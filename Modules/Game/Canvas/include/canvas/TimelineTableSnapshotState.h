@@ -25,6 +25,7 @@ constexpr TimelineTableSnapshotStatus resolveTimelineTableSnapshotStatus(
     bool hasSnapshot, bool snapshotHasBeatmap,
     std::uintptr_t snapshotBeatmapInstanceId)
 {
+    // 活动实例令牌为零等同于没有可绑定谱面，不能消费任何历史快照。
     if ( !hasActiveBeatmap || activeBeatmapInstanceId == 0 ) {
         return TimelineTableSnapshotStatus::Close;
     }
@@ -33,6 +34,7 @@ constexpr TimelineTableSnapshotStatus resolveTimelineTableSnapshotStatus(
          snapshotBeatmapInstanceId != activeBeatmapInstanceId ) {
         return TimelineTableSnapshotStatus::AwaitingSnapshot;
     }
+    // 只有实例身份一致才允许绘制，避免路径相同但对象已重建时复用旧数据。
     return TimelineTableSnapshotStatus::Ready;
 }
 

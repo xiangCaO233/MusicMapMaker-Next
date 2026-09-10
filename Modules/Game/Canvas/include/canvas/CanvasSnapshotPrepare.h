@@ -26,6 +26,7 @@ struct PreparedCanvasSnapshot {
 /// @return steady_clock 当前时间，单位秒。
 inline double currentSteadySeconds()
 {
+    // steady_clock 不受系统时间校准影响，适合作为相邻逻辑快照之间的插值基准。
     return std::chrono::duration<double>(
                std::chrono::steady_clock::now().time_since_epoch())
         .count();
@@ -38,26 +39,32 @@ inline double currentSteadySeconds()
 inline void applyDynamicVertexYOffset(Common::Render::RenderSnapshot* snapshot,
                                       float                           yOffset)
 {
+    // 极小偏移视为零，避免重复加减造成顶点坐标缓慢积累浮点误差。
     if ( !snapshot || std::abs(yOffset) <= 0.0001f ) {
         return;
     }
 
     if ( snapshot->dynamicVertexCount > 0 ) {
+        // 静态顶点位于数组前部，只对逻辑快照标记的动态尾段应用播放插值。
         const uint32_t startVtx = snapshot->staticVertexCount;
         auto&          vertices = snapshot->vertices;
         const uint32_t endVtx =
+            // 防御性限制到实际数组长度，避免不完整快照元数据导致越界。
             std::min(startVtx + snapshot->dynamicVertexCount,
                      static_cast<uint32_t>(vertices.size()));
 
+        // 顶点仅修正纵坐标，横向轨道投影和纹理属性保持不变。
         for ( size_t i = startVtx; i < endVtx; ++i ) {
             vertices[i].pos.y += yOffset;
         }
     }
 
+    // Timeline 元素使用独立交互坐标，必须与可见几何保持相同偏移。
     for ( auto& element : snapshot->timelineElements ) {
         element.y += yOffset;
     }
 
+    // 批注标记也参与命中和连线布局，遗漏会导致标记与音符视觉脱节。
     for ( auto& marker : snapshot->annotationMarkers ) {
         marker.canvasY += yOffset;
     }
@@ -77,6 +84,7 @@ inline PreparedCanvasSnapshot prepareCanvasSnapshot(
     float lastAppliedYOffset, bool scaleByRenderScaleY)
 {
     PreparedCanvasSnapshot prepared;
+    // 没有同步缓冲区时返回全零结果，调用方无需额外构造哨兵快照。
     if ( !syncBuffer ) {
         return prepared;
     }
@@ -86,21 +94,26 @@ inline PreparedCanvasSnapshot prepareCanvasSnapshot(
     applyDynamicVertexYOffset(lastOffsetSnapshot, -lastAppliedYOffset);
 
     prepared.snapshot = syncBuffer->pullLatestSnapshot();
+    // 缓冲区暂无可读快照时，上一帧偏移已经被还原，不能再次记录旧指针。
     if ( !prepared.snapshot ) {
         return prepared;
     }
 
-    float        newYOffset = 0.0f;
+    float newYOffset = 0.0f;
+    // 以快照记录的逻辑发布时间为基准估算 UI 帧相对推进量。
     const double dt =
         prepared.snapshot->playbackInterpolationElapsed(currentSteadySeconds());
     if ( dt > 0.0 ) {
+        // 非正间隔代表快照位于当前时间或未来，不执行反向插值。
         newYOffset =
             static_cast<float>(prepared.snapshot->getInterpolatedOffset(dt));
         if ( scaleByRenderScaleY ) {
+            // 预览画布顶点已缩放，插值位移必须使用相同纵向比例。
             newYOffset *= prepared.snapshot->renderScaleY;
         }
     }
 
+    // 记录已偏移指针和数值，下一帧拉取之前可精确还原原始快照。
     applyDynamicVertexYOffset(prepared.snapshot, newYOffset);
 
     prepared.offsetSnapshot = prepared.snapshot;

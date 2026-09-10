@@ -36,7 +36,9 @@ struct AuxiliaryWindowActivation {
 constexpr AuxiliaryWindowActivation resolveAuxiliaryWindowActivation(
     bool open, bool focusedAndReachable)
 {
+    // 只有窗口已经打开、聚焦且可达时，再次点击菜单才表达关闭意图。
     if ( open && focusedAndReachable ) return {};
+    // 关闭、失焦或落在屏幕外的窗口统一恢复到打开并请求一次聚焦与校正。
     return { true, true, true };
 }
 
@@ -52,8 +54,10 @@ constexpr bool resolveAuxiliaryWindowFocusedAndReachable(bool previous,
                                                          bool focused,
                                                          bool popupOpen)
 {
+    // 屏幕外窗口即使仍被 ImGui 标记聚焦，也不能作为可操作窗口切换关闭。
     if ( !reachable ) return false;
     if ( focused ) return true;
+    // 菜单弹窗临时夺取焦点时延续上一帧，普通失焦则立即清除状态。
     return popupOpen && previous;
 }
 
@@ -79,6 +83,7 @@ inline bool isAuxiliaryWindowReachable(const AuxiliaryWindowRect& window,
         workArea.width > 0.0F && workArea.height > 0.0F;
     if ( !validWindow || !validWorkArea ) return false;
 
+    // 需求尺寸不能超过窗口自身，否则小窗口永远无法被判定为可访问。
     const float effectiveTitleBarHeight =
         std::clamp(titleBarHeight, 1.0F, window.height);
     const float requiredWidth =
@@ -95,6 +100,7 @@ inline bool isAuxiliaryWindowReachable(const AuxiliaryWindowRect& window,
                  std::min(window.y + effectiveTitleBarHeight,
                           workArea.y + workArea.height) -
                      std::max(window.y, workArea.y));
+    // 只要求标题栏保留足够点击区域，窗口正文可以部分位于工作区外。
     return overlapWidth >= requiredWidth && overlapHeight >= requiredHeight;
 }
 
@@ -108,6 +114,7 @@ inline AuxiliaryWindowRect recoverAuxiliaryWindowRect(
     const AuxiliaryWindowRect& window, const AuxiliaryWindowRect& workArea,
     float margin)
 {
+    // margin 为负时视为零，避免反向扩大可用工作区。
     const float safeMargin = std::max(0.0F, margin);
     const float availableWidth =
         std::max(1.0F, workArea.width - safeMargin * 2.0F);
@@ -119,6 +126,7 @@ inline AuxiliaryWindowRect recoverAuxiliaryWindowRect(
     const float sourceHeight =
         std::isfinite(window.height) && window.height > 0.0F ? window.height
                                                              : availableHeight;
+    // 保留正常窗口原尺寸；只有超出工作区时才缩小到安全范围。
     const float recoveredWidth  = std::min(sourceWidth, availableWidth);
     const float recoveredHeight = std::min(sourceHeight, availableHeight);
 

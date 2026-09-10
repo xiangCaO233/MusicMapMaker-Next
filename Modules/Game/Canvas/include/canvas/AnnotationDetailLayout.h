@@ -15,9 +15,11 @@ inline float annotationDetailOpacity(float pointerX, float pointerY, float left,
                                      bool canvasHovered, float proximity)
 {
     if ( !canvasHovered ) return 1.0F;
+    // 指针位于矩形投影内时两个轴距离均为零；位于外部时只累计越界轴。
     const float dx = std::max({ left - pointerX, 0.0F, pointerX - right });
     const float dy = std::max({ top - pointerY, 0.0F, pointerY - bottom });
     const float distance = std::sqrt(dx * dx + dy * dy);
+    // proximity 至少为一个像素，避免配置为零时产生除零或突变。
     return 0.25F +
            0.75F * std::clamp(distance / std::max(1.0F, proximity), 0.0F, 1.0F);
 }
@@ -62,17 +64,20 @@ inline AnnotationDetailWheelResult updateAnnotationDetailWheel(float wheel,
                                                                float scrollStep)
 {
     AnnotationDetailWheelResult result;
-    const float                 normalizedMaxScrollY =
+    // 非有限输入统一回到安全范围，避免 NaN 污染 ImGui 的滚动坐标。
+    const float normalizedMaxScrollY =
         std::max(0.0F, std::isfinite(maxScrollY) ? maxScrollY : 0.0F);
     result.scrollY = std::clamp(
         std::isfinite(scrollY) ? scrollY : 0.0F, 0.0F, normalizedMaxScrollY);
     if ( std::abs(wheel) <= 0.01F ) return result;
 
+    // 滚轮方向与内容偏移相反：向下滚动时增大正文的纵向偏移。
     const float step =
         std::max(1.0F, std::isfinite(scrollStep) ? scrollStep : 1.0F);
     const float nextScroll =
         std::clamp(result.scrollY - wheel * step, 0.0F, normalizedMaxScrollY);
     if ( std::abs(nextScroll - result.scrollY) > 0.01F ) {
+        // 只有实际位置变化才消费输入；到达边界后允许画布继续处理滚轮。
         result.scrollY  = nextScroll;
         result.consumed = true;
     }
@@ -103,6 +108,7 @@ inline std::size_t stepAnnotationDetailItem(std::size_t itemCount,
                                             int         direction)
 {
     if ( itemCount == 0U ) return 0U;
+    // 数据刷新可能缩短同时间戳列表，先把旧索引收敛到新范围内。
     itemIndex = std::min(itemIndex, itemCount - 1U);
     if ( direction < 0 ) return (itemIndex + itemCount - 1U) % itemCount;
     if ( direction > 0 ) return (itemIndex + 1U) % itemCount;
@@ -119,6 +125,7 @@ inline void layoutAnnotationDetailCards(
     std::span<AnnotationDetailCardPlacement> cards, float regionTop,
     float regionBottom, float gap)
 {
+    // 无效区域保持调用方原值，避免对尚未完成布局的画布产生伪坐标。
     if ( cards.empty() || !std::isfinite(regionTop) ||
          !std::isfinite(regionBottom) || regionBottom <= regionTop ) {
         return;
@@ -126,6 +133,7 @@ inline void layoutAnnotationDetailCards(
 
     gap          = std::max(0.0F, std::isfinite(gap) ? gap : 0.0F);
     float cursor = regionTop;
+    // 正向扫描优先保持时间顺序，并把每张卡片推到上一张卡片之后。
     for ( auto& card : cards ) {
         card.height =
             std::max(1.0F, std::isfinite(card.height) ? card.height : 1.0F);
@@ -138,6 +146,7 @@ inline void layoutAnnotationDetailCards(
     }
 
     cursor = regionBottom;
+    // 反向扫描把底部溢出的卡片向上收紧，同时继续维持相邻间距。
     for ( auto iterator = cards.rbegin(); iterator != cards.rend();
           ++iterator ) {
         iterator->topY = std::min(iterator->topY, cursor - iterator->height);
@@ -145,6 +154,7 @@ inline void layoutAnnotationDetailCards(
     }
 
     if ( cards.front().topY < regionTop ) {
+        // 卡片总高超出区域时只能整体贴顶；相对次序和间距仍保持不变。
         const float shift = regionTop - cards.front().topY;
         for ( auto& card : cards ) card.topY += shift;
     }

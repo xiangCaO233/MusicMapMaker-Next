@@ -23,14 +23,18 @@ struct PreviewDensityColor {
 /// @warning UI 热路径纯计算：密度栏每个可见行调用；只允许常量级算术。
 constexpr PreviewDensityColor previewDensityColorAt(float normalizedDensity)
 {
+    // 三个锚点分别表达低、中、高密度，保持亮度足以覆盖在深色预览背景上。
     constexpr PreviewDensityColor low{ 0.31f, 0.76f, 0.38f };
     constexpr PreviewDensityColor medium{ 0.95f, 0.61f, 0.16f };
     constexpr PreviewDensityColor high{ 0.91f, 0.24f, 0.24f };
 
-    const float density             = std::clamp(normalizedDensity, 0.0f, 1.0f);
+    // 外部密度可能因窗口截取或峰值变化短暂越界，先限制到有效色带范围。
+    const float density = std::clamp(normalizedDensity, 0.0f, 1.0f);
+    // 前半段从绿色过渡到橙色，后半段再从橙色过渡到红色。
     const PreviewDensityColor start = density <= 0.5f ? low : medium;
     const PreviewDensityColor end   = density <= 0.5f ? medium : high;
     const float t = density <= 0.5f ? density * 2.0f : (density - 0.5f) * 2.0f;
+    // 三个通道共用局部分段参数，确保每个锚点处颜色连续且无跳变。
     return {
         start.r + (end.r - start.r) * t,
         start.g + (end.g - start.g) * t,

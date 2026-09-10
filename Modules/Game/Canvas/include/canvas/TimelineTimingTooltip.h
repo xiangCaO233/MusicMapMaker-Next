@@ -23,12 +23,14 @@ struct TimelineTimingTooltipDescriptor {
 [[nodiscard]] inline constexpr TimelineTimingTooltipDescriptor
 timelineTimingTooltipDescriptor(::MMM::TimingEffect effect)
 {
+    // 返回静态 string_view，不在悬浮热路径中构造或翻译临时字符串。
     switch ( effect ) {
     case ::MMM::TimingEffect::BPM: return { "BPM", "" };
     case ::MMM::TimingEffect::SCROLL: return { "SV", "" };
     case ::MMM::TimingEffect::JUMP: return { "Jump", " ms" };
     case ::MMM::TimingEffect::HS: return { "HS", "" };
     }
+    // 未知枚举值使用中性名称，保证新增类型尚未适配时仍有可读提示。
     return { "Timing", "" };
 }
 
