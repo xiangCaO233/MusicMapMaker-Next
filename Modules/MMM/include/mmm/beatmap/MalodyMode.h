@@ -6,8 +6,11 @@ namespace MMM
 {
 
 /// @brief 当前导出器支持的 Malody 谱面模式。
+/// @details 枚举值直接对应 Malody `meta.mode`，不得按声明顺序重新编号。
 enum class MalodyMode : std::uint8_t {
-    Key   = 0,
+    /// @brief 多轨下落式 Key 模式。
+    Key = 0,
+    /// @brief 自由轨迹 Slide 模式。
     Slide = 7,
 };
 
@@ -16,6 +19,7 @@ enum class MalodyMode : std::uint8_t {
 /// @return Malody meta.mode 对应的整数值。
 constexpr int malodyModeValue(MalodyMode mode)
 {
+    // 显式转换保留强类型边界，序列化层才暴露格式整数。
     return static_cast<int>(mode);
 }
 

@@ -8,19 +8,27 @@ class BeatMap;
 
 /// @brief 谱面领域数据发生变化的类别位掩码。
 enum class BeatmapMutationFlags : std::uint8_t {
-    None         = 0,
-    Objects      = 1U << 0U,
-    Timelines    = 1U << 1U,
+    /// @brief 未发生需要传播的领域变化。
+    None = 0,
+    /// @brief 玩家物件集合或字段发生变化。
+    Objects = 1U << 0U,
+    /// @brief 时间点集合或字段发生变化。
+    Timelines = 1U << 1U,
+    /// @brief 自动采样集合或字段发生变化。
     AudioSamples = 1U << 2U,
-    Metadata     = 1U << 3U,
-    Annotations  = 1U << 4U,
-    All          = Objects | Timelines | AudioSamples | Metadata | Annotations,
+    /// @brief 谱面基本元数据发生变化。
+    Metadata = 1U << 3U,
+    /// @brief 谱面或物件批注发生变化。
+    Annotations = 1U << 4U,
+    /// @brief 包含所有可传播领域类别。
+    All = Objects | Timelines | AudioSamples | Metadata | Annotations,
 };
 
 /// @brief 合并两个谱面变化类别。
 [[nodiscard]] constexpr BeatmapMutationFlags operator|(BeatmapMutationFlags lhs,
                                                        BeatmapMutationFlags rhs)
 {
+    // 枚举底层类型固定为 uint8_t，组合后再恢复强类型位掩码。
     return static_cast<BeatmapMutationFlags>(static_cast<std::uint8_t>(lhs) |
                                              static_cast<std::uint8_t>(rhs));
 }
@@ -37,6 +45,7 @@ constexpr BeatmapMutationFlags& operator|=(BeatmapMutationFlags& lhs,
 [[nodiscard]] constexpr bool hasBeatmapMutationFlag(BeatmapMutationFlags value,
                                                     BeatmapMutationFlags flag)
 {
+    // 使用非零交集判断，允许 flag 本身包含多个待检查类别。
     return (static_cast<std::uint8_t>(value) &
             static_cast<std::uint8_t>(flag)) != 0U;
 }

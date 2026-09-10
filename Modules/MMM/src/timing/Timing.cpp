@@ -9,6 +9,9 @@
 namespace MMM
 {
 
+/// @brief 将时间点效果枚举转换为 MMM 文本标识。
+/// @param effect 待转换的内部效果类型。
+/// @return 稳定的小写格式标识；未知枚举防御性回退为 `scroll`。
 std::string timingEffectToString(TimingEffect effect)
 {
     switch ( effect ) {
@@ -20,6 +23,9 @@ std::string timingEffectToString(TimingEffect effect)
     return "scroll";
 }
 
+/// @brief 将 MMM 文本标识解析为时间点效果枚举。
+/// @param effect 来源格式的小写效果名称。
+/// @return 对应效果；未知名称按兼容规则回退为 SCROLL。
 TimingEffect timingEffectFromString(const std::string& effect)
 {
     if ( effect == "bpm" ) return TimingEffect::BPM;
@@ -29,26 +35,33 @@ TimingEffect timingEffectFromString(const std::string& effect)
 }
 
 /// @brief 将 osu! 继承时间点的负 beatLength 转换为内部 SV 倍率。
+/// @param beatLength osu! TimingPoint 的 beatLength 字段。
+/// @return 正常负值按 `-100 / beatLength` 换算；其他值按兼容规则收敛。
 double osuInheritedBeatLengthToScrollMultiplier(double beatLength)
 {
     constexpr double MIN_SCROLL_MULTIPLIER = 1e-9;
     if ( beatLength < -MIN_SCROLL_MULTIPLIER ) {
+        // osu! 以负拍长的绝对值反比编码继承速度。
         return -100.0 / beatLength;
     }
     if ( beatLength > MIN_SCROLL_MULTIPLIER ) {
+        // 保留历史正值输入，避免旧工程在读取阶段被强制改写。
         return beatLength;
     }
     return 1.0;
 }
 
 /// @brief 将内部 SV 倍率转换为 osu! 继承时间点的负 beatLength。
+/// @param scrollMultiplier 内部正向滚速倍率。
+/// @return 可写入 osu! 继承时间点的负 beatLength。
 double scrollMultiplierToOsuInheritedBeatLength(double scrollMultiplier)
 {
     constexpr double MIN_SCROLL_MULTIPLIER = 1e-9;
     return -100.0 / std::max(MIN_SCROLL_MULTIPLIER, scrollMultiplier);
 }
 
-/// @brief 从osu的字符串读取
+/// @brief 从 osu! TimingPoint 字段读取内部时间点。
+/// @details 红线转换为 BPM，绿线转换为 SCROLL；来源私有字段保留在元数据中。
 void Timing::from_osu_description(std::vector<std::string>& description)
 {
     using enum TimingMetadataType;
@@ -84,7 +97,7 @@ void Timing::from_osu_description(std::vector<std::string>& description)
     // 上一个基准bpm
     double last_base_bpm = 0.0;
 
-    // 先判断是否继承时间点
+    // 第七字段为零表示继承时间点，决定第二字段采用 BPM 或 SV 语义。
     auto is_inherit_timing =
         MMM::Internal::safeStod(MMM::Internal::safeAt(description, 6)) == 0;
 
@@ -93,7 +106,7 @@ void Timing::from_osu_description(std::vector<std::string>& description)
         MMM::Internal::safeStod(MMM::Internal::safeAt(description, 1));
 
     if ( is_inherit_timing ) {
-        // bpm只存储倍速--并非bpm
+        // 绿线不提供独立 BPM，内部参数保存由负拍长换算出的滚速倍率。
         double scrollMultiplier =
             osuInheritedBeatLengthToScrollMultiplier(m_beat_length);
         m_bpm                   = last_base_bpm;
@@ -125,7 +138,8 @@ void Timing::from_osu_description(std::vector<std::string>& description)
         MMM::Internal::safeStoi(MMM::Internal::safeAt(description, 7))));
 }
 
-/// @brief 转换为osu的字符串
+/// @brief 将内部时间点转换为 osu! TimingPoint 描述。
+/// @return 可直接写入 `[TimingPoints]` 的逗号分隔单行。
 std::string Timing::to_osu_description()
 {
     using enum TimingMetadataType;
@@ -154,9 +168,11 @@ std::string Timing::to_osu_description()
         constexpr double MIN_SCROLL_MULTIPLIER = 1e-9;
         double           scrollMultiplier      = m_timingEffectParameter;
         if ( scrollMultiplier <= MIN_SCROLL_MULTIPLIER ) {
+            // 兼容旧数据：参数无效时尝试历史上复用的 beat_length 字段。
             scrollMultiplier = m_beat_length;
         }
         if ( scrollMultiplier <= MIN_SCROLL_MULTIPLIER ) {
+            // 两个来源都无效时回退一倍速，保证除法与输出有限。
             scrollMultiplier = 1.0;
         }
         oss << std::fixed << std::setprecision(12)

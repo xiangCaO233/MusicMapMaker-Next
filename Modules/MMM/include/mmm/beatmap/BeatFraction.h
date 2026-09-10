@@ -40,20 +40,28 @@ struct MalodyBeatFraction {
 /// @param numerator 分拍分子。
 /// @param denominator 分拍分母。
 /// @return 已处理跨拍和约分的 Malody 分拍。
+/// @details
+/// Malody 使用 `[拍号, 分子, 分母]` 表示位置。该函数先把超出单拍范围的
+/// 分子折算进拍号，再把负余数借位为非负分拍，最后约分。返回结果始终满足
+/// `0 <= numerator < denominator`；零分拍统一写成 `0/1`，便于格式写出比较。
 [[nodiscard]] inline MalodyBeatFraction normalizeMalodyBeatFraction(
     std::int32_t beatIndex, std::int32_t numerator, std::int32_t denominator)
 {
+    // 非正分母无法形成合法拍位，返回统一的零拍默认值。
     if ( denominator <= 0 ) return {};
+    // 先处理完整跨拍部分，避免后续借位只覆盖一个拍长。
     if ( numerator <= -denominator || numerator >= denominator ) {
         beatIndex += numerator / denominator;
         numerator %= denominator;
     }
     if ( numerator < 0 ) {
+        // C++ 取余保留被除数符号，因此负余数需要向前借一拍。
         --beatIndex;
         numerator += denominator;
     }
     if ( numerator == 0 ) return { beatIndex, 0, 1, 0.0 };
 
+    // 最简分数能稳定匹配导入、导出和测试中的等价拍位。
     const auto divisor = std::gcd(numerator, denominator);
     numerator /= divisor;
     denominator /= divisor;
@@ -69,13 +77,19 @@ struct MalodyBeatFraction {
 /// @return 规整后的拍号、分子、分母和分拍值。
 /// @warning 有界纯数值计算；只遍历固定候选表，禁止引入分配、文件系统访问
 /// 或阻塞操作。
+/// @details
+/// 优先选择格式约定的常用分母，使往返结果保持可读；仅当所有候选均超过
+/// 容差时才量化到最高 1/1920 网格。接近整数拍的值提前收敛，避免浮点误差
+/// 被导出为接近一整拍的巨大分数。
 [[nodiscard]] inline MalodyBeatFraction fitMalodyBeatFraction(double beat)
 {
+    // NaN 与无穷没有可定义的拍位，保持与无效分母相同的默认结果。
     if ( !std::isfinite(beat) ) return {};
 
     auto   beatIndex = static_cast<std::int32_t>(std::floor(beat));
     double fraction  = beat - static_cast<double>(beatIndex);
     if ( fraction < 0.0 ) {
+        // floor 理论上已给出非负小数，此分支保留对边界舍入的防御。
         fraction += 1.0;
         --beatIndex;
     }
@@ -87,6 +101,7 @@ struct MalodyBeatFraction {
     }
 
     for ( const auto denominator : MALODY_BEAT_DENOMINATORS ) {
+        // 按从疏到密的顺序选择首个足够精确的可读网格。
         const double scaled  = fraction * static_cast<double>(denominator);
         const auto numerator = static_cast<std::int32_t>(std::llround(scaled));
         if ( std::abs(scaled - static_cast<double>(numerator)) <
@@ -96,6 +111,7 @@ struct MalodyBeatFraction {
         }
     }
 
+    // 非常规分拍统一落到格式上限，避免生成任意且不可交换的分母。
     const auto numerator = static_cast<std::int32_t>(std::llround(
         fraction * static_cast<double>(MALODY_MAX_BEAT_DENOMINATOR)));
     return normalizeMalodyBeatFraction(

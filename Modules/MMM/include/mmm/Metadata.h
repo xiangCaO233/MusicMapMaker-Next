@@ -7,17 +7,23 @@
 
 namespace MMM
 {
+/// @brief 支持异构字符串键查找的哈希器。
+/// @details 允许 `const char*`、string_view 和 string 在不构造临时 string
+/// 时查表。
 struct StringHash {
-    // 这个标签用于开启透明性
+    /// @brief 启用 unordered_map 的透明查找重载。
     using is_transparent = void;
+    /// @brief 计算 C 字符串键的哈希值。
     [[nodiscard]] size_t operator()(const char* txt) const
     {
         return std::hash<std::string_view>{}(txt);
     }
+    /// @brief 计算字符串视图键的哈希值。
     [[nodiscard]] size_t operator()(std::string_view txt) const
     {
         return std::hash<std::string_view>{}(txt);
     }
+    /// @brief 计算拥有型字符串键的哈希值。
     [[nodiscard]] size_t operator()(const std::string& txt) const
     {
         return std::hash<std::string>{}(txt);
@@ -25,17 +31,21 @@ struct StringHash {
 };
 
 enum class MapMetadataType {
+    /// @brief osu! 来源字段。
     OSU,
+    /// @brief Malody 来源字段。
     MALODY,
+    /// @brief Rhythm Master 来源字段。
     RM,
 };
 
+/// @brief 保存谱面级来源格式扩展属性。
 class MapMetadata
 {
 public:
-    // 构造MapMetadata
+    /// @brief 构造空谱面元数据。
     MapMetadata() = default;
-    // 析构MapMetadata
+    /// @brief 释放谱面元数据。
     virtual ~MapMetadata() = default;
 
     // 统一通用属性表(来源-[属性名-属性值])
@@ -44,11 +54,13 @@ public:
                                           std::equal_to<>>>
         map_properties;
 
-    // 获取数据
+    /// @brief 读取并转换指定来源的谱面属性。
+    /// @return 属性缺失时返回调用方给出的默认值。
     template<typename T>
     T get_value(MapMetadataType source, const std::string& key,
                 T default_value = T())
     {
+        // 两级查询均不插入默认键，读取操作不会污染保留属性。
         auto properties_it = map_properties.find(source);
         if ( properties_it == map_properties.end() ) return default_value;
         auto key_it = properties_it->second.find(key);
@@ -57,6 +69,7 @@ public:
             // 类型为字符串时整个返回
             return key_it->second;
         } else {
+            // 历史接口对转换失败返回值初始化结果，调用方应优先提供默认值。
             std::istringstream iss(key_it->second);
             T                  value;
             iss >> value;
@@ -66,11 +79,13 @@ public:
 };
 
 enum class CoverType {
+    /// @brief 静态图片背景。
     IMAGE,
+    /// @brief 带起播偏移的视频背景。
     VIDEO,
 };
 
-// 基本谱面信息
+/// @brief 跨格式共享的谱面基本信息。
 struct BaseMapMeta {
     // 谱面名称
     std::string name;
@@ -117,9 +132,13 @@ struct BaseMapMeta {
 };
 
 enum class NoteMetadataType {
+    /// @brief osu! 来源字段。
     OSU,
+    /// @brief Malody 来源字段。
     MALODY,
+    /// @brief Rhythm Master 来源字段。
     RM,
+    /// @brief MusicMapMaker 原生来源字段。
     MMM,
 };
 
@@ -137,11 +156,13 @@ public:
                                           std::equal_to<>>>
         note_properties;
 
-    // 获取数据
+    /// @brief 读取并转换指定来源的物件属性。
+    /// @return 属性缺失时返回调用方给出的默认值。
     template<typename T>
     T get_value(NoteMetadataType source, const std::string& key,
                 T default_value = T())
     {
+        // 来源与属性名分层保存，避免不同格式使用同名字段时相互覆盖。
         auto properties_it = note_properties.find(source);
         if ( properties_it == note_properties.end() ) return default_value;
         auto key_it = properties_it->second.find(key);
@@ -159,8 +180,11 @@ public:
 };
 
 enum class TimingMetadataType {
+    /// @brief osu! 来源字段。
     OSU,
+    /// @brief Rhythm Master 来源字段。
     RM,
+    /// @brief Malody 来源字段。
     MALODY,
 };
 

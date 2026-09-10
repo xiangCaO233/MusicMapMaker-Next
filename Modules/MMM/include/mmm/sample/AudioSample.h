@@ -42,11 +42,13 @@ public:
     T getValue(SampleMetadataType source, const std::string& key,
                T defaultValue = T()) const
     {
+        // 两级查找均不插入键，读取缺失属性不会改变保留的来源元数据。
         const auto propertiesIt = sample_properties.find(source);
         if ( propertiesIt == sample_properties.end() ) return defaultValue;
         const auto keyIt = propertiesIt->second.find(key);
         if ( keyIt == propertiesIt->second.end() ) return defaultValue;
         if constexpr ( std::is_same_v<T, std::string> ) {
+            // 字符串保持原始文本，数值类型才进入流转换路径。
             return keyIt->second;
         } else {
             std::istringstream stream(keyIt->second);
@@ -93,6 +95,7 @@ struct AudioSampleEvent {
     /// @return 实际播放时间，单位为毫秒。
     [[nodiscard]] double effectiveTimestamp() const
     {
+        // 偏移保持整数毫秒语义，最终在统一浮点时间域中相加。
         return m_timestamp + static_cast<double>(m_offsetMs);
     }
 };

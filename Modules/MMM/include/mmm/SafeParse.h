@@ -34,15 +34,19 @@ struct FloatingParseResult {
 /// @return 解析值、已消费字符数和错误状态。
 inline FloatingParseResult parseFloatingPrefix(std::string_view text)
 {
+    // 空输入没有可消费前缀，维持默认 invalid_argument 结果。
     if ( text.empty() ) return {};
 
 #if defined(__APPLE__)
     const auto isLeadingAsciiSpace = [](char ch) {
+        // 明确列出 ASCII 空白，避免区域设置改变识别范围。
         return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' ||
                ch == '\f' || ch == '\v';
     };
+    // 与 from_chars 对齐：不接受前导加号，也不在本层跳过空白。
     if ( text.front() == '+' || isLeadingAsciiSpace(text.front()) ) return {};
 
+    // strtod_l 需要零结尾缓冲；该分配仅存在于文件解析低频路径。
     const std::string nullTerminatedText(text);
     char*             parseEnd = nullptr;
     errno                      = 0;
@@ -50,13 +54,16 @@ inline FloatingParseResult parseFloatingPrefix(std::string_view text)
         ::strtod_l(nullTerminatedText.c_str(), &parseEnd, LC_C_LOCALE);
     const std::size_t parsedLength =
         static_cast<std::size_t>(parseEnd - nullTerminatedText.c_str());
+    // 指针未前进表示没有形成任何数值前缀。
     if ( parsedLength == 0 ) return {};
     if ( errno == ERANGE ) {
+        // 保留系统得到的饱和值与消费长度，同时显式报告范围错误。
         return { parsed, parsedLength, std::errc::result_out_of_range };
     }
     return { parsed, parsedLength, {} };
 #else
-    double     parsed = 0.0;
+    double parsed = 0.0;
+    // 非 Apple 平台直接复用无区域设置、无分配的 from_chars 语义。
     const auto result =
         std::from_chars(text.data(), text.data() + text.size(), parsed);
     return { parsed,
@@ -70,20 +77,28 @@ inline FloatingParseResult parseFloatingPrefix(std::string_view text)
 /// @return 去掉开头空白后的字符串视图。
 inline std::string_view trimLeadingAsciiSpaces(std::string_view text)
 {
+    // 仅移动视图起点，原字符串的所有权和内容都保持不变。
     while ( !text.empty() ) {
         const unsigned char c = static_cast<unsigned char>(text.front());
         if ( c != ' ' && c != '\t' && c != '\n' && c != '\r' && c != '\f' &&
              c != '\v' ) {
             break;
         }
+        // 单字节 ASCII 判断允许安全地逐字符缩短前缀。
         text.remove_prefix(1);
     }
     return text;
 }
 
+/// @brief 安全读取字符串字段。
+/// @param v 已按格式分隔的字段数组。
+/// @param idx 目标字段索引。
+/// @param defaultVal 越界时返回的默认文本。
+/// @return 指定字段的副本，索引越界时返回默认文本。
 inline std::string safeAt(const std::vector<std::string>& v, size_t idx,
                           const std::string& defaultVal = "")
 {
+    // 格式导入统一走此边界，避免截断行触发 vector 越界访问。
     if ( idx >= v.size() ) return defaultVal;
     return v[idx];
 }
@@ -95,17 +110,20 @@ inline std::string safeAt(const std::vector<std::string>& v, size_t idx,
 /// @return 解析得到的整数或默认值。
 inline int safeStoi(const std::string& s, int defaultVal = 0)
 {
+    // 空字段与纯空白字段都按格式缺省值处理。
     if ( s.empty() ) return defaultVal;
     auto text = trimLeadingAsciiSpaces(s);
     if ( text.empty() ) return defaultVal;
 
-    int        value = 0;
+    int value = 0;
+    // 先尝试严格整数前缀，覆盖绝大多数格式字段且无需浮点转换。
     const auto result =
         std::from_chars(text.data(), text.data() + text.size(), value);
     if ( result.ec == std::errc{} && result.ptr != text.data() ) {
         return value;
     }
 
+    // 兼容历史 stoi 对 `1.0` 等来源数据的接受行为，再尝试浮点前缀。
     const auto doubleResult = parseFloatingPrefix(text);
     if ( doubleResult.error == std::errc{} && doubleResult.parsedLength != 0 &&
          std::isfinite(doubleResult.value) &&
@@ -113,6 +131,7 @@ inline int safeStoi(const std::string& s, int defaultVal = 0)
              static_cast<double>(std::numeric_limits<int>::min()) &&
          doubleResult.value <=
              static_cast<double>(std::numeric_limits<int>::max()) ) {
+        // 范围预检后截断小数部分，与旧 static_cast 行为一致。
         return static_cast<int>(doubleResult.value);
     }
     return defaultVal;
@@ -125,10 +144,12 @@ inline int safeStoi(const std::string& s, int defaultVal = 0)
 /// @return 解析得到的浮点数或默认值。
 inline double safeStod(const std::string& s, double defaultVal = 0.0)
 {
+    // 调用方给出的默认值同时覆盖空字段、纯空白与解析错误。
     if ( s.empty() ) return defaultVal;
     auto text = trimLeadingAsciiSpaces(s);
     if ( text.empty() ) return defaultVal;
 
+    // 只要求存在合法前缀，尾随格式文本按旧 stod 兼容语义忽略。
     const auto result = parseFloatingPrefix(text);
     if ( result.error == std::errc{} && result.parsedLength != 0 ) {
         return result.value;

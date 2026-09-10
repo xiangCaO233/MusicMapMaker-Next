@@ -95,3 +95,9 @@ NoteRenderSystem_Notes 补充可见性包络与分桶、播放补间余量、分
 验证：clang-format、差异检查和非注释 token 对比通过；AudioTimelineDescriptorTest、HitEffectStereoTest、SampleRenderSystemTest、NoteDragGhostRenderTest、CanvasComponentRenderSystemTest、BeatmapMutationObserverBindingTest、ProjectAudioReferenceTest 七个相关 CTest 通过；各批分别完成主项目构建。除自动采样尺寸测试显式使用默认配置外，仅修改注释与格式，本批注释按用户要求提交并暂停，模块尚未全部达标；构建开关已恢复原来的 BUILD_TESTING=OFF。
 
 此前验证记录：ImdPackageExportServiceTest 直接运行因无法解码 source.wav 返回 1，未在注释任务中扩展排查；产物保留于 build/test_output/imd-comment-check-V7zLTZ。
+
+## MMM 当前进度
+
+2026-09-10 按模块实际文件清单统计 48 个自维护文件，本轮完成后逐文件复扫为 48/48 独立达到 30%，剩余 0 个。已覆盖领域模型、项目元数据、BPM 与变速、osu!、RM/IMD、原生 MMM、Malody 读写、共享测试辅助和 CMake 注册说明；大型兼容测试按场景补充格式契约、边界判定与关键实现说明，不扩展为格式行为审计。
+
+验证：逐文件 cloc 为 48/48，clang-format、cmake-format 和差异检查通过；直接运行 BPM、IMD、三个 osu!、两个 Malody、Malody 边界、绑定音效、两个原生 MMM、元数据兼容、变速覆盖及打包扩展名共 14 个场景均通过；`cmake --build build --parallel 12` 完整构建通过。链接仍输出已知的 GCC 16 `stl_algobase.h` LLVM gold plugin 未展开循环提示，本轮未修改构建优化策略。

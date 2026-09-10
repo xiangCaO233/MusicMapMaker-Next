@@ -23,8 +23,10 @@ inline constexpr double DEFAULT_NORMALIZED_BPM = 120.0;
     double bpm, double nanFallback = DEFAULT_NORMALIZED_BPM) noexcept
 {
     if ( std::isnan(bpm) ) {
+        // NaN 没有方向；先选择可解释的回退值，再与普通输入共同夹取。
         bpm = std::isnan(nanFallback) ? DEFAULT_NORMALIZED_BPM : nanFallback;
     }
+    // clamp 同时把正负无穷收敛到最接近其方向的范围边界。
     return std::clamp(bpm, MIN_NORMALIZED_BPM, MAX_NORMALIZED_BPM);
 }
 
