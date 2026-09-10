@@ -446,13 +446,16 @@ bool verifyDefaultSkinEffectFrameRate(
 bool verifyRmSkin(const std::filesystem::path& skinPath,
                   const std::filesystem::path& translationsRoot)
 {
-    auto& manager = MMM::Config::SkinManager::instance();
+    // 两代资源包独立分发，按目录确定各自帧数与图集导出尺寸。
+    const bool old     = skinPath.parent_path().filename() == "rm-old";
+    auto&      manager = MMM::Config::SkinManager::instance();
     // 使用生产加载器解析 Lua，覆盖嵌套资源路径及默认资源复用。
     if ( !check(manager.loadSkin(MMM::Config::pathToUtf8(skinPath),
                                  translationsRoot),
                 "RM 皮肤必须成功加载") )
         return false;
-    bool ok = check(manager.getData().themeName == "RM", "RM 显示名必须准确");
+    bool ok = check(manager.getData().themeName == (old ? "RM(old)" : "RM"),
+                    "RM 显示名必须准确");
     // 贴图自身携带色彩，额外的米黄乘色会破坏蓝键和绿色长条。
     for ( const auto* key : { "note_tap",
                               "note_head",
@@ -469,7 +472,9 @@ bool verifyRmSkin(const std::filesystem::path& skinPath,
         std::uint32_t width = 0U, height = 0U;
         ok &= check(readPngDimensions(manager.getAssetPath(key), width, height),
                     "RM 头部必须是可读 PNG");
-        ok &= check(width == 256U && height == 112U, "RM 头部布局尺寸必须一致");
+        ok &=
+            check(width == (old ? 281U : 256U) && height == (old ? 123U : 112U),
+                  "RM 头部布局尺寸必须一致");
     }
     // 路径必须指向真实文件；独立头部不能意外别名到蓝色 Tap。
     ok &= check(manager.getAssetPath("note.note") !=
@@ -483,8 +488,9 @@ bool verifyRmSkin(const std::filesystem::path& skinPath,
     // 原包两组连续序列长度不同，分别检查可避免错接到默认六帧特效。
     for ( const auto* key : { "note.effect.note", "note.effect.flick" } ) {
         const auto*       sequence = manager.getEffectSequence(key);
-        const std::size_t expected =
-            std::string_view(key) == "note.effect.note" ? 17U : 18U;
+        const std::size_t expected = std::string_view(key) == "note.effect.note"
+                                         ? (old ? 9U : 17U)
+                                         : (old ? 16U : 18U);
         ok &= check(sequence && sequence->frames.size() == expected,
                     "RM 原包帧序必须完整");
         if ( !sequence ) continue;
@@ -578,6 +584,11 @@ int main(int argc, char* argv[])
     ok &= verifyRmSkin(
         MMM::Config::utf8ToPath(argv[4]).parent_path().parent_path() /
             "rm/skin.lua",
+        translationsRoot);
+    // 旧版使用相同生产加载器校验完整资源及加法打击光。
+    ok &= verifyRmSkin(
+        MMM::Config::utf8ToPath(argv[4]).parent_path().parent_path() /
+            "rm-old/skin.lua",
         translationsRoot);
     return ok ? 0 : 1;
 }

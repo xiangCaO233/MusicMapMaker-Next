@@ -1,0 +1,259 @@
+{
+  "source": "source-atlas.png",
+  "normalized": "atlas-rgba.png",
+  "normalized_size": [
+    1536,
+    1536
+  ],
+  "scale": 0.5,
+  "components": [
+    {
+      "name": "note",
+      "rect": [
+        146,
+        182,
+        881,
+        360
+      ],
+      "output": "../image/note/note.png",
+      "size": [
+        281,
+        123
+      ],
+      "source": "topdown-source-atlas-beveled.png",
+      "scale": [
+        0.31895573212258797,
+        0.3416666666666667
+      ],
+      "runtime_rect": [
+        116,
+        195,
+        281,
+        123
+      ]
+    },
+    {
+      "name": "holdhead",
+      "rect": [
+        1145,
+        182,
+        881,
+        360
+      ],
+      "output": "../image/note/holdhead.png",
+      "size": [
+        281,
+        123
+      ],
+      "source": "topdown-source-atlas-beveled.png",
+      "scale": [
+        0.31895573212258797,
+        0.3416666666666667
+      ],
+      "runtime_rect": [
+        628,
+        195,
+        281,
+        123
+      ]
+    },
+    {
+      "name": "node",
+      "rect": [
+        1132,
+        123,
+        288,
+        288
+      ],
+      "output": "../image/note/node.png",
+      "size": [
+        144,
+        144
+      ],
+      "runtime_rect": [
+        1208,
+        184,
+        144,
+        144
+      ]
+    },
+    {
+      "name": "holdend",
+      "rect": [
+        168,
+        688,
+        200,
+        128
+      ],
+      "output": "../image/note/holdend.png",
+      "size": [
+        100,
+        64
+      ],
+      "runtime_rect": [
+        206,
+        736,
+        100,
+        64
+      ]
+    },
+    {
+      "name": "holdbodyvertical",
+      "rect": [
+        704,
+        656,
+        128,
+        192
+      ],
+      "output": "../image/note/holdbodyvertical.png",
+      "size": [
+        64,
+        96
+      ],
+      "runtime_rect": [
+        736,
+        720,
+        64,
+        96
+      ]
+    },
+    {
+      "name": "holdbodyhorizontal",
+      "rect": [
+        1184,
+        688,
+        192,
+        128
+      ],
+      "output": "../image/note/holdbodyhorizontal.png",
+      "size": [
+        96,
+        64
+      ],
+      "runtime_rect": [
+        1232,
+        736,
+        96,
+        64
+      ]
+    },
+    {
+      "name": "arrowleft",
+      "rect": [
+        92,
+        1112,
+        272,
+        288
+      ],
+      "output": "../image/note/arrowleft.png",
+      "size": [
+        136,
+        144
+      ],
+      "runtime_rect": [
+        188,
+        1208,
+        136,
+        144
+      ]
+    },
+    {
+      "name": "arrowright",
+      "rect": [
+        656,
+        1112,
+        272,
+        288
+      ],
+      "output": "../image/note/arrowright.png",
+      "size": [
+        136,
+        144
+      ],
+      "runtime_rect": [
+        700,
+        1208,
+        136,
+        144
+      ]
+    },
+    {
+      "name": "judgearea",
+      "rect": [
+        668,
+        2,
+        310,
+        130
+      ],
+      "output": "../image/panel/judgearea.png",
+      "size": [
+        310,
+        130
+      ],
+      "source": "rym-key5k.png",
+      "scale": 1,
+      "runtime_rect": [
+        1125,
+        1215,
+        310,
+        130
+      ],
+      "perspective": {
+        "from": [
+          [
+            10,
+            0
+          ],
+          [
+            299,
+            0
+          ],
+          [
+            0,
+            110
+          ],
+          [
+            309,
+            110
+          ]
+        ],
+        "to": [
+          [
+            0,
+            0
+          ],
+          [
+            309,
+            0
+          ],
+          [
+            0,
+            110
+          ],
+          [
+            309,
+            110
+          ]
+        ],
+        "viewport": [
+          310,
+          130
+        ]
+      },
+      "frame": {
+        "right_width": 5,
+        "bottom_height": 3,
+        "source_pixel": [
+          820,
+          6
+        ],
+        "brightness_percent": 160
+      }
+    }
+  ],
+  "runtime_atlas": "components-atlas.png",
+  "runtime_atlas_size": [
+    1536,
+    1536
+  ]
+}

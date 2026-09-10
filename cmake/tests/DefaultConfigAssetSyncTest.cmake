@@ -60,6 +60,11 @@ file(MAKE_DIRECTORY "${_MMM_SOURCE_ROOT}/skins/mmm-default/resources/image")
 file(MAKE_DIRECTORY "${_MMM_SOURCE_ROOT}/skins/ivm/resources/image")
 # RM 使用独立目录，验证新内置皮肤不会混入 IVM 或默认皮肤。 嵌套层级保留资源相对路径，模拟实际贴图加载。
 file(MAKE_DIRECTORY "${_MMM_SOURCE_ROOT}/skins/rm/resources/image")
+# 旧版皮肤单独提供入口和图集哨兵，防止同步时混入新版目录。
+file(MAKE_DIRECTORY "${_MMM_SOURCE_ROOT}/skins/rm-old/resources/atlas")
+file(WRITE "${_MMM_SOURCE_ROOT}/skins/rm-old/skin.lua" "rm-old-v1")
+file(WRITE "${_MMM_SOURCE_ROOT}/skins/rm-old/resources/atlas/source.png"
+     "atlas-v1")
 # 预建翻译目标以覆盖已有用户目录升级场景。
 file(MAKE_DIRECTORY "${_MMM_CONFIG_ROOT}/assets/translations")
 # 自定义皮肤目录用于验证默认同步不会执行破坏性清理。
@@ -117,6 +122,13 @@ _mmm_assert_file_content(
   "${_MMM_CONFIG_ROOT}/assets/skins/rm/resources/image/note.txt" "rm-image-v1"
   "RM 皮肤嵌套资源同步")
 
+# 旧版皮肤的入口和原始图集都必须跟随构建同步。
+_mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/skins/rm-old/skin.lua"
+                         "rm-old-v1" "RM(old) 入口同步")
+_mmm_assert_file_content(
+  "${_MMM_CONFIG_ROOT}/assets/skins/rm-old/resources/atlas/source.png"
+  "atlas-v1" "RM(old) 图集同步")
+
 # 用户额外语言与自定义皮肤不属于受管默认文件，必须原样保留。
 _mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/translations/custom.lua"
                          "custom" "保留用户额外语言")
@@ -134,6 +146,9 @@ file(WRITE "${_MMM_SOURCE_ROOT}/skins/mmm-default/skin.lua" "skin-v2-longer")
 file(WRITE "${_MMM_SOURCE_ROOT}/skins/ivm/skin.lua" "ivm-v2-longer")
 # RM 使用同一增量复制契约，入口与嵌套资源都必须保留。 同名入口升级不能要求用户手动删除已安装的 RM。 改变长度排除时间戳相同造成的缓存假阳性。
 file(WRITE "${_MMM_SOURCE_ROOT}/skins/rm/skin.lua" "rm-v2-longer")
+# 更新图集内容验证同名源文件会覆盖旧版本。
+file(WRITE "${_MMM_SOURCE_ROOT}/skins/rm-old/resources/atlas/source.png"
+     "atlas-v2")
 # 重复运行同一生产脚本验证增量同步幂等边界。
 _mmm_run_sync("${_MMM_SOURCE_ROOT}" "${_MMM_CONFIG_ROOT}")
 _mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/translations/en_us.lua"
@@ -145,6 +160,9 @@ _mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/skins/ivm/skin.lua"
 # RM 使用同一增量复制契约，入口与嵌套资源都必须保留。
 _mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/skins/rm/skin.lua"
                          "rm-v2-longer" "增量 RM 皮肤同步")
+_mmm_assert_file_content(
+  "${_MMM_CONFIG_ROOT}/assets/skins/rm-old/resources/atlas/source.png"
+  "atlas-v2" "RM(old) 图集增量同步")
 # 新增 RM 后仍检查非皮肤文件，确保受管目录边界没有扩大。 这些哨兵是用户持久状态，不应被资源同步重新生成。
 # 第二次同步仍必须证明根目录用户状态没有被资源更新波及。
 _mmm_assert_file_content("${_MMM_CONFIG_ROOT}/user_config.json" "user-config"

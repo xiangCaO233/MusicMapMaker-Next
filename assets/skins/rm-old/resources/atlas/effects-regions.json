@@ -1,0 +1,410 @@
+{
+  "source": "effects-source-atlas.png",
+  "frames": [
+    {
+      "source": "rym-hit-1.png",
+      "rect": [
+        0,
+        0,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/note/1.png",
+      "output_rect": [
+        0,
+        0,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hit-2.png",
+      "rect": [
+        258,
+        0,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/note/2.png",
+      "output_rect": [
+        512,
+        0,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hit-3.png",
+      "rect": [
+        516,
+        0,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/note/3.png",
+      "output_rect": [
+        1024,
+        0,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hit-4.png",
+      "rect": [
+        774,
+        0,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/note/4.png",
+      "output_rect": [
+        1536,
+        0,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hit-5.png",
+      "rect": [
+        1032,
+        0,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/note/5.png",
+      "output_rect": [
+        2048,
+        0,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hit-6.png",
+      "rect": [
+        0,
+        258,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/note/6.png",
+      "output_rect": [
+        0,
+        512,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hit-7.png",
+      "rect": [
+        258,
+        258,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/note/7.png",
+      "output_rect": [
+        512,
+        512,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hit-8.png",
+      "rect": [
+        516,
+        258,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/note/8.png",
+      "output_rect": [
+        1024,
+        512,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hit-9.png",
+      "rect": [
+        774,
+        258,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/note/9.png",
+      "output_rect": [
+        1536,
+        512,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hitl-1.png",
+      "rect": [
+        1032,
+        258,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/flick/1.png",
+      "output_rect": [
+        2048,
+        512,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hitl-2.png",
+      "rect": [
+        0,
+        516,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/flick/2.png",
+      "output_rect": [
+        0,
+        1024,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hitl-3.png",
+      "rect": [
+        258,
+        516,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/flick/3.png",
+      "output_rect": [
+        512,
+        1024,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hitl-4.png",
+      "rect": [
+        516,
+        516,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/flick/4.png",
+      "output_rect": [
+        1024,
+        1024,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hitl-5.png",
+      "rect": [
+        774,
+        516,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/flick/5.png",
+      "output_rect": [
+        1536,
+        1024,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hitl-6.png",
+      "rect": [
+        1032,
+        516,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/flick/6.png",
+      "output_rect": [
+        2048,
+        1024,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hitl-7.png",
+      "rect": [
+        0,
+        774,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/flick/7.png",
+      "output_rect": [
+        0,
+        1536,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hitl-8.png",
+      "rect": [
+        258,
+        774,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/flick/8.png",
+      "output_rect": [
+        512,
+        1536,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hitl-9.png",
+      "rect": [
+        516,
+        774,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/flick/9.png",
+      "output_rect": [
+        1024,
+        1536,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hitl-10.png",
+      "rect": [
+        774,
+        774,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/flick/10.png",
+      "output_rect": [
+        1536,
+        1536,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hitl-11.png",
+      "rect": [
+        1032,
+        774,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/flick/11.png",
+      "output_rect": [
+        2048,
+        1536,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hitl-12.png",
+      "rect": [
+        0,
+        1032,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/flick/12.png",
+      "output_rect": [
+        0,
+        2048,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hitl-13.png",
+      "rect": [
+        258,
+        1032,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/flick/13.png",
+      "output_rect": [
+        512,
+        2048,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hitl-14.png",
+      "rect": [
+        516,
+        1032,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/flick/14.png",
+      "output_rect": [
+        1024,
+        2048,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hitl-15.png",
+      "rect": [
+        774,
+        1032,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/flick/15.png",
+      "output_rect": [
+        1536,
+        2048,
+        512,
+        512
+      ]
+    },
+    {
+      "source": "rym-hitl-16.png",
+      "rect": [
+        1032,
+        1032,
+        258,
+        258
+      ],
+      "output": "../image/note/effect/flick/16.png",
+      "output_rect": [
+        2048,
+        2048,
+        512,
+        512
+      ]
+    }
+  ],
+  "atlas": "effects-atlas.png",
+  "atlas_size": [
+    2560,
+    2560
+  ]
+}

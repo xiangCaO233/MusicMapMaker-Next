@@ -19,17 +19,20 @@ set(_MMM_SOURCE_DEFAULT_SKIN "${MMM_SYNC_SOURCE_ASSETS_ROOT}/skins/mmm-default")
 set(_MMM_SOURCE_IVM_SKIN "${MMM_SYNC_SOURCE_ASSETS_ROOT}/skins/ivm")
 # RM 游玩皮肤包含经过矩形适配的物件和原包音效。
 set(_MMM_SOURCE_RM_SKIN "${MMM_SYNC_SOURCE_ASSETS_ROOT}/skins/rm")
+# 旧版 RM 使用独立目录和图集，不能覆盖新版 RM。
+set(_MMM_SOURCE_RM_OLD_SKIN "${MMM_SYNC_SOURCE_ASSETS_ROOT}/skins/rm-old")
 # 目标统一落在 AppPaths 使用的 assets 子目录。
 set(_MMM_DESTINATION_ASSETS "${MMM_SYNC_DESTINATION_CONFIG_ROOT}/assets")
 
-# 默认中英文和三套内置皮肤入口缺失时立即失败，避免生成不完整的本机资源目录。
+# 默认中英文和四套内置皮肤入口缺失时立即失败，避免生成不完整的本机资源目录。
 foreach(
   _MMM_REQUIRED_FILE
   "${_MMM_SOURCE_TRANSLATIONS}/en_us.lua"
   "${_MMM_SOURCE_TRANSLATIONS}/zh_cn.lua"
   "${_MMM_SOURCE_DEFAULT_SKIN}/skin.lua"
   "${_MMM_SOURCE_IVM_SKIN}/skin.lua"
-  "${_MMM_SOURCE_RM_SKIN}/skin.lua")
+  "${_MMM_SOURCE_RM_SKIN}/skin.lua"
+  "${_MMM_SOURCE_RM_OLD_SKIN}/skin.lua")
   # 任一基础入口缺失都说明源码资源不完整，不能继续部分同步。
   if(NOT EXISTS "${_MMM_REQUIRED_FILE}")
     message(
@@ -60,7 +63,7 @@ function(_mmm_sync_managed_directory SOURCE_ROOT DESTINATION_ROOT)
   # 不清理目标中的多余文件是保护用户扩展的关键约束。
 endfunction()
 
-# 四个受管资源根分别增量写入，所有目标都固定在 assets 下；用户配置文件和 ImGui 布局文件不属于同步输入，也不允许成为写入目标。
+# 五个受管资源根分别增量写入，所有目标都固定在 assets 下；用户配置文件和 ImGui 布局文件不属于同步输入，也不允许成为写入目标。
 _mmm_sync_managed_directory("${_MMM_SOURCE_TRANSLATIONS}"
                             "${_MMM_DESTINATION_ASSETS}/translations")
 # 默认皮肤独立写入固定名称，避免影响同级自定义皮肤。
@@ -74,6 +77,10 @@ _mmm_sync_managed_directory("${_MMM_SOURCE_IVM_SKIN}"
 # 默认公共字体仍放在同级 mmm-default 内，不为 RM 复制第二套字体。
 _mmm_sync_managed_directory("${_MMM_SOURCE_RM_SKIN}"
                             "${_MMM_DESTINATION_ASSETS}/skins/rm")
+
+# 旧版组件、动画图集和导出脚本一起增量同步，保留同目录用户扩展。
+_mmm_sync_managed_directory("${_MMM_SOURCE_RM_OLD_SKIN}"
+                            "${_MMM_DESTINATION_ASSETS}/skins/rm-old")
 
 # 演练定义及只读示例源独立分发，用户练习副本和学习进度不属于受管资源。
 if(EXISTS "${MMM_SYNC_SOURCE_ASSETS_ROOT}/walkthroughs")
