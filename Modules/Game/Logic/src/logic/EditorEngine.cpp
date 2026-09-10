@@ -84,6 +84,8 @@ constexpr double RENDER_SNAPSHOT_SECONDARY_MAX_HZ = 240.0;
 void syncKeySoundControls(const Config::SfxConfig& config)
 {
     auto& audio = Audio::AudioManager::instance();
+    // 总开关与未绑定、已绑定两组开关分别同步，保留各组独立静音偏好。
+    // 增益仍单独写入，解除静音后可恢复当前配置而不需要重载资源。
     audio.setPlayerKeySoundAreaMuted(!config.enableHitSfx);
     audio.setKeySoundEffectGroupMuted(Audio::KeySoundEffectGroup::Unbound,
                                       !config.enableUnboundHitSfx);
@@ -109,6 +111,8 @@ constexpr double MAIN_AUDIO_SYNC_BACKWARD_RESET_EPSILON = 0.01;
 /// @return 非空、非点目录且不含任一平台路径分隔符时返回 true。
 bool isValidAudioResourceFileName(std::string_view filename)
 {
+    // 此处只限制单个路径分量，避免重命名输入携带目录移动语义。
+    // 并未检查所有平台保留字符或目标是否已存在，后续文件操作仍需报告失败。
     return !filename.empty() && filename != "." && filename != ".." &&
            filename.find('/') == std::string_view::npos &&
            filename.find('\\') == std::string_view::npos;
@@ -123,14 +127,20 @@ bool isValidAudioResourceFileName(std::string_view filename)
                                                   double nowSteadySeconds)
 {
     double resolvedTime = ctx.currentTime;
+    // 工作区保存与标签切换需要连续时间，而不是上一次 update 的离散值。
+    // 统一使用调用方提供的单调时刻，多个会话可在同一时间基准比较。
     if ( ctx.playbackVisualClock.initialized() ) {
         resolvedTime = ctx.playbackVisualClock.currentTimeAt(nowSteadySeconds);
     }
+    // 视觉时钟结果异常时先回退会话时间，二者都无效才采用零。
+    // 避免把非有限播放位置写入工作区或传播给下一会话。
     if ( !std::isfinite(resolvedTime) ) {
         resolvedTime = std::isfinite(ctx.currentTime) ? ctx.currentTime : 0.0;
     }
 
     const double totalTime = SessionUtils::getEffectiveTotalTimeSeconds(ctx);
+    // 只钳制有限总时长上界，保留负时间视觉前置区间。
+    // 这里不把负播放位置压到零，避免切换标签时丢失预滚动状态。
     if ( std::isfinite(totalTime) ) {
         resolvedTime = std::min(resolvedTime, totalTime);
     }
@@ -145,6 +155,8 @@ void publishProjectOpenFailed(const std::filesystem::path& path,
                               const std::string& message, bool isPackage)
 {
     Event::ProjectOpenFailedEvent event;
+    // 事件路径使用统一 UTF-8 表示，避免状态栏与错误提示各自转换编码。
+    // isPackage 保留失败入口类别，接收方无需再从扩展名猜测。
     event.m_projectPath  = Config::pathToUtf8(path);
     event.m_errorMessage = message;
     event.m_isPackage    = isPackage;
@@ -182,7 +194,9 @@ void publishProjectOpenProgress(Event::ProjectOpenProgressStage stage,
     Event::ProjectOpenProgressEvent event;
     event.m_stage    = stage;
     event.m_fraction = fraction;
-    event.m_detail   = std::move(detail);
+    // 进度详情按值进入事件，调用方的临时字符串可在发布后释放。
+    // 该助手不验证阶段或钳制进度数值，调用者须保持阶段与总进度一致。
+    event.m_detail = std::move(detail);
     Event::EventBus::instance().publish(event);
 }
 
@@ -196,6 +210,8 @@ void updateFollowerHitEffects(SessionContext& ctx, double previousAnimateTime,
     const auto& config = ctx.lastConfig;
     SessionUtils::ensureHitEvents(ctx);
 
+    // 跳转或播放不连续时先重置事件游标，并恢复当前时刻仍有效的持续特效。
+    // 直接返回避免把重建后的历史事件再次作为本轮新触发消费。
     if ( resetHitIndex ) {
         SessionUtils::syncHitIndex(ctx);
         ctx.hitFXSystem.restoreActiveHoldEffects(
@@ -203,10 +219,14 @@ void updateFollowerHitEffects(SessionContext& ctx, double previousAnimateTime,
         return;
     }
 
+    // 正常推进只收集上一动画时刻之后、本次时刻之前的事件。
+    // 当前使用局部向量，存在随触发数量增长的分配成本。
     std::vector<System::HitFXSystem::HitEvent> triggeredEvents;
     while ( ctx.nextHitIndex < ctx.hitEvents.size() &&
             ctx.hitEvents[ctx.nextHitIndex].timestamp <= ctx.animateTime ) {
         const auto& ev = ctx.hitEvents[ctx.nextHitIndex];
+        // 前闭合边界的事件已经被前一轮消费，严格大于可避免重复触发。
+        // 游标对所有不晚于当前时刻的事件推进，包括不需重新触发的旧事件。
         if ( ev.timestamp > previousAnimateTime ) {
             triggeredEvents.push_back(ev);
         }
@@ -228,6 +248,8 @@ void sleepUntilFrameDeadline(FrameLimitClock::time_point deadline)
             return;
         }
 
+        // 限频等待属于用户帧率设置的节拍控制，不用于等待业务状态同步。
+        // 先粗睡眠再睡到剩余截止点，避免用 yield 在最后阶段忙等。
         auto remaining = deadline - now;
         if ( remaining > FRAME_LIMIT_SLEEP_MARGIN ) {
             std::this_thread::sleep_for(remaining - FRAME_LIMIT_SLEEP_MARGIN);
@@ -242,6 +264,8 @@ void sleepUntilFrameDeadline(FrameLimitClock::time_point deadline)
 /// @warning 逻辑热路径：每 update 调用；只做常量级整数夹取和 duration 转换。
 FrameLimitClock::duration backgroundSessionUpdateInterval(int refreshRate)
 {
+    // 后台预算限制在既定范围内，设备报告零或异常低刷新率仍得到有效间隔。
+    // 此处只计算 duration，不实际阻塞任何会话线程。
     int backgroundUps = std::clamp(
         refreshRate, BACKGROUND_SESSION_MIN_UPS, BACKGROUND_SESSION_MAX_UPS);
     return std::chrono::duration_cast<FrameLimitClock::duration>(
@@ -268,11 +292,15 @@ double frameLimitTargetUps(Config::FrameLimitPreference frameLimit)
 double applyUpsBackpressure(double snapshotHz, double logicUps,
                             double targetUps)
 {
+    // 统计尚未稳定或目标无效时保持原预算，避免启动阶段误降刷新率。
+    // Unlimited 的零目标同样不适用这套相对健康度计算。
     if ( logicUps <= 1.0 || targetUps <= 1.0 || !std::isfinite(logicUps) ||
          !std::isfinite(targetUps) ) {
         return snapshotHz;
     }
 
+    // 分段按负载健康度降低快照生成预算，为逻辑推进保留处理时间。
+    // 倍率作用于传入预算，不在此设置线程睡眠或修改用户目标 UPS。
     const double health = logicUps / targetUps;
     if ( health < 0.70 ) {
         return snapshotHz * 0.50;
@@ -298,6 +326,8 @@ float calculateCursorSmokeLifeOverride(const SessionContext& ctx)
     }
 
     double bpm = ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
+    // 从已排序 BPM 缓存查找当前时间之后的首事件，再取前项作为有效 BPM。
+    // 首次 BPM 事件之前沿用谱面偏好值，不扫描原始 Timing 容器。
     auto it = std::upper_bound(ctx.bpmEvents.begin(),
                                ctx.bpmEvents.end(),
                                ctx.currentTime,
@@ -327,6 +357,8 @@ float calculateCursorSmokeLifeOverride(const SessionContext& ctx)
 float resolveActiveCursorSmokeLifeOverride(
     const std::vector<SessionSnapshotEntry>& sessions, int32_t activeIndex)
 {
+    // 活跃值是注册表稳定索引，不是当前快照向量的位置。
+    // 按 entry.index 查找可兼容中间会话关闭后留下的索引空洞。
     for ( const auto& entry : sessions ) {
         if ( entry.index == activeIndex && entry.session ) {
             return calculateCursorSmokeLifeOverride(
@@ -344,6 +376,9 @@ float resolveActiveCursorSmokeLifeOverride(
 int32_t findSessionIndexByCameraIdUnsafe(
     const std::vector<SessionEntry>& sessions, const std::string& cameraId)
 {
+    // 这里返回 SessionEntry 列表位置，与带索引快照中的 entry.index
+    // 查询方式不同。 不检查 session
+    // 是否存在，后续路由需自行验证目标可接收命令。
     for ( int32_t index = 0; index < static_cast<int32_t>(sessions.size());
           ++index ) {
         if ( sessions[static_cast<size_t>(index)].cameraId == cameraId ) {
@@ -362,6 +397,8 @@ int32_t findSessionIndexByCameraIdUnsafe(
 bool canUseHoverScrollTargetUnsafe(const std::vector<SessionEntry>& sessions,
                                    int32_t activeIndex, int32_t targetIndex)
 {
+    // 先确认悬浮目标索引与会话有效，不能只凭 cameraId 命中就放行。
+    // 活动项检查在目标验证之后，空活动槽也不会误获得滚轮权限。
     if ( targetIndex < 0 ||
          targetIndex >= static_cast<int32_t>(sessions.size()) ||
          !sessions[static_cast<size_t>(targetIndex)].session ) {
@@ -376,6 +413,8 @@ bool canUseHoverScrollTargetUnsafe(const std::vector<SessionEntry>& sessions,
         return false;
     }
 
+    // 不同会话只有共享非空主音轨同步键才允许悬浮滚动路由。
+    // 两个空键不代表同步关系，必须显式排除空指纹相等的情况。
     const auto& activeFingerprint =
         sessions[static_cast<size_t>(activeIndex)].mainAudioSyncFingerprint;
     const auto& targetFingerprint =
@@ -384,24 +423,38 @@ bool canUseHoverScrollTargetUnsafe(const std::vector<SessionEntry>& sessions,
 }
 
 /// @brief 将持久化的项目相对路径解析为文件系统路径。
+/// @param project 提供相对路径解释基准的项目。
+/// @param path 持久化路径，可为空或绝对路径。
+/// @return 词法规范化的路径，不检查目标是否存在。
+/// @note 空路径保持空，绝对路径不再拼接项目根。
 std::filesystem::path resolveProjectPath(const Project&               project,
                                          const std::filesystem::path& path)
 {
     if ( path.empty() || path.is_absolute() ) {
         return path.lexically_normal();
     }
+    // 相对路径只在项目根下解释，不使用进程当前目录。
+    // 词法规范化折叠冗余分量，但不解析符号链接。
     return (project.m_projectRoot / path).lexically_normal();
 }
 
 /// @brief 将文件系统路径转换为稳定的项目相对路径。
+/// @param project 相对路径的根目录来源。
+/// @param path 待持久化的文件系统路径。
+/// @return 相对路径；文件系统转换失败时回退文件名。
+/// @warning 低频路径转换可能访问文件系统，禁止放入逐帧坐标或时间同步。
 std::filesystem::path makeProjectRelativePath(const Project& project,
                                               const std::filesystem::path& path)
 {
     if ( path.empty() ) return {};
+    // 已经相对的输入直接规范化，避免再次添加项目目录前缀。
+    // 绝对路径才需要查询项目根并执行相对转换。
     if ( path.is_relative() ) return path.lexically_normal();
 
     std::error_code ec;
     auto            root = std::filesystem::absolute(project.m_projectRoot, ec);
+    // 无法解析项目根时仍给出可展示的文件名，而不是传播无效相对结果。
+    // 这个回退可能失去目录区分度，调用方不能把它当作完整唯一身份。
     if ( ec ) return path.filename();
 
     auto relativePath = std::filesystem::relative(path, root, ec);
@@ -415,6 +468,8 @@ std::filesystem::path makeProjectRelativePath(const Project& project,
 /// @param project 当前项目；存在时相对路径按项目根目录解析。
 /// @param path 谱面文件路径。
 /// @return 规范化后的 UTF-8 路径键，空路径返回空字符串。
+/// @warning 打开与查重的低频路径：weakly_canonical 可能访问文件系统。
+/// @note 路径规范化失败时仍使用词法路径，不通过异常中断项目打开。
 std::string makeBeatmapPathKey(const Project*               project,
                                const std::filesystem::path& path)
 {
@@ -423,6 +478,8 @@ std::string makeBeatmapPathKey(const Project*               project,
     }
 
     std::filesystem::path keyPath = path;
+    // 有项目时以项目根解释相对路径，未关联项目时才使用进程绝对路径转换。
+    // 两种入口最终都转成同一 UTF-8 键格式。
     if ( project ) {
         keyPath = resolveProjectPath(*project, keyPath);
     } else if ( keyPath.is_relative() ) {
@@ -434,6 +491,8 @@ std::string makeBeatmapPathKey(const Project*               project,
     }
 
     std::error_code ec;
+    // 弱规范化允许部分路径尚不存在，同时尽量消除已有前缀的路径别名。
+    // 失败时保留先前路径，最后的词法整理仍可处理点目录冗余。
     auto canonicalPath = std::filesystem::weakly_canonical(keyPath, ec);
     if ( !ec ) {
         keyPath = canonicalPath;
@@ -455,6 +514,8 @@ std::string getOpenSessionBeatmapDiagnosticPath(const Project&        project,
     if ( ctx.currentBeatmap ) {
         mapPath = ctx.currentBeatmap->m_baseMapMetadata.map_path;
     }
+    // 当前谱面尚无路径时退回会话保存的稳定路径键。
+    // 诊断不能因为内存谱面未同步路径就直接丢失来源信息。
     if ( mapPath.empty() && !entry.beatmapPathKey.empty() ) {
         mapPath = Config::utf8ToPath(entry.beatmapPathKey);
     }
@@ -465,6 +526,8 @@ std::string getOpenSessionBeatmapDiagnosticPath(const Project&        project,
             return Config::pathToUtf8(relativePath);
         }
     }
+    // 所有路径来源都不可用时才使用显示名或通用占位描述。
+    // 该结果用于用户诊断，不应再作为资源解析的唯一文件身份。
     return entry.displayName.empty() ? std::string("<opened beatmap>")
                                      : entry.displayName;
 }
@@ -479,16 +542,22 @@ std::vector<BeatmapAudioReference> collectOpenSessionAudioReferencesUnsafe(
 {
     std::vector<BeatmapAudioReference> result;
     for ( auto& entry : sessions ) {
+        // Logo 占位与空会话不携带谱面依赖，先过滤以免访问无效上下文。
+        // 这里只收集已打开谱面，磁盘中其他谱面由资源服务的扫描路径补充。
         if ( entry.isLogoPlaceholder || !entry.session ) continue;
 
         auto& ctx = entry.session->getContextMutable();
         if ( !ctx.currentBeatmap ) continue;
 
+        // 先把未保存 ECS 修改同步到内存谱面，再提取当前引用。
+        // 否则删除资源时可能遗漏刚绑定但尚未落盘的音符或自动采样。
         SessionUtils::syncBeatmap(ctx);
         const auto beatmapPath =
             getOpenSessionBeatmapDiagnosticPath(project, entry, ctx);
         auto references = ProjectResourceService::collectBeatmapAudioReferences(
             *ctx.currentBeatmap, beatmapPath);
+        // 每个会话收集结果按移动迭代器并入总表，保留引用来源路径与类别。
+        // 不在此跨会话去重，以免丢失需要显示的多个阻塞谱面。
         result.insert(result.end(),
                       std::make_move_iterator(references.begin()),
                       std::make_move_iterator(references.end()));
@@ -514,11 +583,15 @@ void publishAudioResourceMutationResult(
     event.m_success              = success;
     event.m_blockingBeatmapPaths = blockingBeatmapPaths;
     event.m_errorMessage         = errorMessage;
+    // 先发布完整结构化结果，UI 可同时读取操作类型、资源 ID 和阻塞路径。
+    // 日志仅补充失败诊断，不能替代事件中的可定位来源。
     Event::EventBus::instance().publish(event);
     if ( !success ) {
         XWARN("Audio resource mutation failed for '{}': {}",
               resourceId,
               errorMessage);
+        // 逐条记录阻塞谱面，避免主错误消息只说明失败却没有引用来源。
+        // 该日志位于低频资源操作结果路径，不进入每次会话更新。
         for ( const auto& beatmapPath : blockingBeatmapPaths ) {
             XWARN("  Blocking beatmap: {}", beatmapPath);
         }
@@ -543,11 +616,16 @@ struct SessionAudioReferenceRemapResult {
 /// @param beatmapPath 用于相对路径匹配的具体谱面路径。
 /// @param previousResource 移动前资源快照。
 /// @return ECS 匹配和实际重写数量。
+/// @warning 资源移动后的低频更新：完整遍历当前会话音符和采样，禁止逐 update
+/// 调用。
+/// @note 计数对应组件存储字段，不是去重后的谱面对象数量。
 SessionAudioReferenceRemapResult remapSessionEcsAudioReferences(
     const Project& project, SessionContext& ctx, const std::string& beatmapPath,
     const AudioResource& previousResource)
 {
     SessionAudioReferenceRemapResult result;
+    // 匹配使用移动前资源快照，旧路径才能按原谱面目录正确解析。
+    // 引用种类随字段传递，避免把 Note 绑定和歌曲提示当成同一种依赖。
     const auto matchesPreviousResource = [&](const std::string& audioReference,
                                              BeatmapAudioReferenceKind kind) {
         return ProjectResourceService::audioReferenceMatchesResource(
@@ -559,6 +637,8 @@ SessionAudioReferenceRemapResult remapSessionEcsAudioReferences(
             },
             previousResource);
     };
+    // 已有稳定 ID 无需改写，只有匹配旧路径的绑定才计入变化数。
+    // 原实例音量和其他绑定属性保留，只更新资源身份字符串。
     const auto remapBinding = [&](std::optional<AudioSampleBinding>& binding) {
         if ( !binding ||
              !matchesPreviousResource(
@@ -571,6 +651,8 @@ SessionAudioReferenceRemapResult remapSessionEcsAudioReferences(
         ++result.m_changedNoteBindingCount;
     };
 
+    // 根组件和内嵌子段都可能保存绑定，必须逐存储位置更新。
+    // 独立 ECS 子实体也在视图内，因此计数不能直接解释为音效事件数量。
     auto noteView = ctx.noteRegistry.view<NoteComponent>();
     for ( auto entity : noteView ) {
         auto& note = noteView.get<NoteComponent>(entity);
@@ -588,6 +670,8 @@ SessionAudioReferenceRemapResult remapSessionEcsAudioReferences(
                  BeatmapAudioReferenceKind::AudioSampleEvent) ) {
             continue;
         }
+        // 匹配数包含已经使用稳定 ID 的采样，用于识别该会话仍依赖资源。
+        // 实际改写数只在引用字符串变化后增加，两者服务不同后续判断。
         ++result.m_audioSampleReferenceCount;
         if ( sample.m_audioResourceId == previousResource.m_id ) continue;
         sample.m_audioResourceId = previousResource.m_id;
@@ -601,11 +685,16 @@ SessionAudioReferenceRemapResult remapSessionEcsAudioReferences(
 /// @param oldResourceId 旧资源 ID。
 /// @param newResourceId 新资源 ID。
 /// @return 实际改写的 ECS 字段数量。
+/// @warning 显式重命名的低频会话扫描，调用者负责会话锁及后续派生状态刷新。
+/// @pre 旧 ID 与新 ID 代表一次实际重命名；本助手不自行检查二者不同。
+/// @note 本入口只做精确 ID 比较，路径兼容匹配由移动引用入口处理。
 SessionAudioReferenceRemapResult remapSessionEcsAudioResourceId(
     SessionContext& ctx, std::string_view oldResourceId,
     std::string_view newResourceId)
 {
     SessionAudioReferenceRemapResult result;
+    // 只改精确命中的绑定身份，保持未命中的路径引用原样。
+    // 新 ID 从 string_view 复制到组件字段，不保存调用方临时字符串视图。
     const auto remapBinding = [&](std::optional<AudioSampleBinding>& binding) {
         if ( !binding || binding->m_audioResourceId != oldResourceId ) return;
         binding->m_audioResourceId = newResourceId;
@@ -621,6 +710,8 @@ SessionAudioReferenceRemapResult remapSessionEcsAudioResourceId(
         }
     }
 
+    // 采样匹配和改写在这个精确重命名入口同步计数。
+    // 它与路径规范化入口的“已匹配但无需改写”分支不同。
     auto sampleView = ctx.sampleRegistry.view<SampleComponent>();
     for ( auto entity : sampleView ) {
         auto& sample = sampleView.get<SampleComponent>(entity);
@@ -633,6 +724,12 @@ SessionAudioReferenceRemapResult remapSessionEcsAudioResourceId(
 }
 
 /// @brief 在写入项目前解析元数据资源路径。
+/// @param project 项目相对路径的解释基准。
+/// @param mapDirectory 当前谱面绝对目录。
+/// @param path 原始资源路径，可为空或绝对路径。
+/// @param preferProjectRoot 是否优先尝试项目根下的相对路径。
+/// @return 首个存在的候选，均不存在时保留首选解释。
+/// @warning 低频保存路径：使用文件存在性查询，不得放入渲染或逻辑热循环。
 std::filesystem::path resolveMetadataResourcePath(
     const Project& project, const std::filesystem::path& mapDirectory,
     const std::filesystem::path& path, bool preferProjectRoot)
@@ -641,12 +738,18 @@ std::filesystem::path resolveMetadataResourcePath(
         return path.lexically_normal();
     }
 
+    // 同一个相对字符串可能源于项目格式或外部谱面格式。
+    // 分别构造两种候选，避免盲目把外部谱面资源解释到项目根。
     auto projectPath = resolveProjectPath(project, path);
     auto mapPath     = (mapDirectory / path).lexically_normal();
 
     std::error_code ec;
+    // 首选存在时直接返回，第二候选只作为缺失回退。
+    // 两个候选都不存在也保留首选路径，使未到位资源仍可持久化其预期位置。
     if ( preferProjectRoot ) {
         if ( std::filesystem::exists(projectPath, ec) ) return projectPath;
+        // 独立文件查询前清除上一候选错误，避免混用两次检查的状态。
+        // 存在性查询失败与不存在一样继续回退，不在此抛异常中止保存。
         ec.clear();
         if ( std::filesystem::exists(mapPath, ec) ) return mapPath;
         return projectPath;
@@ -659,10 +762,16 @@ std::filesystem::path resolveMetadataResourcePath(
 }
 
 /// @brief 将谱面元数据中的长期路径规范化为项目相对路径。
+/// @param beatMap 要原地更新长期资源路径的谱面。
+/// @param project 提供统一持久化根目录的项目。
+/// @warning 低频打开及保存路径：包括路径解析和存在性检查。
+/// @note 只处理元数据路径，不改变 Note 或自动采样的稳定资源 ID。
 void normalizeBeatmapMetadataPathsForProject(BeatMap&       beatMap,
                                              const Project& project)
 {
     auto& meta = beatMap.m_baseMapMetadata;
+    // 没有谱面路径就缺少解释外部相对资源的可靠目录，保持原元数据。
+    // 不能使用进程当前工作目录替代尚未确定的谱面位置。
     if ( meta.map_path.empty() ) return;
 
     auto absoluteMapPath = resolveProjectPath(project, meta.map_path);
@@ -672,10 +781,16 @@ void normalizeBeatmapMetadataPathsForProject(BeatMap&       beatMap,
                    mapExtension.end(),
                    mapExtension.begin(),
                    ::tolower);
+    // MMM 以项目相对路径为首选，其他格式优先采用谱面目录。
+    // 扩展名先统一为小写，避免大小写形式改变同一种文件的解析规则。
     bool preferProjectRoot = (mapExtension == ".mmm");
 
+    // 先保存绝对谱面目录供资源解析，再把谱面自身路径改为项目相对形式。
+    // 顺序不能倒置，否则后续资源解析可能把相对目录再次拼接项目根。
     meta.map_path = makeProjectRelativePath(project, absoluteMapPath);
 
+    // 空字段保持空，不生成指向项目根的假资源引用。
+    // 每个非空字段独立解析，未找到文件仍保留首选位置的项目相对表示。
     auto normalizeResourcePath = [&](std::filesystem::path& path) {
         if ( path.empty() ) return;
         auto resolved = resolveMetadataResourcePath(
@@ -690,8 +805,12 @@ void normalizeBeatmapMetadataPathsForProject(BeatMap&       beatMap,
 }
 
 /// @brief 将编辑工具枚举转换为项目工作区中的稳定文本。
+/// @param tool 当前会话工具。
+/// @return 工作区格式中的稳定名称；临时 Layout 与未知值回退 Move。
 std::string editToolToWorkspaceName(EditTool tool)
 {
+    // 工作区保存的是稳定文本而非枚举数值，避免枚举排列调整影响旧文件。
+    // Layout 不作为恢复后的默认编辑状态，统一回退到移动工具。
     switch ( tool ) {
     case EditTool::Marquee: return "Marquee";
     case EditTool::Draw: return "Draw";
@@ -704,6 +823,8 @@ std::string editToolToWorkspaceName(EditTool tool)
 }
 
 /// @brief 将项目工作区中的稳定文本转换为编辑工具枚举。
+/// @param name 工作区保存的工具文本。
+/// @return 支持的工具，未知名称按 Move 兼容恢复。
 EditTool workspaceNameToEditTool(const std::string& name)
 {
     if ( name == "Marquee" ) {
@@ -718,6 +839,8 @@ EditTool workspaceNameToEditTool(const std::string& name)
     if ( name == "ColorEraser" ) {
         return EditTool::ColorEraser;
     }
+    // 兼容未认识或旧版本工具名，不让工作区加载因单个偏好失败。
+    // 恢复不会猜测新增工具的枚举编号。
     return EditTool::Move;
 }
 
@@ -772,6 +895,7 @@ Config::ObjectPlacementSnapMode workspaceNameToObjectPlacementSnapMode(
     if ( name == "CommonBeatDivisors" ) {
         return Config::ObjectPlacementSnapMode::CommonBeatDivisors;
     }
+    // 未识别文本采用当前分拍，兼容旧工作区缺省值和未来新增模式。
     return Config::ObjectPlacementSnapMode::CurrentBeatDivisor;
 }
 
@@ -783,6 +907,7 @@ void captureToolbarWorkspaceState(ProjectWorkspaceState&      workspace,
                                   const Config::EditorConfig& editorConfig,
                                   bool syncSameMainAudioCanvases)
 {
+    // 有效标记区分已保存的项目偏好与旧项目尚未建立的工具栏状态。
     auto& toolbarState           = workspace.m_toolbarState;
     toolbarState.m_valid         = true;
     toolbarState.m_reverseScroll = editorConfig.settings.reverseScroll;
@@ -799,6 +924,7 @@ void captureToolbarWorkspaceState(ProjectWorkspaceState&      workspace,
         editorConfig.visual.enableLinearScrollMapping;
     toolbarState.m_beatLineDisplayMode = beatLineDisplayModeToWorkspaceName(
         editorConfig.visual.beatLineDisplayMode);
+    // 同时保留旧布尔字段；NearCursor 仍属于可绘制拍线，不能等同于 Hidden。
     toolbarState.m_drawBeatLines = editorConfig.visual.beatLineDisplayMode !=
                                    Config::BeatLineDisplayMode::Hidden;
     toolbarState.m_stopPlaybackOnScroll =
@@ -812,6 +938,8 @@ void captureToolbarWorkspaceState(ProjectWorkspaceState&      workspace,
 /// @brief 将项目工作区工具栏状态应用到编辑器配置。
 /// @param editorConfig 需要修改的编辑器配置。
 /// @param toolbarState 项目工作区中保存的工具栏状态。
+/// @pre 调用者已决定采用该工作区，函数不检查 m_valid。
+/// @note 同主音轨同步开关属于引擎状态，由调用者单独恢复。
 void applyToolbarWorkspaceState(
     Config::EditorConfig&               editorConfig,
     const ProjectWorkspaceToolbarState& toolbarState)
@@ -823,6 +951,7 @@ void applyToolbarWorkspaceState(
     editorConfig.settings.objectPlacementSnapMode =
         workspaceNameToObjectPlacementSnapMode(
             toolbarState.m_objectPlacementSnapMode);
+    // 持久化数据可能来自其他版本，只接纳当前实现认识的分拍位。
     editorConfig.settings.commonBeatDivisorMask =
         toolbarState.m_commonBeatDivisorMask &
         Config::COMMON_BEAT_DIVISOR_MASK_ALL;
@@ -834,6 +963,7 @@ void applyToolbarWorkspaceState(
     editorConfig.settings.stopPlaybackOnScroll =
         toolbarState.m_stopPlaybackOnScroll;
     editorConfig.visual.enableHitEffects = toolbarState.m_enableHitEffects;
+    // 分拍必须为正数，缩放限制沿用工具栏可编辑区间；这里不进行 UI 更新。
     editorConfig.settings.beatDivisor =
         std::clamp(toolbarState.m_beatDivisor, 1, 64);
     editorConfig.visual.timelineZoom =
@@ -885,6 +1015,8 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
 /// @warning 逻辑热路径低频分支：仅在命令入队时做 variant 类型判断。
 bool isTemporaryProjectMutationCommand(const LogicCommand& cmd)
 {
+    // 这里按命令的潜在写入能力分类，不检查当前选择是否为空或操作能否成功。
+    // 新增会写入谱面、资源或保存结果的命令时，需要同时维护这份入口门禁。
     if ( std::holds_alternative<CmdCreateBeatmap>(cmd) ||
          std::holds_alternative<CmdStartDrag>(cmd) ||
          std::holds_alternative<CmdUpdateDrag>(cmd) ||
@@ -930,6 +1062,7 @@ bool isTemporaryProjectMutationCommand(const LogicCommand& cmd)
         return true;
     }
 
+    // 仅导出包不会回写临时项目；转换后保存到项目才需要写权限。
     if ( const auto* pack = std::get_if<CmdPackBeatmap>(&cmd) ) {
         return pack->saveConvertedBeatmapsToProject;
     }
@@ -938,12 +1071,15 @@ bool isTemporaryProjectMutationCommand(const LogicCommand& cmd)
 }
 }  // namespace
 
+/// @brief 返回进程内共享的编辑引擎，首次访问时建立事件订阅。
+/// @return 静态实例的非拥有引用。
 EditorEngine& EditorEngine::instance()
 {
     static EditorEngine instance;
     return instance;
 }
 
+/// @brief 建立配置缓存和事件路由；会话由运行入口随后创建。
 EditorEngine::EditorEngine()
 {
     // 从全局配置初始化本地缓存
@@ -969,6 +1105,8 @@ EditorEngine::EditorEngine()
             CmdUpdateViewport cmd{ e.canvasName,
                                    static_cast<float>(e.newSize.x),
                                    static_cast<float>(e.newSize.y) };
+            // 先保留最新尺寸，使尚未创建或随后切换的会话也能使用该视口。
+            // 事件回调只投递命令，实际相机更新在会话处理命令时完成。
             // 缓存视口尺寸
             m_renderSyncRegistry.cacheViewportSize(cmd.cameraId,
                                                    { cmd.width, cmd.height });
@@ -997,6 +1135,7 @@ EditorEngine::EditorEngine()
     // 订阅逻辑指令事件
     Event::EventBus::instance().subscribe<Event::LogicCommandEvent>(
         [this](const Event::LogicCommandEvent& e) {
+            // 全局配置走统一缓存入口，其余指令按当前会话和项目权限路由。
             if ( std::holds_alternative<CmdUpdateEditorConfig>(e.command) ) {
                 setEditorConfig(
                     std::get<CmdUpdateEditorConfig>(e.command).config);
@@ -1006,6 +1145,8 @@ EditorEngine::EditorEngine()
         });
 }
 
+/// @brief 析构前结束逻辑线程，避免线程继续借用引擎成员。
+/// @warning 进程退出低频路径：stop 可能等待逻辑线程结束。
 EditorEngine::~EditorEngine()
 {
     stop();
@@ -1039,14 +1180,25 @@ TemporaryProjectInfo EditorEngine::currentTemporaryProjectInfo() const
     return ProjectController::instance().currentTemporaryProjectInfo();
 }
 
+/// @brief 接收渲染侧帧率，供逻辑线程计算快照生成预算。
+/// @param fps 当前有效采样帧率；非正数与非有限值被忽略。
+/// @warning UI 每帧可写、逻辑每 update 可读；relaxed 原子只传递预算数值，
+/// 不发布渲染资源，禁止在此等待逻辑线程或访问会话。
 void EditorEngine::publishRenderFps(float fps)
 {
+    // 无效采样不覆盖上一次有效值，避免短暂统计异常改变预算来源。
     if ( !std::isfinite(fps) || fps <= 0.0f ) {
         return;
     }
     m_renderFps.store(fps, std::memory_order_relaxed);
 }
 
+/// @brief 将渲染需求和逻辑吞吐换算为建议的快照生成间隔。
+/// @param config 本轮使用的编辑器配置快照。
+/// @param secondaryCamera 辅助相机使用较低生成倍率与上限。
+/// @return 正的秒数；调用者据此跳过非必要快照，函数自身不等待。
+/// @warning 逻辑每 update 或每辅助相机调用；FPS 由 UI 写入、UPS 由逻辑
+/// 发布，relaxed 读取只用于近似预算，禁止扩展为 ECS 扫描或阻塞同步。
 double EditorEngine::adaptiveRenderSnapshotMinInterval(
     const Config::EditorConfig& config, bool secondaryCamera) const
 {
@@ -1054,6 +1206,7 @@ double EditorEngine::adaptiveRenderSnapshotMinInterval(
         static_cast<double>(m_renderFps.load(std::memory_order_relaxed));
     const double logicUps =
         static_cast<double>(m_logicUps.load(std::memory_order_relaxed));
+    // 主画布保留更密的快照以支持交互；辅助视图独立封顶，控制重复生成成本。
     const double maxSnapshotHz = secondaryCamera
                                      ? RENDER_SNAPSHOT_SECONDARY_MAX_HZ
                                      : RENDER_SNAPSHOT_MAIN_MAX_HZ;
@@ -1063,6 +1216,7 @@ double EditorEngine::adaptiveRenderSnapshotMinInterval(
     double       snapshotHz =
         std::clamp(fpsDrivenHz, RENDER_SNAPSHOT_MIN_HZ, maxSnapshotHz);
 
+    // 不限 UPS 时借用有效 FPS 估算负载目标，仍保留有限的快照预算。
     double targetUps = frameLimitTargetUps(config.settings.frameLimit);
     if ( targetUps <= 1.0 && std::isfinite(renderFps) && renderFps > 1.0 ) {
         targetUps = std::clamp(renderFps * 2.0,
@@ -1070,16 +1224,23 @@ double EditorEngine::adaptiveRenderSnapshotMinInterval(
                                RENDER_SNAPSHOT_MAIN_MAX_HZ);
     }
 
+    // 先按实际逻辑吞吐回压，再守住快照频率上下界，保证倒数有定义。
     snapshotHz = applyUpsBackpressure(snapshotHz, logicUps, targetUps);
     snapshotHz = std::clamp(snapshotHz, RENDER_SNAPSHOT_MIN_HZ, maxSnapshotHz);
     return 1.0 / snapshotHz;
 }
 
+/// @brief 判断打开另一个项目之前是否存在需要关闭的编辑会话。
+/// @return 仅有 Logo 占位画布时返回 false；不以当前是否绑定项目代替判断。
 bool EditorEngine::needsCanvasCloseBeforeProjectOpen() const
 {
     return m_sessionRegistry.hasNonLogoSession();
 }
 
+/// @brief 将已打开谱面的视图位置和工具栏偏好写入当前项目的内存设置。
+/// @note 不保存谱面正文，也不直接把项目设置写入磁盘。
+/// @warning 保存、切换项目等低频入口；持有会话锁遍历列表并规范化路径，
+/// 可能访问文件系统，不得移入每 update 的连续状态发布路径。
 void EditorEngine::captureProjectWorkspaceState()
 {
     auto* project = ProjectController::instance().currentProject();
@@ -1088,6 +1249,7 @@ void EditorEngine::captureProjectWorkspaceState()
     }
 
     auto& workspace = project->m_settings.m_workspace;
+    // 捕获完整替换旧快照，关闭的画布和旧活动谱面不能残留到下次恢复。
     workspace.m_openBeatmaps.clear();
     workspace.m_activeBeatmapPath.clear();
     workspace.m_activePlaybackTime = 0.0;
@@ -1101,8 +1263,9 @@ void EditorEngine::captureProjectWorkspaceState()
 
     /// @brief 保护工作区状态捕获期间的会话列表访问。
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-    const auto&  sessions    = m_sessionRegistry.entriesUnsafe();
-    const auto   activeIndex = m_sessionRegistry.activeIndex();
+    const auto& sessions    = m_sessionRegistry.entriesUnsafe();
+    const auto  activeIndex = m_sessionRegistry.activeIndex();
+    // 所有播放时间外推共享同一次单调时钟采样，避免遍历耗时产生偏差。
     const double workspaceCaptureTime =
         std::chrono::duration<double>(FrameLimitClock::now().time_since_epoch())
             .count();
@@ -1123,12 +1286,15 @@ void EditorEngine::captureProjectWorkspaceState()
         auto relativeMapPath =
             makeProjectRelativePath(*project, absoluteMapPath);
 
+        // 保存项目相对路径便于整体搬迁；相机 ID 保持布局映射，名称用于显示。
         ProjectWorkspaceBeatmapState beatmapState;
         beatmapState.m_filePath     = Config::pathToUtf8(relativeMapPath);
         beatmapState.m_cameraId     = entry.cameraId;
         beatmapState.m_displayName  = entry.displayName;
         beatmapState.m_playbackTime = ctx.currentTime;
-        const auto camera           = ctx.cameras.find(entry.cameraId);
+        // 横移按视口宽度归一化，恢复时可适配不同窗口大小。
+        // 尚无视口或尺寸无效时保留状态默认值，避免除零和持久化非有限结果。
+        const auto camera = ctx.cameras.find(entry.cameraId);
         if ( camera != ctx.cameras.end() &&
              std::isfinite(camera->second.horizontalOffsetX) &&
              std::isfinite(camera->second.viewportWidth) &&
@@ -1136,6 +1302,7 @@ void EditorEngine::captureProjectWorkspaceState()
             beatmapState.m_canvasHorizontalOffsetRatio =
                 camera->second.horizontalOffsetX / camera->second.viewportWidth;
         }
+        // 只有正在播放的活动会话需要连续时间外推；其他画布保留逻辑时间。
         if ( i == activeIndex && ctx.isPlaying ) {
             beatmapState.m_playbackTime =
                 resolveContinuousSessionTime(ctx, workspaceCaptureTime);
@@ -1145,14 +1312,21 @@ void EditorEngine::captureProjectWorkspaceState()
         if ( i == activeIndex ) {
             workspace.m_activeBeatmapPath  = beatmapState.m_filePath;
             workspace.m_activePlaybackTime = beatmapState.m_playbackTime;
+            // 旧项目读取路径仍使用名称字段，与完整工作区同时维护。
             project->m_settings.m_lastOpenedBeatmap = entry.displayName;
         }
     }
 }
 
+/// @brief 按项目工作区重建画布，并将活动会话切换延后到会话更新之后。
+/// @param explicitBeatmapPath 显式打开的谱面路径；非空时跳过整组恢复。
+/// @note 恢复跳转位置，不自动恢复播放状态；缺失文件逐项跳过。
+/// @warning 项目打开低频路径：加载磁盘谱面、分配会话并短暂复制共享所有权，
+/// 局部 shared_ptr 保持解锁后的会话存活，不得用于每帧同步视图。
 void EditorEngine::restoreProjectWorkspace(
     const std::filesystem::path& explicitBeatmapPath)
 {
+    // 用户指定谱面时由打开流程处理，旧工作区不能抢占这一目标。
     if ( !explicitBeatmapPath.empty() ) {
         return;
     }
@@ -1164,6 +1338,7 @@ void EditorEngine::restoreProjectWorkspace(
 
     std::vector<ProjectWorkspaceBeatmapState> beatmaps =
         project->m_settings.m_workspace.m_openBeatmaps;
+    // 兼容仅保存最后打开名称的旧项目；匹配首个同名条目，不猜测磁盘路径。
     if ( beatmaps.empty() &&
          !project->m_settings.m_lastOpenedBeatmap.empty() ) {
         for ( const auto& entry : project->m_beatmaps ) {
@@ -1187,6 +1362,8 @@ void EditorEngine::restoreProjectWorkspace(
                             project->m_settings.m_workspace.m_activeEditTool),
                         std::memory_order_relaxed);
 
+    // 有历史相机身份时先清理不匹配的 Logo，避免占用恢复布局的画布位置。
+    // 第一项没有保存 ID 时保留现有占位行为，兼容旧工作区。
     bool hasSavedCameraId =
         std::any_of(beatmaps.begin(), beatmaps.end(), [](const auto& state) {
             return !state.m_cameraId.empty();
@@ -1195,6 +1372,7 @@ void EditorEngine::restoreProjectWorkspace(
     if ( hasSavedCameraId && !firstWorkspaceCameraId.empty() ) {
         std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
         auto& sessions = m_sessionRegistry.entriesUnsafe();
+        // 逆序删除保持尚未检查的索引有效，并同步移除相机渲染缓存。
         for ( int32_t i = static_cast<int32_t>(sessions.size()) - 1; i >= 0;
               --i ) {
             if ( !sessions[i].isLogoPlaceholder ) {
@@ -1217,6 +1395,7 @@ void EditorEngine::restoreProjectWorkspace(
     int32_t fallbackActiveIndex = -1;
     int32_t restoredActiveIndex = -1;
 
+    // 活动项用持久化路径匹配；没有匹配项时退回最后一次创建返回的索引。
     std::size_t beatmapIndex = 0;
     for ( const auto& state : beatmaps ) {
         const std::size_t currentBeatmapIndex = beatmapIndex++;
@@ -1226,6 +1405,7 @@ void EditorEngine::restoreProjectWorkspace(
 
         auto mapPath =
             resolveProjectPath(*project, Config::utf8ToPath(state.m_filePath));
+        // 工作区加载只占打开流程的 88%～96%；按原列表计数，跳过项也占份额。
         const float beatmapProgress =
             0.88F + 0.08F * static_cast<float>(currentBeatmapIndex + 1) /
                         static_cast<float>(beatmaps.size());
@@ -1233,6 +1413,7 @@ void EditorEngine::restoreProjectWorkspace(
             Event::ProjectOpenProgressStage::LoadingBeatmaps,
             beatmapProgress,
             projectOpenProgressPathDetail(mapPath));
+        // 单张谱面丢失不阻断其他画布恢复；访问失败也沿用跳过路径。
         std::error_code existsError;
         if ( !std::filesystem::exists(mapPath, existsError) ) {
             XWARN("Workspace restore skipped missing beatmap: {}",
@@ -1251,6 +1432,7 @@ void EditorEngine::restoreProjectWorkspace(
                                                 !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
 
+        // 注册表访问只在锁内进行；后续设置相机与投递跳转持有独立生命周期。
         std::shared_ptr<BeatmapSession> restoredSession;
         std::string                     restoredCameraId;
         {
@@ -1264,6 +1446,7 @@ void EditorEngine::restoreProjectWorkspace(
         }
 
         if ( restoredSession ) {
+            // 仅恢复有意义的有限偏移；零偏移继续使用新相机的初始位置。
             if ( !restoredCameraId.empty() &&
                  std::isfinite(state.m_canvasHorizontalOffsetRatio) &&
                  std::abs(state.m_canvasHorizontalOffsetRatio) > 1e-6F ) {
@@ -1272,6 +1455,7 @@ void EditorEngine::restoreProjectWorkspace(
                     restoredCameraId,
                     CameraInfo{ restoredCameraId, 1.0F, 1.0F });
                 (void)inserted;
+                // 尺寸事件尚未到达时以单位宽度还原比例，避免无效尺寸传播。
                 const float viewportWidth =
                     std::isfinite(camera->second.viewportWidth) &&
                             camera->second.viewportWidth > 0.0F
@@ -1280,6 +1464,7 @@ void EditorEngine::restoreProjectWorkspace(
                 camera->second.horizontalOffsetX =
                     state.m_canvasHorizontalOffsetRatio * viewportWidth;
             }
+            // 跳转走会话命令入口，使时间相关缓存随正常更新流程一并处理。
             restoredSession->pushCommand(
                 LogicCommand(CmdSeek{ state.m_playbackTime }));
         }
@@ -1292,17 +1477,23 @@ void EditorEngine::restoreProjectWorkspace(
     if ( restoredActiveIndex < 0 ) {
         restoredActiveIndex = fallbackActiveIndex;
     }
+    // 逻辑循环先处理各会话的恢复跳转，再应用活动索引，避免切换时读到旧时间。
+    // 没有任何可用项时保留 -1，不制造无效的活动会话请求。
     m_pendingWorkspaceActiveIndex = restoredActiveIndex;
 }
 
 /// @brief 校验项目路径并切换到指定普通项目。
 /// @param projectPath 要打开的项目目录或谱面文件路径。
 /// @param creationOptions 新建项目初始设置；普通打开时为空。
+/// @param origin 发起打开动作的入口，用于交互完成事件归因。
+/// @warning 用户打开项目的低频路径：检查目录、保存旧项目和加载谱面可能阻塞。
 void EditorEngine::openProject(
     const std::filesystem::path&                 projectPath,
     const std::optional<ProjectCreationOptions>& creationOptions,
     Event::ProjectOpenOrigin                     origin)
 {
+    // 文件输入以父目录检查项目可用性，原始文件路径继续交给控制器选择谱面。
+    // 新建项目可能尚无目录，不套用普通打开的存在性门禁。
     /// @brief 实际打开前用于保持旧行为的项目目录校验路径。
     std::filesystem::path actualProjectPath = projectPath;
     std::error_code       openPathError;
@@ -1343,6 +1534,7 @@ void EditorEngine::openProject(
         !openPathError;
     const auto* currentProject = ProjectController::instance().currentProject();
     openPathError.clear();
+    // 按文件系统身份识别同一目录，允许路径拼写不同；检查出错时不走快捷返回。
     if ( requestedPathIsDirectory && currentProject &&
          std::filesystem::equivalent(
              actualProjectPath, currentProject->m_projectRoot, openPathError) &&
@@ -1350,6 +1542,7 @@ void EditorEngine::openProject(
         XINFO("忽略当前项目目录的重复打开请求：{}",
               Config::pathToUtf8(actualProjectPath));
         Event::ProjectOpenInteractionEvent event;
+        // 重复打开仍回应交互完成，让发起入口结束等待，但不重发项目加载事件。
         event.m_origin    = origin;
         event.m_completed = true;
         event.m_path      = Config::pathToUtf8(projectPath);
@@ -1371,6 +1564,7 @@ void EditorEngine::openProject(
         return;
     }
 
+    // 旧项目成功关闭后才建立新项目；打开失败不会在这里恢复旧项目。
     /// @brief 项目控制器打开项目后的结果。
     auto openResult =
         ProjectController::instance().openProject(projectPath, creationOptions);
@@ -1388,6 +1582,8 @@ void EditorEngine::openProject(
 
 /// @brief 打开谱面包为临时只读项目。
 /// @param packagePath 需要临时阅览的谱面包路径。
+/// @param origin 发起打开动作的入口。
+/// @warning 包解压和旧项目关闭属于低频阻塞工作，不得放入连续播放更新。
 void EditorEngine::openTemporaryProjectPackage(
     const std::filesystem::path& packagePath, Event::ProjectOpenOrigin origin)
 {
@@ -1396,6 +1592,7 @@ void EditorEngine::openTemporaryProjectPackage(
         Event::ProjectOpenProgressStage::ExtractingPackage,
         0.03F,
         projectOpenProgressPathDetail(packagePath));
+    // 先验证并准备缓存，再关闭现有项目；无效谱面包不会打断当前工作区。
     auto prepared =
         ProjectController::instance().prepareTemporaryProjectPackage(
             packagePath);
@@ -1409,6 +1606,7 @@ void EditorEngine::openTemporaryProjectPackage(
         Event::ProjectOpenProgressStage::ClosingCurrentProject,
         0.08F,
         projectOpenProgressPathDetail(packagePath));
+    // 当前项目无法安全关闭时丢弃新缓存，避免留下未接管的目录。
     if ( !closeProject() ) {
         std::error_code filesystemError;
         std::filesystem::remove_all(prepared.m_temporaryInfo.m_cacheProjectPath,
@@ -1422,6 +1620,7 @@ void EditorEngine::openTemporaryProjectPackage(
         prepared.m_temporaryInfo.m_cacheProjectPath,
         std::nullopt,
         prepared.m_temporaryInfo);
+    // 控制器未接管临时项目，仍由此入口回收解压目录。
     if ( !openResult.m_opened ) {
         std::error_code filesystemError;
         std::filesystem::remove_all(prepared.m_temporaryInfo.m_cacheProjectPath,
@@ -1430,8 +1629,9 @@ void EditorEngine::openTemporaryProjectPackage(
     }
     const bool beatmapOpened = finishOpenProject(openResult);
     Event::ProjectOpenInteractionEvent event;
-    event.m_origin        = origin;
-    event.m_completed     = true;
+    event.m_origin    = origin;
+    event.m_completed = true;
+    // 对 UI 保留用户选择的源包路径，缓存目录只属于内部项目生命周期。
     event.m_path          = Config::pathToUtf8(packagePath);
     event.m_readOnly      = true;
     event.m_beatmapOpened = beatmapOpened;
@@ -1440,14 +1640,20 @@ void EditorEngine::openTemporaryProjectPackage(
 
 /// @brief 应用项目控制器打开项目后的逻辑副作用。
 /// @param openResult 项目控制器返回的打开结果。
+/// @return 显式目标谱面是否创建了会话；工作区恢复不计入此返回值。
+/// @pre 控制器已成功打开新项目，调用者负责此前旧项目的关闭。
+/// @warning 打开项目低频路径：登记音效、加载谱面和恢复画布可能分配或访问磁盘。
 bool EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
 {
+    // 旧工作区的延后切换请求不能应用到新项目的会话索引。
     m_pendingWorkspaceActiveIndex = -1;
     if ( auto* project = ProjectController::instance().currentProject() ) {
         setProjectAutoBackupOverride(project->m_settings.m_autoBackupOverride);
         const auto& workspace = project->m_settings.m_workspace;
+        // 资源 ID 只在项目内有效，先清空旧选择，再匹配新资源表中的记录。
         m_brushAudioResourceId.clear();
         m_brushAudioTrackType = AudioTrackType::Effect;
+        // 音量允许超过 1 的增益，只排除负数和非有限持久化数据。
         m_brushAudioVolume =
             std::isfinite(workspace.m_projectAudioToolBrushVolume)
                 ? std::max(0.0F, workspace.m_projectAudioToolBrushVolume)
@@ -1467,6 +1673,7 @@ bool EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
         }
         m_currentTool.store(workspaceNameToEditTool(workspace.m_activeEditTool),
                             std::memory_order_relaxed);
+        // 已保存的项目工具栏覆盖当前配置；旧项目保留全局偏好，仅重置同步开关。
         if ( workspace.m_toolbarState.m_valid ) {
             auto restoredConfig = getEditorConfig();
             applyToolbarWorkspaceState(restoredConfig,
@@ -1480,6 +1687,8 @@ bool EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
         }
     }
 
+    // 在会话恢复前登记 Effect，使新谱面的绑定能使用本项目的音效身份。
+    // 空登记列表不会进入循环，进度份额的除数只在非空时使用。
     std::size_t effectIndex = 0;
     for ( const auto& registration : openResult.m_effectRegistrations ) {
         const float effectProgress =
@@ -1512,6 +1721,7 @@ bool EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
         XINFO("Auto loading beatmap: {}",
               Config::pathToUtf8(openResult.m_targetBeatmapPath));
         auto loadedMap = BeatMap::loadFromFile(openResult.m_targetBeatmapPath);
+        // 空谱面路径表达未成功解析，不能据项目已打开就宣称开图成功。
         if ( loadedMap.m_baseMapMetadata.map_path.empty() ) {
             XERROR("Failed to auto load beatmap {}",
                    Config::pathToUtf8(openResult.m_targetBeatmapPath));
@@ -1539,9 +1749,14 @@ bool EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
     return beatmapOpened;
 }
 
+/// @brief 保存当前工作区并释放项目关联的音频资源。
+/// @return 无项目或关闭成功返回 true；元数据、设置保存失败时取消关闭。
+/// @note 会话关闭由外围流程管理，本函数不遍历删除所有编辑画布。
+/// @warning 项目切换及退出低频路径：保存文件、停止音频和回收堆页可能阻塞。
 bool EditorEngine::closeProject()
 {
     if ( !ProjectController::instance().currentProject() ) return true;
+    // 先落盘待保存的谱面元数据，再捕获工作区；失败时保留当前项目供用户处理。
     if ( !flushPendingMetadataAutoSaves() ) {
         XERROR(
             "EditorEngine: pending metadata save failed; project close "
@@ -1556,6 +1771,7 @@ bool EditorEngine::closeProject()
         return false;
     }
 
+    // 控制器移出项目所有权后，结果暂时保留资源表用于逐项卸载。
     /// @brief 项目控制器关闭当前项目后的结果。
     auto closeResult = ProjectController::instance().closeProject();
     if ( !closeResult.m_closed || !closeResult.m_project ) {
@@ -1563,6 +1779,7 @@ bool EditorEngine::closeProject()
     }
     setProjectAutoBackupOverride(std::nullopt);
 
+    // 先停止播放、清空调度和时间轴，再卸载 Effect，避免继续引用旧资源。
     auto& audio = Audio::AudioManager::instance();
     audio.stop();
     audio.clearAllScheduledSoundEffects();
@@ -1573,6 +1790,7 @@ bool EditorEngine::closeProject()
             audio.unloadSoundEffect(res.m_id);
         }
     }
+    // 释放项目数据后再回收无引用轨道缓存与空闲堆页，避免频繁播放时抖动。
     closeResult.m_project.reset();
     static_cast<void>(audio.releaseUnusedTrackCache());
     releaseUnusedHeapPages();
@@ -1581,6 +1799,10 @@ bool EditorEngine::closeProject()
     return true;
 }
 
+/// @brief 从应用配置初始化逻辑状态，并向应用线程池提交长驻循环。
+/// @pre 启停由运行生命周期入口串行调用，原子标记不替代并发 start 的互斥。
+/// @warning 启动低频路径；运行标记由启停入口写入、逻辑循环读取，
+/// release/acquire 用于跨线程生命周期可见性，配置本体仍由配置锁保护。
 void EditorEngine::start()
 {
     if ( m_running.load(std::memory_order_acquire) ) {
@@ -1599,6 +1821,7 @@ void EditorEngine::start()
 
     m_running.store(true, std::memory_order_release);
 
+    // 线程池由应用初始化；缺失时撤回运行标记，不能留下没有执行者的运行状态。
     auto* appThreadPool = MMM::Runtime::AppThreadPool::instance().get();
     if ( !appThreadPool ) {
         m_running.store(false, std::memory_order_release);
@@ -1606,17 +1829,24 @@ void EditorEngine::start()
         return;
     }
 
+    // 任务借用 this，future 交给 stop 等待，保证销毁成员前循环已经退出。
     m_loopFuture = appThreadPool->enqueue([this]() { loop(); });
     XINFO("EditorEngine logic thread started.");
 }
 
+/// @brief 停止目录监视并请求逻辑循环退出，等待其不再访问引擎成员。
+/// @warning 退出低频路径：监视器停止与 future::wait 可能阻塞；不得从逻辑
+/// 循环自身调用而等待自己。启停入口写运行原子、逻辑循环读，exchange
+/// 使用 acq_rel 取得本次停止责任并发布退出请求，不提供超时或任务强制取消。
 void EditorEngine::stop()
 {
+    // 先切断外部目录事件来源，再退出逻辑消费端，避免关闭期间继续引入变化。
     ProjectController::instance().stopDirectoryWatcher();
 
     if ( m_running.exchange(false, std::memory_order_acq_rel) ) {
         if ( m_loopFuture.valid() ) {
             m_loopFuture.wait();
+            // 已完成任务句柄不跨下一次启动复用；wait 只等待，不提取任务结果。
             m_loopFuture = std::future<void>{};
         }
         XINFO("EditorEngine logic thread stopped.");
@@ -1624,6 +1854,8 @@ void EditorEngine::stop()
 }
 
 /// @brief 处理新建谱面指令并执行引擎侧保存和开图副作用。
+/// @param cmd 谱面模板、目标轨道与保存选项。
+/// @warning 新建命令低频路径：持有会话递归锁调用项目保存与会话创建。
 void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
@@ -1634,12 +1866,15 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
         return;
     }
 
+    // 控制器返回有效谱面后才推进项目设置保存和开图，避免产生空会话。
     saveProject();
 
     createSession(result.m_beatmap, result.m_displayName);
 }
 
 /// @brief 处理导入音频指令并执行音效登记和项目保存副作用。
+/// @param cmd 导入来源及资源选项。
+/// @warning 用户导入低频路径：可能复制文件、修改资源表并保存项目。
 void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
@@ -1650,6 +1885,7 @@ void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
         return;
     }
 
+    // 不需要独立音效登记的导入仍需保存项目，只跳过此可选副作用。
     if ( result.m_effectRegistration ) {
         Audio::AudioManager::instance().registerSoundEffect(
             result.m_effectRegistration->m_resource.m_id,
@@ -1736,6 +1972,10 @@ bool EditorEngine::isClipboardCutFrom(const SessionContext* context) const
 }
 
 /// @brief 若剪贴板为其他会话剪切内容，则删除源会话原物件。
+/// @param pasteContext 粘贴目标上下文，用于来源判断和目标编辑能力过滤。
+/// @pre 目标粘贴已成功，才可消费源剪切内容。
+/// @warning 粘贴命令低频路径：持有会话锁扫描源物件，折线子项另有全表查找，
+/// 并构造撤销动作；不得在拖动预览或每 update 中重复调用。
 void EditorEngine::consumeCrossSessionCutClipboard(
     const SessionContext* pasteContext)
 {
@@ -1755,12 +1995,14 @@ void EditorEngine::consumeCrossSessionCutClipboard(
         }
 
         auto& sourceCtx = entry.session->getContextMutable();
+        // 仅比较上下文身份；找到仍注册的会话后，才通过该会话访问源数据。
         if ( &sourceCtx != sourceContext ) {
             continue;
         }
 
         std::vector<BatchNoteAction::Entry> noteEntries;
-        std::unordered_set<entt::entity>    collectedNoteEntities;
+        // 根物件与子物件可能同时带剪切标记，按实体去重避免重复生成删除动作。
+        std::unordered_set<entt::entity> collectedNoteEntities;
         auto noteView = sourceCtx.noteRegistry.view<InteractionComponent>();
         for ( auto entity : noteView ) {
             auto& ic = sourceCtx.noteRegistry.get<InteractionComponent>(entity);
@@ -1770,6 +2012,7 @@ void EditorEngine::consumeCrossSessionCutClipboard(
             }
             if ( !collectedNoteEntities.insert(entity).second ) continue;
 
+            // 撤销快照在删除前按值保存；目标编辑开关不允许的物件保留在源会话。
             auto oldNote = sourceCtx.noteRegistry.get<NoteComponent>(entity);
             if ( pasteContext &&
                  !SessionUtils::isNoteEditable(
@@ -1783,6 +2026,8 @@ void EditorEngine::consumeCrossSessionCutClipboard(
                 .beforeSelected = ic.isSelected,
             });
 
+            // 删除折线根时连同派生子实体入批，不能留下指向已删除父实体的组件。
+            // 这里沿用 Registry 扫描寻找父子关系，集合处理主遍历中的重复命中。
             if ( oldNote.m_type == ::MMM::NoteType::POLYLINE &&
                  !oldNote.m_subNotes.empty() ) {
                 for ( auto subEnt :
@@ -1792,6 +2037,7 @@ void EditorEngine::consumeCrossSessionCutClipboard(
                     if ( subNC.m_isSubNote &&
                          subNC.m_parentPolyline == entity &&
                          collectedNoteEntities.insert(subEnt).second ) {
+                        // 子实体可以没有交互组件，撤销记录以空可选值保留这一差异。
                         const auto* subInteraction =
                             sourceCtx.noteRegistry
                                 .try_get<InteractionComponent>(subEnt);
@@ -1824,6 +2070,7 @@ void EditorEngine::consumeCrossSessionCutClipboard(
             });
         }
 
+        // 音符与自动采样来自独立 Registry；混合剪切组合成源会话的一次撤销。
         std::vector<std::unique_ptr<IEditorAction>> actions;
         actions.reserve(2);
         if ( !noteEntries.empty() ) {
@@ -1834,6 +2081,8 @@ void EditorEngine::consumeCrossSessionCutClipboard(
             actions.push_back(std::make_unique<BatchSampleAction>(
                 std::move(sampleEntries), "跨画布剪切自动采样"));
         }
+        // 动作执行可能删除实体，先清除视觉剪切标记，避免遍历已经失效的视图。
+        // 被编辑能力过滤而留下的物件也结束本次剪切状态。
         for ( auto entity : noteView ) {
             sourceCtx.noteRegistry.get<InteractionComponent>(entity).isCut =
                 false;
@@ -1856,6 +2105,7 @@ void EditorEngine::consumeCrossSessionCutClipboard(
         return;
     }
 
+    // 源会话已关闭也结束剪切身份，避免后续粘贴继续删除不存在的源对象。
     markCutClipboardConsumed();
 }
 
@@ -1872,21 +2122,31 @@ std::optional<std::string> EditorEngine::consumePendingSystemClipboardText()
 }
 
 /// @brief 从系统剪贴板文本导入 MMM 剪贴板载荷。
+/// @param text 系统剪贴板提供的文本，交由 MMM 协议解析。
+/// @return 隔离会话拒绝导入或协议不被接受时返回 false。
+/// @warning 用户粘贴低频路径：取得活动会话的共享句柄以跨越注册表解锁，
+/// 保证权限检查期间对象存活；文本解析和分配不能用于每帧探测剪贴板。
 bool EditorEngine::importSystemClipboardText(std::string_view text)
 {
     auto activeSession = getActiveSession();
+    // 隔离策略在协议解析之前执行，禁止系统载荷进入当前协作剪贴板范围。
     if ( activeSession && activeSession->isCollaborationClipboardIsolated() ) {
         return false;
     }
     return m_clipboard.importSystemText(text);
 }
 
+/// @brief 清除指定来源会话持有的编辑器剪贴板内容。
+/// @param context 来源身份；清理其他会话时不应误删当前来源的载荷。
 void EditorEngine::clearClipboardForContext(const SessionContext* context)
 {
     m_clipboard.clearForContext(context);
 }
 
 /// @brief 同步单个谱面文件到项目配置并在发生变化时保存。
+/// @param mapPath 新建、另存或更新后需要同步的谱面文件路径。
+/// @warning 文件变更低频路径：持有会话递归锁，可能规范化路径并保存项目，
+/// 不得作为每 update 检查谱面是否变化的手段。
 void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
@@ -1897,6 +2157,8 @@ void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
         saveProject();
     }
 
+    // 文件同步即使没有改变项目条目，也重新关联会话路径和音频指纹。
+    // 另存可能先改变内存谱面路径，不能只依赖项目条目的 changed 标志。
     /// @brief 当前项目指针，仅用于刷新已打开 Session 的谱面路径键。
     const auto* currentProject = ProjectController::instance().currentProject();
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
@@ -1917,13 +2179,20 @@ void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
     refreshAudioTimelineFingerprintsUnsafe();
 }
 
+/// @brief 执行项目级命令，并把其余指令路由到对应会话队列。
+/// @param cmd 待转移的指令；成功投递后调用者不得依赖原载荷内容。
+/// @note 名称表示统一入口，并非所有命令都异步入队；项目操作在此直接调用。
+/// @warning 鼠标等连续交互可每帧进入，路由仅检查命令类型和会话列表，
+/// 不得为等待焦点、视口或同步数据而休眠；文件操作只属于显式低频命令。
 void EditorEngine::pushCommand(LogicCommand&& cmd)
 {
+    // 临时项目另存是离开只读缓存的入口，先于普通修改命令门禁处理。
     if ( std::holds_alternative<CmdSaveTemporaryProject>(cmd) ) {
         handleSaveTemporaryProject(std::get<CmdSaveTemporaryProject>(cmd));
         return;
     }
 
+    // 拒绝事件携带源包和缓存身份，UI 可提示另存；被拒命令不进入会话。
     if ( ProjectController::instance().isCurrentProjectTemporary() &&
          isTemporaryProjectMutationCommand(cmd) ) {
         const auto info =
@@ -1974,6 +2243,8 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     // 编辑工具是全局状态，所有画布保持一致
     if ( std::holds_alternative<CmdChangeTool>(cmd) ) {
         auto tool = std::get<CmdChangeTool>(cmd).tool;
+        // 枚举立即供 UI 查询，命令再让每个会话清理旧工具状态并接收新工具。
+        // relaxed 只发布工具选择，不表示会话已经处理完命令。
         m_currentTool.store(tool, std::memory_order_relaxed);
         if ( auto* project = ProjectController::instance().currentProject() ) {
             project->m_settings.m_workspace.m_activeEditTool =
@@ -1996,9 +2267,10 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
              std::get_if<CmdSetBrushAudioResource>(&cmd) ) {
         m_brushAudioResourceId = audioResource->audioResourceId;
         m_brushAudioTrackType  = audioResource->audioTrackType;
-        m_brushAudioVolume     = std::isfinite(audioResource->volume)
-                                     ? std::max(0.0F, audioResource->volume)
-                                     : 1.0F;
+        // 与工作区恢复采用相同音量边界，非有限输入回退默认增益。
+        m_brushAudioVolume = std::isfinite(audioResource->volume)
+                                 ? std::max(0.0F, audioResource->volume)
+                                 : 1.0F;
         if ( auto* project = ProjectController::instance().currentProject() ) {
             auto& workspace = project->m_settings.m_workspace;
             workspace.m_projectAudioToolSelectedResourceId =
@@ -2021,6 +2293,7 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
         return;
     }
 
+    // 缓存值供未来会话初始化，当前会话仍需处理相机更新，因此继续下发。
     // 拦截视口更新指令，缓存最新的尺寸
     if ( std::holds_alternative<CmdUpdateViewport>(cmd) ) {
         const auto& v = std::get<CmdUpdateViewport>(cmd);
@@ -2032,6 +2305,7 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     // NearCursor 分拍线，同时不接收任何编辑手势命令。
     if ( std::holds_alternative<CmdSetMousePosition>(cmd) ) {
         const auto& mouse = std::get<CmdSetMousePosition>(cmd);
+        // 主画布目标缺失时丢弃，不能回退到活动会话造成幽灵悬浮；辅助视图走末尾路由。
         if ( SessionUtils::isMainCanvasCameraId(mouse.cameraId) ) {
             std::lock_guard<std::recursive_mutex> lock(
                 m_sessionRegistry.mutex());
@@ -2063,6 +2337,8 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
             /// @brief 滚轮目标主画布对应的 Session 索引。
             const int32_t targetIndex =
                 findSessionIndexByCameraIdUnsafe(sessions, scroll.cameraId);
+            // 后台滚轮只允许与活动会话共享有效 Main
+            // 指纹的画布，避免滚动无关谱面。
             if ( !canUseHoverScrollTargetUnsafe(
                      sessions, activeIndex, targetIndex) ) {
                 return;
@@ -2077,6 +2353,7 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     // 主画布二维平移按 cameraId 精确路由，避免同帧焦点切换把增量发给旧画布。
     if ( std::holds_alternative<CmdPanCanvas>(cmd) ) {
         const auto& pan = std::get<CmdPanCanvas>(cmd);
+        // 平移依据目标相机，不套用滚轮的同主音轨门禁；每次增量立即入目标队列。
         if ( SessionUtils::isMainCanvasCameraId(pan.cameraId) ) {
             std::lock_guard<std::recursive_mutex> lock(
                 m_sessionRegistry.mutex());
@@ -2097,6 +2374,7 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
 
     // 分发到当前活跃 Session
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    // 缓存颜色供以后创建或切换的会话恢复；本条命令仍只投递给活动会话。
     if ( const auto* palette = std::get_if<CmdSetBrushNotePalette>(&cmd) ) {
         for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
             m_brushNoteColors[i] = palette->colors[i];
@@ -2113,12 +2391,17 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
     auto& sessions = m_sessionRegistry.entriesUnsafe();
     /// @brief 当前活跃 Session 索引快照。
+    // 无活动索引时不构造替代会话，缓存的全局画笔选择仍可用于下次创建。
     int32_t idx = m_sessionRegistry.activeIndex();
     if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) ) {
         sessions[idx].session->pushCommand(std::move(cmd));
     }
 }
 
+/// @brief 将已初始化的全局颜色逐槽投递给指定会话。
+/// @param session 正在创建、复用或切换的目标会话。
+/// @pre 调用者持有会话注册表锁，保证画笔缓存读取一致。
+/// @note 未初始化时保留目标会话默认颜色，不能用空缓存覆盖皮肤配置。
 void EditorEngine::restoreBrushNoteColorsUnsafe(BeatmapSession& session) const
 {
     if ( !m_brushNoteColorsInitialized ) return;
@@ -2129,6 +2412,9 @@ void EditorEngine::restoreBrushNoteColorsUnsafe(BeatmapSession& session) const
     }
 }
 
+/// @brief 将全局音频画笔选择、类型和增益作为一个命令恢复到会话。
+/// @param session 接收当前画笔状态的会话。
+/// @pre 调用者持有会话注册表锁；空资源 ID 也需投递以清理目标旧选择。
 void EditorEngine::restoreBrushAudioResourceUnsafe(
     BeatmapSession& session) const
 {
@@ -2139,6 +2425,11 @@ void EditorEngine::restoreBrushAudioResourceUnsafe(
     }));
 }
 
+/// @brief 查询是否有会话撤销栈处于未保存状态。
+/// @return 任一有效会话 actionStack 为脏时返回 true。
+/// @note 不比较磁盘文件，也不检查尚未进入撤销栈的项目配置变更。
+/// @warning 关闭提示或 UI 状态查询可重复调用；只遍历已打开会话，
+/// 禁止在查询中序列化谱面或扫描完整 ECS。
 bool EditorEngine::hasUnsavedChanges() const
 {
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());

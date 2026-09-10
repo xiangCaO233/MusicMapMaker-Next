@@ -444,6 +444,8 @@ bool testRestoreActiveHoldEffectsFromMiddle()
 /// @note 使用真实 Batcher 提交几何，不模拟渲染命令或依赖 GPU。
 bool testEffectBlendBatchBoundaries()
 {
+    // 快照在批处理器之后析构，flush 写入期间目标容器始终有效。
+    // 此用例只检查 CPU 命令，不以像素颜色判断混合状态。
     MMM::Logic::RenderSnapshot  snapshot;
     MMM::Logic::System::Batcher batcher(&snapshot);
     using TextureID = MMM::Logic::TextureID;
@@ -454,14 +456,21 @@ bool testEffectBlendBatchBoundaries()
     snapshot.uvMap[1000] = { 0.2F, 0, 0.1F, 0.1F };
     batcher.setTexture(TextureID::Note);
     batcher.pushQuad(0, 10, 10, 10, { 1, 1, 1, 1 });
+    // 从普通音符切到特效时，即便底层图集相同也必须结束覆盖批次。
+    // 半透明顶点保留在几何中，混合开关属于命令而非顶点属性。
     batcher.setAdditiveBlend(true);
     batcher.setTexture(static_cast<TextureID>(1000));
     batcher.pushQuad(10, 10, 10, 10, { 1, 1, 1, 0.5F });
     // 同状态不应切分加法批次；恢复覆盖后同纹理仍需生成新命令。
     batcher.setAdditiveBlend(true);
     batcher.pushQuad(20, 10, 10, 10, { 1, 1, 1, 0.5F });
+    // 从加法切回覆盖不能复用上一命令，否则后续普通物件也会叠亮。
     batcher.setAdditiveBlend(false);
     batcher.pushQuad(30, 10, 10, 10, { 1, 1, 1, 1 });
+    // 最后一个覆盖批次尚未遇到下一次状态切换，必须显式提交尾批。
+    // 一个四边形产生六个索引，因此中间两个四边形合并后应有十二个。
+    // 偏移检查同时约束几何顺序，防止正确的数量掩盖跨批次重排。
+    // 先确认三条命令存在，再访问各命令，避免失败检查自身发生越界。
     batcher.flush();
     if ( snapshot.cmds.size() != 3 || snapshot.cmds[0].additiveBlend ||
          !snapshot.cmds[1].additiveBlend || snapshot.cmds[2].additiveBlend ||

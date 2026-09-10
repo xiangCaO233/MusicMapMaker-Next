@@ -20,7 +20,7 @@
 
 旧的未完成批次已清空。目录来自实际 `ls Modules` 与 `ls Modules/Game`；以下顺序按编辑正确性、数据安全、运行核心、界面与辅助功能排序，不采用字母顺序。各模块的头文件、实现、测试及构建脚本一并归入对应模块，已完成的 ICE 和演练模型不重复补充。
 
-1. `Game/Logic`：会话、编辑指令、项目管理与保存；按用户最新要求停在 130/146，剩余文件等待后续指示，不自动继续。
+1. `Game/Logic`：会话、编辑指令、项目管理与保存；按 2026-09-10 用户要求恢复补充，继续处理剩余职责。
 2. `MMM`：谱面模型与格式读写。
 3. `Audio`：播放、时间同步与导出。
 4. `Game/Canvas`：编辑交互、坐标与吸附。
@@ -37,19 +37,55 @@
 
 ## Game/Logic 当前进度
 
-范围为该目录下全部 146 个自维护文件（头文件、实现、测试和 CMake）。2026-09-09 收尾时仅复查本模块，逐文件比例达标 130 个，剩余 16 个；比例达标不代替关键实现说明。按用户要求到此停止，不代表模块全部完成。模块明细在本机 `build/test_output/comment-audit/logic-files.csv`，未扫描其他模块。
+范围为该目录下全部 146 个自维护文件（头文件、实现、测试和 CMake）。2026-09-10 因本机旧明细缺失重建本模块基线，129 个达标、17 个不足 30%；未扫描其他模块。本轮完成后为 141/146，剩余 5 个；比例达标不代替关键实现说明。
 
-已补充：SessionRegistry、RenderSyncRegistry、BeatmapSyncBuffer 类型入口、NoteIdentity、RegistrySnapshotLifetimeTest、ProjectStorage 及其测试、ProjectDirectoryScanner、ProjectDirectoryWatcher 及其路径过滤测试、BeatmapBackupService 及其测试。继续处理剩余职责，不提前宣布模块完成。
+已补充的历史职责见前次记录。本轮完成音频描述符、打击特效、自动采样、拖动虚影和画布组件渲染测试、NoteRenderSystem 快照编排和 BeatmapSession 会话渲染实现，继续处理会话、编辑、交互及其余渲染实现与测试，不代表模块全部完成。
 
-## 最近批次：播放视觉时钟与重播控制测试
+进行中：`ProjectAudioReferenceTest.cpp` 已补充夹具、引用保护、歌曲提示、模板迁移、资源重命名和文件移动回滚的关键流程，486 注释行 / 1603 代码行（23.26%，不足 30%）。已格式化、通过非注释 token 对比、相关 CTest 和主项目构建；已补充来源域与目标域、溢出条件及事务状态交叉检查，继续补齐剩余接口约束与断言细节。批量用例验证功能完整性，不以此证明复杂度；文本哨兵仅证明额外文本保留，字节一致性由失败回滚用例验证。
 
-已完成 PlaybackVisualClockTest 与 PlaybackRestartTest 的场景意图、快照状态转换、预期公式及全局状态恢复说明。仅修改注释与格式，两个文件分别达到 30%。
+同时进行：`EditorEngine.cpp` 已补充时间与限频预算、路径身份与音频引用重映射、工作区保存恢复、项目切换、线程启停及跨画布剪切生命周期，689 注释行 / 3425 代码行（16.75%，不足 30%）。说明活动会话回退、视口比例、临时包缓存回收、保存失败取消关闭及源剪切撤销批次；非注释 token 对比、格式化和主项目构建通过。已补充命令路由与画笔状态恢复；按用户要求立即暂停，会话调度等剩余部分留待恢复。
+
+## 最近完成批次：音频测试与会话渲染快照
+
+补充资源解析、事件身份、完整指纹与 Main 同步指纹的边界，说明同 ID 和跨匹配方式冲突、静音草稿及批量事件断言；补充同图集混合模式切批的几何索引约束。
+
+NoteRenderSystem 单独成批，补充缓存借用、补间条件、静态与动态顶点边界、特效命令层次、辅助区裁剪、Timing 像素行占用与几何区间、预览范围和调试命中框说明。
 
 | 文件（相对主仓） | 注释行 | 代码行 | 注释率 |
 | --- | ---: | ---: | ---: |
-| Modules/Game/Logic/tests/PlaybackVisualClockTest.cpp | 236 | 549 | 30.06% |
-| Modules/Game/Logic/tests/PlaybackRestartTest.cpp | 204 | 476 | 30.00% |
+| Modules/Game/Logic/tests/AudioTimelineDescriptorTest.cpp | 280 | 653 | 30.01% |
+| Modules/Game/Logic/tests/HitEffectStereoTest.cpp | 145 | 338 | 30.02% |
+| Modules/Game/Logic/src/logic/ecs/system/render/NoteRenderSystem.cpp | 527 | 1219 | 30.18% |
+| Modules/Game/Logic/src/logic/session/BeatmapSession_Rendering.cpp | 620 | 1436 | 30.16% |
+| Modules/Game/Logic/tests/SampleRenderSystemTest.cpp | 306 | 712 | 30.06% |
+| Modules/Game/Logic/tests/NoteDragGhostRenderTest.cpp | 283 | 656 | 30.14% |
+| Modules/Game/Logic/tests/CanvasComponentRenderSystemTest.cpp | 315 | 731 | 30.11% |
+| Modules/Game/Logic/tests/BeatmapMutationObserverBindingTest.cpp | 446 | 1035 | 30.11% |
+| Modules/Game/Logic/src/logic/session/InteractionController.cpp | 688 | 1602 | 30.04% |
+| Modules/Game/Logic/src/logic/session/tool/GrabTool.cpp | 650 | 1514 | 30.04% |
+| Modules/Game/Logic/src/logic/session/tool/DrawTool.cpp | 626 | 1460 | 30.01% |
+| Modules/Game/Logic/src/logic/ecs/system/render/NoteRenderSystem_Notes.cpp | 857 | 1999 | 30.01% |
 
-验证：格式化、差异检查、两个测试目标及主项目构建通过；两个测试直接运行均返回 0。缺失资源警告来自测试既有夹具。未验收真实设备发声或 UI 行为，未提交。
+BeatmapSession 渲染实现单独成批，补充批注目标解析与时间分组、ECS 脏索引及统计口径、辅助视图非阻塞限频、快照缓冲借用、视口映射、部件检视与拍位拟合、工具预览和最终发布约束。
+
+SampleRenderSystemTest 补充轨道底色与标题顺序、标签滚动裁剪、独立 BGM 布局、临时画笔及交互发光、UTF-8 字形复用与缺字请求说明。验证发现尺寸用例以助手固定 1.2 倍生成物件，却按默认配置计算期望值；改为显式传入默认宽高缩放，覆盖此前 0.95 倍默认值修改。
+
+NoteDragGhostRenderTest 补充按绘制命令提取纹理范围、局部 Registry 和排序索引生命周期、Draft/Player/BGM 独立轨宽、Flick 端点与 Polyline 子项投影、画笔几何和命中框的验证边界。
+
+CanvasComponentRenderSystemTest 补充固定字体与 DPI 档位、组件显示条件、拍号和分拍时间的布局扩展及 scissor、KPS 实例覆盖与紧凑文本、滚动计数窗口和格式化边界。
+
+BeatmapMutationObserverBindingTest 补充本地与权威回调类别、批注目标与权限、活动画笔保留、本地回执和权威包含序号、准备差量的实体身份、离线和细分权限门禁，以及文件门闩夹具的 latch/join 顺序。
+
+InteractionController 补充选择状态、屏幕投影、分区物件包围框、时间区间索引与去重、悬浮与工具路由、采样音量批次、轨道重映射、鼠标归属和框选重算；通过非注释 token 对比和主项目构建。
+
+GrabTool 补充折线退化与来源身份、统一目标投影、多选及局部位移、跨域转换校验、整组回退和撤销事务；说明既有子实体扫描点。非注释 token 与 HEAD 一致，主项目构建通过。
+
+DrawTool 补充起笔与续接、分区坐标、形状增长与退化、尾部合并和擦除分裂的实现约束，已格式化、通过非注释 token 对比与主项目构建。
+
+NoteRenderSystem_Notes 补充可见性包络与分桶、播放补间余量、分层几何与命中、不同根的重叠检测、遮罩拆分及画笔预览。纠正候选必然时间有序的旧说明，记录既有局部分配与排序成本；非注释 token 对比及主项目构建通过。
+
+已登记而未扩展修复：GrabTool 局部节点及子实体同步的全表扫描；DrawTool 续接删除后日志读取父组件，以及尾部合并追加向量元素后仍使用末段引用的生命周期风险。
+
+验证：clang-format、差异检查和非注释 token 对比通过；AudioTimelineDescriptorTest、HitEffectStereoTest、SampleRenderSystemTest、NoteDragGhostRenderTest、CanvasComponentRenderSystemTest、BeatmapMutationObserverBindingTest、ProjectAudioReferenceTest 七个相关 CTest 通过；各批分别完成主项目构建。除自动采样尺寸测试显式使用默认配置外，仅修改注释与格式，本批注释按用户要求提交并暂停，模块尚未全部达标；构建开关已恢复原来的 BUILD_TESTING=OFF。
 
 此前验证记录：ImdPackageExportServiceTest 直接运行因无法解码 source.wav 返回 1，未在注释任务中扩展排查；产物保留于 build/test_output/imd-comment-check-V7zLTZ。
