@@ -483,12 +483,25 @@ struct CmdSelectAll {
     SelectAllScope scope{ SelectAllScope::CurrentTrackArea };
 };
 
-/**
- * @brief 保存谱面指令
- */
+/// @brief 本次保存对全局格式偏好的覆写方式。
+enum class BeatmapSaveFormatOverride : std::uint8_t {
+    /// @brief 使用编辑器设置中的保存格式偏好。
+    Configured,
+    /// @brief 仅本次保留当前谱面的原始格式。
+    Original,
+    /// @brief 仅本次将当前谱面保存为 MMM 格式。
+    ForceMMM,
+};
+
+/// @brief 保存谱面指令。
 struct CmdSaveBeatmap {
     /// @brief 是否允许覆盖哈希已变化或未知的强制 MMM 保存目标。
     bool allowExternallyModifiedOverwrite{ false };
+
+    /// @brief 本次保存的格式覆写，不修改全局设置。
+    BeatmapSaveFormatOverride formatOverride{
+        BeatmapSaveFormatOverride::Configured
+    };
 
     /// @brief 保存来源，用于选择自动保存调度和 UI 反馈策略。
     BeatmapSaveKind kind{ BeatmapSaveKind::Manual };

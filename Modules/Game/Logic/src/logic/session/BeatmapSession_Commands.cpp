@@ -661,15 +661,33 @@ void rememberBeatmapFileHash(
     }
 }
 
-/// @brief 判断强制 MMM 保存是否需要用户确认覆盖。
+/// @brief 判断本次保存是否使用 MMM 格式。
+/// @param settings 当前编辑器设置。
+/// @param cmd 保存命令。
+/// @return 本次应写入 MMM 格式时返回 true。
+bool usesMmmSaveFormat(const MMM::Config::EditorSettings& settings,
+                       const MMM::Logic::CmdSaveBeatmap&  cmd)
+{
+    switch ( cmd.formatOverride ) {
+    case MMM::Logic::BeatmapSaveFormatOverride::Original: return false;
+    case MMM::Logic::BeatmapSaveFormatOverride::ForceMMM: return true;
+    case MMM::Logic::BeatmapSaveFormatOverride::Configured:
+    default:
+        return settings.saveFormatPreference ==
+               MMM::Config::SaveFormatPreference::ForceMMM;
+    }
+}
+
+/// @brief 判断 MMM 保存是否需要用户确认覆盖。
 /// @param settings 当前编辑器设置。
 /// @param savedBeatmapFileHashes 当前会话的谱面文件哈希缓存。
 /// @param cmd 保存命令。
 /// @param savePath 本次实际写出的目标路径。
 /// @return 需要确认时返回 true。
 /// @details
-/// 只有 ForceMMM 可能重定向到另一个已存在文件。用户确认可越过检查；否则缺少
-/// 缓存基线、文件不可读或哈希不同都视为潜在外部修改，实际覆盖留给 UI 决定。
+/// 全局 ForceMMM 或命令的一次性 ForceMMM 可能重定向到另一个已存在文件。
+/// 用户确认可越过检查；否则缺少缓存基线、文件不可读或哈希不同都视为
+/// 潜在外部修改，实际覆盖留给 UI 决定。
 bool shouldConfirmForcedMmmOverwrite(
     const MMM::Config::EditorSettings& settings,
     const std::unordered_map<std::string, std::uint64_t>&
@@ -679,8 +697,7 @@ bool shouldConfirmForcedMmmOverwrite(
 {
     // 用户已经在冲突对话框确认时直接放行，避免同一命令再次触发循环提示。
     if ( cmd.allowExternallyModifiedOverwrite ) return false;
-    if ( settings.saveFormatPreference !=
-         MMM::Config::SaveFormatPreference::ForceMMM ) {
+    if ( !usesMmmSaveFormat(settings, cmd) ) {
         // 保持原格式或其他保存策略不覆盖源文件为 MMM，不适用这项冲突门禁。
         return false;
     }
@@ -3125,9 +3142,9 @@ void BeatmapSession::handleCommand(const CmdLoadBeatmap& cmd)
 /// 写盘前同步 Timing、Note 和打击事件，成功后更新会话路径、哈希、撤销栈保存点
 /// 及项目谱面入口。任何失败都会恢复原尾随元数据任务，供后续重试。
 ///
-/// ForceMMM 只改变本次实际保存路径。覆盖检查使用目标路径及上一次成功写盘哈希，
-/// 不能使用旧扩展名的源路径。用户尚未确认外部修改时，处理器只发布冲突事件，
-/// 不执行任何磁盘或项目状态提交。
+/// 全局 ForceMMM 或命令覆写只改变本次实际保存路径。覆盖检查使用目标路径及
+/// 上一次成功写盘哈希，不能使用旧扩展名的源路径。用户尚未确认外部修改时，
+/// 处理器只发布冲突事件，不执行任何磁盘或项目状态提交。
 ///
 /// saveToFile 成功是事务提交点。之前的同步只更新内存领域副本，之后才能更新
 /// currentBeatmap.map_path、哈希基线和 ActionStack
@@ -3150,9 +3167,8 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
         m_metadataAutoSaveTimerNeedsReset = false;
         auto oldPath  = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
         auto savePath = resolveCurrentProjectPath(oldPath);
-        if ( m_ctx->lastConfig.settings.saveFormatPreference ==
-             Config::SaveFormatPreference::ForceMMM ) {
-            // ForceMMM 改变实际输出扩展名，但旧路径保留到成功后用于项目重映射。
+        if ( usesMmmSaveFormat(m_ctx->lastConfig.settings, cmd) ) {
+            // MMM 覆写改变实际输出扩展名，但旧路径保留到成功后用于项目重映射。
             savePath.replace_extension(".mmm");
         }
         if ( shouldConfirmForcedMmmOverwrite(m_ctx->lastConfig.settings,
