@@ -42,7 +42,7 @@ magick "$atlas_dir/track-source.png" -crop 32x860+1060+0 +repage \
 # 原图已经带有透明通道，固定裁切仅剔除画布留白，不再重算内部深色区域。
 # 两张图共用裁切尺寸与目标尺寸，确保蓝绿按键的结构和视觉重量一致。
 extract_topdown_note() {
-    magick "$atlas_dir/topdown-source-atlas-beveled.png" -crop "$1" +repage \
+    magick "$atlas_dir/topdown-source-atlas.png" -crop "$1" +repage \
         -alpha set \
         -resize 281x123! -depth 8 "PNG32:$atlas_dir/../image/note/$2.png"
 }
