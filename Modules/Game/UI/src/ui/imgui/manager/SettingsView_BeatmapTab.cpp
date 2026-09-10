@@ -24,6 +24,74 @@
 
 namespace MMM::UI
 {
+namespace
+{
+
+/// @brief 绘制带减号、当前值和加号的紧凑轨道数步进器。
+/// @param bounds 设置项为控件预留的 Clay 边界。
+/// @param trackCount 当前持久化轨道数量。
+/// @param minimumTrackCount 允许减少到的最小数量。
+/// @param id 当前设置项的稳定 ImGui ID。
+/// @param removeTooltip 减号按钮提示。
+/// @param addTooltip 加号按钮提示。
+/// @param updateCount 合法点击后接收相邻目标数量的回调。
+/// @warning 设置窗口渲染期间每帧调用；回调只允许入队，不得同步修改逻辑状态。
+template<typename UpdateCount>
+void drawTrackCountStepper(Clay_BoundingBox bounds, std::int32_t trackCount,
+                           std::int32_t minimumTrackCount, const char* id,
+                           const char* removeTooltip, const char* addTooltip,
+                           UpdateCount&& updateCount)
+{
+    const float buttonSize = ImGui::GetFrameHeight();
+    const auto& style      = ImGui::GetStyle();
+    const float buttonGlyphWidth =
+        std::max(ImGui::CalcTextSize("-").x, ImGui::CalcTextSize("+").x);
+    const float maxHorizontalPadding =
+        std::max(0.0F, (buttonSize - buttonGlyphWidth) * 0.5F - 1.0F);
+    const ImVec2 compactButtonPadding{
+        std::min(style.FramePadding.x, maxHorizontalPadding),
+        style.FramePadding.y,
+    };
+    // 方形按钮只收窄横向内边距，避免大 FramePadding 主题裁掉加减号。
+    const auto drawButton = [&](const char* label) {
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, compactButtonPadding);
+        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.5F, 0.5F));
+        const bool clicked =
+            ::MMM::UI::FeedbackButton(label, ImVec2(buttonSize, buttonSize));
+        ImGui::PopStyleVar(2);
+        return clicked;
+    };
+
+    ImGui::SetCursorScreenPos({ bounds.x, bounds.y });
+    ImGui::PushID(id);
+    ImGui::BeginDisabled(trackCount <= minimumTrackCount);
+    if ( drawButton("-##RemovePersistentTrack") ) {
+        updateCount(trackCount - 1);
+    }
+    ImGui::EndDisabled();
+    if ( ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) ) {
+        ImGui::SetTooltip("%s", removeTooltip);
+    }
+
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("%d", trackCount);
+    ImGui::SameLine();
+
+    const bool canAdd = trackCount < std::numeric_limits<std::int32_t>::max();
+    ImGui::BeginDisabled(!canAdd);
+    if ( drawButton("+##AddPersistentTrack") ) {
+        updateCount(trackCount + 1);
+    }
+    ImGui::EndDisabled();
+    if ( ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) ) {
+        ImGui::SetTooltip("%s", addTooltip);
+    }
+    ImGui::PopID();
+}
+
+}  // namespace
+
 /// @brief 渲染谱面设置页。
 void SettingsView::drawBeatmapSettings()
 {
@@ -476,67 +544,45 @@ void SettingsView::drawBeatmapSettings()
         addSettingItem(
             *sec,
             rowIndex,
+            TR_CACHE("ui.settings.beatmap.draft_tracks").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                const auto draftTrackCount =
+                    std::max(1, session->getContext().draftTrackCount);
+                drawTrackCountStepper(
+                    r,
+                    draftTrackCount,
+                    1,
+                    "DraftTrackCount",
+                    TR("ui.settings.beatmap.draft_tracks_remove").data(),
+                    TR("ui.settings.beatmap.draft_tracks_add").data(),
+                    [&](std::int32_t count) {
+                        engine.pushCommand(Logic::CmdUpdateDraftTrackCount{
+                            count,
+                        });
+                    });
+            });
+
+        addSettingItem(
+            *sec,
+            rowIndex,
             TR_CACHE("ui.settings.beatmap.bgm_tracks").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 const auto bgmTrackCount =
                     std::max(0, session->getContext().bgmTrackCount);
-                const float buttonSize       = ImGui::GetFrameHeight();
-                const auto& style            = ImGui::GetStyle();
-                const float buttonGlyphWidth = std::max(
-                    ImGui::CalcTextSize("-").x, ImGui::CalcTextSize("+").x);
-                const float maxHorizontalPadding = std::max(
-                    0.0f, (buttonSize - buttonGlyphWidth) * 0.5f - 1.0f);
-                const ImVec2 compactButtonPadding{
-                    std::min(style.FramePadding.x, maxHorizontalPadding),
-                    style.FramePadding.y,
-                };
-                // 紧凑方形按钮只收窄横向内边距，避免大 FramePadding
-                // 主题裁掉加减号。
-                const auto drawTrackCountButton = [&](const char* label) {
-                    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
-                                        compactButtonPadding);
-                    ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign,
-                                        ImVec2(0.5f, 0.5f));
-                    const bool clicked = ::MMM::UI::FeedbackButton(
-                        label, ImVec2(buttonSize, buttonSize));
-                    ImGui::PopStyleVar(2);
-                    return clicked;
-                };
-                ImGui::SetCursorScreenPos({ r.x, r.y });
-                ImGui::BeginDisabled(bgmTrackCount <= 0);
-                if ( drawTrackCountButton("-##RemovePersistentBgmTrack") ) {
-                    engine.pushCommand(Logic::CmdUpdateBgmTrackCount{
-                        bgmTrackCount - 1,
+                drawTrackCountStepper(
+                    r,
+                    bgmTrackCount,
+                    0,
+                    "BgmTrackCount",
+                    TR("ui.settings.beatmap.bgm_tracks_remove").data(),
+                    TR("ui.settings.beatmap.bgm_tracks_add").data(),
+                    [&](std::int32_t count) {
+                        engine.pushCommand(Logic::CmdUpdateBgmTrackCount{
+                            count,
+                        });
                     });
-                }
-                ImGui::EndDisabled();
-                if ( ImGui::IsItemHovered(
-                         ImGuiHoveredFlags_AllowWhenDisabled) ) {
-                    ImGui::SetTooltip(
-                        "%s",
-                        TR("ui.settings.beatmap.bgm_tracks_remove").data());
-                }
-
-                ImGui::SameLine();
-                ImGui::AlignTextToFramePadding();
-                ImGui::Text("%d", bgmTrackCount);
-                ImGui::SameLine();
-
-                const bool canAdd =
-                    bgmTrackCount < std::numeric_limits<std::int32_t>::max();
-                ImGui::BeginDisabled(!canAdd);
-                if ( drawTrackCountButton("+##AddPersistentBgmTrack") ) {
-                    engine.pushCommand(Logic::CmdUpdateBgmTrackCount{
-                        bgmTrackCount + 1,
-                    });
-                }
-                ImGui::EndDisabled();
-                if ( ImGui::IsItemHovered(
-                         ImGuiHoveredFlags_AllowWhenDisabled) ) {
-                    ImGui::SetTooltip(
-                        "%s", TR("ui.settings.beatmap.bgm_tracks_add").data());
-                }
             });
 
         addSettingItem(*sec,

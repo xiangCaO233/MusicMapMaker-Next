@@ -97,6 +97,10 @@ namespace MMM::Logic
                            : ::MMM::BeatmapMutationFlags::Metadata;
             } else if constexpr ( std::is_same_v<T, CmdUpdateTrackCount> ) {
                 return ::MMM::BeatmapMutationFlags::Metadata;
+            } else if constexpr ( std::is_same_v<T,
+                                                 CmdUpdateDraftTrackCount> ) {
+                // 草稿组不属于当前 BeatMap，但仍沿用物件编辑权限进行本地门禁。
+                return ::MMM::BeatmapMutationFlags::Objects;
             } else if constexpr ( std::is_same_v<T, CmdUndo> ||
                                   std::is_same_v<T, CmdRedo> ) {
                 return ::MMM::BeatmapMutationFlags::None;

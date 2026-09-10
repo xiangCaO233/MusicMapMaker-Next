@@ -52,7 +52,7 @@ public:
         bool   isSubNote;
         /// @brief 物件命中时触发的可选采样绑定；为空时使用内置音效。
         std::optional<::MMM::AudioSampleBinding> sampleBinding;
-        /// @brief 事件是否来自项目级草稿轨道区。
+        /// @brief 事件是否来自当前谱面的草稿轨道区。
         bool isDraft{ false };
 
         bool operator<(const HitEvent& other) const
@@ -78,7 +78,7 @@ public:
     /// @brief 触发音效（仅音效，带预测支持）。
     /// @param ev 待播放的物件打击事件。
     /// @param playerTrackCount 当前谱面的玩家轨道数。
-    /// @param draftTrackCount 当前项目共享草稿轨道数。
+    /// @param draftTrackCount 当前谱面的草稿轨道数。
     /// @param config 当前编辑器配置。
     /// @warning 逻辑预测播放热路径：每个待触发物件调用一次，只允许固定计算和
     /// 音效池调度，禁止文件访问或阻塞等待。
@@ -90,7 +90,7 @@ public:
     /// @param ev 待定位的物件打击事件。
     /// @param playerTrackCount 当前谱面的玩家轨道数。
     /// @param enabled 是否启用立体打击音效。
-    /// @param draftTrackCount 当前项目共享草稿轨道数；负值时兼容为玩家轨道数。
+    /// @param draftTrackCount 当前谱面草稿轨道数；负值时兼容为玩家轨道数。
     /// @return 普通物件为固定增益，Flick
     /// 为起点到滑动终点的线性增益包络；关闭时保持原始立体声。
     /// @warning 逻辑预测播放热路径：仅执行常量时间算术，不得访问 ECS 或分配。
@@ -226,7 +226,7 @@ private:
         double holdDuration{ 0.0 };
         /// @brief 物件起始绝对轨道，草稿轨使用负值。
         int trackIndex{ 0 };
-        /// @brief 特效是否来自项目级草稿轨道区。
+        /// @brief 特效是否来自当前谱面的草稿轨道区。
         bool isDraft{ false };
         /// @brief 物件横跨轨道数。
         int trackSpan{ 1 };

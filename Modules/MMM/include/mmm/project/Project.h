@@ -28,10 +28,13 @@ struct ProjectMetadata {
                                    m_version)
 };
 
-/// @brief 按主音频资源共享的一组项目级草稿轨物件。
+/// @brief 单张谱面独占的一组项目草稿轨物件。
 struct ProjectDraftLaneGroup {
-    /// @brief 作为共享范围键的主音频资源稳定 ID。
-    std::string m_mainAudioResourceId;
+    /// @brief 作为草稿归属键的项目相对谱面路径。
+    std::string m_beatmapFilePath;
+
+    /// @brief 旧版按主音频共享数据的迁移键；新项目不写出该字段。
+    std::string m_legacyMainAudioResourceId;
 
     /// @brief 使用编辑器音符协议保存的草稿物件载荷。
     std::string m_notePayload;
@@ -46,19 +49,27 @@ struct ProjectDraftLaneGroup {
     friend void to_json(nlohmann::json&              json,
                         const ProjectDraftLaneGroup& group)
     {
-        json = nlohmann::json{
-            { "m_mainAudioResourceId", group.m_mainAudioResourceId },
-            { "m_notePayload", group.m_notePayload },
-            { "m_trackCount", group.m_trackCount },
-        };
+        json = nlohmann::json{ { "m_notePayload", group.m_notePayload },
+                               { "m_trackCount", group.m_trackCount } };
+        if ( !group.m_beatmapFilePath.empty() ) {
+            // 新数据只写谱面路径，确保同主音频的不同谱面拥有独立草稿。
+            json["m_beatmapFilePath"] = group.m_beatmapFilePath;
+        } else if ( !group.m_legacyMainAudioResourceId.empty() ) {
+            // 尚未被任一谱面认领的旧组保持原键，避免打开项目时自动保存丢失。
+            json["m_mainAudioResourceId"] = group.m_legacyMainAudioResourceId;
+        }
     }
 
     /// @brief 反序列化草稿轨组并重置进程内版本。
     friend void from_json(const nlohmann::json&  json,
                           ProjectDraftLaneGroup& group)
     {
-        group.m_mainAudioResourceId =
-            json.value("m_mainAudioResourceId", std::string{});
+        group.m_beatmapFilePath =
+            json.value("m_beatmapFilePath", std::string{});
+        group.m_legacyMainAudioResourceId =
+            group.m_beatmapFilePath.empty()
+                ? json.value("m_mainAudioResourceId", std::string{})
+                : std::string{};
         group.m_notePayload     = json.value("m_notePayload", std::string{});
         group.m_trackCount      = std::max(0, json.value("m_trackCount", 0));
         group.m_runtimeRevision = 0U;
@@ -123,7 +134,7 @@ public:
     /// @brief 项目内包含的所有谱面入口列表
     std::vector<BeatmapEntry> m_beatmaps;
 
-    /// @brief 按主音频资源 ID 共享的项目级草稿轨数据。
+    /// @brief 按谱面路径隔离的项目草稿轨数据。
     std::vector<ProjectDraftLaneGroup> m_draftLaneGroups;
 
     /// @brief 手动从项目中移除并排除自动同步的谱面相对路径列表。

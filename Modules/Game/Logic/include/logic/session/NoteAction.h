@@ -147,4 +147,37 @@ private:
     };
 };
 
+/// @brief 改变当前谱面独占草稿区的持久化轨道数量。
+class DraftTrackCountAction : public IEditorAction
+{
+public:
+    /// @brief 构造草稿轨道数量操作。
+    /// @param beforeDraftTrackCount 原持久化草稿轨道数量。
+    /// @param afterDraftTrackCount 新持久化草稿轨道数量。
+    DraftTrackCountAction(std::int32_t beforeDraftTrackCount,
+                          std::int32_t afterDraftTrackCount)
+        : m_beforeDraftTrackCount(beforeDraftTrackCount)
+        , m_afterDraftTrackCount(afterDraftTrackCount)
+    {
+    }
+
+    /// @brief 应用新的草稿轨道数量。
+    void execute(SessionContext& ctx) override;
+    /// @brief 恢复原草稿轨道数量。
+    void undo(SessionContext& ctx) override;
+    /// @brief 重新应用新的草稿轨道数量。
+    void redo(SessionContext& ctx) override;
+    /// @brief 获取增加或删除草稿轨道的本地化操作名称。
+    std::string getName() const override;
+    /// @brief 草稿轨数只更新项目侧车草稿，不属于 BeatMap 正式内容变更。
+    [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
+    {
+        return ::MMM::BeatmapMutationFlags::None;
+    }
+
+private:
+    std::int32_t m_beforeDraftTrackCount{ 1 };  ///< 原草稿轨道数量。
+    std::int32_t m_afterDraftTrackCount{ 1 };   ///< 新草稿轨道数量。
+};
+
 }  // namespace MMM::Logic

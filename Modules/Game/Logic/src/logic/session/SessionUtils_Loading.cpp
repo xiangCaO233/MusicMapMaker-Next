@@ -164,7 +164,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.audioTimelineDescriptor      = {};
     // 描述符清空后由后续脏标记驱动重新生成，不在旧描述上逐条覆盖资源事件。
     // 新谱面的草稿组关联与同步基线需要重新绑定，不能沿用旧组版本。
-    ctx.m_draftLaneGroupId.clear();
+    ctx.m_draftLaneBeatmapPath.clear();
     ctx.m_draftLaneGroupRevision = 0U;
     ctx.m_draftLaneBasePayload.clear();
     ctx.m_needsDraftNotesSync         = false;

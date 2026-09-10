@@ -1074,7 +1074,7 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     m_ctx->lastConfig      = config;
     m_ctx->isActiveSession = isActiveSession;
     // 保存有效配置副本供本轮控制器读取，避免持有调用方配置对象的可变引用。
-    // 先接收项目共享草稿的新版本，再处理当前会话命令，避免从旧基线编辑。
+    // 先接收同谱面草稿的新版本，再处理当前会话命令，避免从旧基线编辑。
     ProjectDraftLaneService::refreshIfChanged(*m_ctx);
     if ( !isActiveSession && m_ctx->isPlaying ) {
         // 后台会话不再作为播放源，但同音轨跟随由独立状态维护。

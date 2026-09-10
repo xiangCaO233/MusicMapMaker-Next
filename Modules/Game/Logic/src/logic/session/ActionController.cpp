@@ -1171,4 +1171,34 @@ std::string BatchNoteAction::getName() const
                        TR("ui.status.info.entries"));
 }
 
+/// @brief 应用草稿轨数动作的目标值。
+/// @param ctx 动作所属会话。
+void DraftTrackCountAction::execute(SessionContext& ctx)
+{
+    applyDraftTrackCount(ctx, m_afterDraftTrackCount);
+}
+
+/// @brief 恢复草稿轨数动作的原值。
+/// @param ctx 动作所属会话。
+void DraftTrackCountAction::undo(SessionContext& ctx)
+{
+    applyDraftTrackCount(ctx, m_beforeDraftTrackCount);
+}
+
+/// @brief 重做草稿轨数动作的目标值。
+/// @param ctx 动作所属会话。
+void DraftTrackCountAction::redo(SessionContext& ctx)
+{
+    applyDraftTrackCount(ctx, m_afterDraftTrackCount);
+}
+
+/// @brief 根据轨数变化方向返回本地化操作名称。
+/// @return 增轨或减轨对应的本地化文本。
+std::string DraftTrackCountAction::getName() const
+{
+    return m_afterDraftTrackCount > m_beforeDraftTrackCount
+               ? TR("ui.action.draft_track.add").data()
+               : TR("ui.action.draft_track.remove").data();
+}
+
 }  // namespace MMM::Logic

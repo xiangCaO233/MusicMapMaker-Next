@@ -1,5 +1,6 @@
 #include "logic/ProjectDraftLaneService.h"
 
+#include "config/Utf8Path.h"
 #include "logic/EditorClipboardProtocol.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectResourceService.h"
@@ -12,6 +13,7 @@
 #include "mmm/project/Project.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
@@ -23,21 +25,86 @@ namespace MMM::Logic
 namespace
 {
 
-/// @brief 查找指定共享组。
-/// @param project 持有共享草稿的项目。
-/// @param groupId 主音频资源 ID，也是共享组的键。
+/// @brief 查找指定谱面的独占草稿组。
+/// @param project 持有草稿数据的项目。
+/// @param beatmapPath 规范化后的项目相对谱面路径。
 /// @return 项目内的观察指针，未找到时为空。
 /// @note 项目组容器增删后需重新取得指针，不跨容器修改缓存。
-/// @details 组键取音频资源身份而非谱面路径，重命名谱面不改变草稿归属。
-ProjectDraftLaneGroup* findGroup(Project& project, std::string_view groupId)
+/// @pre beatmapPath 已在加载入口完成跨平台规范化。
+ProjectDraftLaneGroup* findGroup(Project& project, std::string_view beatmapPath)
 {
+    // update 快路依赖直接比较，不能在这里每帧重新构造 filesystem 路径。
     const auto iterator =
         std::find_if(project.m_draftLaneGroups.begin(),
                      project.m_draftLaneGroups.end(),
-                     [groupId](const ProjectDraftLaneGroup& group) {
-                         return group.m_mainAudioResourceId == groupId;
+                     [beatmapPath](const ProjectDraftLaneGroup& group) {
+                         return group.m_beatmapFilePath == beatmapPath;
                      });
     return iterator == project.m_draftLaneGroups.end() ? nullptr : &*iterator;
+}
+
+/// @brief 查找尚未迁移的旧版主音频共享草稿组。
+/// @param project 持有旧草稿数据的项目。
+/// @param mainAudioResourceId 当前谱面解析到的主音频资源 ID。
+/// @return 首个匹配的旧组；新格式组不会参与匹配。
+/// @note 旧共享组只能被一张谱面认领，避免迁移后继续作为跨谱面公共状态。
+ProjectDraftLaneGroup* findLegacyGroup(Project&         project,
+                                       std::string_view mainAudioResourceId)
+{
+    const auto iterator = std::find_if(
+        project.m_draftLaneGroups.begin(),
+        project.m_draftLaneGroups.end(),
+        [mainAudioResourceId](const ProjectDraftLaneGroup& group) {
+            return group.m_beatmapFilePath.empty() &&
+                   group.m_legacyMainAudioResourceId == mainAudioResourceId;
+        });
+    return iterator == project.m_draftLaneGroups.end() ? nullptr : &*iterator;
+}
+
+/// @brief 统一项目草稿组使用的谱面路径表示。
+/// @param pathText UTF-8 谱面路径。
+/// @return 词法规范化且固定使用正斜杠的路径；空输入保持为空。
+/// @note 只处理字符串与词法路径，不查询文件系统。
+std::string normalizeBeatmapPath(std::string pathText)
+{
+    if ( pathText.empty() ) return {};
+    // 历史项目可能来自另一平台，先统一分隔符再交给 filesystem 折叠点目录。
+    std::replace(pathText.begin(), pathText.end(), '\\', '/');
+    return Config::pathToUtf8Generic(
+        Config::utf8ToPath(pathText).lexically_normal());
+}
+
+/// @brief 生成当前谱面在项目内的持久化草稿键。
+/// @param project 谱面所属项目。
+/// @param beatmapPath 谱面元数据中的相对或绝对路径。
+/// @return 项目相对且跨平台稳定的路径；无法相对化时退回文件名。
+/// @warning 谱面加载或另存的低频路径：绝对路径可能查询项目根。
+std::string makeBeatmapGroupPath(const Project&               project,
+                                 const std::filesystem::path& beatmapPath)
+{
+    if ( beatmapPath.empty() ) return {};
+    if ( beatmapPath.is_relative() ) {
+        // 会话加载通常已得到项目相对路径，这条分支完全不触碰文件系统。
+        return normalizeBeatmapPath(Config::pathToUtf8Generic(beatmapPath));
+    }
+
+    std::error_code filesystemError;
+    // 绝对输入只用于兼容尚未经过项目资源规范化的加载或另存路径。
+    const auto root =
+        std::filesystem::absolute(project.m_projectRoot, filesystemError);
+    if ( filesystemError || project.m_projectRoot.empty() ) {
+        // 缺失项目根时不能持久化机器绝对目录，文件名是最保守的可迁移回退。
+        return normalizeBeatmapPath(
+            Config::pathToUtf8Generic(beatmapPath.filename()));
+    }
+    const auto relativePath =
+        std::filesystem::relative(beatmapPath, root, filesystemError);
+    if ( filesystemError || relativePath.empty() ) {
+        // 跨卷等失败不应导致草稿失去任何键，同时也不能泄漏本机绝对路径。
+        return normalizeBeatmapPath(
+            Config::pathToUtf8Generic(beatmapPath.filename()));
+    }
+    return normalizeBeatmapPath(Config::pathToUtf8Generic(relativePath));
 }
 
 /// @brief 解析当前会话实际使用的项目。
@@ -75,7 +142,7 @@ void convertPersistedTracksToDraft(NoteComponent& note, int trackCount)
 /// @details 宽度与载荷共同定义原点；读取同一载荷时必须使用对应宽度反向换算。
 void convertDraftTracksToPersisted(NoteComponent& note, int trackCount)
 {
-    // 载荷存非负列；草稿身份来自共享组归属，而非持久化 m_isDraft 标志。
+    // 载荷存非负列；草稿身份来自谱面草稿组归属，而非持久化 m_isDraft 标志。
     note.m_trackIndex += trackCount;
     note.m_isDraft = false;
     for ( auto& subNote : note.m_subNotes ) {
@@ -169,7 +236,7 @@ std::string serializeDraftItem(const ClipboardItem& item)
 
 /// @brief 编码草稿条目；空集合保持为空字符串。
 /// @param items 已排序或需保持既有顺序的根条目。
-/// @return 共享组载荷；此处不重新排列条目。
+/// @return 谱面草稿组载荷；此处不重新排列条目。
 /// @note 空字符串与空草稿组配合使用，避免为无物件组生成仅含协议头的载荷。
 std::string serializeDraftItems(const std::vector<ClipboardItem>& items)
 {
@@ -195,7 +262,7 @@ std::vector<ClipboardItem> parseDraftItems(std::string_view payload)
 }
 
 /// @brief 为持久化组补齐稳定 ID，使跨画布刷新可以保留实体身份。
-/// @param group 要规范化的项目共享组。
+/// @param group 要规范化的谱面草稿组。
 /// @note 只在编码内容变化时推进运行时版本，不写磁盘配置。
 /// @details
 /// 会重编码解析结果，因此还会移除独立子实体等无法作为根条目保存的内容。
@@ -315,12 +382,12 @@ void ensureAuxiliaryComponents(entt::registry& registry, entt::entity entity)
 
 /// @brief 以稳定逻辑 ID 合并草稿载荷，并保留仍存在实体的身份。
 /// @param ctx 接收草稿实体的会话。
-/// @param group 共享组；空指针表示清除本会话所有草稿实体。
+/// @param group 谱面草稿组；空指针表示清除本会话所有草稿实体。
 /// @return 实际可见条目的持久化载荷，用作下一次三方合并基线。
 /// @note 未显示的越界条目不计入基线，防止后续同步误认为用户删除它们。
 /// @pre 草稿宽度已写入 ctx；调用期间会话注册表不可被其他线程同时修改。
 /// @details 函数更新当前会话实体，不修改
-/// group；共享组载荷是本次应用的只读输入。
+/// group；谱面组载荷是本次应用的只读输入。
 std::string applyPayload(SessionContext&              ctx,
                          const ProjectDraftLaneGroup* group)
 {
@@ -450,15 +517,15 @@ std::string applyPayload(SessionContext&              ctx,
 
 }  // namespace
 
-/// @brief 为载入谱面的会话选择共享组并建立草稿基线。
+/// @brief 为载入谱面的会话选择独占组并建立草稿基线。
 /// @param ctx 已设置当前谱面及玩家轨道数的会话。
 /// @param project 对应项目；空指针时仅清除旧草稿状态。
 /// @warning 低频加载入口，解析完整载荷并更新 ECS，不逐帧调用。
-/// @details 无可解析音频或无有效轨道时清空草稿实体；不会为这种会话创建共享组。
+/// @details 无有效谱面路径或轨道时清空草稿实体；不会为这种会话创建草稿组。
 void ProjectDraftLaneService::load(SessionContext& ctx, Project* project)
 {
-    // 切换谱面时丢弃旧组身份和基线，不能把前一首歌的草稿当成本次本地编辑。
-    ctx.m_draftLaneGroupId.clear();
+    // 切换谱面时丢弃旧路径和基线，不能把前一张谱面的草稿当成本次本地编辑。
+    ctx.m_draftLaneBeatmapPath.clear();
     ctx.m_draftLaneGroupRevision = 0U;
     ctx.m_draftLaneBasePayload.clear();
     ctx.draftTrackCount           = std::max(0, ctx.trackCount);
@@ -469,22 +536,42 @@ void ProjectDraftLaneService::load(SessionContext& ctx, Project* project)
         return;
     }
 
-    // 共享键采用默认音频资源 ID；不同谱面指向同一音频时共享同一份草稿。
-    const auto* resource =
-        ProjectResourceService::findDefaultBeatmapAudioResource(
-            *project,
-            *ctx.currentBeatmap,
-            ctx.currentBeatmap->m_baseMapMetadata.map_path);
-    // 文件路径可作为显示提示，但没有资源身份就无法稳定选择项目共享组。
-    if ( !resource || resource->m_id.empty() ) {
+    // 组键只取谱面自身路径；共用主音频的不同难度不能再互相读写草稿。
+    ctx.m_draftLaneBeatmapPath = makeBeatmapGroupPath(
+        *project, ctx.currentBeatmap->m_baseMapMetadata.map_path);
+    if ( ctx.m_draftLaneBeatmapPath.empty() ) {
         static_cast<void>(applyPayload(ctx, nullptr));
         return;
     }
 
-    ctx.m_draftLaneGroupId = resource->m_id;
-    auto* group            = findGroup(*project, ctx.m_draftLaneGroupId);
+    // 旧路径在加载时一次性规范化，后续 update 快路只做直接字符串比较。
+    for ( auto& candidate : project->m_draftLaneGroups ) {
+        if ( candidate.m_beatmapFilePath.empty() ) continue;
+        // 只在低频载入时改写历史表示，让后续同谱面画布使用完全相同的键。
+        candidate.m_beatmapFilePath =
+            normalizeBeatmapPath(std::move(candidate.m_beatmapFilePath));
+    }
+    auto* group = findGroup(*project, ctx.m_draftLaneBeatmapPath);
+    if ( !group ) {
+        // 旧版只有主音频键；首次打开时由当前谱面认领，之后便与其他谱面隔离。
+        const auto* resource =
+            ProjectResourceService::findDefaultBeatmapAudioResource(
+                *project,
+                *ctx.currentBeatmap,
+                ctx.currentBeatmap->m_baseMapMetadata.map_path);
+        if ( resource && !resource->m_id.empty() ) {
+            group = findLegacyGroup(*project, resource->m_id);
+            if ( group ) {
+                // 认领是一次性迁移；清掉旧音频键后其他谱面无法再次匹配该组。
+                group->m_beatmapFilePath = ctx.m_draftLaneBeatmapPath;
+                group->m_legacyMainAudioResourceId.clear();
+                // 已打开的其他同谱面画布需要观察到归属字段已经改变。
+                ++group->m_runtimeRevision;
+            }
+        }
+    }
     if ( group ) {
-        // 旧配置未保存宽度时沿用当前玩家键数，已有宽度则保持跨谱面一致。
+        // 旧配置未保存宽度时沿用当前玩家键数，已有宽度只属于当前谱面。
         canonicalizeGroupPayload(*group);
         ctx.draftTrackCount =
             group->m_trackCount > 0 ? group->m_trackCount : ctx.trackCount;
@@ -495,17 +582,17 @@ void ProjectDraftLaneService::load(SessionContext& ctx, Project* project)
     ctx.m_draftLaneGroupRevision  = group ? group->m_runtimeRevision : 0U;
 }
 
-/// @brief 共享组版本变化后刷新本会话可见草稿。
+/// @brief 同谱面草稿组版本变化后刷新本会话可见草稿。
 /// @param ctx 要与项目组对齐的会话。
 /// @warning 每 update 检查组版本；无变化时不解析载荷或遍历实体。
 /// 交互期间保留旧基线，结束后由版本差异再次触发刷新。
-/// @note 版本是项目内的运行时通知，不是磁盘修订号或网络协议序号。
+/// @note 版本只在同一谱面的打开画布间通知，不是磁盘或网络协议序号。
 void ProjectDraftLaneService::refreshIfChanged(SessionContext& ctx)
 {
-    if ( ctx.m_draftLaneGroupId.empty() || !ctx.currentBeatmap ) return;
+    if ( ctx.m_draftLaneBeatmapPath.empty() || !ctx.currentBeatmap ) return;
     auto* project = resolveProject(ctx);
     if ( !project ) return;
-    auto* group = findGroup(*project, ctx.m_draftLaneGroupId);
+    auto* group = findGroup(*project, ctx.m_draftLaneBeatmapPath);
     // 组消失时以零版本和空载荷刷新，使旧草稿不继续滞留在会话中。
     auto revision = group ? group->m_runtimeRevision : 0U;
     // 同版本快路不收集 ECS、不排序、不读取磁盘。
@@ -525,8 +612,8 @@ void ProjectDraftLaneService::refreshIfChanged(SessionContext& ctx)
     ctx.m_draftLaneGroupRevision  = revision;
 }
 
-/// @brief 将本会话草稿改动合并到共享组并刷新本地基线。
-/// @param ctx 持有当前 ECS 草稿和上次共享快照的会话。
+/// @brief 将本会话草稿改动合并到谱面独占组并刷新本地基线。
+/// @param ctx 持有当前 ECS 草稿和上次同谱面快照的会话。
 /// @warning 脏标记置位后完整收集和排序草稿；不用于无条件逐帧重建。
 /// @note 只更新内存项目和运行时版本，磁盘保存由项目持久化流程负责。
 /// @pre 会话的基线载荷与基线宽度来自同一次应用，不可独立重置其中一个。
@@ -535,9 +622,9 @@ void ProjectDraftLaneService::refreshIfChanged(SessionContext& ctx)
 void ProjectDraftLaneService::sync(SessionContext& ctx)
 {
     if ( !ctx.m_needsDraftNotesSync ) return;
-    // 本轮消费请求；后续无共享组等情况不会让同一个无效请求每轮重复执行。
+    // 本轮消费请求；后续无谱面组等情况不会让同一个无效请求每轮重复执行。
     ctx.m_needsDraftNotesSync = false;
-    if ( ctx.m_draftLaneGroupId.empty() || ctx.trackCount <= 0 ) return;
+    if ( ctx.m_draftLaneBeatmapPath.empty() || ctx.trackCount <= 0 ) return;
 
     auto* project = resolveProject(ctx);
     if ( !project ) return;
@@ -567,11 +654,11 @@ void ProjectDraftLaneService::sync(SessionContext& ctx)
             return lhs.note.m_trackIndex < rhs.note.m_trackIndex;
         });
 
-    auto* group = findGroup(*project, ctx.m_draftLaneGroupId);
+    auto* group = findGroup(*project, ctx.m_draftLaneBeatmapPath);
     if ( !group ) {
         // 仅真正有同步请求时创建组，载入空草稿不会提前增加项目配置条目。
         project->m_draftLaneGroups.push_back(ProjectDraftLaneGroup{
-            .m_mainAudioResourceId = ctx.m_draftLaneGroupId,
+            .m_beatmapFilePath = ctx.m_draftLaneBeatmapPath,
         });
         // push_back 后重新取地址，不保留容器扩容前的观察指针。
         group = &project->m_draftLaneGroups.back();
@@ -581,7 +668,7 @@ void ProjectDraftLaneService::sync(SessionContext& ctx)
     /// @brief 最新共享载荷的编码宽度；旧项目零值沿用当前玩家键数。
     const auto latestTrackCount =
         group->m_trackCount > 0 ? group->m_trackCount : ctx.trackCount;
-    // 比较基线宽度区分用户主动改宽与共享组外部改宽，不能只比较两端当前值。
+    // 比较基线宽度区分用户主动改宽与同谱面其他画布改宽，不能只比较当前值。
     const bool localTrackCountChanged =
         ctx.draftTrackCount != ctx.m_draftLaneBaseTrackCount;
     /// @brief 编辑期间是否有其他提交或身份规范化改变共享版本。
@@ -653,6 +740,22 @@ void ProjectDraftLaneService::sync(SessionContext& ctx)
     ctx.m_draftLaneBasePayload    = applyPayload(ctx, group);
     ctx.m_draftLaneBaseTrackCount = ctx.draftTrackCount;
     ctx.m_draftLaneGroupRevision  = group->m_runtimeRevision;
+}
+
+/// @brief 谱面路径变化后重绑当前会话的草稿组键。
+/// @param ctx 已经提交新谱面路径的会话。
+/// @param project 谱面所属项目；空指针表示无法维持项目草稿绑定。
+/// @warning 显式保存低频路径，只计算路径字符串且不访问或重建 ECS。
+void ProjectDraftLaneService::rebindBeatmapPath(SessionContext& ctx,
+                                                Project*        project)
+{
+    if ( !project || !ctx.currentBeatmap ) {
+        // 没有项目归属时不可保留旧项目的相对路径键。
+        ctx.m_draftLaneBeatmapPath.clear();
+        return;
+    }
+    ctx.m_draftLaneBeatmapPath = makeBeatmapGroupPath(
+        *project, ctx.currentBeatmap->m_baseMapMetadata.map_path);
 }
 
 }  // namespace MMM::Logic

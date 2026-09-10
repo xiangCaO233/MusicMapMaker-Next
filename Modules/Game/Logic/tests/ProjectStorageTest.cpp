@@ -119,11 +119,11 @@ MMM::Project makeProject()
     project.m_draftLaneGroups = {
         // 草稿载荷与显式轨道数需要持久化，运行时修订号则必须丢弃。
         MMM::ProjectDraftLaneGroup{
-            // main 关联上方主音轨，让领域载荷具有可恢复的资源上下文。
-            .m_mainAudioResourceId = "main",
-            .m_notePayload         = "draft-payload",
-            .m_trackCount          = 7,
-            .m_runtimeRevision     = 17U,
+            // 谱面路径关联上方唯一入口，不能再用共同主音轨串联多个难度。
+            .m_beatmapFilePath = "hard.mmm",
+            .m_notePayload     = "draft-payload",
+            .m_trackCount      = 7,
+            .m_runtimeRevision = 17U,
         },
     };
     project.m_excludedAudioPaths = { "unused.wav" };
@@ -239,10 +239,10 @@ bool testSplitRoundTrip(const std::filesystem::path& root)
                  "beatmaps should round trip") &&
            check(loaded.m_project.m_draftLaneGroups.size() == 1,
                  "draft lane groups should round trip") &&
-           // 联合检查关联资源、载荷与轨道数，排除只重建空分组的实现。
+           // 联合检查谱面归属、载荷与轨道数，排除只重建空分组的实现。
            check(
-               loaded.m_project.m_draftLaneGroups.front()
-                           .m_mainAudioResourceId == "main" &&
+               loaded.m_project.m_draftLaneGroups.front().m_beatmapFilePath ==
+                       "hard.mmm" &&
                    loaded.m_project.m_draftLaneGroups.front().m_notePayload ==
                        "draft-payload" &&
                    loaded.m_project.m_draftLaneGroups.front().m_trackCount == 7,
@@ -314,8 +314,8 @@ bool testSplitWithoutDraftFile(const std::filesystem::path& root)
                  "missing draft file should produce an empty group list");
 }
 
-/// @brief 验证旧草稿轨组缺少轨道数字段时按未声明状态载入。
-/// @return 反序列化成功且轨道数量保持零值兼容标记时返回 true。
+/// @brief 验证旧主音频草稿组可保留迁移键和未声明轨道数。
+/// @return 反序列化及再次序列化均保留旧迁移信息时返回 true。
 /// 直接验证领域对象的旧字段兼容，不需要写入磁盘或经过项目打开流程。
 /// 未声明轨道数由后续业务解释，测试不在这里替换成某个默认轨道数。
 bool testLegacyDraftGroupWithoutTrackCount()
@@ -326,13 +326,18 @@ bool testLegacyDraftGroupWithoutTrackCount()
         { "m_notePayload", "legacy-draft" },
     };
     const auto group = legacyJson.get<MMM::ProjectDraftLaneGroup>();
+    // 立即重新编码模拟项目打开后的自动保存，不经过草稿服务认领流程。
+    const auto saved = nlohmann::json(group);
     // 输入没有 m_trackCount，测试不先人为补零，以实际覆盖反序列化默认值。
-    // 新字段缺省不能破坏原有资源身份与草稿载荷。
-    return check(group.m_mainAudioResourceId == "main" &&
-                     // 新字段兼容不能覆盖两个已经存在的旧字段。
-                     group.m_notePayload == "legacy-draft" &&
-                     group.m_trackCount == 0,
-                 "legacy draft group should leave track count undeclared");
+    // 尚未被谱面认领前再次保存仍写旧键，避免项目打开时自动保存丢掉迁移入口。
+    return check(
+        group.m_beatmapFilePath.empty() &&
+            group.m_legacyMainAudioResourceId == "main" &&
+            group.m_notePayload == "legacy-draft" && group.m_trackCount == 0 &&
+            saved.value("m_mainAudioResourceId", std::string{}) == "main" &&
+            // 新谱面键尚不存在，不能写一个空字段遮蔽旧音频迁移键。
+            !saved.contains("m_beatmapFilePath"),
+        "legacy draft group should leave track count undeclared");
 }
 
 /// @brief 验证资源扫描不会把内部配置目录中的文件识别为谱面。

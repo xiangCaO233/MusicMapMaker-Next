@@ -144,6 +144,21 @@ std::string normalizeStoredProjectPath(const Project&     project,
     return Config::pathToUtf8(relativePath.lexically_normal());
 }
 
+/// @brief 规范化草稿组使用的跨平台谱面路径键。
+/// @param pathText 项目相对谱面路径。
+/// @return 固定使用正斜杠且折叠点目录的 UTF-8 路径。
+/// @note 草稿键已经是项目相对路径，不再次访问文件系统解析项目根。
+/// @pre 调用方负责先把绝对路径转换为项目相对路径。
+/// @details Windows 历史反斜杠与当前平台分隔符最终得到同一个持久键。
+std::string normalizeDraftBeatmapPath(std::string pathText)
+{
+    if ( pathText.empty() ) return {};
+    // 项目可能在 Windows 与类 Unix 平台间移动，比较前统一历史分隔符。
+    std::replace(pathText.begin(), pathText.end(), '\\', '/');
+    return Config::pathToUtf8Generic(
+        Config::utf8ToPath(pathText).lexically_normal());
+}
+
 /// @brief 按资源 ID、项目相对路径或旧版文件名查找项目音频资源。
 /// @param project 当前项目。
 /// @param audioReference 谱面中保存的资源 ID 或路径。
@@ -406,10 +421,10 @@ bool validateTemplatePlayerObjectTracks(const BeatMap& source,
                 const auto& subNote = subNoteReference.get();
                 const bool  valid   = subNote.m_type == NoteType::FLICK
                                           ? isTemplateFlickTrackValid(
-                                             static_cast<const Flick&>(subNote),
-                                             targetPlayerTrackCount)
+                                                static_cast<const Flick&>(subNote),
+                                                targetPlayerTrackCount)
                                           : isTemplateNoteTrackValid(
-                                             subNote, targetPlayerTrackCount);
+                                                subNote, targetPlayerTrackCount);
                 if ( valid ) continue;
 
                 errorMessage = "模板 Polyline 子物件超出新谱面的玩家轨道范围";
@@ -1010,6 +1025,8 @@ ProjectCommandService::syncProjectWithFile(
 /// @return 项目谱面列表是否发生变化。
 /// @pre 文件移动已由调用方完成；这里接收的是关联更新，而非重命名请求。
 /// @note 旧条目命中时不重写排除列表；未命中才走新增文件的排除项撤销流程。
+/// @details 谱面入口与独占草稿组使用同一对相对路径完成事务式重映射。
+/// 草稿组即使暂时没有对应入口，也会保留这次路径变化供后续项目扫描恢复。
 ProjectCommandService::ProjectMutationResult
 ProjectCommandService::updateBeatmapFilePath(
     Project& project, const std::filesystem::path& oldPath,
@@ -1038,6 +1055,25 @@ ProjectCommandService::updateBeatmapFilePath(
     std::string relNew =
         (newEc || relNewPath.empty()) ? "" : Config::pathToUtf8(relNewPath);
 
+    // 谱面另存或移动后，独占草稿必须跟随项目相对路径一起重命名。
+    const auto oldDraftPath = normalizeDraftBeatmapPath(relOld);
+    const auto newDraftPath = normalizeDraftBeatmapPath(relNew);
+    // 独立记录变化，旧条目缺失但草稿组命中时仍要通知上层保存项目。
+    bool draftPathChanged = false;
+    if ( !oldDraftPath.empty() && !newDraftPath.empty() ) {
+        for ( auto& group : project.m_draftLaneGroups ) {
+            if ( group.m_beatmapFilePath.empty() ||
+                 normalizeDraftBeatmapPath(group.m_beatmapFilePath) !=
+                     oldDraftPath ) {
+                continue;
+            }
+            group.m_beatmapFilePath = newDraftPath;
+            // 同谱面已打开画布通过修订号在下一安全更新点重新绑定状态。
+            ++group.m_runtimeRevision;
+            draftPathChanged = true;
+        }
+    }
+
     for ( auto& entry : project.m_beatmaps ) {
         // 此入口按存储的相对字符串匹配旧条目，不逐项查询文件等价性。
         if ( entry.m_filePath != relOld ) {
@@ -1061,7 +1097,10 @@ ProjectCommandService::updateBeatmapFilePath(
     }
 
     // 旧条目不存在时按新增文件处理，复用根目录限制、排除项撤销和文件去重。
-    return syncProjectWithFile(project, newPath);
+    auto result = syncProjectWithFile(project, newPath);
+    // 草稿路径自身也是项目数据变化，不能被谱面扫描的无变化结果覆盖。
+    result.m_changed = result.m_changed || draftPathChanged;
+    return result;
 }
 
 /// @brief 更新音频资源类型。
@@ -1310,6 +1349,8 @@ ProjectCommandService::removeAudioResource(
 /// @param project 当前打开的项目。
 /// @param cmd 删除谱面命令。
 /// @return 项目谱面列表是否发生变化。
+/// @details 删除谱面入口时只清理该路径的新格式草稿组；尚未迁移的旧音频组保留。
+/// 这样无法归属的兼容数据不会因删除任一共用音频的谱面而提前丢失。
 ProjectCommandService::ProjectMutationResult
 ProjectCommandService::removeBeatmap(Project&                project,
                                      const CmdRemoveBeatmap& cmd) const
@@ -1338,6 +1379,20 @@ ProjectCommandService::removeBeatmap(Project&                project,
 
     if ( maps.size() != oldSize ) {
         // 保留前面新增排除项产生的 true，不能用本次擦除数量直接覆盖结果。
+        result.m_changed = true;
+    }
+
+    // 草稿已按谱面独占，移除项目入口时同步清理其侧车数据，不能留下孤立分组。
+    const auto removedDraftPath = normalizeDraftBeatmapPath(cmd.filePath);
+    const auto oldDraftCount    = project.m_draftLaneGroups.size();
+    // 旧版音频键组尚未确定属于哪张谱面，不能因删除任一共用音频谱面而误删。
+    std::erase_if(
+        project.m_draftLaneGroups, [&](const ProjectDraftLaneGroup& group) {
+            return !group.m_beatmapFilePath.empty() &&
+                   normalizeDraftBeatmapPath(group.m_beatmapFilePath) ==
+                       removedDraftPath;
+        });
+    if ( project.m_draftLaneGroups.size() != oldDraftCount ) {
         result.m_changed = true;
     }
 

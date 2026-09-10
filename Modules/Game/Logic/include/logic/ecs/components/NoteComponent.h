@@ -27,7 +27,7 @@ struct NoteComponent {
     /// @brief 持续时间 (如果是 Hold 类型)
     double m_duration{ 0.0 };
 
-    /// @brief 所属轨道索引；负值表示左侧项目草稿区，非负值用于正式谱面。
+    /// @brief 所属轨道索引；负值表示当前谱面左侧草稿区，非负值用于正式谱面。
     int m_trackIndex{ 0 };
 
     /// @brief 滑动轨道偏移 (如果是 Flick 类型)
@@ -36,7 +36,7 @@ struct NoteComponent {
     /// @brief 是否为折线内部子物件（如果是，则在标准渲染流程中跳过）
     bool m_isSubNote{ false };
 
-    /// @brief 是否属于项目级草稿轨而非当前正式谱面。
+    /// @brief 是否属于当前谱面草稿轨而非正式内容。
     bool m_isDraft{ false };
 
     /// @brief 子物件所属的 Polyline 父实体，仅在当前会话注册表中有效。
@@ -62,7 +62,7 @@ struct NoteComponent {
     /// @brief 折线根物件的子节点数据，子实体通过父句柄与序号关联到此列表。
     std::vector<SubNote> m_subNotes;
 
-    /// @brief 保存、协作及共享草稿中稳定的逻辑物件标识，不等同于 entt
+    /// @brief 保存、协作及同谱面草稿同步中稳定的逻辑物件标识，不等同于 entt
     /// 实体句柄。
     std::string m_collaborationId;
 };

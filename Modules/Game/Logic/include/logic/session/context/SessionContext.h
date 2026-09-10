@@ -70,16 +70,16 @@ struct SessionContext {
     /// @brief 自动采样已选实体索引，避免框选热路径扫描完整 Registry。
     std::unordered_set<entt::entity> selectedSampleEntities;
 
-    /// @brief 当前谱面解析到的主音频草稿共享组 ID。
-    std::string m_draftLaneGroupId;
+    /// @brief 当前草稿组绑定的项目相对谱面路径。
+    std::string m_draftLaneBeatmapPath;
 
-    /// @brief 当前会话已载入的草稿共享组进程内版本。
+    /// @brief 当前会话已载入的同谱面草稿组进程内版本。
     std::uint64_t m_draftLaneGroupRevision{ 0U };
 
-    /// @brief 当前会话上次同步完成时的草稿组载荷，用于三方合并。
+    /// @brief 当前会话上次同步完成时的同谱面草稿载荷，用于三方合并。
     std::string m_draftLaneBasePayload;
 
-    /// @brief 当前会话上次同步完成时的草稿轨道数量，用于并发三方合并。
+    /// @brief 当前会话上次同步完成时的草稿轨道数量，用于同谱面并发合并。
     std::int32_t m_draftLaneBaseTrackCount{ 0 };
 
     double currentTime{ 0.0 };  ///< 当前逻辑播放时间 (秒)
@@ -106,7 +106,7 @@ struct SessionContext {
     /// update 分配。
     std::string m_audioTimelineSyncSourceFingerprint;
     int32_t     trackCount{ 12 };  ///< 当前玩家轨道总数。
-    /// @brief 项目共享的持久化草稿轨道数量，不包含最左侧运行时追加轨。
+    /// @brief 当前谱面独占的持久化草稿轨道数量，不包含最左侧运行时追加轨。
     int32_t draftTrackCount{ 12 };
     /// @brief 用户持久化的 BGM 轨道数量，不包含末尾运行时追加轨。
     int32_t bgmTrackCount{ 0 };

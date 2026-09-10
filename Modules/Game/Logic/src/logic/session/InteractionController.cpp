@@ -2231,6 +2231,86 @@ void InteractionController::handleCommand(const CmdUpdateBgmTrackCount& cmd)
         m_ctx);
 }
 
+/// @brief 按单步规则增加或移除最左侧持久草稿轨道。
+/// @param cmd 目标草稿轨数，最少为一。
+/// @details
+/// 草稿轨使用 `[-count,-1]` 的稳定绝对坐标，增加轨道只扩展左边界，既有物件
+/// 不需要重排。减少一轨则移除当前最小负轨，必须同时检查根节点、Polyline
+/// 子节点和 Flick 终点。合法变更进入动作栈，再由项目草稿服务更新本谱面组宽度。
+/// @par 关键不变量
+/// - 每条命令只改变一轨，避免跨过尚未验证的中间边界。
+/// - 一轨是可持久化的最小宽度，零值仍保留给旧项目的“未声明”语义。
+/// - 占用判断采用 64 位中间值，极端 Flick 偏移也不能造成有符号溢出。
+/// - 失败分支不创建动作，也不提前改变会话或谱面草稿组。
+/// - 成功、Undo 与 Redo 共用 DraftTrackCountAction 的同步路径。
+/// @par 并发说明
+/// 项目草稿服务负责把本地宽度与同谱面组最新版本合并；本入口只决定本次本地
+/// 缩轨是否安全，不缓存组指针，也不绕过服务的版本与基线处理。同一谱面的其他
+/// 画布将在组版本变化后刷新，不同谱面不会收到该变化。活动中的草稿拖动仍由
+/// 服务延迟刷新，轨数按钮不引入额外阻塞等待。
+/// @warning 低频布局编辑：减轨检查全部草稿物件，不得放入连续渲染路径。
+void InteractionController::handleCommand(const CmdUpdateDraftTrackCount& cmd)
+{
+    if ( !m_ctx.currentBeatmap || cmd.draftTrackCount < 1 ||
+         cmd.draftTrackCount == m_ctx.draftTrackCount ) {
+        return;
+    }
+
+    // 只接受相邻变化，使每次减轨都能明确检查将被移除的最左一轨。
+    const auto currentCount = static_cast<std::int64_t>(m_ctx.draftTrackCount);
+    const auto targetCount  = static_cast<std::int64_t>(cmd.draftTrackCount);
+    if ( std::abs(targetCount - currentCount) != 1 ) {
+        m_ctx.lastActionMessage =
+            TR("ui.status.project.draft_track_single_step").data();
+        return;
+    }
+
+    if ( targetCount < currentCount ) {
+        // 草稿轨以负数向左增长；缩轨后小于新左边界的起点或 Flick 终点均属占用。
+        const auto firstValidTrack      = -targetCount;
+        const auto occupiesRemovedTrack = [firstValidTrack](
+                                              const NoteComponent& note) {
+            /// @brief 判断一个节点的起点和可选 Flick 终点是否越过新左边界。
+            const auto partIsOutside = [firstValidTrack](::MMM::NoteType type,
+                                                         std::int32_t    track,
+                                                         std::int32_t dtrack) {
+                if ( static_cast<std::int64_t>(track) < firstValidTrack ) {
+                    return true;
+                }
+                return type == ::MMM::NoteType::FLICK &&
+                       static_cast<std::int64_t>(track) +
+                               static_cast<std::int64_t>(dtrack) <
+                           firstValidTrack;
+            };
+            if ( partIsOutside(
+                     note.m_type, note.m_trackIndex, note.m_dtrack) ) {
+                return true;
+            }
+            return std::ranges::any_of(
+                note.m_subNotes, [&](const NoteComponent::SubNote& subNote) {
+                    return partIsOutside(
+                        subNote.type, subNote.trackIndex, subNote.dtrack);
+                });
+        };
+
+        const auto noteView = m_ctx.noteRegistry.view<const NoteComponent>();
+        for ( const auto entity : noteView ) {
+            const auto& note = noteView.get<const NoteComponent>(entity);
+            if ( note.m_isDraft && occupiesRemovedTrack(note) ) {
+                m_ctx.lastActionMessage =
+                    TR("ui.status.project.draft_track_occupied").data();
+                return;
+            }
+        }
+    }
+
+    // 专用动作复用项目草稿同步入口，使同谱面其他画布收到新宽度并支持撤销。
+    m_ctx.actionStack.pushAndExecute(
+        std::make_unique<DraftTrackCountAction>(m_ctx.draftTrackCount,
+                                                cmd.draftTrackCount),
+        m_ctx);
+}
+
 /// @brief 切换后续交互命令使用的工具类型。
 /// @param cmd 目标工具枚举。
 /// @note 只改变路由状态，当前手势的结束由对应输入流程负责。

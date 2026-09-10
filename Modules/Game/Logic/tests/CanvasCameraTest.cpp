@@ -940,8 +940,8 @@ bool testBrushAudioResourcePlacementRules()
     for ( const auto entity : samples ) {
         const auto& sample = samples.get<MMM::Logic::SampleComponent>(entity);
         foundMain          = foundMain || (sample.m_track == 5 &&
-                                  sample.m_audioResourceId == "main" &&
-                                  near(sample.m_volume, 0.7));
+                                           sample.m_audioResourceId == "main" &&
+                                           near(sample.m_volume, 0.7));
     }
     if ( !foundMain ) return false;
 
@@ -1976,17 +1976,17 @@ std::unordered_set<std::string> collectDraftRootIds(
     return identities;
 }
 
-/// @brief 验证草稿区按主音频共享、并发合并且不写入正式谱面。
+/// @brief 验证草稿区按谱面隔离、同谱面并发合并且不写入正式内容。
 /// @details
-/// 项目草稿以主音频资源 ID 分组，而不是以谱面文件路径或会话地址分组。
+/// 项目草稿以谱面文件路径分组；同一谱面的多个画布仍共享同组运行时版本。
 /// 第一会话先发布草稿 A，第二会话载入同组快照后并发删除 A、创建草稿 C；
 /// 第一会话同时创建草稿 B。刷新必须按稳定 ID 做三方合并，结果保留 B、C。
 /// 正在拖动的本地对象属于未提交交互，远端刷新必须延迟到拖动结束。
 /// 草稿轨数量只能单调合并并保留既有负轨索引，不能因旧会话写回而缩小。
 /// 正式 Note 会参与 HitEvent，但不能进入项目草稿组；草稿也不能写进 BeatMap。
-/// 最后用另一主音频创建会话，证明同项目内不同歌曲的草稿完全隔离。
+/// 最后用共用同一主音频的另一谱面创建会话，证明各谱面草稿完全隔离。
 /// @par 关键不变量
-/// - 草稿组键来自解析后的主音频资源 ID，而非会话或谱面地址。
+/// - 草稿组键来自项目相对谱面路径，而非主音频资源或会话地址。
 /// - 正式对象只写 BeatMap；草稿对象只写 ProjectDraftLaneGroup。
 /// - HitEvent 可同时包含两域对象，但保留 isDraft 与负轨语义。
 /// - 三方合并按 collaborationId 识别创建、修改和删除。
@@ -1994,21 +1994,19 @@ std::unordered_set<std::string> collectDraftRootIds(
 /// - 并发轨道数合并采用足以容纳全部对象的较大值。
 /// - 新会话从项目持久状态重建，不依赖提交者的 Registry 缓存。
 /// @par 故障定位
-/// 同音频不共享先检查分组键解析；并发对象丢失检查稳定 ID 三方合并；拖动中跳变
-/// 检查 refreshIfChanged 的交互保护；不同音频串组则检查资源 ID 隔离。
+/// 同谱面画布不共享先检查路径键解析；并发对象丢失检查稳定 ID 三方合并；拖动中
+/// 跳变检查 refreshIfChanged 的交互保护；不同谱面串组则检查路径隔离。
 /// @par 测试边界
 /// 项目对象在单线程内模拟多个会话，不覆盖网络传输、磁盘保存和真正同时写入；
 /// 用例只证明相同版本序列下的合并与隔离规则。
-/// @return 同主音频画布共享三方合并结果，不同主音频隔离时返回 true。
-bool testProjectDraftLaneSharingAndIsolation()
+/// @return 同谱面画布共享三方合并结果，不同谱面隔离时返回 true。
+bool testPerBeatmapDraftLaneSharingAndIsolation()
 {
-    // 两个会话共享同一项目，同时各自绑定不同谱面上下文。
-    // 项目级草稿轨变更应传播给共享该项目的会话。
+    // 两个会话共享同一项目和谱面路径，草稿变更应在它们之间传播。
     // 会话私有的相机、选择和 Registry 状态不得相互复制。
-    // 切换到另一个项目后，草稿轨配置必须重新隔离。
-    // 返回原项目时使用项目持久值，而非离开前的临时预览。
+    // 切换到另一个谱面路径后，草稿轨配置必须隔离。
     // 组合断言明确区分共享配置与会话瞬态状态。
-    // 两个主音频资源为共享组与隔离组提供稳定、可读的资源标识。
+    // 单个主音频被两张谱面共用，专门暴露旧版按音频串联草稿的问题。
     auto project              = std::make_shared<MMM::Project>();
     project->m_audioResources = {
         MMM::AudioResource{
@@ -2016,28 +2014,37 @@ bool testProjectDraftLaneSharingAndIsolation()
             .m_path = "song.ogg",
             .m_type = MMM::AudioTrackType::Main,
         },
-        MMM::AudioResource{
-            .m_id   = "other-main",
-            .m_path = "other.ogg",
-            .m_type = MMM::AudioTrackType::Main,
+    };
+    project->m_draftLaneGroups = {
+        // 模拟旧版按主音频保存的空组；首次加载后应由当前谱面认领迁移。
+        MMM::ProjectDraftLaneGroup{
+            .m_legacyMainAudioResourceId = "shared-main",
         },
     };
 
     const auto configure = [&](MMM::Logic::SessionContext& context,
+                               std::string_view            beatmapPath,
                                std::string_view            audioPath) {
-        // 每个会话使用独立 Registry，但共享同一 Project 持久草稿容器。
+        // 每个会话使用独立 Registry；只有路径相同才共享项目内同一草稿组。
         context.collaborationProject = project;
         context.currentBeatmap       = std::make_shared<MMM::BeatMap>();
         context.trackCount           = 4;
         context.currentBeatmap->m_baseMapMetadata.track_count = 4;
-        context.currentBeatmap->m_baseMapMetadata.map_path    = "chart.mmm";
+        context.currentBeatmap->m_baseMapMetadata.map_path =
+            std::string(beatmapPath);
         context.currentBeatmap->m_baseMapMetadata.song_file_hint =
             std::string(audioPath);
         MMM::Logic::ProjectDraftLaneService::load(context, project.get());
     };
 
     MMM::Logic::SessionContext first;
-    configure(first, "song.ogg");
+    configure(first, "chart.mmm", "song.ogg");
+    if ( project->m_draftLaneGroups.front().m_beatmapFilePath != "chart.mmm" ||
+         !project->m_draftLaneGroups.front()
+              .m_legacyMainAudioResourceId.empty() ) {
+        XERROR("Legacy audio-keyed draft group was not claimed by the chart");
+        return false;
+    }
     // 正式物件作为对照，只能同步进 BeatMap，不能污染项目草稿组。
     const auto formalEntity = first.noteRegistry.create();
     first.noteRegistry.emplace<MMM::Logic::NoteComponent>(
@@ -2079,7 +2086,7 @@ bool testProjectDraftLaneSharingAndIsolation()
     }
 
     MMM::Logic::SessionContext second;
-    configure(second, "song.ogg");
+    configure(second, "chart.mmm", "song.ogg");
     // 新会话应从项目组重新创建实体，而不是复用第一 Registry 的数值 ID。
     entt::entity loadedDraftA = entt::null;
     for ( const auto entity :
@@ -2163,7 +2170,7 @@ bool testProjectDraftLaneSharingAndIsolation()
     }
 
     MMM::Logic::SessionContext stale;
-    configure(stale, "song.ogg");
+    configure(stale, "chart.mmm", "song.ogg");
     // 旧会话随后提交对象时，不能把另一会话已扩展到七轨的组缩回六轨。
     first.draftTrackCount       = 7;
     first.m_needsDraftNotesSync = true;
@@ -2181,12 +2188,12 @@ bool testProjectDraftLaneSharingAndIsolation()
     stale.m_needsDraftNotesSync = true;
     MMM::Logic::ProjectDraftLaneService::sync(stale);
     MMM::Logic::SessionContext afterConcurrentGrowth;
-    configure(afterConcurrentGrowth, "song.ogg");
+    configure(afterConcurrentGrowth, "chart.mmm", "song.ogg");
     // 全新会话验证最终持久状态，避免只检查提交者自己的本地缓存。
     entt::entity concurrentOuter = entt::null;
     entt::entity concurrentStale = entt::null;
     const auto   concurrentView  = afterConcurrentGrowth.noteRegistry
-                                    .view<const MMM::Logic::NoteComponent>();
+                                       .view<const MMM::Logic::NoteComponent>();
     for ( const auto entity : concurrentView ) {
         const auto& note =
             concurrentView.get<const MMM::Logic::NoteComponent>(entity);
@@ -2204,9 +2211,9 @@ bool testProjectDraftLaneSharingAndIsolation()
     }
 
     MMM::Logic::SessionContext isolated;
-    configure(isolated, "other.ogg");
-    // other-main 必须形成空的新组，不能按相同文件名之外的弱条件串组。
-    return isolated.m_draftLaneGroupId == "other-main" &&
+    configure(isolated, "another-chart.mmm", "song.ogg");
+    // 即使解析到相同主音频，另一谱面路径也必须保持空草稿。
+    return isolated.m_draftLaneBeatmapPath == "another-chart.mmm" &&
            collectDraftRootIds(isolated).empty();
 }
 
@@ -2347,25 +2354,25 @@ bool testAlignCommonBeatsPreservesEmbeddedPolylineNodes()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-              .type       = MMM::NoteType::HOLD,
-              .timestamp  = 1.013,
-              .duration   = 0.241,
-              .trackIndex = 0,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::HOLD,
+            .timestamp  = 1.013,
+            .duration   = 0.241,
+            .trackIndex = 0,
+            .dtrack     = 0,
         },
         {
-              .type       = MMM::NoteType::FLICK,
-              .timestamp  = 1.254,
-              .duration   = 0.0,
-              .trackIndex = 0,
-              .dtrack     = 1,
+            .type       = MMM::NoteType::FLICK,
+            .timestamp  = 1.254,
+            .duration   = 0.0,
+            .trackIndex = 0,
+            .dtrack     = 1,
         },
         {
-              .type       = MMM::NoteType::HOLD,
-              .timestamp  = 1.254,
-              .duration   = 0.246,
-              .trackIndex = 1,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::HOLD,
+            .timestamp  = 1.254,
+            .duration   = 0.246,
+            .trackIndex = 1,
+            .dtrack     = 0,
         },
     };
 
@@ -3759,6 +3766,135 @@ bool testAppendLaneExpandsPersistentCount()
     return true;
 }
 
+/// @brief 验证预设中的草稿轨数增减会持久化、可撤销并保护占用轨道。
+/// @details
+/// 会话按谱面路径绑定独占草稿组，初始宽度沿用四条玩家轨。显式增加一轨后，
+/// 项目组必须保存五轨；Undo/Redo 应同步恢复组宽度。缩轨前用一个起点仍在保留轨、
+/// 但 Flick 终点伸入最左轨的草稿物件验证完整占用检查，拒绝不能新增历史记录。
+/// 删除占用后允许缩回四轨，并由全新会话从项目组重新载入该宽度。
+/// @par 关键不变量
+/// - 增减命令每次只接受相邻轨数。
+/// - 草稿轨数最少为一，且项目组保存显式正数宽度。
+/// - Flick 终点占用最左轨时也禁止缩容。
+/// - 拒绝分支不改变宽度、项目组或 Undo 栈。
+/// - 合法变更、Undo 与 Redo 都通过草稿服务同步更新当前谱面组。
+/// - 新会话能读取最终宽度，证明结果不是提交会话的瞬态状态。
+/// @par 测试边界
+/// 本用例不渲染设置页按钮，只验证其发送的 CmdUpdateDraftTrackCount 完整逻辑链。
+/// @return 全部轨数持久化、历史往返和占用保护正确时返回 true。
+bool testExplicitDraftTrackCountAction()
+{
+    // 谱面路径是草稿组的稳定键；主音频只用于证明其不再决定草稿归属。
+    auto project              = std::make_shared<MMM::Project>();
+    project->m_audioResources = {
+        MMM::AudioResource{
+            .m_id   = "draft-count-main",
+            .m_path = "draft-count.ogg",
+            .m_type = MMM::AudioTrackType::Main,
+        },
+    };
+
+    MMM::Logic::SessionContext context;
+    context.collaborationProject = project;
+    context.currentBeatmap       = std::make_shared<MMM::BeatMap>();
+    context.trackCount           = 4;
+    context.currentBeatmap->m_baseMapMetadata.track_count = 4;
+    context.currentBeatmap->m_baseMapMetadata.map_path    = "draft-count.mmm";
+    context.currentBeatmap->m_baseMapMetadata.song_file_hint =
+        "draft-count.ogg";
+    MMM::Logic::ProjectDraftLaneService::load(context, project.get());
+    MMM::Logic::InteractionController controller(context);
+
+    // 四轨增至五轨应创建项目组，并作为一个可撤销动作提交。
+    controller.handleCommand(MMM::Logic::CmdUpdateDraftTrackCount{ 5 });
+    if ( context.draftTrackCount != 5 ||
+         context.actionStack.getUndoStackSize() != 1U ||
+         project->m_draftLaneGroups.size() != 1U ||
+         project->m_draftLaneGroups.front().m_beatmapFilePath !=
+             "draft-count.mmm" ||
+         project->m_draftLaneGroups.front().m_trackCount != 5 ) {
+        XERROR("Explicit draft lane add did not persist to the project group");
+        return false;
+    }
+
+    // 历史往返必须同步本谱面组宽度，不能只改当前 SessionContext。
+    context.actionStack.undo(context);
+    if ( context.draftTrackCount != 4 ||
+         project->m_draftLaneGroups.front().m_trackCount != 4 ) {
+        XERROR("Draft lane count undo did not restore the project group");
+        return false;
+    }
+    context.actionStack.redo(context);
+    if ( context.draftTrackCount != 5 ||
+         project->m_draftLaneGroups.front().m_trackCount != 5 ) {
+        XERROR("Draft lane count redo did not restore the project group");
+        return false;
+    }
+
+    // 非相邻目标无条件拒绝，防止一次跳过多条轨道的占用检查。
+    controller.handleCommand(MMM::Logic::CmdUpdateDraftTrackCount{ 7 });
+    if ( context.draftTrackCount != 5 ||
+         context.actionStack.getUndoStackSize() != 1U ) {
+        XERROR("Draft lane count accepted a non-adjacent change");
+        return false;
+    }
+
+    // 起点 -4 可保留，但 Flick 终点 -5 占用待删除的最左轨，缩容必须拒绝。
+    const auto occupied = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        occupied,
+        MMM::Logic::NoteComponent{
+            .m_type            = MMM::NoteType::FLICK,
+            .m_timestamp       = 1.0,
+            .m_trackIndex      = -4,
+            .m_dtrack          = -1,
+            .m_isDraft         = true,
+            .m_collaborationId = "draft-count-occupied",
+        });
+    controller.handleCommand(MMM::Logic::CmdUpdateDraftTrackCount{ 4 });
+    if ( context.draftTrackCount != 5 ||
+         project->m_draftLaneGroups.front().m_trackCount != 5 ||
+         context.actionStack.getUndoStackSize() != 1U ) {
+        XERROR("Occupied leftmost draft lane was removed");
+        return false;
+    }
+
+    // 清除占用后同一单步缩容应成功，并成为第二条历史记录。
+    context.noteRegistry.destroy(occupied);
+    controller.handleCommand(MMM::Logic::CmdUpdateDraftTrackCount{ 4 });
+    if ( context.draftTrackCount != 4 ||
+         project->m_draftLaneGroups.front().m_trackCount != 4 ||
+         context.actionStack.getUndoStackSize() != 2U ) {
+        XERROR("Empty leftmost draft lane was not removed");
+        return false;
+    }
+
+    // 同谱面新会话用不同玩家键数，仍应从独占组读取最终四轨。
+    MMM::Logic::SessionContext reloaded;
+    reloaded.collaborationProject = project;
+    reloaded.currentBeatmap       = std::make_shared<MMM::BeatMap>();
+    reloaded.trackCount           = 7;
+    reloaded.currentBeatmap->m_baseMapMetadata.track_count = 7;
+    reloaded.currentBeatmap->m_baseMapMetadata.map_path    = "draft-count.mmm";
+    reloaded.currentBeatmap->m_baseMapMetadata.song_file_hint =
+        "draft-count.ogg";
+    MMM::Logic::ProjectDraftLaneService::load(reloaded, project.get());
+    if ( reloaded.draftTrackCount != 4 ) return false;
+
+    // 另一谱面即使共用相同主音频，也只沿用自己的七条玩家轨默认值。
+    MMM::Logic::SessionContext isolated;
+    isolated.collaborationProject = project;
+    isolated.currentBeatmap       = std::make_shared<MMM::BeatMap>();
+    isolated.trackCount           = 7;
+    isolated.currentBeatmap->m_baseMapMetadata.track_count = 7;
+    isolated.currentBeatmap->m_baseMapMetadata.map_path    = "other-count.mmm";
+    isolated.currentBeatmap->m_baseMapMetadata.song_file_hint =
+        "draft-count.ogg";
+    MMM::Logic::ProjectDraftLaneService::load(isolated, project.get());
+    return isolated.draftTrackCount == 7 &&
+           isolated.m_draftLaneBeatmapPath == "other-count.mmm";
+}
+
 /// @brief 验证显式增删持久 BGM 轨可撤销，并禁止删除占用中的末尾轨。
 /// @details
 /// 显式轨道命令只改变布局，不创建采样。新增一轨应形成一个历史项并支持往返；
@@ -4706,25 +4842,25 @@ bool testSelectedPolylineTailEraseWithOtherSelection()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-              .type       = MMM::NoteType::NOTE,
-              .timestamp  = 1.0,
-              .duration   = 0.0,
-              .trackIndex = 0,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::NOTE,
+            .timestamp  = 1.0,
+            .duration   = 0.0,
+            .trackIndex = 0,
+            .dtrack     = 0,
         },
         {
-              .type       = MMM::NoteType::HOLD,
-              .timestamp  = 2.0,
-              .duration   = 0.5,
-              .trackIndex = 1,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::HOLD,
+            .timestamp  = 2.0,
+            .duration   = 0.5,
+            .trackIndex = 1,
+            .dtrack     = 0,
         },
         {
-              .type       = MMM::NoteType::FLICK,
-              .timestamp  = 3.0,
-              .duration   = 0.0,
-              .trackIndex = 1,
-              .dtrack     = 1,
+            .type       = MMM::NoteType::FLICK,
+            .timestamp  = 3.0,
+            .duration   = 0.0,
+            .trackIndex = 1,
+            .dtrack     = 1,
         },
     };
 
@@ -6644,7 +6780,7 @@ bool testCompositeConversionUsesTypedIdentity()
                 .entity = sampleEntity,
                 .before = context.sampleRegistry
                               .get<MMM::Logic::SampleComponent>(sampleEntity),
-                .after          = std::nullopt,
+                .after  = std::nullopt,
                 .beforeSelected = true,
             },
         }));
@@ -6739,11 +6875,11 @@ bool testMarqueeSelectsTypedSamplesOnlyOnMainCanvas()
     context.sortedSampleMaxEndPrefix = { 1.0 };
     context.marqueeBoxes             = {
         MMM::Logic::MarqueeBox{
-                        .startTime  = 0.9,
-                        .endTime    = 1.1,
-                        .startTrack = 4.05F,
-                        .endTrack   = 4.95F,
-                        .cameraId   = "Basic2DCanvas",
+            .startTime  = 0.9,
+            .endTime    = 1.1,
+            .startTrack = 4.05F,
+            .endTrack   = 4.95F,
+            .cameraId   = "Basic2DCanvas",
         },
     };
     context.isMarqueeSelectionDirty = true;
@@ -7150,7 +7286,7 @@ int main()
                    testDraggedDraftLayoutExpandsAwayFromPlayer() &&
                    testProfessionalModeHidesDraftArea() &&
                    testProfessionalModeUpdatesAllCanvases() &&
-                   testProjectDraftLaneSharingAndIsolation() &&
+                   testPerBeatmapDraftLaneSharingAndIsolation() &&
                    testDraftMirrorStaysInDraftDomain() &&
                    testDraftMirrorUsesDynamicDraftTrackCount() &&
                    testAlignCommonBeatsPreservesEmbeddedPolylineNodes() &&
@@ -7170,6 +7306,7 @@ int main()
                    testAuthoritativeReplacementMergesOwnedUpdateUndo() &&
                    testPolylineSubNoteIdentitySurvivesRepeatedEcsSync() &&
                    testAppendLaneExpandsPersistentCount() &&
+                   testExplicitDraftTrackCountAction() &&
                    testExplicitBgmTrackCountAction() &&
                    testSamplePropertyEditValidationAndAction() &&
                    testSampleRegistryLoadAndSync() &&

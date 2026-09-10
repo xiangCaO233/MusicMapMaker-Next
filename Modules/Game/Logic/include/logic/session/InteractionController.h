@@ -117,6 +117,10 @@ public:
     /// @param cmd 目标 BGM 轨道数量。
     void handleCommand(const CmdUpdateBgmTrackCount& cmd);
 
+    /// @brief 处理当前谱面独占草稿轨道数量更新。
+    /// @param cmd 目标草稿轨道数量。
+    void handleCommand(const CmdUpdateDraftTrackCount& cmd);
+
     /// @brief 更新当前所有实体的框选选中状态
     /// @warning
     /// 逻辑热路径：仅在框选脏标记置位时调用；优先按排序时间段缓存扫描候选，

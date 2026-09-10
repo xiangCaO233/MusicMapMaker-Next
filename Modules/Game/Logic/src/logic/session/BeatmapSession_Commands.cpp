@@ -16,6 +16,7 @@
 #include "logic/ImdPackageExportService.h"
 #include "logic/MalodyPackageCompatibility.h"
 #include "logic/MczAudioOriginAlignment.h"
+#include "logic/ProjectDraftLaneService.h"
 #include "logic/ProjectResourceService.h"
 #include "logic/audio/AudioTimelineDescriptor.h"
 #include "logic/ecs/components/InteractionComponent.h"
@@ -2460,6 +2461,17 @@ bool BeatmapSession::processCommands()
                                     TR("ui.status.category.project"),
                                     TR("ui.status.project.bgm_track_count"),
                                     arg.bgmTrackCount);
+                } else if constexpr ( std::is_same_v<
+                                          T,
+                                          CmdUpdateDraftTrackCount> ) {
+                    // 状态栏先显示用户请求；占用或非单步拒绝会由控制器覆盖为原因。
+                    // 草稿宽度属于项目侧车数据，文本仍归入项目类别而非正式内容。
+                    // 这里只生成反馈，不提前修改上下文或触发项目同步。
+                    m_ctx->lastActionMessage =
+                        fmt::format("{} {} {}",
+                                    TR("ui.status.category.project"),
+                                    TR("ui.status.project.draft_track_count"),
+                                    arg.draftTrackCount);
                 } else if constexpr ( std::is_same_v<T, CmdSelectAll> ) {
                     m_ctx->lastActionMessage = fmt::format(
                         "{} {}",
@@ -2523,6 +2535,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdSetMousePosition> ||
                     std::is_same_v<T, CmdUpdateTrackCount> ||
                     std::is_same_v<T, CmdUpdateBgmTrackCount> ||
+                    std::is_same_v<T, CmdUpdateDraftTrackCount> ||
                     std::is_same_v<T, CmdSetBrushNoteColor> ||
                     std::is_same_v<T, CmdSetBrushNotePalette> ||
                     std::is_same_v<T, CmdSetBrushAudioResource> ||
@@ -2593,6 +2606,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdUpdateSelectedObjectSampleVolume> ||
                     std::is_same_v<T, CmdUpdateTrackCount> ||
                     std::is_same_v<T, CmdUpdateBgmTrackCount> ||
+                    std::is_same_v<T, CmdUpdateDraftTrackCount> ||
                     std::is_same_v<T, CmdPaste> ||
                     std::is_same_v<T, CmdDeleteSelected> ||
                     std::is_same_v<T, CmdMirrorSelected> ||
@@ -3193,6 +3207,13 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
             // 扩展名或路径变化时更新项目条目以及所有打开会话的路径身份。
             EditorEngine::instance().updateBeatmapFilePathInProject(
                 oldPath, storedSavePath);
+            // 项目侧草稿以谱面路径隔离，另存后当前会话必须跟随新的组键。
+            auto* draftProject =
+                m_ctx->collaborationProject
+                    ? m_ctx->collaborationProject.get()
+                    : EditorEngine::instance().getCurrentProject();
+            // 组本体已由项目路径更新流程重命名，这里只迁移会话缓存的查找键。
+            ProjectDraftLaneService::rebindBeatmapPath(*m_ctx, draftProject);
         } else {
             // 路径未变仍同步项目文件信息和音频指纹，覆盖内容可能改变资源引用。
             EditorEngine::instance().syncProjectWithFile(savePath);

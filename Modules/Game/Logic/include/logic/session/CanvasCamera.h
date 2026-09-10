@@ -14,7 +14,7 @@ namespace MMM::Logic
 
 /// @brief 画布轨道所属区域。
 enum class CanvasLaneKind : std::uint8_t {
-    Draft = 0,  ///< 项目级草稿轨道区。
+    Draft = 0,  ///< 当前谱面的草稿轨道区。
     Player,     ///< 玩家可操作的主轨道区。
     Bgm,        ///< 自动采样使用的 BGM 轨道区。
 };
@@ -450,7 +450,7 @@ struct CanvasLaneProjection {
 /// @param horizontalOffsetX 相机产生的内容横向逻辑像素偏移。
 /// @param includeAppendLane 是否在 BGM 持久轨道后显示一条运行时追加轨。
 /// @param includeBgmLanes 是否显示并允许访问 BGM 轨道区。
-/// @param includeDraftLanes 是否显示并允许访问项目级草稿轨道区。
+/// @param includeDraftLanes 是否显示并允许访问当前谱面的草稿轨道区。
 /// @param includeDraftAppendLane 是否在草稿持久轨道前显示一条运行时追加轨。
 /// @return 可供渲染、拾取、框选和拖动共用的统一投影。
 /// @par 草稿扩展方向

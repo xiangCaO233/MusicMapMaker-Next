@@ -204,8 +204,7 @@ struct CmdUpdateMarquee {
 /**
  * @brief 结束框选指令
  */
-struct CmdEndMarquee {
-};
+struct CmdEndMarquee {};
 
 /**
  * @brief 移除指定位置的框选区域
@@ -283,6 +282,11 @@ struct CmdUpdateBgmTrackCount {
     int32_t bgmTrackCount;  ///< 目标持久化 BGM 轨道数量。
 };
 
+/// @brief 更新当前谱面独占草稿区的持久化轨道数量。
+struct CmdUpdateDraftTrackCount {
+    int32_t draftTrackCount;  ///< 目标持久化草稿轨道数量。
+};
+
 /**
  * @brief 跳转时间指令
  */
@@ -304,7 +308,7 @@ struct CmdSetPlaybackSpeed {
 /// @brief Key 音所在的画布轨道区域。
 enum class KeySoundTrackArea : std::uint8_t {
     Player,  ///< 玩家操作轨道区。
-    Draft,   ///< 项目级草稿轨道区。
+    Draft,   ///< 当前谱面的草稿轨道区。
     Bgm      ///< 自动采样 BGM 轨道区。
 };
 
@@ -421,20 +425,17 @@ struct CmdClearNoteColorOverrides {
 /**
  * @brief 撤销指令
  */
-struct CmdUndo {
-};
+struct CmdUndo {};
 
 /**
  * @brief 重做指令
  */
-struct CmdRedo {
-};
+struct CmdRedo {};
 
 /**
  * @brief 复制指令
  */
-struct CmdCopy {
-};
+struct CmdCopy {};
 
 /**
  * @brief 粘贴指令
@@ -450,26 +451,22 @@ struct CmdPaste {
 /**
  * @brief 剪切指令
  */
-struct CmdCut {
-};
+struct CmdCut {};
 
 /**
  * @brief 删除选中物件指令
  */
-struct CmdDeleteSelected {
-};
+struct CmdDeleteSelected {};
 
 /**
  * @brief 镜像选中物件指令
  */
-struct CmdMirrorSelected {
-};
+struct CmdMirrorSelected {};
 
 /**
  * @brief 对齐选中物件至常用分拍指令
  */
-struct CmdAlignSelectedToCommonBeats {
-};
+struct CmdAlignSelectedToCommonBeats {};
 
 /// @brief 全选命令的轨道区范围。
 enum class SelectAllScope : std::uint8_t {
@@ -840,8 +837,7 @@ struct CmdUpdateBeatmapMetadata {
 };
 
 /// @brief 标记直接修改的扩展谱面元数据，并请求尾随自动保存。
-struct CmdMarkBeatmapMetadataDirty {
-};
+struct CmdMarkBeatmapMetadataDirty {};
 
 /**
  * @brief 导入音频指令
@@ -910,27 +906,27 @@ using LogicCommand = std::variant<
     CmdUpdateDrag, CmdEndDrag, CmdCreateAudioSample,
     CmdUpdateAudioSampleProperties, CmdUpdateObjectSampleVolume,
     CmdUpdateSelectedObjectSampleVolume, CmdUpdateTrackCount,
-    CmdUpdateBgmTrackCount, CmdSeek, CmdSetPlaybackSpeed,
-    CmdSetKeySoundTrackMute, CmdSetKeySoundTrackGain,
+    CmdUpdateBgmTrackCount, CmdUpdateDraftTrackCount, CmdSeek,
+    CmdSetPlaybackSpeed, CmdSetKeySoundTrackMute, CmdSetKeySoundTrackGain,
     CmdSetKeySoundEffectGroupGain, CmdSetDraftKeySoundAreaMute,
-    CmdSetBgmKeySoundAreaMute, CmdChangeTool,
-    CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste, CmdCut,
-    CmdDeleteSelected, CmdMirrorSelected, CmdAlignSelectedToCommonBeats,
-    CmdSelectAll, CmdSetBrushNoteColor, CmdApplyNoteColorToSelection,
-    CmdSetBrushNotePalette, CmdSetBrushAudioResource,
-    CmdApplyNotePaletteToSelection, CmdApplyBrushPaletteToEntity,
-    CmdClearNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
-    CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
-    CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
-    CmdUpdateBpmWithKeepSpeedSv, CmdCreateTimelineEvents,
-    CmdReplaceBeatmapTimings, CmdSetNoteAnnotation, CmdUpsertBeatmapAnnotation,
-    CmdRemoveBeatmapAnnotation, CmdReplaceBeatmapData,
-    CmdAcknowledgeCollaborationMutation, CmdSetCollaborationResources,
-    CmdSetCollaborationOfflineReadOnly, CmdSetCollaborationClipboardIsolation,
-    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
-    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
-    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
-    CmdImportAudio, CmdUpdateAudioResource, CmdRenameAudioResource,
+    CmdSetBgmKeySoundAreaMute, CmdChangeTool, CmdSetMousePosition, CmdUndo,
+    CmdRedo, CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdMirrorSelected,
+    CmdAlignSelectedToCommonBeats, CmdSelectAll, CmdSetBrushNoteColor,
+    CmdApplyNoteColorToSelection, CmdSetBrushNotePalette,
+    CmdSetBrushAudioResource, CmdApplyNotePaletteToSelection,
+    CmdApplyBrushPaletteToEntity, CmdClearNoteColorOverrides, CmdSaveBeatmap,
+    CmdSaveBeatmapAs, CmdPackBeatmap, CmdScroll, CmdPanCanvas,
+    CmdUpdateTimelineEvent, CmdUpdateTimelineEvents, CmdDeleteTimelineEvent,
+    CmdCreateTimelineEvent, CmdUpdateBpmWithKeepSpeedSv,
+    CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdSetNoteAnnotation,
+    CmdUpsertBeatmapAnnotation, CmdRemoveBeatmapAnnotation,
+    CmdReplaceBeatmapData, CmdAcknowledgeCollaborationMutation,
+    CmdSetCollaborationResources, CmdSetCollaborationOfflineReadOnly,
+    CmdSetCollaborationClipboardIsolation, CmdStartMarquee, CmdUpdateMarquee,
+    CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush,
+    CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
+    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
+    CmdUpdateAudioResource, CmdRenameAudioResource,
     CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
     CmdExportImdPackage, CmdSaveTemporaryProject>;
 
