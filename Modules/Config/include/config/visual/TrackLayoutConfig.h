@@ -10,6 +10,8 @@ namespace MMM::Config
 struct HorizontalRegionLayout {
     /// @brief 自定义左边界比例；空值表示沿用兼容布局。
     std::optional<float> left;
+    /// @brief 自定义右边界比例；反向扩展区域可用它替代左边界锚点。
+    std::optional<float> right;
     /// @brief 自定义宽度比例；轨道区表示单轨宽度，空值表示沿用兼容布局。
     std::optional<float> width;
 };

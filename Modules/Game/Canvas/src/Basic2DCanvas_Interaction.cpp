@@ -2471,10 +2471,12 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         Config::TrackLayout             candidate   = layout;
         Config::HorizontalRegionLayout* target      = nullptr;
         float                           storedWidth = candidateBounds.width;
+        bool                            anchorRight = false;
         // 草稿与 BGM 配置保存单轨宽度，批注区保存整个区域宽度。
         switch ( m_auxiliaryLayoutRegion ) {
         case AuxiliaryLayoutRegion::Draft:
-            target = &candidate.draftLanes;
+            target      = &candidate.draftLanes;
+            anchorRight = true;
             storedWidth /= static_cast<float>(
                 std::max(auxiliaryProjection.draftLaneCount, 1U));
             break;
@@ -2490,14 +2492,23 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         }
         if ( target ) {
             constexpr float layoutEpsilon = 1e-6F;
-            const bool      changed =
-                !target->left || !target->width ||
-                std::abs(*target->left - candidateBounds.left) >
-                    layoutEpsilon ||
-                std::abs(*target->width - storedWidth) > layoutEpsilon;
+            const float     storedAnchor =
+                anchorRight ? candidateBounds.right() : candidateBounds.left;
+            const auto& currentAnchor =
+                anchorRight ? target->right : target->left;
+            const bool changed =
+                !currentAnchor || !target->width ||
+                std::abs(*currentAnchor - storedAnchor) > layoutEpsilon ||
+                std::abs(*target->width - storedWidth) > layoutEpsilon ||
+                (anchorRight && target->left.has_value());
             if ( changed ) {
-                // 首次修改同时物化 X 与宽度，从此不再受玩家轨道宽度影响。
-                target->left  = candidateBounds.left;
+                // 草稿区锁定右边界，新增轨只会向左扩展；其余区域锁定左边界。
+                if ( anchorRight ) {
+                    target->left.reset();
+                    target->right = storedAnchor;
+                } else {
+                    target->left = storedAnchor;
+                }
                 target->width = storedWidth;
                 appConfig.getVisualConfig().editableTrackLayoutForKeyCount(
                     keyCount) = candidate;

@@ -491,6 +491,9 @@ void to_json(nlohmann::json& j, const HorizontalRegionLayout& layout)
     if ( layout.left && std::isfinite(*layout.left) ) {
         j["left"] = *layout.left;
     }
+    if ( layout.right && std::isfinite(*layout.right) ) {
+        j["right"] = *layout.right;
+    }
     if ( layout.width && std::isfinite(*layout.width) ) {
         j["width"] = *layout.width;
     }
@@ -507,6 +510,10 @@ void from_json(const nlohmann::json& j, HorizontalRegionLayout& layout)
     if ( const auto it = j.find("left"); it != j.end() && it->is_number() ) {
         const float value = it->get<float>();
         if ( std::isfinite(value) ) layout.left = value;
+    }
+    if ( const auto it = j.find("right"); it != j.end() && it->is_number() ) {
+        const float value = it->get<float>();
+        if ( std::isfinite(value) ) layout.right = value;
     }
     if ( const auto it = j.find("width"); it != j.end() && it->is_number() ) {
         const float value = it->get<float>();

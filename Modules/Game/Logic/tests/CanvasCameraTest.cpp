@@ -1685,6 +1685,46 @@ bool testDynamicDraftAppendLaneProjection()
     return true;
 }
 
+/// @brief 验证拖动后的草稿布局以右边界为锚点向左扩轨。
+/// @return 新增持久草稿轨不改变右边界且不侵入玩家区时返回 true。
+/// @details
+/// 布局编辑器保存完整草稿组的右边界和单轨宽度。新增一条持久轨后，投影应只把
+/// 左边界向外移动一个轨宽，原有绝对草稿轨的屏幕位置保持稳定。
+/// @warning 纯投影回归测试，不执行 ImGui 拖动状态机或配置文件写入。
+bool testDraggedDraftLayoutExpandsAwayFromPlayer()
+{
+    MMM::Config::TrackLayout layout;
+    layout.left             = 0.1F;
+    layout.right            = 0.5F;
+    layout.draftLanes.right = 0.1F;
+    layout.draftLanes.width = 0.1F;
+
+    const auto before = MMM::Logic::calculateCanvasLaneProjection(
+        1000.0F, 4, 0, layout, 0.0F, true, false, true, 8, true);
+    const auto beforeAddress =
+        MMM::Logic::CanvasLaneAddress::fromAbsoluteTrack(-8, 4, 9);
+    const auto beforeBounds = before.bounds(beforeAddress);
+
+    const auto after = MMM::Logic::calculateCanvasLaneProjection(
+        1000.0F, 4, 0, layout, 0.0F, true, false, true, 9, true);
+    const auto afterAddress =
+        MMM::Logic::CanvasLaneAddress::fromAbsoluteTrack(-8, 4, 10);
+    const auto afterBounds = after.bounds(afterAddress);
+
+    if ( !before.valid || !after.valid || before.draftLaneCount != 9U ||
+         after.draftLaneCount != 10U || !near(before.draftRightX, 100.0) ||
+         !near(after.draftRightX, before.draftRightX) ||
+         !near(before.player.leftX, before.draftRightX) ||
+         !near(after.player.leftX, after.draftRightX) ||
+         !near(before.draftLeftX, -800.0) || !near(after.draftLeftX, -900.0) ||
+         !beforeBounds || !afterBounds ||
+         !near(beforeBounds->leftX, afterBounds->leftX) ) {
+        XERROR("Dragged draft layout expanded into the player canvas");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证关闭专业模式时不会暴露草稿投影、创建草稿或全选草稿物件。
 /// @return 默认投影隐藏草稿区且编辑入口不会命中草稿数据时返回 true。
 /// @details
@@ -7107,6 +7147,7 @@ int main()
                    testUnifiedLaneProjection() &&
                    testIndependentAuxiliaryLaneProjection() &&
                    testDynamicDraftAppendLaneProjection() &&
+                   testDraggedDraftLayoutExpandsAwayFromPlayer() &&
                    testProfessionalModeHidesDraftArea() &&
                    testProfessionalModeUpdatesAllCanvases() &&
                    testProjectDraftLaneSharingAndIsolation() &&

@@ -453,6 +453,10 @@ struct CanvasLaneProjection {
 /// @param includeDraftLanes 是否显示并允许访问项目级草稿轨道区。
 /// @param includeDraftAppendLane 是否在草稿持久轨道前显示一条运行时追加轨。
 /// @return 可供渲染、拾取、框选和拖动共用的统一投影。
+/// @par 草稿扩展方向
+/// 布局编辑器写入右锚点后，草稿区随轨道数量增加只向左扩展。缺少右锚点的
+/// 旧配置继续按左边界解析，避免加载时改变既有自定义布局；再次编辑该区域时会
+/// 由布局编辑器物化右锚点。
 /// @warning 逻辑与渲染热路径可能每帧调用；只允许常量级数值运算。
 [[nodiscard]] inline CanvasLaneProjection calculateCanvasLaneProjection(
     float viewportWidth, std::int32_t playerTrackCount,
@@ -480,6 +484,14 @@ struct CanvasLaneProjection {
                    ? viewportWidth * *value + horizontalOffsetX
                    : fallback;
     };
+    // 草稿区可保存右锚点，使最左追加轨增长时不侵入玩家区。
+    const auto resolveRight = [viewportWidth, horizontalOffsetX](
+                                  const std::optional<float>& value,
+                                  float                       fallback) {
+        return value && std::isfinite(*value)
+                   ? viewportWidth * *value + horizontalOffsetX
+                   : fallback;
+    };
     // 自定义宽度按视口等比例缩放；非法或非正数仍保持旧版推导值。
     // 左边界回退值已经包含相机偏移，不能在回退路径重复加偏移。
     const auto resolveWidth = [viewportWidth](const std::optional<float>& value,
@@ -501,15 +513,21 @@ struct CanvasLaneProjection {
             ? persistentDraftCount +
                   static_cast<std::uint32_t>(includeDraftAppendLane)
             : std::uint32_t{ 0 };
-    // 草稿区的单轨宽度与左边界可分别覆盖；缺省时仍紧贴玩家区左侧。
+    // 草稿区优先以右边界为锚点向左增长；旧配置没有右锚点时仍沿用左边界。
     result.draftLaneWidth =
         resolveWidth(layout.draftLanes.width, result.player.singleTrackWidth);
     const float legacyDraftLeft =
         result.player.leftX -
         static_cast<float>(result.draftLaneCount) * result.draftLaneWidth;
-    result.draftLeftX = resolveLeft(layout.draftLanes.left, legacyDraftLeft);
+    const float leftAnchoredDraftLeft =
+        resolveLeft(layout.draftLanes.left, legacyDraftLeft);
+    const float leftAnchoredDraftRight =
+        leftAnchoredDraftLeft +
+        static_cast<float>(result.draftLaneCount) * result.draftLaneWidth;
     result.draftRightX =
-        result.draftLeftX +
+        resolveRight(layout.draftLanes.right, leftAnchoredDraftRight);
+    result.draftLeftX =
+        result.draftRightX -
         static_cast<float>(result.draftLaneCount) * result.draftLaneWidth;
 
     const auto persistentCount =

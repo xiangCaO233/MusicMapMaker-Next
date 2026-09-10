@@ -638,7 +638,7 @@ bool testKeyCountLayoutIsolationAndMigration()
     fourTrackLayout.left  = 0.21F;
     fourTrackLayout.right = 0.61F;
     // 三类辅助区域均应按 Key 数独立保存横向覆盖值。
-    fourTrackLayout.draftLanes.left                   = -0.18F;
+    fourTrackLayout.draftLanes.right                  = 0.18F;
     fourTrackLayout.draftLanes.width                  = 0.07F;
     fourTrackLayout.annotation.left                   = 0.64F;
     fourTrackLayout.annotation.width                  = 0.045F;
@@ -685,7 +685,8 @@ bool testKeyCountLayoutIsolationAndMigration()
             .get<MMM::Config::VisualConfig>();
     const auto malformed =
         nlohmann::json{
-            { "draftLanes", { { "left", "bad" }, { "width", -0.1F } } },
+            { "draftLanes",
+              { { "left", "bad" }, { "right", "bad" }, { "width", -0.1F } } },
             { "annotation", nlohmann::json::array() },
             { "bgmLanes", { { "left", nullptr }, { "width", 0.0F } } },
         }
@@ -695,8 +696,9 @@ bool testKeyCountLayoutIsolationAndMigration()
          restored.keyCountLayouts.size() != 2U ||
          !near(restoredFourTrack.left, 0.21F) ||
          !near(restoredFourTrack.right, 0.61F) ||
-         !restoredFourTrack.draftLanes.left ||
-         !near(*restoredFourTrack.draftLanes.left, -0.18F) ||
+         restoredFourTrack.draftLanes.left ||
+         !restoredFourTrack.draftLanes.right ||
+         !near(*restoredFourTrack.draftLanes.right, 0.18F) ||
          !restoredFourTrack.draftLanes.width ||
          !near(*restoredFourTrack.draftLanes.width, 0.07F) ||
          !restoredFourTrack.annotation.left ||
@@ -708,6 +710,7 @@ bool testKeyCountLayoutIsolationAndMigration()
          !restoredFourTrack.bgmLanes.width ||
          !near(*restoredFourTrack.bgmLanes.width, 0.09F) ||
          restoredSevenTrack.draftLanes.left ||
+         restoredSevenTrack.draftLanes.right ||
          restoredSevenTrack.annotation.width ||
          restoredSevenTrack.bgmLanes.left ||
          !near(restoredSevenTrack.left, 0.31F) ||
@@ -726,14 +729,15 @@ bool testKeyCountLayoutIsolationAndMigration()
          !near(materialized.canvasComponents.beatNumber.anchorX, 0.67F) ||
          !legacy.keyCountLayouts.empty() ||
          legacy.trackLayout.draftLanes.left ||
+         legacy.trackLayout.draftLanes.right ||
          legacy.trackLayout.draftLanes.width ||
          legacy.trackLayout.annotation.left ||
          legacy.trackLayout.annotation.width ||
          legacy.trackLayout.bgmLanes.left ||
          legacy.trackLayout.bgmLanes.width || malformed.draftLanes.left ||
-         malformed.draftLanes.width || malformed.annotation.left ||
-         malformed.annotation.width || malformed.bgmLanes.left ||
-         malformed.bgmLanes.width ||
+         malformed.draftLanes.right || malformed.draftLanes.width ||
+         malformed.annotation.left || malformed.annotation.width ||
+         malformed.bgmLanes.left || malformed.bgmLanes.width ||
          !near(legacy.trackLayoutForKeyCount(4).left, 0.17F) ||
          !near(legacy.judgmentLinePositionForKeyCount(7), 0.79F) ||
          !near(legacy.canvasComponentsForKeyCount(9).beatNumber.anchorX,
