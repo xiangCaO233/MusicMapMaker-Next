@@ -19,31 +19,28 @@
 | `Modules/Game/Logic` | 146/146 | 2026-09-10 | 已完成 |
 | `Modules/MMM` | 48/48 | 2026-09-10 | 已完成 |
 | `Modules/Audio` | 44/44 | 2026-09-10 | 已完成 |
-| `Modules/Game/Canvas` | 50/57 | 2026-09-11 | 进行中 |
+| `Modules/Game/Canvas` | 57/57 | 2026-09-11 | 已完成 |
 
 全项目 2026-09-09 的旧基线已因 Logic 与 MMM 后续补充而过期，不再作为当前未达标数量。阶段收尾时重新生成逐文件清单。
 
-`Game/Canvas` 剩余 7 个大型实现：`Basic2DCanvas` 三个实现、`TimelineCanvas` 三个实现和 `PreviewCanvas.cpp`。
-
 ## 后续模块顺序
 
-1. 完成 `Game/Canvas` 剩余 7 个大型实现。
-2. `Game/Graphic`：渲染和图形资源生命周期。
-3. `Runtime`、`Main`：线程、启动与退出。
-4. `Config`：配置持久化及资源加载。
-5. `Event`、`Game/Common`：跨模块通信与公共基础。
-6. `Network`：协作与网络数据传输。
-7. `Game/UI`：界面与演练服务。
-8. `Game/include`、`Game/src`：Game 聚合入口。
-9. `Updater`、`Log`：更新与诊断辅助。
-10. 模块外自维护的构建、工具和资源脚本。
+1. `Game/Graphic`：渲染和图形资源生命周期。
+2. `Runtime`、`Main`：线程、启动与退出。
+3. `Config`：配置持久化及资源加载。
+4. `Event`、`Game/Common`：跨模块通信与公共基础。
+5. `Network`：协作与网络数据传输。
+6. `Game/UI`：界面与演练服务。
+7. `Game/include`、`Game/src`：Game 聚合入口。
+8. `Updater`、`Log`：更新与诊断辅助。
+9. 模块外自维护的构建、工具和资源脚本。
 
 ## 最近验证
 
 - `Game/Logic`：模块复扫 146/146 达标；相关批次已完成格式化、差异检查、测试和主项目构建。
 - `MMM`：模块复扫 48/48 达标；14 个格式与模型测试场景以及 `cmake --build build --parallel 12` 通过。
 - `Audio`：模块复扫 44/44 达标；可用音频测试目标已完成构建和直接运行，完整构建通过。
-- `Game/Canvas`：当前复扫 50/57 达标；本批布局编辑头、对应测试与模块构建脚本均独立达到 30%，`LayoutEditingTest` 直接运行及完整构建通过。
+- `Game/Canvas`：模块复扫 57/57 达标；本批 7 个大型实现均独立达到 30%，完整构建通过。当前构建树未注册 CTest（`Total Tests: 0`）。
 - 完整构建仍会输出已知的 GCC 16 `stl_algobase.h` LLVM gold plugin 循环未展开提示；该构建问题不属于注释补充任务。
 
 历史流水记录仅保存在 [归档](archive/comment-audit-history-2026-09-09.md)，日常不读取、不追加。
