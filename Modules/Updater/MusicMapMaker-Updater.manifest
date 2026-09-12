@@ -1,8 +1,13 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- 更新器清单只声明当前用户权限，不请求管理员提权。 -->
+<!-- 文件替换权限由安装目录现有 ACL 决定，失败时更新器输出诊断。 -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!-- trustInfo 使用 Windows asm.v3 命名空间描述启动权限。 -->
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
+      <!-- 单一 requestedExecutionLevel 避免系统自动推断安装器权限。 -->
       <requestedPrivileges>
+        <!-- asInvoker 沿用主程序用户令牌，uiAccess 保持关闭。 -->
         <requestedExecutionLevel level="asInvoker" uiAccess="false"/>
       </requestedPrivileges>
     </security>
