@@ -10,6 +10,7 @@
 namespace MMM::Network::Collaboration
 {
 /// @brief 当前协作线协议主版本。
+/// @note 不兼容的帧布局或语义变更必须递增版本并由解码器显式拒绝旧值。
 inline constexpr std::uint16_t COLLABORATION_PROTOCOL_VERSION = 7;
 
 /// @brief 线协议允许的消息类型。

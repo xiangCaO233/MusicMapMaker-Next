@@ -12,6 +12,7 @@ namespace MMM::Network
 {
 
 /// @brief 单个资源文件的远程清单记录。
+/// @note path 必须在同步实现中按相对路径校验，禁止逃逸 assets 根目录。
 struct AssetFileEntry {
     std::string   path;       ///< 相对 assets 根目录的文件路径。
     std::string   url;        ///< 可下载该文件的远程 URL。
@@ -20,6 +21,7 @@ struct AssetFileEntry {
 };
 
 /// @brief 默认资源包清单。
+/// @note 完整包字段用于冷启动，files 列表用于已安装版本的增量校验。
 struct AssetManifest {
     std::string                 version;        ///< 资源包版本号。
     std::string                 packageUrl;     ///< 完整资源包下载 URL。
@@ -83,6 +85,7 @@ struct AssetSyncResult {
 };
 
 /// @brief 启动时默认资源包下载、校验和增量更新服务。
+/// @warning 所有同步入口均包含网络或文件 I/O，只能在启动期后台任务调用。
 class AssetSyncService
 {
 public:
