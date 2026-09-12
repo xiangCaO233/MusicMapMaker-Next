@@ -1,1 +1,2 @@
+// 将发布资源中的多尺寸 ICO 绑定为 Windows 主程序图标。
 IDI_ICON1 ICON DISCARDABLE "logo.ico"
