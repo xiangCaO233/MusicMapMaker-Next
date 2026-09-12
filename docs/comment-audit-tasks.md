@@ -33,12 +33,13 @@
 | `Modules/Log` | 3/3 | 2026-09-13 | 已完成 |
 | 根 `CMakeLists.txt` 与 `cmake/` 构建系统 | 19/19 | 2026-09-13 | 已完成 |
 | `scripts/` | 30/30 | 2026-09-13 | 已完成 |
+| `assets/` 自维护程序资源 | 17/17 | 2026-09-13 | 已完成 |
 
 全项目 2026-09-09 的旧基线已因 Logic 与 MMM 后续补充而过期，不再作为当前未达标数量。阶段收尾时重新生成逐文件清单。
 
 ## 后续模块顺序
 
-1. `assets/`：自维护的 Lua、Shell 与 Shader 程序资源。
+1. 全项目收尾：处理阶段复扫发现的 `Modules/` 聚合 CMake、共享测试基础、Logic 测试漂移与 GitHub Actions 工作流共 6 个文件。
 
 ## 最近验证
 
@@ -59,6 +60,8 @@
 - `Log`：模块复扫 3/3 达标，合计 206 行注释、425 行代码，注释率 32.65%；补充跨平台日志目录回退、终端与文件 sink 的线程安全、格式字段和日志器生命周期约束。C++ 词法 token 与 CMake 非注释内容均与 `HEAD` 一致；完整构建通过，隔离配置下相关日志诊断测试通过。
 - 根 `CMakeLists.txt` 与 `cmake/` 构建系统：19/19 达标，合计 670 行注释、1505 行代码，注释率 30.80%；补充顶层配置顺序、测试隔离、PGO 数据源、Vulkan SDK 查找、Windows 交叉工具链、macOS 应用束、调试信息和构建计时约束。16 个修改脚本的非注释内容均与 `HEAD` 一致；完整构建、Shell 语法检查及隔离配置下 `DefaultConfigAssetSyncTest` 1/1 通过。头模板按 C++ 统计，plist 与 JSON 模板作为纯数据排除。
 - `scripts/`：模块复扫 30/30 达标，合计 2404 行注释、5538 行代码，注释率 30.27%；补充本地诊断与格式探针、跨平台构建、预编译 staging 与矩阵更新、精确 LFS 拉取、GitHub 和网站发布流程的参数契约、工具链边界、失败处理及维护约束。30 个脚本去除整行注释与空白后的内容均与 `HEAD` 一致；全部 Shell 语法检查、Python 字节码编译和差异检查通过。本机未安装 `pwsh`，PowerShell 文件通过去注释等价检查，未运行 PowerShell parser。
+- `assets/` 自维护程序资源：模块复扫 17/17 达标，合计 444 行注释、963 行代码，注释率 31.56%；补充 IVM 与默认皮肤的资源归属、颜色、音频、字体、画布和布局契约，以及 6 个 GLSL 的输入输出、描述符、推送常量、采样与后处理约束。8 个修改文件去除整行注释与空白后的内容均与 `HEAD` 一致；7 个图集 Shell 语法检查、4 个皮肤 Lua 的 LuaJIT 字节码编译、6 个 GLSL 的 SPIR-V 编译、完整构建及隔离配置下 6/6 项皮肤与资源 CTest 通过。`translations/*.lua` 为纯键值本地化数据、`.spv` 为生成二进制，均按规则排除。
+- 2026-09-13 阶段收尾预扫发现 6 个仍不足 30% 的历史遗漏或后续漂移文件：`.github/workflows/ci.yaml`、`.github/workflows/github-release.yaml`、`Modules/CMakeLists.txt`、`Modules/Game/CMakeLists.txt`、`tests/TestConfigIsolation.cpp` 与 `Modules/Game/Logic/tests/CanvasCameraTest.cpp`；留待下一完整收尾批次处理，不混入 `assets/` 提交。
 - 完整构建仍会输出已知的 GCC 16 `stl_algobase.h` LLVM gold plugin 循环未展开提示；该构建问题不属于注释补充任务。
 
 历史流水记录仅保存在 [归档](archive/comment-audit-history-2026-09-09.md)，日常不读取、不追加。
