@@ -1,17 +1,21 @@
 cmake_minimum_required(VERSION 3.31)
 
+# 本测试以 CMake 脚本模式验证生产资源同步，不启动主程序或读取个人配置。 夹具完全位于
+# MMM_TEST_OUTPUT_ROOT，覆盖首次安装、增量覆盖和用户文件保留。 所有断言都比较精确内容，避免目录存在但复制来源错误的假阳性。
+# 测试结束保留隔离输出，失败后可直接检查生成目录；下次运行会先清理。
+
 # 测试入口必须由 CTest 提供生产同步脚本和隔离输出根。 生产脚本路径由工程传入，测试不得维护第二份复制实现。
 if(NOT DEFINED MMM_TEST_SYNC_SCRIPT OR MMM_TEST_SYNC_SCRIPT STREQUAL "")
   message(FATAL_ERROR "MMM_TEST_SYNC_SCRIPT is required.")
 endif()
-# 输出根必须位于构建树，避免测试碰触源码资源或真实用户配置。
+# 测试输出根不得回退到当前工作目录。 输出根必须位于构建树，避免测试碰触源码资源或真实用户配置。
 if(NOT DEFINED MMM_TEST_OUTPUT_ROOT OR MMM_TEST_OUTPUT_ROOT STREQUAL "")
   message(FATAL_ERROR "MMM_TEST_OUTPUT_ROOT is required.")
 endif()
 
 # 校验同步后的文件存在且内容精确，避免仅检查目录存在造成假通过。
 function(_mmm_assert_file_content FILE_PATH EXPECTED_CONTENT LABEL)
-  # 缺失文件应给出带场景标签的直接诊断。
+  # LABEL 只用于形成可定位的失败消息。 缺失文件应给出带场景标签的直接诊断。
   if(NOT EXISTS "${FILE_PATH}")
     message(FATAL_ERROR "${LABEL}: file is missing: ${FILE_PATH}")
   endif()
@@ -23,9 +27,10 @@ function(_mmm_assert_file_content FILE_PATH EXPECTED_CONTENT LABEL)
   endif()
 endfunction()
 
-# 通过独立 cmake -P 进程运行生产脚本，确保参数边界与真实构建目标一致。
+# 通过独立 cmake -P 进程运行生产脚本，确保参数边界与真实构建目标一致。 SOURCE_ROOT 与 DESTINATION_ROOT
+# 必须是当前测试创建的隔离目录。
 function(_mmm_run_sync SOURCE_ROOT DESTINATION_ROOT)
-  # 子进程隔离生产脚本变量，避免测试函数作用域掩盖参数缺陷。
+  # 生产脚本在独立变量域中执行。 子进程隔离生产脚本变量，避免测试函数作用域掩盖参数缺陷。
   execute_process(
     COMMAND
       "${CMAKE_COMMAND}" "-DMMM_SYNC_SOURCE_ASSETS_ROOT=${SOURCE_ROOT}"
@@ -43,14 +48,15 @@ function(_mmm_run_sync SOURCE_ROOT DESTINATION_ROOT)
   endif()
 endfunction()
 
-# 每个测试场景使用固定隔离根，便于重复运行前整体清理。
+# 每个测试场景使用固定隔离根，便于重复运行前整体清理。 根目录名称与 CTest 注册项对应，避免和其他脚本测试输出碰撞。
 set(_MMM_TEST_ROOT "${MMM_TEST_OUTPUT_ROOT}/default_config_asset_sync")
 # 源资源夹具模拟仓库 assets 目录结构。
 set(_MMM_SOURCE_ROOT "${_MMM_TEST_ROOT}/source-assets")
 # 目标夹具模拟 AppPaths::configRootPath 返回目录。
 set(_MMM_CONFIG_ROOT "${_MMM_TEST_ROOT}/config-root")
 
-# 每次测试从空目录开始，禁止读取开发者真实配置或前一次运行结果。
+# 清理目标固定在测试专属子目录。 每次测试从空目录开始，禁止读取开发者真实配置或前一次运行结果。 REMOVE_RECURSE
+# 的目标由测试输出根派生，不接受生产配置路径。
 file(REMOVE_RECURSE "${_MMM_TEST_ROOT}")
 # 先建立默认翻译源目录。
 file(MAKE_DIRECTORY "${_MMM_SOURCE_ROOT}/translations")
@@ -63,6 +69,7 @@ file(MAKE_DIRECTORY "${_MMM_SOURCE_ROOT}/skins/rm/resources/image")
 # 旧版皮肤单独提供入口和图集哨兵，防止同步时混入新版目录。
 file(MAKE_DIRECTORY "${_MMM_SOURCE_ROOT}/skins/rm-old/resources/atlas")
 file(WRITE "${_MMM_SOURCE_ROOT}/skins/rm-old/skin.lua" "rm-old-v1")
+# 图集哨兵验证嵌套二进制式资源按原内容复制。
 file(WRITE "${_MMM_SOURCE_ROOT}/skins/rm-old/resources/atlas/source.png"
      "atlas-v1")
 # 预建翻译目标以覆盖已有用户目录升级场景。
@@ -72,6 +79,7 @@ file(MAKE_DIRECTORY "${_MMM_CONFIG_ROOT}/assets/skins/custom-skin")
 
 # 源目录模拟仓库内默认翻译与包含嵌套资源的默认皮肤。 两种默认语言都必须从同一源根被发现。
 file(WRITE "${_MMM_SOURCE_ROOT}/translations/en_us.lua" "en-v1")
+# 第二种默认语言验证同步不依赖单个固定文件名。
 file(WRITE "${_MMM_SOURCE_ROOT}/translations/zh_cn.lua" "zh-v1")
 # 皮肤入口和嵌套资源共同代表完整默认皮肤。
 file(WRITE "${_MMM_SOURCE_ROOT}/skins/mmm-default/skin.lua" "skin-v1")
@@ -96,9 +104,10 @@ file(WRITE "${_MMM_CONFIG_ROOT}/assets/skins/custom-skin/skin.lua"
      "custom-skin")
 # 用户配置和 ImGui 布局位于配置根，任何资源同步都不得覆盖。
 file(WRITE "${_MMM_CONFIG_ROOT}/user_config.json" "user-config")
+# ImGui 布局作为另一类根级用户状态哨兵。
 file(WRITE "${_MMM_CONFIG_ROOT}/imgui.ini" "imgui-layout")
 
-# 首次同步应覆盖旧默认翻译并复制完整的默认皮肤目录树。
+# 首次同步应覆盖旧默认翻译并复制完整的默认皮肤目录树。 同一轮还验证四套内置皮肤与用户扩展的职责边界。
 _mmm_run_sync("${_MMM_SOURCE_ROOT}" "${_MMM_CONFIG_ROOT}")
 _mmm_assert_file_content("${_MMM_CONFIG_ROOT}/assets/translations/en_us.lua"
                          "en-v1" "首次英文翻译同步")
@@ -140,6 +149,7 @@ _mmm_assert_file_content("${_MMM_CONFIG_ROOT}/imgui.ini" "imgui-layout"
                          "保留 ImGui 布局")
 
 # 第二次同步使用同路径更新内容，覆盖同时间戳旧文件的增量行为不能退化。 改变长度确保第二次内容更新不会依赖文件时间戳差异。
+# 仅修改受管源文件，未修改哨兵应在重复同步后保持原内容。
 file(WRITE "${_MMM_SOURCE_ROOT}/translations/en_us.lua" "en-v2-longer")
 file(WRITE "${_MMM_SOURCE_ROOT}/skins/mmm-default/skin.lua" "skin-v2-longer")
 # IVM 内置入口也应随仓库版本正常增量更新。

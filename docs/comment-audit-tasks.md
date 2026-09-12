@@ -31,12 +31,14 @@
 | `Modules/Game/include`、`Modules/Game/src` | 8/8 | 2026-09-13 | 已完成 |
 | `Modules/Updater` | 4/4 | 2026-09-13 | 已完成 |
 | `Modules/Log` | 3/3 | 2026-09-13 | 已完成 |
+| 根 `CMakeLists.txt` 与 `cmake/` 构建系统 | 19/19 | 2026-09-13 | 已完成 |
 
 全项目 2026-09-09 的旧基线已因 Logic 与 MMM 后续补充而过期，不再作为当前未达标数量。阶段收尾时重新生成逐文件清单。
 
 ## 后续模块顺序
 
-1. 模块外自维护的构建、工具和资源脚本。
+1. `scripts/`：构建、发布、诊断和 PGO 工具。
+2. `assets/`：自维护的 Lua、Shell 与 Shader 程序资源。
 
 ## 最近验证
 
@@ -55,6 +57,7 @@
 - `Game/include`、`Game/src`：模块复扫 8/8 达标，合计 373 行注释、712 行代码，注释率 34.38%；补充画布工作区与编辑器应用服务适配、主循环初始化和收尾顺序、限帧热路径、跨平台工作目录及崩溃处理约束。5 个修改文件的去注释词法 token 与 `HEAD` 完全一致；完整构建及隔离配置下相关 4/4 项 CTest 通过。
 - `Updater`：模块复扫 4/4 达标，合计 203 行注释、465 行代码，注释率 30.39%；补充父进程等待、三平台替换与回滚、macOS App 校验、成功标记、独立目标构建和权限清单约束。C++、CMake、manifest 与资源脚本的去注释内容均与 `HEAD` 一致；`MusicMapMaker-Updater` 目标构建及隔离配置下 `UpdateCheckerTest` 1/1 通过。
 - `Log`：模块复扫 3/3 达标，合计 206 行注释、425 行代码，注释率 32.65%；补充跨平台日志目录回退、终端与文件 sink 的线程安全、格式字段和日志器生命周期约束。C++ 词法 token 与 CMake 非注释内容均与 `HEAD` 一致；完整构建通过，隔离配置下相关日志诊断测试通过。
+- 根 `CMakeLists.txt` 与 `cmake/` 构建系统：19/19 达标，合计 670 行注释、1505 行代码，注释率 30.80%；补充顶层配置顺序、测试隔离、PGO 数据源、Vulkan SDK 查找、Windows 交叉工具链、macOS 应用束、调试信息和构建计时约束。16 个修改脚本的非注释内容均与 `HEAD` 一致；完整构建、Shell 语法检查及隔离配置下 `DefaultConfigAssetSyncTest` 1/1 通过。头模板按 C++ 统计，plist 与 JSON 模板作为纯数据排除。
 - 完整构建仍会输出已知的 GCC 16 `stl_algobase.h` LLVM gold plugin 循环未展开提示；该构建问题不属于注释补充任务。
 
 历史流水记录仅保存在 [归档](archive/comment-audit-history-2026-09-09.md)，日常不读取、不追加。
