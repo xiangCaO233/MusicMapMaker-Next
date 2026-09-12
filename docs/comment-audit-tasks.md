@@ -24,12 +24,13 @@
 | `Modules/Runtime` | 6/6 | 2026-09-12 | 已完成 |
 | `Modules/Main` | 7/7 | 2026-09-12 | 已完成 |
 | `Modules/Config` | 52/52 | 2026-09-12 | 已完成 |
+| `Modules/Event` | 43/43 | 2026-09-12 | 已完成 |
 
 全项目 2026-09-09 的旧基线已因 Logic 与 MMM 后续补充而过期，不再作为当前未达标数量。阶段收尾时重新生成逐文件清单。
 
 ## 后续模块顺序
 
-1. `Event`、`Game/Common`：跨模块通信与公共基础。
+1. `Game/Common`：跨模块公共基础。
 2. `Network`：协作与网络数据传输。
 3. `Game/UI`：界面与演练服务。
 4. `Game/include`、`Game/src`：Game 聚合入口。
@@ -46,6 +47,7 @@
 - `Runtime`：模块复扫 6/6 达标；补充共享线程池、退出看门狗、回归测试和构建入口的线程生命周期与同步约束。完整构建及隔离配置下的 `ShutdownWatchdogTest` 1/1 通过。
 - `Main`：模块复扫 7/7 达标；补充启动资源同步、PGO 写出与上传、主程序生命周期、平台构建和 Windows 图标资源说明。纯资源 `logo.svg` 按规则排除，`icon.rc` 作为自维护资源脚本计入；完整构建通过，当前没有 Main 专属 CTest。
 - `Config`：模块复扫 52/52 达标；补充配置值序列化与旧字段迁移、应用路径、翻译缓存、皮肤包事务、皮肤 Lua 解析及对应回归测试的接口和实现约束。完整构建通过；隔离配置下 Config 注册的 19/19 项 CTest 全部通过。
+- `Event`：模块复扫 43/43 达标，合计 1278 行注释、2706 行代码，注释率 32.08%；补充事件分发层级、订阅生命周期、同步回调与锁约束、项目和 UI 事件载荷，以及 GLFW/ImGui 键码翻译边界说明。完整构建通过；隔离配置下 `BeatmapLoadDiagnosticPublisherTest`、`ProjectOpenOriginTest`、`ProjectOpenProgressStateTest`、`SaveResultFeedbackTest` 4/4 通过。
 - 完整构建仍会输出已知的 GCC 16 `stl_algobase.h` LLVM gold plugin 循环未展开提示；该构建问题不属于注释补充任务。
 
 历史流水记录仅保存在 [归档](archive/comment-audit-history-2026-09-09.md)，日常不读取、不追加。
