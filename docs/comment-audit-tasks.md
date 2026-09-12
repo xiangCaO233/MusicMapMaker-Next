@@ -11,7 +11,7 @@
 
 ## 当前进度
 
-更新时间：2026-09-11。
+更新时间：2026-09-12。
 
 | 范围 | 进度 | 最后复扫 | 状态 |
 | --- | ---: | --- | --- |
@@ -20,17 +20,16 @@
 | `Modules/MMM` | 48/48 | 2026-09-10 | 已完成 |
 | `Modules/Audio` | 44/44 | 2026-09-10 | 已完成 |
 | `Modules/Game/Canvas` | 57/57 | 2026-09-11 | 已完成 |
-| `Modules/Game/Graphic` | 39/67 | 2026-09-11 | 进行中 |
+| `Modules/Game/Graphic` | 67/67 | 2026-09-12 | 已完成 |
 
 全项目 2026-09-09 的旧基线已因 Logic 与 MMM 后续补充而过期，不再作为当前未达标数量。阶段收尾时重新生成逐文件清单。
 
 ## 后续模块顺序
 
-1. 完成 `Game/Graphic` 剩余 28 个渲染、窗口与图形资源实现。
-2. `Runtime`、`Main`：线程、启动与退出。
-3. `Config`：配置持久化及资源加载。
-4. `Event`、`Game/Common`：跨模块通信与公共基础。
-5. `Network`：协作与网络数据传输。
+1. `Runtime`、`Main`：线程、启动与退出。
+2. `Config`：配置持久化及资源加载。
+3. `Event`、`Game/Common`：跨模块通信与公共基础。
+4. `Network`：协作与网络数据传输。
 6. `Game/UI`：界面与演练服务。
 7. `Game/include`、`Game/src`：Game 聚合入口。
 8. `Updater`、`Log`：更新与诊断辅助。
@@ -42,7 +41,7 @@
 - `MMM`：模块复扫 48/48 达标；14 个格式与模型测试场景以及 `cmake --build build --parallel 12` 通过。
 - `Audio`：模块复扫 44/44 达标；可用音频测试目标已完成构建和直接运行，完整构建通过。
 - `Game/Canvas`：模块复扫 57/57 达标；本批 7 个大型实现均独立达到 30%，完整构建通过。当前构建树未注册 CTest（`Total Tests: 0`）。
-- `Game/Graphic`：当前复扫 39/67 达标；字体子模块 9/9 达标，平台外观与光标批次 6/6 达标；`AsciiFontRasterizerTest`、`ThemePluginLoaderTest` 及完整构建通过。macOS Objective-C++ 分支未在本机编译。
+- `Game/Graphic`：模块复扫 67/67 达标；字体子模块 9/9、平台外观与光标批次 6/6，以及 Vulkan 上下文、诊断、固定渲染资源、渲染器基础资源、主帧热路径、离屏命令录制、离屏资源生命周期、纹理生命周期、主题注册表、原生窗口状态机、三平台窗口适配器、ImGui Vulkan 初始化与内置主题实现和主题插件测试 28/28 达标。最后一项 `VKContextImguiImpl.cpp` 为 2233 行注释、4249 行代码，注释率 34.45%；完整构建及隔离配置下的 `ThemePluginLoaderTest` 1/1 通过。既有 `AsciiFontRasterizerTest` 通过记录继续有效。Win32/macOS 原生分支未在本机实际编译；`MacOSWindowUtils.mm` 与 `MacOSWindowAdapter.mm` 已完成静态差异检查。
 - 完整构建仍会输出已知的 GCC 16 `stl_algobase.h` LLVM gold plugin 循环未展开提示；该构建问题不属于注释补充任务。
 
 历史流水记录仅保存在 [归档](archive/comment-audit-history-2026-09-09.md)，日常不读取、不追加。
