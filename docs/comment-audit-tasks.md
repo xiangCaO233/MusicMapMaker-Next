@@ -28,14 +28,14 @@
 | `Modules/Game/Common` | 27/27 | 2026-09-12 | 已完成 |
 | `Modules/Network` | 48/48 | 2026-09-12 | 已完成 |
 | `Modules/Game/UI` | 248/248 | 2026-09-13 | 已完成 |
+| `Modules/Game/include`、`Modules/Game/src` | 8/8 | 2026-09-13 | 已完成 |
 
 全项目 2026-09-09 的旧基线已因 Logic 与 MMM 后续补充而过期，不再作为当前未达标数量。阶段收尾时重新生成逐文件清单。
 
 ## 后续模块顺序
 
-1. `Game/include`、`Game/src`：Game 聚合入口。
-2. `Updater`、`Log`：更新与诊断辅助。
-3. 模块外自维护的构建、工具和资源脚本。
+1. `Updater`、`Log`：更新与诊断辅助。
+2. 模块外自维护的构建、工具和资源脚本。
 
 ## 最近验证
 
@@ -51,6 +51,7 @@
 - `Game/Common`：模块复扫 27/27 达标，合计 1643 行注释、3242 行代码，注释率 33.63%；补充公共编辑类型、音频与视频探测、时间线兼容性、画布组件布局、渲染快照及无锁快照池的接口、算法和热路径约束。完整构建通过；隔离配置下 `VideoFrameDecoderTest`、`AudioResourceDragPayloadTest`、`BeatmapAudioTimelineCompatibilityTest` 3/3 通过。
 - `Network`：模块复扫 48/48 达标，合计 16354 行注释、36091 行代码，注释率 31.18%；补充更新与资源同步、协作信令、权限、文档增量、房间后台合并、资源分块及服务端生命周期约束。完整构建通过；隔离配置下 Network 与 Collaboration 的 10/10 项 CTest，以及 `CollaborationRoomTest p2p`、`CollaborationRoomTest resource` 两条手动真实 WebRTC 探针通过。
 - `Game/UI`：模块复扫 248/248 达标，合计 26191 行注释、56151 行代码，注释率 31.81%；补充 UI 接口、布局与绘制热路径、菜单动作、设置与管理视图、音频和协作工具、演练服务及测试约束。176 个 C++ 文件的去注释词法 token 与 `HEAD` 完全一致，CMake 非注释内容一致；完整构建及隔离配置下 UI 相关 19/19 项 CTest 通过。额外完整 CTest 为 127/129，`NoteOverlapMaskRenderTest` 的边界夹具检查和已知 `MarkdownRendererTest` 的假纹理断言失败，均不涉及本次纯注释代码差异。
+- `Game/include`、`Game/src`：模块复扫 8/8 达标，合计 373 行注释、712 行代码，注释率 34.38%；补充画布工作区与编辑器应用服务适配、主循环初始化和收尾顺序、限帧热路径、跨平台工作目录及崩溃处理约束。5 个修改文件的去注释词法 token 与 `HEAD` 完全一致；完整构建及隔离配置下相关 4/4 项 CTest 通过。
 - 完整构建仍会输出已知的 GCC 16 `stl_algobase.h` LLVM gold plugin 循环未展开提示；该构建问题不属于注释补充任务。
 
 历史流水记录仅保存在 [归档](archive/comment-audit-history-2026-09-09.md)，日常不读取、不追加。
