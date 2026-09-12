@@ -32,7 +32,8 @@ using Logic::EditTool;
 using Logic::NoteColorSlot;
 
 
-// 预定义纹理ID，用于跨线程纹理映射
+/// @brief 跨逻辑与渲染线程共享的稳定纹理语义 ID。
+/// @note 数值分区避免内置纹理、动态特效和字体图集互相冲突。
 enum class TextureID : uint32_t {
     None       = 0,
     Background = 1,
@@ -68,11 +69,14 @@ enum class TextureID : uint32_t {
 [[nodiscard]] inline constexpr TextureID asciiGlyphTextureId(
     std::size_t tierIndex, char character)
 {
+    // 先转换为无符号字节，避免实现相关的负 char 破坏范围判断。
     const auto code = static_cast<unsigned char>(character);
+    // 字号档位或字符超出固定 ASCII 图集时显式返回无纹理。
     if ( tierIndex >= Common::ASCII_FONT_RASTER_TIER_COUNT ||
          code < Common::ASCII_GLYPH_FIRST || code > Common::ASCII_GLYPH_LAST ) {
         return TextureID::None;
     }
+    // 每个字号档位占用连续区间，字符码点提供区间内偏移。
     return static_cast<TextureID>(
         static_cast<std::uint32_t>(TextureID::AsciiGlyphStart) +
         tierIndex * Common::ASCII_GLYPH_COUNT + code -
@@ -85,14 +89,18 @@ enum class TextureID : uint32_t {
 [[nodiscard]] inline constexpr TextureID unicodeGlyphTextureId(
     std::uint32_t codepoint)
 {
+    // ASCII 使用独立多档图集，非法 Unicode 标量也不得占用纹理编号。
     if ( codepoint <= Common::ASCII_GLYPH_LAST ||
          !Common::isValidUnicodeCodepoint(codepoint) ) {
         return TextureID::None;
     }
+    // Unicode 高位保留区直接叠加码点，保证同一码点得到稳定 ID。
     return static_cast<TextureID>(
         static_cast<std::uint32_t>(TextureID::UnicodeGlyphStart) + codepoint);
 }
 
+/// @brief 拾取包围盒对应的可交互物件部位。
+/// @note 部位用于选择拖动语义，具体物件领域另由 ChartObjectKind 表示。
 enum class HoverPart : uint8_t {
     None = 0,
     Head,
@@ -104,6 +112,8 @@ enum class HoverPart : uint8_t {
     SampleOffset
 };
 
+/// @brief UI 悬浮检视面板展示的细分物件结构类型。
+/// @note 该枚举比 HoverPart 更细，用于选择不同字段和提示文案。
 enum class HoverInspectKind : uint8_t {
     None = 0,
     Note,
@@ -123,6 +133,7 @@ enum class HoverInspectKind : uint8_t {
     AudioSampleTrigger
 };
 
+/// @brief 悬浮部位对应的拍位、时间和轨道信息。
 struct HoverBeatPoint {
     /// @brief 是否显示该部位的拍位与时间信息
     bool show{ false };
@@ -144,6 +155,7 @@ struct HoverBeatPoint {
     int32_t track{ 0 };
 };
 
+/// @brief 当前悬浮对象交给 UI 展示的结构化只读快照。
 struct HoverInspectInfo {
     /// @brief 是否显示结构化悬浮检视信息
     bool show{ false };
@@ -211,18 +223,21 @@ struct HoverSubdivisionPreview {
     double beatDuration{ 0.0 };
 };
 
-/**
- * @brief 碰撞拾取包围盒
- */
+/// @brief 用于 UI 碰撞拾取的轴对齐包围盒。
 struct Hitbox {
+    /// @brief 包围盒所属 ECS 实体。
     entt::entity entity;
-    HoverPart    part{ HoverPart::None };
-    int          subIndex{
-                 -1
-    };  // 用于区分 Polyline 的第几个 Node 或 Body，或者哪个具体的部分
+    /// @brief 包围盒代表的物件部位。
+    HoverPart part{ HoverPart::None };
+    /// @brief Polyline 子物件或其他细分部位索引；负值表示物件本体。
+    int subIndex{ -1 };
+    /// @brief 包围盒左上角横坐标。
     float x;
+    /// @brief 包围盒左上角纵坐标。
     float y;
+    /// @brief 包围盒宽度。
     float w;
+    /// @brief 包围盒高度。
     float h;
     /// @brief 实体所在的独立 ECS 注册表。
     ChartObjectKind kind{ ChartObjectKind::PlayerNote };
@@ -238,13 +253,16 @@ struct Hitbox {
                                                    float         scaleX,
                                                    float scaleY) noexcept
 {
+    // 非正或非有限缩放不具备有效几何意义，按单位缩放处理。
     const float safeScaleX =
         std::isfinite(scaleX) && scaleX > 0.0F ? scaleX : 1.0F;
     const float safeScaleY =
         std::isfinite(scaleY) && scaleY > 0.0F ? scaleY : 1.0F;
     if ( safeScaleX == 1.0F && safeScaleY == 1.0F ) {
+        // 单位缩放直接返回原对象，避免执行无意义的中心重算。
         return hitbox;
     }
+    // 先保存原包围盒中心，缩放后再围绕相同中心恢复左上角。
     const float centerX = hitbox.x + hitbox.w * 0.5F;
     const float centerY = hitbox.y + hitbox.h * 0.5F;
 
@@ -253,6 +271,7 @@ struct Hitbox {
     scaled.h      = hitbox.h * safeScaleY;
     scaled.x      = centerX - scaled.w * 0.5F;
     scaled.y      = centerY - scaled.h * 0.5F;
+    // 极端输入若导致任一结果溢出，回退完整原包围盒而非返回部分坏值。
     if ( !std::isfinite(scaled.x) || !std::isfinite(scaled.y) ||
          !std::isfinite(scaled.w) || !std::isfinite(scaled.h) ) {
         return hitbox;
@@ -260,9 +279,7 @@ struct Hitbox {
     return scaled;
 }
 
-/**
- * @brief 时间线上的交互元素 (BPM/Scroll 调整点)
- */
+/// @brief 时间线上的 BPM、Scroll、Jump 与 HS 交互元素快照。
 struct TimelineInteractiveElement {
     /// @brief 单个 Timing marker 的快照几何范围。
     struct MarkerGeometry {
@@ -278,17 +295,24 @@ struct TimelineInteractiveElement {
         uint32_t markerIndexCount{ 0 };
     };
 
-    double       time;
-    float        y;
-    uint32_t     effects;
+    /// @brief Timing 元素在谱面时间轴上的时间。
+    double time;
+    /// @brief 标记在当前画布快照中的纵坐标。
+    float y;
+    /// @brief 当前时间点实际包含的 Timing 效果位掩码。
+    uint32_t effects;
+    /// @brief BPM 效果对应实体；不存在时为 entt::null。
     entt::entity bpmEntity{ entt::null };
+    /// @brief Scroll 效果对应实体；不存在时为 entt::null。
     entt::entity scrollEntity{ entt::null };
     entt::entity jumpEntity{ entt::null };  /// @brief Jump 效果实体
     entt::entity hsEntity{ entt::null };    /// @brief HS 效果实体
-    double       bpmValue{ 0.0 };
-    double       scrollValue{ 0.0 };
-    double       jumpValue{ 0.0 };  /// @brief Jump 原始参数，单位毫秒
-    double       hsValue{ 1.0 };    /// @brief HS 原始参数
+    /// @brief BPM 效果的原始数值。
+    double bpmValue{ 0.0 };
+    /// @brief Scroll 效果的原始数值。
+    double scrollValue{ 0.0 };
+    double jumpValue{ 0.0 };  /// @brief Jump 原始参数，单位毫秒
+    double hsValue{ 1.0 };    /// @brief HS 原始参数
     /// @brief BPM 标记的快照几何范围。
     MarkerGeometry bpmMarker;
     /// @brief Scroll 标记的快照几何范围。
@@ -342,25 +366,31 @@ struct CanvasComponentInstanceSnapshot {
     float regionBottom{ 0.0f };
 };
 
-/**
- * @brief 渲染快照数据，包含 UI 画布所需的所有几何与指令信息
- */
+/// @brief 逻辑线程生成并交给 UI 画布消费的一帧完整渲染快照。
+/// @note 快照按值拥有动态数据，跨线程只传递其稳定对象指针。
 struct RenderSnapshot {
-    std::vector<Common::Render::CanvasVertex>  vertices;
-    std::vector<uint32_t>                      indices;
+    /// @brief 所有普通、发光和覆盖批次共享的顶点缓冲数据。
+    std::vector<Common::Render::CanvasVertex> vertices;
+    /// @brief 与 vertices 对应的索引缓冲数据。
+    std::vector<uint32_t> indices;
+    /// @brief 普通混合通道的绘制批次。
     std::vector<Common::Render::CanvasDrawCmd> cmds;
+    /// @brief 发光中间通道的绘制批次。
     std::vector<Common::Render::CanvasDrawCmd> glowCmds;
+    /// @brief 最终覆盖层的绘制批次。
     std::vector<Common::Render::CanvasDrawCmd> overlayCmds;
-    std::vector<Hitbox>                        hitboxes;
+    /// @brief 与本帧可见物件对应的拾取包围盒。
+    std::vector<Hitbox> hitboxes;
     /// @brief 普通悬浮拾取与调试显示使用的横向包围盒缩放。
     float interactionHitboxScaleX{ 1.0F };
     /// @brief 普通悬浮拾取与调试显示使用的纵向包围盒缩放。
-    float                                   interactionHitboxScaleY{ 1.0F };
+    float interactionHitboxScaleY{ 1.0F };
+    /// @brief 本帧可交互的时间线效果标记。
     std::vector<TimelineInteractiveElement> timelineElements;
     /// @brief 可选画布组件的逐实例渲染与布局边界。
     std::vector<CanvasComponentInstanceSnapshot> canvasComponentInstances;
-    std::vector<ScrollSegment>
-        scrollSegments;  // 全量 ScrollCache 拷贝，用于 UI 侧时间计算
+    /// @brief UI 时间换算使用的全量 ScrollCache 分段副本。
+    std::vector<ScrollSegment> scrollSegments;
 
     /// @brief 预览窗口右侧全谱物件密度缓存；非 Preview 快照保持为空。
     PreviewDensitySnapshot previewDensity;
@@ -392,7 +422,7 @@ struct RenderSnapshot {
     /// @brief 当前会话全量批注标记缓存的版本号。
     std::uint64_t annotationRevision{ 0 };
 
-    // 纹理 UV 映射表 (TextureID -> u,v,w,h)
+    /// @brief 从 TextureID 到图集矩形 u、v、w、h 的映射表。
     std::unordered_map<uint32_t, glm::vec4> uvMap;
 
     /// @brief 当前快照持有的图集 UV 修订号。
@@ -419,15 +449,18 @@ struct RenderSnapshot {
     /// @warning 逻辑渲染热路径：只扫描固定上限栈内数组，不分配内存。
     void requestUnicodeGlyph(std::uint32_t codepoint)
     {
+        // ASCII、非法标量和图集中已有字形均无需进入补载请求。
         if ( codepoint <= Common::ASCII_GLYPH_LAST ||
              !Common::isValidUnicodeCodepoint(codepoint) ||
              unicodeFontMetrics.glyph(codepoint) ) {
             return;
         }
+        // 固定数组按当前有效范围去重，避免同一可见字符重复消耗容量。
         for ( std::size_t index = 0U; index < requestedUnicodeGlyphCount;
               ++index ) {
             if ( requestedUnicodeGlyphs[index] == codepoint ) return;
         }
+        // 达到单帧上限后静默保留既有请求，下一帧仍可继续发现缺失字形。
         if ( requestedUnicodeGlyphCount < requestedUnicodeGlyphs.size() ) {
             requestedUnicodeGlyphs[requestedUnicodeGlyphCount++] = codepoint;
         }
@@ -457,18 +490,20 @@ struct RenderSnapshot {
     /// @brief 视频事件在谱面时间轴上的开始时间，单位秒。
     double backgroundVideoStartTime{ 0.0 };
 
-    // 播放状态
+    /// @brief 生成快照时音频时间线是否正在播放。
     bool isPlaying{ false };
     /// @brief 本地是否正在预览连续 Seek；为 true 时联机视口暂缓发送。
-    bool   isSeekScrubbing{ false };
+    bool isSeekScrubbing{ false };
+    /// @brief 包含视觉偏移的当前画布时间，单位秒。
     double currentTime{ 0.0 };
     /// @brief 当前主画布内容相对基础轨道布局的横向逻辑像素偏移。
     float canvasHorizontalOffsetX{ 0.0F };
     /// @brief 未包含视觉偏移的原始谱面播放时间，单位秒。
     double playbackTime{ 0.0 };
+    /// @brief 当前谱面或音频时间线总时长，单位秒。
     double totalTime{ 0.0 };
 
-    /// @brief 逻辑线程写入该快照时的高精度系统时钟 (steady_clock, 秒)
+    /// @brief 逻辑线程写入快照时的 steady_clock 时间，单位秒。
     double snapshotSysTime{ 0.0 };
     /// @brief 当前播放速度倍率 (用于 UI 侧亚帧插值)
     double playbackSpeed{ 1.0 };
@@ -499,7 +534,7 @@ struct RenderSnapshot {
     /// @brief 当前判定线所在时间段生效的 SV。
     double currentSv{ 1.0 };
 
-    // 框选盒子快照
+    /// @brief 一台画布摄像机上的矩形框选时间与轨道范围。
     struct MarqueeBoxSnapshot {
         double      startTime{ 0.0 };
         double      endTime{ 0.0 };
@@ -508,7 +543,7 @@ struct RenderSnapshot {
         std::string cameraId;
     };
 
-    // 交互状态
+    /// @brief 生成当前交互快照时启用的编辑工具。
     EditTool currentTool{ EditTool::Move };
     /// @brief 当前快照是否允许生成拾取/悬浮等交互数据。
     bool                            acceptsInteraction{ false };
@@ -557,7 +592,7 @@ struct RenderSnapshot {
     size_t noteCount{ 0 };           ///< 当前谱面的可计数物件数量
     size_t maxCombo{ 0 };            ///< 当前谱面的最大连击数
 
-    // 笔刷预览状态
+    /// @brief 当前绘制手势交给画布展示的预览状态。
     struct BrushSnapshot {
         bool isActive{ false };  ///< 是否激活
         /// @brief 当前手势是否创建 BGM 区自动采样。
@@ -574,17 +609,17 @@ struct RenderSnapshot {
         /// @brief 自动采样预览引用的项目音频资源 ID。
         std::string audioResourceId;
 
-        // Polyline 子物件预览
+        /// @brief Polyline 手势尚未提交的子物件预览。
         std::vector<Common::Render::PolylineSubNote> polylineSegments;
     } brush;
 
-    // 橡皮擦预览状态
+    /// @brief 当前橡皮擦手势累计命中的实体集合。
     std::unordered_set<entt::entity> erasingEntities;
     /// @brief 橡皮擦目标所在的独立 ECS 注册表。
     ChartObjectKind erasingObjectKind{ ChartObjectKind::PlayerNote };
     int             erasingSubIndex{ -1 };
 
-    // 是否已加载谱面
+    /// @brief 当前快照是否对应已加载谱面。
     bool hasBeatmap{ false };
     /// @brief 当前快照对应的谱面实例标识，仅用于进程内比较，禁止解引用。
     std::uintptr_t beatmapInstanceId{ 0 };
@@ -614,19 +649,23 @@ struct RenderSnapshot {
     [[nodiscard]] double playbackInterpolationElapsed(
         double nowSteadySeconds) const noexcept
     {
+        // 非播放、无快照时钟或无效速度都不能进行 UI 侧外推。
         if ( !isPlaying || snapshotSysTime <= 0.0 ||
              !std::isfinite(nowSteadySeconds) ||
              !std::isfinite(playbackSpeed) || playbackSpeed <= 0.0 ) {
             return 0.0;
         }
+        // 只接受快照之后 100ms 内的正时间差，防止停顿后继续外推旧状态。
         double elapsed = nowSteadySeconds - snapshotSysTime;
         if ( elapsed <= 0.0 || elapsed >= 0.1 ) {
             return 0.0;
         }
+        // 已知播放终点时把外推限制在剩余媒体时间内，避免越过尾端。
         if ( std::isfinite(playbackTime) && std::isfinite(totalTime) ) {
             const double remainingTime =
                 (totalTime - playbackTime) / playbackSpeed;
             if ( remainingTime <= 0.0 ) {
+                // 已到达或越过终点时不再产生补间时间。
                 return 0.0;
             }
             elapsed = std::min(elapsed, remainingTime);
@@ -641,9 +680,11 @@ struct RenderSnapshot {
     [[nodiscard]] double resolveCurrentTimeAt(
         double nowSteadySeconds) const noexcept
     {
+        // 画布时间沿用与顶点补间相同的新鲜窗口和播放速度。
         const double resolved =
             currentTime +
             playbackInterpolationElapsed(nowSteadySeconds) * playbackSpeed;
+        // 极端数值溢出时回退快照原值，避免 NaN 进入渲染计算。
         return std::isfinite(resolved) ? resolved : currentTime;
     }
 
@@ -654,6 +695,7 @@ struct RenderSnapshot {
     [[nodiscard]] double resolvePlaybackTimeAt(
         double nowSteadySeconds) const noexcept
     {
+        // 原始播放时间不包含视觉偏移，但共享同一补间经过时长。
         const double resolved =
             playbackTime +
             playbackInterpolationElapsed(nowSteadySeconds) * playbackSpeed;
@@ -674,17 +716,21 @@ struct RenderSnapshot {
      */
     double getInterpolatedOffset(double dt) const
     {
+        // 只有逻辑层明确允许的线性滚动段才执行亚帧位移外推。
         if ( !allowUiPlaybackInterpolation || !isPlaying || dt <= 0.0 ||
              dt >= 0.1 || !std::isfinite(dt) ||
              !std::isfinite(uiInterpolationAbsYSpeed) ) {
             return 0.0;
         }
+        // AbsY 速度先转换到画布 Y 空间，再乘以经过秒数得到累积偏移。
         return uiInterpolationAbsYSpeed * uiInterpolationYOffsetScale * dt;
     }
 
-    /// @brief 清理当前快照数据（保留内存容量）
+    /// @brief 清理当前快照业务数据并保留动态容器容量。
+    /// @warning 逻辑热路径复用入口；只能由当前拥有该快照的线程调用。
     void clear()
     {
+        // 首先清空 GPU 几何、绘制批次和交互几何，保留各 vector 容量。
         vertices.clear();
         indices.clear();
         cmds.clear();
@@ -696,6 +742,7 @@ struct RenderSnapshot {
         overlapMasks.clear();
         annotationMarkers.clear();
         annotationRevision = 0;
+        // 清除时间线、组件布局、滚动缓存和预览密度等派生数据。
         timelineElements.clear();
         canvasComponentInstances.clear();
         scrollSegments.clear();
@@ -705,6 +752,7 @@ struct RenderSnapshot {
         noteQuerySeenScratch.clear();
         sampleQueryScratch.clear();
         sampleQuerySeenScratch.clear();
+        // 资源字段恢复为空，视频和背景状态不能泄漏到下一个项目快照。
         backgroundPath.clear();
         bgSize                       = glm::vec2(0.0f, 0.0f);
         backgroundIsVideo            = false;
@@ -720,41 +768,45 @@ struct RenderSnapshot {
         allowUiPlaybackInterpolation = false;
         uiInterpolationAbsYSpeed     = 0.0;
         uiInterpolationYOffsetScale  = 1.0;
-        fallbackBpm                  = 120.0;
-        currentBpm                   = 120.0;
-        currentBeatIndex             = 0;
-        currentSv                    = 1.0;
-        currentTool                  = EditTool::Move;
-        acceptsInteraction           = false;
-        isHoveringCanvas             = false;
-        isSelecting                  = false;
+        // 音乐和滚动上下文恢复安全默认值，供尚未写入的新快照读取。
+        fallbackBpm      = 120.0;
+        currentBpm       = 120.0;
+        currentBeatIndex = 0;
+        currentSv        = 1.0;
+        currentTool      = EditTool::Move;
+        // 清除全部交互与磁吸状态，避免复用时延续上一帧手势反馈。
+        acceptsInteraction = false;
+        isHoveringCanvas   = false;
+        isSelecting        = false;
         marqueeBoxes.clear();
         activeSelectionCameraId.clear();
-        hoveredTime              = 0.0;
-        snappedTime              = 0.0;
-        isSnapped                = false;
-        snappedNumerator         = 0;
-        snappedDenominator       = 1;
-        currentBeatDivisor       = 4;
-        hoveredTrack             = 0;
-        hoveredNoteNumerator     = 0;
-        hoveredNoteDenominator   = 1;
-        hoveredBeatIndex         = 0;
-        hoveredNoteBeatIndex     = 0;
-        hoveredNoteTime          = 0.0;
-        hoveredNoteTrack         = 0;
-        hoverInspect             = HoverInspectInfo{};
-        hoverSubdivisionPreview  = HoverSubdivisionPreview{};
-        isPreviewHovered         = false;
-        previewHoverY            = 0.0f;
-        previewHoverTime         = 0.0;
-        isPreviewDragging        = false;
+        hoveredTime             = 0.0;
+        snappedTime             = 0.0;
+        isSnapped               = false;
+        snappedNumerator        = 0;
+        snappedDenominator      = 1;
+        currentBeatDivisor      = 4;
+        hoveredTrack            = 0;
+        hoveredNoteNumerator    = 0;
+        hoveredNoteDenominator  = 1;
+        hoveredBeatIndex        = 0;
+        hoveredNoteBeatIndex    = 0;
+        hoveredNoteTime         = 0.0;
+        hoveredNoteTrack        = 0;
+        hoverInspect            = HoverInspectInfo{};
+        hoverSubdivisionPreview = HoverSubdivisionPreview{};
+        isPreviewHovered        = false;
+        previewHoverY           = 0.0f;
+        previewHoverTime        = 0.0;
+        isPreviewDragging       = false;
+        // 笔刷内部容器保留容量，但清空当前预览身份和颜色覆盖。
         brush.isActive           = false;
         brush.createsAudioSample = false;
         brush.customColors       = {};
         brush.audioResourceId.clear();
         brush.polylineSegments.clear();
         erasingEntities.clear();
+        // 橡皮擦恢复玩家音符领域和无子物件的初始状态。
         erasingObjectKind = ChartObjectKind::PlayerNote;
         erasingSubIndex   = -1;
         hasBeatmap        = false;
@@ -763,6 +815,7 @@ struct RenderSnapshot {
         beatmapName.clear();
         isDirty = false;
         lastActionMessage.clear();
+        // 几何分层计数必须与已清空的顶点和指令数组同步归零。
         staticCmdCount     = 0;
         staticVertexCount  = 0;
         dynamicVertexCount = 0;
@@ -770,10 +823,11 @@ struct RenderSnapshot {
         visibleTimeEnd     = 0.0;
         noteCount          = 0;
         maxCombo           = 0;
-        draftTrackCount    = trackCount;
-        bgmTrackCount      = 0;
-        bmsEditingEnabled  = true;
-        draftLanesEnabled  = false;
+        // 轨道可见性恢复默认编辑模式；玩家轨数本身由下一次生成覆盖。
+        draftTrackCount   = trackCount;
+        bgmTrackCount     = 0;
+        bmsEditingEnabled = true;
+        draftLanesEnabled = false;
     }
 };
 
