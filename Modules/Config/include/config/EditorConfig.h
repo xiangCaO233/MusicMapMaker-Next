@@ -27,6 +27,7 @@ struct EditorConfig {
     /// 打开项目时的默认调色方案。
     void resetNoteRenderingToDefaults()
     {
+        // 临时默认对象集中提供字段初值，避免在重置路径重复维护常量。
         const EditorConfig defaults;
         visual.noteScaleX = defaults.visual.noteScaleX;
         visual.noteScaleY = defaults.visual.noteScaleY;
@@ -44,6 +45,7 @@ struct EditorConfig {
     /// 保留背景电平图配置。
     void resetBackgroundRenderingToDefaults()
     {
+        // 只覆盖本分组声明的选项，背景频谱等独立设置保持用户值。
         const EditorConfig defaults;
         visual.background.fillMode = defaults.visual.background.fillMode;
         visual.background.opaque_ratio =

@@ -87,6 +87,7 @@ public:
     void setWindowContentScale(float scale) { m_uiScale = scale; }
 
 private:
+    /// @brief 创建持有默认 EditorConfig 的进程级配置单例。
     AppConfig();
     ~AppConfig() = default;
 
@@ -97,6 +98,7 @@ private:
     /// @return 用户目录/.config/mmm/user_config.json。
     std::filesystem::path getDefaultConfigPath() const;
 
+    /// @brief 当前进程读取和修改的完整编辑器配置。
     EditorConfig m_editorConfig;
     /// @brief 当前应用配置持久化的协作者稳定标识。
     std::string        m_collaborationParticipantId;
