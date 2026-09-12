@@ -2,9 +2,11 @@
 
 namespace MMM::Graphic
 {
-/**
- * @brief 初始化 Vulkan 应用程序信息
- */
+/// @brief 填充 Vulkan instance 使用的应用与引擎版本信息。
+///
+/// 该结构保存在 VKContext 内，字符串均为静态字面量，因此其指针在 instance
+/// 创建前始终有效。声明 Vulkan 1.4 也使 loader 能按项目使用的 API
+/// 版本校验能力。
 void VKContext::initVkAppInfo()
 {
     m_vkAppInfo.setPApplicationName("MMM")
@@ -14,11 +16,14 @@ void VKContext::initVkAppInfo()
         .setPEngineName("No Engine");
 }
 
-/**
- * @brief 初始化 Vulkan 实例创建信息
- */
+/// @brief 汇总应用信息、平台扩展与可选验证层，生成 instance 创建参数。
+///
+/// m_vkInstanceCreateInfo 只引用上下文成员保存的数据，调用方必须先完成 GLFW
+/// 扩展注册以及 Debug 配置，并在这些容器保持不变期间创建 Vulkan instance。
 void VKContext::initVkInstanceCreateInfo()
 {
+    // 基础路径只启用窗口系统要求的扩展；macOS 的标志与 portability 扩展必须
+    // 成对出现，否则 MoltenVK 物理设备不会出现在 instance 的枚举结果中。
     m_vkInstanceCreateInfo
         .setPApplicationInfo(&m_vkAppInfo)
         // 启用的扩展
@@ -29,9 +34,9 @@ void VKContext::initVkInstanceCreateInfo()
         ;
 
     if ( is_debug() ) {
-        // 启用的Layer
+        // Debug messenger 创建信息通过 pNext 同时覆盖 instance 创建期间产生的
+        // 验证消息；正式 messenger 会在 instance 创建成功后单独建立。
         m_vkInstanceCreateInfo.setPEnabledLayerNames(m_vkValidationLayers);
-        // 启用的Next指针(这里启用的调试信息)
         m_vkInstanceCreateInfo.setPNext(&m_vkDebugUtilCreateInfo);
     }
 }

@@ -8,7 +8,10 @@ namespace MMM::Graphic
 {
 
 /**
- * @brief 构造函数，创建图形管线
+ * @brief 根据画布用途、混合模式和资源布局创建一条固定图形管线。
+ *
+ * 构造期间的所有 Vulkan create-info 都是局部描述，创建完成后只保留管线、管线
+ * 布局以及可能自有的 descriptor set layout。共享布局由调用方维持生命周期。
  *
  * @param logicalDevice 逻辑设备引用
  * @param shader 着色器管理器引用 (提供 Shader Stages)
@@ -16,6 +19,12 @@ namespace MMM::Graphic
  * @param swapchain 交换链引用
  * @param w 视口宽度
  * @param h 视口高度
+ * @param is2DCanvas 是否把 viewport 与 scissor 设为命令录制时提供的动态状态。
+ * @param additiveBlend 是否使用预乘颜色的纯加法混合。
+ * @param blendEnable 是否启用颜色附件混合。
+ * @param sharedLayout 可复用的 descriptor set layout；为空时在本对象内创建。
+ * @param useVertexInput 是否从绑定的顶点缓冲读取标准画布顶点。
+ * @param alphaWeightedAdditive 是否对非预乘来源执行带源 Alpha 的加法混合。
  */
 VKRenderPipeline::VKRenderPipeline(
     vk::Device& logicalDevice, VKShader& shader, VKRenderPass& renderPass,
@@ -25,13 +34,14 @@ VKRenderPipeline::VKRenderPipeline(
     : m_logicalDevice(logicalDevice)
 {
     if ( sharedLayout != VK_NULL_HANDLE ) {
+        // 共享布局由资源所有者统一销毁，本对象只把它纳入 pipeline layout。
         m_descriptorSetLayout    = sharedLayout;
         m_ownDescriptorSetLayout = false;
         XDEBUG("Using Shared VK Descriptor Set Layout.");
     } else {
-        // 2:创建Descriptor Set布局
+        // 独立管线使用与 Brush 一致的 combined image sampler
+        // 绑定，并记录所有权， 使析构只清理由本对象创建的布局。
         vk::DescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo;
-        // 包括uniform在内的所有描述符绑定配置
         descriptorSetLayoutCreateInfo.setBindings(
             { Graphic::BRUSH_TEXTURE_BIND_DESC });
         m_descriptorSetLayout =
@@ -42,7 +52,8 @@ VKRenderPipeline::VKRenderPipeline(
         XDEBUG("Created VK Descriptor Set Layout.");
     }
 
-    // --- 定义 Push Constant 范围 ---
+    // 每次绘制通过 push constant 传入一个变换矩阵；顶点与片元阶段共享同一范围，
+    // 其布局必须与对应 SPIR-V 声明保持一致。
     vk::PushConstantRange pushConstantRange;
     pushConstantRange
         .setStageFlags(
@@ -51,7 +62,7 @@ VKRenderPipeline::VKRenderPipeline(
         .setOffset(0)
         .setSize(sizeof(glm::mat4));  // 大小为一个 4x4 矩阵 (64 bytes)
 
-    // 3:创建渲染管线布局(主要说明整个shader中uniform变量的布局)
+    // pipeline layout 把纹理描述符与变换矩阵组成着色器可见的完整资源接口。
     vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo;
     // 设置SetLayout到管线布局配置中
     pipelineLayoutCreateInfo
@@ -66,7 +77,8 @@ VKRenderPipeline::VKRenderPipeline(
     // 4:图形管线创建信息
     vk::GraphicsPipelineCreateInfo graphicsPipelineCreateInfo;
 
-    // 4.1:顶点输入状态创建信息
+    // 常规 Brush 管线读取固定顶点格式；全屏效果着色器可依赖 gl_VertexIndex
+    // 自行生成顶点，此时保持空输入描述，避免无意义的缓冲绑定契约。
     vk::PipelineVertexInputStateCreateInfo pipelineVertexInputStateCreateInfo;
     // 仅在需要顶点输入时绑定属性描述（效果着色器自行生成顶点）
     if ( useVertexInput ) {
@@ -78,7 +90,8 @@ VKRenderPipeline::VKRenderPipeline(
     graphicsPipelineCreateInfo.setPVertexInputState(
         &pipelineVertexInputStateCreateInfo);
 
-    // 4.2:顶点装配状态创建信息
+    // 所有调用方提交彼此独立的三角形，关闭 primitive restart，避免引入索引
+    // 缓冲哨兵值约定。
     vk::PipelineInputAssemblyStateCreateInfo
         pipelineInputAssemblyStateCreateInfo;
     pipelineInputAssemblyStateCreateInfo
@@ -89,11 +102,12 @@ VKRenderPipeline::VKRenderPipeline(
     graphicsPipelineCreateInfo.setPInputAssemblyState(
         &pipelineInputAssemblyStateCreateInfo);
 
-    // 4.3:着色器配置
+    // stages 内部引用 VKShader 持有的 module；模块至少要存活到管线创建返回。
     auto stages = shader.getShaderStageCreateInfos();
     graphicsPipelineCreateInfo.setStages(stages);
 
-    // 4.4.视口配置
+    // 画布纹理会以不同区域和尺寸重复绘制，因此 viewport/scissor 延迟到命令
+    // 录制时设置；固定窗口管线则把传入尺寸烘焙进不可变状态。
     vk::PipelineViewportStateCreateInfo pipelineViewportStateCreateInfo;
     if ( is2DCanvas ) {
         // 2d窗口 - 不固定视口大小
@@ -120,7 +134,8 @@ VKRenderPipeline::VKRenderPipeline(
     graphicsPipelineCreateInfo.setPViewportState(
         &pipelineViewportStateCreateInfo);
 
-    // 4.5 配置动态状态
+    // 只有声明为动态的状态才允许 vkCmdSetViewport/vkCmdSetScissor 覆盖；固定
+    // 管线传入空列表，并且不挂接空的动态状态结构。
     std::vector<vk::DynamicState> dynamicStates;
     if ( is2DCanvas ) {
         dynamicStates.push_back(vk::DynamicState::eViewport);
@@ -135,7 +150,8 @@ VKRenderPipeline::VKRenderPipeline(
         graphicsPipelineCreateInfo.setPDynamicState(&dynamicStateCreateInfo);
     }
 
-    // 4.6:光栅化配置
+    // 二维画布可能因坐标变换改变绕序，关闭剔除；固定窗口内容保留背面剔除。
+    // 当前附件不使用线框或宽线 feature，因此固定为填充和 1 像素线宽。
     vk::PipelineRasterizationStateCreateInfo
         pipelineRasterizationStateCreateInfo;
     pipelineRasterizationStateCreateInfo
@@ -156,7 +172,8 @@ VKRenderPipeline::VKRenderPipeline(
     graphicsPipelineCreateInfo.setPRasterizationState(
         &pipelineRasterizationStateCreateInfo);
 
-    // 4.7:多重采样配置
+    // RenderPass 当前使用单采样附件，管线必须选择 e1 与其兼容；抗锯齿由纹理
+    // 内容和着色器处理，不在此处隐式启用设备 feature。
     vk::PipelineMultisampleStateCreateInfo pipelineMultisampleStateCreateInfo;
     pipelineMultisampleStateCreateInfo
         // 暂时不启用超采样
@@ -166,10 +183,11 @@ VKRenderPipeline::VKRenderPipeline(
     graphicsPipelineCreateInfo.setPMultisampleState(
         &pipelineMultisampleStateCreateInfo);
 
-    // 4.8:深度测试和模板测试
-    // 3d绘制需要，暂时跳过
+    // 当前渲染顺序通过提交顺序与 Alpha 合成表达，不创建深度/模板附件，也不向
+    // GraphicsPipelineCreateInfo 提供对应状态。
 
-    // 4.9:色彩融混
+    // 三种混合契约分别服务非预乘透明、预乘加法和非预乘发光纹理；选择顺序让
+    // alphaWeightedAdditive 成为更具体的模式。
     vk::PipelineColorBlendStateCreateInfo pipelineColorBlendStateCreateInfo;
     // 4.9.1:颜色附件配置
     vk::PipelineColorBlendAttachmentState pipelineColorBlendAttachmentState;
@@ -186,6 +204,8 @@ VKRenderPipeline::VKRenderPipeline(
             .setDstAlphaBlendFactor(vk::BlendFactor::eOne)
             .setAlphaBlendOp(vk::BlendOp::eAdd);
     } else if ( additiveBlend ) {
+        // 预乘来源的 RGB 已包含 Alpha 权重，源和目标均以 One 相加；Alpha 同样
+        // 累积，供只依赖亮度的效果附件使用。
         pipelineColorBlendAttachmentState
             .setSrcColorBlendFactor(vk::BlendFactor::eOne)
             .setDstColorBlendFactor(vk::BlendFactor::eOne)
@@ -194,6 +214,7 @@ VKRenderPipeline::VKRenderPipeline(
             .setDstAlphaBlendFactor(vk::BlendFactor::eOne)
             .setAlphaBlendOp(vk::BlendOp::eAdd);
     } else {
+        // 常规透明使用直通 Alpha 合成，保持项目 UI 与画布纹理的一致语义。
         pipelineColorBlendAttachmentState
             .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
             .setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
@@ -214,11 +235,13 @@ VKRenderPipeline::VKRenderPipeline(
     graphicsPipelineCreateInfo.setPColorBlendState(
         &pipelineColorBlendStateCreateInfo);
 
-    // 4.10:设置renderpass和layout
+    // render pass 决定附件兼容性，pipeline layout 决定描述符与 push constant
+    // 接口；两者都是创建固定管线不可缺少的外部契约。
     graphicsPipelineCreateInfo.setLayout(m_graphicsPipelineLayout);
     graphicsPipelineCreateInfo.setRenderPass(renderPass.getRenderPass());
 
-    // 4.11:最终创建管线
+    // 无异常 Vulkan-Hpp 接口显式返回结果；失败时保留空句柄，让 isValid 和析构
+    // 路径都能安全识别未完成状态。
     auto pipelineCreateResult = logicalDevice.createGraphicsPipeline(
         nullptr, graphicsPipelineCreateInfo);
     if ( pipelineCreateResult.result != vk::Result::eSuccess ) {
@@ -233,7 +256,8 @@ VKRenderPipeline::VKRenderPipeline(
 
 VKRenderPipeline::~VKRenderPipeline()
 {
-    // 销毁图形渲染管线
+    // 按引用依赖逆序释放：pipeline 引用 layout，pipeline layout 又引用
+    // descriptor set layout。共享 descriptor 布局不属于本对象，绝不能在此销毁。
     if ( m_graphicsPipeline ) {
         m_logicalDevice.destroyPipeline(m_graphicsPipeline);
         XDEBUG("Destroyed VK Graphics RenderPipeline.");

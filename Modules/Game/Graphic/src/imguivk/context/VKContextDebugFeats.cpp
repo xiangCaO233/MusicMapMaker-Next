@@ -6,9 +6,10 @@
 
 namespace MMM::Graphic
 {
-/**
- * @brief 启用 Vulkan Debug 扩展
- */
+/// @brief 注册 Vulkan Debug Utils 扩展并配置验证消息回调。
+///
+/// 这里只准备 instance 创建参数；messenger 本身在 instance 创建成功且动态分派器
+/// 可用后建立。当前仅接收 warning 与 error，避免一般信息淹没启动诊断。
 void VKContext::enableVKDebugExt()
 {
     // 1.启用vk的debug工具扩展
@@ -34,12 +35,13 @@ void VKContext::enableVKDebugExt()
             &VKContext::vkDebug_callback));
 }
 
-/**
- * @brief 启用并检查 Validation Layer
- */
+/// @brief 检查 Debug 构建要求的全部 Vulkan Validation Layer 是否可用。
+///
+/// 任一 layer 缺失都会终止初始化，因为后续 instance 创建参数仍会请求完整列表；
+/// 与其依赖 loader 返回不透明错误，这里先给出缺失名称与安装 Vulkan SDK 的提示。
 void VKContext::enableVKValidateLayer()
 {
-    // 1.检查请求的验证层是否可用
+    // Vulkan 的两阶段枚举先取得数量，再由调用方分配连续存储并读取属性。
     uint32_t layerCount;
     auto     res = vk::enumerateInstanceLayerProperties(&layerCount, nullptr);
 
@@ -49,7 +51,7 @@ void VKContext::enableVKValidateLayer()
     res = vk::enumerateInstanceLayerProperties(&layerCount,
                                                availableLayers.data());
 
-    // 2.检查请求到的验证层都能不能用
+    // 按名称逐项匹配而不依赖枚举顺序，确保配置中的每个必需 layer 都存在。
     bool allLayersAvailable = true;
     for ( const char* layerName : m_vkValidationLayers ) {
         bool layerFound = false;
@@ -68,7 +70,7 @@ void VKContext::enableVKValidateLayer()
         }
     }
 
-    // 3.层检查不通过及时释放已初始化的资源并弹出提示
+    // 此时尚未创建 Vulkan instance，失败路径只需关闭 GLFW 并冻结初始化错误。
     if ( !allLayersAvailable ) {
         logStartupDiagnostics("Requested Vulkan validation layer is missing.");
         std::string msg =
