@@ -23,18 +23,18 @@
 | `Modules/Game/Graphic` | 67/67 | 2026-09-12 | 已完成 |
 | `Modules/Runtime` | 6/6 | 2026-09-12 | 已完成 |
 | `Modules/Main` | 7/7 | 2026-09-12 | 已完成 |
+| `Modules/Config` | 52/52 | 2026-09-12 | 已完成 |
 
 全项目 2026-09-09 的旧基线已因 Logic 与 MMM 后续补充而过期，不再作为当前未达标数量。阶段收尾时重新生成逐文件清单。
 
 ## 后续模块顺序
 
-1. `Config`：配置持久化及资源加载。
-2. `Event`、`Game/Common`：跨模块通信与公共基础。
-3. `Network`：协作与网络数据传输。
-4. `Game/UI`：界面与演练服务。
-5. `Game/include`、`Game/src`：Game 聚合入口。
-6. `Updater`、`Log`：更新与诊断辅助。
-7. 模块外自维护的构建、工具和资源脚本。
+1. `Event`、`Game/Common`：跨模块通信与公共基础。
+2. `Network`：协作与网络数据传输。
+3. `Game/UI`：界面与演练服务。
+4. `Game/include`、`Game/src`：Game 聚合入口。
+5. `Updater`、`Log`：更新与诊断辅助。
+6. 模块外自维护的构建、工具和资源脚本。
 
 ## 最近验证
 
@@ -45,6 +45,7 @@
 - `Game/Graphic`：模块复扫 67/67 达标；字体子模块 9/9、平台外观与光标批次 6/6，以及 Vulkan 上下文、诊断、固定渲染资源、渲染器基础资源、主帧热路径、离屏命令录制、离屏资源生命周期、纹理生命周期、主题注册表、原生窗口状态机、三平台窗口适配器、ImGui Vulkan 初始化与内置主题实现和主题插件测试 28/28 达标。最后一项 `VKContextImguiImpl.cpp` 为 2233 行注释、4249 行代码，注释率 34.45%；完整构建及隔离配置下的 `ThemePluginLoaderTest` 1/1 通过。既有 `AsciiFontRasterizerTest` 通过记录继续有效。Win32/macOS 原生分支未在本机实际编译；`MacOSWindowUtils.mm` 与 `MacOSWindowAdapter.mm` 已完成静态差异检查。
 - `Runtime`：模块复扫 6/6 达标；补充共享线程池、退出看门狗、回归测试和构建入口的线程生命周期与同步约束。完整构建及隔离配置下的 `ShutdownWatchdogTest` 1/1 通过。
 - `Main`：模块复扫 7/7 达标；补充启动资源同步、PGO 写出与上传、主程序生命周期、平台构建和 Windows 图标资源说明。纯资源 `logo.svg` 按规则排除，`icon.rc` 作为自维护资源脚本计入；完整构建通过，当前没有 Main 专属 CTest。
+- `Config`：模块复扫 52/52 达标；补充配置值序列化与旧字段迁移、应用路径、翻译缓存、皮肤包事务、皮肤 Lua 解析及对应回归测试的接口和实现约束。完整构建通过；隔离配置下 Config 注册的 19/19 项 CTest 全部通过。
 - 完整构建仍会输出已知的 GCC 16 `stl_algobase.h` LLVM gold plugin 循环未展开提示；该构建问题不属于注释补充任务。
 
 历史流水记录仅保存在 [归档](archive/comment-audit-history-2026-09-09.md)，日常不读取、不追加。
