@@ -6,6 +6,7 @@ namespace MMM::UI
 {
 
 /// @brief 接收 UI 临时状态消息的抽象接口。
+/// @details 生产者只依赖此接口，消息的计时、覆盖和实际渲染由接收端决定。
 class IStatusMessageSink
 {
 public:

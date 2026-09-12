@@ -14,6 +14,32 @@
 namespace MMM::UI::Utils
 {
 
+/// @brief UI Widget 通用反馈与布局辅助实现约定。
+///
+/// 本文件把项目业务 UI 所需的按钮、菜单、选择项、滑块、Tooltip 与 Dock 原生按钮
+/// 反馈集中封装，使悬浮颜色、点击音效和弹出动画保持一致。
+///
+/// 状态约定：
+/// - 动画进度保存在控件所属窗口的 ImGuiStorage；
+/// - 控件 ID 与不同用途盐值异或后形成独立键；
+/// - 只有连续绘制帧才延续动画，重新出现时从初始状态开始；
+/// - 同一帧重复处理使用帧号抑制重复音效；
+/// - 全局反馈禁用时仍维护视觉状态，但不播放声音。
+///
+/// 样式约定：
+/// - 每次 PushStyleColor、PushStyleVar 与 PushFont 都必须在同一调用路径恢复；
+/// - 自绘圆角高亮期间隐藏 ImGui 默认方角 Header 背景；
+/// - Combo 与 Menu 打开时由配对 End helper 恢复弹层样式；
+/// - DrawList 覆盖绘制只修改当前 Item 已提交的顶点或追加局部几何；
+/// - Clay 适配 helper 离开前恢复 ImGui Window WorkRect。
+///
+/// 音效约定：
+/// - hover 只在进入边沿播放；
+/// - click 不与全局鼠标按下/松开反馈重复；
+/// - slider 变化可按百分比映射音高并限频；
+/// - 所有音效必须使用 AudioManager 中已经预加载的资源；
+/// - 本文件热路径不得加载文件、分配音频资源或阻塞线程。
+
 /// @brief Tooltip 动画进度存储键的盐值。
 constexpr ImGuiID TOOLTIP_ANIM_AMOUNT_KEY_SALT = 0x6D6D5421u;
 
@@ -29,15 +55,25 @@ constexpr float TOOLTIP_SLIDE_Y = 4.0f;
 /// @brief 项目纵向滚动区域统一使用的最小滚动条宽度，单位为逻辑像素。
 constexpr float VERTICAL_SCROLLBAR_MIN_WIDTH = 18.0f;
 
+/// @brief 在当前内容区中央绘制工程切换占位提示。
+///
+/// 提示只使用禁用文本样式，不创建交互控件。可用区域小于文本时偏移钳制为零，
+/// 避免游标被移动到 Child 左侧或上方。
+/// @warning UI 热路径：工程过渡期间每帧调用；只测量和绘制文本。
 void renderProjectTransitionPlaceholder()
 {
-    const char*  text      = TR("ui.project.opening").data();
-    const ImVec2 textSize  = ImGui::CalcTextSize(text);
+    // 翻译视图在当前帧有效，立即用于测量和提交文本。
+    const char* text = TR("ui.project.opening").data();
+    // 文本尺寸与当前字体匹配，作为两轴居中依据。
+    const ImVec2 textSize = ImGui::CalcTextSize(text);
+    // 起点和可用区域来自当前 Child，不改变父窗口布局。
     const ImVec2 startPos  = ImGui::GetCursorScreenPos();
     const ImVec2 available = ImGui::GetContentRegionAvail();
+    // max 防止内容不足时产生负居中偏移。
     ImGui::SetCursorScreenPos(
         { startPos.x + std::max(0.0f, available.x - textSize.x) * 0.5f,
           startPos.y + std::max(0.0f, available.y - textSize.y) * 0.5f });
+    // 禁用色表达过渡中的只读状态。
     ImGui::TextDisabled("%s", text);
 }
 
@@ -47,6 +83,7 @@ void renderProjectTransitionPlaceholder()
 /// @return 用于 ImGuiStorage 的状态键。
 ImGuiID makeTooltipStorageKey(ImGuiID id, ImGuiID salt)
 {
+    // XOR 保持计算常量时间，并把不同用途映射到独立键空间。
     return id ^ salt;
 }
 
@@ -55,6 +92,7 @@ ImGuiID makeTooltipStorageKey(ImGuiID id, ImGuiID salt)
 /// @warning UI 热路径：只读取当前内存配置，不执行文件 IO。
 float getUiAnimationTransitionSpeed()
 {
+    // 配置对象按引用链访问，不复制完整 EditorSettings。
     return Config::AppConfig::instance()
         .getEditorSettings()
         .aesthetics.animationTransitionSpeed();
@@ -65,7 +103,9 @@ float getUiAnimationTransitionSpeed()
 /// @return 缓动后的进度。
 float easeOutCubic(float value)
 {
-    const float t   = std::clamp(value, 0.0f, 1.0f);
+    // 先限制线性进度，避免调用方时间步过大造成颜色或位移越界。
+    const float t = std::clamp(value, 0.0f, 1.0f);
+    // 补值三次方形成前快后慢的收敛曲线。
     const float inv = 1.0f - t;
     return 1.0f - inv * inv * inv;
 }
@@ -77,31 +117,38 @@ float easeOutCubic(float value)
 /// @warning UI 热路径：只访问当前窗口 ImGuiStorage，不执行资源加载。
 float updateTooltipAnimationAmount(ImGuiID itemId, bool isHovered)
 {
+    // Tooltip 状态与当前窗口绑定；无 storage 时退化为无动画显隐。
     ImGuiStorage* storage = ImGui::GetStateStorage();
     if ( !storage ) {
         return isHovered ? 1.0f : 0.0f;
     }
 
+    // 进度和最后绘制帧使用不同盐值，避免覆盖控件自身状态。
     const ImGuiID amountKey =
         makeTooltipStorageKey(itemId, TOOLTIP_ANIM_AMOUNT_KEY_SALT);
     const ImGuiID lastFrameKey =
         makeTooltipStorageKey(itemId, TOOLTIP_LAST_FRAME_KEY_SALT);
+    // 只有连续两帧绘制同一控件才延续动画，重新出现时从零开始。
     const int  currentFrame      = ImGui::GetFrameCount();
     const int  lastFrame         = storage->GetInt(lastFrameKey, -1);
     const bool wasDrawnLastFrame = lastFrame == currentFrame - 1;
 
     if ( !isHovered ) {
+        // 离开控件立即复位，下一次悬浮重新播放进入动画。
         storage->SetFloat(amountKey, 0.0f);
         storage->SetInt(lastFrameKey, currentFrame);
         return 0.0f;
     }
 
+    // 首次出现或中断绘制后不复用旧窗口存储里的历史进度。
     float amount =
         wasDrawnLastFrame ? storage->GetFloat(amountKey, 0.0f) : 0.0f;
+    // 负 DeltaTime 防御性钳制，速度由全局审美配置换算。
     const float step = std::max(0.0f, ImGui::GetIO().DeltaTime) *
                        getUiAnimationTransitionSpeed();
     amount           = std::min(1.0f, amount + step);
 
+    // 写回进度与帧号供下一帧连续推进。
     storage->SetFloat(amountKey, amount);
     storage->SetInt(lastFrameKey, currentFrame);
     return amount;
@@ -113,14 +160,18 @@ float updateTooltipAnimationAmount(ImGuiID itemId, bool isHovered)
 /// @return 当前帧滚动偏移。
 float calcScrollingTextOffset(float textWidth, float visibleWidth)
 {
+    // 完整可见文本保持静止，避免无意义的时间查询。
     if ( textWidth <= visibleWidth ) {
         return 0.0f;
     }
 
+    // 额外尾部余量让文字末端不会紧贴裁剪边界。
     const float scrollRange = textWidth - visibleWidth + 40.0f;
-    const float time        = static_cast<float>(ImGui::GetTime());
-    float       t           = std::sin(time * 0.5f - 1.57f) * 0.5f + 0.5f;
-    t                       = std::clamp((t - 0.1f) / 0.8f, 0.0f, 1.0f);
+    // ImGui 单调时间只影响视觉偏移，不修改控件状态。
+    const float time = static_cast<float>(ImGui::GetTime());
+    // 正弦往复曲线经重映射钳制，在两端形成短暂停留。
+    float t = std::sin(time * 0.5f - 1.57f) * 0.5f + 0.5f;
+    t       = std::clamp((t - 0.1f) / 0.8f, 0.0f, 1.0f);
     return t * scrollRange;
 }
 
@@ -135,19 +186,24 @@ void drawScrollingText(std::string_view text, ImVec2 startPos,
                        float availableWidth, float targetHeight,
                        bool centerWhenFits)
 {
+    // 空文本不修改裁剪栈或 DrawList。
     if ( text.empty() ) return;
 
-    const char*  textBegin    = text.data();
-    const char*  textEnd      = textBegin + text.size();
-    const ImVec2 textSize     = ImGui::CalcTextSize(textBegin, textEnd);
-    const float  visibleWidth = std::max(0.0f, availableWidth);
-    const float  offset  = calcScrollingTextOffset(textSize.x, visibleWidth);
-    const float  textH   = ImGui::GetFontSize();
-    const float  offsetY = (targetHeight - textH) * 0.5f;
-    const float  centerOffset = centerWhenFits && textSize.x <= visibleWidth
-                                    ? (visibleWidth - textSize.x) * 0.5f
-                                    : 0.0f;
+    // 显式结束指针支持 string_view 中不以 NUL 结尾的内容。
+    const char*  textBegin = text.data();
+    const char*  textEnd   = textBegin + text.size();
+    const ImVec2 textSize  = ImGui::CalcTextSize(textBegin, textEnd);
+    // 负布局宽度按零处理，保持裁剪矩形合法。
+    const float visibleWidth = std::max(0.0f, availableWidth);
+    const float offset  = calcScrollingTextOffset(textSize.x, visibleWidth);
+    const float textH   = ImGui::GetFontSize();
+    const float offsetY = (targetHeight - textH) * 0.5f;
+    // 只在完整容纳且调用方请求时居中，滚动文本始终从左侧开始。
+    const float centerOffset = centerWhenFits && textSize.x <= visibleWidth
+                                   ? (visibleWidth - textSize.x) * 0.5f
+                                   : 0.0f;
 
+    // 裁剪只包围本次 DrawList 文本提交，结束后立即恢复。
     ImGui::PushClipRect(
         startPos,
         ImVec2(startPos.x + visibleWidth, startPos.y + targetHeight),
@@ -172,15 +228,19 @@ ScrollingSelectableResult renderScrollingSelectableCore(
     const std::string& id, const std::string& text, float width, float height,
     const std::string& tooltip)
 {
-    const ImVec2      cursorPos    = ImGui::GetCursorScreenPos();
+    // 记录提交前游标，透明 Selectable 后在同一矩形上叠加滚动文本。
+    const ImVec2 cursorPos = ImGui::GetCursorScreenPos();
+    // 可见文本不参与 ID，长名称或重复名称由调用方 id 区分。
     const std::string selectableId = "##selectable_" + id;
     const bool        clicked      = ::MMM::UI::FeedbackSelectable(
         selectableId.c_str(), false, 0, ImVec2(width, height));
 
     if ( !tooltip.empty() ) {
+        // renderTooltip 自行检查上一 Item 的悬浮状态。
         renderTooltip(tooltip.c_str());
     }
 
+    // 横向减去固定留白，避免文字贴住 Selectable 右缘。
     drawScrollingText(text, cursorPos, width - 8.0f, height);
     return { .clicked = clicked };
 }
@@ -195,18 +255,23 @@ ScrollingSelectableResult renderScrollingSelectableCore(
 bool renderCollapsingHeader(const char* label, bool* p_state,
                             Clay_BoundingBox r, ImGuiTreeNodeFlags flags)
 {
+    // Clay 使用绝对屏幕坐标，先把 ImGui 游标移动到分配矩形起点。
     ImGui::SetCursorScreenPos({ r.x, r.y });
 
+    // WorkRect 临时限制 Header 宽度，离开函数前必须恢复。
     ImGuiWindow* win         = ImGui::GetCurrentWindow();
     float        savedWRMaxX = win->WorkRect.Max.x;
     win->WorkRect.Max.x      = r.x + r.width;
 
+    // 清零 WindowPadding 防止 Header 超出 Clay 边界。
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0.0f, 0.0f });
 
+    // p_state 只提供首次默认展开标志，返回结果同步回调用方。
     const bool open = ::MMM::UI::FeedbackCollapsingHeader(
         label, flags | (*p_state ? ImGuiTreeNodeFlags_DefaultOpen : 0));
     *p_state = open;
 
+    // 样式与内部窗口工作区在所有正常路径严格恢复。
     ImGui::PopStyleVar();
     win->WorkRect.Max.x = savedWRMaxX;
 
@@ -226,26 +291,31 @@ bool renderScrollingCollapsingHeader(const std::string& id,
                                      Clay_BoundingBox   r,
                                      ImGuiTreeNodeFlags flags)
 {
+    // 标题交互区域与 Clay 矩形起点对齐。
     ImGui::SetCursorScreenPos({ r.x, r.y });
 
+    // 保存并收窄 WorkRect，防止内部 Header 扩展到布局外。
     ImGuiWindow* win         = ImGui::GetCurrentWindow();
     float        savedWRMaxX = win->WorkRect.Max.x;
     win->WorkRect.Max.x      = r.x + r.width;
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { 0.0f, 0.0f });
 
+    // Header 不绘制内置文本，稳定 id 与后续自绘可见文本分离。
     const std::string hiddenLabel = "##" + id;
     const bool        open        = ::MMM::UI::FeedbackCollapsingHeader(
         hiddenLabel.c_str(),
         flags | (*p_state ? ImGuiTreeNodeFlags_DefaultOpen : 0));
     *p_state = open;
 
+    // 在恢复 WorkRect 前后均保留实际 Item 矩形用于覆盖文本。
     const ImVec2 itemMin = ImGui::GetItemRectMin();
     const ImVec2 itemMax = ImGui::GetItemRectMax();
 
     ImGui::PopStyleVar();
     win->WorkRect.Max.x = savedWRMaxX;
 
+    // 可见文字从展开箭头之后开始，并扣除右侧 frame padding。
     const ImGuiStyle& style        = ImGui::GetStyle();
     const float       targetHeight = std::max(itemMax.y - itemMin.y, r.height);
     const float       arrowWidth   = ImGui::GetTreeNodeToLabelSpacing();
@@ -254,6 +324,7 @@ bool renderScrollingCollapsingHeader(const std::string& id,
     const float       textAvailableWidth =
         std::max(0.0f, itemMax.x - textStartPos.x - textPadding);
 
+    // 文本由 DrawList 裁剪绘制，过长时自动往复滚动。
     drawScrollingText(text, textStartPos, textAvailableWidth, targetHeight);
     return open;
 }
@@ -273,37 +344,46 @@ ScrollingTreeNodeResult renderScrollingTreeNodeCore(const std::string& id,
                                                     bool               isLeaf,
                                                     const std::string& tooltip)
 {
-    const ImVec2      cursorPos     = ImGui::GetCursorScreenPos();
-    const ImGuiStyle& style         = ImGui::GetStyle();
-    const float       targetHeight  = std::max(height, ImGui::GetFrameHeight());
-    const float       framePaddingY = std::max(
+    // 保存原始游标，TreeNode 提交后在同一行上覆盖可见滚动文本。
+    const ImVec2      cursorPos    = ImGui::GetCursorScreenPos();
+    const ImGuiStyle& style        = ImGui::GetStyle();
+    const float       targetHeight = std::max(height, ImGui::GetFrameHeight());
+    // 纵向 padding 至少沿用主题，并能把文字居中到调用方目标高度。
+    const float framePaddingY = std::max(
         style.FramePadding.y, (targetHeight - ImGui::GetFontSize()) * 0.5f);
 
+    // 非叶节点仅通过箭头或双击展开，整行仍作为选择命中区域。
     ImGuiTreeNodeFlags flags =
         ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_OpenOnDoubleClick |
         ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_FramePadding;
     if ( isLeaf ) {
+        // 叶节点显示叶标志且打开时不压入 Tree 栈，调用方无需 TreePop。
         flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
     }
 
+    // 允许后续 DrawList 文本与空标签 TreeNode 的矩形重叠。
     ImGui::SetNextItemAllowOverlap();
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                         ImVec2(style.FramePadding.x, framePaddingY));
     const bool open      = ImGui::TreeNodeEx(id.c_str(), flags, "");
     const bool isHovered = ImGui::IsItemHovered();
+    // 展开箭头点击不算业务选择点击，避免一次操作同时切换与选择。
     const bool isClicked =
         ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen();
     ImGui::PopStyleVar();
 
     if ( !tooltip.empty() && isHovered ) {
+        // Tooltip 只在当前 TreeNode 悬浮时创建。
         renderTooltip(tooltip.c_str());
     }
 
-    const float  arrowWidth         = ImGui::GetTreeNodeToLabelSpacing();
+    const float arrowWidth = ImGui::GetTreeNodeToLabelSpacing();
+    // 叶节点无需为展开箭头预留 gutter，非叶节点扣除箭头宽度。
     const float  treeGutterWidth    = isLeaf ? 0.0f : arrowWidth;
     const float  textAvailableWidth = width - treeGutterWidth - 8.0f;
     const ImVec2 textStartPos = { cursorPos.x + treeGutterWidth, cursorPos.y };
 
+    // 长名称在可用文字区域内裁剪滚动，不覆盖展开箭头。
     drawScrollingText(text, textStartPos, textAvailableWidth, targetHeight);
     return { .open = open, .clicked = isClicked };
 }
@@ -313,20 +393,27 @@ ScrollingTreeNodeResult renderScrollingTreeNodeCore(const std::string& id,
 /// @warning UI 热路径：只写入 ImGui 下一窗口状态。
 void prepareCenteredModalWindow(ImVec2 desiredSize)
 {
+    // 模态始终绑定主视口，避免多视口环境下出现在无关窗口。
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowViewport(viewport->ID);
     ImGui::SetNextWindowPos(
         viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
 
+    // 边缘留白随 DPI 增长，并保证至少 16 像素。
     const float dpiScale =
         Config::AppConfig::instance().getWindowContentScale();
-    const float margin      = std::max(16.0f, 28.0f * dpiScale);
-    const auto  maxAxisSize = [margin](float workSize, float preferredMin) {
-        const float insetSize   = std::max(1.0f, workSize - margin * 2.0f);
-        const float clampedMin  = std::min(preferredMin, workSize);
+    const float margin = std::max(16.0f, 28.0f * dpiScale);
+    /// 计算单轴可用上限，同时兼顾边距、首选最小尺寸和实际工作区。
+    const auto maxAxisSize = [margin](float workSize, float preferredMin) {
+        // insetSize 是扣除两侧边距后的理想上限，最小保持一像素。
+        const float insetSize = std::max(1.0f, workSize - margin * 2.0f);
+        // 首选最小值自身不能超过当前视口工作区。
+        const float clampedMin = std::min(preferredMin, workSize);
+        // 小视口优先保证可用尺寸，大视口保留边缘留白。
         const float clampedSize = std::max(clampedMin, insetSize);
         return std::max(1.0f, std::min(clampedSize, workSize));
     };
+    // 两轴独立计算，支持窄屏或横向多视口布局。
     const ImVec2 maxWindowSize{
         maxAxisSize(viewport->WorkSize.x, 160.0f * dpiScale),
         maxAxisSize(viewport->WorkSize.y, 160.0f * dpiScale),
@@ -334,10 +421,13 @@ void prepareCenteredModalWindow(ImVec2 desiredSize)
     ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), maxWindowSize);
 
     if ( desiredSize.x > 0.0f || desiredSize.y > 0.0f ) {
+        // 零或负轴表示调用方不强制该方向尺寸。
         if ( desiredSize.x > 0.0f ) {
+            // 期望宽度不能超过前面计算的视口安全上限。
             desiredSize.x = std::min(desiredSize.x, maxWindowSize.x);
         }
         if ( desiredSize.y > 0.0f ) {
+            // 高度采用相同钳制规则。
             desiredSize.y = std::min(desiredSize.y, maxWindowSize.y);
         }
         ImGui::SetNextWindowSize(desiredSize, ImGuiCond_Always);
@@ -1232,7 +1322,7 @@ void renderDockTabCloseHover(ImGuiWindow* window, ImGuiID closeButtonId)
     }
 
     const bool  centralTab = (tab->Flags & (ImGuiTabItemFlags_Leading |
-                                           ImGuiTabItemFlags_Trailing)) == 0;
+                                            ImGuiTabItemFlags_Trailing)) == 0;
     const float tabX =
         tabBar->BarRect.Min.x +
         (centralTab ? std::trunc(tab->Offset - tabBar->ScrollingAnim)
@@ -1725,18 +1815,27 @@ bool FeedbackCombo(const char* label, int* currentItem,
 }
 
 /// @brief 绘制带统一反馈的 ImGui Float 滑块。
+/// @param label 可见文本和 ImGui ID。
+/// @param value 当前浮点值指针。
+/// @param minValue 滑块最小值。
+/// @param maxValue 滑块最大值。
+/// @param format 数值显示格式。
+/// @param flags ImGui 滑块标志。
+/// @return 值在当前帧发生变化时返回 true。
 /// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、
 /// 样式栈操作和已预加载 SFX pool 的即时触发。
 bool FeedbackSliderFloat(const char* label, float* value, float minValue,
                          float maxValue, const char* format,
                          ImGuiSliderFlags flags)
 {
+    // 悬浮动画、Frame/Grab 颜色和滑块音高都复用同一稳定 ID。
     const ImGuiID id               = ImGui::GetID(label);
     const float   hoverAmount      = updateButtonHoverAmount(id);
     const int     pushedColorCount = pushAnimatedFrameColors(hoverAmount, true);
     const bool    changed =
         ImGui::SliderFloat(label, value, minValue, maxValue, format, flags);
-    const bool  clicked = isLastItemFeedbackActivated();
+    const bool clicked = isLastItemFeedbackActivated();
+    // 当前百分比映射到统一滑块音效音高。
     const float percent = calcSliderPercent(*value, minValue, maxValue);
     ImGui::PopStyleColor(pushedColorCount);
     playSliderChangeFeedback(id, changed, percent);
@@ -1745,11 +1844,19 @@ bool FeedbackSliderFloat(const char* label, float* value, float minValue,
 }
 
 /// @brief 绘制带统一反馈的 ImGui Int 滑块。
+/// @param label 可见文本和 ImGui ID。
+/// @param value 当前整数值指针。
+/// @param minValue 滑块最小值。
+/// @param maxValue 滑块最大值。
+/// @param format 数值显示格式。
+/// @param flags ImGui 滑块标志。
+/// @return 值在当前帧发生变化时返回 true。
 /// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、
 /// 样式栈操作和已预加载 SFX pool 的即时触发。
 bool FeedbackSliderInt(const char* label, int* value, int minValue,
                        int maxValue, const char* format, ImGuiSliderFlags flags)
 {
+    // 整数范围转成 float 百分比仅用于音效，不改变控件数值语义。
     const ImGuiID id               = ImGui::GetID(label);
     const float   hoverAmount      = updateButtonHoverAmount(id);
     const int     pushedColorCount = pushAnimatedFrameColors(hoverAmount, true);
@@ -1766,12 +1873,21 @@ bool FeedbackSliderInt(const char* label, int* value, int minValue,
 }
 
 /// @brief 绘制带统一反馈的 ImGui 垂直 Float 滑块。
+/// @param label 可见文本和 ImGui ID。
+/// @param size 垂直滑块尺寸。
+/// @param value 当前浮点值指针。
+/// @param minValue 滑块最小值。
+/// @param maxValue 滑块最大值。
+/// @param format 数值显示格式。
+/// @param flags ImGui 滑块标志。
+/// @return 值在当前帧发生变化时返回 true。
 /// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、
 /// 样式栈操作和已预加载 SFX pool 的即时触发。
 bool FeedbackVSliderFloat(const char* label, const ImVec2& size, float* value,
                           float minValue, float maxValue, const char* format,
                           ImGuiSliderFlags flags)
 {
+    // 垂直控件沿用与水平滑块相同的颜色动画和音高反馈。
     const ImGuiID id               = ImGui::GetID(label);
     const float   hoverAmount      = updateButtonHoverAmount(id);
     const int     pushedColorCount = pushAnimatedFrameColors(hoverAmount, true);
@@ -1786,12 +1902,21 @@ bool FeedbackVSliderFloat(const char* label, const ImVec2& size, float* value,
 }
 
 /// @brief 绘制带统一反馈的 ImGui Float 拖拽输入。
+/// @param label 可见文本和 ImGui ID。
+/// @param value 当前浮点值指针。
+/// @param speed 每像素拖动步长。
+/// @param minValue 最小值。
+/// @param maxValue 最大值。
+/// @param format 数值显示格式。
+/// @param flags ImGui 滑块标志。
+/// @return 值在当前帧发生变化时返回 true。
 /// @warning UI 热路径：每帧拖拽输入绘制路径调用，只做 ImGui 状态读写、
 /// 样式栈操作和已预加载 SFX pool 的即时触发。
 bool FeedbackDragFloat(const char* label, float* value, float speed,
                        float minValue, float maxValue, const char* format,
                        ImGuiSliderFlags flags)
 {
+    // Drag 控件只使用 Frame 颜色，不播放连续滑块音高变化。
     const ImGuiID id            = ImGui::GetID(label);
     const float   hoverAmount   = updateButtonHoverAmount(id);
     const int  pushedColorCount = pushAnimatedFrameColors(hoverAmount, false);
@@ -1804,6 +1929,14 @@ bool FeedbackDragFloat(const char* label, float* value, float speed,
 }
 
 /// @brief 绘制带统一反馈的 ImGui 二维 Int 拖拽输入。
+/// @param label 可见文本和 ImGui ID。
+/// @param values 两个整数值组成的数组。
+/// @param speed 每像素拖动步长。
+/// @param minValue 最小值。
+/// @param maxValue 最大值。
+/// @param format 数值显示格式。
+/// @param flags ImGui 滑块标志。
+/// @return 任一分量在当前帧变化时返回 true。
 /// @warning UI 热路径：每帧拖拽输入绘制路径调用，只做 ImGui 状态读写、
 /// 样式栈操作和已预加载 SFX pool 的即时触发。
 bool FeedbackDragInt2(const char* label, int values[2], float speed,
@@ -1822,6 +1955,15 @@ bool FeedbackDragInt2(const char* label, int values[2], float speed,
 }
 
 /// @brief 绘制带统一反馈的 ImGui 标量拖拽输入。
+/// @param label 可见文本和 ImGui ID。
+/// @param dataType 标量的 ImGui 数据类型。
+/// @param value 当前值的无类型指针。
+/// @param speed 每像素拖动步长。
+/// @param minValue 可选最小值指针。
+/// @param maxValue 可选最大值指针。
+/// @param format 数值显示格式。
+/// @param flags ImGui 滑块标志。
+/// @return 值在当前帧发生变化时返回 true。
 /// @warning UI 热路径：每帧拖拽输入绘制路径调用，只做 ImGui 状态读写、
 /// 样式栈操作和已预加载 SFX pool 的即时触发。
 bool FeedbackDragScalar(const char* label, ImGuiDataType dataType, void* value,

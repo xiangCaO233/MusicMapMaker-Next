@@ -13,12 +13,21 @@ class AudioBuffer;
 namespace MMM::UI
 {
 
+/// @brief 展示活动音轨双声道波形包络和均衡器预览的 UI 视图。
+/// @details 视图持有降采样后的全局缓存与当前视野切片；音频缓冲由该对象独占，
+/// GraphicEqualizer 与音频管理器共享生命周期。
 class AudioWaveformView : public IUIView
 {
 public:
+    /// @brief 创建具名波形视图。
+    /// @param name UIManager 注册和查找视图时使用的名称。
     AudioWaveformView(const std::string& name);
+    /// @brief 在实现文件中释放需要完整类型的音频缓冲。
     ~AudioWaveformView() override;
 
+    /// @brief 绘制活动音轨的当前视野波形。
+    /// @param sourceManager 当前 UI 管理器。
+    /// @warning UI 热路径：窗口可见时每帧调用，重计算必须由缓存状态约束。
     void update(UIManager* sourceManager) override;
 
 private:
@@ -29,26 +38,39 @@ private:
     /// @param waveformVisualOffset 波形采样内容使用的专用偏移，单位为秒。
     void updateEnvelopes(double visualTime, double duration, double speed,
                          float waveformVisualOffset);
+    /// @brief 将预览均衡器状态同步到波形处理链。
     void syncEQ();
-    void fullRecalculate();  // 新增：全局重计算
+    /// @brief 低频重建整段音频的固定分辨率包络缓存。
+    /// @warning 可能遍历完整音频，仅允许在音轨或均衡器状态变化后调用。
+    void fullRecalculate();
 
+    /// @brief 与音频预览共享的均衡器实例，用于生成处理后波形。
     std::shared_ptr<ice::GraphicEqualizer> m_previewEQ;
-    std::unique_ptr<ice::AudioBuffer>      m_processBuffer;
-    std::unique_ptr<ice::AudioBuffer>      m_rawBuffer;
+    /// @brief 独占的均衡器处理结果缓冲。
+    std::unique_ptr<ice::AudioBuffer> m_processBuffer;
+    /// @brief 独占的原始音频采样缓冲。
+    std::unique_ptr<ice::AudioBuffer> m_rawBuffer;
 
-    // 全局缓存数据 (分辨率固定，例如每秒 100 个点)
+    /// @brief 固定时间分辨率的左声道最小值和最大值缓存。
     std::vector<float> m_cachedMinL, m_cachedMaxL;
+    /// @brief 固定时间分辨率的右声道最小值和最大值缓存。
     std::vector<float> m_cachedMinR, m_cachedMaxR;
-    double             m_cachePointsPerSecond{ 100.0 };
-    bool               m_isCalculating{ false };
+    /// @brief 全局包络缓存每秒保存的采样点数。
+    double m_cachePointsPerSecond{ 100.0 };
+    /// @brief 防止同一缓存重计算流程重入的状态标记。
+    bool m_isCalculating{ false };
 
-    // 当前视图渲染数据
+    /// @brief 当前视野各包络点对应的时间坐标。
     std::vector<double> m_times;
-    std::vector<double> m_viewMinL, m_maxEnvelopeL;  // 保持变量名兼容或重命名
+    /// @brief 当前视野的左声道最小值与最大值。
+    std::vector<double> m_viewMinL, m_maxEnvelopeL;
+    /// @brief 当前视野的右声道最小值与最大值。
     std::vector<double> m_viewMinR, m_maxEnvelopeR;
 
+    /// @brief 波形时间轴缩放倍率。
     float m_zoom{ 1.0f };
-    int   m_samplePoints{ 2000 };
+    /// @brief 当前视野期望生成的包络点上限。
+    int m_samplePoints{ 2000 };
 };
 
 }  // namespace MMM::UI

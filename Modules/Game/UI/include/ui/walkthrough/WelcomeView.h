@@ -22,6 +22,7 @@ public:
     /// @brief 在同一欢迎标签页进入主题，保留服务中的学习进度。
     void showTopic(std::size_t topicIndex);
     /// @brief 查询当前是否显示主题目录。
+    /// @return 未选择具体主题时返回 true。
     bool showingHome() const { return !m_topic.has_value(); }
     /// @brief 绘制主题目录、内嵌演练和固定页脚。
     /// @warning 每个可见帧调用；禁止磁盘扫描，配置写入只响应用户切换选项。
@@ -29,6 +30,7 @@ public:
 
 private:
     /// @brief 绘制跟随皮肤配色的主题卡片目录。
+    /// @param manager 提供演练目录、进度和服务错误的 UI 管理器。
     /// @warning 可见首页每帧调用，仅访问已加载主题和进度。
     void                       renderHome(UIManager* manager);
     std::optional<std::size_t> m_topic;  ///< 当前主题；空值表示欢迎首页。

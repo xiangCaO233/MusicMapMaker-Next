@@ -10,10 +10,14 @@ namespace MMM::UI
 namespace
 {
 /// @brief 打开新建项目向导动作。
+/// @details 菜单栈内只设置 pending 标志，窗口查找和打开延迟到 renderDeferred，
+/// 避免在 ImGui 菜单渲染过程中改变顶层窗口状态。
 class OpenNewProjectWizardAction final : public IMainMenuItemActionHandler
 {
 public:
     /// @brief 标记下一次延迟渲染打开新建项目向导。
+    /// @param context 统一菜单上下文。
+    /// @param activation 激活来源，不改变延迟语义。
     void execute(MainMenuContext&              context,
                  const MainMenuItemActivation& activation) override
     {
@@ -28,6 +32,7 @@ public:
     /// @warning UI 热路径：每帧只读取 ImGui 按键状态。
     bool handleShortcut(MainMenuContext& context) override
     {
+        // Ctrl+Shift+N 与新建谱面的 Ctrl+N 明确区分。
         (void)context;
         ImGuiIO& io = ImGui::GetIO();
         if ( io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_N) ) {
@@ -38,9 +43,12 @@ public:
     }
 
     /// @brief 在菜单栏窗口外打开新建项目向导。
+    /// @param context 提供可选 UIManager。
     /// @warning UI 热路径：每帧只检查布尔标志，实际打开仅由用户点击触发。
+    /// @note pending=false 时不查询视图注册表。
     void renderDeferred(MainMenuContext& context) override
     {
+        // 服务暂不可用时保留 pending，后续帧仍可完成请求。
         if ( !m_pendingOpen ) return;
         if ( !context.sourceManager ) return;
 
@@ -48,6 +56,7 @@ public:
             "NewProjectWizard");
         if ( wizard ) {
             wizard->open();
+            // 只有实际找到并打开向导后才消费请求。
             m_pendingOpen = false;
         }
     }
@@ -59,6 +68,8 @@ private:
 }  // namespace
 
 /// @brief 创建打开新建项目向导的菜单项业务处理器。
+/// @return 独占所有权并持有延迟打开标志的处理器。
+/// @warning 处理器不拥有 NewProjectWizard。
 std::unique_ptr<IMainMenuItemActionHandler> createOpenNewProjectWizardAction()
 {
     return std::make_unique<OpenNewProjectWizardAction>();

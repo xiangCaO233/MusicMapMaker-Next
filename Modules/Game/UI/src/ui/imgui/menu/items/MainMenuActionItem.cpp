@@ -12,6 +12,7 @@ namespace MMM::UI
 /// @param textKind 菜单项文本来源。
 /// @param shortcut 菜单项默认快捷键提示，可为空。
 /// @param actionHandler 菜单项业务处理器。
+/// @note 图标与快捷键均为非拥有指针，调用方须保证其静态或更长生命周期。
 MainMenuActionItem::MainMenuActionItem(
     const char* icon, std::string label, MainMenuItemTextKind textKind,
     const char*                                 shortcut,
@@ -37,6 +38,7 @@ void MainMenuActionItem::update(MainMenuContext& context)
 /// @brief 绘制菜单项并在点击时执行自身 action handler。
 /// @param context 单帧主菜单上下文。
 /// @warning UI 热路径：仅在所属菜单展开时执行。
+/// @note 业务处理器可按当前上下文覆盖默认图标与快捷键提示。
 void MainMenuActionItem::render(MainMenuContext& context)
 {
     const bool enabled =
@@ -46,6 +48,7 @@ void MainMenuActionItem::render(MainMenuContext& context)
     const char* shortcut = m_actionHandler
                                ? m_actionHandler->shortcut(context, m_shortcut)
                                : m_shortcut;
+    // 无处理器的条目仍可绘制为静态项，但不会响应激活。
     if ( renderMainMenuIconItem(icon, resolveLabel(), shortcut, enabled) &&
          m_actionHandler ) {
         m_actionHandler->execute(context, MainMenuItemActivation{});
@@ -76,6 +79,7 @@ void MainMenuActionItem::renderDeferred(MainMenuContext& context)
 
 /// @brief 获取当前帧的显示文本。
 /// @return 当前帧应显示的菜单项文本。
+/// @warning UI 热路径：翻译结果只保证当前翻译存储生命周期内有效。
 const char* MainMenuActionItem::resolveLabel() const
 {
     if ( m_textKind == MainMenuItemTextKind::Literal ) {

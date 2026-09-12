@@ -7,6 +7,8 @@
 namespace MMM::UI
 {
 
+/// @name 视图菜单开关动作工厂
+/// @{
 /// @brief 创建时间线窗口显示开关处理器。
 std::unique_ptr<IMainMenuToggleItemActionHandler>
 createTimelineWindowToggleAction();
@@ -30,5 +32,6 @@ createFixedToolWindowToggleAction();
 /// @brief 创建管理器标签显示开关处理器。
 std::unique_ptr<IMainMenuToggleItemActionHandler>
 createManagerLabelsToggleAction();
+/// @}
 
 }  // namespace MMM::UI

@@ -6,12 +6,17 @@
  *
  * 本文件保存 FontAwesome 6 图标的 UTF-8 字符串常量，避免在业务代码中散落
  * 硬编码十六进制字符串。
+ * 常量均为编译期字符串指针，不拥有字体资源；实际字形是否可见取决于当前
+ * 皮肤合并的图标字体覆盖范围。
  */
 
 namespace MMM::UI
 {
 
-// --- 通用 UI 图标 ---
+/// @name 通用 UI 图标
+/// @brief 文件、导航、保存和协作入口共用的基础图标。
+/// @details 常量内容是 Nerd Font/FontAwesome UTF-8 编码，调用方直接与标签拼接。
+/// @{
 constexpr const char* ICON_MMM_DESKTOP = "\xef\x84\x88";  ///< \uf108 desktop
 constexpr const char* ICON_MMM_EYE     = "\xef\x81\xae";  ///< \uf06e eye
 constexpr const char* ICON_MMM_FOLDER  = "\xef\x81\xbb";  ///< \uf07b folder
@@ -35,13 +40,20 @@ constexpr const char* ICON_MMM_FILE_ADD =
     "\xef\x8c\x99";  ///< \uf319 file-circle-plus
 constexpr const char* ICON_MMM_LINK  = "\xef\x83\x81";  ///< \uf0c1 link
 constexpr const char* ICON_MMM_USERS = "\xef\x83\x80";  ///< \uf0c0 users
+/// @}
 
-// --- 播放控制图标 ---
+/// @name 播放控制图标
+/// @brief 播放、暂停和停止按钮使用的传输控制符号。
+/// @{
 constexpr const char* ICON_MMM_PLAY  = "\xef\x81\x8b";  ///< \uf04b play
 constexpr const char* ICON_MMM_PAUSE = "\xef\x81\x8c";  ///< \uf04c pause
 constexpr const char* ICON_MMM_STOP  = "\xef\x81\x8d";  ///< \uf04d stop
+/// @}
 
-// --- 编辑工具图标 ---
+/// @name 编辑工具图标
+/// @brief 画布工具、剪贴板命令及编辑模式入口使用的符号。
+/// @details 相同字形可在不同语义按钮复用，但常量名保留业务含义。
+/// @{
 constexpr const char* ICON_MMM_MOUSE = "\xef\xa3\x8c";  ///< \uf8cc mouse
 constexpr const char* ICON_MMM_MOUSE_POINTER =
     "\xef\x89\x85";  ///< \uf245 mouse-pointer (Move Tool)
@@ -80,8 +92,12 @@ constexpr const char* ICON_MMM_ARROW_DOWN =
     "\xef\x81\xa3";  ///< \uf063 arrow-down
 constexpr const char* ICON_MMM_BARS =
     "\xef\x83\x89";  ///< \uf0c9 bars (for beat divisor)
+/// @}
 
-// --- 音频图标 ---
+/// @name 音频图标
+/// @brief 音量等级、静音、音效与视觉效果入口使用的符号。
+/// @note MUTE 当前回退到 volume-off 字形，业务代码仍使用独立语义名称。
+/// @{
 constexpr const char* ICON_MMM_VOLUME_HIGH =
     "\xef\x80\xa8";  ///< \uf028 volume-high
 constexpr const char* ICON_MMM_VOLUME_LOW =
@@ -94,8 +110,11 @@ constexpr const char* ICON_MMM_VOLUME_MUTE =
 constexpr const char* ICON_MMM_HIT_SFX = "\xef\x80\x81";  ///< \uf001 music
 constexpr const char* ICON_MMM_VISUAL_EFFECTS =
     "\xef\x83\xa7";  ///< \uf0e7 bolt
+/// @}
 
-// --- 窗口控制图标 ---
+/// @name 窗口控制图标
+/// @brief 自定义标题栏最小化、最大化、还原和关闭操作的符号。
+/// @{
 constexpr const char* ICON_MMM_MINIMIZE =
     "\xef\x8b\x91";  ///< \uf2d1 window-minimize
 constexpr const char* ICON_MMM_MAXIMIZE =
@@ -104,11 +123,15 @@ constexpr const char* ICON_MMM_RESTORE =
     "\xef\x8b\x92";  ///< \uf2d2 window-restore
 constexpr const char* ICON_MMM_CLOSE =
     "\xef\x80\x8d";  ///< \uf00d xmark / close
+/// @}
 
-// --- 帮助与更新图标 ---
+/// @name 帮助与更新图标
+/// @brief 下载更新和信息提示入口使用的符号。
+/// @{
 constexpr const char* ICON_MMM_DOWNLOAD =
     "\xef\x8C\x81";  ///< \uf381 cloud-arrow-down
 constexpr const char* ICON_MMM_INFO_CIRCLE =
     "\xef\x81\x9a";  ///< \uf05a circle-info
+/// @}
 
 }  // namespace MMM::UI

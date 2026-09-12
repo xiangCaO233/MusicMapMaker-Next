@@ -6,6 +6,7 @@ namespace MMM::UI
 /// @brief 判断是否应启动新的 BPM 后台自动测量请求。
 /// @param backgroundMeasurementActive 当前是否已有后台自动测量请求。
 /// @return 没有后台自动测量任务时返回 true，防止重复点击改变窗口可见状态。
+/// @note 本策略只裁决请求去重，不负责管理测量任务生命周期。
 constexpr bool shouldStartBpmAutomaticMeasurement(
     bool backgroundMeasurementActive)
 {

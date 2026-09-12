@@ -7,6 +7,7 @@
 namespace MMM::UI
 {
 
+/// @name 工具菜单动作工厂
 /// @brief 创建打开 BPM 测量工具动作处理器。
 std::unique_ptr<IMainMenuItemActionHandler> createOpenBpmMeasurementAction();
 

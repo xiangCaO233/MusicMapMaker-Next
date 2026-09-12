@@ -30,9 +30,12 @@ struct ProjectOpenProgressState {
 /// @brief 开始新的项目打开进度，并保留已先到达的进度事件。
 /// @param state 待更新状态。
 /// @param detail 初始项目或谱面包名称。
+/// @note 若进度事件先于开始事件到达，active 已为 true，此函数不会将较新的
+/// 阶段和百分比重置为初始值。
 inline void beginProjectOpenProgress(ProjectOpenProgressState& state,
                                      std::string               detail)
 {
+    // 跨线程事件投递可能重排，已有活动快照代表更具体的进度已经生效。
     if ( state.active ) return;
     state.active   = true;
     state.stage    = Event::ProjectOpenProgressStage::Validating;
@@ -45,6 +48,7 @@ inline void beginProjectOpenProgress(ProjectOpenProgressState& state,
 /// @param stage 当前加载阶段。
 /// @param fraction 当前总进度。
 /// @param detail 当前处理对象。
+/// @note 非有限进度按 0 处理，其余值限制到 UI 进度条接受的闭区间。
 inline void applyProjectOpenProgress(ProjectOpenProgressState&       state,
                                      Event::ProjectOpenProgressStage stage,
                                      float fraction, std::string detail)
@@ -58,6 +62,7 @@ inline void applyProjectOpenProgress(ProjectOpenProgressState&       state,
 
 /// @brief 结束项目打开进度并清理当前处理对象。
 /// @param state 待更新状态。
+/// @note 保留完成比例便于调用方在同一帧读取终态，但 detail 不再引用旧项目。
 inline void finishProjectOpenProgress(ProjectOpenProgressState& state)
 {
     state.active   = false;

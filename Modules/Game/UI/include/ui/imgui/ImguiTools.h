@@ -6,15 +6,22 @@
 namespace MMM::UI
 {
 
+/// @brief WidgetSizeHelper 支持估算的基础 ImGui 控件类别。
 enum class ImGuiWidget { Button, Slider, InputText, Checkbox, TextOnly };
 
+/// @brief 根据当前字体和样式估算控件首选尺寸的无状态辅助类。
+/// @note 结果用于布局建议，不替代 ImGui 在实际窗口中的最终尺寸裁决。
 struct WidgetSizeHelper {
-    /**
-     * @brief 计算控件在当前 ImGui 样式下的最佳尺寸 (Preferred Size)
-     */
+    /// @brief 计算控件在当前 ImGui 样式下的首选尺寸。
+    /// @param type 待估算的控件类别。
+    /// @param label 控件可见标签；无文本控件可以留空。
+    /// @param imageSize 预留图片尺寸参数，当前基础控件估算不使用。
+    /// @return 建议尺寸；未知类别返回零尺寸。
+    /// @warning UI 热路径辅助函数：只读取当前 ImGui 样式和字体。
     static ImVec2 Calculate(ImGuiWidget type, const std::string& label = "",
                             ImVec2 imageSize = { 0, 0 })
     {
+        // imageSize 为兼容既有调用保留，图片缩放统一由 ImageFit 处理。
         ImGuiStyle& style    = ImGui::GetStyle();
         float       fontSize = ImGui::GetFontSize();
 
@@ -52,9 +59,14 @@ struct WidgetSizeHelper {
         }
     }
 
-    // 专门处理图片，保持比例
+    /// @brief 按目标高度等比缩放图片尺寸。
+    /// @param originalSize 图片原始宽高。
+    /// @param targetHeight 目标显示高度。
+    /// @return 保持原宽高比的目标尺寸。
+    /// @pre originalSize.y 必须大于零。
     static ImVec2 ImageFit(ImVec2 originalSize, float targetHeight)
     {
+        // 仅使用宽高比，不裁剪或限制目标宽度。
         float ratio = originalSize.x / originalSize.y;
         return ImVec2(targetHeight * ratio, targetHeight);
     }
