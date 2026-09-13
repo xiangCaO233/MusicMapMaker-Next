@@ -14,8 +14,9 @@ namespace MMM::Runtime
 
 class ShutdownWatchdog;
 
-/// @brief 应用级共享线程池。
-/// 统一承载音频解码、后台计算、渲染命令录制和逻辑任务。
+/// @brief 应用级后台线程池管理器。
+/// 通用池承载音频解码、后台计算、渲染命令录制和逻辑任务；独立文件池承载
+/// 会阻塞或长时间编码的文件事务，避免 UI 每帧等待的短任务排在文件任务之后。
 class AppThreadPool final
 {
 public:
@@ -46,6 +47,12 @@ public:
     /// @return 已初始化时返回线程池指针，否则返回 nullptr。
     ice::ThreadPool* get() const;
 
+    /// @brief 获取与通用任务隔离的文件线程池。
+    /// @return 已初始化时返回文件线程池指针，否则返回 nullptr。
+    /// @warning 只用于低频文件编码、哈希与写入；任务不得访问 UI
+    /// 或可变会话状态。
+    ice::ThreadPool* getFileThreadPool() const;
+
     /// @brief 获取创建线程池时请求的工作线程数量。
     /// @return 请求的工作线程数量；未初始化时返回 0。
     int32_t requestedWorkerCount() const;
@@ -61,6 +68,9 @@ private:
 
     /// @brief IonCachyEngine 线程池实例。
     std::unique_ptr<ice::ThreadPool> m_threadPool;
+
+    /// @brief 与 UI 并行准备任务隔离的文件线程池。
+    std::unique_ptr<ice::ThreadPool> m_fileThreadPool;
 
     /// @brief 创建线程池时请求的工作线程数量。
     int32_t m_requestedWorkerCount{ 0 };

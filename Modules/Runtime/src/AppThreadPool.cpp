@@ -64,8 +64,8 @@ AppThreadPool::~AppThreadPool()
 /// @warning 生命周期路径：由 main 启动阶段调用；禁止放入每帧热路径。
 void AppThreadPool::init()
 {
-    // 初始化保持幂等，多个上层子系统共享同一个所有权入口。
-    if ( m_threadPool ) {
+    // 两个池必须作为同一生命周期单元存在，避免局部初始化暴露半可用状态。
+    if ( m_threadPool && m_fileThreadPool ) {
         return;
     }
 
@@ -79,9 +79,13 @@ void AppThreadPool::init()
                               static_cast<float>(logicalCoreCount) * 0.8f)));
     // 计数先于构造保存，便于日志和使用方采用同一份容量基准。
     m_threadPool = std::make_unique<ice::ThreadPool>(m_requestedWorkerCount);
-    XINFO("AppThreadPool initialized: logical cores={}, requested workers={}",
-          logicalCoreCount,
-          m_requestedWorkerCount);
+    // ICE::ThreadPool 的最小容量是四；文件事务仍由上层全局门闩串行提交磁盘。
+    m_fileThreadPool = std::make_unique<ice::ThreadPool>(4);
+    XINFO(
+        "AppThreadPool initialized: logical cores={}, requested workers={}, "
+        "file workers=4",
+        logicalCoreCount,
+        m_requestedWorkerCount);
 }
 
 /// @brief 关闭共享线程池并等待已提交任务完成。
@@ -89,11 +93,13 @@ void AppThreadPool::init()
 void AppThreadPool::shutdown()
 {
     // 未初始化或已经关闭时直接返回，保证退出清理可重复执行。
-    if ( !m_threadPool ) {
+    if ( !m_threadPool && !m_fileThreadPool ) {
         return;
     }
 
+    // 先完成文件提交，再关闭可能仍在消费运行时任务的通用池。
     // ThreadPool 析构负责停止接收任务并等待其内部工作线程收尾。
+    m_fileThreadPool.reset();
     m_threadPool.reset();
     // 对外可见的容量与 get() 的空状态同步复位，避免报告过期容量。
     m_requestedWorkerCount = 0;
@@ -134,6 +140,14 @@ ice::ThreadPool* AppThreadPool::get() const
 {
     // 返回值仅为观察指针，其生命周期仍完全受本单例的 init/shutdown 控制。
     return m_threadPool.get();
+}
+
+/// @brief 获取与通用后台工作隔离的文件线程池。
+/// @return 已初始化时返回文件线程池观察指针，否则返回 nullptr。
+ice::ThreadPool* AppThreadPool::getFileThreadPool() const
+{
+    // 保存任务可能长期编码或等待文件门闩，不能占用 UI 每帧等待的通用池工作者。
+    return m_fileThreadPool.get();
 }
 
 /// @brief 获取创建线程池时请求的工作线程数量。
