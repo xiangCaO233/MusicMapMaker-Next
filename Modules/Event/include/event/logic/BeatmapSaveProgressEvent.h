@@ -16,10 +16,10 @@ struct BeatmapSaveProgressEvent : BaseEvent {
     std::string stage;
 };
 
-/// @brief 隔离普通 UI 帧与持有会话锁的耗时文件操作。
-/// @return 保存文件操作共享的进程内互斥量。
-/// @warning UI 每帧和逻辑文件指令仅尝试加锁，绝不等待此锁；失败时 UI
-/// 绘制独立进度，逻辑保留原指令顺序并在后续 update 重试。
+/// @brief 串行多个谱面会话提交的保存、导出与打包文件操作。
+/// @return 逻辑文件指令共享的进程内互斥量。
+/// @warning 各逻辑会话仅尝试加锁，失败时保留原指令并在后续 update 重试；
+/// UI 不取得此锁，进度气泡也不阻塞或隐藏普通视图。
 std::mutex& beatmapFileOperationGate();
 }  // namespace MMM::Event
 
