@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 /// @file WalkthroughTest.cpp
 /// @brief 演练模型解析、进度依赖、事件映射、动作白名单和持久化回归测试。
@@ -21,6 +22,16 @@
 /// - 重复章节 ID 与非整数 order 被拒绝；
 /// - 占位主题必须使用布尔 placeholder 且不能包含分支；
 /// - 普通主题必须至少包含一个分支；
+/// - 步骤引导接受提示与语义目标，并拒绝空对象或非法目标；
+/// - 纯键盘引导允许 targets 为空但必须拥有可见 prompt；
+/// - 目标列表保持配置次序，供界面按最后可见候选切换；
+/// - 重复目标被拒绝，避免同一步骤出现不确定优先级；
+/// - 内置真实主题的每一个步骤都提供可进入的 guide；
+/// - 新建项目菜单步骤声明文件菜单到具体菜单项的目标链；
+/// - 菜单入口目标链继续包含向导三页按钮，支持已完成步骤重放；
+/// - 向导出现后更高优先级目标必须覆盖仍然可见的一级菜单；
+/// - 快捷键入口没有菜单目标，但同样声明完整向导按钮链；
+/// - 历史进度不参与目标链解析，避免重放时停留在入口控件；
 /// - 步骤不能依赖自身；
 /// - 同一分支内步骤 ID 不能重复；
 /// - completion=all 与内置 any 分支语义正确解析。
@@ -79,6 +90,20 @@ int main(int argc, char** argv)
             R"({"id":"bad","title":"Bad","placeholder":true,"branches":[{}]})") ||
         parseTopic(R"({"id":"bad","title":"Bad","branches":[]})") )
         return 23;
+    // guide 必须为对象，且提示和目标不能同时为空。
+    if (
+        parseTopic(
+            R"({"id":"bad","title":"Bad","branches":[{"id":"b","title":"B","steps":[{"id":"s","title":"S","guide":false}]}]})") ||
+        parseTopic(
+            R"({"id":"bad","title":"Bad","branches":[{"id":"b","title":"B","steps":[{"id":"s","title":"S","guide":{}}]}]})") )
+        return 30;
+    // 目标使用稳定 ID 白名单，重复项会造成优先级歧义，也必须拒绝。
+    if (
+        parseTopic(
+            R"({"id":"bad","title":"Bad","branches":[{"id":"b","title":"B","steps":[{"id":"s","title":"S","guide":{"targets":["bad/target"]}}]}]})") ||
+        parseTopic(
+            R"({"id":"bad","title":"Bad","branches":[{"id":"b","title":"B","steps":[{"id":"s","title":"S","guide":{"targets":["same","same"]}}]}]})") )
+        return 31;
     for ( const auto* input : BUILTIN_PLACEHOLDERS ) {
         // 所有内置占位主题必须属于 creation 且没有可执行分支。
         const auto placeholder = parseTopic(input);
@@ -91,6 +116,10 @@ int main(int argc, char** argv)
     const auto topic = parseTopic(BUILTIN_WALKTHROUGH);
     if ( !topic || topic->m_branches.size() != 5 || !topic->m_anyBranch )
         return 2;
+    for ( const auto& branch : topic->m_branches )
+        for ( const auto& step : branch.m_steps )
+            // 每个已发布的小步骤都提供“进入引导”所需的配置。
+            if ( !step.m_guide ) return 32;
     // 新建项目教程不是占位项，并提供菜单和快捷键两条可独立完成的分支。
     const auto createProjectTopic =
         parseTopic(BUILTIN_CREATE_PROJECT_WALKTHROUGH);
@@ -98,6 +127,22 @@ int main(int argc, char** argv)
          createProjectTopic->m_branches.size() != 2 ||
          !createProjectTopic->m_anyBranch )
         return 26;
+    for ( const auto& branch : createProjectTopic->m_branches )
+        for ( const auto& step : branch.m_steps )
+            // 新建项目的菜单、快捷键和向导阶段都必须可独立进入引导。
+            if ( !step.m_guide ) return 33;
+    if ( createProjectTopic->m_branches[0].m_steps[0].m_guide->m_targets !=
+         std::vector<std::string>{ "main-menu.file",
+                                   "main-menu.file.new-project",
+                                   "new-project.project-info.next",
+                                   "new-project.preferences.next",
+                                   "new-project.location.create" } )
+        return 34;
+    if ( createProjectTopic->m_branches[1].m_steps[0].m_guide->m_targets !=
+         std::vector<std::string>{ "new-project.project-info.next",
+                                   "new-project.preferences.next",
+                                   "new-project.location.create" } )
+        return 35;
     // 两条分支均应把向导打开设为最终完成步骤的显式前置条件。
     // 该约束保证恢复进度或乱序业务事件不会跳过用户实际唤出向导的动作。
     for ( const auto& branch : createProjectTopic->m_branches ) {

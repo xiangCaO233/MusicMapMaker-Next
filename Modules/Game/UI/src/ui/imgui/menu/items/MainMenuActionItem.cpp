@@ -1,6 +1,8 @@
 #include "ui/imgui/menu/items/MainMenuActionItem.h"
 #include "config/skin/SkinConfig.h"
+#include "ui/UIManager.h"
 #include "ui/imgui/menu/items/MainMenuItemUtils.h"
+#include "ui/walkthrough/WalkthroughSpotlight.h"
 #include <utility>
 
 namespace MMM::UI
@@ -12,16 +14,21 @@ namespace MMM::UI
 /// @param textKind 菜单项文本来源。
 /// @param shortcut 菜单项默认快捷键提示，可为空。
 /// @param actionHandler 菜单项业务处理器。
+/// @param walkthroughTarget 与演练配置约定的可选语义目标 ID。
 /// @note 图标与快捷键均为非拥有指针，调用方须保证其静态或更长生命周期。
+/// @note 引导目标为空时保持原有菜单项路径，不访问 Spotlight。
+/// @warning 构造只发生在菜单注册阶段，允许转移目标字符串和处理器所有权。
 MainMenuActionItem::MainMenuActionItem(
     const char* icon, std::string label, MainMenuItemTextKind textKind,
     const char*                                 shortcut,
-    std::unique_ptr<IMainMenuItemActionHandler> actionHandler)
+    std::unique_ptr<IMainMenuItemActionHandler> actionHandler,
+    std::string                                 walkthroughTarget)
     : m_icon(icon)
     , m_label(std::move(label))
     , m_textKind(textKind)
     , m_shortcut(shortcut)
     , m_actionHandler(std::move(actionHandler))
+    , m_walkthroughTarget(std::move(walkthroughTarget))
 {
 }
 
@@ -48,9 +55,14 @@ void MainMenuActionItem::render(MainMenuContext& context)
     const char* shortcut = m_actionHandler
                                ? m_actionHandler->shortcut(context, m_shortcut)
                                : m_shortcut;
+    // 先保存激活结果，再紧邻控件读取 LastItem 矩形供任意演练配置定位。
+    const bool activated =
+        renderMainMenuIconItem(icon, resolveLabel(), shortcut, enabled);
+    if ( context.sourceManager && !m_walkthroughTarget.empty() )
+        context.sourceManager->walkthroughSpotlight().reportLastItem(
+            m_walkthroughTarget);
     // 无处理器的条目仍可绘制为静态项，但不会响应激活。
-    if ( renderMainMenuIconItem(icon, resolveLabel(), shortcut, enabled) &&
-         m_actionHandler ) {
+    if ( activated && m_actionHandler ) {
         m_actionHandler->execute(context, MainMenuItemActivation{});
     }
 }

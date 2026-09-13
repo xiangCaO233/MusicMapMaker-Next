@@ -42,6 +42,7 @@
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughService.h"
+#include "ui/walkthrough/WalkthroughSpotlight.h"
 #include "ui/walkthrough/WelcomeView.h"
 #include <algorithm>
 #include <ice/thread/ThreadPool.hpp>
@@ -388,6 +389,13 @@ Walkthrough::Service& UIManager::walkthroughService()
 {
     return *m_walkthrough;
 }
+/// @brief 获取当前 UI 管理器独占的演练突出层。
+/// @return 仅允许 UI 线程逐帧使用的状态引用。
+/// @warning UI 热路径：只解引用稳定 unique_ptr，不进行状态复制。
+Walkthrough::Spotlight& UIManager::walkthroughSpotlight()
+{
+    return *m_walkthroughSpotlight;
+}
 
 /// @brief 构造 UI 管理器、引导服务、拖放路由并订阅项目生命周期事件。
 ///
@@ -404,6 +412,8 @@ UIManager::UIManager()
     m_walkthrough = std::make_unique<Walkthrough::Service>(
         Config::AppPaths::configRootPath() / "walkthrough-progress.json",
         Config::AppPaths::configRootPath() / "walkthroughs");
+    // 突出层只保存当前引导和本帧控件几何，不依赖项目或 GPU 资源生命周期。
+    m_walkthroughSpotlight = std::make_unique<Walkthrough::Spotlight>();
     // 引导动作通过菜单工具打开项目选择器，不捕获 UIManager 实例。
     m_walkthrough->registerAction("open_folder",
                                   [] { MenuUtil::openProjectFolderPicker(); });
@@ -1527,6 +1537,8 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 /// 遍历或完整排序。
 void UIManager::onUpdateUI()
 {
+    // 控件矩形属于单帧即时布局，任何视图开始提交前先清除旧坐标。
+    m_walkthroughSpotlight->beginFrame();
     // 引导服务先推进页面与动作状态。
     m_walkthrough->update();
     // 拖放命令只入队到逻辑线程，不因后台保存进度阻塞当前 ImGui 帧。
@@ -1697,6 +1709,11 @@ void UIManager::onUpdateUI()
         // DockSpace 完成后恢复侧栏 resize 鼠标状态。
         sideBarManager->restoreDockResizeMouseAfterDockSpace();
     }
+
+    // 所有控件完成目标上报后再绘制突出层，亮区使用本帧最终布局坐标。
+    m_walkthroughSpotlight->render(
+        Config::AppConfig::instance().getWindowContentScale(),
+        TR("ui.walkthrough.spotlight_acknowledge").data());
 
     // 帧末跟踪根窗口焦点并同步平台标题栏命中区域。
     trackImGuiFocusForAutoSave();

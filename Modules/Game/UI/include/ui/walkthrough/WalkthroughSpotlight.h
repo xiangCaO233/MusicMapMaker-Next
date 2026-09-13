@@ -1,0 +1,105 @@
+#pragma once
+
+#include <imgui.h>
+
+#include <cstddef>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace MMM::UI::Walkthrough
+{
+/// @brief 突出当前演练目标，并用可确认提示推进配置中的目标阶段。
+///
+/// 引导目标使用与本地化文本无关的语义 ID。一个步骤可以提供多个按流程排列的
+/// 候选目标，当前帧实际出现的最后一个候选获得最高优先级，适合菜单、弹窗和
+/// 多页向导依次出现的即时模式界面。
+class Spotlight
+{
+public:
+    /// @brief 开始新 UI 帧并清除上一帧上报的易失控件几何。
+    /// @warning UI 热路径：每帧调用，只复位值状态，不释放目标配置容量。
+    void beginFrame();
+
+    /// @brief 启动或替换当前引导步骤。
+    /// @param targets 按流程先后排列的语义目标 ID，后出现的可见目标优先。
+    /// @param prompt 没有可见目标时显示的提示，也用于目标旁的说明气泡。
+    /// @warning 用户显式进入引导时调用；允许复制字符串，不得每帧重复启动。
+    void start(const std::vector<std::string>& targets, std::string prompt);
+
+    /// @brief 结束当前引导并立即停止后续目标采集。
+    void stop();
+
+    /// @brief 查询是否存在已启动的引导。
+    [[nodiscard]] bool active() const;
+
+    /// @brief 标记当前引导仍由本帧可见的演练页面持有。
+    /// @warning UI 热路径：只写布尔值，不创建窗口或改变焦点。
+    void keepAlive();
+
+    /// @brief 确认当前可见阶段，隐藏其遮罩并等待后续目标出现。
+    /// 最后一个目标被确认时结束本次引导；没有可见目标时不改变流程。
+    void acknowledgeCurrentStage();
+
+    /// @brief 用最近提交的 ImGui 控件矩形上报语义目标。
+    /// @param targetId 与演练配置中的 targets 项一致。
+    /// @warning 必须紧跟目标控件调用；仅在目标属于当前流程时保存矩形。
+    void reportLastItem(std::string_view targetId);
+
+    /// @brief 上报自定义区域，使非标准控件也能参与突出引导。
+    /// @param targetId 与演练配置中的 targets 项一致。
+    /// @param minimum 屏幕空间左上角。
+    /// @param maximum 屏幕空间右下角。
+    /// @param viewport 区域所在视口；为空时使用当前窗口视口。
+    /// @warning UI 热路径：仅比较当前目标列表并复制固定大小几何。
+    void reportTarget(std::string_view targetId, const ImVec2& minimum,
+                      const ImVec2& maximum, ImGuiViewport* viewport = nullptr);
+
+    /// @brief 绘制暗化遮罩、目标描边和带确认按钮的引导提示。
+    /// @param dpiScale 当前内容缩放，用于逻辑间距和线宽。
+    /// @param acknowledgeLabel 当前语言的阶段确认按钮文本。
+    /// @warning UI 热路径：每帧创建固定 ID 的小提示窗口，不拦截窗口外输入。
+    void render(float dpiScale, const char* acknowledgeLabel);
+
+    /// @brief 返回本帧最终采用的目标 ID，供诊断和无 GPU 测试使用。
+    /// @return 没有可见候选目标时返回空视图。
+    [[nodiscard]] std::string_view resolvedTargetId() const;
+
+    /// @brief 返回本帧确认按钮中心，供自动化输入与 UI 诊断使用。
+    /// @return 没有目标遮罩或按钮未提交时返回空值。
+    [[nodiscard]] std::optional<ImVec2> acknowledgeButtonCenter() const;
+
+private:
+    /// @brief 当前帧选中的目标矩形及所属视口。
+    struct Anchor {
+        /// @brief 候选目标在配置列表中的索引，数值越大优先级越高。
+        std::size_t priority{ 0 };
+        /// @brief 目标屏幕空间左上角。
+        ImVec2 minimum{};
+        /// @brief 目标屏幕空间右下角。
+        ImVec2 maximum{};
+        /// @brief 只借用当前帧有效的 ImGui 视口。
+        ImGuiViewport* viewport{ nullptr };
+    };
+
+    /// @brief 当前引导候选目标，仅在用户进入另一引导时替换。
+    std::vector<std::string> m_targets;
+    /// @brief 当前引导提示文本，来自已验证的演练配置。
+    std::string m_prompt;
+    /// @brief 本帧优先级最高的可见目标。
+    std::optional<Anchor> m_anchor;
+    /// @brief 最近由“知道了”确认的目标优先级，旧目标不再重新产生遮罩。
+    std::optional<std::size_t> m_acknowledgedPriority;
+    /// @brief 是否已有用户启动引导。
+    bool m_active{ false };
+    /// @brief 当前帧演练页面是否仍可见，防止关闭页面后残留遮罩。
+    bool m_keepAlive{ false };
+    /// @brief 鼠标左键上一帧状态，用于不依赖模态 HoveredWindow 的边沿判断。
+    bool m_acknowledgeMouseWasDown{ false };
+    /// @brief 左键是否从确认按钮内按下且尚未拖出按钮矩形。
+    bool m_acknowledgePressed{ false };
+    /// @brief 本帧实际提交的确认按钮中心，下一帧开始时失效。
+    std::optional<ImVec2> m_acknowledgeButtonCenter;
+};
+}  // namespace MMM::UI::Walkthrough

@@ -2,6 +2,7 @@
 
 #include <expected>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -16,6 +17,15 @@ struct Text {
     /// @return 借用已存文本或静态空串；修改翻译表前应结束借用。
     const std::string& get(std::string_view language) const;
 };
+/// @brief 单个演练步骤的配置驱动突出引导。
+/// 候选目标按界面流程排列，当前帧可见的最后一项优先；空目标列表表示键盘或
+/// 外部应用步骤，仅显示 prompt。
+struct Guide {
+    /// @brief 没有控件目标时的操作提示，有目标时显示在突出框附近。
+    Text m_prompt;
+    /// @brief 与具体控件注册点约定的稳定语义目标 ID。
+    std::vector<std::string> m_targets;
+};
 /// @brief 一个可单独确认了解的演练步骤。
 /// 步骤 ID 在整个主题内唯一，跨分支前置引用也使用该 ID。
 /// 手动确认跳过前置限制；自动完成则同时检查前置步骤与信号。
@@ -26,8 +36,9 @@ struct Step {
     std::vector<std::string> m_signals;  ///< 自动完成所需信号。
     bool m_allSignals{ false };  ///< true 要求全部信号，否则任一信号即可。
     std::vector<std::string>
-                m_prerequisites;  ///< 自动完成和操作入口的前置步骤。
-    std::string m_action;         ///< 已注册的操作 ID，空值表示没有操作。
+                         m_prerequisites;  ///< 自动完成和操作入口的前置步骤。
+    std::string          m_action;  ///< 已注册的操作 ID，空值表示没有操作。
+    std::optional<Guide> m_guide;   ///< 可选的逐控件突出引导流程。
 };
 /// @brief 同一目标的一条独立操作分支。
 struct Branch {

@@ -2,13 +2,39 @@
 
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
+#include "ui/UIManager.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WalkthroughSpotlight.h"
 
 #include <imgui.h>
+#include <string_view>
 
 namespace MMM::UI
 {
+namespace
+{
+/// @brief 返回一级菜单供演练配置引用的稳定语义目标。
+/// @param id 菜单注册标识。
+/// @return 与显示语言无关的常量 ID。
+/// @warning UI 热路径：只执行固定大小 switch，不读取翻译或分配字符串。
+/// @details 一级菜单只在此处集中绑定语义目标，演练配置不依赖本地化 label。
+/// 新增菜单枚举时必须同步补充映射，Count 哨兵始终返回空目标。
+/// 目标矩形仍由 BeginMenu 的实际 Item 提供，因此横向排版变化无需同步配置。
+/// 这里只声明位置身份，不决定当前是否有演练需要消费该目标。
+constexpr std::string_view walkthroughTarget(MainMenuId id)
+{
+    switch ( id ) {
+    case MainMenuId::File: return "main-menu.file";
+    case MainMenuId::Edit: return "main-menu.edit";
+    case MainMenuId::Tools: return "main-menu.tools";
+    case MainMenuId::View: return "main-menu.view";
+    case MainMenuId::Help: return "main-menu.help";
+    case MainMenuId::Count: break;
+    }
+    return {};
+}
+}  // namespace
 
 /// @brief 构造主菜单视图并创建默认菜单注册表。
 /// @note 注册顺序同时决定一级菜单的显示与快捷键遍历顺序。
@@ -120,7 +146,12 @@ void MainMenuView::renderMenus(UIManager*          sourceManager,
             ImGui::OpenPopup(menuLabel);
         }
 
-        if ( ::MMM::UI::FeedbackBeginMenu(menuLabel) ) {
+        const bool menuOpen = ::MMM::UI::FeedbackBeginMenu(menuLabel);
+        // BeginMenu 刚提交的 LastItem 就是一级菜单按钮，须在弹窗内容前捕获。
+        if ( sourceManager )
+            sourceManager->walkthroughSpotlight().reportLastItem(
+                walkthroughTarget(menuId));
+        if ( menuOpen ) {
             // 关闭请求优先于内容渲染，避免关闭帧仍触发菜单项。
             if ( m_navigationController.consumeCloseRequest(menuId) ) {
                 ImGui::CloseCurrentPopup();

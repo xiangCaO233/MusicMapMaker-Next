@@ -18,6 +18,18 @@ public:
     void render(UIManager* manager, std::size_t topicIndex);
 
 private:
+    /// @brief 当前由用户启动的步骤引导身份及启动时完成状态。
+    struct ActiveGuide {
+        /// @brief 主题稳定 ID。
+        std::string topicId;
+        /// @brief 分支稳定 ID。
+        std::string branchId;
+        /// @brief 当前步骤稳定 ID。
+        std::string stepId;
+        /// @brief true 表示重放已完成步骤，不应自动跳到下一步。
+        bool completedAtStart{ false };
+    };
+
     /// @brief 当前正文主题 ID，切换主题时用于重置展开项。
     std::string m_currentTopic;
 
@@ -29,5 +41,11 @@ private:
 
     /// @brief 图片准备时采用的语言，用于检测本地化切换。
     std::string m_preparedLanguage;
+
+    /// @brief 当前突出引导；页面隐藏时不续租，因此不会残留全屏遮罩。
+    std::optional<ActiveGuide> m_activeGuide;
+
+    /// @brief 上次正文实际渲染的 ImGui 帧，用于返回页面时清除旧引导。
+    int m_lastRenderFrame{ -1 };
 };
 }  // namespace MMM::UI

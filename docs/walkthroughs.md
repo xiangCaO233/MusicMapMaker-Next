@@ -38,7 +38,11 @@
           "body": "关闭模态窗口，将一个文件夹拖到软件中。",
           "requires": ["prepare"],
           "signals": ["project.folder_drop.ready"],
-          "match": "all"
+          "match": "all",
+          "guide": {
+            "prompt": {"zh_cn": "把项目目录拖到软件窗口。", "en_us": "Drop the project folder into the app."},
+            "targets": []
+          }
         }
       ]
     }
@@ -54,6 +58,19 @@
 `requires` 引用同一主题内的步骤 ID，允许跨分支引用；仅约束自动完成和操作按钮，不限制阅读或手动“已了解”。
 `signals` 非空时才会自动完成，`match` 可选 `any` 或 `all`。
 各步骤的“已了解”独立生效，不模拟业务操作、不修改项目。
+
+每个步骤可以声明 `guide`。页面会在该步骤后显示“进入引导”；当前步骤实操完成后，自动衔接同一分支中下一项尚未完成的引导步骤：
+
+```json
+"guide": {
+  "prompt": {"zh_cn": "依次点击文件和新建项目。", "en_us": "Click File, then New Project."},
+  "targets": ["main-menu.file", "main-menu.file.new-project"]
+}
+```
+
+`targets` 是按界面流程排列的稳定语义 ID。控件在绘制后上报当帧屏幕矩形；多个候选同时可见时，列表中最后一个优先，因此展开菜单、切换向导页面和 DPI/布局变化都无需在配置中写坐标。自定义复合控件或画布区域也可以显式上报矩形。
+每个实际亮区旁都显示“知道了”。确认后只跳过当前及更早目标，原控件保持可操作；后续目标出现时自动显示下一处遮罩，确认最后一个目标后结束本次引导。键盘、系统文件管理器等没有应用内控件的步骤允许空 `targets`，此时只显示本地化 `prompt`，不会伪造亮区。
+遮罩仍由 ImGui 前景 DrawList 绘制；只有提示区域创建固定 ID 的小型交互窗口，用于承载统一反馈按钮，不拦截区域外输入、不参与 Dock，并禁止自动取得导航焦点。
 
 加载时检查重复 ID、缺失引用和循环依赖。单主题最多 32 个分支、128 个步骤、1 MiB JSON。
 稳定步骤 ID 用于保留升级后的学习记录；修改正文或递增内容版本不会清空进度。
@@ -85,11 +102,12 @@
 - `WalkthroughService`：目录、操作注册、跨线程事件队列和进度文件；由 UIManager 持有，不属于窗口。
 - `WelcomeView`：主题卡片目录、返回导航、停靠和启动显示偏好。
 - `WalkthroughPage`：欢迎页中的演练正文，不创建独立窗口。
+- `WalkthroughSpotlight`：解析当前可见语义目标并绘制无输入的暗化突出层。
 - `ProjectDropRouter`：主窗口文件夹/谱包拖放入口，不依赖演练是否打开。
 - 磁盘扫描只发生在目录加载；进度保存只发生在进度变化后。损坏进度文件保留，不自动覆盖。
 - 系统拖放一次只处理一个项目入口；模态窗口或文件操作占用期间不打开新项目。
 
-验证入口：`WelcomeViewTest`、`WalkthroughTest`、`ProjectOpenOriginTest`，测试输出使用构建目录的 `test_output/`。
+验证入口：`WelcomeViewTest`、`WalkthroughTest`、`WalkthroughSpotlightTest`、`ProjectOpenOriginTest`，测试输出使用构建目录的 `test_output/`。
 
 ## 章节、阶段与占位主题
 
@@ -103,4 +121,4 @@
 - `order: 20`：新建谱面。
 - `order: 30`：创作谱面。
 
-后三个主题目前为 `placeholder: true`，允许 `branches` 缺失或为空，禁止携带实际分支。入口可打开占位页并返回，不显示虚假的 `0/0` 进度、已完成状态或重置操作。以后定义详细内容时移除占位标记并添加正常分支即可。新增内置主题还需在 UI 模块 CMake 和内置声明模板中注册。
+后两个主题目前为 `placeholder: true`，允许 `branches` 缺失或为空，禁止携带实际分支。入口可打开占位页并返回，不显示虚假的 `0/0` 进度、已完成状态或重置操作。以后定义详细内容时移除占位标记并添加正常分支即可。新增内置主题还需在 UI 模块 CMake 和内置声明模板中注册。

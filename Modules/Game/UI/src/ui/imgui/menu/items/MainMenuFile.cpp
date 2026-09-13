@@ -14,6 +14,7 @@ namespace MMM::UI
 
 /// @brief 构造文件菜单并注册默认菜单项。
 /// @details 菜单按新建、打开与关闭、保存与打包三个职责区域排列。
+/// 新建和打开项目额外声明语义目标，只提供几何定位，不改变动作执行条件。
 MainMenuFile::MainMenuFile()
 {
     // 新建项目和新建谱面分别覆盖容器级与内容级创建流程。
@@ -22,7 +23,8 @@ MainMenuFile::MainMenuFile()
         "ui.file.new_pro",
         MainMenuItemTextKind::TranslationKey,
         "Ctrl+Shift+N",
-        createOpenNewProjectWizardAction()));
+        createOpenNewProjectWizardAction(),
+        "main-menu.file.new-project"));
     // 项目向导负责创建容器和首份基础配置。
     registerItem(std::make_unique<MainMenuActionItem>(
         ICON_MMM_FILE,
@@ -39,7 +41,8 @@ MainMenuFile::MainMenuFile()
         "ui.file.open_pro",
         MainMenuItemTextKind::TranslationKey,
         "Ctrl+O",
-        createOpenProjectAction()));
+        createOpenProjectAction(),
+        "main-menu.file.open-project"));
     // 音频导入保持为项目内容操作，不与目录选择器共享状态。
     registerItem(std::make_unique<MainMenuActionItem>(
         ICON_MMM_MUSIC,

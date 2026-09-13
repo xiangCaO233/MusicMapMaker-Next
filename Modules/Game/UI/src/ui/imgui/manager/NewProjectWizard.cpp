@@ -12,6 +12,7 @@
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WalkthroughSpotlight.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cctype>
@@ -30,6 +31,16 @@ namespace
 /// 原生选择器失败时会回退到 ImGuiFileDialog，固定 ID
 /// 用于跨帧查询、显示和关闭同一 个统一弹窗实例，不能随翻译文本改变。
 constexpr const char* PARENT_FOLDER_PICKER_ID = "NewProjectParentFolderPicker";
+
+/// @brief 项目信息页前进按钮的演练语义目标。
+constexpr std::string_view PROJECT_INFO_NEXT_TARGET =
+    "new-project.project-info.next";
+/// @brief 初始偏好页前进按钮的演练语义目标。
+constexpr std::string_view PREFERENCES_NEXT_TARGET =
+    "new-project.preferences.next";
+/// @brief 保存位置页创建按钮的演练语义目标。
+constexpr std::string_view LOCATION_CREATE_TARGET =
+    "new-project.location.create";
 
 /// @brief 尽量将路径转换为绝对规范路径。
 /// @param path 待规范化路径。
@@ -584,11 +595,12 @@ bool NewProjectWizard::renderLabeledInputText(const char* label, const char* id,
 }
 
 /// @brief 绘制上一步、取消和下一步或创建操作区。
+/// @param sourceManager 提供当前演练突出层，可为空。
 ///
 /// 三个按钮共享自适应宽度。文件选择器刚关闭后的短暂帧窗口会禁用所有页脚操作，
 /// 防止原生或统一弹窗的确认点击穿透到底层向导按钮。
 /// @warning UI 热路径：向导可见时每帧调用；仅更新本地步骤状态或发布显式提交。
-void NewProjectWizard::renderFooter()
+void NewProjectWizard::renderFooter(UIManager* sourceManager)
 {
     // 页脚与滚动内容使用分隔线明确区分。
     ImGui::Separator();
@@ -629,11 +641,21 @@ void NewProjectWizard::renderFooter()
     ImGui::SameLine();
     // 前进按钮还受当前步骤有效性约束，最后一步切换为创建语义。
     ImGui::BeginDisabled(suppressActions || !canAdvance());
-    const bool isLastStep = m_currentStep == Step::Location;
-    if ( ::MMM::UI::FeedbackButton(
-             isLastStep ? TR("ui.wizard.new_project.create").data()
-                        : TR("ui.wizard.new_project.next").data(),
-             buttonSize) ) {
+    const bool isLastStep     = m_currentStep == Step::Location;
+    const bool advanceClicked = ::MMM::UI::FeedbackButton(
+        isLastStep ? TR("ui.wizard.new_project.create").data()
+                   : TR("ui.wizard.new_project.next").data(),
+        buttonSize);
+    if ( sourceManager ) {
+        // 三页共用同一视觉按钮，但按当前步骤上报不同语义目标供配置排序。
+        const std::string_view target =
+            m_currentStep == Step::ProjectInfo
+                ? PROJECT_INFO_NEXT_TARGET
+                : (m_currentStep == Step::Preferences ? PREFERENCES_NEXT_TARGET
+                                                      : LOCATION_CREATE_TARGET);
+        sourceManager->walkthroughSpotlight().reportLastItem(target);
+    }
+    if ( advanceClicked ) {
         if ( m_currentStep == Step::ProjectInfo ) {
             // 信息验证已经由 canAdvance 完成，进入偏好页。
             m_currentStep = Step::Preferences;
@@ -835,8 +857,6 @@ void NewProjectWizard::submitCreateRequest()
 /// 禁止加入阻塞操作。
 void NewProjectWizard::update(UIManager* sourceManager)
 {
-    // 当前实现不需要管理器数据，但保留统一 IUIView 回调签名。
-    (void)sourceManager;
     if ( !m_isOpen ) {
         // 关闭状态不构造任何 ImGui 控件，也不处理残留浏览请求。
         return;
@@ -895,7 +915,7 @@ void NewProjectWizard::update(UIManager* sourceManager)
         }
 
         // 页脚在滚动区之后保持固定位置。
-        renderFooter();
+        renderFooter(sourceManager);
 
         // 浏览请求在触发按钮及页脚全部消费后处理，减少点击穿透风险。
         processPendingParentFolderPicker();

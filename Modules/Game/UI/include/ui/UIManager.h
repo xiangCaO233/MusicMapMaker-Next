@@ -38,7 +38,8 @@ namespace MMM::UI
 namespace Walkthrough
 {
 class Service;
-}
+class Spotlight;
+}  // namespace Walkthrough
 class ProjectDropRouter;
 class ICanvasView;
 class IAuxiliaryWindowView;
@@ -64,6 +65,10 @@ public:
     void openWelcome();
     /// @brief 取得不依赖视图开关的演练服务。
     Walkthrough::Service& walkthroughService();
+    /// @brief 取得用于任意控件上报屏幕矩形的突出引导层。
+    /// @return 生命周期与 UIManager 相同的 UI 线程状态引用。
+    /// @warning UI 热路径：只返回独占成员引用，不复制目标或所有权。
+    Walkthrough::Spotlight& walkthroughSpotlight();
 
     /// @brief 注册视图，转交所有权
     void registerView(const std::string& name, std::unique_ptr<IUIView> view);
@@ -252,6 +257,8 @@ public:
 private:
     /// @brief 学习状态和事件订阅先于视图构造、后于视图销毁。
     std::unique_ptr<Walkthrough::Service> m_walkthrough;
+    /// @brief 当前演练的纯绘制突出层，不创建输入窗口或持有控件对象。
+    std::unique_ptr<Walkthrough::Spotlight> m_walkthroughSpotlight;
     /// @brief 主窗口级拖放处理器，不依赖具体窗口是否打开。
     std::unique_ptr<ProjectDropRouter> m_projectDropRouter;
     /// @brief 延迟创建窗口，避免遍历视图时修改视图注册表。

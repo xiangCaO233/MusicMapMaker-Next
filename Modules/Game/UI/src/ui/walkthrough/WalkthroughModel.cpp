@@ -4,6 +4,12 @@
 #include <nlohmann/json.hpp>
 #include <set>
 
+/// @file WalkthroughModel.cpp
+/// @brief 解析演练主题、突出引导声明以及可持久化学习进度。
+/// @details guide 仅包含本地化提示和稳定控件目标，不授予配置执行输入或业务
+/// 动作的能力；目标顺序的界面含义由 Spotlight 在实际可见控件中解析。
+/// 自定义主题与内置主题使用完全相同的结构、长度和 ID 白名单校验。
+
 namespace MMM::UI::Walkthrough
 {
 namespace
@@ -65,7 +71,7 @@ Text text(const nlohmann::json& object, const char* name)
 }
 /// @brief 读取可选字符串数组，错误类型由调用方拒绝。
 /// @param object 尚在解析中的步骤对象。
-/// @param name signals 或 requires，两种列表采用相同的长度约束。
+/// @param name signals、requires 或 targets，三种列表采用相同长度约束。
 /// @param result 接收追加值，调用方使用尚未发布的步骤对象。
 /// @return 字段缺失视为空列表；超过上限或含非字符串时失败。
 bool strings(const nlohmann::json& object, const char* name,
@@ -226,6 +232,28 @@ std::expected<Topic, std::string> parseTopic(std::string_view input)
             if ( !strings(entry, "signals", step.m_signals) ||
                  !strings(entry, "requires", step.m_prerequisites) )
                 return std::unexpected("步骤信号或前置列表错误");
+            if ( const auto guide = entry.find("guide");
+                 guide != entry.end() ) {
+                // 引导配置只描述可信控件 ID 和文案，不能直接执行任意业务动作。
+                if ( !guide->is_object() )
+                    return std::unexpected("步骤引导必须为对象");
+                Guide parsedGuide;
+                parsedGuide.m_prompt = text(*guide, "prompt");
+                if ( !strings(*guide, "targets", parsedGuide.m_targets) )
+                    return std::unexpected("步骤引导目标列表错误");
+                // 纯键盘步骤允许没有目标，但必须提供可见提示说明下一动作。
+                if ( parsedGuide.m_prompt.m_translations.empty() &&
+                     parsedGuide.m_targets.empty() )
+                    return std::unexpected("步骤引导不能同时缺少提示和目标");
+                std::set<std::string> guideTargets;
+                for ( const auto& target : parsedGuide.m_targets ) {
+                    // 重复或非法目标会使优先级含糊，加载阶段直接拒绝整个主题。
+                    if ( !validId(target) ||
+                         !guideTargets.insert(target).second )
+                        return std::unexpected("步骤引导目标 ID 无效或重复");
+                }
+                step.m_guide = std::move(parsedGuide);
+            }
             // 列表类型已确认，前置 ID 的存在性留到完整索引建立后验证。
             const auto match = field(entry, "match");
             // 没有 match 时采用任一信号完成；空信号列表留给手动确认。

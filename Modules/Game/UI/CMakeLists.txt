@@ -38,6 +38,7 @@ add_library(
   src/ui/IUIView.cpp
   src/ui/walkthrough/WalkthroughModel.cpp
   src/ui/walkthrough/WalkthroughService.cpp
+  src/ui/walkthrough/WalkthroughSpotlight.cpp
   src/ui/walkthrough/WalkthroughPage.cpp
   src/ui/walkthrough/WelcomeView.cpp
   # 工程拖放入口和欢迎页打开动作。
@@ -432,6 +433,14 @@ target_link_libraries(WalkthroughTest PRIVATE Event 3rd_nlohmann_json
                                               3rd_concurrentqueue)
 add_test(NAME WalkthroughTest COMMAND WalkthroughTest
                                       "${CMAKE_BINARY_DIR}/test_output")
+
+# 突出层测试链接正式 UI 实现，覆盖任意控件矩形、阶段确认和不抢占导航焦点。
+mmm_add_test_executable(UI WalkthroughSpotlightTest
+                        tests/WalkthroughSpotlightTest.cpp)
+target_include_directories(WalkthroughSpotlightTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(WalkthroughSpotlightTest PRIVATE UI 3rd_imgui)
+add_test(NAME WalkthroughSpotlightTest COMMAND WalkthroughSpotlightTest)
 
 # cmake-format: off
 # 工程资源导入测试约定：

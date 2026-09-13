@@ -52,8 +52,9 @@ private:
     /// @brief 绘制项目保存位置步骤。
     void renderLocationStep();
 
-    /// @brief 绘制底部操作按钮。
-    void renderFooter();
+    /// @brief 绘制底部操作按钮并上报当前步骤的主操作目标。
+    /// @param sourceManager 提供配置驱动突出层，可为空。
+    void renderFooter(UIManager* sourceManager);
 
     /// @brief 绘制带独立标签的输入框，避免长标签被输入框宽度裁切。
     /// @param label 显示给用户的字段名。

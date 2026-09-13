@@ -10,8 +10,10 @@
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughModel.h"
 #include "ui/walkthrough/WalkthroughService.h"
+#include "ui/walkthrough/WalkthroughSpotlight.h"
 #include <algorithm>
 #include <imgui.h>
+#include <iterator>
 #include <string>
 
 /// @file WalkthroughPage.cpp
@@ -43,6 +45,32 @@
 /// - 重置只清理当前主题，不影响其他主题；
 /// - 占位主题不渲染分支、进度或重置入口。
 ///
+/// 突出引导约定：
+/// - 每个配置 guide 的步骤在正文末尾显示“进入引导”；
+/// - 步骤前置未满足时保留入口但禁止点击；
+/// - 用户可以从任意可用步骤独立启动或替换当前引导；
+/// - 当前按钮切换为“结束引导”，避免用户无法主动退出；
+/// - 引导启动时冻结目标 ID 与本地化提示，不跨帧借用模型字符串；
+/// - 步骤由业务信号首次完成后自动寻找同分支下一项；
+/// - 自动衔接跳过已经完成或没有 guide 的后续步骤；
+/// - 用户主动重放已完成步骤时保持原步骤，不立即自动跳走；
+/// - 分支耗尽后停止突出层，不回退到先前已经操作的控件；
+/// - 折叠、切换分支或更换主题都会结束旧引导；
+/// - 页面缺席一帧后清除旧身份，返回正文不会恢复过期遮罩；
+/// - 可见帧通过 keepAlive 续租，Spotlight 自身不持有页面指针。
+/// - 当前步骤仅以主题、分支和步骤 ID 标识，不缓存容器迭代器；
+/// - 自动完成只在引导启动后发生状态跃迁时触发衔接；
+/// - 已完成步骤仍允许主动重放，以便用户重复熟悉操作位置；
+/// - 目标暂不可见时保留文字提示，等待菜单或向导在后续帧出现。
+///
+/// 配置与控件边界：
+/// - 页面只解释 guide 的流程，不知道具体控件类型或所在窗口；
+/// - 控件通过 UIManager 的 Spotlight 使用稳定语义 ID 上报矩形；
+/// - target 列表顺序由配置作者定义，页面不猜测菜单或向导状态；
+/// - 没有目标的键盘及外部应用步骤仍显示 prompt；
+/// - JSON 不能通过突出层执行控件动作或注入输入；
+/// - 业务完成仍只由 Progress 信号判定，点击“进入引导”不改变进度。
+///
 /// 性能约定：
 /// - 每帧只遍历当前主题的分支和步骤；
 /// - 不在绘制循环中读取教程文件；
@@ -62,6 +90,18 @@ namespace MMM::UI
 /// 本地只保存展开分支及最近准备图片的主题/语言身份。
 void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
 {
+    if ( m_activeGuide && !manager->walkthroughSpotlight().active() ) {
+        // 突出层可由最后一个“知道了”结束，页面下一帧同步清理按钮状态。
+        m_activeGuide.reset();
+    }
+    const int currentFrame = ImGui::GetFrameCount();
+    if ( m_activeGuide && m_lastRenderFrame >= 0 &&
+         currentFrame > m_lastRenderFrame + 1 ) {
+        // 页面至少缺席一帧表示用户离开主题，返回时不恢复过期操作指引。
+        manager->walkthroughSpotlight().stop();
+        m_activeGuide.reset();
+    }
+    m_lastRenderFrame = currentFrame;
     // 主题目录由服务统一验证，索引失效时不绘制过期内容。
     auto&       service = manager->walkthroughService();
     const auto& topics  = service.topics();
@@ -74,6 +114,9 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
     // 固定视觉间距随内容缩放，保持高 DPI 下相同比例。
     const float scale = Config::AppConfig::instance().getWindowContentScale();
     if ( m_currentTopic != topic.m_id ) {
+        // 切换主题必须结束旧配置的目标流程，避免同名控件在新正文中被误突出。
+        manager->walkthroughSpotlight().stop();
+        m_activeGuide.reset();
         // 切换主题时默认展开第一分支，不沿用上一主题的索引。
         m_currentTopic   = topic.m_id;
         m_expandedBranch = 0;
@@ -97,6 +140,21 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
     markdownOptions.images = images;
     // 进度引用由服务拥有，只在本帧查询，不由页面修改。
     const auto& progress = service.progress();
+    // 用户启动或步骤衔接时才复制目标列表，普通帧只对当前引导续租。
+    const auto startGuide = [&](const Walkthrough::Branch& branch,
+                                const Walkthrough::Step&   step) {
+        if ( !step.m_guide ) return;
+        const auto& configuredPrompt = step.m_guide->m_prompt.get(language);
+        manager->walkthroughSpotlight().start(step.m_guide->m_targets,
+                                              configuredPrompt.empty()
+                                                  ? step.m_title.get(language)
+                                                  : configuredPrompt);
+        m_activeGuide =
+            ActiveGuide{ .topicId          = topic.m_id,
+                         .branchId         = branch.m_id,
+                         .stepId           = step.m_id,
+                         .completedAtStart = progress.completed(topic, step) };
+    };
     // 主题 ID 隔离分支、步骤和重置弹窗的 ImGui 内部标识。
     ImGui::PushID(topic.m_id.c_str());
     ImGui::Dummy({ 0, 24.0F * scale });
@@ -133,6 +191,38 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
         // 空分支按 vacuous truth 视为完成，与模型目标判定保持一致。
         const bool done = count == branch.m_steps.size();
         if ( done ) ++finishedBranches;
+        if ( m_activeGuide && m_activeGuide->topicId == topic.m_id &&
+             m_activeGuide->branchId == branch.m_id ) {
+            // 新完成的当前步骤自动衔接本分支下一项未完成引导。
+            const auto current =
+                std::find_if(branch.m_steps.begin(),
+                             branch.m_steps.end(),
+                             [&](const Walkthrough::Step& step) {
+                                 return step.m_id == m_activeGuide->stepId;
+                             });
+            if ( current == branch.m_steps.end() ) {
+                manager->walkthroughSpotlight().stop();
+                m_activeGuide.reset();
+            } else if ( !m_activeGuide->completedAtStart &&
+                        progress.completed(topic, *current) ) {
+                const auto next = std::find_if(
+                    std::next(current),
+                    branch.m_steps.end(),
+                    [&](const Walkthrough::Step& step) {
+                        return step.m_guide && !progress.completed(topic, step);
+                    });
+                if ( next == branch.m_steps.end() ) {
+                    // 没有后续未完成步骤时结束，不回退到已经操作的旧控件。
+                    manager->walkthroughSpotlight().stop();
+                    m_activeGuide.reset();
+                } else {
+                    startGuide(branch, *next);
+                }
+            }
+            if ( m_activeGuide && m_activeGuide->branchId == branch.m_id )
+                // 页面当前仍在提交该分支，允许纯前景层在帧末绘制。
+                manager->walkthroughSpotlight().keepAlive();
+        }
         // 页面只允许一个分支展开，减少长教程的纵向占用。
         const bool expanded = m_expandedBranch == index;
         ImGui::PushID(branch.m_id.c_str());
@@ -207,6 +297,11 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
                 // 悬停展示完整标题，补偿视觉裁剪造成的信息缺失。
                 ImGui::SetTooltip("%s", branch.m_title.get(language).c_str());
             if ( clicked ) {
+                if ( m_activeGuide ) {
+                    // 折叠或切换分支会隐藏当前步骤按钮，应同步结束其引导。
+                    manager->walkthroughSpotlight().stop();
+                    m_activeGuide.reset();
+                }
                 if ( expanded )
                     // 点击已展开分支会折叠全部分支。
                     m_expandedBranch.reset();
@@ -261,6 +356,32 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
                                  TR("ui.walkthrough.perform").data()) )
                             // 数据文件只提供操作 ID，真正函数来自服务注册表。
                             service.execute(step.m_action);
+                        ImGui::EndDisabled();
+                    }
+                    if ( step.m_guide ) {
+                        const bool guidingThisStep =
+                            m_activeGuide &&
+                            m_activeGuide->topicId == topic.m_id &&
+                            m_activeGuide->branchId == branch.m_id &&
+                            m_activeGuide->stepId == step.m_id;
+                        const auto guideLabel =
+                            TR(guidingThisStep ? "ui.walkthrough.stop_guide"
+                                               : "ui.walkthrough.enter_guide")
+                                .toString() +
+                            "###WalkthroughGuide";
+                        // 前置未满足时保留入口位置，但不能从流程中段绕过依赖。
+                        ImGui::BeginDisabled(!guidingThisStep &&
+                                             !progress.available(topic, step));
+                        if ( FeedbackButton(guideLabel.c_str()) ) {
+                            if ( guidingThisStep ) {
+                                manager->walkthroughSpotlight().stop();
+                                m_activeGuide.reset();
+                            } else {
+                                startGuide(branch, step);
+                                // 点击帧立即续租，较早绘制的目标从下一帧开始跟随。
+                                manager->walkthroughSpotlight().keepAlive();
+                            }
+                        }
                         ImGui::EndDisabled();
                     }
                     ImGui::Dummy({ 0, 14.0F * scale });
