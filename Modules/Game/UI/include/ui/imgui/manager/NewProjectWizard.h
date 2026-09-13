@@ -1,5 +1,6 @@
 #pragma once
 
+#include "event/project/ProjectOpenInteractionEvent.h"
 #include "ui/IUIView.h"
 #include "ui/imgui/SideBarUI.h"
 #include <cstddef>
@@ -25,7 +26,9 @@ public:
     void update(UIManager* sourceManager) override;
 
     /// @brief 打开向导并重置输入状态。
-    void open();
+    /// @param origin 唤出向导的用户入口，用于创建成功后的演练归因。
+    void open(
+        Event::ProjectOpenOrigin origin = Event::ProjectOpenOrigin::Unknown);
 
     /// @brief 关闭向导弹窗。
     void close();
@@ -113,6 +116,9 @@ private:
 
     /// @brief 下一帧是否需要聚焦向导窗口。
     bool m_shouldOpen{ false };
+
+    /// @brief 本轮新建流程的用户入口，提交请求后继续传到项目加载结果。
+    Event::ProjectOpenOrigin m_openOrigin{ Event::ProjectOpenOrigin::Unknown };
 
     /// @brief 当前向导步骤。
     Step m_currentStep{ Step::ProjectInfo };

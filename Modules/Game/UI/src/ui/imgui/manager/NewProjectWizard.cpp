@@ -815,6 +815,7 @@ void NewProjectWizard::submitCreateRequest()
 
     // 所有字段集中复制到一个事件，避免消费者读取向导生命周期内存。
     Event::ProjectCreateRequestedEvent event;
+    event.m_origin                 = m_openOrigin;
     event.m_projectPath            = targetProjectPath();
     event.m_title                  = m_titleBuf;
     event.m_artist                 = m_artistBuf;
@@ -906,15 +907,23 @@ void NewProjectWizard::update(UIManager* sourceManager)
 }
 
 /// @brief 重新初始化表单并请求下一帧打开向导模态。
+/// @param origin 唤出向导的用户入口，提交后随项目创建流程传递。
 ///
 /// 每次打开都丢弃上次未提交内容，使用最新软件设置生成默认谱师和父目录。
-void NewProjectWizard::open()
+void NewProjectWizard::open(Event::ProjectOpenOrigin origin)
 {
+    // 入口必须先于 opened 事件冻结，后续表单提交不能按当前焦点重新猜测来源。
+    m_openOrigin = origin;
     // 可见和 OpenPopup 意图分别记录，以适配 ImGui 的帧式 API。
     m_isOpen     = true;
     m_shouldOpen = true;
     // 默认值必须在首帧绘制前准备完毕。
     reset();
+
+    // 只表示向导已经由对应入口唤出；创建成功仍由逻辑层另发 completed 事件。
+    Event::ProjectOpenInteractionEvent event;
+    event.m_origin = origin;
+    Event::EventBus::instance().publish(event);
 }
 
 /// @brief 关闭向导及可能仍打开的统一目录选择器。
@@ -924,6 +933,8 @@ void NewProjectWizard::close()
 {
     // 先停止主向导后续帧渲染。
     m_isOpen = false;
+    // 关闭或提交后不让旧入口泄漏到下一次未归因打开。
+    m_openOrigin = Event::ProjectOpenOrigin::Unknown;
     if ( ImGuiFileDialog::Instance()->IsOpened(PARENT_FOLDER_PICKER_ID) ) {
         // 关联子模态必须显式关闭，避免下次打开继承旧结果。
         ImGuiFileDialog::Instance()->Close();

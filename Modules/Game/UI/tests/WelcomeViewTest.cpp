@@ -31,6 +31,8 @@
 /// - 章节标签使用选中上划线；
 /// - 窄窗口下章节切换和主题往返保持稳定；
 /// - 首个分支默认展开；
+/// - 新建项目主题渲染菜单与快捷键两条真实分支；
+/// - 新建项目主题在窄窗口中仍保留可见分支卡片；
 /// - 学习进度在首页与正文之间保持；
 /// - 越界主题索引安全回退首页；
 /// - 占位主题不残留真实分支窗口。
@@ -59,6 +61,7 @@
 /// - 通过 DrawList 顶点颜色确认透明面板背景实际提交；
 /// - 同时检查子窗口和父窗口以兼容 ImGui 装饰合并；
 /// - 通过 BranchCard 高度确认默认展开正文已布局。
+/// - 通过 Active BranchCard 确认真实主题没有退化为占位页面。
 ///
 /// 隔离约定：
 /// - io.IniFilename 设为空，禁止读写用户布局文件；
@@ -255,9 +258,20 @@ bool testPages()
     chapters->NextSelectedTabId = personalizationTab;
     for ( int i = 0; i < 4; ++i ) frame(360);
     if ( chapters->SelectedTabId != personalizationTab ) return false;
-    // 从空章节状态进入占位主题再返回，章节选择应被恢复。
+    // 从空章节状态进入新建项目主题，菜单和快捷键分支都应正常渲染。
     welcome.showTopic(1);
     for ( int i = 0; i < 4; ++i ) frame(360);
+    bool createProjectBranchVisible = false;
+    for ( const auto* window : ImGui::GetCurrentContext()->Windows ) {
+        if ( window->Active &&
+             std::string_view(window->Name).find("BranchCard") !=
+                 std::string_view::npos ) {
+            createProjectBranchVisible = true;
+            break;
+        }
+    }
+    if ( !createProjectBranchVisible ) return false;
+    // 返回首页时仍须恢复进入主题前选择的个性化章节。
     welcome.showHome();
     for ( int i = 0; i < 4; ++i ) frame(960);
     if ( chapters->SelectedTabId != personalizationTab ) return false;
@@ -294,12 +308,12 @@ bool testPages()
     frame(960);
     if ( !welcome.showingHome() ) return false;
     // 占位主题可独立进入和返回，不能残留上一主题的实际分支或修改已有进度。
-    for ( std::size_t index = 1; index < service.topics().size(); ++index ) {
+    for ( std::size_t index = 2; index < service.topics().size(); ++index ) {
         // 逐个进入所有内置占位主题，覆盖宽窄两种正文布局。
         welcome.showTopic(index);
         if ( welcome.showingHome() ) return false;
         for ( int i = 0; i < 4; ++i )
-            if ( !frame(index == 1 ? 360 : 960) ) return false;
+            if ( !frame(index == 2 ? 360 : 960) ) return false;
         for ( const auto* window : ImGui::GetCurrentContext()->Windows )
             if ( window->Active &&
                  std::string_view(window->Name).find("BranchCard") !=

@@ -35,7 +35,15 @@
 /// - 重置只清除指定主题的记录。
 ///
 /// 覆盖的服务约束包括：
-/// - 内置主题按阶段稳定排序；
+/// - 打开项目与新建项目两个真实主题按阶段稳定排序；
+/// - 新建项目菜单和快捷键分别记录向导打开与最终进入项目；
+/// - 唤出向导只推进首步，不能提前把主题判定为完成；
+/// - 项目加载成功只完成同一入口对应的最终步骤；
+/// - 菜单与快捷键分支的学习进度彼此隔离；
+/// - 两条创建分支都要求先完成各自的向导打开步骤；
+/// - 创建主题保持 completion=any，任选一种实际入口即可完成；
+/// - 创建主题不再参与占位主题集合的解析循环；
+/// - 服务公开主题顺序保持欢迎页使用的稳定索引；
 /// - PackageDrop 只有只读项目完成时才推进；
 /// - BeatmapDrop 只有真正打开谱面时才推进；
 /// - 未注册 action 保持无操作；
@@ -83,6 +91,22 @@ int main(int argc, char** argv)
     const auto topic = parseTopic(BUILTIN_WALKTHROUGH);
     if ( !topic || topic->m_branches.size() != 5 || !topic->m_anyBranch )
         return 2;
+    // 新建项目教程不是占位项，并提供菜单和快捷键两条可独立完成的分支。
+    const auto createProjectTopic =
+        parseTopic(BUILTIN_CREATE_PROJECT_WALKTHROUGH);
+    if ( !createProjectTopic || createProjectTopic->m_placeholder ||
+         createProjectTopic->m_branches.size() != 2 ||
+         !createProjectTopic->m_anyBranch )
+        return 26;
+    // 两条分支均应把向导打开设为最终完成步骤的显式前置条件。
+    // 该约束保证恢复进度或乱序业务事件不会跳过用户实际唤出向导的动作。
+    for ( const auto& branch : createProjectTopic->m_branches ) {
+        if ( branch.m_steps.size() != 2 ||
+             branch.m_steps[1].m_prerequisites.size() != 1 ||
+             branch.m_steps[1].m_prerequisites.front() !=
+                 branch.m_steps[0].m_id )
+            return 29;
+    }
     Progress progress;
     // 手动确认末分支第二步不能隐式完成该分支第一步。
     if ( !progress.acknowledge(*topic, topic->m_branches[4].m_steps[1]) ||
@@ -187,6 +211,32 @@ int main(int argc, char** argv)
                  service.topics()[0],
                  service.topics()[0].m_branches[3].m_steps[1]) )
             return 17;
+        // 新建项目快捷键事件先只完成向导步骤，不得提前完成进入项目或菜单分支。
+        // 同时清除上一组拖放事件字段，避免测试结果依赖事件对象的历史状态。
+        event.m_origin        = MMM::Event::ProjectOpenOrigin::CreateShortcut;
+        event.m_completed     = false;
+        event.m_readOnly      = false;
+        event.m_beatmapOpened = false;
+        MMM::Event::EventBus::instance().publish(event);
+        service.update();
+        const auto& createTopic = service.topics()[1];
+        if ( !service.progress().completed(
+                 createTopic, createTopic.m_branches[1].m_steps[0]) ||
+             service.progress().completed(
+                 createTopic, createTopic.m_branches[1].m_steps[1]) ||
+             service.progress().completed(
+                 createTopic, createTopic.m_branches[0].m_steps[0]) )
+            return 27;
+        // 项目创建并加载完成后，只有同来源分支的最终步骤自动达成。
+        // ready 步骤依赖已完成的 dialog 步骤，因此也证明事件顺序被正确保留。
+        event.m_completed = true;
+        MMM::Event::EventBus::instance().publish(event);
+        service.update();
+        if ( !service.progress().completed(
+                 createTopic, createTopic.m_branches[1].m_steps[1]) ||
+             service.progress().completed(
+                 createTopic, createTopic.m_branches[0].m_steps[1]) )
+            return 28;
         // 未注册 ID 不执行，注册 ID 只增加一次计数。
         int invoked = 0;
         service.registerAction("test", [&] { ++invoked; });

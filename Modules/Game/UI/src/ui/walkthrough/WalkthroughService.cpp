@@ -157,6 +157,8 @@ Service::Service(const std::filesystem::path& progressPath,
         m_impl->m_error = chapters.error();
     // 核心教程优先加入，后续同 ID 自定义主题不能覆盖。
     m_impl->add(BUILTIN_WALKTHROUGH);
+    // 新建项目是第二个真实主题，与打开项目共用业务事件但使用独立来源值。
+    m_impl->add(BUILTIN_CREATE_PROJECT_WALKTHROUGH);
     for ( const auto* placeholder : BUILTIN_PLACEHOLDERS )
         // 占位主题沿用相同解析规则，保证模型结构一致。
         m_impl->add(placeholder);
@@ -266,6 +268,16 @@ void Service::update()
             // 谱包教程要求以只读临时项目方式成功打开。
             if ( event.m_completed && event.m_readOnly )
                 signal = "project.package_drop.ready";
+            break;
+        case Event::ProjectOpenOrigin::CreateFileMenu:
+            // 新建菜单入口先记录向导唤出，项目真正加载后再完成第二步。
+            signal = event.m_completed ? "project.create.menu.ready"
+                                       : "project.create.menu.dialog";
+            break;
+        case Event::ProjectOpenOrigin::CreateShortcut:
+            // 快捷键分支保持独立，不能由菜单创建结果代替实操。
+            signal = event.m_completed ? "project.create.shortcut.ready"
+                                       : "project.create.shortcut.dialog";
             break;
         default: break;
         }

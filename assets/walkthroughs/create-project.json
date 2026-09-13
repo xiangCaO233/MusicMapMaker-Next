@@ -2,7 +2,18 @@
   "id": "mmm.create-project",
   "chapter": "creation",
   "order": 10,
-  "placeholder": true,
+  "version": 1,
+  "completion": "any",
   "title": {"zh_cn": "新建项目", "en_us": "Create a project"},
-  "branches": []
+  "description": {"zh_cn": "通过文件菜单或 Ctrl+Shift+N 打开新建项目向导。任选一种方式完成表单并成功进入新项目，即可完成本主题；取消向导或创建失败不会计为完成。", "en_us": "Open the New Project wizard from the File menu or with Ctrl+Shift+N. Complete the form and enter the newly created project using either method. Cancelling the wizard or a failed creation does not count."},
+  "branches": [
+    {"id": "menu", "title": {"zh_cn": "方式一：文件菜单", "en_us": "Method 1: File menu"}, "steps": [
+      {"id": "menu-dialog", "title": {"zh_cn": "从文件菜单打开新建项目向导", "en_us": "Open the wizard from File"}, "body": {"zh_cn": "点击顶部 **文件 → 新建项目**，唤出新建项目向导。演练页面可以保持打开；向导出现后，本步骤会自动标记。", "en_us": "Choose **File → New Project** to open the New Project wizard. You may keep this walkthrough open; this step is marked automatically when the wizard appears."}, "signals": ["project.create.menu.dialog"]},
+      {"id": "menu-ready", "title": {"zh_cn": "完成创建并进入项目", "en_us": "Create and enter the project"}, "body": {"zh_cn": "依次填写项目信息、初始偏好和保存位置，最后确认创建。只有项目目录与配置创建成功并进入新项目后，才会自动完成此步骤；取消或失败不会计入。", "en_us": "Complete the project details, initial preferences, and location, then confirm creation. This step completes only after the project directory and configuration are created successfully and the app enters the new project."}, "requires": ["menu-dialog"], "signals": ["project.create.menu.ready"]}
+    ]},
+    {"id": "shortcut", "title": {"zh_cn": "方式二：快捷键", "en_us": "Method 2: Keyboard shortcut"}, "steps": [
+      {"id": "shortcut-dialog", "title": {"zh_cn": "按 Ctrl+Shift+N 打开向导", "en_us": "Press Ctrl+Shift+N"}, "body": {"zh_cn": "回到软件窗口，关闭其他模态对话框，然后按 **Ctrl+Shift+N**。快捷键会直接唤出新建项目向导，无需展开文件菜单。", "en_us": "Focus the app, close other modal dialogs, and press **Ctrl+Shift+N** to open the New Project wizard without expanding the File menu."}, "signals": ["project.create.shortcut.dialog"]},
+      {"id": "shortcut-ready", "title": {"zh_cn": "完成创建并进入项目", "en_us": "Create and enter the project"}, "body": {"zh_cn": "填写向导并确认创建。此分支与文件菜单执行相同的新建流程，但会单独记录快捷键入口；项目真正加载成功后才算完成。", "en_us": "Complete the wizard and confirm creation. This performs the same creation flow as the File menu while tracking the shortcut separately; completion is recorded only after the project loads successfully."}, "requires": ["shortcut-dialog"], "signals": ["project.create.shortcut.ready"]}
+    ]}
+  ]
 }

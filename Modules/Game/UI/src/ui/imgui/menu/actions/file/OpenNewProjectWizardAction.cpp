@@ -23,7 +23,7 @@ public:
     {
         (void)context;
         (void)activation;
-        m_pendingOpen = true;
+        m_pendingOrigin = Event::ProjectOpenOrigin::CreateFileMenu;
     }
 
     /// @brief 消费 Ctrl+Shift+N 快捷键。
@@ -36,7 +36,7 @@ public:
         (void)context;
         ImGuiIO& io = ImGui::GetIO();
         if ( io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_N) ) {
-            m_pendingOpen = true;
+            m_pendingOrigin = Event::ProjectOpenOrigin::CreateShortcut;
             return true;
         }
         return false;
@@ -44,26 +44,29 @@ public:
 
     /// @brief 在菜单栏窗口外打开新建项目向导。
     /// @param context 提供可选 UIManager。
-    /// @warning UI 热路径：每帧只检查布尔标志，实际打开仅由用户点击触发。
-    /// @note pending=false 时不查询视图注册表。
+    /// @warning UI
+    /// 热路径：每帧只检查入口枚举，实际打开仅由用户点击或快捷键触发。
+    /// @note pendingOrigin 为 Unknown 时不查询视图注册表。
     void renderDeferred(MainMenuContext& context) override
     {
         // 服务暂不可用时保留 pending，后续帧仍可完成请求。
-        if ( !m_pendingOpen ) return;
+        if ( m_pendingOrigin == Event::ProjectOpenOrigin::Unknown ) return;
         if ( !context.sourceManager ) return;
 
         auto* wizard = context.sourceManager->getView<NewProjectWizard>(
             "NewProjectWizard");
         if ( wizard ) {
-            wizard->open();
+            wizard->open(m_pendingOrigin);
             // 只有实际找到并打开向导后才消费请求。
-            m_pendingOpen = false;
+            m_pendingOrigin = Event::ProjectOpenOrigin::Unknown;
         }
     }
 
 private:
-    /// @brief 是否延迟打开新建项目向导。
-    bool m_pendingOpen = false;
+    /// @brief 等待打开新建项目向导的入口；Unknown 表示没有请求。
+    Event::ProjectOpenOrigin m_pendingOrigin{
+        Event::ProjectOpenOrigin::Unknown
+    };
 };
 }  // namespace
 
