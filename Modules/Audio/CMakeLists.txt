@@ -92,6 +92,15 @@ target_include_directories(Audio PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # 所有测试通过统一 helper 输出到 build/tests/Audio，并自动带入项目测试隔离源。 测试生成文件必须写入
 # build/test_output，源码 tests/data 只作为只读资源基线。
 
+# 引擎 ABI 测试覆盖消费方对象构造和库内混音，不依赖系统声卡。
+mmm_add_test_executable(Audio AudioEngineAbiTest tests/AudioEngineAbiTest.cpp)
+# 直接链接正式依赖，确保预编译模式也检验当前头文件与外置符号、对象布局配套。 不链接
+# AudioManager，避免设备可用性或后端初始化失败掩盖引擎构造缺陷。
+target_link_libraries(AudioEngineAbiTest PRIVATE ICE::IonCachyEngine)
+add_test(NAME AudioEngineAbiTest COMMAND AudioEngineAbiTest)
+# 线程池若因布局错误丢失唤醒，应由测试超时失败而非永久挂起 CI。
+set_tests_properties(AudioEngineAbiTest PROPERTIES TIMEOUT 15)
+
 # Key 音控制测试覆盖默认值、增益组合、越界和并发完整快照。
 mmm_add_test_executable(Audio KeySoundControlTest tests/KeySoundControlTest.cpp)
 # 只链接正式 Audio 接口和日志封装，不依赖文件资源。
