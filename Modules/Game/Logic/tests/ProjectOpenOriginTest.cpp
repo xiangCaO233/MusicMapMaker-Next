@@ -3,10 +3,13 @@
 #include "logic/ProjectController.h"
 
 /// @brief 验证入口随异步项目请求、旧画布关闭和替换请求正确传递，取消不残留。
-/// @return 全部阶段通过时返回 0，1～6 分别定位失败的请求转换阶段。
+/// @return 全部阶段通过时返回 0，1～7 分别定位失败的请求转换阶段。
 /// @note 测试消费待处理动作，不实际打开这些路径或解压谱包。
 /// @note 来源用于区分操作入口，不能在异步排队后丢失或沿用上一请求。
 /// @note 用例顺序刻意共享控制器，覆盖连续请求间的状态转移而非独立字段赋值。
+/// @note 新建项目场景只验证创建参数和入口到达待处理动作，不创建真实目录。
+/// @note 测试末尾显式清理单例，避免状态影响同进程中的后续使用者。
+/// @note 所有虚拟路径均位于不可执行断言中，不触发用户文件写入。
 int main()
 {
     using MMM::Event::ProjectOpenOrigin;
@@ -56,11 +59,22 @@ int main()
     if ( !controller.consumePendingProjectAction(false)
               .m_projectPathToOpen.empty() )
         return 5;
+    // 新建项目创建参数与向导入口必须作为同一动作传递到实际打开阶段。
+    MMM::Logic::ProjectCreationOptions creationOptions;
+    creationOptions.m_title = "Created from shortcut";
+    controller.requestCreateProject(
+        "/test/create", creationOptions, ProjectOpenOrigin::CreateShortcut);
+    action = controller.consumePendingProjectAction(false);
+    if ( action.m_origin != ProjectOpenOrigin::CreateShortcut ||
+         action.m_projectPathToOpen != "/test/create" ||
+         !action.m_projectCreationOptions ||
+         action.m_projectCreationOptions->m_title != creationOptions.m_title )
+        return 6;
     // 省略入口参数模拟内部调用，必须回到 Unknown，而非继承刚取消的 FolderDrop。
     controller.requestOpenProject("/test/internal");
     if ( controller.consumePendingProjectAction(false).m_origin !=
          ProjectOpenOrigin::Unknown )
-        return 6;
+        return 7;
     // 成功结束前清理单例的待切换状态，不让本测试留下尚未完成的请求。
     controller.cancelPendingProjectSwitch();
     return 0;

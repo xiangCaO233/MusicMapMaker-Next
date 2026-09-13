@@ -956,7 +956,8 @@ ProjectController::ProjectController()
                 options.m_colorPaletteSchemeName =
                     event.m_colorPaletteSchemeName;
                 options.m_sidebarActiveTab = event.m_sidebarActiveTab;
-                requestCreateProject(event.m_projectPath, options);
+                requestCreateProject(
+                    event.m_projectPath, options, event.m_origin);
             });
     // 完成与取消只推进请求状态，不在回调中重复执行目录复制或项目存储。
     m_projectSwitchCompletedSubscription =
@@ -1127,10 +1128,11 @@ void ProjectController::requestOpenTemporaryProjectPackage(
 /// @brief 请求创建并打开项目，必要时等待 UI 完成旧画布关闭。
 /// @param projectPath 要创建的项目根目录。
 /// @param options 新项目初始设置。
+/// @param origin 唤出新建向导的用户入口，成功后用于交互结果归因。
 /// @note 创建与普通打开共用模式，通过独立的可选创建参数区分；不立即创建目录。
 void ProjectController::requestCreateProject(
     const std::filesystem::path&  projectPath,
-    const ProjectCreationOptions& options)
+    const ProjectCreationOptions& options, Event::ProjectOpenOrigin origin)
 {
     if ( projectPath.empty() ) {
         return;
@@ -1153,12 +1155,12 @@ void ProjectController::requestCreateProject(
         m_requestedProjectPath.clear();
         m_requestedProjectOpenMode = ProjectOpenMode::Normal;
         m_requestedProjectCreationOptions.reset();
-        m_switchOrigin                 = Event::ProjectOpenOrigin::Unknown;
-        m_pendingProjectSwitchPath     = projectPath;
-        m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
+        m_switchOrigin                        = origin;
+        m_pendingProjectSwitchPath            = projectPath;
+        m_pendingProjectSwitchOpenMode        = ProjectOpenMode::Normal;
         m_pendingProjectSwitchCreationOptions = options;
     } else {
-        m_requestedOrigin                 = Event::ProjectOpenOrigin::Unknown;
+        m_requestedOrigin                 = origin;
         m_requestedProjectPath            = projectPath;
         m_requestedProjectOpenMode        = ProjectOpenMode::Normal;
         m_requestedProjectCreationOptions = options;

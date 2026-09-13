@@ -136,8 +136,11 @@ public:
     /// @brief 请求创建并打开项目，必要时等待 UI 完成旧画布关闭。
     /// @param projectPath 要创建的项目根目录。
     /// @param options 新项目初始设置。
-    void requestCreateProject(const std::filesystem::path&  projectPath,
-                              const ProjectCreationOptions& options);
+    /// @param origin 唤出新建向导的用户入口。
+    void requestCreateProject(
+        const std::filesystem::path&  projectPath,
+        const ProjectCreationOptions& options,
+        Event::ProjectOpenOrigin origin = Event::ProjectOpenOrigin::Unknown);
 
     /// @brief 请求关闭当前项目，必要时等待 UI 完成旧画布关闭。
     void requestCloseProject();
