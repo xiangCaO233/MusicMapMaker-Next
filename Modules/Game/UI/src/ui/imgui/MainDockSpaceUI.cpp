@@ -1020,34 +1020,19 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     }
 }
 
-/// @brief 在普通帧和文件操作占位帧中统一消费、绘制保存反馈。
-/// @param fileOperationBusy 当前是否由文件操作占据主 UI。
+/// @brief 在普通 UI 帧中统一消费、绘制保存进度与最终结果气泡。
 ///
-/// 保存结果与主 DockSpace 绘制解耦，即使工程切换暂时隐藏常规窗口，也要继续
-/// 推进反馈计时并显示结果，防止成功或失败提示被操作遮蔽。
+/// 进度与结果复用同一非交互前景气泡，不创建 ImGuiWindow，也不改变导航或 Dock
+/// 焦点；文件操作期间常规视图继续提交，避免标签页因跨帧缺席而被重新选择。
+/// 气泡阶段变化仅来自事件队列，不以文件互斥量或窗口显隐状态推断操作完成。
 /// @warning UI 热路径：不读取会话状态，不等待文件操作。
-void MainDockSpaceUI::updateSaveFeedback(bool fileOperationBusy)
+void MainDockSpaceUI::updateSaveFeedback()
 {
-    // update 先消费结果并推进计时，render 再按同一 busy 状态选择表现层级。
-    m_saveResultFeedback.update(
-        ImGui::GetIO().DeltaTime, m_statusMessageService, fileOperationBusy);
+    // update 先切换阶段或最终文案，render 再使用同一气泡几何绘制。
+    m_saveResultFeedback.update(ImGui::GetIO().DeltaTime,
+                                m_statusMessageService);
     m_saveResultFeedback.render(
-        Config::AppConfig::instance().getWindowContentScale(),
-        fileOperationBusy);
-}
-
-/// @brief 保持暂时隐藏的谱面与工具窗口的停靠树，不访问会话。
-///
-/// 文件操作期间常规 DockSpace 可能不绘制内容；KeepAliveOnly 保留节点、标签页
-/// 归属和用户布局，待操作结束后可无损恢复。
-/// @warning UI 热路径：操作期间每帧只提交一次停靠节点保活。
-void MainDockSpaceUI::keepFileOperationDockSpaceAlive()
-{
-    // 零 ID 表示根 DockSpace 尚未创建，此时没有需要保活的节点树。
-    if ( s_mainDockId != 0 ) {
-        ImGui::DockSpace(
-            s_mainDockId, ImVec2(0, 0), ImGuiDockNodeFlags_KeepAliveOnly);
-    }
+        Config::AppConfig::instance().getWindowContentScale());
 }
 
 /// @brief 处理临时项目提示、保存结果及音频资源变更结果队列。

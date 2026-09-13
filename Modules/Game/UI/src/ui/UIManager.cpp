@@ -7,7 +7,6 @@
 #include "event/core/EventBus.h"
 #include "event/input/translators/ImGuiTranslator.h"
 #include "event/input/translators/UniversalCodepoint.h"
-#include "event/logic/BeatmapSaveProgressEvent.h"
 #include "event/project/ProjectEvents.h"
 #include "event/ui/GLFWNativeEvent.h"
 #include "event/ui/iwindow/UIWindowKeyEvent.h"
@@ -1515,10 +1514,8 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 
 /// @brief 驱动一帧全局 UI 生命周期、数据准备和视图更新。
 ///
-/// 帧开始先尝试取得谱面文件操作门；转码或保存持锁时只维持 DockSpace
-/// 并禁用反馈， 不让视图并发读取正在替换的会话资源。
-///
-/// 正常路径依次消费项目事件、同步工作区、清理关闭视图、派发输入和剪贴板，再为实现
+/// 每帧先推进不抢焦点的保存进度气泡，再依次消费项目事件、同步工作区、清理关闭
+/// 视图、派发输入和剪贴板，并为实现
 /// IParallelUiPreparable
 /// 的视图准备纯数据缓存。声明主线程要求的字体测量串行执行，
 /// 其余多个任务可使用应用线程池并以 latch 在视图更新前汇合。
@@ -1532,21 +1529,11 @@ void UIManager::onUpdateUI()
 {
     // 引导服务先推进页面与动作状态。
     m_walkthrough->update();
-    // 文件指令也只尝试此锁，且在执行前取得它；普通 UI 帧中的会话读取
-    // 因而不会撞上长时间转码。后台准备任务在本函数返回前已完成。
-    std::unique_lock fileOperationLock(Event::beatmapFileOperationGate(),
-                                       std::try_to_lock);
-    const bool       fileOperationBusy = !fileOperationLock.owns_lock();
-    // 拖放路由在文件操作忙时暂停接收新项目或资源。
-    m_projectDropRouter->update(!fileOperationBusy);
+    // 拖放命令只入队到逻辑线程，不因后台保存进度阻塞当前 ImGui 帧。
+    m_projectDropRouter->update(true);
     if ( auto* dock = getView<MainDockSpaceUI>("MainDockSpaceUI") ) {
-        dock->updateSaveFeedback(fileOperationBusy);
-    }
-    if ( fileOperationBusy ) {
-        // 转码期间不播放按钮反馈，也不进入可能读取 Session 的视图。
-        SetInteractionFeedbackEnabled(false);
-        MainDockSpaceUI::keepFileOperationDockSpaceAlive();
-        return;
+        // 进度与结果共用非交互气泡；绘制不会切换 ImGui 导航或 Dock 标签。
+        dock->updateSaveFeedback();
     }
     if ( m_editorApplicationService ) {
         // FPS 只发布当前 ImGui 平滑帧率值，不做额外统计。

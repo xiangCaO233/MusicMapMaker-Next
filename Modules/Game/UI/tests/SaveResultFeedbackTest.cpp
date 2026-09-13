@@ -5,11 +5,12 @@
 #include "ui/imgui/status/IStatusMessageSink.h"
 
 #include "imgui.h"
+#include "imgui_internal.h"
 
 #include <string>
 
 /// @file SaveResultFeedbackTest.cpp
-/// @brief 保存反馈在长帧、文件操作遮罩、失败优先级和过期清理下的回归测试。
+/// @brief 保存反馈在长帧、实时进度、失败优先级和过期清理下的回归测试。
 /// @details 测试建立无平台后端的最小 ImGui 上下文，通过前景 DrawList 顶点数
 /// 判断是否绘制，不访问真实项目或文件系统。
 
@@ -59,29 +60,49 @@ bool testLongFrameDoesNotExpireNewPackageFeedback()
 
 }  // namespace
 
-/// @brief 验证耗时操作持续绘制、结束清理以及失败反馈不被进度结束吞掉。
-/// @return 忙碌遮罩与失败气泡均绘制、过期后清空时返回 true。
+/// @brief 验证耗时操作使用小气泡、结束后切换结果且失败不被进度结束吞掉。
+/// @return 进度与失败气泡均绘制、无全屏遮罩且过期后清空时返回 true。
 bool testFileOperationProgress()
 {
     // 使用独立反馈器，避免继承上一场景尚未过期的气泡状态。
     MMM::UI::SaveResultFeedback feedback;
     TestStatusMessageSink       sink;
     auto&                       bus = MMM::Event::EventBus::instance();
-    // 阶段事件默认 active，驱动全屏文件操作遮罩。
+    // 阶段事件默认 active，驱动与最终结果共用的小型气泡。
     bus.publish(MMM::Event::BeatmapSaveProgressEvent{ .stage = "Encoding" });
-    // 即使 delta 很大，门闩占用期间遮罩仍必须绘制。
+    // 即使 delta 很大，活动进度仍必须绘制且不能覆盖完整视口。
     feedback.update(30.0F, sink);
     ImGui::NewFrame();
-    feedback.render(1.0F, true);
+    // 哨兵窗口先取得导航焦点，进度气泡只能画到前景层，不能创建或聚焦窗口。
+    ImGui::Begin("SaveProgressFocusSentinel");
+    ImGui::End();
+    ImGui::SetWindowFocus("SaveProgressFocusSentinel");
+    ImGuiWindow* focusedBeforeProgress = GImGui->NavWindow;
+    // 记录的是 ImGui 内部导航窗口身份，不以可见标题或停靠索引间接推断焦点。
+    feedback.render(1.0F);
+    const bool focusPreserved = GImGui->NavWindow == focusedBeforeProgress;
     const bool busyRendered =
         ImGui::GetForegroundDrawList()->VtxBuffer.Size > 0;
+    // 旧实现使用固定颜色绘制覆盖主视口的矩形；新气泡绝不能再出现该颜色。
+    const ImU32 fullScreenMaskColor = IM_COL32(20, 22, 28, 245);
+    bool        hasFullScreenMask   = false;
+    // 前景顶点数量很小，逐项检查能直接区分气泡与被删除的全屏遮罩路径。
+    for ( const auto& vertex : ImGui::GetForegroundDrawList()->VtxBuffer ) {
+        if ( vertex.col == fullScreenMaskColor ) {
+            // 命中任意旧遮罩顶点即可判定回归，无需继续扫描剩余文字几何。
+            hasFullScreenMask = true;
+            break;
+        }
+    }
     // 结束当前帧后再发布最终结果，模拟真实文件任务跨帧完成。
     ImGui::EndFrame();
     // 文件操作失败结果先于结束阶段入队，队列顺序必须保留两者。
     bus.publish(MMM::Event::BeatmapSaveResultEvent{
         .path = "test.zip", .success = false, .isExport = true });
     bus.publish(MMM::Event::BeatmapSaveProgressEvent{ .active = false });
-    // 门闩释放后应显示失败气泡，而不是被 progressActive=false 覆盖。
+    // 结果和结束事件同批消费时，最终文本应在 progressActive
+    // 清除后立即接管气泡。 门闩释放后应显示失败气泡，而不是被
+    // progressActive=false 覆盖。
     feedback.update(30.0F, sink);
     ImGui::NewFrame();
     feedback.render(1.0F);
@@ -96,8 +117,9 @@ bool testFileOperationProgress()
     const bool cleared = ImGui::GetForegroundDrawList()->VtxBuffer.Size == 0;
     // 即使没有绘制几何也要正常结束帧，保持上下文状态平衡。
     ImGui::EndFrame();
-    // 三个阶段必须全部满足才证明遮罩到最终反馈的完整生命周期。
-    return busyRendered && failureRendered && cleared;
+    // 五个条件共同证明阶段与结果共用小气泡、不抢焦点且生命周期完整。
+    return busyRendered && !hasFullScreenMask && focusPreserved &&
+           failureRendered && cleared;
 }
 
 /// @brief 运行保存与打包结果反馈的长帧回归测试。

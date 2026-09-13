@@ -145,7 +145,6 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
 
     // 固定字符串保证 ImGui 配置能跨帧识别同一个根节点。
     ImGuiID dockspace_id = ImGui::GetID("MyMainDockSpace");
-    s_mainDockId         = dockspace_id;
     ImGui::DockSpace(
         dockspace_id, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
     FeedbackDockNodeControls(dockspace_id);

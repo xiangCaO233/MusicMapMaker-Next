@@ -10,8 +10,6 @@
 #include "ui/Icons.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
 
-#include <algorithm>
-#include <cmath>
 #include <concurrentqueue.h>
 #include <filesystem>
 #include <imgui.h>
@@ -21,7 +19,7 @@
 /// @file SaveResultFeedback.cpp
 /// @brief 保存、导出与打包结果从事件线程传递到状态栏或前景气泡的实现。
 /// @details 事件回调只复制载荷并入队，UI 帧按 presentation 决定静默、状态栏
-/// 或鼠标附近气泡；文件操作占用期间改为绘制不可中断的全屏进度遮罩。
+/// 或鼠标附近气泡；文件操作进行中在同一气泡中实时替换阶段文本。
 
 namespace MMM::UI
 {
@@ -134,11 +132,11 @@ struct SaveResultFeedback::Impl {
     /// @note 仅由 UI 线程更新和读取，不需要额外同步。
     std::string displayText;
 
-    /// @brief 当前文件操作阶段，仅在 UI 线程消费和渲染。
-    /// @note 阶段由低频事件更新，不在渲染函数中重新生成。
+    /// @brief 已拼接图标的当前文件操作阶段文本。
+    /// @note 阶段由低频事件更新，渲染函数不再逐帧分配字符串。
     std::string progressText;
     /// @brief 是否收到尚未结束的操作通知。
-    /// @note 该字段选择具体阶段文本，实际门闩状态由 render 参数提供。
+    /// @note 该字段直接选择进度或最终结果气泡，不依赖文件互斥量。
     bool progressActive = false;
 
     /// @brief 保存结果事件订阅令牌，析构时自动取消订阅。
@@ -161,18 +159,16 @@ SaveResultFeedback::~SaveResultFeedback() = default;
 /// @brief 消费保存结果并更新反馈气泡计时器。
 /// @param deltaSeconds 自上一帧以来经过的秒数。
 /// @param statusMessageSink 自动保存成功时使用的状态栏消息入口。
-/// @param fileOperationBusy 文件门闩仍占用时暂停现有气泡倒计时。
 /// @details 先推进旧反馈计时，再消费新载荷，使本帧新结果从完整时限开始；
-/// 阶段事件仅更新遮罩状态，最终结果再按 presentation 分流。
+/// 阶段事件切换同一个气泡的实时文案，最终结果再按 presentation 分流。
 /// @warning UI 热路径：每帧仅消费少量事件并更新常量规模状态。
 void SaveResultFeedback::update(float               deltaSeconds,
-                                IStatusMessageSink& statusMessageSink,
-                                bool                fileOperationBusy)
+                                IStatusMessageSink& statusMessageSink)
 {
     // 当前帧间隔只属于此前已经显示的反馈；新到达的结果必须从完整时长开始，
     // 避免原生文件选择器或耗时导出造成的长帧让新反馈在首次绘制前直接过期。
-    if ( !fileOperationBusy && m_impl->remainingSeconds > 0.0f ) {
-        // 门闩占用时用户看不到结果气泡，因此暂不消耗其可见时限。
+    if ( !m_impl->progressActive && m_impl->remainingSeconds > 0.0f ) {
+        // 进行中阶段优先显示，已有最终结果的可见时限暂不消耗。
         m_impl->remainingSeconds -= deltaSeconds;
     }
 
@@ -180,9 +176,15 @@ void SaveResultFeedback::update(float               deltaSeconds,
     // 排空本帧前已到达的载荷，保留队列中的阶段和结果先后顺序。
     while ( m_impl->queue.try_dequeue(payload) ) {
         if ( payload.isProgress ) {
-            // 阶段事件只更新遮罩状态，不覆盖已有最终结果气泡。
+            // 阶段事件只切换气泡内容，不覆盖已有最终结果与计时状态。
             m_impl->progressActive = payload.active;
-            m_impl->progressText   = std::move(payload.errorMessage);
+            if ( payload.active ) {
+                const char* stage = payload.errorMessage.empty()
+                                        ? "正在处理文件…"
+                                        : payload.errorMessage.c_str();
+                m_impl->progressText =
+                    std::string(ICON_MMM_SAVE) + "  " + stage;
+            }
             continue;
         }
         if ( payload.success && !m_impl->success &&
@@ -241,61 +243,18 @@ void SaveResultFeedback::update(float               deltaSeconds,
 
 /// @brief 渲染当前有效的保存结果反馈气泡。
 /// @param dpiScale 当前窗口内容缩放。
-/// @param fileOperationBusy 是否用全屏进行中遮罩替代结果气泡。
-/// @details 忙碌路径覆盖主视口且不读取结果时限；空闲路径根据鼠标靠近的工作区
-/// 边缘翻转气泡枢轴，减少反馈超出可用区域。
+/// @details 进行中阶段与最终结果复用同一套鼠标附近气泡几何；根据鼠标靠近的
+/// 工作区边缘翻转气泡枢轴，减少反馈超出可用区域。
 /// @warning UI 热路径：仅在反馈计时器有效时提交固定数量绘制命令。
-void SaveResultFeedback::render(float dpiScale, bool fileOperationBusy) const
+void SaveResultFeedback::render(float dpiScale) const
 {
-    if ( fileOperationBusy ) {
-        // 进行中遮罩使用主视口工作区居中，但背景覆盖完整视口。
-        const auto* viewport = ImGui::GetMainViewport();
-        // 前景绘制列表保证遮罩覆盖全部停靠窗口。
-        auto* drawList = ImGui::GetForegroundDrawList();
-        // 尚未收到具体阶段时使用稳定的通用处理中提示。
-        const char* text =
-            m_impl->progressActive && !m_impl->progressText.empty()
-                ? m_impl->progressText.c_str()
-                : "正在处理文件…";
-        // 宽度至少为 360 逻辑像素，同时容纳阶段文本且不超出工作区。
-        const float width =
-            std::min(viewport->WorkSize.x,
-                     std::max(360.0F * dpiScale,
-                              ImGui::CalcTextSize(text).x + 40.0F * dpiScale));
-        // 固定高度面板在工作区中心定位，避开系统任务栏区域。
-        const ImVec2 start =
-            viewport->WorkPos +
-            (viewport->WorkSize - ImVec2(width, 100.0F * dpiScale)) * 0.5F;
-        // 高不透明背景阻止用户误以为当前窗口仍可交互。
-        drawList->AddRectFilled(viewport->Pos,
-                                viewport->Pos + viewport->Size,
-                                IM_COL32(20, 22, 28, 245));
-        // 阶段文本位于进度条上方并保留 DPI 缩放边距。
-        drawList->AddText(start + ImVec2(20.0F, 20.0F) * dpiScale,
-                          IM_COL32(240, 240, 240, 255),
-                          text);
-        // 轨道宽度始终至少一个像素，避免极窄视口出现负几何。
-        const ImVec2 barStart = start + ImVec2(20.0F, 60.0F) * dpiScale;
-        const float  barWidth = std::max(1.0F, width - 40.0F * dpiScale);
-        const float  height   = 8.0F * dpiScale;
-        drawList->AddRectFilled(barStart,
-                                barStart + ImVec2(barWidth, height),
-                                IM_COL32(60, 65, 75, 255),
-                                height * 0.5F);
-        // 往返滑块表示尚无总工作量的阶段，时间只驱动动画，不冒充完成率。
-        const float phase =
-            static_cast<float>(0.5 + 0.5 * std::sin(ImGui::GetTime() * 3.0));
-        const float offset = phase * barWidth * 0.75F;
-        // 滑块占轨道四分之一，三分之四的最大偏移确保它不会越界。
-        drawList->AddRectFilled(
-            barStart + ImVec2(offset, 0.0F),
-            barStart + ImVec2(offset + barWidth * 0.25F, height),
-            ImGui::GetColorU32(ImGuiCol_PlotHistogram),
-            height * 0.5F);
-        return;
-    }
-    // 没有有效时限时不生成任何前景几何。
-    if ( m_impl->remainingSeconds <= 0.0f ) return;
+    const bool showProgress = m_impl->progressActive;
+    // 没有活动阶段且最终结果已经过期时不生成任何前景几何。
+    if ( !showProgress && m_impl->remainingSeconds <= 0.0f ) return;
+
+    // 阶段与结果只切换文本和颜色，位置、背景及边距完全复用。
+    const std::string& visibleText =
+        showProgress ? m_impl->progressText : m_impl->displayText;
 
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     // 读取当前帧鼠标位置，事件线程无需携带或同步指针坐标。
@@ -319,7 +278,7 @@ void SaveResultFeedback::render(float dpiScale, bool fileOperationBusy) const
         pivot.y == 0.0f ? 20.0f * dpiScale : -20.0f * dpiScale;
     // 文本测量与 DPI 内边距共同决定气泡边界。
     const ImVec2 padding{ 16.0f * dpiScale, 10.0f * dpiScale };
-    const ImVec2 textSize = ImGui::CalcTextSize(m_impl->displayText.c_str());
+    const ImVec2 textSize = ImGui::CalcTextSize(visibleText.c_str());
     const ImVec2 size{ textSize.x + padding.x * 2.0f,
                        textSize.y + padding.y * 2.0f };
     const ImVec2 pos{ mousePos.x + offsetX, mousePos.y + offsetY };
@@ -331,15 +290,18 @@ void SaveResultFeedback::render(float dpiScale, bool fileOperationBusy) const
     ImDrawList* drawList = ImGui::GetForegroundDrawList(viewport);
     const ImU32 backgroundColor =
         ImGui::GetColorU32(ImVec4(0.04f, 0.05f, 0.07f, 0.88f));
-    // 绿色表达成功、红色表达失败，背景和几何保持一致。
+    // 进行中使用主题进度色，最终成功与失败分别使用绿色和红色。
     const ImU32 textColor =
-        ImGui::GetColorU32(m_impl->success ? ImVec4(0.45f, 1.0f, 0.48f, 1.0f)
-                                           : ImVec4(1.0f, 0.42f, 0.42f, 1.0f));
+        showProgress
+            ? ImGui::GetColorU32(ImGuiCol_PlotHistogram)
+            : ImGui::GetColorU32(m_impl->success
+                                     ? ImVec4(0.45f, 1.0f, 0.48f, 1.0f)
+                                     : ImVec4(1.0f, 0.42f, 0.42f, 1.0f));
     // 前景 DrawList 让反馈覆盖停靠窗口，但不创建可交互 ImGui 窗口。
     drawList->AddRectFilled(rectMin, rectMax, backgroundColor, 8.0f * dpiScale);
     drawList->AddText(ImVec2(rectMin.x + padding.x, rectMin.y + padding.y),
                       textColor,
-                      m_impl->displayText.c_str());
+                      visibleText.c_str());
 }
 
 }  // namespace MMM::UI
