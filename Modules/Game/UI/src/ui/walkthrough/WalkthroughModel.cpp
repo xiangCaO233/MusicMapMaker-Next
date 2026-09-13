@@ -9,6 +9,8 @@
 /// @details guide 仅包含本地化提示和稳定控件目标，不授予配置执行输入或业务
 /// 动作的能力；目标顺序的界面含义由 Spotlight 在实际可见控件中解析。
 /// 自定义主题与内置主题使用完全相同的结构、长度和 ID 白名单校验。
+/// requires_project 只声明进入环境，不参与步骤依赖图或持久化进度键。
+/// 环境是否满足由 UI 层实时判断，解析器不接触项目生命周期对象。
 
 namespace MMM::UI::Walkthrough
 {
@@ -175,6 +177,13 @@ std::expected<Topic, std::string> parseTopic(std::string_view input)
         if ( !placeholder->is_boolean() )
             return std::unexpected("placeholder 必须为布尔值");
         topic.m_placeholder = placeholder->get<bool>();
+    }
+    // 项目上下文要求属于主题入口约束，不由单个步骤重复声明。
+    if ( auto requiresProject = json.find("requires_project");
+         requiresProject != json.end() ) {
+        if ( !requiresProject->is_boolean() )
+            return std::unexpected("requires_project 必须为布尔值");
+        topic.m_requiresProject = requiresProject->get<bool>();
     }
     // 内容版本用于描述修订，不参与步骤进度键，也不会清空旧进度。
     if ( auto version = json.find("version"); version != json.end() ) {

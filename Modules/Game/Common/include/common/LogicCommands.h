@@ -825,10 +825,21 @@ struct BeatmapTemplateCreateOptions {
     bool copyObjects{ false };
 };
 
+/// @brief 新建谱面向导的用户入口，用于跨异步命令保留操作归因。
+/// @note 该值描述业务入口而非演练步骤，未知入口不会产生演练完成信号。
+enum class BeatmapCreateOrigin : std::uint8_t {
+    Unknown,   ///< 程序内部或未指定入口。
+    FileMenu,  ///< 文件菜单中的新建谱面项。
+    Shortcut   ///< Ctrl+N 快捷键。
+};
+
 /**
  * @brief 新建谱面指令
  */
 struct CmdCreateBeatmap {
+    /// @brief 发起向导的用户入口，随逻辑线程创建结果返回。
+    BeatmapCreateOrigin origin{ BeatmapCreateOrigin::Unknown };
+
     /// @brief 新谱面的基础元数据。
     ::MMM::BaseMapMeta baseMeta;
 

@@ -31,7 +31,9 @@ MainMenuFile::MainMenuFile()
         "ui.file.new_map",
         MainMenuItemTextKind::TranslationKey,
         "Ctrl+N",
-        createOpenNewBeatmapWizardAction()));
+        createOpenNewBeatmapWizardAction(),
+        "main-menu.file.new-beatmap"));
+    // 语义目标仅覆盖可执行菜单项矩形，禁用状态仍由动作处理器统一决定。
     // 谱面向导只向现有项目添加新的可编辑谱面。
     // 分隔创建入口与已有项目的打开和导入入口。
     registerItem(std::make_unique<MainMenuSeparatorItem>());

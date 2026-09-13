@@ -12,8 +12,9 @@
 
 namespace MMM::Event
 {
+enum class BeatmapCreateInteractionStage : std::uint8_t;
 struct GLFWDropEvent;
-}
+}  // namespace MMM::Event
 
 namespace MMM::UI
 {
@@ -34,7 +35,9 @@ public:
     void update(UIManager* sourceManager) override;
 
     /// @brief 打开向导并重置输入状态。
-    void open();
+    /// @param origin 本次向导的用户入口，用于创建成功后的交互归因。
+    void open(Logic::BeatmapCreateOrigin origin =
+                  Logic::BeatmapCreateOrigin::Unknown);
 
     /// @brief 关闭向导弹窗。
     void close();
@@ -116,7 +119,8 @@ private:
     void renderTemplateOptionsPopup();
 
     /// @brief 绘制内部名称冲突警告弹窗。
-    void renderDuplicateNameWarningPopup();
+    /// @param sourceManager 提供突出引导目标注册。
+    void renderDuplicateNameWarningPopup(UIManager* sourceManager);
 
     /// @brief 收集已打开且可作为模板的谱面列表。
     /// @return 可选模板谱面列表。
@@ -178,10 +182,18 @@ private:
     /// @brief 提交新建谱面命令。
     void submitCreateRequest();
 
+    /// @brief 发布当前入口对应的新建谱面交互阶段。
+    /// @param stage 已实际到达的业务阶段。
+    /// @param beatmapPath 完成阶段的新谱面项目内路径。
+    void publishInteraction(Event::BeatmapCreateInteractionStage stage,
+                            std::string beatmapPath = {}) const;
+
     /// @brief 当前向导弹窗是否打开。
     bool m_isOpen = false;
     /// @brief 下一帧是否需要打开弹窗。
     bool m_shouldOpen = false;
+    /// @brief 本轮向导的菜单或快捷键入口。
+    Logic::BeatmapCreateOrigin m_origin{ Logic::BeatmapCreateOrigin::Unknown };
     /// @brief 待创建谱面的基础元数据。
     MMM::BaseMapMeta m_meta;
 

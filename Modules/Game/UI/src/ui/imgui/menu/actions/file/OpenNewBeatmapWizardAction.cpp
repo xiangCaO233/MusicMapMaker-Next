@@ -1,4 +1,3 @@
-#include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
@@ -17,12 +16,13 @@ class OpenNewBeatmapWizardAction final : public IMainMenuItemActionHandler
 public:
     /// @brief 仅在已有项目时允许创建谱面。
     /// @param context 统一菜单上下文。
-    /// @return 当前项目存在时返回 true。
-    /// @warning UI 热路径：只读取项目观察指针。
+    /// @return UI 已确认活动项目且不处于切换阶段时返回 true。
+    /// @warning UI 热路径：只读取 UIManager 的生命周期状态。
     bool isEnabled(const MainMenuContext& context) const override
     {
-        (void)context;
-        return Logic::EditorEngine::instance().getCurrentProject() != nullptr;
+        return context.sourceManager &&
+               context.sourceManager->hasActiveProjectUiState() &&
+               !context.sourceManager->isProjectTransitionInProgress();
     }
 
     /// @brief 打开新建谱面向导视图。
@@ -33,11 +33,7 @@ public:
                  const MainMenuItemActivation& activation) override
     {
         (void)activation;
-        if ( !context.sourceManager ) return;
-
-        auto* wizard = context.sourceManager->getView<NewBeatmapWizard>(
-            "NewBeatmapWizard");
-        if ( wizard ) wizard->open();
+        open(context, Logic::BeatmapCreateOrigin::FileMenu);
     }
 
     /// @brief 消费 Ctrl+N 快捷键。
@@ -49,10 +45,24 @@ public:
         // Ctrl+Shift+N 留给新建项目，当前动作只消费不带 Shift 的 Ctrl+N。
         ImGuiIO& io = ImGui::GetIO();
         if ( io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_N) ) {
-            execute(context, MainMenuItemActivation{});
+            open(context, Logic::BeatmapCreateOrigin::Shortcut);
             return true;
         }
         return false;
+    }
+
+private:
+    /// @brief 按指定用户入口打开已注册的新建谱面向导。
+    /// @param context 提供 UIManager 与向导实例。
+    /// @param origin 菜单或快捷键入口。
+    /// @note 视图缺失时保持无操作，不发布虚假的向导打开阶段。
+    void open(MainMenuContext& context, Logic::BeatmapCreateOrigin origin)
+    {
+        if ( !context.sourceManager ) return;
+
+        auto* wizard = context.sourceManager->getView<NewBeatmapWizard>(
+            "NewBeatmapWizard");
+        if ( wizard ) wizard->open(origin);
     }
 };
 }  // namespace

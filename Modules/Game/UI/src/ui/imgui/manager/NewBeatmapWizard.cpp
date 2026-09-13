@@ -5,6 +5,7 @@
 #include "config/skin/translation/TranslationFormat.h"
 #include "event/core/EventBus.h"
 #include "event/input/glfw/GLFWDropEvent.h"
+#include "event/logic/BeatmapCreateInteractionEvent.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
@@ -18,6 +19,7 @@
 #include "ui/utils/ProjectResourceImport.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WalkthroughSpotlight.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cctype>
@@ -388,6 +390,10 @@ void NewBeatmapWizard::selectTemplate(const OpenTemplateOption& option)
     if ( m_templateBeatmap ) {
         // 只补充资源与尚未填写的文本字段，不覆盖用户已输入内容。
         applyTemplateResourceDefaults(*m_templateBeatmap);
+        if ( !m_selectedAudioPath.empty() )
+            // 模板自动带入有效音频时同样满足向导准备阶段。
+            publishInteraction(
+                Event::BeatmapCreateInteractionStage::AudioSelected);
     }
 }
 
@@ -757,6 +763,7 @@ void NewBeatmapWizard::submitCreateRequest()
 
     // 命令使用值语义携带新谱面初始状态。
     Logic::CmdCreateBeatmap cmd;
+    cmd.origin         = m_origin;
     cmd.baseMeta       = m_meta;
     cmd.initialTimings = m_measuredTimings;
     if ( m_createMode == CreateMode::OpenTemplate && m_templateBeatmap ) {
@@ -877,7 +884,7 @@ void NewBeatmapWizard::renderTemplateOptionsPopup()
 /// @brief 绘制内部名称重复警告并允许用户确认覆盖意图。
 ///
 /// 该弹窗不阻止创建，只把当前名称本地化显示并提供继续或返回编辑两个选择。
-void NewBeatmapWizard::renderDuplicateNameWarningPopup()
+void NewBeatmapWizard::renderDuplicateNameWarningPopup(UIManager* sourceManager)
 {
     if ( ImGui::BeginPopupModal(
              "NewBeatmapDuplicateNameWarning",
@@ -905,6 +912,10 @@ void NewBeatmapWizard::renderDuplicateNameWarningPopup()
             ImGui::CloseCurrentPopup();
             submitCreateRequest();
         }
+        // 重名确认只在警告弹窗出现时可见，作为创建按钮之后的引导阶段。
+        if ( sourceManager )
+            sourceManager->walkthroughSpotlight().reportLastItem(
+                "new-beatmap.duplicate.continue");
         ImGui::SameLine();
         // 取消只关闭警告，让用户留在主向导修改内部名。
         if ( ::MMM::UI::FeedbackButton(
@@ -1262,6 +1273,9 @@ void NewBeatmapWizard::handleResourceDrop(ResourceTarget target)
 /// 进度；两种路径共用轨道 ID 校验和导出回调。切换音频总会废弃旧 Timing。
 /// 创建按钮禁用范围只覆盖提交操作，用户仍可取消或修正资源；重名属于可确认警告，
 /// 不等同于不可创建条件。
+/// 音频下拉与导入按钮注册为同一复合引导区域，避免水平布局变化拆散提示范围。
+/// 创建与重名确认互斥可见，使同一步骤的候选目标能按弹窗状态自然切换。
+/// 交互阶段只在用户真实到达对应状态时发布，关闭向导不会伪造成功结果。
 /// @warning UI
 /// 热路径：向导打开时每帧执行；项目资源递归扫描仅在对应下拉框展开时发生。
 void NewBeatmapWizard::update(UIManager* sourceManager)
@@ -1437,6 +1451,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         ImGui::BeginDisabled();
     }
     ImGui::SetNextItemWidth(comboWidth);
+    // 音频行以一个复合语义区域覆盖下拉框与导入按钮，布局变化时仍可整体跟随。
+    const ImVec2 audioRowMin = ImGui::GetCursorScreenPos();
     if ( ::MMM::UI::FeedbackBeginCombo("##NewBeatmapAudioSelect",
                                        audioPreview.c_str()) ) {
         // 只列出项目资源表中的主音轨。
@@ -1462,6 +1478,12 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         handleResourceDrop(ResourceTarget::Audio);
     if ( FeedbackButton(importAudioLabel, ImVec2(importButtonWidth, 0.0f)) )
         openResourcePicker(ResourceTarget::Audio);
+    if ( sourceManager )
+        sourceManager->walkthroughSpotlight().reportTarget(
+            "new-beatmap.audio",
+            audioRowMin,
+            ImGui::GetItemRectMax(),
+            ImGui::GetWindowViewport());
     // 没有稳定主音轨 ID 时 BPM 工具无法解析音频池资源。
     if ( m_selectedAudioTrackId.empty() ) {
         ImGui::BeginDisabled();
@@ -1654,6 +1676,9 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
             submitCreateRequest();
         }
     }
+    if ( sourceManager )
+        sourceManager->walkthroughSpotlight().reportLastItem(
+            "new-beatmap.create");
 
     if ( !canCreate ) {
         // 恢复控件状态并在按钮旁解释第一个缺失条件。
@@ -1675,7 +1700,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     }
 
     // 子弹窗必须在父 popup 生命周期内持续调用。
-    renderDuplicateNameWarningPopup();
+    renderDuplicateNameWarningPopup(sourceManager);
     // 本帧所有三个资源控件均已获得处理机会，丢弃未命中的事件。
     m_pendingDrops.clear();
     // 内置文件选择器也作为向导帧的一部分驱动。
@@ -1700,14 +1725,30 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
 /// 在打开边界清除 上次输入、错误、模板和 BPM 绑定。
 /// 调用方无需预先检查当前状态；重复 open 会按新的创建流程重新初始化，但 popup
 /// 仍由具有有效 ImGui 帧上下文的 update 创建。
-void NewBeatmapWizard::open()
+void NewBeatmapWizard::open(Logic::BeatmapCreateOrigin origin)
 {
     // 目标状态先设为打开，拖放订阅从此开始接收事件。
     m_isOpen = true;
     // popup 打开请求由 UI 帧消费一次。
     m_shouldOpen = true;
-    // 每次显式打开都是独立创建流程。
+    // 每次显式打开都是独立创建流程，入口在 reset 后写入以免被旧状态覆盖。
     reset();
+    m_origin = origin;
+    publishInteraction(Event::BeatmapCreateInteractionStage::WizardOpened);
+}
+
+/// @brief 发布本轮新建谱面向导已经到达的业务阶段。
+/// @param stage 已实际到达的向导或创建阶段。
+/// @param beatmapPath 完成阶段的新谱面项目内路径。
+/// @note 未知入口仍可发布供其他业务观察，但演练服务会忽略其归因。
+void NewBeatmapWizard::publishInteraction(
+    Event::BeatmapCreateInteractionStage stage, std::string beatmapPath) const
+{
+    Event::BeatmapCreateInteractionEvent event;
+    event.m_origin      = m_origin;
+    event.m_stage       = stage;
+    event.m_beatmapPath = std::move(beatmapPath);
+    Event::EventBus::instance().publish(event);
 }
 
 /// @brief 关闭向导并解除所有跨视图临时绑定。
@@ -1720,6 +1761,8 @@ void NewBeatmapWizard::close()
 {
     // 丢弃尚未匹配到资源控件的文件事件。
     m_pendingDrops.clear();
+    // 命令提交已按值复制入口；取消关闭则必须防止旧入口泄漏到下次调用。
+    m_origin = Logic::BeatmapCreateOrigin::Unknown;
     // 工具回调捕获 this，关闭边界必须主动解除。
     unbindBpmMeasurementTool();
     // 手动测量的暂停状态不能跨向导生命周期保留。
@@ -1806,6 +1849,8 @@ void NewBeatmapWizard::onAudioSelected(const std::filesystem::path& path)
 
     // 项目内资源尽量使用可移植相对路径。
     m_selectedAudioPath = normalizeProjectResourcePath(*project, path);
+    // 路径已规范化且满足提交条件后才记录准备阶段；探针失败不撤销有效选择。
+    publishInteraction(Event::BeatmapCreateInteractionStage::AudioSelected);
 
     // 音频探针需要项目根解析后的绝对路径。
     auto absPath = project->m_projectRoot / m_selectedAudioPath;

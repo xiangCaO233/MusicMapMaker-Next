@@ -1,6 +1,7 @@
 #include "ui/walkthrough/WalkthroughService.h"
 #include "BuiltinWalkthrough.h"
 #include "event/core/EventBus.h"
+#include "event/logic/BeatmapCreateInteractionEvent.h"
 #include "event/project/ProjectOpenInteractionEvent.h"
 #include "ui/walkthrough/WalkthroughModel.h"
 #include <algorithm>
@@ -21,6 +22,26 @@
 /// 模型解析负责内容校验，服务负责来源优先级、目录排序和持久化生命周期；
 /// 页面层只读取验证后的结果，不直接接触这些文件。
 /// 跨线程业务事件先入队，进度对象只在 UI 更新线程修改。
+///
+/// 新建谱面事件适配约定：
+/// - 向导打开、主音频选择和创建完成分别映射为 dialog、audio、ready；
+/// - FileMenu 与 Shortcut 使用互不替代的信号命名空间；
+/// - 入口枚举由业务命令携带，服务不根据当前焦点或可见菜单猜测来源；
+/// - 未知入口不会推进教程，但事件仍可被其他业务订阅；
+/// - 取消向导没有完成事件，因此不会伪造任何后续步骤；
+/// - 创建失败不会发布 ready，已选择音频也不能单独完成主题；
+/// - 同一阶段重复到达由 Progress 的集合语义幂等处理；
+/// - 跨线程回调只复制轻量事件到队列，不写进度文件；
+/// - UI update 一帧统一消费两类队列，并把多次变化合并为一次保存；
+/// - 事件中的谱面路径用于诊断，不进入学习记录键；
+/// - 主题配置仍决定信号对应哪些步骤，服务不硬编码主题索引；
+/// - 自定义主题可以复用公开信号，但不能覆盖同 ID 的内置主题；
+/// - 项目上下文门禁属于页面职责，不在事件到达时丢弃历史实操结果；
+/// - 服务析构必须分别解除项目与谱面订阅，防止队列悬空访问；
+/// - 两个队列均只承载低频用户流程，不用于渲染或逻辑帧同步；
+/// - 业务枚举到字符串的转换集中在 update，资产无需依赖 C++ 枚举值；
+/// - 新阶段若扩展，必须同时补充配置解析测试与来源隔离测试；
+/// - signal 保持稳定可持久化语义，翻译和界面标题变化不得改名。
 
 namespace MMM::UI::Walkthrough
 {
@@ -53,9 +74,12 @@ struct Service::Impl {
     std::filesystem::path m_path;      ///< 专用进度文件。
     std::string           m_error;     ///< 最近错误。
     bool                  m_writable{ true };  ///< 损坏进度文件禁止自动覆盖。
-    Event::SubscriptionID m_subscription{};    ///< 业务结果订阅。
+    Event::SubscriptionID m_projectSubscription{};  ///< 项目交互订阅。
+    Event::SubscriptionID m_beatmapSubscription{};  ///< 新建谱面交互订阅。
     moodycamel::ConcurrentQueue<Event::ProjectOpenInteractionEvent>
-        m_events;  ///< 跨线程仅传递低频结果。
+        m_projectEvents;  ///< 跨线程仅传递低频项目结果。
+    moodycamel::ConcurrentQueue<Event::BeatmapCreateInteractionEvent>
+        m_beatmapEvents;  ///< 跨线程仅传递低频新建谱面阶段。
     std::map<std::string, std::function<void()>, std::less<>>
         m_actions;  ///< 可信操作注册表。
 
@@ -157,8 +181,9 @@ Service::Service(const std::filesystem::path& progressPath,
         m_impl->m_error = chapters.error();
     // 核心教程优先加入，后续同 ID 自定义主题不能覆盖。
     m_impl->add(BUILTIN_WALKTHROUGH);
-    // 新建项目是第二个真实主题，与打开项目共用业务事件但使用独立来源值。
+    // 两个创建主题分别接收项目和谱面业务事件，不依赖欢迎页是否可见。
     m_impl->add(BUILTIN_CREATE_PROJECT_WALKTHROUGH);
+    m_impl->add(BUILTIN_CREATE_BEATMAP_WALKTHROUGH);
     for ( const auto* placeholder : BUILTIN_PLACEHOLDERS )
         // 占位主题沿用相同解析规则，保证模型结构一致。
         m_impl->add(placeholder);
@@ -216,10 +241,18 @@ Service::Service(const std::filesystem::path& progressPath,
         m_impl->m_error    = "演练进度损坏，已保留原文件；重置进度前请备份。";
     }
     // 业务事件可能从逻辑线程到达，回调只入无锁队列，不修改进度文件。
-    m_impl->m_subscription =
+    m_impl->m_projectSubscription =
         Event::EventBus::instance()
             .subscribe<Event::ProjectOpenInteractionEvent>(
-                [this](const auto& event) { m_impl->m_events.enqueue(event); });
+                [this](const auto& event) {
+                    m_impl->m_projectEvents.enqueue(event);
+                });
+    m_impl->m_beatmapSubscription =
+        Event::EventBus::instance()
+            .subscribe<Event::BeatmapCreateInteractionEvent>(
+                [this](const auto& event) {
+                    m_impl->m_beatmapEvents.enqueue(event);
+                });
 }
 /// @brief 解除项目打开交互事件订阅。
 /// @warning EventBus 必须比 UIManager 管理的服务存活更久。
@@ -227,7 +260,10 @@ Service::~Service()
 {
     // 避免服务析构后订阅回调继续访问 m_impl。
     Event::EventBus::instance().unsubscribe<Event::ProjectOpenInteractionEvent>(
-        m_impl->m_subscription);
+        m_impl->m_projectSubscription);
+    Event::EventBus::instance()
+        .unsubscribe<Event::BeatmapCreateInteractionEvent>(
+            m_impl->m_beatmapSubscription);
 }
 /// @brief 返回按目录顺序排列的章节列表。
 /// @return 服务拥有的只读章节容器。
@@ -241,7 +277,7 @@ void Service::update()
 {
     Event::ProjectOpenInteractionEvent event;
     bool                               changed = false;
-    while ( m_impl->m_events.try_dequeue(event) ) {
+    while ( m_impl->m_projectEvents.try_dequeue(event) ) {
         // 每个业务来源与阶段映射为教程模型使用的稳定 signal 字符串。
         std::string signal;
         switch ( event.m_origin ) {
@@ -283,6 +319,36 @@ void Service::update()
         }
         if ( !signal.empty() )
             // 一个业务 signal 可能推进多个主题，逐主题合并 changed 标志。
+            for ( const auto& topic : m_impl->m_topics )
+                changed |= m_impl->m_progress.signal(topic, signal);
+    }
+    Event::BeatmapCreateInteractionEvent beatmapEvent;
+    while ( m_impl->m_beatmapEvents.try_dequeue(beatmapEvent) ) {
+        // 新建谱面按入口和实际阶段生成独立信号，取消与失败没有完成事件。
+        std::string signal;
+        const char* origin = nullptr;
+        switch ( beatmapEvent.m_origin ) {
+        case Logic::BeatmapCreateOrigin::FileMenu: origin = "menu"; break;
+        case Logic::BeatmapCreateOrigin::Shortcut: origin = "shortcut"; break;
+        default: break;
+        }
+        if ( origin ) {
+            const char* stage = nullptr;
+            switch ( beatmapEvent.m_stage ) {
+            case Event::BeatmapCreateInteractionStage::WizardOpened:
+                stage = "dialog";
+                break;
+            case Event::BeatmapCreateInteractionStage::AudioSelected:
+                stage = "audio";
+                break;
+            case Event::BeatmapCreateInteractionStage::Completed:
+                stage = "ready";
+                break;
+            }
+            if ( stage )
+                signal = std::string("beatmap.create.") + origin + "." + stage;
+        }
+        if ( !signal.empty() )
             for ( const auto& topic : m_impl->m_topics )
                 changed |= m_impl->m_progress.signal(topic, signal);
     }

@@ -44,6 +44,7 @@
 /// - 相同 m_order 的连续主题归入同一阶段；
 /// - 主题卡片按服务目录索引进入正文；
 /// - 占位主题显示“即将推出”而非步骤计数；
+/// - 项目限定主题在生命周期未就绪时保留目录位置但禁用点击；
 /// - 卡片标题裁剪时通过悬停提示提供完整文本。
 ///
 /// 样式约定：
@@ -219,6 +220,12 @@ void WelcomeView::renderHome(UIManager* manager)
                             : std::to_string(done) + " / " +
                                   std::to_string(total);
                     const auto& title = topic.m_title.get(language);
+                    // 项目限定主题只读取 UI
+                    // 已消费的生命周期状态，不跨线程访问控制器。
+                    const bool canEnterTopic = Walkthrough::topicAvailable(
+                        topic,
+                        manager->hasActiveProjectUiState() &&
+                            !manager->isProjectTransitionInProgress());
                     // 主题 ID 隔离相同可见标题或相同阶段中的卡片状态。
                     ImGui::PushID(topic.m_id.c_str());
                     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,
@@ -226,11 +233,10 @@ void WelcomeView::renderHome(UIManager* manager)
                     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize,
                                         style.ChildBorderSize);
                     ImGui::PushStyleColor(ImGuiCol_Button, panelColor);
+                    ImGui::BeginDisabled(!canEnterTopic);
                     // 反馈按钮覆盖整张卡片，具体文本和徽标由 DrawList 绘制。
                     const bool chosen =
                         FeedbackButton("##TopicCard", { width, cardHeight });
-                    ImGui::PopStyleColor();
-                    ImGui::PopStyleVar(2);
                     // 使用真实按钮矩形定位图标、标题、副标题和进度徽标。
                     const auto  pos    = ImGui::GetItemRectMin();
                     const auto  end    = ImGui::GetItemRectMax();
@@ -268,13 +274,19 @@ void WelcomeView::renderHome(UIManager* manager)
                     // 第二行入口提示裁剪到卡片右侧内边距。
                     draw->PushClipRect(
                         { textX, pos.y }, { end.x - padding, end.y }, true);
-                    draw->AddText({ textX, pos.y + padding + line * 1.5F },
-                                  ImGui::GetColorU32(ImGuiCol_TextDisabled),
-                                  TR("ui.welcome.start_learning").data());
+                    draw->AddText(
+                        { textX, pos.y + padding + line * 1.5F },
+                        ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                        TR(canEnterTopic ? "ui.welcome.start_learning"
+                                         : "ui.welcome.requires_project")
+                            .data());
                     draw->PopClipRect();
                     if ( ImGui::IsItemHovered() )
                         // 悬停显示完整标题，补偿卡片中的裁剪。
                         ImGui::SetTooltip("%s", title.c_str());
+                    ImGui::EndDisabled();
+                    ImGui::PopStyleColor();
+                    ImGui::PopStyleVar(2);
                     ImGui::PopID();
                     ImGui::Dummy({ 0, 4.0F * scale });
                     if ( chosen ) {

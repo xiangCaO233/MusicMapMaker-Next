@@ -79,6 +79,11 @@
 /// - 所有尺寸使用缓存的内容缩放比例；
 /// - 长标题通过裁剪与悬停提示处理，不测量额外布局；
 /// - ImGui 样式、字体、ID、缩进和子窗口必须严格成对恢复。
+///
+/// 项目上下文约定：
+/// - 页面只读取 UIManager 已归约的生命周期状态，不直接观察逻辑线程项目指针；
+/// - 项目切换或关闭会停止当前 Spotlight，并禁用操作与进入引导按钮；
+/// - 正文和手动“已了解”仍可阅读与使用，不把环境门禁误作知识前置依赖。
 
 namespace MMM::UI
 {
@@ -108,6 +113,16 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
     if ( topicIndex >= topics.size() ) return;
     // 主题引用只在本帧使用，不跨越目录可能重建的生命周期。
     const auto& topic = topics[topicIndex];
+    // 项目条件同时约束页面内操作入口，处理用户停留教程时关闭项目的情况。
+    const bool canEnterTopic = Walkthrough::topicAvailable(
+        topic,
+        manager->hasActiveProjectUiState() &&
+            !manager->isProjectTransitionInProgress());
+    if ( !canEnterTopic && m_activeGuide ) {
+        // 项目消失后立即结束旧目标遮罩，避免仍引导不可执行的菜单动作。
+        manager->walkthroughSpotlight().stop();
+        m_activeGuide.reset();
+    }
     // 标题、正文和步骤内容均按当前编辑器语言即时选择。
     const auto& language =
         Config::AppConfig::instance().getEditorSettings().language;
@@ -172,6 +187,10 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
     ImGui::Dummy({ 0, 16.0F * scale });
     // 非占位主题先显示整体目标，再展示可独立完成的操作分支。
     renderMarkdown(topic.m_description.get(language), markdownOptions);
+    if ( !canEnterTopic ) {
+        ImGui::Spacing();
+        ImGui::TextDisabled("%s", TR("ui.walkthrough.requires_project").data());
+    }
     ImGui::Dummy({ 0, 28.0F * scale });
     // 主题正文与欢迎目录统一沿用设置项的淡背景和中性描边。
     const auto& style      = ImGui::GetStyle();
@@ -350,7 +369,8 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
                     }
                     if ( !step.m_action.empty() ) {
                         // 操作同时受步骤依赖可用性和可信 C++ 注册表限制。
-                        ImGui::BeginDisabled(!progress.available(topic, step) ||
+                        ImGui::BeginDisabled(!canEnterTopic ||
+                                             !progress.available(topic, step) ||
                                              !service.hasAction(step.m_action));
                         if ( FeedbackButton(
                                  TR("ui.walkthrough.perform").data()) )
@@ -370,8 +390,10 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
                                 .toString() +
                             "###WalkthroughGuide";
                         // 前置未满足时保留入口位置，但不能从流程中段绕过依赖。
-                        ImGui::BeginDisabled(!guidingThisStep &&
-                                             !progress.available(topic, step));
+                        ImGui::BeginDisabled(
+                            !canEnterTopic ||
+                            (!guidingThisStep &&
+                             !progress.available(topic, step)));
                         if ( FeedbackButton(guideLabel.c_str()) ) {
                             if ( guidingThisStep ) {
                                 manager->walkthroughSpotlight().stop();

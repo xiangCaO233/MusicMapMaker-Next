@@ -5,6 +5,7 @@
 #include "config/Utf8Path.h"
 #include "event/canvas/interactive/ResizeEvent.h"
 #include "event/core/EventBus.h"
+#include "event/logic/BeatmapCreateInteractionEvent.h"
 #include "event/logic/EditorConfigChangedEvent.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "event/project/ProjectEvents.h"
@@ -2073,7 +2074,19 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
 
     // createSession 接管 shared_ptr 生命周期，displayName
     // 使用控制器规范化结果。
-    createSession(result.m_beatmap, result.m_displayName);
+    const int32_t sessionIndex =
+        createSession(result.m_beatmap, result.m_displayName);
+    if ( sessionIndex < 0 ) {
+        // 文件虽已创建，但没有进入可编辑会话时不宣称交互流程完成。
+        return;
+    }
+
+    Event::BeatmapCreateInteractionEvent event;
+    event.m_origin = cmd.origin;
+    event.m_stage  = Event::BeatmapCreateInteractionStage::Completed;
+    event.m_beatmapPath =
+        Config::pathToUtf8(result.m_beatmap->m_baseMapMetadata.map_path);
+    Event::EventBus::instance().publish(event);
 }
 
 /// @brief 处理导入音频指令并执行音效登记和项目保存副作用。

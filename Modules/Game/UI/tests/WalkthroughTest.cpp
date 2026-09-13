@@ -1,5 +1,6 @@
 #include "BuiltinWalkthrough.h"
 #include "event/core/EventBus.h"
+#include "event/logic/BeatmapCreateInteractionEvent.h"
 #include "event/project/ProjectOpenInteractionEvent.h"
 #include "ui/walkthrough/WalkthroughModel.h"
 #include "ui/walkthrough/WalkthroughService.h"
@@ -20,7 +21,7 @@
 /// 覆盖的模型约束包括：
 /// - 内置章节的数量、顺序和稳定 ID；
 /// - 重复章节 ID 与非整数 order 被拒绝；
-/// - 占位主题必须使用布尔 placeholder 且不能包含分支；
+/// - 占位与 requires_project 必须使用布尔值；
 /// - 普通主题必须至少包含一个分支；
 /// - 步骤引导接受提示与语义目标，并拒绝空对象或非法目标；
 /// - 纯键盘引导允许 targets 为空但必须拥有可见 prompt；
@@ -31,6 +32,7 @@
 /// - 菜单入口目标链继续包含向导三页按钮，支持已完成步骤重放；
 /// - 向导出现后更高优先级目标必须覆盖仍然可见的一级菜单；
 /// - 快捷键入口没有菜单目标，但同样声明完整向导按钮链；
+/// - 新建谱面主题要求活动项目并覆盖菜单、音频与创建目标；
 /// - 历史进度不参与目标链解析，避免重放时停留在入口控件；
 /// - 步骤不能依赖自身；
 /// - 同一分支内步骤 ID 不能重复；
@@ -46,7 +48,7 @@
 /// - 重置只清除指定主题的记录。
 ///
 /// 覆盖的服务约束包括：
-/// - 打开项目与新建项目两个真实主题按阶段稳定排序；
+/// - 打开项目、新建项目与新建谱面三个真实主题按阶段稳定排序；
 /// - 新建项目菜单和快捷键分别记录向导打开与最终进入项目；
 /// - 唤出向导只推进首步，不能提前把主题判定为完成；
 /// - 项目加载成功只完成同一入口对应的最终步骤；
@@ -54,6 +56,28 @@
 /// - 两条创建分支都要求先完成各自的向导打开步骤；
 /// - 创建主题保持 completion=any，任选一种实际入口即可完成；
 /// - 创建主题不再参与占位主题集合的解析循环；
+/// - 新建谱面按菜单和快捷键分别记录向导、音频与最终会话阶段；
+/// - 新建谱面主题明确声明 requires_project，普通主题保持默认不限制；
+/// - requires_project 的字符串伪布尔值必须被解析器拒绝；
+/// - 新建谱面两条分支均包含 dialog、audio、ready 三个步骤；
+/// - 每条分支的 audio 只依赖自身 dialog，不能跨入口解锁；
+/// - 每条分支的 ready 只依赖自身 audio，不能跳过资源选择；
+/// - 菜单入口目标链包含文件菜单和新建谱面菜单项；
+/// - 音频步骤使用复合音频区域的稳定语义目标；
+/// - 创建步骤同时声明普通创建与重名确认两个互斥目标；
+/// - 快捷键打开阶段不声明菜单目标，仅显示 Ctrl+N 提示；
+/// - WizardOpened 只完成菜单分支首步；
+/// - AudioSelected 在首步完成后推进菜单分支第二步；
+/// - Completed 在前两步完成后推进菜单分支最终步骤；
+/// - 菜单事件不能完成快捷键分支的任一步骤；
+/// - 新建谱面主题仍采用 completion=any，任选入口即可达成目标；
+/// - 谱面完成事件携带的路径不参与信号匹配；
+/// - 未知新建谱面入口保持无信号，避免内部调用污染教程；
+/// - 重复阶段事件由进度归约器幂等消费；
+/// - 主题在服务目录中位于两个项目主题之后、创作主题之前；
+/// - 新建谱面不再出现在 BUILTIN_PLACEHOLDERS 循环；
+/// - 新建谱面事件订阅随 Service 生命周期建立和解除；
+/// - 所有事件断言在 service.update 后读取，覆盖真实跨线程队列边界；
 /// - 服务公开主题顺序保持欢迎页使用的稳定索引；
 /// - PackageDrop 只有只读项目完成时才推进；
 /// - BeatmapDrop 只有真正打开谱面时才推进；
@@ -86,6 +110,8 @@ int main(int argc, char** argv)
         parseTopic(
             R"({"id":"bad","title":"Bad","order":-1,"placeholder":true})") ||
         parseTopic(R"({"id":"bad","title":"Bad","placeholder":"true"})") ||
+        parseTopic(
+            R"({"id":"bad","title":"Bad","requires_project":"true","placeholder":true})") ||
         parseTopic(
             R"({"id":"bad","title":"Bad","placeholder":true,"branches":[{}]})") ||
         parseTopic(R"({"id":"bad","title":"Bad","branches":[]})") )
@@ -143,6 +169,39 @@ int main(int argc, char** argv)
                                    "new-project.preferences.next",
                                    "new-project.location.create" } )
         return 35;
+    // 新建谱面由真实内置主题提供，入口条件和三阶段目标均由配置声明。
+    const auto createBeatmapTopic =
+        parseTopic(BUILTIN_CREATE_BEATMAP_WALKTHROUGH);
+    if ( !createBeatmapTopic || createBeatmapTopic->m_placeholder ||
+         !createBeatmapTopic->m_requiresProject ||
+         createBeatmapTopic->m_branches.size() != 2 ||
+         !createBeatmapTopic->m_anyBranch )
+        return 36;
+    // 同一配置在无项目时禁止进入，项目生命周期就绪后立即可用。
+    // 不要求项目的相邻主题作为对照，避免 helper 把全部教程一并锁住。
+    if ( topicAvailable(*createBeatmapTopic, false) ||
+         !topicAvailable(*createBeatmapTopic, true) ||
+         !topicAvailable(*createProjectTopic, false) )
+        return 44;
+    for ( const auto& branch : createBeatmapTopic->m_branches ) {
+        if ( branch.m_steps.size() != 3 ) return 37;
+        for ( const auto& step : branch.m_steps )
+            if ( !step.m_guide ) return 38;
+        if ( branch.m_steps[1].m_prerequisites !=
+                 std::vector<std::string>{ branch.m_steps[0].m_id } ||
+             branch.m_steps[2].m_prerequisites !=
+                 std::vector<std::string>{ branch.m_steps[1].m_id } )
+            return 39;
+    }
+    if ( createBeatmapTopic->m_branches[0].m_steps[0].m_guide->m_targets !=
+             std::vector<std::string>{ "main-menu.file",
+                                       "main-menu.file.new-beatmap" } ||
+         createBeatmapTopic->m_branches[0].m_steps[1].m_guide->m_targets !=
+             std::vector<std::string>{ "new-beatmap.audio" } ||
+         createBeatmapTopic->m_branches[0].m_steps[2].m_guide->m_targets !=
+             std::vector<std::string>{ "new-beatmap.create",
+                                       "new-beatmap.duplicate.continue" } )
+        return 40;
     // 两条分支均应把向导打开设为最终完成步骤的显式前置条件。
     // 该约束保证恢复进度或乱序业务事件不会跳过用户实际唤出向导的动作。
     for ( const auto& branch : createProjectTopic->m_branches ) {
@@ -282,6 +341,37 @@ int main(int argc, char** argv)
              service.progress().completed(
                  createTopic, createTopic.m_branches[0].m_steps[1]) )
             return 28;
+        // 新建谱面菜单入口按向导、音频和会话成功三个阶段依次推进。
+        MMM::Event::BeatmapCreateInteractionEvent beatmapEvent;
+        beatmapEvent.m_origin = MMM::Logic::BeatmapCreateOrigin::FileMenu;
+        beatmapEvent.m_stage =
+            MMM::Event::BeatmapCreateInteractionStage::WizardOpened;
+        MMM::Event::EventBus::instance().publish(beatmapEvent);
+        service.update();
+        const auto& beatmapTopic = service.topics()[2];
+        if ( !service.progress().completed(
+                 beatmapTopic, beatmapTopic.m_branches[0].m_steps[0]) ||
+             service.progress().completed(
+                 beatmapTopic, beatmapTopic.m_branches[0].m_steps[1]) )
+            return 41;
+        beatmapEvent.m_stage =
+            MMM::Event::BeatmapCreateInteractionStage::AudioSelected;
+        MMM::Event::EventBus::instance().publish(beatmapEvent);
+        service.update();
+        if ( !service.progress().completed(
+                 beatmapTopic, beatmapTopic.m_branches[0].m_steps[1]) ||
+             service.progress().completed(
+                 beatmapTopic, beatmapTopic.m_branches[0].m_steps[2]) )
+            return 42;
+        beatmapEvent.m_stage =
+            MMM::Event::BeatmapCreateInteractionStage::Completed;
+        MMM::Event::EventBus::instance().publish(beatmapEvent);
+        service.update();
+        if ( !service.progress().completed(
+                 beatmapTopic, beatmapTopic.m_branches[0].m_steps[2]) ||
+             service.progress().completed(
+                 beatmapTopic, beatmapTopic.m_branches[1].m_steps[0]) )
+            return 43;
         // 未注册 ID 不执行，注册 ID 只增加一次计数。
         int invoked = 0;
         service.registerAction("test", [&] { ++invoked; });
