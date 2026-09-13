@@ -1,7 +1,9 @@
 #include "common/LogicCommands.h"
 #include "config/EditorConfig.h"
+#include "config/Utf8Path.h"
 #include "event/core/EventBus.h"
 #include "event/logic/BeatmapSaveProgressEvent.h"
+#include "event/logic/BeatmapSaveResultEvent.h"
 #include "event/project/ProjectEvents.h"
 #include "logic/BeatmapSession.h"
 #include "logic/ProjectController.h"
@@ -9,14 +11,19 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/beatmap/BeatmapMutationObserver.h"
+#include "runtime/AppThreadPool.h"
 
 #include "log/colorful-log.h"
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <filesystem>
 #include <latch>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -1475,11 +1482,11 @@ private:
 /// @note 每个子测试同步驱动会话，退出码供 CTest 汇总结果。
 int main()
 {
-    /// @brief 模拟 UI 帧占用门闩，验证逻辑不会等待、丢失或倒置文件指令。
+    /// @brief 模拟其它会话占用门闩，验证逻辑不会等待、丢失或倒置文件指令。
     /// @return 持锁时延后且解锁后顺序处理两条文件命令时返回 true。
     /// @note 路径是哨兵参数，没有载入谱面，不把文件内容作为成功依据。
     /// @warning 仅在测试入口运行；latch 与 join 用于可证明的跨线程持锁顺序，
-    /// 不得将此阻塞夹具复制到逻辑 update 或 UI 热路径。
+    /// 不得将此阻塞夹具复制到逻辑 update 热路径。
     const auto testDeferredFileCommands = []() {
         MMM::Logic::BeatmapSession session;
         MMM::Config::EditorConfig  config;
@@ -1495,19 +1502,19 @@ int main()
                         // stages。
                         if ( event.active ) stages.push_back(event.stage);
                     });
-        // 两只 latch 分别确认持锁已建立和允许模拟 UI 释放锁。
+        // 两只 latch 分别确认持锁已建立和允许模拟其它会话释放锁。
         // 同步依赖事件关系，不用固定毫秒等待推测线程是否已启动。
         std::latch   locked(1), release(1);
-        std::jthread uiFrame([&]() {
-            // 模拟 UI 帧占用文件操作门闩，主测试必须在它持锁期间调用 update。
+        std::jthread competingOperation([&]() {
+            // 模拟其它会话占用文件操作门闩，主测试必须在它持锁期间调用 update。
             // 先通知 locked 再等待 release，保证测试实际覆盖竞争条件。
             std::lock_guard lock(MMM::Event::beatmapFileOperationGate());
             locked.count_down();
             release.wait();
         });
-        // 主线程等到模拟 UI 确实持锁，才排队文件命令。
+        // 主线程等到竞争文件操作确实持锁，才排队当前会话的文件命令。
         // 该等待用于测试前置条件，不是生产逻辑等待文件锁的实现。
-        // UI 线程只操作门闩和 latch，不读取会话或修改进度列表。
+        // 夹具线程只操作门闩和 latch，不读取会话或修改进度列表。
         // 因此观察者和进度字符串仍按单线程顺序访问。
         locked.wait();
         // 先保存再导出，两个不同进度阶段作为命令顺序哨兵。
@@ -1520,12 +1527,12 @@ int main()
         // 持锁期间命令仍待处理，且不能发出已开始保存的进度阶段。
         // update 必须返回才能到达释放 latch 的语句，因此也检验非阻塞处理。
         const bool deferred = session.hasPendingCommands() && stages.empty();
-        // 先允许 UI 释放门闩，再 join 确认该线程退出。
+        // 先允许其它会话释放门闩，再 join 确认该线程退出。
         // 不能先 join，否则持锁线程仍等待本线程发送释放信号。
         release.count_down();
         // join 返回后锁已释放，下一次 update 无需再竞争模拟 UI。
         // 没有固定超时窗口，线程退出由 release 信号明确驱动。
-        uiFrame.join();
+        competingOperation.join();
         // 释放锁后只更新一次，证明不需要额外轮询才能开始处理队首文件命令。
         // 退订发生在命令消费后，所有预期阶段都已经记录完毕。
         session.update(0.0, config, false);
@@ -1537,9 +1544,111 @@ int main()
                stages.size() == 2 && stages[0] == "正在保存谱面…" &&
                stages[1] == "正在准备资源包…";
     };
+    /// @brief 验证普通保存等待后台文件门闩时仍继续消费会话交互命令。
+    /// @return 保存期间视口命令已执行且后台任务最终写出目标文件时返回 true。
+    /// @details 用例先在测试线程持有全局文件门闩，再提交真实 CmdSaveBeatmap。
+    /// 后台任务因此无法进入 saveToFile，但提交该命令的 session.update
+    /// 必须返回。 随后排队视口变化并再次
+    /// update；若生产代码仍在逻辑线程同步保存，测试会在
+    /// 视口断言前被门闩卡住。释放门闩后再等待文件结果，确认非阻塞不是直接丢弃
+    /// 保存任务造成的假象。
+    ///
+    /// 视口命令只改变小型会话状态，不依赖音频设备、渲染器或用户配置，适合作为
+    /// “逻辑仍推进”的确定哨兵。最终同时检查结果事件和磁盘文件，防止只发布成功
+    /// 提示却没有真正编码谱面。测试谱面位于临时目录，并在正常路径主动删除。
+    ///
+    /// 条件变量只等待后台 EventBus 回调，主线程在等待前已经释放文件门闩。回调
+    /// 仅修改受 resultMutex 保护的布尔值，不访问
+    /// session；退订发生在任务结果到达 且会话完成一次逻辑提交之后，避免全局
+    /// EventBus 保留局部引用。
+    /// @warning 测试夹具使用条件变量等待后台结果；生产 update 只做零等待轮询。
+    const auto testAsyncSaveKeepsLogicResponsive = []() {
+        auto& appThreadPool = MMM::Runtime::AppThreadPool::instance();
+        // 测试进程没有应用 main 的启动装配，需显式建立通用池与独立文件池。
+        // 用例末尾在所有结果到达后关闭，不能在线程仍等待文件门闩时先析构文件池。
+        appThreadPool.init();
+        const bool usesDedicatedFilePool =
+            appThreadPool.get() && appThreadPool.getFileThreadPool() &&
+            appThreadPool.get() != appThreadPool.getFileThreadPool();
+
+        const auto      outputPath = std::filesystem::temp_directory_path() /
+                                     "mmm_async_save_responsive_test.mmm";
+        std::error_code removeError;
+        std::filesystem::remove(outputPath, removeError);
+        // 删除失败不复用旧产物作为本轮证据，后续 saved 仍要求收到真实成功事件。
+
+        MMM::Logic::BeatmapSession session;
+        MMM::Config::EditorConfig  config;
+        auto                       beatmap  = makeBeatmap();
+        beatmap->m_baseMapMetadata.map_path = outputPath;
+        session.pushCommand(MMM::Logic::LogicCommand{
+            MMM::Logic::CmdLoadBeatmap{ .beatmap = beatmap },
+        });
+        session.update(0.0, config, false);
+        // 先完成载图再持有文件门闩，避免把加载阶段的路径哈希读取混入被测区间。
+
+        std::mutex              resultMutex;
+        std::condition_variable resultCondition;
+        bool                    saveFinished = false;
+        const auto              resultSubscription =
+            MMM::Event::EventBus::instance()
+                .subscribe<MMM::Event::BeatmapSaveResultEvent>(
+                    [&](const auto& event) {
+                        if ( event.path != MMM::Config::pathToUtf8(outputPath) )
+                            return;
+                        std::lock_guard resultLock(resultMutex);
+                        saveFinished = event.success;
+                        resultCondition.notify_one();
+                    });
+
+        // 后台工作线程在门闩处等待时，逻辑线程提交保存快照后必须立即返回。
+        std::unique_lock fileGate(MMM::Event::beatmapFileOperationGate());
+        // 门闩所有权留在测试线程；生产后台任务只能等待，不能借用或解锁此对象。
+        session.pushCommand(MMM::Logic::LogicCommand{
+            MMM::Logic::CmdSaveBeatmap{},
+        });
+        session.update(0.0, config, false);
+        // 此处返回是核心断言前置条件；同步保存实现会因同一门闩永远无法到达下行。
+        session.pushCommand(MMM::Logic::LogicCommand{
+            MMM::Logic::CmdUpdateViewport{ .cameraId = "AsyncSaveCamera",
+                                           .width    = 640.0F,
+                                           .height   = 480.0F },
+        });
+        session.update(0.0, config, false);
+        // 第二次 update 在保存仍未获得门闩时执行，直接覆盖文件命令旁路语义。
+        const auto cameraIt =
+            session.getContext().cameras.find("AsyncSaveCamera");
+        const bool responsive =
+            cameraIt != session.getContext().cameras.end() &&
+            std::abs(cameraIt->second.viewportWidth - 640.0F) < 1e-6F;
+        fileGate.unlock();
+        // 只有视口结果已经按值保存后才放行写盘，不能让快速文件系统掩盖冻结。
+
+        {
+            std::unique_lock resultLock(resultMutex);
+            // 超时只约束测试失败时长，不参与生产保存协议或 UI 调度。
+            resultCondition.wait_for(resultLock,
+                                     std::chrono::seconds(5),
+                                     [&]() { return saveFinished; });
+        }
+        // 后台结果就绪后再推进一次会话，使保存点和项目路径完成逻辑线程提交。
+        session.update(0.0, config, false);
+        // 完成提交不应再次写文件；它只安装路径、哈希和动作栈保存点。
+        MMM::Event::EventBus::instance()
+            .unsubscribe<MMM::Event::BeatmapSaveResultEvent>(
+                resultSubscription);
+        std::error_code existsError;
+        const bool saved = saveFinished &&
+                           std::filesystem::exists(outputPath, existsError) &&
+                           !existsError;
+        std::filesystem::remove(outputPath, removeError);
+        appThreadPool.shutdown();
+        return usesDedicatedFilePool && responsive && saved;
+    };
     // 先覆盖持锁延后，再验证同步与权限，失败通过短路返回非零。
     // 各用例必须自行释放订阅和恢复单例状态，不能依赖后续用例清理。
-    return testDeferredFileCommands() && testOptionalInitialSnapshot() &&
+    return testDeferredFileCommands() && testAsyncSaveKeepsLogicResponsive() &&
+                   testOptionalInitialSnapshot() &&
                    testTimelineCommandsPublishMutations() &&
                    testBeatmapAnnotationPermissionAndTimestampGrouping() &&
                    testRemoteSynchronizationPreservesActiveBrush() &&

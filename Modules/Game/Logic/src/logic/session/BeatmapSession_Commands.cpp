@@ -31,6 +31,7 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/PackageFileTypes.h"
 #include "mmm/project/Project.h"
+#include "runtime/AppThreadPool.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -39,6 +40,8 @@
 #include <filesystem>
 #include <fmt/format.h>
 #include <fstream>
+#include <future>
+#include <ice/thread/ThreadPool.hpp>
 #include <limits>
 #include <miniz.h>
 #include <nlohmann/json.hpp>
@@ -96,6 +99,35 @@
  * 但不能接管 currentBeatmap 的编辑路径，也不能推进撤销栈保存点。格式私有
  * 覆盖只作用于待写出的 BeatMap 副本，完成后恢复或销毁临时元数据。
  *
+ * 普通保存采用“逻辑快照、后台写入、逻辑提交”三阶段协议：
+ *
+ * 1. 逻辑线程同步已标脏的 ECS 与 Timeline，并刷新只依赖当前项目的格式提示。
+ * 2. 同一线程复制全部持久化容器；引用型 m_allNotes 必须在副本中重新建立。
+ * 3. 独立文件池取得全局文件门闩后编码谱面、写入目标并计算哈希。
+ * 4. 工作线程只发布值语义进度与结果事件，不读取 SessionContext 或 Project。
+ * 5. 后续 update 用 future::wait_for(0) 取得结果，再提交路径、哈希与保存点。
+ *
+ * 这一边界允许保存期间继续生成渲染快照和消费编辑命令。后台线程不能直接
+ * 修改活动 BeatMap，因为 UI、协作观察者和逻辑控制器仍可能读取或更新它；同理，
+ * 项目条目和草稿路径迁移必须回到逻辑线程执行。后台结果携带启动时的谱面共享
+ * 身份，若会话已经载入另一谱面，只保留磁盘结果和用户反馈，不把旧状态提交到
+ * 新谱面。
+ *
+ * 保存快照与当前编辑状态通过 ActionStack 单调修订号关联。写入成功不等于当前
+ * 内容已保存：任务执行期间只要发生编辑、撤销、重做或栈外元数据变化，完成阶段
+ * 就保守保留脏状态。这样用户可以在保存气泡显示期间继续操作，同时不会让较早
+ * 快照的成功结果错误清除较新的修改。
+ *
+ * 文件门闩只串行化真正的文件工作，不再充当 UI 可见性门控。后台保存使用独立
+ * 文件池，不占用 UI 每帧并行准备后会等待的通用 AppThreadPool；逻辑线程也绝不
+ * 等待。另存为和打包仍是同步生命周期事务，只用 try_lock 尝试进入。等待中的
+ * 文件命令进入会话私有 FIFO，普通交互命令可以越过这个等待队列，但文件命令
+ * 彼此不能改变顺序。
+ *
+ * 进度和最终结果复用同一前景气泡。后台任务取得门闩后发布开始阶段，文件结果
+ * 先入 UI 队列，再发布 active=false；因此 UI 消费同一事件序列时会在原位置从
+ * “正在保存”切换到成功或失败文本，而不创建 ImGui Window、Dock 节点或焦点请求。
+ *
  * 包写入采用“预检、准备、归档、提交”四阶段：
  *
  * 1. 预检验证选择路径、格式支持和 MCZ 音频原点对齐依赖。
@@ -110,6 +142,48 @@
 
 namespace
 {
+/// @brief 为后台文件编码复制一份不借用会话容器的谱面快照。
+/// @param source 已同步 ECS、时间线与打击事件的当前谱面。
+/// @return 拥有全部持久化数据并重建物件引用表的独立谱面。
+/// @warning 保存低频路径：按谱面规模复制容器；不得放入普通逻辑更新分支。
+std::shared_ptr<MMM::BeatMap> cloneBeatMapForSave(const MMM::BeatMap& source)
+{
+    auto snapshot               = std::make_shared<MMM::BeatMap>();
+    snapshot->m_noteData        = source.m_noteData;
+    snapshot->m_timings         = source.m_timings;
+    snapshot->m_audioSamples    = source.m_audioSamples;
+    snapshot->m_annotations     = source.m_annotations;
+    snapshot->m_loadDiagnostics = source.m_loadDiagnostics;
+    snapshot->m_baseMapMetadata = source.m_baseMapMetadata;
+    snapshot->m_metadata        = source.m_metadata;
+    // m_allNotes 保存引用，不能从源对象复制；按新容器地址重新建立稳定引用。
+    snapshot->sync();
+    return snapshot;
+}
+
+/// @brief 按已同步的持久化物件扩展快照曲长。
+/// @param beatmap 仅由文件工作线程拥有的保存快照。
+/// @details 保存不再为刷新运行时打击事件而在逻辑线程完整扫描 ECS；快照已经包含
+/// 当前正式物件，因此可在文件线程中计算同样的非收缩曲长。Polyline 节点也存在于
+/// m_allNotes，长条节点按实际持续时间扩展，瞬时物件只使用时间戳。
+/// @warning 文件线程低频线性扫描；不得用于活动 BeatMap 或每帧查询。
+void extendBeatMapLengthFromNotes(MMM::BeatMap& beatmap)
+{
+    double maxEndTimeMs = 0.0;
+    for ( const auto& noteReference : beatmap.m_allNotes ) {
+        const auto& note      = noteReference.get();
+        double      endTimeMs = note.m_timestamp;
+        if ( note.m_type == MMM::NoteType::HOLD ) {
+            endTimeMs += static_cast<const MMM::Hold&>(note).m_duration;
+        }
+        if ( std::isfinite(endTimeMs) ) {
+            maxEndTimeMs = std::max(maxEndTimeMs, endTimeMs);
+        }
+    }
+    beatmap.m_baseMapMetadata.map_length =
+        std::max(beatmap.m_baseMapMetadata.map_length, maxEndTimeMs);
+}
+
 /// @brief 将逻辑保存来源映射为 UI 反馈策略。
 /// @param kind 谱面保存请求来源。
 /// @return 保存成功时应采用的界面反馈形式。
@@ -2031,18 +2105,64 @@ bool writeBeatmapPackage(
 namespace MMM::Logic
 {
 
-/// @brief 按顺序消费编辑指令，文件操作遇到活动 UI 帧时保留到下轮处理。
+/// @brief 后台谱面写入完成后交还逻辑线程的结果与提交上下文。
+/// @details 该对象本身只由逻辑线程创建、轮询和销毁。future 的共享状态由文件池
+/// 任务完成；任务参数持有独立 BeatMap 副本，因此会话提前关闭也不会悬空。
+/// sourceBeatmap 只用于身份比较，不交给后台任务读取。路径同时保留原表示、实际
+/// 文件系统表示和项目相对表示，完成阶段不能重新按可能已变化的项目推导。
+///
+/// WriteResult 不携带 BeatMap 或 Project 所有权，只返回文件提交事实与哈希。
+/// UI 结果由工作线程直接发布，逻辑完成阶段不需要为提示保留会话生命周期。
+/// savedMetadata 则冻结项目入口所需的持久化字段；如果用户在写入期间继续修改
+/// 标题或版本，完成阶段不能把这些尚未进入文件的新值同步到项目清单。
+///
+/// AsyncSaveOperation 使用 shared_ptr 作为不完整私有类型的持有方式，但不会在
+/// update 中复制共享所有权。逻辑线程只移动或解引用唯一成员句柄，工作线程持有
+/// 的是另一个 BeatMap 快照句柄，不持有本操作对象。该选择避免公开头暴露 future、
+/// filesystem 和保存结果细节，也避免会话构造函数要求私有类型完整定义。
+struct BeatmapSession::AsyncSaveOperation {
+    /// @brief 后台文件编码、写入和哈希计算结果。
+    struct WriteResult {
+        /// @brief 谱面目标文件是否完整写出。
+        bool success{ false };
+        /// @brief 成功写出文件后的内容哈希；读取失败时为空。
+        std::optional<std::uint64_t> fileHash;
+    };
+
+    /// @brief 后台任务结果句柄；逻辑线程仅以零等待方式轮询。
+    std::future<WriteResult> future;
+    /// @brief 启动任务时正在编辑的谱面身份，用于防止提交到后来载入的谱面。
+    std::shared_ptr<BeatMap> sourceBeatmap;
+    /// @brief 保存前会话长期持有的谱面路径。
+    std::filesystem::path oldPath;
+    /// @brief 本次实际写出的文件系统路径。
+    std::filesystem::path savePath;
+    /// @brief 成功后写回项目和会话的相对优先路径。
+    std::filesystem::path storedSavePath;
+    /// @brief 已写入快照的基础元数据，用于避免提交保存期间的新元数据。
+    BaseMapMeta savedMetadata;
+    /// @brief 创建保存快照时动作栈的单调修订号。
+    std::uint64_t actionRevision{ 0 };
+    /// @brief 启动前是否存在元数据尾随保存，用于失败恢复。
+    bool hadPendingMetadataAutoSave{ false };
+};
+
+/// @brief 在私有异步状态类型完整可见处销毁会话。
+/// @note 丢弃 future 不取消后台任务；任务只持有独立谱面副本，不再访问会话。
+BeatmapSession::~BeatmapSession() = default;
+
+/// @brief 消费编辑指令，并把等待中的文件操作从普通交互队列旁路延后。
 /// @return 本轮是否处理了会影响持续轮询或状态反馈的非悬停命令。
 /// @details
-/// 命令按队列顺序串行执行，但文件操作受全局门闩保护，无法立即取得时只保留
-/// 当前文件命令并结束本轮，后续命令不会越过它。协作权威替换可在本地手势或
+/// 普通命令按队列顺序串行执行；文件操作受全局门闩或会话后台任务保护，暂时
+/// 无法执行时进入独立 FIFO，但后续普通交互仍可继续。协作权威替换可在本地手势或
 /// 未确认变更期间合并延后；普通编辑命令按 Session、Playback、Interaction 和
 /// ActionController 四类职责分派。每批变更合并 mutationFlags，必要时同步
 /// BeatMap 并通知观察者，最后恢复仅为当前轨道数临时物化的视觉布局。
 ///
-/// 队列顺序是命令语义的一部分。普通命令从无锁队列逐个取出；若文件命令无法
-/// 立即取得门闩，只允许保存这一条命令并终止本轮。下一轮必须先恢复它，不能让
-/// 后到的编辑命令越过保存或导出边界。
+/// 文件命令之间的先后仍是命令语义的一部分。每轮只尝试待处理 FIFO 的队首，
+/// 若仍繁忙就保留在队首并继续排空普通命令。这样第二次保存不会越过第一次保存，
+/// 但鼠标、播放、标签和编辑命令不会被后台磁盘任务堵在同一队列后方。
 ///
 /// processed 与 mutationFlags 的职责不同。processed 告诉外层调度器本轮是否
 /// 存在值得继续主动轮询的工作；mutationFlags 告诉协作观察者哪些持久化领域
@@ -2071,13 +2191,14 @@ namespace MMM::Logic
 /// 第一次 visit 负责业务处理和状态栏反馈，第二次 visit 负责从动作栈、脏标记
 /// 与命令类型归纳精确 mutationFlags。分开处理可避免每个控制器都直接依赖协作
 /// 观察者，同时确保权威远端替换不会被当作新的本地编辑回传。
-/// @warning 逻辑 update 调用；文件指令仅尝试门闩，禁止阻塞等待 UI。
-/// 手动文件操作是低频阻塞路径，其执行期间 UI 只绘制独立进度。
+/// @warning 逻辑 update 调用；普通保存只复制快照并提交后台任务，其余文件指令
+/// 仍只尝试门闩，禁止阻塞等待正在执行的后台文件任务。
 bool BeatmapSession::processCommands()
 {
-    // cmd 在循环中复用，deferred 文件命令优先于队列新项恢复原始执行顺序。
+    // 延后队首一旦再次遇忙，本轮不重复尝试；成功后可继续处理下一个文件命令。
     LogicCommand cmd;
-    bool         processed = false;
+    bool         processed            = false;
+    bool         deferredBlockedAgain = false;
     // 多条连续编辑命令的变更类别按位合并，到同步边界一次性发布观察者通知。
     ::MMM::BeatmapMutationFlags mutationFlags =
         ::MMM::BeatmapMutationFlags::None;
@@ -2135,28 +2256,53 @@ bool BeatmapSession::processCommands()
                    value.replaceMetadata || value.replaceAudioSamples ||
                    value.replaceAnnotations;
         };
-    while ( m_deferredFileCommand || m_commandQueue.try_dequeue(cmd) ) {
+    while ( true ) {
+        bool fromDeferred = false;
         // 循环每次只拥有一条 LogicCommand。variant 在处理完成前保持有效，
         // 处理器可以读取其中的字符串和共享对象，但不得保存对 variant 成员的
         // 裸引用供后续 update 使用。
-        if ( m_deferredFileCommand ) {
-            // 延后文件命令必须先执行，避免后续编辑越过尚未保存的状态边界。
-            cmd = std::move(*m_deferredFileCommand);
-            m_deferredFileCommand.reset();
+        if ( !deferredBlockedAgain && !m_deferredFileCommands.empty() ) {
+            cmd = std::move(m_deferredFileCommands.front());
+            m_deferredFileCommands.pop_front();
+            fromDeferred = true;
+        } else if ( !m_commandQueue.try_dequeue(cmd) ) {
+            break;
         }
+        const bool isAsyncSave = std::holds_alternative<CmdSaveBeatmap>(cmd);
         const bool isFileOperation =
-            std::holds_alternative<CmdSaveBeatmap>(cmd) ||
-            std::holds_alternative<CmdSaveBeatmapAs>(cmd) ||
+            isAsyncSave || std::holds_alternative<CmdSaveBeatmapAs>(cmd) ||
             std::holds_alternative<CmdPackBeatmap>(cmd) ||
             std::holds_alternative<CmdExportImdPackage>(cmd);
+        if ( isAsyncSave ) {
+            if ( blockCollaborationOfflineEdit(cmd) ||
+                 blockCollaborationUnauthorizedEdit(cmd, true) ) {
+                continue;
+            }
+            const auto& saveCommand = std::get<CmdSaveBeatmap>(cmd);
+            if ( !beginAsyncBeatmapSave(saveCommand) ) {
+                // 同一会话任务未完成时保持文件 FIFO 头部，但不拦住普通命令。
+                if ( fromDeferred )
+                    m_deferredFileCommands.emplace_front(std::move(cmd));
+                else
+                    m_deferredFileCommands.emplace_back(std::move(cmd));
+                deferredBlockedAgain = true;
+            } else {
+                processed = true;
+            }
+            continue;
+        }
         // 门闩只在文件命令使用，普通交互绝不因 UI 仍在绘制进度帧而等待。
         std::unique_lock fileOperationLock(Event::beatmapFileOperationGate(),
                                            std::defer_lock);
-        if ( isFileOperation && !fileOperationLock.try_lock() ) {
-            // try_lock 失败后把完整 variant 移出并结束本轮，不使用 sleep
-            // 或忙等。
-            m_deferredFileCommand = std::move(cmd);
-            break;
+        if ( isFileOperation &&
+             (m_asyncSaveOperation || !fileOperationLock.try_lock()) ) {
+            // 后台保存或其它会话占用门闩时仅延后文件命令，不使用 sleep 或忙等。
+            if ( fromDeferred )
+                m_deferredFileCommands.emplace_front(std::move(cmd));
+            else
+                m_deferredFileCommands.emplace_back(std::move(cmd));
+            deferredBlockedAgain = true;
+            continue;
         }
         /// @brief 保证成功、失败及权限拒绝等所有退出路径均结束进度。
         struct ProgressScope {
@@ -3135,110 +3281,272 @@ void BeatmapSession::handleCommand(const CmdLoadBeatmap& cmd)
     m_ctx->isBpmEventsDirty = true;
 }
 
-/// @brief 保存当前谱面，并同步文件路径、项目入口和外部修改哈希基线。
+/// @brief 将普通保存请求转换为独立快照并提交后台文件任务。
 /// @param cmd 保存来源及是否已确认覆盖外部修改。
-/// @details
-/// 保存先暂时取下元数据尾随任务并确定实际格式路径，必要时发布覆盖冲突。
-/// 写盘前同步 Timing、Note 和打击事件，成功后更新会话路径、哈希、撤销栈保存点
-/// 及项目谱面入口。任何失败都会恢复原尾随元数据任务，供后续重试。
+/// @details 逻辑线程只同步已标脏领域、检查覆盖冲突并复制保存快照；格式编码、
+/// 磁盘写入和结果哈希均由独立文件池执行。后台任务不借用 SessionContext，
+/// 也不占用 UI 每帧并行准备所等待的通用线程池，因此保存期间后续编辑、渲染
+/// 快照和标签交互可以继续推进。
 ///
-/// 全局 ForceMMM 或命令覆写只改变本次实际保存路径。覆盖检查使用目标路径及
-/// 上一次成功写盘哈希，不能使用旧扩展名的源路径。用户尚未确认外部修改时，
-/// 处理器只发布冲突事件，不执行任何磁盘或项目状态提交。
+/// 覆盖冲突必须在复制前完成，因为冲突对话框会重新提交带确认标志的命令；首次
+/// 请求不能预先清除元数据尾随状态。线程池不可用或拒绝任务时明确发布失败，不能
+/// 退回同步 saveToFile，否则生产故障会重新表现为 UI 冻结。
 ///
-/// saveToFile 成功是事务提交点。之前的同步只更新内存领域副本，之后才能更新
-/// currentBeatmap.map_path、哈希基线和 ActionStack
-/// 保存点。项目入口更新最后执行， 并通过 saveProject
-/// 把路径或元数据变化一起持久化。
-/// @warning 显式或自动保存低频路径：执行完整谱面同步和文件写入。
+/// 保存阶段只在任务成功入队后清除旧尾随请求。此后发生的新元数据修改会重新
+/// 置位并推进 ActionStack 修订号，完成阶段不会将其吞掉。任务所需 presentation
+/// 和 UTF-8 路径均按值捕获，工作线程不读取可能变化的编辑器配置。
+/// @warning 低频保存入口：只回写已标脏领域并复制完整 BeatMap，不等待后台文件
+/// 任务；禁止为“保险”无条件标脏全部领域，否则每次保存都会重复扫描完整 ECS。
 void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
 {
-    if ( m_ctx->currentBeatmap ) {
-        // 记录进入保存前是否存在尾随元数据，失败路径按原状态恢复。
-        const bool hadPendingMetadataAutoSave = m_metadataAutoSavePending;
-        /// @brief 保存失败时恢复尾随任务，避免后续打包读取旧文件。
-        const auto restorePendingMetadataAutoSave = [&]() {
-            if ( !hadPendingMetadataAutoSave ) return;
-            // 重新计时避免失败后立即在同一轮反复尝试阻塞写盘。
-            m_metadataAutoSavePending         = true;
-            m_metadataAutoSaveTimerNeedsReset = true;
-        };
-        m_metadataAutoSavePending         = false;
-        m_metadataAutoSaveTimerNeedsReset = false;
-        auto oldPath  = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
-        auto savePath = resolveCurrentProjectPath(oldPath);
-        if ( usesMmmSaveFormat(m_ctx->lastConfig.settings, cmd) ) {
-            // MMM 覆写改变实际输出扩展名，但旧路径保留到成功后用于项目重映射。
-            savePath.replace_extension(".mmm");
-        }
-        if ( shouldConfirmForcedMmmOverwrite(m_ctx->lastConfig.settings,
-                                             m_savedBeatmapFileHashes,
-                                             cmd,
-                                             savePath) ) {
-            // 冲突事件只请求用户确认，不写文件、不推进保存哈希或撤销栈保存点。
-            Event::EventBus::instance().publish(Event::BeatmapSaveConflictEvent{
-                .path = Config::pathToUtf8(savePath),
-            });
-            restorePendingMetadataAutoSave();
-            return;
-        }
+    if ( beginAsyncBeatmapSave(cmd) ) return;
+    // 同一会话已有后台保存时只延后文件请求；普通编辑命令仍由队列继续消费。
+    m_deferredFileCommands.emplace_back(cmd);
+}
 
-        m_ctx->m_needsTimingsSync = true;
-        m_ctx->m_needsNotesSync   = true;
-        // 保存必须包含当前 ECS 和 Timeline
-        // 全量状态，不能依赖此前脏标记是否准确。
-        SessionUtils::syncBeatmap(*m_ctx);
-        SessionUtils::ensureHitEvents(*m_ctx);
-        refreshCurrentProjectSongFileHint(*m_ctx->currentBeatmap);
+/// @brief 创建一致谱面快照并提交后台写入。
+/// @param cmd 保存来源、格式与覆盖策略。
+/// @return 请求已处理或已启动时返回 true；当前会话已有任务时返回 false。
+bool BeatmapSession::beginAsyncBeatmapSave(const CmdSaveBeatmap& cmd)
+{
+    if ( m_asyncSaveOperation ) return false;
+    if ( !m_ctx->currentBeatmap ) return true;
 
-        bool ok = m_ctx->currentBeatmap->saveToFile(savePath);
-        if ( !ok ) {
-            // 失败结果携带与请求来源匹配的展示策略，自动保存不会弹手动提示。
-            XERROR("SaveBeatmap: failed to save to {}",
-                   Config::pathToUtf8(savePath));
-            Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
-                .path         = Config::pathToUtf8(savePath),
-                .success      = false,
-                .isExport     = false,
-                .presentation = savePresentationFor(cmd.kind),
-            });
-            restorePendingMetadataAutoSave();
-            return;
-        }
+    const bool hadPendingMetadataAutoSave = m_metadataAutoSavePending;
+    const auto oldPath  = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
+    auto       savePath = resolveCurrentProjectPath(oldPath);
+    if ( usesMmmSaveFormat(m_ctx->lastConfig.settings, cmd) ) {
+        // 格式覆写只改变目标路径，活动谱面路径在后台成功后才提交。
+        savePath.replace_extension(".mmm");
+    }
+    if ( shouldConfirmForcedMmmOverwrite(m_ctx->lastConfig.settings,
+                                         m_savedBeatmapFileHashes,
+                                         cmd,
+                                         savePath) ) {
+        Event::EventBus::instance().publish(Event::BeatmapSaveConflictEvent{
+            .path = Config::pathToUtf8(savePath),
+        });
+        return true;
+    }
+
+    auto* threadPool = Runtime::AppThreadPool::instance().getFileThreadPool();
+    if ( !threadPool ) {
+        // 生产应用在逻辑循环启动前初始化线程池；缺失时明确失败而不退回阻塞 UI。
+        XERROR("SaveBeatmap: file thread pool is unavailable");
         Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
-            // 成功先通知文件结果，随后更新内存路径与项目清单基线。
             .path         = Config::pathToUtf8(savePath),
-            .success      = true,
+            .success      = false,
             .isExport     = false,
+            .errorMessage = "后台保存服务不可用",
             .presentation = savePresentationFor(cmd.kind),
         });
-        auto storedSavePath = makeCurrentProjectRelativePath(savePath);
-        // 会话长期路径尽量项目相对化，避免项目整体移动后失去谱面身份。
-        m_ctx->currentBeatmap->m_baseMapMetadata.map_path = storedSavePath;
-        // 成功写出的字节成为新的外部修改比较基线。
-        rememberBeatmapFileHash(m_savedBeatmapFileHashes, savePath);
-        // 撤销栈只在写盘成功后标记保存点，失败仍保持脏状态。
-        m_ctx->actionStack.markSaved();
-        if ( oldPath != storedSavePath ) {
-            // 扩展名或路径变化时更新项目条目以及所有打开会话的路径身份。
-            EditorEngine::instance().updateBeatmapFilePathInProject(
-                oldPath, storedSavePath);
-            // 项目侧草稿以谱面路径隔离，另存后当前会话必须跟随新的组键。
-            auto* draftProject =
-                m_ctx->collaborationProject
-                    ? m_ctx->collaborationProject.get()
-                    : EditorEngine::instance().getCurrentProject();
-            // 组本体已由项目路径更新流程重命名，这里只迁移会话缓存的查找键。
-            ProjectDraftLaneService::rebindBeatmapPath(*m_ctx, draftProject);
-        } else {
-            // 路径未变仍同步项目文件信息和音频指纹，覆盖内容可能改变资源引用。
-            EditorEngine::instance().syncProjectWithFile(savePath);
+        return true;
+    }
+
+    // 各编辑入口负责精确标脏；清洁领域不能仅因保存请求再次完整重建。
+    // 只在逻辑线程触碰已标脏 ECS 和会话模型，后台任务随后仅访问独立副本。
+    SessionUtils::syncBeatmap(*m_ctx);
+    refreshCurrentProjectSongFileHint(*m_ctx->currentBeatmap);
+    auto snapshot = cloneBeatMapForSave(*m_ctx->currentBeatmap);
+
+    auto operation            = std::make_shared<AsyncSaveOperation>();
+    operation->sourceBeatmap  = m_ctx->currentBeatmap;
+    operation->oldPath        = oldPath;
+    operation->savePath       = savePath;
+    operation->storedSavePath = makeCurrentProjectRelativePath(savePath);
+    operation->savedMetadata  = snapshot->m_baseMapMetadata;
+    operation->savedMetadata.map_path = operation->storedSavePath;
+    operation->actionRevision = m_ctx->actionStack.captureSaveRevision();
+    operation->hadPendingMetadataAutoSave = hadPendingMetadataAutoSave;
+    const auto presentation               = savePresentationFor(cmd.kind);
+    const auto savePathText               = Config::pathToUtf8(savePath);
+
+    operation->future = threadPool->enqueue(
+        [savePath, savePathText, presentation](
+            std::shared_ptr<BeatMap> saveSnapshot) mutable {
+            // 全局门闩由后台线程自行持有，绝不把 mutex 所有权跨线程转移。
+            std::lock_guard fileOperationLock(
+                Event::beatmapFileOperationGate());
+            Event::EventBus::instance().publish(Event::BeatmapSaveProgressEvent{
+                .stage = "正在保存谱面…",
+            });
+            AsyncSaveOperation::WriteResult result;
+            // 曲长派生只修改私有快照，避免逻辑线程为保存重建运行时打击事件。
+            extendBeatMapLengthFromNotes(*saveSnapshot);
+            result.success = saveSnapshot->saveToFile(savePath);
+            if ( result.success ) {
+                // 哈希与文件写入在同一串行区间完成，外部比较基线对应刚写出的字节。
+                result.fileHash = calculateBeatmapFileHash(savePath);
+            } else {
+                XERROR("SaveBeatmap: failed to save to {}", savePathText);
+            }
+            Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+                .path         = savePathText,
+                .success      = result.success,
+                .isExport     = false,
+                .presentation = presentation,
+            });
+            // 结果先进入同一 UI 队列，再关闭进度，使气泡原位切换为最终文本。
+            Event::EventBus::instance().publish(
+                Event::BeatmapSaveProgressEvent{ .active = false });
+            return result;
+        },
+        std::move(snapshot));
+    if ( !operation->future.valid() ) {
+        XERROR("SaveBeatmap: file thread pool rejected the save task");
+        Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+            .path         = savePathText,
+            .success      = false,
+            .isExport     = false,
+            .errorMessage = "后台保存任务提交失败",
+            .presentation = presentation,
+        });
+        return true;
+    }
+
+    // 尾随元数据请求由本次快照接管；期间的新元数据命令会重新置位。
+    m_metadataAutoSavePending         = false;
+    m_metadataAutoSaveTimerNeedsReset = false;
+    m_asyncSaveOperation              = std::move(operation);
+    return true;
+}
+
+/// @brief 非阻塞轮询后台写入，并在逻辑线程提交会话与项目状态。
+/// @details future 未就绪时立即返回。成功结果按固定顺序提交：核对谱面身份、更新
+/// 会话路径、安装后台计算的文件哈希、校验动作修订、迁移项目及草稿路径，最后
+/// 保存项目清单。失败只恢复启动前已经存在的元数据尾随请求，不覆盖任务期间新建
+/// 的请求。
+///
+/// 工作线程已经独立发布文件结果和结束进度，这里不重复发布 UI 事件。该安排保证
+/// 会话在任务完成前被关闭时气泡仍能结束，同时被关闭对象也不会再参与项目提交。
+/// 哈希读取失败不否定已成功写出的谱面，但必须删除旧基线，使下次 ForceMMM 覆盖
+/// 重新请求保守确认。
+/// @warning 每次 update 调用；未完成分支只执行 future::wait_for(0)。
+void BeatmapSession::finalizeAsyncBeatmapSave()
+{
+    if ( !m_asyncSaveOperation || !m_asyncSaveOperation->future.valid() ||
+         m_asyncSaveOperation->future.wait_for(std::chrono::seconds(0)) !=
+             std::future_status::ready ) {
+        return;
+    }
+
+    auto       operation = std::move(m_asyncSaveOperation);
+    const auto result    = operation->future.get();
+    // 会话可能在任务期间载入另一谱面；写盘结果仍已由后台发布，但不能提交旧状态。
+    if ( m_ctx->currentBeatmap != operation->sourceBeatmap ) return;
+    if ( !result.success ) {
+        if ( operation->hadPendingMetadataAutoSave ) {
+            m_metadataAutoSavePending         = true;
+            m_metadataAutoSaveTimerNeedsReset = true;
         }
-        static_cast<void>(syncSavedMetadataToProjectEntry(
-            m_ctx->currentBeatmap->m_baseMapMetadata));
-        // 名称等项目入口变化在最后一次项目保存中与路径状态共同落盘。
+        return;
+    }
+
+    m_ctx->currentBeatmap->m_baseMapMetadata.map_path =
+        operation->storedSavePath;
+    const auto hashKey = makeBeatmapFileHashPathKey(operation->savePath);
+    if ( result.fileHash ) {
+        m_savedBeatmapFileHashes[hashKey] = *result.fileHash;
+    } else {
+        // 写入成功但无法读取哈希时删除旧基线，下次覆盖采用保守冲突判断。
+        m_savedBeatmapFileHashes.erase(hashKey);
+    }
+    // 保存期间有新编辑时保留脏状态；旧快照成功不能替后续内容背书。
+    static_cast<void>(
+        m_ctx->actionStack.markSavedIfUnchanged(operation->actionRevision));
+    if ( operation->oldPath != operation->storedSavePath ) {
+        EditorEngine::instance().updateBeatmapFilePathInProject(
+            operation->oldPath, operation->storedSavePath);
+        auto* draftProject = m_ctx->collaborationProject
+                                 ? m_ctx->collaborationProject.get()
+                                 : EditorEngine::instance().getCurrentProject();
+        ProjectDraftLaneService::rebindBeatmapPath(*m_ctx, draftProject);
+    } else {
+        EditorEngine::instance().syncProjectWithFile(operation->savePath);
+    }
+    const bool projectMetadataChanged =
+        syncSavedMetadataToProjectEntry(operation->savedMetadata);
+    if ( projectMetadataChanged ) {
+        // 路径同步入口已自行保存结构变化；这里只补交随后发生的名称更新。
         EditorEngine::instance().saveProject();
     }
+}
+
+/// @brief 在必须立即知道结果的生命周期事务中同步保存当前谱面。
+/// @param cmd 保存来源、格式与覆盖策略。
+/// @return 文件与会话提交成功时返回 true。
+/// @details 项目关闭和资源打包必须在返回前确认源谱面已经落盘，不能只排队后台
+/// 任务后继续释放项目或读取旧文件。因此该入口保留同步事务，但不会由普通
+/// Ctrl+S、
+/// 定时保存或事件触发保存调用。调用方已经位于明确的低频生命周期边界，并负责
+/// 向用户表现其整体等待状态。
+///
+/// 同步路径与异步路径保持相同提交规则：冲突检查在写盘前，失败恢复尾随元数据，
+/// 成功后才更新长期路径、哈希、ActionStack 和项目入口。这里可以直接 markSaved，
+/// 因为返回前同一逻辑线程不会并发消费后续会话编辑命令。
+bool BeatmapSession::saveBeatmapBlocking(const CmdSaveBeatmap& cmd)
+{
+    if ( !m_ctx->currentBeatmap ) return true;
+    const bool hadPendingMetadataAutoSave     = m_metadataAutoSavePending;
+    const auto restorePendingMetadataAutoSave = [&]() {
+        if ( !hadPendingMetadataAutoSave ) return;
+        m_metadataAutoSavePending         = true;
+        m_metadataAutoSaveTimerNeedsReset = true;
+    };
+    m_metadataAutoSavePending         = false;
+    m_metadataAutoSaveTimerNeedsReset = false;
+    const auto oldPath  = m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
+    auto       savePath = resolveCurrentProjectPath(oldPath);
+    if ( usesMmmSaveFormat(m_ctx->lastConfig.settings, cmd) )
+        savePath.replace_extension(".mmm");
+    if ( shouldConfirmForcedMmmOverwrite(m_ctx->lastConfig.settings,
+                                         m_savedBeatmapFileHashes,
+                                         cmd,
+                                         savePath) ) {
+        Event::EventBus::instance().publish(Event::BeatmapSaveConflictEvent{
+            .path = Config::pathToUtf8(savePath),
+        });
+        restorePendingMetadataAutoSave();
+        return false;
+    }
+
+    m_ctx->m_needsTimingsSync = true;
+    m_ctx->m_needsNotesSync   = true;
+    SessionUtils::syncBeatmap(*m_ctx);
+    SessionUtils::ensureHitEvents(*m_ctx);
+    refreshCurrentProjectSongFileHint(*m_ctx->currentBeatmap);
+    const bool success = m_ctx->currentBeatmap->saveToFile(savePath);
+    Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+        .path         = Config::pathToUtf8(savePath),
+        .success      = success,
+        .isExport     = false,
+        .presentation = savePresentationFor(cmd.kind),
+    });
+    if ( !success ) {
+        XERROR("SaveBeatmap: failed to save to {}",
+               Config::pathToUtf8(savePath));
+        restorePendingMetadataAutoSave();
+        return false;
+    }
+
+    const auto storedSavePath = makeCurrentProjectRelativePath(savePath);
+    m_ctx->currentBeatmap->m_baseMapMetadata.map_path = storedSavePath;
+    rememberBeatmapFileHash(m_savedBeatmapFileHashes, savePath);
+    m_ctx->actionStack.markSaved();
+    if ( oldPath != storedSavePath ) {
+        EditorEngine::instance().updateBeatmapFilePathInProject(oldPath,
+                                                                storedSavePath);
+        auto* draftProject = m_ctx->collaborationProject
+                                 ? m_ctx->collaborationProject.get()
+                                 : EditorEngine::instance().getCurrentProject();
+        ProjectDraftLaneService::rebindBeatmapPath(*m_ctx, draftProject);
+    } else {
+        EditorEngine::instance().syncProjectWithFile(savePath);
+    }
+    static_cast<void>(syncSavedMetadataToProjectEntry(
+        m_ctx->currentBeatmap->m_baseMapMetadata));
+    EditorEngine::instance().saveProject();
+    return true;
 }
 
 /// @brief 将当前谱面导出到指定路径，不接管当前会话的谱面路径或保存状态。

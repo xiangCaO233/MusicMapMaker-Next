@@ -22,6 +22,8 @@ void EditorActionStack::pushAndExecute(std::unique_ptr<IEditorAction> action,
     ctx.lastActionMessage = fmt::format(
         "{} {}", TR("ui.status.category.action").data(), action->getName());
     action->execute(ctx);
+    // 修订先于保存完成回调推进，使后台保存不会覆盖本次新编辑的脏状态。
+    ++m_changeRevision;
     // 累积类别而非覆盖，允许会话在一次发布前执行多个不同领域的动作。
     m_pendingMutationFlags |= action->mutationFlags();
     m_undoStack.push_back(std::move(action));
@@ -47,6 +49,8 @@ void EditorActionStack::undo(SessionContext& ctx)
     ctx.lastActionMessage = fmt::format(
         "{} {}", TR("ui.status.category.undo").data(), action->getName());
     action->undo(ctx);
+    // 即使撤销栈深度回到旧值，内容状态也已经越过异步保存快照边界。
+    ++m_changeRevision;
     // 撤销同样改变数据，必须向后续观察者发布该动作涉及的类别。
     m_pendingMutationFlags |= action->mutationFlags();
     m_redoStack.push_back(std::move(action));
@@ -67,6 +71,8 @@ void EditorActionStack::redo(SessionContext& ctx)
     ctx.lastActionMessage = fmt::format(
         "{} {}", TR("ui.status.category.redo").data(), action->getName());
     action->redo(ctx);
+    // 重做同样是一次可观察状态变化，不能沿用后台任务捕获的旧修订号。
+    ++m_changeRevision;
     // 只移动当前栈顶，不清空其余重做记录，后续动作仍可依次恢复。
     m_pendingMutationFlags |= action->mutationFlags();
     m_undoStack.push_back(std::move(action));
@@ -85,7 +91,8 @@ void EditorActionStack::clear()
     // 新的历史基线不继承旧会话的保存位置、非撤销修改或待发布类别。
     m_saveIndex             = 0;
     m_hasNonUndoableChanges = false;
-    m_pendingMutationFlags  = ::MMM::BeatmapMutationFlags::None;
+    ++m_changeRevision;
+    m_pendingMutationFlags = ::MMM::BeatmapMutationFlags::None;
 }
 
 /// @brief 按保存时的历史深度和非撤销修改标记判断未保存状态。
@@ -105,11 +112,34 @@ void EditorActionStack::markSaved()
     m_hasNonUndoableChanges = false;
 }
 
+/// @brief 捕获当前编辑状态的单调修订号。
+/// @return 可与异步保存完成时的当前修订号比较的值。
+std::uint64_t EditorActionStack::captureSaveRevision() const
+{
+    return m_changeRevision;
+}
+
+/// @brief 在后台任务对应的内容仍是当前内容时确认保存点。
+/// @param revision 保存快照创建前捕获的编辑修订号。
+/// @return 修订未变化时返回 true；否则保留脏状态并返回 false。
+bool EditorActionStack::markSavedIfUnchanged(std::uint64_t revision)
+{
+    if ( revision != m_changeRevision ) {
+        // 旧保存任务成功只证明旧快照已落盘，不能清除任务期间新增的修改。
+        m_hasNonUndoableChanges = true;
+        return false;
+    }
+    markSaved();
+    return true;
+}
+
 /// @brief 记录无法通过撤销栈深度表达的修改。
 /// @note 该标记不创建撤销记录，也不推断需要发布的谱面变更类别。
 void EditorActionStack::markDirty()
 {
     m_hasNonUndoableChanges = true;
+    // 栈外修改没有动作深度可供比较，因此必须显式推进统一修订号。
+    ++m_changeRevision;
 }
 
 /// @brief 消费自上次读取以来累积的变更类别。

@@ -558,9 +558,29 @@ bool testNonUndoableDirtyState()
         return false;
     }
 
+    const auto asyncSaveRevision = context.actionStack.captureSaveRevision();
+    // 捕获动作只读取令牌，不应提前清理当前状态或为后续修改预留保存点。
+    context.actionStack.markDirty();
+    // 后台任务只能确认创建快照时的修订；期间的新修改必须阻止旧结果清脏。
+    if ( context.actionStack.markSavedIfUnchanged(asyncSaveRevision) ||
+         !context.actionStack.isDirty() ) {
+        XERROR("A stale asynchronous save cleared newer changes");
+        return false;
+    }
+    const auto latestRevision = context.actionStack.captureSaveRevision();
+    // 未再修改时，同一修订对应的完成结果应正常建立新保存基线。
+    // 这里复用栈外修改覆盖最小场景；可撤销动作、undo 和 redo
+    // 由相同修订计数保护。
+    if ( !context.actionStack.markSavedIfUnchanged(latestRevision) ||
+         context.actionStack.isDirty() ) {
+        XERROR("The current asynchronous save revision was not accepted");
+        return false;
+    }
+
     // 保存和清空是两条独立重置入口，再标脏一次才能确保 clear
     // 不是借用已清洁状态。
     context.actionStack.markDirty();
+    // 再次推进修订后 clear 应建立新会话基线，不继承此前异步令牌的身份。
     context.actionStack.clear();
     // 清空后恢复新会话语义，不能继续保留旧项目的不可撤销变更标记。
     // 再次标脏后清空，覆盖会话关闭或重新载入时不能遗留未保存提示的语义。

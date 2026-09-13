@@ -5,6 +5,7 @@
 #include <atomic>
 #include <concurrentqueue.h>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <string>
@@ -198,6 +199,26 @@ private:
     /// 活跃画笔草稿以保持未结束手势。
     bool processCommands();
 
+    /// @brief 在逻辑线程提交当前谱面快照的后台保存任务。
+    /// @param cmd 保存来源、格式与覆盖策略。
+    /// @return 已启动任务、已发布冲突或无需保存时返回 true；当前会话已有保存
+    /// 任务时返回 false，由命令循环延后重试。
+    /// @warning 低频保存入口：只同步已标脏领域并复制一次完整
+    /// BeatMap；文件编码、 哈希和写入在独立文件池中执行，不占用 UI
+    /// 每帧等待的通用线程池。
+    bool beginAsyncBeatmapSave(const CmdSaveBeatmap& cmd);
+
+    /// @brief 轮询并提交已经完成的后台保存结果。
+    /// @warning 逻辑热路径：每次 update 只做一次非阻塞 future 状态检查；完成
+    /// 分支才更新项目路径、保存点和项目配置。
+    void finalizeAsyncBeatmapSave();
+
+    /// @brief 同步保存当前谱面，供关闭项目与打包前的强制提交边界使用。
+    /// @param cmd 保存来源、格式与覆盖策略。
+    /// @return 谱面文件写入并完成会话提交时返回 true。
+    /// @warning 低频阻塞路径：只允许必须在返回前确认落盘的生命周期事务调用。
+    bool saveBeatmapBlocking(const CmdSaveBeatmap& cmd);
+
     /// @brief 在入队与消费边界统一拦截离线房间谱面的编辑命令。
     /// @param cmd 待检查命令。
     /// @return 命令已被拦截时返回 true。
@@ -281,8 +302,17 @@ private:
     moodycamel::ConcurrentQueue<LogicCommand>
         m_commandQueue;  ///< 跨线程无锁指令队列
 
-    /// @brief 仅由逻辑线程访问的待重试文件指令，保持后续指令的原始顺序。
-    std::optional<LogicCommand> m_deferredFileCommand;
+    /// @brief 仅由逻辑线程访问的待重试文件指令队列。
+    /// @note 文件操作等待期间普通编辑命令仍可继续消费，队列只保留文件命令间
+    /// 的原始顺序。
+    std::deque<LogicCommand> m_deferredFileCommands;
+
+    /// @brief 后台保存任务及其逻辑线程提交信息的私有实现。
+    struct AsyncSaveOperation;
+
+    /// @brief 当前会话唯一的后台谱面保存任务。
+    /// @warning 逻辑线程独占；后台任务只持有独立谱面副本和 future 共享状态。
+    std::shared_ptr<AsyncSaveOperation> m_asyncSaveOperation;
 
     /// @brief 当前低频谱面变化观察者。
     /// @warning 跨线程 shared_ptr 原子：只在谱面发生实际变化或首次绑定时加载，

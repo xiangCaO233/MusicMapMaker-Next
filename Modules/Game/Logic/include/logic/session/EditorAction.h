@@ -2,6 +2,7 @@
 
 #include "mmm/beatmap/BeatmapMutationObserver.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
@@ -64,6 +65,17 @@ public:
     /// @brief 标记当前状态为已保存
     void markSaved();
 
+    /// @brief 捕获当前编辑状态的单调修订号。
+    /// @return 后续异步保存完成时用于核对内容是否仍未变化的修订号。
+    [[nodiscard]] std::uint64_t captureSaveRevision() const;
+
+    /// @brief 仅在内容未越过指定修订时确认异步保存点。
+    /// @param revision 保存快照创建时捕获的编辑修订号。
+    /// @return 当前内容仍与保存快照一致并已清除脏状态时返回 true。
+    /// @note 保存期间若发生编辑、撤销或重做，则保守保留未保存状态，避免把
+    /// 后续内容误标为已经写入磁盘。
+    bool markSavedIfUnchanged(std::uint64_t revision);
+
     /// @brief 标记一次未进入撤销栈的编辑为未保存。
     void markDirty();
 
@@ -90,6 +102,9 @@ private:
 
     /// @brief 是否存在未进入撤销栈且尚未保存的编辑。
     bool m_hasNonUndoableChanges{ false };
+
+    /// @brief 每次内容状态变化时递增的异步保存校验修订号。
+    std::uint64_t m_changeRevision{ 0 };
 
     /// @brief 等待 BeatmapSession 合并并发布的操作变化类别。
     ::MMM::BeatmapMutationFlags m_pendingMutationFlags{

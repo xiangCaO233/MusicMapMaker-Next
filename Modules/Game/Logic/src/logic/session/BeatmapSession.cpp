@@ -259,11 +259,6 @@ BeatmapSession::BeatmapSession()
         .connect<&markScrollCacheDirty>();
 }
 
-/// @brief 在实现文件中销毁会话私有状态及控制器。
-/// @note 此处各私有类型定义完整，支持公开头中的前向声明与独占所有权。
-/// @pre 调用方已停止对该会话提交命令和更新，不与销毁并发访问控制器。
-BeatmapSession::~BeatmapSession() = default;
-
 /// @brief 通过协作编辑限制检查后将命令移入会话队列。
 /// @param cmd 待处理命令，入队成功后其所有权转交队列。
 /// @note 此处只做提交前检查，具体状态修改由会话消费命令时完成。
@@ -544,13 +539,12 @@ void BeatmapSession::publishRequestedMutationSnapshot()
 }
 
 /// @brief 判断会话是否存在等待逻辑线程消费的指令。
-/// @return 延迟文件命令存在或队列近似长度非零时返回 true。
+/// @return 延迟文件命令存在或普通队列近似长度非零时返回 true。
 /// @note 这是调度提示，不是保证队列为空的同步屏障。
 bool BeatmapSession::hasPendingCommands() const
 {
-    // 延迟文件命令已离开队列但仍待执行，不能仅凭队列近似长度判断空闲。
-    return m_deferredFileCommand.has_value() ||
-           m_commandQueue.size_approx() > 0;
+    // 延迟文件命令已离开队列但仍待执行，不能仅凭无锁队列长度判断空闲。
+    return !m_deferredFileCommands.empty() || m_commandQueue.size_approx() > 0;
 }
 
 /// @brief 判断会话是否需要跳过后台限频并立即更新。
@@ -602,6 +596,8 @@ bool BeatmapSession::needsAutoSavePolling(
     const Config::AutoSaveConfig&   saveConfig,
     const Config::AutoBackupConfig& backupConfig) const
 {
+    // 后台保存 future 需要低频完成轮询；不把它伪装成命令以免 Unlimited 空转。
+    if ( m_asyncSaveOperation ) return true;
     // 已收到的事件和已进入待处理状态的请求都需要继续推进，不受定时模式限制。
     if ( m_requestedAutoSaveTriggers.load(std::memory_order_relaxed) != 0U ||
          m_requestedAutoBackupTriggers.load(std::memory_order_relaxed) != 0U ||
@@ -891,12 +887,10 @@ bool BeatmapSession::flushPendingMetadataAutoSave()
     // 尚未关联谱面时不能完成待处理保存，保留请求供调用方处理失败。
     if ( !m_ctx->currentBeatmap ) return false;
 
-    handleCommand(CmdSaveBeatmap{
+    return saveBeatmapBlocking(CmdSaveBeatmap{
         .allowExternallyModifiedOverwrite = true,
         .kind                             = BeatmapSaveKind::TriggeredAutoSave,
     });
-    // 保存命令通过更新脏状态表达结果，不能仅因命令返回就认定落盘成功。
-    return !m_metadataAutoSavePending && !m_ctx->actionStack.isDirty();
 }
 
 /// @brief 为打包流程立即保存当前会话中的全部未落盘修改。
@@ -913,12 +907,10 @@ bool BeatmapSession::saveDirtyBeatmapForPackaging()
         return true;
     }
 
-    handleCommand(CmdSaveBeatmap{
+    return saveBeatmapBlocking(CmdSaveBeatmap{
         .allowExternallyModifiedOverwrite = true,
         .kind                             = BeatmapSaveKind::Internal,
     });
-    // 使用内部保存类型但仍检查全部未保存状态，保证打包读取的是已落盘版本。
-    return !m_metadataAutoSavePending && !m_ctx->actionStack.isDirty();
 }
 
 /// @brief 判断本轮是否需要生成并发布渲染快照。
@@ -1073,6 +1065,11 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
 {
     m_ctx->lastConfig      = config;
     m_ctx->isActiveSession = isActiveSession;
+    // 完成检查不等待后台任务；先提交旧保存结果，再消费本轮可能新增的编辑命令。
+    // 这也让保存期间切换到其他标签后，后台会话在维护轮询中正确安装最终哈希。
+    // 实际结果气泡由工作线程结束，不依赖当前标签是否仍然可见或会话是否存活。
+    // 项目路径只在当前谱面身份仍与任务启动时一致时更新，避免跨载图提交。
+    finalizeAsyncBeatmapSave();
     // 保存有效配置副本供本轮控制器读取，避免持有调用方配置对象的可变引用。
     // 先接收同谱面草稿的新版本，再处理当前会话命令，避免从旧基线编辑。
     ProjectDraftLaneService::refreshIfChanged(*m_ctx);
