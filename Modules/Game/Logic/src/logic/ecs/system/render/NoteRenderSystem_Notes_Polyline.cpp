@@ -3,6 +3,7 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
 #include "logic/ecs/system/render/NoteLaneGeometry.h"
+#include "logic/ecs/system/render/PolylineCarrierAnchor.h"
 
 #include <algorithm>
 #include <cmath>
@@ -63,20 +64,6 @@ static double getSubCarrierEndTime(const NoteComponent::SubNote& sub)
         return sub.timestamp + sub.duration;
     }
     return sub.timestamp;
-}
-
-/// @brief 获取 Polyline 子物件主体末端 HS 锚点时间。
-/// @param sub 用于决定末端所属载体的子物件。
-/// @return Hold 仍以头部为锚点，不能因末端穿过 HS 事件而改变整个载体的缩放。
-/// @note 返回时间键而非 HS 数值，具体效果仍由滚动缓存按该键查询。
-/// @note Flick 的轨道终点发生在同一时刻，横向位移不增加这个锚点时间。
-/// @warning 热路径：Polyline 几何生成时按子物件调用；保持纯计算，不得访问缓存。
-static double getSubCarrierEndAnchorTime(const NoteComponent::SubNote& sub)
-{
-    if ( sub.type == ::MMM::NoteType::HOLD ) {
-        return sub.timestamp;
-    }
-    return getSubCarrierEndTime(sub);
 }
 
 /// @brief 按主体、节点、头部、装饰的叠放顺序生成一条折线。
@@ -279,11 +266,12 @@ void NoteRenderSystem::drawPolylineBody(
         const auto& sub = note.m_subNotes[i];
 
         // 子节点时间是绝对谱面时间，不需要再次加上折线根组件的 timestamp。
-        double displayDeltaStart =
-            cache->getDisplayDelta(sub.timestamp, currentAbsY, sub.timestamp);
+        const double subAnchor = polylineCarrierAnchor(note, i);
+        double       displayDeltaStart =
+            cache->getDisplayDelta(sub.timestamp, currentAbsY, subAnchor);
         // 时间端点与 HS 锚点分开传递，长条末端仍继承头部的载体缩放。
         const double subEndTime       = getSubCarrierEndTime(sub);
-        const double subEndAnchorTime = getSubCarrierEndAnchorTime(sub);
+        const double subEndAnchorTime = subAnchor;
         double       displayDeltaEnd =
             cache->getDisplayDelta(subEndTime, currentAbsY, subEndAnchorTime);
 
@@ -423,13 +411,23 @@ void NoteRenderSystem::drawPolylineBody(
         // 过渡 Body (连接当前子物件末尾到下一个子物件开头)
         if ( i + 1 < note.m_subNotes.size() ) {
             // 只连接相邻数组项，不跳过中间节点寻找另一个可见节点。
-            // 下一节点使用自己的 HS 锚点，不延续当前 Hold 头部的锚点。
+            // 锚点按虚拟对象归属决定，不能简单用下一节点的发生时间。
             const auto& next = note.m_subNotes[i + 1];
-            float       nextStartY =
-                judgmentLineY -
-                static_cast<float>(cache->getDisplayDelta(
-                    next.timestamp, currentAbsY, next.timestamp)) *
-                    renderScaleY;
+            // 同时刻的新竖段是另一虚拟载体，HS 跳变不能被画成跨屏连接线。
+            // rmslideEXF 将竖段末尾横线绘制在前一虚拟对象内；
+            // 下一对象重新采样 HS，因此两者在空间上不一定相接。
+            // 这里保留时间拓扑供编辑使用，但不为视觉间隙补造主体。
+            // 只跳过连接阶段，下一轮仍正常绘制下一载体自身。
+            // 相同 HS 时两端重合，这条零长度连接原本也不提供可见面积。
+            if ( sub.type == ::MMM::NoteType::FLICK &&
+                 next.type == ::MMM::NoteType::HOLD &&
+                 std::abs(sub.timestamp - next.timestamp) <= 1e-7 )
+                continue;
+            const double nextAnchor = polylineCarrierAnchor(note, i + 1);
+            float        nextStartY =
+                judgmentLineY - static_cast<float>(cache->getDisplayDelta(
+                                    next.timestamp, currentAbsY, nextAnchor)) *
+                                    renderScaleY;
             const auto      nextLane = resolveNoteLaneGeometry(next.trackIndex,
                                                                laneProjection,
                                                                leftX,
@@ -468,7 +466,7 @@ void NoteRenderSystem::drawPolylineBody(
             // 过渡从载体结束处接出：Hold 要跳过自身持续区间，Flick
             // 已完成横向位移。
             double tStart       = getSubCarrierEndTime(sub);
-            double tStartAnchor = getSubCarrierEndAnchorTime(sub);
+            double tStartAnchor = subAnchor;
             double tEnd         = next.timestamp;
 
             float sy =
@@ -477,7 +475,7 @@ void NoteRenderSystem::drawPolylineBody(
                                     renderScaleY;
             float ey =
                 judgmentLineY - static_cast<float>(cache->getDisplayDelta(
-                                    tEnd, currentAbsY, tEnd)) *
+                                    tEnd, currentAbsY, nextAnchor)) *
                                     renderScaleY;
 
             float x1 = curBodyX;
@@ -560,9 +558,19 @@ void NoteRenderSystem::drawPolylineNodes(
         }
 
         const auto& sub = note.m_subNotes[i];
-        // 节点按自身起点定位，不能因为它是 Hold 而在末端再画一个 Node。
+        // 紧随横段的 Hold 起点圆点表示横段的另一端，不是新虚拟载体的头部。
+        // 竖段主体仍用自己的 HS；这里只让横段两端装饰留在同一条水平线上。
+        // 拾取框随后复用相同位置，避免可见圆点与可点击区域分离。
+        // 索引仍指向原 Hold，拖动语义和撤销命令身份不随装饰投影变化。
+        const auto& previous = note.m_subNotes[i - 1];
+        const bool  isFlickEnd =
+            sub.type == ::MMM::NoteType::HOLD &&
+            previous.type == ::MMM::NoteType::FLICK &&
+            std::abs(previous.timestamp - sub.timestamp) <= 1e-7;
+        const double nodeAnchor =
+            polylineCarrierAnchor(note, isFlickEnd ? i - 1 : i);
         double displayDeltaStart =
-            cache->getDisplayDelta(sub.timestamp, currentAbsY, sub.timestamp);
+            cache->getDisplayDelta(sub.timestamp, currentAbsY, nodeAnchor);
         // 节点是单时刻载体，两端距离相等仍需保留纹理高度的可见性余量。
         double displayDeltaEnd = displayDeltaStart;
 
@@ -790,7 +798,8 @@ void NoteRenderSystem::drawPolylineDecoration(
     // 先按末端本身进行剔除，主体仍在视口内并不意味着离屏装饰也要提交。
     double targetTime = getSubCarrierEndTime(last);
     // 长条末端取结束时间但沿用头部 HS 锚点，滑键则仍位于起点时间。
-    double targetAnchorTime = getSubCarrierEndAnchorTime(last);
+    double targetAnchorTime =
+        polylineCarrierAnchor(note, note.m_subNotes.size() - 1);
     double displayDelta =
         cache->getDisplayDelta(targetTime, currentAbsY, targetAnchorTime);
     double maxDelta =
@@ -817,7 +826,7 @@ void NoteRenderSystem::drawPolylineDecoration(
 
     float lStartY =
         judgmentLineY - static_cast<float>(cache->getDisplayDelta(
-                            last.timestamp, currentAbsY, last.timestamp)) *
+                            last.timestamp, currentAbsY, targetAnchorTime)) *
                             renderScaleY;
 
     if ( last.type == ::MMM::NoteType::FLICK ) {

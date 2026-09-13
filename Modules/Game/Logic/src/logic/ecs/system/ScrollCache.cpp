@@ -82,6 +82,7 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
         m_absYRangeIndex.clear();
         m_microImpulseWindows.clear();
         m_hasJumpEffects = false;
+        m_hasNonUnitHs   = false;
         isDirty          = false;
         // 修订号仍需推进，让依赖缓存版本的消费者识别状态已被替换。
         ++m_revision;
@@ -277,6 +278,13 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
 
     // 派生索引必须基于新段落重建，完成后才清除脏标志并发布新修订号。
     m_segments = std::move(newSegments);
+    // UI 的统一位移不包含每个虚拟载体的 HS；即使当前段为
+    // 1，未来载体也可能可见。 只在脏缓存重建时检查最终生效段，同刻被覆盖的 HS
+    // 不应留下错误标志。
+    m_hasNonUnitHs = std::any_of(
+        m_segments.begin(), m_segments.end(), [](const ScrollSegment& segment) {
+            return segment.hs != 1.0;
+        });
     // 时间顺序段落与位置反查索引的顺序不同，不能直接把时间段号当位置索引。
     rebuildAbsYRangeIndex();
     rebuildMicroImpulseWindows();

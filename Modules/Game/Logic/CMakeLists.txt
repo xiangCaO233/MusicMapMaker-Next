@@ -284,6 +284,13 @@ mmm_add_test_executable(Logic ExtremeSvHoldRenderTest
 target_link_libraries(ExtremeSvHoldRenderTest PRIVATE Logic Log)
 add_test(NAME ExtremeSvHoldRenderTest COMMAND ExtremeSvHoldRenderTest)
 
+# RMSlide 虚拟载体的横段应沿用前一竖段 HS，而后续竖段重新取值。 独立检查 RMSlide 虚拟载体的 HS
+# 归属和最终横段顶点，避免仅测缓存漏掉渲染调用方。
+mmm_add_test_executable(Logic PolylineCarrierAnchorTest
+                        tests/PolylineCarrierAnchorTest.cpp)
+target_link_libraries(PolylineCarrierAnchorTest PRIVATE Logic Log)
+add_test(NAME PolylineCarrierAnchorTest COMMAND PolylineCarrierAnchorTest)
+
 # 多选拖动测试确保宽折线不会阻塞以单键为焦点的草稿区虚影更新。
 mmm_add_test_executable(Logic GroupedDraftDragPreviewTest
                         tests/GroupedDraftDragPreviewTest.cpp)

@@ -3,6 +3,7 @@
 #include "config/EditorConfig.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include <algorithm>
 #include <entt/entt.hpp>
 #include <glm/vec4.hpp>
 #include <vector>
@@ -325,8 +326,11 @@ private:
     {
         bool timeInRange = (startOffset <= currentTime + 0.1) &&
                            (endOffset >= currentTime - 0.1);
-        bool spatialInRange =
-            (displayDeltaStart <= maxDelta) && (displayDeltaEnd >= minDelta);
+        // HS 为负或区间内存在反向滚动时，时间首尾不再等于空间上下界。
+        // 使用无方向区间相交，不能丢掉首端离屏但尾端仍可见的载体。
+        const double lowDelta  = std::min(displayDeltaStart, displayDeltaEnd);
+        const double highDelta = std::max(displayDeltaStart, displayDeltaEnd);
+        bool spatialInRange = (lowDelta <= maxDelta) && (highDelta >= minDelta);
         return timeInRange || spatialInRange;
     }
 

@@ -274,6 +274,10 @@ void NoteRenderSystem::generateSnapshot(
         snapshot->isPlaying && !snapshot->isPreviewDragging &&
         supportsUiPlaybackInterpolation && std::isfinite(renderTime) &&
         std::isfinite(interpolationDuration) &&
+        // 主画布和预览包含不同 HS 的物件，不能把整个动态顶点批次等速平移。
+        // 继续由逻辑快照逐载体计算位置；这里只关闭不成立的统一亚帧外推。
+        // Timeline 使用自己的坐标映射及单独发布的 HS 比例，保留既有补间路径。
+        (cameraId == "Timeline" || !cache->hasNonUnitHs()) &&
         cache->canInterpolateLinearly(renderTime, interpolationDuration);
     if ( canUsePlaybackInterpolation ) {
         // 滚动速度乘播放倍率，得到绝对滚动坐标每秒变化量。

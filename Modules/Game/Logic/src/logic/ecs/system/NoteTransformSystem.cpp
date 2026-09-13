@@ -2,6 +2,10 @@
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/ecs/system/render/PolylineCarrierAnchor.h"
+
+#include <algorithm>
+#include <cstddef>
 
 namespace MMM::Logic::System
 {
@@ -59,10 +63,13 @@ void NoteTransformSystem::update(entt::registry&             registry,
             maxY = static_cast<float>((endAbsY - currentAbsY) * noteHs);
         } else if ( note.m_type == ::MMM::NoteType::POLYLINE &&
                     !note.m_subNotes.empty() ) {
-            for ( const auto& sub : note.m_subNotes ) {
-                // 子节点使用自己的时间和 HS，不能统一沿用根节点的局部倍率。
+            for ( std::size_t i = 0; i < note.m_subNotes.size(); ++i ) {
+                const auto& sub = note.m_subNotes[i];
+                // 与可见几何共享虚拟载体锚点，跨 HS 的末端横段仍属于前一竖段。
+                // 只改变缓存的投影范围，不把继承的 HS 或时间写回子物件。
+                // 否则后续编辑、导出会丢失真实的横段发生时间。
                 double subAbsY = cache.getAbsY(sub.timestamp);
-                double subHs   = cache.getHsAt(sub.timestamp);
+                double subHs   = cache.getHsAt(polylineCarrierAnchor(note, i));
                 float  subRelY =
                     static_cast<float>((subAbsY - currentAbsY) * subHs);
                 minY = std::min(minY, subRelY);
