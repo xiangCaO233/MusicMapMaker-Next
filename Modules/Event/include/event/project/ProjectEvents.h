@@ -2,6 +2,7 @@
 
 #include "event/EventDef.h"
 #include "event/core/BaseEvent.h"
+#include "event/project/ProjectOpenInteractionEvent.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -36,6 +37,9 @@ struct TemporaryProjectClosePromptRequestedEvent : public ProjectRequestEvent {
 
 /// @brief 新建项目请求事件，由项目控制器创建目录并排队打开。
 struct ProjectCreateRequestedEvent : public ProjectRequestEvent {
+    /// @brief 唤出新建向导的用户入口，随创建和打开流程传递。
+    ProjectOpenOrigin m_origin{ ProjectOpenOrigin::Unknown };
+
     /// @brief 项目根目录路径。
     std::filesystem::path m_projectPath;
 
