@@ -107,8 +107,10 @@ private:
 
     /// @brief 绘制模板创建来源选择区域。
     /// @param templateOptions 当前已打开且可作为模板的谱面列表。
+    /// @param sourceManager 提供演练突出目标注册。
     void renderTemplateSourceControls(
-        const std::vector<OpenTemplateOption>& templateOptions);
+        const std::vector<OpenTemplateOption>& templateOptions,
+        UIManager*                             sourceManager);
 
     /// @brief 绘制已打开谱面的模板选择弹窗。
     /// @param templateOptions 当前已打开且可作为模板的谱面列表。

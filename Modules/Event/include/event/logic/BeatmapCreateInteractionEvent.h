@@ -12,9 +12,11 @@ namespace MMM::Event
 /// @brief 新建谱面交互已经到达的业务阶段。
 /// @details 阶段只单向描述已经发生的事实，不作为 UI 向导状态机的控制命令。
 enum class BeatmapCreateInteractionStage : std::uint8_t {
-    WizardOpened,   ///< 新建谱面向导已经显示。
-    AudioSelected,  ///< 已选择满足创建条件的主音频。
-    Completed       ///< 谱面文件创建成功且已建立编辑会话。
+    WizardOpened,      ///< 新建谱面向导已经显示。
+    TemplateSelected,  ///< 已选择可用的打开谱面作为模板。
+    AudioSelected,     ///< 已选择满足创建条件的主音频。
+    TimingMeasured,    ///< BPM 测量结果已经回填向导。
+    Completed          ///< 谱面文件创建成功且已建立编辑会话。
 };
 
 /// @brief 新建谱面向导的阶段事件，与具体演练文案和步骤 ID 无关。
@@ -29,6 +31,10 @@ struct BeatmapCreateInteractionEvent : BaseEvent {
     BeatmapCreateInteractionStage m_stage{
         BeatmapCreateInteractionStage::WizardOpened
     };
+
+    /// @brief 当前阶段是否属于从已有模板创建的路径。
+    /// @note WizardOpened 发生在用户选择来源前，因此该阶段固定为 false。
+    bool m_fromTemplate{ false };
 
     /// @brief 完成阶段的新谱面项目内路径，其他阶段为空。
     std::string m_beatmapPath;

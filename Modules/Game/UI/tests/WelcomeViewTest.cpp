@@ -33,10 +33,10 @@
 /// - 首个分支默认展开；
 /// - 新建项目主题渲染菜单与快捷键两条真实分支；
 /// - 新建项目主题在窄窗口中仍保留可见分支卡片；
-/// - 新建谱面主题是项目限定的真实主题，不再按占位页处理；
+/// - 两个新建谱面主题是项目限定的真实主题，不再按占位页处理；
 /// - 无项目时直接渲染主题仅供布局测试，不代表目录按钮可以点击；
 /// - 项目限定属性来自内置配置，页面不会按固定主题索引硬编码门禁；
-/// - 新建谱面正文仍生成真实分支卡片，确保配置未退化为静态说明；
+/// - 空白与模板谱面正文均生成真实分支卡片，确保配置未退化为静态说明；
 /// - 学习进度在首页与正文之间保持；
 /// - 越界主题索引安全回退首页；
 /// - 占位主题不残留真实分支窗口。
@@ -275,12 +275,20 @@ bool testPages()
         }
     }
     if ( !createProjectBranchVisible ) return false;
-    // 第三个主题为新建谱面；即使测试未打开项目，直接渲染也应保留可读正文，
-    // 但模型入口条件供首页和引导按钮禁用实际操作。
-    const auto& createBeatmapTopic = manager.walkthroughService().topics()[2];
+    // 阶段二同时包含空白创建和模板创建，两张卡片保持独立主题与相同排序值。
+    // 即使测试未打开项目，直接渲染也应保留可读正文；模型入口条件供首页
+    // 和引导按钮禁用实际操作。
+    const auto& createBeatmapTopic   = manager.walkthroughService().topics()[2];
+    const auto& templateBeatmapTopic = manager.walkthroughService().topics()[3];
+    // ID 校验防止测试仅因索引碰巧可渲染而通过。
+    // 两个主题共享项目门禁和 order，但分别持有自己的分支与进度键。
     if ( createBeatmapTopic.m_id != "mmm.create-beatmap" ||
          createBeatmapTopic.m_placeholder ||
-         !createBeatmapTopic.m_requiresProject )
+         !createBeatmapTopic.m_requiresProject ||
+         templateBeatmapTopic.m_id != "mmm.create-beatmap-template" ||
+         templateBeatmapTopic.m_placeholder ||
+         !templateBeatmapTopic.m_requiresProject ||
+         createBeatmapTopic.m_order != templateBeatmapTopic.m_order )
         return false;
     welcome.showTopic(2);
     for ( int i = 0; i < 4; ++i ) frame(360);
@@ -291,6 +299,17 @@ bool testPages()
                  std::string_view::npos )
             createBeatmapBranchVisible = true;
     if ( !createBeatmapBranchVisible ) return false;
+    // 第二张阶段二卡片同样应能进入独立的模板创建演练正文。
+    welcome.showTopic(3);
+    for ( int i = 0; i < 4; ++i ) frame(360);
+    bool templateBeatmapBranchVisible = false;
+    // BranchCard 来自真实演练模型；静态占位正文不会生成这一子窗口。
+    for ( const auto* window : ImGui::GetCurrentContext()->Windows )
+        if ( window->Active &&
+             std::string_view(window->Name).find("BranchCard") !=
+                 std::string_view::npos )
+            templateBeatmapBranchVisible = true;
+    if ( !templateBeatmapBranchVisible ) return false;
     // 返回首页时仍须恢复进入主题前选择的个性化章节。
     welcome.showHome();
     for ( int i = 0; i < 4; ++i ) frame(960);
@@ -328,12 +347,14 @@ bool testPages()
     frame(960);
     if ( !welcome.showingHome() ) return false;
     // 占位主题可独立进入和返回，不能残留上一主题的实际分支或修改已有进度。
-    for ( std::size_t index = 3; index < service.topics().size(); ++index ) {
+    // 前四项现在均为真实教程，只有其后的创作主题仍进入占位回归循环。
+    // 起始索引随第二张阶段二卡片后移，避免把模板分支误判成残留窗口。
+    for ( std::size_t index = 4; index < service.topics().size(); ++index ) {
         // 逐个进入所有内置占位主题，覆盖宽窄两种正文布局。
         welcome.showTopic(index);
         if ( welcome.showingHome() ) return false;
         for ( int i = 0; i < 4; ++i )
-            if ( !frame(index == 3 ? 360 : 960) ) return false;
+            if ( !frame(index == 4 ? 360 : 960) ) return false;
         for ( const auto* window : ImGui::GetCurrentContext()->Windows )
             if ( window->Active &&
                  std::string_view(window->Name).find("BranchCard") !=

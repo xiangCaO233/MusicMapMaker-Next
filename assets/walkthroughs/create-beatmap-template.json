@@ -1,0 +1,63 @@
+{
+  "id": "mmm.create-beatmap-template",
+  "chapter": "creation",
+  "order": 20,
+  "version": 1,
+  "requires_project": true,
+  "completion": "all",
+  "title": {"zh_cn": "从已有模板创建谱面", "en_us": "Create from an existing template"},
+  "description": {"zh_cn": "复用一个已经打开的谱面作为模板，选择要复制的元数据、时间线和物件，再确认歌曲资源与新谱面信息。模板只作为创建来源，不会被反向修改。", "en_us": "Use an already open beatmap as a template, choose which metadata, timelines, and objects to copy, then confirm the song resources and new beatmap details. The source template is not modified."},
+  "branches": [
+    {
+      "id": "template",
+      "title": {"zh_cn": "复制已打开的谱面", "en_us": "Copy an open beatmap"},
+      "steps": [
+        {
+          "id": "open",
+          "title": {"zh_cn": "准备模板并打开向导", "en_us": "Prepare the template and open the wizard"},
+          "body": {"zh_cn": "先在当前项目中打开要作为模板的谱面，再点击 **文件 → 新建谱面** 或按 **Ctrl+N**。未打开的谱面不会出现在模板候选列表中。", "en_us": "Open the beatmap you want to use as a template in the current project, then choose **File → New Beatmap** or press **Ctrl+N**. Closed beatmaps do not appear in the template list."},
+          "signals": ["beatmap.create.menu.dialog", "beatmap.create.shortcut.dialog"],
+          "guide": {"prompt": {"zh_cn": "确认模板谱面已经打开，然后进入“文件 → 新建谱面”。", "en_us": "Make sure the template beatmap is open, then choose File → New Beatmap."}, "targets": ["main-menu.file", "main-menu.file.new-beatmap"]}
+        },
+        {
+          "id": "select-template",
+          "title": {"zh_cn": "选择从已有模板创建", "en_us": "Choose creation from a template"},
+          "body": {"zh_cn": "将创建方式切换为 **从已开启模板**，点击选择模板，并从候选列表中选择正确的源谱面。", "en_us": "Switch the creation source to **From Open Template**, choose Select Template, and select the correct source beatmap."},
+          "requires": ["open"],
+          "signals": ["beatmap.template.menu.selected", "beatmap.template.shortcut.selected"],
+          "guide": {"prompt": {"zh_cn": "切换到模板创建并选择一个已打开谱面。", "en_us": "Switch to template creation and select an open beatmap."}, "targets": ["new-beatmap.template.mode", "new-beatmap.template.pick"]}
+        },
+        {
+          "id": "audio",
+          "title": {"zh_cn": "确认模板带入的主音频", "en_us": "Confirm the inherited main audio"},
+          "body": {"zh_cn": "模板会尽量带入主音频、封面、背景和基础偏好。确认音频区域指向正确的 Main 音轨；模板缺少音频时需要手动选择或导入。", "en_us": "The template carries over its main audio, cover, background, and basic preferences when possible. Confirm that the audio area points to the correct Main track, or select/import one if the template has none."},
+          "requires": ["select-template"],
+          "signals": ["beatmap.template.menu.audio", "beatmap.template.shortcut.audio"],
+          "guide": {"prompt": {"zh_cn": "确认模板带入的主音频，缺失时选择或导入 Main 音轨。", "en_us": "Confirm the inherited main audio, or select/import a Main track if it is missing."}, "targets": ["new-beatmap.audio"]}
+        },
+        {
+          "id": "copy-options",
+          "title": {"zh_cn": "配置模板复制内容", "en_us": "Configure copied template content"},
+          "body": {"zh_cn": "打开 **模板内容**，按需要选择复制额外元数据、全部 Timing/流速事件和全部物件。复制物件时会在创建阶段校验新谱面的轨道布局。", "en_us": "Open **Template Content** and choose whether to copy extra metadata, all Timing/scroll events, and all objects. Object tracks are validated against the new beatmap layout during creation."},
+          "requires": ["audio"],
+          "guide": {"prompt": {"zh_cn": "点击突出显示的“模板内容”，确认需要复制的内容范围。", "en_us": "Click the highlighted Template Content button and confirm what should be copied."}, "targets": ["new-beatmap.template.options"]}
+        },
+        {
+          "id": "details",
+          "title": {"zh_cn": "补充新谱面信息与资源", "en_us": "Complete the new beatmap details"},
+          "body": {"zh_cn": "填写新谱面的内部名称、标题、艺术家、谱师、难度名和轨道数，并确认封面与背景资源。模板不会覆盖你已经明确填写的标题和艺术家。", "en_us": "Enter the new beatmap's internal name, title, artist, mapper, difficulty, and lane count, and confirm its cover and background. The template does not overwrite title or artist values you already entered."},
+          "requires": ["copy-options"],
+          "guide": {"prompt": {"zh_cn": "在突出显示的向导内容区补全新谱面信息和视觉资源。", "en_us": "Complete the new beatmap details and visual resources in the highlighted wizard area."}, "targets": ["new-beatmap.details"]}
+        },
+        {
+          "id": "create",
+          "title": {"zh_cn": "确认并从模板创建", "en_us": "Confirm and create from the template"},
+          "body": {"zh_cn": "复核模板、复制选项、音频和新谱面信息后点击 **立即创建**。只有模板复制、文件保存和新会话建立全部成功后才算完成。", "en_us": "Review the template, copy options, audio, and new beatmap details, then click **Create Now**. Completion requires successful template copying, file saving, and creation of the new editing session."},
+          "requires": ["details"],
+          "signals": ["beatmap.template.menu.ready", "beatmap.template.shortcut.ready"],
+          "guide": {"prompt": {"zh_cn": "复核全部信息后点击突出显示的创建按钮。", "en_us": "Review everything, then click the highlighted Create button."}, "targets": ["new-beatmap.create", "new-beatmap.duplicate.continue"]}
+        }
+      ]
+    }
+  ]
+}

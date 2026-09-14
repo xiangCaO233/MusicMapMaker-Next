@@ -2,21 +2,62 @@
   "id": "mmm.create-beatmap",
   "chapter": "creation",
   "order": 20,
-  "version": 1,
+  "version": 2,
   "requires_project": true,
-  "completion": "any",
+  "completion": "all",
   "title": {"zh_cn": "新建谱面", "en_us": "Create a beatmap"},
-  "description": {"zh_cn": "此演练只能在已经打开项目时开始。通过文件菜单或 Ctrl+N 打开新建谱面向导，选择项目主音频并完成创建；取消向导、创建失败或没有进入新谱面会话都不会计为完成。", "en_us": "This walkthrough is available only while a project is open. Open the New Beatmap wizard from the File menu or with Ctrl+N, select a project main audio track, and finish creation. Cancelling, failing, or not entering the new beatmap session does not count."},
+  "description": {"zh_cn": "从空白谱面开始的推荐流程：选择主音频，自动测量歌曲 BPM 与首拍偏移，确认并修正参考值，再补充谱面元数据、封面和背景，最后确认创建。", "en_us": "Recommended blank-beatmap flow: select the main audio, automatically detect the song BPM and first-beat offset, verify and correct the reference values, complete metadata, cover, and background, then confirm creation."},
   "branches": [
-    {"id": "menu", "title": {"zh_cn": "方式一：文件菜单", "en_us": "Method 1: File menu"}, "steps": [
-      {"id": "menu-dialog", "title": {"zh_cn": "从文件菜单打开新建谱面向导", "en_us": "Open the wizard from File"}, "body": {"zh_cn": "点击顶部 **文件 → 新建谱面**。只有处于活动项目中时该菜单项和本演练入口才可用；向导实际出现后，本步骤会自动标记。", "en_us": "Choose **File → New Beatmap**. This menu item and walkthrough are available only in an active project; the step is marked automatically when the wizard actually opens."}, "signals": ["beatmap.create.menu.dialog"], "guide": {"prompt": {"zh_cn": "依次点击突出显示的“文件”和“新建谱面”。", "en_us": "Click the highlighted File menu and New Beatmap item."}, "targets": ["main-menu.file", "main-menu.file.new-beatmap"]}},
-      {"id": "menu-audio", "title": {"zh_cn": "选择或导入主音频", "en_us": "Select or import the main audio"}, "body": {"zh_cn": "在音频一栏选择项目已有的主音轨；如果项目还没有音频，使用同一行的导入按钮添加。可以继续调整标题、作者、BPM、轨道数与模板选项。", "en_us": "Select an existing project main track in the audio row, or use the import button on that row if the project has none. You may then adjust the title, artist, BPM, lanes, and template options."}, "requires": ["menu-dialog"], "signals": ["beatmap.create.menu.audio"], "guide": {"prompt": {"zh_cn": "在突出显示的音频区域选择已有主音轨，或导入新的音频。", "en_us": "Select an existing main track or import audio in the highlighted audio area."}, "targets": ["new-beatmap.audio"]}},
-      {"id": "menu-ready", "title": {"zh_cn": "创建并进入新谱面", "en_us": "Create and enter the new beatmap"}, "body": {"zh_cn": "确认信息后点击创建。若内部名称重复，再确认继续；只有谱面文件成功写入并建立可编辑会话后，才会自动完成。", "en_us": "Review the details and click Create. Confirm continuation if the internal name is duplicated. Completion is recorded only after the beatmap file is written and an editable session is created."}, "requires": ["menu-audio"], "signals": ["beatmap.create.menu.ready"], "guide": {"prompt": {"zh_cn": "点击突出显示的创建按钮；如出现重名提示，再确认继续。", "en_us": "Click the highlighted Create button, then confirm if a duplicate-name warning appears."}, "targets": ["new-beatmap.create", "new-beatmap.duplicate.continue"]}}
-    ]},
-    {"id": "shortcut", "title": {"zh_cn": "方式二：快捷键", "en_us": "Method 2: Keyboard shortcut"}, "steps": [
-      {"id": "shortcut-dialog", "title": {"zh_cn": "按 Ctrl+N 打开向导", "en_us": "Press Ctrl+N"}, "body": {"zh_cn": "回到软件窗口，关闭其他模态对话框，然后按 **Ctrl+N**。快捷键只在活动项目中生效，会直接打开新建谱面向导。", "en_us": "Focus the app, close other modal dialogs, and press **Ctrl+N**. The shortcut works only in an active project and opens the New Beatmap wizard directly."}, "signals": ["beatmap.create.shortcut.dialog"], "guide": {"prompt": {"zh_cn": "请按 Ctrl+N 打开新建谱面向导。", "en_us": "Press Ctrl+N to open the New Beatmap wizard."}, "targets": []}},
-      {"id": "shortcut-audio", "title": {"zh_cn": "选择或导入主音频", "en_us": "Select or import the main audio"}, "body": {"zh_cn": "在音频一栏选择项目已有的主音轨，或使用导入按钮添加音频，再按需要调整其他谱面信息。", "en_us": "Choose an existing project main track in the audio row, or import audio, then adjust the remaining beatmap details as needed."}, "requires": ["shortcut-dialog"], "signals": ["beatmap.create.shortcut.audio"], "guide": {"prompt": {"zh_cn": "在突出显示的音频区域选择已有主音轨，或导入新的音频。", "en_us": "Select an existing main track or import audio in the highlighted audio area."}, "targets": ["new-beatmap.audio"]}},
-      {"id": "shortcut-ready", "title": {"zh_cn": "创建并进入新谱面", "en_us": "Create and enter the new beatmap"}, "body": {"zh_cn": "确认信息后点击创建；如遇内部名称重复提示，可确认继续。谱面成功创建并进入编辑会话后，此分支才会完成。", "en_us": "Review the details and click Create, confirming any duplicate-name warning if needed. This branch completes only after the beatmap is created and entered in an editing session."}, "requires": ["shortcut-audio"], "signals": ["beatmap.create.shortcut.ready"], "guide": {"prompt": {"zh_cn": "点击突出显示的创建按钮；如出现重名提示，再确认继续。", "en_us": "Click the highlighted Create button, then confirm if a duplicate-name warning appears."}, "targets": ["new-beatmap.create", "new-beatmap.duplicate.continue"]}}
-    ]}
+    {
+      "id": "blank",
+      "title": {"zh_cn": "从空白谱面开始", "en_us": "Start from a blank beatmap"},
+      "steps": [
+        {
+          "id": "open",
+          "title": {"zh_cn": "打开新建谱面向导", "en_us": "Open the New Beatmap Wizard"},
+          "body": {"zh_cn": "在已有项目中点击 **文件 → 新建谱面**，也可以按 **Ctrl+N**。向导打开后保持创建方式为“新建”。", "en_us": "In an open project, choose **File → New Beatmap** or press **Ctrl+N**. Keep the creation source set to New when the wizard opens."},
+          "signals": ["beatmap.create.menu.dialog", "beatmap.create.shortcut.dialog"],
+          "guide": {"prompt": {"zh_cn": "点击“文件 → 新建谱面”，或按 Ctrl+N 打开向导。", "en_us": "Choose File → New Beatmap, or press Ctrl+N to open the wizard."}, "targets": ["main-menu.file", "main-menu.file.new-beatmap"]}
+        },
+        {
+          "id": "audio",
+          "title": {"zh_cn": "选择或导入主音频", "en_us": "Select or import the main audio"},
+          "body": {"zh_cn": "在音频区域选择项目已有的主音轨；如果项目还没有歌曲音频，使用右侧导入按钮添加。谱面只能绑定标记为 Main 的音轨。", "en_us": "Select an existing Main track in the audio area. If the project has no song audio, add it with the import button. Beatmaps can only bind tracks marked Main."},
+          "requires": ["open"],
+          "signals": ["beatmap.create.menu.audio", "beatmap.create.shortcut.audio"],
+          "guide": {"prompt": {"zh_cn": "在突出显示的音频区域选择已有主音轨，或导入新的音频。", "en_us": "Select an existing Main track or import audio in the highlighted area."}, "targets": ["new-beatmap.audio"]}
+        },
+        {
+          "id": "auto-timing",
+          "title": {"zh_cn": "推荐自动测量 BPM 与首拍", "en_us": "Automatically detect BPM and first beat"},
+          "body": {"zh_cn": "选择音频后，推荐点击 **自动测偏**。工具会分析歌曲并给出 BPM、首拍偏移位置和初始 Timing；分析期间不要切换音频。", "en_us": "After selecting audio, use **Auto Offset**. The tool analyzes the song and returns its BPM, first-beat offset, and initial Timing. Do not switch audio while analysis is running."},
+          "requires": ["audio"],
+          "signals": ["beatmap.create.menu.timing", "beatmap.create.shortcut.timing"],
+          "guide": {"prompt": {"zh_cn": "点击突出显示的“自动测偏”，等待 BPM 与首拍分析完成。", "en_us": "Click the highlighted Auto Offset button and wait for BPM and first-beat analysis."}, "targets": ["new-beatmap.timing.auto"]}
+        },
+        {
+          "id": "verify-timing",
+          "title": {"zh_cn": "确认并修正测量结果", "en_us": "Verify and correct the timing"},
+          "body": {"zh_cn": "检查已测 BPM 与首拍摘要是否符合听感。自动 BPM 可能出现半频或倍频误判；参考值不合理时，直接修正 BPM，或打开手测 BPM 工具重新测量。", "en_us": "Check whether the measured BPM and first-beat summary match what you hear. Automatic BPM may be detected at half-time or double-time; correct an unreasonable reference BPM directly or reopen the manual BPM tool."},
+          "requires": ["auto-timing"],
+          "guide": {"prompt": {"zh_cn": "核对测量摘要；若参考 BPM 不合理，请在突出显示的 BPM 控件中修正。", "en_us": "Check the measurement summary and correct an unreasonable reference BPM in the highlighted control."}, "targets": ["new-beatmap.timing.bpm"]}
+        },
+        {
+          "id": "details",
+          "title": {"zh_cn": "补充元数据和视觉资源", "en_us": "Complete metadata and visual resources"},
+          "body": {"zh_cn": "补充内部名称、标题、艺术家、谱师、难度名和轨道数。随后选择或导入封面图片与背景图片/视频；音频标签自动预填的内容仍应人工核对。", "en_us": "Complete the internal name, title, artist, mapper, difficulty, and lane count. Then select or import a cover image and background image/video, and verify any values prefilled from audio tags."},
+          "requires": ["verify-timing"],
+          "guide": {"prompt": {"zh_cn": "在突出显示的向导内容区补全谱面信息、封面和背景资源。", "en_us": "Complete the beatmap details, cover, and background in the highlighted wizard area."}, "targets": ["new-beatmap.details"]}
+        },
+        {
+          "id": "create",
+          "title": {"zh_cn": "确认并创建谱面", "en_us": "Confirm and create the beatmap"},
+          "body": {"zh_cn": "最后复核音频、Timing 和谱面信息，再点击 **立即创建**。若内部名称重复，需要再次确认；只有文件成功写入并进入新谱面会话后才算完成。", "en_us": "Review the audio, Timing, and beatmap details, then click **Create Now**. Confirm any duplicate internal name. Completion is recorded only after the file is written and the new beatmap session opens."},
+          "requires": ["details"],
+          "signals": ["beatmap.create.menu.ready", "beatmap.create.shortcut.ready"],
+          "guide": {"prompt": {"zh_cn": "复核信息后点击突出显示的创建按钮；如出现重名提示，再确认继续。", "en_us": "Review the details, click the highlighted Create button, and confirm any duplicate-name warning."}, "targets": ["new-beatmap.create", "new-beatmap.duplicate.continue"]}
+        }
+      ]
+    }
   ]
 }

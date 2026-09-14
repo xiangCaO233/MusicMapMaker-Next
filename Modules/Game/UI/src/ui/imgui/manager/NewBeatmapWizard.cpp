@@ -388,6 +388,9 @@ void NewBeatmapWizard::selectTemplate(const OpenTemplateOption& option)
     m_templateBeatmap = option.beatmap;
 
     if ( m_templateBeatmap ) {
+        // 模板身份确认后再发布阶段，空候选不能推进模板创建演练。
+        publishInteraction(
+            Event::BeatmapCreateInteractionStage::TemplateSelected);
         // 只补充资源与尚未填写的文本字段，不覆盖用户已输入内容。
         applyTemplateResourceDefaults(*m_templateBeatmap);
         if ( !m_selectedAudioPath.empty() )
@@ -627,6 +630,8 @@ void NewBeatmapWizard::applyMeasuredTimingsFromTool(
     // 首个 Timing 决定向导显示的首选 BPM。
     m_measuredTimings = std::move(bpmTimings);
     m_bpm             = m_measuredTimings.front().m_bpm;
+    // 只有有效结果真正回填后才推进节奏测量演练步骤。
+    publishInteraction(Event::BeatmapCreateInteractionStage::TimingMeasured);
     if ( m_manualBpmMeasurementActive ) {
         // 手动流程观察此标志后恢复被暂时关闭的模态向导。
         m_manualBpmMeasurementExported = true;
@@ -933,7 +938,8 @@ void NewBeatmapWizard::renderDuplicateNameWarningPopup(UIManager* sourceManager)
 /// 每帧先校验持久化选择仍在候选中；没有候选时强制回退空白模式。弹窗打开请求
 /// 使用一次性布尔位，确保 OpenPopup 与对应 BeginPopup 在同一 UI 调用链中完成。
 void NewBeatmapWizard::renderTemplateSourceControls(
-    const std::vector<OpenTemplateOption>& templateOptions)
+    const std::vector<OpenTemplateOption>& templateOptions,
+    UIManager*                             sourceManager)
 {
     if ( templateOptions.empty() && m_createMode == CreateMode::OpenTemplate ) {
         // 最后一个源会话关闭后，模板模式已不可提交。
@@ -970,9 +976,15 @@ void NewBeatmapWizard::renderTemplateSourceControls(
         // 没有打开谱面时禁止进入不可完成的模板模式。
         ImGui::BeginDisabled();
     }
-    if ( ::MMM::UI::FeedbackRadioButton(
-             TR("ui.wizard.new_beatmap.source.template").data(),
-             m_createMode == CreateMode::OpenTemplate) ) {
+    const bool chooseTemplate = ::MMM::UI::FeedbackRadioButton(
+        TR("ui.wizard.new_beatmap.source.template").data(),
+        m_createMode == CreateMode::OpenTemplate);
+    // 演练目标只记录现有控件矩形，不额外插入占位或改变单页布局。
+    // 禁用态仍可定位，引导才能解释为什么必须先打开一个源谱面。
+    if ( sourceManager )
+        sourceManager->walkthroughSpotlight().reportLastItem(
+            "new-beatmap.template.mode");
+    if ( chooseTemplate ) {
         // 选择模板模式后立即请求选择器，并默认复制时间线结构。
         m_createMode                    = CreateMode::OpenTemplate;
         m_shouldOpenTemplatePicker      = true;
@@ -1001,6 +1013,11 @@ void NewBeatmapWizard::renderTemplateSourceControls(
             // 延迟到本函数末尾打开，保持 ImGui popup 调用顺序。
             m_shouldOpenTemplatePicker = true;
         }
+        // 选择按钮和单选项分别注册，弹出选择器前始终有可见候选目标。
+        // 引导系统按最后可见目标择优，不持有 ImGui Item 生命周期。
+        if ( sourceManager )
+            sourceManager->walkthroughSpotlight().reportLastItem(
+                "new-beatmap.template.pick");
         ImGui::SameLine();
         if ( !m_templateBeatmap ) {
             // 未选源对象时复制范围没有作用。
@@ -1012,6 +1029,11 @@ void NewBeatmapWizard::renderTemplateSourceControls(
             // 选项弹窗直接编辑 m_templateOptions。
             m_shouldOpenTemplateOptions = true;
         }
+        // 复制选项是模板教程的人工确认步骤，只需提供稳定的视觉锚点。
+        // 未选模板时锚点随按钮保持禁用，不能误导为可提交状态。
+        if ( sourceManager )
+            sourceManager->walkthroughSpotlight().reportLastItem(
+                "new-beatmap.template.options");
         if ( !m_templateBeatmap ) {
             ImGui::EndDisabled();
         }
@@ -1324,6 +1346,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         ImGui::InputText(label, buf, bufSize);
     };
 
+    // 基础信息到视觉资源共同组成教程的“补充谱面信息”目标区域。
+    const ImVec2 detailsAreaMin = ImGui::GetCursorScreenPos();
     // 基础信息字段直接编辑向导缓冲，提交时统一同步到 m_meta。
     ImGui::SeparatorText(TR("ui.settings.beatmap.info").data());
     DrawInput(
@@ -1370,6 +1394,10 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
             m_measuredTimings.clear();
         }
     }
+    // BPM 控件用于复核半频或倍频误判，不代替实际听音判断。
+    if ( sourceManager )
+        sourceManager->walkthroughSpotlight().reportLastItem(
+            "new-beatmap.timing.bpm");
     if ( !m_measuredTimings.empty() ) {
         // 摘要提醒用户创建命令将携带测量得到的 Timing 点。
         const auto timingSummary = formatMeasuredTimingSummary();
@@ -1396,7 +1424,7 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
 
     // 模板候选以本帧打开会话为准，关闭源会立即反映。
     auto templateOptions = collectOpenTemplateOptions();
-    renderTemplateSourceControls(templateOptions);
+    renderTemplateSourceControls(templateOptions, sourceManager);
 
     ImGui::SeparatorText(TR("ui.settings.beatmap.resource").data());
 
@@ -1536,6 +1564,10 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     if ( ::MMM::UI::FeedbackButton(autoBpmLabel, ImVec2(autoBpmWidth, 0.0f)) ) {
         openBpmTool(true);
     }
+    // 自动测偏按钮是推荐入口；手动工具仍沿用原有并列布局与行为。
+    if ( sourceManager )
+        sourceManager->walkthroughSpotlight().reportLastItem(
+            "new-beatmap.timing.auto");
     if ( m_selectedAudioTrackId.empty() ) {
         ImGui::EndDisabled();
     }
@@ -1650,6 +1682,14 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     if ( FeedbackButton(importBackgroundLabel,
                         ImVec2(importButtonWidth, 0.0f)) )
         openResourcePicker(ResourceTarget::Background);
+    // 合并矩形覆盖元数据、封面和背景，表达同一人工复核阶段。
+    // 起止坐标均来自现有控件，不增加 Child 或改变滚动内容高度。
+    if ( sourceManager )
+        sourceManager->walkthroughSpotlight().reportTarget(
+            "new-beatmap.details",
+            detailsAreaMin,
+            ImGui::GetItemRectMax(),
+            ImGui::GetWindowViewport());
 
     ImGui::Spacing();
     ImGui::Separator();
@@ -1745,9 +1785,11 @@ void NewBeatmapWizard::publishInteraction(
     Event::BeatmapCreateInteractionStage stage, std::string beatmapPath) const
 {
     Event::BeatmapCreateInteractionEvent event;
-    event.m_origin      = m_origin;
-    event.m_stage       = stage;
-    event.m_beatmapPath = std::move(beatmapPath);
+    event.m_origin = m_origin;
+    event.m_stage  = stage;
+    // 来源在每次发布时读取，允许用户在同一弹窗内切换创建方式。
+    event.m_fromTemplate = m_createMode == CreateMode::OpenTemplate;
+    event.m_beatmapPath  = std::move(beatmapPath);
     Event::EventBus::instance().publish(event);
 }
 

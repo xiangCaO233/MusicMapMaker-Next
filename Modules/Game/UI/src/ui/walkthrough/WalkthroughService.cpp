@@ -181,9 +181,10 @@ Service::Service(const std::filesystem::path& progressPath,
         m_impl->m_error = chapters.error();
     // 核心教程优先加入，后续同 ID 自定义主题不能覆盖。
     m_impl->add(BUILTIN_WALKTHROUGH);
-    // 两个创建主题分别接收项目和谱面业务事件，不依赖欢迎页是否可见。
+    // 三个创建主题分别接收项目、空白谱面和模板谱面事件，不依赖欢迎页是否可见。
     m_impl->add(BUILTIN_CREATE_PROJECT_WALKTHROUGH);
     m_impl->add(BUILTIN_CREATE_BEATMAP_WALKTHROUGH);
+    m_impl->add(BUILTIN_CREATE_BEATMAP_TEMPLATE_WALKTHROUGH);
     for ( const auto* placeholder : BUILTIN_PLACEHOLDERS )
         // 占位主题沿用相同解析规则，保证模型结构一致。
         m_impl->add(placeholder);
@@ -333,20 +334,32 @@ void Service::update()
         default: break;
         }
         if ( origin ) {
-            const char* stage = nullptr;
+            const char* stage  = nullptr;
+            const char* family = beatmapEvent.m_fromTemplate
+                                     ? "beatmap.template"
+                                     : "beatmap.create";
             switch ( beatmapEvent.m_stage ) {
             case Event::BeatmapCreateInteractionStage::WizardOpened:
-                stage = "dialog";
+                // 两个主题共用同一弹窗入口，来源尚未选择时使用通用信号。
+                signal = std::string("beatmap.create.") + origin + ".dialog";
+                break;
+            case Event::BeatmapCreateInteractionStage::TemplateSelected:
+                // 非模板路径不会产生此阶段，仍防御错误构造的事件。
+                if ( beatmapEvent.m_fromTemplate ) stage = "selected";
                 break;
             case Event::BeatmapCreateInteractionStage::AudioSelected:
                 stage = "audio";
+                break;
+            case Event::BeatmapCreateInteractionStage::TimingMeasured:
+                // 模板流程保留源 Timing，不使用单独的自动测量步骤。
+                if ( !beatmapEvent.m_fromTemplate ) stage = "timing";
                 break;
             case Event::BeatmapCreateInteractionStage::Completed:
                 stage = "ready";
                 break;
             }
             if ( stage )
-                signal = std::string("beatmap.create.") + origin + "." + stage;
+                signal = std::string(family) + "." + origin + "." + stage;
         }
         if ( !signal.empty() )
             for ( const auto& topic : m_impl->m_topics )

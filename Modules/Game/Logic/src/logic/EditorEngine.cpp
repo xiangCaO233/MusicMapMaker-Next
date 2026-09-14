@@ -2085,6 +2085,8 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
     Event::BeatmapCreateInteractionEvent event;
     event.m_origin = cmd.origin;
     event.m_stage  = Event::BeatmapCreateInteractionStage::Completed;
+    // 命令中的只读模板对象是跨线程后仍可靠的创建来源事实。
+    event.m_fromTemplate = static_cast<bool>(cmd.templateBeatmap);
     event.m_beatmapPath =
         Config::pathToUtf8(result.m_beatmap->m_baseMapMetadata.map_path);
     Event::EventBus::instance().publish(event);

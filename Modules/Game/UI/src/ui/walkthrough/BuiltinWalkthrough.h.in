@@ -8,6 +8,9 @@ inline constexpr const char* BUILTIN_CREATE_PROJECT_WALKTHROUGH =
 /// @brief 内置新建谱面演练，要求处于项目中并覆盖菜单和快捷键入口。
 inline constexpr const char* BUILTIN_CREATE_BEATMAP_WALKTHROUGH =
     R"MMM_WALK(@MMM_WALKTHROUGH_create-beatmap@)MMM_WALK";
+/// @brief 内置模板创建谱面演练，与空白谱面流程在同一学习阶段并列。
+inline constexpr const char* BUILTIN_CREATE_BEATMAP_TEMPLATE_WALKTHROUGH =
+    R"MMM_WALK(@MMM_WALKTHROUGH_create-beatmap-template@)MMM_WALK";
 /// @brief 有序章节目录，包含尚未添加主题的章节。
 inline constexpr const char* BUILTIN_CHAPTERS =
     R"MMM_WALK(@MMM_WALKTHROUGH_chapters@)MMM_WALK";
