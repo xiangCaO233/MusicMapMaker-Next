@@ -935,7 +935,7 @@ const char* annotationTargetLabelKey(
 /// - 轨道元数据仅在 track 非负时展示。
 /// - 目标缺失状态计入卡片元数据高度。
 /// - Markdown 正文先测量完整内容高度。
-/// - 卡片正文显示高度受单卡上限约束。
+/// - 卡片优先完整显示正文，总高度最多占画布可见高度的一半。
 /// - 超出显示高度的内容启用内部滚动。
 /// - 标题、元数据、分隔线和正文间距共同计入卡片高度。
 /// - 测量和实际绘制使用相同字体宽度。
@@ -965,6 +965,7 @@ const char* annotationTargetLabelKey(
 /// - 实际改变 scrollY 时设置 wheelConsumed。
 /// - scrollY 每帧钳制到零和最大偏移之间。
 /// - 非悬停卡片始终从正文顶部绘制。
+/// - 滚动轨道保持清晰轮廓，滑块使用批注皮肤强调色。
 ///
 /// @details 命中与淡化：
 /// - 命中使用画布局部坐标，与 marker 快照坐标一致。
@@ -983,6 +984,7 @@ const char* annotationTargetLabelKey(
 /// @param canvasScreenX 画布左上角屏幕横坐标。
 /// @param canvasScreenY 画布左上角屏幕纵坐标。
 /// @param targetWidth 画布宽度。
+/// @param targetHeight 画布高度，用于限制单卡最大高度。
 /// @param topY 轨道区顶部局部坐标。
 /// @param bottomY 轨道区底部局部坐标。
 /// @param pointerX 指针相对画布左侧的横坐标。
@@ -1003,8 +1005,8 @@ const char* annotationTargetLabelKey(
 AnnotationDetailCardHit renderConnectedAnnotationDetails(
     const std::vector<Common::Render::AnnotationRenderMarker>& markers,
     const Logic::CanvasLaneProjection& projection, float canvasScreenX,
-    float canvasScreenY, float targetWidth, float topY, float bottomY,
-    float pointerX, float pointerY, bool canvasHovered,
+    float canvasScreenY, float targetWidth, float targetHeight, float topY,
+    float bottomY, float pointerX, float pointerY, bool canvasHovered,
     std::string& scrollItemId, float& scrollY)
 {
     AnnotationDetailCardHit result;
@@ -1018,7 +1020,7 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
     constexpr float CARD_MAX_WIDTH  = 340.0F;
     constexpr float CARD_GAP        = 5.0F;
     constexpr float CARD_PADDING    = CANVAS_HOVER_OVERLAY_PADDING;
-    constexpr float SCROLLBAR_SPACE = 7.0F;
+    constexpr float SCROLLBAR_SPACE = 10.0F;
     constexpr float CONNECTOR_ELBOW = 9.0F;
     const float     rightAvailable =
         targetWidth - projection.annotationRightX - CARD_MARGIN * 2.0F;
@@ -1044,6 +1046,13 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
     const float fontSize = ImGui::GetFontSize();
     const float contentWidth =
         std::max(1.0F, cardWidth - CARD_PADDING * 2.0F - SCROLLBAR_SPACE);
+    const float cardFixedHeight = CARD_PADDING * 2.0F +
+                                  CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y * 2.0F +
+                                  fontSize * 2.0F;
+    // 总卡片高度严格限制为可见画布的一半；空间连标题区都容不下时只画标记。
+    const float maxCardHeight = targetHeight * 0.5F;
+    if ( maxCardHeight <= cardFixedHeight ) return result;
+    const float maxVisibleContentHeight = maxCardHeight - cardFixedHeight;
 
     const ImU32 connectorColor = annotationUiColor(
         "annotations.connector", ImVec4(0.42F, 0.72F, 0.96F, 0.86F));
@@ -1055,11 +1064,17 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
     const ImU32 borderColor     = ImGui::GetColorU32(ImGuiCol_Border);
     const ImU32 headerColor     = ImGui::GetColorU32(ImGuiCol_Text);
     const ImU32 mutedColor      = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    ImVec4 scrollbarBackground = ImGui::GetStyleColorVec4(ImGuiCol_ScrollbarBg);
+    // 深色皮肤常把默认轨道设为近透明；提高最低透明度以稳定显示槽位。
+    scrollbarBackground.w = std::max(scrollbarBackground.w, 0.65F);
     const ImU32 scrollbarBackgroundColor =
-        ImGui::GetColorU32(ImGuiCol_ScrollbarBg);
-    const ImU32 scrollbarColor = ImGui::GetColorU32(ImGuiCol_ScrollbarGrab);
-    const ImU32 scrollbarHoverColor =
-        ImGui::GetColorU32(ImGuiCol_ScrollbarGrabHovered);
+        ImGui::ColorConvertFloat4ToU32(scrollbarBackground);
+    const ImU32 scrollbarColor = annotationUiColor(
+        "annotations.marker",
+        ImGui::GetStyleColorVec4(ImGuiCol_ScrollbarGrabActive));
+    const ImU32 scrollbarHoverColor = annotationUiColor(
+        "annotations.marker_hover",
+        ImGui::GetStyleColorVec4(ImGuiCol_ScrollbarGrabHovered));
     const UI::MarkdownStyle         markdownStyle = UI::defaultMarkdownStyle();
     const UI::MarkdownRenderOptions markdownOptions{
         // 测量和绘制必须使用同一 wrapWidth/compact/style，
@@ -1091,12 +1106,14 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
                 // 达到栈数组上限后停止追加当前及后续标记，禁止越界。
                 if ( cardCount >= entries.size() ) return;
                 const auto& item = marker.items[index];
-                // 先完整测量正文，显示高度再限制为一到五行；完整高度
-                // 保留在 entry 中用于滚动条比例和最大偏移。
+                // 先完整测量正文；空间允许时全部展示，超过半画布高度才滚动。
+                // 完整高度保留在 entry 中用于滚动条比例和最大偏移。
                 const auto contentLayout =
                     UI::measureMarkdown(item.content, markdownOptions);
                 const float visibleContentHeight =
-                    std::clamp(contentLayout.size.y, fontSize, fontSize * 5.0F);
+                    std::clamp(contentLayout.size.y,
+                               std::min(fontSize, maxVisibleContentHeight),
+                               maxVisibleContentHeight);
                 entries[cardCount] = {
                     // marker/item 指针均指向当前快照容器，本帧布局完成前稳定。
                     &marker,
@@ -1108,9 +1125,7 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
                     // preferredY 使用时间戳标记 Y，卡片高度包含标题、元数据、
                     // 两段间距、正文与上下 padding。
                     marker.canvasY,
-                    CARD_PADDING * 2.0F +
-                        CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y * 2.0F +
-                        fontSize * 2.0F + visibleContentHeight,
+                    cardFixedHeight + visibleContentHeight,
                     0.0F,
                 };
                 ++cardCount;
@@ -1298,15 +1313,15 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
         if ( hovered && markdownResult.linkHovered ) result.linkHovered = true;
 
         if ( maxScrollY > 0.01F ) {
-            // 只有正文确实溢出时绘制细滚动条，避免短批注产生无意义槽位。
-            constexpr float SCROLLBAR_WIDTH = 3.0F;
+            // 只有正文确实溢出时绘制滚动条，避免短批注产生无意义槽位。
+            constexpr float SCROLLBAR_WIDTH = 6.0F;
             const float     trackTop        = contentMin.y;
             const float     trackBottom     = contentMax.y;
             const float trackHeight = std::max(1.0F, trackBottom - trackTop);
             const float thumbHeight = std::clamp(
-                // 滑块高度按可见比例计算，同时至少十二像素便于辨认。
+                // 滑块高度按可见比例计算，同时保留明显的最小可视长度。
                 trackHeight * visibleContentHeight / entry.contentHeight,
-                12.0F,
+                18.0F,
                 trackHeight);
             const float thumbTravel = std::max(0.0F, trackHeight - thumbHeight);
             const float thumbTop =
@@ -1316,12 +1331,19 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
             drawList->AddRectFilled({ scrollbarX - SCROLLBAR_WIDTH, trackTop },
                                     { scrollbarX, trackBottom },
                                     scrollbarBackgroundColor,
-                                    2.0F);
+                                    3.0F);
+            // 一像素边框把轨道从半透明卡片背景中分离出来。
+            drawList->AddRect({ scrollbarX - SCROLLBAR_WIDTH, trackTop },
+                              { scrollbarX, trackBottom },
+                              borderColor,
+                              3.0F,
+                              ImDrawFlags_None,
+                              1.0F);
             drawList->AddRectFilled(
                 { scrollbarX - SCROLLBAR_WIDTH, thumbTop },
                 { scrollbarX, thumbTop + thumbHeight },
                 hovered ? scrollbarHoverColor : scrollbarColor,
-                2.0F);
+                3.0F);
         }
         // 统一衰减卡片、正文和连线，避免不透明文字继续遮挡音符。
         if ( opacity < 1.0F ) {
@@ -4207,6 +4229,7 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
                 canvasScreenX,
                 canvasScreenY,
                 targetWidth,
+                targetHeight,
                 topY,
                 bottomY,
                 pointerX,
