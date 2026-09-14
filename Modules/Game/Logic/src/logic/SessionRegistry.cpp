@@ -262,7 +262,8 @@ SessionRegistry::publishedSnapshot() const
 {
     // acquire 对应写侧 release，使同一个快照的会话和元数据完整可见。
     // 读取句柄持有旧快照，写侧替换不会让本轮访问中的会话悬空。
-    auto snapshot = m_publishedSnapshot.load(std::memory_order_acquire);
+    auto snapshot = std::atomic_load_explicit(&m_publishedSnapshot,
+                                              std::memory_order_acquire);
     if ( snapshot ) {
         return snapshot;
     }
@@ -374,7 +375,8 @@ void SessionRegistry::publishSnapshotUnsafe()
 
     // 快照自身只读，但所持会话仍按各自线程协议更新，不是深拷贝谱面。
     // 旧快照由并发读句柄保活，最后一个拥有者释放后才销毁。
-    m_publishedSnapshot.store(
+    std::atomic_store_explicit(
+        &m_publishedSnapshot,
         std::shared_ptr<const PublishedSessionSnapshot>(std::move(snapshot)),
         std::memory_order_release);
 }

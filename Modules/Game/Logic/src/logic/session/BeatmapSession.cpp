@@ -510,7 +510,8 @@ void BeatmapSession::setMutationObserver(
     // 更换观察者后旧的已接受序号不再适用，新的同步关系从零开始。
     m_latestAcceptedLocalObjectMutationSequence.store(
         0, std::memory_order_release);
-    m_mutationObserver.store(std::move(observer), std::memory_order_release);
+    std::atomic_store_explicit(
+        &m_mutationObserver, std::move(observer), std::memory_order_release);
     m_mutationSnapshotRequested.store(requestSnapshot,
                                       std::memory_order_relaxed);
     // 请求位只表达待办，观察者本身通过独立的共享指针发布与获取维持生命周期。
@@ -526,7 +527,8 @@ void BeatmapSession::publishRequestedMutationSnapshot()
                                                std::memory_order_relaxed) ) {
         return;
     }
-    auto observer = m_mutationObserver.load(std::memory_order_acquire);
+    auto observer = std::atomic_load_explicit(&m_mutationObserver,
+                                              std::memory_order_acquire);
     // 回调使用局部共享所有权，外部同时解除观察不会使当前调用目标悬空。
     // 请求消费后观察者可能已解除，或会话尚无谱面，此时不发布空快照。
     if ( !observer || !m_ctx->currentBeatmap ) return;

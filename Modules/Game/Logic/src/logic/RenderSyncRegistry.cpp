@@ -211,7 +211,9 @@ void RenderSyncRegistry::setAtlasUVMap(
 std::shared_ptr<const std::unordered_map<uint32_t, glm::vec4>>
 RenderSyncRegistry::getAtlasUVMap(const std::string& cameraId) const
 {
-    auto snapshot = m_publishedAtlasUVSnapshot.load(std::memory_order_acquire);
+    // shared_ptr 专用自由函数兼容当前 libc++，并让局部句柄继续保活本次读取。
+    auto snapshot = std::atomic_load_explicit(&m_publishedAtlasUVSnapshot,
+                                              std::memory_order_acquire);
     if ( snapshot ) {
         if ( const auto* state =
                  findAtlasUVMapStateInSnapshot(*snapshot, cameraId) ) {
@@ -240,8 +242,8 @@ void RenderSyncRegistry::updateSnapshotAtlasUVMap(
     Common::AsciiFontAtlasMetrics&           targetAsciiFontAtlasMetrics,
     Common::UnicodeFontMetrics&              targetUnicodeFontMetrics) const
 {
-    const auto snapshot =
-        m_publishedAtlasUVSnapshot.load(std::memory_order_acquire);
+    const auto snapshot = std::atomic_load_explicit(&m_publishedAtlasUVSnapshot,
+                                                    std::memory_order_acquire);
     const auto* state =
         snapshot ? findAtlasUVMapStateInSnapshot(*snapshot, cameraId) : nullptr;
     if ( !state ) {
@@ -368,7 +370,8 @@ void RenderSyncRegistry::publishAtlasUVSnapshotUnsafe()
 
     // 构造完成后 release 发布，逻辑侧 acquire 读取可见完整的配套度量。
     // 不维护退休列表，最后一个读取句柄释放后自然回收旧快照。
-    m_publishedAtlasUVSnapshot.store(
+    std::atomic_store_explicit(
+        &m_publishedAtlasUVSnapshot,
         std::shared_ptr<const PublishedAtlasUVSnapshot>(std::move(snapshot)),
         std::memory_order_release);
 }

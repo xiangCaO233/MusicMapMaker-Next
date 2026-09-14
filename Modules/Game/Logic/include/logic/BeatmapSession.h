@@ -315,10 +315,9 @@ private:
     std::shared_ptr<AsyncSaveOperation> m_asyncSaveOperation;
 
     /// @brief 当前低频谱面变化观察者。
-    /// @warning 跨线程 shared_ptr 原子：只在谱面发生实际变化或首次绑定时加载，
-    /// 用于避免观察者在逻辑回调期间被 UI 线程销毁。
-    std::atomic<std::shared_ptr<::MMM::IBeatmapMutationObserver>>
-        m_mutationObserver;
+    /// @warning 跨线程访问通过 shared_ptr 原子自由函数完成；只在谱面发生实际
+    /// 变化或首次绑定时加载，用于避免观察者在逻辑回调期间被 UI 线程销毁。
+    std::shared_ptr<::MMM::IBeatmapMutationObserver> m_mutationObserver;
 
     /// @brief 新观察者绑定后请求逻辑线程发布一次完整谱面快照。
     /// @warning UI 线程写、逻辑线程每 update 读，使用 relaxed

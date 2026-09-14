@@ -2222,7 +2222,8 @@ bool BeatmapSession::processCommands()
             // 自动备份与覆盖原文件的自动保存分别排队，二者策略互不替代。
             m_triggeredAutoBackupPending = true;
         }
-        auto observer = m_mutationObserver.load(std::memory_order_acquire);
+        auto observer = std::atomic_load_explicit(&m_mutationObserver,
+                                                  std::memory_order_acquire);
         if ( observer && m_ctx->currentBeatmap ) {
             // 观察者需要一致领域模型，通知前把本批 ECS 与元数据脏域统一同步。
             SessionUtils::syncBeatmap(*m_ctx);
@@ -2232,8 +2233,8 @@ bool BeatmapSession::processCommands()
                  mutationFlags == ::MMM::BeatmapMutationFlags::Objects ) {
                 // 仅纯物件变更使用本地序号与远端对象快照协调；混合类别等待
                 // 权威状态完整回放，不把单一对象序号解释为全部数据已接受。
-                const auto activeObserver =
-                    m_mutationObserver.load(std::memory_order_acquire);
+                const auto activeObserver = std::atomic_load_explicit(
+                    &m_mutationObserver, std::memory_order_acquire);
                 if ( activeObserver == observer ) {
                     // 回调期间观察者可能被替换，只有身份未变才发布其返回序号。
                     m_latestAcceptedLocalObjectMutationSequence.store(
@@ -2853,7 +2854,8 @@ bool BeatmapSession::processCommands()
         // 这保证一条可撤销命令只执行一次，同时允许控制器以统一脏标记补充类别。
         if ( authoritativeSynchronization && m_ctx->currentBeatmap ) {
             // 权威应用完成后通知协作观察者更新编码基线或接收完整同步快照。
-            auto observer = m_mutationObserver.load(std::memory_order_acquire);
+            auto observer = std::atomic_load_explicit(
+                &m_mutationObserver, std::memory_order_acquire);
             if ( observer ) {
                 if ( authoritativeReplacement
                          ->objectEncodingBaselinePrepared ) {

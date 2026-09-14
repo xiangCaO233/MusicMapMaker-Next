@@ -161,11 +161,10 @@ private:
     mutable std::shared_mutex m_mutex;
 
     /// @brief 逻辑线程当前可读取的不可变图集 UV 快照。
-    /// @warning 逻辑热路径原子：每个快照生成时 acquire 读取；写侧在持有
-    /// m_mutex 后 release 发布新快照。shared_ptr
+    /// @warning 逻辑热路径通过 shared_ptr 原子自由函数访问：每个快照生成时
+    /// acquire 读取，写侧在持有 m_mutex 后 release 发布新快照。shared_ptr
     /// 所有权用于解决读写并发时的快照生命周期。
-    std::atomic<std::shared_ptr<const PublishedAtlasUVSnapshot>>
-        m_publishedAtlasUVSnapshot;
+    std::shared_ptr<const PublishedAtlasUVSnapshot> m_publishedAtlasUVSnapshot;
 };
 
 }  // namespace MMM::Logic
