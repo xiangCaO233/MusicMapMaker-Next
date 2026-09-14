@@ -4135,6 +4135,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
 /// - 新增批注要求规范化后的默认创作者非空。
 /// - 历史批注允许展示未知作者。
 /// - 正文为空时保存按钮禁用。
+/// - 输入框上方提示 Enter 提交与 Shift+Enter 换行。
+/// - Enter 与保存按钮复用同一校验和提交路径。
 /// - 新增和编辑统一发布 `CmdUpsertBeatmapAnnotation`。
 /// - 空 ID 的生成职责属于逻辑层。
 /// - 时间点新建使用 TIMESTAMP 目标类型。
@@ -4548,18 +4550,25 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
                                TR("ui.annotation.creator_required").data());
         }
         ImGui::TextDisabled("%s", TR("ui.annotation.markdown_hint").data());
-        ImGui::InputTextMultiline("##BeatmapAnnotationMarkdown",
-                                  m_annotationEditor.content.data(),
-                                  m_annotationEditor.content.size(),
-                                  ImVec2(520.0F, 220.0F));
+        ImGui::TextDisabled("%s", TR("ui.annotation.input_submit_hint").data());
+        // 组合标志让普通 Enter 返回确认，Shift+Enter 仍由多行输入框插入换行。
+        const bool submitWithEnter = ImGui::InputTextMultiline(
+            "##BeatmapAnnotationMarkdown",
+            m_annotationEditor.content.data(),
+            m_annotationEditor.content.size(),
+            ImVec2(520.0F, 220.0F),
+            ImGuiInputTextFlags_EnterReturnsTrue |
+                ImGuiInputTextFlags_CtrlEnterForNewLine);
 
         // 空正文不能保存；新增还要求规范化后的创作者非空。
         const bool canSave = m_annotationEditor.content.front() != '\0' &&
                              (editingExisting || !creator.empty());
         ImGui::BeginDisabled(!canSave);
-        if ( ::MMM::UI::FeedbackButton(editingExisting
-                                           ? TR("ui.annotation.save").data()
-                                           : TR("ui.annotation.add").data()) ) {
+        const bool saveClicked = ::MMM::UI::FeedbackButton(
+            editingExisting ? TR("ui.annotation.save").data()
+                            : TR("ui.annotation.add").data());
+        ImGui::EndDisabled();
+        if ( canSave && (submitWithEnter || saveClicked) ) {
             // 新增和编辑统一走 upsert 命令；空 ID 由逻辑层生成新标识。
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdUpsertBeatmapAnnotation{
@@ -4572,7 +4581,6 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
             // 命令进入事件队列后即可关闭弹窗，快照更新由逻辑线程回流。
             ImGui::CloseCurrentPopup();
         }
-        ImGui::EndDisabled();
         if ( editingExisting ) {
             // 删除入口只对已有 ID 显示，避免发送无目标删除命令。
             ImGui::SameLine();

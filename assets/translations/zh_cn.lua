@@ -110,6 +110,7 @@ return {
 	["ui.annotation.gutter_hint"] = "右键在此时间戳添加批注",
 	["ui.annotation.creator_required"] = "未设置默认 Creator，无法添加批注。请先在设置中填写默认 Creator。",
 	["ui.annotation.markdown_hint"] = "支持 Markdown 标题、列表、引用和代码块；不执行 HTML 或脚本。",
+	["ui.annotation.input_submit_hint"] = "Enter 确认修改或添加批注 · Shift+Enter 换行",
 	["ui.annotation.add"] = "添加批注",
 	["ui.annotation.save"] = "保存修改",
 	["ui.annotation.delete"] = "删除批注",

@@ -111,6 +111,7 @@ return {
 	["ui.annotation.gutter_hint"] = "Right-click to annotate this timestamp",
 	["ui.annotation.creator_required"] = "The default Creator is not set, so an annotation cannot be added. Set the default Creator in Settings first.",
 	["ui.annotation.markdown_hint"] = "Supports Markdown headings, lists, quotes, and code blocks. HTML and scripts are not executed.",
+	["ui.annotation.input_submit_hint"] = "Enter to save or add an annotation · Shift+Enter for a new line",
 	["ui.annotation.add"] = "Add Annotation",
 	["ui.annotation.save"] = "Save Changes",
 	["ui.annotation.delete"] = "Delete Annotation",
