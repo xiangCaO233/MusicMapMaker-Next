@@ -126,6 +126,16 @@ target_include_directories(TimingTableFractionTest
 target_link_libraries(TimingTableFractionTest PRIVATE MMM)
 add_test(NAME TimingTableFractionTest COMMAND TimingTableFractionTest)
 
+# 批注表拍号分列测试复用公共时间格式换算，覆盖单 BPM、跨 BPM 与缺少计时点。 目标只链接 UI 以取得轻量格式化接口，不创建 ImGui 上下文或完整
+# Canvas 窗口。
+mmm_add_test_executable(Canvas AnnotationTableBeatPositionTest
+                        tests/AnnotationTableBeatPositionTest.cpp)
+target_include_directories(AnnotationTableBeatPositionTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(AnnotationTableBeatPositionTest PRIVATE UI)
+add_test(NAME AnnotationTableBeatPositionTest
+         COMMAND AnnotationTableBeatPositionTest)
+
 # 物件拖拽边缘自动平移使用纯数值计算，覆盖速度和两侧轨道区域边界。 Logic 提供轨道投影，3rd_glm
 # 提供二维位移值类型；不需要真实输入设备或窗口尺寸查询。
 mmm_add_test_executable(Canvas ObjectDragAutoPanTest

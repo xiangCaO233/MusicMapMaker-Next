@@ -294,7 +294,7 @@ void AnnotationTableWindow::update(UI::UIManager* sourceManager)
                 ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV |
                 ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
             if ( ImGui::BeginTable("AnnotationTableRows",
-                                   6,
+                                   8,
                                    tableFlags,
                                    ImVec2(0.0F, tableHeight)) ) {
                 // 禁用 ImGui 默认列菜单，避免与业务窗口自身的右键语义冲突。
@@ -313,6 +313,16 @@ void AnnotationTableWindow::update(UI::UIManager* sourceManager)
                     // 时间格式长度可预测，固定宽度留给正文。
                     ImGuiTableColumnFlags_WidthFixed,
                     125.0F * dpiScale);
+                ImGui::TableSetupColumn(
+                    TR("ui.canvas.beat_index").data(),
+                    // 拍号独立于时间显示偏好，固定宽度便于纵向核对。
+                    ImGuiTableColumnFlags_WidthFixed,
+                    70.0F * dpiScale);
+                ImGui::TableSetupColumn(
+                    TR("ui.canvas.beat_fraction").data(),
+                    // 分拍位使用约分后的短分数，列宽无需参与正文拉伸。
+                    ImGuiTableColumnFlags_WidthFixed,
+                    82.0F * dpiScale);
                 ImGui::TableSetupColumn(TR("ui.annotation.target").data(),
                                         // 目标类型与轨道号共同使用此固定列。
                                         ImGuiTableColumnFlags_WidthFixed,
@@ -414,9 +424,35 @@ void AnnotationTableWindow::update(UI::UIManager* sourceManager)
                         // timeText 生命周期覆盖本次调用，TextUnformatted
                         // 不保存指针。
 
+                        // 拍号与分拍位始终分列显示，不受全局时间格式偏好影响；
+                        // 结构化换算复用已缓存节点，不在可见行循环中分配或排序。
+                        const auto beatPosition =
+                            MMM::UI::Utils::calculateCanvasBeatPosition(
+                                row.timestamp, m_data.timeFormatContext());
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::AlignTextToFramePadding();
+                        if ( beatPosition.valid ) {
+                            ImGui::Text("%lld",
+                                        static_cast<long long>(
+                                            beatPosition.beatNumber));
+                        } else {
+                            // 空 BPM
+                            // 时间线无法推导拍位置，占位符也能区别合法零拍号。
+                            ImGui::TextDisabled("-");
+                        }
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::AlignTextToFramePadding();
+                        if ( beatPosition.valid ) {
+                            ImGui::Text("%d/%d",
+                                        beatPosition.numerator,
+                                        beatPosition.denominator);
+                        } else {
+                            ImGui::TextDisabled("-");
+                        }
+
                         // 目标轨仅对存在具体轨道的批注显示；内部零基索引转换为
                         // 面向用户的一基编号，丢失目标另以醒目标记提示。
-                        ImGui::TableSetColumnIndex(2);
+                        ImGui::TableSetColumnIndex(4);
                         ImGui::AlignTextToFramePadding();
                         ImGui::TextUnformatted(
                             TR(annotationTargetLabelKey(row.targetKind))
@@ -434,7 +470,7 @@ void AnnotationTableWindow::update(UI::UIManager* sourceManager)
                         }
 
                         // 空作者使用翻译后的占位文本，不把空字符串渲染成空格。
-                        ImGui::TableSetColumnIndex(3);
+                        ImGui::TableSetColumnIndex(5);
                         ImGui::AlignTextToFramePadding();
                         ImGui::TextUnformatted(
                             // 占位键由翻译系统提供，避免在代码内固化界面语言。
@@ -445,7 +481,7 @@ void AnnotationTableWindow::update(UI::UIManager* sourceManager)
                         // 表格只显示 Markdown
                         // 首行作为摘要，完整正文留给详情区；
                         // 使用指针对避免为每个可见行创建临时子串。
-                        ImGui::TableSetColumnIndex(4);
+                        ImGui::TableSetColumnIndex(6);
                         ImGui::AlignTextToFramePadding();
                         const auto firstLineEnd = row.content.find('\n');
                         // npos 分支使用完整长度，指针终点始终落在 string
@@ -459,7 +495,7 @@ void AnnotationTableWindow::update(UI::UIManager* sourceManager)
                             row.content.data() + firstLineLength);
 
                         // 操作列按当前单元格剩余宽度均分，窄窗口下仍保证正尺寸。
-                        ImGui::TableSetColumnIndex(5);
+                        ImGui::TableSetColumnIndex(7);
                         const float rowActionWidth =
                             // 列被用户压缩到极窄时以 1 像素兜底，避免向 ImGui
                             // 传入负宽度后按钮反向占满可用区域。

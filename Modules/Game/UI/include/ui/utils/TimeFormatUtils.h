@@ -17,6 +17,19 @@
 
 namespace MMM::UI::Utils
 {
+
+/// @brief 画布时间对应的离散拍号与分拍位置。
+struct CanvasBeatPosition {
+    /// @brief 一基拍号；首个 BPM 节点之前保留零或负数偏移。
+    int64_t beatNumber{ 0 };
+    /// @brief 已约分的分拍分子；正常整拍使用一。
+    int numerator{ 0 };
+    /// @brief 已约分的分拍分母。
+    int denominator{ 1 };
+    /// @brief 是否存在可用于换算的 BPM 时间线。
+    bool valid{ false };
+};
+
 namespace TimeFormatDetail
 {
 
@@ -92,26 +105,26 @@ inline std::vector<CanvasTimeFormatBpmPoint> collectBpmPoints(
     return points;
 }
 
-/// @brief 使用已经归一化的 BPM 节点格式化拍号 + 分拍位。
+/// @brief 使用已经归一化的 BPM 节点计算拍号与分拍位。
 /// @param timeSeconds 待格式化时间，单位秒。
 /// @param points 已按时间排序且 BPM 有效的计时节点。
 /// @param beatDivisor 当前分拍数，非正值回退为四。
-/// @return 拍号加约分分拍；缺少适用节点时返回秒格式。
-inline std::string formatBeatTimeWithPoints(
+/// @return 拍号与约分后的分拍；缺少适用节点时返回无效结果。
+inline CanvasBeatPosition calculateBeatPositionWithPoints(
     double timeSeconds, const std::vector<CanvasTimeFormatBpmPoint>& points,
     int beatDivisor)
 {
-    // 没有 BPM 时间线时无法计算拍位置，保留三位秒数。
-    if ( points.empty() ) return fmt::format("{:.3f} s", timeSeconds);
+    // 没有 BPM 时间线时无法计算拍位置，由调用方决定占位或回退格式。
+    if ( points.empty() ) return {};
 
     // 四分拍是编辑器无效配置的稳定回退值。
     if ( beatDivisor <= 0 ) beatDivisor = 4;
 
-    // 局部辅助函数把相对单个 BPM 节点的时间换算为拍号和分拍。
-    auto formatWithinBpm = [&](double  pointTime,
-                               double  pointBpm,
-                               int64_t totalBeats,
-                               bool    beforeFirstTiming) {
+    // 局部辅助函数把相对单个 BPM 节点的时间换算为结构化拍号和分拍。
+    auto calculateWithinBpm = [&](double  pointTime,
+                                  double  pointBpm,
+                                  int64_t totalBeats,
+                                  bool    beforeFirstTiming) {
         // BPM 已归一化为正数，可以安全计算单拍秒数。
         double beatDuration = 60.0 / pointBpm;
         // 首节点之前允许负相对时间，保持预卷时间可表达。
@@ -130,19 +143,21 @@ inline std::string formatBeatTimeWithPoints(
         }
 
         // 首节点前保留相对拍偏移，时间线内则加累计拍数并改为一基编号。
-        int beatNumber = beforeFirstTiming
-                             ? static_cast<int>(beatOffset)
-                             : static_cast<int>(totalBeats + beatOffset + 1);
+        const int64_t beatNumber =
+            beforeFirstTiming ? beatOffset : totalBeats + beatOffset + 1;
         if ( step == 0 ) {
             // 整拍在首节点前显示 0/1，正常时间线显示 1/1。
-            return beforeFirstTiming ? fmt::format("{} + 0/1", beatNumber)
-                                     : fmt::format("{} + 1/1", beatNumber);
+            return CanvasBeatPosition{
+                beatNumber, beforeFirstTiming ? 0 : 1, 1, true
+            };
         }
 
         // 非整拍使用最大公约数约分，避免显示 2/4 等冗余分数。
         int divisor = beatDivisor;
         int gcd     = std::gcd(step, divisor);
-        return fmt::format("{} + {}/{}", beatNumber, step / gcd, divisor / gcd);
+        return CanvasBeatPosition{
+            beatNumber, step / gcd, divisor / gcd, true
+        };
     };
 
     // totalBeats 累计已完整越过的 BPM 分段拍数。
@@ -159,14 +174,15 @@ inline std::string formatBeatTimeWithPoints(
         if ( timeSeconds < point.time ) {
             if ( i == 0 ) {
                 // 首个 BPM 前仍沿用该 BPM 向负方向外推拍位置。
-                return formatWithinBpm(point.time, point.bpm, totalBeats, true);
+                return calculateWithinBpm(
+                    point.time, point.bpm, totalBeats, true);
             }
             // 有序时间线中不应跳过中间区间，防御异常节点时退出循环。
             break;
         }
         if ( timeSeconds < nextBpmTime ) {
             // 目标落在当前 BPM 分段内，按已累计拍数格式化。
-            return formatWithinBpm(point.time, point.bpm, totalBeats, false);
+            return calculateWithinBpm(point.time, point.bpm, totalBeats, false);
         }
 
         // 越过完整分段后，将其持续时间换算为整数拍加入累计值。
@@ -175,8 +191,27 @@ inline std::string formatBeatTimeWithPoints(
             static_cast<int64_t>(std::round(bpmDuration / beatDuration));
     }
 
-    // 节点时间线异常或无法覆盖目标时使用安全秒格式。
-    return fmt::format("{:.3f} s", timeSeconds);
+    // 节点时间线异常或无法覆盖目标时返回无效结果。
+    return {};
+}
+
+/// @brief 使用已经归一化的 BPM 节点格式化拍号 + 分拍位。
+/// @param timeSeconds 待格式化时间，单位秒。
+/// @param points 已按时间排序且 BPM 有效的计时节点。
+/// @param beatDivisor 当前分拍数，非正值回退为四。
+/// @return 拍号加约分分拍；缺少适用节点时返回秒格式。
+inline std::string formatBeatTimeWithPoints(
+    double timeSeconds, const std::vector<CanvasTimeFormatBpmPoint>& points,
+    int beatDivisor)
+{
+    const auto position =
+        calculateBeatPositionWithPoints(timeSeconds, points, beatDivisor);
+    // 原有格式化接口在无法换算时继续回退秒数，保持所有既有调用行为。
+    if ( !position.valid ) return fmt::format("{:.3f} s", timeSeconds);
+    return fmt::format("{} + {}/{}",
+                       position.beatNumber,
+                       position.numerator,
+                       position.denominator);
 }
 
 /// @brief 使用渲染快照格式化拍号 + 分拍位。
@@ -226,6 +261,18 @@ inline std::string formatTimeWithPreference(
 }
 
 }  // namespace TimeFormatDetail
+
+/// @brief 从批注表等独立画布上下文计算拍号与分拍位置。
+/// @param timeSeconds 待换算时间，单位秒。
+/// @param context 已缓存且按时间排序的 BPM 节点与当前分拍数。
+/// @return 可直接分列显示的拍号和约分分拍；无 BPM 时结果无效。
+/// @warning 可在可见行绘制路径调用，不分配内存且不排序 BPM 节点。
+inline CanvasBeatPosition calculateCanvasBeatPosition(
+    double timeSeconds, const CanvasTimeFormatContext& context)
+{
+    return TimeFormatDetail::calculateBeatPositionWithPoints(
+        timeSeconds, context.bpmPoints, context.beatDivisor);
+}
 
 /// @brief 按编辑器偏好格式化画布时间戳。
 /// @param timeSeconds 时间戳，单位秒
