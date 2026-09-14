@@ -1842,6 +1842,135 @@ void InteractionController::handleCommand(
     m_ctx.lastActionMessage = TR("ui.edit.sample_properties.updated").data();
 }
 
+/// @brief 以单个撤销步骤把谱面物件移动到精确秒时间戳。
+/// @param cmd 带 Registry 领域的实体与目标起始时间。
+/// @warning 低频表单提交路径：Polyline 会遍历其内嵌节点及 Note Registry
+/// 中的关联子实体，不得从连续输入事件直接重复调用。
+/// @note 玩家物件整体平移并保留节点间隔，自动采样只移动锚点且保留 offset。
+/// @details
+/// 命令携带 ChartObjectKind，因为 noteRegistry 与 sampleRegistry 的实体编号可能
+/// 相同，不能只凭 entt::entity 猜测所属领域。每个分支先验证实体和组件，再读取
+/// 修改前快照，避免无效选择进入动作栈。
+///
+/// 玩家物件以根组件的目标时间计算统一 delta。根组件保存的 m_subNotes 用于序列化
+/// 与渲染，Registry 中的独立子实体用于拾取和交互，因此两份表示必须在同一个
+/// BatchNoteAction 内同步移动。任何节点移动后为负数或非有限值时，整个操作都会在
+/// 动作创建前退出，不允许出现只移动部分节点的状态。
+///
+/// 自动采样不含子节点，使用 SampleAction 保存完整组件前后快照。这里只替换
+/// m_timestamp，使资源、BGM 轨、offset 与音量保持用户原先设置。两类动作均交给
+/// ActionStack 执行，从而沿用项目已有的撤销、重做和变更通知路径。
+///
+/// 精确输入不执行额外量化或拍线吸附；只拒绝数据模型无法表达的负数、NaN 与
+/// Infinity。完全相同的目标时间视为空操作，避免用户重复点击应用时污染历史。
+/// @par 原子性约束
+/// 所有派生时间在构造动作前完成验证。根、内嵌节点或任一独立子实体只要越过
+/// 时间轴起点，函数便不执行动作，因此调用者不会观察到半条折线已移动的中间态。
+///
+/// 独立子实体通过父实体 ID 关联，遍历时忽略其他折线和普通音符；批次条目首先
+/// 保存根组件，再附加关联子实体。动作执行顺序不会影响 delta，因为 after 快照
+/// 已在提交前固定。
+/// @par 生命周期约束
+/// Registry 组件在本函数内按值复制，动作持有自己的 before/after 数据，不保留
+/// view 引用或组件观察指针。这样后续 ECS 存储重排不会破坏历史记录。
+void InteractionController::handleCommand(const CmdUpdateObjectTimestamp& cmd)
+{
+    // 播放期间不改变音频时间线，保持与属性窗口的禁用状态一致。
+    if ( m_ctx.isPlaying ) {
+        m_ctx.lastActionMessage =
+            TR("ui.edit.object_timestamp.pause_to_edit").data();
+        return;
+    }
+    // 非有限值与负时间不能进入组件或动作历史。
+    if ( cmd.entity == entt::null || !std::isfinite(cmd.timestamp) ||
+         cmd.timestamp < 0.0 ) {
+        m_ctx.lastActionMessage = TR("ui.edit.object_timestamp.invalid").data();
+        return;
+    }
+
+    if ( cmd.kind == ChartObjectKind::AudioSample ) {
+        if ( !m_ctx.sampleRegistry.valid(cmd.entity) ||
+             !m_ctx.sampleRegistry.all_of<SampleComponent>(cmd.entity) ) {
+            return;
+        }
+        const auto before =
+            m_ctx.sampleRegistry.get<const SampleComponent>(cmd.entity);
+        // 完全相同的双精度时间不产生空撤销项，用户填写值按原样保留。
+        if ( before.m_timestamp == cmd.timestamp ) return;
+        auto after        = before;
+        after.m_timestamp = cmd.timestamp;
+        m_ctx.actionStack.pushAndExecute(
+            std::make_unique<SampleAction>(SampleAction::Type::Update,
+                                           cmd.entity,
+                                           before,
+                                           std::move(after)),
+            m_ctx);
+        m_ctx.lastActionMessage = TR("ui.edit.object_timestamp.updated").data();
+        return;
+    }
+
+    // 玩家与草稿物件共享 Note Registry，未知领域不得按玩家物件兜底。
+    if ( cmd.kind != ChartObjectKind::PlayerNote &&
+         cmd.kind != ChartObjectKind::DraftNote ) {
+        return;
+    }
+    if ( !m_ctx.noteRegistry.valid(cmd.entity) ||
+         !m_ctx.noteRegistry.all_of<NoteComponent>(cmd.entity) ) {
+        return;
+    }
+
+    const auto before = m_ctx.noteRegistry.get<const NoteComponent>(cmd.entity);
+    const bool targetsDraft = cmd.kind == ChartObjectKind::DraftNote;
+    // 子实体不提供独立物件位置；领域也必须与组件实际草稿标志一致。
+    if ( before.m_isSubNote || before.m_isDraft != targetsDraft ||
+         !SessionUtils::isNoteEditable(before, m_ctx.lastConfig.settings) ||
+         before.m_timestamp == cmd.timestamp ) {
+        return;
+    }
+
+    const double delta = cmd.timestamp - before.m_timestamp;
+    auto         after = before;
+    after.m_timestamp  = cmd.timestamp;
+    // Polyline 的内嵌节点按统一增量平移，保持各段持续时间与相对间隔。
+    for ( auto& subNote : after.m_subNotes ) {
+        subNote.timestamp += delta;
+        if ( !std::isfinite(subNote.timestamp) || subNote.timestamp < 0.0 ) {
+            m_ctx.lastActionMessage =
+                TR("ui.edit.object_timestamp.invalid").data();
+            return;
+        }
+    }
+
+    std::vector<BatchNoteAction::Entry> entries;
+    entries.reserve(after.m_subNotes.size() + 1U);
+    entries.push_back({ cmd.entity, before, after });
+    if ( before.m_type == ::MMM::NoteType::POLYLINE ) {
+        // 独立子实体也纳入同一批动作，使撤销、重做和拾取位置保持父子一致。
+        const auto childView = m_ctx.noteRegistry.view<const NoteComponent>();
+        for ( const auto entity : childView ) {
+            const auto& child = childView.get<const NoteComponent>(entity);
+            if ( !child.m_isSubNote || child.m_parentPolyline != cmd.entity ) {
+                continue;
+            }
+            auto movedChild        = child;
+            movedChild.m_timestamp = child.m_timestamp + delta;
+            if ( !std::isfinite(movedChild.m_timestamp) ||
+                 movedChild.m_timestamp < 0.0 ) {
+                m_ctx.lastActionMessage =
+                    TR("ui.edit.object_timestamp.invalid").data();
+                return;
+            }
+            entries.push_back({ entity, child, std::move(movedChild) });
+        }
+    }
+
+    m_ctx.actionStack.pushAndExecute(
+        std::make_unique<BatchNoteAction>(std::move(entries),
+                                          "精确设置物件时间"),
+        m_ctx);
+    m_ctx.lastActionMessage = TR("ui.edit.object_timestamp.updated").data();
+}
+
 /// @brief 以单个撤销步骤更新玩家绑定或自动采样的物件音量。
 /// @param cmd 带类型的实体、可选 Polyline 子物件索引与音量倍率。
 void InteractionController::handleCommand(

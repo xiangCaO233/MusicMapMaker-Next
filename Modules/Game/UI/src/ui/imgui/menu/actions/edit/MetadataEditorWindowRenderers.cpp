@@ -157,6 +157,34 @@ struct SamplePropertyEditorState {
     float volume{ 1.0F };
 };
 
+/// @brief 单个选中物件的精确时间戳表单状态。
+/// @details 输入与最近一次组件观测值分开保存，避免每帧刷新覆盖用户正在填写的
+/// 小数；提交、重置或外部 Undo 后再与组件同步。
+struct ObjectTimestampEditorState {
+    /// @brief 当前绑定物件在对应 Registry 中的实体。
+    entt::entity entity{ entt::null };
+    /// @brief 当前绑定物件的 Registry 领域。
+    Logic::ChartObjectKind kind{ Logic::ChartObjectKind::PlayerNote };
+    /// @brief 表单是否已经从当前选择初始化。
+    bool initialized{ false };
+    /// @brief 用户是否修改了尚未提交的输入。
+    bool dirty{ false };
+    /// @brief 输入框中的目标秒时间。
+    double timestamp{ 0.0 };
+    /// @brief 最近一次同步到表单的组件秒时间。
+    double observedTimestamp{ 0.0 };
+};
+
+/// @brief 当前唯一选中物件的时间戳快照。
+struct ObjectTimestampSelection {
+    /// @brief 对应 Registry 中的实体。
+    entt::entity entity{ entt::null };
+    /// @brief 实体所在对象领域。
+    Logic::ChartObjectKind kind{ Logic::ChartObjectKind::PlayerNote };
+    /// @brief 本帧从组件读取的起始时间，单位秒。
+    double timestamp{ 0.0 };
+};
+
 /// @brief 获取元数据 JSON 编辑器的持久状态。
 /// @return 进程内唯一 JSON 编辑器状态。
 /// @warning UI 每帧绘制路径：仅保存少量弹窗状态，不进行文件系统操作。
@@ -187,6 +215,16 @@ SamplePropertyEditorState& samplePropertyEditorState()
 {
     // 窗口关闭再打开时由外部状态边沿主动清除 initialized。
     static SamplePropertyEditorState state;
+    return state;
+}
+
+/// @brief 获取物件精确时间戳编辑器的跨帧状态。
+/// @return 当前唯一时间戳表单状态。
+/// @warning UI 每帧绘制路径：仅保存一个双精度输入及选择身份。
+ObjectTimestampEditorState& objectTimestampEditorState()
+{
+    // 窗口重新打开或唯一选择变化时由渲染入口重新初始化。
+    static ObjectTimestampEditorState state;
     return state;
 }
 
@@ -2771,12 +2809,121 @@ void renderSelectedSampleProperties(
     ImGui::Spacing();
 }
 
+/// @brief 渲染单个选中物件的精确位置时间戳表单。
+/// @param selection 唯一选择的领域、实体与当前时间；多选时为空。
+/// @param selectedObjectCount 当前玩家物件与自动采样选择总数。
+/// @param context 当前会话上下文，用于读取播放状态。
+/// @param engine 编辑器命令入口。
+/// @param dpiScale 当前 DPI 缩放。
+/// @warning UI 热路径：窗口打开时每帧执行，只比较一个状态并绘制固定控件。
+/// @note 时间单位为秒，九位小数显示不会把用户输入先量化到毫秒。
+/// @post 唯一选择分支结束时恢复局部 ImGui ID 作用域。
+/// @details
+/// 表单只接受跨 Registry 的唯一选择。多选对象可能具有不同起始时间，直接写入
+/// 一个绝对值会把它们重叠到同一位置，因此多选仅显示明确提示。
+///
+/// dirty 状态把用户尚未提交的文本与 ECS 每帧观测值隔离。选择改变时总是载入新
+/// 组件；输入未修改时则跟随 Apply、Undo 或 Redo 后的组件值。该约束防止渲染循环
+/// 在用户键入小数期间覆盖输入，也防止提交后长期显示旧值。
+///
+/// UI 只负责有限值校验与命令排队，逻辑线程仍会重复验证实体、领域和播放状态。
+/// 这种双层校验保证按钮禁用只属于交互反馈，数据完整性不依赖当前窗口帧。
+/// @par 精度约束
+/// InputDouble 直接绑定 double，并以九位小数格式回显；步进按钮只提供便捷增量，
+/// 不限制键盘输入的精度。提交值不经过 float、中间字符串或拍号换算。
+/// @par 状态边界
+/// Reset 仅恢复当前组件快照，不产生动作；Apply 后清除 dirty，让下一帧以逻辑层
+/// 已接受的实际组件值校正表单。
+void renderSelectedObjectTimestamp(
+    const std::optional<ObjectTimestampSelection>& selection,
+    std::size_t selectedObjectCount, const Logic::SessionContext& context,
+    Logic::EditorEngine& engine, float dpiScale)
+{
+    // 没有任何对象时由窗口统一显示无选择提示，这里不重复占位。
+    if ( selectedObjectCount == 0U ) return;
+
+    ImGui::TextUnformatted(TR("ui.edit.object_timestamp.header").data());
+    ImGui::Separator();
+    if ( !selection ) {
+        // 多选对象可能拥有不同基线，禁止把一个绝对值含糊覆盖到全部对象。
+        const auto message =
+            TR_FMT("ui.edit.object_timestamp.single_only", selectedObjectCount);
+        ImGui::TextColored(
+            ImVec4(1.0F, 0.75F, 0.25F, 1.0F), "%s", message.c_str());
+        ImGui::Spacing();
+        return;
+    }
+
+    // 独立 ID 作用域避免与下方自动采样属性表单的应用、重置按钮冲突。
+    ImGui::PushID("ObjectTimestampEditor");
+    auto&      state            = objectTimestampEditorState();
+    const bool selectionChanged = !state.initialized ||
+                                  state.entity != selection->entity ||
+                                  state.kind != selection->kind;
+    // 未编辑状态允许跟随 Apply、Undo、Redo 等逻辑侧变化；脏输入保持原样。
+    const bool observedValueChanged =
+        !state.dirty && state.observedTimestamp != selection->timestamp;
+    if ( selectionChanged || observedValueChanged ) {
+        state.entity            = selection->entity;
+        state.kind              = selection->kind;
+        state.initialized       = true;
+        state.dirty             = false;
+        state.timestamp         = selection->timestamp;
+        state.observedTimestamp = selection->timestamp;
+    }
+
+    // 双精度输入保留九位小数，步进仅用于按钮，不改变直接键入的任意有限值。
+    ImGui::SetNextItemWidth(220.0F * dpiScale);
+    if ( ImGui::InputDouble(TR("ui.edit.object_timestamp.value").data(),
+                            &state.timestamp,
+                            0.001,
+                            0.1,
+                            "%.9f",
+                            ImGuiInputTextFlags_CharsScientific) ) {
+        state.dirty = true;
+    }
+
+    const bool valid = std::isfinite(state.timestamp) && state.timestamp >= 0.0;
+    if ( !valid ) {
+        ImGui::TextColored(ImVec4(1.0F, 0.45F, 0.35F, 1.0F),
+                           "%s",
+                           TR("ui.edit.object_timestamp.invalid").data());
+    } else if ( context.isPlaying ) {
+        ImGui::TextColored(ImVec4(1.0F, 0.75F, 0.25F, 1.0F),
+                           "%s",
+                           TR("ui.edit.object_timestamp.pause_to_edit").data());
+    }
+
+    // 应用只排队稳定身份与数值，实际写入、派生缓存和撤销由逻辑线程处理。
+    ImGui::BeginDisabled(!valid || context.isPlaying);
+    if ( FeedbackButton(TR("ui.edit.sample_properties.apply").data()) ) {
+        engine.pushCommand(Logic::CmdUpdateObjectTimestamp{
+            .entity    = state.entity,
+            .kind      = state.kind,
+            .timestamp = state.timestamp,
+        });
+        // 允许下一帧接受命令处理后的组件值，同时保留本帧刚填写的显示。
+        state.dirty = false;
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if ( FeedbackButton(TR("ui.edit.sample_properties.reset").data()) ) {
+        // 重置只丢弃本地输入，不发送一次无意义的时间更新。
+        state.timestamp         = selection->timestamp;
+        state.observedTimestamp = selection->timestamp;
+        state.dirty             = false;
+    }
+    ImGui::Spacing();
+    ImGui::PopID();
+}
+
 /// @brief 渲染选中谱面物件的元数据与自动采样精确属性窗口。
 /// @param showWindow 窗口可见状态，标题栏关闭时写回 false。
 /// @warning UI 热路径：窗口可见时遍历可交互音符与自动采样 ECS 视图。
-/// @details 玩家音符按完整元数据指纹分组，同组编辑批量应用；自动采样只在
-/// 单选时提供资源、BGM 轨、偏移和音量精确表单。
-/// @note 元数据属性直接更新 ECS 组件，自动采样属性通过逻辑命令提交。
+/// @details 玩家音符按完整元数据指纹分组，同组编辑批量应用；唯一选中的玩家
+/// 物件、草稿或自动采样可填写精确位置时间戳。
+/// @details 自动采样单选时另提供资源、BGM 轨、偏移和音量精确表单。
+/// @note 元数据属性直接更新 ECS 组件，时间与自动采样属性通过逻辑命令提交。
 /// @details 音符元数据指纹对格式类型与字段键排序，消除哈希表遍历顺序差异；
 /// 同指纹实体共享代表值，任何字段编辑或删除都会批量保持组内一致。
 /// @details 选择收集排除子音符，避免父子物件分别编辑造成格式字段分裂；自动
@@ -2808,7 +2955,8 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
     if ( showWindow && !lastShowState ) {
         // 新一轮窗口交互不继承旧分组输入或采样表单。
         inputBuffers.clear();
-        samplePropertyEditorState().initialized = false;
+        samplePropertyEditorState().initialized  = false;
+        objectTimestampEditorState().initialized = false;
     }
     // 保存当前状态供下一帧边沿判断。
     lastShowState = showWindow;
@@ -2880,6 +3028,8 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
             struct SelectedNote {
                 /// @brief noteRegistry 中的稳定实体标识。
                 entt::entity entity;
+                /// @brief 正式玩家物件或草稿物件领域。
+                Logic::ChartObjectKind kind;
                 /// @brief 用于组摘要范围显示的音符时间戳。
                 double timestamp;
             };
@@ -2901,7 +3051,11 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                     const auto& nc = view.get<const Logic::NoteComponent>(e);
                     if ( nc.m_isSubNote ) continue;
                     // 时间戳副本避免摘要阶段再次访问组件。
-                    selectedNotes.push_back({ e, nc.m_timestamp });
+                    selectedNotes.push_back(
+                        { e,
+                          nc.m_isDraft ? Logic::ChartObjectKind::DraftNote
+                                       : Logic::ChartObjectKind::PlayerNote,
+                          nc.m_timestamp });
                 }
             }
 
@@ -2920,7 +3074,37 @@ void renderNoteMetadataEditorWindow(bool& showWindow)
                 }
             }
 
-            // 自动采样表单绘制在玩家音符元数据分组之前。
+            // 只有一个跨领域选择时构造精确时间目标，多选保留明确提示。
+            const std::size_t selectedObjectCount =
+                selectedNotes.size() + selectedSamples.size();
+            std::optional<ObjectTimestampSelection> timestampSelection;
+            if ( selectedObjectCount == 1U ) {
+                if ( !selectedNotes.empty() ) {
+                    const auto& note   = selectedNotes.front();
+                    timestampSelection = ObjectTimestampSelection{
+                        note.entity, note.kind, note.timestamp
+                    };
+                } else {
+                    const auto entity = selectedSamples.front();
+                    // 采样选择刚由有效组件视图收集，可直接读取本帧锚点时间。
+                    const auto& sample =
+                        sessionContext.sampleRegistry
+                            .get<const Logic::SampleComponent>(entity);
+                    timestampSelection = ObjectTimestampSelection{
+                        entity,
+                        Logic::ChartObjectKind::AudioSample,
+                        sample.m_timestamp
+                    };
+                }
+            }
+            // 精确位置表单同时服务玩家物件、草稿与自动采样。
+            renderSelectedObjectTimestamp(timestampSelection,
+                                          selectedObjectCount,
+                                          sessionContext,
+                                          engine,
+                                          dpiScale);
+
+            // 自动采样资源属性表单绘制在玩家音符元数据分组之前。
             renderSelectedSampleProperties(
                 sessionContext, engine, selectedSamples, dpiScale);
 

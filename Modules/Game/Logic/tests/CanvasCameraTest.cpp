@@ -4005,7 +4005,8 @@ bool testExplicitBgmTrackCountAction()
 /// resolveSamplePropertyEdit 是无副作用校验层：Main 与 Effect 都可绑定，BGM
 /// 相对 轨需转换为绝对轨，缺失资源、未知类型、负轨和非有限音量必须返回明确
 /// issue。 成功结果随后交给 SampleAction，要求资源、offset、volume、轨道和隐式
-/// BGM 扩展 组成一个可撤销事务；时间戳不在属性面板编辑范围内，应保持原值。
+/// BGM 扩展组成一个可撤销事务；时间戳由独立精确位置命令编辑，本解析器应保持
+/// 原值。
 /// @par 关键不变量
 /// - Main 与 Effect 都能成为自动采样资源。
 /// - BGM 相对轨先验证非负，再安全编码为绝对轨。
@@ -4328,6 +4329,203 @@ bool testNoteSampleBindingRoundTrip()
         return false;
     }
     return true;
+}
+
+/// @brief 验证精确时间戳命令整体移动折线，并支持自动采样与撤销重做。
+/// @details
+/// 通过 BeatmapSession 队列提交玩家折线和自动采样两个领域的绝对时间。折线根、
+/// 内嵌子节点与独立子实体必须使用同一时间增量；自动采样只改变锚点，offset 与
+/// 其他属性保持不变。负时间随后应被拒绝且不生成历史项。
+/// @par 关键不变量
+/// - 玩家物件和自动采样按 ChartObjectKind 路由到各自 Registry。
+/// - 根折线从 1.0 移到 2.25 时，两个子节点分别移到 2.25 与 2.75。
+/// - 独立子实体与根组件内嵌列表保持一致。
+/// - 自动采样锚点更新为 3.125，毫秒 offset 保持 -25。
+/// - 两次合法提交各生成一个动作，非法负时间不增加历史。
+/// - 两次 Undo 与 Redo 完整恢复两个领域。
+/// @par 故障定位
+/// 根正确而子项错误说明父子批次不完整；组件更新但动作数错误说明绕过动作栈；
+/// 完全未更新通常表示 LogicCommand variant 或 Session 分派遗漏新命令。
+/// @par 测试边界
+/// 本用例验证位置时间戳，不涉及输入框文本解析、DPI 布局或播放中禁用样式。
+/// @par 数据建模背景
+/// Polyline 在 NoteComponent 中保存 m_subNotes，同时在 noteRegistry 中建立带
+/// m_parentPolyline 的独立子实体。前者参与谱面保存和整体渲染，后者参与命中检测
+/// 与子节点交互；时间移动若只修改其中一份，会在下一次同步或保存时出现跳回。
+/// 因此用例同时构造两份表示，并在应用、撤销、重做三个阶段检查它们。
+///
+/// SampleComponent 的 m_timestamp 是物件锚点秒时间，m_offsetMs 是资源内部偏移。
+/// 精确设置物件位置不得把 offset 合并或清零，否则用户之前完成的采样对齐会被
+/// 破坏。用例选择负 offset，确保实现不是仅在默认零值下偶然通过。
+/// @par 命令路由覆盖
+/// 测试经 BeatmapSession::pushCommand 和 update 提交，覆盖 LogicCommand
+/// variant、 会话分派及 InteractionController 处理器。直接调用处理器无法发现
+/// variant 遗漏 或 dispatch 分支缺失，因此这里坚持走与 UI 相同的队列入口。
+///
+/// 玩家根实体与采样实体来自不同 Registry，其数值 ID 允许重合。命令必须依赖
+/// ChartObjectKind 选择 Registry，而不能以先命中的组件决定领域；连续提交两个
+/// 领域可以暴露错误的兜底路由。
+/// @par 动作历史覆盖
+/// 第一次合法命令应生成包含根和两个子实体的单个 BatchNoteAction，第二次合法
+/// 命令应生成单个 SampleAction。负时间命令在创建动作前返回，因此撤销栈仍只有
+/// 两项。随后按后进先出顺序撤销，再按原顺序重做，验证完整前后快照均可恢复。
+///
+/// 本测试使用不能由常见毫秒整数简化表达的 3.125 秒，确认双精度目标值从命令
+/// 传到组件时未经过帧、拍或整数秒换算。折线使用 1.0 到 2.25 的平移量 1.25，
+/// 使根节点、同起点子节点和带 0.5 秒间距的子节点都具有可直接核对的期望值。
+/// @par 失败含义
+/// 根时间正确但内嵌节点错误表示组件内列表未平移；独立子实体错误表示 Registry
+/// 扫描或父实体匹配失效；撤销后仍留在新时间表示批动作未保存完整 before 快照。
+/// 自动采样时间正确但 offset 改变表示更新错误地重建了部分组件字段。
+/// @par 可重复性
+/// 用例不读取外部资源或系统时钟，所有实体、组件与期望时间均在内存中构造。
+/// 因而失败直接反映命令处理和动作历史差异，不受音频解码或帧率影响。
+/// @return 两类物件精确移动、非法拒绝及历史往返均正确时返回 true。
+bool testObjectTimestampCommand()
+{
+    // 真实会话队列覆盖 UI 命令最终经过的 variant 分派路径。
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    context.currentBeatmap             = std::make_shared<MMM::BeatMap>();
+    context.currentBeatmap->m_baseMapMetadata.track_count = 4;
+    context.trackCount                                    = 4;
+    context.lastConfig.settings.enablePolylineEditing     = true;
+
+    // 两节点折线同时建立内嵌数据和独立子实体，便于检查同步闭包。
+    const auto                rootEntity  = context.noteRegistry.create();
+    const auto                firstChild  = context.noteRegistry.create();
+    const auto                secondChild = context.noteRegistry.create();
+    MMM::Logic::NoteComponent root{
+        .m_type       = MMM::NoteType::POLYLINE,
+        .m_timestamp  = 1.0,
+        .m_trackIndex = 1,
+    };
+    root.m_subNotes = {
+        MMM::Logic::NoteComponent::SubNote{
+            .type = MMM::NoteType::NOTE, .timestamp = 1.0, .trackIndex = 1 },
+        MMM::Logic::NoteComponent::SubNote{ .type       = MMM::NoteType::FLICK,
+                                            .timestamp  = 1.5,
+                                            .trackIndex = 2,
+                                            .dtrack     = 1 },
+    };
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(rootEntity, root);
+    const auto addChild = [&](entt::entity entity, std::size_t index) {
+        const auto& sub = root.m_subNotes[index];
+        context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+            entity,
+            MMM::Logic::NoteComponent{
+                .m_type           = sub.type,
+                .m_timestamp      = sub.timestamp,
+                .m_trackIndex     = sub.trackIndex,
+                .m_dtrack         = sub.dtrack,
+                .m_isSubNote      = true,
+                .m_parentPolyline = rootEntity,
+                .m_subIndex       = static_cast<int>(index),
+            });
+    };
+    addChild(firstChild, 0U);
+    addChild(secondChild, 1U);
+
+    const auto sampleEntity = context.sampleRegistry.create();
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        sampleEntity,
+        MMM::Logic::SampleComponent{
+            .m_timestamp       = 2.0,
+            .m_offsetMs        = -25,
+            .m_track           = 4,
+            .m_audioResourceId = "sample.wav",
+            .m_volume          = 0.75F,
+        });
+
+    // 第一条命令移动整条折线，并由 Session update 消费到
+    // InteractionController。
+    session.pushCommand(
+        MMM::Logic::LogicCommand{ MMM::Logic::CmdUpdateObjectTimestamp{
+            .entity    = rootEntity,
+            .kind      = MMM::Logic::ChartObjectKind::PlayerNote,
+            .timestamp = 2.25,
+        } });
+    const auto config = context.lastConfig;
+    session.update(0.0, config, false);
+    const auto& movedRoot =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(rootEntity);
+    if ( !near(movedRoot.m_timestamp, 2.25) ||
+         !near(movedRoot.m_subNotes[0].timestamp, 2.25) ||
+         !near(movedRoot.m_subNotes[1].timestamp, 2.75) ||
+         !near(context.noteRegistry.get<MMM::Logic::NoteComponent>(firstChild)
+                   .m_timestamp,
+               2.25) ||
+         !near(context.noteRegistry.get<MMM::Logic::NoteComponent>(secondChild)
+                   .m_timestamp,
+               2.75) ||
+         context.actionStack.getUndoStackSize() != 1U ) {
+        XERROR("Exact timestamp command did not move the complete polyline");
+        return false;
+    }
+
+    // 第二条命令验证同号实体必须按自动采样领域解释。
+    session.pushCommand(
+        MMM::Logic::LogicCommand{ MMM::Logic::CmdUpdateObjectTimestamp{
+            .entity    = sampleEntity,
+            .kind      = MMM::Logic::ChartObjectKind::AudioSample,
+            .timestamp = 3.125,
+        } });
+    session.update(0.0, config, false);
+    const auto& movedSample =
+        context.sampleRegistry.get<MMM::Logic::SampleComponent>(sampleEntity);
+    if ( !near(movedSample.m_timestamp, 3.125) ||
+         movedSample.m_offsetMs != -25 ||
+         context.actionStack.getUndoStackSize() != 2U ) {
+        XERROR("Exact timestamp command did not preserve sample properties");
+        return false;
+    }
+
+    // 负时间请求不得修改根组件或产生第三条撤销记录。
+    session.pushCommand(
+        MMM::Logic::LogicCommand{ MMM::Logic::CmdUpdateObjectTimestamp{
+            .entity    = rootEntity,
+            .kind      = MMM::Logic::ChartObjectKind::PlayerNote,
+            .timestamp = -1.0,
+        } });
+    session.update(0.0, config, false);
+    if ( !near(context.noteRegistry.get<MMM::Logic::NoteComponent>(rootEntity)
+                   .m_timestamp,
+               2.25) ||
+         context.actionStack.getUndoStackSize() != 2U ) {
+        XERROR("Invalid exact timestamp created a partial edit");
+        return false;
+    }
+
+    // 撤销顺序先恢复采样，再恢复包含两个子实体的折线批次。
+    context.actionStack.undo(context);
+    context.actionStack.undo(context);
+    if ( !near(context.sampleRegistry
+                   .get<MMM::Logic::SampleComponent>(sampleEntity)
+                   .m_timestamp,
+               2.0) ||
+         !near(context.noteRegistry.get<MMM::Logic::NoteComponent>(rootEntity)
+                   .m_timestamp,
+               1.0) ||
+         !near(context.noteRegistry.get<MMM::Logic::NoteComponent>(secondChild)
+                   .m_timestamp,
+               1.5) ) {
+        XERROR("Exact timestamp undo did not restore both object domains");
+        return false;
+    }
+
+    context.actionStack.redo(context);
+    context.actionStack.redo(context);
+    return near(context.noteRegistry.get<MMM::Logic::NoteComponent>(rootEntity)
+                    .m_subNotes[1]
+                    .timestamp,
+                2.75) &&
+           near(context.noteRegistry.get<MMM::Logic::NoteComponent>(secondChild)
+                    .m_timestamp,
+                2.75) &&
+           near(context.sampleRegistry
+                    .get<MMM::Logic::SampleComponent>(sampleEntity)
+                    .m_timestamp,
+                3.125);
 }
 
 /// @brief 验证主画布音量指令原子更新玩家绑定、Polyline 子绑定和自动采样。
@@ -7312,6 +7510,7 @@ int main()
                    testSamplePropertyEditValidationAndAction() &&
                    testSampleRegistryLoadAndSync() &&
                    testNoteSampleBindingRoundTrip() &&
+                   testObjectTimestampCommand() &&
                    testObjectSampleVolumeCommand() &&
                    testObjectSampleVolumeCommandRoutesThroughSession() &&
                    testSelectedObjectSampleVolumeCommand() &&

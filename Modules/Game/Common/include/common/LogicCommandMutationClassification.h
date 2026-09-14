@@ -70,10 +70,11 @@ namespace MMM::Logic
                 // 创建采样和修改采样属性都会直接改变音频时间线对象。
                 // 两者目标领域明确，无需读取当前采样注册表即可授权。
                 return ::MMM::BeatmapMutationFlags::AudioSamples;
-            } else if constexpr ( std::is_same_v<
+            } else if constexpr ( std::is_same_v<T, CmdUpdateObjectTimestamp> ||
+                                  std::is_same_v<
                                       T,
                                       CmdUpdateObjectSampleVolume> ) {
-                // 单对象音量命令同时支持音符与自动采样，必须依据对象领域分类。
+                // 单对象位置和音量命令同时支持音符与自动采样，必须依据领域分类。
                 // 此处只读取命令字段，不解析实体或当前轨道布局。
                 return value.kind == ChartObjectKind::AudioSample
                            ? ::MMM::BeatmapMutationFlags::AudioSamples

@@ -148,6 +148,18 @@ struct CmdUpdateAudioSampleProperties {
     float volume{ 1.0F };
 };
 
+/// @brief 将单个谱面物件移动到精确秒时间戳。
+struct CmdUpdateObjectTimestamp {
+    /// @brief 目标物件在对应独立 Registry 中的实体。
+    entt::entity entity{ entt::null };
+
+    /// @brief 目标物件所在的独立 ECS 注册表。
+    ChartObjectKind kind{ ChartObjectKind::PlayerNote };
+
+    /// @brief 新的非负物件起始时间，单位秒。
+    double timestamp{ 0.0 };
+};
+
 /// @brief 更新主画布单个玩家绑定或自动采样的物件音量。
 struct CmdUpdateObjectSampleVolume {
     /// @brief 目标物件在对应独立 Registry 中的实体。
@@ -928,8 +940,9 @@ using LogicCommand = std::variant<
     CmdUpdateEditorConfig, CmdUpdateViewport, CmdSetPlayState, CmdLoadBeatmap,
     CmdCreateBeatmap, CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag,
     CmdUpdateDrag, CmdEndDrag, CmdCreateAudioSample,
-    CmdUpdateAudioSampleProperties, CmdUpdateObjectSampleVolume,
-    CmdUpdateSelectedObjectSampleVolume, CmdUpdateTrackCount,
+    CmdUpdateAudioSampleProperties, CmdUpdateObjectTimestamp,
+    CmdUpdateObjectSampleVolume, CmdUpdateSelectedObjectSampleVolume,
+    CmdUpdateTrackCount,
     CmdUpdateBgmTrackCount, CmdUpdateDraftTrackCount, CmdSeek,
     CmdSetPlaybackSpeed, CmdSetKeySoundTrackMute, CmdSetKeySoundTrackGain,
     CmdSetKeySoundEffectGroupGain, CmdSetDraftKeySoundAreaMute,
