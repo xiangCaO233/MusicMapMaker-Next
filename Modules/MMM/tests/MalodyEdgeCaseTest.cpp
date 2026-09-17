@@ -1309,7 +1309,7 @@ void test_empty_version_exports_default_metadata()
     bm.m_baseMapMetadata.title   = "EmptyVersionTitle";
     bm.m_baseMapMetadata.artist  = "EmptyVersionArtist";
     fs::path outPath             = std::filesystem::temp_directory_path() /
-                       "edge_empty_version_metadata.mc";
+                                   "edge_empty_version_metadata.mc";
     TEST_ASSERT(bm.saveToFile(outPath), "empty version map should save");
 
     std::ifstream ifs(outPath);
@@ -1903,11 +1903,18 @@ void test_non_malody_lead_in_exports_timing_origin_and_audio_compensation()
 /**
  * @brief 验证半拍后相位统一补偿，且晚首红线通过合成锚点保留。
  *
- * 本场景包含两个子情况。第一条红线仍在首拍内但已越过半拍时，不需要额外
- * timing；保存器把普通 Note 与 effect 的 beat 整体前移，并把后半拍继续
- * 回退成负相位后写入主 SOUND offset。第二条红线位于第三拍以后时，beat 0
- * 必须增加合成 BPM
+ * 本场景包含两个子情况。第一条红线仍在首拍内但已越过半拍时，负相位必须
+ * 由新增 timing 承载，原红线继续与同拍 Scroll 对齐；普通 Note 与 effect
+ * 的 beat 整体前移。第二条红线位于第三拍以后时，beat 0 同样增加合成 BPM
  * 锚点，原红线、后续 BPM、effect 和 Note 均保留各自相对位置。
+ *
+ * @par 首拍后半段导出不变量
+ *
+ * - 新增锚点只承载负相位 delay，不代替原首红线；
+ * - 原首红线与同时间 Scroll 必须导出到相同拍位；
+ * - 主 SOUND 继续绑定新增锚点，并用 offset 抵消 delay；
+ * - 普通内容统一接受整拍补偿，不能只移动其中一种对象；
+ * - 重载后新增锚点、原 BPM 和同拍 Scroll 都必须保留。
  *
  * 合成锚点只承载配对 delay，不能吞掉原始第一条红线，也不能让后续红线
  * 重复携带 delay。重新加载后，模型中应同时存在合成 timing 与全部原 timing。
@@ -1927,7 +1934,7 @@ void test_late_first_timing_prepends_anchor_and_shifts_all_content()
     constexpr double SECOND_BPM_TIME_MS = FIRST_TIME_MS + 2.0 * BEAT_LENGTH_MS;
     constexpr double EXPECTED_DELAY_MS  = BEAT_LENGTH_MS - PHASE_MS;
 
-    // 子情况一：首 timing 在第一拍后半段，不需要保留额外的原红线副本。
+    // 子情况一：首 timing 在第一拍后半段，新增锚点但不移动原红线。
     auto withinFirstBeat                             = makeMinimalBeatMap(0, 4);
     withinFirstBeat.m_baseMapMetadata.preference_bpm = BPM;
     auto& withinFirstTiming         = withinFirstBeat.m_timings.front();
@@ -1935,6 +1942,14 @@ void test_late_first_timing_prepends_anchor_and_shifts_all_content()
     withinFirstTiming.m_bpm         = BPM;
     withinFirstTiming.m_beat_length = BEAT_LENGTH_MS;
     withinFirstTiming.m_timingEffectParameter = BPM;
+
+    // 与首红线同拍放置 Scroll，直接锁定游戏内红绿线必须保持重合。
+    MMM::Timing& withinAlignedScroll = withinFirstBeat.m_timings.emplace_back();
+    withinAlignedScroll.m_timestamp  = PHASE_MS;
+    withinAlignedScroll.m_bpm        = BPM;
+    withinAlignedScroll.m_beat_length           = 1.1;
+    withinAlignedScroll.m_timingEffect          = MMM::TimingEffect::SCROLL;
+    withinAlignedScroll.m_timingEffectParameter = 1.1;
 
     // 同时刻之后一拍放置 SCROLL，检查 effect[] 与 note[] 接受相同相位位移。
     MMM::Timing& withinScroll   = withinFirstBeat.m_timings.emplace_back();
@@ -1966,22 +1981,25 @@ void test_late_first_timing_prepends_anchor_and_shifts_all_content()
         std::find_if(withinExported["note"].begin(),
                      withinExported["note"].end(),
                      [](const json& node) { return !isSoundNode(node); });
-    // 一组联合断言锁定“无合成 timing、零主偏移、普通内容前移一拍”。
+    // 合成锚点位于 beat 0，原红线和同拍 Scroll 必须一起留在 beat 1。
     TEST_ASSERT(
-        withinExported["time"].size() == 1 &&
+        withinExported["time"].size() == 2 &&
             withinExported["time"][0]["beat"] == json::array({ 0, 0, 1 }) &&
             std::abs(withinExported["time"][0].value("delay", 0.0) -
                      EXPECTED_DELAY_MS) < 1e-6 &&
+            withinExported["time"][1]["beat"] == json::array({ 1, 0, 1 }) &&
+            !withinExported["time"][1].contains("delay") &&
             withinMainSample != withinExported["note"].end() &&
             (*withinMainSample)["beat"] == json::array({ 0, 0, 1 }) &&
             withinMainSample->value("offset", -1) ==
                 static_cast<std::int64_t>(std::llround(EXPECTED_DELAY_MS)) &&
             withinPlayable != withinExported["note"].end() &&
             (*withinPlayable)["beat"] == json::array({ 2, 0, 1 }) &&
-            withinExported["effect"].size() == 1 &&
-            withinExported["effect"][0]["beat"] == json::array({ 2, 0, 1 }),
-        "phase after half a beat should reuse negative-phase offset and shift "
-        "ordinary content without adding a synthetic timing");
+            withinExported["effect"].size() == 2 &&
+            withinExported["effect"][0]["beat"] == json::array({ 1, 0, 1 }) &&
+            withinExported["effect"][1]["beat"] == json::array({ 2, 0, 1 }),
+        "phase after half a beat should prepend an anchor without moving the "
+        "original BPM away from its aligned scroll");
 
     // 重载后 Note 与 SCROLL 都应回到 PHASE+一拍的相同绝对时间。
     MMM::BeatMap withinReloaded = MMM::BeatMap::loadFromFile(withinOutputPath);
@@ -1990,10 +2008,23 @@ void test_late_first_timing_prepends_anchor_and_shifts_all_content()
         withinReloaded.m_noteData.notes.size() == 1 &&
             std::abs(withinReloaded.m_noteData.notes.front().m_timestamp -
                      (PHASE_MS + BEAT_LENGTH_MS)) < 1e-6 &&
-            withinReloaded.m_timings.size() == 2 &&
-            std::abs(withinReloaded.m_timings[1].m_timestamp -
-                     (PHASE_MS + BEAT_LENGTH_MS)) < 1e-6,
-        "after-half-beat note and effect should round trip together");
+            withinReloaded.m_timings.size() == 4 &&
+            std::any_of(
+                withinReloaded.m_timings.begin(),
+                withinReloaded.m_timings.end(),
+                [&](const MMM::Timing& timing) {
+                    return timing.m_timingEffect == MMM::TimingEffect::BPM &&
+                           std::abs(timing.m_timestamp - PHASE_MS) < 1e-6;
+                }) &&
+            std::any_of(
+                withinReloaded.m_timings.begin(),
+                withinReloaded.m_timings.end(),
+                [&](const MMM::Timing& timing) {
+                    return timing.m_timingEffect == MMM::TimingEffect::SCROLL &&
+                           std::abs(timing.m_timestamp - PHASE_MS) < 1e-6;
+                }),
+        "after-half-beat BPM should remain aligned with its scroll after "
+        "reload");
 
     // 子情况二：原首红线晚于第一拍，必须额外插入 beat 0 合成锚点。
     auto beatMap                             = makeMinimalBeatMap(0, 4);
@@ -2098,6 +2129,69 @@ void test_late_first_timing_prepends_anchor_and_shifts_all_content()
         "late-first-timing playable note should keep its absolute time");
 
     XINFO("PASS: Late first timing keeps original red line and adds anchor");
+}
+
+/**
+ * @brief 验证 osu! 来源的 BPM 红线不会在 Malody effect 中合成一倍速。
+ *
+ * 同拍放置 38 BPM 与 3.14x Scroll，并在下一拍再放一条 BPM。来源元数据
+ * 标记为 osu!，用于覆盖旧逻辑曾在两条红线处主动写出 scroll=1.0 的路径。
+ * 导出后 effect 数组必须只剩用户设计的 3.14x；显式创建的一倍速仍由普通
+ * SCROLL 分支负责，本场景只禁止从 BPM 隐式派生新效果。
+ *
+ * @note time 数组仍应保留两条 BPM，本测试不改变红线本身的导出规则。
+ * @note effect 数量断言用于排除首红线和后续红线两处合成事件。
+ * @note 数值断言同时防止实现把真实 3.14x 错误替换为默认一倍速。
+ * @note 同拍关系通过 beat 三元组验证，不依赖 JSON 数组的解析先后顺序。
+ */
+void test_osu_source_bpm_does_not_inject_scroll_reset()
+{
+    XINFO("=== Test: OSU source BPM does not inject scroll reset ===");
+    auto             beatMap        = makeMinimalBeatMap(7, 4);
+    constexpr double BPM            = 38.0;
+    constexpr double BEAT_LENGTH_MS = 60000.0 / BPM;
+    constexpr double SCROLL         = 3.14;
+
+    // 来源标记只描述导入来源，不能授权导出器创建不存在的速度事件。
+    beatMap.m_metadata.map_properties[MMM::MapMetadataType::OSU]["source"] =
+        "regression";
+    auto& firstBpm                   = beatMap.m_timings.front();
+    firstBpm.m_bpm                   = BPM;
+    firstBpm.m_beat_length           = BEAT_LENGTH_MS;
+    firstBpm.m_timingEffectParameter = BPM;
+
+    // 真实 3.14x 与首红线同拍，必须成为该拍唯一的 Scroll 输出。
+    MMM::Timing& scroll            = beatMap.m_timings.emplace_back();
+    scroll.m_timestamp             = 0.0;
+    scroll.m_bpm                   = BPM;
+    scroll.m_beat_length           = SCROLL;
+    scroll.m_timingEffect          = MMM::TimingEffect::SCROLL;
+    scroll.m_timingEffectParameter = SCROLL;
+
+    // 第二条红线覆盖“每遇到 BPM 都重置”的旧分支，不能产生尾随 1.0x。
+    MMM::Timing& secondBpm            = beatMap.m_timings.emplace_back();
+    secondBpm.m_timestamp             = BEAT_LENGTH_MS;
+    secondBpm.m_bpm                   = BPM;
+    secondBpm.m_beat_length           = BEAT_LENGTH_MS;
+    secondBpm.m_timingEffect          = MMM::TimingEffect::BPM;
+    secondBpm.m_timingEffectParameter = BPM;
+    beatMap.sync();
+
+    const fs::path outputPath = std::filesystem::temp_directory_path() /
+                                "edge_osu_bpm_without_scroll_reset.mc";
+    TEST_ASSERT(beatMap.saveToFile(outputPath),
+                "OSU source BPM and scroll map should export");
+    std::ifstream outputFile(outputPath);
+    json          exported;
+    outputFile >> exported;
+
+    // 不依赖同拍 JSON 顺序：数组中根本不能存在合成的一倍速事件。
+    TEST_ASSERT(exported.contains("effect") && exported["effect"].size() == 1 &&
+                    exported["effect"][0]["beat"] == json::array({ 0, 0, 1 }) &&
+                    std::abs(exported["effect"][0].value("scroll", 0.0) -
+                             SCROLL) < 1e-9,
+                "BPM should not inject scroll=1 beside the designed 3.14x");
+    XINFO("PASS: OSU source BPM keeps only explicit scroll effects");
 }
 
 /**
@@ -2222,7 +2316,7 @@ void test_first_timing_delay_unwraps_with_its_bpm()
         std::filesystem::temp_directory_path() / "edge_positive_main_offset.mc";
     const fs::path positiveExportPath = std::filesystem::temp_directory_path() /
                                         "edge_positive_main_offset_export.mc";
-    std::ofstream positiveFile(positivePath);
+    std::ofstream  positiveFile(positivePath);
     TEST_ASSERT(positiveFile.good(), "should open positive offset input");
     positiveFile << positiveOffsetData.dump();
     positiveFile.close();
@@ -2316,7 +2410,7 @@ void test_first_timing_delay_unwraps_with_its_bpm()
     unmatchedSample["offset"]    = 200;
     const fs::path unmatchedPath = std::filesystem::temp_directory_path() /
                                    "edge_unmatched_main_offset.mc";
-    std::ofstream unmatchedFile(unmatchedPath);
+    std::ofstream  unmatchedFile(unmatchedPath);
     TEST_ASSERT(unmatchedFile.good(), "should open unmatched offset input");
     unmatchedFile << unmatchedOffsetData.dump();
     unmatchedFile.close();
@@ -2333,7 +2427,7 @@ void test_first_timing_delay_unwraps_with_its_bpm()
     effectOffsetData["note"][1]["sound"] = "effect.ogg";
     const fs::path effectOffsetPath = std::filesystem::temp_directory_path() /
                                       "edge_effect_wrapped_offset.mc";
-    std::ofstream effectOffsetFile(effectOffsetPath);
+    std::ofstream  effectOffsetFile(effectOffsetPath);
     TEST_ASSERT(effectOffsetFile.good(), "should open effect offset input");
     effectOffsetFile << effectOffsetData.dump();
     effectOffsetFile.close();
@@ -3840,6 +3934,7 @@ int main()
     test_timing_delay_and_sample_offset_round_trip_independently();
     test_non_malody_lead_in_exports_timing_origin_and_audio_compensation();
     test_late_first_timing_prepends_anchor_and_shifts_all_content();
+    test_osu_source_bpm_does_not_inject_scroll_reset();
     test_first_timing_delay_unwraps_with_its_bpm();
     test_malody_note_phase_shift_boundaries();
     test_paired_first_delay_round_trips_variable_bpm();

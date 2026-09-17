@@ -138,7 +138,7 @@ using json = nlohmann::json;
 /// - 可兼容的原 delay 与当前相位一致时优先恢复；
 /// - 首红线拍内位置超过半拍时再回退一拍，得到绝对值小于半拍的负相位；
 /// - 正相位可能需要为普通内容增加一拍补偿；
-/// - 首 BPM 晚于生成拍轴首拍时可插入合成首 BPM；
+/// - 负相位锚点与原首 BPM 位置不同时插入合成首 BPM，原红线保持不动；
 /// - 只有规范化后的首红线相位为负时，主 SOUND 才与 delay 成对写 offset；
 /// - 非主采样保持自身 timestamp 与 offset 语义。
 ///
@@ -163,9 +163,8 @@ using json = nlohmann::json;
 ///
 /// effect 数组写出规则：
 /// - 全部 Timing 按时间稳定排序；
-/// - 同时间 BPM 排在效果之前；
-/// - osu! 红线隐式重置 scroll 为 1；
-/// - 当前 scroll 非 1 时才显式生成重置事件；
+/// - 只写内部模型中显式存在的效果，不根据 BPM 合成 scroll；
+/// - 同时间效果保持内部模型中的稳定顺序；
 /// - SCROLL 写 scroll；
 /// - JUMP 写 jump；
 /// - HS 写 hs；
@@ -249,8 +248,8 @@ using json = nlohmann::json;
 /// - 首 BPM 正相位内容拍补偿；
 /// - 首 BPM 负时间的合成锚点；
 /// - 位于生成拍轴以前的自动采样；
-/// - 同时间 BPM 与效果排序；
-/// - osu! 红线 scroll 重置；
+/// - 同时间 BPM 与效果独立写出；
+/// - osu! 来源红线不额外合成 scroll；
 /// - scroll、jump、hs 私有字段恢复；
 /// - mode_ext.column 的 Key 模式补全；
 /// - meta.free 与 mode 的最终一致性；
@@ -373,25 +372,25 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     int trackCount = static_cast<int>(beatMap.m_baseMapMetadata.track_count);
     if ( trackCount <= 0 ) trackCount = 4;
 
-    const double defaultXW        = trackCount == 4   ? 64.0
-                                    : trackCount == 5 ? 51.0
-                                    : trackCount == 6 ? 43.0
-                                    : trackCount == 7
-                                        ? 36.5
-                                        : 256.0 / static_cast<double>(trackCount);
-    const int    defaultWW        = trackCount == 4   ? 60
-                                    : trackCount == 5 ? 50
-                                    : trackCount == 6 ? 40
-                                    : trackCount == 7 ? 30
-                                    : trackCount == 8
-                                        ? 20
-                                        : static_cast<int>(std::round(defaultXW));
-    const int    defaultLongNoteW = trackCount == 7 || trackCount == 8
-                                        ? defaultWW
-                                        : static_cast<int>(std::round(defaultXW));
-    const int    defaultFlickW    = trackCount == 7   ? 30
-                                    : trackCount == 8 ? 20
-                                                      : defaultWW;
+    const double defaultXW     = trackCount == 4   ? 64.0
+                                 : trackCount == 5 ? 51.0
+                                 : trackCount == 6 ? 43.0
+                                 : trackCount == 7
+                                     ? 36.5
+                                     : 256.0 / static_cast<double>(trackCount);
+    const int    defaultWW     = trackCount == 4   ? 60
+                                 : trackCount == 5 ? 50
+                                 : trackCount == 6 ? 40
+                                 : trackCount == 7 ? 30
+                                 : trackCount == 8
+                                     ? 20
+                                     : static_cast<int>(std::round(defaultXW));
+    const int defaultLongNoteW = trackCount == 7 || trackCount == 8
+                                     ? defaultWW
+                                     : static_cast<int>(std::round(defaultXW));
+    const int defaultFlickW    = trackCount == 7   ? 30
+                                 : trackCount == 8 ? 20
+                                                   : defaultWW;
 
     /// @brief 将轨道索引转换为 mode 7 的 x 坐标。
     /// @return 256 宽虚拟画布中的最近整数中心坐标。
@@ -717,7 +716,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
     std::int64_t wrappedMainExportOffsetMs = 0;
     /// @brief 首红线归一到首拍后，Malody 内容拍轴的整拍补偿。
     std::int64_t malodyContentBeatShift = 0;
-    /// @brief 首红线晚于第一拍时是否需要额外生成首拍锚点。
+    /// @brief 是否需要额外生成前置 BPM 锚点并保留原首红线。
     bool prependSyntheticFirstBpm = false;
     // 第二阶段根据配对结果确定首 BPM 拍号、delay 与内容整拍补偿。
     if ( !bpmTimings.empty() ) {
@@ -771,7 +770,9 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             malodyContentBeatShift = static_cast<std::int64_t>(std::llround(
                 (firstBpm.m_timestamp + firstBpmDelayMs) / firstBeatLength));
             prependSyntheticFirstBpm =
-                firstBpm.m_timestamp < -1e-6 ||
+                // 负相位只能由新增锚点承载，原首红线必须留在与同拍
+                // Scroll/HS 相同的位置，不能直接搬到负时间。
+                timingPhase < -1e-6 || firstBpm.m_timestamp < -1e-6 ||
                 firstBpm.m_timestamp >= firstBeatLength - 1e-6;
         } else {
             double wholeBeat =
@@ -890,49 +891,21 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         fileData["time"] = timeArr;
     }
 
-    bool isOsuSource =
-        beatMap.m_metadata.map_properties.find(MapMetadataType::OSU) !=
-        beatMap.m_metadata.map_properties.end();
-
-    double currentScroll = -1.0;  // 哨兵值，确保首个 BPM 点必定输出
-
-    // 对计时点排序：相同时间戳时红线(BPM)必须在绿线(SCROLL)之前
-    // 确保 scroll=1.0 重置在绿线的 scroll=0.01 覆盖之前输出
+    // 效果只按时间稳定排序；同拍的显式 Scroll 保持原有设计顺序。
     std::vector<const Timing*> sortedTimings;
     sortedTimings.reserve(beatMap.m_timings.size());
     for ( const auto& t : beatMap.m_timings ) {
         sortedTimings.push_back(&t);
     }
-    // 同时刻红线先于效果，才能在必要时先生成 scroll 重置。
     std::stable_sort(sortedTimings.begin(),
                      sortedTimings.end(),
                      [](const Timing* a, const Timing* b) {
-                         if ( std::abs(a->m_timestamp - b->m_timestamp) > 1e-4 )
-                             return a->m_timestamp < b->m_timestamp;
-                         // 同一时间：BPM（红线）排在效果之前
-                         if ( a->m_timingEffect != b->m_timingEffect ) {
-                             return a->m_timingEffect == TimingEffect::BPM;
-                         }
-                         return false;
+                         return a->m_timestamp < b->m_timestamp;
                      });
 
     json effectArr = json::array();
     for ( const Timing* tp : sortedTimings ) {
         const auto& t = *tp;
-        if ( t.m_timingEffect == TimingEffect::BPM && isOsuSource ) {
-            // osu! 红线隐含 scroll=1，仅在状态变化时显式补事件。
-            // OSU 红线隐式将滑条速度重置为 1.0
-            // 仅当当前有效 scroll 不等于 1.0 时才需要显式输出
-            if ( currentScroll != 1.0 ) {
-                json resetEj;
-
-                resetEj["beat"]   = timeToMalodyContentBeat(t.m_timestamp);
-                resetEj["scroll"] = 1.0;
-                effectArr.push_back(resetEj);
-                currentScroll = 1.0;
-            }
-        }
-
         if ( t.m_timingEffect == TimingEffect::SCROLL ||
              t.m_timingEffect == TimingEffect::JUMP ||
              t.m_timingEffect == TimingEffect::HS ) {
@@ -945,10 +918,6 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                 ej["jump"] = t.m_timingEffectParameter;
             } else {
                 ej["hs"] = t.m_timingEffectParameter;
-            }
-
-            if ( t.m_timingEffect == TimingEffect::SCROLL ) {
-                currentScroll = ej["scroll"];
             }
 
             // 恢复 Malody 特有字段
