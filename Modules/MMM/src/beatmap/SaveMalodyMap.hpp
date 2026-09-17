@@ -133,12 +133,13 @@ using json = nlohmann::json;
 ///
 /// 首 BPM 与主 SOUND 相位编码：
 /// - 主采样有效时间减首 BPM 时间得到有符号差；
-/// - 差值按首拍长度回卷到非负相位；
+/// - 差值按首拍长度回卷到非负 delay；
 /// - 接近零或完整一拍的相位归零；
 /// - 可兼容的原 delay 与当前相位一致时优先恢复；
+/// - 首红线拍内位置超过半拍时再回退一拍，得到绝对值小于半拍的负相位；
 /// - 正相位可能需要为普通内容增加一拍补偿；
 /// - 首 BPM 晚于生成拍轴首拍时可插入合成首 BPM；
-/// - 主 SOUND offset 与首红线 delay 成对生成；
+/// - 只有规范化后的首红线相位为负时，主 SOUND 才与 delay 成对写 offset；
 /// - 非主采样保持自身 timestamp 与 offset 语义。
 ///
 /// 时间到 Malody 拍位的转换：
@@ -755,12 +756,14 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                  std::abs(timingPhase - firstBeatLength) <= 1e-6 ) {
                 timingPhase = 0.0;
             }
-            // MMM 允许首红线位于负时间；导出 Malody 时，该负相位会
-            // 转为非负 delay，配对主 SOUND 必须携带同一个值，不能因
-            // 其小于半拍而被清零。非负首红线仍沿用既有半拍规则，
-            // 避免游戏端重复应用相位。
-            if ( firstBpm.m_timestamp < -1e-6 ||
-                 firstBpmDelayMs > firstBeatLength * 0.5 + 1e-6 ) {
+            // 拍内位置落在后半拍时继续回退一拍，把它归一到绝对值
+            // 小于半拍的负相位；前半拍保持正值，不需要重复回退。
+            // 后续沿用负首红线的配对规则，避免低 BPM 的长拍长把
+            // 本应向前的小偏移保留成大正数。
+            if ( timingPhase > firstBeatLength * 0.5 + 1e-6 ) {
+                timingPhase -= firstBeatLength;
+            }
+            if ( timingPhase < -1e-6 ) {
                 wrappedMainExportOffsetMs =
                     static_cast<std::int64_t>(std::llround(firstBpmDelayMs));
             }
@@ -1256,8 +1259,8 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         std::int64_t exportedOffset = sample.m_offsetMs;
         if ( &sample == wrappedMainSample ) {
             sampleJson["beat"] = timeToBeat(bpmTimings.front()->m_timestamp);
-            // 主 SOUND 的 offset 必须与首红线相位匹配：负时间首红线
-            // 跟随转正后的 delay；非负首红线沿用既有半拍规则。
+            // 主 SOUND 的 offset 只跟随规范化后的负首红线相位；前半拍
+            // 的正相位保持零 offset，避免游戏端重复应用 delay。
             exportedOffset = wrappedMainExportOffsetMs;
         } else if ( generatedFirstBpmOrigin != nullptr &&
                     sample.m_timestamp <
