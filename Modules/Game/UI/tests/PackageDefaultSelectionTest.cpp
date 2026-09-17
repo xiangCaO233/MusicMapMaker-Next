@@ -10,6 +10,7 @@
 namespace
 {
 using MMM::UI::PackageOpenBeatmapState;
+using MMM::UI::resolveNonOggAudioAlignmentSelection;
 using MMM::UI::shouldDefaultSelectPackageBeatmap;
 
 /// @brief 检查单停靠组只默认选择前台谱面。
@@ -71,6 +72,25 @@ bool checkInvalidSessionSelection()
            !shouldDefaultSelectPackageBeatmap("/project/b.mc", states) &&
            !shouldDefaultSelectPackageBeatmap({}, states);
 }
+
+/// @brief 检查非 OGG 主音轨原点对齐选项的默认值与用户覆盖规则。
+/// @return 默认开启、不可用清空和手动选择保留均符合预期时返回 true。
+/// @note 测试仅覆盖状态策略，候选扫描与音频格式识别由打包实现负责。
+bool checkNonOggAudioAlignmentDefault()
+{
+    // 可用且未被用户操作时必须默认开启，覆盖首次打开和首次选中谱面。
+    const bool defaultEnabled =
+        resolveNonOggAudioAlignmentSelection(true, false, false);
+    // 用户手动取消或保留开启后，候选刷新都不得重置其明确选择。
+    const bool manualDisabled =
+        resolveNonOggAudioAlignmentSelection(true, true, false);
+    const bool manualEnabled =
+        resolveNonOggAudioAlignmentSelection(true, true, true);
+    // 候选中不再含非 OGG 主音轨时必须清空，即使此前已手动开启。
+    const bool unavailable =
+        resolveNonOggAudioAlignmentSelection(false, true, true);
+    return defaultEnabled && !manualDisabled && manualEnabled && !unavailable;
+}
 }  // namespace
 
 /// @brief 覆盖打包窗口按前台停靠画布计算默认谱面选择的场景。
@@ -82,7 +102,8 @@ int main()
     return checkSingleForegroundSelection() &&
                    checkMultipleForegroundSelection() &&
                    checkActiveFallbackSelection() &&
-                   checkInvalidSessionSelection()
+                   checkInvalidSessionSelection() &&
+                   checkNonOggAudioAlignmentDefault()
                ? 0
                : 1;
 }

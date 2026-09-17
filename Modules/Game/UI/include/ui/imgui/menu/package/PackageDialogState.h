@@ -118,6 +118,12 @@ struct PackageDialogState {
 
     /// @brief MCZ 打包时是否把非 OGG Main 音频和首 BPM 红线对齐到原点。
     bool alignNonOggMainAudioToOrigin{ false };
+
+    /// @brief 用户是否已在本次打包流程中手动修改非 OGG 音频对齐选项。
+    bool alignNonOggMainAudioUserOverridden{ false };
+
+    /// @brief 本次打包流程中用户最近一次手动选择的非 OGG 音频对齐值。
+    bool alignNonOggMainAudioUserValue{ false };
 };
 
 }  // namespace MMM::UI

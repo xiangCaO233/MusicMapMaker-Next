@@ -1417,9 +1417,15 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
                     m_package.alignNonOggMainAudioToOrigin = false;
                     ImGui::BeginDisabled();
                 }
-                ::MMM::UI::FeedbackCheckbox(
-                    alignAudioLabel.data(),
-                    &m_package.alignNonOggMainAudioToOrigin);
+                if ( ::MMM::UI::FeedbackCheckbox(
+                         alignAudioLabel.data(),
+                         &m_package.alignNonOggMainAudioToOrigin) ) {
+                    // 记住本次流程中的手动决定，候选刷新不得覆盖用户意图。
+                    m_package.alignNonOggMainAudioUserOverridden = true;
+                    // 独立保存值，选项短暂禁用后仍能恢复用户的明确决定。
+                    m_package.alignNonOggMainAudioUserValue =
+                        m_package.alignNonOggMainAudioToOrigin;
+                }
                 if ( !canAlignNonOggAudio ) {
                     ImGui::EndDisabled();
                 }
@@ -2279,6 +2285,13 @@ void PackBeatmapAction::syncPackageDependencySelection()
             file.selected = false;
         }
     }
+
+    // 初次出现非 OGG 主音轨时默认开启对齐；用户手动修改后只处理失效清空。
+    m_package.alignNonOggMainAudioToOrigin =
+        resolveNonOggAudioAlignmentSelection(
+            hasSelectedPackageNonOggMainAudio(),
+            m_package.alignNonOggMainAudioUserOverridden,
+            m_package.alignNonOggMainAudioUserValue);
 }
 
 /// @brief 判断当前选中谱面是否存在未能绑定的依赖资源。
@@ -2404,6 +2417,10 @@ void PackBeatmapAction::openPackFilePicker()
     m_package.pendingRelativePaths.clear();
     m_package.pendingMetadataOverrides.clear();
     m_package.beatmapMetadataEdits.clear();
+    // 新流程重新采用非 OGG 安全默认值，不继承上一次窗口的手动选择。
+    m_package.alignNonOggMainAudioToOrigin       = false;
+    m_package.alignNonOggMainAudioUserOverridden = false;
+    m_package.alignNonOggMainAudioUserValue      = false;
     // 关闭后续阶段的打开标志，防止旧弹窗在新流程中重现。
     m_package.showFileSelectionWindow        = false;
     m_package.openFileSelectionWindow        = false;
@@ -2420,7 +2437,6 @@ void PackBeatmapAction::openPackFilePicker()
     if ( m_package.selectedFileType != PackageFileType::Mcz ) {
         // Malody 音频兼容设置只在 MCZ 目标下保留。
         m_package.stripMainAudioVolumeFromMalodyExport = false;
-        m_package.alignNonOggMainAudioToOrigin         = false;
     }
 }
 

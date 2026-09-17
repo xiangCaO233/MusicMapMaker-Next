@@ -66,4 +66,21 @@ constexpr bool shouldDefaultSelectPackageBeatmap(
     return false;
 }
 
+/// @brief 计算非 OGG 主音轨原点对齐选项在候选变化后的状态。
+/// @param hasSelectedNonOggMainAudio 当前选择是否包含非 OGG 默认 Main 音轨。
+/// @param userOverridden 用户是否已在本次打包流程中手动修改该选项。
+/// @param userValue 用户最近一次手动选择的值。
+/// @return 不可用时固定为 false；可用且未手动修改时默认返回 true。
+/// @note 用户手动选择独立保存，选项短暂失效再恢复时不会丢失该选择。
+constexpr bool resolveNonOggAudioAlignmentSelection(
+    bool hasSelectedNonOggMainAudio, bool userOverridden, bool userValue)
+{
+    // 没有可对齐的谱面时清除残留值，命令层无需依赖 UI 可用状态。
+    if ( !hasSelectedNonOggMainAudio ) {
+        return false;
+    }
+    // 本次流程尚无用户选择时采用安全默认值；否则原样保留用户意图。
+    return userOverridden ? userValue : true;
+}
+
 }  // namespace MMM::UI
