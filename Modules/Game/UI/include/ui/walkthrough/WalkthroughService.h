@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -31,6 +32,15 @@ public:
     const std::vector<Chapter>& chapters() const;
     /// @brief 取得学习进度的非拥有引用。
     const Progress& progress() const;
+    /// @brief 返回当前进程最近一次收到本步骤业务信号的单调序号。
+    /// @return 尚未收到步骤所需信号时返回 0；历史持久化完成度不参与。
+    /// @warning UI 热路径：只遍历当前步骤的小型信号数组并查询内存映射。
+    std::uint64_t latestSignalRevision(const Step& step) const;
+    /// @brief 判断步骤要求的业务信号是否在指定序号后重新到达。
+    /// @param step 待判断步骤，保留 allSignals 的全满足语义。
+    /// @param revision 当前路线步骤启动时记录的序号。
+    /// @warning UI 热路径：仅在路线引导活动时遍历当前步骤信号。
+    bool receivedSignalAfter(const Step& step, std::uint64_t revision) const;
     /// @brief 返回加载或保存失败说明。
     const std::string& error() const;
     /// @brief 手动确认一个步骤并持久化。

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -18,7 +19,7 @@ public:
     void render(UIManager* manager, std::size_t topicIndex);
 
 private:
-    /// @brief 当前由用户启动的步骤引导身份及启动时完成状态。
+    /// @brief 当前由用户启动的路线引导身份及当前步骤状态。
     struct ActiveGuide {
         /// @brief 主题稳定 ID。
         std::string topicId;
@@ -26,8 +27,8 @@ private:
         std::string branchId;
         /// @brief 当前步骤稳定 ID。
         std::string stepId;
-        /// @brief true 表示重放已完成步骤，不应自动跳到下一步。
-        bool completedAtStart{ false };
+        /// @brief 当前步骤启动时已观察到的业务信号序号。
+        std::uint64_t signalRevisionAtStart{ 0 };
     };
 
     /// @brief 当前正文主题 ID，切换主题时用于重置展开项。

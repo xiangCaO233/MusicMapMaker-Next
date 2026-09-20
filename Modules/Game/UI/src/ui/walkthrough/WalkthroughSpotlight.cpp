@@ -20,6 +20,7 @@
 /// - UIManager 在全部视图更新结束后统一调用 render；
 /// - 业务控件成功完成目标或点击“知道了”都会推进同一状态机；
 /// - 后续控件尚未出现时进入等待态，不重新遮住已完成控件；
+/// - 最后目标完成后保留 Completed，交给路线会话衔接下一步骤；
 /// - stop 清理配置和几何，后续控件上报成为无操作。
 ///
 /// 目标解析：
@@ -154,6 +155,13 @@ bool Spotlight::active() const
     return m_state != State::Inactive;
 }
 
+/// @brief 查询当前步骤是否已完成并等待路线会话接续。
+/// @return 最后一个目标已由业务结果或“知道了”确认时返回 true。
+bool Spotlight::completed() const
+{
+    return m_state == State::Completed;
+}
+
 /// @brief 允许当前可见演练页面在本帧继续显示引导。
 void Spotlight::keepAlive()
 {
@@ -163,6 +171,11 @@ void Spotlight::keepAlive()
 /// @brief 跳过当前已经定位到的目标阶段。
 void Spotlight::acknowledgeCurrentStage()
 {
+    if ( m_targets.empty() && m_state == State::Waiting ) {
+        // 纯文字步骤的“知道了”同样完成当前步骤，避免路线无法继续。
+        m_state = State::Completed;
+        return;
+    }
     if ( m_state != State::Highlighting || !m_anchor ) return;
     completeStage(m_anchor->priority);
 }
@@ -171,7 +184,7 @@ void Spotlight::acknowledgeCurrentStage()
 /// @param targetId 与当前配置中的目标 ID 一致。
 void Spotlight::completeTarget(std::string_view targetId)
 {
-    if ( !active() ) return;
+    if ( !active() || completed() ) return;
     const auto it = std::find(m_targets.begin(), m_targets.end(), targetId);
     if ( it == m_targets.end() ) return;
     completeStage(static_cast<std::size_t>(it - m_targets.begin()));
@@ -181,11 +194,13 @@ void Spotlight::completeTarget(std::string_view targetId)
 /// @param priority 已由业务结果或“知道了”确认的目标索引。
 void Spotlight::completeStage(std::size_t priority)
 {
-    if ( !active() || priority < m_stage || priority >= m_targets.size() )
+    if ( !active() || completed() || priority < m_stage ||
+         priority >= m_targets.size() )
         return;
-    // 最后一个目标确认后没有后续阶段，直接结束并让页面同步退出状态。
+    // 最后目标完成后保留明确终态，让路线会话决定继续下一步或整体结束。
     if ( priority + 1 >= m_targets.size() ) {
-        stop();
+        m_anchor.reset();
+        m_state = State::Completed;
         return;
     }
     // 完成后进入等待态，直到后续目标在新布局中提供本帧有效矩形。
@@ -214,7 +229,9 @@ void Spotlight::reportLastItem(std::string_view targetId)
 void Spotlight::reportTarget(std::string_view targetId, const ImVec2& minimum,
                              const ImVec2& maximum, ImGuiViewport* viewport)
 {
-    if ( !active() || maximum.x <= minimum.x || maximum.y <= minimum.y ) return;
+    if ( !active() || completed() || maximum.x <= minimum.x ||
+         maximum.y <= minimum.y )
+        return;
     // 配置列表通常只有数项；线性查找避免为逐帧注册建立哈希表和分配节点。
     const auto it = std::find(m_targets.begin(), m_targets.end(), targetId);
     if ( it == m_targets.end() ) return;
@@ -239,7 +256,7 @@ void Spotlight::reportTarget(std::string_view targetId, const ImVec2& minimum,
 /// @param acknowledgeLabel 当前语言的确认按钮文本。
 void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
 {
-    if ( !active() || !m_keepAlive ) return;
+    if ( !active() || completed() || !m_keepAlive ) return;
     const bool promptOnly = m_targets.empty();
     // 有目标的引导只在本帧重新解析到当前阶段时显示，等待态不绘制旧高亮。
     if ( m_state != State::Highlighting && !promptOnly ) return;
@@ -251,7 +268,7 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
 
     const ImVec2          viewportMin = viewport->Pos;
     const ImVec2          viewportMax{ viewport->Pos.x + viewport->Size.x,
-                                       viewport->Pos.y + viewport->Size.y };
+                              viewport->Pos.y + viewport->Size.y };
     std::optional<ImVec2> holeMin;
     std::optional<ImVec2> holeMax;
     std::optional<ImVec2> hintAnchor;
@@ -268,10 +285,10 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
         hintAnchor = ImVec2{ (holeMin->x + holeMax->x) * 0.5f, holeMax->y };
     }
 
-    const bool hasAcknowledge =
-        m_anchor && acknowledgeLabel && acknowledgeLabel[0] != '\0';
+    const bool hasAcknowledge = (m_anchor || promptOnly) && acknowledgeLabel &&
+                                acknowledgeLabel[0] != '\0';
     if ( m_prompt.empty() && !hasAcknowledge ) return;
-    // 确认按钮属于目标遮罩阶段；没有目标的快捷键说明不生成无语义按钮。
+    // 目标步骤与纯文字步骤都提供确认入口，确保路线会话可以显式继续。
     const float  margin = 12.0f * dpiScale;
     const auto&  style  = ImGui::GetStyle();
     const ImVec2 buttonTextSize =
@@ -410,9 +427,9 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
         // 把提示窗口并入透明区域，Foreground 遮罩不会盖住按钮。
         // 联合外接矩形可能比两块区域之间更宽，但能保持四块遮罩互不重叠。
         const ImVec2    revealMin{ std::min(holeMin->x, bubbleMin.x),
-                                   std::min(holeMin->y, bubbleMin.y) };
+                                std::min(holeMin->y, bubbleMin.y) };
         const ImVec2    revealMax{ std::max(holeMax->x, bubbleMax.x),
-                                   std::max(holeMax->y, bubbleMax.y) };
+                                std::max(holeMax->y, bubbleMax.y) };
         constexpr ImU32 MASK_COLOR = IM_COL32(0, 0, 0, 190);
         // 四块矩形围出目标与提示的联合透明区，不依赖模板缓冲。
         addFilledRect(

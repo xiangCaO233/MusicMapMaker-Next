@@ -35,6 +35,10 @@ public:
     /// @brief 查询是否存在已启动的引导。
     [[nodiscard]] bool active() const;
 
+    /// @brief 查询当前步骤的全部目标是否已经完成。
+    /// @return 业务成功或“知道了”完成最后目标后返回 true，直到 start 或 stop。
+    [[nodiscard]] bool completed() const;
+
     /// @brief 标记当前引导仍由本帧可见的演练页面持有。
     /// @warning UI 热路径：只写布尔值，不创建窗口或改变焦点。
     void keepAlive();
@@ -79,9 +83,10 @@ public:
 private:
     /// @brief 突出引导逐帧状态；阶段完成后只能单调向后推进。
     enum class State : std::uint8_t {
-        Inactive,     ///< 没有正在运行的引导。
-        Waiting,      ///< 等待当前阶段目标在本帧上报。
-        Highlighting  ///< 当前阶段拥有本帧有效矩形，可以绘制高亮层。
+        Inactive,      ///< 没有正在运行的引导。
+        Waiting,       ///< 等待当前阶段目标在本帧上报。
+        Highlighting,  ///< 当前阶段拥有本帧有效矩形，可以绘制高亮层。
+        Completed      ///< 当前步骤已完成，等待路线会话衔接下一步。
     };
 
     /// @brief 当前帧选中的目标矩形及所属视口。

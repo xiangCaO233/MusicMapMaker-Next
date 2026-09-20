@@ -31,6 +31,10 @@
 /// - 取消向导没有完成事件，因此不会伪造任何后续步骤；
 /// - 创建失败不会发布 ready，已选择音频也不能单独完成主题；
 /// - 同一阶段重复到达由 Progress 的集合语义幂等处理；
+/// - 每次到达仍更新易失信号序号，路线重放不受历史完成度影响；
+/// - 易失序号只存在于当前进程，不写入用户学习进度文件；
+/// - 路线启动时记录当前基线，只有之后到达的同名信号可以推进；
+/// - allSignals 步骤要求每个配置信号都在本轮基线后重新出现；
 /// - 跨线程回调只复制轻量事件到队列，不写进度文件；
 /// - UI update 一帧统一消费两类队列，并把多次变化合并为一次保存；
 /// - 事件中的谱面路径用于诊断，不进入学习记录键；
@@ -68,11 +72,14 @@ std::string readFile(const std::filesystem::path& path)
 /// @details PImpl 隔离
 /// concurrentqueue、事件类型和持久化细节，公开头只暴露模型接口。
 struct Service::Impl {
-    std::vector<Chapter>  m_chapters;  ///< 已排序章节，保留空章节入口区域。
-    std::vector<Topic>    m_topics;    ///< 通过校验的主题。
-    Progress              m_progress;  ///< 独立的学习状态。
-    std::filesystem::path m_path;      ///< 专用进度文件。
-    std::string           m_error;     ///< 最近错误。
+    std::vector<Chapter> m_chapters;  ///< 已排序章节，保留空章节入口区域。
+    std::vector<Topic>   m_topics;    ///< 通过校验的主题。
+    Progress             m_progress;  ///< 独立的学习状态。
+    std::uint64_t        m_signalSequence{ 0 };  ///< 本进程业务信号单调序号。
+    std::map<std::string, std::uint64_t, std::less<>>
+        m_signalRevisions;          ///< 每个稳定信号最近一次到达序号。
+    std::filesystem::path m_path;   ///< 专用进度文件。
+    std::string           m_error;  ///< 最近错误。
     bool                  m_writable{ true };  ///< 损坏进度文件禁止自动覆盖。
     Event::SubscriptionID m_projectSubscription{};  ///< 项目交互订阅。
     Event::SubscriptionID m_beatmapSubscription{};  ///< 新建谱面交互订阅。
@@ -318,10 +325,14 @@ void Service::update()
             break;
         default: break;
         }
-        if ( !signal.empty() )
+        if ( !signal.empty() ) {
+            // 易失序号记录每次真实到达，不能被持久化进度的幂等结果吞掉。
+            m_impl->m_signalRevisions.insert_or_assign(
+                signal, ++m_impl->m_signalSequence);
             // 一个业务 signal 可能推进多个主题，逐主题合并 changed 标志。
             for ( const auto& topic : m_impl->m_topics )
                 changed |= m_impl->m_progress.signal(topic, signal);
+        }
     }
     Event::BeatmapCreateInteractionEvent beatmapEvent;
     while ( m_impl->m_beatmapEvents.try_dequeue(beatmapEvent) ) {
@@ -361,9 +372,13 @@ void Service::update()
             if ( stage )
                 signal = std::string(family) + "." + origin + "." + stage;
         }
-        if ( !signal.empty() )
+        if ( !signal.empty() ) {
+            // 重复创建流程仍有独立序号，供正在运行的路线识别本轮动作。
+            m_impl->m_signalRevisions.insert_or_assign(
+                signal, ++m_impl->m_signalSequence);
             for ( const auto& topic : m_impl->m_topics )
                 changed |= m_impl->m_progress.signal(topic, signal);
+        }
     }
     // 一帧内多个事件只触发一次持久化写入。
     if ( changed ) m_impl->save();
@@ -379,6 +394,39 @@ const std::vector<Topic>& Service::topics() const
 const Progress& Service::progress() const
 {
     return m_impl->m_progress;
+}
+
+/// @brief 返回步骤任一业务信号在当前进程中的最近到达序号。
+/// @param step 待查询步骤；历史持久化记录不会产生本轮序号。
+/// @return 所有步骤信号对应序号的最大值，均未出现时返回 0。
+std::uint64_t Service::latestSignalRevision(const Step& step) const
+{
+    std::uint64_t latest = 0;
+    for ( const auto& signal : step.m_signals ) {
+        const auto it = m_impl->m_signalRevisions.find(signal);
+        if ( it != m_impl->m_signalRevisions.end() )
+            latest = std::max(latest, it->second);
+    }
+    return latest;
+}
+
+/// @brief 判断步骤需要的业务信号是否在路线步骤启动后重新到达。
+/// @param step 待判断步骤；allSignals 为 true 时要求每个信号都重新到达。
+/// @param revision 路线步骤启动时记录的信号序号。
+/// @return 满足当前步骤信号组合语义时返回 true。
+/// @warning UI 热路径：只查询当前步骤的小型信号数组，不分配或访问文件。
+bool Service::receivedSignalAfter(const Step&   step,
+                                  std::uint64_t revision) const
+{
+    if ( step.m_signals.empty() ) return false;
+    const auto received = [&](const std::string& signal) {
+        const auto it = m_impl->m_signalRevisions.find(signal);
+        return it != m_impl->m_signalRevisions.end() && it->second > revision;
+    };
+    if ( step.m_allSignals )
+        return std::all_of(
+            step.m_signals.begin(), step.m_signals.end(), received);
+    return std::any_of(step.m_signals.begin(), step.m_signals.end(), received);
 }
 /// @brief 返回最近一次加载、解析或保存错误。
 /// @return 空字符串表示当前没有记录错误。

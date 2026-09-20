@@ -417,6 +417,16 @@ int main(int argc, char** argv)
                  beatmapTemplateTopic,
                  beatmapTemplateTopic.m_branches[0].m_steps[1]) )
             return 47;
+        // 路线重放不能依赖“是否首次完成”：同一业务动作再次发生时，即使
+        // 持久化步骤早已完成，也必须产生更大的易失信号序号供本轮引导衔接。
+        const auto firstOpenRevision =
+            service.latestSignalRevision(beatmapTopic.m_branches[0].m_steps[0]);
+        MMM::Event::EventBus::instance().publish(beatmapEvent);
+        service.update();
+        if ( firstOpenRevision == 0 ||
+             service.latestSignalRevision(
+                 beatmapTopic.m_branches[0].m_steps[0]) <= firstOpenRevision )
+            return 60;
         // 空白流程先确认音频，再由自动或手动测量结果推进推荐测偏步骤。
         beatmapEvent.m_stage =
             MMM::Event::BeatmapCreateInteractionStage::AudioSelected;

@@ -17,14 +17,14 @@
 /// - 显式矩形与普通 ImGui Item 使用同一解析路径；
 /// - 遮罩向 ForegroundDrawList 增加顶点，提示创建固定 ID 的 Tooltip 层窗口；
 /// - 确认当前阶段后旧目标不再产生遮罩，后续目标仍可被解析；
-/// - 确认最后一个阶段会停止引导；
+/// - 确认最后一个阶段会进入 Completed，供路线会话衔接下一步；
 /// - 模态向导存在时提示按钮仍能悬浮、按下并释放激活；
 /// - 提示按钮通过自身矩形补充模态输入判定，不解锁其他窗口区域；
 /// - 鼠标点击确认只影响 Spotlight，不关闭底层业务模态框；
 /// - 确认只推进内部目标水位，不模拟被突出控件的业务点击；
 /// - 当前界面保持不变时，已确认目标不能在下一帧重新出现；
 /// - 晚于确认水位的目标出现后，应立即成为新的解析结果；
-/// - 无目标的快捷键或外部应用步骤只绘制提示气泡；
+/// - 无目标的快捷键或外部应用步骤绘制可确认的提示气泡；
 /// - 演练页面未续租时不绘制上一帧残留引导。
 ///
 /// 测试环境约束：
@@ -49,16 +49,19 @@
 /// - ForegroundDrawList 顶点增长证明目标遮罩实际提交；
 /// - 固定提示窗口存在、位于 Tooltip 层且只比原窗口表增加一个窗口；
 /// - NavWindow 指针不变证明绘制没有抢占键盘导航焦点；
-/// - 模态环境完成一次真实按钮激活后，单目标引导必须停止；
+/// - 模态环境完成一次真实按钮激活后，单目标引导必须进入完成态；
 /// - 鼠标释放帧之后模态弹窗仍保持打开，证明没有代替业务关闭；
 /// - 提示窗口创建后继续复用，不会随目标切换持续增加窗口数量；
 /// - 下一帧未上报第二项时必须解析为第一项；
 /// - 阶段水位只允许向后推进，不会重新选中已确认目标；
 /// - 确认中间目标后 Spotlight 必须继续保持 active；
-/// - 确认最终目标后 Spotlight 必须立即转为 inactive；
+/// - 确认最终目标后 Spotlight 必须保持 active 并进入 Completed；
+/// - Completed 与 Inactive 必须可区分，让路线接续和主动退出拥有不同语义；
+/// - 新的 start 必须覆盖前一步 Completed，并建立独立目标水位；
+/// - 纯文字“知道了”与目标按钮确认最终都落到相同 Completed 终态；
 /// - 阶段确认后本帧 Anchor 会清空，避免继续暴露过期解析结果；
 /// - 第三阶段测试与真实三页项目向导采用相同的有序候选结构；
-/// - 最终停止后 render 必须安全成为无操作，不再次创建提示内容；
+/// - Completed 状态下 render 必须安全成为无操作，不再次创建提示内容；
 /// - 自定义矩形不需要先提交 ImGui Button；
 /// - 空目标列表用于只能通过快捷键或外部窗口完成的步骤；
 /// - 纯提示帧仍需续租，避免页面离开后残留气泡；
@@ -187,9 +190,9 @@ int main()
 
     // 业务控件确认第二项目标实际成功后直接完成状态机，不依赖鼠标位置猜测。
     // 重复或晚到通知由目标索引约束保持幂等。
-    // 最后一项目标成功后 active 立即清除，页面下一帧即可同步结束按钮状态。
+    // 最后一项目标成功后进入 Completed，路线页面下一帧可衔接后续步骤。
     spotlight.completeTarget("test.second");
-    if ( spotlight.active() ) {
+    if ( !spotlight.active() || !spotlight.completed() ) {
         ImGui::DestroyContext();
         return 10;
     }
@@ -333,7 +336,7 @@ int main()
         ImGui::DestroyContext();
         return 55;
     }
-    if ( spotlight.active() ) {
+    if ( !spotlight.active() || !spotlight.completed() ) {
         ImGui::DestroyContext();
         return 53;
     }
@@ -367,7 +370,7 @@ int main()
     // 下一帧重复上报旧阶段无效，第三阶段出现后才恢复遮罩。
     // 这保证用户关闭当前遮罩后可以继续填写现有窗口，不会被相同目标
     // 立即重新暗化；业务布局进入新阶段时框架才重新显示引导。
-    // 第三项是最终目标，确认后 active 必须同时结束，供页面清理按钮状态。
+    // 第三项是最终目标，确认后保留 Completed，供页面衔接下一路线步骤。
     ImGui::NewFrame();
     spotlight.beginFrame();
     spotlight.reportTarget("stage.first",
@@ -385,7 +388,8 @@ int main()
     spotlight.keepAlive();
     const bool nextStageValid = spotlight.resolvedTargetId() == "stage.third";
     spotlight.acknowledgeCurrentStage();
-    const bool finalStageValid = nextStageValid && !spotlight.active();
+    const bool finalStageValid =
+        nextStageValid && spotlight.active() && spotlight.completed();
     spotlight.render(1.0f, "Got it");
     ImGui::Render();
     if ( !finalStageValid ) {
@@ -394,9 +398,7 @@ int main()
     }
 
     // 无候选目标的快捷键步骤仍提交提示，但不能解析出虚假的控件身份。
-    // 纯文字提示没有“大遮罩阶段”，因此既不绘制前景遮罩，也不生成
-    // 会错误推进目标水位的确认按钮。
-    // 该分支仍保持 active，等待用户以配置描述的外部动作完成演练。
+    // 纯文字提示不绘制前景遮罩，但提供“知道了”作为明确的路线推进入口。
     ImGui::NewFrame();
     spotlight.beginFrame();
     spotlight.start({}, "Press Ctrl+Shift+N");
@@ -406,9 +408,12 @@ int main()
     spotlight.render(1.0f, "Got it");
     const bool promptOnlyValid =
         spotlight.resolvedTargetId().empty() &&
-        foreground->VtxBuffer.Size == promptVerticesBefore;
+        foreground->VtxBuffer.Size == promptVerticesBefore &&
+        spotlight.acknowledgeButtonCenter().has_value();
+    spotlight.acknowledgeCurrentStage();
+    const bool promptCompleted = spotlight.completed();
     ImGui::Render();
-    if ( !promptOnlyValid ) {
+    if ( !promptOnlyValid || !promptCompleted ) {
         ImGui::DestroyContext();
         return 8;
     }
