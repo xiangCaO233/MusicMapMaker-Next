@@ -1153,7 +1153,14 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                 hold.m_timestamp = startTime;
                 hold.m_track     = track;
                 hold.m_duration  = endTime - startTime;
-                notePtr          = &hold;
+                // endbeat 使用共享头部 HS，必须与原生及 seg
+                // 长条的默认语义区分。 标记随 MMM
+                // 保存，避免重新打开后误将尾部改为独立采样。
+                hold.m_metadata
+                    .note_properties[NoteMetadataType::MMM]
+                                    [std::string(HOLD_INDEPENDENT_END_HS)] =
+                    "false";
+                notePtr = &hold;
             } else if ( n.contains("dir") ) {
                 int trackCount = basemeta.track_count;
                 int flickWidthBase =

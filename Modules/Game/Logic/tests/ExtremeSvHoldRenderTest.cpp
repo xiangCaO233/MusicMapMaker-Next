@@ -246,7 +246,9 @@ bool testExtremeSvHoldIsClippedBeforeBatching(bool independentHead)
     }
     return true;
 }
-/// @brief 验证原始 seg 的反向头部和正向尾部在停卷轴、Jump 后独立投影。
+/// @brief 验证原生及导入长条在停卷轴、Jump 后使用一致的尾部运动。
+/// @param positive 启用正向半速尾部，否则覆盖头尾反向。
+/// @param playing 检查播放快照；关闭时同时验证暂停拾取。
 /// @return 主体、尾端纹理及末端命中框均采用独立 HS 时返回真。
 /// @note 期望坐标直接按事件积分给出，不调用被测尾部锚点函数。
 /// @note 同一组件关闭标记后验证普通 Hold，防止修复改变共享 HS 的载体。
@@ -255,18 +257,21 @@ bool testExtremeSvHoldIsClippedBeforeBatching(bool independentHead)
 /// @note 期望值不包含游戏皮肤透视，验证编辑器平面坐标中的真实连接长度。
 /// @note 端点图块的中心代表时间位置，纹理上下边缘不参与长条长度计算。
 /// @note 测试仅使用内存图集，结果不依赖个人皮肤、音频或窗口状态。
-bool testIndependentEndHs()
+bool testIndependentEndHs(bool positive, bool playing)
 {
     using namespace MMM::Logic;
     // 注册表分域与真实会话一致，时间线缓存不能装在音符注册表中。
     // 不启动 Session，避免探针触发音频、目录监视或最近项目更新。
     entt::registry notes, samples, timeline;
     // 1 秒开始双倍滚动，1.5 秒 Jump 前进 0.2 秒，再在 1.75 秒停止。
-    // 头部位于 1 秒，尾部位于 2 秒，两端分别取 -0.2 和 +0.2。
+    // 两端分别覆盖异号反向和正向半速尾部；倍率整体缩小只用于保持纹理可见。
+    // 正向用例模拟头部 1、尾部 0.5 的比例，尾部在每段 Scroll 内应匀速移动。
+    const double headHs = positive ? 0.2 : -0.2;
+    const double tailHs = positive ? 0.1 : 0.2;
     for ( const auto& event :
           { TimelineComponent{ .m_timestamp = 0,
                                .m_effect    = MMM::TimingEffect::HS,
-                               .m_value     = -0.2 },
+                               .m_value     = headHs },
             TimelineComponent{ .m_timestamp = 1,
                                .m_effect    = MMM::TimingEffect::SCROLL,
                                .m_value     = 2 },
@@ -278,7 +283,7 @@ bool testIndependentEndHs()
                                .m_value     = 0 },
             TimelineComponent{ .m_timestamp = 2,
                                .m_effect    = MMM::TimingEffect::HS,
-                               .m_value     = 0.2 } } )
+                               .m_value     = tailHs } } )
         timeline.emplace<TimelineComponent>(timeline.create(), event);
     // 默认基础速度为每秒 500 单位；不传谱面以排除 osu! SliderMultiplier。
     // 保留真实默认布局，期望值只依赖纵向时间映射。
@@ -307,22 +312,35 @@ bool testIndependentEndHs()
     // 尾纹理尺寸不同于头部，能发现拾取框误用头部尺寸的错误。
     const glm::vec4 bodyUv{ .3F, .3F, .05F, .05F };
     const glm::vec4 endUv{ .5F, .5F, .05F, .05F };
-    // 显式关闭标记是普通 Hold 的兼容对照；启用后复用同一实体。
-    // 覆盖原地编辑元数据，避免只在首次创建对象时读取端点规则。
-    for ( bool independent : { false, true } ) {
-        note.m_metadata.note_properties[MMM::NoteMetadataType::MMM][std::string(
-            MMM::HOLD_INDEPENDENT_END_HS)] = independent ? "true" : "false";
+    // 无标记对应原生 MMM；显式开启对应 seg 导入，关闭对应 endbeat 导入。
+    // 同一实体切换来源语义，保证编辑后的快照不继续使用旧端点规则。
+    // 空元数据用例也验证新建长条，不能依赖加载器补上导入标记。
+    for ( int mode : { -1, 0, 1 } ) {
+        const bool independent = mode != 0;
+        note.m_metadata.note_properties.clear();
+        if ( mode >= 0 )
+            note.m_metadata
+                .note_properties[MMM::NoteMetadataType::MMM]
+                                [std::string(MMM::HOLD_INDEPENDENT_END_HS)] =
+                independent ? "true" : "false";
         // 当前时间跨过 Jump、停止段；同一对端点不能被预先缓存为固定高度。
         // 0.5 秒位于所有运动事件之前，1.6 秒已经经过正向 Jump。
         // 1.9 秒处于停止段，尾部仍应保留与头部不同的空间位置。
         // 极早时间的异号几何会跨屏，但载体本身尚未进入窗口，必须剔除。
         // 很晚的停止段仍可能显示该载体，不能用固定秒数窗口遮掩回归。
-        for ( double now : { -100.0, 0.5, 1.6, 1.9, 100.0 } ) {
+        std::vector<double> times{ -100.0, 0.5, 1.6, 1.9, 100.0 };
+        // 连续推进覆盖 Jump 前后与停卷轴，不能只用几个暂停时刻验证长度。
+        // 每帧直接检查尾纹理及拾取中心，防止主体正确但尾部使用另一套速度。
+        for ( int frame = 0; frame <= 90; ++frame )
+            times.push_back(0.5 + frame / 60.0);
+        for ( double now : times ) {
             RenderSnapshot snapshot;
             snapshot.hasBeatmap = true;
             // 暂停且允许交互时才生成拾取框，与编辑器暂停讲解场景一致。
             // 每帧新建快照，防止上一帧的尾部框或顶点掩盖漏画。
             snapshot.acceptsInteraction = true;
+            // 播放和暂停共用相同的端点轨迹，播放状态不能改变尾部倍率。
+            snapshot.isPlaying = playing;
             snapshot.uvMap.emplace(static_cast<uint32_t>(TextureID::None),
                                    glm::vec4{ 0, 0, .01, .01 });
             snapshot.uvMap.emplace(static_cast<uint32_t>(TextureID::Note),
@@ -333,14 +351,17 @@ bool testIndependentEndHs()
                                    endUv);
             // 手算积分：A(头)=500，A(尾)=500+750+200=1450。
             // 不经 ScrollCache 求期望值，避免同时改错缓存与渲染仍能通过。
-            // 当前积分依次为 250、500+600+200、500+750+200。
+            // 当前积分分为单速、双速、Jump 后双速与停止四段。
             // 正 Jump 的距离使用事件当时速度 1000，与毫秒参数的单位保持一致。
-            const double origin = now == 0.5 ? 250 : (now == 1.6 ? 1300 : 1450);
+            const double origin = now < 1      ? now * 500
+                                  : now < 1.5  ? 500 + (now - 1) * 1000
+                                  : now < 1.75 ? 700 + (now - 1) * 1000
+                                               : 1450;
             // 判定线固定在 600；负 HS 允许时间在未来但空间落在判定线下方。
             // 不把相对距离取绝对值，否则无法发现方向错误。
-            const double head = 600 - (500 - origin) * -0.2;
+            const double head = 600 - (500 - origin) * headHs;
             const double end =
-                600 - (1450 - origin) * (independent ? 0.2 : -0.2);
+                600 - (1450 - origin) * (independent ? tailHs : headHs);
             // 调用完整快照路径，同时覆盖候选剔除、主体和端点生成。
             // 使用主画布身份，预览缩放不参与此处期望坐标。
             System::NoteRenderSystem::generateSnapshot(notes,
@@ -420,7 +441,7 @@ bool testIndependentEndHs()
                 if ( box.entity == entity && box.part == HoverPart::HoldEnd )
                     hit = std::abs(box.y + box.h * .5 - end) < .01;
             }
-            if ( !hit ) {
+            if ( !playing && !hit ) {
                 XERROR("Hold end hitbox mismatch");
                 return false;
             }
@@ -439,7 +460,10 @@ int main()
     // 用例日志区分主体缺失、坐标越界、宽度异常及离屏尾部泄漏。
     return testExtremeSvHoldIsClippedBeforeBatching(false) &&
                    testExtremeSvHoldIsClippedBeforeBatching(true) &&
-                   testIndependentEndHs()
+                   testIndependentEndHs(false, false) &&
+                   testIndependentEndHs(true, false) &&
+                   testIndependentEndHs(false, true) &&
+                   testIndependentEndHs(true, true)
                ? 0
                : 1;
 }
