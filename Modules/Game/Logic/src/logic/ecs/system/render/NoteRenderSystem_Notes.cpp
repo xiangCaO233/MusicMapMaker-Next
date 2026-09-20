@@ -8,10 +8,12 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/AudioObjectLabelRenderer.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include "logic/ecs/system/render/HoldCarrierVisibility.h"
 #include "logic/ecs/system/render/NoteLaneGeometry.h"
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/note/HoldScrollSemantics.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -168,16 +170,17 @@ static NoteAbsYBucketIndex& getOrBuildNoteAbsYBucketIndex(
 /// @warning 热路径：音符可见性和命中盒计算中调用；保持纯计算，不得分配。
 /// @param note 当前主体物件，提供起点、类型和持续值。
 /// @param cache 保留的缓存参数；当前锚点规则不读取该指针。
-/// @return Hold 使用起点 HS，其余物件使用结束时间的 HS。
+/// @return Hold 按持久化语义选择头部或尾部 HS，其余物件使用结束时间。
 /// @note 返回的是显示倍率锚点，不是主体几何的结束时间。
 static double getCarrierEndAnchorTime(const NoteComponent& note,
                                       const ScrollCache*   cache)
 {
     (void)cache;
-    // Hold 主体两端共用起点 HS，避免跨 HS 变化时长度与起点分离。
-    // 终点实际时间仍由调用方传给 getDisplayDelta 的第一个参数。
+    // 原始 seg 的两端允许差速，剔除和拾取必须与绘制采用相同锚点。
+    // 未标记的 Hold 及折线虚拟载体仍保持共享起点 HS。
     if ( note.m_type == ::MMM::NoteType::HOLD ) {
-        return note.m_timestamp;
+        return ::MMM::holdEndHsAnchor(
+            note.m_metadata, note.m_timestamp, note.m_duration);
     }
     return note.m_timestamp + note.m_duration;
 }
@@ -899,6 +902,18 @@ static void collectNotesInRange(
     /// @return 至少存在有效样本且包络相交时为 true。
     /// @warning 候选精查热路径，成本仅来自当前物件覆盖的局部流速分段。
     auto isDisplayVisible = [&](const NoteComponent& note) {
+        // 索引包络只负责粗筛，不能代表根载体已经进入显示窗口。
+        // 即便独立端点跨越整个视口，载体未入场时仍须整体排除。
+        // 原始 seg 先按共享头部 HS 的载体范围入场，再检查独立节点几何。
+        // 主画布、预览、发光和拾取共用此候选入口，避免只隐藏某一绘制层。
+        if ( !isIndependentHoldCarrierVisible(note,
+                                              *cache,
+                                              currentTime,
+                                              currentAbsY,
+                                              minDelta - padDelta,
+                                              maxDelta + padDelta) ) {
+            return false;
+        }
         double minDisplayDelta = std::numeric_limits<double>::infinity();
         double maxDisplayDelta = -std::numeric_limits<double>::infinity();
 
@@ -1172,7 +1187,8 @@ void NoteRenderSystem::generateNoteHitboxes(
             laneGeometry.leftX -
             static_cast<float>(note.m_trackIndex) * singleTrackW;
 
-        // 主体起终点分别换算显示差，Hold 末端继续使用根时间 HS。
+        // 主体起终点分别换算显示差，Hold 末端按持久化语义选择 HS。
+        // 独立尾节点允许越过头部，下面的包络必须保留这种空间反转。
         // 命中范围必须与主体绘制使用相同倍率锚点，不能只按 duration
         // 乘全局速度。
         double displayDeltaStart = ctx.cache->getDisplayDelta(

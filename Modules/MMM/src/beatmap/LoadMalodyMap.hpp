@@ -6,6 +6,7 @@
 #include "log/colorful-log.h"
 #include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/note/HoldScrollSemantics.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -1060,7 +1061,13 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
                         h.m_timestamp = startTime;
                         h.m_track     = track;
                         h.m_duration  = std::max(0.0, firstTime - startTime);
-                        notePtr       = &h;
+                        // 原始 seg 首尾分别采样 HS；简化为 Hold
+                        // 后仍须保留此语义。
+                        // 多段折线的虚拟载体不加标记，继续共享各自起点 HS。
+                        h.m_metadata
+                            .note_properties[NoteMetadataType::MMM][std::string(
+                                HOLD_INDEPENDENT_END_HS)] = "true";
+                        notePtr                           = &h;
                     } else if ( firstTime == startTime ) {
                         Flick& f = beatMap.m_noteData.flicks.emplace_back();
                         f.m_type = NoteType::FLICK;
@@ -1259,9 +1266,9 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
 
     // 更新谱面元数据
     basemeta.name             = fmt::format("[mc] {} [{}] {}",
-                                basemeta.title,
-                                basemeta.track_count,
-                                basemeta.version);
+                                            basemeta.title,
+                                            basemeta.track_count,
+                                            basemeta.version);
     beatMap.m_baseMapMetadata = basemeta;
 
     // 最终同步引用

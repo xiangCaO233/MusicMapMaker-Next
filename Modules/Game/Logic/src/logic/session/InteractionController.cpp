@@ -8,6 +8,7 @@
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/SampleComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/ecs/system/render/HoldCarrierVisibility.h"
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/EditorAction.h"
 #include "logic/session/NoteAction.h"
@@ -20,6 +21,7 @@
 #include "logic/session/tool/GrabTool.h"
 #include "logic/session/tool/MarqueeTool.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/note/HoldScrollSemantics.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -65,6 +67,10 @@ struct SelectionScreenContext {
 
     /// @brief 当前视口判定线 Y 坐标。
     float judgmentLineY{ 0.0f };
+    /// @brief 视口底边，用于与渲染一致的根载体入场判断。
+    float viewportHeight{ 0.0f };
+    /// @brief 构造上下文时的动画时间，避免框选逐物件读取另一个时钟。
+    double currentTime{ 0.0 };
 
     /// @brief 轨道区左边界。
     float leftX{ 0.0f };
@@ -533,9 +539,11 @@ SelectionScreenContext makeSelectionScreenContext(
         (singleTrackW / baseAspect) * ctx.lastConfig.visual.noteScaleY;
     // 用动画时间作为屏幕锚点，与当前显示位置一致。
     // 若改用音频真实时间，平滑滚动期间框选会与可见物件错位。
-    screen.currentAbsY = cache->getAbsY(ctx.animateTime);
-    screen.valid       = screen.noteW > 0.0f && screen.noteH > 0.0f &&
-                         std::abs(screen.renderScaleY) > 1e-6f;
+    screen.currentTime    = ctx.animateTime;
+    screen.viewportHeight = cameraIt->second.viewportHeight;
+    screen.currentAbsY    = cache->getVisualAnchorAbsY(ctx.animateTime);
+    screen.valid          = screen.noteW > 0.0f && screen.noteH > 0.0f &&
+                            std::abs(screen.renderScaleY) > 1e-6f;
     return screen;
 }
 
@@ -703,16 +711,18 @@ SelectionRect makeTextureRect(const SelectionScreenContext& screen,
 /// @param duration Hold 持续秒数。
 /// @param trackIndex 主体起轨的统一轨号。
 /// @param dtrack Flick 终点相对起轨的轨差。
+/// @param metadata 普通根物件的长条语义；空指针表示折线虚拟载体。
 void includeCarrierRect(SelectionRect&                target,
                         const SelectionScreenContext& screen,
                         ::MMM::NoteType type, double timestamp, double duration,
-                        int trackIndex, int dtrack)
+                        int trackIndex, int dtrack,
+                        const ::MMM::NoteMetadata* metadata = nullptr)
 {
     if ( !screen.valid || !screen.uvMap ) return;
 
     const auto  startLane = selectionLaneGeometry(screen, trackIndex);
     const float laneScale = startLane.width / screen.singleTrackW;
-    // 正持续 Hold 沿时间方向形成主体，起止 Y 共用头部 HS 锚点。
+    // 根物件按持久化语义投影尾部，折线虚拟载体继续共用头部 HS。
     // 主体横向宽度按起始轨道所在区域的图块比例计算。
     if ( type == ::MMM::NoteType::HOLD && duration > 0.0 ) {
         const glm::vec2 bodySize =
@@ -725,7 +735,8 @@ void includeCarrierRect(SelectionRect&                target,
         const float ey = timeToScreenY(
             screen,
             carrierEndTime(type, timestamp, duration),
-            carrierEndAnchorTime(screen, type, timestamp, duration));
+            metadata ? ::MMM::holdEndHsAnchor(*metadata, timestamp, duration)
+                     : carrierEndAnchorTime(screen, type, timestamp, duration));
         includeRect(target, makeRect(x, sy, x + bodySize.x, ey));
     } else if ( type == ::MMM::NoteType::FLICK && dtrack != 0 ) {
         // Flick 终点可能跨入另一布局区域，必须重新解析终点轨。
@@ -820,6 +831,23 @@ SelectionRect makeNoteScreenRect(const NoteComponent&          note,
 {
     SelectionRect rect;
     if ( !screen.valid ) return rect;
+    // 框选可检查快照之外的实体，因此也须过滤尚未入场的独立 HS 长条。
+    // 使用整个视口而非选框作为载体窗口，随后再按实际拉伸几何判断命中。
+    // 像素边界换算回缓存距离，避免预览压缩比例改变载体生命周期。
+    // 门禁失败保留无效矩形，使不可见长条无法参与后续矩形相交。
+    const double maxDelta =
+        (screen.judgmentLineY + screen.noteH) / screen.renderScaleY;
+    const double minDelta =
+        (screen.judgmentLineY - screen.viewportHeight - screen.noteH) /
+        screen.renderScaleY;
+    if ( !System::isIndependentHoldCarrierVisible(
+             note,
+             *screen.cache,
+             screen.currentTime,
+             screen.currentAbsY,
+             std::min(minDelta, maxDelta),
+             std::max(minDelta, maxDelta)) )
+        return rect;
 
     // 普通点击只有本体纹理，无需合并不存在的主体或末端。
     // 返回仍带 valid 状态，由纹理投影失败或退化矩形决定。
@@ -848,16 +876,16 @@ SelectionRect makeNoteScreenRect(const NoteComponent&          note,
                            note.m_timestamp,
                            note.m_duration,
                            note.m_trackIndex,
-                           note.m_dtrack);
-        includeRect(
-            rect,
-            makeTextureRect(
-                screen,
-                TextureID::HoldEnd,
-                static_cast<float>(note.m_trackIndex),
-                note.m_timestamp + note.m_duration,
-                carrierEndAnchorTime(
-                    screen, note.m_type, note.m_timestamp, note.m_duration)));
+                           note.m_dtrack,
+                           &note.m_metadata);
+        includeRect(rect,
+                    makeTextureRect(screen,
+                                    TextureID::HoldEnd,
+                                    static_cast<float>(note.m_trackIndex),
+                                    note.m_timestamp + note.m_duration,
+                                    ::MMM::holdEndHsAnchor(note.m_metadata,
+                                                           note.m_timestamp,
+                                                           note.m_duration)));
         return rect;
     }
 

@@ -3,6 +3,7 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include "mmm/note/HoldScrollSemantics.h"
 
 #include <algorithm>
 #include <cmath>
@@ -115,10 +116,15 @@ void NoteRenderSystem::renderHold(
         judgmentLineY - cache->getDisplayDelta(
                             note.m_timestamp, currentAbsY, note.m_timestamp) *
                             static_cast<double>(renderScaleY);
-    // 尾部沿用 Hold 起点作为显示锚点，与既有滚动语义保持一致。
+    // 原始单段 seg 尾部独立采样 HS，其他 Hold 保留共享起点的规则。
+    // 两端不同 HS 时长度随当前卷轴变化，不得缓存为固定时长乘速度。
     const double endY =
         judgmentLineY -
-        cache->getDisplayDelta(holdEndTime, currentAbsY, note.m_timestamp) *
+        cache->getDisplayDelta(
+            holdEndTime,
+            currentAbsY,
+            ::MMM::holdEndHsAnchor(
+                note.m_metadata, note.m_timestamp, note.m_duration)) *
             static_cast<double>(renderScaleY);
     // 调用方可能提供翻转边界，先规整为递增区间再执行 clamp。
     // 使用实际轨道上下边界而非硬编码窗口高度，兼容主画布与预览缩放。
