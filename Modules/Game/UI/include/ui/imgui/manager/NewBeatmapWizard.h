@@ -114,11 +114,14 @@ private:
 
     /// @brief 绘制已打开谱面的模板选择弹窗。
     /// @param templateOptions 当前已打开且可作为模板的谱面列表。
+    /// @param sourceManager 提供模板选择成功后的演练状态更新。
     void renderTemplatePickerPopup(
-        const std::vector<OpenTemplateOption>& templateOptions);
+        const std::vector<OpenTemplateOption>& templateOptions,
+        UIManager*                             sourceManager);
 
     /// @brief 绘制模板内容复制选项弹窗。
-    void renderTemplateOptionsPopup();
+    /// @param sourceManager 提供选项确认后的演练状态更新。
+    void renderTemplateOptionsPopup(UIManager* sourceManager);
 
     /// @brief 绘制内部名称冲突警告弹窗。
     /// @param sourceManager 提供突出引导目标注册。

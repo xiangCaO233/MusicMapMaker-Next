@@ -148,9 +148,14 @@ void MainMenuView::renderMenus(UIManager*          sourceManager,
 
         const bool menuOpen = ::MMM::UI::FeedbackBeginMenu(menuLabel);
         // BeginMenu 刚提交的 LastItem 就是一级菜单按钮，须在弹窗内容前捕获。
-        if ( sourceManager )
-            sourceManager->walkthroughSpotlight().reportLastItem(
-                walkthroughTarget(menuId));
+        if ( sourceManager ) {
+            const auto target    = walkthroughTarget(menuId);
+            auto&      spotlight = sourceManager->walkthroughSpotlight();
+            spotlight.reportLastItem(target);
+            if ( menuOpen )
+                // 菜单实际展开是一级入口成功，不用鼠标位置推测点击结果。
+                spotlight.completeTarget(target);
+        }
         if ( menuOpen ) {
             // 关闭请求优先于内容渲染，避免关闭帧仍触发菜单项。
             if ( m_navigationController.consumeCloseRequest(menuId) ) {

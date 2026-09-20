@@ -632,6 +632,10 @@ void NewBeatmapWizard::applyMeasuredTimingsFromTool(
     m_bpm             = m_measuredTimings.front().m_bpm;
     // 只有有效结果真正回填后才推进节奏测量演练步骤。
     publishInteraction(Event::BeatmapCreateInteractionStage::TimingMeasured);
+    if ( m_boundBpmToolManager )
+        // 回调成功即直接推进突出层，不等待下一帧事件归约后再隐藏旧目标。
+        m_boundBpmToolManager->walkthroughSpotlight().completeTarget(
+            "new-beatmap.timing.auto");
     if ( m_manualBpmMeasurementActive ) {
         // 手动流程观察此标志后恢复被暂时关闭的模态向导。
         m_manualBpmMeasurementExported = true;
@@ -786,11 +790,13 @@ void NewBeatmapWizard::submitCreateRequest()
 
 /// @brief 绘制当前打开谱面列表并处理模板选择。
 /// @param templateOptions 本帧收集的可用模板候选。
+/// @param sourceManager 提供模板选择成功后的演练状态更新。
 ///
 /// 弹窗使用稳定内部名称，列表项以 cameraId 构造唯一 ID。选择后先继承默认资源，
 /// 再关闭选择器并请求打开复制选项弹窗。
 void NewBeatmapWizard::renderTemplatePickerPopup(
-    const std::vector<OpenTemplateOption>& templateOptions)
+    const std::vector<OpenTemplateOption>& templateOptions,
+    UIManager*                             sourceManager)
 {
     if ( ImGui::BeginPopupModal(
              "NewBeatmapTemplatePicker",
@@ -822,6 +828,9 @@ void NewBeatmapWizard::renderTemplatePickerPopup(
                     selectTemplate(option);
                     m_shouldOpenTemplateOptions = true;
                     ImGui::CloseCurrentPopup();
+                    if ( sourceManager )
+                        sourceManager->walkthroughSpotlight().completeTarget(
+                            "new-beatmap.template.pick");
                 }
                 if ( !option.mapPath.empty() && ImGui::IsItemHovered() ) {
                     // 完整源路径只在悬停时显示，避免挤占列表宽度。
@@ -843,12 +852,13 @@ void NewBeatmapWizard::renderTemplatePickerPopup(
 }
 
 /// @brief 绘制模板内容复制范围选项弹窗。
+/// @param sourceManager 提供选项确认后的演练状态更新。
 ///
 /// 三个布尔项分别控制元数据、时间线和物件复制；确认与取消都只关闭弹窗，因为
 /// checkbox 已直接写入向导状态，最终是否使用由创建命令决定。
 /// 弹窗本身不要求模板仍存在；若源会话同时关闭，主向导下一帧会清理陈旧选择并禁用
 /// 创建。所有控件使用反馈包装以保持全局悬停和点击音效一致。
-void NewBeatmapWizard::renderTemplateOptionsPopup()
+void NewBeatmapWizard::renderTemplateOptionsPopup(UIManager* sourceManager)
 {
     if ( ImGui::BeginPopupModal(
              "NewBeatmapTemplateOptions",
@@ -874,6 +884,9 @@ void NewBeatmapWizard::renderTemplateOptionsPopup()
         if ( ::MMM::UI::FeedbackButton(TR("ui.help.ok").data(),
                                        ImVec2(120.0f, 0.0f)) ) {
             ImGui::CloseCurrentPopup();
+            if ( sourceManager )
+                sourceManager->walkthroughSpotlight().completeTarget(
+                    "new-beatmap.template.options");
         }
         ImGui::SameLine();
         // 取消沿用当前 checkbox 值，与即时编辑控件语义一致。
@@ -911,15 +924,20 @@ void NewBeatmapWizard::renderDuplicateNameWarningPopup(UIManager* sourceManager)
 
         ImGui::Spacing();
         // 继续按钮绕过本轮重复检查并直接构造命令。
-        if ( ::MMM::UI::FeedbackButton(
-                 TR("ui.wizard.new_beatmap.duplicate_name.continue").data(),
-                 ImVec2(140.0f, 0.0f)) ) {
+        const bool continueClicked = ::MMM::UI::FeedbackButton(
+            TR("ui.wizard.new_beatmap.duplicate_name.continue").data(),
+            ImVec2(140.0f, 0.0f));
+        if ( continueClicked ) {
             ImGui::CloseCurrentPopup();
             submitCreateRequest();
         }
         // 重名确认只在警告弹窗出现时可见，作为创建按钮之后的引导阶段。
         if ( sourceManager )
             sourceManager->walkthroughSpotlight().reportLastItem(
+                "new-beatmap.duplicate.continue");
+        if ( continueClicked && sourceManager )
+            // 创建请求已经提交后才完成重名确认目标。
+            sourceManager->walkthroughSpotlight().completeTarget(
                 "new-beatmap.duplicate.continue");
         ImGui::SameLine();
         // 取消只关闭警告，让用户留在主向导修改内部名。
@@ -984,6 +1002,12 @@ void NewBeatmapWizard::renderTemplateSourceControls(
     if ( sourceManager )
         sourceManager->walkthroughSpotlight().reportLastItem(
             "new-beatmap.template.mode");
+    if ( sourceManager &&
+         (chooseTemplate || m_createMode == CreateMode::OpenTemplate) )
+        // 当前模式是稳定业务状态，可在每帧直接推进而不依赖点击推测。
+        // 重放引导时若已处于模板模式，也应立即等待真正的模板选择目标。
+        sourceManager->walkthroughSpotlight().completeTarget(
+            "new-beatmap.template.mode");
     if ( chooseTemplate ) {
         // 选择模板模式后立即请求选择器，并默认复制时间线结构。
         m_createMode                    = CreateMode::OpenTemplate;
@@ -1045,14 +1069,14 @@ void NewBeatmapWizard::renderTemplateSourceControls(
         m_shouldOpenTemplatePicker = false;
     }
     // BeginPopupModal 自行判断当前是否真正打开。
-    renderTemplatePickerPopup(templateOptions);
+    renderTemplatePickerPopup(templateOptions, sourceManager);
 
     if ( m_shouldOpenTemplateOptions ) {
         // 选择模板后或用户点击选项按钮时打开。
         ::MMM::UI::FeedbackOpenPopup("NewBeatmapTemplateOptions");
         m_shouldOpenTemplateOptions = false;
     }
-    renderTemplateOptionsPopup();
+    renderTemplateOptionsPopup(sourceManager);
 }
 
 /// @brief 按目标资源类型打开原生或 ImGui 文件选择器。
@@ -1372,14 +1396,15 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
 
     // 偏好区保存双精度 BPM，但 ImGui 控件临时使用 float。
     ImGui::SeparatorText(TR("ui.settings.beatmap.preference").data());
-    float bpm = (float)m_bpm;
-    if ( ::MMM::UI::FeedbackDragFloat(
-             TR("ui.settings.beatmap.bpm").data(),
-             &bpm,
-             0.1f,
-             static_cast<float>(::MMM::MIN_NORMALIZED_BPM),
-             static_cast<float>(::MMM::MAX_NORMALIZED_BPM),
-             "%.2f") ) {
+    float      bpm        = (float)m_bpm;
+    const bool bpmChanged = ::MMM::UI::FeedbackDragFloat(
+        TR("ui.settings.beatmap.bpm").data(),
+        &bpm,
+        0.1f,
+        static_cast<float>(::MMM::MIN_NORMALIZED_BPM),
+        static_cast<float>(::MMM::MAX_NORMALIZED_BPM),
+        "%.2f");
+    if ( bpmChanged ) {
         // 使用领域 helper 统一限制项目支持的 BPM 范围。
         m_bpm = ::MMM::normalizeBpmValue(bpm);
         if ( m_measuredTimings.size() == 1 ) {
@@ -1397,6 +1422,10 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     // BPM 控件用于复核半频或倍频误判，不代替实际听音判断。
     if ( sourceManager )
         sourceManager->walkthroughSpotlight().reportLastItem(
+            "new-beatmap.timing.bpm");
+    if ( bpmChanged && sourceManager )
+        // 数值实际写回后才视为修正动作完成；只点击控件不会推进。
+        sourceManager->walkthroughSpotlight().completeTarget(
             "new-beatmap.timing.bpm");
     if ( !m_measuredTimings.empty() ) {
         // 摘要提醒用户创建命令将携带测量得到的 Timing 点。
@@ -1512,6 +1541,11 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
             audioRowMin,
             ImGui::GetItemRectMax(),
             ImGui::GetWindowViewport());
+    if ( sourceManager && !m_selectedAudioPath.empty() )
+        // 已绑定有效音频是每帧可验证的完成状态，避免选择后旧目标反弹。
+        // 该判断覆盖下拉选择、拖放和两种文件选择器的统一结果。
+        sourceManager->walkthroughSpotlight().completeTarget(
+            "new-beatmap.audio");
     // 没有稳定主音轨 ID 时 BPM 工具无法解析音频池资源。
     if ( m_selectedAudioTrackId.empty() ) {
         ImGui::BeginDisabled();
@@ -1567,6 +1601,11 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     // 自动测偏按钮是推荐入口；手动工具仍沿用原有并列布局与行为。
     if ( sourceManager )
         sourceManager->walkthroughSpotlight().reportLastItem(
+            "new-beatmap.timing.auto");
+    if ( sourceManager && !m_measuredTimings.empty() )
+        // 只有有效 Timing 已回填才完成自动测量目标，点击启动按钮并不等价。
+        // 已有结果重放时同样直接退出旧高亮，交由下一复核步骤处理。
+        sourceManager->walkthroughSpotlight().completeTarget(
             "new-beatmap.timing.auto");
     if ( m_selectedAudioTrackId.empty() ) {
         ImGui::EndDisabled();
@@ -1706,8 +1745,9 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         ImGui::BeginDisabled();
     }
 
-    if ( ::MMM::UI::FeedbackButton(TR("ui.wizard.new_beatmap.create").data(),
-                                   ImVec2(120, 0)) ) {
+    const bool createClicked = ::MMM::UI::FeedbackButton(
+        TR("ui.wizard.new_beatmap.create").data(), ImVec2(120, 0));
+    if ( createClicked ) {
         if ( hasInternalNameConflict() ) {
             // 重名只进入确认弹窗，不立即丢弃当前输入。
             ::MMM::UI::FeedbackOpenPopup("NewBeatmapDuplicateNameWarning");
@@ -1718,6 +1758,10 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     }
     if ( sourceManager )
         sourceManager->walkthroughSpotlight().reportLastItem(
+            "new-beatmap.create");
+    if ( createClicked && sourceManager )
+        // 校验已通过并进入提交或重名确认分支，当前创建目标不应再次显示。
+        sourceManager->walkthroughSpotlight().completeTarget(
             "new-beatmap.create");
 
     if ( !canCreate ) {
@@ -1745,6 +1789,10 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     m_pendingDrops.clear();
     // 内置文件选择器也作为向导帧的一部分驱动。
     renderResourcePicker();
+    if ( sourceManager && !m_selectedAudioPath.empty() )
+        // 选择器在资源区之后提交，成功导入仍须在同一帧完成音频目标。
+        sourceManager->walkthroughSpotlight().completeTarget(
+            "new-beatmap.audio");
     if ( !m_resourceImportError.empty() ) {
         // 错误保留到下一次选择开始或成功导入。
         ImGui::TextWrapped("%s: %s",

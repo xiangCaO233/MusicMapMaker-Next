@@ -3,6 +3,7 @@
 #include <imgui.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -13,8 +14,8 @@ namespace MMM::UI::Walkthrough
 /// @brief 突出当前演练目标，并用可确认提示推进配置中的目标阶段。
 ///
 /// 引导目标使用与本地化文本无关的语义 ID。一个步骤可以提供多个按流程排列的
-/// 候选目标，当前帧实际出现的最后一个候选获得最高优先级，适合菜单、弹窗和
-/// 多页向导依次出现的即时模式界面。
+/// 候选目标。后续目标一旦出现，状态机便单调推进且不再回退，适合菜单、弹窗
+/// 和多页向导依次出现的即时模式界面。
 class Spotlight
 {
 public:
@@ -24,7 +25,7 @@ public:
 
     /// @brief 启动或替换当前引导步骤。
     /// @param targets 按流程先后排列的语义目标 ID，后出现的可见目标优先。
-    /// @param prompt 没有可见目标时显示的提示，也用于目标旁的说明气泡。
+    /// @param prompt 纯文字步骤的操作提示或目标旁的说明气泡。
     /// @warning 用户显式进入引导时调用；允许复制字符串，不得每帧重复启动。
     void start(const std::vector<std::string>& targets, std::string prompt);
 
@@ -41,6 +42,11 @@ public:
     /// @brief 确认当前可见阶段，隐藏其遮罩并等待后续目标出现。
     /// 最后一个目标被确认时结束本次引导；没有可见目标时不改变流程。
     void acknowledgeCurrentStage();
+
+    /// @brief 通知突出层某个语义目标已经由业务逻辑正确完成。
+    /// @param targetId 与演练配置中的 targets 项一致。
+    /// @warning 只更新引导状态，不执行控件动作；调用方必须先确认业务成功。
+    void completeTarget(std::string_view targetId);
 
     /// @brief 用最近提交的 ImGui 控件矩形上报语义目标。
     /// @param targetId 与演练配置中的 targets 项一致。
@@ -71,6 +77,13 @@ public:
     [[nodiscard]] std::optional<ImVec2> acknowledgeButtonCenter() const;
 
 private:
+    /// @brief 突出引导逐帧状态；阶段完成后只能单调向后推进。
+    enum class State : std::uint8_t {
+        Inactive,     ///< 没有正在运行的引导。
+        Waiting,      ///< 等待当前阶段目标在本帧上报。
+        Highlighting  ///< 当前阶段拥有本帧有效矩形，可以绘制高亮层。
+    };
+
     /// @brief 当前帧选中的目标矩形及所属视口。
     struct Anchor {
         /// @brief 候选目标在配置列表中的索引，数值越大优先级越高。
@@ -83,16 +96,20 @@ private:
         ImGuiViewport* viewport{ nullptr };
     };
 
+    /// @brief 完成指定目标阶段并保持状态机单调前进。
+    /// @param priority 已由业务结果或“知道了”确认的目标索引。
+    void completeStage(std::size_t priority);
+
     /// @brief 当前引导候选目标，仅在用户进入另一引导时替换。
     std::vector<std::string> m_targets;
     /// @brief 当前引导提示文本，来自已验证的演练配置。
     std::string m_prompt;
     /// @brief 本帧优先级最高的可见目标。
     std::optional<Anchor> m_anchor;
-    /// @brief 最近由“知道了”确认的目标优先级，旧目标不再重新产生遮罩。
-    std::optional<std::size_t> m_acknowledgedPriority;
-    /// @brief 是否已有用户启动引导。
-    bool m_active{ false };
+    /// @brief 当前尚待完成的目标索引；后续目标出现时只会单调增加。
+    std::size_t m_stage{ 0 };
+    /// @brief 当前逐帧引导状态。
+    State m_state{ State::Inactive };
     /// @brief 当前帧演练页面是否仍可见，防止关闭页面后残留遮罩。
     bool m_keepAlive{ false };
     /// @brief 鼠标左键上一帧状态，用于不依赖模态 HoveredWindow 的边沿判断。

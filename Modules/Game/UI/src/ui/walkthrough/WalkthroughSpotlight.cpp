@@ -18,8 +18,8 @@
 /// - 画布和复合控件可以调用 reportTarget 上报显式屏幕矩形；
 /// - 演练页面可见时调用 keepAlive，隐藏后本帧不再绘制；
 /// - UIManager 在全部视图更新结束后统一调用 render；
-/// - “知道了”确认当前目标后，仅忽略该目标及其之前的阶段；
-/// - 后续控件尚未出现时保留文字提示，不重新遮住已确认控件；
+/// - 业务控件成功完成目标或点击“知道了”都会推进同一状态机；
+/// - 后续控件尚未出现时进入等待态，不重新遮住已完成控件；
 /// - stop 清理配置和几何，后续控件上报成为无操作。
 ///
 /// 目标解析：
@@ -28,16 +28,16 @@
 /// - 同帧候选按配置索引决定优先级，列表末项优先；
 /// - 菜单项出现后可自然覆盖一级菜单目标；
 /// - 向导下一页出现后可自然覆盖仍在后台绘制的菜单目标；
-/// - 未确认候选消失时同帧回退到仍上报的前序目标；
-/// - 已确认候选永久跳过，直到启动另一个步骤并重置阶段；
-/// - 未上报目标时只显示 prompt，不伪造控件亮区。
+/// - 后续候选一旦出现便推进当前阶段，消失后也不回退到前序目标；
+/// - 已完成候选永久跳过，直到启动另一个步骤并重置状态机；
+/// - 有目标但未上报时不绘制；纯文字步骤只显示 prompt，不伪造亮区。
 ///
 /// 阶段确认约定：
-/// - 确认水位记录目标索引而不是控件地址，布局重建不影响结果；
-/// - 确认当前目标时一并跳过所有更早目标，流程只会向前推进；
-/// - 确认不会模拟点击或修改业务数据，原控件仍需用户实际操作；
-/// - 当前界面未切换时已确认目标保持无罩，避免遮罩立即反弹；
-/// - 后续目标一旦由业务窗口提交，就按配置顺序恢复突出显示；
+/// - 状态机记录待完成目标索引而不是控件地址，布局重建不影响结果；
+/// - 完成当前目标时一并跳过所有更早目标，流程只会向前推进；
+/// - 业务成功由控件显式通知，突出层不会用鼠标手势猜测执行结果；
+/// - 当前界面未切换时已完成目标保持无罩，避免遮罩立即反弹；
+/// - 后续目标由业务窗口提交后，状态机才恢复突出显示；
 /// - 最后一项目标确认后调用 stop，页面在下一帧同步退出引导状态；
 /// - 没有控件目标的纯文字提示不存在可确认的遮罩阶段。
 ///
@@ -87,6 +87,19 @@ void addFilledRect(ImDrawList& draw, const ImVec2& minimum,
     if ( maximum.x > minimum.x && maximum.y > minimum.y )
         draw.AddRectFilled(minimum, maximum, color);
 }
+
+/// @brief 判断屏幕坐标是否落在半开矩形内。
+/// @param point 待判断坐标。
+/// @param minimum 矩形左上角。
+/// @param maximum 矩形右下角。
+/// @return 坐标位于矩形内时返回 true。
+/// @warning UI 热路径：每帧只执行固定次数的标量比较。
+bool containsPoint(const ImVec2& point, const ImVec2& minimum,
+                   const ImVec2& maximum)
+{
+    return point.x >= minimum.x && point.x < maximum.x &&
+           point.y >= minimum.y && point.y < maximum.y;
+}
 }  // namespace
 
 /// @brief 清除上一帧目标几何并等待可见页面续租。
@@ -97,11 +110,14 @@ void Spotlight::beginFrame()
     m_anchor.reset();
     m_acknowledgeButtonCenter.reset();
     m_keepAlive = false;
+    if ( m_state == State::Highlighting )
+        // 每帧重新等待控件上报，防止窗口关闭后继续绘制旧矩形。
+        m_state = State::Waiting;
 }
 
 /// @brief 启动配置声明的目标流程。
 /// @param targets 候选目标按流程排列，后出现的可见项覆盖前项。
-/// @param prompt 无目标时的操作提示和有目标时的气泡说明。
+/// @param prompt 纯文字步骤的操作提示或目标高亮时的气泡说明。
 void Spotlight::start(const std::vector<std::string>& targets,
                       std::string                     prompt)
 {
@@ -109,8 +125,8 @@ void Spotlight::start(const std::vector<std::string>& targets,
     m_targets = targets;
     m_prompt  = std::move(prompt);
     m_anchor.reset();
-    m_acknowledgedPriority.reset();
-    m_active                  = true;
+    m_stage                   = 0;
+    m_state                   = State::Waiting;
     m_keepAlive               = true;
     m_acknowledgeMouseWasDown = false;
     m_acknowledgePressed      = false;
@@ -120,13 +136,13 @@ void Spotlight::start(const std::vector<std::string>& targets,
 /// @brief 停止引导并清除可见目标与提示文本。
 void Spotlight::stop()
 {
-    m_active                  = false;
+    m_state                   = State::Inactive;
+    m_stage                   = 0;
     m_keepAlive               = false;
     m_acknowledgeMouseWasDown = false;
     m_acknowledgePressed      = false;
     m_acknowledgeButtonCenter.reset();
     m_anchor.reset();
-    m_acknowledgedPriority.reset();
     m_targets.clear();
     m_prompt.clear();
 }
@@ -135,27 +151,47 @@ void Spotlight::stop()
 /// @return 已启动且尚未停止时返回 true。
 bool Spotlight::active() const
 {
-    return m_active;
+    return m_state != State::Inactive;
 }
 
 /// @brief 允许当前可见演练页面在本帧继续显示引导。
 void Spotlight::keepAlive()
 {
-    if ( m_active ) m_keepAlive = true;
+    if ( active() ) m_keepAlive = true;
 }
 
 /// @brief 跳过当前已经定位到的目标阶段。
 void Spotlight::acknowledgeCurrentStage()
 {
-    if ( !m_active || !m_anchor ) return;
+    if ( m_state != State::Highlighting || !m_anchor ) return;
+    completeStage(m_anchor->priority);
+}
+
+/// @brief 通知状态机某个语义目标已经由业务逻辑正确完成。
+/// @param targetId 与当前配置中的目标 ID 一致。
+void Spotlight::completeTarget(std::string_view targetId)
+{
+    if ( !active() ) return;
+    const auto it = std::find(m_targets.begin(), m_targets.end(), targetId);
+    if ( it == m_targets.end() ) return;
+    completeStage(static_cast<std::size_t>(it - m_targets.begin()));
+}
+
+/// @brief 完成指定目标阶段并清除当前帧旧几何。
+/// @param priority 已由业务结果或“知道了”确认的目标索引。
+void Spotlight::completeStage(std::size_t priority)
+{
+    if ( !active() || priority < m_stage || priority >= m_targets.size() )
+        return;
     // 最后一个目标确认后没有后续阶段，直接结束并让页面同步退出状态。
-    if ( m_anchor->priority + 1 >= m_targets.size() ) {
+    if ( priority + 1 >= m_targets.size() ) {
         stop();
         return;
     }
-    // 保存单调递增水位，当前界面未变化时不会重新遮住已确认控件。
-    m_acknowledgedPriority = m_anchor->priority;
+    // 完成后进入等待态，直到后续目标在新布局中提供本帧有效矩形。
+    m_stage = priority + 1;
     m_anchor.reset();
+    m_state = State::Waiting;
 }
 
 /// @brief 捕获最近一个可见 ImGui Item 的实际屏幕矩形。
@@ -163,7 +199,7 @@ void Spotlight::acknowledgeCurrentStage()
 void Spotlight::reportLastItem(std::string_view targetId)
 {
     // 被裁剪的列表项没有可靠可见几何，不应在屏幕外留下突出框。
-    if ( !m_active || !ImGui::IsItemVisible() ) return;
+    if ( !active() || !ImGui::IsItemVisible() ) return;
     reportTarget(targetId,
                  ImGui::GetItemRectMin(),
                  ImGui::GetItemRectMax(),
@@ -178,20 +214,24 @@ void Spotlight::reportLastItem(std::string_view targetId)
 void Spotlight::reportTarget(std::string_view targetId, const ImVec2& minimum,
                              const ImVec2& maximum, ImGuiViewport* viewport)
 {
-    if ( !m_active || maximum.x <= minimum.x || maximum.y <= minimum.y ) return;
+    if ( !active() || maximum.x <= minimum.x || maximum.y <= minimum.y ) return;
     // 配置列表通常只有数项；线性查找避免为逐帧注册建立哈希表和分配节点。
     const auto it = std::find(m_targets.begin(), m_targets.end(), targetId);
     if ( it == m_targets.end() ) return;
     const auto priority = static_cast<std::size_t>(it - m_targets.begin());
-    // “知道了”只关闭当前及先前阶段，不影响尚未出现的后续控件。
-    if ( m_acknowledgedPriority && priority <= *m_acknowledgedPriority ) return;
-    // 同帧出现多个流程阶段时，排列更靠后的目标代表更深入的当前界面。
-    if ( m_anchor && m_anchor->priority > priority ) return;
+    // 已完成阶段永久忽略；后续目标可见本身证明界面已经越过中间阶段。
+    if ( priority < m_stage ) return;
+    if ( priority > m_stage ) {
+        m_stage = priority;
+        m_anchor.reset();
+    }
+    // 同一阶段可以由复合控件重复上报，最后一份可见几何作为当前锚点。
     m_anchor =
         Anchor{ .priority = priority,
                 .minimum  = minimum,
                 .maximum  = maximum,
                 .viewport = viewport ? viewport : ImGui::GetWindowViewport() };
+    m_state = State::Highlighting;
 }
 
 /// @brief 绘制不阻挡目标操作、但允许确认当前阶段的引导层。
@@ -199,7 +239,11 @@ void Spotlight::reportTarget(std::string_view targetId, const ImVec2& minimum,
 /// @param acknowledgeLabel 当前语言的确认按钮文本。
 void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
 {
-    if ( !m_active || !m_keepAlive ) return;
+    if ( !active() || !m_keepAlive ) return;
+    const bool promptOnly = m_targets.empty();
+    // 有目标的引导只在本帧重新解析到当前阶段时显示，等待态不绘制旧高亮。
+    if ( m_state != State::Highlighting && !promptOnly ) return;
+
     ImGuiViewport* viewport = m_anchor && m_anchor->viewport
                                   ? m_anchor->viewport
                                   : ImGui::GetMainViewport();
@@ -331,8 +375,7 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
         const ImGuiIO& io      = ImGui::GetIO();
         const ImVec2   pointer = io.MousePos;
         const bool     pointerInside =
-            pointer.x >= acknowledgeMin->x && pointer.x < acknowledgeMax->x &&
-            pointer.y >= acknowledgeMin->y && pointer.y < acknowledgeMax->y;
+            containsPoint(pointer, *acknowledgeMin, *acknowledgeMax);
         const bool mouseDown = io.MouseDown[ImGuiMouseButton_Left];
         if ( mouseDown ) {
             // 只在按下边沿记录起点；按住后拖出按钮会取消本次确认。
@@ -354,6 +397,12 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
         m_acknowledgeMouseWasDown =
             ImGui::GetIO().MouseDown[ImGuiMouseButton_Left];
         m_acknowledgePressed = false;
+    }
+
+    // 普通按钮结果与模态矩形补充判定都直接推进同一状态机。
+    if ( acknowledged ) {
+        acknowledgeCurrentStage();
+        return;
     }
 
     ImDrawList& draw = *ImGui::GetForegroundDrawList(viewport);
@@ -389,7 +438,6 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
                      ImDrawFlags_None,
                      (2.0f + pulse) * dpiScale);
     }
-    if ( acknowledged ) acknowledgeCurrentStage();
 }
 
 /// @brief 查询本帧被配置优先级解析选中的目标。

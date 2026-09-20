@@ -12,7 +12,8 @@
 ///
 /// 覆盖场景：
 /// - 同帧多个候选目标按配置顺序选择最后一个可见目标；
-/// - 后续帧目标消失时立即回退到仍可见的前序目标；
+/// - 后续目标一旦出现即推进状态机，消失后不再回退到前序目标；
+/// - 业务成功通知与“知道了”共用同一阶段完成入口；
 /// - 显式矩形与普通 ImGui Item 使用同一解析路径；
 /// - 遮罩向 ForegroundDrawList 增加顶点，提示创建固定 ID 的 Tooltip 层窗口；
 /// - 确认当前阶段后旧目标不再产生遮罩，后续目标仍可被解析；
@@ -68,7 +69,7 @@
 /// - 仅确认按钮模拟鼠标点击，被突出控件仍由用户负责实际操作；
 /// - 测试不检查音效资源，统一反馈实现只验证可安全链接与绘制；
 /// - 测试不持久化引导状态，Spotlight 只拥有易失 UI 状态；
-/// - 返回码区分字体、优先级、回退、自定义区域、阶段和续租失败；
+/// - 返回码区分字体、单调阶段、自定义区域、阶段和续租失败；
 /// - 测试完成后不保留全局 ImGui 上下文或活动引导对象。
 
 namespace
@@ -161,9 +162,9 @@ int main()
         return 2;
     }
 
-    // 第二帧只提交第一项，解析不得沿用上一帧已经消失的第二项矩形。
-    // 这覆盖停靠布局变化和菜单收起：控件矩形是逐帧数据，旧的高优先级
-    // 目标即使曾经出现，也不能盖过当前真实可见的较早目标。
+    // 第二帧只提交第一项，状态机仍不得退回已经越过的前序目标。
+    // 这覆盖点击菜单项后弹窗尚未出现的过渡帧：旧按钮即使仍可见，
+    // 也不能立刻再次成为高亮位置；等待态只接受当前或后续阶段。
     ImGui::NewFrame();
     spotlight.beginFrame();
     ImGui::SetNextWindowPos({ 260.0f, 220.0f });
@@ -172,12 +173,25 @@ int main()
     spotlight.reportLastItem("test.first");
     ImGui::End();
     spotlight.keepAlive();
+    foreground = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
+    const int waitingVerticesBefore = foreground->VtxBuffer.Size;
     spotlight.render(1.0f, "Got it");
-    const bool fallbackValid = spotlight.resolvedTargetId() == "test.first";
+    const bool noReboundValid =
+        spotlight.resolvedTargetId().empty() && spotlight.active() &&
+        foreground->VtxBuffer.Size == waitingVerticesBefore;
     ImGui::Render();
-    if ( !fallbackValid ) {
+    if ( !noReboundValid ) {
         ImGui::DestroyContext();
         return 3;
+    }
+
+    // 业务控件确认第二项目标实际成功后直接完成状态机，不依赖鼠标位置猜测。
+    // 重复或晚到通知由目标索引约束保持幂等。
+    // 最后一项目标成功后 active 立即清除，页面下一帧即可同步结束按钮状态。
+    spotlight.completeTarget("test.second");
+    if ( spotlight.active() ) {
+        ImGui::DestroyContext();
+        return 10;
     }
 
     // 自定义区域无需对应标准控件，证明画布或复合控件同样可以注册目标。

@@ -646,14 +646,14 @@ void NewProjectWizard::renderFooter(UIManager* sourceManager)
         isLastStep ? TR("ui.wizard.new_project.create").data()
                    : TR("ui.wizard.new_project.next").data(),
         buttonSize);
+    // 三页共用同一视觉按钮，但按当前步骤使用不同的稳定目标身份。
+    const std::string_view advanceTarget =
+        m_currentStep == Step::ProjectInfo
+            ? PROJECT_INFO_NEXT_TARGET
+            : (m_currentStep == Step::Preferences ? PREFERENCES_NEXT_TARGET
+                                                  : LOCATION_CREATE_TARGET);
     if ( sourceManager ) {
-        // 三页共用同一视觉按钮，但按当前步骤上报不同语义目标供配置排序。
-        const std::string_view target =
-            m_currentStep == Step::ProjectInfo
-                ? PROJECT_INFO_NEXT_TARGET
-                : (m_currentStep == Step::Preferences ? PREFERENCES_NEXT_TARGET
-                                                      : LOCATION_CREATE_TARGET);
-        sourceManager->walkthroughSpotlight().reportLastItem(target);
+        sourceManager->walkthroughSpotlight().reportLastItem(advanceTarget);
     }
     if ( advanceClicked ) {
         if ( m_currentStep == Step::ProjectInfo ) {
@@ -666,6 +666,9 @@ void NewProjectWizard::renderFooter(UIManager* sourceManager)
             // 最后一步发布请求，不在 UI 层直接建立项目目录。
             submitCreateRequest();
         }
+        if ( sourceManager )
+            // canAdvance 已验证当前页，状态切换或请求提交后才完成引导目标。
+            sourceManager->walkthroughSpotlight().completeTarget(advanceTarget);
     }
     ImGui::EndDisabled();
 

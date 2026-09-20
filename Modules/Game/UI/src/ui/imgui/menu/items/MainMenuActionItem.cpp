@@ -64,6 +64,10 @@ void MainMenuActionItem::render(MainMenuContext& context)
     // 无处理器的条目仍可绘制为静态项，但不会响应激活。
     if ( activated && m_actionHandler ) {
         m_actionHandler->execute(context, MainMenuItemActivation{});
+        if ( context.sourceManager && !m_walkthroughTarget.empty() )
+            // 只有启用条目的处理器已执行，才确认对应菜单目标完成。
+            context.sourceManager->walkthroughSpotlight().completeTarget(
+                m_walkthroughTarget);
     }
 }
 
