@@ -36,6 +36,13 @@ public:
         return !m_initializedCanvases.empty();
     }
 
+    /// @brief 查询工作区是否至少包含一个真实谱面编辑器标签页。
+    /// @warning UI 热路径：只读取本帧工作区快照归约出的布尔状态。
+    [[nodiscard]] bool hasOpenBeatmapCanvas() const
+    {
+        return m_hasOpenBeatmapCanvas;
+    }
+
     /// @brief 获取实际类型指针
     void* getActualInstance() override { return this; }
 
@@ -61,6 +68,9 @@ private:
 
     /// @brief 每帧复用的轻量画布工作区快照，避免稳定状态重复分配。
     std::vector<CanvasWorkspaceEntry> m_workspaceEntries;
+
+    /// @brief 本帧工作区快照中是否存在非 Logo 占位谱面会话。
+    bool m_hasOpenBeatmapCanvas{ false };
 };
 
 }  // namespace MMM::UI

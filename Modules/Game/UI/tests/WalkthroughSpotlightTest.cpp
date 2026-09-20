@@ -12,6 +12,12 @@
 ///
 /// 覆盖场景：
 /// - 同帧多个候选目标按配置顺序选择最后一个可见目标；
+/// - 同一语义目标由多个并列控件上报时合并为共同可选范围；
+/// - 视口右侧的纵向工具栏目标把提示放到左侧而不覆盖按钮；
+/// - 目标几何扩张、提示边距与视口裁剪共同保持稳定的安全间隔；
+/// - 提示窗口的位置在 ImGui 完成布局后按真实几何验证；
+/// - 几何回归不依赖 GPU 后端，保证常规 CTest 环境可重复执行；
+/// - 新的并列候选用例与已有单调状态机用例相互隔离；
 /// - 后续目标一旦出现即推进状态机，消失后不再回退到前序目标；
 /// - 业务成功通知与“知道了”共用同一阶段完成入口；
 /// - 显式矩形与普通 ImGui Item 使用同一解析路径；
@@ -195,6 +201,64 @@ int main()
     if ( !spotlight.active() || !spotlight.completed() ) {
         ImGui::DestroyContext();
         return 10;
+    }
+
+    // 多个谱面标签共享同一语义目标；高亮范围应覆盖全部并列候选，
+    // 而不是被最后一个上报标签覆盖成固定选择。
+    // 两个矩形故意留出间隔，证明结果取外接范围而非第二项本身。
+    // 它们共用主视口，符合实际同一 Dock 标签栏内多个谱面的条件。
+    // 本用例只检查目标解析；具体标签点击由画布自身命中区负责，
+    // 避免把 ImGui 内部 Dock 构造细节复制进 Spotlight 单元测试。
+    ImGui::NewFrame();
+    spotlight.beginFrame();
+    spotlight.start({ "choice.tab" }, "Choose any tab");
+    spotlight.reportTarget("choice.tab",
+                           { 80.0F, 20.0F },
+                           { 180.0F, 52.0F },
+                           ImGui::GetMainViewport());
+    spotlight.reportTarget("choice.tab",
+                           { 260.0F, 20.0F },
+                           { 380.0F, 52.0F },
+                           ImGui::GetMainViewport());
+    const auto choiceBounds = spotlight.resolvedTargetBounds();
+    const bool choiceRangeValid =
+        choiceBounds && choiceBounds->minimum.x == 80.0F &&
+        choiceBounds->minimum.y == 20.0F && choiceBounds->maximum.x == 380.0F &&
+        choiceBounds->maximum.y == 52.0F;
+    spotlight.stop();
+    ImGui::Render();
+    if ( !choiceRangeValid ) {
+        ImGui::DestroyContext();
+        return 60;
+    }
+
+    // 右侧纵向工具栏没有上下空间，但左侧足够容纳收窄后的提示气泡。
+    // 提示窗口必须完整位于目标左侧，避免遮住上方工具按钮。
+    // 目标高度覆盖几乎整个视口，确保上下两个候选方向都会失败。
+    // 长提示触发宽度约束，覆盖实际中文说明可能出现的换行路径。
+    // 断言保留十二像素间距，同时验证方向选择与目标边距。
+    // 窗口位置必须在 render 后读取，因为 Begin 才会应用请求尺寸。
+    // 全程只依赖 ImGui 内存路径，无需建立图形后端或上传字体纹理。
+    ImGui::NewFrame();
+    spotlight.beginFrame();
+    spotlight.start({ "toolbar.vertical" },
+                    "This toolbar contains the visible editing tools and "
+                    "common chart controls.");
+    spotlight.reportTarget("toolbar.vertical",
+                           { 720.0F, 20.0F },
+                           { 792.0F, 580.0F },
+                           ImGui::GetMainViewport());
+    spotlight.keepAlive();
+    spotlight.render(1.0F, "Got it");
+    const auto* toolbarHint =
+        ImGui::FindWindowByName("###WalkthroughSpotlightHint");
+    const bool toolbarHintClear =
+        toolbarHint && toolbarHint->Pos.x + toolbarHint->Size.x <= 708.0F;
+    spotlight.stop();
+    ImGui::Render();
+    if ( !toolbarHintClear ) {
+        ImGui::DestroyContext();
+        return 61;
     }
 
     // 自定义区域无需对应标准控件，证明画布或复合控件同样可以注册目标。

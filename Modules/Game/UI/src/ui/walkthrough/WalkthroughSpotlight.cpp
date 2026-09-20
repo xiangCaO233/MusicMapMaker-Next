@@ -27,6 +27,8 @@
 /// - target ID 与翻译文本、ImGui 标签和窗口地址解耦；
 /// - 当前引导只比较配置声明的少量候选，不维护全局控件表；
 /// - 同帧候选按配置索引决定优先级，列表末项优先；
+/// - 同一语义目标重复上报时合并同视口矩形，允许用户从多个并列项中选择；
+/// - 合并后的视觉范围不替代业务命中，只有具体控件确认才完成阶段；
 /// - 菜单项出现后可自然覆盖一级菜单目标；
 /// - 向导下一页出现后可自然覆盖仍在后台绘制的菜单目标；
 /// - 后续候选一旦出现便推进当前阶段，消失后也不回退到前序目标；
@@ -242,12 +244,25 @@ void Spotlight::reportTarget(std::string_view targetId, const ImVec2& minimum,
         m_stage = priority;
         m_anchor.reset();
     }
-    // 同一阶段可以由复合控件重复上报，最后一份可见几何作为当前锚点。
-    m_anchor =
-        Anchor{ .priority = priority,
-                .minimum  = minimum,
-                .maximum  = maximum,
-                .viewport = viewport ? viewport : ImGui::GetWindowViewport() };
+    auto* resolvedViewport = viewport ? viewport : ImGui::GetWindowViewport();
+    if ( m_anchor && m_anchor->priority == priority &&
+         m_anchor->viewport == resolvedViewport ) {
+        // 同一目标可由多项并列控件上报；合并区域让全部候选保持可见可选。
+        // 合并只发生在相同阶段，不能把前后两个动作扩大为同一个孔洞。
+        // 视口必须一致，否则单个 ForegroundDrawList 无法正确表达坐标。
+        // 外接矩形避免热路径维护动态容器，也不改变具体控件的完成判定；
+        // 因此标签之间的间隙虽然透明，却不会误推进状态机。
+        m_anchor->minimum.x = std::min(m_anchor->minimum.x, minimum.x);
+        m_anchor->minimum.y = std::min(m_anchor->minimum.y, minimum.y);
+        m_anchor->maximum.x = std::max(m_anchor->maximum.x, maximum.x);
+        m_anchor->maximum.y = std::max(m_anchor->maximum.y, maximum.y);
+    } else {
+        // 不同视口不能共享一个前景遮罩，保留本次上报作为当前锚点。
+        m_anchor = Anchor{ .priority = priority,
+                           .minimum  = minimum,
+                           .maximum  = maximum,
+                           .viewport = resolvedViewport };
+    }
     m_state = State::Highlighting;
 }
 
@@ -298,11 +313,29 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
     const float  buttonWidth =
         hasAcknowledge ? buttonSize.x + style.ItemSpacing.x : 0.0f;
     // 文本与按钮共同限制在视口内，窄窗口优先压缩提示文字。
-    const float maxTextWidth =
+    float maxTextWidth =
         std::min(420.0f * dpiScale,
                  std::max(1.0f,
                           viewport->Size.x - margin * 2.0f -
                               style.WindowPadding.x * 2.0f - buttonWidth));
+    if ( holeMin && holeMax ) {
+        // 细长工具栏优先把提示放在侧边；先按可用侧宽收窄文字，保证气泡
+        // 能完整离开目标矩形，而不是覆盖最上方的工具按钮。
+        // 两侧取较大值只决定排版宽度，最终方向仍由 fits 检查决定。
+        // 容量扣除双边距，保证视口边缘与目标边缘各保留一份间隔。
+        // 空间不足时不压缩成难读的窄列，而是继续尝试上下布局。
+        const float leftCapacity  = holeMin->x - viewportMin.x - margin * 2.0f;
+        const float rightCapacity = viewportMax.x - holeMax->x - margin * 2.0f;
+        const float sideCapacity  = std::max(leftCapacity, rightCapacity);
+        constexpr float MIN_SIDE_BUBBLE_WIDTH = 240.0f;
+        if ( sideCapacity >= MIN_SIDE_BUBBLE_WIDTH * dpiScale ) {
+            maxTextWidth =
+                std::min(maxTextWidth,
+                         std::max(1.0f,
+                                  sideCapacity - style.WindowPadding.x * 2.0f -
+                                      buttonWidth));
+        }
+    }
     const ImVec2 textSize =
         m_prompt.empty() ? ImVec2{}
                          : ImGui::CalcTextSize(
@@ -314,11 +347,41 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
     // 预先计算气泡外框，遮罩稍后才能一次为目标、说明和按钮留出透明区。
     ImVec2 bubbleMin;
     if ( hintAnchor ) {
-        // 默认放在目标下方；空间不足时翻到上方，水平方向始终限制在视口内。
-        bubbleMin = { hintAnchor->x - bubbleSize.x * 0.5f,
-                      hintAnchor->y + margin };
-        if ( bubbleMin.y + bubbleSize.y > viewportMax.y - margin )
-            bubbleMin.y = m_anchor->minimum.y - margin - bubbleSize.y;
+        // 依次尝试下、上、左、右四个不覆盖目标的位置。工具栏等纵向长窗
+        // 会自然落到侧边；空间均不足时才允许气泡与目标区域相交。
+        // 上下优先保持短提示的既有布局，纵向占满的目标才会使用侧边。
+        // 中心坐标预先限制在视口内，避免选定方向后发生二次跳边。
+        // fits 使用扩张后的 hole 边界，提示与脉冲描边之间不会紧贴。
+        // 最终统一 clamp 仅处理极窄视口，不参与正常方向选择。
+        const float centeredX =
+            std::clamp(hintAnchor->x - bubbleSize.x * 0.5f,
+                       viewportMin.x + margin,
+                       std::max(viewportMin.x + margin,
+                                viewportMax.x - bubbleSize.x - margin));
+        const float centeredY =
+            std::clamp((holeMin->y + holeMax->y - bubbleSize.y) * 0.5f,
+                       viewportMin.y + margin,
+                       std::max(viewportMin.y + margin,
+                                viewportMax.y - bubbleSize.y - margin));
+        const bool fitsBelow =
+            holeMax->y + margin + bubbleSize.y <= viewportMax.y - margin;
+        const bool fitsAbove =
+            holeMin->y - margin - bubbleSize.y >= viewportMin.y + margin;
+        const bool fitsLeft =
+            holeMin->x - margin - bubbleSize.x >= viewportMin.x + margin;
+        const bool fitsRight =
+            holeMax->x + margin + bubbleSize.x <= viewportMax.x - margin;
+        if ( fitsBelow )
+            bubbleMin = { centeredX, holeMax->y + margin };
+        else if ( fitsAbove )
+            bubbleMin = { centeredX, holeMin->y - margin - bubbleSize.y };
+        else if ( fitsLeft )
+            bubbleMin = { holeMin->x - margin - bubbleSize.x, centeredY };
+        else if ( fitsRight )
+            bubbleMin = { holeMax->x + margin, centeredY };
+        else
+            // 时间线等大窗格无相邻空间时沿用顶部回退，后续描边会避开气泡。
+            bubbleMin = { centeredX, holeMin->y - margin - bubbleSize.y };
     } else {
         // 无目标步骤把提示放在视口上方中央，方便继续使用键盘或外部窗口。
         bubbleMin = { viewportMin.x + (viewport->Size.x - bubbleSize.x) * 0.5f,
@@ -448,12 +511,29 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
         // 目标描边仍严格跟随控件，不随较宽的提示透明区扩张。
         const float pulse =
             0.5f + 0.5f * std::sin(static_cast<float>(ImGui::GetTime()) * 4.0f);
-        draw.AddRect(*holeMin,
-                     *holeMax,
-                     ImGui::GetColorU32(ImGuiCol_CheckMark),
-                     style.FrameRounding,
-                     ImDrawFlags_None,
-                     (2.0f + pulse) * dpiScale);
+        const auto drawOutline = [&](const ImVec2& clipMin,
+                                     const ImVec2& clipMax) {
+            if ( clipMax.x <= clipMin.x || clipMax.y <= clipMin.y ) return;
+            draw.PushClipRect(clipMin, clipMax, true);
+            draw.AddRect(*holeMin,
+                         *holeMax,
+                         ImGui::GetColorU32(ImGuiCol_CheckMark),
+                         style.FrameRounding,
+                         ImDrawFlags_None,
+                         (2.0f + pulse) * dpiScale);
+            draw.PopClipRect();
+        };
+        // ForegroundDrawList 总在普通窗口之后合成；将提示矩形从描边裁掉，
+        // 才能保证时间线顶部回退场景中黄色边框不会压住文字和确认按钮。
+        // 四个裁剪区覆盖提示框之外的所有方向，边框在框下自然断开。
+        // 裁剪只影响描边命令，目标与提示共同形成的透明遮罩保持不变。
+        // 提示位于目标外侧时，四次绘制仍只留下同一条边框的可见片段。
+        drawOutline(viewportMin, { viewportMax.x, bubbleMin.y });
+        drawOutline({ viewportMin.x, bubbleMax.y }, viewportMax);
+        drawOutline({ viewportMin.x, bubbleMin.y },
+                    { bubbleMin.x, bubbleMax.y });
+        drawOutline({ bubbleMax.x, bubbleMin.y },
+                    { viewportMax.x, bubbleMax.y });
     }
 }
 
@@ -463,6 +543,15 @@ std::string_view Spotlight::resolvedTargetId() const
 {
     if ( !m_anchor || m_anchor->priority >= m_targets.size() ) return {};
     return m_targets[m_anchor->priority];
+}
+
+/// @brief 返回当前帧最终采用目标的合并屏幕矩形。
+/// @return 有有效锚点时返回值副本，否则返回空值。
+std::optional<Spotlight::TargetBounds> Spotlight::resolvedTargetBounds() const
+{
+    if ( !m_anchor ) return std::nullopt;
+    return TargetBounds{ .minimum = m_anchor->minimum,
+                         .maximum = m_anchor->maximum };
 }
 
 /// @brief 查询当前帧实际提交的确认按钮中心。

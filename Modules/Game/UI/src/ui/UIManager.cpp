@@ -626,6 +626,15 @@ bool UIManager::hasActiveProjectUiState() const
     return m_projectLifecycleState.hasActiveProject;
 }
 
+/// @brief 查询工作区是否存在真实谱面编辑器标签页。
+/// @return 管理器存在且最近工作区快照含真实谱面时返回 true。
+/// @warning UI 热路径：只执行一次视图查找和布尔读取。
+bool UIManager::hasOpenBeatmapEditor()
+{
+    const auto* tabs = getView<CanvasTabManager>("CanvasTabManager");
+    return tabs && tabs->hasOpenBeatmapCanvas();
+}
+
 /// @brief 判断时间线窗口是否正在拖动 Timing 框选区域。
 /// @return 时间线正在框选时返回 true。
 /// @warning UI 热路径：空格快捷键按下时调用；只读取已注册视图的本地状态。

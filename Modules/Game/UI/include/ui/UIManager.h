@@ -150,6 +150,11 @@ public:
     /// @warning UI 热路径：只读取 UI 线程维护的本地状态。
     [[nodiscard]] bool hasActiveProjectUiState() const;
 
+    /// @brief 判断 UI 工作区是否已有至少一个真实谱面编辑器标签页。
+    /// @return CanvasTabManager 本帧快照中存在非占位会话时返回 true。
+    /// @warning UI 热路径：只查询已注册管理器的布尔快照，不扫描逻辑会话。
+    [[nodiscard]] bool hasOpenBeatmapEditor();
+
     /// @brief 判断时间线窗口是否正在拖动 Timing 框选区域。
     /// @return 时间线正在框选时返回 true。
     /// @warning UI 热路径：空格快捷键按下时调用；只读取已注册视图的本地状态。

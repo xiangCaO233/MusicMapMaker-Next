@@ -33,6 +33,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WalkthroughSpotlight.h"
 #include "ui/walkthrough/WelcomeView.h"
 #include <algorithm>
 #include <array>
@@ -47,6 +48,171 @@ namespace MMM::Canvas
 {
 namespace
 {
+/// @brief 上报真实谱面编辑器的 Dock 标签，并在标签切到前台后完成点击目标。
+/// @param manager 提供全局演练高亮状态机。
+/// @param window 当前谱面编辑器 ImGui 窗口。
+/// @param isBeatmap 当前窗口是否对应真实谱面而非 Logo 占位。
+/// @warning UI 热路径：每帧最多遍历当前 Dock 节点的少量标签。
+void reportBeatmapTabWalkthroughTarget(UI::UIManager* manager,
+                                       ImGuiWindow* window, bool isBeatmap)
+{
+    // 标签锚点协议：
+    // - Logo 会话永远不能满足“已打开谱面”的教学前提；
+    // - 浮动窗口没有 Dock 标签，因此等待用户先恢复可点击的标签结构；
+    // - 目标矩形必须从 TabBar 的滚动后坐标计算，不能借用窗口标题栏；
+    // - 只有鼠标实际点击标签正文时才完成，标签当前可见不等同于用户选择；
+    // - 同一语义 ID 可由多张谱面上报，Spotlight 合并为共同可选高亮范围。
+    if ( !manager || !isBeatmap || !window || !window->DockNode ||
+         !window->DockNode->TabBar ) {
+        return;
+    }
+    auto* tabBar = window->DockNode->TabBar;
+    for ( const auto& tab : tabBar->Tabs ) {
+        if ( tab.Window != window && tab.ID != window->TabId ) continue;
+        const bool central = (tab.Flags & (ImGuiTabItemFlags_Leading |
+                                           ImGuiTabItemFlags_Trailing)) == 0;
+        // 中央标签会被 TabBar 横向滚动，Leading/Trailing 固定项则不应用滚动量。
+        const float x =
+            tabBar->BarRect.Min.x +
+            (central ? std::trunc(tab.Offset - tabBar->ScrollingAnim)
+                     : tab.Offset);
+        const float height = GImGui->FontSize + tabBar->FramePadding.y * 2.0F;
+        // 两端裁剪防止滚动到栏外的标签产生跨越其它 Dock 区域的高亮孔洞。
+        const ImVec2 minimum{ std::max(x, tabBar->BarRect.Min.x),
+                              tabBar->BarRect.Min.y };
+        const ImVec2 maximum{ std::min(x + tab.Width, tabBar->BarRect.Max.x),
+                              std::min(tabBar->BarRect.Min.y + height,
+                                       tabBar->BarRect.Max.y) };
+        manager->walkthroughSpotlight().reportTarget(
+            "editor.beatmap-tab", minimum, maximum, window->Viewport);
+        const ImVec2 mouse = ImGui::GetMousePos();
+        // 关闭按钮占据标签最右侧一个字高；点击该区只关闭，不视为选择谱面。
+        // 这里读取按下边沿而非当前选中状态，确保用户作出一次明确选择。
+        // 后台谱面同样执行 Begin 并上报矩形，因此无需预先固定活动会话。
+        // 点击范围排除关闭区，避免关闭某张谱面时误推进介绍步骤。
+        const float closeLeft =
+            maximum.x - tabBar->FramePadding.x - GImGui->FontSize;
+        const bool inCloseButton = window->HasCloseButton &&
+                                   mouse.x >= closeLeft &&
+                                   mouse.y >= minimum.y && mouse.y < maximum.y;
+        const bool clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+                             mouse.x >= minimum.x && mouse.x < maximum.x &&
+                             mouse.y >= minimum.y && mouse.y < maximum.y &&
+                             !inCloseButton;
+        if ( clicked )
+            manager->walkthroughSpotlight().completeTarget(
+                "editor.beatmap-tab");
+        return;
+    }
+}
+
+/// @brief 上报主画布各语义区域，并按完整可见性完成横向拖动目标。
+/// @param manager 提供演练高亮状态机。
+/// @param snapshot 当前真实谱面的渲染快照。
+/// @param canvasPosition 画布内容左上角屏幕坐标。
+/// @param canvasSize 画布内容逻辑尺寸。
+/// @warning UI 热路径：只执行一次轨道投影和固定数量的矩形裁剪。
+void reportCanvasWalkthroughTargets(
+    UI::UIManager* manager, const Common::Render::RenderSnapshot& snapshot,
+    const ImVec2& canvasPosition, const ImVec2& canvasSize)
+{
+    // 区域教学必须复用实际渲染使用的快照字段：
+    // - trackCount 决定玩家区和默认辅助轨宽；
+    // - canvasHorizontalOffsetX 是中键横移后的唯一完成判定来源；
+    // - professionalMode 通过 draftLanesEnabled 决定草稿区是否真实存在；
+    // - bmsEditingEnabled 决定 BGM 区是否能够显示和接收编辑；
+    // - 运行时追加轨也属于用户需要完整看到的可操作区域。
+    // 这里不读取逻辑会话或输入手势，避免 UI 线程与逻辑线程产生第二套状态。
+    if ( !manager || !snapshot.hasBeatmap || canvasSize.x <= 1.0F ||
+         canvasSize.y <= 1.0F ) {
+        return;
+    }
+    const auto& visual = Config::AppConfig::instance().getVisualConfig();
+    const auto& layout = visual.trackLayoutForKeyCount(snapshot.trackCount);
+    const auto  projection =
+        Logic::calculateCanvasLaneProjection(canvasSize.x,
+                                             snapshot.trackCount,
+                                             snapshot.bgmTrackCount,
+                                             layout,
+                                             snapshot.canvasHorizontalOffsetX,
+                                             true,
+                                             snapshot.bmsEditingEnabled,
+                                             snapshot.draftLanesEnabled,
+                                             snapshot.draftTrackCount,
+                                             true);
+    if ( !projection.valid ) return;
+
+    auto& spotlight = manager->walkthroughSpotlight();
+    // 介绍步骤允许目标部分位于屏幕外，但高亮只能覆盖本帧实际可见交集。
+    // 这与拖动步骤的“完整可见”判定刻意不同：前者负责解释，后者负责验收。
+    const auto reportRegion =
+        [&](std::string_view id, float left, float right) {
+            const float clippedLeft  = std::clamp(left, 0.0F, canvasSize.x);
+            const float clippedRight = std::clamp(right, 0.0F, canvasSize.x);
+            // 完全离屏或退化区域保持等待，不能绘制宽度为零的遮罩孔洞。
+            if ( clippedRight <= clippedLeft ) return;
+            spotlight.reportTarget(
+                id,
+                { canvasPosition.x + clippedLeft, canvasPosition.y },
+                { canvasPosition.x + clippedRight,
+                  canvasPosition.y + canvasSize.y },
+                ImGui::GetWindowViewport());
+        };
+    const auto fullyVisible = [&](float left, float right) {
+        // 半像素容差吸收投影与 ImGui 逻辑像素换算误差，不放宽一整条轨道。
+        constexpr float EPSILON = 0.5F;
+        return right > left && left >= -EPSILON &&
+               right <= canvasSize.x + EPSILON;
+    };
+
+    // 拖动画布阶段突出整个交互面，具体区域完整进入视口后由业务状态完成。
+    // 两个目标可以每帧同时上报；Spotlight 只会接纳当前步骤声明的那个 ID。
+    // 因而此处无需查询当前步骤，也不会让草稿完成状态误推进 BGM 步骤。
+    spotlight.reportTarget(
+        "editor.canvas.pan-draft",
+        canvasPosition,
+        { canvasPosition.x + canvasSize.x, canvasPosition.y + canvasSize.y },
+        ImGui::GetWindowViewport());
+    spotlight.reportTarget(
+        "editor.canvas.pan-bgm",
+        canvasPosition,
+        { canvasPosition.x + canvasSize.x, canvasPosition.y + canvasSize.y },
+        ImGui::GetWindowViewport());
+    if ( projection.draftLaneCount > 0 &&
+         fullyVisible(projection.draftLeftX, projection.draftRightX) ) {
+        // 关闭专业模式时计数为零，路线继续等待并由提示说明如何开启。
+        spotlight.completeTarget("editor.canvas.pan-draft");
+    }
+    if ( projection.bgmLaneCount > 0 &&
+         fullyVisible(projection.bgmLeftX, projection.bgmRightX) ) {
+        // BMS 关闭或没有可访问轨道时不能把空区间误判成已完整显示。
+        spotlight.completeTarget("editor.canvas.pan-bgm");
+    }
+
+    // 玩家区始终是主介绍锚点，辅助区域则只在对应功能实际启用时上报。
+    // 区域上报顺序不代表路线顺序，JSON 步骤才是唯一编排来源。
+    // Spotlight 按语义 ID 过滤无关矩形，未进入本主题时这些调用保持无操作。
+    // 所有矩形共享画布纵向范围，使说明不会误导为只作用于某个时间片段。
+    // player 使用实际布局边界，不能假定画布中央或固定四轨宽度。
+    reportRegion("editor.canvas.player",
+                 projection.player.leftX,
+                 projection.player.rightX);
+    if ( projection.draftLaneCount > 0 )
+        // 草稿区按自身右锚点和独立轨宽计算，不能从玩家区简单向左镜像。
+        reportRegion("editor.canvas.draft",
+                     projection.draftLeftX,
+                     projection.draftRightX);
+    reportRegion("editor.canvas.annotation",
+                 projection.annotationLeftX,
+                 projection.annotationRightX);
+    // 批注沟槽不依赖 BGM 轨数，保持为独立步骤以免被 BGM 大区域吞没。
+    // 它可能在 BGM 被关闭时仍然存在，因此不放进 BGM 条件分支。
+    if ( projection.bgmLaneCount > 0 )
+        // BGM 采用自身单轨宽度，持久轨和运行时追加轨共同组成介绍范围。
+        reportRegion(
+            "editor.canvas.bgm", projection.bgmLeftX, projection.bgmRightX);
+}
+
 /// @brief 判断鼠标是否悬停在当前 ImGui 窗口的内容区域内。
 /// @return 鼠标位于当前窗口内容区域时返回 true。
 /// @details 窗口级 hover 包含标题栏、标签和装饰区域，
@@ -352,6 +518,10 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                            showClose ? &m_isOpen : nullptr,
                            dockId,
                            ImGuiCond_Always);
+    reportBeatmapTabWalkthroughTarget(
+        sourceManager, ImGui::GetCurrentWindow(), !isLogoPlaceholder);
+    // 标签目标先于内容可见性计算提交，使后台谱面也能提供可点击入口。
+    // 内容区域目标则只在标签真正可见并拥有有效 RenderContext 时上报。
     // ImGuiCond_Always 只应用显式非零 dockId；普通帧传入零时保留
     // imgui.ini 中的用户布局，不覆盖其手动拖动结果。
     m_lastDockId = ImGui::IsWindowDocked() ? ImGui::GetWindowDockID() : 0;
@@ -409,6 +579,12 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         const ImVec2 canvasScreenPosition = ImGui::GetCursorScreenPos();
         const ImVec2 canvasSize           = rctx.getRenderSize();
         rctx.renderSurface();
+        if ( m_currentSnapshot )
+            // 快照与刚绘制的纹理使用同一代布局，避免教学框和画面错位。
+            reportCanvasWalkthroughTargets(sourceManager,
+                                           *m_currentSnapshot,
+                                           canvasScreenPosition,
+                                           canvasSize);
 
         // 后台谱面收到内容区滚轮时先切换活动会话和窗口焦点，
         // 本帧若 cameraId 已切换成功即可继续消费这一次滚轮操作。

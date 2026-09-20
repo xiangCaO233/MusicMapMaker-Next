@@ -32,8 +32,10 @@
 #include "logic/EditorEngine.h"
 #include "logic/ecs/system/render/Batcher.h"
 #include "ui/Icons.h"
+#include "ui/UIManager.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WalkthroughSpotlight.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -515,6 +517,19 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                            true,
                            ImGuiWindowFlags_NoScrollbar,
                            &windowOpen);
+    if ( auto* window = ImGui::GetCurrentWindow();
+         window && (!window->DockIsActive || window->DockTabIsVisible) ) {
+        // 时间线介绍覆盖完整窗格，包含时间滑块、画布和 Timing 入口。
+        // 后台 Dock 标签没有可见内容，不能使用其缓存 Pos/Size 创建高亮。
+        // 浮动时间线没有 Dock 可见性标志，直接按当前窗口矩形上报。
+        // Spotlight 会过滤非当前步骤的 ID，因此常规帧只产生常量级检查。
+        // 使用 Window 视口保证多视口布局下遮罩绘制到正确平台窗口。
+        sourceManager->walkthroughSpotlight().reportTarget(
+            "editor.timeline",
+            window->Pos,
+            { window->Pos.x + window->Size.x, window->Pos.y + window->Size.y },
+            window->Viewport);
+    }
     m_lastDockId = ImGui::IsWindowDocked() ? ImGui::GetWindowDockID() : 0;
     // 独立表格需要最近 Dock ID 恢复到时间线所属区域。
     if ( ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ) {

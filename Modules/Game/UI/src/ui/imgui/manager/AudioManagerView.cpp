@@ -23,6 +23,7 @@
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WalkthroughSpotlight.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <array>
@@ -772,7 +773,7 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     const float controlRowWidth = footerPadX * 2.0f + labelWidth +
                                   controlColGap + muteButtonSize +
                                   controlColGap + sliderMinW;
-    float       minWidth =
+    float minWidth =
         std::ceil(rootPad * 2.0f + std::max({ controlRowWidth, headerWidth }));
 
     // 列表最小高度按当前资源数量推导，空状态则计算提示占位。
@@ -1777,9 +1778,9 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 const float rowCursorY = ImGui::GetCursorScreenPos().y;
                 // ID 同时包含资源标识、路径和索引，区分潜在同名条目。
                 const std::string rowId   = fmt::format("##AudioRow_{}_{}_{}",
-                                                        rowData.m_id,
-                                                        rowData.m_path,
-                                                        rowIndex);
+                                                      rowData.m_id,
+                                                      rowData.m_path,
+                                                      rowIndex);
                 const bool        clicked = ::MMM::UI::FeedbackSelectable(
                     rowId.c_str(),
                     false,
@@ -2271,6 +2272,18 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         // 零高度时跳过 Clay 渲染，避免创建退化包围盒。
         rootVBox.renderInCurrent(layoutContext.m_startPos,
                                  { layoutContext.m_avail.x, listAreaHeight });
+        // 三块教学锚点严格复用最终 Clay 几何：
+        // - 列表高度会随窗口和页脚展开状态变化；
+        // - 控制区高度包含折叠标题或完整设备与音量行；
+        // - 底部入口始终位于控制区和固定间隔之后；
+        // 因此不能从窗口总高度按固定比例切分这些区域。
+        sourceManager->walkthroughSpotlight().reportTarget(
+            // 列表区域包含表头、分组行和滚动内容，不只突出当前可见资源行。
+            "editor.audio.resources",
+            layoutContext.m_startPos,
+            { layoutContext.m_startPos.x + layoutContext.m_avail.x,
+              layoutContext.m_startPos.y + listAreaHeight },
+            ImGui::GetWindowViewport());
     }
 
     // 页脚紧接列表区域，其屏幕坐标由窗口起点和列表高度确定。
@@ -2282,6 +2295,13 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     // 折叠时仍渲染标题行，展开时容器内包含全部控制项。
     footerVBox.renderInCurrent(footerPos,
                                { layoutContext.m_avail.x, controlH });
+    if ( controlH > 0.0F )
+        // 控制区按展开状态使用实际高度；折叠时标题行仍提供可理解锚点。
+        sourceManager->walkthroughSpotlight().reportTarget(
+            "editor.audio.global",
+            footerPos,
+            { footerPos.x + layoutContext.m_avail.x, footerPos.y + controlH },
+            ImGui::GetWindowViewport());
 
     // 最底部两项入口按 Grow 等分宽度，保持导入与项目工具权重一致。
     // 容器沿用根区域左右内边距，两按钮之间的间距也按 DPI 后像素取整。
@@ -2460,6 +2480,13 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     // 两按钮共用窗口可用宽度和固定高度，不受页脚折叠状态影响。
     bottomBtnHBox.renderInCurrent(
         btnPos, { layoutContext.m_avail.x, layoutMetrics.importButtonHeight });
+    sourceManager->walkthroughSpotlight().reportTarget(
+        // 底部入口单独成步，避免全局音量区域过高时提示气泡远离按钮。
+        "editor.audio.actions",
+        btnPos,
+        { btnPos.x + layoutContext.m_avail.x,
+          btnPos.y + layoutMetrics.importButtonHeight },
+        ImGui::GetWindowViewport());
 
     // 行级移除请求先转换为一次 OpenPopup 调用，再清除边沿标志。
     // 待删除 ID 独立于表格行引用，因此缓存重建或滚动不会使确认目标悬空。

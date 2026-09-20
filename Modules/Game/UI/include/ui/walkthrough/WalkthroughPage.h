@@ -8,10 +8,24 @@
 namespace MMM::UI
 {
 class UIManager;
+namespace Walkthrough
+{
+struct Branch;
+struct Step;
+struct Topic;
+}  // namespace Walkthrough
 /// @brief 欢迎页内嵌的演练正文，不创建独立窗口，也不持有学习进度。
 class WalkthroughPage
 {
 public:
+    /// @brief 每帧推进当前路线，即使欢迎标签被其它 Dock 标签遮住也继续运行。
+    /// @param manager 提供目标状态、业务信号和当前环境门禁。
+    /// @warning UI 热路径：有活动路线时只查找当前主题、分支和步骤。
+    void updateGuide(UIManager* manager);
+
+    /// @brief 显式结束当前路线，用于返回目录或关闭欢迎页。
+    void stopGuide(UIManager* manager);
+
     /// @brief 在欢迎页正文区域绘制指定主题和可独立展开的操作分支。
     /// @param manager 提供演练服务、图片缓存和视图注册表的 UI 管理器。
     /// @param topicIndex 当前目录选中的主题索引。
@@ -19,6 +33,11 @@ public:
     void render(UIManager* manager, std::size_t topicIndex);
 
 private:
+    /// @brief 启动指定配置步骤并记录本轮信号基线。
+    void startGuide(UIManager* manager, const Walkthrough::Topic& topic,
+                    const Walkthrough::Branch& branch,
+                    const Walkthrough::Step&   step);
+
     /// @brief 当前由用户启动的路线引导身份及当前步骤状态。
     struct ActiveGuide {
         /// @brief 主题稳定 ID。
@@ -43,10 +62,7 @@ private:
     /// @brief 图片准备时采用的语言，用于检测本地化切换。
     std::string m_preparedLanguage;
 
-    /// @brief 当前突出引导；页面隐藏时不续租，因此不会残留全屏遮罩。
+    /// @brief 当前突出引导；欢迎标签隐藏时仍由 updateGuide 每帧续租。
     std::optional<ActiveGuide> m_activeGuide;
-
-    /// @brief 上次正文实际渲染的 ImGui 帧，用于返回页面时清除旧引导。
-    int m_lastRenderFrame{ -1 };
 };
 }  // namespace MMM::UI

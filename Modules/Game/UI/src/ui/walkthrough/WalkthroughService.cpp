@@ -188,10 +188,11 @@ Service::Service(const std::filesystem::path& progressPath,
         m_impl->m_error = chapters.error();
     // 核心教程优先加入，后续同 ID 自定义主题不能覆盖。
     m_impl->add(BUILTIN_WALKTHROUGH);
-    // 三个创建主题分别接收项目、空白谱面和模板谱面事件，不依赖欢迎页是否可见。
+    // 创建与编辑区主题按学习阶段加入，均不依赖欢迎页是否可见。
     m_impl->add(BUILTIN_CREATE_PROJECT_WALKTHROUGH);
     m_impl->add(BUILTIN_CREATE_BEATMAP_WALKTHROUGH);
     m_impl->add(BUILTIN_CREATE_BEATMAP_TEMPLATE_WALKTHROUGH);
+    m_impl->add(BUILTIN_EDITOR_OVERVIEW_WALKTHROUGH);
     for ( const auto* placeholder : BUILTIN_PLACEHOLDERS )
         // 占位主题沿用相同解析规则，保证模型结构一致。
         m_impl->add(placeholder);

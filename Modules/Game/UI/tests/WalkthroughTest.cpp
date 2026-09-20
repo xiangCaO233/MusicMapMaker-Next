@@ -35,6 +35,15 @@
 /// - 空白与模板新建谱面主题要求活动项目，并处于同一创作阶段；
 /// - 空白谱面流程依次覆盖音频、自动测偏、校正、资源和创建目标；
 /// - 模板谱面流程覆盖模板选择、复制选项、资源和创建目标；
+/// - 编辑区简介要求活动项目和已打开谱面两个入口条件；
+/// - 编辑区简介包含谱面标签、三类轨道、批注、时间线和工具栏；
+/// - 批注说明位于 BGM 说明之前；
+/// - 时间线说明位于工具栏说明之前；
+/// - 音频管理依次覆盖资源列表、全局设置和底部入口；
+/// - 编辑区简介每一步都提供可重放 guide；
+/// - 谱面标签目标位于整条编辑区路线首步；
+/// - 音频资源入口目标位于整条编辑区路线末步；
+/// - 创作谱面占位主题随编辑区简介加入而移动到阶段四；
 /// - 历史进度不参与目标链解析，避免重放时停留在入口控件；
 /// - 步骤不能依赖自身；
 /// - 同一分支内步骤 ID 不能重复；
@@ -79,6 +88,7 @@
 /// - 新建谱面事件订阅随 Service 生命周期建立和解除；
 /// - 所有事件断言在 service.update 后读取，覆盖真实跨线程队列边界；
 /// - 服务公开主题顺序保持欢迎页使用的稳定索引；
+/// - 阶段三真实主题位于两个新建谱面主题与阶段四占位主题之间；
 /// - PackageDrop 只有只读项目完成时才推进；
 /// - BeatmapDrop 只有真正打开谱面时才推进；
 /// - 未注册 action 保持无操作；
@@ -112,6 +122,8 @@ int main(int argc, char** argv)
         parseTopic(R"({"id":"bad","title":"Bad","placeholder":"true"})") ||
         parseTopic(
             R"({"id":"bad","title":"Bad","requires_project":"true","placeholder":true})") ||
+        parseTopic(
+            R"({"id":"bad","title":"Bad","requires_beatmap":"true","placeholder":true})") ||
         parseTopic(
             R"({"id":"bad","title":"Bad","placeholder":true,"branches":[{}]})") ||
         parseTopic(R"({"id":"bad","title":"Bad","branches":[]})") )
@@ -216,6 +228,32 @@ int main(int argc, char** argv)
     if ( !validateBeatmapFlow(*createBeatmapTopic) ||
          !validateBeatmapFlow(*createBeatmapTemplateTopic) )
         return 37;
+    // 编辑区简介是阶段三真实主题，只在项目和谱面标签同时存在时可进入。
+    const auto editorOverviewTopic =
+        parseTopic(BUILTIN_EDITOR_OVERVIEW_WALKTHROUGH);
+    if ( !editorOverviewTopic || editorOverviewTopic->m_placeholder ||
+         !editorOverviewTopic->m_requiresProject ||
+         !editorOverviewTopic->m_requiresBeatmap ||
+         editorOverviewTopic->m_order != 30 ||
+         editorOverviewTopic->m_branches.size() != 1 ||
+         editorOverviewTopic->m_branches.front().m_steps.size() != 13 ||
+         topicAvailable(*editorOverviewTopic, false, false) ||
+         topicAvailable(*editorOverviewTopic, true, false) ||
+         !topicAvailable(*editorOverviewTopic, true, true) )
+        return 61;
+    const auto& editorSteps = editorOverviewTopic->m_branches.front().m_steps;
+    // 批注说明必须位于 BGM 说明之前，时间线则必须位于工具栏之前。
+    if ( editorSteps[5].m_id != "annotation-area" ||
+         editorSteps[6].m_id != "bgm-area" ||
+         editorSteps[7].m_id != "timeline" ||
+         editorSteps[8].m_id != "toolbar" ||
+         editorSteps.front().m_guide->m_targets !=
+             std::vector<std::string>{ "editor.beatmap-tab" } ||
+         editorSteps.back().m_guide->m_targets !=
+             std::vector<std::string>{ "editor.audio.actions" } )
+        return 62;
+    for ( const auto& step : editorSteps )
+        if ( !step.m_guide ) return 63;
     // 空白流程的六个目标依次对应菜单入口、音频、自动测偏、BPM 复核、
     // 元数据资源区域和最终创建按钮，不要求改造原有单页弹窗布局。
     if ( createBeatmapTopic->m_branches[0].m_steps[0].m_guide->m_targets !=
@@ -323,17 +361,19 @@ int main(int argc, char** argv)
         Service     service(path, directory / "walkthroughs");
         const auto& topics = service.topics();
         // 相同 order 由欢迎页归入同一阶段；稳定插入顺序决定两张卡片的左右顺序。
-        // 创作占位主题必须排在两个阶段二向导之后，形成截图中的阶段三。
-        if ( topics.size() != 5 || service.chapters().size() != 2 ||
+        // 编辑区简介占据阶段三，创作占位主题后移到阶段四。
+        if ( topics.size() != 6 || service.chapters().size() != 2 ||
              topics[0].m_id != "mmm.open-project" ||
              topics[1].m_id != "mmm.create-project" ||
              topics[2].m_id != "mmm.create-beatmap" ||
              topics[3].m_id != "mmm.create-beatmap-template" ||
-             topics[4].m_id != "mmm.compose-beatmap" ||
+             topics[4].m_id != "mmm.editor-overview" ||
+             topics[5].m_id != "mmm.compose-beatmap" ||
              topics[0].m_order != topics[1].m_order ||
              topics[1].m_order >= topics[2].m_order ||
              topics[2].m_order != topics[3].m_order ||
-             topics[3].m_order >= topics[4].m_order )
+             topics[3].m_order >= topics[4].m_order ||
+             topics[4].m_order >= topics[5].m_order )
             return 25;
         // 包投放仅 completed 而非只读时不应完成教程步骤。
         MMM::Event::ProjectOpenInteractionEvent event;

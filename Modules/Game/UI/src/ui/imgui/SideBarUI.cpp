@@ -13,6 +13,7 @@
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WalkthroughSpotlight.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -354,9 +355,14 @@ void SideBarUI::update(UIManager* sourceManager)
             // 透明标签隐藏可见文本，实际内容稍后由 DrawList 精确定位。
             ImGui::SetCursorScreenPos({ rect.x, rect.y });
             // 枚举数值为每个按钮提供稳定且互异的 ImGui ID。
-            std::string btnId = "##tab_btn_" + std::to_string((int)tab);
-            if ( ::MMM::UI::FeedbackButton(btnId.c_str(),
-                                           { rect.width, rect.height }) ) {
+            std::string btnId   = "##tab_btn_" + std::to_string((int)tab);
+            const bool  clicked = ::MMM::UI::FeedbackButton(
+                btnId.c_str(), { rect.width, rect.height });
+            if ( tab == SideBarTab::AudioExplorer )
+                // 上报按钮实际 Item 矩形，标签模式和纯图标模式无需分别推导。
+                sourceManager->walkthroughSpotlight().reportLastItem(
+                    "editor.sidebar.audio");
+            if ( clicked ) {
                 // 所有可见按钮统一经反馈入口处理悬浮渐变和音效。
                 if ( tab == SideBarTab::Settings ) {
                     // 设置入口打开独立窗口，并默认定位软件设置页。
@@ -385,6 +391,14 @@ void SideBarUI::update(UIManager* sourceManager)
 
                     // 同步事件在本帧交给管理器处理，不直接持有其子视图。
                     EventBus::instance().publish(evt);
+                    if ( tab == SideBarTab::AudioExplorer &&
+                         m_activeTab == SideBarTab::AudioExplorer ) {
+                        // 只有实际点击并展开音频页签才完成此操作目标。
+                        // 点击已激活标签会收起管理器，因此不能把该分支算作完成。
+                        // 发布事件后读取本地状态，保持与用户看到的按钮状态一致。
+                        sourceManager->walkthroughSpotlight().completeTarget(
+                            "editor.sidebar.audio");
+                    }
                 }
             }
 

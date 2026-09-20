@@ -225,7 +225,8 @@ void WelcomeView::renderHome(UIManager* manager)
                     const bool canEnterTopic = Walkthrough::topicAvailable(
                         topic,
                         manager->hasActiveProjectUiState() &&
-                            !manager->isProjectTransitionInProgress());
+                            !manager->isProjectTransitionInProgress(),
+                        manager->hasOpenBeatmapEditor());
                     // 主题 ID 隔离相同可见标题或相同阶段中的卡片状态。
                     ImGui::PushID(topic.m_id.c_str());
                     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,
@@ -274,12 +275,13 @@ void WelcomeView::renderHome(UIManager* manager)
                     // 第二行入口提示裁剪到卡片右侧内边距。
                     draw->PushClipRect(
                         { textX, pos.y }, { end.x - padding, end.y }, true);
-                    draw->AddText(
-                        { textX, pos.y + padding + line * 1.5F },
-                        ImGui::GetColorU32(ImGuiCol_TextDisabled),
-                        TR(canEnterTopic ? "ui.welcome.start_learning"
+                    draw->AddText({ textX, pos.y + padding + line * 1.5F },
+                                  ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                                  TR(canEnterTopic ? "ui.welcome.start_learning"
+                                     : topic.m_requiresBeatmap
+                                         ? "ui.welcome.requires_beatmap"
                                          : "ui.welcome.requires_project")
-                            .data());
+                                      .data());
                     draw->PopClipRect();
                     if ( ImGui::IsItemHovered() )
                         // 悬停显示完整标题，补偿卡片中的裁剪。
@@ -333,6 +335,9 @@ void WelcomeView::showTopic(std::size_t topicIndex)
 /// 置于居中的定宽子区域，底部“启动时显示”选项保持在滚动区之外。
 void WelcomeView::update(UIManager* manager)
 {
+    // 引导路线必须在欢迎标签被其它 Dock 标签遮住时继续推进和续租。
+    // 该调用位于 Begin 之前，因此 Dock Tab 不可见时也不会被 ImGui 跳过。
+    m_walkthrough.updateGuide(manager);
     // 当前帧共用配置引用和 DPI 比例，避免重复查询布局参数。
     auto&       config   = Config::AppConfig::instance();
     const float scale    = config.getWindowContentScale();
@@ -392,7 +397,11 @@ void WelcomeView::update(UIManager* manager)
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4{ 0, 0, 0, 0 });
             ImGui::PushStyleColor(ImGuiCol_Text,
                                   ImGui::GetStyleColorVec4(ImGuiCol_CheckMark));
-            if ( FeedbackButton(back.c_str()) ) showHome();
+            if ( FeedbackButton(back.c_str()) ) {
+                // 返回目录表示用户主动退出当前路线，与切换 Dock 标签不同。
+                m_walkthrough.stopGuide(manager);
+                showHome();
+            }
             ImGui::PopStyleColor(2);
         }
         // 页脚高度从正文滚动区中预留，保存错误出现时额外增加一行。
@@ -461,5 +470,8 @@ void WelcomeView::update(UIManager* manager)
     // Begin 即使返回不可见也必须 End，并恢复窗口内边距样式。
     ImGui::End();
     ImGui::PopStyleVar();
+    if ( !m_isOpen )
+        // 关闭欢迎页不再拥有路线会话，立即清除可能仍在续租的遮罩。
+        m_walkthrough.stopGuide(manager);
 }
 }  // namespace MMM::UI

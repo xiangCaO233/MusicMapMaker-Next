@@ -11,6 +11,9 @@ inline constexpr const char* BUILTIN_CREATE_BEATMAP_WALKTHROUGH =
 /// @brief 内置模板创建谱面演练，与空白谱面流程在同一学习阶段并列。
 inline constexpr const char* BUILTIN_CREATE_BEATMAP_TEMPLATE_WALKTHROUGH =
     R"MMM_WALK(@MMM_WALKTHROUGH_create-beatmap-template@)MMM_WALK";
+/// @brief 内置编辑区简介，要求活动项目和至少一个真实谱面编辑器标签页。
+inline constexpr const char* BUILTIN_EDITOR_OVERVIEW_WALKTHROUGH =
+    R"MMM_WALK(@MMM_WALKTHROUGH_editor-overview@)MMM_WALK";
 /// @brief 有序章节目录，包含尚未添加主题的章节。
 inline constexpr const char* BUILTIN_CHAPTERS =
     R"MMM_WALK(@MMM_WALKTHROUGH_chapters@)MMM_WALK";

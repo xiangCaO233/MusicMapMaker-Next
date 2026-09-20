@@ -19,6 +19,12 @@ namespace MMM::UI::Walkthrough
 class Spotlight
 {
 public:
+    /// @brief 当前解析目标的屏幕空间边界，供诊断和无 GPU 测试使用。
+    struct TargetBounds {
+        ImVec2 minimum{};  ///< 合并后的左上角。
+        ImVec2 maximum{};  ///< 合并后的右下角。
+    };
+
     /// @brief 开始新 UI 帧并清除上一帧上报的易失控件几何。
     /// @warning UI 热路径：每帧调用，只复位值状态，不释放目标配置容量。
     void beginFrame();
@@ -75,6 +81,10 @@ public:
     /// @brief 返回本帧最终采用的目标 ID，供诊断和无 GPU 测试使用。
     /// @return 没有可见候选目标时返回空视图。
     [[nodiscard]] std::string_view resolvedTargetId() const;
+
+    /// @brief 返回本帧解析目标的合并矩形。
+    /// @return 没有可见候选目标时返回空值。
+    [[nodiscard]] std::optional<TargetBounds> resolvedTargetBounds() const;
 
     /// @brief 返回本帧确认按钮中心，供自动化输入与 UI 诊断使用。
     /// @return 没有目标遮罩或按钮未提交时返回空值。

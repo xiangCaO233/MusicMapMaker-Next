@@ -181,6 +181,12 @@ void CanvasTabManager::update(UIManager* sourceManager)
     // 复用成员数组填充本帧值快照，避免复制共享所有权对象。
     workspace->fillEntries(m_workspaceEntries);
     const auto& entries = m_workspaceEntries;
+    // 入口门禁只需要归约是否存在真实谱面，不向欢迎页暴露会话容器。
+    // 该快照同样排除始终存在的 Logo 占位标签，避免阶段三被提前解锁。
+    m_hasOpenBeatmapCanvas = std::any_of(
+        entries.begin(), entries.end(), [](const CanvasWorkspaceEntry& entry) {
+            return !entry.isLogoPlaceholder;
+        });
 
     // 第一阶段移除逻辑条目中已不存在的旧 UI 视图注册记录。
     for ( auto initializedIt = m_initializedCanvases.begin();

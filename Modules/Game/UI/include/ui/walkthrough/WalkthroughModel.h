@@ -67,16 +67,21 @@ struct Topic {
     bool        m_placeholder{ false };  ///< 仅预留入口，尚未定义步骤。
     /// @brief 进入主题和启动引导前是否必须已有活动项目。
     bool m_requiresProject{ false };
+    /// @brief 进入主题和启动引导前是否必须已有真实谱面编辑器标签页。
+    bool m_requiresBeatmap{ false };
     bool m_anyBranch{ true };  ///< true 表示任一分支完成目标，false 要求全部。
     std::vector<Branch> m_branches;  ///< 操作分支。
 };
 /// @brief 判断主题在当前项目上下文中是否允许进入和启动操作引导。
 /// @param topic 待检查主题。
 /// @param hasActiveProject UI 已确认且不处于切换中的项目状态。
-/// @return 无项目要求或已有活动项目时返回 true。
-constexpr bool topicAvailable(const Topic& topic, bool hasActiveProject)
+/// @param hasOpenBeatmap UI 工作区中是否存在真实谱面编辑器标签页。
+/// @return 主题声明的全部环境要求都满足时返回 true。
+constexpr bool topicAvailable(const Topic& topic, bool hasActiveProject,
+                              bool hasOpenBeatmap = false)
 {
-    return !topic.m_requiresProject || hasActiveProject;
+    return (!topic.m_requiresProject || hasActiveProject) &&
+           (!topic.m_requiresBeatmap || (hasActiveProject && hasOpenBeatmap));
 }
 /// @brief 解析并验证主题，拒绝重复标识、无效引用、循环前置依赖和超大输入。
 /// @return 完整主题或中文错误原因，失败不发布部分解析结果。

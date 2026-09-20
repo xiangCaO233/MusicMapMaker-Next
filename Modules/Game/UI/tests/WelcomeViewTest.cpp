@@ -37,6 +37,7 @@
 /// - 无项目时直接渲染主题仅供布局测试，不代表目录按钮可以点击；
 /// - 项目限定属性来自内置配置，页面不会按固定主题索引硬编码门禁；
 /// - 空白与模板谱面正文均生成真实分支卡片，确保配置未退化为静态说明；
+/// - 编辑区简介是要求谱面标签的阶段三真实主题；
 /// - 学习进度在首页与正文之间保持；
 /// - 越界主题索引安全回退首页；
 /// - 占位主题不残留真实分支窗口。
@@ -347,14 +348,19 @@ bool testPages()
     frame(960);
     if ( !welcome.showingHome() ) return false;
     // 占位主题可独立进入和返回，不能残留上一主题的实际分支或修改已有进度。
-    // 前四项现在均为真实教程，只有其后的创作主题仍进入占位回归循环。
-    // 起始索引随第二张阶段二卡片后移，避免把模板分支误判成残留窗口。
-    for ( std::size_t index = 4; index < service.topics().size(); ++index ) {
+    // 前五项现在均为真实教程，只有阶段四的创作主题进入占位回归循环。
+    // 编辑区简介虽因门禁不能从目录进入，仍不能被当成静态占位主题。
+    const auto& editorOverview = service.topics()[4];
+    if ( editorOverview.m_id != "mmm.editor-overview" ||
+         editorOverview.m_placeholder || !editorOverview.m_requiresProject ||
+         !editorOverview.m_requiresBeatmap )
+        return false;
+    for ( std::size_t index = 5; index < service.topics().size(); ++index ) {
         // 逐个进入所有内置占位主题，覆盖宽窄两种正文布局。
         welcome.showTopic(index);
         if ( welcome.showingHome() ) return false;
         for ( int i = 0; i < 4; ++i )
-            if ( !frame(index == 4 ? 360 : 960) ) return false;
+            if ( !frame(index == 5 ? 360 : 960) ) return false;
         for ( const auto* window : ImGui::GetCurrentContext()->Windows )
             if ( window->Active &&
                  std::string_view(window->Name).find("BranchCard") !=

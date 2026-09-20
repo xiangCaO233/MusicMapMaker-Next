@@ -24,6 +24,7 @@
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WalkthroughSpotlight.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <array>
@@ -804,6 +805,20 @@ void ToolbarView::update(UIManager* sourceManager)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
     // 可见标题为空格，###Toolbar 提供稳定停靠和查找 ID。
     if ( ImGui::Begin(" ###Toolbar", nullptr, flags) ) {
+        // 工具栏介绍覆盖当前实际显示区域，隐藏 Dock 标签不提交过期几何。
+        // 完整窗口矩形同时涵盖当前设置允许显示的全部工具按钮。
+        // 独立弹层不属于工具栏简介，保持在后续绘制阶段之外。
+        // 多视口时锚点沿用工具栏窗口自身视口，避免提示跳回主屏。
+        if ( auto* window = ImGui::GetCurrentWindow();
+             sourceManager && window &&
+             (!window->DockIsActive || window->DockTabIsVisible) ) {
+            sourceManager->walkthroughSpotlight().reportTarget(
+                "editor.toolbar",
+                window->Pos,
+                { window->Pos.x + window->Size.x,
+                  window->Pos.y + window->Size.y },
+                window->Viewport);
+        }
         bool pushedIconFont = false;
         if ( auto f = skinCfg.getFont("pure_icons") ) {
             // 工具图标优先使用纯图标字体，缺失时保持当前字体栈。
@@ -1134,8 +1149,8 @@ void ToolbarView::update(UIManager* sourceManager)
                 const ImVec2 swatchMin  = {
                     minPos.x + (btnSize - swatchSize) * 0.5f,
                     minPos.y + (showToolLabels
-                                    ? std::floor(5.0f * dpiScale)
-                                    : (btnHeight - swatchSize) * 0.5f),
+                                     ? std::floor(5.0f * dpiScale)
+                                     : (btnHeight - swatchSize) * 0.5f),
                 };
                 const ImVec2 swatchMax = { swatchMin.x + swatchSize,
                                            swatchMin.y + swatchSize };
@@ -1823,11 +1838,11 @@ void ToolbarView::update(UIManager* sourceManager)
         float targetY = m_lastSpeedBtnY;
 
         // 独立缓存尺寸，避免不同弹层内容宽高互相干扰。
-        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                : std::floor(160.0f * dpiScale);
-        float popupH = m_speedPopupHeight > 0.0f
-                           ? m_speedPopupHeight
-                           : std::floor(120.0f * dpiScale);
+        float popupW  = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                 : std::floor(160.0f * dpiScale);
+        float popupH  = m_speedPopupHeight > 0.0f
+                            ? m_speedPopupHeight
+                            : std::floor(120.0f * dpiScale);
         float padding = std::floor(8.0f * dpiScale);
 
         targetX = std::max(targetX, viewportLeft + popupW + padding);

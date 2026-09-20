@@ -1,0 +1,109 @@
+{
+  "id": "mmm.editor-overview",
+  "chapter": "creation",
+  "order": 30,
+  "version": 1,
+  "requires_project": true,
+  "requires_beatmap": true,
+  "completion": "all",
+  "title": {"zh_cn": "编辑区简介", "en_us": "Editor overview"},
+  "description": {"zh_cn": "认识谱面编辑器的主轨道、草稿、批注、BGM、时间线、工具栏与音频管理区域。进入前请先打开项目，并在标签页中打开至少一张谱面。", "en_us": "Tour the player, draft, annotation, BGM, timeline, toolbar, and audio-management areas. Open a project and at least one beatmap editor tab before starting."},
+  "branches": [
+    {
+      "id": "full-tour",
+      "title": {"zh_cn": "完整认识编辑区", "en_us": "Take the full editor tour"},
+      "steps": [
+        {
+          "id": "select-beatmap-tab",
+          "title": {"zh_cn": "进入谱面编辑器", "en_us": "Open a beatmap editor"},
+          "body": {"zh_cn": "点击上方标签栏中的任意谱面编辑器标签，进入对应谱面的编辑区。", "en_us": "Click any beatmap editor tab in the top tab bar to enter that beatmap's editor."},
+          "guide": {"prompt": {"zh_cn": "点击突出显示的谱面编辑器标签页。", "en_us": "Click the highlighted beatmap editor tab."}, "targets": ["editor.beatmap-tab"]}
+        },
+        {
+          "id": "player-area",
+          "title": {"zh_cn": "主轨道区", "en_us": "Player lanes"},
+          "body": {"zh_cn": "主轨道区用于编辑玩家实际游玩的 Note。这里放置并导出的物件会进入最终谱面。", "en_us": "The player lanes contain the Notes that players actually play. Objects placed and exported here become part of the final chart."},
+          "requires": ["select-beatmap-tab"],
+          "guide": {"prompt": {"zh_cn": "这里是主轨道区，用于编辑玩家实际游玩的 Note。", "en_us": "These are the player lanes, where playable Notes are edited."}, "targets": ["editor.canvas.player"]}
+        },
+        {
+          "id": "reveal-draft",
+          "title": {"zh_cn": "显示完整草稿区", "en_us": "Reveal the full draft area"},
+          "body": {"zh_cn": "在画布上按住鼠标中键向右拖动，直到左侧草稿区完整显示。若草稿区尚未开启，请先在 **编辑** 菜单中开启专业模式。", "en_us": "Hold the middle mouse button and drag right until the draft area on the left is fully visible. If it is hidden, enable Professional Mode from the Edit menu first."},
+          "requires": ["player-area"],
+          "guide": {"prompt": {"zh_cn": "按住中键向右拖动画布，直到草稿区完整显示。", "en_us": "Hold middle mouse and drag right until the draft area is fully visible."}, "targets": ["editor.canvas.pan-draft"]}
+        },
+        {
+          "id": "draft-area",
+          "title": {"zh_cn": "草稿区", "en_us": "Draft area"},
+          "body": {"zh_cn": "草稿区中的 Note 不会导出到玩家游玩区域。每张谱面拥有独立草稿区，可在 **编辑** 菜单中通过专业模式开启或关闭。", "en_us": "Notes in the draft area are not exported to the playable area. Every beatmap has its own draft area, which can be shown or hidden through Professional Mode in the Edit menu."},
+          "requires": ["reveal-draft"],
+          "guide": {"prompt": {"zh_cn": "这里是当前谱面独立的草稿区，其中的 Note 不会导出给玩家游玩。", "en_us": "This beatmap has its own draft area; Notes here are not exported for play."}, "targets": ["editor.canvas.draft"]}
+        },
+        {
+          "id": "reveal-bgm",
+          "title": {"zh_cn": "显示完整 BGM 区", "en_us": "Reveal the full BGM area"},
+          "body": {"zh_cn": "在画布上按住鼠标中键向左拖动，直到右侧 BGM 区完整显示。", "en_us": "Hold the middle mouse button and drag left until the BGM area on the right is fully visible."},
+          "requires": ["draft-area"],
+          "guide": {"prompt": {"zh_cn": "按住中键向左拖动画布，直到 BGM 区完整显示。", "en_us": "Hold middle mouse and drag left until the BGM area is fully visible."}, "targets": ["editor.canvas.pan-bgm"]}
+        },
+        {
+          "id": "annotation-area",
+          "title": {"zh_cn": "批注区", "en_us": "Annotation area"},
+          "body": {"zh_cn": "批注区位于主轨道与 BGM 区之间，用来在时间位置记录谱面制作备注，便于整理编排思路。", "en_us": "The annotation area sits between the player lanes and BGM area and records charting notes at specific times."},
+          "requires": ["reveal-bgm"],
+          "guide": {"prompt": {"zh_cn": "这里是批注区，可在指定时间位置记录制谱备注。", "en_us": "This is the annotation area for charting notes at specific times."}, "targets": ["editor.canvas.annotation"]}
+        },
+        {
+          "id": "bgm-area",
+          "title": {"zh_cn": "BGM 区", "en_us": "BGM area"},
+          "body": {"zh_cn": "BGM 区是类 BMS 编辑区。编写音乐前需要先绑定音频采样；放置的音频采样会从指定位置播放一次，持续到该采样结束。", "en_us": "The BGM area is a BMS-style editor. Bind audio samples first; a placed sample plays once from its assigned position until that sample ends."},
+          "requires": ["annotation-area"],
+          "guide": {"prompt": {"zh_cn": "这里是类 BMS 编辑区，需先绑定音频采样，再把采样放到指定播放位置。", "en_us": "This BMS-style area uses bound audio samples placed at their playback positions."}, "targets": ["editor.canvas.bgm"]}
+        },
+        {
+          "id": "timeline",
+          "title": {"zh_cn": "时间线窗口", "en_us": "Timeline window"},
+          "body": {"zh_cn": "时间线窗口提供整首歌曲的纵向概览，并用于查看、定位和编辑 BPM、流速、Jump 与 HS 等 Timing 事件。", "en_us": "The timeline gives an overview of the whole song and is used to inspect, locate, and edit BPM, scroll, Jump, and HS timing events."},
+          "requires": ["bgm-area"],
+          "guide": {"prompt": {"zh_cn": "这里是时间线窗口，用于总览歌曲并编辑各类 Timing 事件。", "en_us": "This timeline provides a song overview and timing-event editing."}, "targets": ["editor.timeline"]}
+        },
+        {
+          "id": "toolbar",
+          "title": {"zh_cn": "编辑工具栏", "en_us": "Editor toolbar"},
+          "body": {"zh_cn": "工具栏集中显示当前启用的移动、绘制、擦除、布局等工具，以及磁吸、拍线、播放速度、轨道数和分拍等快捷控制。实际显示项目取决于你的工具栏设置。", "en_us": "The toolbar shows enabled tools such as Move, Draw, Erase, and Layout, plus shortcuts for snapping, beat lines, playback speed, lane count, and beat division. Visible items depend on your toolbar settings."},
+          "requires": ["timeline"],
+          "guide": {"prompt": {"zh_cn": "这里是工具栏；当前显示的按钮用于切换编辑工具和常用谱面控制。", "en_us": "This toolbar switches editing tools and common chart controls."}, "targets": ["editor.toolbar"]}
+        },
+        {
+          "id": "open-audio-manager",
+          "title": {"zh_cn": "进入音频管理", "en_us": "Open Audio Manager"},
+          "body": {"zh_cn": "点击左侧标签栏中的音频标签，打开当前项目与皮肤音频资源的管理界面。", "en_us": "Click the Audio tab in the left sidebar to open audio resources for the current project and skin."},
+          "requires": ["toolbar"],
+          "guide": {"prompt": {"zh_cn": "点击左侧突出显示的音频标签。", "en_us": "Click the highlighted Audio tab in the left sidebar."}, "targets": ["editor.sidebar.audio"]}
+        },
+        {
+          "id": "audio-resources",
+          "title": {"zh_cn": "音频资源列表", "en_us": "Audio resource list"},
+          "body": {"zh_cn": "上方列表按常驻音效、交互音效、主音轨和项目音效分组，显示资源 ID 与路径，并提供资源级操作。", "en_us": "The upper list groups permanent effects, interaction effects, main tracks, and project effects, showing resource IDs, paths, and resource actions."},
+          "requires": ["open-audio-manager"],
+          "guide": {"prompt": {"zh_cn": "这里是音频资源列表，可按分组查看资源 ID、路径并进行资源级操作。", "en_us": "This is the grouped audio resource list with IDs, paths, and resource actions."}, "targets": ["editor.audio.resources"]}
+        },
+        {
+          "id": "audio-global-settings",
+          "title": {"zh_cn": "全局音频设置", "en_us": "Global audio settings"},
+          "body": {"zh_cn": "全局音频设置用于选择输出设备，并分别调整总音量、主音轨、效果音轨和交互音效的音量与静音状态。", "en_us": "Global audio settings select the output device and control volume and mute state for the master, main track, effects, and interaction sounds."},
+          "requires": ["audio-resources"],
+          "guide": {"prompt": {"zh_cn": "这里可选择输出设备，并调整各类音轨的全局音量和静音状态。", "en_us": "Choose an output device and adjust global volume and mute controls here."}, "targets": ["editor.audio.global"]}
+        },
+        {
+          "id": "audio-actions",
+          "title": {"zh_cn": "音频资源入口", "en_us": "Audio resource actions"},
+          "body": {"zh_cn": "底部按钮用于导入新的音频资源，以及打开项目音频工具进行进一步管理。", "en_us": "The bottom buttons import new audio resources and open the project audio tool for further management."},
+          "requires": ["audio-global-settings"],
+          "guide": {"prompt": {"zh_cn": "底部两个入口分别用于导入音频和打开项目音频工具。", "en_us": "These bottom actions import audio and open the project audio tool."}, "targets": ["editor.audio.actions"]}
+        }
+      ]
+    }
+  ]
+}

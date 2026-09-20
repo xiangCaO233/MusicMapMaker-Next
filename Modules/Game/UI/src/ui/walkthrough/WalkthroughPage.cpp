@@ -54,8 +54,8 @@
 /// - 持久化完成度只用于徽标，本轮路线拥有独立的易失进度；
 /// - 分支耗尽后停止突出层，不回退到先前已经操作的控件；
 /// - 折叠、切换分支或更换主题都会结束旧引导；
-/// - 页面缺席一帧后清除旧身份，返回正文不会恢复过期遮罩；
-/// - 可见帧通过 keepAlive 续租，Spotlight 自身不持有页面指针。
+/// - 欢迎标签被谱面标签遮住时，WelcomeView 仍每帧调用 updateGuide 续租；
+/// - Spotlight 自身不持有页面指针，路线身份仍由本对象管理。
 /// - 当前步骤仅以主题、分支和步骤 ID 标识，不缓存容器迭代器；
 /// - 业务信号使用进程内单调序号，只接受当前步骤启动后的新事件；
 /// - 已完成路线仍允许完整重放，以便用户重复熟悉全部操作；
@@ -70,7 +70,7 @@
 /// - target 列表顺序由配置作者定义，页面不猜测菜单或向导状态；
 /// - 没有目标的键盘及外部应用步骤仍显示 prompt；
 /// - JSON 不能通过突出层执行控件动作或注入输入；
-/// - 路线会话不改写持久化进度，业务事件仍由 Progress 独立记录。
+/// - 路线步骤完成会同步为手动进度；已有业务事件的自动来源仍由 Progress 保留。
 ///
 /// 性能约定：
 /// - 每帧只遍历当前主题的分支和步骤；
@@ -88,6 +88,126 @@
 
 namespace MMM::UI
 {
+/// @brief 启动一个配置步骤的突出引导。
+/// @param manager 提供 Spotlight、服务和当前语言。
+/// @param topic 当前路线主题。
+/// @param branch 当前路线分支。
+/// @param step 必须包含 guide 的目标步骤。
+void WalkthroughPage::startGuide(UIManager*                 manager,
+                                 const Walkthrough::Topic&  topic,
+                                 const Walkthrough::Branch& branch,
+                                 const Walkthrough::Step&   step)
+{
+    if ( !step.m_guide ) return;
+    const auto& language =
+        Config::AppConfig::instance().getEditorSettings().language;
+    const auto& configuredPrompt = step.m_guide->m_prompt.get(language);
+    manager->walkthroughSpotlight().start(step.m_guide->m_targets,
+                                          configuredPrompt.empty()
+                                              ? step.m_title.get(language)
+                                              : configuredPrompt);
+    m_activeGuide = ActiveGuide{
+        .topicId  = topic.m_id,
+        .branchId = branch.m_id,
+        .stepId   = step.m_id,
+        .signalRevisionAtStart =
+            manager->walkthroughService().latestSignalRevision(step),
+    };
+}
+
+/// @brief 显式结束当前路线并清理本地身份。
+/// @param manager 提供全局 Spotlight。
+void WalkthroughPage::stopGuide(UIManager* manager)
+{
+    manager->walkthroughSpotlight().stop();
+    m_activeGuide.reset();
+}
+
+/// @brief 推进当前整条引导路线并为前景层续租。
+/// @param manager 提供目录、环境状态、信号序号和 Spotlight。
+/// @warning UI 热路径：只在路线活动时线性查找一个主题、分支和步骤。
+void WalkthroughPage::updateGuide(UIManager* manager)
+{
+    // 路线推进协议：
+    // - m_activeGuide 是本轮身份，不读取历史完成度决定跳步；
+    // - Spotlight Completed 是当前 UI 目标的明确终态；
+    // - 业务信号只接受步骤启动后的新修订号；
+    // - 每次衔接重新启动 Spotlight 并建立新的信号基线；
+    // - Dock 切换不会清理身份，返回目录和关闭欢迎页则显式 stop；
+    // - 项目或谱面标签消失会立即停止，避免遮罩指向失效窗口。
+    auto& spotlight = manager->walkthroughSpotlight();
+    if ( m_activeGuide && !spotlight.active() ) {
+        m_activeGuide.reset();
+        return;
+    }
+    if ( !m_activeGuide ) return;
+
+    auto&       service = manager->walkthroughService();
+    const auto& topics  = service.topics();
+    const auto  topic   = std::find_if(
+        topics.begin(), topics.end(), [&](const Walkthrough::Topic& candidate) {
+            return candidate.m_id == m_activeGuide->topicId;
+        });
+    if ( topic == topics.end() ||
+         !Walkthrough::topicAvailable(
+             *topic,
+             manager->hasActiveProjectUiState() &&
+                 !manager->isProjectTransitionInProgress(),
+             manager->hasOpenBeatmapEditor()) ) {
+        // 环境或目录失效后立即撤掉遮罩，不能继续指向不存在的编辑区。
+        spotlight.stop();
+        m_activeGuide.reset();
+        return;
+    }
+    const auto branch =
+        std::find_if(topic->m_branches.begin(),
+                     topic->m_branches.end(),
+                     [&](const Walkthrough::Branch& candidate) {
+                         return candidate.m_id == m_activeGuide->branchId;
+                     });
+    if ( branch == topic->m_branches.end() ) {
+        spotlight.stop();
+        m_activeGuide.reset();
+        return;
+    }
+    const auto current =
+        std::find_if(branch->m_steps.begin(),
+                     branch->m_steps.end(),
+                     [&](const Walkthrough::Step& candidate) {
+                         return candidate.m_id == m_activeGuide->stepId;
+                     });
+    if ( current == branch->m_steps.end() ) {
+        spotlight.stop();
+        m_activeGuide.reset();
+        return;
+    }
+    const bool targetCompleted = spotlight.completed();
+    if ( targetCompleted )
+        // 高亮层的“知道了”和业务目标完成都应同步到主题进度。
+        // acknowledge 对已经由业务信号自动完成的步骤保持幂等并保留来源。
+        service.acknowledge(*topic, *current);
+    if ( targetCompleted ||
+         service.receivedSignalAfter(*current,
+                                     m_activeGuide->signalRevisionAtStart) ) {
+        const auto next = std::find_if(std::next(current),
+                                       branch->m_steps.end(),
+                                       [](const Walkthrough::Step& candidate) {
+                                           return candidate.m_guide.has_value();
+                                       });
+        if ( next == branch->m_steps.end() ) {
+            // 最后一步已先同步进度，此处只结束易失路线，不清理完成记录。
+            spotlight.stop();
+            m_activeGuide.reset();
+            return;
+        }
+        startGuide(manager, *topic, *branch, *next);
+    }
+    // Dock 标签切走欢迎页后仍必须保留遮罩和路线状态机。
+    // keepAlive 只控制本帧绘制，不改变当前步骤或重启目标状态机。
+    // 目标窗口晚于欢迎页绘制时仍会在帧末 render 前补齐有效几何。
+    if ( m_activeGuide ) spotlight.keepAlive();
+}
+
 /// @brief 在欢迎页正文区域绘制一个演练主题及其步骤分支。
 /// @param manager 提供演练服务和 Markdown 图片缓存的 UI 管理器。
 /// @param topicIndex 当前主题在已验证目录中的索引。
@@ -96,18 +216,6 @@ namespace MMM::UI
 /// 本地只保存展开分支及最近准备图片的主题/语言身份。
 void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
 {
-    if ( m_activeGuide && !manager->walkthroughSpotlight().active() ) {
-        // 只有显式 stop 才清理路线身份；步骤完成由 Completed 状态负责衔接。
-        m_activeGuide.reset();
-    }
-    const int currentFrame = ImGui::GetFrameCount();
-    if ( m_activeGuide && m_lastRenderFrame >= 0 &&
-         currentFrame > m_lastRenderFrame + 1 ) {
-        // 页面至少缺席一帧表示用户离开主题，返回时不恢复过期操作指引。
-        manager->walkthroughSpotlight().stop();
-        m_activeGuide.reset();
-    }
-    m_lastRenderFrame = currentFrame;
     // 主题目录由服务统一验证，索引失效时不绘制过期内容。
     auto&       service = manager->walkthroughService();
     const auto& topics  = service.topics();
@@ -118,7 +226,8 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
     const bool canEnterTopic = Walkthrough::topicAvailable(
         topic,
         manager->hasActiveProjectUiState() &&
-            !manager->isProjectTransitionInProgress());
+            !manager->isProjectTransitionInProgress(),
+        manager->hasOpenBeatmapEditor());
     if ( !canEnterTopic && m_activeGuide ) {
         // 项目消失后立即结束旧目标遮罩，避免仍引导不可执行的菜单动作。
         manager->walkthroughSpotlight().stop();
@@ -156,21 +265,6 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
     markdownOptions.images = images;
     // 进度引用由服务拥有，只在本帧查询，不由页面修改。
     const auto& progress = service.progress();
-    // 用户启动或步骤衔接时才复制目标列表，普通帧只对当前引导续租。
-    const auto startGuide = [&](const Walkthrough::Branch& branch,
-                                const Walkthrough::Step&   step) {
-        if ( !step.m_guide ) return;
-        const auto& configuredPrompt = step.m_guide->m_prompt.get(language);
-        manager->walkthroughSpotlight().start(step.m_guide->m_targets,
-                                              configuredPrompt.empty()
-                                                  ? step.m_title.get(language)
-                                                  : configuredPrompt);
-        m_activeGuide = ActiveGuide{ .topicId  = topic.m_id,
-                                     .branchId = branch.m_id,
-                                     .stepId   = step.m_id,
-                                     .signalRevisionAtStart =
-                                         service.latestSignalRevision(step) };
-    };
     // 主题 ID 隔离分支、步骤和重置弹窗的 ImGui 内部标识。
     ImGui::PushID(topic.m_id.c_str());
     ImGui::Dummy({ 0, 24.0F * scale });
@@ -190,7 +284,11 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
     renderMarkdown(topic.m_description.get(language), markdownOptions);
     if ( !canEnterTopic ) {
         ImGui::Spacing();
-        ImGui::TextDisabled("%s", TR("ui.walkthrough.requires_project").data());
+        ImGui::TextDisabled(
+            "%s",
+            TR(topic.m_requiresBeatmap ? "ui.walkthrough.requires_beatmap"
+                                       : "ui.walkthrough.requires_project")
+                .data());
     }
     ImGui::Dummy({ 0, 28.0F * scale });
     // 主题正文与欢迎目录统一沿用设置项的淡背景和中性描边。
@@ -211,39 +309,6 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
         // 空分支按 vacuous truth 视为完成，与模型目标判定保持一致。
         const bool done = count == branch.m_steps.size();
         if ( done ) ++finishedBranches;
-        if ( m_activeGuide && m_activeGuide->topicId == topic.m_id &&
-             m_activeGuide->branchId == branch.m_id ) {
-            // 当前路线只认本轮目标终态或启动后新到达的业务信号。
-            const auto current =
-                std::find_if(branch.m_steps.begin(),
-                             branch.m_steps.end(),
-                             [&](const Walkthrough::Step& step) {
-                                 return step.m_id == m_activeGuide->stepId;
-                             });
-            if ( current == branch.m_steps.end() ) {
-                manager->walkthroughSpotlight().stop();
-                m_activeGuide.reset();
-            } else if ( manager->walkthroughSpotlight().completed() ||
-                        service.receivedSignalAfter(
-                            *current, m_activeGuide->signalRevisionAtStart) ) {
-                const auto next =
-                    std::find_if(std::next(current),
-                                 branch.m_steps.end(),
-                                 [&](const Walkthrough::Step& step) {
-                                     return step.m_guide.has_value();
-                                 });
-                if ( next == branch.m_steps.end() ) {
-                    // 路线全部走完后结束；历史徽标不会改变本轮步骤数量。
-                    manager->walkthroughSpotlight().stop();
-                    m_activeGuide.reset();
-                } else {
-                    startGuide(branch, *next);
-                }
-            }
-            if ( m_activeGuide && m_activeGuide->branchId == branch.m_id )
-                // 页面当前仍在提交该分支，允许纯前景层在帧末绘制。
-                manager->walkthroughSpotlight().keepAlive();
-        }
         // 页面只允许一个分支展开，减少长教程的纵向占用。
         const bool expanded = m_expandedBranch == index;
         ImGui::PushID(branch.m_id.c_str());
@@ -353,7 +418,7 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
                             manager->walkthroughSpotlight().stop();
                             m_activeGuide.reset();
                         } else {
-                            startGuide(branch, *firstGuide);
+                            startGuide(manager, topic, branch, *firstGuide);
                             // 点击帧立即续租，目标从下一帧开始按路线顺序跟随。
                             manager->walkthroughSpotlight().keepAlive();
                         }
