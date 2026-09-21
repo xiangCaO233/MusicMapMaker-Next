@@ -961,6 +961,9 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
         { "timelineZoom", config.timelineZoom },
         { "scrollAnimationDuration", config.scrollAnimationDuration },
         { "enableLinearScrollMapping", config.enableLinearScrollMapping },
+        { "simulateAutoplay", config.simulateAutoplay },
+        { "hideJudgedNotes", config.hideJudgedNotes },
+        { "hideJudgedFlicks", config.hideJudgedFlicks },
         { "snapThreshold", config.snapThreshold },
         { "beatLineAlpha", config.beatLineAlpha },
         { "hoverSubdivisionLineExtensionRatio",
@@ -1049,6 +1052,12 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
     config.spectrumVisualOffset    = j.value("spectrumVisualOffset", 0.0f);
     config.timelineZoom            = j.value("timelineZoom", 1.0f);
     config.scrollAnimationDuration = j.value("scrollAnimationDuration", 0.12f);
+    // 旧配置同样默认启用模拟，显式关闭的选择在往返时保留。
+    config.simulateAutoplay = j.value("simulateAutoplay", true);
+    // 子选项独立持久化；关闭总开关不清空单点显示偏好。
+    config.hideJudgedNotes = j.value("hideJudgedNotes", true);
+    // 滑键单独保存，旧配置与新建配置均默认消隐。
+    config.hideJudgedFlicks = j.value("hideJudgedFlicks", true);
     config.enableLinearScrollMapping =
         j.value("enableLinearScrollMapping", false);
     // 悬浮分拍线延伸比例直接限制到归一化零至一范围。

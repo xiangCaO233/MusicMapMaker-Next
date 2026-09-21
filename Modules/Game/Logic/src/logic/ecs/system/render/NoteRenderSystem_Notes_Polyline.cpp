@@ -113,6 +113,17 @@ void NoteRenderSystem::renderPolyline(
     const CanvasLaneProjection* laneProjection)
 {
     if ( !cache ) return;
+    // 模拟策略与物件元数据分离：不能为了预览改写时间、HS 或子节点序列。
+    // 使用当前画布时间可让主画布和缩略预览各自维持正确的驻留位置。
+    const bool simulate = config.visual.simulateAutoplay &&
+                          snapshot->isPlaying && !note.m_isDraft;
+    // 完成后同时去掉头、身体、节点和装饰，负 Scroll 不能恢复已判定部分。
+    // 空折线没有可判定区间；暂停时不应用此门禁。
+    // 结束判断在四个绘制阶段之前，防止只隐藏身体而遗留头尾装饰。
+    // 单点消隐子选项不影响这里，折线生命周期始终由总开关控制。
+    if ( simulate && !note.m_subNotes.empty() &&
+         currentTime >= getSubCarrierEndTime(note.m_subNotes.back()) )
+        return;
 
     // 先获得普通 Note 的基础大小，各节点再按所在区域与皮肤纹理比例换算。
     float noteW = singleTrackW * config.visual.noteScaleX;
@@ -140,7 +151,8 @@ void NoteRenderSystem::renderPolyline(
                      generateHitboxes,
                      glowPart,
                      glowSubIndex,
-                     laneProjection);
+                     laneProjection,
+                     simulate);
 
     // 中间节点使用专用 Node 纹理，与普通头部的皮肤尺寸可以不同。
     drawPolylineNodes(batcher,
@@ -214,6 +226,7 @@ void NoteRenderSystem::renderPolyline(
 }
 
 /// @brief 绘制子物件自身主体及相邻子物件之间的连接四边形。
+/// @param simulateJudgment 播放时裁掉已判定区间，活动连接从判定线接出。
 /// @param batcher 图元输出器，保留调用方的裁剪状态。
 /// @param note 折线组件，空节点列表不生成主体。
 /// @param cache 时间到滚动距离的只读映射。
@@ -249,7 +262,7 @@ void NoteRenderSystem::drawPolylineBody(
     double currentTime, float topY, float bottomY, float noteW, float noteH,
     glm::vec4 colorHold, entt::entity entity, bool generateHitboxes,
     HoverPart glowPart, int glowSubIndex,
-    const CanvasLaneProjection* laneProjection)
+    const CanvasLaneProjection* laneProjection, bool simulateJudgment)
 {
     if ( note.m_subNotes.empty() ) return;
     // 非主体部位的高亮调用不生成连接几何，避免背景主体参与节点光晕叠加。
@@ -292,7 +305,18 @@ void NoteRenderSystem::drawPolylineBody(
         const double padDelta = std::max(startLane.noteH, endLane.noteH) /
                                 static_cast<double>(renderScaleY);
 
-        if ( !NoteRenderSystem::isCarrierVisible(sub.timestamp,
+        // 只有正在判定的载体需要绕过原始端点剔除：其新起点固定在判定线。
+        // 尚未开始的远处载体仍保留原有门禁，避免巨大 Jump 跨屏生成主体。
+        // 竖段本体和到下一节点的连接属于不同时间区间，共用外层可见性入口。
+        // 延伸到下一节点的时间上界，保证本体已结束时仍可绘制活动斜段。
+        const double activeEnd =
+            i + 1 < note.m_subNotes.size()
+                ? std::max(subEndTime, note.m_subNotes[i + 1].timestamp)
+                : subEndTime;
+        const bool active = simulateJudgment && currentTime >= sub.timestamp &&
+                            currentTime < activeEnd;
+        if ( !active &&
+             !NoteRenderSystem::isCarrierVisible(sub.timestamp,
                                                  subEndTime,
                                                  currentTime,
                                                  displayDeltaStart,
@@ -309,7 +333,8 @@ void NoteRenderSystem::drawPolylineBody(
         float subEndY = subStartY;
 
         // 自身主体与过渡连接分别生成：普通节点无本体，但仍可连接下一节点。
-        if ( sub.type == ::MMM::NoteType::FLICK && sub.dtrack != 0 ) {
+        if ( sub.type == ::MMM::NoteType::FLICK && sub.dtrack != 0 &&
+             (!simulateJudgment || currentTime < sub.timestamp) ) {
             auto itBodyH = snapshot->uvMap.find(
                 static_cast<uint32_t>(TextureID::HoldBodyHorizontal));
             if ( itBodyH != snapshot->uvMap.end() ) {
@@ -354,7 +379,8 @@ void NoteRenderSystem::drawPolylineBody(
                                                    drawH });
                 }
             }
-        } else if ( sub.type == ::MMM::NoteType::HOLD && sub.duration > 0 ) {
+        } else if ( sub.type == ::MMM::NoteType::HOLD && sub.duration > 0 &&
+                    (!simulateJudgment || currentTime < subEndTime) ) {
             // 零时长 Hold 不输出竖直主体，仍可由节点和装饰阶段表现端点。
             subEndY = judgmentLineY -
                       static_cast<float>(cache->getDisplayDelta(
@@ -386,6 +412,13 @@ void NoteRenderSystem::drawPolylineBody(
                        static_cast<float>(cache->getDisplayDelta(
                            subEndTime, currentAbsY, subEndAnchorTime)) *
                            renderScaleY;
+            // 按住当前竖段后，起点固定在判定线，尾部越线时压缩为零长度。
+            // 钳制只发生在当前已判定的载体，未来载体仍保留反向几何。
+            // 不把终点距离取绝对值，否则负 Scroll 会被错误翻转成向前延长。
+            if ( simulateJudgment && currentTime >= sub.timestamp ) {
+                sy = judgmentLineY;
+                ey = std::min(ey, judgmentLineY);
+            }
             // 自由四边形保留首尾投影顺序，不假定时间增加时 Y 一定减小。
             batcher.pushFreeQuad({ bodyX, sy },
                                  { bodyX + bodySize.x, sy },
@@ -413,6 +446,8 @@ void NoteRenderSystem::drawPolylineBody(
             // 只连接相邻数组项，不跳过中间节点寻找另一个可见节点。
             // 锚点按虚拟对象归属决定，不能简单用下一节点的发生时间。
             const auto& next = note.m_subNotes[i + 1];
+            // 已到达下一节点的连接体不再显示，但下一载体仍在下一轮处理。
+            if ( simulateJudgment && currentTime >= next.timestamp ) continue;
             // 同时刻的新竖段是另一虚拟载体，HS 跳变不能被画成跨屏连接线。
             // rmslideEXF 将竖段末尾横线绘制在前一虚拟对象内；
             // 下一对象重新采样 HS，因此两者在空间上不一定相接。
@@ -481,9 +516,22 @@ void NoteRenderSystem::drawPolylineBody(
             float x1 = curBodyX;
             float x2 = nextBodyX;
 
+            // 活动斜段沿时间插值横向位置；仅固定纵向判定线，不修改 HS 锚点。
+            // 起点宽度同步插值，独立轨道布局下也能与剩余梯形连续相接。
+            // 时间截断独立于滚动积分；Jump 和停卷轴不改变横向判定进度。
+            // 未开始的连接仍使用原始端点，保留编辑器已有变速投影语义。
+            float startWidth = curBodySize.x;
+            if ( simulateJudgment && currentTime >= tStart && tEnd > tStart ) {
+                const float progress = static_cast<float>(
+                    (currentTime - tStart) / (tEnd - tStart));
+                x1         = std::lerp(x1, x2, progress);
+                startWidth = std::lerp(startWidth, nextBodySize.x, progress);
+                sy         = judgmentLineY;
+                ey         = std::min(ey, judgmentLineY);
+            }
             // 两端各用自己的宽度和横坐标，不能退化成覆盖整段包围盒的矩形。
             batcher.pushFreeQuad({ x1, sy },
-                                 { x1 + curBodySize.x, sy },
+                                 { x1 + startWidth, sy },
                                  { x2 + nextBodySize.x, ey },
                                  { x2, ey },
                                  finalTransColor);
@@ -558,6 +606,10 @@ void NoteRenderSystem::drawPolylineNodes(
         }
 
         const auto& sub = note.m_subNotes[i];
+        // 中间节点经过判定后由活动头部接替，防止倒退时留下重复节点。
+        if ( config.visual.simulateAutoplay && snapshot->isPlaying &&
+             !note.m_isDraft && currentTime >= sub.timestamp )
+            continue;
         // 紧随横段的 Hold 起点圆点表示横段的另一端，不是新虚拟载体的头部。
         // 竖段主体仍用自己的 HS；这里只让横段两端装饰留在同一条水平线上。
         // 拾取框随后复用相同位置，避免可见圆点与可点击区域分离。
@@ -660,7 +712,7 @@ void NoteRenderSystem::drawPolylineNodes(
 /// @note 无实体身份的预览仍可输出图元，但不会产生可编辑的拾取记录。
 /// @note 第一个节点的类型不改变头部纹理；Hold 或 Flick 头也使用普通 Note。
 /// @note 头部高亮要求明确索引 0，和中间节点允许 -1 的筛选规则不同。
-/// @warning 渲染热路径只读取首节点，不遍历整条折线重新推导头部。
+/// @warning 渲染热路径通过二分定位活动节点，不分配、不修改折线组件。
 void NoteRenderSystem::drawPolylineHead(
     Batcher& batcher, const NoteComponent& note, const ScrollCache* cache,
     RenderSnapshot* snapshot, float judgmentLineY, float leftX,
@@ -682,14 +734,52 @@ void NoteRenderSystem::drawPolylineHead(
     double displayDeltaStart = cache->getDisplayDelta(
         firstSub.timestamp, currentAbsY, firstSub.timestamp);
     // 只判断头部时刻可见性；首节点为 Hold 也不让其尾部替头部保活。
+    const bool holding = config.visual.simulateAutoplay &&
+                         snapshot->isPlaying && !note.m_isDraft &&
+                         currentTime >= firstSub.timestamp;
+    // 驻留头用零显示差，不能把 currentTime 当成新的 HS 锚点重算原节点。
+    // 零差也让下方空间门禁保留活动头，即使旧起点早已远离视口。
+    if ( holding ) displayDeltaStart = 0.0;
     double displayDeltaEnd = displayDeltaStart;
 
     double maxDelta =
         (judgmentLineY - topY) / static_cast<double>(renderScaleY);
     double minDelta =
         (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
-    const auto lane = resolveNoteLaneGeometry(
+    auto lane = resolveNoteLaneGeometry(
         firstSub.trackIndex, laneProjection, leftX, singleTrackW, noteW, noteH);
+    // 活动头沿折线时间拓扑移动到当前轨道；二分定位避免每帧额外全段扫描。
+    // Hold 自身持续期间固定轨道，过渡段才在两个端点中心之间移动。
+    if ( holding ) {
+        const auto next = std::upper_bound(
+            note.m_subNotes.begin(),
+            note.m_subNotes.end(),
+            currentTime,
+            [](double time, const auto& sub) { return time < sub.timestamp; });
+        // holding 已保证时间不早于首节点，因此 upper_bound 的前项始终存在。
+        // 同刻横滑和竖段取最后一项，使头部落在横滑完成后的轨道。
+        const auto& active = *(next - 1);
+        const auto  track =
+            active.trackIndex +
+            (active.type == ::MMM::NoteType::FLICK ? active.dtrack : 0);
+        lane = resolveNoteLaneGeometry(
+            track, laneProjection, leftX, singleTrackW, noteW, noteH);
+        const double start = getSubCarrierEndTime(active);
+        if ( next != note.m_subNotes.end() && currentTime > start &&
+             next->timestamp > start ) {
+            const auto  destination = resolveNoteLaneGeometry(next->trackIndex,
+                                                              laneProjection,
+                                                              leftX,
+                                                              singleTrackW,
+                                                              noteW,
+                                                              noteH);
+            const float progress    = static_cast<float>(
+                (currentTime - start) / (next->timestamp - start));
+            // 只改变观察用几何副本，不改变节点轨号或领域投影缓存。
+            // 头部中心与活动连接体起边采用同一时间比例，避免换轨时脱节。
+            lane.leftX += (destination.centerX() - lane.centerX()) * progress;
+        }
+    }
     const double padDelta = lane.noteH / static_cast<double>(renderScaleY);
 
     if ( !NoteRenderSystem::isCarrierVisible(firstSub.timestamp,
@@ -802,6 +892,9 @@ void NoteRenderSystem::drawPolylineDecoration(
         polylineCarrierAnchor(note, note.m_subNotes.size() - 1);
     double displayDelta =
         cache->getDisplayDelta(targetTime, currentAbsY, targetAnchorTime);
+    if ( config.visual.simulateAutoplay && snapshot->isPlaying &&
+         !note.m_isDraft && currentTime >= note.m_subNotes.front().timestamp )
+        displayDelta = std::max(0.0, displayDelta);
     double maxDelta =
         (judgmentLineY - topY) / static_cast<double>(renderScaleY);
     double minDelta =
@@ -873,10 +966,8 @@ void NoteRenderSystem::drawPolylineDecoration(
     } else if ( last.type == ::MMM::NoteType::HOLD ) {
         if ( glowPart == HoverPart::None || glowPart == HoverPart::HoldEnd ) {
             // 即使时长为零也允许绘制结束线，此处不复用正时长主体的筛选条件。
-            float subEndY = judgmentLineY -
-                            static_cast<float>(cache->getDisplayDelta(
-                                targetTime, currentAbsY, targetAnchorTime)) *
-                                renderScaleY;
+            float subEndY =
+                judgmentLineY - static_cast<float>(displayDelta) * renderScaleY;
             const glm::vec2 endSize = getDrawSize(
                 snapshot, TextureID::HoldEnd, lane.noteW, lane.noteH);
             // 结束线使用独立纹理比例，不强制沿用竖直主体宽度。

@@ -127,6 +127,16 @@ struct VisualConfig {
     float noteScaleY{ 0.95f };
     /// @brief 是否在玩家物件上方显示绑定音效资源标签。
     bool showBoundSampleLabels{ true };
+    /// @brief
+    /// 播放时模拟长条判定：头部驻留判定线，已判定身体消隐，结束后整体隐藏。
+    /// @note 默认开启；暂停和草稿保持完整编辑几何，不保存任何判定状态。
+    bool simulateAutoplay{ true };
+    /// @brief 自动游玩模拟的子选项：普通单点到达判定时间后隐藏。
+    /// @note 仅在总开关启用时生效，关闭总开关仍保留此选择。
+    bool hideJudgedNotes{ true };
+    /// @brief 自动游玩模拟的同级子选项：独立滑键判定后整体消隐。
+    /// @note 与单点开关独立，折线内部横段仍遵循长条分段判定。
+    bool hideJudgedFlicks{ true };
     /// @brief 音符填充模式。
     BackgroundFillMode noteFillMode{ BackgroundFillMode::Stretch };
     /// @brief 视觉偏移。

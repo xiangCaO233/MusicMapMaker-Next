@@ -374,6 +374,11 @@ void SettingsView::drawVisualSettings()
     // - scrollAnimationDuration 控制导航过渡时长，零值表示无动画；
     // - enableLinearScrollMapping 选择滚动输入映射算法；
     // - snapThreshold 以屏幕像素保存，便于在视觉距离上保持一致；
+    // - simulateAutoplay 改变播放中的物件生命周期，暂停仍显示原始编辑几何；
+    // - hideJudgedNotes 仅控制普通单点，不能让长条头在开始判定时消失；
+    // - 单点子选项保留独立存储值，总开关关闭只禁用它的编辑入口；
+    // - 两个开关不改写 Scroll/Jump/HS 事件，也不改变谱面或音频时间；
+    // - 驻留头的运动规则由渲染端统一实现，设置页面不维护判定缓存；
     // - 页面只发布新配置，不模拟鼠标、滚轮或吸附事件。
     //
     // 这些值可能在连续拖动中每帧改变，EventBus 消费者应覆盖旧配置并避免为每个
@@ -423,6 +428,50 @@ void SettingsView::drawVisualSettings()
                         Utils::TooltipDir::Right);
                 }
             });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.simulate_autoplay").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox, bool) {
+                // 仅改变播放预览；暂停后仍能编辑已经经过的长条。
+                changed |= ::MMM::UI::FeedbackCheckbox(
+                    "##SimulateAutoplay", &visual.simulateAutoplay);
+                if ( ImGui::IsItemHovered() )
+                    Utils::renderTooltip(
+                        TR("ui.settings.visual.simulate_autoplay_tooltip")
+                            .data(),
+                        Utils::TooltipDir::Right);
+            });
+        addSettingItem(*sec,
+                       rowIndex,
+                       TR_CACHE("ui.settings.visual.hide_judged_notes").data(),
+                       maxLabelW,
+                       [&](Clay_BoundingBox, bool) {
+                           // 子开关保留自己的值，但仅在总模拟启用后允许调整。
+                           // 行标题用层级标记区分从属关系，置灰状态说明当前不可配置。
+                           // 禁用仅围住交互控件，避免影响下一行独立设置。
+                           // 重新打开总开关时恢复此前单点显示偏好。
+                           // 子选项不改变长条及折线的判定消隐。
+                           ImGui::BeginDisabled(!visual.simulateAutoplay);
+                           changed |= ::MMM::UI::FeedbackCheckbox(
+                               "##HideJudgedNotes", &visual.hideJudgedNotes);
+                           ImGui::EndDisabled();
+                       });
+        addSettingItem(*sec,
+                       rowIndex,
+                       TR_CACHE("ui.settings.visual.hide_judged_flicks").data(),
+                       maxLabelW,
+                       [&](Clay_BoundingBox, bool) {
+                           // 滑键和单点是同级偏好，选择不同值时不能相互覆盖。
+                           // 这个开关控制独立滑键整体，不只控制箭头或横向身体。
+                           // 折线内部横段仍随长条判定，避免中途断开活动长条。
+                           // 是否可配置统一服从总开关，保留关闭期间的选择。
+                           ImGui::BeginDisabled(!visual.simulateAutoplay);
+                           changed |= ::MMM::UI::FeedbackCheckbox(
+                               "##HideJudgedFlicks", &visual.hideJudgedFlicks);
+                           ImGui::EndDisabled();
+                       });
         addSettingItem(*sec,
                        rowIndex,
                        TR_CACHE("ui.settings.visual.linear_scroll").data(),

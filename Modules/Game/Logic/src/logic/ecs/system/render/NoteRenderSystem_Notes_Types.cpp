@@ -77,6 +77,7 @@ void NoteRenderSystem::renderTap(Batcher&                           batcher,
 /// @param currentAbsY 当前显示时刻对应的积分位置。
 /// @param judgmentLineY 判定线的画布坐标。
 /// @param renderScaleY 积分距离到画布纵向距离的缩放。
+/// @param currentTime 当前画布时间，模拟判定状态不依赖卷轴方向。
 /// @param topY 可绘制轨道的一侧纵向边界。
 /// @param bottomY 另一侧边界，允许与 topY 顺序相反。
 /// @param glowPart None 绘制全部部件，其余值仅选择对应部件。
@@ -86,8 +87,8 @@ void NoteRenderSystem::renderHold(
     const Config::EditorConfig& config, RenderSnapshot* snapshot, float x,
     float w, float h, float singleTrackW, glm::vec4 headColor,
     glm::vec4 bodyColor, glm::vec4 endColor, const ScrollCache* cache,
-    double currentAbsY, float judgmentLineY, float renderScaleY, float topY,
-    float bottomY, HoverPart glowPart)
+    double currentAbsY, double currentTime, float judgmentLineY,
+    float renderScaleY, float topY, float bottomY, HoverPart glowPart)
 {
     // 三种纹理分别按 Note 基准尺寸换算，裁剪不得改变其横向比例。
     // 主体宽度仅由皮肤 UV 和 noteScaleX 决定，与 SV 数值完全无关。
@@ -108,24 +109,33 @@ void NoteRenderSystem::renderHold(
     float bodyX = x + (w - bodySize.x) * 0.5f;
     // 结束时间保持 double，避免长持续时间在投影前损失精度。
     const double holdEndTime = note.m_timestamp + note.m_duration;
+    // 按时间而非投影方向判定完成，负 Scroll 回流不会复活已结束的长条。
+    // 不写入持久状态，暂停或向前回跳会立即恢复相应时刻的几何。
+    const bool simulate = config.visual.simulateAutoplay &&
+                          snapshot->isPlaying && !note.m_isDraft;
+    if ( simulate && currentTime >= holdEndTime ) return;
+    const bool holding = simulate && currentTime >= note.m_timestamp;
 
     // 保留 double 投影直到裁剪完成，避免极大 SV 先转换为超大 float。
     // 头部锚点使用自身时间，确保跨 Timing 段时选择正确积分基准。
     // renderScaleY 在 double 域中相乘，避免中间结果先降为 float。
     const double headY =
-        judgmentLineY - cache->getDisplayDelta(
-                            note.m_timestamp, currentAbsY, note.m_timestamp) *
-                            static_cast<double>(renderScaleY);
+        holding ? judgmentLineY
+                : judgmentLineY - cache->getDisplayDelta(note.m_timestamp,
+                                                         currentAbsY,
+                                                         note.m_timestamp) *
+                                      static_cast<double>(renderScaleY);
     // 原始单段 seg 尾部独立采样 HS，其他 Hold 保留共享起点的规则。
     // 两端不同 HS 时长度随当前卷轴变化，不得缓存为固定时长乘速度。
-    const double endY =
-        judgmentLineY -
-        cache->getDisplayDelta(
-            holdEndTime,
-            currentAbsY,
-            ::MMM::holdEndHsAnchor(
-                note.m_metadata, note.m_timestamp, note.m_duration)) *
-            static_cast<double>(renderScaleY);
+    double endY = judgmentLineY -
+                  cache->getDisplayDelta(
+                      holdEndTime,
+                      currentAbsY,
+                      ::MMM::holdEndHsAnchor(
+                          note.m_metadata, note.m_timestamp, note.m_duration)) *
+                      static_cast<double>(renderScaleY);
+    // 已按住的长条不从判定线向下反向伸长；尾部越线时收敛为零长度。
+    if ( holding ) endY = std::min(endY, static_cast<double>(judgmentLineY));
     // 调用方可能提供翻转边界，先规整为递增区间再执行 clamp。
     // 使用实际轨道上下边界而非硬编码窗口高度，兼容主画布与预览缩放。
     const float clipTop    = std::min(topY, bottomY);

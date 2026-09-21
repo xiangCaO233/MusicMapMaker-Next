@@ -58,8 +58,15 @@ void renderOverlappingTaps(MMM::Logic::RenderSnapshot& snapshot, bool isPlaying,
         });
 
     MMM::Config::EditorConfig config;
+    // 本用例检查重叠遮罩几何，保留判定后的原始物件以比较播放与暂停。
+    // 自动游玩消隐由独立快照回归覆盖，不应改变本用例的可见输入集合。
+    config.visual.simulateAutoplay  = false;
     config.visual.trackLayout.left  = useAuxiliaryLaneLayout ? 0.5F : 0.1F;
     config.visual.trackLayout.right = useAuxiliaryLaneLayout ? 0.9F : 0.5F;
+    // 右边界场景必须真正越界；默认 95% 宽度只会落在轨道内部。
+    // 只扩大末轨夹具，不改变草稿宽度及其他用例依赖的默认几何。
+    if ( useAuxiliaryLaneLayout && trackIndex == 3 )
+        config.visual.noteScaleX = 1.2F;
     // 辅助布局整体右移玩家区，为左侧草稿物件留出独立可见区域。
     if ( useAuxiliaryLaneLayout ) {
         // 自定义草稿区与玩家区宽度不同，用于验证遮罩不再沿用玩家几何。

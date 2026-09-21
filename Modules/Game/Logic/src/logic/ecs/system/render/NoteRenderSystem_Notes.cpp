@@ -146,7 +146,8 @@ static void collectNotesInRange(
     entt::registry& registry, const ScrollCache* cache, double currentTime,
     double currentAbsY, float judgmentLineY, float topY, float bottomY,
     float renderScaleY, float visualPaddingPixels, double interpolationSeconds,
-    std::vector<entt::entity>& result, std::unordered_set<entt::entity>& seen);
+    std::vector<entt::entity>& result, std::unordered_set<entt::entity>& seen,
+    bool simulateAutoplay);
 
 /// @brief 估算 UI 亚帧补偿期间 ScrollCache 可能产生的最大 AbsY 位移。
 /// @warning 热路径：每次音符候选反查前执行；只允许访问当前时间附近的
@@ -305,20 +306,63 @@ void NoteRenderSystem::renderNotes(
             ? std::abs(snapshot->playbackSpeed) * MAX_UI_INTERPOLATION_SECONDS
             : 0.0,
         noteEntities,
-        noteSeen);
+        noteSeen,
+        snapshot->isPlaying && config.visual.simulateAutoplay);
 
     // 非专业模式统一过滤草稿，所有后续主体、发光和命中层使用相同可见集合。
     // 不要只在绘制层隐藏草稿而留下可拾取的命中区域。
-    if ( !config.settings.professionalMode ) {
-        std::erase_if(noteEntities, [&registry](entt::entity entity) {
+    // 模拟判定只读当前画布时间，向前或向后跳转都不保留历史完成标记。
+    // 单点子选项不能绕过总开关，暂停时任何组合均恢复原始物件。
+    // 在粗筛后过滤保留既有索引，不因开关变化而重建整谱空间数据。
+    // 同一候选集合由主体、发光和标签共享，避免各层生命周期分歧。
+    // 草稿判定只遵循专业模式可见性，不参与玩家自动判定。
+    // 子物件由折线分段处理，不能在根候选中独立删除它们。
+    // 结束边界使用闭区间比较，恰好到尾时不会多保留一帧。
+    const bool hideJudgedNotes = snapshot->isPlaying &&
+                                 config.visual.simulateAutoplay &&
+                                 config.visual.hideJudgedNotes;
+    if ( !config.settings.professionalMode ||
+         (snapshot->isPlaying && config.visual.simulateAutoplay) ) {
+        std::erase_if(noteEntities, [&](entt::entity entity) {
             const auto* note = registry.try_get<const NoteComponent>(entity);
-            return note && note->m_isDraft;
+            if ( !note ) return false;
+            if ( note->m_isDraft ) return !config.settings.professionalMode;
+            // 完成的长条从共同候选中移除，资源标签和发光也随主体消失。
+            // 折线结束时间以最后一个实际节点为准，容器 duration 不参与猜测。
+            if ( snapshot->isPlaying && config.visual.simulateAutoplay ) {
+                if ( note->m_type == ::MMM::NoteType::HOLD &&
+                     ctx.currentTime >= note->m_timestamp + note->m_duration )
+                    return true;
+                if ( note->m_type == ::MMM::NoteType::POLYLINE &&
+                     !note->m_subNotes.empty() ) {
+                    const auto&  last = note->m_subNotes.back();
+                    const double end =
+                        last.timestamp + (last.type == ::MMM::NoteType::HOLD
+                                              ? last.duration
+                                              : 0.0);
+                    if ( ctx.currentTime >= end ) return true;
+                }
+            }
+            // 普通单点的消隐独立于长条模拟；草稿始终保留编辑语义。
+            // 同时过滤发光、标签和命中层，避免留下不可见的可选物件。
+            // 独立滑键与普通单点分别读取子开关；先过滤根对象可同时去掉头、身体和箭头。
+            // 不过滤折线内的横段，避免截断尚未完成的长条。
+            const bool hideFlick = snapshot->isPlaying &&
+                                   config.visual.simulateAutoplay &&
+                                   config.visual.hideJudgedFlicks &&
+                                   note->m_type == ::MMM::NoteType::FLICK;
+            return ((hideJudgedNotes &&
+                     note->m_type == ::MMM::NoteType::NOTE) ||
+                    hideFlick) &&
+                   ctx.currentTime >= note->m_timestamp;
         });
     }
 
-    // 布局模式即使正在播放也需要逐物件边界，供 UI 直接调整渲染比例。
+    // 布局模式通常允许播放时调整；模拟判定时暂停后再提供完整编辑命中框。
+    // 避免把已消隐身体或原始头部位置继续暴露为可拾取区域。
     const bool shouldGenerateHitboxes =
-        (!snapshot->isPlaying || snapshot->currentTool == EditTool::Layout) &&
+        (!snapshot->isPlaying || (snapshot->currentTool == EditTool::Layout &&
+                                  !config.visual.simulateAutoplay)) &&
         snapshot->acceptsInteraction &&
         SessionUtils::isMainCanvasCameraId(cameraId);
 
@@ -858,13 +902,15 @@ static NoteAbsYBucketIndex& getOrBuildNoteAbsYBucketIndex(
 /// @param interpolationSeconds UI 补间需要保护的未来秒数。
 /// @param result 输出候选身份，入口清空并复用容量。
 /// @param seen 拖动身份合并所用暂存集合，不能与其他查询并发共享。
+/// @param simulateAutoplay 保留判定中的驻留头，即使原始端点已经离屏。
 /// @warning 每次快照调用；优先查桶，缺失版本或异常 HS 时存在完整精查兜底。
 /// @note 输出只包含根对象，结果顺序不保证与时间排序列表相同。
 static void collectNotesInRange(
     entt::registry& registry, const ScrollCache* cache, double currentTime,
     double currentAbsY, float judgmentLineY, float topY, float bottomY,
     float renderScaleY, float visualPaddingPixels, double interpolationSeconds,
-    std::vector<entt::entity>& result, std::unordered_set<entt::entity>& seen)
+    std::vector<entt::entity>& result, std::unordered_set<entt::entity>& seen,
+    bool simulateAutoplay)
 {
     // 输出容器由调用方复用，每次查询必须替换而非累加上一相机的结果。
     // 索引内部的序号去重与外部拖动合并集合各自负责不同阶段。
@@ -902,6 +948,15 @@ static void collectNotesInRange(
     /// @return 至少存在有效样本且包络相交时为 true。
     /// @warning 候选精查热路径，成本仅来自当前物件覆盖的局部流速分段。
     auto isDisplayVisible = [&](const NoteComponent& note) {
+        // 活动长条的新头位于判定线，原始端点同时离屏也不能剔除。
+        // 空间索引已覆盖物件期间的卷轴极值，此处只扩大局部精查结果。
+        if ( simulateAutoplay && !note.m_isDraft &&
+             (note.m_type == ::MMM::NoteType::HOLD ||
+              note.m_type == ::MMM::NoteType::POLYLINE) ) {
+            const auto [start, end] = getNoteTimeRange(note);
+            if ( currentTime >= start && currentTime < end ) return true;
+        }
+
         // 索引包络只负责粗筛，不能代表根载体已经进入显示窗口。
         // 即便独立端点跨越整个视口，载体未入场时仍须整体排除。
         // 原始 seg 先按共享头部 HS 的载体范围入场，再检查独立节点几何。
@@ -1630,6 +1685,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
                 curColorHoldEnd,
                 ctx.cache,
                 ctx.currentAbsY,
+                ctx.currentTime,
                 judgmentLineY,
                 renderScaleY,
                 topY,
@@ -1904,6 +1960,7 @@ void NoteRenderSystem::renderNoteGlowLayer(
                 glowEnd,
                 ctx.cache,
                 ctx.currentAbsY,
+                ctx.currentTime,
                 judgmentLineY,
                 renderScaleY,
                 topY,
@@ -3008,6 +3065,7 @@ void NoteRenderSystem::renderBrushPreview(
                                      previewEnd,
                                      ctx.cache,
                                      ctx.currentAbsY,
+                                     ctx.currentTime,
                                      judgmentLineY,
                                      renderScaleY,
                                      0.0f,

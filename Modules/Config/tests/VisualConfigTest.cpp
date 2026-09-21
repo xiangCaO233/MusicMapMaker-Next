@@ -978,6 +978,40 @@ bool testKeyCountLayoutIsolationAndMigration()
     return true;
 }
 
+/// @brief 验证游玩长条模拟默认开启，并保留用户显式关闭的选择。
+/// @return 默认值、旧配置迁移及两种显式值均正确时返回真。
+/// @note 仅使用内存 JSON，避免测试修改个人视觉设置。
+bool testSimulateAutoplayConfig()
+{
+    // 字段缺失时的回退值必须与新建配置一致，旧用户也采用新默认值。
+    // 同时检查滑键字段缺失的迁移，避免旧配置意外保留已判定箭头。
+    const MMM::Config::VisualConfig defaults;
+    const auto                      legacy =
+        nlohmann::json::object().get<MMM::Config::VisualConfig>();
+    if ( !defaults.simulateAutoplay || !legacy.simulateAutoplay ||
+         !defaults.hideJudgedNotes || !legacy.hideJudgedNotes ||
+         !defaults.hideJudgedFlicks || !legacy.hideJudgedFlicks )
+        return false;
+    // 显式关闭不能在读取时被默认开启覆盖；两个方向都走真实 ADL 往返。
+    for ( bool enabled : { false, true } ) {
+        auto config             = defaults;
+        config.simulateAutoplay = enabled;
+        // 子选项刻意与总开关相反，确保保存时不会被联动覆盖。
+        config.hideJudgedNotes = !enabled;
+        // 两个同级子选项取相反值，防止序列化时串用字段。
+        config.hideJudgedFlicks      = enabled;
+        const nlohmann::json encoded = config;
+        if ( encoded.get<MMM::Config::VisualConfig>().simulateAutoplay !=
+                 enabled ||
+             encoded.get<MMM::Config::VisualConfig>().hideJudgedNotes !=
+                 !enabled ||
+             encoded.get<MMM::Config::VisualConfig>().hideJudgedFlicks !=
+                 enabled )
+            return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行视觉配置兼容性与默认值测试。
@@ -989,7 +1023,7 @@ bool testKeyCountLayoutIsolationAndMigration()
 int main()
 {
     // 用例顺序先覆盖视觉字段，再覆盖 EditorSettings 和复杂布局集合。
-    return testBeatLineDisplayModeRoundTrip() &&
+    return testSimulateAutoplayConfig() && testBeatLineDisplayModeRoundTrip() &&
                    testLegacyDrawBeatLinesMigration() &&
                    testBeatLineAutoRatioClamping() &&
                    testHoverSubdivisionLineExtensionRatioConfig() &&

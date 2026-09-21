@@ -248,6 +248,7 @@ private:
                           const Config::EditorConfig& config, float x, float y,
                           float w, float h, float aspect, glm::vec4 color);
 
+    /// @param currentTime 当前画布时间，用于无状态推导模拟判定进度。
     /// @param topY 轨道裁剪区上边界。
     /// @param bottomY 轨道裁剪区下边界。
     /// @warning 热路径：单个 Hold
@@ -258,8 +259,9 @@ private:
                            float singleTrackW, glm::vec4 headColor,
                            glm::vec4 bodyColor, glm::vec4 endColor,
                            const ScrollCache* cache, double currentAbsY,
-                           float judgmentLineY, float renderScaleY, float topY,
-                           float bottomY, HoverPart glowPart = HoverPart::None);
+                           double currentTime, float judgmentLineY,
+                           float renderScaleY, float topY, float bottomY,
+                           HoverPart glowPart = HoverPart::None);
 
     /// @brief 按根节点与终点各自轨道几何绘制 Flick。
     /// @param batcher 目标批处理器。
@@ -307,16 +309,14 @@ private:
 
     /// @warning 热路径：Polyline body 几何生成时执行；禁止动态资源加载或完整
     /// registry 遍历。
-    static void drawPolylineBody(Batcher& batcher, const NoteComponent& note,
-                                 const ScrollCache* cache,
-                                 RenderSnapshot* snapshot, float judgmentLineY,
-                                 float leftX, float singleTrackW,
-                                 float renderScaleY, double currentAbsY,
-                                 double currentTime, float topY, float bottomY,
-                                 float noteW, float noteH, glm::vec4 colorHold,
-                                 entt::entity entity, bool generateHitboxes,
-                                 HoverPart glowPart, int glowSubIndex,
-                                 const CanvasLaneProjection* laneProjection);
+    static void drawPolylineBody(
+        Batcher& batcher, const NoteComponent& note, const ScrollCache* cache,
+        RenderSnapshot* snapshot, float judgmentLineY, float leftX,
+        float singleTrackW, float renderScaleY, double currentAbsY,
+        double currentTime, float topY, float bottomY, float noteW, float noteH,
+        glm::vec4 colorHold, entt::entity entity, bool generateHitboxes,
+        HoverPart glowPart, int glowSubIndex,
+        const CanvasLaneProjection* laneProjection, bool simulateJudgment);
 
     /// @warning 热路径：Polyline 可见性判断内联执行；保持纯计算且不可引入分配。
     static bool isCarrierVisible(double startOffset, double endOffset,
