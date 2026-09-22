@@ -85,11 +85,23 @@
 /// - 未知新建谱面入口保持无信号，避免内部调用污染教程；
 /// - 重复阶段事件由进度归约器幂等消费；
 /// - 主题在服务目录中位于两个项目主题之后、创作主题之前；
-/// - 新建谱面不再出现在 BUILTIN_PLACEHOLDERS 循环；
+/// - 已发布的阶段二和阶段四主题均不再使用内置占位集合；
 /// - 新建谱面事件订阅随 Service 生命周期建立和解除；
 /// - 所有事件断言在 service.update 后读取，覆盖真实跨线程队列边界；
 /// - 服务公开主题顺序保持欢迎页使用的稳定索引；
-/// - 阶段三真实主题位于两个新建谱面主题与阶段四占位主题之间；
+/// - 阶段三简介与阶段四创作主题都要求项目和真实谱面标签；
+/// - 阶段四采用 completion=all，五步必须按相邻依赖顺序完成；
+/// - 阶段四入口重新要求选择任意真实谱面标签；
+/// - 阶段四工具步骤使用独立工具选择区语义目标；
+/// - 阶段四主轨道拖动目标不复用阶段三的完成记录；
+/// - 阶段四主轨道介绍与完整可见拖动保持为两个步骤；
+/// - 阶段四最终步骤只接受拖拽放置的专用目标 ID；
+/// - 阶段四不是 placeholder，并提供一个可展开的真实分支；
+/// - 阶段四 order 严格晚于编辑区简介；
+/// - 阶段四在无项目、无谱面两种状态下均不可进入；
+/// - 阶段四仅在项目和谱面标签都存在时可进入；
+/// - 阶段四每一步都声明可重放的 guide；
+/// - 阶段四自身步骤 ID 与阶段三相似步骤保持主题级隔离；
 /// - PackageDrop 只有只读项目完成时才推进；
 /// - BeatmapDrop 只有真正打开谱面时才推进；
 /// - 未注册 action 保持无操作；
@@ -143,14 +155,13 @@ int main(int argc, char** argv)
         parseTopic(
             R"({"id":"bad","title":"Bad","branches":[{"id":"b","title":"B","steps":[{"id":"s","title":"S","guide":{"targets":["same","same"]}}]}]})") )
         return 31;
-    for ( const auto* input : BUILTIN_PLACEHOLDERS ) {
-        // 所有内置占位主题必须属于 creation 且没有可执行分支。
-        const auto placeholder = parseTopic(input);
-        if ( !placeholder || !placeholder->m_placeholder ||
-             !placeholder->m_branches.empty() ||
-             placeholder->m_chapter != "creation" )
-            return 24;
-    }
+    // 解析器仍支持将未来主题声明为占位，但当前内置阶段都已经提供真实流程。
+    const auto placeholder = parseTopic(
+        R"({"id":"future","title":"Future","chapter":"creation","placeholder":true})");
+    if ( !placeholder || !placeholder->m_placeholder ||
+         !placeholder->m_branches.empty() ||
+         placeholder->m_chapter != "creation" )
+        return 24;
     // 核心教程采用任一分支完成目标，并保持五种打开项目路径。
     const auto topic = parseTopic(BUILTIN_WALKTHROUGH);
     if ( !topic || topic->m_branches.size() != 5 || !topic->m_anyBranch )
@@ -270,6 +281,38 @@ int main(int argc, char** argv)
          editorSteps.back().m_guide->m_targets !=
              std::vector<std::string>{ "editor.audio.actions" } )
         return 62;
+    // 阶段四是独立完整路线，不能继承阶段三已经完成过的步骤进度。
+    const auto composeBeatmapTopic =
+        parseTopic(BUILTIN_COMPOSE_BEATMAP_WALKTHROUGH);
+    if ( !composeBeatmapTopic || composeBeatmapTopic->m_placeholder ||
+         !composeBeatmapTopic->m_requiresProject ||
+         !composeBeatmapTopic->m_requiresBeatmap ||
+         composeBeatmapTopic->m_order != 40 ||
+         composeBeatmapTopic->m_branches.size() != 1 ||
+         composeBeatmapTopic->m_branches.front().m_steps.size() != 5 ||
+         topicAvailable(*composeBeatmapTopic, false, false) ||
+         topicAvailable(*composeBeatmapTopic, true, false) ||
+         !topicAvailable(*composeBeatmapTopic, true, true) )
+        return 65;
+    const auto& composeSteps = composeBeatmapTopic->m_branches.front().m_steps;
+    for ( std::size_t index = 0; index < composeSteps.size(); ++index ) {
+        if ( !composeSteps[index].m_guide ) return 66;
+        if ( index > 0 &&
+             composeSteps[index].m_prerequisites !=
+                 std::vector<std::string>{ composeSteps[index - 1].m_id } )
+            return 67;
+    }
+    if ( composeSteps[0].m_guide->m_targets !=
+             std::vector<std::string>{ "editor.beatmap-tab" } ||
+         composeSteps[1].m_guide->m_targets !=
+             std::vector<std::string>{ "compose.toolbar.tool-selection" } ||
+         composeSteps[2].m_guide->m_targets !=
+             std::vector<std::string>{ "compose.canvas.pan-player" } ||
+         composeSteps[3].m_guide->m_targets !=
+             std::vector<std::string>{ "compose.canvas.player" } ||
+         composeSteps[4].m_guide->m_targets !=
+             std::vector<std::string>{ "compose.canvas.place-note" } )
+        return 68;
     // 空白流程的六个目标依次对应菜单入口、音频、自动测偏、BPM 复核、
     // 元数据资源区域和最终创建按钮，不要求改造原有单页弹窗布局。
     if ( createBeatmapTopic->m_branches[0].m_steps[0].m_guide->m_targets !=
@@ -377,7 +420,7 @@ int main(int argc, char** argv)
         Service     service(path, directory / "walkthroughs");
         const auto& topics = service.topics();
         // 相同 order 由欢迎页归入同一阶段；稳定插入顺序决定两张卡片的左右顺序。
-        // 编辑区简介占据阶段三，创作占位主题后移到阶段四。
+        // 编辑区简介占据阶段三，完整创作路线位于阶段四。
         if ( topics.size() != 6 || service.chapters().size() != 2 ||
              topics[0].m_id != "mmm.open-project" ||
              topics[1].m_id != "mmm.create-project" ||

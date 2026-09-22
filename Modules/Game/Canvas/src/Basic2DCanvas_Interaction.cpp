@@ -1395,6 +1395,13 @@ Basic2DCanvasInteraction::~Basic2DCanvasInteraction()
     Event::EventBus::instance().unsubscribe<Event::GLFWDropEvent>(m_dropSubId);
 }
 
+/// @brief 将下一次绘制释放改为取消提交。
+/// @warning UI 输入热路径：只写一次性状态，释放分支负责消费并复位。
+void Basic2DCanvasInteraction::cancelBrushOnNextRelease()
+{
+    m_cancelBrushOnNextRelease = true;
+}
+
 /// @brief 判断连续拖动编辑命令是否需要发送，并更新缓存。
 ///
 /// @details 去重键与边界：
@@ -5906,7 +5913,10 @@ void Basic2DCanvasInteraction::handleInteractions(
         } else if ( m_leftPressStartedOnCanvas &&
                     currentSnapshot->currentTool == Logic::EditTool::Draw ) {
             Event::EventBus::instance().publish(
-                Event::LogicCommandEvent(Logic::CmdEndBrush{ m_cameraId }));
+                Event::LogicCommandEvent(Logic::CmdEndBrush{
+                    .cameraId = m_cameraId,
+                    .cancel   = m_cancelBrushOnNextRelease,
+                }));
         } else if ( m_leftPressStartedObjectDrag ) {
             // 对象拖拽结束会固化本次连续位移。
             Event::EventBus::instance().publish(
@@ -5934,6 +5944,8 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_leftPressStartedOnEntity      = false;
         m_leftPressStartedObjectDrag    = false;
         m_leftPressDragged              = false;
+        // 取消请求只属于本次释放；即使当前工具已变化也不能污染下一次画笔。
+        m_cancelBrushOnNextRelease = false;
         m_colorStrokeEntities.clear();
         resetContinuousEditCommands();
     }

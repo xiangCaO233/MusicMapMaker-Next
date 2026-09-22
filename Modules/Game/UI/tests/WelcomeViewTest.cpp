@@ -347,32 +347,38 @@ bool testPages()
     welcome.showTopic(9999);
     frame(960);
     if ( !welcome.showingHome() ) return false;
-    // 占位主题可独立进入和返回，不能残留上一主题的实际分支或修改已有进度。
-    // 前五项现在均为真实教程，只有阶段四的创作主题进入占位回归循环。
-    // 编辑区简介虽因门禁不能从目录进入，仍不能被当成静态占位主题。
+    // 阶段三和阶段四都是真实教程；直接渲染仍应有分支卡片，项目与谱面
+    // 门禁只控制首页入口和引导按钮能否执行，不把正文退化成静态占位。
     const auto& editorOverview = service.topics()[4];
     if ( editorOverview.m_id != "mmm.editor-overview" ||
          editorOverview.m_placeholder || !editorOverview.m_requiresProject ||
          !editorOverview.m_requiresBeatmap )
         return false;
-    for ( std::size_t index = 5; index < service.topics().size(); ++index ) {
-        // 逐个进入所有内置占位主题，覆盖宽窄两种正文布局。
-        welcome.showTopic(index);
-        if ( welcome.showingHome() ) return false;
-        for ( int i = 0; i < 4; ++i )
-            if ( !frame(index == 5 ? 360 : 960) ) return false;
-        for ( const auto* window : ImGui::GetCurrentContext()->Windows )
-            if ( window->Active &&
-                 std::string_view(window->Name).find("BranchCard") !=
-                     std::string_view::npos )
-                // 占位主题不得复用上一真实主题的分支卡片。
-                return false;
-        welcome.showHome();
-        if ( !welcome.showingHome() ||
-             !service.progress().completed(topic, step) )
-            return false;
-        frame(960);
-    }
+    const auto& composeBeatmap = service.topics()[5];
+    // 创作主题必须保持独立主题身份，不能靠阶段三分支卡片残留形成假阳性。
+    // requiresProject 与 requiresBeatmap 同时存在，保证目录入口只在编辑上下文
+    // 就绪后开放；这里直接 showTopic 只用于验证正文模型仍然完整可渲染。
+    if ( composeBeatmap.m_id != "mmm.compose-beatmap" ||
+         composeBeatmap.m_placeholder || !composeBeatmap.m_requiresProject ||
+         !composeBeatmap.m_requiresBeatmap )
+        return false;
+    welcome.showTopic(5);
+    if ( welcome.showingHome() ) return false;
+    for ( int i = 0; i < 4; ++i )
+        if ( !frame(360) ) return false;
+    bool composeBranchVisible = false;
+    // 窄窗口覆盖长中文说明换行后的自动高度；只要真实 BranchCard 活动，
+    // 即可证明占位页已被五步流程替换且没有复用上一主题的隐藏子窗口。
+    for ( const auto* candidate : ImGui::GetCurrentContext()->Windows )
+        if ( candidate->Active &&
+             std::string_view(candidate->Name).find("BranchCard") !=
+                 std::string_view::npos )
+            composeBranchVisible = true;
+    if ( !composeBranchVisible ) return false;
+    welcome.showHome();
+    if ( !welcome.showingHome() || !service.progress().completed(topic, step) )
+        return false;
+    frame(960);
 
     // 模拟项目恢复时销毁旧停靠树并生成新的中心节点，主题和学习记录必须保留。
     // 后续场景启用 Dock，并提供第一个项目布局中心节点。

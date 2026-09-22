@@ -164,6 +164,15 @@ bool Spotlight::completed() const
     return m_state == State::Completed;
 }
 
+/// @brief 判断业务控件是否需要为当前阶段准备专用视觉目标。
+/// @param targetId 待比较的稳定语义 ID。
+/// @return 当前水位与目标一致时返回 true。
+bool Spotlight::awaitingTarget(std::string_view targetId) const
+{
+    return active() && !completed() && m_stage < m_targets.size() &&
+           m_targets[m_stage] == targetId;
+}
+
 /// @brief 允许当前可见演练页面在本帧继续显示引导。
 void Spotlight::keepAlive()
 {
@@ -228,8 +237,11 @@ void Spotlight::reportLastItem(std::string_view targetId)
 /// @param minimum 屏幕空间左上角。
 /// @param maximum 屏幕空间右下角。
 /// @param viewport 区域所属视口。
+/// @param drawOutline 是否绘制 Spotlight 自身的脉冲外框。
+/// @note 关闭外框只影响装饰描边，遮罩孔洞、提示定位与完成状态保持不变。
 void Spotlight::reportTarget(std::string_view targetId, const ImVec2& minimum,
-                             const ImVec2& maximum, ImGuiViewport* viewport)
+                             const ImVec2& maximum, ImGuiViewport* viewport,
+                             bool drawOutline)
 {
     if ( !active() || completed() || maximum.x <= minimum.x ||
          maximum.y <= minimum.y )
@@ -256,12 +268,15 @@ void Spotlight::reportTarget(std::string_view targetId, const ImVec2& minimum,
         m_anchor->minimum.y = std::min(m_anchor->minimum.y, minimum.y);
         m_anchor->maximum.x = std::max(m_anchor->maximum.x, maximum.x);
         m_anchor->maximum.y = std::max(m_anchor->maximum.y, maximum.y);
+        // 任一并列目标要求自绘时关闭合并外框，避免把间隔误画成控件边界。
+        m_anchor->drawOutline = m_anchor->drawOutline && drawOutline;
     } else {
         // 不同视口不能共享一个前景遮罩，保留本次上报作为当前锚点。
-        m_anchor = Anchor{ .priority = priority,
-                           .minimum  = minimum,
-                           .maximum  = maximum,
-                           .viewport = resolvedViewport };
+        m_anchor = Anchor{ .priority    = priority,
+                           .minimum     = minimum,
+                           .maximum     = maximum,
+                           .viewport    = resolvedViewport,
+                           .drawOutline = drawOutline };
     }
     m_state = State::Highlighting;
 }
@@ -508,32 +523,34 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
                       { viewportMax.x, revealMax.y },
                       MASK_COLOR);
 
-        // 目标描边仍严格跟随控件，不随较宽的提示透明区扩张。
-        const float pulse =
-            0.5f + 0.5f * std::sin(static_cast<float>(ImGui::GetTime()) * 4.0f);
-        const auto drawOutline = [&](const ImVec2& clipMin,
-                                     const ImVec2& clipMax) {
-            if ( clipMax.x <= clipMin.x || clipMax.y <= clipMin.y ) return;
-            draw.PushClipRect(clipMin, clipMax, true);
-            draw.AddRect(*holeMin,
-                         *holeMax,
-                         ImGui::GetColorU32(ImGuiCol_CheckMark),
-                         style.FrameRounding,
-                         ImDrawFlags_None,
-                         (2.0f + pulse) * dpiScale);
-            draw.PopClipRect();
-        };
-        // ForegroundDrawList 总在普通窗口之后合成；将提示矩形从描边裁掉，
-        // 才能保证时间线顶部回退场景中黄色边框不会压住文字和确认按钮。
-        // 四个裁剪区覆盖提示框之外的所有方向，边框在框下自然断开。
-        // 裁剪只影响描边命令，目标与提示共同形成的透明遮罩保持不变。
-        // 提示位于目标外侧时，四次绘制仍只留下同一条边框的可见片段。
-        drawOutline(viewportMin, { viewportMax.x, bubbleMin.y });
-        drawOutline({ viewportMin.x, bubbleMax.y }, viewportMax);
-        drawOutline({ viewportMin.x, bubbleMin.y },
-                    { bubbleMin.x, bubbleMax.y });
-        drawOutline({ bubbleMax.x, bubbleMin.y },
-                    { viewportMax.x, bubbleMax.y });
+        if ( m_anchor->drawOutline ) {
+            // 目标描边仍严格跟随控件，不随较宽的提示透明区扩张。
+            const float pulse =
+                0.5f +
+                0.5f * std::sin(static_cast<float>(ImGui::GetTime()) * 4.0f);
+            const auto drawTargetOutline = [&](const ImVec2& clipMin,
+                                               const ImVec2& clipMax) {
+                if ( clipMax.x <= clipMin.x || clipMax.y <= clipMin.y ) return;
+                draw.PushClipRect(clipMin, clipMax, true);
+                draw.AddRect(*holeMin,
+                             *holeMax,
+                             ImGui::GetColorU32(ImGuiCol_CheckMark),
+                             style.FrameRounding,
+                             ImDrawFlags_None,
+                             (2.0f + pulse) * dpiScale);
+                draw.PopClipRect();
+            };
+            // ForegroundDrawList 总在普通窗口之后合成；将提示矩形从描边裁掉，
+            // 才能保证时间线顶部回退场景中黄色边框不会压住文字和确认按钮。
+            // 四个裁剪区覆盖提示框之外的所有方向，边框在框下自然断开。
+            // 裁剪只影响描边命令，目标与提示共同形成的透明遮罩保持不变。
+            drawTargetOutline(viewportMin, { viewportMax.x, bubbleMin.y });
+            drawTargetOutline({ viewportMin.x, bubbleMax.y }, viewportMax);
+            drawTargetOutline({ viewportMin.x, bubbleMin.y },
+                              { bubbleMin.x, bubbleMax.y });
+            drawTargetOutline({ bubbleMax.x, bubbleMin.y },
+                              { viewportMax.x, bubbleMax.y });
+        }
     }
 }
 

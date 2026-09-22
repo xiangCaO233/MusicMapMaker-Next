@@ -40,6 +40,12 @@ public:
                 const Common::Render::RenderSnapshot* currentSnapshot,
                 float targetWidth, float targetHeight);
 
+    /// @brief 请求本帧左键释放时丢弃画笔而不是提交物件。
+    /// @details 供上层事务式教学在发现拖拽落点错误后撤销本次临时放置；
+    /// 标记在下一次左键释放后无条件清除，不影响后续普通绘制。
+    /// @warning UI 输入热路径：只设置一次性布尔标记。
+    void cancelBrushOnNextRelease();
+
     /// @brief 仅同步后台主画布的鼠标悬停位置，不启用编辑交互。
     /// @param targetWidth 画布逻辑宽度。
     /// @param targetHeight 画布逻辑高度。
@@ -143,6 +149,9 @@ private:
     std::string              m_cameraId;
     std::vector<PendingDrop> m_pendingDrops;
     Event::SubscriptionID    m_dropSubId;
+
+    /// @brief 下一次绘制工具释放是否只清理临时画笔。
+    bool m_cancelBrushOnNextRelease{ false };
 
     void handleHotkeys(const Common::Render::RenderSnapshot* currentSnapshot);
     /// @brief 处理主画布鼠标、批注栏和物件编辑交互。

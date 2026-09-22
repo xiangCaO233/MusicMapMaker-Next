@@ -328,8 +328,8 @@ void NoteRenderSystem::generateSnapshot(
     // 布局输出统一在栈上初始化，空谱面分支可保留零范围。
     Batcher batcher(snapshot);
     float   leftX = 0, rightX = 0, topY = 0, bottomY = 0, trackAreaW = 0,
-            singleTrackW = 0;
-    float   renderScaleY = 1.0f;
+          singleTrackW = 0;
+    float renderScaleY = 1.0f;
 
     // 第一阶段：静态布局与打击特效预生成。
     // 打击特效顶点不随谱面滚动，因此在静态顶点边界前生成，
@@ -536,11 +536,11 @@ void NoteRenderSystem::generateSnapshot(
         // 主画布显示模式控制拍线基础可见性。
         // Timing 线独立于拍线，默认仅由预览分支启用。
         // 近光标渐隐依赖精确编辑指针，不能直接用于缩略预览。
-        const bool beatLinesHidden       = config.visual.beatLineDisplayMode ==
-                                           Config::BeatLineDisplayMode::Hidden;
-        bool       shouldDrawBeatLines   = !beatLinesHidden;
-        bool       shouldDrawTimingLines = false;
-        bool       revealBeatLinesNearCursor =
+        const bool beatLinesHidden = config.visual.beatLineDisplayMode ==
+                                     Config::BeatLineDisplayMode::Hidden;
+        bool shouldDrawBeatLines   = !beatLinesHidden;
+        bool shouldDrawTimingLines = false;
+        bool revealBeatLinesNearCursor =
             config.visual.beatLineDisplayMode ==
             Config::BeatLineDisplayMode::NearCursor;
 
@@ -571,6 +571,7 @@ void NoteRenderSystem::generateSnapshot(
                                             renderScaleY,
                                             revealBeatLinesNearCursor,
                                             1.0F,
+                                            isMainCanvas,
                                             isMainCanvas);
         }
 
@@ -614,6 +615,7 @@ void NoteRenderSystem::generateSnapshot(
                     renderScaleY,
                     revealBeatLinesNearCursor,
                     0.42F,
+                    false,
                     false);
             }
             // 此助手只负责一个连续可见区域。
@@ -647,6 +649,7 @@ void NoteRenderSystem::generateSnapshot(
                                                 renderScaleY,
                                                 revealBeatLinesNearCursor,
                                                 0.28F,
+                                                false,
                                                 false);
             };
             // 批注与 BGM 相交时绘制一次并集，分离时分别绘制，避免拍线穿越空隙。
@@ -1416,7 +1419,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
         // 段位置先应用动画缩放，再相对当前视觉锚点计算。
         // HS 只缩放显示距离，不改变交互记录里的原始事件时间。
         const double segmentAbsY = seg.absY * cache->getAnimatedZoomScale();
-        float y = judgmentLineY -
+        float        y           = judgmentLineY -
                   static_cast<float>((segmentAbsY - currentAbsY) * seg.hs);
 
         // 先发布完整逻辑记录，再决定是否有可见标记几何。

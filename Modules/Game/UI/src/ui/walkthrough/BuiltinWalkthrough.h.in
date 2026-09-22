@@ -14,10 +14,9 @@ inline constexpr const char* BUILTIN_CREATE_BEATMAP_TEMPLATE_WALKTHROUGH =
 /// @brief 内置编辑区简介，要求活动项目和至少一个真实谱面编辑器标签页。
 inline constexpr const char* BUILTIN_EDITOR_OVERVIEW_WALKTHROUGH =
     R"MMM_WALK(@MMM_WALKTHROUGH_editor-overview@)MMM_WALK";
+/// @brief 内置创作谱面演练，要求在真实谱面中完成一次单 Note 拖拽放置。
+inline constexpr const char* BUILTIN_COMPOSE_BEATMAP_WALKTHROUGH =
+    R"MMM_WALK(@MMM_WALKTHROUGH_compose-beatmap@)MMM_WALK";
 /// @brief 有序章节目录，包含尚未添加主题的章节。
 inline constexpr const char* BUILTIN_CHAPTERS =
     R"MMM_WALK(@MMM_WALKTHROUGH_chapters@)MMM_WALK";
-/// @brief 内置占位主题声明，不伪造步骤或学习完成状态。
-inline constexpr const char* BUILTIN_PLACEHOLDERS[] = {
-    R"MMM_WALK(@MMM_WALKTHROUGH_compose-beatmap@)MMM_WALK"
-};

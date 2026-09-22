@@ -45,6 +45,12 @@ public:
     /// @return 业务成功或“知道了”完成最后目标后返回 true，直到 start 或 stop。
     [[nodiscard]] bool completed() const;
 
+    /// @brief 查询当前尚待完成的阶段是否正对应指定语义目标。
+    /// @param targetId 与演练配置中的 targets 项一致。
+    /// @return 引导活动、未完成且该目标恰为当前阶段时返回 true。
+    /// @warning UI 热路径：仅比较当前阶段字符串，不查找控件或分配内存。
+    [[nodiscard]] bool awaitingTarget(std::string_view targetId) const;
+
     /// @brief 标记当前引导仍由本帧可见的演练页面持有。
     /// @warning UI 热路径：只写布尔值，不创建窗口或改变焦点。
     void keepAlive();
@@ -68,9 +74,11 @@ public:
     /// @param minimum 屏幕空间左上角。
     /// @param maximum 屏幕空间右下角。
     /// @param viewport 区域所在视口；为空时使用当前窗口视口。
+    /// @param drawOutline 是否绘制 Spotlight 自身的脉冲外框。
     /// @warning UI 热路径：仅比较当前目标列表并复制固定大小几何。
     void reportTarget(std::string_view targetId, const ImVec2& minimum,
-                      const ImVec2& maximum, ImGuiViewport* viewport = nullptr);
+                      const ImVec2& maximum, ImGuiViewport* viewport = nullptr,
+                      bool drawOutline = true);
 
     /// @brief 绘制暗化遮罩、目标描边和带确认按钮的引导提示。
     /// @param dpiScale 当前内容缩放，用于逻辑间距和线宽。
@@ -109,6 +117,8 @@ private:
         ImVec2 maximum{};
         /// @brief 只借用当前帧有效的 ImGui 视口。
         ImGuiViewport* viewport{ nullptr };
+        /// @brief 是否绘制 Spotlight 外框；自绘精确目标框时可关闭。
+        bool drawOutline{ true };
     };
 
     /// @brief 完成指定目标阶段并保持状态机单调前进。

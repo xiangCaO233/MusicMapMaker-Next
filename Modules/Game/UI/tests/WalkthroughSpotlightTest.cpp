@@ -20,6 +20,7 @@
 /// - 新的并列候选用例与已有单调状态机用例相互隔离；
 /// - 后续目标一旦出现即推进状态机，消失后不再回退到前序目标；
 /// - 业务成功通知与“知道了”共用同一阶段完成入口；
+/// - 业务层可在控件出现前查询当前水位，以准备固定的临时教学目标；
 /// - 显式矩形与普通 ImGui Item 使用同一解析路径；
 /// - 遮罩向 ForegroundDrawList 增加顶点，提示创建固定 ID 的 Tooltip 层窗口；
 /// - 确认当前阶段后旧目标不再产生遮罩，后续目标仍可被解析；
@@ -134,6 +135,15 @@ int main()
     MMM::UI::Walkthrough::Spotlight spotlight;
     const std::vector<std::string>  targets{ "test.first", "test.second" };
 
+    // 启动后业务层应能在目标矩形首次上报前识别当前水位，供画布只在
+    // 对应步骤生成随机但整段手势内固定的教学几何。
+    spotlight.start(targets, "Follow the highlighted control");
+    if ( !spotlight.awaitingTarget("test.first") ||
+         spotlight.awaitingTarget("test.second") ) {
+        ImGui::DestroyContext();
+        return 62;
+    }
+
     // 第一帧同时提交两个控件，配置中靠后的第二项应成为当前亮区。
     // 窗口数用于约束 Spotlight 只建立一个提示窗口，前景顶点用于证明
     // 遮罩确实被提交；两者结合可以区分“解析成功但没有绘制”的退化。
@@ -161,6 +171,7 @@ int main()
         ImGui::FindWindowByName("###WalkthroughSpotlightHint");
     const bool firstFrameValid =
         spotlight.resolvedTargetId() == "test.second" &&
+        spotlight.awaitingTarget("test.second") &&
         foreground->VtxBuffer.Size > verticesBefore &&
         context->Windows.Size == windowsBefore + 1 && firstHint &&
         (firstHint->Flags & ImGuiWindowFlags_Tooltip) != 0 &&

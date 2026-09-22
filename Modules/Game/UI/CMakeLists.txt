@@ -6,7 +6,7 @@ set_property(
            "${PROJECT_SOURCE_DIR}/assets/walkthroughs/open-project.json")
 file(READ "${PROJECT_SOURCE_DIR}/assets/walkthroughs/open-project.json"
      MMM_BUILTIN_WALKTHROUGH)
-# 章节目录与占位主题同样嵌入程序；修改声明时自动重新生成。
+# 章节目录与各阶段主题同样嵌入程序；修改声明时自动重新生成。
 foreach(_mmm_walkthrough IN
         ITEMS chapters create-project create-beatmap create-beatmap-template
               editor-overview compose-beatmap)

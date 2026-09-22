@@ -10,8 +10,10 @@
 #include "ui/ICanvasView.h"
 #include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -182,6 +184,15 @@ protected:
     void invalidateShaderSourceCache() override;
 
 private:
+    /// @brief 创作教程一次固定拖拽路径的分拍与轨道目标。
+    struct WalkthroughNoteDragTarget {
+        std::uintptr_t beatmapInstanceId{ 0 };  ///< 防止跨谱面复用旧路径。
+        int            sourceTrack{ 0 };        ///< 按下起点所在玩家轨。
+        int            destinationTrack{ 0 };   ///< 松开目标所在玩家轨。
+        double         sourceTime{ 0.0 };       ///< 起点精确分拍时间。
+        double         destinationTime{ 0.0 };  ///< 目标精确分拍时间。
+    };
+
     /// @brief 获取画布字体逻辑像素到物理栅格像素的当前倍率。
     /// @return 有效窗口内容缩放；无效配置回退为 1。
     [[nodiscard]] static float currentFontRasterScale();
@@ -195,6 +206,18 @@ private:
     void updateCollaborationViewports(UI::UIManager* sourceManager,
                                       const ImVec2&  canvasScreenPosition,
                                       const ImVec2&  canvasSize);
+
+    /// @brief 绘制并验证创作教程的单 Note 拖拽路径。
+    /// @param sourceManager 提供演练状态机。
+    /// @param snapshot 当前谱面与画笔状态快照。
+    /// @param canvasScreenPosition 主画布左上角屏幕坐标。
+    /// @param canvasSize 主画布逻辑像素尺寸。
+    /// @warning UI 热路径：仅在对应教程步骤中绘制固定几何；随机路径只在
+    /// 步骤进入或谱面切换时生成一次，失败释放通过取消命令清理临时画笔。
+    void updateComposeWalkthrough(
+        UI::UIManager*                        sourceManager,
+        const Common::Render::RenderSnapshot& snapshot,
+        const ImVec2& canvasScreenPosition, const ImVec2& canvasSize);
 
     /// @brief 画布名称
     std::string m_canvasName;
@@ -320,6 +343,19 @@ private:
     std::uint64_t m_recordedVideoUploadRevision{ 0 };
 
     std::unique_ptr<Basic2DCanvasInteraction> m_interaction;
+
+    /// @brief 当前创作教程固定使用的起点和目标分拍。
+    std::optional<WalkthroughNoteDragTarget> m_walkthroughNoteDragTarget;
+    /// @brief 本次左键尝试是否从画布内开始。
+    bool m_walkthroughNoteAttemptActive{ false };
+    /// @brief 本次尝试是否从指定起点框按下。
+    bool m_walkthroughNoteStartedAtSource{ false };
+    /// @brief 本次尝试是否已经形成可见拖动距离。
+    bool m_walkthroughNoteDragged{ false };
+    /// @brief 逻辑快照是否确认本次画笔已激活。
+    bool m_walkthroughNoteBrushObserved{ false };
+    /// @brief 本次尝试是否使用了会改变单 Note 类型的修饰键。
+    bool m_walkthroughNoteModifierUsed{ false };
 
     /// @brief 上一次应用到动态顶点上的 Y 偏移量
     float m_lastAppliedYOffset{ 0.0f };

@@ -4421,12 +4421,17 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
     ImGui::PushID(static_cast<int>(tool));
     // 点击检测与装饰绘制由 drawIconButton 统一完成；工具切换逻辑只消费返回值。
     // PushID 中的枚举保证不同工具即使共享图标或翻译文本也拥有独立状态。
-    if ( drawIconButton(icon,
-                        "##ToolbarToolButton",
-                        shortLabel,
-                        width,
-                        height,
-                        showLabel) ) {
+    const bool clicked = drawIconButton(
+        icon, "##ToolbarToolButton", shortLabel, width, height, showLabel);
+    if ( sourceManager ) {
+        // 所有可见普通工具共享一个语义目标，Spotlight 会合并为完整选择区。
+        // 只有实际点击 Draw 才完成；Draw 已激活时也可点击自身或按“知道了”。
+        auto& spotlight = sourceManager->walkthroughSpotlight();
+        spotlight.reportLastItem("compose.toolbar.tool-selection");
+        if ( clicked && tool == Logic::EditTool::Draw )
+            spotlight.completeTarget("compose.toolbar.tool-selection");
+    }
+    if ( clicked ) {
         if ( m_currentTool != tool ) {
             // 重复点击活动普通工具无副作用，不产生重复逻辑命令。
             m_currentTool = tool;

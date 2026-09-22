@@ -12,6 +12,17 @@
 /// 但 ### 后的内部窗口 ID 始终使用稳定 canvasName。
 /// 最后一个会话关闭时会重置为 Logo 占位页而不是销毁窗口，
 /// 以维持编辑器中心停靠结构和欢迎页返回入口。
+///
+/// 创作教程的临时目标也由本视图负责，原因是目标必须同时依赖：
+/// - 当前谱面的真实玩家轨道投影；
+/// - 当前相机经过中键横移后的水平偏移；
+/// - BPM Timing 与当前分拍数构成的吸附网格；
+/// - Scroll、Jump 和 HS 共同决定的时间到屏幕坐标映射；
+/// - ImGui 本帧鼠标边沿与逻辑线程上一代画笔快照。
+/// 目标只存在于教学 UI，不写入谱面模型，也不进入离屏 Vulkan 顶点。
+/// 合法手势仍沿用正常 CmdStartBrush/UpdateBrush/EndBrush 命令链，
+/// 失败手势则在结束命令上携带取消标记，由逻辑线程原子丢弃临时画笔。
+/// 这种分工避免 UI 直接创建 Note，也避免用普通 Undo 误伤更早的编辑历史。
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "canvas/CanvasTabTitle.h"
@@ -111,6 +122,10 @@ void reportBeatmapTabWalkthroughTarget(UI::UIManager* manager,
 /// @param snapshot 当前真实谱面的渲染快照。
 /// @param canvasPosition 画布内容左上角屏幕坐标。
 /// @param canvasSize 画布内容逻辑尺寸。
+/// @details 阶段三与阶段四使用不同语义 ID，但共用同一份实际轨道投影。
+/// 这样阶段三曾经完成的介绍不会跳过阶段四重新要求的主轨道复位动作。
+/// 拖动步骤突出整个画布，介绍步骤只突出目标区域；两者不能交换矩形，
+/// 否则用户可能在玩家区仍有一部分离屏时提前通过完整可见性检查。
 /// @warning UI 热路径：只执行一次轨道投影和固定数量的矩形裁剪。
 void reportCanvasWalkthroughTargets(
     UI::UIManager* manager, const Common::Render::RenderSnapshot& snapshot,
@@ -183,6 +198,11 @@ void reportCanvasWalkthroughTargets(
         canvasPosition,
         { canvasPosition.x + canvasSize.x, canvasPosition.y + canvasSize.y },
         ImGui::GetWindowViewport());
+    spotlight.reportTarget(
+        "compose.canvas.pan-player",
+        canvasPosition,
+        { canvasPosition.x + canvasSize.x, canvasPosition.y + canvasSize.y },
+        ImGui::GetWindowViewport());
     if ( projection.draftLaneCount > 0 &&
          fullyVisible(projection.draftLeftX, projection.draftRightX) ) {
         // 关闭专业模式时计数为零，路线继续等待并由提示说明如何开启。
@@ -201,6 +221,10 @@ void reportCanvasWalkthroughTargets(
         // BMS 关闭或没有可访问轨道时不能把空区间误判成已完整显示。
         spotlight.completeTarget("editor.canvas.pan-bgm");
     }
+    if ( fullyVisible(projection.player.leftX, projection.player.rightX) ) {
+        // 创作阶段重新验收玩家区，不复用阶段三已经完成过的进度状态。
+        spotlight.completeTarget("compose.canvas.pan-player");
+    }
 
     // 玩家区始终是主介绍锚点，辅助区域则只在对应功能实际启用时上报。
     // 区域上报顺序不代表路线顺序，JSON 步骤才是唯一编排来源。
@@ -208,6 +232,9 @@ void reportCanvasWalkthroughTargets(
     // 所有矩形共享画布纵向范围，使说明不会误导为只作用于某个时间片段。
     // player 使用实际布局边界，不能假定画布中央或固定四轨宽度。
     reportRegion("editor.canvas.player",
+                 projection.player.leftX,
+                 projection.player.rightX);
+    reportRegion("compose.canvas.player",
                  projection.player.leftX,
                  projection.player.rightX);
     if ( projection.draftLaneCount > 0 )
@@ -367,6 +394,68 @@ float collaborationTimeToCanvasY(const Common::Render::RenderSnapshot& snapshot,
            static_cast<float>((targetAbsY - currentAbsY) * scale);
 }
 
+/// @brief 对教程随机种子执行一次无分配混合。
+/// @param value 当前种子。
+/// @return 可继续取模选择轨道或候选点的混合值。
+/// @details 种子只决定一次教程会话的视觉练习路径，不参与谱面随机性。
+/// 混合函数无全局引擎、无锁且不分配；进入步骤时加入帧号，使重复演练通常
+/// 得到不同路线，同一轮则把结果保存在成员中，防止目标逐帧跳动。
+std::uint64_t mixWalkthroughSeed(std::uint64_t value)
+{
+    value ^= value >> 30U;
+    value *= 0xBF58476D1CE4E5B9ULL;
+    value ^= value >> 27U;
+    value *= 0x94D049BB133111EBULL;
+    return value ^ (value >> 31U);
+}
+
+/// @brief 判断屏幕点是否位于闭区间矩形内。
+/// @param point 屏幕坐标点。
+/// @param minimum 矩形左上角。
+/// @param maximum 矩形右下角。
+/// @return 点位于矩形内时返回 true。
+bool walkthroughPointInRect(const ImVec2& point, const ImVec2& minimum,
+                            const ImVec2& maximum)
+{
+    return point.x >= minimum.x && point.x <= maximum.x &&
+           point.y >= minimum.y && point.y <= maximum.y;
+}
+
+/// @brief 在目标框中心绘制不拦截输入的灯泡提示符。
+/// @param drawList 当前画布窗口绘制列表。
+/// @param center 图标中心。
+/// @param radius 灯泡主体半径。
+/// @param color 提示颜色。
+/// @details 使用基础图元而非字体字形，保证自定义皮肤没有灯泡图标时仍可见。
+/// 图元只进入当前窗口 DrawList，不创建 ImGui Item，因此不会抢走画布点击。
+/// @warning UI 热路径：放置教学步骤每帧提交固定数量线段和圆形。
+void drawWalkthroughLightBulb(ImDrawList* drawList, const ImVec2& center,
+                              float radius, ImU32 color)
+{
+    if ( !drawList || radius <= 1.0F ) return;
+    const ImVec2 bulbCenter{ center.x, center.y - radius * 0.22F };
+    drawList->AddCircle(bulbCenter, radius * 0.58F, color, 20, 2.5F);
+    drawList->AddLine({ center.x - radius * 0.34F, center.y + radius * 0.28F },
+                      { center.x + radius * 0.34F, center.y + radius * 0.28F },
+                      color,
+                      2.5F);
+    drawList->AddLine({ center.x - radius * 0.25F, center.y + radius * 0.48F },
+                      { center.x + radius * 0.25F, center.y + radius * 0.48F },
+                      color,
+                      2.5F);
+    // 六条短射线强化灯泡语义，不依赖皮肤字体是否包含对应图标字形。
+    for ( int index = 0; index < 6; ++index ) {
+        const float angle =
+            -IM_PI + (static_cast<float>(index) + 0.5F) * IM_PI / 3.0F;
+        const ImVec2 direction{ std::cos(angle), std::sin(angle) };
+        const ImVec2 from{ bulbCenter.x + direction.x * radius * 0.78F,
+                           bulbCenter.y + direction.y * radius * 0.78F };
+        const ImVec2 to{ bulbCenter.x + direction.x * radius,
+                         bulbCenter.y + direction.y * radius };
+        drawList->AddLine(from, to, color, 2.0F);
+    }
+}
+
 }  // namespace
 
 /// @brief 创建绑定到逻辑会话的二维主画布。
@@ -401,6 +490,379 @@ Basic2DCanvas::Basic2DCanvas(
 /// @details unique_ptr 成员按声明逆序自动释放；GPU 资源清理由基类和
 /// 渲染器生命周期负责，因此析构体无需显式等待设备空闲。
 Basic2DCanvas::~Basic2DCanvas() {}
+
+/// @brief 绘制创作教程的起点、路径和目标，并验证完整拖拽放置手势。
+/// @param sourceManager 提供当前演练步骤和完成入口。
+/// @param snapshot 当前玩家轨布局、分拍与画笔快照。
+/// @param canvasScreenPosition 画布内容左上角屏幕坐标。
+/// @param canvasSize 画布逻辑像素尺寸。
+/// @details 整个步骤维持以下状态机：
+///
+/// 1. 仅当 Spotlight 正等待 place-note 时生成随机目标；
+/// 2. 直接读取逻辑渲染器本帧实际提交的玩家区分拍线；
+/// 3. 丢弃无法完整容纳真实普通 Note 渲染矩形的候选；
+/// 4. 为起点和终点选择不同候选，轨道数允许时也选择不同玩家轨；
+/// 5. 用成员保存选择，直到步骤结束或用户切换到另一张谱面；
+/// 6. 每帧重算屏幕矩形，使相机或窗口变化后仍跟随相同谱面时间；
+/// 7. 蓝色框表示必须按下的位置，黄色灯泡框表示必须松开的位置；
+/// 8. 左键在画布内按下即建立一次尝试，直接点击目标也会被记录为失败；
+/// 9. 成功要求正确起点、真实拖动、逻辑画笔激活、无修饰键及正确终点；
+/// 10. 失败时要求交互控制器把同帧 EndBrush 改为 cancel，不产生历史节点。
+///
+/// UI 状态只验证教学手势，不替代 DrawTool 的领域校验、吸附和 Note 创建。
+/// brushObserved 来自逻辑快照，确保被主音轨绑定等规则拒绝的起笔不能假完成。
+/// 完成通知发生在正常 EndBrush 之前；命令仍按 Start、Update、End 顺序提交，
+/// 因此最终 Note 使用释放帧的正常画笔更新，而不是由教程直接构造。
+///
+/// @par 坐标约束
+/// 成员目标保存玩家轨号和渲染器公布的分拍时间，不保存窗口像素。每帧从
+/// playerBeatLines 取回同一条真实拍线的中心 Y，并使用 playerNoteWidth 与
+/// playerNoteHeight 构造和普通 Note 完全相同的外接矩形。UI 播放补间位移也
+/// 同步加到中心 Y，避免逻辑快照发布后画面继续滚动而提示框停在旧位置。
+/// X 只使用统一玩家轨投影，不会把草稿轨、批注沟槽或 BGM 轨误算为玩家轨。
+/// 拍线集合只包含渲染器最终通过以下检查的普通玩家区网格：
+/// - BPM 段与可见 Scroll 区间确实相交；
+/// - 当前常显或近光标模式使该线拥有非零透明度；
+/// - 该中心坐标没有被更早的拍线占用同一像素行；
+/// - 中心落在玩家轨道纵向裁剪范围内。
+/// 教程再以完整 Note 高度收窄候选，保证框不会越过轨道上下边缘。
+/// 起点和终点保存精确谱面时间，以便快照滚动时查回新的屏幕 Y；
+/// 如果某条线已经离开实际绘制集合，整条随机路线会重新选择，
+/// 不能继续沿用旧坐标制造一个画面中不存在、也无法吸附的目标。
+///
+/// @par 输入约束
+/// 教程只观察左键边沿，不主动捕获鼠标。真正的画笔输入继续由交互控制器
+/// 处理，所以画布外释放、播放状态、对象 Hover 与连续命令去重规则都保持一致。
+/// 一次尝试从画布内任意位置按下即锁存；起点不正确也必须等到释放后取消，
+/// 防止错误按下已经激活的临时画笔残留到下一次尝试。
+///
+/// @par 失败恢复
+/// 失败不发送普通 CmdUndo，因为起笔可能被逻辑规则拒绝而从未创建动作，
+/// 此时 Undo 会错误撤销用户在教程前完成的编辑。cancel EndBrush 只清理当前
+/// BrushState，既移除预览，也不会创建新动作或改变既有撤销栈。
+/// @warning UI 热路径：非目标步骤仅做状态判断；目标随机化只在进入步骤时执行。
+void Basic2DCanvas::updateComposeWalkthrough(
+    UI::UIManager*                        sourceManager,
+    const Common::Render::RenderSnapshot& snapshot,
+    const ImVec2& canvasScreenPosition, const ImVec2& canvasSize)
+{
+    if ( !sourceManager ) return;
+    auto& spotlight = sourceManager->walkthroughSpotlight();
+    // 路线页面可能在鼠标手势中途被“知道了”或结束引导关闭。此时只清理
+    // 教程自己的观察状态，不发送取消命令；显式跳过代表用户接管普通绘制。
+    if ( !spotlight.awaitingTarget("compose.canvas.place-note") ||
+         !snapshot.hasBeatmap || canvasSize.x <= 1.0F ||
+         canvasSize.y <= 1.0F ) {
+        // 离开放置步骤后清除整段易失状态，下次重练会生成新的随机路径。
+        m_walkthroughNoteDragTarget.reset();
+        m_walkthroughNoteAttemptActive   = false;
+        m_walkthroughNoteStartedAtSource = false;
+        m_walkthroughNoteDragged         = false;
+        m_walkthroughNoteBrushObserved   = false;
+        m_walkthroughNoteModifierUsed    = false;
+        return;
+    }
+
+    const auto& visual = Config::AppConfig::instance().getVisualConfig();
+    const auto& layout = visual.trackLayoutForKeyCount(snapshot.trackCount);
+    // 使用与 DrawTool 相同的统一分区投影，不能按窗口中央猜测玩家轨道。
+    // 草稿、批注和 BGM 的启用状态都会改变辅助区域，但玩家轨边界仍由
+    // player 子投影权威给出，水平偏移则来自当前相机快照。
+    const auto projection =
+        Logic::calculateCanvasLaneProjection(canvasSize.x,
+                                             snapshot.trackCount,
+                                             snapshot.bgmTrackCount,
+                                             layout,
+                                             snapshot.canvasHorizontalOffsetX,
+                                             true,
+                                             snapshot.bmsEditingEnabled,
+                                             snapshot.draftLanesEnabled,
+                                             snapshot.draftTrackCount,
+                                             true);
+    if ( !projection.valid || snapshot.trackCount <= 0 ) return;
+
+    const float noteWidth  = snapshot.playerNoteWidth;
+    const float noteHeight = snapshot.playerNoteHeight;
+    if ( noteWidth <= 1.0F || noteHeight <= 1.0F ||
+         snapshot.playerBeatLines.size() < 2U ) {
+        return;
+    }
+
+    const float trackTop    = canvasSize.y * layout.top;
+    const float trackBottom = canvasSize.y * layout.bottom;
+    /// @brief 查询缓存目标在本帧仍然实际绘出的分拍线中心。
+    /// @param time 缓存的精确分拍时间。
+    /// @return 可完整容纳普通 Note 时返回应用播放补间后的逻辑 Y。
+    const auto findBeatLineY = [&](double time) -> std::optional<float> {
+        for ( const auto& line : snapshot.playerBeatLines ) {
+            if ( std::abs(line.time - time) >= 1e-7 ) continue;
+            const float y = line.y + m_preparedSnapshot.appliedYOffset;
+            // 教程框必须完整落在玩家轨纵向边界内；中心可见但 Note 被裁掉的
+            // 拍线不能作为练习目标，否则实际物件与提示框都只显示一部分。
+            if ( y - noteHeight * 0.5F < trackTop ||
+                 y + noteHeight * 0.5F > trackBottom ) {
+                return std::nullopt;
+            }
+            return y;
+        }
+        return std::nullopt;
+    };
+
+    // 相机滚动、播放或近光标拍线模式都可能让已选拍线离开当前真实绘制集合。
+    // 此时丢弃旧路线并从当前可见线重选，不能继续显示一个已经不存在的拍位。
+    if ( m_walkthroughNoteDragTarget &&
+         m_walkthroughNoteDragTarget->beatmapInstanceId ==
+             snapshot.beatmapInstanceId &&
+         (!findBeatLineY(m_walkthroughNoteDragTarget->sourceTime) ||
+          !findBeatLineY(m_walkthroughNoteDragTarget->destinationTime)) ) {
+        m_walkthroughNoteDragTarget.reset();
+    }
+
+    // 每次进入该步骤只生成一次随机路线。候选来自渲染器已完成 BPM、首拍偏移、
+    // Scroll/SV、自动显隐和像素行去重后的最终结果，不再在 UI 层近似量化。
+    if ( !m_walkthroughNoteDragTarget ||
+         m_walkthroughNoteDragTarget->beatmapInstanceId !=
+             snapshot.beatmapInstanceId ) {
+        struct Candidate {
+            double time{ 0.0 };
+            float  y{ 0.0F };
+        };
+        std::array<Candidate, 64> candidates{};
+        std::size_t               candidateCount = 0;
+        // 固定容量覆盖常规视野而不让 UI 每次进入步骤分配候选容器。
+        // 渲染器已经按像素行去重，遍历顺序中的每项均代表不同可见位置。
+        for ( const auto& line : snapshot.playerBeatLines ) {
+            if ( candidateCount >= candidates.size() ) break;
+            const float y = line.y + m_preparedSnapshot.appliedYOffset;
+            if ( y - noteHeight * 0.5F >= trackTop &&
+                 y + noteHeight * 0.5F <= trackBottom ) {
+                candidates[candidateCount++] = { line.time, y };
+            }
+        }
+        // 少于两个合法分拍无法满足“其他位置”的练习约束。保持等待比退化成
+        // 同点点击更安全；用户改变缩放或播放位置后下一帧会重新尝试生成。
+        if ( candidateCount < 2 ) return;
+
+        // 谱面实例身份隔离不同标签；帧号只在首次生成时采样，成员缓存保证
+        // 同一轮路线稳定。固定常量只作为混合盐，不承载任何谱面业务值。
+        std::uint64_t seed = mixWalkthroughSeed(
+            static_cast<std::uint64_t>(snapshot.beatmapInstanceId) ^
+            (static_cast<std::uint64_t>(ImGui::GetFrameCount()) << 32U) ^
+            0x434F4D504F53454FULL);
+        const std::size_t destinationIndex = seed % candidateCount;
+        seed                               = mixWalkthroughSeed(seed);
+        std::size_t sourceIndex =
+            (destinationIndex + 1U + seed % (candidateCount - 1U)) %
+            candidateCount;
+        // 起终点至少错开两个 Note 高度，路径才明确表达拖动而非近距离抖动。
+        // 从随机起点循环寻找，保持候选随机性同时只选择真实拍线。
+        const float minimumPathHeight = noteHeight * 2.0F;
+        std::size_t inspected         = 0U;
+        while ( inspected < candidateCount - 1U &&
+                std::abs(candidates[sourceIndex].y -
+                         candidates[destinationIndex].y) < minimumPathHeight ) {
+            sourceIndex = (sourceIndex + 1U) % candidateCount;
+            if ( sourceIndex == destinationIndex )
+                sourceIndex = (sourceIndex + 1U) % candidateCount;
+            ++inspected;
+        }
+        if ( std::abs(candidates[sourceIndex].y -
+                      candidates[destinationIndex].y) < minimumPathHeight ) {
+            return;
+        }
+        // 终点轨道覆盖当前真实轨数；起点在多轨谱面中通过非零偏移选到
+        // 另一轨。单轨谱面无法满足跨轨，只保留跨分拍的完整拖拽语义。
+        const int destinationTrack =
+            static_cast<int>(mixWalkthroughSeed(seed) %
+                             static_cast<std::uint64_t>(snapshot.trackCount));
+        int sourceTrack = destinationTrack;
+        if ( snapshot.trackCount > 1 ) {
+            seed = mixWalkthroughSeed(seed);
+            sourceTrack =
+                (destinationTrack + 1 +
+                 static_cast<int>(seed % static_cast<std::uint64_t>(
+                                             snapshot.trackCount - 1))) %
+                snapshot.trackCount;
+        }
+        m_walkthroughNoteDragTarget = WalkthroughNoteDragTarget{
+            .beatmapInstanceId = snapshot.beatmapInstanceId,
+            .sourceTrack       = sourceTrack,
+            .destinationTrack  = destinationTrack,
+            .sourceTime        = candidates[sourceIndex].time,
+            .destinationTime   = candidates[destinationIndex].time,
+        };
+    }
+
+    const auto& target = *m_walkthroughNoteDragTarget;
+    // 路径保存谱面时间而非屏幕坐标。每帧回查渲染快照保证框继续贴住同一条
+    // 实际分拍线；找不到时前面的状态分支已经清除并重选。
+    const float playerWidth =
+        projection.player.rightX - projection.player.leftX;
+    if ( playerWidth <= 1.0F ) return;
+    const float laneWidth =
+        playerWidth / static_cast<float>(snapshot.trackCount);
+    const auto sourceY      = findBeatLineY(target.sourceTime);
+    const auto destinationY = findBeatLineY(target.destinationTime);
+    if ( !sourceY || !destinationY ) return;
+    // DPI 只影响装饰线宽与 Spotlight 外部留白，绝不能修改 Note 外接框尺寸。
+    const float dpiScale =
+        std::max(Config::AppConfig::instance().getWindowContentScale(), 1.0F);
+    const auto makeRect = [&](int track, float y) {
+        // 与 NoteRenderSystem::renderTap 相同：普通 Note 按实际纹理宽度在玩家
+        // 单轨内居中，纵向以真实分拍线为中心，不使用教程自定义大小。
+        const float trackLeft =
+            projection.player.leftX + laneWidth * static_cast<float>(track);
+        const float left  = trackLeft + (laneWidth - noteWidth) * 0.5F;
+        const float right = left + noteWidth;
+        return std::array<ImVec2, 2>{
+            ImVec2{ canvasScreenPosition.x + left,
+                    canvasScreenPosition.y + y - noteHeight * 0.5F },
+            ImVec2{ canvasScreenPosition.x + right,
+                    canvasScreenPosition.y + y + noteHeight * 0.5F },
+        };
+    };
+    const auto sourceRect = makeRect(target.sourceTrack, *sourceY);
+    const auto destinationRect =
+        makeRect(target.destinationTrack, *destinationY);
+    const ImVec2 sourceCenter{
+        (sourceRect[0].x + sourceRect[1].x) * 0.5F,
+        (sourceRect[0].y + sourceRect[1].y) * 0.5F,
+    };
+    const ImVec2 destinationCenter{
+        (destinationRect[0].x + destinationRect[1].x) * 0.5F,
+        (destinationRect[0].y + destinationRect[1].y) * 0.5F,
+    };
+
+    // Spotlight 只需要一个外接目标孔洞；两个独立框和箭头由画布绘制层明确区分。
+    // 外接框还覆盖完整拖动路径，使暗化遮罩不会把中间轨迹重新盖暗。
+    const ImVec2 targetMinimum{
+        std::min(sourceRect[0].x, destinationRect[0].x) - 8.0F * dpiScale,
+        std::min(sourceRect[0].y, destinationRect[0].y) - 8.0F * dpiScale,
+    };
+    const ImVec2 targetMaximum{
+        std::max(sourceRect[1].x, destinationRect[1].x) + 8.0F * dpiScale,
+        std::max(sourceRect[1].y, destinationRect[1].y) + 8.0F * dpiScale,
+    };
+    spotlight.reportTarget("compose.canvas.place-note",
+                           targetMinimum,
+                           targetMaximum,
+                           ImGui::GetWindowViewport(),
+                           false);
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    // 教学图元必须裁剪在画布内容内。提示气泡由 Spotlight 在前景层绘制，
+    // 这里不创建额外窗口，避免改变 Dock 焦点或画布 Hover 判定。
+    drawList->PushClipRect(canvasScreenPosition,
+                           { canvasScreenPosition.x + canvasSize.x,
+                             canvasScreenPosition.y + canvasSize.y },
+                           true);
+    const float pulse =
+        0.65F + 0.35F * std::sin(static_cast<float>(ImGui::GetTime()) * 4.0F);
+    const ImU32 sourceColor = IM_COL32(70, 220, 255, 255);
+    const ImU32 destinationColor =
+        IM_COL32(255, 238, 72, static_cast<int>(210.0F + 45.0F * pulse));
+    // 起点使用稳定青色，目标用呼吸黄色；填充保持低透明度，让用户仍能看到
+    // 下方轨道线和已有 Note，避免教程框被误认为谱面中已经存在的物件。
+    drawList->AddRectFilled(sourceRect[0],
+                            sourceRect[1],
+                            IM_COL32(30, 150, 190, 42),
+                            5.0F * dpiScale);
+    drawList->AddRect(sourceRect[0],
+                      sourceRect[1],
+                      sourceColor,
+                      5.0F * dpiScale,
+                      0,
+                      2.5F * dpiScale);
+    drawList->AddRectFilled(destinationRect[0],
+                            destinationRect[1],
+                            IM_COL32(255, 238, 72, 42),
+                            5.0F * dpiScale);
+    drawList->AddRect(destinationRect[0],
+                      destinationRect[1],
+                      destinationColor,
+                      5.0F * dpiScale,
+                      0,
+                      (2.5F + pulse) * dpiScale);
+    drawList->AddLine(
+        sourceCenter, destinationCenter, destinationColor, 2.5F * dpiScale);
+    // 箭头只表达方向，不作为命中区。灯泡位于最终释放点正中，两个装饰均
+    // 不参与 ImGui 输入，因此鼠标事件仍完整到达 Basic2DCanvasInteraction。
+    const ImVec2 path{ destinationCenter.x - sourceCenter.x,
+                       destinationCenter.y - sourceCenter.y };
+    const float  pathLength = std::sqrt(path.x * path.x + path.y * path.y);
+    if ( pathLength > 1.0F ) {
+        const ImVec2 direction{ path.x / pathLength, path.y / pathLength };
+        const ImVec2 normal{ -direction.y, direction.x };
+        const float  arrowSize = 9.0F * dpiScale;
+        const ImVec2 arrowBase{ destinationCenter.x - direction.x * arrowSize,
+                                destinationCenter.y - direction.y * arrowSize };
+        drawList->AddTriangleFilled(
+            destinationCenter,
+            { arrowBase.x + normal.x * arrowSize * 0.55F,
+              arrowBase.y + normal.y * arrowSize * 0.55F },
+            { arrowBase.x - normal.x * arrowSize * 0.55F,
+              arrowBase.y - normal.y * arrowSize * 0.55F },
+            destinationColor);
+    }
+    drawWalkthroughLightBulb(drawList,
+                             destinationCenter,
+                             std::min(noteHeight * 0.32F, noteWidth * 0.18F),
+                             destinationColor);
+    drawList->PopClipRect();
+
+    const ImVec2 mouse = ImGui::GetMousePos();
+    const ImVec2 canvasMaximum{ canvasScreenPosition.x + canvasSize.x,
+                                canvasScreenPosition.y + canvasSize.y };
+    if ( ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+         walkthroughPointInRect(mouse, canvasScreenPosition, canvasMaximum) ) {
+        // 画布内任何按下都属于一次教学尝试；只有起点框内按下才可能成功。
+        // 这样直接点击目标框也会在释放时取消，不留下绕过路径创建的 Note。
+        m_walkthroughNoteAttemptActive = true;
+        m_walkthroughNoteStartedAtSource =
+            walkthroughPointInRect(mouse, sourceRect[0], sourceRect[1]);
+        m_walkthroughNoteDragged       = false;
+        m_walkthroughNoteBrushObserved = false;
+        m_walkthroughNoteModifierUsed =
+            ImGui::GetIO().KeyShift || ImGui::GetIO().KeyCtrl;
+    }
+    if ( m_walkthroughNoteAttemptActive ) {
+        // ImGui 拖动阈值证明这不是起点内的普通点击。逻辑快照确认画笔真正
+        // 通过权限、轨道领域和资源绑定门禁，防止无对象提交也推进教程。
+        m_walkthroughNoteDragged |=
+            ImGui::IsMouseDragging(ImGuiMouseButton_Left, 1.0F);
+        m_walkthroughNoteBrushObserved |=
+            snapshot.brush.isActive && !snapshot.brush.createsAudioSample &&
+            snapshot.currentTool == Logic::EditTool::Draw;
+        m_walkthroughNoteModifierUsed |=
+            ImGui::GetIO().KeyShift || ImGui::GetIO().KeyCtrl;
+    }
+    if ( ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
+         m_walkthroughNoteAttemptActive ) {
+        // Shift 会把手势解释成 Hold/Flick/Polyline，Ctrl 会绕过时间吸附；
+        // 任一出现都不符合单 Note 的确定分拍练习，必须作为失败取消。
+        const bool success =
+            m_walkthroughNoteStartedAtSource && m_walkthroughNoteDragged &&
+            m_walkthroughNoteBrushObserved && !m_walkthroughNoteModifierUsed &&
+            snapshot.currentTool == Logic::EditTool::Draw &&
+            walkthroughPointInRect(
+                mouse, destinationRect[0], destinationRect[1]);
+        if ( success ) {
+            // 这里只完成教学目标；同帧后续 Interaction 仍发送普通 EndBrush，
+            // 由 DrawTool 创建最终 Note 并生成正常可撤销历史。
+            spotlight.completeTarget("compose.canvas.place-note");
+        } else if ( m_interaction ) {
+            // Interaction 随后发布 cancel=true 的结束命令，原子丢弃失败预览。
+            // 请求必须在本帧 Interaction::update 之前设置，释放分支消费后立即
+            // 复位；因此它不可能泄漏到用户下一次正常画笔手势。
+            m_interaction->cancelBrushOnNextRelease();
+        }
+        m_walkthroughNoteAttemptActive   = false;
+        m_walkthroughNoteStartedAtSource = false;
+        m_walkthroughNoteDragged         = false;
+        m_walkthroughNoteBrushObserved   = false;
+        m_walkthroughNoteModifierUsed    = false;
+    }
+}
 
 /// @brief 更新画布 ImGui 窗口和交互状态。
 /// @param sourceManager UI 管理器观察指针，用于欢迎页和协作房间访问。
@@ -620,6 +1082,14 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
             // 同一 ImGui 层建立命中区域，而覆盖层始终使用本帧快照。
             updateCollaborationViewports(
                 sourceManager, canvasScreenPosition, canvasSize);
+            if ( m_currentSnapshot ) {
+                // 教程先判定本帧释放是否合法，以便交互控制器随后选择提交或
+                // 取消 CmdEndBrush；目标装饰不创建 ImGui Item，不拦截画布输入。
+                updateComposeWalkthrough(sourceManager,
+                                         *m_currentSnapshot,
+                                         canvasScreenPosition,
+                                         canvasSize);
+            }
             m_interaction->update(sourceManager,
                                   m_currentSnapshot,
                                   m_logicalWidth,

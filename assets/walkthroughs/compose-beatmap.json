@@ -2,7 +2,52 @@
   "id": "mmm.compose-beatmap",
   "chapter": "creation",
   "order": 40,
-  "placeholder": true,
+  "version": 1,
+  "requires_project": true,
+  "requires_beatmap": true,
+  "completion": "all",
   "title": {"zh_cn": "创作谱面", "en_us": "Compose a beatmap"},
-  "branches": []
+  "description": {"zh_cn": "选择绘制工具，在主轨道上完成一次从随机起点拖到指定分拍位置的单 Note 放置。进入前请先打开项目，并在标签页中打开至少一张谱面。", "en_us": "Choose the Draw tool and place one single Note by dragging from a random starting point to a specified beat position in the player lanes. Open a project and at least one beatmap editor tab first."},
+  "branches": [
+    {
+      "id": "place-single-note",
+      "title": {"zh_cn": "放置一个单 Note", "en_us": "Place a single Note"},
+      "steps": [
+        {
+          "id": "select-beatmap-tab",
+          "title": {"zh_cn": "进入谱面编辑器", "en_us": "Open a beatmap editor"},
+          "body": {"zh_cn": "点击上方标签栏中的任意谱面编辑器标签，进入对应谱面的编辑区。已有多个谱面标签时可任选其一。", "en_us": "Click any beatmap editor tab in the top tab bar. If several beatmaps are open, choose any one."},
+          "guide": {"prompt": {"zh_cn": "点击突出显示的任意谱面编辑器标签页。", "en_us": "Click any highlighted beatmap editor tab."}, "targets": ["editor.beatmap-tab"]}
+        },
+        {
+          "id": "select-draw-tool",
+          "title": {"zh_cn": "选择绘制工具", "en_us": "Choose the Draw tool"},
+          "body": {"zh_cn": "在工具选择区选择绘制工具。若绘制工具已经选中，可直接点击引导中的 **知道了**，不需要先切换到其他工具再切回来。", "en_us": "Choose the Draw tool in the tool selector. If Draw is already active, use **Got it** without switching away and back."},
+          "requires": ["select-beatmap-tab"],
+          "guide": {"prompt": {"zh_cn": "选择绘制工具；若它已经选中，点击“知道了”继续。", "en_us": "Choose Draw, or click Got it if Draw is already active."}, "targets": ["compose.toolbar.tool-selection"]}
+        },
+        {
+          "id": "reveal-player",
+          "title": {"zh_cn": "显示完整主轨道", "en_us": "Reveal the player lanes"},
+          "body": {"zh_cn": "在画布上按住鼠标中键向右拖动，直到主轨道编辑区完整显示。", "en_us": "Hold the middle mouse button and drag right until the player-lane editor is fully visible."},
+          "requires": ["select-draw-tool"],
+          "guide": {"prompt": {"zh_cn": "按住中键向右拖动画布，直到主轨道编辑区完整显示。", "en_us": "Hold middle mouse and drag right until the player lanes are fully visible."}, "targets": ["compose.canvas.pan-player"]}
+        },
+        {
+          "id": "player-area",
+          "title": {"zh_cn": "主轨道编辑区", "en_us": "Player-lane editor"},
+          "body": {"zh_cn": "这里是主轨道编辑区，接下来会在这里练习放置一个玩家实际游玩的单 Note。", "en_us": "This is the player-lane editor. Next you will place one single playable Note here."},
+          "requires": ["reveal-player"],
+          "guide": {"prompt": {"zh_cn": "这里是主轨道编辑区，点击“知道了”继续。", "en_us": "This is the player-lane editor. Click Got it to continue."}, "targets": ["compose.canvas.player"]}
+        },
+        {
+          "id": "place-note",
+          "title": {"zh_cn": "拖动放置单 Note", "en_us": "Drag to place a single Note"},
+          "body": {"zh_cn": "从蓝色起点框按住左键，沿提示路径拖到黄色目标框，并在灯泡图标处松开。起点和目标位于不同的随机轨道与确定分拍位置；直接点击目标不会完成。放置失败时，本次临时 Note 会自动撤销。", "en_us": "Hold the left mouse button inside the blue source box, follow the path to the yellow target, and release over the light-bulb marker. The source and destination use different random lanes and exact beat positions; clicking the target directly does not count. A failed placement is automatically discarded."},
+          "requires": ["player-area"],
+          "guide": {"prompt": {"zh_cn": "从蓝色起点框按住左键，拖到带灯泡的黄色目标框内再松开。", "en_us": "Hold left mouse in the blue source box, drag to the yellow light-bulb target, then release."}, "targets": ["compose.canvas.place-note"]}
+        }
+      ]
+    }
+  ]
 }

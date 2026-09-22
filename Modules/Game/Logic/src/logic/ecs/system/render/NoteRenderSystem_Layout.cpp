@@ -294,6 +294,7 @@ void NoteRenderSystem::drawJudgmentArea(Batcher& batcher, int32_t trackCount,
 /// @param revealNearCursor 是否仅在悬浮光标附近渐隐显示。
 /// @param opacityScale 调用方追加的整体透明度倍率，限制在 0～1。
 /// @param allowHoverSubdivisionPreview 是否允许以悬浮细分替换目标轨道网格。
+/// @param collectPlayerBeatLines 是否把本次实际绘制的普通线记录为玩家区候选。
 /// @pre BPM 列表已经过滤出 BPM 事件，指针非空且时间顺序有效。
 /// @note 空 BPM 列表不构造默认网格；非法分拍数则兼容回退为四分拍。
 /// @warning 快照生成路径含可见区间查询和逐线绘制，不得加入磁盘访问或阻塞等待。
@@ -304,7 +305,8 @@ void NoteRenderSystem::drawBeatLines(
     const std::vector<const TimelineComponent*>& bpmEvents, double currentTime,
     const ScrollCache* cache, float leftX, float topY, float bottomY,
     float trackAreaW, float renderScaleY, bool revealNearCursor,
-    float opacityScale, bool allowHoverSubdivisionPreview)
+    float opacityScale, bool allowHoverSubdivisionPreview,
+    bool collectPlayerBeatLines)
 {
     if ( !cache ) return;
     // 自动显示依赖当前画布悬浮状态，不以编辑会话焦点代替鼠标命中。
@@ -346,6 +348,13 @@ void NoteRenderSystem::drawBeatLines(
     int rowCount = std::max(
         1, static_cast<int>(std::ceil(visibleBottom - visibleTop)) + 1);
     std::vector<uint8_t> occupiedRows(static_cast<size_t>(rowCount), 0);
+    if ( collectPlayerBeatLines &&
+         batcher.snapshot->playerBeatLines.capacity() <
+             static_cast<std::size_t>(rowCount) ) {
+        // 快照在帧间复用容量；只有视口首次扩大时才增长，随后逐帧 push 不分配。
+        batcher.snapshot->playerBeatLines.reserve(
+            static_cast<std::size_t>(rowCount));
+    }
     // 每个像素行至多保留一条普通分拍线，压缩视图下避免重叠网格无限堆积。
     int occupiedRowCount = 0;
     /// @brief 标记本次绘制已占用的像素行，重复位置返回 false。
@@ -689,6 +698,13 @@ void NoteRenderSystem::drawBeatLines(
                 if ( y >= visibleTop && y <= visibleBottom && occupyRow(y) ) {
                     auto [color, width] = getBeatLineConfig(denominator);
                     color.a *= cursorRevealAlpha;
+                    // 只有通过透明度、可见区与像素占行检查的线才会真实出现在
+                    // 玩家区。教程直接消费这份时间与中心坐标，不能再次按 BPM
+                    // 推算一个看似接近、实际却无法被当前吸附规则命中的位置。
+                    if ( collectPlayerBeatLines ) {
+                        batcher.snapshot->playerBeatLines.push_back(
+                            { .time = t, .y = y });
+                    }
                     // 按时间匹配吸附，避免压缩视图中误亮同像素行的相邻拍位。
                     const bool glow =
                         batcher.snapshot->isSnapped &&

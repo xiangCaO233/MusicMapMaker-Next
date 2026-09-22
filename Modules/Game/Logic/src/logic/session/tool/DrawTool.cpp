@@ -629,8 +629,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
                                               : itCamera->second.viewportHeight;
         float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                    ctx.lastConfig.visual.trackLayout.top) *
-                                   mainViewportHeight;
+                                ctx.lastConfig.visual.trackLayout.top) *
+                               mainViewportHeight;
         float previewDrawH =
             itCamera->second.viewportHeight -
             (ctx.lastConfig.visual.previewConfig.margin.top +
@@ -652,8 +652,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         ctx.animateTime,
         ctx.cameras,
         ctx.currentBeatmap
-            ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
-            : 120.0);
+                 ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+                 : 120.0);
 
     // Ctrl 切换仅影响这一轮时间目标，起笔参照仍保留原始锁定时间。
     // 恢复吸附后会直接按新目标更新几何，不等待额外稳定窗口。
@@ -732,10 +732,10 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     float singleTrackW = trackAreaW / static_cast<float>(ctx.trackCount);
     int   currentTrack =
         currentLane
-            ? currentLane->absoluteTrack(
+              ? currentLane->absoluteTrack(
                   static_cast<std::uint32_t>(ctx.trackCount),
                   projectedDraftLaneCount)
-            : static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
+              : static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
     // 草稿下界包含一个追加轨，玩家上界止于最后一条玩家轨。
     // 后续形状的起点和末端必须使用同一域的边界。
     const bool editsDraft   = ctx.brushState.track < 0;
@@ -1036,6 +1036,13 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
 void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
 {
     if ( !ctx.brushState.isActive ) return;
+
+    // 教学手势未落入指定目标时直接丢弃临时画笔。取消发生在创建动作入栈前，
+    // 对用户表现为本次失败放置已撤销，同时不会误撤销更早的有效编辑。
+    if ( cmd.cancel ) {
+        resetBrushState(ctx);
+        return;
+    }
 
     // 采样有独立提交类型，不能借用 Note 的颜色、子结构或合并流程。
     // 锚点须有效且目标在 BGM 编号范围内，否则只清理手势。

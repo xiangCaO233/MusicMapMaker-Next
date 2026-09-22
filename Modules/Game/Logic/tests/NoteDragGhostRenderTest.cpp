@@ -188,7 +188,6 @@ void renderCrossRegionGhost(
             .m_effect    = MMM::TimingEffect::BPM,
             .m_value     = 120.0,
         });
-
     MMM::Config::EditorConfig config;
     // 玩家区固定为 80 至 400 像素，单轨宽 80 像素。
     // 草稿和 BGM 另给位置与宽度，使跨区端点无法用同一线性轨距替代。
@@ -310,6 +309,13 @@ void renderCrossRegionGhost(
 /// @note 本测试不执行拖动命令，也不验证提交后 Note 转换为采样的过程。
 /// @note 只校验头部左边界，不单独证明完整命中矩形的纵向尺寸。
 /// @note BGM 轨宽通过本体居中公式进入预期位置，不能替换为玩家轨宽。
+/// @note 同一快照还覆盖创作教程所需的玩家 Note 几何与可见拍线发布契约。
+/// @note 教程尺寸断言使用玩家单轨宽，不使用被拖到 BGM 区后的局部轨宽。
+/// @note 拍线时间取零秒 BPM 首拍，能发现 UI 重新近似首拍相位的回归。
+/// @note 拍线 Y 直接与判定线比较，能发现 Scroll 投影后二次换算产生的偏差。
+/// @note 纹理宽高比设为二，避免错误实现碰巧用相等宽高通过断言。
+/// @note 拍线列表必须来自主画布；Preview 或辅助区域不能覆盖玩家候选。
+/// @note 测试不依赖随机路线选择，只验证随机选择之前的权威输入几何。
 bool testDraggedTapUsesBgmLaneBounds()
 {
     entt::registry noteRegistry;
@@ -325,6 +331,16 @@ bool testDraggedTapUsesBgmLaneBounds()
             .m_effect    = MMM::TimingEffect::BPM,
             .m_value     = 120.0,
         });
+    // 第二个时间点给 ScrollCache 提供有限首段，确保位置反查索引覆盖当前视窗。
+    // 两个值相同，不会为本例引入额外的变速语义。
+    const auto bpmEndEntity = timelineRegistry.create();
+    timelineRegistry.emplace<MMM::Logic::TimelineComponent>(
+        bpmEndEntity,
+        MMM::Logic::TimelineComponent{
+            .m_timestamp = 10.0,
+            .m_effect    = MMM::TimingEffect::BPM,
+            .m_value     = 120.0,
+        });
 
     MMM::Config::EditorConfig config;
     config.visual.trackLayout.left  = 0.1F;
@@ -337,8 +353,10 @@ bool testDraggedTapUsesBgmLaneBounds()
     // 测试目标是 BGM 投影选择，不是配置默认值。
     config.visual.noteScaleX = 0.8F;
     config.visual.noteScaleY = 1.0F;
+    // 本例同时验证创作教程消费的渲染几何契约，因此保留玩家区拍线。
+    // 拍线使用纯色纹理，不会混入下面按 Note UV 筛选的物件边界。
     config.visual.beatLineDisplayMode =
-        MMM::Config::BeatLineDisplayMode::Hidden;
+        MMM::Config::BeatLineDisplayMode::Always;
     config.visual.previewConfig.drawBeatLines   = false;
     config.visual.previewConfig.drawTimingLines = false;
     config.settings.enableBmsEditing            = true;
@@ -387,6 +405,11 @@ bool testDraggedTapUsesBgmLaneBounds()
         static_cast<std::uint32_t>(MMM::Logic::TextureID::Note),
         glm::vec4{ 0.25F, 0.35F, 0.2F, 0.1F });
 
+    const std::vector<const MMM::Logic::TimelineComponent*> bpmEvents{
+        &timelineRegistry.get<const MMM::Logic::TimelineComponent>(bpmEntity),
+        &timelineRegistry.get<const MMM::Logic::TimelineComponent>(bpmEndEntity)
+    };
+
     // 通过公开快照入口覆盖拖动虚影与拾取的共同调用链。
     // 样本列表为空，确保检测到的 Note 几何不是另一个自动采样。
     MMM::Logic::System::NoteRenderSystem::generateSnapshot(
@@ -395,7 +418,7 @@ bool testDraggedTapUsesBgmLaneBounds()
         {},
         {},
         timelineRegistry,
-        {},
+        bpmEvents,
         &snapshot,
         "Basic2DCanvas",
         0.0,
@@ -407,6 +430,34 @@ bool testDraggedTapUsesBgmLaneBounds()
         PLAYER_TRACK_COUNT,
         config,
         VIEWPORT_HEIGHT);
+
+    // 教程框必须直接复用普通玩家 Note 的真实渲染宽高，并从实际绘出的
+    // 拍线中选择目标。四轨玩家区单轨宽 80，纹理纵横比为 2，因此当前
+    // 缩放下应发布 64x40；零秒首拍中心应恰好位于判定线。
+    const float expectedJudgmentY =
+        VIEWPORT_HEIGHT * config.visual.judgeline_pos;
+    const auto renderedFirstBeat = std::find_if(
+        snapshot.playerBeatLines.begin(),
+        snapshot.playerBeatLines.end(),
+        [](const MMM::Common::Render::PlayerBeatLineSnapshot& line) {
+            return near(line.time, 0.0);
+        });
+    if ( !near(snapshot.playerNoteWidth, 64.0F) ||
+         !near(snapshot.playerNoteHeight, 40.0F) ||
+         renderedFirstBeat == snapshot.playerBeatLines.end() ||
+         !near(renderedFirstBeat->y, expectedJudgmentY) ) {
+        XERROR(
+            "Walkthrough geometry diverged: note={}x{}, beatCount={}, "
+            "firstY={}, expectedY={}",
+            snapshot.playerNoteWidth,
+            snapshot.playerNoteHeight,
+            snapshot.playerBeatLines.size(),
+            renderedFirstBeat == snapshot.playerBeatLines.end()
+                ? -1.0F
+                : renderedFirstBeat->y,
+            expectedJudgmentY);
+        return false;
+    }
 
     // 期望布局显式打开 BGM 区，草稿区在这个单键案例中关闭。
     // 轨道编号与区域序号不同：统一轨号四对应 BGM 区内序号零。

@@ -286,6 +286,13 @@ void NoteRenderSystem::renderNotes(
             registry, snapshot, currentTime, singleTrackW, config);
     if ( !ctx.cache ) return;
 
+    // 主画布传入统一轨道投影；此时基准上下文恰好就是玩家域普通 Note
+    // 的真实尺寸。预览和辅助相机不得覆盖这份供主画布 UI 使用的几何。
+    if ( laneProjection ) {
+        snapshot->playerNoteWidth  = ctx.noteW;
+        snapshot->playerNoteHeight = ctx.noteH;
+    }
+
     // 复用当前写入快照的暂存容器，候选列表不拥有 ECS 组件。
     // 同一候选集合供后续各层使用，避免每层重复进行空间反查。
     auto& noteEntities = snapshot->noteQueryScratch;
@@ -1224,11 +1231,11 @@ void NoteRenderSystem::generateNoteHitboxes(
         const float fallbackNoteW  = ctx.noteW;
         const float fallbackNoteH  = ctx.noteH;
         const auto  laneGeometry   = resolveNoteLaneGeometry(note.m_trackIndex,
-                                                             laneProjection,
-                                                             fallbackLeftX,
-                                                             fallbackTrackW,
-                                                             fallbackNoteW,
-                                                             fallbackNoteH);
+                                                          laneProjection,
+                                                          fallbackLeftX,
+                                                          fallbackTrackW,
+                                                          fallbackNoteW,
+                                                          fallbackNoteH);
         // 局部值副本只覆盖宽高，滚动锚点与颜色仍沿用本次快照。
         // 不修改调用方上下文，后一个音符可以属于不同领域。
         auto laneContext         = ctx;
@@ -1361,11 +1368,11 @@ void NoteRenderSystem::generateNoteHitboxes(
         const float fallbackNoteW  = ctx.noteW;
         const float fallbackNoteH  = ctx.noteH;
         const auto  laneGeometry   = resolveNoteLaneGeometry(note.m_trackIndex,
-                                                             laneProjection,
-                                                             fallbackLeftX,
-                                                             fallbackTrackW,
-                                                             fallbackNoteW,
-                                                             fallbackNoteH);
+                                                          laneProjection,
+                                                          fallbackLeftX,
+                                                          fallbackTrackW,
+                                                          fallbackNoteW,
+                                                          fallbackNoteH);
         auto        laneContext    = ctx;
         laneContext.noteW          = laneGeometry.noteW;
         laneContext.noteH          = laneGeometry.noteH;
@@ -1565,11 +1572,11 @@ void NoteRenderSystem::renderNoteBaseLayer(
         const float fallbackNoteW  = ctx.noteW;
         const float fallbackNoteH  = ctx.noteH;
         const auto  laneGeometry   = resolveNoteLaneGeometry(note.m_trackIndex,
-                                                             laneProjection,
-                                                             fallbackLeftX,
-                                                             fallbackTrackW,
-                                                             fallbackNoteW,
-                                                             fallbackNoteH);
+                                                          laneProjection,
+                                                          fallbackLeftX,
+                                                          fallbackTrackW,
+                                                          fallbackNoteW,
+                                                          fallbackNoteH);
         auto        laneContext    = ctx;
         laneContext.noteW          = laneGeometry.noteW;
         laneContext.noteH          = laneGeometry.noteH;
@@ -1594,11 +1601,11 @@ void NoteRenderSystem::renderNoteBaseLayer(
             static_cast<float>(ctx.cache->getDisplayDelta(
                 note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
                 renderScaleY;
-        float       visualH = static_cast<float>(ctx.cache->getDisplayDelta(
-                                  note.m_timestamp + note.m_duration,
-                                  ctx.cache->getAbsY(note.m_timestamp),
-                                  note.m_timestamp)) *
-                              renderScaleY;
+        float visualH = static_cast<float>(ctx.cache->getDisplayDelta(
+                            note.m_timestamp + note.m_duration,
+                            ctx.cache->getAbsY(note.m_timestamp),
+                            note.m_timestamp)) *
+                        renderScaleY;
         const float trackX =
             resolveNoteTrackLeftX(note, laneProjection, leftX, singleTrackW);
 
@@ -1873,11 +1880,11 @@ void NoteRenderSystem::renderNoteGlowLayer(
         const float fallbackNoteW  = ctx.noteW;
         const float fallbackNoteH  = ctx.noteH;
         const auto  laneGeometry   = resolveNoteLaneGeometry(note.m_trackIndex,
-                                                             laneProjection,
-                                                             fallbackLeftX,
-                                                             fallbackTrackW,
-                                                             fallbackNoteW,
-                                                             fallbackNoteH);
+                                                          laneProjection,
+                                                          fallbackLeftX,
+                                                          fallbackTrackW,
+                                                          fallbackNoteW,
+                                                          fallbackNoteH);
         auto        laneContext    = ctx;
         laneContext.noteW          = laneGeometry.noteW;
         laneContext.noteH          = laneGeometry.noteH;
@@ -1891,11 +1898,11 @@ void NoteRenderSystem::renderNoteGlowLayer(
             static_cast<float>(ctx.cache->getDisplayDelta(
                 note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
                 renderScaleY;
-        float       visualH = static_cast<float>(ctx.cache->getDisplayDelta(
-                                  note.m_timestamp + note.m_duration,
-                                  ctx.cache->getAbsY(note.m_timestamp),
-                                  note.m_timestamp)) *
-                              renderScaleY;
+        float visualH = static_cast<float>(ctx.cache->getDisplayDelta(
+                            note.m_timestamp + note.m_duration,
+                            ctx.cache->getAbsY(note.m_timestamp),
+                            note.m_timestamp)) *
+                        renderScaleY;
         const float trackX =
             resolveNoteTrackLeftX(note, laneProjection, leftX, singleTrackW);
         HoverPart glowPart = static_cast<HoverPart>(ic.hoveredPart);

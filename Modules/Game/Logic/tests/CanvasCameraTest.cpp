@@ -844,6 +844,27 @@ bool testBrushAudioResourcePlacementRules()
     MMM::Logic::InteractionController controller(context);
     MMM::Logic::DrawTool              drawTool;
 
+    // 教学失败路径使用 cancel 结束同一临时画笔；它必须清空预览且不生成
+    // Note，后续普通提交也不能受到这次取消的残留状态影响。
+    // 这里故意不先创建任何历史动作，以证明 cancel 不会退化成普通 Undo；
+    // 如果实现错误地撤销动作栈，空栈场景可能隐藏对既有用户编辑的误伤。
+    // 后续资源画笔继续由同一个 DrawTool 提交，也同时验证取消状态只消费一次。
+    drawTool.handleStartBrush(context,
+                              MMM::Logic::CmdStartBrush{
+                                  .cameraId = "Basic2DCanvas",
+                                  .mouseX   = 150.0F,
+                                  .mouseY   = 300.0F,
+                              });
+    if ( !context.brushState.isActive ) return false;
+    drawTool.handleEndBrush(
+        context,
+        MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas", .cancel = true });
+    if ( context.brushState.isActive ||
+         !context.noteRegistry.view<MMM::Logic::NoteComponent>().empty() ) {
+        XERROR("Cancelled walkthrough brush created a persistent note");
+        return false;
+    }
+
     controller.handleCommand(MMM::Logic::CmdSetBrushAudioResource{
         // Effect 可同时绑定玩家物件和作为 BGM 区自动采样资源。
         .audioResourceId = "effect",
@@ -941,8 +962,8 @@ bool testBrushAudioResourcePlacementRules()
     for ( const auto entity : samples ) {
         const auto& sample = samples.get<MMM::Logic::SampleComponent>(entity);
         foundMain          = foundMain || (sample.m_track == 5 &&
-                                           sample.m_audioResourceId == "main" &&
-                                           near(sample.m_volume, 0.7));
+                                  sample.m_audioResourceId == "main" &&
+                                  near(sample.m_volume, 0.7));
     }
     if ( !foundMain ) return false;
 
@@ -2194,7 +2215,7 @@ bool testPerBeatmapDraftLaneSharingAndIsolation()
     entt::entity concurrentOuter = entt::null;
     entt::entity concurrentStale = entt::null;
     const auto   concurrentView  = afterConcurrentGrowth.noteRegistry
-                                       .view<const MMM::Logic::NoteComponent>();
+                                    .view<const MMM::Logic::NoteComponent>();
     for ( const auto entity : concurrentView ) {
         const auto& note =
             concurrentView.get<const MMM::Logic::NoteComponent>(entity);
@@ -2355,25 +2376,25 @@ bool testAlignCommonBeatsPreservesEmbeddedPolylineNodes()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-            .type       = MMM::NoteType::HOLD,
-            .timestamp  = 1.013,
-            .duration   = 0.241,
-            .trackIndex = 0,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::HOLD,
+              .timestamp  = 1.013,
+              .duration   = 0.241,
+              .trackIndex = 0,
+              .dtrack     = 0,
         },
         {
-            .type       = MMM::NoteType::FLICK,
-            .timestamp  = 1.254,
-            .duration   = 0.0,
-            .trackIndex = 0,
-            .dtrack     = 1,
+              .type       = MMM::NoteType::FLICK,
+              .timestamp  = 1.254,
+              .duration   = 0.0,
+              .trackIndex = 0,
+              .dtrack     = 1,
         },
         {
-            .type       = MMM::NoteType::HOLD,
-            .timestamp  = 1.254,
-            .duration   = 0.246,
-            .trackIndex = 1,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::HOLD,
+              .timestamp  = 1.254,
+              .duration   = 0.246,
+              .trackIndex = 1,
+              .dtrack     = 0,
         },
     };
 
@@ -5041,25 +5062,25 @@ bool testSelectedPolylineTailEraseWithOtherSelection()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-            .type       = MMM::NoteType::NOTE,
-            .timestamp  = 1.0,
-            .duration   = 0.0,
-            .trackIndex = 0,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::NOTE,
+              .timestamp  = 1.0,
+              .duration   = 0.0,
+              .trackIndex = 0,
+              .dtrack     = 0,
         },
         {
-            .type       = MMM::NoteType::HOLD,
-            .timestamp  = 2.0,
-            .duration   = 0.5,
-            .trackIndex = 1,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::HOLD,
+              .timestamp  = 2.0,
+              .duration   = 0.5,
+              .trackIndex = 1,
+              .dtrack     = 0,
         },
         {
-            .type       = MMM::NoteType::FLICK,
-            .timestamp  = 3.0,
-            .duration   = 0.0,
-            .trackIndex = 1,
-            .dtrack     = 1,
+              .type       = MMM::NoteType::FLICK,
+              .timestamp  = 3.0,
+              .duration   = 0.0,
+              .trackIndex = 1,
+              .dtrack     = 1,
         },
     };
 
@@ -6979,7 +7000,7 @@ bool testCompositeConversionUsesTypedIdentity()
                 .entity = sampleEntity,
                 .before = context.sampleRegistry
                               .get<MMM::Logic::SampleComponent>(sampleEntity),
-                .after  = std::nullopt,
+                .after          = std::nullopt,
                 .beforeSelected = true,
             },
         }));
@@ -7074,11 +7095,11 @@ bool testMarqueeSelectsTypedSamplesOnlyOnMainCanvas()
     context.sortedSampleMaxEndPrefix = { 1.0 };
     context.marqueeBoxes             = {
         MMM::Logic::MarqueeBox{
-            .startTime  = 0.9,
-            .endTime    = 1.1,
-            .startTrack = 4.05F,
-            .endTrack   = 4.95F,
-            .cameraId   = "Basic2DCanvas",
+                        .startTime  = 0.9,
+                        .endTime    = 1.1,
+                        .startTrack = 4.05F,
+                        .endTrack   = 4.95F,
+                        .cameraId   = "Basic2DCanvas",
         },
     };
     context.isMarqueeSelectionDirty = true;

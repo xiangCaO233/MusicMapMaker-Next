@@ -321,9 +321,10 @@ bool BeatmapSession::blockCollaborationUnauthorizedEdit(
             // 移动中的画笔可能跨入另一个数据区域，不能沿用开始时的静态类别。
             required = brushMutationFlagsAt(
                 *m_ctx, updateBrush->cameraId, updateBrush->mouseX);
-        } else if ( std::holds_alternative<CmdEndBrush>(cmd) ) {
+        } else if ( const auto* endBrush = std::get_if<CmdEndBrush>(&cmd) ) {
             // 结束手势以已建立笔刷的物件类型为准，不再依赖鼠标当前所在轨道。
-            required = m_ctx->brushState.isActive
+            // 取消只清理临时状态，不需要取得任何谱面领域的写权限。
+            required = !endBrush->cancel && m_ctx->brushState.isActive
                            ? (m_ctx->brushState.createsAudioSample
                                   ? ::MMM::BeatmapMutationFlags::AudioSamples
                                   : ::MMM::BeatmapMutationFlags::Objects)

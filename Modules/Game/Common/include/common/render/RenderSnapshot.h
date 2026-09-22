@@ -366,6 +366,16 @@ struct CanvasComponentInstanceSnapshot {
     float regionBottom{ 0.0f };
 };
 
+/// @brief 主画布中一条已经实际提交绘制的玩家区分拍线。
+/// @note 教程等 UI 消费者必须复用这份几何，不能另行近似 BPM 或首拍相位。
+struct PlayerBeatLineSnapshot {
+    /// @brief 分拍线对应的精确谱面时间，单位秒。
+    double time{ 0.0 };
+
+    /// @brief 分拍线中心在主画布逻辑坐标中的纵坐标。
+    float y{ 0.0F };
+};
+
 /// @brief 逻辑线程生成并交给 UI 画布消费的一帧完整渲染快照。
 /// @note 快照按值拥有动态数据，跨线程只传递其稳定对象指针。
 struct RenderSnapshot {
@@ -391,6 +401,15 @@ struct RenderSnapshot {
     std::vector<CanvasComponentInstanceSnapshot> canvasComponentInstances;
     /// @brief UI 时间换算使用的全量 ScrollCache 分段副本。
     std::vector<ScrollSegment> scrollSegments;
+
+    /// @brief 主画布玩家区本帧实际绘出的分拍线，不包含悬浮临时细分线。
+    std::vector<PlayerBeatLineSnapshot> playerBeatLines;
+
+    /// @brief 主画布普通玩家 Note 的实际渲染宽度。
+    float playerNoteWidth{ 0.0F };
+
+    /// @brief 主画布普通玩家 Note 的实际渲染高度。
+    float playerNoteHeight{ 0.0F };
 
     /// @brief 预览窗口右侧全谱物件密度缓存；非 Preview 快照保持为空。
     PreviewDensitySnapshot previewDensity;
@@ -564,7 +583,7 @@ struct RenderSnapshot {
     double  hoveredNoteTime{ 0.0 };  // 悬浮物件的精确时间戳
     int32_t hoveredNoteTrack{ 0 };   ///< 悬浮物件精确部件所在轨道
     int     hoveredBeatIndex{
-            0
+        0
     };  // 当前悬浮时间点所在的拍序 (从首个BPMTiming开始)
     int hoveredNoteBeatIndex{ 0 };  // 悬浮物件所在的拍序
     /// @brief 当前悬浮物件的结构化检视信息
@@ -746,6 +765,9 @@ struct RenderSnapshot {
         timelineElements.clear();
         canvasComponentInstances.clear();
         scrollSegments.clear();
+        playerBeatLines.clear();
+        playerNoteWidth  = 0.0F;
+        playerNoteHeight = 0.0F;
         previewDensity.clear();
         requestedUnicodeGlyphCount = 0U;
         noteQueryScratch.clear();
