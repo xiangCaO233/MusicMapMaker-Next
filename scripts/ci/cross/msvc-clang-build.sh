@@ -17,6 +17,7 @@ Options:
   --build-dir <path>     Build directory. Default: build_cross_msvc
   --build-type <type>    CMake build type. Default: RelWithDebInfo
   --compiler-tag <tag>   Prebuilt compiler tag. Default: 2026
+  --llvm-version <major> LLVM tool suite major version. Default: 22
   --jobs <count>         Parallel build jobs. Default: 75% of CPU threads
   --linkage <mode>       PROJECT_LINKAGE value: static or shared. Default: static
   --toolchain <path>     CMake toolchain file. Default: cmake/toolchain/cross-msvc.cmake
@@ -28,6 +29,7 @@ Options:
 
 Environment overrides:
   MSVC_PREBUILT_COMPILER_TAG  Default prebuilt compiler tag
+  MSVC_LLVM_VERSION      Default LLVM tool suite major version
   WINDOWS_CROSS_ROOT     Default: /mnt/cross/windows
   VULKAN_SDK             Default: ${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0
   CMAKE_GENERATOR        Default: Ninja
@@ -74,6 +76,23 @@ requireCommand() {
     fi
 }
 
+# 从已选 clang-cl 所在目录解析配套 LLVM 工具，避免混用不同主版本。
+# 输入只接受工具的标准无版本名称，版本入口由上层统一定位。
+# 输出保留同目录路径，不再经过 PATH 搜索或系统 alternatives。
+# 这样既兼容 Debian 的版本化命令，也兼容 Gentoo 目录内的无版本工具。
+resolveLlvmTool() {
+    local toolName="$1"
+    local toolPath="${llvmBinDir}/${toolName}"
+
+    if [[ ! -x "${toolPath}" ]]; then
+        # LLVM 安装必须在同一 bin 目录提供完整的交叉构建工具集。
+        printf "error: LLVM %s tool not found or not executable: %s\n" "${llvmVersion}" "${toolPath}" >&2
+        exit 1
+    fi
+
+    printf "%s\n" "${toolPath}"
+}
+
 # 将相对路径稳定解析到项目根。
 projectPath() {
     local inputPath="$1"
@@ -96,6 +115,8 @@ buildType="RelWithDebInfo"
 buildJobs="$(detectBuildJobs)"
 # compiler tag 对应预编译目录中的 MSVC 工具集版本。
 compilerTag="${MSVC_PREBUILT_COMPILER_TAG:-2026}"
+# LLVM 主版本只选择宿主工具，不改变预编译目录的 MSVC ABI 标签。
+llvmVersion="${MSVC_LLVM_VERSION:-22}"
 projectLinkage="static"
 toolchainFile="cmake/toolchain/cross-msvc.cmake"
 sourcesBuild="OFF"
@@ -132,6 +153,15 @@ while (( $# > 0 )); do
                 exit 1
             fi
             compilerTag="$2"
+            shift 2
+            ;;
+        --llvm-version)
+            # 同一主版本同时选择 clang-cl、clang、lld-link 与 LLVM binutils。
+            if (( $# < 2 )); then
+                printf "error: --llvm-version requires a value\n" >&2
+                exit 1
+            fi
+            llvmVersion="$2"
             shift 2
             ;;
         --jobs)
@@ -213,6 +243,45 @@ if [[ -z "${compilerTag}" ]]; then
     exit 1
 fi
 
+if [[ ! "${llvmVersion}" =~ ^[1-9][0-9]*$ ]]; then
+    # 主版本参与版本化 clang-cl 入口选择，只接受正整数。
+    printf "error: --llvm-version must be a positive integer\n" >&2
+    exit 1
+fi
+
+requireCommand cmake
+requireCommand readlink
+requireCommand "clang-cl-${llvmVersion}"
+
+# 版本化 clang-cl 可能是系统链接；解析真实目录后只使用同目录工具。
+# 编译器保留版本化入口，避免默认 LLVM 22 使现有 CI cache 发生无意义切换。
+clangClEntry="$(command -v "clang-cl-${llvmVersion}")"
+llvmBinDir="$(dirname "$(readlink -f "${clangClEntry}")")"
+clangCl="${clangClEntry}"
+clangC="$(resolveLlvmTool clang)"
+lldLink="$(resolveLlvmTool lld-link)"
+llvmLib="$(resolveLlvmTool llvm-lib)"
+llvmRc="$(resolveLlvmTool llvm-rc)"
+llvmMt="$(resolveLlvmTool llvm-mt)"
+llvmRanlib="$(resolveLlvmTool llvm-ranlib)"
+llvmStrip="$(resolveLlvmTool llvm-strip)"
+llvmNm="$(resolveLlvmTool llvm-nm)"
+llvmObjcopy="$(resolveLlvmTool llvm-objcopy)"
+
+# Make、Meson 与 ICE 外部项目通过环境变量复用 CMake 选择的同一套工具。
+# MMM_* 服务主项目 LuaJIT 包装器，ICE_* 服务引擎内的外部依赖包装器。
+# 路径写入当前构建进程环境，源码依赖模式不会回退到 wrapper 的 LLVM 22 默认值。
+export MMM_CLANG_CL="${clangCl}"
+export MMM_CLANG_C="${clangC}"
+export MMM_LLD_LINK="${lldLink}"
+export MMM_LLVM_LIB="${llvmLib}"
+export ICE_CLANG_CL="${clangCl}"
+export ICE_CLANG_C="${clangC}"
+export ICE_LLD_LINK="${lldLink}"
+export ICE_LLVM_LIB="${llvmLib}"
+
+printf "Using LLVM %s tools from %s\n" "${llvmVersion}" "${llvmBinDir}"
+
 if [[ "${sourcesBuild}" == "OFF" ]]; then
     # 消费模式在配置前拉取 windows/x86_64/msvc 精确对象。
     bash "${scriptDir}/../pull-lfs-for-build.sh" \
@@ -249,17 +318,6 @@ export LIB="${MSVC_BASE}/lib/x64;${MSVC_BASE}/atlmfc/lib/x64;${WINSDK_BASE}/Lib/
 
 "${scriptDir}/list-msvc-toolchain-layout.sh" --max-entries "${MMM_MSVC_LAYOUT_MAX_ENTRIES:-120}"
 
-requireCommand cmake
-# 版本化命令与无版本 wrapper 都必须存在，防止子构建解析差异。
-requireCommand clang-cl-22
-requireCommand clang-cl
-requireCommand lld-link-22
-requireCommand lld-link
-requireCommand llvm-lib-22
-requireCommand llvm-lib
-requireCommand llvm-rc-22
-requireCommand llvm-mt-22
-
 if [[ ! -d "${VULKAN_SDK}" ]]; then
     # Windows 目标必须使用现有 Windows Vulkan SDK。
     printf "error: VULKAN_SDK does not exist: %s\n" "${VULKAN_SDK}" >&2
@@ -281,6 +339,15 @@ cmake -G "${CMAKE_GENERATOR:-Ninja}" \
     -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF \
     -DCMAKE_BUILD_TYPE="${buildType}" \
     -DCMAKE_TOOLCHAIN_FILE="${toolchainFile}" \
+    -DMMM_CLANG_CL:FILEPATH="${clangCl}" \
+    -DMMM_LLD_LINK:FILEPATH="${lldLink}" \
+    -DMMM_LLVM_LIB:FILEPATH="${llvmLib}" \
+    -DMMM_LLVM_RC:FILEPATH="${llvmRc}" \
+    -DMMM_LLVM_MT:FILEPATH="${llvmMt}" \
+    -DMMM_LLVM_RANLIB:FILEPATH="${llvmRanlib}" \
+    -DMMM_LLVM_STRIP:FILEPATH="${llvmStrip}" \
+    -DMMM_LLVM_NM:FILEPATH="${llvmNm}" \
+    -DMMM_LLVM_OBJCOPY:FILEPATH="${llvmObjcopy}" \
     -DSOURCES_BUILD="${sourcesBuild}" \
     -DPROJECT_LINKAGE="${projectLinkage}" \
     -DICE_LINKAGE="${projectLinkage}" \
@@ -340,8 +407,16 @@ else
 fi
 
 # 维护约束：目标平台固定 Windows x86_64，不得继承 Linux 宿主 ABI。
-# 维护约束：clang-cl、lld-link 与 llvm-lib 必须属于兼容 LLVM 工具集。
-# 维护约束：版本化命令和 wrapper 必须解析到预期兼容实现。
+# 维护约束：clang-cl、clang、lld-link 与 LLVM binutils 必须来自同一目录。
+# 维护约束：LLVM 主版本默认保持 CI 的 22，调用方可显式选择其他已安装版本。
+# 维护约束：LLVM 主版本只接受无前导零的正整数。
+# 维护约束：版本化 clang-cl 是定位工具集目录的唯一 PATH 入口。
+# 维护约束：工具集目录缺少任一必需工具时不得回退到其他 PATH 目录。
+# 维护约束：CMake cache 必须记录本次选择的每一个 LLVM 工具绝对路径。
+# 维护约束：外部 Make 与 ICE 子构建必须继承同一 clang 和归档器路径。
+# 维护约束：切换 LLVM 主版本时应使用独立构建目录或显式 fresh。
+# 维护约束：LLVM 主版本选择不得隐式改写 MSVC 预编译包的 compiler tag。
+# 维护约束：资源、清单与二进制检查工具必须跟随编译器整套切换。
 # 维护约束：MSVC_BASE 必须同时提供 include 与 x64 lib 布局。
 # 维护约束：WINSDK_BASE 与 WINSDK_VER 必须指向同一 SDK 安装。
 # 维护约束：INCLUDE 路径顺序不得让宿主 Linux 头优先。
@@ -377,7 +452,7 @@ fi
 # 维护约束：构建失败直接传播 CMake 或生成器退出状态。
 # 维护约束：脚本不执行 PDB 复制或符号策略选择。
 # 维护约束：脚本不负责 Git LFS add、commit 或 push。
-# 维护约束：LLVM 升级时需同步版本化命令和 CI 镜像。
+# 维护约束：LLVM 默认版本升级时需同步 CI 镜像和帮助文本。
 # 维护约束：MSVC 或 WinSDK 升级时需同步默认目录版本。
 # 维护约束：Vulkan SDK 升级时需同步交叉环境默认值。
 # 维护约束：新增参数必须同步 showUsage 文本。
