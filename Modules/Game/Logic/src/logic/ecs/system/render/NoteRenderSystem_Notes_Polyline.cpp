@@ -4,6 +4,7 @@
 #include "logic/ecs/system/render/Batcher.h"
 #include "logic/ecs/system/render/NoteLaneGeometry.h"
 #include "logic/ecs/system/render/PolylineCarrierAnchor.h"
+#include "logic/ecs/system/render/SkinTextureScale.h"
 
 #include <algorithm>
 #include <cmath>
@@ -19,6 +20,8 @@ namespace MMM::Logic::System
 /// @return 目标纹理相对尺寸；任一纹理缺失时保留基础尺寸。
 /// @pre snapshot 有效，存在的 Note 图集条目宽高为正。
 /// @note 基础尺寸已包含用户缩放；返回值不再次乘 noteScaleX/noteScaleY。
+/// @note 返回值不含按纹理配置的倍率，Batcher 在填充布局完成后统一应用。
+/// @note 拾取与可见性使用单独的缩放后副本，不能将该副本作为绘制实参。
 /// @note 缺失纹理时返回尺寸只是布局后备，不意味着对应图集资源已补齐。
 /// @note 仅换算几何尺寸，UV 内缩及纹理填充由后续批处理接口负责。
 /// @warning 折线逐节点绘制热路径，只查询现有图集，不加载纹理。
@@ -302,8 +305,17 @@ void NoteRenderSystem::drawPolylineBody(
         const auto         endLane     = resolveNoteLaneGeometry(
             subEndTrack, laneProjection, leftX, singleTrackW, noteW, noteH);
         // 将较高端点的纹理高度换回滚动单位，为临近视口边缘的载体留出余量。
-        const double padDelta = std::max(startLane.noteH, endLane.noteH) /
-                                static_cast<double>(renderScaleY);
+        // 横向主体独立倍率会增加厚度；竖向主体的倍率不改变时间跨度。
+        const float bodyHeight =
+            getDrawSize(snapshot,
+                        TextureID::HoldBodyHorizontal,
+                        startLane.noteW,
+                        startLane.noteH)
+                .y *
+            skinTextureScale(TextureID::HoldBodyHorizontal);
+        const double padDelta =
+            std::max({ startLane.noteH, endLane.noteH, bodyHeight }) /
+            static_cast<double>(renderScaleY);
 
         // 只有正在判定的载体需要绕过原始端点剔除：其新起点固定在判定线。
         // 尚未开始的远处载体仍保留原有门禁，避免巨大 Jump 跨屏生成主体。
@@ -370,13 +382,16 @@ void NoteRenderSystem::drawPolylineBody(
                 if ( generateHitboxes && entity != entt::null ) {
                     // 绘制接口以底边定位，拾取框则以左上角定位，二者相差一个高度。
                     // 使用根实体和子索引定位滑键主体，不创建临时子实体身份。
+                    // 只调整纵向厚度，横向起点和终点仍位于原始轨道中心。
+                    const float hitH =
+                        drawH * skinTextureScale(TextureID::HoldBodyHorizontal);
                     snapshot->hitboxes.push_back({ entity,
                                                    HoverPart::HoldBody,
                                                    static_cast<int>(i),
                                                    bodyX,
-                                                   subStartY - drawH * 0.5f,
+                                                   subStartY - hitH * 0.5f,
                                                    drawW,
-                                                   drawH });
+                                                   hitH });
                 }
             }
         } else if ( sub.type == ::MMM::NoteType::HOLD && sub.duration > 0 &&
@@ -429,15 +444,19 @@ void NoteRenderSystem::drawPolylineBody(
             if ( generateHitboxes && entity != entt::null ) {
                 // 投影上下顺序可能反转，命中框统一使用较小 Y 与非负高度。
                 // 命中框保持实际持续区间跨度，不包含两端装饰纹理额外伸出的部分。
-                float hitY = std::min(subStartY, subEndY);
-                float hitH = std::abs(subStartY - subEndY);
-                snapshot->hitboxes.push_back({ entity,
-                                               HoverPart::HoldBody,
-                                               static_cast<int>(i),
-                                               bodyX,
-                                               hitY,
-                                               bodySize.x,
-                                               hitH });
+                float       hitY = std::min(subStartY, subEndY);
+                float       hitH = std::abs(subStartY - subEndY);
+                const float hitW =
+                    bodySize.x * skinTextureScale(TextureID::HoldBodyVertical);
+                // 命中范围与 Batcher 的横截面缩放一致，不延长持有区间。
+                snapshot->hitboxes.push_back(
+                    { entity,
+                      HoverPart::HoldBody,
+                      static_cast<int>(i),
+                      startLane.centerX() - hitW * 0.5F,
+                      hitY,
+                      hitW,
+                      hitH });
             }
         }
 
@@ -464,11 +483,11 @@ void NoteRenderSystem::drawPolylineBody(
                                     next.timestamp, currentAbsY, nextAnchor)) *
                                     renderScaleY;
             const auto      nextLane = resolveNoteLaneGeometry(next.trackIndex,
-                                                               laneProjection,
-                                                               leftX,
-                                                               singleTrackW,
-                                                               noteW,
-                                                               noteH);
+                                                          laneProjection,
+                                                          leftX,
+                                                          singleTrackW,
+                                                          noteW,
+                                                          noteH);
             const glm::vec2 curBodySize =
                 getDrawSize(snapshot,
                             TextureID::HoldBodyVertical,
@@ -539,12 +558,22 @@ void NoteRenderSystem::drawPolylineBody(
             if ( generateHitboxes && entity != entt::null ) {
                 // 拾取采用连接段轴对齐包围盒，不将斜四边形直接作为命中形状。
                 // 因而盒内空白区域也可能命中，精确多边形拾取不由本函数提供。
-                const float xmin = std::min(curBodyX, nextBodyX);
+                const float bodyScale =
+                    skinTextureScale(TextureID::HoldBodyVertical);
+                // 每个端点的轨宽可以不同，因此必须先求两端半宽再求并集。
+                // 斜段两端宽度分别围绕各自中心伸缩，不能缩放整段 AABB
+                // 的横向跨度。
+                const float currentHalfWidth = curBodySize.x * bodyScale * 0.5F;
+                const float nextHalfWidth = nextBodySize.x * bodyScale * 0.5F;
+                const float xmin =
+                    std::min(endLane.centerX() - currentHalfWidth,
+                             nextLane.centerX() - nextHalfWidth);
                 // 右界要比较各端点加自身宽度，不能用左界差加某一端宽度代替。
-                const float xmax = std::max(curBodyX + curBodySize.x,
-                                            nextBodyX + nextBodySize.x);
-                float       ymin = std::min(subEndY, nextStartY);
-                float       ymax = std::max(subEndY, nextStartY);
+                const float xmax =
+                    std::max(endLane.centerX() + currentHalfWidth,
+                             nextLane.centerX() + nextHalfWidth);
+                float ymin = std::min(subEndY, nextStartY);
+                float ymax = std::max(subEndY, nextStartY);
                 snapshot->hitboxes.push_back({ entity,
                                                HoverPart::HoldBody,
                                                static_cast<int>(i),
@@ -632,9 +661,14 @@ void NoteRenderSystem::drawPolylineNodes(
             (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
         const auto lane = resolveNoteLaneGeometry(
             sub.trackIndex, laneProjection, leftX, singleTrackW, noteW, noteH);
-        const double padDelta = lane.noteH / static_cast<double>(renderScaleY);
+        const glm::vec2 nodeSize =
+            getDrawSize(snapshot, TextureID::Node, lane.noteW, lane.noteH);
+        const glm::vec2 hitSize = nodeSize * skinTextureScale(TextureID::Node);
+        // 保留最小基准余量可避免缩小节点后，候选门禁比原有节奏线范围更窄。
+        const double padDelta =
+            std::max(lane.noteH, hitSize.y) / static_cast<double>(renderScaleY);
 
-        // 剔除余量使用参考 Note 高度；实际 Node 尺寸在通过筛选后才按皮肤换算。
+        // 剔除先读取最终节点高度，放大后仍覆盖视口边缘的贴片不能提前消失。
         if ( !NoteRenderSystem::isCarrierVisible(sub.timestamp,
                                                  sub.timestamp,
                                                  currentTime,
@@ -647,8 +681,6 @@ void NoteRenderSystem::drawPolylineNodes(
 
         float subStartY = judgmentLineY -
                           static_cast<float>(displayDeltaStart) * renderScaleY;
-        const glm::vec2 nodeSize =
-            getDrawSize(snapshot, TextureID::Node, lane.noteW, lane.noteH);
         // Node 纹理可宽于轨道，围绕轨中心扩展而非固定左边缘。
         const float nodeX = lane.leftX + (lane.width - nodeSize.x) * 0.5F;
 
@@ -675,13 +707,14 @@ void NoteRenderSystem::drawPolylineNodes(
         // 拾取框使用节点外接矩形，不随 Fit 留白缩到实际纹理不透明区域。
         if ( generateHitboxes && entity != entt::null ) {
             // 一个可见节点对应一个框，不把其后连接体合并成同一拾取区域。
+            // 缩放围绕轨道、时间中心展开；沿用原始左上角会让框单向漂移。
             snapshot->hitboxes.push_back({ entity,
                                            HoverPart::PolylineNode,
                                            static_cast<int>(i),
-                                           nodeX,
-                                           subStartY - nodeSize.y * 0.5f,
-                                           nodeSize.x,
-                                           nodeSize.y });
+                                           lane.centerX() - hitSize.x * 0.5F,
+                                           subStartY - hitSize.y * 0.5f,
+                                           hitSize.x,
+                                           hitSize.y });
         }
     }
 }
@@ -768,11 +801,11 @@ void NoteRenderSystem::drawPolylineHead(
         if ( next != note.m_subNotes.end() && currentTime > start &&
              next->timestamp > start ) {
             const auto  destination = resolveNoteLaneGeometry(next->trackIndex,
-                                                              laneProjection,
-                                                              leftX,
-                                                              singleTrackW,
-                                                              noteW,
-                                                              noteH);
+                                                             laneProjection,
+                                                             leftX,
+                                                             singleTrackW,
+                                                             noteW,
+                                                             noteH);
             const float progress    = static_cast<float>(
                 (currentTime - start) / (next->timestamp - start));
             // 只改变观察用几何副本，不改变节点轨号或领域投影缓存。
@@ -780,7 +813,17 @@ void NoteRenderSystem::drawPolylineHead(
             lane.leftX += (destination.centerX() - lane.centerX()) * progress;
         }
     }
-    const double padDelta = lane.noteH / static_cast<double>(renderScaleY);
+    // 同一纹理决定可见性和命中倍率；原始尺寸仍留给 Batcher 统一缩放。
+    const auto headTexture =
+        snapshot->uvMap.contains(static_cast<uint32_t>(TextureID::HoldHead))
+            ? TextureID::HoldHead
+            : TextureID::Note;
+    const glm::vec2 headSize =
+        getDrawSize(snapshot, headTexture, lane.noteW, lane.noteH);
+    const glm::vec2 hitSize = headSize * skinTextureScale(headTexture);
+    // 自动播放中的移动头也使用同一倍率，纹理缩放不参与沿折线的插值。
+    const double padDelta =
+        std::max(lane.noteH, hitSize.y) / static_cast<double>(renderScaleY);
 
     if ( !NoteRenderSystem::isCarrierVisible(firstSub.timestamp,
                                              firstSub.timestamp,
@@ -796,12 +839,6 @@ void NoteRenderSystem::drawPolylineHead(
         judgmentLineY - static_cast<float>(displayDeltaStart) * renderScaleY;
     // 折线起点与普通长条共享可选头部纹理，旧图集仍使用 Note。
     // 尺寸与填充宽高比必须来自同一纹理，否则会使透明边距与命中框错位。
-    const auto headTexture =
-        snapshot->uvMap.contains(static_cast<uint32_t>(TextureID::HoldHead))
-            ? TextureID::HoldHead
-            : TextureID::Note;
-    const glm::vec2 headSize =
-        getDrawSize(snapshot, headTexture, lane.noteW, lane.noteH);
     const float headX = lane.leftX + (lane.width - headSize.x) * 0.5F;
 
     // 头部几何以轨中心与时间中心对齐，用户缩放不改变它对应的拍位。
@@ -823,13 +860,14 @@ void NoteRenderSystem::drawPolylineHead(
                            finalHeadColor);
 
     if ( generateHitboxes && entity != entt::null ) {
+        // 首节点的身份仍为 PolylineNode/0，尺寸变化不改变撤销或选中语义。
         snapshot->hitboxes.push_back({ entity,
                                        HoverPart::PolylineNode,
                                        0,
-                                       headX,
-                                       headY - headSize.y * 0.5f,
-                                       headSize.x,
-                                       headSize.y });
+                                       lane.centerX() - hitSize.x * 0.5F,
+                                       headY - hitSize.y * 0.5f,
+                                       hitSize.x,
+                                       hitSize.y });
     }
 }
 
@@ -905,7 +943,19 @@ void NoteRenderSystem::drawPolylineDecoration(
     // 箭头放在滑键到达轨，不以滑键起始轨的独立区域宽度计算末端尺寸。
     const auto lane = resolveNoteLaneGeometry(
         decorationTrack, laneProjection, leftX, singleTrackW, noteW, noteH);
-    const double padDelta = lane.noteH / static_cast<double>(renderScaleY);
+    const TextureID decorationTexture =
+        last.type == ::MMM::NoteType::FLICK
+            ? (last.dtrack < 0 ? TextureID::FlickArrowLeft
+                               : TextureID::FlickArrowRight)
+            : TextureID::HoldEnd;
+    const glm::vec2 decorationSize =
+        getDrawSize(snapshot, decorationTexture, lane.noteW, lane.noteH);
+    const glm::vec2 hitSize =
+        decorationSize * skinTextureScale(decorationTexture);
+    // 此尺寸同时供后续命中框使用，避免左右箭头和结束线误用头部倍率。
+    // 末端装饰独立于主体缩放，按自己的最终高度参与视口门禁。
+    const double padDelta =
+        std::max(lane.noteH, hitSize.y) / static_cast<double>(renderScaleY);
 
     if ( !NoteRenderSystem::isCarrierVisible(targetTime,
                                              targetTime,
@@ -926,10 +976,8 @@ void NoteRenderSystem::drawPolylineDecoration(
         if ( glowPart == HoverPart::None ||
              glowPart == HoverPart::FlickArrow ) {
             // 方向由带符号轨差决定，零轨差保留既有右箭头选择。
-            TextureID arrowId = (last.dtrack < 0) ? TextureID::FlickArrowLeft
-                                                  : TextureID::FlickArrowRight;
-            const glm::vec2 arrowSize =
-                getDrawSize(snapshot, arrowId, lane.noteW, lane.noteH);
+            TextureID       arrowId   = decorationTexture;
+            const glm::vec2 arrowSize = decorationSize;
             // 左右箭头可能有不同皮肤尺寸，各自以落点轨道中心对齐。
             const float arrowX = lane.leftX + (lane.width - arrowSize.x) * 0.5F;
 
@@ -954,13 +1002,15 @@ void NoteRenderSystem::drawPolylineDecoration(
 
             if ( generateHitboxes && entity != entt::null ) {
                 // 箭头命中在落点轨道，仍通过末节点索引编辑原滑键的轨差。
-                snapshot->hitboxes.push_back({ entity,
-                                               HoverPart::FlickArrow,
-                                               lastIdx,
-                                               arrowX,
-                                               lStartY - arrowSize.y * 0.5f,
-                                               arrowSize.x,
-                                               arrowSize.y });
+                // 缩放不移动落点，拖动仍从同一轨差和拍位开始。
+                snapshot->hitboxes.push_back(
+                    { entity,
+                      HoverPart::FlickArrow,
+                      lastIdx,
+                      lane.centerX() - hitSize.x * 0.5F,
+                      lStartY - hitSize.y * 0.5f,
+                      hitSize.x,
+                      hitSize.y });
             }
         }
     } else if ( last.type == ::MMM::NoteType::HOLD ) {
@@ -968,8 +1018,7 @@ void NoteRenderSystem::drawPolylineDecoration(
             // 即使时长为零也允许绘制结束线，此处不复用正时长主体的筛选条件。
             float subEndY =
                 judgmentLineY - static_cast<float>(displayDelta) * renderScaleY;
-            const glm::vec2 endSize = getDrawSize(
-                snapshot, TextureID::HoldEnd, lane.noteW, lane.noteH);
+            const glm::vec2 endSize = decorationSize;
             // 结束线使用独立纹理比例，不强制沿用竖直主体宽度。
             const float endX = lane.leftX + (lane.width - endSize.x) * 0.5F;
 
@@ -995,13 +1044,14 @@ void NoteRenderSystem::drawPolylineDecoration(
 
             if ( generateHitboxes && entity != entt::null ) {
                 // 使用 HoldEnd 而非主体部位，让尾部持续时间编辑能识别这个区域。
-                snapshot->hitboxes.push_back({ entity,
-                                               HoverPart::HoldEnd,
-                                               lastIdx,
-                                               endX,
-                                               subEndY - endSize.y * 0.5f,
-                                               endSize.x,
-                                               endSize.y });
+                snapshot->hitboxes.push_back(
+                    { entity,
+                      HoverPart::HoldEnd,
+                      lastIdx,
+                      lane.centerX() - hitSize.x * 0.5F,
+                      subEndY - hitSize.y * 0.5f,
+                      hitSize.x,
+                      hitSize.y });
             }
         }
     }

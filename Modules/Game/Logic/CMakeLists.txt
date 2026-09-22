@@ -62,6 +62,8 @@ add_library(
   # 普通物件和折线的几何规则分别维护，但最终仍链接为一个渲染系统。
   src/logic/ecs/system/render/NoteRenderSystem_Notes_Types.cpp
   src/logic/ecs/system/render/NoteRenderSystem_Notes_Polyline.cpp
+  # 皮肤纹理键到画布 ID 的适配归逻辑层所有，配置模块不依赖画布枚举。
+  src/logic/ecs/system/render/SkinTextureScale.cpp
   src/logic/ecs/system/render/AudioObjectLabelRenderer.cpp
   # 独立采样与绑定音效共用标签绘制入口，避免两套文字布局规则分叉。
   src/logic/ecs/system/render/SampleRenderSystem.cpp
@@ -347,6 +349,33 @@ add_test(
     HitEffectStereoTest "${CMAKE_SOURCE_DIR}/assets/skins"
     "${CMAKE_SOURCE_DIR}/assets/translations"
     "${CMAKE_BINARY_DIR}/test_output/hold_effects")
+
+# 纹理倍率测试直接检查 CPU 顶点、UV 和合批，不要求 Vulkan 窗口或真实音频设备。 临时皮肤只写入构建输出目录；内置皮肤只读，用于核对 RM
+# 三类特效的最终尺寸。 配置解析与几何消费分层断言，防止只验证 getter 而遗漏实际绘制尺寸。
+# 四套内置皮肤共同验证新增倍率与旧皮肤默认值的兼容，不改变用户皮肤设置。
+mmm_add_test_executable(Logic SkinTextureScaleTest
+                        tests/SkinTextureScaleTest.cpp)
+target_link_libraries(SkinTextureScaleTest PRIVATE Logic Audio Log)
+add_test(
+  NAME SkinTextureScaleTest
+  COMMAND
+    SkinTextureScaleTest "${CMAKE_BINARY_DIR}/test_output/texture_scales"
+    "${CMAKE_SOURCE_DIR}/assets/translations"
+    "${CMAKE_SOURCE_DIR}/assets/skins")
+
+# 独立边界回归走完整 Note 快照生成，不能用 Batcher 单图元测试代替拾取验证。 夹具同时调整普通键、头部和尾部倍率，检查教程框与实际图元保持一致。
+# 离屏中心但仍有可见边缘的端点必须保留，避免只放大贴图而沿用旧剔除范围。 临时 Lua 和测试配置只写入构建树；合成 UV 不需要上传图集或打开窗口。
+# 两点折线额外检查连接体厚度，轨道跨度和时间跨度均应保持不变。
+mmm_add_test_executable(Logic NoteTextureScaleBoundsTest
+                        tests/NoteTextureScaleBoundsTest.cpp)
+# 链接正式 Logic 实现，避免测试复制一份渲染算法而绕过生产代码。
+target_link_libraries(NoteTextureScaleBoundsTest PRIVATE Logic Log)
+add_test(
+  NAME NoteTextureScaleBoundsTest
+  COMMAND
+    NoteTextureScaleBoundsTest
+    "${CMAKE_BINARY_DIR}/test_output/note_texture_scales"
+    "${CMAKE_SOURCE_DIR}/assets/translations")
 
 # 旧 MMM 加载诊断测试覆盖一次载入内的事件生成、去重与空输入行为。
 mmm_add_test_executable(Logic BeatmapLoadDiagnosticPublisherTest

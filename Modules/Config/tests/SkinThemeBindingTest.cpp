@@ -41,11 +41,15 @@ bool sameColor(const MMM::Config::Color& lhs, const MMM::Config::Color& rhs)
 /// @brief 写入用于皮肤主题解析测试的最小 Lua 文件。
 /// @param path 输出文件路径。
 /// @param themeExpression theme 字段对应的 Lua 表达式。
+/// @param textureScalesExpression 可选纹理缩放表，nil 模拟旧皮肤缺省。
+/// @param assetsExpression 可选资产表，用于验证序列帧的倍率展开。
 /// @return 文件成功写入时返回 true。
-/// @note 除 theme 外的必需表保持固定，隔离主题格式这一被测变量。
+/// @note 其余必需表保持固定，调用方仅覆写当前测试需要的字段。
 /// @warning 仅写入 CTest 提供的专用输出目录。
 bool writeTestSkin(const std::filesystem::path& path,
-                   std::string_view             themeExpression)
+                   std::string_view             themeExpression,
+                   std::string_view             textureScalesExpression = "nil",
+                   std::string_view             assetsExpression        = "{}")
 {
     // 二进制模式保持脚本字节不受平台换行转换影响。
     std::ofstream file(path, std::ios::binary);
@@ -57,13 +61,129 @@ bool writeTestSkin(const std::filesystem::path& path,
             "'1.0' },\n"
             "  langs = {},\n"
             "  fonts = {},\n"
-            "  assets = {},\n"
             "  audios = {},\n"
             "  layout = {},\n"
+            "  assets = "
+         << assetsExpression
+         << ",\n  texture_scales = " << textureScalesExpression
+         << ",\n"
             "  theme = "
          << themeExpression << "\n}\n";
     // 流状态同时捕获写入和刷新阶段的失败。
     return file.good();
+}
+
+/// @brief 验证任意纹理键、非法倍率和跨皮肤重载时的缓存隔离。
+/// @param path 专用输出目录中的临时皮肤路径。
+/// @param translationsRoot 应用默认翻译目录。
+/// @return 全部有效值、缺省值与缓存边界满足契约时返回 true。
+/// @warning 只写入临时夹具；不读取图片、不调用图形设备。
+bool verifyTextureScales(const std::filesystem::path& path,
+                         const std::filesystem::path& translationsRoot)
+{
+    auto& manager = MMM::Config::SkinManager::instance();
+    // 使用不需要实际图片的三帧序列，隔离配置解析与纹理加载。
+    // 两个序列共享文件路径但倍率独立，保护按逻辑 ID 而非路径索引的约定。
+    constexpr std::string_view ASSETS =
+        "{ custom = { enlarged = 'frame[1 .. 3].png', "
+        "reduced = 'frame[1 .. 3].png' } }";
+    // Lua 运行时不开放 math 库，使用浮点除法构造非有限值。
+    // 正负、零和非有限数值分别覆盖可见性、翻转和顶点有效性约束。
+    // 1e100 在 Lua double 中有效，但不能安全窄化为有限 float。
+    // 1e-100 验证下溢保护，不能让合法 double 在渲染中变成零倍率。
+    // 数字字符串故意保留为字符串，不能因 Lua 隐式转换而被接受。
+    // 空键、数字键和嵌套表分别保护稳定资产键与扁平配置契约。
+    constexpr std::string_view SCALES =
+        "{ ['custom.enlarged'] = 1.6, ['custom.reduced'] = 0.5, "
+        "['cursor'] = 2, ['extension.texture'] = 0.75, "
+        "['negative'] = -1, ['zero'] = 0, ['infinite'] = 1/0, "
+        "['nan'] = 0/0, ['overflow'] = 1e100, ['underflow'] = 1e-100, "
+        "['string'] = '1.6', ['boolean'] = true, ['nested'] = { value = 2 }, "
+        "[''] = 3, [42] = 2 }";
+    // 写入失败时立即退出，不能误把上一份脚本加载成功当作当前结果。
+    if ( !check(writeTestSkin(path, "'DeepDark'", SCALES, ASSETS),
+                "纹理缩放夹具写入失败") ||
+         !check(
+             manager.loadSkin(MMM::Config::pathToUtf8(path), translationsRoot),
+             "纹理缩放夹具应成功加载") ) {
+        return false;
+    }
+    // 未出现在 assets 中的合法键也应保留，允许扩展渲染器自行消费。
+    // 比较 float 常量而非 double，断言关注保存后的公开数据类型。
+    // 同时检测放大、缩小和整数值，不能只支持大于一的特效专用参数。
+    bool ok = check(manager.getTextureScale("extension.texture") == 0.75F &&
+                        manager.getTextureScale("cursor") == 2.0F &&
+                        manager.getTextureScale("custom.enlarged") == 1.6F &&
+                        manager.getTextureScale("custom.reduced") == 0.5F,
+                    "普通纹理与序列应支持独立放大和缩小");
+    // 非法声明不应部分进入字典，避免查询端反复修正 NaN 或溢出值。
+    ok &= check(manager.getData().textureScales.size() == 4U,
+                "只应保存非空字符串键对应的正有限 float 倍率");
+    // 每个非法键都通过公开查询再验证一次，不依赖内部计数碰巧正确。
+    // nested.value 不得出现，用于发现错误复用递归数值解析器的情况。
+    // 数字键对应的字符串 42 也必须缺失，避免隐式字符串化改变配置含义。
+    for ( const auto* key : { "negative",
+                              "zero",
+                              "infinite",
+                              "nan",
+                              "overflow",
+                              "underflow",
+                              "string",
+                              "boolean",
+                              "nested",
+                              "nested.value",
+                              "",
+                              "42",
+                              "missing" } ) {
+        ok &= check(manager.getTextureScale(key) == 1.0F,
+                    "非法或缺失倍率必须回退到 1");
+    }
+    // 从实际分配的起始 ID 验证整个序列，不硬编码动画排序和偏移。
+    // 共享路径的两组序列必须保留不同倍率，否则 Hold/Flick 无法独立调整。
+    // 覆盖中间帧可发现只给起始 ID 或末帧登记倍率的实现遗漏。
+    for ( const auto* key : { "custom.enlarged", "custom.reduced" } ) {
+        const auto* sequence = manager.getEffectSequence(key);
+        ok &= check(sequence && sequence->frames.size() == 3U,
+                    "缩放测试序列必须完整展开");
+        // 先记失败再跳过空观察指针，让其它序列仍能输出独立诊断。
+        if ( !sequence ) continue;
+        for ( std::uint32_t frame = 0; frame < sequence->frames.size();
+              ++frame ) {
+            ok &= check(
+                manager.getEffectTextureScale(sequence->startId + frame) ==
+                    manager.getTextureScale(key),
+                "每个序列帧必须缓存所属序列的倍率");
+        }
+    }
+    // 未分配数值 ID 不应碰巧继承首帧或最近序列的倍率。
+    // 零位于固定纹理范围，高位值位于测试序列范围外，覆盖两侧缺省。
+    ok &= check(manager.getEffectTextureScale(0U) == 1.0F &&
+                    manager.getEffectTextureScale(999999U) == 1.0F,
+                "非序列 ID 应保持单位倍率");
+
+    // 先载入相同序列但缺少缩放声明，再载入非法顶层值。
+    // 保留相同 ID 能直接暴露旧皮肤数值缓存未清除的错误。
+    // nil 对应历史皮肤未提供该字段，字符串/数字/布尔均不是合法表。
+    // 无效可选字段不应导致整套皮肤失效，其它资源仍应按原配置加载。
+    for ( const auto* expression : { "nil", "'invalid'", "42", "true" } ) {
+        if ( !check(writeTestSkin(path, "'DeepDark'", expression, ASSETS),
+                    "缺省缩放夹具写入失败") ||
+             !check(manager.loadSkin(MMM::Config::pathToUtf8(path),
+                                     translationsRoot),
+                    "缺省或非法顶层缩放配置不应使皮肤加载失败") ) {
+            return false;
+        }
+        // 字符串键与数值帧键两个缓存都必须随皮肤数据一并重建。
+        // 单查纹理键不能发现旧帧 ID 泄漏，单查帧也不能发现旧光标倍率。
+        // 单位倍率不要求展开存储，以免没有启用此功能的皮肤增加无用容量。
+        ok &= check(manager.getData().textureScales.empty() &&
+                        manager.getData().effectTextureScales.empty() &&
+                        manager.getTextureScale("cursor") == 1.0F &&
+                        manager.getEffectTextureScale(1000U) == 1.0F,
+                    "重载旧皮肤必须清除全部自定义缩放");
+    }
+    // 每次加载均替换单例状态，调用方后续检查应重新加载目标皮肤。
+    return ok;
 }
 
 /// @brief 写入发光被关闭的旧版内置 IVM 测试皮肤。
@@ -599,6 +719,10 @@ bool verifyRmSkin(const std::filesystem::path& skinPath,
     ok &= check(manager.getAssetPath("note.note") !=
                     manager.getAssetPath("note.holdhead"),
                 "RM 长条头不能复用单键贴图");
+    // 放大打击光不能改变普通 Note 或长条头部本身的显示比例。
+    ok &= check(manager.getTextureScale("note.note") == 1.0F &&
+                    manager.getTextureScale("note.holdhead") == 1.0F,
+                "RM 打击光倍率不得影响物件纹理");
     // 路径不等比像素差异更直接保护独立头部资源选择。
     // 全部普通资产都必须落到真实普通文件，不能仅验证两张头部纹理。
     for ( const auto& [key, path] : manager.getData().assetPaths ) {
@@ -622,6 +746,15 @@ bool verifyRmSkin(const std::filesystem::path& skinPath,
                     "RM 原包帧序必须完整");
         // 缺失序列已计入失败，跳过后续帧访问以继续汇总其他断言。
         if ( !sequence ) continue;
+        // 三类动画分别配置，Hold 不应因共享 Flick 图片而丢失独立倍率。
+        ok &= check(manager.getTextureScale(key) == 1.6F,
+                    "RM 三类打击特效应分别放大到 1.6 倍");
+        for ( std::uint32_t frame = 0; frame < sequence->frames.size();
+              ++frame ) {
+            ok &= check(manager.getEffectTextureScale(sequence->startId +
+                                                      frame) == 1.6F,
+                        "RM 全部打击特效帧应应用 1.6 倍缩放");
+        }
         if ( hold ) {
             const auto* flick = manager.getEffectSequence("note.effect.flick");
             // 后半段与滑键共享文件但保持独立序列，不能误取单键消散帧。
@@ -729,6 +862,9 @@ int main(int argc, char* argv[])
                              "ComfortableLight",
                              translationsRoot);
     ok &= verifyLegacyIvmGlowMigration(legacyIvmSkinPath, translationsRoot);
+    // 缩放解析使用独立夹具，后续内置皮肤检查继续验证生产资源配置。
+    ok &= verifyTextureScales(outputDirectory / "texture-scales.lua",
+                              translationsRoot);
     // 临时旧 IVM 检查完成后，后续 helper 会继续替换单例皮肤状态。
     // 皮肤解析之后独立验证应用级主题偏好和默认皮肤特效契约。
     ok &= verifyLegacyAppConfigSemantics();

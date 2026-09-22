@@ -2,6 +2,7 @@
 
 #include "config/visual/BackgroundConfig.h"
 #include "logic/BeatmapSyncBuffer.h"
+#include "logic/ecs/system/render/SkinTextureScale.h"
 #include <glm/glm.hpp>
 
 namespace MMM::Logic::System
@@ -15,6 +16,9 @@ using BackgroundFillMode = MMM::Config::BackgroundFillMode;
 /// @note 不持有输出对象所有权；构造后需显式 flush 提交最后一批。
 /// @pre 快照由当前调用线程独占写入，多个批处理器不能交错追加未提交批次。
 /// @note 命令描述连续索引区间，改变状态只分割命令，不搬移已有顶点。
+/// @note 皮肤倍率只作用于最终几何，不更改 UV、图集尺寸或谱面坐标。
+/// @note 普通图元围绕中心缩放；连接体保留首尾中心，只调整厚度。
+/// @note 交互框与可见性由上层按相同倍率计算，此处不回写命中记录。
 struct Batcher {
     /// @brief 顶点、索引与图集映射的借用目标，生命周期覆盖本批处理器。
     RenderSnapshot* snapshot;
@@ -22,6 +26,8 @@ struct Batcher {
     std::vector<Common::Render::CanvasDrawCmd>* targetCmds;
     /// @brief 后续图元使用的逻辑纹理，用于选择对应图集 UV。
     TextureID currentTex = TextureID::None;
+    /// @brief 当前纹理的独立视觉倍率，切换纹理时刷新且不影响图集合批。
+    float m_textureScale = 1.0F;
     /// @brief 尚未提交的连续索引范围及其绘制状态。
     Common::Render::CanvasDrawCmd currentCmd;
 
@@ -106,7 +112,9 @@ struct Batcher {
         if ( currentCmd.indexCount == 0 ) {
             currentCmd.customTextureId = static_cast<uint32_t>(tex);
         }
-        currentTex = tex;
+        currentTex     = tex;
+        m_textureScale = skinTextureScale(tex);
+        // 同图集的纹理可拥有不同倍率，不切批也必须刷新当前几何状态。
         // 即使无需切批，也必须更新逻辑纹理，否则后续 UV 会沿用旧条目。
     }
 
@@ -175,6 +183,17 @@ struct Batcher {
     void pushUVQuad(float x, float y, float w, float h, glm::vec2 uvMin,
                     glm::vec2 uvMax, glm::vec4 color)
     {
+        // 填充与裁剪 UV 已由上层确定，最后只改变几何，避免重复缩放。
+        // 持续连接体只改变厚度，不能改变谱面时间或两轨之间的实际跨度。
+        const float scaleX =
+            currentTex == TextureID::HoldBodyHorizontal ? 1.0F : m_textureScale;
+        const float scaleY =
+            currentTex == TextureID::HoldBodyVertical ? 1.0F : m_textureScale;
+        x -= w * (scaleX - 1.0F) * 0.5F;
+        y += h * (scaleY - 1.0F) * 0.5F;
+        w *= scaleX;
+        h *= scaleY;
+        // 只在最终入口缩放，pushFilledQuad 的比例适配不会再叠乘一次。
         // 这里只追加几何，调用方必须先用 setTexture 选择实际采样资源。
         // UV 可超出常规范围，本函数不裁剪或自动修正调用方的采样策略。
         if ( currentCmd.indexCount == 0 ) {
@@ -321,6 +340,26 @@ struct Batcher {
     void pushFreeQuad(glm::vec2 p1, glm::vec2 p2, glm::vec2 p3, glm::vec2 p4,
                       glm::vec4 color)
     {
+        if ( m_textureScale != 1.0F ) {
+            // 连接体以每条端边的中点为锚。斜向折线也保持首尾中心不动，
+            // 仅扩展端边厚度，不能把连接的时间/轨道距离乘上纹理倍率。
+            glm::vec2 anchor1, anchor2, anchor3, anchor4;
+            if ( currentTex == TextureID::HoldBodyVertical ) {
+                anchor1 = anchor2 = (p1 + p2) * 0.5F;
+                anchor3 = anchor4 = (p3 + p4) * 0.5F;
+            } else if ( currentTex == TextureID::HoldBodyHorizontal ) {
+                anchor1 = anchor4 = (p1 + p4) * 0.5F;
+                anchor2 = anchor3 = (p2 + p3) * 0.5F;
+            } else {
+                // 点状纹理围绕同一中心等比伸缩，UV、颜色和混合规则不变。
+                anchor1 = anchor2 = anchor3 = anchor4 =
+                    (p1 + p2 + p3 + p4) * 0.25F;
+            }
+            p1 = anchor1 + (p1 - anchor1) * m_textureScale;
+            p2 = anchor2 + (p2 - anchor2) * m_textureScale;
+            p3 = anchor3 + (p3 - anchor3) * m_textureScale;
+            p4 = anchor4 + (p4 - anchor4) * m_textureScale;
+        }
         // 该入口不施加最小高度，斜边和折线连接体可以保持其原始形状。
         // 不重新排序角点，几何方向和纹理方向都由传入顺序决定。
         if ( currentCmd.indexCount == 0 ) {

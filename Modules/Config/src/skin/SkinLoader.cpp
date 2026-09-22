@@ -6,8 +6,10 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <regex>
 #include <sol/sol.hpp>
@@ -370,6 +372,31 @@ bool SkinManager::loadSkin(const std::string&           luaFilePath,
         }
     }
 
+    // 缩放声明使用完整资产键，不递归展开，避免表结构与标量约定混淆。
+    // 配置独立于资产路径，因此未知扩展纹理键也可供后续渲染器消费。
+    const sol::object textureScalesObject = skinTable["texture_scales"];
+    if ( textureScalesObject.get_type() == sol::type::table ) {
+        const auto textureScalesTable = textureScalesObject.as<sol::table>();
+        for ( const auto& [keyObject, valueObject] : textureScalesTable ) {
+            // 严格检查 Lua 类型，拒绝数值字符串和隐式数字键转换。
+            if ( keyObject.get_type() != sol::type::string ||
+                 valueObject.get_type() != sol::type::number ) {
+                continue;
+            }
+            const auto   key   = keyObject.as<std::string>();
+            const double value = valueObject.as<double>();
+            // 先在 double 范围验证，不能先窄化再检测已溢出的 float。
+            if ( key.empty() || !std::isfinite(value) || value <= 0.0 ||
+                 value > std::numeric_limits<float>::max() ) {
+                continue;
+            }
+            const float scale = static_cast<float>(value);
+            // 极小正数可能在 float 转换时下溢成零，零不属于有效缩放。
+            if ( scale > 0.0F ) m_data.textureScales.emplace(key, scale);
+        }
+    }
+    // 非表顶层声明视为缺省；单个错误项不影响同表中其他合法倍率。
+
     // assets 支持嵌套路径和序列描述，递归解析后统一分配纹理 ID。
     sol::table assetsTable = skinTable["assets"];
     if ( assetsTable.valid() ) {
@@ -400,6 +427,15 @@ bool SkinManager::loadSkin(const std::string&           luaFilePath,
                   key,
                   currentId,
                   frameCount);
+            // 在低频分配阶段展开倍率，渲染每帧只查询当前帧 ID。
+            // 仅缓存非默认项，旧皮肤不会因新功能增加逐帧映射容量。
+            const float scale = getTextureScale(key);
+            if ( scale != 1.0F ) {
+                for ( std::uint32_t frame = 0; frame < frameCount; ++frame ) {
+                    m_data.effectTextureScales.emplace(currentId + frame,
+                                                       scale);
+                }
+            }
             // 下一序列紧接当前末帧，避免空洞并维持唯一性。
             currentId += frameCount;
         }
@@ -870,6 +906,28 @@ std::filesystem::path SkinManager::getAssetPath(const std::string& key)
     XERROR("Asset key not found: " + key);
     // 仅在缺失分支记录一次调用日志，高频调用方应预先验证键。
     return "";
+}
+
+/// @brief 查询完整纹理键对应的视觉倍率。
+/// @param key 普通资产或序列的完整点分键。
+/// @return 合法配置倍率，未声明时保持原始尺寸。
+/// @warning 渲染热路径只读当前皮肤缓存，不分配或访问 Lua。
+float SkinManager::getTextureScale(const std::string& key) const
+{
+    // find 不创建缺失项，未知扩展键与旧皮肤都保持单位倍率。
+    const auto it = m_data.textureScales.find(key);
+    return it == m_data.textureScales.end() ? 1.0F : it->second;
+}
+
+/// @brief 查询序列帧的预展开视觉倍率。
+/// @param textureId 当前皮肤分配的帧 ID。
+/// @return 非默认缓存命中时返回配置值，其余情况返回 1。
+/// @warning 逐图元热路径仅做数值哈希查询，不遍历序列范围。
+float SkinManager::getEffectTextureScale(std::uint32_t textureId) const
+{
+    // 同一物理帧可以属于不同动画，倍率按逻辑 ID 而非路径区分。
+    const auto it = m_data.effectTextureScales.find(textureId);
+    return it == m_data.effectTextureScales.end() ? 1.0F : it->second;
 }
 
 /// @brief 查询已经展开并分配 ID 的特效序列。

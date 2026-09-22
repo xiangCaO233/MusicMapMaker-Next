@@ -78,6 +78,10 @@ struct SkinData {
     // 资产路径表 (Key: 资产ID, Value: 文件路径)
     std::unordered_map<std::string, std::filesystem::path> assetPaths;
 
+    /// @brief 按完整资产键保存独立视觉倍率，未声明的纹理保持原始尺寸。
+    /// @note 序列键作用于整个动画，不改变源图片、图集 UV 或播放时序。
+    std::unordered_map<std::string, float> textureScales;
+
     // 音频路径表 (Key: 音频ID, Value: 文件路径)
     std::unordered_map<std::string, std::filesystem::path> audioPaths;
 
@@ -92,6 +96,10 @@ struct SkinData {
         bool additiveBlend{ false };
     };
     std::unordered_map<std::string, EffectSequence> effectSequences;
+
+    /// @brief 加载时展开的序列帧倍率，供渲染按帧 ID 常量时间查询。
+    /// @note 仅缓存非默认倍率；随 SkinData 重建，禁止跨皮肤复用旧 ID。
+    std::unordered_map<std::uint32_t, float> effectTextureScales;
 
     /// @brief 特效序列帧的基础播放帧率。
     float effectBaseFps{ DEFAULT_EFFECT_BASE_FPS };
@@ -193,6 +201,18 @@ public:
 
     ///@brief 获取资产路径
     std::filesystem::path getAssetPath(const std::string& key);
+
+    /// @brief 获取普通纹理或整个序列的独立视觉倍率。
+    /// @param key 与 assets 一致的完整点分键。
+    /// @return 正有限倍率；缺失或无效声明返回 1。
+    /// @warning 渲染热路径只查询缓存，不进行 Lua 访问或资源加载。
+    float getTextureScale(const std::string& key) const;
+
+    /// @brief 通过已分配的序列帧 ID 查询该动画的视觉倍率。
+    /// @param textureId 当前皮肤序列中的帧 ID。
+    /// @return 未声明倍率或不属于序列的 ID 返回 1。
+    /// @warning 逐图元热路径只查数值键，不遍历序列或构造字符串。
+    float getEffectTextureScale(std::uint32_t textureId) const;
 
     ///@brief 获取特效序列帧
     const SkinData::EffectSequence* getEffectSequence(

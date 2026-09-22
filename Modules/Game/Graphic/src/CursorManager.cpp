@@ -5,6 +5,7 @@
 #include "imgui_internal.h"
 
 #include <algorithm>
+#include <string>
 
 /// @file
 /// @brief 实现软件光标皮肤资源切换和基于 ImGui 前景层的粒子绘制。
@@ -143,11 +144,21 @@ void CursorManager::UpdateAndDraw(float smokeLifeOverride)
     const float pressScale =
         1.0f - (1.0f - CURSOR_PRESSED_SCALE) * easeOutCubic(m_pressAmount);
 
-    // 每帧读取可热更新配置，并把视觉尺寸统一换算为当前屏幕像素。
-    float cursorSize    = cursorCfg.cursorSize * dpiScale * pressScale;
-    float trailSize     = cursorCfg.trailSize * dpiScale * pressScale;
+    // 资源键只初始化一次；三个倍率每帧各读取一次，不在粒子循环中查询。
+    static const std::string CURSOR_KEY = "cursor";
+    static const std::string TRAIL_KEY  = "cursortrail";
+    static const std::string SMOKE_KEY  = "cursor_smoke";
+    const auto&              skin       = Config::SkinManager::instance();
+    // 纹理倍率叠加用户尺寸、DPI 与按压动画，保持鼠标热点和发射间距不变。
+    // 三层各自缩放，烟雾和拖尾不会被主光标纹理的配置连带改变。
+    // 未配置的资源由皮肤管理器返回单位倍率，兼容既有皮肤的视觉尺寸。
+    float cursorSize = cursorCfg.cursorSize * dpiScale * pressScale *
+                       skin.getTextureScale(CURSOR_KEY);
+    float trailSize = cursorCfg.trailSize * dpiScale * pressScale *
+                      skin.getTextureScale(TRAIL_KEY);
     float trailLifeTime = cursorCfg.trailLifeTime;
-    float smokeSize     = cursorCfg.smokeSize * dpiScale * pressScale;
+    float smokeSize     = cursorCfg.smokeSize * dpiScale * pressScale *
+                      skin.getTextureScale(SMOKE_KEY);
     float smokeLifeTime = (smokeLifeOverride > 0.0f) ? smokeLifeOverride
                                                      : cursorCfg.smokeLifeTime;
 

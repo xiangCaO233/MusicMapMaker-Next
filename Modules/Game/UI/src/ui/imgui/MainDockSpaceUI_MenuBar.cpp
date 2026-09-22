@@ -13,6 +13,7 @@
 #include "ui/utils/UIWidgetUtils.h"
 #include <fmt/format.h>
 #include <memory>
+#include <string>
 
 namespace MMM::UI
 {
@@ -99,14 +100,16 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
 
-        /// 绘制带纹理覆盖层的透明标题栏按钮。
+        /// @brief 绘制带纹理覆盖层的透明标题栏按钮。
+        /// @param textureScale 皮肤纹理倍率，仅作用于图像，不影响按钮布局。
         /// 按钮本体统一经过 FeedbackButton，以保留悬停和点击反馈。
         /// 纹理只作为视觉层，不单独创建第二个交互区域。
         /// 返回值仅表示本帧点击，不保存按下状态或纹理所有权。
         auto DrawIconButton = [&](const char*                          str_id,
                                   std::unique_ptr<Graphic::VKTexture>& tex,
                                   float                                btnSize,
-                                  ImVec4 hoverColor) -> bool {
+                                  ImVec4 hoverColor,
+                                  float  textureScale) -> bool {
             // 固定按钮样式消除皮肤内边距差异，保证窗口按钮等宽。
             Utils::pushFixedButtonStyleVars();
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
@@ -118,8 +121,9 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
             if ( tex ) {
                 // VKTexture 描述符由资源管理层持有，本函数不接管其生命周期。
                 ImTextureID imTexId = (ImTextureID)tex->getImTextureID();
-                // 图标在按钮矩形内保持固定比例，并按整数像素居中。
-                float  iconSize = btnSize * 0.65f;
+                // 以按钮中心缩放纹理，按钮本体与后续菜单的占位保持不变。
+                // 倍率大于一时允许图像延伸到按钮外，仍遵循窗口现有裁剪。
+                float  iconSize = btnSize * 0.65f * textureScale;
                 ImVec2 p_min    = ImGui::GetItemRectMin();
                 float  offsetX  = std::floor((btnSize - iconSize) * 0.5f);
                 float  offsetY  = std::floor((btnSize - iconSize) * 0.5f);
@@ -164,7 +168,13 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
 
         // Logo 固定在最左侧，并占据一个与菜单栏等高的方形区域。
         ImGui::SetCursorPosX(0.0f);
-        DrawIconButton("##logo", m_logo_texture, buttonSize, hoverVec4);
+        // 静态键避免热路径重复构造字符串；切换皮肤后立即读取新倍率。
+        static const std::string LOGO_KEY = "logo";
+        DrawIconButton("##logo",
+                       m_logo_texture,
+                       buttonSize,
+                       hoverVec4,
+                       skinCfg.getTextureScale(LOGO_KEY));
 
         // 主菜单紧跟 Logo；横向留白按 DPI 缩放，纵向沿用默认基线。
         ImGui::PushStyleVar(
@@ -194,9 +204,9 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         ImGuiIO&    io       = ImGui::GetIO();
         float       logicUps = Logic::EditorEngine::instance().getLogicUps();
         std::string fpsStr   = TR_FMT("ui.menu.frame_stats_fmt",
-                                      1000.0f / io.Framerate,
-                                      io.Framerate,
-                                      logicUps);
+                                    1000.0f / io.Framerate,
+                                    io.Framerate,
+                                    logicUps);
         float       fpsWidth = ImGui::CalcTextSize(fpsStr.c_str()).x;
 
         // 右侧区域固定容纳最小化、最大化和关闭三个等宽按钮。

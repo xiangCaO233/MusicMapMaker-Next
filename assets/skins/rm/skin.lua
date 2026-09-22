@@ -87,6 +87,13 @@ return {
         beat_lines_width = { beat_1 = 1.5, default = 1.0 },
         glow = { resolution_scale = 0.5 },
     },
+    -- 任意纹理均可按 assets 的完整键独立缩放；1 为原尺寸，小于 1 为缩小。
+    -- 序列键作用于全部动画帧，调整时无需修改图片或全局 Note 尺寸。
+    texture_scales = {
+        ["note.effect.note"] = 1.6,
+        ["note.effect.flick"] = 1.6,
+        ["note.effect.hold"] = 1.6,
+    },
     -- 游戏资源不提供桌面主题，使用现有深色主题搭配深色轨道。
     theme = { light = "Moonlight", dark = "Moonlight" },
     -- 固定判定点序列帧不会像轨道填充效果一样拉伸整幅爆闪。

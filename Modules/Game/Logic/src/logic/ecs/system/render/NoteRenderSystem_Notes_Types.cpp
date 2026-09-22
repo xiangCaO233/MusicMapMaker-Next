@@ -3,6 +3,7 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include "logic/ecs/system/render/SkinTextureScale.h"
 #include "mmm/note/HoldScrollSemantics.h"
 
 #include <algorithm>
@@ -180,8 +181,10 @@ void NoteRenderSystem::renderHold(
     };
 
     // 2. 头部。
+    // 可见性使用最终倍率，提交尺寸保持原值，由 Batcher 统一围绕中心缩放。
     if ( (glowPart == HoverPart::None || glowPart == HoverPart::Head) &&
-         isEndpointVisible(headY, headSize.y) ) {
+         isEndpointVisible(headY,
+                           headSize.y * skinTextureScale(headTexture)) ) {
         // 可见头部保持原始中心坐标，不对固定尺寸纹理进行拉伸。
         batcher.setTexture(headTexture);
         batcher.pushFilledQuad(headX,
@@ -195,7 +198,8 @@ void NoteRenderSystem::renderHold(
 
     // 3. 尾部。
     if ( (glowPart == HoverPart::None || glowPart == HoverPart::HoldEnd) &&
-         isEndpointVisible(endY, endSize.y) ) {
+         isEndpointVisible(endY,
+                           endSize.y * skinTextureScale(TextureID::HoldEnd)) ) {
         // 可见尾部同样保持皮肤尺寸，只有完全离屏时才跳过。
         batcher.setTexture(TextureID::HoldEnd);
         batcher.pushFilledQuad(
