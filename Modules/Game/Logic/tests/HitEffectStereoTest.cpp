@@ -209,8 +209,7 @@ bool testBoundSoundOverridesDefault()
     auto boundEvent          = makeEvent(MMM::NoteType::FLICK, 1, 1);
     boundEvent.sampleBinding = MMM::AudioSampleBinding{ "sample.wav", 0.35F };
     // 同时给出 Flick 默认类型与显式绑定，绑定必须覆盖默认类型对应的内置键。
-    if ( HitFXSystem::soundEffectKeyForEvent(
-             boundEvent, MMM::NoteType::FLICK) != "sample.wav" ) {
+    if ( HitFXSystem::soundEffectKeyForEvent(boundEvent) != "sample.wav" ) {
         XERROR("Bound note sound did not override the built-in Flick sound");
         return false;
     }
@@ -219,10 +218,9 @@ bool testBoundSoundOverridesDefault()
     const auto flickEvent = makeEvent(MMM::NoteType::FLICK, 0, 1);
     // 默认资源名是后续皮肤查找的键，不是本测试要求存在的文件系统路径。
     // 缺省分支分别覆盖 Note 与 Flick，不能只证明绑定优先而忽略默认资源选择。
-    if ( HitFXSystem::soundEffectKeyForEvent(noteEvent, MMM::NoteType::NOTE) !=
-             "hiteffect.note" ||
-         HitFXSystem::soundEffectKeyForEvent(
-             flickEvent, MMM::NoteType::FLICK) != "hiteffect.flick" ) {
+    if ( HitFXSystem::soundEffectKeyForEvent(noteEvent) != "hiteffect.note" ||
+         HitFXSystem::soundEffectKeyForEvent(flickEvent) !=
+             "hiteffect.flick" ) {
         XERROR("Empty bound sound did not select the built-in hit effect");
         return false;
     }
@@ -502,26 +500,25 @@ bool testEffectBlendBatchBoundaries()
 bool verifyHoldVisualPlayback(const std::string& holdKey)
 {
     using System         = MMM::Logic::System::HitFXSystem;
-    using Strategy       = MMM::Config::PolylineSfxStrategy;
     auto&       manager  = MMM::Config::SkinManager::instance();
     const auto* sequence = manager.getEffectSequence(holdKey);
     // 无序列直接失败，避免空资源测试因为“没有绘制”而虚假通过。
     if ( !sequence || sequence->frames.empty() ) return false;
-    // 折线的声音简化策略不应改变长按视觉；四种策略都必须覆盖。
-    for ( const auto strategy : { Strategy::Exact,
-                                  Strategy::InternalAsNormal,
-                                  Strategy::OnlyTailExact,
-                                  Strategy::AllAsNormal } ) {
+    // 内部滑键开关不应影响长按段；开启和关闭都验证独立 Hold 序列。
+    for ( const bool internalFlickEnabled : { false, true } ) {
         for ( const bool subNote : { false, true } ) {
-            // 每种策略和物件身份使用全新系统，不能继承前一场景的活跃事件。
-            // config 只改变键音策略；视觉开关显式打开，不读取个人设置。
+            // 每种开关和物件身份使用全新系统，不能继承前一场景的活跃事件。
+            // 全局视觉开关显式打开，不读取个人设置。
             MMM::Config::EditorConfig config;
-            config.settings.sfxConfig.polylineStrategy = strategy;
-            config.visual.enableHitEffects             = true;
-            auto event      = makeEvent(MMM::NoteType::HOLD, 0);
-            event.duration  = 2.0;
-            event.isSubNote = subNote;
-            // Internal 是简化策略会改成单键的关键角色，最容易误选旧动画。
+            config.settings.sfxConfig.enablePolylineInternalFlickSfx =
+                internalFlickEnabled;
+            config.visual.enablePolylineInternalFlickEffects =
+                internalFlickEnabled;
+            config.visual.enableHitEffects = true;
+            auto event                     = makeEvent(MMM::NoteType::HOLD, 0);
+            event.duration                 = 2.0;
+            event.isSubNote                = subNote;
+            // Internal 用于排除开关误伤同位置 Hold 的回归。
             // 普通长条则保留 None，不让测试事件本身混入折线角色语义。
             event.role = subNote ? System::HitEvent::Role::Internal
                                  : System::HitEvent::Role::None;

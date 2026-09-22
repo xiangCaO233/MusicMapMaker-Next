@@ -1,5 +1,6 @@
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
@@ -113,7 +114,7 @@ void SettingsView::drawEditorSettings()
         // 行、节、页面前缀和标题共同隔离不同分组的 ImGui 状态。
         std::string baseIdStr = "S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
 
         // 在登记标题回调前读取状态，以决定本帧是否创建内容区。
         bool isOpen =
@@ -545,7 +546,7 @@ void SettingsView::drawEditorSettings()
     }
 
     // 音效配置边界：
-    // - PolylineSfxStrategy 决定折线内部点和尾点映射到哪类采样；
+    // - 内部滑键开关只控制严格的中间节点，首尾继续按自身类型播放；
     // - 宽度倍率只在对应总开关启用时参与音量计算；
     // - 立体声开关控制声像，不改变总体音量；
     // - 变速同步开关决定 SFX 是否经过随播放速度变化的路由；
@@ -555,41 +556,19 @@ void SettingsView::drawEditorSettings()
     // AudioManager 调用必须位于控件确实变化的分支，不能在每帧无条件执行。
     if ( auto* sec =
              addHeader(TR_CACHE("ui.settings.editor.sfx").data(), true) ) {
-        // 音效组控制折线音符映射、宽度音量、声像和变速同步。
+        // 音效组控制折线内部滑键开关、宽度音量、声像和变速同步。
         // 采用统一标签宽度，使动态出现的倍率行不会改变对齐方式。
 
         addSettingItem(
             *sec,
             rowIndex,
-            TR_CACHE("ui.settings.editor.sfx_strategy").data(),
+            TR_CACHE("ui.settings.editor.polyline_internal_flick_sfx").data(),
             maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                // 组合框使用局部整数，避免直接把 enum 存储交给 ImGui API。
-                int strategy = (int)settings.sfxConfig.polylineStrategy;
-                // 数组顺序必须与 PolylineSfxStrategy 枚举值顺序保持一致。
-                const char* strategies[] = {
-                    TR_CACHE("ui.settings.editor.sfx_strategy.exact").data(),
-                    TR_CACHE(
-                        "ui.settings.editor.sfx_strategy.internal_as_normal")
-                        .data(),
-                    TR_CACHE("ui.settings.editor.sfx_strategy.only_tail_exact")
-                        .data(),
-                    TR_CACHE("ui.settings.editor.sfx_strategy.all_as_normal")
-                        .data()
-                };
-                // 控件占满 Clay 分配的值列，选中后再强类型回写枚举。
-                ImGui::SetNextItemWidth(r.width);
-                if ( ::MMM::UI::FeedbackCombo("##SfxStrategy",
-                                              &strategy,
-                                              strategies,
-                                              IM_ARRAYSIZE(strategies)) ) {
-                    // FeedbackCombo
-                    // 保证索引来自当前四项数组，再转换回策略枚举。
-                    settings.sfxConfig.polylineStrategy =
-                        (Config::PolylineSfxStrategy)strategy;
-                    // 策略只影响后续命中音效选择，不立即播放声音。
-                    changed = true;
-                }
+            [&](Clay_BoundingBox, bool) {
+                // 声音与视觉分别存储，关闭声音不能同时关闭命中动画。
+                changed |= FeedbackCheckbox(
+                    "##PolylineInternalFlickSfx",
+                    &settings.sfxConfig.enablePolylineInternalFlickSfx);
             });
         addSettingItem(
             *sec,

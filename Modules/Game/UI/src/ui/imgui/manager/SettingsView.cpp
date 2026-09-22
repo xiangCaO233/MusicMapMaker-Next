@@ -218,9 +218,14 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Visual: {
-        // 视觉页覆盖偏移、预览、画布交互和频谱细节标签。
+        // 视觉页覆盖偏移、预览、画布交互、特效和频谱细节标签。
         // 组合框选项宽度由 widget 测量函数另行覆盖。
-        const std::array<const char*, 17> labels{
+        // 内部滑键开关的“不含首尾”属于完整标签，测量时不能截断限定语。
+        // 即使分组折叠也保留这些宽度，避免展开时值列位置跳动。
+        const std::array<const char*, 19> labels{
+            TR_CACHE("ui.settings.visual.flick_hit_effect_mode").data(),
+            TR_CACHE("ui.settings.visual.polyline_internal_flick_effects")
+                .data(),
             TR_CACHE("ui.settings.visual.beat_line_before_first_timing").data(),
             TR_CACHE("ui.settings.visual.preview_ratio").data(),
             TR_CACHE("ui.settings.visual.preview_edge_scroll_sensitivity")
@@ -318,7 +323,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.editor.selection").data(),
             TR_CACHE("ui.settings.editor.selection.thickness").data(),
             TR_CACHE("ui.settings.editor.selection.rounding").data(),
-            TR_CACHE("ui.settings.editor.sfx_strategy").data(),
+            TR_CACHE("ui.settings.editor.polyline_internal_flick_sfx").data(),
             TR_CACHE("ui.settings.editor.sfx_flick_scale").data(),
             TR_CACHE("ui.settings.editor.sfx_flick_mul").data(),
             TR_CACHE("ui.settings.editor.sfx_stereo_hit_effects").data(),
@@ -427,8 +432,18 @@ float measureSettingsTabWidgetWidth(Event::SettingsTab     tab,
         break;
     }
     case Event::SettingsTab::Visual: {
-        // 视觉页的填充模式选项代表该页最长离散控件文本。
+        // 填充模式与滑键播放模式都参与离散控件的最小宽度计算。
         // 连续数值滑块继续使用基础数值宽度，无需逐项测量。
+        // 英文“头到尾”文本较长，不能只依据当前中文选项或选中项估算。
+        // 翻译版本变化时布局缓存重建，选项宽度随当前语言统一更新。
+        // 仅测量文本，不在宽度计算阶段访问配置写入口或绘制控件。
+        addOptions(std::array<const char*, 3>{
+            TR_CACHE("ui.settings.visual.flick_hit_effect_mode.head_only")
+                .data(),
+            TR_CACHE("ui.settings.visual.flick_hit_effect_mode.tail_only")
+                .data(),
+            TR_CACHE("ui.settings.visual.flick_hit_effect_mode.head_to_tail")
+                .data() });
         addOptions(std::array<const char*, 4>{
             TR_CACHE("ui.settings.visual.fill_mode.stretch").data(),
             TR_CACHE("ui.settings.visual.fill_mode.aspect_fit").data(),
@@ -682,7 +697,7 @@ SettingsView::LayoutMetricsCache SettingsView::buildLayoutMetrics(
     const float categorySize    = std::floor(sidebarBaseW * scale);
     const float categorySpacing = std::floor(snapshot.itemSpacing * scale);
     const float categoryHeight  = std::floor(8.0f * scale) * 2.0f +
-                                  categorySize * 8.0f + categorySpacing * 7.0f;
+                                 categorySize * 8.0f + categorySpacing * 7.0f;
 
     // 标签列额外留出间隔，使文字与右侧控件不贴合。
     cache.tabLabelWidth =
@@ -1075,9 +1090,9 @@ void SettingsView::drawContent()
                 // 标签在分隔线右侧留出固定缩放 padding，并垂直居中。
                 ImVec2 labelSize       = ImGui::CalcTextSize(label.c_str());
                 float  textLeftPadding = std::floor(8.0f * dpiScale);
-                ImVec2 labelPos = { sepX + textLeftPadding,
-                                    rect.y +
-                                        (rect.height - labelSize.y) * 0.5f };
+                ImVec2 labelPos        = { sepX + textLeftPadding,
+                                           rect.y +
+                                               (rect.height - labelSize.y) * 0.5f };
                 ImGui::GetWindowDrawList()->AddText(
                     menuFont,
                     ImGui::GetFontSize(),

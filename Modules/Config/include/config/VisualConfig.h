@@ -14,6 +14,18 @@
 namespace MMM::Config
 {
 
+/// @brief 滑键命中时特效覆盖的轨道范围，不改变打击计数或音效。
+enum class FlickHitEffectMode {
+    HeadOnly,   ///< 仅在滑键起始轨道播放。
+    TailOnly,   ///< 仅在滑键终点轨道播放，兼容旧版行为。
+    HeadToTail  ///< 起点到终点经过的全部轨道同时播放。
+};
+
+/// @brief 将滑键特效模式写为稳定文本。
+void to_json(nlohmann::json& json, const FlickHitEffectMode& mode);
+/// @brief 读取滑键特效模式，未知值回退到仅尾部播放。
+void from_json(const nlohmann::json& json, FlickHitEffectMode& mode);
+
 /// @brief 主画布分拍线显示模式。
 enum class BeatLineDisplayMode {
     Always,      ///< 始终显示分拍线。
@@ -197,6 +209,10 @@ struct VisualConfig {
     SpectrumDetailLevel spectrumDetailLevel{ SpectrumDetailLevel::Balanced };
     /// @brief 是否启用打击特效动画。
     bool enableHitEffects{ true };
+    /// @brief 滑键特效的轨道覆盖策略，默认保留仅尾部播放。
+    FlickHitEffectMode flickHitEffectMode{ FlickHitEffectMode::TailOnly };
+    /// @brief 是否显示严格位于折线内部的滑键特效，不影响首尾节点。
+    bool enablePolylineInternalFlickEffects{ true };
     /// @brief 非 Hold 打击特效的持续时间，超过序列帧周期时循环播放。
     float nonHoldHitEffectDuration{ DEFAULT_NON_HOLD_HIT_EFFECT_DURATION };
     /// @brief 是否绘制音符悬浮拾取包围盒。

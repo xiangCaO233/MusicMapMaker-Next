@@ -1,9 +1,13 @@
 #include "logic/ecs/system/HitFXSystem.h"
 #include "audio/AudioManager.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
+#include "config/VisualConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/ecs/system/render/Batcher.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace MMM::Logic::System
 {
@@ -73,7 +77,7 @@ std::optional<std::size_t> HitFXSystem::loopingEffectFrameIndex(
 /// @param ev 谱面时间线上的命中事件，实际播放时刻使用其 timestamp。
 /// @param playerTrackCount 玩家区轨道数。
 /// @param draftTrackCount 草稿区轨道数，负数时沿用兼容回退规则。
-/// @param config 当前折线键音、滑键音量及立体声配置。
+/// @param config 当前内部滑键开关、滑键音量及立体声配置。
 /// @note 本函数不登记视觉特效，预调度声音不应提前显示命中动画。
 /// @note 滑键宽度音量与绑定音量相乘，不改变原事件中存储的倍率。
 /// @warning 播放调度路径调用；不得在这里等待设备时间或同步解码音频。
@@ -82,34 +86,14 @@ void HitFXSystem::triggerAudio(const HitEvent&             ev,
                                std::int32_t                draftTrackCount,
                                const Config::EditorConfig& config)
 {
+    // 在申请音效通道与解析绑定采样之前过滤，不让关闭的内部滑键占用资源。
+    if ( !shouldScheduleHitAudio(ev, config.settings.sfxConfig) ) return;
     auto& audioManager = Audio::AudioManager::instance();
 
-    // 1. 根据策略确定最终播放类型
-    ::MMM::NoteType effectiveType = ev.type;
-
-    if ( ev.isSubNote ) {
-        // 策略只替换播放类型，不改变原事件的轨道跨度和绑定资源。
-        const auto& strategy = config.settings.sfxConfig.polylineStrategy;
-        switch ( strategy ) {
-        case Config::PolylineSfxStrategy::Exact: break;
-        case Config::PolylineSfxStrategy::InternalAsNormal:
-            if ( ev.role == HitEvent::Role::Internal )
-                effectiveType = ::MMM::NoteType::NOTE;
-            break;
-        case Config::PolylineSfxStrategy::OnlyTailExact:
-            if ( ev.role != HitEvent::Role::Tail )
-                effectiveType = ::MMM::NoteType::NOTE;
-            break;
-        case Config::PolylineSfxStrategy::AllAsNormal:
-            effectiveType = ::MMM::NoteType::NOTE;
-            break;
-        }
-    }
-
-    // 2. 播放音效 (使用预定播放接口)
+    // 使用预定播放接口，内部节点过滤不改变其他事件的调度时间。
     float volumeFactor = 1.0f;
-    // 宽度增益依据策略处理后的类型，改作普通点按的折线节点不再按滑键放大。
-    if ( effectiveType == ::MMM::NoteType::FLICK &&
+    // 所有滑键均按自身类型播放，宽度增益不改变绑定采样的选择。
+    if ( ev.type == ::MMM::NoteType::FLICK &&
          config.settings.sfxConfig.enableFlickWidthVolumeScaling ) {
         volumeFactor =
             1.0f + (ev.trackSpan - 1) *
@@ -118,10 +102,10 @@ void HitFXSystem::triggerAudio(const HitEvent&             ev,
     volumeFactor *= sampleVolumeForEvent(ev);
     // 绑定音量作为乘数合入；未绑定事件保持默认单位音量。
 
-    const std::string& sfxKey = soundEffectKeyForEvent(ev, effectiveType);
+    const std::string& sfxKey = soundEffectKeyForEvent(ev);
 
     const auto stereoEnvelope = stereoGainEnvelopeForEvent(
-        // 声像仍按真实事件运动计算，不随键音类型替换而丢失滑动方向。
+        // 声像按真实事件运动计算，不因视觉覆盖模式而丢失滑动方向。
         ev,
         playerTrackCount,
         config.settings.sfxConfig.enableStereoHitEffects,
@@ -144,14 +128,31 @@ void HitFXSystem::triggerAudio(const HitEvent&             ev,
         sfxKey, ev.timestamp, volumeFactor, stereoEnvelope, playbackControl);
 }
 
+/// @brief 只识别严格的折线内部滑键，首尾角色不能由“非尾部”近似。
+/// @warning 每个命中事件调用；只读原始事件，不遍历折线节点。
+bool HitFXSystem::isPolylineInternalFlick(const HitEvent& ev) noexcept
+{
+    // 同时要求子物件身份和内部角色，不能仅凭“不是尾部”排除首节点。
+    return ev.isSubNote && ev.role == HitEvent::Role::Internal &&
+           ev.type == ::MMM::NoteType::FLICK;
+}
+
+/// @brief 在声音预调度入口应用内部滑键开关，与视觉开关完全独立。
+/// @warning 每个待调度事件调用；不获取音频单例，不执行阻塞操作。
+bool HitFXSystem::shouldScheduleHitAudio(
+    const HitEvent& ev, const Config::SfxConfig& config) noexcept
+{
+    // 首尾、独立滑键与非滑键总是继续进入原有音频控制链路。
+    return config.enablePolylineInternalFlickSfx ||
+           !isPolylineInternalFlick(ev);
+}
+
 /// @brief 选择绑定资源或默认键音资源键。
 /// @param ev 提供可选采样绑定的事件。
-/// @param effectiveType 已经过折线键音策略转换的播放类型。
 /// @return 绑定字符串或静态默认键的借用引用，不返回临时字符串。
 /// @note 绑定引用的有效期受 ev 及其绑定对象限制，不能缓存到事件销毁之后。
 /// @warning 调度热路径只选择现有键，不复制资源 ID。
-const std::string& HitFXSystem::soundEffectKeyForEvent(
-    const HitEvent& ev, ::MMM::NoteType effectiveType)
+const std::string& HitFXSystem::soundEffectKeyForEvent(const HitEvent& ev)
 {
     if ( hasBoundSoundEffect(ev) ) {
         // 显式绑定优先于默认 note/flick 类型选择。
@@ -160,8 +161,8 @@ const std::string& HitFXSystem::soundEffectKeyForEvent(
 
     static const std::string NOTE_SOUND_EFFECT_KEY  = "hiteffect.note";
     static const std::string FLICK_SOUND_EFFECT_KEY = "hiteffect.flick";
-    return effectiveType == ::MMM::NoteType::FLICK ? FLICK_SOUND_EFFECT_KEY
-                                                   : NOTE_SOUND_EFFECT_KEY;
+    return ev.type == ::MMM::NoteType::FLICK ? FLICK_SOUND_EFFECT_KEY
+                                             : NOTE_SOUND_EFFECT_KEY;
 }
 
 /// @brief 检查是否存在非空采样资源绑定。
@@ -174,7 +175,7 @@ bool HitFXSystem::hasBoundSoundEffect(const HitEvent& ev) noexcept
 }
 
 /// @brief 返回有效绑定的音量倍率，否则使用单位音量。
-/// @param ev 原始事件，音量不受折线类型替换策略影响。
+/// @param ev 原始事件，绑定音量与默认类型选择相互独立。
 /// @warning 调度热路径直接读取已准备的绑定，不重新规范化音量。
 float HitFXSystem::sampleVolumeForEvent(const HitEvent& ev)
 {
@@ -286,7 +287,7 @@ Audio::StereoGainEnvelope HitFXSystem::stereoGainEnvelopeForEvent(
 
 /// @brief 建立命中视觉特效，同轨道的新事件替换旧事件。
 /// @param ev 提供原始物件类型、轨道和持续时间的事件。
-/// @param config 决定特效开关和折线节点的表现类型。
+/// @param config 决定全局特效开关和严格内部滑键的可见性。
 /// @note 新实例以事件时间为起点，不使用触发函数被调用时的墙钟时间。
 /// @note 关闭特效时不新增实例，已有实例的清理仍由更新或显式重置完成。
 /// @warning 事件触发路径更新活动表，不在此加载皮肤动画。
@@ -294,44 +295,30 @@ void HitFXSystem::triggerVisual(const HitEvent&             ev,
                                 const Config::EditorConfig& config)
 {
     if ( !config.visual.enableHitEffects ) return;
+    if ( !config.visual.enablePolylineInternalFlickEffects &&
+         isPolylineInternalFlick(ev) )
+        return;
 
-    ::MMM::NoteType effectiveType = ev.type;
-    std::string     effectKey     = "note";
-
-    if ( ev.isSubNote ) {
-        const auto& strategy = config.settings.sfxConfig.polylineStrategy;
-        switch ( strategy ) {
-        case Config::PolylineSfxStrategy::Exact: break;
-        case Config::PolylineSfxStrategy::InternalAsNormal:
-            if ( ev.role == HitEvent::Role::Internal )
-                effectiveType = ::MMM::NoteType::NOTE;
-            break;
-        case Config::PolylineSfxStrategy::OnlyTailExact:
-            if ( ev.role != HitEvent::Role::Tail )
-                effectiveType = ::MMM::NoteType::NOTE;
-            break;
-        case Config::PolylineSfxStrategy::AllAsNormal:
-            effectiveType = ::MMM::NoteType::NOTE;
-            break;
-        }
-    }
+    std::string effectKey = "note";
 
     if ( ev.type == ::MMM::NoteType::HOLD ) {
-        // 持续视觉按真实段类型选择；折线键音策略不能把 Hold 循环降级为单键。
+        // 持续视觉使用独立 Hold 序列，折线内部滑键开关不干扰长按段。
         effectKey = "hold";
-    } else if ( effectiveType == ::MMM::NoteType::FLICK ) {
+    } else if ( ev.type == ::MMM::NoteType::FLICK ) {
         effectKey = "flick";
     }
 
     ActiveEffect newEffect;
-    newEffect.startTime    = ev.timestamp;
-    newEffect.holdDuration = ev.duration;
-    newEffect.trackIndex   = ev.trackIndex;
-    newEffect.isDraft      = ev.isDraft;
-    newEffect.trackSpan    = ev.trackSpan;
-    newEffect.trackOffset  = ev.trackOffset;
-    newEffect.isHold       = (ev.type == ::MMM::NoteType::HOLD);
-    // 持续生命周期仍按原始物件类型决定，不因表现策略改成普通键音而缩短。
+    newEffect.startTime       = ev.timestamp;
+    newEffect.holdDuration    = ev.duration;
+    newEffect.trackIndex      = ev.trackIndex;
+    newEffect.isDraft         = ev.isDraft;
+    newEffect.trackSpan       = ev.trackSpan;
+    newEffect.trackOffset     = ev.trackOffset;
+    newEffect.isHold          = (ev.type == ::MMM::NoteType::HOLD);
+    newEffect.isFlick         = (ev.type == ::MMM::NoteType::FLICK);
+    newEffect.isInternalFlick = isPolylineInternalFlick(ev);
+    // 生命周期由物件原始类型决定，声音开关不参与视觉寿命计算。
     newEffect.effectKey = effectKey;
 
     m_trackActiveEffects[ev.trackIndex] = newEffect;
@@ -341,7 +328,7 @@ void HitFXSystem::triggerVisual(const HitEvent&             ev,
 /// @brief 跳转后恢复覆盖当前时刻的长条视觉特效，不重放声音。
 /// @param animateTime 要恢复的动画时间，单位秒。
 /// @param events 按 timestamp 升序排列的命中事件。
-/// @param config 当前特效开关与节点表现策略。
+/// @param config 当前特效开关与视觉寿命设置。
 /// @return 触发恢复的事件数量，不保证等于最终活动轨道数量。
 /// @note 不先清除现有活动表，调用方需在跳转重置流程中安排清理。
 /// @warning 播放跳转的低频分支遍历历史事件，不得每次 update 无条件恢复。
@@ -556,6 +543,10 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
     for ( const auto& [track, active] : m_trackActiveEffects ) {
         (void)track;
         if ( active.isDraft != renderDraftEffects ) continue;
+        // 关闭时立即隐藏仍在寿命内的内部滑键，不影响同轨道的首尾或长按动画。
+        if ( active.isInternalFlick &&
+             !config.visual.enablePolylineInternalFlickEffects )
+            continue;
         // 两个区域分别绘制，共享活动表但不重复提交同一特效。
         const auto* seq = resolveVisualSequence(active.effectKey);
         if ( !seq || seq->frames.empty() ) continue;
@@ -593,20 +584,28 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
         const float fixedHeight =
             (singleTrackW / texAspect) * config.visual.noteScaleY;
         // 草稿负索引转为本次区域内索引，玩家索引无需转换。
-        const int renderTrack =
-            active.isDraft ? active.trackIndex + trackCount : active.trackIndex;
-        const HitEffectRenderBounds bounds =
-            calculateRenderBounds(layoutMode,
-                                  trackCount,
-                                  renderTrack,
-                                  active.trackOffset,
-                                  judgmentLineY,
-                                  leftX,
-                                  topY,
-                                  bottomY,
-                                  singleTrackW,
-                                  fixedWidth,
-                                  fixedHeight);
+        // 先以宽整数计算终点再钳位，异常大偏移不能溢出或造成无界绘制循环。
+        const int64_t renderTrack = static_cast<int64_t>(active.trackIndex) +
+                                    (active.isDraft ? trackCount : 0);
+        const int headTrack = static_cast<int>(
+            std::clamp<int64_t>(renderTrack, 0, trackCount - 1));
+        const int tailTrack  = static_cast<int>(std::clamp<int64_t>(
+            renderTrack + active.trackOffset, 0, trackCount - 1));
+        int       firstTrack = tailTrack;
+        int       lastTrack  = tailTrack;
+        // 范围只扩展视觉几何，事件、声音和 KPS 均保持一次命中语义。
+        if ( active.isFlick ) {
+            switch ( config.visual.flickHitEffectMode ) {
+            case Config::FlickHitEffectMode::HeadOnly:
+                firstTrack = lastTrack = headTrack;
+                break;
+            case Config::FlickHitEffectMode::HeadToTail:
+                firstTrack = std::min(headTrack, tailTrack);
+                lastTrack  = std::max(headTrack, tailTrack);
+                break;
+            default: break;
+            }
+        }
 
         // 同图集中的覆盖与发光序列也要切批，模式不依赖帧的纹理 ID。
         batcher.setAdditiveBlend(seq->additiveBlend);
@@ -617,13 +616,27 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
             layoutMode == Config::HitEffectLayoutMode::TrackFill
                 ? Config::BackgroundFillMode::Stretch
                 : config.visual.noteFillMode;
-        batcher.pushFilledQuad(bounds.x,
-                               bounds.y,
-                               bounds.width,
-                               bounds.height,
-                               { texAspect, 1.0f },
-                               fillMode,
-                               glm::vec4(1.0f));
+        // 所有副本共享同一帧、缩放和混合模式；零偏移不会重复绘制。
+        for ( int lane = firstTrack; lane <= lastTrack; ++lane ) {
+            const auto bounds = calculateRenderBounds(layoutMode,
+                                                      trackCount,
+                                                      lane,
+                                                      0,
+                                                      judgmentLineY,
+                                                      leftX,
+                                                      topY,
+                                                      bottomY,
+                                                      singleTrackW,
+                                                      fixedWidth,
+                                                      fixedHeight);
+            batcher.pushFilledQuad(bounds.x,
+                                   bounds.y,
+                                   bounds.width,
+                                   bounds.height,
+                                   { texAspect, 1.0f },
+                                   fillMode,
+                                   glm::vec4(1.0f));
+        }
     }
 
     // 保证末尾同纹理图元形成完整命令，调用方随后可切换其他渲染职责。

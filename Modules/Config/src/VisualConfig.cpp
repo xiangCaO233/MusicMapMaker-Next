@@ -33,6 +33,36 @@ std::array<float, 4> sanitizeBackgroundLevelColor(
 }
 }  // namespace
 
+/// @brief 保存滑键特效范围；非法枚举值按兼容模式写出。
+/// @param j 接收稳定英文模式标识的 JSON 值。
+/// @param mode 只影响命中轨道范围，不影响皮肤动画序列选择。
+/// @note 不持久化轨道数，模式随当前谱面的实际轨道布局计算。
+void to_json(nlohmann::json& j, const FlickHitEffectMode& mode)
+{
+    // 持久化不使用翻译文本，语言切换不能改变设置含义。
+    switch ( mode ) {
+    case FlickHitEffectMode::HeadOnly: j = "HeadOnly"; break;
+    case FlickHitEffectMode::HeadToTail: j = "HeadToTail"; break;
+    default: j = "TailOnly"; break;
+    }
+}
+
+/// @brief 恢复滑键特效范围，缺失或损坏的值保持旧版仅尾部体验。
+/// @param j 用户配置中保存的模式字符串。
+/// @param mode 读取结果；非字符串、未知值统一使用 TailOnly。
+/// @note 默认分支也覆盖显式 TailOnly，无需在旧配置中补写新字段。
+void from_json(const nlohmann::json& j, FlickHitEffectMode& mode)
+{
+    // 先建立默认值，非字符串与未来版本未知值均安全回退。
+    mode = FlickHitEffectMode::TailOnly;
+    if ( !j.is_string() ) return;
+    const auto& value = j.get_ref<const std::string&>();
+    if ( value == "HeadOnly" )
+        mode = FlickHitEffectMode::HeadOnly;
+    else if ( value == "HeadToTail" )
+        mode = FlickHitEffectMode::HeadToTail;
+}
+
 /// @brief 将分拍线显示模式写为稳定英文标识。
 /// @param j 接收模式字符串的 JSON 值。
 /// @param mode 当前分拍线显示模式。
@@ -980,6 +1010,9 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
         { "spectrumDetailLevel", config.spectrumDetailLevel },
         // 打击特效和交互包围盒调试参数位于列表末端便于扩展。
         { "enableHitEffects", config.enableHitEffects },
+        { "flickHitEffectMode", config.flickHitEffectMode },
+        { "enablePolylineInternalFlickEffects",
+          config.enablePolylineInternalFlickEffects },
         { "nonHoldHitEffectDuration", config.nonHoldHitEffectDuration },
         { "debugDrawHitboxes", config.debugDrawHitboxes },
         { "interactionHitboxScaleX", config.interactionHitboxScaleX },
@@ -1088,6 +1121,11 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
     config.spectrumDetailLevel =
         j.value("spectrumDetailLevel", SpectrumDetailLevel::Balanced);
     config.enableHitEffects = j.value("enableHitEffects", true);
+    // 新开关默认开启，仅范围模式延续旧版尾部定位。
+    config.flickHitEffectMode =
+        j.value("flickHitEffectMode", FlickHitEffectMode::TailOnly);
+    config.enablePolylineInternalFlickEffects =
+        j.value("enablePolylineInternalFlickEffects", true);
     config.nonHoldHitEffectDuration =
         j.value("nonHoldHitEffectDuration",
                 VisualConfig::DEFAULT_NON_HOLD_HIT_EFFECT_DURATION);

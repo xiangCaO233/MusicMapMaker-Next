@@ -79,52 +79,16 @@ void from_json(const nlohmann::json& json, SyncConfig& config)
     config.syncInterval    = json.value("syncInterval", 10.0);
 }
 
-/// @brief 将折线音效策略写为稳定英文标识。
-/// @param json 接收策略标识的 JSON 值。
-/// @param strategy 待保存的折线音效策略。
-/// @note 未知枚举保守写为 Exact，保持每个音符的精确行为。
-void to_json(nlohmann::json& json, const PolylineSfxStrategy& strategy)
-{
-    // Exact 是最完整的表达，作为序列化前的安全默认值。
-    json = "Exact";
-    switch ( strategy ) {
-    case PolylineSfxStrategy::Exact: json = "Exact"; break;
-    case PolylineSfxStrategy::InternalAsNormal:
-        json = "InternalAsNormal";
-        break;
-    case PolylineSfxStrategy::OnlyTailExact: json = "OnlyTailExact"; break;
-    case PolylineSfxStrategy::AllAsNormal: json = "AllAsNormal"; break;
-    }
-}
-
-/// @brief 从配置标识恢复折线音效策略。
-/// @param json 待读取的 JSON 字符串。
-/// @param strategy 接收已知策略；非法值回退到 Exact。
-/// @note 对未知标识不进行模糊匹配，避免拼写错误改变声音语义。
-void from_json(const nlohmann::json& json, PolylineSfxStrategy& strategy)
-{
-    // 类型或内容不符合契约时维持最精确的默认策略。
-    strategy = PolylineSfxStrategy::Exact;
-    if ( !json.is_string() ) return;
-    const auto value = json.get<std::string>();
-    if ( value == "InternalAsNormal" ) {
-        strategy = PolylineSfxStrategy::InternalAsNormal;
-    } else if ( value == "OnlyTailExact" ) {
-        strategy = PolylineSfxStrategy::OnlyTailExact;
-    } else if ( value == "AllAsNormal" ) {
-        strategy = PolylineSfxStrategy::AllAsNormal;
-    }
-}
-
 /// @brief 序列化编辑器打击音效和声道控制配置。
 /// @param json 接收完整音效配置对象。
 /// @param config 待保存的音效策略、开关、增益与永久通道状态。
 /// @note 增益在写出时再次净化，阻止非有限值进入持久化文件。
 void to_json(nlohmann::json& json, const SfxConfig& config)
 {
-    // 策略与 Flick 宽度缩放字段描述物件类型到音效的映射规则。
+    // 内部滑键开关与宽度缩放独立保存，不再写出旧版物件类型替换策略。
     json = nlohmann::json{
-        { "polylineStrategy", config.polylineStrategy },
+        { "enablePolylineInternalFlickSfx",
+          config.enablePolylineInternalFlickSfx },
         { "enableFlickWidthVolumeScaling",
           config.enableFlickWidthVolumeScaling },
         { "flickWidthVolumeMultiplier", config.flickWidthVolumeMultiplier },
@@ -149,9 +113,10 @@ void to_json(nlohmann::json& json, const SfxConfig& config)
 /// @note 缺失字段保持历史默认体验，增益统一限制到有效线性范围。
 void from_json(const nlohmann::json& json, SfxConfig& config)
 {
-    // 策略和宽度缩放采用功能引入时的默认值，旧配置不会突然改变音效。
-    config.polylineStrategy =
-        json.value("polylineStrategy", PolylineSfxStrategy::Exact);
+    // 忽略旧 polylineStrategy；各物件使用自身音效，内部滑键由独立开关控制。
+    // 旧配置缺少开关时仍播放内部滑键，不能把普通键音策略误迁移为静音。
+    config.enablePolylineInternalFlickSfx =
+        json.value("enablePolylineInternalFlickSfx", true);
     config.enableFlickWidthVolumeScaling =
         json.value("enableFlickWidthVolumeScaling", false);
     config.flickWidthVolumeMultiplier =

@@ -1,4 +1,5 @@
 #include "config/AppConfig.h"
+#include "config/VisualConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
@@ -19,8 +20,9 @@ namespace MMM::UI
 /// @brief 渲染视觉设置页。
 ///
 /// 本页编辑软件级 `VisualConfig`，覆盖谱面时间偏移、拍线、预览区、画布交互和
-/// 频谱细节五组参数。控件直接修改 AppConfig 中的内存值，本帧存在任一实际交互
-/// 时才发布 `CmdUpdateEditorConfig` 并保存配置。
+/// 频谱细节及打击特效参数。控件直接修改 AppConfig
+/// 中的内存值，本帧存在任一实际交互 时才发布 `CmdUpdateEditorConfig`
+/// 并保存配置。
 ///
 /// 配置传播分为两步：
 /// - EventBus 把最新 EditorConfig 交给逻辑线程，使画布和分析视图即时更新；
@@ -89,7 +91,7 @@ void SettingsView::drawVisualSettings()
         // 页面前缀、节序号、行序号和标签共同隔离不同标题的 ImGui 状态。
         std::string baseIdStr = "VS_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
 
         // 状态先于回调登记读取，用来决定本帧是否构建内容 section。
         bool isOpen =
@@ -168,6 +170,66 @@ void SettingsView::drawVisualSettings()
         // 折叠分组不创建任何设置行，因此也不会提交隐藏控件。
         return nullptr;
     };
+
+    // 特效范围与内部节点开关只影响视觉；音效开关在编辑页独立提供。
+    // 新分组沿用整页 changed 汇总，不额外发送命令，保证每个交互帧只保存一次。
+    // “头到尾”表示经过的每条轨道同时播放，各副本共享同一皮肤帧与寿命。
+    // 不按轨道数量增加音效触发次数，也不修改原始物件的计数语义。
+    // 模式不区分玩家区和草稿区，渲染侧使用事件所属区域的实际轨道数。
+    // 旧配置缺少这组字段时仍显示尾部模式，并开启内部滑键动画。
+    if ( auto* sec = addHeader(
+             TR_CACHE("ui.settings.visual.hit_effects").data(), true) ) {
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.flick_hit_effect_mode").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                // 选项顺序与枚举保持一致，保存稳定枚举而不是翻译字符串。
+                // 使用局部整数适配 ImGui，不将枚举成员地址重解释为 int 指针。
+                // 配置反序列化已把未知标识回退为尾部，选中索引保持有效。
+                int         mode = static_cast<int>(visual.flickHitEffectMode);
+                const char* options[] = {
+                    TR_CACHE(
+                        "ui.settings.visual.flick_hit_effect_mode.head_only")
+                        .data(),
+                    TR_CACHE(
+                        "ui.settings.visual.flick_hit_effect_mode.tail_only")
+                        .data(),
+                    TR_CACHE(
+                        "ui.settings.visual.flick_hit_effect_mode.head_to_tail")
+                        .data()
+                };
+                ImGui::SetNextItemWidth(r.width);
+                // 宽度采用 Clay 的值列矩形，避免较长翻译侵入左侧标签。
+                // FeedbackCombo 沿用全局声音和悬浮反馈，不维护另一套控件状态。
+                if ( FeedbackCombo("##FlickHitEffectMode",
+                                   &mode,
+                                   options,
+                                   IM_ARRAYSIZE(options)) ) {
+                    visual.flickHitEffectMode =
+                        static_cast<Config::FlickHitEffectMode>(mode);
+                    // 只回写实际选择，切换分组或重绘页面不会触发配置更新。
+                    changed = true;
+                }
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.polyline_internal_flick_effects")
+                .data(),
+            maxLabelW,
+            [&](Clay_BoundingBox, bool) {
+                // 只过滤 Internal 滑键，首尾、普通节点和 Hold 不受影响。
+                // 本开关不能绑定音效字段；两者必须能分别开启与关闭。
+                // 不因全局打击特效暂时关闭就隐藏或重置这个子选项。
+                // 当前仍活跃的内部滑键由快照生成立即隐藏，无需等待动画播完。
+                // 新事件则在触发入口过滤，不为关闭状态创建无意义的活动实例。
+                changed |= FeedbackCheckbox(
+                    "##PolylineInternalFlickEffects",
+                    &visual.enablePolylineInternalFlickEffects);
+            });
+    }
 
     // 时间偏移契约：
     // - 三个字段都使用秒作为存储单位；

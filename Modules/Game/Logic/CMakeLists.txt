@@ -350,6 +350,16 @@ add_test(
     "${CMAKE_SOURCE_DIR}/assets/translations"
     "${CMAKE_BINARY_DIR}/test_output/hold_effects")
 
+# 滑键模式测试覆盖配置往返、首尾及全范围几何和严格内部节点的独立开关。 只读内置皮肤并生成 CPU 快照，不打开声卡或图形设备，不依赖用户配置。
+# 所有期望轨道均由夹具明确指定，草稿、反向和极端偏移独立验证。 新目标沿用公共入口，二进制归入 build/tests/Logic，不散落源码树。
+mmm_add_test_executable(Logic FlickHitEffectModeTest
+                        tests/FlickHitEffectModeTest.cpp)
+# 链接正式事件系统和批处理器，避免复制渲染算法使测试偏离生产路径。
+target_link_libraries(FlickHitEffectModeTest PRIVATE Logic Audio Log)
+add_test(NAME FlickHitEffectModeTest
+         COMMAND FlickHitEffectModeTest "${CMAKE_SOURCE_DIR}/assets/skins"
+                 "${CMAKE_SOURCE_DIR}/assets/translations")
+
 # 纹理倍率测试直接检查 CPU 顶点、UV 和合批，不要求 Vulkan 窗口或真实音频设备。 临时皮肤只写入构建输出目录；内置皮肤只读，用于核对 RM
 # 三类特效的最终尺寸。 配置解析与几何消费分层断言，防止只验证 getter 而遗漏实际绘制尺寸。
 # 四套内置皮肤共同验证新增倍率与旧皮肤默认值的兼容，不改变用户皮肤设置。

@@ -38,21 +38,10 @@ void to_json(nlohmann::json& json, const SyncConfig& config);
 /// @brief 从 JSON 读取同步配置。
 void from_json(const nlohmann::json& json, SyncConfig& config);
 
-enum class PolylineSfxStrategy {
-    Exact,             ///< 策略一: 所有子物件精确按照他们的类型播放对应音效
-    InternalAsNormal,  ///< 策略二: 仅"内部"子物件播放普通Note音效
-    OnlyTailExact,     ///< 策略三: 仅尾部子物件按类型播放
-    AllAsNormal        ///< 策略四: 全部子物件均播放普通Note音效
-};
-
-/// @brief 将折线音效策略序列化为稳定文本。
-void to_json(nlohmann::json& json, const PolylineSfxStrategy& strategy);
-/// @brief 从稳定文本读取折线音效策略。
-void from_json(const nlohmann::json& json, PolylineSfxStrategy& strategy);
-
+/// @brief 打击音效的独立开关、声像、增益与资源混音设置。
 struct SfxConfig {
-    /// @brief 折线内部子物件音效播放策略
-    PolylineSfxStrategy polylineStrategy{ PolylineSfxStrategy::Exact };
+    /// @brief 是否播放严格位于折线内部的滑键键音，不影响首尾或独立滑键。
+    bool enablePolylineInternalFlickSfx{ true };
 
     /// @brief Flick类型音效的播放是否跟随滑动轨道数量进行增益
     bool enableFlickWidthVolumeScaling{ false };
