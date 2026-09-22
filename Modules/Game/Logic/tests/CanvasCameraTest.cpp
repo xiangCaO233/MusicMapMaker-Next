@@ -465,9 +465,9 @@ bool testKeyModeBrushCreatesOnlyHold()
            note.m_duration > 0.0 && note.m_subNotes.empty();
 }
 
-/// @brief 验证长条教学独立起笔、取消和提交均不删除已有音符。
-/// @details 起点悬浮已有 Note，终点另放一个同轨 Note，分别触发普通编辑的
-/// 续接和尾部合并条件。教学命令必须绕过这两类改写，只管理本次新长条。
+/// @brief 验证滑键和长条教学的独立起笔、取消和提交均不删除已有音符。
+/// @details 起点悬浮已有 Note，拖动终点再放一个 Note，触发普通编辑的
+/// 续接和尾部合并条件。教学命令必须绕过这两类改写，只管理本次新物件。
 /// @par 验证边界
 /// 使用真实 DrawTool 命令链，覆盖 UI 下发独立放置标志后的持久化行为。
 /// Ctrl 在本测试中仅用于隔离坐标换算，不代表教学界面允许关闭吸附。
@@ -476,101 +476,122 @@ bool testKeyModeBrushCreatesOnlyHold()
 /// 原物件不加入动作栈，因此取消后执行 Undo 不应找到任何历史。
 /// 成功提交的 Undo 必须只移除新物件，原物件身份不可变化。
 /// 不创建窗口或渲染资源，不能据此推断高亮路径已经通过视觉验收。
-/// @return 原物件始终保留且新增 Hold 可独立撤销时返回 true。
-bool testWalkthroughStandaloneHold()
+/// @return 原物件始终保留且新增 Flick/Hold 可独立撤销时返回 true。
+bool testWalkthroughStandalonePlacement()
 {
-    // 取消与成功各用全新会话，避免前一次手势的历史掩盖副作用。
-    for ( const bool cancel : { true, false } ) {
-        MMM::Logic::SessionContext context;
-        configureObjectEditingCanvas(context);
-        context.lastConfig.settings.enablePolylineEditing = true;
-        // 开启路径清除，以验证独立放置同时绕过此类隐式删除。
-        context.lastConfig.settings.removeObjectsOnPolylinePath = true;
-        MMM::Logic::DrawTool tool;
-        // 固定相机下起点位于当前时间；原物件直接装入 ECS，不产生历史。
-        MMM::Logic::NoteComponent original;
-        original.m_type       = MMM::NoteType::NOTE;
-        original.m_timestamp  = context.currentTime;
-        original.m_trackIndex = 0;
-        const auto head       = context.noteRegistry.create();
-        context.noteRegistry.emplace<MMM::Logic::NoteComponent>(head, original);
-        context.hoveredEntity     = head;
-        context.hoveredObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
-        // 命中已有玩家物件并按 Shift，若保护失效会立即进入替换续接。
-        // 开启 Polyline 后普通 Shift 起笔会删除原对象，再以临时画笔续写。
-        // 此处检查提交之前的实体状态，避免结束阶段的恢复掩盖瞬时删除。
-        tool.handleStartBrush(
-            context,
-            MMM::Logic::CmdStartBrush{ .cameraId         = "Basic2DCanvas",
-                                       .mouseX           = 150.0F,
-                                       .mouseY           = 300.0F,
-                                       .isShiftDown      = true,
-                                       .isCtrlDown       = true,
-                                       .createStandalone = true });
-        if ( !context.noteRegistry.valid(head) ||
-             context.brushState.replacesExistingObject )
-            return false;
-        // 保持同轨，仅向更晚时间拖动，隔离普通 Hold 与折线手势。
-        tool.handleUpdateBrush(
-            context,
-            MMM::Logic::CmdUpdateBrush{ .cameraId    = "Basic2DCanvas",
-                                        .mouseX      = 150.0F,
-                                        .mouseY      = 100.0F,
-                                        .isShiftDown = true,
-                                        .isCtrlDown  = true });
-        const double duration = context.brushState.duration;
-        // 先验证预览类型，防止取消分支因没有创建有效画笔而虚假通过。
-        // 正时长也保证尾部与起点不同，覆盖两个独立的隐式删除入口。
-        if ( context.brushState.type != MMM::NoteType::HOLD || duration <= 0.0 )
-            return false;
-        // 从真实画笔结果取得终点，避免测试坐标换算误差绕开合并条件。
-        auto tailNote        = original;
-        tailNote.m_timestamp = context.brushState.time + duration;
-        const auto tail      = context.noteRegistry.create();
-        context.noteRegistry.emplace<MMM::Logic::NoteComponent>(tail, tailNote);
-        // 与起笔配对发送策略，结束命令不能恢复成普通的自动拼接提交。
-        // cancel 优先于创建和合并，失败练习因此不需要回滚其他编辑历史。
-        tool.handleEndBrush(
-            context,
-            MMM::Logic::CmdEndBrush{ .cameraId         = "Basic2DCanvas",
-                                     .cancel           = cancel,
-                                     .createStandalone = true });
-        // 原起点和尾部物件的身份、时间不变，不能以删除后重建冒充保留。
-        if ( !context.noteRegistry.valid(head) ||
-             !context.noteRegistry.valid(tail) ||
-             !near(context.noteRegistry.get<MMM::Logic::NoteComponent>(head)
-                       .m_timestamp,
-                   original.m_timestamp) ||
-             !near(context.noteRegistry.get<MMM::Logic::NoteComponent>(tail)
-                       .m_timestamp,
-                   tailNote.m_timestamp) )
-            return false;
-        const auto notes =
-            context.noteRegistry.view<MMM::Logic::NoteComponent>();
-        // 数量与身份联合约束：仅统计数量会漏掉删除原物件后创建替代品的情况。
-        // 失败不留下普通 Note、零长度 Hold 或折线子实体等残留。
-        if ( notes.size() != (cancel ? 2U : 3U) ) return false;
-        if ( !cancel ) {
-            // 成功只能增加一个独立、正时长的 Hold，不能把尾部 Note 拼进折线。
-            for ( const auto entity : notes ) {
-                if ( entity == head || entity == tail ) continue;
-                const auto& note = notes.get<MMM::Logic::NoteComponent>(entity);
-                // 验收持久化首尾时间，防止自动拼接后类型仍为 Hold 却长度已变。
-                // 轨号保持手势起点，不从终点附近的已有物件推导。
-                if ( note.m_type != MMM::NoteType::HOLD ||
-                     note.m_trackIndex != 0 ||
-                     !near(note.m_timestamp, original.m_timestamp) ||
-                     !near(note.m_duration, duration) )
-                    return false;
+    // 负、正轨差覆盖左右两个方向的 Flick；零轨差继续覆盖原有长条流程。
+    // 横移必须保留符号，不能只按绝对距离验收而把箭头方向翻转。
+    for ( const int laneDelta : { -2, 0, 2 } ) {
+        const int  startTrack = laneDelta < 0 ? 2 : 0;
+        const bool flick      = laneDelta != 0;
+        const auto expectedType =
+            flick ? MMM::NoteType::FLICK : MMM::NoteType::HOLD;
+        // 取消与成功各用全新会话，避免前一次手势的历史掩盖副作用。
+        for ( const bool cancel : { true, false } ) {
+            MMM::Logic::SessionContext context;
+            configureObjectEditingCanvas(context);
+            context.lastConfig.settings.enablePolylineEditing = true;
+            // 开启路径清除，以验证独立放置同时绕过此类隐式删除。
+            context.lastConfig.settings.removeObjectsOnPolylinePath = true;
+            MMM::Logic::DrawTool tool;
+            // 固定相机下起点位于当前时间；原物件直接装入 ECS，不产生历史。
+            MMM::Logic::NoteComponent original;
+            original.m_type       = MMM::NoteType::NOTE;
+            original.m_timestamp  = context.currentTime;
+            original.m_trackIndex = startTrack;
+            const auto head       = context.noteRegistry.create();
+            context.noteRegistry.emplace<MMM::Logic::NoteComponent>(head,
+                                                                    original);
+            context.hoveredEntity     = head;
+            context.hoveredObjectKind = MMM::Logic::ChartObjectKind::PlayerNote;
+            // 命中已有玩家物件并按 Shift，若保护失效会立即进入替换续接。
+            // 开启 Polyline 后普通 Shift 起笔会删除原对象，再以临时画笔续写。
+            // 此处检查提交之前的实体状态，避免结束阶段的恢复掩盖瞬时删除。
+            tool.handleStartBrush(context,
+                                  MMM::Logic::CmdStartBrush{
+                                      .cameraId = "Basic2DCanvas",
+                                      .mouseX   = 150.0F + 100.0F * startTrack,
+                                      .mouseY   = 300.0F,
+                                      .isShiftDown      = true,
+                                      .isCtrlDown       = true,
+                                      .createStandalone = true });
+            if ( !context.noteRegistry.valid(head) ||
+                 context.brushState.replacesExistingObject )
+                return false;
+            // Flick 保持同拍只改变轨道；Hold 保持同轨只改变时间。
+            // 不做对角拖动，以免测试本身先生成折线而掩盖独立滑键的协议。
+            tool.handleUpdateBrush(
+                context,
+                MMM::Logic::CmdUpdateBrush{
+                    .cameraId    = "Basic2DCanvas",
+                    .mouseX      = 150.0F + 100.0F * (startTrack + laneDelta),
+                    .mouseY      = flick ? 300.0F : 100.0F,
+                    .isShiftDown = true,
+                    .isCtrlDown  = true });
+            const double duration = context.brushState.duration;
+            // 先验证预览类型，防止取消分支因没有创建有效画笔而虚假通过。
+            // Flick 持续时间为零但轨差非零；Hold 持续时间为正但轨差为零。
+            // 两种几何都使尾部与起点不同，覆盖两个独立的隐式删除入口。
+            if ( context.brushState.type != expectedType ||
+                 context.brushState.dtrack != laneDelta ||
+                 (flick ? !near(duration, 0.0) : duration <= 0.0) )
+                return false;
+            // 从真实画笔结果取得终点，避免测试坐标换算误差绕开合并条件。
+            auto tailNote        = original;
+            tailNote.m_timestamp = context.brushState.time + duration;
+            // 滑键尾部位于目的轨，不能误把同轨重叠当作跨轨拼接覆盖。
+            tailNote.m_trackIndex = startTrack + laneDelta;
+            const auto tail       = context.noteRegistry.create();
+            context.noteRegistry.emplace<MMM::Logic::NoteComponent>(tail,
+                                                                    tailNote);
+            // 与起笔配对发送策略，结束命令不能恢复成普通的自动拼接提交。
+            // cancel 优先于创建和合并，失败练习因此不需要回滚其他编辑历史。
+            tool.handleEndBrush(
+                context,
+                MMM::Logic::CmdEndBrush{ .cameraId         = "Basic2DCanvas",
+                                         .cancel           = cancel,
+                                         .createStandalone = true });
+            // 原起点和尾部物件的身份、时间不变，不能以删除后重建冒充保留。
+            if ( !context.noteRegistry.valid(head) ||
+                 !context.noteRegistry.valid(tail) ||
+                 !near(context.noteRegistry.get<MMM::Logic::NoteComponent>(head)
+                           .m_timestamp,
+                       original.m_timestamp) ||
+                 !near(context.noteRegistry.get<MMM::Logic::NoteComponent>(tail)
+                           .m_timestamp,
+                       tailNote.m_timestamp) )
+                return false;
+            const auto notes =
+                context.noteRegistry.view<MMM::Logic::NoteComponent>();
+            // 数量与身份联合约束：仅统计数量会漏掉删除原物件后创建替代品的情况。
+            // 失败不留下普通 Note、零长度 Hold 或折线子实体等残留。
+            if ( notes.size() != (cancel ? 2U : 3U) ) return false;
+            if ( !cancel ) {
+                // 成功只能增加一个独立 Flick/Hold，不能把尾部 Note 拼进折线。
+                for ( const auto entity : notes ) {
+                    if ( entity == head || entity == tail ) continue;
+                    const auto& note =
+                        notes.get<MMM::Logic::NoteComponent>(entity);
+                    // 验收持久化时间与方向，防止自动拼接后类型相同却几何已变。
+                    // 轨号保持手势起点，不从终点附近的已有物件推导。
+                    if ( note.m_type != expectedType ||
+                         note.m_trackIndex != startTrack ||
+                         note.m_dtrack != laneDelta ||
+                         !near(note.m_timestamp, original.m_timestamp) ||
+                         !near(note.m_duration, duration) )
+                        return false;
+                }
             }
+            // 取消没有动作可撤销；成功则撤销本次新物件。两者均回到原始两颗
+            // Note。
+            context.actionStack.undo(context);
+            // Registry 视图引用同一个存储，Undo
+            // 后重新查询大小检查实际删除结果。 仅撤销新
+            // Flick/Hold，不要求对教程之前的编辑作任何回滚。
+            if ( notes.size() != 2U || !context.noteRegistry.valid(head) ||
+                 !context.noteRegistry.valid(tail) )
+                return false;
         }
-        // 取消没有动作可撤销；成功则撤销本次 Hold。两者均回到原始两颗 Note。
-        context.actionStack.undo(context);
-        // Registry 视图引用同一个存储，Undo 后重新查询大小检查实际删除结果。
-        // 仅撤销新 Hold，不要求对教程之前的编辑作任何回滚。
-        if ( notes.size() != 2U || !context.noteRegistry.valid(head) ||
-             !context.noteRegistry.valid(tail) )
-            return false;
     }
     return true;
 }
@@ -7601,7 +7622,7 @@ int main()
     return testKeyModeInteractionRestriction() &&
                    testSelectAllRespectsPointerTrackArea() &&
                    testKeyModeBrushCreatesOnlyHold() &&
-                   testWalkthroughStandaloneHold() &&
+                   testWalkthroughStandalonePlacement() &&
                    testDownwardBrushCreatesZeroLengthHold() &&
                    testDownwardFlickAndPolylineRemainSlides() &&
                    testPolylinePreservesHorizontalFirstGestureOrder() &&

@@ -289,7 +289,7 @@ int main(int argc, char** argv)
          !composeBeatmapTopic->m_requiresBeatmap ||
          composeBeatmapTopic->m_order != 40 ||
          composeBeatmapTopic->m_branches.size() != 1 ||
-         composeBeatmapTopic->m_branches.front().m_steps.size() != 6 ||
+         composeBeatmapTopic->m_branches.front().m_steps.size() != 7 ||
          topicAvailable(*composeBeatmapTopic, false, false) ||
          topicAvailable(*composeBeatmapTopic, true, false) ||
          !topicAvailable(*composeBeatmapTopic, true, true) )
@@ -312,8 +312,11 @@ int main(int argc, char** argv)
              std::vector<std::string>{ "compose.canvas.player" } ||
          composeSteps[4].m_guide->m_targets !=
              std::vector<std::string>{ "compose.canvas.place-note" } ||
-         // 长条必须紧接单键，同一轮路线保留实际单键落点用于附近异轨约束。
+         // 滑键必须排在长条之前，不能只改正文标题却保留原执行顺序。
          composeSteps[5].m_guide->m_targets !=
+             std::vector<std::string>{ "compose.canvas.place-flick" } ||
+         // 长条仍借用单键落点，不因插入 Flick 改成以滑键为时间或轨道参考。
+         composeSteps[6].m_guide->m_targets !=
              std::vector<std::string>{ "compose.canvas.place-hold" } )
         return 68;
     // 空白流程的六个目标依次对应菜单入口、音频、自动测偏、BPM 复核、

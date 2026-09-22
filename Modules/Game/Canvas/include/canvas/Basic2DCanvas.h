@@ -184,6 +184,13 @@ protected:
     void invalidateShaderSourceCache() override;
 
 private:
+    /// @brief 当前教学路径的几何语义，防止步骤切换复用上一种物件的目标。
+    enum class WalkthroughPlacementKind : std::uint8_t {
+        Note,   ///< 跨轨、跨拍移动后放下单键。
+        Flick,  ///< 同拍横向跨轨绘制滑键。
+        Hold,   ///< 同轨向后延伸绘制长条。
+    };
+
     /// @brief 创作教程一次固定拖拽路径的分拍与轨道目标。
     struct WalkthroughNoteDragTarget {
         std::uintptr_t beatmapInstanceId{ 0 };  ///< 防止跨谱面复用旧路径。
@@ -191,7 +198,8 @@ private:
         int            destinationTrack{ 0 };   ///< 松开目标所在玩家轨。
         double         sourceTime{ 0.0 };       ///< 起点精确分拍时间。
         double         destinationTime{ 0.0 };  ///< 目标精确分拍时间。
-        bool           isHold{ false };         ///< 是否为同轨 Shift 长条路径。
+        /// @brief 路径对应的物件类型，用于进入新步骤时清除旧目标。
+        WalkthroughPlacementKind kind{ WalkthroughPlacementKind::Note };
     };
 
     /// @brief 获取画布字体逻辑像素到物理栅格像素的当前倍率。
@@ -208,7 +216,7 @@ private:
                                       const ImVec2&  canvasScreenPosition,
                                       const ImVec2&  canvasSize);
 
-    /// @brief 绘制并验证创作教程的单键或 Shift 长条拖拽路径。
+    /// @brief 绘制并验证创作教程的单键、Shift 滑键和长条拖拽路径。
     /// @param sourceManager 提供演练状态机。
     /// @param snapshot 当前谱面与画笔状态快照。
     /// @param canvasScreenPosition 主画布左上角屏幕坐标。
@@ -347,7 +355,7 @@ private:
 
     /// @brief 当前创作教程固定使用的起点和目标分拍。
     std::optional<WalkthroughNoteDragTarget> m_walkthroughNoteDragTarget;
-    /// @brief 上次单键成功放置的位置，跨步骤保留以约束长条必须邻近且异轨。
+    /// @brief 单键成功落点，跨滑键步骤保留以约束后续长条必须邻近且异轨。
     std::optional<WalkthroughNoteDragTarget> m_walkthroughPlacedNote;
     /// @brief 本次左键尝试是否从画布内开始。
     bool m_walkthroughNoteAttemptActive{ false };
@@ -357,7 +365,7 @@ private:
     bool m_walkthroughNoteDragged{ false };
     /// @brief 逻辑快照是否确认本次画笔已激活。
     bool m_walkthroughNoteBrushObserved{ false };
-    /// @brief 本次尝试是否违反修饰键规则：单键禁 Shift，长条要求持续 Shift。
+    /// @brief 本次尝试是否违反修饰键规则：单键禁 Shift，滑键和长条持续 Shift。
     bool m_walkthroughNoteModifierUsed{ false };
 
     /// @brief 上一次应用到动态顶点上的 Y 偏移量
