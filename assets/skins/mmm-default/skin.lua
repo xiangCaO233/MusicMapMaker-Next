@@ -265,6 +265,8 @@ local Skin = {
 			effect = {
 				-- 方括号范围由皮肤加载器展开为连续序列帧路径。
 				note = "image/note/effect/note/[1 .. 6].png",
+				-- Hold 独立配置，初始复制单键帧序列；共享原文件但不共享序列身份。
+				hold = "image/note/effect/note/[1 .. 6].png",
 				flick = "image/note/effect/flick/[1 .. 16].png",
 			},
 		},

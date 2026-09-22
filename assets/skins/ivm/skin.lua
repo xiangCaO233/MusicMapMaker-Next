@@ -280,6 +280,8 @@ return {
 			effect = {
 				-- 方括号范围由加载器展开为连续的 note 与 flick 帧。
 				note = resource("image/note/effect/note/[1 .. 6].png"),
+				-- 长按独立循环相同的六帧轨道光，保留本皮肤的整轨铺满布局。
+				hold = resource("image/note/effect/note/[1 .. 6].png"),
 				flick = resource("image/note/effect/flick/[1 .. 16].png"),
 			},
 		},

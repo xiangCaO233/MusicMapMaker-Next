@@ -171,9 +171,9 @@ bool verifyLegacyAppConfigSemantics()
     // 插件主题同时携带禁用插件 ID，验证两个相关字段独立往返。
     MMM::Config::EditorSettings pluginSettings;
     const nlohmann::json        pluginJson{
-        { "theme", "example.twilight" },
-        { "disabledPluginIds",
-          nlohmann::json::array({ "themes/example.lua" }) },
+               { "theme", "example.twilight" },
+               { "disabledPluginIds",
+                 nlohmann::json::array({ "themes/example.lua" }) },
     };
     from_json(pluginJson, pluginSettings);
     // 禁用列表与主题值在同一 EditorSettings 读取中独立恢复。
@@ -277,8 +277,8 @@ bool verifyDraftPalette(const std::filesystem::path& skinPath,
     // 每套内置皮肤分别调用该 helper，确保两者都满足草稿视觉契约。
     auto& skinManager = MMM::Config::SkinManager::instance();
     bool  ok = check(skinManager.loadSkin(MMM::Config::pathToUtf8(skinPath),
-                                          translationsRoot),
-                     "内置皮肤草稿配色检查前应成功加载");
+                                         translationsRoot),
+                    "内置皮肤草稿配色检查前应成功加载");
     // 键清单覆盖六类草稿物件和五类草稿轨道呈现。
     constexpr std::array<std::string_view, 11> DRAFT_COLOR_KEYS{
         "draft_notes.note_tap",      "draft_notes.note_head",
@@ -450,8 +450,10 @@ bool verifyIvmSkin(const std::filesystem::path& skinPath,
         std::size_t frameCount;
     };
     // 普通音符与 Flick 使用不同帧数，但共享单帧纵向渐变尺寸。
-    constexpr std::array<EffectExpectation, 2> EFFECT_EXPECTATIONS{
+    // Hold 是独立序列，但初始复用单键的六张原图，不额外复制二进制资源。
+    constexpr std::array<EffectExpectation, 3> EFFECT_EXPECTATIONS{
         EffectExpectation{ "note.effect.note", "note", 6U },
+        EffectExpectation{ "note.effect.hold", "note", 6U },
         EffectExpectation{ "note.effect.flick", "flick", 16U },
     };
     // 期望根由 IVM 入口推导，不依赖进程工作目录。
@@ -467,7 +469,7 @@ bool verifyIvmSkin(const std::filesystem::path& skinPath,
         ok &= check(sequence->frames.size() == expectation.frameCount,
                     "IVM 特效序列帧数不符合约定");
         // 帧数在遍历前验证，但实际循环仍检查加载器返回的全部路径。
-        // 每类序列拥有独立子目录，所有帧必须保持在对应根内。
+        // 单键和 Hold 共享单键子目录，Flick 独立；所有帧保持在声明的根内。
         const auto expectedDirectory =
             (effectRoot / expectation.directory).lexically_normal();
         // 遍历全部帧而非首尾抽样，能发现中间缺失或跨目录引用。
@@ -527,14 +529,19 @@ bool verifyDefaultSkinEffectFrameRate(
     // 通过生产加载入口解析默认皮肤，避免测试直接读取 Lua 文本。
     auto& skinManager = MMM::Config::SkinManager::instance();
     bool  ok = check(skinManager.loadSkin(MMM::Config::pathToUtf8(skinPath),
-                                          translationsRoot),
-                     "默认内置皮肤应成功加载");
+                                         translationsRoot),
+                    "默认内置皮肤应成功加载");
     // 帧率值来自 meta.effectbasefps 或加载器默认契约。
     ok &= check(skinManager.getEffectBaseFps() == 120.0F,
                 "默认内置皮肤序列帧动画必须以 120 FPS 播放");
     // 同一个图集可同时包含覆盖型判定反馈与加法型爆炸光。
     const auto* note  = skinManager.getEffectSequence("note.effect.note");
     const auto* flick = skinManager.getEffectSequence("note.effect.flick");
+    const auto* hold  = skinManager.getEffectSequence("note.effect.hold");
+    // 独立 ID 保证 Hold 可单独替换，帧路径相等则验证初始序列逐帧复制。
+    ok &= check(note && hold && hold->frames == note->frames &&
+                    hold->startId != note->startId && !hold->additiveBlend,
+                "默认 Hold 必须独立配置且复用完整单键帧序列");
     // 短路条件先验证指针存在，再读取混合标志，避免空指针访问。
     ok &= check(note && flick && !note->additiveBlend && flick->additiveBlend,
                 "默认皮肤只对爆炸光启用加法混合");
@@ -601,19 +608,38 @@ bool verifyRmSkin(const std::filesystem::path& skinPath,
                     "RM 资产引用必须落到真实文件");
     }
     // 原包两组连续序列长度不同，分别检查可避免错接到默认六帧特效。
-    // 两类特效按皮肤代际选择各自原包帧数。
-    for ( const auto* key : { "note.effect.note", "note.effect.flick" } ) {
+    // 单键与滑键保持原序列长度，Hold 单独检查所截取的循环范围。
+    for ( const auto* key :
+          { "note.effect.note", "note.effect.flick", "note.effect.hold" } ) {
         const auto*       sequence = manager.getEffectSequence(key);
-        const std::size_t expected = std::string_view(key) == "note.effect.note"
-                                         ? (old ? 9U : 17U)
-                                         : (old ? 16U : 18U);
+        const bool        hold = std::string_view(key) == "note.effect.hold";
+        const std::size_t expected =
+            hold                                          ? (old ? 8U : 9U)
+            : std::string_view(key) == "note.effect.note" ? (old ? 9U : 17U)
+                                                          : (old ? 16U : 18U);
         // 期望帧数按序列类型和资源代际二维选择，避免交叉套用。
         ok &= check(sequence && sequence->frames.size() == expected,
                     "RM 原包帧序必须完整");
         // 缺失序列已计入失败，跳过后续帧访问以继续汇总其他断言。
         if ( !sequence ) continue;
+        if ( hold ) {
+            const auto* flick = manager.getEffectSequence("note.effect.flick");
+            // 后半段与滑键共享文件但保持独立序列，不能误取单键消散帧。
+            // 不只检查首尾路径，逐帧比较保证中间范围也保持顺序。
+            // 先约束两侧范围长度，错误配置也不能令断言自身越过迭代器边界。
+            ok &= check(flick && flick->frames.size() >= expected &&
+                            sequence->frames.size() == expected &&
+                            sequence->startId != flick->startId &&
+                            std::equal(sequence->frames.begin(),
+                                       sequence->frames.end(),
+                                       flick->frames.end() - expected),
+                        "RM Hold 必须精确使用滑键后半段稳定帧");
+        }
         ok &= check(sequence->additiveBlend, "RM 打击光应使用加法混合");
-        // 两类 RM 特效都使用加法混合，与默认皮肤普通反馈不同。
+        // 三类 RM 特效都使用加法混合，与默认皮肤普通反馈不同。
+        // Hold 不能因新增资源键遗漏 blend 声明而出现覆盖型暗斑。
+        // 独立帧 ID 和独立混合配置共同构成可单独替换的动画契约。
+        // 路径复用只节省源文件，不表示运行时回退成 Flick 类型。
         // 校验落盘帧而非仅检查 Lua 的范围字符串，缺失末帧也应失败。
         // 每一帧都验证可读 PNG，覆盖范围展开后的中间路径。
         for ( const auto& frame : sequence->frames ) {

@@ -1,6 +1,7 @@
 #include "logic/ecs/system/HitFXSystem.h"
 
 #include "audio/StereoGainEnvelope.h"
+#include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "log/colorful-log.h"
 #include "logic/ecs/system/render/Batcher.h"
@@ -8,11 +9,16 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <system_error>
+#include <vector>
 
 namespace
 {
 
-// 测试只验证声像包络与特效状态计算，不加载音频文件、不启动声卡或图形设备。
+// 测试验证声像包络及皮肤序列的 CPU 快照，不加载音频文件、不启动声卡或图形设备。
 // 资源键采用符号字符串，sample.wav 无需存在；不能据此声称实际混音链路已验证。
 
 /// @brief 使用小容差比较声道增益。
@@ -485,14 +491,159 @@ bool testEffectBlendBatchBoundaries()
     return true;
 }
 
+/// @brief 验证普通长条与折线 Hold 始终取独立循环帧，尾部清理及跳转恢复一致。
+/// @param holdKey 新皮肤使用独立键，旧皮肤用单键键验证兼容回退。
+/// @note UV 只注册当前期望帧；选错序列或取模错误都会导致缺少几何。
+/// 直接驱动触发、寿命更新和快照链路，不以纯辅助函数的返回值替代实际行为。
+/// 本用例的 Hold 持续两秒，超过所有测试皮肤的一轮动画与普通命中特效寿命。
+/// 同一组时刻用于普通 Hold 和折线内部段，确保两者没有不同的序列选择规则。
+/// 皮肤在函数执行期间保持不变，序列指针不能跨下一次加载继续借用。
+/// UV 哨兵同时覆盖帧起始 ID 与相对帧号，不只是检查特效容器有成员。
+bool verifyHoldVisualPlayback(const std::string& holdKey)
+{
+    using System         = MMM::Logic::System::HitFXSystem;
+    using Strategy       = MMM::Config::PolylineSfxStrategy;
+    auto&       manager  = MMM::Config::SkinManager::instance();
+    const auto* sequence = manager.getEffectSequence(holdKey);
+    // 无序列直接失败，避免空资源测试因为“没有绘制”而虚假通过。
+    if ( !sequence || sequence->frames.empty() ) return false;
+    // 折线的声音简化策略不应改变长按视觉；四种策略都必须覆盖。
+    for ( const auto strategy : { Strategy::Exact,
+                                  Strategy::InternalAsNormal,
+                                  Strategy::OnlyTailExact,
+                                  Strategy::AllAsNormal } ) {
+        for ( const bool subNote : { false, true } ) {
+            // 每种策略和物件身份使用全新系统，不能继承前一场景的活跃事件。
+            // config 只改变键音策略；视觉开关显式打开，不读取个人设置。
+            MMM::Config::EditorConfig config;
+            config.settings.sfxConfig.polylineStrategy = strategy;
+            config.visual.enableHitEffects             = true;
+            auto event      = makeEvent(MMM::NoteType::HOLD, 0);
+            event.duration  = 2.0;
+            event.isSubNote = subNote;
+            // Internal 是简化策略会改成单键的关键角色，最容易误选旧动画。
+            // 普通长条则保留 None，不让测试事件本身混入折线角色语义。
+            event.role = subNote ? System::HitEvent::Role::Internal
+                                 : System::HitEvent::Role::None;
+            System system;
+            system.update(0.0, { event }, 4, config);
+            // 时间跨越多轮动画和普通特效寿命，验证长按不会被单键寿命裁掉。
+            // 取非整周期时刻，避免错误地总取第一帧也能通过。
+            for ( const double time : { 0.0, 0.041, 0.317, 1.073 } ) {
+                // 后续 update 不重发命中事件，否则会掩盖持续实例提前消失。
+                // 每帧使用新快照，不能让上一帧的顶点冒充本帧输出。
+                system.update(time, {}, 4, config);
+                MMM::Logic::RenderSnapshot  snapshot;
+                MMM::Logic::System::Batcher batcher(&snapshot);
+                const auto frame = System::loopingEffectFrameIndex(
+                    time, manager.getEffectBaseFps(), sequence->frames.size());
+                if ( !frame ) return false;
+                // 只有正确帧拥有 UV；错误选到 note/flick 时无法提交矩形。
+                // 图集比例为一仅固定几何尺寸，不参与动画帧选择算法。
+                snapshot.uvMap[sequence->startId +
+                               static_cast<uint32_t>(*frame)] = { 0, 0, 1, 1 };
+                system.generateSnapshot(
+                    batcher, time, config, 4, 300, 0, 0, 600, 100);
+                // 两种布局都应输出一个完整矩形；RM 的 Hold
+                // 同时必须保持加法混合。
+                // Batcher 用四顶点与索引表达一个特效，不应叠画单键加 Hold。
+                if ( snapshot.vertices.size() != 4U ||
+                     snapshot.cmds.size() != 1U ||
+                     snapshot.cmds.front().additiveBlend !=
+                         sequence->additiveBlend ) {
+                    XERROR("Hold did not render its expected looping frame: {}",
+                           holdKey);
+                    return false;
+                }
+            }
+            // 恢复中段使用原始事件起点作为相位，不允许从单键帧或首帧重新闪起。
+            system.clearActiveEffects();
+            // 恢复不重发声音，仍通过同一个视觉触发入口选择 Hold 序列。
+            const std::vector<System::HitEvent> events{ event };
+            if ( system.restoreActiveHoldEffects(1.0, events, config) != 1U )
+                return false;
+            MMM::Logic::RenderSnapshot  snapshot;
+            MMM::Logic::System::Batcher batcher(&snapshot);
+            const auto                  frame = System::loopingEffectFrameIndex(
+                1.0, manager.getEffectBaseFps(), sequence->frames.size());
+            // 前面的多时刻检查已验证帧率与帧数有效，恢复仍按原事件相位计算。
+            snapshot.uvMap[sequence->startId +
+                           static_cast<uint32_t>(*frame)] = { 0, 0, 1, 1 };
+            system.generateSnapshot(
+                batcher, 1.0, config, 4, 300, 0, 0, 600, 100);
+            if ( snapshot.vertices.empty() ) return false;
+            // 清理检查提供整组有效 UV，避免三秒时帧号变化造成缺纹理假阳性。
+            // 这里刻意放宽资源哨兵，让唯一的无几何原因只能是活动实例已结束。
+            snapshot.vertices.clear();
+            snapshot.cmds.clear();
+            for ( std::size_t index = 0; index < sequence->frames.size();
+                  ++index )
+                snapshot.uvMap[sequence->startId +
+                               static_cast<uint32_t>(index)] = { 0, 0, 1, 1 };
+            // 只注册当前 Hold 序列；不同皮肤中的帧号和起始 ID 不共享。
+            system.update(3.0, {}, 4, config);
+            // 检查时刻既超过物件尾部也超过最短动画周期，两种寿命条件均成立。
+            system.generateSnapshot(
+                batcher, 3.0, config, 4, 300, 0, 0, 600, 100);
+            if ( !snapshot.vertices.empty() ) return false;
+        }
+    }
+    return true;
+}
+
+/// @brief 加载四套真实皮肤及缺少 Hold 键的旧皮肤，验证序列选择和回退。
+/// @note 只解析配置与构造 CPU 快照；这里不上传纹理，也不声称 GPU 像素验收。
+/// @param outputRoot 专用构建输出目录，所有夹具都写在此处。
+/// @param skinsRoot 随仓库分发的四套皮肤入口父目录。
+/// @param translationsRoot 公共翻译资源，不借用用户配置中的本地化文件。
+/// @return 任一真实皮肤无法绘制或旧皮肤无法回退时返回 false。
+/// @warning 仅测试初始化路径执行文件访问，不进入正式应用的渲染循环。
+bool testHoldVisualSkins(const std::filesystem::path& skinsRoot,
+                         const std::filesystem::path& translationsRoot,
+                         const std::filesystem::path& outputRoot)
+{
+    auto& manager = MMM::Config::SkinManager::instance();
+    for ( const auto* name : { "mmm-default", "ivm", "rm", "rm-old" } ) {
+        // 每次重新加载都重新查询序列，避免排序分配后的帧 ID 跨皮肤混用。
+        // 完整资源路径、截取范围及混合声明另由 SkinThemeBindingTest 检查。
+        if ( !manager.loadSkin(
+                 MMM::Config::pathToUtf8(skinsRoot / name / "skin.lua"),
+                 translationsRoot) ||
+             !verifyHoldVisualPlayback("note.effect.hold") )
+            return false;
+    }
+    // 模拟旧包只声明单键序列，不能为了测试回退而修改真实皮肤。
+    std::error_code error;
+    std::filesystem::create_directories(outputRoot, error);
+    // 文件系统失败属于测试环境错误，不忽略后继续加载上次运行的夹具。
+    if ( error ) return false;
+    const auto path = outputRoot / "legacy-skin.lua";
+    {
+        // 固定夹具文件只覆盖本测试的构建输出；不递归删除任何资源目录。
+        std::ofstream file(path);
+        file << "return { meta={effectbasefps=60}, "
+                "assets={note={effect={note='note/[1 .. 3].png'}}} }";
+        // 加载器只展开路径；CPU 快照提供合成 UV，不要求生成测试 PNG。
+        file.close();
+        // 显式关闭后再加载，以便把写入或关闭失败作为测试失败而非解析噪声。
+        if ( !file ) return false;
+    }
+    return manager.loadSkin(MMM::Config::pathToUtf8(path), translationsRoot) &&
+           // 未声明 Hold 时，实际渲染必须消费单键帧的 ID，而不是静默消失。
+           verifyHoldVisualPlayback("note.effect.note");
+}
 }  // namespace
 
 /// @brief 运行 HitEffect 立体声定位测试。
 /// @return 全部测试通过时返回 0。
+/// @param argc 应为程序名加三个独立路径参数。
+/// @param argv 内置皮肤根、翻译根和专用测试输出目录。
 /// @note 同时覆盖绑定分类、视觉边界和中途恢复；名称不代表只运行声道计算。
-/// @note 无外部路径参数，不读取用户谱面，也不创建音频测试产物。
-int main()
+/// @note 资源与夹具根由 CTest 显式传入，不读取用户谱面或产生音频文件。
+int main(int argc, char* argv[])
 {
+    // CTest 提供全部路径，缺参时明确失败而非按当前工作目录猜测资源位置。
+    if ( argc != 4 ) return 1;
     // 各有状态场景自行创建系统，不复用前一场景的 KPS 或活跃特效。
     // 纯计算用例先执行，状态恢复用例最后执行，顺序不表示状态应跨场景传递。
     // 短路执行；只有退出零才能证明全部场景都已执行且通过。
@@ -509,7 +660,10 @@ int main()
                    testDraftEventsDoNotAffectPlayerKps() &&
                    testTrackFillHitEffectBounds() &&
                    testNonHoldHitEffectPlayback() &&
-                   testRestoreActiveHoldEffectsFromMiddle()
+                   testRestoreActiveHoldEffectsFromMiddle() &&
+                   testHoldVisualSkins(MMM::Config::utf8ToPath(argv[1]),
+                                       MMM::Config::utf8ToPath(argv[2]),
+                                       MMM::Config::utf8ToPath(argv[3]))
                ? 0
                : 1;
 }

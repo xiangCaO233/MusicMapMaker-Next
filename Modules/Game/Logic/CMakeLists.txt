@@ -339,7 +339,14 @@ add_test(NAME RegistrySnapshotLifetimeTest COMMAND RegistrySnapshotLifetimeTest)
 # Audio 依赖保持 PRIVATE，测试程序不向其他目标导出音频使用要求。 此处只注册测试目标，不在 CMake 配置阶段打开音频设备或执行测试程序。
 mmm_add_test_executable(Logic HitEffectStereoTest tests/HitEffectStereoTest.cpp)
 target_link_libraries(HitEffectStereoTest PRIVATE Logic Audio Log)
-add_test(NAME HitEffectStereoTest COMMAND HitEffectStereoTest)
+# Hold 视觉测试路径契约： - 从实际内置皮肤加载序列，不依赖用户当前选择。 - 翻译根显式传递，不依赖 CTest 工作目录。 -
+# 兼容夹具只写入构建树，不污染源码资源目录。
+add_test(
+  NAME HitEffectStereoTest
+  COMMAND
+    HitEffectStereoTest "${CMAKE_SOURCE_DIR}/assets/skins"
+    "${CMAKE_SOURCE_DIR}/assets/translations"
+    "${CMAKE_BINARY_DIR}/test_output/hold_effects")
 
 # 旧 MMM 加载诊断测试覆盖一次载入内的事件生成、去重与空输入行为。
 mmm_add_test_executable(Logic BeatmapLoadDiagnosticPublisherTest

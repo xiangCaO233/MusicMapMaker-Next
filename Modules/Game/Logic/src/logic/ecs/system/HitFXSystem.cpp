@@ -7,6 +7,29 @@
 
 namespace MMM::Logic::System
 {
+namespace
+{
+/// @brief 解析独立视觉序列，未声明 Hold 的旧皮肤继续使用单键动画。
+/// @note 返回当前皮肤的借用指针，不跨皮肤重载缓存序列地址或纹理 ID。
+/// @warning 更新及渲染热路径：只查询已有表，静态键避免逐帧拼接分配。
+const Config::SkinData::EffectSequence* resolveVisualSequence(
+    const std::string& effectKey)
+{
+    static const std::string NOTE_KEY  = "note.effect.note";
+    static const std::string FLICK_KEY = "note.effect.flick";
+    static const std::string HOLD_KEY  = "note.effect.hold";
+    auto&                    manager   = Config::SkinManager::instance();
+    const auto*              sequence =
+        manager.getEffectSequence(effectKey == "hold"    ? HOLD_KEY
+                                  : effectKey == "flick" ? FLICK_KEY
+                                                         : NOTE_KEY);
+    // 只对可选的 Hold 提供兼容回退，不能把缺失的 Flick 偷换为单键。
+    // 寿命计算与取帧必须共用此入口，避免旧皮肤的长按被提前清理。
+    if ( effectKey == "hold" && (!sequence || sequence->frames.empty()) )
+        sequence = manager.getEffectSequence(NOTE_KEY);
+    return sequence;
+}
+}  // namespace
 
 /// @brief 判断非持续型特效是否达到结束时刻。
 /// @param elapsed 相对触发时间的经过秒数，允许尚未到达触发时刻。
@@ -293,7 +316,10 @@ void HitFXSystem::triggerVisual(const HitEvent&             ev,
         }
     }
 
-    if ( effectiveType == ::MMM::NoteType::FLICK ) {
+    if ( ev.type == ::MMM::NoteType::HOLD ) {
+        // 持续视觉按真实段类型选择；折线键音策略不能把 Hold 循环降级为单键。
+        effectKey = "hold";
+    } else if ( effectiveType == ::MMM::NoteType::FLICK ) {
         effectKey = "flick";
     }
 
@@ -384,13 +410,12 @@ void HitFXSystem::update(double                       animateTime,
 
         if ( active.isHold ) {
             // 长条最短可见时长取皮肤一轮动画长度，持续阶段允许循环播放。
-            auto&       skinManager = Config::SkinManager::instance();
-            const auto* seq = skinManager.getEffectSequence("note.effect." +
-                                                            active.effectKey);
+            auto&             skinManager = Config::SkinManager::instance();
+            const auto*       seq = resolveVisualSequence(active.effectKey);
             const std::size_t frameCount = seq ? seq->frames.size() : 0U;
             const float       baseFps    = skinManager.getEffectBaseFps();
             // 对于 Hold，如果当前时间超过了 Hold
-            // 结束时间，且至少播放完一个完整的普通动画周期，则结束
+            // 结束时间，且至少播放完一个完整的 Hold 动画周期，则结束
             // 这确保了极短或 0 时长的 Hold 也能正常播放完一个完整的打击动画
             double animDuration = static_cast<double>(frameCount) / baseFps;
             // 两个结束条件必须同时成立：长条已过尾部，且最短动画周期已完成。
@@ -532,8 +557,7 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
         (void)track;
         if ( active.isDraft != renderDraftEffects ) continue;
         // 两个区域分别绘制，共享活动表但不重复提交同一特效。
-        const auto* seq =
-            skinManager.getEffectSequence("note.effect." + active.effectKey);
+        const auto* seq = resolveVisualSequence(active.effectKey);
         if ( !seq || seq->frames.empty() ) continue;
         // 皮肤没有对应序列时跳过几何，不在快照生成阶段补载资源。
 

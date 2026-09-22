@@ -234,7 +234,7 @@ private:
         int trackOffset{ 0 };
         /// @brief 是否为 Hold 物件。
         bool isHold{ false };
-        /// @brief 皮肤特效序列标识，为 note 或 flick。
+        /// @brief 皮肤视觉序列标识：note、flick 或持续长按专用的 hold。
         std::string effectKey;
     };
 
