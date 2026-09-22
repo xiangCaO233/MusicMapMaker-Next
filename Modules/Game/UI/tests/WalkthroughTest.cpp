@@ -37,7 +37,8 @@
 /// - 模板谱面流程覆盖模板选择、复制选项、资源和创建目标；
 /// - 编辑区简介要求活动项目和已打开谱面两个入口条件；
 /// - 编辑区简介包含谱面标签、三类轨道、批注、时间线和工具栏；
-/// - 批注说明位于 BGM 说明之前；
+/// - 草稿、批注与 BGM 区分别拥有独立的完整可见拖动步骤；
+/// - 批注拖动与说明位于 BGM 拖动与说明之前；
 /// - 时间线说明位于工具栏说明之前；
 /// - 音频管理依次覆盖资源列表、全局设置和底部入口；
 /// - 编辑区简介每一步都提供可重放 guide；
@@ -236,24 +237,39 @@ int main(int argc, char** argv)
          !editorOverviewTopic->m_requiresBeatmap ||
          editorOverviewTopic->m_order != 30 ||
          editorOverviewTopic->m_branches.size() != 1 ||
-         editorOverviewTopic->m_branches.front().m_steps.size() != 13 ||
+         editorOverviewTopic->m_branches.front().m_steps.size() != 14 ||
          topicAvailable(*editorOverviewTopic, false, false) ||
          topicAvailable(*editorOverviewTopic, true, false) ||
          !topicAvailable(*editorOverviewTopic, true, true) )
         return 61;
     const auto& editorSteps = editorOverviewTopic->m_branches.front().m_steps;
-    // 批注说明必须位于 BGM 说明之前，时间线则必须位于工具栏之前。
-    if ( editorSteps[5].m_id != "annotation-area" ||
-         editorSteps[6].m_id != "bgm-area" ||
-         editorSteps[7].m_id != "timeline" ||
-         editorSteps[8].m_id != "toolbar" ||
+    for ( std::size_t index = 0; index < editorSteps.size(); ++index ) {
+        if ( !editorSteps[index].m_guide ) return 63;
+        // 除入口外，每一步只依赖紧邻前一步，防止后续插入区域时再次越级。
+        // 这同时验证批注介绍结束后只能进入 BGM 完整可见步骤。
+        // 严格单链还保证新增步骤不会绕开既有草稿区或后续音频介绍。
+        if ( index > 0 &&
+             editorSteps[index].m_prerequisites !=
+                 std::vector<std::string>{ editorSteps[index - 1].m_id } )
+            return 64;
+    }
+    // 批注与 BGM 各自先完成完整可见拖动，再进入对应的只读介绍步骤。
+    // 时间线仍须位于工具栏之前，后续音频管理顺序保持不变。
+    if ( editorSteps[4].m_id != "reveal-annotation" ||
+         editorSteps[4].m_guide->m_targets !=
+             std::vector<std::string>{ "editor.canvas.pan-annotation" } ||
+         editorSteps[5].m_id != "annotation-area" ||
+         editorSteps[6].m_id != "reveal-bgm" ||
+         editorSteps[6].m_guide->m_targets !=
+             std::vector<std::string>{ "editor.canvas.pan-bgm" } ||
+         editorSteps[7].m_id != "bgm-area" ||
+         editorSteps[8].m_id != "timeline" ||
+         editorSteps[9].m_id != "toolbar" ||
          editorSteps.front().m_guide->m_targets !=
              std::vector<std::string>{ "editor.beatmap-tab" } ||
          editorSteps.back().m_guide->m_targets !=
              std::vector<std::string>{ "editor.audio.actions" } )
         return 62;
-    for ( const auto& step : editorSteps )
-        if ( !step.m_guide ) return 63;
     // 空白流程的六个目标依次对应菜单入口、音频、自动测偏、BPM 复核、
     // 元数据资源区域和最终创建按钮，不要求改造原有单页弹窗布局。
     if ( createBeatmapTopic->m_branches[0].m_steps[0].m_guide->m_targets !=

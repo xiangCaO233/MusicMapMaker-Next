@@ -166,10 +166,15 @@ void reportCanvasWalkthroughTargets(
     };
 
     // 拖动画布阶段突出整个交互面，具体区域完整进入视口后由业务状态完成。
-    // 两个目标可以每帧同时上报；Spotlight 只会接纳当前步骤声明的那个 ID。
-    // 因而此处无需查询当前步骤，也不会让草稿完成状态误推进 BGM 步骤。
+    // 三个目标可以每帧同时上报；Spotlight 只会接纳当前步骤声明的那个 ID。
+    // 因而此处无需查询当前步骤，也不会让某一区域完成状态误推进下一步。
     spotlight.reportTarget(
         "editor.canvas.pan-draft",
+        canvasPosition,
+        { canvasPosition.x + canvasSize.x, canvasPosition.y + canvasSize.y },
+        ImGui::GetWindowViewport());
+    spotlight.reportTarget(
+        "editor.canvas.pan-annotation",
         canvasPosition,
         { canvasPosition.x + canvasSize.x, canvasPosition.y + canvasSize.y },
         ImGui::GetWindowViewport());
@@ -182,6 +187,14 @@ void reportCanvasWalkthroughTargets(
          fullyVisible(projection.draftLeftX, projection.draftRightX) ) {
         // 关闭专业模式时计数为零，路线继续等待并由提示说明如何开启。
         spotlight.completeTarget("editor.canvas.pan-draft");
+    }
+    if ( fullyVisible(projection.annotationLeftX,
+                      projection.annotationRightX) ) {
+        // 批注区不依赖 BGM 开关，按自身完整边界单独验收横移阶段。
+        // 左右边界都进入画布才算完成，不能只凭批注中心或局部露出推进。
+        // 该区域始终存在，因此不使用轨道数量作为额外启用条件。
+        // 独立目标保证批注完成后仍需继续横移并单独验收 BGM 区。
+        spotlight.completeTarget("editor.canvas.pan-annotation");
     }
     if ( projection.bgmLaneCount > 0 &&
          fullyVisible(projection.bgmLeftX, projection.bgmRightX) ) {

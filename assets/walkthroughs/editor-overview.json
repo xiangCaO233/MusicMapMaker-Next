@@ -41,24 +41,31 @@
           "guide": {"prompt": {"zh_cn": "这里是当前谱面独立的草稿区，其中的 Note 不会导出给玩家游玩。", "en_us": "This beatmap has its own draft area; Notes here are not exported for play."}, "targets": ["editor.canvas.draft"]}
         },
         {
-          "id": "reveal-bgm",
-          "title": {"zh_cn": "显示完整 BGM 区", "en_us": "Reveal the full BGM area"},
-          "body": {"zh_cn": "在画布上按住鼠标中键向左拖动，直到右侧 BGM 区完整显示。", "en_us": "Hold the middle mouse button and drag left until the BGM area on the right is fully visible."},
+          "id": "reveal-annotation",
+          "title": {"zh_cn": "显示完整批注区", "en_us": "Reveal the full annotation area"},
+          "body": {"zh_cn": "在画布上按住鼠标中键向左拖动，直到右侧批注区完整显示。", "en_us": "Hold the middle mouse button and drag left until the annotation area on the right is fully visible."},
           "requires": ["draft-area"],
-          "guide": {"prompt": {"zh_cn": "按住中键向左拖动画布，直到 BGM 区完整显示。", "en_us": "Hold middle mouse and drag left until the BGM area is fully visible."}, "targets": ["editor.canvas.pan-bgm"]}
+          "guide": {"prompt": {"zh_cn": "按住中键向左拖动画布，直到批注区完整显示。", "en_us": "Hold middle mouse and drag left until the annotation area is fully visible."}, "targets": ["editor.canvas.pan-annotation"]}
         },
         {
           "id": "annotation-area",
           "title": {"zh_cn": "批注区", "en_us": "Annotation area"},
           "body": {"zh_cn": "批注区位于主轨道与 BGM 区之间，用来在时间位置记录谱面制作备注，便于整理编排思路。", "en_us": "The annotation area sits between the player lanes and BGM area and records charting notes at specific times."},
-          "requires": ["reveal-bgm"],
+          "requires": ["reveal-annotation"],
           "guide": {"prompt": {"zh_cn": "这里是批注区，可在指定时间位置记录制谱备注。", "en_us": "This is the annotation area for charting notes at specific times."}, "targets": ["editor.canvas.annotation"]}
+        },
+        {
+          "id": "reveal-bgm",
+          "title": {"zh_cn": "显示完整 BGM 区", "en_us": "Reveal the full BGM area"},
+          "body": {"zh_cn": "继续在画布上按住鼠标中键向左拖动，直到右侧 BGM 区完整显示。", "en_us": "Continue holding the middle mouse button and drag left until the BGM area on the right is fully visible."},
+          "requires": ["annotation-area"],
+          "guide": {"prompt": {"zh_cn": "继续按住中键向左拖动画布，直到 BGM 区完整显示。", "en_us": "Continue holding middle mouse and drag left until the BGM area is fully visible."}, "targets": ["editor.canvas.pan-bgm"]}
         },
         {
           "id": "bgm-area",
           "title": {"zh_cn": "BGM 区", "en_us": "BGM area"},
           "body": {"zh_cn": "BGM 区是类 BMS 编辑区。编写音乐前需要先绑定音频采样；放置的音频采样会从指定位置播放一次，持续到该采样结束。", "en_us": "The BGM area is a BMS-style editor. Bind audio samples first; a placed sample plays once from its assigned position until that sample ends."},
-          "requires": ["annotation-area"],
+          "requires": ["reveal-bgm"],
           "guide": {"prompt": {"zh_cn": "这里是类 BMS 编辑区，需先绑定音频采样，再把采样放到指定播放位置。", "en_us": "This BMS-style area uses bound audio samples placed at their playback positions."}, "targets": ["editor.canvas.bgm"]}
         },
         {
