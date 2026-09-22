@@ -29,6 +29,7 @@
 #include "canvas/CollaborationPeerColor.h"
 #include "canvas/CollaborationViewportProjection.h"
 #include "canvas/ComposeHoldTarget.h"
+#include "canvas/ComposeTargetEligibility.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
@@ -686,13 +687,15 @@ void Basic2DCanvas::updateComposeWalkthrough(
     /// @param time 缓存的精确分拍时间。
     /// @return 可完整容纳普通 Note 时返回应用播放补间后的逻辑 Y。
     const auto findBeatLineY = [&](double time) -> std::optional<float> {
+        // 缓存同样遵循新候选的时间门禁，微小负值不能借匹配容差命中零拍。
+        if ( !isComposeTargetTime(time) ) return std::nullopt;
         for ( const auto& line : snapshot.playerBeatLines ) {
             if ( std::abs(line.time - time) >= 1e-7 ) continue;
             const float y = line.y + m_preparedSnapshot.appliedYOffset;
             // 教程框必须完整落在玩家轨纵向边界内；中心可见但 Note 被裁掉的
             // 拍线不能作为练习目标，否则实际物件与提示框都只显示一部分。
-            if ( y - noteHeight * 0.5F < trackTop ||
-                 y + noteHeight * 0.5F > trackBottom ) {
+            if ( !isComposeTargetBeatLine(
+                     line.time, y, noteHeight, trackTop, trackBottom) ) {
                 return std::nullopt;
             }
             return y;
@@ -791,8 +794,10 @@ void Basic2DCanvas::updateComposeWalkthrough(
         for ( const auto& line : snapshot.playerBeatLines ) {
             if ( candidateCount >= candidates.size() ) break;
             const float y = line.y + m_preparedSnapshot.appliedYOffset;
-            if ( y - noteHeight * 0.5F >= trackTop &&
-                 y + noteHeight * 0.5F <= trackBottom ) {
+            // 负时间拍线可见不代表可绘制；起点和终点必须从同一合法集合选取。
+            // 不钳制到零，确保首拍偏移和当前分拍位置保持原样。
+            if ( isComposeTargetBeatLine(
+                     line.time, y, noteHeight, trackTop, trackBottom) ) {
                 candidates[candidateCount++] = { line.time, y };
             }
         }

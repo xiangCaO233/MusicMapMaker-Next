@@ -1,5 +1,6 @@
 #pragma once
 
+#include "canvas/ComposeTargetEligibility.h"
 #include "common/render/RenderSnapshot.h"
 #include <cmath>
 #include <cstdint>
@@ -37,14 +38,14 @@ inline std::optional<ComposeHoldTarget> chooseComposeHoldTarget(
 {
     // 单轨谱面无法满足异轨要求；缺少真实尺寸时也不能猜测提示框。
     if ( trackCount < 2 || noteTrack < 0 || noteTrack >= trackCount ||
-         !std::isfinite(noteTime) || !std::isfinite(noteHeight) ||
+         !isComposeTargetTime(noteTime) || !std::isfinite(noteHeight) ||
          noteHeight <= 0.0F )
         return std::nullopt;
     /// @brief 以完整端点高度判断可见性，防止框中心可见但边缘被裁剪。
     const auto visible = [&](const auto& line) {
-        return line.time >= 0.0 && std::isfinite(line.time) &&
-               line.y - noteHeight * 0.5F >= top &&
-               line.y + noteHeight * 0.5F <= bottom;
+        // Flick 也复用本候选集，不能单独放宽负时间或裁剪约束。
+        return isComposeTargetBeatLine(
+            line.time, line.y, noteHeight, top, bottom);
     };
     const Common::Render::PlayerBeatLineSnapshot* anchor = nullptr;
     // 借用输入中的实际拍位保留首拍偏移与变速段相位，不创建新的浮点网格。
