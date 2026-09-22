@@ -191,6 +191,7 @@ private:
         int            destinationTrack{ 0 };   ///< 松开目标所在玩家轨。
         double         sourceTime{ 0.0 };       ///< 起点精确分拍时间。
         double         destinationTime{ 0.0 };  ///< 目标精确分拍时间。
+        bool           isHold{ false };         ///< 是否为同轨 Shift 长条路径。
     };
 
     /// @brief 获取画布字体逻辑像素到物理栅格像素的当前倍率。
@@ -207,7 +208,7 @@ private:
                                       const ImVec2&  canvasScreenPosition,
                                       const ImVec2&  canvasSize);
 
-    /// @brief 绘制并验证创作教程的单 Note 拖拽路径。
+    /// @brief 绘制并验证创作教程的单键或 Shift 长条拖拽路径。
     /// @param sourceManager 提供演练状态机。
     /// @param snapshot 当前谱面与画笔状态快照。
     /// @param canvasScreenPosition 主画布左上角屏幕坐标。
@@ -346,6 +347,8 @@ private:
 
     /// @brief 当前创作教程固定使用的起点和目标分拍。
     std::optional<WalkthroughNoteDragTarget> m_walkthroughNoteDragTarget;
+    /// @brief 上次单键成功放置的位置，跨步骤保留以约束长条必须邻近且异轨。
+    std::optional<WalkthroughNoteDragTarget> m_walkthroughPlacedNote;
     /// @brief 本次左键尝试是否从画布内开始。
     bool m_walkthroughNoteAttemptActive{ false };
     /// @brief 本次尝试是否从指定起点框按下。
@@ -354,7 +357,7 @@ private:
     bool m_walkthroughNoteDragged{ false };
     /// @brief 逻辑快照是否确认本次画笔已激活。
     bool m_walkthroughNoteBrushObserved{ false };
-    /// @brief 本次尝试是否使用了会改变单 Note 类型的修饰键。
+    /// @brief 本次尝试是否违反修饰键规则：单键禁 Shift，长条要求持续 Shift。
     bool m_walkthroughNoteModifierUsed{ false };
 
     /// @brief 上一次应用到动态顶点上的 Y 偏移量

@@ -28,6 +28,7 @@
 #include "canvas/CanvasTabTitle.h"
 #include "canvas/CollaborationPeerColor.h"
 #include "canvas/CollaborationViewportProjection.h"
+#include "canvas/ComposeHoldTarget.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
@@ -491,14 +492,14 @@ Basic2DCanvas::Basic2DCanvas(
 /// 渲染器生命周期负责，因此析构体无需显式等待设备空闲。
 Basic2DCanvas::~Basic2DCanvas() {}
 
-/// @brief 绘制创作教程的起点、路径和目标，并验证完整拖拽放置手势。
+/// @brief 绘制单键与后续异轨长条的路径，并验证完整拖拽放置手势。
 /// @param sourceManager 提供当前演练步骤和完成入口。
 /// @param snapshot 当前玩家轨布局、分拍与画笔快照。
 /// @param canvasScreenPosition 画布内容左上角屏幕坐标。
 /// @param canvasSize 画布逻辑像素尺寸。
 /// @details 整个步骤维持以下状态机：
 ///
-/// 1. 仅当 Spotlight 正等待 place-note 时生成随机目标；
+/// 1. 仅当 Spotlight 正等待 place-note 或 place-hold 时生成目标；
 /// 2. 直接读取逻辑渲染器本帧实际提交的玩家区分拍线；
 /// 3. 丢弃无法完整容纳真实普通 Note 渲染矩形的候选；
 /// 4. 为起点和终点选择不同候选，轨道数允许时也选择不同玩家轨；
@@ -506,7 +507,7 @@ Basic2DCanvas::~Basic2DCanvas() {}
 /// 6. 每帧重算屏幕矩形，使相机或窗口变化后仍跟随相同谱面时间；
 /// 7. 蓝色框表示必须按下的位置，黄色灯泡框表示必须松开的位置；
 /// 8. 左键在画布内按下即建立一次尝试，直接点击目标也会被记录为失败；
-/// 9. 成功要求正确起点、真实拖动、逻辑画笔激活、无修饰键及正确终点；
+/// 9. 成功要求正确起点、真实拖动、逻辑画笔激活、正确修饰键及正确终点；
 /// 10. 失败时要求交互控制器把同帧 EndBrush 改为 cancel，不产生历史节点。
 ///
 /// UI 状态只验证教学手势，不替代 DrawTool 的领域校验、吸附和 Note 创建。
@@ -540,6 +541,30 @@ Basic2DCanvas::~Basic2DCanvas() {}
 /// 失败不发送普通 CmdUndo，因为起笔可能被逻辑规则拒绝而从未创建动作，
 /// 此时 Undo 会错误撤销用户在教程前完成的编辑。cancel EndBrush 只清理当前
 /// BrushState，既移除预览，也不会创建新动作或改变既有撤销栈。
+///
+/// @par 单键到长条的状态交接
+/// 单键成功释放时复制逻辑画笔的实际轨号和时间，后续步骤只借用这个值。
+/// 参考带有谱面实例身份，切换标签后不能把另一张谱面的拍位当作当前参考。
+/// 步骤间 Spotlight 可能短暂进入等待态，因此参考与临时拖动目标分开保存。
+/// 下一轮单键开始时清除参考，显式跳过单键也不会沿用上轮练习的旧物件。
+/// 长条的两个端点位于同一条玩家轨，该轨必须不同于参考单键所在轨道。
+/// 时间优先从参考同拍向后延伸；后方不可见时才取附近前驱到参考同拍。
+/// 两个分支都按时间递增排列，从而遵守 DrawTool 的非负持续时间规则。
+///
+/// @par 长条手势验收
+/// Shift 必须在按下左键之前生效，并保持到左键释放；Ctrl 始终不允许。
+/// 任一采样帧违反修饰键规则都会锁存失败，稍后恢复按键也不会清除失败。
+/// 指针横向必须始终在目标轨内，避免折线模式下跨轨再返回留下子段。
+/// 释放帧既检查鼠标在终点框内，也检查最新逻辑画笔的类型、头尾时间与轨号。
+/// 只有真实 HOLD 且持续时间大于零时才允许把本轮练习标为完成。
+/// 目标因滚动、缩放或临时显隐而失效时，已开始的手势必须在释放时取消。
+/// 目标缺失不能跳过取消清理，否则错误放置仍可能进入用户的谱面历史。
+///
+/// @par 不具备练习条件时的行为
+/// 缺少参考单键、单轨谱面或原拍位不在视野中时，仅展示恢复条件提示。
+/// 用户可以返回原拍位、重新演练，或显式确认跳过当前步骤。
+/// 此时不能选择任意其他可见拍位来替代“刚才单键附近”的要求。
+/// 目标缓存失效后仍使用原单键参考选择，不会累计时间偏移而逐轮远离它。
 /// @warning UI 热路径：非目标步骤仅做状态判断；目标随机化只在进入步骤时执行。
 void Basic2DCanvas::updateComposeWalkthrough(
     UI::UIManager*                        sourceManager,
@@ -547,12 +572,27 @@ void Basic2DCanvas::updateComposeWalkthrough(
     const ImVec2& canvasScreenPosition, const ImVec2& canvasSize)
 {
     if ( !sourceManager ) return;
-    auto& spotlight = sourceManager->walkthroughSpotlight();
+    auto&      spotlight = sourceManager->walkthroughSpotlight();
+    const bool placingHold =
+        spotlight.awaitingTarget("compose.canvas.place-hold");
+    const bool placingNote =
+        spotlight.awaitingTarget("compose.canvas.place-note");
+    if ( m_interaction )
+        m_interaction->setWalkthroughPlacement(placingNote || placingHold);
+    const std::string_view targetId =
+        placingHold ? "compose.canvas.place-hold" : "compose.canvas.place-note";
+    /// @brief 目标几何失效时仍消费失败释放，避免临时画笔漏提交。
+    const auto cancelUnresolvedRelease = [&]() {
+        if ( m_walkthroughNoteAttemptActive &&
+             ImGui::IsMouseReleased(ImGuiMouseButton_Left) ) {
+            if ( m_interaction ) m_interaction->cancelBrushOnNextRelease();
+            m_walkthroughNoteAttemptActive = false;
+        }
+    };
     // 路线页面可能在鼠标手势中途被“知道了”或结束引导关闭。此时只清理
     // 教程自己的观察状态，不发送取消命令；显式跳过代表用户接管普通绘制。
-    if ( !spotlight.awaitingTarget("compose.canvas.place-note") ||
-         !snapshot.hasBeatmap || canvasSize.x <= 1.0F ||
-         canvasSize.y <= 1.0F ) {
+    if ( (!placingNote && !placingHold) || !snapshot.hasBeatmap ||
+         canvasSize.x <= 1.0F || canvasSize.y <= 1.0F ) {
         // 离开放置步骤后清除整段易失状态，下次重练会生成新的随机路径。
         m_walkthroughNoteDragTarget.reset();
         m_walkthroughNoteAttemptActive   = false;
@@ -579,12 +619,25 @@ void Basic2DCanvas::updateComposeWalkthrough(
                                              snapshot.draftLanesEnabled,
                                              snapshot.draftTrackCount,
                                              true);
-    if ( !projection.valid || snapshot.trackCount <= 0 ) return;
+    if ( !projection.valid || snapshot.trackCount <= 0 ) {
+        cancelUnresolvedRelease();
+        return;
+    }
+
+    // 步骤切换必须丢弃单键的跨轨路径，但保留其成功落点作为长条参考。
+    // 新一轮单键练习清除旧参考，不能把历史教程的落点带入这一轮。
+    if ( m_walkthroughNoteDragTarget &&
+         m_walkthroughNoteDragTarget->isHold != placingHold ) {
+        m_walkthroughNoteDragTarget.reset();
+    }
+    if ( placingNote && !m_walkthroughNoteDragTarget )
+        m_walkthroughPlacedNote.reset();
 
     const float noteWidth  = snapshot.playerNoteWidth;
     const float noteHeight = snapshot.playerNoteHeight;
     if ( noteWidth <= 1.0F || noteHeight <= 1.0F ||
          snapshot.playerBeatLines.size() < 2U ) {
+        cancelUnresolvedRelease();
         return;
     }
 
@@ -615,7 +668,59 @@ void Basic2DCanvas::updateComposeWalkthrough(
              snapshot.beatmapInstanceId &&
          (!findBeatLineY(m_walkthroughNoteDragTarget->sourceTime) ||
           !findBeatLineY(m_walkthroughNoteDragTarget->destinationTime)) ) {
+        // 手势中途失去目标后，这次尝试不得继承下一条路径的起点资格。
+        // 释放仍走取消入口，保留上一颗单键及此前有效编辑。
+        m_walkthroughNoteStartedAtSource = false;
+        cancelUnresolvedRelease();
+        if ( m_walkthroughNoteAttemptActive ) return;
         m_walkthroughNoteDragTarget.reset();
+    }
+
+    // 长条首尾均从刚才单键附近的真实拍线选择，单轨内纵向拖动才能保证
+    // 开启折线编辑时仍然创建普通 Hold，而不是横移形成 Flick 或 Polyline。
+    if ( placingHold && (!m_walkthroughNoteDragTarget ||
+                         m_walkthroughNoteDragTarget->beatmapInstanceId !=
+                             snapshot.beatmapInstanceId) ) {
+        if ( !m_walkthroughPlacedNote ||
+             m_walkthroughPlacedNote->beatmapInstanceId !=
+                 snapshot.beatmapInstanceId ) {
+            // 用户显式跳过单键或切换谱面时没有可靠参考，不能假装已完成单键。
+            // 保留“知道了”出口，正文说明返回单键步骤后再做完整练习。
+            spotlight.reportTarget(targetId,
+                                   canvasScreenPosition,
+                                   { canvasScreenPosition.x + canvasSize.x,
+                                     canvasScreenPosition.y + canvasSize.y },
+                                   ImGui::GetWindowViewport(),
+                                   false);
+            return;
+        }
+        const auto hold = chooseComposeHoldTarget(
+            snapshot.playerBeatLines,
+            m_walkthroughPlacedNote->destinationTime,
+            m_walkthroughPlacedNote->destinationTrack,
+            snapshot.trackCount,
+            noteHeight,
+            trackTop - m_preparedSnapshot.appliedYOffset,
+            trackBottom - m_preparedSnapshot.appliedYOffset,
+            mixWalkthroughSeed(snapshot.beatmapInstanceId));
+        if ( !hold ) {
+            // 没有异轨或原拍位不在视野中时仅保留提示，让用户可移动视野或跳过。
+            spotlight.reportTarget(targetId,
+                                   canvasScreenPosition,
+                                   { canvasScreenPosition.x + canvasSize.x,
+                                     canvasScreenPosition.y + canvasSize.y },
+                                   ImGui::GetWindowViewport(),
+                                   false);
+            return;
+        }
+        m_walkthroughNoteDragTarget = WalkthroughNoteDragTarget{
+            .beatmapInstanceId = snapshot.beatmapInstanceId,
+            .sourceTrack       = hold->track,
+            .destinationTrack  = hold->track,
+            .sourceTime        = hold->startTime,
+            .destinationTime   = hold->endTime,
+            .isHold            = true,
+        };
     }
 
     // 每次进入该步骤只生成一次随机路线。候选来自渲染器已完成 BPM、首拍偏移、
@@ -743,7 +848,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
         std::max(sourceRect[1].x, destinationRect[1].x) + 8.0F * dpiScale,
         std::max(sourceRect[1].y, destinationRect[1].y) + 8.0F * dpiScale,
     };
-    spotlight.reportTarget("compose.canvas.place-note",
+    spotlight.reportTarget(targetId,
                            targetMinimum,
                            targetMaximum,
                            ImGui::GetWindowViewport(),
@@ -823,7 +928,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
         m_walkthroughNoteDragged       = false;
         m_walkthroughNoteBrushObserved = false;
         m_walkthroughNoteModifierUsed =
-            ImGui::GetIO().KeyShift || ImGui::GetIO().KeyCtrl;
+            (ImGui::GetIO().KeyShift != placingHold) || ImGui::GetIO().KeyCtrl;
     }
     if ( m_walkthroughNoteAttemptActive ) {
         // ImGui 拖动阈值证明这不是起点内的普通点击。逻辑快照确认画笔真正
@@ -834,22 +939,47 @@ void Basic2DCanvas::updateComposeWalkthrough(
             snapshot.brush.isActive && !snapshot.brush.createsAudioSample &&
             snapshot.currentTool == Logic::EditTool::Draw;
         m_walkthroughNoteModifierUsed |=
-            ImGui::GetIO().KeyShift || ImGui::GetIO().KeyCtrl;
+            (ImGui::GetIO().KeyShift != placingHold) || ImGui::GetIO().KeyCtrl;
+        // 长条练习全程限定在选定轨道内，横移后返回也不能误当纯 Hold 成功。
+        // 使用轨道边界而非 Note 纹理宽度，允许轨道内部的自然指针抖动。
+        if ( placingHold ) {
+            const float laneLeft =
+                canvasScreenPosition.x + projection.player.leftX +
+                laneWidth * static_cast<float>(target.sourceTrack);
+            m_walkthroughNoteStartedAtSource &=
+                mouse.x >= laneLeft && mouse.x < laneLeft + laneWidth;
+        }
     }
     if ( ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
          m_walkthroughNoteAttemptActive ) {
-        // Shift 会把手势解释成 Hold/Flick/Polyline，Ctrl 会绕过时间吸附；
-        // 任一出现都不符合单 Note 的确定分拍练习，必须作为失败取消。
+        // 长条必须检查逻辑层已经形成正时长 Hold 且两端精确对齐目标。
+        // 仅在黄色框内释放不足以证明成功：中途横移可能已经变成折线。
+        const bool brushMatches =
+            !placingHold ||
+            (snapshot.brush.type == ::MMM::NoteType::HOLD &&
+             snapshot.brush.track == target.sourceTrack &&
+             std::abs(snapshot.brush.time - target.sourceTime) < 1e-6 &&
+             std::abs(snapshot.brush.time + snapshot.brush.duration -
+                      target.destinationTime) < 1e-6 &&
+             snapshot.brush.duration > 0.0);
         const bool success =
             m_walkthroughNoteStartedAtSource && m_walkthroughNoteDragged &&
             m_walkthroughNoteBrushObserved && !m_walkthroughNoteModifierUsed &&
-            snapshot.currentTool == Logic::EditTool::Draw &&
+            brushMatches && snapshot.currentTool == Logic::EditTool::Draw &&
             walkthroughPointInRect(
                 mouse, destinationRect[0], destinationRect[1]);
         if ( success ) {
             // 这里只完成教学目标；同帧后续 Interaction 仍发送普通 EndBrush，
             // 由 DrawTool 创建最终 Note 并生成正常可撤销历史。
-            spotlight.completeTarget("compose.canvas.place-note");
+            if ( placingNote ) {
+                // EndBrush 使用最后一次逻辑更新的实际时间与轨道，后续长条
+                // 必须围绕这颗单键而不是释放指针的近似位置生成。
+                m_walkthroughPlacedNote                  = target;
+                m_walkthroughPlacedNote->destinationTime = snapshot.brush.time;
+                m_walkthroughPlacedNote->destinationTrack =
+                    snapshot.brush.track;
+            }
+            spotlight.completeTarget(targetId);
         } else if ( m_interaction ) {
             // Interaction 随后发布 cancel=true 的结束命令，原子丢弃失败预览。
             // 请求必须在本帧 Interaction::update 之前设置，释放分支消费后立即

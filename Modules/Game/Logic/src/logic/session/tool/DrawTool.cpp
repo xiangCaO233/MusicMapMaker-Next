@@ -388,7 +388,9 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     // 只有显式启用折线编辑并按住 Shift 才尝试从悬浮对象续接。
     // 普通起笔仍可发生在已有对象附近，不隐式删除悬浮物件。
     bool isResuming = false;
-    if ( ctx.lastConfig.settings.enablePolylineEditing && cmd.isShiftDown &&
+    // 独立教学放置不能借 Shift 起笔删除已有物件，否则失败取消无法保留原谱。
+    if ( !cmd.createStandalone &&
+         ctx.lastConfig.settings.enablePolylineEditing && cmd.isShiftDown &&
          isHoveredPlayerNote(ctx) ) {
         const auto& note =
             ctx.noteRegistry.get<NoteComponent>(ctx.hoveredEntity);
@@ -1188,7 +1190,8 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
 
         // 清洗可能清空列表，先检查非空再读取末段。
         // 只有 Hold 和 Flick 在下面定义有效尾部，正常状态机应提供这两类尾段。
-        if ( segments.size() >= 1 ) {
+        // 独立练习仍规范化自身几何，但不得合并或删除附近已有物件。
+        if ( !cmd.createStandalone && segments.size() >= 1 ) {
             // 计算尾部的时间和轨道
             // 这里保存工作列表末元素引用，后续分支会向同一向量追加元素。
             // 向量扩容会使该引用失效，追加后的后续匹配存在既有生命周期风险。
@@ -1423,7 +1426,9 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
         // 3.5. 移除折线路径上的物件 (如果设置开启)
         // 该选项当前按路径节点匹配物件起点，不做段内部连续几何相交检测。
         // 候选仅限独立 NOTE、HOLD、FLICK，完整折线不在这段清理中删除。
-        if ( ctx.lastConfig.settings.removeObjectsOnPolylinePath ) {
+        // 路径清除同样属于隐式改写，独立放置不能借此删除此前成功的练习。
+        if ( !cmd.createStandalone &&
+             ctx.lastConfig.settings.removeObjectsOnPolylinePath ) {
             /// @brief 提交阶段用于起点重叠匹配的路径节点。
             struct Node {
                 /// @brief 节点绝对轨号，草稿保留负号。

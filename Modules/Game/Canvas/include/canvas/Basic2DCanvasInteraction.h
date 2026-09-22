@@ -46,6 +46,13 @@ public:
     /// @warning UI 输入热路径：只设置一次性布尔标记。
     void cancelBrushOnNextRelease();
 
+    /// @brief 设置后续起笔是否为只新建独立物件的教学练习。
+    /// @warning UI 每帧入口，只修改布尔值，起笔时锁存到整段手势。
+    void setWalkthroughPlacement(bool enabled)
+    {
+        m_walkthroughPlacement = enabled;
+    }
+
     /// @brief 仅同步后台主画布的鼠标悬停位置，不启用编辑交互。
     /// @param targetWidth 画布逻辑宽度。
     /// @param targetHeight 画布逻辑高度。
@@ -152,6 +159,10 @@ private:
 
     /// @brief 下一次绘制工具释放是否只清理临时画笔。
     bool m_cancelBrushOnNextRelease{ false };
+    /// @brief 当前引导是否要求独立放置，下一次起笔时读取。
+    bool m_walkthroughPlacement{ false };
+    /// @brief 当前活动画笔锁存的独立放置策略，不随步骤确认或结束改变。
+    bool m_standaloneBrush{ false };
 
     void handleHotkeys(const Common::Render::RenderSnapshot* currentSnapshot);
     /// @brief 处理主画布鼠标、批注栏和物件编辑交互。

@@ -368,7 +368,7 @@ bool testPages()
         if ( !frame(360) ) return false;
     bool composeBranchVisible = false;
     // 窄窗口覆盖长中文说明换行后的自动高度；只要真实 BranchCard 活动，
-    // 即可证明占位页已被五步流程替换且没有复用上一主题的隐藏子窗口。
+    // 即可证明单键与长条流程完整显示且没有复用上一主题的隐藏子窗口。
     for ( const auto* candidate : ImGui::GetCurrentContext()->Windows )
         if ( candidate->Active &&
              std::string_view(candidate->Name).find("BranchCard") !=

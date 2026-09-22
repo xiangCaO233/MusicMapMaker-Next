@@ -289,7 +289,7 @@ int main(int argc, char** argv)
          !composeBeatmapTopic->m_requiresBeatmap ||
          composeBeatmapTopic->m_order != 40 ||
          composeBeatmapTopic->m_branches.size() != 1 ||
-         composeBeatmapTopic->m_branches.front().m_steps.size() != 5 ||
+         composeBeatmapTopic->m_branches.front().m_steps.size() != 6 ||
          topicAvailable(*composeBeatmapTopic, false, false) ||
          topicAvailable(*composeBeatmapTopic, true, false) ||
          !topicAvailable(*composeBeatmapTopic, true, true) )
@@ -311,7 +311,10 @@ int main(int argc, char** argv)
          composeSteps[3].m_guide->m_targets !=
              std::vector<std::string>{ "compose.canvas.player" } ||
          composeSteps[4].m_guide->m_targets !=
-             std::vector<std::string>{ "compose.canvas.place-note" } )
+             std::vector<std::string>{ "compose.canvas.place-note" } ||
+         // 长条必须紧接单键，同一轮路线保留实际单键落点用于附近异轨约束。
+         composeSteps[5].m_guide->m_targets !=
+             std::vector<std::string>{ "compose.canvas.place-hold" } )
         return 68;
     // 空白流程的六个目标依次对应菜单入口、音频、自动测偏、BPM 复核、
     // 元数据资源区域和最终创建按钮，不要求改造原有单页弹窗布局。

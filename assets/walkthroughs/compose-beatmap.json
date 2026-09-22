@@ -7,11 +7,11 @@
   "requires_beatmap": true,
   "completion": "all",
   "title": {"zh_cn": "创作谱面", "en_us": "Compose a beatmap"},
-  "description": {"zh_cn": "选择绘制工具，在主轨道上完成一次从随机起点拖到指定分拍位置的单 Note 放置。进入前请先打开项目，并在标签页中打开至少一张谱面。", "en_us": "Choose the Draw tool and place one single Note by dragging from a random starting point to a specified beat position in the player lanes. Open a project and at least one beatmap editor tab first."},
+  "description": {"zh_cn": "选择绘制工具，在主轨道上拖动放置单 Note，再按住 Shift，在它附近的另一条轨道上拖动放置长条。进入前请先打开项目，并在标签页中打开至少一张谱面。", "en_us": "Choose Draw, drag to place a single Note, then hold Shift and drag to place a nearby Hold on a different lane. Open a project and at least one beatmap editor tab first."},
   "branches": [
     {
       "id": "place-single-note",
-      "title": {"zh_cn": "放置一个单 Note", "en_us": "Place a single Note"},
+      "title": {"zh_cn": "放置单 Note 与长条", "en_us": "Place a single Note and a Hold"},
       "steps": [
         {
           "id": "select-beatmap-tab",
@@ -46,6 +46,13 @@
           "body": {"zh_cn": "从蓝色起点框按住左键，沿提示路径拖到黄色目标框，并在灯泡图标处松开。起点和目标位于不同的随机轨道与确定分拍位置；直接点击目标不会完成。放置失败时，本次临时 Note 会自动撤销。", "en_us": "Hold the left mouse button inside the blue source box, follow the path to the yellow target, and release over the light-bulb marker. The source and destination use different random lanes and exact beat positions; clicking the target directly does not count. A failed placement is automatically discarded."},
           "requires": ["player-area"],
           "guide": {"prompt": {"zh_cn": "从蓝色起点框按住左键，拖到带灯泡的黄色目标框内再松开。", "en_us": "Hold left mouse in the blue source box, drag to the yellow light-bulb target, then release."}, "targets": ["compose.canvas.place-note"]}
+        },
+        {
+          "id": "place-hold",
+          "title": {"zh_cn": "按住 Shift 拖动放置长条", "en_us": "Hold Shift and drag to place a Hold"},
+          "body": {"zh_cn": "在刚才单键附近的另一条轨道上，先按住 Shift，再从蓝色起点框按下左键，保持 Shift 和左键按住，沿同一轨道拖到带灯泡的黄色终点框后松开左键。两端都对齐实际分拍线；忘记按 Shift、跨轨或未拖到指定终点时会取消本次放置。若刚才跳过了单键，请重新演练并先放置单键；至少需要两条玩家轨道。", "en_us": "On a different lane near the single Note you just placed, hold Shift first, press left mouse in the blue source box, and keep both held while dragging along the same lane to the yellow light-bulb endpoint. Release left mouse there. Both ends use actual beat lines. Missing Shift, changing lanes, or missing the endpoint cancels the attempt. If you skipped the single Note, restart and place it first. At least two player lanes are required."},
+          "requires": ["place-note"],
+          "guide": {"prompt": {"zh_cn": "按住 Shift，从蓝框按下左键，沿同一轨道拖到黄色灯泡框后松开左键。目标在刚才单键附近的另一轨；无目标时请返回单键附近，或重新演练先放单键。", "en_us": "Hold Shift, press left mouse in blue, drag along the same lane to the yellow bulb, then release left mouse. The Hold is near the previous Note on another lane. If no target appears, return to the Note or restart and place it first."}, "targets": ["compose.canvas.place-hold"]}
         }
       ]
     }

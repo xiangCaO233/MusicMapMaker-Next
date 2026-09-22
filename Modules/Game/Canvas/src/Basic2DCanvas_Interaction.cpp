@@ -5026,7 +5026,13 @@ void Basic2DCanvasInteraction::handleInteractions(
                         currentSnapshot->currentTool ==
                             Logic::EditTool::Draw ) {
                 Event::EventBus::instance().publish(
-                    Event::LogicCommandEvent(Logic::CmdEndBrush{ m_cameraId }));
+                    Event::LogicCommandEvent(Logic::CmdEndBrush{
+                        .cameraId = m_cameraId,
+                        // 中键中断尚未验收的教学拖动，必须丢弃而不是提前提交。
+                        .cancel = m_cancelBrushOnNextRelease ||
+                                  (m_standaloneBrush && m_walkthroughPlacement),
+                        .createStandalone = m_standaloneBrush,
+                    }));
             } else if ( m_leftPressStartedObjectDrag ) {
                 Event::EventBus::instance().publish(
                     Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
@@ -5054,6 +5060,7 @@ void Basic2DCanvasInteraction::handleInteractions(
             m_leftPressDragged              = false;
             m_colorStrokeEntities.clear();
             resetContinuousEditCommands();
+            m_cancelBrushOnNextRelease = false;
         }
 
         // ResizeAll 光标明确表示二维平移，不依赖当前编辑工具图标。
@@ -5171,8 +5178,16 @@ void Basic2DCanvasInteraction::handleInteractions(
             break;
         case BlockedCanvasLeftGestureEnd::Brush:
             // 完成画笔会结束当前连续创建事务。
+            // 遮挡、弹窗等分支仍可能结束已开始的练习，不能恢复为自动合并。
+            // 独立策略在起笔锁存，而不是从可能已结束的教程状态重新推导。
+            // 取消标志与普通释放共用，保留这一帧教程验收的结果。
+            // 因而失去画布输入归属时，也不会提交本应丢弃的教学失败手势。
             Event::EventBus::instance().publish(
-                Event::LogicCommandEvent(Logic::CmdEndBrush{ m_cameraId }));
+                Event::LogicCommandEvent(Logic::CmdEndBrush{
+                    .cameraId         = m_cameraId,
+                    .cancel           = m_cancelBrushOnNextRelease,
+                    .createStandalone = m_standaloneBrush,
+                }));
             break;
         case BlockedCanvasLeftGestureEnd::ObjectDrag:
             // 完成对象拖拽会提交最终位置并形成撤销记录。
@@ -5190,6 +5205,8 @@ void Basic2DCanvasInteraction::handleInteractions(
         }
         if ( completion.clearLeftState ) {
             // 本地锁存与连续命令缓存同步清空，下一次按下重新建立基线。
+            // 已消费的失败标志不能取消下一次普通画笔操作。
+            m_cancelBrushOnNextRelease      = false;
             m_leftPressStartedOnCanvas      = false;
             m_leftPressStartedInTrackLayout = false;
             m_leftPressStartedOnEntity      = false;
@@ -5741,13 +5758,16 @@ void Basic2DCanvasInteraction::handleInteractions(
                 if ( !currentSnapshot->isPlaying ) {
                     // 画笔起点连同 Shift/Ctrl 状态一次性发送，逻辑层决定
                     // 物件种类、吸附与复合绘制模式。
+                    // 教学策略只在起笔锁存，跳过提示也不能在结束时意外合并旧物件。
+                    m_standaloneBrush = m_walkthroughPlacement;
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(
                             Logic::CmdStartBrush{ m_cameraId,
                                                   localMousePos.x,
                                                   localMousePos.y,
                                                   ImGui::GetIO().KeyShift,
-                                                  ImGui::GetIO().KeyCtrl }));
+                                                  ImGui::GetIO().KeyCtrl,
+                                                  m_standaloneBrush }));
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::ColorBrush ) {
@@ -5914,8 +5934,9 @@ void Basic2DCanvasInteraction::handleInteractions(
                     currentSnapshot->currentTool == Logic::EditTool::Draw ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndBrush{
-                    .cameraId = m_cameraId,
-                    .cancel   = m_cancelBrushOnNextRelease,
+                    .cameraId         = m_cameraId,
+                    .cancel           = m_cancelBrushOnNextRelease,
+                    .createStandalone = m_standaloneBrush,
                 }));
         } else if ( m_leftPressStartedObjectDrag ) {
             // 对象拖拽结束会固化本次连续位移。

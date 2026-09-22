@@ -237,6 +237,8 @@ struct CmdStartBrush {
     float       mouseY;       ///< 鼠标相对于视口的 Y 坐标
     bool        isShiftDown;  ///< 当前 Shift 键是否按下 (用于创建 Hold)
     bool        isCtrlDown;   ///< 当前 Ctrl 键是否按下 (用于禁用磁吸)
+    /// @brief 练习新建独立物件时禁用从已有物件续接，避免失败手势改动原谱面。
+    bool createStandalone{ false };
 };
 
 /**
@@ -257,6 +259,8 @@ struct CmdEndBrush {
     std::string cameraId;
     /// @brief 为 true 时丢弃当前临时画笔，不创建物件或撤销记录。
     bool cancel{ false };
+    /// @brief 与起笔策略配对；独立放置不自动合并附近已有物件。
+    bool createStandalone{ false };
 };
 
 /**

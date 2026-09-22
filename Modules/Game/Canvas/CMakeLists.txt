@@ -145,6 +145,15 @@ target_include_directories(ObjectDragAutoPanTest
 target_link_libraries(ObjectDragAutoPanTest PRIVATE Logic 3rd_glm)
 add_test(NAME ObjectDragAutoPanTest COMMAND ObjectDragAutoPanTest)
 
+# 创作长条目标直接选择真实拍线，测试附近时间、异轨约束和反向滚动。 只链接快照值类型所需 Common，不构造图形窗口或运行完整编辑器。
+# 测试使用非零首拍和乱序候选，确保后续重构仍保留输入几何的精确值。
+mmm_add_test_executable(Canvas ComposeHoldTargetTest
+                        tests/ComposeHoldTargetTest.cpp)
+target_include_directories(ComposeHoldTargetTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(ComposeHoldTargetTest PRIVATE Common)
+add_test(NAME ComposeHoldTargetTest COMMAND ComposeHoldTargetTest)
+
 # 主画布悬浮层选择使用纯候选去重，覆盖同一物件的多个相交命中框。 Common 与 entt 只提供对象种类和实体值，测试不构造 ECS 注册表，也不依赖当前
 # Session。
 mmm_add_test_executable(Canvas HoverLayerSelectionTest
