@@ -597,7 +597,8 @@ void Basic2DCanvas::updateComposeWalkthrough(
                                : placingHold ? WalkthroughPlacementKind::Hold
                                              : WalkthroughPlacementKind::Note;
     if ( m_interaction )
-        m_interaction->setWalkthroughPlacement(placingNote || requiresShift);
+        m_interaction->setWalkthroughPlacement(placingNote || requiresShift,
+                                               spotlight.stepToken());
     const std::string_view targetId =
         placingFlick  ? "compose.canvas.place-flick"
         : placingHold ? "compose.canvas.place-hold"
@@ -1051,7 +1052,18 @@ void Basic2DCanvas::updateComposeWalkthrough(
                 m_walkthroughPlacedNote->destinationTrack =
                     snapshot.brush.track;
             }
-            spotlight.completeTarget(targetId);
+            // 回调只保存命令值，不借用画布寿命；切换标签后仍路由到原画布。
+            // 登记先于完成，保证下一帧衔接或立即返回都能找到这一笔的身份。
+            spotlight.registerRollback(
+                targetId,
+                [command =
+                     Logic::CmdUndo{ .walkthroughToken = spotlight.stepToken(),
+                                     .cameraId         = m_cameraId }] {
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(command));
+                });
+            // 回退后的重新绘制是新手势，可以完成步骤，不受回看防跳步限制。
+            spotlight.completeTarget(targetId, true);
         } else if ( m_interaction ) {
             // Interaction 随后发布 cancel=true 的结束命令，原子丢弃失败预览。
             // 请求必须在本帧 Interaction::update 之前设置，释放分支消费后立即

@@ -20,6 +20,11 @@
 /// - UIManager 在全部视图更新结束后统一调用 render；
 /// - 业务控件成功完成目标或点击“知道了”都会推进同一状态机；
 /// - 后续控件尚未出现时进入等待态，不重新遮住已完成控件；
+/// - 显式返回可以降低目标水位，绘制练习仅调用已登记的定向补偿；
+/// - 回看锁定只作用于当前配置步骤，下一步骤重新使用正常自动推进；
+/// - 跨步骤请求交给页面层消费，本层不拥有主题或分支的数据引用；
+/// - 目标缺席时只显示导航气泡，不复用上一帧坐标绘制高亮；
+/// - 模态环境中两个导航按钮分别保存按下起点，不允许拖移串键；
 /// - 最后目标完成后保留 Completed，交给路线会话衔接下一步骤；
 /// - stop 清理配置和几何，后续控件上报成为无操作。
 ///
@@ -112,6 +117,7 @@ void Spotlight::beginFrame()
     // ImGui 控件坐标只能在提交它的当前帧使用，绝不能沿用旧布局矩形。
     m_anchor.reset();
     m_acknowledgeButtonCenter.reset();
+    m_previousButtonCenter.reset();
     m_keepAlive = false;
     if ( m_state == State::Highlighting )
         // 每帧重新等待控件上报，防止窗口关闭后继续绘制旧矩形。
@@ -121,12 +127,28 @@ void Spotlight::beginFrame()
 /// @brief 启动配置声明的目标流程。
 /// @param targets 候选目标按流程排列，后出现的可见项覆盖前项。
 /// @param prompt 纯文字步骤的操作提示或目标高亮时的气泡说明。
+/// @param previousStepAvailable 路线中是否存在可回看的前一步。
+/// @param reviewing 回看时只允许显式确认，防止已有状态立即跳过。
 void Spotlight::start(const std::vector<std::string>& targets,
-                      std::string                     prompt)
+                      std::string prompt, bool previousStepAvailable,
+                      bool reviewing)
 {
+    // 新路线不继承旧练习；正常前进保留产物，回到旧目标才消费补偿。
+    if ( !previousStepAvailable && !reviewing ) m_rollbacks.clear();
+    if ( reviewing ) {
+        // 回到前一步时撤掉该步旧成果，随后重新进入可绘制状态。
+        // 只按登记的语义目标匹配，教程文本或历史学习进度不参与判定。
+        for ( const auto& target : targets ) rollbackTarget(target);
+    }
+    ++m_stepToken;
     // 复制只发生在用户点击“进入引导”或步骤自动衔接时，不进入常规帧路径。
-    m_targets = targets;
-    m_prompt  = std::move(prompt);
+    m_targets               = targets;
+    m_previousStepAvailable = previousStepAvailable;
+    m_previousStepRequested = false;
+    m_reviewing             = reviewing;
+    m_previousPressed = m_previousMouseWasDown = false;
+    m_previousButtonCenter.reset();
+    m_prompt = std::move(prompt);
     m_anchor.reset();
     m_stage                   = 0;
     m_state                   = State::Waiting;
@@ -139,6 +161,12 @@ void Spotlight::start(const std::vector<std::string>& targets,
 /// @brief 停止引导并清除可见目标与提示文本。
 void Spotlight::stop()
 {
+    // 结束演练保留用户已绘制的成果，只有返回才执行补偿。
+    m_rollbacks.clear();
+    // 跨路线请求不能泄漏到下次进入，引导退出不保留返回手势。
+    m_previousStepAvailable = m_previousStepRequested = m_reviewing = false;
+    m_previousPressed = m_previousMouseWasDown = false;
+    m_previousButtonCenter.reset();
     m_state                   = State::Inactive;
     m_stage                   = 0;
     m_keepAlive               = false;
@@ -148,6 +176,68 @@ void Spotlight::stop()
     m_anchor.reset();
     m_targets.clear();
     m_prompt.clear();
+}
+
+/// @brief 判断是否存在当前目标或当前步骤之前的引导。
+/// @warning UI 每帧多次查询，只读取本实例的值状态。
+bool Spotlight::canGoBack() const
+{
+    // 步骤内目标优先于跨步骤；未启动时即使成员仍有值也不提供返回能力。
+    return active() && (m_stage > 0 || m_previousStepAvailable);
+}
+
+/// @brief 优先回退步骤内目标，首目标则请求路线层切换到前一步。
+void Spotlight::requestPrevious()
+{
+    // 重复点击只保留一个跨步骤请求，不能累积成一次跨越多个步骤。
+    if ( !canGoBack() || m_previousStepRequested ) return;
+    // 当前步骤若已提交但尚未衔接，也必须清掉，避免留下被跳过的练习。
+    for ( const auto& target : m_targets ) rollbackTarget(target);
+    // 清除本帧几何与输入锁存，返回点击不得同时确认重新出现的目标。
+    // 下一帧必须重新解析回看目标，不能把后续窗口的旧坐标当作前序控件。
+    // 目标若已关闭，导航气泡仍会出现，但不擅自重新打开业务窗口。
+    m_anchor.reset();
+    m_acknowledgeButtonCenter.reset();
+    m_previousButtonCenter.reset();
+    m_acknowledgePressed = m_previousPressed = false;
+    m_reviewing                              = true;
+    m_state                                  = State::Waiting;
+    if ( m_stage > 0 )
+        --m_stage;
+    else
+        m_previousStepRequested = true;
+}
+
+/// @brief 一次性消费跨步骤请求，由路线层定位前序步骤。
+bool Spotlight::consumePreviousStepRequest()
+{
+    // 本层不持有业务路线指针，避免 UI 生命周期与导航状态相互耦合。
+    // 消费不退出回看模式；只有 start/stop 才能建立另一轮正常演练。
+    return std::exchange(m_previousStepRequested, false);
+}
+
+/// @brief 只在真实绘制成功时登记业务提供的补偿命令。
+void Spotlight::registerRollback(std::string_view      targetId,
+                                 std::function<void()> rollback)
+{
+    // 必须在完成通知之前登记，过期步骤的晚到业务事件不能挂到新目标。
+    if ( !awaitingTarget(targetId) || !rollback ) return;
+    m_rollbacks.push_back({ std::string(targetId), std::move(rollback) });
+}
+
+/// @brief 消费匹配目标的补偿后移除记录，确保返回操作幂等。
+void Spotlight::rollbackTarget(std::string_view targetId)
+{
+    // 此列表只包含教学创建，不通过历史完成度或实体数量推断业务副作用。
+    for ( auto it = m_rollbacks.begin(); it != m_rollbacks.end(); ) {
+        if ( it->targetId != targetId ) {
+            ++it;
+            continue;
+        }
+        it->action();
+        // 命令携带值语义的会话与步骤身份，擦除闭包不影响已入队的回滚。
+        it = m_rollbacks.erase(it);
+    }
 }
 
 /// @brief 查询引导是否已经由用户启动。
@@ -182,9 +272,17 @@ void Spotlight::keepAlive()
 /// @brief 跳过当前已经定位到的目标阶段。
 void Spotlight::acknowledgeCurrentStage()
 {
+    if ( m_previousStepRequested ) return;
+    // 返回与确认具有互斥语义，待路线切换期间不能误确认被离开的步骤。
     if ( m_targets.empty() && m_state == State::Waiting ) {
         // 纯文字步骤的“知道了”同样完成当前步骤，避免路线无法继续。
         m_state = State::Completed;
+        return;
+    }
+    // 已关闭的弹窗不会被导航自动重开；回看时允许显式略过缺席目标。
+    if ( m_reviewing && m_state == State::Waiting ) {
+        // 缺席目标只允许用户主动略过；普通等待态仍必须等目标真正出现。
+        completeStage(m_stage);
         return;
     }
     if ( m_state != State::Highlighting || !m_anchor ) return;
@@ -193,9 +291,13 @@ void Spotlight::acknowledgeCurrentStage()
 
 /// @brief 通知状态机某个语义目标已经由业务逻辑正确完成。
 /// @param targetId 与当前配置中的目标 ID 一致。
-void Spotlight::completeTarget(std::string_view targetId)
+/// @param explicitAction 是否为用户回看后实际执行的新手势。
+void Spotlight::completeTarget(std::string_view targetId, bool explicitAction)
 {
-    if ( !active() || completed() ) return;
+    // 回看忽略持续上报的已满足条件，但重画成功属于明确的新操作。
+    if ( !active() || completed() || (m_reviewing && !explicitAction) ||
+         m_previousStepRequested )
+        return;
     const auto it = std::find(m_targets.begin(), m_targets.end(), targetId);
     if ( it == m_targets.end() ) return;
     completeStage(static_cast<std::size_t>(it - m_targets.begin()));
@@ -244,12 +346,14 @@ void Spotlight::reportTarget(std::string_view targetId, const ImVec2& minimum,
                              bool drawOutline)
 {
     if ( !active() || completed() || maximum.x <= minimum.x ||
-         maximum.y <= minimum.y )
+         maximum.y <= minimum.y || m_previousStepRequested )
         return;
     // 配置列表通常只有数项；线性查找避免为逐帧注册建立哈希表和分配节点。
     const auto it = std::find(m_targets.begin(), m_targets.end(), targetId);
     if ( it == m_targets.end() ) return;
     const auto priority = static_cast<std::size_t>(it - m_targets.begin());
+    // 返回后后续窗口可能仍然打开，不能仅凭其可见性抢走回看目标。
+    if ( m_reviewing && priority != m_stage ) return;
     // 已完成阶段永久忽略；后续目标可见本身证明界面已经越过中间阶段。
     if ( priority < m_stage ) return;
     if ( priority > m_stage ) {
@@ -284,12 +388,17 @@ void Spotlight::reportTarget(std::string_view targetId, const ImVec2& minimum,
 /// @brief 绘制不阻挡目标操作、但允许确认当前阶段的引导层。
 /// @param dpiScale 当前内容缩放。
 /// @param acknowledgeLabel 当前语言的确认按钮文本。
-void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
+/// @param previousLabel 当前语言的返回按钮文本，空值保留旧调用方式。
+void Spotlight::render(float dpiScale, const char* acknowledgeLabel,
+                       const char* previousLabel)
 {
     if ( !active() || completed() || !m_keepAlive ) return;
     const bool promptOnly = m_targets.empty();
     // 有目标的引导只在本帧重新解析到当前阶段时显示，等待态不绘制旧高亮。
-    if ( m_state != State::Highlighting && !promptOnly ) return;
+    // 目标暂时缺席时只显示导航气泡，不伪造高亮；用户仍能返回前一步。
+    const bool waitingNavigation = canGoBack() || m_reviewing;
+    if ( m_state != State::Highlighting && !promptOnly && !waitingNavigation )
+        return;
 
     ImGuiViewport* viewport = m_anchor && m_anchor->viewport
                                   ? m_anchor->viewport
@@ -315,9 +424,10 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
         hintAnchor = ImVec2{ (holeMin->x + holeMax->x) * 0.5f, holeMax->y };
     }
 
-    const bool hasAcknowledge = (m_anchor || promptOnly) && acknowledgeLabel &&
-                                acknowledgeLabel[0] != '\0';
-    if ( m_prompt.empty() && !hasAcknowledge ) return;
+    const bool hasPrevious    = previousLabel && previousLabel[0] != '\0';
+    const bool hasAcknowledge = (m_anchor || promptOnly || m_reviewing) &&
+                                acknowledgeLabel && acknowledgeLabel[0] != '\0';
+    if ( m_prompt.empty() && !hasAcknowledge && !hasPrevious ) return;
     // 目标步骤与纯文字步骤都提供确认入口，确保路线会话可以显式继续。
     const float  margin = 12.0f * dpiScale;
     const auto&  style  = ImGui::GetStyle();
@@ -325,8 +435,19 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
         hasAcknowledge ? ImGui::CalcTextSize(acknowledgeLabel) : ImVec2{};
     const ImVec2 buttonSize{ buttonTextSize.x + style.FramePadding.x * 2.0f,
                              buttonTextSize.y + style.FramePadding.y * 2.0f };
-    const float  buttonWidth =
-        hasAcknowledge ? buttonSize.x + style.ItemSpacing.x : 0.0f;
+    const ImVec2 previousTextSize =
+        hasPrevious ? ImGui::CalcTextSize(previousLabel) : ImVec2{};
+    // 返回按钮与确认按钮一起参与布局，不能把额外按钮挤到目标框外侧。
+    // 禁用态返回按钮仍占相同尺寸，首步与后续步骤切换时保持稳定布局。
+    // 等待态可能只剩返回按钮，其高度也必须参与气泡的包围框计算。
+    // 本层不读取翻译单例，生产传本地化文本，测试传固定标签。
+    const float previousWidth = hasPrevious ? previousTextSize.x +
+                                                  style.FramePadding.x * 2.0f +
+                                                  style.ItemSpacing.x
+                                            : 0.0f;
+    const float buttonWidth =
+        previousWidth +
+        (hasAcknowledge ? buttonSize.x + style.ItemSpacing.x : 0.0f);
     // 文本与按钮共同限制在视口内，窄窗口优先压缩提示文字。
     float maxTextWidth =
         std::min(420.0f * dpiScale,
@@ -357,7 +478,12 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
                                m_prompt.c_str(), nullptr, false, maxTextWidth);
     const ImVec2 bubbleSize{
         textSize.x + buttonWidth + style.WindowPadding.x * 2.0f,
-        std::max(textSize.y, buttonSize.y) + style.WindowPadding.y * 2.0f
+        std::max({ textSize.y,
+                   buttonSize.y,
+                   hasPrevious
+                       ? previousTextSize.y + style.FramePadding.y * 2.0f
+                       : 0.0f }) +
+            style.WindowPadding.y * 2.0f
     };
     // 预先计算气泡外框，遮罩稍后才能一次为目标、说明和按钮留出透明区。
     ImVec2 bubbleMin;
@@ -427,7 +553,10 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
         ImGuiWindowFlags_NoFocusOnAppearing |
         ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav;
-    bool                  acknowledged = false;
+    bool                  acknowledged    = false;
+    bool                  previousClicked = false;
+    std::optional<ImVec2> previousMin;
+    std::optional<ImVec2> previousMax;
     std::optional<ImVec2> acknowledgeMin;
     std::optional<ImVec2> acknowledgeMax;
     if ( ImGui::Begin("###WalkthroughSpotlightHint", nullptr, HINT_FLAGS) ) {
@@ -442,9 +571,27 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
             ImGui::PopTextWrapPos();
             ImGui::EndGroup();
         }
+        if ( hasPrevious ) {
+            if ( !m_prompt.empty() ) ImGui::SameLine();
+            // 首步保留禁用按钮以明确导航边界，不误触发跨路线跳转。
+            // 模态补充判定也检查 canGoBack，不能绕过 ImGui 的禁用状态。
+            // 实际控件矩形用于点击补判，气泡预估位置不能替代最终布局。
+            ImGui::PushID("WalkthroughSpotlightPrevious");
+            ImGui::PushItemFlag(ImGuiItemFlags_NoFocus, true);
+            ImGui::BeginDisabled(!canGoBack());
+            previousClicked = FeedbackButton(previousLabel);
+            ImGui::EndDisabled();
+            ImGui::PopItemFlag();
+            previousMin            = ImGui::GetItemRectMin();
+            previousMax            = ImGui::GetItemRectMax();
+            m_previousButtonCenter = { (previousMin->x + previousMax->x) * 0.5f,
+                                       (previousMin->y + previousMax->y) *
+                                           0.5f };
+            ImGui::PopID();
+        }
         if ( hasAcknowledge ) {
             // 按钮保持在说明右侧，让每个大遮罩都有明确且紧邻的退出入口。
-            if ( !m_prompt.empty() ) ImGui::SameLine();
+            if ( !m_prompt.empty() || hasPrevious ) ImGui::SameLine();
             ImGui::PushID("WalkthroughSpotlightAcknowledge");
             // 非模态环境仍使用统一按钮行为，并禁止点击提示时改变业务焦点。
             ImGui::PushItemFlag(ImGuiItemFlags_NoFocus, true);
@@ -463,6 +610,33 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel)
     ImGui::End();
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
+    // 模态窗口外的返回按钮采用与确认按钮相同的完整按下/释放判定。
+    // 独立锁存避免从一个按钮按下、拖到另一个按钮释放时错误导航。
+    // 控件缺席时仍采样鼠标状态，避免出现帧把既有按住当作新点击。
+    // 拖出一次后保持失败，必须重新按下才建立下一次有效手势。
+    const auto& io = ImGui::GetIO();
+    const bool  previousInside =
+        canGoBack() && previousMin && previousMax &&
+        containsPoint(io.MousePos, *previousMin, *previousMax);
+    const bool previousDown = io.MouseDown[ImGuiMouseButton_Left];
+    if ( previousDown ) {
+        if ( !m_previousMouseWasDown )
+            m_previousPressed = previousInside;
+        else if ( !previousInside )
+            m_previousPressed = false;
+    } else {
+        previousClicked |=
+            m_previousMouseWasDown && m_previousPressed && previousInside;
+        m_previousPressed = false;
+    }
+    m_previousMouseWasDown = previousDown;
+    if ( previousClicked ) {
+        // 本帧立即撤掉旧高亮；跨步骤请求在路线下一次更新时消费。
+        // 不再执行同帧确认分支，避免一个鼠标释放同时产生两个导航结果。
+        // requestPrevious 本身不持久化进度，也不会操作底层业务弹窗。
+        requestPrevious();
+        return;
+    }
     if ( acknowledgeMin && acknowledgeMax ) {
         // 模态窗口会阻止独立提示窗口成为 HoveredWindow；用实际按钮
         // 矩形补充释放判定，不放宽遮罩外的任何业务输入。
@@ -576,5 +750,11 @@ std::optional<Spotlight::TargetBounds> Spotlight::resolvedTargetBounds() const
 std::optional<ImVec2> Spotlight::acknowledgeButtonCenter() const
 {
     return m_acknowledgeButtonCenter;
+}
+
+/// @brief 返回本帧实际提交的返回按钮中心。
+std::optional<ImVec2> Spotlight::previousButtonCenter() const
+{
+    return m_previousButtonCenter;
 }
 }  // namespace MMM::UI::Walkthrough

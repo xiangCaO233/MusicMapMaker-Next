@@ -596,6 +596,128 @@ bool testWalkthroughStandalonePlacement()
     return true;
 }
 
+/// @brief 覆盖三类教学创建的定向回退，以及夹杂普通编辑和手动撤销的边界。
+/// @details 使用真实 DrawTool 提交身份，不只测试人工构造的动作标签。
+/// 目标物件与其它练习共享轨道和时间，保证删除依据身份而非位置匹配。
+/// 补偿本身仍应支持普通撤销重做，保存修订与业务通知沿用动作栈协议。
+/// 成功和已撤销两条分支分别构造全新会话，不共享实体槽位或动作栈。
+/// 原物件保留检查同时使用数量和实体身份，不能用同位置的新建物冒充。
+/// 使用固定非零身份区分练习，普通动作不设置身份，保持零值契约。
+/// 缺失身份使用不同令牌，验证没有命中时不会回退成普通栈顶撤销。
+/// 本用例只检查领域行为；导航回调消费由 Spotlight 测试单独覆盖。
+bool testWalkthroughPlacementRollback()
+{
+    for ( const auto type :
+          { MMM::NoteType::NOTE, MMM::NoteType::FLICK, MMM::NoteType::HOLD } ) {
+        for ( const bool alreadyUndone : { false, true } ) {
+            MMM::Logic::SessionContext context;
+            configureObjectEditingCanvas(context);
+            context.lastConfig.settings.enablePolylineEditing = true;
+            MMM::Logic::DrawTool tool;
+            // 保持相机、当前时间和轨宽与已有真实绘制测试一致。
+            // 测试打开折线编辑，确保 Shift 路径不是被配置禁用后降级成功。
+            const bool shift = type != MMM::NoteType::NOTE;
+            tool.handleStartBrush(
+                context,
+                MMM::Logic::CmdStartBrush{ .cameraId         = "Basic2DCanvas",
+                                           .mouseX           = 150.0F,
+                                           .mouseY           = 300.0F,
+                                           .isShiftDown      = shift,
+                                           .isCtrlDown       = true,
+                                           .createStandalone = true });
+            tool.handleUpdateBrush(
+                context,
+                MMM::Logic::CmdUpdateBrush{
+                    .cameraId = "Basic2DCanvas",
+                    .mouseX   = type == MMM::NoteType::FLICK ? 350.0F : 150.0F,
+                    .mouseY   = type == MMM::NoteType::HOLD ? 100.0F : 300.0F,
+                    .isShiftDown = shift,
+                    .isCtrlDown  = true });
+            // 无修饰键创建单键，横向 Shift 创建滑键，纵向 Shift 创建长条。
+            // 令牌在释放命令上传递，不能因类型不同而漏标历史动作。
+            tool.handleEndBrush(
+                context,
+                MMM::Logic::CmdEndBrush{ .cameraId         = "Basic2DCanvas",
+                                         .createStandalone = true,
+                                         .walkthroughToken = 11 });
+            // 若结束阶段未把身份写入 NoteAction，后续定向删除就会保持三颗物件。
+            // 因此数量断言同时覆盖 UI 命令载荷到逻辑历史的最后一段传递。
+            // 从持久化 ECS 检查最终类型，不能只凭画笔预览宣告创建成功。
+            // 视图只持有存储引用，后续每次 size 都读取当前状态。
+            auto notes = context.noteRegistry.view<MMM::Logic::NoteComponent>();
+            if ( notes.size() != 1U ||
+                 notes.get<MMM::Logic::NoteComponent>(*notes.begin()).m_type !=
+                     type )
+                return false;
+            // 用户已自行撤销时返回必须无操作，不能接着撤销下一条普通历史。
+            if ( alreadyUndone ) context.actionStack.undo(context);
+            // 普通编辑刻意与教学起点重叠；按位置删除会把它一起误伤。
+            // NoteAction 为每次创建建立独立逻辑身份，不能按轨道时间去重。
+            MMM::Logic::NoteComponent original;
+            original.m_timestamp  = context.currentTime;
+            original.m_trackIndex = 0;
+            const auto unrelated  = context.noteRegistry.create();
+            // 通过正常动作栈创建，确保错误的 CmdUndo 能被测试明确捕获。
+            // 直接写入 ECS 的普通对象无法覆盖“误弹出栈顶”这个回归风险。
+            context.actionStack.pushAndExecute(
+                std::make_unique<MMM::Logic::NoteAction>(
+                    MMM::Logic::NoteAction::Type::Create,
+                    unrelated,
+                    std::nullopt,
+                    original),
+                context);
+            // 另一教学步骤也应保留，验证范围不是所有独立创建或所有教学物件。
+            const auto otherStep = context.noteRegistry.create();
+            // 预留实体后再交动作初始化组件，保留一个不随容器遍历变化的身份。
+            // 两个非目标实体都须保持有效，不能仅用总数相同来判定保护成功。
+            auto otherAction = std::make_unique<MMM::Logic::NoteAction>(
+                MMM::Logic::NoteAction::Type::Create,
+                otherStep,
+                std::nullopt,
+                original);
+            otherAction->m_walkthroughToken = 12;
+            context.actionStack.pushAndExecute(std::move(otherAction), context);
+            MMM::Logic::ActionController controller(context);
+            // 走正式命令处理入口，不能只调用新 helper 而漏测分支分发。
+            // 当前栈顶属于令牌 12，请求 11 必须越过它而不改变它。
+            controller.handleCommand(
+                MMM::Logic::CmdUndo{ .walkthroughToken = 11 });
+            if ( notes.size() != 2U || !context.noteRegistry.valid(unrelated) ||
+                 !context.noteRegistry.valid(otherStep) )
+                return false;
+            const auto depth = context.actionStack.getUndoStackSize();
+            // 首次有效回退可以新增补偿历史；之后的重复请求必须保持深度。
+            // 已手动撤销分支从一开始就不应产生补偿记录。
+            // 同一返回重发、未成功绘制的令牌都不能产生空历史或执行普通 Undo。
+            controller.handleCommand(
+                MMM::Logic::CmdUndo{ .walkthroughToken = 11 });
+            controller.handleCommand(
+                MMM::Logic::CmdUndo{ .walkthroughToken = 99 });
+            if ( context.actionStack.getUndoStackSize() != depth ||
+                 notes.size() != 2U )
+                return false;
+            if ( !alreadyUndone ) {
+                // 未手动撤销的路径才有补偿可撤销；另一条路径跳过普通 Undo，
+                // 否则测试自身会主动删除作为保护对象的另一教学步骤。
+                // 同一补偿通过标准 Undo/Redo 往返，而不是调用教学回退重放。
+                // 补偿自己没有教学身份，不能被下一次教学请求再次匹配。
+                // 撤销回退恢复练习，重做回退再次删除；无关创建在往返中保持身份。
+                context.actionStack.undo(context);
+                if ( notes.size() != 3U ) return false;
+                context.actionStack.redo(context);
+                if ( notes.size() != 2U ) return false;
+            }
+            controller.handleCommand(
+                MMM::Logic::CmdUndo{ .walkthroughToken = 12 });
+            // 返回更早步骤时可以独立消费另一个教学创建，普通编辑仍然保留。
+            // 每个场景以恰好一颗原物件结束，排除类型特有的附属实体残留。
+            if ( notes.size() != 1U || !context.noteRegistry.valid(unrelated) )
+                return false;
+        }
+    }
+    return true;
+}
+
 /// @brief 验证反向拖动半拍、一拍的纯 Hold 在提交及撤销重做后仍为零长度长条。
 /// @details
 /// 对 Polyline 开关开/关各测试半拍与一拍反向拖动。鼠标保持同轨并向歌曲更早
@@ -7623,6 +7745,7 @@ int main()
                    testSelectAllRespectsPointerTrackArea() &&
                    testKeyModeBrushCreatesOnlyHold() &&
                    testWalkthroughStandalonePlacement() &&
+                   testWalkthroughPlacementRollback() &&
                    testDownwardBrushCreatesZeroLengthHold() &&
                    testDownwardFlickAndPolylineRemainSlides() &&
                    testPolylinePreservesHorizontalFirstGestureOrder() &&

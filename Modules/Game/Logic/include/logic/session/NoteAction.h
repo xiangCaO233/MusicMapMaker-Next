@@ -44,6 +44,9 @@ public:
     void undo(SessionContext& ctx) override;
     /// @brief 重新应用变化后的音符状态。
     void redo(SessionContext& ctx) override;
+    /// @brief 校验逻辑身份后生成教学创建的删除动作，缺失物件安全跳过。
+    std::unique_ptr<IEditorAction> walkthroughRollback(
+        SessionContext& ctx) override;
     /// @brief 获取该操作类型的可读名称。
     std::string getName() const override;
     /// @brief 草稿专属操作不发布谱面变更，其余操作修改主谱面物件。

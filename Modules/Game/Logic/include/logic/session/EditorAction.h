@@ -36,6 +36,15 @@ public:
 
     /// @brief 返回该操作执行、撤销或重做会修改的谱面数据类别。
     [[nodiscard]] virtual ::MMM::BeatmapMutationFlags mutationFlags() const = 0;
+
+    /// @brief 教学创建所属步骤；普通动作保持零，不受引导回退影响。
+    std::uint64_t m_walkthroughToken{ 0 };
+    /// @brief 构造只移除本动作教学产物的补偿动作；默认不支持。
+    /// @note 不重放普通 undo，以免恢复布局或覆盖其他后续编辑。
+    virtual std::unique_ptr<IEditorAction> walkthroughRollback(SessionContext&)
+    {
+        return {};
+    }
 };
 
 /// @brief 操作栈管理器，维护撤销栈和重做栈。
@@ -51,6 +60,10 @@ public:
     /// @brief 执行撤销
     /// @param ctx 会话上下文引用
     void undo(SessionContext& ctx);
+
+    /// @brief 精确回滚指定教学步骤创建的物件，保留其余历史和内容。
+    /// @warning 仅用户点击返回时扫描历史，不允许逐帧调用。
+    void rollbackWalkthrough(std::uint64_t token, SessionContext& ctx);
 
     /// @brief 执行重做
     /// @param ctx 会话上下文引用

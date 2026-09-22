@@ -1722,7 +1722,8 @@ void UIManager::onUpdateUI()
     // 所有控件完成目标上报后再绘制突出层，亮区使用本帧最终布局坐标。
     m_walkthroughSpotlight->render(
         Config::AppConfig::instance().getWindowContentScale(),
-        TR("ui.walkthrough.spotlight_acknowledge").data());
+        TR("ui.walkthrough.spotlight_acknowledge").data(),
+        TR("ui.walkthrough.previous_step").data());
 
     // 帧末跟踪根窗口焦点并同步平台标题栏命中区域。
     trackImGuiFocusForAutoSave();

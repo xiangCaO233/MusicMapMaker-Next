@@ -60,6 +60,34 @@ void EditorActionStack::undo(SessionContext& ctx)
     ProjectDraftLaneService::sync(ctx);
 }
 
+/// @brief 用独立补偿事务删除教学产物，不弹出无关的栈顶编辑。
+/// @warning 用户显式返回时执行；只扫描历史，不扫描整个实体注册表。
+void EditorActionStack::rollbackWalkthrough(std::uint64_t   token,
+                                            SessionContext& ctx)
+{
+    if ( token == 0 ) return;
+    std::vector<std::unique_ptr<IEditorAction>> actions;
+    // 先收集再入栈，避免 pushAndExecute 扩容使历史迭代器失效。
+    // 同一步骤即使产生多次创建，也只能撤掉带相同身份的产物。
+    for ( auto it = m_undoStack.rbegin(); it != m_undoStack.rend(); ++it ) {
+        if ( (*it)->m_walkthroughToken != token ) continue;
+        auto rollback = (*it)->walkthroughRollback(ctx);
+        if ( rollback ) actions.push_back(std::move(rollback));
+        // 请求只消费一次；重复返回或已手动删除都不能退化为普通撤销。
+        (*it)->m_walkthroughToken = 0;
+    }
+    // 手动撤销过的练习已经不在谱面上，但重做不能保留过期的教学身份。
+    for ( auto& action : m_redoStack ) {
+        if ( action->m_walkthroughToken == token )
+            action->m_walkthroughToken = 0;
+    }
+    // 空回滚不改动保存点、不清空用户的重做记录。
+    if ( actions.empty() ) return;
+    pushAndExecute(std::make_unique<CompositeEditorAction>(
+                       std::move(actions), "Walkthrough Rollback"),
+                   ctx);
+}
+
 /// @brief 重做最近撤销的动作，并恢复其在撤销历史中的位置。
 /// @param ctx 保存动作涉及实体的会话。
 /// @note 调用动作自己的 redo，允许它区别于首次 execute 的初始化过程。

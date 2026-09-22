@@ -341,9 +341,12 @@ bool BeatmapSession::blockCollaborationUnauthorizedEdit(
                                   ? ::MMM::BeatmapMutationFlags::AudioSamples
                                   : ::MMM::BeatmapMutationFlags::Objects)
                            : ::MMM::BeatmapMutationFlags::None;
-        } else if ( std::holds_alternative<CmdUndo>(cmd) ) {
+        } else if ( const auto* undo = std::get_if<CmdUndo>(&cmd) ) {
             // 撤销权限取实际栈顶动作，不能将所有历史操作一概视作音符修改。
-            required = m_ctx->actionStack.undoMutationFlags();
+            // 教学补偿只删除玩家音符，不能误用无关栈顶动作的权限类别。
+            required = undo->walkthroughToken != 0
+                           ? ::MMM::BeatmapMutationFlags::Objects
+                           : m_ctx->actionStack.undoMutationFlags();
         } else if ( std::holds_alternative<CmdRedo>(cmd) ) {
             required = m_ctx->actionStack.redoMutationFlags();
         } else if ( std::holds_alternative<CmdPaste>(cmd) ) {

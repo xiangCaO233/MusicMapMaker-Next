@@ -6,7 +6,9 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/walkthrough/WalkthroughModel.h"
+#include "ui/walkthrough/WalkthroughPage.h"
 #include "ui/walkthrough/WalkthroughService.h"
+#include "ui/walkthrough/WalkthroughSpotlight.h"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <nlohmann/json.hpp>
@@ -338,6 +340,53 @@ bool testPages()
     const auto& topic   = service.topics().front();
     const auto& step    = topic.m_branches.front().m_steps.front();
     service.acknowledge(topic, step);
+    {
+        // 用真实目录和页面导航验证跨步骤回退，不能只检查 Spotlight 局部索引。
+        MMM::UI::WalkthroughPage route;
+        // 与 WelcomeView 共用 UIManager 的全局 Spotlight 和服务进度。
+        auto&       spotlight = manager.walkthroughSpotlight();
+        const auto& branch    = topic.m_branches.front();
+        const auto& second    = branch.m_steps[1];
+        // 第一步已有历史完成记录，返回仍应完整进入回看，而不是跳过它。
+        // 此路线无项目门禁，测试无需伪造已打开谱面来绕过环境检查。
+        // 从第二步启动，能力计算必须依据模型顺序而不是运行时访问历史。
+        route.startGuide(&manager, topic, branch, second);
+        if ( !spotlight.canGoBack() ) return false;
+        spotlight.requestPrevious();
+        route.updateGuide(&manager);
+        if ( !spotlight.reviewing() ||
+             !spotlight.awaitingTarget(step.m_guide->m_targets.front()) )
+            return false;
+        // 已完成控件重复报告不推进，也不清除持久化学习记录。
+        // 后续目标的完成通知也不能绕开首目标，覆盖菜单仍展开的情况。
+        spotlight.completeTarget(step.m_guide->m_targets.back());
+        route.updateGuide(&manager);
+        if ( !spotlight.awaitingTarget(step.m_guide->m_targets.front()) ||
+             !service.progress().completed(topic, step) )
+            return false;
+        // 回看中的缺席菜单仍可逐项显式确认，最终回到正常的第二步。
+        // 本测试不渲染业务菜单，刻意覆盖返回到已关闭窗口的处理路径。
+        // 最后目标确认前，页面不能凭历史进度提前结束整条路线。
+        for ( const auto& target : step.m_guide->m_targets ) {
+            if ( !spotlight.awaitingTarget(target) ) return false;
+            spotlight.acknowledgeCurrentStage();
+        }
+        route.updateGuide(&manager);
+        if ( spotlight.reviewing() || !spotlight.canGoBack() ||
+             !spotlight.active() || spotlight.completed() )
+            return false;
+        // 再次返回必须仍然可用，确保请求没有残留并导致一次点击连续退两次。
+        // 再向前后退出回看模式，后续的新业务操作仍可正常自动推进。
+        // 连续往返不依赖清空学习记录，也不能重用已消费的请求。
+        spotlight.requestPrevious();
+        route.updateGuide(&manager);
+        if ( !spotlight.awaitingTarget(step.m_guide->m_targets.front()) )
+            return false;
+        route.stopGuide(&manager);
+        // 停止后欢迎页的其它导航测试不能带着活动遮罩或待处理返回请求。
+        // 学习记录仍由服务持有，本地导航对象销毁不影响先前的确认结果。
+        if ( spotlight.active() || spotlight.canGoBack() ) return false;
+    }
     welcome.showHome();
     if ( !welcome.showingHome() || !service.progress().completed(topic, step) )
         return false;

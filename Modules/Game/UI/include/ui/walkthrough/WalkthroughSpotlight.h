@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -14,8 +15,8 @@ namespace MMM::UI::Walkthrough
 /// @brief 突出当前演练目标，并用可确认提示推进配置中的目标阶段。
 ///
 /// 引导目标使用与本地化文本无关的语义 ID。一个步骤可以提供多个按流程排列的
-/// 候选目标。后续目标一旦出现，状态机便单调推进且不再回退，适合菜单、弹窗
-/// 和多页向导依次出现的即时模式界面。
+/// 候选目标。正常演练按可见目标推进，显式返回时锁定回看阶段，避免已完成的
+/// 业务状态把用户立即推回后续目标。
 class Spotlight
 {
 public:
@@ -32,8 +33,26 @@ public:
     /// @brief 启动或替换当前引导步骤。
     /// @param targets 按流程先后排列的语义目标 ID，后出现的可见目标优先。
     /// @param prompt 纯文字步骤的操作提示或目标旁的说明气泡。
+    /// @param previousStepAvailable 所属路线是否还有前一个可引导步骤。
+    /// @param reviewing 是否由返回操作进入；回看只由用户显式确认推进。
     /// @warning 用户显式进入引导时调用；允许复制字符串，不得每帧重复启动。
-    void start(const std::vector<std::string>& targets, std::string prompt);
+    void start(const std::vector<std::string>& targets, std::string prompt,
+               bool previousStepAvailable = false, bool reviewing = false);
+
+    /// @brief 当前目标或所属路线存在前序步骤时允许返回。
+    bool canGoBack() const;
+    /// @brief 回退一个目标；当前为首目标时向路线持有者请求前一步。
+    /// @warning 仅执行业务层显式登记的练习回滚，不清理学习记录。
+    void requestPrevious();
+    /// @brief 当前步骤本次启动的唯一身份，供绘制命令标记产物。
+    std::uint64_t stepToken() const { return m_stepToken; }
+    /// @brief 登记当前目标的练习回滚；只在实际成功提交时调用。
+    void registerRollback(std::string_view      targetId,
+                          std::function<void()> rollback);
+    /// @brief 路线持有者消费一次跨步骤返回请求。
+    bool consumePreviousStepRequest();
+    /// @brief 回看阶段不接受已有业务状态驱动的自动推进。
+    bool reviewing() const { return m_reviewing; }
 
     /// @brief 结束当前引导并立即停止后续目标采集。
     void stop();
@@ -62,7 +81,8 @@ public:
     /// @brief 通知突出层某个语义目标已经由业务逻辑正确完成。
     /// @param targetId 与演练配置中的 targets 项一致。
     /// @warning 只更新引导状态，不执行控件动作；调用方必须先确认业务成功。
-    void completeTarget(std::string_view targetId);
+    /// @param explicitAction 是否为回看后新发生的操作，而非持续满足的状态。
+    void completeTarget(std::string_view targetId, bool explicitAction = false);
 
     /// @brief 用最近提交的 ImGui 控件矩形上报语义目标。
     /// @param targetId 与演练配置中的 targets 项一致。
@@ -83,8 +103,10 @@ public:
     /// @brief 绘制暗化遮罩、目标描边和带确认按钮的引导提示。
     /// @param dpiScale 当前内容缩放，用于逻辑间距和线宽。
     /// @param acknowledgeLabel 当前语言的阶段确认按钮文本。
+    /// @param previousLabel 当前语言的返回按钮文本；为空时不绘制该按钮。
     /// @warning UI 热路径：每帧创建固定 ID 的小提示窗口，不拦截窗口外输入。
-    void render(float dpiScale, const char* acknowledgeLabel);
+    void render(float dpiScale, const char* acknowledgeLabel,
+                const char* previousLabel = nullptr);
 
     /// @brief 返回本帧最终采用的目标 ID，供诊断和无 GPU 测试使用。
     /// @return 没有可见候选目标时返回空视图。
@@ -97,6 +119,8 @@ public:
     /// @brief 返回本帧确认按钮中心，供自动化输入与 UI 诊断使用。
     /// @return 没有目标遮罩或按钮未提交时返回空值。
     [[nodiscard]] std::optional<ImVec2> acknowledgeButtonCenter() const;
+    /// @brief 本帧上一步按钮中心，用于无 GPU 输入回归测试。
+    [[nodiscard]] std::optional<ImVec2> previousButtonCenter() const;
 
 private:
     /// @brief 突出引导逐帧状态；阶段完成后只能单调向后推进。
@@ -127,12 +151,29 @@ private:
 
     /// @brief 当前引导候选目标，仅在用户进入另一引导时替换。
     std::vector<std::string> m_targets;
+    /// @brief 一个目标的业务补偿，不持有画布或页面指针。
+    struct Rollback {
+        std::string           targetId;  ///< 原始绘制目标，不依赖界面标签。
+        std::function<void()> action;    ///< 发布定向撤销命令的低频回调。
+    };
+    /// @brief 本轮尚未回退的绘制产物；正常结束只释放，不撤销成果。
+    std::vector<Rollback> m_rollbacks;
+    /// @brief 逐次启动递增且停止时不复位，避免旧历史匹配重练步骤。
+    std::uint64_t m_stepToken{ 0 };
+    /// @brief 消费指定目标的全部回滚，重复返回不会触发普通撤销。
+    void rollbackTarget(std::string_view targetId);
     /// @brief 当前引导提示文本，来自已验证的演练配置。
     std::string m_prompt;
     /// @brief 本帧优先级最高的可见目标。
     std::optional<Anchor> m_anchor;
-    /// @brief 当前尚待完成的目标索引；后续目标出现时只会单调增加。
+    /// @brief 当前目标索引；正常自动推进，只有显式返回才减小。
     std::size_t m_stage{ 0 };
+    /// @brief 路线持有者提供的跨步骤返回能力。
+    bool m_previousStepAvailable{ false };
+    /// @brief 待路线持有者消费的返回请求，重复点击不会累积。
+    bool m_previousStepRequested{ false };
+    /// @brief 显式回看期间锁定目标，不被后续可见目标或业务完成抢占。
+    bool m_reviewing{ false };
     /// @brief 当前逐帧引导状态。
     State m_state{ State::Inactive };
     /// @brief 当前帧演练页面是否仍可见，防止关闭页面后残留遮罩。
@@ -143,5 +184,11 @@ private:
     bool m_acknowledgePressed{ false };
     /// @brief 本帧实际提交的确认按钮中心，下一帧开始时失效。
     std::optional<ImVec2> m_acknowledgeButtonCenter;
+    /// @brief 返回按钮的模态补充点击状态，与确认按钮相互独立。
+    bool m_previousMouseWasDown{ false };
+    /// @brief 返回按钮内按下后未拖出的手势锁存。
+    bool m_previousPressed{ false };
+    /// @brief 当前帧返回按钮的实际中心，不沿用旧布局。
+    std::optional<ImVec2> m_previousButtonCenter;
 };
 }  // namespace MMM::UI::Walkthrough

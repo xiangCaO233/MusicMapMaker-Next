@@ -30,6 +30,7 @@ return {
 	["ui.walkthrough.enter_guide"] = "Start guide",
 	["ui.walkthrough.stop_guide"] = "Stop guide",
 	["ui.walkthrough.spotlight_acknowledge"] = "Got it",
+	["ui.walkthrough.previous_step"] = "Previous",
 	["ui.walkthrough.reset"] = "Restart walkthrough",
 	["ui.walkthrough.reset_confirm"] = "Reset only this topic's learning progress. Project files will not be changed.",
 	["ui.walkthrough.goal_complete"] = "Topic goal reached. You can still explore the other methods.",

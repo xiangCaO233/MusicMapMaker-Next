@@ -1561,10 +1561,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                                displayName,
-                                                false,
-                                                state.m_cameraId,
-                                                !state.m_cameraId.empty());
+                                      displayName,
+                                      false,
+                                      state.m_cameraId,
+                                      !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
         // fallback 始终指向最后成功创建项，活动路径丢失时仍给用户可用画布。
 
@@ -2690,6 +2690,22 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
         }
     }
 
+    // 教学回退绑定创建时的画布；切换标签后不得误用当前活动谱面的历史。
+    if ( const auto* undo = std::get_if<CmdUndo>(&cmd);
+         undo && undo->walkthroughToken != 0 ) {
+        std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+        auto&      sessions = m_sessionRegistry.entriesUnsafe();
+        const auto index =
+            findSessionIndexByCameraIdUnsafe(sessions, undo->cameraId);
+        // 目标关闭或替换时直接放弃；唯一教学身份也阻止新会话命中旧练习。
+        if ( index >= 0 && index < static_cast<int32_t>(sessions.size()) &&
+             sessions[static_cast<size_t>(index)].session ) {
+            sessions[static_cast<size_t>(index)].session->pushCommand(
+                std::move(cmd));
+        }
+        return;
+    }
+
     // 剩余命令属于活动编辑上下文；取得锁后再读取活动索引，避免路由中途切换。
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
     // 颜色选择虽然仅由活动会话执行，但引擎保留全局副本供新建与切换会话恢复。
@@ -3403,10 +3419,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 顺序投递初始化命令，保证载图处理看到完整编辑环境。
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName = displayName.empty()
-                                              ? beatmap->m_baseMapMetadata.name
-                                              : displayName;
-                sessions[i].beatmapPathKey = requestedBeatmapKey;
+                sessions[i].displayName              = displayName.empty()
+                                                           ? beatmap->m_baseMapMetadata.name
+                                                           : displayName;
+                sessions[i].beatmapPathKey           = requestedBeatmapKey;
                 // 占位条目的旧音频身份必须覆盖为空，等待载图命令生成新描述符。
                 sessions[i].audioTimelineFingerprint =
                     requestedAudioTimelineFingerprint;

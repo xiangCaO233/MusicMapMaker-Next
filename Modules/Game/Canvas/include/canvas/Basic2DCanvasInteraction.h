@@ -47,10 +47,15 @@ public:
     void cancelBrushOnNextRelease();
 
     /// @brief 设置后续起笔是否为只新建独立物件的教学练习。
-    /// @warning UI 每帧入口，只修改布尔值，起笔时锁存到整段手势。
-    void setWalkthroughPlacement(bool enabled)
+    /// @warning UI 每帧入口，只修改值状态，起笔时锁存到整段手势。
+    void setWalkthroughPlacement(bool enabled, std::uint64_t token = 0)
     {
+        // 步骤切换不能让旧手势在新目标下提交；保持普通绘制不受影响。
+        if ( m_leftPressStartedOnCanvas && m_standaloneBrush &&
+             m_brushWalkthroughToken != token )
+            m_cancelBrushOnNextRelease = true;
         m_walkthroughPlacement = enabled;
+        m_walkthroughToken     = token;
     }
 
     /// @brief 仅同步后台主画布的鼠标悬停位置，不启用编辑交互。
@@ -163,6 +168,10 @@ private:
     bool m_walkthroughPlacement{ false };
     /// @brief 当前活动画笔锁存的独立放置策略，不随步骤确认或结束改变。
     bool m_standaloneBrush{ false };
+    /// @brief 下一次教学起笔所属的步骤实例。
+    std::uint64_t m_walkthroughToken{ 0 };
+    /// @brief 起笔时冻结的步骤身份，不能被后续帧的导航替换。
+    std::uint64_t m_brushWalkthroughToken{ 0 };
 
     void handleHotkeys(const Common::Render::RenderSnapshot* currentSnapshot);
     /// @brief 处理主画布鼠标、批注栏和物件编辑交互。

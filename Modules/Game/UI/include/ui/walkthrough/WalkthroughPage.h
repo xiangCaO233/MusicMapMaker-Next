@@ -32,12 +32,13 @@ public:
     /// @warning UI 可见帧只读取目录与进度，文件访问仅来自显式操作或进度变更。
     void render(UIManager* manager, std::size_t topicIndex);
 
-private:
     /// @brief 启动指定配置步骤并记录本轮信号基线。
+    /// @param reviewing 返回模式不接受业务信号自动推进。
     void startGuide(UIManager* manager, const Walkthrough::Topic& topic,
                     const Walkthrough::Branch& branch,
-                    const Walkthrough::Step&   step);
+                    const Walkthrough::Step& step, bool reviewing = false);
 
+private:
     /// @brief 当前由用户启动的路线引导身份及当前步骤状态。
     struct ActiveGuide {
         /// @brief 主题稳定 ID。

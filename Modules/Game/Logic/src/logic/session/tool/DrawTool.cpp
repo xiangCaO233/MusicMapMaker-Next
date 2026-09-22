@@ -1652,6 +1652,9 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
             // 此路径由动作自行分配身份，保持空 before 的创建语义。
             auto action = std::make_unique<NoteAction>(
                 NoteAction::Type::Create, entt::null, std::nullopt, note);
+            // 仅独立练习创建可被返回操作定向删除，普通绘制不能混入教学历史。
+            if ( cmd.createStandalone )
+                action->m_walkthroughToken = cmd.walkthroughToken;
             ctx.actionStack.pushAndExecute(std::move(action), ctx);
         }
     }

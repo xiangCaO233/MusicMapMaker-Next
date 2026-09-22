@@ -93,19 +93,29 @@ namespace MMM::UI
 /// @param topic 当前路线主题。
 /// @param branch 当前路线分支。
 /// @param step 必须包含 guide 的目标步骤。
+/// @param reviewing 是否显式返回回看，不能被历史完成状态立即推走。
 void WalkthroughPage::startGuide(UIManager*                 manager,
                                  const Walkthrough::Topic&  topic,
                                  const Walkthrough::Branch& branch,
-                                 const Walkthrough::Step&   step)
+                                 const Walkthrough::Step& step, bool reviewing)
 {
     if ( !step.m_guide ) return;
     const auto& language =
         Config::AppConfig::instance().getEditorSettings().language;
     const auto& configuredPrompt = step.m_guide->m_prompt.get(language);
+    // 路线顺序是前后导航的唯一依据，历史完成度不能删除回看入口。
+    bool hasPrevious = false;
+    // 没有 guide 的说明项不属于可执行导航节点，不能成为返回后的死路。
+    for ( const auto& candidate : branch.m_steps ) {
+        if ( candidate.m_id == step.m_id ) break;
+        hasPrevious |= candidate.m_guide.has_value();
+    }
     manager->walkthroughSpotlight().start(step.m_guide->m_targets,
                                           configuredPrompt.empty()
                                               ? step.m_title.get(language)
-                                              : configuredPrompt);
+                                              : configuredPrompt,
+                                          hasPrevious,
+                                          reviewing);
     m_activeGuide = ActiveGuide{
         .topicId  = topic.m_id,
         .branchId = branch.m_id,
@@ -181,14 +191,31 @@ void WalkthroughPage::updateGuide(UIManager* manager)
         m_activeGuide.reset();
         return;
     }
+    // 返回请求优先于完成或业务信号；点击返回的同帧不能顺便完成当前步骤。
+    if ( spotlight.consumePreviousStepRequest() ) {
+        // 与向前遍历使用同一分支边界，不跨主题或跳进其它创建路线。
+        auto previous = current;
+        while ( previous != branch->m_steps.begin() ) {
+            --previous;
+            // 顺序查找只发生在返回请求被消费时，不建立逐帧历史副本。
+            if ( !previous->m_guide ) continue;
+            // 重建信号基线，不清空学习进度；Spotlight 消费目标登记的练习补偿。
+            startGuide(manager, *topic, *branch, *previous, true);
+            break;
+        }
+        // 返回后立即退出本次推进，避免消费业务完成信号后又向前跳转。
+        spotlight.keepAlive();
+        return;
+    }
     const bool targetCompleted = spotlight.completed();
     if ( targetCompleted )
         // 高亮层的“知道了”和业务目标完成都应同步到主题进度。
         // acknowledge 对已经由业务信号自动完成的步骤保持幂等并保留来源。
         service.acknowledge(*topic, *current);
     if ( targetCompleted ||
-         service.receivedSignalAfter(*current,
-                                     m_activeGuide->signalRevisionAtStart) ) {
+         (!spotlight.reviewing() &&
+          service.receivedSignalAfter(*current,
+                                      m_activeGuide->signalRevisionAtStart)) ) {
         const auto next = std::find_if(std::next(current),
                                        branch->m_steps.end(),
                                        [](const Walkthrough::Step& candidate) {

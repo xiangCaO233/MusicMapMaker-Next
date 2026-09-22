@@ -84,6 +84,58 @@
 
 namespace
 {
+/// @brief 验证绘制回退只消费当前和即将重练的产物，正常结束不删除成果。
+/// @details 独立计数模拟三类绘制的副作用，不依赖逻辑线程或真实物件。
+/// 按照 Note、Flick、Hold 的正式路线顺序验证，避免用单个回调掩盖跨步问题。
+/// 回调不负责推进教程，导航状态仍由 requestPrevious/start 驱动。
+/// 最后检查退出后的身份隔离，防止重练意外删除之前保留的成果。
+bool testDrawingRollback()
+{
+    MMM::UI::Walkthrough::Spotlight spotlight;
+    int                             notes = 0, flicks = 0, holds = 0;
+    spotlight.start({ "note" }, "Note", true);
+    const auto noteToken = spotlight.stepToken();
+    spotlight.registerRollback("note", [&] { ++notes; });
+    spotlight.completeTarget("note", true);
+    spotlight.start({ "flick" }, "Flick", true);
+    // 正常衔接保留单键，不把完成步骤当成需要撤销的退出。
+    if ( notes != 0 || spotlight.stepToken() == noteToken ) return false;
+    spotlight.registerRollback("flick", [&] { ++flicks; });
+    spotlight.completeTarget("flick", true);
+    spotlight.start({ "hold" }, "Hold", true);
+    // 模拟创建已成功而页面尚未衔接的窄窗口，返回仍需处理当前成果。
+    // 不依赖完成态来判断是否有产物，唯一依据是已登记的业务补偿。
+    spotlight.registerRollback("hold", [&] { ++holds; });
+    spotlight.requestPrevious();
+    // 请求立即消费当前步骤，页面确认前重复点击也不会执行第二次。
+    spotlight.requestPrevious();
+    if ( holds != 1 || flicks != 0 || notes != 0 ||
+         !spotlight.consumePreviousStepRequest() )
+        return false;
+    spotlight.start({ "flick" }, "Flick", true, true);
+    // 重练滑键只清除滑键，必须保留作为邻近定位基准的单键。
+    if ( flicks != 1 || notes != 0 ) return false;
+    spotlight.completeTarget("flick");
+    if ( spotlight.completed() ) return false;
+    // 回看防自动跳步不应阻止用户重新画出的正确结果。
+    spotlight.registerRollback("flick", [&] { ++flicks; });
+    spotlight.completeTarget("flick", true);
+    if ( !spotlight.completed() ) return false;
+    spotlight.requestPrevious();
+    spotlight.consumePreviousStepRequest();
+    spotlight.start({ "note" }, "Note", true, true);
+    // 连续返回必须同时移除重新绘制的滑键和首次单键，但不能重复撤长条。
+    // 这也验证同一个语义目标在重练后可以登记新的独立补偿。
+    if ( flicks != 2 || notes != 1 || holds != 1 ) return false;
+    // 正常退出保留成果，并且下轮返回不能消费上一轮的闭包。
+    spotlight.registerRollback("note", [&] { ++notes; });
+    spotlight.stop();
+    spotlight.start({ "note" }, "Note", true, true);
+    // 退出不重置单调步骤身份，旧补偿则必须已经释放。
+    spotlight.requestPrevious();
+    return notes == 1;
+}
+
 /// @brief 在测试宿主内提交保持打开的模态窗口及其引导目标。
 /// @param spotlight 接收目标矩形的突出引导实例。
 /// @param requestOpen 本帧是否请求首次打开弹窗。
@@ -109,6 +161,120 @@ bool submitModalTarget(MMM::UI::Walkthrough::Spotlight& spotlight,
     return modalOpen;
 }
 
+/// @brief 覆盖显式回退、目标锁定、缺席导航和模态返回按钮的完整手势。
+/// @details 状态部分不依赖控件存在，输入部分使用真实 ImGui 模态窗口。
+/// 两部分分别定位导航协议错误与输入层级错误，不能互相替代。
+/// 缺席目标只检查导航气泡，不能把没有高亮矩形误当作返回失败。
+/// 所有坐标来自当帧按钮实际中心，不依赖文本宽度或硬编码屏幕位置。
+/// 返回不负责修改业务窗口，这里只断言模态仍打开以及教程水位变化。
+/// @return 返回不会被已有状态推走，且模态按钮仅在合法释放时激活。
+bool testPreviousNavigation()
+{
+    MMM::UI::Walkthrough::Spotlight spotlight;
+    spotlight.start({ "before", "after" }, "Review");
+    // 首目标且无前一步时禁止返回，不将索引减成无符号上溢值。
+    // 默认调用没有路线前驱，保持独立 Spotlight 实例的首步边界。
+    if ( spotlight.canGoBack() ) return false;
+    spotlight.requestPrevious();
+    if ( !spotlight.awaitingTarget("before") ) return false;
+    spotlight.reportTarget(
+        "after", { 20, 20 }, { 80, 80 }, ImGui::GetMainViewport());
+    spotlight.requestPrevious();
+    if ( !spotlight.reviewing() || !spotlight.awaitingTarget("before") ||
+         spotlight.resolvedTargetBounds() )
+        return false;
+    // 后续窗口仍存在、当前业务持续上报完成，都不能抢走主动回看的目标。
+    // 这模拟已经打开的标签页持续报告完成，而不是新的用户确认。
+    // 返回当帧还要立即清除原锚点，不能等到下一次清帧才撤掉。
+    spotlight.reportTarget(
+        "after", { 20, 20 }, { 80, 80 }, ImGui::GetMainViewport());
+    spotlight.completeTarget("before");
+    if ( !spotlight.awaitingTarget("before") ) return false;
+    // 目标已关闭时仍允许“知道了”显式向前，不伪造重新打开窗口的动作。
+    // 显式确认只解开当前目标，仍留在同一配置步骤的回看模式。
+    spotlight.acknowledgeCurrentStage();
+    if ( !spotlight.awaitingTarget("after") ) return false;
+    spotlight.start({}, "Text only", true);
+    spotlight.requestPrevious();
+    // 跨步骤请求只能消费一次，不能在下一帧再次回退一整步。
+    // 纯文字步骤没有目标索引，也必须能请求回到路线前一步。
+    // 后续 stop 必须清空回看标记和返回能力，不污染另一条路线。
+    if ( !spotlight.consumePreviousStepRequest() ||
+         spotlight.consumePreviousStepRequest() )
+        return false;
+    spotlight.stop();
+    if ( spotlight.canGoBack() || spotlight.reviewing() ) return false;
+
+    /// @brief 使用真实模态窗口驱动返回按钮，不绕开 ImGui 输入分发。
+    const auto frame = [&](bool open) {
+        // 顺序与生产一致：清帧、业务目标上报、续租、最终导航气泡。
+        ImGui::NewFrame();
+        spotlight.beginFrame();
+        const bool modalOpen = submitModalTarget(spotlight, open);
+        spotlight.keepAlive();
+        spotlight.render(1.0f, "Got it", "Previous");
+        ImGui::Render();
+        return modalOpen;
+    };
+    spotlight.start(
+        { "modal.before", "modal.target" }, "Back inside a modal", true);
+    frame(true);
+    frame(false);
+    const auto center = spotlight.previousButtonCenter();
+    // 前两帧已使即时模式窗口落到最终布局，此时才取得输入坐标。
+    if ( !center ) return false;
+    auto& io = ImGui::GetIO();
+    io.AddMousePosEvent(center->x, center->y);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frame(false);
+    // 按下只建立手势，不提前改变步骤或借机关闭模态业务窗口。
+    // 释放必须走与普通按钮一致的激活边界，不能仅凭鼠标命中就导航。
+    if ( !spotlight.awaitingTarget("modal.target") ) return false;
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    const bool modalSurvived = frame(false);
+    if ( !modalSurvived || !spotlight.awaitingTarget("modal.before") )
+        return false;
+    // 前序目标在当前模态窗口中缺席，导航气泡仍可返回或继续。
+    // 既要没有虚假目标，也要两个导航入口仍存在。
+    // 模态仍在遮挡普通窗口，按钮不能靠关闭弹窗来绕过输入限制。
+    frame(false);
+    if ( spotlight.resolvedTargetBounds() ||
+         !spotlight.previousButtonCenter() ||
+         !spotlight.acknowledgeButtonCenter() )
+        return false;
+
+    // 从按钮按下再拖出取消，不允许仅靠释放时的旧坐标触发返回。
+    // 切换目标时原按键锁存应已清空，不得继承上一轮合法点击。
+    spotlight.start({ "modal.target" }, "Cancel a dragged button", true);
+    frame(false);
+    frame(false);
+    const auto cancelCenter = spotlight.previousButtonCenter();
+    if ( !cancelCenter ) return false;
+    io.AddMousePosEvent(cancelCenter->x, cancelCenter->y);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frame(false);
+    io.AddMousePosEvent(-100, -100);
+    // 拖出单独经历一帧，以验证手势失效状态被锁存。
+    frame(false);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frame(false);
+    if ( spotlight.consumePreviousStepRequest() || spotlight.reviewing() )
+        return false;
+    // 最后一次合法点击走跨步骤请求，确认按钮不得同时完成本步。
+    // 不重新 start，证明取消状态能供下一次合法点击继续使用。
+    // 此时在首目标请求返回，页面层接手而不是再次修改局部索引。
+    // 请求与完成终态必须互斥，否则页面下一帧可能前进而不是后退。
+    // 这也检查两个按钮的手势缓存没有被前一次拖出操作串在一起。
+    // 一次合法请求的消费不会触发其它窗口动作或更改项目状态。
+    const auto finalCenter = spotlight.previousButtonCenter();
+    if ( !finalCenter ) return false;
+    io.AddMousePosEvent(finalCenter->x, finalCenter->y);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frame(false);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frame(false);
+    return spotlight.consumePreviousStepRequest() && !spotlight.completed();
+}
 }  // namespace
 
 /// @brief 在最小 ImGui 帧中验证 Spotlight 的配置驱动行为。
@@ -502,6 +668,8 @@ int main()
     spotlight.render(1.0f, "Got it");
     const bool hiddenValid = foreground->VtxBuffer.Size == hiddenVerticesBefore;
     ImGui::Render();
+    const bool previousValid =
+        testPreviousNavigation() && testDrawingRollback();
     ImGui::DestroyContext();
-    return hiddenValid ? 0 : 9;
+    return !hiddenValid ? 9 : previousValid ? 0 : 63;
 }

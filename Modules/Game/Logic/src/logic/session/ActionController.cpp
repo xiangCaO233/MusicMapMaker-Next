@@ -642,6 +642,23 @@ std::string BatchTimelineAction::getName() const
 
 // --- NoteAction 实现 ---
 
+/// @brief 构造教学创建的精确反向删除，不恢复其它领域状态。
+/// @warning 仅用户回退时调用，实体缺失或逻辑身份已改变时不产生动作。
+std::unique_ptr<IEditorAction> NoteAction::walkthroughRollback(
+    SessionContext& ctx)
+{
+    // 只允许撤销独立教学创建；更新、删除和槽位复用不能借此修改原谱面。
+    if ( m_type != Type::Create || !m_after ||
+         !isActionNoteEntity(ctx.noteRegistry, m_entity, *m_after) )
+        return {};
+    const auto& current = ctx.noteRegistry.get<NoteComponent>(m_entity);
+    // 取当前快照，使用户之后撤销这次回退时能恢复最新的练习内容。
+    // 教学只创建单键、滑键和长条，不接管后续已转换成折线的复杂编辑。
+    if ( current.m_type == ::MMM::NoteType::POLYLINE ) return {};
+    return std::make_unique<NoteAction>(
+        Type::Delete, m_entity, current, std::nullopt);
+}
+
 /// @brief 应用单个音符动作并优先增量更新模型与渲染查询缓存。
 /// @param ctx 动作所属会话，持有正式谱面与项目草稿的同步标记。
 /// @pre before/after 与动作类型匹配，注册表由逻辑执行方独占修改。

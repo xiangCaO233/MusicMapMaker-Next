@@ -261,6 +261,8 @@ struct CmdEndBrush {
     bool cancel{ false };
     /// @brief 与起笔策略配对；独立放置不自动合并附近已有物件。
     bool createStandalone{ false };
+    /// @brief 本轮教学步骤的唯一身份；零表示普通绘制，不参与引导回退。
+    std::uint64_t walkthroughToken{ 0 };
 };
 
 /**
@@ -445,6 +447,10 @@ struct CmdClearNoteColorOverrides {
  * @brief 撤销指令
  */
 struct CmdUndo {
+    /// @brief 非零时只回滚对应教学创建，不执行普通栈顶撤销。
+    std::uint64_t walkthroughToken{ 0 };
+    /// @brief 教学撤销的原始画布；关闭后丢弃，不回退到当前活动谱面。
+    std::string cameraId;
 };
 
 /**

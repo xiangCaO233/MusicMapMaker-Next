@@ -2154,11 +2154,16 @@ private:
  * 无载荷命令仍保留参数名，以便注释和所有 LogicCommand 重载保持统一表达。
  */
 
-/// @brief 撤销 ActionStack 顶部已执行动作。
-/// @param cmd 无附加参数的撤销命令。
+/// @brief 普通撤销栈顶动作，或定向补偿指定教学步骤的创建。
+/// @param cmd 教学身份为零时保留普通撤销语义。
 /// @note 撤销可能涉及 Timing，统一将 BPM 指针缓存标脏。
 void ActionController::handleCommand(const CmdUndo& cmd)
 {
+    // 教学回退不是普通撤销：中间插入其它编辑后，仍只删除该练习的创建物。
+    if ( cmd.walkthroughToken != 0 ) {
+        m_ctx.actionStack.rollbackWalkthrough(cmd.walkthroughToken, m_ctx);
+        return;
+    }
     // Action 自身负责恢复领域状态，会话这里只处理共享 BPM 派生缓存。
     m_ctx.actionStack.undo(m_ctx);
     m_ctx.isBpmEventsDirty = true;

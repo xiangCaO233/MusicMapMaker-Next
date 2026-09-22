@@ -5032,6 +5032,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                         .cancel = m_cancelBrushOnNextRelease ||
                                   (m_standaloneBrush && m_walkthroughPlacement),
                         .createStandalone = m_standaloneBrush,
+                        .walkthroughToken = m_brushWalkthroughToken,
                     }));
             } else if ( m_leftPressStartedObjectDrag ) {
                 Event::EventBus::instance().publish(
@@ -5187,6 +5188,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                     .cameraId         = m_cameraId,
                     .cancel           = m_cancelBrushOnNextRelease,
                     .createStandalone = m_standaloneBrush,
+                    .walkthroughToken = m_brushWalkthroughToken,
                 }));
             break;
         case BlockedCanvasLeftGestureEnd::ObjectDrag:
@@ -5760,6 +5762,9 @@ void Basic2DCanvasInteraction::handleInteractions(
                     // 物件种类、吸附与复合绘制模式。
                     // 教学策略只在起笔锁存，跳过提示也不能在结束时意外合并旧物件。
                     m_standaloneBrush = m_walkthroughPlacement;
+                    // 固定起笔身份，后续返回或跳步不能把提交归属到另一次练习。
+                    m_brushWalkthroughToken =
+                        m_standaloneBrush ? m_walkthroughToken : 0;
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(
                             Logic::CmdStartBrush{ m_cameraId,
@@ -5937,6 +5942,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                     .cameraId         = m_cameraId,
                     .cancel           = m_cancelBrushOnNextRelease,
                     .createStandalone = m_standaloneBrush,
+                    .walkthroughToken = m_brushWalkthroughToken,
                 }));
         } else if ( m_leftPressStartedObjectDrag ) {
             // 对象拖拽结束会固化本次连续位移。

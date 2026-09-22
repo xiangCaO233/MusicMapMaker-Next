@@ -30,6 +30,7 @@ return {
 	["ui.walkthrough.enter_guide"] = "进入引导",
 	["ui.walkthrough.stop_guide"] = "结束引导",
 	["ui.walkthrough.spotlight_acknowledge"] = "知道了",
+	["ui.walkthrough.previous_step"] = "上一步",
 	["ui.walkthrough.reset"] = "重新演练",
 	["ui.walkthrough.reset_confirm"] = "仅重置当前主题的学习进度，不会修改项目文件。",
 	["ui.walkthrough.goal_complete"] = "已达成主题目标，可以继续了解其他操作分支。",
