@@ -1561,10 +1561,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                      displayName,
-                                      false,
-                                      state.m_cameraId,
-                                      !state.m_cameraId.empty());
+                                                displayName,
+                                                false,
+                                                state.m_cameraId,
+                                                !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
         // fallback 始终指向最后成功创建项，活动路径丢失时仍给用户可用画布。
 
@@ -2620,24 +2620,21 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     // NearCursor 分拍线；坐标只影响视觉悬停，不改变活动会话身份。
     if ( std::holds_alternative<CmdSetMousePosition>(cmd) ) {
         const auto& mouse = std::get<CmdSetMousePosition>(cmd);
-        // 主画布目标缺失时丢弃，不能回退到活动会话造成幽灵悬浮。
-        // Preview、Timeline 等辅助相机不在此命中，继续走末尾活动会话路由。
-        if ( SessionUtils::isMainCanvasCameraId(mouse.cameraId) ) {
-            std::lock_guard<std::recursive_mutex> lock(
-                m_sessionRegistry.mutex());
-            auto&         sessions = m_sessionRegistry.entriesUnsafe();
-            const int32_t targetIndex =
-                findSessionIndexByCameraIdUnsafe(sessions, mouse.cameraId);
-            if ( targetIndex < 0 ||
-                 targetIndex >= static_cast<int32_t>(sessions.size()) ||
-                 !sessions[static_cast<size_t>(targetIndex)].session ) {
+        // 鼠标位置是纯视觉状态；拥有型发布快照在标签关闭后仍保证队列存活。
+        // 关闭瞬间投给旧会话的悬停更新会随旧会话丢弃，不会误投新标签。
+        const auto snapshot = m_sessionRegistry.publishedSnapshot();
+        const bool isMainCanvas =
+            SessionUtils::isMainCanvasCameraId(mouse.cameraId);
+        const int32_t activeIndex = m_sessionRegistry.activeIndex();
+        for ( const auto& entry : snapshot->sessions ) {
+            if ( (isMainCanvas && entry.cameraId == mouse.cameraId) ||
+                 (!isMainCanvas && entry.index == activeIndex) ) {
+                entry.session->pushCommand(std::move(cmd));
                 return;
             }
-            sessions[static_cast<size_t>(targetIndex)].session->pushCommand(
-                std::move(cmd));
-            // variant 已转移给唯一目标，不允许再落入通用活动会话分支。
-            return;
         }
+        // 主画布目标缺失时丢弃，不能回退活动会话造成幽灵悬浮。
+        return;
     }
 
     // 主画布滚轮按 cameraId 精确路由，确保焦点切换帧的滚动命令进入悬停画布，
@@ -2867,6 +2864,16 @@ void EditorEngine::setSessionCanvasVisible(const std::string& cameraId,
         return;
     }
 
+    // 大多数帧可见性不变：先查已有逻辑快照，避免 UI 等待整轮会话 update。
+    // 真正变化时仍在锁内复核，保证并发标签删除不会写入过期条目。
+    const auto snapshot = m_sessionRegistry.publishedSnapshot();
+    for ( const auto& entry : snapshot->sessions ) {
+        if ( entry.cameraId == cameraId &&
+             entry.isCanvasVisible == isVisible ) {
+            return;
+        }
+    }
+
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
     auto& sessions = m_sessionRegistry.entriesUnsafe();
     for ( auto& entry : sessions ) {
@@ -2892,42 +2899,30 @@ EditTool EditorEngine::getCurrentTool() const
     return m_currentTool.load(std::memory_order_relaxed);
 }
 
-/// @brief 查询当前活动会话是否处于实际播放状态。
-/// @return 活动会话存在且持有播放状态时返回 true。
+/// @brief 查询最近一次发布的活动会话实际播放状态。
+/// @return 活动会话控制全局播放时返回 true。
 /// @note 同步 follower 始终保持 isPlaying=false，不会把后台视觉跟随误报为播放。
-/// @warning UI 热路径：短暂持有 SessionRegistry 递归锁，只读取常量布尔值。
+/// @warning UI 热路径每帧读取 relaxed 原子；逻辑更新和会话切换负责写入，
+/// 不能在此获取贯穿整个 BeatmapSession::update 的 SessionRegistry 锁。
 bool EditorEngine::isPlaybackPlaying() const
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-    /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-    const auto& sessions = m_sessionRegistry.entriesUnsafe();
-    /// @brief 当前活跃 Session 索引快照。
-    int32_t idx = m_sessionRegistry.activeIndex();
-    if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) ) {
-        // isPlaying 只在活动会话代表全局 transport；后台 follower 不会返回
-        // true。
-        return sessions[idx].session->getContext().isPlaying;
-    }
-    return false;
+    return m_activePlaybackPlaying.load(std::memory_order_relaxed);
+}
+
+/// @brief 查询逻辑线程发布的活动谱面存在状态。
+/// @warning UI 菜单每帧 relaxed 读取；只控制可用性显示，编辑命令自行校验。
+bool EditorEngine::hasActiveBeatmap() const
+{
+    return m_activeHasBeatmap.load(std::memory_order_relaxed);
 }
 
 /// @brief 判断当前活跃 Session 是否存在已选谱面物件。
 /// @return 玩家物件或自动采样至少有一个被选中时返回 true。
-/// @warning UI 热路径：菜单状态每帧读取；会短暂锁定 SessionRegistry，
-/// 只检查常量级选择索引，不遍历 ECS，也不复制 shared_ptr 所有权。
+/// @warning UI 菜单每帧读取 relaxed 原子；逻辑 update 发布最终选择状态，
+/// 不等待整轮会话更新持有的 SessionRegistry 锁。
 bool EditorEngine::hasActiveChartObjectSelection() const
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-    const auto& sessions = m_sessionRegistry.entriesUnsafe();
-    const auto  idx      = m_sessionRegistry.activeIndex();
-    if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) &&
-         sessions[idx].session ) {
-        const auto& ctx = sessions[idx].session->getContext();
-        // Note 与 Sample 使用独立选择索引，任一非空都允许通用删除、剪切等操作。
-        return !ctx.selectedNoteEntities.empty() ||
-               !ctx.selectedSampleEntities.empty();
-    }
-    return false;
+    return m_activeHasChartObjectSelection.load(std::memory_order_relaxed);
 }
 
 /// @brief 判断当前活跃 Session 是否正在拖拽框选区域。
@@ -3419,10 +3414,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 顺序投递初始化命令，保证载图处理看到完整编辑环境。
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName              = displayName.empty()
-                                                           ? beatmap->m_baseMapMetadata.name
-                                                           : displayName;
-                sessions[i].beatmapPathKey           = requestedBeatmapKey;
+                sessions[i].displayName = displayName.empty()
+                                              ? beatmap->m_baseMapMetadata.name
+                                              : displayName;
+                sessions[i].beatmapPathKey = requestedBeatmapKey;
                 // 占位条目的旧音频身份必须覆盖为空，等待载图命令生成新描述符。
                 sessions[i].audioTimelineFingerprint =
                     requestedAudioTimelineFingerprint;
@@ -3455,6 +3450,11 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                             AutoSaveTrigger::BeatmapSwitch);
                 }
                 m_sessionRegistry.setActiveIndex(i);
+                // 新谱面尚未处理载入与播放命令，旧活动项状态不能继续显示。
+                m_activePlaybackPlaying.store(false, std::memory_order_relaxed);
+                m_activeHasBeatmap.store(false, std::memory_order_relaxed);
+                m_activeHasChartObjectSelection.store(
+                    false, std::memory_order_relaxed);
                 // 会话条目身份变化后立即刷新候选并发布快照，UI 不能继续看到
                 // 已经装载谱面的画布仍标记为 Logo。
                 refreshMainAudioSyncPeerStateUnsafe();
@@ -3571,6 +3571,32 @@ void EditorEngine::closeSession(int32_t index, bool updateWorkspace)
     // 先从注册表移除会话并发布新列表，后续同步计算不能再把它作为候选。
     // cameraId 已按值保存，因此对象析构后仍可精确清理对应渲染缓存。
     m_sessionRegistry.erase(index);
+    // 关闭可能移动活动索引；在同一锁内重算轻量播放状态再供 UI 读取。
+    const auto&   remainingSessions = m_sessionRegistry.entriesUnsafe();
+    const int32_t activeIndex       = m_sessionRegistry.activeIndex();
+    const bool    activePlaying =
+        activeIndex >= 0 &&
+        activeIndex < static_cast<int32_t>(remainingSessions.size()) &&
+        remainingSessions[activeIndex].session &&
+        remainingSessions[activeIndex].session->getContext().isPlaying;
+    m_activePlaybackPlaying.store(activePlaying, std::memory_order_relaxed);
+    const bool activeHasBeatmap =
+        activeIndex >= 0 &&
+        activeIndex < static_cast<int32_t>(remainingSessions.size()) &&
+        remainingSessions[activeIndex].session &&
+        remainingSessions[activeIndex].session->getContext().currentBeatmap;
+    m_activeHasBeatmap.store(activeHasBeatmap, std::memory_order_relaxed);
+    bool activeHasSelection = false;
+    if ( activeIndex >= 0 &&
+         activeIndex < static_cast<int32_t>(remainingSessions.size()) &&
+         remainingSessions[activeIndex].session ) {
+        const auto& context =
+            remainingSessions[activeIndex].session->getContext();
+        activeHasSelection = !context.selectedNoteEntities.empty() ||
+                             !context.selectedSampleEntities.empty();
+    }
+    m_activeHasChartObjectSelection.store(activeHasSelection,
+                                          std::memory_order_relaxed);
     refreshMainAudioSyncPeerStateUnsafe();
     m_lastMainAudioSyncActiveIndex = -1;
 
@@ -3641,6 +3667,10 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
     entry.restoreDockFromWorkspace = false;
 
     m_sessionRegistry.setActiveIndex(index);
+    // Logo 不控制 transport；原槽重置后旧播放状态立即失效。
+    m_activePlaybackPlaying.store(false, std::memory_order_relaxed);
+    m_activeHasBeatmap.store(false, std::memory_order_relaxed);
+    m_activeHasChartObjectSelection.store(false, std::memory_order_relaxed);
     refreshMainAudioSyncPeerStateUnsafe();
     m_sessionRegistry.publishSnapshotUnsafe();
     m_lastMainAudioSyncActiveIndex = -1;
@@ -3713,6 +3743,10 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
     }
 
     m_sessionRegistry.setActiveIndex(index);
+    // 切换期间先撤销旧会话的播放标记，防止 UI 把旧状态用于新目标。
+    m_activePlaybackPlaying.store(false, std::memory_order_relaxed);
+    m_activeHasBeatmap.store(false, std::memory_order_relaxed);
+    m_activeHasChartObjectSelection.store(false, std::memory_order_relaxed);
     auto& activeSession = sessions[index].session;
     if ( !activeSession ) {
         // 空槽无法接管 transport，卸载旧时间线防止 UI 状态与实际播放来源分离。
@@ -3770,6 +3804,15 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
         audio.unloadAudioTimeline();
         transferPlayback = false;
     }
+
+    // transport 最终状态已确定，再发布给逐帧工具栏读取。
+    m_activePlaybackPlaying.store(ctx.isPlaying, std::memory_order_relaxed);
+    m_activeHasBeatmap.store(ctx.currentBeatmap != nullptr,
+                             std::memory_order_relaxed);
+    m_activeHasChartObjectSelection.store(
+        !ctx.selectedNoteEntities.empty() ||
+            !ctx.selectedSampleEntities.empty(),
+        std::memory_order_relaxed);
 
     ctx.animateTime =
         ctx.currentTime + editorConfig.visual.getEffectiveVisualOffset();
@@ -4276,6 +4319,23 @@ void EditorEngine::loop()
                             entry.session->getContext().currentTime;
                         entry.session->update(
                             sessionDt, editorConfigSnapshot, isActiveSession);
+                        if ( isActiveSession ) {
+                            // 命令可能在本轮改变播放状态；发布只含活动源的最终值。
+                            m_activePlaybackPlaying.store(
+                                entry.session->getContext().isPlaying,
+                                std::memory_order_relaxed);
+                            m_activeHasBeatmap.store(
+                                entry.session->getContext().currentBeatmap !=
+                                    nullptr,
+                                std::memory_order_relaxed);
+                            const auto& activeContext =
+                                entry.session->getContext();
+                            m_activeHasChartObjectSelection.store(
+                                !activeContext.selectedNoteEntities.empty() ||
+                                    !activeContext.selectedSampleEntities
+                                         .empty(),
+                                std::memory_order_relaxed);
+                        }
                         // update 可能处理
                         // seek、载图与播放命令，随后读取的是最终位置。
                         if ( isActiveSession && hadPendingCommands &&

@@ -282,6 +282,16 @@ public:
      */
     int32_t getSessionCount() const { return m_sessionRegistry.count(); }
 
+    /// @brief 获取结构变更时发布的画布标签元数据。
+    /// @return 持有本轮 UI 访问期间稳定的索引和相机 ID。
+    /// @warning UI 热路径每帧复制一次 shared_ptr；并发删除标签时必须保持
+    /// 快照拥有权，避免持有贯穿逻辑 update 的注册表锁。
+    std::shared_ptr<const PublishedSessionUiSnapshot>
+    getSessionUiSnapshot() const
+    {
+        return m_sessionRegistry.publishedUiSnapshot();
+    }
+
     /**
      * @brief 获取指定索引的 SessionEntry (只读)
      */
@@ -404,15 +414,21 @@ public:
      */
     EditTool getCurrentTool() const;
 
-    /**
-     * @brief 获取当前播放状态
-     */
+    /// @brief 获取最近一次逻辑更新发布的活动会话播放状态。
+    /// @return 活动会话正在控制全局播放时为 true。
+    /// @warning UI 热路径每帧读取 relaxed 原子；逻辑线程每 update 发布，
+    /// 会话切换与关闭路径也写入。必须避免在此等待覆盖整轮 update 的会话锁。
     bool isPlaybackPlaying() const;
+
+    /// @brief 查询最近一次发布的活动会话是否已载入谱面。
+    /// @warning UI 菜单每帧读取 relaxed 原子；逻辑更新及会话切换写入，
+    /// 只供 UI 可用状态判定，不承诺与后续编辑命令构成事务。
+    bool hasActiveBeatmap() const;
 
     /// @brief 判断当前活跃 Session 是否存在已选谱面物件。
     /// @return 玩家物件或自动采样至少有一个被选中时返回 true。
-    /// @warning UI 热路径：菜单状态每帧读取；会短暂锁定 SessionRegistry，
-    /// 只检查常量级选择索引，不遍历 ECS，也不复制 shared_ptr 所有权。
+    /// @warning UI 菜单每帧读取 relaxed 原子；逻辑 update 发布最终状态，
+    /// 菜单可用性允许至多一轮逻辑更新的延迟，编辑命令仍由会话自身校验。
     bool hasActiveChartObjectSelection() const;
 
     /// @brief 判断当前活跃 Session 是否正在拖拽框选区域。
@@ -700,6 +716,21 @@ private:
     /// @warning 逻辑/UI 热路径/原子：逻辑线程低频写入、UI
     /// 可每帧读取；仅用于展示，使用 relaxed。
     std::atomic<float> m_logicUps{ 0.0f };
+
+    /// @brief 活动会话实际播放状态的轻量发布值，后台 follower 不计入。
+    /// @warning 逻辑线程每 update 写入、UI 每帧读取 relaxed；仅供工具栏
+    /// 与播放切换命令判断，使用原子是为了避开会话更新期间的长锁等待。
+    std::atomic<bool> m_activePlaybackPlaying{ false };
+
+    /// @brief 活动会话的谱面存在状态，供逐帧菜单可用性判定。
+    /// @warning 逻辑线程每 update 写入、UI 每帧读取 relaxed；避免菜单读取
+    /// currentBeatmap 时等待逻辑线程整个 update 周期持有的注册表锁。
+    std::atomic<bool> m_activeHasBeatmap{ false };
+
+    /// @brief 活动会话是否选中了 Note 或 Sample，供菜单显示可用状态。
+    /// @warning 逻辑线程每 update 写入、UI 每帧读取 relaxed；选择只在
+    /// 会话命令消费后生效，原子值避免菜单检查等待逻辑更新的长锁。
+    std::atomic<bool> m_activeHasChartObjectSelection{ false };
 
     /// @brief 主渲染线程实时刷新率 (FPS)。
     /// @warning UI/逻辑热路径/原子：UI 线程每帧写入、逻辑线程每 update

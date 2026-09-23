@@ -6,7 +6,6 @@
 #include "canvas/TimelineCanvas.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectController.h"
-#include <mutex>
 
 namespace MMM::Game
 {
@@ -14,31 +13,22 @@ namespace MMM::Game
 /// @brief 生成 UI 画布标签所需的会话工作区快照。
 /// @param entries 接收与当前会话顺序一致的画布条目。
 ///
-/// 会话容器在逻辑线程维护，读取期间持有递归互斥。输出只复制稳定相机 ID、
-/// Logo 占位标志和停靠恢复标志，不把 SessionEntry 指针泄漏到 UI 帧之外。
-/// @warning UI 更新路径：调用时会短暂获取会话锁，禁止在循环内执行绘制或 I/O。
+/// 标签元数据在结构变化时发布，输出只复制稳定相机 ID、Logo 占位标志和
+/// 停靠恢复标志；拥有型快照允许本帧在逻辑线程更新时安全读取。
+/// @warning UI 每帧调用：只复制轻量字段，不得等待 SessionRegistry 长锁。
 void CanvasWorkspaceService::fillEntries(
     std::vector<UI::CanvasWorkspaceEntry>& entries)
 {
-    // 先取得引擎单例并在整个索引快照期间保持会话集合稳定。
-    auto& engine = Logic::EditorEngine::instance();
-    std::lock_guard<std::recursive_mutex> lock(engine.getSessionMutex());
-
-    // 预先调整输出长度，逐项赋值时不再触发额外扩容。
-    const std::int32_t entryCount = engine.getSessionCount();
-    entries.resize(static_cast<std::size_t>(entryCount));
-    for ( std::int32_t index = 0; index < entryCount; ++index ) {
-        const auto* entry = engine.getSessionEntry(index);
-        if ( !entry ) {
-            // 索引在锁内仍可能代表稀疏或防御性失败；截断到已复制的有效前缀。
-            entries.resize(static_cast<std::size_t>(index));
-            return;
-        }
-        // UI DTO 按值复制，不延长逻辑会话对象生命周期。
-        auto& target             = entries[static_cast<std::size_t>(index)];
-        target.cameraId          = entry->cameraId;
-        target.isLogoPlaceholder = entry->isLogoPlaceholder;
-        target.restoreDockFromWorkspace = entry->restoreDockFromWorkspace;
+    const auto snapshot =
+        Logic::EditorEngine::instance().getSessionUiSnapshot();
+    // vector 复用已有容量，快照在本次复制期间保持所有字符串有效。
+    entries.resize(snapshot->entries.size());
+    for ( std::size_t index = 0; index < snapshot->entries.size(); ++index ) {
+        const auto& source              = snapshot->entries[index];
+        auto&       target              = entries[index];
+        target.cameraId                 = source.cameraId;
+        target.isLogoPlaceholder        = source.isLogoPlaceholder;
+        target.restoreDockFromWorkspace = source.restoreDockFromWorkspace;
     }
 }
 
@@ -94,7 +84,8 @@ void CanvasWorkspaceService::closeSession(std::int32_t index,
 /// @warning UI 更新路径：返回瞬时快照，调用方不得据此长期假定索引有效。
 std::int32_t CanvasWorkspaceService::getEntryCount() const
 {
-    return Logic::EditorEngine::instance().getSessionCount();
+    return static_cast<std::int32_t>(
+        Logic::EditorEngine::instance().getSessionUiSnapshot()->entries.size());
 }
 
 /// @brief 取出并清除逻辑层排队的会话聚焦请求。

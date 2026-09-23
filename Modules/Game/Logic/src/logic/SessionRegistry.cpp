@@ -181,16 +181,16 @@ std::shared_ptr<BeatmapSession> SessionRegistry::activeNonLogoSession() const
 /// @brief 获取当前活跃画布的 cameraId。
 std::string SessionRegistry::activeCameraId() const
 {
-    // 返回字符串副本，避免外层窗口代码借用可被删除的条目字段。
-    /// @brief 保护本次活跃 cameraId 读取的临界区。
-    std::lock_guard<std::recursive_mutex> lock(m_mutex);
-
-    /// @brief 当前活跃 Session 索引快照。
-    const int32_t index = activeIndex();
-    if ( !isValidIndexUnsafe(index) ) {
+    // 标签元数据由低频结构变更发布；拥有型快照保护索引与字符串生命周期。
+    // 活跃索引与快照并非事务，切换边界的无效下标只能返回空身份。
+    // 相机 ID 按值返回，调用者不会借用旧快照中的字符串地址。
+    const auto    snapshot = publishedUiSnapshot();
+    const int32_t index    = activeIndex();
+    if ( index < 0 ||
+         index >= static_cast<int32_t>(snapshot->entries.size()) ) {
         return "";
     }
-    return m_entries[index].cameraId;
+    return snapshot->entries[static_cast<size_t>(index)].cameraId;
 }
 
 /// @brief 获取当前所有有效 Session 指针快照。
@@ -245,6 +245,7 @@ void SessionRegistry::fillIndexedSessionSnapshot(
         if ( entry.session ) {
             sessions.push_back({ index,
                                  // 保存原索引，不能用过滤后的输出长度替代。
+                                 entry.cameraId,
                                  entry.session,
                                  entry.isCanvasVisible,
                                  entry.audioTimelineFingerprint,
@@ -271,6 +272,26 @@ SessionRegistry::publishedSnapshot() const
     /// @brief 极早期访问时使用的空快照兜底。
     static const auto emptySnapshot =
         std::make_shared<const PublishedSessionSnapshot>();
+    return emptySnapshot;
+}
+
+/// @brief 获取结构变更时发布的 UI 画布元数据。
+/// @warning UI 热路径每帧复制拥有型 shared_ptr，防止并发替换导致字符串悬空。
+std::shared_ptr<const PublishedSessionUiSnapshot>
+SessionRegistry::publishedUiSnapshot() const
+{
+    // acquire 配对结构变更的 release，读者能看到完整的标签元数据。
+    // 复制引用仅延长这一代快照寿命，不延长任何 BeatmapSession 寿命。
+    // 读者可以在标签关闭与列表重排后完成本轮画布身份匹配。
+    auto snapshot = std::atomic_load_explicit(&m_publishedUiSnapshot,
+                                              std::memory_order_acquire);
+    if ( snapshot ) {
+        return snapshot;
+    }
+
+    /// @brief 构造期极早访问使用的空元数据快照。
+    static const auto emptySnapshot =
+        std::make_shared<const PublishedSessionUiSnapshot>();
     return emptySnapshot;
 }
 
@@ -357,14 +378,25 @@ const std::vector<SessionEntry>& SessionRegistry::entriesUnsafe() const
 /// @warning 低频结构或可见性变更路径，调用方必须持锁；此处会分配和复制。
 void SessionRegistry::publishSnapshotUnsafe()
 {
-    // 先完整构造候选，再原子替换，读者不会看到填充到一半的 vector。
-    auto snapshot = std::make_shared<PublishedSessionSnapshot>();
+    // 两份候选都在锁内完整构造，读者不会看到填充到一半的 vector。
+    // UI 读者只需要标签身份，不应为每帧绘制复制会话拥有权。
+    // 分离快照也防止 UI 持有标签元数据时阻止旧谱面会话释放。
+    auto snapshot   = std::make_shared<PublishedSessionSnapshot>();
+    auto uiSnapshot = std::make_shared<PublishedSessionUiSnapshot>();
     snapshot->sessions.reserve(m_entries.size());
+    uiSnapshot->entries.reserve(m_entries.size());
     for ( int32_t index = 0; index < static_cast<int32_t>(m_entries.size());
           ++index ) {
         const auto& entry = m_entries[static_cast<size_t>(index)];
+        // UI 条目保留所有位置；逻辑快照仍只保留有效会话。
+        // 关闭标签后相邻位置会移动，UI 必须按新列表重建窗口索引。
+        uiSnapshot->entries.push_back({ index,
+                                        entry.cameraId,
+                                        entry.isLogoPlaceholder,
+                                        entry.restoreDockFromWorkspace });
         if ( entry.session ) {
             snapshot->sessions.push_back({ index,
+                                           entry.cameraId,
                                            entry.session,
                                            entry.isCanvasVisible,
                                            entry.audioTimelineFingerprint,
@@ -375,10 +407,17 @@ void SessionRegistry::publishSnapshotUnsafe()
 
     // 快照自身只读，但所持会话仍按各自线程协议更新，不是深拷贝谱面。
     // 旧快照由并发读句柄保活，最后一个拥有者释放后才销毁。
+    // 两次发布间的短暂代际差只影响 UI 标签身份，不改变命令校验规则。
     std::atomic_store_explicit(
         &m_publishedSnapshot,
         std::shared_ptr<const PublishedSessionSnapshot>(std::move(snapshot)),
         std::memory_order_release);
+    std::atomic_store_explicit(
+        &m_publishedUiSnapshot,
+        std::shared_ptr<const PublishedSessionUiSnapshot>(
+            std::move(uiSnapshot)),
+        std::memory_order_release);
+    // 所有元数据变更均通过本入口发布；不得只修改 entriesUnsafe 后遗漏发布。
 }
 
 /// @brief 在调用者已持锁时判断索引是否有效。

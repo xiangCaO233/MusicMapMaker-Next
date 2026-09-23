@@ -416,10 +416,8 @@ bool MenuUtil::hasActiveBeatmap(bool requireProject)
         return false;
     }
 
-    // Session 及 currentBeatmap 读取受递归互斥锁保护。
-    std::lock_guard<std::recursive_mutex> sessionLock(engine.getSessionMutex());
-    auto                                  session = engine.getActiveSession();
-    return session && session->getContext().currentBeatmap;
+    // 逻辑线程逐轮发布存在状态，菜单判定不等待完整会话更新。
+    return engine.hasActiveBeatmap();
 }
 
 /// @brief 当前是否允许触发画布编辑类快捷键。

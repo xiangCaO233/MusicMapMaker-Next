@@ -113,16 +113,41 @@ float resolveNoteTrackLeftX(const NoteComponent&        note,
         .leftX;
 }
 
+/// @brief 当前索引版本中一个根物件的可见性倍率范围。
+/// @note 空范围表示没有可复用的有限采样，查询端需要即时采样组件。
+/// @note 同一根物件在来源列表和分桶条目中引用同一组极值。
+struct NoteVisibilitySampleRange {
+    /// @brief 可见性倍率数组的起点。
+    std::size_t begin{ 0 };
+    /// @brief 可见性倍率数组的终点，不包含该位置。
+    std::size_t end{ 0 };
+};
+
 /// @brief 单个音符在 AbsY 空间覆盖的保守区间。
 /// @note 区间存储未缩放的 AbsY，查询端必须解除动画缩放后才能比较。
 /// @note 一个长物件可覆盖多个桶，entity 用于最后读取当前组件精查。
 /// @note 这是空间包络，不能由区间端点直接推导唯一的最早或最晚时间。
+/// @note 可见性范围与空间条目同版本，分桶精查可直接读取。
 struct NoteAbsYRangeEntry {
     /// @brief 音符实体。
     entt::entity entity{ entt::null };
     /// @brief 区间下界。
     double minAbsY{ 0.0 };
     /// @brief 区间上界。
+    double maxAbsY{ 0.0 };
+    /// @brief 当前物件可见性倍率极值的连续范围。
+    NoteVisibilitySampleRange visibility;
+};
+
+/// @brief 相同 HS 下所有采样位置的未缩放极值。
+/// @note 对固定帧原点和动画缩放，显示差对原始 AbsY 单调，两个端点足以精查。
+/// @note 不同 HS 不可合并，否则显示原点变化会改变各点的相对次序。
+struct NoteVisibilityHsRange {
+    /// @brief 采样时间生效的 HS 倍率。
+    double hs{ 1.0 };
+    /// @brief 此倍率下的最小未缩放位置。
+    double minAbsY{ 0.0 };
+    /// @brief 此倍率下的最大未缩放位置。
     double maxAbsY{ 0.0 };
 };
 
@@ -135,6 +160,8 @@ struct NoteAbsYRangeEntry {
 /// @note 对同一来源原地编辑时数量可能不变，调用方必须发布新的 noteRevision。
 /// @note querySerial 回绕清零仅影响去重，不改变几何条目及其来源版本。
 /// @note 桶数保护只限制空间跨度的桶分配，每条目的跨桶引用仍与覆盖长度有关。
+/// @note visibilityRanges 随来源版本重建，播放帧不修改其内容。
+/// @note visibilityBySource 与 sourceEntities 等长，回退扫描无需哈希查找。
 struct NoteAbsYBucketIndex {
     /// @brief 建立索引时使用的 ScrollCache。
     const ScrollCache* cache{ nullptr };
@@ -152,16 +179,33 @@ struct NoteAbsYBucketIndex {
     double minHs{ 1.0 };
     /// @brief 可用的最大正 HS。
     double maxHs{ 1.0 };
+    /// @brief 负 HS 中绝对值最大的倍率，用于反向显示窗口的空间反查。
+    double minNegativeHs{ std::numeric_limits<double>::infinity() };
+    /// @brief 负 HS 中最接近零的倍率，不能与正 HS 共用同一端点。
+    double maxNegativeHs{ -std::numeric_limits<double>::infinity() };
     /// @brief 是否存在无法安全索引的 HS 数据。
     bool requiresFullExactScan{ false };
     /// @brief 音符 AbsY 区间条目。
     std::vector<NoteAbsYRangeEntry> entries;
+    /// @brief 与来源列表逐项对齐的可见性范围，供全量精查复用。
+    std::vector<NoteVisibilitySampleRange> visibilityBySource;
+    /// @brief 与条目版本同步的可见性倍率及位置极值，播放帧只读取。
+    std::vector<NoteVisibilityHsRange> visibilityRanges;
     /// @brief AbsY 桶到 entries 下标的映射。
     std::vector<std::vector<std::uint32_t>> buckets;
     /// @brief 查询去重标记。
     std::vector<std::uint32_t> seenSerials;
     /// @brief 当前查询序号。
     std::uint32_t querySerial{ 0 };
+};
+
+/// @brief 当前候选可使用的已缓存可见性视图。
+/// @note 两个观察指针必须来自同一索引版本，空值表示即时采样。
+struct NoteVisibilityView {
+    /// @brief 根物件对应的采样范围。
+    const NoteVisibilitySampleRange* range{ nullptr };
+    /// @brief 采样范围所属的索引。
+    const NoteAbsYBucketIndex* index{ nullptr };
 };
 
 /// @brief 计算单个音符在时间维度上的保守覆盖范围。
@@ -800,8 +844,12 @@ static NoteAbsYBucketIndex& getOrBuildNoteAbsYBucketIndex(
     index->bucketOrigin          = 0.0;
     index->minHs                 = std::numeric_limits<double>::infinity();
     index->maxHs                 = 0.0;
+    index->minNegativeHs         = std::numeric_limits<double>::infinity();
+    index->maxNegativeHs         = -std::numeric_limits<double>::infinity();
     index->requiresFullExactScan = false;
     index->entries.clear();
+    index->visibilityBySource.clear();
+    index->visibilityRanges.clear();
     index->buckets.clear();
     index->seenSerials.clear();
 
@@ -816,10 +864,17 @@ static NoteAbsYBucketIndex& getOrBuildNoteAbsYBucketIndex(
     // 容量以来源数量预留，子实体和无效条目会被过滤，实际条目数可以更少。
     // 全局包络只由有效根物件的采样范围贡献。
     index->entries.reserve(entities.size());
+    // 全量精查按来源下标访问，空槽也必须保留以维持与排序列表的对齐。
+    index->visibilityBySource.resize(entities.size());
+    // 单次重建复用映射内存；同一 HS 的大量 SV 边界只保留两个位置极值。
+    // 不按时间连续段分组，因为重复出现的 HS 采用相同显示变换。
+    std::unordered_map<double, std::size_t> visibilityRangeByHs;
     double globalMinAbsY = std::numeric_limits<double>::infinity();
     double globalMaxAbsY = -std::numeric_limits<double>::infinity();
 
-    for ( auto entity : entities ) {
+    for ( std::size_t sourceIndex = 0; sourceIndex < entities.size();
+          ++sourceIndex ) {
+        const auto entity = entities[sourceIndex];
         // 来源列表可能仍包含失效身份，重建阶段先检查代际和组件存在性。
         // 同一实体号的新代际不能当作旧列表成员直接读取。
         if ( !registry.valid(entity) ||
@@ -832,38 +887,70 @@ static NoteAbsYBucketIndex& getOrBuildNoteAbsYBucketIndex(
         // 后续基础层与命中盒从父结构生成子几何。
         if ( note.m_isSubNote ) continue;
 
-        double minAbsY = std::numeric_limits<double>::infinity();
-        double maxAbsY = -std::numeric_limits<double>::infinity();
+        double            minAbsY = std::numeric_limits<double>::infinity();
+        double            maxAbsY = -std::numeric_limits<double>::infinity();
+        const std::size_t visibilityBegin = index->visibilityRanges.size();
+        // 每个根物件单独聚合，不能让另一物件相同 HS 扩张当前包络。
+        visibilityRangeByHs.clear();
 
         // 单根条目聚合全部有限采样的未缩放绝对位置。
-        // 整个索引同时聚合正 HS 极值，供显示窗口反推保守查询区间。
-        /// @brief 累计当前根物件绝对位置包络和索引级正 HS 极值。
+        // 整个索引分别聚合正负 HS 极值，供显示窗口反推保守查询区间。
+        /// @brief 累计当前根物件绝对位置包络和索引级 HS 极值。
         /// @param time 要采样的有限时间。
-        /// @note 不安全 HS 设置整个索引的精查标志，不能仅排除当前采样点。
+        /// @note 零或异常 HS 设置整个索引的精查标志，不能仅排除当前采样点。
         /// @warning 索引重建的局部采样，不新增事件扫描或资源访问。
         auto includeSampleTime = [&](double time) {
             if ( !std::isfinite(time) ) return;
 
-            // 桶坐标解除动画缩放，交互缩放过程中不必仅因缩放值改变就重建分桶。
-            // 查询端必须执行相同转换，否则桶边界与视野不在同一空间。
-            const double absY = cache->toUnscaledAbsY(cache->getAbsY(time));
-            if ( !std::isfinite(absY) ) return;
+            const double rawAbsY = cache->getUnscaledRawAbsY(time);
+            const double hs      = cache->getHsAt(time);
+            if ( std::isfinite(rawAbsY) && std::isfinite(hs) ) {
+                // 全量精查也复用相同倍率的原始位置极值；负 HS 保留符号。
+                // 不把异常样本缓存为有限范围，保持原逐点路径的过滤语义。
+                const auto [rangeIt, inserted] =
+                    visibilityRangeByHs.try_emplace(
+                        hs, index->visibilityRanges.size());
+                if ( inserted ) {
+                    index->visibilityRanges.push_back({ hs, rawAbsY, rawAbsY });
+                } else {
+                    auto& range   = index->visibilityRanges[rangeIt->second];
+                    range.minAbsY = std::min(range.minAbsY, rawAbsY);
+                    range.maxAbsY = std::max(range.maxAbsY, rawAbsY);
+                }
+            }
 
-            const double hs = cache->getHsAt(time);
-            // 反推窗口需要除以正 HS；零、负和非有限值不满足此约束。
-            // 一旦出现异常便启用完整精查，不能把该样本忽略后宣称索引仍保守。
-            if ( !std::isfinite(hs) || hs <= 1e-6 ) {
+            // 正负倍率都能反推窗口；零附近的倍率使反推区间无限扩大。
+            // 非有限值也无法建立保守桶范围，两者继续走完整精查。
+            if ( !std::isfinite(hs) || std::abs(hs) <= 1e-6 ) {
                 index->requiresFullExactScan = true;
                 return;
             }
 
-            minAbsY      = std::min(minAbsY, absY);
-            maxAbsY      = std::max(maxAbsY, absY);
-            index->minHs = std::min(index->minHs, hs);
-            index->maxHs = std::max(index->maxHs, hs);
+            // 桶坐标仍使用原有逆缩放口径；不可表示时改用完整精查。
+            const double absY =
+                cache->toUnscaledAbsY(rawAbsY * cache->getAnimatedZoomScale());
+            if ( !std::isfinite(absY) ) {
+                index->requiresFullExactScan = true;
+                return;
+            }
+
+            minAbsY = std::min(minAbsY, absY);
+            maxAbsY = std::max(maxAbsY, absY);
+            if ( hs > 0.0 ) {
+                index->minHs = std::min(index->minHs, hs);
+                index->maxHs = std::max(index->maxHs, hs);
+            } else {
+                index->minNegativeHs = std::min(index->minNegativeHs, hs);
+                index->maxNegativeHs = std::max(index->maxNegativeHs, hs);
+            }
         };
 
         forEachNoteVisibilitySampleTime(note, cache, includeSampleTime);
+        // 即使本物件因负 HS 无法入桶，全量精查仍可直接读取其有限样本极值。
+        // 范围只在重建阶段写入；播放帧中的显示原点和动画倍率不改变它。
+        index->visibilityBySource[sourceIndex] = {
+            visibilityBegin, index->visibilityRanges.size()
+        };
 
         // 没有有效坐标样本的物件不生成无穷区间条目。
         // 此前检测到的不安全 HS 标志仍保留，查询时可走完整显示精查。
@@ -875,15 +962,23 @@ static NoteAbsYBucketIndex& getOrBuildNoteAbsYBucketIndex(
         // 被过滤的子实体或异常根不会制造不可表示的桶原点。
         globalMinAbsY = std::min(globalMinAbsY, minAbsY);
         globalMaxAbsY = std::max(globalMaxAbsY, maxAbsY);
-        index->entries.push_back({ entity, minAbsY, maxAbsY });
+        index->entries.push_back({ entity,
+                                   minAbsY,
+                                   maxAbsY,
+                                   index->visibilityBySource[sourceIndex] });
     }
 
-    // 缺少可用正 HS 时不能按无穷或零值做窗口反算。
-    // 中性极值只用于保持数值有效，requiresFullExactScan 仍阻止桶查询。
-    if ( !std::isfinite(index->minHs) || index->maxHs <= 1e-6 ) {
-        index->minHs                 = 1.0;
-        index->maxHs                 = 1.0;
+    // 仅当两个符号区间都没有有效倍率时才无法建立空间查询范围。
+    // 单独存在负 HS 的谱面仍可按负倍率端点反推，不能强制回退全量扫描。
+    if ( !std::isfinite(index->minHs) &&
+         !std::isfinite(index->minNegativeHs) ) {
         index->requiresFullExactScan = true;
+    }
+
+    // 零或异常 HS 已确定只能全量精查；缓存极值仍可复用，但分桶不会被读取。
+    // 提前结束可避免极端 Jump 跨度分配大量桶及重复的条目引用。
+    if ( index->requiresFullExactScan ) {
+        return *index;
     }
 
     // 去重数组与新 entries 一一对应，旧查询印记不跨重建沿用。
@@ -997,14 +1092,20 @@ static void collectNotesInRange(
                           static_cast<double>(std::abs(renderScaleY)) +
                       calculateInterpolationPaddingAbsY(
                           cache, currentTime, interpolationSeconds);
+    const auto* pinnedEntities =
+        registry.ctx().find<DragRenderPinnedEntities>();
+    const bool hasPinnedDrag = pinnedEntities && pinnedEntities->entities &&
+                               !pinnedEntities->entities->empty();
 
     // 粗筛后仍按组件当前值精查，不能仅依赖可能较宽的索引包络。
     // 局部流速边界也参与极值，保留中途反向进入视野的物件。
     /// @brief 按组件当前显示包络判断是否与扩张视野相交。
     /// @param note 根物件及其内嵌子列表。
     /// @return 至少存在有效样本且包络相交时为 true。
-    /// @warning 候选精查热路径，成本仅来自当前物件覆盖的局部流速分段。
-    auto isDisplayVisible = [&](const NoteComponent& note) {
+    /// @param visibility 同版本的采样范围和索引；缺少时即时采样组件。
+    /// @warning 候选精查热路径，常见路径只遍历当前物件的 HS 极值。
+    auto isDisplayVisible = [&](const NoteComponent& note,
+                                NoteVisibilityView   visibility = {}) {
         // 活动长条的新头位于判定线，原始端点同时离屏也不能剔除。
         // 空间索引已覆盖物件期间的卷轴极值，此处只扩大局部精查结果。
         if ( simulateAutoplay && !note.m_isDraft &&
@@ -1028,6 +1129,39 @@ static void collectNotesInRange(
         }
         double minDisplayDelta = std::numeric_limits<double>::infinity();
         double maxDisplayDelta = -std::numeric_limits<double>::infinity();
+
+        // 无拖动时，当前版本的区间极值已经覆盖端点及内部全部流速边界。
+        // 动画缩放每帧重算，故缩放过渡不需要重建索引；异常数值退回即时采样。
+        bool usedCachedRanges = visibility.range && visibility.index &&
+                                !hasPinnedDrag &&
+                                visibility.range->begin < visibility.range->end;
+        // 拖动预览可能先改组件、后发布版本；此时须使用当前组件即时采样。
+        // 极值投影溢出时也退回逐点采样，以保留中间有限样本。
+        if ( usedCachedRanges ) {
+            const double zoom = cache->getAnimatedZoomScale();
+            for ( std::size_t i = visibility.range->begin;
+                  i < visibility.range->end;
+                  ++i ) {
+                const auto&  range = visibility.index->visibilityRanges[i];
+                const double first =
+                    (range.minAbsY * zoom - currentAbsY) * range.hs;
+                const double last =
+                    (range.maxAbsY * zoom - currentAbsY) * range.hs;
+                if ( !std::isfinite(first) || !std::isfinite(last) ) {
+                    usedCachedRanges = false;
+                    break;
+                }
+                minDisplayDelta =
+                    std::min(minDisplayDelta, std::min(first, last));
+                maxDisplayDelta =
+                    std::max(maxDisplayDelta, std::max(first, last));
+            }
+        }
+
+        if ( usedCachedRanges ) {
+            return maxDisplayDelta >= minDelta - padDelta &&
+                   minDisplayDelta <= maxDelta + padDelta;
+        }
 
         // 显示差以采样时间自身的 HS 解释，与候选可见性规则保持一致。
         // 非有限结果不进入极值，避免一个异常样本破坏所有范围比较。
@@ -1057,18 +1191,29 @@ static void collectNotesInRange(
 
     // 兜底依赖会话排序列表中的身份和 Note 组件仍有效。
     // 它避免不安全的 HS 反推，但仍是全量工作，不能在正常桶路径重复调用。
+    // 已有版本索引时沿来源下标读取极值；无版本契约时仍即时枚举边界。
     /// @brief 对来源列表所有根对象使用当前组件显示精查。
     /// @warning
     /// 缺少版本契约或索引不安全时的既有全量兜底，禁止正常桶路径重复调用。
     /// @pre 排序列表中身份仍持有 NoteComponent，调用期间不可并发删除。
     /// @note 本助手不补入来源列表之外的拖动身份，由调用分支单独处理。
-    auto runFullExactScan = [&]() {
+    const NoteAbsYBucketIndex* cachedVisibilityIndex = nullptr;
+    auto                       runFullExactScan      = [&]() {
         result.reserve(count);
-        for ( auto entity : entities ) {
-            const auto& note = registry.get<const NoteComponent>(entity);
+        for ( std::size_t sourceIndex = 0; sourceIndex < entities.size();
+              ++sourceIndex ) {
+            const auto  entity = entities[sourceIndex];
+            const auto& note   = registry.get<const NoteComponent>(entity);
             if ( note.m_isSubNote ) continue;
 
-            if ( isDisplayVisible(note) ) {
+            const auto* visibility =
+                cachedVisibilityIndex
+                    ? &cachedVisibilityIndex->visibilityBySource[sourceIndex]
+                    : nullptr;
+            // 零 HS 会阻止分桶，但本物件有限 HS 的显示差仍可由极值求得。
+            // 拖动状态由 isDisplayVisible 统一退回当前组件，避免旧索引误判。
+            if ( isDisplayVisible(note,
+                                  { visibility, cachedVisibilityIndex }) ) {
                 result.push_back(entity);
             }
         }
@@ -1081,8 +1226,6 @@ static void collectNotesInRange(
     /// @note result 已有身份保持顺序，新增可见根追加到末尾。
     /// @note 子实体不会单独返回，绘制仍由父折线负责。
     auto appendPinnedDragEntities = [&]() {
-        const auto* pinnedEntities =
-            registry.ctx().find<DragRenderPinnedEntities>();
         if ( !pinnedEntities || !pinnedEntities->entities ||
              pinnedEntities->entities->empty() ) {
             return;
@@ -1126,7 +1269,8 @@ static void collectNotesInRange(
 
     auto& index = getOrBuildNoteAbsYBucketIndex(
         registry, cache, entities, **noteRevisionPtr);
-    // 不安全索引完全绕开 HS 反推与桶访问，避免部分桶结果造成漏绘。
+    cachedVisibilityIndex = &index;
+    // 零或异常 HS 的不安全索引绕开桶访问，避免部分桶结果造成漏绘。
     // 当前组件精查完成后仍补回拖动身份，两个可见性保障同时生效。
     if ( index.requiresFullExactScan ) {
         runFullExactScan();
@@ -1144,13 +1288,13 @@ static void collectNotesInRange(
     const double displayMax   = std::max(minDelta, maxDelta) + padDelta;
     double       queryMinAbsY = std::numeric_limits<double>::infinity();
     double       queryMaxAbsY = -std::numeric_limits<double>::infinity();
-    // 正 HS 范围的两个端点给出视野反推位置的保守包络。
+    // 正负 HS 各自的两个端点给出视野反推位置的保守包络。
     // 同时考虑显示区间两侧，避免视野跨过判定线时只取单侧极值。
-    /// @brief 用一个正 HS 边界反推显示窗口对应的绝对位置范围。
-    /// @param hs 索引记录的最小或最大正倍率。
+    /// @brief 用一个非零 HS 边界反推显示窗口对应的绝对位置范围。
+    /// @param hs 索引记录的正或负倍率端点。
     /// @note 无效倍率不修改累计包络，最终有效性检查决定是否退回精查。
     auto includeHsBound = [&](double hs) {
-        if ( !std::isfinite(hs) || hs <= 1e-6 ) return;
+        if ( !std::isfinite(hs) || std::abs(hs) <= 1e-6 ) return;
         const double a = currentAbsY + displayMin / hs;
         const double b = currentAbsY + displayMax / hs;
         queryMinAbsY   = std::min(queryMinAbsY, std::min(a, b));
@@ -1158,6 +1302,8 @@ static void collectNotesInRange(
     };
     includeHsBound(index.minHs);
     includeHsBound(index.maxHs);
+    includeHsBound(index.minNegativeHs);
+    includeHsBound(index.maxNegativeHs);
     // 反推失败时丢弃未定义查询区间，不把无穷强转为桶下标。
     // 使用完整精查保证异常输入不会直接表现为整批候选消失。
     if ( !std::isfinite(queryMinAbsY) || !std::isfinite(queryMaxAbsY) ) {
@@ -1226,7 +1372,7 @@ static void collectNotesInRange(
 
             const auto& note = registry.get<const NoteComponent>(entry.entity);
             if ( note.m_isSubNote ) continue;
-            if ( isDisplayVisible(note) ) {
+            if ( isDisplayVisible(note, { &entry.visibility, &index }) ) {
                 result.push_back(entry.entity);
             }
         }
@@ -1283,11 +1429,11 @@ void NoteRenderSystem::generateNoteHitboxes(
         const float fallbackNoteW  = ctx.noteW;
         const float fallbackNoteH  = ctx.noteH;
         const auto  laneGeometry   = resolveNoteLaneGeometry(note.m_trackIndex,
-                                                          laneProjection,
-                                                          fallbackLeftX,
-                                                          fallbackTrackW,
-                                                          fallbackNoteW,
-                                                          fallbackNoteH);
+                                                             laneProjection,
+                                                             fallbackLeftX,
+                                                             fallbackTrackW,
+                                                             fallbackNoteW,
+                                                             fallbackNoteH);
         // 局部值副本只覆盖宽高，滚动锚点与颜色仍沿用本次快照。
         // 不修改调用方上下文，后一个音符可以属于不同领域。
         auto laneContext         = ctx;
@@ -1425,11 +1571,11 @@ void NoteRenderSystem::generateNoteHitboxes(
         const float fallbackNoteW  = ctx.noteW;
         const float fallbackNoteH  = ctx.noteH;
         const auto  laneGeometry   = resolveNoteLaneGeometry(note.m_trackIndex,
-                                                          laneProjection,
-                                                          fallbackLeftX,
-                                                          fallbackTrackW,
-                                                          fallbackNoteW,
-                                                          fallbackNoteH);
+                                                             laneProjection,
+                                                             fallbackLeftX,
+                                                             fallbackTrackW,
+                                                             fallbackNoteW,
+                                                             fallbackNoteH);
         auto        laneContext    = ctx;
         laneContext.noteW          = laneGeometry.noteW;
         laneContext.noteH          = laneGeometry.noteH;
@@ -1649,11 +1795,11 @@ void NoteRenderSystem::renderNoteBaseLayer(
         const float fallbackNoteW  = ctx.noteW;
         const float fallbackNoteH  = ctx.noteH;
         const auto  laneGeometry   = resolveNoteLaneGeometry(note.m_trackIndex,
-                                                          laneProjection,
-                                                          fallbackLeftX,
-                                                          fallbackTrackW,
-                                                          fallbackNoteW,
-                                                          fallbackNoteH);
+                                                             laneProjection,
+                                                             fallbackLeftX,
+                                                             fallbackTrackW,
+                                                             fallbackNoteW,
+                                                             fallbackNoteH);
         auto        laneContext    = ctx;
         laneContext.noteW          = laneGeometry.noteW;
         laneContext.noteH          = laneGeometry.noteH;
@@ -1678,11 +1824,11 @@ void NoteRenderSystem::renderNoteBaseLayer(
             static_cast<float>(ctx.cache->getDisplayDelta(
                 note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
                 renderScaleY;
-        float visualH = static_cast<float>(ctx.cache->getDisplayDelta(
-                            note.m_timestamp + note.m_duration,
-                            ctx.cache->getAbsY(note.m_timestamp),
-                            note.m_timestamp)) *
-                        renderScaleY;
+        float       visualH = static_cast<float>(ctx.cache->getDisplayDelta(
+                                  note.m_timestamp + note.m_duration,
+                                  ctx.cache->getAbsY(note.m_timestamp),
+                                  note.m_timestamp)) *
+                              renderScaleY;
         const float trackX =
             resolveNoteTrackLeftX(note, laneProjection, leftX, singleTrackW);
 
@@ -1957,11 +2103,11 @@ void NoteRenderSystem::renderNoteGlowLayer(
         const float fallbackNoteW  = ctx.noteW;
         const float fallbackNoteH  = ctx.noteH;
         const auto  laneGeometry   = resolveNoteLaneGeometry(note.m_trackIndex,
-                                                          laneProjection,
-                                                          fallbackLeftX,
-                                                          fallbackTrackW,
-                                                          fallbackNoteW,
-                                                          fallbackNoteH);
+                                                             laneProjection,
+                                                             fallbackLeftX,
+                                                             fallbackTrackW,
+                                                             fallbackNoteW,
+                                                             fallbackNoteH);
         auto        laneContext    = ctx;
         laneContext.noteW          = laneGeometry.noteW;
         laneContext.noteH          = laneGeometry.noteH;
@@ -1975,11 +2121,11 @@ void NoteRenderSystem::renderNoteGlowLayer(
             static_cast<float>(ctx.cache->getDisplayDelta(
                 note.m_timestamp, ctx.currentAbsY, note.m_timestamp)) *
                 renderScaleY;
-        float visualH = static_cast<float>(ctx.cache->getDisplayDelta(
-                            note.m_timestamp + note.m_duration,
-                            ctx.cache->getAbsY(note.m_timestamp),
-                            note.m_timestamp)) *
-                        renderScaleY;
+        float       visualH = static_cast<float>(ctx.cache->getDisplayDelta(
+                                  note.m_timestamp + note.m_duration,
+                                  ctx.cache->getAbsY(note.m_timestamp),
+                                  note.m_timestamp)) *
+                              renderScaleY;
         const float trackX =
             resolveNoteTrackLeftX(note, laneProjection, leftX, singleTrackW);
         HoverPart glowPart = static_cast<HoverPart>(ic.hoveredPart);

@@ -701,8 +701,10 @@ double ScrollCache::getDisplayDelta(double t, double currentAbsY,
         seg = &(*std::prev(it));
     }
 
-    // 同锚点直接复用当前段 HS；跨段端点仍使用指定锚点而非自身段的倍率。
-    double absY = getAbsY(t);
+    // 命中的段同时提供积分锚点与 HS，避免 getAbsY 再次二分同一时间。
+    // 跨段端点仍使用指定锚点，而不是端点自身段的倍率。
+    const double absY =
+        applyAnimatedZoomScale(seg->absY + (t - seg->time) * seg->speed);
     double hs =
         (std::abs(t - anchorTime) <= 1e-9) ? seg->hs : getHsAt(anchorTime);
     // 先减视觉原点再乘 HS；把两端各自乘不同 HS 会改变长条等物件的整体几何。

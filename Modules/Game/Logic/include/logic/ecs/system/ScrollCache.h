@@ -79,6 +79,12 @@ public:
     /// @brief 获取给定时间戳对应的绝对 Y 坐标。
     double getAbsY(double t) const;
 
+    /// @brief 获取未应用动画缩放的原始分段积分位置。
+    /// @param t 查询时间，允许落在首段之前。
+    /// @return 与 getAbsY 使用相同分段的原始 AbsY。
+    /// @warning 索引重建路径：仅二分查找，不遍历时间线实体。
+    double getUnscaledRawAbsY(double t) const;
+
     /// @brief 获取播放渲染锚点使用的绝对 Y 坐标。
     /// @param t 当前播放动画时间。
     /// @return 渲染锚点 AbsY。
@@ -209,12 +215,6 @@ private:
     /// @brief 重建亚帧抵消脉冲窗口。
     /// @warning 逻辑低频路径：仅在 ScrollCache rebuild 时完整扫描分段。
     void rebuildMicroImpulseWindows();
-
-    /// @brief 获取原始分段积分 AbsY，不应用动画缩放或亚帧脉冲窗口修正。
-    /// @param t 查询时间。
-    /// @return 原始 AbsY。
-    /// @warning 热路径：每次坐标查询可能调用；只能做二分查找。
-    double getUnscaledRawAbsY(double t) const;
 
     /// @brief 获取应用动画缩放后的分段积分 AbsY，不应用亚帧脉冲窗口修正。
     /// @param t 查询时间。

@@ -310,6 +310,10 @@ bool testIndependentEndHs(bool positive, bool playing)
     // 按正式快照契约提供排序列表，避免空候选导致虚假的通过。
     const std::vector<entt::entity> sorted{ entity };
     notes.ctx().emplace<const std::vector<entt::entity>*>(&sorted);
+    // 正式会话提供物件版本；正负 HS 用例都走分桶与缓存极值精查。
+    // 修改导入标记后递增版本，避免复用旧语义下的空间包络。
+    std::uint64_t noteRevision = 1;
+    notes.ctx().emplace<const std::uint64_t*>(&noteRevision);
     // 图集区域互不重叠，便于区分主体、尾端与轨道背景。
     // 尾纹理尺寸不同于头部，能发现拾取框误用头部尺寸的错误。
     const glm::vec4 bodyUv{ .3F, .3F, .05F, .05F };
@@ -325,6 +329,7 @@ bool testIndependentEndHs(bool positive, bool playing)
                 .note_properties[MMM::NoteMetadataType::MMM]
                                 [std::string(MMM::HOLD_INDEPENDENT_END_HS)] =
                 independent ? "true" : "false";
+        ++noteRevision;
         // 当前时间跨过 Jump、停止段；同一对端点不能被预先缓存为固定高度。
         // 0.5 秒位于所有运动事件之前，1.6 秒已经经过正向 Jump。
         // 1.9 秒处于停止段，尾部仍应保留与头部不同的空间位置。
@@ -336,6 +341,10 @@ bool testIndependentEndHs(bool positive, bool playing)
         for ( int frame = 0; frame <= 90; ++frame )
             times.push_back(0.5 + frame / 60.0);
         for ( double now : times ) {
+            // 部分帧只改变动画缩放，不发布物件或卷轴版本；缓存极值须按本帧倍率投影。
+            // 随后恢复原倍率，避免只在首次查询时碰巧得到正确位置。
+            const double zoom = now >= 1.6 && now < 1.65 ? 1.1 : 1.0;
+            cache.setAnimatedZoomScale(zoom);
             RenderSnapshot snapshot;
             snapshot.hasBeatmap = true;
             // 暂停且允许交互时才生成拾取框，与编辑器暂停讲解场景一致。
@@ -361,9 +370,9 @@ bool testIndependentEndHs(bool positive, bool playing)
                                                : 1450;
             // 判定线固定在 600；负 HS 允许时间在未来但空间落在判定线下方。
             // 不把相对距离取绝对值，否则无法发现方向错误。
-            const double head = 600 - (500 - origin) * headHs;
+            const double head = 600 - (500 - origin) * zoom * headHs;
             const double end =
-                600 - (1450 - origin) * (independent ? tailHs : headHs);
+                600 - (1450 - origin) * zoom * (independent ? tailHs : headHs);
             // 调用完整快照路径，同时覆盖候选剔除、主体和端点生成。
             // 使用主画布身份，预览缩放不参与此处期望坐标。
             System::NoteRenderSystem::generateSnapshot(notes,

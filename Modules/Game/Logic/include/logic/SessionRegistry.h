@@ -47,6 +47,9 @@ struct SessionSnapshotEntry {
     /// @brief Session 在注册表中的原始索引。
     int32_t index{ -1 };
 
+    /// @brief 主画布稳定身份，供鼠标位置命令在锁外选择目标。
+    std::string cameraId;
+
     /// @brief 逻辑会话共享引用，保证锁外 update 期间生命周期有效。
     std::shared_ptr<BeatmapSession> session;
 
@@ -67,6 +70,24 @@ struct SessionSnapshotEntry {
 struct PublishedSessionSnapshot {
     /// @brief 当前所有有效 Session 的稳定快照。
     std::vector<SessionSnapshotEntry> sessions;
+};
+
+/// @brief 只含 UI 标签元数据的不可变条目，不延长 BeatmapSession 生命周期。
+struct SessionUiSnapshotEntry {
+    /// @brief 与注册表索引保持一致的画布位置。
+    int32_t index{ -1 };
+    /// @brief 画布注册与命令路由共用的稳定相机 ID。
+    std::string cameraId;
+    /// @brief 当前条目是否仍为欢迎 Logo 占位会话。
+    bool isLogoPlaceholder{ false };
+    /// @brief 是否从项目工作区恢复原有停靠布局。
+    bool restoreDockFromWorkspace{ false };
+};
+
+/// @brief UI 每帧读取的轻量会话列表，由结构变更低频发布。
+struct PublishedSessionUiSnapshot {
+    /// @brief 与会话注册表同索引的画布元数据。
+    std::vector<SessionUiSnapshotEntry> entries;
 };
 
 /// @brief 编辑器多画布会话注册表，封装 Session 列表、活跃索引和 cameraId 分配。
@@ -185,6 +206,13 @@ public:
     /// 并发替换快照时保证本轮逻辑访问安全，并让旧项目会话在最后一个读者离开后及时释放。
     std::shared_ptr<const PublishedSessionSnapshot> publishedSnapshot() const;
 
+    /// @brief 获取不持有 BeatmapSession 的 UI 画布元数据快照。
+    /// @return 拥有型快照句柄，结构变更后本轮读取仍有效。
+    /// @warning UI 每帧复制一次 shared_ptr，以避免等待逻辑线程持有的长锁；
+    /// 跨线程快照生命周期要求此拥有型句柄，不能改为裸指针。
+    std::shared_ptr<const PublishedSessionUiSnapshot>
+    publishedUiSnapshot() const;
+
     /// @brief 查找第一个 Logo 占位 Session。
     /// @return Logo 占位 Session 索引；不存在时返回 -1。
     int32_t findLogoPlaceholder() const;
@@ -246,6 +274,11 @@ private:
     /// acquire 读取，写侧在持有 m_mutex 后 release 发布新快照。shared_ptr
     /// 所有权用于解决读写并发时的快照生命周期。
     std::shared_ptr<const PublishedSessionSnapshot> m_publishedSnapshot;
+
+    /// @brief 只含标签信息的 UI 发布快照，写侧仅在结构变化时替换。
+    /// @warning UI 每帧 acquire 读取、结构变更 release 写入；shared_ptr
+    /// 保证 UI 使用期间旧快照有效，避免锁住整个会话更新周期。
+    std::shared_ptr<const PublishedSessionUiSnapshot> m_publishedUiSnapshot;
 };
 
 }  // namespace MMM::Logic

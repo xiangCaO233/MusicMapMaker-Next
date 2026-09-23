@@ -235,9 +235,9 @@ void PreviewCanvas::drawDensityOverview(const ImVec2& canvasPos,
     }
     const auto  currentDensityColor = previewDensityColorAt(currentNormalized);
     ImVec4      activeBackground{ currentDensityColor.r,
-                             currentDensityColor.g,
-                             currentDensityColor.b,
-                             0.20f };
+                                  currentDensityColor.g,
+                                  currentDensityColor.b,
+                                  0.20f };
     const ImU32 activeBackgroundColor = ImGui::GetColorU32(activeBackground);
 
     // 每个屏幕像素行至多生成一个密度矩形，限制窄而高的预览窗口
@@ -268,7 +268,7 @@ void PreviewCanvas::drawDensityOverview(const ImVec2& canvasPos,
         const float rowY1 = layout.innerMin.y +
                             innerHeight * static_cast<float>(visualRow + 1) /
                                 static_cast<float>(displayRowCount);
-        const bool isCurrent = currentBin >= binBegin && currentBin < binEnd;
+        const bool  isCurrent = currentBin >= binBegin && currentBin < binEnd;
         // 当前行背景即使 rowCount 为零也要保留，保证播放游标在
         // 空白小节仍能通过整行底色快速定位。
         if ( isCurrent ) {
@@ -484,7 +484,7 @@ std::optional<double> PreviewCanvas::handleDensitySeekInteraction(
     const double visualOffset = Config::AppConfig::instance()
                                     .getVisualConfig()
                                     .getEffectiveVisualOffset();
-    const double commandTime = *targetTime - visualOffset;
+    const double commandTime  = *targetTime - visualOffset;
     if ( dispatch == PreviewDensitySeekDispatch::Preview ) {
         // 预览命令允许音频和协作层采用轻量拖动策略；同时缓存视觉
         // 与命令时间，分别服务抖动判断、提示绘制和最终提交。
@@ -577,7 +577,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2 localMousePos{ 0.0f, 0.0f };
+    ImVec2     localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         // 逻辑相机使用以预览内容区左上角为原点的局部坐标，
         // 不能包含窗口标题、边框或右侧密度栏偏移。
@@ -765,8 +765,12 @@ void PreviewCanvas::swapPreparedUiFrameData()
 
     auto&         engine      = Logic::EditorEngine::instance();
     const int32_t activeIndex = engine.getActiveSessionIndex();
-    const auto*   activeEntry = engine.getSessionEntry(activeIndex);
-    if ( !activeEntry || activeEntry->isLogoPlaceholder ) {
+    const auto    snapshot    = engine.getSessionUiSnapshot();
+    const bool    hasActiveBeatmap =
+        activeIndex >= 0 &&
+        activeIndex < static_cast<int32_t>(snapshot->entries.size()) &&
+        !snapshot->entries[static_cast<size_t>(activeIndex)].isLogoPlaceholder;
+    if ( !hasActiveBeatmap ) {
         // 项目级占位页不拥有可预览谱面，清除当前与偏移快照，
         // 同时消费本次 prepared 标志，防止同一空结果重复交换。
         m_currentSnapshot     = nullptr;

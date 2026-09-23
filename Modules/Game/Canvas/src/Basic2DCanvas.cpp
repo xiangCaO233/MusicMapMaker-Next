@@ -1188,11 +1188,12 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
     // cameraId 是窗口与会话的稳定连接键；索引会随标签关闭和重排变化，
     // 因此需要使用时重新解析，不能跨帧缓存旧索引。
     auto findSessionIndex = [this, &engine]() -> int32_t {
-        for ( int32_t i = 0; i < engine.getSessionCount(); ++i ) {
-            const auto* entry = engine.getSessionEntry(i);
-            if ( entry && entry->cameraId == m_cameraId ) {
+        const auto snapshot = engine.getSessionUiSnapshot();
+        // 此次 cameraId 解析始终读取同一代际，避免借用可移动条目。
+        for ( const auto& entry : snapshot->entries ) {
+            if ( entry.cameraId == m_cameraId ) {
                 // 返回当前容器中的即时索引，调用方在同一同步步骤内使用。
-                return i;
+                return entry.index;
             }
         }
         return -1;
@@ -1223,9 +1224,14 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
     // Logo 占位页没有可关闭的谱面语义，隐藏标签关闭按钮；真实会话
     // 才把 m_isOpen 交给 ImGui 标题栏关闭控件。
     if ( myIndex != -1 ) {
-        const auto* entry = engine.getSessionEntry(myIndex);
-        isLogoPlaceholder = entry && entry->isLogoPlaceholder;
-        showClose         = entry && !isLogoPlaceholder;
+        const auto snapshot = engine.getSessionUiSnapshot();
+        // 关闭时逻辑层还会校验索引；这里仅决定当前标签外观。
+        if ( myIndex < static_cast<int32_t>(snapshot->entries.size()) ) {
+            // 与索引查询使用相同的结构代际，避免标签关闭时读到替换项。
+            const auto& entry = snapshot->entries[static_cast<size_t>(myIndex)];
+            isLogoPlaceholder = entry.isLogoPlaceholder;
+            showClose         = !isLogoPlaceholder;
+        }
     }
 
     auto* collaborationRoom =
@@ -1508,9 +1514,9 @@ void Basic2DCanvas::updateCollaborationViewports(
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
     // 渲染模式是本地显示偏好，不写入 ParticipantViewport；不同用户
     // 可独立选择填充、轮廓或轨道边缘而不影响网络协议。
-    const auto viewportRenderMode = Config::AppConfig::instance()
-                                        .getEditorSettings()
-                                        .collaborationViewportRenderMode;
+    const auto  viewportRenderMode = Config::AppConfig::instance()
+                                         .getEditorSettings()
+                                         .collaborationViewportRenderMode;
     const auto& layout =
         visual.trackLayoutForKeyCount(m_currentSnapshot->trackCount);
     // 使用当前轨道数对应布局，使动态扩轨后的协作范围立即跟随
@@ -2068,14 +2074,15 @@ bool Basic2DCanvas::shouldKeepOpenForLastSessionReset() const
         return false;
     }
 
-    auto& engine = Logic::EditorEngine::instance();
-    if ( engine.getSessionCount() != 1 ) {
+    const auto snapshot =
+        Logic::EditorEngine::instance().getSessionUiSnapshot();
+    if ( snapshot->entries.size() != 1 ) {
         // 规则只适用于全局唯一会话，不能仅凭当前索引位于末尾判断。
         return false;
     }
 
-    const auto* entry = engine.getSessionEntry(0);
-    return entry && entry->cameraId == m_cameraId && !entry->isLogoPlaceholder;
+    const auto& entry = snapshot->entries.front();
+    return entry.cameraId == m_cameraId && !entry.isLogoPlaceholder;
 }
 
 /// @brief 取得当前 ImGui 字体图集的垂直栅格缩放。

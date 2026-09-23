@@ -33,8 +33,21 @@ bool testErasedSessionIsReleased()
     entry.displayName              = "Lifetime Test";
     entry.audioTimelineFingerprint = "complete-timeline";
     entry.mainAudioSyncFingerprint = "main-sync";
+    entry.restoreDockFromWorkspace = true;
     // 移入条目后，本地 session 和注册表是预期的拥有方。
     registry.append(std::move(entry));
+
+    // UI 元数据快照必须保留画布身份与停靠状态，但不能拥有谱面会话。
+    // 这些字段决定标签复用与工作区恢复，发布时遗漏任一字段都会改变 UI 行为。
+    // 逻辑快照和 UI 快照各自拥有独立读句柄，检查前者不能代替检查后者。
+    const auto uiSnapshot = registry.publishedUiSnapshot();
+    if ( uiSnapshot->entries.size() != 1U ||
+         uiSnapshot->entries.front().cameraId != "Canvas_0" ||
+         uiSnapshot->entries.front().isLogoPlaceholder ||
+         !uiSnapshot->entries.front().restoreDockFromWorkspace ) {
+        XERROR("Session registry did not publish UI canvas metadata");
+        return false;
+    }
 
     {
         // 用作用域结束快照借用，后面的删除测试不应留着读者保活会话。
@@ -54,10 +67,19 @@ bool testErasedSessionIsReleased()
 
     // 删除索引零会产生空的新快照，旧的无读者快照应随替换释放。
     registry.erase(0);
+    // 旧 UI 读者继续看到原画布；新读者看到删除后的空列表。
+    // 这里刻意持有旧读句柄跨越 erase，覆盖 UI 帧与关闭标签并发的生命周期。
+    // 若写侧原地清空旧 vector，旧读者会丢失 cameraId 或读取无效内存。
+    if ( uiSnapshot->entries.front().cameraId != "Canvas_0" ||
+         !registry.publishedUiSnapshot()->entries.empty() ) {
+        XERROR("Session UI snapshot changed after its reader was acquired");
+        return false;
+    }
     // 去掉本地强引用后，残留拥有者只能来自注册表及其内部发布快照。
     session.reset();
     if ( !sessionObserver.expired() ) {
-        // 若退休快照被永久积攒，条目虽已删除却仍占用会话资源。
+        // UI 读者仍存活，不能因此保留旧会话；逻辑退休快照也应已释放。
+        // 这防止标签元数据快照意外复制 BeatmapSession 的 shared_ptr。
         XERROR("Erased session remained owned by a retired registry snapshot");
         return false;
     }
