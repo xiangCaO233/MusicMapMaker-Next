@@ -59,6 +59,9 @@ private:
     /// @brief 记录当前是否为折线内部子段拖拽模式
     bool m_isPolylineSubDrag{ false };
 
+    /// @brief 首子段身体拖动只移动原折线后缀，并在释放时补建前置连接段。
+    bool m_isFirstPolylineBodyDrag{ false };
+
     /// @brief 当前手势是否已进入统一轨道移动或跨区转换模式。
     bool m_usesUnifiedObjectDrag{ false };
 
@@ -81,6 +84,16 @@ private:
     /// @brief 尝试在折线子段拖拽结束时执行合并操作 (dtrack==0 或 duration==0)
     /// @return true 如果执行了合并并已提交 Action
     bool tryPolylineSubDragMerge(SessionContext& ctx);
+
+    /// @brief 实时移动首子段及后缀，不改变原根锚点或当前子项数量。
+    /// @warning 每次拖动调用，只修改已有组件；结构插入留到释放时。
+    void updateFirstPolylineBodyDrag(SessionContext&      ctx,
+                                     const CmdUpdateDrag& cmd);
+
+    /// @brief 把首段身体拖动产生的前置连接与旧子项一次性提交到历史。
+    /// @return 实际发生移动并提交了结构变化时返回 true。
+    /// @warning 仅释放时遍历当前折线的子实体，不能放入每帧更新。
+    bool finishFirstPolylineBodyDrag(SessionContext& ctx);
 
     /// @brief 处理统一玩家/BGM 轨道中的整物件拖动。
     /// @param ctx 会话上下文。

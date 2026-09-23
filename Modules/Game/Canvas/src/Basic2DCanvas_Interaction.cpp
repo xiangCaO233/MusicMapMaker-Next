@@ -5724,12 +5724,16 @@ void Basic2DCanvasInteraction::handleInteractions(
                                                     hoveredObjectKind }));
                     if ( !currentSnapshot->isPlaying ) {
                         // 播放时仍允许选择查看，但不允许改变对象位置。
+                        // 按下处的命中部位与子索引随命令一起入队，避免拖拽工具
+                        // 在稍后的逻辑帧误读到另一处悬停状态。
                         Event::EventBus::instance().publish(
                             Event::LogicCommandEvent(
                                 Logic::CmdStartDrag{ hoveredEntity,
                                                      m_cameraId,
                                                      ImGui::GetIO().KeyCtrl,
-                                                     hoveredObjectKind }));
+                                                     hoveredObjectKind,
+                                                     hoveredPart,
+                                                     hoveredSubIndex }));
                         m_leftPressStartedObjectDrag = true;
                     }
                 } else {
@@ -5747,12 +5751,15 @@ void Basic2DCanvasInteraction::handleInteractions(
                 if ( !currentSnapshot->isPlaying &&
                      hoveredEntity != entt::null ) {
                     // 抓取工具不负责选中，保留用户已有的多选集合。
+                    // 头部与首段身体共用根实体，仅传实体无法区分两种手势。
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(
                             Logic::CmdStartDrag{ hoveredEntity,
                                                  m_cameraId,
                                                  ImGui::GetIO().KeyCtrl,
-                                                 hoveredObjectKind }));
+                                                 hoveredObjectKind,
+                                                 hoveredPart,
+                                                 hoveredSubIndex }));
                     m_leftPressStartedObjectDrag = true;
                 }
             } else if ( currentSnapshot->currentTool ==

@@ -422,18 +422,21 @@ inline NoteComponent makeNoteComponentFromSubNote(
     }
 
     NoteComponent note;
-    // 几何、绑定和颜色一并转移，父关系则显式采用调用方提供的注册信息。
-    note.m_type           = normalizedSub.type;
-    note.m_timestamp      = normalizedSub.timestamp;
-    note.m_duration       = normalizedSub.duration;
-    note.m_trackIndex     = normalizedSub.trackIndex;
-    note.m_dtrack         = normalizedSub.dtrack;
-    note.m_metadata       = normalizedSub.metadata;
-    note.m_sampleBinding  = normalizedSub.sampleBinding;
-    note.m_customColors   = normalizedSub.customColors;
-    note.m_isSubNote      = isSubNote;
-    note.m_parentPolyline = parentPolyline;
-    note.m_subIndex       = subIndex;
+    // 几何、绑定、颜色及稳定身份一并转移。
+    // 子实体与父内嵌子项共享协作 ID，不能在首次编辑时被当成两个节点。
+    // 父关系与局部索引仍显式采用调用方提供的注册信息。
+    note.m_type            = normalizedSub.type;
+    note.m_timestamp       = normalizedSub.timestamp;
+    note.m_duration        = normalizedSub.duration;
+    note.m_trackIndex      = normalizedSub.trackIndex;
+    note.m_dtrack          = normalizedSub.dtrack;
+    note.m_metadata        = normalizedSub.metadata;
+    note.m_sampleBinding   = normalizedSub.sampleBinding;
+    note.m_customColors    = normalizedSub.customColors;
+    note.m_collaborationId = normalizedSub.collaborationId;
+    note.m_isSubNote       = isSubNote;
+    note.m_parentPolyline  = parentPolyline;
+    note.m_subIndex        = subIndex;
     return note;
 }
 

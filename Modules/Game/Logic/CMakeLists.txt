@@ -299,6 +299,13 @@ mmm_add_test_executable(Logic GroupedDraftDragPreviewTest
 target_link_libraries(GroupedDraftDragPreviewTest PRIVATE Logic Log)
 add_test(NAME GroupedDraftDragPreviewTest COMMAND GroupedDraftDragPreviewTest)
 
+# 首段头部与身体使用不同拖动语义，覆盖前置连接、后缀相对位置和撤销。 松键前还要生成正式画布快照，防止仅提交结果正确而拖动预览错误。
+mmm_add_test_executable(Logic PolylineFirstBodyDragTest
+                        tests/PolylineFirstBodyDragTest.cpp)
+target_link_libraries(PolylineFirstBodyDragTest PRIVATE Logic Log)
+# CTest 直接运行快照回归，防止只构建测试而不执行预览断言。
+add_test(NAME PolylineFirstBodyDragTest COMMAND PolylineFirstBodyDragTest)
+
 # 音符渲染测试覆盖草稿物件独立配色与播放中的顶层重叠提示。 显式传入仓库内默认皮肤和翻译路径，避免使用机器上安装资源的不同版本。
 # 参数保留引号，源码目录包含空格时仍应作为单个路径传给测试。 这两个位置是只读输入；新增输出参数时应另指向构建树下的 test_output。
 # 默认皮肤入口取自源码树，不使用构建同步到个人配置目录后的资源副本。 翻译根与皮肤脚本是两个不同参数，手动执行该测试时也必须完整传入。

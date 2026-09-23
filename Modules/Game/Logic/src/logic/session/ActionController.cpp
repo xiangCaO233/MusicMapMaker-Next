@@ -309,6 +309,19 @@ void applySelectiveNoteTransition(NoteComponent&       current,
                              equal);
     applyNoteFieldTransition(
         current.m_dtrack, expected.m_dtrack, replacement.m_dtrack, equal);
+    // 折线结构编辑会对既有子实体重新编号；只恢复位置会让投影索引错位。
+    // 关系字段同样按预期值条件回退，保留动作之后独立发生的外部修改。
+    // 父引用用实体身份比较，不从时间与轨道猜测新的归属。
+    applyNoteFieldTransition(current.m_isSubNote,
+                             expected.m_isSubNote,
+                             replacement.m_isSubNote,
+                             equal);
+    applyNoteFieldTransition(current.m_parentPolyline,
+                             expected.m_parentPolyline,
+                             replacement.m_parentPolyline,
+                             equal);
+    applyNoteFieldTransition(
+        current.m_subIndex, expected.m_subIndex, replacement.m_subIndex, equal);
     applyNoteFieldTransition(
         current.m_isDraft, expected.m_isDraft, replacement.m_isDraft, equal);
     // 元数据表按整体比较，不逐键合并并发修改。
@@ -340,7 +353,7 @@ void applySelectiveNoteTransition(NoteComponent&       current,
 /// @param current 当前有效实体的音符状态。
 /// @param snapshot 待更新身份的旧值或新值快照；为空时不创建。
 /// @note 只修正逻辑标识，不把当前几何、颜色或批注覆盖进历史值。
-/// @note 子节点按共同索引继承身份，不根据时间或轨道猜测节点对应关系。
+/// @note 仅对缺失身份的子节点按共同索引回填；显式身份用于结构插入与重排。
 /// @pre current 的身份已由调用者补齐，本函数只传播，不生成新的 ID。
 void inheritNoteIdentity(const NoteComponent&          current,
                          std::optional<NoteComponent>& snapshot)
@@ -349,12 +362,15 @@ void inheritNoteIdentity(const NoteComponent&          current,
     snapshot->m_collaborationId = current.m_collaborationId;
     const auto count =
         std::min(snapshot->m_subNotes.size(), current.m_subNotes.size());
-    // 只传播双方共有索引，不改变动作记录的子节点数量或补出新节点。
+    // 只向双方共有索引的空身份回填，不覆盖结构编辑明确保留的来源身份。
     // 身份继承不修改根实体引用，运行期 entt 编号仍由创建或恢复流程维护。
     // 历史路径可能比当前路径长，超出共同部分的历史节点保留各自已有身份。
     for ( std::size_t index = 0; index < count; ++index ) {
-        snapshot->m_subNotes[index].collaborationId =
-            current.m_subNotes[index].collaborationId;
+        // 新增前缀已有独立 ID，不能复用原首节点的 ID。
+        if ( snapshot->m_subNotes[index].collaborationId.empty() ) {
+            snapshot->m_subNotes[index].collaborationId =
+                current.m_subNotes[index].collaborationId;
+        }
     }
 }
 

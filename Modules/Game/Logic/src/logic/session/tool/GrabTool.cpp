@@ -9,6 +9,7 @@
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/EditorAction.h"
 #include "logic/session/NoteAction.h"
+#include "logic/session/NoteIdentity.h"
 #include "logic/session/SampleAction.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
@@ -711,6 +712,7 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
     // 开始新手势前清空上次模式标志、初始快照与渲染钉住集合。
     // 防止失败或结束后的旧参与者被下一次拖动重复更新。
     m_isPolylineSubDrag        = false;
+    m_isFirstPolylineBodyDrag  = false;
     m_usesUnifiedObjectDrag    = false;
     m_isSampleOffsetDrag       = false;
     m_hasLastAppliedDragTarget = false;
@@ -747,13 +749,31 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
     ctx.draggedEntity     = draggedEntity;
     ctx.draggedObjectKind = cmd.kind;
     ctx.dragCameraId      = cmd.cameraId;
-    // 从当前悬浮状态锁定命中部件和子索引，拖动中不随新的悬浮改变。
-    // 命令领域和相机同步记录，供后续连续更新选择正确路径。
-    ctx.draggedPart     = static_cast<HoverPart>(ctx.hoveredPart);
-    ctx.draggedSubIndex = ctx.hoveredSubIndex;
+    // 画布按下时的命中结果必须随命令传入；共享悬停状态可能属于别帧，
+    // 尤其在头部与首段身体重叠时不能由旧状态决定是否整体平移。
+    // 未携带命中信息的其它调用方仍沿用原有悬停语义。
+    ctx.draggedPart = static_cast<HoverPart>(
+        cmd.hitPart.value_or(static_cast<std::uint8_t>(ctx.hoveredPart)));
+    ctx.draggedSubIndex = cmd.hitSubIndex.value_or(ctx.hoveredSubIndex);
+    // 折线首节点头与身体共享索引零，必须再用命中部位区别拖动意图。
+    // 只对能产生正交前置载体的 Hold/Flick 启用这种结构编辑。
+    // 草稿子实体已在上面提升为父，避免误把子投影当作完整折线。
+    if ( cmd.kind == ChartObjectKind::PlayerNote ||
+         cmd.kind == ChartObjectKind::DraftNote ) {
+        const auto* note =
+            ctx.noteRegistry.try_get<const NoteComponent>(draggedEntity);
+        m_isFirstPolylineBodyDrag =
+            note && note->m_type == ::MMM::NoteType::POLYLINE &&
+            !note->m_subNotes.empty() && ctx.draggedSubIndex == 0 &&
+            ctx.draggedPart == HoverPart::HoldBody &&
+            (note->m_subNotes.front().type == ::MMM::NoteType::HOLD ||
+             note->m_subNotes.front().type == ::MMM::NoteType::FLICK);
+    }
     // 草稿从起始帧就使用统一有符号轨号，不能先进入只接受玩家轨的兼容路径。
     // 后面是否包含采样不会取消这一最初的跨域要求。
-    if ( cmd.kind == ChartObjectKind::DraftNote ) {
+    if ( cmd.kind == ChartObjectKind::DraftNote &&
+         !m_isFirstPolylineBodyDrag ) {
+        // 首段身体有自己的有符号轨号计算，不进入整条折线跨域平移。
         m_usesUnifiedObjectDrag = true;
     }
 
@@ -865,7 +885,9 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
 
         // 选中主对象时保存当前可编辑选中组，并记录原有选中状态。
         // 该快照用于最终撤销，不以连续拖动后的临时位置作为 before。
-        if ( primarySelected ) {
+        // 已选中根的首段身体仍是局部编辑，不带动其他选中物件。
+        // 原有选择标志继续留在实体上，只缩小本次拖动的参与集合。
+        if ( primarySelected && !m_isFirstPolylineBodyDrag ) {
             // 模式 A: 拖动整个选中组
             auto view = registry.view<InteractionComponent, NoteComponent>();
             for ( auto entity : view ) {
@@ -924,7 +946,9 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
         } else {
             // 模式 B: 只拖动当前物件
             if ( auto* note = registry.try_get<NoteComponent>(draggedEntity) ) {
-                m_initialStates[draggedEntity] = { *note, false };
+                // 身体特例以单根路径收集完整父子快照，撤销需要原子边界。
+                // 保存真实选择状态，不能因为不联动选择组就改变选中属性。
+                m_initialStates[draggedEntity] = { *note, primarySelected };
                 if ( !registry.all_of<InteractionComponent>(draggedEntity) ) {
                     registry.emplace<InteractionComponent>(draggedEntity);
                 }
@@ -975,7 +999,10 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
             SessionUtils::isMainCanvasCameraId(cmd.cameraId) &&
             ctx.lastConfig.settings.professionalMode;
         m_usesUnifiedObjectDrag =
-            m_usesUnifiedObjectDrag || previewsAcrossDraftBoundary;
+            m_usesUnifiedObjectDrag ||
+            (previewsAcrossDraftBoundary && !m_isFirstPolylineBodyDrag);
+        // 身体特例不执行玩家/草稿/BGM 的域转换。
+        // 实际横移范围在专用更新中由整个旧后缀共同约束。
 
         // 兼容旧代码 (保留主拖拽物件的初始备份)
         // 主要 Note 必须已经纳入参与集合才能进入活动拖动。
@@ -1321,6 +1348,13 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
 void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
 {
     if ( ctx.draggedEntity == entt::null ) return;
+    // 首段身体只移动原有后缀；不能落入整条平移或跨域转换路径。
+    // PolylineNode/0 仍沿原路径移动整条，只有 HoldBody/0 被提前截获。
+    // 专用路径复用统一画布投影，但不启用统一对象提交模式。
+    if ( m_isFirstPolylineBodyDrag ) {
+        updateFirstPolylineBodyDrag(ctx, cmd);
+        return;
+    }
     // 统一路径已接管时直接结束，避免同一输入被两套规则重复应用。
     // 普通路径必须找到主对象初始快照，不能临时以当前值作为起点。
     if ( handleUnifiedDragUpdate(ctx, cmd) ) return;
@@ -1347,9 +1381,9 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                 ctx.lastConfig.visual.trackLayout.top) *
                                mainViewportHeight;
-        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by           = it->second.viewportHeight -
-                             ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float ty = ctx.lastConfig.visual.previewConfig.margin.top;
+        float by = it->second.viewportHeight -
+                   ctx.lastConfig.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         renderScaleY =
             previewDrawH /
@@ -1742,6 +1776,236 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
     }
 }
 
+/// @brief 预览首个折线子段身体的局部拖动。
+/// @param ctx 保存原始父子快照与当前折线的会话。
+/// @param cmd 当前鼠标位置；轨道和时间均通过统一画布投影解析。
+/// @warning 连续输入路径只在前缀出现或消失时改变列表容量，不重建撤销历史。
+/// @note 后缀统一平移保持相对位置，预览与提交使用同一条完整折线。
+/// @note 原父 timestamp 和 trackIndex 保留旧头位置，前缀在拖动时即时可见。
+/// @note 横移检查所有 Flick 终轨，纵移不允许产生负时长的前置 Hold。
+/// @note 前缀预览仅改变父内嵌列表，原子投影索引随之临时顺延。
+/// @note 画布坐标暂不可解析时维持上一次有效预览，不退化成整条移动。
+void GrabTool::updateFirstPolylineBodyDrag(SessionContext&      ctx,
+                                           const CmdUpdateDrag& cmd)
+{
+    const auto initial = m_initialStates.find(ctx.draggedEntity);
+    auto* note = ctx.noteRegistry.try_get<NoteComponent>(ctx.draggedEntity);
+    if ( initial == m_initialStates.end() || !note ||
+         initial->second.note.m_subNotes.empty() ) {
+        // 外部操作若改变了列表结构，旧索引不能再安全套到当前列表。
+        // 放弃本轮写入，释放时仍由原快照核对是否应创建前缀。
+        return;
+    }
+    const auto target = calculateUnifiedDragTarget(ctx, cmd);
+    if ( !target ) return;
+
+    const auto& original  = initial->second.note.m_subNotes;
+    const bool  hasPrefix = note->m_subNotes.size() == original.size() + 1;
+    // 预览只允许原列表或多一条前缀这两种形态。
+    // 若外部编辑改变了数量，不能靠索引猜测哪段是当前原首项。
+    // 这个不变量也保证渲染读取时不会看到重复的前置载体。
+    // 异常结构留给更上层恢复，连续输入路径不做全量修复。
+    if ( !hasPrefix && note->m_subNotes.size() != original.size() ) return;
+    const auto&            first = original.front();
+    NoteComponent::SubNote prefix;
+    bool                   wantPrefix = false;
+    if ( first.type == ::MMM::NoteType::HOLD ) {
+        // 横移整个旧后缀，并把所有 Flick 终轨计入边界限制。
+        // 草稿与玩家域分别钳制，不把折线一半移到另一编辑区域。
+        const int minimum = note->m_isDraft ? -ctx.draftTrackCount : 0;
+        const int maximum = note->m_isDraft ? -1 : ctx.trackCount - 1;
+        int       delta   = target->absoluteTrack - first.trackIndex;
+        // 各段共享一个 delta，不分别把节点夹到轨道边缘。
+        // 原本合法的折线至少有零位移可行，区间交集不会为空。
+        // 终轨与起轨都参与约束，防止 Flick 尾跨出所属区域。
+        for ( const auto& sub : original ) {
+            const int end =
+                sub.trackIndex +
+                (sub.type == ::MMM::NoteType::FLICK ? sub.dtrack : 0);
+            delta = std::max(delta, minimum - std::min(sub.trackIndex, end));
+            delta = std::min(delta, maximum - std::max(sub.trackIndex, end));
+        }
+        wantPrefix        = delta != 0;
+        prefix.type       = ::MMM::NoteType::FLICK;
+        prefix.timestamp  = first.timestamp;
+        prefix.trackIndex = first.trackIndex;
+        prefix.dtrack     = delta;
+        // 横向前缀在当前帧就连上移动后的原首 Hold，不能等释放才渲染。
+        // 所有原段仍共用同一轨差，持续时间与相对方向保持不变。
+        // insert 只在从零位移变为非零位移时执行一次；后续帧复用容量。
+        // 回到零位移立即移除前缀，让画布不残留断开的旧连接。
+        if ( wantPrefix && !hasPrefix )
+            note->m_subNotes.insert(note->m_subNotes.begin(), prefix);
+        else if ( !wantPrefix && hasPrefix )
+            note->m_subNotes.erase(note->m_subNotes.begin());
+        if ( wantPrefix ) note->m_subNotes.front() = prefix;
+        // 插入前缀后原子项整体顺延一位；后缀仍以起笔快照计算位移。
+        // 不能用上一帧的轨号累计，否则反向拖动会产生漂移。
+        const std::size_t offset = wantPrefix ? 1U : 0U;
+        for ( std::size_t i = 0; i < original.size(); ++i ) {
+            note->m_subNotes[i + offset].trackIndex =
+                original[i].trackIndex + delta;
+        }
+    } else if ( first.type == ::MMM::NoteType::FLICK ) {
+        // 新前置 Hold 不能有负持续时间，向下拖动只回到原始起点。
+        // 其余子项采用相同时间差，保持后缀内部节奏和先后顺序。
+        const double rawDelta = std::max(0.0, target->time - first.timestamp);
+        const double delta =
+            rawDelta < POLYLINE_SUB_DRAG_ZERO_DURATION ? 0.0 : rawDelta;
+        // 容差内退回原点，不在释放时生成不可见的极短 Hold。
+        // 同刻 Flick 和后继 Hold 共享位移，仍在同一节奏位置衔接。
+        wantPrefix        = delta > 0.0;
+        prefix.type       = ::MMM::NoteType::HOLD;
+        prefix.timestamp  = first.timestamp;
+        prefix.trackIndex = first.trackIndex;
+        prefix.duration   = delta;
+        // 预览中的 Hold 始终从旧头延伸到新 Flick 起点。
+        // 负向拖动被钳制为零，因而不显示负持续时间的伪连接段。
+        // 非零位置往返时复用同一列表槽，不每帧重建父实体。
+        if ( wantPrefix && !hasPrefix )
+            note->m_subNotes.insert(note->m_subNotes.begin(), prefix);
+        else if ( !wantPrefix && hasPrefix )
+            note->m_subNotes.erase(note->m_subNotes.begin());
+        if ( wantPrefix ) note->m_subNotes.front() = prefix;
+        // 时间只取原始快照加本次位移，避免长时间拖动累积量化误差。
+        const std::size_t offset = wantPrefix ? 1U : 0U;
+        for ( std::size_t i = 0; i < original.size(); ++i ) {
+            note->m_subNotes[i + offset].timestamp =
+                original[i].timestamp + delta;
+        }
+    } else {
+        return;
+    }
+    // 只访问起笔时收集的本条折线子实体，不在新热路径扫描整个 Registry。
+    // 新前缀直到释放才获得独立实体，原子投影先与父列表索引保持一致。
+    // 索引来自不可变初始快照，不读取拖动中可能变动的悬停目标。
+    // 玩家区和草稿区同样只同步两项几何字段，其他局部属性保持原值。
+    // 投影实体若被外部删除则跳过，释放阶段仍以现存实体建立事务。
+    // 循环期间只赋值已有组件，不增删 Registry 或改变父列表容量。
+    // 父列表是渲染权威，子投影是选择与身份权威，二者索引必须对齐。
+    // 前缀自身还没有投影实体，它只在结束动作成功时获得独立身份。
+    for ( const auto& [entity, state] : m_initialStates ) {
+        if ( !state.note.m_isSubNote ||
+             state.note.m_parentPolyline != ctx.draggedEntity ||
+             state.note.m_subIndex < 0 ||
+             state.note.m_subIndex >= static_cast<int>(original.size()) ) {
+            continue;
+        }
+        auto* child = ctx.noteRegistry.try_get<NoteComponent>(entity);
+        if ( !child ) continue;
+        const int   index   = state.note.m_subIndex + (wantPrefix ? 1 : 0);
+        const auto& sub     = note->m_subNotes[index];
+        child->m_subIndex   = index;
+        child->m_timestamp  = sub.timestamp;
+        child->m_trackIndex = sub.trackIndex;
+    }
+}
+
+/// @brief 提交首子段身体拖动引出的前置连接段。
+/// @param ctx 当前会话与原始父子快照。
+/// @return 实际插入并提交一个撤销事务时返回 true。
+/// @warning 释放低频路径：只遍历当前折线的投影子实体，允许列表插入。
+/// @note 新前缀占索引零，旧子实体保持身份与所有非位置属性。
+/// @note 历史 before 来自手势起点，不读取被预览覆盖的当前组件。
+/// @note 根身份与绑定留在旧锚点，不窃取原首子段的独立绑定。
+/// @note 零位移不创建动作，拖动状态由外层统一清理。
+bool GrabTool::finishFirstPolylineBodyDrag(SessionContext& ctx)
+{
+    const auto initial = m_initialStates.find(ctx.draggedEntity);
+    auto* note = ctx.noteRegistry.try_get<NoteComponent>(ctx.draggedEntity);
+    if ( initial == m_initialStates.end() || !note ||
+         initial->second.note.m_subNotes.empty() ||
+         note->m_subNotes.size() !=
+             initial->second.note.m_subNotes.size() + 1 ) {
+        return false;
+    }
+    const auto&            oldHead = initial->second.note.m_subNotes.front();
+    const auto&            newHead = note->m_subNotes[1];
+    NoteComponent::SubNote prefix  = note->m_subNotes.front();
+    if ( oldHead.type == ::MMM::NoteType::HOLD ) {
+        const int shift = newHead.trackIndex - oldHead.trackIndex;
+        if ( shift == 0 || prefix.type != ::MMM::NoteType::FLICK ||
+             prefix.dtrack != shift )
+            return false;
+        // 横向前缀在预览中已存在，释放时只校验并补身份。
+    } else if ( oldHead.type == ::MMM::NoteType::FLICK ) {
+        const double shift = newHead.timestamp - oldHead.timestamp;
+        if ( shift <= 0.0 || prefix.type != ::MMM::NoteType::HOLD ||
+             std::abs(prefix.duration - shift) > 1e-7 )
+            return false;
+        // 竖向前缀也已参与预览；不能松手时再插入第二条。
+    } else {
+        return false;
+    }
+
+    // 结构插入前给原后缀和投影补齐一致的稳定身份。
+    // 未编号的测试或旧谱面不能让动作按新索引给旧节点错误配号。
+    ensureNoteCollaborationIdentity(*note);
+    // 优先使用已有子实体的稳定 ID，避免旧父列表与实际子投影身份相反。
+    // 只有旧投影缺号时才采用刚为父内嵌子项补出的 ID。
+    for ( const auto& [entity, state] : m_initialStates ) {
+        if ( entity == ctx.draggedEntity || !state.note.m_isSubNote ||
+             state.note.m_parentPolyline != ctx.draggedEntity ||
+             state.note.m_subIndex < 0 ||
+             state.note.m_subIndex >=
+                 static_cast<int>(initial->second.note.m_subNotes.size()) ) {
+            continue;
+        }
+        auto* child = ctx.noteRegistry.try_get<NoteComponent>(entity);
+        if ( !child ) continue;
+        auto& subId =
+            note->m_subNotes[state.note.m_subIndex + 1].collaborationId;
+        if ( child->m_collaborationId.empty() ) {
+            child->m_collaborationId = subId;
+        } else {
+            subId = child->m_collaborationId;
+        }
+    }
+    prefix.collaborationId                         = makeNoteCollaborationId();
+    NoteComponent parentAfter                      = *note;
+    parentAfter.m_subNotes.front().collaborationId = prefix.collaborationId;
+    // 根锚点保留在新增前置段的起点，原父属性与音频绑定继续留在头部。
+    // 插入仅作用于 Action 的 after 副本，初始快照仍是 Undo 权威来源。
+    // 父实体身份不替换，避免选择、批注与协作引用无故漂移。
+    parentAfter.m_timestamp  = prefix.timestamp;
+    parentAfter.m_trackIndex = prefix.trackIndex;
+    std::vector<BatchNoteAction::Entry> entries;
+    entries.push_back({ ctx.draggedEntity, initial->second.note, parentAfter });
+
+    // 旧子实体保留身份和局部属性，只把数组索引整体顺延一位。
+    // 从初始快照取 before，避免拖动预览坐标污染撤销结果。
+    for ( const auto& [entity, state] : m_initialStates ) {
+        if ( entity == ctx.draggedEntity ) continue;
+        // 这里只处理同一父折线的子投影，其他选中物件不在集合中。
+        // 子段音效、颜色和稳定身份由当前组件完整复制，不用默认前缀覆盖。
+        const auto* current =
+            ctx.noteRegistry.try_get<const NoteComponent>(entity);
+        if ( !current || !state.note.m_isSubNote ||
+             state.note.m_parentPolyline != ctx.draggedEntity ) {
+            continue;
+        }
+        NoteComponent after = *current;
+        after.m_subIndex    = state.note.m_subIndex + 1;
+        // 索引零留给新增子实体；旧子实体按原顺序从一重新编号。
+        // 撤销需要同时恢复该关系字段和对应的旧父列表。
+        entries.push_back({ entity, state.note, after });
+    }
+
+    const entt::entity prefixEntity = ctx.noteRegistry.create();
+    NoteComponent      prefixNote =
+        makeNoteComponentFromSubNote(prefix, true, ctx.draggedEntity, 0);
+    prefixNote.m_isDraft = note->m_isDraft;
+    // 新前缀在动作首次执行时获得稳定协作 ID；Undo 销毁这个新实体。
+    // 旧子实体始终保留原实体号，Redo 不会把它们当作新建对象。
+    entries.push_back({ prefixEntity, std::nullopt, prefixNote });
+    clearDraggingFlags(ctx, m_initialStates);
+    auto action = std::make_unique<BatchNoteAction>(std::move(entries),
+                                                    "Polyline First Body Drag");
+    ctx.actionStack.pushAndExecute(std::move(action), ctx);
+    SessionUtils::rebuildHitEvents(ctx);
+    return true;
+}
+
 /// @brief 校验统一拖动落点，并整体提交跨域转换或恢复初始状态。
 /// @param ctx 包含拖动预览结果的会话。
 /// @warning
@@ -2048,6 +2312,25 @@ void GrabTool::handleEndDrag(SessionContext& ctx, const CmdEndDrag& cmd)
 {
     (void)cmd;
     if ( ctx.draggedEntity == entt::null ) return;
+
+    if ( m_isFirstPolylineBodyDrag ) {
+        finishFirstPolylineBodyDrag(ctx);
+        // 结构动作已经原子提交，不能再叠加普通位置历史。
+        // 无位移也要解除所有旧父子实体的拖动状态。
+        clearDraggingFlags(ctx, m_initialStates);
+        clearSessionDragState(ctx);
+        ctx.draggedEntity     = entt::null;
+        ctx.draggedObjectKind = ChartObjectKind::PlayerNote;
+        ctx.dragInitialNote.reset();
+        ctx.dragInitialSample.reset();
+        ctx.dragRenderPinnedEntities.clear();
+        ctx.dragSampleRenderPinnedEntities.clear();
+        m_initialStates.clear();
+        m_initialSampleStates.clear();
+        m_isFirstPolylineBodyDrag  = false;
+        m_hasLastAppliedDragTarget = false;
+        return;
+    }
 
     // 跨域或采样手势由专用收尾统一校验并提交。
     // 返回后不再走普通音符批次，避免同一拖动重复进入历史。

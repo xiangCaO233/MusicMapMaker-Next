@@ -93,6 +93,10 @@ struct CmdStartDrag {
     bool         isCtrlDown{ false };
     /// @brief 实体所在的独立 ECS 注册表。
     ChartObjectKind kind{ ChartObjectKind::PlayerNote };
+    /// @brief 按下瞬间命中的部位；缺省时兼容非画布调用方的悬停状态。
+    std::optional<std::uint8_t> hitPart;
+    /// @brief 按下瞬间命中的折线子项索引，与 hitPart 一起锁定手势目标。
+    std::optional<std::int32_t> hitSubIndex;
 };
 
 /**
