@@ -20,14 +20,15 @@ mmm_add_test_executable(Graphic AsciiFontRasterizerTest
 # 测试复用生产字体库，并借助 Config 完成 UTF-8 测试路径转换。
 target_link_libraries(AsciiFontRasterizerTest PRIVATE Font Config)
 # CTest 参数依次固定 ASCII 字体、CJK 字体与构建输出根目录。
-add_test(
-  NAME AsciiFontRasterizerTest
+mmm_register_test_case(
+  NAME
+  AsciiFontRasterizerTest
   COMMAND
-    # 使用真实内置字体覆盖 ASCII 与 CJK 两类栅格化输入，并把临时副本放入构建目录。
-    AsciiFontRasterizerTest
-    "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/font/0xProtoNerdFontPropo-Regular.ttf"
-    "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/font/NotoSansMonoCJKsc-Regular.otf"
-    "${CMAKE_BINARY_DIR}/test_output")
+  # 使用真实内置字体覆盖 ASCII 与 CJK 两类栅格化输入，并把临时副本放入构建目录。
+  AsciiFontRasterizerTest
+  "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/font/0xProtoNerdFontPropo-Regular.ttf"
+  "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/font/NotoSansMonoCJKsc-Regular.otf"
+  "${CMAKE_BINARY_DIR}/test_output")
 
 # 启动期系统字体解析仅链接当前平台的原生字体查询依赖。 Windows 通过 DirectWrite 解析当前 UI 字体和中文回退字体。
 if(WIN32)

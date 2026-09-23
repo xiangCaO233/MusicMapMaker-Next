@@ -89,12 +89,14 @@ mmm_add_test_executable(Graphic ThemePluginLoaderTest
 # 测试进程链接真实 Graphic 目标，以覆盖与应用相同的 Lua 和主题注册实现。
 target_link_libraries(ThemePluginLoaderTest PRIVATE Graphic)
 # CTest 参数顺序属于测试入口契约，调整夹具路径时必须同步测试 main 的解析顺序。
-add_test(
-  NAME ThemePluginLoaderTest
+mmm_register_test_case(
+  NAME
+  ThemePluginLoaderTest
   COMMAND
-    ThemePluginLoaderTest "${CMAKE_BINARY_DIR}/test_output/theme_plugins"
-    "${CMAKE_SOURCE_DIR}/docs/plugin/examples/theme-example.lua"
-    "${CMAKE_SOURCE_DIR}/docs/plugin/examples/ivm.lua")
+  ThemePluginLoaderTest
+  "${CMAKE_BINARY_DIR}/test_output/theme_plugins"
+  "${CMAKE_SOURCE_DIR}/docs/plugin/examples/theme-example.lua"
+  "${CMAKE_SOURCE_DIR}/docs/plugin/examples/ivm.lua")
 
 if(APPLE)
   # Cocoa 窗框和系统主题查询需要 Objective-C++；这些源不能进入其他平台编译器。

@@ -41,7 +41,8 @@ target_include_directories(RtcDiagnosticLoggingTest
 target_link_libraries(RtcDiagnosticLoggingTest PRIVATE NetworkCollaboration
                                                        Config)
 # 该测试不启动真实 RTC 连接，仅检查日志和配置契约。
-add_test(NAME RtcDiagnosticLoggingTest COMMAND RtcDiagnosticLoggingTest)
+mmm_register_test_case(NAME RtcDiagnosticLoggingTest COMMAND
+                       RtcDiagnosticLoggingTest)
 
 # 构建指纹测试覆盖后台任务投递、非阻塞状态查询和最终 SHA-256 格式。
 mmm_add_test_executable(Collaboration CollaborationBuildFingerprintTest
@@ -50,8 +51,8 @@ mmm_add_test_executable(Collaboration CollaborationBuildFingerprintTest
 target_link_libraries(CollaborationBuildFingerprintTest
                       PRIVATE NetworkCollaboration Runtime)
 # 指纹测试会等待后台任务完成，但不依赖外部网络。
-add_test(NAME CollaborationBuildFingerprintTest
-         COMMAND CollaborationBuildFingerprintTest)
+mmm_register_test_case(NAME CollaborationBuildFingerprintTest COMMAND
+                       CollaborationBuildFingerprintTest)
 
 # 单进程创建 1 个房主和 7 个访客，验证增量顺序、去重和日志补发。
 mmm_add_test_executable(Collaboration CollaborationPeerTest
@@ -59,7 +60,7 @@ mmm_add_test_executable(Collaboration CollaborationPeerTest
 # Peer 测试使用 LoopbackTransport，不需要 RTC 服务。
 target_link_libraries(CollaborationPeerTest PRIVATE NetworkCollaboration)
 # 多参与者状态机作为普通 CTest 回归项运行。
-add_test(NAME CollaborationPeerTest COMMAND CollaborationPeerTest)
+mmm_register_test_case(NAME CollaborationPeerTest COMMAND CollaborationPeerTest)
 
 # 视野同步设置测试覆盖默认频率以及 5～60 Hz 房间层边界限制。
 mmm_add_test_executable(Collaboration CollaborationViewportSettingsTest
@@ -68,8 +69,8 @@ mmm_add_test_executable(Collaboration CollaborationViewportSettingsTest
 target_link_libraries(CollaborationViewportSettingsTest
                       PRIVATE NetworkCollaboration)
 # 测试不创建传输实例，可快速验证默认值和钳制。
-add_test(NAME CollaborationViewportSettingsTest
-         COMMAND CollaborationViewportSettingsTest)
+mmm_register_test_case(NAME CollaborationViewportSettingsTest COMMAND
+                       CollaborationViewportSettingsTest)
 
 # 谱面文档测试覆盖全部对象类型、元数据、快照和分类增量往返。
 mmm_add_test_executable(Collaboration BeatmapDocumentCodecTest
@@ -77,7 +78,8 @@ mmm_add_test_executable(Collaboration BeatmapDocumentCodecTest
 # 文档往返通过协作库访问正式 JSON 编解码实现。
 target_link_libraries(BeatmapDocumentCodecTest PRIVATE NetworkCollaboration)
 # 覆盖测试不写入源码资源目录。
-add_test(NAME BeatmapDocumentCodecTest COMMAND BeatmapDocumentCodecTest)
+mmm_register_test_case(NAME BeatmapDocumentCodecTest COMMAND
+                       BeatmapDocumentCodecTest)
 
 # 资源状态机测试覆盖清单完整性、分块重组、缓存复用和单文件增量更新。
 mmm_add_test_executable(Collaboration CollaborationResourceSyncTest
@@ -89,8 +91,8 @@ target_include_directories(CollaborationResourceSyncTest
 target_link_libraries(CollaborationResourceSyncTest
                       PRIVATE NetworkCollaboration 3rd_nlohmann_json Runtime)
 # 生成资源只写入构建树测试输出目录。
-add_test(NAME CollaborationResourceSyncTest
-         COMMAND CollaborationResourceSyncTest)
+mmm_register_test_case(NAME CollaborationResourceSyncTest COMMAND
+                       CollaborationResourceSyncTest)
 
 # 本机真实 WebRTC 集成测试覆盖中心信令、瞬时释放、DataChannel、身份和资源同步。
 mmm_add_test_executable(Collaboration CollaborationRoomTest
@@ -110,5 +112,5 @@ mmm_add_test_executable(Collaboration CollaborationDirectoryClientTest
 target_link_libraries(CollaborationDirectoryClientTest
                       PRIVATE NetworkCollaboration NetworkCollaborationServer)
 # 该稳定路径保留为自动 CTest，替代易受全局 RTC 句柄影响的房间探针。
-add_test(NAME CollaborationDirectoryClientTest
-         COMMAND CollaborationDirectoryClientTest)
+mmm_register_test_case(NAME CollaborationDirectoryClientTest COMMAND
+                       CollaborationDirectoryClientTest)

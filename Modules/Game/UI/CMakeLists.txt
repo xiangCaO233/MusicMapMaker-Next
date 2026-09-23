@@ -228,9 +228,12 @@ endif()
 # cmake-format: off
 # UI 测试注册约定：
 # - 测试均通过 mmm_add_test_executable 创建；
-# - 二进制统一输出到构建树 tests/UI；
+# - 对象目标按依赖归入套件程序，二进制统一输出到构建树 tests/Suites；
 # - 每个目标显式列出 include 和链接依赖；
-# - 测试名称与可执行文件名称保持一致；
+# - CTest 名称继续逐项保留，套件用原目标名分派；
+# - MarkdownRendererTest 的浏览器替身必须与真实 UI 实现分组；
+# - WelcomeViewTest 链接 Game，独立分组可避免扩展其余 UI 用例的链接闭包；
+# - 所有用例仍是独立进程，不共享 ImGui 状态或项目单例；
 # - 纯策略测试不链接完整 Game 或 GPU；
 # - 需要 ImGui 状态的测试只创建最小上下文；
 # - 测试不得写入源码 tests/data。
@@ -240,7 +243,8 @@ mmm_add_test_executable(UI BpmPlaybackRoutingTest
                         tests/BpmPlaybackRoutingTest.cpp)
 target_include_directories(BpmPlaybackRoutingTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-add_test(NAME BpmPlaybackRoutingTest COMMAND BpmPlaybackRoutingTest)
+mmm_register_test_case(NAME BpmPlaybackRoutingTest COMMAND
+                       BpmPlaybackRoutingTest)
 
 # 空格播放路由测试覆盖活动拖拽交互和控件导航激活隔离。 显式链接 ImGui，以构造路由判定所需的最小输入上下文。
 mmm_add_test_executable(UI PlaybackShortcutRoutingTest
@@ -248,7 +252,8 @@ mmm_add_test_executable(UI PlaybackShortcutRoutingTest
 target_include_directories(PlaybackShortcutRoutingTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(PlaybackShortcutRoutingTest PRIVATE 3rd_imgui)
-add_test(NAME PlaybackShortcutRoutingTest COMMAND PlaybackShortcutRoutingTest)
+mmm_register_test_case(NAME PlaybackShortcutRoutingTest COMMAND
+                       PlaybackShortcutRoutingTest)
 
 # cmake-format: off
 # Markdown 测试分层：
@@ -263,7 +268,7 @@ add_test(NAME PlaybackShortcutRoutingTest COMMAND PlaybackShortcutRoutingTest)
 mmm_add_test_executable(UI MarkdownParserTest tests/MarkdownParserTest.cpp)
 target_include_directories(MarkdownParserTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-add_test(NAME MarkdownParserTest COMMAND MarkdownParserTest)
+mmm_register_test_case(NAME MarkdownParserTest COMMAND MarkdownParserTest)
 
 # Markdown 绘制测试创建最小 ImGui 帧，覆盖测量、流式绘制与矩形裁剪入口。 实现文件直接加入测试目标，隔离完整 UI 静态库的高层依赖。
 mmm_add_test_executable(UI MarkdownRendererTest tests/MarkdownRendererTest.cpp
@@ -271,13 +276,14 @@ mmm_add_test_executable(UI MarkdownRendererTest tests/MarkdownRendererTest.cpp
 target_include_directories(MarkdownRendererTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(MarkdownRendererTest PRIVATE 3rd_imgui)
-add_test(NAME MarkdownRendererTest COMMAND MarkdownRendererTest)
+mmm_register_test_case(NAME MarkdownRendererTest COMMAND MarkdownRendererTest)
 
 # 更新图片测试默认离线，覆盖相对地址、非法协议和多帧 GIF 解码。 链接 UI 以复用正式 Markdown 图片缓存实现及其资源边界。
 mmm_add_test_executable(UI MarkdownImageCacheTest
                         tests/MarkdownImageCacheTest.cpp)
 target_link_libraries(MarkdownImageCacheTest PRIVATE UI)
-add_test(NAME MarkdownImageCacheTest COMMAND MarkdownImageCacheTest)
+mmm_register_test_case(NAME MarkdownImageCacheTest COMMAND
+                       MarkdownImageCacheTest)
 
 # 分拍线快捷键测试覆盖最近两个显示模式间的双向切换。 该状态依赖 Config 枚举，测试不需要完整 Game 目标。
 mmm_add_test_executable(UI BeatLineDisplayModeHistoryTest
@@ -285,15 +291,16 @@ mmm_add_test_executable(UI BeatLineDisplayModeHistoryTest
 target_include_directories(BeatLineDisplayModeHistoryTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(BeatLineDisplayModeHistoryTest PRIVATE Config)
-add_test(NAME BeatLineDisplayModeHistoryTest
-         COMMAND BeatLineDisplayModeHistoryTest)
+mmm_register_test_case(NAME BeatLineDisplayModeHistoryTest COMMAND
+                       BeatLineDisplayModeHistoryTest)
 
 # 打包默认选项测试覆盖不同工程状态下的初始选择策略。 策略位于轻量公开头，测试无需额外图形依赖。
 mmm_add_test_executable(UI PackageDefaultSelectionTest
                         tests/PackageDefaultSelectionTest.cpp)
 target_include_directories(PackageDefaultSelectionTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-add_test(NAME PackageDefaultSelectionTest COMMAND PackageDefaultSelectionTest)
+mmm_register_test_case(NAME PackageDefaultSelectionTest COMMAND
+                       PackageDefaultSelectionTest)
 
 # cmake-format: off
 # 工程 UI 状态测试约定：
@@ -310,7 +317,8 @@ mmm_add_test_executable(UI ProjectUiLifecycleStateTest
                         tests/ProjectUiLifecycleStateTest.cpp)
 target_include_directories(ProjectUiLifecycleStateTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-add_test(NAME ProjectUiLifecycleStateTest COMMAND ProjectUiLifecycleStateTest)
+mmm_register_test_case(NAME ProjectUiLifecycleStateTest COMMAND
+                       ProjectUiLifecycleStateTest)
 
 # 项目加载进度测试覆盖跨线程事件乱序、数值约束和完成清理。 Event 显式链接确保测试使用与生产代码相同的进度事件定义。
 mmm_add_test_executable(UI ProjectOpenProgressStateTest
@@ -318,7 +326,8 @@ mmm_add_test_executable(UI ProjectOpenProgressStateTest
 target_include_directories(ProjectOpenProgressStateTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(ProjectOpenProgressStateTest PRIVATE Event)
-add_test(NAME ProjectOpenProgressStateTest COMMAND ProjectOpenProgressStateTest)
+mmm_register_test_case(NAME ProjectOpenProgressStateTest COMMAND
+                       ProjectOpenProgressStateTest)
 
 # cmake-format: off
 # 协作 UI 测试约定：
@@ -336,8 +345,8 @@ mmm_add_test_executable(UI CollaborationSelectableButtonTest
 target_include_directories(CollaborationSelectableButtonTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(CollaborationSelectableButtonTest PRIVATE UI)
-add_test(NAME CollaborationSelectableButtonTest
-         COMMAND CollaborationSelectableButtonTest)
+mmm_register_test_case(NAME CollaborationSelectableButtonTest COMMAND
+                       CollaborationSelectableButtonTest)
 
 # Dock 标签关闭按钮测试覆盖标签悬浮色与固定红色危险高亮。 测试需要 ImGui 内部标签状态，因此同时链接 UI 与 3rd_imgui。
 mmm_add_test_executable(UI DockTabCloseHoverTest
@@ -345,7 +354,7 @@ mmm_add_test_executable(UI DockTabCloseHoverTest
 target_include_directories(DockTabCloseHoverTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(DockTabCloseHoverTest PRIVATE UI 3rd_imgui)
-add_test(NAME DockTabCloseHoverTest COMMAND DockTabCloseHoverTest)
+mmm_register_test_case(NAME DockTabCloseHoverTest COMMAND DockTabCloseHoverTest)
 
 # 保存反馈测试覆盖原生文件选择器或耗时导出后的长帧首次绘制。 长帧场景只推进反馈状态机，不真正执行磁盘写入。
 mmm_add_test_executable(UI SaveResultFeedbackTest
@@ -353,7 +362,8 @@ mmm_add_test_executable(UI SaveResultFeedbackTest
 target_include_directories(SaveResultFeedbackTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(SaveResultFeedbackTest PRIVATE UI)
-add_test(NAME SaveResultFeedbackTest COMMAND SaveResultFeedbackTest)
+mmm_register_test_case(NAME SaveResultFeedbackTest COMMAND
+                       SaveResultFeedbackTest)
 
 # 协作入口策略测试确保只有房主开启房间要求预先打开项目。 策略测试保持轻量，仅链接日志设施以满足生产接口依赖。
 mmm_add_test_executable(UI CollaborationEntryPolicyTest
@@ -361,7 +371,8 @@ mmm_add_test_executable(UI CollaborationEntryPolicyTest
 target_include_directories(CollaborationEntryPolicyTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(CollaborationEntryPolicyTest PRIVATE Log)
-add_test(NAME CollaborationEntryPolicyTest COMMAND CollaborationEntryPolicyTest)
+mmm_register_test_case(NAME CollaborationEntryPolicyTest COMMAND
+                       CollaborationEntryPolicyTest)
 
 # 协作房卡封面测试覆盖真实图片居中缩略、Base64 往返和无效输入拒绝。 测试资源通过 MMM_TEST_RESOURCE_DIR
 # 传入，禁止向源码资源目录写输出。
@@ -370,9 +381,9 @@ mmm_add_test_executable(UI CollaborationRoomCoverImageTest
 target_include_directories(CollaborationRoomCoverImageTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(CollaborationRoomCoverImageTest PRIVATE UI)
-add_test(NAME CollaborationRoomCoverImageTest
-         COMMAND CollaborationRoomCoverImageTest
-                 "${MMM_TEST_RESOURCE_DIR}/ma/Hai Yorokonde/cover.jpg")
+mmm_register_test_case(
+  NAME CollaborationRoomCoverImageTest COMMAND CollaborationRoomCoverImageTest
+  "${MMM_TEST_RESOURCE_DIR}/ma/Hai Yorokonde/cover.jpg")
 
 # cmake-format: off
 # 项目音频工具测试约定：
@@ -389,22 +400,24 @@ mmm_add_test_executable(UI ProjectAudioToolLayoutTest
                         tests/ProjectAudioToolLayoutTest.cpp)
 target_include_directories(ProjectAudioToolLayoutTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-add_test(NAME ProjectAudioToolLayoutTest COMMAND ProjectAudioToolLayoutTest)
+mmm_register_test_case(NAME ProjectAudioToolLayoutTest COMMAND
+                       ProjectAudioToolLayoutTest)
 
 # 音效工具轨道布局测试覆盖草稿区自动扩充后控件行同步增加。 草稿轨道数量与布局映射通过纯状态接口验证。
 mmm_add_test_executable(UI SoundEffectToolTrackLayoutTest
                         tests/SoundEffectToolTrackLayoutTest.cpp)
 target_include_directories(SoundEffectToolTrackLayoutTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-add_test(NAME SoundEffectToolTrackLayoutTest
-         COMMAND SoundEffectToolTrackLayoutTest)
+mmm_register_test_case(NAME SoundEffectToolTrackLayoutTest COMMAND
+                       SoundEffectToolTrackLayoutTest)
 
 # 项目音频工具搜索测试覆盖精确、子串、顺序模糊和 UTF-8 文件名匹配。 搜索测试只包含公开 helper，不依赖项目资源文件。
 mmm_add_test_executable(UI ProjectAudioToolSearchTest
                         tests/ProjectAudioToolSearchTest.cpp)
 target_include_directories(ProjectAudioToolSearchTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-add_test(NAME ProjectAudioToolSearchTest COMMAND ProjectAudioToolSearchTest)
+mmm_register_test_case(NAME ProjectAudioToolSearchTest COMMAND
+                       ProjectAudioToolSearchTest)
 
 # cmake-format: off
 # 欢迎页与演练测试约定：
@@ -419,7 +432,7 @@ add_test(NAME ProjectAudioToolSearchTest COMMAND ProjectAudioToolSearchTest)
 # 欢迎页测试覆盖启动偏好、宽窄窗口排版和内嵌演练往返，不创建 GPU。 链接 Game 提供欢迎页完整集成所需的 UI 和业务目标。
 mmm_add_test_executable(UI WelcomeViewTest tests/WelcomeViewTest.cpp)
 target_link_libraries(WelcomeViewTest PRIVATE Game)
-add_test(NAME WelcomeViewTest COMMAND WelcomeViewTest)
+mmm_register_test_case(NAME WelcomeViewTest COMMAND WelcomeViewTest)
 
 # 演练核心测试不链接图形视图，验证窗口关闭时的事件计数与独立进度恢复。 单独编译 Model 与 Service，保持测试不依赖 Vulkan 和 ImGui
 # 视图。 生成目录提供内嵌演练头，输出目录参数指向构建树 test_output。
@@ -432,8 +445,8 @@ target_include_directories(
                           ${CMAKE_CURRENT_BINARY_DIR}/generated)
 target_link_libraries(WalkthroughTest PRIVATE Event 3rd_nlohmann_json
                                               3rd_concurrentqueue)
-add_test(NAME WalkthroughTest COMMAND WalkthroughTest
-                                      "${CMAKE_BINARY_DIR}/test_output")
+mmm_register_test_case(NAME WalkthroughTest COMMAND WalkthroughTest
+                       "${CMAKE_BINARY_DIR}/test_output")
 
 # 突出层测试链接正式 UI 实现，覆盖任意控件矩形、阶段确认和不抢占导航焦点。
 mmm_add_test_executable(UI WalkthroughSpotlightTest
@@ -441,7 +454,8 @@ mmm_add_test_executable(UI WalkthroughSpotlightTest
 target_include_directories(WalkthroughSpotlightTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(WalkthroughSpotlightTest PRIVATE UI 3rd_imgui)
-add_test(NAME WalkthroughSpotlightTest COMMAND WalkthroughSpotlightTest)
+mmm_register_test_case(NAME WalkthroughSpotlightTest COMMAND
+                       WalkthroughSpotlightTest)
 
 # cmake-format: off
 # 工程资源导入测试约定：
@@ -458,5 +472,6 @@ mmm_add_test_executable(UI ProjectResourceImportTest
                         tests/ProjectResourceImportTest.cpp)
 target_include_directories(ProjectResourceImportTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-add_test(NAME ProjectResourceImportTest
-         COMMAND ProjectResourceImportTest "${CMAKE_BINARY_DIR}/test_output")
+mmm_register_test_case(
+  NAME ProjectResourceImportTest COMMAND ProjectResourceImportTest
+  "${CMAKE_BINARY_DIR}/test_output")

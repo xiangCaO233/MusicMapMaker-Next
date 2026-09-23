@@ -131,26 +131,22 @@ if(APPLE AND CMAKE_GENERATOR MATCHES "Ninja")
   set_property(GLOBAL APPEND PROPERTY JOB_POOLS macos_test_link_pool=1)
 endif()
 
-# 配置单个测试目标的输出目录、配置隔离和平台链接约束。 MODULE_NAME 用作测试输出分组，TARGET_NAME 必须是已经创建的目标。
+# 配置套件程序的输出目录、直接运行时的配置隔离和平台链接约束。
 function(mmm_set_test_target MODULE_NAME TARGET_NAME)
-  # helper 只接受已经存在的目标，不负责声明源文件或注册测试名称。 所有配置共用模块级目录，便于 CTest 和手动诊断定位可执行文件。
+  # helper 只接受已经存在的套件目标，不负责声明源文件或登记 CTest 名称。
   set(TEST_RUNTIME_DIR "${CMAKE_BINARY_DIR}/tests/${MODULE_NAME}")
   set_target_properties(${TARGET_NAME} PROPERTIES RUNTIME_OUTPUT_DIRECTORY
                                                   "${TEST_RUNTIME_DIR}")
 
-  # 测试会调用正式配置保存入口；每个目标必须隔离配置与 ImGui 状态，禁止落入个人目录。
+  # 直接运行套件时必须隔离配置与 ImGui 状态，禁止落入个人目录。
   set(TEST_CONFIG_ROOT
       "${CMAKE_BINARY_DIR}/test_output/config/${MODULE_NAME}/${TARGET_NAME}")
-  # 每个目标独占目录，避免并行 CTest 共享用户配置或 ImGui 布局。
+  # CTest 会按旧用例目标名覆盖该默认根，避免并行用例共享配置。
   target_sources(${TARGET_NAME}
                  PRIVATE "${CMAKE_SOURCE_DIR}/tests/TestConfigIsolation.cpp")
   target_compile_definitions(${TARGET_NAME}
                              PRIVATE MMM_TEST_CONFIG_ROOT="${TEST_CONFIG_ROOT}")
-  # 编译常量为直接运行提供默认隔离根，启动器则覆盖继承环境。 CTest 启动器覆盖继承环境中的配置根；直接执行测试时由公共启动代码提供同一路径。
-  set_property(
-    TARGET ${TARGET_NAME}
-    PROPERTY TEST_LAUNCHER
-             "${CMAKE_COMMAND};-E;env;MMM_CONFIG_ROOT=${TEST_CONFIG_ROOT}")
+  # 公共启动代码提供直接运行时的默认根；CTest 登记 helper 显式传入每项用例的环境根。
 
   if(APPLE AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     # 这些设置仅影响测试可执行文件，不降低业务库自身的发布优化。 macOS 测试目标仍需从业务库的 ThinLTO bitcode
@@ -180,18 +176,8 @@ function(mmm_set_test_target MODULE_NAME TARGET_NAME)
   endif()
 endfunction()
 
-# 统一声明项目测试目标；关闭测试时保留显式目标但排除出默认构建，便于各模块继续集中配置依赖。 统一入口确保任何新增测试都不会绕过配置隔离和运行时文件复制。
-# MODULE_NAME 决定测试目录，TARGET_NAME 为目标名，其余参数原样传给 add_executable。
-function(mmm_add_test_executable MODULE_NAME TARGET_NAME)
-  if(BUILD_TESTING)
-    # 开启测试时纳入默认构建，保证 CTest 注册目标始终存在。
-    add_executable(${TARGET_NAME} ${ARGN})
-  else()
-    # 关闭测试时保留可按需构建的目标，避免配置逻辑产生两套分支。
-    add_executable(${TARGET_NAME} EXCLUDE_FROM_ALL ${ARGN})
-  endif()
-  mmm_set_test_target(${MODULE_NAME} ${TARGET_NAME})
-endfunction()
+# 测试分组逻辑集中维护，根工程只保留平台与配置隔离公共设施。
+include("test-suites")
 
 # 第三方依赖默认使用预编译库；需要重建依赖时显式开启。 OFF 模式缺失任何预编译内容都应由 Find 模块报错，不能自动回退源码。
 option(SOURCES_BUILD "Build Deps from sources." OFF)
@@ -221,6 +207,9 @@ include("pgo")
 
 # 业务模块在依赖、全局编译配置和 PGO 选项确定后统一加入。
 add_subdirectory("Modules")
+
+# 模块声明完成后统一组装测试程序，数量限制与分派细节留在 helper 中。
+mmm_finalize_test_suites()
 
 # macOS 需要把应用束、Vulkan 运行时和更新器组合为可分发的 DMG；Windows/Linux 继续直接发布单可执行文件。
 if(APPLE)

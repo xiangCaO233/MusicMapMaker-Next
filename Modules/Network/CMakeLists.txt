@@ -39,5 +39,5 @@ target_include_directories(AssetSyncServiceTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 # 两个目标均在 CTest 隔离配置环境中运行。
-add_test(NAME UpdateCheckerTest COMMAND UpdateCheckerTest)
-add_test(NAME AssetSyncServiceTest COMMAND AssetSyncServiceTest)
+mmm_register_test_case(NAME UpdateCheckerTest COMMAND UpdateCheckerTest)
+mmm_register_test_case(NAME AssetSyncServiceTest COMMAND AssetSyncServiceTest)

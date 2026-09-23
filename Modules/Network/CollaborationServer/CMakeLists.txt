@@ -21,5 +21,5 @@ mmm_add_test_executable(CollaborationServer CollaborationSignalingServerTest
 target_link_libraries(CollaborationSignalingServerTest
                       PRIVATE NetworkCollaborationServer)
 # 服务端测试由 CTest 直接运行，无需外部信令服务进程。
-add_test(NAME CollaborationSignalingServerTest
-         COMMAND CollaborationSignalingServerTest)
+mmm_register_test_case(NAME CollaborationSignalingServerTest COMMAND
+                       CollaborationSignalingServerTest)

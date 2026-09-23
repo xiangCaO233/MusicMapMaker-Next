@@ -16,4 +16,4 @@ mmm_add_test_executable(Runtime ShutdownWatchdogTest
                         tests/ShutdownWatchdogTest.cpp)
 target_link_libraries(ShutdownWatchdogTest PRIVATE Runtime)
 # 直接注册短时独立测试，避免应用主循环参与退出时序验证。
-add_test(NAME ShutdownWatchdogTest COMMAND ShutdownWatchdogTest)
+mmm_register_test_case(NAME ShutdownWatchdogTest COMMAND ShutdownWatchdogTest)

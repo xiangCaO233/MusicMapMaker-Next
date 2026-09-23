@@ -32,20 +32,20 @@ mmm_add_test_executable(Common VideoFrameDecoderTest
                         tests/VideoFrameDecoderTest.cpp)
 target_link_libraries(VideoFrameDecoderTest PRIVATE Common 3rd_ffmpeg)
 # 测试运行时不读取个人配置，输出仅写入构建树的 test_output。 CTest 将输出路径显式传给测试进程，便于隔离并复查产物。
-add_test(NAME VideoFrameDecoderTest
-         COMMAND VideoFrameDecoderTest
-                 "${CMAKE_BINARY_DIR}/test_output/video_frame_decoder")
+mmm_register_test_case(NAME VideoFrameDecoderTest COMMAND VideoFrameDecoderTest
+                       "${CMAKE_BINARY_DIR}/test_output/video_frame_decoder")
 
 # 音频资源拖拽载荷测试保证跨模块共享的固定布局与长度拒绝规则稳定。 测试只依赖 Common 导出的协议和项目音频资源枚举。
 mmm_add_test_executable(Common AudioResourceDragPayloadTest
                         tests/AudioResourceDragPayloadTest.cpp)
 target_link_libraries(AudioResourceDragPayloadTest PRIVATE Common)
 # 载荷测试无需命令行参数，直接注册可执行文件即可。
-add_test(NAME AudioResourceDragPayloadTest COMMAND AudioResourceDragPayloadTest)
+mmm_register_test_case(NAME AudioResourceDragPayloadTest COMMAND
+                       AudioResourceDragPayloadTest)
 
 # 单文件兼容测试覆盖复合音频时间线的显式拒绝条件。 MMM 提供真实 BeatMap 与 Project 模型，避免测试复制不完整 DTO。
 mmm_add_test_executable(Common BeatmapAudioTimelineCompatibilityTest
                         tests/BeatmapAudioTimelineCompatibilityTest.cpp)
 target_link_libraries(BeatmapAudioTimelineCompatibilityTest PRIVATE Common MMM)
-add_test(NAME BeatmapAudioTimelineCompatibilityTest
-         COMMAND BeatmapAudioTimelineCompatibilityTest)
+mmm_register_test_case(NAME BeatmapAudioTimelineCompatibilityTest COMMAND
+                       BeatmapAudioTimelineCompatibilityTest)

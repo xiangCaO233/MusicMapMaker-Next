@@ -88,7 +88,8 @@ mmm_add_test_executable(Config FontPreferenceValidatorTest
 # 接口，避免引入 UI 或渲染运行时。
 target_link_libraries(FontPreferenceValidatorTest PRIVATE Config)
 # 测试不读写个人配置，可直接注册目标程序作为 CTest 命令。
-add_test(NAME FontPreferenceValidatorTest COMMAND FontPreferenceValidatorTest)
+mmm_register_test_case(NAME FontPreferenceValidatorTest COMMAND
+                       FontPreferenceValidatorTest)
 
 # Creator 身份测试覆盖持久化、规范化和联机前置校验共同边界。
 mmm_add_test_executable(Config CreatorIdentityTest
@@ -96,7 +97,7 @@ mmm_add_test_executable(Config CreatorIdentityTest
 # 身份逻辑独立成测试目标，避免通过 AppConfig 集成测试掩盖规范化边界。
 target_link_libraries(CreatorIdentityTest PRIVATE Config)
 # 身份测试使用进程内临时值，不需要额外环境包装器。
-add_test(NAME CreatorIdentityTest COMMAND CreatorIdentityTest)
+mmm_register_test_case(NAME CreatorIdentityTest COMMAND CreatorIdentityTest)
 
 # 本机多客户端测试必须把每个进程的配置和 ImGui 状态隔离到独立目录。
 mmm_add_test_executable(Config AppPathsProfileOverrideTest
@@ -104,29 +105,32 @@ mmm_add_test_executable(Config AppPathsProfileOverrideTest
 # 同一目标注册三种启动方式，用来覆盖显式覆盖、helper 隔离和直接执行。
 target_link_libraries(AppPathsProfileOverrideTest PRIVATE Config)
 # 显式覆盖场景同时传入期望根目录，验证环境解析和返回路径一致。
-add_test(
-  NAME AppPathsProfileOverrideTest
+mmm_register_test_case(
+  NAME
+  AppPathsProfileOverrideTest
   COMMAND
-    "${CMAKE_COMMAND}" -E env
-    "MMM_CONFIG_ROOT=${CMAKE_BINARY_DIR}/test_output/collaboration_profile"
-    "$<TARGET_FILE:AppPathsProfileOverrideTest>"
-    "${CMAKE_BINARY_DIR}/test_output/collaboration_profile")
+  AppPathsProfileOverrideTest
+  "${CMAKE_BINARY_DIR}/test_output/collaboration_profile"
+  CONFIG_ROOT
+  "${CMAKE_BINARY_DIR}/test_output/collaboration_profile")
 
-# 同一只读探针分别验证 CTest 启动器与直接执行二进制时的默认配置隔离。
-add_test(
-  NAME TestConfigIsolationTest
-  # 目标启动器由公共测试 helper 注入隔离根，此处只给出预期目录。
+# 同一只读探针分别验证 CTest 显式覆盖与直接执行套件时的默认配置隔离。 两项用例必须保持不同进程，才能发现继承环境变量导致的隔离失效。
+mmm_register_test_case(
+  NAME
+  TestConfigIsolationTest
+  # 公共测试 helper 注入隔离根，此处只给出预期目录。
   COMMAND
-    AppPathsProfileOverrideTest
-    "${CMAKE_BINARY_DIR}/test_output/config/Config/AppPathsProfileOverrideTest")
-# 绕过目标启动器并清空显式覆盖，确保调试器或手动执行测试也不会使用个人配置。
+  AppPathsProfileOverrideTest
+  "${CMAKE_BINARY_DIR}/test_output/config/Config/AppPathsProfileOverrideTest")
+# 下一项刻意绕过 CTest 的显式环境变量，验证手动执行也不会触碰个人配置。 绕过目标启动器并清空显式覆盖，确保调试器或手动执行测试也不会使用个人配置。
 add_test(
   NAME TestConfigIsolationDirectTest
-  # 直接二进制路径绕过 helper，验证程序自身仍采用测试构建隔离约定。
+  # 直接套件路径绕过 helper，验证程序自身仍采用测试构建隔离约定。
   COMMAND
     "${CMAKE_COMMAND}" -E env --unset=MMM_CONFIG_ROOT
-    "$<TARGET_FILE:AppPathsProfileOverrideTest>"
-    "${CMAKE_BINARY_DIR}/test_output/config/Config/AppPathsProfileOverrideTest")
+    "$<TARGET_FILE:MMMTestSuite_Config>" AppPathsProfileOverrideTest
+    "${CMAKE_BINARY_DIR}/test_output/config/Suites/MMMTestSuite_Config")
+# 隔离路径差异由两项探针直接断言，不应通过测试执行顺序推断。
 
 # 帧率限制换算测试确保渲染与逻辑循环使用一致的刷新率目标。
 mmm_add_test_executable(Config FrameLimitUtilsTest
@@ -134,7 +138,7 @@ mmm_add_test_executable(Config FrameLimitUtilsTest
 # 帧率工具是头文件接口，独立链接 Config 可同时验证公开 include 完整性。
 target_link_libraries(FrameLimitUtilsTest PRIVATE Config)
 # 纯换算测试不需要资源或输出目录。
-add_test(NAME FrameLimitUtilsTest COMMAND FrameLimitUtilsTest)
+mmm_register_test_case(NAME FrameLimitUtilsTest COMMAND FrameLimitUtilsTest)
 
 # 皮肤主题绑定测试覆盖旧格式、Auto 语义及 IVM 内置皮肤资源约束。
 mmm_add_test_executable(Config SkinThemeBindingTest
@@ -142,13 +146,15 @@ mmm_add_test_executable(Config SkinThemeBindingTest
 # 该目标读取版本库资源但只把临时产物写入构建树。
 target_link_libraries(SkinThemeBindingTest PRIVATE Config)
 # 依次传入输出根、IVM 皮肤、默认翻译和默认皮肤，避免测试自行猜测源码位置。
-add_test(
-  NAME SkinThemeBindingTest
+mmm_register_test_case(
+  NAME
+  SkinThemeBindingTest
   COMMAND
-    SkinThemeBindingTest "${CMAKE_BINARY_DIR}/test_output/skin_theme_binding"
-    "${CMAKE_SOURCE_DIR}/assets/skins/ivm/skin.lua"
-    "${CMAKE_SOURCE_DIR}/assets/translations"
-    "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/skin.lua")
+  SkinThemeBindingTest
+  "${CMAKE_BINARY_DIR}/test_output/skin_theme_binding"
+  "${CMAKE_SOURCE_DIR}/assets/skins/ivm/skin.lua"
+  "${CMAKE_SOURCE_DIR}/assets/translations"
+  "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/skin.lua")
 
 # MSK 皮肤包测试覆盖安全导入、目录定位、覆盖保护和导出往返。
 mmm_add_test_executable(Config SkinPackageServiceTest
@@ -156,9 +162,9 @@ mmm_add_test_executable(Config SkinPackageServiceTest
 # 归档安全测试使用真实文件系统边界，因此必须获得独占输出子目录。
 target_link_libraries(SkinPackageServiceTest PRIVATE Config 3rd_miniz)
 # 测试需要 miniz 构造恶意归档夹具，生产服务仍通过 Config 调用。
-add_test(NAME SkinPackageServiceTest
-         COMMAND SkinPackageServiceTest
-                 "${CMAKE_BINARY_DIR}/test_output/skin_package_service")
+mmm_register_test_case(
+  NAME SkinPackageServiceTest COMMAND SkinPackageServiceTest
+  "${CMAKE_BINARY_DIR}/test_output/skin_package_service")
 
 # 调色方案文件测试覆盖独立文件格式、写入和同路径覆盖。
 mmm_add_test_executable(Config ColorPaletteFileTest
@@ -166,71 +172,72 @@ mmm_add_test_executable(Config ColorPaletteFileTest
 # 示例文件验证对外格式兼容，不能复制到源码目录后原地修改。
 target_link_libraries(ColorPaletteFileTest PRIVATE Config)
 # 示例调色板作为只读输入，所有导出产物写入 test_output。
-add_test(
-  NAME ColorPaletteFileTest
-  COMMAND
-    ColorPaletteFileTest "${CMAKE_BINARY_DIR}/test_output/color_palette_file"
-    "${CMAKE_SOURCE_DIR}/docs/plugin/examples/ivm.mmpalette")
+mmm_register_test_case(
+  NAME ColorPaletteFileTest COMMAND ColorPaletteFileTest
+  "${CMAKE_BINARY_DIR}/test_output/color_palette_file"
+  "${CMAKE_SOURCE_DIR}/docs/plugin/examples/ivm.mmpalette")
 
 # 视觉配置测试覆盖分拍线三态模式、旧布尔开关迁移和自动范围约束。
 mmm_add_test_executable(Config VisualConfigTest tests/VisualConfigTest.cpp)
 # Log 由序列化失败分支使用，保持为测试目标的显式依赖。
 target_link_libraries(VisualConfigTest PRIVATE Config Log)
 # 视觉配置测试使用内存 JSON，不触碰用户配置文件。
-add_test(NAME VisualConfigTest COMMAND VisualConfigTest)
+mmm_register_test_case(NAME VisualConfigTest COMMAND VisualConfigTest)
 
 # 音效配置测试覆盖立体打击音效字段往返和旧版 Flick 开关迁移。
 mmm_add_test_executable(Config SfxConfigTest tests/SfxConfigTest.cpp)
 target_link_libraries(SfxConfigTest PRIVATE Config Log)
 # 音效字段测试同样只验证序列化值语义。
-add_test(NAME SfxConfigTest COMMAND SfxConfigTest)
+mmm_register_test_case(NAME SfxConfigTest COMMAND SfxConfigTest)
 
 # 协作服务器设置测试覆盖端点持久化、旧配置默认值和非法字段回退。
 mmm_add_test_executable(Config CollaborationServerSettingsTest
                         tests/CollaborationServerSettingsTest.cpp)
 target_link_libraries(CollaborationServerSettingsTest PRIVATE Config Log)
 # 协作服务器测试不启动网络，只校验配置兼容和边界回退。
-add_test(NAME CollaborationServerSettingsTest
-         COMMAND CollaborationServerSettingsTest)
+mmm_register_test_case(NAME CollaborationServerSettingsTest COMMAND
+                       CollaborationServerSettingsTest)
 
 # 自动保存配置测试覆盖定时单位、范围约束、事件开关和旧配置默认值。
 mmm_add_test_executable(Config AutoSaveConfigTest tests/AutoSaveConfigTest.cpp)
 target_link_libraries(AutoSaveConfigTest PRIVATE Config Log)
 # 自动保存测试不创建真实项目，避免引入项目存储副作用。
-add_test(NAME AutoSaveConfigTest COMMAND AutoSaveConfigTest)
+mmm_register_test_case(NAME AutoSaveConfigTest COMMAND AutoSaveConfigTest)
 
 # 工具栏可见性测试覆盖分组字段往返、旧配置默认值和部分配置兼容性。
 mmm_add_test_executable(Config ToolbarVisibilityConfigTest
                         tests/ToolbarVisibilityConfigTest.cpp)
 target_link_libraries(ToolbarVisibilityConfigTest PRIVATE Config Log)
 # 工具栏测试仅覆盖嵌套 JSON，不依赖 ImGui 上下文。
-add_test(NAME ToolbarVisibilityConfigTest COMMAND ToolbarVisibilityConfigTest)
+mmm_register_test_case(NAME ToolbarVisibilityConfigTest COMMAND
+                       ToolbarVisibilityConfigTest)
 
 # 翻译并发测试覆盖 UI 与逻辑线程同时查找、填充和清空缓存。
 mmm_add_test_executable(Config TranslationConcurrencyTest
                         tests/TranslationConcurrencyTest.cpp)
 target_link_libraries(TranslationConcurrencyTest PRIVATE Config Log)
 # 并发用例自行管理线程和临时语言文件，CTest 只负责进程级隔离。
-add_test(NAME TranslationConcurrencyTest COMMAND TranslationConcurrencyTest)
+mmm_register_test_case(NAME TranslationConcurrencyTest COMMAND
+                       TranslationConcurrencyTest)
 
 # 皮肤翻译覆写测试覆盖默认字典合并、未知字段及皮肤包路径边界。
 mmm_add_test_executable(Config SkinTranslationOverrideTest
                         tests/SkinTranslationOverrideTest.cpp)
 target_link_libraries(SkinTranslationOverrideTest PRIVATE Config Log)
 # 覆写测试在专用输出根创建最小皮肤，禁止写入同步后的用户 assets。
-add_test(NAME SkinTranslationOverrideTest
-         COMMAND SkinTranslationOverrideTest
-                 "${CMAKE_BINARY_DIR}/test_output/skin_translation_override")
+mmm_register_test_case(
+  NAME SkinTranslationOverrideTest COMMAND SkinTranslationOverrideTest
+  "${CMAKE_BINARY_DIR}/test_output/skin_translation_override")
 
 # 翻译资源迁移测试覆盖旧版固定路径文件的无条件清理与一次性标记。
 mmm_add_test_executable(Config TranslationResourceMigrationTest
                         tests/TranslationResourceMigrationTest.cpp)
 target_link_libraries(TranslationResourceMigrationTest PRIVATE Config Log)
 # 迁移用例显式获得 test_output 根，只删除其内部构造的旧版文件。
-add_test(
-  NAME TranslationResourceMigrationTest
-  COMMAND TranslationResourceMigrationTest
-          "${CMAKE_BINARY_DIR}/test_output/translation_resource_migration")
+mmm_register_test_case(
+  NAME TranslationResourceMigrationTest COMMAND
+  TranslationResourceMigrationTest
+  "${CMAKE_BINARY_DIR}/test_output/translation_resource_migration")
 
 # 构建期资源同步测试覆盖两套内置皮肤、默认文件增量覆盖、用户扩展以及配置和 ImGui 布局保留。 测试直接运行生产 cmake -P
 # 脚本，不依赖默认开启的真实用户目录目标。
@@ -250,9 +257,7 @@ mmm_add_test_executable(Config DefaultTranslationParityTest
 # 键集合一致性在资源更新时提供快速失败，避免运行期才发现缺失译文。
 target_link_libraries(DefaultTranslationParityTest PRIVATE Config Log)
 # 两个默认语言文件均作为只读参数传入，不依赖构建期用户资源同步。
-add_test(
-  NAME DefaultTranslationParityTest
-  COMMAND
-    DefaultTranslationParityTest
-    "${CMAKE_SOURCE_DIR}/assets/translations/zh_cn.lua"
-    "${CMAKE_SOURCE_DIR}/assets/translations/en_us.lua")
+mmm_register_test_case(
+  NAME DefaultTranslationParityTest COMMAND DefaultTranslationParityTest
+  "${CMAKE_SOURCE_DIR}/assets/translations/zh_cn.lua"
+  "${CMAKE_SOURCE_DIR}/assets/translations/en_us.lua")

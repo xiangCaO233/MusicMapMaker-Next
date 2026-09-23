@@ -52,37 +52,35 @@ file(MAKE_DIRECTORY "${TEST_OUTPUT_DIR}")
 # BPM 规范化测试覆盖有限越界值、无穷值和 NaN 回退语义。
 mmm_add_test_executable(MMM BpmNormalizationTest tests/BpmNormalizationTest.cpp)
 target_link_libraries(BpmNormalizationTest PRIVATE MMM Log)
-add_test(NAME Test_BPM_Normalization COMMAND BpmNormalizationTest)
+mmm_register_test_case(NAME Test_BPM_Normalization COMMAND BpmNormalizationTest)
 
 # IMD 测试同时覆盖二进制区块、统一模型和同名前缀资源发现。
 mmm_add_test_executable(MMM IMDConsistencyTest tests/IMDConsistencyTest.cpp)
 target_link_libraries(IMDConsistencyTest PRIVATE MMM Log)
 target_include_directories(IMDConsistencyTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-add_test(
-  NAME Test_IMD_Consistency
-  COMMAND
-    IMDConsistencyTest "${TEST_DATA_DIR}/[GeneralPolyline]Redemptione.imd"
-    "${TEST_OUTPUT_DIR}/Redemptione_export.imd")
+mmm_register_test_case(
+  NAME Test_IMD_Consistency COMMAND IMDConsistencyTest
+  "${TEST_DATA_DIR}/[GeneralPolyline]Redemptione.imd"
+  "${TEST_OUTPUT_DIR}/Redemptione_export.imd")
 
 # osu! 使用三个代表性夹具覆盖普通谱面、效果 SV 与高密度 BPM/SV 组合。
 mmm_add_test_executable(MMM OSUConsistencyTest tests/OSUConsistencyTest.cpp)
 target_link_libraries(OSUConsistencyTest PRIVATE MMM Log)
 target_include_directories(OSUConsistencyTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-add_test(NAME Test_OSU_Consistency_Scandal
-         COMMAND OSUConsistencyTest "${TEST_DATA_DIR}/[General]Scandal.osu"
-                 "${TEST_OUTPUT_DIR}/Scandal_export.osu")
-add_test(
-  NAME Test_OSU_Consistency_ICanFly
-  COMMAND
-    OSUConsistencyTest
-    "${TEST_DATA_DIR}/[Effect SV]I Can Fly In The Universe.osu"
-    "${TEST_OUTPUT_DIR}/I_Can_Fly_export.osu")
-add_test(
-  NAME Test_OSU_Consistency_Mopemope
-  COMMAND OSUConsistencyTest "${TEST_DATA_DIR}/[BPM SV(Giant)]Mopemope.osu"
-          "${TEST_OUTPUT_DIR}/Mopemope_export.osu")
+mmm_register_test_case(
+  NAME Test_OSU_Consistency_Scandal COMMAND OSUConsistencyTest
+  "${TEST_DATA_DIR}/[General]Scandal.osu"
+  "${TEST_OUTPUT_DIR}/Scandal_export.osu")
+mmm_register_test_case(
+  NAME Test_OSU_Consistency_ICanFly COMMAND OSUConsistencyTest
+  "${TEST_DATA_DIR}/[Effect SV]I Can Fly In The Universe.osu"
+  "${TEST_OUTPUT_DIR}/I_Can_Fly_export.osu")
+mmm_register_test_case(
+  NAME Test_OSU_Consistency_Mopemope COMMAND OSUConsistencyTest
+  "${TEST_DATA_DIR}/[BPM SV(Giant)]Mopemope.osu"
+  "${TEST_OUTPUT_DIR}/Mopemope_export.osu")
 
 # Malody 使用普通谱面与折线谱面分别覆盖 JSON 分区和节点连续性。
 mmm_add_test_executable(MMM MalodyConsistencyTest
@@ -90,58 +88,61 @@ mmm_add_test_executable(MMM MalodyConsistencyTest
 target_link_libraries(MalodyConsistencyTest PRIVATE MMM Log)
 target_include_directories(MalodyConsistencyTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-add_test(
-  NAME Test_Malody_Consistency_Unsan
-  COMMAND MalodyConsistencyTest "${TEST_DATA_DIR}/[General]Unsan-musho.mc"
-          "${TEST_OUTPUT_DIR}/Unsan-musho_export.mc")
-add_test(
-  NAME Test_Malody_Consistency_Collision
-  COMMAND MalodyConsistencyTest "${TEST_DATA_DIR}/[Polyline]Collision.mc"
-          "${TEST_OUTPUT_DIR}/Collision_export.mc")
+mmm_register_test_case(
+  NAME Test_Malody_Consistency_Unsan COMMAND MalodyConsistencyTest
+  "${TEST_DATA_DIR}/[General]Unsan-musho.mc"
+  "${TEST_OUTPUT_DIR}/Unsan-musho_export.mc")
+mmm_register_test_case(
+  NAME Test_Malody_Consistency_Collision COMMAND MalodyConsistencyTest
+  "${TEST_DATA_DIR}/[Polyline]Collision.mc"
+  "${TEST_OUTPUT_DIR}/Collision_export.mc")
 
 # Malody 边界测试通过程序化夹具覆盖损坏字段和罕见组合，不引入额外资源文件。
 mmm_add_test_executable(MMM MalodyEdgeCaseTest tests/MalodyEdgeCaseTest.cpp)
 target_link_libraries(MalodyEdgeCaseTest PRIVATE MMM Log)
 target_include_directories(MalodyEdgeCaseTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-add_test(NAME Test_Malody_Edge_Case COMMAND MalodyEdgeCaseTest)
+mmm_register_test_case(NAME Test_Malody_Edge_Case COMMAND MalodyEdgeCaseTest)
 
 # 跨格式绑定音效测试区分玩家命中采样和时间线自动采样，并写入独立输出目录。
 mmm_add_test_executable(MMM BoundNoteSoundTest tests/BoundNoteSoundTest.cpp)
 target_link_libraries(BoundNoteSoundTest PRIVATE MMM Log)
-add_test(NAME Test_Bound_Note_Sound
-         COMMAND BoundNoteSoundTest "${TEST_OUTPUT_DIR}/bound_note_sound")
+mmm_register_test_case(NAME Test_Bound_Note_Sound COMMAND BoundNoteSoundTest
+                       "${TEST_OUTPUT_DIR}/bound_note_sound")
 
 # 原生 MMM 往返测试从两种外部格式导入，验证公共模型能被规范 JSON 完整承接。
 mmm_add_test_executable(MMM MapConsistencyTest tests/MapConsistencyTest.cpp)
 target_link_libraries(MapConsistencyTest PRIVATE MMM Log)
 target_include_directories(MapConsistencyTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-add_test(NAME Test_MMM_Consistency_Scandal
-         COMMAND MapConsistencyTest "${TEST_DATA_DIR}/[General]Scandal.osu"
-                 "${TEST_OUTPUT_DIR}/Scandal_export.mmm")
-add_test(NAME Test_MMM_Consistency_Collision
-         COMMAND MapConsistencyTest "${TEST_DATA_DIR}/[Polyline]Collision.mc"
-                 "${TEST_OUTPUT_DIR}/Collision_export.mmm")
+mmm_register_test_case(
+  NAME Test_MMM_Consistency_Scandal COMMAND MapConsistencyTest
+  "${TEST_DATA_DIR}/[General]Scandal.osu"
+  "${TEST_OUTPUT_DIR}/Scandal_export.mmm")
+mmm_register_test_case(
+  NAME Test_MMM_Consistency_Collision COMMAND MapConsistencyTest
+  "${TEST_DATA_DIR}/[Polyline]Collision.mc"
+  "${TEST_OUTPUT_DIR}/Collision_export.mmm")
 
 # 元数据兼容测试使用程序化谱面，覆盖 osu! 视频事件与 MMM 新旧格式往返， 因此不需要从 tests/data 增加仅服务字段组合的静态 JSON
 # 夹具。
 mmm_add_test_executable(MMM MetadataCompatibilityTest
                         tests/MetadataCompatibilityTest.cpp)
 target_link_libraries(MetadataCompatibilityTest PRIVATE MMM Config Log)
-add_test(NAME Test_Metadata_Compatibility
-         COMMAND MetadataCompatibilityTest
-                 "${TEST_OUTPUT_DIR}/metadata_compatibility")
+mmm_register_test_case(
+  NAME Test_Metadata_Compatibility COMMAND MetadataCompatibilityTest
+  "${TEST_OUTPUT_DIR}/metadata_compatibility")
 
 mmm_add_test_executable(MMM BeatmapSpeedTransformTest
                         tests/BeatmapSpeedTransformTest.cpp)
 # 变速覆盖测试遍历共享资源目录，所有派生谱面与音频路径都写入 test_output。
 target_link_libraries(BeatmapSpeedTransformTest PRIVATE MMM Log)
-add_test(NAME Test_Beatmap_Speed_Transform
-         COMMAND BeatmapSpeedTransformTest "${MMM_TEST_RESOURCE_DIR}/ma"
-                 "${TEST_OUTPUT_DIR}/speed_transform_coverage")
+mmm_register_test_case(
+  NAME Test_Beatmap_Speed_Transform COMMAND BeatmapSpeedTransformTest
+  "${MMM_TEST_RESOURCE_DIR}/ma" "${TEST_OUTPUT_DIR}/speed_transform_coverage")
 
 # 打包文件类型测试是纯规则测试，不读取或生成资源文件。
 mmm_add_test_executable(MMM PackageFileTypesTest tests/PackageFileTypesTest.cpp)
 target_link_libraries(PackageFileTypesTest PRIVATE MMM Log)
-add_test(NAME Test_Package_File_Types COMMAND PackageFileTypesTest)
+mmm_register_test_case(NAME Test_Package_File_Types COMMAND
+                       PackageFileTypesTest)

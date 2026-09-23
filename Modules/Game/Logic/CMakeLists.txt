@@ -105,25 +105,27 @@ target_include_directories(Logic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 # 以下测试链接同一份 Logic，不通过复制业务源文件建立行为可能分叉的测试版本。 测试名称直接引用可执行目标，由 CMake 解析具体构建配置下的程序位置。
 # 不硬编码 bin 路径或平台扩展名，保持单配置与多配置生成器的目标寻址一致。
 
-# 顶层 helper 注入公共配置隔离启动代码，防止测试调用正式保存入口时污染个人配置。 每个测试有独立配置根；直接运行使用启动代码，CTest
-# 则通过目标启动器覆盖继承的 MMM_CONFIG_ROOT。 配置隔离目录与显式传入的产物目录不同，不能把两者当同一清理范围。
+# 顶层 helper 注入公共配置隔离启动代码，防止测试调用正式保存入口时污染个人配置。 每个 CTest
+# 用例都有独立配置根；直接运行套件则使用套件自身的隔离根。 配置隔离目录与显式传入的产物目录不同，不能把两者当同一清理范围。
 
 # TestConfigIsolation.cpp 已由顶层注入，各测试不要重复登记该公共启动源文件。
 
-# helper 统一 Debug 与发布配置的测试输出位置，不依赖生成器默认子目录。 shared 预编译运行库按目标部署到独立测试程序旁；支持的 macOS
-# 工具链链接限制也由顶层设置。 不应绕过 helper 另建普通 add_executable，否则会丢失这些运行与隔离约定。
+# helper 统一 Debug 与发布配置的套件输出位置，不依赖生成器默认子目录。 shared 预编译运行库按套件部署；支持的 macOS
+# 工具链链接限制也由顶层设置。 不应绕过 helper 另建普通 add_executable，否则会丢失运行与隔离约定。
 
-# 多配置目标共用 tests/Logic 输出位置，运行前应先构建需要验证的具体配置。
+# 多配置目标共用 tests/Suites 输出位置，运行前应先构建需要验证的具体配置。 旧测试目标现在是对象库，仍可单独编译，但完整运行需通过套件分派。
 
 # BUILD_TESTING=OFF 时仍配置目标与依赖，但顶层不开启测试发现；依赖仍须能被 CMake 正常解析。 模块不自行修改
 # BUILD_TESTING，也不根据当前机器能否运行测试来删除目标。 配置阶段只登记命令；手动构建后需另行运行程序，cmake --build 不会自动执行
-# add_test。
+# CTest。
 
-# helper 的第一个 Logic 参数用于测试目录归属，不会自动链接 Logic 库。 每个目标仍须显式声明
-# target_link_libraries，不能把目录归属当作链接依赖。 可执行目标名必须在整个构建树唯一，不能在另一个模块复用同名目标。
+# helper 的第一个 Logic 参数用于套件分组，不会自动链接 Logic 库。 每个对象目标仍须显式声明
+# target_link_libraries，不能把分组当作链接依赖。 旧测试目标名必须在整个构建树唯一，分派器以该名称选择实际测试入口。
 
-# add_test 的 NAME 是筛选测试用的名称，COMMAND 则指向实际可执行目标。 COMMAND
-# 使用目标名才能保留目标启动器与配置环境，不改成猜测的二进制绝对路径。
+# mmm_register_test_case 的 NAME 是筛选测试用的名称，COMMAND 指向测试对象目标。 helper
+# 根据该目标取得套件程序并传入分派名，不手工猜测二进制绝对路径。 因此合并链接不会丢失细分 CTest 条目或各用例原有的命令行资源参数。
+# 套件只分派入口，不能替代各目标对 Logic 与 Log 的直接依赖声明。 有写入行为的测试继续使用构建树输出目录，不能借用共享资源根。
+# 测试入口由公共包装器生成，源文件中的 main 不需要批量改名。 若新增测试包含替身符号，应先检查其与同套件真实实现是否冲突。
 
 # 共享资源只读根通过 MMM_TEST_RESOURCE_DIR 传入，允许调用方选用其他谱面资源集。 默认皮肤与翻译不是共享谱面测试数据，不跟随
 # MMM_TEST_RESOURCE_DIR 切换。 未传资源参数的目标由测试自身准备夹具，不为整个模块追加统一的资源命令行。
@@ -132,81 +134,90 @@ target_include_directories(Logic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 mmm_add_test_executable(Logic EditorClipboardProtocolTest
                         tests/EditorClipboardProtocolTest.cpp)
 target_link_libraries(EditorClipboardProtocolTest PRIVATE Logic Log)
-add_test(NAME EditorClipboardProtocolTest COMMAND EditorClipboardProtocolTest)
+mmm_register_test_case(NAME EditorClipboardProtocolTest COMMAND
+                       EditorClipboardProtocolTest)
 
 # 预览密度与时间线批量元数据分成目标，便于只运行受影响的数据处理回归。
 mmm_add_test_executable(Logic PreviewDensityTest tests/PreviewDensityTest.cpp)
+# 密度计算单独保留 CTest 名称，可在画布密度回归时快速筛选。
 target_link_libraries(PreviewDensityTest PRIVATE Logic Log)
-add_test(NAME PreviewDensityTest COMMAND PreviewDensityTest)
+mmm_register_test_case(NAME PreviewDensityTest COMMAND PreviewDensityTest)
 
 mmm_add_test_executable(Logic TimelineBatchMetadataTest
                         tests/TimelineBatchMetadataTest.cpp)
 target_link_libraries(TimelineBatchMetadataTest PRIVATE Logic Log)
-add_test(NAME TimelineBatchMetadataTest COMMAND TimelineBatchMetadataTest)
+mmm_register_test_case(NAME TimelineBatchMetadataTest COMMAND
+                       TimelineBatchMetadataTest)
 
 mmm_add_test_executable(Logic ProjectCompatibilityTest
                         tests/ProjectCompatibilityTest.cpp)
+# 项目兼容只读取测试数据，不与导出测试共享可写路径。
 target_link_libraries(ProjectCompatibilityTest PRIVATE Logic Log)
-add_test(NAME ProjectCompatibilityTest COMMAND ProjectCompatibilityTest)
+mmm_register_test_case(NAME ProjectCompatibilityTest COMMAND
+                       ProjectCompatibilityTest)
 
 # 谱面自动备份测试覆盖原生快照写入、单谱面数量轮转和路径隔离。 可写输出置于构建树，不允许将备份产物写入 tests/data 源资源目录。
 mmm_add_test_executable(Logic BeatmapBackupServiceTest
                         tests/BeatmapBackupServiceTest.cpp)
 target_link_libraries(BeatmapBackupServiceTest PRIVATE Logic Log)
-add_test(
-  NAME BeatmapBackupServiceTest
-  COMMAND
-    BeatmapBackupServiceTest
-    # 传给程序的是可清理工作区，不是备份读取用的源码资源根。
-    "${CMAKE_BINARY_DIR}/test_output/beatmap_backup_service")
+mmm_register_test_case(
+  NAME BeatmapBackupServiceTest COMMAND BeatmapBackupServiceTest
+  # 传给程序的是可清理工作区，不是备份读取用的源码资源根。
+  "${CMAKE_BINARY_DIR}/test_output/beatmap_backup_service")
 
 # 放置吸附与拍号累计分别验证局部定位和跨 BPM 编号，保留独立失败入口。
 mmm_add_test_executable(Logic ObjectPlacementSnapTest
                         tests/ObjectPlacementSnapTest.cpp)
+# 放置吸附测试只走计算路径，不依赖窗口或输入设备。
 target_link_libraries(ObjectPlacementSnapTest PRIVATE Logic Log)
-add_test(NAME ObjectPlacementSnapTest COMMAND ObjectPlacementSnapTest)
+mmm_register_test_case(NAME ObjectPlacementSnapTest COMMAND
+                       ObjectPlacementSnapTest)
 
 # 拍号累计测试覆盖短 BPM 段与整拍边界。
 mmm_add_test_executable(Logic BeatIndexTest tests/BeatIndexTest.cpp)
 target_link_libraries(BeatIndexTest PRIVATE Logic Log)
-add_test(NAME BeatIndexTest COMMAND BeatIndexTest)
+mmm_register_test_case(NAME BeatIndexTest COMMAND BeatIndexTest)
 
 # 项目分片存储测试覆盖职责拆分、完整往返和旧单文件迁移。 测试自行准备临时项目结构，这里无需依赖用户的现有项目目录。
 mmm_add_test_executable(Logic ProjectStorageTest tests/ProjectStorageTest.cpp)
 target_link_libraries(ProjectStorageTest PRIVATE Logic Log)
-add_test(NAME ProjectStorageTest COMMAND ProjectStorageTest)
+mmm_register_test_case(NAME ProjectStorageTest COMMAND ProjectStorageTest)
 
 # 临时谱面包测试覆盖旧编码文件名通过 Info-ZIP Unicode Path 恢复为 UTF-8。
 # 这里只传入共享资源根供读取，临时解包目录由项目打开流程管理。
 mmm_add_test_executable(Logic TemporaryPackageUnicodePathTest
                         tests/TemporaryPackageUnicodePathTest.cpp)
 target_link_libraries(TemporaryPackageUnicodePathTest PRIVATE Logic Log)
-add_test(NAME TemporaryPackageUnicodePathTest # 资源根是运行参数，不用编译期宏固化到测试源码。
-         COMMAND TemporaryPackageUnicodePathTest "${MMM_TEST_RESOURCE_DIR}")
+mmm_register_test_case(
+  NAME TemporaryPackageUnicodePathTest # 资源根是运行参数，不用编译期宏固化到测试源码。
+  COMMAND TemporaryPackageUnicodePathTest "${MMM_TEST_RESOURCE_DIR}")
 
 # 音频引用测试与波形解码测试分离，当前目标归属于项目资源和引用管理职责。
 mmm_add_test_executable(Logic ProjectAudioReferenceTest
                         tests/ProjectAudioReferenceTest.cpp)
 target_link_libraries(ProjectAudioReferenceTest PRIVATE Logic Log)
-add_test(NAME ProjectAudioReferenceTest COMMAND ProjectAudioReferenceTest)
+mmm_register_test_case(NAME ProjectAudioReferenceTest COMMAND
+                       ProjectAudioReferenceTest)
 
 # Malody 导出模式测试覆盖临时模式覆盖、Key 自动转换与会话元数据恢复。 该目标验证 MC 文件模式选择，不替代下面 IMD 资源包的打包回归。
 mmm_add_test_executable(Logic MalodyExportModeTest
                         tests/MalodyExportModeTest.cpp)
 target_link_libraries(MalodyExportModeTest PRIVATE Logic Log)
-add_test(NAME MalodyExportModeTest COMMAND MalodyExportModeTest)
+mmm_register_test_case(NAME MalodyExportModeTest COMMAND MalodyExportModeTest)
 
 # MCZ 音频原点对齐测试覆盖正负相位、整数拍前导和安全失败。 相位模型测试不需要在 CTest 命令行传入音频文件。
 # 此处验证时间转换，不将模型测试通过解释为音频编解码链路通过。
 mmm_add_test_executable(Logic MczAudioOriginAlignmentTest
                         tests/MczAudioOriginAlignmentTest.cpp)
 target_link_libraries(MczAudioOriginAlignmentTest PRIVATE Logic Log)
-add_test(NAME MczAudioOriginAlignmentTest COMMAND MczAudioOriginAlignmentTest)
+mmm_register_test_case(NAME MczAudioOriginAlignmentTest COMMAND
+                       MczAudioOriginAlignmentTest)
 
 mmm_add_test_executable(Logic AudioTimelineDescriptorTest
                         tests/AudioTimelineDescriptorTest.cpp)
 target_link_libraries(AudioTimelineDescriptorTest PRIVATE Logic Log)
-add_test(NAME AudioTimelineDescriptorTest COMMAND AudioTimelineDescriptorTest)
+mmm_register_test_case(NAME AudioTimelineDescriptorTest COMMAND
+                       AudioTimelineDescriptorTest)
 # 描述层回归与设备播放启动分离，描述测试通过不能代替播放重启测试。
 
 # IMD 资源包测试覆盖同名前缀、时间线拼装 MP3、zip 内容和 IMD 回读。 导出输出使用专用子目录，避免与自动备份测试共享可清理的工作目录。
@@ -214,97 +225,107 @@ add_test(NAME AudioTimelineDescriptorTest COMMAND AudioTimelineDescriptorTest)
 mmm_add_test_executable(Logic ImdPackageExportServiceTest
                         tests/ImdPackageExportServiceTest.cpp)
 target_link_libraries(ImdPackageExportServiceTest PRIVATE Logic Log)
-add_test(
-  NAME ImdPackageExportServiceTest
-  COMMAND
-    ImdPackageExportServiceTest
-    # 程序在运行前清理此目录，必须保持为该测试独占的输出路径。
-    "${CMAKE_BINARY_DIR}/test_output/imd_package_export_service")
+mmm_register_test_case(
+  NAME ImdPackageExportServiceTest COMMAND ImdPackageExportServiceTest
+  # 程序在运行前清理此目录，必须保持为该测试独占的输出路径。
+  "${CMAKE_BINARY_DIR}/test_output/imd_package_export_service")
 
 mmm_add_test_executable(Logic ProjectDirectoryWatcherTest
                         tests/ProjectDirectoryWatcherTest.cpp)
 target_link_libraries(ProjectDirectoryWatcherTest PRIVATE Logic Log)
-add_test(NAME ProjectDirectoryWatcherTest COMMAND ProjectDirectoryWatcherTest)
+mmm_register_test_case(NAME ProjectDirectoryWatcherTest COMMAND
+                       ProjectDirectoryWatcherTest)
 
 # 播放重启与后续视觉时钟测试独立登记，运输状态与时间推演不互相替代验证。
 mmm_add_test_executable(Logic PlaybackRestartTest tests/PlaybackRestartTest.cpp)
 target_link_libraries(PlaybackRestartTest PRIVATE Logic Log)
-add_test(NAME PlaybackRestartTest COMMAND PlaybackRestartTest)
+mmm_register_test_case(NAME PlaybackRestartTest COMMAND PlaybackRestartTest)
 
 # Unlimited 空闲门控测试确保暂停时不争抢 Session 锁，实时工作仍保持无限更新。
 mmm_add_test_executable(Logic UnlimitedIdleUpdateGateTest
                         tests/UnlimitedIdleUpdateGateTest.cpp)
 target_link_libraries(UnlimitedIdleUpdateGateTest PRIVATE Logic Log)
-add_test(NAME UnlimitedIdleUpdateGateTest COMMAND UnlimitedIdleUpdateGateTest)
+mmm_register_test_case(NAME UnlimitedIdleUpdateGateTest COMMAND
+                       UnlimitedIdleUpdateGateTest)
 
 # 连续播放时钟测试覆盖 block 内推演、校准、暂停、Seek、循环与 UI 补间。 视觉时钟单独链接成测试程序，便于与真实音频设备启动故障区分。
 mmm_add_test_executable(Logic PlaybackVisualClockTest
                         tests/PlaybackVisualClockTest.cpp)
 target_link_libraries(PlaybackVisualClockTest PRIVATE Logic Log)
-add_test(NAME PlaybackVisualClockTest COMMAND PlaybackVisualClockTest)
+mmm_register_test_case(NAME PlaybackVisualClockTest COMMAND
+                       PlaybackVisualClockTest)
 
 # 主画布相机测试覆盖中键二维平移、逻辑像素投影和 Resize 比例保持。 相机坐标回归单独登记，不要求先启动编辑器窗口才能检查坐标变换。
 mmm_add_test_executable(Logic CanvasCameraTest tests/CanvasCameraTest.cpp)
 target_link_libraries(CanvasCameraTest PRIVATE Logic Log)
-add_test(NAME CanvasCameraTest COMMAND CanvasCameraTest)
+mmm_register_test_case(NAME CanvasCameraTest COMMAND CanvasCameraTest)
 
 # 背景覆盖层和文字组件各有独立目标，避免只能通过整套界面检查底层几何。 背景测试检查快照生成的 CPU 几何，不代表 GPU 合成或皮肤视觉验收。
 mmm_add_test_executable(Logic BackgroundRenderSystemTest
                         tests/BackgroundRenderSystemTest.cpp)
 target_link_libraries(BackgroundRenderSystemTest PRIVATE Logic Log)
-add_test(NAME BackgroundRenderSystemTest COMMAND BackgroundRenderSystemTest)
+mmm_register_test_case(NAME BackgroundRenderSystemTest COMMAND
+                       BackgroundRenderSystemTest)
 
 mmm_add_test_executable(Logic CanvasComponentRenderSystemTest
                         tests/CanvasComponentRenderSystemTest.cpp)
 target_link_libraries(CanvasComponentRenderSystemTest PRIVATE Logic Log)
-add_test(NAME CanvasComponentRenderSystemTest
-         COMMAND CanvasComponentRenderSystemTest)
+mmm_register_test_case(NAME CanvasComponentRenderSystemTest COMMAND
+                       CanvasComponentRenderSystemTest)
 
 # 自动采样渲染测试确保 BGM 物件复用当前皮肤的 Note 纹理。 玩家绑定采样标签另由下一个目标覆盖，两类对象不共用同一条测试判定。
 mmm_add_test_executable(Logic SampleRenderSystemTest
                         tests/SampleRenderSystemTest.cpp)
+# 采样渲染直接链接正式 Logic，避免测试内重新实现 BGM 轨道转换。
 target_link_libraries(SampleRenderSystemTest PRIVATE Logic Log)
-add_test(NAME SampleRenderSystemTest COMMAND SampleRenderSystemTest)
+mmm_register_test_case(NAME SampleRenderSystemTest COMMAND
+                       SampleRenderSystemTest)
 
 # 玩家物件标签测试确保绑定音效显示只在主画布启用并复用采样标签滚动。 标签目标不传默认皮肤文件参数，不能机械复制下方重叠遮罩测试的启动命令。
 mmm_add_test_executable(Logic NoteBoundSampleLabelRenderTest
                         tests/NoteBoundSampleLabelRenderTest.cpp)
 target_link_libraries(NoteBoundSampleLabelRenderTest PRIVATE Logic Log)
-add_test(NAME NoteBoundSampleLabelRenderTest
-         COMMAND NoteBoundSampleLabelRenderTest)
+mmm_register_test_case(NAME NoteBoundSampleLabelRenderTest COMMAND
+                       NoteBoundSampleLabelRenderTest)
 
 # 拖动虚影测试确保跨入 BGM 区的单键使用统一轨道投影并避开批注沟槽。
 mmm_add_test_executable(Logic NoteDragGhostRenderTest
                         tests/NoteDragGhostRenderTest.cpp)
+# 虚影断言覆盖正式快照阶段，不能只凭命令提交结果判断拖拽行为。
 target_link_libraries(NoteDragGhostRenderTest PRIVATE Logic Log)
-add_test(NAME NoteDragGhostRenderTest COMMAND NoteDragGhostRenderTest)
+mmm_register_test_case(NAME NoteDragGhostRenderTest COMMAND
+                       NoteDragGhostRenderTest)
 
 # 极大 SV 渲染测试确保超长 Hold 在进入 Batcher 前裁剪到画布范围。 独立目标直接检查 CPU 顶点，避免回归结果依赖具体 Vulkan
 # 驱动。
 mmm_add_test_executable(Logic ExtremeSvHoldRenderTest
                         tests/ExtremeSvHoldRenderTest.cpp)
 target_link_libraries(ExtremeSvHoldRenderTest PRIVATE Logic Log)
-add_test(NAME ExtremeSvHoldRenderTest COMMAND ExtremeSvHoldRenderTest)
+mmm_register_test_case(NAME ExtremeSvHoldRenderTest COMMAND
+                       ExtremeSvHoldRenderTest)
 
 # RMSlide 虚拟载体的横段应沿用前一竖段 HS，而后续竖段重新取值。 独立检查 RMSlide 虚拟载体的 HS
 # 归属和最终横段顶点，避免仅测缓存漏掉渲染调用方。
 mmm_add_test_executable(Logic PolylineCarrierAnchorTest
                         tests/PolylineCarrierAnchorTest.cpp)
 target_link_libraries(PolylineCarrierAnchorTest PRIVATE Logic Log)
-add_test(NAME PolylineCarrierAnchorTest COMMAND PolylineCarrierAnchorTest)
+mmm_register_test_case(NAME PolylineCarrierAnchorTest COMMAND
+                       PolylineCarrierAnchorTest)
 
 # 多选拖动测试确保宽折线不会阻塞以单键为焦点的草稿区虚影更新。
 mmm_add_test_executable(Logic GroupedDraftDragPreviewTest
                         tests/GroupedDraftDragPreviewTest.cpp)
 target_link_libraries(GroupedDraftDragPreviewTest PRIVATE Logic Log)
-add_test(NAME GroupedDraftDragPreviewTest COMMAND GroupedDraftDragPreviewTest)
+mmm_register_test_case(NAME GroupedDraftDragPreviewTest COMMAND
+                       GroupedDraftDragPreviewTest)
 
 # 首段头部与身体使用不同拖动语义，覆盖前置连接、后缀相对位置和撤销。 松键前还要生成正式画布快照，防止仅提交结果正确而拖动预览错误。
 mmm_add_test_executable(Logic PolylineFirstBodyDragTest
                         tests/PolylineFirstBodyDragTest.cpp)
 target_link_libraries(PolylineFirstBodyDragTest PRIVATE Logic Log)
 # CTest 直接运行快照回归，防止只构建测试而不执行预览断言。
-add_test(NAME PolylineFirstBodyDragTest COMMAND PolylineFirstBodyDragTest)
+mmm_register_test_case(NAME PolylineFirstBodyDragTest COMMAND
+                       PolylineFirstBodyDragTest)
 
 # 音符渲染测试覆盖草稿物件独立配色与播放中的顶层重叠提示。 显式传入仓库内默认皮肤和翻译路径，避免使用机器上安装资源的不同版本。
 # 参数保留引号，源码目录包含空格时仍应作为单个路径传给测试。 这两个位置是只读输入；新增输出参数时应另指向构建树下的 test_output。
@@ -312,37 +333,44 @@ add_test(NAME PolylineFirstBodyDragTest COMMAND PolylineFirstBodyDragTest)
 mmm_add_test_executable(Logic NoteOverlapMaskRenderTest
                         tests/NoteOverlapMaskRenderTest.cpp)
 target_link_libraries(NoteOverlapMaskRenderTest PRIVATE Logic Log)
-add_test(
-  NAME NoteOverlapMaskRenderTest
+mmm_register_test_case(
+  NAME
+  NoteOverlapMaskRenderTest
   COMMAND
-    NoteOverlapMaskRenderTest
-    # 皮肤入口与翻译根目录保持各自独立参数，不拼接成一个资源路径。
-    "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/skin.lua"
-    "${CMAKE_SOURCE_DIR}/assets/translations")
+  NoteOverlapMaskRenderTest
+  # 皮肤入口与翻译根目录保持各自独立参数，不拼接成一个资源路径。
+  "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/skin.lua"
+  "${CMAKE_SOURCE_DIR}/assets/translations")
 
 # 交互拾取包围盒测试覆盖独立横纵缩放、中心保持和非法值回退。
 mmm_add_test_executable(Logic InteractionHitboxScaleTest
                         tests/InteractionHitboxScaleTest.cpp)
 target_link_libraries(InteractionHitboxScaleTest PRIVATE Logic Log)
-add_test(NAME InteractionHitboxScaleTest COMMAND InteractionHitboxScaleTest)
+mmm_register_test_case(NAME InteractionHitboxScaleTest COMMAND
+                       InteractionHitboxScaleTest)
 
 # Logo 占位画布测试确保空谱面图标不继承轨道布局裁剪。
 mmm_add_test_executable(Logic LogoPlaceholderScissorTest
                         tests/LogoPlaceholderScissorTest.cpp)
+# 裁剪回归使用 CPU 图元检查，故无需初始化 Vulkan 设备。
 target_link_libraries(LogoPlaceholderScissorTest PRIVATE Logic Log)
-add_test(NAME LogoPlaceholderScissorTest COMMAND LogoPlaceholderScissorTest)
+mmm_register_test_case(NAME LogoPlaceholderScissorTest COMMAND
+                       LogoPlaceholderScissorTest)
 
 # 编辑器级画笔预设继承和会话级鼠标路由在此回归，不要求真实画布窗口。 预设继承通过关闭、重建会话验证，不替代应用重启后的配置持久化测试。
 mmm_add_test_executable(Logic BrushPaletteSessionStateTest
                         tests/BrushPaletteSessionStateTest.cpp)
 target_link_libraries(BrushPaletteSessionStateTest PRIVATE Logic Log)
-add_test(NAME BrushPaletteSessionStateTest COMMAND BrushPaletteSessionStateTest)
+mmm_register_test_case(NAME BrushPaletteSessionStateTest COMMAND
+                       BrushPaletteSessionStateTest)
 
 # 注册表快照生命周期测试确保关闭会话和替换图集后旧快照可回收。 此目标检查所有权边界，不需要真实图形设备完成一帧渲染。
 mmm_add_test_executable(Logic RegistrySnapshotLifetimeTest
                         tests/RegistrySnapshotLifetimeTest.cpp)
+# 快照生命周期回归保持单独用例，便于定位所有权释放错误。
 target_link_libraries(RegistrySnapshotLifetimeTest PRIVATE Logic Log)
-add_test(NAME RegistrySnapshotLifetimeTest COMMAND RegistrySnapshotLifetimeTest)
+mmm_register_test_case(NAME RegistrySnapshotLifetimeTest COMMAND
+                       RegistrySnapshotLifetimeTest)
 
 # 打击音效立体声测试覆盖普通物件固定声像和 Flick 全程线性移动。 此目标显式列出 Audio 链接依赖，以保留测试直接使用音频能力的职责声明。
 # Audio 依赖保持 PRIVATE，测试程序不向其他目标导出音频使用要求。 此处只注册测试目标，不在 CMake 配置阶段打开音频设备或执行测试程序。
@@ -350,22 +378,24 @@ mmm_add_test_executable(Logic HitEffectStereoTest tests/HitEffectStereoTest.cpp)
 target_link_libraries(HitEffectStereoTest PRIVATE Logic Audio Log)
 # Hold 视觉测试路径契约： - 从实际内置皮肤加载序列，不依赖用户当前选择。 - 翻译根显式传递，不依赖 CTest 工作目录。 -
 # 兼容夹具只写入构建树，不污染源码资源目录。
-add_test(
-  NAME HitEffectStereoTest
+mmm_register_test_case(
+  NAME
+  HitEffectStereoTest
   COMMAND
-    HitEffectStereoTest "${CMAKE_SOURCE_DIR}/assets/skins"
-    "${CMAKE_SOURCE_DIR}/assets/translations"
-    "${CMAKE_BINARY_DIR}/test_output/hold_effects")
+  HitEffectStereoTest
+  "${CMAKE_SOURCE_DIR}/assets/skins"
+  "${CMAKE_SOURCE_DIR}/assets/translations"
+  "${CMAKE_BINARY_DIR}/test_output/hold_effects")
 
 # 滑键模式测试覆盖配置往返、首尾及全范围几何和严格内部节点的独立开关。 只读内置皮肤并生成 CPU 快照，不打开声卡或图形设备，不依赖用户配置。
-# 所有期望轨道均由夹具明确指定，草稿、反向和极端偏移独立验证。 新目标沿用公共入口，二进制归入 build/tests/Logic，不散落源码树。
+# 所有期望轨道均由夹具明确指定，草稿、反向和极端偏移独立验证。 新目标沿用公共入口，二进制归入 build/tests/Suites，不散落源码树。
 mmm_add_test_executable(Logic FlickHitEffectModeTest
                         tests/FlickHitEffectModeTest.cpp)
 # 链接正式事件系统和批处理器，避免复制渲染算法使测试偏离生产路径。
 target_link_libraries(FlickHitEffectModeTest PRIVATE Logic Audio Log)
-add_test(NAME FlickHitEffectModeTest
-         COMMAND FlickHitEffectModeTest "${CMAKE_SOURCE_DIR}/assets/skins"
-                 "${CMAKE_SOURCE_DIR}/assets/translations")
+mmm_register_test_case(
+  NAME FlickHitEffectModeTest COMMAND FlickHitEffectModeTest
+  "${CMAKE_SOURCE_DIR}/assets/skins" "${CMAKE_SOURCE_DIR}/assets/translations")
 
 # 纹理倍率测试直接检查 CPU 顶点、UV 和合批，不要求 Vulkan 窗口或真实音频设备。 临时皮肤只写入构建输出目录；内置皮肤只读，用于核对 RM
 # 三类特效的最终尺寸。 配置解析与几何消费分层断言，防止只验证 getter 而遗漏实际绘制尺寸。
@@ -373,12 +403,14 @@ add_test(NAME FlickHitEffectModeTest
 mmm_add_test_executable(Logic SkinTextureScaleTest
                         tests/SkinTextureScaleTest.cpp)
 target_link_libraries(SkinTextureScaleTest PRIVATE Logic Audio Log)
-add_test(
-  NAME SkinTextureScaleTest
+mmm_register_test_case(
+  NAME
+  SkinTextureScaleTest
   COMMAND
-    SkinTextureScaleTest "${CMAKE_BINARY_DIR}/test_output/texture_scales"
-    "${CMAKE_SOURCE_DIR}/assets/translations"
-    "${CMAKE_SOURCE_DIR}/assets/skins")
+  SkinTextureScaleTest
+  "${CMAKE_BINARY_DIR}/test_output/texture_scales"
+  "${CMAKE_SOURCE_DIR}/assets/translations"
+  "${CMAKE_SOURCE_DIR}/assets/skins")
 
 # 独立边界回归走完整 Note 快照生成，不能用 Batcher 单图元测试代替拾取验证。 夹具同时调整普通键、头部和尾部倍率，检查教程框与实际图元保持一致。
 # 离屏中心但仍有可见边缘的端点必须保留，避免只放大贴图而沿用旧剔除范围。 临时 Lua 和测试配置只写入构建树；合成 UV 不需要上传图集或打开窗口。
@@ -387,19 +419,17 @@ mmm_add_test_executable(Logic NoteTextureScaleBoundsTest
                         tests/NoteTextureScaleBoundsTest.cpp)
 # 链接正式 Logic 实现，避免测试复制一份渲染算法而绕过生产代码。
 target_link_libraries(NoteTextureScaleBoundsTest PRIVATE Logic Log)
-add_test(
-  NAME NoteTextureScaleBoundsTest
-  COMMAND
-    NoteTextureScaleBoundsTest
-    "${CMAKE_BINARY_DIR}/test_output/note_texture_scales"
-    "${CMAKE_SOURCE_DIR}/assets/translations")
+mmm_register_test_case(
+  NAME NoteTextureScaleBoundsTest COMMAND NoteTextureScaleBoundsTest
+  "${CMAKE_BINARY_DIR}/test_output/note_texture_scales"
+  "${CMAKE_SOURCE_DIR}/assets/translations")
 
 # 旧 MMM 加载诊断测试覆盖一次载入内的事件生成、去重与空输入行为。
 mmm_add_test_executable(Logic BeatmapLoadDiagnosticPublisherTest
                         tests/BeatmapLoadDiagnosticPublisherTest.cpp)
 target_link_libraries(BeatmapLoadDiagnosticPublisherTest PRIVATE Logic Log)
-add_test(NAME BeatmapLoadDiagnosticPublisherTest
-         COMMAND BeatmapLoadDiagnosticPublisherTest)
+mmm_register_test_case(NAME BeatmapLoadDiagnosticPublisherTest COMMAND
+                       BeatmapLoadDiagnosticPublisherTest)
 
 # 协作观察者绑定测试确保访客不会把收到的房主快照回传为本地编辑。 两个目标分别覆盖变更来源与打开入口，不将项目切换来源混同为协作编辑来源。
 mmm_add_test_executable(Logic BeatmapMutationObserverBindingTest
@@ -409,7 +439,7 @@ mmm_add_test_executable(Logic BeatmapMutationObserverBindingTest
 mmm_add_test_executable(Logic ProjectOpenOriginTest
                         tests/ProjectOpenOriginTest.cpp)
 target_link_libraries(ProjectOpenOriginTest PRIVATE Logic Log)
-add_test(NAME ProjectOpenOriginTest COMMAND ProjectOpenOriginTest)
+mmm_register_test_case(NAME ProjectOpenOriginTest COMMAND ProjectOpenOriginTest)
 target_link_libraries(BeatmapMutationObserverBindingTest PRIVATE Logic Log)
-add_test(NAME BeatmapMutationObserverBindingTest
-         COMMAND BeatmapMutationObserverBindingTest)
+mmm_register_test_case(NAME BeatmapMutationObserverBindingTest COMMAND
+                       BeatmapMutationObserverBindingTest)
