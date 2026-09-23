@@ -1904,10 +1904,11 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                         entries.push_back({ entity, nc, std::nullopt });
 
                         // 3. 计算左右半段
-                        // 只为内部索引生成左右余段，k
-                        // 为零时保持当前整条删除语义。 被擦除的第 k
-                        // 段不包含在任一余段中。
-                        if ( k > 0 ) {
+                        // 只有首节点头部代表整条折线；首段身体擦除也要保留后续节点。
+                        // 被擦除的第 k 段不包含在任一余段中。
+                        if ( k > 0 ||
+                             ctx.hoveredPart !=
+                                 static_cast<int>(HoverPart::PolylineNode) ) {
                             // 先复制原子项列表，左右部分的输入与即将删除的父组件独立。
                             // 撤销快照仍保留原父完整结构，新结果按各自余段重建。
                             auto subNotes = nc.m_subNotes;
@@ -1926,111 +1927,112 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                             /// @param inheritsParentSound 是否包含原父头部。
                             /// @warning
                             /// 仅在释放时构造值与预留实体，不执行音频加载。
-                            auto processPart =
-                                [&](const std::vector<NoteComponent::SubNote>&
-                                         part,
-                                    bool inheritsParentSound) {
-                                    // 擦除末段可使右部分为空，这是正常边界，无需创建空折线。
-                                    if ( part.empty() ) return;
-                                    if ( part.size() == 1 ) {
-                                        // 单段恢复为根组件，清除父关联和子索引以参与普通物件渲染。
-                                        // 几何、绑定和颜色优先来自保留下来的子项。
-                                        auto          s = part[0];
-                                        NoteComponent nextNC =
-                                            makeNoteComponentFromSubNote(
-                                                s, false, entt::null, -1);
-                                        nextNC.m_isDraft = nc.m_isDraft;
-                                        // 子项已有音效不覆盖；仅包含原头部的一侧才允许回退父绑定。
-                                        // 否则分裂后的两侧会在不同时间重复播放原根音效。
-                                        if ( !nextNC.m_sampleBinding &&
-                                             inheritsParentSound ) {
-                                            nextNC.m_sampleBinding =
-                                                nc.m_sampleBinding;
-                                        }
-                                        // 颜色回退采用整组规则：子项没有任何覆盖时才复制父颜色。
-                                        // 部分槽位已设置时不在这里逐槽补齐，保留现有样式继承行为。
-                                        if ( !hasAnyNoteColorOverride(
-                                                 nextNC.m_customColors) &&
-                                             hasAnyNoteColorOverride(
-                                                 nc.m_customColors) ) {
-                                            nextNC.m_customColors =
-                                                nc.m_customColors;
-                                            // 同步颜色字段与元数据表示，避免保存后丢失刚继承的颜色。
-                                            writeNoteColorOverridesToMetadata(
-                                                nextNC);
-                                        }
-
-                                        // 余段使用新实体身份，旧实体完整留在删除
-                                        // before 中。
-                                        // 撤销按删除新对象并恢复旧对象重建分裂前状态。
-                                        entt::entity newEnt =
-                                            ctx.noteRegistry.create();
-                                        entries.push_back(
-                                            { newEnt, std::nullopt, nextNC });
-                                    } else {
-                                        // 多段部分创建新的根，基本时间和轨道取该部分首段。
-                                        // 根不使用单段 duration 或
-                                        // dtrack，完整几何由子列表表达。
-                                        NoteComponent nextNC;
-                                        nextNC.m_type =
-                                            ::MMM::NoteType::POLYLINE;
-                                        nextNC.m_timestamp =
-                                            part.front().timestamp;
-                                        nextNC.m_trackIndex =
-                                            part.front().trackIndex;
-                                        nextNC.m_duration = 0.0;
-                                        nextNC.m_dtrack   = 0;
-                                        // 父元数据沿用原折线，音效继承另受头部归属限制。
-                                        // 不能因为元数据被复制就无条件复制父级音效绑定。
-                                        nextNC.m_metadata = nc.m_metadata;
-                                        if ( inheritsParentSound ) {
-                                            nextNC.m_sampleBinding =
-                                                nc.m_sampleBinding;
-                                        }
+                            auto processPart = [&](const std::vector<
+                                                       NoteComponent::SubNote>&
+                                                        part,
+                                                   bool inheritsParentSound) {
+                                // 擦除末段可使右部分为空，这是正常边界，无需创建空折线。
+                                if ( part.empty() ) return;
+                                if ( part.size() == 1 ) {
+                                    // 单段恢复为根组件，清除父关联和子索引以参与普通物件渲染。
+                                    // 几何、绑定和颜色优先来自保留下来的子项。
+                                    auto          s = part[0];
+                                    NoteComponent nextNC =
+                                        makeNoteComponentFromSubNote(
+                                            s, false, entt::null, -1);
+                                    nextNC.m_isDraft = nc.m_isDraft;
+                                    // 只有擦掉原头时余段是同一折线的延续，保留容器批注。
+                                    if ( k == 0 )
+                                        nextNC.m_annotation = nc.m_annotation;
+                                    // 子项已有音效不覆盖；仅包含原头部的一侧才允许回退父绑定。
+                                    // 否则分裂后的两侧会在不同时间重复播放原根音效。
+                                    if ( !nextNC.m_sampleBinding &&
+                                         inheritsParentSound ) {
+                                        nextNC.m_sampleBinding =
+                                            nc.m_sampleBinding;
+                                    }
+                                    // 颜色回退采用整组规则：子项没有任何覆盖时才复制父颜色。
+                                    // 部分槽位已设置时不在这里逐槽补齐，保留现有样式继承行为。
+                                    if ( !hasAnyNoteColorOverride(
+                                             nextNC.m_customColors) &&
+                                         hasAnyNoteColorOverride(
+                                             nc.m_customColors) ) {
                                         nextNC.m_customColors =
                                             nc.m_customColors;
-                                        // 分裂出的每一部分都成为独立根，不再指向原来将被删除的父。
-                                        // 旧父身份只能保留在撤销快照中，不能进入新根的关系字段。
-                                        nextNC.m_isSubNote      = false;
-                                        nextNC.m_isDraft        = nc.m_isDraft;
-                                        nextNC.m_parentPolyline = entt::null;
-                                        nextNC.m_subIndex       = -1;
-                                        // 完整复制保留段的局部属性，随后按新列表顺序生成连续子索引。
-                                        // 新根不沿用原父身份，子实体必须引用新分配的
-                                        // parentEnt。
-                                        nextNC.m_subNotes = part;
-
-                                        // 为多段余部预留父身份后，所有新子项用该身份建立关系。
-                                        // 子索引从零开始，不继续使用原折线被擦除位置之后的旧索引。
-                                        entt::entity parentEnt =
-                                            ctx.noteRegistry.create();
-                                        entries.push_back({ parentEnt,
-                                                            std::nullopt,
-                                                            nextNC });
-
-                                        for ( size_t i = 0; i < part.size();
-                                              ++i ) {
-                                            const auto&   s = part[i];
-                                            NoteComponent subNC =
-                                                makeNoteComponentFromSubNote(
-                                                    s,
-                                                    true,
-                                                    parentEnt,
-                                                    static_cast<int>(i));
-                                            // 分裂不跨域，所有新子实体继承原父草稿标志。
-                                            // 不可仅依赖子轨号而留下与根不同的编辑可见性。
-                                            subNC.m_isDraft = nc.m_isDraft;
-
-                                            entt::entity subEnt =
-                                                ctx.noteRegistry.create();
-                                            entries.push_back({ subEnt,
-                                                                std::nullopt,
-                                                                subNC });
-                                        }
+                                        // 同步颜色字段与元数据表示，避免保存后丢失刚继承的颜色。
+                                        writeNoteColorOverridesToMetadata(
+                                            nextNC);
                                     }
-                                };
 
-                            // 左半包含原始头部，右半从断点之后开始，音效继承标志据此区分。
+                                    // 余段使用新实体身份，旧实体完整留在删除
+                                    // before 中。
+                                    // 撤销按删除新对象并恢复旧对象重建分裂前状态。
+                                    entt::entity newEnt =
+                                        ctx.noteRegistry.create();
+                                    entries.push_back(
+                                        { newEnt, std::nullopt, nextNC });
+                                } else {
+                                    // 多段部分创建新的根，基本时间和轨道取该部分首段。
+                                    // 根不使用单段 duration 或
+                                    // dtrack，完整几何由子列表表达。
+                                    NoteComponent nextNC;
+                                    nextNC.m_type = ::MMM::NoteType::POLYLINE;
+                                    nextNC.m_timestamp = part.front().timestamp;
+                                    nextNC.m_trackIndex =
+                                        part.front().trackIndex;
+                                    nextNC.m_duration = 0.0;
+                                    nextNC.m_dtrack   = 0;
+                                    // 父元数据沿用原折线，音效继承另受头部归属限制。
+                                    // 不能因为元数据被复制就无条件复制父级音效绑定。
+                                    nextNC.m_metadata = nc.m_metadata;
+                                    // 新首节点接管根的时间和轨道，容器批注仍属于这条折线。
+                                    if ( k == 0 )
+                                        nextNC.m_annotation = nc.m_annotation;
+                                    if ( inheritsParentSound ) {
+                                        nextNC.m_sampleBinding =
+                                            nc.m_sampleBinding;
+                                    }
+                                    nextNC.m_customColors = nc.m_customColors;
+                                    // 分裂出的每一部分都成为独立根，不再指向原来将被删除的父。
+                                    // 旧父身份只能保留在撤销快照中，不能进入新根的关系字段。
+                                    nextNC.m_isSubNote      = false;
+                                    nextNC.m_isDraft        = nc.m_isDraft;
+                                    nextNC.m_parentPolyline = entt::null;
+                                    nextNC.m_subIndex       = -1;
+                                    // 完整复制保留段的局部属性，随后按新列表顺序生成连续子索引。
+                                    // 新根不沿用原父身份，子实体必须引用新分配的
+                                    // parentEnt。
+                                    nextNC.m_subNotes = part;
+
+                                    // 为多段余部预留父身份后，所有新子项用该身份建立关系。
+                                    // 子索引从零开始，不继续使用原折线被擦除位置之后的旧索引。
+                                    entt::entity parentEnt =
+                                        ctx.noteRegistry.create();
+                                    entries.push_back(
+                                        { parentEnt, std::nullopt, nextNC });
+
+                                    for ( size_t i = 0; i < part.size(); ++i ) {
+                                        const auto&   s = part[i];
+                                        NoteComponent subNC =
+                                            makeNoteComponentFromSubNote(
+                                                s,
+                                                true,
+                                                parentEnt,
+                                                static_cast<int>(i));
+                                        // 分裂不跨域，所有新子实体继承原父草稿标志。
+                                        // 不可仅依赖子轨号而留下与根不同的编辑可见性。
+                                        subNC.m_isDraft = nc.m_isDraft;
+
+                                        entt::entity subEnt =
+                                            ctx.noteRegistry.create();
+                                        entries.push_back(
+                                            { subEnt, std::nullopt, subNC });
+                                    }
+                                }
+                            };
+
+                            // 父级音效绑定属于已删除的原头；右半新头只使用自身绑定。
+                            // 内部断点仍只让包含旧头的左半继承，避免两侧重复发声。
                             // 两半的创建条目与原父子删除同批提交，避免出现可单独撤销的半次分裂。
                             processPart(L, true);
                             processPart(R, false);
@@ -2078,10 +2080,11 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                             entries.push_back({ entity, nc, std::nullopt });
 
                             // 3. 计算左右半段
-                            // 只为内部索引生成左右余段，k
-                            // 为零时保持当前整条删除语义。 被擦除的第 k
-                            // 段不包含在任一余段中。
-                            if ( k > 0 ) {
+                            // 只有首节点头部代表整条折线；首段身体擦除保留后续节点。
+                            // 被擦除的第 k 段不包含在任一余段中。
+                            if ( k > 0 || ctx.hoveredPart !=
+                                              static_cast<int>(
+                                                  HoverPart::PolylineNode) ) {
                                 // 先复制原子项列表，左右部分的输入与即将删除的父组件独立。
                                 // 撤销快照仍保留原父完整结构，新结果按各自余段重建。
                                 auto subNotes = nc.m_subNotes;
@@ -2114,6 +2117,10 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                             makeNoteComponentFromSubNote(
                                                 s, false, entt::null, -1);
                                         nextNC.m_isDraft = nc.m_isDraft;
+                                        // 首段身体删除后仅剩一段时，根批注仍随余段保留。
+                                        if ( k == 0 )
+                                            nextNC.m_annotation =
+                                                nc.m_annotation;
                                         // 子项已有音效不覆盖；仅包含原头部的一侧才允许回退父绑定。
                                         // 否则分裂后的两侧会在不同时间重复播放原根音效。
                                         if ( !nextNC.m_sampleBinding &&
@@ -2157,6 +2164,10 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                         // 父元数据沿用原折线，音效继承另受头部归属限制。
                                         // 不能因为元数据被复制就无条件复制父级音效绑定。
                                         nextNC.m_metadata = nc.m_metadata;
+                                        // 首段身体删除后新根延续原容器批注，不复制原头音效。
+                                        if ( k == 0 )
+                                            nextNC.m_annotation =
+                                                nc.m_annotation;
                                         if ( inheritsParentSound ) {
                                             nextNC.m_sampleBinding =
                                                 nc.m_sampleBinding;
@@ -2200,7 +2211,8 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
                                     }
                                 };
 
-                                // 左半包含原始头部，右半从断点之后开始，音效继承标志据此区分。
+                                // 父级音效绑定属于已删除的原头；右半新头只使用自身绑定。
+                                // 内部断点仍只由保留原头的左半继承，避免重复发声。
                                 // 两半的创建条目与原父子删除同批提交，避免出现可单独撤销的半次分裂。
                                 processPart(L, true);
                                 processPart(R, false);

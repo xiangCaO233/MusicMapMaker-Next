@@ -366,7 +366,6 @@ void NoteRenderSystem::drawPolylineBody(
                 // 擦除反馈降低原透明度并改红，只影响命中的节点或整条折线。
                 if ( snapshot->erasingEntities.count(entity) &&
                      (snapshot->erasingSubIndex == static_cast<int>(i) ||
-                      snapshot->erasingSubIndex == 0 ||
                       snapshot->erasingSubIndex == -1) ) {
                     finalBodyColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
                 }
@@ -412,7 +411,6 @@ void NoteRenderSystem::drawPolylineBody(
             glm::vec4 finalBodyColor = colorHold;
             if ( snapshot->erasingEntities.count(entity) &&
                  (snapshot->erasingSubIndex == static_cast<int>(i) ||
-                  snapshot->erasingSubIndex == 0 ||
                   snapshot->erasingSubIndex == -1) ) {
                 finalBodyColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
             }
@@ -506,10 +504,10 @@ void NoteRenderSystem::drawPolylineBody(
 
             glm::vec4 finalTransColor = colorHold;
             // 当前与下一端不插值两种乘色，整个连接段统一使用主体色。
-            // 过渡段擦除反馈关联其到达节点，与子物件自身主体的索引规则不同。
+            // 过渡段可由起段主体或到达节点擦除；首段身体只标红首条连接。
             if ( snapshot->erasingEntities.count(entity) &&
-                 (snapshot->erasingSubIndex == static_cast<int>(i + 1) ||
-                  snapshot->erasingSubIndex == 0 ||
+                 (snapshot->erasingSubIndex == static_cast<int>(i) ||
+                  snapshot->erasingSubIndex == static_cast<int>(i + 1) ||
                   snapshot->erasingSubIndex == -1) ) {
                 finalTransColor = { 1.0f, 0.2f, 0.2f, colorHold.a * 0.5f };
             }
@@ -688,7 +686,6 @@ void NoteRenderSystem::drawPolylineNodes(
         glm::vec4 finalNodeColor = colorNode;
         if ( snapshot->erasingEntities.count(entity) &&
              (snapshot->erasingSubIndex == static_cast<int>(i) ||
-              snapshot->erasingSubIndex == 0 ||
               snapshot->erasingSubIndex == -1) ) {
             finalNodeColor = { 1.0f, 0.2f, 0.2f, colorNode.a * 0.5f };
         }
@@ -843,9 +840,9 @@ void NoteRenderSystem::drawPolylineHead(
 
     // 头部几何以轨中心与时间中心对齐，用户缩放不改变它对应的拍位。
     glm::vec4 finalHeadColor = colorHead;
-    // 只擦除其他节点时不将头部染红；0 和 -1 分别包含头部或整条折线反馈。
+    // 首段身体的索引 0 不删除头部；仅整条删除标记 -1 令头部染红。
     if ( snapshot->erasingEntities.count(entity) &&
-         (snapshot->erasingSubIndex == 0 || snapshot->erasingSubIndex == -1) ) {
+         snapshot->erasingSubIndex == -1 ) {
         finalHeadColor = { 1.0f, 0.2f, 0.2f, colorHead.a * 0.5f };
     }
 
@@ -985,7 +982,6 @@ void NoteRenderSystem::drawPolylineDecoration(
             // 装饰保留调用方透明度，只在擦除反馈中额外衰减，不重算全局 alpha。
             if ( snapshot->erasingEntities.count(entity) &&
                  (snapshot->erasingSubIndex == lastIdx ||
-                  snapshot->erasingSubIndex == 0 ||
                   snapshot->erasingSubIndex == -1) ) {
                 finalArrowColor = { 1.0f, 0.2f, 0.2f, colorArrow.a * 0.5f };
             }
@@ -1026,7 +1022,6 @@ void NoteRenderSystem::drawPolylineDecoration(
             // 尾部反馈允许由整条擦除或末节点擦除触发，不读取中间节点的独立状态。
             if ( snapshot->erasingEntities.count(entity) &&
                  (snapshot->erasingSubIndex == lastIdx ||
-                  snapshot->erasingSubIndex == 0 ||
                   snapshot->erasingSubIndex == -1) ) {
                 finalEndColor = { 1.0f, 0.2f, 0.2f, colorHoldEnd.a * 0.5f };
             }

@@ -5462,6 +5462,214 @@ bool testSelectedPolylineTailEraseWithOtherSelection()
            selectionIndexIsConsistent() && reducedPolylineIsValid();
 }
 
+/// @brief 验证首节点的头部与身体右键擦除具有不同删除范围。
+/// @return 选中与未选中、单段与多段、正式与草稿的撤销往返均正确时返回 true。
+/// @details 通过 DrawTool 的真实擦除事务检查父组件及子实体；不直接改写数组。
+/// 首节点头部删除整条折线；身体删除第一子项，并以第二子项重建根锚点。
+/// 两段折线删首段后降级为独立 Hold，单段折线则没有可保留的余部。
+/// 原首节点的父级音频绑定不能转移到新首节点；根批注继续保留。
+/// 用例矩阵同时覆盖两种选择状态，避免选中集合分支与普通目标分支分歧。
+/// 头部命中采用 PolylineNode/0，这是折线头在渲染拾取中的真实编码。
+/// 身体命中采用 HoldBody/0，与头部共享子索引却必须留下右侧余段。
+/// 一段对象验证空余部边界，不得创建没有节点的替代父对象。
+/// 两段对象验证降级边界，第二子项成为普通 Hold，而非单节点折线。
+/// 三段对象验证父子结构，保留段的新子索引必须从零重新编排。
+/// 草稿用例选在三段选中分支，防止负轨道在批量选择删除后丢失域标志。
+/// 每种组合都执行撤销和重做，防止快照只在首次删除时正确。
+/// @warning 仅测试命令路径创建临时 Registry，不启动渲染或音频设备。
+bool testPolylineFirstSubEraseDistinguishesHeadAndBody()
+{
+    using Note = MMM::Logic::NoteComponent;
+    using Part = MMM::Logic::HoverPart;
+    for ( const bool selected : { false, true } ) {
+        for ( const Part part : { Part::PolylineNode, Part::HoldBody } ) {
+            for ( const int count : { 1, 2, 3 } ) {
+                MMM::Logic::SessionContext context;
+                context.lastConfig.settings.enablePolylineEditing = true;
+                // 测试以全新上下文运行每个组合。
+                // 这样选择集合、历史栈与实体 ID 不会从上一个组合泄漏。
+                // 局部擦除门禁必须显式开启，否则命令不会进入分裂路径。
+                // 选中多段场景同时覆盖草稿域，确保重建不会把负轨号移入玩家区。
+                const bool draft = selected && count == 3;
+                // 草稿轨需要专业模式门禁，测试应模拟用户确实能编辑该区域。
+                context.lastConfig.settings.professionalMode = draft;
+                Note polyline;
+                polyline.m_type       = MMM::NoteType::POLYLINE;
+                polyline.m_timestamp  = 1.0;
+                polyline.m_trackIndex = draft ? -3 : 0;
+                polyline.m_isDraft    = draft;
+                polyline.m_annotation = "root annotation";
+                polyline.m_sampleBinding =
+                    MMM::AudioSampleBinding{ "old-head.wav", 0.75F };
+                // 父批注作为容器属性，应随同一条折线的右侧延续段保留。
+                // 父绑定属于原头部触发点，删除首段后不得挪到下一节点。
+                // 二者分别设置，可识别重建代码将所有父属性一概复制的错误。
+                // Hold 头具有独立的节点头部和可点击身体；后续节点逐轨逐秒递增。
+                for ( int index = 0; index < count; ++index ) {
+                    polyline.m_subNotes.push_back({
+                        .type       = MMM::NoteType::HOLD,
+                        .timestamp  = static_cast<double>(index + 1),
+                        .duration   = 0.5,
+                        .trackIndex = (draft ? -3 : 0) + index,
+                        .dtrack     = 0,
+                    });
+                }
+                const auto oldRoot = context.noteRegistry.create();
+                context.noteRegistry.emplace<Note>(oldRoot, polyline);
+                context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
+                    oldRoot);
+                // 原父实体仍持有内嵌子项列表。
+                // 实际编辑又依赖 Registry 中对应的子实体投影。
+                // 只检查内嵌数组会漏掉被删子实体继续显示和参与拾取的故障。
+                // 投影实体与父内嵌数组同时安装，便于检测删除后是否有孤儿节点。
+                std::vector<entt::entity> oldChildren;
+                for ( int index = 0; index < count; ++index ) {
+                    const auto child = context.noteRegistry.create();
+                    auto childNote   = MMM::Logic::makeNoteComponentFromSubNote(
+                        polyline.m_subNotes[static_cast<std::size_t>(index)],
+                        true,
+                        oldRoot,
+                        index);
+                    childNote.m_isDraft = draft;
+                    context.noteRegistry.emplace<Note>(child, childNote);
+                    context.noteRegistry
+                        .emplace<MMM::Logic::InteractionComponent>(child);
+                    oldChildren.push_back(child);
+                }
+                if ( selected ) {
+                    // 选中状态使用真实选择入口建立。
+                    // 擦除命令由此走集合删除分支，而不是仅伪造悬停标志。
+                    MMM::Logic::setChartObjectSelected(
+                        context,
+                        draft ? MMM::Logic::ChartObjectKind::DraftNote
+                              : MMM::Logic::ChartObjectKind::PlayerNote,
+                        oldRoot,
+                        true);
+                }
+                context.hoveredEntity = oldRoot;
+                context.hoveredObjectKind =
+                    draft ? MMM::Logic::ChartObjectKind::DraftNote
+                          : MMM::Logic::ChartObjectKind::PlayerNote;
+                context.hoveredPart     = static_cast<int>(part);
+                context.hoveredSubIndex = 0;
+                // 两种命中都指向同一父实体及第零子项。
+                // 唯一有意变化的是 hoveredPart，以隔离精确命中的语义。
+                // Start/Update/End 模拟右键手势的命令序列与历史栈提交。
+                MMM::Logic::DrawTool tool;
+                tool.handleStartErase(context, MMM::Logic::CmdStartErase{});
+                tool.handleUpdateErase(context, MMM::Logic::CmdUpdateErase{});
+                tool.handleEndErase(context, MMM::Logic::CmdEndErase{});
+
+                // 同一组断言同时用于首次执行与 Redo；新实体 ID 可以变化。
+                // 必须核对父时间、轨道、批注、绑定和子索引，数量相等远远不够。
+                const auto resultIsValid = [&]() {
+                    // 命中头部，或单段物件命中身体时，删除后不存在余部。
+                    // 身体命中且至少有第二段时，才允许生成新的根实体。
+                    const bool hasRemainder =
+                        part == Part::HoldBody && count > 1;
+                    const auto view = context.noteRegistry.view<const Note>();
+                    // 原根不能混入重建结果，否则同一折线会被重复渲染。
+                    // 两段降级时只有一个实体；三段缩减时是一父两子。
+                    if ( context.noteRegistry.valid(oldRoot) ||
+                         view.size() !=
+                             static_cast<std::size_t>(
+                                 hasRemainder ? (count == 2 ? 1 : 3) : 0) ) {
+                        return false;
+                    }
+                    for ( const auto oldChild : oldChildren ) {
+                        // 旧投影必须与旧父一起消失。
+                        // 新父只能拥有重新创建、重新编号的投影实体。
+                        if ( context.noteRegistry.valid(oldChild) )
+                            return false;
+                    }
+                    if ( !hasRemainder ) return true;
+                    // 降级对象和仍为折线的根都应从第二子项的时间及轨道开始。
+                    entt::entity root = entt::null;
+                    // 不能依赖新实体 ID 或 Registry 迭代顺序。
+                    // 用根/子角色识别后，统一核对新锚点属性。
+                    for ( const auto entity : view ) {
+                        const auto& note = view.get<const Note>(entity);
+                        if ( !note.m_isSubNote ) root = entity;
+                    }
+                    if ( root == entt::null ) return false;
+                    const auto& remaining = view.get<const Note>(root);
+                    // 原第二段的时间、轨道成为新根锚点。
+                    // 草稿归属与批注延续，而原头音频绑定随首段消失。
+                    if ( remaining.m_timestamp != 2.0 ||
+                         remaining.m_trackIndex != (draft ? -2 : 1) ||
+                         remaining.m_isDraft != draft ||
+                         remaining.m_annotation != "root annotation" ||
+                         remaining.m_sampleBinding ) {
+                        return false;
+                    }
+                    if ( count == 2 ) {
+                        // 仅剩一段不保留空折线容器，也不得附带旧父关系。
+                        // 这种降级必须走普通 Hold 的渲染与保存语义。
+                        return remaining.m_type == MMM::NoteType::HOLD &&
+                               remaining.m_subNotes.empty() &&
+                               remaining.m_parentPolyline == entt::null;
+                    }
+                    if ( remaining.m_type != MMM::NoteType::POLYLINE ||
+                         remaining.m_subNotes.size() != 2U )
+                        return false;
+                    // 新父的内嵌列表与两个投影子实体必须一一对应、重新编号。
+                    // 这里以时间和轨道序列反查索引，防止只改索引却排错顺序。
+                    // 子实体的父引用必须指向这次新建的根，而非被删除的旧根。
+                    for ( const auto entity : view ) {
+                        const auto& note = view.get<const Note>(entity);
+                        if ( !note.m_isSubNote ) continue;
+                        if ( note.m_parentPolyline != root ||
+                             note.m_subIndex < 0 || note.m_subIndex >= 2 ||
+                             note.m_isDraft != draft ||
+                             note.m_timestamp != note.m_subIndex + 2.0 ||
+                             note.m_trackIndex !=
+                                 (draft ? -2 : 1) + note.m_subIndex ) {
+                            return false;
+                        }
+                    }
+                    return true;
+                };
+                if ( !resultIsValid() ||
+                     context.actionStack.getUndoStackSize() != 1U ) {
+                    // 一次右键手势只能提交一个可撤销事务。
+                    // 如重建和删除分开入栈，Undo 会留下半条折线。
+                    // 选中分支会额外收集选择集合，但当前目标的父子变更仍属同一事务。
+                    // 未选中分支不得因没有选择集合而跳过局部缩减。
+                    XERROR(
+                        "Polyline first erase result invalid: selected={} "
+                        "part={} count={}",
+                        selected,
+                        static_cast<int>(part),
+                        count);
+                    return false;
+                }
+                // Undo 恢复原父子身份和头部绑定；Redo 再核对缩减或整条删除。
+                // 此时原父仍应保存自己的触发采样，而非被重建代码就地改写。
+                // 原子投影也必须恢复原身份，供后续选择和交互继续使用。
+                // 若旧根音频绑定恢复失败，即使视觉结构正确也不能视为撤销成功。
+                // 三段草稿场景还依赖恢复后的旧投影维持正确的对象域。
+                context.actionStack.undo(context);
+                if ( !context.noteRegistry.valid(oldRoot) ||
+                     !context.noteRegistry.get<const Note>(oldRoot)
+                          .m_sampleBinding ||
+                     context.noteRegistry.get<const Note>(oldRoot)
+                             .m_sampleBinding->m_audioResourceId !=
+                         "old-head.wav" ) {
+                    return false;
+                }
+                for ( const auto child : oldChildren ) {
+                    if ( !context.noteRegistry.valid(child) ) return false;
+                }
+                // 重做可能分配不同实体 ID，因此再次检验结构与属性。
+                // 不假设首次执行时 Registry 的槽位布局可复用。
+                context.actionStack.redo(context);
+                if ( !resultIsValid() ) return false;
+            }
+        }
+    }
+    return true;
+}
+
 /// @brief 验证自动采样悬浮检视包含锚点、实际触发点和音频字段。
 /// @details
 /// 自动采样的锚点时间与实际播放时间由 offsetMs 区分。悬停 offset handle 时，
@@ -7793,6 +8001,7 @@ int main()
                    testCollaborationResourcesRouteThroughSession() &&
                    testSampleEraseTargetsTypedRegistry() &&
                    testSelectedPolylineTailEraseWithOtherSelection() &&
+                   testPolylineFirstSubEraseDistinguishesHeadAndBody() &&
                    testSampleHoverInspectDetails() &&
                    testHoverSubdivisionPreviewUsesInspectedTrackAndBeat() &&
                    testSeekScrubStatePropagatesToCanvasSnapshot() &&

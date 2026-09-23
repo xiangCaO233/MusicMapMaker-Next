@@ -647,7 +647,7 @@ float calculatePreviewRenderScaleY(const SessionContext&       ctx,
     float previewDrawH = previewCamera.viewportHeight -
                          (config.visual.previewConfig.margin.top +
                           config.visual.previewConfig.margin.bottom);
-    float areaRatio    = config.visual.previewConfig.areaRatio;
+    float areaRatio = config.visual.previewConfig.areaRatio;
 
     // 没有有效绘制面积时拒绝比例换算。
     // 返回零让上层跳过除法，不把退化视图放大到异常比例。
@@ -737,8 +737,8 @@ void syncPreviewDragHoverTime(SessionContext&             ctx,
     double currentAbsY = cache->getAbsY(ctx.animateTime);
     // 先把压缩后的屏幕距离还原成滚动距离，再逆映射到时间。
     // 不能直接将鼠标 Y 当作毫秒或线性时间差。
-    double deltaY        = (judgmentLineY - ctx.lastMousePos.y) /
-                           static_cast<double>(renderScaleY);
+    double deltaY = (judgmentLineY - ctx.lastMousePos.y) /
+                    static_cast<double>(renderScaleY);
     ctx.previewHoverTime = cache->getTime(currentAbsY + deltaY);
 }
 }  // namespace
@@ -1077,9 +1077,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             std::filesystem::path bgPath;
             // 协作项目优先使用其独立资源根。
             // 没有项目时才回退到谱面父目录，支持单文件载入。
-            auto* project = m_ctx->collaborationProject
-                                ? m_ctx->collaborationProject.get()
-                                : engine.getCurrentProject();
+            auto*                 project      = m_ctx->collaborationProject
+                                                     ? m_ctx->collaborationProject.get()
+                                                     : engine.getCurrentProject();
             std::filesystem::path resourcePath = metadata.main_cover_path;
             const auto resourceKey = Config::pathToUtf8(resourcePath);
             // 协作资源映射可能改变本地文件位置。
@@ -1345,7 +1345,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                        m_ctx->mouseCameraId == "Preview" ||
                                        m_ctx->dragCameraId == "AudioWaveform" ||
                                        m_ctx->dragCameraId == "AudioSpectrum");
-        snapshot->previewHoverTime  = m_ctx->previewHoverTime;
+        snapshot->previewHoverTime = m_ctx->previewHoverTime;
 
         // --- 注入框选状态 ---
         snapshot->isSelecting = m_ctx->isSelecting;
@@ -1828,10 +1828,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                             inspect.body = makeBeatPoint(note.m_timestamp,
                                                          note.m_trackIndex);
                         } else {
-                            inspect.kind  = HoverInspectKind::FlickHead;
-                            inspect.head  = makeBeatPoint(note.m_timestamp,
-                                                          note.m_trackIndex);
-                            inspect.track = note.m_trackIndex;
+                            inspect.kind      = HoverInspectKind::FlickHead;
+                            inspect.head      = makeBeatPoint(note.m_timestamp,
+                                                         note.m_trackIndex);
+                            inspect.track     = note.m_trackIndex;
                             inspect.showTrack = true;
                         }
                         inspect.showDtrack = true;
@@ -2104,8 +2104,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             snapshot->erasingObjectKind = m_ctx->eraserState.targetObjectKind;
             snapshot->erasingSubIndex   = -1;
 
-            // Shift 模式下保持 erasingSubIndex = -1，使整个 Polyline 标红
-            // 非 Shift 才允许缩小到合法折线子项。
+            // Shift 和首节点头部都用 -1 标记整条删除；首段身体保留索引 0。
+            // 预览必须和释放时按命中部位判断的删除范围一致。
             // 无效子索引继续保留整条高亮，不能访问越界子数组。
             if ( !m_ctx->eraserState.isShiftDown ) {
                 // 非 Shift：悬停在 Polyline 的任意子物件时，允许局部高亮红色
@@ -2121,7 +2121,13 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                         if ( m_ctx->hoveredSubIndex >= 0 &&
                              m_ctx->hoveredSubIndex <
                                  static_cast<int>(nc.m_subNotes.size()) ) {
-                            snapshot->erasingSubIndex = m_ctx->hoveredSubIndex;
+                            if ( m_ctx->hoveredSubIndex != 0 ||
+                                 m_ctx->hoveredPart !=
+                                     static_cast<int>(
+                                         HoverPart::PolylineNode) ) {
+                                snapshot->erasingSubIndex =
+                                    m_ctx->hoveredSubIndex;
+                            }
                         }
                     }
                 }
