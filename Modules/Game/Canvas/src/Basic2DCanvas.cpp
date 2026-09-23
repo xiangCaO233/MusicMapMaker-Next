@@ -576,6 +576,20 @@ Basic2DCanvas::~Basic2DCanvas() {}
 /// 纵向拖动形成的 Hold 或 Polyline 不能因鼠标回到目标框就被验收。
 /// 与其他练习共用独立起笔和取消命令，不续接、不合并已有音符。
 /// 折线编辑关闭时不偷偷修改配置；提示用户开启后才提供可执行路径。
+///
+/// @par 删除练习的身份约束
+/// 每个成功的创建步骤保存步骤标记，而不是用轨道和拍位猜测被删对象。
+/// 逻辑线程仅回传对应标记创建的实体及其存活状态。
+/// 本视图既不访问逻辑注册表，也不根据右键输入边沿推断删除成功。
+/// 用户右键其他物件、移动相机或临时隐藏 Note 均不能使目标消失。
+/// 删除步骤只在相同谱面实例中核对，切换标签不能误认相同数值的实体。
+/// 未到达快照的创建命令会保持等待，不把“尚未看见”当作已删除。
+/// Hold 必须优先清理；剩余物件按 Note、Flick 顺序逐个提示。
+/// 第二阶段仍检查所有有标记的练习物件，避免上一阶段跳过后漏清理。
+/// 已完成删除只影响引导进度，物件本身仍由普通编辑命令删除。
+/// 可见包围盒用于定位，真实完成条件是逻辑快照中的实体存活状态。
+/// 目标移出视口时只突出画布以提示导航，不会据此修改删除状态。
+/// 快照中固定三个槽位的核对成本与谱面 Note 总量无关。
 /// @warning UI 热路径：非目标步骤仅做状态判断；目标随机化只在进入步骤时执行。
 void Basic2DCanvas::updateComposeWalkthrough(
     UI::UIManager*                        sourceManager,
@@ -590,6 +604,81 @@ void Basic2DCanvas::updateComposeWalkthrough(
         spotlight.awaitingTarget("compose.canvas.place-note");
     const bool placingFlick =
         spotlight.awaitingTarget("compose.canvas.place-flick");
+    const bool deletingHold =
+        spotlight.awaitingTarget("compose.canvas.delete-hold");
+    const bool deletingRemaining =
+        spotlight.awaitingTarget("compose.canvas.delete-remaining");
+    if ( placingNote && m_walkthroughNoteStepToken != spotlight.stepToken() ) {
+        // 重练必须从空的身份集开始，不能把上次的删除状态当作本轮成果。
+        m_walkthroughNoteStepToken             = spotlight.stepToken();
+        m_walkthroughPracticeTokens            = {};
+        m_walkthroughPracticeBeatmapInstanceId = snapshot.beatmapInstanceId;
+    }
+    if ( deletingHold || deletingRemaining ) {
+        // 删除练习沿用绘制工具现有的右键擦除命令链；这里只观察结果，
+        // 不直接向谱面写入 Delete Action，也不吞掉普通鼠标事件。
+        const std::string_view deletionTarget =
+            deletingHold ? "compose.canvas.delete-hold"
+                         : "compose.canvas.delete-remaining";
+        // 固定次序先 Hold，再 Note 与 Flick；第二步也核对被跳过的 Hold，
+        // 不能因为点击过“知道了”就带着练习物件完成整条路线。
+        constexpr std::array<std::size_t, 3> deletionOrder{ 1U, 0U, 2U };
+        std::optional<entt::entity>          nextEntity;
+        bool                                 awaitingSnapshot = false;
+        if ( snapshot.beatmapInstanceId ==
+             m_walkthroughPracticeBeatmapInstanceId ) {
+            for ( const auto index : deletionOrder ) {
+                if ( deletingHold && index != 1U ) break;
+                const auto token = m_walkthroughPracticeTokens[index];
+                if ( token == 0 ) continue;
+                const auto& state = snapshot.walkthroughPracticeNotes[index];
+                if ( state.token != token ) {
+                    // 创建和快照跨线程；新步骤不能用尚未发布的旧状态判完成。
+                    awaitingSnapshot = true;
+                    continue;
+                }
+                if ( state.alive && !nextEntity ) nextEntity = state.entity;
+            }
+        }
+        if ( snapshot.hasBeatmap &&
+             snapshot.beatmapInstanceId ==
+                 m_walkthroughPracticeBeatmapInstanceId &&
+             !nextEntity && !awaitingSnapshot ) {
+            // 只有逻辑线程快照确认目标身份已消失，才允许推进；普通右键或
+            // 临时移出可见范围都不能代替实际删除。
+            if ( spotlight.reviewing() )
+                // 回看已删除步骤时停在原位供用户阅读，再明确确认继续。
+                spotlight.reportReviewedActionSatisfied();
+            else
+                spotlight.completeTarget(deletionTarget, true);
+        } else if ( nextEntity ) {
+            // 命中框来自实际渲染物件；不可见时保留整画布提示，允许用户滚动寻找。
+            // 一个 Hold 可以具有头部和身体多个命中框，同目标的报告由
+            // Spotlight 合并；删除仍交给真正的对象拾取逻辑。
+            bool reported = false;
+            for ( const auto& box : snapshot.hitboxes ) {
+                if ( box.entity != *nextEntity ||
+                     box.kind != Logic::ChartObjectKind::PlayerNote )
+                    continue;
+                const ImVec2 minimum{ canvasScreenPosition.x + box.x,
+                                      canvasScreenPosition.y + box.y };
+                const ImVec2 maximum{ minimum.x + box.w, minimum.y + box.h };
+                spotlight.reportTarget(deletionTarget,
+                                       minimum,
+                                       maximum,
+                                       ImGui::GetWindowViewport());
+                reported = true;
+            }
+            if ( !reported )
+                spotlight.reportTarget(
+                    deletionTarget,
+                    canvasScreenPosition,
+                    { canvasScreenPosition.x + canvasSize.x,
+                      canvasScreenPosition.y + canvasSize.y },
+                    ImGui::GetWindowViewport(),
+                    false);
+        }
+    }
     // 类型独立于是否按 Shift：Flick 与 Hold 修饰键相同，但不能共享旧路径。
     // 只在步骤转换时使目标失效，不随用户临时松开修饰键重新随机化。
     const bool requiresShift = placingHold || placingFlick;
@@ -1052,6 +1141,10 @@ void Basic2DCanvas::updateComposeWalkthrough(
                 m_walkthroughPlacedNote->destinationTrack =
                     snapshot.brush.track;
             }
+            m_walkthroughPracticeTokens[placingNote   ? 0U
+                                        : placingHold ? 1U
+                                                      : 2U] =
+                spotlight.stepToken();
             // 回调只保存命令值，不借用画布寿命；切换标签后仍路由到原画布。
             // 登记先于完成，保证下一帧衔接或立即返回都能找到这一笔的身份。
             spotlight.registerRollback(

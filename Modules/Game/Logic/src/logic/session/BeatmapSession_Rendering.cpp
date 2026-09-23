@@ -1231,6 +1231,26 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         // 实例标识只在本进程内区分谱面对象，不能作为保存或协作 ID。
         // UI 可用它区分内容更新与整个谱面替换。
         snapshot->beatmapInstanceId = snapshotBeatmapInstanceId;
+        // 只核对三个已知句柄；删除后即使物件离开视口，UI 也能准确推进教程。
+        // 实体句柄包含版本；旧教学实体被删除后不会误认后续复用的槽位。
+        // 快照按值传递，UI 不借用逻辑线程注册表及其组件生命周期。
+        for ( std::size_t index = 0;
+              index < m_ctx->walkthroughPracticeNotes.size();
+              ++index ) {
+            const auto& practice = m_ctx->walkthroughPracticeNotes[index];
+            // 句柄相同还不够：重放或其他动作可能主动占用旧槽位。
+            // 比对稳定 ID 后才上报存活，编辑同一音符的几何不会中断引导。
+            const auto* note = practice.token != 0 && m_ctx->noteRegistry.valid(
+                                                          practice.entity)
+                                   ? m_ctx->noteRegistry.try_get<NoteComponent>(
+                                         practice.entity)
+                                   : nullptr;
+            snapshot->walkthroughPracticeNotes[index] = {
+                practice.token,
+                practice.entity,
+                note && note->m_collaborationId == practice.collaborationId
+            };
+        }
         // 批注版本和批注可见项来自同一会话缓存。
         // 消费端可据版本判断提示数据是否已更新。
         snapshot->annotationRevision = m_ctx->annotationRenderCacheRevision;

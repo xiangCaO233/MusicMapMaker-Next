@@ -115,7 +115,8 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
                                               ? step.m_title.get(language)
                                               : configuredPrompt,
                                           hasPrevious,
-                                          reviewing);
+                                          reviewing,
+                                          step.m_guide->m_requiresAction);
     m_activeGuide = ActiveGuide{
         .topicId  = topic.m_id,
         .branchId = branch.m_id,
@@ -475,7 +476,10 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
                     ImGui::PushStyleColor(
                         ImGuiCol_Text,
                         ImGui::GetStyleColorVec4(ImGuiCol_CheckMark));
-                    ImGui::BeginDisabled(completed);
+                    // 必须执行的删除步骤只能由画布报告完成，页面按钮不可越过。
+                    ImGui::BeginDisabled(completed ||
+                                         step.m_guide &&
+                                             step.m_guide->m_requiresAction);
                     if ( FeedbackButton(acknowledge.c_str()) )
                         // 手动确认由服务更新依赖进度并立即持久化。
                         service.acknowledge(topic, step);

@@ -113,6 +113,7 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     // 两套 Registry 可包含相同的数值实体号，选择种类必须参与清理，
     // 不能把音符选择集合当作采样选择集合的替代品。
     ctx.noteRegistry.clear();
+    ctx.walkthroughPracticeNotes = {};
     ctx.sampleRegistry.clear();
     ctx.timelineRegistry.clear();
     // 撤销记录属于旧谱面，不能跨模型载入复用。

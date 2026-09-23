@@ -714,6 +714,21 @@ void NoteAction::execute(SessionContext& ctx)
         reg.emplace_or_replace<NoteComponent>(m_entity, *m_after);
         reg.emplace_or_replace<TransformComponent>(m_entity);
         reg.emplace_or_replace<InteractionComponent>(m_entity);
+        // 只跟踪三类教学创建动作；重做也会更新句柄，普通创建绝不占用练习槽。
+        // 类型到槽位映射固定，UI 可用步骤标记核对确切的本轮创建动作。
+        // 删除时保留记录，以便快照用无效句柄确认物件已真正消失。
+        // 稳定协作 ID 与句柄同时记录，阻止后来复用槽位的音符冒充练习成果。
+        // 任何其他 NoteAction 即使落在同一拍位，也不能覆盖本轮目标。
+        if ( m_walkthroughToken != 0 ) {
+            const auto index = m_after->m_type == ::MMM::NoteType::NOTE    ? 0U
+                               : m_after->m_type == ::MMM::NoteType::HOLD  ? 1U
+                               : m_after->m_type == ::MMM::NoteType::FLICK ? 2U
+                                                                           : 3U;
+            if ( index < ctx.walkthroughPracticeNotes.size() )
+                ctx.walkthroughPracticeNotes[index] = {
+                    m_walkthroughToken, m_entity, m_after->m_collaborationId
+                };
+        }
         // 创建使用新的辅助状态，不从动作快照恢复旧悬浮或拖动标记。
         cacheAfter = reg.get<NoteComponent>(m_entity);
         if ( !hadPendingNoteSync ) {

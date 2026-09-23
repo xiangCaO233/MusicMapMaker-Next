@@ -13,6 +13,7 @@
 #include "logic/session/AnnotationRenderData.h"
 #include "logic/session/ClipboardTypes.h"
 #include "logic/session/EditorAction.h"
+#include <array>
 #include <cstdint>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
@@ -58,11 +59,21 @@ struct DragRenderPinnedEntities {
     const std::vector<entt::entity>* entities{ nullptr };
 };
 
+/// @brief 一次绘制教学创建的物件身份；仅用于核对删除练习，不参与保存。
+struct WalkthroughPracticeNote {
+    std::uint64_t token{ 0 };            ///< 创建步骤的唯一标记。
+    entt::entity  entity{ entt::null };  ///< 创建动作实际写入的实体。
+    std::string   collaborationId;       ///< 防止实体槽位被其他物件复用。
+};
+
 /// @brief 共享的上下文状态，记录了当前会话的所有运行时数据，供各个 Controller
 /// 和 Tool 访问。
 struct SessionContext {
     // --- 核心状态 ---
-    entt::registry noteRegistry;      ///< 音符实体的 ECS 注册表
+    entt::registry noteRegistry;  ///< 音符实体的 ECS 注册表
+    /// @note 本索引不持有实体；装载新谱面时清零，删除只改变其存活查询结果。
+    /// @brief 按 Note、Hold、Flick 顺序记录本轮练习产物，避免扫描完整注册表。
+    std::array<WalkthroughPracticeNote, 3> walkthroughPracticeNotes{};
     entt::registry sampleRegistry;    ///< 自动采样实体的独立 ECS 注册表
     entt::registry timelineRegistry;  ///< 时间轴事件(BPM等)的 ECS 注册表
     /// @brief 玩家物件已选实体索引，避免框选热路径扫描完整 Registry。

@@ -649,8 +649,24 @@ bool testWalkthroughPlacementRollback()
                  notes.get<MMM::Logic::NoteComponent>(*notes.begin()).m_type !=
                      type )
                 return false;
+            // 教学删除不靠轨道与时间猜测，创建动作必须记录真实 ECS 句柄。
+            // 稳定逻辑 ID 还需匹配当前组件，不能仅以可重用句柄作为身份。
+            // 类型槽位的次序与跨线程快照一致，错误槽位会使删除步骤永久等待。
+            const auto practiceIndex = type == MMM::NoteType::NOTE   ? 0U
+                                       : type == MMM::NoteType::HOLD ? 1U
+                                                                     : 2U;
+            const auto practice =
+                context.walkthroughPracticeNotes[practiceIndex];
+            if ( practice.token != 11 || practice.entity != *notes.begin() ||
+                 practice.collaborationId !=
+                     notes.get<MMM::Logic::NoteComponent>(*notes.begin())
+                         .m_collaborationId )
+                return false;
             // 用户已自行撤销时返回必须无操作，不能接着撤销下一条普通历史。
             if ( alreadyUndone ) context.actionStack.undo(context);
+            // 删除及撤销只使句柄失效，不清除身份；快照据此报告已删除状态。
+            if ( alreadyUndone && context.noteRegistry.valid(practice.entity) )
+                return false;
             // 普通编辑刻意与教学起点重叠；按位置删除会把它一起误伤。
             // NoteAction 为每次创建建立独立逻辑身份，不能按轨道时间去重。
             MMM::Logic::NoteComponent original;

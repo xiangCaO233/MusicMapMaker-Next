@@ -114,6 +114,7 @@ bool containsPoint(const ImVec2& point, const ImVec2& minimum,
 /// @warning UI 热路径：每帧调用，只重置 optional 与布尔值。
 void Spotlight::beginFrame()
 {
+    m_reviewedActionSatisfied = false;
     // ImGui 控件坐标只能在提交它的当前帧使用，绝不能沿用旧布局矩形。
     m_anchor.reset();
     m_acknowledgeButtonCenter.reset();
@@ -129,9 +130,10 @@ void Spotlight::beginFrame()
 /// @param prompt 纯文字步骤的操作提示或目标高亮时的气泡说明。
 /// @param previousStepAvailable 路线中是否存在可回看的前一步。
 /// @param reviewing 回看时只允许显式确认，防止已有状态立即跳过。
+/// @param requiresAction 是否禁止手动确认跳过。
 void Spotlight::start(const std::vector<std::string>& targets,
                       std::string prompt, bool previousStepAvailable,
-                      bool reviewing)
+                      bool reviewing, bool requiresAction)
 {
     // 新路线不继承旧练习；正常前进保留产物，回到旧目标才消费补偿。
     if ( !previousStepAvailable && !reviewing ) m_rollbacks.clear();
@@ -142,10 +144,12 @@ void Spotlight::start(const std::vector<std::string>& targets,
     }
     ++m_stepToken;
     // 复制只发生在用户点击“进入引导”或步骤自动衔接时，不进入常规帧路径。
-    m_targets               = targets;
-    m_previousStepAvailable = previousStepAvailable;
-    m_previousStepRequested = false;
-    m_reviewing             = reviewing;
+    m_targets                 = targets;
+    m_previousStepAvailable   = previousStepAvailable;
+    m_previousStepRequested   = false;
+    m_reviewing               = reviewing;
+    m_requiresAction          = requiresAction;
+    m_reviewedActionSatisfied = false;
     m_previousPressed = m_previousMouseWasDown = false;
     m_previousButtonCenter.reset();
     m_prompt = std::move(prompt);
@@ -165,6 +169,8 @@ void Spotlight::stop()
     m_rollbacks.clear();
     // 跨路线请求不能泄漏到下次进入，引导退出不保留返回手势。
     m_previousStepAvailable = m_previousStepRequested = m_reviewing = false;
+    m_requiresAction                                                = false;
+    m_reviewedActionSatisfied                                       = false;
     m_previousPressed = m_previousMouseWasDown = false;
     m_previousButtonCenter.reset();
     m_state                   = State::Inactive;
@@ -272,6 +278,8 @@ void Spotlight::keepAlive()
 /// @brief 跳过当前已经定位到的目标阶段。
 void Spotlight::acknowledgeCurrentStage()
 {
+    // 业务强制步骤没有手动跳过入口，即使外部直接调用确认也不能越权。
+    if ( m_requiresAction && !m_reviewedActionSatisfied ) return;
     if ( m_previousStepRequested ) return;
     // 返回与确认具有互斥语义，待路线切换期间不能误确认被离开的步骤。
     if ( m_targets.empty() && m_state == State::Waiting ) {
@@ -287,6 +295,14 @@ void Spotlight::acknowledgeCurrentStage()
     }
     if ( m_state != State::Highlighting || !m_anchor ) return;
     completeStage(m_anchor->priority);
+}
+
+/// @brief 回看已完成的强制步骤时保留停留机会，不能因旧成果立即前进。
+void Spotlight::reportReviewedActionSatisfied()
+{
+    // 本方法不改变阶段水位；用户仍有机会停留或返回前一步。
+    // 条件由业务帧重新上报，不能从已完成学习进度中推测物件状态。
+    if ( m_requiresAction && m_reviewing ) m_reviewedActionSatisfied = true;
 }
 
 /// @brief 通知状态机某个语义目标已经由业务逻辑正确完成。
@@ -424,9 +440,11 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel,
         hintAnchor = ImVec2{ (holeMin->x + holeMax->x) * 0.5f, holeMax->y };
     }
 
-    const bool hasPrevious    = previousLabel && previousLabel[0] != '\0';
-    const bool hasAcknowledge = (m_anchor || promptOnly || m_reviewing) &&
-                                acknowledgeLabel && acknowledgeLabel[0] != '\0';
+    const bool hasPrevious = previousLabel && previousLabel[0] != '\0';
+    const bool hasAcknowledge =
+        (!m_requiresAction || m_reviewedActionSatisfied) &&
+        (m_anchor || promptOnly || m_reviewing) && acknowledgeLabel &&
+        acknowledgeLabel[0] != '\0';
     if ( m_prompt.empty() && !hasAcknowledge && !hasPrevious ) return;
     // 目标步骤与纯文字步骤都提供确认入口，确保路线会话可以显式继续。
     const float  margin = 12.0f * dpiScale;

@@ -136,6 +136,35 @@ bool testDrawingRollback()
     return notes == 1;
 }
 
+/// @brief 删除练习不能通过确认跳过，必须等待业务身份核对后显式完成。
+/// @details 此处模拟已经有可见高亮框的状态，而非缺失目标等待态。
+/// 如确认按钮在普通步骤可用、强制步骤仍可跳过，测试必须能区分。
+/// 完成后的业务回调沿用原有 completeTarget 状态转换，不引入第二终态。
+/// 此测试只验证高亮层权限，具体物件存活由逻辑快照负责判断。
+/// 返回后必须显式确认，不能根据历史步骤完成度自动前进。
+/// 高亮框传入主视口，测试在非窗口提交阶段也不会借用当前窗口。
+bool testRequiresAction()
+{
+    MMM::UI::Walkthrough::Spotlight spotlight;
+    spotlight.start(
+        { "practice.delete-hold" }, "Right-click Hold", true, false, true);
+    spotlight.reportTarget("practice.delete-hold",
+                           { 10.0F, 10.0F },
+                           { 30.0F, 30.0F },
+                           ImGui::GetMainViewport());
+    spotlight.acknowledgeCurrentStage();
+    // 突出区域存在也不代表业务成功，用户确认不能清掉实际物件。
+    if ( spotlight.completed() ) return false;
+    spotlight.completeTarget("practice.delete-hold", true);
+    if ( !spotlight.completed() ) return false;
+    spotlight.start({ "practice.delete-hold" }, "Review", true, true, true);
+    // 返回已删过的步骤不能自动跳走，但重新核实后可由用户明确继续。
+    spotlight.reportReviewedActionSatisfied();
+    if ( spotlight.completed() ) return false;
+    spotlight.acknowledgeCurrentStage();
+    return spotlight.completed();
+}
+
 /// @brief 在测试宿主内提交保持打开的模态窗口及其引导目标。
 /// @param spotlight 接收目标矩形的突出引导实例。
 /// @param requestOpen 本帧是否请求首次打开弹窗。
@@ -668,8 +697,8 @@ int main()
     spotlight.render(1.0f, "Got it");
     const bool hiddenValid = foreground->VtxBuffer.Size == hiddenVerticesBefore;
     ImGui::Render();
-    const bool previousValid =
-        testPreviousNavigation() && testDrawingRollback();
+    const bool previousValid = testPreviousNavigation() &&
+                               testDrawingRollback() && testRequiresAction();
     ImGui::DestroyContext();
     return !hiddenValid ? 9 : previousValid ? 0 : 63;
 }

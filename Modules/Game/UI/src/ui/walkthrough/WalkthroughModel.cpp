@@ -258,6 +258,14 @@ std::expected<Topic, std::string> parseTopic(std::string_view input)
                     return std::unexpected("步骤引导必须为对象");
                 Guide parsedGuide;
                 parsedGuide.m_prompt = text(*guide, "prompt");
+                if ( const auto required = guide->find("requires_action");
+                     required != guide->end() ) {
+                    // 删除练习不得通过确认按钮跳过，但普通说明步骤保留默认行为。
+                    // 拒绝非布尔配置，避免字符串 "false" 被错误解释为 true。
+                    if ( !required->is_boolean() )
+                        return std::unexpected("引导操作限制必须为布尔值");
+                    parsedGuide.m_requiresAction = required->get<bool>();
+                }
                 if ( !strings(*guide, "targets", parsedGuide.m_targets) )
                     return std::unexpected("步骤引导目标列表错误");
                 // 纯键盘步骤允许没有目标，但必须提供可见提示说明下一动作。

@@ -10,6 +10,7 @@
 #include "ui/ICanvasView.h"
 #include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
+#include <array>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
@@ -357,6 +358,12 @@ private:
     std::optional<WalkthroughNoteDragTarget> m_walkthroughNoteDragTarget;
     /// @brief 单键成功落点，跨滑键步骤保留以约束后续长条必须邻近且异轨。
     std::optional<WalkthroughNoteDragTarget> m_walkthroughPlacedNote;
+    /// @brief 本轮创建的 Note、Hold、Flick 步骤标记，只核对当前谱面快照。
+    std::array<std::uint64_t, 3> m_walkthroughPracticeTokens{};
+    /// @brief 上述标记所属的谱面实例，防止跨标签误认相同实体号。
+    std::uint64_t m_walkthroughPracticeBeatmapInstanceId{ 0 };
+    /// @brief 新的单键步骤标记，用来在重新演练时废弃上一轮身份。
+    std::uint64_t m_walkthroughNoteStepToken{ 0 };
     /// @brief 本次左键尝试是否从画布内开始。
     bool m_walkthroughNoteAttemptActive{ false };
     /// @brief 本次尝试是否从指定起点框按下。

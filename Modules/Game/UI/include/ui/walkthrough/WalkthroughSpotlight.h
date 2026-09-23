@@ -34,10 +34,12 @@ public:
     /// @param targets 按流程先后排列的语义目标 ID，后出现的可见目标优先。
     /// @param prompt 纯文字步骤的操作提示或目标旁的说明气泡。
     /// @param previousStepAvailable 所属路线是否还有前一个可引导步骤。
-    /// @param reviewing 是否由返回操作进入；回看只由用户显式确认推进。
+    /// @param reviewing 是否由返回操作进入；回看不继承旧业务完成状态。
+    /// @param requiresAction 是否禁止“知道了”跳过当前目标。
     /// @warning 用户显式进入引导时调用；允许复制字符串，不得每帧重复启动。
     void start(const std::vector<std::string>& targets, std::string prompt,
-               bool previousStepAvailable = false, bool reviewing = false);
+               bool previousStepAvailable = false, bool reviewing = false,
+               bool requiresAction = false);
 
     /// @brief 当前目标或所属路线存在前序步骤时允许返回。
     bool canGoBack() const;
@@ -77,6 +79,10 @@ public:
     /// @brief 确认当前可见阶段，隐藏其遮罩并等待后续目标出现。
     /// 最后一个目标被确认时结束本次引导；没有可见目标时不改变流程。
     void acknowledgeCurrentStage();
+
+    /// @brief 回看强制操作步骤且目标已满足时，允许显式确认继续。
+    /// @warning UI 热路径：业务目标须每帧重新报告，不能沿用旧快照判断。
+    void reportReviewedActionSatisfied();
 
     /// @brief 通知突出层某个语义目标已经由业务逻辑正确完成。
     /// @param targetId 与演练配置中的 targets 项一致。
@@ -182,6 +188,10 @@ private:
     bool m_acknowledgeMouseWasDown{ false };
     /// @brief 左键是否从确认按钮内按下且尚未拖出按钮矩形。
     bool m_acknowledgePressed{ false };
+    /// @brief 当前步骤只能由业务调用 completeTarget 完成。
+    bool m_requiresAction{ false };
+    /// @brief 回看时本帧已核实删除目标完成，不自动跳过当前步骤。
+    bool m_reviewedActionSatisfied{ false };
     /// @brief 本帧实际提交的确认按钮中心，下一帧开始时失效。
     std::optional<ImVec2> m_acknowledgeButtonCenter;
     /// @brief 返回按钮的模态补充点击状态，与确认按钮相互独立。

@@ -25,6 +25,8 @@ struct Guide {
     Text m_prompt;
     /// @brief 与具体控件注册点约定的稳定语义目标 ID。
     std::vector<std::string> m_targets;
+    /// @brief 必须由业务动作完成，不能用“知道了”跳过。
+    bool m_requiresAction{ false };
 };
 /// @brief 一个可单独确认了解的演练步骤。
 /// 步骤 ID 在整个主题内唯一，跨分支前置引用也使用该 ID。

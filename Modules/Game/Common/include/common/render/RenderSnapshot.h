@@ -391,6 +391,15 @@ struct RenderSnapshot {
     std::vector<Common::Render::CanvasDrawCmd> overlayCmds;
     /// @brief 与本帧可见物件对应的拾取包围盒。
     std::vector<Hitbox> hitboxes;
+    /// @brief 按 Note、Hold、Flick
+    /// 顺序传递练习物件状态，实体句柄仅在本会话有效。
+    struct WalkthroughPracticeNoteState {
+        std::uint64_t token{ 0 };            ///< 对应创建步骤的标记。
+        entt::entity  entity{ entt::null };  ///< 创建动作的实体。
+        bool          alive{ false };        ///< 同一实体仍然存在。
+    };
+    /// @brief 固定三个物件的删除状态，不依赖其是否处于可见时间范围。
+    std::array<WalkthroughPracticeNoteState, 3> walkthroughPracticeNotes{};
     /// @brief 普通悬浮拾取与调试显示使用的横向包围盒缩放。
     float interactionHitboxScaleX{ 1.0F };
     /// @brief 普通悬浮拾取与调试显示使用的纵向包围盒缩放。
@@ -756,8 +765,9 @@ struct RenderSnapshot {
         glowCmds.clear();
         overlayCmds.clear();
         hitboxes.clear();
-        interactionHitboxScaleX = 1.0F;
-        interactionHitboxScaleY = 1.0F;
+        walkthroughPracticeNotes = {};
+        interactionHitboxScaleX  = 1.0F;
+        interactionHitboxScaleY  = 1.0F;
         overlapMasks.clear();
         annotationMarkers.clear();
         annotationRevision = 0;
