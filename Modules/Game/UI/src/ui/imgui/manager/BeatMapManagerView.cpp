@@ -1058,10 +1058,11 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                 rebuildSortCache();
             }
 
-            // Clipper 只遍历当前滚动窗口内的固定高度行。
+            // 由首行实际占用高度推算列表总高度；表格 CellPadding 和
+            // Selectable 会使最终行高大于 TableNextRow 的最小高度。
+            // 若只传入 rowHeight，长列表可能被低估到不足以显示滚动条。
             ImGuiListClipper clipper;
-            clipper.Begin(static_cast<int>(m_sortedBeatmapIndices.size()),
-                          rowHeight);
+            clipper.Begin(static_cast<int>(m_sortedBeatmapIndices.size()));
             while ( clipper.Step() ) {
                 for ( int row = clipper.DisplayStart; row < clipper.DisplayEnd;
                       ++row ) {
