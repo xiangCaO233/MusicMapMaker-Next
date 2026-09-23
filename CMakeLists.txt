@@ -107,6 +107,10 @@ include("project-configure")
 # 测试开关必须在添加业务模块前确定。 项目测试默认不参与常规构建，避免大量测试可执行文件显著增加链接时间；需要测试时显式开启。
 option(BUILD_TESTING "Build and register MusicMapMaker tests." OFF)
 
+# Vulkan 验证层由构建选项独立控制，默认不要求运行环境安装验证层。
+option(MMM_ENABLE_VULKAN_VALIDATION_LAYERS
+       "Enable Vulkan validation layers and debug messenger." OFF)
+
 # 本机开发构建默认把仓库翻译和内置皮肤同步到应用配置目录；CI 与打包脚本必须显式关闭。
 option(MMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN
        "Sync translations and built-in skins into the local user config." ON)

@@ -4,6 +4,16 @@
 # PGO 插桩在 clang64 构建启用，用于产出可分发的采样版本。
 set -euo pipefail
 
+# CI 默认不启用验证层，显式参数用于诊断构建。
+vulkanValidationLayers="OFF"
+# 仅接受显式诊断开关，拼错参数时在下载依赖前报错。
+for option in "$@"; do
+    case "${option}" in
+        --vulkan-validation-layers) vulkanValidationLayers="ON" ;;
+        *) printf "error: unknown option: %s\n" "${option}" >&2; exit 1 ;;
+    esac
+done
+
 # 计算 CI 构建并发度，保留约四分之一核心供 Runner 服务和链接峰值。
 detectCiBuildJobs() {
     # 无法探测时使用单线程安全默认值。
@@ -56,10 +66,12 @@ rm -rf build_clang
 # 配置使用 RelWithDebInfo，并与拉取的预编译二进制目录一致。
 # 源码根和构建根显式给出，避免依赖调用者目录推断。
 # CI 构建不得写入 Runner 的用户配置目录。
+# 即使复用 CI 构建目录，也让本次参数决定缓存值。
 cmake -G Ninja \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DSOURCES_BUILD=OFF \
     -DBUILD_TESTING=ON \
+    -DMMM_ENABLE_VULKAN_VALIDATION_LAYERS="${vulkanValidationLayers}" \
     -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF \
     -DMMM_PGO_INSTRUMENT=ON \
     -DMMM_PGO_USE=OFF \

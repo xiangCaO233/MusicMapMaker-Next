@@ -25,6 +25,7 @@ Options:
   --sysroot <path>        MinGW sysroot. Default: ${WINDOWS_CROSS_ROOT}/msys64/clang64
   --toolchain <path>      CMake toolchain file. Default: cmake/toolchain/cross-mingw-clang.cmake
   --sources-build         Configure with SOURCES_BUILD=ON.
+  --vulkan-validation-layers Enable Vulkan validation layers. Default: disabled.
   --prebuilt-targets      Build only third-party targets used for staging.
   --configure-only        Configure and generate, then stop
   --fresh                 Remove the build directory before configuring
@@ -296,6 +297,8 @@ mingwSysroot=""
 # CMake toolchain 负责把探测结果映射为编译链接参数。
 toolchainFile="cmake/toolchain/cross-mingw-clang.cmake"
 sourcesBuild="OFF"
+# 每次配置都写入验证层状态，避免旧 CMake 缓存残留。
+vulkanValidationLayers="OFF"
 # 流程开关分别控制目标集合、停止点和构建树生命周期。
 prebuiltTargets=0
 configureOnly=0
@@ -388,6 +391,11 @@ while (( $# > 0 )); do
         --sources-build)
             # 源码模式构建 staging 需要的第三方依赖。
             sourcesBuild="ON"
+            shift
+            ;;
+        --vulkan-validation-layers)
+            # 显式启用目标程序的 Vulkan 验证层。
+            vulkanValidationLayers="ON"
             shift
             ;;
         --prebuilt-targets)
@@ -527,9 +535,11 @@ fi
 
 # 交叉编译不得写入宿主机的用户配置目录。
 # CMake 参数明确传递目标工具链、依赖来源和两级 ABI 标签。
+# 每次配置明确覆盖旧缓存，避免上次诊断构建影响默认产物。
 cmake -G "${CMAKE_GENERATOR:-Ninja}" \
     -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF \
     -DCMAKE_BUILD_TYPE="${buildType}" \
+    -DMMM_ENABLE_VULKAN_VALIDATION_LAYERS="${vulkanValidationLayers}" \
     -DCMAKE_TOOLCHAIN_FILE="${toolchainFile}" \
     -DLLVM_MINGW_ROOT="${LLVM_MINGW_ROOT:-}" \
     -DMINGW_SYSROOT="${MINGW_SYSROOT}" \

@@ -403,8 +403,8 @@ void VKContext::collectVulkanInstanceCreateDiagnostics()
                                          extension ? extension : "<null>"));
     }
 
-    // Release 不请求 validation layer，因此不制造“未记录 layer”的歧义。
-    if ( is_debug() ) {
+    // 只记录当前构建确实请求的验证层，与 instance 创建参数保持一致。
+    if ( validationLayersEnabled() ) {
         for ( const char* layer : m_vkValidationLayers ) {
             addStartupDiagnostic(
                 fmt::format("Requested validation layer: {}", layer));

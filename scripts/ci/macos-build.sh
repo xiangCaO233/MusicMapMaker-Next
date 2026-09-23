@@ -26,6 +26,7 @@ Options:
   --compiler-tag <tag>       Prebuilt compiler tag. Default: detected clang major
   --jobs <count>             Parallel build jobs. Default: 75% of CPU threads
   --linkage <mode>           PROJECT_LINKAGE value: static or shared. Default: static
+  --vulkan-validation-layers Enable Vulkan validation layers. Default: disabled.
   --sources-build            Configure with SOURCES_BUILD=ON.
   --prebuilt-targets         Build only third-party targets used for staging.
   --configure-only           Configure and generate, then stop.
@@ -160,6 +161,8 @@ prebuiltToolchain="${MACOS_PREBUILT_TOOLCHAIN:-clang}"
 compilerTag="${MACOS_PREBUILT_COMPILER_TAG:-}"
 projectLinkage="static"
 sourcesBuild="OFF"
+# 显式关闭默认值，避免复用构建目录时沿用旧缓存。
+vulkanValidationLayers="OFF"
 # 三个流程开关分别控制目标集合、停止点和目录生命周期。
 prebuiltTargets=0
 configureOnly=0
@@ -270,6 +273,11 @@ while (( $# > 0 )); do
         --sources-build)
             # 源码模式不从预编译目录消费依赖。
             sourcesBuild="ON"
+            shift
+            ;;
+        --vulkan-validation-layers)
+            # 验证层选项与依赖来源和构建类型互不绑定。
+            vulkanValidationLayers="ON"
             shift
             ;;
         --prebuilt-targets)
@@ -413,6 +421,8 @@ cmakeArgs=(
     -G "${CMAKE_GENERATOR:-Ninja}"
     -DCMAKE_BUILD_TYPE="${buildType}"
     -DBUILD_TESTING=ON
+    # 配置数组保留完整参数边界，验证层状态每次都显式写入缓存。
+    -DMMM_ENABLE_VULKAN_VALIDATION_LAYERS="${vulkanValidationLayers}"
     # CI 与打包构建不得写入 Runner 的用户配置目录。
     -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF
     -DCMAKE_OSX_ARCHITECTURES="${targetArch}"

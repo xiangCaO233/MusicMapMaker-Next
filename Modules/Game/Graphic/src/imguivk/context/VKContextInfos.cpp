@@ -19,7 +19,7 @@ void VKContext::initVkAppInfo()
 /// @brief 汇总应用信息、平台扩展与可选验证层，生成 instance 创建参数。
 ///
 /// m_vkInstanceCreateInfo 只引用上下文成员保存的数据，调用方必须先完成 GLFW
-/// 扩展注册以及 Debug 配置，并在这些容器保持不变期间创建 Vulkan instance。
+/// 扩展注册以及可选验证层配置，并在这些容器保持不变期间创建 Vulkan instance。
 void VKContext::initVkInstanceCreateInfo()
 {
     // 基础路径只启用窗口系统要求的扩展；macOS 的标志与 portability 扩展必须
@@ -33,7 +33,7 @@ void VKContext::initVkInstanceCreateInfo()
 #endif  //__APPLE__
         ;
 
-    if ( is_debug() ) {
+    if ( validationLayersEnabled() ) {
         // Debug messenger 创建信息通过 pNext 同时覆盖 instance 创建期间产生的
         // 验证消息；正式 messenger 会在 instance 创建成功后单独建立。
         m_vkInstanceCreateInfo.setPEnabledLayerNames(m_vkValidationLayers);

@@ -4,6 +4,16 @@
 # 独立 build_gcc 防止与 clang64 的 libc++ 产物或缓存混用。
 set -euo pipefail
 
+# CI 默认不启用验证层，显式参数用于诊断构建。
+vulkanValidationLayers="OFF"
+# 仅接受显式诊断开关，拼错参数时在下载依赖前报错。
+for option in "$@"; do
+    case "${option}" in
+        --vulkan-validation-layers) vulkanValidationLayers="ON" ;;
+        *) printf "error: unknown option: %s\n" "${option}" >&2; exit 1 ;;
+    esac
+done
+
 # 取主机核心数的四分之三，降低链接峰值对 Runner 保活的影响。
 detectCiBuildJobs() {
     # 探测失败时仍允许串行构建。
@@ -55,10 +65,12 @@ rm -rf build_gcc
 # 配置使用 RelWithDebInfo，并与拉取的预编译二进制目录一致。
 # 源码与构建目录显式固定，避免调用位置影响生成路径。
 # CI 构建不得写入 Runner 的用户配置目录。
+# 即使复用 CI 构建目录，也让本次参数决定缓存值。
 cmake -G Ninja \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DSOURCES_BUILD=OFF \
     -DBUILD_TESTING=ON \
+    -DMMM_ENABLE_VULKAN_VALIDATION_LAYERS="${vulkanValidationLayers}" \
     -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF \
     -DMMM_PGO_INSTRUMENT=OFF \
     -DMMM_PGO_USE=OFF \

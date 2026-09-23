@@ -23,6 +23,7 @@ Options:
   --compiler-tag <tag>        Prebuilt compiler tag. Default: preset value
   --jobs <count>              Parallel build jobs. Default: 75% of CPU threads
   --linkage <mode>            PROJECT_LINKAGE value: static or shared. Default: static
+  --vulkan-validation-layers  Enable Vulkan validation layers. Default: disabled.
   --pgo-instrument            Force MMM_PGO_INSTRUMENT=ON.
   --no-pgo-instrument         Force MMM_PGO_INSTRUMENT=OFF.
   --sources-build             Configure with SOURCES_BUILD=ON.
@@ -162,6 +163,8 @@ prebuiltToolchain="${LINUX_PREBUILT_TOOLCHAIN:-}"
 compilerTag="${LINUX_PREBUILT_COMPILER_TAG:-}"
 projectLinkage="static"
 sourcesBuild="OFF"
+# 显式传递关闭状态，复用构建目录时不会保留上次的验证层设置。
+vulkanValidationLayers="OFF"
 # 三个流程开关分别控制目标集合、停止点和构建树生命周期。
 prebuiltTargets=0
 configureOnly=0
@@ -265,6 +268,11 @@ while (( $# > 0 )); do
         --sources-build)
             # 源码模式不消费预编译 LFS 二进制。
             sourcesBuild="ON"
+            shift
+            ;;
+        --vulkan-validation-layers)
+            # 验证层可独立于 CMake 构建类型启用。
+            vulkanValidationLayers="ON"
             shift
             ;;
         --prebuilt-targets)
@@ -387,10 +395,12 @@ unset VULKAN_SDK VK_SDK_PATH
 
 # CI 与预编译构建不得写入 Runner 的用户配置目录。
 # 清除旧 Vulkan cache 项，避免构建目录复用遗留 Windows SDK 路径。
+# 每次配置都覆盖缓存中的验证层状态，确保诊断开关按本次参数生效。
 cmake -U "Vulkan_*" \
     -G "${CMAKE_GENERATOR:-Ninja}" \
     -DCMAKE_BUILD_TYPE="${buildType}" \
     -DBUILD_TESTING=ON \
+    -DMMM_ENABLE_VULKAN_VALIDATION_LAYERS="${vulkanValidationLayers}" \
     -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF \
     -DSOURCES_BUILD="${sourcesBuild}" \
     -DPROJECT_LINKAGE="${projectLinkage}" \

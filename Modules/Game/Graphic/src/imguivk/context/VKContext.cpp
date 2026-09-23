@@ -104,6 +104,17 @@ void VKContext::failInitialization(std::string message)
     }
 }
 
+/// @brief 返回当前构建是否请求 Vulkan 验证层。
+/// @return 启用验证层及 Debug Utils 时为 true，否则为 false。
+bool VKContext::validationLayersEnabled()
+{
+#ifdef MMM_ENABLE_VULKAN_VALIDATION_LAYERS
+    return true;
+#else
+    return false;
+#endif
+}
+
 /// @brief 初始化不依赖具体窗口尺寸的 GLFW 与 Vulkan instance 资源。
 ///
 /// 构造按依赖顺序完成 GLFW、instance 扩展、Debug layer、instance 和动态扩展
@@ -125,9 +136,9 @@ VKContext::VKContext() : m_themeRegistry(std::make_unique<ImGuiThemeRegistry>())
     registerGLFWExtensions();
     if ( hasInitializationError() ) return;
 
-    // Debug 构建把 debug utils 和 validation layer 作为必需启动能力；Release
-    // 不请求这些开发环境依赖。
-    if ( is_debug() ) {
+    // 仅在构建选项开启时请求 Debug Utils 与验证层，避免默认构建依赖 SDK
+    // 验证层。
+    if ( validationLayersEnabled() ) {
         enableVKDebugExt();
         enableVKValidateLayer();
         if ( hasInitializationError() ) return;
@@ -156,12 +167,12 @@ VKContext::VKContext() : m_themeRegistry(std::make_unique<ImGuiThemeRegistry>())
     collectPhysicalDeviceDiagnostics(false);
 
     // Debug Utils 属于 instance 扩展，动态分派器只能在 instance
-    // 创建后解析入口； 即使 Release 不建立
+    // 创建后解析入口；即使未启用验证层、不建立
     // messenger，其余扩展调用也共享这份分派状态。
     m_vkDldy.init(m_vkInstance, vkGetInstanceProcAddr);
     XDEBUG("VK dldy initialized.");
 
-    if ( is_debug() ) {
+    if ( validationLayersEnabled() ) {
         // 创建参数已通过 instance pNext 捕获创建阶段消息；正式 messenger 接管
         // instance 生命周期剩余阶段。显式传入动态分派器以调用扩展入口。
         auto debugMessengerResult = m_vkInstance.createDebugUtilsMessengerEXT(
@@ -370,7 +381,7 @@ void VKContext::release()
     }
 
     // messenger 使用 instance 扩展入口销毁，必须早于其所属 instance。
-    if ( is_debug() && m_vkDebugMessenger ) {
+    if ( validationLayersEnabled() && m_vkDebugMessenger ) {
         m_vkInstance.destroyDebugUtilsMessengerEXT(
             m_vkDebugMessenger, nullptr, m_vkDldy);
         m_vkDebugMessenger = nullptr;

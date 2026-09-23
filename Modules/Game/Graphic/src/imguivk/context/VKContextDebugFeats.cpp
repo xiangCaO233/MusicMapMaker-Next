@@ -35,10 +35,10 @@ void VKContext::enableVKDebugExt()
             &VKContext::vkDebug_callback));
 }
 
-/// @brief 检查 Debug 构建要求的全部 Vulkan Validation Layer 是否可用。
+/// @brief 检查构建选项要求的全部 Vulkan Validation Layer 是否可用。
 ///
 /// 任一 layer 缺失都会终止初始化，因为后续 instance 创建参数仍会请求完整列表；
-/// 与其依赖 loader 返回不透明错误，这里先给出缺失名称与安装 Vulkan SDK 的提示。
+/// 与其依赖 loader 返回不透明错误，这里先给出缺失名称与目标系统安装提示。
 void VKContext::enableVKValidateLayer()
 {
     // Vulkan 的两阶段枚举先取得数量，再由调用方分配连续存储并读取属性。
@@ -75,11 +75,12 @@ void VKContext::enableVKValidateLayer()
         logStartupDiagnostics("Requested Vulkan validation layer is missing.");
         std::string msg =
             "Vulkan validation layers are missing.\n"
-            "Since you are running a Debug build, these layers are required.\n"
-            "Please download and install the Vulkan SDK to enable debugging "
-            "features.";
+            "This build enables Vulkan validation layers, so they are "
+            "required.\n"
+            "Install VK_LAYER_KHRONOS_validation on the target system.";
         XERROR("Fatal: {}", msg);
-        UI::showFatalError("MusicMapMaker - Vulkan SDK Missing", msg);
+        UI::showFatalError("MusicMapMaker - Vulkan Validation Layer Missing",
+                           msg);
 
         releaseGLFW();
         failInitialization(

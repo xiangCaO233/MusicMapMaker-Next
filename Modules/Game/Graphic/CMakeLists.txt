@@ -49,6 +49,13 @@ add_library(
   src/system/SystemTheme.cpp
   src/CursorManager.cpp)
 
+# 验证层只影响图形模块的 instance 初始化，不传播为上层模块的编译接口。 关闭时不定义宏，使默认构建跳过 layer 查询与 Debug Utils
+# messenger。
+if(MMM_ENABLE_VULKAN_VALIDATION_LAYERS)
+  target_compile_definitions(Graphic
+                             PRIVATE MMM_ENABLE_VULKAN_VALIDATION_LAYERS)
+endif()
+
 # include/ 构成模块公共 API；使用 Graphic 的目标需要继承该搜索路径。
 target_include_directories(Graphic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 

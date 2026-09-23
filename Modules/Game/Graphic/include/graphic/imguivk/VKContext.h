@@ -41,20 +41,6 @@ enum class VKWindowResourceMode : std::uint8_t {
     Application  ///< 资源就绪后加载完整皮肤字体、主题和软件光标。
 };
 
-/**
- * @brief 检查当前是否为 Debug 模式
- * @return true 如果是 Debug 模式
- * @return false 如果是 Release 模式
- */
-static constexpr bool is_debug()
-{
-#ifdef BUILD_TYPE_DEBUG
-    return BUILD_TYPE_DEBUG;
-#else
-    return false;
-#endif
-}
-
 class VKContext final
 {
 public:
@@ -391,6 +377,10 @@ private:
      * @brief 启用 Vulkan Debug 扩展
      */
     void enableVKDebugExt();
+
+    /// @brief 返回构建时是否启用了 Vulkan 验证层及对应调试消息机制。
+    /// @return 启用验证层时为 true，否则为 false。
+    static bool validationLayersEnabled();
 
     /// @brief Vulkan Debug Utils 创建信息
     vk::DebugUtilsMessengerCreateInfoEXT m_vkDebugUtilCreateInfo{};

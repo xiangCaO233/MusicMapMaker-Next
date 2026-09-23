@@ -27,6 +27,7 @@ Options:
   --linkage <static>           PROJECT_LINKAGE/ICE_LINKAGE value. Default: static.
                                Shared staging is not implemented in this script yet.
   --llvm-mingw-root <path>     Complete llvm-mingw UCRT toolchain root for clang64.
+  --vulkan-validation-layers  Enable Vulkan validation layers in child builds.
   --configure-only             Run only the configure-only phase.
   --reuse-build-dirs           Do not remove build directories during the configure-only phase.
   --skip-windows               Skip all Windows cross prebuilt libraries.
@@ -178,6 +179,9 @@ runMsvcConfigure() {
         command+=(--fresh)
     fi
 
+    # 矩阵参数也进入首次配置，保证生成的缓存与后续构建一致。
+    command+=("${vulkanValidationArgs[@]}")
+
     runCommand "configure windows msvc/2026 ${config}" "${command[@]}"
 }
 
@@ -188,6 +192,7 @@ runMsvcBuild() {
     buildDir="$(msvcBuildDir "${config}")"
 
     # 构建阶段复用前一阶段生成的同一绝对目录。
+    # 后续重新配置必须保留与首次配置相同的验证层选择。
     runCommand "build windows msvc/2026 ${config}" \
         bash \
         "${crossScriptDir}/msvc-clang-build.sh" \
@@ -197,7 +202,8 @@ runMsvcBuild() {
         --jobs "${buildJobs}" \
         --linkage "${projectLinkage}" \
         --sources-build \
-        --prebuilt-targets
+        --prebuilt-targets \
+        "${vulkanValidationArgs[@]}"
     # clang-cl 归档声明 CodeView 内嵌，清理可能存在的旧 PDB。
     runCommand "stage windows msvc/2026 ${config}" \
         bash \
@@ -236,6 +242,9 @@ runMingwClangConfigure() {
         command+=(--fresh)
     fi
 
+    # 配置与构建阶段共用同一诊断开关。
+    command+=("${vulkanValidationArgs[@]}")
+
     runCommand "configure windows mingw/clang64 ${config}" "${command[@]}"
 }
 
@@ -261,6 +270,9 @@ runMingwClangBuild() {
         # 工具链根必须在两个阶段使用同一值。
         command+=(--llvm-mingw-root "${llvmMingwRoot}")
     fi
+
+    # llvm-mingw 的可选路径与验证层参数分别保持参数边界。
+    command+=("${vulkanValidationArgs[@]}")
 
     # 先完成全部归档，再调用对应 MinGW staging。
     runCommand "build windows mingw/clang64 ${config}" "${command[@]}"
@@ -296,6 +308,9 @@ runMingwGccConfigure() {
         command+=(--fresh)
     fi
 
+    # MinGW GCC 复用目录时也应采用本轮矩阵的选项。
+    command+=("${vulkanValidationArgs[@]}")
+
     runCommand "configure windows mingw/ucrt64 ${config}" "${command[@]}"
 }
 
@@ -315,7 +330,8 @@ runMingwGccBuild() {
         --jobs "${buildJobs}" \
         --linkage "${projectLinkage}" \
         --sources-build \
-        --prebuilt-targets
+        --prebuilt-targets \
+        "${vulkanValidationArgs[@]}"
     # staging 脚本负责 COFF 归档验证和规范输出布局。
     runCommand "stage windows mingw/ucrt64 ${config}" \
         bash \
@@ -352,6 +368,9 @@ runLinuxGccConfigure() {
         command+=(--fresh)
     fi
 
+    # 两套 Linux 编译器分别生成缓存，均需传播选项。
+    command+=("${vulkanValidationArgs[@]}")
+
     runCommand "configure linux gcc/gcc14 ${config}" "${command[@]}"
 }
 
@@ -374,7 +393,8 @@ runLinuxGccBuild() {
         --linkage "${projectLinkage}" \
         --no-pgo-instrument \
         --sources-build \
-        --prebuilt-targets
+        --prebuilt-targets \
+        "${vulkanValidationArgs[@]}"
     # 输出目录固定为 linux/x86_64/gcc/gcc14/config。
     runCommand "stage linux gcc/gcc14 ${config}" \
         bash \
@@ -412,6 +432,8 @@ runLinuxClangConfigure() {
         command+=(--fresh)
     fi
 
+    command+=("${vulkanValidationArgs[@]}")
+
     runCommand "configure linux clang/clang19 ${config}" "${command[@]}"
 }
 
@@ -434,7 +456,8 @@ runLinuxClangBuild() {
         --linkage "${projectLinkage}" \
         --no-pgo-instrument \
         --sources-build \
-        --prebuilt-targets
+        --prebuilt-targets \
+        "${vulkanValidationArgs[@]}"
     # 输出目录固定为 linux/x86_64/clang/clang19/config。
     runCommand "stage linux clang/clang19 ${config}" \
         bash \
@@ -519,6 +542,7 @@ buildJobs="${PREBUILTS_UPDATE_JOBS:-$(detectBuildJobs)}"
 # staging 当前只实现静态布局。
 projectLinkage="static"
 llvmMingwRoot="${LLVM_MINGW_ROOT:-}"
+vulkanValidationArgs=()
 configureOnly=0
 # 默认 configure 阶段清理每个构建树。
 freshConfigure=1
@@ -576,6 +600,11 @@ while (( $# > 0 )); do
             fi
             llvmMingwRoot="$2"
             shift 2
+            ;;
+        --vulkan-validation-layers)
+            # 同一开关传给矩阵中每个子构建的配置和构建阶段。
+            vulkanValidationArgs=(--vulkan-validation-layers)
+            shift
             ;;
         --configure-only)
             # 只运行第一阶段，不生成或覆盖预编译归档。
