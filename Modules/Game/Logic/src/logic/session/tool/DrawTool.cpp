@@ -109,6 +109,9 @@ void resetBrushState(SessionContext& ctx)
     ctx.brushState.activeAudioResourceId.clear();
     ctx.brushState.activeSampleBinding.reset();
     ctx.brushState.replacesExistingObject = false;
+    ctx.brushState.resumedEntity          = entt::null;
+    ctx.brushState.resumedPracticeSlot    = -1;
+    ctx.brushState.resumedPracticeToken   = 0;
     ctx.brushState.hasPolylineGesture     = false;
     // 负起点是尚未建立持续段的哨兵，不是可提交时间。
     // isActive 最后置为 false，后续更新入口会停止处理该手势。
@@ -299,6 +302,9 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                            : std::string{};
     ctx.brushState.activeSampleBinding.reset();
     ctx.brushState.replacesExistingObject = false;
+    ctx.brushState.resumedEntity          = entt::null;
+    ctx.brushState.resumedPracticeSlot    = -1;
+    ctx.brushState.resumedPracticeToken   = 0;
     if ( !createsAudioSample &&
          !ctx.brushState.selectedAudioResourceId.empty() ) {
         // 音符绑定保留资源引用及实例音量，资源自身的公共音量不在此修改。
@@ -406,6 +412,22 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
         if ( ctx.noteRegistry.valid(targetEntity) ) {
             const auto& parentNote =
                 ctx.noteRegistry.get<NoteComponent>(targetEntity);
+            // 在旧实体删除前锁存本轮练习身份；续接创建的新根沿用同一槽位。
+            // 句柄之外还核对协作 ID，避免复用的实体号接管旧引导目标。
+            // 仅 Shift 起笔到真实旧根的分支会进入这里；普通独立绘制不继承。
+            // 令牌保持原创建步骤的值，删除练习仍能找到替换后的物件。
+            for ( std::size_t slot = 0;
+                  slot < ctx.walkthroughPracticeNotes.size();
+                  ++slot ) {
+                const auto& practice = ctx.walkthroughPracticeNotes[slot];
+                if ( practice.token != 0 && practice.entity == targetEntity &&
+                     practice.collaborationId ==
+                         parentNote.m_collaborationId ) {
+                    ctx.brushState.resumedPracticeSlot = static_cast<int>(slot);
+                    ctx.brushState.resumedPracticeToken = practice.token;
+                    break;
+                }
+            }
             if ( parentNote.m_type == ::MMM::NoteType::POLYLINE &&
                  !parentNote.m_subNotes.empty() ) {
                 // 只允许从原折线最后一段续接，内部节点点击不截断或分叉原折线。
@@ -491,6 +513,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                         // 只有删除动作已入栈后才标记替换状态，取消恢复需要识别这一步历史。
                         // 普通未续接画笔不会携带该标志。
                         ctx.brushState.replacesExistingObject = true;
+                        ctx.brushState.resumedEntity          = targetEntity;
                         ctx.isDragging                        = true;
                         // 续接借用会话拖动归属保存输入来源，后续事件路由应保持相机一致。
                         // 这里设置的是交互状态，不把视口信息写入谱面物件。
@@ -552,6 +575,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                 ctx.actionStack.pushAndExecute(std::move(deleteAction), ctx);
 
                 ctx.brushState.replacesExistingObject = true;
+                ctx.brushState.resumedEntity          = targetEntity;
                 ctx.isDragging                        = true;
                 ctx.dragCameraId                      = cmd.cameraId;
                 isResuming                            = true;
@@ -1622,6 +1646,19 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
         return;
     }
 
+    /// @brief 正式替换沿用源练习身份；独立教学笔画沿用本次步骤令牌。
+    /// @note 普通画笔保持零令牌，不会被教学快照误认成练习物件。
+    /// @note 独立创建由命令给出新令牌，续接由手势开始时捕获旧令牌。
+    /// @note 合并候选可能使新物件走批次 Action，统一标记避免遗漏。
+    const auto markPracticeAction = [&](IEditorAction& action) {
+        if ( cmd.createStandalone ) {
+            action.m_walkthroughToken = cmd.walkthroughToken;
+        } else if ( ctx.brushState.resumedPracticeSlot >= 0 ) {
+            action.m_walkthroughToken = ctx.brushState.resumedPracticeToken;
+            action.m_walkthroughSlot  = ctx.brushState.resumedPracticeSlot;
+        }
+    };
+
     if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
         // 创建折线父实体及所有子物件实体
         // 先预留父身份，子组件可在同批次中引用它。
@@ -1646,8 +1683,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
         auto action = std::make_unique<BatchNoteAction>(
             std::move(mergeDeleteEntries), "Polyline Create");
         // 独立折线也属于教学产物，批量父子创建共用一次步骤身份。
-        if ( cmd.createStandalone )
-            action->m_walkthroughToken = cmd.walkthroughToken;
+        markPracticeAction(*action);
         ctx.actionStack.pushAndExecute(std::move(action), ctx);
     } else {
         // 非折线降级物件 (NOTE / HOLD / FLICK)
@@ -1658,6 +1694,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                 { ctx.noteRegistry.create(), std::nullopt, note });
             auto action = std::make_unique<BatchNoteAction>(
                 std::move(mergeDeleteEntries), "Note Create & Merge");
+            markPracticeAction(*action);
             ctx.actionStack.pushAndExecute(std::move(action), ctx);
         } else {
             // 没有删除候选的普通新物件使用单对象创建动作。
@@ -1665,12 +1702,25 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
             auto action = std::make_unique<NoteAction>(
                 NoteAction::Type::Create, entt::null, std::nullopt, note);
             // 仅独立练习创建可被返回操作定向删除，普通绘制不能混入教学历史。
-            if ( cmd.createStandalone )
-                action->m_walkthroughToken = cmd.walkthroughToken;
+            markPracticeAction(*action);
             ctx.actionStack.pushAndExecute(std::move(action), ctx);
         }
     }
 
+    // 画笔续接可能替换根实体，事件仍记录起笔时的旧身份供 UI 验收。
+    // 正式物件创建后才公布释放事务；失败或取消不推进引导。
+    // 事务没有直接表示成功；UI 还要比较新根类型、子段数量和几何。
+    // 不对普通独立笔画发布此事件，防止新画折线冒充从旧尾部续接。
+    // 序号在提交后增加，跨步骤复用的旧事件会被基线序号过滤。
+    if ( ctx.brushState.replacesExistingObject ) {
+        auto& editEvent = ctx.walkthroughEditEvent;
+        ++editEvent.revision;
+        editEvent.sourceEntity = ctx.brushState.resumedEntity;
+        editEvent.part         = HoverPart::None;
+        editEvent.subIndex     = -1;
+        editEvent.kind =
+            Common::Render::RenderSnapshot::WalkthroughEditEvent::Kind::Brush;
+    }
     // 重置状态
     resetBrushState(ctx);
 }

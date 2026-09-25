@@ -720,7 +720,11 @@ void NoteAction::execute(SessionContext& ctx)
         // 稳定协作 ID 与句柄同时记录，阻止后来复用槽位的音符冒充练习成果。
         // 任何其他 NoteAction 即使落在同一拍位，也不能覆盖本轮目标。
         if ( m_walkthroughToken != 0 ) {
-            const auto index = m_after->m_type == ::MMM::NoteType::NOTE    ? 0U
+            // 续接后的根类型会变化；显式槽位优先于依据最终类型推断。
+            // 创建阶段没有槽位覆盖时，仍使用各类型原有的固定槽位。
+            const auto index = m_walkthroughSlot >= 0
+                                   ? static_cast<std::size_t>(m_walkthroughSlot)
+                               : m_after->m_type == ::MMM::NoteType::NOTE  ? 0U
                                : m_after->m_type == ::MMM::NoteType::HOLD  ? 1U
                                : m_after->m_type == ::MMM::NoteType::FLICK ? 2U
                                                                            : 3U;
@@ -1018,13 +1022,21 @@ void BatchNoteAction::execute(SessionContext& ctx)
             reg.emplace_or_replace<NoteComponent>(entry.entity, *entry.after);
             // 父折线创建后登记教学身份；子实体不占用独立练习槽位。
             if ( m_walkthroughToken != 0 && !entry.before &&
-                 entry.after->m_type == ::MMM::NoteType::POLYLINE &&
+                 (m_walkthroughSlot >= 0 ||
+                  entry.after->m_type == ::MMM::NoteType::POLYLINE) &&
                  !entry.after->m_isSubNote ) {
-                ctx.walkthroughPracticeNotes[3] = {
-                    m_walkthroughToken,
-                    entry.entity,
-                    entry.after->m_collaborationId
-                };
+                // 批次中只让新根继承教学令牌，子实体不能挤占练习槽位。
+                // 原 Hold 或 Flick 转成折线时，槽位仍指向原创建步骤。
+                const auto index =
+                    m_walkthroughSlot >= 0
+                        ? static_cast<std::size_t>(m_walkthroughSlot)
+                        : 3U;
+                if ( index < ctx.walkthroughPracticeNotes.size() )
+                    ctx.walkthroughPracticeNotes[index] = {
+                        m_walkthroughToken,
+                        entry.entity,
+                        entry.after->m_collaborationId
+                    };
             }
             // 批量写入保留已有辅助组件；选择状态由下面的可选字段单独决定。
             ensureNoteAuxiliaryComponents(reg, entry.entity);

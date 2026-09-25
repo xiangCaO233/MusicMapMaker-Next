@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
 #include <span>
 
@@ -42,8 +43,9 @@ struct ComposePolylineTarget {
 /// @note 只有时间严格递增的纵向段才可通过 DrawTool 最终规范化。
 /// @note 屏幕 y 可以因 Scroll/SV 非单调，不能拿 y 代替谱面时间排序。
 /// @note 种子只选择候选起点和轨道，不改变五段路线的结构约束。
-/// @note 三轨以上整条路线避开旧 Hold 轨道，包含横移经过的端点。
-/// @note 双轨没有两条空轨，五个拍位必须全部处于 Hold 的同一时间侧。
+/// @note 四轨以上整条路线避开旧 Hold 轨道，包含横移经过的端点。
+/// @note 两三轨可能复用旧 Hold 轨，五个拍位必须处于其同一时间侧。
+/// @note 三轨以上选择可整体横移中间段的轨道对，供后续编辑练习使用。
 /// @warning 仅在目标生成或失效后调用；不进入每帧排序或全谱扫描。
 inline std::optional<ComposePolylineTarget> chooseComposePolylineTarget(
     std::span<const Common::Render::PlayerBeatLineSnapshot> lines,
@@ -54,11 +56,12 @@ inline std::optional<ComposePolylineTarget> chooseComposePolylineTarget(
     if ( trackCount < 2 || lines.size() < 5U || !std::isfinite(noteHeight) ||
          noteHeight <= 0.0F )
         return std::nullopt;
-    // 多轨时整个路线避开旧 Hold 所在轨；双轨必须保留两轨，改为换时间段。
+    // 四轨以上整个路线避开旧 Hold 所在轨；两三轨可能需要复用该轨。
+    // 复用时改由时间分隔，避免教程目标与旧 Hold 可见几何重叠。
     const bool validHold       = placedHold && placedHold->track >= 0 &&
                                  placedHold->track < trackCount &&
                                  placedHold->startTime < placedHold->endTime;
-    const bool avoidHoldTrack  = validHold && trackCount > 2;
+    const bool avoidHoldTrack  = validHold && trackCount > 3;
     const int  availableTracks = trackCount - (avoidHoldTrack ? 1 : 0);
     /// @brief 把候选序号映射回真实轨号，排除已经占用的 Hold 轨道。
     /// @note 先在紧凑候选集取模，再跳过旧轨，保留每条空轨的选中机会。
@@ -66,6 +69,52 @@ inline std::optional<ComposePolylineTarget> chooseComposePolylineTarget(
         if ( avoidHoldTrack && index >= placedHold->track ) ++index;
         return index;
     };
+
+    // 中间 subHold 拖动会平移该段及后缀，同时调整前一 Flick 的终点。
+    // 两端都卡在边界的轨道对无法完成后续编辑，所以三轨以上跳过这种组合。
+    // 偏移一轨后仍须与前一 Flick 的起点不同，否则会提前触发合并。
+    // source 是首尾 Hold 所在轨；other 是中段 Hold 所在轨。
+    // 后续编辑中两个轨号会同时加上 localDelta，因此需要共同余量。
+    // 不限制绝对轨距，只要求至少一个方向存在非退化的一轨位移。
+    // 偏移方向只用于可行性筛选，实际拖动由用户在 Move 工具中完成。
+    // 候选遍历由 seed 轮换起点，仍可在多个可行轨道对之间变化。
+    // 某个起点无解时尝试下一起点，不能因为随机到边界组合就放弃教程。
+    // 两轨无法留出第三轨，保留原有五段绘制路线并由文案说明后续限制。
+    // 三轨若旧 Hold 占中轨，时间分隔可让路径暂时借用该轨以保留余量。
+    int sourceTrack = -1;
+    int otherTrack  = -1;
+    for ( int sourceOffset = 0; sourceOffset < availableTracks;
+          ++sourceOffset ) {
+        const int sourceIndex =
+            (static_cast<int>(seed % availableTracks) + sourceOffset) %
+            availableTracks;
+        const int candidateSource = availableTrackAt(sourceIndex);
+        for ( int otherOffset = 0; otherOffset < availableTracks - 1;
+              ++otherOffset ) {
+            const int otherRank =
+                (otherOffset +
+                 static_cast<int>((seed >> 16U) % (availableTracks - 1))) %
+                (availableTracks - 1);
+            const int otherIndex =
+                (sourceIndex + 1 + otherRank) % availableTracks;
+            const int candidateOther = availableTrackAt(otherIndex);
+            if ( candidateSource == candidateOther ) continue;
+            bool canMoveMiddle = trackCount < 3;
+            for ( const int delta : { -1, 1 } ) {
+                const int movedSource = candidateSource + delta;
+                const int movedOther  = candidateOther + delta;
+                canMoveMiddle |= movedSource >= 0 && movedSource < trackCount &&
+                                 movedOther >= 0 && movedOther < trackCount &&
+                                 movedOther != candidateSource;
+            }
+            if ( !canMoveMiddle ) continue;
+            sourceTrack = candidateSource;
+            otherTrack  = candidateOther;
+            break;
+        }
+        if ( sourceTrack >= 0 ) break;
+    }
+    if ( sourceTrack < 0 ) return std::nullopt;
 
     // 从轮转起点寻找一条完整时间正向路径；时间增长不要求屏幕 y 单调。
     // 每次只在线性可见拍线中寻找下一拍，避免按每帧 UI 顺序排序。
@@ -77,14 +126,14 @@ inline std::optional<ComposePolylineTarget> chooseComposePolylineTarget(
         if ( !isComposeTargetBeatLine(
                  first.time, first.y, noteHeight, top, bottom) )
             continue;
-        // 双轨没有两条空轨，整条折线只能落在旧 Hold 的前侧或后侧。
+        // 两三轨可能复用旧 Hold 轨，整条折线须处于其时间区间一侧。
         // 只检查端点时间不足以保护中间段，因此后续拍线须保持在同一侧。
-        const bool beforeHold = validHold && trackCount == 2 &&
+        const bool beforeHold = validHold && trackCount <= 3 &&
                                 first.time < placedHold->startTime - 1e-7;
-        const bool afterHold  = validHold && trackCount == 2 &&
+        const bool afterHold  = validHold && trackCount <= 3 &&
                                 first.time > placedHold->endTime + 1e-7;
         // 起点在 Hold 内部时不能仅靠后继筛选来修正整段跨越。
-        if ( validHold && trackCount == 2 && !beforeHold && !afterHold )
+        if ( validHold && trackCount <= 3 && !beforeHold && !afterHold )
             continue;
         // 这些指针只在本次候选搜索期间使用，返回前全部转成时间值。
         std::array<const Common::Render::PlayerBeatLineSnapshot*, 5> chosen{};
@@ -122,15 +171,7 @@ inline std::optional<ComposePolylineTarget> chooseComposePolylineTarget(
 
         // 横向两次跨轨夹在三段时间正向 Hold 之间。
         // 末尾同轨再经过一拍，使画笔的临时零长度 Hold 真正延长。
-        // 第二轨通过非零偏移选取，双轨谱面自然使用唯一的另一个轨道。
-        const int sourceIndex = static_cast<int>(seed % availableTracks);
-        const int otherIndex =
-            (sourceIndex + 1 +
-             static_cast<int>((seed >> 16U) % (availableTracks - 1))) %
-            availableTracks;
-        // 两次横移复用同一对空轨；纵向段不会落回旧 Hold 轨道。
-        const int sourceTrack = availableTrackAt(sourceIndex);
-        const int otherTrack  = availableTrackAt(otherIndex);
+        // 两次横移复用同一对已验证的轨道；路线与后续编辑共享可移动余量。
         return ComposePolylineTarget{
             .waypoints = {
                 ComposePolylineWaypoint{ sourceTrack, chosen[0]->time },

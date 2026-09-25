@@ -170,11 +170,25 @@ int main()
          points[5].track != points[6].track )
         return 13;
     // 先前的 Hold 即使与路线使用同一组拍位，也不能被折线覆盖。
-    // 三轨以上整条路线不使用 Hold 轨；种子变化也不得绕开这项约束。
+    // 四轨以上整条路线不使用 Hold 轨；种子变化也不得绕开这项约束。
     // Hold 处于路线选中时间内，确保轨道避让承担实际防重叠作用。
     const MMM::Canvas::ComposeHoldTarget placedHold{ 1, 2.0, 4.0 };
     // 低位和高位种子会分别改变第一轨与第二轨的选择。
     // 检查所有节点，覆盖同轨纵向段和两次横向转折的两侧。
+    // 编辑章节还会横移中间 Hold 和整段后缀，因此路线需预留可行方向。
+    // 位移后不能让中间 Hold 回到前一 Flick 起点，否则会提前发生合并。
+    // 用相同轨道公式复查每个随机种子，避免偶发的边界组合卡住教程。
+    const auto canMoveMiddle = [](int source, int other, int laneCount) {
+        // 目标是保留结构的局部移动，两端都必须继续位于玩家轨道内。
+        // 中段落回源轨会让前 Flick 消失，应留给后面的合并练习。
+        for ( const int delta : { -1, 1 } ) {
+            if ( source + delta >= 0 && source + delta < laneCount &&
+                 other + delta >= 0 && other + delta < laneCount &&
+                 other + delta != source )
+                return true;
+        }
+        return false;
+    };
     for ( std::uint64_t seed = 0; seed < 24; ++seed ) {
         const auto clearRoute = MMM::Canvas::chooseComposePolylineTarget(
             polylineLines, 4, 20.0F, 0.0F, 600.0F, seed, placedHold);
@@ -182,6 +196,32 @@ int main()
         for ( const auto& point : clearRoute->waypoints ) {
             if ( point.track == placedHold.track ) return 16;
         }
+        if ( !canMoveMiddle(clearRoute->waypoints[0].track,
+                            clearRoute->waypoints[2].track,
+                            4) )
+            return 20;
+    }
+    // 三轨且旧 Hold 占中轨时，两条剩余外轨无法共同横移。
+    // 允许路线借用中轨，但所有拍位必须与旧 Hold 时间区间分开。
+    // 这验证了编辑可行性与此前避免物件重叠的约束同时成立。
+    const std::array threeTrackLines{
+        Line{ 1.0, 540.0F }, Line{ 2.0, 500.0F }, Line{ 3.0, 460.0F },
+        Line{ 4.0, 420.0F }, Line{ 5.0, 380.0F }, Line{ 6.0, 340.0F },
+        Line{ 7.0, 300.0F }, Line{ 8.0, 260.0F }, Line{ 9.0, 220.0F },
+    };
+    const MMM::Canvas::ComposeHoldTarget middleHold{ 1, 1.0, 4.0 };
+    const auto threeTrackRoute = MMM::Canvas::chooseComposePolylineTarget(
+        threeTrackLines, 3, 20.0F, 0.0F, 600.0F, 0, middleHold);
+    // 原 Hold 覆盖 1～4 秒，安全路线应从 5 秒或更晚开始。
+    // 路线可以借用中轨，但不能在相同拍位覆盖原 Hold。
+    // 两条外轨构成不可移动的组合时，候选筛选必须改选轨道对。
+    if ( !threeTrackRoute || !canMoveMiddle(threeTrackRoute->waypoints[0].track,
+                                            threeTrackRoute->waypoints[2].track,
+                                            3) )
+        return 21;
+    for ( const auto& point : threeTrackRoute->waypoints ) {
+        // 七个检查点都检查，首尾安全不能代替中间点安全。
+        if ( point.time <= middleHold.endTime ) return 22;
     }
     // 双轨无法避开 Hold 轨道，五段路径应全部位于其时间区间外。
     // 可见拍位不足时须暂停提示，不能让路线从 Hold 身体上穿过去。

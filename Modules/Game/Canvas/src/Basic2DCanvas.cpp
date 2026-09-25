@@ -698,6 +698,11 @@ void Basic2DCanvas::updateComposeWalkthrough(
                     false);
         }
     }
+    // 已创建物件上的编辑引导先读取正式快照；被处理的步骤不再生成绘制目标。
+    // 这样局部拖动与 Shift 续接不会落入下面的独立画笔路径。
+    if ( updateComposeEditWalkthrough(
+             sourceManager, snapshot, canvasScreenPosition, canvasSize) )
+        return;
     if ( placingPolyline ) {
         // 折线没有预设的唯一终点，用户可以在主轨道自由折返。
         // 这一步改为完整七点路线；五个有效子物件来自纵横交替。

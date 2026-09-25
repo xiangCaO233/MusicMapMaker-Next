@@ -7,11 +7,11 @@
   "requires_beatmap": true,
   "completion": "all",
   "title": {"zh_cn": "创作谱面", "en_us": "Compose a beatmap"},
-  "description": {"zh_cn": "选择绘制工具，依次练习放置单 Note、Flick 和 Hold，随后先删除 Hold，再删除本次练习的其余 Note。进入前请先打开项目，并在标签页中打开至少一张谱面。", "en_us": "Choose Draw and practice placing a Note, Flick, and Hold. Then delete the Hold first and remove the other practice notes. Open a project and at least one beatmap editor tab first."},
+  "description": {"zh_cn": "练习绘制 Note、Flick、Hold 与折线，再使用拖拽工具编辑它们，最后清理练习物件。进入前请先打开项目，并在标签页中打开至少一张谱面。", "en_us": "Draw a Note, Flick, Hold, and polyline, edit them with Move, then remove the practice objects. Open a project and a beatmap editor tab first."},
   "branches": [
     {
       "id": "place-single-note",
-      "title": {"zh_cn": "绘制并删除单 Note、滑键与长条", "en_us": "Draw and remove a Note, Flick, and Hold"},
+      "title": {"zh_cn": "绘制、编辑并删除练习物件", "en_us": "Draw, edit, and remove practice objects"},
       "steps": [
         {
           "id": "select-beatmap-tab",
@@ -69,10 +69,80 @@
           "guide": {"prompt": {"zh_cn": "按住 Shift，从蓝色 1 号框起笔，保持左键依次经过箭头指向的 2～7 号框，在黄色 7 号框松开。若没有路线，请滚动或缩放画布以显示更多拍线。", "en_us": "Hold Shift, start in blue box 1, follow boxes 2–7 while holding left mouse, and release in yellow box 7. If no route appears, scroll or zoom to show more beat lines."}, "targets": ["compose.canvas.place-polyline"], "requires_action": true}
         },
         {
-          "id": "delete-hold",
-          "title": {"zh_cn": "删除刚绘制的 Hold", "en_us": "Remove the practice Hold"},
-          "body": {"zh_cn": "右键删除物件，shift+右键删除整个折线", "en_us": "Right-click to delete an object; Shift+right-click to delete the entire polyline."},
+          "id": "select-move-tool",
+          "title": {"zh_cn": "选择拖拽工具", "en_us": "Choose the Move tool"},
+          "body": {"zh_cn": "在工具栏选择拖拽工具，接下来修改刚绘制的练习物件。", "en_us": "Choose Move in the toolbar to edit the objects you just drew."},
           "requires": ["place-polyline"],
+          "guide": {"prompt": {"zh_cn": "点击拖拽工具；若已选中，可点击“知道了”继续。", "en_us": "Click Move, or use Got it if it is already active."}, "targets": ["compose.toolbar.select-move-tool"]}
+        },
+        {
+          "id": "move-note",
+          "title": {"zh_cn": "移动单 Note", "en_us": "Move the single Note"},
+          "body": {"zh_cn": "按住高亮单 Note 的头部，拖到另一轨或另一拍位后松开。", "en_us": "Drag the highlighted Note head to another lane or beat position and release."},
+          "requires": ["select-move-tool"],
+          "guide": {"prompt": {"zh_cn": "从高亮单 Note 头部按住左键，移动至少一轨或一拍后松开。", "en_us": "Drag the highlighted Note head to a different lane or beat."}, "targets": ["compose.canvas.move-note"], "requires_action": true}
+        },
+        {
+          "id": "resize-hold",
+          "title": {"zh_cn": "修改 Hold 长度", "en_us": "Resize the Hold"},
+          "body": {"zh_cn": "拖动高亮 Hold 尾部，使长条延长或缩短；不要拖动头部。", "en_us": "Drag the highlighted Hold tail to lengthen or shorten it; leave the head in place."},
+          "requires": ["move-note"],
+          "guide": {"prompt": {"zh_cn": "拖动高亮的 Hold 尾部到另一拍位后松开。", "en_us": "Drag the highlighted Hold tail to another beat."}, "targets": ["compose.canvas.resize-hold"], "requires_action": true}
+        },
+        {
+          "id": "resize-flick",
+          "title": {"zh_cn": "修改 Flick 滑动距离", "en_us": "Change the Flick distance"},
+          "body": {"zh_cn": "拖动高亮 Flick 箭头到另一个终点轨道，改变横向滑动距离。需要至少三条玩家轨道可选。", "en_us": "Drag the highlighted Flick arrow to another destination lane. This requires at least three player lanes."},
+          "requires": ["resize-hold"],
+          "guide": {"prompt": {"zh_cn": "拖动高亮的 Flick 箭头到另一轨后松开。", "en_us": "Drag the highlighted Flick arrow to another lane."}, "targets": ["compose.canvas.resize-flick"], "requires_action": true}
+        },
+        {
+          "id": "move-sub-hold",
+          "title": {"zh_cn": "拖动折线中间的 subHold", "en_us": "Drag an internal subHold"},
+          "body": {"zh_cn": "按住高亮的折线中间 Hold 连接段，横向拖到另一轨；这会移动该段与后续折线。暂时避开上一段 Flick 的起点轨，以便下一步继续观察结构；这一步需要至少三条玩家轨道。", "en_us": "Drag the highlighted internal Hold body sideways to another lane. It moves this segment and the following path. Avoid the previous Flick's start lane for now; this step requires at least three player lanes."},
+          "requires": ["resize-flick"],
+          "guide": {"prompt": {"zh_cn": "按住高亮的中间 subHold 身体，横向拖到另一轨后松开。", "en_us": "Drag the highlighted internal subHold body sideways to another lane."}, "targets": ["compose.canvas.move-sub-hold"], "requires_action": true}
+        },
+        {
+          "id": "move-sub-flick",
+          "title": {"zh_cn": "拖动折线中间的 subFlick", "en_us": "Drag an internal subFlick"},
+          "body": {"zh_cn": "按住高亮的折线中间 Flick 连接段，沿时间方向拖到另一拍位；相邻 Hold 的长度会随之调整。先避开前一段 Hold 的起点，下一步再练习合并。", "en_us": "Drag the highlighted internal Flick body to another beat. The adjacent Hold changes length. Avoid the previous Hold start for now; the next step will merge there."},
+          "requires": ["move-sub-hold"],
+          "guide": {"prompt": {"zh_cn": "按住高亮的中间 subFlick 身体，纵向拖到另一拍位后松开。", "en_us": "Drag the highlighted internal subFlick body to another beat."}, "targets": ["compose.canvas.move-sub-flick"], "requires_action": true}
+        },
+        {
+          "id": "merge-sub-note",
+          "title": {"zh_cn": "合并折线子段", "en_us": "Merge polyline segments"},
+          "body": {"zh_cn": "将折线中间的 subFlick 沿时间拖到前一段 Hold 的起点，让 Hold 缩为零；松手后相邻子段会合并，折线也可能退化成普通 Hold。", "en_us": "Drag the internal subFlick to the previous Hold's start beat. The Hold collapses, neighboring segments merge, and the polyline may become a single Hold."},
+          "requires": ["move-sub-flick"],
+          "guide": {"prompt": {"zh_cn": "横向拖动高亮的中间 subHold，直到前一段 Flick 消失并形成合并。", "en_us": "Drag the highlighted internal subFlick to the previous Hold's start beat and release."}, "targets": ["compose.canvas.merge-sub-note"], "requires_action": true}
+        },
+        {
+          "id": "select-draw-tool-edit",
+          "title": {"zh_cn": "切回绘制工具", "en_us": "Return to the Draw tool"},
+          "body": {"zh_cn": "选择绘制工具，准备从已有物件的尾部继续绘制。", "en_us": "Choose Draw to continue from the tail of an existing object."},
+          "requires": ["merge-sub-note"],
+          "guide": {"prompt": {"zh_cn": "点击绘制工具；若已选中，可点击“知道了”继续。", "en_us": "Click Draw, or use Got it if it is already active."}, "targets": ["compose.toolbar.select-draw-tool-edit"]}
+        },
+        {
+          "id": "extend-note",
+          "title": {"zh_cn": "将 Hold 或 Flick 扩展成折线", "en_us": "Extend a Hold or Flick into a polyline"},
+          "body": {"zh_cn": "在高亮的 Hold 尾部按住 Shift 和左键向另一轨拖动，或从 Flick 箭头拖到更晚的拍位；松手后原物件扩展为折线。", "en_us": "Hold Shift and drag from the highlighted Hold tail to another lane, or from the Flick arrow to a later beat; release to extend it into a polyline."},
+          "requires": ["select-draw-tool-edit"],
+          "guide": {"prompt": {"zh_cn": "从高亮的 Hold 或 Flick 尾部按住 Shift 和左键，拖动续出新段后松开。", "en_us": "Hold Shift and drag from either highlighted tail to add a segment."}, "targets": ["compose.canvas.extend-note"], "requires_action": true}
+        },
+        {
+          "id": "resume-polyline",
+          "title": {"zh_cn": "续写或回写折线", "en_us": "Continue or rewrite a polyline"},
+          "body": {"zh_cn": "在刚扩展出的折线尾部按住 Shift 和左键，继续向新轨道或拍位绘制；也可回拖修改末段，再松开提交。", "en_us": "Hold Shift and left mouse at the highlighted tail of the polyline you just extended. Draw to a new lane or beat, or drag back to rewrite its last segment, then release."},
+          "requires": ["extend-note"],
+          "guide": {"prompt": {"zh_cn": "从高亮折线尾部按住 Shift 和左键，续写新段或回写末段后松开。", "en_us": "Hold Shift and drag from the highlighted polyline tail to continue or rewrite it."}, "targets": ["compose.canvas.resume-polyline"], "requires_action": true}
+        },
+        {
+          "id": "delete-hold",
+          "title": {"zh_cn": "删除原 Hold 练习物件", "en_us": "Remove the original Hold practice object"},
+          "body": {"zh_cn": "右键删除物件，shift+右键删除整个折线", "en_us": "Right-click to delete an object; Shift+right-click to delete the entire polyline."},
+          "requires": ["resume-polyline"],
           "guide": {"prompt": {"zh_cn": "右键删除物件，shift+右键删除整个折线", "en_us": "Right-click to delete an object; Shift+right-click to delete the entire polyline."}, "targets": ["compose.canvas.delete-hold"], "requires_action": true}
         },
         {

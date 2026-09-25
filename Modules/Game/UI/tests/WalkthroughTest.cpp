@@ -4,6 +4,7 @@
 #include "event/project/ProjectOpenInteractionEvent.h"
 #include "ui/walkthrough/WalkthroughModel.h"
 #include "ui/walkthrough/WalkthroughService.h"
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -289,7 +290,7 @@ int main(int argc, char** argv)
          !composeBeatmapTopic->m_requiresBeatmap ||
          composeBeatmapTopic->m_order != 40 ||
          composeBeatmapTopic->m_branches.size() != 1 ||
-         composeBeatmapTopic->m_branches.front().m_steps.size() != 10 ||
+         composeBeatmapTopic->m_branches.front().m_steps.size() != 20 ||
          topicAvailable(*composeBeatmapTopic, false, false) ||
          topicAvailable(*composeBeatmapTopic, true, false) ||
          !topicAvailable(*composeBeatmapTopic, true, true) )
@@ -302,35 +303,44 @@ int main(int argc, char** argv)
                  std::vector<std::string>{ composeSteps[index - 1].m_id } )
             return 67;
     }
-    if ( composeSteps[0].m_guide->m_targets !=
-             std::vector<std::string>{ "editor.beatmap-tab" } ||
-         composeSteps[1].m_guide->m_targets !=
-             std::vector<std::string>{ "compose.toolbar.tool-selection" } ||
-         composeSteps[2].m_guide->m_targets !=
-             std::vector<std::string>{ "compose.canvas.pan-player" } ||
-         composeSteps[3].m_guide->m_targets !=
-             std::vector<std::string>{ "compose.canvas.player" } ||
-         composeSteps[4].m_guide->m_targets !=
-             std::vector<std::string>{ "compose.canvas.place-note" } ||
-         // 滑键必须排在长条之前，不能只改正文标题却保留原执行顺序。
-         composeSteps[5].m_guide->m_targets !=
-             std::vector<std::string>{ "compose.canvas.place-flick" } ||
-         // 长条仍借用单键落点，不因插入 Flick 改成以滑键为时间或轨道参考。
-         composeSteps[6].m_guide->m_targets !=
-             std::vector<std::string>{ "compose.canvas.place-hold" } ||
-         // 折线需真正提交至少五段，确认按钮不得跳过本次练习。
-         // 路线顺序也由上面的前置链验证，不能把清理放到绘制之前。
-         composeSteps[7].m_guide->m_targets !=
-             std::vector<std::string>{ "compose.canvas.place-polyline" } ||
-         !composeSteps[7].m_guide->m_requiresAction ||
-         // 两个删除步骤必须有独立目标；最终完成不能由确认按钮绕过。
-         composeSteps[8].m_guide->m_targets !=
-             std::vector<std::string>{ "compose.canvas.delete-hold" } ||
-         composeSteps[9].m_guide->m_targets !=
-             std::vector<std::string>{ "compose.canvas.delete-remaining" } ||
-         !composeSteps[8].m_guide->m_requiresAction ||
-         !composeSteps[9].m_guide->m_requiresAction )
-        return 68;
+    // 十个新编辑步骤必须夹在折线创建与删除之间，且每一步使用独立目标。
+    // 工具选择允许已选中时手动确认，其余编辑与删除需真实操作完成。
+    // 前八项保持原有的打开、导航和绘制顺序，防止新增编辑练习改变入口。
+    // 选择 Move 和重新选择 Draw 各占一个目标，避免按钮上下文串用。
+    // Note、Hold、Flick 三项都指向各自的真实渲染命中框。
+    // 折线中间段分别有位置、时间和结构合并三种验收动作。
+    // 最后两个编辑目标从现有尾部续接，必须位于删除动作之前。
+    // 两个删除步骤仍使用独立目标，不会被编辑事务提前完成。
+    constexpr std::array composeTargets{
+        "editor.beatmap-tab",
+        "compose.toolbar.tool-selection",
+        "compose.canvas.pan-player",
+        "compose.canvas.player",
+        "compose.canvas.place-note",
+        "compose.canvas.place-flick",
+        "compose.canvas.place-hold",
+        "compose.canvas.place-polyline",
+        "compose.toolbar.select-move-tool",
+        "compose.canvas.move-note",
+        "compose.canvas.resize-hold",
+        "compose.canvas.resize-flick",
+        "compose.canvas.move-sub-hold",
+        "compose.canvas.move-sub-flick",
+        "compose.canvas.merge-sub-note",
+        "compose.toolbar.select-draw-tool-edit",
+        "compose.canvas.extend-note",
+        "compose.canvas.resume-polyline",
+        "compose.canvas.delete-hold",
+        "compose.canvas.delete-remaining",
+    };
+    for ( std::size_t index = 0; index < composeTargets.size(); ++index ) {
+        const auto& guide = *composeSteps[index].m_guide;
+        if ( guide.m_targets !=
+                 std::vector<std::string>{ composeTargets[index] } ||
+             (index >= 7 && index != 8 && index != 15 &&
+              !guide.m_requiresAction) )
+            return 68;
+    }
     // 空白流程的六个目标依次对应菜单入口、音频、自动测偏、BPM 复核、
     // 元数据资源区域和最终创建按钮，不要求改造原有单页弹窗布局。
     if ( createBeatmapTopic->m_branches[0].m_steps[0].m_guide->m_targets !=

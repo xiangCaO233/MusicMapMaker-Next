@@ -1381,9 +1381,9 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                 ctx.lastConfig.visual.trackLayout.top) *
                                mainViewportHeight;
-        float ty = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by = it->second.viewportHeight -
-                   ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
+        float by           = it->second.viewportHeight -
+                             ctx.lastConfig.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         renderScaleY =
             previewDrawH /
@@ -2312,6 +2312,15 @@ void GrabTool::handleEndDrag(SessionContext& ctx, const CmdEndDrag& cmd)
 {
     (void)cmd;
     if ( ctx.draggedEntity == entt::null ) return;
+    // 只发布释放事务的身份；几何仍由随后生成的正式快照验收。
+    // 预览中的移动不能凭鼠标松开就推进教学步骤。
+    auto& editEvent = ctx.walkthroughEditEvent;
+    ++editEvent.revision;
+    editEvent.sourceEntity = ctx.draggedEntity;
+    editEvent.part         = ctx.draggedPart;
+    editEvent.subIndex     = ctx.draggedSubIndex;
+    editEvent.kind =
+        Common::Render::RenderSnapshot::WalkthroughEditEvent::Kind::Drag;
 
     if ( m_isFirstPolylineBodyDrag ) {
         finishFirstPolylineBodyDrag(ctx);

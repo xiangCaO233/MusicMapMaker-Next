@@ -29,6 +29,8 @@ add_library(
   src/AuxiliaryWindowUi.cpp
   src/BackgroundVideoPlayer.cpp
   src/Basic2DCanvas.cpp
+  # 编辑练习的快照核对与目标投影单独编译，减轻主画布更新文件的职责。
+  src/Basic2DCanvas_WalkthroughEditing.cpp
   src/Basic2DCanvas_Interaction.cpp
   src/Basic2DCanvas_Rendering.cpp
   src/MarqueeAutoScroll.cpp
@@ -162,6 +164,16 @@ target_include_directories(ComposeHoldTargetTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(ComposeHoldTargetTest PRIVATE Common)
 mmm_register_test_case(NAME ComposeHoldTargetTest COMMAND ComposeHoldTargetTest)
+
+# 创作编辑验收只使用逻辑快照的固定值字段；不启动图形窗口或访问个人配置。 覆盖拖动部位、正式几何、折线合并及替换根实体后的身份续接。
+mmm_add_test_executable(Canvas ComposeEditProgressTest
+                        tests/ComposeEditProgressTest.cpp)
+# 编辑事务验证与画布投影分离，避免测试依赖窗口和 Vulkan 实例。 测试覆盖几何变化、对象身份以及错误工具或错误部件的提交事件。
+target_include_directories(ComposeEditProgressTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(ComposeEditProgressTest PRIVATE Common)
+mmm_register_test_case(NAME ComposeEditProgressTest COMMAND
+                       ComposeEditProgressTest)
 
 # 主画布悬浮层选择使用纯候选去重，覆盖同一物件的多个相交命中框。 Common 与 entt 只提供对象种类和实体值，测试不构造 ECS 注册表，也不依赖当前
 # Session。

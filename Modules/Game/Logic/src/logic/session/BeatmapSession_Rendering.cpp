@@ -1247,7 +1247,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                    ? m_ctx->noteRegistry.try_get<NoteComponent>(
                                          practice.entity)
                                    : nullptr;
-            snapshot->walkthroughPracticeNotes[index] = {
+            auto&       state = snapshot->walkthroughPracticeNotes[index];
+            state             = {
                 practice.token,
                 practice.entity,
                 note && note->m_collaborationId == practice.collaborationId,
@@ -1256,7 +1257,36 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     ? static_cast<std::uint32_t>(note->m_subNotes.size())
                     : 0U
             };
+            if ( state.alive ) {
+                // 四个教学句柄是固定上限；只复制根与前 32 个子段的值。
+                // UI 据此验收结束后的编辑，不跨线程借用 ECS 指针。
+                // 复制发生在逻辑线程已经持有的会话状态中，不添加跨线程锁。
+                // 拖动中的临时值可以进入快照，但缺少释放事件不能完成教程。
+                // 令牌与协作 ID 同时匹配，实体槽位复用也不会伪造旧练习。
+                // 固定容量把最坏情况限制为四个根和每根 32 个子段。
+                // 尾段超出容量时 UI 只报告无法定位，不越界读取。
+                // 结构合并仍能通过正式总段数变化验收，不依赖全部几何。
+                // 根几何先写入，子段数组仅在根仍持有对应数量时复制。
+                state.root                 = { note->m_type,
+                                               note->m_timestamp,
+                                               note->m_duration,
+                                               note->m_trackIndex,
+                                               note->m_dtrack };
+                state.capturedSubNoteCount = static_cast<std::uint32_t>(
+                    std::min(note->m_subNotes.size(), state.subNotes.size()));
+                for ( std::size_t subIndex = 0;
+                      subIndex < state.capturedSubNoteCount;
+                      ++subIndex ) {
+                    const auto& sub          = note->m_subNotes[subIndex];
+                    state.subNotes[subIndex] = { sub.type,
+                                                 sub.timestamp,
+                                                 sub.duration,
+                                                 sub.trackIndex,
+                                                 sub.dtrack };
+                }
+            }
         }
+        snapshot->walkthroughEditEvent = m_ctx->walkthroughEditEvent;
         // 批注版本和批注可见项来自同一会话缓存。
         // 消费端可据版本判断提示数据是否已更新。
         snapshot->annotationRevision = m_ctx->annotationRenderCacheRevision;

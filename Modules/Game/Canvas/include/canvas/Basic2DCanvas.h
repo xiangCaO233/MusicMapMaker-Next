@@ -230,6 +230,14 @@ private:
         const Common::Render::RenderSnapshot& snapshot,
         const ImVec2& canvasScreenPosition, const ImVec2& canvasSize);
 
+    /// @brief 检查创作教程中的编辑操作并定位真实物件上的操作起点。
+    /// @return 当前步骤属于编辑练习时返回 true。
+    /// @warning UI 热路径：仅扫描固定数量的练习物件与当前帧命中框。
+    bool updateComposeEditWalkthrough(
+        UI::UIManager*                        sourceManager,
+        const Common::Render::RenderSnapshot& snapshot,
+        const ImVec2& canvasScreenPosition, const ImVec2& canvasSize);
+
     /// @brief 画布名称
     std::string m_canvasName;
 
@@ -387,6 +395,14 @@ private:
     bool m_walkthroughPolylineDragged{ false };
     /// @brief 已释放并等待逻辑快照确认最终子段数的步骤身份。
     std::uint64_t m_walkthroughPolylinePendingToken{ 0 };
+    /// @brief 编辑练习进入时固定的四个物件几何，避免拖动预览抵扣正式结果。
+    std::array<Common::Render::RenderSnapshot::WalkthroughPracticeNoteState, 4>
+        m_walkthroughEditBaselines{};
+    /// @brief 当前编辑练习步骤身份与开始时已完成的编辑事务序号。
+    std::uint64_t m_walkthroughEditStepToken{ 0 };
+    std::uint64_t m_walkthroughEditFirstRevision{ 0 };
+    /// @brief 缓存所属谱面；换标签后不复用旧谱面的实体句柄。
+    std::uintptr_t m_walkthroughEditBeatmapInstanceId{ 0 };
     /// @brief 本次尝试是否已经形成可见拖动距离。
     bool m_walkthroughNoteDragged{ false };
     /// @brief 逻辑快照是否确认本次画笔已激活。

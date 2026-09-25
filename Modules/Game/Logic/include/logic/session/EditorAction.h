@@ -39,6 +39,8 @@ public:
 
     /// @brief 教学创建所属步骤；普通动作保持零，不受引导回退影响。
     std::uint64_t m_walkthroughToken{ 0 };
+    /// @brief 替换式续接沿用原练习槽位；普通创建按音符类型选择槽位。
+    int m_walkthroughSlot{ -1 };
     /// @brief 构造只移除本动作教学产物的补偿动作；默认不支持。
     /// @note 不重放普通 undo，以免恢复布局或覆盖其他后续编辑。
     virtual std::unique_ptr<IEditorAction> walkthroughRollback(SessionContext&)

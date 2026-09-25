@@ -1149,8 +1149,8 @@ void ToolbarView::update(UIManager* sourceManager)
                 const ImVec2 swatchMin  = {
                     minPos.x + (btnSize - swatchSize) * 0.5f,
                     minPos.y + (showToolLabels
-                                     ? std::floor(5.0f * dpiScale)
-                                     : (btnHeight - swatchSize) * 0.5f),
+                                    ? std::floor(5.0f * dpiScale)
+                                    : (btnHeight - swatchSize) * 0.5f),
                 };
                 const ImVec2 swatchMax = { swatchMin.x + swatchSize,
                                            swatchMin.y + swatchSize };
@@ -1838,11 +1838,11 @@ void ToolbarView::update(UIManager* sourceManager)
         float targetY = m_lastSpeedBtnY;
 
         // 独立缓存尺寸，避免不同弹层内容宽高互相干扰。
-        float popupW  = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                 : std::floor(160.0f * dpiScale);
-        float popupH  = m_speedPopupHeight > 0.0f
-                            ? m_speedPopupHeight
-                            : std::floor(120.0f * dpiScale);
+        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
+                                                : std::floor(160.0f * dpiScale);
+        float popupH = m_speedPopupHeight > 0.0f
+                           ? m_speedPopupHeight
+                           : std::floor(120.0f * dpiScale);
         float padding = std::floor(8.0f * dpiScale);
 
         targetX = std::max(targetX, viewportLeft + popupW + padding);
@@ -4430,6 +4430,22 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
         spotlight.reportLastItem("compose.toolbar.tool-selection");
         if ( clicked && tool == Logic::EditTool::Draw )
             spotlight.completeTarget("compose.toolbar.tool-selection");
+        // 后续编辑先切到拖拽工具，续写时再返回绘制工具；每个按钮只上报
+        // 自己对应的目标，避免整个工具组都被误认成正确选择。
+        // 通用绘制工具选择步骤仍沿用旧目标，维护旧教程阶段的完成条件。
+        // 新目标只在当前按钮绘制时报告，聚光灯不会高亮相邻的工具按钮。
+        // 用户若已选中目标工具，可由步骤的确认入口继续而不伪造点击。
+        if ( tool == Logic::EditTool::Move ) {
+            spotlight.reportLastItem("compose.toolbar.select-move-tool");
+            if ( clicked )
+                spotlight.completeTarget("compose.toolbar.select-move-tool");
+        }
+        if ( tool == Logic::EditTool::Draw ) {
+            spotlight.reportLastItem("compose.toolbar.select-draw-tool-edit");
+            if ( clicked )
+                spotlight.completeTarget(
+                    "compose.toolbar.select-draw-tool-edit");
+        }
     }
     if ( clicked ) {
         if ( m_currentTool != tool ) {

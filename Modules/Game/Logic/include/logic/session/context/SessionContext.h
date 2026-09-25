@@ -74,6 +74,8 @@ struct SessionContext {
     /// @note 本索引不持有实体；装载新谱面时清零，删除只改变其存活查询结果。
     /// @brief 按 Note、Hold、Flick、Polyline 顺序记录练习产物。
     std::array<WalkthroughPracticeNote, 4> walkthroughPracticeNotes{};
+    /// @brief 最近一次结束的编辑手势；仅发布标记，不在热路径复制音符列表。
+    Common::Render::RenderSnapshot::WalkthroughEditEvent walkthroughEditEvent{};
     entt::registry sampleRegistry;    ///< 自动采样实体的独立 ECS 注册表
     entt::registry timelineRegistry;  ///< 时间轴事件(BPM等)的 ECS 注册表
     /// @brief 玩家物件已选实体索引，避免框选热路径扫描完整 Registry。
@@ -295,6 +297,12 @@ struct SessionContext {
 
         /// @brief 当前画笔是否通过先删除已有物件进入恢复或转换编辑。
         bool replacesExistingObject{ false };
+        /// @brief 续接前的根实体；用于把教学身份转移给替换后的折线。
+        entt::entity resumedEntity{ entt::null };
+        /// @brief 源物件属于哪个练习槽位；无匹配时保持 -1。
+        int resumedPracticeSlot{ -1 };
+        /// @brief 续接后应由新实体继承的创建令牌。
+        std::uint64_t resumedPracticeToken{ 0 };
         /// @brief 本次手势是否进入过滑键或折线；禁止其零长度段变成独立 Hold。
         bool hasPolylineGesture{ false };
 

@@ -394,14 +394,39 @@ struct RenderSnapshot {
     /// @brief 按 Note、Hold、Flick、Polyline
     /// 顺序传递练习物件状态，实体句柄仅在本会话有效。
     struct WalkthroughPracticeNoteState {
+        /// @brief 教学只复制前 32 段，避免每帧为四个练习物件分配动态内存。
+        static constexpr std::size_t MAX_SUB_NOTES = 32;
+        /// @brief 一段用于辨认编辑结果的值语义几何。
+        struct SubNoteState {
+            ::MMM::NoteType type{ ::MMM::NoteType::NOTE };
+            double          timestamp{ 0.0 };
+            double          duration{ 0.0 };
+            int             track{ 0 };
+            int             dtrack{ 0 };
+        };
         std::uint64_t token{ 0 };            ///< 对应创建步骤的标记。
         entt::entity  entity{ entt::null };  ///< 创建动作的实体。
         bool          alive{ false };        ///< 同一实体仍然存在。
         /// @brief 根折线最终保留的子段数，其他类型为零。
         std::uint32_t subNoteCount{ 0 };
+        /// @brief 根物件类型和几何，用于验收实际落地的局部编辑。
+        SubNoteState root{};
+        /// @brief 已复制的子段数量；超出固定容量时教学不猜测隐藏段。
+        std::uint32_t capturedSubNoteCount{ 0 };
+        /// @brief 折线子段的稳定下标与值，不持有逻辑线程组件指针。
+        std::array<SubNoteState, MAX_SUB_NOTES> subNotes{};
     };
     /// @brief 固定四个物件的删除状态，不依赖其是否处于可见时间范围。
     std::array<WalkthroughPracticeNoteState, 4> walkthroughPracticeNotes{};
+    /// @brief 一次已经结束的编辑手势，配合正式几何防止拖动预览提前完成引导。
+    struct WalkthroughEditEvent {
+        enum class Kind : std::uint8_t { None, Drag, Brush };
+        std::uint64_t revision{ 0 };
+        entt::entity  sourceEntity{ entt::null };
+        HoverPart     part{ HoverPart::None };
+        int           subIndex{ -1 };
+        Kind          kind{ Kind::None };
+    } walkthroughEditEvent{};
     /// @brief 普通悬浮拾取与调试显示使用的横向包围盒缩放。
     float interactionHitboxScaleX{ 1.0F };
     /// @brief 普通悬浮拾取与调试显示使用的纵向包围盒缩放。
@@ -768,8 +793,10 @@ struct RenderSnapshot {
         overlayCmds.clear();
         hitboxes.clear();
         walkthroughPracticeNotes = {};
-        interactionHitboxScaleX  = 1.0F;
-        interactionHitboxScaleY  = 1.0F;
+        // 复用快照缓冲时不能让上张谱面的释放事务流入下一张谱面。
+        walkthroughEditEvent    = {};
+        interactionHitboxScaleX = 1.0F;
+        interactionHitboxScaleY = 1.0F;
         overlapMasks.clear();
         annotationMarkers.clear();
         annotationRevision = 0;
