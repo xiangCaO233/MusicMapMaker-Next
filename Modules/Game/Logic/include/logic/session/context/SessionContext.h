@@ -72,8 +72,8 @@ struct SessionContext {
     // --- 核心状态 ---
     entt::registry noteRegistry;  ///< 音符实体的 ECS 注册表
     /// @note 本索引不持有实体；装载新谱面时清零，删除只改变其存活查询结果。
-    /// @brief 按 Note、Hold、Flick 顺序记录本轮练习产物，避免扫描完整注册表。
-    std::array<WalkthroughPracticeNote, 3> walkthroughPracticeNotes{};
+    /// @brief 按 Note、Hold、Flick、Polyline 顺序记录练习产物。
+    std::array<WalkthroughPracticeNote, 4> walkthroughPracticeNotes{};
     entt::registry sampleRegistry;    ///< 自动采样实体的独立 ECS 注册表
     entt::registry timelineRegistry;  ///< 时间轴事件(BPM等)的 ECS 注册表
     /// @brief 玩家物件已选实体索引，避免框选热路径扫描完整 Registry。

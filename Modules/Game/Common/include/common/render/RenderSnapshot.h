@@ -391,15 +391,17 @@ struct RenderSnapshot {
     std::vector<Common::Render::CanvasDrawCmd> overlayCmds;
     /// @brief 与本帧可见物件对应的拾取包围盒。
     std::vector<Hitbox> hitboxes;
-    /// @brief 按 Note、Hold、Flick
+    /// @brief 按 Note、Hold、Flick、Polyline
     /// 顺序传递练习物件状态，实体句柄仅在本会话有效。
     struct WalkthroughPracticeNoteState {
         std::uint64_t token{ 0 };            ///< 对应创建步骤的标记。
         entt::entity  entity{ entt::null };  ///< 创建动作的实体。
         bool          alive{ false };        ///< 同一实体仍然存在。
+        /// @brief 根折线最终保留的子段数，其他类型为零。
+        std::uint32_t subNoteCount{ 0 };
     };
-    /// @brief 固定三个物件的删除状态，不依赖其是否处于可见时间范围。
-    std::array<WalkthroughPracticeNoteState, 3> walkthroughPracticeNotes{};
+    /// @brief 固定四个物件的删除状态，不依赖其是否处于可见时间范围。
+    std::array<WalkthroughPracticeNoteState, 4> walkthroughPracticeNotes{};
     /// @brief 普通悬浮拾取与调试显示使用的横向包围盒缩放。
     float interactionHitboxScaleX{ 1.0F };
     /// @brief 普通悬浮拾取与调试显示使用的纵向包围盒缩放。
@@ -592,7 +594,7 @@ struct RenderSnapshot {
     double  hoveredNoteTime{ 0.0 };  // 悬浮物件的精确时间戳
     int32_t hoveredNoteTrack{ 0 };   ///< 悬浮物件精确部件所在轨道
     int     hoveredBeatIndex{
-        0
+            0
     };  // 当前悬浮时间点所在的拍序 (从首个BPMTiming开始)
     int hoveredNoteBeatIndex{ 0 };  // 悬浮物件所在的拍序
     /// @brief 当前悬浮物件的结构化检视信息

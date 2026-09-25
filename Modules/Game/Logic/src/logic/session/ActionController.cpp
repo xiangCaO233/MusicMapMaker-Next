@@ -714,7 +714,7 @@ void NoteAction::execute(SessionContext& ctx)
         reg.emplace_or_replace<NoteComponent>(m_entity, *m_after);
         reg.emplace_or_replace<TransformComponent>(m_entity);
         reg.emplace_or_replace<InteractionComponent>(m_entity);
-        // 只跟踪三类教学创建动作；重做也会更新句柄，普通创建绝不占用练习槽。
+        // 普通创建按 Note/Hold/Flick 存放；折线批量创建在独立路径处理。
         // 类型到槽位映射固定，UI 可用步骤标记核对确切的本轮创建动作。
         // 删除时保留记录，以便快照用无效句柄确认物件已真正消失。
         // 稳定协作 ID 与句柄同时记录，阻止后来复用槽位的音符冒充练习成果。
@@ -949,6 +949,35 @@ std::string NoteAction::getName() const
 
 // --- BatchNoteAction 实现 ---
 
+/// @brief 为教学折线生成只删除本批父子实体的补偿动作。
+/// @param ctx 当前会话，用于核对实体和稳定协作身份。
+/// @return 所有创建条目仍属于原动作时返回批量删除，否则跳过失效条目。
+/// @warning 用户返回步骤时扫描本批历史条目，不进入逐帧路径。
+std::unique_ptr<IEditorAction> BatchNoteAction::walkthroughRollback(
+    SessionContext& ctx)
+{
+    if ( m_walkthroughToken == 0 ) return {};
+    std::vector<Entry> deletions;
+    deletions.reserve(m_entries.size());
+    // 保存创建动作中的原始实体集合，而不是按轨道或时间重新查找。
+    // 绘制后的用户编辑可能改变折线形状，身份仍是唯一可靠的回退依据。
+    // 所有条目在建立补偿动作前逐一验证，避免复用的 entt 句柄误删新对象。
+    // 被用户手动删除的条目直接跳过，剩余父子项仍可一并补偿。
+    // 通过动作栈执行补偿，保持撤销和重做语义与普通编辑一致。
+    for ( const auto& entry : m_entries ) {
+        // 教学折线只允许独立新建；混合删除或更新批次不能误删旧物件。
+        if ( entry.before || !entry.after ) return {};
+        if ( !isActionNoteEntity(ctx.noteRegistry, entry.entity, *entry.after) )
+            continue;
+        deletions.push_back({ entry.entity,
+                              ctx.noteRegistry.get<NoteComponent>(entry.entity),
+                              std::nullopt });
+    }
+    if ( deletions.empty() ) return {};
+    return std::make_unique<BatchNoteAction>(std::move(deletions),
+                                             "Walkthrough Rollback");
+}
+
 /// @brief 首次执行一组音符变更，并统一维护身份、选择与派生缓存标记。
 /// @param ctx 批量动作所属会话。
 /// @note 条目按记录顺序执行；批量路径采用重排或剔除失效标记而非逐项增量更新。
@@ -987,6 +1016,16 @@ void BatchNoteAction::execute(SessionContext& ctx)
             if ( !reg.valid(entry.entity) )
                 entry.entity = reg.create(entry.entity);
             reg.emplace_or_replace<NoteComponent>(entry.entity, *entry.after);
+            // 父折线创建后登记教学身份；子实体不占用独立练习槽位。
+            if ( m_walkthroughToken != 0 && !entry.before &&
+                 entry.after->m_type == ::MMM::NoteType::POLYLINE &&
+                 !entry.after->m_isSubNote ) {
+                ctx.walkthroughPracticeNotes[3] = {
+                    m_walkthroughToken,
+                    entry.entity,
+                    entry.after->m_collaborationId
+                };
+            }
             // 批量写入保留已有辅助组件；选择状态由下面的可选字段单独决定。
             ensureNoteAuxiliaryComponents(reg, entry.entity);
             // 选择操作只改交互状态，不写回 entry.after 中的音符业务值。

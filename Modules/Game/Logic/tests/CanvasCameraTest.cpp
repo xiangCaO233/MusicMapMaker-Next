@@ -734,6 +734,184 @@ bool testWalkthroughPlacementRollback()
     return true;
 }
 
+/// @brief 核验五段教学折线的正式提交、短折线拒绝和父子物件定向回退。
+/// @return 最终子段门禁与回退身份均正确时返回 true。
+/// @details 沿五次方向变更构造真实 Shift 画笔，覆盖预览到批量动作的路径。
+/// 先尝试两段折线，确认最低段数在正式动作创建前生效。
+/// 再绘制五段并检查根组件、子实体数量、稳定 ID 与教学槽位。
+/// 最后在相同拍位补一颗普通 Note，确认按令牌回退不会误删它。
+/// @par 关键不变量
+/// - 最低段数使用最终规范化子段，而不是鼠标更新次数。
+/// - 独立折线对应一个动作，但根与每段子实体均属同一动作。
+/// - 教学槽位保存根实体与稳定协作 ID，不保存任意子实体。
+/// - 短折线没有持久实体，也不增加撤销栈深度。
+/// - 回退补偿只删除目标动作仍存活的父子实体。
+/// - 补偿仍遵守常规撤销、重做协议。
+/// @par 故障定位
+/// 两段仍被提交时检查 DrawTool 规范化之后的门禁。
+/// 五段有根无子时检查 BatchNoteAction 创建条目。
+/// 根存在但槽位为空时检查批量动作的教学令牌传播。
+/// 回退误删普通物件时检查实体身份与补偿条目的对应关系。
+/// @par 测试边界
+/// 本测试直接发送画笔命令，不模拟 ImGui 目标框或气泡渲染。
+/// 横纵交替的坐标选择与已有画布测试共享线性相机布局。
+/// 快照发布的复制语义由会话渲染代码负责，本测试验证源槽位。
+/// 子段需要在新方向建立后继续移动，末尾的零时长 Hold 会在提交时消失。
+/// 因此最后一轨安排两次纵向采样，避免只把预览段数误认为最终段数。
+/// 第二次横移回到起始轨道，覆盖折线转向后负 dtrack 的表示。
+/// 最终类型序列必须保持 Hold、Flick 交替，不能只核对总数量。
+/// 末段的正持续时间单独检查，防止五个节点中混入待清理临时段。
+/// 这些断言与画布的七点路线共同约束同一真实 DrawTool 手势。
+/// 短笔画与完整笔画使用不同令牌，避免前者的历史残留被后者掩盖。
+/// 根组件的内嵌段数与注册表子实体总数分别断言，便于区分两种失败。
+/// 普通物件在折线提交后追加，用于验证回退令牌不依赖栈顶顺序。
+/// 首次回退后再发送相同令牌，用历史深度检查幂等性。
+/// Undo 与 Redo 使用动作栈原生路径，不调用补偿 helper 伪造结果。
+/// 失败日志只在断言不成立时发出，成功路径保持测试输出简洁。
+/// 整体不写入文件或项目最近记录，不触及用户个人配置。
+/// @warning 测试在命令路径提交画笔，不进入每帧渲染路径。
+bool testWalkthroughPolylinePlacementRollback()
+{
+    // 每个子场景沿用同一个会话，以检查失败笔画没有污染后续成功笔画。
+    // 若失败后遗留 brushState，第二次起笔会被状态门禁挡住。
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    context.lastConfig.settings.enablePolylineEditing = true;
+    MMM::Logic::DrawTool tool;
+    // 画笔工具通过采样点模拟用户持续按住左键的移动过程。
+    // 结束命令携带当前步骤令牌和最低子段数，而非修改全局编辑配置。
+    const auto draw = [&](std::initializer_list<std::pair<float, float>> points,
+                          std::uint64_t token) {
+        tool.handleStartBrush(
+            context,
+            MMM::Logic::CmdStartBrush{ .cameraId         = "Basic2DCanvas",
+                                       .mouseX           = 150.0F,
+                                       .mouseY           = 300.0F,
+                                       .isShiftDown      = true,
+                                       .createStandalone = true });
+        for ( const auto [x, y] : points ) {
+            tool.handleUpdateBrush(
+                context,
+                MMM::Logic::CmdUpdateBrush{ .cameraId    = "Basic2DCanvas",
+                                            .mouseX      = x,
+                                            .mouseY      = y,
+                                            .isShiftDown = true });
+        }
+        if ( token == 42 && context.brushState.polylineSegments.size() < 5U )
+            XERROR("Walkthrough polyline preview has {} segments, type {}",
+                   context.brushState.polylineSegments.size(),
+                   static_cast<int>(context.brushState.type));
+        tool.handleEndBrush(
+            context,
+            MMM::Logic::CmdEndBrush{ .cameraId         = "Basic2DCanvas",
+                                     .createStandalone = true,
+                                     .walkthroughToken = token,
+                                     .walkthroughMinimumSubNotes = 5 });
+    };
+
+    // 两段预览不能通过最终五段门禁，也不能留下可撤销的空动作。
+    draw({ { 150.0F, 250.0F }, { 250.0F, 250.0F } }, 41);
+    if ( !context.noteRegistry.view<MMM::Logic::NoteComponent>().empty() ||
+         context.actionStack.getUndoStackSize() != 0U ) {
+        XERROR("Short walkthrough polyline changed objects or history");
+        return false;
+    }
+
+    // 纵、横交替改变方向；同一手势应规范为五个非退化子段。
+    // 水平点和前一个点保持同一 y，避免无意生成斜段改变节点数量。
+    // 最后一段仍沿时间方向延伸，确保结束时不会被零长度清理删除。
+    draw({ { 150.0F, 250.0F },
+           { 250.0F, 250.0F },
+           { 250.0F, 200.0F },
+           { 150.0F, 200.0F },
+           { 150.0F, 150.0F },
+           { 150.0F, 100.0F } },
+         42);
+    const auto practice = context.walkthroughPracticeNotes[3];
+    if ( practice.token != 42 || !context.noteRegistry.valid(practice.entity) ||
+         context.actionStack.getUndoStackSize() != 1U ) {
+        XERROR("Walkthrough polyline commit missing: token {}, depth {}",
+               practice.token,
+               context.actionStack.getUndoStackSize());
+        return false;
+    }
+    const auto& root =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(practice.entity);
+    if ( root.m_type != MMM::NoteType::POLYLINE || root.m_isSubNote ||
+         root.m_subNotes.size() != 5U ||
+         root.m_collaborationId != practice.collaborationId ) {
+        XERROR("Walkthrough polyline root invalid: type {}, subnotes {}",
+               static_cast<int>(root.m_type),
+               root.m_subNotes.size());
+        return false;
+    }
+    // 完整路线应是三段 Hold 夹两段 Flick，横移后再回到起始轨。
+    // 只核对根的最终子段，不拿临时画笔中可能存在的零长度尾段凑数。
+    // 第五段必须具有正持续时间，否则松手时会被规范化清掉。
+    const std::array expectedTypes{ MMM::NoteType::HOLD,
+                                    MMM::NoteType::FLICK,
+                                    MMM::NoteType::HOLD,
+                                    MMM::NoteType::FLICK,
+                                    MMM::NoteType::HOLD };
+    for ( std::size_t index = 0; index < expectedTypes.size(); ++index ) {
+        if ( root.m_subNotes[index].type != expectedTypes[index] ) return false;
+    }
+    if ( root.m_subNotes[1].dtrack != 1 || root.m_subNotes[3].dtrack != -1 ||
+         root.m_subNotes[4].duration <= 0.0 )
+        return false;
+    // 每一段还应有独立 ECS 投影实体，不能只记录父物件的内嵌数组。
+    const auto originalCount =
+        context.noteRegistry.view<MMM::Logic::NoteComponent>().size();
+    // 父组件内嵌子段之外，每段还应有一个独立 ECS 投影实体。
+    // 该数量检查可捕获只登记根、不登记子物件的回退遗漏。
+    if ( originalCount != root.m_subNotes.size() + 1U ) {
+        XERROR("Walkthrough polyline child count invalid: objects {}",
+               originalCount);
+        return false;
+    }
+
+    // 普通物件与教学折线重叠也不能被定向回退误删。
+    // 普通动作放在栈顶，确保 CmdUndo 使用令牌定位，而非直接弹栈顶。
+    MMM::Logic::NoteComponent unrelated;
+    unrelated.m_timestamp      = context.currentTime;
+    unrelated.m_trackIndex     = 0;
+    const auto unrelatedEntity = context.noteRegistry.create();
+    context.actionStack.pushAndExecute(std::make_unique<MMM::Logic::NoteAction>(
+                                           MMM::Logic::NoteAction::Type::Create,
+                                           unrelatedEntity,
+                                           std::nullopt,
+                                           unrelated),
+                                       context);
+    MMM::Logic::ActionController controller(context);
+    controller.handleCommand(MMM::Logic::CmdUndo{ .walkthroughToken = 42 });
+    if ( context.noteRegistry.valid(practice.entity) ||
+         !context.noteRegistry.valid(unrelatedEntity) ||
+         context.noteRegistry.view<MMM::Logic::NoteComponent>().size() != 1U ) {
+        XERROR("Walkthrough polyline rollback did not isolate children");
+        return false;
+    }
+    // 补偿动作仍可撤销重做；重复请求不生成额外历史。
+    // 回退是新的可撤销动作，所以 Undo 应恢复整条父子链。
+    // Redo 再次删除整条链，不能只切换根实体的存活状态。
+    const auto depth = context.actionStack.getUndoStackSize();
+    controller.handleCommand(MMM::Logic::CmdUndo{ .walkthroughToken = 42 });
+    if ( context.actionStack.getUndoStackSize() != depth ) {
+        XERROR("Walkthrough polyline rollback repeated history");
+        return false;
+    }
+    context.actionStack.undo(context);
+    if ( context.noteRegistry.view<MMM::Logic::NoteComponent>().size() !=
+         originalCount + 1U ) {
+        XERROR("Walkthrough polyline rollback Undo did not restore children");
+        return false;
+    }
+    context.actionStack.redo(context);
+    const bool redoPassed =
+        context.noteRegistry.view<MMM::Logic::NoteComponent>().size() == 1U;
+    if ( !redoPassed ) XERROR("Walkthrough polyline rollback Redo failed");
+    return redoPassed;
+}
+
 /// @brief 验证反向拖动半拍、一拍的纯 Hold 在提交及撤销重做后仍为零长度长条。
 /// @details
 /// 对 Polyline 开关开/关各测试半拍与一拍反向拖动。鼠标保持同轨并向歌曲更早
@@ -1231,8 +1409,8 @@ bool testBrushAudioResourcePlacementRules()
     for ( const auto entity : samples ) {
         const auto& sample = samples.get<MMM::Logic::SampleComponent>(entity);
         foundMain          = foundMain || (sample.m_track == 5 &&
-                                  sample.m_audioResourceId == "main" &&
-                                  near(sample.m_volume, 0.7));
+                                           sample.m_audioResourceId == "main" &&
+                                           near(sample.m_volume, 0.7));
     }
     if ( !foundMain ) return false;
 
@@ -2484,7 +2662,7 @@ bool testPerBeatmapDraftLaneSharingAndIsolation()
     entt::entity concurrentOuter = entt::null;
     entt::entity concurrentStale = entt::null;
     const auto   concurrentView  = afterConcurrentGrowth.noteRegistry
-                                    .view<const MMM::Logic::NoteComponent>();
+                                       .view<const MMM::Logic::NoteComponent>();
     for ( const auto entity : concurrentView ) {
         const auto& note =
             concurrentView.get<const MMM::Logic::NoteComponent>(entity);
@@ -2645,25 +2823,25 @@ bool testAlignCommonBeatsPreservesEmbeddedPolylineNodes()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-              .type       = MMM::NoteType::HOLD,
-              .timestamp  = 1.013,
-              .duration   = 0.241,
-              .trackIndex = 0,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::HOLD,
+            .timestamp  = 1.013,
+            .duration   = 0.241,
+            .trackIndex = 0,
+            .dtrack     = 0,
         },
         {
-              .type       = MMM::NoteType::FLICK,
-              .timestamp  = 1.254,
-              .duration   = 0.0,
-              .trackIndex = 0,
-              .dtrack     = 1,
+            .type       = MMM::NoteType::FLICK,
+            .timestamp  = 1.254,
+            .duration   = 0.0,
+            .trackIndex = 0,
+            .dtrack     = 1,
         },
         {
-              .type       = MMM::NoteType::HOLD,
-              .timestamp  = 1.254,
-              .duration   = 0.246,
-              .trackIndex = 1,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::HOLD,
+            .timestamp  = 1.254,
+            .duration   = 0.246,
+            .trackIndex = 1,
+            .dtrack     = 0,
         },
     };
 
@@ -5331,25 +5509,25 @@ bool testSelectedPolylineTailEraseWithOtherSelection()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-              .type       = MMM::NoteType::NOTE,
-              .timestamp  = 1.0,
-              .duration   = 0.0,
-              .trackIndex = 0,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::NOTE,
+            .timestamp  = 1.0,
+            .duration   = 0.0,
+            .trackIndex = 0,
+            .dtrack     = 0,
         },
         {
-              .type       = MMM::NoteType::HOLD,
-              .timestamp  = 2.0,
-              .duration   = 0.5,
-              .trackIndex = 1,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::HOLD,
+            .timestamp  = 2.0,
+            .duration   = 0.5,
+            .trackIndex = 1,
+            .dtrack     = 0,
         },
         {
-              .type       = MMM::NoteType::FLICK,
-              .timestamp  = 3.0,
-              .duration   = 0.0,
-              .trackIndex = 1,
-              .dtrack     = 1,
+            .type       = MMM::NoteType::FLICK,
+            .timestamp  = 3.0,
+            .duration   = 0.0,
+            .trackIndex = 1,
+            .dtrack     = 1,
         },
     };
 
@@ -7477,7 +7655,7 @@ bool testCompositeConversionUsesTypedIdentity()
                 .entity = sampleEntity,
                 .before = context.sampleRegistry
                               .get<MMM::Logic::SampleComponent>(sampleEntity),
-                .after          = std::nullopt,
+                .after  = std::nullopt,
                 .beforeSelected = true,
             },
         }));
@@ -7572,11 +7750,11 @@ bool testMarqueeSelectsTypedSamplesOnlyOnMainCanvas()
     context.sortedSampleMaxEndPrefix = { 1.0 };
     context.marqueeBoxes             = {
         MMM::Logic::MarqueeBox{
-                        .startTime  = 0.9,
-                        .endTime    = 1.1,
-                        .startTrack = 4.05F,
-                        .endTrack   = 4.95F,
-                        .cameraId   = "Basic2DCanvas",
+            .startTime  = 0.9,
+            .endTime    = 1.1,
+            .startTrack = 4.05F,
+            .endTrack   = 4.95F,
+            .cameraId   = "Basic2DCanvas",
         },
     };
     context.isMarqueeSelectionDirty = true;
@@ -8056,6 +8234,7 @@ int main()
                    testKeyModeBrushCreatesOnlyHold() &&
                    testWalkthroughStandalonePlacement() &&
                    testWalkthroughPlacementRollback() &&
+                   testWalkthroughPolylinePlacementRollback() &&
                    testDownwardBrushCreatesZeroLengthHold() &&
                    testDownwardFlickAndPolylineRemainSlides() &&
                    testPolylinePreservesHorizontalFirstGestureOrder() &&

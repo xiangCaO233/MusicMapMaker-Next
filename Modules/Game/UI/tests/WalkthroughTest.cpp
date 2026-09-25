@@ -289,7 +289,7 @@ int main(int argc, char** argv)
          !composeBeatmapTopic->m_requiresBeatmap ||
          composeBeatmapTopic->m_order != 40 ||
          composeBeatmapTopic->m_branches.size() != 1 ||
-         composeBeatmapTopic->m_branches.front().m_steps.size() != 9 ||
+         composeBeatmapTopic->m_branches.front().m_steps.size() != 10 ||
          topicAvailable(*composeBeatmapTopic, false, false) ||
          topicAvailable(*composeBeatmapTopic, true, false) ||
          !topicAvailable(*composeBeatmapTopic, true, true) )
@@ -318,14 +318,18 @@ int main(int argc, char** argv)
          // 长条仍借用单键落点，不因插入 Flick 改成以滑键为时间或轨道参考。
          composeSteps[6].m_guide->m_targets !=
              std::vector<std::string>{ "compose.canvas.place-hold" } ||
-         // 两个删除步骤必须有独立目标；最终完成不能由确认按钮绕过。
+         // 折线需真正提交至少五段，确认按钮不得跳过本次练习。
          // 路线顺序也由上面的前置链验证，不能把清理放到绘制之前。
          composeSteps[7].m_guide->m_targets !=
-             std::vector<std::string>{ "compose.canvas.delete-hold" } ||
-         composeSteps[8].m_guide->m_targets !=
-             std::vector<std::string>{ "compose.canvas.delete-remaining" } ||
+             std::vector<std::string>{ "compose.canvas.place-polyline" } ||
          !composeSteps[7].m_guide->m_requiresAction ||
-         !composeSteps[8].m_guide->m_requiresAction )
+         // 两个删除步骤必须有独立目标；最终完成不能由确认按钮绕过。
+         composeSteps[8].m_guide->m_targets !=
+             std::vector<std::string>{ "compose.canvas.delete-hold" } ||
+         composeSteps[9].m_guide->m_targets !=
+             std::vector<std::string>{ "compose.canvas.delete-remaining" } ||
+         !composeSteps[8].m_guide->m_requiresAction ||
+         !composeSteps[9].m_guide->m_requiresAction )
         return 68;
     // 空白流程的六个目标依次对应菜单入口、音频、自动测偏、BPM 复核、
     // 元数据资源区域和最终创建按钮，不要求改造原有单页弹窗布局。

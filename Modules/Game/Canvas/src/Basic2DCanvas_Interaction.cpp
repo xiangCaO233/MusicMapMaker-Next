@@ -454,14 +454,14 @@ void drawCanvasComponentEditableRegionMask(
 
     constexpr float edgeEpsilon  = 0.5f;
     const bool      coversCanvas = left <= edgeEpsilon && top <= edgeEpsilon &&
-                              right >= canvasWidth - edgeEpsilon &&
-                              bottom >= canvasHeight - edgeEpsilon;
+                                   right >= canvasWidth - edgeEpsilon &&
+                                   bottom >= canvasHeight - edgeEpsilon;
     // 普通组件允许覆盖整张画布，边框与遮罩都没有额外信息价值。
     if ( coversCanvas ) return;
 
     const ImVec2    canvasMin{ canvasScreenX, canvasScreenY };
     const ImVec2    canvasMax{ canvasScreenX + canvasWidth,
-                            canvasScreenY + canvasHeight };
+                               canvasScreenY + canvasHeight };
     const ImVec2    allowedMin{ canvasScreenX + left, canvasScreenY + top };
     const ImVec2    allowedMax{ canvasScreenX + right, canvasScreenY + bottom };
     constexpr ImU32 maskColor = IM_COL32(0, 0, 0, 118);
@@ -1169,9 +1169,9 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
 
         const float cardTopY    = placement.topY;
         const float cardBottomY = cardTopY + placement.height;
-        const bool  hovered     = canvasHovered && pointerX >= cardLeftX &&
-                             pointerX <= cardRightX && pointerY >= cardTopY &&
-                             pointerY <= cardBottomY;
+        const bool  hovered = canvasHovered && pointerX >= cardLeftX &&
+                              pointerX <= cardRightX && pointerY >= cardTopY &&
+                              pointerY <= cardBottomY;
         // 多张卡片理论上不重叠；若边界恰好共享，只保留首个命中，
         // 保持滚轮和目标提示归属稳定。
         if ( hovered && !result.marker ) {
@@ -4198,9 +4198,9 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
     const float topY          = layout.top * targetHeight;
     const float bottomY       = layout.bottom * targetHeight;
     const bool  gutterHovered = projection.valid && canvasHovered &&
-                               pointerX >= projection.annotationLeftX &&
-                               pointerX <= projection.annotationRightX &&
-                               pointerY >= topY && pointerY <= bottomY;
+                                pointerX >= projection.annotationLeftX &&
+                                pointerX <= projection.annotationRightX &&
+                                pointerY >= topY && pointerY <= bottomY;
 
     // hoveredMarker 指向当前快照，生命周期仅限本帧，不保存为成员。
     // detail index 只有在详情卡命中具体条目时才存在；普通气泡命中默认
@@ -4636,7 +4636,7 @@ void Basic2DCanvasInteraction::updateHoverState(float targetWidth,
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2 localMousePos{ 0.0F, 0.0F };
+    ImVec2     localMousePos{ 0.0F, 0.0F };
     if ( hasValidMousePos ) {
         // 逻辑命令使用当前画布窗口的局部坐标，而非桌面屏幕坐标。
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
@@ -4838,7 +4838,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2 localMousePos{ 0.0f, 0.0f };
+    ImVec2     localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         // 所有逻辑工具共享相对于画布内容原点的坐标系。
         localMousePos = { mousePos.x - windowPos.x, mousePos.y - windowPos.y };
@@ -5031,8 +5031,9 @@ void Basic2DCanvasInteraction::handleInteractions(
                         // 中键中断尚未验收的教学拖动，必须丢弃而不是提前提交。
                         .cancel = m_cancelBrushOnNextRelease ||
                                   (m_standaloneBrush && m_walkthroughPlacement),
-                        .createStandalone = m_standaloneBrush,
-                        .walkthroughToken = m_brushWalkthroughToken,
+                        .createStandalone           = m_standaloneBrush,
+                        .walkthroughToken           = m_brushWalkthroughToken,
+                        .walkthroughMinimumSubNotes = m_brushMinimumSubNotes,
                     }));
             } else if ( m_leftPressStartedObjectDrag ) {
                 Event::EventBus::instance().publish(
@@ -5185,10 +5186,11 @@ void Basic2DCanvasInteraction::handleInteractions(
             // 因而失去画布输入归属时，也不会提交本应丢弃的教学失败手势。
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndBrush{
-                    .cameraId         = m_cameraId,
-                    .cancel           = m_cancelBrushOnNextRelease,
-                    .createStandalone = m_standaloneBrush,
-                    .walkthroughToken = m_brushWalkthroughToken,
+                    .cameraId                   = m_cameraId,
+                    .cancel                     = m_cancelBrushOnNextRelease,
+                    .createStandalone           = m_standaloneBrush,
+                    .walkthroughToken           = m_brushWalkthroughToken,
+                    .walkthroughMinimumSubNotes = m_brushMinimumSubNotes,
                 }));
             break;
         case BlockedCanvasLeftGestureEnd::ObjectDrag:
@@ -5772,6 +5774,9 @@ void Basic2DCanvasInteraction::handleInteractions(
                     // 固定起笔身份，后续返回或跳步不能把提交归属到另一次练习。
                     m_brushWalkthroughToken =
                         m_standaloneBrush ? m_walkthroughToken : 0;
+                    // 子段门槛同样随本次手势冻结，最终清洗后由逻辑层核验。
+                    m_brushMinimumSubNotes =
+                        m_standaloneBrush ? m_walkthroughMinimumSubNotes : 0;
                     Event::EventBus::instance().publish(
                         Event::LogicCommandEvent(
                             Logic::CmdStartBrush{ m_cameraId,
@@ -5946,10 +5951,11 @@ void Basic2DCanvasInteraction::handleInteractions(
                     currentSnapshot->currentTool == Logic::EditTool::Draw ) {
             Event::EventBus::instance().publish(
                 Event::LogicCommandEvent(Logic::CmdEndBrush{
-                    .cameraId         = m_cameraId,
-                    .cancel           = m_cancelBrushOnNextRelease,
-                    .createStandalone = m_standaloneBrush,
-                    .walkthroughToken = m_brushWalkthroughToken,
+                    .cameraId                   = m_cameraId,
+                    .cancel                     = m_cancelBrushOnNextRelease,
+                    .createStandalone           = m_standaloneBrush,
+                    .walkthroughToken           = m_brushWalkthroughToken,
+                    .walkthroughMinimumSubNotes = m_brushMinimumSubNotes,
                 }));
         } else if ( m_leftPressStartedObjectDrag ) {
             // 对象拖拽结束会固化本次连续位移。

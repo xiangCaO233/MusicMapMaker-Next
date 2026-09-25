@@ -29,12 +29,18 @@ struct ComposeHoldTarget {
 /// @param top 可见区域上界，已扣除 UI 补间位移。
 /// @param bottom 可见区域下界，已扣除 UI 补间位移。
 /// @param seed 仅影响另一个轨道的选择，不改变附近拍位的排序。
-/// @return 首选从单键同拍向后延伸；后方不可见则以同拍为尾向前选择。
+/// @param excludedEndTime 已绘制 Flick 头部所在拍位；长条尾部不得重合。
+/// @param excludedTrack Flick 头部轨道；多轨谱面先改用另一条轨道。
+/// @return 普通练习首选后继；同轨 Flick 附近改走其时间相反侧。
+/// @note 多轨先换轨，双轨换轨无解时改选相反侧时间区间。
+/// @note 无完整可见的安全区间时返回空，不让长条身体穿过已有 Flick。
 /// @warning 教程目标失效时调用；只扫描可见拍线，不分配、排序或访问 ECS。
 inline std::optional<ComposeHoldTarget> chooseComposeHoldTarget(
     std::span<const Common::Render::PlayerBeatLineSnapshot> lines,
     double noteTime, int noteTrack, int trackCount, float noteHeight, float top,
-    float bottom, std::uint64_t seed)
+    float bottom, std::uint64_t seed,
+    std::optional<double> excludedEndTime = std::nullopt,
+    std::optional<int>    excludedTrack   = std::nullopt)
 {
     // 单轨谱面无法满足异轨要求；缺少真实尺寸时也不能猜测提示框。
     if ( trackCount < 2 || noteTrack < 0 || noteTrack >= trackCount ||
@@ -58,6 +64,21 @@ inline std::optional<ComposeHoldTarget> chooseComposeHoldTarget(
     }
     // 原拍位不再可见时等待用户返回，禁止重选到远处而丢失单键附近的约束。
     if ( !anchor ) return std::nullopt;
+    int targetTrack =
+        (noteTrack + 1 + static_cast<int>(seed % (trackCount - 1))) %
+        trackCount;
+    // 三轨以上优先避开 Flick 头所在轨，整个 Hold 身体也不会穿过它。
+    if ( excludedTrack && targetTrack == *excludedTrack && trackCount > 2 ) {
+        for ( int candidate = 0; candidate < trackCount; ++candidate ) {
+            if ( candidate != noteTrack && candidate != *excludedTrack ) {
+                targetTrack = candidate;
+                break;
+            }
+        }
+    }
+    const bool sameFlickTrack =
+        excludedEndTime && (!excludedTrack || targetTrack == *excludedTrack);
+    // 只有仍在同一轨时才应用排除拍位，否则同拍但异轨并不重叠。
     double next     = std::numeric_limits<double>::infinity();
     double previous = -std::numeric_limits<double>::infinity();
     // 分段滚动可能让拍线乱序；线性选择最近时间即可，无需热路径完整排序。
@@ -67,16 +88,27 @@ inline std::optional<ComposeHoldTarget> chooseComposeHoldTarget(
         if ( !visible(line) ||
              std::abs(line.y - anchor->y) < noteHeight * 2.0F )
             continue;
-        if ( line.time > noteTime && line.time < next ) next = line.time;
+        // 同轨时禁用 Flick 头拍位；异轨时可照常选最近后继。
+        if ( line.time > noteTime && line.time < next &&
+             (!sameFlickTrack ||
+              std::abs(line.time - *excludedEndTime) >= 1e-7) )
+            next = line.time;
         if ( line.time < noteTime && line.time > previous )
             previous = line.time;
     }
-    // 必须从较早时间按下，DrawTool 才能生成正时长 Hold。
-    // 最近的后继优先，靠近视口上沿时使用最近前驱，不产生零长度长条。
+    // 两轨时同轨不可避开，改用 Flick 头相反侧的时间区间。
+    // 这样不仅尾部不重叠，Hold 身体也不会穿过已有 Flick 头。
+    if ( sameFlickTrack ) {
+        if ( *excludedEndTime > noteTime + 1e-7 && std::isfinite(previous) )
+            return ComposeHoldTarget{ targetTrack, previous, noteTime };
+        if ( *excludedEndTime < noteTime - 1e-7 && std::isfinite(next) )
+            return ComposeHoldTarget{ targetTrack, noteTime, next };
+        return std::nullopt;
+    }
+    // 普通路径仍优先选最近后继，靠近上沿时退到最近前驱。
     if ( !std::isfinite(next) && !std::isfinite(previous) ) return std::nullopt;
     return ComposeHoldTarget{
-        .track = (noteTrack + 1 + static_cast<int>(seed % (trackCount - 1))) %
-                 trackCount,
+        .track     = targetTrack,
         .startTime = std::isfinite(next) ? noteTime : previous,
         .endTime   = std::isfinite(next) ? next : noteTime,
     };

@@ -220,8 +220,7 @@ struct CmdUpdateMarquee {
 /**
  * @brief 结束框选指令
  */
-struct CmdEndMarquee {
-};
+struct CmdEndMarquee {};
 
 /**
  * @brief 移除指定位置的框选区域
@@ -267,6 +266,8 @@ struct CmdEndBrush {
     bool createStandalone{ false };
     /// @brief 本轮教学步骤的唯一身份；零表示普通绘制，不参与引导回退。
     std::uint64_t walkthroughToken{ 0 };
+    /// @brief 折线教学要求的最少最终子段数；普通绘制保持零。
+    std::uint8_t walkthroughMinimumSubNotes{ 0 };
 };
 
 /**
@@ -460,14 +461,12 @@ struct CmdUndo {
 /**
  * @brief 重做指令
  */
-struct CmdRedo {
-};
+struct CmdRedo {};
 
 /**
  * @brief 复制指令
  */
-struct CmdCopy {
-};
+struct CmdCopy {};
 
 /**
  * @brief 粘贴指令
@@ -483,26 +482,22 @@ struct CmdPaste {
 /**
  * @brief 剪切指令
  */
-struct CmdCut {
-};
+struct CmdCut {};
 
 /**
  * @brief 删除选中物件指令
  */
-struct CmdDeleteSelected {
-};
+struct CmdDeleteSelected {};
 
 /**
  * @brief 镜像选中物件指令
  */
-struct CmdMirrorSelected {
-};
+struct CmdMirrorSelected {};
 
 /**
  * @brief 对齐选中物件至常用分拍指令
  */
-struct CmdAlignSelectedToCommonBeats {
-};
+struct CmdAlignSelectedToCommonBeats {};
 
 /// @brief 全选命令的轨道区范围。
 enum class SelectAllScope : std::uint8_t {
@@ -897,8 +892,7 @@ struct CmdUpdateBeatmapMetadata {
 };
 
 /// @brief 标记直接修改的扩展谱面元数据，并请求尾随自动保存。
-struct CmdMarkBeatmapMetadataDirty {
-};
+struct CmdMarkBeatmapMetadataDirty {};
 
 /**
  * @brief 导入音频指令

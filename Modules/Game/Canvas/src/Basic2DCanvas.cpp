@@ -589,7 +589,13 @@ Basic2DCanvas::~Basic2DCanvas() {}
 /// 已完成删除只影响引导进度，物件本身仍由普通编辑命令删除。
 /// 可见包围盒用于定位，真实完成条件是逻辑快照中的实体存活状态。
 /// 目标移出视口时只突出画布以提示导航，不会据此修改删除状态。
-/// 快照中固定三个槽位的核对成本与谱面 Note 总量无关。
+/// 快照中固定四个槽位的核对成本与谱面 Note 总量无关。
+/// 折线目标使用五条真实可见拍线生成七个有序检查点。
+/// 七点路线包含三段 Hold、两段 Flick；最后两点延长末段 Hold。
+/// 路线仅在进入步骤或失效后重选，不在每帧排序或重建全谱索引。
+/// 当前帧只投影七个目标并核对一个固定身份槽位。
+/// 鼠标经过顺序和最终 ECS 子段数分别在 UI 与逻辑线程验证。
+/// Flick 与 Hold 的相邻练习也需避开同轨相交的可见物件。
 /// @warning UI 热路径：非目标步骤仅做状态判断；目标随机化只在进入步骤时执行。
 void Basic2DCanvas::updateComposeWalkthrough(
     UI::UIManager*                        sourceManager,
@@ -604,6 +610,8 @@ void Basic2DCanvas::updateComposeWalkthrough(
         spotlight.awaitingTarget("compose.canvas.place-note");
     const bool placingFlick =
         spotlight.awaitingTarget("compose.canvas.place-flick");
+    const bool placingPolyline =
+        spotlight.awaitingTarget("compose.canvas.place-polyline");
     const bool deletingHold =
         spotlight.awaitingTarget("compose.canvas.delete-hold");
     const bool deletingRemaining =
@@ -613,18 +621,23 @@ void Basic2DCanvas::updateComposeWalkthrough(
         m_walkthroughNoteStepToken             = spotlight.stepToken();
         m_walkthroughPracticeTokens            = {};
         m_walkthroughPracticeBeatmapInstanceId = snapshot.beatmapInstanceId;
+        m_walkthroughPlacedFlick.reset();
     }
     if ( deletingHold || deletingRemaining ) {
         // 删除练习沿用绘制工具现有的右键擦除命令链；这里只观察结果，
         // 不直接向谱面写入 Delete Action，也不吞掉普通鼠标事件。
+        // 折线删除属于复合对象操作，必须等待根身份失活再推进路线。
+        // 如果用户只删去其中一段，根实体依然有效，当前目标继续等待。
         const std::string_view deletionTarget =
             deletingHold ? "compose.canvas.delete-hold"
                          : "compose.canvas.delete-remaining";
-        // 固定次序先 Hold，再 Note 与 Flick；第二步也核对被跳过的 Hold，
+        // 固定次序先 Hold，再折线、Note 与 Flick；第二步也核对被跳过的 Hold，
         // 不能因为点击过“知道了”就带着练习物件完成整条路线。
-        constexpr std::array<std::size_t, 3> deletionOrder{ 1U, 0U, 2U };
-        std::optional<entt::entity>          nextEntity;
-        bool                                 awaitingSnapshot = false;
+        constexpr std::array<std::size_t, 4> deletionOrder{ 1U, 3U, 0U, 2U };
+        // 顺序只决定提示焦点；实际完成检查遍历所有登记过的练习身份。
+        // 被跳过的创建步骤没有令牌，也就没有可追踪的练习物件。
+        std::optional<entt::entity> nextEntity;
+        bool                        awaitingSnapshot = false;
         if ( snapshot.beatmapInstanceId ==
              m_walkthroughPracticeBeatmapInstanceId ) {
             for ( const auto index : deletionOrder ) {
@@ -634,6 +647,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
                 const auto& state = snapshot.walkthroughPracticeNotes[index];
                 if ( state.token != token ) {
                     // 创建和快照跨线程；新步骤不能用尚未发布的旧状态判完成。
+                    // 折线父实体可能比 UI 步骤晚一帧出现，继续等待权威槽位。
                     awaitingSnapshot = true;
                     continue;
                 }
@@ -655,6 +669,8 @@ void Basic2DCanvas::updateComposeWalkthrough(
             // 命中框来自实际渲染物件；不可见时保留整画布提示，允许用户滚动寻找。
             // 一个 Hold 可以具有头部和身体多个命中框，同目标的报告由
             // Spotlight 合并；删除仍交给真正的对象拾取逻辑。
+            // 折线根物件也可能有多个子段命中框，焦点与身份统一指向根。
+            // 仅靠屏幕可见盒不能决定物件是否已经被删除。
             bool reported = false;
             for ( const auto& box : snapshot.hitboxes ) {
                 if ( box.entity != *nextEntity ||
@@ -670,6 +686,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
                 reported = true;
             }
             if ( !reported )
+                // 滚出视口的根物件仍处于待删状态，整画布提示用户导航。
                 spotlight.reportTarget(
                     deletionTarget,
                     canvasScreenPosition,
@@ -679,6 +696,392 @@ void Basic2DCanvas::updateComposeWalkthrough(
                     false);
         }
     }
+    if ( placingPolyline ) {
+        // 折线没有预设的唯一终点，用户可以在主轨道自由折返。
+        // 这一步改为完整七点路线；五个有效子物件来自纵横交替。
+        // 验收与画笔提交处于不同线程，不在鼠标释放的 UI 帧读取 ECS。
+        // 其它放置步骤继续使用下方的具体拍位与轨道目标。
+        // 路线从快照里的可见拍线生成，不能在 UI 层虚构分拍坐标。
+        // 检查点 6、7 处于同一轨，第五段 Hold 因持续移动而不再是零长度。
+        // 多出的第七个检查点只延长第五段，不要求生成第六个子物件。
+        // 逻辑线程仍决定最终规范化结果，画布不直接写入谱面。
+        constexpr std::string_view targetId = "compose.canvas.place-polyline";
+        constexpr std::uint8_t     minimumSubNotes = 5;
+        const auto                 token           = spotlight.stepToken();
+        // 单键步骤通常先建立谱面身份；允许用户跳过它直接练习折线。
+        // 切换到另一张谱面时，旧槽位不再代表当前编辑器的练习结果。
+        // 步骤令牌保持由 Spotlight 管理，这里只重置本画布的追踪槽位。
+        // 这一步不读取或修改个人配置目录，只依据当前会话快照定位谱面。
+        // 已完成的其它练习属于旧谱面，不能拿来抵扣新谱面的删除步骤。
+        if ( snapshot.hasBeatmap && m_walkthroughPracticeBeatmapInstanceId !=
+                                        snapshot.beatmapInstanceId ) {
+            m_walkthroughPracticeBeatmapInstanceId = snapshot.beatmapInstanceId;
+            m_walkthroughPracticeTokens            = {};
+            m_walkthroughPolylinePendingToken      = 0;
+            m_walkthroughPolylineTarget.reset();
+        }
+        // 起笔之前公布本次门禁；Interaction 会锁存到整段手势。
+        // 即使步骤在拖动途中改变，EndBrush 仍能检查原来的最低段数。
+        // minimumSubNotes 只服务教学笔画，普通用户画笔的值保持零。
+        // 已进行的笔画不因 UI 快照滞后而丢失所属步骤令牌。
+        if ( m_interaction )
+            m_interaction->setWalkthroughPlacement(
+                true, token, minimumSubNotes);
+
+        // 逻辑线程完成规范化和提交后才会发布根物件及子段数量；预览或松手
+        // 本身均不能证明五段真实存在。
+        // Pending 只表示本画布确实观察到合格的教学手势释放。
+        // 令牌匹配排除上次演练，谱面身份排除切换标签后延迟到达的快照。
+        // 存活检查防止用户在第一帧发布前就撤销后仍错误完成。
+        // 除该槽位外不遍历音符实体，保持 UI 每帧检查为常量时间。
+        // 子段数来自逻辑线程已经清洗的根组件，避免重复几何算法。
+        // Route 检查发生在释放前，快照验收只负责确认实体与实际段数。
+        // 已提交的短折线不会进入历史，所以状态槽位仍保留旧 token。
+        // 松手帧内还没有新快照，必须等待下一代而不能自行猜测结果。
+        if ( m_walkthroughPolylinePendingToken == token &&
+             snapshot.beatmapInstanceId ==
+                 m_walkthroughPracticeBeatmapInstanceId ) {
+            const auto& state = snapshot.walkthroughPracticeNotes[3];
+            if ( state.token == token && state.alive &&
+                 state.subNoteCount >= minimumSubNotes ) {
+                // 保存根身份供后续删除步骤查询；子段实体由根动作一起管理。
+                // 回退注册必须先于完成通知，立即导航也能撤回本次创建。
+                // 只跟踪这一条根实体，删除检查不需要扫描全部子音符。
+                // 回退命令使用原画布 cameraId，切标签后仍定位原会话。
+                m_walkthroughPracticeTokens[3] = token;
+                spotlight.registerRollback(
+                    targetId,
+                    [command = Logic::CmdUndo{ .walkthroughToken = token,
+                                               .cameraId = m_cameraId }] {
+                        Event::EventBus::instance().publish(
+                            Event::LogicCommandEvent(command));
+                    });
+                spotlight.completeTarget(targetId, true);
+                m_walkthroughPolylinePendingToken = 0;
+                return;
+            }
+        }
+
+        const ImVec2 canvasMaximum{ canvasScreenPosition.x + canvasSize.x,
+                                    canvasScreenPosition.y + canvasSize.y };
+        /// @brief 路线不可用时取消本次释放，防止视野变化提交无提示的画笔。
+        /// @note 取消标志留给同帧后续 Interaction 消费，不直接发逻辑命令。
+        /// @note 按住鼠标但仍未松开时保留尝试状态，等待释放边沿。
+        const auto cancelInvalidRelease = [&]() {
+            if ( m_walkthroughPolylineAttemptActive &&
+                 ImGui::IsMouseReleased(ImGuiMouseButton_Left) ) {
+                if ( m_interaction ) m_interaction->cancelBrushOnNextRelease();
+                m_walkthroughPolylineAttemptActive = false;
+                m_walkthroughPolylineAttemptValid  = false;
+                m_walkthroughPolylineNextWaypoint  = 0;
+            }
+        };
+        /// @brief 缺少可见完整路径时保留整画布定位提示。
+        /// @note 鼠标仍可滚动、缩放或调整编辑设置，以使目标重新出现。
+        /// @note 不把不可用状态伪装成一个可点击的完成目标。
+        const auto reportUnavailable = [&]() {
+            spotlight.reportTarget(targetId,
+                                   canvasScreenPosition,
+                                   canvasMaximum,
+                                   ImGui::GetWindowViewport(),
+                                   false);
+        };
+        if ( !snapshot.hasBeatmap || canvasSize.x <= 1.0F ||
+             canvasSize.y <= 1.0F || snapshot.trackCount < 2 ||
+             snapshot.playerNoteWidth <= 1.0F ||
+             snapshot.playerNoteHeight <= 1.0F ) {
+            // 单轨无法产生任何 Flick；无真实尺寸无法画出可命中的提示框。
+            // 活动画笔必须在此路径的释放边沿取消，避免错误入谱。
+            reportUnavailable();
+            cancelInvalidRelease();
+            return;
+        }
+
+        const auto& visual = Config::AppConfig::instance().getVisualConfig();
+        const auto& layout = visual.trackLayoutForKeyCount(snapshot.trackCount);
+        // 横向目标与 DrawTool 使用同一玩家轨投影，包括草稿/BGM 分区偏移。
+        // 不直接从窗口宽度均分轨道，否则中键平移后提示会错位。
+        // 当前键数的皮肤布局决定轨道上下边界，也用于拍线可见性检查。
+        // 预览画布的投影参数不同，不能直接复用缩略区的坐标。
+        // 绘制和拾取必须引用同一个主画布相机水平偏移。
+        const auto projection = Logic::calculateCanvasLaneProjection(
+            canvasSize.x,
+            snapshot.trackCount,
+            snapshot.bgmTrackCount,
+            layout,
+            snapshot.canvasHorizontalOffsetX,
+            true,
+            snapshot.bmsEditingEnabled,
+            snapshot.draftLanesEnabled,
+            snapshot.draftTrackCount,
+            true);
+        if ( !projection.valid ||
+             projection.player.rightX <= projection.player.leftX ) {
+            // 错误布局没有合法轨宽，停止验收而不是构造零面积框。
+            // 保留整画布提示，用户调整窗口后下一帧可重新生成路线。
+            reportUnavailable();
+            cancelInvalidRelease();
+            return;
+        }
+        const float noteWidth   = snapshot.playerNoteWidth;
+        const float noteHeight  = snapshot.playerNoteHeight;
+        const float trackTop    = canvasSize.y * layout.top;
+        const float trackBottom = canvasSize.y * layout.bottom;
+        const float laneWidth =
+            (projection.player.rightX - projection.player.leftX) /
+            static_cast<float>(snapshot.trackCount);
+        // Note 的纹理大小用于画框，轨道宽度用于框中心；两者不能混用。
+        // 垂直范围只覆盖实际玩家区，排除窗口底部操作条与边缘裁剪。
+
+        // 起笔前选择一次固定路线；拖动中失去任一拍线时不临时换目标。
+        // 种子混合谱面实例与步骤令牌，重练可获得新路径但单次保持稳定。
+        // 选择器在线性可见拍线中寻找五个足够分离的时间，不遍历 ECS。
+        // 传入未应用 UI 补间的边界，与快照中拍线 y 的坐标系一致。
+        // 生成只发生在进入步骤或旧路线失效之后，不在每帧执行候选扫描。
+        if ( !m_walkthroughPolylineTarget &&
+             !m_walkthroughPolylineAttemptActive ) {
+            m_walkthroughPolylineTarget = chooseComposePolylineTarget(
+                snapshot.playerBeatLines,
+                snapshot.trackCount,
+                noteHeight,
+                trackTop - m_preparedSnapshot.appliedYOffset,
+                trackBottom - m_preparedSnapshot.appliedYOffset,
+                mixWalkthroughSeed(snapshot.beatmapInstanceId ^ token));
+            m_walkthroughPolylineTargetBeatmapInstanceId =
+                snapshot.beatmapInstanceId;
+        }
+        if ( !m_walkthroughPolylineTarget ||
+             m_walkthroughPolylineTargetBeatmapInstanceId !=
+                 snapshot.beatmapInstanceId ) {
+            // 当前视野里没有五个合法拍位时等待滚动/缩放，而非降为自由绘制。
+            // 活动手势此时已经失去目标，释放时必须丢弃临时画笔。
+            m_walkthroughPolylineAttemptValid = false;
+            reportUnavailable();
+            cancelInvalidRelease();
+            return;
+        }
+
+        // 七个检查点共用五个实际拍位：最后两个同轨纵向点让第五段
+        // Hold 超过 DrawTool 的零长度清理阈值。
+        // 路线成员只保留时间与轨道；每帧重新读取真实拍线的当前屏幕 y。
+        // 滚动、播放补间及变速效果可能让同一时间移到另一处像素位置。
+        // 固定容量数组避免教学 UI 的每帧堆分配。
+        // 单个拍位可以同时作为横移前后的两个检查点，屏幕 x 由轨道决定。
+        std::array<std::array<ImVec2, 2>, 7> waypointRects{};
+        std::array<ImVec2, 7>                centers{};
+        bool                                 routeVisible = true;
+        for ( std::size_t index = 0; index < waypointRects.size(); ++index ) {
+            const auto& waypoint =
+                m_walkthroughPolylineTarget->waypoints[index];
+            // 只匹配生成路线时保存的精确时间，不重新向网格量化。
+            // 多个渲染项时间相同只取第一条；横向点共享同一个 y。
+            // 当前快照若不再绘制该线，就不允许沿旧像素框继续教学。
+            std::optional<float> y;
+            for ( const auto& line : snapshot.playerBeatLines ) {
+                if ( std::abs(line.time - waypoint.time) >= 1e-7 ) continue;
+                const float screenY =
+                    line.y + m_preparedSnapshot.appliedYOffset;
+                if ( isComposeTargetBeatLine(waypoint.time,
+                                             screenY,
+                                             noteHeight,
+                                             trackTop,
+                                             trackBottom) )
+                    y = screenY;
+                // 找到同拍线后立即停止；失去完整可见性不能换成别的拍位。
+                break;
+            }
+            if ( !y ) {
+                routeVisible = false;
+                break;
+            }
+            const float left = canvasScreenPosition.x +
+                               projection.player.leftX +
+                               laneWidth * static_cast<float>(waypoint.track) +
+                               (laneWidth - noteWidth) * 0.5F;
+            // 实际 Note 按纹理宽度在单轨中居中，命中框也必须同样投影。
+            // 统一加上窗口原点，避免停靠或 DPI 变化后框留在旧位置。
+            const float top = canvasScreenPosition.y + *y - noteHeight * 0.5F;
+            waypointRects[index] = {
+                ImVec2{ left, top },
+                ImVec2{ left + noteWidth, top + noteHeight },
+            };
+            centers[index] = { left + noteWidth * 0.5F,
+                               top + noteHeight * 0.5F };
+        }
+        if ( !routeVisible ) {
+            // 滚动或变速显隐可能让旧目标离开快照；失败手势释放后再重选。
+            // 删除整条目标，而不是只挪动失效的一个检查点破坏路线顺序。
+            // 当前左键若未松开，保持失败状态直到释放；下一笔再选路线。
+            // 先要求取消本笔，避免在切换目标的同帧留下无提示的折线。
+            m_walkthroughPolylineTarget.reset();
+            m_walkthroughPolylineAttemptValid = false;
+            reportUnavailable();
+            cancelInvalidRelease();
+            return;
+        }
+
+        const float dpiScale = std::max(
+            Config::AppConfig::instance().getWindowContentScale(), 1.0F);
+        // Spotlight 只能提供单个外接孔洞；取所有节点包围盒的并集。
+        // 连线位于节点中心之间，因此必然被该并集覆盖。
+        // 留出适量边缘可见度，让箭头不紧贴暗化遮罩。
+        ImVec2 targetMinimum = waypointRects[0][0];
+        ImVec2 targetMaximum = waypointRects[0][1];
+        for ( const auto& rect : waypointRects ) {
+            targetMinimum.x = std::min(targetMinimum.x, rect[0].x);
+            targetMinimum.y = std::min(targetMinimum.y, rect[0].y);
+            targetMaximum.x = std::max(targetMaximum.x, rect[1].x);
+            targetMaximum.y = std::max(targetMaximum.y, rect[1].y);
+        }
+        targetMinimum.x -= 8.0F * dpiScale;
+        targetMinimum.y -= 8.0F * dpiScale;
+        targetMaximum.x += 8.0F * dpiScale;
+        targetMaximum.y += 8.0F * dpiScale;
+        spotlight.reportTarget(targetId,
+                               targetMinimum,
+                               targetMaximum,
+                               ImGui::GetWindowViewport(),
+                               false);
+
+        // 先画连线和箭头，再覆盖检查点，使用户能辨认每次转向的拍位。
+        // 所有教学图元仅进入当前画布 ImGui 绘制列表，不进入谱面渲染数据。
+        // 裁剪限制在内容区内，长路径不会盖住 Dock 标签或相邻窗口。
+        // 黄色路线表达移动方向，蓝色 1 号框表达真正的起笔位置。
+        // 这些覆盖层不占用鼠标输入，Interaction 仍处理普通画笔命令。
+        ImDrawList* drawList = ImGui::GetWindowDrawList();
+        drawList->PushClipRect(canvasScreenPosition, canvasMaximum, true);
+        const ImU32 pathColor = IM_COL32(255, 238, 72, 220);
+        for ( std::size_t index = 1; index < centers.size(); ++index ) {
+            // 每个相邻节点之间均绘制方向箭头，包括第五段的延长部分。
+            // 画在整段的约七成位置，避免箭头尖端被节点填充完全盖住。
+            // 变速导致路径方向反转时，箭头由实际屏幕向量重新计算。
+            const ImVec2 from = centers[index - 1];
+            const ImVec2 to   = centers[index];
+            drawList->AddLine(from, to, pathColor, 3.0F * dpiScale);
+            const ImVec2 vector{ to.x - from.x, to.y - from.y };
+            const float  length =
+                std::sqrt(vector.x * vector.x + vector.y * vector.y);
+            if ( length <= 1.0F ) continue;
+            // 两点异常重合时不创建退化三角形；段数验收仍由逻辑层负责。
+            const ImVec2 direction{ vector.x / length, vector.y / length };
+            const ImVec2 normal{ -direction.y, direction.x };
+            const ImVec2 tip{ from.x + vector.x * 0.72F,
+                              from.y + vector.y * 0.72F };
+            const float  arrowSize = 7.0F * dpiScale;
+            const ImVec2 base{ tip.x - direction.x * arrowSize,
+                               tip.y - direction.y * arrowSize };
+            drawList->AddTriangleFilled(
+                tip,
+                { base.x + normal.x * arrowSize * 0.55F,
+                  base.y + normal.y * arrowSize * 0.55F },
+                { base.x - normal.x * arrowSize * 0.55F,
+                  base.y - normal.y * arrowSize * 0.55F },
+                pathColor);
+        }
+        constexpr std::array<const char*, 7> labels{ "1", "2", "3", "4",
+                                                     "5", "6", "7" };
+        // 数字直接标示鼠标需经过的顺序，跨轨和同轨节点都可独立辨认。
+        // 起点、终点颜色与单 Note/Flick/Hold 的蓝到黄约定一致。
+        // 中间框采用半透明填充，保留底下已有谱面物件的可见性。
+        // 最终目标落在 7 号框，6 号框只是末段持续移动中的检查点。
+        for ( std::size_t index = 0; index < waypointRects.size(); ++index ) {
+            const ImU32 color = index == 0 ? IM_COL32(70, 220, 255, 255)
+                                : index == waypointRects.size() - 1
+                                    ? IM_COL32(255, 238, 72, 255)
+                                    : IM_COL32(235, 245, 255, 245);
+            drawList->AddRectFilled(waypointRects[index][0],
+                                    waypointRects[index][1],
+                                    IM_COL32(24, 36, 50, 175),
+                                    5.0F * dpiScale);
+            drawList->AddRect(waypointRects[index][0],
+                              waypointRects[index][1],
+                              color,
+                              5.0F * dpiScale,
+                              0,
+                              2.5F * dpiScale);
+            drawList->AddText({ centers[index].x - 4.0F * dpiScale,
+                                centers[index].y - 8.0F * dpiScale },
+                              color,
+                              labels[index]);
+        }
+        drawList->PopClipRect();
+
+        // 鼠标必须依次经过 1 至 7，最后两点表示同一第五段继续延伸。
+        // 路线节点只证明手势顺序；最终五段仍由逻辑层清洗后核对。
+        // 有序门禁不统计帧数：用户停在任意节点不会自己推进下一检查点。
+        // 检查点采用真实 Note 尺寸，不要求鼠标精确经过一条像素细线。
+        const ImVec2 mouse = ImGui::GetMousePos();
+        if ( ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+             walkthroughPointInRect(
+                 mouse, canvasScreenPosition, canvasMaximum) ) {
+            // 画布内任何起笔都成为一次尝试，错点起笔会在释放时取消。
+            // Shift 和绘制工具必须在按下时已启用，末尾补按不算完成。
+            // 新尝试清除旧 pending，避免前一笔延迟快照完成后一笔路线。
+            m_walkthroughPolylineAttemptActive = true;
+            m_walkthroughPolylineAttemptValid =
+                walkthroughPointInRect(
+                    mouse, waypointRects[0][0], waypointRects[0][1]) &&
+                snapshot.currentTool == Logic::EditTool::Draw &&
+                ImGui::GetIO().KeyShift && !ImGui::GetIO().KeyCtrl &&
+                Config::AppConfig::instance()
+                    .getEditorSettings()
+                    .enablePolylineEditing;
+            m_walkthroughPolylineNextWaypoint =
+                m_walkthroughPolylineAttemptValid ? 1U : 0U;
+            m_walkthroughPolylineDragged      = false;
+            m_walkthroughPolylinePendingToken = 0;
+        }
+        if ( m_walkthroughPolylineAttemptActive ) {
+            // 修饰键中途变化会锁存失败，不因之后重新按回而恢复资格。
+            // 拖动与路径命中分别核对，直接依次点击节点不能形成一次折线。
+            // 每帧最多推进一个检查点，防止相邻框重叠时跨越顺序要求。
+            m_walkthroughPolylineAttemptValid &= ImGui::GetIO().KeyShift &&
+                                                 !ImGui::GetIO().KeyCtrl &&
+                                                 Config::AppConfig::instance()
+                                                     .getEditorSettings()
+                                                     .enablePolylineEditing;
+            m_walkthroughPolylineDragged |=
+                ImGui::IsMouseDragging(ImGuiMouseButton_Left, 1.0F);
+            if ( m_walkthroughPolylineAttemptValid &&
+                 m_walkthroughPolylineNextWaypoint < waypointRects.size() &&
+                 walkthroughPointInRect(
+                     mouse,
+                     waypointRects[m_walkthroughPolylineNextWaypoint][0],
+                     waypointRects[m_walkthroughPolylineNextWaypoint][1]) )
+                ++m_walkthroughPolylineNextWaypoint;
+        }
+        if ( ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
+             m_walkthroughPolylineAttemptActive ) {
+            // 松手必须仍在第七框内，之前经过它后又折返不能冒充正确终点。
+            // UI 只负责路线顺序与输入状态；规范化后的真实子段另行验收。
+            // 合格释放依旧走普通 EndBrush，教学层不直接创建批量动作。
+            // 错误释放只取消这一笔，已有 Note、Flick、Hold 均保留。
+            if ( m_walkthroughPolylineAttemptValid &&
+                 m_walkthroughPolylineDragged &&
+                 m_walkthroughPolylineNextWaypoint == waypointRects.size() &&
+                 walkthroughPointInRect(
+                     mouse, waypointRects.back()[0], waypointRects.back()[1]) &&
+                 snapshot.currentTool == Logic::EditTool::Draw ) {
+                // 正常结束命令提交后等待正式根物件快照，禁止提前完成。
+                m_walkthroughPolylinePendingToken = token;
+            } else if ( m_interaction ) {
+                m_interaction->cancelBrushOnNextRelease();
+            }
+            m_walkthroughPolylineAttemptActive = false;
+            m_walkthroughPolylineAttemptValid  = false;
+            m_walkthroughPolylineDragged       = false;
+            m_walkthroughPolylineNextWaypoint  = 0;
+        }
+        return;
+    }
+    // 离开折线步骤后清理输入状态，保留已登记的根身份给删除步骤使用。
+    // 旧步骤的延迟快照不再能凭 Pending 令牌推进当前目标。
+    m_walkthroughPolylineAttemptActive = false;
+    m_walkthroughPolylineAttemptValid  = false;
+    m_walkthroughPolylineDragged       = false;
+    m_walkthroughPolylinePendingToken  = 0;
+    m_walkthroughPolylineNextWaypoint  = 0;
+    m_walkthroughPolylineTarget.reset();
     // 类型独立于是否按 Shift：Flick 与 Hold 修饰键相同，但不能共享旧路径。
     // 只在步骤转换时使目标失效，不随用户临时松开修饰键重新随机化。
     const bool requiresShift = placingHold || placingFlick;
@@ -762,6 +1165,8 @@ void Basic2DCanvas::updateComposeWalkthrough(
     }
     if ( placingNote && !m_walkthroughNoteDragTarget )
         m_walkthroughPlacedNote.reset();
+    if ( placingFlick && !m_walkthroughNoteDragTarget )
+        m_walkthroughPlacedFlick.reset();
 
     const float noteWidth  = snapshot.playerNoteWidth;
     const float noteHeight = snapshot.playerNoteHeight;
@@ -826,6 +1231,23 @@ void Basic2DCanvas::updateComposeWalkthrough(
                                    false);
             return;
         }
+        // 优先换轨；两轨时选择 Flick 头相反侧的拍位，避免身体穿过它。
+        // 先前的 Flick 手势在步骤切换后不再是当前拖拽目标，因此单独缓存。
+        // 缓存按谱面实例核对，切换标签后不能把旧 Flick 当作障碍。
+        // 多轨谱面可在原拍位另选空轨，双轨谱面则依赖相反侧可见拍线。
+        // 没有安全拍线时保持无目标，要求用户移动视野再尝试。
+        // 不修改 Flick 本身，也不通过 Undo 隐藏错误重叠。
+        const bool avoidFlick = placingHold && m_walkthroughPlacedFlick &&
+                                m_walkthroughPlacedFlick->beatmapInstanceId ==
+                                    snapshot.beatmapInstanceId;
+        const std::optional<double> excludedHoldEnd =
+            avoidFlick
+                ? std::optional<double>(m_walkthroughPlacedFlick->sourceTime)
+                : std::nullopt;
+        const std::optional<int> excludedHoldTrack =
+            avoidFlick
+                ? std::optional<int>(m_walkthroughPlacedFlick->sourceTrack)
+                : std::nullopt;
         const auto hold = chooseComposeHoldTarget(
             snapshot.playerBeatLines,
             m_walkthroughPlacedNote->destinationTime,
@@ -834,7 +1256,9 @@ void Basic2DCanvas::updateComposeWalkthrough(
             noteHeight,
             trackTop - m_preparedSnapshot.appliedYOffset,
             trackBottom - m_preparedSnapshot.appliedYOffset,
-            mixWalkthroughSeed(snapshot.beatmapInstanceId));
+            mixWalkthroughSeed(snapshot.beatmapInstanceId),
+            excludedHoldEnd,
+            excludedHoldTrack);
         if ( !hold ) {
             // 没有异轨或原拍位不在视野中时仅保留提示，让用户可移动视野或跳过。
             spotlight.reportTarget(targetId,
@@ -1141,6 +1565,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
                 m_walkthroughPlacedNote->destinationTrack =
                     snapshot.brush.track;
             }
+            if ( placingFlick ) m_walkthroughPlacedFlick = target;
             m_walkthroughPracticeTokens[placingNote   ? 0U
                                         : placingHold ? 1U
                                                       : 2U] =

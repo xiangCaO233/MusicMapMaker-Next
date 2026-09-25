@@ -47,15 +47,19 @@ public:
     void cancelBrushOnNextRelease();
 
     /// @brief 设置后续起笔是否为只新建独立物件的教学练习。
+    /// @param minimumSubNotes 非零时要求提交后的折线至少有这么多子段。
+    /// @note 参数在起笔时锁存，导航切步不能改变当前画笔的提交门禁。
     /// @warning UI 每帧入口，只修改值状态，起笔时锁存到整段手势。
-    void setWalkthroughPlacement(bool enabled, std::uint64_t token = 0)
+    void setWalkthroughPlacement(bool enabled, std::uint64_t token = 0,
+                                 std::uint8_t minimumSubNotes = 0)
     {
         // 步骤切换不能让旧手势在新目标下提交；保持普通绘制不受影响。
         if ( m_leftPressStartedOnCanvas && m_standaloneBrush &&
              m_brushWalkthroughToken != token )
             m_cancelBrushOnNextRelease = true;
-        m_walkthroughPlacement = enabled;
-        m_walkthroughToken     = token;
+        m_walkthroughPlacement       = enabled;
+        m_walkthroughToken           = token;
+        m_walkthroughMinimumSubNotes = minimumSubNotes;
     }
 
     /// @brief 仅同步后台主画布的鼠标悬停位置，不启用编辑交互。
@@ -172,6 +176,10 @@ private:
     std::uint64_t m_walkthroughToken{ 0 };
     /// @brief 起笔时冻结的步骤身份，不能被后续帧的导航替换。
     std::uint64_t m_brushWalkthroughToken{ 0 };
+    /// @brief 下一次教学起笔要求的最终折线子段数；零表示普通物件练习。
+    std::uint8_t m_walkthroughMinimumSubNotes{ 0 };
+    /// @brief 起笔时锁存的子段数门槛，不受步骤切换影响。
+    std::uint8_t m_brushMinimumSubNotes{ 0 };
 
     void handleHotkeys(const Common::Render::RenderSnapshot* currentSnapshot);
     /// @brief 处理主画布鼠标、批注栏和物件编辑交互。

@@ -647,7 +647,7 @@ float calculatePreviewRenderScaleY(const SessionContext&       ctx,
     float previewDrawH = previewCamera.viewportHeight -
                          (config.visual.previewConfig.margin.top +
                           config.visual.previewConfig.margin.bottom);
-    float areaRatio = config.visual.previewConfig.areaRatio;
+    float areaRatio    = config.visual.previewConfig.areaRatio;
 
     // 没有有效绘制面积时拒绝比例换算。
     // 返回零让上层跳过除法，不把退化视图放大到异常比例。
@@ -737,8 +737,8 @@ void syncPreviewDragHoverTime(SessionContext&             ctx,
     double currentAbsY = cache->getAbsY(ctx.animateTime);
     // 先把压缩后的屏幕距离还原成滚动距离，再逆映射到时间。
     // 不能直接将鼠标 Y 当作毫秒或线性时间差。
-    double deltaY = (judgmentLineY - ctx.lastMousePos.y) /
-                    static_cast<double>(renderScaleY);
+    double deltaY        = (judgmentLineY - ctx.lastMousePos.y) /
+                           static_cast<double>(renderScaleY);
     ctx.previewHoverTime = cache->getTime(currentAbsY + deltaY);
 }
 }  // namespace
@@ -1077,9 +1077,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             std::filesystem::path bgPath;
             // 协作项目优先使用其独立资源根。
             // 没有项目时才回退到谱面父目录，支持单文件载入。
-            auto*                 project      = m_ctx->collaborationProject
-                                                     ? m_ctx->collaborationProject.get()
-                                                     : engine.getCurrentProject();
+            auto* project = m_ctx->collaborationProject
+                                ? m_ctx->collaborationProject.get()
+                                : engine.getCurrentProject();
             std::filesystem::path resourcePath = metadata.main_cover_path;
             const auto resourceKey = Config::pathToUtf8(resourcePath);
             // 协作资源映射可能改变本地文件位置。
@@ -1231,7 +1231,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         // 实例标识只在本进程内区分谱面对象，不能作为保存或协作 ID。
         // UI 可用它区分内容更新与整个谱面替换。
         snapshot->beatmapInstanceId = snapshotBeatmapInstanceId;
-        // 只核对三个已知句柄；删除后即使物件离开视口，UI 也能准确推进教程。
+        // 只核对四个已知句柄；删除后即使物件离开视口，UI 也能准确推进教程。
         // 实体句柄包含版本；旧教学实体被删除后不会误认后续复用的槽位。
         // 快照按值传递，UI 不借用逻辑线程注册表及其组件生命周期。
         for ( std::size_t index = 0;
@@ -1240,6 +1240,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             const auto& practice = m_ctx->walkthroughPracticeNotes[index];
             // 句柄相同还不够：重放或其他动作可能主动占用旧槽位。
             // 比对稳定 ID 后才上报存活，编辑同一音符的几何不会中断引导。
+            // 子段数读取根组件的正式列表，不能以独立子实体总量代替。
+            // 这样删除或合并退化段后的验收与画笔最终结果保持一致。
             const auto* note = practice.token != 0 && m_ctx->noteRegistry.valid(
                                                           practice.entity)
                                    ? m_ctx->noteRegistry.try_get<NoteComponent>(
@@ -1248,7 +1250,11 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             snapshot->walkthroughPracticeNotes[index] = {
                 practice.token,
                 practice.entity,
-                note && note->m_collaborationId == practice.collaborationId
+                note && note->m_collaborationId == practice.collaborationId,
+                note && note->m_collaborationId == practice.collaborationId &&
+                        note->m_type == ::MMM::NoteType::POLYLINE
+                    ? static_cast<std::uint32_t>(note->m_subNotes.size())
+                    : 0U
             };
         }
         // 批注版本和批注可见项来自同一会话缓存。
@@ -1365,7 +1371,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                        m_ctx->mouseCameraId == "Preview" ||
                                        m_ctx->dragCameraId == "AudioWaveform" ||
                                        m_ctx->dragCameraId == "AudioSpectrum");
-        snapshot->previewHoverTime = m_ctx->previewHoverTime;
+        snapshot->previewHoverTime  = m_ctx->previewHoverTime;
 
         // --- 注入框选状态 ---
         snapshot->isSelecting = m_ctx->isSelecting;
@@ -1848,10 +1854,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                             inspect.body = makeBeatPoint(note.m_timestamp,
                                                          note.m_trackIndex);
                         } else {
-                            inspect.kind      = HoverInspectKind::FlickHead;
-                            inspect.head      = makeBeatPoint(note.m_timestamp,
-                                                         note.m_trackIndex);
-                            inspect.track     = note.m_trackIndex;
+                            inspect.kind  = HoverInspectKind::FlickHead;
+                            inspect.head  = makeBeatPoint(note.m_timestamp,
+                                                          note.m_trackIndex);
+                            inspect.track = note.m_trackIndex;
                             inspect.showTrack = true;
                         }
                         inspect.showDtrack = true;

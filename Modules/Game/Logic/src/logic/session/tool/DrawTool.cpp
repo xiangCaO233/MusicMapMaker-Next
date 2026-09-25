@@ -631,8 +631,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
                                               : itCamera->second.viewportHeight;
         float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                ctx.lastConfig.visual.trackLayout.top) *
-                               mainViewportHeight;
+                                    ctx.lastConfig.visual.trackLayout.top) *
+                                   mainViewportHeight;
         float previewDrawH =
             itCamera->second.viewportHeight -
             (ctx.lastConfig.visual.previewConfig.margin.top +
@@ -654,8 +654,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         ctx.animateTime,
         ctx.cameras,
         ctx.currentBeatmap
-                 ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
-                 : 120.0);
+            ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+            : 120.0);
 
     // Ctrl 切换仅影响这一轮时间目标，起笔参照仍保留原始锁定时间。
     // 恢复吸附后会直接按新目标更新几何，不等待额外稳定窗口。
@@ -734,10 +734,10 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     float singleTrackW = trackAreaW / static_cast<float>(ctx.trackCount);
     int   currentTrack =
         currentLane
-              ? currentLane->absoluteTrack(
+            ? currentLane->absoluteTrack(
                   static_cast<std::uint32_t>(ctx.trackCount),
                   projectedDraftLaneCount)
-              : static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
+            : static_cast<int>(std::floor((cmd.mouseX - leftX) / singleTrackW));
     // 草稿下界包含一个追加轨，玩家上界止于最后一条玩家轨。
     // 后续形状的起点和末端必须使用同一域的边界。
     const bool editsDraft   = ctx.brushState.track < 0;
@@ -1613,6 +1613,15 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
         return;
     }
 
+    // 教学折线按清洗后的正式子段数验收；预览里的零长度段不能凑足五段。
+    // 失败手势在创建动作前终止，既不污染谱面，也不改动撤销历史。
+    if ( cmd.createStandalone && cmd.walkthroughMinimumSubNotes > 0 &&
+         (note.m_type != ::MMM::NoteType::POLYLINE ||
+          note.m_subNotes.size() < cmd.walkthroughMinimumSubNotes) ) {
+        resetBrushState(ctx);
+        return;
+    }
+
     if ( note.m_type == ::MMM::NoteType::POLYLINE ) {
         // 创建折线父实体及所有子物件实体
         // 先预留父身份，子组件可在同批次中引用它。
@@ -1636,6 +1645,9 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
         // 动作取得条目所有权后，工具不再读取移动后的局部向量。
         auto action = std::make_unique<BatchNoteAction>(
             std::move(mergeDeleteEntries), "Polyline Create");
+        // 独立折线也属于教学产物，批量父子创建共用一次步骤身份。
+        if ( cmd.createStandalone )
+            action->m_walkthroughToken = cmd.walkthroughToken;
         ctx.actionStack.pushAndExecute(std::move(action), ctx);
     } else {
         // 非折线降级物件 (NOTE / HOLD / FLICK)

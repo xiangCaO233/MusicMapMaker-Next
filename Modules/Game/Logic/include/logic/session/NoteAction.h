@@ -118,6 +118,9 @@ public:
     void undo(SessionContext& ctx) override;
     /// @brief 恢复本批条目的 after 快照和已记录的选中状态。
     void redo(SessionContext& ctx) override;
+    /// @brief 只删除本批教学折线创建的父子实体，保留其它编辑动作。
+    std::unique_ptr<IEditorAction> walkthroughRollback(
+        SessionContext& ctx) override;
     /// @brief 获取调用方指定的批量操作名称。
     std::string getName() const override;
     /// @brief 返回该批量动作声明的精确谱面变更类别。

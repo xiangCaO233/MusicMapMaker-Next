@@ -2,6 +2,7 @@
 
 #include "canvas/BackgroundVideoPlayer.h"
 #include "canvas/CanvasSnapshotPrepare.h"
+#include "canvas/ComposePolylineTarget.h"
 #include "common/AsciiFontData.h"
 #include "common/UnicodeFontData.h"
 #include "common/render/RenderSnapshotBuffer.h"
@@ -358,8 +359,10 @@ private:
     std::optional<WalkthroughNoteDragTarget> m_walkthroughNoteDragTarget;
     /// @brief 单键成功落点，跨滑键步骤保留以约束后续长条必须邻近且异轨。
     std::optional<WalkthroughNoteDragTarget> m_walkthroughPlacedNote;
-    /// @brief 本轮创建的 Note、Hold、Flick 步骤标记，只核对当前谱面快照。
-    std::array<std::uint64_t, 3> m_walkthroughPracticeTokens{};
+    /// @brief 滑键成功起点，用于避开随后长条尾部的同轨同拍重叠。
+    std::optional<WalkthroughNoteDragTarget> m_walkthroughPlacedFlick;
+    /// @brief 本轮 Note、Hold、Flick、Polyline 的步骤标记，只核对当前谱面。
+    std::array<std::uint64_t, 4> m_walkthroughPracticeTokens{};
     /// @brief 上述标记所属的谱面实例，防止跨标签误认相同实体号。
     std::uint64_t m_walkthroughPracticeBeatmapInstanceId{ 0 };
     /// @brief 新的单键步骤标记，用来在重新演练时废弃上一轮身份。
@@ -368,6 +371,20 @@ private:
     bool m_walkthroughNoteAttemptActive{ false };
     /// @brief 本次尝试是否从指定起点框按下。
     bool m_walkthroughNoteStartedAtSource{ false };
+    /// @brief 折线练习是否已从画布按下左键，直到该次释放才结束。
+    bool m_walkthroughPolylineAttemptActive{ false };
+    /// @brief 固定的五段折线检查点，视野失效后再重选。
+    std::optional<ComposePolylineTarget> m_walkthroughPolylineTarget;
+    /// @brief 折线路线所属谱面实例，防止不同标签复用同一组拍位。
+    std::uintptr_t m_walkthroughPolylineTargetBeatmapInstanceId{ 0 };
+    /// @brief 当前手势下一个必须经过的折线路线检查点。
+    std::size_t m_walkthroughPolylineNextWaypoint{ 0 };
+    /// @brief 折线练习的轨道、工具及修饰键在整段手势中是否合规。
+    bool m_walkthroughPolylineAttemptValid{ false };
+    /// @brief 本次折线练习是否发生真实左键拖动。
+    bool m_walkthroughPolylineDragged{ false };
+    /// @brief 已释放并等待逻辑快照确认最终子段数的步骤身份。
+    std::uint64_t m_walkthroughPolylinePendingToken{ 0 };
     /// @brief 本次尝试是否已经形成可见拖动距离。
     bool m_walkthroughNoteDragged{ false };
     /// @brief 逻辑快照是否确认本次画笔已激活。

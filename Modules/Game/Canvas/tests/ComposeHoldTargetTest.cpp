@@ -1,4 +1,5 @@
 #include "canvas/ComposeHoldTarget.h"
+#include "canvas/ComposePolylineTarget.h"
 #include "canvas/ComposeTargetEligibility.h"
 #include <array>
 #include <limits>
@@ -9,6 +10,12 @@
 /// @note 时间采用非零偏移及三分拍，避免零起点四分拍掩盖重新量化的错误。
 /// @note 负时间回归同时检查公共候选门禁与长条选择器，前者也供单键使用。
 /// @note Flick 的同拍横移端点来自长条选择器的附近拍位，必须继承相同边界。
+/// @note 新增折线目标同样只使用可见拍线，测试打乱输入次序避免依赖排序。
+/// @note 双轨时验证 Hold 走 Flick 头的时间相反侧，不仅比较终点。
+/// @note 多轨时验证换轨后可以继续使用最近后继，不牺牲教程可见性。
+/// @note 若同轨相反侧不可见，必须保持无目标而不是穿过 Flick。
+/// @note 折线末段两个同轨检查点共享一个最终子音符的几何语义。
+/// @note 返回的时间必须取自输入拍线，不接受按固定四分拍重算。
 int main()
 {
     using MMM::Canvas::chooseComposeHoldTarget;
@@ -46,6 +53,28 @@ int main()
     if ( !backward || backward->startTime != lines[1].time ||
          backward->endTime != lines[2].time )
         return 2;
+    // 多轨时直接换到 Flick 头以外的玩家轨，保持原先的近邻时间目标。
+    const auto afterFlick = chooseComposeHoldTarget(
+        lines, 1.337, 1, 4, 20.0F, 0.0F, 500.0F, 3, lines[0].time, 2);
+    if ( !afterFlick || afterFlick->track == 1 || afterFlick->track == 2 ||
+         afterFlick->endTime != lines[0].time )
+        return 10;
+    // 两轨无法换轨时改走 Flick 头相反侧，身体也不经过已有 Flick。
+    const auto beforeFlick = chooseComposeHoldTarget(
+        lines, 1.337, 0, 2, 20.0F, 0.0F, 500.0F, 3, lines[0].time, 1);
+    if ( !beforeFlick || beforeFlick->startTime != lines[1].time ||
+         beforeFlick->endTime != lines[2].time )
+        return 11;
+    // 若相反侧没有完整可见的拍线，就等待视野变化而不强行穿过 Flick。
+    if ( chooseComposeHoldTarget(
+             lines, 1.337, 0, 2, 20.0F, 0.0F, 350.0F, 3, lines[0].time, 1) )
+        return 15;
+    // Flick 头在过去拍位时，两轨 Hold 改向下一拍延伸。
+    const auto forwardFromFlick = chooseComposeHoldTarget(
+        lines, 1.337, 0, 2, 20.0F, 0.0F, 500.0F, 3, lines[1].time, 1);
+    if ( !forwardFromFlick || forwardFromFlick->startTime != lines[2].time ||
+         forwardFromFlick->endTime != lines[0].time )
+        return 16;
     // 反向滚动下时间增长对应 Y 增长；选择仍遵循时间，路径自然向下。
     auto reversed = lines;
     // 只反转屏幕位置，保留时间和输入顺序，隔离坐标方向对算法的影响。
@@ -98,6 +127,36 @@ int main()
     // 拒绝生成比钳制前驱为零更安全：后者会制造没有拖动跨度的伪路径。
     if ( chooseComposeHoldTarget(crossingZero, 0.0, 0, 4, 20, 250, 500, 0) )
         return 9;
+    // 折线路线从打乱的真实拍线中保持时间递增，并明确显示末段延长检查点。
+    // 五个拍位映射到七个操作检查点，后两点共用轨道构成第五个子段。
+    // 轨道交替必须发生两次；否则看似七点却可能只清洗出长条。
+    const std::array polylineLines{
+        Line{ 3.0, 300.0F }, Line{ 1.0, 500.0F }, Line{ 5.0, 100.0F },
+        Line{ 2.0, 400.0F }, Line{ 4.0, 200.0F },
+    };
+    const auto route = MMM::Canvas::chooseComposePolylineTarget(
+        polylineLines, 4, 20.0F, 0.0F, 600.0F, 0);
+    if ( !route ) return 12;
+    const auto& points = route->waypoints;
+    // 相邻横向点时间相等，纵向点时间严格增长。
+    // 第六、第七点仍同轨，不引入第六段新类型。
+    if ( points[0].time != 1.0 || points[1].time != 2.0 ||
+         points[2].time != points[1].time || points[3].time != 3.0 ||
+         points[4].time != points[3].time || points[5].time != 4.0 ||
+         points[6].time != 5.0 || points[0].track != points[1].track ||
+         points[1].track == points[2].track ||
+         points[2].track != points[3].track ||
+         points[3].track == points[4].track ||
+         points[4].track != points[5].track ||
+         points[5].track != points[6].track )
+        return 13;
+    // 少于五条完整可见拍线或只有一轨时不能虚构教学目标。
+    // 边界裁剪用已存在的线实现，避免把测试变成另一套伪投影。
+    if ( MMM::Canvas::chooseComposePolylineTarget(
+             polylineLines, 1, 20.0F, 0.0F, 600.0F, 0) ||
+         MMM::Canvas::chooseComposePolylineTarget(
+             polylineLines, 4, 20.0F, 150.0F, 600.0F, 0) )
+        return 14;
     // 高频场景只借用输入 span；不要求渲染设备、谱面实体或磁盘测试资源。
     // 通过生产 helper 验证几何约束，鼠标与命令链由画布集成测试另行覆盖。
     return 0;
