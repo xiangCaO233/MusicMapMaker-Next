@@ -4,9 +4,11 @@
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "ui/UIManager.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WalkthroughSpotlight.h"
 
 #include "imgui.h"
 
@@ -72,6 +74,11 @@ void SettingsView::drawShortcutBindingControl(Config::ShortcutBinding& binding,
             changed                   = true;
             m_recordingShortcutTarget = ShortcutRecordTarget::None;
             ShortcutUtils::setShortcutRecordingActive(false);
+            if ( target == ShortcutRecordTarget::ToolMove && m_sourceManager )
+                // 录制到完整组合键后再推进；仅进入录制态不算设置成功。
+                // 其他快捷键继续使用原有保存路径，不影响本引导的进度。
+                m_sourceManager->walkthroughSpotlight().completeTarget(
+                    "personalization.settings.shortcut-move", true);
         }
     }
 
@@ -263,7 +270,9 @@ void SettingsView::drawShortcutSettings()
                               const char*              label,
                               Config::ShortcutBinding& binding,
                               ShortcutRecordTarget     target,
-                              const char*              id) {
+                              const char*              id,
+                              const char*              guideTarget = nullptr) {
+        // 教程目标只附着到移动工具行，其余行继续使用相同的编辑控件。
         Config::ShortcutBinding* bindingPtr = &binding;
         // 值捕获 target 和 ID，避免 Lambda 依赖调用栈临时参数。
         ShortcutRecordTarget targetValue = target;
@@ -285,7 +294,9 @@ void SettingsView::drawShortcutSettings()
                                            conflicted,
                                            changed);
             },
-            conflicted);
+            conflicted,
+            true,
+            guideTarget);
     };
 
     // 工具选择快捷键组：移动、框选、绘制、颜色刷与颜色擦除。
@@ -295,7 +306,8 @@ void SettingsView::drawShortcutSettings()
                    TR_CACHE("ui.settings.shortcut.tool_move").data(),
                    shortcutConfig.toolMove,
                    ShortcutRecordTarget::ToolMove,
-                   "ToolMove");
+                   "ToolMove",
+                   "personalization.settings.shortcut-move");
     // 框选和移动虽然都用于选择交互，仍保留独立绑定。
     addShortcutRow(shortcutSection,
                    TR_CACHE("ui.settings.shortcut.tool_marquee").data(),

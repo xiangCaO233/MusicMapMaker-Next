@@ -7,7 +7,7 @@
 点击卡片后在同一标签页展示内嵌演练，通过顶部“返回欢迎页”回到主题目录。主题正文采用窄版居中排版，分支通过圆形进度标记和细描边展开卡片展示，每次展开一个分支。
 关闭窗口或返回首页不影响业务事件计数，重新进入继续显示已有进度。
 
-- 内置主题源：`assets/walkthroughs/` 下的 `open-project.json`、`create-project.json`、`create-beatmap.json`、`create-beatmap-template.json`、`editor-overview.json` 和 `compose-beatmap.json`，构建时嵌入程序，避免安装路径影响基础教程。
+- 内置主题源：`assets/walkthroughs/` 下的 `open-project.json`、`create-project.json`、`create-beatmap.json`、`create-beatmap-template.json`、`editor-overview.json`、`compose-beatmap.json` 和 `software-personalization.json`，构建时嵌入程序，避免安装路径影响基础教程。
 - 示例资源：`assets/walkthroughs/canonrock/`。当前示例包含音频和两张图片，不包含谱面或谱包；谱面拖放和谱包拖放分支需要自行准备对应文件。
 - 构建同步后的资源：用户配置根的 `assets/walkthroughs/`。不要在受管资源目录直接编辑项目，应先复制到自己的练习目录。
 - 自定义主题：用户配置根的 `walkthroughs/*.json`，下次启动读取。使用不同的主题 ID，不覆盖内置主题。
@@ -111,9 +111,13 @@
 
 ## 章节与阶段
 
-`assets/walkthroughs/chapters.json` 定义内置章节的 `id`、本地化 `title` 和非负整数 `order`，数值越小越靠前。章节以标签容器展示，每次只显示选中章节的主题，返回目录时保留章节选择。空章节也保留标签；当前“创作”已有正式主题，“个性化”暂为空章节。
+`assets/walkthroughs/chapters.json` 定义内置章节的 `id`、本地化 `title` 和非负整数 `order`，数值越小越靠前。章节以标签容器展示，每次只显示选中章节的主题，返回目录时保留章节选择。“创作”和“个性化”章节均有正式主题。
 
-主题新增 `chapter`（章节 ID）、`order`（章节内顺序）和 `placeholder`（默认 false）。顺序相同的主题展示在同一阶段，阶段仅表达学习顺序，不锁定入口。同阶段的内置主题保留声明顺序。没有章节字段的旧自定义主题归入“其他”；未知章节以其 ID 展示在内置章节之后。
+## 软件个性化演练
+
+`software-personalization.json` 位于“个性化”章节，无需打开项目或谱面。引导从左侧设置入口进入“软件”页，依次介绍主题、ASCII 字体和 CJK 字体；“界面美化”使用单个步骤，一次高亮标题及窗口圆角、控件圆角、窗口间隙、组件间距、窗口内边距和动画过渡时间六项设置；随后切换软件/系统光标，最后以移动工具绑定演示录制快捷键。目标矩形来自设置控件本帧的实际布局，随字体、主题、DPI 和窗口尺寸变化。目标与提示分别留出亮区，中间的无关界面保持暗化。设置项可以沿用当前偏好并点击“知道了”继续；用户实际切换光标或成功录制移动工具快捷键时也会直接推进。折叠分组需先展开；进入新步骤时，设置内容区会把离屏目标自动滚入视口，之后保留用户手动滚动的自由。
+
+主题新增 `chapter`（章节 ID）、`order`（主题全局排序值）和 `placeholder`（默认 false）。同一章节内顺序相同的主题展示在同一阶段，阶段仅表达学习顺序，不锁定入口。同顺序的内置主题保留声明顺序。没有章节字段的旧自定义主题归入“其他”；未知章节以其 ID 展示在内置章节之后。
 
 创作章节的阶段定义：
 

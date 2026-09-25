@@ -1,0 +1,74 @@
+{
+  "id": "mmm.software-personalization",
+  "chapter": "personalization",
+  "order": 50,
+  "version": 1,
+  "requires_project": false,
+  "requires_beatmap": false,
+  "completion": "all",
+  "title": {"zh_cn": "软件个性化", "en_us": "Personalize the app"},
+  "description": {"zh_cn": "认识软件设置中的主题、字体、界面美化、光标和快捷键。已有满意配置时，可以直接确认继续。", "en_us": "Explore the app theme, fonts, appearance, cursor, and keyboard shortcuts. You can continue without changing settings you already like."},
+  "branches": [
+    {
+      "id": "appearance-and-controls",
+      "title": {"zh_cn": "外观与操作偏好", "en_us": "Appearance and controls"},
+      "steps": [
+        {
+          "id": "open-settings",
+          "title": {"zh_cn": "打开软件设置", "en_us": "Open app settings"},
+          "body": {"zh_cn": "点击左侧边栏的设置按钮。设置窗口会打开到“软件”分类；无需先创建项目或谱面。", "en_us": "Click Settings in the left sidebar. The window opens on the Software category; no project or beatmap is required."},
+          "guide": {"prompt": {"zh_cn": "点击左侧边栏高亮的设置按钮。", "en_us": "Click the highlighted Settings button in the left sidebar."}, "targets": ["personalization.sidebar.settings"]}
+        },
+        {
+          "id": "choose-theme",
+          "title": {"zh_cn": "选择界面主题", "en_us": "Choose a theme"},
+          "body": {"zh_cn": "在“软件 → 常规”中打开主题列表，选择自动或喜欢的配色。主题会立即应用；若当前主题已经合适，可点击“知道了”。", "en_us": "Open the theme list under Software → General and choose Auto or a palette you like. It applies immediately. Use Got it if your current theme suits you."},
+          "requires": ["open-settings"],
+          "guide": {"prompt": {"zh_cn": "在软件设置中打开高亮的“主题”选择框。若分组折叠，请先展开“常规”。", "en_us": "Open the highlighted Theme control under Software. Expand General if it is collapsed."}, "targets": ["personalization.settings.theme"]}
+        },
+        {
+          "id": "choose-ascii-font",
+          "title": {"zh_cn": "设置英文字体", "en_us": "Choose a Latin font"},
+          "body": {"zh_cn": "ASCII 字体控制英文和符号。可选皮肤提供的字体，或用右侧浏览按钮选取 .ttf/.otf 文件；保持默认也可以。", "en_us": "The ASCII font controls Latin text and symbols. Choose a font from the skin or browse for a .ttf/.otf file; keeping Default is fine."},
+          "requires": ["choose-theme"],
+          "guide": {"prompt": {"zh_cn": "查看高亮的 ASCII 字体选择框与浏览按钮。", "en_us": "Explore the highlighted ASCII font selector and browse button."}, "targets": ["personalization.settings.font-ascii"]}
+        },
+        {
+          "id": "choose-cjk-font",
+          "title": {"zh_cn": "设置中日韩字体", "en_us": "Choose a CJK font"},
+          "body": {"zh_cn": "CJK 字体独立控制中日韩文字，可与英文字体分别选择。修改后字体图集会在安全时机重建。", "en_us": "The CJK font controls Chinese, Japanese, and Korean text independently from the Latin font. The font atlas rebuilds at a safe point after a change."},
+          "requires": ["choose-ascii-font"],
+          "guide": {"prompt": {"zh_cn": "查看高亮的 CJK 字体选择框；无需为了完成引导强制更换字体。", "en_us": "Explore the highlighted CJK font selector; you do not need to change a font you like."}, "targets": ["personalization.settings.font-cjk"]}
+        },
+        {
+          "id": "adjust-aesthetics",
+          "title": {"zh_cn": "查看界面美化设置", "en_us": "Explore appearance settings"},
+          "body": {"zh_cn": "“界面美化”集中提供窗口圆角、控件圆角、窗口间隙、组件间距、窗口内边距和动画过渡时间六项设置。可在同一处比较与调整，满意现有外观可直接继续。", "en_us": "Appearance includes six settings together: window and control rounding, window gaps, item spacing, window padding, and animation transition duration. Compare or adjust them here, or continue with your current look."},
+          "requires": ["choose-cjk-font"],
+          "guide": {"prompt": {"zh_cn": "展开“界面美化”，一次查看高亮区域内的全部六项设置。", "en_us": "Expand Appearance and inspect all six settings in the highlighted group."}, "targets": ["personalization.settings.aesthetics"]}
+        },
+        {
+          "id": "switch-cursor",
+          "title": {"zh_cn": "切换光标样式", "en_us": "Switch cursor style"},
+          "body": {"zh_cn": "在“光标参数”中选择软件光标或系统光标。选择软件光标后，还可以设置大小、轨迹和烟雾效果；切回系统光标不会清空这些参数。", "en_us": "Choose a software or system cursor under Cursor. Software mode also offers size, trail, and smoke settings; switching to System keeps those values."},
+          "requires": ["adjust-aesthetics"],
+          "guide": {"prompt": {"zh_cn": "展开“光标参数”后，设置页会定位到高亮的光标样式选项。", "en_us": "Expand Cursor; the settings page will reveal the highlighted cursor-style options."}, "targets": ["personalization.settings.cursor"]}
+        },
+        {
+          "id": "open-shortcuts",
+          "title": {"zh_cn": "打开快捷键设置", "en_us": "Open shortcut settings"},
+          "body": {"zh_cn": "点击设置窗口左侧的“快捷键”分类。这里可以修改工具、编辑和播放操作的按键组合。", "en_us": "Click Shortcuts in the settings sidebar. You can configure bindings for tools, editing, and playback here."},
+          "requires": ["switch-cursor"],
+          "guide": {"prompt": {"zh_cn": "点击设置窗口左侧高亮的“快捷键”分类。", "en_us": "Click the highlighted Shortcuts category in the settings sidebar."}, "targets": ["personalization.settings.shortcut-tab"]}
+        },
+        {
+          "id": "set-shortcut",
+          "title": {"zh_cn": "设置一个快捷键", "en_us": "Set a shortcut"},
+          "body": {"zh_cn": "以“移动工具”为例：点击当前绑定或“录制”，按下想要的组合键。Esc 取消录制；若已有合适的绑定，可点击“知道了”完成引导。", "en_us": "Use Move Tool as an example: click its binding or Record, then press your preferred key combination. Esc cancels recording. Use Got it if the existing binding suits you."},
+          "requires": ["open-shortcuts"],
+          "guide": {"prompt": {"zh_cn": "在高亮的“移动工具”快捷键行录制组合键，或确认已有设置。", "en_us": "Record a binding in the highlighted Move Tool row, or keep the existing one."}, "targets": ["personalization.settings.shortcut-move"]}
+        }
+      ]
+    }
+  ]
+}

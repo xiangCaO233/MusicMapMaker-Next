@@ -362,6 +362,16 @@ void SideBarUI::update(UIManager* sourceManager)
                 // 上报按钮实际 Item 矩形，标签模式和纯图标模式无需分别推导。
                 sourceManager->walkthroughSpotlight().reportLastItem(
                     "editor.sidebar.audio");
+            if ( tab == SideBarTab::Settings ) {
+                // 个性化引导从现有设置入口开始，不依赖打开项目或谱面。
+                // 保留侧栏普通点击行为，使引导完成与打开窗口同步发生。
+                // 图标和文字两种侧栏模式共用 Item 矩形，避免提示漂移。
+                auto& spotlight = sourceManager->walkthroughSpotlight();
+                spotlight.reportLastItem("personalization.sidebar.settings");
+                if ( clicked )
+                    spotlight.completeTarget("personalization.sidebar.settings",
+                                             true);
+            }
             if ( clicked ) {
                 // 所有可见按钮统一经反馈入口处理悬浮渐变和音效。
                 if ( tab == SideBarTab::Settings ) {

@@ -1,8 +1,11 @@
+#include "ui/UIManager.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WalkthroughSpotlight.h"
 
 #include "imgui.h"
+#include <algorithm>
 
 /// @file SettingsView_Tabs.cpp
 /// @brief 设置页复用的分组、标准双列行和自动换行单选项布局实现。
@@ -11,6 +14,63 @@
 
 namespace MMM::UI
 {
+namespace
+{
+/// @brief 将设置项引导框限制在当前设置内容 Child 的可见区域。
+/// @param bounds Clay 返回的屏幕空间布局矩形。
+/// @param minimum 接收可见部分的左上角。
+/// @param maximum 接收可见部分的右下角。
+/// @return 至少有一部分可见时返回 true。
+/// @warning UI 热路径：只做固定次数的几何计算，不查询或修改设置状态。
+bool visibleGuideRect(Clay_BoundingBox bounds, ImVec2& minimum, ImVec2& maximum)
+{
+    // Clay 仍会回调滚出 Child 的行；这些行不能成为当前引导锚点。
+    const ImVec2 windowPos  = ImGui::GetWindowPos();
+    const ImVec2 windowSize = ImGui::GetWindowSize();
+    // 当前回调始终在 SettingsContent Child 中，窗口边界即滚动裁剪边界。
+    minimum = { std::max(bounds.x, windowPos.x),
+                std::max(bounds.y, windowPos.y) };
+    maximum = { std::min(bounds.x + bounds.width, windowPos.x + windowSize.x),
+                std::min(bounds.y + bounds.height,
+                         windowPos.y + windowSize.y) };
+    // 仅上报实际可见的交集，避免孔洞覆盖侧栏或视口外区域。
+    return maximum.x > minimum.x && maximum.y > minimum.y;
+}
+}  // namespace
+
+/// @brief 在新引导步骤首次绘制时定位离屏设置项。
+/// @param targetId 当前设置行的稳定语义 ID。
+/// @param bounds Clay 布局返回的屏幕空间矩形。
+/// @warning UI 热路径：日常帧只比较令牌，滚动请求仅在新步骤首次出现时执行。
+void SettingsView::scrollGuideRowIntoView(const char*      targetId,
+                                          Clay_BoundingBox bounds)
+{
+    // 普通设置行不触发滚动查询，只有已注册的引导控件参与定位。
+    if ( !targetId || !m_sourceManager ) return;
+    auto& spotlight = m_sourceManager->walkthroughSpotlight();
+    if ( !spotlight.awaitingTarget(targetId) ||
+         spotlight.stepToken() == m_lastGuideScrollToken )
+        return;
+    // 新步骤只定位一次，随后允许用户自行滚动浏览其它设置。
+    // 即使该行本来可见也记下令牌，防止稍后手动滚走时突然拉回。
+    m_lastGuideScrollToken  = spotlight.stepToken();
+    const ImVec2 windowPos  = ImGui::GetWindowPos();
+    const ImVec2 windowSize = ImGui::GetWindowSize();
+    const float  margin     = ImGui::GetFrameHeight();
+    if ( bounds.y >= windowPos.y + margin &&
+         bounds.y + bounds.height <= windowPos.y + windowSize.y - margin )
+        return;
+    // 整组高于 Child 时从顶部展示，避免居中后首尾同时被截断。
+    // 可容纳时仍按中心定位，让标题和整组六项尽量同时可见。
+    const float availableHeight = std::max(0.0f, windowSize.y - margin * 2.0f);
+    const float targetCenter    = bounds.height > availableHeight
+                                      ? bounds.y + availableHeight * 0.5f
+                                      : bounds.y + bounds.height * 0.5f;
+    // 仅修改当前内容 Child 的纵向滚动，不移动设置窗口或侧栏。
+    const float viewCenter = windowPos.y + windowSize.y * 0.5f;
+    ImGui::SetScrollY(
+        std::max(0.0f, ImGui::GetScrollY() + targetCenter - viewCenter));
+}
 
 /// @brief 创建一个共享边框的关联设置项容器。
 /// @param parent 接收新分组的父级纵向布局。
@@ -37,11 +97,12 @@ CLayVBox& SettingsView::addSettingGroup(CLayVBox& parent, size_t& sectionIndex,
 /// @param widget 设置项右侧控件绘制回调。
 /// @param dangerLabel 是否使用危险色绘制标签。
 /// @param decorated 是否为整行绘制背景、边框和较大内边距。
+/// @param walkthroughTarget 可选引导目标；控件回调执行后报告真实值列矩形。
 /// @warning UI 热路径：设置页可见时每帧构造布局，回调不得阻塞或访问文件。
 void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
                                   const char* label, float labelWidth,
                                   CLayBox::DrawFunc widget, bool dangerLabel,
-                                  bool decorated)
+                                  bool decorated, const char* walkthroughTarget)
 {
     // 主行来自对象池，装饰状态决定内边距与最终行高。
     auto& row = getRow(rowIndex++);
@@ -94,16 +155,26 @@ void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
                   Sizing::Grow());
 
     // 右列占据剩余宽度，并在回调中按 ImGui 标准帧高垂直居中。
-    row.addElement(labelId + "_wgt",
-                   Sizing::Grow(),
-                   Sizing::Grow(),
-                   [widget](Clay_BoundingBox r, bool h) {
-                       // 控件回调接收完整横向区域和 Clay 悬停状态。
-                       float widgetH = ImGui::GetFrameHeight();
-                       float offset  = (r.height - widgetH) * 0.5f;
-                       ImGui::SetCursorScreenPos({ r.x, r.y + offset });
-                       widget(r, h);
-                   });
+    row.addElement(
+        labelId + "_wgt",
+        Sizing::Grow(),
+        Sizing::Grow(),
+        [this, widget, walkthroughTarget](Clay_BoundingBox r, bool h) {
+            // 控件回调接收完整横向区域和 Clay 悬停状态。
+            float widgetH = ImGui::GetFrameHeight();
+            float offset  = (r.height - widgetH) * 0.5f;
+            ImGui::SetCursorScreenPos({ r.x, r.y + offset });
+            widget(r, h);
+            // Clay 已给出真实值列位置，避免用翻译文本或行号猜测高亮区。
+            // 原控件先完成绘制，再用相同布局矩形定位引导遮罩和描边。
+            if ( walkthroughTarget && m_sourceManager ) {
+                scrollGuideRowIntoView(walkthroughTarget, r);
+                ImVec2 minimum, maximum;
+                if ( visibleGuideRect(r, minimum, maximum) )
+                    m_sourceManager->walkthroughSpotlight().reportTarget(
+                        walkthroughTarget, minimum, maximum);
+            }
+        });
 
     // 装饰行额外包含上下各六像素内边距，普通行仅保留轻量间隔。
     float rowH = ImGui::GetFrameHeight() + (decorated ? 12.0f : 4.0f);
@@ -122,11 +193,12 @@ void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
 /// @param current 当前选中值。
 /// @param changed 设置发生变化时写入 true。
 /// @param decorated 是否为整行绘制装饰背景与内边距。
+/// @param walkthroughTarget 可选引导目标，分别报告各实际单选按钮。
 /// @warning UI 热路径：每帧按可用宽度重新分行，选项集合应保持小规模稳定。
 void SettingsView::addRadioSetting(
     CLayVBox& parent, size_t& rowIndex, size_t& sectionIndex, const char* label,
     float labelWidth, const std::vector<std::pair<std::string, int>>& options,
-    int& current, bool& changed, bool decorated)
+    int& current, bool& changed, bool decorated, const char* walkthroughTarget)
 {
     // 使用当前 ImGui 内容区宽度决定单选项换行位置。
     float totalWidth = ImGui::GetContentRegionAvail().x;
@@ -204,9 +276,11 @@ void SettingsView::addRadioSetting(
             optId.c_str(),
             Sizing::Fixed(itemW),
             Sizing::Fixed(ImGui::GetFrameHeight()),
-            [optLabel = optLabel,
+            [this,
+             optLabel = optLabel,
              optValue = optValue,
              optionId = optId,
+             walkthroughTarget,
              &current,
              &changed](Clay_BoundingBox r, bool) {
                 // Clay 决定按钮位置，ImGui 负责输入和最终绘制。
@@ -217,8 +291,19 @@ void SettingsView::addRadioSetting(
                     // 点击同时写入选项值和页面级变化标记。
                     current = optValue;
                     changed = true;
+                    if ( walkthroughTarget && m_sourceManager )
+                        m_sourceManager->walkthroughSpotlight().completeTarget(
+                            walkthroughTarget, true);
                 }
                 ImGui::PopID();
+                if ( walkthroughTarget && m_sourceManager ) {
+                    scrollGuideRowIntoView(walkthroughTarget, r);
+                    ImVec2 minimum, maximum;
+                    // 多个单选按钮只合并当前可见的部分。
+                    if ( visibleGuideRect(r, minimum, maximum) )
+                        m_sourceManager->walkthroughSpotlight().reportTarget(
+                            walkthroughTarget, minimum, maximum);
+                }
             });
 
         // 加入下一项前计入统一十二像素项间距。

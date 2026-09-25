@@ -84,6 +84,74 @@
 
 namespace
 {
+/// @brief 验证目标与提示之间的空白区域仍被遮罩覆盖。
+/// @return 只有实际目标和提示矩形保持明亮时返回 true。
+/// @details 提示宽于目标时，外接矩形遮罩会误照亮旁边的无关窗口。
+/// 使用前景 DrawList 的四顶点矩形验证真实提交几何，不依赖截图颜色采样。
+/// 探针分别位于目标、提示与它们之间的空隙；前两者应明亮，后者应变暗。
+/// 目标设置在视口上部，保证提示可放在下方并形成可检查的空隙。
+/// 仅在测试帧关闭目标描边，使前景顶点都来自遮罩填充矩形。
+/// 测试检查实际暗化范围，不依赖内部拆分矩形的数量或顺序。
+bool testSeparateMaskHoles()
+{
+    MMM::UI::Walkthrough::Spotlight spotlight;
+    // 长提示使气泡明显宽于目标，复现截图中的横向大块误留白。
+    spotlight.start({ "mask.target" },
+                    "This prompt is wider than the highlighted control");
+    ImGui::NewFrame();
+    spotlight.beginFrame();
+    // 小目标位于屏幕偏右侧，气泡水平居中后向左扩展。
+    spotlight.reportTarget("mask.target",
+                           { 420.0f, 120.0f },
+                           { 480.0f, 150.0f },
+                           ImGui::GetMainViewport(),
+                           false);
+    spotlight.keepAlive();
+    // 真实渲染路径将暗化几何提交到视口前景列表。
+    spotlight.render(1.0f, "Got it");
+    auto* hint       = ImGui::FindWindowByName("###WalkthroughSpotlightHint");
+    auto* foreground = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
+    if ( !hint || !foreground ) {
+        // 提示缺失时先完成 ImGui 帧，避免污染后续独立用例。
+        ImGui::Render();
+        return false;
+    }
+    // 目标上方的横向探针落在旧外接矩形内部，却不属于任何真实开口。
+    // 取气泡左缘而非固定 X，适应提示字号和主题内边距变化。
+    const ImVec2 gapPoint{ hint->Pos.x + 4.0f, 135.0f };
+    const ImVec2 targetPoint{ 450.0f, 135.0f };
+    const ImVec2 hintPoint{ hint->Pos.x + hint->Size.x * 0.5f,
+                            hint->Pos.y + hint->Size.y * 0.5f };
+    const bool   separated = gapPoint.x < 413.0f && hint->Pos.y > 157.0f;
+    // 布局若未形成目标与提示之间的空隙，不能让遮罩测试空通过。
+    // 关闭目标外框后，前景列表仅包含遮罩矩形，每四个顶点构成一个矩形。
+    const auto coveredByMask = [&](ImVec2 point) {
+        const auto& vertices = foreground->VtxBuffer;
+        // 读取实际提交的四角位置，避免假定矩形顶点的排列方向。
+        for ( int i = 0; i + 3 < vertices.Size; i += 4 ) {
+            float left = vertices[i].pos.x, right = left;
+            float top = vertices[i].pos.y, bottom = top;
+            for ( int corner = 1; corner < 4; ++corner ) {
+                left   = std::min(left, vertices[i + corner].pos.x);
+                right  = std::max(right, vertices[i + corner].pos.x);
+                top    = std::min(top, vertices[i + corner].pos.y);
+                bottom = std::max(bottom, vertices[i + corner].pos.y);
+            }
+            if ( point.x >= left && point.x < right && point.y >= top &&
+                 point.y < bottom )
+                return true;
+        }
+        // 未被任一遮罩片覆盖时，该点就是本帧的真实亮区。
+        return false;
+    };
+    // 气泡与控件本身留白，二者之间的无关设置行仍应保持暗化。
+    // 同时检查两个亮区，防止用整屏暗化伪造空隙已修复。
+    const bool valid = separated && coveredByMask(gapPoint) &&
+                       !coveredByMask(targetPoint) && !coveredByMask(hintPoint);
+    ImGui::Render();
+    return valid;
+}
+
 /// @brief 验证绘制回退只消费当前和即将重练的产物，正常结束不删除成果。
 /// @details 独立计数模拟三类绘制的副作用，不依赖逻辑线程或真实物件。
 /// 按照 Note、Flick、Hold 的正式路线顺序验证，避免用单个回调掩盖跨步问题。
@@ -699,6 +767,7 @@ int main()
     ImGui::Render();
     const bool previousValid = testPreviousNavigation() &&
                                testDrawingRollback() && testRequiresAction();
+    const bool maskValid     = testSeparateMaskHoles();
     ImGui::DestroyContext();
-    return !hiddenValid ? 9 : previousValid ? 0 : 63;
+    return !hiddenValid ? 9 : !previousValid ? 63 : maskValid ? 0 : 64;
 }

@@ -17,6 +17,10 @@ inline constexpr const char* BUILTIN_EDITOR_OVERVIEW_WALKTHROUGH =
 /// @brief 内置创作谱面演练，要求在真实谱面中完成一次单 Note 拖拽放置。
 inline constexpr const char* BUILTIN_COMPOSE_BEATMAP_WALKTHROUGH =
     R"MMM_WALK(@MMM_WALKTHROUGH_compose-beatmap@)MMM_WALK";
+
+/// @brief 内置软件个性化演练，独立于项目和谱面引导常用全局设置。
+inline constexpr const char* BUILTIN_SOFTWARE_PERSONALIZATION_WALKTHROUGH =
+    R"MMM_WALK(@MMM_WALKTHROUGH_software-personalization@)MMM_WALK";
 /// @brief 有序章节目录，包含尚未添加主题的章节。
 inline constexpr const char* BUILTIN_CHAPTERS =
     R"MMM_WALK(@MMM_WALKTHROUGH_chapters@)MMM_WALK";

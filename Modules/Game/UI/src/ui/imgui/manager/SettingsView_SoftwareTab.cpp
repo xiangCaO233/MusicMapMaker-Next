@@ -20,10 +20,12 @@
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WalkthroughSpotlight.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <filesystem>
 #include <nfd.h>
+#include <optional>
 #include <system_error>
 #include <vector>
 
@@ -471,17 +473,33 @@ void SettingsView::drawSoftwareSettings()
     const float maxLabelW = getCurrentTabLabelWidth(
         Config::AppConfig::instance().getWindowContentScale());
     // 所有设置行共享该宽度，动态显示参数时不会横向跳动。
+    // 布局回调在本函数返回前同步执行，保存首尾位置以一次突出整个美化分组。
+    // 标题在折叠时仍能被绘制；最后一行只会在内容已经展开时出现。
+    // 两个矩形都是本帧屏幕坐标，不能跨帧复用或缓存到 SettingsView 成员。
+    // 用标题而非首个滑块作为上边界，避免把分组名称留在暗区。
+    // 用第六行而非固定像素作为下边界，适应字体大小与 UI 缩放。
+    std::optional<Clay_BoundingBox> aestheticsHeaderBounds;
+    std::optional<Clay_BoundingBox> aestheticsLastRowBounds;
+    constexpr const char*           AESTHETICS_TARGET =
+        "personalization.settings.aesthetics";
 
     /// 创建一个可折叠软件设置分组并返回当前帧内容 section。
     /// @param label 本地化标题，也参与页面内稳定 ID 构造。
     /// @param defaultOpen StateStorage 无记录时使用的首次展开状态。
+    /// @param guideTarget 可选分组目标，仅收集标题边界供布局结束后上报。
     /// @return 展开时返回非拥有 section 指针，折叠时返回空指针。
     ///
     /// 调用方只在非空返回值下登记控件。section 由 SettingsView 缓存所有，返回
     /// 指针不能跨帧保存。
     ///
+    /// 引导展开要在建立 Clay 子树前决定，回调执行时已无法补建缺失的六行。
+    /// ImGui 折叠状态也需同步更新，避免视觉标题与实际子树状态不同。
+    /// 只有新引导步骤触发自动展开；普通设置页遵循用户保存的状态。
+    ///
     /// 折叠状态改变只影响下一帧内容树，不设置页面 changed，也不保存配置。
-    auto addHeader = [&](const char* label, bool defaultOpen) -> CLayVBox* {
+    auto addHeader = [&](const char* label,
+                         bool        defaultOpen,
+                         const char* guideTarget = nullptr) -> CLayVBox* {
         // 页面前缀、节、行和标题共同隔离不同折叠状态。
         // 元素与布局继续使用不同后缀，避免 Clay ID 冲突。
         std::string baseIdStr = "SW_S" + std::to_string(sectionIndex) + "_R" +
@@ -491,6 +509,18 @@ void SettingsView::drawSoftwareSettings()
         // 在登记回调前读取状态，以决定本帧是否创建内容区。
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
+        bool forceOpen = false;
+        if ( guideTarget && m_sourceManager ) {
+            const auto& spotlight = m_sourceManager->walkthroughSpotlight();
+            // 引导首次到达美化组时展开折叠内容，让六项同时参与布局。
+            // 只在新步骤首次执行，之后允许用户主动折叠或重新展开。
+            if ( spotlight.awaitingTarget(guideTarget) &&
+                 spotlight.stepToken() != m_lastGuideScrollToken && !isOpen ) {
+                isOpen    = true;
+                forceOpen = true;
+                ImGui::GetStateStorage()->SetInt(id, 1);
+            }
+        }
 
         // 标题独占一行，使用当前 ImGui frame 高度适配主题与 DPI。
         auto& row = getRow(rowIndex++);
@@ -501,7 +531,15 @@ void SettingsView::drawSoftwareSettings()
             (baseIdStr + "_el").c_str(),
             Sizing::Grow(),
             Sizing::Fixed(h),
-            [label, id, defaultOpen](Clay_BoundingBox r, bool) {
+            [label,
+             id,
+             defaultOpen,
+             guideTarget,
+             forceOpen,
+             &aestheticsHeaderBounds](Clay_BoundingBox r, bool) {
+                // 标题与最后一行在同一轮布局中给出分组的完整纵向范围。
+                // 即使内容折叠，也保留标题位置作为引导的可见回退锚点。
+                if ( guideTarget ) aestheticsHeaderBounds = r;
                 // Clay 给出绝对矩形，ImGui 游标必须移动到标题起点。
                 ImGui::SetCursorScreenPos({ r.x, r.y });
                 // Header 三态颜色从当前主题基础色逐级增亮。
@@ -530,6 +568,8 @@ void SettingsView::drawSoftwareSettings()
 
                 // 数值 ID 借用指针重载传入，不表示可解引用对象地址。
                 // CollapsingHeader 不建立树嵌套，因此无需 TreePop。
+                // 布局登记时已展开分组，ImGui 的 TreeNode 状态也须同帧同步。
+                if ( forceOpen ) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
                 bool nowOpen = ImGui::TreeNodeEx(
                     (void*)(intptr_t)id,
                     ImGuiTreeNodeFlags_CollapsingHeader |
@@ -1055,7 +1095,12 @@ void SettingsView::drawSoftwareSettings()
                     }
                     ::MMM::UI::FeedbackEndCombo();
                 }
-            });
+            },
+            // 主题变更可能重载皮肤，目标随每帧真实控件位置重新上报。
+            // 引导确认不代替用户实际选择，原有立即应用逻辑继续负责写入。
+            false,
+            true,
+            "personalization.settings.theme");
 
         // 字体选择契约：
         // - ASCII 与 CJK 各自维护独立偏好和文件选择器 key；
@@ -1194,7 +1239,11 @@ void SettingsView::drawSoftwareSettings()
                         }
                     }
                 }
-            });
+            },
+            // 字体图集更新后布局可能变化，锚点不保存旧屏幕坐标。
+            false,
+            true,
+            "personalization.settings.font-ascii");
 
         // CJK 字体组合框生命周期：
         // - 使用独立 preferredCjkFont 字段；
@@ -1322,7 +1371,11 @@ void SettingsView::drawSoftwareSettings()
                         }
                     }
                 }
-            });
+            },
+            // 中日韩字体与 ASCII 字体分别引导，避免只检查其中一种文字。
+            false,
+            true,
+            "personalization.settings.font-cjk");
 
         // 界面全局缩放影响主题尺寸，拖动结束后再应用以避免每帧重算样式。
         addSettingItem(
@@ -1463,7 +1516,10 @@ void SettingsView::drawSoftwareSettings()
               { TR_CACHE("ui.settings.editor.cursor_system").data(),
                 (int)Config::CursorStyle::System } },
             (int&)settings.cursorStyle,
-            changed);
+            changed,
+            true,
+            // 软件/系统光标两项共同组成一个可选引导目标。
+            "personalization.settings.cursor");
 
         if ( settings.cursorStyle == Config::CursorStyle::Software ) {
             // 软件光标参数仅在对应模式可见，切换到系统光标时保留配置。
@@ -1568,8 +1624,11 @@ void SettingsView::drawSoftwareSettings()
     // - 需要主题刷新的字段只在拖动结束后 applyTheme；
     // - 临时值在控件空闲时始终回读实际配置。
     // 外观组编辑窗口、控件、间距和动画参数；高成本主题应用延迟到拖动结束。
-    if ( auto* sec = addHeader(
-             TR_CACHE("ui.settings.software.aesthetics").data(), true) ) {
+    // 个性化演练一次突出标题和六项设置，用户可在同一步比较参数。
+    if ( auto* sec =
+             addHeader(TR_CACHE("ui.settings.software.aesthetics").data(),
+                       true,
+                       AESTHETICS_TARGET) ) {
         // 采用统一标签宽度，让所有像素滑块和持续时间控件对齐。
 
         addSettingItem(
@@ -1593,7 +1652,9 @@ void SettingsView::drawSoftwareSettings()
                     // 控件空闲时同步外部配置变化。
                     tmpRounding = settings.aesthetics.windowRounding;
                 }
-            });
+            },
+            false,
+            true);
         addSettingItem(
             *sec,
             rowIndex,
@@ -1615,7 +1676,9 @@ void SettingsView::drawSoftwareSettings()
                     // 非活动帧以持久化内存值校正临时滑块。
                     tmpFrame = settings.aesthetics.frameRounding;
                 }
-            });
+            },
+            false,
+            true);
         addSettingItem(
             *sec,
             rowIndex,
@@ -1638,7 +1701,9 @@ void SettingsView::drawSoftwareSettings()
                     // 控件空闲时接受外部更新。
                     tmpGap = settings.aesthetics.windowGap;
                 }
-            });
+            },
+            false,
+            true);
         addSettingItem(
             *sec,
             rowIndex,
@@ -1660,7 +1725,9 @@ void SettingsView::drawSoftwareSettings()
                     // 非拖动帧重新对齐实际设置。
                     tmpSpacing = settings.aesthetics.itemSpacing;
                 }
-            });
+            },
+            false,
+            true);
         addSettingItem(
             *sec,
             rowIndex,
@@ -1682,7 +1749,9 @@ void SettingsView::drawSoftwareSettings()
                     // 空闲时从配置刷新，防止静态临时值跨重载陈旧。
                     tmpPadding = settings.aesthetics.windowPadding;
                 }
-            });
+            },
+            false,
+            true);
         addSettingItem(
             *sec,
             rowIndex,
@@ -1690,6 +1759,8 @@ void SettingsView::drawSoftwareSettings()
                 .data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
+                // 最后一行的下沿决定六项设置共同亮区的结束位置。
+                aestheticsLastRowBounds = r;
                 // 动画过渡时长使用秒，临时值支持连续精细拖动。
                 static float tmpDuration =
                     settings.aesthetics.animationTransitionDuration;
@@ -1725,7 +1796,9 @@ void SettingsView::drawSoftwareSettings()
                     tmpDuration =
                         settings.aesthetics.animationTransitionDuration;
                 }
-            });
+            },
+            false,
+            true);
     }
 
     // 偏好与同步配置契约：
@@ -2200,8 +2273,44 @@ void SettingsView::drawSoftwareSettings()
     // 所有展开分组登记完成后统一执行 Clay 布局与 ImGui 回调。
     ImVec2 startPos = ImGui::GetCursorScreenPos();
     // 根布局使用当前剩余宽度，高度由标题和设置行自动计算。
-    ImVec2 sz = m_contentVBox.renderInCurrent(
-        startPos, { ImGui::GetContentRegionAvail().x, 0 });
+    const float contentWidth = ImGui::GetContentRegionAvail().x;
+    ImVec2 sz = m_contentVBox.renderInCurrent(startPos, { contentWidth, 0 });
+    if ( aestheticsHeaderBounds && m_sourceManager ) {
+        // 高亮整个分组而非逐个滑块；折叠时只突出标题，提示用户展开。
+        // 展开后用完整高度定位滚动，使六项能在同一帧共同呈现。
+        // 高度取最后一行下沿加 section 底部内边距，标题和所有标签都在框内。
+        // 宽度取根布局实际宽度，包含左侧标签列和右侧滑块，而非仅值列。
+        // 分组上下边界从同一帧的布局结果取值，不混用旧滚动位置。
+        // 视口空间有限时可能只显示交集，但目标仍是完整六行构成的分组。
+        const float bottom =
+            aestheticsLastRowBounds
+                ? aestheticsLastRowBounds->y + aestheticsLastRowBounds->height +
+                      8.0f
+                : aestheticsHeaderBounds->y + aestheticsHeaderBounds->height;
+        const Clay_BoundingBox groupBounds{ startPos.x,
+                                            aestheticsHeaderBounds->y,
+                                            contentWidth,
+                                            bottom -
+                                                aestheticsHeaderBounds->y };
+        // 首帧设定 Child 滚动目标，下一帧 Clay 才能得到滚动后的屏幕坐标。
+        // 折叠状态不占用滚动令牌，重新展开时仍能定位完整六行。
+        if ( aestheticsLastRowBounds )
+            scrollGuideRowIntoView(AESTHETICS_TARGET, groupBounds);
+        const ImVec2 childPos  = ImGui::GetWindowPos();
+        const ImVec2 childSize = ImGui::GetWindowSize();
+        const ImVec2 minimum{ std::max(groupBounds.x, childPos.x),
+                              std::max(groupBounds.y, childPos.y) };
+        const ImVec2 maximum{ std::min(groupBounds.x + groupBounds.width,
+                                       childPos.x + childSize.x),
+                              std::min(groupBounds.y + groupBounds.height,
+                                       childPos.y + childSize.y) };
+        // 裁剪到当前 Child，避免宽提示或邻接时间线被误认为设置亮区。
+        // 仅可见交集有正面积时上报，离屏分组由下一帧滚动结果接管。
+        // Spotlight 会单独为提示框留亮区，此处只负责设置内容本身。
+        if ( maximum.x > minimum.x && maximum.y > minimum.y )
+            m_sourceManager->walkthroughSpotlight().reportTarget(
+                AESTHETICS_TARGET, minimum, maximum);
+    }
     // 推进游标，使父窗口正确计算内容高度与滚动范围。
     ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 

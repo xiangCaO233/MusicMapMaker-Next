@@ -87,13 +87,89 @@ ImVec2 clampPoint(const ImVec2& point, const ImVec2& minimum,
 /// @param minimum 左上角。
 /// @param maximum 右下角。
 /// @param color 已包含透明度的遮罩颜色。
-/// @warning UI 热路径：每帧最多调用四次，只向已有 DrawList 追加矩形。
+/// @warning UI 热路径：只向已有 DrawList 追加矩形，不分配临时资源。
 void addFilledRect(ImDrawList& draw, const ImVec2& minimum,
                    const ImVec2& maximum, ImU32 color)
 {
     // 目标贴近视口边缘时部分遮罩宽高为零，跳过可避免退化三角形。
     if ( maximum.x > minimum.x && maximum.y > minimum.y )
         draw.AddRectFilled(minimum, maximum, color);
+}
+
+/// @brief 在一个暗化矩形内扣除提示气泡所占区域。
+/// @param draw 当前视口前景绘制列表。
+/// @param regionMin 原暗化矩形左上角。
+/// @param regionMax 原暗化矩形右下角。
+/// @param bubbleMin 提示气泡左上角。
+/// @param bubbleMax 提示气泡右下角。
+/// @warning UI 热路径：固定四个候选矩形，不排序或分配容器。
+void addMaskRegionExcludingBubble(ImDrawList& draw, const ImVec2& regionMin,
+                                  const ImVec2& regionMax,
+                                  const ImVec2& bubbleMin,
+                                  const ImVec2& bubbleMax)
+{
+    constexpr ImU32 MASK_COLOR = IM_COL32(0, 0, 0, 190);
+    const ImVec2    overlapMin{ std::max(regionMin.x, bubbleMin.x),
+                                std::max(regionMin.y, bubbleMin.y) };
+    const ImVec2    overlapMax{ std::min(regionMax.x, bubbleMax.x),
+                                std::min(regionMax.y, bubbleMax.y) };
+    if ( overlapMax.x <= overlapMin.x || overlapMax.y <= overlapMin.y ) {
+        // 气泡不与此暗区相交时保留原矩形，避免无谓拆分绘制命令。
+        addFilledRect(draw, regionMin, regionMax, MASK_COLOR);
+        return;
+    }
+    // 上下两带占整宽，中间仅保留气泡左右两侧；四块互不覆盖。
+    // 所有输出仍落在原暗化矩形内，避免跨视口提交多余几何。
+    addFilledRect(draw, regionMin, { regionMax.x, overlapMin.y }, MASK_COLOR);
+    addFilledRect(draw, { regionMin.x, overlapMax.y }, regionMax, MASK_COLOR);
+    addFilledRect(draw,
+                  { regionMin.x, overlapMin.y },
+                  { overlapMin.x, overlapMax.y },
+                  MASK_COLOR);
+    addFilledRect(draw,
+                  { overlapMax.x, overlapMin.y },
+                  { regionMax.x, overlapMax.y },
+                  MASK_COLOR);
+}
+
+/// @brief 在视口内分别为目标与提示保留亮区。
+/// @param draw 当前视口前景绘制列表。
+/// @param viewportMin 视口左上角。
+/// @param viewportMax 视口右下角。
+/// @param targetMin 目标亮区左上角。
+/// @param targetMax 目标亮区右下角。
+/// @param bubbleMin 提示气泡左上角。
+/// @param bubbleMax 提示气泡右下角。
+/// @warning UI 热路径：只拆分固定四个目标外区域，不进行排序或动态分配。
+void addMaskOutsideTargetAndBubble(ImDrawList& draw, const ImVec2& viewportMin,
+                                   const ImVec2& viewportMax,
+                                   const ImVec2& targetMin,
+                                   const ImVec2& targetMax,
+                                   const ImVec2& bubbleMin,
+                                   const ImVec2& bubbleMax)
+{
+    // 先按目标形成互不重叠的四个暗区，再从每块中扣除提示窗口。
+    // 两块亮区之间因此仍为暗色，且两者局部相交时不会叠加遮罩。
+    addMaskRegionExcludingBubble(draw,
+                                 viewportMin,
+                                 { viewportMax.x, targetMin.y },
+                                 bubbleMin,
+                                 bubbleMax);
+    addMaskRegionExcludingBubble(draw,
+                                 { viewportMin.x, targetMax.y },
+                                 viewportMax,
+                                 bubbleMin,
+                                 bubbleMax);
+    addMaskRegionExcludingBubble(draw,
+                                 { viewportMin.x, targetMin.y },
+                                 { targetMin.x, targetMax.y },
+                                 bubbleMin,
+                                 bubbleMax);
+    addMaskRegionExcludingBubble(draw,
+                                 { targetMax.x, targetMin.y },
+                                 { viewportMax.x, targetMax.y },
+                                 bubbleMin,
+                                 bubbleMax);
 }
 
 /// @brief 判断屏幕坐标是否落在半开矩形内。
@@ -423,7 +499,7 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel,
 
     const ImVec2          viewportMin = viewport->Pos;
     const ImVec2          viewportMax{ viewport->Pos.x + viewport->Size.x,
-                              viewport->Pos.y + viewport->Size.y };
+                                       viewport->Pos.y + viewport->Size.y };
     std::optional<ImVec2> holeMin;
     std::optional<ImVec2> holeMax;
     std::optional<ImVec2> hintAnchor;
@@ -694,26 +770,14 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel,
 
     ImDrawList& draw = *ImGui::GetForegroundDrawList(viewport);
     if ( holeMin && holeMax ) {
-        // 把提示窗口并入透明区域，Foreground 遮罩不会盖住按钮。
-        // 联合外接矩形可能比两块区域之间更宽，但能保持四块遮罩互不重叠。
-        const ImVec2    revealMin{ std::min(holeMin->x, bubbleMin.x),
-                                std::min(holeMin->y, bubbleMin.y) };
-        const ImVec2    revealMax{ std::max(holeMax->x, bubbleMax.x),
-                                std::max(holeMax->y, bubbleMax.y) };
-        constexpr ImU32 MASK_COLOR = IM_COL32(0, 0, 0, 190);
-        // 四块矩形围出目标与提示的联合透明区，不依赖模板缓冲。
-        addFilledRect(
-            draw, viewportMin, { viewportMax.x, revealMin.y }, MASK_COLOR);
-        addFilledRect(
-            draw, { viewportMin.x, revealMax.y }, viewportMax, MASK_COLOR);
-        addFilledRect(draw,
-                      { viewportMin.x, revealMin.y },
-                      { revealMin.x, revealMax.y },
-                      MASK_COLOR);
-        addFilledRect(draw,
-                      { revealMax.x, revealMin.y },
-                      { viewportMax.x, revealMax.y },
-                      MASK_COLOR);
+        // 目标与提示分别挖孔，不能让两者的外接矩形照亮无关内容。
+        addMaskOutsideTargetAndBubble(draw,
+                                      viewportMin,
+                                      viewportMax,
+                                      *holeMin,
+                                      *holeMax,
+                                      bubbleMin,
+                                      bubbleMax);
 
         if ( m_anchor->drawOutline ) {
             // 目标描边仍严格跟随控件，不随较宽的提示透明区扩张。

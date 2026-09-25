@@ -45,6 +45,9 @@
 /// - 编辑区简介每一步都提供可重放 guide；
 /// - 谱面标签目标位于整条编辑区路线首步；
 /// - 音频资源入口目标位于整条编辑区路线末步；
+/// - 软件个性化主题属于独立章节且无需活动项目；
+/// - 软件个性化步骤包含主题、双字体、界面美化、光标与快捷键；
+/// - 已有满意设置允许通过确认推进，不强制改动用户偏好；
 /// - 创作谱面占位主题随编辑区简介加入而移动到阶段四；
 /// - 历史进度不参与目标链解析，避免重放时停留在入口控件；
 /// - 步骤不能依赖自身；
@@ -341,6 +344,54 @@ int main(int argc, char** argv)
               !guide.m_requiresAction) )
             return 68;
     }
+    // 软件个性化独立于项目和谱面，可从欢迎页直接进入。
+    // 每步聚焦真实设置控件；保留现有偏好时允许明确确认继续。
+    // 此流程不会修改磁盘设置，解析检查仅保证内置路线完整可达。
+    // 不要求动作的阶段仍需有效目标，保证提示对应具体界面入口。
+    const auto personalizationTopic =
+        parseTopic(BUILTIN_SOFTWARE_PERSONALIZATION_WALKTHROUGH);
+    if ( !personalizationTopic || personalizationTopic->m_placeholder ||
+         personalizationTopic->m_chapter != "personalization" ||
+         personalizationTopic->m_requiresProject ||
+         personalizationTopic->m_requiresBeatmap ||
+         personalizationTopic->m_order != 50 ||
+         personalizationTopic->m_branches.size() != 1 ||
+         !topicAvailable(*personalizationTopic, false, false) )
+        return 69;
+    constexpr std::array personalizationTargets{
+        // 首步连接主侧栏，用户不需要先打开任何编辑器标签页。
+        "personalization.sidebar.settings",
+        // 常规分组中的主题和两种字体系不同配置键，逐项指向控件。
+        "personalization.settings.theme",
+        "personalization.settings.font-ascii",
+        "personalization.settings.font-cjk",
+        // 单个步骤定位整个美化分组，六项设置在同一片亮区展示。
+        "personalization.settings.aesthetics",
+        // 光标与美化分属可折叠分组，目标仍使用稳定语义标识。
+        "personalization.settings.cursor",
+        // 最后进入独立快捷键页并定位到一个可实际录制的绑定。
+        "personalization.settings.shortcut-tab",
+        "personalization.settings.shortcut-move",
+    };
+    const auto& personalizationSteps =
+        personalizationTopic->m_branches.front().m_steps;
+    if ( personalizationSteps.size() != personalizationTargets.size() )
+        return 70;
+    // 顺序由前置步骤形成单链，避免欢迎页展示无法完成的分支。
+    for ( std::size_t index = 0; index < personalizationSteps.size();
+          ++index ) {
+        const auto& step = personalizationSteps[index];
+        // 同一步只高亮一个语义目标，设置的可选性质由引导标志体现。
+        // 首步没有前置条件，其余步骤必须紧跟上一操作。
+        if ( !step.m_guide || step.m_guide->m_requiresAction ||
+             step.m_guide->m_targets !=
+                 std::vector<std::string>{ personalizationTargets[index] } ||
+             (index > 0 && step.m_prerequisites !=
+                               std::vector<std::string>{
+                                   personalizationSteps[index - 1].m_id }) )
+            return 71;
+    }
+    // 后续原有内置主题断言继续执行，防止新增章节影响创作路线。
     // 空白流程的六个目标依次对应菜单入口、音频、自动测偏、BPM 复核、
     // 元数据资源区域和最终创建按钮，不要求改造原有单页弹窗布局。
     if ( createBeatmapTopic->m_branches[0].m_steps[0].m_guide->m_targets !=
@@ -449,18 +500,21 @@ int main(int argc, char** argv)
         const auto& topics = service.topics();
         // 相同 order 由欢迎页归入同一阶段；稳定插入顺序决定两张卡片的左右顺序。
         // 编辑区简介占据阶段三，完整创作路线位于阶段四。
-        if ( topics.size() != 6 || service.chapters().size() != 2 ||
+        // 个性化主题排在现有主题之后，保持旧测试与导航索引稳定。
+        if ( topics.size() != 7 || service.chapters().size() != 2 ||
              topics[0].m_id != "mmm.open-project" ||
              topics[1].m_id != "mmm.create-project" ||
              topics[2].m_id != "mmm.create-beatmap" ||
              topics[3].m_id != "mmm.create-beatmap-template" ||
              topics[4].m_id != "mmm.editor-overview" ||
              topics[5].m_id != "mmm.compose-beatmap" ||
+             topics[6].m_id != "mmm.software-personalization" ||
              topics[0].m_order != topics[1].m_order ||
              topics[1].m_order >= topics[2].m_order ||
              topics[2].m_order != topics[3].m_order ||
              topics[3].m_order >= topics[4].m_order ||
-             topics[4].m_order >= topics[5].m_order )
+             topics[4].m_order >= topics[5].m_order ||
+             topics[5].m_order >= topics[6].m_order )
             return 25;
         // 包投放仅 completed 而非只读时不应完成教程步骤。
         MMM::Event::ProjectOpenInteractionEvent event;

@@ -6,16 +6,24 @@ set_property(
            "${PROJECT_SOURCE_DIR}/assets/walkthroughs/open-project.json")
 file(READ "${PROJECT_SOURCE_DIR}/assets/walkthroughs/open-project.json"
      MMM_BUILTIN_WALKTHROUGH)
-# 章节目录与各阶段主题同样嵌入程序；修改声明时自动重新生成。
-foreach(_mmm_walkthrough IN
-        ITEMS chapters create-project create-beatmap create-beatmap-template
-              editor-overview compose-beatmap)
+# 章节目录与各阶段主题同样嵌入程序；软件个性化无需项目也可独立展示。 修改任一声明时自动重新生成内置资源，防止安装包遗漏新章节内容。
+foreach(
+  _mmm_walkthrough IN
+  ITEMS chapters
+        create-project
+        create-beatmap
+        create-beatmap-template
+        editor-overview
+        compose-beatmap
+        software-personalization)
+  # 所有主题 JSON 都列为配置依赖，编辑演练内容无需手动重新配置。
   set_property(
     DIRECTORY
     APPEND
     PROPERTY
       CMAKE_CONFIGURE_DEPENDS
       "${PROJECT_SOURCE_DIR}/assets/walkthroughs/${_mmm_walkthrough}.json")
+  # 嵌入当前文件正文，与 WalkthroughService 中的内置注册顺序对应。
   file(READ
        "${PROJECT_SOURCE_DIR}/assets/walkthroughs/${_mmm_walkthrough}.json"
        MMM_WALKTHROUGH_${_mmm_walkthrough})

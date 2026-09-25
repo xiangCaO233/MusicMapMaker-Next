@@ -5,6 +5,7 @@
 #include "mmm/project/ProjectSettings.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/imgui/manager/SettingsView.h"
 #include "ui/walkthrough/WalkthroughModel.h"
 #include "ui/walkthrough/WalkthroughPage.h"
 #include "ui/walkthrough/WalkthroughService.h"
@@ -83,6 +84,90 @@
 
 namespace
 {
+/// @brief 验证快捷键和完整美化分组自动滚入设置内容区。
+/// @param manager 复用欢迎页测试的 UI 管理器及其 Clay 上下文。
+/// @return 移动工具行获得可见聚光灯锚点时返回 true。
+/// @details 首先复现快捷键列表停在底部的场景，再进入单个美化步骤。
+/// 美化区域涵盖标题与六行设置，来自真实 SettingsView 布局回调。
+/// 目标必须同时落在 Child 的横纵边界内，防止亮区跨到相邻停靠页。
+/// 同一步内用户手动滚开后不应被反复拉回，下一步才允许重新定位。
+/// @warning 无 GPU 界面测试：仅驱动固定帧数，不读取个人设置目录。
+bool testSettingsGuideScroll(MMM::UI::UIManager& manager)
+{
+    // 复用同一 UIManager，避免重建 Clay 全局测量上下文。
+    MMM::UI::SettingsView settings("SettingsGuideScrollTest");
+    settings.open(MMM::Event::SettingsTab::Shortcut);
+    auto& spotlight            = manager.walkthroughSpotlight();
+    ImGui::GetIO().DisplaySize = { 1050, 720 };
+    // 设置窗口每帧独立绘制，测试不进入应用渲染循环。
+    const auto frame = [&] {
+        ImGui::NewFrame();
+        spotlight.beginFrame();
+        ImGui::SetNextWindowPos({ 0, 0 });
+        ImGui::SetNextWindowSize({ 1050, 700 });
+        settings.update(&manager);
+        ImGui::Render();
+    };
+    // 首帧创建 Child，下一帧才拥有稳定的内容高度和滚动上限。
+    frame();
+    frame();
+    // 找到快捷键列表的实际滚动 Child，模拟用户此前停在列表底部。
+    // 此场景与进入最后一个个性化引导步骤时的截图一致。
+    ImGuiWindow* content = nullptr;
+    for ( auto* candidate : ImGui::GetCurrentContext()->Windows )
+        if ( std::string_view(candidate->Name).find("SettingsContent") !=
+             std::string_view::npos )
+            content = candidate;
+    // 没有滚动上限时无法复现底部停留场景，应显式视为测试准备失败。
+    if ( !content || content->ScrollMax.y <= 0.0f ) return false;
+    // 仅无 GPU 测试直接写 Child 初始滚动值，生产路径仍调用 ImGui API。
+    content->Scroll.y = content->ScrollMax.y;
+
+    // 新步骤指向列表顶部的移动工具；首次布局提出非阻塞滚动请求。
+    constexpr const char* target = "personalization.settings.shortcut-move";
+    spotlight.start({ target }, "移动工具快捷键");
+    // 滚动请求在下一次 Begin Child 生效，故先后驱动两帧。
+    frame();
+    frame();
+    const auto bounds = spotlight.resolvedTargetBounds();
+    // 第二帧必须取得落在 Child 内的真实控件矩形，而非离屏提示框。
+    // 横向范围也必须留在设置内容区，不能跨到相邻的时间线停靠页。
+    const bool revealed =
+        spotlight.resolvedTargetId() == target && bounds &&
+        bounds->minimum.x >= content->Pos.x &&
+        bounds->maximum.x <= content->Pos.x + content->Size.x &&
+        bounds->minimum.y >= content->Pos.y &&
+        bounds->maximum.y <= content->Pos.y + content->Size.y;
+    // 自动定位只发生一次，之后用户仍可主动翻到列表底部。
+    content->Scroll.y = content->ScrollMax.y;
+    frame();
+    // 令牌阻止重复定位，用户滚走后目标应重新回到等待可见状态。
+    if ( !revealed || !spotlight.resolvedTargetId().empty() ||
+         content->Scroll.y < content->ScrollMax.y )
+        return false;
+
+    // 同一内容 Child 切回软件页，只启动一次完整美化分组引导。
+    // 切页保留测试窗口和滚动容器身份，以覆盖步骤间布局切换。
+    settings.open(MMM::Event::SettingsTab::Software);
+    constexpr const char* aestheticsTarget =
+        "personalization.settings.aesthetics";
+    spotlight.start({ aestheticsTarget }, "全部界面美化设置");
+    frame();
+    frame();
+    // 第一帧申请滚动，第二帧必须从标题到最后一行形成同一个亮区。
+    const auto groupBounds = spotlight.resolvedTargetBounds();
+    // 六行加标题应显著高于一个控件；只亮一行会在此回归检查中失败。
+    const bool wholeGroup = spotlight.resolvedTargetId() == aestheticsTarget &&
+                            groupBounds &&
+                            groupBounds->maximum.y - groupBounds->minimum.y >
+                                ImGui::GetFrameHeight() * 6.0f;
+    // 横向与纵向都约束在内容 Child 中，不能照亮相邻停靠页。
+    return wholeGroup && groupBounds->minimum.x >= content->Pos.x &&
+           groupBounds->maximum.x <= content->Pos.x + content->Size.x &&
+           groupBounds->minimum.y >= content->Pos.y &&
+           groupBounds->maximum.y <= content->Pos.y + content->Size.y;
+}
+
 /// @brief 验证旧配置默认开启、关闭偏好往返和错误类型回退。
 /// @return 所有配置兼容性约束成立时返回 true。
 bool testSettings()
@@ -244,7 +329,7 @@ bool testPages()
     }
     // 深浅主题切换是全局状态，必须在后续导航测试前恢复。
     ImGui::GetStyle() = originalStyle;
-    // 章节标签切换与正文往返不应丢失选择；空章节仍占有独立标签。
+    // 章节标签切换与正文往返不应丢失选择；个性化也有独立主题卡片。
     // 从居中内容子窗口取得章节 TabBar 的内部状态。
     ImGuiTabBar* chapters = nullptr;
     for ( const auto* window : ImGui::GetCurrentContext()->Windows ) {
@@ -255,17 +340,41 @@ bool testPages()
             if ( chapters ) break;
         }
     }
-    // 两个内置章节都应存在，包括没有实际主题的个性化章节。
+    // 两个内置章节都应存在，个性化主题无需项目即可显示。
+    // TabBar 索引仍按章节目录排列，新增主题不能改变创作章节位置。
     if ( !chapters || chapters->Tabs.Size != 2 ) return false;
     if ( !(chapters->Flags & ImGuiTabBarFlags_DrawSelectedOverline) )
         return false;
     const auto creationTab        = chapters->Tabs[0].ID;
     const auto personalizationTab = chapters->Tabs[1].ID;
-    // 直接请求选择空章节，随后在窄窗口帧中确认状态落地。
+    // 直接请求选择个性化章节，随后在窄窗口帧中确认状态落地。
+    // 窄窗口覆盖主题卡片布局换行，避免只在宽屏下可进入。
     chapters->NextSelectedTabId = personalizationTab;
     for ( int i = 0; i < 4; ++i ) frame(360);
     if ( chapters->SelectedTabId != personalizationTab ) return false;
-    // 从空章节状态进入新建项目主题，菜单和快捷键分支都应正常渲染。
+    // 无项目时也能打开个性化主题，其真实分支应在窄窗口下可见。
+    // 注册索引在既有创作主题之后，检查对应稳定 ID 防止误测其他卡片。
+    const auto& personalizationTopic = manager.walkthroughService().topics()[6];
+    if ( personalizationTopic.m_id != "mmm.software-personalization" ||
+         personalizationTopic.m_requiresProject ||
+         personalizationTopic.m_requiresBeatmap )
+        return false;
+    welcome.showTopic(6);
+    // 页面切换跨帧完成，等布局和状态都更新后再检查卡片。
+    for ( int i = 0; i < 4; ++i ) frame(360);
+    bool personalizationBranchVisible = false;
+    for ( const auto* window : ImGui::GetCurrentContext()->Windows )
+        if ( window->Active &&
+             std::string_view(window->Name).find("BranchCard") !=
+                 std::string_view::npos )
+            personalizationBranchVisible = true;
+    if ( !personalizationBranchVisible ) return false;
+    // 返回章节首页应保留刚才的个性化选择。
+    welcome.showHome();
+    for ( int i = 0; i < 4; ++i ) frame(360);
+    if ( chapters->SelectedTabId != personalizationTab ) return false;
+    // 从个性化章节进入新建项目主题，跨章节入口仍应正常渲染。
+    // 这也验证新增章节不会拦截既有主题的直接导航。
     welcome.showTopic(1);
     for ( int i = 0; i < 4; ++i ) frame(360);
     bool createProjectBranchVisible = false;
@@ -494,7 +603,7 @@ bool testPages()
     for ( int i = 0; i < 4; ++i ) frame(960);
     MMM::UI::MainDockSpaceUI::setCenterDockId(0);
     // 清空共享中心 ID，并以窗口保持浮动作为最终断言。
-    return window->DockId == 0;
+    return window->DockId == 0 && testSettingsGuideScroll(manager);
 }
 }  // namespace
 /// @brief 欢迎页配置与无 GPU 渲染回归入口，个人配置由测试公共守卫隔离。

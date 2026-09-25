@@ -6,11 +6,13 @@
 #include "imgui.h"
 #include "mmm/SafeParse.h"
 #include "ui/Icons.h"
+#include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WalkthroughSpotlight.h"
 #include <algorithm>
 #include <array>
 #include <cfloat>
@@ -697,7 +699,7 @@ SettingsView::LayoutMetricsCache SettingsView::buildLayoutMetrics(
     const float categorySize    = std::floor(sidebarBaseW * scale);
     const float categorySpacing = std::floor(snapshot.itemSpacing * scale);
     const float categoryHeight  = std::floor(8.0f * scale) * 2.0f +
-                                 categorySize * 8.0f + categorySpacing * 7.0f;
+                                  categorySize * 8.0f + categorySpacing * 7.0f;
 
     // 标签列额外留出间隔，使文字与右侧控件不贴合。
     cache.tabLabelWidth =
@@ -1035,9 +1037,22 @@ void SettingsView::drawContent()
             ImGui::PushStyleColor(ImGuiCol_Text, iconVec4);
 
             // 内部 ID 只使用稳定枚举值，不依赖翻译后的可见文本。
-            std::string btnId = "##setting_tab_" + std::to_string((int)tab);
-            if ( ::MMM::UI::FeedbackButton(btnId.c_str(),
-                                           { rect.width, rect.height }) ) {
+            std::string btnId   = "##setting_tab_" + std::to_string((int)tab);
+            const bool  clicked = ::MMM::UI::FeedbackButton(
+                btnId.c_str(), { rect.width, rect.height });
+            if ( tab == Event::SettingsTab::Shortcut && m_sourceManager ) {
+                // 分类按钮的真实 Item 覆盖图标与文字，无需依赖翻译测量。
+                // 点击后同帧切到快捷键内容，下一步可以直接定位绑定行。
+                // 未点击时仍持续上报，供从演练页面返回时重放高亮。
+                // 目标 ID 固定，不受分类短标签或当前语言变化影响。
+                auto& spotlight = m_sourceManager->walkthroughSpotlight();
+                spotlight.reportLastItem(
+                    "personalization.settings.shortcut-tab");
+                if ( clicked )
+                    spotlight.completeTarget(
+                        "personalization.settings.shortcut-tab", true);
+            }
+            if ( clicked ) {
                 // 点击仅切换枚举；右侧内容在同一帧后续 switch 中立即更新。
                 m_currentTab = tab;
                 if ( tab != Event::SettingsTab::Shortcut ) {
@@ -1090,9 +1105,9 @@ void SettingsView::drawContent()
                 // 标签在分隔线右侧留出固定缩放 padding，并垂直居中。
                 ImVec2 labelSize       = ImGui::CalcTextSize(label.c_str());
                 float  textLeftPadding = std::floor(8.0f * dpiScale);
-                ImVec2 labelPos        = { sepX + textLeftPadding,
-                                           rect.y +
-                                               (rect.height - labelSize.y) * 0.5f };
+                ImVec2 labelPos = { sepX + textLeftPadding,
+                                    rect.y +
+                                        (rect.height - labelSize.y) * 0.5f };
                 ImGui::GetWindowDrawList()->AddText(
                     menuFont,
                     ImGui::GetFontSize(),
