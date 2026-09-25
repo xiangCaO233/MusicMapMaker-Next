@@ -92,6 +92,8 @@ namespace
 /// 目标设置在视口上部，保证提示可放在下方并形成可检查的空隙。
 /// 仅在测试帧关闭目标描边，使前景顶点都来自遮罩填充矩形。
 /// 测试检查实际暗化范围，不依赖内部拆分矩形的数量或顺序。
+/// 同一帧加入右侧设置面板，验证它与画布主目标分别保留亮区。
+/// 两者之间及面板下方仍须有暗区，不能通过整幅亮区伪造修复。
 bool testSeparateMaskHoles()
 {
     MMM::UI::Walkthrough::Spotlight spotlight;
@@ -106,6 +108,13 @@ bool testSeparateMaskHoles()
                            { 480.0f, 150.0f },
                            ImGui::GetMainViewport(),
                            false);
+    // 实际布局教学还需要保留右侧面板的所有选项，不能只露出一个画布物件。
+    // 面板与主目标相隔较远，遮罩必须分别扣除两处并保留中间暗区。
+    // 面板只提供辅助亮区，不应改变气泡贴近主目标的定位方式。
+    spotlight.reportCompanionRegion("mask.target",
+                                    { 650.0f, 80.0f },
+                                    { 780.0f, 500.0f },
+                                    ImGui::GetMainViewport());
     spotlight.keepAlive();
     // 真实渲染路径将暗化几何提交到视口前景列表。
     spotlight.render(1.0f, "Got it");
@@ -122,7 +131,12 @@ bool testSeparateMaskHoles()
     const ImVec2 targetPoint{ 450.0f, 135.0f };
     const ImVec2 hintPoint{ hint->Pos.x + hint->Size.x * 0.5f,
                             hint->Pos.y + hint->Size.y * 0.5f };
-    const bool   separated = gapPoint.x < 413.0f && hint->Pos.y > 157.0f;
+    const ImVec2 panelPoint{ 710.0f, 300.0f };
+    const ImVec2 betweenPoint{ 600.0f, 300.0f };
+    const ImVec2 belowPanelPoint{ 710.0f, 540.0f };
+    // 三个探针分别代表面板内部、画布与面板之间，以及面板之外。
+    // 最后一处防止实现错误地把面板所在的右侧整列都保持明亮。
+    const bool separated = gapPoint.x < 413.0f && hint->Pos.y > 157.0f;
     // 布局若未形成目标与提示之间的空隙，不能让遮罩测试空通过。
     // 关闭目标外框后，前景列表仅包含遮罩矩形，每四个顶点构成一个矩形。
     const auto coveredByMask = [&](ImVec2 point) {
@@ -146,8 +160,12 @@ bool testSeparateMaskHoles()
     };
     // 气泡与控件本身留白，二者之间的无关设置行仍应保持暗化。
     // 同时检查两个亮区，防止用整屏暗化伪造空隙已修复。
-    const bool valid = separated && coveredByMask(gapPoint) &&
-                       !coveredByMask(targetPoint) && !coveredByMask(hintPoint);
+    // 检查实际提交的前景几何，可检出遮罩片重叠后重新压暗面板的问题。
+    // 不只断言 reportCompanionRegion 储存了矩形，否则绘制回归无法发现。
+    const bool valid =
+        separated && coveredByMask(gapPoint) && !coveredByMask(targetPoint) &&
+        !coveredByMask(hintPoint) && !coveredByMask(panelPoint) &&
+        coveredByMask(betweenPoint) && coveredByMask(belowPanelPoint);
     ImGui::Render();
     return valid;
 }
@@ -504,6 +522,55 @@ int main()
     if ( !choiceRangeValid ) {
         ImGui::DestroyContext();
         return 60;
+    }
+
+    // 布局面板开关只是组件缺席时的备用入口。无论面板和画布谁先上报，
+    // 实际组件都必须独占亮区；不能把相隔很远的两处合并为大片遮罩孔洞。
+    // 组件尚未显示时则应精确高亮右侧开关，供用户找到启用位置。
+    // 三次分别对应仅有开关、画布先于开关、开关先于画布。
+    // 未来调整工具栏和画布的更新顺序时，主目标选择仍要稳定。
+    // 三次各自启动独立步骤，避免先前的 Completed 状态影响目标解析。
+    // 只查询解析结果，不模拟点击，以便单独定位遮罩路由错误。
+    constexpr ImVec2 fallbackMin{ 700.0F, 240.0F };
+    constexpr ImVec2 fallbackMax{ 780.0F, 266.0F };
+    constexpr ImVec2 componentMin{ 120.0F, 180.0F };
+    constexpr ImVec2 componentMax{ 220.0F, 210.0F };
+    for ( int order = 0; order < 3; ++order ) {
+        ImGui::NewFrame();
+        spotlight.beginFrame();
+        spotlight.start({ "component.target" }, "Arrange component");
+        if ( order == 1 ) {
+            // 后来的备用入口不能覆盖已上报的真实画布组件。
+            spotlight.reportTarget("component.target",
+                                   componentMin,
+                                   componentMax,
+                                   ImGui::GetMainViewport());
+        }
+        spotlight.reportTarget("component.target",
+                               fallbackMin,
+                               fallbackMax,
+                               ImGui::GetMainViewport(),
+                               true,
+                               true);
+        if ( order == 2 ) {
+            // 后来的真实组件需要替换备用入口，而不能与它合并。
+            spotlight.reportTarget("component.target",
+                                   componentMin,
+                                   componentMax,
+                                   ImGui::GetMainViewport());
+        }
+        const auto bounds = spotlight.resolvedTargetBounds();
+        // 横向边界足以区分两处，也能检出错误的外接矩形合并。
+        // 没有解析出目标时 optional 为空，明确视为测试失败。
+        const bool valid =
+            bounds && bounds->minimum.x == (order == 0 ? 700.0F : 120.0F) &&
+            bounds->maximum.x == (order == 0 ? 780.0F : 220.0F);
+        spotlight.stop();
+        ImGui::Render();
+        if ( !valid ) {
+            ImGui::DestroyContext();
+            return 62;
+        }
     }
 
     // 右侧纵向工具栏没有上下空间，但左侧足够容纳收窄后的提示气泡。

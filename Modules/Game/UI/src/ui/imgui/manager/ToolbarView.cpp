@@ -1081,7 +1081,7 @@ void ToolbarView::update(UIManager* sourceManager)
 
         if ( stateToolVisibility.layout ) {
             // Layout 按钮不受自身编辑态禁用，可再次点击退出该模式。
-            drawLayoutButton(btnSize, btnHeight, showToolLabels);
+            drawLayoutButton(btnSize, btnHeight, showToolLabels, sourceManager);
             advanceItem();
         }
 
@@ -1659,7 +1659,7 @@ void ToolbarView::update(UIManager* sourceManager)
     renderColorPalettePopup(dpiScale);
     renderPaletteExportFileDialog(dpiScale);
     renderPaletteImportFileDialog(dpiScale);
-    renderLayoutPopup(dpiScale);
+    renderLayoutPopup(dpiScale, sourceManager);
     renderMagnetPopup(dpiScale);
     renderBeatLinePopup(dpiScale);
     renderSoundEffectTool(dpiScale);
@@ -4499,8 +4499,10 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
 /// 布局模式。进入布局时关闭音效工具，因为两个宽弹层共享工具栏左侧锚定区。
 /// 其他小弹层已由 update 中的互斥规则管理，不在此重复清理。
 /// 此函数与普通工具按钮使用相同三态样式栈和平面图标绘制入口。
+/// @param sourceManager 提供实际可见按钮的引导登记入口。
 /// @warning UI 热路径：Layout 按钮可见时每帧执行，只提交轻量绘制与点击命令。
-void ToolbarView::drawLayoutButton(float width, float height, bool showLabel)
+void ToolbarView::drawLayoutButton(float width, float height, bool showLabel,
+                                   UIManager* sourceManager)
 {
     // 活动态样式与普通工具按钮保持一致。
     const bool isActive = m_currentTool == Logic::EditTool::Layout;
@@ -4516,12 +4518,13 @@ void ToolbarView::drawLayoutButton(float width, float height, bool showLabel)
 
     ImGui::PushID("LayoutTool");
     // Layout 使用专用 ID 和短标签，图标按钮本身不理解进入/退出双态语义。
-    if ( drawIconButton(ICON_MMM_TRACK_LAYOUT,
-                        "##ToolbarLayoutButton",
-                        TR("ui.toolbar.short.layout").data(),
-                        width,
-                        height,
-                        showLabel) ) {
+    const bool clicked = drawIconButton(ICON_MMM_TRACK_LAYOUT,
+                                        "##ToolbarLayoutButton",
+                                        TR("ui.toolbar.short.layout").data(),
+                                        width,
+                                        height,
+                                        showLabel);
+    if ( clicked ) {
         // 默认点击进入 Layout，活动态点击则计算恢复目标。
         // nextTool 先以进入目标初始化，活动态分支再替换为恢复目标。
         Logic::EditTool nextTool = Logic::EditTool::Layout;
@@ -4539,6 +4542,15 @@ void ToolbarView::drawLayoutButton(float width, float height, bool showLabel)
         m_currentTool = nextTool;
         // 视图成员和逻辑引擎通过同一命令保持同步。
         MenuUtil::dispatchCommand(Logic::CmdChangeTool{ nextTool });
+    }
+    if ( sourceManager ) {
+        // 个性化路线直接突出布局工具；已有活动工具时允许确认跳过点击。
+        // 仅从其它工具进入布局模式的点击才能自动完成此入口步骤。
+        auto& spotlight = sourceManager->walkthroughSpotlight();
+        spotlight.reportLastItem("personalization.editor.layout-tool");
+        if ( clicked && !isActive )
+            spotlight.completeTarget("personalization.editor.layout-tool",
+                                     true);
     }
     // 在弹窗渲染前缓存本帧按钮顶部屏幕坐标。
     m_lastLayoutBtnY = ImGui::GetItemRectMin().y;
@@ -4948,8 +4960,14 @@ void ToolbarView::renderBeatLinePopup(float dpiScale)
 /// 恢复默认操作直接调用 EditorConfig 的职责化 reset 函数或组件布局 reset，
 /// 不在 UI 中复制默认常量。频谱组件额外恢复专用尺寸字段，是因为这些字段不
 /// 属于通用 placement。所有恢复动作立即应用并保存，覆盖未完成连续编辑状态。
+/// 个性化引导借用每个显隐 Checkbox 的真实 Item 边界作为备用目标。
+/// 画布组件已显示时由画布目标优先；显隐选项仍通过整个弹层的独立亮区可读。
+/// 两处几何不能在本函数合并，否则中间窗口也会被照亮并误导拖拽位置。
+/// 弹层的屏幕位置和大小每帧重算，因为工具栏可移动、DPI 和展开组会改变。
+/// 当前目标若被弹层滚动裁掉，只请求下一帧滚到该项，不使用裁剪外旧坐标。
 /// @warning UI 热路径：浮层打开时每帧执行；会话锁只允许短时读取元数据。
-void ToolbarView::renderLayoutPopup(float dpiScale)
+/// @param sourceManager 提供组件开关的引导备用目标。
+void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
 {
     // 浮层关闭或工具切走时提交未完成连续编辑，并清理颜色选择器状态。
     if ( !m_showLayoutPopup || m_currentTool != Logic::EditTool::Layout ) {
@@ -5426,6 +5444,57 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
                 updateEditorConfig(updatedConfig);
                 appConfig.save();
             }
+            // 未启用或暂时离屏时，精确指向该组件的显隐开关；画布实体
+            // 一旦可见便覆盖这个备用锚点，避免跨面板合并成大片亮区。
+            // 这里必须紧跟 Checkbox：后续颜色和复位按钮会覆盖 LastItem
+            // 的矩形，届时再报目标就会把用户引向错误按钮。
+            // 固定 ID 与翻译后的 label 解耦，语言切换不会丢失教程目标。
+            if ( sourceManager ) {
+                std::string_view walkthroughTarget;
+                // 绘制顺序来自布局面板，目标名称来自引导数据；显式映射
+                // 避免误以枚举数值拼接 ID，也防止本地化改名破坏定位。
+                // KPS 虽然在频谱细项之后绘制，仍和其他组件走同一入口。
+                switch ( type ) {
+                case Config::CanvasComponentType::JudgmentLineTime:
+                    walkthroughTarget =
+                        "personalization.editor.component.judgment-time";
+                    break;
+                case Config::CanvasComponentType::BeatNumber:
+                    walkthroughTarget =
+                        "personalization.editor.component.beat-number";
+                    break;
+                case Config::CanvasComponentType::BeatLineTime:
+                    walkthroughTarget =
+                        "personalization.editor.component.beat-line-time";
+                    break;
+                case Config::CanvasComponentType::BackgroundSpectrum:
+                    walkthroughTarget =
+                        "personalization.editor.component.spectrum";
+                    break;
+                case Config::CanvasComponentType::Kps:
+                    walkthroughTarget = "personalization.editor.component.kps";
+                    break;
+                default: break;
+                }
+                auto& spotlight = sourceManager->walkthroughSpotlight();
+                if ( spotlight.awaitingTarget(walkthroughTarget) ) {
+                    if ( ImGui::IsItemVisible() ) {
+                        // 可见行只提供备用入口；画布若报出真实组件矩形，
+                        // Spotlight 会按主目标优先规则替换它。
+                        spotlight.reportTarget(walkthroughTarget,
+                                               ImGui::GetItemRectMin(),
+                                               ImGui::GetItemRectMax(),
+                                               ImGui::GetWindowViewport(),
+                                               true,
+                                               true);
+                    } else {
+                        // 较短的弹层会滚动；让被引导的开关进入视野后再高亮。
+                        // 不用视口外的 ItemRect，否则亮区会被夹在窗口边缘。
+                        // 下帧 ImGui 完成滚动后再取新的实际控件坐标。
+                        ImGui::SetScrollHereY();
+                    }
+                }
+            }
 
             if ( showColor ) {
                 // 频谱使用左右声道专用颜色，因此不显示通用组件色按钮。
@@ -5846,6 +5915,42 @@ void ToolbarView::renderLayoutPopup(float dpiScale)
 
         ImGui::TextDisabled("%s",
                             TR("ui.toolbar.layout_component_drag_hint").data());
+
+        // 编辑器个性化始终保持右侧布局设置可见；用户需要一边看画布组件，
+        // 一边检查显隐、同步与尺寸选项。设置区与画布目标分别挖孔，不能
+        // 合并成跨过时间线的大矩形，也不能让未勾选的开关被遮罩盖住。
+        // 判定线、轨宽和 Note 步骤也保留此面板：它们同样有配置入口。
+        // 仅当前个性化目标可请求额外亮区，其他演练继续只照亮自身目标。
+        // 弹层必须先绘制完所有可选项，才可读取完整的当帧窗口尺寸。
+        // 以实际 WindowPos/Size 而非上帧 m_layoutPopupWidth/Height 上报，
+        // 否则展开“物件渲染”或“KPS 同步设置”后亮区会漏掉新行。
+        // 弹层未打开时不报告，Spotlight 下一帧会清掉上一帧的面板亮区。
+        if ( sourceManager ) {
+            auto& spotlight = sourceManager->walkthroughSpotlight();
+            constexpr std::array layoutTargets{
+                "personalization.editor.component.judgment-time",
+                "personalization.editor.component.beat-number",
+                "personalization.editor.component.beat-line-time",
+                "personalization.editor.component.spectrum",
+                "personalization.editor.component.kps",
+                "personalization.editor.judgment-line",
+                "personalization.editor.player-lanes",
+                "personalization.editor.draft-lanes",
+                "personalization.editor.bgm-lanes",
+                "personalization.editor.note-size"
+            };
+            for ( std::string_view target : layoutTargets ) {
+                if ( !spotlight.awaitingTarget(target) ) continue;
+                const ImVec2 position = ImGui::GetWindowPos();
+                const ImVec2 size     = ImGui::GetWindowSize();
+                spotlight.reportCompanionRegion(
+                    target,
+                    position,
+                    { position.x + size.x, position.y + size.y },
+                    ImGui::GetWindowViewport());
+                break;
+            }
+        }
 
         // 缓存真实自动布局尺寸，下一帧可在视口边缘稳定定位。
         const ImVec2 size   = ImGui::GetWindowSize();

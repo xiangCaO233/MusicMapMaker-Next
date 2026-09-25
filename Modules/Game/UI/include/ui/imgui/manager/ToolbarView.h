@@ -203,7 +203,9 @@ private:
     /// @param width 按钮宽度。
     /// @param height 按钮高度。
     /// @param showLabel 是否显示短标签。
-    void drawLayoutButton(float width, float height, bool showLabel);
+    /// @param sourceManager 提供编辑器个性化引导状态。
+    void drawLayoutButton(float width, float height, bool showLabel,
+                          UIManager* sourceManager);
 
     /// @brief 获取当前逻辑编辑器配置，服务缺失时回退本地用户配置。
     /// @warning UI 热路径：只复制已有配置值，不执行文件 I/O。
@@ -215,8 +217,9 @@ private:
 
     /// @brief 绘制布局组件显隐管理弹层。
     /// @param dpiScale 当前 DPI 缩放。
+    /// @param sourceManager 提供当前引导目标的突出层。
     /// @warning UI 热路径：仅在布局工具激活时绘制固定数量控件。
-    void renderLayoutPopup(float dpiScale);
+    void renderLayoutPopup(float dpiScale, UIManager* sourceManager);
 
     /// @brief 绘制分拍线显示模式与自动渐隐范围弹窗。
     /// @param dpiScale 当前 DPI 缩放。

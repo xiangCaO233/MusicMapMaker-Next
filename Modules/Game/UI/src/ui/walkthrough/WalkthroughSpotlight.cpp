@@ -33,6 +33,10 @@
 /// - 当前引导只比较配置声明的少量候选，不维护全局控件表；
 /// - 同帧候选按配置索引决定优先级，列表末项优先；
 /// - 同一语义目标重复上报时合并同视口矩形，允许用户从多个并列项中选择；
+/// - 备用入口与真实目标同名时真实目标胜出，不能合并相隔很远的设置和画布；
+/// - 同一阶段另有一个不参与提示定位的辅助亮区，留给可操作的设置面板；
+/// - 辅助亮区与主目标分别从遮罩扣除，位于两者之间的窗口继续暗化；
+/// - 辅助亮区每帧重新上报，面板关闭后下一帧自动恢复普通遮罩；
 /// - 合并后的视觉范围不替代业务命中，只有具体控件确认才完成阶段；
 /// - 菜单项出现后可自然覆盖一级菜单目标；
 /// - 向导下一页出现后可自然覆盖仍在后台绘制的菜单目标；
@@ -132,6 +136,49 @@ void addMaskRegionExcludingBubble(ImDrawList& draw, const ImVec2& regionMin,
                   MASK_COLOR);
 }
 
+/// @brief 同时扣除提示气泡和设置面板，保持两处可操作区域明亮。
+/// @param draw 当前视口前景绘制列表。
+/// @param regionMin 当前待暗化区域左上角。
+/// @param regionMax 当前待暗化区域右下角。
+/// @param bubbleMin 提示气泡左上角。
+/// @param bubbleMax 提示气泡右下角。
+/// @param panelMin 设置面板左上角。
+/// @param panelMax 设置面板右下角。
+/// @warning UI 热路径：最多将固定四块区域继续拆成十六块，不分配容器。
+void addMaskRegionExcludingBubbleAndPanel(
+    ImDrawList& draw, const ImVec2& regionMin, const ImVec2& regionMax,
+    const ImVec2& bubbleMin, const ImVec2& bubbleMax, const ImVec2& panelMin,
+    const ImVec2& panelMax)
+{
+    const ImVec2 overlapMin{ std::max(regionMin.x, panelMin.x),
+                             std::max(regionMin.y, panelMin.y) };
+    const ImVec2 overlapMax{ std::min(regionMax.x, panelMax.x),
+                             std::min(regionMax.y, panelMax.y) };
+    if ( overlapMax.x <= overlapMin.x || overlapMax.y <= overlapMin.y ) {
+        // 面板完全不在当前暗区时走单气泡路径，维持普通演练的矩形数量。
+        addMaskRegionExcludingBubble(
+            draw, regionMin, regionMax, bubbleMin, bubbleMax);
+        return;
+    }
+    // 先扣面板，再由既有 helper 从四块互不重叠的暗区扣除提示气泡。
+    // 上下条带占原区域全宽，左右条带只占面板的纵向交集。
+    // 这样即使气泡跨过面板边缘，也不会产生重叠半透明层而变暗。
+    addMaskRegionExcludingBubble(
+        draw, regionMin, { regionMax.x, overlapMin.y }, bubbleMin, bubbleMax);
+    addMaskRegionExcludingBubble(
+        draw, { regionMin.x, overlapMax.y }, regionMax, bubbleMin, bubbleMax);
+    addMaskRegionExcludingBubble(draw,
+                                 { regionMin.x, overlapMin.y },
+                                 { overlapMin.x, overlapMax.y },
+                                 bubbleMin,
+                                 bubbleMax);
+    addMaskRegionExcludingBubble(draw,
+                                 { overlapMax.x, overlapMin.y },
+                                 { regionMax.x, overlapMax.y },
+                                 bubbleMin,
+                                 bubbleMax);
+}
+
 /// @brief 在视口内分别为目标与提示保留亮区。
 /// @param draw 当前视口前景绘制列表。
 /// @param viewportMin 视口左上角。
@@ -140,36 +187,35 @@ void addMaskRegionExcludingBubble(ImDrawList& draw, const ImVec2& regionMin,
 /// @param targetMax 目标亮区右下角。
 /// @param bubbleMin 提示气泡左上角。
 /// @param bubbleMax 提示气泡右下角。
-/// @warning UI 热路径：只拆分固定四个目标外区域，不进行排序或动态分配。
-void addMaskOutsideTargetAndBubble(ImDrawList& draw, const ImVec2& viewportMin,
-                                   const ImVec2& viewportMax,
-                                   const ImVec2& targetMin,
-                                   const ImVec2& targetMax,
-                                   const ImVec2& bubbleMin,
-                                   const ImVec2& bubbleMax)
+/// @param companion 可选的设置面板亮区，单独扣除而不合并主目标。
+/// @warning UI 热路径：只拆分固定数量区域，不进行排序或动态分配。
+void addMaskOutsideTargetAndBubble(
+    ImDrawList& draw, const ImVec2& viewportMin, const ImVec2& viewportMax,
+    const ImVec2& targetMin, const ImVec2& targetMax, const ImVec2& bubbleMin,
+    const ImVec2&                                 bubbleMax,
+    const std::optional<Spotlight::TargetBounds>& companion)
 {
     // 先按目标形成互不重叠的四个暗区，再从每块中扣除提示窗口。
     // 两块亮区之间因此仍为暗色，且两者局部相交时不会叠加遮罩。
-    addMaskRegionExcludingBubble(draw,
-                                 viewportMin,
-                                 { viewportMax.x, targetMin.y },
-                                 bubbleMin,
-                                 bubbleMax);
-    addMaskRegionExcludingBubble(draw,
-                                 { viewportMin.x, targetMax.y },
-                                 viewportMax,
-                                 bubbleMin,
-                                 bubbleMax);
-    addMaskRegionExcludingBubble(draw,
-                                 { viewportMin.x, targetMin.y },
-                                 { targetMin.x, targetMax.y },
-                                 bubbleMin,
-                                 bubbleMax);
-    addMaskRegionExcludingBubble(draw,
-                                 { targetMax.x, targetMin.y },
-                                 { viewportMax.x, targetMax.y },
-                                 bubbleMin,
-                                 bubbleMax);
+    // 辅助面板在该区域之外时沿用原路径，避免普通演练多画遮罩片。
+    const auto addRegion = [&](const ImVec2& minimum, const ImVec2& maximum) {
+        if ( companion ) {
+            addMaskRegionExcludingBubbleAndPanel(draw,
+                                                 minimum,
+                                                 maximum,
+                                                 bubbleMin,
+                                                 bubbleMax,
+                                                 companion->minimum,
+                                                 companion->maximum);
+        } else {
+            addMaskRegionExcludingBubble(
+                draw, minimum, maximum, bubbleMin, bubbleMax);
+        }
+    };
+    addRegion(viewportMin, { viewportMax.x, targetMin.y });
+    addRegion({ viewportMin.x, targetMax.y }, viewportMax);
+    addRegion({ viewportMin.x, targetMin.y }, { targetMin.x, targetMax.y });
+    addRegion({ targetMax.x, targetMin.y }, { viewportMax.x, targetMax.y });
 }
 
 /// @brief 判断屏幕坐标是否落在半开矩形内。
@@ -193,6 +239,7 @@ void Spotlight::beginFrame()
     m_reviewedActionSatisfied = false;
     // ImGui 控件坐标只能在提交它的当前帧使用，绝不能沿用旧布局矩形。
     m_anchor.reset();
+    m_companion.reset();
     m_acknowledgeButtonCenter.reset();
     m_previousButtonCenter.reset();
     m_keepAlive = false;
@@ -230,6 +277,7 @@ void Spotlight::start(const std::vector<std::string>& targets,
     m_previousButtonCenter.reset();
     m_prompt = std::move(prompt);
     m_anchor.reset();
+    m_companion.reset();
     m_stage                   = 0;
     m_state                   = State::Waiting;
     m_keepAlive               = true;
@@ -256,6 +304,7 @@ void Spotlight::stop()
     m_acknowledgePressed      = false;
     m_acknowledgeButtonCenter.reset();
     m_anchor.reset();
+    m_companion.reset();
     m_targets.clear();
     m_prompt.clear();
 }
@@ -405,12 +454,14 @@ void Spotlight::completeStage(std::size_t priority)
     // 最后目标完成后保留明确终态，让路线会话决定继续下一步或整体结束。
     if ( priority + 1 >= m_targets.size() ) {
         m_anchor.reset();
+        m_companion.reset();
         m_state = State::Completed;
         return;
     }
     // 完成后进入等待态，直到后续目标在新布局中提供本帧有效矩形。
     m_stage = priority + 1;
     m_anchor.reset();
+    m_companion.reset();
     m_state = State::Waiting;
 }
 
@@ -432,10 +483,11 @@ void Spotlight::reportLastItem(std::string_view targetId)
 /// @param maximum 屏幕空间右下角。
 /// @param viewport 区域所属视口。
 /// @param drawOutline 是否绘制 Spotlight 自身的脉冲外框。
+/// @param fallback 画布实体缺席时才使用的备用设置入口。
 /// @note 关闭外框只影响装饰描边，遮罩孔洞、提示定位与完成状态保持不变。
 void Spotlight::reportTarget(std::string_view targetId, const ImVec2& minimum,
                              const ImVec2& maximum, ImGuiViewport* viewport,
-                             bool drawOutline)
+                             bool drawOutline, bool fallback)
 {
     if ( !active() || completed() || maximum.x <= minimum.x ||
          maximum.y <= minimum.y || m_previousStepRequested )
@@ -453,6 +505,13 @@ void Spotlight::reportTarget(std::string_view targetId, const ImVec2& minimum,
         m_anchor.reset();
     }
     auto* resolvedViewport = viewport ? viewport : ImGui::GetWindowViewport();
+    // 同一语义目标在面板和画布都有入口时优先指向实际组件，不能把两处
+    // 合并成覆盖半个窗口的长框；上报顺序不影响选择结果。
+    if ( m_anchor && m_anchor->priority == priority &&
+         m_anchor->fallback != fallback ) {
+        if ( fallback ) return;
+        m_anchor.reset();
+    }
     if ( m_anchor && m_anchor->priority == priority &&
          m_anchor->viewport == resolvedViewport ) {
         // 同一目标可由多项并列控件上报；合并区域让全部候选保持可见可选。
@@ -472,9 +531,32 @@ void Spotlight::reportTarget(std::string_view targetId, const ImVec2& minimum,
                            .minimum     = minimum,
                            .maximum     = maximum,
                            .viewport    = resolvedViewport,
-                           .drawOutline = drawOutline };
+                           .drawOutline = drawOutline,
+                           .fallback    = fallback };
     }
     m_state = State::Highlighting;
+}
+
+/// @brief 保存与当前目标并列的设置区域，不改变目标提示的定位锚点。
+/// @param targetId 当前阶段语义 ID。
+/// @param minimum 设置区域屏幕左上角。
+/// @param maximum 设置区域屏幕右下角。
+/// @param viewport 设置区域所在视口。
+void Spotlight::reportCompanionRegion(std::string_view targetId,
+                                      const ImVec2&    minimum,
+                                      const ImVec2&    maximum,
+                                      ImGuiViewport*   viewport)
+{
+    // 额外亮区只能服务当前阶段；否则旧面板可能照亮后续无关步骤。
+    // 它不设置 Highlighting：没有实际目标时不得凭空显示可确认气泡。
+    if ( !awaitingTarget(targetId) || maximum.x <= minimum.x ||
+         maximum.y <= minimum.y )
+        return;
+    m_companion =
+        Anchor{ .priority = m_stage,
+                .minimum  = minimum,
+                .maximum  = maximum,
+                .viewport = viewport ? viewport : ImGui::GetWindowViewport() };
 }
 
 /// @brief 绘制不阻挡目标操作、但允许确认当前阶段的引导层。
@@ -503,6 +585,7 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel,
     std::optional<ImVec2> holeMin;
     std::optional<ImVec2> holeMax;
     std::optional<ImVec2> hintAnchor;
+    std::optional<TargetBounds> companionHole;
     if ( m_anchor ) {
         const float padding = std::max(4.0f, 7.0f * dpiScale);
         holeMin             = clampPoint(
@@ -514,6 +597,22 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel,
             viewportMin,
             viewportMax);
         hintAnchor = ImVec2{ (holeMin->x + holeMax->x) * 0.5f, holeMax->y };
+        // 多视口不能由同一前景列表扣洞，阶段或视口不一致就忽略额外区域。
+        // 面板边界只加小幅内边距，避免描边盖住设置项和窗口边框。
+        if ( m_companion && m_companion->priority == m_anchor->priority &&
+             m_companion->viewport == viewport ) {
+            const float panelPadding = std::max(2.0f, 3.0f * dpiScale);
+            companionHole            = TargetBounds{
+                .minimum = clampPoint({ m_companion->minimum.x - panelPadding,
+                                        m_companion->minimum.y - panelPadding },
+                                      viewportMin,
+                                      viewportMax),
+                .maximum = clampPoint({ m_companion->maximum.x + panelPadding,
+                                        m_companion->maximum.y + panelPadding },
+                                      viewportMin,
+                                      viewportMax)
+            };
+        }
     }
 
     const bool hasPrevious = previousLabel && previousLabel[0] != '\0';
@@ -777,7 +876,8 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel,
                                       *holeMin,
                                       *holeMax,
                                       bubbleMin,
-                                      bubbleMax);
+                                      bubbleMax,
+                                      companionHole);
 
         if ( m_anchor->drawOutline ) {
             // 目标描边仍严格跟随控件，不随较宽的提示透明区扩张。

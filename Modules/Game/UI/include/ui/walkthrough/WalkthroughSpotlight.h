@@ -101,10 +101,21 @@ public:
     /// @param maximum 屏幕空间右下角。
     /// @param viewport 区域所在视口；为空时使用当前窗口视口。
     /// @param drawOutline 是否绘制 Spotlight 自身的脉冲外框。
+    /// @param fallback 同一目标的画布实体可见时，由实体矩形替换此备用入口。
     /// @warning UI 热路径：仅比较当前目标列表并复制固定大小几何。
     void reportTarget(std::string_view targetId, const ImVec2& minimum,
                       const ImVec2& maximum, ImGuiViewport* viewport = nullptr,
-                      bool drawOutline = true);
+                      bool drawOutline = true, bool fallback = false);
+
+    /// @brief 为当前目标保留另一个不暗化的操作区域，例如布局设置面板。
+    /// @param targetId 当前阶段的语义目标。
+    /// @param minimum 额外亮区的屏幕空间左上角。
+    /// @param maximum 额外亮区的屏幕空间右下角。
+    /// @param viewport 亮区所在视口；为空时使用当前窗口视口。
+    /// @warning UI 热路径：只保存一个固定大小矩形，不合并到主目标。
+    void reportCompanionRegion(std::string_view targetId, const ImVec2& minimum,
+                               const ImVec2&  maximum,
+                               ImGuiViewport* viewport = nullptr);
 
     /// @brief 绘制暗化遮罩、目标描边和带确认按钮的引导提示。
     /// @param dpiScale 当前内容缩放，用于逻辑间距和线宽。
@@ -149,6 +160,8 @@ private:
         ImGuiViewport* viewport{ nullptr };
         /// @brief 是否绘制 Spotlight 外框；自绘精确目标框时可关闭。
         bool drawOutline{ true };
+        /// @brief 备用设置入口只在没有画布实体时生效，不与实体合并。
+        bool fallback{ false };
     };
 
     /// @brief 完成指定目标阶段并保持状态机单调前进。
@@ -172,6 +185,8 @@ private:
     std::string m_prompt;
     /// @brief 本帧优先级最高的可见目标。
     std::optional<Anchor> m_anchor;
+    /// @brief 当前目标的额外可操作亮区，与主目标分开挖孔。
+    std::optional<Anchor> m_companion;
     /// @brief 当前目标索引；正常自动推进，只有显式返回才减小。
     std::size_t m_stage{ 0 };
     /// @brief 路线持有者提供的跨步骤返回能力。

@@ -391,6 +391,62 @@ int main(int argc, char** argv)
                                    personalizationSteps[index - 1].m_id }) )
             return 71;
     }
+    // 编辑器个性化必须与当前谱面的轨道数和可见组件关联。
+    // 各步骤允许用户自行确认，不能要求拖到某个固定坐标才放行。
+    // 与软件个性化不同，本主题在没有打开谱面时不得呈现为可执行。
+    // order 必须排在软件主题之后，欢迎页才能稳定显示既有顺序。
+    // 主标题的章节 ID 同时决定欢迎页卡片归属，不能混进创作章节。
+    const auto editorPersonalizationTopic =
+        parseTopic(BUILTIN_EDITOR_PERSONALIZATION_WALKTHROUGH);
+    if ( !editorPersonalizationTopic ||
+         editorPersonalizationTopic->m_chapter != "personalization" ||
+         !editorPersonalizationTopic->m_requiresProject ||
+         !editorPersonalizationTopic->m_requiresBeatmap ||
+         editorPersonalizationTopic->m_order != 60 ||
+         editorPersonalizationTopic->m_branches.size() != 1 )
+        return 72;
+    constexpr std::array editorPersonalizationTargets{
+        // 先选择布局工具和了解边界，再逐项介绍实际可见组件。
+        // 入口目标属于工具栏，画布目标来自当前谱面渲染快照。
+        "personalization.editor.layout-tool",
+        "personalization.editor.canvas-range",
+        "personalization.editor.component.judgment-time",
+        "personalization.editor.component.beat-number",
+        "personalization.editor.component.beat-line-time",
+        "personalization.editor.component.spectrum",
+        "personalization.editor.component.kps",
+        // 主轨道、草稿区和 BGM 区是独立的调整目标。
+        // 这些 ID 不共用画布大框，否则会掩盖具体调整对象。
+        "personalization.editor.judgment-line",
+        "personalization.editor.player-lanes",
+        "personalization.editor.draft-lanes",
+        "personalization.editor.bgm-lanes",
+        "personalization.editor.note-size",
+    };
+    const auto& editorPersonalizationSteps =
+        editorPersonalizationTopic->m_branches.front().m_steps;
+    if ( editorPersonalizationSteps.size() !=
+         editorPersonalizationTargets.size() )
+        return 73;
+    // 每个目标均应有一个独立步骤，否则用户无法分别确认满意位置。
+    // 单链前置条件同时阻止跳过尚未阅读的可调范围说明。
+    // 最后一项仍需保留明确的 Note 尺寸目标以支持空谱面回退。
+    for ( std::size_t index = 0; index < editorPersonalizationSteps.size();
+          ++index ) {
+        const auto& step = editorPersonalizationSteps[index];
+        // 一个目标对应一个用户可自行结束的阶段，顺序不能被多目标抢占。
+        // 特别不能误设 requires_action；个性化没有唯一正确的完成坐标。
+        // 此处检查配置语义，不用修改真实谱面或个人视觉配置。
+        if ( !step.m_guide || step.m_guide->m_requiresAction ||
+             step.m_guide->m_targets !=
+                 std::vector<std::string>{
+                     editorPersonalizationTargets[index] } ||
+             (index > 0 &&
+              step.m_prerequisites !=
+                  std::vector<std::string>{
+                      editorPersonalizationSteps[index - 1].m_id }) )
+            return 74;
+    }
     // 后续原有内置主题断言继续执行，防止新增章节影响创作路线。
     // 空白流程的六个目标依次对应菜单入口、音频、自动测偏、BPM 复核、
     // 元数据资源区域和最终创建按钮，不要求改造原有单页弹窗布局。
@@ -501,7 +557,9 @@ int main(int argc, char** argv)
         // 相同 order 由欢迎页归入同一阶段；稳定插入顺序决定两张卡片的左右顺序。
         // 编辑区简介占据阶段三，完整创作路线位于阶段四。
         // 个性化主题排在现有主题之后，保持旧测试与导航索引稳定。
-        if ( topics.size() != 7 || service.chapters().size() != 2 ||
+        // 新主题作为第八张内置卡片，不能覆盖已完成主题的进度键。
+        // 相同章节内按 order 排序，注册顺序不应隐式决定阅读顺序。
+        if ( topics.size() != 8 || service.chapters().size() != 2 ||
              topics[0].m_id != "mmm.open-project" ||
              topics[1].m_id != "mmm.create-project" ||
              topics[2].m_id != "mmm.create-beatmap" ||
@@ -509,12 +567,14 @@ int main(int argc, char** argv)
              topics[4].m_id != "mmm.editor-overview" ||
              topics[5].m_id != "mmm.compose-beatmap" ||
              topics[6].m_id != "mmm.software-personalization" ||
+             topics[7].m_id != "mmm.editor-personalization" ||
              topics[0].m_order != topics[1].m_order ||
              topics[1].m_order >= topics[2].m_order ||
              topics[2].m_order != topics[3].m_order ||
              topics[3].m_order >= topics[4].m_order ||
              topics[4].m_order >= topics[5].m_order ||
-             topics[5].m_order >= topics[6].m_order )
+             topics[5].m_order >= topics[6].m_order ||
+             topics[6].m_order >= topics[7].m_order )
             return 25;
         // 包投放仅 completed 而非只读时不应完成教程步骤。
         MMM::Event::ProjectOpenInteractionEvent event;

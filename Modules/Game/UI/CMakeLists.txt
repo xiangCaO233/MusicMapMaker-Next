@@ -15,7 +15,9 @@ foreach(
         create-beatmap-template
         editor-overview
         compose-beatmap
-        software-personalization)
+        software-personalization
+        # 编辑器个性化复用实际画布布局边界，需要随程序一起嵌入。
+        editor-personalization)
   # 所有主题 JSON 都列为配置依赖，编辑演练内容无需手动重新配置。
   set_property(
     DIRECTORY

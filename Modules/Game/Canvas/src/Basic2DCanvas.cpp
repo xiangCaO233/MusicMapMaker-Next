@@ -128,6 +128,14 @@ void reportBeatmapTabWalkthroughTarget(UI::UIManager* manager,
 /// 这样阶段三曾经完成的介绍不会跳过阶段四重新要求的主轨道复位动作。
 /// 拖动步骤突出整个画布，介绍步骤只突出目标区域；两者不能交换矩形，
 /// 否则用户可能在玩家区仍有一部分离屏时提前通过完整可见性检查。
+/// 编辑器个性化目标沿用该画布的屏幕原点和当前 RenderSnapshot。
+/// 重复组件只取首个可见实例，避免拍号和时间文字形成全屏长框。
+/// 用户可自由选择布局位置，目标仅供指引，拖动数值不自动完成。
+/// 不可见的可选组件退回画布范围，步骤文字解释如何在面板启用。
+/// 草稿或 BGM 区关闭时同样退回画布，保留引导确认按钮。
+/// 主轨道和辅助区的宽度来自独立投影，不能用左右镜像推测。
+/// Note 尺寸步骤仅在活动时查询可见拾取盒，平时不增加扫描成本。
+/// 目标上报前裁剪到当前画布，不照亮旁边的时间线和预览。
 /// @warning UI 热路径：只执行一次轨道投影和固定数量的矩形裁剪。
 void reportCanvasWalkthroughTargets(
     UI::UIManager* manager, const Common::Render::RenderSnapshot& snapshot,
@@ -253,6 +261,150 @@ void reportCanvasWalkthroughTargets(
         // BGM 采用自身单轨宽度，持久轨和运行时追加轨共同组成介绍范围。
         reportRegion(
             "editor.canvas.bgm", projection.bgmLeftX, projection.bgmRightX);
+
+    // 个性化路线使用本帧渲染快照和相同轨道投影，避免高亮追逐旧布局。
+    // 每个设置步骤都由用户自行确认；拖动到任意合法位置不会自动跳过。
+    // 布局工具会持续改变轨道宽度，目标每帧重读几何而不缓存旧位置。
+    // 一个矩形只服务一个语义 ID，Spotlight 会拒绝当前步骤之外的目标。
+    const auto reportBox = [&](std::string_view id,
+                               float            left,
+                               float            top,
+                               float            right,
+                               float            bottom) {
+        const float clippedLeft   = std::clamp(left, 0.0F, canvasSize.x);
+        const float clippedTop    = std::clamp(top, 0.0F, canvasSize.y);
+        const float clippedRight  = std::clamp(right, 0.0F, canvasSize.x);
+        const float clippedBottom = std::clamp(bottom, 0.0F, canvasSize.y);
+        // 四边独立裁剪，组件可以部分进入视野但不能向邻窗开孔。
+        // 退化交集不送给 Spotlight，避免零面积边框误导可拖拽范围。
+        if ( clippedRight <= clippedLeft || clippedBottom <= clippedTop )
+            return;
+        spotlight.reportTarget(
+            id,
+            { canvasPosition.x + clippedLeft, canvasPosition.y + clippedTop },
+            { canvasPosition.x + clippedRight,
+              canvasPosition.y + clippedBottom },
+            ImGui::GetWindowViewport());
+    };
+    if ( spotlight.awaitingTarget("personalization.editor.canvas-range") )
+        // 总览阶段展示完整内容区，后续阶段再缩到组件或轨道边界。
+        reportBox("personalization.editor.canvas-range",
+                  0.0F,
+                  0.0F,
+                  canvasSize.x,
+                  canvasSize.y);
+
+    // 文本和频谱实例已有逻辑线程计算的内容及允许区域，选择首个可见实例。
+    // 拍号与分拍时间可能重复很多次，不能把全部实例合并成贯穿画布的长框。
+    // 类型与目标显式配对，新增枚举成员时不会静默指向别的组件。
+    // 数组次序不影响路线次序；路线只由 JSON 中的前置关系决定。
+    constexpr std::array componentTargets{
+        std::pair{ Config::CanvasComponentType::JudgmentLineTime,
+                   "personalization.editor.component.judgment-time" },
+        std::pair{ Config::CanvasComponentType::BeatNumber,
+                   "personalization.editor.component.beat-number" },
+        std::pair{ Config::CanvasComponentType::BeatLineTime,
+                   "personalization.editor.component.beat-line-time" },
+        std::pair{ Config::CanvasComponentType::Kps,
+                   "personalization.editor.component.kps" },
+        std::pair{ Config::CanvasComponentType::BackgroundSpectrum,
+                   "personalization.editor.component.spectrum" },
+    };
+    for ( const auto& [type, target] : componentTargets ) {
+        // 当前路线一次只等一个组件；其余类型直接跳过且不扫描快照。
+        if ( !spotlight.awaitingTarget(target) ) continue;
+        for ( const auto& instance : snapshot.canvasComponentInstances ) {
+            if ( instance.type != type ||
+                 !visual.canvasComponentsForKeyCount(snapshot.trackCount)
+                      .placement(instance.type)
+                      .visible )
+                continue;
+            // 只使用可见交集；完全离屏的重复拍号不能抢占当前高亮。
+            // 当前 placement 可见性会过滤上一代快照未消失的组件实例。
+            const float left  = std::clamp(instance.left, 0.0F, canvasSize.x);
+            const float top   = std::clamp(instance.top, 0.0F, canvasSize.y);
+            const float right = std::clamp(instance.right, 0.0F, canvasSize.x);
+            const float bottom =
+                std::clamp(instance.bottom, 0.0F, canvasSize.y);
+            if ( right <= left || bottom <= top ) continue;
+            // 内容几何用于定位目标，拖动时原有布局遮罩展示允许区域。
+            reportBox(target, left, top, right, bottom);
+            break;
+        }
+        // 没有可见实例时由布局面板的对应显隐控件提供精确备用锚点。
+        // 不用整张画布冒充可调整物件，也不擅自开启用户隐藏的组件。
+        break;
+    }
+
+    const float trackTop    = layout.top * canvasSize.y;
+    const float trackBottom = layout.bottom * canvasSize.y;
+    // 上下范围来自当前 Key 数，不沿用上一张谱面的轨道配置。
+    // 相机只影响横向投影，纵向画布边界仍来自本地归一化比例。
+    const float judgmentY =
+        visual.judgmentLinePositionForKeyCount(snapshot.trackCount) *
+        canvasSize.y;
+    // 判定线只框住可拖动横线，主轨道及辅助区则沿用各自独立投影边界。
+    // 八像素容差让细线也形成可辨识的教学亮区。
+    // 横向边界限制在玩家区，避免把相邻草稿和 BGM 轨误标为判定线。
+    // 位置取当前 Key 数专属设置，换谱后的亮区跟随新谱面变化。
+    reportBox("personalization.editor.judgment-line",
+              projection.player.leftX,
+              judgmentY - 8.0F,
+              projection.player.rightX,
+              judgmentY + 8.0F);
+    reportBox("personalization.editor.player-lanes",
+              projection.player.leftX,
+              trackTop,
+              projection.player.rightX,
+              trackBottom);
+    // 专业模式关闭时保留说明入口；打开后下一帧采用真实草稿边界。
+    // 草稿组宽度由其独立单轨宽度和当前草稿轨数共同决定。
+    // 与玩家区只共享纵向范围，不共享横向位置或宽度配置。
+    reportBox(
+        "personalization.editor.draft-lanes",
+        projection.draftLaneCount > 0 ? projection.draftLeftX : 0.0F,
+        trackTop,
+        projection.draftLaneCount > 0 ? projection.draftRightX : canvasSize.x,
+        trackBottom);
+    // BMS 未启用时不能伪造 BGM 宽度，亮区退回可交互画布。
+    // BGM 组使用自身的右侧锚点与单轨宽度，不从草稿区镜像获得。
+    // 用户分别调整两区后，两组高亮只随自己的配置变化。
+    reportBox("personalization.editor.bgm-lanes",
+              projection.bgmLaneCount > 0 ? projection.bgmLeftX : 0.0F,
+              trackTop,
+              projection.bgmLaneCount > 0 ? projection.bgmRightX : canvasSize.x,
+              trackBottom);
+
+    if ( spotlight.awaitingTarget("personalization.editor.note-size") ) {
+        bool found = false;
+        // 只在当前教学步骤扫描可见拾取盒，避免普通播放每帧遍历音符。
+        // 布局工具的 Note 角点与普通拾取共用快照，不查询 ECS 注册表。
+        for ( const auto& hitbox : snapshot.hitboxes ) {
+            // 草稿音符和背景样本不代表玩家 Note 的全局缩放操作。
+            if ( hitbox.kind != Logic::ChartObjectKind::PlayerNote ) continue;
+            const float left = std::clamp(hitbox.x, 0.0F, canvasSize.x);
+            const float top  = std::clamp(hitbox.y, 0.0F, canvasSize.y);
+            const float right =
+                std::clamp(hitbox.x + hitbox.w, 0.0F, canvasSize.x);
+            const float bottom =
+                std::clamp(hitbox.y + hitbox.h, 0.0F, canvasSize.y);
+            if ( right <= left || bottom <= top ) continue;
+            // 首个玩家 Note 足以演示角点，不合并其它物件造成大亮区。
+            reportBox(
+                "personalization.editor.note-size", left, top, right, bottom);
+            found = true;
+            break;
+        }
+        // 当前视野没有 Note 时突出主轨道，提示可改用布局面板的宽高滑块。
+        // 这条回退不制造谱面物件，也不要求滚到特定时间。
+        // 因而即使空白谱面也可以读完这一项并自行确认。
+        if ( !found )
+            reportBox("personalization.editor.note-size",
+                      projection.player.leftX,
+                      trackTop,
+                      projection.player.rightX,
+                      trackBottom);
+    }
 }
 
 /// @brief 判断鼠标是否悬停在当前 ImGui 窗口的内容区域内。

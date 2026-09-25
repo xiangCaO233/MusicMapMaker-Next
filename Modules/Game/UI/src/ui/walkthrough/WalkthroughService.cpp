@@ -197,6 +197,8 @@ Service::Service(const std::filesystem::path& progressPath,
     m_impl->add(BUILTIN_COMPOSE_BEATMAP_WALKTHROUGH);
     // 个性化主题与创作流程同级注册，不受项目或谱面打开状态限制。
     m_impl->add(BUILTIN_SOFTWARE_PERSONALIZATION_WALKTHROUGH);
+    // 编辑器个性化依赖已打开谱面，但不要求改动到固定数值才能完成。
+    m_impl->add(BUILTIN_EDITOR_PERSONALIZATION_WALKTHROUGH);
     std::error_code error;
     if ( std::filesystem::is_directory(customDirectory, error) ) {
         // 使用 error_code 迭代目录，不让损坏条目抛出异常终止启动。
