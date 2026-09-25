@@ -825,20 +825,26 @@ void includePolylineTransitionRect(SelectionRect&                target,
 /// @note Polyline 由另一入口逐部件测试，此函数不构造整条折线包围框。
 /// @param note 普通根物件组件，不包含折线整体处理。
 /// @param screen 用于投影各个部件的有效屏幕上下文。
+/// @param selection 当前框选矩形，允许检查视口外仍被框住的长条。
 /// @return 合并后的外包矩形，未支持类型保留无效状态。
 SelectionRect makeNoteScreenRect(const NoteComponent&          note,
-                                 const SelectionScreenContext& screen)
+                                 const SelectionScreenContext& screen,
+                                 SelectionRect                 selection)
 {
     SelectionRect rect;
     if ( !screen.valid ) return rect;
     // 框选可检查快照之外的实体，因此也须过滤尚未入场的独立 HS 长条。
-    // 使用整个视口而非选框作为载体窗口，随后再按实际拉伸几何判断命中。
+    // 拖动画布时选框可能延伸到视口外，门禁窗口须同时覆盖这部分区域。
+    // 保留原有视口范围，避免改变视口内独立尾部 HS 的选择语义。
     // 像素边界换算回缓存距离，避免预览压缩比例改变载体生命周期。
     // 门禁失败保留无效矩形，使不可见长条无法参与后续矩形相交。
+    const float windowTop = std::min(0.0F, selection.top);
+    const float windowBottom =
+        std::max(screen.viewportHeight, selection.bottom);
     const double maxDelta =
-        (screen.judgmentLineY + screen.noteH) / screen.renderScaleY;
+        (screen.judgmentLineY - windowTop + screen.noteH) / screen.renderScaleY;
     const double minDelta =
-        (screen.judgmentLineY - screen.viewportHeight - screen.noteH) /
+        (screen.judgmentLineY - windowBottom - screen.noteH) /
         screen.renderScaleY;
     if ( !System::isIndependentHoldCarrierVisible(
              note,
@@ -1027,7 +1033,7 @@ bool noteMatchesSelection(const NoteComponent&          note,
         return polylineMatchesSelection(note, screen, selection, mode);
     }
     return selectionMatchesRect(
-        selection, makeNoteScreenRect(note, screen), mode);
+        selection, makeNoteScreenRect(note, screen, selection), mode);
 }
 
 /// @brief 计算自动采样锚点、offset 连线与实际触发 handle 的选择包围盒。

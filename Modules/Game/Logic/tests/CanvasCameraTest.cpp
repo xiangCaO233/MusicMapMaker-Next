@@ -7614,6 +7614,92 @@ bool testMarqueeSelectsTypedSamplesOnlyOnMainCanvas()
            context.selectedSampleEntities.empty();
 }
 
+/// @brief 验证框住的根 Hold 离开主画布后，松手重算仍保留选择。
+/// @details 先在可见时框住两种尾部 HS 语义的 Hold，再推进画布使两者完全
+/// 位于视口下方；第二次计算模拟松手时的最终同步。
+/// @par 关键不变量
+/// - 框的时间端点属于谱面坐标，滚动画布不应修改它们。
+/// - 独立尾部 HS 的载体入场门禁须覆盖视口外的框选区域。
+/// - 共享尾部 HS 不经过这道门禁，作为同一操作的对照。
+/// - 松手时重新计算可以清除旧选择，但必须重新命中框内物件。
+/// - 排序实体列表及结束时间前缀必须同时提供，走正式候选筛选路径。
+/// - 两个物件同时位于同一时间窗，避免只因候选范围不同而产生假阳性。
+/// - 最终判断读取 selectedNoteEntities，覆盖组件状态向集合的同步结果。
+/// @par 故障定位
+/// 可见阶段失败时先检查纹理包围盒与轨道投影。
+/// 仅画面外的独立尾部 HS 失败时，检查载体门禁使用的空间窗口。
+/// 两种 Hold 都失败时，检查框的重投影和候选时间范围。
+/// @par 测试边界
+/// 本例直接设置框端点与动画时间，验证选择重算的结果。
+/// 鼠标事件和自动滚动速度由画布交互层负责，不在此重复模拟。
+/// @return 独立尾部 HS 与共享尾部 HS 的 Hold 均保持选中时返回 true。
+bool testMarqueeKeepsOffscreenHoldsOnRelease()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+
+    // 原生根 Hold 默认让尾节点独立采样 HS；这正是问题涉及的门禁分支。
+    const auto independentEntity = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        independentEntity,
+        MMM::Logic::NoteComponent{
+            .m_type       = MMM::NoteType::HOLD,
+            .m_timestamp  = 1.0,
+            .m_duration   = 0.4,
+            .m_trackIndex = 1,
+        });
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
+        independentEntity);
+    // 显式共享头部 HS 的 Hold 用来确认普通长条选择没有被此次修复改变。
+    const auto sharedEntity = context.noteRegistry.create();
+    auto&      shared = context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        sharedEntity,
+        MMM::Logic::NoteComponent{
+            .m_type       = MMM::NoteType::HOLD,
+            .m_timestamp  = 1.0,
+            .m_duration   = 0.4,
+            .m_trackIndex = 2,
+        });
+    shared.m_metadata.note_properties[MMM::NoteMetadataType::MMM]
+                                     ["hold_independent_end_hs"] = "false";
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
+        sharedEntity);
+    // 框完全覆盖两个轨道和 Hold 的时间范围，并提供与运行时一致的索引。
+    context.sortedNoteEntities     = { independentEntity, sharedEntity };
+    context.sortedNoteMaxEndPrefix = { 1.4, 1.4 };
+    context.marqueeBoxes           = {
+        MMM::Logic::MarqueeBox{
+            .startTime  = 0.8,
+            .endTime    = 1.6,
+            .startTrack = 0.8F,
+            .endTrack   = 3.2F,
+            .cameraId   = "Basic2DCanvas",
+        },
+    };
+
+    // 首次计算代表用户在可见区域已框住物件，必须先建立真实选中基线。
+    MMM::Logic::InteractionController controller(context);
+    context.isMarqueeSelectionDirty = true;
+    controller.updateMarqueeSelection();
+    if ( !context.selectedNoteEntities.contains(independentEntity) ||
+         !context.selectedNoteEntities.contains(sharedEntity) ) {
+        XERROR("Visible marquee did not enclose both Hold variants");
+        return false;
+    }
+
+    // 相机前进后，整个 Hold 已低于 600 像素视口；最终同步不得丢弃它。
+    // 保持框端点不变，覆盖拖拽后持续滚动直至松手的行为。
+    context.animateTime             = 100.0;
+    context.isMarqueeSelectionDirty = true;
+    controller.updateMarqueeSelection();
+    if ( !context.selectedNoteEntities.contains(independentEntity) ||
+         !context.selectedNoteEntities.contains(sharedEntity) ) {
+        XERROR("Release sync dropped an offscreen Hold from marquee selection");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证混合 Note/Sample 跨会话粘贴共用时间锚点和相对 BGM 轨道。
 /// @details
 /// 来源选择同时包含玩家 Note 和自动 Sample，两者最早时间相差一秒。复制到六键
@@ -8037,6 +8123,7 @@ int main()
                    testUnboundNoteDragConvertsToSilentSample() &&
                    testCompositeConversionUsesTypedIdentity() &&
                    testMarqueeSelectsTypedSamplesOnlyOnMainCanvas() &&
+                   testMarqueeKeepsOffscreenHoldsOnRelease() &&
                    testMixedChartObjectClipboardAcrossSessions() &&
                    testMixedChartObjectLocalCut() &&
                    testAnnotationMarkerProjectionAndGutterSnap()
