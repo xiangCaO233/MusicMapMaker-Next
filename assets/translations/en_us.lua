@@ -472,6 +472,7 @@ return {
 	["ui.settings.beatmap.name"] = "Internal Name",
 	["ui.settings.beatmap.title_unicode"] = "Title (Unicode)",
 	["ui.settings.beatmap.artist_unicode"] = "Artist (Unicode)",
+	["ui.settings.beatmap.album"] = "Album",
 	["ui.settings.beatmap.cover_type"] = "Background Type",
 	["ui.settings.beatmap.cover_type.image"] = "Image",
 	["ui.settings.beatmap.cover_type.video"] = "Video",
@@ -1210,6 +1211,7 @@ return {
 	["ui.wizard.new_project.create"] = "Create Project",
 
 	["ui.wizard.new_beatmap.title"] = "New Beatmap Wizard",
+	["ui.wizard.new_beatmap.fill_from_project"] = "Fill title, artist and mapper from project",
 	["ui.wizard.new_beatmap.create"] = "Create Now",
 	["ui.wizard.new_beatmap.cancel"] = "Cancel",
 	["ui.wizard.new_beatmap.select_audio"] = "Select Main Track",

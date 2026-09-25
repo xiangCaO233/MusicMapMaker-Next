@@ -445,7 +445,7 @@ bool baseMapMetadataEqual(const MMM::BaseMapMeta& lhs,
     // 显式比较全部持久化基础字段，避免结构填充或未来非持久化成员参与判等。
     return lhs.name == rhs.name && lhs.title == rhs.title &&
            lhs.title_unicode == rhs.title_unicode && lhs.artist == rhs.artist &&
-           lhs.artist_unicode == rhs.artist_unicode &&
+           lhs.artist_unicode == rhs.artist_unicode && lhs.album == rhs.album &&
            lhs.map_path == rhs.map_path &&
            lhs.main_audio_path == rhs.main_audio_path &&
            lhs.song_file_hint == rhs.song_file_hint &&

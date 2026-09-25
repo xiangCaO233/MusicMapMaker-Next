@@ -689,6 +689,7 @@ Json encodeMetadata(const ::MMM::BeatMap& beatmap)
         { "title_unicode", base.title_unicode },
         { "artist", base.artist },
         { "artist_unicode", base.artist_unicode },
+        { "album", base.album },
         { "map_path", Config::pathToUtf8(base.map_path) },
         { "main_audio_path", Config::pathToUtf8(base.main_audio_path) },
         { "song_file_hint", Config::pathToUtf8(base.song_file_hint) },
@@ -1011,11 +1012,16 @@ bool decodeMetadata(const Json& source, ::MMM::BeatMap& beatmap)
     std::string   coverPath;
     std::uint32_t coverType = 0;
     const auto    extraIt   = source.find("extra");
+    // 旧协作快照缺少专辑时清空目标值，防止整体替换误保留上一版元数据。
+    // 若字段存在仍必须按字符串校验，错误类型应使整个快照解码失败。
+    base.album.clear();
     if ( !readValue(source, "name", base.name) ||
          !readValue(source, "title", base.title) ||
          !readValue(source, "title_unicode", base.title_unicode) ||
          !readValue(source, "artist", base.artist) ||
          !readValue(source, "artist_unicode", base.artist_unicode) ||
+         (source.contains("album") &&
+          !readValue(source, "album", base.album)) ||
          !readValue(source, "map_path", mapPath) ||
          !readValue(source, "main_audio_path", mainAudioPath) ||
          !readValue(source, "song_file_hint", songFileHint) ||

@@ -414,7 +414,7 @@ bool sameMetadata(const BeatMap& lhs, const BeatMap& rhs)
            left.title_unicode == right.title_unicode &&
            left.artist == right.artist &&
            left.artist_unicode == right.artist_unicode &&
-           left.map_path == right.map_path &&
+           left.album == right.album && left.map_path == right.map_path &&
            left.main_audio_path == right.main_audio_path &&
            left.song_file_hint == right.song_file_hint &&
            left.main_cover_path == right.main_cover_path &&
@@ -471,6 +471,7 @@ bool testStrictCategoryIsolation()
         edited->m_audioSamples.front().m_volume           = 0.25F;
         // Metadata 改变文本和数值字段，证明不依赖单一类型。
         edited->m_baseMapMetadata.title         = "Changed Title";
+        edited->m_baseMapMetadata.album         = "Collaboration Album";
         edited->m_baseMapMetadata.map_length    = 654321.0;
         edited->m_annotations.front().m_content = "## 新批注";
         // Annotations 同时覆盖已有 ID 更新和新 ID 追加。

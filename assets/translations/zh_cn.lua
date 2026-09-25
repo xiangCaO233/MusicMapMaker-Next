@@ -471,6 +471,7 @@ return {
 	["ui.settings.beatmap.name"] = "内部名称",
 	["ui.settings.beatmap.title_unicode"] = "标题 (Unicode)",
 	["ui.settings.beatmap.artist_unicode"] = "艺术家 (Unicode)",
+	["ui.settings.beatmap.album"] = "唱片集",
 	["ui.settings.beatmap.cover_type"] = "背景类型",
 	["ui.settings.beatmap.cover_type.image"] = "图片",
 	["ui.settings.beatmap.cover_type.video"] = "视频",
@@ -1209,6 +1210,7 @@ return {
 	["ui.wizard.new_project.create"] = "创建项目",
 
 	["ui.wizard.new_beatmap.title"] = "新建谱面向导",
+	["ui.wizard.new_beatmap.fill_from_project"] = "从项目填入标题、艺术家和谱师",
 	["ui.wizard.new_beatmap.create"] = "立即创建",
 	["ui.wizard.new_beatmap.cancel"] = "取消",
 	["ui.wizard.new_beatmap.select_audio"] = "选择主音轨",

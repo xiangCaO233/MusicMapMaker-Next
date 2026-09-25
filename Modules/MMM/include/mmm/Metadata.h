@@ -97,6 +97,8 @@ struct BaseMapMeta {
     std::string artist;
     // 谱面歌曲艺术家(unicode)
     std::string artist_unicode;
+    /// @brief 歌曲所属专辑；音频没有该标签时保持为空。
+    std::string album;
     // 谱面文件路径
     std::filesystem::path map_path;
     /// @brief 旧版单主音频路径；仅供兼容尚未迁移的调用方，不再决定播放事件。

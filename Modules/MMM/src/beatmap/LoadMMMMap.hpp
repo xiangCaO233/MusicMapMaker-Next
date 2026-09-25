@@ -40,6 +40,7 @@ using json = nlohmann::json;
 /// - `name` 映射编辑器展示名；
 /// - `title` 与 `title_unicode` 映射两种标题；
 /// - `artist` 与 `artist_unicode` 映射两种艺术家名；
+/// - `album` 映射歌曲所属专辑，旧文件缺失时为空；
 /// - `version` 映射难度版本；
 /// - `author` 映射谱师；
 /// - `song_file_hint` 映射项目主音频提示；
@@ -454,6 +455,7 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
             beatMap.m_baseMapMetadata.artist = readMMMString(base, "artist");
             beatMap.m_baseMapMetadata.artist_unicode =
                 readMMMString(base, "artist_unicode");
+            beatMap.m_baseMapMetadata.album   = readMMMString(base, "album");
             beatMap.m_baseMapMetadata.version = readMMMString(base, "version");
             beatMap.m_baseMapMetadata.author  = readMMMString(base, "author");
             // v1 使用 audio 作为主音频；新版本使用 song_file_hint 与自动采样。

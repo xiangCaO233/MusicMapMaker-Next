@@ -570,6 +570,9 @@ void SettingsView::drawBeatmapSettings()
         DrawInput(TR_CACHE("ui.settings.beatmap.artist_unicode").data(),
                   meta.artist_unicode,
                   !isImd);
+        // 原生谱面保存专辑；不支持该字段的 IMD 保留展示而禁止编辑。
+        DrawInput(
+            TR_CACHE("ui.settings.beatmap.album").data(), meta.album, !isImd);
         DrawInput(
             TR_CACHE("ui.settings.beatmap.mapper").data(), meta.author, !isImd);
         DrawInput(

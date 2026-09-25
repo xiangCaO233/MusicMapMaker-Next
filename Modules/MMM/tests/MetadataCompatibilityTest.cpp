@@ -172,19 +172,19 @@ bool testProjectAudioToolWorkspaceRoundTrip()
     source.m_projectAudioToolPlacements         = {
         // 第一项显式提供尺寸，覆盖用户调整过的自由布局。
         MMM::ProjectAudioToolItemPlacement{
-                    .m_audioResourceId = "main",
-                    .m_x               = 12.5F,
-                    .m_y               = 30.0F,
-                    .m_width           = 260.0F,
-                    .m_height          = 120.0F,
-                    .m_zOrder          = 4,
+            .m_audioResourceId = "main",
+            .m_x               = 12.5F,
+            .m_y               = 30.0F,
+            .m_width           = 260.0F,
+            .m_height          = 120.0F,
+            .m_zOrder          = 4,
         },
         // 第二项省略尺寸，模拟仍依赖自动尺寸的旧版项目配置。
         MMM::ProjectAudioToolItemPlacement{
-                    .m_audioResourceId = "effect",
-                    .m_x               = 80.0F,
-                    .m_y               = 50.0F,
-                    .m_zOrder          = 5,
+            .m_audioResourceId = "effect",
+            .m_x               = 80.0F,
+            .m_y               = 50.0F,
+            .m_zOrder          = 5,
         },
     };
 
@@ -369,6 +369,7 @@ bool testImageEventFallback(const std::filesystem::path& outputDirectory)
  *
  * 外部格式解析通过后仍可能在保存为项目原生格式时丢字段，因此该场景直接
  * 构造统一模型并执行磁盘往返。视频类型、起播时间、路径和偏移必须成组保持。
+ * 同时验证新增专辑字段在原生 JSON 中存在且重新加载后仍然可用。
  *
  * @param outputDirectory 原生 MMM 夹具的输出目录。
  * @return 所有视频背景字段无损往返时返回 true。
@@ -382,6 +383,7 @@ bool testMMMVideoMetadataRoundTrip(const std::filesystem::path& outputDirectory)
     MMM::BeatMap source;
     auto&        sourceMeta    = source.m_baseMapMetadata;
     sourceMeta.name            = "Video metadata round trip";
+    sourceMeta.album           = "Test Album";
     sourceMeta.main_cover_path = "videos/background.mp4";
     sourceMeta.cover_type      = MMM::CoverType::VIDEO;
     sourceMeta.video_starttime = 2468;
@@ -398,10 +400,21 @@ bool testMMMVideoMetadataRoundTrip(const std::filesystem::path& outputDirectory)
         return false;
     }
 
+    // 直接查看落盘字段，防止加载器的默认值掩盖保存遗漏。
+    json          saved;
+    std::ifstream input(path);
+    if ( !input ) return false;
+    input >> saved;
+    bool ok =
+        check(saved["metadata"]["base"].value("album", "") == "Test Album",
+              "MMM saver should write the album field");
+
     // 从磁盘重新解析而不是检查 source，覆盖真实 JSON 字段名与转换函数。
+    // 专辑不能由标题回填，必须直接从持久化字段恢复。
     const MMM::BeatMap loaded = MMM::BeatMap::loadFromFile(path);
     const auto&        meta   = loaded.m_baseMapMetadata;
-    bool               ok     = true;
+    ok &= check(meta.album == "Test Album",
+                "MMM round trip should keep the album field");
     // 背景类型决定渲染器选择图片还是视频，必须和路径一起保持。
     ok &= check(meta.cover_type == MMM::CoverType::VIDEO,
                 "MMM round trip should keep cover type");
@@ -675,6 +688,8 @@ bool testLegacyMMMMetadataDefaults(const std::filesystem::path& outputDirectory)
                 "legacy MMM should default video start time to zero");
     ok &= check(meta.bgxoffset == 0 && meta.bgyoffset == 0,
                 "legacy MMM should default background offsets to zero");
+    ok &= check(meta.album.empty(),
+                "legacy MMM without album should default to empty");
     ok &= check(meta.main_audio_path == std::filesystem::path("legacy.ogg") &&
                     meta.song_file_hint == std::filesystem::path("legacy.ogg"),
                 "legacy MMM audio should populate both compatibility fields");
@@ -1133,8 +1148,8 @@ bool testSingleAudioExporterCompatibility(
         const MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(boundOSUPath);
         const auto         binding =
             reloaded.m_allNotes.empty()
-                        ? std::optional<MMM::AudioSampleBinding>{}
-                        : reloaded.m_allNotes.front().get().getSampleBinding();
+                ? std::optional<MMM::AudioSampleBinding>{}
+                : reloaded.m_allNotes.front().get().getSampleBinding();
         ok &= check(
             binding.has_value() && binding->m_audioResourceId == "hit.wav",
             "osu! should round-trip a playable sample file");

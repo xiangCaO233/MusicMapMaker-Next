@@ -43,6 +43,8 @@ std::optional<AudioInfo> AudioInfoUtils::probeAudioInfo(
     AudioInfo info;
     info.title  = mediaInfo.title;
     info.artist = mediaInfo.artist;
+    // 专辑属于媒体标签，不从文件路径或项目名称推断，缺失时保持空值。
+    info.album = mediaInfo.album;
     // 只有正采样率才能安全地把 PCM 帧数换算为秒。
     // 无效或缺失采样率保留默认零时长，不执行除法也不猜测容器时长。
     if ( mediaInfo.format.samplerate > 0 ) {

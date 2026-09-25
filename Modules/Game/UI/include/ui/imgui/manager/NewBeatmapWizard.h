@@ -234,10 +234,15 @@ private:
     char m_artistBuf[256] = { 0 };
     /// @brief Unicode 艺术家输入缓冲区。
     char m_artistUnicodeBuf[256] = { 0 };
+    /// @brief 音频标签或手工输入的专辑缓冲区。
+    char m_albumBuf[256] = { 0 };
     /// @brief 谱师输入缓冲区。
     char m_authorBuf[256] = { 0 };
     /// @brief 难度名输入缓冲区。
     char m_versionBuf[256] = { 0 };
+
+    /// @brief 用户已明确选择项目元数据时，后续音频探测不得覆盖对应文本。
+    bool m_projectMetadataImported{ false };
 
     /// @brief 谱面默认 BPM。
     double m_bpm = 120.0;

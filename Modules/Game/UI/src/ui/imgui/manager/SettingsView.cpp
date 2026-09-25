@@ -276,12 +276,13 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
     case Event::SettingsTab::Beatmap: {
         // 谱面页覆盖基本信息、封面、偏好和资源选择标签。
         // 动态视频起始行也必须纳入，不应因当前封面类型隐藏而缩小窗口。
-        const std::array<const char*, 19> labels{
+        const std::array<const char*, 20> labels{
             TR_CACHE("ui.settings.beatmap.name").data(),
             TR_CACHE("ui.settings.beatmap.title").data(),
             TR_CACHE("ui.settings.beatmap.title_unicode").data(),
             TR_CACHE("ui.settings.beatmap.artist").data(),
             TR_CACHE("ui.settings.beatmap.artist_unicode").data(),
+            TR_CACHE("ui.settings.beatmap.album").data(),
             TR_CACHE("ui.settings.beatmap.mapper").data(),
             TR_CACHE("ui.settings.beatmap.version").data(),
             TR_CACHE("ui.settings.beatmap.path").data(),

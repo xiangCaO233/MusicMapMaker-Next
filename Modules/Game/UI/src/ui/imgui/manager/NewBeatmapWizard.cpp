@@ -468,6 +468,10 @@ void NewBeatmapWizard::applyTemplateResourceDefaults(
                      sizeof(m_artistUnicodeBuf),
                      meta.artist_unicode);
     }
+    if ( m_albumBuf[0] == '\0' && !meta.album.empty() ) {
+        // 模板专辑只填空栏，保留用户已输入或音频标签给出的值。
+        copyToBuffer(m_albumBuf, sizeof(m_albumBuf), meta.album);
+    }
 }
 
 /// @brief 按资源路径查找项目中对应的主音轨 ID。
@@ -540,6 +544,7 @@ void NewBeatmapWizard::syncMetaFromInputs()
     m_meta.title_unicode  = m_titleUnicodeBuf;
     m_meta.artist         = m_artistBuf;
     m_meta.artist_unicode = m_artistUnicodeBuf;
+    m_meta.album          = m_albumBuf;
     m_meta.author         = m_authorBuf;
     m_meta.version        = m_versionBuf;
     // 轨道数在 UI 侧也钳制，此处再次维护命令边界不变量。
@@ -1315,6 +1320,7 @@ void NewBeatmapWizard::handleResourceDrop(ResourceTarget target)
 /// 固定内部窗口 ID 保护翻译切换后的 popup 状态；所有子弹窗都在父 popup 的 Begin
 /// 与 End 之间驱动。关闭、手动测量暂停和项目消失分别走独立清理路径。
 /// 资源下拉框只在展开时扫描项目目录，普通帧仅枚举内存中的主音轨资源表。
+/// 用户点击项目元数据导入后，音频探测只更新时长和内部名，不覆盖明确选择的文本。
 /// 手动 BPM 工具通过关闭当前 popup 暂时接管焦点，自动分析则保持向导可见并展示
 /// 进度；两种路径共用轨道 ID 校验和导出回调。切换音频总会废弃旧 Timing。
 /// 创建按钮禁用范围只覆盖提交操作，用户仍可取消或修正资源；重名属于可确认警告，
@@ -1374,6 +1380,24 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     const ImVec2 detailsAreaMin = ImGui::GetCursorScreenPos();
     // 基础信息字段直接编辑向导缓冲，提交时统一同步到 m_meta。
     ImGui::SeparatorText(TR("ui.settings.beatmap.info").data());
+    // 仅当前项目能提供权威信息；没有项目时继续显示下方已有的错误说明。
+    auto* project = Logic::EditorEngine::instance().getCurrentProject();
+    if ( project &&
+         FeedbackButton(
+             TR("ui.wizard.new_beatmap.fill_from_project").data()) ) {
+        // 项目标题和艺术家没有独立 Unicode 字段，复制到两种谱面展示文本。
+        const auto& metadata = project->m_metadata;
+        copyToBuffer(m_titleBuf, sizeof(m_titleBuf), metadata.m_title);
+        copyToBuffer(
+            m_titleUnicodeBuf, sizeof(m_titleUnicodeBuf), metadata.m_title);
+        copyToBuffer(m_artistBuf, sizeof(m_artistBuf), metadata.m_artist);
+        copyToBuffer(
+            m_artistUnicodeBuf, sizeof(m_artistUnicodeBuf), metadata.m_artist);
+        copyToBuffer(m_authorBuf, sizeof(m_authorBuf), metadata.m_mapper);
+        // 用户主动选择项目值后，随后选择音频只能补时长和内部名。
+        // 难度、BPM、资源和轨道数属于单张谱面，不从项目展示元数据推导。
+        m_projectMetadataImported = true;
+    }
     DrawInput(
         TR("ui.settings.beatmap.name").data(), m_nameBuf, sizeof(m_nameBuf));
     DrawInput(
@@ -1387,6 +1411,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     DrawInput(TR("ui.settings.beatmap.artist_unicode").data(),
               m_artistUnicodeBuf,
               sizeof(m_artistUnicodeBuf));
+    DrawInput(
+        TR("ui.settings.beatmap.album").data(), m_albumBuf, sizeof(m_albumBuf));
     DrawInput(TR("ui.settings.beatmap.mapper").data(),
               m_authorBuf,
               sizeof(m_authorBuf));
@@ -1440,7 +1466,6 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     }
 
     // 文件选择期间项目可能被关闭，因此绘制资源区前再次查询。
-    auto* project = Logic::EditorEngine::instance().getCurrentProject();
     if ( !project ) {
         // 无项目时给出错误并保持向导打开，等待生命周期更新。
         m_pendingDrops.clear();
@@ -1890,10 +1915,13 @@ void NewBeatmapWizard::reset()
     copyToBuffer(m_titleUnicodeBuf, sizeof(m_titleUnicodeBuf), "");
     copyToBuffer(m_artistBuf, sizeof(m_artistBuf), "");
     copyToBuffer(m_artistUnicodeBuf, sizeof(m_artistUnicodeBuf), "");
+    copyToBuffer(m_albumBuf, sizeof(m_albumBuf), "");
     copyToBuffer(m_authorBuf,
                  sizeof(m_authorBuf),
                  defaultCreator.empty() ? "Unknown" : defaultCreator);
     copyToBuffer(m_versionBuf, sizeof(m_versionBuf), "Easy");
+    // 每次打开重新决定文本来源，不能沿用上一次项目导入的优先级。
+    m_projectMetadataImported = false;
 
     // 资源选择和探测时长全部从未绑定状态开始。
     m_selectedAudioPath.clear();
@@ -1952,14 +1980,22 @@ void NewBeatmapWizard::onAudioSelected(const std::filesystem::path& path)
         // 向导内部以秒保存，提交时再转为毫秒。
         m_audioDuration = info.duration;
 
-        // 文件标签同时填入普通与 Unicode 字段，用户可继续编辑区分。
-        copyToBuffer(m_titleBuf, sizeof(m_titleBuf), info.title);
-        copyToBuffer(m_titleUnicodeBuf, sizeof(m_titleUnicodeBuf), info.title);
-        copyToBuffer(m_artistBuf, sizeof(m_artistBuf), info.artist);
-        copyToBuffer(
-            m_artistUnicodeBuf, sizeof(m_artistUnicodeBuf), info.artist);
+        // 项目导入是用户显式选择，音频标签只填入尚未优先指定的文本。
+        // 自动探测仍刷新时长；项目没有保存这项音频专属信息。
+        if ( !m_projectMetadataImported ) {
+            copyToBuffer(m_titleBuf, sizeof(m_titleBuf), info.title);
+            copyToBuffer(
+                m_titleUnicodeBuf, sizeof(m_titleUnicodeBuf), info.title);
+            copyToBuffer(m_artistBuf, sizeof(m_artistBuf), info.artist);
+            copyToBuffer(
+                m_artistUnicodeBuf, sizeof(m_artistUnicodeBuf), info.artist);
+        }
+        // 项目没有专辑字段，因此音频标签始终作为专辑初始值。
+        // 重新选择音频时同步刷新专辑，避免显示前一个资源的标签。
+        copyToBuffer(m_albumBuf, sizeof(m_albumBuf), info.album);
 
-        // 内部名称默认使用去空白标题，避免生成包含空格的常见不便标识。
+        // 项目一键导入只覆盖展示字段，内部名称仍沿用音频标题的原有推导。
+        // 去掉空白可避免生成包含空格的常见不便标识。
         std::string safeName = info.title;
         // remove_if 只修改本地副本，不改变展示标题。
         safeName.erase(

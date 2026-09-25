@@ -82,6 +82,7 @@ using json = nlohmann::json;
 /// - `metadata.base.title_unicode`：Unicode 标题；
 /// - `metadata.base.artist`：艺术家；
 /// - `metadata.base.artist_unicode`：Unicode 艺术家；
+/// - `metadata.base.album`：歌曲所属专辑；
 /// - `metadata.base.version`：难度版本；
 /// - `metadata.base.author`：谱师；
 /// - `metadata.base.song_file_hint`：主音频资源提示；
@@ -159,6 +160,7 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
     base["title_unicode"]  = beatMap.m_baseMapMetadata.title_unicode;
     base["artist"]         = beatMap.m_baseMapMetadata.artist;
     base["artist_unicode"] = beatMap.m_baseMapMetadata.artist_unicode;
+    base["album"]          = beatMap.m_baseMapMetadata.album;
     base["version"]        = beatMap.m_baseMapMetadata.version;
     base["author"]         = beatMap.m_baseMapMetadata.author;
     base["song_file_hint"] =
