@@ -57,7 +57,7 @@
         {
           "id": "place-hold",
           "title": {"zh_cn": "按住 Shift 拖动放置长条", "en_us": "Hold Shift and drag to place a Hold"},
-          "body": {"zh_cn": "在刚才单键附近的另一条轨道上，先按住 Shift，再从蓝色起点框按下左键，保持 Shift 和左键按住，沿同一轨道拖到带灯泡的黄色终点框后松开左键。终点会避开刚才 Flick 头部的拍位，不再与它重叠。两端都对齐实际分拍线；忘记按 Shift、跨轨或未拖到指定终点时会取消本次放置。若刚才跳过了单键，请重新演练并先放置单键；至少需要两条玩家轨道。", "en_us": "On a different lane near the single Note you just placed, hold Shift first, press left mouse in the blue source box, and keep both held while dragging along the same lane to the yellow light-bulb endpoint. Release left mouse there. The endpoint avoids the beat position of the Flick head you just drew. Both ends use actual beat lines. Missing Shift, changing lanes, or missing the endpoint cancels the attempt. If you skipped the single Note, restart and place it first. At least two player lanes are required."},
+          "body": {"zh_cn": "在刚才单键附近的另一条轨道上，先按住 Shift，再从蓝色起点框按下左键，保持 Shift 和左键按住，沿同一轨道拖到带灯泡的黄色终点框后松开左键。路径会避开刚才 Flick 的头部和横向连接体。两端都对齐实际分拍线；忘记按 Shift、跨轨或未拖到指定终点时会取消本次放置。若刚才跳过了单键，请重新演练并先放置单键；至少需要两条玩家轨道。", "en_us": "On a different lane near the single Note you just placed, hold Shift first, press left mouse in the blue source box, and keep both held while dragging along the same lane to the yellow light-bulb endpoint. Release left mouse there. The path avoids the previous Flick head and horizontal body. Both ends use actual beat lines. Missing Shift, changing lanes, or missing the endpoint cancels the attempt. If you skipped the single Note, restart and place it first. At least two player lanes are required."},
           "requires": ["place-flick"],
           "guide": {"prompt": {"zh_cn": "按住 Shift，从蓝框沿同轨拖到黄色灯泡框再松开。目标会避开上一步 Flick；若没有目标，请滚动或缩放画布以显示安全拍线。", "en_us": "Hold Shift and drag from blue to the yellow bulb on the same lane, then release. The target avoids the previous Flick. If no target appears, scroll or zoom until a safe beat line is visible."}, "targets": ["compose.canvas.place-hold"]}
         },
@@ -71,16 +71,16 @@
         {
           "id": "delete-hold",
           "title": {"zh_cn": "删除刚绘制的 Hold", "en_us": "Remove the practice Hold"},
-          "body": {"zh_cn": "用绘制工具在刚才的长条上点击鼠标右键，先删除这条 Hold。高亮使用实际物件位置；只有这条 Hold 真正被删除才会继续。", "en_us": "With the Draw tool, right-click the Hold you just placed. The highlight follows the actual object, and this step continues only when that Hold is removed."},
+          "body": {"zh_cn": "右键删除物件，shift+右键删除整个折线", "en_us": "Right-click to delete an object; Shift+right-click to delete the entire polyline."},
           "requires": ["place-polyline"],
-          "guide": {"prompt": {"zh_cn": "在高亮的 Hold 上点击鼠标右键，先删除它。", "en_us": "Right-click the highlighted Hold to remove it first."}, "targets": ["compose.canvas.delete-hold"], "requires_action": true}
+          "guide": {"prompt": {"zh_cn": "右键删除物件，shift+右键删除整个折线", "en_us": "Right-click to delete an object; Shift+right-click to delete the entire polyline."}, "targets": ["compose.canvas.delete-hold"], "requires_action": true}
         },
         {
           "id": "delete-remaining",
           "title": {"zh_cn": "删除其余练习物件", "en_us": "Remove the remaining practice objects"},
-          "body": {"zh_cn": "继续在高亮的练习物件上逐个点击鼠标右键，删除刚才绘制的折线、单 Note 与 Flick。删除整条折线时请按住 Shift 再点击右键；不按 Shift 会只拆除一段。若上一阶段没有删除 Hold，也需要将其删除。只有本轮练习创建的物件全部消失，向导才会结束。", "en_us": "Right-click each highlighted practice object to remove the polyline, single Note, and Flick. Hold Shift while right-clicking the polyline to remove the whole object; without Shift, the eraser only removes a segment. If the Hold was not removed in the previous step, remove it too. The walkthrough ends only when all objects created in this practice are gone."},
+          "body": {"zh_cn": "右键删除物件，shift+右键删除整个折线", "en_us": "Right-click to delete an object; Shift+right-click to delete the entire polyline."},
           "requires": ["delete-hold"],
-          "guide": {"prompt": {"zh_cn": "按住 Shift 右键删除整条高亮折线，再右键删除其余练习物件。", "en_us": "Hold Shift and right-click the highlighted polyline to remove it all, then right-click the other practice objects."}, "targets": ["compose.canvas.delete-remaining"], "requires_action": true}
+          "guide": {"prompt": {"zh_cn": "右键删除物件，shift+右键删除整个折线", "en_us": "Right-click to delete an object; Shift+right-click to delete the entire polyline."}, "targets": ["compose.canvas.delete-remaining"], "requires_action": true}
         }
       ]
     }

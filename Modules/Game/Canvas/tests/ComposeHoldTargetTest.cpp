@@ -2,7 +2,9 @@
 #include "canvas/ComposePolylineTarget.h"
 #include "canvas/ComposeTargetEligibility.h"
 #include <array>
+#include <cstdint>
 #include <limits>
+#include <span>
 
 /// @brief 验证长条始终邻近上一单键、异轨且首尾取自真实可见拍线。
 /// @return 任一时间、轨道或不可用边界违反契约时返回非零。
@@ -16,6 +18,8 @@
 /// @note 若同轨相反侧不可见，必须保持无目标而不是穿过 Flick。
 /// @note 折线末段两个同轨检查点共享一个最终子音符的几何语义。
 /// @note 返回的时间必须取自输入拍线，不接受按固定四分拍重算。
+/// @note 已放置 Hold 时重复不同随机种子，确认整条路径都避开它的轨道。
+/// @note 双轨可用时间不足时应无目标，以免退化到重叠路径。
 int main()
 {
     using MMM::Canvas::chooseComposeHoldTarget;
@@ -59,6 +63,21 @@ int main()
     if ( !afterFlick || afterFlick->track == 1 || afterFlick->track == 2 ||
          afterFlick->endTime != lines[0].time )
         return 10;
+    // Flick 从 1 轨横跨到 4 轨时，中间的 2、3 轨也被连接体占用。
+    // 原先只排除起点轨和单键轨，会错误地把 2、3 轨当成空轨。
+    const auto clearFlickSpan = chooseComposeHoldTarget(
+        lines, 1.337, 4, 6, 20.0F, 0.0F, 500.0F, 3, lines[0].time, 1, 4);
+    // 允许横向范围两侧的空轨，不把避让条件误写成固定选第一轨。
+    if ( !clearFlickSpan ||
+         (clearFlickSpan->track != 0 && clearFlickSpan->track != 5) ||
+         clearFlickSpan->endTime != lines[0].time )
+        return 20;
+    // Flick 横跨全部轨道时不存在空轨；必须回到其时间相反侧。
+    const auto allTracksOccupied = chooseComposeHoldTarget(
+        lines, 1.337, 2, 3, 20.0F, 0.0F, 500.0F, 3, lines[0].time, 0, 2);
+    if ( !allTracksOccupied || allTracksOccupied->startTime != lines[1].time ||
+         allTracksOccupied->endTime != lines[2].time )
+        return 21;
     // 两轨无法换轨时改走 Flick 头相反侧，身体也不经过已有 Flick。
     const auto beforeFlick = chooseComposeHoldTarget(
         lines, 1.337, 0, 2, 20.0F, 0.0F, 500.0F, 3, lines[0].time, 1);
@@ -150,6 +169,48 @@ int main()
          points[4].track != points[5].track ||
          points[5].track != points[6].track )
         return 13;
+    // 先前的 Hold 即使与路线使用同一组拍位，也不能被折线覆盖。
+    // 三轨以上整条路线不使用 Hold 轨；种子变化也不得绕开这项约束。
+    // Hold 处于路线选中时间内，确保轨道避让承担实际防重叠作用。
+    const MMM::Canvas::ComposeHoldTarget placedHold{ 1, 2.0, 4.0 };
+    // 低位和高位种子会分别改变第一轨与第二轨的选择。
+    // 检查所有节点，覆盖同轨纵向段和两次横向转折的两侧。
+    for ( std::uint64_t seed = 0; seed < 24; ++seed ) {
+        const auto clearRoute = MMM::Canvas::chooseComposePolylineTarget(
+            polylineLines, 4, 20.0F, 0.0F, 600.0F, seed, placedHold);
+        if ( !clearRoute ) return 15;
+        for ( const auto& point : clearRoute->waypoints ) {
+            if ( point.track == placedHold.track ) return 16;
+        }
+    }
+    // 双轨无法避开 Hold 轨道，五段路径应全部位于其时间区间外。
+    // 可见拍位不足时须暂停提示，不能让路线从 Hold 身体上穿过去。
+    // 前四拍和 Hold 重叠，后五拍刚好足够组成完整路线。
+    // 各拍位屏幕间距达到两个 Note 高度，失败只能归因于避让条件。
+    const std::array twoTrackLines{
+        Line{ 1.0, 540.0F }, Line{ 2.0, 500.0F }, Line{ 3.0, 460.0F },
+        Line{ 4.0, 420.0F }, Line{ 5.0, 380.0F }, Line{ 6.0, 340.0F },
+        Line{ 7.0, 300.0F }, Line{ 8.0, 260.0F }, Line{ 9.0, 220.0F },
+    };
+    const MMM::Canvas::ComposeHoldTarget twoTrackHold{ 0, 1.0, 4.0 };
+    const auto afterHold = MMM::Canvas::chooseComposePolylineTarget(
+        twoTrackLines, 2, 20.0F, 0.0F, 600.0F, 0, twoTrackHold);
+    // 检查七个操作点，而非只检查第一个与最后一个端点。
+    if ( !afterHold ) return 17;
+    for ( const auto& point : afterHold->waypoints ) {
+        if ( point.time <= twoTrackHold.endTime ) return 18;
+    }
+    // 移除最后两拍后只剩三个安全拍位，不能从 Hold 区间借拍。
+    // 这同时覆盖路线不足时返回空值，而不是生成不完整的七点提示。
+    if ( MMM::Canvas::chooseComposePolylineTarget(
+             std::span(twoTrackLines).first(7),
+             2,
+             20.0F,
+             0.0F,
+             600.0F,
+             0,
+             twoTrackHold) )
+        return 19;
     // 少于五条完整可见拍线或只有一轨时不能虚构教学目标。
     // 边界裁剪用已存在的线实现，避免把测试变成另一套伪投影。
     if ( MMM::Canvas::chooseComposePolylineTarget(

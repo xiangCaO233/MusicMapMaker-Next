@@ -622,6 +622,8 @@ void Basic2DCanvas::updateComposeWalkthrough(
         m_walkthroughPracticeTokens            = {};
         m_walkthroughPracticeBeatmapInstanceId = snapshot.beatmapInstanceId;
         m_walkthroughPlacedFlick.reset();
+        // 新一轮的旧长条可能已经撤销，不能让它继续约束折线选轨。
+        m_walkthroughPlacedHold.reset();
     }
     if ( deletingHold || deletingRemaining ) {
         // 删除练习沿用绘制工具现有的右键擦除命令链；这里只观察结果，
@@ -840,13 +842,28 @@ void Basic2DCanvas::updateComposeWalkthrough(
         // 生成只发生在进入步骤或旧路线失效之后，不在每帧执行候选扫描。
         if ( !m_walkthroughPolylineTarget &&
              !m_walkthroughPolylineAttemptActive ) {
+            // 已完成的 Hold 占用整条轨道上的一段时间；优先让折线使用其它轨。
+            // 只有双轨无法换轨时，选择完全处于 Hold 时间区间外的拍线。
+            // 只使用本轮成功手势且谱面实例一致的目标；跳过 Hold 步骤时
+            // 保持原有折线候选范围，不读取可能已过期的旧目标。
+            const std::optional<ComposeHoldTarget> placedHold =
+                m_walkthroughPlacedHold &&
+                        m_walkthroughPlacedHold->beatmapInstanceId ==
+                            snapshot.beatmapInstanceId &&
+                        m_walkthroughPracticeTokens[1] != 0
+                    ? std::optional<ComposeHoldTarget>(ComposeHoldTarget{
+                          m_walkthroughPlacedHold->sourceTrack,
+                          m_walkthroughPlacedHold->sourceTime,
+                          m_walkthroughPlacedHold->destinationTime })
+                    : std::nullopt;
             m_walkthroughPolylineTarget = chooseComposePolylineTarget(
                 snapshot.playerBeatLines,
                 snapshot.trackCount,
                 noteHeight,
                 trackTop - m_preparedSnapshot.appliedYOffset,
                 trackBottom - m_preparedSnapshot.appliedYOffset,
-                mixWalkthroughSeed(snapshot.beatmapInstanceId ^ token));
+                mixWalkthroughSeed(snapshot.beatmapInstanceId ^ token),
+                placedHold);
             m_walkthroughPolylineTargetBeatmapInstanceId =
                 snapshot.beatmapInstanceId;
         }
@@ -1231,22 +1248,28 @@ void Basic2DCanvas::updateComposeWalkthrough(
                                    false);
             return;
         }
-        // 优先换轨；两轨时选择 Flick 头相反侧的拍位，避免身体穿过它。
+        // 优先换到 Flick 连接体之外；无空轨时走其时间相反侧。
         // 先前的 Flick 手势在步骤切换后不再是当前拖拽目标，因此单独缓存。
         // 缓存按谱面实例核对，切换标签后不能把旧 Flick 当作障碍。
-        // 多轨谱面可在原拍位另选空轨，双轨谱面则依赖相反侧可见拍线。
+        // 多轨谱面可在原拍位另选空轨，其余情形依赖相反侧可见拍线。
         // 没有安全拍线时保持无目标，要求用户移动视野再尝试。
         // 不修改 Flick 本身，也不通过 Undo 隐藏错误重叠。
         const bool avoidFlick = placingHold && m_walkthroughPlacedFlick &&
                                 m_walkthroughPlacedFlick->beatmapInstanceId ==
                                     snapshot.beatmapInstanceId;
-        const std::optional<double> excludedHoldEnd =
+        const std::optional<double> excludedFlickTime =
             avoidFlick
                 ? std::optional<double>(m_walkthroughPlacedFlick->sourceTime)
                 : std::nullopt;
-        const std::optional<int> excludedHoldTrack =
+        const std::optional<int> excludedFlickStartTrack =
             avoidFlick
                 ? std::optional<int>(m_walkthroughPlacedFlick->sourceTrack)
+                : std::nullopt;
+        // 终点轨道与起点轨道共同界定 Flick 连接体的完整横向覆盖范围。
+        // 省略终点会把两者之间的轨道误认成可放置 Hold 的空轨。
+        const std::optional<int> excludedFlickDestinationTrack =
+            avoidFlick
+                ? std::optional<int>(m_walkthroughPlacedFlick->destinationTrack)
                 : std::nullopt;
         const auto hold = chooseComposeHoldTarget(
             snapshot.playerBeatLines,
@@ -1257,8 +1280,9 @@ void Basic2DCanvas::updateComposeWalkthrough(
             trackTop - m_preparedSnapshot.appliedYOffset,
             trackBottom - m_preparedSnapshot.appliedYOffset,
             mixWalkthroughSeed(snapshot.beatmapInstanceId),
-            excludedHoldEnd,
-            excludedHoldTrack);
+            excludedFlickTime,
+            excludedFlickStartTrack,
+            excludedFlickDestinationTrack);
         if ( !hold ) {
             // 没有异轨或原拍位不在视野中时仅保留提示，让用户可移动视野或跳过。
             spotlight.reportTarget(targetId,
@@ -1566,6 +1590,8 @@ void Basic2DCanvas::updateComposeWalkthrough(
                     snapshot.brush.track;
             }
             if ( placingFlick ) m_walkthroughPlacedFlick = target;
+            // 成功目标与同帧 EndBrush 的受验收画笔一致，保存供下一步避让。
+            if ( placingHold ) m_walkthroughPlacedHold = target;
             m_walkthroughPracticeTokens[placingNote   ? 0U
                                         : placingHold ? 1U
                                                       : 2U] =

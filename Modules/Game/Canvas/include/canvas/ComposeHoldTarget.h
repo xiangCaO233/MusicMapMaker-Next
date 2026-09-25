@@ -2,6 +2,7 @@
 
 #include "canvas/ComposeTargetEligibility.h"
 #include "common/render/RenderSnapshot.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -29,18 +30,21 @@ struct ComposeHoldTarget {
 /// @param top 可见区域上界，已扣除 UI 补间位移。
 /// @param bottom 可见区域下界，已扣除 UI 补间位移。
 /// @param seed 仅影响另一个轨道的选择，不改变附近拍位的排序。
-/// @param excludedEndTime 已绘制 Flick 头部所在拍位；长条尾部不得重合。
-/// @param excludedTrack Flick 头部轨道；多轨谱面先改用另一条轨道。
+/// @param excludedEndTime 已绘制 Flick 所在拍位；长条身体不得穿过它。
+/// @param excludedTrack Flick 起点轨道。
+/// @param excludedFlickDestinationTrack Flick
+/// 终点轨道；两端之间的连接体也需避开。
 /// @return 普通练习首选后继；同轨 Flick 附近改走其时间相反侧。
-/// @note 多轨先换轨，双轨换轨无解时改选相反侧时间区间。
+/// @note 多轨先避开 Flick 横跨的所有轨道，无空轨时改选相反侧时间区间。
 /// @note 无完整可见的安全区间时返回空，不让长条身体穿过已有 Flick。
 /// @warning 教程目标失效时调用；只扫描可见拍线，不分配、排序或访问 ECS。
 inline std::optional<ComposeHoldTarget> chooseComposeHoldTarget(
     std::span<const Common::Render::PlayerBeatLineSnapshot> lines,
     double noteTime, int noteTrack, int trackCount, float noteHeight, float top,
     float bottom, std::uint64_t seed,
-    std::optional<double> excludedEndTime = std::nullopt,
-    std::optional<int>    excludedTrack   = std::nullopt)
+    std::optional<double> excludedEndTime               = std::nullopt,
+    std::optional<int>    excludedTrack                 = std::nullopt,
+    std::optional<int>    excludedFlickDestinationTrack = std::nullopt)
 {
     // 单轨谱面无法满足异轨要求；缺少真实尺寸时也不能猜测提示框。
     if ( trackCount < 2 || noteTrack < 0 || noteTrack >= trackCount ||
@@ -67,18 +71,28 @@ inline std::optional<ComposeHoldTarget> chooseComposeHoldTarget(
     int targetTrack =
         (noteTrack + 1 + static_cast<int>(seed % (trackCount - 1))) %
         trackCount;
-    // 三轨以上优先避开 Flick 头所在轨，整个 Hold 身体也不会穿过它。
-    if ( excludedTrack && targetTrack == *excludedTrack && trackCount > 2 ) {
+    /// @brief Flick 的横向连接体覆盖两端轨道及其间的全部玩家轨道。
+    /// @note 只比较起点会把中间轨误判为空轨，使 Hold 与连接体相交。
+    const auto flickOccupiesTrack = [&](int track) {
+        if ( !excludedTrack ) return excludedEndTime.has_value();
+        const int endTrack =
+            excludedFlickDestinationTrack.value_or(*excludedTrack);
+        return track >= std::min(*excludedTrack, endTrack) &&
+               track <= std::max(*excludedTrack, endTrack);
+    };
+    // 先尝试在 Flick 横跨范围之外选轨，保留原来的随机候选优先级。
+    // 若 Flick 覆盖了所有可用轨道，后面用相反侧时间区间避开整段连接体。
+    if ( flickOccupiesTrack(targetTrack) && trackCount > 2 ) {
         for ( int candidate = 0; candidate < trackCount; ++candidate ) {
-            if ( candidate != noteTrack && candidate != *excludedTrack ) {
+            if ( candidate != noteTrack && !flickOccupiesTrack(candidate) ) {
                 targetTrack = candidate;
                 break;
             }
         }
     }
     const bool sameFlickTrack =
-        excludedEndTime && (!excludedTrack || targetTrack == *excludedTrack);
-    // 只有仍在同一轨时才应用排除拍位，否则同拍但异轨并不重叠。
+        excludedEndTime && flickOccupiesTrack(targetTrack);
+    // 只有仍被横向连接体覆盖时才应用排除拍位；范围外可照常选最近后继。
     double next     = std::numeric_limits<double>::infinity();
     double previous = -std::numeric_limits<double>::infinity();
     // 分段滚动可能让拍线乱序；线性选择最近时间即可，无需热路径完整排序。
@@ -88,7 +102,7 @@ inline std::optional<ComposeHoldTarget> chooseComposeHoldTarget(
         if ( !visible(line) ||
              std::abs(line.y - anchor->y) < noteHeight * 2.0F )
             continue;
-        // 同轨时禁用 Flick 头拍位；异轨时可照常选最近后继。
+        // 位于 Flick 横跨范围时禁用其拍位；范围外可照常选最近后继。
         if ( line.time > noteTime && line.time < next &&
              (!sameFlickTrack ||
               std::abs(line.time - *excludedEndTime) >= 1e-7) )
@@ -96,8 +110,7 @@ inline std::optional<ComposeHoldTarget> chooseComposeHoldTarget(
         if ( line.time < noteTime && line.time > previous )
             previous = line.time;
     }
-    // 两轨时同轨不可避开，改用 Flick 头相反侧的时间区间。
-    // 这样不仅尾部不重叠，Hold 身体也不会穿过已有 Flick 头。
+    // 无空轨时改用 Flick 相反侧的时间区间，身体不穿过横向连接体。
     if ( sameFlickTrack ) {
         if ( *excludedEndTime > noteTime + 1e-7 && std::isfinite(previous) )
             return ComposeHoldTarget{ targetTrack, previous, noteTime };

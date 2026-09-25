@@ -361,6 +361,8 @@ private:
     std::optional<WalkthroughNoteDragTarget> m_walkthroughPlacedNote;
     /// @brief 滑键成功起点，用于避开随后长条尾部的同轨同拍重叠。
     std::optional<WalkthroughNoteDragTarget> m_walkthroughPlacedFlick;
+    /// @brief 本轮成功绘制的长条路径，供折线练习避开已有长条。
+    std::optional<WalkthroughNoteDragTarget> m_walkthroughPlacedHold;
     /// @brief 本轮 Note、Hold、Flick、Polyline 的步骤标记，只核对当前谱面。
     std::array<std::uint64_t, 4> m_walkthroughPracticeTokens{};
     /// @brief 上述标记所属的谱面实例，防止跨标签误认相同实体号。
