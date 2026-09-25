@@ -831,11 +831,56 @@ void SettingsView::drawBeatmapSettings()
         // 资源组只保存工程内引用，不读取或预览实际媒体内容。
         // 当前引用即使不在候选列表中也继续显示，以保留可修复信息。
         // 采用统一标签宽度，使音频、封面与背景组合框对齐。
+        // 每行右侧导入按钮把外部资源复制到当前工程并绑定此谱面。
+        // 下拉框仍只列工程内候选，失效引用可以通过导入按钮修复。
+        // 背景行仅导入图片，导入成功后同步切换背景媒体类型。
 
         if ( isImd ) {
             // IMD 资源字段在此页不可安全回写，整组保留只读展示。
+            // 新增导入按钮同处禁用范围，不能绕过格式写入限制。
             ImGui::BeginDisabled();
         }
+
+        // 导入按钮与组合框并排；宽度取两种文案的较大值，三行值列保持对齐。
+        // 这里只记录请求和当时的项目/谱面身份；文件选择器在会话锁外打开。
+        // 宽度随当前语言与字体变化，SettingsView 的最小宽度测量同步覆盖。
+        // 长路径只裁剪组合框预览，不能挤掉固定宽的可点击导入按钮。
+        const char* audioImportLabel =
+            TR_CACHE("ui.settings.beatmap.import_audio").data();
+        const char* imageImportLabel =
+            TR_CACHE("ui.settings.beatmap.import_image").data();
+        const float importButtonWidth =
+            std::max(ImGui::CalcTextSize(audioImportLabel).x,
+                     ImGui::CalcTextSize(imageImportLabel).x) +
+            ImGui::GetStyle().FramePadding.x * 2.0F;
+        /// @brief 为资源行的下拉框预留右侧导入按钮宽度。
+        /// @note 极窄窗口仍保留正宽度，避免负值传给 ImGui 布局。
+        const auto resourceComboWidth = [&](Clay_BoundingBox bounds) {
+            return std::max(1.0F,
+                            bounds.width - importButtonWidth -
+                                ImGui::GetStyle().ItemSpacing.x);
+        };
+        /// @brief 记录资源导入请求，实际选择与复制交给锁外的低频路径。
+        /// @note 目标枚举区分同名的封面与背景“导入图片”按钮。
+        const auto drawResourceImportButton =
+            [&](const char* label, BeatmapResourceTarget target) {
+                ImGui::SameLine();
+                ImGui::PushID(static_cast<int>(target));
+                ImGui::BeginDisabled(!project);
+                // 无工程时资源缺少持久归属，按钮保留占位但不能触发。
+                if ( ::MMM::UI::FeedbackButton(
+                         label, ImVec2(importButtonWidth, 0.0F)) ) {
+                    m_beatmapResourceTarget     = target;
+                    m_openBeatmapResourcePicker = true;
+                    m_resourceImportProjectRoot = project->m_projectRoot;
+                    m_resourceImportBeatmapPath =
+                        beatmap.m_baseMapMetadata.map_path;
+                    // 对话框可能跨帧返回，结果必须与这两项身份重新比较。
+                    m_beatmapResourceImportError.clear();
+                }
+                ImGui::EndDisabled();
+                ImGui::PopID();
+            };
 
         // 音频选择优先使用外部格式提示字段，并限定为 Project 登记的主音频资源。
         addSettingItem(
@@ -866,7 +911,7 @@ void SettingsView::drawBeatmapSettings()
                 }
 
                 // 组合框占满值列；打开后才遍历 Project 已登记音频。
-                ImGui::SetNextItemWidth(r.width);
+                ImGui::SetNextItemWidth(resourceComboWidth(r));
                 if ( ::MMM::UI::FeedbackBeginCombo("##AudioCombo",
                                                    audioPreview.c_str()) ) {
                     if ( audioPushed ) {
@@ -902,6 +947,9 @@ void SettingsView::drawBeatmapSettings()
                 }
                 // 未打开组合框时，补回预览阶段压入的警告颜色。
                 if ( audioPushed ) ImGui::PopStyleColor();
+                drawResourceImportButton(audioImportLabel,
+                                         BeatmapResourceTarget::Audio);
+                // 主音频的工程登记和谱面绑定由统一导入结果完成。
             });
 
         // 封面选择扫描工程图片文件，并把选择保存为工程相对路径。
@@ -932,7 +980,7 @@ void SettingsView::drawBeatmapSettings()
                 }
 
                 // 目录递归扫描仅在组合框打开后的分支发生。
-                ImGui::SetNextItemWidth(r.width);
+                ImGui::SetNextItemWidth(resourceComboWidth(r));
                 if ( ::MMM::UI::FeedbackBeginCombo("##CoverCombo",
                                                    coverPreview.c_str()) ) {
                     if ( coverPushed ) {
@@ -964,6 +1012,9 @@ void SettingsView::drawBeatmapSettings()
                 }
                 // 保持 PushStyleColor 与所有控制流路径严格配对。
                 if ( coverPushed ) ImGui::PopStyleColor();
+                drawResourceImportButton(imageImportLabel,
+                                         BeatmapResourceTarget::Cover);
+                // 封面导入不隐式覆盖背景字段。
             });
 
         // 背景选择依据 cover_type 在图像与视频扩展名集合之间切换。
@@ -995,7 +1046,7 @@ void SettingsView::drawBeatmapSettings()
                 }
 
                 // 打开组合框后才扫描匹配当前背景类型的资源。
-                ImGui::SetNextItemWidth(r.width);
+                ImGui::SetNextItemWidth(resourceComboWidth(r));
                 if ( ::MMM::UI::FeedbackBeginCombo("##BgCombo",
                                                    bgPreview.c_str()) ) {
                     if ( bgPushed ) {
@@ -1060,6 +1111,9 @@ void SettingsView::drawBeatmapSettings()
                 }
                 // 未打开弹窗时恢复预览阶段可能压入的警告颜色。
                 if ( bgPushed ) ImGui::PopStyleColor();
+                drawResourceImportButton(imageImportLabel,
+                                         BeatmapResourceTarget::Background);
+                // 背景导入保留用户已有的显式封面选择。
             });
 
         if ( isImd ) {
@@ -1075,6 +1129,13 @@ void SettingsView::drawBeatmapSettings()
         startPos, { ImGui::GetContentRegionAvail().x, 0 });
     // 推进游标，使父窗口正确计算滚动范围。
     ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
+
+    // 失败信息在资源控件下方显示，避免同步文件错误被静默吞掉。
+    if ( !m_beatmapResourceImportError.empty() ) {
+        ImGui::TextColored(Utils::UIThemeUtils::getWarningColor(),
+                           "%s",
+                           m_beatmapResourceImportError.c_str());
+    }
 
     if ( changed ) {
         // 一帧内所有元数据字段变化合并成一个逻辑命令，保持原子更新语义。

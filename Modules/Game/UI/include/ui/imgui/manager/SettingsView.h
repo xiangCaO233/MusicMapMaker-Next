@@ -202,6 +202,26 @@ private:
     /// @brief 上一次同步到元数据编辑副本的谱面路径。
     std::string m_lastBeatmapPath;
 
+    /// @brief 谱面资源按钮对应的导入目标；None 表示没有待处理选择。
+    enum class BeatmapResourceTarget { None, Audio, Cover, Background };
+
+    /// @brief 当前文件选择器请求的资源类型。
+    BeatmapResourceTarget m_beatmapResourceTarget{
+        BeatmapResourceTarget::None
+    };
+
+    /// @brief 按钮点击后等待在会话锁外打开文件选择器。
+    bool m_openBeatmapResourcePicker{ false };
+
+    /// @brief 选择器打开时的项目根目录，用于拒绝跨项目误绑定。
+    std::filesystem::path m_resourceImportProjectRoot;
+
+    /// @brief 选择器打开时的谱面路径，用于拒绝切谱后的旧结果。
+    std::filesystem::path m_resourceImportBeatmapPath;
+
+    /// @brief 最近一次资源导入错误，仅在用户再次选择或成功后清空。
+    std::string m_beatmapResourceImportError;
+
     /// @brief 软件设置页默认 Creator 的固定长度 UTF-8 输入缓冲区。
     std::array<char, Config::MAX_CREATOR_IDENTITY_BYTES + 1>
         m_defaultCreatorInputBuffer{};
@@ -358,6 +378,16 @@ private:
 
     /// @brief 绘制谱面设置页。
     void drawBeatmapSettings();
+
+    /// @brief 在谱面会话锁外打开并驱动音频或图片文件选择器。
+    /// @param dpiScale 当前内容缩放。
+    /// @warning 文件对话框可能阻塞；仅在用户点击导入时打开。
+    void renderBeatmapResourcePicker(float dpiScale);
+
+    /// @brief 校验并将选定资源复制到项目，再绑定到原谱面。
+    /// @param source 用户选中的本地文件。
+    /// @warning 低频导入路径：可能复制文件并保存项目资源表。
+    void importBeatmapResource(const std::filesystem::path& source);
 
     /// @brief 绘制编辑器设置页。
     void drawEditorSettings();

@@ -165,6 +165,8 @@ add_library(
   src/ui/imgui/manager/NewProjectWizard.cpp
   src/ui/imgui/manager/SettingsView.cpp
   src/ui/imgui/manager/SettingsView_BeatmapTab.cpp
+  # 谱面资源导入在设置页布局与会话锁之外驱动文件选择器。
+  src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp
   src/ui/imgui/manager/SettingsView_CollaborationTab.cpp
   src/ui/imgui/manager/SettingsView_DebugTab.cpp
   src/ui/imgui/manager/SettingsView_EditorTab.cpp
