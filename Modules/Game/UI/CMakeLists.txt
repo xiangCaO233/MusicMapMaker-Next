@@ -368,6 +368,13 @@ target_include_directories(DockTabCloseHoverTest
 target_link_libraries(DockTabCloseHoverTest PRIVATE UI 3rd_imgui)
 mmm_register_test_case(NAME DockTabCloseHoverTest COMMAND DockTabCloseHoverTest)
 
+# 项目打开时会在已创建的默认 DockSpace 上加载持久化布局，需覆盖现有窗口的归属。
+mmm_add_test_executable(UI WorkspaceDockRestoreTest
+                        tests/WorkspaceDockRestoreTest.cpp)
+target_link_libraries(WorkspaceDockRestoreTest PRIVATE UI 3rd_imgui)
+mmm_register_test_case(NAME WorkspaceDockRestoreTest COMMAND
+                       WorkspaceDockRestoreTest)
+
 # 保存反馈测试覆盖原生文件选择器或耗时导出后的长帧首次绘制。 长帧场景只推进反馈状态机，不真正执行磁盘写入。
 mmm_add_test_executable(UI SaveResultFeedbackTest
                         tests/SaveResultFeedbackTest.cpp)

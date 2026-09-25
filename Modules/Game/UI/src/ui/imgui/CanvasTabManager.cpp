@@ -5,11 +5,15 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
+#include "mmm/project/ProjectSettings.h"
 #include "ui/ICanvasView.h"
 #include "ui/ICanvasWorkspaceService.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/imgui/WorkspaceDockRestore.h"
 #include "ui/walkthrough/WelcomeView.h"
+
+#include <algorithm>
 
 /// @file CanvasTabManager.cpp
 /// @brief 逻辑画布会话与 UI 视图注册、停靠、聚焦和关闭流程的同步实现。
@@ -22,6 +26,118 @@ namespace MMM::UI
 /// @brief 创建具名画布标签管理器。
 /// @param name UIManager 注册该帧驱动视图时使用的稳定名称。
 CanvasTabManager::CanvasTabManager(const std::string& name) : IUIView(name) {}
+
+/// @brief 解析项目保存的画布停靠身份，忽略原本浮动的画布。
+/// @param workspace 项目已加载的工作区快照。
+/// @param entries 本次项目打开后实际存在的画布条目。
+/// @details 工作区的列表是保存时状态，实际会话列表是本次载图成功后的结果。
+/// 直接等保存列表会让已删除文件或显式打开单谱面永久阻止布局捕获。
+/// 浮动画布虽然无需补 DockId，仍需完成第一次 Begin 才能安全保存新快照。
+/// @warning 项目打开时调用一次；解析 ini 和扩容均不进入常态每帧路径。
+void CanvasTabManager::prepareProjectWorkspaceDockRestore(
+    const ProjectWorkspaceState&             workspace,
+    const std::vector<CanvasWorkspaceEntry>& entries)
+{
+    m_pendingWorkspaceDocks.clear();
+    // 恢复请求数量不会超过本次实际发布的会话数量。
+    m_pendingWorkspaceDocks.reserve(entries.size());
+    // 旧 ImGui 窗口可能还在上下文里，但其上次绘制帧不能代表新项目已呈现。
+    m_workspaceDockRestoreFrame        = ImGui::GetFrameCount();
+    m_workspaceCanvasFirstFramePending = false;
+    m_workspaceHasDockLayout           = !workspace.m_imguiIniData.empty();
+    for ( const auto& entry : entries ) {
+        // 显式打开单谱面时不会恢复旧列表；丢失的谱面也不在实际会话中。
+        if ( entry.isLogoPlaceholder || !entry.restoreDockFromWorkspace )
+            continue;
+        // 是否需要等首帧由实际会话决定，不能只看 ini 中是否写了 DockId。
+        m_workspaceCanvasFirstFramePending = true;
+        const auto dockId = savedWorkspaceWindowDockId(workspace.m_imguiIniData,
+                                                       entry.cameraId);
+        if ( dockId ) {
+            m_pendingWorkspaceDocks.push_back({ entry.cameraId, *dockId, 0 });
+        }
+    }
+}
+
+/// @brief 在画布第一次真实绘制后核对项目停靠关系。
+/// @param sourceManager 当前 UI 管理器。
+/// @param entries 已发布的逻辑画布条目。
+/// @details 先验证会话仍存在，再等视图首次 Begin；只有同一窗口经过本次
+/// 恢复帧之后，DockId 才具有可比较的意义。补停靠最多重复四次。
+/// 保存门闩独立于 Dock 请求：浮动画布也必须先提交实际窗口状态。
+/// @warning 项目恢复短路径：只有待核对列表非空才查找 ImGui 窗口和节点。
+void CanvasTabManager::reconcileProjectWorkspaceDocks(
+    UIManager* sourceManager, const std::vector<CanvasWorkspaceEntry>& entries)
+{
+    if ( ImGui::GetFrameCount() <= m_workspaceDockRestoreFrame ) return;
+
+    // 无待处理请求时循环直接跳过；正常编辑帧无需遍历完整窗口集合。
+    for ( auto it = m_pendingWorkspaceDocks.begin();
+          it != m_pendingWorkspaceDocks.end(); ) {
+        // 缺失谱面或切换后仅剩 Logo 时，旧项目的补停靠请求必须丢弃。
+        const auto entry =
+            std::find_if(entries.begin(),
+                         entries.end(),
+                         [&](const CanvasWorkspaceEntry& item) {
+                             return item.cameraId == it->cameraId;
+                         });
+        if ( entry == entries.end() || entry->isLogoPlaceholder ) {
+            it = m_pendingWorkspaceDocks.erase(it);
+            continue;
+        }
+
+        // 注册不等于窗口已 Begin；不能把旧窗口或尚未绘制的窗口误判为恢复结果。
+        auto*        canvas = sourceManager->getCanvasView(it->cameraId);
+        ImGuiWindow* window = ImGui::FindWindowByName(it->cameraId.c_str());
+        if ( !canvas || !window ||
+             window->LastFrameActive < m_workspaceDockRestoreFrame ) {
+            // `registerView` 发生在视图遍历中，新画布通常下一帧才 Begin。
+            ++it;
+            continue;
+        }
+
+        if ( reconcileSavedWorkspaceWindowDock(
+                 it->cameraId,
+                 it->dockId,
+                 MainDockSpaceUI::getCenterDockId()) ) {
+            // 已在原叶节点即可停止核对，允许后续正常拖动布局。
+            it = m_pendingWorkspaceDocks.erase(it);
+            continue;
+        }
+        // 节点布局异常时有界重试，避免把低频恢复变成永久热路径。
+        if ( ++it->attempts >= 4 ) {
+            // 放弃异常节点，避免工作区捕获和常态 UI 都永久受阻。
+            // 此时最后一次停靠请求已发出；下一帧 ImGui 仍可自行完成它。
+            XWARN("CanvasTabManager: Could not restore dock for {}",
+                  it->cameraId);
+            it = m_pendingWorkspaceDocks.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    if ( m_workspaceCanvasFirstFramePending ) {
+        // 注册阶段可能先于 Begin 一帧；所有实际存在的谱面窗口至少绘制一次后
+        // 才允许下一次工作区捕获覆盖已保存的完整 Dock 树。
+        // 本次显式打开的新画布不复用旧布局，不应该增加恢复门闩的等待集合。
+        bool allCanvasWindowsDrawn = true;
+        for ( const auto& entry : entries ) {
+            if ( entry.isLogoPlaceholder || !entry.restoreDockFromWorkspace )
+                continue;
+            ImGuiWindow* window =
+                ImGui::FindWindowByName(entry.cameraId.c_str());
+            if ( !window ||
+                 window->LastFrameActive < m_workspaceDockRestoreFrame ) {
+                // 延续使用磁盘上的完整 ini，避免半成品树写回项目配置。
+                allCanvasWindowsDrawn = false;
+                break;
+            }
+        }
+        if ( allCanvasWindowsDrawn ) m_workspaceCanvasFirstFramePending = false;
+        // 标志在第一次完整提交后永久清除；后续用户拖动属于正常布局编辑，
+        // 不再按项目初始快照覆盖用户的新位置。
+    }
+}
 
 /// @brief 推进待处理项目切换中的画布逐个关闭状态机。
 /// @param sourceManager 当前 UI 管理器。
@@ -220,9 +336,12 @@ void CanvasTabManager::update(UIManager* sourceManager)
                   entry.cameraId);
 
             // 工作区工厂按条目类型创建真实画布或 Logo 占位画布。
-            auto newCanvas = workspace->createMainCanvas(entry, 200, 200);
-            if ( !entry.restoreDockFromWorkspace ) {
-                // 没有持久化 Dock 布局时请求画布采用默认中央停靠。
+            auto       newCanvas = workspace->createMainCanvas(entry, 200, 200);
+            const bool useDefaultDock =
+                !entry.restoreDockFromWorkspace || !m_workspaceHasDockLayout;
+            // `restoreDockFromWorkspace` 只说明保留了 cameraId，不保证有 ini。
+            if ( useDefaultDock ) {
+                // 旧项目可能保存了相机 ID 却没有 ini，仍须使用默认中央停靠。
                 if ( auto* canvas = newCanvas->asCanvasView() ) {
                     canvas->requestDockToCenter();
                 }
@@ -234,7 +353,7 @@ void CanvasTabManager::update(UIManager* sourceManager)
 
             // DockBuilder 只能在中央节点已经由 MainDockSpaceUI 创建后调用。
             ImGuiID centerDockId = MainDockSpaceUI::getCenterDockId();
-            if ( centerDockId != 0 && !entry.restoreDockFromWorkspace ) {
+            if ( centerDockId != 0 && useDefaultDock ) {
                 // 仅默认布局使用中心节点，工作区恢复由 ini/DockBuilder
                 // 状态负责。
                 XINFO("CanvasTabManager: Docking {} to center dock #{}",
@@ -245,6 +364,9 @@ void CanvasTabManager::update(UIManager* sourceManager)
             }
         }
     }
+
+    // 项目 ini 在运行中加载后，核对真正绘制过的画布，补回偶发丢失的 DockId。
+    reconcileProjectWorkspaceDocks(sourceManager, entries);
 
     // 新画布注册完成后再消费聚焦，确保目标视图本帧已经存在。
     focusPendingSessionCanvas(sourceManager, entries);

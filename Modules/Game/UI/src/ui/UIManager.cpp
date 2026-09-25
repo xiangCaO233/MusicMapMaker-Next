@@ -717,11 +717,14 @@ void UIManager::captureProjectWorkspaceState()
     // 先捕获动态视图及画布开关。
     captureProjectWorkspaceViews(*workspace);
 
-    // ImGui 提供当前上下文 ini 内存快照，复制到项目值对象。
-    size_t      iniSize = 0;
-    const char* iniData = ImGui::SaveIniSettingsToMemory(&iniSize);
-    if ( iniData && iniSize > 0 ) {
-        workspace->m_imguiIniData.assign(iniData, iniSize);
+    // 慢速载图时画布可能尚未提交首帧，此时保留磁盘中已保存的完整停靠树。
+    const auto* tabs = getView<CanvasTabManager>("CanvasTabManager");
+    if ( !tabs || !tabs->projectWorkspaceDockRestorePending() ) {
+        size_t      iniSize = 0;
+        const char* iniData = ImGui::SaveIniSettingsToMemory(&iniSize);
+        if ( iniData && iniSize > 0 ) {
+            workspace->m_imguiIniData.assign(iniData, iniSize);
+        }
     }
 
     if ( m_nativeWindow ) {
@@ -1074,6 +1077,16 @@ void UIManager::syncProjectWorkspaceState()
                 // 标记主 DockSpace 已接收项目布局，避免默认布局覆盖。
                 MainDockSpaceUI::markProjectWorkspaceLayoutLoaded();
             }
+        }
+
+        // 画布可能在加载布局后下一帧才首次 Begin；以实际成功恢复的会话
+        // 核对原节点，避免缺失谱面或显式打开单谱面阻止后续布局捕获。
+        if ( auto* tabs = getView<CanvasTabManager>("CanvasTabManager") ) {
+            std::vector<CanvasWorkspaceEntry> entries;
+            if ( auto* canvasWorkspace = getCanvasWorkspaceService() ) {
+                canvasWorkspace->fillEntries(entries);
+            }
+            tabs->prepareProjectWorkspaceDockRestore(workspace, entries);
         }
 
         if ( m_nativeWindow && workspace.m_mainWindow.m_valid ) {
