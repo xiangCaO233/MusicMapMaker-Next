@@ -119,6 +119,12 @@ cmake-format -i <absolute_file_path>
 - `IonCachyEngine` 作为独立项目，其内部 `3rdpty/cmake/**/*.cmake` 和 `3rdpty/CMakeLists.txt` 禁止包含 `MMM` 相关文件名、变量名、函数名或注释标识。
 - 所有预编译库相关文件必须由 Git LFS 追踪，路径至少包含主仓 `.gitattributes` 中的 `3rdpty/prebuilts/**`、`3rdpty/sources/IonCachyEngine/3rdpty/prebuilts/**`，以及 `IonCachyEngine` 仓库自身 `.gitattributes` 中的 `3rdpty/prebuilts/**`。
 
+### 3.6 macOS 编译兼容
+
+- **sol2 的 Lua nil**：判断可选 `sol::object` 是否存在时优先使用 `valid()`；确需按类型判断时使用 `sol::type::lua_nil`，向 Lua 写入 nil 时使用 `sol::lua_nil`。禁止使用 `sol::type::nil`：它在 Apple/Objective-C 环境中不可用，会导致 macOS 编译失败。
+- **浮点文本解析**：面向 macOS 26 之前系统的代码不得直接用 `std::from_chars` 解析 `float` / `double`，因为该重载不能在这些部署目标上使用。统一调用 `mmm/SafeParse.h` 中的 `MMM::Internal::parseFloatingPrefix`，按字段语义检查错误码、消费长度、有限值及范围；要求严格十进制时，还须限制输入字符，避免 Apple 分支的 `strtod_l` 接受十六进制等扩展形式。整数 `std::from_chars` 可照常使用。
+- **同类问题排查**：修复平台编译错误时，检查项目自维护代码中的同类 API 用法，并按最低支持的部署目标验证；本机较新的 SDK 或其他平台构建通过，不能代替目标平台验证。
+
 ## 4. 架构与模块依赖
 
 - **依赖方向**: `UI` 模块可以依赖 `Graphic` 模块，但 `Graphic` 模块严禁直接引用 `UI` 模块的高层结构，例如 `Brush` 或 `DrawCmd`。

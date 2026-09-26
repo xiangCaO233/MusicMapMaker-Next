@@ -23,6 +23,7 @@
 #include "config/AppPaths.h"
 #include "config/Utf8Path.h"
 #include "graphic/imguivk/VKTexture.h"
+#include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/imgui/MainDockSpaceUI.h"
@@ -658,8 +659,7 @@ struct ToolPluginView::Impl {
                 const sol::object children = row["children"];
                 const sol::object width    = row["min_column_width"];
                 if ( widget.id.empty() || !children.is<sol::table>() ||
-                     (width.valid() && width.get_type() != sol::type::nil &&
-                      !width.is<double>()) ) {
+                     (width.valid() && !width.is<double>()) ) {
                     // 禁止字符串隐式转换列宽，错误直接留在工具窗口中。
                     plugin.info.error = "横排布局声明无效";
                     return false;
@@ -819,11 +819,17 @@ struct ToolPluginView::Impl {
                 else if ( key == "map_length" || key == "bpm" ) {
                     // 数值必须被完整消费，拒绝 NaN、无穷和尾随乱码。
                     // BPM 需要严格正数；长度允许零代表尚未给出有效时长。
-                    double number           = 0.0;
-                    const auto [end, error] = std::from_chars(
-                        value.data(), value.data() + value.size(), number);
-                    if ( error != std::errc{} ||
-                         end != value.data() + value.size() ||
+                    // macOS 26 之前无法部署浮点 from_chars；复用已有的跨平台
+                    // 解析入口，并限制为十进制字符以拒绝 strtod_l
+                    // 的十六进制扩展。
+                    const auto parsed =
+                        ::MMM::Internal::parseFloatingPrefix(value);
+                    const double number = parsed.value;
+                    if ( value.empty() ||
+                         value.find_first_not_of("0123456789eE+-.") !=
+                             std::string::npos ||
+                         parsed.error != std::errc{} ||
+                         parsed.parsedLength != value.size() ||
                          !std::isfinite(number) || number < 0.0 ||
                          (key == "bpm" && number == 0.0) ) {
                         return std::string("数值格式无效");

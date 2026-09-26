@@ -254,13 +254,18 @@ int main()
               "build=function(api) return {{type='row', id='fields', "
               "min_column_width=230, children={{type='input', id='first', "
               "label='第一项', value='1'}, {type='input', id='second', "
-              "label='第二项', value='2'}}}} end, "
+              "label='第二项', value='2'}}}, {type='row', "
+              "id='default-width', min_column_width=nil, "
+              "children={{type='input', id='third', label='第三项', "
+              "value='3'}, {type='input', id='fourth', label='第四项', "
+              "value='4'}}}} end, "
               "on_action=function(id, value, api) end }";
     output.close();
     if ( !output ) return 3;
     view.reload();
     // 显式重载后重新扫描测试目录；没有轮询或逐帧文件检测。
-    // 自定义工具使用两个输入框的 row，走与内置转码工具相同的解析入口。
+    // 两个 row 分别覆盖显式列宽与 nil 缺省列宽，防止 Apple 平台误用
+    // sol::type::nil 后连普通工具脚本都无法编译或载入。
     // 回调未执行时控件树也必须先构建完成，错误会保留在清单快照中。
     const auto tool = std::find_if(
         view.plugins().begin(), view.plugins().end(), [](const auto& info) {
