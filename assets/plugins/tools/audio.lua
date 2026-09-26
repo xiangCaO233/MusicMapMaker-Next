@@ -47,10 +47,8 @@ local function format_from_path(path)
 end
 
 local state = {
-    -- 输入和输出用途分别记录最近目录，重复选择互不覆盖。
     input = "",
-    output = "",
-    -- 格式与目标后缀同步；改格式后清空旧路径以重新确认覆盖目标。
+    -- 保存位置由导出按钮打开的对话框决定，格式仅控制建议文件名。
     format = output_formats[1].label,
     -- 文本输入便于原样保留用户编辑；提交时才转换成数值并验证。
     speed = "1.0",
@@ -150,7 +148,7 @@ return {
             -- 编码器拒绝参数、文件打开失败等都沿同一错误通道呈现。
             status_text = "导出失败：" .. (status.error or "未知错误")
         end
-        -- 输入信息与封面归为一组，输出参数在文件选择之后展示。
+        -- 输入信息与封面归为一组，输出参数在导出按钮之前展示。
         local widgets = {
             { type = "button", id = "select_input", label = "选择输入音频" },
             { type = "text", id = "input_path", label = state.input },
@@ -179,15 +177,14 @@ return {
             end
         end
         widgets[#widgets + 1] = { type = "separator", id = "export_section", label = "输出" }
-        -- 先选格式，再生成对应的保存建议名；手动改后缀时反向同步此选择。
+        -- 先选格式，点击导出后再生成对应的保存建议名。
+        -- 不在面板内保留待导出路径，每次导出均由保存对话框确认覆盖目标。
         -- 下拉项显示实际后缀，用户无需靠默认文件名推测可导出格式。
         -- 宿主仍会对编码器是否存在进行最终检查，界面不假定所有平台一致。
         widgets[#widgets + 1] = {
             type = "combo", id = "output_format", label = "输出格式",
             value = state.format, choices = format_labels,
         }
-        widgets[#widgets + 1] = { type = "button", id = "select_output", label = "选择输出文件" }
-        widgets[#widgets + 1] = { type = "text", id = "output_path", label = state.output }
         -- 宽面板中两列并排；窄面板自动纵排，标签始终位于输入框上方。
         -- 倍速与独立变调都由后台音频图处理，码率和采样率由编码器协商。
         -- 两组 row 只描述视觉排列；子控件 ID 仍直接到达 on_action。
@@ -237,38 +234,8 @@ return {
                 state.message = state.info.error or "已读取音频信息。"
             end
         elseif id == "output_format" then
-            -- 旧路径只经过旧后缀的保存确认；切换格式后必须重新选择目标。
-            -- 不能直接改写旧路径后缀，否则新路径若已存在会绕过保存确认。
-            local format = selected_format(value)
-            if state.format ~= format.label then
-                state.format = format.label
-                if state.output ~= "" then
-                    state.output = ""
-                    state.message = "输出格式已更改，请重新选择输出文件。"
-                end
-            end
-        elseif id == "select_output" then
-            -- 保存建议名和当前格式一致；手动输入其他已知后缀时尊重用户选择。
-            -- 选择器返回的路径才是后端真实目标，不能只依赖下拉框显示值。
-            local format = selected_format(state.format)
-            local path = api.save_file("audio_output", "output" .. format.extension)
-            if path ~= "" then
-                local chosen = format_from_path(path)
-                if chosen then
-                    -- 用户手动改后缀时，码率控件也要随真正的目标编码切换。
-                    state.output = path
-                    state.format = chosen.label
-                elseif path:match("%.[^%.\\/]+$") then
-                    -- 未知后缀不能留着旧目标路径供误导出。
-                    -- 后端虽然会报告错误，但这里先给出可操作的格式提示。
-                    state.output = ""
-                    state.message = "不支持该输出后缀；请选择列表中的音频格式。"
-                else
-                    -- 对话框尚未确认补后缀后的目标是否已有文件，必须重新选择。
-                    state.output = ""
-                    state.message = "请选择带 " .. format.extension .. " 后缀的输出文件。"
-                end
-            end
+            -- 此时没有待确认的输出路径，切换格式只更新保存建议名。
+            state.format = selected_format(value).label
         elseif id == "toggle_details" then
             state.show_details = not state.show_details
         elseif id == "speed" then
@@ -284,6 +251,15 @@ return {
             -- bit/s 与常见的 kbit/s 不同，避免把 192 误认为 192 kbit/s。
             state.bitrate = value
         elseif id == "export" then
+            -- 已有任务时不弹出无意义的保存对话框，等待任务结束后再试。
+            if api.audio_status().state == "running" then
+                state.message = "已有音频导出任务正在运行。"
+                return
+            end
+            if state.input == "" or not state.info or state.info.error then
+                state.message = "请先选择可读取的输入音频。"
+                return
+            end
             -- Lua number 可能是小数；采样时钟和目标码率必须是整数。
             local speed, pitch = tonumber(state.speed), tonumber(state.pitch)
             local format = selected_format(state.format)
@@ -299,15 +275,30 @@ return {
                 state.message = "倍速、变调、采样率和码率必须是有效数字；后两项必须为非负整数。"
                 return
             end
-            if state.output == "" or format_from_path(state.output) ~= format then
-                -- 防御外部脚本或保存对话框返回了与选择不一致的路径。
-                state.message = "请选择与输出格式一致的目标文件。"
+            -- 参数正确后才选择目标；取消对话框不改变状态，也不启动任务。
+            -- 用途键只记最近目录，不能把上次输出文件当成本次隐式目标。
+            local output = api.save_file("audio_output", "output" .. format.extension)
+            if output == "" then return end
+            local chosen = format_from_path(output)
+            if not chosen then
+                -- 不猜测无后缀文件的编码器，保存对话框可能尚未确认补名结果。
+                state.message = "请选择带受支持音频后缀的输出文件。"
                 return
+            end
+            if chosen ~= format then
+                -- 手动改后缀时沿用原行为，同步格式并重新核验码率。
+                state.format = chosen.label
+                format = chosen
+                bitrate = format.lossy and tonumber(state.bitrate) or 0
+                if not bitrate or bitrate < 0 or bitrate % 1 ~= 0 then
+                    state.message = "目标码率必须为非负整数。"
+                    return
+                end
             end
             -- 宿主再次验证数值范围、路径和编码器能力，脚本校验只负责输入体验。
             -- 返回空串仅表示任务进入队列，最终结果仍以 audio_status 为准。
             local error = api.audio_export({
-                input = state.input, output = state.output,
+                input = state.input, output = output,
                 speed = speed, pitch_semitones = pitch,
                 sample_rate = sample_rate, bitrate = bitrate,
             })
