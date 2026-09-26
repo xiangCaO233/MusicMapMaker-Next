@@ -3033,21 +3033,24 @@ void ToolbarView::pushPaletteToSelection()
         Logic::CmdApplyNotePaletteToSelection{ m_paletteColors });
 }
 
-/// @brief 把当前分拍线调色盘和覆盖开关写入编辑器视觉配置。
+/// @brief 把当前分拍线与玩家音符默认配色写入编辑器运行时视觉配置。
 ///
-/// 所有槽位转换为固定存储数组后一次提交完整配置，保证渲染器观察一致快照。
+/// 两组槽位转换为固定存储数组后一次提交，保证渲染器观察一致快照。
 /// 皮肤默认选择会关闭覆盖，自定义或软件自定义继承会开启覆盖。
 ///
-/// 分拍线颜色属于 VisualConfig 而不是画笔命令，因为预览区、主画布和其他
-/// 渲染消费者需要共享同一配置快照。转换循环保持数组索引与分母语义稳定。
+/// 画笔命令只影响新建物件；画布已有物件的默认色由 VisualConfig 提供。
+/// 分拍线及音符配色共享同一快照，且不会改写物件的自定义颜色。
 /// 函数使用应用服务入口，使配置变更通知与设置页修改具有相同传播路径。
 /// 若应用服务未绑定，currentEditorConfig 仍提供安全副本，但提交会无操作。
 void ToolbarView::pushBeatLinePaletteToRenderer()
 {
-    auto& engine = Logic::EditorEngine::instance();
-    // 复制当前完整配置，只修改分拍线相关字段。
+    // 同一次快照提交分拍线与音符默认配色，避免界面方案和已有物件分帧错位。
     auto config                          = currentEditorConfig();
     config.visual.overrideBeatLineColors = m_overrideBeatLinePalette;
+    config.visual.overrideNoteColors     = m_overrideBeatLinePalette;
+    for ( std::size_t i = 0; i < m_paletteColors.size(); ++i ) {
+        config.visual.noteColors[i] = toStoredColor(m_paletteColors[i]);
+    }
     // 运行时 glm 表示逐槽转换回可序列化数组。
     for ( std::size_t i = 0; i < m_beatLinePaletteColors.size(); ++i ) {
         config.visual.beatLineColors[i] =

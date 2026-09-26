@@ -170,8 +170,11 @@ void renderPlayerAndDraftTaps(MMM::Logic::RenderSnapshot& snapshot)
     config.visual.trackLayout.right = 0.9F;
     config.visual.beatLineDisplayMode =
         MMM::Config::BeatLineDisplayMode::Hidden;
+    // 模拟无项目配置的旧谱面：默认物件应使用软件选中的活动方案。
+    config.visual.overrideNoteColors = true;
+    config.visual.noteColors[0]      = { 0.73F, 0.21F, 0.44F, 1.0F };
     config.settings.professionalMode = true;
-    // 两类物件必须同时可见，不能用草稿隐藏后的空结果验证配色隔离。
+    // 玩家默认色、玩家自定义色和草稿色都必须可见。
 
     auto& cache =
         timelineRegistry.ctx().emplace<MMM::Logic::System::ScrollCache>();
@@ -180,21 +183,23 @@ void renderPlayerAndDraftTaps(MMM::Logic::RenderSnapshot& snapshot)
     // 只验证草稿身份是否决定颜色来源，不同时改变宽度规则。
 
     constexpr glm::vec4 SHARED_CUSTOM_COLOR{ 0.12F, 0.34F, 0.56F, 1.0F };
-    // 选择非默认的自定义色，玩家顶点应采用它，草稿顶点应采用专用皮肤色。
+    // 自定义色与活动方案色不同，才能验证旧物件的默认色来源。
     std::vector<entt::entity> sortedNotes;
-    for ( const auto [track, isDraft] :
-          { std::pair{ 0, false }, std::pair{ -4, true } } ) {
+    for ( const auto [track, isDraft] : { std::pair{ 0, false },
+                                          std::pair{ 1, false },
+                                          std::pair{ -4, true } } ) {
         // 玩家索引从零起，草稿使用负轨号；不能把 -4 当成无符号玩家索引。
         const auto                entity = noteRegistry.create();
         MMM::Logic::NoteComponent note;
-        note.m_timestamp        = 1.0;
-        note.m_type             = MMM::NoteType::NOTE;
-        note.m_trackIndex       = track;
-        note.m_isDraft          = isDraft;
-        note.m_customColors.tap = SHARED_CUSTOM_COLOR;
-        // 显式写入运行时颜色覆盖字段，使玩家分支确实走自定义色优先级，
-        // 而非依赖恰好与期望值相同的皮肤默认色。
-        // 除所属区域外保持类型、时间和自定义色一致，避免混入物件类型色差。
+        note.m_timestamp  = 1.0;
+        note.m_type       = MMM::NoteType::NOTE;
+        note.m_trackIndex = track;
+        note.m_isDraft    = isDraft;
+        if ( track == 0 || isDraft ) {
+            note.m_customColors.tap = SHARED_CUSTOM_COLOR;
+        }
+        // 首轨玩家音符与草稿音符显式改色；次轨玩家音符模拟未改色旧物件。
+        // 草稿的显式颜色不应覆盖其专用皮肤色。
         noteRegistry.emplace<MMM::Logic::NoteComponent>(entity,
                                                         std::move(note));
         noteRegistry.emplace<MMM::Logic::TransformComponent>(entity);
@@ -265,8 +270,10 @@ bool testDraftTapUsesDedicatedSkinColor()
     constexpr MMM::Config::Color PLAYER_CUSTOM_COLOR{
         0.12F, 0.34F, 0.56F, 1.0F
     };
-    bool playerMatched = false;
-    bool draftMatched  = false;
+    constexpr MMM::Config::Color PALETTE_COLOR{ 0.73F, 0.21F, 0.44F, 1.0F };
+    bool                         playerMatched  = false;
+    bool                         paletteMatched = false;
+    bool                         draftMatched   = false;
     for ( const auto& vertex : snapshot.vertices ) {
         // 只接收人工 Note UV 矩形内的顶点，跳过背景与轨道底板几何。
         if ( vertex.uv.u < 0.25F || vertex.uv.u > 0.45F ||
@@ -276,16 +283,20 @@ bool testDraftTapUsesDedicatedSkinColor()
         // 这里比较的是已提交顶点属性，不读取 NoteComponent 上的原始自定义色。
         // 因而能发现组件配置正确但渲染分支仍用了错误颜色的情况。
         if ( vertex.pos.x >= VIEWPORT_WIDTH * 0.5F ) {
-            // 本夹具玩家区域在右半边，草稿区域在左半边，据此区分颜色断言。
-            playerMatched |= sameColor(vertex.color, PLAYER_CUSTOM_COLOR);
+            // 首轨物件保留自定义色，次轨旧物件跟随活动方案。
+            if ( vertex.pos.x < VIEWPORT_WIDTH * 0.6F ) {
+                playerMatched |= sameColor(vertex.color, PLAYER_CUSTOM_COLOR);
+            } else {
+                paletteMatched |= sameColor(vertex.color, PALETTE_COLOR);
+            }
             // 累积存在性结果，后续不匹配的顶点不会抹掉已经找到的匹配项。
         } else {
             draftMatched |= sameColor(vertex.color, draftColor);
         }
     }
-    if ( !playerMatched || !draftMatched ) {
-        // 两类都必须实际绘制，任何一类缺失不能算作配色互不干扰。
-        XERROR("Draft and player Tap vertices did not use separated colors");
+    if ( !playerMatched || !paletteMatched || !draftMatched ) {
+        // 三类顶点必须都出现，不能只靠正确的自定义色掩盖默认色错误。
+        XERROR("Custom, palette and draft Tap colors were not separated");
         return false;
     }
     return true;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config/BeatLinePalette.h"
+#include "config/NotePalette.h"
 #include "config/visual/BackgroundConfig.h"
 #include "config/visual/CanvasComponentConfig.h"
 #include "config/visual/PreviewAreaConfig.h"
@@ -203,6 +204,10 @@ struct VisualConfig {
     bool overrideBeatLineColors{ false };
     /// @brief 当前调色方案的分拍线覆盖颜色；仅保留在运行时。
     BeatLineColorPalette beatLineColors{};
+    /// @brief 是否用活动调色盘覆盖无自定义颜色的玩家音符；仅运行时有效。
+    bool overrideNoteColors{ false };
+    /// @brief 活动方案中的玩家音符默认颜色；仅运行时有效。
+    NoteColorPalette noteColors{};
     /// @brief 是否绘制第一个 BPM 红线前的分拍线。
     bool drawBeatLinesBeforeFirstTiming{ true };
     /// @brief 全局频谱图生成精细度。

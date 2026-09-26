@@ -2,6 +2,7 @@
 #include "config/AudioPlaybackConfig.h"
 #include "config/BeatLinePalette.h"
 #include "config/FrameLimitPreference.h"
+#include "config/NotePalette.h"
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -164,9 +165,6 @@ void to_json(nlohmann::json& json, const UIAestheticsConfig& config);
 /// @brief 从 JSON 读取 UI 审美配置。
 void from_json(const nlohmann::json& json, UIAestheticsConfig& config);
 
-/// @brief 音符调色盘方案中的颜色槽位数量。
-inline constexpr std::size_t NOTE_COLOR_PALETTE_SLOT_COUNT = 6;
-
 /// @brief 使用当前皮肤完整默认配色的调色盘方案标识。
 inline constexpr const char* COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID =
     "__skin_default__";
@@ -177,8 +175,7 @@ struct ColorPaletteScheme {
     std::string name{ "Palette" };
 
     /// @brief 完整物件颜色，顺序与工具栏物件颜色槽位一致。
-    std::array<std::array<float, 4>, NOTE_COLOR_PALETTE_SLOT_COUNT>
-        noteColors{};
+    NoteColorPalette noteColors{};
 
     /// @brief 完整分拍线颜色。
     BeatLineColorPalette beatLineColors{};

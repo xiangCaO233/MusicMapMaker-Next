@@ -1115,6 +1115,8 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
     // 调色板覆盖属于运行期组合结果，不从视觉配置文件恢复。
     config.overrideBeatLineColors = false;
     config.beatLineColors         = {};
+    config.overrideNoteColors     = false;
+    config.noteColors             = {};
     config.drawBeatLinesBeforeFirstTiming =
         j.value("drawBeatLinesBeforeFirstTiming", true);
     // 频谱细节缺失时选择质量与负载折中的 Balanced。

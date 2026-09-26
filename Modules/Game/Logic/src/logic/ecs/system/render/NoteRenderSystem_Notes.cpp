@@ -656,6 +656,21 @@ NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
     ctx.colorDraftArrow =
         draftColor(DRAFT_NOTE_ARROW_COLOR_KEY, ctx.colorArrow);
 
+    // 草稿默认色已从皮肤确定；只替换玩家音符的默认色，物件覆盖仍优先。
+    if ( config.visual.overrideNoteColors ) {
+        const auto& colors       = config.visual.noteColors;
+        const auto  paletteColor = [&colors](NoteColorSlot slot) {
+            const auto& rgba = colors[static_cast<std::size_t>(slot)];
+            return glm::vec4{ rgba[0], rgba[1], rgba[2], rgba[3] };
+        };
+        ctx.colorTap   = paletteColor(NoteColorSlot::Tap);
+        ctx.colorHead  = paletteColor(NoteColorSlot::Head);
+        ctx.colorHold  = paletteColor(NoteColorSlot::Hold);
+        ctx.colorEnd   = paletteColor(NoteColorSlot::End);
+        ctx.colorNode  = paletteColor(NoteColorSlot::Node);
+        ctx.colorArrow = paletteColor(NoteColorSlot::FlickArrow);
+    }
+
     return ctx;
 }
 
