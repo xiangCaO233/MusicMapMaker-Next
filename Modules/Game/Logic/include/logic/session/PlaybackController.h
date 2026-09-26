@@ -87,7 +87,7 @@ public:
 
 private:
     /// @brief 重建当前 BPM 段的下一拍游标。
-    /// @param time 当前音频时间，单位秒。
+    /// @param time 当前画布视觉时间，单位秒。
     /// @warning 跳转或 BPM 编辑时执行一次二分查找，不在稳定播放时重复扫描。
     void resetMetronomeCursor(double time);
 
@@ -104,8 +104,10 @@ private:
     std::size_t m_metronomeSegmentIndex{ 0U };
     /// @brief 当前 BPM 段的下一拍整数索引。
     std::int64_t m_nextMetronomeBeatIndex{ 0 };
-    /// @brief 下一拍在音频时间轴上的秒数。
+    /// @brief 下一拍在画布视觉时间轴上的秒数。
     double m_nextMetronomeBeatTime{ 0.0 };
+    /// @brief 已用于节拍预约的视觉偏移；变化时须撤销旧预约并重建游标。
+    double m_appliedMetronomeVisualOffset{ 0.0 };
     /// @brief 已应用到音效池的节拍器增益；负值表示需要首次同步。
     float m_appliedMetronomeGain{ -1.0F };
 };

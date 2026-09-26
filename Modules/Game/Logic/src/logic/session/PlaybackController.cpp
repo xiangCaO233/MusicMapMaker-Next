@@ -218,10 +218,10 @@ bool PlaybackController::preloadMetronomeSounds(float gain)
     return preloadEditorMetronomeSounds(Audio::AudioManager::instance(), gain);
 }
 
-/// @brief 在跳转位置找到当前 BPM 段和不早于当前音频时间的第一拍。
-/// @param time 当前播放音频时间，单位秒。
+/// @brief 在跳转位置找到当前 BPM 段和不早于当前画布视觉时间的第一拍。
+/// @param time 当前画布视觉时间，单位秒。
 /// @warning 仅在首次启用、跳转和 BPM 变更时二分查找；稳定播放复用游标。
-/// @details BPM 时间戳和音频播放位置属于同一时间域，视觉偏移不得介入。
+/// @details BPM 时间戳属于画布谱面域；播放时钟先加视觉偏移再查找节拍。
 /// 首个 BPM 事件之前以谱面偏好 BPM 从零点数拍。
 /// BPM 事件自身是新段首拍，不延续旧段不足一拍的相位。
 /// upper_bound 保证刚好落在事件时间的跳转归入新段。
@@ -256,7 +256,7 @@ void PlaybackController::resetMetronomeCursor(double time)
     // 小容差只修正浮点边界；跳转到拍点之后不补播已过去的节拍。
     const double index =
         std::max(0.0, std::ceil((time - origin) / beatLength - 1e-7));
-    // 音频时间若无效，不能将非有限浮点数转换为拍号整数。
+    // 视觉时间若无效，不能将非有限浮点数转换为拍号整数。
     // 极端远跳超出整数范围时等待下一次有效重置，不保留错误游标。
     if ( !std::isfinite(index) ||
          index >=
@@ -278,6 +278,7 @@ void PlaybackController::resetMetronomeCursor(double time)
 /// 播放跳转由会话先清理旧预约，本函数随后从当前时间重建窗口。
 /// 稳定轮次仅推进尚未预约的拍号，同一拍不会重复发声。
 /// BPM 编辑只撤销编辑器节拍器自身的预约，不打断键声和测量工具。
+/// 视觉偏移变更也会撤销旧预约；节拍线时间转成音频时间后才提交音效。
 /// 单轮最多处理 64 个拍点或段边界，异常密度不会阻塞逻辑线程。
 void PlaybackController::updateMetronome(bool playbackJumped)
 {
@@ -321,6 +322,12 @@ void PlaybackController::updateMetronome(bool playbackJumped)
     if ( !m_metronomeResourcesReady ) return;
     m_metronomeWasActive = true;
 
+    // 画布使用 currentTime + effectiveVisualOffset 显示谱面；BPM 事件是谱面
+    // 时间，不能直接作为音频时钟的预约目标。有效偏移包含固定硬件校准值。
+    const double visualOffset =
+        m_ctx.lastConfig.visual.getEffectiveVisualOffset();
+    const double visualNow = m_ctx.currentTime + visualOffset;
+
     // 增益改变才写两个音效池，避免每个逻辑轮次刷新整个 voice 集合。
     // UI 拖动直接试听草稿值，松手后的配置值在此处正式接管。
     if ( m_appliedMetronomeGain != config.editorMetronomeGain ) {
@@ -336,16 +343,20 @@ void PlaybackController::updateMetronome(bool playbackJumped)
     // 其他工具可能先于播放更新重建缓存；比较版本而非读取已清除的脏标记。
     SessionUtils::ensureBpmEvents(m_ctx);
     const bool bpmChanged = m_seenBpmEventsRevision != m_ctx.bpmEventsRevision;
-    m_seenBpmEventsRevision = m_ctx.bpmEventsRevision;
-    if ( bpmChanged ) {
-        // BPM 编辑后旧前瞻计划不再对应新网格，只撤销节拍器自己的声音。
+    m_seenBpmEventsRevision  = m_ctx.bpmEventsRevision;
+    const bool offsetChanged = m_metronomeCursorReady &&
+                               m_appliedMetronomeVisualOffset != visualOffset;
+    if ( bpmChanged || offsetChanged ) {
+        // BPM 或视觉偏移改变后，旧前瞻预约不再对应画布拍点。
         audio.stopSoundEffect(EDITOR_METRONOME_LOW_KEY);
         audio.stopSoundEffect(EDITOR_METRONOME_HIGH_KEY);
     }
     // Seek 已经清空所有预约声音；重设游标才能重新排定前瞻窗口。
     // BPM 编辑会改变段锚点和拍长，旧索引不得继续复用。
-    if ( playbackJumped || bpmChanged || !m_metronomeCursorReady ) {
-        resetMetronomeCursor(m_ctx.currentTime);
+    if ( playbackJumped || bpmChanged || offsetChanged ||
+         !m_metronomeCursorReady ) {
+        resetMetronomeCursor(visualNow);
+        m_appliedMetronomeVisualOffset = visualOffset;
     }
     if ( !m_metronomeCursorReady ) return;
 
@@ -354,7 +365,7 @@ void PlaybackController::updateMetronome(bool playbackJumped)
         m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm);
     // 只预约短未来，既覆盖音频块边界，又降低跳转时撤销的成本。
     // 更远的拍点留给后续轮次，以接纳用户在播放中的 BPM 修改。
-    const double horizon = m_ctx.currentTime + METRONOME_SCHEDULE_AHEAD_SECONDS;
+    const double horizon = visualNow + METRONOME_SCHEDULE_AHEAD_SECONDS;
     // 即使异常 BPM 被规范到上界，单轮预约也有限额，防止极短拍长阻塞更新。
     // 下一个 BPM 事件可能落在两个旧节拍之间，循环必须同时看事件边界。
     // 只检查下一拍会漏掉前瞻窗口里的新段首拍。
@@ -379,8 +390,7 @@ void PlaybackController::updateMetronome(bool playbackJumped)
             const double beatLength  = 60.0 / bpm;
             m_nextMetronomeBeatIndex = static_cast<std::int64_t>(std::max(
                 0.0,
-                std::ceil((m_ctx.currentTime - segmentStart) / beatLength -
-                          1e-7)));
+                std::ceil((visualNow - segmentStart) / beatLength - 1e-7)));
             m_nextMetronomeBeatTime =
                 segmentStart +
                 static_cast<double>(m_nextMetronomeBeatIndex) * beatLength;
@@ -388,12 +398,14 @@ void PlaybackController::updateMetronome(bool playbackJumped)
         }
         // 两毫秒仅补偿浮点与音频块边界误差，真正过去的拍不追赶播放。
         // AudioManager 使用绝对时间预约，逻辑线程无需等待节拍到来。
-        if ( m_nextMetronomeBeatTime >= m_ctx.currentTime - 0.002 ) {
+        if ( m_nextMetronomeBeatTime >= visualNow - 0.002 ) {
             // 每段首拍重音，其后每四拍重复重音；不补播跳转前已过去的拍。
             const std::string& key = m_nextMetronomeBeatIndex % 4 == 0
                                          ? EDITOR_METRONOME_HIGH_KEY
                                          : EDITOR_METRONOME_LOW_KEY;
-            audio.playSoundEffectScheduled(key, m_nextMetronomeBeatTime);
+            // 谱面拍点必须先减去视觉偏移，才能对齐 AudioManager 的音频时钟。
+            audio.playSoundEffectScheduled(
+                key, m_nextMetronomeBeatTime - visualOffset);
         }
         // 游标在每次计划后立即推进，下一轮不会重复预约同一整数拍。
         // 重新按原点加整数倍拍长计算，避免累计浮点误差逐拍漂移。

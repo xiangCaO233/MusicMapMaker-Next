@@ -1310,7 +1310,7 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
             triggeredEvents,
             m_ctx->trackCount,
             effectiveConfig);
-        // 节拍器在全局跳转清空预约音效后重新排定，使用未加视觉偏移的音频时间。
+        // 节拍器在全局跳转清空预约后重排，并按画布视觉偏移换算播放时间。
         m_playback->updateMetronome(playbackJumped);
     } else {
         // 暂停或后台会话仅停止本会话的节拍音，不干扰 BPM 测量工具。
