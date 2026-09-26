@@ -97,6 +97,11 @@ else()
     if(WIN32 AND CMAKE_CROSSCOMPILING)
       # Windows 交叉 GCC 的 CI 构建日志需要保持可读，默认不输出每个翻译单元的 GCC 内部耗时表。
       message(STATUS "GCC time report disabled for Windows cross builds.")
+    elseif(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 14
+           AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 15)
+      # GCC 14 的 -ftime-report 会在实例化 std::span 的迭代器时触发编译器内部错误；
+      # 该参数仅生成编译耗时报告，禁用后不影响目标代码与音频混音行为。
+      message(STATUS "GCC time report disabled for GCC 14 compiler stability.")
     else()
       add_compile_options("-ftime-report")
     endif()
