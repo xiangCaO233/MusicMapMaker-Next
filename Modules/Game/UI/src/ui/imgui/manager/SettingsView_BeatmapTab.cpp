@@ -858,15 +858,19 @@ void SettingsView::drawBeatmapSettings()
             ImGui::GetStyle().FramePadding.x * 2.0F;
         /// @brief 为资源行的下拉框预留右侧导入按钮宽度。
         /// @note 极窄窗口仍保留正宽度，避免负值传给 ImGui 布局。
-        const auto resourceComboWidth = [&](Clay_BoundingBox bounds) {
-            return std::max(1.0F,
-                            bounds.width - importButtonWidth -
-                                ImGui::GetStyle().ItemSpacing.x);
-        };
+        // Clay 在本分组作用域结束后才执行回调，宽度必须按值进入回调。
+        const auto resourceComboWidth =
+            [importButtonWidth](Clay_BoundingBox bounds) {
+                return std::max(1.0F,
+                                bounds.width - importButtonWidth -
+                                    ImGui::GetStyle().ItemSpacing.x);
+            };
         /// @brief 记录资源导入请求，实际选择与复制交给锁外的低频路径。
         /// @note 目标枚举区分同名的封面与背景“导入图片”按钮。
+        // 只借用受本函数 session 锁保护的谱面；其余分组局部状态按值捕获。
         const auto drawResourceImportButton =
-            [&](const char* label, BeatmapResourceTarget target) {
+            [this, project, beatmapPtr = &beatmap, importButtonWidth](
+                const char* label, BeatmapResourceTarget target) {
                 ImGui::SameLine();
                 ImGui::PushID(static_cast<int>(target));
                 ImGui::BeginDisabled(!project);
@@ -877,7 +881,7 @@ void SettingsView::drawBeatmapSettings()
                     m_openBeatmapResourcePicker = true;
                     m_resourceImportProjectRoot = project->m_projectRoot;
                     m_resourceImportBeatmapPath =
-                        beatmap.m_baseMapMetadata.map_path;
+                        beatmapPtr->m_baseMapMetadata.map_path;
                     // 对话框可能跨帧返回，结果必须与这两项身份重新比较。
                     m_beatmapResourceImportError.clear();
                 }
@@ -891,7 +895,8 @@ void SettingsView::drawBeatmapSettings()
             rowIndex,
             TR_CACHE("ui.settings.beatmap.audio").data(),
             maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
+            [&, resourceComboWidth, drawResourceImportButton, audioImportLabel](
+                Clay_BoundingBox r, bool) {
                 /// @brief 歌曲文件提示只服务于外部格式，不决定实际播放时间线。
                 /// 空提示时回退到主音频路径，兼容本项目原生元数据。
                 const auto& audioHint        = meta.song_file_hint.empty()
@@ -961,7 +966,8 @@ void SettingsView::drawBeatmapSettings()
             rowIndex,
             TR_CACHE("ui.settings.beatmap.cover").data(),
             maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
+            [&, resourceComboWidth, drawResourceImportButton, imageImportLabel](
+                Clay_BoundingBox r, bool) {
                 // 当前显示路径经过旧前缀兼容和工程相对化。
                 std::string currentCoverPath =
                     displayProjectPath(meta.cover_path);
@@ -1026,7 +1032,8 @@ void SettingsView::drawBeatmapSettings()
             rowIndex,
             TR_CACHE("ui.settings.beatmap.background").data(),
             maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
+            [&, resourceComboWidth, drawResourceImportButton, imageImportLabel](
+                Clay_BoundingBox r, bool) {
                 // main_cover_path 是实际背景引用，独立于缩略封面 cover_path。
                 std::string currentBgPath =
                     displayProjectPath(meta.main_cover_path);
