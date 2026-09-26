@@ -681,8 +681,8 @@ Basic2DCanvas::~Basic2DCanvas() {}
 /// - 中心落在玩家轨道纵向裁剪范围内。
 /// 教程再以完整 Note 高度收窄候选，保证框不会越过轨道上下边缘。
 /// 起点和终点保存精确谱面时间，以便快照滚动时查回新的屏幕 Y；
-/// 如果某条线已经离开实际绘制集合，整条随机路线会重新选择，
-/// 不能继续沿用旧坐标制造一个画面中不存在、也无法吸附的目标。
+/// 如果某条线暂时离开实际绘制集合，保留已选时间和轨道并隐藏提示；
+/// 鼠标返回或视野恢复后继续显示原目标，不能重新随机生成另一条路线。
 ///
 /// @par 输入约束
 /// 教程只观察左键边沿，不主动捕获鼠标。真正的画笔输入继续由交互控制器
@@ -744,7 +744,7 @@ Basic2DCanvas::~Basic2DCanvas() {}
 /// 快照中固定四个槽位的核对成本与谱面 Note 总量无关。
 /// 折线目标使用五条真实可见拍线生成七个有序检查点。
 /// 七点路线包含三段 Hold、两段 Flick；最后两点延长末段 Hold。
-/// 路线仅在进入步骤或失效后重选，不在每帧排序或重建全谱索引。
+/// 路线仅在进入步骤或谱面身份变化后重选，不在每帧排序或重建全谱索引。
 /// 当前帧只投影七个目标并核对一个固定身份槽位。
 /// 鼠标经过顺序和最终 ECS 子段数分别在 UI 与逻辑线程验证。
 /// Flick 与 Hold 的相邻练习也需避开同轨相交的可见物件。
@@ -1083,13 +1083,10 @@ void Basic2DCanvas::updateComposeWalkthrough(
                                top + noteHeight * 0.5F };
         }
         if ( !routeVisible ) {
-            // 滚动或变速显隐可能让旧目标离开快照；失败手势释放后再重选。
-            // 删除整条目标，而不是只挪动失效的一个检查点破坏路线顺序。
-            // 当前左键若未松开，保持失败状态直到释放；下一笔再选路线。
-            // 先要求取消本笔，避免在切换目标的同帧留下无提示的折线。
-            m_walkthroughPolylineTarget.reset();
+            // 近光标拍线可因鼠标离开暂时缺席；保留路线身份与七点次序。
+            // 暂停显示并取消未完成笔画，恢复可见后继续原来的练习。
+            // 若谱面身份真的改变，上面的身份检查仍会丢弃旧路线。
             m_walkthroughPolylineAttemptValid = false;
-            reportUnavailable();
             cancelInvalidRelease();
             return;
         }
@@ -1372,19 +1369,19 @@ void Basic2DCanvas::updateComposeWalkthrough(
         return std::nullopt;
     };
 
-    // 相机滚动、播放或近光标拍线模式都可能让已选拍线离开当前真实绘制集合。
-    // 此时丢弃旧路线并从当前可见线重选，不能继续显示一个已经不存在的拍位。
+    // 相机滚动、播放或近光标拍线模式都可能让已选拍线暂时离开当前集合。
+    // 保留已选时间和轨道，隐藏不可见框；重新上报后仍是同一个目标。
+    // 物件类型变化和谱面切换分别由路径种类与谱面实例身份清除旧目标。
     if ( m_walkthroughNoteDragTarget &&
          m_walkthroughNoteDragTarget->beatmapInstanceId ==
              snapshot.beatmapInstanceId &&
          (!findBeatLineY(m_walkthroughNoteDragTarget->sourceTime) ||
           !findBeatLineY(m_walkthroughNoteDragTarget->destinationTime)) ) {
-        // 手势中途失去目标后，这次尝试不得继承下一条路径的起点资格。
+        // 手势中途失去目标后，本次尝试失效，不能继承旧的起点资格。
         // 释放仍走取消入口，保留上一颗单键及此前有效编辑。
         m_walkthroughNoteStartedAtSource = false;
         cancelUnresolvedRelease();
-        if ( m_walkthroughNoteAttemptActive ) return;
-        m_walkthroughNoteDragTarget.reset();
+        return;
     }
 
     // Shift 练习共用原单键附近的真实拍线，长条沿时间方向、滑键沿轨道方向。
@@ -1552,7 +1549,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
 
     const auto& target = *m_walkthroughNoteDragTarget;
     // 路径保存谱面时间而非屏幕坐标。每帧回查渲染快照保证框继续贴住同一条
-    // 实际分拍线；找不到时前面的状态分支已经清除并重选。
+    // 实际分拍线；临时找不到时上面的分支会隐藏框而保留目标身份。
     const float playerWidth =
         projection.player.rightX - projection.player.leftX;
     if ( playerWidth <= 1.0F ) return;
