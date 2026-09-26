@@ -1,0 +1,11 @@
+#pragma once
+
+#include <string_view>
+
+namespace MMM::UI::BuiltinToolPlugins
+{
+/// @brief 标准音频工具的 Lua 声明，构建配置阶段嵌入。
+inline constexpr std::string_view AUDIO = R"mmm_audio(@MMM_TOOL_audio@)mmm_audio";
+/// @brief 标准谱面工具的 Lua 声明，构建配置阶段嵌入。
+inline constexpr std::string_view BEATMAP = R"mmm_beatmap(@MMM_TOOL_beatmap@)mmm_beatmap";
+}  // namespace MMM::UI::BuiltinToolPlugins

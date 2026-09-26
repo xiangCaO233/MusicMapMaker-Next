@@ -218,12 +218,14 @@ std::size_t calculateTargetFrames(std::size_t                    inputFrames,
 /// @brief 创建保留音高的音频图。
 /// @param track 输入音轨。
 /// @param speed 倍速倍率。
+/// @param pitchSemitones 独立变调半音数。
 /// @return 图的输出节点。
 ///
 /// SourceNode 的同块 final 通知让 TimeStretcher 及时刷新算法尾部，不依赖额外
 /// 空拉取触发结束。prepare 失败时返回空图并由服务生成统一错误。
 std::shared_ptr<ice::IAudioNode> createPitchPreservedGraph(
-    const std::shared_ptr<ice::AudioTrack>& track, double speed)
+    const std::shared_ptr<ice::AudioTrack>& track, double speed,
+    double pitchSemitones)
 {
     // SourceNode 提供顺序 PCM，TimeStretcher 负责状态化变速与尾部刷新。
     auto source = std::make_shared<ice::SourceNode>(track);
@@ -237,7 +239,8 @@ std::shared_ptr<ice::IAudioNode> createPitchPreservedGraph(
         return {};
     }
     stretcher->set_playback_ratio(speed);
-    stretcher->set_pitch_semitones(0.0);
+    // 变速与变调分别传入拉伸器，避免通过重采样把两者错误绑定。
+    stretcher->set_pitch_semitones(pitchSemitones);
     // 同块 final 让 stretcher 在目标帧数内及时提交剩余窗，不依赖额外空拉取。
     source->set_final_input_listener(stretcher.get(),
                                      &requestFinalStretcherInput);
@@ -281,11 +284,34 @@ std::shared_ptr<ice::IAudioNode> createPitchShiftedGraph(
 AudioSpeedExportResult AudioSpeedExportService::exportWav(
     const AudioSpeedExportOptions& options)
 {
+    // 服务同时供谱面倍速导出与独立音频工具调用，零高级参数保持旧行为。
+    // 输出后缀交给 ICE 选择容器；不能仅凭后缀假设编码器存在。
     // 默认失败，所有环境校验在创建输出编码器前完成。
     AudioSpeedExportResult result;
     // 速度必须为有限正数，防止目标帧除零及源位置无法前进。
     if ( options.speed <= 0.0 || !std::isfinite(options.speed) ) {
         result.errorMessage = "Invalid speed multiplier";
+        return result;
+    }
+    if ( !std::isfinite(options.pitchSemitones) ||
+         std::abs(options.pitchSemitones) > 48.0 ||
+         (!options.preservePitch && options.pitchSemitones != 0.0) ) {
+        result.errorMessage = "Invalid independent pitch shift";
+        return result;
+    }
+    // 显式采样率仅接受常见音频时钟范围，具体值仍由编码器精确验证。
+    // 上限只过滤明显错误输入，不替代所选 codec 的能力协商。
+    if ( options.outputSampleRate != 0 &&
+         (options.outputSampleRate < 8000 ||
+          options.outputSampleRate > 384000) ) {
+        result.errorMessage = "Invalid output sample rate";
+        return result;
+    }
+    // 避免无意义的码率值进入 FFmpeg；无损格式由 Receiver 另行拒绝。
+    // 此数值为输出总 bit/s；零表示接收端原有默认策略。
+    if ( options.bitrate != 0 &&
+         (options.bitrate < 8000 || options.bitrate > 1000000000) ) {
+        result.errorMessage = "Invalid output bitrate";
         return result;
     }
     if ( options.inputPath.empty() || options.outputPath.empty() ) {
@@ -339,7 +365,8 @@ AudioSpeedExportResult AudioSpeedExportService::exportWav(
         calculateTargetFrames(inputFrames, format.samplerate, options);
     // 两条图只在 DSP 算法上不同，后续目标长度与编码路径完全一致。
     auto graph = options.preservePitch
-                     ? createPitchPreservedGraph(track, options.speed)
+                     ? createPitchPreservedGraph(
+                           track, options.speed, options.pitchSemitones)
                      : createPitchShiftedGraph(track, options.speed, format);
     if ( !graph ) {
         result.errorMessage = "Failed to create audio export graph";
@@ -349,8 +376,26 @@ AudioSpeedExportResult AudioSpeedExportService::exportWav(
     emitProgress(options, 0.08f, "正在通过音频引擎导出...");
 
     ice::FFmpegFileReceiver receiver(options.outputPath, format);
+    // 接收端输入仍使用引擎内部时钟，目标采样率只在编码链重采样。
+    // targetFrames 和进度分母不能按目标采样率重复缩放。
     receiver.set_source(graph);
     receiver.set_target_frames(targetFrames);
+#if defined(ICE_FFMPEG_FILE_RECEIVER_ADVANCED_OPTIONS) && !defined(__APPLE__)
+    // 新版 ICE 会验证具体 codec 的能力；配置失败必须在创建文件前返回。
+    if ( !receiver.set_output_sample_rate(options.outputSampleRate) ||
+         !receiver.set_bitrate(options.bitrate) ) {
+        result.errorMessage = "Failed to configure audio encoder";
+        return result;
+    }
+#else
+    // 旧预编译包仍可执行原有导出，显式编码参数必须报错而不能静默忽略。
+    // macOS 的 ICE 预编译库尚未由原生 Runner 重建；避免链接未提供的方法。
+    if ( options.outputSampleRate != 0 || options.bitrate != 0 ) {
+        result.errorMessage =
+            "Audio encoder options require updated ICE prebuilts";
+        return result;
+    }
+#endif
     // 两种处理图均按相同离线块大小拉取，避免结果依赖 Receiver 默认值。
     receiver.set_block_frames(AUDIO_SPEED_EXPORT_CHUNK_FRAMES);
     // Receiver 按已编码帧数映射进度，分母至少为一以覆盖最小空输出。
@@ -372,6 +417,7 @@ AudioSpeedExportResult AudioSpeedExportService::exportWav(
     }
 
     // 完成后以 Receiver 的真实计数生成结果和最终百分之百进度。
+    // frames_written 属于输入时钟；改采样率后不等于容器内样本数。
     result.outputFrames          = receiver.frames_written();
     result.outputDurationSeconds = static_cast<double>(result.outputFrames) /
                                    static_cast<double>(format.samplerate);

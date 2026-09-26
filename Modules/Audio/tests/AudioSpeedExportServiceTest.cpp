@@ -14,7 +14,9 @@
 #include <ice/manage/AudioBuffer.hpp>
 #include <ice/manage/AudioPool.hpp>
 #include <ice/manage/AudioTrack.hpp>
+#include <ice/manage/dec/MediaInfo.hpp>
 #include <ice/manage/dec/ffmpeg/FFmpegDecoderFactory.hpp>
+#include <ice/out/io/FFmpegFileReceiver.hpp>
 #include <ice/thread/ThreadPool.hpp>
 #include <memory>
 #include <optional>
@@ -33,6 +35,10 @@ namespace
 // - 遍历常用目标扩展名，验证 Receiver 容器选择和回读能力；
 // - 覆盖长 OGG、Unicode 路径与同路径覆盖后的 AudioPool 缓存刷新；
 // - minimumDurationSeconds 必须补足静音尾部而不是改变有效内容速度；
+// - 新版 ICE 的目标采样率和目标码率必须进入实际 AAC 编码器；
+// - 旧预编译包没有扩展 ABI 时必须明确拒绝非零高级编码参数；
+// - PCM 容器不能默默接受只对有损编码有效的码率请求；
+// - 高级参数测试检查真实文件头，避免只验证选项值已传入服务对象；
 // - 可选资源目录按源扩展名抽样导出，并对全部资源执行多窗口解码；
 // - 外部 MMM_AUDIO_PROBE_FILE 只增加诊断覆盖，不改变固定回归场景。
 //
@@ -251,7 +257,7 @@ bool writeFixtureWav(const std::filesystem::path& path, std::uint32_t frames,
         const double phase = 2.0 * 3.14159265358979323846 * 440.0 *
                              static_cast<double>(frame) /
                              static_cast<double>(sampleRate);
-        const auto sample =
+        const auto   sample =
             static_cast<std::int16_t>(std::sin(phase) * 12000.0);
         writeU16(file, static_cast<std::uint16_t>(sample));
         writeU16(file, static_cast<std::uint16_t>(sample));
@@ -521,9 +527,9 @@ DecodeProbeResult probeAudioDecode(const std::filesystem::path& path)
     ice::ThreadPool   threadPool(1);
     auto decoderFactory = std::make_shared<ice::FFmpegDecoderFactory>();
     auto track          = ice::AudioTrack::create(MMM::Config::pathToUtf8(path),
-                                         threadPool,
-                                         decoderFactory,
-                                         ice::CachingStrategy::CACHY);
+                                                  threadPool,
+                                                  decoderFactory,
+                                                  ice::CachingStrategy::CACHY);
     if ( !track ) {
         return result;
     }
@@ -888,6 +894,74 @@ int main(int argc, char* argv[])
                 label + " output");
         }
     }
+
+// 直接包含接收器头读取能力宏，测试分支必须与本次实际编译的 ICE 一致。
+#if defined(ICE_FFMPEG_FILE_RECEIVER_ADVANCED_OPTIONS) && !defined(__APPLE__)
+    // 用户明确请求的采样时钟与有损码率必须进入真实编码器，而非仅存于 UI。
+    // m4a 在接收器中显式映射到 AAC，避免 ogg 默认 codec 随 FFmpeg 构建变化。
+    // 输入为 48 kHz，目标选 44.1 kHz，探测结果可以直接发现参数未生效。
+    // 倍速和独立变调与目标编码选项同次运行，检查它们可组合而非互斥。
+    MMM::Audio::AudioSpeedExportOptions advancedOptions;
+    advancedOptions.inputPath  = largeInputPath;
+    advancedOptions.outputPath = root / "output_advanced.m4a";
+    // 独立输出名避免后面的缓存覆盖测试读取到先前 AAC 文件。
+    advancedOptions.speed            = 1.25;
+    advancedOptions.pitchSemitones   = 3.0;
+    advancedOptions.outputSampleRate = 44100;
+    advancedOptions.bitrate          = 128000;
+    // 非零码率必须让 AAC 编码器接收，不能被无损 codec 默认策略吞掉。
+    const auto advancedResult =
+        MMM::Audio::AudioSpeedExportService::exportWav(advancedOptions);
+    // 失败日志保留真实 codec 原因，便于区分采样率不支持与文件系统错误。
+    if ( !advancedResult.success ) {
+        XERROR("[audio-speed-export] advanced m4a error: {}",
+               advancedResult.errorMessage);
+    }
+    ok &= check(advancedResult.success, "advanced m4a export succeeds");
+    if ( advancedResult.success ) {
+        // 不只检查服务返回成功，而是重新探测实际写出的容器头。
+        ice::FFmpegDecoderFactory probeFactory;
+        ice::MediaInfo            outputMedia;
+        ok &= check(probeFactory.probe(
+                        MMM::Config::pathToUtf8(advancedOptions.outputPath),
+                        outputMedia),
+                    "advanced m4a output can be probed");
+        ok &= check(outputMedia.format.samplerate == 44100,
+                    "advanced m4a uses requested sample rate");
+        // 目标码率并非逐秒恒定值，不能用短文件平均码率等于请求值作断言。
+    }
+
+    // 无损 PCM 不应默默丢弃有损码率选项，参数冲突必须由接收端显式拒绝。
+    // 失败应发生在打开编码链阶段，不把错误请求当作默认 WAV 写出。
+    MMM::Audio::AudioSpeedExportOptions invalidBitrateOptions;
+    invalidBitrateOptions.inputPath  = inputPath;
+    invalidBitrateOptions.outputPath = root / "output_invalid_bitrate.wav";
+    // WAV 对应 PCM，不存在可调的有损目标码率。
+    invalidBitrateOptions.bitrate = 128000;
+    const auto invalidBitrateResult =
+        MMM::Audio::AudioSpeedExportService::exportWav(invalidBitrateOptions);
+    ok &= check(
+        !invalidBitrateResult.success &&
+            invalidBitrateResult.errorMessage.find(
+                "does not support adjustable bitrate") != std::string::npos,
+        "pcm explicitly rejects adjustable bitrate");
+#else
+    // 旧包缺少编码参数 ABI 时必须明确拒绝，不能按默认参数产出貌似成功的文件。
+    // 此分支只验证兼容行为；真实高级参数由 SOURCES_BUILD 的分支覆盖。
+    // 输入和输出路径均合法，失败原因只能来自缺少扩展参数能力。
+    MMM::Audio::AudioSpeedExportOptions unsupportedOptions;
+    unsupportedOptions.inputPath        = inputPath;
+    unsupportedOptions.outputPath       = root / "output_unsupported.m4a";
+    unsupportedOptions.outputSampleRate = 44100;
+    // 只设置一个扩展参数即可覆盖旧 ABI 的拒绝路径。
+    const auto unsupportedResult =
+        MMM::Audio::AudioSpeedExportService::exportWav(unsupportedOptions);
+    ok &= check(!unsupportedResult.success &&
+                    unsupportedResult.errorMessage.find(
+                        "updated ICE prebuilts") != std::string::npos,
+                "old prebuilt rejects advanced options explicitly");
+    // 保持零参数的既有容器测试不变，确认兼容分支只拒绝显式请求。
+#endif
 
     // 长 OGG 跨越多个 65536 帧处理块，覆盖连续源位置不会在块边界漂移。
     MMM::Audio::AudioSpeedExportOptions longOggOptions;

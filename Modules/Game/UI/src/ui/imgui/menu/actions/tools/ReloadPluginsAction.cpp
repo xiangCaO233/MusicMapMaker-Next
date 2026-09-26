@@ -6,6 +6,8 @@
 #include "config/skin/translation/TranslationFormat.h"
 #include "graphic/imguivk/VKContext.h"
 #include "graphic/theme/ImGuiThemeRegistry.h"
+#include "ui/UIManager.h"
+#include "ui/plugin/ToolPluginView.h"
 
 #include <memory>
 #include <string>
@@ -41,6 +43,16 @@ public:
         // 由图形层统一执行卸载、扫描与重建，菜单层只消费汇总结果。
         const Graphic::ThemePluginReloadResult result =
             graphicContext->get().reloadPlugins();
+        // 工具脚本与主题脚本共用显式重载入口，避免逐帧扫描插件目录。
+        // 两种加载器分别维护虚拟机和资源，不共享可变脚本对象。
+        if ( context.sourceManager ) {
+            if ( auto* tools = context.sourceManager->getView<ToolPluginView>(
+                     "ToolPluginView") ) {
+                tools->reload();
+                // 旧窗口状态不跨实例借用，重载后可从新清单重新打开。
+            }
+        }
+        // 主题汇总消息仍使用图形注册表结果；工具错误可在插件列表查看。
         // 汇总结果按值保留到消息构造结束，避免引用重载过程中的临时状态。
         std::string message;
         if ( result.success() ) {

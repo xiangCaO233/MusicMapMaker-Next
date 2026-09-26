@@ -34,6 +34,24 @@ configure_file(
   src/ui/walkthrough/BuiltinWalkthrough.h.in
   "${CMAKE_CURRENT_BINARY_DIR}/generated/BuiltinWalkthrough.h" @ONLY)
 
+# 内置工具插件随程序嵌入，安装包缺少外部 assets 时仍能打开两个标准工具。 用户 plugins/tools 目录只承载自定义插件，重载不会覆盖其脚本。
+# 原始 Lua 文件被列为配置依赖；编辑脚本会自动重新生成内置头文件。 嵌入内容只在 CMake 配置阶段读取，不在应用启动时访问源码目录。
+foreach(_mmm_tool IN ITEMS audio beatmap)
+  # 每份脚本独立登记配置依赖，避免只更新一个工具时沿用过期嵌入文本。
+  set_property(
+    DIRECTORY
+    APPEND
+    PROPERTY CMAKE_CONFIGURE_DEPENDS
+             "${PROJECT_SOURCE_DIR}/assets/plugins/tools/${_mmm_tool}.lua")
+  # 脚本内容进入生成头的独立原始字符串，不依赖运行时 assets 路径。
+  file(READ "${PROJECT_SOURCE_DIR}/assets/plugins/tools/${_mmm_tool}.lua"
+       MMM_TOOL_${_mmm_tool})
+endforeach()
+configure_file(
+  src/ui/plugin/BuiltinToolPlugins.h.in
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/BuiltinToolPlugins.h" @ONLY)
+# 两个工具共享声明式宿主实现，外置工具只需在配置目录新增 Lua 文件。
+
 # cmake-format: off
 # UI 静态库源文件维护规则：
 # - 只登记本模块自维护实现，不使用递归 glob 自动收集；
@@ -52,6 +70,9 @@ add_library(
   src/ui/walkthrough/WalkthroughSpotlight.cpp
   src/ui/walkthrough/WalkthroughPage.cpp
   src/ui/walkthrough/WelcomeView.cpp
+  # 声明式 Lua 工具插件只在加载与用户动作时执行脚本。
+  # 普通 UI 帧由 C++ 读取缓存控件，不调用脚本或文件系统。
+  src/ui/plugin/ToolPluginView.cpp
   # 工程拖放入口和欢迎页打开动作。
   src/ui/project/ProjectDropRouter.cpp
   src/ui/imgui/menu/actions/help/OpenWelcomeAction.cpp
@@ -230,7 +251,8 @@ target_link_libraries(
          3rd_concurrentqueue
          3rd_entt
          Network)
-target_link_libraries(UI PRIVATE NetworkCollaboration)
+target_link_libraries(UI PRIVATE NetworkCollaboration luajit::luajit 3rd_sol2
+                                 3rd_nlohmann_json)
 
 # Windows 系统文件管理器调用 ShellExecuteW，需要显式链接 Shell32。
 if(WIN32)
@@ -296,6 +318,11 @@ mmm_add_test_executable(UI MarkdownImageCacheTest
 target_link_libraries(MarkdownImageCacheTest PRIVATE UI)
 mmm_register_test_case(NAME MarkdownImageCacheTest COMMAND
                        MarkdownImageCacheTest)
+
+# 内置与用户工具脚本共用加载路径，使用 CTest 隔离配置避免污染个人插件目录。 测试覆盖入口清单、沙箱和错误项展示，不要求创建 Vulkan 图形设备。
+mmm_add_test_executable(UI ToolPluginViewTest tests/ToolPluginViewTest.cpp)
+target_link_libraries(ToolPluginViewTest PRIVATE UI)
+mmm_register_test_case(NAME ToolPluginViewTest COMMAND ToolPluginViewTest)
 
 # 分拍线快捷键测试覆盖最近两个显示模式间的双向切换。 该状态依赖 Config 枚举，测试不需要完整 Game 目标。
 mmm_add_test_executable(UI BeatLineDisplayModeHistoryTest

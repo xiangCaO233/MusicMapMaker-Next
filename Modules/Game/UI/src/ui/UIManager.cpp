@@ -38,6 +38,7 @@
 #include "ui/imgui/markdown/MarkdownImageCache.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/plugin/ToolPluginView.h"
 #include "ui/project/ProjectDropRouter.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -425,6 +426,8 @@ UIManager::UIManager()
                         .m_showWelcomeOnStartup;
     // Clay 需要 ImGui 字体测量回调才能计算文本布局。
     CLayWrapperCore::instance().setupClayTextMeasurement();
+    // 工具插件视图随应用生存；脚本扫描只在构造和显式重载时发生。
+    registerView("ToolPluginView", std::make_unique<ToolPluginView>());
 
     // 保存所有订阅 ID，析构时逐项精确注销。
     auto& eventBus = Event::EventBus::instance();

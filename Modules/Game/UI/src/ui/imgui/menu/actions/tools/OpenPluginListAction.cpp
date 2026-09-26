@@ -8,6 +8,8 @@
 #include "config/skin/translation/TranslationFormat.h"
 #include "graphic/imguivk/VKContext.h"
 #include "graphic/theme/ImGuiThemeRegistry.h"
+#include "ui/UIManager.h"
+#include "ui/plugin/ToolPluginView.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 
@@ -86,6 +88,33 @@ public:
         // 获取轻量上下文引用包装，不复制底层图形资源所有权。
         auto graphicContext = Graphic::VKContext::get();
         if ( opened ) {
+            // 工具插件清单来自启动或显式重载的内存快照；打开按钮只修改窗口位。
+            if ( context.sourceManager ) {
+                if ( auto* toolView =
+                         context.sourceManager->getView<ToolPluginView>(
+                             "ToolPluginView") ) {
+                    ImGui::TextUnformatted("工具插件");
+                    // 工具状态来自内存快照；此窗口每帧不会重新扫描用户目录。
+                    for ( const auto& tool : toolView->plugins() ) {
+                        ImGui::PushID(tool.id.c_str());
+                        if ( tool.available ) {
+                            if ( FeedbackButton(tool.name.c_str()) ) {
+                                (void)toolView->openPlugin(tool.id);
+                            }
+                        } else {
+                            // 无效脚本保留来源与诊断，避免提供无效果的打开按钮。
+                            // 点击重载后会重新校验，修复脚本无需重启应用。
+                            ImGui::TextUnformatted(tool.name.c_str());
+                        }
+                        if ( !tool.error.empty() ) {
+                            ImGui::SameLine();
+                            ImGui::TextWrapped("%s", tool.error.c_str());
+                        }
+                        ImGui::PopID();
+                    }
+                    ImGui::Separator();
+                }
+            }
             if ( !graphicContext ) {
                 // 图形上下文未就绪时只显示不可用提示，窗口仍可安全关闭。
                 ImGui::TextDisabled(
