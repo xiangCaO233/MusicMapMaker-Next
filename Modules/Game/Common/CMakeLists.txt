@@ -49,3 +49,25 @@ mmm_add_test_executable(Common BeatmapAudioTimelineCompatibilityTest
 target_link_libraries(BeatmapAudioTimelineCompatibilityTest PRIVATE Common MMM)
 mmm_register_test_case(NAME BeatmapAudioTimelineCompatibilityTest COMMAND
                        BeatmapAudioTimelineCompatibilityTest)
+
+# Linux 旧预编译引擎尚未包含流级标签修复，只为源码构建和已同步的 MSVC 静态包登记此回归，避免默认构建把依赖版本差异误报为本层探测失败。
+if(SOURCES_BUILD
+   OR (WIN32
+       AND MSVC
+       AND PROJECT_LINKAGE STREQUAL "static"))
+  # Ogg 标签可能在音频流而非容器字典；测试走向导使用的 Common DTO。
+  mmm_add_test_executable(Common AudioInfoUtilsTest
+                          tests/AudioInfoUtilsTest.cpp)
+  # Common 负责传播 ICE 链接关系，测试不建立私有的探测实现。
+  target_link_libraries(AudioInfoUtilsTest PRIVATE Common)
+  # 两份夹具都是只读输入，测试不往源资源目录写生成文件。
+  mmm_register_test_case(
+    NAME
+    AudioInfoUtilsTest
+    COMMAND
+    AudioInfoUtilsTest
+    # 首个资源的音频流提供标题、艺术家和专辑标签。
+    "${PROJECT_SOURCE_DIR}/tests/data/ma/Don't Fight The Music/Don't Fight The Music.ogg"
+    # 第二个资源的缺失标签必须保持空或退回文件名。
+    "${PROJECT_SOURCE_DIR}/tests/data/ma/雲散霧消/audio.ogg")
+endif()

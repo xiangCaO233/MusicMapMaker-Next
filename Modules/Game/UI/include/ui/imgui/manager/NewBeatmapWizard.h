@@ -241,9 +241,6 @@ private:
     /// @brief 难度名输入缓冲区。
     char m_versionBuf[256] = { 0 };
 
-    /// @brief 用户已明确选择项目元数据时，后续音频探测不得覆盖对应文本。
-    bool m_projectMetadataImported{ false };
-
     /// @brief 谱面默认 BPM。
     double m_bpm = 120.0;
     /// @brief BPM 测量工具回填的新建谱面初始 Timing 列表。

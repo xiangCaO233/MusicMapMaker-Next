@@ -1394,9 +1394,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         copyToBuffer(
             m_artistUnicodeBuf, sizeof(m_artistUnicodeBuf), metadata.m_artist);
         copyToBuffer(m_authorBuf, sizeof(m_authorBuf), metadata.m_mapper);
-        // 用户主动选择项目值后，随后选择音频只能补时长和内部名。
+        // 本次按钮操作覆盖展示字段；随后重新选音频则由新音频标签更新这些字段。
         // 难度、BPM、资源和轨道数属于单张谱面，不从项目展示元数据推导。
-        m_projectMetadataImported = true;
     }
     DrawInput(
         TR("ui.settings.beatmap.name").data(), m_nameBuf, sizeof(m_nameBuf));
@@ -1920,9 +1919,6 @@ void NewBeatmapWizard::reset()
                  sizeof(m_authorBuf),
                  defaultCreator.empty() ? "Unknown" : defaultCreator);
     copyToBuffer(m_versionBuf, sizeof(m_versionBuf), "Easy");
-    // 每次打开重新决定文本来源，不能沿用上一次项目导入的优先级。
-    m_projectMetadataImported = false;
-
     // 资源选择和探测时长全部从未绑定状态开始。
     m_selectedAudioPath.clear();
     m_selectedAudioTrackId.clear();
@@ -1980,16 +1976,13 @@ void NewBeatmapWizard::onAudioSelected(const std::filesystem::path& path)
         // 向导内部以秒保存，提交时再转为毫秒。
         m_audioDuration = info.duration;
 
-        // 项目导入是用户显式选择，音频标签只填入尚未优先指定的文本。
-        // 自动探测仍刷新时长；项目没有保存这项音频专属信息。
-        if ( !m_projectMetadataImported ) {
-            copyToBuffer(m_titleBuf, sizeof(m_titleBuf), info.title);
-            copyToBuffer(
-                m_titleUnicodeBuf, sizeof(m_titleUnicodeBuf), info.title);
-            copyToBuffer(m_artistBuf, sizeof(m_artistBuf), info.artist);
-            copyToBuffer(
-                m_artistUnicodeBuf, sizeof(m_artistUnicodeBuf), info.artist);
-        }
+        // 选择音频是新的用户操作，标签应替换旧项目值或前一音频的文本。
+        // 普通与 Unicode 栏先用同一标签，仍允许随后分别手动调整。
+        copyToBuffer(m_titleBuf, sizeof(m_titleBuf), info.title);
+        copyToBuffer(m_titleUnicodeBuf, sizeof(m_titleUnicodeBuf), info.title);
+        copyToBuffer(m_artistBuf, sizeof(m_artistBuf), info.artist);
+        copyToBuffer(
+            m_artistUnicodeBuf, sizeof(m_artistUnicodeBuf), info.artist);
         // 项目没有专辑字段，因此音频标签始终作为专辑初始值。
         // 重新选择音频时同步刷新专辑，避免显示前一个资源的标签。
         copyToBuffer(m_albumBuf, sizeof(m_albumBuf), info.album);
