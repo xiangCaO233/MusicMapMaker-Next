@@ -400,8 +400,10 @@ struct CmdChangeTool {
 struct CmdSetBrushNoteColor {
     /// @brief 要修改的音符颜色槽位。
     NoteColorSlot slot;
-    /// @brief 自定义颜色；为空时清除该槽位并回退到皮肤默认色。
+    /// @brief 自定义颜色；为空时新建物件继续跟随活动方案。
     std::optional<glm::vec4> color;
+    /// @brief 是否把此槽作为新建物件的显式颜色；恢复调色盘快照时为 false。
+    bool applyToNewNotes{ true };
 };
 
 /// @brief 将自定义音符颜色应用到当前选中物件。
@@ -412,10 +414,12 @@ struct CmdApplyNoteColorToSelection {
     std::optional<glm::vec4> color;
 };
 
-/// @brief 设置画笔当前使用的完整音符调色盘。
+/// @brief 设置颜色画笔使用的完整方案，不把方案值视为物件显式染色。
 struct CmdSetBrushNotePalette {
-    /// @brief 完整自定义颜色表，顺序与 NoteColorSlot 一致。
+    /// @brief 完整方案颜色表，顺序与 NoteColorSlot 一致。
     std::array<glm::vec4, NOTE_COLOR_SLOT_COUNT> colors;
+    /// @brief 选择新方案时清除显式绘制色；仅刷新颜色画笔时保留。
+    bool resetDrawColors{ true };
 };
 
 /// @brief 设置画笔新建物件使用的项目音频资源。

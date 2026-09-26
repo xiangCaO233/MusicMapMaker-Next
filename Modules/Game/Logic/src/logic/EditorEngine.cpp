@@ -2711,6 +2711,8 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
         for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
             // 调色板命令是全量快照，逐槽覆盖后再标记缓存已经初始化。
             m_brushNoteColors[i] = palette->colors[i];
+            if ( palette->resetDrawColors )
+                m_brushNoteColorsExplicit[i] = false;
         }
         m_brushNoteColorsInitialized = true;
     } else if ( const auto* color = std::get_if<CmdSetBrushNoteColor>(&cmd) ) {
@@ -2718,7 +2720,9 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
         if ( colorIndex < m_brushNoteColors.size() ) {
             // 单槽命令只更新命中位置，越界枚举不污染缓存也不阻止会话自行校验。
             m_brushNoteColors[colorIndex] = color->color;
-            m_brushNoteColorsInitialized  = true;
+            m_brushNoteColorsExplicit[colorIndex] =
+                color->applyToNewNotes && color->color.has_value();
+            m_brushNoteColorsInitialized = true;
         }
     }
 
@@ -2745,8 +2749,10 @@ void EditorEngine::restoreBrushNoteColorsUnsafe(BeatmapSession& session) const
 
     for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
         // 使用单槽命令复用会话既有校验和派生状态更新，不直接访问其上下文。
-        session.pushCommand(CmdSetBrushNoteColor{ static_cast<NoteColorSlot>(i),
-                                                  m_brushNoteColors[i] });
+        session.pushCommand(
+            CmdSetBrushNoteColor{ static_cast<NoteColorSlot>(i),
+                                  m_brushNoteColors[i],
+                                  m_brushNoteColorsExplicit[i] });
     }
 }
 

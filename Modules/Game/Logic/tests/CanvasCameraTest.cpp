@@ -465,6 +465,68 @@ bool testKeyModeBrushCreatesOnlyHold()
            note.m_duration > 0.0 && note.m_subNotes.empty();
 }
 
+/// @brief 普通绘制只保存明确指定的颜色，不把活动方案固化到 Note。
+/// @return 默认和显式颜色两条路径均产生正确缓存与元数据时返回 true。
+/// @note 使用真实画笔手势及交互命令，避免只检查空结构的初始值。
+/// @details 白色方案值模拟从白色皮肤绘制后切换到另一皮肤的场景。
+/// 两轮独立建图，防止前一轮的选择、动作栈或元数据污染后一轮。
+/// 一轮只选方案，另一轮在相同方案上单独设色，差异仅来自用户意图。
+/// 同时检查缓存和 metadata，因为当前画面正确不代表保存后仍能跟随皮肤。
+/// 本测试不更换全局皮肤；它检查决定跨皮肤行为的持久化边界。
+bool testDrawNoteDistinguishesPaletteFromExplicitColor()
+{
+    const std::array<glm::vec4, MMM::Logic::NOTE_COLOR_SLOT_COUNT> palette{
+        glm::vec4{ 1.0F }, glm::vec4{ 1.0F }, glm::vec4{ 1.0F },
+        glm::vec4{ 1.0F }, glm::vec4{ 1.0F }, glm::vec4{ 1.0F }
+    };
+    constexpr glm::vec4 explicitColor{ 0.21F, 0.43F, 0.65F, 1.0F };
+    // 方案色和显式色不同，便于辨认误将整个方案写入 Note 的路径。
+    for ( bool explicitDrawColor : { false, true } ) {
+        MMM::Logic::SessionContext context;
+        configureObjectEditingCanvas(context);
+        MMM::Logic::InteractionController interaction(context);
+        // 命令入口应清除新建物件的显式色，但保留颜色画笔的白色来源。
+        interaction.handleCommand(
+            MMM::Logic::CmdSetBrushNotePalette{ palette });
+        if ( explicitDrawColor ) {
+            // 单槽命令代表主动染色，值应跨 DrawTool 提交进入领域对象。
+            interaction.handleCommand(MMM::Logic::CmdSetBrushNoteColor{
+                MMM::Logic::NoteColorSlot::Tap, explicitColor });
+            // 激活颜色画笔只刷新方案来源，不清除已经明确选定的绘制色。
+            interaction.handleCommand(
+                MMM::Logic::CmdSetBrushNotePalette{ palette, false });
+        }
+        MMM::Logic::DrawTool tool;
+        // 真正提交一次点击，不能直接构造默认 Note 让空字段断言通过。
+        tool.handleStartBrush(
+            context,
+            MMM::Logic::CmdStartBrush{ .cameraId = "Basic2DCanvas",
+                                       .mouseX   = 150.0F,
+                                       .mouseY   = 300.0F });
+        tool.handleEndBrush(
+            context, MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+        const auto notes =
+            context.noteRegistry.view<MMM::Logic::NoteComponent>();
+        if ( notes.size() != 1U ) return false;
+        const auto& note = notes.get<MMM::Logic::NoteComponent>(*notes.begin());
+        // 运行时缓存和文件元数据须一致表示是否由用户显式染色。
+        const auto cached = MMM::Logic::getNoteColorOverride(
+            note, MMM::Logic::NoteColorSlot::Tap);
+        const auto stored = MMM::Logic::getNoteMetadataColor(
+            note.m_metadata, MMM::Logic::NoteColorSlot::Tap);
+        if ( explicitDrawColor ) {
+            // 主动染色需在两处留下非白值，重载后才可继续固定显示。
+            if ( !cached || !stored || !near(cached->r, explicitColor.r) ||
+                 !near(stored->g, explicitColor.g) )
+                return false;
+        } else if ( cached || stored ) {
+            // 即使调色盘恰好是白色，也不应保存与皮肤绑定的颜色字段。
+            return false;
+        }
+    }
+    return true;
+}
+
 /// @brief 验证滑键和长条教学的独立起笔、取消和提交均不删除已有音符。
 /// @details 起点悬浮已有 Note，拖动终点再放一个 Note，触发普通编辑的
 /// 续接和尾部合并条件。教学命令必须绕过这两类改写，只管理本次新物件。
@@ -8232,6 +8294,7 @@ int main()
     return testKeyModeInteractionRestriction() &&
                    testSelectAllRespectsPointerTrackArea() &&
                    testKeyModeBrushCreatesOnlyHold() &&
+                   testDrawNoteDistinguishesPaletteFromExplicitColor() &&
                    testWalkthroughStandalonePlacement() &&
                    testWalkthroughPlacementRollback() &&
                    testWalkthroughPolylinePlacementRollback() &&

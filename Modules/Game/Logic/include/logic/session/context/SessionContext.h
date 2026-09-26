@@ -274,8 +274,10 @@ struct SessionContext {
         float  segmentStartMouseY{ 0.0f };  ///< 当前子段开始时的鼠标 Y 坐标
         ::MMM::NoteType type{ ::MMM::NoteType::NOTE };
 
-        /// @brief 当前画笔应用到新建物件的自定义颜色。
+        /// @brief 颜色画笔使用的当前调色盘，不代表物件已显式染色。
         NoteColorOverrides customColors;
+        /// @brief 仅用户明确指定的绘制颜色会写进新物件元数据。
+        NoteColorOverrides drawCustomColors;
 
         /// @brief 当前项目音频工具选中的资源 ID；为空时新建玩家物件不绑定音效。
         std::string selectedAudioResourceId;

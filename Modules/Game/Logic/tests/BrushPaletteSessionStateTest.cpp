@@ -88,18 +88,40 @@ bool testPaletteRestoredAfterSessionClose()
     // 零时间步只消费状态，不依赖播放时间推进或等待固定帧数。
     // 读取目标会话落地后的画笔状态，而非仅检查编辑器暂存的命令或配置。
     const auto& restored = session->getContext().brushState.customColors;
-    const bool  matches  = colorMatches(restored.tap, colors[0]) &&
-                           colorMatches(restored.head, colors[1]) &&
-                           colorMatches(restored.hold, colors[2]) &&
-                           colorMatches(restored.end, colors[3]) &&
-                           colorMatches(restored.flickArrow, colors[4]) &&
-                           colorMatches(restored.node, colors[5]);
+    const bool matches = colorMatches(restored.tap, colors[0]) &&
+                         colorMatches(restored.head, colors[1]) &&
+                         colorMatches(restored.hold, colors[2]) &&
+                         colorMatches(restored.end, colors[3]) &&
+                         colorMatches(restored.flickArrow, colors[4]) &&
+                         colorMatches(restored.node, colors[5]) &&
+                         !MMM::Logic::hasAnyNoteColorOverride(
+                             session->getContext().brushState.drawCustomColors);
+    // 颜色画笔可恢复六槽，并不意味着普通绘制应把这六个值写入 Note。
+    // 显式标志必须由命令种类保存，无法从恰好相同的 RGBA 值反推。
+    // 单槽命令才表达用户明确选定的新建物件颜色，并应跨会话保留该意图。
+    constexpr glm::vec4 explicitTap{ 0.72F, 0.31F, 0.42F, 1.0F };
+    engine.pushCommand(MMM::Logic::CmdSetBrushNoteColor{
+        MMM::Logic::NoteColorSlot::Tap, explicitTap });
+    engine.closeSession(0, false);
+    engine.createSession(nullptr, "Explicit Palette Target", true);
+    auto explicitSession = engine.getActiveSession();
+    if ( !explicitSession ) return false;
+    explicitSession->update(0.0, engine.getEditorConfig(), true);
+    const auto& explicitBrush = explicitSession->getContext().brushState;
+    // 第三会话从引擎缓存恢复，不依赖源会话上下文仍存在。
+    // Head 必须保持未染色，防止恢复时将整套方案误当作对象覆写。
+    const bool explicitRestored =
+        colorMatches(explicitBrush.customColors.tap, explicitTap) &&
+        colorMatches(explicitBrush.drawCustomColors.tap, explicitTap) &&
+        !explicitBrush.drawCustomColors.head;
     // 在关闭前完成所有引用读取，后面只保留布尔结果用于报告。
     engine.closeSession(0, false);
-    if ( !matches ) {
-        XERROR("New session did not restore the editor brush palette");
+    // 单例跨用例存活，恢复为方案态，后续场景不继承本例显式画笔颜色。
+    engine.pushCommand(MMM::Logic::CmdSetBrushNotePalette{ colors });
+    if ( !matches || !explicitRestored ) {
+        XERROR("Brush palette or explicit draw color was not restored");
     }
-    return matches;
+    return matches && explicitRestored;
 }
 
 /// @brief 验证新会话恢复编辑器级项目音频画笔选择。

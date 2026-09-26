@@ -288,8 +288,9 @@ private:
     /// @brief 项目切换或默认方案变化后应用项目调色方案偏好。
     void applyProjectPalettePreference();
 
-    /// @brief 将当前调色盘颜色发送为画笔自定义颜色。
-    void pushPaletteToBrush();
+    /// @brief 同步颜色画笔方案；选择新方案时清除普通绘制的显式色。
+    /// @param resetDrawColors 是否清除用户手动选择的新建物件颜色。
+    void pushPaletteToBrush(bool resetDrawColors = true);
 
     /// @brief 将当前调色盘颜色应用到选中物件。
     void pushPaletteToSelection();

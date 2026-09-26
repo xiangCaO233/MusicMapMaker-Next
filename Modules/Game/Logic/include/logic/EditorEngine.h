@@ -679,6 +679,8 @@ private:
     /// @brief 编辑器级画笔配色，各会话创建或重新激活时从此状态恢复。
     std::array<std::optional<glm::vec4>, NOTE_COLOR_SLOT_COUNT>
         m_brushNoteColors{};
+    /// @brief 各槽是否由单槽显式染色命令设置，不能从 RGBA 数值反推。
+    std::array<bool, NOTE_COLOR_SLOT_COUNT> m_brushNoteColorsExplicit{};
 
     /// @brief 编辑器是否已经收到过画笔配色命令。
     bool m_brushNoteColorsInitialized{ false };

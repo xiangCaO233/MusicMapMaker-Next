@@ -1109,7 +1109,8 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
     note.m_type          = ctx.brushState.type;
     note.m_isDraft       = note.m_trackIndex < 0;
     note.m_sampleBinding = ctx.brushState.activeSampleBinding;
-    applyNoteColorOverrides(note, ctx.brushState.customColors);
+    // 活动方案由渲染器解析；只有用户明确指定的画笔颜色才写入物件。
+    applyNoteColorOverrides(note, ctx.brushState.drawCustomColors);
 
     // 释放时再次检查配置门禁，覆盖手势中途切换编辑模式的情况。
     // 拒绝不会生成新音符或执行本函数后续合并。

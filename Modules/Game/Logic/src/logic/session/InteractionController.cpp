@@ -2488,13 +2488,18 @@ void InteractionController::handleCommand(const CmdChangeTool& cmd)
 void InteractionController::handleCommand(const CmdSetBrushNoteColor& cmd)
 {
     setNoteColorOverride(m_ctx.brushState.customColors, cmd.slot, cmd.color);
+    setNoteColorOverride(m_ctx.brushState.drawCustomColors,
+                         cmd.slot,
+                         cmd.applyToNewNotes ? cmd.color : std::nullopt);
 }
 
-/// @brief 一次替换画笔各部件的颜色覆盖。
-/// @param cmd 按颜色槽顺序排列的覆盖数组。
+/// @brief 一次替换颜色画笔的方案值，并按命令决定是否重置显式绘制色。
+/// @param cmd 按颜色槽顺序排列的方案值及重置策略。
 /// @note 固定槽数更新，不遍历谱面物件。
 void InteractionController::handleCommand(const CmdSetBrushNotePalette& cmd)
 {
+    // 方案只提供默认色与颜色画笔来源，普通 Draw 不应把它固化为物件覆写。
+    if ( cmd.resetDrawColors ) m_ctx.brushState.drawCustomColors = {};
     for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
         auto slot = static_cast<NoteColorSlot>(i);
         setNoteColorOverride(

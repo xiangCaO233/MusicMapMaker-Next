@@ -3009,16 +3009,17 @@ void ToolbarView::applyProjectPalettePreference()
     }
 }
 
-/// @brief 将当前笔记调色盘通过逻辑命令同步到画笔。
+/// @brief 将当前笔记方案同步到颜色画笔，可选择重置显式绘制色。
+/// @param resetDrawColors 切换方案时为 true，重新激活颜色画笔时为 false。
 ///
 /// 定长颜色数组按值进入命令，后续本地编辑不会改变已排队快照。
-/// 命令只更新未来绘制使用的颜色，不遍历现有音符，也不改变当前选择。
+/// 方案值供颜色画笔显式涂色，普通 Draw 不再把方案色写进新物件。
 /// 调色盘拖动可每帧调用此入口，因此实现必须保持无阻塞并避免磁盘访问。
 /// 生命周期由命令值语义保证，ToolbarView 销毁后队列仍可安全消费。
-void ToolbarView::pushPaletteToBrush()
+void ToolbarView::pushPaletteToBrush(bool resetDrawColors)
 {
     Logic::EditorEngine::instance().pushCommand(
-        Logic::CmdSetBrushNotePalette{ m_paletteColors });
+        Logic::CmdSetBrushNotePalette{ m_paletteColors, resetDrawColors });
 }
 
 /// @brief 将当前笔记调色盘应用到画布已有选择。
@@ -4260,7 +4261,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                 activeColor = parsedColor;
                 if ( editingNote ) {
                     // 笔记颜色拖动期间只更新画笔，不反复修改已有选择。
-                    pushPaletteToBrush();
+                    pushColorCommands(m_activeColorSlot, activeColor, false);
                 } else {
                     // 分拍线颜色属于视觉配置，需要启用覆盖并立即提交。
                     m_overrideBeatLinePalette = true;
@@ -4306,7 +4307,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                  "##PaletteColorPicker", &activeColor.r, pickerFlags) ) {
             // 连续选择器变化即时更新画笔或分拍线渲染预览。
             if ( editingNote ) {
-                pushPaletteToBrush();
+                pushColorCommands(m_activeColorSlot, activeColor, false);
             } else {
                 m_overrideBeatLinePalette = true;
                 pushBeatLinePaletteToRenderer();
@@ -4343,7 +4344,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                     // 点击默认色同时切换槽位、恢复颜色并应用到画笔与选择。
                     m_activeColorSlot  = slot;
                     m_paletteColors[i] = defaultColor;
-                    pushPaletteToBrush();
+                    pushColorCommands(slot, defaultColor, false);
                     pushPaletteToSelection();
                 }
                 if ( ImGui::IsItemHovered() ) {
@@ -4605,7 +4606,7 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
             m_currentTool = tool;
             if ( tool == Logic::EditTool::ColorBrush ) {
                 // 颜色画笔激活前保证逻辑层拥有最新完整调色盘。
-                pushPaletteToBrush();
+                pushPaletteToBrush(false);
             }
             // 使用菜单公共分发入口保持快捷键和工具栏行为一致。
             MenuUtil::dispatchCommand(Logic::CmdChangeTool{ tool });
