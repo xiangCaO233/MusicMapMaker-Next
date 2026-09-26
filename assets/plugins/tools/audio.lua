@@ -2,10 +2,56 @@
 -- 所有磁盘操作只在 on_action 中由用户明确触发。
 -- 闭包状态只属于当前插件虚拟机，重载后重新初始化。
 -- 路径始终由宿主文件选择器返回 UTF-8 字符串，脚本不自行打开文件。
+-- 列表只展示宿主接收器已识别的常见后缀；实际可用性仍由 FFmpeg 构建决定。
+-- .m4a 和 .aac 使用不同封装，不能只按编解码器名称合并成同一项。
+-- .opus 与 .ogg 也需要保留独立后缀，接收器会据此选择不同音频编码。
+-- lossy 仅表示是否展示目标码率；它不承诺具体编码器提供恒定码率。
+-- 保存建议名和用户最终选择的路径必须使用同一张映射表。
+local output_formats = {
+    { label = "FLAC (.flac)", extension = ".flac", lossy = false },
+    { label = "WAV (.wav)", extension = ".wav", lossy = false },
+    { label = "MP3 (.mp3)", extension = ".mp3", lossy = true },
+    { label = "Ogg (.ogg)", extension = ".ogg", lossy = true },
+    { label = "AAC (.m4a)", extension = ".m4a", lossy = true },
+    { label = "Opus (.opus)", extension = ".opus", lossy = true },
+    { label = "AAC (.aac)", extension = ".aac", lossy = true },
+}
+local format_labels = {}
+-- combo 协议返回可见文本，因此选项顺序和值都从格式表一次构造。
+-- 不在每次 build 里重建该数组，避免插件控件缓存出现不同选择顺序。
+for _, format in ipairs(output_formats) do
+    format_labels[#format_labels + 1] = format.label
+end
+
+-- 显示文案只作选择值；扩展名是后端选择容器和编码器的依据。
+-- 未知选择回退到初始无损格式，不能把任意文本拼进文件后缀。
+-- 返回的格式表项在插件虚拟机生命周期内保持稳定。
+local function selected_format(label)
+    for _, format in ipairs(output_formats) do
+        if format.label == label then return format end
+    end
+    return output_formats[1]
+end
+
+-- 文件选择器可能返回 Windows 或 POSIX 路径；只识别最后文件名中的后缀。
+-- 大小写比较只作用于 ASCII 后缀，不改动用户选择的原始路径文本。
+-- 未识别后缀保留为 nil，由调用方拒绝，而非猜测编码器。
+local function format_from_path(path)
+    local extension = path:match("%.[^%.\\/]+$")
+    if not extension then return nil end
+    extension = extension:lower()
+    for _, format in ipairs(output_formats) do
+        if format.extension == extension then return format end
+    end
+    return nil
+end
+
 local state = {
     -- 输入和输出用途分别记录最近目录，重复选择互不覆盖。
     input = "",
     output = "",
+    -- 格式与目标后缀同步；改格式后清空旧路径以重新确认覆盖目标。
+    format = output_formats[1].label,
     -- 文本输入便于原样保留用户编辑；提交时才转换成数值并验证。
     speed = "1.0",
     pitch = "0.0",
@@ -19,7 +65,7 @@ local state = {
 }
 
 -- 输入扩展名只用于解码器选择，输出扩展名决定容器及编码器。
--- 选择无损或 PCM 时，显式目标码率会被宿主拒绝并显示原因。
+-- 无损或 PCM 不接受目标码率，脚本导出时传零；切回有损格式保留原输入。
 -- 源文件中的标签和封面目前只作展示，导出音频不会自动复制这些数据。
 -- 最近目录由宿主按插件 ID 和用途写入配置目录，不保存在此闭包中。
 -- 状态文字在任务完成时由宿主触发重建，不需要 Lua 定时器轮询。
@@ -133,7 +179,13 @@ return {
             end
         end
         widgets[#widgets + 1] = { type = "separator", id = "export_section", label = "输出" }
-        -- 不复制输入文件后缀作为建议名称，以免把输出格式误设为输入格式。
+        -- 先选格式，再生成对应的保存建议名；手动改后缀时反向同步此选择。
+        -- 下拉项显示实际后缀，用户无需靠默认文件名推测可导出格式。
+        -- 宿主仍会对编码器是否存在进行最终检查，界面不假定所有平台一致。
+        widgets[#widgets + 1] = {
+            type = "combo", id = "output_format", label = "输出格式",
+            value = state.format, choices = format_labels,
+        }
         widgets[#widgets + 1] = { type = "button", id = "select_output", label = "选择输出文件" }
         widgets[#widgets + 1] = { type = "text", id = "output_path", label = state.output }
         -- 宽面板中两列并排；窄面板自动纵排，标签始终位于输入框上方。
@@ -150,11 +202,16 @@ return {
         -- 零值交给编码器默认协商，显式设置要求目标格式确实支持。
         -- 编码参数与播放参数分组，窗口横向空间不足时仍按业务顺序展示。
         -- 这里不复制参数值；重建控件树时直接读取当前闭包状态。
+        local format = selected_format(state.format)
+        -- 无损格式用文字替代输入框，明确当前填写的有损码率不会被使用。
+        -- 保留闭包中的原码率，切回有损格式时不丢失用户刚输入的数值。
         widgets[#widgets + 1] = {
             type = "row", id = "encoding_options", min_column_width = 230,
             children = {
                 { type = "input", id = "sample_rate", label = "输出采样率 Hz（0 为自动）", value = state.sample_rate },
-                { type = "input", id = "bitrate", label = "目标码率 bit/s（0 为默认）", value = state.bitrate },
+                format.lossy
+                    and { type = "input", id = "bitrate", label = "目标码率 bit/s（0 为默认）", value = state.bitrate }
+                    or { type = "text", id = "lossless_bitrate", label = "无损格式不使用目标码率" },
             },
         }
         widgets[#widgets + 1] = { type = "button", id = "export", label = "开始导出" }
@@ -179,10 +236,39 @@ return {
                 -- 探测失败也保留路径，便于重新选择；状态文字必须报告真实结果。
                 state.message = state.info.error or "已读取音频信息。"
             end
+        elseif id == "output_format" then
+            -- 旧路径只经过旧后缀的保存确认；切换格式后必须重新选择目标。
+            -- 不能直接改写旧路径后缀，否则新路径若已存在会绕过保存确认。
+            local format = selected_format(value)
+            if state.format ~= format.label then
+                state.format = format.label
+                if state.output ~= "" then
+                    state.output = ""
+                    state.message = "输出格式已更改，请重新选择输出文件。"
+                end
+            end
         elseif id == "select_output" then
-            -- 输出用途拥有独立最近目录，也不从输入路径猜测目标位置。
-            local path = api.save_file("audio_output", "output.flac")
-            if path ~= "" then state.output = path end
+            -- 保存建议名和当前格式一致；手动输入其他已知后缀时尊重用户选择。
+            -- 选择器返回的路径才是后端真实目标，不能只依赖下拉框显示值。
+            local format = selected_format(state.format)
+            local path = api.save_file("audio_output", "output" .. format.extension)
+            if path ~= "" then
+                local chosen = format_from_path(path)
+                if chosen then
+                    -- 用户手动改后缀时，码率控件也要随真正的目标编码切换。
+                    state.output = path
+                    state.format = chosen.label
+                elseif path:match("%.[^%.\\/]+$") then
+                    -- 未知后缀不能留着旧目标路径供误导出。
+                    -- 后端虽然会报告错误，但这里先给出可操作的格式提示。
+                    state.output = ""
+                    state.message = "不支持该输出后缀；请选择列表中的音频格式。"
+                else
+                    -- 对话框尚未确认补后缀后的目标是否已有文件，必须重新选择。
+                    state.output = ""
+                    state.message = "请选择带 " .. format.extension .. " 后缀的输出文件。"
+                end
+            end
         elseif id == "toggle_details" then
             state.show_details = not state.show_details
         elseif id == "speed" then
@@ -200,12 +286,22 @@ return {
         elseif id == "export" then
             -- Lua number 可能是小数；采样时钟和目标码率必须是整数。
             local speed, pitch = tonumber(state.speed), tonumber(state.pitch)
-            local sample_rate, bitrate = tonumber(state.sample_rate), tonumber(state.bitrate)
+            local format = selected_format(state.format)
+            local sample_rate = tonumber(state.sample_rate)
+            local bitrate = 0
+            -- 无损码率字段不可见，即使旧输入不是数字也不应阻止无损导出。
+            -- 有损格式必须沿用真实用户值，不能把解析失败误当成默认零值。
+            if format.lossy then bitrate = tonumber(state.bitrate) end
             if not speed or not pitch or not sample_rate or not bitrate or
                 sample_rate < 0 or bitrate < 0 or
                 sample_rate % 1 ~= 0 or bitrate % 1 ~= 0 then
                 -- 允许 0 表示后端默认值；负数和小数没有有效编码器语义。
                 state.message = "倍速、变调、采样率和码率必须是有效数字；后两项必须为非负整数。"
+                return
+            end
+            if state.output == "" or format_from_path(state.output) ~= format then
+                -- 防御外部脚本或保存对话框返回了与选择不一致的路径。
+                state.message = "请选择与输出格式一致的目标文件。"
                 return
             end
             -- 宿主再次验证数值范围、路径和编码器能力，脚本校验只负责输入体验。
