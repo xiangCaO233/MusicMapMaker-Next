@@ -1,10 +1,12 @@
 #pragma once
 
+#include "canvas/AnnotationExport.h"
 #include "canvas/AnnotationTableData.h"
 #include "ui/IAuxiliaryWindowView.h"
 #include "ui/IUIView.h"
 
 #include <cstddef>
+#include <filesystem>
 #include <optional>
 #include <string>
 
@@ -49,6 +51,20 @@ private:
     /// @brief 关闭窗口并清理所有瞬时状态。
     void closeWindow();
 
+    /// @brief 打开当前格式对应的保存对话框。
+    /// @warning 只在点击导出时调用，原生对话框可能阻塞 UI。
+    void openExportFilePicker();
+
+    /// @brief 消费内置文件选择器的确认或取消操作。
+    /// @param dpiScale 当前窗口内容缩放。
+    /// @warning UI 热路径：每帧仅检查对话框状态，实际写文件只在确认时进行。
+    void renderExportFileDialog(float dpiScale);
+
+    /// @brief 将当前批注快照导出到选定路径。
+    /// @param path 文件选择器返回的路径。
+    /// @warning 仅用户确认导出时执行全量格式化和磁盘写入。
+    void exportToPath(const std::filesystem::path& path);
+
     /// @brief 批注表自己的可见状态，不与 Timeline 共享。
     bool m_isWindowOpen{ false };
 
@@ -72,6 +88,21 @@ private:
 
     /// @brief 当前详情区选中的批注行。
     std::optional<std::size_t> m_selectedRow;
+
+    /// @brief 导出文件格式选择，按界面顺序存储。
+    int m_exportFormat{ 0 };
+
+    /// @brief 位置格式选择，零为时间戳，一为拍号。
+    int m_exportPosition{ 0 };
+
+    /// @brief 文件选择器打开时锁定的格式，避免弹窗期间修改选项造成扩展名错配。
+    AnnotationExportFormat m_dialogExportFormat{ AnnotationExportFormat::Txt };
+
+    /// @brief 最近一次导出结果的翻译键；空值不显示反馈。
+    std::string m_exportStatusKey;
+
+    /// @brief 最近一次导出是否成功，用于反馈文字颜色。
+    bool m_exportSucceeded{ false };
 };
 
 }  // namespace MMM::Canvas

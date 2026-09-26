@@ -25,6 +25,7 @@
 add_library(
   Canvas STATIC
   src/AnnotationTableData.cpp
+  src/AnnotationExport.cpp
   src/AnnotationTableWindow.cpp
   src/AuxiliaryWindowUi.cpp
   src/BackgroundVideoPlayer.cpp
@@ -52,6 +53,7 @@ target_link_libraries(
          NetworkCollaboration
          3rd_glm
          3rd_entt)
+target_link_libraries(Canvas PRIVATE 3rd_miniz)
 # 仅公开本模块 include 根目录，调用方统一使用 canvas/... 路径包含头文件。
 target_include_directories(Canvas PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
@@ -146,6 +148,25 @@ target_include_directories(AnnotationTableBeatPositionTest
 target_link_libraries(AnnotationTableBeatPositionTest PRIVATE UI)
 mmm_register_test_case(NAME AnnotationTableBeatPositionTest COMMAND
                        AnnotationTableBeatPositionTest)
+
+# 批注导出测试直接编译纯文件服务，验证三种格式和时间、拍号定位。 测试文件仅落在构建树 test_output，不读取用户配置或活动谱面。 测试目标显式链接
+# miniz，避免借用 Canvas 传递依赖掩盖直接使用。 该测试不加载批注表窗口，因此不会创建 Vulkan、ImGui 或谱面会话。
+# 生产与测试分别编译同一导出源，测试可独立验证文件服务逻辑。 输出目录通过编译定义固定在构建树，运行时不接受用户目录。 CTest 用例与现有 Canvas
+# 套件共进程入口、独立进程执行。
+#
+# 测试同时读取 ZIP 中的实际 XML 成员；仅检查输出文件是否存在，无法发现 Office 部件缺失或正文转义错误。 生产端与测试端都使用统一的
+# UTF-8 内容模型，避免文件格式分支各自拼接目标描述。
+mmm_add_test_executable(Canvas AnnotationExportTest
+                        tests/AnnotationExportTest.cpp src/AnnotationExport.cpp)
+target_include_directories(AnnotationExportTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(AnnotationExportTest PRIVATE UI 3rd_miniz)
+target_compile_definitions(
+  AnnotationExportTest
+  PRIVATE
+    MMM_ANNOTATION_EXPORT_TEST_OUTPUT="${CMAKE_BINARY_DIR}/test_output/annotation_export"
+)
+mmm_register_test_case(NAME AnnotationExportTest COMMAND AnnotationExportTest)
 
 # 物件拖拽边缘自动平移使用纯数值计算，覆盖速度和两侧轨道区域边界。 Logic 提供轨道投影，3rd_glm
 # 提供二维位移值类型；不需要真实输入设备或窗口尺寸查询。

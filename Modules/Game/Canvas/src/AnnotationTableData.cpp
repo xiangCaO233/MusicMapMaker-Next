@@ -2,6 +2,7 @@
 
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
+#include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
@@ -9,6 +10,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <mutex>
 #include <utility>
@@ -24,6 +27,17 @@ namespace MMM::Canvas
 ///
 /// @warning 该函数会短暂持有会话递归锁。调用方必须按低频刷新间隔调用，
 /// 不得把它放进每个表格行或每个画布物件的绘制循环。
+/// @details 渲染缓存是批注表与主画布共享的版本化读模型。
+/// 当批注目标跟随物件移动时，该缓存已经提供新的实际时间和轨道。
+/// 导出所需的类型与终轨在相同锁区读取，避免另一次导出时遍历 ECS。
+/// 复制完成后，批注表和导出器都只访问自持有的字符串和值字段。
+/// 目标解析失败时保留正文，目标类型由导出层显示为已丢失。
+/// 草稿区使用负轨道编号，导出层不会把它错误转成正轨道。
+/// BGM 采样轨来自统一轨道坐标，导出时换算为 BGM 区局部编号。
+/// 子折线物件带有父实体及子索引，不能直接读取父根的物件类型。
+/// 缓存修订号与 Timing 修订号分别检查，减少未变化时的拷贝。
+/// 所有会话引用都止于当前锁区，窗口绘制阶段不再解引用实体。
+/// 导出附加元数据只在行版本变化时构造，不增加每帧绘制成本。
 AnnotationTableDataRefreshResult AnnotationTableData::refresh()
 {
     // 活动会话指针及其上下文都受同一把锁保护。锁内完成版本检查和复制，
@@ -71,15 +85,81 @@ AnnotationTableDataRefreshResult AnnotationTableData::refresh()
         // 各自成为独立表格行，不能把正文或目标信息折叠到 marker 层级。
         for ( const auto& marker : context.annotationRenderCache ) {
             for ( const auto& item : marker.items ) {
-                refreshedRows.push_back({
+                AnnotationTableRow row{
                     .timestamp     = marker.timestamp,
                     .id            = item.id,
                     .targetKind    = item.targetKind,
                     .track         = item.track,
+                    .exportTrack   = item.track,
                     .targetMissing = item.targetMissing,
                     .author        = item.author,
                     .content       = item.content,
-                });
+                };
+                // 缓存保存父折线实体和子段索引；在持锁的版本刷新边界读取
+                // 目标类型与终轨，导出时不再访问可能变化的 Registry。
+                // 同一实体可能是普通物件或折线根，子段类型需按索引覆盖。
+                // 若索引无效则退回根类型，绝不越界访问子段数组。
+                if ( item.targetKind ==
+                         ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT &&
+                     !item.targetMissing && item.targetEntity != entt::null ) {
+                    const auto* note = context.noteRegistry
+                                           .try_get<const Logic::NoteComponent>(
+                                               item.targetEntity);
+                    if ( note ) {
+                        ::MMM::NoteType type   = note->m_type;
+                        std::int32_t    dtrack = note->m_dtrack;
+                        if ( item.targetSubIndex >= 0 &&
+                             static_cast<std::size_t>(item.targetSubIndex) <
+                                 note->m_subNotes.size() ) {
+                            // 批注附着的是子段本身，其轨道和 Flick 位移由
+                            // 渲染缓存的目标轨与子段定义共同决定。
+                            const auto& sub =
+                                note->m_subNotes[static_cast<std::size_t>(
+                                    item.targetSubIndex)];
+                            type                  = sub.type;
+                            dtrack                = sub.dtrack;
+                            row.isPolylineSubNote = true;
+                        }
+                        switch ( type ) {
+                        case ::MMM::NoteType::NOTE:
+                            row.objectType = AnnotationExportObjectType::Note;
+                            break;
+                        case ::MMM::NoteType::HOLD:
+                            row.objectType = AnnotationExportObjectType::Hold;
+                            break;
+                        case ::MMM::NoteType::FLICK:
+                            // dtrack 是相对起始轨的偏移，可以为负。
+                            row.objectType = AnnotationExportObjectType::Flick;
+                            row.exportEndTrack = row.exportTrack + dtrack;
+                            break;
+                        case ::MMM::NoteType::POLYLINE:
+                            row.objectType =
+                                AnnotationExportObjectType::Polyline;
+                            // 整条折线以最终节点的落轨描述路径跨度。
+                            // 最后节点仍可能是横向 Flick，终轨要包含其位移。
+                            // 折线内部弯折无法用两端轨道完全表示；正文仍保留
+                            // 原批注细节，目标描述只承担快速定位用途。
+                            if ( !note->m_subNotes.empty() ) {
+                                const auto& tail = note->m_subNotes.back();
+                                row.exportEndTrack =
+                                    tail.trackIndex +
+                                    (tail.type == ::MMM::NoteType::FLICK
+                                         ? tail.dtrack
+                                         : 0);
+                            }
+                            break;
+                        default: break;
+                        }
+                    }
+                } else if ( item.targetKind ==
+                                ::MMM::BeatmapAnnotationTargetKind::
+                                    AUDIO_SAMPLE &&
+                            item.track >= context.trackCount ) {
+                    // 自动采样使用统一绝对轨道编号，导出改用 BGM 区局部编号。
+                    // 负轨和主画布轨不进入此分支，避免跨区域编号混用。
+                    row.exportTrack = item.track - context.trackCount;
+                }
+                refreshedRows.push_back(std::move(row));
             }
         }
         // 交换保持刷新前后边界清晰，同时让旧字符串随临时容器统一释放。

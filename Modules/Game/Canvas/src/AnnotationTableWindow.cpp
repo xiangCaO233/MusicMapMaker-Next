@@ -1,20 +1,29 @@
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include "canvas/AnnotationTableWindow.h"
 
 #include "canvas/AuxiliaryWindowState.h"
 #include "canvas/AuxiliaryWindowUi.h"
 #include "config/AppConfig.h"
+#include "config/Utf8Path.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
+#include "log/colorful-log.h"
 #include "ui/imgui/markdown/MarkdownRenderer.h"
+#include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/TimeFormatUtils.h"
+#include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 
+#include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <fmt/format.h>
 #include <imgui_internal.h>
+#include <nfd.h>
+#include <string>
 
 namespace MMM::Canvas
 {
@@ -42,6 +51,61 @@ const char* annotationTargetLabelKey(
     case ::MMM::BeatmapAnnotationTargetKind::TIMESTAMP:
     default: return "ui.annotation.target.timestamp";
     }
+}
+
+/// @brief 将界面序号转换为导出格式，避免未知序号进入写文件逻辑。
+/// @param index 下拉框的零基序号。
+/// @return 对应的导出格式，越界时回退纯文本。
+/// @details 选择序号只属于窗口状态，不会写入谱面或导出文件。
+/// 文件后缀和实际编码均以转换后的枚举决定，防止两者脱节。
+AnnotationExportFormat exportFormatFromIndex(int index)
+{
+    switch ( index ) {
+    case 1: return AnnotationExportFormat::Docx;
+    case 2: return AnnotationExportFormat::Xlsx;
+    default: return AnnotationExportFormat::Txt;
+    }
+}
+
+/// @brief 获取文件格式的扩展名，供两个文件选择器共用。
+/// @param format 当前锁定的导出格式。
+/// @return 不带点的 ASCII 扩展名。
+/// @details 原生过滤器需要无点形式，内置过滤器由调用方补点。
+/// 统一此映射可防止扩展名与压缩包内容格式发生错配。
+const char* exportExtension(AnnotationExportFormat format)
+{
+    switch ( format ) {
+    case AnnotationExportFormat::Docx: return "docx";
+    case AnnotationExportFormat::Xlsx: return "xlsx";
+    default: return "txt";
+    }
+}
+
+/// @brief 在用户触发导出时解析当前语言的所有文件标签。
+/// @return 不依赖翻译系统临时缓冲区的独立字符串集合。
+/// @details 备注表允许运行中切换语言，标签必须在导出当下采样。
+/// 导出器本身不访问全局翻译系统，便于独立测试与后续复用。
+/// TXT 和 DOCX 使用作者标签，XLSX 同时使用四个列标题。
+/// 类型标签与轨道前缀按当前语言拼接，正文始终保留原文。
+AnnotationExportLabels makeExportLabels()
+{
+    return {
+        .track           = TR("ui.annotation.export.track").toString(),
+        .bgmTrack        = TR("ui.annotation.export.bgm_track").toString(),
+        .note            = TR("ui.annotation.export.note").toString(),
+        .hold            = TR("ui.annotation.export.hold").toString(),
+        .flick           = TR("ui.annotation.export.flick").toString(),
+        .polyline        = TR("ui.annotation.export.polyline").toString(),
+        .polylineSubNote = TR("ui.annotation.export.sub_note").toString(),
+        .sample          = TR("ui.annotation.export.sample").toString(),
+        .playerObject    = TR("ui.annotation.export.object").toString(),
+        .targetMissing   = TR("ui.annotation.export.missing").toString(),
+        .author          = TR("ui.annotation.export.author").toString(),
+        .positionHeader  = TR("ui.annotation.export.position").toString(),
+        .targetHeader    = TR("ui.annotation.export.target").toString(),
+        .authorHeader    = TR("ui.annotation.export.author").toString(),
+        .contentHeader   = TR("ui.annotation.table.content").toString(),
+    };
 }
 }  // namespace
 
@@ -150,11 +214,152 @@ void AnnotationTableWindow::closeWindow()
     resetData();
 }
 
+/// @brief 将快照写入选定文件，并按成功状态记录下次选择目录。
+/// @param selectedPath 文件选择器返回的路径。
+/// @warning 用户显式确认路径：生成全部内容和写磁盘均仅在此执行。
+/// @details 同一入口处理原生和内置文件选择器，避免两套输出路径分叉。
+/// 弹窗开启时锁定格式，确认时不能被背景窗口的选项变化影响。
+/// 已解析的表格数据不再借用活动会话；导出过程中不持会话锁。
+/// 失败详情写日志，界面只显示本地化结果，避免露出平台错误码。
+/// 导出完成后再保存最近目录，取消或失败不会改写用户偏好。
+void AnnotationTableWindow::exportToPath(
+    const std::filesystem::path& selectedPath)
+{
+    // 扩展名由打开弹窗时的格式决定；NFD 与内置对话框都可能返回无后缀路径。
+    auto path = selectedPath;
+    // 用户手输任意后缀时按所选格式归一，内容与文件名保持一致。
+    // 这一处理也覆盖部分原生选择器不自动添加扩展名的情况。
+    path.replace_extension(exportExtension(m_dialogExportFormat));
+    const auto labels  = makeExportLabels();
+    const auto records = buildAnnotationExportRecords(
+        // 这里消费同一刷新版本的行和 BPM 上下文。
+        // build 函数只读值类型，不重入会话锁。
+        m_data.rows(),
+        m_data.timeFormatContext(),
+        m_exportPosition == 1 ? AnnotationExportPosition::Beat
+                              : AnnotationExportPosition::Timestamp,
+        labels);
+    std::string error;
+    m_exportSucceeded = writeAnnotationExportFile(
+        records, labels, m_dialogExportFormat, path, error);
+    m_exportStatusKey = m_exportSucceeded ? "ui.annotation.export.success"
+                                          : "ui.annotation.export.failed";
+    if ( !m_exportSucceeded ) {
+        // 原始错误保留在日志，用户仍可重新选择路径再次尝试。
+        XERROR("Annotation export failed: {}", error);
+        return;
+    }
+    // 最近目录只在文件完整落盘后更新，失败不改变用户的文件选择偏好。
+    auto& app = Config::AppConfig::instance();
+    app.getEditorSettings().lastFilePickerPath =
+        Config::pathToUtf8(path.parent_path());
+    app.save();
+}
+
+/// @brief 根据用户文件选择器偏好打开备注导出保存对话框。
+/// @warning 点击导出后的低频路径；原生保存对话框会暂时阻塞当前线程。
+/// @details 默认目录来自最近一次成功使用的文件选择器路径。
+/// 建议名称固定为 annotations 加所选扩展名，不依赖谱面标题合法性。
+/// 取消保存不是失败；仅平台错误或异常空成功路径显示失败提示。
+/// NFD 返回的路径内存必须在同步写入结束后释放。
+/// 内置弹窗则跨帧存在，由 renderExportFileDialog 消费确认结果。
+/// 重复点击同一打开的弹窗不重复播放开启音效。
+/// 文件格式过滤只用于限制建议后缀，最终后缀在共享入口再次规范化。
+/// 对话框路径用 UTF-8 与 AppConfig 往返，避免 Windows 中文路径损坏。
+/// 最近目录只在成功导出后更新，因此取消不会改变后续默认目录。
+/// 原生对话框返回后不保留路径指针，防止跨帧悬空引用。
+/// 此入口不负责修改谱面批注，导出是纯读取操作。
+/// 成功提示在用户下一次操作之前持续显示，便于确认导出完成。
+void AnnotationTableWindow::openExportFilePicker()
+{
+    m_dialogExportFormat = exportFormatFromIndex(m_exportFormat);
+    m_exportStatusKey.clear();
+    const char* extension = exportExtension(m_dialogExportFormat);
+    const auto& settings  = Config::AppConfig::instance().getEditorSettings();
+    const std::string directory = settings.lastFilePickerPath.empty()
+                                      ? std::string(".")
+                                      : settings.lastFilePickerPath;
+    const std::string fileName  = fmt::format("annotations.{}", extension);
+    if ( settings.filePickerStyle == Config::FilePickerStyle::Native ) {
+        // 原生选择器不与 ImGui 的 Display 生命周期混合。
+        // 选择完成即调用共享的 exportToPath 写入。
+        ::MMM::UI::PlayPopupOpenFeedback();
+        nfdu8char_t*            path     = nullptr;
+        const nfdu8filteritem_t filter[] = { { "Annotation export",
+                                               extension } };
+        const auto              result   = UI::NativeFileDialog::saveFile(
+            &path, filter, 1, directory.c_str(), fileName.c_str());
+        if ( result == NFD_OKAY && path ) {
+            // 文件名和格式仍在共享入口规范化，过滤器只提供选择建议。
+            exportToPath(Config::utf8ToPath(path));
+            NFD_FreePathU8(path);
+        } else if ( result == NFD_ERROR || result == NFD_OKAY ) {
+            // NFD_CANCEL 被有意排除，用户取消不应显示红色失败信息。
+            const char* dialogError = NFD_GetError();
+            XERROR("Annotation export file dialog failed: {}",
+                   dialogError ? dialogError : "empty path");
+            m_exportSucceeded = false;
+            m_exportStatusKey = "ui.annotation.export.failed";
+        }
+        return;
+    }
+
+    IGFD::FileDialogConfig config;
+    // Modal 保持保存流程完整，隐藏类型列避免用户把类型列误认成格式选择。
+    // 格式已经由备注表下拉框确定，过滤器只允许当前一种扩展名。
+    config.path              = directory;
+    config.fileName          = fileName;
+    config.countSelectionMax = 1;
+    config.flags =
+        ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_HideColumnType;
+    const bool wasOpen =
+        ImGuiFileDialog::Instance()->IsOpened("AnnotationExportPicker");
+    const std::string filter = fmt::format(".{}", extension);
+    ImGuiFileDialog::Instance()->OpenDialog(
+        "AnnotationExportPicker",
+        TR("ui.annotation.export.dialog").data(),
+        filter.c_str(),
+        config);
+    if ( !wasOpen &&
+         ImGuiFileDialog::Instance()->IsOpened("AnnotationExportPicker") ) {
+        ::MMM::UI::PlayPopupOpenFeedback();
+    }
+}
+
+/// @brief 处理内置备注导出对话框，确认后只执行一次实际写入。
+/// @param dpiScale 当前窗口内容缩放。
+/// @warning UI 热路径：未确认时只消费固定的弹窗状态。
+/// @details Display 返回 true 同时覆盖确认和取消，两者都必须 Close。
+/// 弹层使用项目共用的居中样式；其窗口状态不进入用户布局文件。
+/// 仅 IsOk 时把 UTF-8 路径转换为平台路径并触发实际导出。
+/// 输入焦点停留在模态弹层时，备注表仍可保持已复制的数据快照。
+void AnnotationTableWindow::renderExportFileDialog(float dpiScale)
+{
+    UI::Utils::CenteredModalPopupScope popupStyle(dpiScale);
+    if ( ImGuiFileDialog::Instance()->IsOpened("AnnotationExportPicker") ) {
+        UI::Utils::prepareCenteredModalWindow({ 600, 400 });
+    }
+    if ( ImGuiFileDialog::Instance()->Display(
+             "AnnotationExportPicker",
+             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoSavedSettings,
+             { 600, 400 }) ) {
+        if ( ImGuiFileDialog::Instance()->IsOk() ) {
+            // 文件对话框返回 UTF-8，Windows 路径不能直接以窄字节构造。
+            exportToPath(Config::utf8ToPath(
+                ImGuiFileDialog::Instance()->GetFilePathName()));
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+}
+
 /// @brief 刷新并绘制独立的批注表窗口。
 /// @param sourceManager 当前 UI 管理器；批注表暂不需要反向访问管理器。
 ///
 /// 本函数依次处理可见性、低频数据刷新、窗口恢复、表格虚拟化和详情预览。
 /// 数据只由 AnnotationTableData 提供，不依赖时间线画布是否打开或渲染。
+/// 导出选项位于表格滚动区外，长列表滚动时仍能选格式与定位方式。
+/// 写文件只发生在点击和确认路径时，绝不进入 clipper 的逐行循环。
 ///
 /// @warning UI 热路径：每帧调用。关闭时必须保持常量级早退；打开时会绘制
 /// 可见表格行，但会话加锁刷新受固定间隔与版本号共同限制。
@@ -274,6 +479,48 @@ void AnnotationTableWindow::update(UI::UIManager* sourceManager)
             // TR_FMT 临时字符串存活到完整表达式结束，ImGui 会在调用内复制文本。
             ImGui::SameLine();
             ImGui::TextDisabled("%s", TR("ui.annotation.table.hint").data());
+
+            // 选择项固定且很少，保持在滚动表格外，使长批注表仍能直接导出。
+            // 文件格式与定位方式是正交选项，三种输出共用同一套记录。
+            // Combo 的隐藏 ID 保证切换翻译后控件身份不变。
+            const char* formats[]   = { "TXT", "DOCX", "XLSX" };
+            const char* positions[] = {
+                TR("ui.annotation.export.timestamp").data(),
+                TR("ui.annotation.export.beat").data(),
+            };
+            // 明示两个选择器的含义，避免只凭当前值猜测哪个是定位方式。
+            // 标签跟随语言即时翻译，隐藏 Combo ID 则保持稳定。
+            // 固定宽度只影响当前操作行，不改动下面表格的列宽。
+            // 当前选择仅保存在窗口实例中，不写回谱面配置。
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(TR("ui.annotation.export.format").data());
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(120.0F * dpiScale);
+            UI::FeedbackCombo(
+                "##AnnotationExportFormat", &m_exportFormat, formats, 3);
+            ImGui::SameLine();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(TR("ui.annotation.export.position").data());
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(130.0F * dpiScale);
+            UI::FeedbackCombo(
+                "##AnnotationExportPosition", &m_exportPosition, positions, 2);
+            ImGui::SameLine();
+            if ( UI::FeedbackButton(
+                     TR("ui.annotation.export.button").data()) ) {
+                // 点击后才可能打开平台保存对话框；普通 UI 帧不碰文件系统。
+                openExportFilePicker();
+            }
+            if ( !m_exportStatusKey.empty() ) {
+                // 反馈保留到下一次导出，方便用户看到上一次的真实结果。
+                // 颜色只区分结果；文字仍是本地化内容以满足可读性。
+                ImGui::SameLine();
+                const ImVec4 color = m_exportSucceeded
+                                         ? ImVec4(0.34F, 0.81F, 0.48F, 1.0F)
+                                         : ImVec4(1.0F, 0.42F, 0.32F, 1.0F);
+                ImGui::TextColored(
+                    color, "%s", TR(m_exportStatusKey.c_str()).data());
+            }
 
             // 详情区占可用高度的固定比例，并限制上下界；表格获得剩余空间，
             // 从而在矮窗口中仍保留至少一段可滚动的行区域。
@@ -599,6 +846,8 @@ void AnnotationTableWindow::update(UI::UIManager* sourceManager)
         }
     }
     ImGui::End();
+    // 对话框在宿主窗口 End 后绘制，可停靠表格不受模态窗口布局影响。
+    renderExportFileDialog(dpiScale);
     // 与上方六次 PushStyleVar 成对，不能让批注表外观泄漏到其它停靠窗口。
     ImGui::PopStyleVar(6);
 

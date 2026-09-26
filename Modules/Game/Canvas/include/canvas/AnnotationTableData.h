@@ -10,6 +10,9 @@
 namespace MMM::Canvas
 {
 
+/// @brief 批注目标玩家物件的导出类型；无目标或目标缺失时为 None。
+enum class AnnotationExportObjectType { None, Note, Hold, Flick, Polyline };
+
 /// @brief 批注表中一条已经解析到实际谱面位置的独立数据行。
 struct AnnotationTableRow {
     /// @brief 批注实际展示时间，单位秒。
@@ -25,6 +28,18 @@ struct AnnotationTableRow {
 
     /// @brief 目标物件轨道；独立时间戳或目标丢失时为 -1。
     std::int32_t track{ -1 };
+
+    /// @brief 面向导出的目标起始轨道；音频采样已转换为 BGM 区内零基编号。
+    std::int32_t exportTrack{ -1 };
+
+    /// @brief 滑键或折线终点的零基轨道；其它对象为 -1。
+    std::int32_t exportEndTrack{ -1 };
+
+    /// @brief 目标玩家物件的种类，音频采样和时间标记使用 None。
+    AnnotationExportObjectType objectType{ AnnotationExportObjectType::None };
+
+    /// @brief 目标是否指向折线内嵌子段，而非整条折线。
+    bool isPolylineSubNote{ false };
 
     /// @brief 目标物件是否已经不存在。
     bool targetMissing{ false };
