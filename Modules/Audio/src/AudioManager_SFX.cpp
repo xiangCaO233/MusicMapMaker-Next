@@ -74,6 +74,9 @@ constexpr const char* HIT_SOUND_EFFECT_KEY_PREFIX = "hiteffect.";
 /// @brief 使用独立交互音量的音效 key 前缀。
 constexpr const char* INTERACTION_SOUND_EFFECT_KEY_PREFIX = "ui.";
 
+/// @brief 编辑器节拍器允许单独提升至 200%，其他资源仍以 100% 为上限。
+constexpr const char* EDITOR_METRONOME_KEY_PREFIX = "editor.metronome.";
+
 /// @brief 判断音效是否属于谱面打击音效。
 /// @param key 音效池标识。
 /// @return 属于打击音效时返回 true。
@@ -92,13 +95,16 @@ bool isInteractionSoundEffectKey(const std::string& key)
     return key.rfind(INTERACTION_SOUND_EFFECT_KEY_PREFIX, 0) == 0;
 }
 
-/// @brief 将资源或皮肤音效基础音量规范化到线性单位范围。
-/// @param volume 外部资源或配置音量。
-/// @return 有限的 0 到 1 线性音量；异常值按静音处理。
-float sanitizedSoundEffectVolume(float volume) noexcept
+/// @brief 按音效类别规范化池音量，保留编辑器节拍器的补偿增益。
+/// @param key 音效池标识。
+/// @param volume 用户设置的线性音量。
+/// @return 有限且处于该类别许可范围内的音量。
+float sanitizedPoolVolume(const std::string& key, float volume) noexcept
 {
+    const float maximum =
+        key.starts_with(EDITOR_METRONOME_KEY_PREFIX) ? 2.0F : 1.0F;
     // NaN 不能进入池增益，否则会污染整个输出 block。
-    return std::isfinite(volume) ? std::clamp(volume, 0.0F, 1.0F) : 0.0F;
+    return std::isfinite(volume) ? std::clamp(volume, 0.0F, maximum) : 0.0F;
 }
 
 /// @brief 读取最近一次主时间线音频 block 的起始帧。
@@ -135,13 +141,6 @@ float AudioManager::getSFXEffectiveGain(const std::string& key) const
     // 全局静音是最外层覆盖，直接短路所有音效分组。
     if ( m_globalMuted ) return 0.0f;
 
-    // 编辑器节拍器有自己的分组滑条，不能被“全部打击音效”总控静音。
-    // 仍继承软件全局音量和全局静音，保持所有来源的主音量语义一致。
-    // BPM 测量工具沿用既有普通音效分组，只隔离编辑器专属前缀。
-    if ( key.starts_with("editor.metronome.") ) {
-        return m_globalVolume;
-    }
-
     if ( isInteractionSoundEffectKey(key) ) {
         // 交互音效不继承普通 SFX 分组，仍共同受全局音量控制。
         return m_interactionSfxGainMuted
@@ -149,6 +148,7 @@ float AudioManager::getSFXEffectiveGain(const std::string& key) const
                    : m_globalVolume * m_interactionSfxGain;
     }
 
+    // 编辑器节拍器和普通音效共用效果音轨总控；各自的池音量仍可单独调整。
     return m_sfxGainMuted ? 0.0f : m_globalVolume * m_sfxGain;
 }
 
@@ -162,7 +162,7 @@ float AudioManager::getSFXEffectiveGain(const std::string& key) const
 void AudioManager::setSFXPoolVolume(const std::string& key, float volume,
                                     bool isPermanent)
 {
-    volume = sanitizedSoundEffectVolume(volume);
+    volume = sanitizedPoolVolume(key, volume);
     // 登记值供未来重新加载使用，项目资源配置保持与默认音量一致。
     auto registration = m_registeredSoundEffects.find(key);
     if ( registration != m_registeredSoundEffects.end() ) {
@@ -396,7 +396,7 @@ void AudioManager::registerSoundEffectImpl(
     bool usesProjectResourceConfig)
 {
     const float normalizedVolume =
-        sanitizedSoundEffectVolume(resourceConfig.volume);
+        sanitizedPoolVolume(key, resourceConfig.volume);
     auto       existingRegistration = m_registeredSoundEffects.find(key);
     const bool wasBoundNoteSound =
         existingRegistration != m_registeredSoundEffects.end() &&

@@ -780,6 +780,46 @@ bool testStreamingSelection(MMM::Audio::AudioManager& manager,
     return playback && cachedAnalysis && testLegacyBgmWrapper(manager, path);
 }
 
+/// @brief 验证编辑器节拍器的独立音量确实可超过普通音效的上限。
+/// @param manager 已初始化且拥有音效图的管理器。
+/// @param samplePath 可解码的短音效路径。
+/// @return 预载和运行时调节均遵守各自音量范围时返回 true。
+///
+/// 编辑器的真实节拍 key 在业务层由 PlaybackController 预载，音频层根据
+/// editor.metronome. 前缀保留 200% 上限。这里给节拍池和普通池预载同一
+/// 短样本，使断言只反映池分类和控制入口。预载初值覆盖登记到附加的链路，
+/// 随后分别调小、调大及越界，检查运行时更新和上限处理。退出前卸载两池，
+/// 避免后续场景继承额外的 mixer 来源。
+bool testEditorMetronomePoolGain(MMM::Audio::AudioManager& manager,
+                                 const std::string&        samplePath)
+{
+    constexpr const char* METRONOME_KEY = "editor.metronome.test_beat";
+    constexpr const char* ORDINARY_KEY  = "ordinary.test_beat";
+    // 预载和运行时更新经过不同入口，两个入口都必须保留节拍器的补偿增益。
+    const bool loaded =
+        manager.preloadSoundEffect(METRONOME_KEY, samplePath, 1.5F) &&
+        manager.preloadSoundEffect(ORDINARY_KEY, samplePath, 1.5F);
+    bool passed =
+        loaded &&
+        std::abs(manager.getSFXPoolVolume(METRONOME_KEY) - 1.5F) < 1.0e-6F &&
+        std::abs(manager.getSFXPoolVolume(ORDINARY_KEY) - 1.0F) < 1.0e-6F;
+    // 先降到 25%，覆盖用户报告的独立滑条向下调节路径。
+    manager.setSFXPoolVolume(METRONOME_KEY, 0.25F);
+    passed = passed && std::abs(manager.getSFXPoolVolume(METRONOME_KEY) -
+                                0.25F) < 1.0e-6F;
+    manager.setSFXPoolVolume(METRONOME_KEY, 1.8F);
+    passed = passed &&
+             std::abs(manager.getSFXPoolVolume(METRONOME_KEY) - 1.8F) < 1.0e-6F;
+    manager.setSFXPoolVolume(METRONOME_KEY, 2.5F);
+    passed = passed &&
+             std::abs(manager.getSFXPoolVolume(METRONOME_KEY) - 2.0F) < 1.0e-6F;
+    manager.unloadSoundEffect(METRONOME_KEY);
+    manager.unloadSoundEffect(ORDINARY_KEY);
+    if ( !passed )
+        XERROR("Editor metronome pool gain was unexpectedly clamped");
+    return passed;
+}
+
 }  // namespace
 
 /// @brief 运行 AudioManager 自动采样时间线集成测试。
@@ -822,6 +862,7 @@ int main(int argc, char** argv)
     // 场景短路执行，避免前一集成失败留下的音频图状态造成大量次生错误。
     const bool passed =
         testEmptyTimelineClock(manager) &&
+        testEditorMetronomePoolGain(manager, samplePath) &&
         testSingleClipResourceProcessing(manager, samplePath) &&
         testKeySoundTrackMutes(manager, samplePath) &&
         testIndependentResourceAndGlobalSpeed(manager, samplePath) &&
