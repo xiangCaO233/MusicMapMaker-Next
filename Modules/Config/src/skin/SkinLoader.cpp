@@ -263,13 +263,15 @@ bool SkinManager::loadSkin(const std::string&           luaFilePath,
         m_translator.switchLang(m_data.fallBackLang);
     }
 
-    // fonts 是按用途命名的基础字体映射，所有路径相对 resources 解析。
-    sol::table fontsTable = skinTable["fonts"];
-    // 表契约要求字符串键值，正式皮肤由资源测试保证内容合法。
-    for ( const auto& kv : fontsTable ) {
-        std::string key       = kv.first.as<std::string>();
-        std::string rpath     = kv.second.as<std::string>();
-        m_data.fontPaths[key] = makeResPath(rpath);
+    // 精简皮肤可以省略 fonts；缺省时由 UI 字体层提供后备字体。
+    sol::optional<sol::table> fontsTableOpt = skinTable["fonts"];
+    if ( fontsTableOpt ) {
+        // 已声明的表仍按字符串键值解析，资源路径相对 resources。
+        for ( const auto& kv : fontsTableOpt.value() ) {
+            std::string key       = kv.first.as<std::string>();
+            std::string rpath     = kv.second.as<std::string>();
+            m_data.fontPaths[key] = makeResPath(rpath);
+        }
     }
     // 新版可独立指定图标字体；旧皮肤缺失时兼容复用 ASCII 字体。
     if ( !m_data.fontPaths.contains("icons") ) {
@@ -397,11 +399,11 @@ bool SkinManager::loadSkin(const std::string&           luaFilePath,
     }
     // 非表顶层声明视为缺省；单个错误项不影响同表中其他合法倍率。
 
-    // assets 支持嵌套路径和序列描述，递归解析后统一分配纹理 ID。
-    sol::table assetsTable = skinTable["assets"];
-    if ( assetsTable.valid() ) {
+    // assets 可省略；声明时支持嵌套路径和序列描述，再统一分配纹理 ID。
+    sol::optional<sol::table> assetsTableOpt = skinTable["assets"];
+    if ( assetsTableOpt ) {
         // 空前缀使顶层键不携带多余分隔符。
-        parseAssetsRecursive(assetsTable, "");
+        parseAssetsRecursive(assetsTableOpt.value(), "");
         XINFO("Assets parsed: {} asset(s), {} sequence(s)",
               m_data.assetPaths.size(),
               m_data.effectSequences.size());
@@ -441,13 +443,13 @@ bool SkinManager::loadSkin(const std::string&           luaFilePath,
         }
     }
 
-    sol::table audiosTable = skinTable["audios"];
-    // audios 不存在时 sol table 无效，解析分支安全跳过并保持空映射。
+    sol::optional<sol::table> audiosTableOpt = skinTable["audios"];
+    // 精简皮肤不声明 audios 时保持空映射，不强制转换 nil 为 Lua 表。
     // 音频路径与起音延迟共同重建，旧皮肤数据不得残留到新加载结果。
     m_data.audioPaths.clear();
     m_data.audioLeadInSeconds.clear();
-    if ( audiosTable.valid() ) {
-        parseAudiosRecursive(audiosTable, "");
+    if ( audiosTableOpt ) {
+        parseAudiosRecursive(audiosTableOpt.value(), "");
     }
 
     // effects 是可选扩展；缺失时 SkinData 构造默认值直接生效。
@@ -547,11 +549,11 @@ bool SkinManager::loadSkin(const std::string&           luaFilePath,
         }
     }
 
-    // layout 的字符串、数值和布尔叶子统一扁平化为点分字符串键。
-    sol::table layoutTable = skinTable["layout"];
-    if ( layoutTable.valid() ) {
+    // layout 可省略；声明时将字符串、数值和布尔叶子扁平化为点分键。
+    sol::optional<sol::table> layoutTableOpt = skinTable["layout"];
+    if ( layoutTableOpt ) {
         // 空前缀从顶层字段名开始，不写入多余的 layout. 前缀。
-        parseLayoutRecursive(layoutTable, "");
+        parseLayoutRecursive(layoutTableOpt.value(), "");
     }
     // layout 缺失时查询返回空字符串，交由每个 UI 消费点使用默认值。
 

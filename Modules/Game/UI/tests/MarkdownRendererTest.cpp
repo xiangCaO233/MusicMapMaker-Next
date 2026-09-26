@@ -235,6 +235,8 @@ int main()
         ImGui::DestroyContext();
         return 1;
     }
+    // 无 GPU 后端仍须给已构建字体图集一个有效纹理 ID，供 DrawCmd 查询。
+    io.Fonts->SetTexID(ImTextureID{ 1 });
 
     // 所有公共布局、滚动和图片场景必须同时通过。
     const bool valid = testMarkdownLayoutAndRendering() &&

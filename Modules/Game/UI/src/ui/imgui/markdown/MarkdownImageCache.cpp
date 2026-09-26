@@ -31,6 +31,7 @@
 ///
 /// 资源限制：
 /// - 单次下载最多 32 MiB；
+/// - 内存 GIF 源帧数据最多 128 MiB，超出时交给逐帧视频解码器；
 /// - 单张输入宽高最多 4096 像素；
 /// - GIF 时长最多 120 秒；
 /// - GIF 采样最多 96 帧且目标约 15 FPS；
@@ -50,6 +51,83 @@ constexpr std::size_t MAX_DOWNLOAD_BYTES =
     32U * 1024U * 1024U;  ///< 单个下载上限。
 constexpr std::size_t MAX_CACHE_BYTES =
     192U * 1024U * 1024U;  ///< GPU 图集总预算。
+constexpr std::size_t MAX_MEMORY_GIF_BYTES =
+    128U * 1024U * 1024U;  ///< 内存 GIF 源帧总预算。
+
+/// @brief 跳过 GIF 扩展或图像数据的连续子块。
+/// @param bytes 完整 GIF 文件字节。
+/// @param offset 当前读取位置，成功后指向下一个块标记。
+/// @return 子块由零长度块正确终止时返回 true。
+/// @details GIF 扩展和图像压缩数据都使用长度前缀子块；不能按字节值搜索
+/// 终止符，否则压缩内容中的零值会被误认成块边界。
+bool skipGifSubBlocks(std::span<const unsigned char> bytes, std::size_t& offset)
+{
+    while ( offset < bytes.size() ) {
+        // 先消费长度字节，零长度表示该组子块结束。
+        const auto length = bytes[offset++];
+        if ( length == 0U ) return true;
+        // 不完整的块不能进入 stb 解码，以免预扫描低估源帧内存。
+        if ( length > bytes.size() - offset ) return false;
+        offset += length;
+    }
+    return false;
+}
+
+/// @brief 在调用整图 GIF 解码器前统计帧数并限制解压后的源帧容量。
+/// @param bytes 已通过签名和尺寸校验的 GIF 文件。
+/// @param width 逻辑画布宽度。
+/// @param height 逻辑画布高度。
+/// @return 可安全整图解码时返回帧数，否则返回零并交给逐帧解码路径。
+/// @pre width 和 height 已由 stbi_info_from_memory 验证为正且不超过 4096。
+/// @details 逐块解析 GIF 容器，只读取长度和标记，不解压 LZW 数据。
+/// 每个图像块最多产生一张完整逻辑画布，故帧数乘画布字节数是源帧容量上界。
+std::size_t boundedGifFrameCount(std::span<const unsigned char> bytes,
+                                 unsigned width, unsigned height)
+{
+    // GIF 每帧由完整逻辑画布构成；先限制单帧，再逐个图像块累计数量。
+    const std::size_t frameBytes =
+        static_cast<std::size_t>(width) * height * 4U;
+    if ( bytes.size() < 13U || frameBytes > MAX_MEMORY_GIF_BYTES ) return 0U;
+    std::size_t offset = 13U;
+    // 逻辑屏幕描述符后可能紧跟全局调色板，位数由 packed 低三位决定。
+    if ( (bytes[10] & 0x80U) != 0U ) {
+        const auto paletteBytes = 3U * (1U << ((bytes[10] & 0x07U) + 1U));
+        if ( paletteBytes > bytes.size() - offset ) return 0U;
+        offset += paletteBytes;
+    }
+
+    std::size_t frames = 0U;
+    while ( offset < bytes.size() ) {
+        // 只有标准 trailer 才完成预扫描；截断数据不进入整图解码。
+        const auto marker = bytes[offset++];
+        if ( marker == 0x3BU ) return frames;
+        if ( marker == 0x21U ) {
+            // 扩展块包含一个标签，后续内容同样按子块长度跳过。
+            // 图形控制扩展不算作图像帧。
+            if ( offset == bytes.size() ) return 0U;
+            ++offset;
+            if ( !skipGifSubBlocks(bytes, offset) ) return 0U;
+            continue;
+        }
+        // 图像描述符固定九字节，packed 位还可声明独立的局部调色板。
+        if ( marker != 0x2CU || bytes.size() - offset < 9U ) return 0U;
+        const auto packed = bytes[offset + 8U];
+        offset += 9U;
+        if ( (packed & 0x80U) != 0U ) {
+            const auto paletteBytes = 3U * (1U << ((packed & 0x07U) + 1U));
+            if ( paletteBytes > bytes.size() - offset ) return 0U;
+            offset += paletteBytes;
+        }
+        // LZW 最小码长占一字节，之后才是以零长度块结尾的图像数据。
+        if ( offset == bytes.size() ) return 0U;
+        ++offset;
+        if ( !skipGifSubBlocks(bytes, offset) ) return 0U;
+        // 在解码前累计帧数，防止高度压缩的长动画放大内存。
+        if ( ++frames > MAX_MEMORY_GIF_BYTES / frameBytes ) return 0U;
+    }
+    return 0U;
+}
+
 /// @brief 限制下载大小，拒绝无界响应。
 /// @param data libcurl 本次提供的响应数据。
 /// @param size 单个数据单元字节数。
@@ -123,6 +201,73 @@ MarkdownImagePixels makeAtlas(unsigned width, unsigned height, unsigned frames,
     return out;
 }
 
+/// @brief 使用 stb_image 在内存中解码有界 GIF，并按播放时间采样为图集。
+/// @param bytes GIF 文件字节。
+/// @param expectedWidth 已验证的逻辑画布宽度。
+/// @param expectedHeight 已验证的逻辑画布高度。
+/// @param maximumFrames 预扫描确认的源帧数量。
+/// @return 解码成功时返回动画图集，否则返回空布局。
+/// @details 仅对源帧容量经过预扫描的 GIF 使用此路径，避免依赖可选的
+/// FFmpeg GIF 解复用器；输出仍按约 15 FPS 和 96 帧上限采样。
+/// @warning 后台资源路径：完整 GIF 解码会分配源帧缓冲，禁止在 UI 热路径调用。
+MarkdownImagePixels decodeBoundedGif(std::span<const unsigned char> bytes,
+                                     unsigned    expectedWidth,
+                                     unsigned    expectedHeight,
+                                     std::size_t maximumFrames)
+{
+    int* rawDelays = nullptr;
+    int  width = 0, height = 0, sourceFrames = 0, channels = 0;
+    // stb 分别分配像素和毫秒延时数组，两个所有权都立即交给 RAII。
+    auto pixels = std::unique_ptr<unsigned char, decltype(&stbi_image_free)>(
+        stbi_load_gif_from_memory(bytes.data(),
+                                  static_cast<int>(bytes.size()),
+                                  &rawDelays,
+                                  &width,
+                                  &height,
+                                  &sourceFrames,
+                                  &channels,
+                                  4),
+        stbi_image_free);
+    auto delays = std::unique_ptr<int, decltype(&stbi_image_free)>(
+        rawDelays, stbi_image_free);
+    // 解码结果必须与预扫描画布及帧数一致，才可按连续 RGBA 帧寻址。
+    if ( !pixels || !delays || width != static_cast<int>(expectedWidth) ||
+         height != static_cast<int>(expectedHeight) || sourceFrames <= 0 ||
+         static_cast<std::size_t>(sourceFrames) > maximumFrames )
+        return {};
+
+    // GIF 的零延时帧按 10 ms 展示；累计时长沿用既有 120 秒上限。
+    // 延时由解码器按帧提供，不能用均匀帧率代替原动画节奏。
+    double durationMs = 0.0;
+    for ( int index = 0; index < sourceFrames; ++index ) {
+        durationMs += std::max(delays.get()[index], 10);
+        if ( durationMs > 120000.0 ) return {};
+    }
+    const double duration = durationMs / 1000.0;
+    // 图集帧数只依赖总时长，不随源文件的帧数线性增长。
+    const unsigned frames =
+        std::clamp(static_cast<unsigned>(std::ceil(duration * 15.0)), 1U, 96U);
+    auto       out = makeAtlas(expectedWidth, expectedHeight, frames, duration);
+    const auto frameBytes =
+        static_cast<std::size_t>(expectedWidth) * expectedHeight * 4U;
+    int    sourceIndex = 0;
+    double sourceEndMs = std::max(delays.get()[0], 10);
+    for ( unsigned index = 0; index < frames; ++index ) {
+        // 目标采样时间递增，源索引也只前进；无需为每个图集帧重新查找。
+        const double targetMs = durationMs * index / frames;
+        while ( sourceIndex + 1 < sourceFrames && targetMs >= sourceEndMs ) {
+            ++sourceIndex;
+            sourceEndMs += std::max(delays.get()[sourceIndex], 10);
+        }
+        // 源帧按整张逻辑画布顺序排列，拷贝时才缩放到最终图集尺寸。
+        copyFrame(out,
+                  index,
+                  pixels.get() + sourceIndex * frameBytes,
+                  expectedWidth,
+                  expectedHeight);
+    }
+    return out;
+}
 /// @brief 只清理本次成功创建的独立临时目录，不触及用户资源。
 struct TemporaryImage {
     std::filesystem::path path;  ///< 精确的任务目录。
@@ -237,6 +382,15 @@ MarkdownImagePixels decodeUpdateImage(std::span<const unsigned char> bytes)
         copyFrame(out, 0U, pixels.get(), width, height);
         return out;
     }
+    // 常见小型 GIF 直接从内存读取，避免依赖各平台预编译 FFmpeg 的 GIF 能力。
+    // 大型 GIF 保留原有逐帧解码路径，以免一次展开全部源帧。
+    const auto boundedFrames = boundedGifFrameCount(bytes, width, height);
+    if ( boundedFrames > 0U ) {
+        auto decoded = decodeBoundedGif(bytes, width, height, boundedFrames);
+        if ( !decoded.pixels.empty() ) return decoded;
+    }
+    // 预扫描超出源帧预算时仍尝试逐帧解码，以保留大型动画的现有支持。
+    // 该路径不持有整段动画的完整 RGBA 源帧。
     // GIF 解码器需要文件路径，先取得系统临时目录。
     std::error_code ec;
     const auto      root = std::filesystem::temp_directory_path(ec);
