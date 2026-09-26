@@ -952,6 +952,44 @@ int main(int argc, char* argv[])
         // 目标码率并非逐秒恒定值，不能用短文件平均码率等于请求值作断言。
     }
 
+    // Ogg 的默认编码器取决于 FFmpeg 是否启用 libvorbis；显式码率必须
+    // 始终导出 Vorbis，而不是在部分构建中误选不支持目标码率的 FLAC。
+    // 使用界面默认的 192 kbit/s，覆盖用户实际触发的参数组合。
+    // 复用较长的源文件，让编码器经历多次写入及最终排空。
+    MMM::Audio::AudioSpeedExportOptions oggBitrateOptions;
+    oggBitrateOptions.inputPath  = largeInputPath;
+    oggBitrateOptions.outputPath = root / "output_192k.ogg";
+    oggBitrateOptions.bitrate    = 192000;
+    // 保持倍速、变调和采样率默认值，以隔离容器与编码器选择。
+    const auto oggBitrateResult =
+        MMM::Audio::AudioSpeedExportService::exportWav(oggBitrateOptions);
+    // 导出失败时保留底层 FFmpeg 错误，便于定位不同平台的编码器能力。
+    if ( !oggBitrateResult.success ) {
+        XERROR("[audio-speed-export] ogg bitrate error: {}",
+               oggBitrateResult.errorMessage);
+    }
+    ok &= check(oggBitrateResult.success, "192k ogg export succeeds");
+    if ( oggBitrateResult.success ) {
+        // 成功返回后再读取磁盘文件，防止只验证内存中的结果状态。
+        std::vector<unsigned char> oggBytes;
+        ok &= check(readFile(oggBitrateOptions.outputPath, oggBytes),
+                    "192k ogg output is readable");
+        // 限定在第一个 page 的头部，避免正文偶然出现 codec 名造成误判。
+        // 文件短于截取长度时收缩边界，避免越界迭代器。
+        const std::string header(
+            oggBytes.begin(),
+            oggBytes.begin() + std::min(oggBytes.size(), std::size_t{ 128 }));
+        // 识别包位于首个 Ogg page；检查实际 codec，避免只凭后缀宣布修复。
+        ok &= check(header.starts_with("OggS") &&
+                        header.find("\x01vorbis") != std::string::npos,
+                    "192k ogg contains Vorbis identification packet");
+        // 重新解码并检查末端，确认最终排空与封装收尾后的数据仍可读。
+        ok &= checkEngineCanReadTail(
+            oggBitrateOptions.outputPath,
+            minimumDecodedFrames(oggBitrateResult.outputFrames),
+            "192k ogg output");
+    }
+
     // 无损 PCM 不应默默丢弃有损码率选项，参数冲突必须由接收端显式拒绝。
     // 失败应发生在打开编码链阶段，不把错误请求当作默认 WAV 写出。
     MMM::Audio::AudioSpeedExportOptions invalidBitrateOptions;
