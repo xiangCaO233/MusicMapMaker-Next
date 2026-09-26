@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 
+#include <functional>
 #include <string_view>
 
 namespace MMM::UI
@@ -58,6 +59,8 @@ struct MarkdownRenderOptions {
     const MarkdownStyle* style{ nullptr };
     /// @brief 可选图片缓存；为空时显示图片替代文本。
     const IMarkdownImages* images{ nullptr };
+    /// @brief 已加载图片被双击时通知调用方；目标只在当前文档渲染期间有效。
+    std::function<void(std::string_view)> onImageDoubleClick;
 };
 
 /// @brief Markdown 排版结果。

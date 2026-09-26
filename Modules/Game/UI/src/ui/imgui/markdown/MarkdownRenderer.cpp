@@ -89,9 +89,11 @@ public:
     /// @param compact 是否使用紧凑块间距。
     /// @param interactiveLinks 是否允许链接悬停和点击。
     /// @param images 可选非拥有图片查询接口。
-    MarkdownLayout(ImDrawList* drawList, ImVec2 origin, float width,
-                   float maxHeight, const MarkdownStyle& style, bool compact,
-                   bool interactiveLinks, const IMarkdownImages* images)
+    MarkdownLayout(
+        ImDrawList* drawList, ImVec2 origin, float width, float maxHeight,
+        const MarkdownStyle& style, bool compact, bool interactiveLinks,
+        const IMarkdownImages*                       images,
+        const std::function<void(std::string_view)>* onImageDoubleClick)
         : m_drawList(drawList)
         , m_origin(origin)
         , m_width(std::max(1.0F, width))
@@ -100,6 +102,7 @@ public:
         , m_compact(compact)
         , m_interactiveLinks(interactiveLinks && drawList != nullptr)
         , m_images(images)
+        , m_onImageDoubleClick(onImageDoubleClick)
         , m_font(ImGui::GetFont())
         , m_baseFontSize(ImGui::GetFontSize())
     {
@@ -316,11 +319,20 @@ private:
                 const ImVec2 min{ m_origin.x + inset, m_origin.y + lineY };
                 const ImVec2 max{ min.x + width, min.y + height };
                 if ( m_drawList ) {
-                    if ( image.texture )
+                    if ( image.texture ) {
                         // 已就绪纹理使用缓存提供的当前动画帧 UV。
                         m_drawList->AddImage(
                             image.texture, min, max, image.uv0, image.uv1);
-                    else {
+                        // 只对当前可交互窗口内的真实图片响应双击，测量模式不触发回调。
+                        if ( m_onImageDoubleClick && *m_onImageDoubleClick &&
+                             ImGui::IsWindowHovered() &&
+                             ImGui::IsMouseHoveringRect(min, max, true) ) {
+                            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                            if ( ImGui::IsMouseDoubleClicked(
+                                     ImGuiMouseButton_Left) )
+                                (*m_onImageDoubleClick)(span.destination);
+                        }
+                    } else {
                         // 排队、失败或没有缓存接口时绘制统一占位块。
                         m_drawList->AddRectFilled(
                             min, max, m_style.codeBackgroundColor);
@@ -610,6 +622,10 @@ private:
     bool m_interactiveLinks{ false };
     /// @brief 本次排版使用的非拥有图片缓存。
     const IMarkdownImages* m_images{ nullptr };
+    /// @brief 仅在绘制模式调用的图片双击回调，所有权留在本帧调用方。
+    const std::function<void(std::string_view)>* m_onImageDoubleClick{
+        nullptr
+    };
     /// @brief 当前 ImGui 字体。
     ImFont* m_font{ nullptr };
     /// @brief 当前 ImGui 基础字号。
@@ -675,7 +691,8 @@ MarkdownLayoutResult measureMarkdown(std::string_view             markdown,
                           style,
                           options.compact,
                           false,
-                          options.images);
+                          options.images,
+                          nullptr);
     return layout.run(markdown);
 }
 
@@ -699,7 +716,8 @@ void renderMarkdown(std::string_view             markdown,
                           style,
                           options.compact,
                           options.interactiveLinks,
-                          options.images);
+                          options.images,
+                          &options.onImageDoubleClick);
     // Dummy 把手工绘制占用面积反馈给 ImGui 后续布局和滚动计算。
     const auto result = layout.run(markdown);
     ImGui::Dummy({ width, std::max(1.0F, result.size.y) });
@@ -744,7 +762,8 @@ MarkdownLayoutResult renderMarkdownToDrawList(
                           style,
                           options.compact,
                           options.interactiveLinks,
-                          options.images);
+                          options.images,
+                          &options.onImageDoubleClick);
     // 返回的是完整排版坐标结果，调用方可继续计算滚动条。
     const auto result = layout.run(markdown);
     drawList.PopClipRect();

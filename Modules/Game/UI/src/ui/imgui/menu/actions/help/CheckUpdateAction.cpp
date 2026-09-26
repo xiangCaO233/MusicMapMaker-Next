@@ -16,6 +16,7 @@
 #include <imgui.h>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -128,6 +129,13 @@ private:
     /// @brief 已扫描的更新版本，避免逐帧重新安排图片任务。
     /// @note 版本变化时重新解析对应更新日志中的远程图片。
     std::string m_imageVersion;
+    /// @brief 图片预览保存目标而非纹理句柄，保证动画帧与缓存生命周期正确。
+    /// @note 双击回调复制目标，不能借用 Markdown 解析中的临时视图。
+    std::string m_imagePreviewDestination;
+    /// @brief Markdown 双击只登记请求，待退出日志子窗口后再打开预览弹窗。
+    bool m_openImagePreview{ false };
+    /// @brief 预览窗口的标题栏关闭状态。
+    bool m_imagePreviewOpen{ false };
     /// @brief 渲染更新检查中的状态弹窗。
     /// @warning UI 热路径：每帧执行；只轮询更新检查器状态。
     /// @note 检查中、已最新、发现更新和错误四种状态互斥展示。
@@ -260,9 +268,80 @@ private:
                 renderErrorBody(info.errorMessage, dpiScale);
             }
 
+            // 图片弹窗属于更新弹窗，必须在退出日志子窗口后提交。
+            renderImagePreview(dpiScale);
             // 与成功 BeginPopup 路径配对，保持弹窗栈平衡。
             ImGui::EndPopup();
         }
+    }
+
+    /// @brief 在更新弹窗上层显示可移动、可调整大小的完整图片预览。
+    /// @param dpiScale 当前窗口内容缩放。
+    /// @warning 每帧重新查询缓存帧，不能持有可能因更新版本而失效的纹理。
+    /// @details 预览是更新弹窗的子模态窗口，关闭父窗口时不再接受输入。
+    /// 初始位置和大小只设一次，避免拖动或调整大小后被逐帧重置。
+    /// 图片绘制使用原始比例和当前图集 UV，避免放大 GIF 时停在首帧。
+    void renderImagePreview(float dpiScale)
+    {
+        // 固定内部 ID，翻译语言变化不应改变弹窗身份。
+        const std::string title =
+            std::string(TR("ui.help.image_preview").data()) +
+            "###UpdateImagePreview";
+        if ( m_openImagePreview ) {
+            // 双击发生于子窗口，弹窗请求须在父窗口上下文中消费。
+            ::MMM::UI::FeedbackOpenPopup(title.c_str());
+            m_openImagePreview = false;
+            m_imagePreviewOpen = true;
+        }
+
+        // 首次显示时放到主视口中央，后续允许用户拖动和缩放。
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        const ImVec2         previewSize{
+            std::min(1100.0f * dpiScale, viewport->WorkSize.x * 0.9f),
+            std::min(850.0f * dpiScale, viewport->WorkSize.y * 0.9f)
+        };
+        // 工作区比例限制初始大小，留出标题栏和窗口边缘的操作空间。
+        // 与更新弹窗绑定同一主视口，避免多视口环境中跳到其他屏幕。
+        ImGui::SetNextWindowViewport(viewport->ID);
+        ImGui::SetNextWindowPos(
+            viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(previewSize, ImGuiCond_Appearing);
+        if ( ImGui::BeginPopupModal(title.c_str(),
+                                    &m_imagePreviewOpen,
+                                    ImGuiWindowFlags_NoSavedSettings) ) {
+            // 只保存 Markdown 目标；动态图片的 UV 必须每帧从缓存查询。
+            // 若更新日志换版，旧目标查询失败时显示状态文本而非旧纹理。
+            const MarkdownImage image =
+                m_images ? m_images->findImage(m_imagePreviewDestination)
+                         : MarkdownImage{};
+            // 缓存尚未给出有效帧尺寸时避免比例计算中的除零。
+            if ( image.texture && image.size.x > 0.0f && image.size.y > 0.0f ) {
+                const ImVec2 available = ImGui::GetContentRegionAvail();
+                // 按窗口内容区域等比放大，也允许小视口下等比缩小。
+                // 极小窗口仍保留正比例，避免向 ImGui 提交无效图片尺寸。
+                // 以缓存报告的帧尺寸计算比例，不使用图集纹理的总尺寸。
+                const float scale =
+                    std::max(0.01f,
+                             std::min(available.x / image.size.x,
+                                      available.y / image.size.y));
+                const ImVec2 displaySize{ image.size.x * scale,
+                                          image.size.y * scale };
+                ImGui::SetCursorPosX(
+                    ImGui::GetCursorPosX() +
+                    std::max(0.0f, (available.x - displaySize.x) * 0.5f));
+                // 空白部分单独居中，动画帧的图集 UV 保持不变。
+                ImGui::SetCursorPosY(
+                    ImGui::GetCursorPosY() +
+                    std::max(0.0f, (available.y - displaySize.y) * 0.5f));
+                ImGui::Image(image.texture, displaySize, image.uv0, image.uv1);
+            } else {
+                // 加载失败或资源暂不可用时给出明确状态，避免空白窗口。
+                ImGui::TextUnformatted(TR("ui.help.image_unavailable").data());
+            }
+            ImGui::EndPopup();
+        }
+        // 标题栏关闭后清除目标，避免下一次预览误用旧图。
+        if ( !m_imagePreviewOpen ) m_imagePreviewDestination.clear();
     }
 
     /// @brief 渲染更新下载成功后的提示弹窗。
@@ -413,6 +492,7 @@ private:
             ImGui::Separator();
             ImGui::Spacing();
             ImGui::TextUnformatted(TR("ui.help.changelog").data());
+            ImGui::TextDisabled("%s", TR("ui.help.image_preview_hint").data());
 
             {
                 // 滚动条样式通过 RAII 作用域限制在更新日志子窗口。
@@ -436,8 +516,16 @@ private:
                     m_imageVersion = info.latestVersion;
                 }
                 // Markdown 渲染器仅接收观察指针，纹理由 UIManager 缓存持有。
-                renderMarkdown(info.changelog,
-                               MarkdownRenderOptions{ .images = m_images });
+                renderMarkdown(
+                    info.changelog,
+                    MarkdownRenderOptions{
+                        .images = m_images,
+                        .onImageDoubleClick =
+                            [this](std::string_view destination) {
+                                // 回调可能处于子窗口中，延迟到父弹窗创建预览。
+                                m_imagePreviewDestination.assign(destination);
+                                m_openImagePreview = true;
+                            } });
                 ImGui::EndChild();
                 // 与 PushStyleVar 配对，恢复外层弹窗内边距。
                 ImGui::PopStyleVar();
