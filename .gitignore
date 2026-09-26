@@ -4,6 +4,7 @@ build/
 .cache/
 .vscode/
 .idea/
+*.mmm/
 release/
 *__pycache__*/
 
