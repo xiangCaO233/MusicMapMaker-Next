@@ -316,10 +316,13 @@ void VKContext::imguiVulkanInit(GLFWwindow*          windowHandle,
     // 键盘和手柄导航在首次 NewFrame 前固定，避免运行中改变 backend 输入契约。
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
-    // Docking/Multi-Viewport 必须在首次 NewFrame 前确定；Bootstrap
-    // 只使用主视口， 提前启用不会主动创建平台窗口。
+    // Docking/Multi-Viewport 必须在首次 NewFrame 前确定。
+    // Wayland 不提供顶层窗口定位能力；禁用平台视口后，插件和其他 ImGui
+    // 浮动面板仍可停靠或在 MMM 主窗口内移动，而不会创建额外 GLFW 窗口。
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    if ( glfwGetPlatform() != GLFW_PLATFORM_WAYLAND ) {
+        io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    }
     // 允许平台窗口自动并回主视口，但不为每个 viewport 创建独立任务栏图标。
     io.ConfigViewportsNoAutoMerge   = false;
     io.ConfigViewportsNoTaskBarIcon = true;
