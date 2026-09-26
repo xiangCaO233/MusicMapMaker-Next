@@ -36,6 +36,13 @@
 #include <sol/sol.hpp>
 #include <stb_image.h>
 
+extern "C" {
+#include <libavcodec/codec_id.h>
+#include <libavformat/avformat.h>
+#include <libavutil/avutil.h>
+#include <libavutil/dict.h>
+}
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -113,6 +120,98 @@ bool supportedMapExtension(std::string_view extension)
     // 比较精确后缀，不根据文件内容猜测输出格式。
     return extension == ".mmm" || extension == ".mc" || extension == ".osu" ||
            extension == ".imd";
+}
+
+/// @brief 释放独立的 FFmpeg 探测上下文。
+struct AudioProbeContextDeleter {
+    /// @brief 关闭输入并释放容器与流元信息。
+    void operator()(AVFormatContext* context) const
+    {
+        // avformat_close_input 需要指针地址；局部副本避免泄漏到调用方。
+        avformat_close_input(&context);
+    }
+};
+
+/// @brief 将 FFmpeg 字典逐项复制到 Lua 数组，保留同名标签与原始顺序。
+/// @param lua 当前工具插件的独立虚拟机。
+/// @param metadata 容器或流所有的标签字典。
+/// @return 每个元素含 key 和 value 的 Lua 数组。
+/// @warning 文件探测动作路径：会复制元数据，不得从 UI 每帧调用。
+sol::table copyAudioTags(sol::state& lua, const AVDictionary* metadata)
+{
+    sol::table tags  = lua.create_table();
+    int        index = 1;
+    // 字典可能含重复键，不能转换为 Lua 哈希表后丢掉后面的值。
+    // 每个条目复制为独立 Lua 表，关闭输入后不会借用 FFmpeg 字符指针。
+    // 容器和流使用相同规则，空字典自然得到空数组。
+    for ( const AVDictionaryEntry* entry = av_dict_iterate(metadata, nullptr);
+          entry;
+          entry = av_dict_iterate(metadata, entry) ) {
+        sol::table tag = lua.create_table();
+        tag["key"]     = entry->key;
+        tag["value"]   = entry->value;
+        tags[index++]  = std::move(tag);
+    }
+    return tags;
+}
+
+/// @brief 补充容器及所有流公开的元信息，不改变 ICE 的预编译 ABI。
+/// @param lua 当前工具插件的独立虚拟机。
+/// @param path 已成功通过 ICE 探测的输入文件 UTF-8 路径。
+/// @param output 待填充的音频探测结果表。
+/// @return FFmpeg 能读取完整流信息时为 true。
+/// @warning 用户选择文件后的低频路径：再次打开媒体，不得在 build 中调用。
+bool appendAudioDetails(sol::state& lua, const std::string& path,
+                        sol::table& output)
+{
+    // ICE 已完成基础探测；这里仅补充其公开结构没有容纳的标签与流。
+    // 不改 MediaInfo 布局，保持尚未更新的 macOS ICE 库可用。
+    AVFormatContext* raw = nullptr;
+    if ( avformat_open_input(&raw, path.c_str(), nullptr, nullptr) < 0 )
+        return false;
+    std::unique_ptr<AVFormatContext, AudioProbeContextDeleter> context(raw);
+    if ( avformat_find_stream_info(context.get(), nullptr) < 0 ) return false;
+
+    // 容器时长与 ICE 估计帧数分别展示，未知时长以零表示，不伪装成精确值。
+    // 两个时长来自不同时间基，保留两者以便识别容器声明偏差。
+    const auto* format  = context->iformat;
+    output["container"] = format && format->name ? format->name : "";
+    output["container_long_name"] =
+        format && format->long_name ? format->long_name : "";
+    output["container_duration"] =
+        context->duration == AV_NOPTS_VALUE
+            ? 0.0
+            : static_cast<double>(context->duration) / AV_TIME_BASE;
+    output["format_tags"] = copyAudioTags(lua, context->metadata);
+
+    sol::table streams = lua.create_table();
+    // 不只报告第一条音轨：图片、视频及附带的第二音轨也属于文件可读取信息。
+    // Lua 数组从 1 开始，item.index 仍保留 FFmpeg 的零起始流编号。
+    for ( unsigned int index = 0; index < context->nb_streams; ++index ) {
+        const AVStream* stream = context->streams[index];
+        if ( !stream || !stream->codecpar ) continue;
+        const AVCodecParameters* codec = stream->codecpar;
+        sol::table               item  = lua.create_table();
+        const char* type    = av_get_media_type_string(codec->codec_type);
+        item["index"]       = static_cast<int>(index);
+        item["type"]        = type ? type : "unknown";
+        item["codec"]       = avcodec_get_name(codec->codec_id);
+        item["bitrate"]     = codec->bit_rate > 0 ? codec->bit_rate : 0;
+        item["sample_rate"] = codec->sample_rate;
+        item["channels"]    = codec->ch_layout.nb_channels;
+        item["duration"] =
+            stream->duration == AV_NOPTS_VALUE || stream->time_base.den == 0
+                ? 0.0
+                : static_cast<double>(stream->duration) *
+                      stream->time_base.num / stream->time_base.den;
+        item["attached_picture"] =
+            (stream->disposition & AV_DISPOSITION_ATTACHED_PIC) != 0;
+        // 附图标志只描述流；封面像素依旧由 ICE 的首张有效附件读取。
+        item["tags"] = copyAudioTags(lua, stream->metadata);
+        streams[static_cast<int>(index + 1)] = std::move(item);
+    }
+    output["streams"] = std::move(streams);
+    return true;
 }
 
 /// @brief 为格式专属元数据生成稳定排序的可读 JSON 文本。
@@ -330,24 +429,30 @@ bool inputTextDynamic(const char* label, std::string& value, bool multiline)
 {
     // 两种控件共享同一 std::string 容量协议，避免固定字符数组截断谱面文本。
     // 文本内容由 Widget 独占，Lua 回调只收到动作发生时的值拷贝。
-    const auto flags = ImGuiInputTextFlags_CallbackResize;
+    const auto flags   = ImGuiInputTextFlags_CallbackResize;
+    bool       changed = false;
     if ( multiline ) {
         // 固定初始高度让很长的预览仍留在可滚动区域内。
-        return ImGui::InputTextMultiline(label,
-                                         value.data(),
-                                         value.capacity() + 1,
-                                         ImVec2(-1.0F, 240.0F),
-                                         flags,
-                                         &resizeInputText,
-                                         &value);
+        changed = ImGui::InputTextMultiline(label,
+                                            value.data(),
+                                            value.capacity() + 1,
+                                            ImVec2(-1.0F, 240.0F),
+                                            flags,
+                                            &resizeInputText,
+                                            &value);
+    } else {
+        // 输入框只对用户编辑返回 true，静态帧不会构造动作字符串。
+        changed = ImGui::InputText(label,
+                                   value.data(),
+                                   value.capacity() + 1,
+                                   flags,
+                                   &resizeInputText,
+                                   &value);
     }
-    // 输入框只对用户编辑返回 true，静态帧不会构造动作字符串。
-    return ImGui::InputText(label,
-                            value.data(),
-                            value.capacity() + 1,
-                            flags,
-                            &resizeInputText,
-                            &value);
+    // ImGui 在已有容量中直接编辑字符时不会触发 CallbackResize；动作值必须
+    // 同步逻辑长度，否则 Lua 收到旧前缀，删除字符时还可能带上残留尾部。
+    if ( changed ) value.resize(std::strlen(value.c_str()));
+    return changed;
 }
 
 }  // namespace
@@ -855,6 +960,11 @@ struct ToolPluginView::Impl {
                         : static_cast<double>(media.frame_count) /
                               media.format.samplerate;
                 // 时长由媒体估计帧数计算，零采样率时不能除零或宣称精确时长。
+                // 扩展标签通过 FFmpeg 原生字典补充，ICE 的值语义公开结构不变。
+                // 部分容器无法二次读取详情时仍保留上面的基础探测结果。
+                if ( !appendAudioDetails(plugin.lua, path, output) ) {
+                    output["details_error"] = "无法读取完整容器元数据";
+                }
                 // 封面存在标志要等像素解码成功，避免永远显示上传中占位。
                 output["cover_present"] = false;
                 plugin.pendingCover.clear();

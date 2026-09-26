@@ -14,6 +14,7 @@ local state = {
     bitrate = "0",
     -- info 是一次媒体探测的快照，路径改变时由新的探测结果替换。
     info = nil,
+    show_details = false,
     message = "请选择音频文件。",
 }
 
@@ -37,6 +38,50 @@ local function describe(info)
         info.duration or 0, info.channels or 0, info.sample_rate or 0,
         info.bitrate or 0, info.frames or 0,
         info.cover_present and "已读取" or "无")
+end
+
+-- FFmpeg 的字典保留同名键与原始顺序；不能先转成 Lua 哈希表再展示。
+-- 容器与每条流分开展示，避免把附图流误当作音频编码参数。
+-- 缺失标签保留空章节，用户能区分没有标签与探测入口失败。
+-- 行数组只在展开详情时构造，普通帧由宿主绘制缓存文本。
+local function append_tags(lines, heading, tags)
+    lines[#lines + 1] = heading
+    if not tags or #tags == 0 then
+        -- 保留章节标题，让没有标签的流也能与前后流明确分隔。
+        lines[#lines + 1] = "  （无标签）"
+        return
+    end
+    for _, tag in ipairs(tags) do
+        -- 原值不做数值转换，日期、语言和自由文本均可原样查看。
+        lines[#lines + 1] = string.format("  %s: %s", tag.key or "", tag.value or "")
+    end
+end
+
+-- 详情只在用户展开后拼接，普通帧由宿主复用已声明的文本控件。
+-- 容器时长与 ICE 估算时长分别展示，二者可能有不同精度。
+-- 一条媒体可以同时含音频、视频、图片或额外流。
+local function describe_details(info)
+    if not info or info.error then return "" end
+    if info.details_error then return info.details_error end
+    -- 基础信息仍可用时只显示详情错误，不覆盖上方摘要及封面。
+    local lines = {
+        "容器：" .. (info.container_long_name or info.container or ""),
+        string.format("容器时长：%.3f 秒", info.container_duration or 0),
+    }
+    append_tags(lines, "容器标签", info.format_tags)
+    -- 逐流标签不与容器标签合并，避免相同键覆盖各自来源。
+    for _, stream in ipairs(info.streams or {}) do
+        -- 附图标志不代表像素上传完成，上方控件负责真实图片展示。
+        -- 流序号保留 FFmpeg 原值，方便对应外部分析工具。
+        lines[#lines + 1] = string.format(
+            "流 #%d：%s / %s / %s bit/s / %s Hz / %s 声道 / %.3f 秒%s",
+            stream.index or 0, stream.type or "", stream.codec or "",
+            stream.bitrate or 0, stream.sample_rate or 0,
+            stream.channels or 0, stream.duration or 0,
+            stream.attached_picture and " / 附图" or "")
+        append_tags(lines, "流标签", stream.tags)
+    end
+    return table.concat(lines, "\n")
 end
 
 return {
@@ -71,6 +116,21 @@ return {
             widgets[#widgets + 1] = {
                 type = "image", id = "album_cover", label = "封面待上传或不可用"
             }
+        end
+        if state.info and not state.info.error then
+            -- 基础摘要始终可见；较长的容器与逐流标签由用户按需展开。
+            -- 展开状态只属于本插件，切换输出参数不会重新探测输入。
+            -- 插件重载后闭包重置，不会持有关闭媒体的详情引用。
+            widgets[#widgets + 1] = {
+                type = "button", id = "toggle_details",
+                label = state.show_details and "收起完整音频信息" or "显示完整音频信息",
+            }
+            if state.show_details then
+                widgets[#widgets + 1] = {
+                    type = "text", id = "media_details",
+                    label = describe_details(state.info),
+                }
+            end
         end
         widgets[#widgets + 1] = { type = "separator", id = "export_section", label = "输出" }
         -- 不复制输入文件后缀作为建议名称，以免把输出格式误设为输入格式。
@@ -108,6 +168,8 @@ return {
             -- 输出用途拥有独立最近目录，也不从输入路径猜测目标位置。
             local path = api.save_file("audio_output", "output.flac")
             if path ~= "" then state.output = path end
+        elseif id == "toggle_details" then
+            state.show_details = not state.show_details
         elseif id == "speed" then
             -- 编辑期间不启动 DSP；无效中间文本允许留在输入框内继续修正。
             state.speed = value

@@ -3,6 +3,7 @@
 #include "mmm/project/ProjectSettings.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -52,6 +53,12 @@
  *    - 同一时间戳允许存在多个 Markdown 批注；
  *    - PLAYER_OBJECT 与 AUDIO_SAMPLE 通过 collaborationId 保持目标身份；
  *    - 时间戳相同不应导致不同目标种类被错误合并。
+ *
+ * 6. 格式转换矩阵
+ *    - 一份共通谱面先落成四种来源，确保每个读取器能接收对应写出器结果；
+ *    - 每种来源再写出另外三种目标，覆盖工具插件可选择的全部方向；
+ *    - 检查普通 Note 数量，避免只生成有效文件头却丢掉玩家物件；
+ *    - 特殊来源属性不纳入共通夹具，单独由上面的格式能力测试约束。
  *
  * 这些场景同时约束“能读取旧数据”和“新数据不倒退为旧表示”两件事。
  * 读取兼容允许吸收历史字段，保存则应输出当前规范结构；否则一次普通保存
@@ -1402,6 +1409,89 @@ bool testMMMBeatmapAnnotationsRoundTrip(
                  "MMM player annotation target identity should round-trip");
 }
 
+/// @brief 验证四种受支持谱面格式均能读入并写出另外三种格式。
+/// @param outputDirectory 构建树中的独立测试输出目录。
+/// @return 十二条转换路径均产出可重新读取的普通 Note 时为 true。
+/// @details 每一转换方向均从真实来源文件重新读取，再交给目标写出器；
+/// 这能覆盖插件“选输入、选另一个输出格式”的领域模型链路。
+/// 文件名使用固定轨数形式，使 IMD 读取器可恢复玩家轨道数。
+/// 该测试约束共通 Note 与基本节奏，不声称所有特殊字段跨格式无损。
+bool testBeatmapConverterFormatMatrix(
+    const std::filesystem::path& outputDirectory)
+{
+    // 共用最小可表达子集，避免把来源格式无法表示的特殊属性误作转换故障。
+    // Note 与 BPM 使重新读取检验真实解析结果，而不只检查文件存在。
+    MMM::BeatMap source;
+    source.m_baseMapMetadata.name           = "Converter";
+    source.m_baseMapMetadata.title          = "Converter";
+    source.m_baseMapMetadata.version        = "Test";
+    source.m_baseMapMetadata.track_count    = 4;
+    source.m_baseMapMetadata.preference_bpm = 120.0;
+    source.m_baseMapMetadata.map_length     = 30000.0;
+    // 独立 Timing 点保证 IMD 能生成 BPM 表，避免仅凭摘要 BPM 通过。
+    // 其时间位于曲首，四个写出器都可明确表示，不触发速度事件降级。
+    auto& timing         = source.m_timings.emplace_back();
+    timing.m_timestamp   = 0.0;
+    timing.m_bpm         = 120.0;
+    timing.m_beat_length = 500.0;
+    auto& note           = source.m_noteData.notes.emplace_back();
+    note.m_timestamp     = 1000.0;
+    note.m_track         = 2;
+    // 玩家轨编号从零起算，索引 2 在四轨文件的有效范围内。
+    // 写盘前同步统一物件视图；部分导出器依赖 m_allNotes 而非原始容器。
+    source.sync();
+
+    constexpr std::array<std::string_view, 4> formats{
+        ".mmm", ".mc", ".osu", ".imd"
+    };
+    bool ok = true;
+    // 外层逐一制造来源文件，而不是直接从内存 source 写完全部目标。
+    // 这样一次来源解析失败不会被最初的内存模型掩盖。
+    for ( const auto inputFormat : formats ) {
+        // IMD 使用含轨道数的文件名，其余格式沿用同一前缀便于排查。
+        const auto inputPath =
+            outputDirectory / ("Converter_4k_Test" + std::string(inputFormat));
+        if ( !check(source.saveToFile(inputPath),
+                    "converter matrix should create each input format") ) {
+            // 失败来源没有可用模型，跳过其三个目标并保留整体失败标记。
+            ok = false;
+            continue;
+        }
+        MMM::BeatMap loaded = MMM::BeatMap::loadFromFile(inputPath);
+        // map_path 为空是加载器的失败标志；物件数量验证实际内容被解析。
+        if ( !check(!loaded.m_baseMapMetadata.map_path.empty() &&
+                        loaded.m_noteData.notes.size() == 1U,
+                    "converter matrix should read each input format") ) {
+            ok = false;
+            continue;
+        }
+        // 加载器生成的是各格式自己的结构；重新建立统一索引供写出器使用。
+        loaded.sync();
+        for ( const auto outputFormat : formats ) {
+            // 本工具明确只提供另外三种格式，同格式重保存不计入矩阵。
+            if ( outputFormat == inputFormat ) continue;
+            const auto outputPath =
+                outputDirectory / ("Converter_4k_Test_from_" +
+                                   std::string(inputFormat.substr(1)) +
+                                   std::string(outputFormat));
+            // 每一对格式都调用正式写出器，并让正式读取器再解析一次。
+            // 单独文件名避免此前成功的目标掩盖本次写出失败。
+            if ( !check(loaded.saveToFile(outputPath),
+                        "converter matrix should write another format") ) {
+                ok = false;
+                continue;
+            }
+            const auto restored = MMM::BeatMap::loadFromFile(outputPath);
+            // 目标必须还能被正式读取器消费；文件存在或字节数非零不足为证。
+            // 注意这里不比较来源特有属性，避免把有意降级误判为解析损坏。
+            ok &= check(!restored.m_baseMapMetadata.map_path.empty() &&
+                            restored.m_noteData.notes.size() == 1U,
+                        "converter matrix output should be readable");
+        }
+    }
+    return ok;
+}
+
 }  // namespace
 
 /// @brief 运行背景元数据格式兼容测试。
@@ -1447,6 +1537,7 @@ int main(int argc, char* argv[])
     ok &= testSingleAudioExporterCompatibility(outputDirectory);
     ok &= testMalodySaverDoesNotSynthesizeAudioSample(outputDirectory);
     ok &= testOSUSaverDoesNotSynthesizeAudioSample(outputDirectory);
+    ok &= testBeatmapConverterFormatMatrix(outputDirectory);
     // 批注组验证折线层级以及同时间戳多目标的稳定身份。
     ok &= testMMMPolylineAnnotationRoundTrip(outputDirectory);
     ok &= testMMMBeatmapAnnotationsRoundTrip(outputDirectory);

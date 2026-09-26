@@ -327,6 +327,28 @@ AudioSpeedExportResult AudioSpeedExportService::exportWav(
         return result;
     }
 
+    // 输出若指向输入的同一文件，FFmpeg 打开目标会截断仍需解码的来源。
+    // equivalent 捕获硬链接，weakly_canonical 兼顾尚未创建的相对目标路径。
+    // 两种检查都在离线图创建前完成，拒绝时原文件保持原样。
+    // 不存在的目标会让 equivalent 返回错误，不能据此拒绝合法新文件。
+    std::error_code equivalentError;
+    const bool      sameExistingFile = std::filesystem::equivalent(
+        options.inputPath, options.outputPath, equivalentError);
+    std::error_code inputCanonicalError, outputCanonicalError;
+    const auto      inputCanonical = std::filesystem::weakly_canonical(
+        options.inputPath, inputCanonicalError);
+    const auto outputCanonical = std::filesystem::weakly_canonical(
+        options.outputPath, outputCanonicalError);
+    // 规范路径比较还可识别符号链接与路径中的点段。
+    // 查询失败时后续正常打开路径会给出实际 I/O 错误。
+    if ( (!equivalentError && sameExistingFile) ||
+         (!inputCanonicalError && !outputCanonicalError &&
+          inputCanonical == outputCanonical) ) {
+        result.errorMessage =
+            "Input and output audio paths refer to the same file";
+        return result;
+    }
+
     emitProgress(options, 0.0f, "正在打开音频...");
 
     ice::ThreadPool* threadPool = Runtime::AppThreadPool::instance().get();

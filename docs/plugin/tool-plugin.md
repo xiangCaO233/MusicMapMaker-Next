@@ -132,9 +132,17 @@ C++→Lua 调用约 `0.008 µs/帧`；一次 C++→Lua 加 40 次空 Lua→C 调
 
 | 调用 | 返回值 | 说明 |
 | --- | --- | --- |
-| `api.audio_probe(path)` | 表 | 读取标题、艺术家、专辑、时长、总帧数、声道、采样率、码率与封面存在状态；失败时返回 `error`。封面像素在低频资源准备阶段上传，随后由 `image` 控件显示。 |
+| `api.audio_probe(path)` | 表 | 读取标题、艺术家、专辑、时长、总帧数、声道、采样率、码率与封面存在状态，并补充容器和各流公开的标签及编码信息；失败时返回 `error`。封面像素在低频资源准备阶段上传，随后由 `image` 控件显示。 |
 | `api.audio_export(options)` | 错误字符串 | 空字符串表示后台任务已提交；`options` 包含 `input`、`output`、`speed`、`pitch_semitones`、`sample_rate`、`bitrate`。非空字符串解释拒绝原因。 |
 | `api.audio_status()` | 表 | `state` 为 `idle`、`running`、`success` 或 `error`；运行时带 `progress`，结束时带 `error`、`frames`、`duration`。 |
+
+`audio_probe` 的 `format_tags` 是容器标签数组；`streams` 是流数组，每条流
+提供 `index`、`type`、`codec`、`bitrate`、`sample_rate`、`channels`、
+`duration`、`attached_picture` 和 `tags`。两种标签数组的元素均含 `key` 与
+`value`，保留同名键与 FFmpeg 返回的顺序。`container`、
+`container_long_name` 和 `container_duration` 描述封装格式；容器时长未知时为
+`0`。基本探测成功但完整流信息读取失败时会返回 `details_error`，其余字段仍
+可用。内置音频工具默认只展示摘要，点击“显示完整音频信息”可查看这些详情。
 
 `audio_export` 的变调单位是半音，`0` 保留原音高，支持范围为 `-48` 到
 `+48`。输出容器和编码器由文件扩展名选择，是否支持某个扩展名取决于本机
@@ -163,6 +171,7 @@ if error ~= "" then state.message = error end
 封面只用于界面展示。导出失败时后端可能留下未完成的输出文件，插件不应将其
 标记为可交付结果。`audio_status().frames` 是送入编码器的输入时钟帧数，
 显式改变采样率后与容器内部的样本数不同；`duration` 由该输入时钟推算。
+输入和输出若指向同一文件，服务会在打开编码器前拒绝导出，保留源文件内容。
 
 ## 谱面宿主 API
 

@@ -813,6 +813,27 @@ int main(int argc, char* argv[])
                 "long fixture wav created");
     ok &= checkEngineCanReadTail(largeInputPath, 96000, "large fixture");
 
+    // 同一路径若进入编码器会截断来源，必须在打开音频图前拒绝并保持字节不变。
+    // 使用真实 WAV 夹具而非只检查报错，字节比较覆盖头部与音频体。
+    // 后续正常导出复用这份输入，可再发现被误清空的回归。
+    std::vector<unsigned char> inputBefore, inputAfter;
+    ok &= check(readFile(inputPath, inputBefore),
+                "same-path source readable before export");
+    MMM::Audio::AudioSpeedExportOptions samePathOptions;
+    samePathOptions.inputPath  = inputPath;
+    samePathOptions.outputPath = inputPath;
+    const auto samePathResult =
+        MMM::Audio::AudioSpeedExportService::exportWav(samePathOptions);
+    // 错误应来自同一路径门槛，不应由解码或编码碰巧失败产生。
+    ok &= check(
+        !samePathResult.success &&
+            samePathResult.errorMessage.find("same file") != std::string::npos,
+        "same-path export rejected before encoder opens");
+    ok &= check(readFile(inputPath, inputAfter) && inputAfter == inputBefore,
+                "same-path source bytes preserved");
+    // 即使没有创建目标，输入仍须能通过后续基准场景完整读取。
+    // 测试目录与用户配置隔离，结束时由测试统一清理。
+
     // 基准 WAV 场景使用不保音高图，2 倍速度理论长度精确减半。
     MMM::Audio::AudioSpeedExportOptions options;
     options.inputPath     = inputPath;
