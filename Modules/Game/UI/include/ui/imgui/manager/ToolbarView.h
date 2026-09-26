@@ -6,9 +6,13 @@
 #include "config/EditorSettings.h"
 #include "ui/IUIView.h"
 #include "ui/imgui/manager/BeatLineDisplayModeHistory.h"
+
+#include <glm/glm.hpp>
+
 #include <array>
 #include <cstddef>
-#include <glm/glm.hpp>
+#include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 
@@ -115,6 +119,22 @@ private:
     bool m_showSoundEffectTool{ false };
     /// @brief 上一帧音效工具按钮的屏幕 Y 坐标，用于定位弹层。
     float m_lastSoundEffectToolBtnY{ 0.0f };
+    /// @brief 音效工具上次成功读取的活动会话索引，切换会话时立即清空旧布局。
+    int m_soundEffectTrackSessionIndex{ -1 };
+    /// @brief 会话锁暂不可用时沿用的玩家轨道数。
+    int m_soundEffectPlayerTrackCount{ 0 };
+    /// @brief 会话锁暂不可用时沿用的草稿轨道数。
+    int m_soundEffectDraftTrackCount{ 0 };
+    /// @brief 会话锁暂不可用时沿用的 BGM 轨道数。
+    int m_soundEffectBgmTrackCount{ 0 };
+    /// @brief 缓存轨道数是否来自已载入的谱面。
+    bool m_soundEffectHasBeatmap{ false };
+    /// @brief 音效工具复用的配置值，只有配置修订变化时复制完整对象。
+    Config::EditorConfig m_soundEffectEditorConfigCache;
+    /// @brief 配置缓存的修订号；最大值保证首次显示时获取权威值。
+    std::uint64_t m_soundEffectEditorConfigRevision{
+        std::numeric_limits<std::uint64_t>::max()
+    };
     /// @brief 绑定分类增益草稿是否已从配置初始化。
     bool m_soundEffectGainDraftInitialized{ false };
     /// @brief 未绑定音效文件的实时增益草稿。

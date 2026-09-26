@@ -3894,13 +3894,13 @@ Config::EditorConfig EditorEngine::getEditorConfig() const
     return m_editorConfig;
 }
 
-/// @brief 按修订号刷新逻辑线程持有的编辑器配置快照。
+/// @brief 按修订号刷新逻辑线程或 UI 持有的编辑器配置快照。
 /// @param target 发生变化时接收最新逻辑线程配置。
 /// @param targetRevision 调用方已知修订号，更新后写回当前修订。
 /// @return 修订发生变化并复制配置时返回 true。
 /// @note 返回 false 时 target 与 targetRevision
 /// 保持调用前内容，便于循环直接复用。
-/// @warning 逻辑热路径：未变化时仅执行一次 acquire
+/// @warning 逻辑/UI 热路径：未变化时仅执行一次 acquire
 /// 原子读取，配置变化时才加锁复制。
 bool EditorEngine::refreshEditorConfigSnapshot(
     Config::EditorConfig& target, std::uint64_t& targetRevision) const

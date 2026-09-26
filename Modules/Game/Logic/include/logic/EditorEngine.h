@@ -407,6 +407,15 @@ public:
     /// 禁止在物件循环中重复调用。
     Config::EditorConfig getEditorConfig() const;
 
+    /// @brief 按修订号刷新调用方持有的编辑器配置快照。
+    /// @param target 接收稳定配置的本地对象。
+    /// @param targetRevision 本地对象对应的修订号，成功同步后更新。
+    /// @return 配置修订变化并完成复制时返回 true。
+    /// @warning 逻辑/UI 热路径：未变化时只读取一次 acquire 原子；
+    /// 变化时短暂加锁并复制完整配置，不得在物件循环中逐项调用。
+    bool refreshEditorConfigSnapshot(Config::EditorConfig& target,
+                                     std::uint64_t& targetRevision) const;
+
     /**
      * @brief 获取当前工具类型
      * @warning 逻辑/UI
@@ -639,15 +648,6 @@ private:
 
     /// @brief 多画布会话注册表，封装 Session 列表、活跃索引和 cameraId 分配。
     SessionRegistry m_sessionRegistry;
-
-    /// @brief 将共享配置按修订号同步到逻辑线程本地快照。
-    /// @param target 接收稳定配置的逻辑线程本地对象。
-    /// @param targetRevision 本地对象当前对应的修订号，成功同步后更新。
-    /// @return 配置修订发生变化并完成复制时返回 true。
-    /// @warning 逻辑热路径：每轮 loop 调用；未变化时只进行一次 acquire
-    /// 原子读取， 变化时才短暂加锁并复制完整配置。
-    bool refreshEditorConfigSnapshot(Config::EditorConfig& target,
-                                     std::uint64_t& targetRevision) const;
 
     /// @brief 保护编辑器配置完整对象的读写，防止 UI
     /// 拖拽更新与逻辑线程复制并发。

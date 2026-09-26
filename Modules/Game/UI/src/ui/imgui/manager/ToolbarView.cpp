@@ -37,6 +37,7 @@
 #include <imgui_internal.h>
 #include <iterator>
 #include <limits>
+#include <mutex>
 #include <nfd.h>
 #include <optional>
 #include <string>
@@ -611,6 +612,11 @@ void ToolbarView::setEditorApplicationService(
     IEditorApplicationService* service)
 {
     // 每帧从 UIManager 同步，避免保存已替换应用服务的旧指针。
+    // 服务实例变化时下一次打开音效工具必须重新取得权威配置。
+    if ( m_editorApplicationService != service ) {
+        m_soundEffectEditorConfigRevision =
+            std::numeric_limits<std::uint64_t>::max();
+    }
     m_editorApplicationService = service;
 }
 
@@ -1302,13 +1308,17 @@ void ToolbarView::update(UIManager* sourceManager)
                 if ( m_showSoundEffectTool ) {
                     // 每次打开重置增益草稿初始化，使其从运行时状态重新同步。
                     m_soundEffectGainDraftInitialized = false;
-                    m_showLayoutPopup                 = false;
-                    m_showColorPopup                  = false;
-                    m_showDivisorPopup                = false;
-                    m_showKeyPopup                    = false;
-                    m_showSpeedPopup                  = false;
-                    m_showBeatLinePopup               = false;
-                    m_showMagnetPopup                 = false;
+                    // 强制首次显示复制一次权威配置，防止引擎重启后修订号
+                    // 恰好与上次相同而复用旧会话的音效设置。
+                    m_soundEffectEditorConfigRevision =
+                        std::numeric_limits<std::uint64_t>::max();
+                    m_showLayoutPopup   = false;
+                    m_showColorPopup    = false;
+                    m_showDivisorPopup  = false;
+                    m_showKeyPopup      = false;
+                    m_showSpeedPopup    = false;
+                    m_showBeatLinePopup = false;
+                    m_showMagnetPopup   = false;
                 }
             }
             // 音效窗口固定宽度，但仍以按钮顶部作为垂直锚点并执行视口夹取。
@@ -2098,28 +2108,66 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar");
     if ( !toolbarWindow ) return;
 
-    // 会话数据只用于建立行布局，离开锁后所有绘制使用值快照。
+    // 轨道数只决定弹层行布局；逻辑线程持有会话锁更新时沿用上次布局，
+    // 不能让每帧 UI 等待完整的 BeatmapSession::update。
     auto& engine = Logic::EditorEngine::instance();
-    bool  hasBeatmap{ false };
-    int   playerTrackCount{ 0 };
-    int   draftTrackCount{ 0 };
-    int   bgmTrackCount{ 0 };
+    // 活动索引是原子快照；先处理标签切换，避免抢锁失败时继续显示
+    // 上一张谱面的轨道控制行。
+    const int activeSessionIndex = engine.getActiveSessionIndex();
+    if ( activeSessionIndex != m_soundEffectTrackSessionIndex ) {
+        // 新标签不能短暂显示前一个谱面的混音轨道。
+        m_soundEffectTrackSessionIndex = activeSessionIndex;
+        m_soundEffectHasBeatmap        = false;
+        m_soundEffectPlayerTrackCount  = 0;
+        m_soundEffectDraftTrackCount   = 0;
+        m_soundEffectBgmTrackCount     = 0;
+    }
     {
-        // 缩短锁作用域，禁止将整段 ImGui 绘制放在会话互斥内。
-        std::lock_guard<std::recursive_mutex> sessionLock(
-            engine.getSessionMutex());
-        const auto session = engine.getActiveSession();
-        if ( session && session->getContext().currentBeatmap ) {
-            // 元数据轨道数和草稿轨道数来源不同，分别读取后规范为非负值。
-            const auto& metadata =
-                session->getContext().currentBeatmap->m_baseMapMetadata;
-            hasBeatmap       = true;
-            playerTrackCount = std::max(0, metadata.track_count);
-            draftTrackCount =
-                std::max(0, session->getContext().draftTrackCount);
-            bgmTrackCount = std::max(0, metadata.bgm_track_count);
+        // try_lock 失败仅延后一帧刷新，不阻塞主线程；成功后借用 SessionEntry，
+        // 避免每帧复制 BeatmapSession 的共享所有权。
+        // 高 UPS 时也不重试抢锁，否则会变相等待整个会话更新。
+        std::unique_lock<std::recursive_mutex> sessionLock(
+            engine.getSessionMutex(), std::try_to_lock);
+        if ( sessionLock.owns_lock() ) {
+            // 活动标签可能恰好在 try_lock 前切换；锁内复核并清空旧布局。
+            const int lockedActiveIndex = engine.getActiveSessionIndex();
+            if ( lockedActiveIndex != m_soundEffectTrackSessionIndex ) {
+                m_soundEffectTrackSessionIndex = lockedActiveIndex;
+                m_soundEffectHasBeatmap        = false;
+                m_soundEffectPlayerTrackCount  = 0;
+                m_soundEffectDraftTrackCount   = 0;
+                m_soundEffectBgmTrackCount     = 0;
+            }
+            // getSessionEntry 的内部递归加锁在当前线程立即成功；外层锁
+            // 继续保护返回指针和 SessionContext 的读取，避免标签关闭时悬空。
+            const auto* entry = engine.getSessionEntry(lockedActiveIndex);
+            m_soundEffectHasBeatmap =
+                entry && entry->session &&
+                entry->session->getContext().currentBeatmap;
+            if ( m_soundEffectHasBeatmap ) {
+                // 元数据轨道数和草稿轨道数来源不同，读取后规范为非负值。
+                const auto& context = entry->session->getContext();
+                const auto& metadata =
+                    context.currentBeatmap->m_baseMapMetadata;
+                m_soundEffectPlayerTrackCount =
+                    std::max(0, metadata.track_count);
+                m_soundEffectDraftTrackCount =
+                    std::max(0, context.draftTrackCount);
+                m_soundEffectBgmTrackCount =
+                    std::max(0, metadata.bgm_track_count);
+            } else {
+                m_soundEffectPlayerTrackCount = 0;
+                m_soundEffectDraftTrackCount  = 0;
+                m_soundEffectBgmTrackCount    = 0;
+            }
         }
     }
+    // 离开锁后只消费缓存标量，不借用会话或谱面对象。
+    // 轨道数变化在下一次成功读取时更新，不影响本帧控件交互。
+    const bool hasBeatmap       = m_soundEffectHasBeatmap;
+    const int  playerTrackCount = m_soundEffectPlayerTrackCount;
+    const int  draftTrackCount  = m_soundEffectDraftTrackCount;
+    const int  bgmTrackCount    = m_soundEffectBgmTrackCount;
 
     // 弹层外观沿用编辑器主题，几何尺寸统一按 DPI 取整。
     const auto& aesthetics =
@@ -2200,9 +2248,20 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     ImGui::TextUnformatted(TR("ui.key_sound_tool.title").data());
     ImGui::Separator();
 
-    // 音频管理器提供当前混音快照；编辑器配置保存语义开关与默认增益。
-    auto&      audio        = Audio::AudioManager::instance();
-    const auto editorConfig = currentEditorConfig();
+    // 音频管理器提供当前混音快照；配置未变化时沿用上一帧的值副本，
+    // 避免每帧在配置锁内复制完整视觉设置、配色表及近期项目列表。
+    auto& audio = Audio::AudioManager::instance();
+    if ( m_editorApplicationService ) {
+        // 修订号未变时只做一次 acquire 读取；配置变更由 EditorEngine
+        // 统一发布，滑条提交后的新值会在下一帧自动进入缓存。
+        static_cast<void>(engine.refreshEditorConfigSnapshot(
+            m_soundEffectEditorConfigCache, m_soundEffectEditorConfigRevision));
+    } else {
+        // 未注入服务的测试与初始化路径继续使用应用配置。
+        m_soundEffectEditorConfigCache =
+            Config::AppConfig::instance().getEditorConfig();
+    }
+    const auto& editorConfig = m_soundEffectEditorConfigCache;
     if ( !m_soundEffectGainDraftInitialized || !ImGui::IsAnyItemActive() ) {
         // 没有活动控件时允许外部设置覆盖草稿；拖动期间保持本地连续值，
         // 防止异步运行时回读把滑块拉回上一采样点。
