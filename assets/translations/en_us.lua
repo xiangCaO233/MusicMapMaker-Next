@@ -1067,6 +1067,8 @@ return {
 	["ui.toolbar.note_palette.skin_defaults"] = "Skin Defaults",
 	["ui.toolbar.note_palette.apply_selected"] = "Apply Selected",
 	["ui.toolbar.note_palette.clear_custom"] = "Use Skin Default",
+	["ui.toolbar.note_palette.clear_all_notes"] = "Clear All Note Colors",
+	["ui.toolbar.note_palette.clear_all_notes_confirm"] = "Remove saved color fields from every Note, Hold, Flick, and polyline segment in this chart? This can be undone and does not change drafts or palette schemes.",
 	["ui.toolbar.note_palette.beat_line_skin_defaults"] = "Skin Beat-line Palette",
 	["ui.toolbar.note_palette.use_skin_beat_lines"] = "Apply Skin Beat-line Palette",
 

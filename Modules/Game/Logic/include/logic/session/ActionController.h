@@ -58,6 +58,10 @@ public:
     /// @param cmd 命令数据
     void handleCommand(const CmdClearNoteColorOverrides& cmd);
 
+    /// @brief 可撤销地清除当前谱面所有正式音符的持久化颜色。
+    /// @param cmd 无附加参数的批量清理命令。
+    void handleCommand(const CmdClearAllNoteColorOverrides& cmd);
+
     /// @brief 处理粘贴实体的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdPaste& cmd);

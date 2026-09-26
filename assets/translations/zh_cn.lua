@@ -1066,6 +1066,8 @@ return {
 	["ui.toolbar.note_palette.skin_defaults"] = "皮肤默认色盘",
 	["ui.toolbar.note_palette.apply_selected"] = "应用到选中",
 	["ui.toolbar.note_palette.clear_custom"] = "使用皮肤默认",
+	["ui.toolbar.note_palette.clear_all_notes"] = "清除全谱物件颜色",
+	["ui.toolbar.note_palette.clear_all_notes_confirm"] = "清除当前谱面全部 Note、Hold、Flick 和折线子段写入文件的颜色字段？此操作可撤销，不影响草稿区与调色方案。",
 	["ui.toolbar.note_palette.beat_line_skin_defaults"] = "皮肤默认分拍线色盘",
 	["ui.toolbar.note_palette.use_skin_beat_lines"] = "应用皮肤默认分拍线色盘",
 

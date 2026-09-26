@@ -448,6 +448,9 @@ struct CmdClearNoteColorOverrides {
     entt::entity entity{ entt::null };
 };
 
+/// @brief 清除当前谱面全部正式音符及折线子段的自定义颜色。
+struct CmdClearAllNoteColorOverrides {};
+
 /**
  * @brief 撤销指令
  */
@@ -970,18 +973,19 @@ using LogicCommand = std::variant<
     CmdSelectAll, CmdSetBrushNoteColor, CmdApplyNoteColorToSelection,
     CmdSetBrushNotePalette, CmdSetBrushAudioResource,
     CmdApplyNotePaletteToSelection, CmdApplyBrushPaletteToEntity,
-    CmdClearNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
-    CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
-    CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
-    CmdUpdateBpmWithKeepSpeedSv, CmdCreateTimelineEvents,
-    CmdReplaceBeatmapTimings, CmdSetNoteAnnotation, CmdUpsertBeatmapAnnotation,
-    CmdRemoveBeatmapAnnotation, CmdReplaceBeatmapData,
-    CmdAcknowledgeCollaborationMutation, CmdSetCollaborationResources,
-    CmdSetCollaborationOfflineReadOnly, CmdSetCollaborationClipboardIsolation,
-    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
-    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
-    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
-    CmdImportAudio, CmdUpdateAudioResource, CmdRenameAudioResource,
+    CmdClearNoteColorOverrides, CmdClearAllNoteColorOverrides, CmdSaveBeatmap,
+    CmdSaveBeatmapAs, CmdPackBeatmap, CmdScroll, CmdPanCanvas,
+    CmdUpdateTimelineEvent, CmdUpdateTimelineEvents, CmdDeleteTimelineEvent,
+    CmdCreateTimelineEvent, CmdUpdateBpmWithKeepSpeedSv,
+    CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdSetNoteAnnotation,
+    CmdUpsertBeatmapAnnotation, CmdRemoveBeatmapAnnotation,
+    CmdReplaceBeatmapData, CmdAcknowledgeCollaborationMutation,
+    CmdSetCollaborationResources, CmdSetCollaborationOfflineReadOnly,
+    CmdSetCollaborationClipboardIsolation, CmdStartMarquee, CmdUpdateMarquee,
+    CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush,
+    CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
+    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
+    CmdUpdateAudioResource, CmdRenameAudioResource,
     CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
     CmdExportImdPackage, CmdSaveTemporaryProject>;
 

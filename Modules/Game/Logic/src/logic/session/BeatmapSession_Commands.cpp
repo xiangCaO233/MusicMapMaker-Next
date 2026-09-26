@@ -2736,6 +2736,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdApplyNotePaletteToSelection> ||
                     std::is_same_v<T, CmdApplyBrushPaletteToEntity> ||
                     std::is_same_v<T, CmdClearNoteColorOverrides> ||
+                    std::is_same_v<T, CmdClearAllNoteColorOverrides> ||
                     std::is_same_v<T, CmdDeleteSelected> ||
                     std::is_same_v<T, CmdMirrorSelected> ||
                     std::is_same_v<T, CmdAlignSelectedToCommonBeats> ||
@@ -2781,6 +2782,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdApplyNotePaletteToSelection> ||
                     std::is_same_v<T, CmdApplyBrushPaletteToEntity> ||
                     std::is_same_v<T, CmdClearNoteColorOverrides> ||
+                    std::is_same_v<T, CmdClearAllNoteColorOverrides> ||
                     std::is_same_v<T, CmdUpdateTimelineEvent> ||
                     std::is_same_v<T, CmdUpdateTimelineEvents> ||
                     std::is_same_v<T, CmdUpdateBpmWithKeepSpeedSv> ||

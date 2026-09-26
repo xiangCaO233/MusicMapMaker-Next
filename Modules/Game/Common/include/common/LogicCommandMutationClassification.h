@@ -96,7 +96,8 @@ namespace MMM::Logic
                 std::is_same_v<T, CmdApplyNoteColorToSelection> ||
                 std::is_same_v<T, CmdApplyNotePaletteToSelection> ||
                 std::is_same_v<T, CmdApplyBrushPaletteToEntity> ||
-                std::is_same_v<T, CmdClearNoteColorOverrides> ) {
+                std::is_same_v<T, CmdClearNoteColorOverrides> ||
+                std::is_same_v<T, CmdClearAllNoteColorOverrides> ) {
                 // 镜像、对齐和局部配色都只修改玩家物件几何或显示属性。
                 // 选择集内容在执行阶段解析，但不会跨出 Objects 数据域。
                 return ::MMM::BeatmapMutationFlags::Objects;

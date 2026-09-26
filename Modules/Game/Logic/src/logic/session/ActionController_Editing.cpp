@@ -2435,7 +2435,7 @@ void ActionController::handleCommand(const CmdMirrorSelected& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Mirror Selected");
+                                                          "Mirror Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Mirrored {} items (including sub-notes)", count);
 
@@ -2589,6 +2589,34 @@ void ActionController::handleCommand(const CmdClearNoteColorOverrides& cmd)
     m_ctx.lastActionMessage = "Note palette cleared";
 }
 
+/// @brief 清除当前谱面全部正式音符和折线子段的颜色字段。
+/// @param cmd 无附加参数；作用范围由当前会话决定。
+/// @note 旧格式别名和无效颜色文本也会清理；其他元数据与草稿物件保留。
+/// @warning 用户显式按钮操作：遍历一次 Note Registry 并创建单条撤销记录。
+void ActionController::handleCommand(const CmdClearAllNoteColorOverrides& cmd)
+{
+    (void)cmd;
+    if ( !m_ctx.currentBeatmap ) return;
+
+    std::vector<BatchNoteAction::Entry> entries;
+    auto view = m_ctx.noteRegistry.view<NoteComponent>();
+    for ( auto entity : view ) {
+        const auto& oldNote = view.get<NoteComponent>(entity);
+        if ( oldNote.m_isDraft ) continue;
+
+        // 父折线持有真正保存的子数组；子实体也更新，确保画布立即显示皮肤色。
+        auto newNote = oldNote;
+        if ( !clearAllNoteColorOverrides(newNote) ) continue;
+        entries.push_back({ entity, oldNote, std::move(newNote) });
+    }
+    if ( entries.empty() ) return;
+
+    auto action = std::make_unique<BatchNoteAction>(std::move(entries),
+                                                    "Clear All Note Palettes");
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    m_ctx.lastActionMessage = "All note palettes cleared";
+}
+
 /// @brief 粘贴剪贴板中的物件，并拒绝会落到负时间的创建结果。
 /// @param cmd 粘贴指令。
 /// @details
@@ -2684,7 +2712,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
         const double pasteFallbackBpm = getClipboardFallbackBpm(m_ctx);
         auto         pasteBeatTimeline =
             pasteByBeat ? buildClipboardBeatTimeline(m_ctx, pasteFallbackBpm)
-                                : ClipboardBeatTimeline{};
+                        : ClipboardBeatTimeline{};
         const double pasteBeat =
             // 播放头时间先映射到目标谱面的连续拍数，作为整批粘贴锚点。
             pasteByBeat ? clipboardTimeToBeat(
@@ -2931,7 +2959,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
         const double pasteFallbackBpm = getClipboardFallbackBpm(m_ctx);
         auto         pasteBeatTimeline =
             pasteByBeat ? buildClipboardBeatTimeline(m_ctx, pasteFallbackBpm)
-                                : ClipboardBeatTimeline{};
+                        : ClipboardBeatTimeline{};
         const double pasteBeat =
             pasteByBeat ? clipboardTimeToBeat(
                               pasteBeatTimeline, pasteTime, pasteFallbackBpm)
@@ -4100,7 +4128,7 @@ void ActionController::handleCommand(const CmdAlignSelectedToCommonBeats& cmd)
     if ( !entries.empty() ) {
         size_t count  = entries.size();
         auto   action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                        "Align Selected");
+                                                          "Align Selected");
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Aligned {} selected items to nearest common beat divisors",
               count);

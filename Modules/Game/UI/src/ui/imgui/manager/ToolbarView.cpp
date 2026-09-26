@@ -4251,6 +4251,40 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                 activeColor = toVec4(skinColorForSlot(slot));
                 pushColorCommands(slot, std::nullopt, true);
             }
+
+            // 全谱清理只在明确确认后入队，单次动作可撤销且不修改当前画笔。
+            // 此入口只出现在物件页，不影响分拍线颜色或方案配置。
+            // 保持按钮与上方两项动作同宽，防止调色浮层横向扩张。
+            // 确认后清理已有对象；当前槽位选择及未来画笔颜色不变。
+            // 只有用户点击才构造命令，浮层每帧绘制不访问谱面数据。
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.toolbar.note_palette.clear_all_notes").data(),
+                     ImVec2(std::floor(288.0f * dpiScale), buttonH)) ) {
+                ::MMM::UI::FeedbackOpenPopup("ClearAllNoteColorsConfirm");
+            }
+            if ( ImGui::BeginPopup("ClearAllNoteColorsConfirm") ) {
+                // 当前谱面所有正式物件都会被修改，因此确认文案明确给出范围。
+                // 弹窗借用本浮层的输入捕获，取消时不触发任何逻辑命令。
+                ImGui::TextWrapped(
+                    "%s",
+                    TR("ui.toolbar.note_palette.clear_all_notes_confirm")
+                        .data());
+                if ( ::MMM::UI::FeedbackButton(
+                         TR("ui.common.confirm").data()) ) {
+                    // UI 只发送命令；逻辑层在消费时解析活动会话和注册表。
+                    // 不在界面线程扫描 Note，避免大谱面下阻塞浮层绘制。
+                    Logic::EditorEngine::instance().pushCommand(
+                        Logic::CmdClearAllNoteColorOverrides{});
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                // 取消只关闭确认弹窗，调色盘及当前颜色编辑状态保持不变。
+                if ( ::MMM::UI::FeedbackButton(
+                         TR("ui.common.cancel").data()) ) {
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndPopup();
+            }
         } else {
             // 分拍线页附加每槽皮肤默认和整体恢复动作。
             ImGui::TextUnformatted(

@@ -1,6 +1,10 @@
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
+#include "logic/ecs/components/NoteColorUtils.h"
+#include "logic/session/ActionController.h"
+#include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
 
 #include "config/AppConfig.h"
 #include "log/colorful-log.h"
@@ -8,6 +12,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <memory>
 #include <optional>
 #include <string>
 #include <thread>
@@ -316,6 +321,137 @@ bool testSkinSelectionSurvivesPaletteRefresh()
     return ok;
 }
 
+/// @brief 验证全谱清理会清除新旧颜色字段、折线子段，并可撤销。
+/// @return 正式模型和运行时视图一致且无关数据保留时返回 true。
+/// @details
+/// 直接使用正式命令入口检查批量动作与撤销历史，而不只调用颜色工具函数。
+/// 首个根物件混合新键、旧别名、无效旧值以及其它 MMM 字段。
+/// 无效旧值无法进入颜色缓存，但仍须从最终保存的 metadata 中移除。
+/// Malody 来源的同名字段属于外部格式，不能随 MMM 颜色一并删除。
+/// 折线父物件保存子段数组，子实体负责画布交互，两处都必须清空。
+/// 草稿物件由项目草稿存储管理，不属于当前谱面正式物件清理范围。
+/// 模型同步后的容器是文件保存的输入，因此也检查实际同步结果。
+/// 最后撤销这一次全谱命令，验证缓存、历史别名和子实体同时恢复。
+/// 本测试不依赖皮肤当前 RGB 值；皮肤颜色的具体值可随主题变化。
+/// 清除的判据是 optional 颜色为空和来源字段消失，而不是变成白色。
+/// 这能区分真正恢复继承语义与写入一个恰巧等于当前皮肤的固定色。
+/// 命令只作用于当前正式谱面，不会更改后续新建物件使用的画笔调色盘。
+/// 文件保存入口读取同步后的模型，因此不需要为夹具创建真实项目目录。
+/// @warning 测试只执行一次用户命令及模型同步，不模拟逐帧批量清理。
+bool testClearAllNoteColors()
+{
+    using namespace MMM::Logic;
+    constexpr auto mmm = MMM::NoteMetadataType::MMM;
+    SessionContext ctx;
+    // 测试模型仅驻留内存，避免保存路径触及用户配置或真实项目。
+    ctx.currentBeatmap = std::make_shared<MMM::BeatMap>();
+    ActionController actions(ctx);
+    // ActionController 将单次命令记录进会话的 ActionStack，后续 Undo
+    // 使用同一栈。
+
+    // 普通物件同时放入有效新键和无效旧别名，确保清理按键名而非解析结果执行。
+    // 另一个非颜色 MMM 属性用于发现误删整个来源域的实现。
+    NoteComponent tap;
+    tap.m_customColors.tap = glm::vec4{ 0.2F, 0.3F, 0.4F, 1.0F };
+    tap.m_metadata.note_properties[mmm]["note_tap"]   = "0.2,0.3,0.4,1";
+    tap.m_metadata.note_properties[mmm]["color.note"] = "invalid";
+    tap.m_metadata.note_properties[mmm]["annotation"] = "keep";
+    // 保留同一来源域的非颜色键，能发现“删掉整个 MMM 元数据域”的误实现。
+    tap.m_metadata
+        .note_properties[MMM::NoteMetadataType::MALODY]["color.note"] =
+        "foreign";
+    const auto tapEntity = ctx.noteRegistry.create();
+    ctx.noteRegistry.emplace<NoteComponent>(tapEntity, tap);
+
+    // 折线内嵌段是持久化真源，派生子实体也须同步清空以立即更新画布。
+    // 父级旧别名与子段新旧键混合，覆盖曾经编辑过的旧版谱面。
+    NoteComponent polyline;
+    polyline.m_type              = MMM::NoteType::POLYLINE;
+    polyline.m_customColors.head = glm::vec4{ 0.5F };
+    polyline.m_metadata.note_properties[mmm]["color.hold_flick_head"] =
+        "0.5,0.5,0.5,0.5";
+    NoteComponent::SubNote sub;
+    sub.type                                             = MMM::NoteType::HOLD;
+    sub.duration                                         = 1.0;
+    sub.customColors.hold                                = glm::vec4{ 0.6F };
+    sub.metadata.note_properties[mmm]["note_hold"]       = "0.6,0.6,0.6,0.6";
+    sub.metadata.note_properties[mmm]["color.hold_body"] = "invalid";
+    polyline.m_subNotes.push_back(sub);
+    // 父实体与子投影共享这一子段的逻辑位置，但拥有独立的 ECS 组件值。
+    const auto parentEntity = ctx.noteRegistry.create();
+    ctx.noteRegistry.emplace<NoteComponent>(parentEntity, polyline);
+    auto       child = makeNoteComponentFromSubNote(sub, true, parentEntity, 0);
+    const auto childEntity = ctx.noteRegistry.create();
+    ctx.noteRegistry.emplace<NoteComponent>(childEntity, child);
+    // 创建投影后不再改写父数组，避免测试夹具先天不一致。
+
+    // 草稿颜色保留；它存于项目草稿区，不属于当前谱面的正式 Note 容器。
+    // 使用普通物件副本生成草稿，保证草稿确实包含待清理颜色。
+    NoteComponent draft    = tap;
+    draft.m_isDraft        = true;
+    const auto draftEntity = ctx.noteRegistry.create();
+    ctx.noteRegistry.emplace<NoteComponent>(draftEntity, draft);
+
+    // 先确认内存中的所有正式投影，再调用文件保存前的模型同步。
+    actions.handleCommand(CmdClearAllNoteColorOverrides{});
+    const auto& clearedTap = ctx.noteRegistry.get<NoteComponent>(tapEntity);
+    const auto& clearedParent =
+        ctx.noteRegistry.get<NoteComponent>(parentEntity);
+    const auto& clearedChild = ctx.noteRegistry.get<NoteComponent>(childEntity);
+    const auto& retainedDraft =
+        ctx.noteRegistry.get<NoteComponent>(draftEntity);
+    // 即时视图覆盖四种角色：独立根、折线父、折线投影和草稿根。
+    // 颜色缓存缺失代表渲染回退皮肤；元数据缺失代表重启后仍回退皮肤。
+    // 两个状态都需要验证，否则清理可能只在当前编辑会话内有效。
+    bool ok =
+        !hasAnyNoteColorOverride(clearedTap.m_customColors) &&
+        !hasAnyNoteColorOverride(clearedParent.m_customColors) &&
+        !hasAnyNoteColorOverride(clearedParent.m_subNotes[0].customColors) &&
+        !hasAnyNoteColorOverride(clearedChild.m_customColors) &&
+        clearedTap.m_metadata.note_properties.at(mmm).size() == 1 &&
+        clearedTap.m_metadata.note_properties.at(mmm).contains("annotation") &&
+        clearedTap.m_metadata.note_properties.at(MMM::NoteMetadataType::MALODY)
+            .contains("color.note") &&
+        clearedParent.m_subNotes[0].metadata.note_properties.find(mmm) ==
+            clearedParent.m_subNotes[0].metadata.note_properties.end() &&
+        hasAnyNoteColorOverride(retainedDraft.m_customColors);
+
+    // 模型同步是保存入口的数据源，文件写出时不得重新带回已清除的颜色。
+    // Hold 子段来自父内嵌数组，不能错误地以派生实体作为持久化真源。
+    SessionUtils::syncBeatmap(ctx);
+    // 同步会重建具体类型容器，子 Hold 也应该出现在正式 Hold 容器里。
+    ok = ok && ctx.currentBeatmap->m_noteData.notes.size() == 1 &&
+         ctx.currentBeatmap->m_noteData.polylines.size() == 1 &&
+         ctx.currentBeatmap->m_noteData.holds.size() == 1 &&
+         ctx.currentBeatmap->m_noteData.notes.front()
+                 .m_metadata.note_properties.at(mmm)
+                 .size() == 1 &&
+         ctx.currentBeatmap->m_noteData.holds.front()
+                 .m_metadata.note_properties.find(mmm) ==
+             ctx.currentBeatmap->m_noteData.holds.front()
+                 .m_metadata.note_properties.end();
+
+    // Undo 应恢复缓存和旧字段，确保随后再保存能还原原始谱面属性。
+    // 投影子实体若没有恢复，画布颜色会与父折线持久化状态分离。
+    // 这里通过统一命令入口撤销，覆盖 ActionStack 而非直接复写旧副本。
+    actions.handleCommand(CmdUndo{});
+    ok = ok &&
+         hasAnyNoteColorOverride(
+             ctx.noteRegistry.get<NoteComponent>(tapEntity).m_customColors) &&
+         ctx.noteRegistry.get<NoteComponent>(tapEntity)
+             .m_metadata.note_properties.at(mmm)
+             .contains("color.note") &&
+         hasAnyNoteColorOverride(
+             ctx.noteRegistry.get<NoteComponent>(parentEntity)
+                 .m_subNotes[0]
+                 .customColors) &&
+         hasAnyNoteColorOverride(
+             ctx.noteRegistry.get<NoteComponent>(childEntity).m_customColors);
+    if ( !ok )
+        XERROR("Clear all note colors did not preserve persistence or undo");
+    return ok;
+}
+
 }  // namespace
 
 /// @brief 运行画笔调色盘跨会话恢复测试。
@@ -325,7 +461,8 @@ bool testSkinSelectionSurvivesPaletteRefresh()
 int main()
 {
     // 先验证跨会话共享状态，再验证目标路由隔离，最后执行配置并发读取回归。
-    return testSkinSelectionSurvivesPaletteRefresh() &&
+    return testClearAllNoteColors() &&
+                   testSkinSelectionSurvivesPaletteRefresh() &&
                    testPaletteRestoredAfterSessionClose() &&
                    testAudioResourceRestoredAfterSessionClose() &&
                    testBackgroundCanvasMousePositionRouting() &&

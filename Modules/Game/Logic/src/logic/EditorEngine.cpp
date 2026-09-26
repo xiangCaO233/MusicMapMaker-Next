@@ -1120,6 +1120,7 @@ bool isTemporaryProjectMutationCommand(const LogicCommand& cmd)
          std::holds_alternative<CmdApplyNotePaletteToSelection>(cmd) ||
          std::holds_alternative<CmdApplyBrushPaletteToEntity>(cmd) ||
          std::holds_alternative<CmdClearNoteColorOverrides>(cmd) ||
+         std::holds_alternative<CmdClearAllNoteColorOverrides>(cmd) ||
          std::holds_alternative<CmdSaveBeatmap>(cmd) ||
          std::holds_alternative<CmdSaveBeatmapAs>(cmd) ||
          std::holds_alternative<CmdUpdateTimelineEvent>(cmd) ||

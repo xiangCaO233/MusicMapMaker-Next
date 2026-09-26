@@ -4,6 +4,7 @@
 #include "logic/ecs/components/NoteComponent.h"
 #include "mmm/Metadata.h"
 #include <algorithm>
+#include <array>
 #include <glm/glm.hpp>
 #include <iomanip>
 #include <optional>
@@ -247,6 +248,71 @@ inline bool hasAnyNoteColorOverride(const NoteColorOverrides& colors)
     return colors.tap.has_value() || colors.head.has_value() ||
            colors.hold.has_value() || colors.end.has_value() ||
            colors.flickArrow.has_value() || colors.node.has_value();
+}
+
+/// @brief 删除物件 MMM 元数据中的全部新旧颜色键。
+/// @param metadata 需要保留其它属性和来源域的元数据。
+/// @return 至少删除一个颜色键时返回 true，包括内容无效的历史颜色字段。
+/// @note 不依赖颜色解析结果，未能解析的旧值也要从文件字段中清除。
+/// @note 同一 MMM 来源域中的非颜色属性继续保留。
+/// @note 不修改 OSU、Malody 等其它来源域的同名属性。
+/// @warning 用户显式批量编辑路径：扫描固定键集合，不得用于逐帧渲染。
+inline bool clearNoteColorMetadata(::MMM::NoteMetadata& metadata)
+{
+    auto sourceIt = metadata.note_properties.find(::MMM::NoteMetadataType::MMM);
+    if ( sourceIt == metadata.note_properties.end() ) return false;
+
+    // 兼容读取支持旧别名；只删新键会在下次载入时重新显现旧颜色。
+    constexpr std::array<std::string_view, 13> colorKeys{
+        // 前六项由当前编辑器写入，后七项只为旧版文件读取兼容。
+        "note_tap",
+        "note_head",
+        "note_hold",
+        "note_end",
+        "note_flick_arrow",
+        "note_node",
+        "color.note",
+        "color.note_head",
+        "color.hold_flick_head",
+        "color.hold_body",
+        "color.hold_end",
+        "color.flick_end",
+        "color.polyline_node",
+    };
+    bool changed = false;
+    for ( auto key : colorKeys ) {
+        // 使用透明键查找，删除走迭代器以兼容构建所用的标准库版本。
+        if ( auto colorIt = sourceIt->second.find(key);
+             colorIt != sourceIt->second.end() ) {
+            sourceIt->second.erase(colorIt);
+            changed = true;
+        }
+    }
+    if ( changed && sourceIt->second.empty() ) {
+        // 仅在本次确实移除了最后一个颜色键时删除空域，避免无关清理副作用。
+        metadata.note_properties.erase(sourceIt);
+    }
+    return changed;
+}
+
+/// @brief 同时清除根物件与折线内嵌子段的颜色缓存和持久化字段。
+/// @param note 当前谱面中的正式根物件；派生子实体由调用方跳过。
+/// @return 缓存或元数据中曾有颜色时返回 true。
+/// @note 返回值供撤销动作跳过无变化物件，不代表实际删除键的数量。
+/// @note 子段元数据独立于父级，必须逐段清理。
+/// @warning 用户显式编辑路径：遍历折线节点和元数据，不进入热路径。
+inline bool clearAllNoteColorOverrides(NoteComponent& note)
+{
+    bool changed        = hasAnyNoteColorOverride(note.m_customColors);
+    note.m_customColors = {};
+    changed             = clearNoteColorMetadata(note.m_metadata) || changed;
+    for ( auto& sub : note.m_subNotes ) {
+        // 内嵌子段是正式谱面的保存来源，派生实体由命令调用方另外清理。
+        changed          = hasAnyNoteColorOverride(sub.customColors) || changed;
+        sub.customColors = {};
+        changed          = clearNoteColorMetadata(sub.metadata) || changed;
+    }
+    return changed;
 }
 
 /// @brief 读取 NoteComponent 上某个槽位的缓存自定义颜色。
