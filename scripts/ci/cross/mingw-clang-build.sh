@@ -561,9 +561,14 @@ fi
 
 if (( prebuiltTargets )); then
     # 清单只覆盖 staging 所需第三方归档。
+    # clang64 自行产出 Xiph 归档，不能复用 ucrt64 GCC 对象。
+    # 三个项目共享私有安装前缀，目标顺序遵循 Ogg、Vorbis、Opus。
     cmake --build "${buildDir}" --parallel "${buildJobs}" --target \
         zlib_project \
         lame_project \
+        ogg_project \
+        vorbis_project \
+        opus_project \
         ffmpeg_project \
         fftw_project \
         rubberband_project \

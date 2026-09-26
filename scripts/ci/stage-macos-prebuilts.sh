@@ -354,6 +354,12 @@ copyMainLib "ffmpeg" "libavutil.a" "3rdpty/sources/IonCachyEngine/3rdpty/sources
 # 两个转换组件分别覆盖音频和视频数据路径。
 copyMainLib "ffmpeg" "libswresample.a" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_install/lib/libswresample.a"
 copyMainLib "ffmpeg" "libswscale.a" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_install/lib/libswscale.a"
+# Xiph 归档与 FFmpeg 来自同一源码构建，避免编码器符号跨配置混用。
+# 四项必须全部复制：Vorbis 编码器经 Vorbis 公共库引用 Ogg，Opus 另有独立实现。
+copyMainLib "xiph" "libvorbisenc.a" "3rdpty/xiph_inst/lib/libvorbisenc.a"
+copyMainLib "xiph" "libvorbis.a" "3rdpty/xiph_inst/lib/libvorbis.a"
+copyMainLib "xiph" "libogg.a" "3rdpty/xiph_inst/lib/libogg.a"
+copyMainLib "xiph" "libopus.a" "3rdpty/xiph_inst/lib/libopus.a"
 # FFTW 使用独立安装前缀。
 copyMainLib "fftw" "libfftw3.a" "3rdpty/fftw_inst/lib/libfftw3.a"
 # fmt 与 FreeType 按配置优先寻找规范输出名。
@@ -399,6 +405,11 @@ copyIceLib "ffmpeg" "libavutil.a" "3rdpty/sources/IonCachyEngine/3rdpty/sources/
 # 两个转换组件分别覆盖音频和视频数据路径。
 copyIceLib "ffmpeg" "libswresample.a" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_install/lib/libswresample.a"
 copyIceLib "ffmpeg" "libswscale.a" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_install/lib/libswscale.a"
+# 引擎预编译消费也需要同一批 Xiph 归档，不能只更新主仓。
+copyIceLib "xiph" "libvorbisenc.a" "3rdpty/xiph_inst/lib/libvorbisenc.a"
+copyIceLib "xiph" "libvorbis.a" "3rdpty/xiph_inst/lib/libvorbis.a"
+copyIceLib "xiph" "libogg.a" "3rdpty/xiph_inst/lib/libogg.a"
+copyIceLib "xiph" "libopus.a" "3rdpty/xiph_inst/lib/libopus.a"
 # FFTW、fmt、LAME 与 libsamplerate 构成 DSP 和编码依赖。
 copyIceLib "fftw" "libfftw3.a" "3rdpty/fftw_inst/lib/libfftw3.a"
 copyIceLib "fmt" "${fmtOutputName}" "lib/${fmtOutputName}" "lib/libfmt.a" "lib/libfmtd.a"

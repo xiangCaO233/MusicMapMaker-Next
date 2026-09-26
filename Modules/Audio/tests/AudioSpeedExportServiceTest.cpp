@@ -44,7 +44,8 @@ namespace
 //
 // 解码验证不只检查 track 创建，还在开头、四分点、中点、四分之三和尾部读取
 // 窗口，统计短读、静音、RMS、峰值与非有限样本。压缩容器允许少量编码器延迟，
-// 因此最低回读帧数使用 95% 容忍；Receiver 自身报告帧数仍按精确理论值检查。
+// 因此最低回读帧数容许 5% 或短 Ogg 的 128 帧延迟；Receiver 报告帧数
+// 仍按精确理论值检查。
 //
 // 文件系统约束如下：
 //
@@ -198,8 +199,15 @@ bool isNearlyEqual(double actual, double expected)
 /// @return 最低可接受读回帧数。
 std::size_t minimumDecodedFrames(std::size_t expectedFrames)
 {
-    // 短文件不放宽，较长压缩容器只容许最多 5% 的编解码延迟差异。
-    return expectedFrames > 100 ? expectedFrames * 95 / 100 : expectedFrames;
+    // 短文件不放宽；较长文件容许 5% 的编解码延迟差异。
+    if ( expectedFrames <= 100 ) return expectedFrames;
+    const auto percentageTolerance = expectedFrames - expectedFrames * 95 / 100;
+    // libvorbis 对 2400 帧的短 Ogg 会有 128 帧解码延迟，略高于 5%。
+    const auto tolerance =
+        expectedFrames >= 2048
+            ? std::max(percentageTolerance, std::size_t{ 128 })
+            : percentageTolerance;
+    return expectedFrames - tolerance;
 }
 
 /// @brief 创建测试用立体声 WAV。
@@ -917,7 +925,7 @@ int main(int argc, char* argv[])
     }
 
 // 直接包含接收器头读取能力宏，测试分支必须与本次实际编译的 ICE 一致。
-#if defined(ICE_FFMPEG_FILE_RECEIVER_ADVANCED_OPTIONS) && !defined(__APPLE__)
+#if defined(ICE_FFMPEG_FILE_RECEIVER_ADVANCED_OPTIONS)
     // 用户明确请求的采样时钟与有损码率必须进入真实编码器，而非仅存于 UI。
     // m4a 在接收器中显式映射到 AAC，避免 ogg 默认 codec 随 FFmpeg 构建变化。
     // 输入为 48 kHz，目标选 44.1 kHz，探测结果可以直接发现参数未生效。
@@ -952,14 +960,15 @@ int main(int argc, char* argv[])
         // 目标码率并非逐秒恒定值，不能用短文件平均码率等于请求值作断言。
     }
 
+    // 各平台预编译包都需发布 libvorbis，显式码率必须端到端生效。
     // Ogg 的默认编码器取决于 FFmpeg 是否启用 libvorbis；显式码率必须
     // 始终导出 Vorbis，而不是在部分构建中误选不支持目标码率的 FLAC。
-    // 使用界面默认的 192 kbit/s，覆盖用户实际触发的参数组合。
+    // 使用用户报告的 96 kbit/s，验证头部标称值而非仅检查容器格式。
     // 复用较长的源文件，让编码器经历多次写入及最终排空。
     MMM::Audio::AudioSpeedExportOptions oggBitrateOptions;
     oggBitrateOptions.inputPath  = largeInputPath;
-    oggBitrateOptions.outputPath = root / "output_192k.ogg";
-    oggBitrateOptions.bitrate    = 192000;
+    oggBitrateOptions.outputPath = root / "output_96k.ogg";
+    oggBitrateOptions.bitrate    = 96000;
     // 保持倍速、变调和采样率默认值，以隔离容器与编码器选择。
     const auto oggBitrateResult =
         MMM::Audio::AudioSpeedExportService::exportWav(oggBitrateOptions);
@@ -968,12 +977,12 @@ int main(int argc, char* argv[])
         XERROR("[audio-speed-export] ogg bitrate error: {}",
                oggBitrateResult.errorMessage);
     }
-    ok &= check(oggBitrateResult.success, "192k ogg export succeeds");
+    ok &= check(oggBitrateResult.success, "96k ogg export succeeds");
     if ( oggBitrateResult.success ) {
         // 成功返回后再读取磁盘文件，防止只验证内存中的结果状态。
         std::vector<unsigned char> oggBytes;
         ok &= check(readFile(oggBitrateOptions.outputPath, oggBytes),
-                    "192k ogg output is readable");
+                    "96k ogg output is readable");
         // 限定在第一个 page 的头部，避免正文偶然出现 codec 名造成误判。
         // 文件短于截取长度时收缩边界，避免越界迭代器。
         const std::string header(
@@ -982,14 +991,19 @@ int main(int argc, char* argv[])
         // 识别包位于首个 Ogg page；检查实际 codec，避免只凭后缀宣布修复。
         ok &= check(header.starts_with("OggS") &&
                         header.find("\x01vorbis") != std::string::npos,
-                    "192k ogg contains Vorbis identification packet");
+                    "96k ogg contains Vorbis identification packet");
+        // Vorbis 识别包在编码开始时写入目标码率；原生编码器会将其清零。
+        // 读取标称字段能稳定发现忽略设置的问题，不受两秒正弦波的 VBR 均值影响。
+        const auto identOffset = header.find("\x01vorbis");
+        ok &= check(identOffset != std::string::npos &&
+                        readU32(oggBytes, identOffset + 20) == 96000,
+                    "96k ogg advertises requested nominal bitrate");
         // 重新解码并检查末端，确认最终排空与封装收尾后的数据仍可读。
         ok &= checkEngineCanReadTail(
             oggBitrateOptions.outputPath,
             minimumDecodedFrames(oggBitrateResult.outputFrames),
-            "192k ogg output");
+            "96k ogg output");
     }
-
     // 无损 PCM 不应默默丢弃有损码率选项，参数冲突必须由接收端显式拒绝。
     // 失败应发生在打开编码链阶段，不把错误请求当作默认 WAV 写出。
     MMM::Audio::AudioSpeedExportOptions invalidBitrateOptions;

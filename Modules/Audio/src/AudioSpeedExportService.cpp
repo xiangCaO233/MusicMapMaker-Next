@@ -402,7 +402,7 @@ AudioSpeedExportResult AudioSpeedExportService::exportWav(
     // targetFrames 和进度分母不能按目标采样率重复缩放。
     receiver.set_source(graph);
     receiver.set_target_frames(targetFrames);
-#if defined(ICE_FFMPEG_FILE_RECEIVER_ADVANCED_OPTIONS) && !defined(__APPLE__)
+#if defined(ICE_FFMPEG_FILE_RECEIVER_ADVANCED_OPTIONS)
     // 新版 ICE 会验证具体 codec 的能力；配置失败必须在创建文件前返回。
     if ( !receiver.set_output_sample_rate(options.outputSampleRate) ||
          !receiver.set_bitrate(options.bitrate) ) {
@@ -411,7 +411,7 @@ AudioSpeedExportResult AudioSpeedExportService::exportWav(
     }
 #else
     // 旧预编译包仍可执行原有导出，显式编码参数必须报错而不能静默忽略。
-    // macOS 的 ICE 预编译库尚未由原生 Runner 重建；避免链接未提供的方法。
+    // 未更新 ICE 公共头和静态归档的构建仍保留明确错误，避免静默忽略参数。
     if ( options.outputSampleRate != 0 || options.bitrate != 0 ) {
         result.errorMessage =
             "Audio encoder options require updated ICE prebuilts";

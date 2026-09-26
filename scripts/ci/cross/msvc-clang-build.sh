@@ -387,9 +387,14 @@ fi
 
 if (( prebuiltTargets )); then
     # 清单只包含后续 staging 所需第三方归档。
+    # Xiph COFF 归档按当前配置的静态 CRT 单独构建。
+    # 此目标组不能混入 MinGW 的同名 Xiph 归档。
     cmake --build "${buildDir}" --parallel "${buildJobs}" --target \
         zlib_project \
         lame_project \
+        ogg_project \
+        vorbis_project \
+        opus_project \
         ffmpeg_project \
         fftw_project \
         rubberband_project \

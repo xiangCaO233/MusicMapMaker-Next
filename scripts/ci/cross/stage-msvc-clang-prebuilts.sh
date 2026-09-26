@@ -397,6 +397,12 @@ stageMainLibWithPdb "ffmpeg" "avformat.lib" "avformat.pdb" "3rdpty/sources/IonCa
 stageMainLibWithPdb "ffmpeg" "avutil.lib" "avutil.pdb" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_install/lib/avutil.lib"
 stageMainLibWithPdb "ffmpeg" "swresample.lib" "swresample.pdb" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_install/lib/swresample.lib"
 stageMainLibWithPdb "ffmpeg" "swscale.lib" "swscale.pdb" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_install/lib/swscale.lib"
+# Xiph 的静态归档使用上游 CMake 输出名，PDB 由各项目内部目标决定。
+copyMainLib "xiph" "vorbisenc.lib" "3rdpty/xiph_inst/lib/vorbisenc.lib"
+# 四个 COFF 归档来自同一 CRT 配置；此处不搜索宿主安装目录。
+copyMainLib "xiph" "vorbis.lib" "3rdpty/xiph_inst/lib/vorbis.lib"
+copyMainLib "xiph" "ogg.lib" "3rdpty/xiph_inst/lib/ogg.lib"
+copyMainLib "xiph" "opus.lib" "3rdpty/xiph_inst/lib/opus.lib"
 # 数学、格式化与字体依赖允许 Debug 名称差异。
 stageMainLibWithPdb "fftw" "fftw3.lib" "fftw3.pdb" "3rdpty/fftw_inst/lib/fftw3.lib"
 stageMainLibWithPdb "fmt" "${fmtOutputName}" "${fmtPdbName}" "lib/${fmtOutputName}" "lib/fmt.lib" "lib/fmtd.lib"
@@ -437,6 +443,11 @@ stageIceLibWithPdb "ffmpeg" "avformat.lib" "avformat.pdb" "3rdpty/sources/IonCac
 stageIceLibWithPdb "ffmpeg" "avutil.lib" "avutil.pdb" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_install/lib/avutil.lib"
 stageIceLibWithPdb "ffmpeg" "swresample.lib" "swresample.pdb" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_install/lib/swresample.lib"
 stageIceLibWithPdb "ffmpeg" "swscale.lib" "swscale.pdb" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_install/lib/swscale.lib"
+# 引擎独立构建时的 FFmpeg 也要解析相同 CRT 配置的 Xiph 归档。
+copyIceLib "xiph" "vorbisenc.lib" "3rdpty/xiph_inst/lib/vorbisenc.lib"
+copyIceLib "xiph" "vorbis.lib" "3rdpty/xiph_inst/lib/vorbis.lib"
+copyIceLib "xiph" "ogg.lib" "3rdpty/xiph_inst/lib/ogg.lib"
+copyIceLib "xiph" "opus.lib" "3rdpty/xiph_inst/lib/opus.lib"
 # DSP、编码与重采样库复用主仓源产物。
 stageIceLibWithPdb "fftw" "fftw3.lib" "fftw3.pdb" "3rdpty/fftw_inst/lib/fftw3.lib"
 stageIceLibWithPdb "fmt" "${fmtOutputName}" "${fmtPdbName}" "lib/${fmtOutputName}" "lib/fmt.lib" "lib/fmtd.lib"

@@ -431,9 +431,13 @@ fi
 
 if (( prebuiltTargets )); then
     # 清单与 staging 脚本保持同步，避免构建无关业务目标。
+    # Xiph 三项显式列出，防止仅靠 FFmpeg 的传递依赖偶然构建。
     cmake --build "${buildDir}" --parallel "${buildJobs}" --target \
         zlib_project \
         lame_project \
+        ogg_project \
+        vorbis_project \
+        opus_project \
         ffmpeg_project \
         fftw_project \
         rubberband_project \

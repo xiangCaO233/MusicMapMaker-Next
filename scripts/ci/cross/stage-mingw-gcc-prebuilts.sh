@@ -229,6 +229,12 @@ copyMainLib "ffmpeg" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_instal
 copyMainLib "ffmpeg" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_install/lib/libswresample.a" "libswresample.a"
 # swscale 供视频像素格式与尺寸转换路径使用。
 copyMainLib "ffmpeg" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_install/lib/libswscale.a" "libswscale.a"
+# 外部有损编码器按 FFmpeg 静态链接顺序与工具链配置一起发布。
+copyMainLib "xiph" "3rdpty/xiph_inst/lib/libvorbisenc.a" "libvorbisenc.a"
+# MinGW GCC 和 Clang wrapper 共用清单，但目标目录由各自 compiler tag 隔离。
+copyMainLib "xiph" "3rdpty/xiph_inst/lib/libvorbis.a" "libvorbis.a"
+copyMainLib "xiph" "3rdpty/xiph_inst/lib/libogg.a" "libogg.a"
+copyMainLib "xiph" "3rdpty/xiph_inst/lib/libopus.a" "libopus.a"
 # FFTW 与格式化、字体库使用各自规范化输出名。
 copyMainLib "fftw" "3rdpty/fftw_inst/lib/libfftw3.a" "libfftw3.a"
 # fmt 文件名随 Debug 配置选择 d 后缀。
@@ -291,6 +297,11 @@ copyIceLib "ffmpeg" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_install
 copyIceLib "ffmpeg" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_install/lib/libswresample.a" "libswresample.a"
 # swscale 保留给视频帧转换路径。
 copyIceLib "ffmpeg" "3rdpty/sources/IonCachyEngine/3rdpty/sources/ffmpeg_install/lib/libswscale.a" "libswscale.a"
+# 引擎独立消费预编译 FFmpeg 时需要同 ABI 的 Vorbis、Ogg 和 Opus 归档。
+copyIceLib "xiph" "3rdpty/xiph_inst/lib/libvorbisenc.a" "libvorbisenc.a"
+copyIceLib "xiph" "3rdpty/xiph_inst/lib/libvorbis.a" "libvorbis.a"
+copyIceLib "xiph" "3rdpty/xiph_inst/lib/libogg.a" "libogg.a"
+copyIceLib "xiph" "3rdpty/xiph_inst/lib/libopus.a" "libopus.a"
 # FFTW、fmt 与音频编解码库构成引擎处理链。
 copyIceLib "fftw" "3rdpty/fftw_inst/lib/libfftw3.a" "libfftw3.a"
 # fmt 复用当前配置选择后的归档名称。

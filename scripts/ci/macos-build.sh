@@ -461,9 +461,15 @@ fi
 
 if (( prebuiltTargets )); then
     # 清单与 staging 脚本保持同步，只构建依赖归档。
+    # Ogg 必须先安装，Vorbis 的配置探针才能使用本次构建的头和库。
+    # Opus 与它们共用私有安装前缀，FFmpeg 配置前要等待整组归档完成。
+    # 三个 Xiph 目标对应 staging 清单，缺项会使预编译消费链接失败。
     cmake --build "${buildDir}" --parallel "${buildJobs}" --target \
         zlib_project \
         lame_project \
+        ogg_project \
+        vorbis_project \
+        opus_project \
         ffmpeg_project \
         fftw_project \
         rubberband_project \

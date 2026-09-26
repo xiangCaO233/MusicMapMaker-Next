@@ -367,9 +367,13 @@ fi
 
 if (( prebuiltTargets )); then
     # 清单只包含后续 staging 所需第三方归档。
+    # Xiph 归档必须与当前 ucrt64 工具链和配置一起构建。
     cmake --build "${buildDir}" --parallel "${buildJobs}" --target \
         zlib_project \
         lame_project \
+        ogg_project \
+        vorbis_project \
+        opus_project \
         ffmpeg_project \
         fftw_project \
         rubberband_project \
