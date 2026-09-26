@@ -9,11 +9,13 @@
 #include "graphic/imguivk/VKContext.h"
 #include "graphic/theme/ImGuiThemeRegistry.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/plugin/ToolPluginView.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <memory>
 #include <optional>
@@ -74,12 +76,38 @@ public:
         ImGui::SetNextWindowSize(
             ImVec2(620.0f * context.dpiScale, 440.0f * context.dpiScale),
             ImGuiCond_FirstUseEver);
-        // ### 后缀固定内部 ID，使语言切换不丢失窗口状态。
+        // 标题可本地化，### 后的管理窗口 ID 才是持久化停靠身份。
         const std::string windowTitle =
             TR("ui.tools.plugin_list.title").toString() + "###PluginListWindow";
+        if ( m_pendingInitialDock ) {
+            // 旧版浮动记录不会响应 FirstUseEver，打开时迁回主 DockSpace。
+            // 既有 DockId 则保留用户在项目工作区创建的标签或分栏。
+            const ImGuiID centerDockId = MainDockSpaceUI::getCenterDockId();
+            if ( centerDockId != 0 ) {
+                const auto* saved = ImGui::FindWindowSettingsByID(
+                    ImHashStr(windowTitle.c_str()));
+                const auto* existing =
+                    ImGui::FindWindowByName(windowTitle.c_str());
+                // 仅初次显示时迁回浮动窗口；之后不覆盖用户拖放的结果。
+                // 如果节点本帧尚不可用，保留请求至实际停靠成功。
+                // 旧配置常只有 Pos/Size，这仍是已保存的窗口；FirstUseEver
+                // 对它无效，因此以缺少 DockId 作为迁移依据。
+                const bool floating = saved ? saved->DockId == 0
+                                            : existing && existing->DockId == 0;
+                ImGui::SetNextWindowDockID(
+                    centerDockId,
+                    floating ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
+            }
+        }
+        // 即使从 DockSpace 拖出，也继续使用应用主视口而非平台独立窗口。
+        ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
         const bool wasOpenBeforeBegin = m_showWindow;
         // Begin 返回折叠状态；无论返回值如何都必须调用 End。
         const bool opened = ImGui::Begin(windowTitle.c_str(), &m_showWindow);
+        // 真实 DockNode 建立后才撤销初始停靠请求。
+        // 这样首次打开时主 DockSpace 尚在构建，也不会把窗口永久留在浮动层。
+        if ( m_pendingInitialDock && ImGui::IsWindowDocked() )
+            m_pendingInitialDock = false;
         // 统一关闭按钮反馈只比较 Begin 前后的可见性值。
         FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin, &m_showWindow);
 
@@ -283,6 +311,9 @@ private:
     /// @brief 插件列表窗口是否显示。
     /// @note execute 置位，ImGui 窗口关闭按钮直接清除。
     bool m_showWindow{ false };
+
+    /// @brief 管理面板首次显示时等待有效主 DockSpace 节点。
+    bool m_pendingInitialDock{ true };
 
     /// @brief 打开窗口时缓存的主题插件目录显示文本，避免每帧触发路径创建。
     /// @note 目录在应用运行期间稳定，关闭窗口时无需清空。

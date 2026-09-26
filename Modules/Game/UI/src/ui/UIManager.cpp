@@ -1698,7 +1698,11 @@ void UIManager::onUpdateUI()
     const size_t initialViewCount = m_uiSequence.size();
     for ( size_t i = 0; i < initialViewCount && i < m_uiSequence.size(); ++i ) {
         const std::string name = m_uiSequence[i];
-        auto              it   = m_uiviews.find(name);
+        // 工具插件在 UIManager 构造时注册，早于主 DockSpace。
+        // ImGui 要求先提交 DockSpace 再提交可停靠窗口；因此工具窗口
+        // 必须等本轮普通视图（包括主停靠区）全部绘制完成后再提交。
+        if ( name == "ToolPluginView" ) continue;
+        auto it = m_uiviews.find(name);
         if ( it == m_uiviews.end() ) {
             // 先前视图更新可能注销后续名称，查找失败时跳过。
             continue;
@@ -1707,6 +1711,12 @@ void UIManager::onUpdateUI()
         // 视图内部提交 ImGui 控件及必要画笔数据。
         it->second->update(this);
     }
+
+    // 这里仍处于同一 ImGui 帧，插件列表和主编辑区节点均已创建。
+    // 用户可把工具窗口拖到画布、时间线或其他窗口，而非只能拖到插件列表。
+    // 视图可能在本轮被注销；只从注册表查询当前存活实例。
+    if ( auto* tools = getView<ToolPluginView>("ToolPluginView") )
+        tools->update(this);
 
     // 主画布由 CanvasTabManager 在 update 中注册，欢迎页必须排在它之后。
     // 逻辑会话可能迟到，保留打开请求直到画布确实存在，不靠固定延时猜测就绪。

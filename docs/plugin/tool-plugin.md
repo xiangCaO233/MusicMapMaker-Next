@@ -3,7 +3,9 @@
 工具插件位于用户配置目录的 `plugins/tools/`，每个 `.lua` 文件对应一个独立 Lua
 状态。应用启动时加载一次；在“工具 → 插件列表”中打开窗口，在“工具 → 重载插件”
 中重新读取脚本。窗口使用插件 `id` 作为固定 ImGui 内部标识，标题改名不会丢失
-停靠位置。
+停靠位置。首次打开的工具窗口会加入主编辑区 DockSpace；之后可以与其他
+ImGui 面板相互停靠或拆分，临时浮动时也留在应用主窗口内部。插件列表
+管理窗口遵循相同的停靠方式。
 
 复制下面的最小示例为配置目录中的 `plugins/tools/hello.lua`，再点击“工具 →
 重载插件”，即可在“工具 → 插件列表”的“工具插件”区域打开。内置插件的源码
@@ -68,6 +70,22 @@ return {
 | `combo` | 下拉选择 | `value` 为当前项，`choices` 为字符串数组 |
 | `image` | 展示最近一次 `audio_probe` 读取的专辑封面 | 上传中显示 `label` |
 | `audio_progress` | 绘制当前插件后台导出的实时进度条 | `label` 是进度提示文本 |
+| `row` | 将 2–4 个控件横排，空间不足时纵排 | `children` 为控件数组，`min_column_width` 可选 |
+
+`row` 的每个子项使用上述普通控件声明，不能再嵌套 `row`；容器和子项的 `id`
+在整个插件中都必须唯一。`min_column_width` 默认为 240，单位为 ImGui
+逻辑像素，可设置为 80–1000。当前区域宽度不足以容纳所有列时，宿主按原顺序
+纵向排列，因此同一插件可以停靠在宽编辑区或窄侧栏而无需判断窗口宽度。
+输入框与下拉框的 `label` 会显示在控件上方，控件填满所在列；空 `text`
+不占据高度。例如：
+
+```lua
+{ type = "row", id = "audio_parameters", min_column_width = 230,
+  children = {
+    { type = "input", id = "speed", label = "倍速", value = state.speed },
+    { type = "input", id = "pitch", label = "变调", value = state.pitch },
+  } },
+```
 
 输入控件的 `on_action` 会在内容变化时调用，插件应立即把新值保存到自身
 `state`，供下一次 `build` 返回。长文本输入会随用户编辑按需增长；插件应避免

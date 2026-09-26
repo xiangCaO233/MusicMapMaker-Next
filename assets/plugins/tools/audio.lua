@@ -136,12 +136,27 @@ return {
         -- 不复制输入文件后缀作为建议名称，以免把输出格式误设为输入格式。
         widgets[#widgets + 1] = { type = "button", id = "select_output", label = "选择输出文件" }
         widgets[#widgets + 1] = { type = "text", id = "output_path", label = state.output }
+        -- 宽面板中两列并排；窄面板自动纵排，标签始终位于输入框上方。
         -- 倍速与独立变调都由后台音频图处理，码率和采样率由编码器协商。
-        widgets[#widgets + 1] = { type = "input", id = "speed", label = "倍速", value = state.speed }
-        widgets[#widgets + 1] = { type = "input", id = "pitch", label = "变调（半音）", value = state.pitch }
+        -- 两组 row 只描述视觉排列；子控件 ID 仍直接到达 on_action。
+        -- 最小列宽保证数字输入在侧栏中不会被压到无法阅读。
+        widgets[#widgets + 1] = {
+            type = "row", id = "speed_pitch", min_column_width = 230,
+            children = {
+                { type = "input", id = "speed", label = "倍速", value = state.speed },
+                { type = "input", id = "pitch", label = "变调（半音）", value = state.pitch },
+            },
+        }
         -- 零值交给编码器默认协商，显式设置要求目标格式确实支持。
-        widgets[#widgets + 1] = { type = "input", id = "sample_rate", label = "输出采样率 Hz（0 为自动）", value = state.sample_rate }
-        widgets[#widgets + 1] = { type = "input", id = "bitrate", label = "目标码率 bit/s（0 为默认）", value = state.bitrate }
+        -- 编码参数与播放参数分组，窗口横向空间不足时仍按业务顺序展示。
+        -- 这里不复制参数值；重建控件树时直接读取当前闭包状态。
+        widgets[#widgets + 1] = {
+            type = "row", id = "encoding_options", min_column_width = 230,
+            children = {
+                { type = "input", id = "sample_rate", label = "输出采样率 Hz（0 为自动）", value = state.sample_rate },
+                { type = "input", id = "bitrate", label = "目标码率 bit/s（0 为默认）", value = state.bitrate },
+            },
+        }
         widgets[#widgets + 1] = { type = "button", id = "export", label = "开始导出" }
         if status.state == "running" then
             -- 进度由 C++ 缓存控件直接读取原子快照，无需每帧跨 Lua 边界。

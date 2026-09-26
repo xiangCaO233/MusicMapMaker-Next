@@ -25,6 +25,7 @@
 #include "graphic/imguivk/VKTexture.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "runtime/AppThreadPool.h"
+#include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 
@@ -32,6 +33,7 @@
 #include <ice/manage/dec/ffmpeg/FFmpegDecoderFactory.hpp>
 #include <ice/thread/ThreadPool.hpp>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <nlohmann/json.hpp>
 #include <sol/sol.hpp>
 #include <stb_image.h>
@@ -59,6 +61,7 @@ extern "C" {
 #include <string_view>
 #include <system_error>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -82,6 +85,12 @@ struct Widget {
     std::string value;
     /// @brief 组合框可选项。
     std::vector<std::string> choices;
+    /// @brief 横排布局包含的普通控件，不允许再次嵌套布局。
+    /// @note 子控件仍拥有自身 ID，动作名称不加布局前缀。
+    std::vector<Widget> children;
+    /// @brief 每列所需最小宽度，空间不足时自动改为纵向排列。
+    /// @note 使用 ImGui 逻辑坐标，与当前窗口可用内容宽度比较。
+    float minColumnWidth{ 240.0F };
 };
 
 /// @brief 将 Lua 表中的字符串字段复制为 C++ 值。
@@ -94,6 +103,50 @@ std::string tableString(const sol::table& table, const char* key)
     // 让清单校验能够区分真正提供的文本和错误声明。
     const sol::object value = table[key];
     return value.is<std::string>() ? value.as<std::string>() : std::string{};
+}
+
+/// @brief 将一个不含子布局的 Lua 控件声明复制成绘制快照。
+/// @param row 声明表。
+/// @param widget 待写入的缓存控件。
+/// @param error 解析失败时的诊断文本。
+/// @return 类型及标识有效时为 true。
+/// @warning 只在 build 后的低频重建路径调用，不进入普通 UI 帧。
+bool parseLeafWidget(const sol::table& row, Widget& widget, std::string& error)
+{
+    // 布局容器由外层单独解析；叶控件仍只接受原有白名单。
+    // 复制完成后逐帧绘制不再触碰 Lua table 或做类型分支校验。
+    // 控件值保留字符串语义，数值检查仍由具体动作在提交时执行。
+    // 因而把输入项放入 row 不会改变插件的状态更新协议。
+    widget.type  = tableString(row, "type");
+    widget.id    = tableString(row, "id");
+    widget.label = tableString(row, "label");
+    widget.value = tableString(row, "value");
+    if ( widget.id.empty() ||
+         (widget.type != "text" && widget.type != "button" &&
+          widget.type != "input" && widget.type != "multiline" &&
+          widget.type != "checkbox" && widget.type != "combo" &&
+          widget.type != "separator" && widget.type != "image" &&
+          widget.type != "audio_progress") ) {
+        // 未知声明不能作为空白占位，否则脚本错误难以定位。
+        error = "控件类型或 ID 无效";
+        return false;
+    }
+    const sol::object choices = row["choices"];
+    if ( choices.is<sol::table>() ) {
+        // 选项顺序影响所选值；非法元素沿用原协议跳过。
+        // 值复制到 C++ 后，普通帧只遍历稳定的字符串向量。
+        const sol::table options = choices.as<sol::table>();
+        for ( std::size_t choice = 1; choice <= options.size(); ++choice ) {
+            // 下标从一开始并保持原顺序，不按显示文字重新排序。
+            const sol::object value = options[choice];
+            if ( value.is<std::string>() )
+                widget.choices.push_back(value.as<std::string>());
+        }
+    }
+    // 输入缓冲在低频阶段预留余量，用户继续输入时再按需增长。
+    if ( widget.type == "input" || widget.type == "multiline" )
+        widget.value.reserve(widget.value.size() + 64);
+    return true;
 }
 
 /// @brief 限制插件 ID 为可直接用作状态文件名的字符集合。
@@ -522,6 +575,8 @@ struct ToolPluginView::Impl {
         bool actionActive{ false };
         /// @brief 窗口打开状态独立于插件视图本身。
         bool open{ false };
+        /// @brief 首次展示时等待主 DockSpace 节点就绪，再提交一次默认停靠。
+        bool pendingInitialDock{ true };
     };
 
     /// @brief 插件所有权向量，重载时整体替换。
@@ -570,11 +625,19 @@ struct ToolPluginView::Impl {
             plugin.info.error = "build 必须返回控件数组";
             return false;
         }
-        const sol::table    source = object.as<sol::table>();
-        std::vector<Widget> candidate;
+        const sol::table                source = object.as<sol::table>();
+        std::vector<Widget>             candidate;
+        std::unordered_set<std::string> ids;
         // 先在局部向量中完成所有解析，最后一次性交换到可见缓存。
         // Lua 数组从 1 起始，按返回顺序绘制，不能按哈希遍历打乱布局。
+        // 限制总量并拒绝重复 ID，防止控件动作与布局作用域发生歧义。
+        // row 的子控件另有每行上限，此处约束顶层声明规模。
+        if ( source.size() > 256 ) {
+            plugin.info.error = "控件数量超过上限";
+            return false;
+        }
         candidate.reserve(source.size());
+        ids.reserve(source.size() * 2);
         for ( std::size_t index = 1; index <= source.size(); ++index ) {
             // 本协议要求密集数组；缺失项视为错误，不在窗口里留下不可见空槽。
             const sol::object item = source[index];
@@ -585,40 +648,69 @@ struct ToolPluginView::Impl {
             }
             const sol::table row = item.as<sol::table>();
             Widget           widget;
-            widget.type  = tableString(row, "type");
-            widget.id    = tableString(row, "id");
-            widget.label = tableString(row, "label");
-            widget.value = tableString(row, "value");
-            // 控件类型做白名单检查，脚本不能注入任意 ImGui 调用。
-            // ID 是窗口内部身份，空值会让多个元素共享输入焦点状态。
-            // `audio_progress` 是唯一会在绘制阶段读取后台原子状态的控件。
-            if ( widget.id.empty() ||
-                 (widget.type != "text" && widget.type != "button" &&
-                  widget.type != "input" && widget.type != "multiline" &&
-                  widget.type != "checkbox" && widget.type != "combo" &&
-                  widget.type != "separator" && widget.type != "image" &&
-                  widget.type != "audio_progress") ) {
-                plugin.info.error = "控件类型或 ID 无效";
+            if ( tableString(row, "type") == "row" ) {
+                // row 只接受一层叶控件；固定上限使布局和 ID 空间可预测。
+                // 空间不足时渲染器会依 min_column_width 将它们纵向堆叠。
+                // 容器没有动作，仍需稳定 ID 来隔离表格及焦点作用域。
+                // 子项沿用原动作 ID，脚本无需维护两套横纵排列回调。
+                widget.type                = "row";
+                widget.id                  = tableString(row, "id");
+                const sol::object children = row["children"];
+                const sol::object width    = row["min_column_width"];
+                if ( widget.id.empty() || !children.is<sol::table>() ||
+                     (width.valid() && width.get_type() != sol::type::nil &&
+                      !width.is<double>()) ) {
+                    // 禁止字符串隐式转换列宽，错误直接留在工具窗口中。
+                    plugin.info.error = "横排布局声明无效";
+                    return false;
+                }
+                if ( width.is<double>() ) {
+                    const double columnWidth = width.as<double>();
+                    // 有界列宽防止过密控件或无穷阈值破坏自适应。
+                    // 检查发生在快照构建时，不进入逐帧路径。
+                    if ( !std::isfinite(columnWidth) || columnWidth < 80.0 ||
+                         columnWidth > 1000.0 ) {
+                        plugin.info.error = "横排最小列宽无效";
+                        return false;
+                    }
+                    widget.minColumnWidth = static_cast<float>(columnWidth);
+                }
+                const sol::table elements = children.as<sol::table>();
+                // 两列以上才有布局意义；四列上限避免窗口内容过密。
+                if ( elements.size() < 2 || elements.size() > 4 ) {
+                    plugin.info.error = "横排布局需要 2 至 4 个控件";
+                    return false;
+                }
+                widget.children.reserve(elements.size());
+                for ( std::size_t child = 1; child <= elements.size();
+                      ++child ) {
+                    const sol::object childItem = elements[child];
+                    if ( !childItem.is<sol::table>() ) {
+                        // 稀疏数组会使视觉顺序和动作来源错位，直接报错。
+                        plugin.info.error = "横排子控件必须是表";
+                        return false;
+                    }
+                    Widget leaf;
+                    if ( !parseLeafWidget(childItem.as<sol::table>(),
+                                          leaf,
+                                          plugin.info.error) )
+                        return false;
+                    if ( !ids.insert(leaf.id).second ) {
+                        // 跨 row 的叶控件也不能共用 ID，否则动作名称歧义。
+                        plugin.info.error = "控件 ID 重复";
+                        return false;
+                    }
+                    widget.children.push_back(std::move(leaf));
+                }
+            } else if ( !parseLeafWidget(row, widget, plugin.info.error) ) {
                 return false;
             }
-            const sol::object choices = row["choices"];
-            if ( choices.is<sol::table>() ) {
-                // 下拉选项只接受数组中的字符串，忽略类型错误的单项。
-                // 选项顺序影响用户选择索引，因此保留脚本数组顺序。
-                // 选择后返回字符串值，脚本无需维护与 C++ 相同的数字索引。
-                const sol::table options = choices.as<sol::table>();
-                for ( std::size_t choice = 1; choice <= options.size();
-                      ++choice ) {
-                    const sol::object value = options[choice];
-                    if ( value.is<std::string>() ) {
-                        // 只复制值，不在 C++ 快照中留 Lua 对象引用。
-                        widget.choices.push_back(value.as<std::string>());
-                    }
-                }
+            // row 自身也参与唯一性检查，不得与其中一个子控件共用标识。
+            // 仅当整棵候选布局有效时才替换当前可见控件树。
+            if ( !ids.insert(widget.id).second ) {
+                plugin.info.error = "控件 ID 重复";
+                return false;
             }
-            // 为常见短编辑留少量余量，长文本只在用户输入时按需增长。
-            if ( widget.type == "input" || widget.type == "multiline" )
-                widget.value.reserve(widget.value.size() + 64);
             // 每个候选值为独立所有权，swap 后普通帧不碰 Lua 分配器。
             candidate.push_back(std::move(widget));
         }
@@ -1331,9 +1423,35 @@ void ToolPluginView::update(UIManager* sourceManager)
         // 关闭窗口时跳过所有 ImGui 控件，后台任务仍可继续执行。
         // 标题在加载时缓存，避免逐帧拼接字符串和生成新的停靠 ID。
         // 不因名称文字改变而修改窗口内部 ID，用户并排停靠布局可恢复。
+        if ( plugin.pendingInitialDock ) {
+            // 插件视图在主 DockSpace 前注册，但由 UIManager 延后绘制。
+            // 独立测试或工作区重建时中心节点仍可能暂时不可用。
+            // 已保存的浮动窗口须迁回主停靠树，否则 FirstUseEver 不会生效。
+            const ImGuiID centerDockId = MainDockSpaceUI::getCenterDockId();
+            if ( centerDockId != 0 ) {
+                const auto* saved = ImGui::FindWindowSettingsByID(
+                    ImHashStr(plugin.windowTitle.c_str()));
+                const auto* existing =
+                    ImGui::FindWindowByName(plugin.windowTitle.c_str());
+                // 旧版窗口无论留在主视口还是平台视口，只要没有 DockId，
+                // 就先并入主工作区；已有 DockId 的标签或分栏继续按 ini 恢复。
+                // 首次 Begin 若未建好节点，下一帧用实时未停靠状态继续尝试。
+                const bool floating = saved ? saved->DockId == 0
+                                            : existing && existing->DockId == 0;
+                ImGui::SetNextWindowDockID(
+                    centerDockId,
+                    floating ? ImGuiCond_Always : ImGuiCond_FirstUseEver);
+            }
+        }
+        // 多视口模式会把未停靠面板提升为独立系统窗口；工具插件始终留在
+        // 主视口内，允许作为普通 ImGui 面板停靠、拆分或临时浮动。
+        ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
         const bool wasOpen = plugin.open;
         const bool visible =
             ImGui::Begin(plugin.windowTitle.c_str(), &plugin.open);
+        // 确认窗口实际进入 Dock 节点后才停止尝试，避免无效节点丢失请求。
+        if ( plugin.pendingInitialDock && ImGui::IsWindowDocked() )
+            plugin.pendingInitialDock = false;
         FeedbackCurrentWindowCloseButton(wasOpen, &plugin.open);
         // 一个窗口本帧最多提交一次动作，所有控件先完成绘制后才进入 Lua。
         // 这样回调重建控件树不会让当前 for 遍历的 Widget 引用失效。
@@ -1346,12 +1464,16 @@ void ToolPluginView::update(UIManager* sourceManager)
                 // 脚本错误只作为窗口文字显示，不破坏后续控件栈。
                 ImGui::TextWrapped("%s", plugin.info.error.c_str());
             }
-            for ( auto& widget : plugin.widgets ) {
+            // 叶控件共用绘制规则；row 只负责排列，不改变动作协议。
+            // lambda 仅捕获本帧动作槽，不保留跨帧控件或 Lua 引用。
+            const auto drawLeaf = [&](Widget& widget) {
                 // 插件内稳定 ID 形成局部 ImGui 命名空间，可见标签可以重复。
+                // 外层 row 的 ID 只隔离表格，不替代叶控件的稳定 ID。
                 ImGui::PushID(widget.id.c_str());
                 if ( widget.type == "text" ) {
-                    // 只读文字不触发回调，适合元数据摘要和错误状态。
-                    ImGui::TextWrapped("%s", widget.label.c_str());
+                    // 空占位不占高度；路径和详细信息仍可自动换行。
+                    if ( !widget.label.empty() )
+                        ImGui::TextWrapped("%s", widget.label.c_str());
                 } else if ( widget.type == "separator" ) {
                     // 分组标题由宿主绘制，Lua 无法改变 ImGui 栈结构。
                     ImGui::SeparatorText(widget.label.c_str());
@@ -1370,8 +1492,13 @@ void ToolPluginView::update(UIManager* sourceManager)
                     }
                 } else if ( widget.type == "combo" ) {
                     // 选项来自构建期复制的 C++ 向量，逐帧不遍历 Lua table。
-                    if ( ImGui::BeginCombo(widget.label.c_str(),
-                                           widget.value.c_str()) ) {
+                    // 标签独占一行，下拉框使用当前列的全部宽度。
+                    // 内部 ##value 隐去重复可见标签，仍由 PushID 隔离状态。
+                    // 长标签在侧栏内换行，避免被相邻列或窗口边缘裁掉。
+                    if ( !widget.label.empty() )
+                        ImGui::TextWrapped("%s", widget.label.c_str());
+                    ImGui::SetNextItemWidth(-1.0F);
+                    if ( ImGui::BeginCombo("##value", widget.value.c_str()) ) {
                         for ( const auto& choice : widget.choices ) {
                             // 选中值按字符串返回，脚本可用稳定文本保存选择。
                             if ( ImGui::Selectable(choice.c_str(),
@@ -1414,10 +1541,14 @@ void ToolPluginView::update(UIManager* sourceManager)
                     // 文本由 Widget 的 std::string
                     // 拥有，增长只发生在用户输入时。 大预览动作可返回 false
                     // 保留这份已编辑的 C++ 缓存。
-                    const bool changed =
-                        inputTextDynamic(widget.label.c_str(),
-                                         widget.value,
-                                         widget.type == "multiline");
+                    // 标签置于输入框上方，避免窄面板截断右侧说明。
+                    // 宽度按当前表格单元格计算，不缓存窗口像素尺寸。
+                    // 插件可省略标签；有标签时由当前列宽决定换行。
+                    if ( !widget.label.empty() )
+                        ImGui::TextWrapped("%s", widget.label.c_str());
+                    ImGui::SetNextItemWidth(-1.0F);
+                    const bool changed = inputTextDynamic(
+                        "##value", widget.value, widget.type == "multiline");
                     if ( changed ) {
                         // 修改值复制一次给动作回调，普通静态帧不复制全文。
                         actionId    = widget.id;
@@ -1426,6 +1557,39 @@ void ToolPluginView::update(UIManager* sourceManager)
                 }
                 ImGui::PopID();
                 // 每个控件自身配对 PushID/PopID，不依赖插件脚本正确性。
+            };
+            for ( auto& widget : plugin.widgets ) {
+                if ( widget.type != "row" ) {
+                    drawLeaf(widget);
+                    continue;
+                }
+                // row ID 隔离表格和子控件；每列有最小宽度，窄面板纵排。
+                // 阈值只读取当前内容区域，窗口停靠尺寸变化会即时生效。
+                ImGui::PushID(widget.id.c_str());
+                const float neededWidth =
+                    widget.minColumnWidth * widget.children.size() +
+                    ImGui::GetStyle().ItemSpacing.x *
+                        (widget.children.size() - 1);
+                if ( ImGui::GetContentRegionAvail().x >= neededWidth ) {
+                    if ( ImGui::BeginTable(
+                             "##layout",
+                             static_cast<int>(widget.children.size()),
+                             ImGuiTableFlags_SizingStretchSame) ) {
+                        for ( auto& child : widget.children ) {
+                            // 声明顺序就是列顺序，动作 ID 与排列方向无关。
+                            ImGui::TableNextColumn();
+                            drawLeaf(child);
+                        }
+                        ImGui::EndTable();
+                    }
+                    // BeginTable 因裁剪返回 false
+                    // 时，此行不可见，无需提交子项。
+                } else {
+                    // 不创建横向滚动；所有控件按声明顺序可见且可操作。
+                    // 纵排没有缓存状态，重新拉宽窗口会立即回到横排。
+                    for ( auto& child : widget.children ) drawLeaf(child);
+                }
+                ImGui::PopID();
             }
         }
         ImGui::End();
