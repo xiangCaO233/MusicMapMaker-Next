@@ -259,7 +259,7 @@
  * @par test_non_malody_lead_in_exports_timing_origin_and_audio_compensation
  *
  * - 237ms 首 timing 回卷成 263ms 非负 delay；
- * - 首 timing 位于前半拍，因此主 SOUND 保持零 offset；
+ * - 首 timing 位于前半拍时，主 SOUND 仍用 offset 抵消回卷 delay；
  * - 普通 Note 的导出 beat 前移一拍；
  * - Key 与 Slide 重载后都恢复 237ms 绝对时间。
  *
@@ -1811,7 +1811,7 @@ void test_timing_delay_and_sample_offset_round_trip_independently()
  * 统一模型中首 timing 位于 237ms，而主音频有效播放仍在时间零。Malody
  * 无法直接使用负拍号表达这段前导，保存器需要把首 timing 写在 beat 0，
  * 以一拍减去 237ms 得到 263ms delay；该红线仍位于前半拍，主 SOUND
- * 保持零 offset 即可，不能再重复应用 delay。
+ * 使用与 delay 配对的整数 offset，将主音频对齐到歌曲零点。
  *
  * 正相位还要求普通 Note 的导出 beat 前移一拍，但重新加载后其绝对时间仍
  * 必须回到 237ms。Key 和 Slide 都执行同一相位算法，只改变玩家字段协议。
@@ -1865,8 +1865,9 @@ void test_non_malody_lead_in_exports_timing_origin_and_audio_compensation()
                     "lead-in export should keep the main sample");
         TEST_ASSERT((*sampleIt)["beat"] == json::array({ 0, 0, 1 }),
                     "main sample should move back one beat");
-        TEST_ASSERT(sampleIt->value("offset", -1) == 0,
-                    "first-half-beat red line should keep zero main offset");
+        TEST_ASSERT(
+            sampleIt->value("offset", -1) == 263,
+            "first-half-beat red line should pair main offset with delay");
 
         // 普通玩家对象需要前移一个导出拍，才能与回卷后的时间原点对齐。
         const auto noteIt =
@@ -1898,6 +1899,55 @@ void test_non_malody_lead_in_exports_timing_origin_and_audio_compensation()
     }
 
     XINFO("PASS: Non-Malody lead-in uses timing delay and sample compensation");
+}
+
+/// @brief 验证晚到红线回卷后主音频仍补偿完整的首拍 delay。
+/// @details 120 BPM 的 2649.5ms 红线对应 149.5ms 相位和 350.5ms delay。
+///
+/// 原时间包含五个完整拍与 149.5ms 拍内相位。导出器为了保留原红线，
+/// 先生成 beat 0 BPM 锚点，再把原 BPM 放在拍轴的后续位置。
+/// 这个合成锚点必须与主 SOUND 的 offset 成对，否则游戏中的音乐零点
+/// 会被首拍 delay 推迟。输出 offset 只支持整数毫秒，因此 350.5ms
+/// 按当前舍入规则写成 351ms，误差由加载器的半毫秒配对容差吸收。
+/// 重载检查同时覆盖合成红线、原红线和规范化的歌曲零点，防止只改动
+/// JSON 数值却使编辑器内的播放时间线发生整拍漂移。
+void test_late_first_timing_keeps_paired_main_offset()
+{
+    // 使用最小 Slide 谱面保留主 SOUND 与首 BPM 的配对条件。
+    auto beatMap                          = makeMinimalBeatMap(7, 4);
+    beatMap.m_timings.front().m_timestamp = 2649.5;
+    beatMap.sync();
+
+    const fs::path outputPath = std::filesystem::temp_directory_path() /
+                                "edge_late_paired_main_offset.mc";
+    TEST_ASSERT(beatMap.saveToFile(outputPath),
+                "late first timing should export");
+    std::ifstream stream(outputPath);
+    json          exported;
+    stream >> exported;
+    const auto sample = std::find_if(
+        exported["note"].begin(), exported["note"].end(), isSoundNode);
+
+    // 真实 BPM 位于合成锚点之后六拍：五拍前导加一拍相位进位。
+    // 主 SOUND 的 offset 与 delay 仅有不可避免的半毫秒整数化误差。
+    TEST_ASSERT(
+        exported["time"].size() == 2 &&
+            std::abs(exported["time"][0].value("delay", 0.0) - 350.5) < 1e-6 &&
+            exported["time"][1]["beat"] == json::array({ 6, 0, 1 }) &&
+            sample != exported["note"].end() &&
+            sample->value("offset", 0) == 351,
+        "late first timing should pair 350.5ms delay with 351ms SOUND offset");
+
+    // 导入时去掉相位进位，两个红线分别落回 149.5ms 与 2649.5ms。
+    MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(outputPath);
+    reloaded.sync();
+    TEST_ASSERT(
+        reloaded.m_timings.size() == 2 &&
+            std::abs(reloaded.m_timings[0].m_timestamp - 149.5) < 1e-6 &&
+            std::abs(reloaded.m_timings[1].m_timestamp - 2649.5) < 1e-6 &&
+            reloaded.m_audioSamples.size() == 1 &&
+            reloaded.m_audioSamples.front().effectiveTimestamp() == 0.0,
+        "paired offset should preserve the red lines and audio origin");
 }
 
 /**
@@ -2200,7 +2250,7 @@ void test_osu_source_bpm_does_not_inject_scroll_reset()
  * 这是首拍相位兼容的综合场景，覆盖历史输入、规范回写和编辑失效。基础输入
  * 在 210 BPM 下以 beat 0 delay=237.032ms 表示首 timing，并把同名主 SOUND
  * 放在 beat 0、offset=237。加载后首 timing 解回约 48.682ms，主音频则规范
- * 为时间零且 offset 清零；再次保存应按解出的前半拍红线相位规范为零 offset。
+ * 为时间零且内部 offset 清零；再次保存时 SOUND offset 仍与 delay 配对。
  *
  * 后续子场景依次验证：较小配对 delay、超过一拍的 Euclidean modulo、与
  * delay 不匹配的普通 offset、非主音频 offset、亚毫秒 timing 编辑、整拍
@@ -2290,14 +2340,14 @@ void test_first_timing_delay_unwraps_with_its_bpm()
     TEST_ASSERT(std::abs(exported["time"][0].value("delay", 0.0) -
                          WRAPPED_DELAY_MS) < 1e-6,
                 "wrapped first timing should keep its non-negative delay");
-    // 红线相位位于前半拍，主 SOUND 应恢复 beat 0 与零 offset。
+    // 红线相位位于前半拍，主 SOUND 仍须以整数 offset 抵消 delay。
     const auto exportedSample = std::find_if(
         exported["note"].begin(), exported["note"].end(), isSoundNode);
     TEST_ASSERT(exportedSample != exported["note"].end(),
                 "wrapped map should keep its main sample");
     TEST_ASSERT((*exportedSample)["beat"] == json::array({ 0, 0, 1 }) &&
-                    exportedSample->value("offset", -1) == 0,
-                "first-half-beat wrapped main sample should keep zero offset");
+                    exportedSample->value("offset", -1) == 237,
+                "first-half-beat wrapped main sample should pair offset");
     // 玩家 Note 再次前移到 beat 1，与正相位 timing 保持绝对时间一致。
     const auto exportedPlayable = std::find_if(
         exported["note"].begin(), exported["note"].end(), [](const json& node) {
@@ -2400,9 +2450,11 @@ void test_first_timing_delay_unwraps_with_its_bpm()
         std::abs(largeDelayExported["time"][0].value("delay", 0.0) -
                  std::fmod(LARGE_DELAY_MS, LARGE_DELAY_BEAT_MS)) < 1e-6 &&
             largeDelayExportedSample != largeDelayExported["note"].end() &&
-            largeDelayExportedSample->value("offset", -1) == 0,
-        "large wrapped delay should keep zero offset for a first-half red "
-        "line");
+            largeDelayExportedSample->value("offset", -1) ==
+                static_cast<std::int64_t>(std::llround(
+                    std::fmod(LARGE_DELAY_MS, LARGE_DELAY_BEAT_MS))),
+        "large wrapped delay should pair main offset with its first-beat "
+        "delay");
 
     // 子场景三：主 SOUND offset 与 timing delay 不同，不满足配对条件。
     json  unmatchedOffsetData    = fileData;
@@ -2578,7 +2630,7 @@ void test_first_timing_delay_unwraps_with_its_bpm()
     TEST_ASSERT(std::abs(legacyShapeJson["time"][0].value("delay", 0.0) -
                          WRAPPED_DELAY_MS) < 1e-6 &&
                     legacyShapeSample != legacyShapeJson["note"].end() &&
-                    legacyShapeSample->value("offset", -1) == 0,
+                    legacyShapeSample->value("offset", -1) == 237,
                 "legacy anchor-plus-offset shape should export canonically");
 
     // 子场景九：原 timing 略早于零，覆盖回卷相位的数值边界。
@@ -2667,7 +2719,7 @@ void test_first_timing_delay_unwraps_with_its_bpm()
                     expectedOriginalBeat &&
                 legacyWholeBeatSample != legacyWholeBeatJson["note"].end() &&
                 (*legacyWholeBeatSample)["beat"] == json::array({ 0, 0, 1 }) &&
-                legacyWholeBeatSample->value("offset", -1) == 0,
+                legacyWholeBeatSample->value("offset", -1) == 237,
             "legacy wrapped shape should retain the original red line after "
             "the synthetic anchor");
         MMM::BeatMap legacyWholeBeatReloaded =
@@ -2752,15 +2804,15 @@ void test_first_timing_delay_unwraps_with_its_bpm()
             std::abs(generatedJson["time"][0].value("delay", 0.0) -
                      WRAPPED_DELAY_MS) < 1e-6,
             "paired first timing should export its wrapped phase delay");
-        // 先定位主 SOUND，确认前半拍红线不会重复携带 timing delay。
+        // 先定位主 SOUND，确认前半拍红线也会补偿 timing delay。
         const auto generatedSample = std::find_if(generatedJson["note"].begin(),
                                                   generatedJson["note"].end(),
                                                   isSoundNode);
         TEST_ASSERT(
             generatedSample != generatedJson["note"].end() &&
                 (*generatedSample)["beat"] == json::array({ 0, 0, 1 }) &&
-                generatedSample->value("offset", -1) == 0,
-            "first-half-beat main SOUND should keep zero offset");
+                generatedSample->value("offset", -1) == 237,
+            "first-half-beat main SOUND should pair its offset");
         // 普通 Note 的绝对时间依靠正相位拍号补偿保持。
         const auto generatedPlayable =
             std::find_if(generatedJson["note"].begin(),
@@ -2904,8 +2956,8 @@ void test_first_timing_delay_unwraps_with_its_bpm()
  * @brief 验证 note[] 拍号补偿在首拍相位边界仍保持绝对时间。
  *
  * 表驱动 case 覆盖首 timing 为负时间、恰好位于整拍，以及低 BPM 下先回卷
- * 到一拍内的前后半拍。前半拍保持正相位，不重复补偿主 SOUND；后半拍再
- * 回退一拍成为绝对值小于半拍的负相位，并复用负相位分支写出主 offset。
+ * 到一拍内的前后半拍。两侧都由主 SOUND 的整数 offset 抵消首拍 delay；
+ * 后半拍回退一拍成为绝对值小于半拍的负相位。
  *
  * 每个 case 同时跑 Key 和 Slide，证明相位算法不依赖玩家坐标协议。导出层
  * 检查 beat/delay/offset，重载层再按绝对毫秒查找原首 BPM 与玩家 Note。
@@ -2930,7 +2982,7 @@ void test_malody_note_phase_shift_boundaries()
     const std::array<TestCase, 4> cases{ {
         { 120.0, -100.0, 0, 100.0, 100, "negative_timing" },
         { 120.0, 500.0, 1, 0.0, 0, "zero_phase" },
-        { 60.0, 1400.0, 2, 600.0, 0, "low_bpm_before_half" },
+        { 60.0, 1400.0, 2, 600.0, 600, "low_bpm_before_half" },
         { 60.0, 1600.0, 2, 400.0, 400, "low_bpm_after_half" },
     } };
 
@@ -3113,13 +3165,13 @@ void test_paired_first_delay_round_trips_variable_bpm()
                  std::abs(exported["time"][2].value("delay", 0.0)) < 1e-6),
             "later BPM timings should not repeat the paired delay");
 
-        // 首红线位于前半拍，主 SOUND 不重复携带 wrapped delay。
+        // 首红线位于前半拍时，主 SOUND 也需要抵消回卷 delay。
         const auto exportedSample = std::find_if(
             exported["note"].begin(), exported["note"].end(), isSoundNode);
         TEST_ASSERT(exportedSample != exported["note"].end() &&
                         (*exportedSample)["beat"] == json::array({ 0, 0, 1 }) &&
-                        exportedSample->value("offset", -1) == 0,
-                    "first-half-beat main SOUND should keep zero offset");
+                        exportedSample->value("offset", -1) == 237,
+                    "first-half-beat main SOUND should pair offset");
         // Note 与 SCROLL 分属不同数组，但导出拍号分别对应 101 与 111。
         const auto exportedPlayable =
             std::find_if(exported["note"].begin(),
@@ -3933,6 +3985,7 @@ int main()
     // 第三组：普通 delay、配对首拍相位、边界和多 BPM 编辑。
     test_timing_delay_and_sample_offset_round_trip_independently();
     test_non_malody_lead_in_exports_timing_origin_and_audio_compensation();
+    test_late_first_timing_keeps_paired_main_offset();
     test_late_first_timing_prepends_anchor_and_shifts_all_content();
     test_osu_source_bpm_does_not_inject_scroll_reset();
     test_first_timing_delay_unwraps_with_its_bpm();

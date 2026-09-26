@@ -139,7 +139,7 @@ using json = nlohmann::json;
 /// - 首红线拍内位置超过半拍时再回退一拍，得到绝对值小于半拍的负相位；
 /// - 正相位可能需要为普通内容增加一拍补偿；
 /// - 负相位锚点与原首 BPM 位置不同时插入合成首 BPM，原红线保持不动；
-/// - 只有规范化后的首红线相位为负时，主 SOUND 才与 delay 成对写 offset；
+/// - 主 SOUND 始终与回卷 delay 成对写入整数毫秒 offset；
 /// - 非主采样保持自身 timestamp 与 offset 语义。
 ///
 /// 时间到 Malody 拍位的转换：
@@ -762,10 +762,10 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             if ( timingPhase > firstBeatLength * 0.5 + 1e-6 ) {
                 timingPhase -= firstBeatLength;
             }
-            if ( timingPhase < -1e-6 ) {
-                wrappedMainExportOffsetMs =
-                    static_cast<std::int64_t>(std::llround(firstBpmDelayMs));
-            }
+            // 主 SOUND 必须抵消首拍 delay，包括红线处于前半拍时
+            // 反向回卷得到的大 delay；否则游戏端会让音频晚于红线。
+            wrappedMainExportOffsetMs =
+                static_cast<std::int64_t>(std::llround(firstBpmDelayMs));
             firstBpmOriginBeat     = 0.0;
             malodyContentBeatShift = static_cast<std::int64_t>(std::llround(
                 (firstBpm.m_timestamp + firstBpmDelayMs) / firstBeatLength));
@@ -1228,8 +1228,7 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         std::int64_t exportedOffset = sample.m_offsetMs;
         if ( &sample == wrappedMainSample ) {
             sampleJson["beat"] = timeToBeat(bpmTimings.front()->m_timestamp);
-            // 主 SOUND 的 offset 只跟随规范化后的负首红线相位；前半拍
-            // 的正相位保持零 offset，避免游戏端重复应用 delay。
+            // 主 SOUND 与首拍 delay 成对，offset 使用 Malody 的整数毫秒。
             exportedOffset = wrappedMainExportOffsetMs;
         } else if ( generatedFirstBpmOrigin != nullptr &&
                     sample.m_timestamp <
