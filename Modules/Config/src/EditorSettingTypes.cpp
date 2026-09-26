@@ -103,7 +103,11 @@ void to_json(nlohmann::json& json, const SfxConfig& config)
         { "enableUnboundHitSfx", config.enableUnboundHitSfx },
         { "unboundHitSfxGain", sanitizeHitSfxGain(config.unboundHitSfxGain) },
         { "enableBoundHitSfx", config.enableBoundHitSfx },
-        { "boundHitSfxGain", sanitizeHitSfxGain(config.boundHitSfxGain) }
+        { "boundHitSfxGain", sanitizeHitSfxGain(config.boundHitSfxGain) },
+        // 节拍器只控制编辑器播放，缺省关闭以保持旧谱面的听感。
+        { "enableEditorMetronome", config.enableEditorMetronome },
+        { "editorMetronomeGain",
+          sanitizeHitSfxGain(config.editorMetronomeGain) }
     };
 }
 
@@ -139,6 +143,10 @@ void from_json(const nlohmann::json& json, SfxConfig& config)
     config.enableBoundHitSfx = json.value("enableBoundHitSfx", true);
     config.boundHitSfxGain =
         sanitizeHitSfxGain(json.value("boundHitSfxGain", 1.0F));
+    // 旧配置没有节拍器字段时不新增声音；增益沿用音效组安全范围。
+    config.enableEditorMetronome = json.value("enableEditorMetronome", false);
+    config.editorMetronomeGain =
+        sanitizeHitSfxGain(json.value("editorMetronomeGain", 1.0F));
 }
 
 /// @brief 序列化文件选择器实现偏好。

@@ -1039,6 +1039,8 @@ return {
 	["ui.key_sound_tool.no_player_tracks"] = "当前没有主画布轨道",
 	["ui.key_sound_tool.no_draft_tracks"] = "当前没有草稿区轨道",
 	["ui.key_sound_tool.no_bgm_tracks"] = "当前没有 BGM 轨道",
+	["ui.key_sound_tool.metronome_area"] = "节拍器",
+	["ui.key_sound_tool.editor_metronome"] = "编辑器节拍器",
 	["ui.key_sound_tool.hit_sound_area"] = "打击音效",
 	["ui.key_sound_tool.all_hit_sounds"] = "全部打击音效",
 	["ui.key_sound_tool.unbound_hit_sound"] = "未绑定音效文件",

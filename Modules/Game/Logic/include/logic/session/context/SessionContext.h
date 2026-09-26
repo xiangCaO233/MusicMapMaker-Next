@@ -181,8 +181,10 @@ struct SessionContext {
     };  ///< 下一次推进绑定音效后台加载的系统时间
     System::HitFXSystem hitFXSystem;  ///< 打击特效处理系统
     std::vector<const TimelineComponent*>
-         bpmEvents;                  ///< 缓存并排序后的 BPM 事件
-    bool isBpmEventsDirty{ true };   ///< BPM 缓存脏标记
+         bpmEvents;                 ///< 缓存并排序后的 BPM 事件
+    bool isBpmEventsDirty{ true };  ///< BPM 缓存脏标记
+    /// @brief BPM 缓存每次重建后递增的版本，供跨控制器消费方识别变化。
+    std::uint64_t bpmEventsRevision{ 0U };
     bool isHitEventsDirty{ false };  ///< 打击事件序列是否需要按音符变更重建
     bool isNoteOrderDirty{ true };   ///< 音符排序缓存是否需要完整重建
     bool isNotePruneDirty{ false };  ///< 音符排序缓存是否只需剔除失效实体

@@ -121,6 +121,8 @@ private:
     float m_unboundHitSoundGainDraft{ 1.0f };
     /// @brief 已绑定音效文件的实时增益草稿。
     float m_boundHitSoundGainDraft{ 1.0f };
+    /// @brief 节拍器增益拖动草稿，避免异步配置回读打断手势。
+    float m_editorMetronomeGainDraft{ 1.0f };
     /// @brief 是否显示调色盘弹窗。
     bool m_showColorPopup{ false };
     /// @brief 上一帧调色盘按钮的屏幕 Y 坐标，用于定位弹窗。

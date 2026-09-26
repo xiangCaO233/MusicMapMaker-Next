@@ -186,6 +186,54 @@ bool testNonFiniteHitSoundGroupGains()
     return true;
 }
 
+/// @details 缺字段的旧设置必须保持安静，升级不能增加播放音效。
+/// 非单位增益和关闭默认值分别验证保存及迁移行为。
+/// 越界输入在反序列化时收敛，避免污染运行时混音池。
+/// @brief 验证编辑器节拍器的独立开关、增益及旧配置默认值。
+/// @return 新配置往返、旧配置静音且非法增益受限时返回 true。
+bool testEditorMetronomeControls()
+{
+    // 空对象模拟旧版用户文件没有节拍器字段。
+    // 静音默认值避免用户升级后在所有谱面播放中突然听见节拍声。
+    // 旧用户配置没有节拍器字段，升级后不能突然在播放时发声。
+    MMM::Config::SfxConfig legacy;
+    from_json(nlohmann::json::object(), legacy);
+    if ( legacy.enableEditorMetronome || legacy.editorMetronomeGain != 1.0F ) {
+        XERROR("Legacy SFX config unexpectedly enables the metronome");
+        return false;
+    }
+
+    // 新字段同时覆盖开关与 135% 增益，不能只检查默认值。
+    // 单独构造恢复对象对应进程重启后从配置文件读取的路径。
+    MMM::Config::SfxConfig source;
+    source.enableEditorMetronome = true;
+    source.editorMetronomeGain   = 1.35F;
+    nlohmann::json encoded;
+    to_json(encoded, source);
+    MMM::Config::SfxConfig restored;
+    from_json(encoded, restored);
+    if ( !restored.enableEditorMetronome ||
+         restored.editorMetronomeGain != 1.35F ||
+         !encoded.contains("enableEditorMetronome") ||
+         !encoded.contains("editorMetronomeGain") ) {
+        XERROR("Editor metronome config did not round trip");
+        return false;
+    }
+
+    // 第二次读取故意省略 enable，确认不会沿用前一个对象的 true。
+    // 超出 UI 上限的外部配置应在进入音频层前变为安全边界。
+    // 这里只提供增益字段，借此确认 enable 缺失时不会保留旧对象状态。
+    // 恢复边界完成钳制，音频调用方无需区分值来自 UI 还是外部文件。
+    // 高于 200% 的持久化输入必须在音频路径使用前收敛。
+    from_json(nlohmann::json{ { "editorMetronomeGain", 4.0F } }, restored);
+    if ( restored.editorMetronomeGain != 2.0F ||
+         restored.enableEditorMetronome ) {
+        XERROR("Editor metronome defaults or gain bounds were lost");
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行打击音效设置序列化与兼容性测试。
@@ -201,7 +249,8 @@ int main()
                    testLegacyHitSoundGroupDefaults() &&
                    testHitSoundGroupGainBounds() &&
                    // 非有限值场景放在最后，验证最严格的数值清洗边界。
-                   testNonFiniteHitSoundGroupGains()
+                   testNonFiniteHitSoundGroupGains() &&
+                   testEditorMetronomeControls()
                ? 0
                : 1;
 }

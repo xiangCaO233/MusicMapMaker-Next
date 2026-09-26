@@ -14,6 +14,7 @@
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "logic/session/PlaybackController.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
@@ -275,6 +276,9 @@ bool SettingsView::applySkinSelection(const std::string& skinDirectoryName,
     auto& audio = Audio::AudioManager::instance();
     audio.clearSoundEffects();
     preloadCurrentSkinSoundEffects();
+    // 独立编辑器节拍音池借用新皮肤资源；皮肤切换是允许同步加载的低频事件。
+    static_cast<void>(Logic::PlaybackController::preloadMetronomeSounds(
+        settings.sfxConfig.editorMetronomeGain));
     // 皮肤音效之后重新叠加当前工程自定义特效资源。
     Logic::EditorEngine::instance().registerCurrentProjectEffectSoundEffects();
     if ( m_sourceManager ) {

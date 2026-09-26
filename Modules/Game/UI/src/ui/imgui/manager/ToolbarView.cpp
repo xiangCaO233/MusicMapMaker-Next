@@ -11,6 +11,7 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
+#include "logic/session/PlaybackController.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/ICanvasView.h"
@@ -2209,6 +2210,8 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
             editorConfig.settings.sfxConfig.unboundHitSfxGain;
         m_boundHitSoundGainDraft =
             editorConfig.settings.sfxConfig.boundHitSfxGain;
+        m_editorMetronomeGainDraft =
+            editorConfig.settings.sfxConfig.editorMetronomeGain;
         m_soundEffectGainDraftInitialized = true;
     }
     const float muteButtonSize  = std::floor(ImGui::GetFrameHeight());
@@ -2338,13 +2341,16 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     const int allHitSoundRow     = 1;
     const int unboundHitSoundRow = 2;
     const int boundHitSoundRow   = 3;
-    // 玩家区域从第五行开始：标题、区域总开关，然后是每个玩家轨道。
+    // 节拍器有独立标题和混音行，不属于打击音或逐轨键声分组。
+    const int metronomeHeaderRow = 4;
+    const int editorMetronomeRow = 5;
+    // 玩家区域从第七行开始：标题、区域总开关，然后是每个玩家轨道。
     // 该总开关沿用 enableHitSfx 持久配置，逐轨静音和增益则是运行时命令。
     // 即使没有谱面，布局 helper 也保留一条占位轨道行，向用户解释不可用原因，
     // 后方草稿和 BGM 区域的索引仍保持连续且可预测。
-    const int playerHeaderRow  = 4;
-    const int playerMasterRow  = 5;
-    const int playerTrackBegin = 6;
+    const int playerHeaderRow  = 6;
+    const int playerMasterRow  = 7;
+    const int playerTrackBegin = 8;
     // 草稿区域轨道数来自 SessionContext，而不是谱面持久元数据。草稿轨道可能
     // 随临时编辑状态变化，因此每帧在短锁内重新读取并重建逻辑行数。区域总控
     // 和逐轨值都是 EditorEngine 命令，不写入常规击打音 enable 配置。
@@ -2459,6 +2465,56 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                     // 最终值写回持久配置，供重新启动时恢复。
                     auto config = currentEditorConfig();
                     config.settings.sfxConfig.boundHitSfxGain = gain;
+                    updateEditorConfig(config);
+                });
+            continue;
+        }
+        // 节拍器标题占独立逻辑行，滚动虚拟化不会把它并入打击音区域。
+        // 固定行高也保证窄窗口下能滚动到后续轨道分组。
+        if ( row == metronomeHeaderRow ) {
+            ImGui::SeparatorText(TR("ui.key_sound_tool.metronome_area").data());
+            continue;
+        }
+        // 编辑器节拍器的开关和增益与普通击打音类别独立保存。
+        // BPM 测量工具继续使用自己的音效池和调度时钟。
+        // 分类滑条允许 200% 增益，以补偿较轻的皮肤采样。
+        if ( row == editorMetronomeRow ) {
+            // 控制编辑器自己的两种节拍音；BPM 测量工具保留独立路由。
+            drawMixRow(
+                TR("ui.key_sound_tool.editor_metronome").data(),
+                "EditorMetronome",
+                !editorConfig.settings.sfxConfig.enableEditorMetronome,
+                m_editorMetronomeGainDraft,
+                2.0F,
+                // 开关切换会同步到编辑器配置，播放源在下一轮接纳新状态。
+                // 关闭时只停止编辑器专属节拍声，不取消打击音预约。
+                [this](bool muted) {
+                    auto config = currentEditorConfig();
+                    config.settings.sfxConfig.enableEditorMetronome = !muted;
+                    updateEditorConfig(config);
+                    // 已载入的短 PCM 可复用，重复启用不会再次解码。
+                    // 资源加载可能等待文件读取，只允许在这次点击边沿进行。
+                    // 点击启用后由低频 UI 事件准备资源，播放循环不做同步解码。
+                    if ( !muted ) {
+                        static_cast<void>(
+                            Logic::PlaybackController::preloadMetronomeSounds(
+                                config.settings.sfxConfig.editorMetronomeGain));
+                    }
+                },
+                [this, &audio](float gain) {
+                    // 草稿先写入成员，下一帧回读配置时不会覆盖当前手势。
+                    // 重拍和普通拍同步改变音量，节拍层次只由采样自身决定。
+                    // 拖动期间即时更新已载入的两种节拍音，不写配置文件。
+                    m_editorMetronomeGainDraft = gain;
+                    audio.setSFXPoolVolume("editor.metronome.beat_low", gain);
+                    audio.setSFXPoolVolume("editor.metronome.downbeat_high",
+                                           gain);
+                },
+                // 控件失活后再保存最终增益，避免每帧鼠标移动写文件。
+                // 此前的即时试听已经修改运行时池，不必重新播放节拍。
+                [this](float gain) {
+                    auto config = currentEditorConfig();
+                    config.settings.sfxConfig.editorMetronomeGain = gain;
                     updateEditorConfig(config);
                 });
             continue;

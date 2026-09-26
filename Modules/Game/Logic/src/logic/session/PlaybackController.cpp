@@ -1,6 +1,9 @@
 #include "logic/session/PlaybackController.h"
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
+#include "config/AppPaths.h"
+#include "config/Utf8Path.h"
+#include "config/skin/SkinConfig.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/CanvasCamera.h"
@@ -11,11 +14,82 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <filesystem>
+#include <limits>
+#include <string>
 
 namespace MMM::Logic
 {
 namespace
 {
+/// @brief 编辑器普通拍与重拍使用独立池，避免控制 BPM 测量工具的节拍器。
+const std::string EDITOR_METRONOME_LOW_KEY  = "editor.metronome.beat_low";
+const std::string EDITOR_METRONOME_HIGH_KEY = "editor.metronome.downbeat_high";
+/// @brief 两种节拍声在皮肤表中的原始资源标识。
+constexpr const char* SKIN_METRONOME_LOW_KEY  = "metronome.beat_low";
+constexpr const char* SKIN_METRONOME_HIGH_KEY = "metronome.downbeat_high";
+/// @brief 短前瞻用于跨逻辑调度间隔精确排定节拍。
+constexpr double METRONOME_SCHEDULE_AHEAD_SECONDS = 0.2;
+
+/// @brief 低频加载皮肤的普通拍与重拍音效到编辑器专属池。
+/// @param audio 当前全局音频管理器。
+/// @param gain 用户指定的编辑器节拍器增益。
+/// @return 两个音效都可用时返回 true。
+/// @warning 可能访问文件系统和解码资源，只能在首次启用或皮肤清空音效池后调用。
+/// @details 皮肤可分别覆盖普通拍与重拍，两个资源路径独立解析。
+/// 池使用编辑器前缀，BPM 测量工具的现有节拍器不受本组音量影响。
+/// 加载失败时不发布半套节奏，下一次显式播放或启用可重试。
+/// 资源的 lead-in 由皮肤定义，预约时间仍表示实际听到节拍的时刻。
+bool preloadEditorMetronomeSounds(Audio::AudioManager& audio, float gain)
+{
+    const auto& skinData = Config::SkinManager::instance().getData();
+    // 皮肤表中的路径已解析；缺项时沿用 BPM 工具的内置资源后备约定。
+    // 资源表保存已解析路径，正常皮肤无需再次访问文件系统。
+    // 只在未声明该音效时拼接软件自带的默认皮肤路径。
+    // 自定义皮肤可能没有 resources 子目录，不能拼接其自身目录作回退。
+    const auto resolvePath = [&](const char* key, const char* fallback) {
+        if ( const auto it = skinData.audioPaths.find(key);
+             it != skinData.audioPaths.end() ) {
+            return it->second;
+        }
+        // 当前皮肤未声明时从软件随附的默认皮肤取样，不猜测自定义皮肤目录。
+        return Config::AppPaths::defaultSkinFilePath().parent_path() /
+               Config::utf8ToPath("resources") / Config::utf8ToPath(fallback);
+    };
+    // 普通拍和重拍可能具有不同的前导静音长度。
+    // 提前量仅影响声音起播，不改变 BPM 网格本身的拍点。
+    const auto resolveLeadIn = [&](const char* key) {
+        if ( const auto it = skinData.audioLeadInSeconds.find(key);
+             it != skinData.audioLeadInSeconds.end() ) {
+            return it->second;
+        }
+        return 0.0;
+    };
+    // 已加载池直接复用预解码 PCM，避免切换播放状态后重新解码。
+    // 两个短路表达式独立求值，缺失一种资源时只补载那一种。
+    // 这条路径只由用户操作或皮肤资源重载事件触发。
+    const bool lowReady =
+        audio.getSFXDuration(EDITOR_METRONOME_LOW_KEY) > 0.0 ||
+        audio.preloadSoundEffect(
+            EDITOR_METRONOME_LOW_KEY,
+            Config::pathToUtf8(resolvePath(
+                SKIN_METRONOME_LOW_KEY, "audio/metronome/metronome_light.wav")),
+            gain,
+            resolveLeadIn(SKIN_METRONOME_LOW_KEY));
+    const bool highReady =
+        audio.getSFXDuration(EDITOR_METRONOME_HIGH_KEY) > 0.0 ||
+        audio.preloadSoundEffect(EDITOR_METRONOME_HIGH_KEY,
+                                 Config::pathToUtf8(resolvePath(
+                                     SKIN_METRONOME_HIGH_KEY,
+                                     "audio/metronome/metronome_accent.wav")),
+                                 gain,
+                                 resolveLeadIn(SKIN_METRONOME_HIGH_KEY));
+    // 不允许只用重拍或普通拍构成残缺节奏，避免误导用户校准。
+    // 返回值供低频调用者记录，可播放性仍由热路径查询已接入池确认。
+    return lowReady && highReady;
+}
+
 /// @brief 获取当前控制手势使用的 steady_clock 秒数。
 /// @return 与视觉时钟锚点相同时间基准的秒数，不是谱面时间。
 [[nodiscard]] double currentSteadySeconds() noexcept
@@ -66,8 +140,8 @@ void cancelActiveEditingState(SessionContext& ctx)
 {
     // 允许继续的手势必须与当前工具一致，并仍有有效的工作数据。
     // 单独残留的 isDragging 或 isSelecting 标志不足以恢复一次编辑。
-    const bool keepMarquee = ctx.currentTool == EditTool::Marquee &&
-                             ctx.isSelecting && !ctx.marqueeBoxes.empty();
+    const bool keepMarquee  = ctx.currentTool == EditTool::Marquee &&
+                              ctx.isSelecting && !ctx.marqueeBoxes.empty();
     const bool keepMoveDrag = ctx.currentTool == EditTool::Move &&
                               ctx.draggedEntity != entt::null &&
                               ctx.noteRegistry.valid(ctx.draggedEntity) &&
@@ -135,6 +209,210 @@ void restoreActiveHoldEffectsAfterPlaybackJump(SessionContext& ctx)
 }
 }  // namespace
 
+/// @brief 预加载编辑器专属节拍音池，供低频 UI 和播放命令调用。
+/// @param gain 线性初始增益。
+/// @return 两个音效池都就绪时返回 true。
+/// @warning 同步音频资源加载；不得在播放逐轮更新或绘制中调用。
+bool PlaybackController::preloadMetronomeSounds(float gain)
+{
+    return preloadEditorMetronomeSounds(Audio::AudioManager::instance(), gain);
+}
+
+/// @brief 在跳转位置找到当前 BPM 段和不早于当前音频时间的第一拍。
+/// @param time 当前播放音频时间，单位秒。
+/// @warning 仅在首次启用、跳转和 BPM 变更时二分查找；稳定播放复用游标。
+/// @details BPM 时间戳和音频播放位置属于同一时间域，视觉偏移不得介入。
+/// 首个 BPM 事件之前以谱面偏好 BPM 从零点数拍。
+/// BPM 事件自身是新段首拍，不延续旧段不足一拍的相位。
+/// upper_bound 保证刚好落在事件时间的跳转归入新段。
+/// 只在跳转、编辑 BPM 或首次开启时计算，普通更新复用游标。
+void PlaybackController::resetMetronomeCursor(double time)
+{
+    const auto& events = m_ctx.bpmEvents;
+    // 缓存已经按时间排序；二分定位使复杂变速谱面的跳转仍然快速。
+    // 比较器只看时间，BPM 值另行通过规范化函数限制计算范围。
+    const auto it =
+        std::upper_bound(events.begin(),
+                         events.end(),
+                         time,
+                         [](double value, const TimelineComponent* event) {
+                             return value < event->m_timestamp;
+                         });
+    m_metronomeSegmentIndex = static_cast<std::size_t>(it - events.begin());
+    const double origin =
+        m_metronomeSegmentIndex == 0U
+            ? 0.0
+            : events[m_metronomeSegmentIndex - 1U]->m_timestamp;
+    const double fallback = ::MMM::normalizeBpmValue(
+        m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm);
+    const double bpm =
+        m_metronomeSegmentIndex == 0U
+            ? fallback
+            : ::MMM::normalizeBpmValue(
+                  events[m_metronomeSegmentIndex - 1U]->m_value, fallback);
+    // normalizeBpmValue 保证正有限拍长，损坏谱面值不会作为除数。
+    // 当前段锚点决定节拍相位，后续只使用整数拍索引推导时间。
+    const double beatLength = 60.0 / bpm;
+    // 小容差只修正浮点边界；跳转到拍点之后不补播已过去的节拍。
+    const double index =
+        std::max(0.0, std::ceil((time - origin) / beatLength - 1e-7));
+    // 音频时间若无效，不能将非有限浮点数转换为拍号整数。
+    // 极端远跳超出整数范围时等待下一次有效重置，不保留错误游标。
+    if ( !std::isfinite(index) ||
+         index >=
+             static_cast<double>(std::numeric_limits<std::int64_t>::max()) ) {
+        m_metronomeCursorReady = false;
+        return;
+    }
+    m_nextMetronomeBeatIndex = static_cast<std::int64_t>(index);
+    m_nextMetronomeBeatTime =
+        origin + static_cast<double>(m_nextMetronomeBeatIndex) * beatLength;
+    m_metronomeCursorReady = true;
+}
+
+/// @brief 按活动谱面的 BPM 分段排定编辑器节拍器音效。
+/// @param playbackJumped 本轮是否已经清除全局预约声音。
+/// @warning
+/// 逻辑热路径：普通轮次只推进少量拍点，资源加载必须由低频交互入口完成。
+/// @details 热路径只读音频时钟与已加载音效池，不读文件、不等待解码。
+/// 播放跳转由会话先清理旧预约，本函数随后从当前时间重建窗口。
+/// 稳定轮次仅推进尚未预约的拍号，同一拍不会重复发声。
+/// BPM 编辑只撤销编辑器节拍器自身的预约，不打断键声和测量工具。
+/// 单轮最多处理 64 个拍点或段边界，异常密度不会阻塞逻辑线程。
+void PlaybackController::updateMetronome(bool playbackJumped)
+{
+    auto&       audio  = Audio::AudioManager::instance();
+    const auto& config = m_ctx.lastConfig.settings.sfxConfig;
+    // 后台同步跟随画布不是音频播放源，不能重复发出同一节拍。
+    // 配置关闭和播放暂停都要撤销本池预约，并使时间游标失效。
+    if ( !m_ctx.isActiveSession || !m_ctx.isPlaying || !m_ctx.currentBeatmap ||
+         !config.enableEditorMetronome ) {
+        if ( m_metronomeWasActive && m_ctx.isActiveSession ) {
+            // 后台旧会话不能停止新活动会话共用的全局节拍器音效池。
+            // 活动源关闭时只停止编辑器专属池，不触及键声或 BPM 工具。
+            audio.stopSoundEffect(EDITOR_METRONOME_LOW_KEY);
+            audio.stopSoundEffect(EDITOR_METRONOME_HIGH_KEY);
+        }
+        // 保留已解码的短音频，恢复播放时只需重建拍号位置。
+        // 同时废弃已应用增益标记，接纳暂停期间可能发生的设置更新。
+        m_metronomeWasActive   = false;
+        m_metronomeCursorReady = false;
+        m_appliedMetronomeGain = -1.0F;
+        return;
+    }
+
+    // 皮肤切换后由设置页预加载新资源，此处只使旧游标失效。
+    // 皮肤热切换会清空音效池，旧的就绪标记不可跨资源代使用。
+    // 此处只做池查询；对应的预加载已移至皮肤切换动作。
+    if ( m_metronomeResourcesReady &&
+         (audio.getSFXDuration(EDITOR_METRONOME_LOW_KEY) <= 0.0 ||
+          audio.getSFXDuration(EDITOR_METRONOME_HIGH_KEY) <= 0.0) ) {
+        m_metronomeResourcesReady = false;
+        m_metronomeCursorReady    = false;
+    }
+    // 第一次播放也可能由命令先预加载；等待两种声音都附加到混音图。
+    // 音效池不可用时静默跳过，绝不在逻辑 update 内同步加载资源。
+    if ( !m_metronomeResourcesReady ) {
+        // UI、播放命令或皮肤切换流程负责同步加载；热路径只查询池状态。
+        m_metronomeResourcesReady =
+            audio.getSFXDuration(EDITOR_METRONOME_LOW_KEY) > 0.0 &&
+            audio.getSFXDuration(EDITOR_METRONOME_HIGH_KEY) > 0.0;
+    }
+    if ( !m_metronomeResourcesReady ) return;
+    m_metronomeWasActive = true;
+
+    // 增益改变才写两个音效池，避免每个逻辑轮次刷新整个 voice 集合。
+    // UI 拖动直接试听草稿值，松手后的配置值在此处正式接管。
+    if ( m_appliedMetronomeGain != config.editorMetronomeGain ) {
+        // 两种拍声共用一条用户增益，池音量能立即影响已排定的 voice。
+        audio.setSFXPoolVolume(EDITOR_METRONOME_LOW_KEY,
+                               config.editorMetronomeGain);
+        audio.setSFXPoolVolume(EDITOR_METRONOME_HIGH_KEY,
+                               config.editorMetronomeGain);
+        m_appliedMetronomeGain = config.editorMetronomeGain;
+    }
+
+    // BPM 缓存由脏标记门控，正常轮次不会重新扫描 entt Registry。
+    // 其他工具可能先于播放更新重建缓存；比较版本而非读取已清除的脏标记。
+    SessionUtils::ensureBpmEvents(m_ctx);
+    const bool bpmChanged = m_seenBpmEventsRevision != m_ctx.bpmEventsRevision;
+    m_seenBpmEventsRevision = m_ctx.bpmEventsRevision;
+    if ( bpmChanged ) {
+        // BPM 编辑后旧前瞻计划不再对应新网格，只撤销节拍器自己的声音。
+        audio.stopSoundEffect(EDITOR_METRONOME_LOW_KEY);
+        audio.stopSoundEffect(EDITOR_METRONOME_HIGH_KEY);
+    }
+    // Seek 已经清空所有预约声音；重设游标才能重新排定前瞻窗口。
+    // BPM 编辑会改变段锚点和拍长，旧索引不得继续复用。
+    if ( playbackJumped || bpmChanged || !m_metronomeCursorReady ) {
+        resetMetronomeCursor(m_ctx.currentTime);
+    }
+    if ( !m_metronomeCursorReady ) return;
+
+    const auto&  events   = m_ctx.bpmEvents;
+    const double fallback = ::MMM::normalizeBpmValue(
+        m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm);
+    // 只预约短未来，既覆盖音频块边界，又降低跳转时撤销的成本。
+    // 更远的拍点留给后续轮次，以接纳用户在播放中的 BPM 修改。
+    const double horizon = m_ctx.currentTime + METRONOME_SCHEDULE_AHEAD_SECONDS;
+    // 即使异常 BPM 被规范到上界，单轮预约也有限额，防止极短拍长阻塞更新。
+    // 下一个 BPM 事件可能落在两个旧节拍之间，循环必须同时看事件边界。
+    // 只检查下一拍会漏掉前瞻窗口里的新段首拍。
+    // 上限也约束同时间戳密集事件和极高 BPM 的单轮工作量。
+    for ( int scheduled = 0;
+          scheduled < 64 &&
+          (m_nextMetronomeBeatTime <= horizon ||
+           (m_metronomeSegmentIndex < events.size() &&
+            events[m_metronomeSegmentIndex]->m_timestamp <= horizon));
+          ++scheduled ) {
+        if ( m_metronomeSegmentIndex < events.size() &&
+             m_nextMetronomeBeatTime >=
+                 events[m_metronomeSegmentIndex]->m_timestamp - 1e-8 ) {
+            // BPM 边界由新段拥有；同时间的多个事件依次推进至最后一个。
+            // 变速点归新段，旧段的剩余拍长丢弃，避免出现双重首拍。
+            // 若音频时钟已经越过边界，跳过新段里已经过去的拍点。
+            const double segmentStart =
+                events[m_metronomeSegmentIndex]->m_timestamp;
+            ++m_metronomeSegmentIndex;
+            const double bpm = ::MMM::normalizeBpmValue(
+                events[m_metronomeSegmentIndex - 1U]->m_value, fallback);
+            const double beatLength  = 60.0 / bpm;
+            m_nextMetronomeBeatIndex = static_cast<std::int64_t>(std::max(
+                0.0,
+                std::ceil((m_ctx.currentTime - segmentStart) / beatLength -
+                          1e-7)));
+            m_nextMetronomeBeatTime =
+                segmentStart +
+                static_cast<double>(m_nextMetronomeBeatIndex) * beatLength;
+            continue;
+        }
+        // 两毫秒仅补偿浮点与音频块边界误差，真正过去的拍不追赶播放。
+        // AudioManager 使用绝对时间预约，逻辑线程无需等待节拍到来。
+        if ( m_nextMetronomeBeatTime >= m_ctx.currentTime - 0.002 ) {
+            // 每段首拍重音，其后每四拍重复重音；不补播跳转前已过去的拍。
+            const std::string& key = m_nextMetronomeBeatIndex % 4 == 0
+                                         ? EDITOR_METRONOME_HIGH_KEY
+                                         : EDITOR_METRONOME_LOW_KEY;
+            audio.playSoundEffectScheduled(key, m_nextMetronomeBeatTime);
+        }
+        // 游标在每次计划后立即推进，下一轮不会重复预约同一整数拍。
+        // 重新按原点加整数倍拍长计算，避免累计浮点误差逐拍漂移。
+        ++m_nextMetronomeBeatIndex;
+        const double origin =
+            m_metronomeSegmentIndex == 0U
+                ? 0.0
+                : events[m_metronomeSegmentIndex - 1U]->m_timestamp;
+        const double bpm =
+            m_metronomeSegmentIndex == 0U
+                ? fallback
+                : ::MMM::normalizeBpmValue(
+                      events[m_metronomeSegmentIndex - 1U]->m_value, fallback);
+        m_nextMetronomeBeatTime =
+            origin +
+            static_cast<double>(m_nextMetronomeBeatIndex) * (60.0 / bpm);
+    }
+}
+
 /// @brief 切换当前会话的播放状态，并恢复相应的命中与视觉状态。
 /// @param cmd 请求的播放状态；曲终后的首次开始请求会回到原点。
 /// @details 播放依赖音频时间线激活成功，暂停不卸载已加载的资源。
@@ -171,6 +449,11 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
             // 激活失败不能留下正在播放的 UI 状态；当前位置仍可用于重试。
             m_ctx.isPlaying = false;
             return;
+        }
+        // 播放命令是低频入口，在进入逐轮调度前准备短节拍音资源。
+        if ( m_ctx.lastConfig.settings.sfxConfig.enableEditorMetronome ) {
+            static_cast<void>(preloadMetronomeSounds(
+                m_ctx.lastConfig.settings.sfxConfig.editorMetronomeGain));
         }
         // 清除上次播放的瞬时效果，再补回跨越当前位置的持续长条效果。
         // 命中游标同步到新起点，避免把此前的事件重新作为新命中触发。

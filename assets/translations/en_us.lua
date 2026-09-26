@@ -1040,6 +1040,8 @@ return {
 	["ui.key_sound_tool.no_player_tracks"] = "There are no main canvas tracks",
 	["ui.key_sound_tool.no_draft_tracks"] = "There are no draft tracks",
 	["ui.key_sound_tool.no_bgm_tracks"] = "There are no BGM tracks",
+	["ui.key_sound_tool.metronome_area"] = "Metronome",
+	["ui.key_sound_tool.editor_metronome"] = "Editor Metronome",
 	["ui.key_sound_tool.hit_sound_area"] = "Hit Sounds",
 	["ui.key_sound_tool.all_hit_sounds"] = "All Hit Sounds",
 	["ui.key_sound_tool.unbound_hit_sound"] = "Unbound Hit Sounds",

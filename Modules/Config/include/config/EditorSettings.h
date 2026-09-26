@@ -75,6 +75,12 @@ struct SfxConfig {
 
     /// @brief 已绑定音效文件的物件打击音效线性增益，范围为 0.0~2.0。
     float boundHitSfxGain{ 1.0F };
+
+    /// @brief 普通谱面编辑器播放时是否启用节拍器；旧配置默认关闭。
+    bool enableEditorMetronome{ false };
+
+    /// @brief 编辑器节拍器的线性增益，范围为 0.0~2.0。
+    float editorMetronomeGain{ 1.0F };
 };
 
 /// @brief 将打击音效线性增益规范到持久化与实时混音的共同范围。

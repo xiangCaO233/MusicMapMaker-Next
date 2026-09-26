@@ -14,7 +14,7 @@ struct SoundEffectToolTrackLayout {
     /// @brief BGM 轨道控件行数，空区域时仍保留一行提示。
     int bgmRows{ 1 };
     /// @brief 包含分类标题和总控件的全部行数。
-    int totalRows{ 13 };
+    int totalRows{ 15 };
 };
 
 /// @brief 根据各区域实际轨道数量计算音效工具控件布局。
@@ -31,7 +31,7 @@ calculateSoundEffectToolTrackLayout(int playerTrackCount, int draftTrackCount,
     layout.draftRows  = std::max(1, draftTrackCount);
     layout.bgmRows    = std::max(1, bgmTrackCount);
     layout.totalRows =
-        10 + layout.playerRows + layout.draftRows + layout.bgmRows;
+        12 + layout.playerRows + layout.draftRows + layout.bgmRows;
     return layout;
 }
 

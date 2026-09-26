@@ -1183,7 +1183,7 @@ SnapResult getSnapResult(
         // 不能以 BPM 拍长直接推算像素高度替代滚动积分后的绝对坐标。
         // 投影仅作有效性检查，不在多候选间比较鼠标的像素距离。
         double snapAbsY = cache->getAbsY(candidate.snappedTime);
-        float  snapY    = judgmentLineY -
+        float snapY = judgmentLineY -
                       static_cast<float>(snapAbsY - currentAbsY) * renderScaleY;
         if ( !std::isfinite(snapY) || !std::isfinite(mouseY) ) continue;
 
@@ -1207,7 +1207,7 @@ void syncHitIndex(SessionContext& ctx)
     ensureHitEvents(ctx);
     // 定位基准是 animateTime，包含会话视觉偏移；不能改成设备采样时间。
     // 空事件表的查询结果为 end，距离为零，三个消费者均从空区间开始。
-    auto it                 = std::lower_bound(ctx.hitEvents.begin(),
+    auto it = std::lower_bound(ctx.hitEvents.begin(),
                                ctx.hitEvents.end(),
                                System::HitFXSystem::HitEvent{
                                    ctx.animateTime, ::MMM::NoteType::NOTE });
@@ -1244,7 +1244,10 @@ void ensureBpmEvents(SessionContext& ctx)
         [](const TimelineComponent* a, const TimelineComponent* b) {
             return a->m_timestamp < b->m_timestamp;
         });
-    // 排序完成才允许消费方复用缓存；清洁标志不表示时间点数值已经规范化。
+    // 排序完成后再发布版本；即使其他工具先清了脏标记，播放调度仍可发现变化。
+    // 版本只在真实重建时推进，普通逻辑轮次不会无端重置节拍器预约。
+    ++ctx.bpmEventsRevision;
+    // 清洁标志仅表示借用缓存可读，不代表 BPM 值已经规范化。
     ctx.isBpmEventsDirty = false;
 }
 

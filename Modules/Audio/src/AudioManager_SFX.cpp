@@ -135,6 +135,13 @@ float AudioManager::getSFXEffectiveGain(const std::string& key) const
     // 全局静音是最外层覆盖，直接短路所有音效分组。
     if ( m_globalMuted ) return 0.0f;
 
+    // 编辑器节拍器有自己的分组滑条，不能被“全部打击音效”总控静音。
+    // 仍继承软件全局音量和全局静音，保持所有来源的主音量语义一致。
+    // BPM 测量工具沿用既有普通音效分组，只隔离编辑器专属前缀。
+    if ( key.starts_with("editor.metronome.") ) {
+        return m_globalVolume;
+    }
+
     if ( isInteractionSoundEffectKey(key) ) {
         // 交互音效不继承普通 SFX 分组，仍共同受全局音量控制。
         return m_interactionSfxGainMuted
@@ -968,10 +975,10 @@ void AudioManager::playSoundEffectScheduled(
     // 逻辑位置允许负预滚，调度 planner 的无符号当前帧按零处理。
     const std::size_t currentReferenceFrame =
         currentPosition > 0 ? static_cast<std::size_t>(currentPosition) : 0U;
-    const bool syncSpeed = Config::AppConfig::instance()
-                               .getEditorSettings()
-                               .sfxConfig.hitSfxSyncSpeed;
-    const SoundEffectSchedulePlan schedule = planSoundEffectSchedule(
+    const bool                    syncSpeed = Config::AppConfig::instance()
+                                                  .getEditorSettings()
+                                                  .sfxConfig.hitSfxSyncSpeed;
+    const SoundEffectSchedulePlan schedule  = planSoundEffectSchedule(
         targetFrame, currentReferenceFrame, m_speed, syncSpeed);
     // OpenAL 负责空间化输出，不叠加 SDL 使用的手工左右包络。
     const StereoGainEnvelope effectiveEnvelope =
