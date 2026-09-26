@@ -86,7 +86,7 @@ void AudioTrackControllerUI::requestFocus()
 /// - pendingDockId 只在 ImGui 报告已停靠后清除；
 /// - focus 请求提交一次后立即清除；
 /// - 工程切换时只绘制占位，不读取项目资源；
-/// - 本地配置草稿只在当前帧有效；
+/// - 本地配置草稿只在当前帧有效，速度和音高滑块草稿跨帧保留到编辑结束；
 /// - 用户变更最终经逻辑命令或 AudioManager 专用接口写入。
 /// - 子区域只修改引用参数和 changed 标志，不直接持久化配置；
 /// - Clay 描述树在本帧构建并立即渲染，不跨帧保存控件引用；
@@ -98,6 +98,9 @@ void AudioTrackControllerUI::requestFocus()
 void AudioTrackControllerUI::update(UIManager* sourceManager)
 {
     if ( !m_isOpen ) {
+        // 窗口关闭时撤销尚未提交的拖动草稿，不带入下次打开。
+        m_speedSliderEditing = false;
+        m_pitchSliderEditing = false;
         // 关闭音效轨窗口时停止预览，防止不可见控制器继续发声。
         if ( m_type == TrackType::Effect ) {
             Audio::AudioManager::instance().pauseSoundEffect(m_trackId);
@@ -131,6 +134,9 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
     if ( opened ) {
         // 工程切换时不读取可能正在替换的项目和音频资源容器。
         if ( sourceManager && sourceManager->isProjectTransitionInProgress() ) {
+            // 工程身份切换后，旧工程的滑块草稿不能写入新工程资源。
+            m_speedSliderEditing = false;
+            m_pitchSliderEditing = false;
             Utils::renderProjectTransitionPlaceholder();
             ImGui::End();
             return;
@@ -190,6 +196,12 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
                 volume = audio.getSFXPoolVolume(m_trackId);
                 muted  = audio.getSFXPoolMute(m_trackId);
             }
+        }
+
+        if ( !config ) {
+            // 项目资源消失时舍弃编辑中的值；重现后以项目配置为初值。
+            m_speedSliderEditing = false;
+            m_pitchSliderEditing = false;
         }
 
         // 各子区域共享变更标志，本帧末尾只提交一次配置更新。
@@ -282,6 +294,10 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
                 });
             }
         }
+    } else {
+        // 折叠窗口不提交未完成的交互，下一次展开从项目配置读取。
+        m_speedSliderEditing = false;
+        m_pitchSliderEditing = false;
     }
     // Begin 无论是否展开内容都必须配对 End。
     ImGui::End();
