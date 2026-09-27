@@ -36,7 +36,9 @@ void populateComposeLessonTopic(Topic&                            topic,
                                 const std::vector<ComposeLesson>& lessons);
 
 /// @brief 比较主轨道最终物件与草稿参考的完整几何及数量。
-/// @details 时间、Hold 长度允许 2 ms 浮点/吸附误差，轨道与类型必须精确相等。
+/// @details 时间、有效 Hold 长度允许 2 ms
+/// 浮点/吸附误差，轨道与类型必须精确相等。
+/// 折线父级的持续长度与横移缓存不参与验收，完整子段路径仍须相同。
 /// @warning 仅在教学物件变更后的单次查询结果到达时调用，不进入普通 UI 帧。
 bool matchesComposeLessonNotes(
     const ComposeLesson&                         lesson,

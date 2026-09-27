@@ -30,7 +30,8 @@
 /// 参考几何遵循以下契约：
 /// - 项目草稿侧车用剪贴板协议保存非负的草稿相对轨道；
 /// - 草稿与主轨道按紧邻边界的轨道对齐，多出的草稿轨道位于左侧；
-/// - 只验收音符类型、时间、轨道、持续长度及折线全部子段；
+/// - 只验收音符类型、时间、轨道、有效持续长度及折线全部子段；
+/// - 折线父级的持续长度和横移缓存不定义路径，以子段几何为准；
 /// - 配色、音效、协作 ID 和 ECS 实体身份不属于教程目标；
 /// - 数量与一对一匹配同时检查，重叠物件不能重复抵扣参考。
 ///
@@ -94,10 +95,14 @@ bool sameGeometry(const Logic::ComposeLessonNote& left,
     // 持续时间共用这一阈值，避免 Hold 与瞬时 Note 被混淆。
     constexpr double TIME_TOLERANCE = 0.002;
     if ( left.type != right.type || left.track != right.track ||
-         left.dtrack != right.dtrack ||
          std::abs(left.timestamp - right.timestamp) > TIME_TOLERANCE ||
-         std::abs(left.duration - right.duration) > TIME_TOLERANCE ||
          left.subNotes.size() != right.subNotes.size() )
+        return false;
+    // 折线父级没有独立的持续时间或滑动距离：绘制时可能留下画笔末段值，
+    // 而草稿剪贴板保留的是另一轮绘制的缓存。两者路径相同时仍应验收成功。
+    if ( left.type != ::MMM::NoteType::POLYLINE &&
+         (left.dtrack != right.dtrack ||
+          std::abs(left.duration - right.duration) > TIME_TOLERANCE) )
         return false;
     // 折线必须从头到尾逐段对应；只比较包围盒会放过不同的路径。
     for ( std::size_t index = 0; index < left.subNotes.size(); ++index ) {

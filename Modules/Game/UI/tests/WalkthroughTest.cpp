@@ -102,6 +102,7 @@
 /// - 两个分支分别按首播、编辑、复播三步展开每个段落；
 /// - 编辑阶段不能靠“知道了”跳过几何验收；
 /// - 草稿载荷与正式物件按类型、轨道、时间和数量比较；
+/// - 折线父级缓存差异可通过，子段路径差异仍被拒绝；
 /// - 额外或漏掉的物件不能被相似位置的另一个物件抵扣；
 /// - 阶段四在资产有效时解除 placeholder 并提供完整路线；
 /// - 阶段四 order 严格晚于编辑区简介；
@@ -392,6 +393,22 @@ int main(int argc, char** argv)
         if ( packagedLessons->front().m_reference[index].track !=
              firstLessonTracks[index] )
             return 112;
+    // 第四段使用真实草稿折线：父级缓存可因画笔收尾方式不同而变化，
+    // 但任何子段长度变化都必须继续阻止进入复播。
+    if ( packagedLessons->size() < 4 ||
+         packagedLessons->at(3).m_reference.empty() ||
+         packagedLessons->at(3).m_reference.front().subNotes.empty() )
+        return 114;
+    // 保留其它折线原样，专门验证单条折线父级缓存不会阻断整段验收。
+    auto polylineGeometry = packagedLessons->at(3).m_reference;
+    polylineGeometry.front().duration += 0.3;
+    polylineGeometry.front().dtrack += 1;
+    if ( !matchesComposeLessonNotes(packagedLessons->at(3), polylineGeometry) )
+        return 115;
+    // 子段多出 10 ms 已越过 2 ms 容差，路径变化仍须被完整比较捕获。
+    polylineGeometry.front().subNotes.front().duration += 0.01;
+    if ( matchesComposeLessonNotes(packagedLessons->at(3), polylineGeometry) )
+        return 116;
     // 静态声明刻意是占位；只有真实批注和草稿载荷同时可读才生成分支。
     // 此处使用隔离夹具，不能依赖仓库中正在编辑的个人教学谱面。
     if ( !composeBeatmapTopic || !composeBeatmapTopic->m_placeholder ||

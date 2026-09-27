@@ -95,6 +95,8 @@ private:
 
     /// @brief 当前突出引导；欢迎标签隐藏时仍由 updateGuide 每帧续租。
     std::optional<ActiveGuide> m_activeGuide;
+    /// @brief 引导开始前的草稿区总静音状态；跨步骤保留，退出时恢复。
+    std::optional<bool> m_draftAreaMutedBeforeGuide;
     /// @brief 旧项目关闭后才启动的打开项目路线，避免同一请求覆盖关闭意图。
     std::optional<ActiveGuide> m_pendingOpenGuide;
     /// @brief 启动创作教学时的可见错误；成功进入新步骤后清空。

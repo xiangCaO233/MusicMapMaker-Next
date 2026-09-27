@@ -1,5 +1,6 @@
 #include "ui/walkthrough/WalkthroughPage.h"
 
+#include "audio/AudioManager.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "common/walkthrough/ComposeLessonNotes.h"
 #include "config/AppConfig.h"
@@ -121,9 +122,13 @@
 
 namespace MMM::UI
 {
-/// @brief 页面退出时释放打开项目演练的全局路径限制。
+/// @brief 页面退出时恢复引导期间的音频状态和项目路径限制。
 WalkthroughPage::~WalkthroughPage()
 {
+    // 欢迎页通常先调用 stopGuide；析构仍兜底处理直接销毁页面的路径。
+    if ( m_draftAreaMutedBeforeGuide.has_value() )
+        Audio::AudioManager::instance().setDraftKeySoundAreaMuted(
+            *m_draftAreaMutedBeforeGuide);
     Walkthrough::restrictOpenProjectGuideToCanonRock(false);
 }
 
@@ -312,6 +317,14 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
         .nextSignalRevisionAtRunStart = nextSignalRevisionAtRunStart,
         .reviewing                    = reviewing,
     };
+    if ( !m_draftAreaMutedBeforeGuide.has_value() ) {
+        // 区域总静音覆盖全部草稿轨道，不改写用户逐轨静音和音量。
+        // 只在本轮首次进入时保存原值，切换教学步骤不重复覆盖。
+        // 直接发布到线程安全控制库，避免命令被非活动谱面会话忽略。
+        auto& audio                 = Audio::AudioManager::instance();
+        m_draftAreaMutedBeforeGuide = audio.isDraftKeySoundAreaMuted();
+        audio.setDraftKeySoundAreaMuted(true);
+    }
     if ( step.m_composeLesson ) {
         // 会话队列按停播、定位、按阶段开播的顺序执行。
         // 练习阶段保持暂停，给用户稳定的拍位来绘制或调整物件。
@@ -356,6 +369,13 @@ void WalkthroughPage::stopGuide(UIManager* manager)
         // 此命令只在退出时排入队列，不进入每帧更新路径。
         m_activeGuide->composeSession->pushCommand(
             Logic::CmdSetPlayState{ false });
+    if ( m_draftAreaMutedBeforeGuide.has_value() ) {
+        // 本轮结束时恢复原值；预先已静音的用户不会被意外打开声音。
+        // 控制库独立于谱面会话，关闭项目后也可还原进入引导前的值。
+        Audio::AudioManager::instance().setDraftKeySoundAreaMuted(
+            *m_draftAreaMutedBeforeGuide);
+        m_draftAreaMutedBeforeGuide.reset();
+    }
     // 取消路线同时取消等待关闭的请求；事件已发出时仍由原关闭流程处理。
     // 清理路径状态防止关闭欢迎标签后误限制普通打开项目操作。
     manager->walkthroughSpotlight().stop();
