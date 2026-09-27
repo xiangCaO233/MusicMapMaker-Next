@@ -376,6 +376,49 @@ bool testInvalidDraftTrackUsesAnnotationGutterFallback()
         512.0F);
 }
 
+/// @brief 验证尾部编辑只框住可拖动箭头，普通批注仍覆盖整件。
+/// @return 部位过滤不把头部和身体混入尾部提示时返回 true。
+/// @details 头部与箭头故意相距很远，联合范围和局部范围容易区分。
+/// 缺失的 HoldEnd 不能退化成 Flick 头部，否则编辑教程会标错起点。
+/// 这个测试只检查可见命中框过滤，不需要 Vulkan 或皮肤图集。
+bool testTargetHintCanFocusDragPart()
+{
+    const entt::entity entity = static_cast<entt::entity>(23);
+    MMM::Common::Render::AnnotationRenderItem item;
+    item.targetKind   = MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT;
+    item.targetEntity = entity;
+    // 两个命中框属于同一根实体；只有部位枚举决定尾部过滤结果。
+    // 箭头原始宽 20 像素，小于提示最小宽度 32 像素。
+    // 因此还能核查扩张后仍围绕箭头中心而非头部中心。
+    const std::vector<MMM::Common::Render::Hitbox> hitboxes{
+        { entity, MMM::Common::Render::HoverPart::Head, -1, 10, 40, 30, 20 },
+        { entity,
+          MMM::Common::Render::HoverPart::FlickArrow,
+          -1,
+          110,
+          40,
+          20,
+          20 },
+    };
+    const auto whole =
+        MMM::Canvas::findAnnotationTargetHintBounds(item, hitboxes);
+    // 未指定部位时保留普通批注目标框覆盖整件的旧行为。
+    const auto tail = MMM::Canvas::findAnnotationTargetHintBounds(
+        item,
+        hitboxes,
+        5.0F,
+        32.0F,
+        MMM::Common::Render::HoverPart::FlickArrow);
+    // 指定 FlickArrow 时只接受箭头本身，不合并同实体头部。
+    // 右边界也要检查，避免宽度虽对但中心仍来自联合包围盒。
+    const auto missing = MMM::Canvas::findAnnotationTargetHintBounds(
+        item, hitboxes, 5.0F, 32.0F, MMM::Common::Render::HoverPart::HoldEnd);
+    // 当前实体没有 HoldEnd，返回空值而不是把头部当成长条尾部。
+    // 提示绘制器会等待可见尾部出现，不在视口边界伪造蓝色目标。
+    return whole && tail && !missing && near(whole->left, 5.0F) &&
+           near(tail->left, 104.0F) && near(tail->right, 136.0F);
+}
+
 }  // namespace
 
 /// @brief 覆盖批注悬浮时解析连线目标几何的规则。
@@ -393,7 +436,8 @@ int main()
                    testAudioSampleTargetMergesVisibleParts() &&
                    testMissingTargetHasNoHint() &&
                    testDraftTargetUsesDraftLaneProjection() &&
-                   testInvalidDraftTrackUsesAnnotationGutterFallback()
+                   testInvalidDraftTrackUsesAnnotationGutterFallback() &&
+                   testTargetHintCanFocusDragPart()
                ? 0
                : 1;
 }

@@ -20,7 +20,11 @@ struct ComposeLesson {
     bool        m_advanced{ false };  ///< 从进阶标记开始属于进阶路线。
     /// @brief 草稿区同一时间窗内的目标几何；删除练习可为空。
     std::vector<Logic::ComposeLessonNote> m_reference;
+    bool m_allowUndoButton{ true };  ///< 删除教学及后续段落只能由用户亲自编辑。
 };
+
+/// @brief 编辑练习中当前物件与目标物件之间需要修正的部位。
+enum class ComposeLessonRepairKind { None, Move, FlickTail, HoldTail, Delete };
 
 /// @brief 一次正式物件查询与草稿目标的一对一匹配结果。
 /// @details 只在修订变化后重建，画布每帧仅读取匹配标记绘制提示。
@@ -33,6 +37,14 @@ struct ComposeLessonFeedback {
     std::vector<Logic::ComposeLessonNote> actual;  ///< 最近一次逻辑查询结果。
     std::vector<bool> expectedMatched;  ///< 每个草稿目标是否已有正式物件。
     std::vector<bool> actualMatched;    ///< 每个正式物件是否满足一份目标。
+    ComposeLessonRepairKind repairKind{
+        ComposeLessonRepairKind::None
+    };  ///< 当前段落的编辑语义。
+    /// @brief 未完成的实际物件对应的参考下标；无可修正目标时为 -1。
+    std::vector<int> repairTargetForActual;
+    bool             showUndoButton{
+        false
+    };  ///< 仅删除教学之前的普通放置段落开放辅助按钮。
 };
 
 /// @brief 对实际物件与教学参考作完整一对一匹配并产生绘制反馈。

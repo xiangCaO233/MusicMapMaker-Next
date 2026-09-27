@@ -23,6 +23,14 @@ void renderAnnotationTargetHint(
     float canvasWidth, float canvasHeight,
     AnnotationTargetHintStyle style = AnnotationTargetHintStyle::Accent);
 
+/// @brief 从当前错误部位向目标位置绘制蓝色落点和方向连线。
+/// @param source 物件待移动部位的画布局部坐标。
+/// @param destination 参考物件对应部位的画布局部坐标。
+/// @warning UI 热路径：只追加固定数量的裁剪几何，不查询物件或文件。
+void renderAnnotationTargetTransferHint(ImVec2 source, ImVec2 destination,
+                                        ImVec2 canvasPosition,
+                                        float canvasWidth, float canvasHeight);
+
 /// @brief 用与普通批注框相同的颜色和描边绘制整条折线的连续轮廓。
 /// @param polygon 顺时针画布局部坐标顶点，不包含画布原点偏移。
 /// @warning UI 热路径：只提交当前教学折线的已投影多边形。
@@ -50,6 +58,7 @@ struct AnnotationTargetHintBounds {
 /// @param hitboxes 当前主画布已生成的可见物件命中框。
 /// @param padding 目标物件四周追加的视觉留白。
 /// @param minimumExtent 提示框横纵方向允许的最小尺寸。
+/// @param part 仅标记特定可拖动部位；为空时合并整件全部命中框。
 /// @return 目标可见时返回合并后的提示边界；时间戳批注或目标不可见时为空。
 ///
 /// 同一目标可对应多个渲染命中框，例如长条的头部与主体。函数只合并当前
@@ -57,10 +66,11 @@ struct AnnotationTargetHintBounds {
 /// @warning UI 热路径：仅在悬浮批注详情卡片时扫描当前可见命中框，不得访问
 /// ECS 或文件系统。
 [[nodiscard]] inline std::optional<AnnotationTargetHintBounds>
-findAnnotationTargetHintBounds(const Common::Render::AnnotationRenderItem& item,
-                               std::span<const Common::Render::Hitbox> hitboxes,
-                               float padding       = 5.0F,
-                               float minimumExtent = 32.0F)
+findAnnotationTargetHintBounds(
+    const Common::Render::AnnotationRenderItem& item,
+    std::span<const Common::Render::Hitbox> hitboxes, float padding = 5.0F,
+    float                                    minimumExtent = 32.0F,
+    std::optional<Common::Render::HoverPart> part          = std::nullopt)
 {
     // 时间戳批注没有物件目标；丢失标记还阻止实体编号复用后的误匹配。
     if ( item.targetMissing || item.targetEntity == entt::null ||
@@ -87,6 +97,7 @@ findAnnotationTargetHintBounds(const Common::Render::AnnotationRenderItem& item,
                    hitbox.kind == Logic::ChartObjectKind::DraftNote);
         if ( hitbox.entity != item.targetEntity || !kindMatches ||
              hitbox.w < 0.0F || hitbox.h < 0.0F ||
+             (part && hitbox.part != *part) ||
              (item.targetSubIndex >= 0 &&
               hitbox.subIndex != item.targetSubIndex) ) {
             // subIndex 为负时表示整个父物件，允许合并其全部可见部件。

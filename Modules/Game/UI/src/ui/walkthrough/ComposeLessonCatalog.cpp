@@ -8,7 +8,9 @@
 #include <cmath>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -116,6 +118,86 @@ bool sameGeometry(const Logic::ComposeLessonNote& left,
     }
     return true;
 }
+
+/// @brief 根据批注标题选择需要修正的部位，普通放置练习仍可删除多余物件。
+/// @details 这里仅识别示例谱面已定义的动作标题，不根据 Note 类型推断手势。
+/// 同一 Flick 在放置教学中应创建新物件，在调整教学中则应拖动现有箭头。
+/// 删除练习没有参考终点；它使用独立语义禁止一键代替右键操作。
+/// 未识别的标题保留普通几何反馈，避免未来新增段落误接入错误拖动提示。
+ComposeLessonRepairKind repairKindFor(const ComposeLesson& lesson)
+{
+    if ( lesson.m_title == "拖拽移动教学" )
+        return ComposeLessonRepairKind::Move;
+    if ( lesson.m_title == "滑键拖拽调整教学" )
+        return ComposeLessonRepairKind::FlickTail;
+    if ( lesson.m_title == "长条拖拽调整教学" )
+        return ComposeLessonRepairKind::HoldTail;
+    if ( lesson.m_title == "删除物件教学" )
+        return ComposeLessonRepairKind::Delete;
+    return ComposeLessonRepairKind::None;
+}
+
+/// @brief 计算可修正物件与目标的距离；不兼容的结构不参与配对。
+/// @return 距离越小越优先；无法通过该段教学手势修正时为空。
+/// @details 调整尾部要求根时间和轨道已正确；移动整件要求相对结构不变。
+/// 距离只负责多个兼容物件的配对顺序，不决定最终教学是否完成。
+/// 最终验收仍由 sameGeometry 对每个物件的绝对坐标执行严格检查。
+/// @warning 只在正式物件修订后的低频比较中调用，不进入画布热路径。
+std::optional<double> repairDistance(const Logic::ComposeLessonNote& expected,
+                                     const Logic::ComposeLessonNote& actual,
+                                     ComposeLessonRepairKind         kind)
+{
+    constexpr double TIME_TOLERANCE = 0.002;
+    if ( expected.type != actual.type ||
+         expected.subNotes.size() != actual.subNotes.size() )
+        return std::nullopt;
+    // 数量相等只是形状比较的前提；下面仍逐项检查子段的相对轨道与时间。
+    // 这样移动教程中的折线可以整体平移，但不能把路径形状改了再配对。
+    // 尾部调整不能改变根部；用精确起点把每条滑键或长条对应到原物件。
+    if ( kind == ComposeLessonRepairKind::FlickTail ||
+         kind == ComposeLessonRepairKind::HoldTail ) {
+        if ( expected.track != actual.track ||
+             std::abs(expected.timestamp - actual.timestamp) > TIME_TOLERANCE ||
+             !expected.subNotes.empty() ||
+             expected.type != (kind == ComposeLessonRepairKind::FlickTail
+                                   ? ::MMM::NoteType::FLICK
+                                   : ::MMM::NoteType::HOLD) ||
+             (kind == ComposeLessonRepairKind::FlickTail &&
+              std::abs(expected.duration - actual.duration) > TIME_TOLERANCE) ||
+             (kind == ComposeLessonRepairKind::HoldTail &&
+              expected.dtrack != actual.dtrack) )
+            return std::nullopt;
+        // 尾部差值只影响重名根物件的竞争顺序，不放宽上述根部约束。
+        // 长条以持续时间作为尾部时间差，滑键以有向轨差作为箭头位置差。
+        return kind == ComposeLessonRepairKind::FlickTail
+                   ? static_cast<double>(
+                         std::abs(expected.dtrack - actual.dtrack))
+                   : std::abs(expected.duration - actual.duration);
+    }
+    if ( kind != ComposeLessonRepairKind::Move ) return std::nullopt;
+    // 整件移动只能平移时间和轨道；类型、长度及折线相对拓扑必须保留。
+    // 不设置任意最大移动距离：教学段内的物件均应能被移回正确位置。
+    // 距离只参与最近候选选择，不能让错误的形状通过验收。
+    if ( expected.type != ::MMM::NoteType::POLYLINE &&
+         (expected.dtrack != actual.dtrack ||
+          std::abs(expected.duration - actual.duration) > TIME_TOLERANCE) )
+        return std::nullopt;
+    for ( std::size_t index = 0; index < expected.subNotes.size(); ++index ) {
+        const auto& left  = expected.subNotes[index];
+        const auto& right = actual.subNotes[index];
+        if ( left.type != right.type || left.dtrack != right.dtrack ||
+             left.track - expected.track != right.track - actual.track ||
+             std::abs((left.timestamp - expected.timestamp) -
+                      (right.timestamp - actual.timestamp)) > TIME_TOLERANCE ||
+             std::abs(left.duration - right.duration) > TIME_TOLERANCE )
+            return std::nullopt;
+    }
+    // 时间使用毫秒权重，与教学批注和谱面吸附的可见刻度一致。
+    // 轨差额外计入成本，使同一时间附近的同类型音符优先找近轨目标。
+    // 全局最近优先，再消费双方下标；相邻同类型物件不能都指向一个目标。
+    return std::abs(expected.timestamp - actual.timestamp) * 1000.0 +
+           static_cast<double>(std::abs(expected.track - actual.track)) * 100.0;
+}
 }  // namespace
 
 /// @brief 加载 CanonRock 谱面并将时间戳批注配对成基础和进阶教学段落。
@@ -186,7 +268,10 @@ std::expected<std::vector<ComposeLesson>, std::string> loadComposeLessons(
     // 这里不推断缺失终点，也不使用下一段起点作为隐式结束时间。
     std::vector<ComposeLesson> lessons;
     lessons.reserve(markers.size() / 2);
-    bool advanced = false;
+    bool advanced        = false;
+    bool allowUndoButton = true;
+    // 按钮开关沿时间顺序单向关闭；不能在后续进阶段重新打开。
+    // 这样新增的后续基础段也自动继承“用户亲自完成”的教学要求。
     for ( std::size_t index = 0; index < markers.size(); index += 2 ) {
         const auto& begin = markers[index];
         const auto& end   = markers[index + 1];
@@ -205,11 +290,15 @@ std::expected<std::vector<ComposeLesson>, std::string> loadComposeLessons(
         }
         if ( title.empty() )
             return std::unexpected("CanonRock 教学段落名称为空");
+        // 删除段起所有练习都由用户亲自完成；后续新增基础段也继承该规则。
+        if ( title == "删除物件教学" ) allowUndoButton = false;
+        // 每个段落保存当时的开关快照；反馈对象无需在每帧追溯前一段。
         lessons.push_back({ std::string(title),
                             begin.timestamp,
                             end.timestamp,
                             advanced,
-                            {} });
+                            {},
+                            allowUndoButton });
     }
     if ( !advanced || lessons.front().m_advanced )
         return std::unexpected("CanonRock 教学缺少基础或进阶段落");
@@ -339,6 +428,16 @@ bool matchesComposeLessonNotes(
 /// 红框来源于未匹配的实际物件，普通框来源于未匹配的参考物件。
 /// 几何判定直接调用最终验收的同一比较器，避免提示与进度结论冲突。
 /// 此函数只在查询完成时调用，允许为稳定反馈分配两组匹配数组。
+/// @par 可修正物件
+/// 完全匹配优先消费实际和参考，修正候选只看双方剩余下标。
+/// 候选保留两侧未匹配状态，使目标轮廓和当前红框同时显示。
+/// 候选表只代表该做哪一种手势，不能使播放复查提前完成。
+/// 轨道或时间已错的尾部编辑物件不作为候选，因为该手势不能改根部。
+/// 独占目标防止多个同类型物件把蓝点叠到同一处。
+/// 因此画布不需要自行猜测最近参考，避免每帧出现不稳定的线条切换。
+/// @par 按钮范围
+/// 删除段和其后段落沿用加载时关闭的开关，普通新段也不重新启用。
+/// 三种编辑段即使排在删除段之前，也不能用一键删除代替操作。
 ComposeLessonFeedback compareComposeLessonNotes(
     const ComposeLesson& lesson, std::vector<Logic::ComposeLessonNote> actual,
     std::uintptr_t beatmapInstanceId, std::uint64_t composeNoteRevision)
@@ -350,6 +449,13 @@ ComposeLessonFeedback compareComposeLessonNotes(
     feedback.actual              = std::move(actual);
     feedback.expectedMatched.assign(lesson.m_reference.size(), false);
     feedback.actualMatched.assign(feedback.actual.size(), false);
+    feedback.repairKind = repairKindFor(lesson);
+    feedback.repairTargetForActual.assign(feedback.actual.size(), -1);
+    // 可修正物件不能提供删除捷径；删除段之后连普通多余物件也不提供。
+    // 该标记在逻辑查询结果到达时固定，画布只读它来决定是否创建按钮。
+    feedback.showUndoButton =
+        lesson.m_allowUndoButton &&
+        feedback.repairKind == ComposeLessonRepairKind::None;
     // 与最终验收共用 sameGeometry；先消费完全对应的物件，局部错误不会
     // 挡住同段内其它正确物件的提示状态。
     for ( std::size_t expected = 0; expected < lesson.m_reference.size();
@@ -362,6 +468,52 @@ ComposeLessonFeedback compareComposeLessonNotes(
             feedback.expectedMatched[expected] = true;
             feedback.actualMatched[found]      = true;
             break;
+        }
+    }
+    // 先排除已经完整匹配的物件，再为可修正的错误建立独占目标。
+    // 匹配只在编辑修订后运行；画布每帧只读取配对下标和投影点。
+    if ( feedback.repairKind == ComposeLessonRepairKind::Move ||
+         feedback.repairKind == ComposeLessonRepairKind::FlickTail ||
+         feedback.repairKind == ComposeLessonRepairKind::HoldTail ) {
+        std::vector<bool> reserved(lesson.m_reference.size(), false);
+        // 最近候选全局消费，比逐个实际物件找第一个参考更稳定。
+        // 先匹配几何完全正确的物件，再把未完成目标供拖动提示使用。
+        // reserved 与 expectedMatched 分开，提示配对不代表目标已完成。
+        while ( true ) {
+            double      bestDistance = std::numeric_limits<double>::infinity();
+            std::size_t bestActual   = feedback.actual.size();
+            std::size_t bestExpected = lesson.m_reference.size();
+            for ( std::size_t actualIndex = 0;
+                  actualIndex < feedback.actual.size();
+                  ++actualIndex ) {
+                if ( feedback.actualMatched[actualIndex] ||
+                     feedback.repairTargetForActual[actualIndex] >= 0 )
+                    continue;
+                for ( std::size_t expectedIndex = 0;
+                      expectedIndex < lesson.m_reference.size();
+                      ++expectedIndex ) {
+                    if ( feedback.expectedMatched[expectedIndex] ||
+                         reserved[expectedIndex] )
+                        continue;
+                    // 不兼容对象返回空值，不会因为距离近而抢走可修正目标。
+                    // 相同类型但不同折线路径、不同根部的调整对象也会被过滤。
+                    const auto distance =
+                        repairDistance(lesson.m_reference[expectedIndex],
+                                       feedback.actual[actualIndex],
+                                       feedback.repairKind);
+                    if ( distance && *distance < bestDistance ) {
+                        bestDistance = *distance;
+                        bestActual   = actualIndex;
+                        bestExpected = expectedIndex;
+                    }
+                }
+            }
+            if ( bestActual == feedback.actual.size() ) break;
+            // 一对一结果保留原始参考下标，画布可以直接取目标的皮肤投影。
+            // 不改 actualMatched：实际物件仍未验收，必须继续显示红框。
+            feedback.repairTargetForActual[bestActual] =
+                static_cast<int>(bestExpected);
+            reserved[bestExpected] = true;
         }
     }
     return feedback;
@@ -392,8 +544,9 @@ void populateComposeLessonTopic(Topic&                            topic,
                              ComposeLessonPhase::Practice,
                              ComposeLessonPhase::Review };
     for ( std::size_t index = 0; index < lessons.size(); ++index ) {
-        const auto& lesson = lessons[index];
-        auto&       branch = lesson.m_advanced ? advanced : basic;
+        const auto& lesson     = lessons[index];
+        const auto  repairKind = repairKindFor(lesson);
+        auto&       branch     = lesson.m_advanced ? advanced : basic;
         // 阶段顺序在数据中展开，而不在页面渲染时每帧动态生成。
         // 每段完整走完复播后，下一段首播才会成为当前目标。
         for ( std::size_t phaseIndex = 0; phaseIndex < phases.size();
@@ -429,6 +582,48 @@ void populateComposeLessonTopic(Topic&                            topic,
                     ? "Edit the player lanes to match the draft reference in "
                       "this section."
                     : "Replay this section to review your result.";
+            // 修正段需告诉用户实际的拖动部位；红框与蓝点仅给位置，
+            // 文字补足整件移动、尾部调整和右键删除的手势区别。
+            // 普通放置与播放阶段仍沿用原说明，避免改变已有学习路线。
+            if ( phaseIndex == 1 ) {
+                switch ( repairKind ) {
+                case ComposeLessonRepairKind::Move:
+                    // 整件移动的落点对应 Note 头部，不要求拖动尾端装饰。
+                    step.m_body.m_translations["zh_cn"] =
+                        "拖动红框物件到对应蓝色落点，使位置与草稿一致。";
+                    step.m_body.m_translations["en_us"] =
+                        "Drag each marked note to its blue target point.";
+                    break;
+                case ComposeLessonRepairKind::FlickTail:
+                    // Flick 的箭头可单独编辑，说明中明确手势目标是箭头。
+                    // 蓝点标的是有向终轨，不是旧箭头的撤销入口。
+                    step.m_body.m_translations["zh_cn"] =
+                        "拖动红框滑键的箭头尾部到对应蓝色落点。";
+                    step.m_body.m_translations["en_us"] =
+                        "Drag each marked flick arrow to its blue target "
+                        "point.";
+                    break;
+                case ComposeLessonRepairKind::HoldTail:
+                    // 长条头部已正确时只改持续时间；尾点在目标结束拍位。
+                    // 用户无需重新绘制整条 Hold，避免丢掉起点精度。
+                    step.m_body.m_translations["zh_cn"] =
+                        "拖动红框长条的尾部到对应蓝色落点。";
+                    step.m_body.m_translations["en_us"] =
+                        "Drag each marked hold end to its blue target point.";
+                    break;
+                case ComposeLessonRepairKind::Delete:
+                    // 删除段没有参考落点，红框只标识应右键的正式物件。
+                    // 说明不能使用旧的“照草稿编辑”文案来暗示放置 Note。
+                    step.m_body.m_translations["zh_cn"] =
+                        "右键删除红框标出的主轨道物件，直到该段与草稿区一致。";
+                    step.m_body.m_translations["en_us"] =
+                        "Right-click the marked notes to delete them.";
+                    break;
+                case ComposeLessonRepairKind::None:
+                    // 普通放置段保留通用说明及其已有误放物件辅助处理。
+                    break;
+                }
+            }
             // 播放与编辑各有独立语义目标；UI 只接收业务状态机的完成通知。
             // 所有步骤禁用“知道了”，避免错误谱面或未完成物件继续推进。
             Guide guide;

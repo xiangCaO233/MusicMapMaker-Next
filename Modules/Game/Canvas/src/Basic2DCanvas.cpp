@@ -59,6 +59,7 @@
 #include <fmt/format.h>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -682,6 +683,9 @@ Basic2DCanvas::~Basic2DCanvas() {}
 ///
 /// @par 撤销按钮
 /// 按钮停靠在错误框一侧；右侧放不下时移到左侧，再限定在画布范围。
+/// 它只用于删除教学之前的普通放置段落，帮助纠正多余的误放物件。
+/// 移动、尾部调整和删除段要求用户亲自执行手势，因此不创建按钮。
+/// 删除段以后的进阶练习也不恢复按钮，即使碰到新的普通放置目标。
 /// 按钮点击只传递目标根实体、谱面实例和捕获时几何，不发送普通 CmdUndo。
 /// 逻辑线程再次核验这些字段，物件已移动或切谱时请求无操作。
 /// 红框边按钮在 ImGui 层消费鼠标，本帧画笔不能把点击解释为新 Note。
@@ -1297,6 +1301,8 @@ bool Basic2DCanvas::updateComposeLessonHints(
     }
 
     // 错误物件用快照里真实的可见包围盒，和普通批注悬浮框保持一致。
+    // 可修正物件额外取得参考下标，蓝色落点从同一草稿目标投影而来。
+    // 配对只在修订后做一次，不在此处遍历全部目标寻找最近 Note。
     // 按钮只携带已核对的根实体；逻辑线程还会检查谱面实例和几何。
     bool buttonHovered = false;
     // 绝对定位按钮不能影响画布窗口随后创建的正常控件位置。
@@ -1311,21 +1317,77 @@ bool Basic2DCanvas::updateComposeLessonHints(
         if ( feedback->composeNoteRevision != snapshot.composeNoteRevision )
             continue;
         if ( note.entity == entt::null ) continue;
-        // 复用批注对象的命中框合并规则；长条身体、头尾与折线段
-        // 都被收敛进同一个根目标提示，而不是只标一个纹理片段。
+        // 放置和删除仍标整件；尾部编辑只框住真正需要拖动的部位，
+        // 避免将长条身体或滑键头部误示为拖动起点。
+        // 根实体不变，只有部位过滤不同，后续逻辑仍用同一身份核验。
         Common::Render::AnnotationRenderItem target;
         target.targetKind   = ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT;
         target.targetEntity = note.entity;
-        const auto bounds =
-            findAnnotationTargetHintBounds(target, snapshot.hitboxes);
+        const int  repairIndex = index < feedback->repairTargetForActual.size()
+                                     ? feedback->repairTargetForActual[index]
+                                     : -1;
+        const bool paired =
+            repairIndex >= 0 && static_cast<std::size_t>(repairIndex) <
+                                    feedback->lesson->m_reference.size();
+        // 参考下标由低频比较产生；快照与反馈代数一致时才允许投影。
+        // 目标不存在时保留普通红框，让用户知道仍有未完成的实际物件。
+        std::optional<Common::Render::HoverPart> repairPart;
+        if ( paired && feedback->repairKind ==
+                           UI::Walkthrough::ComposeLessonRepairKind::FlickTail )
+            repairPart = Common::Render::HoverPart::FlickArrow;
+        else if ( paired &&
+                  feedback->repairKind ==
+                      UI::Walkthrough::ComposeLessonRepairKind::HoldTail )
+            repairPart = Common::Render::HoverPart::HoldEnd;
+        // 只接受尾部真实命中框；尾部离屏时不退回头部或身体的中心。
+        // 否则蓝线会从不可能拖动的部位起笔，误导用户操作。
+        auto bounds = findAnnotationTargetHintBounds(
+            target, snapshot.hitboxes, 5.0F, 32.0F, repairPart);
+        // 部位可能刚好滚出视口；此时不改标别的部位，避免错误指引。
         // 错误物件已经滚出视口时保持反馈状态，但不在窗口边缘伪造位置。
         // 回到该时间点后快照重新生成命中框，红框会再次出现。
         if ( !bounds ) continue;
+        if ( paired ) {
+            const auto& expected =
+                feedback->lesson
+                    ->m_reference[static_cast<std::size_t>(repairIndex)];
+            ImVec2 source{ trackX(note.track), timeY(note.timestamp) };
+            ImVec2 destination{ trackX(expected.track),
+                                timeY(expected.timestamp) };
+            // 整件移动以头部时间和轨道为目标，不把长条中点当落点。
+            // 尾部调整则把参考端点替换进同一套画布投影坐标。
+            if ( feedback->repairKind ==
+                 UI::Walkthrough::ComposeLessonRepairKind::FlickTail ) {
+                source = { (bounds->left + bounds->right) * 0.5F,
+                           (bounds->top + bounds->bottom) * 0.5F };
+                destination.x =
+                    trackX(std::clamp(expected.track + expected.dtrack,
+                                      0,
+                                      snapshot.trackCount - 1));
+                // Flick 的方向和终轨由箭头决定，起始头部保持原位。
+                // 越界资源沿用参考贴图的终轨裁剪，点位不能与贴图分离。
+            } else if ( feedback->repairKind ==
+                        UI::Walkthrough::ComposeLessonRepairKind::HoldTail ) {
+                source        = { (bounds->left + bounds->right) * 0.5F,
+                                  (bounds->top + bounds->bottom) * 0.5F };
+                destination.y = timeY(expected.timestamp + expected.duration);
+                // Hold 尾端由根时间加持续时间定义，滚速映射由 timeY 处理。
+            }
+            renderAnnotationTargetTransferHint(source,
+                                               destination,
+                                               canvasScreenPosition,
+                                               canvasSize.x,
+                                               canvasSize.y);
+        }
         renderAnnotationTargetHint(*bounds,
                                    canvasScreenPosition,
                                    canvasSize.x,
                                    canvasSize.y,
                                    AnnotationTargetHintStyle::Error);
+        // 移动、调整和右键删除都是练习动作；按钮会代替用户完成操作。
+        // 仅删除教学之前的普通放置段落保留纠正多余物件的撤销入口。
+        // 后续教程即使未匹配目标，也不产生覆盖右键手势的按钮命中区。
+        if ( !feedback->showUndoButton ) continue;
         constexpr const char* LABEL      = "撤销此物件";
         const ImVec2          buttonSize = ImGui::CalcTextSize(LABEL);
         const float           width =

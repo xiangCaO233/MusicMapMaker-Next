@@ -362,6 +362,32 @@ int main(int argc, char** argv)
          packagedLessons->front().m_reference.empty() ||
          !packagedLessons->back().m_advanced )
         return 107;
+    // 真实目录的删除段是辅助撤销按钮的截止点。
+    // 此检查贯穿后续进阶段落，避免只在删除段本身隐藏按钮。
+    // 标题仅用于找到边界；按钮状态必须来自加载时的段落次序。
+    // 段落次序来自时间戳批注，而不是静态 JSON 的教程列表。
+    // 资源装载会剥离进阶前缀，删除标题比较的是规范化结果。
+    // 因此检查资源包内实际分发的谱面，覆盖配置同步后的入口数据。
+    // 删除段之前应维持原放置教学的辅助入口，不改变已有设计。
+    // 删除段本身必须关闭，否则用户可点击按钮跳过右键手势。
+    // 最后一个进阶段仍关闭，保证后续分支不会重新打开辅助操作。
+    const auto deletePosition =
+        std::ranges::find_if(*packagedLessons, [](const ComposeLesson& lesson) {
+            return lesson.m_title == "删除物件教学";
+        });
+    if ( deletePosition == packagedLessons->end() ||
+         deletePosition == packagedLessons->begin() ||
+         std::any_of(packagedLessons->begin(),
+                     deletePosition,
+                     [](const ComposeLesson& lesson) {
+                         return !lesson.m_allowUndoButton;
+                     }) ||
+         std::any_of(deletePosition,
+                     packagedLessons->end(),
+                     [](const ComposeLesson& lesson) {
+                         return lesson.m_allowUndoButton;
+                     }) )
+        return 176;
     // 路线入口会用独立基线还原主轨，资源必须可被正式谱面读取器加载。
     // 首段初始为空，重练时才会要求重新绘制这六枚 Note。
     // 基线与可保存的示例谱面分开存放，后者在用户练习后可能发生变化。
@@ -472,6 +498,99 @@ int main(int argc, char** argv)
     if ( std::ranges::count(wrongTrackFeedback.expectedMatched, false) != 0 ||
          std::ranges::count(wrongTrackFeedback.actualMatched, false) != 1 )
         return 119;
+    // 移动段先排除完整匹配，再给不同位置的同结构物件分配独占目标。
+    // 目标与实际枚举顺序相反，避免误把数组相同下标当作配对依据。
+    // 两枚物件故意使用相同类型，单靠 NoteType 无法确定配对。
+    // 两者仅偏移时间，必须显示蓝色目的地而非一键删除按钮。
+    // 期望下标恰好与实际顺序交叉，能够抓出按索引直连的错误实现。
+    // 这里没有 ECS 实体，比较器只应依赖捕获的几何和目录阶段。
+    // 最近优先配对还须消费目标，不能让第二枚重复指向第一枚。
+    ComposeLesson moveLesson;
+    moveLesson.m_title     = "拖拽移动教学";
+    moveLesson.m_reference = {
+        { .type = ::MMM::NoteType::NOTE, .timestamp = 1.0, .track = 0 },
+        { .type = ::MMM::NoteType::NOTE, .timestamp = 1.3, .track = 1 },
+    };
+    auto movedNotes = moveLesson.m_reference;
+    std::swap(movedNotes[0], movedNotes[1]);
+    movedNotes[0].timestamp += 0.08;
+    movedNotes[1].timestamp += 0.05;
+    const auto moveFeedback =
+        compareComposeLessonNotes(moveLesson, movedNotes, 17, 10);
+    // 完整验收仍为 false；配对不能把未到达目标的音符标成已完成。
+    // 反馈保留实例令牌和修订号，画布后续据此拒绝陈旧红框。
+    if ( moveFeedback.repairKind != ComposeLessonRepairKind::Move ||
+         moveFeedback.repairTargetForActual != std::vector<int>{ 1, 0 } ||
+         std::ranges::count(moveFeedback.actualMatched, true) != 0 ||
+         moveFeedback.showUndoButton )
+        return 170;
+    // 滑键只调整箭头终轨；根时间和起始轨保持一致才能建立配对。
+    // 从第一轨向第三轨的目标与当前向第二轨的箭头共享同一头部。
+    // 仅改有向轨差即成为尾部修正候选，不应要求创建新的 Flick。
+    // 此段没有额外子物件，目标端点可由根轨道加 dtrack 确定。
+    ComposeLesson flickLesson;
+    flickLesson.m_title     = "滑键拖拽调整教学";
+    flickLesson.m_reference = {
+        { .type      = ::MMM::NoteType::FLICK,
+          .timestamp = 2.0,
+          .track     = 0,
+          .dtrack    = 2 },
+    };
+    auto wrongFlick           = flickLesson.m_reference;
+    wrongFlick.front().dtrack = 1;
+    const auto flickFeedback =
+        compareComposeLessonNotes(flickLesson, wrongFlick, 17, 11);
+    // 这个配对必须禁止一键撤销，让用户亲自拖动现有箭头。
+    if ( flickFeedback.repairKind != ComposeLessonRepairKind::FlickTail ||
+         flickFeedback.repairTargetForActual != std::vector<int>{ 0 } ||
+         flickFeedback.showUndoButton )
+        return 171;
+    wrongFlick.front().track = 1;
+    // 修改头轨后尾部拖动已无法修复整个几何；不应画误导性蓝点。
+    // 对这种不兼容的根部错误只保留红框，供用户辨认其它操作需求。
+    // 该断言防止“任何 Flick 都配到最近 Flick”的过度宽松提示。
+    if ( compareComposeLessonNotes(flickLesson, wrongFlick, 17, 12)
+             .repairTargetForActual != std::vector<int>{ -1 } )
+        return 172;
+    // 长条尾端与删除段同样不应提供一键撤销，但删除没有蓝色目标。
+    // 长度从 0.6 秒缩到 0.3 秒时头部仍正确，唯一动作是拖动 HoldEnd。
+    // 参考尾时间应由起点加持续时间计算，不能取长条矩形中心。
+    ComposeLesson holdLesson;
+    holdLesson.m_title     = "长条拖拽调整教学";
+    holdLesson.m_reference = {
+        { .type      = ::MMM::NoteType::HOLD,
+          .timestamp = 3.0,
+          .duration  = 0.6,
+          .track     = 2 },
+    };
+    auto shortHold             = holdLesson.m_reference;
+    shortHold.front().duration = 0.3;
+    const auto holdFeedback =
+        compareComposeLessonNotes(holdLesson, shortHold, 17, 13);
+    // 当前长条仍须标红，直到用户把尾部调整到参考持续时间。
+    if ( holdFeedback.repairKind != ComposeLessonRepairKind::HoldTail ||
+         holdFeedback.repairTargetForActual != std::vector<int>{ 0 } ||
+         holdFeedback.showUndoButton )
+        return 173;
+    ComposeLesson deleteLesson;
+    deleteLesson.m_title = "删除物件教学";
+    // 删除段没有草稿目标，不能为多余正式物件生成蓝色落点。
+    // 红框仍存在，让用户知道应对哪个物件执行右键删除。
+    const auto deleteFeedback =
+        compareComposeLessonNotes(deleteLesson, shortHold, 17, 14);
+    if ( deleteFeedback.repairKind != ComposeLessonRepairKind::Delete ||
+         deleteFeedback.repairTargetForActual != std::vector<int>{ -1 } ||
+         deleteFeedback.showUndoButton )
+        return 174;
+    // 删除之后即使再次遇到普通放置类型，也只提示，不自动提供删除按钮。
+    // 用独立开关模拟加载器的顺序继承，避免后续标题被误认成早期放置段。
+    // 保留非空参考可证明按钮开关与目标是否存在无关。
+    moveLesson.m_title           = "后续普通教学";
+    moveLesson.m_allowUndoButton = false;
+    if ( compareComposeLessonNotes(moveLesson, movedNotes, 17, 15)
+             .showUndoButton )
+        return 175;
+    // 后续进阶段即使包含未匹配的 Note，也只能由用户自行调整或删除。
     if ( composeBeatmapTopic->m_branches.size() != 2 ||
          composeBeatmapTopic->m_branches[0].m_steps.size() != 12 ||
          composeBeatmapTopic->m_branches[1].m_steps.size() != 3 )

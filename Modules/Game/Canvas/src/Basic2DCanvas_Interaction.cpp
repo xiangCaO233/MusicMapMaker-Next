@@ -217,6 +217,65 @@ void renderAnnotationTargetHint(const AnnotationTargetHintBounds& bounds,
     drawList->PopClipRect();
 }
 
+/// @brief 在同一画布内连接待修正部位和蓝色目标落点。
+/// @details 目标不在当前视口时保留原错误框，避免在边缘伪造落点。
+/// 箭头与落点只负责视觉指引，实际几何仍由教学验收逻辑判定。
+/// 起点与终点均采用画布局部坐标，由调用方使用同一轨道和时间投影。
+/// 目标点采用独立蓝色而非皮肤强调色，与青色预期物件外框区分。
+/// 连线始终画在内容裁剪区中，不进入时间线、预览或其它 Dock 标签。
+/// 落点仍在原参考位置，即使当前对象与目标只差几个像素也不偏移。
+/// 起点即使位于裁剪区外也只会留下可见线段，不生成额外窗口。
+/// @warning UI 热路径：每个未匹配的可修正物件只追加固定几何。
+void renderAnnotationTargetTransferHint(ImVec2 source, ImVec2 destination,
+                                        ImVec2 canvasPosition,
+                                        float canvasWidth, float canvasHeight)
+{
+    if ( destination.x < 0.0F || destination.x > canvasWidth ||
+         destination.y < 0.0F || destination.y > canvasHeight )
+        return;
+    // 离屏参考没有可靠的当前窗口落点；等待滚动后自然重新投影。
+    // 不将坐标钳制到边界，边界上的蓝点会被误认成目标轨道。
+    constexpr ImU32 BLUE   = IM_COL32(61, 180, 255, 255);
+    constexpr ImU32 SHADOW = IM_COL32(0, 0, 0, 235);
+    constexpr ImU32 CORE   = IM_COL32(231, 250, 255, 255);
+    const ImVec2    start{ canvasPosition.x + source.x,
+                           canvasPosition.y + source.y };
+    const ImVec2    end{ canvasPosition.x + destination.x,
+                         canvasPosition.y + destination.y };
+    ImDrawList*     drawList = ImGui::GetWindowDrawList();
+    drawList->PushClipRect(
+        canvasPosition,
+        { canvasPosition.x + canvasWidth, canvasPosition.y + canvasHeight },
+        true);
+    // 线段先于目标圆点绘制，中心高亮不会被线条横穿。
+    // 起点可能在视口外，但 ImGui 裁剪仍把可见部分限制在当前画布。
+    // 方向线停在落点外环，避免连线穿过白色中心而遮住精确拖放位置。
+    const float dx     = end.x - start.x;
+    const float dy     = end.y - start.y;
+    const float length = std::sqrt(dx * dx + dy * dy);
+    if ( length > 20.0F ) {
+        // 距离太近时省略箭头，保留圆点即可避免方向三角遮住红框。
+        // 远距离时使用归一化方向，让箭头大小不随轨道宽度变化。
+        const ImVec2 unit{ dx / length, dy / length };
+        const ImVec2 lineEnd{ end.x - unit.x * 11.0F, end.y - unit.y * 11.0F };
+        drawList->AddLine(start, lineEnd, SHADOW, 5.0F);
+        drawList->AddLine(start, lineEnd, BLUE, 2.5F);
+        const ImVec2 wing{ -unit.y * 5.0F, unit.x * 5.0F };
+        drawList->AddTriangleFilled(lineEnd,
+                                    { lineEnd.x - unit.x * 9.0F + wing.x,
+                                      lineEnd.y - unit.y * 9.0F + wing.y },
+                                    { lineEnd.x - unit.x * 9.0F - wing.x,
+                                      lineEnd.y - unit.y * 9.0F - wing.y },
+                                    BLUE);
+    }
+    // 深色外环在亮背景上保持可见，白色内芯标示精确终点。
+    // 它是纯提示几何，不参与 ImGui 命中，因此不会阻止用户拖放。
+    drawList->AddCircleFilled(end, 9.0F, SHADOW);
+    drawList->AddCircleFilled(end, 6.5F, BLUE);
+    drawList->AddCircleFilled(end, 2.5F, CORE);
+    drawList->PopClipRect();
+}
+
 /// @brief 绘制一条折线教学目标的连续凹多边形提示。
 /// @param polygon 顺时针画布局部坐标轮廓。
 /// @param canvasPosition 画布左上角屏幕坐标。
