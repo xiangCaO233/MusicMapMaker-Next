@@ -54,7 +54,7 @@
 /// 可观察结果：
 /// - resolvedTargetId 暴露配置优先级的最终解析结果；
 /// - ForegroundDrawList 顶点增长证明目标遮罩实际提交；
-/// - 固定提示窗口存在、位于 Tooltip 层且只比原窗口表增加一个窗口；
+/// - 固定提示窗口存在、位于 Tooltip 层，暗区另有透明输入拦截窗口；
 /// - NavWindow 指针不变证明绘制没有抢占键盘导航焦点；
 /// - 模态环境完成一次真实按钮激活后，单目标引导必须进入完成态；
 /// - 鼠标释放帧之后模态弹窗仍保持打开，证明没有代替业务关闭；
@@ -84,6 +84,75 @@
 
 namespace
 {
+/// @brief 验证遮罩暗区实际吞掉鼠标按下与释放，亮区仍可点击。
+/// @details 先绘制一帧建立 ImGui 窗口层级，再在暗区和亮区各执行完整点击。
+/// 使用真实 ImGui Button 的返回值作为结果，不能只判断遮罩绘制顶点。
+/// 点击由位置、按下、释放三个事件组成；只送单帧按下不能验证激活。
+/// 鼠标换区后先增加空闲帧，让 ImGui 依据上帧窗口层级重算悬浮窗口。
+/// 测试把两枚按钮放在同一底层窗口中，排除不同窗口焦点的干扰。
+/// 亮区按钮向 Spotlight 上报真实 Item 矩形，而暗区按钮从不上报。
+/// 这样暗区与亮区唯一差别就是遮罩的输入窗口，不靠业务分支判定。
+/// 提示气泡出现在目标下方，不覆盖测试按钮的按下或释放点。
+/// 断言暗区从头到尾没有点击，且亮区在相同流程中确实可以点击。
+/// 若全部按钮都被拦截，亮区断言会失败；若全部透传，暗区断言会失败。
+/// 使用 ImGui 输入事件队列而不是直接改写 io.MouseDown，贴近 GLFW
+/// 后端将输入交给 ImGui 的正常路径。每次 NewFrame 消费一次新事件。
+/// 暗区按钮保留在同一底层窗口中，因此它仍然可见、尺寸有效，
+/// 失败不能归因于未绘制、窗口折叠或测试坐标落到窗口之外。
+/// 对亮区使用松手激活验证：只检查悬浮态会漏掉遮罩吞掉释放事件的问题。
+/// Spotlight 每帧续租，确保两个点击都处于活动引导，而不是后半段
+/// 遮罩因页面离开而自动消失，造成亮区断言偶然通过。
+/// 无图形后端仍能执行 ImGui 命中测试，避免平台窗口层行为干扰结果。
+/// 最终只返回是否满足输入边界，不修改服务进度或项目状态。
+bool testInputBlocking()
+{
+    MMM::UI::Walkthrough::Spotlight spotlight;
+    spotlight.start({ "input.bright" }, "Click the highlighted button");
+    bool darkClicked = false, brightClicked = false;
+    // 每帧按生产顺序先提交底层控件，再提交聚光灯遮罩与提示窗口。
+    const auto frame = [&] {
+        ImGui::NewFrame();
+        spotlight.beginFrame();
+        // 固定底层窗口位置，不让测试依赖用户的 ImGui ini 布局。
+        ImGui::SetNextWindowPos({ 0.0F, 0.0F }, ImGuiCond_Always);
+        ImGui::SetNextWindowSize({ 800.0F, 600.0F }, ImGuiCond_Always);
+        ImGui::Begin(
+            "InputLayer",
+            nullptr,
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings);
+        // 左按钮落在主目标与气泡之外，必须由透明暗区窗口覆盖。
+        ImGui::SetCursorScreenPos({ 100.0F, 100.0F });
+        darkClicked |= ImGui::Button("Dark", { 100.0F, 40.0F });
+        // 右按钮是唯一注册的目标，它仍由原底层窗口接收点击。
+        ImGui::SetCursorScreenPos({ 420.0F, 100.0F });
+        brightClicked |= ImGui::Button("Bright", { 100.0F, 40.0F });
+        spotlight.reportLastItem("input.bright");
+        ImGui::End();
+        spotlight.keepAlive();
+        spotlight.render(1.0F, "Got it");
+        ImGui::Render();
+    };
+    ImGuiIO& io = ImGui::GetIO();
+    // 预热帧创建所有固定 ID 的遮罩窗口，供下一帧悬浮命中。
+    frame();
+    io.AddMousePosEvent(150.0F, 120.0F);
+    // 先移动，再完成暗区的一次按下与释放。
+    frame();
+    io.AddMouseButtonEvent(0, true);
+    frame();
+    io.AddMouseButtonEvent(0, false);
+    frame();
+    io.AddMousePosEvent(470.0F, 120.0F);
+    // 移动到亮区后单独建立悬浮状态，再执行相同的鼠标序列。
+    frame();
+    io.AddMouseButtonEvent(0, true);
+    frame();
+    io.AddMouseButtonEvent(0, false);
+    frame();
+    // 两个结果一起比较，保证输入边界恰好等于 Spotlight 的亮区。
+    return !darkClicked && brightClicked;
+}
+
 /// @brief 验证目标与提示之间的空白区域仍被遮罩覆盖。
 /// @return 只有实际目标和提示矩形保持明亮时返回 true。
 /// @details 提示宽于目标时，外接矩形遮罩会误照亮旁边的无关窗口。
@@ -162,12 +231,33 @@ bool testSeparateMaskHoles()
     // 同时检查两个亮区，防止用整屏暗化伪造空隙已修复。
     // 检查实际提交的前景几何，可检出遮罩片重叠后重新压暗面板的问题。
     // 不只断言 reportCompanionRegion 储存了矩形，否则绘制回归无法发现。
-    const bool valid =
+    const auto blockedByInputWindow = [](ImVec2 point) {
+        for ( int index = 0; index < 16; ++index ) {
+            const auto name =
+                "###WalkthroughSpotlightBlocker" + std::to_string(index);
+            const auto* blocker = ImGui::FindWindowByName(name.c_str());
+            if ( blocker && blocker->Active && point.x >= blocker->Pos.x &&
+                 point.x < blocker->Pos.x + blocker->Size.x &&
+                 point.y >= blocker->Pos.y &&
+                 point.y < blocker->Pos.y + blocker->Size.y )
+                return true;
+        }
+        return false;
+    };
+    // 暗区必须由遮罩窗口接管输入；两个实际亮区不得被窗口盖住。
+    const bool visualValid =
         separated && coveredByMask(gapPoint) && !coveredByMask(targetPoint) &&
         !coveredByMask(hintPoint) && !coveredByMask(panelPoint) &&
         coveredByMask(betweenPoint) && coveredByMask(belowPanelPoint);
+    const bool gapBlocked        = blockedByInputWindow(gapPoint);
+    const bool betweenBlocked    = blockedByInputWindow(betweenPoint);
+    const bool belowPanelBlocked = blockedByInputWindow(belowPanelPoint);
+    const bool targetBlocked     = blockedByInputWindow(targetPoint);
+    const bool panelBlocked      = blockedByInputWindow(panelPoint);
+    const bool inputValid = gapBlocked && betweenBlocked && belowPanelBlocked &&
+                            !targetBlocked && !panelBlocked;
     ImGui::Render();
-    return valid;
+    return visualValid && inputValid;
 }
 
 /// @brief 验证绘制回退只消费当前和即将重练的产物，正常结束不删除成果。
@@ -426,7 +516,7 @@ int main()
     }
 
     // 第一帧同时提交两个控件，配置中靠后的第二项应成为当前亮区。
-    // 窗口数用于约束 Spotlight 只建立一个提示窗口，前景顶点用于证明
+    // 窗口数用于约束 Spotlight 建立提示和暗区拦截窗口，前景顶点用于证明
     // 遮罩确实被提交；两者结合可以区分“解析成功但没有绘制”的退化。
     // NavWindow 则保存绘制前状态，确保提示出现不会夺走键盘导航焦点。
     ImGui::NewFrame();
@@ -450,17 +540,19 @@ int main()
     spotlight.render(1.0f, "Got it");
     const ImGuiWindow* firstHint =
         ImGui::FindWindowByName("###WalkthroughSpotlightHint");
-    const bool firstFrameValid =
-        spotlight.resolvedTargetId() == "test.second" &&
-        spotlight.awaitingTarget("test.second") &&
-        foreground->VtxBuffer.Size > verticesBefore &&
-        context->Windows.Size == windowsBefore + 1 && firstHint &&
-        (firstHint->Flags & ImGuiWindowFlags_Tooltip) != 0 &&
-        context->NavWindow == navBefore;
+    const int firstFrameFailure =
+        spotlight.resolvedTargetId() != "test.second"        ? 21
+        : !spotlight.awaitingTarget("test.second")           ? 22
+        : foreground->VtxBuffer.Size <= verticesBefore       ? 23
+        : context->Windows.Size <= windowsBefore + 1         ? 24
+        : !firstHint                                         ? 25
+        : (firstHint->Flags & ImGuiWindowFlags_Tooltip) == 0 ? 26
+        : context->NavWindow != navBefore                    ? 27
+                                                             : 0;
     ImGui::Render();
-    if ( !firstFrameValid ) {
+    if ( firstFrameFailure ) {
         ImGui::DestroyContext();
-        return 2;
+        return firstFrameFailure;
     }
 
     // 第二帧只提交第一项，状态机仍不得退回已经越过的前序目标。
@@ -477,9 +569,16 @@ int main()
     foreground = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
     const int waitingVerticesBefore = foreground->VtxBuffer.Size;
     spotlight.render(1.0f, "Got it");
+    const auto* waitingBlocker =
+        ImGui::FindWindowByName("###WalkthroughSpotlightBlocker0");
+    // 目标未出现的过渡帧不沿用旧亮区，但整屏仍需阻止误触。
+    // 固定窗口 ID 的本帧 Active 状态证明这是新遮罩，而非历史残留。
     const bool noReboundValid =
         spotlight.resolvedTargetId().empty() && spotlight.active() &&
-        foreground->VtxBuffer.Size == waitingVerticesBefore;
+        foreground->VtxBuffer.Size == waitingVerticesBefore && waitingBlocker &&
+        waitingBlocker->Active && waitingBlocker->Pos.x == 0.0F &&
+        waitingBlocker->Pos.y == 0.0F && waitingBlocker->Size.x == 800.0F &&
+        waitingBlocker->Size.y == 600.0F;
     ImGui::Render();
     if ( !noReboundValid ) {
         ImGui::DestroyContext();
@@ -835,6 +934,11 @@ int main()
     const bool previousValid = testPreviousNavigation() &&
                                testDrawingRollback() && testRequiresAction();
     const bool maskValid     = testSeparateMaskHoles();
+    const bool inputValid    = testInputBlocking();
     ImGui::DestroyContext();
-    return !hiddenValid ? 9 : !previousValid ? 63 : maskValid ? 0 : 64;
+    return !hiddenValid     ? 9
+           : !previousValid ? 63
+           : !maskValid     ? 64
+           : inputValid     ? 0
+                            : 65;
 }

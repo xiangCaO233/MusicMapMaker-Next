@@ -3,6 +3,7 @@
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
+#include "ui/walkthrough/WalkthroughService.h"
 
 namespace MMM::UI
 {
@@ -25,6 +26,8 @@ public:
         // 路径只在事件边界转换一次，保留非 ASCII 平台路径。
         Event::OpenProjectEvent ev;
         ev.m_projectPath = Config::utf8ToPath(activation.textPayload);
+        // 最近项目入口也不能在教学期间切到其它项目。
+        if ( !Walkthrough::openProjectGuideAllows(ev.m_projectPath) ) return;
         Event::EventBus::instance().publish(ev);
     }
 };

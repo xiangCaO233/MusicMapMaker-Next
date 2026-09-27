@@ -112,6 +112,12 @@
 /// - 已注册 action 恰好执行一次；
 /// - 销毁并重建服务后进度仍可恢复；
 /// - 重置后的状态再次重建服务仍保持清除。
+/// - 打开项目演练只允许测试配置根内的 CanonRock 目录及指定文件。
+/// - 指定目录以文件系统身份比较，不能把配置根误当成项目目录；
+/// - 未列入引导的其它谱面文件不能因为父目录相同而放行；
+/// - 结束演练后所有路径重新走正常打开流程，限制不能泄漏到其它主题。
+/// - 资源占位只在测试输出配置根下建立，不要求真实 CanonRock 压缩包；
+/// - 文件系统身份检查使用存在的临时文件，避免不存在路径的假阳性。
 
 /// @brief 验证分支隔离、每步手动了解、信号判定、配置校验和无窗口持久化。
 /// @param argc 必须包含测试输出根目录参数。
@@ -122,6 +128,35 @@ int main(int argc, char** argv)
     using namespace MMM::UI::Walkthrough;
     // 持久化测试必须由 CTest 提供隔离目录。
     if ( argc != 2 ) return 1;
+    // 路径门禁测试只在隔离配置根下创建资源占位，绝不接触个人配置。
+    // CanonRock 目录来自和生产代码相同的 AppPaths 配置根解析入口。
+    const auto canonRock = canonRockDirectory();
+    if ( canonRock.string().find(std::filesystem::path(argv[1]).string()) !=
+         0U )
+        return 101;
+    std::error_code pathError;
+    // 只需制造真实文件系统身份，无需复制大型谱面或音频资源。
+    std::filesystem::create_directories(canonRock, pathError);
+    if ( pathError ) return 102;
+    const auto beatmap = canonRock / "卡农-示例谱面.mmm";
+    const auto package = canonRock / "canonrock.zip";
+    std::ofstream(beatmap).put('x');
+    std::ofstream(package).put('x');
+    if ( !std::filesystem::exists(beatmap) ||
+         !std::filesystem::exists(package) )
+        return 103;
+    // 先启用限制，分别验证目录、谱面、谱包与两种不允许的路径。
+    restrictOpenProjectGuideToCanonRock(true);
+    const bool pathsAllowed =
+        openProjectGuideAllows(canonRock) && openProjectGuideAllows(beatmap) &&
+        openProjectGuideAllows(package) &&
+        !openProjectGuideAllows(std::filesystem::path(argv[1])) &&
+        !openProjectGuideAllows(canonRock / "another.mmm");
+    // 最后显式退出演练，确保后续持久化和事件测试不被全局状态污染。
+    restrictOpenProjectGuideToCanonRock(false);
+    if ( !pathsAllowed ||
+         !openProjectGuideAllows(std::filesystem::path(argv[1])) )
+        return 104;
     // 首先验证编译期章节目录的稳定公共结构。
     const auto chapters = parseChapters(BUILTIN_CHAPTERS);
     if ( !chapters || chapters->size() != 2 ||
@@ -174,6 +209,16 @@ int main(int argc, char** argv)
         for ( const auto& step : branch.m_steps )
             // 每个已发布的小步骤都提供“进入引导”所需的配置。
             if ( !step.m_guide ) return 32;
+    // 菜单、快捷键唤起和全部最终打开步骤都必须由实际业务事件推进。
+    // 拖放准备说明保留“知道了”，供用户先切到系统文件管理器。
+    // 这也防止原生选择器尚未选定目录时把第二步错误地当成完成。
+    for ( std::size_t index = 0; index < topic->m_branches.size(); ++index ) {
+        const auto& steps = topic->m_branches[index].m_steps;
+        if ( steps.size() != 2 ||
+             steps[0].m_guide->m_requiresAction != (index < 2) ||
+             !steps[1].m_guide->m_requiresAction )
+            return 105;
+    }
     // 新建项目教程不是占位项，并提供菜单和快捷键两条可独立完成的分支。
     const auto createProjectTopic =
         parseTopic(BUILTIN_CREATE_PROJECT_WALKTHROUGH);

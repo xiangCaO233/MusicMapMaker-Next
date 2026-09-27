@@ -1,5 +1,6 @@
 #include "ui/walkthrough/WalkthroughService.h"
 #include "BuiltinWalkthrough.h"
+#include "config/AppPaths.h"
 #include "event/core/EventBus.h"
 #include "event/logic/BeatmapCreateInteractionEvent.h"
 #include "event/project/ProjectOpenInteractionEvent.h"
@@ -51,6 +52,19 @@ namespace MMM::UI::Walkthrough
 {
 namespace
 {
+/// @brief 打开项目演练的低频 UI 线程路径限制，不影响普通项目操作。
+bool canonRockOnly = false;
+
+/// @brief 使用文件系统身份比较，兼容路径分隔符、相对路径与符号链接。
+/// @details 不做字符串前缀比较；同名前缀目录和父目录均不能混入教学项目。
+/// equivalent 同时要求两端存在，因此未同步资源不会被误认成有效输入。
+/// @warning 只在用户选择文件或投放文件时调用，不进入常规 UI 帧。
+bool sameFile(const std::filesystem::path& left,
+              const std::filesystem::path& right)
+{
+    std::error_code error;
+    return std::filesystem::equivalent(left, right, error) && !error;
+}
 /// @brief 有大小上限的低频文件读取，失败返回空文本。
 /// @param path 待读取的主题或进度文件路径。
 /// @return 不超过 1 MiB 的完整二进制文本；查询或打开失败时返回空。
@@ -68,6 +82,36 @@ std::string readFile(const std::filesystem::path& path)
              std::istreambuf_iterator<char>() };
 }
 }  // namespace
+/// @brief 返回已同步到用户资源包的 CanonRock 项目目录。
+std::filesystem::path canonRockDirectory()
+{
+    return Config::AppPaths::assetsRootPath() / "walkthroughs" / "canonrock";
+}
+
+/// @brief 仅在打开项目引导运行期间启用路径限制。
+void restrictOpenProjectGuideToCanonRock(bool active)
+{
+    canonRockOnly = active;
+}
+
+/// @brief 只接受资源包中的目录、指定谱面及其谱包。
+bool openProjectGuideAllows(const std::filesystem::path& path)
+{
+    if ( !canonRockOnly ) return true;
+    const auto directory = canonRockDirectory();
+    // 不接受同名的其他项目，也不接受目录中的任意非教学文件。
+    // 单独列出允许的类型，避免把音频、图片误交给项目打开入口。
+    return sameFile(path, directory) ||
+           sameFile(path, directory / "卡农-示例谱面.mmm") ||
+           sameFile(path, directory / "canonrock.zip");
+}
+
+/// @brief 返回 UI 选择器需要的演练活动状态。
+bool openProjectGuideRestricted()
+{
+    return canonRockOnly;
+}
+
 /// @brief Service 的稳定目录、进度、事件队列和动作注册表实现。
 /// @details PImpl 隔离
 /// concurrentqueue、事件类型和持久化细节，公开头只暴露模型接口。

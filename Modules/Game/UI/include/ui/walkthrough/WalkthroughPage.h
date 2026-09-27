@@ -18,6 +18,8 @@ struct Topic;
 class WalkthroughPage
 {
 public:
+    /// @brief 退出页面时撤销只属于本演练的项目路径限制。
+    ~WalkthroughPage();
     /// @brief 每帧推进当前路线，即使欢迎标签被其它 Dock 标签遮住也继续运行。
     /// @param manager 提供目标状态、业务信号和当前环境门禁。
     /// @warning UI 热路径：有活动路线时只查找当前主题、分支和步骤。
@@ -49,6 +51,10 @@ private:
         std::string stepId;
         /// @brief 当前步骤启动时已观察到的业务信号序号。
         std::uint64_t signalRevisionAtStart{ 0 };
+        /// @brief 同步文件选择器关闭前，后续成功信号在分支入口的基线。
+        std::uint64_t nextSignalRevisionAtRunStart{ 0 };
+        /// @brief 关闭旧项目后重播目标时仍保留回看模式。
+        bool reviewing{ false };
     };
 
     /// @brief 当前正文主题 ID，切换主题时用于重置展开项。
@@ -65,5 +71,7 @@ private:
 
     /// @brief 当前突出引导；欢迎标签隐藏时仍由 updateGuide 每帧续租。
     std::optional<ActiveGuide> m_activeGuide;
+    /// @brief 旧项目关闭后才启动的打开项目路线，避免同一请求覆盖关闭意图。
+    std::optional<ActiveGuide> m_pendingOpenGuide;
 };
 }  // namespace MMM::UI

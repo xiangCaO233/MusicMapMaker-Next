@@ -67,7 +67,7 @@ void MainMenuActionItem::render(MainMenuContext& context)
         if ( context.sourceManager && !m_walkthroughTarget.empty() )
             // 只有启用条目的处理器已执行，才确认对应菜单目标完成。
             context.sourceManager->walkthroughSpotlight().completeTarget(
-                m_walkthroughTarget);
+                m_walkthroughTarget, true);
     }
 }
 

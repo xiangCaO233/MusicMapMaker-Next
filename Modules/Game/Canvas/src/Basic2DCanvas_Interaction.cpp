@@ -51,6 +51,7 @@
 #include "ui/utils/CanvasContentVisibility.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WalkthroughService.h"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -2194,6 +2195,8 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
                 // 当前协议只使用首路径作为一个打开动作，多文件批量导入
                 // 由专门资源入口处理，避免隐式打开多个项目。
                 std::filesystem::path p = Config::utf8ToPath(drop.paths[0]);
+                // 画布拖放不经过主窗口目录路由，单独执行同一教学路径门禁。
+                if ( !UI::Walkthrough::openProjectGuideAllows(p) ) continue;
                 if ( isTemporaryPackagePath(p) ) {
                     // 主窗口路由负责谱包解压和临时只读状态，画布不重复处理。
                     continue;

@@ -154,7 +154,7 @@ void MainMenuView::renderMenus(UIManager*          sourceManager,
             spotlight.reportLastItem(target);
             if ( menuOpen )
                 // 菜单实际展开是一级入口成功，不用鼠标位置推测点击结果。
-                spotlight.completeTarget(target);
+                spotlight.completeTarget(target, true);
         }
         if ( menuOpen ) {
             // 关闭请求优先于内容渲染，避免关闭帧仍触发菜单项。

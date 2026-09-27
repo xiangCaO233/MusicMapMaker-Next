@@ -15,6 +15,7 @@
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WalkthroughService.h"
 
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -286,6 +287,11 @@ static Event::ProjectOpenOrigin projectFolderPickerOrigin{
 /// @warning 仅由 UI 线程的项目选择器完成路径调用。
 void MenuUtil::submitProjectFolderSelection(const std::filesystem::path& path)
 {
+    // 演练选择器只能打开预设 CanonRock，错误选择直接取消本次来源状态。
+    if ( !Walkthrough::openProjectGuideAllows(path) ) {
+        projectFolderPickerOrigin = Event::ProjectOpenOrigin::Unknown;
+        return;
+    }
     // 事件按值保存原生路径和打开来源。
     Event::OpenProjectEvent event;
     event.m_projectPath = path;
@@ -308,12 +314,19 @@ void MenuUtil::openProjectFolderPicker(Event::ProjectOpenOrigin origin)
     Event::EventBus::instance().publish(interaction);
     // 引用设置读取选择器实现和最近目录。
     auto& config = Config::AppConfig::instance().getEditorSettings();
+    // 演练时从受管资源的上级目录开始，避免用户在个人项目中寻找示例。
+    const auto guidePickerPath =
+        Walkthrough::openProjectGuideRestricted()
+            ? Config::pathToUtf8(
+                  Walkthrough::canonRockDirectory().parent_path())
+            : std::string{};
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
         // 原生对话框在当前调用中完成，打开前播放统一反馈。
         ::MMM::UI::PlayPopupOpenFeedback();
         nfdu8char_t*      outPath = nullptr;
-        const nfdresult_t result =
-            NativeFileDialog::pickFolder(&outPath, nullptr);
+        const nfdresult_t result  = NativeFileDialog::pickFolder(
+            &outPath,
+            guidePickerPath.empty() ? nullptr : guidePickerPath.c_str());
 
         if ( result == NFD_OKAY ) {
             // NFD 返回 UTF-8 路径，转换后立即发布选择结果。
@@ -329,7 +342,8 @@ void MenuUtil::openProjectFolderPicker(Event::ProjectOpenOrigin origin)
 
     // ImGui 对话框跨帧保持状态，配置只允许单选目录。
     IGFD::FileDialogConfig fdConfig;
-    fdConfig.path              = config.lastFilePickerPath;
+    fdConfig.path =
+        guidePickerPath.empty() ? config.lastFilePickerPath : guidePickerPath;
     fdConfig.countSelectionMax = 1;
     fdConfig.flags             = ImGuiFileDialogFlags_Modal;
     // 记录打开前状态，避免重复请求反复播放声音。

@@ -13,6 +13,16 @@ struct Topic;
 struct Chapter;
 struct Step;
 class Progress;
+/// @brief 返回受管资源包中 CanonRock 演练项目的目录。
+std::filesystem::path canonRockDirectory();
+/// @brief 限制当前打开项目演练只接受 CanonRock 目录、谱面或谱包。
+/// @warning 仅 UI 线程切换状态；路径校验只在低频打开操作中进行。
+void restrictOpenProjectGuideToCanonRock(bool active);
+/// @brief 判断项目打开入口是否符合当前演练的路径限制。
+/// @warning 无活动限制时立即返回；真实打开时才访问文件系统身份。
+bool openProjectGuideAllows(const std::filesystem::path& path);
+/// @brief 查询当前是否处于 CanonRock 打开演练，供 UI 选择器定位示例目录。
+bool openProjectGuideRestricted();
 /// @brief 独立于演练窗口的主题目录、事件适配、操作注册及进度存储服务。
 class Service
 {

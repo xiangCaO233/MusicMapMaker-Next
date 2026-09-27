@@ -473,12 +473,12 @@ bool testPages()
         if ( !spotlight.awaitingTarget(step.m_guide->m_targets.front()) ||
              !service.progress().completed(topic, step) )
             return false;
-        // 回看中的缺席菜单仍可逐项显式确认，最终回到正常的第二步。
-        // 本测试不渲染业务菜单，刻意覆盖返回到已关闭窗口的处理路径。
-        // 最后目标确认前，页面不能凭历史进度提前结束整条路线。
+        // 回看强制操作步骤要重新收到显式菜单动作，历史完成记录不能跳步。
+        // 本测试不渲染业务菜单，由目标通知模拟新的菜单展开和菜单项激活。
+        // 最后目标实际激活前，页面不能凭历史进度提前结束整条路线。
         for ( const auto& target : step.m_guide->m_targets ) {
             if ( !spotlight.awaitingTarget(target) ) return false;
-            spotlight.acknowledgeCurrentStage();
+            spotlight.completeTarget(target, true);
         }
         route.updateGuide(&manager);
         if ( spotlight.reviewing() || !spotlight.canGoBack() ||

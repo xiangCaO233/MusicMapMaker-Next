@@ -12,6 +12,7 @@
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WalkthroughService.h"
 #include <ImGuiFileDialog.h>
 #include <nfd.h>
 
@@ -85,6 +86,9 @@ void FileManagerView::handleDragDrop(UIManager* sourceManager)
 
         // 当前交互只以批次首个路径决定打开项目和目标页签。
         std::filesystem::path p = Config::utf8ToPath(drop.paths[0]);
+        // 文件管理器是独立拖放入口，演练期间不得绕过 CanonRock 白名单。
+        // 该入口先于普通项目路由消费悬浮区域内的同一批系统拖放事件。
+        if ( !Walkthrough::openProjectGuideAllows(p) ) continue;
         if ( !isHovered ) {
             // 不在文件管理器区域的批次由其他全局拖放路由处理。
             continue;
@@ -273,9 +277,12 @@ void FileManagerView::renderEmptyProjectView(LayoutContext& layoutContext)
                         r.height,
                         [p]() {
                             // 点击只发布打开事件，实际校验与加载由项目控制器处理。
-                            Event::OpenProjectEvent ev;
-                            ev.m_projectPath = p;
-                            Event::EventBus::instance().publish(ev);
+                            // 最近项目按钮也会发布打开请求，不能绕过演练入口。
+                            if ( Walkthrough::openProjectGuideAllows(p) ) {
+                                Event::OpenProjectEvent ev;
+                                ev.m_projectPath = p;
+                                Event::EventBus::instance().publish(ev);
+                            }
                         },
                         path);
                     if ( ImGui::IsItemHovered() ) {
@@ -324,9 +331,12 @@ void FileManagerView::openFolderPicker()
         // 只有 NFD_OKAY 保证 outPath 有效，取消不会产生项目打开事件。
         if ( result == NFD_OKAY ) {
             // 成功目录转换为平台路径并通过统一事件打开项目。
-            Event::OpenProjectEvent ev;
-            ev.m_projectPath = Config::utf8ToPath(outPath);
-            Event::EventBus::instance().publish(ev);
+            const auto path = Config::utf8ToPath(outPath);
+            if ( Walkthrough::openProjectGuideAllows(path) ) {
+                Event::OpenProjectEvent ev;
+                ev.m_projectPath = path;
+                Event::EventBus::instance().publish(ev);
+            }
             // 仅成功结果具有需要释放的路径缓冲。
             NFD_FreePathU8(outPath);
         }

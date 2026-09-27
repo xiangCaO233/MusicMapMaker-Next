@@ -3,14 +3,15 @@
 #include "ui/utils/UIWidgetUtils.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <imgui_internal.h>
 #include <utility>
 
 /// @file WalkthroughSpotlight.cpp
 /// @brief 配置驱动的任意控件目标解析、前景遮罩与阶段确认提示实现。
-/// @details 遮罩本身不接管输入；仅提示气泡创建固定 ID 的小窗口，使“知道了”
-/// 按钮可点击。气泡外的鼠标和键盘仍由原控件处理。
+/// @details 暗区使用透明窗口拦截 ImGui 鼠标输入；主目标、辅助亮区和提示按钮
+/// 保持可操作。键盘及系统拖放由各自入口按演练上下文处理。
 ///
 /// 帧生命周期：
 /// - beginFrame 丢弃上一帧的控件矩形并清除页面续租；
@@ -229,6 +230,113 @@ bool containsPoint(const ImVec2& point, const ImVec2& minimum,
 {
     return point.x >= minimum.x && point.x < maximum.x &&
            point.y >= minimum.y && point.y < maximum.y;
+}
+
+/// @brief 用透明 ImGui 窗口吞掉遮罩暗区的鼠标输入，亮区继续透传给原控件。
+/// @param viewport 当前目标所在视口。
+/// @param target 主目标亮区；纯提示步骤为空。
+/// @param companion 可选的辅助亮区。
+/// @details 窗口必须覆盖视口中未高亮的部分，而不能把整屏窗口设成
+/// NoInputs；后者会把暗区点击继续交给底下的编辑器。
+/// 每扣除一个亮区，就把与亮区相交的暗区切成上、下、左、右四块。
+/// 切分后不允许以亮区外接矩形作为唯一开口，因为两个区域之间可能仍有
+/// 可点击的无关设置项。与绘制遮罩使用同一组亮区，保证视觉和命中一致。
+/// 零面积片被跳过；ImGui 会保留历史窗口对象，但未 Begin 的旧窗口
+/// 在当前帧不参与悬浮命中。窗口名称固定，避免每帧分配新的内部 ID。
+/// 提示气泡在这些窗口之后提交并置顶，按钮因此仍可接受鼠标输入。
+/// 纯文字步骤没有目标时，整片视口被窗口覆盖；快捷键和外部文件
+/// 选择器依旧按各自入口工作，避免伪造一个不存在的 ImGui 亮区。
+/// 存在辅助亮区时只开放该矩形本身，不开放目标和辅助区之间的走廊。
+/// 鼠标捕获依赖 ImGui 上一帧的窗口层级，因此每帧必须持续 Begin
+/// 固定 ID 的保护窗口，不能只在步骤开始时建立一次。
+/// 关闭或切换步骤后不再 Begin，旧窗口对象当帧失活并停止拦截。
+/// @warning UI 热路径：固定最多十六块矩形，窗口无绘制和文件操作。
+void blockOutsideTargets(
+    ImGuiViewport*                                viewport,
+    const std::optional<Spotlight::TargetBounds>& target,
+    const std::optional<Spotlight::TargetBounds>& companion)
+{
+    struct Rect {
+        ImVec2 min, max;
+    };
+    // 先把整个目标视口视为暗区；目标位于浮动视口时不能用主视口坐标。
+    std::array<Rect, 16> regions{};
+    std::size_t          count = 1;
+    regions[0]                 = { viewport->Pos,
+                                   { viewport->Pos.x + viewport->Size.x,
+                                     viewport->Pos.y + viewport->Size.y } };
+    // 最多两个亮区；每轮仅遍历进入本轮前已有的片，新增片留给下一轮。
+    // 否则同一个亮区可能被重复从自身的拆分片中扣除，产生重叠窗口。
+    for ( const auto& hole : { target, companion } ) {
+        if ( !hole ) continue;
+        const auto originalCount = count;
+        for ( std::size_t index = 0; index < originalCount; ++index ) {
+            const Rect   current = regions[index];
+            const ImVec2 intersectionMin{
+                std::max(current.min.x, hole->minimum.x),
+                std::max(current.min.y, hole->minimum.y)
+            };
+            const ImVec2 intersectionMax{
+                std::min(current.max.x, hole->maximum.x),
+                std::min(current.max.y, hole->maximum.y)
+            };
+            // 完全不相交时保留原片；边界相切不应制造零宽输入窗口。
+            if ( intersectionMax.x <= intersectionMin.x ||
+                 intersectionMax.y <= intersectionMin.y )
+                continue;
+            // 旧槽位复用为上方片，其余三个方向追加到固定数组。
+            // 这些片只在相交带内使用左右区间，不会重新覆盖亮区。
+            regions[index] = { current.min,
+                               { current.max.x, intersectionMin.y } };
+            // 两个亮区的矩形差集有固定上界；保留容量检查防止配置异常。
+            if ( count + 3 > regions.size() ) break;
+            regions[count++] = { { current.min.x, intersectionMax.y },
+                                 current.max };
+            regions[count++] = { { current.min.x, intersectionMin.y },
+                                 { intersectionMin.x, intersectionMax.y } };
+            regions[count++] = { { intersectionMax.x, intersectionMin.y },
+                                 { current.max.x, intersectionMax.y } };
+        }
+    }
+    // 透明只表示不绘制背景；故意不设置 NoInputs，让 ImGui 命中这些窗口。
+    // 禁止导航和自动聚焦，以免鼠标保护层改变键盘操作的当前焦点。
+    // 禁止 Dock 与 ini 持久化，避免临时遮罩成为可保存的工作区窗口。
+    constexpr ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoDecoration |
+        ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+        ImGuiWindowFlags_NoFocusOnAppearing |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNav;
+    static constexpr std::array<const char*, 16> names{
+        "###WalkthroughSpotlightBlocker0",  "###WalkthroughSpotlightBlocker1",
+        "###WalkthroughSpotlightBlocker2",  "###WalkthroughSpotlightBlocker3",
+        "###WalkthroughSpotlightBlocker4",  "###WalkthroughSpotlightBlocker5",
+        "###WalkthroughSpotlightBlocker6",  "###WalkthroughSpotlightBlocker7",
+        "###WalkthroughSpotlightBlocker8",  "###WalkthroughSpotlightBlocker9",
+        "###WalkthroughSpotlightBlocker10", "###WalkthroughSpotlightBlocker11",
+        "###WalkthroughSpotlightBlocker12", "###WalkthroughSpotlightBlocker13",
+        "###WalkthroughSpotlightBlocker14", "###WalkthroughSpotlightBlocker15",
+    };
+    // ImGui 默认最小窗口宽度会让狭窄片侵入亮区，因此局部清零。
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2{});
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{});
+    for ( std::size_t index = 0; index < count; ++index ) {
+        const auto& region = regions[index];
+        if ( region.max.x <= region.min.x || region.max.y <= region.min.y )
+            continue;
+        // 每帧重新指定位置和尺寸，跟随停靠布局、滚动及 DPI 后的新坐标。
+        ImGui::SetNextWindowPos(region.min, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(
+            { region.max.x - region.min.x, region.max.y - region.min.y },
+            ImGuiCond_Always);
+        ImGui::SetNextWindowViewport(viewport->ID);
+        ImGui::Begin(names[index], nullptr, flags);
+        // 后绘制的设置窗口也不能在本帧把暗区保护层压到后面。
+        ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+        ImGui::End();
+    }
+    ImGui::PopStyleVar(2);
 }
 }  // namespace
 
@@ -568,11 +676,8 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel,
 {
     if ( !active() || completed() || !m_keepAlive ) return;
     const bool promptOnly = m_targets.empty();
-    // 有目标的引导只在本帧重新解析到当前阶段时显示，等待态不绘制旧高亮。
-    // 目标暂时缺席时只显示导航气泡，不伪造高亮；用户仍能返回前一步。
-    const bool waitingNavigation = canGoBack() || m_reviewing;
-    if ( m_state != State::Highlighting && !promptOnly && !waitingNavigation )
-        return;
+    // 目标暂时缺席时仍保留全屏暗区输入层；否则切换窗口的一帧会漏进点击。
+    // 不沿用旧目标矩形，提示气泡说明当前操作并等待本帧目标重新上报。
 
     ImGuiViewport* viewport = m_anchor && m_anchor->viewport
                                   ? m_anchor->viewport
@@ -731,7 +836,14 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel,
     bubbleMin = clampPoint(bubbleMin, bubbleLimitMin, bubbleLimitMax);
     const ImVec2 bubbleMax{ bubbleMin.x + bubbleSize.x,
                             bubbleMin.y + bubbleSize.y };
-    // 提示窗口只覆盖自身矩形，窗口外输入会穿透到原有控件和目标亮区。
+    // 透明窗口吸收暗区点击和滚轮；主目标与辅助目标不被窗口覆盖。
+    // 提示窗口稍后置顶，保留它自己的“上一步”和“知道了”按钮。
+    blockOutsideTargets(
+        viewport,
+        holeMin && holeMax
+            ? std::optional<TargetBounds>{ TargetBounds{ *holeMin, *holeMax } }
+            : std::nullopt,
+        companionHole);
     ImGui::SetNextWindowPos(bubbleMin, ImGuiCond_Always);
     ImGui::SetNextWindowSize(bubbleSize, ImGuiCond_Always);
     ImGui::SetNextWindowViewport(viewport->ID);

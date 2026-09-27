@@ -3,6 +3,7 @@
 #include "event/core/EventBus.h"
 #include "event/input/glfw/GLFWDropEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
+#include "ui/walkthrough/WalkthroughService.h"
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -67,7 +68,9 @@ void ProjectDropRouter::update(bool enabled)
              drop.pos.x >= viewport->Size.x || drop.pos.y >= viewport->Size.y )
             continue;
         // GLFW 路径为 UTF-8，文件系统操作前转换为平台原生路径。
-        const auto      path = Config::utf8ToPath(drop.paths.front());
+        const auto path = Config::utf8ToPath(drop.paths.front());
+        // 系统拖放绕过 ImGui 亮区，必须在发布项目事件前检查演练路径。
+        if ( !Walkthrough::openProjectGuideAllows(path) ) continue;
         std::error_code error;
         if ( std::filesystem::is_directory(path, error) && !error ) {
             // 目录投放沿用正常项目打开事件，并标记来源供上层策略判断。
