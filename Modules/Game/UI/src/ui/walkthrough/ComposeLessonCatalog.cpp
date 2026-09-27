@@ -226,10 +226,11 @@ std::pair<std::string_view, std::string_view> lessonPracticeInstruction(
     // 两段路径的其它正确节点不需要重新绘制。
     if ( title == "折线拖拽合并教学" )
         return {
-            "使用拖拽工具，按住左键将折线连接节点拖到对应蓝色落点，使两段路径合"
-            "并。",
-            "Use Move: left-drag each polyline connection node to its blue "
-            "target to join the paths."
+            "使用拖拽工具，分别按住左键将两条折线内侧的上方连接节点向下拖到"
+            "同轨蓝色落点；松开后中间的往返段会一次合并。",
+            "Use Move: on each polyline, left-drag the upper inner connection "
+            "node down to the blue point on the same lane. Releasing merges "
+            "the detour in one step."
         };
     // 普通节点右键用于断开，折线头或 Shift+右键用于删除整条。
     // 需要两种动作的区别，才能避免误删已有正确路径。
@@ -399,6 +400,85 @@ std::optional<ComposeLessonPathArrow> nextPathArrow(
     const auto [targetTrack, targetTime] = pathEndpoint(target[count]);
     return ComposeLessonPathArrow{
         sourceTrack, sourceTime, targetTrack, targetTime
+    };
+}
+
+/// @brief 找到折线合并教学中应向下拖动的内侧返回节点。
+/// @param expected 草稿中已经清理往返段的目标路径。
+/// @param actual 主轨道中仍包含待合并往返段的现有折线。
+/// @return 从内侧返回节点指向同轨前一个节点的箭头；结构不符时为空。
+/// @warning 只在物件修订后的低频反馈比较中调用，不进入画布绘制热路径。
+/// @details 合并教学的现有路径以 Hold、Flick、Hold、Flick、Hold 起头。
+/// 用户拖动第二个 Flick 的节点到第一个 Flick 的时间，夹在中间的
+/// Hold 退化为零长度，两段反向 Flick 相互抵消，前后 Hold 合并。
+/// 因此不能使用普通的“首个不同端点”算法；它会错误要求拉长外侧 Hold。
+/// 这里只为仍具有这段局部形态的路径产生提示，后续正确路径由验收消费。
+/// 轨道关系和目标首段总长度同时核对，避免其它折线碰巧同拍而误得箭头。
+/// 两条镜像路径分别独立判断，轨号不写死为某一侧的内轨或外轨。
+/// 只检查会被一次节点拖动消去的前缀，后续路径保留由完整几何验收负责。
+/// 部分拖动时若中间 Hold 还未归零，仍沿原方向提示用户继续到相同落点。
+/// 拖动到位并提交后应由清理流程删掉退化段，再由下一次比较撤掉箭头。
+std::optional<ComposeLessonPathArrow> mergeCollapseArrow(
+    const Logic::ComposeLessonNote& expected,
+    const Logic::ComposeLessonNote* actual)
+{
+    if ( !actual || actual->type != ::MMM::NoteType::POLYLINE ||
+         expected.subNotes.size() < 3 || actual->subNotes.size() < 7 )
+        return std::nullopt;
+    const auto&      target         = expected.subNotes;
+    const auto&      source         = actual->subNotes;
+    const auto&      firstHold      = source[0];
+    const auto&      outbound       = source[1];
+    const auto&      innerHold      = source[2];
+    const auto&      returning      = source[3];
+    const auto&      nextHold       = source[4];
+    constexpr double TIME_TOLERANCE = 0.002;
+    const auto       near           = [](double left, double right) {
+        return std::abs(left - right) <= TIME_TOLERANCE;
+    };
+    // 起点外侧轨、往返的内侧轨及回到外侧轨必须首尾相接。
+    // 同轨向下拖动返回节点才会让两次横移抵消，而非挪动整件。
+    // 时间连通性不能只由目标推断：用户可能已在路径中间改动过节点。
+    // 拒绝断开的实际路径，避免蓝箭头引导一次无法触发合并的拖动。
+    if ( firstHold.type != ::MMM::NoteType::HOLD ||
+         outbound.type != ::MMM::NoteType::FLICK ||
+         innerHold.type != ::MMM::NoteType::HOLD ||
+         returning.type != ::MMM::NoteType::FLICK ||
+         nextHold.type != ::MMM::NoteType::HOLD || outbound.dtrack == 0 ||
+         firstHold.track != outbound.track ||
+         innerHold.track != outbound.track + outbound.dtrack ||
+         returning.track != innerHold.track ||
+         nextHold.track != returning.track + returning.dtrack ||
+         nextHold.track != firstHold.track ||
+         !near(firstHold.timestamp + firstHold.duration, outbound.timestamp) ||
+         !near(outbound.timestamp, innerHold.timestamp) ||
+         !near(innerHold.timestamp + innerHold.duration, returning.timestamp) ||
+         !near(returning.timestamp, nextHold.timestamp) )
+        return std::nullopt;
+    // 目标的第一条 Hold 正好覆盖合并后的外侧前后两段。
+    // 这项核对也允许用户拖了一部分后继续朝同一蓝点修正。
+    // 目标第二次进内侧的 Flick 应延后到两个外侧 Hold 的合并末端。
+    // 若作者以后改了草稿结构，应停止显示旧手势，而非强行复用箭头。
+    if ( target[0].type != ::MMM::NoteType::HOLD ||
+         target[1].type != ::MMM::NoteType::FLICK ||
+         target[2].type != ::MMM::NoteType::HOLD ||
+         target[0].track != firstHold.track ||
+         target[1].track != firstHold.track ||
+         target[1].dtrack != outbound.dtrack ||
+         target[2].track != innerHold.track ||
+         !near(target[0].timestamp, firstHold.timestamp) ||
+         !near(target[0].duration, firstHold.duration + nextHold.duration) ||
+         !near(target[1].timestamp, outbound.timestamp + nextHold.duration) ||
+         !near(target[2].timestamp, target[1].timestamp) ||
+         returning.timestamp <= outbound.timestamp + TIME_TOLERANCE )
+        return std::nullopt;
+    // 箭头源点必须位于可抓取的内侧返回 Flick，落点为同轨前一个节点。
+    // 把首段外侧 Hold 的端点当源点会示意另一种无法一步完成的操作。
+    return ComposeLessonPathArrow{
+        returning.track,
+        returning.timestamp,
+        returning.track,
+        outbound.timestamp,
     };
 }
 
@@ -873,10 +953,13 @@ ComposeLessonFeedback compareComposeLessonNotes(
             }
             // 没有候选也保留首段起笔提示，但不增加正式物件。
             // 用户完成修改后才由下一次查询更新箭头与验收状态。
-            feedback.pathArrowForExpected[expectedIndex] = nextPathArrow(
-                expected,
-                best == feedback.actual.size() ? nullptr
-                                               : &feedback.actual[best]);
+            const auto* candidate = best == feedback.actual.size()
+                                        ? nullptr
+                                        : &feedback.actual[best];
+            feedback.pathArrowForExpected[expectedIndex] =
+                lesson.m_title == "折线拖拽合并教学"
+                    ? mergeCollapseArrow(expected, candidate)
+                    : nextPathArrow(expected, candidate);
         }
     }
     return feedback;

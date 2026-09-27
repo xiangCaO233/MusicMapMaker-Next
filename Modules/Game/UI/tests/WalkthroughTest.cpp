@@ -62,6 +62,10 @@
 /// - 现有折线续写时，箭头从最后一个实际子段的末端出发；
 /// - 独立长条作为首段时，先指示需要补足的长条尾部；
 /// - 折线尾段错误时，箭头从实际终轨指向参考终轨；
+/// - 合并教学的蓝箭头指向内侧返回节点的同轨前一个时间点；
+/// - 镜像折线分别获得落点，已经完成的一侧不重复提示；
+/// - 合并段基线不叠放独立物件，拖动后数量验收可以完成；
+/// - 示例谱面与重练基线在合并段提供同样的正式物件集合；
 /// - 空白折线从第一子段起笔，完成后不保留旧方向提示；
 /// - 删除子物件段没有参考折线时，不出现臆造的目标箭头。
 ///
@@ -421,6 +425,9 @@ int main(int argc, char** argv)
             if ( (lessonIndex == 7 || lessonIndex == 13) &&
                  body.find("右键") == std::string::npos )
                 return 185;
+            // 合并段的文字必须对应内侧节点向下收拢的一次拖动。
+            if ( lessonIndex == 12 && body.find("向下拖") == std::string::npos )
+                return 187;
             // 保留总数断言，新增批注段落后不会悄悄落回模糊的通用文案。
             ++practiceSteps;
         }
@@ -489,6 +496,34 @@ int main(int argc, char** argv)
                                 timeMs <= packagedLessons->front().m_endMs;
                      }) )
         return 113;
+    // 合并段的输入必须只有两条待操作折线。曾经额外叠放的独立 Hold
+    // 与 Flick 虽然外观重合，却会让“一侧拖一次”之后的数量验收永远失败。
+    // 同时检查可打开的示例谱面和重练基线，避免首轮与重练出现不同输入。
+    // 校验范围来自打包批注，而非写死第 185 拍附近的毫秒数。
+    // 未来调整段落长度时，测试仍会检查程序真正用于验收的时间窗。
+    const auto& mergeReference    = packagedLessons->at(12);
+    const auto  mergeInputIsClean = [&](const MMM::BeatMap& map) {
+        std::size_t inSegment = 0;
+        // 根物件数量直接影响一对一验收；不能只数多段折线子项。
+        // 相同轨道和时间的独立 Note 也会被正式查询捕获。
+        for ( const auto& item : map.m_allNotes ) {
+            const auto& note = item.get();
+            if ( note.m_timestamp < mergeReference.m_beginMs ||
+                 note.m_timestamp > mergeReference.m_endMs )
+                continue;
+            if ( note.m_type != ::MMM::NoteType::POLYLINE ) return false;
+            ++inSegment;
+        }
+        // 两侧各留一条路径；缺少一侧虽没有多余物件，也不能用于练习。
+        return inSegment == mergeReference.m_reference.size() &&
+               inSegment == 2U;
+    };
+    // 磁盘资产由正式读取器加载，避免只按 JSON 文本筛选而漏掉序列化差异。
+    // 保留用户可打开的那份资源校验，不能仅修复隐藏的基线副本。
+    const auto sample = MMM::BeatMap::loadFromFile(
+        std::filesystem::path(MMM_COMPOSE_SAMPLE_FILE));
+    if ( !mergeInputIsClean(baseline) || !mergeInputIsClean(sample) )
+        return 190;
     // 分发谱面的草稿有五列、主画布有四列；右侧四列对应主轨道 0–3。
     // 首段的六枚 Note 覆盖全部四条主轨，防止直接比较草稿编码而卡住练习。
     // 用实际资源验证，隔离夹具单独通过不能证明用户看到的谱面可继续。
@@ -741,6 +776,72 @@ int main(int argc, char** argv)
          !adjustFeedback.suppressErrorForActual.front() ||
          adjustFeedback.actualMatched.front() )
         return 178;
+    // 合并不是拉长外侧首段：内部第二次 Flick 向下退到前一次 Flick 的
+    // 时间点后，中间 Hold 归零、两段反向 Flick 抵消、外侧 Hold 拼接。
+    // 左右两条镜像路径都必须独立给出从内侧上节点到下节点的蓝箭头。
+    // 这些数值采用同一操作的缩小版，以便看清相邻子段的先后关系。
+    // 目标第一段的长度为 0.45 秒，原路径由 0.30 与 0.15 秒两段组成。
+    ComposeLesson mergeLesson;
+    mergeLesson.m_title                = "折线拖拽合并教学";
+    mergeLesson.m_advanced             = true;
+    auto expectedLeft                  = expectedPath;
+    expectedLeft.subNotes[0].duration  = 0.45;
+    expectedLeft.subNotes[1].timestamp = 4.45;
+    expectedLeft.subNotes[2].timestamp = 4.45;
+    expectedLeft.subNotes[2].duration  = 0.075;
+    auto expectedRight                 = expectedLeft;
+    expectedRight.track                = 3;
+    // 镜像转换同时反转 Flick 的方向，防止测试只验证左侧示例。
+    // 提示算法只依赖局部轨道关系，不应写死玩家轨道 0 或 1。
+    for ( auto& sub : expectedRight.subNotes ) {
+        sub.track  = 3 - sub.track;
+        sub.dtrack = -sub.dtrack;
+    }
+    mergeLesson.m_reference = { expectedLeft, expectedRight };
+    auto actualLeft         = expectedLeft;
+    // 中间 0.15 秒内轨 Hold 与两侧反向 Flick 构成可清理的往返。
+    // 拖动第二个 Flick 的时间会带动后缀并缩短前一个 Hold。
+    actualLeft.subNotes = {
+        { ::MMM::NoteType::HOLD, 4.0, 0.3, 0, 0 },
+        { ::MMM::NoteType::FLICK, 4.3, 0.0, 0, 1 },
+        { ::MMM::NoteType::HOLD, 4.3, 0.15, 1, 0 },
+        { ::MMM::NoteType::FLICK, 4.45, 0.0, 1, -1 },
+        { ::MMM::NoteType::HOLD, 4.45, 0.15, 0, 0 },
+        { ::MMM::NoteType::FLICK, 4.6, 0.0, 0, 1 },
+        { ::MMM::NoteType::HOLD, 4.6, 0.075, 1, 0 },
+    };
+    auto actualRight  = actualLeft;
+    actualRight.track = 3;
+    // 两条路径同拍存在，反馈配对仍需保持两侧目标独占。
+    for ( auto& sub : actualRight.subNotes ) {
+        sub.track  = 3 - sub.track;
+        sub.dtrack = -sub.dtrack;
+    }
+    const auto mergeFeedback = compareComposeLessonNotes(
+        mergeLesson, { actualLeft, actualRight }, 17, 24);
+    // 路径还未改动时两侧都未验收；同根配对只抑制整件错误红框。
+    // 对应蓝点必须在内侧原轨，不能落在两个外侧 Hold 的端点。
+    // 箭头方向为时间减小，即画布中视觉上向下的节点移动。
+    // 用完整源、目标时间断言防止回退到普通首差异箭头。
+    for ( std::size_t index = 0; index < 2; ++index ) {
+        const auto& arrow      = mergeFeedback.pathArrowForExpected[index];
+        const int   innerTrack = index == 0 ? 1 : 2;
+        if ( !arrow || arrow->sourceTrack != innerTrack ||
+             arrow->destinationTrack != innerTrack ||
+             std::abs(arrow->sourceTime - 4.45) > 0.001 ||
+             std::abs(arrow->destinationTime - 4.3) > 0.001 ||
+             mergeFeedback.expectedMatched[index] ||
+             mergeFeedback.actualMatched[index] ||
+             !mergeFeedback.suppressErrorForActual[index] )
+            return 188;
+    }
+    // 第一条已合并后只剩第二条有操作箭头，不能重画已完成的目标。
+    // 半完成状态也防止第一个候选抢走第二条路径的蓝色落点。
+    const auto halfMerged = compareComposeLessonNotes(
+        mergeLesson, { expectedLeft, actualRight }, 17, 25);
+    if ( !halfMerged.expectedMatched[0] || halfMerged.pathArrowForExpected[0] ||
+         !halfMerged.pathArrowForExpected[1] )
+        return 189;
     // 第一子段偏离原位置的折线不是当前目标的可修正候选，仍需红框。
     // 同段多出的独立 Note 也不能借折线提示豁免错误标记。
     auto misplacedPath                   = wrongPath;
