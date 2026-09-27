@@ -37,11 +37,13 @@ website_branch="${MMM_WEBSITE_BRANCH:-}"
 deepseek_model="${DEEPSEEK_MODEL:-${DEFAULT_DEEPSEEK_MODEL}}"
 
 # 这里使用前插 PATH，按低优先级到高优先级排列，确保 node24 优先于 node20。
-# 仅当目录含可执行 npm 且尚未位于 PATH 时才插入。
+# Runner 自带 npm 的入口可能损坏，必须确认它能启动后才前插 PATH。
+# 全部候选不可用时保留系统 npm，不让版本探测的错误输出污染发布日志。
 for npm_bin_dir in \
     "/home/xiang/actions-runner/externals/node20/bin" \
     "/home/xiang/actions-runner/externals/node24/bin"; do
-    if [[ ":${PATH}:" != *":${npm_bin_dir}:"* && -x "${npm_bin_dir}/npm" ]]; then
+    if [[ ":${PATH}:" != *":${npm_bin_dir}:"* && -x "${npm_bin_dir}/npm" ]] &&
+       "${npm_bin_dir}/npm" --version >/dev/null 2>&1; then
         # 后处理的 node24 前插到 node20 之前。
         PATH="${npm_bin_dir}:${PATH}"
     fi
@@ -576,7 +578,9 @@ build_and_deploy_website() {
 
     log "安装网站依赖"
     # npm ci 严格使用网站仓 lockfile，避免依赖版本漂移。
-    run npm --prefix "${website_dir}" ci
+    # Runner 网络偶发重置连接，优先缓存并限制并发下载后重试短暂失败。
+    run npm --prefix "${website_dir}" ci --prefer-offline --fetch-retries=5 \
+        --fetch-retry-mintimeout=1000 --fetch-retry-maxtimeout=20000 --maxsockets=8
 
     log "执行网站完整构建和部署"
     (
@@ -685,7 +689,9 @@ main "$@"
 # 维护约束：旧 assets.zip 在写入新归档前只删除单一目标文件。
 # 维护约束：资源归档不得包含目录之外的符号链接目标内容。
 # 维护约束：npm ci 必须在 deploy 前成功完成并遵循 lockfile。
+# 维护约束：npm 下载偶发中断须有限重试，不能跳过失败依赖继续 deploy。
 # 维护约束：npm 运行时优先级必须保持 node24 高于 node20。
+# 维护约束：Runner 自带 npm 必须可运行，损坏时回退到系统 PATH 中的 npm。
 # 维护约束：PATH 注入只选择确实包含可执行 npm 的 Runner 目录。
 # 维护约束：用户 bashrc 加载失败应由严格模式阻止继续发布。
 # 维护约束：敏感 API key 只通过环境传给单次 Python 进程。
