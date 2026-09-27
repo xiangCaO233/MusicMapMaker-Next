@@ -166,6 +166,89 @@ bool sameGeometry(const Logic::ComposeLessonNote& left,
     return true;
 }
 
+/// @brief 取得折线子段的可操作末端，供下一步方向提示使用。
+/// @details Hold 的末端在时间轴上，Flick 的末端在目标轨道上。
+/// 折线子段按谱面中的连接顺序处理，不按时间或轨道重排。
+/// 横移和纵向可以交替出现；使用实际操作末端才能继续引导。
+std::pair<int, double> pathEndpoint(
+    const Logic::ComposeLessonNote::SubNote& sub)
+{
+    if ( sub.type == ::MMM::NoteType::HOLD )
+        return { sub.track, sub.timestamp + sub.duration };
+    if ( sub.type == ::MMM::NoteType::FLICK )
+        return { sub.track + sub.dtrack, sub.timestamp };
+    return { sub.track, sub.timestamp };
+}
+
+/// @brief 将当前折线的首个差异或缺失子段转换为一步蓝色方向箭头。
+/// @param expected 草稿中的完整折线路径。
+/// @param actual 同一起点的现有折线或尚未续写的独立首段；空值表示未起笔。
+/// @return 目标已完整覆盖或只多出待删除子段时不提供方向箭头。
+/// @warning 仅在正式物件修订后调用，不在画布热路径比较子段。
+/// @details 箭头只表达当前一步，完整目标仍由青色轮廓展示。
+/// 从第一个不一致的子段开始提示，避免把用户引回已完成区域。
+/// 若现有子段均正确但路径仍短，就提示下一子段的操作终点。
+/// 物件修订后重新计算，因此箭头会随用户的续写进度前进。
+/// 已有路径比目标更长时没有下一目标，应留给红框提示删除。
+/// 独立 Hold 可以作为首段，因为示例谱面从长条开始续写折线。
+/// 时间容差与最终验收相同，轨道和类型仍要求精确对应。
+std::optional<ComposeLessonPathArrow> nextPathArrow(
+    const Logic::ComposeLessonNote& expected,
+    const Logic::ComposeLessonNote* actual)
+{
+    if ( expected.subNotes.empty() ) return std::nullopt;
+    const auto& target = expected.subNotes;
+    if ( !actual ) {
+        // 没有现有起点时，从首段头部指向首段末端。
+        // 覆盖物件段也从这里获得起笔方向，不凭空匹配背景 Note。
+        const auto [endTrack, endTime] = pathEndpoint(target.front());
+        return ComposeLessonPathArrow{
+            target.front().track, target.front().timestamp, endTrack, endTime
+        };
+    }
+    const Logic::ComposeLessonNote::SubNote firstActual{ actual->type,
+                                                         actual->timestamp,
+                                                         actual->duration,
+                                                         actual->track,
+                                                         actual->dtrack };
+    const auto count = actual->type == ::MMM::NoteType::POLYLINE
+                           ? actual->subNotes.size()
+                           : std::size_t{ 1 };
+    const auto at =
+        [&](std::size_t index) -> const Logic::ComposeLessonNote::SubNote& {
+        // 独立首段只有一个可比较节点；折线保留真实子段顺序。
+        return actual->type == ::MMM::NoteType::POLYLINE
+                   ? actual->subNotes[index]
+                   : firstActual;
+    };
+    constexpr double TIME_TOLERANCE = 0.002;
+    for ( std::size_t index = 0; index < std::min(count, target.size());
+          ++index ) {
+        const auto& current = at(index);
+        const auto& wanted  = target[index];
+        if ( current.type == wanted.type && current.track == wanted.track &&
+             current.dtrack == wanted.dtrack &&
+             std::abs(current.timestamp - wanted.timestamp) <= TIME_TOLERANCE &&
+             std::abs(current.duration - wanted.duration) <= TIME_TOLERANCE )
+            continue;
+        // 头部正确而末端有差异时，从现有端点指向草稿端点。
+        // 调整长度或终轨无需先删除物件，仍保持原有练习手势。
+        const auto [sourceTrack, sourceTime] = pathEndpoint(current);
+        const auto [targetTrack, targetTime] = pathEndpoint(wanted);
+        return ComposeLessonPathArrow{
+            sourceTrack, sourceTime, targetTrack, targetTime
+        };
+    }
+    if ( count >= target.size() || count == 0 ) return std::nullopt;
+    // 当前全部子段吻合时，从最后末端接到第一处缺失段的末端。
+    // 不从折线根部重新起箭头，否则每次续写都会指回开头。
+    const auto [sourceTrack, sourceTime] = pathEndpoint(at(count - 1));
+    const auto [targetTrack, targetTime] = pathEndpoint(target[count]);
+    return ComposeLessonPathArrow{
+        sourceTrack, sourceTime, targetTrack, targetTime
+    };
+}
+
 /// @brief 根据批注标题选择需要修正的部位，普通放置练习仍可删除多余物件。
 /// @details 这里仅识别示例谱面已定义的动作标题，不根据 Note 类型推断手势。
 /// 同一 Flick 在放置教学中应创建新物件，在调整教学中则应拖动现有箭头。
@@ -498,6 +581,7 @@ ComposeLessonFeedback compareComposeLessonNotes(
     feedback.actualMatched.assign(feedback.actual.size(), false);
     feedback.repairKind = repairKindFor(lesson);
     feedback.repairTargetForActual.assign(feedback.actual.size(), -1);
+    feedback.pathArrowForExpected.resize(lesson.m_reference.size());
     // 可修正物件不能提供删除捷径；删除段之后连普通多余物件也不提供。
     // 该标记在逻辑查询结果到达时固定，画布只读它来决定是否创建按钮。
     feedback.showUndoButton =
@@ -561,6 +645,75 @@ ComposeLessonFeedback compareComposeLessonNotes(
             feedback.repairTargetForActual[bestActual] =
                 static_cast<int>(bestExpected);
             reserved[bestExpected] = true;
+        }
+    }
+    // 进阶折线以草稿的完整路径为参照，但蓝箭头只指出当前要完成的
+    // 第一处子段。优先关联同一起点的现有折线，避免独立首段抢走续写提示。
+    // 这些配对不改变验收标记；用户仍须完成整个路径并复播。
+    // 完整匹配已经先消费，不会再对正确折线生成重复方向提示。
+    // 这里只按根时间和轨道找候选，允许当前尾端尚未调整到位。
+    // 段内可能还有同拍背景 Note，首段类型也要与参考相容。
+    // 每个现有候选只指向一个参考，防止重叠目标共享一条箭头。
+    // 提示配对不等于几何验收，不能借此提前结束编辑阶段。
+    // 起点坐标采用谱面秒数，误差与参考几何比较中的 2 ms 一致。
+    // 不用实体 ID 关联草稿，因为草稿区与正式区的实体本就不同。
+    // 也不依赖逻辑线程枚举顺序，候选可按子段数稳定比较进度。
+    // 完整形态的轮廓由画布单独绘制，这里只保存数值型箭头端点。
+    // 用户滚动画布后会重新投影端点，因此不能在反馈里缓存像素。
+    // 后续可能同时存在多条参考折线，reserved 防止重复使用候选。
+    // 若没有任何候选，首段方向仍有效，但当前实际数量保持不变。
+    // 删除子物件段的参考若只含独立 Note，不会进入此折线分支。
+    if ( lesson.m_advanced ) {
+        constexpr double  TIME_TOLERANCE = 0.002;
+        std::vector<bool> reserved(feedback.actual.size(), false);
+        for ( std::size_t expectedIndex = 0;
+              expectedIndex < lesson.m_reference.size();
+              ++expectedIndex ) {
+            const auto& expected = lesson.m_reference[expectedIndex];
+            if ( feedback.expectedMatched[expectedIndex] ||
+                 expected.type != ::MMM::NoteType::POLYLINE ||
+                 expected.subNotes.empty() )
+                continue;
+            std::size_t best  = feedback.actual.size();
+            std::size_t score = 0;
+            for ( std::size_t actualIndex = 0;
+                  actualIndex < feedback.actual.size();
+                  ++actualIndex ) {
+                const auto& current = feedback.actual[actualIndex];
+                if ( reserved[actualIndex] ||
+                     feedback.actualMatched[actualIndex] ||
+                     current.track != expected.track ||
+                     std::abs(current.timestamp - expected.timestamp) >
+                         TIME_TOLERANCE )
+                    continue;
+                // 单独的 Hold 可作为折线首段；其他独立物件不能用来
+                // 指示续写，否则同拍的背景 Note 会得到错误蓝箭头。
+                const auto& first = expected.subNotes.front();
+                const auto  compatible =
+                    current.type == ::MMM::NoteType::POLYLINE
+                        ? !current.subNotes.empty() &&
+                              current.subNotes.front().type == first.type
+                        : current.type == first.type;
+                if ( !compatible ) continue;
+                // 同根候选优先选子段较多的现有折线；独立首段兜底。
+                // 这让教程沿用户实际续写的路径推进，而非停在首段。
+                const std::size_t candidateScore =
+                    current.type == ::MMM::NoteType::POLYLINE
+                        ? current.subNotes.size() + 1
+                        : 1;
+                if ( best == feedback.actual.size() ||
+                     candidateScore > score ) {
+                    best  = actualIndex;
+                    score = candidateScore;
+                }
+            }
+            if ( best != feedback.actual.size() ) reserved[best] = true;
+            // 没有候选也保留首段起笔提示，但不增加正式物件。
+            // 用户完成修改后才由下一次查询更新箭头与验收状态。
+            feedback.pathArrowForExpected[expectedIndex] = nextPathArrow(
+                expected,
+                best == feedback.actual.size() ? nullptr
+                                               : &feedback.actual[best]);
         }
     }
     return feedback;

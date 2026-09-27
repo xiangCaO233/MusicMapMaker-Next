@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -33,6 +34,14 @@ Logic::EditTool requiredComposeLessonTool(std::string_view title);
 /// @brief 编辑练习中当前物件与目标物件之间需要修正的部位。
 enum class ComposeLessonRepairKind { None, Move, FlickTail, HoldTail, Delete };
 
+/// @brief 进阶折线当前一步的箭头起点与目标，均使用正式主轨道坐标。
+struct ComposeLessonPathArrow {
+    int    sourceTrack{ 0 };        ///< 应从当前哪一轨道的节点起笔或拖动。
+    double sourceTime{ 0.0 };       ///< 当前节点时间，单位秒。
+    int    destinationTrack{ 0 };   ///< 本次操作的目标轨道。
+    double destinationTime{ 0.0 };  ///< 本次操作的目标时间，单位秒。
+};
+
 /// @brief 一次正式物件查询与草稿目标的一对一匹配结果。
 /// @details 只在修订变化后重建，画布每帧仅读取匹配标记绘制提示。
 struct ComposeLessonFeedback {
@@ -49,7 +58,9 @@ struct ComposeLessonFeedback {
     };  ///< 当前段落的编辑语义。
     /// @brief 未完成的实际物件对应的参考下标；无可修正目标时为 -1。
     std::vector<int> repairTargetForActual;
-    bool             showUndoButton{
+    /// @brief 每个参考折线下一处待处理的方向箭头；物件修订后重算。
+    std::vector<std::optional<ComposeLessonPathArrow>> pathArrowForExpected;
+    bool                                               showUndoButton{
         false
     };  ///< 仅删除教学之前的普通放置段落开放辅助按钮。
 };

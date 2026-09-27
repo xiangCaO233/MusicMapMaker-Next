@@ -1300,6 +1300,37 @@ bool Basic2DCanvas::updateComposeLessonHints(
             vertices, canvasScreenPosition, canvasSize.x, canvasSize.y);
     }
 
+    // 进阶段落复用基础编辑练习的蓝色箭头：从现有路径的当前末端
+    // 指向草稿路径的下一处端点。轮廓仍展示完整目标，箭头只提示一步。
+    // 反馈与当前谱面修订不一致时不投影旧端点，等待逻辑线程重新比较。
+    // 端点坐标由比较器预先算好，渲染线程仅调用统一的轨道与时间投影。
+    // 这样窗口缩放、轨宽变化和时间轴滚动都能立即更新箭头位置。
+    // 路径可能横移到最外侧；越出玩家轨道的数据不应画进 BGM 区。
+    // 旧快照在修订切换时可能仍可见一帧，因此需检查修订代数。
+    // 参考已匹配时不绘制箭头，即使上一次反馈数组仍有占位项。
+    if ( feedback->composeNoteRevision == snapshot.composeNoteRevision ) {
+        for ( std::size_t index = 0;
+              index < feedback->pathArrowForExpected.size();
+              ++index ) {
+            if ( index < feedback->expectedMatched.size() &&
+                 feedback->expectedMatched[index] )
+                continue;
+            const auto& arrow = feedback->pathArrowForExpected[index];
+            if ( !arrow || arrow->sourceTrack < 0 ||
+                 arrow->sourceTrack >= snapshot.trackCount ||
+                 arrow->destinationTrack < 0 ||
+                 arrow->destinationTrack >= snapshot.trackCount )
+                continue;
+            renderAnnotationTargetTransferHint(
+                { trackX(arrow->sourceTrack), timeY(arrow->sourceTime) },
+                { trackX(arrow->destinationTrack),
+                  timeY(arrow->destinationTime) },
+                canvasScreenPosition,
+                canvasSize.x,
+                canvasSize.y);
+        }
+    }
+
     // 错误物件用快照里真实的可见包围盒，和普通批注悬浮框保持一致。
     // 可修正物件额外取得参考下标，蓝色落点从同一草稿目标投影而来。
     // 配对只在修订后做一次，不在此处遍历全部目标寻找最近 Note。

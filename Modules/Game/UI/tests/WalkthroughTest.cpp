@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -57,6 +58,12 @@
 /// - 步骤不能依赖自身；
 /// - 同一分支内步骤 ID 不能重复；
 /// - completion=all 与内置 any 分支语义正确解析。
+/// - 进阶折线只指向下一处子段，不把完整轮廓当作当前手势；
+/// - 现有折线续写时，箭头从最后一个实际子段的末端出发；
+/// - 独立长条作为首段时，先指示需要补足的长条尾部；
+/// - 折线尾段错误时，箭头从实际终轨指向参考终轨；
+/// - 空白折线从第一子段起笔，完成后不保留旧方向提示；
+/// - 删除子物件段没有参考折线时，不出现臆造的目标箭头。
 ///
 /// 覆盖的进度约束包括：
 /// - 手动确认只完成目标步骤，不串到同分支其他步骤；
@@ -632,6 +639,92 @@ int main(int argc, char** argv)
     if ( compareComposeLessonNotes(moveLesson, movedNotes, 17, 15)
              .showUndoButton )
         return 175;
+    // 进阶续写只指向当前路径的第一处缺失端点，后续路径仍由青色
+    // 完整轮廓展示。实际折线与草稿目标仍保持未匹配状态。
+    // 三段参考依次是长条、横移、长条；把最后一段删去模拟用户
+    // 刚画完横移后准备继续。此时箭头必须从横移到达的第二轨
+    // 指向下一个长条的尾端，而非折线的最初头部。
+    // 初始根时间和根轨故意与第一子段一致，覆盖真实谱面数据结构。
+    ComposeLesson pathLesson;
+    pathLesson.m_title    = "续写折线教学";
+    pathLesson.m_advanced = true;
+    MMM::Logic::ComposeLessonNote expectedPath;
+    expectedPath.type      = ::MMM::NoteType::POLYLINE;
+    expectedPath.timestamp = 4.0;
+    expectedPath.track     = 0;
+    expectedPath.subNotes  = {
+        { ::MMM::NoteType::HOLD, 4.0, 0.3, 0, 0 },
+        { ::MMM::NoteType::FLICK, 4.3, 0.0, 0, 1 },
+        { ::MMM::NoteType::HOLD, 4.3, 0.3, 1, 0 },
+    };
+    pathLesson.m_reference.push_back(expectedPath);
+    auto shortPath = expectedPath;
+    shortPath.subNotes.pop_back();
+    const auto pathFeedback =
+        compareComposeLessonNotes(pathLesson, { shortPath }, 17, 16);
+    const auto& nextArrow = pathFeedback.pathArrowForExpected.front();
+    // 提示只是视觉方向：它不能将目标或现有物件标记为完成。
+    // 起点与目标都在第二轨，但时间相差一个长条长度。
+    if ( !nextArrow || nextArrow->sourceTrack != 1 ||
+         std::abs(nextArrow->sourceTime - 4.3) > 0.001 ||
+         nextArrow->destinationTrack != 1 ||
+         std::abs(nextArrow->destinationTime - 4.6) > 0.001 ||
+         pathFeedback.expectedMatched.front() ||
+         pathFeedback.actualMatched.front() )
+        return 176;
+    // 路径首段已经存在但长度不足时，箭头从实际尾端指到草稿尾端。
+    // 独立 Hold 的长度与参考不同，因此还不是一条完整折线。
+    // 这里保证优先提示修正已有末端，而不是建议用户重复放置首段。
+    MMM::Logic::ComposeLessonNote shortStart;
+    shortStart.type      = ::MMM::NoteType::HOLD;
+    shortStart.timestamp = 4.0;
+    shortStart.duration  = 0.15;
+    shortStart.track     = 0;
+    const auto shortStartFeedback =
+        compareComposeLessonNotes(pathLesson, { shortStart }, 17, 17);
+    const auto& endArrow = shortStartFeedback.pathArrowForExpected.front();
+    // 起点仍位于同一轨道，实际与参考时间差正好是缺失的长度。
+    if ( !endArrow || endArrow->sourceTrack != 0 ||
+         std::abs(endArrow->sourceTime - 4.15) > 0.001 ||
+         endArrow->destinationTrack != 0 ||
+         std::abs(endArrow->destinationTime - 4.3) > 0.001 )
+        return 177;
+    // 拖拽调整段的折线已覆盖全部子段，但错误横移端仍应给出蓝点。
+    // 只改变中间 Flick 的终轨，后续 Hold 暂时保持草稿原样；
+    // 第一处不一致必须优先于后面仍然正确的子段得到提示。
+    // 箭头源点来自实际 dtrack，落点来自参考 dtrack。
+    auto wrongPath               = expectedPath;
+    wrongPath.subNotes[1].dtrack = 2;
+    pathLesson.m_title           = "折线拖拽调整教学";
+    const auto adjustFeedback =
+        compareComposeLessonNotes(pathLesson, { wrongPath }, 17, 18);
+    const auto& adjustArrow = adjustFeedback.pathArrowForExpected.front();
+    // 此例为纯横向拖动，两端时间相等；若误用下一子段会出现纵向箭头。
+    if ( !adjustArrow || adjustArrow->sourceTrack != 2 ||
+         adjustArrow->destinationTrack != 1 ||
+         std::abs(adjustArrow->sourceTime - 4.3) > 0.001 ||
+         std::abs(adjustArrow->destinationTime - 4.3) > 0.001 )
+        return 178;
+    // 空白目标给首段起笔方向；完整路径和非折线删除目标不生成箭头。
+    // 空白阶段没有可拖动的现有物件，首个蓝点只表达创建方向。
+    // 完全匹配后进度检查会消费目标；反馈数组不应保留上一轮箭头。
+    const auto emptyPathFeedback =
+        compareComposeLessonNotes(pathLesson, {}, 17, 19);
+    const auto& firstArrow = emptyPathFeedback.pathArrowForExpected.front();
+    if ( !firstArrow || firstArrow->sourceTrack != 0 ||
+         std::abs(firstArrow->sourceTime - 4.0) > 0.001 ||
+         firstArrow->destinationTrack != 0 ||
+         std::abs(firstArrow->destinationTime - 4.3) > 0.001 ||
+         compareComposeLessonNotes(pathLesson, { expectedPath }, 17, 20)
+             .pathArrowForExpected.front() )
+        return 179;
+    pathLesson.m_title     = "折线删除子物件教学";
+    pathLesson.m_reference = { shortStart };
+    // 删除段只有独立目标，不存在可以续写的参考折线。
+    // 错误子物件应继续由红框和右键手势处理，不能出现蓝色落点。
+    if ( compareComposeLessonNotes(pathLesson, {}, 17, 21)
+             .pathArrowForExpected.front() )
+        return 180;
     // 后续进阶段即使包含未匹配的 Note，也只能由用户自行调整或删除。
     if ( composeBeatmapTopic->m_branches.size() != 2 ||
          composeBeatmapTopic->m_branches[0].m_steps.size() != 12 ||
