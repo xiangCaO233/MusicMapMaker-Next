@@ -1,9 +1,11 @@
 #include "ui/walkthrough/WalkthroughService.h"
 #include "BuiltinWalkthrough.h"
 #include "config/AppPaths.h"
+#include "config/Utf8Path.h"
 #include "event/core/EventBus.h"
 #include "event/logic/BeatmapCreateInteractionEvent.h"
 #include "event/project/ProjectOpenInteractionEvent.h"
+#include "ui/walkthrough/ComposeLessonCatalog.h"
 #include "ui/walkthrough/WalkthroughModel.h"
 #include <algorithm>
 #include <concurrentqueue.h>
@@ -88,6 +90,18 @@ std::filesystem::path canonRockDirectory()
     return Config::AppPaths::assetsRootPath() / "walkthroughs" / "canonrock";
 }
 
+/// @brief 接受两处正式分发的示例文件身份，避免开发工作区使用源码资源时误拒绝。
+bool canonRockComposeBeatmapAllows(const std::filesystem::path& path)
+{
+    if ( path.empty() ) return false;
+    // 发布安装使用配置资源；源码目录只在本地开发构建仍存在时匹配。
+    // equivalent 同时处理符号链接，且不会把同名的用户谱面误认成示例。
+    return sameFile(path, canonRockDirectory() / "卡农-示例谱面.mmm") ||
+           sameFile(path,
+                    Config::utf8ToPath(MMM_CANONROCK_SOURCE_DIRECTORY) /
+                        "卡农-示例谱面.mmm");
+}
+
 /// @brief 仅在打开项目引导运行期间启用路径限制。
 void restrictOpenProjectGuideToCanonRock(bool active)
 {
@@ -112,9 +126,10 @@ bool openProjectGuideRestricted()
     return canonRockOnly;
 }
 
-/// @brief 在普通项目条件之外，限定两个新建谱面演练的项目身份。
+/// @brief 在普通项目条件之外，限定新建谱面演练的项目身份。
 /// @details 打开项目演练可以使用临时谱包，但创建演练需要可写的项目目录；
 /// 因此只接受项目控制器发布的 CanonRock 根目录，不接受解包后的临时根目录。
+/// 创作演练按已打开的谱面文件判断，不能用项目根替代谱面身份。
 /// @warning UI 热路径：首次解析示例目录后，后续只比较 UI 已发布的路径。
 bool topicAvailableInProject(const Topic& topic, bool hasActiveProject,
                              bool                         hasOpenBeatmap,
@@ -143,8 +158,10 @@ bool topicAvailableInProject(const Topic& topic, bool hasActiveProject,
 struct Service::Impl {
     std::vector<Chapter> m_chapters;  ///< 已排序章节，保留空章节入口区域。
     std::vector<Topic>   m_topics;    ///< 通过校验的主题。
-    Progress             m_progress;  ///< 独立的学习状态。
-    std::uint64_t        m_signalSequence{ 0 };  ///< 本进程业务信号单调序号。
+    std::vector<ComposeLesson>
+                  m_composeLessons;       ///< 启动时加载的草稿教学参考。
+    Progress      m_progress;             ///< 独立的学习状态。
+    std::uint64_t m_signalSequence{ 0 };  ///< 本进程业务信号单调序号。
     std::map<std::string, std::uint64_t, std::less<>>
         m_signalRevisions;          ///< 每个稳定信号最近一次到达序号。
     std::filesystem::path m_path;   ///< 专用进度文件。
@@ -262,8 +279,36 @@ Service::Service(const std::filesystem::path& progressPath,
     m_impl->add(BUILTIN_CREATE_BEATMAP_WALKTHROUGH);
     m_impl->add(BUILTIN_CREATE_BEATMAP_TEMPLATE_WALKTHROUGH);
     m_impl->add(BUILTIN_EDITOR_OVERVIEW_WALKTHROUGH);
-    // 创作谱面已具备完整交互步骤，必须作为正式内置路线加载而非继续占位。
+    // 创作路线的标题与时间窗由 CanonRock 实际批注生成，不能沿用旧固定练习。
+    // 静态主题只提供稳定 ID、顺序和说明，真实分支必须由资源构造。
+    // 参考载荷缺失时保持占位，不能让旧演练配置在新版本继续显示。
     m_impl->add(BUILTIN_COMPOSE_BEATMAP_WALKTHROUGH);
+    const auto composeLessons =
+        loadComposeLessons(canonRockDirectory() / "卡农-示例谱面.mmm");
+    if ( composeLessons ) {
+        // 构造完成后把参考与步骤同时交给服务，页面只使用只读索引。
+        // 避免每帧重新读取项目侧车或把答案复制到每个 Step。
+        // 主题仍沿用原有稳定 ID，已有进度记录只按新的步骤 ID 自然失效。
+        // 两条分支的边界由谱面批注决定，服务不保留固定段落数量。
+        for ( auto& topic : m_impl->m_topics )
+            if ( topic.m_id == "mmm.compose-beatmap" ) {
+                populateComposeLessonTopic(topic, *composeLessons);
+                m_impl->m_composeLessons = *composeLessons;
+                break;
+            }
+    } else {
+        // 谱面缺失时只保留可阅读的主题说明，绝不回退到旧随机绘制路线。
+        // 错误原因保存在服务状态中，欢迎页可以直接告知资源作者。
+        // 项目和谱面其余主题保持可用，不因一份草稿资源失败全部停用。
+        // 服务重建前不会自动重试；用户同步资源后重新启动即可重新生成。
+        for ( auto& topic : m_impl->m_topics )
+            if ( topic.m_id == "mmm.compose-beatmap" ) {
+                topic.m_placeholder = true;
+                topic.m_branches.clear();
+                break;
+            }
+        m_impl->m_error = composeLessons.error();
+    }
     // 个性化主题与创作流程同级注册，不受项目或谱面打开状态限制。
     m_impl->add(BUILTIN_SOFTWARE_PERSONALIZATION_WALKTHROUGH);
     // 编辑器个性化依赖已打开谱面，但不要求改动到固定数值才能完成。
@@ -461,6 +506,13 @@ void Service::update()
 const std::vector<Topic>& Service::topics() const
 {
     return m_impl->m_topics;
+}
+/// @brief 查询已经随主题一起加载的草稿参考，不接触正在变化的项目文件。
+const ComposeLesson* Service::composeLesson(std::size_t index) const
+{
+    return index < m_impl->m_composeLessons.size()
+               ? &m_impl->m_composeLessons[index]
+               : nullptr;
 }
 /// @brief 返回当前学习进度。
 /// @return 服务拥有的只读进度对象。

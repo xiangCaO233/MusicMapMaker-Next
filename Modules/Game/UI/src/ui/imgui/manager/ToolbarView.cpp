@@ -4581,6 +4581,11 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
         // 只有实际点击 Draw 才完成；Draw 已激活时也可点击自身或按“知道了”。
         auto& spotlight = sourceManager->walkthroughSpotlight();
         spotlight.reportLastItem("compose.toolbar.tool-selection");
+        // 练习阶段允许切换画笔、拖拽与橡皮擦；工具栏作为画布目标的伴随亮区。
+        spotlight.reportCompanionRegion("compose.lesson.practice",
+                                        ImGui::GetItemRectMin(),
+                                        ImGui::GetItemRectMax(),
+                                        ImGui::GetWindowViewport());
         if ( clicked && tool == Logic::EditTool::Draw )
             spotlight.completeTarget("compose.toolbar.tool-selection");
         // 后续编辑先切到拖拽工具，续写时再返回绘制工具；每个按钮只上报

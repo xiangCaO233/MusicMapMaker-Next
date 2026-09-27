@@ -1,9 +1,13 @@
 #include "BuiltinWalkthrough.h"
+#include "ComposeLessonFixture.h"
 #include "event/core/EventBus.h"
 #include "event/logic/BeatmapCreateInteractionEvent.h"
 #include "event/project/ProjectOpenInteractionEvent.h"
+#include "mmm/beatmap/BeatMap.h"
+#include "ui/walkthrough/ComposeLessonCatalog.h"
 #include "ui/walkthrough/WalkthroughModel.h"
 #include "ui/walkthrough/WalkthroughService.h"
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <filesystem>
@@ -48,7 +52,7 @@
 /// - 软件个性化主题属于独立章节且无需活动项目；
 /// - 软件个性化步骤包含主题、双字体、界面美化、光标与快捷键；
 /// - 已有满意设置允许通过确认推进，不强制改动用户偏好；
-/// - 创作谱面占位主题随编辑区简介加入而移动到阶段四；
+/// - 创作谱面静态主题保留稳定阶段四身份，分支从项目资产生成；
 /// - 历史进度不参与目标链解析，避免重放时停留在入口控件；
 /// - 步骤不能依赖自身；
 /// - 同一分支内步骤 ID 不能重复；
@@ -89,23 +93,22 @@
 /// - 未知新建谱面入口保持无信号，避免内部调用污染教程；
 /// - 重复阶段事件由进度归约器幂等消费；
 /// - 主题在服务目录中位于两个项目主题之后、创作主题之前；
-/// - 已发布的阶段二和阶段四主题均不再使用内置占位集合；
+/// - 阶段二继续使用内置路线，阶段四仅在参考资产有效时解除占位；
 /// - 新建谱面事件订阅随 Service 生命周期建立和解除；
 /// - 所有事件断言在 service.update 后读取，覆盖真实跨线程队列边界；
 /// - 服务公开主题顺序保持欢迎页使用的稳定索引；
 /// - 阶段三简介与阶段四创作主题都要求项目和真实谱面标签；
-/// - 阶段四采用 completion=all，五步必须按相邻依赖顺序完成；
-/// - 阶段四入口重新要求选择任意真实谱面标签；
-/// - 阶段四工具步骤使用独立工具选择区语义目标；
-/// - 阶段四主轨道拖动目标不复用阶段三的完成记录；
-/// - 阶段四主轨道介绍与完整可见拖动保持为两个步骤；
-/// - 阶段四最终步骤只接受拖拽放置的专用目标 ID；
-/// - 阶段四不是 placeholder，并提供一个可展开的真实分支；
+/// - 阶段四按批注生成基础和进阶两个独立分支；
+/// - 两个分支分别按首播、编辑、复播三步展开每个段落；
+/// - 编辑阶段不能靠“知道了”跳过几何验收；
+/// - 草稿载荷与正式物件按类型、轨道、时间和数量比较；
+/// - 额外或漏掉的物件不能被相似位置的另一个物件抵扣；
+/// - 阶段四在资产有效时解除 placeholder 并提供完整路线；
 /// - 阶段四 order 严格晚于编辑区简介；
 /// - 阶段四在无项目、无谱面两种状态下均不可进入；
 /// - 阶段四仅在项目和谱面标签都存在时可进入；
 /// - 阶段四每一步都声明可重放的 guide；
-/// - 阶段四自身步骤 ID 与阶段三相似步骤保持主题级隔离；
+/// - 阶段四动态步骤 ID 与阶段三旧目标保持主题级隔离；
 /// - PackageDrop 只有只读项目完成时才推进；
 /// - BeatmapDrop 只有真正打开谱面时才推进；
 /// - 未注册 action 保持无操作；
@@ -141,7 +144,7 @@ int main(int argc, char** argv)
     if ( pathError ) return 102;
     const auto beatmap = canonRock / "卡农-示例谱面.mmm";
     const auto package = canonRock / "canonrock.zip";
-    std::ofstream(beatmap).put('x');
+    if ( !MMM::UI::Test::writeComposeLessonFixture(canonRock) ) return 102;
     std::ofstream(package).put('x');
     if ( !std::filesystem::exists(beatmap) ||
          !std::filesystem::exists(package) )
@@ -158,6 +161,20 @@ int main(int argc, char** argv)
     if ( !pathsAllowed ||
          !openProjectGuideAllows(std::filesystem::path(argv[1])) )
         return 104;
+    // 入口可由配置副本进入，也可直接打开仓库源码中的正式示例。
+    // 另一个目录里的同名谱面不能仅凭文件名绕过启动身份校验。
+    // 覆盖开发者直接从仓库练习与发布包从配置资源练习两条路径。
+    const auto unrelatedDirectory = std::filesystem::path(argv[1]) / "other";
+    std::filesystem::create_directories(unrelatedDirectory, pathError);
+    if ( pathError ) return 108;
+    const auto unrelatedBeatmap = unrelatedDirectory / "卡农-示例谱面.mmm";
+    std::ofstream(unrelatedBeatmap).put('x');
+    if ( !canonRockComposeBeatmapAllows(beatmap) ||
+         !canonRockComposeBeatmapAllows(
+             std::filesystem::path(MMM_COMPOSE_SAMPLE_FILE)) ||
+         canonRockComposeBeatmapAllows(unrelatedBeatmap) ||
+         canonRockComposeBeatmapAllows({}) )
+        return 109;
     // 首先验证编译期章节目录的稳定公共结构。
     const auto chapters = parseChapters(BUILTIN_CHAPTERS);
     if ( !chapters || chapters->size() != 2 ||
@@ -331,65 +348,104 @@ int main(int argc, char** argv)
          editorSteps.back().m_guide->m_targets !=
              std::vector<std::string>{ "editor.audio.actions" } )
         return 62;
-    // 阶段四是独立完整路线，不能继承阶段三已经完成过的步骤进度。
-    const auto composeBeatmapTopic =
-        parseTopic(BUILTIN_COMPOSE_BEATMAP_WALKTHROUGH);
-    if ( !composeBeatmapTopic || composeBeatmapTopic->m_placeholder ||
+    // 创作主题从资产批注生成两条路线，不再承袭固定的二十步操作脚本。
+    auto composeBeatmapTopic  = parseTopic(BUILTIN_COMPOSE_BEATMAP_WALKTHROUGH);
+    const auto composeLessons = loadComposeLessons(beatmap);
+    // 源码中实际分发的 CanonRock 草稿侧车也必须能生成两阶段路线。
+    // 夹具通过不能代替打包资源有效，尤其是隐藏的 .mmm 工作目录。
+    // 这里只读取源码资产；隔离配置根仍用于服务进度和练习夹具写入。
+    // 最后一段必须标记进阶，防止只分发基础教学也误报通过。
+    const auto packagedLessons =
+        loadComposeLessons(std::filesystem::path(MMM_COMPOSE_SAMPLE_FILE));
+    if ( !packagedLessons || packagedLessons->empty() ||
+         packagedLessons->front().m_reference.empty() ||
+         !packagedLessons->back().m_advanced )
+        return 107;
+    // 路线入口会用独立基线还原主轨，资源必须可被正式谱面读取器加载。
+    // 首段初始为空，重练时才会要求重新绘制这六枚 Note。
+    // 基线与可保存的示例谱面分开存放，后者在用户练习后可能发生变化。
+    // 文件存在但解析成空谱面也必须失败，不能让入口清空全部目标物件。
+    // 后续调整课程需要预置物件，所以基线总体必须包含正式 Note。
+    // 入口只替换正式对象域，本测试聚焦替换命令的真实来源内容。
+    // 首段空白是每次重新练习单键放置的起点，不受其它段落预置项影响。
+    const auto baseline = MMM::BeatMap::loadFromFile(
+        std::filesystem::path(MMM_COMPOSE_SAMPLE_FILE).parent_path() / ".mmm" /
+        "compose_baseline.mmm");
+    if ( baseline.m_baseMapMetadata.track_count != 4 ||
+         baseline.m_allNotes.empty() ||
+         std::any_of(baseline.m_allNotes.begin(),
+                     baseline.m_allNotes.end(),
+                     [&](const auto& note) {
+                         const double timeMs = note.get().m_timestamp;
+                         return timeMs >= packagedLessons->front().m_beginMs &&
+                                timeMs <= packagedLessons->front().m_endMs;
+                     }) )
+        return 113;
+    // 分发谱面的草稿有五列、主画布有四列；右侧四列对应主轨道 0–3。
+    // 首段的六枚 Note 覆盖全部四条主轨，防止直接比较草稿编码而卡住练习。
+    // 用实际资源验证，隔离夹具单独通过不能证明用户看到的谱面可继续。
+    constexpr std::array<int, 6> firstLessonTracks{ 0, 2, 1, 3, 1, 2 };
+    if ( packagedLessons->front().m_reference.size() !=
+         firstLessonTracks.size() )
+        return 111;
+    for ( std::size_t index = 0; index < firstLessonTracks.size(); ++index )
+        if ( packagedLessons->front().m_reference[index].track !=
+             firstLessonTracks[index] )
+            return 112;
+    // 静态声明刻意是占位；只有真实批注和草稿载荷同时可读才生成分支。
+    // 此处使用隔离夹具，不能依赖仓库中正在编辑的个人教学谱面。
+    if ( !composeBeatmapTopic || !composeBeatmapTopic->m_placeholder ||
          !composeBeatmapTopic->m_requiresProject ||
          !composeBeatmapTopic->m_requiresBeatmap ||
-         composeBeatmapTopic->m_order != 40 ||
-         composeBeatmapTopic->m_branches.size() != 1 ||
-         composeBeatmapTopic->m_branches.front().m_steps.size() != 20 ||
+         composeBeatmapTopic->m_order != 40 || !composeLessons ||
+         composeLessons->size() != 5 ||
          topicAvailable(*composeBeatmapTopic, false, false) ||
          topicAvailable(*composeBeatmapTopic, true, false) ||
          !topicAvailable(*composeBeatmapTopic, true, true) )
         return 65;
-    const auto& composeSteps = composeBeatmapTopic->m_branches.front().m_steps;
-    for ( std::size_t index = 0; index < composeSteps.size(); ++index ) {
-        if ( !composeSteps[index].m_guide ) return 66;
-        if ( index > 0 &&
-             composeSteps[index].m_prerequisites !=
-                 std::vector<std::string>{ composeSteps[index - 1].m_id } )
-            return 67;
-    }
-    // 十个新编辑步骤必须夹在折线创建与删除之间，且每一步使用独立目标。
-    // 工具选择允许已选中时手动确认，其余编辑与删除需真实操作完成。
-    // 前八项保持原有的打开、导航和绘制顺序，防止新增编辑练习改变入口。
-    // 选择 Move 和重新选择 Draw 各占一个目标，避免按钮上下文串用。
-    // Note、Hold、Flick 三项都指向各自的真实渲染命中框。
-    // 折线中间段分别有位置、时间和结构合并三种验收动作。
-    // 最后两个编辑目标从现有尾部续接，必须位于删除动作之前。
-    // 两个删除步骤仍使用独立目标，不会被编辑事务提前完成。
-    constexpr std::array composeTargets{
-        "editor.beatmap-tab",
-        "compose.toolbar.tool-selection",
-        "compose.canvas.pan-player",
-        "compose.canvas.player",
-        "compose.canvas.place-note",
-        "compose.canvas.place-flick",
-        "compose.canvas.place-hold",
-        "compose.canvas.place-polyline",
-        "compose.toolbar.select-move-tool",
-        "compose.canvas.move-note",
-        "compose.canvas.resize-hold",
-        "compose.canvas.resize-flick",
-        "compose.canvas.move-sub-hold",
-        "compose.canvas.move-sub-flick",
-        "compose.canvas.merge-sub-note",
-        "compose.toolbar.select-draw-tool-edit",
-        "compose.canvas.extend-note",
-        "compose.canvas.resume-polyline",
-        "compose.canvas.delete-hold",
-        "compose.canvas.delete-remaining",
-    };
-    for ( std::size_t index = 0; index < composeTargets.size(); ++index ) {
-        const auto& guide = *composeSteps[index].m_guide;
-        if ( guide.m_targets !=
-                 std::vector<std::string>{ composeTargets[index] } ||
-             (index >= 7 && index != 8 && index != 15 &&
-              !guide.m_requiresAction) )
-            return 68;
-    }
+    populateComposeLessonTopic(*composeBeatmapTopic, *composeLessons);
+    if ( composeBeatmapTopic->m_placeholder ) return 73;
+    // 隔离夹具同样采用五列草稿对应四列主轨，首列参考必须归一到零。
+    if ( composeLessons->front().m_reference.front().track != 0 ) return 110;
+    // 一次物件可视上接近但轨道或数量不对时，不能替代完整草稿目标。
+    // 不同比较场景复用同一目标，确保容差不会意外放宽类型和数量约束。
+    // 此处不涉及 UI 帧，几何比较仅在测试中显式调用。
+    // 几何结果在每次变体后重置，断言失败能归因到单一字段。
+    auto geometry = composeLessons->front().m_reference;
+    if ( !matchesComposeLessonNotes(composeLessons->front(), geometry) )
+        return 69;
+    geometry.front().track += 1;
+    if ( matchesComposeLessonNotes(composeLessons->front(), geometry) )
+        return 70;
+    geometry = composeLessons->front().m_reference;
+    geometry.front().timestamp += 0.01;
+    if ( matchesComposeLessonNotes(composeLessons->front(), geometry) )
+        return 71;
+    geometry = composeLessons->front().m_reference;
+    geometry.push_back(geometry.front());
+    if ( matchesComposeLessonNotes(composeLessons->front(), geometry) )
+        return 72;
+    if ( composeBeatmapTopic->m_branches.size() != 2 ||
+         composeBeatmapTopic->m_branches[0].m_steps.size() != 12 ||
+         composeBeatmapTopic->m_branches[1].m_steps.size() != 3 )
+        return 66;
+    // 每段都是首播、练习、复播三步；任何一步都不能靠手动确认完成。
+    // 前置依赖在分支内相邻连接，进阶首步不依赖基础末步。
+    for ( const auto& branch : composeBeatmapTopic->m_branches )
+        for ( std::size_t index = 0; index < branch.m_steps.size(); ++index ) {
+            const auto& step = branch.m_steps[index];
+            if ( !step.m_guide || !step.m_composeLesson ||
+                 !step.m_guide->m_requiresAction ||
+                 step.m_guide->m_targets !=
+                     std::vector<std::string>{
+                         index % 3 == 1 ? "compose.lesson.practice"
+                                        : "compose.lesson.playback" } )
+                return 67;
+            if ( index > 0 &&
+                 step.m_prerequisites != std::vector<std::string>{
+                                             branch.m_steps[index - 1].m_id } )
+                return 68;
+        }
     // 软件个性化独立于项目和谱面，可从欢迎页直接进入。
     // 每步聚焦真实设置控件；保留现有偏好时允许明确确认继续。
     // 此流程不会修改磁盘设置，解析检查仅保证内置路线完整可达。
@@ -631,6 +687,13 @@ int main(int argc, char** argv)
              topicAvailableInProject(topics[2], false, false, canonRock) ||
              !topicAvailableInProject(topics[1], true, false, directory) )
             return 105;
+        // 创作教程只要求打开谱面，页面在开始步骤时核对示例文件身份。
+        // 不能因为同一谱面通过临时工作区打开就禁用欢迎页入口。
+        if ( !topicAvailableInProject(topics[5], true, true, directory) ||
+             !topicAvailableInProject(topics[5], true, true, canonRock) ||
+             topicAvailableInProject(topics[5], true, false, canonRock) ||
+             topicAvailableInProject(topics[5], false, true, canonRock) )
+            return 106;
         // 包投放仅 completed 而非只读时不应完成教程步骤。
         MMM::Event::ProjectOpenInteractionEvent event;
         event.m_origin    = MMM::Event::ProjectOpenOrigin::PackageDrop;

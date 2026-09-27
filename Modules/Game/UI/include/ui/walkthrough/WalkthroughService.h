@@ -12,9 +12,13 @@ namespace MMM::UI::Walkthrough
 struct Topic;
 struct Chapter;
 struct Step;
+struct ComposeLesson;
 class Progress;
 /// @brief 返回受管资源包中 CanonRock 演练项目的目录。
 std::filesystem::path canonRockDirectory();
+/// @brief 判断谱面是否为配置资源或源码资源中的 CanonRock 示例谱面。
+/// @warning 仅在启动教学步骤时访问文件系统，不得逐帧调用。
+bool canonRockComposeBeatmapAllows(const std::filesystem::path& path);
 /// @brief 限制当前打开项目演练只接受 CanonRock 目录、谱面或谱包。
 /// @warning 仅 UI 线程切换状态；路径校验只在低频打开操作中进行。
 void restrictOpenProjectGuideToCanonRock(bool active);
@@ -43,6 +47,9 @@ public:
     void update();
     /// @brief 取得已验证的主题目录。
     const std::vector<Topic>& topics() const;
+    /// @brief 取得内置 CanonRock 教学参考；缺失时返回空指针。
+    /// @warning UI 热路径：仅做已加载 vector 边界检查，不访问文件系统。
+    const ComposeLesson* composeLesson(std::size_t index) const;
     /// @brief 取得按顺序排列的章节，包括空章节。
     const std::vector<Chapter>& chapters() const;
     /// @brief 取得学习进度的非拥有引用。

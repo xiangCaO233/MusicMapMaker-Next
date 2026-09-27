@@ -28,6 +28,19 @@ struct Guide {
     /// @brief 必须由业务动作完成，不能用“知道了”跳过。
     bool m_requiresAction{ false };
 };
+/// @brief CanonRock 每段的三个实际操作阶段。
+enum class ComposeLessonPhase {
+    Preview,   ///< 首次播放参考段落。
+    Practice,  ///< 参照草稿区编辑正式轨道。
+    Review,    ///< 编辑完成后重播同一段落。
+};
+/// @brief 创作教程步骤的时间窗与阶段，普通演练步骤不设置此字段。
+struct ComposeLessonStep {
+    double             m_beginMs{ 0.0 };  ///< 批注起点，单位毫秒。
+    double             m_endMs{ 0.0 };    ///< 批注终点，单位毫秒。
+    ComposeLessonPhase m_phase{ ComposeLessonPhase::Preview };
+    std::size_t        m_lessonIndex{ 0 };  ///< 已加载参考段落的稳定索引。
+};
 /// @brief 一个可单独确认了解的演练步骤。
 /// 步骤 ID 在整个主题内唯一，跨分支前置引用也使用该 ID。
 /// 手动确认跳过前置限制；自动完成则同时检查前置步骤与信号。
@@ -41,6 +54,8 @@ struct Step {
                          m_prerequisites;  ///< 自动完成和操作入口的前置步骤。
     std::string          m_action;  ///< 已注册的操作 ID，空值表示没有操作。
     std::optional<Guide> m_guide;   ///< 可选的逐控件突出引导流程。
+    /// @brief 内置 CanonRock 创作路线专用的播放与编辑边界。
+    std::optional<ComposeLessonStep> m_composeLesson;
 };
 /// @brief 同一目标的一条独立操作分支。
 struct Branch {

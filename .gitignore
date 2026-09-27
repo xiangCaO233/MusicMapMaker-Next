@@ -5,6 +5,10 @@ build/
 .vscode/
 .idea/
 *.mmm/
+!assets/walkthroughs/canonrock/.mmm/
+assets/walkthroughs/canonrock/.mmm/*
+!assets/walkthroughs/canonrock/.mmm/draft_lanes.json
+!assets/walkthroughs/canonrock/.mmm/compose_baseline.mmm
 release/
 *__pycache__*/
 

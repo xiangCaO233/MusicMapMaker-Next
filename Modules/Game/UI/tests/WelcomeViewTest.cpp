@@ -1,4 +1,5 @@
 #include "ui/walkthrough/WelcomeView.h"
+#include "ComposeLessonFixture.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
 #include "log/colorful-log.h"
@@ -199,6 +200,11 @@ bool testSettings()
 /// @warning 测试内部创建 UIManager，要求调用方已建立 ImGui 上下文和字体图集。
 bool testPages()
 {
+    // 服务构造前在隔离配置根准备真实批注和草稿载荷，避免把缺资产占位误作 UI
+    // 回归。
+    if ( !MMM::UI::Test::writeComposeLessonFixture(
+             MMM::UI::Walkthrough::canonRockDirectory()) )
+        return false;
     // UIManager 提供真实演练服务，WelcomeView 作为被测页面单独构造。
     MMM::UI::UIManager   manager;
     MMM::UI::WelcomeView welcome;

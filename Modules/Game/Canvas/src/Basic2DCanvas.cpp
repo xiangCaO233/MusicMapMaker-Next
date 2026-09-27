@@ -213,6 +213,17 @@ void reportCanvasWalkthroughTargets(
         canvasPosition,
         { canvasPosition.x + canvasSize.x, canvasPosition.y + canvasSize.y },
         ImGui::GetWindowViewport());
+    // 创作段落需要同时看到主轨道和草稿参照；播放自动推进，编辑留在画布内。
+    const ImVec2 canvasEnd{ canvasPosition.x + canvasSize.x,
+                            canvasPosition.y + canvasSize.y };
+    spotlight.reportTarget("compose.lesson.playback",
+                           canvasPosition,
+                           canvasEnd,
+                           ImGui::GetWindowViewport());
+    spotlight.reportTarget("compose.lesson.practice",
+                           canvasPosition,
+                           canvasEnd,
+                           ImGui::GetWindowViewport());
     if ( projection.draftLaneCount > 0 &&
          fullyVisible(projection.draftLeftX, projection.draftRightX) ) {
         // 关闭专业模式时计数为零，路线继续等待并由提示说明如何开启。

@@ -2,9 +2,19 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 
+namespace MMM::Logic
+{
+class BeatmapSession;
+struct ComposeLessonCapture;
+}  // namespace MMM::Logic
+namespace MMM::Common::Render
+{
+class RenderSnapshotBuffer;
+}
 namespace MMM::UI
 {
 class UIManager;
@@ -55,6 +65,20 @@ private:
         std::uint64_t nextSignalRevisionAtRunStart{ 0 };
         /// @brief 关闭旧项目后重播目标时仍保留回看模式。
         bool reviewing{ false };
+        /// @brief 创作教学期间固定的目标会话，避免切换标签误操作其它谱面。
+        std::shared_ptr<Logic::BeatmapSession> composeSession;
+        /// @brief 仅启动步骤时取得一次；UI 后续直接读已发布快照，不等待会话锁。
+        std::shared_ptr<Common::Render::RenderSnapshotBuffer> composeBuffer;
+        /// @brief 本轮唯一允许验收的 CanonRock 示例谱面路径键。
+        std::string composeBeatmapKey;
+        /// @brief 编辑阶段起始对象修订；旧谱面已有正确物件不会算新练习。
+        std::uint64_t composeBaselineRevision{ 0 };
+        /// @brief 最近一次已请求快照对应的对象修订。
+        std::uint64_t composeCaptureRevision{ 0 };
+        /// @brief 逻辑线程写入、UI 无阻塞轮询的一次性验收结果。
+        std::shared_ptr<Logic::ComposeLessonCapture> composeCapture;
+        /// @brief 首播/复播先观察到新的播放开始，避免旧帧直接完成。
+        bool composePlaybackStarted{ false };
     };
 
     /// @brief 当前正文主题 ID，切换主题时用于重置展开项。
@@ -73,5 +97,7 @@ private:
     std::optional<ActiveGuide> m_activeGuide;
     /// @brief 旧项目关闭后才启动的打开项目路线，避免同一请求覆盖关闭意图。
     std::optional<ActiveGuide> m_pendingOpenGuide;
+    /// @brief 启动创作教学时的可见错误；成功进入新步骤后清空。
+    std::string m_guideError;
 };
 }  // namespace MMM::UI

@@ -2208,6 +2208,13 @@ bool BeatmapSession::processCommands()
         // 将类别消费掉。
         // 没有累计变更时保持自动保存和观察者状态不动。
         if ( mutationFlags == ::MMM::BeatmapMutationFlags::None ) return;
+        if ( hasBeatmapMutationFlag(mutationFlags,
+                                    ::MMM::BeatmapMutationFlags::Objects) ) {
+            // 一批正式或草稿物件编辑只通知教学验收一次。
+            // 修订号由逻辑线程独占写入并随 RenderSnapshot 发布。
+            // UI 不读取注册表，也不等待这轮 mutation 的会话锁。
+            ++m_ctx->composeNoteRevision;
+        }
         // 任一谱面变更都让自动备份基线失效，定时策略由其他轮询路径处理。
         m_autoBackupDirty    = true;
         const auto& autoSave = m_ctx->lastConfig.settings.autoSave;
@@ -2646,8 +2653,48 @@ bool BeatmapSession::processCommands()
                                  "current_track_area_selected"));
                 }
 
+                // 只在显式教学查询命令到达时扫描正式根物件，不进入普通更新帧。
+                // 一次查询只截取本段时间窗，结果由命令持有的对象发布给 UI。
+                // 扫描发生在逻辑线程已有的会话写入上下文内，无需追加跨线程锁。
+                if constexpr ( std::is_same_v<T,
+                                              CmdCaptureComposeLessonNotes> ) {
+                    if ( arg.m_result ) {
+                        auto&      output = arg.m_result->notes;
+                        const auto view =
+                            m_ctx->noteRegistry.view<const NoteComponent>();
+                        for ( auto entity : view ) {
+                            const auto& note =
+                                view.get<const NoteComponent>(entity);
+                            if ( note.m_isDraft || note.m_isSubNote ||
+                                 note.m_timestamp < arg.m_begin ||
+                                 note.m_timestamp > arg.m_end )
+                                continue;
+                            // 子物件由根折线组件携带，不能重复计入段内音符数量。
+                            // 草稿仅提供目标参考，正式主轨道才参与完成判定。
+                            ComposeLessonNote item;
+                            item.type      = note.m_type;
+                            item.timestamp = note.m_timestamp;
+                            item.duration  = note.m_duration;
+                            item.track     = note.m_trackIndex;
+                            item.dtrack    = note.m_dtrack;
+                            item.subNotes.reserve(note.m_subNotes.size());
+                            for ( const auto& sub : note.m_subNotes )
+                                item.subNotes.push_back({ sub.type,
+                                                          sub.timestamp,
+                                                          sub.duration,
+                                                          sub.trackIndex,
+                                                          sub.dtrack });
+                            output.push_back(std::move(item));
+                        }
+                        // release 发布整份结果；UI 只以 acquire
+                        // 查询，不等会话锁。
+                        // 发布后逻辑线程不再修改 notes，页面可无锁完成深比较。
+                        arg.m_result->ready.store(true,
+                                                  std::memory_order_release);
+                    }
+                }
                 // 会话自身处理配置、文件、协作资源和元数据等跨控制器命令。
-                if constexpr (
+                else if constexpr (
                     std::is_same_v<T, CmdUpdateEditorConfig> ||
                     std::is_same_v<T, CmdUpdateViewport> ||
                     std::is_same_v<T, CmdLoadBeatmap> ||

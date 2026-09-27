@@ -65,6 +65,8 @@ add_library(
   UI STATIC
   # 视图基础接口与演练流程。
   src/ui/IUIView.cpp
+  # 教学段落目录仅在服务构造时读取资源，运行时按已生成模型推进。
+  src/ui/walkthrough/ComposeLessonCatalog.cpp
   src/ui/walkthrough/WalkthroughModel.cpp
   src/ui/walkthrough/WalkthroughService.cpp
   src/ui/walkthrough/WalkthroughSpotlight.cpp
@@ -220,6 +222,14 @@ target_include_directories(
   PRIVATE ${PROJECT_SOURCE_DIR}/Modules/Game/Logic/include
   PRIVATE ${PROJECT_SOURCE_DIR}/Modules/Audio/include)
 
+# 开发构建允许直接打开仓库里的 CanonRock 示例，发布安装仍优先识别配置资源。 只传目录路径给实现，具体文件身份在启动时由文件系统确认。
+# 安装包中源码目录不存在时自然回退到配置资源，不引入另一份运行时拷贝。
+target_compile_definitions(
+  UI
+  PRIVATE
+    MMM_CANONROCK_SOURCE_DIRECTORY="${PROJECT_SOURCE_DIR}/assets/walkthroughs/canonrock"
+)
+
 # cmake-format: off
 # 链接依赖边界：
 # - PUBLIC 列表覆盖 UI 公开 API 暴露或消费者必须继承的目标；
@@ -235,6 +245,7 @@ target_link_libraries(
   PUBLIC Audio
          Log
          Common
+         Logic
          Event
          Config
          MMM
@@ -483,13 +494,26 @@ mmm_register_test_case(NAME WelcomeViewTest COMMAND WelcomeViewTest)
 # 演练核心测试不链接图形视图，验证窗口关闭时的事件计数与独立进度恢复。 单独编译 Model 与 Service，保持测试不依赖 Vulkan 和 ImGui
 # 视图。 生成目录提供内嵌演练头，输出目录参数指向构建树 test_output。
 mmm_add_test_executable(
-  UI WalkthroughTest tests/WalkthroughTest.cpp
+  UI
+  WalkthroughTest
+  tests/WalkthroughTest.cpp
+  src/ui/walkthrough/ComposeLessonCatalog.cpp
   src/ui/walkthrough/WalkthroughModel.cpp
   src/ui/walkthrough/WalkthroughService.cpp)
 target_include_directories(
   WalkthroughTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
                           ${CMAKE_CURRENT_BINARY_DIR}/generated)
-target_link_libraries(WalkthroughTest PRIVATE Event 3rd_nlohmann_json
+# 正式示例谱面和隐藏的草稿侧车必须同时随源码分发；测试直接读取只读资产。 此处只传谱面绝对路径，解析器按同目录查找
+# .mmm/draft_lanes.json。 不复制侧车到测试输出，否则可能掩盖仓库漏收录的问题。
+# 测试与应用共用源码目录宏，避免两套身份判断在本地构建中分叉。
+target_compile_definitions(
+  WalkthroughTest
+  PRIVATE
+    MMM_COMPOSE_SAMPLE_FILE="${PROJECT_SOURCE_DIR}/assets/walkthroughs/canonrock/卡农-示例谱面.mmm"
+    MMM_CANONROCK_SOURCE_DIRECTORY="${PROJECT_SOURCE_DIR}/assets/walkthroughs/canonrock"
+)
+# 目录夹具复用正式剪贴板解析器，测试目标需显式链接 Logic。
+target_link_libraries(WalkthroughTest PRIVATE Event Logic 3rd_nlohmann_json
                                               3rd_concurrentqueue)
 mmm_register_test_case(NAME WalkthroughTest COMMAND WalkthroughTest
                        "${CMAKE_BINARY_DIR}/test_output")

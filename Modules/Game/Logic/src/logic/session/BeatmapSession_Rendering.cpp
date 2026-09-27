@@ -1287,6 +1287,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             }
         }
         snapshot->walkthroughEditEvent = m_ctx->walkthroughEditEvent;
+        snapshot->composeNoteRevision  = m_ctx->composeNoteRevision;
         // 批注版本和批注可见项来自同一会话缓存。
         // 消费端可据版本判断提示数据是否已更新。
         snapshot->annotationRevision = m_ctx->annotationRenderCacheRevision;

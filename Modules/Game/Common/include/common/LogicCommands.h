@@ -5,6 +5,7 @@
 #include "common/ChartObjectKind.h"
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
+#include "common/walkthrough/ComposeLessonNotes.h"
 #include "config/EditorConfig.h"
 #include "mmm/Metadata.h"
 #include "mmm/annotation/BeatmapAnnotation.h"
@@ -322,6 +323,15 @@ struct CmdSeek {
 
     /// @brief 是否为拖动进度条期间的连续预览请求。
     bool isScrubbing{ false };
+};
+
+/// @brief 在逻辑线程一次性截取指定教学段落的正式轨道根物件。
+/// @warning 仅在创作教程进入编辑阶段或对象变更时投递；处理时遍历 ECS，
+/// 不允许随普通帧轮询。结果通过发布标志无阻塞交给 UI。
+struct CmdCaptureComposeLessonNotes {
+    double                                m_begin{ 0.0 };  ///< 起点，单位秒。
+    double                                m_end{ 0.0 };    ///< 终点，单位秒。
+    std::shared_ptr<ComposeLessonCapture> m_result;  ///< 跨线程一次性结果。
 };
 
 /**
@@ -969,27 +979,27 @@ using LogicCommand = std::variant<
     CmdUpdateAudioSampleProperties, CmdUpdateObjectTimestamp,
     CmdUpdateObjectSampleVolume, CmdUpdateSelectedObjectSampleVolume,
     CmdUpdateTrackCount, CmdUpdateBgmTrackCount, CmdUpdateDraftTrackCount,
-    CmdSeek, CmdSetPlaybackSpeed, CmdSetKeySoundTrackMute,
-    CmdSetKeySoundTrackGain, CmdSetKeySoundEffectGroupGain,
-    CmdSetDraftKeySoundAreaMute, CmdSetBgmKeySoundAreaMute, CmdChangeTool,
-    CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste, CmdCut,
-    CmdDeleteSelected, CmdMirrorSelected, CmdAlignSelectedToCommonBeats,
-    CmdSelectAll, CmdSetBrushNoteColor, CmdApplyNoteColorToSelection,
-    CmdSetBrushNotePalette, CmdSetBrushAudioResource,
-    CmdApplyNotePaletteToSelection, CmdApplyBrushPaletteToEntity,
-    CmdClearNoteColorOverrides, CmdClearAllNoteColorOverrides, CmdSaveBeatmap,
-    CmdSaveBeatmapAs, CmdPackBeatmap, CmdScroll, CmdPanCanvas,
-    CmdUpdateTimelineEvent, CmdUpdateTimelineEvents, CmdDeleteTimelineEvent,
-    CmdCreateTimelineEvent, CmdUpdateBpmWithKeepSpeedSv,
-    CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdSetNoteAnnotation,
-    CmdUpsertBeatmapAnnotation, CmdRemoveBeatmapAnnotation,
-    CmdReplaceBeatmapData, CmdAcknowledgeCollaborationMutation,
-    CmdSetCollaborationResources, CmdSetCollaborationOfflineReadOnly,
-    CmdSetCollaborationClipboardIsolation, CmdStartMarquee, CmdUpdateMarquee,
-    CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush,
-    CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
-    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
-    CmdUpdateAudioResource, CmdRenameAudioResource,
+    CmdSeek, CmdCaptureComposeLessonNotes, CmdSetPlaybackSpeed,
+    CmdSetKeySoundTrackMute, CmdSetKeySoundTrackGain,
+    CmdSetKeySoundEffectGroupGain, CmdSetDraftKeySoundAreaMute,
+    CmdSetBgmKeySoundAreaMute, CmdChangeTool, CmdSetMousePosition, CmdUndo,
+    CmdRedo, CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdMirrorSelected,
+    CmdAlignSelectedToCommonBeats, CmdSelectAll, CmdSetBrushNoteColor,
+    CmdApplyNoteColorToSelection, CmdSetBrushNotePalette,
+    CmdSetBrushAudioResource, CmdApplyNotePaletteToSelection,
+    CmdApplyBrushPaletteToEntity, CmdClearNoteColorOverrides,
+    CmdClearAllNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
+    CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
+    CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
+    CmdUpdateBpmWithKeepSpeedSv, CmdCreateTimelineEvents,
+    CmdReplaceBeatmapTimings, CmdSetNoteAnnotation, CmdUpsertBeatmapAnnotation,
+    CmdRemoveBeatmapAnnotation, CmdReplaceBeatmapData,
+    CmdAcknowledgeCollaborationMutation, CmdSetCollaborationResources,
+    CmdSetCollaborationOfflineReadOnly, CmdSetCollaborationClipboardIsolation,
+    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
+    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
+    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
+    CmdImportAudio, CmdUpdateAudioResource, CmdRenameAudioResource,
     CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
     CmdExportImdPackage, CmdSaveTemporaryProject>;
 
@@ -1017,6 +1027,7 @@ using LogicCommand = std::variant<
                 std::is_same_v<T, CmdEndMarquee> ||
                 std::is_same_v<T, CmdRemoveMarqueeAt> ||
                 std::is_same_v<T, CmdSeek> ||
+                std::is_same_v<T, CmdCaptureComposeLessonNotes> ||
                 std::is_same_v<T, CmdSetPlaybackSpeed> ||
                 std::is_same_v<T, CmdSetKeySoundTrackMute> ||
                 std::is_same_v<T, CmdSetKeySoundTrackGain> ||

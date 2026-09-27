@@ -1,17 +1,22 @@
 #include "ui/walkthrough/WalkthroughPage.h"
 
+#include "common/render/RenderSnapshotBuffer.h"
+#include "common/walkthrough/ComposeLessonNotes.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/project/ProjectEvents.h"
+#include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/markdown/MarkdownImageCache.h"
 #include "ui/imgui/markdown/MarkdownRenderer.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/ComposeLessonCatalog.h"
 #include "ui/walkthrough/WalkthroughModel.h"
 #include "ui/walkthrough/WalkthroughService.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
@@ -89,6 +94,30 @@
 /// - 页面只读取 UIManager 已归约的生命周期状态，不直接观察逻辑线程项目指针；
 /// - 项目切换或关闭会停止当前 Spotlight，并禁用操作与进入引导按钮；
 /// - 正文和手动“已了解”仍可阅读与使用，不把环境门禁误作知识前置依赖。
+///
+/// CanonRock 创作路线约定：
+/// - 批注段落展开为首播、练习和复播三个业务步骤；
+/// - 切步时绑定当前非 Logo 会话与它的发布缓冲；
+/// - 两处正式示例资源的文件身份决定目标会话；
+/// - 每次进入基础或进阶路线时从独立基线还原正式主轨道物件；
+/// - 草稿侧车、时间线、谱面元数据和其它标签不参与基线还原；
+/// - 快照路径可能为相对路径，启动时使用注册表中的绝对文件身份；
+/// - 欢迎页获得焦点不代表谱面 Session 不存在；启动时查找已打开的匹配标签；
+/// - 多个候选中优先沿用活动标签，避免用户正在查看另一份示例时突然切换；
+/// - 找到目标后通过工作区聚焦请求显示画布，才可上报可视聚光灯目标；
+/// - 后续帧只比较已绑定键，不访问文件系统；
+/// - 预览先暂停、定位，再播放，防止旧位置直接满足终点；
+/// - 练习先暂停并定位，让草稿参考停在同一时间窗；
+/// - 正式物件变化只提供修订号，不在 UI 直接锁会话扫描 ECS；
+/// - 逻辑线程一次性查询段落物件，再发布结果给 UI；
+/// - 结果修订落后于最新快照时丢弃，不沿用旧几何；
+/// - 练习检查段内全部物件与草稿参考，不接受手动跳步；
+/// - 同一对象修订只排一次查询，避免高帧率 UI 堆积逻辑命令；
+/// - 页面销毁或主动退出后，尚在队列中的查询结果仍有共享所有权；
+/// - 查询只读取正式轨道根物件，草稿仍由目录持有的参考提供；
+/// - 复播再次从段首开始，播到终点才接续下一段；
+/// - 退出或切换项目时停播并清理旧目标身份；
+/// - 基础与进阶分支独立导航，不隐式串到另一分支。
 
 namespace MMM::UI
 {
@@ -119,6 +148,94 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
              manager->hasOpenBeatmapEditor(),
              manager->getActiveProjectRoot()) )
         return;
+    m_guideError.clear();
+    const auto& language =
+        Config::AppConfig::instance().getEditorSettings().language;
+    // 创作教程只控制当前 CanonRock 示例谱面；禁止把播放命令误发给其它标签。
+    // 这些身份查询只发生在步骤交接时，不进入每帧高亮路径。
+    std::shared_ptr<Logic::BeatmapSession>                composeSession;
+    std::shared_ptr<Common::Render::RenderSnapshotBuffer> composeBuffer;
+    std::shared_ptr<::MMM::BeatMap>                       composeBaseline;
+    const Common::Render::RenderSnapshot* composeSnapshot = nullptr;
+    std::string                           composeBeatmapKey;
+    int32_t                               composeSessionIndex = -1;
+    if ( step.m_composeLesson ) {
+        // 欢迎页取得焦点后，活动 Session 不一定还是示例谱面；从已打开的
+        // 标签中找精确的文件身份，优先使用此前活动的那个匹配项。
+        // 列表仅在切步时复制，不能在每帧 UI 中等待注册表锁。
+        auto&      engine  = Logic::EditorEngine::instance();
+        const auto entries = engine.getSessionEntries();
+        const auto allows  = [&](std::size_t index) {
+            // 先排除空项和 Logo；这些项没有可播放的正式谱面。
+            // 文件身份检查涉及磁盘，只能留在这个低频启动闭包内。
+            return index < entries.size() && entries[index].session &&
+                   !entries[index].isLogoPlaceholder &&
+                   Walkthrough::canonRockComposeBeatmapAllows(
+                       Config::utf8ToPath(entries[index].beatmapPathKey));
+        };
+        const auto activeIndex = engine.getActiveSessionIndex();
+        if ( activeIndex >= 0 && allows(static_cast<std::size_t>(activeIndex)) )
+            composeSessionIndex = activeIndex;
+        else
+            for ( std::size_t index = 0; index < entries.size(); ++index )
+                if ( allows(index) ) {
+                    composeSessionIndex = static_cast<int32_t>(index);
+                    break;
+                }
+        if ( composeSessionIndex >= 0 ) {
+            // 会话和相机来自同一注册表项，避免分别读取活动身份时发生错配。
+            const auto& entry =
+                entries[static_cast<std::size_t>(composeSessionIndex)];
+            composeSession = entry.session;
+            composeBuffer  = engine.getSyncBuffer(entry.cameraId);
+            composeSnapshot =
+                composeBuffer ? composeBuffer->getReadingSnapshot() : nullptr;
+        }
+        if ( !composeSession || !composeSnapshot ||
+             !composeSnapshot->hasBeatmap ) {
+            // 不启动遮罩，直接在欢迎页说明下一步应打开的资源。
+            // 错误谱面被选中时必须保留编辑器正常输入。
+            // 说明随设置语言显示，但谱面身份仍使用同一规范路径判定。
+            m_guideError =
+                Config::AppConfig::instance().getEditorSettings().language ==
+                        "en_us"
+                    ? "Open the CanonRock sample chart before starting the "
+                      "composition walkthrough."
+                    : "请先在 CanonRock "
+                      "项目中打开《卡农-示例谱面.mmm》再进入创作引导。";
+            return;
+        }
+        composeBeatmapKey = composeSnapshot->beatmapPathKey;
+        if ( !branch.m_steps.empty() &&
+             branch.m_steps.front().m_id == step.m_id ) {
+            // 只在开始或重练路线时还原；段与段之间必须保留本轮已完成的修改。
+            // 独立基线不受练习谱面保存影响，避免上次练习成为下次的标准答案。
+            // 用户可能直接编辑源码示例，也可能编辑同步到配置目录的副本。
+            // 因此基线跟随当前匹配的谱面目录，而不是硬编码其中一处路径。
+            // 侧车目录不会被当成可编辑谱面标签，教学主画布和基线分离。
+            // 此处只在路线入口读取文件，切到下一段时不再触发磁盘访问。
+            const auto samplePath = Config::utf8ToPath(
+                entries[static_cast<std::size_t>(composeSessionIndex)]
+                    .beatmapPathKey);
+            const auto baselinePath =
+                samplePath.parent_path() / ".mmm" / "compose_baseline.mmm";
+            auto baseline = ::MMM::BeatMap::loadFromFile(baselinePath);
+            if ( baseline.m_allNotes.empty() ||
+                 baseline.m_baseMapMetadata.track_count !=
+                     composeSnapshot->trackCount ) {
+                // 不完整基线不能用于整体替换；保留现有谱面并解释原因。
+                // 轨道数不符时即使 Note 可解析，也无法保证后续教学位置正确。
+                m_guideError =
+                    language == "en_us"
+                        ? "The CanonRock reference notes are missing or "
+                          "invalid."
+                        : "CanonRock 主轨道的原始示范物件缺失或无效。";
+                return;
+            }
+            composeBaseline =
+                std::make_shared<::MMM::BeatMap>(std::move(baseline));
+        }
+    }
     // 每次从分支入口重练打开项目，都先单独关闭旧项目；关闭确认仍可交互。
     // 关闭流程完成前不启动 Spotlight，也不排入新打开请求覆盖关闭意图。
     // 回看首步也遵守同一规则，不能保留上轮的活动项目继续演示打开。
@@ -144,8 +261,6 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
                 Event::ProjectCloseRequestedEvent{});
         return;
     }
-    const auto& language =
-        Config::AppConfig::instance().getEditorSettings().language;
     const auto& configuredPrompt = step.m_guide->m_prompt.get(language);
     // 路线顺序是前后导航的唯一依据，历史完成度不能删除回看入口。
     bool hasPrevious = false;
@@ -197,6 +312,34 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
         .nextSignalRevisionAtRunStart = nextSignalRevisionAtRunStart,
         .reviewing                    = reviewing,
     };
+    if ( step.m_composeLesson ) {
+        // 会话队列按停播、定位、按阶段开播的顺序执行。
+        // 练习阶段保持暂停，给用户稳定的拍位来绘制或调整物件。
+        const auto& lesson            = *step.m_composeLesson;
+        auto&       guide             = *m_activeGuide;
+        guide.composeSession          = std::move(composeSession);
+        guide.composeBuffer           = std::move(composeBuffer);
+        guide.composeBeatmapKey       = std::move(composeBeatmapKey);
+        guide.composeBaselineRevision = composeSnapshot->composeNoteRevision;
+        const double begin            = lesson.m_beginMs / 1000.0;
+        guide.composeSession->pushCommand(Logic::CmdSetPlayState{ false });
+        if ( composeBaseline ) {
+            // 逻辑队列依次停播、还原正式物件、定位、开播，首播不会闪过旧内容。
+            // 对象替换沿用既有命令，草稿及非对象数据域保持原状。
+            // 同一轮只提交一次还原；练习中绘制的 Note 会保留到后续段落。
+            guide.composeSession->pushCommand(Logic::CmdReplaceBeatmapData{
+                .sourceBeatmap  = std::move(composeBaseline),
+                .replaceObjects = true,
+            });
+        }
+        guide.composeSession->pushCommand(Logic::CmdSeek{ begin });
+        if ( lesson.m_phase != Walkthrough::ComposeLessonPhase::Practice )
+            guide.composeSession->pushCommand(Logic::CmdSetPlayState{ true });
+        // 欢迎页与谱面常在同一 Dock 标签组；启动后必须让目标画布可见，
+        // 否则聚光灯目标无法上报，用户只能看到仍停在原处的教程正文。
+        Logic::EditorEngine::instance().requestSessionFocus(
+            composeSessionIndex);
+    }
     // 其它主题不继承项目白名单；本主题的所有入口共享同一资源身份。
     // 状态只影响用户触发的 UI 文件路径入口，不改变项目加载协议。
     // 这样普通主题的项目操作不会意外继承 CanonRock 路径过滤。
@@ -208,11 +351,17 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
 /// @param manager 提供全局 Spotlight。
 void WalkthroughPage::stopGuide(UIManager* manager)
 {
+    if ( m_activeGuide && m_activeGuide->composeSession )
+        // 用户按 Esc 或主动结束时，不让自动预览继续在后台播放。
+        // 此命令只在退出时排入队列，不进入每帧更新路径。
+        m_activeGuide->composeSession->pushCommand(
+            Logic::CmdSetPlayState{ false });
     // 取消路线同时取消等待关闭的请求；事件已发出时仍由原关闭流程处理。
     // 清理路径状态防止关闭欢迎标签后误限制普通打开项目操作。
     manager->walkthroughSpotlight().stop();
     m_activeGuide.reset();
     m_pendingOpenGuide.reset();
+    m_guideError.clear();
     Walkthrough::restrictOpenProjectGuideToCanonRock(false);
 }
 
@@ -306,6 +455,73 @@ void WalkthroughPage::updateGuide(UIManager* manager)
     if ( current == branch->m_steps.end() ) {
         stopGuide(manager);
         return;
+    }
+    if ( current->m_composeLesson ) {
+        // 只读画布已发布的数据，避免每帧等待会话 update 的长持锁区。
+        // 快照消失或换谱面后，继续验收会污染另一张谱面的学习进度。
+        const auto& lesson   = *current->m_composeLesson;
+        auto&       guide    = *m_activeGuide;
+        const auto* snapshot = guide.composeBuffer
+                                   ? guide.composeBuffer->getReadingSnapshot()
+                                   : nullptr;
+        if ( !guide.composeSession || !snapshot || !snapshot->hasBeatmap ||
+             snapshot->beatmapPathKey != guide.composeBeatmapKey ) {
+            stopGuide(manager);
+            return;
+        }
+        const double begin = lesson.m_beginMs / 1000.0;
+        const double end   = lesson.m_endMs / 1000.0;
+        if ( lesson.m_phase == Walkthrough::ComposeLessonPhase::Practice ) {
+            // 先等新修改进入已发布快照，再请求一次性逻辑查询；普通帧不扫描
+            // ECS。每次重新开始路线会先恢复示例物件，预设内容不算本轮练习。
+            // 草稿修改可能触发修订，但最终只比较正式主轨道。
+            if ( snapshot->composeNoteRevision >
+                 guide.composeBaselineRevision ) {
+                if ( guide.composeCapture && guide.composeCapture->ready.load(
+                                                 std::memory_order_acquire) ) {
+                    // acquire 后才可安全读取逻辑线程填充的完整数组。
+                    // 版本落后于最新快照时，旧查询不能完成当前目标。
+                    if ( guide.composeCaptureRevision ==
+                         snapshot->composeNoteRevision ) {
+                        if ( const auto* reference =
+                                 service.composeLesson(lesson.m_lessonIndex);
+                             reference &&
+                             Walkthrough::matchesComposeLessonNotes(
+                                 *reference, guide.composeCapture->notes) )
+                            spotlight.completeTarget("compose.lesson.practice",
+                                                     true);
+                    }
+                    guide.composeCapture.reset();
+                }
+                if ( !guide.composeCapture &&
+                     guide.composeCaptureRevision !=
+                         snapshot->composeNoteRevision ) {
+                    // 同一修订只排一次查询，不随 UI 帧率重复扫描 ECS。
+                    // 命令和页面共享结果所有权，页面退出也不会悬空。
+                    guide.composeCaptureRevision =
+                        snapshot->composeNoteRevision;
+                    guide.composeCapture =
+                        std::make_shared<Logic::ComposeLessonCapture>();
+                    guide.composeSession->pushCommand(
+                        Logic::CmdCaptureComposeLessonNotes{
+                            begin, end, guide.composeCapture });
+                }
+            }
+        } else {
+            // 旧帧可能仍停留在上一段末尾；必须先看到本次播放从段首启动。
+            // 用跨过终点而非恰好等于终点判断，避免离散帧跳过边界。
+            // 回看时重新播放属于明确的新业务动作，符合强制步骤语义。
+            guide.composePlaybackStarted |=
+                snapshot->isPlaying && snapshot->playbackTime >= begin - 0.05 &&
+                snapshot->playbackTime < end;
+            if ( guide.composePlaybackStarted &&
+                 snapshot->playbackTime >= end ) {
+                // 停播先入队；下一步骤会重新定位自己的开始时间。
+                guide.composeSession->pushCommand(
+                    Logic::CmdSetPlayState{ false });
+                spotlight.completeTarget("compose.lesson.playback", true);
+            }
+        }
     }
     // 返回请求优先于完成或业务信号；点击返回的同帧不能顺便完成当前步骤。
     if ( spotlight.consumePreviousStepRequest() ) {
@@ -582,6 +798,10 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
                         }
                     }
                     ImGui::EndDisabled();
+                    // 长路线的底部错误信息不可见；入口校验失败必须就地反馈。
+                    if ( !m_guideError.empty() &&
+                         topic.m_id == "mmm.compose-beatmap" )
+                        ImGui::TextWrapped("%s", m_guideError.c_str());
                     ImGui::Spacing();
                 }
                 // 步骤内容缩进到状态圆之后，与分支标题文字对齐。

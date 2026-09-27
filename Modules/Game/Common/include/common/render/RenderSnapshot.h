@@ -427,6 +427,8 @@ struct RenderSnapshot {
         int           subIndex{ -1 };
         Kind          kind{ Kind::None };
     } walkthroughEditEvent{};
+    /// @brief 仅在物件变更批次递增，创作教程据此低频请求完整段落快照。
+    std::uint64_t composeNoteRevision{ 0 };
     /// @brief 普通悬浮拾取与调试显示使用的横向包围盒缩放。
     float interactionHitboxScaleX{ 1.0F };
     /// @brief 普通悬浮拾取与调试显示使用的纵向包围盒缩放。
@@ -795,6 +797,7 @@ struct RenderSnapshot {
         walkthroughPracticeNotes = {};
         // 复用快照缓冲时不能让上张谱面的释放事务流入下一张谱面。
         walkthroughEditEvent    = {};
+        composeNoteRevision     = 0;
         interactionHitboxScaleX = 1.0F;
         interactionHitboxScaleY = 1.0F;
         overlapMasks.clear();

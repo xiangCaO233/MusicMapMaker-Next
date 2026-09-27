@@ -76,6 +76,8 @@ struct SessionContext {
     std::array<WalkthroughPracticeNote, 4> walkthroughPracticeNotes{};
     /// @brief 最近一次结束的编辑手势；仅发布标记，不在热路径复制音符列表。
     Common::Render::RenderSnapshot::WalkthroughEditEvent walkthroughEditEvent{};
+    /// @brief 教学只读验收用的正式物件变更序号；仅逻辑线程写入。
+    std::uint64_t  composeNoteRevision{ 0 };
     entt::registry sampleRegistry;    ///< 自动采样实体的独立 ECS 注册表
     entt::registry timelineRegistry;  ///< 时间轴事件(BPM等)的 ECS 注册表
     /// @brief 玩家物件已选实体索引，避免框选热路径扫描完整 Registry。
