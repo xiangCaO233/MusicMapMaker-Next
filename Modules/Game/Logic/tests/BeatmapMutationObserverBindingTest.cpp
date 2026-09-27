@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdint>
 #include <filesystem>
 #include <latch>
 #include <memory>
@@ -1474,6 +1475,71 @@ private:
     }
     return true;
 }
+
+/// @brief 验证教学红框仅删除同一谱面修订中的目标 Note，且删除可以撤销。
+/// @return 过期请求被拒绝，当前请求删除目标，撤销后恢复时返回 true。
+/// @note 使用加载后的真实 ECS 身份，避免仅靠时间轨道的伪造断言。
+/// @note 源模型时间单位为毫秒，ECS 中的时间单位为秒。
+/// @note 实体号由真实加载流程分配，不能在用例里自行构造一个整数。
+/// @note 谱面实例标识与生产按钮使用相同的共享对象地址约定。
+/// @note 首次请求刻意携带未来修订号，验证过期标记不能误删。
+/// @note 拒绝请求之后必须先断言物件仍在，才有意义继续删除验证。
+/// @note 第二次请求沿用捕获时的修订，模拟用户点击当前红框。
+/// @note 删除后检查会话 Registry，不只检查编辑动作是否入栈。
+/// @note 撤销单独推进一轮 update，避免与删除在同批次合并。
+/// @note 恢复验证要求同时间同轨道的正式根 Note 再次出现。
+/// @note 本例不修改用户项目文件，也不打开图形界面。
+/// @note 实际使用时段落限制由教学页下发；这里设置最小合法窗口。
+/// @note 若载入未生成实体则立即失败，不发送含空实体的命令。
+/// @note 请求中的 Note 类型参与逻辑层二次检查，保持目标绑定。
+/// @note 测试聚焦错误框按钮的逻辑命令，不模拟 ImGui 鼠标事件。
+[[nodiscard]] bool testComposeLessonTargetedRemoval()
+{
+    MMM::Logic::BeatmapSession session;
+    MMM::Config::EditorConfig  config;
+    auto                       beatmap = makeBeatmap();
+    auto&                      note = beatmap->m_noteData.notes.emplace_back();
+    note.m_timestamp                = 500.0;
+    note.m_track                    = 2;
+    beatmap->sync();
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdLoadBeatmap{ .beatmap = std::move(beatmap) },
+    });
+    session.update(0.0, config, false);
+
+    auto& context = session.getContextMutable();
+    context.composeLessonInputMode =
+        MMM::Logic::ComposeLessonInputMode::Practice;
+    context.composeLessonBegin = 0.4;
+    context.composeLessonEnd   = 0.6;
+    const auto notes =
+        context.noteRegistry.view<const MMM::Logic::NoteComponent>();
+    if ( notes.empty() ) return false;
+    const auto entity = *notes.begin();
+    // 同一实体号只在本谱面实例和当前修订内有效，旧提示不能删除新编辑。
+    const MMM::Logic::CmdRemoveComposeLessonNote request{
+        .entity = entity,
+        .beatmapInstanceId =
+            reinterpret_cast<std::uintptr_t>(context.currentBeatmap.get()),
+        .composeNoteRevision = context.composeNoteRevision,
+        .timestamp           = 0.5,
+        .track               = 2,
+        .type                = MMM::NoteType::NOTE,
+    };
+    auto stale = request;
+    ++stale.composeNoteRevision;
+    session.pushCommand(MMM::Logic::LogicCommand{ stale });
+    session.update(0.0, config, false);
+    if ( !hasRootNote(session, 0.5, 2) ) return false;
+
+    session.pushCommand(MMM::Logic::LogicCommand{ request });
+    session.update(0.0, config, false);
+    if ( hasRootNote(session, 0.5, 2) ) return false;
+    // 红框按钮只建立一条普通可撤销动作，不改变其它 Note 的撤销顺序。
+    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdUndo{} });
+    session.update(0.0, config, false);
+    return hasRootNote(session, 0.5, 2);
+}
 }  // namespace
 
 /// @brief 运行协作谱面观察者绑定回归测试。
@@ -1657,6 +1723,7 @@ int main()
                    testOfflineCollaborationSessionIsReadOnly() &&
                    testCollaborationMutationPermissionsAreLocalGate() &&
                    testCollaborationBgmPermissionIsLocalGate() &&
+                   testComposeLessonTargetedRemoval() &&
                    testGuestConnectionBlocksLocalProjectOpening()
                ? 0
                : 1;

@@ -442,6 +442,36 @@ int main(int argc, char** argv)
     geometry.push_back(geometry.front());
     if ( matchesComposeLessonNotes(composeLessons->front(), geometry) )
         return 72;
+    // 错误提示必须与最终验收使用同一套一对一几何语义：正确物件不标红，
+    // 多出的重叠物件仍为错误，遗漏目标仍有待操作框。
+    // 匹配结果按资源参考和实际数组的原始下标输出，方便画布逐项定位。
+    geometry = composeLessons->front().m_reference;
+    const auto completeFeedback =
+        compareComposeLessonNotes(composeLessons->front(), geometry, 17, 9);
+    // 示例谱面实例令牌必须原样保留，供画布拒绝其它同路径标签页。
+    // 正确完成时不应再有任何目标框或错误框。
+    if ( completeFeedback.beatmapInstanceId != 17 ||
+         completeFeedback.composeNoteRevision != 9 ||
+         std::ranges::find(completeFeedback.expectedMatched, false) !=
+             completeFeedback.expectedMatched.end() ||
+         std::ranges::find(completeFeedback.actualMatched, false) !=
+             completeFeedback.actualMatched.end() )
+        return 117;
+    geometry.push_back(geometry.front());
+    const auto duplicateFeedback =
+        compareComposeLessonNotes(composeLessons->front(), geometry, 17, 9);
+    // 两个完全重叠的实际 Note 只能消费一份参考；多出的那个标红。
+    // 数量错误不能靠渲染时合并同位置矩形来掩盖。
+    if ( std::ranges::count(duplicateFeedback.actualMatched, false) != 1 )
+        return 118;
+    geometry.front().track += 1;
+    const auto wrongTrackFeedback =
+        compareComposeLessonNotes(composeLessons->front(), geometry, 17, 9);
+    // 另一个重叠 Note 仍能覆盖参考；移到错误轨道的那颗独立标红。
+    // 匹配算法不能因第一份实际物件先失败就放弃搜索后续对象。
+    if ( std::ranges::count(wrongTrackFeedback.expectedMatched, false) != 0 ||
+         std::ranges::count(wrongTrackFeedback.actualMatched, false) != 1 )
+        return 119;
     if ( composeBeatmapTopic->m_branches.size() != 2 ||
          composeBeatmapTopic->m_branches[0].m_steps.size() != 12 ||
          composeBeatmapTopic->m_branches[1].m_steps.size() != 3 )

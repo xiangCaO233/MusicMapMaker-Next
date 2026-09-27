@@ -2678,6 +2678,9 @@ bool BeatmapSession::processCommands()
                             item.duration  = note.m_duration;
                             item.track     = note.m_trackIndex;
                             item.dtrack    = note.m_dtrack;
+                            // 根实体只在本次谱面实例内有效，画布按钮必须
+                            // 同时传回实例令牌并由执行器重新核验。
+                            item.entity = entity;
                             item.subNotes.reserve(note.m_subNotes.size());
                             for ( const auto& sub : note.m_subNotes )
                                 item.subNotes.push_back({ sub.type,
@@ -2789,6 +2792,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdClearNoteColorOverrides> ||
                     std::is_same_v<T, CmdClearAllNoteColorOverrides> ||
                     std::is_same_v<T, CmdDeleteSelected> ||
+                    std::is_same_v<T, CmdRemoveComposeLessonNote> ||
                     std::is_same_v<T, CmdMirrorSelected> ||
                     std::is_same_v<T, CmdAlignSelectedToCommonBeats> ||
                     std::is_same_v<T, CmdCreateTimelineEvent> ) {
@@ -2827,6 +2831,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdUpdateDraftTrackCount> ||
                     std::is_same_v<T, CmdPaste> ||
                     std::is_same_v<T, CmdDeleteSelected> ||
+                    std::is_same_v<T, CmdRemoveComposeLessonNote> ||
                     std::is_same_v<T, CmdMirrorSelected> ||
                     std::is_same_v<T, CmdAlignSelectedToCommonBeats> ||
                     std::is_same_v<T, CmdApplyNoteColorToSelection> ||

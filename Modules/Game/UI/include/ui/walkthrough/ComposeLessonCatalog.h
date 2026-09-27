@@ -2,6 +2,7 @@
 
 #include "common/walkthrough/ComposeLessonNotes.h"
 
+#include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <string>
@@ -20,6 +21,25 @@ struct ComposeLesson {
     /// @brief 草稿区同一时间窗内的目标几何；删除练习可为空。
     std::vector<Logic::ComposeLessonNote> m_reference;
 };
+
+/// @brief 一次正式物件查询与草稿目标的一对一匹配结果。
+/// @details 只在修订变化后重建，画布每帧仅读取匹配标记绘制提示。
+struct ComposeLessonFeedback {
+    const ComposeLesson* lesson{
+        nullptr
+    };  ///< 服务内稳定参考，退出路线时失效。
+    std::uintptr_t beatmapInstanceId{ 0 };    ///< 防止跨谱面显示旧物件。
+    std::uint64_t  composeNoteRevision{ 0 };  ///< 防止展示旧修订的错误物件。
+    std::vector<Logic::ComposeLessonNote> actual;  ///< 最近一次逻辑查询结果。
+    std::vector<bool> expectedMatched;  ///< 每个草稿目标是否已有正式物件。
+    std::vector<bool> actualMatched;    ///< 每个正式物件是否满足一份目标。
+};
+
+/// @brief 对实际物件与教学参考作完整一对一匹配并产生绘制反馈。
+/// @warning 只在段落进入和正式物件修订后调用，不进入每帧绘制路径。
+ComposeLessonFeedback compareComposeLessonNotes(
+    const ComposeLesson& lesson, std::vector<Logic::ComposeLessonNote> actual,
+    std::uintptr_t beatmapInstanceId, std::uint64_t composeNoteRevision);
 
 /// @brief 从示例谱面读取并配对教学开始、结束批注。
 /// @param beatmapFile CanonRock 教学谱面的实际路径。

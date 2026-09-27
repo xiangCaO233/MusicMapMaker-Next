@@ -24,6 +24,7 @@
 /// 失败手势则在结束命令上携带取消标记，由逻辑线程原子丢弃临时画笔。
 /// 这种分工避免 UI 直接创建 Note，也避免用普通 Undo 误伤更早的编辑历史。
 #include "canvas/Basic2DCanvas.h"
+#include "canvas/AnnotationTargetHint.h"
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "canvas/CanvasTabTitle.h"
 #include "canvas/CollaborationPeerColor.h"
@@ -46,6 +47,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/ComposeLessonCatalog.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
 #include "ui/walkthrough/WelcomeView.h"
 #include <algorithm>
@@ -655,6 +657,199 @@ Basic2DCanvas::Basic2DCanvas(
 /// @details unique_ptr 成员按声明逆序自动释放；GPU 资源清理由基类和
 /// 渲染器生命周期负责，因此析构体无需显式等待设备空闲。
 Basic2DCanvas::~Basic2DCanvas() {}
+
+/// @brief 在玩家轨道绘制教学目标的批注式框与错误物件定向删除按钮。
+/// @details 画布与欢迎页共用 UIManager，但目标数据仍由教学页负责；
+/// 这里借用当前页的只读反馈，退出或切步后不会留下孤立的目标缓存。
+/// 反馈只在逻辑线程完成正式物件查询后替换，画布本身不访问 ECS。
+///
+/// @par 目标与错误的含义
+/// 草稿参考未被一对一几何匹配时呈现普通批注强调框，提示用户下一步放置点。
+/// 实际正式物件未匹配任何草稿时呈现同形状红框，不要求它必须多于参考数量；
+/// 类型、轨道、时间或折线路径不一致也都属于未匹配。
+/// 因此目标框与错误框可以同时出现，分别指向应有与已有的位置。
+///
+/// @par 坐标与裁剪
+/// 目标使用当前相机的玩家轨道投影，避免横向平移后仍留在旧位置。
+/// 时间通过与协作视野相同的 Scroll 分段转换到当前视觉帧。
+/// 纹理宽高来自快照而非固定常数，随 Note 尺寸设置同步变化。
+/// Hold 身体覆盖起止时间，Flick 连接覆盖起止轨道；折线再绘制各子段。
+/// 批注框绘制器统一裁剪在画布内，Dock 中相邻的时间线和预览不受覆盖。
+///
+/// @par 撤销按钮
+/// 按钮停靠在错误框一侧；右侧放不下时移到左侧，再限定在画布范围。
+/// 按钮点击只传递目标根实体、谱面实例和捕获时几何，不发送普通 CmdUndo。
+/// 逻辑线程再次核验这些字段，物件已移动或切谱时请求无操作。
+/// 红框边按钮在 ImGui 层消费鼠标，本帧画笔不能把点击解释为新 Note。
+/// 按钮产生的删除仍进入正常编辑历史，用户可以通过常规撤销恢复。
+/// @warning UI 热路径：反馈数组仅在物件修订后重建，此处只读取当前可见命中框。
+bool Basic2DCanvas::updateComposeLessonHints(
+    UI::UIManager*                        sourceManager,
+    const Common::Render::RenderSnapshot& snapshot,
+    const ImVec2& canvasScreenPosition, const ImVec2& canvasSize)
+{
+    // Spotlight 负责步骤真值；无练习时不查询欢迎视图和配置单例。
+    // 活动页也可能在关闭欢迎标签时销毁，不能缓存其对象指针。
+    if ( !sourceManager ||
+         !sourceManager->walkthroughSpotlight().awaitingTarget(
+             "compose.lesson.practice") )
+        return false;
+    const auto* welcome  = sourceManager->getView<UI::WelcomeView>("Welcome");
+    const auto* feedback = welcome ? welcome->composeLessonFeedback() : nullptr;
+    // 同一路线可能有多张示例谱面标签；只有启动步骤时记录的那张
+    // BeatMap 实例可承接教学标记，路径相同也不能跨实例套用。
+    if ( !feedback || !feedback->lesson || !snapshot.hasBeatmap ||
+         feedback->beatmapInstanceId != snapshot.beatmapInstanceId ||
+         snapshot.trackCount <= 0 )
+        return false;
+
+    // 画布宽度、用户自定义轨道布局和相机平移共同决定真实轨中心。
+    // 只拿一份投影，避免每颗 Note 重算布局造成逐帧额外开销。
+    const auto& layout =
+        Config::AppConfig::instance().getVisualConfig().trackLayoutForKeyCount(
+            snapshot.trackCount);
+    const auto projection =
+        Logic::calculateCanvasLaneProjection(canvasSize.x,
+                                             snapshot.trackCount,
+                                             snapshot.bgmTrackCount,
+                                             layout,
+                                             snapshot.canvasHorizontalOffsetX,
+                                             true,
+                                             snapshot.bmsEditingEnabled,
+                                             snapshot.draftLanesEnabled,
+                                             snapshot.draftTrackCount,
+                                             true);
+    // 尚未完成离屏绘制时纹理尺寸可能为零，此帧没有可靠定位依据。
+    // 等下一代快照自然重试，不使用硬编码宽高猜测操作点。
+    if ( !projection.valid || snapshot.playerNoteWidth <= 0.0F ||
+         snapshot.playerNoteHeight <= 0.0F )
+        return false;
+
+    // 缺少的参考物件按与主画布 Note 相同的轨道中心、时间映射和纹理尺寸
+    // 绘制；Hold 和折线节点分别给出可操作的完整时间/轨道范围。
+    const auto drawExpected =
+        [&](int track, double time, double duration, int dtrack) {
+            if ( track < 0 || track >= snapshot.trackCount ) return;
+            // Flick 的方向可能指向轨道域外；边框只能落在可编辑玩家域。
+            // 有效谱面目标通常已在域内，裁剪只是容错而非验收规则。
+            const int endTrack =
+                std::clamp(track + dtrack, 0, snapshot.trackCount - 1);
+            const float laneWidth = projection.player.singleTrackWidth;
+            const float x = projection.player.leftX +
+                            (static_cast<float>(track) + 0.5F) * laneWidth;
+            const float endX =
+                projection.player.leftX +
+                (static_cast<float>(endTrack) + 0.5F) * laneWidth;
+            // 当前时间不一定在正中；用同一 Scroll/Jump/HS 映射投影
+            // 起止点后再合并范围，正反滚速都不会令矩形上下颠倒。
+            const float y =
+                collaborationTimeToCanvasY(snapshot, time, canvasSize.y);
+            const float endY = collaborationTimeToCanvasY(
+                snapshot, time + std::max(0.0, duration), canvasSize.y);
+            const float halfWidth  = snapshot.playerNoteWidth * 0.5F + 5.0F;
+            const float halfHeight = snapshot.playerNoteHeight * 0.5F + 5.0F;
+            // 五像素留白与普通批注提示一致；视觉尺寸从真实 Note 快照取值。
+            // 对长条和滑键只扩张外包范围，不改变编辑器的真实命中区域。
+            AnnotationTargetHintBounds bounds{
+                std::min(x, endX) - halfWidth,
+                std::min(y, endY) - halfHeight,
+                std::max(x, endX) + halfWidth,
+                std::max(y, endY) + halfHeight,
+            };
+            // 当前段落可能比视口高很多，离屏目标不进入 ImGui 绘制列表。
+            // 屏幕滚动后逐帧重投影，自然出现对应的目标框。
+            if ( bounds.right < 0.0F || bounds.left > canvasSize.x ||
+                 bounds.bottom < 0.0F || bounds.top > canvasSize.y )
+                return;
+            renderAnnotationTargetHint(
+                bounds, canvasScreenPosition, canvasSize.x, canvasSize.y);
+        };
+    // 目标顺序沿用资源包中的草稿顺序，不对 UI 帧做排序或格式转换。
+    // 同位置重叠目标由匹配标记逐个消费，未完成数量仍准确。
+    for ( std::size_t index = 0; index < feedback->lesson->m_reference.size();
+          ++index ) {
+        if ( index < feedback->expectedMatched.size() &&
+             feedback->expectedMatched[index] )
+            continue;
+        const auto& note = feedback->lesson->m_reference[index];
+        drawExpected(note.track, note.timestamp, note.duration, note.dtrack);
+        // Polyline 子段是独立可操作部位；只框父头会隐藏后续拐点。
+        // 每段按自己的时间、轨道与拖尾方向单独投影。
+        for ( const auto& sub : note.subNotes )
+            drawExpected(sub.track, sub.timestamp, sub.duration, sub.dtrack);
+    }
+
+    // 错误物件用快照里真实的可见包围盒，和普通批注悬浮框保持一致。
+    // 按钮只携带已核对的根实体；逻辑线程还会检查谱面实例和几何。
+    bool buttonHovered = false;
+    // 绝对定位按钮不能影响画布窗口随后创建的正常控件位置。
+    // 因此退出叠层时必须恢复进入前的 ImGui 布局光标。
+    const ImVec2 savedCursor = ImGui::GetCursorScreenPos();
+    for ( std::size_t index = 0; index < feedback->actual.size(); ++index ) {
+        if ( index < feedback->actualMatched.size() &&
+             feedback->actualMatched[index] )
+            continue;
+        const auto& note = feedback->actual[index];
+        // 新编辑已经进入快照而反馈尚未重查时，旧红框不能继续提供删除入口。
+        if ( feedback->composeNoteRevision != snapshot.composeNoteRevision )
+            continue;
+        if ( note.entity == entt::null ) continue;
+        // 复用批注对象的命中框合并规则；长条身体、头尾与折线段
+        // 都被收敛进同一个根目标提示，而不是只标一个纹理片段。
+        Common::Render::AnnotationRenderItem target;
+        target.targetKind   = ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT;
+        target.targetEntity = note.entity;
+        const auto bounds =
+            findAnnotationTargetHintBounds(target, snapshot.hitboxes);
+        // 错误物件已经滚出视口时保持反馈状态，但不在窗口边缘伪造位置。
+        // 回到该时间点后快照重新生成命中框，红框会再次出现。
+        if ( !bounds ) continue;
+        renderAnnotationTargetHint(*bounds,
+                                   canvasScreenPosition,
+                                   canvasSize.x,
+                                   canvasSize.y,
+                                   AnnotationTargetHintStyle::Error);
+        constexpr const char* LABEL      = "撤销此物件";
+        const ImVec2          buttonSize = ImGui::CalcTextSize(LABEL);
+        const float           width =
+            buttonSize.x + ImGui::GetStyle().FramePadding.x * 2.0F;
+        const float height =
+            buttonSize.y + ImGui::GetStyle().FramePadding.y * 2.0F;
+        // 小窗口无法完整容纳按钮时仅保留红框，不创建被裁掉的点击区。
+        // 用户放大窗口或调整停靠尺寸后可直接操作同一物件。
+        if ( canvasSize.x < width || canvasSize.y < height ) continue;
+        const float desiredX = bounds->right + 7.0F + width <= canvasSize.x
+                                   ? bounds->right + 7.0F
+                                   : bounds->left - width - 7.0F;
+        // 先尝试框右边，再尝试左边；极窄画布仍由 clamp 保持可点击。
+        // 按钮的坐标以同一画布内容矩形为界，不跨入批注或预览 Dock。
+        const float buttonX = std::clamp(desiredX, 0.0F, canvasSize.x - width);
+        const float buttonY =
+            std::clamp(bounds->top, 0.0F, canvasSize.y - height);
+        ImGui::SetCursorScreenPos({ canvasScreenPosition.x + buttonX,
+                                    canvasScreenPosition.y + buttonY });
+        // 实体可能重叠，但本次查询索引唯一，确保多个按钮 ID 不碰撞。
+        // 下一次物件修订重建反馈后 ID 变化不影响谱面实体身份。
+        ImGui::PushID(static_cast<int>(index));
+        const bool clicked = UI::FeedbackSmallButton(LABEL);
+        buttonHovered |= ImGui::IsItemHovered() || ImGui::IsItemActive();
+        ImGui::PopID();
+        // 删除命令的安全性不能只依赖 UI 快照：逻辑队列执行时还会复核
+        // 实例、实体存活、根物件结构以及段落范围。
+        if ( clicked )
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdRemoveComposeLessonNote{
+                    .entity              = note.entity,
+                    .beatmapInstanceId   = snapshot.beatmapInstanceId,
+                    .composeNoteRevision = feedback->composeNoteRevision,
+                    .timestamp           = note.timestamp,
+                    .track               = note.track,
+                    .type                = note.type,
+                }));
+    }
+    ImGui::SetCursorScreenPos(savedCursor);
+    return buttonHovered;
+}
 
 /// @brief 绘制单键、滑键与异轨长条的路径，并验证完整拖拽放置手势。
 /// @param sourceManager 提供当前演练步骤和完成入口。
@@ -2011,6 +2206,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
             // 同一 ImGui 层建立命中区域，而覆盖层始终使用本帧快照。
             updateCollaborationViewports(
                 sourceManager, canvasScreenPosition, canvasSize);
+            bool lessonButtonHovered = false;
             if ( m_currentSnapshot ) {
                 // 教程先判定本帧释放是否合法，以便交互控制器随后选择提交或
                 // 取消 CmdEndBrush；目标装饰不创建 ImGui Item，不拦截画布输入。
@@ -2018,11 +2214,23 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                                          *m_currentSnapshot,
                                          canvasScreenPosition,
                                          canvasSize);
+                lessonButtonHovered =
+                    updateComposeLessonHints(sourceManager,
+                                             *m_currentSnapshot,
+                                             canvasScreenPosition,
+                                             canvasSize);
             }
-            m_interaction->update(sourceManager,
-                                  m_currentSnapshot,
-                                  m_logicalWidth,
-                                  m_logicalHeight);
+            if ( lessonButtonHovered ) {
+                // 红框旁的按钮已消费鼠标，不能让同帧画笔再次放置物件。
+                m_interaction->updateHoverState(m_logicalWidth,
+                                                m_logicalHeight);
+                m_interaction->updateTransientUi();
+            } else {
+                m_interaction->update(sourceManager,
+                                      m_currentSnapshot,
+                                      m_logicalWidth,
+                                      m_logicalHeight);
+            }
         } else {
             // 后台画布仍接受文件拖入，并清理悬浮/瞬态 UI，保证鼠标
             // 离开旧标签后不会残留高亮；编辑工具命令则完全跳过。

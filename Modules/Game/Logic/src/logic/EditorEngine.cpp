@@ -1114,6 +1114,7 @@ bool isTemporaryProjectMutationCommand(const LogicCommand& cmd)
          std::holds_alternative<CmdPaste>(cmd) ||
          std::holds_alternative<CmdCut>(cmd) ||
          std::holds_alternative<CmdDeleteSelected>(cmd) ||
+         std::holds_alternative<CmdRemoveComposeLessonNote>(cmd) ||
          std::holds_alternative<CmdMirrorSelected>(cmd) ||
          std::holds_alternative<CmdAlignSelectedToCommonBeats>(cmd) ||
          std::holds_alternative<CmdApplyNoteColorToSelection>(cmd) ||

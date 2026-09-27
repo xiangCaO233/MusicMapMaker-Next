@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui/walkthrough/ComposeLessonCatalog.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -50,6 +52,10 @@ public:
                     const Walkthrough::Branch& branch,
                     const Walkthrough::Step& step, bool reviewing = false);
 
+    /// @brief 返回当前 CanonRock 写谱阶段的只读目标与错误物件反馈。
+    /// @warning UI 热路径：仅返回本页已有对象，不复制谱面物件或共享所有权。
+    const Walkthrough::ComposeLessonFeedback* composeLessonFeedback() const;
+
 private:
     /// @brief 只在折线覆盖教学期间启用路径清理，离开该步骤时恢复用户设置。
     /// @param enabled 当前步骤是否需要清理折线路径上的已有物件。
@@ -79,6 +85,8 @@ private:
         std::uint64_t composeBaselineRevision{ 0 };
         /// @brief 最近一次已请求快照对应的对象修订。
         std::uint64_t composeCaptureRevision{ 0 };
+        /// @brief 即使对象修订为零，也需在进入练习时取得一次初始物件反馈。
+        bool composeCaptureRequested{ false };
         /// @brief 逻辑线程写入、UI 无阻塞轮询的一次性验收结果。
         std::shared_ptr<Logic::ComposeLessonCapture> composeCapture;
         /// @brief 首播/复播先观察到新的播放开始，避免旧帧直接完成。
@@ -99,6 +107,8 @@ private:
 
     /// @brief 当前突出引导；欢迎标签隐藏时仍由 updateGuide 每帧续租。
     std::optional<ActiveGuide> m_activeGuide;
+    /// @brief 低频查询结果；步骤切换后立即撤掉画布上的旧提示。
+    std::unique_ptr<Walkthrough::ComposeLessonFeedback> m_composeFeedback;
     /// @brief 引导开始前的草稿区总静音状态；跨步骤保留，退出时恢复。
     std::optional<bool> m_draftAreaMutedBeforeGuide;
     /// @brief 折线覆盖教学前的用户设置；空值表示本轮没有临时覆盖。

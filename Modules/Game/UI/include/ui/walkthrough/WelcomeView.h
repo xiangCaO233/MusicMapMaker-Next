@@ -21,6 +21,12 @@ public:
     void prepareForDockLayoutChange();
     /// @brief 在同一欢迎标签页进入主题，保留服务中的学习进度。
     void showTopic(std::size_t topicIndex);
+    /// @brief 向同一 UIManager 内的谱面画布提供当前写谱目标。
+    /// @warning UI 热路径：仅转发非拥有只读指针，不复制教学状态。
+    const Walkthrough::ComposeLessonFeedback* composeLessonFeedback() const
+    {
+        return m_walkthrough.composeLessonFeedback();
+    }
     /// @brief 查询当前是否显示主题目录。
     /// @return 未选择具体主题时返回 true。
     bool showingHome() const { return !m_topic.has_value(); }

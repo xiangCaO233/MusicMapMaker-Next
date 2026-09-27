@@ -8,8 +8,20 @@
 #include <optional>
 #include <span>
 
+struct ImVec2;
+
 namespace MMM::Canvas
 {
+
+/// @brief 批注目标框的颜色语义；几何与三角标记共用同一绘制器。
+enum class AnnotationTargetHintStyle { Accent, Error };
+
+/// @brief 将批注目标框绘制在当前画布的前景层。
+/// @warning UI 热路径：只追加固定数量的 ImGui 几何，不访问谱面对象。
+void renderAnnotationTargetHint(
+    const struct AnnotationTargetHintBounds& bounds, ImVec2 canvasPosition,
+    float canvasWidth, float canvasHeight,
+    AnnotationTargetHintStyle style = AnnotationTargetHintStyle::Accent);
 
 /// @brief 批注目标提示框在画布局部坐标中的边界。
 struct AnnotationTargetHintBounds {

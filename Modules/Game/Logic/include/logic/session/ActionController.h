@@ -34,6 +34,9 @@ public:
     /// @param cmd 命令数据
     void handleCommand(const CmdDeleteSelected& cmd);
 
+    /// @brief 仅删除教学查询标出的那个错误根物件及其折线子投影。
+    void handleCommand(const CmdRemoveComposeLessonNote& cmd);
+
     /// @brief 处理镜像选中实体的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdMirrorSelected& cmd);

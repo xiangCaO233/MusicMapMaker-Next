@@ -26,6 +26,7 @@
 #include <imgui.h>
 #include <iterator>
 #include <string>
+#include <utility>
 
 /// @file WalkthroughPage.cpp
 /// @brief 欢迎页演练主题正文、分支卡片和步骤操作的即时模式绘制。
@@ -128,6 +129,13 @@
 
 namespace MMM::UI
 {
+/// @brief 供活动画布借用本轮已发布的写谱反馈。
+const Walkthrough::ComposeLessonFeedback*
+WalkthroughPage::composeLessonFeedback() const
+{
+    return m_composeFeedback.get();
+}
+
 /// @brief 页面退出时恢复引导期间的音频状态和项目路径限制。
 WalkthroughPage::~WalkthroughPage()
 {
@@ -392,6 +400,10 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
         .nextSignalRevisionAtRunStart = nextSignalRevisionAtRunStart,
         .reviewing                    = reviewing,
     };
+    // 先清理旧段落；首帧即显示本段全部待操作位置，查询完成后逐项收敛。
+    // 页面与画布共用 UIManager，因此状态切换必须先于画布下一次绘制。
+    // 其它引导主题绝不能沿用 CanonRock 的旧物件身份与提示颜色。
+    m_composeFeedback.reset();
     if ( !m_draftAreaMutedBeforeGuide.has_value() ) {
         // 区域总静音覆盖全部草稿轨道，不改写用户逐轨静音和音量。
         // 只在本轮首次进入时保存原值，切换教学步骤不重复覆盖。
@@ -409,8 +421,22 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
         guide.composeBuffer           = std::move(composeBuffer);
         guide.composeBeatmapKey       = std::move(composeBeatmapKey);
         guide.composeBaselineRevision = composeSnapshot->composeNoteRevision;
-        const double begin            = lesson.m_beginMs / 1000.0;
-        const double end              = lesson.m_endMs / 1000.0;
+        if ( lesson.m_phase == Walkthrough::ComposeLessonPhase::Practice ) {
+            // 初始结果只有参考，没有实际物件；先提供目标定位，用户无须
+            // 等待第一次绘制才能看到该段落预期放置的 Note 位置。
+            if ( const auto* reference =
+                     manager->walkthroughService().composeLesson(
+                         lesson.m_lessonIndex) )
+                m_composeFeedback =
+                    std::make_unique<Walkthrough::ComposeLessonFeedback>(
+                        Walkthrough::compareComposeLessonNotes(
+                            *reference,
+                            {},
+                            composeSnapshot->beatmapInstanceId,
+                            composeSnapshot->composeNoteRevision));
+        }
+        const double begin = lesson.m_beginMs / 1000.0;
+        const double end   = lesson.m_endMs / 1000.0;
         // 旧阶段的自动播放限制必须先解除，教学自己的停播与段首定位才能执行。
         // 练习与播放使用同一段起止，切步不沿用前一批注的时间窗口。
         guide.composeSession->pushCommand(
@@ -451,6 +477,7 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
 /// @param manager 提供全局 Spotlight。
 void WalkthroughPage::stopGuide(UIManager* manager)
 {
+    m_composeFeedback.reset();
     if ( m_activeGuide && m_activeGuide->composeSession ) {
         // 用户按 Esc 或主动结束时，不让自动预览继续在后台播放。
         // 先解除教学限制，随后停播；这两个命令只在退出时排入队列。
@@ -583,40 +610,54 @@ void WalkthroughPage::updateGuide(UIManager* manager)
         const double begin = lesson.m_beginMs / 1000.0;
         const double end   = lesson.m_endMs / 1000.0;
         if ( lesson.m_phase == Walkthrough::ComposeLessonPhase::Practice ) {
-            // 先等新修改进入已发布快照，再请求一次性逻辑查询；普通帧不扫描
-            // ECS。每次重新开始路线会先恢复示例物件，预设内容不算本轮练习。
+            // 进入练习时先查询现存物件供红框提示；后续只在正式物件修订
+            // 变化时再次查询。预设内容即使与目标相同也不算本轮练习完成。
             // 草稿修改可能触发修订，但最终只比较正式主轨道。
-            if ( snapshot->composeNoteRevision >
-                 guide.composeBaselineRevision ) {
-                if ( guide.composeCapture && guide.composeCapture->ready.load(
-                                                 std::memory_order_acquire) ) {
-                    // acquire 后才可安全读取逻辑线程填充的完整数组。
-                    // 版本落后于最新快照时，旧查询不能完成当前目标。
-                    if ( guide.composeCaptureRevision ==
-                         snapshot->composeNoteRevision ) {
-                        if ( const auto* reference =
-                                 service.composeLesson(lesson.m_lessonIndex);
-                             reference &&
-                             Walkthrough::matchesComposeLessonNotes(
-                                 *reference, guide.composeCapture->notes) )
+            // 查询对象跨线程持有直到 ready；UI 只在 acquire 后移动结果。
+            // 捕获完成前不借用其数组存储，避免逻辑线程仍在填充时读到半成品。
+            // 这条路径在 revision 为零时也要执行一次，不能误当成未变化。
+            if ( guide.composeCapture &&
+                 guide.composeCapture->ready.load(std::memory_order_acquire) ) {
+                // acquire 后才可安全读取逻辑线程填充的完整数组。
+                // 版本落后于最新快照时，旧查询不能完成当前目标。
+                // 同样不能用旧对象给画布画红框，以免错误位置继续可点。
+                // 下一轮修订查询会重新发布成组匹配标记与根实体。
+                if ( guide.composeCaptureRevision ==
+                     snapshot->composeNoteRevision ) {
+                    if ( const auto* reference =
+                             service.composeLesson(lesson.m_lessonIndex) ) {
+                        const bool complete =
+                            Walkthrough::matchesComposeLessonNotes(
+                                *reference, guide.composeCapture->notes);
+                        m_composeFeedback = std::make_unique<
+                            Walkthrough::ComposeLessonFeedback>(
+                            Walkthrough::compareComposeLessonNotes(
+                                *reference,
+                                std::move(guide.composeCapture->notes),
+                                snapshot->beatmapInstanceId,
+                                snapshot->composeNoteRevision));
+                        if ( complete && snapshot->composeNoteRevision >
+                                             guide.composeBaselineRevision )
                             spotlight.completeTarget("compose.lesson.practice",
                                                      true);
                     }
-                    guide.composeCapture.reset();
                 }
-                if ( !guide.composeCapture &&
-                     guide.composeCaptureRevision !=
-                         snapshot->composeNoteRevision ) {
-                    // 同一修订只排一次查询，不随 UI 帧率重复扫描 ECS。
-                    // 命令和页面共享结果所有权，页面退出也不会悬空。
-                    guide.composeCaptureRevision =
-                        snapshot->composeNoteRevision;
-                    guide.composeCapture =
-                        std::make_shared<Logic::ComposeLessonCapture>();
-                    guide.composeSession->pushCommand(
-                        Logic::CmdCaptureComposeLessonNotes{
-                            begin, end, guide.composeCapture });
-                }
+                guide.composeCapture.reset();
+            }
+            if ( !guide.composeCapture &&
+                 (!guide.composeCaptureRequested ||
+                  guide.composeCaptureRevision !=
+                      snapshot->composeNoteRevision) ) {
+                // 同一修订只排一次查询，不随 UI 帧率重复扫描 ECS。
+                // 命令和页面共享结果所有权，页面退出也不会悬空。
+                // 等待期间沿用上一版标记；新版本到达后整体替换反馈。
+                guide.composeCaptureRevision  = snapshot->composeNoteRevision;
+                guide.composeCaptureRequested = true;
+                guide.composeCapture =
+                    std::make_shared<Logic::ComposeLessonCapture>();
+                guide.composeSession->pushCommand(
+                    Logic::CmdCaptureComposeLessonNotes{
+                        begin, end, guide.composeCapture });
             }
         } else {
             // 旧帧可能仍停留在上一段末尾；必须先看到本次播放从段首启动。

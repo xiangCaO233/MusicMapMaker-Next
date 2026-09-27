@@ -10,6 +10,7 @@
 #include <iterator>
 #include <nlohmann/json.hpp>
 #include <string_view>
+#include <utility>
 
 /// @file ComposeLessonCatalog.cpp
 /// @brief 将示例谱面的教学标记与项目草稿载荷转换成可执行引导。
@@ -330,6 +331,40 @@ bool matchesComposeLessonNotes(
         if ( !found ) return false;
     }
     return true;
+}
+
+/// @brief 复用验收的几何语义，为未完成目标与错误物件保留独立标记。
+/// @details 相同位置可有多个对象，不能用集合按坐标去重；
+/// 每份参考只能消费一份正式物件，反过来同样成立。
+/// 红框来源于未匹配的实际物件，普通框来源于未匹配的参考物件。
+/// 几何判定直接调用最终验收的同一比较器，避免提示与进度结论冲突。
+/// 此函数只在查询完成时调用，允许为稳定反馈分配两组匹配数组。
+ComposeLessonFeedback compareComposeLessonNotes(
+    const ComposeLesson& lesson, std::vector<Logic::ComposeLessonNote> actual,
+    std::uintptr_t beatmapInstanceId, std::uint64_t composeNoteRevision)
+{
+    ComposeLessonFeedback feedback;
+    feedback.lesson              = &lesson;
+    feedback.beatmapInstanceId   = beatmapInstanceId;
+    feedback.composeNoteRevision = composeNoteRevision;
+    feedback.actual              = std::move(actual);
+    feedback.expectedMatched.assign(lesson.m_reference.size(), false);
+    feedback.actualMatched.assign(feedback.actual.size(), false);
+    // 与最终验收共用 sameGeometry；先消费完全对应的物件，局部错误不会
+    // 挡住同段内其它正确物件的提示状态。
+    for ( std::size_t expected = 0; expected < lesson.m_reference.size();
+          ++expected ) {
+        for ( std::size_t found = 0; found < feedback.actual.size(); ++found ) {
+            if ( feedback.actualMatched[found] ||
+                 !sameGeometry(lesson.m_reference[expected],
+                               feedback.actual[found]) )
+                continue;
+            feedback.expectedMatched[expected] = true;
+            feedback.actualMatched[found]      = true;
+            break;
+        }
+    }
+    return feedback;
 }
 
 /// @brief 将实际批注段落展开为两条可单独进入的三阶段教学分支。

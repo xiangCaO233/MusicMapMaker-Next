@@ -142,20 +142,26 @@ void renderHoverTrack(const char* labelPrefix, std::int32_t track,
     }
 }
 
-/// @brief 绘制当前悬浮批注所指向物件的高对比几何提示。
+}  // namespace
+
+/// @brief 绘制批注目标或教学错误物件的高对比几何提示。
 /// @param bounds 批注目标在画布局部坐标中的提示边界。
 /// @param canvasPosition 画布左上角屏幕坐标。
 /// @param canvasWidth 画布可见宽度。
 /// @param canvasHeight 画布可见高度。
+/// @param style 普通批注强调色或教学错误红色。
 /// @details 将逻辑快照提供的局部矩形转换为屏幕坐标，
 /// 先绘制低透明度填充，再叠加黑色粗描边与主题强调色细描边。
 /// 顶部双层三角标记指向目标中心，使窄物件也容易定位。
 /// 所有几何裁剪在画布范围内，不能覆盖相邻 Dock 窗口。
+/// 教学错误态只替换强调色，保留和正常批注完全相同的描边及顶部指针。
+/// 同一坐标协议让悬浮批注和写谱提示共用绘制结果。
 /// @warning UI 热路径：悬浮批注详情卡片时每帧调用一次，只追加固定数量 ImGui
 /// 几何。
 void renderAnnotationTargetHint(const AnnotationTargetHintBounds& bounds,
                                 ImVec2 canvasPosition, float canvasWidth,
-                                float canvasHeight)
+                                float                     canvasHeight,
+                                AnnotationTargetHintStyle style)
 {
     // bounds 已由纯几何 helper 约束到画布局部坐标；这里只叠加窗口
     // 屏幕原点，不修改其大小和命中语义。
@@ -173,6 +179,9 @@ void renderAnnotationTargetHint(const AnnotationTargetHintBounds& bounds,
         const ImVec4 fallback = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
         accentColor = { fallback.x, fallback.y, fallback.z, fallback.w };
     }
+    // 错误态只更换强调色，继续使用批注目标框的描边与三角几何。
+    if ( style == AnnotationTargetHintStyle::Error )
+        accentColor = { 1.0F, 0.23F, 0.27F, 1.0F };
 
     const ImU32 accent = ImGui::ColorConvertFloat4ToU32(
         { accentColor.r, accentColor.g, accentColor.b, 1.0F });
@@ -206,6 +215,9 @@ void renderAnnotationTargetHint(const AnnotationTargetHintBounds& bounds,
                                 accent);
     drawList->PopClipRect();
 }
+
+namespace
+{
 
 /// @brief 组件布局拖动的基础吸附距离，单位逻辑像素。
 /// @details 实际阈值会乘当前 DPI，保持不同显示缩放下相近的物理手感。

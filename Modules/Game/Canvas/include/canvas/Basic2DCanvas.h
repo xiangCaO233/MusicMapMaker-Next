@@ -230,6 +230,14 @@ private:
         const Common::Render::RenderSnapshot& snapshot,
         const ImVec2& canvasScreenPosition, const ImVec2& canvasSize);
 
+    /// @brief 用批注样式标出本段待操作位置和错误物件，并提供定向删除按钮。
+    /// @return 鼠标位于教学按钮上时返回 true，阻止同帧被画布工具解释。
+    /// @warning UI 热路径：只访问已剔除的命中框和低频更新的段落反馈。
+    bool updateComposeLessonHints(
+        UI::UIManager*                        sourceManager,
+        const Common::Render::RenderSnapshot& snapshot,
+        const ImVec2& canvasScreenPosition, const ImVec2& canvasSize);
+
     /// @brief 检查创作教程中的编辑操作并定位真实物件上的操作起点。
     /// @return 当前步骤属于编辑练习时返回 true。
     /// @warning UI 热路径：仅扫描固定数量的练习物件与当前帧命中框。

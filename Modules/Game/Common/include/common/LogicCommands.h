@@ -520,6 +520,16 @@ struct CmdCut {};
  */
 struct CmdDeleteSelected {};
 
+/// @brief 删除创作教学红框指定的错误根物件，避免普通撤销误伤其它编辑。
+struct CmdRemoveComposeLessonNote {
+    entt::entity    entity{ entt::null };      ///< 本次查询取得的根实体。
+    std::uintptr_t  beatmapInstanceId{ 0 };    ///< 限定当前谱面实例。
+    std::uint64_t   composeNoteRevision{ 0 };  ///< 防止旧框删除后续更正的物件。
+    double          timestamp{ 0.0 };          ///< 防止旧反馈删除已移动的实体。
+    int             track{ 0 };                ///< 查询时的玩家轨道。
+    ::MMM::NoteType type{ ::MMM::NoteType::NOTE };  ///< 查询时的根类型。
+};
+
 /**
  * @brief 镜像选中物件指令
  */
@@ -997,7 +1007,8 @@ using LogicCommand = std::variant<
     CmdSetPlaybackSpeed, CmdSetKeySoundTrackMute, CmdSetKeySoundTrackGain,
     CmdSetKeySoundEffectGroupGain, CmdSetDraftKeySoundAreaMute,
     CmdSetBgmKeySoundAreaMute, CmdChangeTool, CmdSetMousePosition, CmdUndo,
-    CmdRedo, CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdMirrorSelected,
+    CmdRedo, CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected,
+    CmdRemoveComposeLessonNote, CmdMirrorSelected,
     CmdAlignSelectedToCommonBeats, CmdSelectAll, CmdSetBrushNoteColor,
     CmdApplyNoteColorToSelection, CmdSetBrushNotePalette,
     CmdSetBrushAudioResource, CmdApplyNotePaletteToSelection,

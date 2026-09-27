@@ -2379,6 +2379,42 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
     }
 }
 
+/// @brief 使用谱面实例和根物件几何复核红框按钮的目标，再创建可撤销删除动作。
+/// @details 红框可能在 UI 快照生成后因用户连续编辑而过期；
+/// 命令必须拒绝已换谱、已移动或已经不在本段落的目标。
+/// 不借用选择集和普通撤销栈顶，因为两者都可能已经指向另一笔编辑。
+/// 折线根和子投影同组删除，使逆操作恢复完整对象拓扑。
+/// 删除动作仍经过会话的正常同步入口，后续教学匹配据此刷新红框。
+void ActionController::handleCommand(const CmdRemoveComposeLessonNote& cmd)
+{
+    // UI 的提示来自上一代快照，排队期间可能已切谱或移动物件。
+    // 精确身份失效时只丢弃命令，不退化成删除当前选择或栈顶动作。
+    if ( !m_ctx.currentBeatmap ||
+         reinterpret_cast<std::uintptr_t>(m_ctx.currentBeatmap.get()) !=
+             cmd.beatmapInstanceId ||
+         m_ctx.composeNoteRevision != cmd.composeNoteRevision ||
+         m_ctx.composeLessonInputMode != ComposeLessonInputMode::Practice ||
+         cmd.entity == entt::null || !m_ctx.noteRegistry.valid(cmd.entity) ||
+         !m_ctx.noteRegistry.all_of<NoteComponent>(cmd.entity) )
+        return;
+    const auto& note = m_ctx.noteRegistry.get<const NoteComponent>(cmd.entity);
+    if ( note.m_isDraft || note.m_isSubNote || note.m_type != cmd.type ||
+         note.m_trackIndex != cmd.track ||
+         std::abs(note.m_timestamp - cmd.timestamp) > 0.002 ||
+         note.m_timestamp < m_ctx.composeLessonBegin ||
+         note.m_timestamp > m_ctx.composeLessonEnd )
+        return;
+
+    std::vector<BatchNoteAction::Entry> entries;
+    entries.push_back({ cmd.entity, note, std::nullopt });
+    // Polyline 的子投影必须随根实体一次删除，Undo 才能完整恢复路径。
+    appendDeletedPolylineChildren(m_ctx, { cmd.entity }, entries);
+    m_ctx.actionStack.pushAndExecute(
+        std::make_unique<BatchNoteAction>(std::move(entries),
+                                          "撤销教学错误物件"),
+        m_ctx);
+}
+
 /// @brief 将已选可编辑 Note 在各自玩家或草稿轨道域内水平镜像。
 /// @param cmd 无附加参数的镜像命令。
 /// @details

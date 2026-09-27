@@ -3,14 +3,16 @@
 #include "mmm/note/Note.h"
 
 #include <atomic>
+#include <entt/entt.hpp>
 #include <vector>
 
 namespace MMM::Logic
 {
 /// @brief 创作教程用于比较的一段音符几何，忽略配色、采样和协作身份。
 /// @details 草稿持久化采用非负轨道坐标，玩家音符也采用非负坐标。
-/// 比较值故意不保留 ECS 实体、项目指针或纹理句柄。
-/// 教学查询跨线程传输时只移动这些稳定的标量与子段数组。
+/// 草稿参考不保留 ECS 身份；正式物件查询额外保留根实体句柄，
+/// 供错误框按钮定向操作，谱面实例身份仍由调用方单独核验。
+/// 教学查询跨线程传输时只移动这些标量与子段数组。
 struct ComposeLessonNote {
     /// @brief 折线中的一段几何，轨道采用该区域从左到右的相对索引。
     struct SubNote {
@@ -28,6 +30,7 @@ struct ComposeLessonNote {
     int                  track{ 0 };        ///< 区域内轨道索引。
     int                  dtrack{ 0 };       ///< Flick 相对终点。
     std::vector<SubNote> subNotes;          ///< Polyline 全部子段。
+    entt::entity entity{ entt::null };  ///< 实际物件的根身份；参考不持有实体。
 };
 
 /// @brief UI 与逻辑线程之间的一次性教学物件查询结果。
