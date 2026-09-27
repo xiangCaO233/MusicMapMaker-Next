@@ -18,6 +18,29 @@
 #include <memory>
 #include <vector>
 
+/// @file PolylineFirstBodyDragTest.cpp
+/// @brief 以真实拖动命令验证折线首段身体与内部节点的编辑语义。
+/// @details 首段头部、首段身体和内部节点虽然共用父折线，
+/// 但各自需要不同位移范围。测试明确指定按下帧的命中部位，
+/// 避免滞后的悬停状态把子段编辑升级成整物件移动。
+/// 子段同时存在父内嵌列表和独立 ECS 子实体投影，
+/// 拖动、释放、撤销和重做后两份几何都必须一致。
+/// 仅检查父列表会漏掉拾取位置滞后的错误。
+/// 已选中根时另放一颗已选 Note，作为整组选中误入的哨兵。
+/// 未选中根时复用相同命中，覆盖旧的整体移动分支。
+/// Hold 节点横移时，前一 Flick 终轨要接上新节点并移动后缀。
+/// Flick 节点纵移时，前一 Hold 尾端要接上新时间并移动后缀。
+/// 首节点索引零仍用于整条移动，不与内部局部编辑混淆。
+/// 测试不启动 UI，也不改动个人项目、布局或配置文件。
+/// 一次拖动始终用按下时状态计算位移，不能逐帧累加误差。
+/// 根被选中时不得把其它选中 Note 纳入节点的编辑历史。
+/// 未选中时也不得以整物件移动代替连接段调整。
+/// 前一段的 Flick 轨差与 Hold 时长分别表达横向和纵向接缝。
+/// 后续子段整体平移后，其自身长度与轨差仍保持原结构。
+/// 命令负载中的部位和子索引应覆盖旧悬停数据。
+/// 预览阶段就要同步子实体，使下一帧拾取与视觉一致。
+/// 历史动作要覆盖父、子实体，同时不重建未改变的身份。
+
 namespace
 {
 /// @brief 首节点身体与头部的回归场景。
@@ -455,6 +478,165 @@ bool runCase(DragCase kind)
     return kind == DragCase::HoldHead ||
            checkBodyResult(ctx, root, children, kind);
 }
+
+/// @brief 检查内部节点拖动只改变相连子段和后缀，不移动整条折线。
+/// @param selected 根折线与另一 Note 是否同时被选中。
+/// @param flick 抓取横移子段节点；否则抓取竖向子段节点。
+/// @return 父子投影、选择组、撤销与重做均保持同一局部语义时返回 true。
+/// @details 横向拖动 Hold 节点时，前一 Flick 的终轨须接上新节点；
+/// 纵向拖动 Flick 节点时，前一 Hold 的尾端须接上新节点时间。
+/// 两种场景的后缀均跟随移动，根部与其它选中物件仍停在原位置。
+/// @warning 仅测试命令级手势，不改变测试用户配置或项目资源。
+bool runInternalNodeCase(bool selected, bool flick)
+{
+    // 每个场景建立新会话，前一场景的选择与历史不影响本次结果。
+    // 玩家轨道投影与首段身体场景一致，直接使用生产时间逆映射。
+    using Note = MMM::Logic::NoteComponent;
+    MMM::Logic::SessionContext ctx;
+    configure(ctx);
+    Note parent;
+    parent.m_type       = MMM::NoteType::POLYLINE;
+    parent.m_timestamp  = 1.0;
+    parent.m_trackIndex = 0;
+    // 两组正交连接给目标节点的前后都提供有效子段。
+    // 末段是后缀哨兵，防止实现只移动被抓的单个节点。
+    // 根锚点固定在第零轨，局部拖动不能改变它。
+    parent.m_subNotes = {
+        Note::SubNote{ .type       = MMM::NoteType::HOLD,
+                       .timestamp  = 1.0,
+                       .duration   = 0.5,
+                       .trackIndex = 0 },
+        Note::SubNote{ .type       = MMM::NoteType::FLICK,
+                       .timestamp  = 1.5,
+                       .trackIndex = 0,
+                       .dtrack     = 1 },
+        Note::SubNote{ .type       = MMM::NoteType::HOLD,
+                       .timestamp  = 1.5,
+                       .duration   = 0.5,
+                       .trackIndex = 1 },
+        Note::SubNote{ .type       = MMM::NoteType::FLICK,
+                       .timestamp  = 2.0,
+                       .trackIndex = 1,
+                       .dtrack     = 1 },
+        Note::SubNote{ .type       = MMM::NoteType::HOLD,
+                       .timestamp  = 2.0,
+                       .duration   = 0.5,
+                       .trackIndex = 2 },
+    };
+    MMM::Logic::ensureNoteCollaborationIdentity(parent);
+    // original 独立于被编辑组件，后续 Undo 不以预览状态作期望值。
+    // 父子投影复用同一协作身份，撤销后仍要对应原来的实体。
+    const auto original = parent.m_subNotes;
+    const auto root     = ctx.noteRegistry.create();
+    ctx.noteRegistry.emplace<Note>(root, parent);
+    ctx.noteRegistry.emplace<MMM::Logic::TransformComponent>(root);
+    ctx.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
+        root, MMM::Logic::InteractionComponent{ .isSelected = selected });
+    std::vector<entt::entity> children;
+    // 真实加载的折线有子实体投影；只核对父列表会漏掉拾取与撤销错误。
+    // 子实体直接从父子段构造，不能在测试中修补生产逻辑的输出。
+    for ( std::size_t index = 0; index < original.size(); ++index ) {
+        const auto entity = ctx.noteRegistry.create();
+        ctx.noteRegistry.emplace<Note>(
+            entity,
+            MMM::Logic::makeNoteComponentFromSubNote(
+                original[index], true, root, static_cast<int>(index)));
+        ctx.noteRegistry.emplace<MMM::Logic::InteractionComponent>(entity);
+        children.push_back(entity);
+    }
+    const auto other = ctx.noteRegistry.create();
+    ctx.noteRegistry.emplace<Note>(other,
+                                   Note{ .m_type       = MMM::NoteType::NOTE,
+                                         .m_timestamp  = 3.0,
+                                         .m_trackIndex = 3 });
+    ctx.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
+        other, MMM::Logic::InteractionComponent{ .isSelected = selected });
+    // 索引一是 Flick，索引二是其终轨上的 Hold。
+    // 使用正交拖动分别检验时间连接与轨道连接。
+    const int subIndex  = flick ? 1 : 2;
+    ctx.hoveredPart     = static_cast<int>(MMM::Logic::HoverPart::Head);
+    ctx.hoveredSubIndex = -1;
+    MMM::Logic::GrabTool tool;
+    // 按下帧明确传入节点身份，不能依赖上一帧悬停的 Head 状态。
+    // 即使根和哨兵均已选中，本次手势仍只能编辑这一条折线的内部连接。
+    tool.handleStartDrag(
+        ctx,
+        MMM::Logic::CmdStartDrag{
+            root,
+            "Basic2DCanvas",
+            false,
+            MMM::Logic::ChartObjectKind::PlayerNote,
+            static_cast<std::uint8_t>(MMM::Logic::HoverPart::PolylineNode),
+            subIndex });
+    if ( !ctx.isDragging ) return false;
+    // Ctrl 关闭吸附；Flick 向时间后方移动，Hold 向右移动一轨。
+    // 目标点跨过相应节点，但没有跨出当前谱面的玩家轨道域。
+    tool.handleUpdateDrag(ctx,
+                          MMM::Logic::CmdUpdateDrag{ "Basic2DCanvas",
+                                                     flick ? 150.0F : 350.0F,
+                                                     flick ? 0.0F : 300.0F,
+                                                     true });
+    const auto&  preview = ctx.noteRegistry.get<const Note>(root);
+    const double shift   = preview.m_subNotes[1].timestamp - 1.5;
+    // 父根与第一子段固定；横向调整改变前一 Flick 的终轨，
+    // 纵向调整改变前一 Hold 的长度，两个方向都不需要搬移整条折线。
+    // 两种路径均检查后缀末段，避免只改当前子段却留下断开的路径。
+    // 只要误入整条位移分支，根时间或轨道的断言就会失败。
+    const bool connected =
+        flick ? shift > 0.0 &&
+                    std::abs(preview.m_subNotes[0].duration - (0.5 + shift)) <
+                        1e-7 &&
+                    std::abs(preview.m_subNotes[2].timestamp - (1.5 + shift)) <
+                        1e-7 &&
+                    std::abs(preview.m_subNotes[4].timestamp - (2.0 + shift)) <
+                        1e-7
+              : preview.m_subNotes[1].dtrack == 2 &&
+                    preview.m_subNotes[2].trackIndex == 2 &&
+                    preview.m_subNotes[3].trackIndex == 2 &&
+                    preview.m_subNotes[4].trackIndex == 3;
+    if ( !connected || preview.m_timestamp != 1.0 ||
+         preview.m_trackIndex != 0 ||
+         ctx.noteRegistry.get<const Note>(other).m_trackIndex != 3 ||
+         ctx.noteRegistry.get<const Note>(other).m_timestamp != 3.0 )
+        return false;
+    // 子实体与父内嵌列表同步，释放后仍须保持原实体身份。
+    // 预览帧就应同步拾取位置，不能等待松手才修复 ECS 投影。
+    for ( std::size_t index = 0; index < children.size(); ++index ) {
+        const auto& child = ctx.noteRegistry.get<const Note>(children[index]);
+        if ( child.m_timestamp != preview.m_subNotes[index].timestamp ||
+             child.m_trackIndex != preview.m_subNotes[index].trackIndex ||
+             child.m_dtrack != preview.m_subNotes[index].dtrack ||
+             child.m_duration != preview.m_subNotes[index].duration )
+            return false;
+    }
+    tool.handleEndDrag(ctx, MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+    // 单次手势只能占一个历史动作，否则 Undo 会恢复半条折线。
+    if ( ctx.actionStack.getUndoStackSize() != 1U ) return false;
+    ctx.actionStack.undo(ctx);
+    const auto& restored = ctx.noteRegistry.get<const Note>(root);
+    // 根锚点、父子段和子实体都回到按下前，不能只回退视觉父根。
+    // 独立哨兵从未进入本次批次，不依赖撤销再移回原位。
+    if ( restored.m_timestamp != 1.0 || restored.m_trackIndex != 0 )
+        return false;
+    for ( std::size_t index = 0; index < children.size(); ++index ) {
+        const auto& child = ctx.noteRegistry.get<const Note>(children[index]);
+        if ( restored.m_subNotes[index].timestamp !=
+                 original[index].timestamp ||
+             restored.m_subNotes[index].trackIndex !=
+                 original[index].trackIndex ||
+             child.m_timestamp != original[index].timestamp ||
+             child.m_trackIndex != original[index].trackIndex )
+            return false;
+    }
+    ctx.actionStack.redo(ctx);
+    const auto& redone = ctx.noteRegistry.get<const Note>(root);
+    // Redo 使用已保存的 after 状态，不再读取当前鼠标位置或吸附。
+    // 同时核对前连接段和末端后缀，防止历史只记录其中一部分。
+    return flick ? redone.m_subNotes[1].timestamp > 1.5 &&
+                       redone.m_subNotes[0].duration > 0.5
+                 : redone.m_subNotes[1].dtrack == 2 &&
+                       redone.m_subNotes[4].trackIndex == 3;
+}
 }  // namespace
 
 /// @brief 运行首段两种身体拖动与头部整体拖动的回归矩阵。
@@ -462,7 +644,10 @@ bool runCase(DragCase kind)
 int main()
 {
     return runCase(DragCase::HoldBody) && runCase(DragCase::FlickBody) &&
-                   runCase(DragCase::HoldHead)
+                   runCase(DragCase::HoldHead) &&
+                   runInternalNodeCase(false, false) &&
+                   runInternalNodeCase(true, false) &&
+                   runInternalNodeCase(true, true)
                ? 0
                : 1;
 }

@@ -755,6 +755,22 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
     ctx.draggedPart = static_cast<HoverPart>(
         cmd.hitPart.value_or(static_cast<std::uint8_t>(ctx.hoveredPart)));
     ctx.draggedSubIndex = cmd.hitSubIndex.value_or(ctx.hoveredSubIndex);
+    // 内部节点编辑沿用折线子段局部拖动：当前子项与后缀一起移动，
+    // 前一连接段随之伸缩。首节点仍保留整条折线移动语义。
+    // 未选中折线的内部身体也使用这一路径；选中组不能抢走节点手势。
+    if ( cmd.kind == ChartObjectKind::PlayerNote ) {
+        const auto* note =
+            ctx.noteRegistry.try_get<const NoteComponent>(draggedEntity);
+        const bool internalSub =
+            note && note->m_type == ::MMM::NoteType::POLYLINE &&
+            ctx.draggedSubIndex > 0 &&
+            ctx.draggedSubIndex < static_cast<int>(note->m_subNotes.size());
+        m_isPolylineSubDrag =
+            internalSub &&
+            (ctx.draggedPart == HoverPart::PolylineNode ||
+             (ctx.draggedPart == HoverPart::HoldBody &&
+              !isEntitySelected(ctx.noteRegistry, draggedEntity)));
+    }
     // 折线首节点头与身体共享索引零，必须再用命中部位区别拖动意图。
     // 只对能产生正交前置载体的 Hold/Flick 启用这种结构编辑。
     // 草稿子实体已在上面提升为父，避免误把子投影当作完整折线。
@@ -878,16 +894,18 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
         // 整体部件允许与采样组成统一移动组，Hold 尾与 Flick 箭头保留局部编辑。
         // 不能因为主要对象已选中就把所有端点编辑都当作整组平移。
         const bool groupCompatiblePart =
-            ctx.draggedPart == HoverPart::None ||
-            ctx.draggedPart == HoverPart::Head ||
-            ctx.draggedPart == HoverPart::HoldBody ||
-            ctx.draggedPart == HoverPart::PolylineNode;
+            !m_isPolylineSubDrag &&
+            (ctx.draggedPart == HoverPart::None ||
+             ctx.draggedPart == HoverPart::Head ||
+             ctx.draggedPart == HoverPart::HoldBody ||
+             ctx.draggedPart == HoverPart::PolylineNode);
 
         // 选中主对象时保存当前可编辑选中组，并记录原有选中状态。
         // 该快照用于最终撤销，不以连续拖动后的临时位置作为 before。
         // 已选中根的首段身体仍是局部编辑，不带动其他选中物件。
         // 原有选择标志继续留在实体上，只缩小本次拖动的参与集合。
-        if ( primarySelected && !m_isFirstPolylineBodyDrag ) {
+        if ( primarySelected && !m_isFirstPolylineBodyDrag &&
+             !m_isPolylineSubDrag ) {
             // 模式 A: 拖动整个选中组
             auto view = registry.view<InteractionComponent, NoteComponent>();
             for ( auto entity : view ) {
@@ -985,10 +1003,7 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
             const auto* note =
                 registry.try_get<const NoteComponent>(draggedEntity);
             if ( note && note->m_type == ::MMM::NoteType::POLYLINE ) {
-                const bool editsInternalBody =
-                    ctx.draggedPart == HoverPart::HoldBody &&
-                    ctx.draggedSubIndex > 0;
-                movesWholeObjects = !editsInternalBody;
+                movesWholeObjects = !m_isPolylineSubDrag;
             }
         }
         // 主画布启用草稿轨后，整体单物件和多选组都从首帧使用统一轨道域。
@@ -1050,6 +1065,9 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
 bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
                                        const CmdUpdateDrag& cmd)
 {
+    // 折线内部节点与身体只能调整本段及其后缀；即使鼠标短暂越过
+    // 玩家区边界，也不能把这一手势升级成整条折线的跨区搬移。
+    if ( m_isPolylineSubDrag ) return false;
     // 未进入统一模式的纯音符手势，先检查鼠标是否越出玩家区。
     // 仍在玩家区时交还普通更新，保持旧局部部件编辑语义。
     if ( !m_usesUnifiedObjectDrag &&
@@ -1349,7 +1367,7 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
 {
     if ( ctx.draggedEntity == entt::null ) return;
     // 首段身体只移动原有后缀；不能落入整条平移或跨域转换路径。
-    // PolylineNode/0 仍沿原路径移动整条，只有 HoldBody/0 被提前截获。
+    // PolylineNode/0 仍移动整条；内部节点在后面的子段路径中处理。
     // 专用路径复用统一画布投影，但不启用统一对象提交模式。
     if ( m_isFirstPolylineBodyDrag ) {
         updateFirstPolylineBodyDrag(ctx, cmd);
@@ -1495,22 +1513,9 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         }
     }
 
-    // --- 折线内部子段拖拽检测 ---
-    // 未选中折线的内部 HoldBody 是整体移动规则中的特例。
-    // 只允许正子索引，根段不按内部连接调整处理。
-    bool isPolylineSubDrag = false;
-    if ( !isPrimarySelected && ctx.draggedPart == HoverPart::HoldBody ) {
-        auto* draggedNote =
-            ctx.noteRegistry.try_get<NoteComponent>(ctx.draggedEntity);
-        if ( draggedNote && draggedNote->m_type == ::MMM::NoteType::POLYLINE &&
-             ctx.draggedSubIndex > 0 &&
-             ctx.draggedSubIndex < (int)(draggedNote->m_subNotes.size()) ) {
-            isPolylineSubDrag = true;
-        }
-    }
-    // 把本轮判定保存给释放入口，决定是否尝试退化段清理。
-    // 该标志不是实体持久属性，不随谱面序列化。
-    m_isPolylineSubDrag = isPolylineSubDrag;
+    // 起始帧已经锁定内部子段语义，不能在拖动过程中依当前选择状态
+    // 改成整条移动；释放入口也以同一标志决定是否清理退化连接段。
+    const bool isPolylineSubDrag = m_isPolylineSubDrag;
 
     // 禁用纵向对象拖动仅约束整体平移，不禁用改变局部持续时间。
     // 内部子段移动与末端拉伸继续遵守各自规则。
