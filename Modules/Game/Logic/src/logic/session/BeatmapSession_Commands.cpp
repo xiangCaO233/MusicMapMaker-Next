@@ -2717,8 +2717,11 @@ bool BeatmapSession::processCommands()
                 }
                 // PlaybackController 独占
                 // transport、seek、滚动和平移的时间语义。
+                // 教学阶段门禁与这些命令必须落在同一有序队列中：
+                // 先解除旧阶段，再由教学停播和定位，最后锁住新阶段。
                 else if constexpr (
                     std::is_same_v<T, CmdSetPlayState> ||
+                    std::is_same_v<T, CmdSetComposeLessonInputLimit> ||
                     std::is_same_v<T, CmdSeek> ||
                     std::is_same_v<T, CmdSetPlaybackSpeed> ||
                     std::is_same_v<T, CmdSetKeySoundTrackMute> ||
@@ -3317,6 +3320,12 @@ void BeatmapSession::handleCommand(const CmdLoadBeatmap& cmd)
     // 载图建立本地项目解析环境，旧协作资源快照和路径映射全部失效。
     m_ctx->collaborationProject.reset();
     m_ctx->collaborationPathRemap.clear();
+    // 载入另一张谱面时立即解除旧教学时间窗，不等欢迎页下一帧发现身份变化。
+    // 同一个 SessionContext 会被复用；只清理 UI 的 Spotlight 不足以保证安全。
+    // 后续普通滚动和播放必须读取 Off，而不能继承上一张谱面的练习区间。
+    m_ctx->composeLessonInputMode = ComposeLessonInputMode::Off;
+    m_ctx->composeLessonBegin     = 0.0;
+    m_ctx->composeLessonEnd       = 0.0;
     SessionUtils::loadBeatmap(*m_ctx, cmd.beatmap);
     if ( m_ctx->currentBeatmap ) {
         // 诊断在完整载入后发布，能检查实际格式解析和资源引用结果。

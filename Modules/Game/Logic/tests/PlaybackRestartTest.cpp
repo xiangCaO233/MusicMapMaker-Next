@@ -69,6 +69,47 @@ bool testFinishedTimelineRewindsBeforeActivation()
     return true;
 }
 
+/// @brief 验证写谱练习允许播放，且段尾重播以本段起点而非全曲零点为准。
+/// @return 两种重播原因均定位到当前教学段首时为 true。
+/// @note 刻意不提供谱面，使音频激活失败；定位必须在尝试激活前完成。
+/// @note 未激活的请求不能伪装成已播放，仍需检查会话播放状态。
+/// @note 首个请求检查段尾按钮，第二个请求检查音频自然结束遗留标志。
+/// @note 两次断言都在命令返回时执行，不借助后续 Session 更新纠正位置。
+/// @note 教学范围只写入临时会话，不触及用户配置或测试资源文件。
+bool testComposePracticeRestartsFromLessonBeginning()
+{
+    // 活动会话可进入播放命令；同一控制器复用当前练习范围。
+    // 选择非零段首，避免错误地回到整首歌曲开头仍通过断言。
+    MMM::Logic::SessionContext     context;
+    MMM::Logic::PlaybackController controller(context);
+    context.isActiveSession = true;
+    controller.handleCommand(MMM::Logic::CmdSetComposeLessonInputLimit{
+        .mode  = MMM::Logic::ComposeLessonInputMode::Practice,
+        .begin = 0.8,
+        .end   = 1.2,
+    });
+
+    // 段尾自行按播放应被接受；即使缺少音频，也应先回到本段起点。
+    context.currentTime = 1.2;
+    controller.handleCommand(MMM::Logic::CmdSetPlayState{ true });
+    if ( context.isPlaying || !near(context.currentTime, 0.8) ) {
+        XERROR("Compose practice did not rewind from lesson end");
+        return false;
+    }
+
+    // 自然播放结束的待重播标志也不能覆盖教学段落起点。
+    // 消费标志后不能在后续尝试中再次跳回全曲开头。
+    context.currentTime                       = 1.1;
+    context.restartPlaybackAfterFinishPending = true;
+    controller.handleCommand(MMM::Logic::CmdSetPlayState{ true });
+    if ( context.isPlaying || !near(context.currentTime, 0.8) ||
+         context.restartPlaybackAfterFinishPending ) {
+        XERROR("Compose practice restarted at whole-chart beginning");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证拉伸器尾音期间暂停不会把视觉时间冻结到谱面末尾之外。
 /// @return 会话时间与连续视觉时钟都冻结在五秒终点时为 true。
 /// @note 只模拟尾部的时间状态，不创建真实拉伸器或等待设备尾音。
@@ -709,6 +750,7 @@ int main()
                    testFollowerUsesRebasedSourceClock() &&
                    testFollowerRejectsUnexpectedSourceTimeline() &&
                    testFinishedTimelineRewindsBeforeActivation() &&
+                   testComposePracticeRestartsFromLessonBeginning() &&
                    testPauseClampsVisualClockToTimelineEnd() &&
                    testBackgroundSessionCannotControlTransport() &&
                    testBackgroundSessionCannotControlKeySoundGain() &&

@@ -57,6 +57,20 @@ struct CmdSetPlayState {
     bool isPlaying;
 };
 
+/// @brief 创作教学当前允许的用户播放与定位方式。
+enum class ComposeLessonInputMode : std::uint8_t {
+    Off,           ///< 未运行创作教学，保持普通编辑行为。
+    AutoPlayback,  ///< 首播或复播由教学驱动，忽略用户暂停和定位。
+    Practice,      ///< 写谱可自行播放；定位和播放都限定在当前段落。
+};
+
+/// @brief 只对目标谱面会话生效的创作教学输入范围。
+struct CmdSetComposeLessonInputLimit {
+    ComposeLessonInputMode mode{ ComposeLessonInputMode::Off };
+    double                 begin{ 0.0 };  ///< 段落音频时间起点，单位秒。
+    double                 end{ 0.0 };    ///< 段落音频时间终点，单位秒。
+};
+
 /**
  * @brief 加载新谱面指令
  */
@@ -979,8 +993,8 @@ using LogicCommand = std::variant<
     CmdUpdateAudioSampleProperties, CmdUpdateObjectTimestamp,
     CmdUpdateObjectSampleVolume, CmdUpdateSelectedObjectSampleVolume,
     CmdUpdateTrackCount, CmdUpdateBgmTrackCount, CmdUpdateDraftTrackCount,
-    CmdSeek, CmdCaptureComposeLessonNotes, CmdSetPlaybackSpeed,
-    CmdSetKeySoundTrackMute, CmdSetKeySoundTrackGain,
+    CmdSeek, CmdCaptureComposeLessonNotes, CmdSetComposeLessonInputLimit,
+    CmdSetPlaybackSpeed, CmdSetKeySoundTrackMute, CmdSetKeySoundTrackGain,
     CmdSetKeySoundEffectGroupGain, CmdSetDraftKeySoundAreaMute,
     CmdSetBgmKeySoundAreaMute, CmdChangeTool, CmdSetMousePosition, CmdUndo,
     CmdRedo, CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected, CmdMirrorSelected,
@@ -1028,6 +1042,7 @@ using LogicCommand = std::variant<
                 std::is_same_v<T, CmdRemoveMarqueeAt> ||
                 std::is_same_v<T, CmdSeek> ||
                 std::is_same_v<T, CmdCaptureComposeLessonNotes> ||
+                std::is_same_v<T, CmdSetComposeLessonInputLimit> ||
                 std::is_same_v<T, CmdSetPlaybackSpeed> ||
                 std::is_same_v<T, CmdSetKeySoundTrackMute> ||
                 std::is_same_v<T, CmdSetKeySoundTrackGain> ||

@@ -432,6 +432,10 @@ void PlaybackController::updateMetronome(bool playbackJumped)
 /// 用户播放控制路径，可能激活音频时间线和重建命中特效；禁止逐帧重复提交。
 void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
 {
+    // 自动首播和复播只能由教学步骤停下；写谱阶段允许用户自行播放、暂停。
+    if ( m_ctx.composeLessonInputMode == ComposeLessonInputMode::AutoPlayback &&
+         !cmd.isPlaying )
+        return;
     if ( !m_ctx.isActiveSession ) {
         // 后台会话不能抢占全局音频；这里只撤销本会话的播放和跟随标记。
         m_ctx.isPlaying                   = false;
@@ -453,8 +457,15 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
     m_ctx.m_audioTimelineSyncSourceFingerprint.clear();
     m_ctx.isPlaying = cmd.isPlaying;
     if ( m_ctx.isPlaying ) {
-        if ( shouldRestartFromBeginning ) {
-            m_ctx.currentTime = 0.0;
+        if ( shouldRestartFromBeginning ||
+             (m_ctx.composeLessonInputMode ==
+                  ComposeLessonInputMode::Practice &&
+              m_ctx.currentTime >= m_ctx.composeLessonEnd) ) {
+            // 已停在练习段尾时，从本段起点重播；曲终标记也不能跳回全曲开头。
+            m_ctx.currentTime =
+                m_ctx.composeLessonInputMode == ComposeLessonInputMode::Practice
+                    ? m_ctx.composeLessonBegin
+                    : 0.0;
         }
         cancelActiveEditingState(m_ctx);
         if ( !SessionUtils::activateAudioTimeline(m_ctx, true) ) {
@@ -483,7 +494,52 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
             // 音频属于另一描述符时只暂停它，不用它推算当前会话的时间。
             audio.pause();
         }
+        if ( m_ctx.composeLessonInputMode == ComposeLessonInputMode::Practice &&
+             m_ctx.currentTime > m_ctx.composeLessonEnd ) {
+            // 手动暂停也可能在两个逻辑更新之间跨过段尾，立即回卷至边界。
+            handleCommand(CmdSeek{ m_ctx.composeLessonEnd });
+        }
     }
+}
+
+/// @brief 应用当前创作教学的输入阶段和时间范围。
+/// @param cmd 来自教学页面的单会话阶段切换命令。
+/// @details 无效范围解除旧约束，避免资源更新后把普通谱面锁在旧段落。
+/// @warning 只在段落交接时调用，不参与每帧播放更新。
+void PlaybackController::handleCommand(const CmdSetComposeLessonInputLimit& cmd)
+{
+    if ( cmd.mode == ComposeLessonInputMode::Off || !std::isfinite(cmd.begin) ||
+         !std::isfinite(cmd.end) || cmd.begin > cmd.end ) {
+        m_ctx.composeLessonInputMode = ComposeLessonInputMode::Off;
+        m_ctx.composeLessonBegin     = 0.0;
+        m_ctx.composeLessonEnd       = 0.0;
+        // 退出时也清除拖拽遗留速度，避免普通编辑在解锁后一帧突然滚动。
+        m_ctx.previewEdgeScrollVelocity = 0.0;
+        return;
+    }
+    m_ctx.composeLessonBegin     = cmd.begin;
+    m_ctx.composeLessonEnd       = cmd.end;
+    m_ctx.composeLessonInputMode = cmd.mode;
+    // 前一个工具遗留的预览边缘滚动速度不能在新的教学阶段继续积分。
+    m_ctx.previewEdgeScrollVelocity = 0.0;
+}
+
+/// @brief 在练习播放越过批注段尾时停止音频并定位到段尾。
+/// @return 本轮停播或校正越界位置时返回 true。
+/// @details 复用暂停和定位入口，使音频时钟、会话位置及命中游标保持一致。
+/// @warning 每轮播放更新调用；仅到达段尾的单次更新执行音频控制。
+bool PlaybackController::stopAtComposeLessonEnd()
+{
+    if ( m_ctx.composeLessonInputMode != ComposeLessonInputMode::Practice ||
+         m_ctx.currentTime < m_ctx.composeLessonEnd ||
+         (!m_ctx.isPlaying && m_ctx.currentTime <= m_ctx.composeLessonEnd) )
+        return false;
+    // 音频时钟可能在本轮更新后才失效；已停止时仍需回收越界的位置。
+    if ( m_ctx.isPlaying ) handleCommand(CmdSetPlayState{ false });
+    // 暂停使用另一瞬间的连续时钟，最终再对齐到教学段落的准确终点。
+    if ( m_ctx.currentTime != m_ctx.composeLessonEnd )
+        handleCommand(CmdSeek{ m_ctx.composeLessonEnd });
+    return true;
 }
 
 /// @brief 定位会话时间，必要时同步全局音频并重建跳转处的特效状态。
@@ -494,6 +550,9 @@ void PlaybackController::handleCommand(const CmdSetPlayState& cmd)
 /// @warning 输入命令路径；拖动会反复调用，不能增加阻塞等待或延迟本地定位反馈。
 void PlaybackController::handleCommand(const CmdSeek& cmd)
 {
+    // 自动首播和复播只接受教学自身在设置阶段前发出的定位命令。
+    if ( m_ctx.composeLessonInputMode == ComposeLessonInputMode::AutoPlayback )
+        return;
     // 首个拖动请求和最终释放都采用提交模式，只有连续拖动中间帧可合并。
     const bool isContinuingScrub = cmd.isScrubbing && m_ctx.isSeekScrubbing;
     // 命令入口统一解除同步跟随，拖动中间帧同样代表用户主动选择位置。
@@ -525,7 +584,11 @@ void PlaybackController::handleCommand(const CmdSeek& cmd)
     }
 
     // 先发布本地位置；后台会话也能定位，但只有活动会话驱动音频。
-    m_ctx.currentTime = std::clamp(cmd.time, minTime, totalTime);
+    double targetTime = cmd.time;
+    if ( m_ctx.composeLessonInputMode == ComposeLessonInputMode::Practice )
+        targetTime = std::clamp(
+            targetTime, m_ctx.composeLessonBegin, m_ctx.composeLessonEnd);
+    m_ctx.currentTime = std::clamp(targetTime, minTime, totalTime);
     if ( m_ctx.isActiveSession ) {
         auto& audio = Audio::AudioManager::instance();
         if ( m_ctx.isAudioTimelineActivationPending ||
@@ -679,6 +742,9 @@ void PlaybackController::handleCommand(const CmdSetBgmKeySoundAreaMute& cmd)
 /// 需要一并停止当前主音频，避免活动画布下一轮同步把目标时间复原。
 void PlaybackController::handleCommand(const CmdScroll& cmd)
 {
+    // 自动播放期间滚轮连暂停策略也不能触发；它可能来自主画布或时间线。
+    if ( m_ctx.composeLessonInputMode == ComposeLessonInputMode::AutoPlayback )
+        return;
     // 反向滚动偏好只作用于主画布和时间线，不改变其他视口的输入约定。
     float wheel = cmd.wheel;
     if ( m_ctx.lastConfig.settings.reverseScroll &&
@@ -811,6 +877,9 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
     }
 
     // 无论吸附还是自由滚动，都经过同一谱面范围约束再驱动音频。
+    if ( m_ctx.composeLessonInputMode == ComposeLessonInputMode::Practice )
+        targetTime = std::clamp(
+            targetTime, m_ctx.composeLessonBegin, m_ctx.composeLessonEnd);
     m_ctx.currentTime = std::clamp(targetTime, minTime, totalTime);
     if ( m_ctx.isActiveSession ) {
         auto& audio = Audio::AudioManager::instance();
@@ -845,6 +914,9 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
 /// 不得在此增加阻塞等待、文件操作或额外全量扫描。
 void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
 {
+    // 中键纵移同样是用户定位；首播和复播时不允许改变自动演示位置。
+    if ( m_ctx.composeLessonInputMode == ComposeLessonInputMode::AutoPlayback )
+        return;
     // 预览和时间线有各自的坐标与交互规则，不套用主画布的二维拖动解释。
     if ( !SessionUtils::isMainCanvasCameraId(cmd.cameraId) ) {
         return;

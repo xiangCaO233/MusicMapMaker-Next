@@ -3058,6 +3058,99 @@ bool testPanCommandUsesLogicalPixels()
     return true;
 }
 
+/// @brief 核对 CanonRock 教学首播、写谱和退出后的播放定位边界。
+/// @details 直接驱动控制器，覆盖滚轮、定位和中键平移三条独立输入路径。
+/// @par 写谱阶段
+/// - 段落起止均为音频秒数，跳转到两侧之外都应停在最近边界。
+/// - 滚轮从两个方向撞上边界，确认方向与吸附设置无关。
+/// - 中键纵移经相机投影后仍复用相同边界，不留下可越界的旁路。
+/// - 用户可以试听；越过段尾后必须停播并精确回到段尾。
+/// @par 自动播放阶段
+/// - 用户暂停命令不得改变正在播放的会话状态。
+/// - 在滚动即停播的用户偏好开启时，滚轮也不能间接暂停演示。
+/// - 定位和中键纵移不能跳过演示区间或提前满足完成判定。
+/// @par 退出阶段
+/// - 教学清理按解除限制、停播、普通跳转的顺序执行。
+/// - 清理后不能保留前一段的时间边界，保证普通编辑入口恢复。
+/// @note 本测试不启动音频设备；播放位使用会话状态验证输入拒绝。
+/// @note 直接设置会话时钟模拟音频快照已发布，不依赖异步音频设备时序。
+/// @note 边界检查在 Session 更新消费传输快照后调用，测试覆盖该控制器入口。
+/// @note 已停播仍越界的场景模拟音频资源在到达边界同帧自行终止。
+/// @return 阶段约束只在所属会话生效，并在退出后恢复普通输入时返回 true。
+bool testComposeLessonPlaybackAndPositionLimits()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    context.audioTimelineTotalTime                   = 10.0;
+    context.lastConfig.settings.scrollSnap           = false;
+    context.lastConfig.settings.stopPlaybackOnScroll = true;
+    MMM::Logic::PlaybackController controller(context);
+
+    // 写谱只能在当前教学段找位置；普通 Seek、滚轮和中键平移
+    // 分别经过不同入口，先检查前两条不会越过段首或段尾。
+    controller.handleCommand(MMM::Logic::CmdSetComposeLessonInputLimit{
+        .mode  = MMM::Logic::ComposeLessonInputMode::Practice,
+        .begin = 0.8,
+        .end   = 1.2,
+    });
+    controller.handleCommand(MMM::Logic::CmdSeek{ 9.0 });
+    if ( !near(context.currentTime, 1.2) ) return false;
+    controller.handleCommand(MMM::Logic::CmdSeek{ 0.0 });
+    if ( !near(context.currentTime, 0.8) ) return false;
+    controller.handleCommand(
+        MMM::Logic::CmdScroll{ .cameraId = "Basic2DCanvas", .wheel = -10.0F });
+    if ( !near(context.currentTime, 1.2) ) return false;
+    controller.handleCommand(
+        MMM::Logic::CmdScroll{ .cameraId = "Basic2DCanvas", .wheel = 10.0F });
+    if ( !near(context.currentTime, 0.8) ) return false;
+
+    // 中键纵移复用 Seek，但它有单独的前置相机处理路径。
+    controller.handleCommand(MMM::Logic::CmdPanCanvas{
+        .cameraId = "Basic2DCanvas", .deltaY = 100000.0F });
+    if ( !near(context.currentTime, 1.2) ) return false;
+    // 控制器接收音频时钟后的边界检查，仅在真实越界时停播。
+    context.currentTime = 1.1;
+    context.isPlaying   = true;
+    if ( controller.stopAtComposeLessonEnd() || !context.isPlaying )
+        return false;
+    context.currentTime = 1.3;
+    if ( !controller.stopAtComposeLessonEnd() || context.isPlaying ||
+         !near(context.currentTime, 1.2) )
+        return false;
+    // 音频资源若先自行停止，仍要回收最后一帧留下的越界位置。
+    context.currentTime = 1.3;
+    if ( !controller.stopAtComposeLessonEnd() ||
+         !near(context.currentTime, 1.2) )
+        return false;
+
+    // 首播与复播即使收到暂停、滚动或拖动命令，也只能沿音频时钟前进。
+    controller.handleCommand(MMM::Logic::CmdSetComposeLessonInputLimit{
+        .mode  = MMM::Logic::ComposeLessonInputMode::AutoPlayback,
+        .begin = 0.8,
+        .end   = 1.2,
+    });
+    context.currentTime = 1.0;
+    context.isPlaying   = true;
+    controller.handleCommand(MMM::Logic::CmdSetPlayState{ false });
+    controller.handleCommand(MMM::Logic::CmdSeek{ 2.0 });
+    controller.handleCommand(
+        MMM::Logic::CmdScroll{ .cameraId = "Basic2DCanvas", .wheel = -10.0F });
+    controller.handleCommand(MMM::Logic::CmdPanCanvas{
+        .cameraId = "Basic2DCanvas", .deltaY = 100000.0F });
+    if ( !context.isPlaying || !near(context.currentTime, 1.0) ) return false;
+
+    // 结束教学先解除约束再停播，普通谱面定位立即恢复。
+    // 退出时也要丢弃可能尚未积分的边缘滚动速度。
+    context.previewEdgeScrollVelocity = 1.0;
+    controller.handleCommand(MMM::Logic::CmdSetComposeLessonInputLimit{});
+    controller.handleCommand(MMM::Logic::CmdSetPlayState{ false });
+    controller.handleCommand(MMM::Logic::CmdSeek{ 2.0 });
+    if ( context.isPlaying || !near(context.currentTime, 2.0) ||
+         !near(context.previewEdgeScrollVelocity, 0.0) )
+        return false;
+    return true;
+}
+
 /// @brief 验证改键数按 BGM 相对索引原子迁移全部自动采样。
 /// @details
 /// 自动采样保存绝对轨道，但其语义是相对玩家区末尾的 BGM 索引。玩家轨从四轨
@@ -8319,6 +8412,7 @@ int main()
                    testAlignCommonBeatsPreservesEmbeddedPolylineNodes() &&
                    testResizePreservesNormalizedOffset() &&
                    testPanCommandUsesLogicalPixels() &&
+                   testComposeLessonPlaybackAndPositionLimits() &&
                    testTrackCountActionMigratesAllSamples() &&
                    testSessionSelectsKeyCountLayout() &&
                    testBackgroundSessionPublishesCanvasHover() &&

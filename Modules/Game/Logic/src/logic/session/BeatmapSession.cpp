@@ -1,6 +1,7 @@
 #include "logic/BeatmapSession.h"
 #include "audio/AudioManager.h"
 #include "common/LogicCommandMutationClassification.h"
+#include "common/LogicCommands.h"
 #include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
 #include "event/core/EventBus.h"
@@ -1176,12 +1177,22 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
     m_ctx->lastSnapshotTime = currentSysTime;
 
     // 边缘速度按实际经过时间积分，使拖动自动滚动不依赖逻辑帧率。
+    // 教学自动播放由音频时钟唯一驱动，遗留的边缘速度不能抢占播放位置。
+    if ( m_ctx->composeLessonInputMode == ComposeLessonInputMode::AutoPlayback )
+        m_ctx->previewEdgeScrollVelocity = 0.0;
     if ( std::abs(m_ctx->previewEdgeScrollVelocity) > 0.0001 ) {
         double delta     = m_ctx->previewEdgeScrollVelocity * dt;
         double totalTime = SessionUtils::getEffectiveTotalTimeSeconds(*m_ctx);
+        double minTime   = 0.0;
+        if ( m_ctx->composeLessonInputMode ==
+             ComposeLessonInputMode::Practice ) {
+            // 预览边缘自动滚动不经过 CmdSeek/CmdScroll，必须独立遵守段落边界。
+            minTime   = std::clamp(m_ctx->composeLessonBegin, 0.0, totalTime);
+            totalTime = std::clamp(m_ctx->composeLessonEnd, minTime, totalTime);
+        }
         m_ctx->currentTime =
             // 自动滚动限制在有效曲长内，不允许持续速度将位置推到范围外。
-            std::clamp(m_ctx->currentTime + delta, 0.0, totalTime);
+            std::clamp(m_ctx->currentTime + delta, minTime, totalTime);
 
         if ( m_ctx->isPlaying && m_ctx->isActiveSession ) {
             // 只有播放源同步全局音频定位，后台画布不能抢占传输位置。
@@ -1220,6 +1231,11 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                 audioClockSnapshot,
                 playbackClockNow,
                 effectiveConfig.settings.syncConfig);
+
+        // 练习允许自行试听，但不能让时钟越过当前批注段落继续播放。
+        // 边界只在同步到本轮音频位置后检查，随后钳制到准确的段尾。
+        if ( m_playback->stopAtComposeLessonEnd() )
+            isPlaybackClockActive = false;
 
         updateAnimateTime(dt, effectiveConfig, isPlaybackClockActive);
         // 有效播放时直接跟随时钟，避免滚动平滑叠加音画延迟。

@@ -1,6 +1,7 @@
 #include "ui/walkthrough/WalkthroughPage.h"
 
 #include "audio/AudioManager.h"
+#include "common/LogicCommands.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "common/walkthrough/ComposeLessonNotes.h"
 #include "config/AppConfig.h"
@@ -117,6 +118,11 @@
 /// - 页面销毁或主动退出后，尚在队列中的查询结果仍有共享所有权；
 /// - 查询只读取正式轨道根物件，草稿仍由目录持有的参考提供；
 /// - 复播再次从段首开始，播到终点才接续下一段；
+/// - 首播和复播期间用户不能停播或定位，教学在段尾自行停播；
+/// - 写谱阶段可以自行试听，播放到段尾自动停下，定位限定于当前段落；
+/// - 阶段限制只存在于目标谱面会话，不写入项目或用户设置；
+/// - 限制与停播、定位命令使用同一队列，切步时先解锁旧阶段；
+/// - 滚轮、跳转和中键平移共享段落界限，边缘自动滚动也须遵守；
 /// - 退出或切换项目时停播并清理旧目标身份；
 /// - 基础与进阶分支独立导航，不隐式串到另一分支。
 
@@ -126,6 +132,14 @@ namespace MMM::UI
 WalkthroughPage::~WalkthroughPage()
 {
     // 欢迎页通常先调用 stopGuide；析构仍兜底处理直接销毁页面的路径。
+    if ( m_activeGuide && m_activeGuide->composeSession ) {
+        // 页面销毁不能把上个教学阶段的输入限制留给普通谱面编辑。
+        // 即使没有收到通常的 stopGuide，队列顺序仍保证停播不被旧阶段拦截。
+        m_activeGuide->composeSession->pushCommand(
+            Logic::CmdSetComposeLessonInputLimit{});
+        m_activeGuide->composeSession->pushCommand(
+            Logic::CmdSetPlayState{ false });
+    }
     if ( m_draftAreaMutedBeforeGuide.has_value() )
         Audio::AudioManager::instance().setDraftKeySoundAreaMuted(
             *m_draftAreaMutedBeforeGuide);
@@ -360,6 +374,15 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
                                           hasPrevious,
                                           reviewing,
                                           step.m_guide->m_requiresAction);
+    if ( m_activeGuide && m_activeGuide->composeSession &&
+         m_activeGuide->composeSession != composeSession ) {
+        // 切换示例谱面标签时，先放开旧会话，避免旧标签在引导外仍被锁定。
+        // 新旧会话各有独立队列；旧会话先解锁再停播，新会话按新步骤重新配置。
+        m_activeGuide->composeSession->pushCommand(
+            Logic::CmdSetComposeLessonInputLimit{});
+        m_activeGuide->composeSession->pushCommand(
+            Logic::CmdSetPlayState{ false });
+    }
     m_activeGuide = ActiveGuide{
         .topicId  = topic.m_id,
         .branchId = branch.m_id,
@@ -379,7 +402,7 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
     }
     if ( step.m_composeLesson ) {
         // 会话队列按停播、定位、按阶段开播的顺序执行。
-        // 练习阶段保持暂停，给用户稳定的拍位来绘制或调整物件。
+        // 练习进入时保持暂停；用户之后可自行试听，播放到段尾自动停止。
         const auto& lesson            = *step.m_composeLesson;
         auto&       guide             = *m_activeGuide;
         guide.composeSession          = std::move(composeSession);
@@ -387,6 +410,11 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
         guide.composeBeatmapKey       = std::move(composeBeatmapKey);
         guide.composeBaselineRevision = composeSnapshot->composeNoteRevision;
         const double begin            = lesson.m_beginMs / 1000.0;
+        const double end              = lesson.m_endMs / 1000.0;
+        // 旧阶段的自动播放限制必须先解除，教学自己的停播与段首定位才能执行。
+        // 练习与播放使用同一段起止，切步不沿用前一批注的时间窗口。
+        guide.composeSession->pushCommand(
+            Logic::CmdSetComposeLessonInputLimit{});
         guide.composeSession->pushCommand(Logic::CmdSetPlayState{ false });
         if ( composeBaseline ) {
             // 逻辑队列依次停播、还原正式物件、定位、开播，首播不会闪过旧内容。
@@ -398,6 +426,13 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
             });
         }
         guide.composeSession->pushCommand(Logic::CmdSeek{ begin });
+        guide.composeSession->pushCommand(Logic::CmdSetComposeLessonInputLimit{
+            .mode  = lesson.m_phase == Walkthrough::ComposeLessonPhase::Practice
+                         ? Logic::ComposeLessonInputMode::Practice
+                         : Logic::ComposeLessonInputMode::AutoPlayback,
+            .begin = begin,
+            .end   = end,
+        });
         if ( lesson.m_phase != Walkthrough::ComposeLessonPhase::Practice )
             guide.composeSession->pushCommand(Logic::CmdSetPlayState{ true });
         // 欢迎页与谱面常在同一 Dock 标签组；启动后必须让目标画布可见，
@@ -416,11 +451,14 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
 /// @param manager 提供全局 Spotlight。
 void WalkthroughPage::stopGuide(UIManager* manager)
 {
-    if ( m_activeGuide && m_activeGuide->composeSession )
+    if ( m_activeGuide && m_activeGuide->composeSession ) {
         // 用户按 Esc 或主动结束时，不让自动预览继续在后台播放。
-        // 此命令只在退出时排入队列，不进入每帧更新路径。
+        // 先解除教学限制，随后停播；这两个命令只在退出时排入队列。
+        m_activeGuide->composeSession->pushCommand(
+            Logic::CmdSetComposeLessonInputLimit{});
         m_activeGuide->composeSession->pushCommand(
             Logic::CmdSetPlayState{ false });
+    }
     if ( m_draftAreaMutedBeforeGuide.has_value() ) {
         // 本轮结束时恢复原值；预先已静音的用户不会被意外打开声音。
         // 控制库独立于谱面会话，关闭项目后也可还原进入引导前的值。
@@ -589,7 +627,10 @@ void WalkthroughPage::updateGuide(UIManager* manager)
                 snapshot->playbackTime < end;
             if ( guide.composePlaybackStarted &&
                  snapshot->playbackTime >= end ) {
-                // 停播先入队；下一步骤会重新定位自己的开始时间。
+                // 播到段尾后先解除输入锁，再停播；下一步骤会重新定位。
+                // 不能提前解锁，否则终点附近的用户输入可能改变完成判定。
+                guide.composeSession->pushCommand(
+                    Logic::CmdSetComposeLessonInputLimit{});
                 guide.composeSession->pushCommand(
                     Logic::CmdSetPlayState{ false });
                 spotlight.completeTarget("compose.lesson.playback", true);

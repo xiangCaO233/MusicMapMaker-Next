@@ -8,6 +8,7 @@ namespace MMM::Logic
 struct CmdPanCanvas;
 struct CmdScroll;
 struct CmdSeek;
+struct CmdSetComposeLessonInputLimit;
 struct CmdSetBgmKeySoundAreaMute;
 struct CmdSetDraftKeySoundAreaMute;
 struct CmdSetKeySoundEffectGroupGain;
@@ -34,6 +35,15 @@ public:
     /// @brief 处理设置播放状态的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdSetPlayState& cmd);
+
+    /// @brief 切换本会话的创作教学输入范围；退出后恢复普通播放和定位。
+    /// @param cmd 教学阶段及其音频时间起止位置。
+    void handleCommand(const CmdSetComposeLessonInputLimit& cmd);
+
+    /// @brief 写谱练习播放越过教学段尾时暂停并定位到准确边界。
+    /// @return 本轮停播或校正越界位置时返回 true。
+    /// @warning 每轮播放更新调用；未越界时只做常量级检查，不访问音频设备。
+    [[nodiscard]] bool stopAtComposeLessonEnd();
 
     /// @brief 处理时间轴跳转的命令
     /// @param cmd 命令数据

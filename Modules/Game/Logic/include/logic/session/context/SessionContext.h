@@ -33,6 +33,8 @@ class Project;
 namespace MMM::Logic
 {
 
+enum class ComposeLessonInputMode : std::uint8_t;
+
 using BeatmapSyncBuffer = Common::Render::RenderSnapshotBuffer;
 
 /// @brief 相机/视口信息
@@ -77,7 +79,13 @@ struct SessionContext {
     /// @brief 最近一次结束的编辑手势；仅发布标记，不在热路径复制音符列表。
     Common::Render::RenderSnapshot::WalkthroughEditEvent walkthroughEditEvent{};
     /// @brief 教学只读验收用的正式物件变更序号；仅逻辑线程写入。
-    std::uint64_t  composeNoteRevision{ 0 };
+    std::uint64_t composeNoteRevision{ 0 };
+    /// @brief 当前会话的创作教学阶段；零值为 Off，不写入谱面或用户配置。
+    ComposeLessonInputMode composeLessonInputMode{};
+    /// @brief 当前教学段的音频时间下界，由步骤切换命令一次性更新。
+    double composeLessonBegin{ 0.0 };
+    /// @brief 当前教学段的音频时间上界，写谱期间所有定位入口共用。
+    double         composeLessonEnd{ 0.0 };
     entt::registry sampleRegistry;    ///< 自动采样实体的独立 ECS 注册表
     entt::registry timelineRegistry;  ///< 时间轴事件(BPM等)的 ECS 注册表
     /// @brief 玩家物件已选实体索引，避免框选热路径扫描完整 Registry。
