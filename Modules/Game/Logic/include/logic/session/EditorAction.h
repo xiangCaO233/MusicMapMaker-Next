@@ -2,6 +2,7 @@
 
 #include "mmm/beatmap/BeatmapMutationObserver.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
@@ -35,6 +36,17 @@ public:
 
     /// @brief 返回该操作执行、撤销或重做会修改的谱面数据类别。
     [[nodiscard]] virtual ::MMM::BeatmapMutationFlags mutationFlags() const = 0;
+
+    /// @brief 教学创建所属步骤；普通动作保持零，不受引导回退影响。
+    std::uint64_t m_walkthroughToken{ 0 };
+    /// @brief 替换式续接沿用原练习槽位；普通创建按音符类型选择槽位。
+    int m_walkthroughSlot{ -1 };
+    /// @brief 构造只移除本动作教学产物的补偿动作；默认不支持。
+    /// @note 不重放普通 undo，以免恢复布局或覆盖其他后续编辑。
+    virtual std::unique_ptr<IEditorAction> walkthroughRollback(SessionContext&)
+    {
+        return {};
+    }
 };
 
 /// @brief 操作栈管理器，维护撤销栈和重做栈。
@@ -51,6 +63,10 @@ public:
     /// @param ctx 会话上下文引用
     void undo(SessionContext& ctx);
 
+    /// @brief 精确回滚指定教学步骤创建的物件，保留其余历史和内容。
+    /// @warning 仅用户点击返回时扫描历史，不允许逐帧调用。
+    void rollbackWalkthrough(std::uint64_t token, SessionContext& ctx);
+
     /// @brief 执行重做
     /// @param ctx 会话上下文引用
     void redo(SessionContext& ctx);
@@ -63,6 +79,17 @@ public:
 
     /// @brief 标记当前状态为已保存
     void markSaved();
+
+    /// @brief 捕获当前编辑状态的单调修订号。
+    /// @return 后续异步保存完成时用于核对内容是否仍未变化的修订号。
+    [[nodiscard]] std::uint64_t captureSaveRevision() const;
+
+    /// @brief 仅在内容未越过指定修订时确认异步保存点。
+    /// @param revision 保存快照创建时捕获的编辑修订号。
+    /// @return 当前内容仍与保存快照一致并已清除脏状态时返回 true。
+    /// @note 保存期间若发生编辑、撤销或重做，则保守保留未保存状态，避免把
+    /// 后续内容误标为已经写入磁盘。
+    bool markSavedIfUnchanged(std::uint64_t revision);
 
     /// @brief 标记一次未进入撤销栈的编辑为未保存。
     void markDirty();
@@ -90,6 +117,9 @@ private:
 
     /// @brief 是否存在未进入撤销栈且尚未保存的编辑。
     bool m_hasNonUndoableChanges{ false };
+
+    /// @brief 每次内容状态变化时递增的异步保存校验修订号。
+    std::uint64_t m_changeRevision{ 0 };
 
     /// @brief 等待 BeatmapSession 合并并发布的操作变化类别。
     ::MMM::BeatmapMutationFlags m_pendingMutationFlags{

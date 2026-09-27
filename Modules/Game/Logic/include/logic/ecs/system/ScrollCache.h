@@ -79,6 +79,12 @@ public:
     /// @brief 获取给定时间戳对应的绝对 Y 坐标。
     double getAbsY(double t) const;
 
+    /// @brief 获取未应用动画缩放的原始分段积分位置。
+    /// @param t 查询时间，允许落在首段之前。
+    /// @return 与 getAbsY 使用相同分段的原始 AbsY。
+    /// @warning 索引重建路径：仅二分查找，不遍历时间线实体。
+    double getUnscaledRawAbsY(double t) const;
+
     /// @brief 获取播放渲染锚点使用的绝对 Y 坐标。
     /// @param t 当前播放动画时间。
     /// @return 渲染锚点 AbsY。
@@ -113,6 +119,11 @@ public:
 
     /// @brief 是否存在 Jump 效果，存在时可见物件集合不再是连续时间区间
     bool hasJumpEffects() const;
+
+    /// @brief 是否存在会使物件位移不同于统一画布位移的有效 HS。
+    /// @return 任一生效段的 HS 不为 1 时返回真；线性显示模式下为假。
+    /// @warning 每份渲染快照读取，仅访问重建时缓存的标志，不扫描时间线。
+    bool hasNonUnitHs() const { return m_hasNonUnitHs; }
 
     /// @brief 判断给定播放窗口是否可以用当前瞬时速度做 UI 侧线性补间。
     /// @param startTime 播放窗口起点时间。
@@ -176,6 +187,8 @@ private:
 
     /// @brief 当前缓存是否包含 Jump 断层。
     bool m_hasJumpEffects{ false };
+    /// @brief 根据最终生效段缓存非单位 HS，供统一顶点补间判定使用。
+    bool m_hasNonUnitHs{ false };
 
     struct TimingEntry {
         entt::entity             entity;
@@ -202,12 +215,6 @@ private:
     /// @brief 重建亚帧抵消脉冲窗口。
     /// @warning 逻辑低频路径：仅在 ScrollCache rebuild 时完整扫描分段。
     void rebuildMicroImpulseWindows();
-
-    /// @brief 获取原始分段积分 AbsY，不应用动画缩放或亚帧脉冲窗口修正。
-    /// @param t 查询时间。
-    /// @return 原始 AbsY。
-    /// @warning 热路径：每次坐标查询可能调用；只能做二分查找。
-    double getUnscaledRawAbsY(double t) const;
 
     /// @brief 获取应用动画缩放后的分段积分 AbsY，不应用亚帧脉冲窗口修正。
     /// @param t 查询时间。

@@ -40,9 +40,42 @@ public:
                 const Common::Render::RenderSnapshot* currentSnapshot,
                 float targetWidth, float targetHeight);
 
+    /// @brief 请求本帧左键释放时丢弃画笔而不是提交物件。
+    /// @details 供上层事务式教学在发现拖拽落点错误后撤销本次临时放置；
+    /// 标记在下一次左键释放后无条件清除，不影响后续普通绘制。
+    /// @warning UI 输入热路径：只设置一次性布尔标记。
+    void cancelBrushOnNextRelease();
+
+    /// @brief 设置后续起笔是否为只新建独立物件的教学练习。
+    /// @param minimumSubNotes 非零时要求提交后的折线至少有这么多子段。
+    /// @note 参数在起笔时锁存，导航切步不能改变当前画笔的提交门禁。
+    /// @warning UI 每帧入口，只修改值状态，起笔时锁存到整段手势。
+    void setWalkthroughPlacement(bool enabled, std::uint64_t token = 0,
+                                 std::uint8_t minimumSubNotes = 0)
+    {
+        // 步骤切换不能让旧手势在新目标下提交；保持普通绘制不受影响。
+        if ( m_leftPressStartedOnCanvas && m_standaloneBrush &&
+             m_brushWalkthroughToken != token )
+            m_cancelBrushOnNextRelease = true;
+        m_walkthroughPlacement       = enabled;
+        m_walkthroughToken           = token;
+        m_walkthroughMinimumSubNotes = minimumSubNotes;
+    }
+
+    /// @brief 仅同步后台主画布的鼠标悬停位置，不启用编辑交互。
+    /// @param targetWidth 画布逻辑宽度。
+    /// @param targetHeight 画布逻辑高度。
+    /// @warning UI 热路径：后台可见画布每帧调用；只在指针状态变化时发布一条
+    /// 鼠标位置命令，禁止扩展为绘制、拾取或拖拽处理。
+    void updateHoverState(float targetWidth, float targetHeight);
+
     /// @brief 推进并绘制交互层的临时 UI。
     /// @warning UI 热路径：每帧最多绘制一个播放速度提示窗口。
     void updateTransientUi();
+
+    /// @brief 处理落在当前画布上的系统文件拖放，不要求画布已获得编辑焦点。
+    /// @warning 每个可见帧检查队列；文件系统访问只发生于实际收到拖放时。
+    void handleDrops(UI::UIManager* sourceManager);
 
     /// @brief 处理当前鼠标所在主画布上的 Ctrl/Command/Alt 修饰键滚轮。
     /// @param currentSnapshot 当前渲染快照。
@@ -61,6 +94,8 @@ private:
         bool blocksCanvas{ false };
         /// @brief 是否允许未消费的滚轮继续传给画布。
         bool passesWheelToCanvas{ false };
+        /// @brief 详情正文是否已消费本帧滚轮，避免画布重复滚动。
+        bool wheelConsumed{ false };
     };
 
     struct PendingDrop {
@@ -131,17 +166,29 @@ private:
     std::vector<PendingDrop> m_pendingDrops;
     Event::SubscriptionID    m_dropSubId;
 
-    void handleDrops(UI::UIManager* sourceManager);
+    /// @brief 下一次绘制工具释放是否只清理临时画笔。
+    bool m_cancelBrushOnNextRelease{ false };
+    /// @brief 当前引导是否要求独立放置，下一次起笔时读取。
+    bool m_walkthroughPlacement{ false };
+    /// @brief 当前活动画笔锁存的独立放置策略，不随步骤确认或结束改变。
+    bool m_standaloneBrush{ false };
+    /// @brief 下一次教学起笔所属的步骤实例。
+    std::uint64_t m_walkthroughToken{ 0 };
+    /// @brief 起笔时冻结的步骤身份，不能被后续帧的导航替换。
+    std::uint64_t m_brushWalkthroughToken{ 0 };
+    /// @brief 下一次教学起笔要求的最终折线子段数；零表示普通物件练习。
+    std::uint8_t m_walkthroughMinimumSubNotes{ 0 };
+    /// @brief 起笔时锁存的子段数门槛，不受步骤切换影响。
+    std::uint8_t m_brushMinimumSubNotes{ 0 };
+
     void handleHotkeys(const Common::Render::RenderSnapshot* currentSnapshot);
     /// @brief 处理主画布鼠标、批注栏和物件编辑交互。
-    /// @param sourceManager 用于打开共享的批注表窗口。
     /// @param currentSnapshot 当前主画布渲染快照。
     /// @param targetWidth 画布宽度。
     /// @param targetHeight 画布高度。
     /// @warning UI 热路径：每帧执行；只允许常量级输入处理和可见物件遍历，
     /// 禁止文件系统访问、完整谱面扫描或阻塞操作。
     void handleInteractions(
-        UI::UIManager*                        sourceManager,
         const Common::Render::RenderSnapshot* currentSnapshot,
         float targetWidth, float targetHeight);
     /// @brief 在移动工具下绘制当前悬浮物件的独立音频试听按钮。
@@ -160,7 +207,6 @@ private:
         float canvasScreenX, float canvasScreenY, float targetWidth,
         float targetHeight, float pointerX, float pointerY);
     /// @brief 绘制批注标记区、悬浮详情和时间戳批注编辑弹窗。
-    /// @param sourceManager 用于访问共享 Timeline 窗口中的批注表状态。
     /// @param currentSnapshot 当前主画布渲染快照。
     /// @param canvasScreenX 画布左上角屏幕横坐标。
     /// @param canvasScreenY 画布左上角屏幕纵坐标。
@@ -173,7 +219,6 @@ private:
     /// @warning UI 热路径：只遍历当前快照已裁剪的可见批注标记；不访问 ECS、
     /// 文件系统或完整谱面。
     AnnotationGutterInteractionResult renderAnnotationGutter(
-        UI::UIManager*                        sourceManager,
         const Common::Render::RenderSnapshot& currentSnapshot,
         float canvasScreenX, float canvasScreenY, float targetWidth,
         float targetHeight, float pointerX, float pointerY, bool canvasHovered);
@@ -335,6 +380,18 @@ private:
     Config::TrackLayout m_trackLayoutDragStart;
     /// @brief 轨道布局拖动开始时的归一化指针坐标。
     glm::vec2 m_trackLayoutPointerStart{ 0.0f, 0.0f };
+    /// @brief 当前独立横向拖动的辅助区域。
+    AuxiliaryLayoutRegion m_auxiliaryLayoutRegion{
+        AuxiliaryLayoutRegion::None
+    };
+    /// @brief 当前辅助区域的横向拖动句柄。
+    HorizontalRegionDragHandle m_horizontalRegionDragHandle{
+        HorizontalRegionDragHandle::None
+    };
+    /// @brief 辅助区域拖动开始时的已解析归一化边界。
+    HorizontalRegionBounds m_horizontalRegionDragStart;
+    /// @brief 辅助区域拖动开始时的归一化横坐标。
+    float m_horizontalRegionPointerStart{ 0.0F };
     /// @brief 当前快照中可见物件的合并布局包围框。
     std::vector<NoteLayoutInstance> m_noteLayoutInstances;
     /// @brief 重建物件布局包围框时复用的实体到数组下标映射。

@@ -9,12 +9,15 @@ namespace MMM::UI
 {
 class UIManager;
 class ICanvasView;
+class IAuxiliaryWindowView;
 class IParallelUiPreparable;
 
-/// @brief 给当前 ImGui 窗口原生关闭按钮补充统一交互反馈。
+/// @brief 给当前 ImGui 窗口原生关闭按钮补充统一交互与 Dock
+/// 悬浮视觉反馈。
 /// @param wasOpenBeforeBegin 调用 ImGui::Begin 前窗口是否处于打开状态。
 /// @param pOpen 传给 ImGui::Begin 的打开状态指针。
-/// @warning UI 热路径：窗口 Begin 后调用，只读取 ImGui 状态并触发预加载音效。
+/// @warning UI 热路径：窗口 Begin 后调用；普通帧只读取 ImGui
+/// 状态，Dock 关闭按钮悬浮时只调整宿主已有顶点颜色。
 void FeedbackCurrentWindowCloseButton(bool wasOpenBeforeBegin, bool* pOpen);
 
 /// @brief 视图类型判别枚举,替代 dynamic_cast (支持 -fno-rtti)
@@ -49,6 +52,9 @@ public:
 
     /// @brief 安全转换为画布能力接口。
     virtual ICanvasView* asCanvasView() { return nullptr; }
+
+    /// @brief 安全转换为独立窗口能力接口。
+    virtual IAuxiliaryWindowView* asAuxiliaryWindowView() { return nullptr; }
 
     /// @brief 安全转换为可并行准备 UI 数据的接口
     virtual IParallelUiPreparable* asParallelUiPreparable() { return nullptr; }

@@ -35,7 +35,14 @@ class CollaborationRoom;
 
 namespace MMM::UI
 {
+namespace Walkthrough
+{
+class Service;
+class Spotlight;
+}  // namespace Walkthrough
+class ProjectDropRouter;
 class ICanvasView;
+class IAuxiliaryWindowView;
 class ICanvasWorkspaceService;
 class IEditorApplicationService;
 class IRenderableView;
@@ -54,6 +61,14 @@ public:
 
     /// @brief 取消项目生命周期订阅并销毁 UI 管理器。
     ~UIManager();
+    /// @brief 请求在下一帧打开欢迎页并返回主题目录，不改变启动偏好。
+    void openWelcome();
+    /// @brief 取得不依赖视图开关的演练服务。
+    Walkthrough::Service& walkthroughService();
+    /// @brief 取得用于任意控件上报屏幕矩形的突出引导层。
+    /// @return 生命周期与 UIManager 相同的 UI 线程状态引用。
+    /// @warning UI 热路径：只返回独占成员引用，不复制目标或所有权。
+    Walkthrough::Spotlight& walkthroughSpotlight();
 
     /// @brief 注册视图，转交所有权
     void registerView(const std::string& name, std::unique_ptr<IUIView> view);
@@ -83,6 +98,13 @@ public:
     /// @return 视图存在并实现画布能力时返回观察指针，否则返回 nullptr。
     /// @warning UI 热路径：只查询本地注册表并调用虚拟能力访问器。
     [[nodiscard]] ICanvasView* getCanvasView(const std::string& name) const;
+
+    /// @brief 获取已注册视图暴露的独立窗口能力接口。
+    /// @param name 视图注册名。
+    /// @return 视图存在并实现独立窗口能力时返回观察指针，否则返回 nullptr。
+    /// @warning UI 热路径：只查询本地注册表并调用能力访问器。
+    [[nodiscard]] IAuxiliaryWindowView* getAuxiliaryWindowView(
+        const std::string& name) const;
 
     /// @brief 清理所有ui
     void clearAllViews();
@@ -127,6 +149,11 @@ public:
     /// @return 已加载项目仍有效时返回 true。
     /// @warning UI 热路径：只读取 UI 线程维护的本地状态。
     [[nodiscard]] bool hasActiveProjectUiState() const;
+
+    /// @brief 判断 UI 工作区是否已有至少一个真实谱面编辑器标签页。
+    /// @return CanvasTabManager 本帧快照中存在非占位会话时返回 true。
+    /// @warning UI 热路径：只查询已注册管理器的布尔快照，不扫描逻辑会话。
+    [[nodiscard]] bool hasOpenBeatmapEditor();
 
     /// @brief 判断时间线窗口是否正在拖动 Timing 框选区域。
     /// @return 时间线正在框选时返回 true。
@@ -233,6 +260,14 @@ public:
                                uint32_t taskIndex) override;
 
 private:
+    /// @brief 学习状态和事件订阅先于视图构造、后于视图销毁。
+    std::unique_ptr<Walkthrough::Service> m_walkthrough;
+    /// @brief 当前演练的纯绘制突出层，不创建输入窗口或持有控件对象。
+    std::unique_ptr<Walkthrough::Spotlight> m_walkthroughSpotlight;
+    /// @brief 主窗口级拖放处理器，不依赖具体窗口是否打开。
+    std::unique_ptr<ProjectDropRouter> m_projectDropRouter;
+    /// @brief 延迟创建窗口，避免遍历视图时修改视图注册表。
+    bool m_openWelcome{ false };
     /// @brief 跨线程投递到 UI 的项目生命周期快照。
     struct ProjectUiLifecycleUpdate {
         /// @brief 本次更新类型。

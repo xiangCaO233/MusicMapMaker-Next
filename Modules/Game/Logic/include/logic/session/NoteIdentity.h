@@ -21,10 +21,12 @@ struct SampleComponent;
 [[nodiscard]] std::string makeNoteCollaborationId();
 
 /// @brief 为领域音符补齐协作逻辑标识。
+/// 已有非空标识保持原样，重复载入不改变协作引用。
 /// @param note 待补齐的领域音符。
 void ensureNoteCollaborationIdentity(::MMM::Note& note);
 
 /// @brief 为 ECS 根音符及其折线子物件补齐协作逻辑标识。
+/// 根与各子物件分别编号，不能把根标识复制给所有折线节点。
 /// @param note 待补齐的 ECS 音符。
 void ensureNoteCollaborationIdentity(NoteComponent& note);
 

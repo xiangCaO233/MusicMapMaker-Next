@@ -2,6 +2,7 @@
 
 #include "canvas/BackgroundVideoPlayer.h"
 #include "canvas/CanvasSnapshotPrepare.h"
+#include "canvas/ComposePolylineTarget.h"
 #include "common/AsciiFontData.h"
 #include "common/UnicodeFontData.h"
 #include "common/render/RenderSnapshotBuffer.h"
@@ -10,8 +11,11 @@
 #include "ui/ICanvasView.h"
 #include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
+#include <array>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -182,6 +186,24 @@ protected:
     void invalidateShaderSourceCache() override;
 
 private:
+    /// @brief 当前教学路径的几何语义，防止步骤切换复用上一种物件的目标。
+    enum class WalkthroughPlacementKind : std::uint8_t {
+        Note,   ///< 跨轨、跨拍移动后放下单键。
+        Flick,  ///< 同拍横向跨轨绘制滑键。
+        Hold,   ///< 同轨向后延伸绘制长条。
+    };
+
+    /// @brief 创作教程一次固定拖拽路径的分拍与轨道目标。
+    struct WalkthroughNoteDragTarget {
+        std::uintptr_t beatmapInstanceId{ 0 };  ///< 防止跨谱面复用旧路径。
+        int            sourceTrack{ 0 };        ///< 按下起点所在玩家轨。
+        int            destinationTrack{ 0 };   ///< 松开目标所在玩家轨。
+        double         sourceTime{ 0.0 };       ///< 起点精确分拍时间。
+        double         destinationTime{ 0.0 };  ///< 目标精确分拍时间。
+        /// @brief 路径对应的物件类型，用于进入新步骤时清除旧目标。
+        WalkthroughPlacementKind kind{ WalkthroughPlacementKind::Note };
+    };
+
     /// @brief 获取画布字体逻辑像素到物理栅格像素的当前倍率。
     /// @return 有效窗口内容缩放；无效配置回退为 1。
     [[nodiscard]] static float currentFontRasterScale();
@@ -195,6 +217,34 @@ private:
     void updateCollaborationViewports(UI::UIManager* sourceManager,
                                       const ImVec2&  canvasScreenPosition,
                                       const ImVec2&  canvasSize);
+
+    /// @brief 绘制并验证创作教程的单键、Shift 滑键和长条拖拽路径。
+    /// @param sourceManager 提供演练状态机。
+    /// @param snapshot 当前谱面与画笔状态快照。
+    /// @param canvasScreenPosition 主画布左上角屏幕坐标。
+    /// @param canvasSize 主画布逻辑像素尺寸。
+    /// @warning UI 热路径：仅在对应教程步骤中绘制固定几何；随机路径只在
+    /// 步骤进入或谱面切换时生成一次，失败释放通过取消命令清理临时画笔。
+    void updateComposeWalkthrough(
+        UI::UIManager*                        sourceManager,
+        const Common::Render::RenderSnapshot& snapshot,
+        const ImVec2& canvasScreenPosition, const ImVec2& canvasSize);
+
+    /// @brief 用批注样式标出本段待操作位置和错误物件，并提供定向删除按钮。
+    /// @return 鼠标位于教学按钮上时返回 true，阻止同帧被画布工具解释。
+    /// @warning UI 热路径：只访问已剔除的命中框和低频更新的段落反馈。
+    bool updateComposeLessonHints(
+        UI::UIManager*                        sourceManager,
+        const Common::Render::RenderSnapshot& snapshot,
+        const ImVec2& canvasScreenPosition, const ImVec2& canvasSize);
+
+    /// @brief 检查创作教程中的编辑操作并定位真实物件上的操作起点。
+    /// @return 当前步骤属于编辑练习时返回 true。
+    /// @warning UI 热路径：仅扫描固定数量的练习物件与当前帧命中框。
+    bool updateComposeEditWalkthrough(
+        UI::UIManager*                        sourceManager,
+        const Common::Render::RenderSnapshot& snapshot,
+        const ImVec2& canvasScreenPosition, const ImVec2& canvasSize);
 
     /// @brief 画布名称
     std::string m_canvasName;
@@ -320,6 +370,53 @@ private:
     std::uint64_t m_recordedVideoUploadRevision{ 0 };
 
     std::unique_ptr<Basic2DCanvasInteraction> m_interaction;
+
+    /// @brief 当前创作教程固定使用的起点和目标分拍。
+    std::optional<WalkthroughNoteDragTarget> m_walkthroughNoteDragTarget;
+    /// @brief 单键成功落点，跨滑键步骤保留以约束后续长条必须邻近且异轨。
+    std::optional<WalkthroughNoteDragTarget> m_walkthroughPlacedNote;
+    /// @brief 滑键成功起点，用于避开随后长条尾部的同轨同拍重叠。
+    std::optional<WalkthroughNoteDragTarget> m_walkthroughPlacedFlick;
+    /// @brief 本轮成功绘制的长条路径，供折线练习避开已有长条。
+    std::optional<WalkthroughNoteDragTarget> m_walkthroughPlacedHold;
+    /// @brief 本轮 Note、Hold、Flick、Polyline 的步骤标记，只核对当前谱面。
+    std::array<std::uint64_t, 4> m_walkthroughPracticeTokens{};
+    /// @brief 上述标记所属的谱面实例，防止跨标签误认相同实体号。
+    std::uint64_t m_walkthroughPracticeBeatmapInstanceId{ 0 };
+    /// @brief 新的单键步骤标记，用来在重新演练时废弃上一轮身份。
+    std::uint64_t m_walkthroughNoteStepToken{ 0 };
+    /// @brief 本次左键尝试是否从画布内开始。
+    bool m_walkthroughNoteAttemptActive{ false };
+    /// @brief 本次尝试是否从指定起点框按下。
+    bool m_walkthroughNoteStartedAtSource{ false };
+    /// @brief 折线练习是否已从画布按下左键，直到该次释放才结束。
+    bool m_walkthroughPolylineAttemptActive{ false };
+    /// @brief 固定的五段折线检查点，视野失效后再重选。
+    std::optional<ComposePolylineTarget> m_walkthroughPolylineTarget;
+    /// @brief 折线路线所属谱面实例，防止不同标签复用同一组拍位。
+    std::uintptr_t m_walkthroughPolylineTargetBeatmapInstanceId{ 0 };
+    /// @brief 当前手势下一个必须经过的折线路线检查点。
+    std::size_t m_walkthroughPolylineNextWaypoint{ 0 };
+    /// @brief 折线练习的轨道、工具及修饰键在整段手势中是否合规。
+    bool m_walkthroughPolylineAttemptValid{ false };
+    /// @brief 本次折线练习是否发生真实左键拖动。
+    bool m_walkthroughPolylineDragged{ false };
+    /// @brief 已释放并等待逻辑快照确认最终子段数的步骤身份。
+    std::uint64_t m_walkthroughPolylinePendingToken{ 0 };
+    /// @brief 编辑练习进入时固定的四个物件几何，避免拖动预览抵扣正式结果。
+    std::array<Common::Render::RenderSnapshot::WalkthroughPracticeNoteState, 4>
+        m_walkthroughEditBaselines{};
+    /// @brief 当前编辑练习步骤身份与开始时已完成的编辑事务序号。
+    std::uint64_t m_walkthroughEditStepToken{ 0 };
+    std::uint64_t m_walkthroughEditFirstRevision{ 0 };
+    /// @brief 缓存所属谱面；换标签后不复用旧谱面的实体句柄。
+    std::uintptr_t m_walkthroughEditBeatmapInstanceId{ 0 };
+    /// @brief 本次尝试是否已经形成可见拖动距离。
+    bool m_walkthroughNoteDragged{ false };
+    /// @brief 逻辑快照是否确认本次画笔已激活。
+    bool m_walkthroughNoteBrushObserved{ false };
+    /// @brief 本次尝试是否违反修饰键规则：单键禁 Shift，滑键和长条持续 Shift。
+    bool m_walkthroughNoteModifierUsed{ false };
 
     /// @brief 上一次应用到动态顶点上的 Y 偏移量
     float m_lastAppliedYOffset{ 0.0f };

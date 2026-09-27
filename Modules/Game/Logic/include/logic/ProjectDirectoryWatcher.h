@@ -10,6 +10,8 @@ namespace MMM::Logic
 {
 
 /// @brief 监听项目目录中的文件系统变更，并向逻辑线程发布待处理变更标记。
+/// 通知只表示“目录可能变化”，不保留事件计数或路径队列，资源重扫由上层执行。
+/// start/stop/析构由控制侧串行调用，工作任务只发布变更标志。
 class ProjectDirectoryWatcher
 {
 public:
@@ -36,6 +38,8 @@ public:
     void start(const std::filesystem::path& path);
 
     /// @brief 停止文件夹监听器。
+    /// @warning 低频生命周期路径，等待线程池任务退出；非 Windows
+    /// 轮询可能尚在休眠。
     void stop();
 
     /// @brief 读取并清空当前是否存在待处理的文件系统变更。
@@ -54,6 +58,8 @@ private:
     /// @brief 文件夹监听线程的主循环。
     /// @param watchPath 需要递归监听的项目目录路径。
     /// @param stopToken 共享线程池任务的停止令牌。
+    /// @warning 后台阻塞监听路径；Win32 等待退出/变更事件，其他平台每 500ms
+    /// 采样。
     void watcherThreadLoop(std::filesystem::path watchPath,
                            std::stop_token       stopToken);
 

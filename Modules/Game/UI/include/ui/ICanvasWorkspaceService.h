@@ -72,6 +72,11 @@ public:
     /// @brief 创建应用启动时的时间线画布。
     [[nodiscard]] virtual std::unique_ptr<IUIView> createTimelineCanvas(
         const std::string& name, std::uint32_t width, std::uint32_t height) = 0;
+
+    /// @brief 创建应用启动时永久注册的独立批注表窗口。
+    /// @return 拥有独立数据生命周期的批注表视图。
+    [[nodiscard]] virtual std::unique_ptr<IUIView> createAnnotationTableWindow(
+        const std::string& name) = 0;
 };
 
 }  // namespace MMM::UI

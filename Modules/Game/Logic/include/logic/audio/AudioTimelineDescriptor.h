@@ -51,6 +51,9 @@ struct AudioTimelineDescriptor {
     /// @brief 覆盖全部听觉语义的稳定双 FNV-1a 指纹。
     std::string m_fingerprint;
 
+    /// @brief 仅覆盖 Main 资源序列及各自有效起播位置的画布同步指纹。
+    std::string m_mainAudioSyncFingerprint;
+
     /// @brief 非自动采样内容决定的谱面结束时间，单位为秒。
     double m_chartEndSeconds{ 0.0 };
 };

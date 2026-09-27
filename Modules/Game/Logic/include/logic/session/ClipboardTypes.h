@@ -11,6 +11,8 @@ namespace MMM::Logic
 {
 
 /// @brief 音符剪贴板条目，保留物件值和复制时的分拍位置。
+/// @details 组件按值持有，源实体被删除或源会话关闭后仍可读取复制内容。
+/// @note 分拍数据只有 hasBeatPositions 为真时有效，零值本身不代表缺失。
 struct ClipboardItem {
     NoteComponent       note;              ///< 复制的音符组件数据。
     double              startBeat{ 0.0 };  ///< 复制时的起始分拍位置。
@@ -21,6 +23,7 @@ struct ClipboardItem {
 };
 
 /// @brief 自动采样剪贴板条目。
+/// @note 保存相对 BGM 轨道，粘贴时需按目标谱面的玩家轨道数恢复绝对索引。
 struct SampleClipboardItem {
     /// @brief 复制的自动采样组件数据；其中 m_track 已归一化为 BGM 相对索引。
     SampleComponent sample;
@@ -36,6 +39,7 @@ struct SampleClipboardItem {
 };
 
 /// @brief Timeline 事件剪贴板条目。
+/// @details 秒偏移与 beat 偏移使用同一剪贴板锚点，供不同粘贴定位模式选择。
 struct TimelineClipboardItem {
     /// @brief 复制的 Timeline 组件数据。
     TimelineComponent timeline;

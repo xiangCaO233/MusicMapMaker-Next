@@ -29,6 +29,9 @@ struct SessionEntry {
     /// @brief 当前会话完整复合音频时间线的稳定指纹。
     std::string audioTimelineFingerprint;
 
+    /// @brief 当前会话 Main 资源序列和起播位置的画布同步指纹。
+    std::string mainAudioSyncFingerprint;
+
     /// @brief 是否为初始 Logo 占位画布，尚未加载谱面时为 true。
     bool isLogoPlaceholder{ false };
 
@@ -44,6 +47,9 @@ struct SessionSnapshotEntry {
     /// @brief Session 在注册表中的原始索引。
     int32_t index{ -1 };
 
+    /// @brief 主画布稳定身份，供鼠标位置命令在锁外选择目标。
+    std::string cameraId;
+
     /// @brief 逻辑会话共享引用，保证锁外 update 期间生命周期有效。
     std::shared_ptr<BeatmapSession> session;
 
@@ -52,6 +58,9 @@ struct SessionSnapshotEntry {
 
     /// @brief 当前会话完整复合音频时间线指纹。
     std::string audioTimelineFingerprint;
+
+    /// @brief 当前会话 Main 资源序列和起播位置的画布同步指纹。
+    std::string mainAudioSyncFingerprint;
 
     /// @brief 该条目是否为 Logo 占位画布。
     bool isLogoPlaceholder{ false };
@@ -63,7 +72,27 @@ struct PublishedSessionSnapshot {
     std::vector<SessionSnapshotEntry> sessions;
 };
 
+/// @brief 只含 UI 标签元数据的不可变条目，不延长 BeatmapSession 生命周期。
+struct SessionUiSnapshotEntry {
+    /// @brief 与注册表索引保持一致的画布位置。
+    int32_t index{ -1 };
+    /// @brief 画布注册与命令路由共用的稳定相机 ID。
+    std::string cameraId;
+    /// @brief 当前条目是否仍为欢迎 Logo 占位会话。
+    bool isLogoPlaceholder{ false };
+    /// @brief 是否从项目工作区恢复原有停靠布局。
+    bool restoreDockFromWorkspace{ false };
+};
+
+/// @brief UI 每帧读取的轻量会话列表，由结构变更低频发布。
+struct PublishedSessionUiSnapshot {
+    /// @brief 与会话注册表同索引的画布元数据。
+    std::vector<SessionUiSnapshotEntry> entries;
+};
+
 /// @brief 编辑器多画布会话注册表，封装 Session 列表、活跃索引和 cameraId 分配。
+/// 可变条目受递归锁保护；逻辑循环使用已发布快照保持锁外会话生命周期。
+/// 索引随删除移动，不是永久身份；跨结构变更定位画布应使用 cameraId。
 class SessionRegistry
 {
 public:
@@ -119,11 +148,14 @@ public:
     /// @brief 获取指定索引的 SessionEntry。
     /// @param index 目标 Session 索引。
     /// @return 指定索引的 SessionEntry；索引无效时返回 nullptr。
+    /// @warning 返回的是容器内借用指针；需要跨调用访问时，调用方须保持外层
+    /// mutex() 锁且避免修改容器结构，内部短锁不会延长条目地址的有效期。
     SessionEntry* entry(int32_t index);
 
     /// @brief 获取指定索引的只读 SessionEntry。
     /// @param index 目标 Session 索引。
     /// @return 指定索引的只读 SessionEntry；索引无效时返回 nullptr。
+    /// @warning 只读指针同样依赖外层锁与容器地址稳定性，不是快照。
     const SessionEntry* entry(int32_t index) const;
 
     /// @brief 获取所有 Session 条目的只读快照。
@@ -174,6 +206,13 @@ public:
     /// 并发替换快照时保证本轮逻辑访问安全，并让旧项目会话在最后一个读者离开后及时释放。
     std::shared_ptr<const PublishedSessionSnapshot> publishedSnapshot() const;
 
+    /// @brief 获取不持有 BeatmapSession 的 UI 画布元数据快照。
+    /// @return 拥有型快照句柄，结构变更后本轮读取仍有效。
+    /// @warning UI 每帧复制一次 shared_ptr，以避免等待逻辑线程持有的长锁；
+    /// 跨线程快照生命周期要求此拥有型句柄，不能改为裸指针。
+    std::shared_ptr<const PublishedSessionUiSnapshot>
+    publishedUiSnapshot() const;
+
     /// @brief 查找第一个 Logo 占位 Session。
     /// @return Logo 占位 Session 索引；不存在时返回 -1。
     int32_t findLogoPlaceholder() const;
@@ -194,6 +233,7 @@ public:
 
     /// @brief 获取可变 SessionEntry 列表，调用者必须已持有 mutex()。
     /// @return 内部 SessionEntry 列表引用。
+    /// 修改逻辑侧需要观察的字段后，应在同一临界区调用 publishSnapshotUnsafe。
     std::vector<SessionEntry>& entriesUnsafe();
 
     /// @brief 获取只读 SessionEntry 列表，调用者必须已持有 mutex()。
@@ -230,10 +270,15 @@ private:
     mutable std::recursive_mutex m_mutex;
 
     /// @brief 逻辑线程当前可读取的不可变 Session 快照。
-    /// @warning 逻辑热路径原子：loop 每 update acquire 读取；写侧在持有
-    /// m_mutex 后 release 发布新快照。shared_ptr
+    /// @warning 逻辑热路径通过 shared_ptr 原子自由函数访问：loop 每 update
+    /// acquire 读取，写侧在持有 m_mutex 后 release 发布新快照。shared_ptr
     /// 所有权用于解决读写并发时的快照生命周期。
     std::shared_ptr<const PublishedSessionSnapshot> m_publishedSnapshot;
+
+    /// @brief 只含标签信息的 UI 发布快照，写侧仅在结构变化时替换。
+    /// @warning UI 每帧 acquire 读取、结构变更 release 写入；shared_ptr
+    /// 保证 UI 使用期间旧快照有效，避免锁住整个会话更新周期。
+    std::shared_ptr<const PublishedSessionUiSnapshot> m_publishedUiSnapshot;
 };
 
 }  // namespace MMM::Logic

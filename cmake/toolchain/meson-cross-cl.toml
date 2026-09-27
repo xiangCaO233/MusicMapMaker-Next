@@ -1,15 +1,20 @@
 # clang-cl 在 Linux 上交叉构建 Windows 目标时，Meson 需要显式工具链与目标平台信息。
+# 该配置用于 CMake 外部项目调用 Meson 时维持 MSVC ABI 工具选择。
+# clang-cl 通过 lld-link 生成 PE，归档器必须使用 COFF 兼容的 llvm-lib。
+# 工具名由执行环境 PATH 解析，调用脚本负责提供固定 LLVM 版本环境。
 [binaries]
 c = ['clang-cl', '-fuse-ld=lld-link']
 cpp = ['clang-cl', '-fuse-ld=lld-link']
 ar = 'llvm-lib'
 strip = 'llvm-strip-22'
 
+# host_machine 描述生成物运行平台，而不是执行 Meson 的 Linux 主机。
 [host_machine]
 system = 'windows'
 cpu_family = 'x86_64'
 cpu = 'x86_64'
 endian = 'little'
 
+# 交叉生成的 Windows 探针无法直接在 Linux 配置主机执行。
 [properties]
 needs_exe_wrapper = true

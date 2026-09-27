@@ -9,6 +9,7 @@ namespace MMM::Logic
 {
 
 /// @brief ECS 中的自动采样物件，内部时间统一使用秒。
+/// @note 锚点与偏移分别保存，换算时不能提前合并，否则会丢失偏移编辑语义。
 struct SampleComponent {
     /// @brief 采样锚点时间，单位秒。
     double m_timestamp{ 0.0 };
@@ -35,6 +36,7 @@ struct SampleComponent {
     /// @return 实际播放时间，单位秒。
     [[nodiscard]] double effectiveTime() const
     {
+        // 偏移保留毫秒精度，只在求实际播放时间时转换到锚点的秒单位。
         return m_timestamp + static_cast<double>(m_offsetMs) / 1000.0;
     }
 
@@ -44,6 +46,8 @@ struct SampleComponent {
     [[nodiscard]] static SampleComponent fromAudioSample(
         const ::MMM::AudioSampleEvent& sample)
     {
+        // 领域层锚点使用毫秒，只有锚点缩放；偏移字段本来就是毫秒，不可再除一次。
+        // 资源身份和格式元数据原样复制，以便编辑后能无损返回领域对象。
         return {
             .m_timestamp       = sample.m_timestamp / 1000.0,
             .m_offsetMs        = sample.m_offsetMs,
@@ -59,6 +63,8 @@ struct SampleComponent {
     /// @return 时间已从秒转换为毫秒的自动采样领域对象。
     [[nodiscard]] ::MMM::AudioSampleEvent toAudioSample() const
     {
+        // 与读取方向对称，保存锚点而非
+        // effectiveTime，避免往返转换重复叠加偏移。
         return {
             .m_timestamp       = m_timestamp * 1000.0,
             .m_offsetMs        = m_offsetMs,

@@ -1,0 +1,102 @@
+{
+  "id": "mmm.editor-personalization",
+  "chapter": "personalization",
+  "order": 60,
+  "version": 1,
+  "requires_project": true,
+  "requires_beatmap": true,
+  "completion": "all",
+  "title": {"zh_cn": "编辑器个性化", "en_us": "Personalize the editor"},
+  "description": {"zh_cn": "使用布局工具调整画布组件、判定线、轨道和 Note 尺寸。每项都可以调到自己舒服的位置后点击“知道了”，无需匹配预设数值。", "en_us": "Use the Layout tool to arrange canvas components, the judgment line, lanes, and Note size. Adjust each to your preference, then click Got it; no preset value is required."},
+  "branches": [
+    {
+      "id": "canvas-layout",
+      "title": {"zh_cn": "画布布局", "en_us": "Canvas layout"},
+      "steps": [
+        {
+          "id": "select-layout-tool",
+          "title": {"zh_cn": "选择布局工具", "en_us": "Select the Layout tool"},
+          "body": {"zh_cn": "打开一张谱面，点击工具栏中的“调整布局”。布局模式允许直接拖动画布边界和可选组件；进入时会打开布局设置面板。", "en_us": "Open a beatmap and click Layout on the toolbar. Layout mode lets you drag canvas boundaries and optional components; entering also opens its settings panel."},
+          "guide": {"prompt": {"zh_cn": "点击高亮的“调整布局”工具。若已启用，可直接点“知道了”。", "en_us": "Click the highlighted Layout tool, or use Got it if it is already active."}, "targets": ["personalization.editor.layout-tool"]}
+        },
+        {
+          "id": "explain-component-range",
+          "title": {"zh_cn": "理解组件可调范围", "en_us": "Understand component bounds"},
+          "body": {"zh_cn": "可选文字和频谱组件属于这张主画布，移动时会保持内容完整可见；拍号和分拍线时间还绑定到所属的拍或分拍区间，因此不能拖到别的时间段。拖动时的区域遮罩显示当前组件的允许范围。这样缩放、滚动和换轨数后仍能读出它表示的时间或轨道。", "en_us": "Optional text and spectrum components stay fully visible on this canvas. Beat numbers and beat-line times are also tied to their own beat intervals, so they cannot be moved into another time interval. The drag mask shows the current allowed region, keeping the displayed time or lane meaningful after scrolling, zooming, or changing lane count."},
+          "requires": ["select-layout-tool"],
+          "guide": {"prompt": {"zh_cn": "先查看画布范围；随后可逐项拖动组件，满意后自行确认。", "en_us": "Inspect the canvas bounds. You can move each component in the following steps and confirm when satisfied."}, "targets": ["personalization.editor.canvas-range"]}
+        },
+        {
+          "id": "judgment-time-component",
+          "title": {"zh_cn": "当前判定线时间", "en_us": "Judgment-line time"},
+          "body": {"zh_cn": "在布局面板的“可选画布组件”中可开启当前判定线时间。启用后拖动文字主体改变位置，拖动角点改变字号；它限制在主画布内，以免读数被窗口边缘裁掉。", "en_us": "Enable Current Judgment-line Time under Optional Canvas Components. Drag its body to move it and its corners to resize the text. It remains inside the canvas so the readout is not clipped."},
+          "requires": ["explain-component-range"],
+          "guide": {"prompt": {"zh_cn": "右侧“调整布局”面板→“可选画布组件”勾选“当前判定线时间”；再拖动画布上的文字移动、拖动四角改大小，满意后点“知道了”。", "en_us": "In the right Layout panel, enable Current Judgment-line Time under Optional Canvas Components. Drag the canvas text to move it or its corners to resize it, then use Got it."}, "targets": ["personalization.editor.component.judgment-time"]}
+        },
+        {
+          "id": "beat-number-component",
+          "title": {"zh_cn": "拍号位置与大小", "en_us": "Beat number placement"},
+          "body": {"zh_cn": "拍号是逐拍重复的组件。它的纵向可调范围随所在拍移动，避免一个拍号跨到相邻拍；拖动任意可见拍号可统一调整相对位置与字号。", "en_us": "Beat numbers repeat once per beat. Their vertical range follows each beat so a number cannot drift into a neighboring beat. Drag a visible number to adjust its relative placement and size."},
+          "requires": ["judgment-time-component"],
+          "guide": {"prompt": {"zh_cn": "右侧“调整布局”面板→“可选画布组件”勾选“拍号”；再拖动画布上的一个拍号移动、拖动四角改大小，满意后点“知道了”。", "en_us": "Enable Beat Number under Optional Canvas Components in the right Layout panel. Drag a visible number to move it or a corner to resize it, then confirm."}, "targets": ["personalization.editor.component.beat-number"]}
+        },
+        {
+          "id": "beat-line-time-component",
+          "title": {"zh_cn": "分拍线时间", "en_us": "Beat-line time"},
+          "body": {"zh_cn": "分拍线时间同样随对应时间格重复。它的可调范围属于该时间格，以保持标签和线的位置关系；可在布局面板中启用，并通过画布拖动调整。", "en_us": "Beat-line time labels repeat with their timing cells. Their allowed region belongs to each cell, keeping the label associated with its line. Enable them in Layout settings and adjust them on the canvas."},
+          "requires": ["beat-number-component"],
+          "guide": {"prompt": {"zh_cn": "右侧“调整布局”面板→“可选画布组件”勾选“分拍线时间”；再拖动画布上的时间标签移动、拖动四角改大小，满意后点“知道了”。", "en_us": "Enable Beat-line Time under Optional Canvas Components in the right Layout panel. Drag a visible label to move it or a corner to resize it, then confirm."}, "targets": ["personalization.editor.component.beat-line-time"]}
+        },
+        {
+          "id": "spectrum-component",
+          "title": {"zh_cn": "背景频谱", "en_us": "Background spectrum"},
+          "body": {"zh_cn": "背景频谱可在布局面板中启用。可拖动它调整画布中的位置与包围尺寸；左右声道颜色和频谱参数仍在布局面板的专用设置中。", "en_us": "Enable the background spectrum in Layout settings. Drag it to adjust its canvas position and bounds; channel colors and spectrum options remain in the dedicated Layout settings."},
+          "requires": ["beat-line-time-component"],
+          "guide": {"prompt": {"zh_cn": "右侧“调整布局”面板→“可选画布组件”勾选“背景频谱”；在画布拖动频谱调整位置和大小，其他参数在下方“背景频谱设置”。", "en_us": "Enable Background Spectrum under Optional Canvas Components in the right Layout panel. Drag it on the canvas to move or resize it; use Background Spectrum Settings below for other options."}, "targets": ["personalization.editor.component.spectrum"]}
+        },
+        {
+          "id": "kps-component",
+          "title": {"zh_cn": "KPS 组件", "en_us": "KPS components"},
+          "body": {"zh_cn": "KPS 可显示总计和逐轨文字。布局面板提供逐轨尺寸、逐轨位置及全部组件位置的同步选项；关闭同步后可分别摆放。组件仍需位于可编辑画布范围内。", "en_us": "KPS can show total and per-lane text. Layout settings can synchronize per-lane size, per-lane position, or every KPS position. Disable synchronization to arrange them separately; each stays in the editable canvas."},
+          "requires": ["spectrum-component"],
+          "guide": {"prompt": {"zh_cn": "右侧“调整布局”面板→“可选画布组件”勾选“KPS”；在画布拖动其位置和大小，面板下方“KPS 同步设置”可控制联动。", "en_us": "Enable KPS under Optional Canvas Components in the right Layout panel. Drag it on the canvas; choose linked adjustments under KPS Sync Settings below."}, "targets": ["personalization.editor.component.kps"]}
+        },
+        {
+          "id": "judgment-line-position",
+          "title": {"zh_cn": "判定线位置", "en_us": "Judgment-line position"},
+          "body": {"zh_cn": "拖动主轨道中的判定线可改变其纵向位置。这个位置按当前轨道数保存；让判定线留在你便于观察和操作的高度即可。", "en_us": "Drag the judgment line within the player lanes to change its vertical position. Its position is saved for the current lane count; choose a height comfortable to read and edit."},
+          "requires": ["kps-component"],
+          "guide": {"prompt": {"zh_cn": "在主轨道内按住粉色水平判定线（右端有短柄）向上或下拖动；它不是轨道边框，调好高度后点“知道了”。", "en_us": "Drag the pink horizontal judgment line with a short handle at its right end up or down inside the player lanes, then use Got it."}, "targets": ["personalization.editor.judgment-line"]}
+        },
+        {
+          "id": "player-lane-width",
+          "title": {"zh_cn": "主轨道宽度", "en_us": "Player lane width"},
+          "body": {"zh_cn": "拖动主轨道左右边缘可调整轨道总宽度，也可拖动主体移动。边界按画布比例保存，缩放窗口时保持相对布局；留出空间给草稿和 BGM 区更便于同时查看。", "en_us": "Drag the player area edges to change its total width, or drag the body to move it. The boundaries are saved as canvas ratios so the relative layout survives window resizing. Leave space for draft and BGM lanes if you use them."},
+          "requires": ["judgment-line-position"],
+          "guide": {"prompt": {"zh_cn": "拖动蓝色主轨道左右竖边上的蓝色短柄调整宽度；拖动中间蓝色圆柄平移，满意后确认。", "en_us": "Drag the blue handles on the player area’s left and right edges to resize it, or the center blue circle to move it, then confirm."}, "targets": ["personalization.editor.player-lanes"]}
+        },
+        {
+          "id": "draft-layout",
+          "title": {"zh_cn": "草稿区位置与宽度", "en_us": "Draft area position and width"},
+          "body": {"zh_cn": "草稿区有独立的横向位置与单条草稿轨宽度，不再与主轨道或 BGM 区共用尺寸。拖动区块主体移动，拖动左右边缘改变宽度；未显示时先开启专业模式。", "en_us": "The draft area has its own horizontal position and per-lane width, independent from player and BGM lanes. Drag its body to move it or its left and right edges to resize it. Enable Professional Mode if it is hidden."},
+          "requires": ["player-lane-width"],
+          "guide": {"prompt": {"zh_cn": "画布左侧 DRAFT 区：拖动区内圆柄移动，拖动边缘短柄改宽度；未出现时先启用专业模式。满意后确认。", "en_us": "On the left DRAFT area, drag its center handle to move it or its edge handles to resize it. Enable Professional Mode if hidden, then confirm."}, "targets": ["personalization.editor.draft-lanes"]}
+        },
+        {
+          "id": "bgm-layout",
+          "title": {"zh_cn": "BGM 区位置与宽度", "en_us": "BGM area position and width"},
+          "body": {"zh_cn": "BGM 区也有独立的横向位置与单轨宽度。使用相同的主体拖动和左右边缘句柄，可分别安排草稿区与 BGM 区而不相互牵连；未显示时先开启 BMS 编辑。", "en_us": "The BGM area also has its own horizontal position and per-lane width. Use its body and edge handles to arrange it independently from the draft area. Enable BMS editing if it is hidden."},
+          "requires": ["draft-layout"],
+          "guide": {"prompt": {"zh_cn": "画布右侧 BGM 区：拖动区内圆柄移动，拖动边缘短柄改宽度；未出现时先启用 BMS 编辑。满意后确认。", "en_us": "On the right BGM area, drag its center handle to move it or its edge handles to resize it. Enable BMS editing if hidden, then confirm."}, "targets": ["personalization.editor.bgm-lanes"]}
+        },
+        {
+          "id": "note-size",
+          "title": {"zh_cn": "Note 尺寸", "en_us": "Note size"},
+          "body": {"zh_cn": "布局工具下拖动可见 Note 的角点可调整全局宽高比例；布局面板的“物件渲染”也提供独立的横向和纵向倍率滑块，范围为默认尺寸的 0.5～3 倍。按自己的读谱习惯设置，满意后自行完成。", "en_us": "In Layout mode, drag a visible Note corner to adjust global width and height. Layout settings also offer separate horizontal and vertical sliders from 0.5 to 3 times the default size. Choose what reads best to you, then finish."},
+          "requires": ["bgm-layout"],
+          "guide": {"prompt": {"zh_cn": "拖动画布上 Note 的四角小方块调尺寸；也可展开右侧“调整布局”→“物件渲染”，修改 Note 横向/纵向倍率，满意后确认。", "en_us": "Drag a corner square of a visible Note, or expand Layout → Object Rendering on the right and adjust the Note width and height sliders, then confirm."}, "targets": ["personalization.editor.note-size"]}
+        }
+      ]
+    }
+  ]
+}

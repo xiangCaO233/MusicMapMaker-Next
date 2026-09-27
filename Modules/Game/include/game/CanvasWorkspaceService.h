@@ -52,6 +52,10 @@ public:
     [[nodiscard]] std::unique_ptr<UI::IUIView> createTimelineCanvas(
         const std::string& name, std::uint32_t width,
         std::uint32_t height) override;
+
+    /// @copydoc UI::ICanvasWorkspaceService::createAnnotationTableWindow
+    [[nodiscard]] std::unique_ptr<UI::IUIView> createAnnotationTableWindow(
+        const std::string& name) override;
 };
 
 }  // namespace MMM::Game

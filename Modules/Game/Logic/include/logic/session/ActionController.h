@@ -34,6 +34,9 @@ public:
     /// @param cmd 命令数据
     void handleCommand(const CmdDeleteSelected& cmd);
 
+    /// @brief 仅删除教学查询标出的那个错误根物件及其折线子投影。
+    void handleCommand(const CmdRemoveComposeLessonNote& cmd);
+
     /// @brief 处理镜像选中实体的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdMirrorSelected& cmd);
@@ -57,6 +60,10 @@ public:
     /// @brief 处理清除单个音符自定义配色的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdClearNoteColorOverrides& cmd);
+
+    /// @brief 可撤销地清除当前谱面所有正式音符的持久化颜色。
+    /// @param cmd 无附加参数的批量清理命令。
+    void handleCommand(const CmdClearAllNoteColorOverrides& cmd);
 
     /// @brief 处理粘贴实体的命令
     /// @param cmd 命令数据

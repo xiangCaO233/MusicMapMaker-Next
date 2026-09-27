@@ -1,0 +1,83 @@
+#pragma once
+#include <cstdint>
+#include <filesystem>
+#include <functional>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace MMM::UI::Walkthrough
+{
+struct Topic;
+struct Chapter;
+struct Step;
+struct ComposeLesson;
+class Progress;
+/// @brief 返回受管资源包中 CanonRock 演练项目的目录。
+std::filesystem::path canonRockDirectory();
+/// @brief 判断谱面是否为配置资源或源码资源中的 CanonRock 示例谱面。
+/// @warning 仅在启动教学步骤时访问文件系统，不得逐帧调用。
+bool canonRockComposeBeatmapAllows(const std::filesystem::path& path);
+/// @brief 限制当前打开项目演练只接受 CanonRock 目录、谱面或谱包。
+/// @warning 仅 UI 线程切换状态；路径校验只在低频打开操作中进行。
+void restrictOpenProjectGuideToCanonRock(bool active);
+/// @brief 判断项目打开入口是否符合当前演练的路径限制。
+/// @warning 无活动限制时立即返回；真实打开时才访问文件系统身份。
+bool openProjectGuideAllows(const std::filesystem::path& path);
+/// @brief 查询当前是否处于 CanonRock 打开演练，供 UI 选择器定位示例目录。
+bool openProjectGuideRestricted();
+/// @brief 判断主题在当前项目中是否允许进入；新建谱面演练限定 CanonRock。
+/// @warning UI 热路径：CanonRock 目录身份只在首次调用时解析，逐帧仅比较路径。
+bool topicAvailableInProject(const Topic& topic, bool hasActiveProject,
+                             bool                         hasOpenBeatmap,
+                             const std::filesystem::path& projectRoot);
+/// @brief 独立于演练窗口的主题目录、事件适配、操作注册及进度存储服务。
+class Service
+{
+public:
+    /// @brief 加载内置与用户主题、恢复学习记录，并订阅业务结果事件。
+    Service(const std::filesystem::path& progressPath,
+            const std::filesystem::path& customDirectory);
+    /// @brief 解除事件订阅，状态生命周期由 UIManager 管理。
+    ~Service();
+    /// @brief 消费业务结果；窗口关闭时仍调用。
+    /// @warning UI
+    /// 每帧只尝试读取事件队列；队列跨逻辑线程传递结果不可避免。仅进度改变时低频保存小文件。
+    void update();
+    /// @brief 取得已验证的主题目录。
+    const std::vector<Topic>& topics() const;
+    /// @brief 取得内置 CanonRock 教学参考；缺失时返回空指针。
+    /// @warning UI 热路径：仅做已加载 vector 边界检查，不访问文件系统。
+    const ComposeLesson* composeLesson(std::size_t index) const;
+    /// @brief 取得按顺序排列的章节，包括空章节。
+    const std::vector<Chapter>& chapters() const;
+    /// @brief 取得学习进度的非拥有引用。
+    const Progress& progress() const;
+    /// @brief 返回当前进程最近一次收到本步骤业务信号的单调序号。
+    /// @return 尚未收到步骤所需信号时返回 0；历史持久化完成度不参与。
+    /// @warning UI 热路径：只遍历当前步骤的小型信号数组并查询内存映射。
+    std::uint64_t latestSignalRevision(const Step& step) const;
+    /// @brief 判断步骤要求的业务信号是否在指定序号后重新到达。
+    /// @param step 待判断步骤，保留 allSignals 的全满足语义。
+    /// @param revision 当前路线步骤启动时记录的序号。
+    /// @warning UI 热路径：仅在路线引导活动时遍历当前步骤信号。
+    bool receivedSignalAfter(const Step& step, std::uint64_t revision) const;
+    /// @brief 返回加载或保存失败说明。
+    const std::string& error() const;
+    /// @brief 手动确认一个步骤并持久化。
+    void acknowledge(const Topic& topic, const Step& step);
+    /// @brief 重置当前主题，保留其他主题和自定义内容。
+    void reset(const Topic& topic);
+    /// @brief 注册可信 C++ 操作，数据文件不能执行未注册命令。
+    void registerAction(std::string id, std::function<void()> action);
+    /// @brief 查询操作是否已经注册。
+    bool hasAction(std::string_view id) const;
+    /// @brief 用户点击时调用已注册操作。
+    void execute(std::string_view id);
+
+private:
+    struct Impl;                   ///< 目录、队列和持久化实现。
+    std::unique_ptr<Impl> m_impl;  ///< 稳定服务状态。
+};
+}  // namespace MMM::UI::Walkthrough

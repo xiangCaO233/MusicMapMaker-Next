@@ -7,15 +7,20 @@ namespace
 /// @return BPM、SV、Jump 和 HS 的描述均符合界面约定时返回 true。
 bool testTimingTooltipDescriptors()
 {
+    // 分别取得四种现有 Timing 类型的静态描述。
     const auto bpm =
         MMM::Canvas::timelineTimingTooltipDescriptor(MMM::TimingEffect::BPM);
     const auto sv =
         MMM::Canvas::timelineTimingTooltipDescriptor(MMM::TimingEffect::SCROLL);
     const auto jump =
         MMM::Canvas::timelineTimingTooltipDescriptor(MMM::TimingEffect::JUMP);
+    // Jump 是唯一附带物理单位的现有类型，需独立检查其空格与单位文本。
     const auto hs =
         MMM::Canvas::timelineTimingTooltipDescriptor(MMM::TimingEffect::HS);
+    // HS 与 SV 保留编辑器通用缩写，不在提示层展开内部枚举名称。
 
+    // BPM、SV 与 HS 直接展示无单位参数；Jump 的原始数值按毫秒解释。
+    // 同时比较标签和后缀，避免界面术语正确但单位悄然回归。
     return bpm.label == "BPM" && bpm.valueSuffix.empty() && sv.label == "SV" &&
            sv.valueSuffix.empty() && jump.label == "Jump" &&
            jump.valueSuffix == " ms" && hs.label == "HS" &&
@@ -28,5 +33,6 @@ bool testTimingTooltipDescriptors()
 /// @return 全部术语与单位映射正确时返回 0。
 int main()
 {
+    // 函数为 constexpr 纯映射，运行测试仍能覆盖实际头文件调用结果。
     return testTimingTooltipDescriptors() ? 0 : 1;
 }

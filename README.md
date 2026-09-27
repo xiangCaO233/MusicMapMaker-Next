@@ -72,7 +72,7 @@ Windows 与 Linux 正式产物是单可执行文件：下载后可放在任意�
 
 ### 按需构建
 
-仓库中的预编译依赖由 Git LFS 管理。为了避免克隆时下载所有平台、所有编译器的二进制，先使用 `GIT_LFS_SKIP_SMUDGE=1` 克隆，再只拉取目标工具链对应的对象。`SOURCES_BUILD` 默认且必须保持为 `OFF`；只有明确希望从第三方源码重建依赖时才使用 `--sources-build`。
+仓库中的预编译依赖由 Git LFS 管理。根目录 `.lfsconfig` 默认排除全部 LFS 下载，因此普通克隆、拉取和检出不会下载任何 LFS 对象。预编译模式构建脚本会按平台、架构、工具链、编译器标签、配置和链接方式精确拉取公共头文件、运行资源、原生测试数据及对应预编译库，不会拉取其他编译器标签。`SOURCES_BUILD` 默认且必须保持为 `OFF`；使用 `--sources-build` 时脚本不会自动拉取 LFS 对象。
 
 #### Windows 原生 MSVC
 
@@ -80,10 +80,8 @@ Windows 与 Linux 正式产物是单可执行文件：下载后可放在任意�
 
 ```powershell
 git lfs install
-$env:GIT_LFS_SKIP_SMUDGE = '1'
 git clone https://github.com/xiangCaO233/MusicMapMaker-Next.git
 Set-Location MusicMapMaker-Next
-Remove-Item Env:GIT_LFS_SKIP_SMUDGE
 
 pwsh -File .\scripts\ci\msvc-build.ps1
 .\build_msvc\bin\MusicMapMaker-Next.exe
@@ -93,25 +91,18 @@ pwsh -File .\scripts\ci\msvc-build.ps1
 
 #### Linux GCC 14 / Clang 19
 
-下面以 GCC 14 为例。Clang 19 只需把路径中的 `gcc/gcc14` 改为 `clang/clang19`，并把脚本参数改为 `--compiler clang19`。
+下面以 GCC 14 为例。Clang 19 只需把脚本参数改为 `--compiler clang19`，脚本会自动选择 `clang/clang19` 预编译标签。
 
 ```bash
 git lfs install
-GIT_LFS_SKIP_SMUDGE=1 git clone \
-  https://github.com/xiangCaO233/MusicMapMaker-Next.git
+git clone https://github.com/xiangCaO233/MusicMapMaker-Next.git
 cd MusicMapMaker-Next
 
-git lfs pull \
-  --include="3rdpty/prebuilts/headers/**,assets/**,tests/data/**,Modules/Main/src/logo.svg" \
-  --exclude=""
-git lfs pull \
-  --include="3rdpty/prebuilts/binaries/linux/*/libs/x86_64/gcc/gcc14/RelWithDebInfo/**" \
-  --exclude=""
 bash scripts/ci/linux-build.sh --compiler gcc14 --fresh
 ./build_linux_gcc14/bin/MusicMapMaker-Next
 ```
 
-Linux 还需要所选编译器、CMake 3.31+、Ninja、Vulkan 开发包、PkgConfig、Fontconfig 和桌面系统开发包。发行版包名不同，请使用对应发行版的软件仓库。
+脚本会根据 `--compiler` 解析出的工具链和编译器标签，仅拉取对应 Linux x86_64 预编译对象。Linux 还需要所选编译器、CMake 3.31+、Ninja、Vulkan 开发包、PkgConfig、Fontconfig 和桌面系统开发包。发行版包名不同，请使用对应发行版的软件仓库。
 
 #### macOS Apple Silicon
 
@@ -119,25 +110,18 @@ Linux 还需要所选编译器、CMake 3.31+、Ninja、Vulkan 开发包、PkgCon
 
 ```bash
 git lfs install
-GIT_LFS_SKIP_SMUDGE=1 git clone \
-  https://github.com/xiangCaO233/MusicMapMaker-Next.git
+git clone https://github.com/xiangCaO233/MusicMapMaker-Next.git
 cd MusicMapMaker-Next
 
-git lfs pull \
-  --include="3rdpty/prebuilts/headers/**,assets/**,tests/data/**,Modules/Main/src/logo.svg" \
-  --exclude=""
-git lfs pull \
-  --include="3rdpty/prebuilts/binaries/macos/*/libs/arm64/clang/clang17/RelWithDebInfo/**" \
-  --exclude=""
 bash scripts/ci/macos-build.sh --arch arm64 --fresh
 ./build_macos_arm64/bin/MusicMapMaker-Next
 ```
 
-`macos-build.sh` 会从本机 AppleClang 主版本自动推导预编译标签；如果本机不是 AppleClang 17，请使用仓库实际存在的标签或传入 `--compiler-tag`。
+`macos-build.sh` 会从本机 AppleClang 主版本自动推导预编译标签，并仅拉取该标签的 macOS 预编译对象；如果本机不是 AppleClang 17，请使用仓库实际存在的标签或传入 `--compiler-tag`。
 
 #### Linux 主机上的 Windows 交叉构建
 
-这些脚本面向已经准备好 `/mnt/cross/windows`、Vulkan SDK 与对应 sysroot 的 CI/开发主机。仍需按上面的方式把 LFS 二进制路径替换为下表中的目标路径后再运行脚本。
+这些脚本面向已经准备好 `/mnt/cross/windows`、Vulkan SDK 与对应 sysroot 的 CI/开发主机。每个脚本会在预编译模式下按下表所示标签精确拉取 LFS 对象，交叉构建无需手工执行 `git lfs pull`。
 
 | 目标 | 预编译路径（位于每个 package 的 `libs` 下） | 构建命令 | 输出目录 |
 | --- | --- | --- | --- |
@@ -145,16 +129,15 @@ bash scripts/ci/macos-build.sh --arch arm64 --fresh
 | MinGW GCC UCRT64 | `windows/*/libs/x86_64/mingw/ucrt64/RelWithDebInfo/**` | `bash scripts/ci/cross/mingw-gcc-build.sh --fresh` | `build_cross_mingw_gcc/bin` |
 | MinGW Clang CLANG64 | `windows/*/libs/x86_64/mingw/clang64/RelWithDebInfo/**` | `bash scripts/ci/cross/mingw-clang-build.sh --fresh` | `build_cross_mingw_clang/bin` |
 
-静态链接是所有示例的默认值。若使用 `--linkage shared`，还必须拉取对应工具链下的 `shared/RelWithDebInfo` 库、`bin` 运行时和符号文件；不要混用 static 与 shared 布局。
+静态链接是所有示例的默认值。若使用 `--linkage shared`，脚本只会拉取同一编译器标签下的 `shared/RelWithDebInfo` 导入库和 `bin` 运行时；不会混用 static 与 shared 布局。
 
 #### 从第三方源码构建依赖
 
-源码构建不需要拉取任何 `3rdpty/prebuilts/binaries`，但会明显增加构建时间。例如：
+源码构建脚本不会自动拉取任何 LFS 对象，也不需要 `3rdpty/prebuilts/binaries`。若要构建完整主程序并运行测试，可手工只拉取运行资源和测试数据，但源码构建会明显增加构建时间。例如：
 
 ```bash
 git lfs install
-GIT_LFS_SKIP_SMUDGE=1 git clone --recurse-submodules \
-  https://github.com/xiangCaO233/MusicMapMaker-Next.git
+git clone --recurse-submodules https://github.com/xiangCaO233/MusicMapMaker-Next.git
 cd MusicMapMaker-Next
 git lfs pull --include="assets/**,tests/data/**,Modules/Main/src/logo.svg" --exclude=""
 bash scripts/ci/linux-build.sh --compiler gcc14 --sources-build --fresh
@@ -268,7 +251,7 @@ The native MSVC, MinGW UCRT64, and MinGW CLANG64 scripts no longer perform `fetc
 
 ### On-demand builds
 
-Prebuilt dependencies are managed by Git LFS. Clone with `GIT_LFS_SKIP_SMUDGE=1` to avoid downloading binaries for every platform and compiler, then pull objects for only the selected toolchain. `SOURCES_BUILD` defaults to and must remain `OFF`; pass `--sources-build` only when intentionally rebuilding third-party dependencies from source.
+Prebuilt dependencies are managed by Git LFS. The root `.lfsconfig` excludes every LFS download by default, so normal clone, fetch, pull, and checkout operations download no LFS objects. In prebuilt mode, each build script pulls only shared headers, runtime assets, native test data, and libraries matching its resolved platform, architecture, toolchain, compiler tag, configuration, and linkage. `SOURCES_BUILD` defaults to and must remain `OFF`; with `--sources-build`, scripts do not pull LFS objects automatically.
 
 #### Windows native MSVC
 
@@ -276,10 +259,8 @@ Install Microsoft C++ Build Tools with “Desktop development with C++”, CMake
 
 ```powershell
 git lfs install
-$env:GIT_LFS_SKIP_SMUDGE = '1'
 git clone https://github.com/xiangCaO233/MusicMapMaker-Next.git
 Set-Location MusicMapMaker-Next
-Remove-Item Env:GIT_LFS_SKIP_SMUDGE
 
 pwsh -File .\scripts\ci\msvc-build.ps1
 .\build_msvc\bin\MusicMapMaker-Next.exe
@@ -289,25 +270,18 @@ On the current branch, the script selectively pulls shared headers, runtime asse
 
 #### Linux GCC 14 / Clang 19
 
-This example selects GCC 14. For Clang 19, replace `gcc/gcc14` with `clang/clang19` in the binary LFS path and pass `--compiler clang19`.
+This example selects GCC 14. For Clang 19, pass `--compiler clang19`; the script selects the `clang/clang19` prebuilt tag automatically.
 
 ```bash
 git lfs install
-GIT_LFS_SKIP_SMUDGE=1 git clone \
-  https://github.com/xiangCaO233/MusicMapMaker-Next.git
+git clone https://github.com/xiangCaO233/MusicMapMaker-Next.git
 cd MusicMapMaker-Next
 
-git lfs pull \
-  --include="3rdpty/prebuilts/headers/**,assets/**,tests/data/**,Modules/Main/src/logo.svg" \
-  --exclude=""
-git lfs pull \
-  --include="3rdpty/prebuilts/binaries/linux/*/libs/x86_64/gcc/gcc14/RelWithDebInfo/**" \
-  --exclude=""
 bash scripts/ci/linux-build.sh --compiler gcc14 --fresh
 ./build_linux_gcc14/bin/MusicMapMaker-Next
 ```
 
-Linux also requires the selected compiler, CMake 3.31+, Ninja, Vulkan development files, PkgConfig, Fontconfig, and desktop-system development packages. Package names vary by distribution.
+The script pulls only the Linux x86_64 objects matching the toolchain and compiler tag resolved from `--compiler`. Linux also requires the selected compiler, CMake 3.31+, Ninja, Vulkan development files, PkgConfig, Fontconfig, and desktop-system development packages. Package names vary by distribution.
 
 #### macOS Apple Silicon
 
@@ -315,25 +289,18 @@ Install Xcode Command Line Tools, CMake 3.31+, Ninja, Git LFS, and the Vulkan SD
 
 ```bash
 git lfs install
-GIT_LFS_SKIP_SMUDGE=1 git clone \
-  https://github.com/xiangCaO233/MusicMapMaker-Next.git
+git clone https://github.com/xiangCaO233/MusicMapMaker-Next.git
 cd MusicMapMaker-Next
 
-git lfs pull \
-  --include="3rdpty/prebuilts/headers/**,assets/**,tests/data/**,Modules/Main/src/logo.svg" \
-  --exclude=""
-git lfs pull \
-  --include="3rdpty/prebuilts/binaries/macos/*/libs/arm64/clang/clang17/RelWithDebInfo/**" \
-  --exclude=""
 bash scripts/ci/macos-build.sh --arch arm64 --fresh
 ./build_macos_arm64/bin/MusicMapMaker-Next
 ```
 
-`macos-build.sh` derives the prebuilt tag from the local AppleClang major version. If the machine does not use AppleClang 17, select a tag that actually exists in the repository or pass `--compiler-tag`.
+`macos-build.sh` derives the prebuilt tag from the local AppleClang major version and pulls only that macOS tag. If the machine does not use AppleClang 17, select a tag that actually exists in the repository or pass `--compiler-tag`.
 
 #### Windows cross-builds on a Linux host
 
-These scripts target a prepared CI/development host with `/mnt/cross/windows`, a Vulkan SDK, and the appropriate sysroot. Replace the LFS binary path in the preceding examples with the target path below before invoking the script.
+These scripts target a prepared CI/development host with `/mnt/cross/windows`, a Vulkan SDK, and the appropriate sysroot. In prebuilt mode, each script pulls the exact tag shown below; no manual `git lfs pull` is required.
 
 | Target | Prebuilt path below each package's `libs` directory | Build command | Output directory |
 | --- | --- | --- | --- |
@@ -341,16 +308,15 @@ These scripts target a prepared CI/development host with `/mnt/cross/windows`, a
 | MinGW GCC UCRT64 | `windows/*/libs/x86_64/mingw/ucrt64/RelWithDebInfo/**` | `bash scripts/ci/cross/mingw-gcc-build.sh --fresh` | `build_cross_mingw_gcc/bin` |
 | MinGW Clang CLANG64 | `windows/*/libs/x86_64/mingw/clang64/RelWithDebInfo/**` | `bash scripts/ci/cross/mingw-clang-build.sh --fresh` | `build_cross_mingw_clang/bin` |
 
-Static linkage is the default for every example. With `--linkage shared`, also pull the matching `shared/RelWithDebInfo` libraries, `bin` runtime files, and symbols. Do not mix static and shared layouts.
+Static linkage is the default for every example. With `--linkage shared`, the script pulls only the `shared/RelWithDebInfo` import libraries and `bin` runtime files under the same compiler tag; static and shared layouts are never mixed.
 
 #### Build third-party dependencies from source
 
-A source build does not need any `3rdpty/prebuilts/binaries`, but takes substantially longer. For example:
+Source-build scripts pull no LFS objects automatically and need no `3rdpty/prebuilts/binaries`. To build the full application and run tests, manually pull only runtime assets and test data; source builds take substantially longer. For example:
 
 ```bash
 git lfs install
-GIT_LFS_SKIP_SMUDGE=1 git clone --recurse-submodules \
-  https://github.com/xiangCaO233/MusicMapMaker-Next.git
+git clone --recurse-submodules https://github.com/xiangCaO233/MusicMapMaker-Next.git
 cd MusicMapMaker-Next
 git lfs pull --include="assets/**,tests/data/**,Modules/Main/src/logo.svg" --exclude=""
 bash scripts/ci/linux-build.sh --compiler gcc14 --sources-build --fresh

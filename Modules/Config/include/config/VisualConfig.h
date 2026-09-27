@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config/BeatLinePalette.h"
+#include "config/NotePalette.h"
 #include "config/visual/BackgroundConfig.h"
 #include "config/visual/CanvasComponentConfig.h"
 #include "config/visual/PreviewAreaConfig.h"
@@ -13,6 +14,18 @@
 
 namespace MMM::Config
 {
+
+/// @brief 滑键命中时特效覆盖的轨道范围，不改变打击计数或音效。
+enum class FlickHitEffectMode {
+    HeadOnly,   ///< 仅在滑键起始轨道播放。
+    TailOnly,   ///< 仅在滑键终点轨道播放，兼容旧版行为。
+    HeadToTail  ///< 起点到终点经过的全部轨道同时播放。
+};
+
+/// @brief 将滑键特效模式写为稳定文本。
+void to_json(nlohmann::json& json, const FlickHitEffectMode& mode);
+/// @brief 读取滑键特效模式，未知值回退到仅尾部播放。
+void from_json(const nlohmann::json& json, FlickHitEffectMode& mode);
 
 /// @brief 主画布分拍线显示模式。
 enum class BeatLineDisplayMode {
@@ -121,12 +134,22 @@ struct VisualConfig {
     /// @warning 逻辑热路径：配置刷新时调用；仅在存在独立布局时执行值复制。
     void applyKeyCountLayout(std::int32_t keyCount);
 
-    /// @brief 音符 X 轴缩放。
-    float noteScaleX{ 1.2f };
-    /// @brief 音符 Y 轴缩放。
-    float noteScaleY{ 1.2f };
+    /// @brief 音符 X 轴缩放，默认按基准宽度的 95% 显示。
+    float noteScaleX{ 0.95f };
+    /// @brief 音符 Y 轴缩放，默认按基准高度的 95% 显示。
+    float noteScaleY{ 0.95f };
     /// @brief 是否在玩家物件上方显示绑定音效资源标签。
     bool showBoundSampleLabels{ true };
+    /// @brief
+    /// 播放时模拟长条判定：头部驻留判定线，已判定身体消隐，结束后整体隐藏。
+    /// @note 默认开启；暂停和草稿保持完整编辑几何，不保存任何判定状态。
+    bool simulateAutoplay{ true };
+    /// @brief 自动游玩模拟的子选项：普通单点到达判定时间后隐藏。
+    /// @note 仅在总开关启用时生效，关闭总开关仍保留此选择。
+    bool hideJudgedNotes{ true };
+    /// @brief 自动游玩模拟的同级子选项：独立滑键判定后整体消隐。
+    /// @note 与单点开关独立，折线内部横段仍遵循长条分段判定。
+    bool hideJudgedFlicks{ true };
     /// @brief 音符填充模式。
     BackgroundFillMode noteFillMode{ BackgroundFillMode::Stretch };
     /// @brief 视觉偏移。
@@ -181,12 +204,20 @@ struct VisualConfig {
     bool overrideBeatLineColors{ false };
     /// @brief 当前调色方案的分拍线覆盖颜色；仅保留在运行时。
     BeatLineColorPalette beatLineColors{};
+    /// @brief 是否用活动调色盘覆盖无自定义颜色的玩家音符；仅运行时有效。
+    bool overrideNoteColors{ false };
+    /// @brief 活动方案中的玩家音符默认颜色；仅运行时有效。
+    NoteColorPalette noteColors{};
     /// @brief 是否绘制第一个 BPM 红线前的分拍线。
     bool drawBeatLinesBeforeFirstTiming{ true };
     /// @brief 全局频谱图生成精细度。
     SpectrumDetailLevel spectrumDetailLevel{ SpectrumDetailLevel::Balanced };
     /// @brief 是否启用打击特效动画。
     bool enableHitEffects{ true };
+    /// @brief 滑键特效的轨道覆盖策略，默认保留仅尾部播放。
+    FlickHitEffectMode flickHitEffectMode{ FlickHitEffectMode::TailOnly };
+    /// @brief 是否显示严格位于折线内部的滑键特效，不影响首尾节点。
+    bool enablePolylineInternalFlickEffects{ true };
     /// @brief 非 Hold 打击特效的持续时间，超过序列帧周期时循环播放。
     float nonHoldHitEffectDuration{ DEFAULT_NON_HOLD_HIT_EFFECT_DURATION };
     /// @brief 是否绘制音符悬浮拾取包围盒。

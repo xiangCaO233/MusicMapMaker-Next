@@ -8,12 +8,14 @@ namespace MMM::Logic
 {
 
 /// @brief 扫描项目目录并按资源类型归类项目文件。
+/// 只收集扩展名匹配的路径；资源内容解析、业务排除列表与去重由上层处理。
 class ProjectDirectoryScanner
 {
 public:
     /// @brief 单次项目目录扫描返回的结果。
     struct ScanResult {
         /// @brief 目录遍历是否在没有文件系统错误的情况下完成。
+        /// 中途迭代失败时为 false，文件列表可能仍含已发现的部分结果。
         bool m_success{ false };
 
         /// @brief 在项目根目录下发现的谱面文件列表。
@@ -26,6 +28,7 @@ public:
     /// @brief 从项目根目录递归收集已知格式的谱面和音频文件。
     /// @param projectRoot 作为递归扫描起点的项目根目录。
     /// @return 按资源类型分组的文件列表以及扫描是否成功。
+    /// @warning 同步递归 IO，应由项目加载或低频资源重扫调用，不在每帧执行。
     ScanResult scan(const std::filesystem::path& projectRoot) const;
 
     /// @brief 判断路径是否带有受支持的谱面扩展名。

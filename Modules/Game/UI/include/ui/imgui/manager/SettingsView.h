@@ -202,6 +202,26 @@ private:
     /// @brief 上一次同步到元数据编辑副本的谱面路径。
     std::string m_lastBeatmapPath;
 
+    /// @brief 谱面资源按钮对应的导入目标；None 表示没有待处理选择。
+    enum class BeatmapResourceTarget { None, Audio, Cover, Background };
+
+    /// @brief 当前文件选择器请求的资源类型。
+    BeatmapResourceTarget m_beatmapResourceTarget{
+        BeatmapResourceTarget::None
+    };
+
+    /// @brief 按钮点击后等待在会话锁外打开文件选择器。
+    bool m_openBeatmapResourcePicker{ false };
+
+    /// @brief 选择器打开时的项目根目录，用于拒绝跨项目误绑定。
+    std::filesystem::path m_resourceImportProjectRoot;
+
+    /// @brief 选择器打开时的谱面路径，用于拒绝切谱后的旧结果。
+    std::filesystem::path m_resourceImportBeatmapPath;
+
+    /// @brief 最近一次资源导入错误，仅在用户再次选择或成功后清空。
+    std::string m_beatmapResourceImportError;
+
     /// @brief 软件设置页默认 Creator 的固定长度 UTF-8 输入缓冲区。
     std::array<char, Config::MAX_CREATOR_IDENTITY_BYTES + 1>
         m_defaultCreatorInputBuffer{};
@@ -242,6 +262,9 @@ private:
     ShortcutRecordTarget m_recordingShortcutTarget{
         ShortcutRecordTarget::None
     };
+
+    /// @brief 上一次自动定位的引导步骤令牌；每个步骤只调整一次内容滚动。
+    std::uint64_t m_lastGuideScrollToken{ 0 };
 
     /// @brief 已扫描到的皮肤目录名缓存。
     std::vector<std::string> m_availableSkinDirectories;
@@ -356,6 +379,16 @@ private:
     /// @brief 绘制谱面设置页。
     void drawBeatmapSettings();
 
+    /// @brief 在谱面会话锁外打开并驱动音频或图片文件选择器。
+    /// @param dpiScale 当前内容缩放。
+    /// @warning 文件对话框可能阻塞；仅在用户点击导入时打开。
+    void renderBeatmapResourcePicker(float dpiScale);
+
+    /// @brief 校验并将选定资源复制到项目，再绑定到原谱面。
+    /// @param source 用户选中的本地文件。
+    /// @warning 低频导入路径：可能复制文件并保存项目资源表。
+    void importBeatmapResource(const std::filesystem::path& source);
+
     /// @brief 绘制编辑器设置页。
     void drawEditorSettings();
 
@@ -399,6 +432,12 @@ private:
     CLayVBox& addSettingGroup(CLayVBox& parent, size_t& sectionIndex,
                               const char* id);
 
+    /// @brief 首次遇到当前引导目标时，将离屏设置项滚入内容区。
+    /// @param targetId 目标的稳定语义 ID。
+    /// @param bounds Clay 返回的屏幕空间设置项矩形。
+    /// @warning UI 热路径：每帧只做目标比较；滚动仅在步骤首次出现时设置。
+    void scrollGuideRowIntoView(const char* targetId, Clay_BoundingBox bounds);
+
     /// @brief 添加一个设置项行（标签 + 控件）。
     /// @param parent 接收设置行的父级布局。
     /// @param rowIndex 当前行索引，会在添加时递增。
@@ -407,9 +446,11 @@ private:
     /// @param widget 控件绘制回调。
     /// @param dangerLabel 是否使用危险色绘制标签。
     /// @param decorated 是否为该行单独绘制设置框。
+    /// @param walkthroughTarget 可选的个性化引导目标；仅报告本帧真实控件矩形。
     void addSettingItem(CLayVBox& parent, size_t& rowIndex, const char* label,
                         float labelWidth, CLayBox::DrawFunc widget,
-                        bool dangerLabel = false, bool decorated = true);
+                        bool dangerLabel = false, bool decorated = true,
+                        const char* walkthroughTarget = nullptr);
 
     /// @brief 添加一个带自动换行的 RadioButton 组。
     /// @param parent 接收设置行的父级布局。
@@ -421,11 +462,13 @@ private:
     /// @param current 当前选中的值。
     /// @param changed 设置发生变化时写入 true。
     /// @param decorated 是否为该行单独绘制设置框。
+    /// @param walkthroughTarget 可选的个性化引导目标，覆盖本行单选项。
     void addRadioSetting(
         CLayVBox& parent, size_t& rowIndex, size_t& sectionIndex,
         const char* label, float labelWidth,
         const std::vector<std::pair<std::string, int>>& options, int& current,
-        bool& changed, bool decorated = true);
+        bool& changed, bool decorated = true,
+        const char* walkthroughTarget = nullptr);
 };
 
 }  // namespace MMM::UI

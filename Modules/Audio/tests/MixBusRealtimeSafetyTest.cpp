@@ -16,6 +16,23 @@
 
 namespace
 {
+// 本测试验证 MixBus 的固定容量混音与读复制更新协议：
+//
+// - 来源列表由控制线程发布为不可变快照，回调按稳定插入顺序读取；
+// - prepare 后所有 scratch 地址和容量固定，短块与超长分块都不分配；
+// - 重复来源被忽略，删除后重新加入会移动到稳定顺序尾部；
+// - replace_source 保留索引，只发布一份完整的新来源快照；
+// - 格式或来源活动帧数违约时整块静音并累计诊断；
+// - 音频线程持有 hazard 快照期间，控制线程不能释放其中的来源；
+// - 退役快照只在回调离开临界区后由控制线程回收。
+//
+// 分配计数采用 thread_local，控制线程创建新快照的合法分配不会被误计入音频
+// 线程。测试代理覆盖普通、数组、带尺寸和对齐 new/delete，避免编译器选择
+// 不同重载后漏报。所有计数在进入被测区间前清零，退出后立即关闭。
+// CallTrace 也使用固定数组和原子计数，不会让测试观察逻辑自身制造回调分配。
+// 样本节点只写常量，使来源顺序、累加次数和失败静音都能直接从输出识别。
+// 测试的 FORMAT 与容量在栈上固定，不依赖全局音频设备配置。
+
 /// @brief 当前线程是否正在统计普通堆分配。
 thread_local bool g_trackAllocations{ false };
 
@@ -45,6 +62,7 @@ struct CallTrace {
     /// @param id 来源编号。
     void append(int id, const ice::AudioBuffer& buffer)
     {
+        // fetch_add 为每次调用保留唯一槽；超出测试容量时只停止记录，不分配。
         const std::size_t index =
             count.fetch_add(1U, std::memory_order_relaxed);
         if ( index >= ids.size() ) return;
@@ -89,6 +107,7 @@ public:
     /// @warning 测试音频热路径：不得分配内存。
     void process(ice::AudioBuffer& buffer) override
     {
+        // 先记录 MixBus 暴露的缓冲视图，再用固定值覆盖整个活动前缀。
         m_trace.append(m_id, buffer);
         float** samples = buffer.raw_ptrs();
         if ( !samples ) return;
@@ -121,6 +140,7 @@ public:
     /// @warning 测试音频热路径：只修改活动帧数，不分配内存。
     void process(ice::AudioBuffer& buffer) override
     {
+        // 故意违反“来源保持活动帧数不变”的契约，触发总线整块拒绝。
         const std::size_t invalidFrames =
             buffer.num_frames() > 0U ? buffer.num_frames() - 1U : 0U;
         static_cast<void>(buffer.set_active_frames(invalidFrames));
@@ -129,6 +149,7 @@ public:
 
 /// @brief 阻塞节点与测试线程共享的生命周期状态。
 struct BlockingState {
+    // 状态独立于 BlockingNode 生命周期，析构后测试仍能读取最终标志。
     /// @brief process 是否已经进入。
     std::atomic_bool entered{ false };
 
@@ -156,6 +177,8 @@ public:
     /// @brief 记录析构时机。
     ~BlockingNode() override
     {
+        // release 尚未发布便析构，说明 hazard 快照没有覆盖完整 process
+        // 生命周期。
         if ( m_state->entered.load(std::memory_order_acquire) &&
              !m_state->release.load(std::memory_order_acquire) ) {
             m_state->destroyedWhileProcessing.store(true,
@@ -169,6 +192,7 @@ public:
     /// @warning 仅测试 RCU 临界区；这里的 yield 不代表生产回调实现。
     void process(ice::AudioBuffer& buffer) override
     {
+        // entered 与 release 建立确定并发窗口；循环只存在于测试节点。
         m_state->entered.store(true, std::memory_order_release);
         while ( !m_state->release.load(std::memory_order_acquire) ) {
             std::this_thread::yield();
@@ -211,6 +235,25 @@ bool allSamplesEqual(const ice::AudioBuffer& buffer, float expected)
 
 /// @brief 验证稳定来源顺序、回调普通堆零分配和超长 block 分块。
 /// @return 失败断言数量。
+///
+/// 两个 ConstantNode 的输出分别为 1 和 2，正确累加后每个样本应为 3。来源
+/// 调用轨迹同时记录活动帧数、固定容量和首声道地址，用于证明 10 帧超长 block
+/// 被拆成 4、4、2 三段并始终复用同一 scratch。
+///
+/// 场景还逐项覆盖：
+///
+/// - 重复 add 后来源数量保持二；
+/// - 三帧短 block 仍复用四帧 scratch；
+/// - remove/add 后顺序从 1、2 变为 2、1；
+/// - 超长 block 的每个分块都按 2、1 调用；
+/// - 最后两帧只改变 active frame，不缩小容量或换地址；
+/// - 错误声道数时输出归零并递增 rejected 计数；
+/// - 来源破坏 active frame 时整块归零并再次递增计数；
+/// - clear 发布空来源快照，查询数量立即为零。
+///
+/// 短块路径验证 prepare 容量是上限而不是固定活动长度；超长路径验证上限又能
+/// 被内部安全分块复用。两者结合可防止实现把每次设备 block 大小误当作分配依据。
+/// 存储地址六次完全相同，进一步证明最后两帧分块只调整逻辑视图而未换缓冲。
 int testStableOrderAndRealtimeCapacity()
 {
     constexpr ice::AudioDataFormat FORMAT{
@@ -225,6 +268,7 @@ int testStableOrderAndRealtimeCapacity()
 
     ice::MixBus bus;
     bus.prepare(FORMAT, PREPARED_FRAMES);
+    // 重复加入 first 不得形成双重混音，sourceCount 应保持二。
     bus.add_source(first);
     bus.add_source(second);
     bus.add_source(first);
@@ -236,6 +280,7 @@ int testStableOrderAndRealtimeCapacity()
                            "prepare publishes requested frame capacity");
 
     ice::AudioBuffer shortBuffer(FORMAT, 3U);
+    // 计数只覆盖 process，测试对象和输出缓冲均已在控制阶段构造完成。
     g_allocationCount   = 0U;
     g_deallocationCount = 0U;
     g_trackAllocations  = true;
@@ -251,6 +296,7 @@ int testStableOrderAndRealtimeCapacity()
                                trace.ids[0] == 1 && trace.ids[1] == 2,
                            "sources keep insertion order");
 
+    // 删除再添加是显式顺序变更，下一快照应按 second、first 调用。
     bus.remove_source(first);
     bus.add_source(first);
     trace.reset();
@@ -260,6 +306,7 @@ int testStableOrderAndRealtimeCapacity()
                            "remove then add moves source to stable tail");
 
     trace.reset();
+    // 10 不能被预备容量 4 整除，最后一段必须只暴露两个活动帧。
     ice::AudioBuffer oversizedBuffer(FORMAT, 10U);
     g_allocationCount   = 0U;
     g_deallocationCount = 0U;
@@ -298,6 +345,7 @@ int testStableOrderAndRealtimeCapacity()
             trace.storageAddresses[0] == trace.storageAddresses[5],
         "chunk active-frame changes preserve scratch capacity and address");
 
+    // 格式拒绝不得调用来源，且输出必须覆盖为确定静音。
     constexpr ice::AudioDataFormat WRONG_FORMAT{
         .channels   = 1U,
         .samplerate = 48000U,
@@ -309,6 +357,7 @@ int testStableOrderAndRealtimeCapacity()
     failures += expectTrue(bus.rejectedProcessCount() == 1U,
                            "format mismatch increments rejection diagnostic");
 
+    // 来源若擅自缩短活动帧数，MixBus 不能混合一份形状不一致的 block。
     bus.clear();
     auto invalidSource = std::make_shared<InvalidFrameNode>();
     bus.add_source(invalidSource);
@@ -327,6 +376,12 @@ int testStableOrderAndRealtimeCapacity()
 
 /// @brief 验证 replace_source 只发布一次快照且保留原来源索引。
 /// @return 失败断言数量。
+///
+/// 初始顺序为 1、2、3，把中间来源替换为值 9 后，调用顺序必须为 1、9、3，
+/// 输出和为 13。不存在的旧来源与已存在的新来源都应被拒绝，且不改变当前快照。
+/// sourceCount 在替换前后均为三，确保实现没有短暂删除或重复插入。输出和与
+/// CallTrace 同时断言，避免某个来源被调用两次但数值偶然抵消后漏检。
+/// 两个拒绝分支之后不再 process；它们的返回值直接证明当前有效快照未被发布。
 int testIndexPreservingReplacement()
 {
     constexpr ice::AudioDataFormat FORMAT{
@@ -347,6 +402,7 @@ int testIndexPreservingReplacement()
     bus.add_source(third);
 
     int failures = 0;
+    // 成功替换只改变一个索引，不执行 remove 加 add 造成的尾部移动。
     failures += expectTrue(bus.replace_source(second, replacement),
                            "replace_source accepts an existing source");
     failures += expectTrue(bus.sourceCount() == 3U,
@@ -360,6 +416,7 @@ int testIndexPreservingReplacement()
         "replace_source preserves the replaced source index");
     failures += expectTrue(allSamplesEqual(buffer, 13.0F),
                            "replacement source participates exactly once");
+    // second 已不在新快照中，因此不能再次作为匹配键。
     failures += expectTrue(!bus.replace_source(second, first),
                            "replace_source rejects an absent source");
     failures += expectTrue(!bus.replace_source(replacement, first),
@@ -369,6 +426,18 @@ int testIndexPreservingReplacement()
 
 /// @brief 验证控制线程替换来源时 hazard 快照保护其完整 process 生命周期。
 /// @return 失败断言数量。
+///
+/// BlockingNode 在 process 内等待测试门，确保控制线程在回调临界区期间替换来源
+/// 并尝试回收。旧来源的 weak_ptr 此时必须仍有效，退役队列也必须保留被 hazard
+/// 保护的快照。放行并 join 后再次回收，析构才可发生；下一 block
+/// 只调用替代节点。
+/// @warning 测试中的阻塞只用于确定性放大并发窗口，不代表生产音频实现。
+///
+/// 第一次 reclaim 发生在旧节点仍阻塞时，预期退役计数至少为一。第二次发生在
+/// processor join 后，预期 weak_ptr 过期且退役计数归零。额外析构标志单独
+/// 防止实现虽然延迟快照，却提前释放快照内部的来源对象。
+/// 替代节点固定输出 0.5，并用独立 CallTrace 确认接管后的首块只调用一次。
+/// 旧 BlockingNode 输出 0.25 不参与最终断言，避免并发首块内容影响生命周期验证。
 int testConcurrentSnapshotReplacement()
 {
     constexpr ice::AudioDataFormat FORMAT{
@@ -385,7 +454,8 @@ int testConcurrentSnapshotReplacement()
     bus.add_source(source);
 
     ice::AudioBuffer buffer(FORMAT, 16U);
-    std::thread      processor([&bus, &buffer]() { bus.process(buffer); });
+    // 等待 entered 确保音频线程已经取得旧快照，而非仅仅创建了线程。
+    std::thread processor([&bus, &buffer]() { bus.process(buffer); });
     while ( !state->entered.load(std::memory_order_acquire) ) {
         std::this_thread::yield();
     }
@@ -393,6 +463,7 @@ int testConcurrentSnapshotReplacement()
     CallTrace replacementTrace;
     auto      replacement =
         std::make_shared<ConstantNode>(7, 0.5F, replacementTrace);
+    // 控制线程释放自己的强引用后，旧来源只应由活跃 hazard 快照保留。
     const bool replaced = bus.replace_source(source, replacement);
     source.reset();
     bus.reclaimRetiredSources();
@@ -408,6 +479,7 @@ int testConcurrentSnapshotReplacement()
         !state->destroyedWhileProcessing.load(std::memory_order_acquire),
         "source is not destroyed inside process");
 
+    // 回调退出临界区后，控制线程才可回收快照并触发旧来源析构。
     state->release.store(true, std::memory_order_release);
     processor.join();
     bus.reclaimRetiredSources();
@@ -421,6 +493,7 @@ int testConcurrentSnapshotReplacement()
             !state->destroyedWhileProcessing.load(std::memory_order_acquire),
         "source destructor runs only after process returns");
 
+    // 新 block 必须只观察替代来源一次，证明快照切换没有重复或遗漏。
     bus.process(buffer);
     failures += expectTrue(
         allSamplesEqual(buffer, 0.5F) &&
@@ -553,6 +626,14 @@ void operator delete[](void* memory, std::size_t size,
 
 /// @brief 运行 MixBus 实时安全和并发快照测试。
 /// @return 测试通过时返回 0。
+///
+/// 三个场景分别覆盖容量与顺序、单线程替换语义、并发生命周期。失败数统一
+/// 累加，便于一次执行报告所有独立契约，而不把某一类失败误判为其他问题。
+/// 测试不启动真实音频设备，所有 block 由当前线程或显式 processor 线程驱动，
+/// 因而每个控制发布点和回收点都可重复复现。
+/// 全局分配代理只存在于本测试二进制，测试结束后不会影响其他音频目标。
+/// operator new 失败时直接 abort，与标准不可恢复分配失败语义保持一致。
+/// 断言失败数非零时返回一，适合作为 CTest 的单一成功条件。
 int main()
 {
     const int failures = testStableOrderAndRealtimeCapacity() +

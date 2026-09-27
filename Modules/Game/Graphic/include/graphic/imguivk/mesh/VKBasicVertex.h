@@ -31,6 +31,9 @@ static_assert(offsetof(VKBasicVertex, color) == sizeof(float) * 3U);
 static_assert(offsetof(VKBasicVertex, uv) == sizeof(float) * 7U);
 
 /// @brief 画布顶点输入绑定描述。
+///
+/// 单个顶点缓冲绑定按 VKBasicVertex 的完整跨度前进，输入频率为逐顶点；实例化
+/// 数据若后续引入，必须使用独立 binding，不能改变此跨逻辑模块共享的布局。
 inline constexpr vk::VertexInputBindingDescription VKVERTEX_BIND_DESC =
     vk::VertexInputBindingDescription()
         .setBinding(0)
@@ -38,6 +41,10 @@ inline constexpr vk::VertexInputBindingDescription VKVERTEX_BIND_DESC =
         .setInputRate(vk::VertexInputRate::eVertex);
 
 /// @brief 画布顶点输入属性描述列表。
+///
+/// location 0、1、2 分别映射位置、颜色和 UV，格式与 CanvasRenderTypes 中九个
+/// float 的物理排列严格对应。着色器输入 location 或分量宽度变化时必须同步更新
+/// 共享顶点契约和上述 static_assert。
 inline constexpr std::array<vk::VertexInputAttributeDescription, 3>
     VKVERTEX_ATTR_DESC = {
         vk::VertexInputAttributeDescription()

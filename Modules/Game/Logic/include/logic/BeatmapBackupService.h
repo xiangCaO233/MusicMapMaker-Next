@@ -16,6 +16,7 @@ namespace MMM::Logic
 /// @brief 单次谱面备份写入与轮转结果。
 struct BeatmapBackupResult {
     /// @brief 是否成功写入新的备份文件。
+    /// 轮转失败不撤销已完成的写入，成功时也应查看 m_errorMessage。
     bool m_success{ false };
 
     /// @brief 成功写入的备份文件路径。
@@ -29,6 +30,7 @@ struct BeatmapBackupResult {
 };
 
 /// @brief 将谱面快照写入项目隐藏目录并按单谱面数量轮转。
+/// 备份使用原生 MMM 格式，不覆盖源谱面；同一谱面的备份调用须由上层串行安排。
 class BeatmapBackupService
 {
 public:
@@ -36,6 +38,7 @@ public:
     /// @param projectRoot 当前项目根目录。
     /// @param sourceBeatmapPath 当前谱面源文件路径。
     /// @return 位于 .mmm/backups 下且不会被项目资源扫描器导入的目录。
+    /// 这里只计算路径，符号链接及真实目录边界在实际写入前检查。
     [[nodiscard]] static std::filesystem::path backupDirectory(
         const std::filesystem::path& projectRoot,
         const std::filesystem::path& sourceBeatmapPath);

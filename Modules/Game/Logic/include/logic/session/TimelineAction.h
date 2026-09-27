@@ -29,9 +29,13 @@ public:
     {
     }
 
-    void        execute(SessionContext& ctx) override;
-    void        undo(SessionContext& ctx) override;
-    void        redo(SessionContext& ctx) override;
+    /// @brief 首次应用时间点变化。
+    void execute(SessionContext& ctx) override;
+    /// @brief 恢复变化前的时间点状态。
+    void undo(SessionContext& ctx) override;
+    /// @brief 重新应用变化后的时间点状态。
+    void redo(SessionContext& ctx) override;
+    /// @brief 获取操作类型对应的展示名称。
     std::string getName() const override;
     /// @brief Timeline 操作始终修改 Timing 数据。
     [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override
@@ -71,9 +75,13 @@ public:
     {
     }
 
-    void        execute(SessionContext& ctx) override;
-    void        undo(SessionContext& ctx) override;
-    void        redo(SessionContext& ctx) override;
+    /// @brief 将全部时间点变化应用为一条撤销记录。
+    void execute(SessionContext& ctx) override;
+    /// @brief 恢复本批条目的 before 状态。
+    void undo(SessionContext& ctx) override;
+    /// @brief 重新应用本批条目的 after 状态。
+    void redo(SessionContext& ctx) override;
+    /// @brief 获取构造时指定的批量操作名称。
     std::string getName() const override;
     /// @brief 批量 Timeline 操作始终修改 Timing 数据。
     [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override

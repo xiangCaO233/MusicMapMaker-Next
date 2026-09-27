@@ -1,1 +1,2 @@
+// 把 asInvoker 权限清单作为 RT_MANIFEST 资源嵌入 MinGW 更新器。
 1 24 "MusicMapMaker-Updater.manifest"

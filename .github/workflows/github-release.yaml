@@ -1,17 +1,23 @@
 name: Publish GitHub Release
 
+# 此工作流只接受人工触发，避免普通 push 意外创建公开发布。
 on:
   workflow_dispatch:
+    # 输入为空时由发布脚本从源码 APPVER 推导标签和标题。
     inputs:
       tag:
+        # 标签只作为可选覆盖值传递，不在 YAML 层验证格式。
         description: "发布标签，留空时读取 APPVER / Release tag; empty uses APPVER"
         required: false
         type: string
       title:
+        # 标题允许独立于 Git 标签定制 GitHub 展示文本。
         description: "发布标题，留空时自动生成 / Release title; empty uses the tag"
         required: false
         type: string
       release_type:
+        # 状态白名单与 publish-github-release.sh 保持一致。
+        # workflow_dispatch 的默认值必须位于选项白名单。
         description: "发布类型 / Release type"
         required: true
         type: choice
@@ -22,45 +28,64 @@ on:
           - draft
 
 permissions:
+  # 创建 tag、Release 与上传资产需要仓库 contents 写权限。
+  # 工作流不得使用 force push 或长期个人凭据。
   contents: write
 
 concurrency:
+  # 所有人工发布共享单一串行组，避免两个版本同时修改远端。
   group: musicmapmaker-next-github-release
+  # 已开始的发布不可被新请求取消，防止留下部分远端状态。
   cancel-in-progress: false
 
 jobs:
   publish-github-release:
+    # 聚合产物保存在指定 Linux 自托管 Runner 的本地目录。
+    # 聚合 release 目录必须在触发工作流前由完整 CI 准备。
     runs-on: [self-hosted, Linux, X64, debian]
+    # 网络上传异常时限制任务最长占用时间。
+    # 任务超时不能替代发布脚本对远端前置状态的检查。
     timeout-minutes: 30
 
     defaults:
       run:
+        # 所有命令使用 Bash 严格模式脚本语义。
         shell: bash
+        # 发布脚本及聚合 release 目录均相对此 checkout 定位。
         working-directory: /home/xiang/MusicMapMaker-Next
 
     env:
+      # 使用当前 workflow 的短期 token，不保存个人访问令牌。
       GH_TOKEN: ${{ github.token }}
+      # 输入先放入环境，避免在 run 脚本中直接展开表达式。
       MMM_RELEASE_TAG: ${{ inputs.tag }}
       MMM_RELEASE_TITLE: ${{ inputs.title }}
       MMM_RELEASE_TYPE: ${{ inputs.release_type }}
 
     steps:
       - name: release->Package and publish GitHub Release
+        # publish 的输出由下一步写入 GitHub Summary。
         id: publish
         run: |
+          # 任一未定义变量、失败命令或管道错误都终止发布。
           set -euo pipefail
 
+          # 与 CI 仓库同步共用锁，防止发布时 checkout 被其他任务替换。
           exec 9>"/home/xiang/MusicMapMaker-Next/.git/mmm-ci-sync.lock"
           flock 9
 
           if [[ ! "${GITHUB_RUN_ID}" =~ ^[0-9]+$ ]] ||
              [[ ! "${GITHUB_RUN_ATTEMPT}" =~ ^[0-9]+$ ]]; then
+            # 目录名只接受 GitHub 提供的纯数字运行身份。
             printf 'error: invalid GitHub run identity\n' >&2
             exit 1
           fi
 
           stage_dir="/home/xiang/MusicMapMaker-Next/.git/mmm-github-release/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # case 白名单确保后续递归删除始终位于专用 Git 元数据目录。
+          # staging 目录不得移出仓库 .git 专用子目录。
           case "${stage_dir}" in
+            # 精确命中专用前缀时无需额外动作。
             /home/xiang/MusicMapMaker-Next/.git/mmm-github-release/*) ;;
             *)
               printf 'error: unsafe staging directory: %s\n' "${stage_dir}" >&2
@@ -68,10 +93,12 @@ jobs:
               ;;
           esac
 
+          # 重试同一 attempt 前重建空 staging，退出时无论成功失败都清理。
           rm -rf -- "${stage_dir}"
           mkdir -p -- "${stage_dir}"
           trap 'rm -rf -- "${stage_dir}"' EXIT
 
+          # 参数数组保持路径和用户标题中的空格边界。
           publish_args=(
             --source-release /home/xiang/MusicMapMaker-Next/release
             --output-dir "${stage_dir}"
@@ -80,19 +107,31 @@ jobs:
             --type "${MMM_RELEASE_TYPE}"
           )
           if [[ -n "${MMM_RELEASE_TAG}" ]]; then
+            # 只有非空覆盖值才传递 --tag。
             publish_args+=(--tag "${MMM_RELEASE_TAG}")
           fi
           if [[ -n "${MMM_RELEASE_TITLE}" ]]; then
+            # 只有非空覆盖值才传递 --title。
             publish_args+=(--title "${MMM_RELEASE_TITLE}")
           fi
 
+          # helper 负责本地归档校验、远端前置检查和单次 Release 创建。
+          # 发布 helper 会验证 checkout HEAD 与 GITHUB_SHA 一致。
+          # 已有 tag 或 Release 不会由本工作流覆盖或删除。
+          # 发布失败后的远端状态需要人工核对后再决定是否重试。
+          # 新增输入必须同步环境映射和发布脚本参数。
           bash scripts/ci/publish-github-release.sh "${publish_args[@]}"
 
       - name: release->Summary
+        # 仅消费上一步成功写入的公开 URL 和最终标签。
+        # 发布输出名称必须与 helper 写入 GITHUB_OUTPUT 的键一致。
+        # 成功 Summary 只能在发布 helper 正常结束后生成。
         env:
           RELEASE_URL: ${{ steps.publish.outputs.release_url }}
           RELEASE_TAG: ${{ steps.publish.outputs.release_tag }}
         run: |
+          # Summary 使用 Markdown，并保留标签与 SHA 的代码样式。
+          # 工作流成功只证明 Release 创建调用完成，下载验收需另行执行。
           {
             printf '## GitHub Release\n\n'
             printf -- '- Tag: `%s`\n' "${RELEASE_TAG}"

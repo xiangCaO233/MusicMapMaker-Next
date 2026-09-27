@@ -52,7 +52,7 @@ public:
         bool   isSubNote;
         /// @brief 物件命中时触发的可选采样绑定；为空时使用内置音效。
         std::optional<::MMM::AudioSampleBinding> sampleBinding;
-        /// @brief 事件是否来自项目级草稿轨道区。
+        /// @brief 事件是否来自当前谱面的草稿轨道区。
         bool isDraft{ false };
 
         bool operator<(const HitEvent& other) const
@@ -78,7 +78,7 @@ public:
     /// @brief 触发音效（仅音效，带预测支持）。
     /// @param ev 待播放的物件打击事件。
     /// @param playerTrackCount 当前谱面的玩家轨道数。
-    /// @param draftTrackCount 当前项目共享草稿轨道数。
+    /// @param draftTrackCount 当前谱面的草稿轨道数。
     /// @param config 当前编辑器配置。
     /// @warning 逻辑预测播放热路径：每个待触发物件调用一次，只允许固定计算和
     /// 音效池调度，禁止文件访问或阻塞等待。
@@ -86,11 +86,21 @@ public:
                       std::int32_t                draftTrackCount,
                       const Config::EditorConfig& config);
 
+    /// @brief 判断事件是否为严格的折线内部滑键，排除首尾和独立物件。
+    /// @warning 逻辑与渲染热路径：仅检查事件原始字段，不进行类型映射或分配。
+    [[nodiscard]] static bool isPolylineInternalFlick(
+        const HitEvent& ev) noexcept;
+
+    /// @brief 判断事件是否通过内部滑键静音策略，其他全局混音开关由音频侧处理。
+    /// @warning 预调度热路径：在申请音效通道前检查，不触发资源操作。
+    [[nodiscard]] static bool shouldScheduleHitAudio(
+        const HitEvent& ev, const Config::SfxConfig& config) noexcept;
+
     /// @brief 计算物件中心对应的双声道增益包络。
     /// @param ev 待定位的物件打击事件。
     /// @param playerTrackCount 当前谱面的玩家轨道数。
     /// @param enabled 是否启用立体打击音效。
-    /// @param draftTrackCount 当前项目共享草稿轨道数；负值时兼容为玩家轨道数。
+    /// @param draftTrackCount 当前谱面草稿轨道数；负值时兼容为玩家轨道数。
     /// @return 普通物件为固定增益，Flick
     /// 为起点到滑动终点的线性增益包络；关闭时保持原始立体声。
     /// @warning 逻辑预测播放热路径：仅执行常量时间算术，不得访问 ECS 或分配。
@@ -110,11 +120,10 @@ public:
 
     /// @brief 解析打击事件实际使用的音效资源标识。
     /// @param ev 待解析的打击事件。
-    /// @param effectiveType 已应用折线音效策略后的物件类型。
     /// @return 自定义绑定存在时返回绑定资源，否则返回对应内置音效资源。
     /// @warning 逻辑预测播放热路径：只返回稳定字符串引用，不得分配或访问文件。
     [[nodiscard]] static const std::string& soundEffectKeyForEvent(
-        const HitEvent& ev, ::MMM::NoteType effectiveType);
+        const HitEvent& ev);
 
     /// @brief 判断打击事件是否绑定了可用的物件音效资源。
     /// @param ev 待检查的打击事件。
@@ -226,7 +235,7 @@ private:
         double holdDuration{ 0.0 };
         /// @brief 物件起始绝对轨道，草稿轨使用负值。
         int trackIndex{ 0 };
-        /// @brief 特效是否来自项目级草稿轨道区。
+        /// @brief 特效是否来自当前谱面的草稿轨道区。
         bool isDraft{ false };
         /// @brief 物件横跨轨道数。
         int trackSpan{ 1 };
@@ -234,7 +243,11 @@ private:
         int trackOffset{ 0 };
         /// @brief 是否为 Hold 物件。
         bool isHold{ false };
-        /// @brief 皮肤特效序列标识，为 note 或 flick。
+        /// @brief 原始物件是否为滑键，控制多轨特效覆盖范围。
+        bool isFlick{ false };
+        /// @brief 是否为严格的折线内部滑键，供实时特效开关过滤。
+        bool isInternalFlick{ false };
+        /// @brief 皮肤视觉序列标识：note、flick 或持续长按专用的 hold。
         std::string effectKey;
     };
 

@@ -30,6 +30,7 @@ struct SpectrumDetailProfile {
 /// @return 频谱图生成参数。
 inline SpectrumDetailProfile spectrumDetailProfile(SpectrumDetailLevel level)
 {
+    // 每个档位同时提高时间和频率分辨率，避免只放大单一维度造成失衡。
     switch ( level ) {
     case SpectrumDetailLevel::Performance: return { 40.0, 64 };
     case SpectrumDetailLevel::Balanced: return { 64.0, 96 };
@@ -38,6 +39,7 @@ inline SpectrumDetailProfile spectrumDetailProfile(SpectrumDetailLevel level)
     case SpectrumDetailLevel::Extreme: return { 240.0, 256 };
     case SpectrumDetailLevel::Experimental: return { 360.0, 384 };
     }
+    // 防御未来枚举值或损坏配置，回退到成本适中的 Balanced 档位。
     return { 64.0, 96 };
 }
 
@@ -50,7 +52,9 @@ inline std::uint64_t estimateSpectrumTextureBytesPerMinute(
     SpectrumDetailLevel level, std::uint32_t channelCount,
     std::uint32_t bytesPerTexel = 1)
 {
+    // 估算只计算紧密纹理数据，调用方需要另行考虑驱动对齐和多级缓存。
     const auto profile = spectrumDetailProfile(level);
+    // 先用 double 组合时间维度，最终统一转换为无符号字节数。
     return static_cast<std::uint64_t>(
         profile.segmentsPerSecond * 60.0 *
         static_cast<double>(profile.frequencyBins) *

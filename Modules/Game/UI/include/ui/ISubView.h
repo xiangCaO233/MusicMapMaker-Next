@@ -16,15 +16,23 @@ namespace MMM::UI
 {
 class UIManager;
 class LayoutContext;
-// 所有的侧边栏内容需要实现的简单接口
+/// @brief 所有侧边栏内容共享的轻量绘制与资源准备接口。
+/// @details 子视图由上层容器持有，名称用于布局和查找；默认实现不拥有 GPU
+/// 资源，也不参与并行数据准备。
 class ISubView
 {
 public:
+    /// @brief 创建具有稳定名称的子视图。
+    /// @param subViewName 上层容器注册和查找该视图时使用的名称。
     ISubView(const std::string& subViewName) : m_subViewName(subViewName) {}
 
+    /// @brief 通过接口析构派生子视图。
     virtual ~ISubView() = default;
 
-    /// @brief 内部绘制逻辑 (Clay/ImGui)
+    /// @brief 执行子视图内部的 Clay 或 ImGui 绘制逻辑。
+    /// @param layoutContext 当前帧布局上下文。
+    /// @param sourceManager 当前 UI 管理器。
+    /// @warning UI 热路径：面板可见时每帧调用。
     virtual void onUpdate(LayoutContext& layoutContext,
                           UIManager*     sourceManager) = 0;
 
@@ -59,7 +67,8 @@ public:
         (void)queue;
     }
 
-    /// @brief 获取子视图名称
+    /// @brief 获取子视图名称。
+    /// @return 与对象生命周期一致的只读名称引用。
     inline const std::string& getSubViewName() const { return m_subViewName; }
 
     /// @brief 获取子视图中不可再换行元素所需的最小内容尺寸。
@@ -72,7 +81,7 @@ public:
     }
 
 protected:
-    /// @brief 子视图名称
+    /// @brief 子视图稳定名称，构造后不再改变。
     const std::string m_subViewName;
 };
 }  // namespace MMM::UI

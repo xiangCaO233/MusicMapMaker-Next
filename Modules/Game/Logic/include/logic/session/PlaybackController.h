@@ -1,10 +1,14 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
+
 namespace MMM::Logic
 {
 struct CmdPanCanvas;
 struct CmdScroll;
 struct CmdSeek;
+struct CmdSetComposeLessonInputLimit;
 struct CmdSetBgmKeySoundAreaMute;
 struct CmdSetDraftKeySoundAreaMute;
 struct CmdSetKeySoundEffectGroupGain;
@@ -22,9 +26,24 @@ public:
     /// @param ctx 会话上下文引用
     PlaybackController(SessionContext& ctx) : m_ctx(ctx) {}
 
+    /// @brief 在用户启用、开始播放或切换皮肤时预加载编辑器节拍音。
+    /// @param gain 编辑器节拍器初始线性增益。
+    /// @return 两种拍声均已载入时返回 true。
+    /// @warning 低频交互路径：可能等待文件解码，禁止在逐轮 update 中调用。
+    [[nodiscard]] static bool preloadMetronomeSounds(float gain);
+
     /// @brief 处理设置播放状态的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdSetPlayState& cmd);
+
+    /// @brief 切换本会话的创作教学输入范围；退出后恢复普通播放和定位。
+    /// @param cmd 教学阶段及其音频时间起止位置。
+    void handleCommand(const CmdSetComposeLessonInputLimit& cmd);
+
+    /// @brief 写谱练习播放越过教学段尾时暂停并定位到准确边界。
+    /// @return 本轮停播或校正越界位置时返回 true。
+    /// @warning 每轮播放更新调用；未越界时只做常量级检查，不访问音频设备。
+    [[nodiscard]] bool stopAtComposeLessonEnd();
 
     /// @brief 处理时间轴跳转的命令
     /// @param cmd 命令数据
@@ -70,12 +89,37 @@ public:
     /// @brief 重新构建所有的打击事件列表
     void rebuildHitEvents();
 
-    /// @brief 每帧更新逻辑
-    /// @param dt 帧间隔时间 (秒)
-    void onUpdate(double dt);
+    /// @brief 更新编辑器播放节拍器的提前预约。
+    /// @param playbackJumped 本轮播放时钟是否跳转并清空预约音效。
+    /// @warning
+    /// 逻辑热路径：只对已加载音效进行常量级预约；资源加载仅在启用或皮肤失效的低频分支执行。
+    void updateMetronome(bool playbackJumped);
 
 private:
+    /// @brief 重建当前 BPM 段的下一拍游标。
+    /// @param time 当前画布视觉时间，单位秒。
+    /// @warning 跳转或 BPM 编辑时执行一次二分查找，不在稳定播放时重复扫描。
+    void resetMetronomeCursor(double time);
+
     SessionContext& m_ctx;  ///< 全局会话上下文引用
+    /// @brief 两种皮肤节拍音是否已载入当前音频管理器。
+    bool m_metronomeResourcesReady{ false };
+    /// @brief 上轮是否作为播放源排定节拍，停止时仅清理自己的两个音效池。
+    bool m_metronomeWasActive{ false };
+    /// @brief 下一拍游标是否与当前 BPM 缓存和播放位置对应。
+    bool m_metronomeCursorReady{ false };
+    /// @brief 最后一次用于预约节拍的 BPM 缓存版本。
+    std::uint64_t m_seenBpmEventsRevision{ 0U };
+    /// @brief 已生效 BPM 事件数量，零代表使用谱面偏好 BPM。
+    std::size_t m_metronomeSegmentIndex{ 0U };
+    /// @brief 当前 BPM 段的下一拍整数索引。
+    std::int64_t m_nextMetronomeBeatIndex{ 0 };
+    /// @brief 下一拍在画布视觉时间轴上的秒数。
+    double m_nextMetronomeBeatTime{ 0.0 };
+    /// @brief 已用于节拍预约的视觉偏移；变化时须撤销旧预约并重建游标。
+    double m_appliedMetronomeVisualOffset{ 0.0 };
+    /// @brief 已应用到音效池的节拍器增益；负值表示需要首次同步。
+    float m_appliedMetronomeGain{ -1.0F };
 };
 
 }  // namespace MMM::Logic

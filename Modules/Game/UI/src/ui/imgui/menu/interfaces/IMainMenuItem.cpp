@@ -5,6 +5,7 @@ namespace MMM::UI
 
 /// @brief 默认不更新菜单项跨帧状态。
 /// @param context 单帧主菜单上下文。
+/// @note 无状态菜单项无需覆盖该阶段，派生类仍可按需实现。
 void IMainMenuItem::update(MainMenuContext& context)
 {
     (void)context;

@@ -2,6 +2,7 @@
 #include "config/AudioPlaybackConfig.h"
 #include "config/BeatLinePalette.h"
 #include "config/FrameLimitPreference.h"
+#include "config/NotePalette.h"
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -38,21 +39,10 @@ void to_json(nlohmann::json& json, const SyncConfig& config);
 /// @brief 从 JSON 读取同步配置。
 void from_json(const nlohmann::json& json, SyncConfig& config);
 
-enum class PolylineSfxStrategy {
-    Exact,             ///< 策略一: 所有子物件精确按照他们的类型播放对应音效
-    InternalAsNormal,  ///< 策略二: 仅"内部"子物件播放普通Note音效
-    OnlyTailExact,     ///< 策略三: 仅尾部子物件按类型播放
-    AllAsNormal        ///< 策略四: 全部子物件均播放普通Note音效
-};
-
-/// @brief 将折线音效策略序列化为稳定文本。
-void to_json(nlohmann::json& json, const PolylineSfxStrategy& strategy);
-/// @brief 从稳定文本读取折线音效策略。
-void from_json(const nlohmann::json& json, PolylineSfxStrategy& strategy);
-
+/// @brief 打击音效的独立开关、声像、增益与资源混音设置。
 struct SfxConfig {
-    /// @brief 折线内部子物件音效播放策略
-    PolylineSfxStrategy polylineStrategy{ PolylineSfxStrategy::Exact };
+    /// @brief 是否播放严格位于折线内部的滑键键音，不影响首尾或独立滑键。
+    bool enablePolylineInternalFlickSfx{ true };
 
     /// @brief Flick类型音效的播放是否跟随滑动轨道数量进行增益
     bool enableFlickWidthVolumeScaling{ false };
@@ -86,6 +76,12 @@ struct SfxConfig {
 
     /// @brief 已绑定音效文件的物件打击音效线性增益，范围为 0.0~2.0。
     float boundHitSfxGain{ 1.0F };
+
+    /// @brief 普通谱面编辑器播放时是否启用节拍器；旧配置默认关闭。
+    bool enableEditorMetronome{ false };
+
+    /// @brief 编辑器节拍器的线性增益，范围为 0.0~2.0。
+    float editorMetronomeGain{ 1.0F };
 };
 
 /// @brief 将打击音效线性增益规范到持久化与实时混音的共同范围。
@@ -169,9 +165,6 @@ void to_json(nlohmann::json& json, const UIAestheticsConfig& config);
 /// @brief 从 JSON 读取 UI 审美配置。
 void from_json(const nlohmann::json& json, UIAestheticsConfig& config);
 
-/// @brief 音符调色盘方案中的颜色槽位数量。
-inline constexpr std::size_t NOTE_COLOR_PALETTE_SLOT_COUNT = 6;
-
 /// @brief 使用当前皮肤完整默认配色的调色盘方案标识。
 inline constexpr const char* COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID =
     "__skin_default__";
@@ -182,8 +175,7 @@ struct ColorPaletteScheme {
     std::string name{ "Palette" };
 
     /// @brief 完整物件颜色，顺序与工具栏物件颜色槽位一致。
-    std::array<std::array<float, 4>, NOTE_COLOR_PALETTE_SLOT_COUNT>
-        noteColors{};
+    NoteColorPalette noteColors{};
 
     /// @brief 完整分拍线颜色。
     BeatLineColorPalette beatLineColors{};
@@ -718,6 +710,9 @@ struct EditorSettings {
     /// @brief 重叠物件检测的时间窗口，单位毫秒。
     float overlapTimeWindowMs{ 5.0f };
 
+    /// @brief 是否允许悬浮右侧工具栏数值按钮时使用滚轮直接调整。
+    bool enableToolbarValueWheelAdjustment{ false };
+
     /// @brief 是否反转鼠标滚动方向
     bool reverseScroll{ false };
 
@@ -738,6 +733,9 @@ struct EditorSettings {
     /// @brief 最近打开项目的显示上限
     int recentProjectsLimit{ 10 };
 
+    /// @brief 启动时显示独立欢迎页；关闭页面不修改此偏好。
+    bool m_showWelcomeOnStartup{ true };
+
     /// @brief 语言设置 (zh_cn, en_us)
     std::string language{ "zh_cn" };
 
@@ -749,6 +747,9 @@ struct EditorSettings {
 
     /// @brief 音频播放后端偏好。
     AudioPlaybackBackend audioPlaybackBackend{ AudioPlaybackBackend::SDL };
+
+    /// @brief 新加载播放资源的解码方式，默认完整缓存以保证编辑跳转稳定。
+    AudioDecodingMode audioDecodingMode{ AudioDecodingMode::Cached };
 
     /// @brief SDL 音频后端的输出设备名称，空字符串表示默认设备。
     std::string sdlAudioOutputDeviceName;
@@ -851,15 +852,15 @@ struct EditorSettings {
     /// @brief 移除折线路径上的物件
     bool removeObjectsOnPolylinePath{ false };
 
+    /// @brief 各画布共用的专业模式，统一控制时间线专业分轨与草稿区显示和编辑。
+    /// @details 由 AppConfig 全局持久化，BMS 与折线编辑开关保持独立。
+    bool professionalMode{ false };
+
     /// @brief 是否允许编辑 Flick、Polyline 及折线子物件。
     bool enablePolylineEditing{ true };
 
     /// @brief 是否显示并允许编辑 BGM 轨道及自动采样。
     bool enableBmsEditing{ true };
-
-    /// @brief 当前构建是否发布项目级草稿轨功能。
-    /// @details 内部发布门禁，不序列化也不向设置界面开放。
-    bool enableDraftLanes{ true };
 
     /// @brief 粘贴后是否清空旧选择并选中新粘贴出的物件
     bool selectPastedObjects{ false };
@@ -887,9 +888,6 @@ struct EditorSettings {
 
     /// @brief 是否显示时间线窗口。
     bool showTimelineWindow{ true };
-
-    /// @brief 时间线窗口是否启用专业分轨显示模式。
-    bool timelineProfessionalMode{ false };
 
     /// @brief 是否显示预览窗口。
     bool showPreviewWindow{ true };

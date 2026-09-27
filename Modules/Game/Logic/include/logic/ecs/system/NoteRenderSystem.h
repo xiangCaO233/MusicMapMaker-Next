@@ -3,14 +3,16 @@
 #include "config/EditorConfig.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include <algorithm>
 #include <entt/entt.hpp>
 #include <glm/vec4.hpp>
 #include <vector>
 
 namespace MMM::Logic
 {
+struct CanvasLaneProjection;
 struct TimelineComponent;
-}
+}  // namespace MMM::Logic
 
 namespace MMM::Logic::System
 {
@@ -128,6 +130,7 @@ private:
 
     /// @param allowHoverSubdivisionPreview
     /// 是否允许绘制主画布玩家轨道的悬浮检视或编辑手势分拍预览。
+    /// @param collectPlayerBeatLines 是否把实际绘制的普通拍线写入玩家区快照。
     /// @warning 热路径：可见拍线每次动态快照生成时执行；BPM
     /// 列表必须由调用方提供缓存，禁止此处完整遍历或排序 timeline registry；临时
     /// 分拍预览的单拍切分数必须限制在 128 以内，常用分拍并集只能读取固定的
@@ -139,7 +142,7 @@ private:
         double currentTime, const ScrollCache* cache, float leftX, float topY,
         float bottomY, float trackAreaW, float renderScaleY,
         bool revealNearCursor, float opacityScale,
-        bool allowHoverSubdivisionPreview);
+        bool allowHoverSubdivisionPreview, bool collectPlayerBeatLines);
 
     /// @warning 热路径：Preview timing 线每次动态快照生成时执行；只遍历
     /// ScrollCache 已缓存段。
@@ -159,7 +162,8 @@ private:
                             Batcher& batcher, float leftX, float clipLeftX,
                             float clipRightX, float rightX, float topY,
                             float bottomY, float singleTrackW,
-                            float renderScaleY);
+                            float                       renderScaleY,
+                            const CanvasLaneProjection* laneProjection);
 
     /// @warning
     /// 热路径：音符渲染前每次执行；只读取快照和缓存，不得触发资源生命周期变更。
@@ -202,7 +206,8 @@ private:
         const NoteRenderContext&         ctx,
         const std::vector<entt::entity>& noteEntities, float judgmentLineY,
         float leftX, float topY, float bottomY, float singleTrackW,
-        float renderScaleY, const Config::EditorConfig& config);
+        float renderScaleY, const Config::EditorConfig& config,
+        const CanvasLaneProjection* laneProjection);
 
     /// @warning
     /// 热路径：音符基础层每次快照生成时执行；依赖预排序输入，禁止每帧完整排序。
@@ -212,7 +217,8 @@ private:
         const std::vector<entt::entity>& noteEntities, Batcher& batcher,
         float currentTime, float judgmentLineY, float leftX, float rightX,
         float topY, float bottomY, float singleTrackW, float renderScaleY,
-        int32_t trackCount, bool generateHitboxes, bool showBoundSampleLabels);
+        int32_t trackCount, bool generateHitboxes, bool showBoundSampleLabels,
+        const CanvasLaneProjection* laneProjection);
 
     /// @warning
     /// 热路径：悬浮发光层每次快照生成时执行；只扫描当前可见实体列表，禁止完整
@@ -222,7 +228,8 @@ private:
         const NoteRenderContext& ctx, const Config::EditorConfig& config,
         const std::vector<entt::entity>& noteEntities, float currentTime,
         float judgmentLineY, float leftX, float clipLeftX, float rightX,
-        float topY, float bottomY, float singleTrackW, float renderScaleY);
+        float topY, float bottomY, float singleTrackW, float renderScaleY,
+        const CanvasLaneProjection* laneProjection);
 
     /// @brief 生成并绘制当前快照中的重叠物件顶层遮罩。
     /// @warning
@@ -233,7 +240,8 @@ private:
         const NoteRenderContext& ctx, const Config::EditorConfig& config,
         const std::vector<entt::entity>& noteEntities, float judgmentLineY,
         float leftX, float clipLeftX, float clipRightX, float topY,
-        float bottomY, float singleTrackW, float renderScaleY);
+        float bottomY, float singleTrackW, float renderScaleY,
+        const CanvasLaneProjection* laneProjection);
 
     /// @warning 热路径：单个 Tap 几何生成时执行；不得分配 GPU
     /// 资源或访问文件系统。
@@ -241,6 +249,9 @@ private:
                           const Config::EditorConfig& config, float x, float y,
                           float w, float h, float aspect, glm::vec4 color);
 
+    /// @param currentTime 当前画布时间，用于无状态推导模拟判定进度。
+    /// @param topY 轨道裁剪区上边界。
+    /// @param bottomY 轨道裁剪区下边界。
     /// @warning 热路径：单个 Hold
     /// 几何生成时执行；循环范围必须由可见时间段限制。
     static void renderHold(Batcher& batcher, const NoteComponent& note,
@@ -249,15 +260,33 @@ private:
                            float singleTrackW, glm::vec4 headColor,
                            glm::vec4 bodyColor, glm::vec4 endColor,
                            const ScrollCache* cache, double currentAbsY,
-                           float judgmentLineY, float renderScaleY,
+                           double currentTime, float judgmentLineY,
+                           float renderScaleY, float topY, float bottomY,
                            HoverPart glowPart = HoverPart::None);
 
+    /// @brief 按根节点与终点各自轨道几何绘制 Flick。
+    /// @param batcher 目标批处理器。
+    /// @param note Flick 逻辑数据。
+    /// @param config 当前编辑器配置。
+    /// @param snapshot 当前渲染快照。
+    /// @param x 根节点绘制左边界。
+    /// @param y 根节点中心纵坐标。
+    /// @param w 根节点基础宽度。
+    /// @param h 根节点基础高度。
+    /// @param endpointCenterX 终点轨道中心横坐标。
+    /// @param endpointW 按终点轨宽缩放的基础宽度。
+    /// @param endpointH 按终点轨宽缩放的基础高度。
+    /// @param headColor 根节点颜色。
+    /// @param bodyColor 横向连接体颜色。
+    /// @param arrowColor 终点箭头颜色。
+    /// @param glowPart 发光层仅绘制的部件。
     /// @warning 热路径：单个 Flick 几何生成时执行；不得触发排序或全量 ECS
     /// 查询。
     static void renderFlick(Batcher& batcher, const NoteComponent& note,
                             const Config::EditorConfig& config,
                             RenderSnapshot* snapshot, float x, float y, float w,
-                            float h, float singleTrackW, glm::vec4 headColor,
+                            float h, float endpointCenterX, float endpointW,
+                            float endpointH, glm::vec4 headColor,
                             glm::vec4 bodyColor, glm::vec4 arrowColor,
                             HoverPart glowPart = HoverPart::None);
 
@@ -267,12 +296,12 @@ private:
         const ScrollCache* cache, Batcher& batcher, const NoteComponent& note,
         const Config::EditorConfig& config, RenderSnapshot* snapshot,
         double currentAbsY, double currentTime, float judgmentLineY,
-        float leftX, float rightX, float topY, float bottomY,
-        float singleTrackW, float renderScaleY, glm::vec4 colorHead,
-        glm::vec4 colorHoldBody, glm::vec4 colorHoldEnd, glm::vec4 colorNode,
-        glm::vec4 colorArrow, entt::entity entity = entt::null,
-        bool generateHitboxes = false, HoverPart glowPart = HoverPart::None,
-        int glowSubIndex = -1);
+        float leftX, float topY, float bottomY, float singleTrackW,
+        float renderScaleY, glm::vec4 colorHead, glm::vec4 colorHoldBody,
+        glm::vec4 colorHoldEnd, glm::vec4 colorNode, glm::vec4 colorArrow,
+        entt::entity entity = entt::null, bool generateHitboxes = false,
+        HoverPart glowPart = HoverPart::None, int glowSubIndex = -1,
+        const CanvasLaneProjection* laneProjection = nullptr);
 
     /// @brief 绘制当前快照中的音符拾取包围盒，辅助排查悬浮命中区域。
     /// @warning 热路径：仅在 debugDrawHitboxes
@@ -281,15 +310,14 @@ private:
 
     /// @warning 热路径：Polyline body 几何生成时执行；禁止动态资源加载或完整
     /// registry 遍历。
-    static void drawPolylineBody(Batcher& batcher, const NoteComponent& note,
-                                 const ScrollCache* cache,
-                                 RenderSnapshot* snapshot, float judgmentLineY,
-                                 float leftX, float singleTrackW,
-                                 float renderScaleY, double currentAbsY,
-                                 double currentTime, float topY, float bottomY,
-                                 float noteW, float noteH, glm::vec4 colorHold,
-                                 entt::entity entity, bool generateHitboxes,
-                                 HoverPart glowPart, int glowSubIndex);
+    static void drawPolylineBody(
+        Batcher& batcher, const NoteComponent& note, const ScrollCache* cache,
+        RenderSnapshot* snapshot, float judgmentLineY, float leftX,
+        float singleTrackW, float renderScaleY, double currentAbsY,
+        double currentTime, float topY, float bottomY, float noteW, float noteH,
+        glm::vec4 colorHold, entt::entity entity, bool generateHitboxes,
+        HoverPart glowPart, int glowSubIndex,
+        const CanvasLaneProjection* laneProjection, bool simulateJudgment);
 
     /// @warning 热路径：Polyline 可见性判断内联执行；保持纯计算且不可引入分配。
     static bool isCarrierVisible(double startOffset, double endOffset,
@@ -299,34 +327,33 @@ private:
     {
         bool timeInRange = (startOffset <= currentTime + 0.1) &&
                            (endOffset >= currentTime - 0.1);
-        bool spatialInRange =
-            (displayDeltaStart <= maxDelta) && (displayDeltaEnd >= minDelta);
+        // HS 为负或区间内存在反向滚动时，时间首尾不再等于空间上下界。
+        // 使用无方向区间相交，不能丢掉首端离屏但尾端仍可见的载体。
+        const double lowDelta  = std::min(displayDeltaStart, displayDeltaEnd);
+        const double highDelta = std::max(displayDeltaStart, displayDeltaEnd);
+        bool spatialInRange = (lowDelta <= maxDelta) && (highDelta >= minDelta);
         return timeInRange || spatialInRange;
     }
 
     /// @warning 热路径：Polyline 节点几何生成时执行；只处理可见范围内节点。
-    static void drawPolylineNodes(Batcher& batcher, const NoteComponent& note,
-                                  const ScrollCache* cache,
-                                  RenderSnapshot* snapshot, float judgmentLineY,
-                                  float leftX, float singleTrackW,
-                                  float renderScaleY, double currentAbsY,
-                                  double currentTime, float topY, float bottomY,
-                                  float noteW, float noteH, glm::vec4 colorNode,
-                                  const Config::EditorConfig& config,
-                                  entt::entity entity, bool generateHitboxes,
-                                  HoverPart glowPart, int glowSubIndex);
+    static void drawPolylineNodes(
+        Batcher& batcher, const NoteComponent& note, const ScrollCache* cache,
+        RenderSnapshot* snapshot, float judgmentLineY, float leftX,
+        float singleTrackW, float renderScaleY, double currentAbsY,
+        double currentTime, float topY, float bottomY, float noteW, float noteH,
+        glm::vec4 colorNode, const Config::EditorConfig& config,
+        entt::entity entity, bool generateHitboxes, HoverPart glowPart,
+        int glowSubIndex, const CanvasLaneProjection* laneProjection);
 
     /// @warning 热路径：Polyline 头部几何生成时执行；不得触发 ECS 全量查询。
-    static void drawPolylineHead(Batcher& batcher, const NoteComponent& note,
-                                 const ScrollCache* cache,
-                                 RenderSnapshot* snapshot, float judgmentLineY,
-                                 float leftX, float singleTrackW,
-                                 float renderScaleY, double currentAbsY,
-                                 double currentTime, float topY, float bottomY,
-                                 float noteW, float noteH, glm::vec4 colorHead,
-                                 const Config::EditorConfig& config,
-                                 entt::entity entity, bool generateHitboxes,
-                                 HoverPart glowPart, int glowSubIndex);
+    static void drawPolylineHead(
+        Batcher& batcher, const NoteComponent& note, const ScrollCache* cache,
+        RenderSnapshot* snapshot, float judgmentLineY, float leftX,
+        float singleTrackW, float renderScaleY, double currentAbsY,
+        double currentTime, float topY, float bottomY, float noteW, float noteH,
+        glm::vec4 colorHead, const Config::EditorConfig& config,
+        entt::entity entity, bool generateHitboxes, HoverPart glowPart,
+        int glowSubIndex, const CanvasLaneProjection* laneProjection);
 
     /// @warning 热路径：Polyline 装饰几何生成时执行；不得触发排序或磁盘读取。
     static void drawPolylineDecoration(
@@ -336,7 +363,8 @@ private:
         double currentTime, float topY, float bottomY, float noteW, float noteH,
         glm::vec4 colorHoldEnd, glm::vec4 colorArrow,
         const Config::EditorConfig& config, entt::entity entity,
-        bool generateHitboxes, HoverPart glowPart, int glowSubIndex);
+        bool generateHitboxes, HoverPart glowPart, int glowSubIndex,
+        const CanvasLaneProjection* laneProjection);
 
     /// @warning 热路径：框选区域几何生成时执行；只处理当前快照中的框选列表。
     static void renderMarqueeBox(Batcher& batcher,
@@ -352,7 +380,8 @@ private:
                                    const Config::EditorConfig& config,
                                    Batcher& batcher, float judgmentLineY,
                                    float leftX, float singleTrackW,
-                                   float renderScaleY);
+                                   float                       renderScaleY,
+                                   const CanvasLaneProjection* laneProjection);
 };
 
 }  // namespace MMM::Logic::System

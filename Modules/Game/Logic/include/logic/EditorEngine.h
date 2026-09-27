@@ -2,6 +2,7 @@
 
 #include "common/AsciiFontData.h"
 #include "common/LogicCommands.h"
+#include "event/project/ProjectOpenInteractionEvent.h"
 #include "logic/EditorClipboard.h"
 #include "logic/ProjectTypes.h"
 #include "logic/RenderSyncRegistry.h"
@@ -281,6 +282,16 @@ public:
      */
     int32_t getSessionCount() const { return m_sessionRegistry.count(); }
 
+    /// @brief 获取结构变更时发布的画布标签元数据。
+    /// @return 持有本轮 UI 访问期间稳定的索引和相机 ID。
+    /// @warning UI 热路径每帧复制一次 shared_ptr；并发删除标签时必须保持
+    /// 快照拥有权，避免持有贯穿逻辑 update 的注册表锁。
+    std::shared_ptr<const PublishedSessionUiSnapshot>
+    getSessionUiSnapshot() const
+    {
+        return m_sessionRegistry.publishedUiSnapshot();
+    }
+
     /**
      * @brief 获取指定索引的 SessionEntry (只读)
      */
@@ -328,13 +339,6 @@ public:
     /// 低频路径：可能访问文件系统解析规范路径，只能在文件选择、打开或打包流程调用。
     std::string makeBeatmapPathKeyForPath(
         const std::filesystem::path& beatmapPath) const;
-
-    /// @brief 判断指定主画布是否允许通过悬停滚轮接管滚动。
-    /// @param cameraId 目标主画布 cameraId。
-    /// @return 目标是当前活动画布，或与当前活动画布引用同一主音轨时返回 true。
-    /// @warning UI 热路径辅助：只允许在滚轮输入分支调用；会短暂持有
-    /// SessionRegistry 锁。
-    bool canHoverScrollCamera(const std::string& cameraId) const;
 
     /// @brief 更新指定主画布窗口在 UI 中的可见状态。
     /// @param cameraId 目标主画布 cameraId。
@@ -403,6 +407,15 @@ public:
     /// 禁止在物件循环中重复调用。
     Config::EditorConfig getEditorConfig() const;
 
+    /// @brief 按修订号刷新调用方持有的编辑器配置快照。
+    /// @param target 接收稳定配置的本地对象。
+    /// @param targetRevision 本地对象对应的修订号，成功同步后更新。
+    /// @return 配置修订变化并完成复制时返回 true。
+    /// @warning 逻辑/UI 热路径：未变化时只读取一次 acquire 原子；
+    /// 变化时短暂加锁并复制完整配置，不得在物件循环中逐项调用。
+    bool refreshEditorConfigSnapshot(Config::EditorConfig& target,
+                                     std::uint64_t& targetRevision) const;
+
     /**
      * @brief 获取当前工具类型
      * @warning 逻辑/UI
@@ -410,15 +423,21 @@ public:
      */
     EditTool getCurrentTool() const;
 
-    /**
-     * @brief 获取当前播放状态
-     */
+    /// @brief 获取最近一次逻辑更新发布的活动会话播放状态。
+    /// @return 活动会话正在控制全局播放时为 true。
+    /// @warning UI 热路径每帧读取 relaxed 原子；逻辑线程每 update 发布，
+    /// 会话切换与关闭路径也写入。必须避免在此等待覆盖整轮 update 的会话锁。
     bool isPlaybackPlaying() const;
+
+    /// @brief 查询最近一次发布的活动会话是否已载入谱面。
+    /// @warning UI 菜单每帧读取 relaxed 原子；逻辑更新及会话切换写入，
+    /// 只供 UI 可用状态判定，不承诺与后续编辑命令构成事务。
+    bool hasActiveBeatmap() const;
 
     /// @brief 判断当前活跃 Session 是否存在已选谱面物件。
     /// @return 玩家物件或自动采样至少有一个被选中时返回 true。
-    /// @warning UI 热路径：菜单状态每帧读取；会短暂锁定 SessionRegistry，
-    /// 只检查常量级选择索引，不遍历 ECS，也不复制 shared_ptr 所有权。
+    /// @warning UI 菜单每帧读取 relaxed 原子；逻辑 update 发布最终状态，
+    /// 菜单可用性允许至多一轮逻辑更新的延迟，编辑命令仍由会话自身校验。
     bool hasActiveChartObjectSelection() const;
 
     /// @brief 判断当前活跃 Session 是否正在拖拽框选区域。
@@ -560,17 +579,22 @@ private:
 
     /// @brief 打开项目目录并加载其中的所有资源。
     /// @param projectPath 要打开的项目目录或谱面文件路径。
-    void openProject(const std::filesystem::path& projectPath,
-                     const std::optional<ProjectCreationOptions>&
-                         creationOptions = std::nullopt);
+    void openProject(
+        const std::filesystem::path&                 projectPath,
+        const std::optional<ProjectCreationOptions>& creationOptions =
+            std::nullopt,
+        Event::ProjectOpenOrigin origin = Event::ProjectOpenOrigin::Unknown);
 
     /// @brief 打开谱面包为临时只读项目。
     /// @param packagePath 需要临时阅览的谱面包路径。
-    void openTemporaryProjectPackage(const std::filesystem::path& packagePath);
+    void openTemporaryProjectPackage(
+        const std::filesystem::path& packagePath,
+        Event::ProjectOpenOrigin origin = Event::ProjectOpenOrigin::Unknown);
 
     /// @brief 应用项目控制器打开项目后的逻辑副作用。
     /// @param openResult 项目控制器返回的打开结果。
-    void finishOpenProject(const OpenProjectResult& openResult);
+    /// @return 指定的谱面成功创建会话时返回 true。
+    bool finishOpenProject(const OpenProjectResult& openResult);
 
     /**
      * @brief 定期扫描项目目录变更（实现实时目录监听与资源同步）
@@ -592,10 +616,10 @@ private:
     /// @param sourceIndex 源 Session 在注册表中的索引。
     /// @warning 逻辑热路径：每次 Session update 后可能执行；同步开关读取使用
     /// relaxed，并短暂持有 SessionRegistry 递归锁，只同步
-    /// audioTimelineFingerprint 相同的 Session。
+    /// mainAudioSyncFingerprint 相同的 Session。
     void syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex);
 
-    /// @brief 发布已打开 Session 的复合时间线指纹，调用者必须持有注册表锁。
+    /// @brief 发布已打开 Session 的完整时间线和 Main 同步指纹。
     /// @warning 低频路径：只读取各会话已构建的 descriptor。
     void refreshAudioTimelineFingerprintsUnsafe();
 
@@ -605,7 +629,7 @@ private:
     void markAudioTimelineDescriptorsDirtyUnsafe(
         std::string_view resourceId = {});
 
-    /// @brief 刷新是否存在同主音轨同步候选，调用者必须持有注册表锁。
+    /// @brief 刷新同主音轨候选并清理与活动源不兼容的 follower。
     /// @warning 低频路径：只在 Session 增删或主音轨路径变化后调用。
     void refreshMainAudioSyncPeerStateUnsafe();
 
@@ -624,15 +648,6 @@ private:
 
     /// @brief 多画布会话注册表，封装 Session 列表、活跃索引和 cameraId 分配。
     SessionRegistry m_sessionRegistry;
-
-    /// @brief 将共享配置按修订号同步到逻辑线程本地快照。
-    /// @param target 接收稳定配置的逻辑线程本地对象。
-    /// @param targetRevision 本地对象当前对应的修订号，成功同步后更新。
-    /// @return 配置修订发生变化并完成复制时返回 true。
-    /// @warning 逻辑热路径：每轮 loop 调用；未变化时只进行一次 acquire
-    /// 原子读取， 变化时才短暂加锁并复制完整配置。
-    bool refreshEditorConfigSnapshot(Config::EditorConfig& target,
-                                     std::uint64_t& targetRevision) const;
 
     /// @brief 保护编辑器配置完整对象的读写，防止 UI
     /// 拖拽更新与逻辑线程复制并发。
@@ -664,6 +679,8 @@ private:
     /// @brief 编辑器级画笔配色，各会话创建或重新激活时从此状态恢复。
     std::array<std::optional<glm::vec4>, NOTE_COLOR_SLOT_COUNT>
         m_brushNoteColors{};
+    /// @brief 各槽是否由单槽显式染色命令设置，不能从 RGBA 数值反推。
+    std::array<bool, NOTE_COLOR_SLOT_COUNT> m_brushNoteColorsExplicit{};
 
     /// @brief 编辑器是否已经收到过画笔配色命令。
     bool m_brushNoteColorsInitialized{ false };
@@ -701,6 +718,21 @@ private:
     /// @warning 逻辑/UI 热路径/原子：逻辑线程低频写入、UI
     /// 可每帧读取；仅用于展示，使用 relaxed。
     std::atomic<float> m_logicUps{ 0.0f };
+
+    /// @brief 活动会话实际播放状态的轻量发布值，后台 follower 不计入。
+    /// @warning 逻辑线程每 update 写入、UI 每帧读取 relaxed；仅供工具栏
+    /// 与播放切换命令判断，使用原子是为了避开会话更新期间的长锁等待。
+    std::atomic<bool> m_activePlaybackPlaying{ false };
+
+    /// @brief 活动会话的谱面存在状态，供逐帧菜单可用性判定。
+    /// @warning 逻辑线程每 update 写入、UI 每帧读取 relaxed；避免菜单读取
+    /// currentBeatmap 时等待逻辑线程整个 update 周期持有的注册表锁。
+    std::atomic<bool> m_activeHasBeatmap{ false };
+
+    /// @brief 活动会话是否选中了 Note 或 Sample，供菜单显示可用状态。
+    /// @warning 逻辑线程每 update 写入、UI 每帧读取 relaxed；选择只在
+    /// 会话命令消费后生效，原子值避免菜单检查等待逻辑更新的长锁。
+    std::atomic<bool> m_activeHasChartObjectSelection{ false };
 
     /// @brief 主渲染线程实时刷新率 (FPS)。
     /// @warning UI/逻辑热路径/原子：UI 线程每帧写入、逻辑线程每 update

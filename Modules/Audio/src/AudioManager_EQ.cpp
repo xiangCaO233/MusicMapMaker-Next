@@ -14,8 +14,25 @@
 
 namespace MMM::Audio
 {
+// 主轨 EQ 是时间线预览图中的可选处理节点，管理时遵循以下约束：
+//
+// - 频段表和滤波状态在控制线程创建并 prepare，音频回调只处理固定缓冲；
+// - 热插拔通过 MixBus 原子替换来源，不能先断开旧路由再连接新节点；
+// - 频谱采集若存在则位于 EQ 前，关闭 EQ 后仍恢复到同一上游节点；
+// - m_mainEQ 只在路由替换成功后提交，失败时保留旧节点与预设；
+// - UI 的频段参数读写直接转交 GraphicEqualizer 的线程安全控制接口。
+// - 未创建 EQ 时 getter 返回中性默认值，setter 安全忽略；
+// - 频响查询把接近零的线性幅值限制为可绘制的 -120 dB 下限；
+// - 创建与销毁日志只在控制路径输出，不进入实时音频回调。
+// - 预设枚举与中心频率表一一对应，不允许发布空频段的未知非 None 预设；
+// - 所有公开查询在节点缺失时保持无副作用并返回可直接绘制的中性结果。
+
 /// @brief 为复合时间线创建或替换全局预览图形均衡器。
 /// @param preset 目标 EQ 预设。
+///
+/// None 复用销毁路径；其余预设先构造并预备完整新节点，再原子替换当前路由。
+/// 十段与十五段中心频率采用固定音乐均衡器标准分布，不在运行时自动重排。
+/// @warning 低频控制路径；会分配滤波状态并调整音频图，不在音频回调调用。
 void AudioManager::createMainTrackEQ(EQPreset preset)
 {
     if ( preset == EQPreset::None ) {
@@ -23,6 +40,7 @@ void AudioManager::createMainTrackEQ(EQPreset preset)
         return;
     }
 
+    // 中心频率由预设完整给出，顺序即 UI 频段索引顺序。
     std::vector<double> freqs;
     if ( preset == EQPreset::TenBand ) {
         freqs = { 31.25,  62.5,   125.0,  250.0,  500.0,
@@ -33,6 +51,7 @@ void AudioManager::createMainTrackEQ(EQPreset preset)
                   2500.0, 4000.0, 6300.0, 10000.0, 16000.0 };
     }
 
+    // 在接入运行图之前完成 prepare，避免回调观察到未分配 scratch 的节点。
     auto newEQ = std::make_shared<ice::GraphicEqualizer>(freqs);
     newEQ->prepare(
         ice::ICEConfig::internal_format,
@@ -44,6 +63,7 @@ void AudioManager::createMainTrackEQ(EQPreset preset)
         if ( !input ) input = m_audioTimelineNode;
         newEQ->set_inputnode(input);
 
+        // replace_source 需要当前实际路由身份；没有旧 EQ 时当前路由就是 input。
         std::shared_ptr<ice::IAudioNode> currentRoute = m_mainEQ;
         if ( !currentRoute ) currentRoute = input;
         if ( !m_preStretcherMixer->replace_source(currentRoute, newEQ) ) {
@@ -52,12 +72,16 @@ void AudioManager::createMainTrackEQ(EQPreset preset)
         }
     }
 
+    // 路由切换完成后再发布成员，保证成员状态与音频图一致。
     m_mainEQ       = std::move(newEQ);
     m_mainEQPreset = preset;
     XINFO("Main track EQ created with {} bands.", freqs.size());
 }
 
 /// @brief 销毁复合时间线全局预览均衡器并恢复原始路由。
+///
+/// 先把 MixBus 来源从 EQ 换回频谱采集或时间线，再释放 EQ 所有权；替换失败时
+/// 保留原路由，避免正在播放的预览链出现断音。
 void AudioManager::destroyMainTrackEQ()
 {
     if ( !m_mainEQ ) return;
@@ -72,6 +96,7 @@ void AudioManager::destroyMainTrackEQ()
         }
     }
 
+    // 只有路由不再引用 EQ 后才清空管理器成员与预设状态。
     m_mainEQ.reset();
     m_mainEQPreset = EQPreset::None;
     XINFO("Main track EQ destroyed.");
@@ -160,6 +185,7 @@ EQPreset AudioManager::getMainTrackEQPreset() const
 float AudioManager::getMainTrackEQResponse(float frequency) const
 {
     if ( m_mainEQ ) {
+        // 线性幅度先设下限，避免 log10(0) 产生负无穷污染绘图。
         double mag = m_mainEQ->get_total_magnitude_response(
             static_cast<double>(frequency));
         if ( mag <= 1e-6 ) return -120.0f;  // 避免 log10(0)

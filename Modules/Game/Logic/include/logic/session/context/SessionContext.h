@@ -13,6 +13,7 @@
 #include "logic/session/AnnotationRenderData.h"
 #include "logic/session/ClipboardTypes.h"
 #include "logic/session/EditorAction.h"
+#include <array>
 #include <cstdint>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
@@ -31,6 +32,8 @@ class Project;
 
 namespace MMM::Logic
 {
+
+enum class ComposeLessonInputMode : std::uint8_t;
 
 using BeatmapSyncBuffer = Common::Render::RenderSnapshotBuffer;
 
@@ -58,11 +61,31 @@ struct DragRenderPinnedEntities {
     const std::vector<entt::entity>* entities{ nullptr };
 };
 
+/// @brief 一次绘制教学创建的物件身份；仅用于核对删除练习，不参与保存。
+struct WalkthroughPracticeNote {
+    std::uint64_t token{ 0 };            ///< 创建步骤的唯一标记。
+    entt::entity  entity{ entt::null };  ///< 创建动作实际写入的实体。
+    std::string   collaborationId;       ///< 防止实体槽位被其他物件复用。
+};
+
 /// @brief 共享的上下文状态，记录了当前会话的所有运行时数据，供各个 Controller
 /// 和 Tool 访问。
 struct SessionContext {
     // --- 核心状态 ---
-    entt::registry noteRegistry;      ///< 音符实体的 ECS 注册表
+    entt::registry noteRegistry;  ///< 音符实体的 ECS 注册表
+    /// @note 本索引不持有实体；装载新谱面时清零，删除只改变其存活查询结果。
+    /// @brief 按 Note、Hold、Flick、Polyline 顺序记录练习产物。
+    std::array<WalkthroughPracticeNote, 4> walkthroughPracticeNotes{};
+    /// @brief 最近一次结束的编辑手势；仅发布标记，不在热路径复制音符列表。
+    Common::Render::RenderSnapshot::WalkthroughEditEvent walkthroughEditEvent{};
+    /// @brief 教学只读验收用的正式物件变更序号；仅逻辑线程写入。
+    std::uint64_t composeNoteRevision{ 0 };
+    /// @brief 当前会话的创作教学阶段；零值为 Off，不写入谱面或用户配置。
+    ComposeLessonInputMode composeLessonInputMode{};
+    /// @brief 当前教学段的音频时间下界，由步骤切换命令一次性更新。
+    double composeLessonBegin{ 0.0 };
+    /// @brief 当前教学段的音频时间上界，写谱期间所有定位入口共用。
+    double         composeLessonEnd{ 0.0 };
     entt::registry sampleRegistry;    ///< 自动采样实体的独立 ECS 注册表
     entt::registry timelineRegistry;  ///< 时间轴事件(BPM等)的 ECS 注册表
     /// @brief 玩家物件已选实体索引，避免框选热路径扫描完整 Registry。
@@ -70,16 +93,16 @@ struct SessionContext {
     /// @brief 自动采样已选实体索引，避免框选热路径扫描完整 Registry。
     std::unordered_set<entt::entity> selectedSampleEntities;
 
-    /// @brief 当前谱面解析到的主音频草稿共享组 ID。
-    std::string m_draftLaneGroupId;
+    /// @brief 当前草稿组绑定的项目相对谱面路径。
+    std::string m_draftLaneBeatmapPath;
 
-    /// @brief 当前会话已载入的草稿共享组进程内版本。
+    /// @brief 当前会话已载入的同谱面草稿组进程内版本。
     std::uint64_t m_draftLaneGroupRevision{ 0U };
 
-    /// @brief 当前会话上次同步完成时的草稿组载荷，用于三方合并。
+    /// @brief 当前会话上次同步完成时的同谱面草稿载荷，用于三方合并。
     std::string m_draftLaneBasePayload;
 
-    /// @brief 当前会话上次同步完成时的草稿轨道数量，用于并发三方合并。
+    /// @brief 当前会话上次同步完成时的草稿轨道数量，用于同谱面并发合并。
     std::int32_t m_draftLaneBaseTrackCount{ 0 };
 
     double currentTime{ 0.0 };  ///< 当前逻辑播放时间 (秒)
@@ -99,10 +122,14 @@ struct SessionContext {
     bool isSeekScrubbing{ false };
     /// @brief 当前会话是否拥有全局音频时间线的控制权。
     bool isActiveSession{ false };
-    /// @brief 是否作为同复合时间线后台跟随者读取全局 transport。
-    bool    isAudioTimelineSyncFollower{ false };
-    int32_t trackCount{ 12 };  ///< 当前玩家轨道总数。
-    /// @brief 项目共享的持久化草稿轨道数量，不包含最左侧运行时追加轨。
+    /// @brief 是否作为同 Main 音轨时间线后台跟随者读取全局 transport。
+    bool isAudioTimelineSyncFollower{ false };
+    /// @brief 同步跟随者当前允许读取的活动完整时间线指纹。
+    /// @warning 逻辑热路径只比较该缓存；仅在同步源变化时替换字符串，避免逐
+    /// update 分配。
+    std::string m_audioTimelineSyncSourceFingerprint;
+    int32_t     trackCount{ 12 };  ///< 当前玩家轨道总数。
+    /// @brief 当前谱面独占的持久化草稿轨道数量，不包含最左侧运行时追加轨。
     int32_t draftTrackCount{ 12 };
     /// @brief 用户持久化的 BGM 轨道数量，不包含末尾运行时追加轨。
     int32_t bgmTrackCount{ 0 };
@@ -164,8 +191,10 @@ struct SessionContext {
     };  ///< 下一次推进绑定音效后台加载的系统时间
     System::HitFXSystem hitFXSystem;  ///< 打击特效处理系统
     std::vector<const TimelineComponent*>
-         bpmEvents;                  ///< 缓存并排序后的 BPM 事件
-    bool isBpmEventsDirty{ true };   ///< BPM 缓存脏标记
+         bpmEvents;                 ///< 缓存并排序后的 BPM 事件
+    bool isBpmEventsDirty{ true };  ///< BPM 缓存脏标记
+    /// @brief BPM 缓存每次重建后递增的版本，供跨控制器消费方识别变化。
+    std::uint64_t bpmEventsRevision{ 0U };
     bool isHitEventsDirty{ false };  ///< 打击事件序列是否需要按音符变更重建
     bool isNoteOrderDirty{ true };   ///< 音符排序缓存是否需要完整重建
     bool isNotePruneDirty{ false };  ///< 音符排序缓存是否只需剔除失效实体
@@ -255,8 +284,10 @@ struct SessionContext {
         float  segmentStartMouseY{ 0.0f };  ///< 当前子段开始时的鼠标 Y 坐标
         ::MMM::NoteType type{ ::MMM::NoteType::NOTE };
 
-        /// @brief 当前画笔应用到新建物件的自定义颜色。
+        /// @brief 颜色画笔使用的当前调色盘，不代表物件已显式染色。
         NoteColorOverrides customColors;
+        /// @brief 仅用户明确指定的绘制颜色会写进新物件元数据。
+        NoteColorOverrides drawCustomColors;
 
         /// @brief 当前项目音频工具选中的资源 ID；为空时新建玩家物件不绑定音效。
         std::string selectedAudioResourceId;
@@ -280,6 +311,14 @@ struct SessionContext {
 
         /// @brief 当前画笔是否通过先删除已有物件进入恢复或转换编辑。
         bool replacesExistingObject{ false };
+        /// @brief 续接前的根实体；用于把教学身份转移给替换后的折线。
+        entt::entity resumedEntity{ entt::null };
+        /// @brief 源物件属于哪个练习槽位；无匹配时保持 -1。
+        int resumedPracticeSlot{ -1 };
+        /// @brief 续接后应由新实体继承的创建令牌。
+        std::uint64_t resumedPracticeToken{ 0 };
+        /// @brief 本次手势是否进入过滑键或折线；禁止其零长度段变成独立 Hold。
+        bool hasPolylineGesture{ false };
 
         // Polyline 相关的实时构建链
         std::vector<NoteComponent::SubNote> polylineSegments;

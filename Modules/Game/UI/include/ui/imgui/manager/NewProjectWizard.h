@@ -1,5 +1,6 @@
 #pragma once
 
+#include "event/project/ProjectOpenInteractionEvent.h"
 #include "ui/IUIView.h"
 #include "ui/imgui/SideBarUI.h"
 #include <cstddef>
@@ -25,7 +26,9 @@ public:
     void update(UIManager* sourceManager) override;
 
     /// @brief 打开向导并重置输入状态。
-    void open();
+    /// @param origin 唤出向导的用户入口，用于创建成功后的演练归因。
+    void open(
+        Event::ProjectOpenOrigin origin = Event::ProjectOpenOrigin::Unknown);
 
     /// @brief 关闭向导弹窗。
     void close();
@@ -43,14 +46,16 @@ private:
     /// @brief 绘制项目基本信息步骤。
     void renderProjectInfoStep();
 
-    /// @brief 绘制项目初始偏好步骤。
-    void renderPreferencesStep();
+    /// @brief 绘制项目初始偏好步骤，并上报展开列表的可交互范围。
+    /// @param sourceManager 提供当前引导遮罩，可为空。
+    void renderPreferencesStep(UIManager* sourceManager);
 
     /// @brief 绘制项目保存位置步骤。
     void renderLocationStep();
 
-    /// @brief 绘制底部操作按钮。
-    void renderFooter();
+    /// @brief 绘制底部操作按钮并上报当前步骤的主操作目标。
+    /// @param sourceManager 提供配置驱动突出层，可为空。
+    void renderFooter(UIManager* sourceManager);
 
     /// @brief 绘制带独立标签的输入框，避免长标签被输入框宽度裁切。
     /// @param label 显示给用户的字段名。
@@ -113,6 +118,9 @@ private:
 
     /// @brief 下一帧是否需要聚焦向导窗口。
     bool m_shouldOpen{ false };
+
+    /// @brief 本轮新建流程的用户入口，提交请求后继续传到项目加载结果。
+    Event::ProjectOpenOrigin m_openOrigin{ Event::ProjectOpenOrigin::Unknown };
 
     /// @brief 当前向导步骤。
     Step m_currentStep{ Step::ProjectInfo };

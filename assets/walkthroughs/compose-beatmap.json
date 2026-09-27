@@ -1,0 +1,12 @@
+{
+  "id": "mmm.compose-beatmap",
+  "chapter": "creation",
+  "order": 40,
+  "version": 2,
+  "requires_project": true,
+  "requires_beatmap": true,
+  "completion": "all",
+  "placeholder": true,
+  "title": {"zh_cn": "创作谱面", "en_us": "Compose a beatmap"},
+  "description": {"zh_cn": "在 CanonRock 示例谱面中，先播放教学段落，再按画布中的青色轮廓与蓝色落点完成主轨道操作，最后重播检查。绘制工具左键单点写入单键；按住 Shift 并用左键拖拽写入长条、折线或滑键，直到松开左键都不要松开 Shift。右键删除物件；右键折线节点会断开折线，Shift+右键折线或直接右键折线头会删除整条折线；右键已选中的物件会删除所有选中物件。教学期间草稿区隐藏，只作为程序的内部参考。", "en_us": "In the CanonRock sample chart, preview each section, follow the cyan outlines and blue targets in the player lanes, then replay it. With Draw, left-click to place a tap; hold Shift while left-dragging to create a hold, polyline, or flick, and keep Shift held until releasing the left button. Right-click to delete a note; right-click a polyline node to split it, or Shift+right-click the polyline or right-click its head to delete the whole path. Right-clicking a selected note deletes all selected notes. The draft lanes are hidden during these lessons and used only as an internal reference."}
+}

@@ -5,7 +5,8 @@
 namespace MMM::UI
 {
 
-/// @brief 主菜单分隔线项。
+/// @brief 不持有状态、只表达相邻菜单命令视觉分组的分隔线项。
+/// @note 继承统一菜单项接口以便直接插入任意菜单的项目序列。
 class MainMenuSeparatorItem final : public IMainMenuItem
 {
 public:

@@ -243,6 +243,18 @@ private:
 
     Audio::EQPreset m_currentPreset{ Audio::EQPreset::None };
 
+    /// @brief 倍速滑块拖动时的界面草稿；松开后才提交离线音频处理。
+    float m_speedSliderDraft{ 1.0f };
+
+    /// @brief 跨帧保留倍速拖动值，避免每帧从项目配置重置滑块。
+    bool m_speedSliderEditing{ false };
+
+    /// @brief 音高滑块拖动时的界面草稿；松开后才提交离线音频处理。
+    float m_pitchSliderDraft{ 0.0f };
+
+    /// @brief 跨帧保留音高拖动值，避免每帧从项目配置重置滑块。
+    bool m_pitchSliderEditing{ false };
+
     /// @brief Clay 布局容器池
     CLayVBox             m_contentVBox;
     std::deque<CLayHBox> m_rows;

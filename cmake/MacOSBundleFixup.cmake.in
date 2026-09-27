@@ -1,18 +1,25 @@
-# CPack 安装阶段需要把非系统动态库复制进应用束，并修正 Mach-O install name。
+# CPack 安装阶段需要把非系统动态库复制进应用束，并修正 Mach-O install name。 DESTDIR 与安装前缀共同定位 CPack 的临时
+# staging 根，不指向构建树应用。
 set(_mmm_bundle "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/MusicMapMaker-Next.app")
+# MoltenVK 作为额外库交给 BundleUtilities，确保其依赖也参与修复。
 set(_mmm_moltenvk "${_mmm_bundle}/Contents/Frameworks/libMoltenVK.dylib")
+# 依赖搜索目录在配置阶段由 Vulkan loader 与 MoltenVK 实际位置生成。
 set(_mmm_dependency_dirs "@MMM_MACOS_DEPENDENCY_DIRS@")
 
 include(BundleUtilities)
+# fixup_bundle 复制非系统 dylib、重写 install name，并检查应用束闭包。
 fixup_bundle("${_mmm_bundle}" "${_mmm_moltenvk}" "${_mmm_dependency_dirs}")
 
 # fixup_bundle 会改写应用束内容，因此签名必须最后执行。默认 "-" 为本地 ad-hoc 签名； CI 可通过
 # MMM_MACOS_CODESIGN_IDENTITY 换成 Developer ID。
 set(_mmm_codesign_identity "@MMM_MACOS_CODESIGN_IDENTITY@")
 if(NOT _mmm_codesign_identity STREQUAL "")
+  # 请求签名时 codesign 必须存在，不能生成无法验证的发布包。
   find_program(_mmm_codesign codesign REQUIRED)
+  # --deep 覆盖 BundleUtilities 新复制的嵌套依赖，--force 允许替换旧签名。
   set(_mmm_codesign_arguments --force --deep --sign "${_mmm_codesign_identity}")
   if(NOT _mmm_codesign_identity STREQUAL "-")
+    # 真实 Developer ID 签名附加 hardened runtime 和可信时间戳。
     list(APPEND _mmm_codesign_arguments --options runtime --timestamp)
   endif()
   list(APPEND _mmm_codesign_arguments "${_mmm_bundle}")
@@ -20,6 +27,7 @@ if(NOT _mmm_codesign_identity STREQUAL "")
   execute_process(COMMAND "${_mmm_codesign}" ${_mmm_codesign_arguments}
                   RESULT_VARIABLE _mmm_codesign_result)
   if(NOT _mmm_codesign_result EQUAL 0)
+    # 签名失败必须终止安装阶段，防止 CPack 封装无效应用束。
     message(FATAL_ERROR "macOS 应用束签名失败：${_mmm_bundle}")
   endif()
 
@@ -27,6 +35,7 @@ if(NOT _mmm_codesign_identity STREQUAL "")
     COMMAND "${_mmm_codesign}" --verify --deep --strict --verbose=2
             "${_mmm_bundle}" RESULT_VARIABLE _mmm_codesign_verify_result)
   if(NOT _mmm_codesign_verify_result EQUAL 0)
+    # 严格递归验证覆盖主程序、更新器和 Frameworks 中的动态库。
     message(FATAL_ERROR "macOS 应用束签名校验失败：${_mmm_bundle}")
   endif()
 endif()

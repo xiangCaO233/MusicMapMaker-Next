@@ -9,6 +9,10 @@ namespace MMM::Config
 class AppPaths
 {
 public:
+    /// @brief 实时获取当前可执行文件所在目录的绝对路径。
+    /// @return 可执行文件所在目录；平台查询失败时退回当前绝对工作目录。
+    static std::filesystem::path executableDirectoryPath();
+
     /// @brief 获取本应用在用户 .config 下的根目录。
     /// @return 用户配置根目录，Windows 下为 用户目录/.config/mmm。
     static std::filesystem::path configRootPath();

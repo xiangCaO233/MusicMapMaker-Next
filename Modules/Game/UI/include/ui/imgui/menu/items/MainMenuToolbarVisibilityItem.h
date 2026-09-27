@@ -6,6 +6,7 @@ namespace MMM::UI
 {
 
 /// @brief 在查看菜单中分组控制工具栏按钮可见性的子菜单项。
+/// @details 子项直接映射工具栏配置，保持菜单勾选状态与主界面可见性一致。
 class MainMenuToolbarVisibilityItem final : public IMainMenuItem
 {
 public:

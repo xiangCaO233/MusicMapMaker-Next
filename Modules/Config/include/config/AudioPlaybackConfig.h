@@ -11,6 +11,12 @@ enum class AudioPlaybackBackend {
     OpenAL  ///< OpenAL Soft 音频后端。
 };
 
+/// @brief 音频播放的解码方式，离线分析始终使用完整缓存。
+enum class AudioDecodingMode {
+    Cached,    ///< 完整 PCM 缓存，随机读取稳定，内存随时长增长。
+    Streaming  ///< 后台流式预读，内存有界，缺页时可能短暂静音。
+};
+
 /// @brief OpenAL 空间化输出配置。
 struct OpenALSpatialConfig {
     /// @brief 是否启用 OpenAL 空间化输出。

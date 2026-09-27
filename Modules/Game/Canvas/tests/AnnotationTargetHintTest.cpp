@@ -1,7 +1,10 @@
 #include "canvas/AnnotationTargetHint.h"
+#include "canvas/ComposeLessonHintGeometry.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace
@@ -16,20 +19,159 @@ bool near(float lhs, float rhs)
     return std::abs(lhs - rhs) < 1e-4F;
 }
 
+/// @brief 检查折线节点是否位于连续提示轮廓内部。
+/// @param point 待检查的参考 Note 中心。
+/// @param polygon 顺时针提示轮廓。
+/// @return 节点落在轮廓内时返回 true。
+/// @details 用射线奇偶性确认目标中心真正落在填充区域，
+/// 不能只检查外包矩形：后者无法识别轮廓被错误拆成多个断块。
+bool insidePolygon(MMM::Canvas::ComposeLessonHintPoint                  point,
+                   std::span<const MMM::Canvas::ComposeLessonHintPoint> polygon)
+{
+    // 射线从待测点向右延伸；每穿过一条边就翻转一次内外状态。
+    // 水平边不满足 Y 跨越条件，避免在节点处重复计数。
+    bool inside = false;
+    for ( std::size_t index = 0, previous = polygon.size() - 1;
+          index < polygon.size();
+          previous = index++ ) {
+        const auto& a = polygon[index];
+        const auto& b = polygon[previous];
+        // 除法只在边的两端位于点的不同 Y 侧时执行，因此分母非零。
+        // 参考 Note 位于外环内部是合并框的最基本可见性要求。
+        if ( (a.y > point.y) != (b.y > point.y) &&
+             point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x )
+            inside = !inside;
+    }
+    return inside;
+}
+
+/// @brief 验证折线目标只生成一个可填充的顺时针轮廓。
+/// @return 横竖连接和拐角均包住参考节点且没有分离边框时返回 true。
+/// @details 使用足够长的转折段隔离普通 L 型连接的边界逻辑，
+/// 再由短折返用例单独覆盖矩形大面积重叠的情况。
+bool testComposePolylineHintIsContinuous()
+{
+    using MMM::Canvas::ComposeLessonHintPoint;
+    // 混合水平和竖直段覆盖折线头、拐角及尾端的 Note 留白。
+    // 轨道与时间已被简化为像素，测试只关注外环构造本身。
+    const std::vector<ComposeLessonHintPoint> path{
+        { 40.0F, 30.0F },
+        { 140.0F, 30.0F },
+        { 140.0F, 130.0F },
+        { 240.0F, 130.0F },
+    };
+    const auto polygon =
+        MMM::Canvas::buildComposeLessonHintPolygon(path, 20.0F, 10.0F);
+    // 只返回一条外边界；拐角数量由相邻矩形的并集决定。
+    if ( polygon.size() < 4 ) return false;
+    // 任一节点落在框外时，玩家会看到与草稿区对应不上位置的高亮。
+    for ( const auto& point : path )
+        if ( !insidePolygon(point, polygon) ) return false;
+    double area = 0.0;
+    // 屏幕 Y 轴向下，正面积对应 ImGui 凹多边形所需的顺时针顶点。
+    // 如果顶点反向，填充器可能生成错误的三角形。
+    for ( std::size_t index = 0; index < polygon.size(); ++index ) {
+        const auto& a = polygon[index];
+        const auto& b = polygon[(index + 1) % polygon.size()];
+        area += static_cast<double>(a.x) * b.y - static_cast<double>(a.y) * b.x;
+    }
+    return area > 0.0;
+}
+
+/// @brief 验证密集折返仍生成一个没有自交的提示轮廓。
+/// @return 短 Hold 与横向 Flick 交替时全部节点均位于单个轮廓内。
+/// @details 数值比例模拟相邻轨中心间距大于短 Hold 时间距离，
+/// 即截图中最容易让逐段偏移轮廓互相穿过的组合。
+bool testComposePolylineHintHandlesShortSwitchbacks()
+{
+    using MMM::Canvas::ComposeLessonHintPoint;
+    // CanonRock 进阶段落包含短于 Note 宽度的连续折返；简单法线扩张
+    // 会在这里形成自交，矩形并集的外环必须保持有效。
+    // 路径多次返回先前轨道，不能用单调 X 或单调 Y 假设简化。
+    const std::vector<ComposeLessonHintPoint> path{
+        { 100.0F, 0.0F },  { 100.0F, 20.0F }, { 250.0F, 20.0F },
+        { 250.0F, 40.0F }, { 100.0F, 40.0F }, { 100.0F, 60.0F },
+        { 250.0F, 60.0F }, { 250.0F, 80.0F },
+    };
+    const auto polygon =
+        MMM::Canvas::buildComposeLessonHintPolygon(path, 60.0F, 15.0F);
+    // 宽度比短竖段更大，必须检验重叠后的外轮廓而非各段独立框。
+    // 这个比例还覆盖了画布较窄时玩家轨道与 Note 纹理尺寸接近的情况。
+    if ( polygon.size() < 4 ) return false;
+    for ( const auto& point : path )
+        if ( !insidePolygon(point, polygon) ) return false;
+    // 非相邻边不得发生严格交叉，保证 ImGui 的凹多边形填充可用。
+    // 相邻边共享顶点是允许的，首尾边也视作相邻，不计作自交。
+    const auto cross = [](const ComposeLessonHintPoint& a,
+                          const ComposeLessonHintPoint& b,
+                          const ComposeLessonHintPoint& c) {
+        return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    };
+    for ( std::size_t first = 0; first < polygon.size(); ++first ) {
+        // 逐边比较足够小的教学轮廓，避免测试依赖外部几何库。
+        const auto& a = polygon[first];
+        const auto& b = polygon[(first + 1) % polygon.size()];
+        for ( std::size_t second = first + 2; second < polygon.size();
+              ++second ) {
+            if ( first == 0 && second + 1 == polygon.size() ) continue;
+            const auto& c = polygon[second];
+            const auto& d = polygon[(second + 1) % polygon.size()];
+            // 两对端点分别位于对方线段两侧才是严格相交。
+            // 共线但不重叠的边不会被误报，轮廓凹陷仍可存在。
+            if ( cross(a, b, c) * cross(a, b, d) < 0.0F &&
+                 cross(c, d, a) * cross(c, d, b) < 0.0F )
+                return false;
+        }
+    }
+    return true;
+}
+
+/// @brief 验证重复折线节点不会造成零长度边或丢失单点参考。
+/// @return 相邻重合点合并后仍得到有效轮廓。
+/// @details Flick 末端与下一子段起点可能同轨同拍，
+/// 零长段必须合并，同时退化为单点时还要保留完整 Note 占地。
+bool testComposePolylineHintDeduplicatesPoints()
+{
+    using MMM::Canvas::ComposeLessonHintPoint;
+    const std::vector<ComposeLessonHintPoint> repeated{
+        // 第二个节点有意与首节点重合，检查后续有效连接不会消失。
+        { 20.0F, 30.0F },
+        { 20.0F, 30.0F },
+        { 80.0F, 30.0F },
+    };
+    const auto polygon =
+        MMM::Canvas::buildComposeLessonHintPolygon(repeated, 10.0F, 6.0F);
+    const std::vector<ComposeLessonHintPoint> single{ { 20.0F, 30.0F } };
+    // 单点目标仍然使用 Note 半宽和半高，而非绘制零面积路径。
+    const auto singlePolygon =
+        MMM::Canvas::buildComposeLessonHintPolygon(single, 10.0F, 6.0F);
+    return polygon.size() == 4 && singlePolygon.size() == 4 &&
+           near(singlePolygon.front().x, 10.0F) &&
+           near(singlePolygon.front().y, 24.0F);
+}
+
 /// @brief 验证时间戳批注不会误高亮普通悬浮物件。
 /// @return 时间戳批注始终没有物件提示边界时返回 true。
 bool testTimestampAnnotationHasNoTargetHint()
 {
+    // 默认 AnnotationRenderItem 表示独立时间戳目标。
     const MMM::Common::Render::AnnotationRenderItem item;
-    const std::vector<MMM::Common::Render::Hitbox>  hitboxes{
+    // 不设置 targetEntity，保留时间戳目标的标准无实体状态。
+    // 放入一个可见命中框，确认函数不会误用当前悬浮的任意物件。
+    const std::vector<MMM::Common::Render::Hitbox> hitboxes{
+        // 实体编号刻意有效，确保被排除的原因确实是目标类型而非空实体。
         { static_cast<entt::entity>(1),
+          // Head 是普通玩家物件最常见的可见部件。
           MMM::Common::Render::HoverPart::Head,
+          // -1 表示非折线子节点。
           -1,
+          // 几何参数给出非零有效矩形，排除无效尺寸分支干扰。
           10.0F,
           20.0F,
           40.0F,
           20.0F },
     };
+    // 时间戳目标没有实体关联，因此结果必须为空。
     return !MMM::Canvas::findAnnotationTargetHintBounds(item, hitboxes);
 }
 
@@ -37,12 +179,17 @@ bool testTimestampAnnotationHasNoTargetHint()
 /// @return 提示边界未包含同一父物件的其它子物件时返回 true。
 bool testPolylineSubTargetUsesMatchingHitboxes()
 {
+    // 三个命中框共享父实体，其中首个属于另一个折线节点。
+    // 这同时覆盖实体匹配与子索引匹配两层筛选条件。
     const auto entity = static_cast<entt::entity>(7);
     MMM::Common::Render::AnnotationRenderItem item;
-    item.targetKind     = MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT;
-    item.targetEntity   = entity;
+    // 指定 PLAYER_OBJECT 后，函数应接受 PlayerNote 与 DraftNote 命中框。
+    item.targetKind   = MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT;
+    item.targetEntity = entity;
+    // subIndex=2 要求只合并后两个框，排除 subIndex=1 的长条段。
     item.targetSubIndex = 2;
     const std::vector<MMM::Common::Render::Hitbox> hitboxes{
+        // 此框与目标实体一致，但子索引 1 必须被过滤。
         { entity,
           MMM::Common::Render::HoverPart::HoldBody,
           1,
@@ -50,6 +197,7 @@ bool testPolylineSubTargetUsesMatchingHitboxes()
           50.0F,
           30.0F,
           15.0F },
+        // subIndex=2 的头部建立目标联合边界的上半部分。
         { entity,
           MMM::Common::Render::HoverPart::Head,
           2,
@@ -57,6 +205,7 @@ bool testPolylineSubTargetUsesMatchingHitboxes()
           40.0F,
           8.0F,
           12.0F },
+        // 同一节点的 HoldBody 向下扩展联合边界。
         { entity,
           MMM::Common::Render::HoverPart::HoldBody,
           2,
@@ -65,9 +214,13 @@ bool testPolylineSubTargetUsesMatchingHitboxes()
           4.0F,
           18.0F },
     };
+    // 默认 5 像素留白和 32 像素最小尺寸共同决定最终范围。
     const auto bounds =
         MMM::Canvas::findAnnotationTargetHintBounds(item, hitboxes);
+    // 结果还需满足 32 像素最小宽度，因此窄头部会围绕中心对称扩张。
+    // 纵向联合范围由 y=40 的头部延伸到 y=70 的长条底边。
     return bounds && near(bounds->left, 88.0F) && near(bounds->top, 35.0F) &&
+           // 被排除的 x=20 命中框若参与合并，left 将明显小于 88。
            near(bounds->right, 120.0F) && near(bounds->bottom, 75.0F);
 }
 
@@ -75,11 +228,17 @@ bool testPolylineSubTargetUsesMatchingHitboxes()
 /// @return 合并边界同时覆盖两处几何并追加留白时返回 true。
 bool testAudioSampleTargetMergesVisibleParts()
 {
+    // 自动采样的锚点与偏移句柄属于同一实体、同一种对象类型。
+    // 两种 HoverPart 不应影响合并，只由对象类型和实体编号决定归属。
     const auto entity = static_cast<entt::entity>(9);
     MMM::Common::Render::AnnotationRenderItem item;
+    // AUDIO_SAMPLE 分支应拒绝同实体编号的玩家或草稿对象命中框。
     item.targetKind   = MMM::BeatmapAnnotationTargetKind::AUDIO_SAMPLE;
     item.targetEntity = entity;
+    // 不限制 subIndex，使同一采样实体的锚点和偏移句柄全部参与合并。
+    // 两个框纵向分离，测试合并结果必须覆盖中间空白和两端留白。
     const std::vector<MMM::Common::Render::Hitbox> hitboxes{
+        // 锚点给出联合边界的左右极值和下边界。
         { entity,
           MMM::Common::Render::HoverPart::SampleAnchor,
           -1,
@@ -88,6 +247,7 @@ bool testAudioSampleTargetMergesVisibleParts()
           40.0F,
           20.0F,
           MMM::Logic::ChartObjectKind::AudioSample },
+        // 偏移句柄给出联合边界的上边界，且仍属于 AudioSample。
         { entity,
           MMM::Common::Render::HoverPart::SampleOffset,
           -1,
@@ -99,7 +259,10 @@ bool testAudioSampleTargetMergesVisibleParts()
     };
     const auto bounds =
         MMM::Canvas::findAnnotationTargetHintBounds(item, hitboxes);
+    // 高度由两个可见部件的联合范围决定，不受最小尺寸兜底影响。
+    // 横向联合范围由较宽的采样锚点决定，偏移句柄只扩展上边界。
     return bounds && near(bounds->left, 45.0F) && near(bounds->top, 25.0F) &&
+           // 原始联合范围为 [50, 90] x [30, 100]，四边各扩张 5。
            near(bounds->right, 95.0F) && near(bounds->bottom, 105.0F);
 }
 
@@ -108,10 +271,14 @@ bool testAudioSampleTargetMergesVisibleParts()
 bool testMissingTargetHasNoHint()
 {
     MMM::Common::Render::AnnotationRenderItem item;
-    item.targetKind    = MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT;
-    item.targetEntity  = static_cast<entt::entity>(3);
+    // 目标种类本身有效，用于隔离 targetMissing 的优先级行为。
+    item.targetKind   = MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT;
+    item.targetEntity = static_cast<entt::entity>(3);
+    // 即使可见列表存在相同实体编号，显式丢失标记也必须优先终止匹配。
     item.targetMissing = true;
+    // targetMissing 是持久语义，优先于当前帧命中框里是否出现同号实体。
     const std::vector<MMM::Common::Render::Hitbox> hitboxes{
+        // 相同编号的有效玩家物件模拟实体池复用后的新对象。
         { static_cast<entt::entity>(3),
           MMM::Common::Render::HoverPart::Head,
           -1,
@@ -120,6 +287,7 @@ bool testMissingTargetHasNoHint()
           20.0F,
           20.0F },
     };
+    // 该场景模拟 entt 销毁后编号被其它物件复用，不能产生错误高亮。
     return !MMM::Canvas::findAnnotationTargetHintBounds(item, hitboxes);
 }
 
@@ -127,18 +295,37 @@ bool testMissingTargetHasNoHint()
 /// @return 连线起点位于目标草稿轨中心且提示边界命中草稿物件时返回 true。
 bool testDraftTargetUsesDraftLaneProjection()
 {
+    // 负轨道 -2 表示从玩家区向左数第二条草稿轨。
+    // 连线算法必须保留负轨语义，不能先转换成无符号整数。
     const auto entity = static_cast<entt::entity>(13);
     MMM::Common::Render::AnnotationRenderItem item;
+    // DraftNote 仍使用 PLAYER_OBJECT 批注目标种类，区别只存在于轨道与命中框。
     item.targetKind   = MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT;
     item.targetEntity = entity;
     item.track        = -2;
+    // 未设置 targetMissing，确保测试进入正常轨道投影而非提前回退。
 
+    // 投影启用三条草稿轨，使 -2 落在有效范围内。
     const auto projection = MMM::Logic::calculateCanvasLaneProjection(
-        1000.0F, 4, 0, 0.1F, 0.5F, 0.0F, true, false, true, 3, true);
+        // 画布宽度为 1000，四条玩家轨，草稿区宽度比例为 0.1。
+        1000.0F,
+        4,
+        0,
+        0.1F,
+        0.5F,
+        0.0F,
+        true,
+        false,
+        true,
+        3,
+        true);
     const float sourceX =
         MMM::Canvas::annotationConnectorSourceX(item, projection, 512.0F);
+    // fallbackX 故意与预期草稿轨中心不同，避免错误回退也能通过测试。
 
+    // 命中框以计算出的草稿轨中心构造，验证草稿对象类型也可被提示函数接受。
     const std::vector<MMM::Common::Render::Hitbox> hitboxes{
+        // 以 sourceX 为中心的 40 像素框便于直接验证左右边界。
         { entity,
           MMM::Common::Render::HoverPart::Head,
           -1,
@@ -150,7 +337,10 @@ bool testDraftTargetUsesDraftLaneProjection()
     };
     const auto bounds =
         MMM::Canvas::findAnnotationTargetHintBounds(item, hitboxes);
+    // 同时验证连线投影与悬浮边界，保证两条视觉提示落在同一草稿轨。
+    // 提示框中心应与 sourceX 一致，避免连线和高亮分别指向不同区域。
     return near(sourceX, -50.0F) && bounds && near(bounds->left, -75.0F) &&
+           // 40 像素命中框加两侧 5 像素留白得到 50 像素提示宽度。
            near(bounds->right, -25.0F);
 }
 
@@ -158,14 +348,75 @@ bool testDraftTargetUsesDraftLaneProjection()
 /// @return 超出草稿区范围时回退到批注栏中心坐标。
 bool testInvalidDraftTrackUsesAnnotationGutterFallback()
 {
+    // 投影只有三条草稿轨，-5 明确越过合法负轨范围。
+    // 边界检查应发生在 CanvasLaneAddress 转换之前。
     MMM::Common::Render::AnnotationRenderItem item;
-    item.targetKind       = MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT;
-    item.track            = -5;
+    // PLAYER_OBJECT 使负轨道进入正式/草稿统一地址转换分支。
+    item.targetKind = MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT;
+    item.track      = -5;
+    // 本测试只关心连线起点，无需构造任何可见命中框。
+    // 512 是批注栏中心的显著值，便于识别是否错误投影到负坐标草稿区。
     const auto projection = MMM::Logic::calculateCanvasLaneProjection(
-        1000.0F, 4, 0, 0.1F, 0.5F, 0.0F, true, false, true, 3, true);
+        // 与有效草稿轨测试保持相同投影，仅改变待解析的 track。
+        1000.0F,
+        4,
+        0,
+        0.1F,
+        0.5F,
+        0.0F,
+        true,
+        false,
+        true,
+        3,
+        true);
+    // 越界值不得被 clamp 到最左轨，必须保持调用方给定的批注栏中心。
     return near(
+        // 返回值应逐字等于调用方提供的 fallbackX，而非某条轨道中心。
         MMM::Canvas::annotationConnectorSourceX(item, projection, 512.0F),
         512.0F);
+}
+
+/// @brief 验证尾部编辑只框住可拖动箭头，普通批注仍覆盖整件。
+/// @return 部位过滤不把头部和身体混入尾部提示时返回 true。
+/// @details 头部与箭头故意相距很远，联合范围和局部范围容易区分。
+/// 缺失的 HoldEnd 不能退化成 Flick 头部，否则编辑教程会标错起点。
+/// 这个测试只检查可见命中框过滤，不需要 Vulkan 或皮肤图集。
+bool testTargetHintCanFocusDragPart()
+{
+    const entt::entity entity = static_cast<entt::entity>(23);
+    MMM::Common::Render::AnnotationRenderItem item;
+    item.targetKind   = MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT;
+    item.targetEntity = entity;
+    // 两个命中框属于同一根实体；只有部位枚举决定尾部过滤结果。
+    // 箭头原始宽 20 像素，小于提示最小宽度 32 像素。
+    // 因此还能核查扩张后仍围绕箭头中心而非头部中心。
+    const std::vector<MMM::Common::Render::Hitbox> hitboxes{
+        { entity, MMM::Common::Render::HoverPart::Head, -1, 10, 40, 30, 20 },
+        { entity,
+          MMM::Common::Render::HoverPart::FlickArrow,
+          -1,
+          110,
+          40,
+          20,
+          20 },
+    };
+    const auto whole =
+        MMM::Canvas::findAnnotationTargetHintBounds(item, hitboxes);
+    // 未指定部位时保留普通批注目标框覆盖整件的旧行为。
+    const auto tail = MMM::Canvas::findAnnotationTargetHintBounds(
+        item,
+        hitboxes,
+        5.0F,
+        32.0F,
+        MMM::Common::Render::HoverPart::FlickArrow);
+    // 指定 FlickArrow 时只接受箭头本身，不合并同实体头部。
+    // 右边界也要检查，避免宽度虽对但中心仍来自联合包围盒。
+    const auto missing = MMM::Canvas::findAnnotationTargetHintBounds(
+        item, hitboxes, 5.0F, 32.0F, MMM::Common::Render::HoverPart::HoldEnd);
+    // 当前实体没有 HoldEnd，返回空值而不是把头部当成长条尾部。
+    // 提示绘制器会等待可见尾部出现，不在视口边界伪造蓝色目标。
+    return whole && tail && !missing && near(whole->left, 5.0F) &&
+           near(tail->left, 104.0F) && near(tail->right, 136.0F);
 }
 
 }  // namespace
@@ -174,12 +425,19 @@ bool testInvalidDraftTrackUsesAnnotationGutterFallback()
 /// @return 全部断言通过时返回 0。
 int main()
 {
-    return testTimestampAnnotationHasNoTargetHint() &&
+    // 独立覆盖无目标、折线节点、自动采样、实体复用、草稿轨和越界轨道。
+    // 任一规则回归都会使测试进程返回非零，供 CTest 或直接执行捕获。
+    // 测试仅构造轻量渲染数据，不依赖 EditorEngine 或图形设备初始化。
+    return testComposePolylineHintIsContinuous() &&
+                   testComposePolylineHintHandlesShortSwitchbacks() &&
+                   testComposePolylineHintDeduplicatesPoints() &&
+                   testTimestampAnnotationHasNoTargetHint() &&
                    testPolylineSubTargetUsesMatchingHitboxes() &&
                    testAudioSampleTargetMergesVisibleParts() &&
                    testMissingTargetHasNoHint() &&
                    testDraftTargetUsesDraftLaneProjection() &&
-                   testInvalidDraftTrackUsesAnnotationGutterFallback()
+                   testInvalidDraftTrackUsesAnnotationGutterFallback() &&
+                   testTargetHintCanFocusDragPart()
                ? 0
                : 1;
 }

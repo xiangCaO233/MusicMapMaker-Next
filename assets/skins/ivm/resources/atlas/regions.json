@@ -1,0 +1,187 @@
+{
+  "source": "source-atlas.png",
+  "atlas": "note-atlas.png",
+  "size": [
+    1536,
+    768
+  ],
+  "rect_format": "x, y, width, height",
+  "components": [
+    {
+      "name": "note",
+      "source_rect": [
+        0,
+        0,
+        256,
+        128
+      ],
+      "crop": [
+        0,
+        0,
+        256,
+        128
+      ],
+      "output": "../image/note/note.png",
+      "rect": [
+        0,
+        0,
+        256,
+        128
+      ]
+    },
+    {
+      "name": "node",
+      "source_rect": [
+        512,
+        0,
+        24,
+        24
+      ],
+      "crop": [
+        0,
+        0,
+        24,
+        24
+      ],
+      "output": "../image/note/node.png",
+      "rect": [
+        512,
+        0,
+        24,
+        24
+      ]
+    },
+    {
+      "name": "holdend",
+      "source_rect": [
+        1024,
+        0,
+        24,
+        12
+      ],
+      "crop": [
+        0,
+        0,
+        24,
+        12
+      ],
+      "output": "../image/note/holdend.png",
+      "rect": [
+        1024,
+        0,
+        24,
+        12
+      ]
+    },
+    {
+      "name": "holdbodyvertical",
+      "source_rect": [
+        0,
+        256,
+        24,
+        128
+      ],
+      "crop": [
+        0,
+        0,
+        24,
+        128
+      ],
+      "output": "../image/note/holdbodyvertical.png",
+      "rect": [
+        0,
+        256,
+        24,
+        128
+      ]
+    },
+    {
+      "name": "holdbodyhorizontal",
+      "source_rect": [
+        512,
+        256,
+        256,
+        24
+      ],
+      "crop": [
+        0,
+        0,
+        256,
+        24
+      ],
+      "output": "../image/note/holdbodyhorizontal.png",
+      "rect": [
+        512,
+        256,
+        256,
+        24
+      ]
+    },
+    {
+      "name": "arrowleft",
+      "source_rect": [
+        1024,
+        256,
+        128,
+        96
+      ],
+      "crop": [
+        0,
+        0,
+        128,
+        96
+      ],
+      "output": "../image/note/arrowleft.png",
+      "rect": [
+        1024,
+        256,
+        128,
+        96
+      ]
+    },
+    {
+      "name": "arrowright",
+      "source_rect": [
+        0,
+        512,
+        128,
+        96
+      ],
+      "crop": [
+        0,
+        0,
+        128,
+        96
+      ],
+      "output": "../image/note/arrowright.png",
+      "rect": [
+        0,
+        512,
+        128,
+        96
+      ]
+    },
+    {
+      "name": "judgearea",
+      "source_rect": [
+        512,
+        512,
+        256,
+        128
+      ],
+      "crop": [
+        0,
+        0,
+        256,
+        128
+      ],
+      "output": "../image/panel/judgearea.png",
+      "rect": [
+        512,
+        512,
+        256,
+        128
+      ]
+    }
+  ]
+}

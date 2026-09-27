@@ -16,6 +16,7 @@ inline constexpr int FRAME_LIMIT_FALLBACK_REFRESH_RATE = 60;
 constexpr double frameLimitTargetRate(FrameLimitPreference preference,
                                       int                  deviceRefreshRate)
 {
+    // 平台未报告有效刷新率时使用稳定回退，防止目标频率变为零或负数。
     const double refreshRate = static_cast<double>(
         deviceRefreshRate > 0 ? deviceRefreshRate
                               : FRAME_LIMIT_FALLBACK_REFRESH_RATE);

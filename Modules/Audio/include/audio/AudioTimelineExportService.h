@@ -4,7 +4,9 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace MMM::Audio
@@ -20,6 +22,9 @@ struct AudioTimelineExportOptions {
 
     /// @brief 目标音频文件路径；编码格式由扩展名决定。
     std::filesystem::path outputPath;
+
+    /// @brief 在导出调用线程通知低频阶段，回调不得阻塞或操作界面。
+    std::function<void(std::string_view)> progress;
 };
 
 /// @brief 复合音频时间线离线导出结果。

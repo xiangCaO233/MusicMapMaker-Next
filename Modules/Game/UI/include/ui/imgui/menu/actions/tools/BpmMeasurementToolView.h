@@ -19,6 +19,7 @@
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace ice
@@ -47,6 +48,11 @@ public:
     /// @brief 设置测量结果导出回调，用于新建谱面向导等未打开谱面的流程。
     /// @param callback 接收当前音频轨道 ID 和 BPM Timing 列表的回调。
     void setMeasurementExportCallback(MeasurementExportCallback callback);
+
+    /// @brief 手测期间沿用新建谱面引导当前阶段的遮罩目标。
+    /// @param targetId 引导阶段的稳定目标 ID；空值表示解除接管。
+    /// @warning 低频窗口切换调用；目标字符串复制后由工具自行持有。
+    void setWalkthroughTarget(std::string_view targetId);
 
     /// @brief 打开窗口并选中指定项目音频轨道。
     /// @param audioTrackId 项目内音频资源 ID；为空时选择活动谱面的默认音频。
@@ -200,16 +206,19 @@ private:
     void consumePendingAnalysis();
 
     /// @brief 绘制右侧测量参数面板。
-    void renderControlPanel();
+    /// @param sourceManager 提供展开音轨列表的引导亮区上报。
+    void renderControlPanel(UIManager* sourceManager);
 
     /// @brief 绘制 BPM 段落列表和应用入口。
     void renderTimingSegmentsPanel();
 
     /// @brief 绘制自动测偏移后的应用确认弹窗。
-    void renderAutoApplyOffsetPopup();
+    /// @param sourceManager 提供弹窗实时亮区上报。
+    void renderAutoApplyOffsetPopup(UIManager* sourceManager);
 
     /// @brief 绘制将测量结果应用到已打开谱面的弹窗。
-    void renderApplyTimingPopup();
+    /// @param sourceManager 提供弹窗实时亮区上报。
+    void renderApplyTimingPopup(UIManager* sourceManager);
 
     /// @brief 绘制试听播放、暂停、进度和倍速控制。
     /// @warning UI 热路径约束如下。
@@ -655,6 +664,8 @@ private:
 
     /// @brief 外部流程接收 BPM Timing 测量结果的回调。
     MeasurementExportCallback m_measurementExportCallback;
+    /// @brief 向导暂时收起期间由 BPM 工具接管的引导目标。
+    std::string m_walkthroughTarget;
 
     /// @brief 是否在下一帧打开自动测偏移应用确认弹窗。
     bool m_shouldOpenAutoApplyPopup{ false };

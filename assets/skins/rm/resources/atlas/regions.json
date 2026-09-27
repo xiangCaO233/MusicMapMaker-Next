@@ -1,0 +1,122 @@
+{
+  "source": "rm-atlas-source.png",
+  "source_sha256": "cd1e2153df93892d10b54a59b7a2116aea5e080a35cb97e67ff04d7c423ab177",
+  "source_size": [
+    1774,
+    887
+  ],
+  "normalized_atlas": "rm-atlas-rgba.png",
+  "normalized_size": [
+    2048,
+    1024
+  ],
+  "uniform_export_scale": 0.5,
+  "region_format": "x, y, width, height",
+  "regions": {
+    "note": {
+      "rect": [
+        0,
+        138,
+        512,
+        224
+      ],
+      "output": "../image/note/note.png",
+      "size": [
+        256,
+        112
+      ]
+    },
+    "holdhead": {
+      "rect": [
+        512,
+        138,
+        512,
+        224
+      ],
+      "output": "../image/note/holdhead.png",
+      "size": [
+        256,
+        112
+      ]
+    },
+    "node": {
+      "rect": [
+        1098,
+        68,
+        364,
+        364
+      ],
+      "output": "../image/note/node.png",
+      "size": [
+        182,
+        182
+      ]
+    },
+    "holdend": {
+      "rect": [
+        1664,
+        170,
+        256,
+        160
+      ],
+      "output": "../image/note/holdend.png",
+      "size": [
+        128,
+        80
+      ]
+    },
+    "holdbodyvertical": {
+      "rect": [
+        192,
+        612,
+        128,
+        256
+      ],
+      "output": "../image/note/holdbodyvertical.png",
+      "size": [
+        64,
+        128
+      ]
+    },
+    "holdbodyhorizontal": {
+      "rect": [
+        640,
+        680,
+        256,
+        128
+      ],
+      "output": "../image/note/holdbodyhorizontal.png",
+      "size": [
+        128,
+        64
+      ]
+    },
+    "arrowleft": {
+      "rect": [
+        1132,
+        562,
+        296,
+        364
+      ],
+      "output": "../image/note/arrowleft.png",
+      "size": [
+        148,
+        182
+      ]
+    },
+    "arrowright": {
+      "rect": [
+        1644,
+        562,
+        296,
+        364
+      ],
+      "output": "../image/note/arrowright.png",
+      "size": [
+        148,
+        182
+      ]
+    }
+  },
+  "alpha_extraction": "Opaque key interiors: min(1, 4*max RGB) in top-left two cells; emissive components: max RGB; noise threshold 0.01; RGB unpremultiplied by alpha"
+}

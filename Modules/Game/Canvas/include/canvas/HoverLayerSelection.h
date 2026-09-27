@@ -32,6 +32,8 @@ inline bool appendHoverLayerCandidate(
     const HoverLayerCandidate&        candidate)
 {
     if ( candidate.kind == Logic::ChartObjectKind::AudioSample ) {
+        // 自动采样的锚点与偏移句柄属于同一交互对象，实体与注册表种类共同
+        // 构成身份；先到项位于更高渲染层，重复项不能覆盖其命中部位。
         for ( const auto& existing : candidates ) {
             if ( existing.entity == candidate.entity &&
                  existing.kind == candidate.kind ) {
@@ -39,6 +41,7 @@ inline bool appendHoverLayerCandidate(
             }
         }
     }
+    // 玩家音符的不同部位和折线子索引需要分别切换，因此不执行实体去重。
     candidates.push_back(candidate);
     return true;
 }

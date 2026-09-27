@@ -20,10 +20,12 @@ public:
     /// @param textKind 菜单项文本来源。
     /// @param shortcut 菜单项默认快捷键提示，可为空。
     /// @param actionHandler 菜单项业务处理器。
+    /// @param walkthroughTarget 与演练配置约定的可选语义目标 ID。
     MainMenuActionItem(
         const char* icon, std::string label, MainMenuItemTextKind textKind,
         const char*                                 shortcut,
-        std::unique_ptr<IMainMenuItemActionHandler> actionHandler);
+        std::unique_ptr<IMainMenuItemActionHandler> actionHandler,
+        std::string                                 walkthroughTarget = {});
 
     /// @brief 更新菜单项业务处理器跨帧状态。
     /// @param context 单帧主菜单上下文。
@@ -65,6 +67,9 @@ private:
 
     /// @brief 菜单项业务处理器。
     std::unique_ptr<IMainMenuItemActionHandler> m_actionHandler;
+
+    /// @brief 可供配置驱动引导定位此菜单项的稳定语义 ID。
+    std::string m_walkthroughTarget;
 };
 
 }  // namespace MMM::UI

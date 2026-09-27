@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -21,7 +22,7 @@ struct AudioSpeedExportOptions {
     /// @brief 输入音频文件路径。
     std::filesystem::path inputPath;
 
-    /// @brief 输出 WAV 文件路径。
+    /// @brief 输出音频路径，扩展名决定编码格式。
     std::filesystem::path outputPath;
 
     /// @brief 倍速倍率，必须大于 0。
@@ -29,6 +30,16 @@ struct AudioSpeedExportOptions {
 
     /// @brief 是否保持原音高；false 时音高随倍速改变。
     bool preservePitch{ true };
+
+    /// @brief 保持音高模式下的独立变调量，单位半音；零为原音高。
+    /// @note 与倍速倍率独立，只有 preservePitch=true 时允许非零值。
+    double pitchSemitones{ 0.0 };
+
+    /// @brief 显式输出采样率；零表示由编码器按内部格式自动协商。
+    std::uint32_t outputSampleRate{ 0 };
+
+    /// @brief 有损编码目标总码率，单位 bit/s；零表示格式默认值。
+    std::uint64_t bitrate{ 0 };
 
     /// @brief 最低输出时长，单位秒；用于补齐谱面尾部。
     double minimumDurationSeconds{ 0.0 };
@@ -45,10 +56,10 @@ struct AudioSpeedExportResult {
     /// @brief 失败原因。
     std::string errorMessage;
 
-    /// @brief 实际写出的音频帧数。
+    /// @brief 送入编码器的输入时钟帧数；重采样后不等于容器内样本数。
     std::size_t outputFrames{ 0 };
 
-    /// @brief 实际写出的音频时长，单位秒。
+    /// @brief 按输入时钟帧数计算的导出时长，单位秒。
     double outputDurationSeconds{ 0.0 };
 };
 

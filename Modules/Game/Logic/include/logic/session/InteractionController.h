@@ -47,6 +47,10 @@ public:
     /// @param cmd 实体与资源、BGM 相对轨、偏移和音量。
     void handleCommand(const CmdUpdateAudioSampleProperties& cmd);
 
+    /// @brief 将单个玩家物件、草稿或自动采样移动到精确时间戳。
+    /// @param cmd 带对象领域的实体与目标秒时间。
+    void handleCommand(const CmdUpdateObjectTimestamp& cmd);
+
     /// @brief 更新单个玩家绑定或自动采样的物件音量。
     /// @param cmd 带类型的实体、可选子物件索引与音量倍率。
     void handleCommand(const CmdUpdateObjectSampleVolume& cmd);
@@ -116,6 +120,10 @@ public:
     /// @brief 处理持久化 BGM 轨道数量更新。
     /// @param cmd 目标 BGM 轨道数量。
     void handleCommand(const CmdUpdateBgmTrackCount& cmd);
+
+    /// @brief 处理当前谱面独占草稿轨道数量更新。
+    /// @param cmd 目标草稿轨道数量。
+    void handleCommand(const CmdUpdateDraftTrackCount& cmd);
 
     /// @brief 更新当前所有实体的框选选中状态
     /// @warning

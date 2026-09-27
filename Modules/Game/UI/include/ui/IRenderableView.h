@@ -14,37 +14,54 @@
 namespace MMM::UI
 {
 class Brush;
+/// @brief 同时提供 UI 视图、纹理加载与 Vulkan 离屏渲染能力的基础接口。
+/// @details 派生画布用 Brush 生成 CPU 几何，由基类将批次录制为绘制命令，
+/// RenderContext 再把离屏描述符嵌入对应 ImGui 窗口。
 class IRenderableView : public ITextureLoader,
                         public Graphic::VKOffScreenRenderer
 {
 public:
+    /// @brief 创建具名可渲染视图并初始化两条公共基类路径。
+    /// @param name UIManager 注册和查找视图时使用的稳定名称。
     IRenderableView(const std::string& name)
         : IUIView(name), ITextureLoader(name)
     {
     }
 
+    /// @brief 渲染资源与注册身份不可安全转移或复制。
     IRenderableView(IRenderableView&&)                 = delete;
     IRenderableView(const IRenderableView&)            = delete;
     IRenderableView& operator=(IRenderableView&&)      = delete;
     IRenderableView& operator=(const IRenderableView&) = delete;
-    virtual ~IRenderableView() override                = default;
+    /// @brief 通过渲染接口析构派生画布及其离屏资源。
+    virtual ~IRenderableView() override = default;
 
-    /// @brief 获取视图具体类型,替代 dynamic_cast
+    /// @brief 获取视图具体类型，替代 dynamic_cast。
+    /// @return 固定的可渲染视图枚举值。
     ViewType getViewType() const override { return ViewType::RenderableView; }
 
-    /// @brief 安全转换为自身
-    ITextureLoader*  asTextureLoader() override { return this; }
+    /// @brief 以纹理加载接口访问当前对象。
+    /// @return 非拥有的自身指针。
+    ITextureLoader* asTextureLoader() override { return this; }
+    /// @brief 以可渲染接口访问当前对象。
+    /// @return 非拥有的自身指针。
     IRenderableView* asRenderableView() override { return this; }
 
+    /// @brief 返回无需 RTTI 的实际实例地址。
+    /// @return 非拥有的自身地址。
     void* getActualInstance() override { return this; }
 
-    ///@brief 获取笔刷
+    /// @brief 获取当前帧 CPU 绘制批次。
+    /// @return 只读 Brush 引用。
     const Brush& getBrush() const { return m_brush; }
 
-    ///@brief 是否可渲染
+    /// @brief 声明该视图具备离屏渲染能力。
+    /// @return 始终为 true。
     bool renderable() override { return true; }
 
-    ///@brief 是否需要重新记录命令 (比如数据变了)
+    /// @brief 查询画布数据是否要求重新录制命令。
+    /// @return 数据或渲染状态变化时返回 true。
+    /// @warning 渲染热路径：每帧查询，只能读取内存状态。
     virtual bool isDirty() const = 0;
 
     /// @brief 当前帧是否需要录制离屏渲染命令。
@@ -162,9 +179,12 @@ public:
         float getReservedRightWidth() const { return m_reservedRightWidth; }
 
     private:
+        /// @brief 当前上下文操作的非拥有视图指针。
         IRenderableView* m_view;
-        int              m_width;
-        int              m_height;
+        /// @brief 首次显示建议窗口宽度。
+        int m_width;
+        /// @brief 首次显示建议窗口高度。
+        int m_height;
         /// @brief 当前帧离屏表面是否已经提交到 ImGui。
         bool m_surfaceRendered{ false };
         /// @brief 当前帧扣除辅助栏后的画布逻辑尺寸。
@@ -174,15 +194,19 @@ public:
     };
 
 protected:
+    /// @brief 派生视图逐帧填充、由离屏录制阶段只读消费的绘制批次。
     Brush m_brush;
 
-    // --- 获取数据供 Vulkan 使用 ---
+    /// @brief 向 Vulkan 上传路径暴露 Brush 顶点缓存。
+    /// @return 当前帧顶点数组的只读引用。
     const std::vector<Graphic::Vertex::VKBasicVertex>&
     getVertices() const override
     {
         return m_brush.getVertices();
     }
 
+    /// @brief 向 Vulkan 上传路径暴露 Brush 索引缓存。
+    /// @return 当前帧索引数组的只读引用。
     const std::vector<uint32_t>& getIndices() const override
     {
         return m_brush.getIndices();
@@ -201,6 +225,7 @@ protected:
     {
         for ( const auto& cmd : m_brush.getCmds() ) {
             if ( cmd.texture != VK_NULL_HANDLE ) {
+                // 纹理批次绑定自身描述符。
                 cmdBuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                           pipelineLayout,
                                           0,
@@ -209,6 +234,7 @@ protected:
                                           0,
                                           nullptr);
             } else {
+                // 纯色批次沿用渲染器提供的默认描述符。
                 cmdBuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                           pipelineLayout,
                                           0,
@@ -217,6 +243,7 @@ protected:
                                           0,
                                           nullptr);
             }
+            // Brush 已预先计算连续索引范围，单条指令只需一次 drawIndexed。
             cmdBuf.drawIndexed(
                 cmd.indexCount, 1, cmd.indexOffset, cmd.vertexOffset, 0);
         }

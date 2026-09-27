@@ -35,6 +35,8 @@ VKSwapchain::VKSwapchain(vk::PhysicalDevice& vkPhysicalDevice,
 
 VKSwapchain::~VKSwapchain()
 {
+    // Framebuffer 引用 image view，而 image view 又引用交换链图像，必须按依赖
+    // 逆序销毁，最后才释放交换链句柄。
     destroyFramebuffers();
     cleanupImageViews();
     if ( m_swapchain ) {
@@ -44,13 +46,17 @@ VKSwapchain::~VKSwapchain()
     XDEBUG("SwapChain destroyed.");
 }
 
-// 提取出的公共初始化逻辑
+/// @brief 创建交换链、取得其中的图像并为每张图像建立颜色视图。
+/// @param oldSwapchain 重建时仍然有效的旧交换链；首次创建传空句柄。
+/// @warning 启动或交换链重建路径：调用方必须先停止使用旧 framebuffer 和 view，
+/// 并保证逻辑设备在整个创建过程中保持有效。
 void VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
                                  vk::SurfaceKHR&     vkSurface,
                                  QueueFamilyIndices& queueFamilyIndices, int w,
                                  int h, vk::SwapchainKHR oldSwapchain)
 {
-    // 1. 基础配置 (不随窗口变化的)
+    // 颜色附件仅用于最终呈现，旧交换链交给驱动复用兼容资源；裁剪被遮挡区域可
+    // 避免实现保留应用永远不会观察到的像素。
     m_swapchainCreateInfo.setClipped(true)
         .setImageArrayLayers(1)
         .setImageUsage(vk::ImageUsageFlagBits::eColorAttachment)
@@ -58,8 +64,8 @@ void VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
         .setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque)
         .setOldSwapchain(oldSwapchain);  // 【关键】设置旧交换链以优化重建
 
-    // 2. 查询物理设备支持情况
-    // 查询格式
+    // surface 格式属于物理设备与窗口系统的组合能力，每次重建都重新取得当前
+    // 列表。优先 UNORM 以匹配现有着色器和 ImGui 输出的颜色约定。
     auto formatsResult = vkPhysicalDevice.getSurfaceFormatsKHR(vkSurface);
     std::vector<vk::SurfaceFormatKHR> supported_surfaceFormats =
         formatsResult.value;
@@ -73,7 +79,7 @@ void VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
         }
     }
 
-    // 查询能力 (Extent, Count)
+    // 能力同时约束图像数量和 extent，窗口请求尺寸不能直接写入创建信息。
     auto capsResult = vkPhysicalDevice.getSurfaceCapabilitiesKHR(vkSurface);
     vk::SurfaceCapabilitiesKHR caps = capsResult.value;
 
@@ -95,14 +101,15 @@ void VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
            caps.minImageCount,
            caps.maxImageCount);
 
-    // 确定尺寸
+    // 当前 GLFW 路径传入 framebuffer 像素尺寸，并将其钳制到 surface 能力范围。
     vk::Extent2D extent;
     extent.width = std::clamp<uint32_t>(
         w, caps.minImageExtent.width, caps.maxImageExtent.width);
     extent.height = std::clamp<uint32_t>(
         h, caps.minImageExtent.height, caps.maxImageExtent.height);
 
-    // 3. 队列族处理
+    // 图形与呈现队列族不同时使用 concurrent 共享，避免每帧显式转移图像所有权；
+    // 相同时保留 exclusive，以获得更低的驱动管理开销。
     std::set<uint32_t> queueIndices = {
         queueFamilyIndices.graphicsQueueIndex.value(),
         queueFamilyIndices.presentQueueIndex.value()
@@ -126,7 +133,8 @@ void VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
         m_vkLogicalDevice.createSwapchainKHR(m_swapchainCreateInfo).value;
     XDEBUG("SwapChain Created (Extent: {}x{})", extent.width, extent.height);
 
-    // 5. 获取图像并创建 ImageView
+    // 交换链拥有 Image，封装只拥有与其配套的 ImageView 和后建的 Framebuffer。
+    // 新创建前 cleanupImageViews 已清空容器，因此 reserve 不会保留旧条目。
     auto imagesResult = m_vkLogicalDevice.getSwapchainImagesKHR(m_swapchain);
     std::vector<vk::Image> swapchain_images = imagesResult.value;
     m_vkImageBuffers.reserve(swapchain_images.size());
@@ -147,7 +155,9 @@ void VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
     XDEBUG("Successfully Created [{}] ImageBuffers", m_vkImageBuffers.size());
 }
 
-// 清理 ImageView 的逻辑（不销毁 Swapchain 句柄，用于 recreate 过程中间）
+/// @brief 销毁当前交换链图像对应的全部 ImageView 并清空缓存。
+/// @warning Framebuffer 必须已先销毁；本函数不销毁交换链本身，以便重建时把旧
+/// 句柄传入驱动。
 void VKSwapchain::cleanupImageViews()
 {
     for ( const auto& imageBuffer : m_vkImageBuffers ) {
@@ -167,10 +177,10 @@ void VKSwapchain::recreate(vk::PhysicalDevice& vkPhysicalDevice,
                            vk::SurfaceKHR&     vkSurface,
                            QueueFamilyIndices& queueFamilyIndices, int w, int h)
 {
-    // 1. 备份旧句柄
+    // 保留旧句柄直到新交换链成功创建，使驱动能够迁移内部呈现资源。
     vk::SwapchainKHR oldSwapchain = m_swapchain;
 
-    // 2. 销毁依赖旧交换链的资源（注意：不能先销毁 oldSwapchain 句柄）
+    // framebuffer 和 view 都依赖旧图像，必须在建立新一组包装资源前释放。
     destroyFramebuffers();
     cleanupImageViews();
 
@@ -178,7 +188,7 @@ void VKSwapchain::recreate(vk::PhysicalDevice& vkPhysicalDevice,
     createInternal(
         vkPhysicalDevice, vkSurface, queueFamilyIndices, w, h, oldSwapchain);
 
-    // 4. 此时可以安全销毁旧句柄了
+    // createInternal 成功后成员已指向新句柄，局部变量成为唯一待销毁的旧句柄。
     if ( oldSwapchain ) {
         m_vkLogicalDevice.destroySwapchainKHR(oldSwapchain);
     }
@@ -206,6 +216,8 @@ const vk::SwapchainCreateInfoKHR& VKSwapchain::info() const
  */
 void VKSwapchain::createFramebuffers(const VKRenderPass& renderPass)
 {
+    // 每个交换链 image view 对应一个 framebuffer；附件顺序必须与 render pass
+    // 的单颜色附件声明一致，尺寸则沿用实际创建成功的交换链 extent。
     for ( auto& imageBuffer : m_vkImageBuffers ) {
         // 帧缓冲创建信息
         vk::FramebufferCreateInfo framebufferCreateInfo;
@@ -233,6 +245,8 @@ void VKSwapchain::createFramebuffers(const VKRenderPass& renderPass)
  */
 void VKSwapchain::destroyFramebuffers()
 {
+    // Vulkan 允许销毁空句柄，但这里仍把成员复位，防止重建或析构路径重复持有
+    // 已释放资源的表象。
     for ( auto& imageBuffer : m_vkImageBuffers ) {
         m_vkLogicalDevice.destroyFramebuffer(imageBuffer.vk_frameBuffer);
         imageBuffer.vk_frameBuffer = nullptr;

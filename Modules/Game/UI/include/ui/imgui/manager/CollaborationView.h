@@ -149,6 +149,8 @@ private:
     std::uint64_t m_lastRenderedChatSequence{ 0 };
     /// @brief 上一次发送聊天消息是否被协议或传输拒绝。
     bool m_chatSendFailed{ false };
+    /// @brief 下一帧是否需要把键盘焦点重新交给聊天输入框。
+    bool m_shouldFocusChatInput{ false };
     /// @brief 等待后台构建指纹完成的房主开房配置。
     std::unique_ptr<PendingHostStart> m_pendingHostStart;
     /// @brief 等待全部本机编辑状态安全关闭后的访客加入配置。

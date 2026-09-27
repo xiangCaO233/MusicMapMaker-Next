@@ -1,5 +1,6 @@
 #include "ui/imgui/menu/items/MainMenuToggleItem.h"
 #include "config/skin/SkinConfig.h"
+#include "ui/imgui/menu/items/MainMenuItemUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <utility>
 
@@ -10,12 +11,16 @@ namespace MMM::UI
 /// @param label 菜单项文本或翻译键。
 /// @param textKind 菜单项文本来源。
 /// @param actionHandler 勾选菜单项业务处理器。
+/// @param icon 菜单项图标文本，可为空；须在菜单项生命周期内有效。
+/// @note 带图标与无图标分支使用不同 ImGui 接口，但共享同一状态地址。
 MainMenuToggleItem::MainMenuToggleItem(
     std::string label, MainMenuItemTextKind textKind,
-    std::unique_ptr<IMainMenuToggleItemActionHandler> actionHandler)
+    std::unique_ptr<IMainMenuToggleItemActionHandler> actionHandler,
+    const char*                                       icon)
     : m_label(std::move(label))
     , m_textKind(textKind)
     , m_actionHandler(std::move(actionHandler))
+    , m_icon(icon)
 {
 }
 
@@ -32,17 +37,23 @@ void MainMenuToggleItem::update(MainMenuContext& context)
 /// @brief 绘制勾选菜单项并在状态变化时执行自身 action handler。
 /// @param context 单帧主菜单上下文。
 /// @warning UI 热路径：仅在所属菜单展开时执行。
+/// @note value 返回 nullptr 时条目保持禁用，避免解引用无效配置状态。
 void MainMenuToggleItem::render(MainMenuContext& context)
 {
+    // 状态地址由动作处理器提供，菜单项不持有目标布尔值。
     bool* value = m_actionHandler ? m_actionHandler->value(context) : nullptr;
-    if ( !value ) {
-        ::MMM::UI::FeedbackMenuItem(resolveLabel(), nullptr, false, false);
-        return;
-    }
-
-    const bool enabled = m_actionHandler->isEnabled(context);
-    if ( ::MMM::UI::FeedbackMenuItem(
-             resolveLabel(), nullptr, value, enabled) ) {
+    const bool enabled = value && m_actionHandler->isEnabled(context);
+    const bool clicked =
+        m_icon ? renderMainMenuIconItem(
+                     m_icon, resolveLabel(), nullptr, enabled, value && *value)
+               : ::MMM::UI::FeedbackMenuItem(
+                     resolveLabel(), nullptr, value, enabled);
+    if ( clicked && value ) {
+        if ( m_icon ) {
+            // 自绘图标菜单项不会由 ImGui 自动翻转状态，需要在此显式切换。
+            *value = !*value;
+        }
+        // 状态更新后通知处理器执行持久化或附加副作用。
         m_actionHandler->execute(context, MainMenuItemActivation{});
     }
 }
@@ -71,6 +82,7 @@ void MainMenuToggleItem::renderDeferred(MainMenuContext& context)
 
 /// @brief 获取当前帧的显示文本。
 /// @return 当前帧应显示的菜单项文本。
+/// @warning UI 热路径：不得缓存翻译系统返回的临时视图。
 const char* MainMenuToggleItem::resolveLabel() const
 {
     if ( m_textKind == MainMenuItemTextKind::Literal ) {

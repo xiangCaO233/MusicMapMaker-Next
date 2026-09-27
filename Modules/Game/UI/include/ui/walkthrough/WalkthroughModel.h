@@ -1,0 +1,140 @@
+#pragma once
+
+#include <expected>
+#include <map>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace MMM::UI::Walkthrough
+{
+/// @brief 演练文本按语言标识提供翻译，缺失时回退英语或首个文本。
+struct Text {
+    /// @brief 语言与 Markdown 文本。
+    std::map<std::string, std::string, std::less<>> m_translations;
+    /// @brief 查询文本，不分配、不访问文件。
+    /// @return 借用已存文本或静态空串；修改翻译表前应结束借用。
+    const std::string& get(std::string_view language) const;
+};
+/// @brief 单个演练步骤的配置驱动突出引导。
+/// 候选目标按界面流程排列，当前帧可见的最后一项优先；空目标列表表示键盘或
+/// 外部应用步骤，仅显示 prompt。
+struct Guide {
+    /// @brief 没有控件目标时的操作提示，有目标时显示在突出框附近。
+    Text m_prompt;
+    /// @brief 可选的随步骤播放的内置操作 GIF 目标。
+    std::string m_gif;
+    /// @brief 与具体控件注册点约定的稳定语义目标 ID。
+    std::vector<std::string> m_targets;
+    /// @brief 必须由业务动作完成，不能用“知道了”跳过。
+    bool m_requiresAction{ false };
+};
+/// @brief CanonRock 每段的三个实际操作阶段。
+enum class ComposeLessonPhase {
+    Preview,   ///< 首次播放参考段落。
+    Practice,  ///< 依据画布目标提示编辑正式轨道，草稿只作内部验收参考。
+    Review,    ///< 编辑完成后重播同一段落。
+};
+/// @brief 创作教程步骤的时间窗与阶段，普通演练步骤不设置此字段。
+struct ComposeLessonStep {
+    double             m_beginMs{ 0.0 };  ///< 批注起点，单位毫秒。
+    double             m_endMs{ 0.0 };    ///< 批注终点，单位毫秒。
+    ComposeLessonPhase m_phase{ ComposeLessonPhase::Preview };
+    std::size_t        m_lessonIndex{ 0 };  ///< 已加载参考段落的稳定索引。
+};
+/// @brief 一个可单独确认了解的演练步骤。
+/// 步骤 ID 在整个主题内唯一，跨分支前置引用也使用该 ID。
+/// 手动确认跳过前置限制；自动完成则同时检查前置步骤与信号。
+struct Step {
+    std::string              m_id;       ///< 稳定步骤标识。
+    Text                     m_title;    ///< 步骤标题。
+    Text                     m_body;     ///< Markdown 正文。
+    std::vector<std::string> m_signals;  ///< 自动完成所需信号。
+    bool m_allSignals{ false };  ///< true 要求全部信号，否则任一信号即可。
+    std::vector<std::string>
+                         m_prerequisites;  ///< 自动完成和操作入口的前置步骤。
+    std::string          m_action;  ///< 已注册的操作 ID，空值表示没有操作。
+    std::optional<Guide> m_guide;   ///< 可选的逐控件突出引导流程。
+    /// @brief 内置 CanonRock 创作路线专用的播放与编辑边界。
+    std::optional<ComposeLessonStep> m_composeLesson;
+};
+/// @brief 同一目标的一条独立操作分支。
+struct Branch {
+    std::string       m_id;     ///< 稳定分支标识。
+    Text              m_title;  ///< 分支标题。
+    std::vector<Step> m_steps;  ///< 有序步骤，可独立手动确认。
+};
+/// @brief 主题目录中的章节，允许暂时没有主题。
+/// 顺序仅用于展示，不代表访问权限或学习完成条件。
+struct Chapter {
+    std::string m_id;          ///< 稳定章节标识。
+    Text        m_title;       ///< 本地化章节标题。
+    int         m_order{ 0 };  ///< 章节展示顺序，数值较小者在前。
+};
+/// @brief 解析章节目录，拒绝重复标识和非法顺序。
+std::expected<std::vector<Chapter>, std::string> parseChapters(
+    std::string_view json);
+/// @brief 可由数据文件扩展的演练主题。
+struct Topic {
+    std::string m_id;            ///< 稳定主题标识。
+    int         m_version{ 1 };  ///< 内容修订版本，稳定步骤 ID 保留学习记录。
+    Text        m_title;         ///< 主题标题。
+    Text        m_description;   ///< 主题说明。
+    std::string m_chapter{ "other" };  ///< 所属章节，旧主题归入其他章节。
+    int         m_order{ 0 };  ///< 章节内学习阶段，相同值表示平级，不限制进入。
+    bool        m_placeholder{ false };  ///< 仅预留入口，尚未定义步骤。
+    /// @brief 进入主题和启动引导前是否必须已有活动项目。
+    bool m_requiresProject{ false };
+    /// @brief 进入主题和启动引导前是否必须已有真实谱面编辑器标签页。
+    bool m_requiresBeatmap{ false };
+    bool m_anyBranch{ true };  ///< true 表示任一分支完成目标，false 要求全部。
+    std::vector<Branch> m_branches;  ///< 操作分支。
+};
+/// @brief 判断主题在当前项目上下文中是否允许进入和启动操作引导。
+/// @param topic 待检查主题。
+/// @param hasActiveProject UI 已确认且不处于切换中的项目状态。
+/// @param hasOpenBeatmap UI 工作区中是否存在真实谱面编辑器标签页。
+/// @return 主题声明的全部环境要求都满足时返回 true。
+constexpr bool topicAvailable(const Topic& topic, bool hasActiveProject,
+                              bool hasOpenBeatmap = false)
+{
+    return (!topic.m_requiresProject || hasActiveProject) &&
+           (!topic.m_requiresBeatmap || (hasActiveProject && hasOpenBeatmap));
+}
+/// @brief 解析并验证主题，拒绝重复标识、无效引用、循环前置依赖和超大输入。
+/// @return 完整主题或中文错误原因，失败不发布部分解析结果。
+/// @warning 低频资源加载入口，构造容器并遍历依赖图，不应逐帧解析。
+std::expected<Topic, std::string> parseTopic(std::string_view json);
+/// @brief 与窗口生命周期无关的学习记录及纯状态归约器。
+/// 调用方串行访问；持久化只记录完成来源，不保存窗口或业务对象。
+/// 内容版本不进入记录键，改写步骤含义时需由资产作者更新步骤 ID。
+class Progress
+{
+public:
+    /// @brief 查询步骤是否已了解或已实操完成。
+    bool completed(const Topic& topic, const Step& step) const;
+    /// @brief 查询步骤完成来源，空字符串表示尚未完成。
+    std::string_view source(const Topic& topic, const Step& step) const;
+    /// @brief 任意步骤均允许独立手动确认，不受前置步骤限制。
+    bool acknowledge(const Topic& topic, const Step& step);
+    /// @brief 根据已注册业务信号推进自动完成，返回是否改变持久化进度。
+    /// 空信号只重新计算既有信号，供手动完成前置步骤后传播进度。
+    /// @warning 业务事件路径可能分配并多轮扫描步骤，不作逐帧查询使用。
+    bool signal(const Topic& topic, std::string_view signal);
+    /// @brief 清除此主题的学习和本次实操信号，不影响其他主题。
+    void reset(const Topic& topic);
+    /// @brief 检查前置步骤，仅用于操作和自动完成，不限制阅读。
+    bool available(const Topic& topic, const Step& step) const;
+    /// @brief 序列化学习记录，不保存易失实操信号。
+    std::string serialize() const;
+    /// @brief 恢复合法学习记录；损坏输入不会清空已有状态。
+    bool restore(std::string_view json);
+
+private:
+    /// @brief 主题/步骤对应 manual 或 automatic，保留未知步骤以支持升级。
+    std::map<std::string, std::string, std::less<>> m_records;
+    /// @brief 当前进程见过的信号，主题间隔离。
+    std::map<std::string, std::vector<std::string>, std::less<>> m_signals;
+};
+}  // namespace MMM::UI::Walkthrough

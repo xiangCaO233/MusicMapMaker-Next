@@ -16,6 +16,7 @@ std::vector<std::string> splitOsuHoldParameters(std::string_view value)
 {
     std::vector<std::string> fields;
     std::size_t              start = 0;
+    // Hold 参数允许以冒号结束，末尾空字段必须保留为“无自定义音效”。
     while ( start <= value.size() ) {
         const std::size_t end = value.find(':', start);
         fields.emplace_back(value.substr(start,
@@ -23,6 +24,7 @@ std::vector<std::string> splitOsuHoldParameters(std::string_view value)
                                              ? value.size() - start
                                              : end - start));
         if ( end == std::string_view::npos ) break;
+        // 仅移动视图起点，避免在逐段扫描时构造临时源字符串。
         start = end + 1;
     }
     return fields;
@@ -36,11 +38,15 @@ std::string composeOsuHoldHitSample(std::string_view original,
                                     std::string_view sampleFile)
 {
     auto fields = splitOsuHoldParameters(original);
+    // 第一段是结束时间，之后固定五段 HitSample；缺失部分补为空值。
     fields.resize(6);
+    // 文件名以通用采样绑定为准，防止资源重命名后回写旧来源值。
     fields[5] = sampleFile;
 
     std::ostringstream stream;
+    // 从索引一开始跳过结束时间，只组装可复用的 HitSample 部分。
     for ( std::size_t index = 1; index < fields.size(); ++index ) {
+        // 首个 HitSample 字段前不写分隔符，后续字段以冒号连接。
         if ( index > 1 ) stream << ':';
         stream << fields[index];
     }
@@ -48,31 +54,36 @@ std::string composeOsuHoldHitSample(std::string_view original,
 }
 }  // namespace
 
-/// @brief 从osu描述加载
+/// @brief 从 osu!mania HitObject 字段加载长条物件。
+/// @details
+/// 逗号字段负责起点、轨道和音效位，最后一段再以冒号拆出终点及 HitSample。
+/// SafeParse 负责缺失字段的默认化，本函数同步刷新通用采样绑定。
 void Hold::from_osu_description(const std::vector<std::string>& description,
                                 int32_t                         orbit_count)
 {
     using enum NoteMetadataType;
     auto& osunote_prop = m_metadata.note_properties[OSU];
 
+    // 导入对象可能被复用，先恢复派生类应有的固定类型。
     m_type = NoteType::HOLD;
     for ( int i = 0; i < description.size(); ++i ) {
+        // 仅解析通用模型需要的逗号字段，其余来源字段保持在原描述中。
         switch ( i ) {
         case 0: {
-            // 位置
+            // 与普通 Note 使用相同的 0 至 512 横坐标离散规则。
             m_track = std::floor(
                 MMM::Internal::safeStod(MMM::Internal::safeAt(description, 0)) *
                 orbit_count / 512);
             break;
         }
         case 2: {
-            // 时间戳
+            // osu! 时间统一以毫秒为单位，无需在领域层换算。
             m_timestamp =
                 MMM::Internal::safeStod(MMM::Internal::safeAt(description, 2));
             break;
         }
         case 4: {
-            // 音效
+            // 位标志属于 osu! 私有元数据，不与自定义文件绑定混用。
             osunote_prop["sample"] = std::to_string(
                 MMM::Internal::safeStoi(MMM::Internal::safeAt(description, 4)));
             break;
@@ -81,25 +92,28 @@ void Hold::from_osu_description(const std::vector<std::string>& description,
         }
     }
 
-    // 长条结束时间
-    // 结束时间和音效组参数粘一起了
+    // osu! 将结束时间与 HitSample 粘在同一逗号字段，需要二次按冒号解析。
     const std::string sampleGroup = MMM::Internal::safeAt(description, 5);
     const auto        last_paras  = splitOsuHoldParameters(sampleGroup);
 
+    // 保存完整字段，以便导出时保留音效组、参数和音量等来源信息。
     osunote_prop["samplegroup"] = sampleGroup;
     const auto sampleFile       = MMM::Internal::safeAt(last_paras, 5);
     if ( sampleFile.empty() ) {
+        // 空文件名必须清除复用对象原有的通用采样绑定。
         clearSampleBinding();
     } else {
         setSampleBinding(AudioSampleBinding{ sampleFile, 1.0F });
     }
 
+    // 领域模型保存持续时间，使用解析出的绝对终点减去起点。
     m_duration = static_cast<int32_t>(MMM::Internal::safeStod(
                      MMM::Internal::safeAt(last_paras, 0))) -
                  m_timestamp;
 }
 
-/// @brief 转换为osu描述
+/// @brief 转换为 osu!mania Hold HitObject 描述。
+/// @details 由起点和持续时间重建绝对终点，并用通用采样绑定刷新文件名段。
 std::string Hold::to_osu_description(int32_t orbit_count)
 {
     using enum NoteMetadataType;
@@ -113,6 +127,7 @@ std::string Hold::to_osu_description(int32_t orbit_count)
      */
 
     std::ostringstream oss;
+    // osu!mania HitObject 使用整数横坐标与毫秒时间输出。
     oss << std::fixed << std::setprecision(0);
 
     // x 坐标 (根据轨道数计算)
@@ -137,11 +152,12 @@ std::string Hold::to_osu_description(int32_t orbit_count)
         oss << "0" << ",";
     }
 
-    // 结束时间和音效组参数
+    // osu! 要求先写绝对终点，再紧接冒号分隔的 HitSample 参数。
     int end_time = m_timestamp + m_duration;
+    // 与当前整数输出精度一致，终点按格式可表示的整毫秒写出。
     oss << end_time << ":";
 
-    // 音效组参数
+    // 缺少来源字段时使用完整六段默认值，确保输出仍可被 osu! 解析。
     const auto             sampleGroup = osunote_prop.contains("samplegroup")
                                              ? osunote_prop.at("samplegroup")
                                              : std::string("0:0:0:0:0:");
@@ -149,8 +165,10 @@ std::string Hold::to_osu_description(int32_t orbit_count)
     const std::string_view sampleFile =
         binding ? std::string_view(binding->m_audioResourceId)
                 : std::string_view{};
+    // 无绑定时仍保留空文件名字段，避免缩短标准 HitSample 结构。
     oss << composeOsuHoldHitSample(sampleGroup, sampleFile);
 
+    // 返回值不包含换行，由文件级写出器统一控制行边界。
     return oss.str();
 }
 

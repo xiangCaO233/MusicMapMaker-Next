@@ -20,6 +20,9 @@ namespace MMM::UI
 class MainDockSpaceUI : public ITextureLoader, virtual public IUIView
 {
 public:
+    /// @brief 更新并绘制不抢占焦点的文件操作进度或结果气泡。
+    /// @warning UI 每帧执行，只消费通知并绘制固定规模的反馈。
+    void           updateSaveFeedback();
     static ImGuiID getCenterDockId() { return s_centerDockId; }
     static void    setCenterDockId(ImGuiID id) { s_centerDockId = id; }
     /// @brief 获取解除固定时工具窗口使用的右侧停靠节点。

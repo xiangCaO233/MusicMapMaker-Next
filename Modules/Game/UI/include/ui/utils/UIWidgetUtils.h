@@ -264,11 +264,12 @@ void PlayInteractionMouseUpFeedback();
 /// SFX pool 的即时触发。
 void FeedbackLastItem(ImGuiID id, bool clicked);
 
-/// @brief 给当前 ImGui 窗口原生关闭按钮补充统一反馈。
+/// @brief 给当前 ImGui 窗口原生关闭按钮补充统一交互与 Dock
+/// 悬浮视觉反馈。
 /// @param wasOpenBeforeBegin 调用 ImGui::Begin 前窗口是否处于打开状态。
 /// @param pOpen 传给 ImGui::Begin 的打开状态指针。
-/// @warning UI 热路径：每帧窗口 Begin 后调用，只读取 ImGui 内部交互状态，
-/// 并触发已预加载 SFX pool。
+/// @warning UI 热路径：每帧窗口 Begin 后调用；普通帧只读取 ImGui
+/// 内部交互状态，Dock 关闭按钮悬浮时只调整宿主已有顶点颜色。
 void FeedbackCurrentWindowCloseButton(bool wasOpenBeforeBegin, bool* pOpen);
 
 /// @brief 给指定 DockSpace 下的原生节点按钮补充统一反馈。

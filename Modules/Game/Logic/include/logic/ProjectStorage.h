@@ -10,13 +10,18 @@ namespace MMM::Logic
 {
 
 /// @brief 负责项目配置的分片读写和旧单文件兼容。
+/// 文件布局与 Project 的内存结构解耦；读取时重新组装领域序列化结构。
+/// @warning 同一项目的读写须由调用方串行安排，保存不是跨分片事务。
 class ProjectStorage
 {
 public:
     /// @brief 项目配置实际读取来源。
     enum class Source {
+        /// @brief 没有发现配置入口。
         None,
+        /// @brief 使用隐藏目录中的分片配置。
         Split,
+        /// @brief 使用项目根目录中的旧单文件配置。
         Legacy,
     };
 
@@ -55,6 +60,7 @@ public:
         const std::filesystem::path& projectRoot);
 
     /// @brief 优先读取新分片配置，失败时回退到旧单文件。
+    /// 读取不执行迁移或删除旧文件；调用方确认保存成功后再清理旧配置。
     [[nodiscard]] LoadResult load(
         const std::filesystem::path& projectRoot) const;
 
@@ -63,6 +69,7 @@ public:
     /// @param projectRoot 项目根目录。
     /// @param errorMessage 失败时接收原因。
     /// @return 所有分片和入口文件均写入成功时返回 true。
+    /// 失败时已写入的分片不回滚，旧版单文件保持不变。
     [[nodiscard]] bool save(const Project&               project,
                             const std::filesystem::path& projectRoot,
                             std::string&                 errorMessage) const;

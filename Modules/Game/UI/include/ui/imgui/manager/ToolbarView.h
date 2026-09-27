@@ -6,9 +6,13 @@
 #include "config/EditorSettings.h"
 #include "ui/IUIView.h"
 #include "ui/imgui/manager/BeatLineDisplayModeHistory.h"
+
+#include <glm/glm.hpp>
+
 #include <array>
 #include <cstddef>
-#include <glm/glm.hpp>
+#include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 
@@ -115,12 +119,30 @@ private:
     bool m_showSoundEffectTool{ false };
     /// @brief 上一帧音效工具按钮的屏幕 Y 坐标，用于定位弹层。
     float m_lastSoundEffectToolBtnY{ 0.0f };
+    /// @brief 音效工具上次成功读取的活动会话索引，切换会话时立即清空旧布局。
+    int m_soundEffectTrackSessionIndex{ -1 };
+    /// @brief 会话锁暂不可用时沿用的玩家轨道数。
+    int m_soundEffectPlayerTrackCount{ 0 };
+    /// @brief 会话锁暂不可用时沿用的草稿轨道数。
+    int m_soundEffectDraftTrackCount{ 0 };
+    /// @brief 会话锁暂不可用时沿用的 BGM 轨道数。
+    int m_soundEffectBgmTrackCount{ 0 };
+    /// @brief 缓存轨道数是否来自已载入的谱面。
+    bool m_soundEffectHasBeatmap{ false };
+    /// @brief 音效工具复用的配置值，只有配置修订变化时复制完整对象。
+    Config::EditorConfig m_soundEffectEditorConfigCache;
+    /// @brief 配置缓存的修订号；最大值保证首次显示时获取权威值。
+    std::uint64_t m_soundEffectEditorConfigRevision{
+        std::numeric_limits<std::uint64_t>::max()
+    };
     /// @brief 绑定分类增益草稿是否已从配置初始化。
     bool m_soundEffectGainDraftInitialized{ false };
     /// @brief 未绑定音效文件的实时增益草稿。
     float m_unboundHitSoundGainDraft{ 1.0f };
     /// @brief 已绑定音效文件的实时增益草稿。
     float m_boundHitSoundGainDraft{ 1.0f };
+    /// @brief 节拍器增益拖动草稿，避免异步配置回读打断手势。
+    float m_editorMetronomeGainDraft{ 1.0f };
     /// @brief 是否显示调色盘弹窗。
     bool m_showColorPopup{ false };
     /// @brief 上一帧调色盘按钮的屏幕 Y 坐标，用于定位弹窗。
@@ -203,7 +225,9 @@ private:
     /// @param width 按钮宽度。
     /// @param height 按钮高度。
     /// @param showLabel 是否显示短标签。
-    void drawLayoutButton(float width, float height, bool showLabel);
+    /// @param sourceManager 提供编辑器个性化引导状态。
+    void drawLayoutButton(float width, float height, bool showLabel,
+                          UIManager* sourceManager);
 
     /// @brief 获取当前逻辑编辑器配置，服务缺失时回退本地用户配置。
     /// @warning UI 热路径：只复制已有配置值，不执行文件 I/O。
@@ -215,8 +239,9 @@ private:
 
     /// @brief 绘制布局组件显隐管理弹层。
     /// @param dpiScale 当前 DPI 缩放。
+    /// @param sourceManager 提供当前引导目标的突出层。
     /// @warning UI 热路径：仅在布局工具激活时绘制固定数量控件。
-    void renderLayoutPopup(float dpiScale);
+    void renderLayoutPopup(float dpiScale, UIManager* sourceManager);
 
     /// @brief 绘制分拍线显示模式与自动渐隐范围弹窗。
     /// @param dpiScale 当前 DPI 缩放。
@@ -263,8 +288,9 @@ private:
     /// @brief 项目切换或默认方案变化后应用项目调色方案偏好。
     void applyProjectPalettePreference();
 
-    /// @brief 将当前调色盘颜色发送为画笔自定义颜色。
-    void pushPaletteToBrush();
+    /// @brief 同步颜色画笔方案；选择新方案时清除普通绘制的显式色。
+    /// @param resetDrawColors 是否清除用户手动选择的新建物件颜色。
+    void pushPaletteToBrush(bool resetDrawColors = true);
 
     /// @brief 将当前调色盘颜色应用到选中物件。
     void pushPaletteToSelection();

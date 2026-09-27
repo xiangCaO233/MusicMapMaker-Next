@@ -5,6 +5,7 @@
 #include "common/ChartObjectKind.h"
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
+#include "common/walkthrough/ComposeLessonNotes.h"
 #include "config/EditorConfig.h"
 #include "mmm/Metadata.h"
 #include "mmm/annotation/BeatmapAnnotation.h"
@@ -20,6 +21,7 @@
 #include <string>
 #include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -54,6 +56,20 @@ struct CmdUpdateViewport {
  */
 struct CmdSetPlayState {
     bool isPlaying;
+};
+
+/// @brief 创作教学当前允许的用户播放与定位方式。
+enum class ComposeLessonInputMode : std::uint8_t {
+    Off,           ///< 未运行创作教学，保持普通编辑行为。
+    AutoPlayback,  ///< 首播或复播由教学驱动，忽略用户暂停和定位。
+    Practice,      ///< 写谱可自行播放；定位和播放都限定在当前段落。
+};
+
+/// @brief 只对目标谱面会话生效的创作教学输入范围。
+struct CmdSetComposeLessonInputLimit {
+    ComposeLessonInputMode mode{ ComposeLessonInputMode::Off };
+    double                 begin{ 0.0 };  ///< 段落音频时间起点，单位秒。
+    double                 end{ 0.0 };    ///< 段落音频时间终点，单位秒。
 };
 
 /**
@@ -93,6 +109,10 @@ struct CmdStartDrag {
     bool         isCtrlDown{ false };
     /// @brief 实体所在的独立 ECS 注册表。
     ChartObjectKind kind{ ChartObjectKind::PlayerNote };
+    /// @brief 按下瞬间命中的部位；缺省时兼容非画布调用方的悬停状态。
+    std::optional<std::uint8_t> hitPart;
+    /// @brief 按下瞬间命中的折线子项索引，与 hitPart 一起锁定手势目标。
+    std::optional<std::int32_t> hitSubIndex;
 };
 
 /**
@@ -146,6 +166,18 @@ struct CmdUpdateAudioSampleProperties {
 
     /// @brief 自动采样物件音量。
     float volume{ 1.0F };
+};
+
+/// @brief 将单个谱面物件移动到精确秒时间戳。
+struct CmdUpdateObjectTimestamp {
+    /// @brief 目标物件在对应独立 Registry 中的实体。
+    entt::entity entity{ entt::null };
+
+    /// @brief 目标物件所在的独立 ECS 注册表。
+    ChartObjectKind kind{ ChartObjectKind::PlayerNote };
+
+    /// @brief 新的非负物件起始时间，单位秒。
+    double timestamp{ 0.0 };
 };
 
 /// @brief 更新主画布单个玩家绑定或自动采样的物件音量。
@@ -204,8 +236,7 @@ struct CmdUpdateMarquee {
 /**
  * @brief 结束框选指令
  */
-struct CmdEndMarquee {
-};
+struct CmdEndMarquee {};
 
 /**
  * @brief 移除指定位置的框选区域
@@ -225,6 +256,8 @@ struct CmdStartBrush {
     float       mouseY;       ///< 鼠标相对于视口的 Y 坐标
     bool        isShiftDown;  ///< 当前 Shift 键是否按下 (用于创建 Hold)
     bool        isCtrlDown;   ///< 当前 Ctrl 键是否按下 (用于禁用磁吸)
+    /// @brief 练习新建独立物件时禁用从已有物件续接，避免失败手势改动原谱面。
+    bool createStandalone{ false };
 };
 
 /**
@@ -243,6 +276,14 @@ struct CmdUpdateBrush {
  */
 struct CmdEndBrush {
     std::string cameraId;
+    /// @brief 为 true 时丢弃当前临时画笔，不创建物件或撤销记录。
+    bool cancel{ false };
+    /// @brief 与起笔策略配对；独立放置不自动合并附近已有物件。
+    bool createStandalone{ false };
+    /// @brief 本轮教学步骤的唯一身份；零表示普通绘制，不参与引导回退。
+    std::uint64_t walkthroughToken{ 0 };
+    /// @brief 折线教学要求的最少最终子段数；普通绘制保持零。
+    std::uint8_t walkthroughMinimumSubNotes{ 0 };
 };
 
 /**
@@ -283,6 +324,11 @@ struct CmdUpdateBgmTrackCount {
     int32_t bgmTrackCount;  ///< 目标持久化 BGM 轨道数量。
 };
 
+/// @brief 更新当前谱面独占草稿区的持久化轨道数量。
+struct CmdUpdateDraftTrackCount {
+    int32_t draftTrackCount;  ///< 目标持久化草稿轨道数量。
+};
+
 /**
  * @brief 跳转时间指令
  */
@@ -292,6 +338,15 @@ struct CmdSeek {
 
     /// @brief 是否为拖动进度条期间的连续预览请求。
     bool isScrubbing{ false };
+};
+
+/// @brief 在逻辑线程一次性截取指定教学段落的正式轨道根物件。
+/// @warning 仅在创作教程进入编辑阶段或对象变更时投递；处理时遍历 ECS，
+/// 不允许随普通帧轮询。结果通过发布标志无阻塞交给 UI。
+struct CmdCaptureComposeLessonNotes {
+    double                                m_begin{ 0.0 };  ///< 起点，单位秒。
+    double                                m_end{ 0.0 };    ///< 终点，单位秒。
+    std::shared_ptr<ComposeLessonCapture> m_result;  ///< 跨线程一次性结果。
 };
 
 /**
@@ -304,7 +359,7 @@ struct CmdSetPlaybackSpeed {
 /// @brief Key 音所在的画布轨道区域。
 enum class KeySoundTrackArea : std::uint8_t {
     Player,  ///< 玩家操作轨道区。
-    Draft,   ///< 项目级草稿轨道区。
+    Draft,   ///< 当前谱面的草稿轨道区。
     Bgm      ///< 自动采样 BGM 轨道区。
 };
 
@@ -370,8 +425,10 @@ struct CmdChangeTool {
 struct CmdSetBrushNoteColor {
     /// @brief 要修改的音符颜色槽位。
     NoteColorSlot slot;
-    /// @brief 自定义颜色；为空时清除该槽位并回退到皮肤默认色。
+    /// @brief 自定义颜色；为空时新建物件继续跟随活动方案。
     std::optional<glm::vec4> color;
+    /// @brief 是否把此槽作为新建物件的显式颜色；恢复调色盘快照时为 false。
+    bool applyToNewNotes{ true };
 };
 
 /// @brief 将自定义音符颜色应用到当前选中物件。
@@ -382,10 +439,12 @@ struct CmdApplyNoteColorToSelection {
     std::optional<glm::vec4> color;
 };
 
-/// @brief 设置画笔当前使用的完整音符调色盘。
+/// @brief 设置颜色画笔使用的完整方案，不把方案值视为物件显式染色。
 struct CmdSetBrushNotePalette {
-    /// @brief 完整自定义颜色表，顺序与 NoteColorSlot 一致。
+    /// @brief 完整方案颜色表，顺序与 NoteColorSlot 一致。
     std::array<glm::vec4, NOTE_COLOR_SLOT_COUNT> colors;
+    /// @brief 选择新方案时清除显式绘制色；仅刷新颜色画笔时保留。
+    bool resetDrawColors{ true };
 };
 
 /// @brief 设置画笔新建物件使用的项目音频资源。
@@ -418,23 +477,28 @@ struct CmdClearNoteColorOverrides {
     entt::entity entity{ entt::null };
 };
 
+/// @brief 清除当前谱面全部正式音符及折线子段的自定义颜色。
+struct CmdClearAllNoteColorOverrides {};
+
 /**
  * @brief 撤销指令
  */
 struct CmdUndo {
+    /// @brief 非零时只回滚对应教学创建，不执行普通栈顶撤销。
+    std::uint64_t walkthroughToken{ 0 };
+    /// @brief 教学撤销的原始画布；关闭后丢弃，不回退到当前活动谱面。
+    std::string cameraId;
 };
 
 /**
  * @brief 重做指令
  */
-struct CmdRedo {
-};
+struct CmdRedo {};
 
 /**
  * @brief 复制指令
  */
-struct CmdCopy {
-};
+struct CmdCopy {};
 
 /**
  * @brief 粘贴指令
@@ -450,26 +514,32 @@ struct CmdPaste {
 /**
  * @brief 剪切指令
  */
-struct CmdCut {
-};
+struct CmdCut {};
 
 /**
  * @brief 删除选中物件指令
  */
-struct CmdDeleteSelected {
+struct CmdDeleteSelected {};
+
+/// @brief 删除创作教学红框指定的错误根物件，避免普通撤销误伤其它编辑。
+struct CmdRemoveComposeLessonNote {
+    entt::entity    entity{ entt::null };      ///< 本次查询取得的根实体。
+    std::uintptr_t  beatmapInstanceId{ 0 };    ///< 限定当前谱面实例。
+    std::uint64_t   composeNoteRevision{ 0 };  ///< 防止旧框删除后续更正的物件。
+    double          timestamp{ 0.0 };          ///< 防止旧反馈删除已移动的实体。
+    int             track{ 0 };                ///< 查询时的玩家轨道。
+    ::MMM::NoteType type{ ::MMM::NoteType::NOTE };  ///< 查询时的根类型。
 };
 
 /**
  * @brief 镜像选中物件指令
  */
-struct CmdMirrorSelected {
-};
+struct CmdMirrorSelected {};
 
 /**
  * @brief 对齐选中物件至常用分拍指令
  */
-struct CmdAlignSelectedToCommonBeats {
-};
+struct CmdAlignSelectedToCommonBeats {};
 
 /// @brief 全选命令的轨道区范围。
 enum class SelectAllScope : std::uint8_t {
@@ -486,12 +556,25 @@ struct CmdSelectAll {
     SelectAllScope scope{ SelectAllScope::CurrentTrackArea };
 };
 
-/**
- * @brief 保存谱面指令
- */
+/// @brief 本次保存对全局格式偏好的覆写方式。
+enum class BeatmapSaveFormatOverride : std::uint8_t {
+    /// @brief 使用编辑器设置中的保存格式偏好。
+    Configured,
+    /// @brief 仅本次保留当前谱面的原始格式。
+    Original,
+    /// @brief 仅本次将当前谱面保存为 MMM 格式。
+    ForceMMM,
+};
+
+/// @brief 保存谱面指令。
 struct CmdSaveBeatmap {
     /// @brief 是否允许覆盖哈希已变化或未知的强制 MMM 保存目标。
     bool allowExternallyModifiedOverwrite{ false };
+
+    /// @brief 本次保存的格式覆写，不修改全局设置。
+    BeatmapSaveFormatOverride formatOverride{
+        BeatmapSaveFormatOverride::Configured
+    };
 
     /// @brief 保存来源，用于选择自动保存调度和 UI 反馈策略。
     BeatmapSaveKind kind{ BeatmapSaveKind::Manual };
@@ -738,6 +821,10 @@ struct CmdReplaceBeatmapData {
     /// @brief 是否替换物件数据。
     bool replaceObjects{ false };
 
+    /// @brief 可选的正式根物件替换时间窗，闭区间且单位为秒。
+    /// 未设置时保持原有的整谱替换行为；草稿和时间线不受此范围影响。
+    std::optional<std::pair<double, double>> objectTimeRange;
+
     /// @brief 是否替换时间线数据。
     bool replaceTimelines{ false };
 
@@ -815,10 +902,21 @@ struct BeatmapTemplateCreateOptions {
     bool copyObjects{ false };
 };
 
+/// @brief 新建谱面向导的用户入口，用于跨异步命令保留操作归因。
+/// @note 该值描述业务入口而非演练步骤，未知入口不会产生演练完成信号。
+enum class BeatmapCreateOrigin : std::uint8_t {
+    Unknown,   ///< 程序内部或未指定入口。
+    FileMenu,  ///< 文件菜单中的新建谱面项。
+    Shortcut   ///< Ctrl+N 快捷键。
+};
+
 /**
  * @brief 新建谱面指令
  */
 struct CmdCreateBeatmap {
+    /// @brief 发起向导的用户入口，随逻辑线程创建结果返回。
+    BeatmapCreateOrigin origin{ BeatmapCreateOrigin::Unknown };
+
     /// @brief 新谱面的基础元数据。
     ::MMM::BaseMapMeta baseMeta;
 
@@ -840,8 +938,7 @@ struct CmdUpdateBeatmapMetadata {
 };
 
 /// @brief 标记直接修改的扩展谱面元数据，并请求尾随自动保存。
-struct CmdMarkBeatmapMetadataDirty {
-};
+struct CmdMarkBeatmapMetadataDirty {};
 
 /**
  * @brief 导入音频指令
@@ -908,18 +1005,20 @@ using LogicCommand = std::variant<
     CmdUpdateEditorConfig, CmdUpdateViewport, CmdSetPlayState, CmdLoadBeatmap,
     CmdCreateBeatmap, CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag,
     CmdUpdateDrag, CmdEndDrag, CmdCreateAudioSample,
-    CmdUpdateAudioSampleProperties, CmdUpdateObjectSampleVolume,
-    CmdUpdateSelectedObjectSampleVolume, CmdUpdateTrackCount,
-    CmdUpdateBgmTrackCount, CmdSeek, CmdSetPlaybackSpeed,
-    CmdSetKeySoundTrackMute, CmdSetKeySoundTrackGain,
+    CmdUpdateAudioSampleProperties, CmdUpdateObjectTimestamp,
+    CmdUpdateObjectSampleVolume, CmdUpdateSelectedObjectSampleVolume,
+    CmdUpdateTrackCount, CmdUpdateBgmTrackCount, CmdUpdateDraftTrackCount,
+    CmdSeek, CmdCaptureComposeLessonNotes, CmdSetComposeLessonInputLimit,
+    CmdSetPlaybackSpeed, CmdSetKeySoundTrackMute, CmdSetKeySoundTrackGain,
     CmdSetKeySoundEffectGroupGain, CmdSetDraftKeySoundAreaMute,
-    CmdSetBgmKeySoundAreaMute, CmdChangeTool,
-    CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste, CmdCut,
-    CmdDeleteSelected, CmdMirrorSelected, CmdAlignSelectedToCommonBeats,
-    CmdSelectAll, CmdSetBrushNoteColor, CmdApplyNoteColorToSelection,
-    CmdSetBrushNotePalette, CmdSetBrushAudioResource,
-    CmdApplyNotePaletteToSelection, CmdApplyBrushPaletteToEntity,
-    CmdClearNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
+    CmdSetBgmKeySoundAreaMute, CmdChangeTool, CmdSetMousePosition, CmdUndo,
+    CmdRedo, CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected,
+    CmdRemoveComposeLessonNote, CmdMirrorSelected,
+    CmdAlignSelectedToCommonBeats, CmdSelectAll, CmdSetBrushNoteColor,
+    CmdApplyNoteColorToSelection, CmdSetBrushNotePalette,
+    CmdSetBrushAudioResource, CmdApplyNotePaletteToSelection,
+    CmdApplyBrushPaletteToEntity, CmdClearNoteColorOverrides,
+    CmdClearAllNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
     CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
     CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
     CmdUpdateBpmWithKeepSpeedSv, CmdCreateTimelineEvents,
@@ -958,6 +1057,8 @@ using LogicCommand = std::variant<
                 std::is_same_v<T, CmdEndMarquee> ||
                 std::is_same_v<T, CmdRemoveMarqueeAt> ||
                 std::is_same_v<T, CmdSeek> ||
+                std::is_same_v<T, CmdCaptureComposeLessonNotes> ||
+                std::is_same_v<T, CmdSetComposeLessonInputLimit> ||
                 std::is_same_v<T, CmdSetPlaybackSpeed> ||
                 std::is_same_v<T, CmdSetKeySoundTrackMute> ||
                 std::is_same_v<T, CmdSetKeySoundTrackGain> ||

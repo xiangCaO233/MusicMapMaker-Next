@@ -1,0 +1,734 @@
+#include "logic/ecs/system/NoteRenderSystem.h"
+
+#include "config/EditorConfig.h"
+#include "log/colorful-log.h"
+#include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/TimelineComponent.h"
+#include "logic/ecs/components/TransformComponent.h"
+#include "logic/ecs/system/ScrollCache.h"
+#include "mmm/note/HoldScrollSemantics.h"
+#include <string>
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <vector>
+
+namespace
+{
+/// @brief 回归测试使用的画布宽度。
+constexpr float VIEWPORT_WIDTH = 800.0F;
+/// @brief 回归测试使用的画布高度。
+constexpr float VIEWPORT_HEIGHT = 600.0F;
+/// @brief 画布玩家轨道数量。
+constexpr std::int32_t TRACK_COUNT = 4;
+/// @brief 复现问题的极大 SV 倍率。
+constexpr double EXTREME_SV = 10000.0;
+
+/// @brief 判断顶点 UV 是否属于指定图集区域。
+/// @param vertex 待检查的画布顶点。
+/// @param region 图集中的起点与尺寸。
+/// @return UV 位于区域内部时返回 true。
+/// @note 只用于本用例互不重叠的纹理区域，不是通用纹理身份查询接口。
+bool isInsideUvRegion(const MMM::Common::Render::CanvasVertex& vertex,
+                      const glm::vec4&                         region)
+{
+    // 半像素内缩仍位于区域内部，因此无需依赖 Batcher 的图集尺寸常量。
+    return vertex.uv.u >= region.x && vertex.uv.u <= region.x + region.z &&
+           vertex.uv.v >= region.y && vertex.uv.v <= region.y + region.w;
+}
+
+/// @brief 验证极大 SV 下 Hold 主体只提交视口内矩形。
+/// @return 主体纵坐标有界、宽度稳定且离屏尾部未提交时返回 true。
+/// @note 使用正向极大 SV；反向滚动、Jump 和跨段长条不在此用例覆盖范围。
+/// @param independentHead 是否使用与 Tap 分离的长条头图集区域。
+/// @note 两个用例共享相同音符、滚动映射及布局，唯一差异是可选图集项。
+/// @note 缺失项模拟旧皮肤，存在项模拟 RM 的独立绿色长条头。
+bool testExtremeSvHoldIsClippedBeforeBatching(bool independentHead)
+{
+    // 三个 Registry 与编辑器会话中的数据边界一致。
+    // 音符、采样和时间线分离可避免测试构造偏离正式渲染入口。
+    entt::registry noteRegistry;
+    entt::registry sampleRegistry;
+    entt::registry timelineRegistry;
+
+    // 固定 BPM 后在同一时间启用 10000 倍 SV，稳定复现超长主体投影。
+    // BPM 提供 ScrollCache 积分使用的基础速度。
+    // 时间零点与 SV 重合，避免额外时间段干扰极端倍率计算。
+    const auto bpmEntity = timelineRegistry.create();
+    timelineRegistry.emplace<MMM::Logic::TimelineComponent>(
+        bpmEntity,
+        MMM::Logic::TimelineComponent{
+            .m_timestamp = 0.0,
+            .m_effect    = MMM::TimingEffect::BPM,
+            .m_value     = 120.0,
+        });
+    // ScrollCache 会按 BPM、SCROLL 顺序处理同时间点事件。
+    // SCROLL 值直接使用问题报告中的 10000，而不是人工放大的替代值。
+    // 同时间点排序由正式缓存实现负责，测试不手动拼装 Segment。
+    const auto scrollEntity = timelineRegistry.create();
+    timelineRegistry.emplace<MMM::Logic::TimelineComponent>(
+        scrollEntity,
+        MMM::Logic::TimelineComponent{
+            .m_timestamp = 0.0,
+            .m_effect    = MMM::TimingEffect::SCROLL,
+            .m_value     = EXTREME_SV,
+        });
+
+    // 默认视觉参数保留正式画布的判定线与纵向缩放语义。
+    // 测试只覆盖几何稳定性，不覆盖皮肤颜色或资源加载。
+    MMM::Config::EditorConfig config;
+    // 缩小轨道区只影响横向布局，不改变被测纵向裁剪条件。
+    config.visual.trackLayout.left  = 0.1F;
+    config.visual.trackLayout.right = 0.9F;
+    config.visual.noteScaleX        = 0.8F;
+    config.visual.noteScaleY        = 1.0F;
+    // 关闭无关动态线，保证快照中的测试纹理只来自 Hold。
+    config.visual.beatLineDisplayMode =
+        MMM::Config::BeatLineDisplayMode::Hidden;
+    config.visual.previewConfig.drawBeatLines   = false;
+    config.visual.previewConfig.drawTimingLines = false;
+    // 关闭辅助线只减少无关顶点，不改变 Hold 的可见性判断。
+    // 主画布轨道背景仍照常生成，可验证 UV 过滤没有误选普通几何。
+
+    // 渲染与可见性查询共享同一个 ScrollCache，避免测试绕开真实投影。
+    // 缓存通过 Registry context 暴露，与 NoteRenderSystem 的读取方式一致。
+    auto& cache =
+        timelineRegistry.ctx().emplace<MMM::Logic::System::ScrollCache>();
+    cache.rebuild(timelineRegistry, config, nullptr);
+    // rebuild 使用真实 BPM 与 SV 事件生成超大但有限的 double 投影。
+    // 该投影在修复前会直接缩窄为远离视口的 float 顶点。
+
+    // Hold 头部位于判定线，尾部在极大 SV 下远离视口但主体仍穿过画布。
+    // 一百秒持续时间确保尾部远超画布顶部，主体仍覆盖判定线。
+    // 选择普通 Hold 可直接覆盖截图中出现粗细异常的纵向长条。
+    const auto holdEntity = noteRegistry.create();
+    noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        holdEntity,
+        MMM::Logic::NoteComponent{
+            .m_type       = MMM::NoteType::HOLD,
+            .m_timestamp  = 0.0,
+            .m_duration   = 100.0,
+            .m_trackIndex = 1,
+        });
+    // TransformComponent 是普通音符渲染实体的基础组件。
+    noteRegistry.emplace<MMM::Logic::TransformComponent>(holdEntity);
+    // 正式会话会维护按时间排序的实体缓存，测试显式提供同样的观察指针。
+    // 单实体顺序是确定的，避免排序逻辑掩盖渲染回归。
+    const std::vector<entt::entity> sortedNotes{ holdEntity };
+    // 注册表只借用此向量地址，向量必须保持存活且不搬移到快照生成结束。
+    noteRegistry.ctx().emplace<const std::vector<entt::entity>*>(&sortedNotes);
+
+    // 快照直接收集 CPU 端顶点，因此测试无需依赖 Vulkan 驱动结果。
+    // 这能在光栅化异常出现前验证危险坐标已经被消除。
+    MMM::Logic::RenderSnapshot snapshot;
+    snapshot.hasBeatmap = true;
+    // 为主体和尾部使用互不重叠的 UV，便于准确提取生成的顶点。
+    const glm::vec4 noneUv{ 0.0F, 0.0F, 0.01F, 0.01F };
+    const glm::vec4 noteUv{ 0.1F, 0.1F, 0.1F, 0.1F };
+    const glm::vec4 bodyUv{ 0.4F, 0.2F, 0.05F, 0.2F };
+    const glm::vec4 endUv{ 0.7F, 0.3F, 0.1F, 0.1F };
+    // None 与普通 Note 同样分配独立区域，防止辅助几何被误计为长条主体。
+    // 主体区域较窄可同时检查皮肤宽度换算后仍保持两个固定 X 边界。
+    // 尾部区域单独保留，用于证明离屏端点没有进入批次。
+    snapshot.uvMap.emplace(
+        static_cast<std::uint32_t>(MMM::Logic::TextureID::None), noneUv);
+    snapshot.uvMap.emplace(
+        static_cast<std::uint32_t>(MMM::Logic::TextureID::Note), noteUv);
+    snapshot.uvMap.emplace(
+        static_cast<std::uint32_t>(MMM::Logic::TextureID::HoldBodyVertical),
+        bodyUv);
+    snapshot.uvMap.emplace(
+        static_cast<std::uint32_t>(MMM::Logic::TextureID::HoldEnd), endUv);
+
+    // 独立 UV 能发现长条头仍误用蓝色 Tap 贴图，缺省用例验证旧皮肤回退。
+    const glm::vec4 headUv{ 0.82F, 0.6F, 0.1F, 0.1F };
+    if ( independentHead ) {
+        snapshot.uvMap.emplace(
+            static_cast<std::uint32_t>(MMM::Logic::TextureID::HoldHead),
+            headUv);
+    }
+
+    // 走完整主画布快照路径，确保测试覆盖调用方传入的真实裁剪边界。
+    // 当前时间与 Hold 头部一致，使主体从判定线贯穿可见轨道区。
+    // cameraId 选择主画布路径，预览区压缩投影不参与本测试。
+    MMM::Logic::System::NoteRenderSystem::generateSnapshot(
+        noteRegistry,
+        sampleRegistry,
+        {},
+        {},
+        timelineRegistry,
+        {},
+        &snapshot,
+        "Basic2DCanvas",
+        0.0,
+        VIEWPORT_WIDTH,
+        VIEWPORT_HEIGHT,
+        VIEWPORT_HEIGHT * config.visual.judgeline_pos,
+        TRACK_COUNT,
+        0,
+        0,
+        config,
+        VIEWPORT_HEIGHT);
+
+    // 一个 Hold 主体应恰好生成四个顶点；旧实现也生成四个但 Y 远超视口。
+    // 只保存坐标可让后续断言独立检查纵向边界与横向宽度。
+    // 尾部使用布尔标记，因为预期正确结果是完全没有对应顶点。
+    std::vector<glm::vec2> bodyPositions;
+    bool                   foundEndVertex = false;
+    // 头部在判定线上必须出现，不能通过不绘制头部规避贴图选择断言。
+    // 人工 UV 不重叠，主轨底板与连接体不会被误识别为头部。
+    // 每个头部提交一个四边形，所以检查四个顶点而非仅检查至少一个。
+    std::size_t headVertexCount = 0;
+    std::size_t tapVertexCount  = 0;
+    for ( const auto& vertex : snapshot.vertices ) {
+        // 从最终顶点缓冲筛选，不能仅检查绘制命令上的 scissor 来代替 CPU 裁剪。
+        if ( isInsideUvRegion(vertex, bodyUv) ) {
+            bodyPositions.push_back({ vertex.pos.x, vertex.pos.y });
+        }
+        if ( isInsideUvRegion(vertex, endUv) ) foundEndVertex = true;
+        if ( isInsideUvRegion(vertex, independentHead ? headUv : noteUv) ) {
+            ++headVertexCount;
+        }
+        if ( isInsideUvRegion(vertex, noteUv) ) ++tapVertexCount;
+    }
+    // 新皮肤只用独立头部；缺失可选纹理的旧快照仍产生四个 Note 顶点。
+    if ( headVertexCount != 4U || (independentHead && tapVertexCount != 0U) ) {
+        XERROR("Hold head texture selection mismatch");
+        return false;
+    }
+    if ( bodyPositions.size() != 4U ) {
+        // 空主体同样失败，避免通过剔除整个长条来绕过极端坐标问题。
+        XERROR("Extreme-SV Hold body vertex count mismatch: {}",
+               bodyPositions.size());
+        return false;
+    }
+
+    // CPU 裁剪后所有主体顶点都必须落在画布纵向范围内。
+    // 先检查有限值，NaN 会令普通大小比较失效，不能只检查是否越过上下界。
+    for ( const auto& position : bodyPositions ) {
+        if ( !std::isfinite(position.x) || !std::isfinite(position.y) ||
+             position.y < 0.0F || position.y > VIEWPORT_HEIGHT ) {
+            XERROR("Extreme-SV Hold emitted out-of-viewport vertex: ({}, {})",
+                   position.x,
+                   position.y);
+            return false;
+        }
+    }
+
+    // 提取横向极值，检查主体没有塌缩且所有顶点均落在这两条边界上。
+    // 这里不硬编码皮肤宽度，只验证输出仍具有非零且一致的横向跨度。
+    const auto [minXIt, maxXIt] = std::minmax_element(
+        bodyPositions.begin(),
+        bodyPositions.end(),
+        [](const auto& lhs, const auto& rhs) { return lhs.x < rhs.x; });
+    // minmax 只分析主体自己的四个顶点，不受轨道边界影响。
+    const float minX = minXIt->x;
+    const float maxX = maxXIt->x;
+    if ( !(maxX > minX) ) {
+        XERROR("Extreme-SV Hold body collapsed horizontally");
+        return false;
+    }
+    // 每个顶点必须严格落在同一组左右边界，保持矩形粗细一致。
+    for ( const auto& position : bodyPositions ) {
+        if ( std::abs(position.x - minX) > 1e-4F &&
+             std::abs(position.x - maxX) > 1e-4F ) {
+            XERROR("Extreme-SV Hold body width became nonuniform");
+            return false;
+        }
+    }
+
+    // 远离视口的尾部不应进入顶点缓冲，避免继续携带极端坐标。
+    // GPU 裁剪可能隐藏错误尾部，但无法满足本测试对提交前几何范围的约束。
+    if ( foundEndVertex ) {
+        XERROR("Extreme-SV Hold emitted its off-screen end geometry");
+        return false;
+    }
+    return true;
+}
+/// @brief 验证原生及导入长条在停卷轴、Jump 后使用一致的尾部运动。
+/// @param positive 启用正向半速尾部，否则覆盖头尾反向。
+/// @param playing 检查播放快照；关闭时同时验证暂停拾取。
+/// @return 主体、尾端纹理及末端命中框均采用独立 HS 时返回真。
+/// @note 期望坐标直接按事件积分给出，不调用被测尾部锚点函数。
+/// @note 同一组件关闭标记后验证普通 Hold，防止修复改变共享 HS 的载体。
+/// @note 正向 Jump 会改变两个相反倍率端点的距离，不能只测试匀速区间。
+/// @note 停止段保留原有空间坐标，不应将长条重新折叠到判定线。
+/// @note 期望值不包含游戏皮肤透视，验证编辑器平面坐标中的真实连接长度。
+/// @note 端点图块的中心代表时间位置，纹理上下边缘不参与长条长度计算。
+/// @note 测试仅使用内存图集，结果不依赖个人皮肤、音频或窗口状态。
+bool testIndependentEndHs(bool positive, bool playing)
+{
+    using namespace MMM::Logic;
+    // 注册表分域与真实会话一致，时间线缓存不能装在音符注册表中。
+    // 不启动 Session，避免探针触发音频、目录监视或最近项目更新。
+    entt::registry notes, samples, timeline;
+    // 1 秒开始双倍滚动，1.5 秒 Jump 前进 0.2 秒，再在 1.75 秒停止。
+    // 两端分别覆盖异号反向和正向半速尾部；倍率整体缩小只用于保持纹理可见。
+    // 正向用例模拟头部 1、尾部 0.5 的比例，尾部在每段 Scroll 内应匀速移动。
+    const double headHs = positive ? 0.2 : -0.2;
+    const double tailHs = positive ? 0.1 : 0.2;
+    for ( const auto& event :
+          { TimelineComponent{ .m_timestamp = 0,
+                               .m_effect    = MMM::TimingEffect::HS,
+                               .m_value     = headHs },
+            TimelineComponent{ .m_timestamp = 1,
+                               .m_effect    = MMM::TimingEffect::SCROLL,
+                               .m_value     = 2 },
+            TimelineComponent{ .m_timestamp = 1.5,
+                               .m_effect    = MMM::TimingEffect::JUMP,
+                               .m_value     = 200 },
+            TimelineComponent{ .m_timestamp = 1.75,
+                               .m_effect    = MMM::TimingEffect::SCROLL,
+                               .m_value     = 0 },
+            TimelineComponent{ .m_timestamp = 2,
+                               .m_effect    = MMM::TimingEffect::HS,
+                               .m_value     = tailHs } } )
+        timeline.emplace<TimelineComponent>(timeline.create(), event);
+    // 默认基础速度为每秒 500 单位；不传谱面以排除 osu! SliderMultiplier。
+    // 保留真实默认布局，期望值只依赖纵向时间映射。
+    MMM::Config::EditorConfig config;
+    // 线性映射会禁用 HS 与 Jump，必须明确开启效果路径。
+    // 缓存只重建一次，后续多帧验证相同事件表下的时间推进。
+    config.visual.enableLinearScrollMapping = false;
+    // 本组检查完整端点几何，显式关闭游玩消隐；模拟状态另有独立回归。
+    config.visual.simulateAutoplay = false;
+    auto& cache = timeline.ctx().emplace<System::ScrollCache>();
+    cache.rebuild(timeline, config, nullptr);
+    // 使用持续 1 秒的独立根长条；不设置子物件身份，确保走普通 Hold 入口。
+    // 多段虚拟载体的行为由 PolylineCarrierAnchorTest 独立覆盖。
+    const auto entity = notes.create();
+    auto&      note   = notes.emplace<NoteComponent>(entity);
+    note.m_type       = MMM::NoteType::HOLD;
+    note.m_timestamp  = 1;
+    note.m_duration   = 1;
+    note.m_trackIndex = 1;
+    // 正式渲染要求实体携带 Transform，坐标仍由本帧滚动结果生成。
+    // 不能提前把期望坐标写入 Transform 来绕过被测计算。
+    notes.emplace<TransformComponent>(entity);
+    // 来源列表在整个测试内稳定存活，缓存只借用地址。
+    // 按正式快照契约提供排序列表，避免空候选导致虚假的通过。
+    const std::vector<entt::entity> sorted{ entity };
+    notes.ctx().emplace<const std::vector<entt::entity>*>(&sorted);
+    // 正式会话提供物件版本；正负 HS 用例都走分桶与缓存极值精查。
+    // 修改导入标记后递增版本，避免复用旧语义下的空间包络。
+    std::uint64_t noteRevision = 1;
+    notes.ctx().emplace<const std::uint64_t*>(&noteRevision);
+    // 图集区域互不重叠，便于区分主体、尾端与轨道背景。
+    // 尾纹理尺寸不同于头部，能发现拾取框误用头部尺寸的错误。
+    const glm::vec4 bodyUv{ .3F, .3F, .05F, .05F };
+    const glm::vec4 endUv{ .5F, .5F, .05F, .05F };
+    // 无标记对应原生 MMM；显式开启对应 seg 导入，关闭对应 endbeat 导入。
+    // 同一实体切换来源语义，保证编辑后的快照不继续使用旧端点规则。
+    // 空元数据用例也验证新建长条，不能依赖加载器补上导入标记。
+    for ( int mode : { -1, 0, 1 } ) {
+        const bool independent = mode != 0;
+        note.m_metadata.note_properties.clear();
+        if ( mode >= 0 )
+            note.m_metadata
+                .note_properties[MMM::NoteMetadataType::MMM]
+                                [std::string(MMM::HOLD_INDEPENDENT_END_HS)] =
+                independent ? "true" : "false";
+        ++noteRevision;
+        // 当前时间跨过 Jump、停止段；同一对端点不能被预先缓存为固定高度。
+        // 0.5 秒位于所有运动事件之前，1.6 秒已经经过正向 Jump。
+        // 1.9 秒处于停止段，尾部仍应保留与头部不同的空间位置。
+        // 极早时间的异号几何会跨屏，但载体本身尚未进入窗口，必须剔除。
+        // 很晚的停止段仍可能显示该载体，不能用固定秒数窗口遮掩回归。
+        std::vector<double> times{ -100.0, 0.5, 1.6, 1.9, 100.0 };
+        // 连续推进覆盖 Jump 前后与停卷轴，不能只用几个暂停时刻验证长度。
+        // 每帧直接检查尾纹理及拾取中心，防止主体正确但尾部使用另一套速度。
+        for ( int frame = 0; frame <= 90; ++frame )
+            times.push_back(0.5 + frame / 60.0);
+        for ( double now : times ) {
+            // 部分帧只改变动画缩放，不发布物件或卷轴版本；缓存极值须按本帧倍率投影。
+            // 随后恢复原倍率，避免只在首次查询时碰巧得到正确位置。
+            const double zoom = now >= 1.6 && now < 1.65 ? 1.1 : 1.0;
+            cache.setAnimatedZoomScale(zoom);
+            RenderSnapshot snapshot;
+            snapshot.hasBeatmap = true;
+            // 暂停且允许交互时才生成拾取框，与编辑器暂停讲解场景一致。
+            // 每帧新建快照，防止上一帧的尾部框或顶点掩盖漏画。
+            snapshot.acceptsInteraction = true;
+            // 播放和暂停共用相同的端点轨迹，播放状态不能改变尾部倍率。
+            snapshot.isPlaying = playing;
+            snapshot.uvMap.emplace(static_cast<uint32_t>(TextureID::None),
+                                   glm::vec4{ 0, 0, .01, .01 });
+            snapshot.uvMap.emplace(static_cast<uint32_t>(TextureID::Note),
+                                   glm::vec4{ .1, .1, .1, .1 });
+            snapshot.uvMap.emplace(
+                static_cast<uint32_t>(TextureID::HoldBodyVertical), bodyUv);
+            snapshot.uvMap.emplace(static_cast<uint32_t>(TextureID::HoldEnd),
+                                   endUv);
+            // 手算积分：A(头)=500，A(尾)=500+750+200=1450。
+            // 不经 ScrollCache 求期望值，避免同时改错缓存与渲染仍能通过。
+            // 当前积分分为单速、双速、Jump 后双速与停止四段。
+            // 正 Jump 的距离使用事件当时速度 1000，与毫秒参数的单位保持一致。
+            const double origin = now < 1      ? now * 500
+                                  : now < 1.5  ? 500 + (now - 1) * 1000
+                                  : now < 1.75 ? 700 + (now - 1) * 1000
+                                               : 1450;
+            // 判定线固定在 600；负 HS 允许时间在未来但空间落在判定线下方。
+            // 不把相对距离取绝对值，否则无法发现方向错误。
+            const double head = 600 - (500 - origin) * zoom * headHs;
+            const double end =
+                600 - (1450 - origin) * zoom * (independent ? tailHs : headHs);
+            // 调用完整快照路径，同时覆盖候选剔除、主体和端点生成。
+            // 使用主画布身份，预览缩放不参与此处期望坐标。
+            System::NoteRenderSystem::generateSnapshot(notes,
+                                                       samples,
+                                                       {},
+                                                       {},
+                                                       timeline,
+                                                       {},
+                                                       &snapshot,
+                                                       "Basic2DCanvas",
+                                                       now,
+                                                       800,
+                                                       1200,
+                                                       600,
+                                                       4,
+                                                       0,
+                                                       0,
+                                                       config,
+                                                       1200);
+            // 范围哨兵在没有顶点时保持倒置，配合数量断言避免空结果通过。
+            // 使用 double 聚合 float 顶点，误差阈值仅容忍正常的像素浮点舍入。
+            double      low = 1200, high = 0, endLow = 1200, endHigh = 0;
+            std::size_t count = 0, endCount = 0;
+            // 检查实际提交的主体顶点，防止仅修正辅助公式却漏掉渲染入口。
+            for ( const auto& v : snapshot.vertices ) {
+                if ( isInsideUvRegion(v, bodyUv) ) {
+                    low  = std::min(low, double(v.pos.y));
+                    high = std::max(high, double(v.pos.y));
+                    ++count;
+                }
+                // 尾端取纹理中心作为时间位置，不依赖其固定显示高度。
+                // 不能用主体末端代替尾端，否则会漏掉两条绘制路径不一致。
+                if ( isInsideUvRegion(v, endUv) ) {
+                    endLow  = std::min(endLow, double(v.pos.y));
+                    endHigh = std::max(endHigh, double(v.pos.y));
+                    ++endCount;
+                }
+            }
+            // 远处的根对象不应凭不同 HS 端点组成的跨屏包络进入候选。
+            // 同时验证不可拾取，防止仅隐藏主体却残留交互范围。
+            // 这里保留完整渲染查询流程，覆盖索引粗筛之后的载体门禁。
+            if ( now < 0 ) {
+                if ( count != 0 || endCount != 0 ||
+                     !snapshot.hitboxes.empty() ) {
+                    XERROR(
+                        "Distant Hold leaked into viewport: independent={}, "
+                        "body={}",
+                        independent,
+                        count);
+                    return false;
+                }
+                continue;
+            }
+            // 首尾都在视口内，主体应完整出现，不能以裁剪或漏画规避断言。
+            // 分别检查空间上下界，头尾交换后依然必须覆盖相同连接范围。
+            // 共享和独立 HS 的预期长度不同，禁止只比较两帧移动方向。
+            if ( count != 4 || endCount != 4 ||
+                 std::abs(low - std::min(head, end)) > .01 ||
+                 std::abs(high - std::max(head, end)) > .01 ||
+                 std::abs((endLow + endHigh) * .5 - end) > .01 ) {
+                XERROR(
+                    "Hold HS mismatch: independent={}, now={}, body=[{},{}], "
+                    "expected=[{},{}]",
+                    independent,
+                    now,
+                    low,
+                    high,
+                    head,
+                    end);
+                return false;
+            }
+            // 末端拾取位置必须与纹理一致，避免只能看到却无法选择尾部。
+            // 只接受本实体的 HoldEnd，背景框或头部框不计入成功。
+            // 未找到框时也失败，不能把未进入交互路径当作坐标正确。
+            bool hit = false;
+            for ( const auto& box : snapshot.hitboxes ) {
+                if ( box.entity == entity && box.part == HoverPart::HoldEnd )
+                    hit = std::abs(box.y + box.h * .5 - end) < .01;
+            }
+            if ( !playing && !hit ) {
+                XERROR("Hold end hitbox mismatch");
+                return false;
+            }
+        }
+    }
+    return true;
+}
+/// @brief 通过真实快照验证自动判定的驻留头、分段消隐和暂停恢复。
+/// @param polyline 使用跨轨折线，否则使用独立长条。
+/// @return 所有状态切换均保持时间判定和几何一致时返回真。
+/// @note 时间顺序包含结束后回跳；不允许把完成状态永久写入实体。
+/// @note 事件包含负 Scroll、Jump 和异倍率尾部，避免仅覆盖匀速正向情况。
+bool testSimulatedHoldJudgment(bool polyline)
+{
+    using namespace MMM::Logic;
+    // 三个注册表与正式渲染域隔离方式一致，不使用游戏运行中的判定器。
+    // 模拟结果只能由配置、播放态和当前时间推导，不能依赖前一快照副作用。
+    entt::registry notes, samples, timeline;
+    // 实际事件缓存参与查询与绘制，不能靠手工写投影掩盖候选丢失。
+    // 初始 BPM 提供确定的基础速度，后续变化只来自显式 Scroll 和 HS。
+    // 第一段负 Scroll 位于斜向连接期间，横向进度仍应按时间继续推进。
+    // Jump 发生在负流速段内，其符号沿用正式缓存的事件语义。
+    // 尾段半速专门覆盖头部驻留时不能重采样整条 HS 的边界。
+    // 第二段负 Scroll 位于物件结束之后，使消隐检查不会被自然离屏替代。
+    for ( const auto& event :
+          { TimelineComponent{ 0.0, MMM::TimingEffect::BPM, 120.0 },
+            TimelineComponent{ 2.25, MMM::TimingEffect::SCROLL, -1.0 },
+            TimelineComponent{ 2.5, MMM::TimingEffect::JUMP, 100.0 },
+            TimelineComponent{ 2.75, MMM::TimingEffect::SCROLL, 1.0 },
+            TimelineComponent{ 3.0, MMM::TimingEffect::HS, 0.5 },
+            TimelineComponent{ 4.25, MMM::TimingEffect::SCROLL, -1.0 } } )
+        timeline.emplace<TimelineComponent>(timeline.create(), event);
+    // 默认总开关应生效；后续枚举显式值还会验证关闭路径。
+    // 不打开真实项目，确保测试不会改动用户最近列表和谱面资源。
+    MMM::Config::EditorConfig config;
+    // 必须保留变速映射，否则负 Scroll 和 Jump 输入会被线性模式忽略。
+    // 禁止用简化后的匀速坐标代替这组输入，以免消隐门禁掩盖几何问题。
+    config.visual.enableLinearScrollMapping = false;
+    config.visual.showBoundSampleLabels     = false;
+    auto& cache = timeline.ctx().emplace<System::ScrollCache>();
+    cache.rebuild(timeline, config, nullptr);
+    // 一条物件保证纹理统计无歧义；跨轨折线包含两个竖段和中间斜段。
+    const auto entity = notes.create();
+    auto&      note   = notes.emplace<NoteComponent>(entity);
+    note.m_type      = polyline ? MMM::NoteType::POLYLINE : MMM::NoteType::HOLD;
+    note.m_timestamp = 1.0;
+    note.m_duration  = 3.0;
+    note.m_trackIndex = 1;
+    // 头竖段结束与下一段开始之间保留一秒，形成可测量的斜向过渡。
+    // 两个竖段的轨道不同，能发现头部始终停在起始轨的错误实现。
+    // 末段仍带持续时间，以覆盖容器末节点时间与真正结束时间的区别。
+    if ( polyline )
+        note.m_subNotes = { { .type       = MMM::NoteType::HOLD,
+                              .timestamp  = 1.0,
+                              .duration   = 1.0,
+                              .trackIndex = 1 },
+                            { .type       = MMM::NoteType::HOLD,
+                              .timestamp  = 3.0,
+                              .duration   = 1.0,
+                              .trackIndex = 2 } };
+    notes.emplace<TransformComponent>(entity);
+    // 独立单点用于验证子选项；它的命运不能受长条完成状态影响。
+    // 单点发生在长条进行中，排除只在全部长条结束后才应用子开关的错误。
+    // 使用空闲轨道不与长条遮挡，纹理身份仍是判定它是否绘制的唯一依据。
+    const auto tap = notes.create();
+    notes.emplace<NoteComponent>(tap,
+                                 NoteComponent{ .m_type = MMM::NoteType::NOTE,
+                                                .m_timestamp  = 1.75,
+                                                .m_trackIndex = 0 });
+    notes.emplace<TransformComponent>(tap);
+    // 滑键与单点同时发生，用独立颜色标记其头部，避免与长条共用纹理时混计。
+    // 横向身体和箭头使用独立 UV，消隐必须同时移除三个部件。
+    // 滑键发生时间早于长条结束，不能借长条根对象的消隐间接通过测试。
+    // 起始轨设为中间轨，左右端点都在玩家区，避免离屏裁剪干扰数量断言。
+    const auto flick              = notes.create();
+    auto&      flickNote          = notes.emplace<NoteComponent>(flick);
+    flickNote.m_type              = MMM::NoteType::FLICK;
+    flickNote.m_timestamp         = 1.75;
+    flickNote.m_trackIndex        = 2;
+    flickNote.m_customColors.head = glm::vec4{ .123F, .456F, .789F, 1.0F };
+    notes.emplace<TransformComponent>(flick);
+    // 注册顺序即时间顺序，正式候选查询借用该稳定容器。
+    // 容器在所有开关组合期间保持有效，不让悬空的来源指针影响测试。
+    // 本夹具不发布版本索引，因此测试精查路径直接读取最新配置和组件。
+    // 不直接调用私有绘制函数，从而覆盖根载体剔除和主体绘制两层门禁。
+    const std::vector<entt::entity> sorted{ entity, tap, flick };
+    notes.ctx().emplace<const std::vector<entt::entity>*>(&sorted);
+    // 纹理身份区分头、身体和尾；普通背景图元不能使空渲染误判为通过。
+    // 专用头纹理也避免单点子选项误删长条头时仍被普通 Note 顶点补足数量。
+    const glm::vec4 headUv{ .2F, .2F, .05F, .05F };
+    const glm::vec4 bodyUv{ .4F, .4F, .05F, .05F };
+    const glm::vec4 endUv{ .6F, .6F, .05F, .05F };
+    // 总开关与子开关交叉枚举，特别覆盖总开关关、子开关开这一无效组合。
+    // 两个方向都在同一个注册表上切换，避免缓存重建替错误状态提供掩护。
+    for ( bool enabled : { false, true } ) {
+        config.visual.simulateAutoplay = enabled;
+        for ( bool hideTaps : { false, true } ) {
+            config.visual.hideJudgedNotes = hideTaps;
+            // 同级子开关取相反值，确保滑键不会误用单点开关。
+            // 两轮同时覆盖左右滑键；关闭总开关后两者都必须保留。
+            config.visual.hideJudgedFlicks = !hideTaps;
+            flickNote.m_dtrack             = hideTaps ? -1 : 1;
+            // 暂停恢复属于编辑预览契约，即使开关开启也必须展示完整物件。
+            // 枚举播放态而非手工调用恢复函数，验证恢复无需额外状态清理。
+            for ( bool playing : { false, true } ) {
+                // 时间边界、倒退中间和结束后都采样，最后回跳验证无状态恢复。
+                for ( double now :
+                      { 0.9, 1.0, 1.5, 1.75, 2.0, 2.5, 3.5, 4.0, 5.0, 1.5 } ) {
+                    // 每帧使用干净输出缓冲，前帧头部或身体顶点不能混入统计。
+                    // 时间 4 恰在结束边界，时间 5
+                    // 已反向回流到这些物件所在空间。
+                    // 最后重新查询 1.5，要求已经结束的对象在回跳后重新进入活动态。
+                    RenderSnapshot snapshot;
+                    snapshot.hasBeatmap = true;
+                    snapshot.isPlaying  = playing;
+                    // 正式入口自行决定是否允许拾取，测试不绕过播放期交互约束。
+                    snapshot.acceptsInteraction = true;
+                    snapshot.uvMap.emplace(uint32_t(TextureID::None),
+                                           glm::vec4{ 0, 0, .01, .01 });
+                    snapshot.uvMap.emplace(uint32_t(TextureID::Note),
+                                           glm::vec4{ .1, .1, .05, .05 });
+                    snapshot.uvMap.emplace(uint32_t(TextureID::HoldHead),
+                                           headUv);
+                    snapshot.uvMap.emplace(
+                        uint32_t(TextureID::HoldBodyVertical), bodyUv);
+                    snapshot.uvMap.emplace(uint32_t(TextureID::HoldEnd), endUv);
+                    // 箭头左右方向共享测试区域，计数不依赖实际图片加载。
+                    snapshot.uvMap.emplace(
+                        uint32_t(TextureID::HoldBodyHorizontal),
+                        glm::vec4{ .7, .7, .05, .05 });
+                    for ( auto id : { TextureID::FlickArrowLeft,
+                                      TextureID::FlickArrowRight } )
+                        snapshot.uvMap.emplace(uint32_t(id),
+                                               glm::vec4{ .8, .8, .05, .05 });
+                    // 使用同一个判定线基准，主画布几何由正式入口产生。
+                    // 画布留出足够上下空间，保证单点在所有采样时刻本应可见。
+                    // 因而单点顶点数量变化只能由所测消隐规则引起。
+                    // 头部尺寸影响四个顶点边界，不改变四点均值对应的时间中心。
+                    System::NoteRenderSystem::generateSnapshot(notes,
+                                                               samples,
+                                                               {},
+                                                               {},
+                                                               timeline,
+                                                               {},
+                                                               &snapshot,
+                                                               "Basic2DCanvas",
+                                                               now,
+                                                               800,
+                                                               1200,
+                                                               600,
+                                                               4,
+                                                               0,
+                                                               0,
+                                                               config,
+                                                               1200);
+                    std::size_t heads = 0, bodies = 0, ends = 0, taps = 0,
+                                flicks = 0;
+                    double headY = 0, headX = 0, bodyStartX = 0, bodyStartY = 0,
+                           bodyBottom = 0;
+                    for ( const auto& vertex : snapshot.vertices ) {
+                        // 先识别滑键头，再统计长条头，防止共享纹理掩盖残留头部。
+                        const bool flickHead =
+                            isInsideUvRegion(vertex, headUv) &&
+                            std::abs(vertex.color.r - .123F) < .001;
+                        if ( flickHead ||
+                             isInsideUvRegion(vertex,
+                                              glm::vec4{ .7, .7, .05, .05 }) ||
+                             isInsideUvRegion(vertex,
+                                              glm::vec4{ .8, .8, .05, .05 }) )
+                            ++flicks;
+                        if ( isInsideUvRegion(
+                                 vertex,
+                                 snapshot.uvMap.at(uint32_t(TextureID::Note))) )
+                            ++taps;
+                        if ( isInsideUvRegion(vertex, headUv) && !flickHead ) {
+                            ++heads;
+                            headY += vertex.pos.y;
+                            headX += vertex.pos.x;
+                        }
+                        if ( isInsideUvRegion(vertex, bodyUv) ) {
+                            // 主体每个四边形前两点是起边，平均后得到当前连接中心。
+                            // 只统计第一段，后续尚未开始的段不能替代活动段通过断言。
+                            if ( bodies < 2 ) {
+                                bodyStartX += vertex.pos.x;
+                                bodyStartY += vertex.pos.y;
+                            }
+                            bodyBottom =
+                                std::max(bodyBottom, double(vertex.pos.y));
+                            ++bodies;
+                        }
+                        if ( isInsideUvRegion(vertex, endUv) ) ++ends;
+                    }
+                    // 判定是否生效的期望只用布尔组合，不调用被测绘制辅助函数。
+                    // 期望判定线为固定常数，不能从输出顶点反推出“正确”位置。
+                    const bool simulated = enabled && playing;
+                    // 子选项只有总开关和播放同时生效时才能隐藏单点。
+                    // 暂停、总开关关闭及子开关关闭均应保留处于视口中的单点。
+                    const bool hiddenTap = simulated && hideTaps && now >= 1.75;
+                    if ( taps != (hiddenTap ? 0U : 4U) ) {
+                        XERROR("Tap sub-option mismatch at {}", now);
+                        return false;
+                    }
+                    // 十二个顶点分别来自头部、身体和箭头；边界时间采用包含等号的判定。
+                    // 子开关关闭时，即使单点同时消失，滑键仍须输出完整几何。
+                    // 反向组合则要求滑键消失而单点继续显示，验证两个字段互不替代。
+                    // 播放态关闭时，两组开关均不得影响暂停编辑所需的物件形状。
+                    // 结束后负 Scroll
+                    // 将其带回视野，也不能使已判定滑键重新出现。
+                    const bool hiddenFlick =
+                        simulated && !hideTaps && now >= 1.75;
+                    if ( flicks != (hiddenFlick ? 0U : 12U) ) {
+                        XERROR("Flick sub-option mismatch at {}", now);
+                        return false;
+                    }
+                    // 完成门禁必须同时移除全部部件，不能只把身体缩成零高矩形。
+                    if ( simulated && now >= 4.0 ) {
+                        // 三类纹理同时检查，避免尾端或驻留头在结束帧残留。
+                        // 顶点完全缺席才代表消隐，透明或退化身体仍不能通过此断言。
+                        if ( heads || bodies || ends ) {
+                            XERROR("Completed hold reappeared at {}", now);
+                            return false;
+                        }
+                    } else if ( simulated && now >= 1.0 ) {
+                        // 当前头只有一个，且在倒退及换轨过程中都停在同一判定线。
+                        if ( heads != 4 ||
+                             std::abs(headY / heads - 600) > .01 ||
+                             snapshot.allowUiPlaybackInterpolation ) {
+                            XERROR("Simulated head is not pinned at {}", now);
+                            return false;
+                        }
+                        // 竖段中部和跨轨过渡中部都必须从驻留头接出。
+                        // 这同时防止旧段漏画消隐、头部换轨与身体插值采用不同进度。
+                        if ( (now == 1.5 || now == 2.5 || now == 3.5) &&
+                             (bodies < 4 ||
+                              std::abs(bodyStartY * .5 - 600) > .01 ||
+                              std::abs(bodyStartX * .5 - headX / heads) >
+                                  .01) ) {
+                            XERROR(
+                                "Simulated body detached: polyline={}, now={}",
+                                polyline,
+                                now);
+                            return false;
+                        }
+                        // 独立长条只剩未判定身体；任何落在判定线下方的顶点都属回归。
+                        // 折线的未来段允许有自己的反向几何，因此不套用整条空间裁剪。
+                        if ( !polyline && bodyBottom > 600.01 ) return false;
+                    } else if ( now == 1.5 || now == 4.0 ) {
+                        // 暂停与关闭选项均保留完整身体，结束时间也不能删除原始几何。
+                        // 这里不把身体钳制到判定线，保持原始编辑几何的可观察性。
+                        // 独立 HS
+                        // 的具体坐标仍由上面的完整端点回归负责精确检查。
+                        if ( bodies == 0 ) return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+}  // namespace
+
+/// @brief 运行极大 SV 下 Hold 几何裁剪回归测试。
+/// @return 测试通过时返回 0。
+/// @note 结果证明指定输入下的 CPU 几何约束，不替代实际驱动和画面验收。
+int main()
+{
+    // 使用内存实体与人工图集坐标复现，不依赖用户皮肤或外部谱面文件。
+    // 用例日志区分主体缺失、坐标越界、宽度异常及离屏尾部泄漏。
+    return testSimulatedHoldJudgment(false) &&
+                   testSimulatedHoldJudgment(true) &&
+                   testExtremeSvHoldIsClippedBeforeBatching(false) &&
+                   testExtremeSvHoldIsClippedBeforeBatching(true) &&
+                   testIndependentEndHs(false, false) &&
+                   testIndependentEndHs(true, false) &&
+                   testIndependentEndHs(false, true) &&
+                   testIndependentEndHs(true, true)
+               ? 0
+               : 1;
+}

@@ -5,16 +5,19 @@
 namespace MMM::Graphic
 {
 
-///@brief 读取文件文本内容工具
+/// @brief 以二进制形式读取完整着色器文件。
+/// @param path 着色器文件路径。
+/// @return 文件内容；打开失败时记录错误并返回空字符串。
 std::string VKShader::readFile(std::string path)
 {
-    // 读取文件内容
+    // 从文件尾取得精确字节数，避免文本模式换行转换破坏 SPIR-V 数据。
     std::ifstream fs;
     fs.open(path, std::ios::binary | std::ios::ate);
     if ( !fs.is_open() ) {
         XERROR("Fatal: Could not open File[{}]!", path);
         return {};
     }
+    // 一次性准备最终缓冲并回到文件头读取，返回值可直接作为 shader module 输入。
     auto        sourceSize = fs.tellg();
     std::string source;
     source.resize(sourceSize);
@@ -35,7 +38,8 @@ VKShader::VKShader(vk::Device& vkLogicalDevice, std::string_view vertexSource,
                    std::string_view fragmentSource)
     : m_vkLogicalDevice(vkLogicalDevice)
 {
-    // 着色器模块创建信息
+    // 输入是 SPIR-V 字节视图；调用方必须保证尺寸与地址满足 Vulkan 对 uint32_t
+    // 指令流的要求，模块创建完成后源码视图即可失效。
     vk::ShaderModuleCreateInfo shaderCreateInfo;
     // 设置着色器源代码
     shaderCreateInfo.setCodeSize(vertexSource.size());
@@ -106,7 +110,7 @@ VKShader::VKShader(vk::Device& vkLogicalDevice, std::string_view vertexSource,
 
 VKShader::~VKShader()
 {
-    // 销毁着色器模块
+    // 管线只在创建阶段读取模块，VKShader 生命周期结束时按所有权逐项销毁句柄。
     m_vkLogicalDevice.destroyShaderModule(m_vertexShaderModule);
     XDEBUG("Destroyed vertex shader module");
 

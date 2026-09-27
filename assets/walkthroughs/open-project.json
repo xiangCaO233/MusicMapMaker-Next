@@ -1,0 +1,276 @@
+{
+  "id": "mmm.open-project",
+  "chapter": "creation",
+  "order": 10,
+  "version": 2,
+  "completion": "any",
+  "title": {
+    "zh_cn": "打开谱面项目",
+    "en_us": "Open a beatmap project"
+  },
+  "description": {
+    "zh_cn": "本演练只使用预设资源包 assets/walkthroughs/canonrock 中的 CanonRock 项目。每次进入一种打开方式，先关闭当前项目，等待工作区清空后再操作。目录、谱面文件和谱包必须来自这个引导目录；其它路径不会被本轮演练打开。",
+    "en_us": "This walkthrough uses only CanonRock in the managed assets/walkthroughs/canonrock directory. Each practice run closes the current project and waits for a clean workspace. Only its folder, beatmap, or package can be opened during this walkthrough."
+  },
+  "branches": [
+    {
+      "id": "menu",
+      "title": {
+        "zh_cn": "方式一：文件菜单",
+        "en_us": "Method 1: File menu"
+      },
+      "steps": [
+        {
+          "id": "menu-picker",
+          "title": {
+            "zh_cn": "从文件菜单打开文件夹",
+            "en_us": "Open the folder picker from File"
+          },
+          "body": {
+            "zh_cn": "在空项目工作区点击顶部「文件 → 打开项目」。随后在文件夹选择器中定位预设资源包的 assets/walkthroughs/canonrock。",
+            "en_us": "With no project open, choose File → Open Project. Then locate assets/walkthroughs/canonrock in the managed asset pack."
+          },
+          "signals": [
+            "project.menu.picker"
+          ],
+          "guide": {
+            "prompt": {
+              "zh_cn": "依次点击突出显示的“文件”和“打开项目”。",
+              "en_us": "Click the highlighted File menu, then Open Project."
+            },
+            "targets": [
+              "main-menu.file",
+              "main-menu.file.open-project"
+            ],
+            "requires_action": true
+          }
+        },
+        {
+          "id": "menu-ready",
+          "title": {
+            "zh_cn": "只选择 CanonRock 项目目录",
+            "en_us": "Select only the CanonRock project folder"
+          },
+          "body": {
+            "zh_cn": "在选择器中选择 canonrock 目录并确认。选择其它目录不会打开，也不会完成练习。",
+            "en_us": "Select the canonrock directory. Other folders are ignored and do not complete this practice."
+          },
+          "signals": [
+            "project.menu.ready"
+          ],
+          "guide": {
+            "prompt": {
+              "zh_cn": "在文件夹选择器里选择引导资源中的 canonrock 目录。",
+              "en_us": "Select the canonrock folder in the walkthrough assets."
+            },
+            "targets": [],
+            "requires_action": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "shortcut",
+      "title": {
+        "zh_cn": "方式二：快捷键",
+        "en_us": "Method 2: Keyboard shortcut"
+      },
+      "steps": [
+        {
+          "id": "shortcut-picker",
+          "title": {
+            "zh_cn": "按 Ctrl+O 唤出选择器",
+            "en_us": "Press Ctrl+O"
+          },
+          "body": {
+            "zh_cn": "关闭当前项目后，按 Ctrl+O 打开项目目录选择器。",
+            "en_us": "After the current project closes, press Ctrl+O to open the folder picker."
+          },
+          "signals": [
+            "project.shortcut.picker"
+          ],
+          "guide": {
+            "prompt": {
+              "zh_cn": "请按 Ctrl+O 打开项目文件夹选择器。",
+              "en_us": "Press Ctrl+O to open the project folder picker."
+            },
+            "targets": [],
+            "requires_action": true
+          }
+        },
+        {
+          "id": "shortcut-ready",
+          "title": {
+            "zh_cn": "用快捷键选择 CanonRock 目录",
+            "en_us": "Open CanonRock through the shortcut"
+          },
+          "body": {
+            "zh_cn": "仅选择预设资源包 assets/walkthroughs/canonrock 目录并确认。",
+            "en_us": "Select only assets/walkthroughs/canonrock in the managed asset pack."
+          },
+          "signals": [
+            "project.shortcut.ready"
+          ],
+          "guide": {
+            "prompt": {
+              "zh_cn": "选择引导目录中的 canonrock 项目文件夹。",
+              "en_us": "Choose the canonrock project folder in the walkthrough directory."
+            },
+            "targets": [],
+            "requires_action": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "folder-drop",
+      "title": {
+        "zh_cn": "方式三：拖入文件夹",
+        "en_us": "Method 3: Drop a folder"
+      },
+      "steps": [
+        {
+          "id": "folder-prepare",
+          "title": {
+            "zh_cn": "在系统文件管理器中找到项目文件夹",
+            "en_us": "Find the project folder in your file manager"
+          },
+          "body": {
+            "zh_cn": "在系统文件管理器中找到预设资源包 assets/walkthroughs/canonrock 的项目文件夹，确认是这个目录后点击「知道了」。",
+            "en_us": "Find the canonrock project folder under managed assets/walkthroughs in your file manager, then acknowledge this step."
+          },
+          "signals": [],
+          "guide": {
+            "prompt": {
+              "zh_cn": "在系统文件管理器中找到引导资源的 canonrock 目录，准备好后点「知道了」。",
+              "en_us": "Find the canonrock folder in your file manager, then click Got it."
+            },
+            "targets": []
+          }
+        },
+        {
+          "id": "folder-ready",
+          "title": {
+            "zh_cn": "拖到软件窗口并松开",
+            "en_us": "Drop it into the app"
+          },
+          "body": {
+            "zh_cn": "只将这个 canonrock 文件夹拖入软件。其它文件夹会被忽略。",
+            "en_us": "Drop only this canonrock folder into the app. Other folders are ignored."
+          },
+          "signals": [
+            "project.folder_drop.ready"
+          ],
+          "guide": {
+            "prompt": {
+              "zh_cn": "把引导资源中的 canonrock 文件夹拖入软件窗口。",
+              "en_us": "Drop the canonrock walkthrough folder into the app."
+            },
+            "targets": [],
+            "requires_action": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "beatmap-drop",
+      "title": {
+        "zh_cn": "方式四：拖入谱面文件",
+        "en_us": "Method 4: Drop a beatmap onto the canvas"
+      },
+      "steps": [
+        {
+          "id": "beatmap-prepare",
+          "title": {
+            "zh_cn": "找到 CanonRock 项目谱面",
+            "en_us": "Find the CanonRock beatmap"
+          },
+          "body": {
+            "zh_cn": "在引导目录 canonrock 中找到「卡农-示例谱面.mmm」，准备好后点击「知道了」。",
+            "en_us": "Find 卡农-示例谱面.mmm in the canonrock walkthrough folder, then acknowledge this step."
+          },
+          "signals": [],
+          "guide": {
+            "prompt": {
+              "zh_cn": "找到 canonrock/卡农-示例谱面.mmm，准备好后点「知道了」。",
+              "en_us": "Find canonrock/卡农-示例谱面.mmm, then click Got it."
+            },
+            "targets": []
+          }
+        },
+        {
+          "id": "beatmap-ready",
+          "title": {
+            "zh_cn": "拖到画布，打开项目并查看谱面",
+            "en_us": "Drop onto the canvas to open and view it"
+          },
+          "body": {
+            "zh_cn": "只把这份 .mmm 文件拖到欢迎画布或谱面画布；项目目录与谱面成功打开后才算完成。",
+            "en_us": "Drop only this .mmm file onto the welcome or beatmap canvas. Completion requires the project and beatmap to open."
+          },
+          "signals": [
+            "project.beatmap_drop.ready"
+          ],
+          "guide": {
+            "prompt": {
+              "zh_cn": "将引导目录的「卡农-示例谱面.mmm」拖到画布。",
+              "en_us": "Drop the walkthrough beatmap file onto the canvas."
+            },
+            "targets": [],
+            "requires_action": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "package-drop",
+      "title": {
+        "zh_cn": "方式五：临时只读打开谱包",
+        "en_us": "Method 5: Preview a package read-only"
+      },
+      "steps": [
+        {
+          "id": "package-prepare",
+          "title": {
+            "zh_cn": "找到 CanonRock 谱包",
+            "en_us": "Find the CanonRock package"
+          },
+          "body": {
+            "zh_cn": "在同一引导目录找到 canonrock.zip，准备好后点击「知道了」。",
+            "en_us": "Find canonrock.zip in the same walkthrough folder, then acknowledge this step."
+          },
+          "signals": [],
+          "guide": {
+            "prompt": {
+              "zh_cn": "找到引导目录中的 canonrock.zip，准备好后点「知道了」。",
+              "en_us": "Find canonrock.zip in the walkthrough folder, then click Got it."
+            },
+            "targets": []
+          }
+        },
+        {
+          "id": "package-ready",
+          "title": {
+            "zh_cn": "拖入软件，以临时只读方式查看",
+            "en_us": "Drop into the app for a temporary read-only preview"
+          },
+          "body": {
+            "zh_cn": "只将 canonrock.zip 拖入软件，以临时只读方式打开。其它谱包会被忽略。",
+            "en_us": "Drop only canonrock.zip into the app to open a temporary read-only project. Other packages are ignored."
+          },
+          "signals": [
+            "project.package_drop.ready"
+          ],
+          "guide": {
+            "prompt": {
+              "zh_cn": "将引导目录中的 canonrock.zip 拖入软件。",
+              "en_us": "Drop the canonrock.zip walkthrough package into the app."
+            },
+            "targets": [],
+            "requires_action": true
+          }
+        }
+      ]
+    }
+  ]
+}
