@@ -1,7 +1,10 @@
 #include "canvas/AnnotationTargetHint.h"
+#include "canvas/ComposeLessonHintGeometry.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace
@@ -14,6 +17,137 @@ namespace
 bool near(float lhs, float rhs)
 {
     return std::abs(lhs - rhs) < 1e-4F;
+}
+
+/// @brief 检查折线节点是否位于连续提示轮廓内部。
+/// @param point 待检查的参考 Note 中心。
+/// @param polygon 顺时针提示轮廓。
+/// @return 节点落在轮廓内时返回 true。
+/// @details 用射线奇偶性确认目标中心真正落在填充区域，
+/// 不能只检查外包矩形：后者无法识别轮廓被错误拆成多个断块。
+bool insidePolygon(MMM::Canvas::ComposeLessonHintPoint                  point,
+                   std::span<const MMM::Canvas::ComposeLessonHintPoint> polygon)
+{
+    // 射线从待测点向右延伸；每穿过一条边就翻转一次内外状态。
+    // 水平边不满足 Y 跨越条件，避免在节点处重复计数。
+    bool inside = false;
+    for ( std::size_t index = 0, previous = polygon.size() - 1;
+          index < polygon.size();
+          previous = index++ ) {
+        const auto& a = polygon[index];
+        const auto& b = polygon[previous];
+        // 除法只在边的两端位于点的不同 Y 侧时执行，因此分母非零。
+        // 参考 Note 位于外环内部是合并框的最基本可见性要求。
+        if ( (a.y > point.y) != (b.y > point.y) &&
+             point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x )
+            inside = !inside;
+    }
+    return inside;
+}
+
+/// @brief 验证折线目标只生成一个可填充的顺时针轮廓。
+/// @return 横竖连接和拐角均包住参考节点且没有分离边框时返回 true。
+/// @details 使用足够长的转折段隔离普通 L 型连接的边界逻辑，
+/// 再由短折返用例单独覆盖矩形大面积重叠的情况。
+bool testComposePolylineHintIsContinuous()
+{
+    using MMM::Canvas::ComposeLessonHintPoint;
+    // 混合水平和竖直段覆盖折线头、拐角及尾端的 Note 留白。
+    // 轨道与时间已被简化为像素，测试只关注外环构造本身。
+    const std::vector<ComposeLessonHintPoint> path{
+        { 40.0F, 30.0F },
+        { 140.0F, 30.0F },
+        { 140.0F, 130.0F },
+        { 240.0F, 130.0F },
+    };
+    const auto polygon =
+        MMM::Canvas::buildComposeLessonHintPolygon(path, 20.0F, 10.0F);
+    // 只返回一条外边界；拐角数量由相邻矩形的并集决定。
+    if ( polygon.size() < 4 ) return false;
+    // 任一节点落在框外时，玩家会看到与草稿区对应不上位置的高亮。
+    for ( const auto& point : path )
+        if ( !insidePolygon(point, polygon) ) return false;
+    double area = 0.0;
+    // 屏幕 Y 轴向下，正面积对应 ImGui 凹多边形所需的顺时针顶点。
+    // 如果顶点反向，填充器可能生成错误的三角形。
+    for ( std::size_t index = 0; index < polygon.size(); ++index ) {
+        const auto& a = polygon[index];
+        const auto& b = polygon[(index + 1) % polygon.size()];
+        area += static_cast<double>(a.x) * b.y - static_cast<double>(a.y) * b.x;
+    }
+    return area > 0.0;
+}
+
+/// @brief 验证密集折返仍生成一个没有自交的提示轮廓。
+/// @return 短 Hold 与横向 Flick 交替时全部节点均位于单个轮廓内。
+/// @details 数值比例模拟相邻轨中心间距大于短 Hold 时间距离，
+/// 即截图中最容易让逐段偏移轮廓互相穿过的组合。
+bool testComposePolylineHintHandlesShortSwitchbacks()
+{
+    using MMM::Canvas::ComposeLessonHintPoint;
+    // CanonRock 进阶段落包含短于 Note 宽度的连续折返；简单法线扩张
+    // 会在这里形成自交，矩形并集的外环必须保持有效。
+    // 路径多次返回先前轨道，不能用单调 X 或单调 Y 假设简化。
+    const std::vector<ComposeLessonHintPoint> path{
+        { 100.0F, 0.0F },  { 100.0F, 20.0F }, { 250.0F, 20.0F },
+        { 250.0F, 40.0F }, { 100.0F, 40.0F }, { 100.0F, 60.0F },
+        { 250.0F, 60.0F }, { 250.0F, 80.0F },
+    };
+    const auto polygon =
+        MMM::Canvas::buildComposeLessonHintPolygon(path, 60.0F, 15.0F);
+    // 宽度比短竖段更大，必须检验重叠后的外轮廓而非各段独立框。
+    // 这个比例还覆盖了画布较窄时玩家轨道与 Note 纹理尺寸接近的情况。
+    if ( polygon.size() < 4 ) return false;
+    for ( const auto& point : path )
+        if ( !insidePolygon(point, polygon) ) return false;
+    // 非相邻边不得发生严格交叉，保证 ImGui 的凹多边形填充可用。
+    // 相邻边共享顶点是允许的，首尾边也视作相邻，不计作自交。
+    const auto cross = [](const ComposeLessonHintPoint& a,
+                          const ComposeLessonHintPoint& b,
+                          const ComposeLessonHintPoint& c) {
+        return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    };
+    for ( std::size_t first = 0; first < polygon.size(); ++first ) {
+        // 逐边比较足够小的教学轮廓，避免测试依赖外部几何库。
+        const auto& a = polygon[first];
+        const auto& b = polygon[(first + 1) % polygon.size()];
+        for ( std::size_t second = first + 2; second < polygon.size();
+              ++second ) {
+            if ( first == 0 && second + 1 == polygon.size() ) continue;
+            const auto& c = polygon[second];
+            const auto& d = polygon[(second + 1) % polygon.size()];
+            // 两对端点分别位于对方线段两侧才是严格相交。
+            // 共线但不重叠的边不会被误报，轮廓凹陷仍可存在。
+            if ( cross(a, b, c) * cross(a, b, d) < 0.0F &&
+                 cross(c, d, a) * cross(c, d, b) < 0.0F )
+                return false;
+        }
+    }
+    return true;
+}
+
+/// @brief 验证重复折线节点不会造成零长度边或丢失单点参考。
+/// @return 相邻重合点合并后仍得到有效轮廓。
+/// @details Flick 末端与下一子段起点可能同轨同拍，
+/// 零长段必须合并，同时退化为单点时还要保留完整 Note 占地。
+bool testComposePolylineHintDeduplicatesPoints()
+{
+    using MMM::Canvas::ComposeLessonHintPoint;
+    const std::vector<ComposeLessonHintPoint> repeated{
+        // 第二个节点有意与首节点重合，检查后续有效连接不会消失。
+        { 20.0F, 30.0F },
+        { 20.0F, 30.0F },
+        { 80.0F, 30.0F },
+    };
+    const auto polygon =
+        MMM::Canvas::buildComposeLessonHintPolygon(repeated, 10.0F, 6.0F);
+    const std::vector<ComposeLessonHintPoint> single{ { 20.0F, 30.0F } };
+    // 单点目标仍然使用 Note 半宽和半高，而非绘制零面积路径。
+    const auto singlePolygon =
+        MMM::Canvas::buildComposeLessonHintPolygon(single, 10.0F, 6.0F);
+    return polygon.size() == 4 && singlePolygon.size() == 4 &&
+           near(singlePolygon.front().x, 10.0F) &&
+           near(singlePolygon.front().y, 24.0F);
 }
 
 /// @brief 验证时间戳批注不会误高亮普通悬浮物件。
@@ -251,7 +385,10 @@ int main()
     // 独立覆盖无目标、折线节点、自动采样、实体复用、草稿轨和越界轨道。
     // 任一规则回归都会使测试进程返回非零，供 CTest 或直接执行捕获。
     // 测试仅构造轻量渲染数据，不依赖 EditorEngine 或图形设备初始化。
-    return testTimestampAnnotationHasNoTargetHint() &&
+    return testComposePolylineHintIsContinuous() &&
+                   testComposePolylineHintHandlesShortSwitchbacks() &&
+                   testComposePolylineHintDeduplicatesPoints() &&
+                   testTimestampAnnotationHasNoTargetHint() &&
                    testPolylineSubTargetUsesMatchingHitboxes() &&
                    testAudioSampleTargetMergesVisibleParts() &&
                    testMissingTargetHasNoHint() &&

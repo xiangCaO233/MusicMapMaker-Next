@@ -23,6 +23,13 @@ void renderAnnotationTargetHint(
     float canvasWidth, float canvasHeight,
     AnnotationTargetHintStyle style = AnnotationTargetHintStyle::Accent);
 
+/// @brief 用与普通批注框相同的颜色和描边绘制整条折线的连续轮廓。
+/// @param polygon 顺时针画布局部坐标顶点，不包含画布原点偏移。
+/// @warning UI 热路径：只提交当前教学折线的已投影多边形。
+void renderAnnotationTargetPolygonHint(std::span<const ImVec2> polygon,
+                                       ImVec2 canvasPosition, float canvasWidth,
+                                       float canvasHeight);
+
 /// @brief 批注目标提示框在画布局部坐标中的边界。
 struct AnnotationTargetHintBounds {
     /// @brief 左边界。

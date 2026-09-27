@@ -30,9 +30,11 @@
 #include "canvas/CollaborationPeerColor.h"
 #include "canvas/CollaborationViewportProjection.h"
 #include "canvas/ComposeHoldTarget.h"
+#include "canvas/ComposeLessonHintGeometry.h"
 #include "canvas/ComposeTargetEligibility.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
+#include "config/skin/SkinConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "event/canvas/interactive/ResizeEvent.h"
 #include "event/core/EventBus.h"
@@ -42,6 +44,7 @@
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "logic/ecs/system/render/SkinTextureScale.h"
 #include "logic/session/CanvasCamera.h"
 #include "network/collaboration/CollaborationRoom.h"
 #include "ui/UIManager.h"
@@ -58,6 +61,7 @@
 #include <limits>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace MMM::Canvas
 {
@@ -726,44 +730,357 @@ bool Basic2DCanvas::updateComposeLessonHints(
         return false;
 
     // 缺少的参考物件按与主画布 Note 相同的轨道中心、时间映射和纹理尺寸
-    // 绘制；Hold 和折线节点分别给出可操作的完整时间/轨道范围。
-    const auto drawExpected =
-        [&](int track, double time, double duration, int dtrack) {
-            if ( track < 0 || track >= snapshot.trackCount ) return;
-            // Flick 的方向可能指向轨道域外；边框只能落在可编辑玩家域。
-            // 有效谱面目标通常已在域内，裁剪只是容错而非验收规则。
-            const int endTrack =
-                std::clamp(track + dtrack, 0, snapshot.trackCount - 1);
-            const float laneWidth = projection.player.singleTrackWidth;
-            const float x = projection.player.leftX +
-                            (static_cast<float>(track) + 0.5F) * laneWidth;
-            const float endX =
-                projection.player.leftX +
-                (static_cast<float>(endTrack) + 0.5F) * laneWidth;
-            // 当前时间不一定在正中；用同一 Scroll/Jump/HS 映射投影
-            // 起止点后再合并范围，正反滚速都不会令矩形上下颠倒。
-            const float y =
-                collaborationTimeToCanvasY(snapshot, time, canvasSize.y);
-            const float endY = collaborationTimeToCanvasY(
-                snapshot, time + std::max(0.0, duration), canvasSize.y);
-            const float halfWidth  = snapshot.playerNoteWidth * 0.5F + 5.0F;
-            const float halfHeight = snapshot.playerNoteHeight * 0.5F + 5.0F;
-            // 五像素留白与普通批注提示一致；视觉尺寸从真实 Note 快照取值。
-            // 对长条和滑键只扩张外包范围，不改变编辑器的真实命中区域。
-            AnnotationTargetHintBounds bounds{
-                std::min(x, endX) - halfWidth,
-                std::min(y, endY) - halfHeight,
-                std::max(x, endX) + halfWidth,
-                std::max(y, endY) + halfHeight,
-            };
-            // 当前段落可能比视口高很多，离屏目标不进入 ImGui 绘制列表。
-            // 屏幕滚动后逐帧重投影，自然出现对应的目标框。
-            if ( bounds.right < 0.0F || bounds.left > canvasSize.x ||
-                 bounds.bottom < 0.0F || bounds.top > canvasSize.y )
-                return;
-            renderAnnotationTargetHint(
-                bounds, canvasScreenPosition, canvasSize.x, canvasSize.y);
+    // 投影；提示轮廓里的淡色 Note 让目标类型和精确落点一眼可辨。
+    // 玩家轨中心仍取统一布局投影，不能按窗口宽度平均分布；自定义
+    // 草稿/BGM 区占比和中键平移都会改变当前玩家区的真实起点。
+    // 时间投影也使用现有协作可视映射，避免框与 Vulkan Note 漂移。
+    const float laneWidth = projection.player.singleTrackWidth;
+    const auto  trackX    = [&](int track) {
+        return projection.player.leftX +
+               (static_cast<float>(track) + 0.5F) * laneWidth;
+    };
+    const auto timeY = [&](double time) {
+        return collaborationTimeToCanvasY(snapshot, time, canvasSize.y);
+    };
+    const float halfWidth  = snapshot.playerNoteWidth * 0.5F + 5.0F;
+    const float halfHeight = snapshot.playerNoteHeight * 0.5F + 5.0F;
+    // 教学目标仍是一张真实谱面的观察层，而不是另一个临时 Note 实体。
+    // 若直接复制 Note 到会话，会进入保存、拾取和判定等正常逻辑。
+    // 因此只借用画布已经上传的皮肤图集，目标本身保持无持久状态。
+    // 此处的尺寸与 NoteRenderSystem 使用同一份 RenderSnapshot。
+    // 用户在教学中调整轨宽时，下一帧会按新投影重新计算目标尺寸。
+    // 图集 TextureID 也与渲染器一致，不按皮肤文件路径猜测类型。
+    using Common::Render::TextureID;
+    using Logic::NoteColorSlot;
+    const auto& uvMap = snapshot.uvMap;
+    const auto  base  = uvMap.find(static_cast<std::uint32_t>(TextureID::Note));
+    // 图集重载期间可以暂时没有 Note；此时仍绘制目标框，下一帧再恢复贴图。
+    // 图集对象持有当前 Vulkan 纹理，不能把上一代 ImTextureID 缓存在教程里。
+    // 皮肤热重载可能换掉描述符，逐帧取当前句柄才能跟随切换。
+    // 此查询只命中已构建资源，不在 UI 热路径读取皮肤文件。
+    // 图集不可用时只省略内部预览，不影响教学目标和错误提示的交互。
+    const ImTextureID atlasTexture = m_textureAtlas && base != uvMap.end()
+                                         ? m_textureAtlas->getImTextureID()
+                                         : ImTextureID{};
+    const TextureID   headTexture =
+        uvMap.contains(static_cast<std::uint32_t>(TextureID::HoldHead))
+            ? TextureID::HoldHead
+            : TextureID::Note;
+    // 头部可选是皮肤协议的一部分，普通 Note 是旧皮肤的兼容回退。
+    // 必须在求尺寸之前确定最终纹理，否则头部与真实物件宽高不同。
+    // Hold、Flick 和 Polyline 均共享这个选择；Tap 始终使用 Note。
+    const auto& visual = Config::AppConfig::instance().getVisualConfig();
+    auto&       skin   = Config::SkinManager::instance();
+    std::array<ImU32, Logic::NOTE_COLOR_SLOT_COUNT> ghostTint{};
+    // 与真实 Note 使用同一配色槽；约四分之一透明度比普通画笔的
+    // 二分之一透明度更淡，皮肤自身带透明度时也按相同比例衰减。
+    // 颜色是皮肤纹理的乘色，而非统一的蓝白占位色。
+    // 若用户启用了配色方案覆盖，应使用覆盖后的玩家轨颜色。
+    // 草稿区参考物件的配色仍由草稿渲染器自己负责。
+    // 这些颜色只影响教学预览，不修改实际 Note 的颜色字段。
+    static const std::array<std::string, Logic::NOTE_COLOR_SLOT_COUNT>
+        COLOR_KEYS{ "note_tap", "note_head",        "note_hold",
+                    "note_end", "note_flick_arrow", "note_node" };
+    // 槽位顺序跟 NoteColorSlot 一致，不与 TextureID 的顺序混用。
+    // 颜色键静态保存，避免当前段落每帧为每个键重新分配字符串。
+    // 皮肤允许单独配置长条头尾，老皮肤则从 Hold 色回退。
+    // 显式设置的全透明头尾色仍然有效，不能按 alpha 为零推断缺键。
+    // 此处只处理玩家轨默认色，物件自身颜色覆盖留给真实谱面渲染。
+    for ( std::size_t slot = 0; slot < ghostTint.size(); ++slot ) {
+        const auto& key = COLOR_KEYS[slot];
+        const auto& fallbackKey =
+            (slot == static_cast<std::size_t>(NoteColorSlot::Head) ||
+             slot == static_cast<std::size_t>(NoteColorSlot::End)) &&
+                    !skin.getData().colors.contains(key)
+                ? COLOR_KEYS[static_cast<std::size_t>(NoteColorSlot::Hold)]
+                : key;
+        const auto color = skin.getColor(fallbackKey);
+        const auto rgba =
+            visual.overrideNoteColors
+                ? visual.noteColors[slot]
+                : std::array<float, 4>{ color.r, color.g, color.b, color.a };
+        // 图集本身仍保留贴图内部渐变、透明边缘及箭头方向。
+        // 只衰减最终顶点 alpha，避免把有透明洞的图形变成实心框。
+        // 配色方案 alpha 与教学 alpha 相乘，使用户的皮肤透明度有效。
+        ghostTint[slot] = ImGui::ColorConvertFloat4ToU32(
+            { rgba[0], rgba[1], rgba[2], rgba[3] * 0.24F });
+    }
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    /// @brief 按原始 Note 的图集 UV 比例取得皮肤部件大小。
+    /// @param texture 已加载到当前画布图集中的皮肤部件 ID。
+    /// @return 未找到部件时保留基础 Note 尺寸，绘制入口再跳过缺纹理。
+    /// @note 图集 UV 的宽高比例对应部件原始像素宽高比例。
+    /// @note Note 基准由逻辑快照提供，不从窗口像素重新反推 noteScale。
+    /// @warning UI 热路径：只查询两次已发布的 UV，不读取纹理文件。
+    const auto partSize = [&](TextureID texture) {
+        glm::vec2  size{ snapshot.playerNoteWidth, snapshot.playerNoteHeight };
+        const auto part = uvMap.find(static_cast<std::uint32_t>(texture));
+        if ( base != uvMap.end() && part != uvMap.end() &&
+             base->second.z > 0.0F && base->second.w > 0.0F ) {
+            // 真实渲染器也以 Note 的图集比例换算头部、尾部和节点。
+            // 横纵比例分别计算，宽图箭头不能被错误压成普通 Note。
+            size *= glm::vec2(part->second.z / base->second.z,
+                              part->second.w / base->second.w);
+        }
+        return size;
+    };
+    /// @brief 用真实图集子纹理绘制淡色目标贴片，填充模式与编辑器一致。
+    /// @param texture 皮肤部件纹理；缺图集记录时此帧跳过。
+    /// @param slot 与真实部件对应的配色槽位。
+    /// @param x 玩家轨道中心的画布局部横坐标。
+    /// @param y 谱面时间投影后的画布局部纵坐标。
+    /// @param width 来自 Note 基准或连接体真实轨差的宽度。
+    /// @param height 来自 Note 基准或持续时间投影的高度。
+    /// @param isBody 主体只按伸缩方向使用纹理倍率，不套用端点填充模式。
+    /// @note 普通 Note 和节点经填充策略调整后仍围绕原中心放置。
+    /// @note 此处仅改变视觉，不扩大教学命中范围和物件验收容差。
+    /// @warning UI 热路径：一次绘制只追加一个 ImGui 图元，不创建资源。
+    const auto drawPart = [&](TextureID     texture,
+                              NoteColorSlot slot,
+                              float         x,
+                              float         y,
+                              float         width,
+                              float         height,
+                              bool          isBody = false) {
+        if ( atlasTexture == ImTextureID{} || width <= 0.0F || height <= 0.0F )
+            return;
+        // 若某个皮肤缺少可选部件，批注目标仍在，但不画错误的替代矩形。
+        // 根纹理若缺失已由上方判断，局部纹理缺失仅影响该局部贴片。
+        const auto uv = uvMap.find(static_cast<std::uint32_t>(texture));
+        if ( uv == uvMap.end() || uv->second.z <= 0.0F || uv->second.w <= 0.0F )
+            return;
+        // 固定贴片双轴缩放；横向主体只改变厚度，竖向主体只改变宽度。
+        // 身体的时间长度和两轨跨度由谱面数据决定，不属于皮肤倍率。
+        // 这与 Batcher::pushUVQuad 对两类主体的特殊缩放分支一致。
+        const float scale = Logic::System::skinTextureScale(texture);
+        width *= texture == TextureID::HoldBodyHorizontal ? 1.0F : scale;
+        height *= texture == TextureID::HoldBodyVertical ? 1.0F : scale;
+        float u0 = uv->second.x;
+        float v0 = uv->second.y;
+        float u1 = u0 + uv->second.z;
+        float v1 = v0 + uv->second.w;
+        // 主体沿时间或轨差拉伸，端点则遵循 Note 填充策略。
+        // AspectFit 缩小一条绘制轴，保留贴图全部 UV 与透明边缘。
+        // AspectFill 保持物件目标框，改为中心裁取所需的纹理区域。
+        // Center 对仅传宽高比的 Note 与 Stretch 几何相同。
+        // 宽高始终正值，因此比例换算无需另设退化图元路径。
+        if ( !isBody &&
+             visual.noteFillMode != Config::BackgroundFillMode::Stretch ) {
+            const float textureAspect = uv->second.z / uv->second.w;
+            const float viewAspect    = width / height;
+            if ( visual.noteFillMode ==
+                 Config::BackgroundFillMode::AspectFit ) {
+                if ( textureAspect > viewAspect )
+                    height = width / textureAspect;
+                else
+                    width = height * textureAspect;
+            } else if ( visual.noteFillMode ==
+                        Config::BackgroundFillMode::AspectFill ) {
+                if ( textureAspect > viewAspect ) {
+                    const float shown = viewAspect / textureAspect;
+                    u0 += uv->second.z * (1.0F - shown) * 0.5F;
+                    u1 = u0 + uv->second.z * shown;
+                } else {
+                    const float shown = textureAspect / viewAspect;
+                    v0 += uv->second.w * (1.0F - shown) * 0.5F;
+                    v1 = v0 + uv->second.w * shown;
+                }
+            }
+        }
+        // 半像素内缩沿用 Vulkan 自由四边形采样规则，避免图集串色。
+        // 连接体需做这一步，因为绘制器的自由四边形也会内缩采样。
+        // 固定贴片使用 pushFilledQuad 的完整 UV，不在这里缩进边缘。
+        if ( isBody ) {
+            constexpr float HALF_TEXEL = 0.5F / 2048.0F;
+            u0 += HALF_TEXEL;
+            v0 += HALF_TEXEL;
+            u1 -= HALF_TEXEL;
+            v1 -= HALF_TEXEL;
+        }
+        drawList->AddImage(atlasTexture,
+                           { canvasScreenPosition.x + x - width * 0.5F,
+                             canvasScreenPosition.y + y - height * 0.5F },
+                           { canvasScreenPosition.x + x + width * 0.5F,
+                             canvasScreenPosition.y + y + height * 0.5F },
+                           { u0, v0 },
+                           { u1, v1 },
+                           ghostTint[static_cast<std::size_t>(slot)]);
+        // DrawList 的图片坐标是左上到右下；中心由同一轨道和时间投影提供。
+        // Vulkan Note 使用底边坐标，转换后两者仍落在同一个中心点。
+    };
+    /// @brief 沿两个时间端点绘制长条皮肤纹理，并保留纹理的起止方向。
+    /// @param x 轨道中心，使用主体纹理的独立横向倍率。
+    /// @param startY 起始时间的画布局部坐标。
+    /// @param endY 结束时间的画布局部坐标，允许处于起点下方。
+    /// @note 反向 Scroll 时两端次序会倒转，普通 AddImage 矩形会把纹理翻面。
+    /// @note 与真实 Note 的 pushFreeQuad 相同，起点采样主体 UV 的下沿。
+    /// @note 起止位置都来自时间投影，不用持续秒数直接换算像素。
+    /// @note 图集暂不可用时只缺席一帧，外层批注框仍说明目标范围。
+    /// @warning UI 热路径：只向当前 DrawList 追加固定四个顶点。
+    const auto drawVerticalBody = [&](float x, float startY, float endY) {
+        const auto uv =
+            uvMap.find(static_cast<std::uint32_t>(TextureID::HoldBodyVertical));
+        if ( atlasTexture == ImTextureID{} || uv == uvMap.end() ||
+             std::abs(endY - startY) <= 0.0001F )
+            return;
+        // 零长主体不提交退化四边形，但头尾仍由普通贴片绘制。
+        // 负向滚动允许 endY 大于 startY，不能直接对两端排序。
+        // 主体仅横向缩放：Y 跨度表示谱面时间，不能乘皮肤纹理倍率。
+        // 宽度按主体与 Note 的 UV 比例计算，与实际渲染器共享基准尺寸。
+        const float halfBody =
+            partSize(TextureID::HoldBodyVertical).x *
+            Logic::System::skinTextureScale(TextureID::HoldBodyVertical) * 0.5F;
+        // 自由四边形沿用图集半像素内缩，尤其短连接体不能采到邻近贴片。
+        constexpr float HALF_TEXEL = 0.5F / 2048.0F;
+        const float     u0         = uv->second.x + HALF_TEXEL;
+        const float     v0         = uv->second.y + HALF_TEXEL;
+        const float     u1         = uv->second.x + uv->second.z - HALF_TEXEL;
+        const float     v1         = uv->second.y + uv->second.w - HALF_TEXEL;
+        // ImGui 四角参数按传入次序与 UV 逐一配对。
+        // 起点两角采样下沿，终点两角采样上沿，保持皮肤渐变方向。
+        // 若按屏幕上下排序，反向 Scroll 时会把长条纹理倒过来。
+        drawList->AddImageQuad(
+            atlasTexture,
+            { canvasScreenPosition.x + x - halfBody,
+              canvasScreenPosition.y + startY },
+            { canvasScreenPosition.x + x + halfBody,
+              canvasScreenPosition.y + startY },
+            { canvasScreenPosition.x + x + halfBody,
+              canvasScreenPosition.y + endY },
+            { canvasScreenPosition.x + x - halfBody,
+              canvasScreenPosition.y + endY },
+            { u0, v1 },
+            { u1, v1 },
+            { u1, v0 },
+            { u0, v0 },
+            ghostTint[static_cast<std::size_t>(NoteColorSlot::Hold)]);
+    };
+    /// @brief 根据真实 Note 分段纹理绘制普通教学目标。
+    /// @param type 与普通渲染器相同的 Note 结构类型。
+    /// @param track 主轨道头部零基编号。
+    /// @param time 物件起点秒数。
+    /// @param duration 仅 Hold 使用的持续时间。
+    /// @param dtrack 仅 Flick 使用的有向轨差。
+    /// @note 部件次序依照真实渲染器：先身体，再头部与末端装饰。
+    /// @note 引导轮廓在此函数外最后绘制，保持轮廓位于淡色纹理上层。
+    /// @warning UI 热路径：固定数量的图集贴片，仅操作当前可见目标。
+    const auto drawGhost = [&](::MMM::NoteType type,
+                               int             track,
+                               double          time,
+                               double          duration,
+                               int             dtrack) {
+        if ( track < 0 || track >= snapshot.trackCount ) return;
+        const float x = trackX(track);
+        const float y = timeY(time);
+        drawList->PushClipRect(canvasScreenPosition,
+                               { canvasScreenPosition.x + canvasSize.x,
+                                 canvasScreenPosition.y + canvasSize.y },
+                               true);
+        // ImGui 的裁剪只限制屏幕绘制，不改变下面的本地谱面坐标。
+        // Flick 箭头越过当前轨道时也不能覆盖相邻 Dock 窗口。
+        if ( type == ::MMM::NoteType::HOLD ) {
+            // Hold 尾部是独立贴片，不把身体最末像素拉伸成尾线。
+            // 三段使用各自皮肤比例和配色，与主画布保持同一结构。
+            if ( duration > 0.0 ) {
+                drawVerticalBody(x, y, timeY(time + duration));
+            }
+            const auto head = partSize(headTexture);
+            const auto end  = partSize(TextureID::HoldEnd);
+            drawPart(headTexture, NoteColorSlot::Head, x, y, head.x, head.y);
+            drawPart(TextureID::HoldEnd,
+                     NoteColorSlot::End,
+                     x,
+                     timeY(time + duration),
+                     end.x,
+                     end.y);
+        } else if ( type == ::MMM::NoteType::FLICK ) {
+            // 横段宽度只由两轨中心的距离决定，皮肤倍率只影响厚度。
+            // 有向轨差决定左右箭头资源，不翻转同一张贴图。
+            if ( dtrack != 0 ) {
+                const int endTrack =
+                    std::clamp(track + dtrack, 0, snapshot.trackCount - 1);
+                const float endX = trackX(endTrack);
+                drawPart(TextureID::HoldBodyHorizontal,
+                         NoteColorSlot::Hold,
+                         (x + endX) * 0.5F,
+                         y,
+                         std::abs(endX - x),
+                         partSize(TextureID::HoldBodyHorizontal).y,
+                         true);
+                const auto head = partSize(headTexture);
+                drawPart(
+                    headTexture, NoteColorSlot::Head, x, y, head.x, head.y);
+                const auto arrow     = dtrack < 0 ? TextureID::FlickArrowLeft
+                                                  : TextureID::FlickArrowRight;
+                const auto arrowSize = partSize(arrow);
+                // 箭头使用到达轨中心，起始轨只提供横向主体起点。
+                // 不同轨宽区域的箭头也需与目的轨居中对齐。
+                drawPart(arrow,
+                         NoteColorSlot::FlickArrow,
+                         endX,
+                         y,
+                         arrowSize.x,
+                         arrowSize.y);
+            } else {
+                // 零轨差仍显示起始头部，不生成退化箭头。
+                const auto head = partSize(headTexture);
+                drawPart(
+                    headTexture, NoteColorSlot::Head, x, y, head.x, head.y);
+            }
+        } else {
+            // 普通单键直接采样 Note，不继承 HoldHead 的颜色或尺寸。
+            drawPart(TextureID::Note,
+                     NoteColorSlot::Tap,
+                     x,
+                     y,
+                     snapshot.playerNoteWidth,
+                     snapshot.playerNoteHeight);
+        }
+        drawList->PopClipRect();
+        // 匹配与删除仍由已有逻辑完成，绘制层不更新反馈状态。
+    };
+    /// @brief 为单个非折线目标绘制完整范围、淡色 Note 与批注框。
+    /// @param type 单键、长条或滑键类型。
+    /// @param track 目标头部所在玩家轨。
+    /// @param time 目标起始时间。
+    /// @param duration 长条的持续时间。
+    /// @param dtrack 滑键的目标轨道差。
+    /// @details 外框覆盖实际物件加五像素留白；内部预览只画实际尺寸。
+    /// 缺失目标离屏时直接返回，滚动回该段后下一帧自动重新投影。
+    /// @warning UI 热路径：只处理当前段落尚未匹配的参考物件。
+    const auto drawExpected = [&](::MMM::NoteType type,
+                                  int             track,
+                                  double          time,
+                                  double          duration,
+                                  int             dtrack) {
+        if ( track < 0 || track >= snapshot.trackCount ) return;
+        // Flick 的方向可能指向轨道域外；边框只能落在可编辑玩家域。
+        // 有效谱面目标通常已在域内，裁剪只是容错而非验收规则。
+        const int endTrack =
+            std::clamp(track + dtrack, 0, snapshot.trackCount - 1);
+        const float x    = trackX(track);
+        const float endX = trackX(endTrack);
+        // 当前时间不一定在正中；用同一 Scroll/Jump/HS 映射投影
+        // 起止点后再合并范围，正反滚速都不会令矩形上下颠倒。
+        const float y    = timeY(time);
+        const float endY = timeY(time + std::max(0.0, duration));
+        // 五像素留白与普通批注提示一致；视觉尺寸从真实 Note 快照取值。
+        // 对长条和滑键只扩张外包范围，不改变编辑器的真实命中区域。
+        AnnotationTargetHintBounds bounds{
+            std::min(x, endX) - halfWidth,
+            std::min(y, endY) - halfHeight,
+            std::max(x, endX) + halfWidth,
+            std::max(y, endY) + halfHeight,
         };
+        // 当前段落可能比视口高很多，离屏目标不进入 ImGui 绘制列表。
+        // 屏幕滚动后逐帧重投影，自然出现对应的目标框。
+        if ( bounds.right < 0.0F || bounds.left > canvasSize.x ||
+             bounds.bottom < 0.0F || bounds.top > canvasSize.y )
+            return;
+        drawGhost(type, track, time, duration, dtrack);
+        renderAnnotationTargetHint(
+            bounds, canvasScreenPosition, canvasSize.x, canvasSize.y);
+    };
     // 目标顺序沿用资源包中的草稿顺序，不对 UI 帧做排序或格式转换。
     // 同位置重叠目标由匹配标记逐个消费，未完成数量仍准确。
     for ( std::size_t index = 0; index < feedback->lesson->m_reference.size();
@@ -772,11 +1089,211 @@ bool Basic2DCanvas::updateComposeLessonHints(
              feedback->expectedMatched[index] )
             continue;
         const auto& note = feedback->lesson->m_reference[index];
-        drawExpected(note.track, note.timestamp, note.duration, note.dtrack);
-        // Polyline 子段是独立可操作部位；只框父头会隐藏后续拐点。
-        // 每段按自己的时间、轨道与拖尾方向单独投影。
-        for ( const auto& sub : note.subNotes )
-            drawExpected(sub.track, sub.timestamp, sub.duration, sub.dtrack);
+        if ( note.type != ::MMM::NoteType::POLYLINE || note.subNotes.empty() ) {
+            // 空子段的异常折线仍按根节点给一个落点，不让教程静默失焦。
+            // 普通物件保持原有独立提示框，避免同拍多个单键被错误合并。
+            drawExpected(note.type,
+                         note.track,
+                         note.timestamp,
+                         note.duration,
+                         note.dtrack);
+            continue;
+        }
+        // 折线由有序子段构成：节点之间、Hold 身体及 Flick 末端共用
+        // 一条路径，只在路径外围绘制一次完整轮廓，不再逐段叠加矩形。
+        std::vector<ComposeLessonHintPoint> path;
+        path.reserve(note.subNotes.size() * 2);
+        // 根折线的位置不是所有拐角的替代品；真实可操作节点在 subNotes。
+        // Hold 追加尾端，Flick 追加横移端，这些都是轮廓必须包住的部位。
+        // 不对节点排序，保留谱面里的连接顺序才能显示真实运动路径。
+        for ( const auto& sub : note.subNotes ) {
+            if ( sub.track < 0 || sub.track >= snapshot.trackCount ) continue;
+            path.push_back({ trackX(sub.track), timeY(sub.timestamp) });
+            if ( sub.type == ::MMM::NoteType::HOLD && sub.duration > 0.0 )
+                path.push_back(
+                    { trackX(sub.track), timeY(sub.timestamp + sub.duration) });
+            if ( sub.type == ::MMM::NoteType::FLICK && sub.dtrack != 0 )
+                // 越界方向同普通目标一样收敛到玩家区，保持前景层安全。
+                path.push_back(
+                    { trackX(std::clamp(
+                          sub.track + sub.dtrack, 0, snapshot.trackCount - 1)),
+                      timeY(sub.timestamp) });
+        }
+        const auto polygon =
+            buildComposeLessonHintPolygon(path, halfWidth, halfHeight);
+        // 密集折返的框不能由逐节点矩形叠加，否则内部会留下许多黑边。
+        // 几何 helper 返回这些范围的单个外环，批注绘制器只描一次边。
+        // 轮廓不参与命中或教学验收，实际 Note 仍由原有逻辑独立检查。
+        // 生成失败时宁可跳过本帧提示，也不提交不闭合的多边形顶点。
+        if ( polygon.empty() ) continue;
+        // 离屏目标不进入绘制列表；可见时将局部坐标一次转换给批注绘制器。
+        const auto [left, right] = std::minmax_element(
+            polygon.begin(), polygon.end(), [](const auto& a, const auto& b) {
+                return a.x < b.x;
+            });
+        const auto [top, bottom] = std::minmax_element(
+            polygon.begin(), polygon.end(), [](const auto& a, const auto& b) {
+                return a.y < b.y;
+            });
+        if ( right->x < 0.0F || left->x > canvasSize.x || bottom->y < 0.0F ||
+             top->y > canvasSize.y )
+            continue;
+        // 可见性仅按当前投影外包范围决定；不可缓存上次的屏幕矩形。
+        // 用户滚动到同一段落的下一帧，轮廓会跟随时间轴重新出现。
+        // 折线只绘制一个首头、后续节点和末端装饰；不能把每段当作
+        // 独立 Hold/Flick，否则会多出不存在的头部与箭头。
+        // 先绘主体和连接，让首尾贴片保持在连接纹理的上方。
+        // 子段顺序沿用谱面数组，不因负滚速重新按屏幕 Y 排序。
+        // Jump 可能让两个时间点在屏幕上重合，拓扑关系仍不变。
+        drawList->PushClipRect(canvasScreenPosition,
+                               { canvasScreenPosition.x + canvasSize.x,
+                                 canvasScreenPosition.y + canvasSize.y },
+                               true);
+        for ( std::size_t subIndex = 0; subIndex < note.subNotes.size();
+              ++subIndex ) {
+            const auto& sub = note.subNotes[subIndex];
+            if ( sub.track < 0 || sub.track >= snapshot.trackCount ) continue;
+            const float x = trackX(sub.track);
+            const float y = timeY(sub.timestamp);
+            if ( sub.type == ::MMM::NoteType::HOLD && sub.duration > 0.0 ) {
+                // 长条子段只覆盖自身持续区间，不延伸到下一节点。
+                drawVerticalBody(x, y, timeY(sub.timestamp + sub.duration));
+            } else if ( sub.type == ::MMM::NoteType::FLICK &&
+                        sub.dtrack != 0 ) {
+                // 折线横段复用独立滑键的身体纹理和到达轨定位。
+                // 折线内部的箭头只在最终装饰阶段绘制一次。
+                const float endX = trackX(std::clamp(
+                    sub.track + sub.dtrack, 0, snapshot.trackCount - 1));
+                drawPart(TextureID::HoldBodyHorizontal,
+                         NoteColorSlot::Hold,
+                         (x + endX) * 0.5F,
+                         y,
+                         std::abs(endX - x),
+                         partSize(TextureID::HoldBodyHorizontal).y,
+                         true);
+            }
+            if ( subIndex + 1 >= note.subNotes.size() ) continue;
+            const auto& next = note.subNotes[subIndex + 1];
+            if ( next.track < 0 || next.track >= snapshot.trackCount ||
+                 (sub.type == ::MMM::NoteType::FLICK &&
+                  next.type == ::MMM::NoteType::HOLD &&
+                  std::abs(sub.timestamp - next.timestamp) <= 1e-7) )
+                continue;
+            // 同刻 Flick 到 Hold 是横段自己的到达节点。
+            // 下一虚拟竖段重新采样 HS，不能画一条额外跨屏连接。
+            // 两个虚拟载体间使用真实竖向主体纹理连成一个梯形。
+            // 轨差先落到终点轨，再从当前子段结束时间连至下一头部。
+            const auto uv = uvMap.find(
+                static_cast<std::uint32_t>(TextureID::HoldBodyVertical));
+            if ( atlasTexture == ImTextureID{} || uv == uvMap.end() ||
+                 uv->second.z <= 0.0F || uv->second.w <= 0.0F )
+                continue;
+            const int endTrack =
+                sub.type == ::MMM::NoteType::FLICK
+                    ? std::clamp(
+                          sub.track + sub.dtrack, 0, snapshot.trackCount - 1)
+                    : sub.track;
+            // Flick 的下一连接从横滑到达轨发出，而非起始轨。
+            // Hold 的下一连接从其结束时刻出发，避免重复自身主体。
+            const float startX = trackX(endTrack);
+            const float endX   = trackX(next.track);
+            const float startY =
+                timeY(sub.timestamp +
+                      (sub.type == ::MMM::NoteType::HOLD ? sub.duration : 0.0));
+            const float endY = timeY(next.timestamp);
+            const float halfBody =
+                partSize(TextureID::HoldBodyVertical).x *
+                Logic::System::skinTextureScale(TextureID::HoldBodyVertical) *
+                0.5F;
+            // 两端围绕自己的轨中心，斜段形成等宽带而非外接矩形。
+            // 主体横向倍率只改变带宽，不能改变到下一节点的时间跨度。
+            constexpr float HALF_TEXEL = 0.5F / 2048.0F;
+            const float     u0         = uv->second.x + HALF_TEXEL;
+            const float     v0         = uv->second.y + HALF_TEXEL;
+            const float     u1 = uv->second.x + uv->second.z - HALF_TEXEL;
+            const float     v1 = uv->second.y + uv->second.w - HALF_TEXEL;
+            // 四角维持真实渲染器的起点下沿、终点上沿采样关系。
+            // 同一份纹理同时支持竖直连接和斜向连接，不额外发明形状。
+            // 直接按四角 UV 映射可保留皮肤沿连接方向绘制的细节。
+            drawList->AddImageQuad(
+                atlasTexture,
+                { canvasScreenPosition.x + startX - halfBody,
+                  canvasScreenPosition.y + startY },
+                { canvasScreenPosition.x + startX + halfBody,
+                  canvasScreenPosition.y + startY },
+                { canvasScreenPosition.x + endX + halfBody,
+                  canvasScreenPosition.y + endY },
+                { canvasScreenPosition.x + endX - halfBody,
+                  canvasScreenPosition.y + endY },
+                { u0, v1 },
+                { u1, v1 },
+                { u1, v0 },
+                { u0, v0 },
+                ghostTint[static_cast<std::size_t>(NoteColorSlot::Hold)]);
+        }
+        // 后续子段使用节点纹理；第一子段才绘制 Hold 头部。
+        // 节点从第二个子物件开始；每段都画头会出现多余的方块。
+        // Node 尺寸可与普通 Note 差很大，必须单独取图集比例。
+        const auto nodeSize = partSize(TextureID::Node);
+        for ( std::size_t subIndex = 1; subIndex < note.subNotes.size();
+              ++subIndex ) {
+            const auto& sub = note.subNotes[subIndex];
+            if ( sub.track < 0 || sub.track >= snapshot.trackCount ) continue;
+            drawPart(TextureID::Node,
+                     NoteColorSlot::Node,
+                     trackX(sub.track),
+                     timeY(sub.timestamp),
+                     nodeSize.x,
+                     nodeSize.y);
+        }
+        const auto& first = note.subNotes.front();
+        // 首部作为整条折线的视觉起点，只绘制一次。
+        if ( first.track >= 0 && first.track < snapshot.trackCount ) {
+            const auto headSize = partSize(headTexture);
+            drawPart(headTexture,
+                     NoteColorSlot::Head,
+                     trackX(first.track),
+                     timeY(first.timestamp),
+                     headSize.x,
+                     headSize.y);
+        }
+        const auto& last = note.subNotes.back();
+        // 末端装饰仅取最后子段，中间 Hold 不画尾线。
+        // 最终 Flick 的箭头才表示整条折线的离开方向。
+        // 最后一段的类型决定装饰种类，与前面经过哪些节点无关。
+        if ( last.track >= 0 && last.track < snapshot.trackCount ) {
+            if ( last.type == ::MMM::NoteType::HOLD ) {
+                const auto endSize = partSize(TextureID::HoldEnd);
+                drawPart(TextureID::HoldEnd,
+                         NoteColorSlot::End,
+                         trackX(last.track),
+                         timeY(last.timestamp + last.duration),
+                         endSize.x,
+                         endSize.y);
+            } else if ( last.type == ::MMM::NoteType::FLICK ) {
+                const auto arrow = last.dtrack < 0 ? TextureID::FlickArrowLeft
+                                                   : TextureID::FlickArrowRight;
+                const auto arrowSize = partSize(arrow);
+                drawPart(
+                    arrow,
+                    NoteColorSlot::FlickArrow,
+                    trackX(std::clamp(
+                        last.track + last.dtrack, 0, snapshot.trackCount - 1)),
+                    timeY(last.timestamp),
+                    arrowSize.x,
+                    arrowSize.y);
+            }
+        }
+        drawList->PopClipRect();
+        // 贴图可能位于提示外环边缘；外环仍最后绘制以保持可读性。
+        // 内部主体、头部先画，外环最后画；这样提示仍维持批注框的
+        // 黑色粗描边与皮肤强调色，而不是被预览 Note 遮住。
+        std::vector<ImVec2> vertices;
+        vertices.reserve(polygon.size());
+        for ( const auto& point : polygon )
+            vertices.emplace_back(point.x, point.y);
+        renderAnnotationTargetPolygonHint(
+            vertices, canvasScreenPosition, canvasSize.x, canvasSize.y);
     }
 
     // 错误物件用快照里真实的可见包围盒，和普通批注悬浮框保持一致。

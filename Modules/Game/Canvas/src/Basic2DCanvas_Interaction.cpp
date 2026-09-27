@@ -65,6 +65,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace MMM::Canvas
 {
@@ -212,6 +213,86 @@ void renderAnnotationTargetHint(const AnnotationTargetHintBounds& bounds,
     drawList->AddTriangleFilled({ markerX - 3.5F, minimum.y - 5.5F },
                                 { markerX + 3.5F, minimum.y - 5.5F },
                                 { markerX, minimum.y - 1.5F },
+                                accent);
+    drawList->PopClipRect();
+}
+
+/// @brief 绘制一条折线教学目标的连续凹多边形提示。
+/// @param polygon 顺时针画布局部坐标轮廓。
+/// @param canvasPosition 画布左上角屏幕坐标。
+/// @param canvasWidth 画布可见宽度。
+/// @param canvasHeight 画布可见高度。
+/// @details 折线目标先在画布局部坐标中合并成单个外环，
+/// 此处只负责皮肤颜色、屏幕平移和当前内容区裁剪。
+/// 填充与黑色粗描边沿用单个批注目标框的视觉层级。
+/// 顶部三角只画一次，提示整条路径而非每个子节点。
+/// @warning UI 热路径：仅在当前教学段落存在未完成折线时调用。
+void renderAnnotationTargetPolygonHint(std::span<const ImVec2> polygon,
+                                       ImVec2 canvasPosition, float canvasWidth,
+                                       float canvasHeight)
+{
+    if ( polygon.size() < 3 ) return;
+    // 顶点不足的退化路径不能交给凹多边形填充器。
+    // 颜色键与普通矩形框共用，切换皮肤后两种提示保持一致。
+    auto& skin        = Config::SkinManager::instance();
+    auto  accentColor = skin.getColor("preview.judgeline");
+    // 与矩形提示一致，皮肤缺少该颜色时使用 ImGui 的主题色。
+    if ( accentColor.r == 1.0F && accentColor.g == 0.0F &&
+         accentColor.b == 1.0F ) {
+        const ImVec4 fallback = ImGui::GetStyleColorVec4(ImGuiCol_CheckMark);
+        accentColor = { fallback.x, fallback.y, fallback.z, fallback.w };
+    }
+    const ImU32 accent = ImGui::ColorConvertFloat4ToU32(
+        { accentColor.r, accentColor.g, accentColor.b, 1.0F });
+    const ImU32 fill = ImGui::ColorConvertFloat4ToU32(
+        { accentColor.r, accentColor.g, accentColor.b, 0.16F });
+    constexpr ImU32 SHADOW = IM_COL32(0, 0, 0, 230);
+    // 低透明填充露出谱面，粗暗轮廓负责压住复杂的背景图。
+    // 内部预计 Note 的透明度由画布控制，不能用这里的强调色替代。
+
+    // 轮廓在局部坐标生成，集中平移后交给 ImGui 凹多边形填充器。
+    std::vector<ImVec2> screenPoints;
+    screenPoints.reserve(polygon.size());
+    // 只平移一次外环顶点，保持调用方的局部坐标协议明确。
+    // 屏幕点只活到本帧提交，后续相机变化会重新计算局部外环。
+    for ( const ImVec2& point : polygon )
+        screenPoints.emplace_back(point.x + canvasPosition.x,
+                                  point.y + canvasPosition.y);
+
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
+    drawList->PushClipRect(
+        canvasPosition,
+        { canvasPosition.x + canvasWidth, canvasPosition.y + canvasHeight },
+        true);
+    drawList->AddConcavePolyFilled(
+        screenPoints.data(), static_cast<int>(screenPoints.size()), fill);
+    // 只描外环，合并处不再出现每个子节点矩形的交叉边线。
+    // 先暗后亮的顺序与单 Note 批注框相同。
+    drawList->AddPolyline(screenPoints.data(),
+                          static_cast<int>(screenPoints.size()),
+                          SHADOW,
+                          6.0F,
+                          ImDrawFlags_Closed);
+    drawList->AddPolyline(screenPoints.data(),
+                          static_cast<int>(screenPoints.size()),
+                          accent,
+                          2.5F,
+                          ImDrawFlags_Closed);
+    // 顶部标记沿用矩形框的样式；取最高顶点定位，不依赖首节点方向。
+    // 反向滚动时最早节点未必在屏幕上方，故从整个外环找锚点。
+    const auto top =
+        std::min_element(screenPoints.begin(),
+                         screenPoints.end(),
+                         [](const ImVec2& left, const ImVec2& right) {
+                             return left.y < right.y;
+                         });
+    drawList->AddTriangleFilled({ top->x - 5.0F, top->y - 7.0F },
+                                { top->x + 5.0F, top->y - 7.0F },
+                                { top->x, top->y - 1.0F },
+                                SHADOW);
+    drawList->AddTriangleFilled({ top->x - 3.5F, top->y - 5.5F },
+                                { top->x + 3.5F, top->y - 5.5F },
+                                { top->x, top->y - 1.5F },
                                 accent);
     drawList->PopClipRect();
 }
