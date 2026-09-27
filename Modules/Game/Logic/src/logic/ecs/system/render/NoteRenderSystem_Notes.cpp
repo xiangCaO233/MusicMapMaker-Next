@@ -422,12 +422,17 @@ void NoteRenderSystem::renderNotes(
     const bool hideJudgedNotes = snapshot->isPlaying &&
                                  config.visual.simulateAutoplay &&
                                  config.visual.hideJudgedNotes;
-    if ( !config.settings.professionalMode ||
+    // 草稿区是否存在由本帧快照决定，配置中的专业模式在教学期间仍可保持开启。
+    // 此处必须同步移除草稿 Note 候选，否则虽未绘制草稿轨仍会留下物件几何。
+    // 保留播放模拟的原筛选分支，避免改变正式主轨道的自动演奏效果。
+    if ( !snapshot->draftLanesEnabled ||
          (snapshot->isPlaying && config.visual.simulateAutoplay) ) {
         std::erase_if(noteEntities, [&](entt::entity entity) {
             const auto* note = registry.try_get<const NoteComponent>(entity);
             if ( !note ) return false;
-            if ( note->m_isDraft ) return !config.settings.professionalMode;
+            // 隐藏只作用于草稿物件；正式物件仍需参加下方时间范围过滤。
+            // 后台实体继续存在，教程的参考比较可在编辑后读取同一份数据。
+            if ( note->m_isDraft ) return !snapshot->draftLanesEnabled;
             // 完成的长条从共同候选中移除，资源标签和发光也随主体消失。
             // 折线结束时间以最后一个实际节点为准，容器 duration 不参与猜测。
             if ( snapshot->isPlaying && config.visual.simulateAutoplay ) {

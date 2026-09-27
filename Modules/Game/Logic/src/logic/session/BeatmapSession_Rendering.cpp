@@ -1,6 +1,7 @@
 #include "logic/BeatmapSession.h"
 
 #include "audio/AudioManager.h"
+#include "common/LogicCommands.h"
 #include "config/Utf8Path.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
@@ -1388,8 +1389,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         // 它们必须与统一轨号解释一起交给消费端，不能只发布玩家轨数。
         snapshot->bmsEditingEnabled =
             m_ctx->lastConfig.settings.enableBmsEditing;
+        // 创作教学保留草稿数据作为内部答案，但不向画布发布草稿区域。
         snapshot->draftLanesEnabled =
-            m_ctx->lastConfig.settings.professionalMode;
+            m_ctx->lastConfig.settings.professionalMode &&
+            m_ctx->composeLessonInputMode == ComposeLessonInputMode::Off;
         snapshot->isHoveringCanvas =
             m_ctx->isMouseInCanvas && (m_ctx->mouseCameraId == cameraId);
 
@@ -1494,7 +1497,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                         camera.horizontalOffsetX,
                         true,
                         config.settings.enableBmsEditing,
-                        config.settings.professionalMode,
+                        snapshot->draftLanesEnabled,
                         m_ctx->draftTrackCount,
                         true);
                     trackProjection = laneProjection.player;

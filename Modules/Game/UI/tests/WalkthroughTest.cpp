@@ -394,6 +394,38 @@ int main(int argc, char** argv)
              expectedLessonTools[index] )
             return 124;
     populateComposeLessonTopic(*packagedTopic, *packagedLessons);
+    // 分发的十四段均应说明用户实际手势，不能再要求查看已隐藏的草稿。
+    // 放置与续写必须明确 Shift 保持到左键释放；删除段说明右键语义。
+    // 预览和复播只解释播放，不把尚未开放的编辑操作写成当前任务。
+    // 使用打包谱面实际的批注顺序，防止仅在手工构造的夹具上通过。
+    // 每段只检查练习步骤，因为预览阶段尚不允许写入物件。
+    std::size_t practiceSteps = 0;
+    for ( const auto& branch : packagedTopic->m_branches )
+        for ( const auto& step : branch.m_steps ) {
+            if ( !step.m_composeLesson ||
+                 step.m_composeLesson->m_phase != ComposeLessonPhase::Practice )
+                continue;
+            const auto& body = step.m_body.m_translations.at("zh_cn");
+            // 练习必须包含工具名，旧的“照草稿”说明在隐藏草稿后不可执行。
+            if ( body.find("草稿") != std::string::npos ||
+                 body.find("工具") == std::string::npos )
+                return 183;
+            const auto lessonIndex = step.m_composeLesson->m_lessonIndex;
+            // 这些段落通过 Shift 拖拽提交新路径，需显式指出左键手势。
+            // 其余调整段使用拖拽工具，不应错误地强加 Shift 条件。
+            if ( (lessonIndex == 1 || lessonIndex == 2 || lessonIndex == 3 ||
+                  lessonIndex == 8 || lessonIndex == 9 || lessonIndex == 10) &&
+                 (body.find("Shift") == std::string::npos ||
+                  body.find("左键") == std::string::npos) )
+                return 184;
+            if ( (lessonIndex == 7 || lessonIndex == 13) &&
+                 body.find("右键") == std::string::npos )
+                return 185;
+            // 保留总数断言，新增批注段落后不会悄悄落回模糊的通用文案。
+            ++practiceSteps;
+        }
+    if ( practiceSteps != packagedLessons->size() ) return 186;
+    // 动画绑定仍需继续使用同一份打包教材验证。
     // 用源码中的真实 CanonRock 批注生成路线，防止只对隔离夹具的
     // 五段教学生效，却漏掉后面的进阶 GIF 映射。
     std::size_t gifSteps = 0;

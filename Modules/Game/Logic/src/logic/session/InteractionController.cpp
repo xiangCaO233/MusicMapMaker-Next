@@ -1,4 +1,5 @@
 #include "logic/session/InteractionController.h"
+#include "common/LogicCommands.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "logic/EditorEngine.h"
@@ -219,17 +220,20 @@ void detachMarqueeSelection(SessionContext& ctx)
     const auto camera = ctx.cameras.find(ctx.lastMainCanvasCameraId);
     if ( camera == ctx.cameras.end() ) return std::nullopt;
 
-    const auto projection =
-        calculateCanvasLaneProjection(camera->second.viewportWidth,
-                                      ctx.trackCount,
-                                      ctx.bgmTrackCount,
-                                      ctx.lastConfig.visual.trackLayout,
-                                      camera->second.horizontalOffsetX,
-                                      true,
-                                      ctx.lastConfig.settings.enableBmsEditing,
-                                      ctx.lastConfig.settings.professionalMode,
-                                      ctx.draftTrackCount,
-                                      true);
+    // 教学期间草稿仅供后台验收，框选区域按当前可见轨道重新投影。
+    // 不直接修改用户的专业模式配置，退出教学后仍能恢复原布局。
+    const auto projection = calculateCanvasLaneProjection(
+        camera->second.viewportWidth,
+        ctx.trackCount,
+        ctx.bgmTrackCount,
+        ctx.lastConfig.visual.trackLayout,
+        camera->second.horizontalOffsetX,
+        true,
+        ctx.lastConfig.settings.enableBmsEditing,
+        ctx.lastConfig.settings.professionalMode &&
+            ctx.composeLessonInputMode == ComposeLessonInputMode::Off,
+        ctx.draftTrackCount,
+        true);
     // 鼠标落在批注沟槽或区域间隙时不会得到轨道地址。
     // 只返回区域类型，不把具体轨号误当作全选范围。
     const auto lane = projection.laneAt(ctx.lastMainCanvasMousePos.x);
@@ -527,7 +531,8 @@ SelectionScreenContext makeSelectionScreenContext(
             cameraIt->second.horizontalOffsetX,
             true,
             ctx.lastConfig.settings.enableBmsEditing,
-            ctx.lastConfig.settings.professionalMode,
+            ctx.lastConfig.settings.professionalMode &&
+                ctx.composeLessonInputMode == ComposeLessonInputMode::Off,
             ctx.draftTrackCount,
             true);
         screen.usesLaneProjection = screen.laneProjection.valid;
@@ -1632,8 +1637,11 @@ void InteractionController::handleCommand(const CmdSelectAll& cmd)
             if ( !SessionUtils::isNoteEditable(note,
                                                m_ctx.lastConfig.settings) ||
                  note.m_isSubNote ||
+                 // 全选也必须遵守隐藏草稿约束，不能绕过画布的命中区域限制。
                  (note.m_isDraft &&
-                  !m_ctx.lastConfig.settings.professionalMode) ||
+                  (!m_ctx.lastConfig.settings.professionalMode ||
+                   m_ctx.composeLessonInputMode !=
+                       ComposeLessonInputMode::Off)) ||
                  (cmd.scope == SelectAllScope::CurrentTrackArea &&
                   note.m_isDraft != (*laneKind == CanvasLaneKind::Draft)) ) {
                 continue;
@@ -1741,7 +1749,8 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
         camera.horizontalOffsetX,
         true,
         m_ctx.lastConfig.settings.enableBmsEditing,
-        m_ctx.lastConfig.settings.professionalMode,
+        m_ctx.lastConfig.settings.professionalMode &&
+            m_ctx.composeLessonInputMode == ComposeLessonInputMode::Off,
         m_ctx.draftTrackCount,
         true);
     // 把水平相机偏移和独立分区布局纳入落点解析。

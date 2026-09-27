@@ -367,12 +367,6 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
         prompt += "\n";
         prompt += Config::pathToUtf8(Walkthrough::canonRockDirectory());
     }
-    if ( teachPolylinePathRemoval )
-        prompt +=
-            language == "en_us"
-                ? "\nPolyline path cleanup is enabled for this step. "
-                  "Draw across the existing Notes."
-                : "\n此段已临时开启折线路径清理；沿草稿折线画过已有单键。";
     // 目标缺席或等待外部操作时也要给出明确的退出方式。
     prompt += "\n";
     prompt += TR("ui.walkthrough.escape_to_exit").toString();

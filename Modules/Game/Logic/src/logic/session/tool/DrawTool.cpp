@@ -1,4 +1,5 @@
 #include "logic/session/tool/DrawTool.h"
+#include "common/LogicCommands.h"
 #include "log/colorful-log.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
@@ -268,7 +269,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
             itCamera->second.horizontalOffsetX,
             true,
             ctx.lastConfig.settings.enableBmsEditing,
-            ctx.lastConfig.settings.professionalMode,
+            ctx.lastConfig.settings.professionalMode &&
+                ctx.composeLessonInputMode == ComposeLessonInputMode::Off,
             ctx.draftTrackCount,
             true);
         projectedDraftLaneCount = laneProjection.draftLaneCount;
@@ -706,7 +708,8 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
             itCamera->second.horizontalOffsetX,
             true,
             ctx.lastConfig.settings.enableBmsEditing,
-            ctx.lastConfig.settings.professionalMode,
+            ctx.lastConfig.settings.professionalMode &&
+                ctx.composeLessonInputMode == ComposeLessonInputMode::Off,
             ctx.draftTrackCount,
             true);
         projectedDraftLaneCount = laneProjection.draftLaneCount;

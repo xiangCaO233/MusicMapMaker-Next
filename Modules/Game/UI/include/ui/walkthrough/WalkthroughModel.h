@@ -33,7 +33,7 @@ struct Guide {
 /// @brief CanonRock 每段的三个实际操作阶段。
 enum class ComposeLessonPhase {
     Preview,   ///< 首次播放参考段落。
-    Practice,  ///< 参照草稿区编辑正式轨道。
+    Practice,  ///< 依据画布目标提示编辑正式轨道，草稿只作内部验收参考。
     Review,    ///< 编辑完成后重播同一段落。
 };
 /// @brief 创作教程步骤的时间窗与阶段，普通演练步骤不设置此字段。

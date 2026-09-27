@@ -11,6 +11,7 @@
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -97,6 +98,158 @@ std::string_view lessonGif(std::string_view title)
     for ( const auto& [name, file] : GIFS )
         if ( title == name ) return file;
     return {};
+}
+
+/// @brief 根据批注中的教学动作给出实际鼠标手势，而非暴露内部草稿答案。
+/// @return 中文和英文的练习提示；新增未知段落时给出可执行的通用定位说明。
+/// @warning 目录生成时调用，不进入绘制或编辑的每帧路径。
+/// @details 同一种 Note 的放置、移动、尾部调整和删除使用不同输入事件。
+/// 这张映射以教学批注标题为键，避免从 Note 类型反推用户应执行的手势。
+/// 文案与欢迎页的总览互补：每段只讲当前要执行的动作与必要的按键约束。
+/// 青色轮廓和蓝色落点承担具体位置提示，文本不暴露作为答案的草稿轨。
+/// Shift 拖拽类操作以左键释放作为提交点；提前释放 Shift 会改变工具语义。
+/// 删除类操作明确右键目标，避免将程序的撤销入口误写成教学步骤。
+/// 两种语言按同一分支返回，使翻译不会落到另一教学段落的操作说明。
+std::pair<std::string_view, std::string_view> lessonPracticeInstruction(
+    std::string_view title)
+{
+    // 单键直接点按创建，不要求拖动；青色目标提供轨道和拍位。
+    // 这里不写 Shift，避免用户误进入其它物件的绘制方式。
+    if ( title == "单键放置教学" )
+        return { "使用绘制工具，在青色目标位置单击左键写入单键。",
+                 "Use Draw and left-click each cyan target to place a tap." };
+    // 长条从头到尾由一次按住左键的手势决定持续时间。
+    // Shift 必须覆盖整次拖拽，松开左键时才结束输入事务。
+    if ( title == "长条放置教学" )
+        return {
+            "使用绘制工具，按住 Shift "
+            "并用左键从长条头拖到尾；左键松开前不要松开 Shift。",
+            "Use Draw: hold Shift and left-drag from each hold head to its "
+            "end. Keep Shift held until releasing the left button."
+        };
+    // 滑键的箭头方向由拖拽终点决定，提示必须区分头部和尾部。
+    // 放置阶段创建新物件，不能套用后面编辑旧箭头的动作。
+    if ( title == "滑键教学（给嚓音踩滑键）" )
+        return {
+            "使用绘制工具，按住 Shift "
+            "并用左键从滑键头横向拖到箭头目标；左键松开前不要松开 Shift。",
+            "Use Draw: hold Shift and left-drag from each flick head to its "
+            "arrow target. Keep Shift held until releasing the left button."
+        };
+    // 折线是一条连续路径，起笔后要经过全部目标节点。
+    // 中途松开 Shift 或左键会让路径提前结束。
+    if ( title == "折线放置教学" )
+        return {
+            "使用绘制工具，按住 Shift "
+            "并用左键沿青色折线路径连续拖拽；完成整条折线并松开左键前不要松开 "
+            "Shift。",
+            "Use Draw: hold Shift and left-drag through the cyan polyline "
+            "path. Keep Shift held until the whole path is finished and the "
+            "left button is released."
+        };
+    // 移动现有物件要抓住头部，蓝点标出最终位置。
+    // 此段使用拖拽工具，不创建第二个同类型 Note。
+    if ( title == "拖拽移动教学" )
+        return {
+            "使用拖拽工具，按住左键拖动标出的物件头部到蓝色落点。",
+            "Use Move: left-drag each marked note head to its blue target."
+        };
+    // 调整滑键只移动箭头终点；旧头部已经是正确的起点。
+    // 文案显式提醒不要移动头部，以保持物件拍位不变。
+    if ( title == "滑键拖拽调整教学" )
+        return {
+            "使用拖拽工具，按住左键将滑键箭头尾部拖到蓝色落点，不要移动滑键头"
+            "。",
+            "Use Move: left-drag each flick arrow to its blue target without "
+            "moving the head."
+        };
+    // 长条的持续时间由尾部决定，头部不应随修改平移。
+    // 蓝色落点代表新的尾端，不是重画长条的起笔点。
+    if ( title == "长条拖拽调整教学" )
+        return {
+            "使用拖拽工具，按住左键将长条尾部拖到蓝色落点，不要移动长条头。",
+            "Use Move: left-drag each hold end to its blue target without "
+            "moving the head."
+        };
+    // 删除段要求用户使用右键，红框用于定位待删正式物件。
+    // 已选中物件的右键会批量删除，说明中保留这项实际行为。
+    if ( title == "删除物件教学" )
+        return {
+            "使用绘制工具，右键点击红框物件将其删除；右键点击已选中的物件会一并"
+            "删除所有选中物件。",
+            "Use Draw and right-click each red-marked note to delete it. "
+            "Right-clicking a selected note deletes all selected notes."
+        };
+    // 续写以现有折线末端为起点，不再创建独立的新路径。
+    // 蓝点随已完成的子段前进，拖拽期间 Shift 需要持续按住。
+    if ( title == "续写折线教学" )
+        return {
+            "使用绘制工具，按住 "
+            "Shift，从已有折线的末端左键拖拽到蓝色目标，继续完成路径；左键松开"
+            "前不要松开 Shift。",
+            "Use Draw: hold Shift and left-drag from the existing polyline end "
+            "through the blue targets. Keep Shift held until releasing the "
+            "left button."
+        };
+    // 连接教学把两段已有路径接起来，目标是另一段的连接点。
+    // 这里沿用折线的连续 Shift 拖拽输入，不要求用户搬动整条折线。
+    if ( title == "折线连接教学" )
+        return {
+            "使用绘制工具，按住 "
+            "Shift，从已有折线末端左键拖到另一段折线的连接位置；左键松开前不要"
+            "松开 Shift。",
+            "Use Draw: hold Shift and left-drag from one polyline end to the "
+            "next connection point. Keep Shift held until releasing the left "
+            "button."
+        };
+    // 本段允许沿新路径清除重叠单键；这项规则由教学状态单独启用。
+    // 提示用户画完整条目标路径，不能让用户逐个手动删掉旧 Note。
+    if ( title == "折线覆盖物件教学" )
+        return {
+            "使用绘制工具，按住 Shift "
+            "并用左键沿青色目标路径拖过已有单键；本段已开启路径清理，左键松开前"
+            "不要松开 Shift。",
+            "Use Draw: hold Shift and left-drag along the cyan path across "
+            "existing taps. Path cleanup is enabled for this lesson; keep "
+            "Shift held until releasing the left button."
+        };
+    // 折线路径中已有的节点可逐个拖到目标位置。
+    // 抓取节点而非空白折线主体，才能只改对应子段。
+    if ( title == "折线拖拽调整教学" )
+        return {
+            "使用拖拽工具，按住左键拖动需要调整的折线节点到对应蓝色落点，逐个修"
+            "正路径。",
+            "Use Move: left-drag each polyline node that needs adjustment to "
+            "its blue target."
+        };
+    // 合并段同样操作连接节点，蓝点表示最终拼接位置。
+    // 两段路径的其它正确节点不需要重新绘制。
+    if ( title == "折线拖拽合并教学" )
+        return {
+            "使用拖拽工具，按住左键将折线连接节点拖到对应蓝色落点，使两段路径合"
+            "并。",
+            "Use Move: left-drag each polyline connection node to its blue "
+            "target to join the paths."
+        };
+    // 普通节点右键用于断开，折线头或 Shift+右键用于删除整条。
+    // 需要两种动作的区别，才能避免误删已有正确路径。
+    if ( title == "折线删除子物件教学" )
+        return {
+            "使用绘制工具，右键点击要断开的折线节点；Shift+"
+            "右键点击折线，或直接右键点击折线头，会删除整条折线。右键点击已选中"
+            "的物件会删除所有选中物件。",
+            "Use Draw: right-click a polyline node to split it. "
+            "Shift+right-click the polyline, or right-click its head, to "
+            "delete the whole path. Right-clicking a selected note deletes all "
+            "selected notes."
+        };
+    // 未识别的自定义批注仍给出可执行的位置提示，且不假定具体工具。
+    // 目录中已有的十四段均命中上方分支，测试会防止其意外回退。
+    // 新增教学段落时应同步加入专属手势说明和对应测试断言。
+    // 回退说明仅保障资源可读，不替代正式教学文案。
+    return { "按青色轮廓与蓝色落点，在主轨道完成当前段落的物件操作。",
+             "Use the cyan outlines and blue targets to edit this section in "
+             "the player lanes." };
 }
 
 /// @brief 起点或终点批注的最小字段集合。
@@ -754,9 +907,8 @@ void populateComposeLessonTopic(Topic&                            topic,
                              ComposeLessonPhase::Practice,
                              ComposeLessonPhase::Review };
     for ( std::size_t index = 0; index < lessons.size(); ++index ) {
-        const auto& lesson     = lessons[index];
-        const auto  repairKind = repairKindFor(lesson);
-        auto&       branch     = lesson.m_advanced ? advanced : basic;
+        const auto& lesson = lessons[index];
+        auto&       branch = lesson.m_advanced ? advanced : basic;
         // 阶段顺序在数据中展开，而不在页面渲染时每帧动态生成。
         // 每段完整走完复播后，下一段首播才会成为当前目标。
         for ( std::size_t phaseIndex = 0; phaseIndex < phases.size();
@@ -772,7 +924,7 @@ void populateComposeLessonTopic(Topic&                            topic,
                 step.m_prerequisites.push_back(branch.m_steps.back().m_id);
             step.m_title.m_translations["zh_cn"] =
                 lesson.m_title + (phaseIndex == 0   ? "：先播放"
-                                  : phaseIndex == 1 ? "：照草稿编辑"
+                                  : phaseIndex == 1 ? "：动手编辑"
                                                     : "：完成后重播");
             step.m_title.m_translations["en_us"] =
                 "Lesson " + std::to_string(index + 1) +
@@ -780,60 +932,20 @@ void populateComposeLessonTopic(Topic&                            topic,
                  : phaseIndex == 1 ? ": practice"
                                    : ": replay");
             step.m_body.m_translations["zh_cn"] =
-                phaseIndex == 0 ? "先播放这一段，观察草稿区的目标物件。"
+                phaseIndex == 0 ? "先播放这一段，观察主轨道物件的实际效果。"
                 : phaseIndex == 1
-                    ? "暂停后按照同一时间段草稿区的物件，在主画布完成绘制或调整"
-                      "；物件结构、轨道和拍位都要对应。"
+                    ? std::string(
+                          lessonPracticeInstruction(lesson.m_title).first)
                     : "目标物件已完成，再播放同一段检查实际效果。";
             step.m_body.m_translations["en_us"] =
                 phaseIndex == 0
-                    ? "Play this section and study its draft lane reference."
+                    ? "Play this section and observe the player lanes."
                 : phaseIndex == 1
-                    ? "Edit the player lanes to match the draft reference in "
-                      "this section."
+                    ? std::string(
+                          lessonPracticeInstruction(lesson.m_title).second)
                     : "Replay this section to review your result.";
-            // 修正段需告诉用户实际的拖动部位；红框与蓝点仅给位置，
-            // 文字补足整件移动、尾部调整和右键删除的手势区别。
-            // 普通放置与播放阶段仍沿用原说明，避免改变已有学习路线。
-            if ( phaseIndex == 1 ) {
-                switch ( repairKind ) {
-                case ComposeLessonRepairKind::Move:
-                    // 整件移动的落点对应 Note 头部，不要求拖动尾端装饰。
-                    step.m_body.m_translations["zh_cn"] =
-                        "拖动红框物件到对应蓝色落点，使位置与草稿一致。";
-                    step.m_body.m_translations["en_us"] =
-                        "Drag each marked note to its blue target point.";
-                    break;
-                case ComposeLessonRepairKind::FlickTail:
-                    // Flick 的箭头可单独编辑，说明中明确手势目标是箭头。
-                    // 蓝点标的是有向终轨，不是旧箭头的撤销入口。
-                    step.m_body.m_translations["zh_cn"] =
-                        "拖动红框滑键的箭头尾部到对应蓝色落点。";
-                    step.m_body.m_translations["en_us"] =
-                        "Drag each marked flick arrow to its blue target "
-                        "point.";
-                    break;
-                case ComposeLessonRepairKind::HoldTail:
-                    // 长条头部已正确时只改持续时间；尾点在目标结束拍位。
-                    // 用户无需重新绘制整条 Hold，避免丢掉起点精度。
-                    step.m_body.m_translations["zh_cn"] =
-                        "拖动红框长条的尾部到对应蓝色落点。";
-                    step.m_body.m_translations["en_us"] =
-                        "Drag each marked hold end to its blue target point.";
-                    break;
-                case ComposeLessonRepairKind::Delete:
-                    // 删除段没有参考落点，红框只标识应右键的正式物件。
-                    // 说明不能使用旧的“照草稿编辑”文案来暗示放置 Note。
-                    step.m_body.m_translations["zh_cn"] =
-                        "右键删除红框标出的主轨道物件，直到该段与草稿区一致。";
-                    step.m_body.m_translations["en_us"] =
-                        "Right-click the marked notes to delete them.";
-                    break;
-                case ComposeLessonRepairKind::None:
-                    // 普通放置段保留通用说明及其已有误放物件辅助处理。
-                    break;
-                }
-            }
+            // 练习提示由动作名称决定，和青色轮廓、蓝色落点共同说明操作。
+            // 草稿几何只供后台验收，不能要求用户看不可见的内部参考。
             // 播放与编辑各有独立语义目标；UI 只接收业务状态机的完成通知。
             // 所有步骤禁用“知道了”，避免错误谱面或未完成物件继续推进。
             Guide guide;

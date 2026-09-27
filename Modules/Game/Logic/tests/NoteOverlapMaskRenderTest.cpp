@@ -108,7 +108,10 @@ void renderOverlappingTaps(MMM::Logic::RenderSnapshot& snapshot, bool isPlaying,
     noteRegistry.ctx().emplace<const std::vector<entt::entity>*>(&sortedNotes);
     // 索引由局部容器拥有，生命周期覆盖下面的同步快照生成调用。
 
-    snapshot.hasBeatmap = true;
+    snapshot.hasBeatmap        = true;
+    snapshot.draftLanesEnabled = config.settings.professionalMode;
+    // 同步夹具需模拟会话发布的草稿可见位，不能只设置配置项。
+    // 普通编辑的辅助轨道仍应参与遮罩渲染。
     // 显式标记已加载谱面，避免落入无项目时的 Logo 占位绘制流程。
     snapshot.isPlaying     = isPlaying;
     snapshot.playbackSpeed = 1.0;
@@ -207,7 +210,10 @@ void renderPlayerAndDraftTaps(MMM::Logic::RenderSnapshot& snapshot)
     }
     noteRegistry.ctx().emplace<const std::vector<entt::entity>*>(&sortedNotes);
 
-    snapshot.hasBeatmap = true;
+    snapshot.hasBeatmap        = true;
+    snapshot.draftLanesEnabled = config.settings.professionalMode;
+    // 配色用例需要草稿 Note 真正出现在快照中才能比较皮肤色。
+    // 教学隐藏行为由会话级用例验证，这里保持专业模式的正常布局。
     // 纯色与音符 UV 区域分离，后续只检查音符纹理范围内的顶点颜色。
     snapshot.uvMap.emplace(
         static_cast<std::uint32_t>(MMM::Logic::TextureID::None),

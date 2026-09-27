@@ -328,8 +328,8 @@ void NoteRenderSystem::generateSnapshot(
     // 布局输出统一在栈上初始化，空谱面分支可保留零范围。
     Batcher batcher(snapshot);
     float   leftX = 0, rightX = 0, topY = 0, bottomY = 0, trackAreaW = 0,
-          singleTrackW = 0;
-    float renderScaleY = 1.0f;
+            singleTrackW = 0;
+    float   renderScaleY = 1.0f;
 
     // 第一阶段：静态布局与打击特效预生成。
     // 打击特效顶点不随谱面滚动，因此在静态顶点边界前生成，
@@ -379,7 +379,7 @@ void NoteRenderSystem::generateSnapshot(
                                       tempSTW);
         // 专业模式下草稿可能有独立轨数与宽度。
         // 不按玩家轨宽向左简单延伸，否则自定义布局后特效会错位。
-        if ( isMainCanvas && config.settings.professionalMode ) {
+        if ( isMainCanvas && snapshot->draftLanesEnabled ) {
             const auto laneProjection =
                 calculateCanvasLaneProjection(viewportWidth,
                                               trackCount,
@@ -536,11 +536,11 @@ void NoteRenderSystem::generateSnapshot(
         // 主画布显示模式控制拍线基础可见性。
         // Timing 线独立于拍线，默认仅由预览分支启用。
         // 近光标渐隐依赖精确编辑指针，不能直接用于缩略预览。
-        const bool beatLinesHidden = config.visual.beatLineDisplayMode ==
-                                     Config::BeatLineDisplayMode::Hidden;
-        bool shouldDrawBeatLines   = !beatLinesHidden;
-        bool shouldDrawTimingLines = false;
-        bool revealBeatLinesNearCursor =
+        const bool beatLinesHidden       = config.visual.beatLineDisplayMode ==
+                                           Config::BeatLineDisplayMode::Hidden;
+        bool       shouldDrawBeatLines   = !beatLinesHidden;
+        bool       shouldDrawTimingLines = false;
+        bool       revealBeatLinesNearCursor =
             config.visual.beatLineDisplayMode ==
             Config::BeatLineDisplayMode::NearCursor;
 
@@ -584,7 +584,7 @@ void NoteRenderSystem::generateSnapshot(
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
-                                              config.settings.professionalMode,
+                                              snapshot->draftLanesEnabled,
                                               draftTrackCount,
                                               true);
             // 草稿几何可能部分移出视口，裁剪仅取其可见交集。
@@ -709,7 +709,7 @@ void NoteRenderSystem::generateSnapshot(
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
-                                              config.settings.professionalMode,
+                                              snapshot->draftLanesEnabled,
                                               draftTrackCount,
                                               true);
             // 有投影时，音符生成可使用独立辅助区域布局。
@@ -757,7 +757,7 @@ void NoteRenderSystem::generateSnapshot(
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
-                                              config.settings.professionalMode,
+                                              snapshot->draftLanesEnabled,
                                               draftTrackCount,
                                               true);
             // 自动采样只在主画布展示，不混入缩略 Preview。
@@ -794,7 +794,7 @@ void NoteRenderSystem::generateSnapshot(
                                               snapshot->canvasHorizontalOffsetX,
                                               true,
                                               config.settings.enableBmsEditing,
-                                              config.settings.professionalMode,
+                                              snapshot->draftLanesEnabled,
                                               draftTrackCount,
                                               true);
             const auto  contentBounds = laneProjection.contentBounds();
@@ -1419,7 +1419,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
         // 段位置先应用动画缩放，再相对当前视觉锚点计算。
         // HS 只缩放显示距离，不改变交互记录里的原始事件时间。
         const double segmentAbsY = seg.absY * cache->getAnimatedZoomScale();
-        float        y           = judgmentLineY -
+        float y = judgmentLineY -
                   static_cast<float>((segmentAbsY - currentAbsY) * seg.hs);
 
         // 先发布完整逻辑记录，再决定是否有可见标记几何。
@@ -1734,7 +1734,7 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                                           snapshot->canvasHorizontalOffsetX,
                                           true,
                                           config.settings.enableBmsEditing,
-                                          config.settings.professionalMode,
+                                          snapshot->draftLanesEnabled,
                                           draftTrackCount,
                                           true);
         const float visibleDraftLeft =

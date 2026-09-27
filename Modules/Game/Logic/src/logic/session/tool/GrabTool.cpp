@@ -1,4 +1,5 @@
 #include "logic/session/tool/GrabTool.h"
+#include "common/LogicCommands.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectResourceService.h"
@@ -451,7 +452,9 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
         isMainCanvas ? camera.horizontalOffsetX : 0.0F,
         isMainCanvas,
         isMainCanvas && ctx.lastConfig.settings.enableBmsEditing,
-        isMainCanvas && ctx.lastConfig.settings.professionalMode,
+        // 拖拽落点使用与教学快照一致的可见轨道，不能落到隐藏草稿区。
+        isMainCanvas && ctx.lastConfig.settings.professionalMode &&
+            ctx.composeLessonInputMode == ComposeLessonInputMode::Off,
         ctx.draftTrackCount,
         isMainCanvas);
     if ( !projection.valid ) return std::nullopt;
@@ -1012,7 +1015,8 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
         const bool previewsAcrossDraftBoundary =
             movesWholeObjects &&
             SessionUtils::isMainCanvasCameraId(cmd.cameraId) &&
-            ctx.lastConfig.settings.professionalMode;
+            ctx.lastConfig.settings.professionalMode &&
+            ctx.composeLessonInputMode == ComposeLessonInputMode::Off;
         m_usesUnifiedObjectDrag =
             m_usesUnifiedObjectDrag ||
             (previewsAcrossDraftBoundary && !m_isFirstPolylineBodyDrag);

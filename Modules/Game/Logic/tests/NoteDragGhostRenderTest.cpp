@@ -242,6 +242,8 @@ void renderCrossRegionGhost(
     // 若提供笔刷，先复制其值，避免生成器借用调用方的临时对象。
     snapshot.hasBeatmap         = true;
     snapshot.acceptsInteraction = true;
+    snapshot.draftLanesEnabled  = config.settings.professionalMode;
+    // 夹具绕过会话快照发布，手动保留普通专业模式下的草稿区。
     if ( brush ) snapshot.brush = *brush;
     // 按纹理类别分配独立 U 区间，测试据此识别节点、身体和箭头。
     // 图块只需内存坐标，不需要真正加载图像或创建 GPU 纹理。

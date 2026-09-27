@@ -2482,9 +2482,47 @@ bool testProfessionalModeUpdatesAllCanvases()
             return false;
         }
     }
+    // 创作教学只临时隐藏草稿：不改专业模式配置，也不删除内部参考数据。
+    // 两个主画布都应立即停止发布草稿命中框，退出教学后恢复原有可见性。
+    // 以非零时间段进入练习状态，避免默认空限制意外跳过教学分支。
+    // 走正式命令队列，覆盖会话更新到渲染快照的完整状态传播。
+    session.pushCommand(MMM::Logic::CmdSetComposeLessonInputLimit{
+        .mode  = MMM::Logic::ComposeLessonInputMode::Practice,
+        .begin = 0.5,
+        .end   = 1.5,
+    });
+    session.update(0.0, config, true);
+    // 主副画布共用教程限制，不能只隐藏当前获得鼠标焦点的画布。
+    // 命中框检查保证“看不见”同时也意味着无法点到草稿物件。
+    for ( const char* cameraId :
+          { "Basic2DCanvas", "Basic2DCanvasSecondary" } ) {
+        const auto* snapshot =
+            context.syncBuffers.at(cameraId)->pullLatestSnapshot();
+        if ( !snapshot || snapshot->draftLanesEnabled ||
+             std::any_of(snapshot->hitboxes.begin(),
+                         snapshot->hitboxes.end(),
+                         [draft](const auto& hitbox) {
+                             return hitbox.entity == draft;
+                         }) )
+            return false;
+    }
+    if ( !context.lastConfig.settings.professionalMode ||
+         !context.noteRegistry.valid(draft) )
+        return false;
+    // 关闭限制应恢复原有专业模式，而不是把用户配置永久改为简洁模式。
+    // 草稿实体的持续存在也确保后台几何答案没有在隐藏时被清除。
+    session.pushCommand(MMM::Logic::CmdSetComposeLessonInputLimit{});
+    session.update(0.0, config, true);
+    // 恢复检查读取下一次正式渲染快照，避免只验证命令对象本身。
+    // 同时保留原轨道号断言，防止通过重建实体伪装成可见性切换。
+    // 同一测试覆盖进入与退出教学的反向状态转换。
+    // 恢复后的快照应重新允许草稿轨参与主画布布局。
+    const auto* restored =
+        context.syncBuffers.at("Basic2DCanvas")->pullLatestSnapshot();
     // 最终重新开启后检查原实体数据，排除通过重建替代可见性切换的实现。
-    return context.noteRegistry.get<MMM::Logic::NoteComponent>(draft)
-               .m_trackIndex == -1;
+    return restored && restored->draftLanesEnabled &&
+           context.noteRegistry.get<MMM::Logic::NoteComponent>(draft)
+                   .m_trackIndex == -1;
 }
 
 /// @brief 收集会话内草稿根物件的稳定 ID。

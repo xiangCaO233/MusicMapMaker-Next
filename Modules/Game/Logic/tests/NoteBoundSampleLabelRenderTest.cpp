@@ -225,7 +225,9 @@ void renderBoundTap(MMM::Logic::RenderSnapshot& snapshot, bool enabled,
     noteRegistry.ctx().emplace<const std::vector<entt::entity>*>(&sortedNotes);
     // 上下文借用局部索引；generateSnapshot 同步完成后才离开本函数。
 
-    snapshot.hasBeatmap = true;
+    snapshot.hasBeatmap        = true;
+    snapshot.draftLanesEnabled = config.settings.professionalMode;
+    // 直接调用渲染器的夹具须显式提供会话原本发布的草稿可见状态。
     // 明确进入已加载谱面的渲染分支，避免空谱面占位逻辑干扰结果。
     snapshot.snapshotSysTime = snapshotSysTime;
     // 显式注入标签动画时钟，不读取真实时间，也不通过 sleep 等待滚动。
