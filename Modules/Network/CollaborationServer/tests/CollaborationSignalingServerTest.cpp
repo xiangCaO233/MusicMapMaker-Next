@@ -257,11 +257,13 @@ bool testDirectoryAndSignalingRelay()
     // 目录与房主控制面使用两个独立 WebSocket，验证角色不会共享状态。
     auto directory = connectSocket(server.listeningPort());
     auto host      = connectSocket(server.listeningPort());
-    // 创建失败或任一连接未在阶段窗口打开都终止后续协议检查。
+    // 客户端打开与服务端接纳是两个异步事件，二者完成后才发送首条消息。
+    // 只等待客户端 opened 会让服务端尚未建立 Client 时丢掉 create_room。
     if ( !directory || !host || !pumpUntil(server, [&]() {
              // acquire 与回调 release 配对，读取稳定的 opened 标志。
              return directory->opened.load(std::memory_order_acquire) &&
-                    host->opened.load(std::memory_order_acquire);
+                    host->opened.load(std::memory_order_acquire) &&
+                    server.clientCount() == 2U;
          }) ) {
         return fail("directory_host_open");
     }
@@ -361,11 +363,14 @@ bool testDirectoryAndSignalingRelay()
     }
 
     // 新访客使用独立控制连接向刚创建的房间提交加入申请。
+    // 先观察服务端计数，保证加入消息不会跑在新连接的登记事件前面。
     auto guest = connectSocket(server.listeningPort());
     if ( !guest ||
-         !pumpUntil(
-             server,
-             [&]() { return guest->opened.load(std::memory_order_acquire); }) ||
+         !pumpUntil(server,
+                    [&]() {
+                        return guest->opened.load(std::memory_order_acquire) &&
+                               server.clientCount() == 3U;
+                    }) ||
          !sendJson(*guest,
                    { { "type", "join_room" },
                      { "version", 1 },
@@ -400,11 +405,14 @@ bool testDirectoryAndSignalingRelay()
     }
 
     // 房主另建中继连接执行 accept_join，控制连接仍保留房间所有权。
+    // 第四个连接被接纳后才能提交审批，避免时序依赖平台线程调度。
     auto hostPeer = connectSocket(server.listeningPort());
     if ( !hostPeer ||
          !pumpUntil(server,
                     [&]() {
-                        return hostPeer->opened.load(std::memory_order_acquire);
+                        return hostPeer->opened.load(
+                                   std::memory_order_acquire) &&
+                               server.clientCount() == 4U;
                     }) ||
          !sendJson(*hostPeer,
                    { { "type", "accept_join" },
@@ -488,12 +496,14 @@ bool testDirectoryAndSignalingRelay()
     // 清理断言同时证明关闭一个中继端不会误删仍由 host 持有的房间。
 
     // 第二个访客携带构建指纹，用于覆盖房主明确拒绝的审批路径。
+    // 中继连接已清理完毕，因此新访客接入后的活动连接数为三个。
     auto rejectedGuest = connectSocket(server.listeningPort());
     if ( !rejectedGuest ||
          !pumpUntil(server,
                     [&]() {
                         return rejectedGuest->opened.load(
-                            std::memory_order_acquire);
+                                   std::memory_order_acquire) &&
+                               server.clientCount() == 3U;
                     }) ||
          !sendJson(*rejectedGuest,
                    { { "type", "join_room" },
