@@ -222,11 +222,20 @@ void WelcomeView::renderHome(UIManager* manager)
                     const auto& title = topic.m_title.get(language);
                     // 项目限定主题只读取 UI
                     // 已消费的生命周期状态，不跨线程访问控制器。
-                    const bool canEnterTopic = Walkthrough::topicAvailable(
-                        topic,
-                        manager->hasActiveProjectUiState() &&
-                            !manager->isProjectTransitionInProgress(),
-                        manager->hasOpenBeatmapEditor());
+                    // 新建谱面教程使用资源目录身份检查，不能在用户的其它项目中演示。
+                    const bool canEnterTopic =
+                        Walkthrough::topicAvailableInProject(
+                            topic,
+                            manager->hasActiveProjectUiState() &&
+                                !manager->isProjectTransitionInProgress(),
+                            manager->hasOpenBeatmapEditor(),
+                            manager->getActiveProjectRoot());
+                    const bool needsCanonRock =
+                        (topic.m_id == "mmm.create-beatmap" ||
+                         topic.m_id == "mmm.create-beatmap-template") &&
+                        !canEnterTopic;
+                    // 未满足目录门禁时直接在卡片给出专用提示，让用户回到打开项目路线。
+                    // 禁用按钮仍保留进度展示，不清除其它项目下已经记录的学习状态。
                     // 主题 ID 隔离相同可见标题或相同阶段中的卡片状态。
                     ImGui::PushID(topic.m_id.c_str());
                     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,
@@ -275,13 +284,15 @@ void WelcomeView::renderHome(UIManager* manager)
                     // 第二行入口提示裁剪到卡片右侧内边距。
                     draw->PushClipRect(
                         { textX, pos.y }, { end.x - padding, end.y }, true);
-                    draw->AddText({ textX, pos.y + padding + line * 1.5F },
-                                  ImGui::GetColorU32(ImGuiCol_TextDisabled),
-                                  TR(canEnterTopic ? "ui.welcome.start_learning"
-                                     : topic.m_requiresBeatmap
-                                         ? "ui.welcome.requires_beatmap"
-                                         : "ui.welcome.requires_project")
-                                      .data());
+                    draw->AddText(
+                        { textX, pos.y + padding + line * 1.5F },
+                        ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                        TR(canEnterTopic    ? "ui.welcome.start_learning"
+                           : needsCanonRock ? "ui.welcome.requires_canonrock"
+                           : topic.m_requiresBeatmap
+                               ? "ui.welcome.requires_beatmap"
+                               : "ui.welcome.requires_project")
+                            .data());
                     draw->PopClipRect();
                     if ( ImGui::IsItemHovered() )
                         // 悬停显示完整标题，补偿卡片中的裁剪。

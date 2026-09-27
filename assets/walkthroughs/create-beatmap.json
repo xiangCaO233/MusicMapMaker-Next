@@ -6,7 +6,7 @@
   "requires_project": true,
   "completion": "all",
   "title": {"zh_cn": "新建谱面", "en_us": "Create a beatmap"},
-  "description": {"zh_cn": "从空白谱面开始的推荐流程：选择主音频，自动测量歌曲 BPM 与首拍偏移，确认并修正参考值，再补充谱面元数据、封面和背景，最后确认创建。", "en_us": "Recommended blank-beatmap flow: select the main audio, automatically detect the song BPM and first-beat offset, verify and correct the reference values, complete metadata, cover, and background, then confirm creation."},
+  "description": {"zh_cn": "请先通过“打开项目”演练打开引导资源中的 canonrock 项目目录。本练习只能在该项目中进行：选择主音频，自动测量歌曲 BPM 与首拍偏移，补充谱面信息和视觉资源，最后创建空白谱面。", "en_us": "First open the canonrock project folder from the walkthrough assets through the Open Project walkthrough. This practice runs only in that project: select its main audio, measure BPM and first-beat offset, complete the beatmap details and visual resources, then create a blank beatmap."},
   "branches": [
     {
       "id": "blank",
@@ -15,7 +15,7 @@
         {
           "id": "open",
           "title": {"zh_cn": "打开新建谱面向导", "en_us": "Open the New Beatmap Wizard"},
-          "body": {"zh_cn": "在已有项目中点击 **文件 → 新建谱面**，也可以按 **Ctrl+N**。向导打开后保持创建方式为“新建”。", "en_us": "In an open project, choose **File → New Beatmap** or press **Ctrl+N**. Keep the creation source set to New when the wizard opens."},
+          "body": {"zh_cn": "确认当前打开的是引导资源中的 canonrock 项目目录，然后点击 **文件 → 新建谱面**，也可以按 **Ctrl+N**。向导打开后保持创建方式为“新建”。", "en_us": "With the canonrock walkthrough project folder open, choose **File → New Beatmap** or press **Ctrl+N**. Keep the creation source set to New when the wizard opens."},
           "signals": ["beatmap.create.menu.dialog", "beatmap.create.shortcut.dialog"],
           "guide": {"prompt": {"zh_cn": "点击“文件 → 新建谱面”，或按 Ctrl+N 打开向导。", "en_us": "Choose File → New Beatmap, or press Ctrl+N to open the wizard."}, "targets": ["main-menu.file", "main-menu.file.new-beatmap"]}
         },

@@ -23,6 +23,11 @@ void restrictOpenProjectGuideToCanonRock(bool active);
 bool openProjectGuideAllows(const std::filesystem::path& path);
 /// @brief 查询当前是否处于 CanonRock 打开演练，供 UI 选择器定位示例目录。
 bool openProjectGuideRestricted();
+/// @brief 判断主题在当前项目中是否允许进入；新建谱面演练限定 CanonRock。
+/// @warning UI 热路径：CanonRock 目录身份只在首次调用时解析，逐帧仅比较路径。
+bool topicAvailableInProject(const Topic& topic, bool hasActiveProject,
+                             bool                         hasOpenBeatmap,
+                             const std::filesystem::path& projectRoot);
 /// @brief 独立于演练窗口的主题目录、事件适配、操作注册及进度存储服务。
 class Service
 {

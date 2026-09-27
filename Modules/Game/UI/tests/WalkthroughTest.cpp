@@ -118,6 +118,7 @@
 /// - 结束演练后所有路径重新走正常打开流程，限制不能泄漏到其它主题。
 /// - 资源占位只在测试输出配置根下建立，不要求真实 CanonRock 压缩包；
 /// - 文件系统身份检查使用存在的临时文件，避免不存在路径的假阳性。
+/// - 两个新建谱面引导只在 CanonRock 项目根下可进入，普通主题不受影响。
 
 /// @brief 验证分支隔离、每步手动了解、信号判定、配置校验和无窗口持久化。
 /// @param argc 必须包含测试输出根目录参数。
@@ -621,6 +622,15 @@ int main(int argc, char** argv)
              topics[5].m_order >= topics[6].m_order ||
              topics[6].m_order >= topics[7].m_order )
             return 25;
+        // 空白和模板入口共用 CanonRock 项目门禁，错误项目及无项目都不能启动。
+        // 普通项目主题仍由原有项目条件决定，不继承这一教学限制。
+        if ( !topicAvailableInProject(topics[2], true, false, canonRock) ||
+             !topicAvailableInProject(topics[3], true, false, canonRock) ||
+             topicAvailableInProject(topics[2], true, false, directory) ||
+             topicAvailableInProject(topics[3], true, false, beatmap) ||
+             topicAvailableInProject(topics[2], false, false, canonRock) ||
+             !topicAvailableInProject(topics[1], true, false, directory) )
+            return 105;
         // 包投放仅 completed 而非只读时不应完成教程步骤。
         MMM::Event::ProjectOpenInteractionEvent event;
         event.m_origin    = MMM::Event::ProjectOpenOrigin::PackageDrop;

@@ -6,7 +6,7 @@
   "requires_project": true,
   "completion": "all",
   "title": {"zh_cn": "从已有模板创建谱面", "en_us": "Create from an existing template"},
-  "description": {"zh_cn": "复用一个已经打开的谱面作为模板，选择要复制的元数据、时间线和物件，再确认歌曲资源与新谱面信息。模板只作为创建来源，不会被反向修改。", "en_us": "Use an already open beatmap as a template, choose which metadata, timelines, and objects to copy, then confirm the song resources and new beatmap details. The source template is not modified."},
+  "description": {"zh_cn": "请先通过“打开项目”演练打开引导资源中的 canonrock 项目目录，并打开「卡农-示例谱面.mmm」。本练习只能在该项目中复制模板；源谱面不会被反向修改。", "en_us": "First open the canonrock project folder from the walkthrough assets through the Open Project walkthrough, then open 卡农-示例谱面.mmm. This template practice runs only in that project; the source beatmap is not modified."},
   "branches": [
     {
       "id": "template",
@@ -15,7 +15,7 @@
         {
           "id": "open",
           "title": {"zh_cn": "准备模板并打开向导", "en_us": "Prepare the template and open the wizard"},
-          "body": {"zh_cn": "先在当前项目中打开要作为模板的谱面，再点击 **文件 → 新建谱面** 或按 **Ctrl+N**。未打开的谱面不会出现在模板候选列表中。", "en_us": "Open the beatmap you want to use as a template in the current project, then choose **File → New Beatmap** or press **Ctrl+N**. Closed beatmaps do not appear in the template list."},
+          "body": {"zh_cn": "在 canonrock 项目中打开「卡农-示例谱面.mmm」作为模板，再点击 **文件 → 新建谱面** 或按 **Ctrl+N**。未打开的谱面不会出现在模板候选列表中。", "en_us": "Open 卡农-示例谱面.mmm in the canonrock project as the template, then choose **File → New Beatmap** or press **Ctrl+N**. Closed beatmaps do not appear in the template list."},
           "signals": ["beatmap.create.menu.dialog", "beatmap.create.shortcut.dialog"],
           "guide": {"prompt": {"zh_cn": "确认模板谱面已经打开，然后进入“文件 → 新建谱面”。", "en_us": "Make sure the template beatmap is open, then choose File → New Beatmap."}, "targets": ["main-menu.file", "main-menu.file.new-beatmap"]}
         },

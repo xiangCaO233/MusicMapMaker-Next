@@ -110,6 +110,15 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
                                  const Walkthrough::Step& step, bool reviewing)
 {
     if ( !step.m_guide ) return;
+    // 页面按钮之外的重放入口也必须重新检查项目身份。
+    // 若用户在菜单或弹窗操作中切换了项目，不能启动指向别的项目的遮罩。
+    if ( !Walkthrough::topicAvailableInProject(
+             topic,
+             manager->hasActiveProjectUiState() &&
+                 !manager->isProjectTransitionInProgress(),
+             manager->hasOpenBeatmapEditor(),
+             manager->getActiveProjectRoot()) )
+        return;
     // 每次从分支入口重练打开项目，都先单独关闭旧项目；关闭确认仍可交互。
     // 关闭流程完成前不启动 Spotlight，也不排入新打开请求覆盖关闭意图。
     // 回看首步也遵守同一规则，不能保留上轮的活动项目继续演示打开。
@@ -255,12 +264,15 @@ void WalkthroughPage::updateGuide(UIManager* manager)
         topics.begin(), topics.end(), [&](const Walkthrough::Topic& candidate) {
             return candidate.m_id == m_activeGuide->topicId;
         });
+    // 运行中切走 CanonRock 后立即撤掉引导，避免后续业务信号推进错误项目。
+    // 这里只读取 UI 已归约的项目根；不等待逻辑线程项目锁。
     if ( topic == topics.end() ||
-         !Walkthrough::topicAvailable(
+         !Walkthrough::topicAvailableInProject(
              *topic,
              manager->hasActiveProjectUiState() &&
                  !manager->isProjectTransitionInProgress(),
-             manager->hasOpenBeatmapEditor()) ) {
+             manager->hasOpenBeatmapEditor(),
+             manager->getActiveProjectRoot()) ) {
         // 环境或目录失效后立即撤掉遮罩，不能继续指向不存在的编辑区。
         stopGuide(manager);
         return;
@@ -354,11 +366,13 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
     // 主题引用只在本帧使用，不跨越目录可能重建的生命周期。
     const auto& topic = topics[topicIndex];
     // 项目条件同时约束页面内操作入口，处理用户停留教程时关闭项目的情况。
-    const bool canEnterTopic = Walkthrough::topicAvailable(
+    // 主题正文与欢迎卡片共用门禁，防止已打开页面绕过目录限制。
+    const bool canEnterTopic = Walkthrough::topicAvailableInProject(
         topic,
         manager->hasActiveProjectUiState() &&
             !manager->isProjectTransitionInProgress(),
-        manager->hasOpenBeatmapEditor());
+        manager->hasOpenBeatmapEditor(),
+        manager->getActiveProjectRoot());
     if ( !canEnterTopic && m_activeGuide ) {
         // 项目消失后立即结束旧目标遮罩，避免仍引导不可执行的菜单动作。
         stopGuide(manager);
@@ -415,8 +429,11 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
         ImGui::Spacing();
         ImGui::TextDisabled(
             "%s",
-            TR(topic.m_requiresBeatmap ? "ui.walkthrough.requires_beatmap"
-                                       : "ui.walkthrough.requires_project")
+            TR((topic.m_id == "mmm.create-beatmap" ||
+                topic.m_id == "mmm.create-beatmap-template")
+                   ? "ui.walkthrough.requires_canonrock"
+               : topic.m_requiresBeatmap ? "ui.walkthrough.requires_beatmap"
+                                         : "ui.walkthrough.requires_project")
                 .data());
     }
     ImGui::Dummy({ 0, 28.0F * scale });

@@ -112,6 +112,31 @@ bool openProjectGuideRestricted()
     return canonRockOnly;
 }
 
+/// @brief 在普通项目条件之外，限定两个新建谱面演练的项目身份。
+/// @details 打开项目演练可以使用临时谱包，但创建演练需要可写的项目目录；
+/// 因此只接受项目控制器发布的 CanonRock 根目录，不接受解包后的临时根目录。
+/// @warning UI 热路径：首次解析示例目录后，后续只比较 UI 已发布的路径。
+bool topicAvailableInProject(const Topic& topic, bool hasActiveProject,
+                             bool                         hasOpenBeatmap,
+                             const std::filesystem::path& projectRoot)
+{
+    if ( !topicAvailable(topic, hasActiveProject, hasOpenBeatmap) )
+        return false;
+    if ( topic.m_id != "mmm.create-beatmap" &&
+         topic.m_id != "mmm.create-beatmap-template" )
+        return true;
+    // 项目控制器发布的根目录已经规范化；只在第一次查询时规范化示例目录。
+    // 不在 UI 帧内重复调用文件系统 API，也不修改普通项目的创建行为。
+    // 配置根在进程内固定，缓存与同步资源目录具有相同生命周期。
+    static const auto directory = [] {
+        std::error_code error;
+        auto            result =
+            std::filesystem::weakly_canonical(canonRockDirectory(), error);
+        return error ? canonRockDirectory().lexically_normal() : result;
+    }();
+    return projectRoot == directory;
+}
+
 /// @brief Service 的稳定目录、进度、事件队列和动作注册表实现。
 /// @details PImpl 隔离
 /// concurrentqueue、事件类型和持久化细节，公开头只暴露模型接口。
