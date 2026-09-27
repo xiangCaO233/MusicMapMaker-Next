@@ -23,6 +23,8 @@ struct Text {
 struct Guide {
     /// @brief 没有控件目标时的操作提示，有目标时显示在突出框附近。
     Text m_prompt;
+    /// @brief 可选的随步骤播放的内置操作 GIF 目标。
+    std::string m_gif;
     /// @brief 与具体控件注册点约定的稳定语义目标 ID。
     std::vector<std::string> m_targets;
     /// @brief 必须由业务动作完成，不能用“知道了”跳过。

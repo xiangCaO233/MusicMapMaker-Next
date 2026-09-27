@@ -362,6 +362,28 @@ int main(int argc, char** argv)
          packagedLessons->front().m_reference.empty() ||
          !packagedLessons->back().m_advanced )
         return 107;
+    // 分发谱面的每个批注段落必须对应一张实际打包的操作 GIF；三阶段
+    // 共用该段示范，教学步骤切换时不能出现空白媒体键。
+    auto packagedTopic = parseTopic(BUILTIN_COMPOSE_BEATMAP_WALKTHROUGH);
+    if ( !packagedTopic || packagedLessons->size() != 14U ) return 122;
+    populateComposeLessonTopic(*packagedTopic, *packagedLessons);
+    // 用源码中的真实 CanonRock 批注生成路线，防止只对隔离夹具的
+    // 五段教学生效，却漏掉后面的进阶 GIF 映射。
+    std::size_t gifSteps = 0;
+    const auto  gifDirectory =
+        std::filesystem::path(MMM_COMPOSE_SAMPLE_FILE).parent_path() / "gifs";
+    for ( const auto& branch : packagedTopic->m_branches )
+        for ( const auto& step : branch.m_steps ) {
+            // 不要求 GPU 就能验证每一步所引用的文件已纳入可同步资产。
+            // 目录由谱面同级推导，不能误指向测试写入的临时配置根。
+            if ( !step.m_guide ||
+                 !step.m_guide->m_gif.starts_with("walkthrough-gif:") ||
+                 !std::filesystem::is_regular_file(
+                     gifDirectory / step.m_guide->m_gif.substr(16U)) )
+                return 123;
+            ++gifSteps;
+        }
+    if ( gifSteps != 42U ) return 124;
     // 真实目录的删除段是辅助撤销按钮的截止点。
     // 此检查贯穿后续进阶段落，避免只在删除段本身隐藏按钮。
     // 标题仅用于找到边界；按钮状态必须来自加载时的段落次序。

@@ -1749,7 +1749,8 @@ void UIManager::onUpdateUI()
     m_walkthroughSpotlight->render(
         Config::AppConfig::instance().getWindowContentScale(),
         TR("ui.walkthrough.spotlight_acknowledge").data(),
-        TR("ui.walkthrough.previous_step").data());
+        TR("ui.walkthrough.previous_step").data(),
+        getView<MarkdownImageCache>("WalkthroughImages"));
 
     // 帧末跟踪根窗口焦点并同步平台标题栏命中区域。
     trackImGuiFocusForAutoSave();

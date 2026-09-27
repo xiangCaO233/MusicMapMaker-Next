@@ -24,7 +24,8 @@ std::string resolveUpdateImageUrl(std::string_view destination);
 MarkdownImagePixels loadUpdateImage(const std::string& url);
 /// @brief 解码有界的图片字节；GIF 逐帧生成缩略图，不展开全尺寸动画。
 /// @warning 仅后台任务或测试调用，GIF 由 FFmpeg 从任务专属临时文件逐帧读取。
-MarkdownImagePixels decodeUpdateImage(std::span<const unsigned char> bytes);
+MarkdownImagePixels decodeUpdateImage(std::span<const unsigned char> bytes,
+                                      unsigned animatedEdge = 320U);
 
 /// @brief 更新日志专用图片缓存，生命周期由 UIManager 管理。
 class MarkdownImageCache final : public ITextureLoader, public IMarkdownImages
@@ -38,6 +39,10 @@ public:
     void* getActualInstance() override { return this; }
     /// @brief 新文档到达时扫描图片并加入去重队列，不执行网络操作。
     void prepareDocument(std::string_view markdown);
+    /// @brief 排入单张远程图片或打包的教程 GIF，不读取文件。
+    void prepareImage(std::string_view destination);
+    /// @brief 已上传的 GIF 从当前教学阶段开始重新计时，不重建纹理。
+    void restartImage(std::string_view destination);
     /// @brief 仅查询纹理与动画帧，禁止热路径 I/O 或所有权复制。
     MarkdownImage findImage(std::string_view destination) const override;
     /// @brief 缓存没有独立窗口，纹理生命周期由资源准备阶段推进。

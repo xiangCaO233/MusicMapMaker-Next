@@ -1,6 +1,7 @@
 #include "ui/imgui/markdown/MarkdownImageCache.h"
 
 #include "common/VideoFrameDecoder.h"
+#include "config/AppPaths.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/imgui/markdown/MarkdownParser.h"
@@ -25,7 +26,7 @@
 #include <vector>
 
 /// @file MarkdownImageCache.cpp
-/// @brief Markdown 远程图片的安全 URL 解析、后台下载解码、图集与 GPU 缓存实现。
+/// @brief Markdown 远程图片与内置教程 GIF 的后台解码和 GPU 图集缓存。
 /// @details UI 线程只扫描文档、排队键和查询已上传纹理；网络、图片解码及
 /// GIF 临时文件操作全部在线程池任务中完成，GPU 上传只在纹理准备阶段执行。
 ///
@@ -42,6 +43,10 @@
 /// - 文档缓存最多接纳 32 个不同目标；
 /// - 同时只运行一个下载与解码任务。
 /// - 失败目标保留条目状态，避免可见帧反复发起相同请求。
+/// 教程 GIF 的来源仅限同步到配置根的打包资源，Markdown 的远程地址
+/// 解析仍只允许 HTTP(S)；两条来源复用相同的字节与图集大小上限。
+/// 为适配没有 FFmpeg GIF 解码器的预编译包，打包动画先降至 480 像素，
+/// 使完整源帧低于内存解码上限；显示图集再降至 192 像素。
 
 namespace MMM::UI
 {
@@ -53,6 +58,54 @@ constexpr std::size_t MAX_CACHE_BYTES =
     192U * 1024U * 1024U;  ///< GPU 图集总预算。
 constexpr std::size_t MAX_MEMORY_GIF_BYTES =
     128U * 1024U * 1024U;  ///< 内存 GIF 源帧总预算。
+/// @brief 与网络 URL 命名空间隔离的内置资源键前缀。
+constexpr std::string_view WALKTHROUGH_GIF_PREFIX = "walkthrough-gif:";
+
+/// @brief 只接受单个 ASCII 文件名，阻止教程图片键逃出资源目录。
+/// @param destination 由教学步骤提供的完整媒体键。
+/// @return 只有安全的单文件 GIF 名称才允许进入本地资源加载分支。
+/// @note 拒绝路径分隔符、连续句点和其它 scheme，不对任意磁盘路径开放。
+bool validWalkthroughGif(std::string_view destination)
+{
+    if ( !destination.starts_with(WALKTHROUGH_GIF_PREFIX) ) return false;
+    const auto file = destination.substr(WALKTHROUGH_GIF_PREFIX.size());
+    if ( file.size() < 5U || !file.ends_with(".gif") ) return false;
+    return std::all_of(file.begin(),
+                       file.end(),
+                       [](char character) {
+                           return (character >= 'a' && character <= 'z') ||
+                                  (character >= '0' && character <= '9') ||
+                                  character == '-' || character == '.';
+                       }) &&
+           file.find("..") == std::string_view::npos;
+}
+
+/// @brief 后台读取已打包的单张教程动画，沿用相同的图片解码限制。
+/// @param destination 已通过单文件名语法验证的媒体键。
+/// @return 文件丢失、超限或解码失败时返回空图集。
+/// @warning 后台任务可访问磁盘；UI 的每帧查询绝不能调用此函数。
+MarkdownImagePixels loadWalkthroughGif(const std::string& destination)
+{
+    if ( !validWalkthroughGif(destination) ) return {};
+    // 校验后的文件名不含路径分隔符；配置目录由资源同步流程维护。
+    const auto      path = Config::AppPaths::assetsRootPath() / "walkthroughs" /
+                           "canonrock" / "gifs" /
+                           destination.substr(WALKTHROUGH_GIF_PREFIX.size());
+    std::error_code error;
+    const auto      size = std::filesystem::file_size(path, error);
+    // 先查元数据再分配，防止资源被替换为任意大文件时扩张工作线程内存。
+    if ( error || size == 0U || size > MAX_DOWNLOAD_BYTES ) return {};
+    std::ifstream file(path, std::ios::binary);
+    if ( !file ) return {};
+    std::vector<unsigned char> bytes(static_cast<std::size_t>(size));
+    file.read(reinterpret_cast<char*>(bytes.data()),
+              static_cast<std::streamsize>(bytes.size()));
+    // 文件在读取期间被替换或截断时不把残缺字节交给 GIF 解码器。
+    if ( !file || file.gcount() != static_cast<std::streamsize>(bytes.size()) )
+        return {};
+    // 内置操作动画使用较小图集，14 段同时浏览也能留在 GPU 预算内。
+    return decodeUpdateImage(bytes, 192U);
+}
 
 /// @brief 跳过 GIF 扩展或图像数据的连续子块。
 /// @param bytes 完整 GIF 文件字节。
@@ -179,14 +232,17 @@ void copyFrame(MarkdownImagePixels& out, unsigned index,
 /// @param height 源帧高度。
 /// @param frames 待存储帧数。
 /// @param duration 动画循环时长；静态图为零。
+/// @param animatedEdge 动画帧最长边，静态图保留既有独立上限。
 /// @return 已分配 RGBA 缓冲和完整帧布局。
 MarkdownImagePixels makeAtlas(unsigned width, unsigned height, unsigned frames,
-                              double duration)
+                              double duration, unsigned animatedEdge)
 {
     MarkdownImagePixels out;
     // 动画采用较小上限控制多帧内存，静态图保留更高阅读分辨率。
     const double scale =
-        std::min(1.0, (frames > 1U ? 320.0 : 1280.0) / std::max(width, height));
+        std::min(1.0,
+                 (frames > 1U ? static_cast<double>(animatedEdge) : 1280.0) /
+                     std::max(width, height));
     out.frameWidth  = std::max(1U, static_cast<unsigned>(width * scale));
     out.frameHeight = std::max(1U, static_cast<unsigned>(height * scale));
     // 列数同时受帧数和 4096 像素图集宽度限制。
@@ -207,13 +263,15 @@ MarkdownImagePixels makeAtlas(unsigned width, unsigned height, unsigned frames,
 /// @param expectedHeight 已验证的逻辑画布高度。
 /// @param maximumFrames 预扫描确认的源帧数量。
 /// @return 解码成功时返回动画图集，否则返回空布局。
+/// @param animatedEdge 内置教程与远程图片各自的帧尺寸上限。
 /// @details 仅对源帧容量经过预扫描的 GIF 使用此路径，避免依赖可选的
 /// FFmpeg GIF 解复用器；输出仍按约 15 FPS 和 96 帧上限采样。
 /// @warning 后台资源路径：完整 GIF 解码会分配源帧缓冲，禁止在 UI 热路径调用。
 MarkdownImagePixels decodeBoundedGif(std::span<const unsigned char> bytes,
                                      unsigned    expectedWidth,
                                      unsigned    expectedHeight,
-                                     std::size_t maximumFrames)
+                                     std::size_t maximumFrames,
+                                     unsigned    animatedEdge)
 {
     int* rawDelays = nullptr;
     int  width = 0, height = 0, sourceFrames = 0, channels = 0;
@@ -247,7 +305,8 @@ MarkdownImagePixels decodeBoundedGif(std::span<const unsigned char> bytes,
     // 图集帧数只依赖总时长，不随源文件的帧数线性增长。
     const unsigned frames =
         std::clamp(static_cast<unsigned>(std::ceil(duration * 15.0)), 1U, 96U);
-    auto       out = makeAtlas(expectedWidth, expectedHeight, frames, duration);
+    auto out = makeAtlas(
+        expectedWidth, expectedHeight, frames, duration, animatedEdge);
     const auto frameBytes =
         static_cast<std::size_t>(expectedWidth) * expectedHeight * 4U;
     int    sourceIndex = 0;
@@ -346,12 +405,16 @@ MarkdownImagePixels loadUpdateImage(const std::string& url)
 
 /// @brief 将下载字节解码为静态或动画 RGBA 图集。
 /// @param bytes 受下载上限约束的图片文件内容。
+/// @param animatedEdge 动画缩略帧的最长边，不允许超过远程图片原上限。
 /// @return 解码和尺寸校验成功时返回图集，否则返回空。
 /// @warning 后台低频路径：GIF 会创建任务专属临时目录并逐帧调用解码器。
-MarkdownImagePixels decodeUpdateImage(std::span<const unsigned char> bytes)
+MarkdownImagePixels decodeUpdateImage(std::span<const unsigned char> bytes,
+                                      unsigned animatedEdge)
 {
     // 直接调用场景也必须执行与下载回调相同的大小边界。
-    if ( bytes.empty() || bytes.size() > MAX_DOWNLOAD_BYTES ) return {};
+    if ( bytes.empty() || bytes.size() > MAX_DOWNLOAD_BYTES ||
+         animatedEdge == 0U || animatedEdge > 320U )
+        return {};
     // 先读取头部尺寸，拒绝无效或超过 GPU 支持边界的图像。
     int width = 0, height = 0, channels = 0;
     if ( !stbi_info_from_memory(bytes.data(),
@@ -378,7 +441,7 @@ MarkdownImagePixels decodeUpdateImage(std::span<const unsigned char> bytes)
                 stbi_image_free);
         if ( !pixels ) return {};
         // 静态图也通过单帧图集路径缩放并统一布局结构。
-        auto out = makeAtlas(width, height, 1U, 0.0);
+        auto out = makeAtlas(width, height, 1U, 0.0, animatedEdge);
         copyFrame(out, 0U, pixels.get(), width, height);
         return out;
     }
@@ -386,7 +449,8 @@ MarkdownImagePixels decodeUpdateImage(std::span<const unsigned char> bytes)
     // 大型 GIF 保留原有逐帧解码路径，以免一次展开全部源帧。
     const auto boundedFrames = boundedGifFrameCount(bytes, width, height);
     if ( boundedFrames > 0U ) {
-        auto decoded = decodeBoundedGif(bytes, width, height, boundedFrames);
+        auto decoded =
+            decodeBoundedGif(bytes, width, height, boundedFrames, animatedEdge);
         if ( !decoded.pixels.empty() ) return decoded;
     }
     // 预扫描超出源帧预算时仍尝试逐帧解码，以保留大型动画的现有支持。
@@ -430,7 +494,7 @@ MarkdownImagePixels decodeUpdateImage(std::span<const unsigned char> bytes)
     // 约 15 FPS 采样并限制为 1–96 帧，长动画会降低实际采样率。
     const unsigned frames =
         std::clamp(static_cast<unsigned>(std::ceil(duration * 15.0)), 1U, 96U);
-    auto out = makeAtlas(width, height, frames, duration);
+    auto out = makeAtlas(width, height, frames, duration, animatedEdge);
     for ( unsigned index = 0; index < frames; ++index ) {
         // 在整个动画时长内均匀取样，不保存解码器原始全部帧。
         const auto* frame = decoder.decodeFrameAt(duration * index / frames);
@@ -476,19 +540,35 @@ void MarkdownImageCache::prepareDocument(std::string_view markdown)
     visitMarkdownBlocks(markdown, [&](const MarkdownBlock& block) {
         if ( block.kind == MarkdownBlockKind::Code ) return;
         visitMarkdownInline(block.text, [&](const MarkdownInlineSpan& span) {
-            // 非图片、已登记目标和超过条目上限的目标都直接忽略。
-            if ( span.kind != MarkdownInlineKind::Image ||
-                 m_impl->m_entries.contains(span.destination) ||
-                 m_impl->m_entries.size() >= 32U )
-                return;
-            // map 以原始 Markdown 目标为键，渲染查询无需再次规范化。
-            auto  key   = std::string(span.destination);
-            auto& entry = m_impl->m_entries[key];
-            // URL 不合法时永久标记失败，避免每帧重复排队。
-            entry.m_failed = resolveUpdateImageUrl(key).empty();
-            if ( !entry.m_failed ) m_impl->m_pending.push_back(std::move(key));
+            if ( span.kind == MarkdownInlineKind::Image )
+                prepareImage(span.destination);
         });
     });
+}
+
+/// @brief 为步骤主动预热一张图片，避免将 GIF 嵌入文字文档。
+/// @param destination 原始图片键；本地资源必须使用内置教程 scheme。
+/// @warning UI 低频路径：只登记键和排队，真正读盘由线程池完成。
+void MarkdownImageCache::prepareImage(std::string_view destination)
+{
+    if ( m_impl->m_entries.contains(destination) ||
+         m_impl->m_entries.size() >= 32U )
+        return;
+    auto  key   = std::string(destination);
+    auto& entry = m_impl->m_entries[key];
+    // 本地路径只有受限教程 scheme 可用，远程 Markdown 仍按旧策略解析。
+    entry.m_failed =
+        !validWalkthroughGif(key) && resolveUpdateImageUrl(key).empty();
+    if ( !entry.m_failed ) m_impl->m_pending.push_back(std::move(key));
+}
+
+/// @brief 重新进入一个教学阶段时让现有动画从首帧播放。
+/// @warning UI 低频路径：只更新时间标量，未上传的图集在上传时自行起播。
+void MarkdownImageCache::restartImage(std::string_view destination)
+{
+    const auto it = m_impl->m_entries.find(destination);
+    if ( it != m_impl->m_entries.end() && it->second.m_texture )
+        it->second.m_startTime = ImGui::GetTime();
 }
 /// @brief 启动下一后台图片任务并非阻塞轮询当前任务完成状态。
 /// @return 当前 future 已就绪、需要进入纹理准备阶段时返回 true。
@@ -502,10 +582,14 @@ bool MarkdownImageCache::needReload()
         // 取出队首作为唯一活动键，future 结果与该键一一对应。
         m_impl->m_active = std::move(m_impl->m_pending.front());
         m_impl->m_pending.erase(m_impl->m_pending.begin());
-        // prepareDocument 已验证过 URL，此处重新解析获得任务捕获值。
-        const auto url = resolveUpdateImageUrl(m_impl->m_active);
-        m_impl->m_future =
-            pool->enqueue([url]() { return loadUpdateImage(url); });
+        // 复制短键交给任务，不捕获缓存对象；视图关闭也不会悬挂 this。
+        // 本地与远程均在工作线程执行，needReload 继续保持零等待轮询。
+        const auto key   = m_impl->m_active;
+        m_impl->m_future = pool->enqueue([key]() {
+            return validWalkthroughGif(key)
+                       ? loadWalkthroughGif(key)
+                       : loadUpdateImage(resolveUpdateImageUrl(key));
+        });
     }
     // 零秒 wait_for 只查询状态，不阻塞 UI 线程。
     return m_impl->m_future.valid() &&

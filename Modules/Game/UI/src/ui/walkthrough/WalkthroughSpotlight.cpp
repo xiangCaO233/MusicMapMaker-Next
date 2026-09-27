@@ -1,5 +1,6 @@
 #include "ui/walkthrough/WalkthroughSpotlight.h"
 
+#include "ui/imgui/markdown/MarkdownRenderer.h"
 #include "ui/utils/UIWidgetUtils.h"
 
 #include <algorithm>
@@ -362,9 +363,10 @@ void Spotlight::beginFrame()
 /// @param previousStepAvailable 路线中是否存在可回看的前一步。
 /// @param reviewing 回看时只允许显式确认，防止已有状态立即跳过。
 /// @param requiresAction 是否禁止手动确认跳过。
+/// @param gif 可选动画键，随步骤重启替换而不继承前一段的演示。
 void Spotlight::start(const std::vector<std::string>& targets,
                       std::string prompt, bool previousStepAvailable,
-                      bool reviewing, bool requiresAction)
+                      bool reviewing, bool requiresAction, std::string gif)
 {
     // 新路线不继承旧练习；正常前进保留产物，回到旧目标才消费补偿。
     if ( !previousStepAvailable && !reviewing ) m_rollbacks.clear();
@@ -384,6 +386,8 @@ void Spotlight::start(const std::vector<std::string>& targets,
     m_previousPressed = m_previousMouseWasDown = false;
     m_previousButtonCenter.reset();
     m_prompt = std::move(prompt);
+    // 只保存短键；GPU 纹理继续由共享缓存持有，退出步骤时无需同步 GPU。
+    m_gif = std::move(gif);
     m_anchor.reset();
     m_companion.reset();
     m_stage                   = 0;
@@ -415,6 +419,8 @@ void Spotlight::stop()
     m_companion.reset();
     m_targets.clear();
     m_prompt.clear();
+    // 空键确保普通教程和创作教程之间不会显示上一段动画。
+    m_gif.clear();
 }
 
 /// @brief 判断是否存在当前目标或当前步骤之前的引导。
@@ -694,8 +700,9 @@ void Spotlight::reportCompanionRegion(std::string_view targetId,
 /// @param dpiScale 当前内容缩放。
 /// @param acknowledgeLabel 当前语言的确认按钮文本。
 /// @param previousLabel 当前语言的返回按钮文本，空值保留旧调用方式。
+/// @param images 已上传动画的非拥有查询接口，缺失时保留原文字引导。
 void Spotlight::render(float dpiScale, const char* acknowledgeLabel,
-                       const char* previousLabel)
+                       const char* previousLabel, const IMarkdownImages* images)
 {
     if ( !active() || completed() || !m_keepAlive ) return;
     const bool promptOnly = m_targets.empty();
@@ -797,13 +804,29 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel,
         m_prompt.empty() ? ImVec2{}
                          : ImGui::CalcTextSize(
                                m_prompt.c_str(), nullptr, false, maxTextWidth);
+    // 动画区域有固定外框，后台解码完成前后气泡不跳动。
+    // 空间不足时保留原提示与按钮，避免媒体占掉画布全部操作区域。
+    const bool   mediaVisible = !m_gif.empty() && images &&
+                                viewport->Size.x > 360.0f * dpiScale &&
+                                viewport->Size.y > 400.0f * dpiScale;
+    const ImVec2 mediaBox{
+        mediaVisible ? std::min(288.0f * dpiScale,
+                                viewport->Size.x - margin * 2.0f -
+                                    style.WindowPadding.x * 2.0f)
+                     : 0.0f,
+        mediaVisible ? std::min(220.0f * dpiScale, viewport->Size.y * 0.32f)
+                     : 0.0f
+    };
+    // 首行同时容纳文字与导航按钮，第二行媒体不改变按钮的横向命中区。
+    const float rowHeight = std::max(
+        { textSize.y,
+          buttonSize.y,
+          hasPrevious ? previousTextSize.y + style.FramePadding.y * 2.0f
+                      : 0.0f });
     const ImVec2 bubbleSize{
-        textSize.x + buttonWidth + style.WindowPadding.x * 2.0f,
-        std::max({ textSize.y,
-                   buttonSize.y,
-                   hasPrevious
-                       ? previousTextSize.y + style.FramePadding.y * 2.0f
-                       : 0.0f }) +
+        std::max(textSize.x + buttonWidth, mediaBox.x) +
+            style.WindowPadding.x * 2.0f,
+        rowHeight + (mediaVisible ? style.ItemSpacing.y + mediaBox.y : 0.0f) +
             style.WindowPadding.y * 2.0f
     };
     // 预先计算气泡外框，遮罩稍后才能一次为目标、说明和按钮留出透明区。
@@ -933,6 +956,23 @@ void Spotlight::render(float dpiScale, const char* acknowledgeLabel,
                 (acknowledgeMin->y + acknowledgeMax->y) * 0.5f
             };
             ImGui::PopID();
+        }
+        if ( mediaVisible ) {
+            // 当前 UV 由缓存按帧推进，图片只读展示，不产生新的交互热区。
+            const auto image = images->findImage(m_gif);
+            if ( image.texture && image.size.x > 0.0f && image.size.y > 0.0f ) {
+                // 保留源画面比例，UV 只切换当前图集帧，不复制纹理。
+                const float scale = std::min(mediaBox.x / image.size.x,
+                                             mediaBox.y / image.size.y);
+                ImGui::Image(image.texture,
+                             { image.size.x * scale, image.size.y * scale },
+                             image.uv0,
+                             image.uv1);
+            } else {
+                // 加载中和失败均留出相同空间；步骤仍可正常操作与退出。
+                // 不在渲染路径中重新排队失败资源，防止缺文件时反复读盘。
+                ImGui::Dummy(mediaBox);
+            }
         }
     }
     ImGui::End();

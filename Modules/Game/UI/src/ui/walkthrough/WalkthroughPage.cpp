@@ -377,11 +377,21 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
             nextSignalRevisionAtRunStart =
                 manager->walkthroughService().latestSignalRevision(*next);
     }
+    // 步骤切换时只排队一次动画；图片缓存的后台任务不阻塞画布输入。
+    // 资源视图缺席时纯文字引导仍可进入，不把图片状态当作教学判定。
+    if ( !step.m_guide->m_gif.empty() )
+        if ( auto* images =
+                 manager->getView<MarkdownImageCache>("WalkthroughImages") ) {
+            images->prepareImage(step.m_guide->m_gif);
+            // 已缓存的图集重新计时；尚在后台解码的图集上传时会自行起播。
+            images->restartImage(step.m_guide->m_gif);
+        }
     manager->walkthroughSpotlight().start(step.m_guide->m_targets,
                                           std::move(prompt),
                                           hasPrevious,
                                           reviewing,
-                                          step.m_guide->m_requiresAction);
+                                          step.m_guide->m_requiresAction,
+                                          step.m_guide->m_gif);
     if ( m_activeGuide && m_activeGuide->composeSession &&
          m_activeGuide->composeSession != composeSession ) {
         // 切换示例谱面标签时，先放开旧会话，避免旧标签在引导外仍被锁定。

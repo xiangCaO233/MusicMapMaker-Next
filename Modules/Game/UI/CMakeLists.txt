@@ -327,6 +327,13 @@ mmm_register_test_case(NAME MarkdownRendererTest COMMAND MarkdownRendererTest)
 mmm_add_test_executable(UI MarkdownImageCacheTest
                         tests/MarkdownImageCacheTest.cpp)
 target_link_libraries(MarkdownImageCacheTest PRIVATE UI)
+# 全部操作 GIF 验证打包后的帧解码和较小图集，避免只测内联单像素动画。 资源路径固定在源码目录，测试本身不写入或修改这些只读文件。
+target_compile_definitions(
+  MarkdownImageCacheTest
+  PRIVATE
+    MMM_WALKTHROUGH_GIF_DIRECTORY="${PROJECT_SOURCE_DIR}/assets/walkthroughs/canonrock/gifs"
+)
+# 注册为常规离线用例，避免真实资源测试仅在开发者手动运行时执行。
 mmm_register_test_case(NAME MarkdownImageCacheTest COMMAND
                        MarkdownImageCacheTest)
 

@@ -10,6 +10,11 @@
 #include <string_view>
 #include <vector>
 
+namespace MMM::UI
+{
+class IMarkdownImages;
+}
+
 namespace MMM::UI::Walkthrough
 {
 /// @brief 突出当前演练目标，并用可确认提示推进配置中的目标阶段。
@@ -39,7 +44,7 @@ public:
     /// @warning 用户显式进入引导时调用；允许复制字符串，不得每帧重复启动。
     void start(const std::vector<std::string>& targets, std::string prompt,
                bool previousStepAvailable = false, bool reviewing = false,
-               bool requiresAction = false);
+               bool requiresAction = false, std::string gif = {});
 
     /// @brief 当前目标或所属路线存在前序步骤时允许返回。
     bool canGoBack() const;
@@ -130,7 +135,8 @@ public:
     /// @param previousLabel 当前语言的返回按钮文本；为空时不绘制该按钮。
     /// @warning UI 热路径：每帧创建固定 ID 的小提示窗口，不拦截窗口外输入。
     void render(float dpiScale, const char* acknowledgeLabel,
-                const char* previousLabel = nullptr);
+                const char*            previousLabel = nullptr,
+                const IMarkdownImages* images        = nullptr);
 
     /// @brief 返回本帧最终采用的目标 ID，供诊断和无 GPU 测试使用。
     /// @return 没有可见候选目标时返回空视图。
@@ -190,6 +196,8 @@ private:
     void rollbackTarget(std::string_view targetId);
     /// @brief 当前引导提示文本，来自已验证的演练配置。
     std::string m_prompt;
+    /// @brief 当前步骤的可选动画键，纹理仍归图片缓存持有。
+    std::string m_gif;
     /// @brief 本帧优先级最高的可见目标。
     std::optional<Anchor> m_anchor;
     /// @brief 当前目标的额外可操作亮区，与主目标分开挖孔。

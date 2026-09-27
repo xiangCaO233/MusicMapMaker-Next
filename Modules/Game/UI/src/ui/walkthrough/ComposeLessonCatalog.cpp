@@ -52,6 +52,36 @@ constexpr std::string_view END_SUFFIX = "结束";
 /// @brief 作者在进阶第一段起点使用的分组标记。
 constexpr std::string_view ADVANCED_PREFIX = "（进阶教学）";
 
+/// @brief 将谱面批注标题关联到打包的操作动画。
+/// @return 未配置动画的自定义段落返回空，仍可正常进入教学。
+/// @details 使用规范化后的批注标题作为键，进阶段落的组名前缀已被剥离。
+/// 资源文件名使用 ASCII，避免配置同步与跨平台路径编码的差异。
+/// 映射只决定教学媒体，不参与播放边界或 Note 答案的验收。
+std::string_view lessonGif(std::string_view title)
+{
+    // 标题来自示例谱面，不能以段落数组下标匹配动画；作者插入新段落时
+    // 不应错配后面所有演示。没有配套文件的段落保持纯文字引导。
+    constexpr std::array<std::pair<std::string_view, std::string_view>, 14>
+        GIFS{ { { "单键放置教学", "place-tap.gif" },
+                { "长条放置教学", "place-hold.gif" },
+                { "滑键教学（给嚓音踩滑键）", "place-flick.gif" },
+                { "折线放置教学", "place-polyline.gif" },
+                { "拖拽移动教学", "move-note.gif" },
+                { "滑键拖拽调整教学", "adjust-flick.gif" },
+                { "长条拖拽调整教学", "adjust-hold.gif" },
+                { "删除物件教学", "delete-note.gif" },
+                { "续写折线教学", "extend-polyline.gif" },
+                { "折线连接教学", "connect-polyline.gif" },
+                { "折线覆盖物件教学", "cover-note.gif" },
+                { "折线拖拽调整教学", "adjust-polyline.gif" },
+                { "折线拖拽合并教学", "merge-polyline.gif" },
+                { "折线删除子物件教学", "delete-polyline-segment.gif" } } };
+    // 启动目录时只查一次，每帧 UI 不重新遍历这张表。
+    for ( const auto& [name, file] : GIFS )
+        if ( title == name ) return file;
+    return {};
+}
+
 /// @brief 起点或终点批注的最小字段集合。
 struct Marker {
     std::string content;           ///< 教学说明原文。
@@ -627,6 +657,10 @@ void populateComposeLessonTopic(Topic&                            topic,
             // 播放与编辑各有独立语义目标；UI 只接收业务状态机的完成通知。
             // 所有步骤禁用“知道了”，避免错误谱面或未完成物件继续推进。
             Guide guide;
+            // 同一段的首播、练习与复播都保留操作演示；媒体不改变
+            // 三阶段实际由播放器和谱面验收推进的状态机。
+            if ( const auto file = lessonGif(lesson.m_title); !file.empty() )
+                guide.m_gif = "walkthrough-gif:" + std::string(file);
             guide.m_targets = { phaseIndex == 1 ? "compose.lesson.practice"
                                                 : "compose.lesson.playback" };
             guide.m_requiresAction = true;
