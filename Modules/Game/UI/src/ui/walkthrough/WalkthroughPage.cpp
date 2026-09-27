@@ -129,7 +129,38 @@ WalkthroughPage::~WalkthroughPage()
     if ( m_draftAreaMutedBeforeGuide.has_value() )
         Audio::AudioManager::instance().setDraftKeySoundAreaMuted(
             *m_draftAreaMutedBeforeGuide);
+    setTemporaryPolylinePathRemoval(false);
     Walkthrough::restrictOpenProjectGuideToCanonRock(false);
+}
+
+/// @brief 在折线覆盖练习与普通步骤之间切换临时编辑设置。
+/// @param enabled 当前步骤是否要求画出的折线清理路径上的已有物件。
+/// @details 此教学段落的草稿答案没有路径节点上的独立单键和长条。
+/// 用户可能关闭了软件默认关闭的路径清理设置，因此进入练习时临时开启。
+/// 记下进入时的值而不是固定恢复 false，避免覆盖已经开启此设置的用户偏好。
+/// 每次切换到预览、复播或其它主题都会恢复；直接销毁页面也会恢复。
+/// 配置发布由引擎统一完成，使 DrawTool 使用的会话副本与设置页一致。
+/// 仅在配置确实变化时广播，避免同一练习重复进入后发送冗余命令。
+/// @warning 只在步骤交接和退出时广播配置，不在每帧引导更新中调用。
+void WalkthroughPage::setTemporaryPolylinePathRemoval(bool enabled)
+{
+    auto config = Config::AppConfig::instance().getEditorConfig();
+    if ( enabled ) {
+        if ( !m_polylinePathRemovalBeforeGuide.has_value() )
+            m_polylinePathRemovalBeforeGuide =
+                config.settings.removeObjectsOnPolylinePath;
+        if ( config.settings.removeObjectsOnPolylinePath ) return;
+        config.settings.removeObjectsOnPolylinePath = true;
+    } else {
+        if ( !m_polylinePathRemovalBeforeGuide.has_value() ) return;
+        const bool original = *m_polylinePathRemovalBeforeGuide;
+        m_polylinePathRemovalBeforeGuide.reset();
+        if ( config.settings.removeObjectsOnPolylinePath == original ) return;
+        config.settings.removeObjectsOnPolylinePath = original;
+    }
+    // 设置必须通过引擎向所有会话发布；只改 AppConfig 会让 DrawTool 继续
+    // 读取旧的 lastConfig，教学画出的折线就不会覆盖相交的 Note。
+    Logic::EditorEngine::instance().setEditorConfig(config);
 }
 
 /// @brief 启动一个配置步骤的突出引导。
@@ -266,6 +297,21 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
                 Event::ProjectCloseRequestedEvent{});
         return;
     }
+    // 覆盖段需要与谱面作者在草稿中配置的最终物件集合一致；仅靠
+    // Guide 的通用画布目标无法推断本段要清理已有单键。
+    // 依据目录索引读取当前教学段落，不把第 11 段的顺序写成固定数字。
+    bool teachPolylinePathRemoval = false;
+    if ( step.m_composeLesson &&
+         step.m_composeLesson->m_phase ==
+             Walkthrough::ComposeLessonPhase::Practice ) {
+        if ( const auto* lesson = manager->walkthroughService().composeLesson(
+                 step.m_composeLesson->m_lessonIndex);
+             lesson && lesson->m_title == "折线覆盖物件教学" )
+            teachPolylinePathRemoval = true;
+    }
+    // 在新聚光灯开放画布之前发布设置，首个绘制手势就应使用正确策略。
+    // 非覆盖步骤立即恢复原值，后续折线不会继续清理其它章节的物件。
+    setTemporaryPolylinePathRemoval(teachPolylinePathRemoval);
     const auto& configuredPrompt = step.m_guide->m_prompt.get(language);
     // 路线顺序是前后导航的唯一依据，历史完成度不能删除回看入口。
     bool hasPrevious = false;
@@ -283,6 +329,12 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
         prompt += "\n";
         prompt += Config::pathToUtf8(Walkthrough::canonRockDirectory());
     }
+    if ( teachPolylinePathRemoval )
+        prompt +=
+            language == "en_us"
+                ? "\nPolyline path cleanup is enabled for this step. "
+                  "Draw across the existing Notes."
+                : "\n此段已临时开启折线路径清理；沿草稿折线画过已有单键。";
     // 目标缺席或等待外部操作时也要给出明确的退出方式。
     prompt += "\n";
     prompt += TR("ui.walkthrough.escape_to_exit").toString();
@@ -376,6 +428,7 @@ void WalkthroughPage::stopGuide(UIManager* manager)
             *m_draftAreaMutedBeforeGuide);
         m_draftAreaMutedBeforeGuide.reset();
     }
+    setTemporaryPolylinePathRemoval(false);
     // 取消路线同时取消等待关闭的请求；事件已发出时仍由原关闭流程处理。
     // 清理路径状态防止关闭欢迎标签后误限制普通打开项目操作。
     manager->walkthroughSpotlight().stop();

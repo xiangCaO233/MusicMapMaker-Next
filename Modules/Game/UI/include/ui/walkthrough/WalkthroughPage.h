@@ -51,6 +51,10 @@ public:
                     const Walkthrough::Step& step, bool reviewing = false);
 
 private:
+    /// @brief 只在折线覆盖教学期间启用路径清理，离开该步骤时恢复用户设置。
+    /// @param enabled 当前步骤是否需要清理折线路径上的已有物件。
+    void setTemporaryPolylinePathRemoval(bool enabled);
+
     /// @brief 当前由用户启动的路线引导身份及当前步骤状态。
     struct ActiveGuide {
         /// @brief 主题稳定 ID。
@@ -97,6 +101,8 @@ private:
     std::optional<ActiveGuide> m_activeGuide;
     /// @brief 引导开始前的草稿区总静音状态；跨步骤保留，退出时恢复。
     std::optional<bool> m_draftAreaMutedBeforeGuide;
+    /// @brief 折线覆盖教学前的用户设置；空值表示本轮没有临时覆盖。
+    std::optional<bool> m_polylinePathRemovalBeforeGuide;
     /// @brief 旧项目关闭后才启动的打开项目路线，避免同一请求覆盖关闭意图。
     std::optional<ActiveGuide> m_pendingOpenGuide;
     /// @brief 启动创作教学时的可见错误；成功进入新步骤后清空。
