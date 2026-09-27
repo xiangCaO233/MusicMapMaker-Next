@@ -49,9 +49,11 @@ public:
 
     /// @brief 启动指定配置步骤并记录本轮信号基线。
     /// @param reviewing 返回模式不接受业务信号自动推进。
+    /// @param restorePreviousSegment 返回上一段时只还原目标段的正式物件。
     void startGuide(UIManager* manager, const Walkthrough::Topic& topic,
                     const Walkthrough::Branch& branch,
-                    const Walkthrough::Step& step, bool reviewing = false);
+                    const Walkthrough::Step& step, bool reviewing = false,
+                    bool restorePreviousSegment = false);
 
     /// @brief 返回当前 CanonRock 写谱阶段的只读目标与错误物件反馈。
     /// @warning UI 热路径：仅返回本页已有对象，不复制谱面物件或共享所有权。

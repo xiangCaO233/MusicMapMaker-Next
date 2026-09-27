@@ -1343,6 +1343,11 @@ bool Basic2DCanvas::updateComposeLessonHints(
         if ( index < feedback->actualMatched.size() &&
              feedback->actualMatched[index] )
             continue;
+        // 已与参考折线起点配对的路径仍待编辑，但蓝色目标已经足够指引。
+        // 此条件只影响错误绘制，不改变目标轮廓、箭头或完成判定。
+        if ( index < feedback->suppressErrorForActual.size() &&
+             feedback->suppressErrorForActual[index] )
+            continue;
         const auto& note = feedback->actual[index];
         // 新编辑已经进入快照而反馈尚未重查时，旧红框不能继续提供删除入口。
         if ( feedback->composeNoteRevision != snapshot.composeNoteRevision )

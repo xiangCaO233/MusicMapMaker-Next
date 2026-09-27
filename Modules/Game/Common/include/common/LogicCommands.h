@@ -21,6 +21,7 @@
 #include <string>
 #include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -819,6 +820,10 @@ struct CmdReplaceBeatmapData {
 
     /// @brief 是否替换物件数据。
     bool replaceObjects{ false };
+
+    /// @brief 可选的正式根物件替换时间窗，闭区间且单位为秒。
+    /// 未设置时保持原有的整谱替换行为；草稿和时间线不受此范围影响。
+    std::optional<std::pair<double, double>> objectTimeRange;
 
     /// @brief 是否替换时间线数据。
     bool replaceTimelines{ false };

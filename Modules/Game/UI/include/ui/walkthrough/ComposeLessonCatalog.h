@@ -53,6 +53,8 @@ struct ComposeLessonFeedback {
     std::vector<Logic::ComposeLessonNote> actual;  ///< 最近一次逻辑查询结果。
     std::vector<bool> expectedMatched;  ///< 每个草稿目标是否已有正式物件。
     std::vector<bool> actualMatched;    ///< 每个正式物件是否满足一份目标。
+    /// @brief 起始子 Note 已对齐的折线可直接沿蓝色目标调整，无需错误红框。
+    std::vector<bool>       suppressErrorForActual;
     ComposeLessonRepairKind repairKind{
         ComposeLessonRepairKind::None
     };  ///< 当前段落的编辑语义。

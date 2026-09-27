@@ -670,7 +670,8 @@ int main(int argc, char** argv)
          nextArrow->destinationTrack != 1 ||
          std::abs(nextArrow->destinationTime - 4.6) > 0.001 ||
          pathFeedback.expectedMatched.front() ||
-         pathFeedback.actualMatched.front() )
+         pathFeedback.actualMatched.front() ||
+         !pathFeedback.suppressErrorForActual.front() )
         return 176;
     // 路径首段已经存在但长度不足时，箭头从实际尾端指到草稿尾端。
     // 独立 Hold 的长度与参考不同，因此还不是一条完整折线。
@@ -687,7 +688,8 @@ int main(int argc, char** argv)
     if ( !endArrow || endArrow->sourceTrack != 0 ||
          std::abs(endArrow->sourceTime - 4.15) > 0.001 ||
          endArrow->destinationTrack != 0 ||
-         std::abs(endArrow->destinationTime - 4.3) > 0.001 )
+         std::abs(endArrow->destinationTime - 4.3) > 0.001 ||
+         !shortStartFeedback.suppressErrorForActual.front() )
         return 177;
     // 拖拽调整段的折线已覆盖全部子段，但错误横移端仍应给出蓝点。
     // 只改变中间 Flick 的终轨，后续 Hold 暂时保持草稿原样；
@@ -703,8 +705,31 @@ int main(int argc, char** argv)
     if ( !adjustArrow || adjustArrow->sourceTrack != 2 ||
          adjustArrow->destinationTrack != 1 ||
          std::abs(adjustArrow->sourceTime - 4.3) > 0.001 ||
-         std::abs(adjustArrow->destinationTime - 4.3) > 0.001 )
+         std::abs(adjustArrow->destinationTime - 4.3) > 0.001 ||
+         !adjustFeedback.suppressErrorForActual.front() ||
+         adjustFeedback.actualMatched.front() )
         return 178;
+    // 第一子段偏离原位置的折线不是当前目标的可修正候选，仍需红框。
+    // 同段多出的独立 Note 也不能借折线提示豁免错误标记。
+    auto misplacedPath                   = wrongPath;
+    misplacedPath.subNotes.front().track = 1;
+    auto extraNote                       = shortStart;
+    extraNote.timestamp                  = 4.1;
+    const auto unmatchedFeedback         = compareComposeLessonNotes(
+        pathLesson, { misplacedPath, extraNote }, 17, 22);
+    if ( unmatchedFeedback.suppressErrorForActual !=
+         std::vector<bool>{ false, false } )
+        return 181;
+    const auto mixedFeedback =
+        compareComposeLessonNotes(pathLesson, { wrongPath, extraNote }, 17, 23);
+    // 一条路径配对不会把同段其它实际物件一起标成可编辑路径。
+    // 两个 bool 的下标必须与传入的实际物件顺序一致，供画布逐项绘制。
+    // 不改变 actualMatched：修正之前即使红框消失也不能通过复播检查。
+    // 第一子段错轨的路径仍由未配对分支处理，不能获得蓝色续写箭头。
+    // 这些条件还防止候选匹配把所有红框一并吞掉。
+    if ( mixedFeedback.suppressErrorForActual !=
+         std::vector<bool>{ true, false } )
+        return 182;
     // 空白目标给首段起笔方向；完整路径和非折线删除目标不生成箭头。
     // 空白阶段没有可拖动的现有物件，首个蓝点只表达创建方向。
     // 完全匹配后进度检查会消费目标；反馈数组不应保留上一轮箭头。
@@ -722,8 +747,10 @@ int main(int argc, char** argv)
     pathLesson.m_reference = { shortStart };
     // 删除段只有独立目标，不存在可以续写的参考折线。
     // 错误子物件应继续由红框和右键手势处理，不能出现蓝色落点。
-    if ( compareComposeLessonNotes(pathLesson, {}, 17, 21)
-             .pathArrowForExpected.front() )
+    const auto deletionFeedback =
+        compareComposeLessonNotes(pathLesson, {}, 17, 21);
+    if ( deletionFeedback.pathArrowForExpected.front() ||
+         !deletionFeedback.suppressErrorForActual.empty() )
         return 180;
     // 后续进阶段即使包含未匹配的 Note，也只能由用户自行调整或删除。
     if ( composeBeatmapTopic->m_branches.size() != 2 ||

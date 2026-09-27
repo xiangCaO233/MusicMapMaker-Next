@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <fmt/format.h>
 #include <ice/thread/ThreadPool.hpp>
+#include <iterator>
 #include <limits>
 #include <mutex>
 #include <optional>
@@ -3722,6 +3723,29 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
         // 正式根 Note 和 Polyline 子数组形成对象域的双向快照。
         beforeNotes = collectEditableNoteComponents(m_ctx);
         afterNotes  = makeNoteComponentsFromBeatMap(*cmd.sourceBeatmap);
+        if ( cmd.objectTimeRange ) {
+            // 时间窗与 ECS Note 均以秒计，和领域 BeatMap 的毫秒字段不同。
+            // 只有根 Note 的起点决定段落归属，子段随根组件保持整体。
+            const auto [begin, end] = *cmd.objectTimeRange;
+            if ( begin > end ) return;
+            // 只还原返回的教学段落：保留时间窗外的现有根物件，
+            // 时间窗内则以独立基线为准。折线子段随根组件一起替换。
+            // 闭区间与教学查询一致，位于段首或段尾的物件都要恢复。
+            // afterNotes 仍是完整对象快照，现有动作栈可原子撤销局部结果。
+            // 不直接修改 Registry，避免部分恢复中途暴露给渲染快照。
+            std::vector<NoteComponent> merged;
+            merged.reserve(beforeNotes.size() + afterNotes.size());
+            for ( const auto& note : beforeNotes )
+                if ( note.m_timestamp < begin || note.m_timestamp > end )
+                    merged.push_back(note);
+            std::erase_if(afterNotes, [begin, end](const auto& note) {
+                return note.m_timestamp < begin || note.m_timestamp > end;
+            });
+            merged.insert(merged.end(),
+                          std::make_move_iterator(afterNotes.begin()),
+                          std::make_move_iterator(afterNotes.end()));
+            afterNotes = std::move(merged);
+        }
     }
 
     std::vector<TimelineComponent> beforeTimelines;

@@ -579,6 +579,7 @@ ComposeLessonFeedback compareComposeLessonNotes(
     feedback.actual              = std::move(actual);
     feedback.expectedMatched.assign(lesson.m_reference.size(), false);
     feedback.actualMatched.assign(feedback.actual.size(), false);
+    feedback.suppressErrorForActual.assign(feedback.actual.size(), false);
     feedback.repairKind = repairKindFor(lesson);
     feedback.repairTargetForActual.assign(feedback.actual.size(), -1);
     feedback.pathArrowForExpected.resize(lesson.m_reference.size());
@@ -692,7 +693,10 @@ ComposeLessonFeedback compareComposeLessonNotes(
                 const auto  compatible =
                     current.type == ::MMM::NoteType::POLYLINE
                         ? !current.subNotes.empty() &&
-                              current.subNotes.front().type == first.type
+                              current.subNotes.front().type == first.type &&
+                              current.subNotes.front().track == first.track &&
+                              std::abs(current.subNotes.front().timestamp -
+                                       first.timestamp) <= TIME_TOLERANCE
                         : current.type == first.type;
                 if ( !compatible ) continue;
                 // 同根候选优先选子段较多的现有折线；独立首段兜底。
@@ -707,7 +711,13 @@ ComposeLessonFeedback compareComposeLessonNotes(
                     score = candidateScore;
                 }
             }
-            if ( best != feedback.actual.size() ) reserved[best] = true;
+            if ( best != feedback.actual.size() ) {
+                reserved[best] = true;
+                // 起始子段正确时，该物件是待续写或待调整路径，而非多余物件。
+                // 保持未验收状态，仅抑制整件错误框；目标轮廓和蓝箭头照常显示。
+                // 未配对的多余 Note 或错位折线继续由画布显示红框。
+                feedback.suppressErrorForActual[best] = true;
+            }
             // 没有候选也保留首段起笔提示，但不增加正式物件。
             // 用户完成修改后才由下一次查询更新箭头与验收状态。
             feedback.pathArrowForExpected[expectedIndex] = nextPathArrow(

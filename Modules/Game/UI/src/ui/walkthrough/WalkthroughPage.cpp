@@ -203,10 +203,12 @@ void WalkthroughPage::setTemporaryPolylinePathRemoval(bool enabled)
 /// @param branch 当前路线分支。
 /// @param step 必须包含 guide 的目标步骤。
 /// @param reviewing 是否显式返回回看，不能被历史完成状态立即推走。
+/// @param restorePreviousSegment 只重置返回的上一教学段落，不影响其它段。
 void WalkthroughPage::startGuide(UIManager*                 manager,
                                  const Walkthrough::Topic&  topic,
                                  const Walkthrough::Branch& branch,
-                                 const Walkthrough::Step& step, bool reviewing)
+                                 const Walkthrough::Step& step, bool reviewing,
+                                 bool restorePreviousSegment)
 {
     if ( !step.m_guide ) return;
     // 页面按钮之外的重放入口也必须重新检查项目身份。
@@ -276,8 +278,10 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
             return;
         }
         composeBeatmapKey = composeSnapshot->beatmapPathKey;
-        if ( !branch.m_steps.empty() &&
-             branch.m_steps.front().m_id == step.m_id ) {
+        // 返回上一段也要读取同一份独立基线，但只投递该段的局部替换。
+        if ( restorePreviousSegment ||
+             (!branch.m_steps.empty() &&
+              branch.m_steps.front().m_id == step.m_id) ) {
             // 只在开始或重练路线时还原；段与段之间必须保留本轮已完成的修改。
             // 独立基线不受练习谱面保存影响，避免上次练习成为下次的标准答案。
             // 用户可能直接编辑源码示例，也可能编辑同步到配置目录的副本。
@@ -518,9 +522,14 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
             // 逻辑队列依次停播、还原正式物件、定位、开播，首播不会闪过旧内容。
             // 对象替换沿用既有命令，草稿及非对象数据域保持原状。
             // 同一轮只提交一次还原；练习中绘制的 Note 会保留到后续段落。
+            // 分支入口重练清空全部主轨道；跨段返回仅还原目标时间窗。
             guide.composeSession->pushCommand(Logic::CmdReplaceBeatmapData{
                 .sourceBeatmap  = std::move(composeBaseline),
                 .replaceObjects = true,
+                .objectTimeRange =
+                    restorePreviousSegment
+                        ? std::make_optional(std::pair{ begin, end })
+                        : std::nullopt,
             });
         }
         guide.composeSession->pushCommand(Logic::CmdSeek{ begin });
@@ -759,7 +768,18 @@ void WalkthroughPage::updateGuide(UIManager* manager)
             // 顺序查找只发生在返回请求被消费时，不建立逐帧历史副本。
             if ( !previous->m_guide ) continue;
             // 重建信号基线，不清空学习进度；Spotlight 消费目标登记的练习补偿。
-            startGuide(manager, *topic, *branch, *previous, true);
+            // 仅跨段返回才重置该段；同一段的预览、练习和复播互相返回时
+            // 保留当前绘制，避免回看预览抹去尚未完成的操作。
+            const bool entersPreviousSegment =
+                previous->m_composeLesson && current->m_composeLesson &&
+                previous->m_composeLesson->m_lessonIndex !=
+                    current->m_composeLesson->m_lessonIndex;
+            startGuide(manager,
+                       *topic,
+                       *branch,
+                       *previous,
+                       true,
+                       entersPreviousSegment);
             break;
         }
         // 返回后立即退出本次推进，避免消费业务完成信号后又向前跳转。

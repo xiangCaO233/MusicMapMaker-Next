@@ -3868,6 +3868,91 @@ bool testMetadataAudioChangeRetargetsFirstMainBgmSample()
            near(updatedDomainSample->m_volume, 0.6);
 }
 
+/// @brief 验证教学回退只替换所选时间窗内的正式物件。
+/// @details
+/// 时间窗外的用户绘制必须保留，窗内额外物件要移除，缺失的基线物件要恢复。
+/// Undo/Redo 必须以同一段局部替换为一个动作，不能在回退时清空其它段落。
+/// @par 时间单位
+/// 命令区间和 ECS 均为秒，基线 BeatMap 的领域 Note 则为毫秒。
+/// 测试固定采用三个分段，防止误把毫秒区间直接用于 ECS 筛选。
+/// @par 边界归属
+/// 时间窗两端都参与替换；窗外两侧各有一个正式物件作哨兵。
+/// 基线故意包含后一段同时间的不同轨物件，证明它不会覆盖现状。
+/// 窗内放入两个错误物件而基线只有一个，证明局部恢复包含删除。
+/// @par 动作语义
+/// 本地替换必须进入一次撤销栈，撤销恢复窗内原始物件的全部轨道位置。
+/// 重做再次使用首次替换的快照，不应从变更后的来源谱面重新筛选。
+/// 窗外物件在前进与回退后都必须保持用户绘制时的轨道和时间。
+/// @par 测试边界
+/// 这里验证逻辑命令对正式根物件的效果；UI 的“上一步”负责选取时间窗。
+/// 草稿由不同数据域保存，命令只设置 replaceObjects，不请求其它域替换。
+/// 测试不依赖窗口、音频播放或文件系统中的 CanonRock 项目。
+/// 断言使用排序后的时间和轨道值，避免 ECS Registry 枚举顺序影响结果。
+/// 校验撤销前后的物件数量，可区分恢复原物件与简单改轨两种行为。
+/// @return 首次替换、撤销及重做都符合时间窗边界时返回 true。
+bool testComposeLessonSegmentReplacement()
+{
+    MMM::Logic::SessionContext context;
+    context.currentBeatmap = std::make_shared<MMM::BeatMap>();
+    context.trackCount     = 4;
+    const auto addActual   = [&](double time, int track) {
+        auto entity = context.noteRegistry.create();
+        context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+            entity,
+            MMM::Logic::NoteComponent{ .m_type       = MMM::NoteType::NOTE,
+                                       .m_timestamp  = time,
+                                       .m_trackIndex = track });
+    };
+    addActual(0.5, 0);   // 前一段的用户成果。
+    addActual(1.5, 1);   // 返回目标段内的错误物件。
+    addActual(1.75, 1);  // 返回目标段内的多余物件。
+    addActual(2.5, 2);   // 后一段的用户成果。
+
+    auto  baseline       = std::make_shared<MMM::BeatMap>();
+    auto& restored       = baseline->m_noteData.notes.emplace_back();
+    restored.m_timestamp = 1500.0;
+    restored.m_track     = 3;
+    auto& outside        = baseline->m_noteData.notes.emplace_back();
+    outside.m_timestamp  = 2500.0;
+    outside.m_track      = 0;  // 来源的段外物件不得覆盖用户修改。
+    baseline->sync();
+
+    const auto tracksAtTimes = [&]() {
+        std::vector<std::pair<double, int>> notes;
+        const auto                          view =
+            context.noteRegistry.view<const MMM::Logic::NoteComponent>();
+        for ( const auto entity : view ) {
+            const auto& note =
+                view.get<const MMM::Logic::NoteComponent>(entity);
+            if ( !note.m_isSubNote && !note.m_isDraft )
+                notes.emplace_back(note.m_timestamp, note.m_trackIndex);
+        }
+        std::sort(notes.begin(), notes.end());
+        return notes;
+    };
+    MMM::Logic::ActionController controller(context);
+    controller.handleCommand(MMM::Logic::CmdReplaceBeatmapData{
+        .sourceBeatmap   = baseline,
+        .replaceObjects  = true,
+        .objectTimeRange = std::pair{ 1.0, 2.0 },
+    });
+    const auto expected = std::vector<std::pair<double, int>>{ { 0.5, 0 },
+                                                               { 1.5, 3 },
+                                                               { 2.5, 2 } };
+    if ( tracksAtTimes() != expected ||
+         context.actionStack.getUndoStackSize() != 1U )
+        return false;
+    // 撤销必须重新出现被删除的窗内物件，不能只恢复替换轨道。
+    context.actionStack.undo(context);
+    if ( tracksAtTimes() !=
+         std::vector<std::pair<double, int>>{
+             { 0.5, 0 }, { 1.5, 1 }, { 1.75, 1 }, { 2.5, 2 } } )
+        return false;
+    // 重做再次移除多余物件，同时仍保留前后段落的用户成果。
+    context.actionStack.redo(context);
+    return tracksAtTimes() == expected;
+}
+
 /// @brief 验证替换元数据时同步迁移自动采样，并保留当前 BGM 轨道数。
 /// @details
 /// metadata 分支可从外部谱面取得新玩家键数，但当前编辑会话已经拥有自己的 BGM
@@ -8413,6 +8498,7 @@ int main()
                    testResizePreservesNormalizedOffset() &&
                    testPanCommandUsesLogicalPixels() &&
                    testComposeLessonPlaybackAndPositionLimits() &&
+                   testComposeLessonSegmentReplacement() &&
                    testTrackCountActionMigratesAllSamples() &&
                    testSessionSelectsKeyCountLayout() &&
                    testBackgroundSessionPublishesCanvasHover() &&
