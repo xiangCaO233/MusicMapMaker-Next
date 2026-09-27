@@ -1737,7 +1737,7 @@ ProjectResourceService::syncDirectoryResources(
     /// @brief 按精确项目路径建立的现有谱面索引。
     std::unordered_map<std::string, const Project::BeatmapEntry*>
         existingBeatmapsByPath;
-    // 建立只读索引直到新列表组装完成，沿用已有谱面条目的用户设置和显示信息。
+    // 建立只读索引直到新列表组装完成，沿用已有谱面条目的其他持久信息。
     existingBeatmapsByPath.reserve(project.m_beatmaps.size());
     for ( const auto& entry : project.m_beatmaps ) {
         existingBeatmapsByPath.try_emplace(entry.m_filePath, &entry);
@@ -1760,8 +1760,14 @@ ProjectResourceService::syncDirectoryResources(
         Project::BeatmapEntry mapEntry;
         const auto existingEntry = existingBeatmapsByPath.find(relativeMapPath);
         if ( existingEntry != existingBeatmapsByPath.end() ) {
-            // 文件仍在原位置时复制已有入口，不仅恢复文件名这一项。
+            // 文件仍在原位置时复制已有入口，再修复旧版误写入 Version 的名称。
             mapEntry = *existingEntry->second;
+            // 旧项目配置可能已持久化错误值；仅修复不一致项以避免每次扫描都保存。
+            // Version 仍由谱面解析缓存提供，不能从项目入口反向覆盖该字段。
+            if ( mapEntry.m_name != filename ) {
+                mapEntry.m_name  = filename;
+                result.m_changed = true;
+            }
         } else {
             mapEntry.m_name     = filename;
             mapEntry.m_filePath = relativeMapPath;

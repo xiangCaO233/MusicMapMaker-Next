@@ -209,6 +209,89 @@ bool saveReferenceBeatmap(const std::filesystem::path& path,
     return beatmap.saveToFile(path);
 }
 
+/// @brief 验证项目谱面名称只取实际文件名，且旧版 Version 污染可由目录同步修复。
+/// @return 发现、重扫、移动和新建流程均未把 Version 写入名称时返回 true。
+/// @note 文件位于隔离临时目录；元数据 Version 与文件名故意设置为不同值。
+/// @details 四种入口使用同一个项目实例，检查一次操作产生的名称能否被下一次
+/// 操作继续正确维护，避免仅在刚创建的入口上偶然得到正确文本。
+/// 扫描修复场景模拟已持久化的旧版错误值，要求变更标记使上层保存项目。
+/// 移动场景先改变磁盘，再通知服务，遵守生产环境文件监听的调用顺序。
+/// 新建场景使用文件名保留字符，证明项目列表显示最终路径而非原始元数据名。
+/// @note 本用例不检查视图绘制；视图的名称列直接读取项目入口名称。
+/// @note 没有音频资源输入，避免引用识别结果干扰谱面条目断言。
+/// @note 同名扫描后的条目数量保持为一，防止重复发现掩盖名称修复。
+/// @note 每一步失败立即退出，后续路径变化不能覆盖前一步留下的错误状态。
+/// @note 创建返回的谱面实例还用于核对 Version 仍保留在元数据里。
+bool testBeatmapEntryNameFollowsFilename()
+{
+    ScopedTestProjectDirectory directory;
+    if ( directory.path().empty() ) return false;
+
+    const auto originalPath = directory.path() / "Chart.mmm";
+    if ( !saveReferenceBeatmap(originalPath, {}, {}, {}) ) return false;
+
+    MMM::Project project;
+    project.m_projectRoot = directory.path();
+    MMM::Logic::ProjectCommandService commandService;
+    // 增量发现曾把文件内的 Reference 版本写进名称列。
+    // 文件名包含扩展名；版本值在夹具中是独立的 Reference。
+    if ( !commandService.syncProjectWithFile(project, originalPath).m_changed ||
+         project.m_beatmaps.size() != 1U ||
+         project.m_beatmaps.front().m_name != "Chart.mmm" ) {
+        XERROR("Discovered beatmap name did not follow its filename");
+        return false;
+    }
+
+    // 模拟旧项目已经保存了错误名称；全量目录重扫应修复并报告项目变化。
+    project.m_beatmaps.front().m_name = "Reference";
+    MMM::Logic::ProjectDirectoryScanner::ScanResult scanResult;
+    // 扫描结果刻意只包含这张谱面；修复不应依赖新文件或音频文件出现。
+    scanResult.m_success = true;
+    scanResult.m_beatmapFiles.push_back(originalPath);
+    const auto syncResult =
+        MMM::Logic::ProjectResourceService{}.syncDirectoryResources(project,
+                                                                    scanResult);
+    // 即使列表数量不变，名称修复也必须标脏；否则错误值仍会留在项目文件里。
+    if ( !syncResult.m_changed || project.m_beatmaps.size() != 1U ||
+         project.m_beatmaps.front().m_name != "Chart.mmm" ) {
+        XERROR("Directory sync did not restore the beatmap filename");
+        return false;
+    }
+
+    // 物理移动先于路径通知；新名称必须跟随目标文件，而非旧名称或 Version。
+    const auto      movedPath = directory.path() / "Renamed.mmm";
+    std::error_code filesystemError;
+    std::filesystem::rename(originalPath, movedPath, filesystemError);
+    // 移动后的文件中 Version 仍为 Reference，名称不能继续读这个字段。
+    if ( filesystemError ||
+         !commandService.updateBeatmapFilePath(project, originalPath, movedPath)
+              .m_changed ||
+         project.m_beatmaps.front().m_filePath != "Renamed.mmm" ||
+         project.m_beatmaps.front().m_name != "Renamed.mmm" ) {
+        XERROR("Renamed beatmap entry did not follow its new filename");
+        return false;
+    }
+
+    // 新建时保留谱面元数据原名，但项目列表展示净化后的真实文件名。
+    MMM::Logic::CmdCreateBeatmap createCommand;
+    // 冒号被文件名净化为下划线，但谱面元数据仍可保留用户输入原文。
+    createCommand.baseMeta.name    = "Level:One";
+    createCommand.baseMeta.version = "Hard";
+    const auto createResult =
+        commandService.createBeatmap(project, createCommand);
+    // 同时确认 Version 没被反向改写；列表名称与内容版本应各守其职责。
+    if ( !createResult.m_created || project.m_beatmaps.size() != 2U ||
+         project.m_beatmaps.back().m_filePath != "Level_One.mmm" ||
+         project.m_beatmaps.back().m_name != "Level_One.mmm" ||
+         !createResult.m_beatmap ||
+         createResult.m_beatmap->m_baseMapMetadata.version != "Hard" ) {
+        XERROR("Created beatmap entry mixed filename with metadata Version");
+        return false;
+    }
+    // 临时项目析构后删除文件；这里不修改个人配置和仓库中的测试资源。
+    return true;
+}
+
 /// @brief 验证旧单主音轨字段只读兼容且当前项目不再写出该字段。
 /// @return 兼容行为正确时返回 true。
 /// @note 单独验证序列化迁移方向：旧字段可读，当前格式不继续写出。
@@ -568,9 +651,9 @@ bool testBulkReferenceIndexPreservesCompatibility()
         // 旧 basename 组沿用文件名 ID，其他组故意使用与路径不同的稳定 ID。
         // 防止所有路径分支被精确 ID 匹配偶然覆盖。
         const bool useLegacyBasename = index % 5U == 3U;
-        const auto resourceId        = useLegacyBasename
-                                           ? filename
-                                           : "stable-sample-" + std::to_string(index);
+        const auto resourceId = useLegacyBasename
+                                    ? filename
+                                    : "stable-sample-" + std::to_string(index);
 
         std::string reference;
         // 五组分别覆盖稳定 ID、项目相对、谱面相对、旧目录文件名和反斜杠路径。
@@ -709,7 +792,7 @@ bool testBulkDirectorySyncReusesNormalizedResources()
         // 按构造顺序逐项验证，顺序变化本身也会暴露为 ID 或配置不匹配。
         const auto& resource       = project.m_audioResources[index];
         const auto  expectedVolume = static_cast<float>(index + 1U) /
-                                    static_cast<float>(RESOURCE_COUNT + 1U);
+                                     static_cast<float>(RESOURCE_COUNT + 1U);
         // ID 与期望音量共同按同一索引校验，识别内容相同数量下的错位复用。
         // 音量计算在夹具与断言使用相同有界表达式，避免引入不相关舍入差异。
         if ( resource.m_id != "stable-sync-" + std::to_string(index) ||
@@ -1473,9 +1556,9 @@ bool testInvalidTemplateObjectTracksAreRejectedAtomically()
     playerLaneSource->m_baseMapMetadata.bgm_track_count = 1;
     playerLaneSource->m_audioSamples                    = {
         MMM::AudioSampleEvent{ .m_track           = 4,
-                                                  .m_audioResourceId = "valid-first" },
+                               .m_audioResourceId = "valid-first" },
         MMM::AudioSampleEvent{ .m_track           = 3,
-                                                  .m_audioResourceId = "invalid-player" },
+                               .m_audioResourceId = "invalid-player" },
     };
     // 第一个合法事件可发现实现是否边复制边提交，第二个事件才触发整体拒绝。
 
@@ -2453,7 +2536,8 @@ int main()
     // 临时目录与配置夹具均由各测试作用域负责恢复。
     // 各用例独立管理临时目录或内存项目，失败时析构仍清理已创建夹具。
     // 配置覆盖用例也恢复默认作者，后续测试不继承它的专用设置。
-    return testLegacyBeatmapEntryIsReadOnly() &&
+    return testBeatmapEntryNameFollowsFilename() &&
+                   testLegacyBeatmapEntryIsReadOnly() &&
                    testReferenceAwareDirectoryScan() &&
                    testAudioResolutionPreservesCrossModeFirstMatch() &&
                    testRootBeatmapEscapedLegacyReferenceFallback() &&

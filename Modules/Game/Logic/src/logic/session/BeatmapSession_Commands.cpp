@@ -621,10 +621,10 @@ bool retargetFirstMainBgmSample(MMM::Logic::SessionContext& ctx,
 
 /// @brief 将已成功保存的谱面基础信息同步到项目谱面入口。
 /// @param metadata 已成功写入谱面文件的基础元数据。
-/// @return 项目入口的名称发生变化时返回 true。
+/// @return 项目入口的文件名展示发生变化时返回 true。
 /// @details
 /// 项目条目通过文件系统等价身份匹配，而不是直接比较可能一绝对一相对的字符串。
-/// 这里只更新既有条目的难度名称；新文件登记由 EditorEngine 的文件同步负责。
+/// 这里只校正既有条目的文件名；新文件登记由 EditorEngine 的文件同步负责。
 bool syncSavedMetadataToProjectEntry(const MMM::BaseMapMeta& metadata)
 {
     auto* project = MMM::Logic::EditorEngine::instance().getCurrentProject();
@@ -643,11 +643,12 @@ bool syncSavedMetadataToProjectEntry(const MMM::BaseMapMeta& metadata)
             !pathError;
         if ( !isSavedEntry ) continue;
 
-        // 项目标签名称对应谱面 version，而非通用 name 字段。
-        if ( entry.m_name == metadata.version ) return false;
+        // 保存元数据不改变文件名；旧项目若误存了 Version，借本次保存恢复。
+        const auto filename = MMM::Config::pathToUtf8(savedMapPath.filename());
+        if ( entry.m_name == filename ) return false;
 
-        entry.m_name = metadata.version;
-        XINFO("BeatmapSession: Synced saved name '{}' to project entry",
+        entry.m_name = filename;
+        XINFO("BeatmapSession: Synced filename '{}' to project entry",
               entry.m_name);
         return true;
     }

@@ -85,7 +85,7 @@ public:
 
     /// @brief 项目内管理的谱面入口信息
     struct BeatmapEntry {
-        /// @brief 难度名称或版本名 (如 "Easy", "Remix Ver.")
+        /// @brief 谱面文件名；谱面 Version 由文件元数据单独提供。
         std::string m_name;
 
         /// @brief 谱面定义文件路径 (相对于项目根目录)

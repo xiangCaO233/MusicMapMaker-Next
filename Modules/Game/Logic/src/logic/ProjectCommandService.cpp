@@ -646,7 +646,7 @@ ProjectCommandService::CreateBeatmapResult ProjectCommandService::createBeatmap(
     XINFO("Creating new beatmap: {} (Title: {})", meta.name, meta.title);
 
     /// @brief 经过非法文件名字符替换后的谱面文件名主体。
-    // 文件名与显示名称分离，净化只影响磁盘名称，不改谱面难度名的展示内容。
+    // 元数据名称保留原文；项目列表名称稍后使用实际落盘文件名。
     std::string safeFilename = meta.name;
     std::replace_if(
         safeFilename.begin(),
@@ -783,7 +783,8 @@ ProjectCommandService::CreateBeatmapResult ProjectCommandService::createBeatmap(
     // 落盘成功是登记边界；显式创建也撤销同路径的历史排除项。
     /// @brief 新谱面在项目列表中的入口。
     Project::BeatmapEntry entry;
-    entry.m_name = meta.name;
+    // 实际文件名可能因保留字符替换或同名避让而不同于用户填写的标题。
+    entry.m_name = Config::pathToUtf8(mapPath.filename());
     entry.m_filePath =
         Config::pathToUtf8(makeProjectRelativePath(project, mapPath));
     removeExcludedPath(project.m_excludedBeatmapPaths, entry.m_filePath);
@@ -999,13 +1000,10 @@ ProjectCommandService::syncProjectWithFile(
     }
     normalizeBeatmapMetadataPathsForProject(map, project);
 
-    // 展示名来自文件内容的 version；空版本才回退文件名，而非目录名。
+    // 名称列展示实际文件名；谱面 Version 由列表的独立列读取。
     /// @brief 新发现谱面在项目列表中的入口。
     Project::BeatmapEntry entry;
-    entry.m_name = map.m_baseMapMetadata.version;
-    if ( entry.m_name.empty() ) {
-        entry.m_name = Config::pathToUtf8(absMapPath.filename());
-    }
+    entry.m_name = Config::pathToUtf8(absMapPath.filename());
 
     entry.m_filePath = relMapPath;
 
@@ -1080,17 +1078,9 @@ ProjectCommandService::updateBeatmapFilePath(
             continue;
         }
 
-        // 路径先跟随移动结果；新文件暂时不能加载时仍保留旧显示名，不撤销路径关联。
+        // 文件已完成移动，名称始终跟随新文件名，与谱面 Version 无关。
         entry.m_filePath = relNew;
-        /// @brief 临时加载的新谱面，用于刷新项目入口元数据。
-        auto map = BeatMap::loadFromFile(absNew);
-        if ( !map.m_baseMapMetadata.map_path.empty() ) {
-            normalizeBeatmapMetadataPathsForProject(map, project);
-            entry.m_name = map.m_baseMapMetadata.version;
-            if ( entry.m_name.empty() ) {
-                entry.m_name = Config::pathToUtf8(absNew.filename());
-            }
-        }
+        entry.m_name     = Config::pathToUtf8(absNew.filename());
 
         // 首个匹配条目处理完即结束；本入口不作为历史重复条目的批量清理工具。
         return ProjectMutationResult{ true };
