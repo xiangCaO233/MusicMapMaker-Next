@@ -425,7 +425,9 @@ void NewProjectWizard::renderProjectInfoStep()
 ///
 /// 空配色 ID 表示继承软件默认，特殊常量表示跟随皮肤，其余字符串对应当前编辑器
 /// 配置中的具名方案。只保存标识，不复制配色内容。
-void NewProjectWizard::renderPreferencesStep()
+/// @param sourceManager 提供当前引导遮罩，可为空。
+/// @warning UI 热路径：仅在向导偏好页可见时绘制；候选来自已加载配置。
+void NewProjectWizard::renderPreferencesStep(UIManager* sourceManager)
 {
     // 页内标题与两组组合框保持视觉层级一致。
     ImGui::SeparatorText(TR("ui.wizard.new_project.preferences").data());
@@ -482,6 +484,16 @@ void NewProjectWizard::renderPreferencesStep()
             }
             if ( selected ) ImGui::SetItemDefaultFocus();
         }
+        // 资源数量改变时按当帧弹窗范围扩展可交互的表单区域。
+        if ( sourceManager ) {
+            const ImVec2 popupMin  = ImGui::GetWindowPos();
+            const ImVec2 popupSize = ImGui::GetWindowSize();
+            sourceManager->walkthroughSpotlight().reportCompanionRegion(
+                PREFERENCES_NEXT_TARGET,
+                popupMin,
+                { popupMin.x + popupSize.x, popupMin.y + popupSize.y },
+                ImGui::GetWindowViewport());
+        }
         ::MMM::UI::FeedbackEndCombo();
     }
 
@@ -504,6 +516,16 @@ void NewProjectWizard::renderPreferencesStep()
                 m_initialSideBarTab = tab;
             }
             if ( selected ) ImGui::SetItemDefaultFocus();
+        }
+        // 侧边栏列表可能越过 Child 边界，同样使用实时弹窗几何。
+        if ( sourceManager ) {
+            const ImVec2 popupMin  = ImGui::GetWindowPos();
+            const ImVec2 popupSize = ImGui::GetWindowSize();
+            sourceManager->walkthroughSpotlight().reportCompanionRegion(
+                PREFERENCES_NEXT_TARGET,
+                popupMin,
+                { popupMin.x + popupSize.x, popupMin.y + popupSize.y },
+                ImGui::GetWindowViewport());
         }
         ::MMM::UI::FeedbackEndCombo();
     }
@@ -911,8 +933,24 @@ void NewProjectWizard::update(UIManager* sourceManager)
             // 只绘制当前步骤，其他步骤的数据仍保存在成员缓冲中。
             switch ( m_currentStep ) {
             case Step::ProjectInfo: renderProjectInfoStep(); break;
-            case Step::Preferences: renderPreferencesStep(); break;
+            case Step::Preferences: renderPreferencesStep(sourceManager); break;
             case Step::Location: renderLocationStep(); break;
+            }
+            // 表单 Child 是当前页可填写的范围，其他页脚按钮继续被遮罩拦截。
+            if ( sourceManager ) {
+                const std::string_view target =
+                    m_currentStep == Step::ProjectInfo
+                        ? PROJECT_INFO_NEXT_TARGET
+                    : m_currentStep == Step::Preferences
+                        ? PREFERENCES_NEXT_TARGET
+                        : LOCATION_CREATE_TARGET;
+                const ImVec2 childMin  = ImGui::GetWindowPos();
+                const ImVec2 childSize = ImGui::GetWindowSize();
+                sourceManager->walkthroughSpotlight().reportCompanionRegion(
+                    target,
+                    childMin,
+                    { childMin.x + childSize.x, childMin.y + childSize.y },
+                    ImGui::GetWindowViewport());
             }
             ImGui::EndChild();
         }

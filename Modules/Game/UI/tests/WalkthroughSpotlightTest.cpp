@@ -84,6 +84,118 @@
 
 namespace
 {
+/// @brief 验证音频下拉展开后亮区跟随弹窗，选项可以接收鼠标点击。
+/// @return 选项被选中且关闭后遮罩重新收缩到音频行时返回 true。
+/// @details 使用真实 ImGui Combo 和 Spotlight 遮罩，不以矩形计算代替输入。
+/// 打开和选择都执行完整的按下、释放手势；弹窗在每帧上报自己的窗口边界。
+/// 该上报顺序与新建谱面向导一致：弹窗先上报，音频行后上报并合并目标。
+bool testExpandedComboInput()
+{
+    // 使用单目标引导隔离菜单、其他窗口和目标优先级的影响。
+    // 若选项无法点击，失败只能来自当前弹窗和遮罩的空间关系。
+    MMM::UI::Walkthrough::Spotlight spotlight;
+    spotlight.start({ "new-beatmap.audio" }, "Choose the main audio");
+    // 点击坐标取控件本帧实际几何，字体和样式变化不会改变测试意图。
+    ImVec2 comboCenter{};
+    ImVec2 optionCenter{};
+    // 分别记录未展开的音频行底部和 Spotlight 最终亮区底部。
+    // 展开时两者必须分离，关闭后则应重新贴合。
+    float rowBottom      = 0.0F;
+    float expandedBottom = 0.0F;
+    // 弹窗开闭与业务选中各自记录，不能用亮区扩大代替成功选择。
+    bool popupOpen = false;
+    bool selected  = false;
+    // 外层模态保持打开，模拟真实新建谱面向导的窗口层级。
+    bool modalRequested = false;
+    bool modalOpen      = false;
+    // 每次输入事件后完成整帧，确保遮罩拦截窗口参加下一帧命中测试。
+    const auto frame = [&] {
+        ImGui::NewFrame();
+        spotlight.beginFrame();
+        // OpenPopup 只执行一次，避免每帧重置用户刚关闭的模态。
+        if ( !modalRequested ) {
+            ImGui::OpenPopup("AudioWizardModal");
+            modalRequested = true;
+        }
+        ImGui::SetNextWindowPos({ 100.0F, 80.0F }, ImGuiCond_Always);
+        ImGui::SetNextWindowSize({ 600.0F, 420.0F }, ImGuiCond_Always);
+        modalOpen = ImGui::BeginPopupModal(
+            "AudioWizardModal",
+            nullptr,
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings);
+        // 模态尚未建立时仍配对 Render，保持 ImGui 帧生命周期完整。
+        if ( !modalOpen ) {
+            ImGui::Render();
+            return;
+        }
+        ImGui::SetCursorScreenPos({ 180.0F, 145.0F });
+        // 音频行位于模态上方，候选列表向下展开到原始亮区之外。
+        const ImVec2 rowMin = ImGui::GetCursorScreenPos();
+        ImGui::SetNextItemWidth(320.0F);
+        popupOpen = ImGui::BeginCombo("##AudioList", "Select audio");
+        if ( popupOpen ) {
+            // 实际 Selectable 返回值证明鼠标释放抵达列表而非遮罩窗口。
+            selected |= ImGui::Selectable("canonrock.mp3");
+            // 选项中心比硬编码像素更接近用户点击真实候选的行为。
+            const ImVec2 itemMin = ImGui::GetItemRectMin();
+            const ImVec2 itemMax = ImGui::GetItemRectMax();
+            optionCenter         = { (itemMin.x + itemMax.x) * 0.5F,
+                                     (itemMin.y + itemMax.y) * 0.5F };
+            // 在当前弹窗作用域上报，EndCombo 后窗口会切回外层模态。
+            spotlight.reportCurrentPopup("new-beatmap.audio");
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        ImGui::Button("Import");
+        // 导入按钮和组合框共用行目标，匹配向导原有复合亮区。
+        const ImVec2 rowMax = ImGui::GetItemRectMax();
+        rowBottom           = rowMax.y;
+        comboCenter         = { rowMin.x + 150.0F, rowMin.y + 10.0F };
+        spotlight.reportTarget(
+            "new-beatmap.audio", rowMin, rowMax, ImGui::GetWindowViewport());
+        ImGui::EndPopup();
+        // 先提交全部业务窗口，再渲染位于前景的遮罩和提示按钮。
+        spotlight.keepAlive();
+        spotlight.render(1.0F, "Got it");
+        // 解析结果在 render 后读取，检查用户最终看到的孔洞范围。
+        const auto bounds = spotlight.resolvedTargetBounds();
+        expandedBottom    = bounds ? bounds->maximum.y : 0.0F;
+        ImGui::Render();
+    };
+    ImGuiIO& io = ImGui::GetIO();
+    // 初帧建立模态窗口；后续鼠标事件才有有效的悬浮窗口供命中。
+    frame();
+    // 先移动到组合框中心，避免同帧移动加按下与上一帧命中状态混淆。
+    io.AddMousePosEvent(comboCenter.x, comboCenter.y);
+    frame();
+    // 打开组合框必须经过真实按下和释放，不能直接调用 OpenPopup。
+    io.AddMouseButtonEvent(0, true);
+    frame();
+    io.AddMouseButtonEvent(0, false);
+    frame();
+    // 弹窗展开后再提交一帧，等待 ImGui 建立新的悬浮窗口层级。
+    // 此时保留模态的打开状态，避免把外层焦点丢失误判为列表被拦截。
+    frame();
+    // 即使弹窗存在，若亮区未覆盖候选列表，本测试仍应判为失败。
+    if ( !modalOpen || !popupOpen || expandedBottom <= rowBottom + 10.0F )
+        return false;
+    // 指针穿过原音频行底边，验证新增孔洞确实允许选项交互。
+    io.AddMousePosEvent(optionCenter.x, optionCenter.y);
+    frame();
+    // 列表项使用与展开相同的完整点击手势，避免伪造选中状态。
+    io.AddMouseButtonEvent(0, true);
+    frame();
+    io.AddMouseButtonEvent(0, false);
+    frame();
+    // 额外一帧确认关闭后的 popup 不再上报旧边界。
+    // 若仅在点击帧验证，ImGui 关闭动画或上一帧几何会掩盖残留遮罩。
+    frame();
+    // 模态仍在说明选项点击没有意外关闭整个新建向导。
+    // 亮区恢复到原行说明本帧动态计算不保留过期弹窗几何。
+    return selected && modalOpen && !popupOpen &&
+           expandedBottom <= rowBottom + 1.0F;
+}
+
 /// @brief 验证遮罩暗区实际吞掉鼠标按下与释放，亮区仍可点击。
 /// @details 先绘制一帧建立 ImGui 窗口层级，再在暗区和亮区各执行完整点击。
 /// 使用真实 ImGui Button 的返回值作为结果，不能只判断遮罩绘制顶点。
@@ -180,8 +292,13 @@ bool testSeparateMaskHoles()
     // 实际布局教学还需要保留右侧面板的所有选项，不能只露出一个画布物件。
     // 面板与主目标相隔较远，遮罩必须分别扣除两处并保留中间暗区。
     // 面板只提供辅助亮区，不应改变气泡贴近主目标的定位方式。
+    // 表单与后来展开的列表分两次上报，合并后仍只允许面板纵向范围。
     spotlight.reportCompanionRegion("mask.target",
                                     { 650.0f, 80.0f },
+                                    { 780.0f, 290.0f },
+                                    ImGui::GetMainViewport());
+    spotlight.reportCompanionRegion("mask.target",
+                                    { 650.0f, 290.0f },
                                     { 780.0f, 500.0f },
                                     ImGui::GetMainViewport());
     spotlight.keepAlive();
@@ -935,10 +1052,12 @@ int main()
                                testDrawingRollback() && testRequiresAction();
     const bool maskValid     = testSeparateMaskHoles();
     const bool inputValid    = testInputBlocking();
+    const bool comboValid    = testExpandedComboInput();
     ImGui::DestroyContext();
     return !hiddenValid     ? 9
            : !previousValid ? 63
            : !maskValid     ? 64
-           : inputValid     ? 0
-                            : 65;
+           : !inputValid    ? 65
+           : comboValid     ? 0
+                            : 66;
 }

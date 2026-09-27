@@ -163,6 +163,9 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
         prompt += "\n";
         prompt += Config::pathToUtf8(Walkthrough::canonRockDirectory());
     }
+    // 目标缺席或等待外部操作时也要给出明确的退出方式。
+    prompt += "\n";
+    prompt += TR("ui.walkthrough.escape_to_exit").toString();
     // 原生选择器阻塞 UI 时，唤起与打开成功事件可能在同一次 update 中到达。
     // 下一步骤的基线必须在进入分支时拍下，不能等选择器关闭才拍。
     // 基线采用服务内的递增修订号，已完成的旧练习不会被当成新事件。
@@ -225,6 +228,13 @@ void WalkthroughPage::updateGuide(UIManager* manager)
     // - 每次衔接重新启动 Spotlight 并建立新的信号基线；
     // - Dock 切换不会清理身份，返回目录和关闭欢迎页则显式 stop；
     // - 项目或谱面标签消失会立即停止，避免遮罩指向失效窗口。
+    // Esc 总能取消当前路线；待旧项目关闭的阶段还没有遮罩，也须清掉等待身份。
+    // 只在演练活动时读取按键，不影响普通弹窗或编辑器的 Esc 行为。
+    if ( (m_activeGuide || m_pendingOpenGuide) &&
+         ImGui::IsKeyPressed(ImGuiKey_Escape, false) ) {
+        stopGuide(manager);
+        return;
+    }
     // 只有 UI 已确认没有活动项目且切换结束，才启动先前排队的教学入口。
     // 不能只看逻辑线程对象指针：工作区标签清理也属于关闭过程。
     // 如果用户在关闭确认中取消，本分支保持待启动状态，仍可从页面停止。

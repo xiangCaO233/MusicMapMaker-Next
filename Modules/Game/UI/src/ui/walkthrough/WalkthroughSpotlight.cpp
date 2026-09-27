@@ -585,6 +585,21 @@ void Spotlight::reportLastItem(std::string_view targetId)
                  ImGui::GetWindowViewport());
 }
 
+/// @brief 将当前弹窗窗口的实时矩形上报为目标可交互范围。
+/// @param targetId 弹窗所属控件的稳定语义 ID。
+/// @warning UI 热路径：只读取当前 ImGui 窗口几何并复用目标上报路径。
+void Spotlight::reportCurrentPopup(std::string_view targetId)
+{
+    // 弹窗列表与触发控件分属不同窗口，Item 矩形无法覆盖选项。
+    // 必须在 EndCombo 或 EndPopup 前读取当前窗口，下一帧重新报告。
+    const ImVec2 minimum = ImGui::GetWindowPos();
+    const ImVec2 size    = ImGui::GetWindowSize();
+    reportTarget(targetId,
+                 minimum,
+                 { minimum.x + size.x, minimum.y + size.y },
+                 ImGui::GetWindowViewport());
+}
+
 /// @brief 在当前流程中选择优先级最高的已上报目标。
 /// @param targetId 控件稳定语义 ID。
 /// @param minimum 屏幕空间左上角。
@@ -660,11 +675,19 @@ void Spotlight::reportCompanionRegion(std::string_view targetId,
     if ( !awaitingTarget(targetId) || maximum.x <= minimum.x ||
          maximum.y <= minimum.y )
         return;
-    m_companion =
-        Anchor{ .priority = m_stage,
-                .minimum  = minimum,
-                .maximum  = maximum,
-                .viewport = viewport ? viewport : ImGui::GetWindowViewport() };
+    auto* resolvedViewport = viewport ? viewport : ImGui::GetWindowViewport();
+    if ( m_companion && m_companion->viewport == resolvedViewport ) {
+        // 同一表单与其展开列表共享辅助亮区，不解锁无关的页脚按钮。
+        m_companion->minimum.x = std::min(m_companion->minimum.x, minimum.x);
+        m_companion->minimum.y = std::min(m_companion->minimum.y, minimum.y);
+        m_companion->maximum.x = std::max(m_companion->maximum.x, maximum.x);
+        m_companion->maximum.y = std::max(m_companion->maximum.y, maximum.y);
+    } else {
+        m_companion = Anchor{ .priority = m_stage,
+                              .minimum  = minimum,
+                              .maximum  = maximum,
+                              .viewport = resolvedViewport };
+    }
 }
 
 /// @brief 绘制不阻挡目标操作、但允许确认当前阶段的引导层。

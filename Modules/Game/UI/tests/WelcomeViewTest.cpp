@@ -40,6 +40,7 @@
 /// - 无项目时直接渲染主题仅供布局测试，不代表目录按钮可以点击；
 /// - 项目限定属性来自内置配置，页面不会按固定主题索引硬编码门禁；
 /// - 空白与模板谱面正文均生成真实分支卡片，确保配置未退化为静态说明；
+/// - 活动聚光灯按 Esc 退出，并释放打开项目演练的路径限制；
 /// - 编辑区简介是要求谱面标签的阶段三真实主题；
 /// - 学习进度在首页与正文之间保持；
 /// - 越界主题索引安全回退首页；
@@ -495,6 +496,20 @@ bool testPages()
         // 停止后欢迎页的其它导航测试不能带着活动遮罩或待处理返回请求。
         // 学习记录仍由服务持有，本地导航对象销毁不影响先前的确认结果。
         if ( spotlight.active() || spotlight.canGoBack() ) return false;
+        // 从打开项目路线重新启动，Esc 必须走同一停止出口，而非只隐藏遮罩。
+        // 路径限制若未清除，后续用户的普通项目选择会被错误拦截。
+        route.startGuide(&manager, topic, branch, second);
+        if ( !spotlight.active() ||
+             !MMM::UI::Walkthrough::openProjectGuideRestricted() )
+            return false;
+        ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true);
+        ImGui::NewFrame();
+        route.updateGuide(&manager);
+        const bool exited = !spotlight.active() && !spotlight.canGoBack() &&
+                            !MMM::UI::Walkthrough::openProjectGuideRestricted();
+        ImGui::Render();
+        ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, false);
+        if ( !exited ) return false;
     }
     welcome.showHome();
     if ( !welcome.showingHome() || !service.progress().completed(topic, step) )

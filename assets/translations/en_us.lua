@@ -37,6 +37,7 @@ return {
 	["ui.walkthrough.goal_complete"] = "Topic goal reached. You can still explore the other methods.",
 	["ui.walkthrough.requires_project"] = "This walkthrough requires an active project. Open or create a project before starting the guide.",
 	["ui.walkthrough.requires_canonrock"] = "This walkthrough runs in the CanonRock project from the walkthrough assets. Open its canonrock folder through the Open Project walkthrough first.",
+	["ui.walkthrough.escape_to_exit"] = "Press Esc to exit the guide.",
 	["ui.walkthrough.requires_beatmap"] = "This walkthrough requires an active project and an open beatmap editor tab. Open a beatmap before starting the guide.",
 	["ui.file.open_project_directory"] = "Open Project Folder",
 	["ui.file.open_project_directory_failed"] = "Failed to open the current project folder",

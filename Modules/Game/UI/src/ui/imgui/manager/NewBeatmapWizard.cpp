@@ -852,6 +852,10 @@ void NewBeatmapWizard::renderTemplatePickerPopup(
                  ImVec2(120.0f, 0.0f)) ) {
             ImGui::CloseCurrentPopup();
         }
+        // 布局完成后读取实际弹窗范围，包含可滚动候选和取消按钮。
+        if ( sourceManager )
+            sourceManager->walkthroughSpotlight().reportCurrentPopup(
+                "new-beatmap.template.pick");
         ImGui::EndPopup();
     }
 }
@@ -900,6 +904,10 @@ void NewBeatmapWizard::renderTemplateOptionsPopup(UIManager* sourceManager)
                  ImVec2(120.0f, 0.0f)) ) {
             ImGui::CloseCurrentPopup();
         }
+        // 复制选项弹窗接管目标边界，允许逐项勾选后确认。
+        if ( sourceManager )
+            sourceManager->walkthroughSpotlight().reportCurrentPopup(
+                "new-beatmap.template.options");
         ImGui::EndPopup();
     }
 }
@@ -1044,7 +1052,8 @@ void NewBeatmapWizard::renderTemplateSourceControls(
         }
         // 选择按钮和单选项分别注册，弹出选择器前始终有可见候选目标。
         // 引导系统按最后可见目标择优，不持有 ImGui Item 生命周期。
-        if ( sourceManager )
+        if ( sourceManager && !m_shouldOpenTemplatePicker &&
+             !ImGui::IsPopupOpen("NewBeatmapTemplatePicker") )
             sourceManager->walkthroughSpotlight().reportLastItem(
                 "new-beatmap.template.pick");
         ImGui::SameLine();
@@ -1060,7 +1069,8 @@ void NewBeatmapWizard::renderTemplateSourceControls(
         }
         // 复制选项是模板教程的人工确认步骤，只需提供稳定的视觉锚点。
         // 未选模板时锚点随按钮保持禁用，不能误导为可提交状态。
-        if ( sourceManager )
+        if ( sourceManager && !m_shouldOpenTemplateOptions &&
+             !ImGui::IsPopupOpen("NewBeatmapTemplateOptions") )
             sourceManager->walkthroughSpotlight().reportLastItem(
                 "new-beatmap.template.options");
         if ( !m_templateBeatmap ) {
@@ -1551,6 +1561,10 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
             ImGui::SameLine();
             ImGui::TextDisabled("(%s)", res.m_path.c_str());
         }
+        // 下拉选项可能延伸到音频行下方，随展开窗口同步更新遮罩。
+        if ( sourceManager )
+            sourceManager->walkthroughSpotlight().reportCurrentPopup(
+                "new-beatmap.audio");
         ::MMM::UI::FeedbackEndCombo();
     }
     ImGui::SameLine();
@@ -1679,6 +1693,11 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
             }
             if ( isSelected ) ImGui::SetItemDefaultFocus();
         }
+        // “补充信息”阶段包含封面选择，展开后必须照亮完整资源列表。
+        // 文件数变化会改变弹窗高度，不能沿用打开瞬间的旧坐标。
+        if ( sourceManager )
+            sourceManager->walkthroughSpotlight().reportCurrentPopup(
+                "new-beatmap.details");
         ::MMM::UI::FeedbackEndCombo();
     }
 
@@ -1736,6 +1755,10 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
             }
             if ( isSelected ) ImGui::SetItemDefaultFocus();
         }
+        // 背景列表与封面列表遵守同一帧范围契约，收起后自动恢复。
+        if ( sourceManager )
+            sourceManager->walkthroughSpotlight().reportCurrentPopup(
+                "new-beatmap.details");
         ::MMM::UI::FeedbackEndCombo();
     }
 

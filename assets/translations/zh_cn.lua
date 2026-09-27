@@ -37,6 +37,7 @@ return {
 	["ui.walkthrough.goal_complete"] = "已达成主题目标，可以继续了解其他操作分支。",
 	["ui.walkthrough.requires_project"] = "此演练需要活动项目。请先打开或新建项目后再进入引导。",
 	["ui.walkthrough.requires_canonrock"] = "此演练必须在引导资源中的 CanonRock 项目内进行。请先使用“打开项目”演练打开 canonrock 目录。",
+	["ui.walkthrough.escape_to_exit"] = "按 Esc 退出引导。",
 	["ui.walkthrough.requires_beatmap"] = "此演练需要活动项目和已打开的谱面编辑器标签页。请先打开一张谱面后再进入引导。",
 	["ui.file.open_project_directory"] = "打开项目目录",
 	["ui.file.open_project_directory_failed"] = "无法打开当前项目目录",

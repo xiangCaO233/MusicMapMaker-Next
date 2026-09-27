@@ -27,6 +27,7 @@
 #include <filesystem>
 #include <nfd.h>
 #include <optional>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -486,6 +487,22 @@ void SettingsView::drawSoftwareSettings()
     std::optional<Clay_BoundingBox> aestheticsLastRowBounds;
     constexpr const char*           AESTHETICS_TARGET =
         "personalization.settings.aesthetics";
+    // 同一常规组依次承载主题和两类字体；折叠时按当前步骤突出组标题。
+    // 只匹配正在等待的语义目标，避免后续步骤提前抢走本组提示。
+    // 目标仍由实际设置行负责，标题仅在内容不可见时兜底。
+    const char* generalGuideTarget = nullptr;
+    if ( m_sourceManager ) {
+        const auto& spotlight = m_sourceManager->walkthroughSpotlight();
+        for ( const char* target : { "personalization.settings.theme",
+                                     "personalization.settings.font-ascii",
+                                     "personalization.settings.font-cjk" } ) {
+            // 每个步骤最多命中一个候选；无需为常规组维护持久状态。
+            if ( spotlight.awaitingTarget(target) ) {
+                generalGuideTarget = target;
+                break;
+            }
+        }
+    }
 
     /// 创建一个可折叠软件设置分组并返回当前帧内容 section。
     /// @param label 本地化标题，也参与页面内稳定 ID 构造。
@@ -540,10 +557,15 @@ void SettingsView::drawSoftwareSettings()
              defaultOpen,
              guideTarget,
              forceOpen,
-             &aestheticsHeaderBounds](Clay_BoundingBox r, bool) {
+             AESTHETICS_TARGET,
+             &aestheticsHeaderBounds,
+             this](Clay_BoundingBox r, bool) {
                 // 标题与最后一行在同一轮布局中给出分组的完整纵向范围。
                 // 即使内容折叠，也保留标题位置作为引导的可见回退锚点。
-                if ( guideTarget ) aestheticsHeaderBounds = r;
+                // 美化组使用整组边界；其他设置组仍由各自控件上报矩形。
+                if ( guideTarget &&
+                     std::string_view(guideTarget) == AESTHETICS_TARGET )
+                    aestheticsHeaderBounds = r;
                 // Clay 给出绝对矩形，ImGui 游标必须移动到标题起点。
                 ImGui::SetCursorScreenPos({ r.x, r.y });
                 // Header 三态颜色从当前主题基础色逐级增亮。
@@ -587,6 +609,14 @@ void SettingsView::drawSoftwareSettings()
 
                 ImGui::GetStateStorage()->SetInt(id, nowOpen ? 1 : 0);
                 ImGui::PopStyleColor(3);
+                // 用户在引导中重新折叠分组时，标题仍须可见并可点击展开。
+                // 展开动作只改变本地 UI 状态，不视作完成主题或字体设置。
+                // 折叠内容下一帧才会加入 Clay 树，标题填补这期间的目标空档。
+                if ( guideTarget && !nowOpen && m_sourceManager )
+                    m_sourceManager->walkthroughSpotlight().reportTarget(
+                        guideTarget,
+                        { r.x, r.y },
+                        { r.x + r.width, r.y + r.height });
             });
 
         // 标题始终加入根 VBox，内容 section 仅在展开时加入。
@@ -627,7 +657,8 @@ void SettingsView::drawSoftwareSettings()
     // 该组包含多个即时运行态更新，但所有持久化字段仍通过函数末尾的一次 save
     // 提交。任何提前返回或失败分支都不得把 changed 设为 true。
     if ( auto* sec = addHeader(TR_CACHE("ui.settings.software.general").data(),
-                               true) ) {
+                               true,
+                               generalGuideTarget) ) {
         // 常规组包含程序级身份、帧调度、音频、皮肤、字体与光标设置。
         // 采用统一标签宽度，使动态 OpenAL 参数和字体行保持同一值列起点。
 
@@ -1097,6 +1128,13 @@ void SettingsView::drawSoftwareSettings()
                             }
                         }
                     }
+                    // 主题候选属于独立弹窗，展开时与值列共同保持明亮可点击。
+                    // 关闭后本调用不再发生，Spotlight 的 beginFrame
+                    // 会清理旧几何。
+                    if ( m_sourceManager )
+                        m_sourceManager->walkthroughSpotlight()
+                            .reportCurrentPopup(
+                                "personalization.settings.theme");
                     ::MMM::UI::FeedbackEndCombo();
                 }
             },
@@ -1184,6 +1222,12 @@ void SettingsView::drawSoftwareSettings()
                             changed = true;
                         }
                     }
+                    // 字体列表超出设置行时按本帧窗口边界扩展引导亮区。
+                    // 字体重建可能改变文本尺寸，因此不能缓存上次弹窗矩形。
+                    if ( m_sourceManager )
+                        m_sourceManager->walkthroughSpotlight()
+                            .reportCurrentPopup(
+                                "personalization.settings.font-ascii");
                     ::MMM::UI::FeedbackEndCombo();
                 }
                 // 浏览按钮与组合框同排，使用紧凑样式避免省略号被裁剪。
@@ -1316,6 +1360,12 @@ void SettingsView::drawSoftwareSettings()
                             changed = true;
                         }
                     }
+                    // CJK 候选收起后不再报告弹窗，遮罩随下帧恢复到设置行。
+                    // 即使皮肤字体数量变化，仍以实际弹窗边界确定可点区域。
+                    if ( m_sourceManager )
+                        m_sourceManager->walkthroughSpotlight()
+                            .reportCurrentPopup(
+                                "personalization.settings.font-cjk");
                     ::MMM::UI::FeedbackEndCombo();
                 }
                 // 浏览按钮采用与 ASCII 行一致的紧凑省略号样式。
@@ -1503,8 +1553,10 @@ void SettingsView::drawSoftwareSettings()
     // - BPM 同步启用时固定 smokeLifeTime 仍保留但不可编辑；
     // - 所有字段只改变后续帧绘制，不创建或销毁持久资源。
     // 光标组选择系统光标或软件绘制光标，并展示后者的粒子参数。
-    if ( auto* sec = addHeader(
-             TR_CACHE("ui.settings.software.cursor_params").data(), true) ) {
+    if ( auto* sec =
+             addHeader(TR_CACHE("ui.settings.software.cursor_params").data(),
+                       true,
+                       "personalization.settings.cursor") ) {
 
         // 采用统一标签宽度，使动态软件光标参数保持对齐。
 

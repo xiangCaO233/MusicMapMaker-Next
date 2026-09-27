@@ -95,6 +95,12 @@ public:
     /// @warning 必须紧跟目标控件调用；仅在目标属于当前流程时保存矩形。
     void reportLastItem(std::string_view targetId);
 
+    /// @brief 将当前展开的 ImGui 弹窗窗口边界并入引导目标。
+    /// @param targetId 弹窗所属控件的稳定语义 ID。
+    /// @warning UI 热路径：只能在成功的 BeginCombo 或 BeginPopup 内调用；
+    /// 每帧读取当前窗口边界，收起后不再上报，避免保留过期亮区。
+    void reportCurrentPopup(std::string_view targetId);
+
     /// @brief 上报自定义区域，使非标准控件也能参与突出引导。
     /// @param targetId 与演练配置中的 targets 项一致。
     /// @param minimum 屏幕空间左上角。
@@ -112,7 +118,8 @@ public:
     /// @param minimum 额外亮区的屏幕空间左上角。
     /// @param maximum 额外亮区的屏幕空间右下角。
     /// @param viewport 亮区所在视口；为空时使用当前窗口视口。
-    /// @warning UI 热路径：只保存一个固定大小矩形，不合并到主目标。
+    /// @warning UI
+    /// 热路径：同一视口的重复上报仅合并固定大小矩形，不合并到主目标。
     void reportCompanionRegion(std::string_view targetId, const ImVec2& minimum,
                                const ImVec2&  maximum,
                                ImGuiViewport* viewport = nullptr);

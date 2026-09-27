@@ -46,8 +46,9 @@ private:
     /// @brief 绘制项目基本信息步骤。
     void renderProjectInfoStep();
 
-    /// @brief 绘制项目初始偏好步骤。
-    void renderPreferencesStep();
+    /// @brief 绘制项目初始偏好步骤，并上报展开列表的可交互范围。
+    /// @param sourceManager 提供当前引导遮罩，可为空。
+    void renderPreferencesStep(UIManager* sourceManager);
 
     /// @brief 绘制项目保存位置步骤。
     void renderLocationStep();
