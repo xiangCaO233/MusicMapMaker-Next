@@ -4,6 +4,7 @@
 #include <imgui_internal.h>
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 /// @file WalkthroughSpotlightTest.cpp
@@ -194,6 +195,151 @@ bool testExpandedComboInput()
     // 亮区恢复到原行说明本帧动态计算不保留过期弹窗几何。
     return selected && modalOpen && !popupOpen &&
            expandedBottom <= rowBottom + 1.0F;
+}
+
+/// @brief 验证手测 BPM 工具接管亮区、可点击并在关闭后交还向导。
+/// @param target 当前打开手测工具时的向导阶段目标。
+/// @return 手测入口、工具操作和恢复后的 BPM 控件均能接收点击时返回 true。
+/// @details 每帧只上报实际可见窗口，模拟向导收起和工具关闭的几何切换。
+/// 手测入口作为 BPM 目标的独立辅助亮区，不把两处之间的暗区解锁。
+/// 测试窗口固定在主视口内，避免依赖停靠布局和外部图形后端。
+/// 初始 BPM 输入框和手测按钮相距较远，检验辅助亮区不会扩大主目标。
+/// 手测按钮的真实点击会触发窗口切换，不通过测试代码直接改写状态。
+/// 工具窗口和向导窗口互斥提交，模拟生产中的 CloseCurrentPopup。
+/// 工具内的 Tap 和 Close 分别验证测量操作与返回操作均可接收输入。
+/// 关闭后再检查锚点边界，确保前一个窗口的矩形没有残留到下一帧。
+/// 最后点击恢复的 BPM 控件，证明向导继续接受输入而非只恢复显示。
+/// 这项测试不依赖音频解码，关注 Spotlight 的窗口交接和输入权限。
+/// 工具阶段继续使用相同语义 ID，避免因跨窗口造成教程水位变化。
+/// 工具边界来自真实 ImGui 窗口，不使用预先计算的固定孔洞。
+/// 提交整窗边界相当于允许用户操作波形、输入框和关闭按钮。
+/// 按钮位置由固定屏幕坐标给定，点击坐标与各按钮中心一致。
+/// 输入由事件队列送入，保留 ImGui 的窗口命中与释放语义。
+/// 遮罩晚于工具创建，从而检验前景拦截窗口不会占据工具亮区。
+/// 工具关闭时不再上报窗口区域，下一帧仅由向导提供目标。
+/// 目标恢复后再点击，防止仅比较边界而漏掉输入层残留。
+/// 失败不会推进教程或修改工程，仅返回专用测试错误码。
+/// 每个操作均由完整帧结束，避免同帧窗口切换掩盖交接问题。
+bool testManualBpmWindowHandoff(std::string_view target)
+{
+    MMM::UI::Walkthrough::Spotlight spotlight;
+    spotlight.start({ std::string(target) }, "Check the BPM measurement");
+    bool       toolOpen = false;
+    bool       toolUsed = false;
+    bool       bpmUsed  = false;
+    const auto frame    = [&] {
+        ImGui::NewFrame();
+        spotlight.beginFrame();
+        if ( toolOpen ) {
+            // 进入手测后向导不再绘制，确保失去原有 BPM 目标锚点。
+            ImGui::SetNextWindowPos({ 280.0F, 180.0F }, ImGuiCond_Always);
+            ImGui::SetNextWindowSize({ 350.0F, 250.0F }, ImGuiCond_Always);
+            ImGui::Begin("Manual Bpm Tool",
+                         nullptr,
+                         ImGuiWindowFlags_NoDecoration |
+                             ImGuiWindowFlags_NoSavedSettings);
+            ImGui::SetCursorScreenPos({ 330.0F, 230.0F });
+            // Tap 位于工具内部，若遮罩仍覆盖该窗口就无法激活。
+            toolUsed |= ImGui::Button("Tap BPM", { 100.0F, 40.0F });
+            ImGui::SetCursorScreenPos({ 480.0F, 230.0F });
+            // Close 也必须在亮区内，否则用户会被锁在测量工具中。
+            if ( ImGui::Button("Close Tool", { 100.0F, 40.0F }) )
+                toolOpen = false;
+            // 实际工具窗口在向导暂时收起期间取代原 BPM Item。
+            const ImVec2 minimum = ImGui::GetWindowPos();
+            const ImVec2 size    = ImGui::GetWindowSize();
+            spotlight.reportTarget(target,
+                                   minimum,
+                                   { minimum.x + size.x, minimum.y + size.y },
+                                   ImGui::GetWindowViewport());
+            ImGui::End();
+        } else {
+            // 恢复向导后复用原有窗口 ID，等价于保留未提交的表单状态。
+            ImGui::SetNextWindowPos({ 40.0F, 60.0F }, ImGuiCond_Always);
+            ImGui::SetNextWindowSize({ 720.0F, 180.0F }, ImGuiCond_Always);
+            ImGui::Begin("Bpm Wizard",
+                         nullptr,
+                         ImGuiWindowFlags_NoDecoration |
+                             ImGuiWindowFlags_NoSavedSettings);
+            ImGui::SetCursorScreenPos({ 100.0F, 100.0F });
+            // 仍以 BPM 控件为主锚点，让提示说明继续指向复核位置。
+            bpmUsed |= ImGui::Button("Reference BPM", { 130.0F, 40.0F });
+            spotlight.reportLastItem(target);
+            ImGui::SetCursorScreenPos({ 550.0F, 100.0F });
+            // 点击备用入口只切换窗口，不提前完成当前引导阶段。
+            if ( ImGui::Button("Measure Manually", { 150.0F, 40.0F }) )
+                toolOpen = true;
+            spotlight.reportCompanionRegion(target,
+                                            ImGui::GetItemRectMin(),
+                                            ImGui::GetItemRectMax(),
+                                            ImGui::GetWindowViewport());
+            ImGui::End();
+        }
+        spotlight.keepAlive();
+        // 与 UIManager 一样，在全部业务窗口上报后再创建遮罩输入窗口。
+        spotlight.render(1.0F, "Got it");
+        ImGui::Render();
+    };
+    ImGuiIO& io = ImGui::GetIO();
+    // 每个动作都先移动再按下、释放，使前景拦截窗口进入下一帧命中测试。
+    const auto click = [&](float x, float y) {
+        io.AddMousePosEvent(x, y);
+        frame();
+        io.AddMouseButtonEvent(0, true);
+        frame();
+        io.AddMouseButtonEvent(0, false);
+        frame();
+    };
+    frame();
+    // 辅助亮区实际允许点击远离 BPM 主锚点的手测按钮。
+    click(625.0F, 120.0F);
+    if ( !toolOpen ) return false;
+    frame();
+    const auto toolBounds = spotlight.resolvedTargetBounds();
+    // 工具获得当前帧主锚点后，原向导的坐标不能继续参与解析。
+    if ( !toolBounds || toolBounds->minimum.x > 330.0F ||
+         toolBounds->maximum.y < 270.0F )
+        return false;
+    click(380.0F, 250.0F);
+    click(530.0F, 250.0F);
+    // 两枚按钮分别验证可操作和可退出，缺一都无法完成手测流程。
+    if ( !toolUsed || toolOpen ) return false;
+    frame();
+    const auto wizardBounds = spotlight.resolvedTargetBounds();
+    // 工具关闭后的第一帧必须重新收紧到原 BPM 控件范围。
+    if ( !wizardBounds || wizardBounds->maximum.x > 240.0F ) return false;
+    click(165.0F, 120.0F);
+    // 向导恢复的不只是几何，控件仍需获得正常的按下与释放事件。
+    return bpmUsed;
+}
+
+/// @brief 验证 BPM 数值框滚出视野时，手测入口仍可成为引导主目标。
+/// @return 备用锚点落在按钮区域且输入遮罩留出亮区时返回 true。
+/// @details 只上报手测按钮，不制造已被裁剪的 BPM 控件矩形。
+/// 这覆盖纵览表单滚动到音频资源行时，顶部 BPM 输入框已经不可见的情况。
+/// 上报标记为 fallback，和生产向导中主控件优先的目标选择规则一致。
+/// 恢复时重新计算的亮区应落在按钮边界，不接受旧的数值框坐标。
+bool testManualBpmFallback()
+{
+    MMM::UI::Walkthrough::Spotlight spotlight;
+    spotlight.start({ "new-beatmap.timing.bpm" }, "Use manual BPM");
+    ImGui::NewFrame();
+    spotlight.beginFrame();
+    // 备用入口只有在主控件缺席时才决定提示锚点。
+    spotlight.reportTarget("new-beatmap.timing.bpm",
+                           { 550.0F, 100.0F },
+                           { 700.0F, 140.0F },
+                           ImGui::GetMainViewport(),
+                           true,
+                           true);
+    spotlight.keepAlive();
+    spotlight.render(1.0F, "Got it");
+    const auto bounds = spotlight.resolvedTargetBounds();
+    // 可见按钮范围代替滚出视野的输入框，关闭手测后仍有明确继续入口。
+    const bool valid =
+        bounds && bounds->minimum.x == 550.0F && bounds->maximum.x == 700.0F;
+    ImGui::Render();
+    return valid;
 }
 
 /// @brief 验证遮罩暗区实际吞掉鼠标按下与释放，亮区仍可点击。
@@ -1053,11 +1199,17 @@ int main()
     const bool maskValid     = testSeparateMaskHoles();
     const bool inputValid    = testInputBlocking();
     const bool comboValid    = testExpandedComboInput();
+    const bool handoffValid =
+        testManualBpmWindowHandoff("new-beatmap.timing.auto") &&
+        testManualBpmWindowHandoff("new-beatmap.timing.bpm") &&
+        testManualBpmWindowHandoff("new-beatmap.details") &&
+        testManualBpmFallback();
     ImGui::DestroyContext();
     return !hiddenValid     ? 9
            : !previousValid ? 63
            : !maskValid     ? 64
            : !inputValid    ? 65
-           : comboValid     ? 0
-                            : 66;
+           : !comboValid    ? 66
+           : handoffValid   ? 0
+                            : 67;
 }

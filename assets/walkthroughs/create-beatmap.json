@@ -30,17 +30,17 @@
         {
           "id": "auto-timing",
           "title": {"zh_cn": "推荐自动测量 BPM 与首拍", "en_us": "Automatically detect BPM and first beat"},
-          "body": {"zh_cn": "选择音频后，推荐点击 **自动测偏**。工具会分析歌曲并给出 BPM、首拍偏移位置和初始 Timing；分析期间不要切换音频。", "en_us": "After selecting audio, use **Auto Offset**. The tool analyzes the song and returns its BPM, first-beat offset, and initial Timing. Do not switch audio while analysis is running."},
+          "body": {"zh_cn": "选择音频后，推荐点击 **自动测偏**。也可以点击 **手测 BPM**，在测量工具中操作，关闭工具后返回向导。导出有效 Timing 后再继续；自动分析期间不要切换音频。", "en_us": "After selecting audio, Auto Offset is recommended. You can also open Measure BPM, use the tool, and return to the wizard when you close it. Export valid Timing before continuing; do not switch audio during automatic analysis."},
           "requires": ["audio"],
           "signals": ["beatmap.create.menu.timing", "beatmap.create.shortcut.timing"],
-          "guide": {"prompt": {"zh_cn": "点击突出显示的“自动测偏”，等待 BPM 与首拍分析完成。", "en_us": "Click the highlighted Auto Offset button and wait for BPM and first-beat analysis."}, "targets": ["new-beatmap.timing.auto"]}
+          "guide": {"prompt": {"zh_cn": "点击“自动测偏”，或打开旁边的“手测 BPM”工具；导出测量结果后继续。", "en_us": "Choose Auto Offset or open the adjacent Measure BPM tool; continue after exporting the result."}, "targets": ["new-beatmap.timing.auto"]}
         },
         {
           "id": "verify-timing",
           "title": {"zh_cn": "确认并修正测量结果", "en_us": "Verify and correct the timing"},
           "body": {"zh_cn": "检查已测 BPM 与首拍摘要是否符合听感。自动 BPM 可能出现半频或倍频误判；参考值不合理时，直接修正 BPM，或打开手测 BPM 工具重新测量。", "en_us": "Check whether the measured BPM and first-beat summary match what you hear. Automatic BPM may be detected at half-time or double-time; correct an unreasonable reference BPM directly or reopen the manual BPM tool."},
           "requires": ["auto-timing"],
-          "guide": {"prompt": {"zh_cn": "核对测量摘要；若参考 BPM 不合理，请在突出显示的 BPM 控件中修正。", "en_us": "Check the measurement summary and correct an unreasonable reference BPM in the highlighted control."}, "targets": ["new-beatmap.timing.bpm"]}
+          "guide": {"prompt": {"zh_cn": "核对测量摘要；可直接修改 BPM，或打开“手测 BPM”工具重新测量。", "en_us": "Check the measurement summary. Adjust BPM directly or reopen Measure BPM to measure again."}, "targets": ["new-beatmap.timing.bpm"]}
         },
         {
           "id": "details",

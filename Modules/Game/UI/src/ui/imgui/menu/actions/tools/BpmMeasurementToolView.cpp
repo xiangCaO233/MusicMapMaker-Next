@@ -22,6 +22,7 @@
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/walkthrough/WalkthroughSpotlight.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -878,6 +879,16 @@ void BpmMeasurementToolView::setMeasurementExportCallback(
     m_measurementExportCallback = std::move(callback);
 }
 
+/// @brief 手测 BPM 时让工具窗口接管向导当前引导目标。
+/// @param targetId 当前 Spotlight 阶段 ID；空值清除绑定。
+/// @warning 仅向导切换窗口时调用，不在每帧复制目标字符串。
+/// @details 保存值而非借用向导内存，工具可在向导关闭后继续存在。
+/// 只有向导进入手测路径才设置目标；一般工具入口保持空值。
+void BpmMeasurementToolView::setWalkthroughTarget(std::string_view targetId)
+{
+    m_walkthroughTarget = targetId;
+}
+
 /// @brief 由全局快捷键路由切换 BPM 工具当前音轨的播放状态。
 /// @warning UI 输入路径：只在 BPM 工具聚焦且按下无修饰空格时调用。
 /// @note 快捷键与播放按钮共享 togglePlayback，确保加载、回绕和错误状态一致。
@@ -1099,7 +1110,7 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
                                    ImVec2(0.0f, 0.0f),
                                    ImGuiChildFlags_None,
                                    ImGuiWindowFlags_AlwaysVerticalScrollbar) ) {
-                renderControlPanel();
+                renderControlPanel(sourceManager);
             }
             ImGui::EndChild();
         }
@@ -1107,8 +1118,21 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
         ImGui::EndTable();
     }
 
-    renderAutoApplyOffsetPopup();
-    renderApplyTimingPopup();
+    renderAutoApplyOffsetPopup(sourceManager);
+    renderApplyTimingPopup(sourceManager);
+
+    if ( m_isOpen && sourceManager && !m_walkthroughTarget.empty() ) {
+        // 向导暂时收起时，按工具窗口的实时位置和尺寸放行全部测量控件。
+        // 子弹窗已在各自 Begin 范围内上报，本帧遮罩不会沿用旧几何。
+        // 只在仍然打开时上报，点关闭按钮的帧不能留下可交互的旧窗口。
+        const ImVec2 minimum = ImGui::GetWindowPos();
+        const ImVec2 size    = ImGui::GetWindowSize();
+        sourceManager->walkthroughSpotlight().reportTarget(
+            m_walkthroughTarget,
+            minimum,
+            { minimum.x + size.x, minimum.y + size.y },
+            ImGui::GetWindowViewport());
+    }
 
     if ( !m_isOpen ) {
         // 关闭是明确提交点：立即保存偏好并释放独立试听轨。
@@ -1556,7 +1580,7 @@ void BpmMeasurementToolView::applyMeasuredTimingsToSelectedBeatmap()
 /// - 视野中心与缩放；
 /// - 变速 Timing 段维护和应用；
 /// - 后台分析进度及最终状态。
-void BpmMeasurementToolView::renderControlPanel()
+void BpmMeasurementToolView::renderControlPanel(UIManager* sourceManager)
 {
     auto* project = Logic::EditorEngine::instance().getCurrentProject();
     if ( !project ) {
@@ -1609,6 +1633,10 @@ void BpmMeasurementToolView::renderControlPanel()
                 ImGui::SetItemDefaultFocus();
             }
         }
+        if ( sourceManager && !m_walkthroughTarget.empty() )
+            // 下拉项脱离右侧子窗口范围，需要随展开状态单独上报。
+            sourceManager->walkthroughSpotlight().reportCurrentPopup(
+                m_walkthroughTarget);
         ::MMM::UI::FeedbackEndCombo();
     }
 
@@ -1914,7 +1942,8 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
 /// @note 此弹窗只确认是否进入目标谱面选择，不直接写入任何会话。
 /// @details 打开请求来自后台结果消费阶段，实际 OpenPopup 延迟到 UI 绘制。
 /// “应用”只排队打开下一层目标选择；“取消”保留工具内测量结果供继续调整。
-void BpmMeasurementToolView::renderAutoApplyOffsetPopup()
+void BpmMeasurementToolView::renderAutoApplyOffsetPopup(
+    UIManager* sourceManager)
 {
     const char* popupTitle = TR("ui.tools.bpm_measure.auto_apply_title").data();
     if ( m_shouldOpenAutoApplyPopup ) {
@@ -1941,6 +1970,10 @@ void BpmMeasurementToolView::renderAutoApplyOffsetPopup()
                                        ImVec2(buttonWidth, 0.0f)) ) {
             ImGui::CloseCurrentPopup();
         }
+        if ( sourceManager && !m_walkthroughTarget.empty() )
+            // 模态框的位置由 ImGui 决定，不能沿用工具主窗口的矩形。
+            sourceManager->walkthroughSpotlight().reportCurrentPopup(
+                m_walkthroughTarget);
         ImGui::EndPopup();
     }
 }
@@ -1949,7 +1982,7 @@ void BpmMeasurementToolView::renderAutoApplyOffsetPopup()
 /// @warning UI 热路径：弹窗打开时按会话快照重建候选列表，不持有会话所有权。
 /// @details 弹窗持续验证先前选择的会话索引；目标失效时回退首个候选，
 /// 所有候选消失时禁用应用按钮。真正修改通过可撤销命令提交。
-void BpmMeasurementToolView::renderApplyTimingPopup()
+void BpmMeasurementToolView::renderApplyTimingPopup(UIManager* sourceManager)
 {
     const char* popupTitle =
         TR("ui.tools.bpm_measure.apply_popup_title").data();
@@ -2003,6 +2036,10 @@ void BpmMeasurementToolView::renderApplyTimingPopup()
                         ImGui::SetItemDefaultFocus();
                     }
                 }
+                if ( sourceManager && !m_walkthroughTarget.empty() )
+                    // 目标谱面下拉列表可能超出确认框，使用当帧弹窗边界。
+                    sourceManager->walkthroughSpotlight().reportCurrentPopup(
+                        m_walkthroughTarget);
                 ::MMM::UI::FeedbackEndCombo();
             }
             ::MMM::UI::FeedbackCheckbox(
@@ -2029,6 +2066,10 @@ void BpmMeasurementToolView::renderApplyTimingPopup()
                                        ImVec2(buttonWidth, 0.0f)) ) {
             ImGui::CloseCurrentPopup();
         }
+        if ( sourceManager && !m_walkthroughTarget.empty() )
+            // 目标选择确认框关闭后下一帧不再上报，遮罩立即收回。
+            sourceManager->walkthroughSpotlight().reportCurrentPopup(
+                m_walkthroughTarget);
         ImGui::EndPopup();
     }
 }

@@ -653,11 +653,28 @@ void NewBeatmapWizard::applyMeasuredTimingsFromTool(
 /// ImGui 不适合叠加两个需要交互的模态层，因此手动测量期间关闭当前 popup，但保留
 /// m_isOpen 和所有输入状态；工具结束后由 shouldWaitForManualBpmMeasurement
 /// 重开。
+/// 引导目标只在手动测量生命周期内委托给工具，不能让普通工具窗口永久取得
+/// 向导遮罩的输入权限。委托使用当前阶段原有的语义 ID，使步骤进度保持不变。
+/// 若用户在自动测量阶段主动改用手测，仍须等到有效 Timing 导出后才推进。
 void NewBeatmapWizard::beginManualBpmMeasurement(BpmMeasurementToolView& tool)
 {
     // active 区分临时收起与用户主动关闭向导。
     m_manualBpmMeasurementActive   = true;
     m_manualBpmMeasurementExported = false;
+    // 手测期间向导目标不可见；把当前目标交给工具窗口维持遮罩亮区。
+    // 自动测偏、结果复核和信息总览都可能打开手测，关闭后交还向导。
+    tool.setWalkthroughTarget({});
+    if ( m_boundBpmToolManager ) {
+        const auto& spotlight = m_boundBpmToolManager->walkthroughSpotlight();
+        if ( spotlight.awaitingTarget("new-beatmap.timing.auto") )
+            tool.setWalkthroughTarget("new-beatmap.timing.auto");
+        else if ( spotlight.awaitingTarget("new-beatmap.timing.bpm") )
+            tool.setWalkthroughTarget("new-beatmap.timing.bpm");
+        else if ( spotlight.awaitingTarget("new-beatmap.details") )
+            tool.setWalkthroughTarget("new-beatmap.details");
+        else
+            tool.setWalkthroughTarget({});
+    }
     // 确保 BPM 工具窗口在向导关闭后取得前层焦点。
     tool.requestFocus();
     // 只关闭 ImGui popup，不能调用 close 清理向导数据。
@@ -701,6 +718,8 @@ bool NewBeatmapWizard::shouldWaitForManualBpmMeasurement(
 ///
 /// 先通过保存的 UIManager 和稳定视图名重新查找对象，再与保存观察指针比较；只有
 /// 同一实例仍注册时才清空回调，避免触碰已销毁或同名替换的新窗口。
+/// 手动测量可能因关闭窗口、导出、重开向导或项目切换而结束；每条路径均通过此处
+/// 归还 Spotlight 目标，否则独立打开的旧工具会继续留有教程亮区。
 void NewBeatmapWizard::unbindBpmMeasurementTool()
 {
     if ( m_boundBpmToolManager ) {
@@ -710,6 +729,7 @@ void NewBeatmapWizard::unbindBpmMeasurementTool()
         if ( tool && tool == m_boundBpmToolView ) {
             // 清除捕获 this 的函数对象后，工具可独立继续或销毁。
             tool->setMeasurementExportCallback({});
+            tool->setWalkthroughTarget({});
         }
     }
 
@@ -1631,6 +1651,32 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     if ( ::MMM::UI::FeedbackButton(measureBpmLabel,
                                    ImVec2(measureBpmWidth, 0.0f)) ) {
         openBpmTool(false);
+    }
+    if ( sourceManager ) {
+        // 手测是自动测量与结果复核两阶段的可选入口，单独留出按钮亮区。
+        // BPM 数值框位于向导上方，自动按钮位于同一行；辅助区域避免将
+        // 两者之间的表单字段一并解锁，也不改变教程步骤的完成条件。
+        const ImVec2 minimum   = ImGui::GetItemRectMin();
+        const ImVec2 maximum   = ImGui::GetItemRectMax();
+        auto&        spotlight = sourceManager->walkthroughSpotlight();
+        // BPM 数值框滚出可视范围时，手测按钮仍可作为该阶段的备用锚点。
+        // 主控件可见时 fallback 不会覆盖原本的提示位置。
+        // 备用锚点按每帧实际按钮位置上报，窗口滚动后不沿用历史矩形。
+        // 用户从该入口返回时，向导复核阶段仍保持原有目标水位。
+        spotlight.reportTarget("new-beatmap.timing.bpm",
+                               minimum,
+                               maximum,
+                               ImGui::GetWindowViewport(),
+                               true,
+                               true);
+        spotlight.reportCompanionRegion("new-beatmap.timing.auto",
+                                        minimum,
+                                        maximum,
+                                        ImGui::GetWindowViewport());
+        spotlight.reportCompanionRegion("new-beatmap.timing.bpm",
+                                        minimum,
+                                        maximum,
+                                        ImGui::GetWindowViewport());
     }
     ImGui::SameLine();
     if ( ::MMM::UI::FeedbackButton(autoBpmLabel, ImVec2(autoBpmWidth, 0.0f)) ) {
