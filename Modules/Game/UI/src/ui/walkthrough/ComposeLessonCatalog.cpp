@@ -236,13 +236,12 @@ std::pair<std::string_view, std::string_view> lessonPracticeInstruction(
     // 需要两种动作的区别，才能避免误删已有正确路径。
     if ( title == "折线删除子物件教学" )
         return {
-            "使用绘制工具，右键点击要断开的折线节点；Shift+"
-            "右键点击折线，或直接右键点击折线头，会删除整条折线。右键点击已选中"
-            "的物件会删除所有选中物件。",
-            "Use Draw: right-click a polyline node to split it. "
-            "Shift+right-click the polyline, or right-click its head, to "
-            "delete the whole path. Right-clicking a selected note deletes all "
-            "selected notes."
+            "使用绘制工具，右键点击红框指出的横向连接节点；每次只断开这一处，"
+            "直到折线成为七条独立长条。不要右键折线头或按 Shift+右键，"
+            "那会删除整条折线。",
+            "Use Draw: right-click the red-marked horizontal connection node. "
+            "Split one connection at a time until seven separate holds remain. "
+            "Avoid the head and Shift+right-click, which delete the whole path."
         };
     // 未识别的自定义批注仍给出可执行的位置提示，且不假定具体工具。
     // 目录中已有的十四段均命中上方分支，测试会防止其意外回退。
@@ -961,6 +960,41 @@ ComposeLessonFeedback compareComposeLessonNotes(
                     ? mergeCollapseArrow(expected, candidate)
                     : nextPathArrow(expected, candidate);
         }
+    }
+    // 删除子段只提示下一处连接节点。右键横向 Flick 节点后，折线会
+    // 分成左侧独立长条与右侧剩余路径；下次修订再提示下一个节点。
+    // 其它多余物件此刻不加红框，避免挡住真正需要右键的位置。
+    if ( lesson.m_title == "折线删除子物件教学" ) {
+        // 初始折线可能与参考长条覆盖重叠，仍应优先处理其横向连接。
+        // 从较早的连接开始，右侧剩余路径会保持同样的本地索引规律。
+        for ( std::size_t index = 0; index < feedback.actual.size(); ++index ) {
+            if ( feedback.actualMatched[index] ||
+                 feedback.actual[index].type != ::MMM::NoteType::POLYLINE )
+                continue;
+            const auto& subNotes = feedback.actual[index].subNotes;
+            for ( std::size_t subIndex = 1; subIndex < subNotes.size();
+                  ++subIndex ) {
+                // 只提示横向 Flick：删除纵向 Hold 会破坏目标长条几何。
+                if ( subNotes[subIndex].type != ::MMM::NoteType::FLICK )
+                    continue;
+                feedback.deletionTargetActualIndex = static_cast<int>(index);
+                feedback.deletionTargetSubIndex    = static_cast<int>(subIndex);
+                break;
+            }
+            if ( feedback.deletionTargetActualIndex >= 0 ) break;
+        }
+        // 其余意外物件仍须由用户删除；若无可断开的横向节点，
+        // 仅提示第一件多余物件，绝不画覆盖全段的多重红框。
+        // 配对成功的长条无需再显示错误，即使它曾是原折线的子段。
+        // 下一次右键导致的根身份变化由新反馈重算，不复用旧索引。
+        if ( feedback.deletionTargetActualIndex < 0 )
+            for ( std::size_t index = 0; index < feedback.actual.size();
+                  ++index )
+                if ( !feedback.actualMatched[index] ) {
+                    feedback.deletionTargetActualIndex =
+                        static_cast<int>(index);
+                    break;
+                }
     }
     return feedback;
 }

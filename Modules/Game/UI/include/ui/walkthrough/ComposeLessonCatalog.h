@@ -62,7 +62,11 @@ struct ComposeLessonFeedback {
     std::vector<int> repairTargetForActual;
     /// @brief 每个参考折线下一处待处理的方向箭头；物件修订后重算。
     std::vector<std::optional<ComposeLessonPathArrow>> pathArrowForExpected;
-    bool                                               showUndoButton{
+    int deletionTargetActualIndex{
+        -1
+    };  ///< 删除子段教学当前唯一提示的正式物件。
+    int deletionTargetSubIndex{ -1 };  ///< 应右键断开的折线节点；负值表示整件。
+    bool showUndoButton{
         false
     };  ///< 仅删除教学之前的普通放置段落开放辅助按钮。
 };

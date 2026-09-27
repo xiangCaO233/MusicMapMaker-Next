@@ -1343,6 +1343,14 @@ bool Basic2DCanvas::updateComposeLessonHints(
         if ( index < feedback->actualMatched.size() &&
              feedback->actualMatched[index] )
             continue;
+        // 折线删除练习逐次指出一个可右键节点，避免整段多余物件同时亮红。
+        const bool deletionLesson =
+            feedback->lesson->m_title == "折线删除子物件教学";
+        // 比较器只给一个未完成对象分配删除目标，其余物件保持原样可交互。
+        // 红框仅描述本次右键位置，不承担遮罩或输入拦截职责。
+        if ( deletionLesson &&
+             static_cast<int>(index) != feedback->deletionTargetActualIndex )
+            continue;
         // 已与参考折线起点配对的路径仍待编辑，但蓝色目标已经足够指引。
         // 此条件只影响错误绘制，不改变目标轮廓、箭头或完成判定。
         if ( index < feedback->suppressErrorForActual.size() &&
@@ -1359,6 +1367,8 @@ bool Basic2DCanvas::updateComposeLessonHints(
         Common::Render::AnnotationRenderItem target;
         target.targetKind   = ::MMM::BeatmapAnnotationTargetKind::PLAYER_OBJECT;
         target.targetEntity = note.entity;
+        if ( deletionLesson && feedback->deletionTargetSubIndex >= 0 )
+            target.targetSubIndex = feedback->deletionTargetSubIndex;
         const int  repairIndex = index < feedback->repairTargetForActual.size()
                                      ? feedback->repairTargetForActual[index]
                                      : -1;
@@ -1375,6 +1385,8 @@ bool Basic2DCanvas::updateComposeLessonHints(
                   feedback->repairKind ==
                       UI::Walkthrough::ComposeLessonRepairKind::HoldTail )
             repairPart = Common::Render::HoverPart::HoldEnd;
+        else if ( deletionLesson && feedback->deletionTargetSubIndex >= 0 )
+            repairPart = Common::Render::HoverPart::PolylineNode;
         // 只接受尾部真实命中框；尾部离屏时不退回头部或身体的中心。
         // 否则蓝线会从不可能拖动的部位起笔，误导用户操作。
         auto bounds = findAnnotationTargetHintBounds(

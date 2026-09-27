@@ -1428,14 +1428,6 @@
             "type": "polyline"
         },
         {
-            "collaboration_id": "18d9759033fe2577c6ef2615b2a49254",
-            "duration": 149.99999999999858,
-            "extra": [],
-            "timestamp": 60020.4593309682,
-            "track": 0,
-            "type": "hold"
-        },
-        {
             "collaboration_id": "003fe3851a0a43a1ada740b8018120f5",
             "extra": [],
             "sub_notes": [
@@ -1521,102 +1513,6 @@
             "timestamp": 60020.4593309682,
             "track": 0,
             "type": "polyline"
-        },
-        {
-            "collaboration_id": "18d9759033fed4f0ca4d70e88ad8bd07",
-            "dtrack": 1,
-            "extra": [],
-            "timestamp": 60170.4593309682,
-            "track": 0,
-            "type": "flick"
-        },
-        {
-            "collaboration_id": "18d9759033fe263e6526a1d33372ec9e",
-            "duration": 149.99999999999858,
-            "extra": [],
-            "timestamp": 60170.4593309682,
-            "track": 1,
-            "type": "hold"
-        },
-        {
-            "collaboration_id": "18d9759033fe27e3035e3b98bc0f694a",
-            "duration": 149.99999999999858,
-            "extra": [],
-            "timestamp": 60320.459330968195,
-            "track": 2,
-            "type": "hold"
-        },
-        {
-            "collaboration_id": "18d9759033fed5a56884cab60b9538bd",
-            "dtrack": 1,
-            "extra": [],
-            "timestamp": 60320.459330968195,
-            "track": 1,
-            "type": "flick"
-        },
-        {
-            "collaboration_id": "18d9759033fed72206bc447f9423b6ab",
-            "dtrack": 1,
-            "extra": [],
-            "timestamp": 60470.459330968195,
-            "track": 2,
-            "type": "flick"
-        },
-        {
-            "collaboration_id": "18d9759033fe28a3a195b5663cc5e21f",
-            "duration": 149.99999999999858,
-            "extra": [],
-            "timestamp": 60470.459330968195,
-            "track": 3,
-            "type": "hold"
-        },
-        {
-            "collaboration_id": "18d9759033fe2a5e3fcd0f2fbd9264ff",
-            "duration": 150.00000000000568,
-            "extra": [],
-            "timestamp": 60620.459330968195,
-            "track": 2,
-            "type": "hold"
-        },
-        {
-            "collaboration_id": "18d9759033fed8d6a4f3dfc514f8353a",
-            "dtrack": -1,
-            "extra": [],
-            "timestamp": 60620.459330968195,
-            "track": 3,
-            "type": "flick"
-        },
-        {
-            "collaboration_id": "18d9759033fe2bdbde0486f53e28f881",
-            "duration": 149.99999999999858,
-            "extra": [],
-            "timestamp": 60770.4593309682,
-            "track": 1,
-            "type": "hold"
-        },
-        {
-            "collaboration_id": "18d9759033fed981432b598295b6a860",
-            "dtrack": -1,
-            "extra": [],
-            "timestamp": 60770.4593309682,
-            "track": 2,
-            "type": "flick"
-        },
-        {
-            "collaboration_id": "18d9759033fe2d737c3c00b2bee573ee",
-            "duration": 299.99999999999716,
-            "extra": [],
-            "timestamp": 60920.4593309682,
-            "track": 0,
-            "type": "hold"
-        },
-        {
-            "collaboration_id": "18d9759033fedb1ae162d34816432e94",
-            "dtrack": -1,
-            "extra": [],
-            "timestamp": 60920.4593309682,
-            "track": 1,
-            "type": "flick"
         }
     ],
     "timing": [

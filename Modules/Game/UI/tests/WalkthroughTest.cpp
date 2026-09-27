@@ -4,6 +4,7 @@
 #include "event/logic/BeatmapCreateInteractionEvent.h"
 #include "event/project/ProjectOpenInteractionEvent.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/note/Polyline.h"
 #include "ui/walkthrough/ComposeLessonCatalog.h"
 #include "ui/walkthrough/WalkthroughModel.h"
 #include "ui/walkthrough/WalkthroughService.h"
@@ -68,6 +69,7 @@
 /// - 示例谱面与重练基线在合并段提供同样的正式物件集合；
 /// - 空白折线从第一子段起笔，完成后不保留旧方向提示；
 /// - 删除子物件段没有参考折线时，不出现臆造的目标箭头。
+/// - 最后一段只指向一个待右键的横向连接节点，基线没有重复独立物件。
 ///
 /// 覆盖的进度约束包括：
 /// - 手动确认只完成目标步骤，不串到同分支其他步骤；
@@ -524,6 +526,31 @@ int main(int argc, char** argv)
         std::filesystem::path(MMM_COMPOSE_SAMPLE_FILE));
     if ( !mergeInputIsClean(baseline) || !mergeInputIsClean(sample) )
         return 190;
+    // 末段必须从一条完整折线开始；右键逐个断开横向节点后，
+    // 留下的长条才能与七个草稿目标一对一对应。
+    // 两份资源都要满足，否则首次进入和按上一步重练会有不同输入。
+    // 子段数包含七个纵向 Hold 与六个横向 Flick，少一段便无法演练。
+    const auto& deletionReference    = packagedLessons->back();
+    const auto  deletionInputIsClean = [&](const MMM::BeatMap& map) {
+        std::size_t count = 0;
+        for ( const auto& item : map.m_allNotes ) {
+            const auto& note = item.get();
+            // 只看批注圈定的最终段落，不要求其它段落也只有折线。
+            if ( note.m_timestamp < deletionReference.m_beginMs ||
+                 note.m_timestamp > deletionReference.m_endMs )
+                continue;
+            if ( note.m_type != ::MMM::NoteType::POLYLINE ||
+                 static_cast<const MMM::Polyline&>(note).m_subNotes.size() !=
+                     13U )
+                return false;
+            // 同拍独立物件也会进入逻辑捕获，必须通过根物件计数排除。
+            ++count;
+        }
+        return count == 1U;
+    };
+    if ( deletionReference.m_reference.size() != 7U ||
+         !deletionInputIsClean(baseline) || !deletionInputIsClean(sample) )
+        return 191;
     // 分发谱面的草稿有五列、主画布有四列；右侧四列对应主轨道 0–3。
     // 首段的六枚 Note 覆盖全部四条主轨，防止直接比较草稿编码而卡住练习。
     // 用实际资源验证，隔离夹具单独通过不能证明用户看到的谱面可继续。
@@ -883,8 +910,35 @@ int main(int argc, char** argv)
     const auto deletionFeedback =
         compareComposeLessonNotes(pathLesson, {}, 17, 21);
     if ( deletionFeedback.pathArrowForExpected.front() ||
-         !deletionFeedback.suppressErrorForActual.empty() )
+         !deletionFeedback.suppressErrorForActual.empty() ||
+         deletionFeedback.deletionTargetActualIndex != -1 )
         return 180;
+    // 有完整折线时，必须选中第一个 Flick 连接节点，而不是整条父物件。
+    // 另一枚无关错误音符也不应抢走本次断开操作的唯一红框。
+    // 参考只保留独立长条，因此一般的进阶折线配对分支不会生效。
+    // 用两处 Flick 模拟连续两次右键，检查剩余折线重新编号后的目标。
+    auto deletionPath = expectedPath;
+    deletionPath.subNotes.push_back({ ::MMM::NoteType::FLICK, 4.6, 0.0, 1, 1 });
+    deletionPath.subNotes.push_back({ ::MMM::NoteType::HOLD, 4.6, 0.3, 2, 0 });
+    const auto deletionStep = compareComposeLessonNotes(
+        pathLesson, { extraNote, deletionPath }, 17, 24);
+    if ( deletionStep.deletionTargetActualIndex != 1 ||
+         deletionStep.deletionTargetSubIndex != 1 ||
+         deletionStep.actualMatched != std::vector<bool>{ false, false } )
+        return 192;
+    // 修订号变化后必须重新定位，不能沿用被删除父物件的旧节点下标。
+    // 断开首处横向节点后，下一轮索引会随剩余路径重新从 1 开始。
+    // 结果不依赖逻辑线程枚举顺序：新折线在数组首位也应得到提示。
+    // 另一枚无关音符仍未验收，但必须等折线节点清完之后再提示。
+    deletionPath.timestamp = 4.3;
+    deletionPath.track     = 1;
+    deletionPath.subNotes.erase(deletionPath.subNotes.begin(),
+                                deletionPath.subNotes.begin() + 2);
+    const auto nextDeletionStep = compareComposeLessonNotes(
+        pathLesson, { deletionPath, extraNote }, 17, 25);
+    if ( nextDeletionStep.deletionTargetActualIndex != 0 ||
+         nextDeletionStep.deletionTargetSubIndex != 1 )
+        return 193;
     // 后续进阶段即使包含未匹配的 Note，也只能由用户自行调整或删除。
     if ( composeBeatmapTopic->m_branches.size() != 2 ||
          composeBeatmapTopic->m_branches[0].m_steps.size() != 12 ||
