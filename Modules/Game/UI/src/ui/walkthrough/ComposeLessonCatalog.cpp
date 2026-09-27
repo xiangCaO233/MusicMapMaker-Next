@@ -432,7 +432,9 @@ std::optional<ComposeLessonPathArrow> mergeCollapseArrow(
     const auto&      returning      = source[3];
     const auto&      nextHold       = source[4];
     constexpr double TIME_TOLERANCE = 0.002;
-    const auto       near           = [](double left, double right) {
+    // 使用明确的时间比较名称，避免与 Windows 头文件的 near 宏冲突。
+    // 所有首尾连接与参考终点共用同一容差，防止浮点误差改变手势提示。
+    const auto withinTimeTolerance = [](double left, double right) {
         return std::abs(left - right) <= TIME_TOLERANCE;
     };
     // 起点外侧轨、往返的内侧轨及回到外侧轨必须首尾相接。
@@ -449,10 +451,12 @@ std::optional<ComposeLessonPathArrow> mergeCollapseArrow(
          returning.track != innerHold.track ||
          nextHold.track != returning.track + returning.dtrack ||
          nextHold.track != firstHold.track ||
-         !near(firstHold.timestamp + firstHold.duration, outbound.timestamp) ||
-         !near(outbound.timestamp, innerHold.timestamp) ||
-         !near(innerHold.timestamp + innerHold.duration, returning.timestamp) ||
-         !near(returning.timestamp, nextHold.timestamp) )
+         !withinTimeTolerance(firstHold.timestamp + firstHold.duration,
+                              outbound.timestamp) ||
+         !withinTimeTolerance(outbound.timestamp, innerHold.timestamp) ||
+         !withinTimeTolerance(innerHold.timestamp + innerHold.duration,
+                              returning.timestamp) ||
+         !withinTimeTolerance(returning.timestamp, nextHold.timestamp) )
         return std::nullopt;
     // 目标的第一条 Hold 正好覆盖合并后的外侧前后两段。
     // 这项核对也允许用户拖了一部分后继续朝同一蓝点修正。
@@ -465,10 +469,12 @@ std::optional<ComposeLessonPathArrow> mergeCollapseArrow(
          target[1].track != firstHold.track ||
          target[1].dtrack != outbound.dtrack ||
          target[2].track != innerHold.track ||
-         !near(target[0].timestamp, firstHold.timestamp) ||
-         !near(target[0].duration, firstHold.duration + nextHold.duration) ||
-         !near(target[1].timestamp, outbound.timestamp + nextHold.duration) ||
-         !near(target[2].timestamp, target[1].timestamp) ||
+         !withinTimeTolerance(target[0].timestamp, firstHold.timestamp) ||
+         !withinTimeTolerance(target[0].duration,
+                              firstHold.duration + nextHold.duration) ||
+         !withinTimeTolerance(target[1].timestamp,
+                              outbound.timestamp + nextHold.duration) ||
+         !withinTimeTolerance(target[2].timestamp, target[1].timestamp) ||
          returning.timestamp <= outbound.timestamp + TIME_TOLERANCE )
         return std::nullopt;
     // 箭头源点必须位于可抓取的内侧返回 Flick，落点为同轨前一个节点。
