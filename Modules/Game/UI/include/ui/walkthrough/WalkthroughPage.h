@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/EditTool.h"
 #include "ui/walkthrough/ComposeLessonCatalog.h"
 
 #include <cstddef>
@@ -91,6 +92,12 @@ private:
         std::shared_ptr<Logic::ComposeLessonCapture> composeCapture;
         /// @brief 首播/复播先观察到新的播放开始，避免旧帧直接完成。
         bool composePlaybackStarted{ false };
+        /// @brief 预览后工具不符时，先仅开放正确的工具栏按钮。
+        bool composeToolSelectionPending{ false };
+        /// @brief 当前练习需要的工具；仅在等待切换时读取。
+        Logic::EditTool composeRequiredTool{ Logic::EditTool::Draw };
+        /// @brief 工具切换完成后恢复的原始画布练习提示。
+        std::string composePracticePrompt;
     };
 
     /// @brief 当前正文主题 ID，切换主题时用于重置展开项。

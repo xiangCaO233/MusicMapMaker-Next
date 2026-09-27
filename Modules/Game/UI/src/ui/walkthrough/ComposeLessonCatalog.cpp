@@ -45,6 +45,23 @@
 
 namespace MMM::UI::Walkthrough
 {
+/// @brief 将需要直接拖动现有几何的段落映射到移动工具。
+/// @param title 批注中的规范化教学名称。
+/// @return 其余绘制、续写、覆盖与右键删除段落使用绘制工具。
+Logic::EditTool requiredComposeLessonTool(std::string_view title)
+{
+    // 教学动作由作者批注定义，不根据草稿物件类型猜测：同一种 Note
+    // 可以在不同段落分别要求绘制、拖动头部或调整尾部。
+    constexpr std::array<std::string_view, 5> moveLessons{
+        "拖拽移动教学",     "滑键拖拽调整教学", "长条拖拽调整教学",
+        "折线拖拽调整教学", "折线拖拽合并教学",
+    };
+    return std::find(moveLessons.begin(), moveLessons.end(), title) !=
+                   moveLessons.end()
+               ? Logic::EditTool::Move
+               : Logic::EditTool::Draw;
+}
+
 namespace
 {
 /// @brief 结束批注使用的中文后缀；只剥离末尾，标题本身可包含“结束”。

@@ -109,6 +109,11 @@
 /// - 阶段四在无项目、无谱面两种状态下均不可进入；
 /// - 阶段四仅在项目和谱面标签都存在时可进入；
 /// - 阶段四每一步都声明可重放的 guide；
+/// - 实际打包段落的工具要求与动作吻合，拖动段指向移动工具；
+/// - 放置、续写、覆盖和右键删除段保持绘制工具；
+/// - 工具映射不改动每段预览、练习、复播的既有步骤数；
+/// - 批注顺序变化会使预期工具检查失败，提醒维护者审查流程；
+/// - 工具校验直接使用发布资源，避免只在隔离夹具上通过；
 /// - 阶段四动态步骤 ID 与阶段三旧目标保持主题级隔离；
 /// - PackageDrop 只有只读项目完成时才推进；
 /// - BeatmapDrop 只有真正打开谱面时才推进；
@@ -366,6 +371,21 @@ int main(int argc, char** argv)
     // 共用该段示范，教学步骤切换时不能出现空白媒体键。
     auto packagedTopic = parseTopic(BUILTIN_COMPOSE_BEATMAP_WALKTHROUGH);
     if ( !packagedTopic || packagedLessons->size() != 14U ) return 122;
+    // 预览后的工具门禁按真实批注决定。三段基础拖动与两段折线拖动
+    // 必须切到 Move；放置、续写、覆盖和右键删除继续使用 Draw。
+    constexpr std::array expectedLessonTools{
+        MMM::Logic::EditTool::Draw, MMM::Logic::EditTool::Draw,
+        MMM::Logic::EditTool::Draw, MMM::Logic::EditTool::Draw,
+        MMM::Logic::EditTool::Move, MMM::Logic::EditTool::Move,
+        MMM::Logic::EditTool::Move, MMM::Logic::EditTool::Draw,
+        MMM::Logic::EditTool::Draw, MMM::Logic::EditTool::Draw,
+        MMM::Logic::EditTool::Draw, MMM::Logic::EditTool::Move,
+        MMM::Logic::EditTool::Move, MMM::Logic::EditTool::Draw,
+    };
+    for ( std::size_t index = 0; index < packagedLessons->size(); ++index )
+        if ( requiredComposeLessonTool(packagedLessons->at(index).m_title) !=
+             expectedLessonTools[index] )
+            return 124;
     populateComposeLessonTopic(*packagedTopic, *packagedLessons);
     // 用源码中的真实 CanonRock 批注生成路线，防止只对隔离夹具的
     // 五段教学生效，却漏掉后面的进阶 GIF 映射。

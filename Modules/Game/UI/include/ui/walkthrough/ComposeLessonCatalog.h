@@ -1,11 +1,13 @@
 #pragma once
 
+#include "common/EditTool.h"
 #include "common/walkthrough/ComposeLessonNotes.h"
 
 #include <cstdint>
 #include <expected>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace MMM::UI::Walkthrough
@@ -22,6 +24,11 @@ struct ComposeLesson {
     std::vector<Logic::ComposeLessonNote> m_reference;
     bool m_allowUndoButton{ true };  ///< 删除教学及后续段落只能由用户亲自编辑。
 };
+
+/// @brief 根据批注段落选择练习所需的编辑工具。
+/// @param title 去掉进阶前缀后的教学名称。
+/// @return 拖拽调整使用移动工具，其余放置和右键删除使用绘制工具。
+Logic::EditTool requiredComposeLessonTool(std::string_view title);
 
 /// @brief 编辑练习中当前物件与目标物件之间需要修正的部位。
 enum class ComposeLessonRepairKind { None, Move, FlickTail, HoldTail, Delete };

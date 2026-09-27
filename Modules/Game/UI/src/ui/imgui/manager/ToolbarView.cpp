@@ -4595,11 +4595,15 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
         // 用户若已选中目标工具，可由步骤的确认入口继续而不伪造点击。
         if ( tool == Logic::EditTool::Move ) {
             spotlight.reportLastItem("compose.toolbar.select-move-tool");
+            // 创作练习换工具阶段只高亮此按钮；真正切换由页面读取
+            // 已发布的编辑器工具状态确认，不凭点击提前开放画布。
+            spotlight.reportLastItem("compose.lesson.select-move-tool");
             if ( clicked )
                 spotlight.completeTarget("compose.toolbar.select-move-tool");
         }
         if ( tool == Logic::EditTool::Draw ) {
             spotlight.reportLastItem("compose.toolbar.select-draw-tool-edit");
+            spotlight.reportLastItem("compose.lesson.select-draw-tool");
             if ( clicked )
                 spotlight.completeTarget(
                     "compose.toolbar.select-draw-tool-edit");

@@ -23,6 +23,8 @@
 /// - 业务成功通知与“知道了”共用同一阶段完成入口；
 /// - 业务层可在控件出现前查询当前水位，以准备固定的临时教学目标；
 /// - 显式矩形与普通 ImGui Item 使用同一解析路径；
+/// - 创作练习切工具时，已显示的画布不会抢占独立工具目标；
+/// - 工具确认后重新启动练习目标，原工具按钮不再成为亮区；
 /// - 遮罩向 ForegroundDrawList 增加顶点，提示创建固定 ID 的 Tooltip 层窗口；
 /// - 确认当前阶段后旧目标不再产生遮罩，后续目标仍可被解析；
 /// - 确认最后一个阶段会进入 Completed，供路线会话衔接下一步；
@@ -981,6 +983,75 @@ int main()
     if ( !customTargetValid ) {
         ImGui::DestroyContext();
         return 4;
+    }
+
+    // 创作练习把工具选择与画布编辑作为两个独立 Spotlight 状态。
+    // 同时上报已可见的画布，验证选择阶段不会让用户提前在画布操作。
+    // 若把两个目标排在同一列表，当前 Spotlight 会优先采用后来的画布。
+    // 因此测试保持两个 start 调用，固定这条面向教程的调用契约。
+    // 练习画布面积远大于工具按钮；若错误合并范围，目标断言能发现。
+    // 工具选择阶段是强制动作，气泡中不能用“知道了”代替按钮操作。
+    // 两个状态分别建立完整帧，让 ImGui 不沿用上一阶段锚点。
+    ImGui::NewFrame();
+    spotlight.beginFrame();
+    spotlight.start({ "compose.lesson.select-move-tool" },
+                    "Select Move before editing",
+                    false,
+                    false,
+                    true);
+    spotlight.reportTarget("compose.lesson.practice",
+                           { 100.0F, 100.0F },
+                           { 600.0F, 500.0F },
+                           ImGui::GetMainViewport());
+    // 画布在生产环境中早于工具栏出现，选择阶段仍只能锚定工具。
+    // 此处先上报画布，避免注册顺序掩盖意外的目标优先级变化。
+    spotlight.reportTarget("compose.lesson.select-move-tool",
+                           { 720.0F, 160.0F },
+                           { 780.0F, 210.0F },
+                           ImGui::GetMainViewport());
+    spotlight.keepAlive();
+    spotlight.render(1.0F, "Got it");
+    const bool toolOnly =
+        spotlight.resolvedTargetId() == "compose.lesson.select-move-tool";
+    // 只检查最终语义目标，提示气泡的字体和位置不影响这个断言。
+    // 原画布仍绘制但不属于当前目标，这是遮罩禁止交互的前提。
+    ImGui::Render();
+    if ( !toolOnly ) {
+        ImGui::DestroyContext();
+        return 73;
+    }
+    // 应用确认工具后，页面重启为单独画布目标；旧工具按钮即使
+    // 仍可见，也不能继续占用本段练习的遮罩孔洞。
+    // 第二阶段反转上报顺序，覆盖目标报告顺序变化的情况。
+    // 复用同一 Spotlight 对象，更接近页面只替换目标的实际流程。
+    // 画布目标须由工具切换确认后的独立 start 调用建立。
+    ImGui::NewFrame();
+    spotlight.beginFrame();
+    spotlight.start({ "compose.lesson.practice" },
+                    "Match the draft notes",
+                    false,
+                    false,
+                    true);
+    spotlight.reportTarget("compose.lesson.select-move-tool",
+                           { 720.0F, 160.0F },
+                           { 780.0F, 210.0F },
+                           ImGui::GetMainViewport());
+    // 正式练习窗口重新报告画布范围，只有这个目标能成为亮区。
+    spotlight.reportTarget("compose.lesson.practice",
+                           { 100.0F, 100.0F },
+                           { 600.0F, 500.0F },
+                           ImGui::GetMainViewport());
+    spotlight.keepAlive();
+    spotlight.render(1.0F, "Got it");
+    const bool canvasOnly =
+        spotlight.resolvedTargetId() == "compose.lesson.practice";
+    // 帧结束前清理状态，后面的模态向导测试必须从空状态开始。
+    // 两阶段使用独立返回码，以区分工具门禁与画布交接故障。
+    spotlight.stop();
+    ImGui::Render();
+    if ( !canvasOnly ) {
+        ImGui::DestroyContext();
+        return 74;
     }
 
     // 首帧打开模态向导并记录气泡中“知道了”按钮的真实屏幕中心。

@@ -13,6 +13,7 @@
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "ui/IEditorApplicationService.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/markdown/MarkdownImageCache.h"
@@ -120,6 +121,17 @@
 /// - 查询只读取正式轨道根物件，草稿仍由目录持有的参考提供；
 /// - 复播再次从段首开始，播到终点才接续下一段；
 /// - 首播和复播期间用户不能停播或定位，教学在段尾自行停播；
+/// - 首播结束进入练习前，先检查本段要求的编辑工具；
+/// - 工具不匹配时仅在工具栏目标按钮开孔，画布目标暂不注册；
+/// - 工具栏继续使用原本的变更命令，页面只观察应用后的工具状态；
+/// - 工具状态确认后再启动练习目标，防止点击帧提前开放画布；
+/// - 相邻段落要求同一工具时直接进入练习，不重复打断用户；
+/// - 工具选择步骤和练习共享本段 GIF，不改变三阶段进度记录；
+/// - 工具选择期间仍可通过 Esc 退出，或通过上一步回到预览；
+/// - 切换后恢复练习原提示，用户仍能看到该段物件的具体手势要求；
+/// - 只有工具状态已被应用服务发布时才结束工具选择阶段；
+/// - 工具按钮目标与练习画布目标分开启动，不能依赖候选优先级排序；
+/// - 首段若当前工具已经正确，直接进入练习，不制造无意义的工具步骤；
 /// - 写谱阶段可以自行试听，播放到段尾自动停下，定位限定于当前段落；
 /// - 阶段限制只存在于目标谱面会话，不写入项目或用户设置；
 /// - 限制与停播、定位命令使用同一队列，切步时先解锁旧阶段；
@@ -360,6 +372,40 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
     // 目标缺席或等待外部操作时也要给出明确的退出方式。
     prompt += "\n";
     prompt += TR("ui.walkthrough.escape_to_exit").toString();
+    // 预览完成后若仍选用上一段的工具，先只开放目标工具按钮。
+    // 工具切换由正常工具栏命令完成；画布在聚光灯换回练习目标前保持遮挡。
+    bool            selectComposeTool   = false;
+    Logic::EditTool composeRequiredTool = Logic::EditTool::Draw;
+    std::string     composePracticePrompt;
+    if ( step.m_composeLesson &&
+         step.m_composeLesson->m_phase ==
+             Walkthrough::ComposeLessonPhase::Practice ) {
+        // 目录已经在启动时解析批注，运行中只借用标题确定工具。
+        // 不从草稿几何反推，因为相同类型的 Note 可用于放置或调整。
+        if ( const auto* lesson = manager->walkthroughService().composeLesson(
+                 step.m_composeLesson->m_lessonIndex) ) {
+            composeRequiredTool =
+                Walkthrough::requiredComposeLessonTool(lesson->m_title);
+            const auto* application = manager->getEditorApplicationService();
+            selectComposeTool = application && application->currentTool() !=
+                                                   composeRequiredTool;
+        }
+        if ( selectComposeTool ) {
+            // 原提示留到正式练习阶段；这里直接告诉用户应点哪个工具。
+            // 保留 Esc 文案，工具按钮被用户设置隐藏时仍有退出入口。
+            composePracticePrompt = std::move(prompt);
+            prompt =
+                language == "en_us"
+                    ? "Preview complete. Select the required tool in the "
+                      "toolbar before editing: "
+                    : "预览完成，请先在工具栏选择本段需要的工具，再开始编辑：";
+            prompt += composeRequiredTool == Logic::EditTool::Move
+                          ? (language == "en_us" ? "Move" : "拖拽工具")
+                          : (language == "en_us" ? "Draw" : "绘制工具");
+            prompt += "\n";
+            prompt += TR("ui.walkthrough.escape_to_exit").toString();
+        }
+    }
     // 原生选择器阻塞 UI 时，唤起与打开成功事件可能在同一次 update 中到达。
     // 下一步骤的基线必须在进入分支时拍下，不能等选择器关闭才拍。
     // 基线采用服务内的递增修订号，已完成的旧练习不会被当成新事件。
@@ -386,12 +432,25 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
             // 已缓存的图集重新计时；尚在后台解码的图集上传时会自行起播。
             images->restartImage(step.m_guide->m_gif);
         }
-    manager->walkthroughSpotlight().start(step.m_guide->m_targets,
-                                          std::move(prompt),
-                                          hasPrevious,
-                                          reviewing,
-                                          step.m_guide->m_requiresAction,
-                                          step.m_guide->m_gif);
+    if ( selectComposeTool )
+        // 单独目标不能与画布排在同一列表：Spotlight 会优先采用
+        // 当前帧已出现的后续目标，直接把画布放入会跳过工具按钮。
+        manager->walkthroughSpotlight().start(
+            { composeRequiredTool == Logic::EditTool::Move
+                  ? "compose.lesson.select-move-tool"
+                  : "compose.lesson.select-draw-tool" },
+            std::move(prompt),
+            hasPrevious,
+            reviewing,
+            true,
+            step.m_guide->m_gif);
+    else
+        manager->walkthroughSpotlight().start(step.m_guide->m_targets,
+                                              std::move(prompt),
+                                              hasPrevious,
+                                              reviewing,
+                                              step.m_guide->m_requiresAction,
+                                              step.m_guide->m_gif);
     if ( m_activeGuide && m_activeGuide->composeSession &&
          m_activeGuide->composeSession != composeSession ) {
         // 切换示例谱面标签时，先放开旧会话，避免旧标签在引导外仍被锁定。
@@ -431,6 +490,9 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
         guide.composeBuffer           = std::move(composeBuffer);
         guide.composeBeatmapKey       = std::move(composeBeatmapKey);
         guide.composeBaselineRevision = composeSnapshot->composeNoteRevision;
+        guide.composeToolSelectionPending = selectComposeTool;
+        guide.composeRequiredTool         = composeRequiredTool;
+        guide.composePracticePrompt       = std::move(composePracticePrompt);
         if ( lesson.m_phase == Walkthrough::ComposeLessonPhase::Practice ) {
             // 初始结果只有参考，没有实际物件；先提供目标定位，用户无须
             // 等待第一次绘制才能看到该段落预期放置的 Note 位置。
@@ -701,6 +763,28 @@ void WalkthroughPage::updateGuide(UIManager* manager)
             break;
         }
         // 返回后立即退出本次推进，避免消费业务完成信号后又向前跳转。
+        spotlight.keepAlive();
+        return;
+    }
+    if ( m_activeGuide->composeToolSelectionPending ) {
+        // 工具栏命令应用到编辑器后才转入可操作画布。选择阶段只有一个
+        // 工具按钮目标，画布即使已经可见也不会提前成为遮罩孔洞。
+        // 旧引导目标的点击事件不代表工具状态已经提交，不能据此放行。
+        // 无应用服务时继续显示目标，避免假定 Draw 已启用而误开练习。
+        const auto* application = manager->getEditorApplicationService();
+        if ( application && application->currentTool() ==
+                                m_activeGuide->composeRequiredTool ) {
+            // 复用原有练习目标和提示，保持业务验收及 GIF 对应同一段。
+            // 这里只替换高亮内容，不重建 ActiveGuide 或会话时间边界。
+            spotlight.start(current->m_guide->m_targets,
+                            std::move(m_activeGuide->composePracticePrompt),
+                            current != branch->m_steps.begin(),
+                            m_activeGuide->reviewing,
+                            current->m_guide->m_requiresAction,
+                            current->m_guide->m_gif);
+            m_activeGuide->composeToolSelectionPending = false;
+        }
+        // 切换确认帧先结束；下一帧画布重新上报矩形后才接受绘制。
         spotlight.keepAlive();
         return;
     }
