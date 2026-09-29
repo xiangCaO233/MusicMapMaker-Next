@@ -5,7 +5,7 @@ cmake_minimum_required(VERSION 3.31)
 # cache，并限制为明确的合法取值。 本文件不直接列举业务源文件，模块边界由各自 CMakeLists 维护。
 
 # 应用版本集中定义于根工程，供生成头、安装包和发布脚本共同消费。
-set(APPVER "0.5.9")
+set(APPVER "0.6.0")
 
 # 平台语言集合必须先于首次编译器探测确定。 Apple 平台的窗口与应用束实现包含 Objective-C 和 Objective-C++ 源码。
 if(APPLE)

@@ -242,6 +242,7 @@ public:
     /// @brief 绑定到单次 WebSocket 生命周期的稳定回调上下文。
     /// @details 上下文由 generation 映射持有，直到 WebSocket 越过退役宽限期；
     /// 第三方回调的裸指针因此不会指向已移动的 Client 容器元素。
+    /// 打开回调和安装后的主动查询可能并发，入队标志必须由同一把锁保护。
     struct CallbackContext {
         /// @brief 所属服务端实现。
         Impl* owner = nullptr;
@@ -249,6 +250,8 @@ public:
         int websocketId = -1;
         /// @brief 当前句柄的连接代次。
         std::uint64_t generation = 0;
+        /// @brief 打开事件是否已入队，由 m_callbackMutex 保护以避免重复接入。
+        bool connectedQueued = false;
     };
 
     /// @brief 一个已接入 WebSocket 客户端的主循环状态。
@@ -420,7 +423,7 @@ public:
     /// - 禁止回调访问当前实例。
     /// - 对外发布停止状态。
     /// - 删除监听服务，阻止新连接进入。
-    /// - 清除活动和退役 WebSocket 句柄。
+    /// - 清除握手中、活动和退役 WebSocket 句柄。
     /// - 清空房间、请求与目录脏状态。
     /// - 在互斥量下最后释放回调事件和稳定上下文。
     /// @warning 会同步删除所有第三方网络句柄，只用于服务关闭路径。
@@ -434,13 +437,22 @@ public:
         // 先移走句柄使重复 stop 看见无服务可删。
         if ( serverId >= 0 ) rtcDeleteWebSocketServer(serverId);
 
-        for ( const auto& [websocketId, client] : m_clients ) {
-            static_cast<void>(client);
-            deleteWebSocketSafely(websocketId);
+        std::vector<int> websocketIds;
+        {
+            std::scoped_lock lock(m_callbackMutex);
+            // 每代上下文对应一个尚未删除的句柄；已经越过宽限期的上下文不在表中。
+            // 用上下文表统一收集可覆盖刚接收但尚未收到 Open 的连接。
+            websocketIds.reserve(m_callbackContexts.size());
+            // 尚未打开的握手连接也由上下文持有，停止时必须一并删除。
+            for ( const auto& [generation, context] : m_callbackContexts ) {
+                static_cast<void>(generation);
+                websocketIds.push_back(context->websocketId);
+            }
         }
-        for ( const auto& retired : m_retiredWebSockets ) {
-            // 关闭服务时无需继续等待宽限期，回调入口已整体禁止。
-            rtcDeleteWebSocket(retired.websocketId);
+        // 不在回调锁内调用第三方删除，以免其等待另一个回调线程退出。
+        // 回调入口已禁用，清除 user pointer 后才能释放上下文内存。
+        for ( int websocketId : websocketIds ) {
+            deleteWebSocketSafely(websocketId);
         }
         m_retiredWebSockets.clear();
         m_clients.clear();
@@ -536,6 +548,7 @@ private:
     static void deleteWebSocketSafely(int websocketId)
     {
         // 先逐项解除回调和 user pointer，第三方删除期间不能再访问 Impl。
+        rtcSetOpenCallback(websocketId, nullptr);
         rtcSetMessageCallback(websocketId, nullptr);
         rtcSetClosedCallback(websocketId, nullptr);
         rtcSetErrorCallback(websocketId, nullptr);
@@ -558,6 +571,7 @@ private:
     void retireWebSocket(int websocketId, std::uint64_t generation)
     {
         // user pointer 在 close 前清空，新的第三方回调无法再取得上下文。
+        rtcSetOpenCallback(websocketId, nullptr);
         rtcSetMessageCallback(websocketId, nullptr);
         rtcSetClosedCallback(websocketId, nullptr);
         rtcSetErrorCallback(websocketId, nullptr);
@@ -682,9 +696,21 @@ private:
     /// @details
     /// 新连接只有在容量未满且 WebSocket 路径完全匹配时才建立 Unknown 客户端。
     /// 拒绝发生在状态表外，直接进入退役队列，不向未知协议端发送目录错误。
+    /// 第三方路径查询要求 WebSocket 已打开，因此仅消费 Open 阶段发布的事件。
     void processConnected(int websocketId, std::uint64_t generation)
     {
+        // 打开事件只应登记一次；迟到回调不能让已退役句柄重新入表。
+        if ( m_clients.contains(websocketId) ||
+             std::any_of(m_retiredWebSockets.begin(),
+                         m_retiredWebSockets.end(),
+                         [&](const auto& retired) {
+                             return retired.websocketId == websocketId &&
+                                    retired.generation == generation;
+                         }) ) {
+            return;
+        }
         // 容量按已纳入 m_clients 的活动连接计算，不包含退役句柄。
+        // 关闭事件可能在 Open 事件消费前到达，已退役句柄必须直接忽略。
         if ( m_clients.size() >= m_config.maxClients ) {
             retireWebSocket(websocketId, generation);
             return;
@@ -1268,11 +1294,31 @@ private:
     /// generation 先过滤迟到关闭。PendingGuest 取消请求并通知房主；HostControl
     /// 关闭会删除整个房间及相关连接；Paired 任一端关闭会请求关闭另一端。
     /// 当前客户端最后从活动表移除并进入延迟退役队列。
+    /// 尚未经过 Open 的连接无客户端记录，仍须清理其第三方句柄。
     void processClosed(int websocketId, std::uint64_t generation)
     {
         const auto iterator = m_clients.find(websocketId);
         if ( iterator == m_clients.end() ||
              iterator->second.generation != generation ) {
+            // 握手未完成就关闭的连接也必须退役，否则上下文和句柄会滞留。
+            bool knownConnection = false;
+            {
+                std::scoped_lock lock(m_callbackMutex);
+                // 只认可仍由当前实例持有、且与事件代次匹配的上下文。
+                const auto context = m_callbackContexts.find(generation);
+                knownConnection = context != m_callbackContexts.end() &&
+                                  context->second->websocketId == websocketId;
+            }
+            if ( knownConnection &&
+                 !std::any_of(m_retiredWebSockets.begin(),
+                              m_retiredWebSockets.end(),
+                              [&](const auto& retired) {
+                                  return retired.websocketId == websocketId &&
+                                         retired.generation == generation;
+                              }) ) {
+                // 退役集合去重，避免 Error 与 Closed 同轮触发两次删除。
+                retireWebSocket(websocketId, generation);
+            }
             return;
         }
         const Client client = iterator->second;
@@ -1457,9 +1503,10 @@ private:
 
     /// @brief 接收新的 WebSocket 客户端。
     /// @details
-    /// 创建稳定 CallbackContext 并分配单调 generation，把 user pointer 和三个
-    /// 第三方回调全部安装后再排入 Connected。所有步骤在 callback mutex 内完成，
-    /// 防止主循环在上下文尚未登记完整时消费连接事件。
+    /// 创建稳定 CallbackContext 并分配单调 generation，把 user pointer 和回调
+    /// 全部安装后，等 WebSocket 打开再排入 Connected。路径 API
+    /// 只能在打开后调用。 所有注册步骤在 callback mutex
+    /// 内完成，防止主循环消费半初始化连接。
     /// @par 上下文不变量
     /// - generation 在服务实例内单调增加且不复用。
     /// - CallbackContext 地址在第三方持有期间保持稳定。
@@ -1468,6 +1515,7 @@ private:
     /// - 队列无容量时不安装一套无法被主循环接管的连接状态。
     /// - stop 禁止回调后才清空全部上下文。
     /// - 常规关闭必须越过退役宽限期才释放上下文。
+    /// - Open 与主动查询只允许首次成功者登记 Connected。
     /// @warning 由 libdatachannel 回调线程调用，只能修改互斥量保护的回调状态。
     static void onWebSocketClient(int, int websocketId, void* pointer)
     {
@@ -1495,16 +1543,48 @@ private:
             owner->m_callbackContexts.emplace(context->generation,
                                               std::move(context));
             rtcSetUserPointer(websocketId, contextPointer);
+            rtcSetOpenCallback(websocketId, &Impl::onWebSocketOpen);
             rtcSetClosedCallback(websocketId, &Impl::onWebSocketClosed);
             rtcSetErrorCallback(websocketId, &Impl::onWebSocketError);
             rtcSetMessageCallback(websocketId, &Impl::onWebSocketMessage);
-            // Connected 入队晚于全部回调安装，随后消息事件保持队列顺序。
-            owner->m_callbackEvents.push_back({ CallbackEventType::Connected,
-                                                websocketId,
-                                                contextPointer->generation,
-                                                {},
-                                                true });
+            // 握手可能在回调安装期间完成；主动查询补上已发生的打开事件。
+            // 递归互斥量允许第三方设置回调时同步调用 onWebSocketOpen。
+            if ( rtcIsOpen(websocketId) ) {
+                onWebSocketOpen(websocketId, contextPointer);
+            }
         }
+    }
+
+    /// @brief 在握手完成后登记连接，使主循环读取路径时符合第三方 API 前置条件。
+    /// @details Open 回调仅发布事件，房间及客户端状态仍由主循环独占修改。
+    /// @param websocketId 已打开的 WebSocket 句柄。
+    /// @param pointer 与句柄绑定的稳定连接上下文。
+    /// @warning 由 libdatachannel 回调线程调用，只能修改互斥量保护的回调队列。
+    static void onWebSocketOpen(int websocketId, void* pointer)
+    {
+        auto* context = static_cast<CallbackContext*>(pointer);
+        if ( !context || !context->owner ||
+             !context->owner->m_acceptCallbacks.load(
+                 std::memory_order_acquire) ) {
+            return;
+        }
+        auto*            owner = context->owner;
+        std::scoped_lock lock(owner->m_callbackMutex);
+        // 查询补偿与打开回调可同时到达，同一代次只能入队一次。
+        // 入队标志和队列变更置于同一临界区，避免任一方看到半发布状态。
+        if ( context->connectedQueued ) return;
+        if ( owner->m_callbackEvents.size() >= MAX_CALLBACK_EVENTS ) {
+            // 队列过载时拒绝无状态连接；关闭事件也可能被丢弃，stop
+            // 仍会回收上下文。
+            static_cast<void>(rtcClose(websocketId));
+            return;
+        }
+        context->connectedQueued = true;
+        owner->m_callbackEvents.push_back({ CallbackEventType::Connected,
+                                            websocketId,
+                                            context->generation,
+                                            {},
+                                            true });
     }
 
     /// @brief 接收 WebSocket 消息并复制到主循环队列。
