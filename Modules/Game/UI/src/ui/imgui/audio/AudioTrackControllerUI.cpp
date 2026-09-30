@@ -174,9 +174,8 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
         }
 
         if ( config ) {
-            // 项目配置是主轨和已导入音效轨的权威初值。
+            // 项目配置提供资源音量、音高与静音；主轨速度另读全局预览状态。
             volume = config->volume;
-            speed  = config->playbackSpeed;
             pitch  = config->playbackPitch;
             muted  = config->muted;
             if ( m_type == TrackType::Main ) {
@@ -204,8 +203,14 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
             m_pitchSliderEditing = false;
         }
 
-        // 各子区域共享变更标志，本帧末尾只提交一次配置更新。
-        bool changed = false;
+        if ( m_type == TrackType::Main ) {
+            // 主音轨速度与画布滚轮共享全局实时变速器，不读取旧项目资源倍率。
+            speed = static_cast<float>(audio.getPlaybackSpeed());
+        }
+
+        // 持久化资源变更和全局速度分别提交，避免速度触发项目保存。
+        bool changed      = false;
+        bool speedChanged = false;
 
         // 每帧清空并重建轻量 Clay 描述树，不保留指向上一帧控件的引用。
         m_contentVBox.clear();
@@ -237,7 +242,8 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
                                       availWidgetW,
                                       speed,
                                       pitch,
-                                      changed);
+                                      changed,
+                                      speedChanged);
             buildAnalysisButtons(m_contentVBox, rowIndex, sourceManager);
         }
 
@@ -264,13 +270,14 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
             if ( !config ) ImGui::EndDisabled();
         }
 
-        // 没有控件变更时不写音频池，也不向逻辑线程发送冗余命令。
+        // 资源配置仅在持久化字段变化时更新，不受全局倍速控件影响。
         if ( changed ) {
             if ( config ) {
                 // 把控件结果写回本地草稿，随后整份配置随命令按值发送。
-                config->volume        = volume;
-                config->muted         = muted;
-                config->playbackSpeed = speed;
+                config->volume = volume;
+                config->muted  = muted;
+                // 旧版主音轨资源倍率已弃用；顺带写回中性值以逐步清理配置。
+                if ( m_type == TrackType::Main ) config->playbackSpeed = 1.0F;
                 config->playbackPitch = pitch;
             }
 
@@ -293,6 +300,10 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
                     .config = *config,
                 });
             }
+        }
+        if ( speedChanged ) {
+            // 与画布 Ctrl+Alt 滚轮走同一逻辑命令，不重建资源 PCM 或保存项目。
+            engine.pushCommand(Logic::CmdSetPlaybackSpeed{ speed });
         }
     } else {
         // 折叠窗口不提交未完成的交互，下一次展开从项目配置读取。
