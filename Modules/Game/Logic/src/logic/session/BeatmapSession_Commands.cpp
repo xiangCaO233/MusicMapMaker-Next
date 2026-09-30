@@ -144,7 +144,15 @@ namespace
 {
 /// @brief 为后台文件编码复制一份不借用会话容器的谱面快照。
 /// @param source 已同步 ECS、时间线与打击事件的当前谱面。
-/// @return 拥有全部持久化数据并重建物件引用表的独立谱面。
+/// @return 拥有全部持久化数据并重建物件引用表的独立谱面；引用无效时返回空。
+/// @details NoteData 的默认复制只复制拥有型 deque 中的对象，不会调整
+/// Polyline 内 reference_wrapper 的目标地址。若仅重建 m_allNotes，后台
+/// 保存仍通过折线节点访问活动谱面，既可能读到新编辑，也可能读取失效对象。
+/// 地址映射使用源对象身份作为键；时间和轨道允许相同，不能用于寻找对应节点。
+/// 目标对象按各拥有型容器的同一索引确定，因此保留原始节点顺序和重复引用。
+/// 通用节点序列与 Hold、Flick 分类序列分别重建，以兼容不同保存器的遍历方式。
+/// 任一原引用不属于当前 BeatMap 时拒绝复制，避免把不完整折线写成有效文件。
+/// 在返回快照后，文件线程只能读取快照；原谱面的后续编辑不改变本次保存。
 /// @warning 保存低频路径：按谱面规模复制容器；不得放入普通逻辑更新分支。
 std::shared_ptr<MMM::BeatMap> cloneBeatMapForSave(const MMM::BeatMap& source)
 {
@@ -156,7 +164,67 @@ std::shared_ptr<MMM::BeatMap> cloneBeatMapForSave(const MMM::BeatMap& source)
     snapshot->m_loadDiagnostics = source.m_loadDiagnostics;
     snapshot->m_baseMapMetadata = source.m_baseMapMetadata;
     snapshot->m_metadata        = source.m_metadata;
-    // m_allNotes 保存引用，不能从源对象复制；按新容器地址重新建立稳定引用。
+
+    // 三类拥有型容器的顺序和元素数在本次复制中保持一致。
+    // 用基类地址统一查找，通用 m_subNotes 才能保留 Hold 与 Flick 混合顺序。
+    // 不读取来源节点内容即可完成映射；仅检查其地址是否确实属于源谱面。
+    std::unordered_map<const MMM::Note*, MMM::Note*> copiedNotes;
+    copiedNotes.reserve(source.m_noteData.notes.size() +
+                        source.m_noteData.holds.size() +
+                        source.m_noteData.flicks.size());
+    // reserve 只影响临时哈希表；节点指针指向已复制的 deque
+    // 元素，不依赖哈希表槽位。
+    for ( size_t i = 0; i < source.m_noteData.notes.size(); ++i ) {
+        // 普通 Note 也可能作为折线头部或转折节点，不能只登记 Hold/Flick。
+        copiedNotes.emplace(&source.m_noteData.notes[i],
+                            &snapshot->m_noteData.notes[i]);
+    }
+    for ( size_t i = 0; i < source.m_noteData.holds.size(); ++i ) {
+        // 分类容器一一对应，不能按时间寻找，否则同拍重叠节点会被混同。
+        copiedNotes.emplace(&source.m_noteData.holds[i],
+                            &snapshot->m_noteData.holds[i]);
+    }
+    for ( size_t i = 0; i < source.m_noteData.flicks.size(); ++i ) {
+        // 滑键与长条共用 Note 键空间，仍能恢复交错的折线路径。
+        copiedNotes.emplace(&source.m_noteData.flicks[i],
+                            &snapshot->m_noteData.flicks[i]);
+    }
+    // 按根折线索引重建，避免不同折线共享子节点时改变原有关系。
+    for ( size_t i = 0; i < source.m_noteData.polylines.size(); ++i ) {
+        const auto& original = source.m_noteData.polylines[i];
+        auto&       copied   = snapshot->m_noteData.polylines[i];
+        // 默认复制留下的全部源引用必须先丢弃，之后才允许向快照写入新引用。
+        copied.m_subNotes.clear();
+        copied.m_subHolds.clear();
+        copied.m_subFlicks.clear();
+        // 通用序列顺序决定 Malody seg 的路径，不允许按分类重新排序。
+        for ( const auto& child : original.m_subNotes ) {
+            const auto it = copiedNotes.find(&child.get());
+            // 悬空或外部借用节点无法安全编码；拒绝保存比遗漏一个节点更可靠。
+            if ( it == copiedNotes.end() ) return {};
+            copied.m_subNotes.emplace_back(*it->second);
+        }
+        for ( const auto& child : original.m_subHolds ) {
+            // 分类视图还供其他格式和编辑路径访问，不能只修通用序列。
+            const auto it = copiedNotes.find(&child.get());
+            // 分类视图的目标类型要再次核对，避免将错误类型强转成 Hold。
+            if ( it == copiedNotes.end() ||
+                 it->second->m_type != MMM::NoteType::HOLD )
+                return {};
+            copied.m_subHolds.emplace_back(
+                static_cast<MMM::Hold&>(*it->second));
+        }
+        for ( const auto& child : original.m_subFlicks ) {
+            const auto it = copiedNotes.find(&child.get());
+            // 与 Hold 相同，分类视图必须与通用节点映射到同一批拥有型对象。
+            if ( it == copiedNotes.end() ||
+                 it->second->m_type != MMM::NoteType::FLICK )
+                return {};
+            copied.m_subFlicks.emplace_back(
+                static_cast<MMM::Flick&>(*it->second));
+        }
+    }
+    // 最后重建顶层索引；sync 不会替代上面的折线子节点重绑。
     snapshot->sync();
     return snapshot;
 }
@@ -3416,6 +3484,18 @@ bool BeatmapSession::beginAsyncBeatmapSave(const CmdSaveBeatmap& cmd)
     SessionUtils::syncBeatmap(*m_ctx);
     refreshCurrentProjectSongFileHint(*m_ctx->currentBeatmap);
     auto snapshot = cloneBeatMapForSave(*m_ctx->currentBeatmap);
+    if ( !snapshot ) {
+        // 快照不完整时保持原谱面与保存点不变，并向 UI 返回明确失败原因。
+        XERROR("SaveBeatmap: polyline references do not belong to beatmap");
+        Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+            .path         = Config::pathToUtf8(savePath),
+            .success      = false,
+            .isExport     = false,
+            .errorMessage = "折线子物件引用无效，无法保存谱面",
+            .presentation = savePresentationFor(cmd.kind),
+        });
+        return true;
+    }
 
     auto operation            = std::make_shared<AsyncSaveOperation>();
     operation->sourceBeatmap  = m_ctx->currentBeatmap;

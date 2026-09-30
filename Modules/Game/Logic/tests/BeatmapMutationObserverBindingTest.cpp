@@ -22,9 +22,11 @@
 #include <condition_variable>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <latch>
 #include <memory>
 #include <mutex>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -1711,9 +1713,173 @@ int main()
         appThreadPool.shutdown();
         return usesDedicatedFilePool && responsive && saved;
     };
+    /// @brief 验证后台保存 `.mc` 时折线子节点与活动谱面彻底分离。
+    /// @return 写出仍保留快照几何及折线父子关系时返回 true。
+    /// @note 文件门闩固定快照与写盘的先后顺序，避免依赖线程调度时机。
+    /// @details 测试创建一条由 Hold 接 Flick 构成的 Slide 折线。
+    /// 活动谱面先通过正常载入命令建立 ECS，再通过保存命令创建独立快照。
+    /// 文件工作线程被门闩挡住时，在逻辑侧改变原 Flick 的位移方向。
+    /// 放行写盘后，若快照仍借用源节点，导出的横向偏移会跟着反向。
+    /// 断言固定为创建快照时的正向偏移，可直接识别跨线程借用问题。
+    /// Malody 将同拍 Hold 尾与 Flick 合并成一个 seg，断言遵循该格式规则。
+    /// 最后重新载入写出的 `.mc`，检查根折线与两类子节点的引用视图。
+    /// 单看文件存在或成功事件不能证明父子关系，因此同时检查编码与重载。
+    /// 测试仅使用会话、文件池和临时文件，不依赖渲染器或音频设备。
+    /// 测试文件位于系统临时目录，避免写入版本化测试资源。
+    /// 事件订阅只消费本轮目标路径，防止并发保存误报成功。
+    /// 负向改动只发生在源谱面，不通过会话再次生成快照。
+    /// 门闩在检查结果前释放，避免测试自己阻断文件工作线程。
+    const auto testAsyncMalodySaveKeepsPolylineSnapshot = []() {
+        auto& appThreadPool = MMM::Runtime::AppThreadPool::instance();
+        // 使用正式独立文件池，测试才覆盖实际异步保存边界。
+        appThreadPool.init();
+        const auto      outputPath = std::filesystem::temp_directory_path() /
+                                     "mmm_async_polyline_snapshot_test.mc";
+        std::error_code removeError;
+        // 遗留文件不能代替本轮写入结果，开始前先清除。
+        std::filesystem::remove(outputPath, removeError);
+
+        // 目标扩展名和 Malody mode 必须保留，确保进入原格式 Slide 编码器。
+        auto beatmap                              = makeBeatmap();
+        beatmap->m_baseMapMetadata.map_path       = outputPath;
+        beatmap->m_baseMapMetadata.preference_bpm = 120.0;
+        beatmap->m_metadata
+            .map_properties[MMM::MapMetadataType::MALODY]["mode"] = "7";
+        MMM::Timing timing;
+        // 明确零点 BPM，使段落拍位无需依赖导出器默认值。
+        timing.m_timestamp             = 0.0;
+        timing.m_bpm                   = 120.0;
+        timing.m_beat_length           = 500.0;
+        timing.m_timingEffect          = MMM::TimingEffect::BPM;
+        timing.m_timingEffectParameter = 120.0;
+        beatmap->m_timings.push_back(timing);
+
+        // Hold 从第二拍开始，Flick 在尾部右移一轨。
+        // 两者归属于同一根，不能被当作两个独立顶层物件。
+        auto& hold        = beatmap->m_noteData.holds.emplace_back();
+        hold.m_timestamp  = 1000.0;
+        hold.m_duration   = 500.0;
+        hold.m_track      = 1;
+        hold.m_isSubNote  = true;
+        auto& flick       = beatmap->m_noteData.flicks.emplace_back();
+        flick.m_timestamp = 1500.0;
+        flick.m_track     = 1;
+        flick.m_dtrack    = 1;
+        flick.m_isSubNote = true;
+        // 同时建立通用顺序与分类引用，检验三组借用视图都重绑。
+        auto& polyline       = beatmap->m_noteData.polylines.emplace_back();
+        polyline.m_timestamp = 1000.0;
+        polyline.m_track     = 1;
+        polyline.m_subNotes.emplace_back(hold);
+        polyline.m_subNotes.emplace_back(flick);
+        polyline.m_subHolds.emplace_back(hold);
+        polyline.m_subFlicks.emplace_back(flick);
+        // 载入前重建顶层视图，避免夹具自身缺少根物件。
+        beatmap->sync();
+
+        // 通过会话命令进入保存路径，而不是直接绕过快照调用编码器。
+        MMM::Logic::BeatmapSession session;
+        MMM::Config::EditorConfig  config;
+        session.pushCommand(MMM::Logic::LogicCommand{
+            MMM::Logic::CmdLoadBeatmap{ .beatmap = beatmap },
+        });
+        session.update(0.0, config, false);
+
+        std::mutex              resultMutex;
+        std::condition_variable resultCondition;
+        bool                    saveFinished = false;
+        // 保存结果由文件线程发出，只接受本测试目标文件的事件。
+        // 事件可能在逻辑线程下次 update 前到达，因此使用独立条件变量。
+        const auto subscription =
+            MMM::Event::EventBus::instance()
+                .subscribe<MMM::Event::BeatmapSaveResultEvent>(
+                    [&](const auto& event) {
+                        if ( event.path != MMM::Config::pathToUtf8(outputPath) )
+                            return;
+                        std::lock_guard resultLock(resultMutex);
+                        saveFinished = event.success;
+                        resultCondition.notify_one();
+                    });
+
+        // 后台任务在门闩处等待，允许确认快照建立后再修改原谱面。
+        // 门闩只锁住文件操作，不阻塞逻辑侧创建命令快照。
+        // 强制指定 Original，避免编辑器默认格式掩盖 `.mc` 路径。
+        std::unique_lock fileGate(MMM::Event::beatmapFileOperationGate());
+        session.pushCommand(MMM::Logic::LogicCommand{
+            MMM::Logic::CmdSaveBeatmap{
+                .formatOverride =
+                    MMM::Logic::BeatmapSaveFormatOverride::Original },
+        });
+        session.update(0.0, config, false);
+        // 修改时文件线程尚未编码，借用源 Flick 的快照会读到负位移。
+        // 正确的深快照则仍持有创建瞬间的正位移。
+        beatmap->m_noteData.flicks.front().m_dtrack = -1;
+        // 放行后不再触碰文件产物，读取仅在完成事件到达后进行。
+        fileGate.unlock();
+
+        {
+            // 有界等待防止保存回归时让整组 CTest 永久挂起。
+            // 谓词抵御通知先于 wait 的线程交错。
+            std::unique_lock resultLock(resultMutex);
+            resultCondition.wait_for(resultLock,
+                                     std::chrono::seconds(5),
+                                     [&]() { return saveFinished; });
+        }
+        // 消费文件线程的结果并移除事件订阅，避免污染后续用例。
+        session.update(0.0, config, false);
+        MMM::Event::EventBus::instance()
+            .unsubscribe<MMM::Event::BeatmapSaveResultEvent>(subscription);
+
+        bool hasSnapshotSeg = false;
+        if ( saveFinished ) {
+            // `seg.x` 直接体现 Flick 的跨轨方向，可区别两个谱面版本。
+            // 读取真实产物；成功事件仅说明写盘完成，不说明内容正确。
+            // 使用非抛异常解析，坏文件由断言路径统一报告。
+            std::ifstream input(outputPath);
+            const auto    data = nlohmann::json::parse(input, nullptr, false);
+            if ( !data.is_discarded() && data.contains("note") ) {
+                for ( const auto& note : data["note"] ) {
+                    // 只检查折线根的 seg，普通音符不承担父子编码契约。
+                    if ( !note.contains("seg") || !note["seg"].is_array() ||
+                         note["seg"].size() != 1U )
+                        continue;
+                    // Hold 尾与同拍 Flick 会合成一个带 x 的 seg。
+                    // 原谱面方向已反转，正向位移只可能来自独立快照。
+                    hasSnapshotSeg = note["seg"][0].value("x", 0) > 0;
+                }
+            }
+        }
+        bool hasPolylineRelationship = false;
+        if ( saveFinished ) {
+            // 若源关系丢失，导出器可能仍写出独立音符，必须检查根节点。
+            // 再经正式读取器构造 NoteData，验证编码可回读。
+            // 分类引用和通用顺序引用都必须恢复到同一条折线。
+            auto reloaded = MMM::BeatMap::loadFromFile(outputPath);
+            hasPolylineRelationship =
+                reloaded.m_noteData.polylines.size() == 1U &&
+                reloaded.m_noteData.polylines.front().m_subNotes.size() == 2U &&
+                reloaded.m_noteData.polylines.front().m_subHolds.size() == 1U &&
+                reloaded.m_noteData.polylines.front().m_subFlicks.size() == 1U;
+        }
+        if ( !saveFinished || !hasSnapshotSeg || !hasPolylineRelationship ) {
+            // 日志保留失败维度，定位 CI 中异步顺序问题。
+            // 三个布尔量区分写盘、几何快照与父子关系失败。
+            XERROR(
+                "Async Malody snapshot regression: saved={}, seg={}, "
+                "relationship={}",
+                saveFinished,
+                hasSnapshotSeg,
+                hasPolylineRelationship);
+        }
+        // 清理测试产物并关闭独立文件池，后续用例不继承线程状态。
+        std::filesystem::remove(outputPath, removeError);
+        appThreadPool.shutdown();
+        return saveFinished && hasSnapshotSeg && hasPolylineRelationship;
+    };
     // 先覆盖持锁延后，再验证同步与权限，失败通过短路返回非零。
     // 各用例必须自行释放订阅和恢复单例状态，不能依赖后续用例清理。
     return testDeferredFileCommands() && testAsyncSaveKeepsLogicResponsive() &&
+                   testAsyncMalodySaveKeepsPolylineSnapshot() &&
                    testOptionalInitialSnapshot() &&
                    testTimelineCommandsPublishMutations() &&
                    testBeatmapAnnotationPermissionAndTimestampGrouping() &&
