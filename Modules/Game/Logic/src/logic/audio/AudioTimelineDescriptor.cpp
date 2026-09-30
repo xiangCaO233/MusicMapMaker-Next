@@ -495,9 +495,10 @@ AudioTimelineDescriptor buildAudioTimelineDescriptor(
             event.filePath       = pathIterator->second;
             event.resourceConfig = resource->m_config;
             if ( resource->m_type == AudioTrackType::Main ) {
-                // 主音轨倍率属于全局预览传输；旧项目保存的资源倍率不得触发
-                // 整首音频离线拉伸，也不应改变谱面时长或描述符指纹。
+                // 主音轨倍率与音高属于全局实时预览；旧项目保存的资源值不得
+                // 触发整首音频离线处理，也不应改变谱面时长或描述符指纹。
                 event.resourceConfig.playbackSpeed = 1.0F;
+                event.resourceConfig.playbackPitch = 0.0F;
             }
         }
         if ( resource && resource->m_type == AudioTrackType::Main ) {

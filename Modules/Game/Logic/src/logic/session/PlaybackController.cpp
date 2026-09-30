@@ -648,6 +648,16 @@ void PlaybackController::handleCommand(const CmdSetPlaybackSpeed& cmd)
     audio.setPlaybackSpeed(cmd.speed);
 }
 
+/// @brief 将主音轨音高写入实时拉伸器，避免资源级完整离线处理。
+/// @param cmd 目标半音偏移。
+/// @warning 低频播放控制路径；只允许活动会话改变全局播放状态。
+void PlaybackController::handleCommand(const CmdSetPlaybackPitch& cmd)
+{
+    // 后台会话不得覆盖当前正在播放的主音轨音高。
+    if ( !m_ctx.isActiveSession ) return;
+    Audio::AudioManager::instance().setPlaybackPitch(cmd.semitones);
+}
+
 /// @brief 应用单条玩家、草稿或 BGM 轨道的运行时 Key 音静音状态。
 /// @param cmd 目标区域、轨道索引和静音状态。
 /// @details 轨道号属于指定区域，控制器不进行跨区域的索引偏移换算。

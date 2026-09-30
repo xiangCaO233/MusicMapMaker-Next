@@ -15,6 +15,7 @@ struct CmdSetKeySoundEffectGroupGain;
 struct CmdSetKeySoundTrackGain;
 struct CmdSetKeySoundTrackMute;
 struct CmdSetPlaybackSpeed;
+struct CmdSetPlaybackPitch;
 struct CmdSetPlayState;
 struct SessionContext;
 
@@ -52,6 +53,10 @@ public:
     /// @brief 处理设置播放速度的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdSetPlaybackSpeed& cmd);
+
+    /// @brief 仅活动会话可调整全局实时变调。
+    /// @param cmd 半音偏移指令。
+    void handleCommand(const CmdSetPlaybackPitch& cmd);
 
     /// @brief 处理单条玩家或 BGM 轨道的 Key 音静音命令。
     /// @param cmd 目标区域、轨道索引和静音状态。

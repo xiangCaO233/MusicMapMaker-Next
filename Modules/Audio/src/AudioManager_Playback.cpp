@@ -307,10 +307,12 @@ double AudioManager::getActualPlaybackSpeed() const
 /// 全局音高由主拉伸器实时应用，与资源配置中的离线音高处理相互独立。
 void AudioManager::setPlaybackPitch(double semitones)
 {
-    m_playbackPitch =
+    const double sanitized =
         std::isfinite(semitones) ? std::clamp(semitones, -24.0, 24.0) : 0.0;
+    // 仅向 UI 发布标量读数；拉伸器自行在音频块边界接收完整状态。
+    m_playbackPitch.store(sanitized, std::memory_order_relaxed);
     if ( m_stretcher ) {
-        m_stretcher->set_pitch_semitones(m_playbackPitch);
+        m_stretcher->set_pitch_semitones(sanitized);
     }
 }
 
@@ -318,7 +320,8 @@ void AudioManager::setPlaybackPitch(double semitones)
 /// @return 半音偏移量。
 double AudioManager::getPlaybackPitch() const
 {
-    return m_playbackPitch;
+    // UI 仅展示当前请求值，无需借此建立其他音频对象的先行关系。
+    return m_playbackPitch.load(std::memory_order_relaxed);
 }
 
 /// @brief 设置复合时间线全局预览拉伸质量。

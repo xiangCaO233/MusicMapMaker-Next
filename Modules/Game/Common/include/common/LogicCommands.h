@@ -356,6 +356,11 @@ struct CmdSetPlaybackSpeed {
     double speed;
 };
 
+/// @brief 设置全局预览播放音高，不修改谱面资源配置。
+struct CmdSetPlaybackPitch {
+    double semitones;  ///< 相对原音高的半音偏移。
+};
+
 /// @brief Key 音所在的画布轨道区域。
 enum class KeySoundTrackArea : std::uint8_t {
     Player,  ///< 玩家操作轨道区。
@@ -1009,11 +1014,11 @@ using LogicCommand = std::variant<
     CmdUpdateObjectSampleVolume, CmdUpdateSelectedObjectSampleVolume,
     CmdUpdateTrackCount, CmdUpdateBgmTrackCount, CmdUpdateDraftTrackCount,
     CmdSeek, CmdCaptureComposeLessonNotes, CmdSetComposeLessonInputLimit,
-    CmdSetPlaybackSpeed, CmdSetKeySoundTrackMute, CmdSetKeySoundTrackGain,
-    CmdSetKeySoundEffectGroupGain, CmdSetDraftKeySoundAreaMute,
-    CmdSetBgmKeySoundAreaMute, CmdChangeTool, CmdSetMousePosition, CmdUndo,
-    CmdRedo, CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected,
-    CmdRemoveComposeLessonNote, CmdMirrorSelected,
+    CmdSetPlaybackSpeed, CmdSetPlaybackPitch, CmdSetKeySoundTrackMute,
+    CmdSetKeySoundTrackGain, CmdSetKeySoundEffectGroupGain,
+    CmdSetDraftKeySoundAreaMute, CmdSetBgmKeySoundAreaMute, CmdChangeTool,
+    CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste, CmdCut,
+    CmdDeleteSelected, CmdRemoveComposeLessonNote, CmdMirrorSelected,
     CmdAlignSelectedToCommonBeats, CmdSelectAll, CmdSetBrushNoteColor,
     CmdApplyNoteColorToSelection, CmdSetBrushNotePalette,
     CmdSetBrushAudioResource, CmdApplyNotePaletteToSelection,
@@ -1060,6 +1065,7 @@ using LogicCommand = std::variant<
                 std::is_same_v<T, CmdCaptureComposeLessonNotes> ||
                 std::is_same_v<T, CmdSetComposeLessonInputLimit> ||
                 std::is_same_v<T, CmdSetPlaybackSpeed> ||
+                std::is_same_v<T, CmdSetPlaybackPitch> ||
                 std::is_same_v<T, CmdSetKeySoundTrackMute> ||
                 std::is_same_v<T, CmdSetKeySoundTrackGain> ||
                 std::is_same_v<T, CmdSetKeySoundEffectGroupGain> ||

@@ -174,9 +174,8 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
         }
 
         if ( config ) {
-            // 项目配置提供资源音量、音高与静音；主轨速度另读全局预览状态。
+            // 项目配置提供资源音量与静音；主轨速度和音高另读全局预览状态。
             volume = config->volume;
-            pitch  = config->playbackPitch;
             muted  = config->muted;
             if ( m_type == TrackType::Main ) {
                 // eqEnabled 为 false 时强制显示 None，避免旧 preset
@@ -204,13 +203,16 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
         }
 
         if ( m_type == TrackType::Main ) {
-            // 主音轨速度与画布滚轮共享全局实时变速器，不读取旧项目资源倍率。
+            // 主音轨速度与音高共享全局实时拉伸器，不读取旧项目资源设置。
             speed = static_cast<float>(audio.getPlaybackSpeed());
+            // 使用引擎当前值刷新空闲控件，避免项目里残留的旧音高覆盖预览。
+            pitch = static_cast<float>(audio.getPlaybackPitch());
         }
 
-        // 持久化资源变更和全局速度分别提交，避免速度触发项目保存。
+        // 资源字段与实时播放控制分别提交，避免拖动触发项目保存或 PCM 重建。
         bool changed      = false;
         bool speedChanged = false;
+        bool pitchChanged = false;
 
         // 每帧清空并重建轻量 Clay 描述树，不保留指向上一帧控件的引用。
         m_contentVBox.clear();
@@ -242,8 +244,8 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
                                       availWidgetW,
                                       speed,
                                       pitch,
-                                      changed,
-                                      speedChanged);
+                                      speedChanged,
+                                      pitchChanged);
             buildAnalysisButtons(m_contentVBox, rowIndex, sourceManager);
         }
 
@@ -276,9 +278,11 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
                 // 把控件结果写回本地草稿，随后整份配置随命令按值发送。
                 config->volume = volume;
                 config->muted  = muted;
-                // 旧版主音轨资源倍率已弃用；顺带写回中性值以逐步清理配置。
-                if ( m_type == TrackType::Main ) config->playbackSpeed = 1.0F;
-                config->playbackPitch = pitch;
+                // 清理旧版主轨资源控制值，阻止下次加载时重新离线处理。
+                if ( m_type == TrackType::Main ) {
+                    config->playbackSpeed = 1.0F;
+                    config->playbackPitch = 0.0F;
+                }
             }
 
             if ( m_type == TrackType::Effect && !config ) {
@@ -304,6 +308,10 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
         if ( speedChanged ) {
             // 与画布 Ctrl+Alt 滚轮走同一逻辑命令，不重建资源 PCM 或保存项目。
             engine.pushCommand(Logic::CmdSetPlaybackSpeed{ speed });
+        }
+        if ( pitchChanged ) {
+            // 主轨变调直接更新全局拉伸器，音频资源和项目文件均不变。
+            engine.pushCommand(Logic::CmdSetPlaybackPitch{ pitch });
         }
     } else {
         // 折叠窗口不提交未完成的交互，下一次展开从项目配置读取。

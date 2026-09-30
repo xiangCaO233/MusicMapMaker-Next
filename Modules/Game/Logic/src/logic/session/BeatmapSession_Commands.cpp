@@ -2796,6 +2796,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdSetComposeLessonInputLimit> ||
                     std::is_same_v<T, CmdSeek> ||
                     std::is_same_v<T, CmdSetPlaybackSpeed> ||
+                    std::is_same_v<T, CmdSetPlaybackPitch> ||
                     std::is_same_v<T, CmdSetKeySoundTrackMute> ||
                     std::is_same_v<T, CmdSetKeySoundTrackGain> ||
                     std::is_same_v<T, CmdSetKeySoundEffectGroupGain> ||

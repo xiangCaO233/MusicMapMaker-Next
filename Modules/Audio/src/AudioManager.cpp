@@ -332,7 +332,7 @@ void AudioManager::init()
     static_cast<void>(m_stretcher->prepare(ice::ICEConfig::internal_format,
                                            maximumBlockFrames));
     m_stretcher->set_playback_ratio(m_speed);
-    m_stretcher->set_pitch_semitones(m_playbackPitch);
+    m_stretcher->set_pitch_semitones(getPlaybackPitch());
     m_stretcher->set_discontinuity_generation_provider(
         m_audioTimelineNode.get(), &readTimelineEpoch);
     // epoch 与输入边界回调让拉伸器在 Seek、循环和自然结束时清空旧缓存。

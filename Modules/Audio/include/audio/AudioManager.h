@@ -587,7 +587,8 @@ public:
     /// @brief 设置复合时间线全局预览音高偏移 (半音，-24.0 ~ +24.0)
     void setPlaybackPitch(double semitones);
 
-    /// @brief 获取复合时间线全局预览音高偏移
+    /// @brief 获取复合时间线全局预览音高偏移。
+    /// @warning UI 每帧读取、逻辑线程低频写入；只发布独立数值，不同步音频状态。
     double getPlaybackPitch() const;
 
     /// @brief 主音轨时间拉伸质量。
@@ -1209,7 +1210,9 @@ private:
     double m_speed{ 1.0 };
 
     /// @brief 当前复合时间线全局预览音高。
-    double m_playbackPitch{ 0.0 };
+    /// @warning 逻辑线程在命令处理时写入，UI 每帧读取显示；只需 relaxed
+    /// 发布标量快照，实际音频状态由 TimeStretcher 的控制邮箱独立同步。
+    std::atomic<double> m_playbackPitch{ 0.0 };
 
     /// @brief 当前复合时间线全局拉伸质量。
     StretchQuality m_playbackQuality{ StretchQuality::Finer };

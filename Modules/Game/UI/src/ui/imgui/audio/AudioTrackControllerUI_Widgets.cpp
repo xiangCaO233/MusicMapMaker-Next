@@ -827,8 +827,8 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
 /// @param availWidgetW 控件列当前可用宽度，用于预计算按钮折行。
 /// @param speed 全局预览播放速度，可由预设或滑块修改。
 /// @param pitch 音高半音偏移，可由预设或滑块修改。
-/// @param changed 项目音高配置需要更新时置 true。
 /// @param speedChanged 全局预览倍率需要更新时置 true。
+/// @param pitchChanged 全局实时音高需要更新时置 true。
 ///
 /// 预设按钮先用当前字体测量并计算行数，随后以相同规则在 Clay
 /// 回调中实际折行，保证
@@ -837,7 +837,7 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
 /// 热路径：只测量固定数量文本和构建控件，不得访问文件系统或解码音频。
 /// @details 速度范围为 0.25x 到 2.0x，音高范围为正负 24 半音。
 /// 预设只提供常用值，滑块允许在完整范围内连续调整；速度和音高分开提交，
-/// 避免速度变化触发项目资源的离线 PCM 重新准备。
+/// 避免播放控制变化触发项目资源的离线 PCM 重新准备。
 ///
 /// 拉伸质量直接交给 AudioManager，不触发项目资源配置保存。
 ///
@@ -849,7 +849,7 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
 /// 布局度量；若未来改变父布局，必须同步保持判断公式一致。
 void AudioTrackControllerUI::buildSpeedAndPitchSection(
     CLayVBox& parent, size_t& rowIndex, float labelWidth, float availWidgetW,
-    float& speed, float& pitch, bool& changed, bool& speedChanged)
+    float& speed, float& pitch, bool& speedChanged, bool& pitchChanged)
 {
     // AudioManager 提供实际播放速度和拉伸质量状态。
     auto&       audio = Audio::AudioManager::instance();
@@ -1133,7 +1133,7 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
          pitchPresets,
          targetPitches,
          &pitch,
-         &changed,
+         &pitchChanged,
          rowPadY,
          widgetH,
          spacing,
@@ -1163,11 +1163,11 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
                 ImGui::PushID(static_cast<int>(i + 100));
                 // 偏移 ID 区间，避免与速度预设在同一窗口发生冲突。
                 if ( ::MMM::UI::FeedbackButton(pitchPresets[i].c_str()) ) {
-                    // 音高预设同样构成一次完整编辑，覆盖滑块草稿。
-                    pitch                = targetPitches[i];
+                    // 音高预设直接提交全局预览控制，覆盖滑块草稿。
+                    pitchChanged = pitchChanged || pitch != targetPitches[i];
+                    pitch        = targetPitches[i];
                     m_pitchSliderDraft   = pitch;
                     m_pitchSliderEditing = false;
-                    changed              = true;
                 }
                 ImGui::PopID();
             }
@@ -1179,17 +1179,17 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
         rowIndex,
         TR_CACHE("ui.audio_manager.pitch_value").data(),
         labelWidth,
-        [this, &pitch, &changed](Clay_BoundingBox r, bool) {
+        [this, &pitch, &pitchChanged](Clay_BoundingBox r, bool) {
             // 连续滑块允许 -24 到 +24 半音的非预设值。
             ImGui::SetNextItemWidth(r.width);
-            // 音高仍属于资源级离线处理，仅在交互结束后提交配置。
+            // 滑动期间只改控件草稿，松开后统一提交实时音高。
             if ( !m_pitchSliderEditing ) m_pitchSliderDraft = pitch;
             ::MMM::UI::FeedbackSliderFloat(
                 "##PitchSlider", &m_pitchSliderDraft, -24.0f, 24.0f, "%.4f st");
             if ( ImGui::IsItemDeactivatedAfterEdit() ) {
-                // 音高编辑结束才触发资源重建，未改变时跳过重复加载。
-                changed              = changed || pitch != m_pitchSliderDraft;
-                pitch                = m_pitchSliderDraft;
+                // 仅提交最终值，避免拖动时不断重设拉伸器。
+                pitchChanged = pitchChanged || pitch != m_pitchSliderDraft;
+                pitch        = m_pitchSliderDraft;
                 m_pitchSliderEditing = false;
             } else {
                 m_pitchSliderEditing = ImGui::IsItemActive();

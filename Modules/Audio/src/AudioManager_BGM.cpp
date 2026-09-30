@@ -423,7 +423,7 @@ AudioTimelineLoadResult AudioManager::loadAudioTimeline(
     refreshAudioTimelineVolume();
     // setter 同步现有 stretcher，使换图后延续用户预览参数。
     setPlaybackSpeed(m_speed);
-    setPlaybackPitch(m_playbackPitch);
+    setPlaybackPitch(getPlaybackPitch());
     setPlaybackQuality(m_playbackQuality);
 
     result.success         = true;

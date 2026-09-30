@@ -45,6 +45,8 @@ MMM::Project makeProject()
     project.m_projectRoot = root / "mmm-audio-timeline-descriptor-test";
 
     // 非默认速度、音高和 EQ 用于识别字段丢失。
+    // Main 的历史控制值刻意保留非零，验证构造事件时才归一化。
+    // Effect 的非零值应继续原样进入离线资源处理路径。
     // 增益数组和 Q 数组使用不同数据，避免误交换仍通过比较。
     // EQ 预设和手动频带同时保存，两者都属于持久化配置。
     MMM::AudioTrackConfig mainConfig;
@@ -301,6 +303,8 @@ bool testCanonicalDescriptor()
     const auto* effectEvent          = findEvent(descriptor, "effect-id");
     auto        expectedMainConfig   = project.m_audioResources[0].m_config;
     expectedMainConfig.playbackSpeed = 1.0F;
+    // Main 的旧音高与旧倍率一起归零，EQ 和音量仍按资源原值比较。
+    expectedMainConfig.playbackPitch = 0.0F;
     if ( !mainEvent || !effectEvent ||
          !MMM::Config::utf8ToPath(mainEvent->filePath).is_absolute() ||
          !MMM::Config::utf8ToPath(effectEvent->filePath).is_absolute() ||
@@ -548,7 +552,8 @@ bool testFingerprintSensitivity()
         return true;
     };
 
-    // 分别扰动参与时间线播放的资源参数；Main 旧倍速另有归一化测试。
+    // 分别扰动参与时间线播放的资源参数；Main 旧控制值另有归一化测试。
+    // Main 音高不参与音频资源指纹；Effect 音高仍决定处理结果。
     // EQ 开关和预设分别检查，不能只哈希最终启用状态。
     // 追加频带元素还能检查数组长度是否参与身份。
     // 短路失败保留首个字段名，便于定位缺失的语义维度。
@@ -565,7 +570,8 @@ bool testFingerprintSensitivity()
              [](MMM::AudioTrackConfig& config) {
                  config.playbackPitch += 0.25F;
              },
-             "playbackPitch") ||
+             "effect playbackPitch",
+             1U) ||
          !configChangesFingerprint(
              [](MMM::AudioTrackConfig& config) { config.muted = true; },
              "muted") ||
@@ -626,20 +632,22 @@ bool testFingerprintSensitivity()
     return true;
 }
 
-/// @brief 验证旧项目 Main 资源倍率不会改变时间线，也不会在重开项目时离线拉伸。
-/// @return Main 速度归一且指纹稳定，同时 Effect 资源速度仍保留时返回 true。
-/// @details 以不同项目配置重建同一谱面描述符，模拟保存旧倍率后的项目重开。
-/// 加载事件携带归一后的配置，避免旧倍率额外触发完整解码和离线速度处理。
-/// 指纹等价意味着旧 Main 倍率不会让活动会话误判为另一份音频调度。
-/// Effect 倍率仍须传递给资源处理器，以免修复扩大到无关音效轨。
-bool testLegacyMainSpeedUsesGlobalPreview()
+/// @brief 验证旧项目 Main 资源倍率和音高都不会触发重开时的离线处理。
+/// @return Main 配置归一且指纹稳定，同时 Effect 的配置仍保留时返回 true。
+/// @details 以不同持久化值重建同一谱面描述符，模拟旧项目重新打开。
+/// 加载事件携带中性值，避免历史半音偏移重建整首音频 PCM。
+/// 指纹等价意味着旧 Main 控制字段不会被误判为另一份音频调度。
+/// Effect 倍速和音高继续传给资源处理器，归一化只作用于主音轨。
+bool testLegacyMainControlsUseGlobalPreview()
 {
-    // 两份项目只改变旧版 Main 的持久化倍率，音频事件语义应相同。
-    // 使用夹具中的非默认 EQ 和音高，确认只归一化速度一个字段。
+    // 两份项目仅在历史 Main 速度和音高字段上不同，加载语义应相同。
+    // 夹具保留非默认 EQ，确认其他资源配置没有被重置。
     auto baselineProject = makeProject();
     auto slowProject     = makeProject();
     baselineProject.m_audioResources.front().m_config.playbackSpeed = 1.0F;
     slowProject.m_audioResources.front().m_config.playbackSpeed     = 0.25F;
+    baselineProject.m_audioResources.front().m_config.playbackPitch = 0.0F;
+    slowProject.m_audioResources.front().m_config.playbackPitch     = 10.0F;
     // 同一自动采样序列避免事件数量和顺序掩盖速度差异。
     const auto beatMap  = makeBeatMap(false);
     const auto baseline = MMM::Logic::buildAudioTimelineDescriptor(
@@ -655,18 +663,20 @@ bool testLegacyMainSpeedUsesGlobalPreview()
     const auto* mainEvent   = findEvent(slow, "main-id");
     const auto* effectEvent = findEvent(slow, "effect-id");
     // 缺任一资源时直接失败，不能让后续配置比较读取无效指针。
-    // 显式检查 Main 的加载参数，防止旧 0.25 倍率进入完整 PCM 离线处理。
-    // Effect 的 0.9 倍率可作为对照，证明归一化限定在主音轨。
-    // Effect 继续使用自己的资源配置；仅 Main 旧速度字段被排除。
-    // 还比较完整事件，防止只改指纹计算而未改传给加载器的速度。
+    // 显式检查 Main 加载参数，防止旧 0.25 倍率和 10 半音进入离线处理。
+    // Effect 的非默认速度及音高证明归一化限定在主音轨。
+    // 还比较完整事件，防止只改指纹而未改传给加载器的配置。
     // 反过来只改事件但未改指纹，也会在这里被发现。
     if ( !mainEvent || !effectEvent ||
          mainEvent->resourceConfig.playbackSpeed != 1.0F ||
+         mainEvent->resourceConfig.playbackPitch != 0.0F ||
          effectEvent->resourceConfig.playbackSpeed !=
              slowProject.m_audioResources[1].m_config.playbackSpeed ||
+         effectEvent->resourceConfig.playbackPitch !=
+             slowProject.m_audioResources[1].m_config.playbackPitch ||
          baseline.m_fingerprint != slow.m_fingerprint ||
          !sameLoadEvents(baseline.m_events, slow.m_events) ) {
-        XERROR("Legacy Main resource speed leaked into timeline processing");
+        XERROR("Legacy Main resource controls leaked into timeline processing");
         return false;
     }
     return true;
@@ -1035,7 +1045,7 @@ int main()
                    testNonAudioFieldsAreExcluded() &&
                    testMainAudioSyncFingerprintUsesResourcesAndPositions() &&
                    testFingerprintSensitivity() &&
-                   testLegacyMainSpeedUsesGlobalPreview() &&
+                   testLegacyMainControlsUseGlobalPreview() &&
                    testDescriptorResourceReferenceLookup() &&
                    testBulkStableIdResolutionUsesFirstResource() &&
                    testCrossModeConflictPreservesResourceOrder() &&
