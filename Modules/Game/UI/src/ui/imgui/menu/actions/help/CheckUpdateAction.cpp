@@ -272,6 +272,11 @@ private:
             renderImagePreview(dpiScale);
             // 与成功 BeginPopup 路径配对，保持弹窗栈平衡。
             ImGui::EndPopup();
+        } else if ( m_imagePreviewOpen ) {
+            // 父窗口关闭时子弹窗也失效，及时归还独立高清图集。
+            if ( m_images ) m_images->releasePreviewImage();
+            m_imagePreviewOpen = false;
+            m_imagePreviewDestination.clear();
         }
     }
 
@@ -290,6 +295,9 @@ private:
         if ( m_openImagePreview ) {
             // 双击发生于子窗口，弹窗请求须在父窗口上下文中消费。
             ::MMM::UI::FeedbackOpenPopup(title.c_str());
+            // 放大图使用独立高清帧；加载期间先显示原有缩略图。
+            if ( m_images )
+                m_images->preparePreviewImage(m_imagePreviewDestination);
             m_openImagePreview = false;
             m_imagePreviewOpen = true;
         }
@@ -312,7 +320,7 @@ private:
             // 只保存 Markdown 目标；动态图片的 UV 必须每帧从缓存查询。
             // 若更新日志换版，旧目标查询失败时显示状态文本而非旧纹理。
             const MarkdownImage image =
-                m_images ? m_images->findImage(m_imagePreviewDestination)
+                m_images ? m_images->findPreviewImage(m_imagePreviewDestination)
                          : MarkdownImage{};
             // 缓存尚未给出有效帧尺寸时避免比例计算中的除零。
             if ( image.texture && image.size.x > 0.0f && image.size.y > 0.0f ) {
@@ -341,7 +349,12 @@ private:
             ImGui::EndPopup();
         }
         // 标题栏关闭后清除目标，避免下一次预览误用旧图。
-        if ( !m_imagePreviewOpen ) m_imagePreviewDestination.clear();
+        if ( !m_imagePreviewOpen && !m_imagePreviewDestination.empty() ) {
+            // 释放请求只更新缓存状态，真正等待在途 GPU 命令由资源准备阶段处理。
+            // 清空目标后，后续弹窗帧不能再查询刚关闭的高清描述符。
+            if ( m_images ) m_images->releasePreviewImage();
+            m_imagePreviewDestination.clear();
+        }
     }
 
     /// @brief 渲染更新下载成功后的提示弹窗。

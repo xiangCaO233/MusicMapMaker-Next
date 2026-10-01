@@ -320,6 +320,9 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
         // 路径门禁也同步释放；关闭对话框可能访问最近项目和保存位置。
         // 待 UI 确认工作区清空后，才重新建立本轮引导的路径门禁。
         manager->walkthroughSpotlight().stop();
+        if ( auto* images =
+                 manager->getView<MarkdownImageCache>("WalkthroughImages") )
+            images->releaseWalkthroughImage();
         m_activeGuide.reset();
         Walkthrough::restrictOpenProjectGuideToCanonRock(false);
         m_pendingOpenGuide = ActiveGuide{ .topicId   = topic.m_id,
@@ -572,6 +575,10 @@ void WalkthroughPage::stopGuide(UIManager* manager)
     // 取消路线同时取消等待关闭的请求；事件已发出时仍由原关闭流程处理。
     // 清理路径状态防止关闭欢迎标签后误限制普通打开项目操作。
     manager->walkthroughSpotlight().stop();
+    // 退出后不再需要本段 GIF，回收高清图集给正文图片和下次教学使用。
+    if ( auto* images =
+             manager->getView<MarkdownImageCache>("WalkthroughImages") )
+        images->releaseWalkthroughImage();
     m_activeGuide.reset();
     m_pendingOpenGuide.reset();
     m_guideError.clear();
