@@ -45,13 +45,17 @@ CollaborationLogWindow::CollaborationLogWindow(
 {
     if ( m_room ) {
         // 谱面回调同时覆盖访客首次建会话和已绑定会话的增量替换。
+        // 历史补偿的栈同步命令由房间先入队，权威替换后入队；两者共享
+        // 当前会话队列，防止网络回调直接跨线程改动 EditorActionStack。
         m_room->setApplyBeatmapCallback(
             [this](std::shared_ptr<::MMM::BeatMap> beatmap,
                    ::MMM::BeatmapMutationFlags     flags,
                    std::uint64_t includedLocalMutationSequence,
                    std::uint64_t authoritativeRevision,
                    std::optional<std::vector<std::string>>
-                       objectDeltaIdentities) {
+                        objectDeltaIdentities,
+                   bool preserveCollaborationHistory) {
+                // 此布尔值只对补偿原作者有效；其他在线成员照常应用权威谱面。
                 // weak_ptr 防止会话销毁后回调延长其生命周期。
                 auto session = m_boundSession.lock();
                 // 空谱面不能建立会话或替换数据，直接忽略异常通知。
@@ -114,6 +118,10 @@ CollaborationLogWindow::CollaborationLogWindow(
                         .notifyMutationObserver = false,
                         // 远端权威替换不可再次回传 observer，避免协作回环。
                         .authoritativeRemote = true,
+                        .preserveCollaborationHistory =
+                            preserveCollaborationHistory,
+                        // 跨类别补偿已转移动作所有权时保留栈，避免权威
+                        // 替换的常规清理误删刚同步好的本地撤销记录。
                         .includedLocalMutationSequence =
                             includedLocalMutationSequence,
                         .objectDeltaIdentities =
@@ -134,6 +142,17 @@ CollaborationLogWindow::CollaborationLogWindow(
                         }));
                 }
             });
+        m_room->setHistoryCorrectedCallback([this](std::uint64_t sequence,
+                                                   bool          redo) {
+            if ( auto session = m_boundSession.lock() ) {
+                // 与下一份权威谱面替换同队列排序；本地不执行动作本身。
+                session->pushCommand(
+                    Logic::LogicCommand(Logic::CmdReconcileCollaborationHistory{
+                        .sequence = sequence,
+                        .redo     = redo,
+                    }));
+            }
+        });
         // 资源包可早于会话到达，因此先保存共享载荷再尝试绑定。
         m_room->setResourceBundleCallback(
             [this](Network::Collaboration::CollaborationResourceBundle bundle) {
@@ -171,6 +190,7 @@ CollaborationLogWindow::~CollaborationLogWindow()
         // 三个回调都捕获 this，析构结束前必须全部置空。
         m_room->setApplyBeatmapCallback(nullptr);
         m_room->setLocalMutationAcknowledgedCallback(nullptr);
+        m_room->setHistoryCorrectedCallback(nullptr);
         m_room->setResourceBundleCallback(nullptr);
     }
 }

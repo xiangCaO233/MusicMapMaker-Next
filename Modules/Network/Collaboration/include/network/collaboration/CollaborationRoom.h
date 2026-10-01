@@ -19,6 +19,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace MMM::Network::Collaboration
@@ -83,6 +84,18 @@ struct CollaborationChatEntry {
     std::string text;
 };
 
+/// @brief 房主按稳定身份保留的成员编辑历史摘要。
+struct CollaborationMemberHistory {
+    /// @brief 成员持久身份，离线后仍可用于撤回和重做。
+    ParticipantId participantId;
+    /// @brief 最近一次提交时的展示名称。
+    std::string creator;
+    /// @brief 当前可撤回的操作数。
+    std::size_t undoCount{ 0 };
+    /// @brief 当前可重做的操作数。
+    std::size_t redoCount{ 0 };
+};
+
 /// @brief 房主创建房间所需的产品层参数。
 struct CollaborationHostRoomConfig {
     /// @brief 房主 Creator。
@@ -138,10 +151,13 @@ public:
     /// @brief 把房主已排序的谱面状态回灌到当前本地会话。
     using ApplyBeatmapCallback = std::function<void(
         std::shared_ptr<::MMM::BeatMap>, ::MMM::BeatmapMutationFlags,
-        std::uint64_t, std::uint64_t, std::optional<std::vector<std::string>>)>;
+        std::uint64_t, std::uint64_t, std::optional<std::vector<std::string>>,
+        bool)>;
     /// @brief 通知逻辑线程本地变化已经进入房主权威文档。
     using LocalMutationAcknowledgedCallback =
         std::function<void(std::uint64_t)>;
+    /// @brief 通知逻辑线程把房主补偿对应的本地动作移至另一历史栈。
+    using HistoryCorrectedCallback = std::function<void(std::uint64_t, bool)>;
     /// @brief 访客资源完整校验后绑定到协作会话的入口。
     using ResourceBundleCallback =
         std::function<void(CollaborationResourceBundle)>;
@@ -206,6 +222,9 @@ public:
     void setLocalMutationAcknowledgedCallback(
         LocalMutationAcknowledgedCallback callback);
 
+    /// @brief 设置在线成员本地历史栈同步入口。
+    void setHistoryCorrectedCallback(HistoryCorrectedCallback callback);
+
     /// @brief 设置访客资源完成回调。
     /// @param callback UI 线程消费的资源包回调。
     void setResourceBundleCallback(ResourceBundleCallback callback);
@@ -250,6 +269,23 @@ public:
     /// @return 当前未完成连接时返回 InvalidPeer。
     [[nodiscard]] SubmitOperationResult submitOperation(
         std::span<const std::uint8_t> payload);
+
+    /// @brief 房主请求撤回指定成员最近一次仍可安全恢复的编辑。
+    /// @param participantId 成员稳定身份，允许已离线或已变成只读。
+    /// @return 请求成功排入权威文档消费者时返回 true。
+    [[nodiscard]] bool requestMemberUndo(std::string_view participantId);
+
+    /// @brief 房主请求重做指定成员最近一次由房主撤回的编辑。
+    /// @param participantId 成员稳定身份，允许已离线或已变成只读。
+    /// @return 请求成功排入权威文档消费者时返回 true。
+    [[nodiscard]] bool requestMemberRedo(std::string_view participantId);
+
+    /// @brief 获取后台已发布的成员历史摘要。
+    [[nodiscard]] const std::vector<CollaborationMemberHistory>&
+    memberHistories() const;
+
+    /// @brief 获取最近一次成员历史请求的拒绝原因。
+    [[nodiscard]] const std::string& memberHistoryError() const;
 
     /// @brief 向当前房间发送一条聊天消息。
     /// @param text 单行 UTF-8 正文。
@@ -411,6 +447,10 @@ private:
     /// @warning UI 热路径：每帧最多处理固定数量结果，只移动智能指针并触发
     /// 非阻塞逻辑命令回调。
     void processRemoteOperationResults();
+
+    /// @brief 消费后台历史建议并由房主提交为下一个权威修订。
+    /// @warning UI 热路径：每帧只移动有界结果，不计算谱面差异。
+    void processMemberHistoryProposals();
     /// @brief 在房主快照追上协议修订后登记等待中的新访客。
     /// @warning UI 热路径：每帧仅比较修订号；满足条件时才消费低频连接事件。
     void processPendingPeerConnections();
@@ -488,8 +528,23 @@ private:
     ApplyBeatmapCallback m_applyBeatmapCallback;
     /// @brief 本地提交无需整谱回灌时使用的序号确认入口。
     LocalMutationAcknowledgedCallback m_localMutationAcknowledgedCallback;
+    /// @brief 房主历史补偿对应的本地动作栈入口。
+    HistoryCorrectedCallback m_historyCorrectedCallback;
+    /// @brief 本会话已提交客户端序号到逻辑观察序号的有界对应表。
+    std::deque<std::pair<std::uint64_t, std::uint64_t>>
+        m_localSequenceByClientSequence;
     /// @brief 私有无锁队列、消费者状态与后台任务生命周期。
     std::unique_ptr<RemoteOperationPipeline> m_remoteOperationPipeline;
+    /// @brief UI 线程最近收到的房主成员历史摘要。
+    std::vector<CollaborationMemberHistory> m_memberHistories;
+    /// @brief 最近一次成员历史请求的失败原因。
+    std::string m_memberHistoryError;
+    /// @brief 防止用户连续点击时重复提交同一历史步骤。
+    bool m_memberHistoryRequestPending{ false };
+    /// @brief 即将同步提交的补偿操作原始修订；回调入队时消费。
+    std::uint64_t m_pendingHistoryRevision{ 0 };
+    /// @brief 即将同步提交的补偿操作是否为重做。
+    bool m_pendingHistoryRedo{ false };
     /// @brief 房主等待最新文档快照完成后再登记的访客连接事件。
     std::deque<WebRtcTransportEvent> m_pendingPeerConnections;
     /// @brief 已发布给 Peer 且可安全交给新访客的文档修订号。

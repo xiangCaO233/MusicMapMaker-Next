@@ -2305,6 +2305,10 @@ bool BeatmapSession::processCommands()
             SessionUtils::syncBeatmap(*m_ctx);
             const auto sequence = observer->onBeatmapMutated(
                 *m_ctx->currentBeatmap, mutationFlags);
+            if ( sequence != 0 ) {
+                // 房主之后按网络修订定位原动作；首次创建序号只绑定一次。
+                m_ctx->actionStack.markLatestCollaborationSequence(sequence);
+            }
             if ( sequence != 0 &&
                  mutationFlags == ::MMM::BeatmapMutationFlags::Objects ) {
                 // 仅纯物件变更使用本地序号与远端对象快照协调；混合类别等待
@@ -2440,6 +2444,16 @@ bool BeatmapSession::processCommands()
             processed = true;
             continue;
         }
+        if ( const auto* correction =
+                 std::get_if<CmdReconcileCollaborationHistory>(&cmd) ) {
+            // 房主补偿已经通过权威替换改变谱面；这里只移动本地撤销所有权。
+            // 零序号表示房间侧映射已经淘汰，动作栈会主动清理过期记录。
+            // 必须先于随后排队的 CmdReplaceBeatmapData 执行，避免重复修改 ECS。
+            static_cast<void>(m_ctx->actionStack.reconcileCollaborationHistory(
+                correction->sequence, correction->redo));
+            processed = true;
+            continue;
+        }
         auto* authoritativeReplacement =
             std::get_if<CmdReplaceBeatmapData>(&cmd);
         // 只有明确标记 authoritativeRemote 的全量替换参与协作延后与序号协议。
@@ -2489,6 +2503,9 @@ bool BeatmapSession::processCommands()
                 deferred.replaceAudioSamples;
             authoritativeReplacement->replaceAnnotations |=
                 deferred.replaceAnnotations;
+            authoritativeReplacement->preserveCollaborationHistory |=
+                deferred.preserveCollaborationHistory;
+            // 合并延后权威替换时不能丢失先前补偿已完成的栈同步语义。
         }
         const bool preservesActiveBrush =
             authoritativeSynchronization &&

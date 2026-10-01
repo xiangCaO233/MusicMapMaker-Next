@@ -500,6 +500,18 @@ bool hasConcurrentBurstNotes(const std::shared_ptr<const BeatMap>& beatmap,
 /// 被快照 included sequence 或独立 acknowledge 覆盖。测试还要求中间过程没有
 /// 记录 invalid_beatmap_document，避免最终快照掩盖临时损坏。
 ///
+/// @par 在线成员历史不变量
+/// 访客先提交一次对象修改，随后房主收回其编辑权限。定向撤回仍必须
+/// 恢复房主和只读访客双方的谱面，并向原作者回报首次编辑的本地序号。
+/// 该回报是 EditorActionStack 转移所有权的依据，不能采用补偿提交的
+/// 房主序号，也不能在只读后停止发送。房主重做应再次同步谱面和方向位。
+/// 此流程经真实 Peer/DataChannel 传播，不能只验证本机 Codec 状态。
+///
+/// @par 历史与权限独立
+/// 编辑权限变化只约束后续访客提交，不改变房主持有的既有修订。
+/// 因此撤回与重做分别在权限为零的条件下运行，确认房主操作不再向
+/// 被撤回成员请求执行其本地 Undo。访客仅被动接受权威补偿修订。
+///
 /// @par 断线清理不变量
 /// 房主断开后，访客不仅要离开 Connected，还必须清除 peer ID、参与者列表、
 /// 视口缓存和权限。保留非空 lastError 与唯一 HostDisconnected 日志，使上层
@@ -547,7 +559,8 @@ bool testPublicDirectoryWebRtcRoom()
                                       BeatmapMutationFlags,
                                       std::uint64_t,
                                       std::uint64_t,
-                                      std::optional<std::vector<std::string>>) {
+                                      std::optional<std::vector<std::string>>,
+                                      bool) {
             // 回调只记录真正由协作层应用的快照；本地提交不应反向回调自身。
             hostModel = std::move(beatmap);
             ++hostApplyCount;
@@ -593,7 +606,8 @@ bool testPublicDirectoryWebRtcRoom()
                     std::uint64_t includedLocalMutationSequence,
                     std::uint64_t,
                     std::optional<std::vector<std::string>>
-                        objectDeltaIdentities) {
+                        objectDeltaIdentities,
+                    bool) {
                 // 模拟编辑器的防回退策略：只接受已经包含当前本地水位线的快照。
                 if ( includedLocalMutationSequence <
                      guestRequiredMutationSequences[index] ) {
@@ -935,6 +949,77 @@ bool testPublicDirectoryWebRtcRoom()
         return false;
     }
 
+    // 房主在撤销前收回访客编辑权；定向补偿仍必须经权威修订同步到两端。
+    // 使用稳定参与者身份而非 guestPeerId 作为历史查询键，覆盖离线场景。
+    const auto guestParticipantId = makeRoomTestParticipantId(2);
+    if ( !pumpUntil(server, host, guests, [&]() {
+             return std::any_of(host.memberHistories().begin(),
+                                host.memberHistories().end(),
+                                [&guestParticipantId](const auto& item) {
+                                    // UI
+                                    // 按这个摘要启用按钮，至少需一条可撤回动作。
+                                    return item.participantId ==
+                                               guestParticipantId &&
+                                           item.undoCount > 0;
+                                });
+         }) ) {
+        XERROR("Host did not retain guest operation history");
+        return false;
+    }
+    const PeerId guestPeerId = guests.front()->localPeerId();
+    // 先等待权限广播到访客，确保补偿测试实际运行在只读状态。
+    if ( !host.setParticipantPermissions(guestPeerId, 0U) ||
+         !pumpUntil(server, host, guests, [&]() {
+             return guests.front()->localPermissions() == 0U;
+         }) ) {
+        XERROR("Could not revoke guest permissions before history action");
+        return false;
+    }
+    std::vector<std::pair<std::uint64_t, bool>> guestHistoryCorrections;
+    // 真实 UI 会将此回调送入逻辑命令队列；这里记录身份映射和方向。
+    guests.front()->setHistoryCorrectedCallback(
+        [&guestHistoryCorrections](std::uint64_t sequence, bool redo) {
+            guestHistoryCorrections.emplace_back(sequence, redo);
+        });
+    if ( !host.requestMemberUndo(guestParticipantId) ||
+         // 收敛要求房主、访客及本地历史回调三方全部完成。
+         !pumpUntil(
+             server,
+             host,
+             guests,
+             [&]() {
+                 return hasExpectedState(hostModel, 1000.0, "Host Creator") &&
+                        hasExpectedState(
+                            guestModels.front(), 1000.0, "Host Creator") &&
+                        guestHistoryCorrections.size() == 1U;
+             }) ||
+         guestHistoryCorrections.front() !=
+             std::pair{ guestEditMutationSequence, false } ) {
+        // 序号不同意味着会错误移动另一条 EditorAction。
+        XERROR("Read-only guest history undo failed: {}",
+               host.memberHistoryError());
+        return false;
+    }
+    if ( !host.requestMemberRedo(guestParticipantId) ||
+         // 不能只检查房主模型；访客也必须收到权威正向补偿。
+         !pumpUntil(
+             server,
+             host,
+             guests,
+             [&]() {
+                 return hasExpectedState(hostModel, 1250.0, "Host Creator") &&
+                        hasExpectedState(
+                            guestModels.front(), 1250.0, "Host Creator") &&
+                        guestHistoryCorrections.size() == 2U;
+             }) ||
+         guestHistoryCorrections.back() !=
+             std::pair{ guestEditMutationSequence, true } ) {
+        // 重做沿用原始序号，只改变方向位。
+        XERROR("Read-only guest history redo failed: {}",
+               host.memberHistoryError());
+        return false;
+    }
+
     // 第九阶段：房主只修改作者元数据，验证 Metadata 标志的下行同步不会丢失
     // 已由访客提交的对象时间戳。
     auto hostEdit = makeBeatmap(1250.0, "Host Revised");
@@ -1031,6 +1116,30 @@ bool testPublicDirectoryWebRtcRoom()
 /// 被移除后调用 onBeatmapMutated 仍是合法的上层行为，因为用户可以继续编辑
 /// 本地项目。房间已经不活跃时，该调用应被视为无需联网提交，而不是协议错误；
 /// 因此测试比较调用前后的 local_operation_submit_failed 日志数量必须相等。
+///
+/// @par 离线成员历史契约
+/// 获准访客在离线前连续两次修改同一稳定 Note；房主必须在访客移出后
+/// 继续按持久 participantId 找到其记录。第一次撤回恢复中间值，第二次
+/// 撤回恢复初始值；随后第一次重做必须先恢复中间值，第二次才到最终值。
+/// 这样可以捕获把重做错误实现为“取最近被撤回动作”的顺序问题。
+/// 四次补偿全由房主独立完成，不依赖已移出访客的连接或权限。
+///
+/// @par 测试模型
+/// hostModel 只通过房间权威应用回调更新，不通过手动复制模拟补偿结果。
+/// 每一步使用 pumpUntil 等待实际修订传播，避免只看到按钮请求入队
+/// 就误判为撤销成功。中间时间戳不同，能直接区分动作顺序。
+///
+/// @par 失败定位
+/// 离线历史四个阶段各使用单独的诊断标签：first_undo、second_undo、
+/// first_redo、second_redo。若消息未到达或修订冲突，可以直接知道
+/// 失败发生在哪个方向和哪一层栈深度，不依赖最终状态推断。
+/// 完成四步后再运行原有的离线编辑静默提交检查，确保历史补偿没有
+/// 让已移出房间的客户端重新进入错误的发送状态。
+///
+/// @par 稳定身份
+/// 移除使用当时真实 PeerId；之后四个历史请求只携带 ParticipantId。
+/// 这种刻意分离验证房主历史不会随临时网络连接一同删除。
+/// 初次被拒绝的访客与获准访客具有不同 ID，防止误用名称寻找历史。
 bool testHostAdmissionControl()
 {
     // 准入测试使用独立服务端，避免主流程用例的房间和连接残留影响结果。
@@ -1055,6 +1164,14 @@ bool testHostAdmissionControl()
     hostConfig.roomName      = "Admission Test";
     hostConfig.endpoint      = endpoint;
     if ( !host.startHost(hostConfig) ) return false;
+    std::shared_ptr<const BeatMap> hostModel;
+    host.setApplyBeatmapCallback(
+        [&hostModel](std::shared_ptr<const BeatMap> beatmap,
+                     BeatmapMutationFlags,
+                     std::uint64_t,
+                     std::uint64_t,
+                     std::optional<std::vector<std::string>>,
+                     bool) { hostModel = std::move(beatmap); });
     std::vector<std::unique_ptr<CollaborationRoom>> guests;
     // 所有阶段共用诊断出口，记录当前阶段和两端关键状态，保持主断言紧凑。
     const auto failAdmission = [&host, &guests](std::string_view phase) {
@@ -1145,6 +1262,7 @@ bool testHostAdmissionControl()
     // 建链后提交一份文档，确保获准访客的 DataChannel 已可承载业务消息，
     // 而不仅是信令状态显示 Connected。
     auto sharedBeatmap = makeBeatmap(1000.0, "Admission Host");
+    hostModel          = sharedBeatmap;
     static_cast<void>(
         host.onBeatmapMutated(*sharedBeatmap, BeatmapMutationFlags::All));
     if ( !pumpUntil(server, host, guests, [&]() {
@@ -1155,7 +1273,62 @@ bool testHostAdmissionControl()
         return failAdmission("initial_document");
     }
 
+    // 访客提交一次编辑，使其离线后仍有可由房主恢复的独立历史。
+    // 初始谱面已由 DataChannel 同步，后续只允许访客修改 Objects 类别。
+    const auto editPermissions =
+        static_cast<MMM::Network::Collaboration::CollaborationPermissionMask>(
+            MMM::Network::Collaboration::CollaborationPermission::Edit) |
+        static_cast<MMM::Network::Collaboration::CollaborationPermissionMask>(
+            MMM::Network::Collaboration::CollaborationPermission::Objects);
+    const auto removedParticipantId = makeRoomTestParticipantId(3);
+    // 身份与前一个拒绝案例不同，防止旧会话记录影响此次判断。
+    const PeerId assignedGuestPeerId = guests.back()->localPeerId();
+    guests.back()->onBeatmapSynchronized(*sharedBeatmap);
+    if ( !host.setParticipantPermissions(assignedGuestPeerId,
+                                         editPermissions) ||
+         !pumpUntil(server, host, guests, [&]() {
+             return guests.back()->localPermissions() == editPermissions;
+         }) ) {
+        return failAdmission("grant_history_edit");
+    }
+    auto guestEdit = makeBeatmap(1250.0, "Admission Host");
+    // 首次时间戳明确区别于初始 1000，供连续回滚核对。
+    if ( guests.back()->onBeatmapMutated(*guestEdit,
+                                         BeatmapMutationFlags::Objects) == 0 ||
+         !pumpUntil(server, host, guests, [&]() {
+             return hasExpectedState(hostModel, 1250.0, "Admission Host") &&
+                    std::any_of(host.memberHistories().begin(),
+                                host.memberHistories().end(),
+                                [&removedParticipantId](const auto& item) {
+                                    return item.participantId ==
+                                               removedParticipantId &&
+                                           item.undoCount > 0;
+                                });
+         }) ) {
+        return failAdmission("guest_history_edit");
+    }
+
+    // 同一成员再次改动同一 Note，断线后连续撤回和重做必须按动作栈次序恢复。
+    // 第二个修订依赖第一个修订产生的 Note 值，错误顺序会在源值校验处失败。
+    auto secondGuestEdit = makeBeatmap(1500.0, "Admission Host");
+    if ( guests.back()->onBeatmapMutated(*secondGuestEdit,
+                                         BeatmapMutationFlags::Objects) == 0 ||
+         !pumpUntil(server, host, guests, [&]() {
+             return hasExpectedState(hostModel, 1500.0, "Admission Host") &&
+                    std::any_of(host.memberHistories().begin(),
+                                host.memberHistories().end(),
+                                [&removedParticipantId](const auto& item) {
+                                    return item.participantId ==
+                                               removedParticipantId &&
+                                           item.undoCount >= 2;
+                                    // 后台摘要已包含两次不同原始修订才允许断开。
+                                });
+         }) ) {
+        return failAdmission("second_guest_history_edit");
+    }
+
     // 使用访客真实分配的 peer ID 执行移除；零值表示连接身份尚未建立。
+    // 之后的历史入口改用 removedParticipantId，不再使用此临时路由槽位。
     const PeerId guestPeerId = guests.back()->localPeerId();
     if ( guestPeerId == 0 || !host.removeParticipant(guestPeerId) ) {
         return failAdmission("remove_start");
@@ -1174,6 +1347,38 @@ bool testHostAdmissionControl()
                         1U;
          }) ) {
         return failAdmission("remove_complete");
+    }
+
+    if ( !host.requestMemberUndo(removedParticipantId) ||
+         // 最新动作先回退到中间态；不能直接跳到初始值。
+         !pumpUntil(server, host, guests, [&]() {
+             return hasExpectedState(hostModel, 1250.0, "Admission Host");
+         }) ) {
+        return failAdmission("offline_member_first_undo");
+    }
+    // 下一次请求在前一权威修订完成后发出，避免测试自身制造竞态。
+    if ( !host.requestMemberUndo(removedParticipantId) ||
+         // 第二次才回退最早访客编辑。
+         !pumpUntil(server, host, guests, [&]() {
+             return hasExpectedState(hostModel, 1000.0, "Admission Host");
+         }) ) {
+        return failAdmission("offline_member_second_undo");
+    }
+    // 两次撤回之后，最早动作才是重做栈当前顶部。
+    if ( !host.requestMemberRedo(removedParticipantId) ||
+         // 重做顺序与撤回相反，先恢复较早的编辑。
+         !pumpUntil(server, host, guests, [&]() {
+             return hasExpectedState(hostModel, 1250.0, "Admission Host");
+         }) ) {
+        return failAdmission("offline_member_first_redo");
+    }
+    // 前一正向补丁恢复中间值后，最新动作的源值校验才会成立。
+    if ( !host.requestMemberRedo(removedParticipantId) ||
+         // 最后才恢复较新的编辑，确认两个方向的补丁均可重用。
+         !pumpUntil(server, host, guests, [&]() {
+             return hasExpectedState(hostModel, 1500.0, "Admission Host");
+         }) ) {
+        return failAdmission("offline_member_second_redo");
     }
 
     // 被移除端仍可能继续编辑本地谱面。此时 CollaborationRoom 应静默忽略发送，

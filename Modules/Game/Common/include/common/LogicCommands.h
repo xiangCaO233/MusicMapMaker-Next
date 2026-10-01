@@ -849,6 +849,9 @@ struct CmdReplaceBeatmapData {
     /// 权威替换不进入本地撤销栈，并会废弃引用旧 ECS 实体的历史动作。
     bool authoritativeRemote{ false };
 
+    /// @brief 历史补偿已同步动作栈时，跨类别权威替换保留该动作栈。
+    bool preserveCollaborationHistory{ false };
+
     /// @brief 该权威状态已经包含的本机变化序号。
     /// 逻辑线程只允许覆盖不新于此序号的本地编辑，0 表示没有待确认本地变化。
     std::uint64_t includedLocalMutationSequence{ 0 };
@@ -867,6 +870,14 @@ struct CmdReplaceBeatmapData {
 struct CmdAcknowledgeCollaborationMutation {
     /// @brief 已由房主提交的本地变化序号。
     std::uint64_t sequence{ 0 };
+};
+
+/// @brief 房主历史补偿后只调整本地动作栈，不再次执行领域编辑。
+struct CmdReconcileCollaborationHistory {
+    /// @brief 原动作首次创建对应的本地变化序号；零表示映射已过期。
+    std::uint64_t sequence{ 0 };
+    /// @brief true 将动作移回撤销栈；false 移入重做栈。
+    bool redo{ false };
 };
 
 /// @brief 将已经完整校验的协作资源绑定到当前访客会话。
@@ -1029,12 +1040,13 @@ using LogicCommand = std::variant<
     CmdUpdateBpmWithKeepSpeedSv, CmdCreateTimelineEvents,
     CmdReplaceBeatmapTimings, CmdSetNoteAnnotation, CmdUpsertBeatmapAnnotation,
     CmdRemoveBeatmapAnnotation, CmdReplaceBeatmapData,
-    CmdAcknowledgeCollaborationMutation, CmdSetCollaborationResources,
-    CmdSetCollaborationOfflineReadOnly, CmdSetCollaborationClipboardIsolation,
-    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
-    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
-    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
-    CmdImportAudio, CmdUpdateAudioResource, CmdRenameAudioResource,
+    CmdAcknowledgeCollaborationMutation, CmdReconcileCollaborationHistory,
+    CmdSetCollaborationResources, CmdSetCollaborationOfflineReadOnly,
+    CmdSetCollaborationClipboardIsolation, CmdStartMarquee, CmdUpdateMarquee,
+    CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush,
+    CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
+    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
+    CmdUpdateAudioResource, CmdRenameAudioResource,
     CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
     CmdExportImdPackage, CmdSaveTemporaryProject>;
 
@@ -1079,6 +1091,7 @@ using LogicCommand = std::variant<
                 std::is_same_v<T, CmdScroll> ||
                 std::is_same_v<T, CmdPanCanvas> ||
                 std::is_same_v<T, CmdAcknowledgeCollaborationMutation> ||
+                std::is_same_v<T, CmdReconcileCollaborationHistory> ||
                 std::is_same_v<T, CmdSetCollaborationResources> ||
                 std::is_same_v<T, CmdSetCollaborationOfflineReadOnly> ||
                 std::is_same_v<T, CmdSetCollaborationClipboardIsolation>;

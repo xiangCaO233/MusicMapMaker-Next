@@ -351,7 +351,8 @@ bool CollaborationPeer::setParticipantPermissions(
 /// @return 入队、发送或输入失败的精确结果。
 /// @warning 交互提交路径调用；只复制有界负载并非阻塞入队或发送。
 SubmitOperationResult CollaborationPeer::submitOperation(
-    std::span<const std::uint8_t> payload)
+    std::span<const std::uint8_t> payload,
+    std::uint64_t*                acceptedClientSequence)
 {
     // 构造无效对象不能产生序号或传输副作用。
     if ( !m_valid ) {
@@ -365,7 +366,6 @@ SubmitOperationResult CollaborationPeer::submitOperation(
     if ( payload.size() > m_config.limits.maxOperationBytes ) {
         return SubmitOperationResult::OperationTooLarge;
     }
-
     // 身份和会话来自已规范化配置，序号只在接受成功后递增。
     EditRequest request;
     request.participantId  = m_config.participantId;
@@ -385,7 +385,67 @@ SubmitOperationResult CollaborationPeer::submitOperation(
     }
 
     // 只有请求已进入房主队列或传输层后才消费本地序号。
+    if ( acceptedClientSequence ) {
+        *acceptedClientSequence = m_nextClientSequence;
+    }
     ++m_nextClientSequence;
+    return SubmitOperationResult::Accepted;
+}
+
+/// @brief 在房主验证历史补偿后立即分配修订并广播。
+/// @param payload 已在后台按当前规范文档完成冲突校验的增量。
+/// @param correction 原作者、原会话和原客户端序号及补偿方向。
+/// @return 房主和负载有效时返回 Accepted。
+/// @details 补偿必须像普通谱面编辑一样进入房主修订日志并广播给全部成员。
+///         这里直接分配修订，避免已验证的旧文档补丁在待处理请求后面排队。
+///         调用者需先比对 Peer 已应用修订与后台建议的 expectedRevision。
+///         访客无法调用此入口，补偿也不能伪装成原成员的网络来源。
+///
+/// @par 身份协议
+/// 外层 committed 使用房主身份表示权威提交；historyCorrection 中的
+/// 三元组只表示被补偿的原始操作，供在线原作者同步本地动作栈。
+/// 不能以显示名或短期 PeerId 定位，二者在离线后均可能变化。
+///
+/// @warning 房主 UI 低频入口，不在渲染循环中构造或广播修订。
+SubmitOperationResult CollaborationPeer::commitHostCorrection(
+    std::span<const std::uint8_t>  payload,
+    CollaborationHistoryCorrection correction)
+{
+    if ( !m_valid || !m_config.isHost ) {
+        return SubmitOperationResult::InvalidPeer;
+    }
+    if ( correction.clientSequence == 0 || correction.participantId.empty() ||
+         correction.sessionId.empty() ||
+         Config::normalizeCollaborationStableId(correction.participantId) !=
+             correction.participantId ||
+         Config::normalizeCollaborationStableId(correction.sessionId) !=
+             correction.sessionId ) {
+        return SubmitOperationResult::InvalidPeer;
+    }
+    if ( payload.empty() ) return SubmitOperationResult::EmptyOperation;
+    if ( payload.size() > m_config.limits.maxOperationBytes ) {
+        return SubmitOperationResult::OperationTooLarge;
+    }
+    if ( !m_pendingRequests.empty() ) {
+        // 请求队列中已有尚未分配修订的编辑，交还调用方重新校验最新文档。
+        return SubmitOperationResult::QueueFull;
+    }
+    // 此入口由房主 UI 独占，先立即提交再处理队列中的新访客请求，
+    // 避免已通过旧文档冲突校验的补丁被随后分配的修订插队。
+    CommittedOperation committed;
+    committed.revision       = m_nextRevision++;
+    committed.participantId  = m_config.participantId;
+    committed.sessionId      = m_config.sessionId;
+    committed.clientSequence = m_nextClientSequence++;
+    committed.payload.assign(payload.begin(), payload.end());
+    committed.historyCorrection = std::move(correction);
+    // 先让房主自身收到相同修订，再记录重同步日志并广播其他成员。
+    applyCommittedOperation(committed);
+    m_journal.push_back(committed);
+    while ( m_journal.size() > m_config.limits.maxJournalOperations ) {
+        m_journal.pop_front();
+    }
+    broadcastCommittedOperation(committed);
     return SubmitOperationResult::Accepted;
 }
 

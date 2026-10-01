@@ -3854,7 +3854,7 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
             (cmd.replaceObjects || cmd.replaceAnnotations) &&
             !cmd.replaceTimelines && !cmd.replaceMetadata &&
             !cmd.replaceAudioSamples;
-        if ( !preservesNoteHistory ) {
+        if ( !preservesNoteHistory && !cmd.preserveCollaborationHistory ) {
             // 跨域替换会改变本地动作解释基准，只能丢弃历史保证后续安全。
             m_ctx.actionStack.clear();
         }

@@ -17,6 +17,7 @@
 #include "mmm/project/Project.h"
 #include "network/collaboration/CollaborationBuildFingerprint.h"
 #include "network/collaboration/CollaborationRoom.h"
+#include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/CollaborationEntryPolicy.h"
 #include "ui/imgui/manager/CollaborationLogWindow.h"
@@ -306,6 +307,64 @@ void drawLocalPermissionSummary(
         Network::Collaboration::CollaborationPermission::Annotations);
 }
 
+/// @brief 绘制房主针对稳定成员身份的撤回和重做图标。
+/// @param room 当前房间。
+/// @param participantId 操作历史的稳定成员身份。
+/// @param inlineWithPrevious 是否紧接当前单元格已绘制的控件。
+/// @warning UI 每帧成员列表路径；只读取后台发布的有界历史摘要。
+/// @details 在线成员在跟随或权限按钮后内联显示两个小图标；离线成员
+///         从空白第二列开始绘制，因此首个图标不调用 SameLine。
+///         可用状态由房主已发布的成员历史计数决定，权限为只读或
+///         成员断线都不会隐藏历史按钮。
+///
+/// @par 提示与身份
+/// ImGui ID 外层由 participantId 区分，同名成员不会共享按钮状态。
+/// 悬停使用 ImGui 自带的正常延迟，防止鼠标经过表格时立刻弹出提示。
+/// 点击只提交稳定身份给房间层，UI 不直接更改谱面或动作栈。
+void drawMemberHistoryActions(Network::Collaboration::CollaborationRoom& room,
+                              std::string_view participantId,
+                              bool             inlineWithPrevious = true)
+{
+    const auto& histories = room.memberHistories();
+    const auto  history   = std::find_if(
+        histories.begin(), histories.end(), [participantId](const auto& item) {
+            return item.participantId == participantId;
+        });
+    // 摘要可能尚未交付，缺失时两个操作都保持禁用。
+    const bool canUndo = history != histories.end() && history->undoCount > 0;
+    const bool canRedo = history != histories.end() && history->redoCount > 0;
+    // 禁用按钮仍可在悬停延迟后解释其作用，避免用户猜测图标含义。
+    if ( inlineWithPrevious ) ImGui::SameLine();
+    ImGui::BeginDisabled(!canUndo);
+    const std::string undoLabel = std::string(ICON_MMM_UNDO) + "##memberUndo";
+    if ( FeedbackSmallButton(undoLabel.c_str()) ) {
+        // 房间后台先检查目标值和当前修订，拒绝冲突时按钮不做本地回滚。
+        static_cast<void>(room.requestMemberUndo(participantId));
+    }
+    ImGui::EndDisabled();
+    // 延时提示在按钮禁用时仍可解释操作，但不会触发房间请求。
+    if ( ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal |
+                              ImGuiHoveredFlags_AllowWhenDisabled) ) {
+        // 复用 ImGui 延迟计时，不额外维护逐成员悬停时间状态。
+        ImGui::SetTooltip("%s",
+                          TR("ui.collaboration.member_undo_tooltip").data());
+    }
+    ImGui::SameLine();
+    // 两个图标共享成员级 ID，额外的后缀区分撤回与重做。
+    ImGui::BeginDisabled(!canRedo);
+    const std::string redoLabel = std::string(ICON_MMM_REDO) + "##memberRedo";
+    if ( FeedbackSmallButton(redoLabel.c_str()) ) {
+        // 重做取房主持有的历史条目，成员本地栈只在权威广播后同步。
+        static_cast<void>(room.requestMemberRedo(participantId));
+    }
+    ImGui::EndDisabled();
+    if ( ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal |
+                              ImGuiHoveredFlags_AllowWhenDisabled) ) {
+        ImGui::SetTooltip("%s",
+                          TR("ui.collaboration.member_redo_tooltip").data());
+    }
+}
+
 /// @brief 绘制一名协作成员的表格行和可选跟随按钮。
 /// @param room 当前协作房间。
 /// @param peerId 成员 PeerId。
@@ -319,6 +378,7 @@ void drawLocalPermissionSummary(
 /// 值仍保留在局部 掩码中；重新开启 Edit
 /// 后可恢复之前细分选择。实际授权由网络层同时考虑主位。
 /// follow、权限更新和移除都只传递稳定 PeerId，不以可重名 Creator 定位成员。
+
 void drawParticipantRow(
     Network::Collaboration::CollaborationRoom&         room,
     Network::Collaboration::PeerId                     peerId,
@@ -356,6 +416,9 @@ void drawParticipantRow(
         // 本地成员不能跟随、移除或修改自己的房主权限。
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("%s", TR("ui.collaboration.you_suffix").data());
+        if ( room.isHost() ) {
+            drawMemberHistoryActions(room, identity.participantId);
+        }
     } else {
         // 同一按钮在跟随中切换为停止跟随。
         const char* actionLabel =
@@ -366,6 +429,7 @@ void drawParticipantRow(
             static_cast<void>(room.setFollowedPeer(following ? 0 : peerId));
         }
         if ( room.isHost() ) {
+            drawMemberHistoryActions(room, identity.participantId);
             // 权限管理和移除仅对房主可见。
             ImGui::SameLine();
             if ( FeedbackSmallButton(
@@ -446,6 +510,33 @@ void drawParticipantRow(
             }
         }
     }
+    ImGui::PopID();
+}
+
+/// @brief 保留已离线成员的历史入口，房主仍可撤回其操作。
+/// @param room 当前房主房间。
+/// @param history 成员最近一次操作留下的稳定身份和展示名。
+/// @warning UI 成员列表路径；每帧最多扫描有界历史摘要。
+/// @details 离线行没有 PeerId，因此不显示跟随、权限与移除按钮。
+///         身份仍以 participantId 为 ImGui ID，断线重连后不与其他
+///         成员同名行冲突。历史计数由房主持有，不依赖成员是否在线。
+void drawOfflineMemberHistoryRow(
+    Network::Collaboration::CollaborationRoom&                room,
+    const Network::Collaboration::CollaborationMemberHistory& history)
+{
+    ImGui::PushID(history.participantId.c_str());
+    ImGui::TableNextRow(ImGuiTableRowFlags_None, ImGui::GetFrameHeight());
+    ImGui::TableSetColumnIndex(0);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(history.creator.c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%.*s, %s)",
+                        8,
+                        history.participantId.c_str(),
+                        TR("ui.collaboration.member_offline").data());
+    ImGui::TableSetColumnIndex(1);
+    // 第二列起始处直接绘制图标，不借用上一行按钮的 SameLine 位置。
+    drawMemberHistoryActions(room, history.participantId, false);
     ImGui::PopID();
 }
 }  // namespace
@@ -1774,7 +1865,7 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
             ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
         if ( ImGui::BeginTable(
                  "CollaborationParticipantsTable", 2, tableFlags) ) {
-            // 动作列按访客跟随按钮和房主额外两个按钮的总宽度计算。
+            // 动作列包含跟随、撤回重做、权限和移除，避免图标被表格裁剪。
             const float actionWidth =
                 ImGui::CalcTextSize(
                     TR("ui.collaboration.stop_following").data())
@@ -1788,7 +1879,11 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
                            ImGui::CalcTextSize(
                                TR("ui.collaboration.remove_participant").data())
                                .x +
-                           style.FramePadding.x * 2.0F + style.ItemSpacing.x
+                           style.FramePadding.x * 2.0F + style.ItemSpacing.x +
+                           ImGui::CalcTextSize(ICON_MMM_UNDO).x +
+                           ImGui::CalcTextSize(ICON_MMM_REDO).x +
+                           style.FramePadding.x * 4.0F +
+                           style.ItemSpacing.x * 2.0F
                      : 0.0F);
             ImGui::TableSetupColumn(TR("ui.collaboration.user").data(),
                                     ImGuiTableColumnFlags_WidthStretch);
@@ -1809,7 +1904,31 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
                     drawParticipantRow(*m_room, peerId, identity);
                 }
             }
+            if ( m_room->isHost() ) {
+                // 离线身份仍对应房主保存的独立历史，直到该历史被淘汰。
+                // 当前在线表先绘制完毕，再按稳定身份排除重复行。
+                // 只读用户仍属于在线成员，不应错误显示为已离线。
+                for ( const auto& history : m_room->memberHistories() ) {
+                    const bool online =
+                        std::any_of(participants.begin(),
+                                    participants.end(),
+                                    [&history](const auto& item) {
+                                        return item.second.participantId ==
+                                               history.participantId;
+                                    });
+                    if ( !online ) {
+                        // 没有历史的离线用户无需占据成员表空间。
+                        drawOfflineMemberHistoryRow(*m_room, history);
+                    }
+                }
+            }
             ImGui::EndTable();
+        }
+        if ( m_room->isHost() && !m_room->memberHistoryError().empty() ) {
+            // 冲突和超限均是本次请求反馈；谱面已保持原状。
+            ImGui::TextColored(ImVec4(1.0F, 0.4F, 0.4F, 1.0F),
+                               "%s",
+                               TR(m_room->memberHistoryError().c_str()).data());
         }
         if ( !m_room->isHost() ) {
             // 访客在表格下方查看房主授予自己的只读权限摘要。

@@ -349,6 +349,177 @@ private:
     return true;
 }
 
+/// @brief 房主补偿时间线后同步本地动作栈并保留可用的重做动作。
+/// @return 权威替换不重复撤销，原作者仍可本地重做时返回 true。
+/// @details 时间线属于通常会清空动作栈的跨类别权威替换，因此此用例
+///         同时验证补偿身份、命令顺序和 preserveCollaborationHistory。
+///         observer 首次本地编辑分配序号一；补偿命令先移栈，随后
+///         权威替换安装编辑前状态，不再执行同一个动作的 undo。
+///
+/// @par 本地动作身份
+/// 原编辑通过正常 CmdCreateTimelineEvent 进入 ActionStack，而不是测试
+/// 直接构造私有动作。observer 分配的序号随后随房主补偿命令返回，
+/// 这样能覆盖“网络序号正确但本地动作未打标”的接线错误。
+///
+/// @par 权威替换顺序
+/// 两条命令在同一 Session update 依次执行。先移动历史所有权，
+/// 再把时间线恢复为初始数据；权威替换不回传 observer，避免产生
+/// 第二次本地协作操作。保存的动作仍可通过本地 CmdRedo 再次执行。
+///
+/// @par 验收边界
+/// 同时比较通知次数、动作栈深度和领域时间线数量；只比较单一
+/// 结果可能把无动作的界面假象误判为成功。重做后撤销栈重新拥有动作，
+/// 证明补偿没有创建一份只可显示、不可再次执行的伪历史记录。
+/// 此测试不依赖 P2P 房间，网络序号映射另由协作集成测试覆盖。
+///
+/// @par 后续历史操作
+/// 原作者在房主补偿后先本地重做，再本地撤销。两次操作均通过
+/// 同一个动作实例发布，但各自有独立的协作序号；随后房主撤回
+/// 原作者的撤销，再重做这次撤销。这个顺序同时检查动作身份
+/// 不丢失、序号不会只绑定首次创建，以及操作方向的反转。
+///
+/// @par 栈与谱面分工
+/// 栈补偿只移动动作所有权，权威替换负责改变时间线。测试
+/// 每一阶段都核对两者，防止单独正确而组合后执行两次撤销。
+/// 权威替换不向 observer 反馈，可排除远端补偿生成新本地序号。
+[[nodiscard]] bool testCollaborationHistoryCorrectionKeepsLocalRedo()
+{
+    MMM::Logic::BeatmapSession session;
+    MMM::Config::EditorConfig  config;
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdLoadBeatmap{ .beatmap = makeBeatmap() },
+    });
+    session.update(0.0, config, false);
+    auto observer = std::make_shared<CountingMutationObserver>();
+    session.setMutationObserver(observer, false);
+
+    // 本地动作进入撤销栈，观察者把首次变化编号为一。
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdCreateTimelineEvent{
+            .time  = 1.25,
+            .type  = MMM::TimingEffect::SCROLL,
+            .value = 1.5,
+        },
+    });
+    session.update(0.0, config, false);
+    const auto originalTimingCount =
+        session.getContext().currentBeatmap->m_timings.size();
+    // 空白基线可能带有默认时间线，因此只比较编辑前后数量。
+    // 首次通知数必须精确为一，后续补偿才能稳定引用该序号。
+    if ( observer->notificationCount() != 1 ||
+         session.getContext().actionStack.getUndoStackSize() != 1U ||
+         originalTimingCount == 0U ) {
+        return false;
+    }
+
+    // 在线原作者先接收栈同步，再应用房主撤回后的权威时间线。
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdReconcileCollaborationHistory{
+            .sequence = 1,
+            .redo     = false,
+        },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdReplaceBeatmapData{
+            .sourceBeatmap                 = makeBeatmap(),
+            .replaceTimelines              = true,
+            .notifyMutationObserver        = false,
+            .authoritativeRemote           = true,
+            .preserveCollaborationHistory  = true,
+            .includedLocalMutationSequence = 1,
+        },
+    });
+    session.update(0.0, config, false);
+    // 栈中已存在可重做动作，但权威时间线仍应保持撤回结果。
+    // observer 次数不变说明房主补偿未被误认为成员再次编辑。
+    if ( session.getContext().actionStack.getUndoStackSize() != 0U ||
+         session.getContext().actionStack.getRedoStackSize() != 1U ||
+         session.getContext().currentBeatmap->m_timings.size() >=
+             originalTimingCount ||
+         observer->notificationCount() != 1 ) {
+        XERROR("Collaboration history correction did not preserve local redo");
+        return false;
+    }
+
+    // 后续本地重做复用原动作；若栈被跨类别替换清空，此处不会恢复事件。
+    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdRedo{} });
+    session.update(0.0, config, false);
+    // 本地重做验证补偿没有损坏动作持有的时间线事件数据。
+    // 这里恢复的是原事件，不能凭空增加另一条重复时间线。
+    if ( session.getContext().actionStack.getUndoStackSize() != 1U ||
+         session.getContext().actionStack.getRedoStackSize() != 0U ||
+         session.getContext().currentBeatmap->m_timings.size() !=
+             originalTimingCount ) {
+        return false;
+    }
+    const auto appliedTimings = session.getContext().currentBeatmap->m_timings;
+
+    // 成员自己再次撤销也形成独立网络操作，序号三的完成方向为未应用。
+    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdUndo{} });
+    session.update(0.0, config, false);
+    // 第二次本地操作的序号为三：一是创建，二是重做。
+    // 这次撤销结束后动作在重做栈，供房主反向补偿验证。
+    if ( observer->notificationCount() != 3 ||
+         session.getContext().actionStack.getRedoStackSize() != 1U ) {
+        return false;
+    }
+
+    // 房主撤回这次“撤销”应把原动作移回撤销栈，而不是再移入重做栈。
+    auto restored       = makeBeatmap();
+    restored->m_timings = appliedTimings;
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdReconcileCollaborationHistory{
+            .sequence = 3,
+            .redo     = false,
+        },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdReplaceBeatmapData{
+            .sourceBeatmap                 = std::move(restored),
+            .replaceTimelines              = true,
+            .notifyMutationObserver        = false,
+            .authoritativeRemote           = true,
+            .preserveCollaborationHistory  = true,
+            .includedLocalMutationSequence = 3,
+        },
+    });
+    session.update(0.0, config, false);
+    // 房主撤回成员的 Undo 后应恢复事件及动作的已应用状态。
+    // 如果只看首次创建的方向，本次会错误地留在重做栈。
+    if ( session.getContext().actionStack.getUndoStackSize() != 1U ||
+         session.getContext().actionStack.getRedoStackSize() != 0U ||
+         session.getContext().currentBeatmap->m_timings.size() !=
+             originalTimingCount ) {
+        XERROR("Host reversal of a member undo left the local stack stale");
+        return false;
+    }
+
+    // 房主重做原成员的 Undo 时，再按方向把动作转移回本地重做栈。
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdReconcileCollaborationHistory{
+            .sequence = 3,
+            .redo     = true,
+        },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdReplaceBeatmapData{
+            .sourceBeatmap                 = makeBeatmap(),
+            .replaceTimelines              = true,
+            .notifyMutationObserver        = false,
+            .authoritativeRemote           = true,
+            .preserveCollaborationHistory  = true,
+            .includedLocalMutationSequence = 3,
+        },
+    });
+    session.update(0.0, config, false);
+    // 再恢复成员的 Undo，验证同一序号在两个房主方向上可往返。
+    // 谱面和本地重做栈应回到房主撤回前的状态。
+    return session.getContext().actionStack.getUndoStackSize() == 0U &&
+           session.getContext().actionStack.getRedoStackSize() == 1U &&
+           session.getContext().currentBeatmap->m_timings.size() <
+               originalTimingCount;
+}
+
 /// @brief 验证多批注的 Creator 门禁、物件定位、时间分组与协作权限。
 /// @return 无 Creator 拒绝新增，同时间戳聚合且撤销和权限类别正确时返回 true。
 /// @note 同时覆盖对象、时间戳和自动采样三类批注目标。
@@ -1882,6 +2053,7 @@ int main()
                    testAsyncMalodySaveKeepsPolylineSnapshot() &&
                    testOptionalInitialSnapshot() &&
                    testTimelineCommandsPublishMutations() &&
+                   testCollaborationHistoryCorrectionKeepsLocalRedo() &&
                    testBeatmapAnnotationPermissionAndTimestampGrouping() &&
                    testRemoteSynchronizationPreservesActiveBrush() &&
                    testRemoteSynchronizationWaitsForLocalMutationReceipt() &&

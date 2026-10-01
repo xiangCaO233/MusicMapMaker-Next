@@ -545,6 +545,48 @@ void pumpPeers(CollaborationPeer&                               host,
         return false;
     }
 
+    // 补偿修订必须携带原成员会话和序号，普通编辑不能伪装成该标记。
+    // 外层提交者刻意设为房主，内层身份仍指向原访客。
+    // 这两层身份在真实 P2P 房间中分别承担授权和本地历史定位。
+    CommittedOperation correction;
+    correction.revision       = 12;
+    correction.participantId  = makeTestStableId(1, 'c');
+    correction.sessionId      = makeTestStableId(1, 'd');
+    correction.clientSequence = 4;
+    correction.payload        = { 1, 2, 3, 4 };
+    correction.historyCorrection =
+        MMM::Network::Collaboration::CollaborationHistoryCorrection{
+            // 稳定身份来自此前的 EditRequest，不从可变 Creator 推断。
+            .participantId  = request.participantId,
+            .sessionId      = request.sessionId,
+            .clientSequence = request.clientSequence,
+            .redo           = true,
+        };
+    const auto encodedCorrection = encodeCollaborationMessage(correction, 4);
+    // 操作正文限制为四字节，不应把补偿元数据算进正文上限。
+    if ( !encodedCorrection ) return false;
+    const auto decodedCorrection =
+        decodeCollaborationMessage(*encodedCorrection, 4);
+    // 解码器使用同一个操作长度上限，校验两端解释一致。
+    const auto* original =
+        decodedCorrection
+            ? std::get_if<CommittedOperation>(&decodedCorrection.value())
+            : nullptr;
+    // 同时检查外层类型与内层字段，避免只证明解码返回成功。
+    if ( !original || !original->historyCorrection ||
+         // 外层参与者是补偿发起者，内层才是被撤回的动作拥有者。
+         original->historyCorrection->participantId != request.participantId ||
+         original->historyCorrection->sessionId != request.sessionId ||
+         original->historyCorrection->clientSequence !=
+             request.clientSequence ||
+         !original->historyCorrection->redo ) {
+        return false;
+    }
+    // 普通请求在上文已无补偿标记；两类消息共享协议版本但语义不同。
+    // redo=true 能验证尾部方向字节不是固定写零。
+    // sessionId 与客户端序号组合可区分同成员重新入房后的旧动作。
+    // 当前断言还保护 64 位序号不被线格式窄化。
+
     // 将运行时上限降为三，原四字节负载必须明确报 OperationTooLarge。
     auto oversized = encodeCollaborationMessage(request, 3);
     if ( oversized.has_value() ||
