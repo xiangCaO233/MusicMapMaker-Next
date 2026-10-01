@@ -39,7 +39,7 @@ enum class CollaborationPermission : std::uint32_t {
 /// @brief 一组可序列化的协作权限位。
 using CollaborationPermissionMask = std::uint32_t;
 
-/// @brief 默认授予已获准访客的完整权限集合。
+/// @brief 协议允许房主显式授予的完整权限集合。
 inline constexpr CollaborationPermissionMask COLLABORATION_PERMISSION_ALL =
     static_cast<CollaborationPermissionMask>(CollaborationPermission::Edit) |
     static_cast<CollaborationPermissionMask>(CollaborationPermission::Objects) |

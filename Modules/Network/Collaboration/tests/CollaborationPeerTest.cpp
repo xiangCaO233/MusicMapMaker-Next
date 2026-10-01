@@ -364,6 +364,16 @@ void pumpPeers(CollaborationPeer&                               host,
         return false;
     }
 
+    // 本用例聚焦增量收敛；先由房主明确授权七名访客，再提交操作。
+    for ( std::size_t index = 0; index < guests.size(); ++index ) {
+        if ( !host.setParticipantPermissions(
+                 static_cast<PeerId>(index + 2),
+                 MMM::Network::Collaboration::COLLABORATION_PERMISSION_ALL) ) {
+            return false;
+        }
+    }
+    pumpPeers(host, guests, 2U);
+
     // 房主先发布一组有限且有代表性的画布时间与横向偏移。
     ParticipantViewport hostViewport;
     hostViewport.playbackTime          = 12.5;
@@ -806,6 +816,8 @@ void pumpPeers(CollaborationPeer&                               host,
 /// @brief 验证房主权限快照同步和 revision 前的强制授权不可被访客绕过。
 /// @details
 /// 权限判断分为房主持有的粗粒度位掩码和业务提供的负载级回调两层。
+/// 新访客一开始必须为零权限，尚未授权时的请求即使绕过本地 UI 也被房主拒绝。
+/// 房主与访客的权限镜像都要先确认零值，避免仅在界面显示只读。
 /// 第一阶段授予 Edit 与 Objects，但先提交首字节 0x41 的负载，证明细分回调
 /// 能在权威 revision 分配前拒绝它；随后提交 0x42，证明两层均通过时正常提交。
 /// 第二阶段撤销 Edit、保留 Objects，再次提交 0x42，证明业务回调的允许结果
@@ -815,11 +827,15 @@ void pumpPeers(CollaborationPeer&                               host,
 /// @par 授权顺序
 /// - 房主先验证发送者身份与当前 SessionId。
 /// - Edit 位决定成员是否具备基础编辑资格。
+/// - 入房审批只建立成员身份，不赋予 Edit 或任一细分位。
 /// - 业务回调再按具体负载决定细分对象权限。
 /// - 两层授权全部通过后才能分配下一 revision。
 /// - 权限变更由房主广播，访客镜像只用于界面反馈而非权威判断。
 /// @par 失败保护
 /// 被拒操作可以增加诊断统计，但不能触发应用回调、修改模型或占用版本号。
+/// 默认只读、负载回调拒绝、撤销授权三个阶段分别增加一次越权统计。
+/// 合法授权阶段必须只产生一个修订，证明安全默认值不妨碍正常协作。
+/// 初始快照及后续变更由同一房主权限表广播，双方读到的掩码应一致。
 /// @return 越权请求不推进版本，恢复权限后合法请求正常收敛时返回 true。
 [[nodiscard]] bool testParticipantPermissionsAreAuthoritative()
 {
@@ -870,8 +886,37 @@ void pumpPeers(CollaborationPeer&                               host,
     guests.push_back(std::move(guest));
     // 初始泵送同步身份与默认权限表。
     pumpPeers(host, guests, 3U);
+    // 首先验证房主权威表，否则本地只读可能掩盖房主全权限缺陷。
+    const auto initialHostPermission =
+        host.participantPermissions().find(GUEST_ID);
+    // 然后验证访客镜像；权限广播应把自身条目明确写成零。
+    const auto initialGuestPermission =
+        guests.front()->participantPermissions().find(GUEST_ID);
+    if ( initialHostPermission == host.participantPermissions().end() ||
+         initialGuestPermission ==
+             guests.front()->participantPermissions().end() ||
+         initialHostPermission->second != 0U ||
+         initialGuestPermission->second != 0U ) {
+        // 缺失条目和意外授予任何权限都违反入房最小权限约束。
+        return false;
+    }
+
+    // 即使访客绕过 UI 发送删除类请求，房主也不得应用或推进版本。
+    // 使用后续会被业务回调允许的 0x42，证明拒绝仅由基础权限决定。
+    const ByteBuffer unauthorizedPayload{ 0x42U };
+    if ( guests.front()->submitOperation(unauthorizedPayload) !=
+         SubmitOperationResult::Accepted ) {
+        return false;
+    }
+    pumpPeers(host, guests, 3U);
+    // 权威版本和两端模型同时检查，拒绝不能产生幽灵提交。
+    if ( host.appliedRevision() != 0U || !hostModel.empty() ||
+         !guestModel.empty() || host.stats().unauthorizedEditRequests != 1U ) {
+        return false;
+    }
 
     // 第一阶段授予 Edit 与 Objects，整体权限允许进入细分回调。
+    // 此后原有回调测试继续证明房主显式授权能正常解除只读状态。
     const auto objectEditPermissions =
         static_cast<MMM::Network::Collaboration::CollaborationPermissionMask>(
             MMM::Network::Collaboration::CollaborationPermission::Edit) |
@@ -898,7 +943,7 @@ void pumpPeers(CollaborationPeer&                               host,
     pumpPeers(host, guests, 3U);
     // 拒绝发生在 revision 分配前，两侧模型与水位均保持初始状态。
     if ( host.appliedRevision() != 0U ||
-         host.stats().unauthorizedEditRequests != 1U || !hostModel.empty() ||
+         host.stats().unauthorizedEditRequests != 2U || !hostModel.empty() ||
          !guestModel.empty() ) {
         return false;
     }
@@ -932,7 +977,7 @@ void pumpPeers(CollaborationPeer&                               host,
     pumpPeers(host, guests, 3U);
     // 第二次越权计数增加，但 revision 和两侧模型大小不变。
     return host.appliedRevision() == 1U &&
-           host.stats().unauthorizedEditRequests == 2U &&
+           host.stats().unauthorizedEditRequests == 3U &&
            hostModel.size() == 1U && guestModel.size() == 1U;
 }
 
@@ -1143,6 +1188,7 @@ void pumpPeers(CollaborationPeer&                               host,
                               guestConfig.creator) ) {
         return false;
     }
+
     // 先让访客消费身份和权限广播，建立正常在线状态。
     guest.update();
 
@@ -1233,6 +1279,13 @@ void pumpPeers(CollaborationPeer&                               host,
         return false;
     }
 
+    // 会话序号测试只比较顺序，访客操作须先得到房主显式授权。
+    if ( !host.setParticipantPermissions(
+             GUEST_ID,
+             MMM::Network::Collaboration::COLLABORATION_PERMISSION_ALL) ) {
+        return false;
+    }
+
     // 连续提交两条请求，但房主本轮上限只会应用第一条。
     const auto firstOperation  = makeOperation(GUEST_ID, 1);
     const auto queuedOperation = makeOperation(GUEST_ID, 2);
@@ -1261,6 +1314,21 @@ void pumpPeers(CollaborationPeer&                               host,
                               guestConfig.participantId,
                               guestConfig.sessionId,
                               guestConfig.creator) ) {
+        return false;
+    }
+
+    // 重连是一次新加入，默认只读；再次授权后才测试新会话序号。
+    // 稳定 ParticipantId 不应使旧会话的编辑授权自动继承到新会话。
+    // 检查房主权威权限表，避免仅凭访客本地显示状态作出安全判断。
+    const auto rejoinedPermission =
+        host.participantPermissions().find(GUEST_ID);
+    if ( rejoinedPermission == host.participantPermissions().end() ||
+         rejoinedPermission->second != 0U ) {
+        return false;
+    }
+    if ( !host.setParticipantPermissions(
+             GUEST_ID,
+             MMM::Network::Collaboration::COLLABORATION_PERMISSION_ALL) ) {
         return false;
     }
 

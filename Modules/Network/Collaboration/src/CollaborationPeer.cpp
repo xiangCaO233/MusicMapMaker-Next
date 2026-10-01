@@ -235,14 +235,13 @@ bool CollaborationPeer::addParticipant(PeerId             peerId,
                                         std::move(sessionId),
                                         std::move(creator) };
     m_participantIdentities.emplace(peerId, identity);
-    // 当前协议默认新访客拥有全部已知权限，房主可随后收窄。
-    m_participantPermissions.emplace(peerId, COLLABORATION_PERMISSION_ALL);
+    // 新访客初始只读；只有房主显式授权后才能提交谱面变更。
+    m_participantPermissions.emplace(peerId, 0U);
     // 向所有访客广播新身份与权限，新访客也会收到自身权威镜像。
     for ( const PeerId participantId : m_participants ) {
         static_cast<void>(sendMessage(participantId, identity));
-        static_cast<void>(sendMessage(
-            participantId,
-            ParticipantPermissions{ peerId, COLLABORATION_PERMISSION_ALL }));
+        static_cast<void>(
+            sendMessage(participantId, ParticipantPermissions{ peerId, 0U }));
     }
     // 两条广播各自独立，部分发送失败不会撤销已发送或本地登记。
     // 若房主已有可独立恢复快照，新访客可跳过日志起点限制直接追平。

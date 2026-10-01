@@ -506,7 +506,7 @@ void CollaborationView::onUpdate(LayoutContext&, UIManager* sourceManager)
 
     if ( m_room->isActive() ) {
         // 活动房间先绘制可改变连接状态的主区。
-        drawActiveRoom();
+        drawActiveRoom(sourceManager);
         // drawActiveRoom 可能处理断开按钮，因此聊天前复查。
         if ( m_room->isActive() ) drawChatSection();
         drawLogSection(sourceManager);
@@ -1446,12 +1446,18 @@ void CollaborationView::advancePendingHostStart()
 }
 
 /// @brief 绘制已连接房间的详情、请求、同步设置、参与者和断开操作。
+/// @param sourceManager 用于打开实际生效的自动备份设置页。
 ///
 /// 房间详情对所有成员只读；加入请求与权限管理仅房主可见。资源同步进度来自房间
 /// 快照，视野发布率在滑块编辑结束时提交，渲染模式属于本机设置并立即持久化。
 /// 断开按钮可能使 room 在本帧转为非活动，调用方会在进入聊天前再次检查。
+/// 房主还会看到自动备份风险提示，判断使用项目覆盖后的有效配置。
+/// 提示本身不改动备份设置；只有点击入口才打开对应的设置页。
+/// 即使尚无待审批访客，房主也能在开房后立即看到备份风险。
+/// 房间退出后不再绘制该提醒，避免误指向普通离线编辑状态。
+/// 项目覆盖与软件默认值只在 UI 线程读取，不跨线程修改会话配置。
 /// @warning UI
-/// 热路径：活动房间每帧执行，只读取内存快照；网络写入由明确控件触发。
+/// 热路径：活动房间每帧执行，只读取内存快照；网络写入和打开设置由明确控件触发。
 /// @details 加入申请循环先记录
 /// requestId，结束表格遍历后才调用批准或拒绝接口，避免 房间服务同步更新
 /// pendingJoinRequests 导致正在遍历的引用失效。同一帧批准优先。
@@ -1461,7 +1467,8 @@ void CollaborationView::advancePendingHostStart()
 ///
 /// 参与者表把本地 Peer 固定放在首行，远端随后按快照顺序绘制；访客额外看到自己
 /// 权限的只读摘要，房主则在每个远端行内管理权限和移除成员。
-void CollaborationView::drawActiveRoom()
+/// 审批区说明新成员默认只读，避免把“同意入房”误解为“授予编辑权限”。
+void CollaborationView::drawActiveRoom(UIManager* sourceManager)
 {
     // 样式引用用于计算表格标签和动作列宽度。
     const auto& style = ImGui::GetStyle();
@@ -1514,10 +1521,58 @@ void CollaborationView::drawActiveRoom()
     }
 
     if ( m_room->isHost() ) {
+        // 项目级覆盖优先于软件设置，提醒必须依据会话真正使用的配置。
+        // 全局备份即使开启，项目覆盖为关闭时也仍应提醒房主。
+        const auto* project =
+            Logic::EditorEngine::instance().getCurrentProject();
+        const auto& softwareBackup =
+            Config::AppConfig::instance().getEditorSettings().autoBackup;
+        const bool projectOverride =
+            project && project->m_settings.m_autoBackupOverride.has_value();
+        // 无项目覆盖时保持对 AppConfig 内存值的引用，不复制重配置。
+        const auto& backup = projectOverride
+                                 ? *project->m_settings.m_autoBackupOverride
+                                 : softwareBackup;
+        // 事件模式如果没有任何触发条件，也不会实际产生自动备份。
+        // 定时模式的间隔由既有配置校验负责，这里只检查是否会被调度。
+        const bool backupEnabled =
+            backup.mode == Config::AutoSaveMode::Timed ||
+            (backup.mode == Config::AutoSaveMode::EventTriggered &&
+             (backup.onObjectModified || backup.onBeatmapSwitch ||
+              backup.onImGuiWindowFocusLost || backup.onNativeWindowFocusLost));
+        if ( !backupEnabled ) {
+            // 提醒只在房主侧出现，不向访客暴露本机备份策略。
+            ImGui::Spacing();
+            // 窄侧栏使用换行文本，完整风险说明不因窗口尺寸被截断。
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  ImVec4(1.0F, 0.65F, 0.25F, 1.0F));
+            ImGui::TextWrapped("%s",
+                               TR("ui.collaboration.backup_disabled").data());
+            ImGui::PopStyleColor();
+            if ( sourceManager &&
+                 FeedbackButton(
+                     TR(projectOverride
+                            ? "ui.collaboration.backup_open_project_settings"
+                            : "ui.collaboration.backup_open_software_settings")
+                         .data()) ) {
+                // 设置页定位与生效层级保持一致，避免房主改了未生效的全局项。
+                sourceManager->openSettingsWindow(
+                    projectOverride ? Event::SettingsTab::Project
+                                    : Event::SettingsTab::Software);
+            }
+        }
+
         // 访客不接收或审批其他人的加入请求。
         ImGui::Spacing();
         if ( FeedbackCollapsingHeader(
                  TR("ui.collaboration.join_requests").data(), headerFlags) ) {
+            // 与权威 Peer 默认值一致，审批不隐含任何谱面写权限。
+            // 窄侧栏中提示需要自动换行，避免默认权限说明被裁掉。
+            ImGui::PushStyleColor(
+                ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped(
+                "%s", TR("ui.collaboration.join_read_only_hint").data());
+            ImGui::PopStyleColor();
             // pendingJoinRequests 是房间服务发布的只读快照。
             const auto& requests = m_room->pendingJoinRequests();
             if ( requests.empty() ) {
