@@ -1073,6 +1073,8 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "rtcDiagnosticLogging", settings.rtcDiagnosticLogging },
         { "collaborationViewportRenderMode",
           settings.collaborationViewportRenderMode },
+        { "collaborationChatBeijingTime",
+          settings.collaborationChatBeijingTime },
         { "collaborationServer", settings.collaborationServer },
         { "autoUploadPgoProfiles", settings.autoUploadPgoProfiles },
         { "pgoProfileUploadConsentAsked",
@@ -1220,6 +1222,9 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     settings.collaborationViewportRenderMode =
         json.value("collaborationViewportRenderMode",
                    CollaborationViewportRenderMode::Filled);
+    // 旧配置未存聊天时间偏好时默认显示更直观的北京时间。
+    settings.collaborationChatBeijingTime =
+        json.value("collaborationChatBeijingTime", true);
     // 协作端点由子结构校验，视野模式仅控制本地渲染。
     settings.collaborationServer =
         json.value("collaborationServer", CollaborationServerSettings{});

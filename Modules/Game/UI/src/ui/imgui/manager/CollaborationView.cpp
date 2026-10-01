@@ -78,6 +78,30 @@ constexpr std::string_view HOST_ROOM_COVER_TEXTURE_KEY = "##HostRoomCover";
 constexpr const char* ROOM_COVER_FILE_DIALOG_ID =
     "CollaborationRoomCoverPicker";
 
+/// @brief 将 Unix 毫秒时间换算为固定 UTC+8 的当日时分秒。
+/// @param unixMilliseconds 本机收到消息时记录的绝对时间。
+/// @return 与操作系统本地时区无关的北京时间时分秒。
+/// @warning UI 热路径：每条可见消息每帧调用，仅执行常量次整数运算。
+/// @details UTC+8 是固定偏移，不读取本地时区，也不应用夏令时。
+/// 历史记录在收到消息时已经固定，格式化仅做当天秒数的计算。
+[[nodiscard]] constexpr std::array<std::int64_t, 3> beijingClockTime(
+    std::int64_t unixMilliseconds)
+{
+    // 负时间使用向下取整，确保 Unix 纪元前的边界仍可正确回卷。
+    auto seconds = unixMilliseconds / 1000;
+    if ( unixMilliseconds < 0 && unixMilliseconds % 1000 != 0 ) --seconds;
+    constexpr std::int64_t SECONDS_PER_DAY = 24 * 60 * 60;
+    // 先加北京偏移再进行正模回卷，跨 UTC 日期时只保留钟面时间。
+    const auto secondsOfDay =
+        ((seconds + 8 * 60 * 60) % SECONDS_PER_DAY + SECONDS_PER_DAY) %
+        SECONDS_PER_DAY;
+    return { secondsOfDay / 3600, secondsOfDay / 60 % 60, secondsOfDay % 60 };
+}
+
+static_assert(beijingClockTime(16LL * 60 * 60 * 1000) ==
+              std::array<std::int64_t, 3>{ 0, 0, 0 });
+static_assert(beijingClockTime(-1) == std::array<std::int64_t, 3>{ 7, 59, 59 });
+
 /// @brief 判断编辑器是否仍存在非欢迎页谱面会话。
 /// @return 任一会话不是 Logo 占位时返回 true。
 ///
@@ -1748,8 +1772,10 @@ void CollaborationView::drawActiveRoom()
 /// 校验为协议最大字节数加终止符；Enter
 /// 和按钮共用发送路径，失败保留原输入供重试。
 /// @warning UI 热路径：活动房间每帧绘制内存消息；网络发送只在显式提交时发生。
-/// @details 聊天历史的时间是进入房间后的相对经过时间，不表示本地时区墙钟。消息
-/// sequence 同时用于行 ID 和判断是否有新末尾消息，只有后者变化才自动滚动。
+/// @details 时间偏好只影响本机显示，默认用消息接收时的固定 UTC+8 时钟；切换
+/// 为联机时长时使用进入房间后的相对时间。sequence 用于行 ID 和自动滚动判断。
+/// 时间选择保存在本机 EditorSettings，不向协作房间广播；旧配置沿用北京默认值。
+/// 接收时刻来自本机墙钟，远端发送者时钟和网络传输时间均不参与计算。
 ///
 /// 发送结果不是 Accepted 时保留输入缓冲并显示错误；无论成功失败都请求下一帧重新
 /// 聚焦输入框，使连续聊天和修正重试都不需要再次点击。
@@ -1766,6 +1792,28 @@ void CollaborationView::drawChatSection()
         return;
     }
 
+    // 时间显示偏好只影响本地历史，切换后已有消息立即按所选方式重绘。
+    // 下拉框紧贴标题，保持聊天内容和输入区的固定布局。
+    auto& settings = Config::AppConfig::instance().getEditorSettings();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(TR("ui.collaboration.chat.time_mode").data());
+    ImGui::SameLine();
+    int timeMode = settings.collaborationChatBeijingTime ? 0 : 1;
+    // 顺序与 timeMode 的 0/1 取值对应，零值保持北京时间默认。
+    const char* timeModes[]{
+        TR("ui.collaboration.chat.time_mode.beijing").data(),
+        TR("ui.collaboration.chat.time_mode.elapsed").data(),
+    };
+    ImGui::SetNextItemWidth(-1.0F);
+    if ( FeedbackCombo("##CollaborationChatTimeMode",
+                       &timeMode,
+                       timeModes,
+                       IM_ARRAYSIZE(timeModes)) ) {
+        // 明确选择时才落盘，避免每帧执行文件系统操作。
+        settings.collaborationChatBeijingTime = timeMode == 0;
+        Config::AppConfig::instance().save();
+    }
+
     // 消息快照由房间服务拥有，历史区固定八行便于侧栏滚动。
     const auto& messages      = m_room->chatMessages();
     const float historyHeight = ImGui::GetTextLineHeightWithSpacing() * 8.0F;
@@ -1777,15 +1825,27 @@ void CollaborationView::drawChatSection()
             ImGui::TextDisabled("%s", TR("ui.collaboration.chat.empty").data());
         } else {
             for ( const auto& message : messages ) {
-                // elapsedMilliseconds 转为房间内相对分钟和秒数。
-                const auto totalSeconds = message.elapsedMilliseconds / 1000U;
-                const auto minutes      = totalSeconds / 60U;
-                const auto seconds      = totalSeconds % 60U;
                 // sequence 低位作为本帧稳定 ImGui ID，文本本身无需隐藏后缀。
                 ImGui::PushID(static_cast<int>(message.sequence & 0x7FFFFFFFU));
-                ImGui::TextDisabled("[%02llu:%02llu]",
-                                    static_cast<unsigned long long>(minutes),
-                                    static_cast<unsigned long long>(seconds));
+                if ( settings.collaborationChatBeijingTime ) {
+                    // 已记录的绝对时间不随系统时区或切换偏好改变。
+                    // 固定八位钟面宽度适合窄侧栏，消息仍可按正文自动折行。
+                    const auto clock =
+                        beijingClockTime(message.receivedUnixMilliseconds);
+                    ImGui::TextDisabled("[%02lld:%02lld:%02lld]",
+                                        static_cast<long long>(clock[0]),
+                                        static_cast<long long>(clock[1]),
+                                        static_cast<long long>(clock[2]));
+                } else {
+                    // 兼容旧版的房间相对分钟和秒数展示。
+                    // 分钟不按小时回卷，长时间联机仍能看到完整经过时长。
+                    const auto totalSeconds =
+                        message.elapsedMilliseconds / 1000U;
+                    ImGui::TextDisabled(
+                        "[%02llu:%02llu]",
+                        static_cast<unsigned long long>(totalSeconds / 60U),
+                        static_cast<unsigned long long>(totalSeconds % 60U));
+                }
                 ImGui::SameLine();
                 // Creator 使用主题选中色，与普通消息正文区分。
                 ImGui::TextColored(

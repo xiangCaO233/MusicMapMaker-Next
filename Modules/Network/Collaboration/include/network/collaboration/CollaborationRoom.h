@@ -71,6 +71,8 @@ struct CollaborationChatEntry {
     std::uint64_t sequence = 0;
     /// @brief 从本次房间启动起经过的毫秒数。
     std::uint64_t elapsedMilliseconds = 0;
+    /// @brief 本机收到消息时的 Unix 毫秒时间，用于按固定 UTC+8 显示。
+    std::int64_t receivedUnixMilliseconds = 0;
     /// @brief 原始发送者的临时路由槽位。
     PeerId peerId = 0;
     /// @brief 原始发送者的稳定协作者标识。

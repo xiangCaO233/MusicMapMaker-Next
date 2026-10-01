@@ -474,6 +474,36 @@ bool testCollaborationViewportRenderModeRoundTrip()
     return true;
 }
 
+/// @brief 验证聊天时间偏好默认北京时间并允许保存联机时长模式。
+/// @return 新旧配置与显式切换均恢复预期值时返回 true。
+/// @details 不建立协作连接，只验证本地偏好向 JSON 的兼容读写。
+/// 缺失字段代表既有用户配置，必须与新建配置的北京默认行为一致。
+/// false 代表用户明确改选联机时长，不能在重新加载后恢复默认值。
+bool testCollaborationChatTimePreference()
+{
+    // 空配置代表升级前的用户设置，必须采用北京时间作为默认选项。
+    const auto legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    MMM::Config::EditorSettings elapsed;
+    // 选用非默认值写出，确保序列化没有只依赖字段初始化。
+    elapsed.collaborationChatBeijingTime = false;
+    const nlohmann::json encoded         = elapsed;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+
+    // 同时检查 JSON 中确实存在 false 与恢复后的字段，避免单向实现遗漏。
+    if ( !legacy.collaborationChatBeijingTime ||
+         encoded.value("collaborationChatBeijingTime", true) ||
+         restored.collaborationChatBeijingTime ) {
+        // 日志直接指出时间偏好边界，便于与视野模式用例区分。
+        XERROR(
+            "Collaboration chat time preference did not preserve defaults or "
+            "choice");
+        return false;
+    }
+    // 通过表示旧配置与新配置的选择都已得到保存。
+    return true;
+}
+
 /// @brief 验证批量音量编辑快捷键可持久化且旧配置默认不占用键位。
 /// @return 自定义组合键往返无损且缺失字段保持禁用时返回 true。
 /// @note 同时检查全部修饰键，避免只比较主键而漏掉组合语义。
@@ -1037,6 +1067,7 @@ int main()
                    testProfessionalModeConfigMigration() &&
                    testVerticalObjectDragConfigRoundTrip() &&
                    testCollaborationViewportRenderModeRoundTrip() &&
+                   testCollaborationChatTimePreference() &&
                    testSelectedVolumeShortcutRoundTrip() &&
                    testSelectedAnnotationShortcutRoundTrip() &&
                    testAnnotationDetailVisibilityRoundTrip() &&

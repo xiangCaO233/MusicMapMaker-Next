@@ -1352,6 +1352,8 @@ void CollaborationRoom::appendLog(CollaborationLogEventType type, PeerId peerId,
 ///
 /// @details 只接受当前参与者表中的 peer，身份和 creator 从权威表补齐，不信任
 /// 消息自带显示字段。记录按会话相对时间编号，超过上限删除最旧前缀。
+/// 同时保存本机接收时的绝对时钟，切换 UI 时间模式无需重写已有记录。
+/// 绝对时间不进入协议，避免依赖远端设备的时钟准确性。
 ///
 /// @note Peer 已完成聊天文本格式验证；Room 只绑定权威身份并维护 UI 有界历史，
 ///       不把聊天写入 BeatMap 或操作日志。
@@ -1363,13 +1365,18 @@ void CollaborationRoom::handleChatMessage(
 
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - m_startedAt);
-    m_chatMessages.push_back({ m_nextChatSequence++,
-                               static_cast<std::uint64_t>(
-                                   std::max<std::int64_t>(0, elapsed.count())),
-                               message.peerId,
-                               participant->second.participantId,
-                               participant->second.creator,
-                               message.text });
+    // 两种时间都只在接收时采样一次，系统时间后来变化不会改写历史。
+    m_chatMessages.push_back(
+        { m_nextChatSequence++,
+          static_cast<std::uint64_t>(
+              std::max<std::int64_t>(0, elapsed.count())),
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::system_clock::now().time_since_epoch())
+              .count(),
+          message.peerId,
+          participant->second.participantId,
+          participant->second.creator,
+          message.text });
     if ( m_chatMessages.size() > MAX_COLLABORATION_CHAT_ENTRIES ) {
         m_chatMessages.erase(
             m_chatMessages.begin(),

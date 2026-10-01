@@ -771,6 +771,9 @@ struct EditorSettings {
         CollaborationViewportRenderMode::Filled
     };
 
+    /// @brief 聊天记录默认显示北京时间；关闭时显示本次联机经过时间。
+    bool collaborationChatBeijingTime{ true };
+
     /// @brief 公网协作目录与信令服务器连接配置。
     CollaborationServerSettings collaborationServer;
 
