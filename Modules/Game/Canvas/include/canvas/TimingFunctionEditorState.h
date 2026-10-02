@@ -57,7 +57,8 @@ struct TimingFunctionEditorState {
     {
         // 修改范围后旧缓存不再对应秒域，不能只凭候选指针存在就应用。
         if ( !m_fit || !m_fitFunction ||
-             timingFunctionDuration(*m_fitFunction) != curve.m_duration ||
+             timingFunctionDuration(*m_fitFunction) !=
+                 timingInterpolationVariableDuration(curve) ||
              m_fit->m_expression.size() >= m_expression.size() ) {
             m_fitError = "拟合结果已失效，请重新拟合。";
             return false;
@@ -66,8 +67,8 @@ struct TimingFunctionEditorState {
         candidate.m_curve    = TimingCurve::Custom;
         candidate.m_function = m_fitFunction;
         const double start   = evaluateTimingFunction(*m_fitFunction, 0);
-        candidate.m_endValue =
-            evaluateTimingFunction(*m_fitFunction, curve.m_duration);
+        candidate.m_endValue = evaluateTimingFunction(
+            *m_fitFunction, timingInterpolationVariableDuration(curve));
         // 完整域校验也覆盖两端均合法、但区间中间越界的 BPM 曲线。
         if ( !isValidTimingInterpolation(candidate, effect, start) ) {
             m_fitError =
@@ -81,7 +82,7 @@ struct TimingFunctionEditorState {
         m_expression[m_fit->m_expression.size()] = '\0';
         curve                                    = std::move(candidate);
         startValue                               = start;
-        m_compiledDuration                       = curve.m_duration;
+        m_compiledDuration = timingInterpolationVariableDuration(curve);
         m_error.clear();
         m_fitError.clear();
         return true;

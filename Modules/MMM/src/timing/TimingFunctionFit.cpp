@@ -135,7 +135,7 @@ bool solve(std::span<const TimingCurvePoint> points, double duration,
 /// @param family 已通过求解和误差比较的函数族。
 /// @param columns 有效系数数量，与求解矩阵一致。
 /// @param c 双精度系数，至少保存十七位有效数字。
-/// @param duration 实际秒域长度，不隐式存入宿主变量。
+/// @param duration 实际自变量域长度，不隐式存入宿主变量。
 /// @return 能由受限数学编译器重新读取的完整表达式。
 /// 多项式采用 Horner 结构，避免重复计算多个高次幂。
 /// 其他族使用加权初等函数组合，与 basis 保持一一对应。
@@ -158,7 +158,8 @@ std::string expression(Family family, std::size_t columns,
     std::string value = fmt::format("({:.17g})", c[0]);
     for ( std::size_t column = 1; column < columns; ++column ) {
         std::string term;
-        // 归一化仅存在于公式中的显式 t/duration，公开 t 仍是实际秒。
+        // 归一化仅存在于公式中的显式 t/duration，公开 t
+        // 仍以当前自变量单位计量。
         switch ( family ) {
         case Family::Fourier:
             term = fmt::format("{}(2*pi*{}*{})",
@@ -180,7 +181,7 @@ std::string expression(Family family, std::size_t columns,
 
 /// @brief 校验绘制点后比较有效候选，误差接近时优先简单表达式。
 /// @warning 用户点击拟合的低频路径；不读注册表、不发布中间谱面修改。
-/// @param points 覆盖完整段落的实际秒域采样。
+/// @param points 覆盖完整段落的实际自变量域采样。
 /// @param duration 当前编辑定义域长度。
 /// @return 最优有效候选及 RMS、最大绝对误差，或输入错误说明。
 /// 调用方必须主动触发拟合，不能在连续鼠标事件中重复求解。
@@ -197,10 +198,12 @@ std::string expression(Family family, std::size_t columns,
 std::expected<TimingFunctionFit, std::string> fitTimingFunction(
     std::span<const TimingCurvePoint> points, double duration)
 {
-    if ( !std::isfinite(duration) || duration < .001 || points.size() < 8 ||
+    // 数学域可以是秒或拍，最小时长约束只属于段落的秒域范围。
+    // 很短的合法秒段可能不足 0.001 拍，不能用毫秒下限拒绝拍域函数。
+    if ( !std::isfinite(duration) || duration <= 0 || points.size() < 8 ||
          points.size() > MAX_POINTS )
         return std::unexpected(
-            "拟合需要至少 8 个绘制点，且段落时长至少为 1 ms。");
+            "拟合需要至少 8 个绘制点，自变量范围须为有限正数。");
     if ( std::abs(points.front().m_time) > 1e-9 ||
          std::abs(points.back().m_time - duration) > 1e-9 )
         return std::unexpected("请从段落起点画到终点，覆盖整个范围。");
@@ -210,7 +213,7 @@ std::expected<TimingFunctionFit, std::string> fitTimingFunction(
         if ( !std::isfinite(point.m_time) || !std::isfinite(point.m_value) ||
              point.m_time <= previous || point.m_time < 0 ||
              point.m_time > duration )
-            return std::unexpected("绘制点须有限且按时间严格递增。");
+            return std::unexpected("绘制点须有限且按自变量严格递增。");
         previous = point.m_time;
         minimum  = std::min(minimum, point.m_value);
         maximum  = std::max(maximum, point.m_value);

@@ -819,6 +819,46 @@ bool timelineRangesConflict(const TimelineComponent& left,
                1e-9;
 }
 
+/// @brief 在编辑提交边界使用当前红线重建节拍定义，拒绝过期 UI 映射。
+/// @param context 拥有权威时间线的会话，调用方已经处于逻辑编辑路径。
+/// @param candidate 独立的新值，失败时不执行任何撤销动作。
+/// @warning 用户命令低频入口会复制 BPM 字段，禁止放入每帧展示查询。
+// 窗口打开后协作编辑可能改变 BPM，提交不能信任旧 UI 域。
+// 源组件由会话同步约束保护，借用仅存活于本次命令。
+// 只修改候选，失败不执行动作，不改写原注册表。
+// 拍域终值按当前红线准备，不直接沿用旧工作副本缓存。
+// 撤销保留完整 before/after，映射不能拆成独立事务。
+// 普通点和秒域事件不遍历红线，保持原成本边界。
+// 最后范围和数学合法性仍交给 canPlace 检查。
+bool prepareTimelineBeatInterpolation(const SessionContext& context,
+                                      TimelineComponent&    candidate)
+{
+    if ( !candidate.m_interpolation ||
+         candidate.m_interpolation->m_variable != TimingVariable::Beat )
+        return true;
+    std::vector<Timing> redLines;
+    // 时间戳只在 ECS 与领域模型边界转换一次，不混用毫秒与秒。
+    const auto view = context.timelineRegistry.view<const TimelineComponent>();
+    for ( auto entity : view ) {
+        const auto& item = view.get<const TimelineComponent>(entity);
+        if ( item.m_effect != TimingEffect::BPM ) continue;
+        Timing timing;
+        timing.m_timestamp             = item.m_timestamp * 1000;
+        timing.m_timingEffectParameter = item.m_value;
+        timing.m_bpm                   = item.m_value;
+        timing.m_interpolation         = item.m_interpolation;
+        redLines.push_back(std::move(timing));
+    }
+    const double fallback =
+        context.currentBeatmap &&
+                context.currentBeatmap->m_baseMapMetadata.preference_bpm > 0
+            ? context.currentBeatmap->m_baseMapMetadata.preference_bpm
+            : 120;
+    // 绑定只修改候选副本，源组件和旧撤销记录的缓存保持不可变。
+    return bindTimingInterpolationBeatAxis(
+        *candidate.m_interpolation, candidate.m_timestamp, redLines, fallback);
+}
+
 /// @brief 校验插值段落和同类型时间点的互斥范围。
 /// @details 起终边界可相接，内部不能包含同类型普通点或另一段落。
 ///           UI 只作提示，逻辑入口重新验证，避免排队期间谱面变化使旧校验失效。
@@ -3181,7 +3221,8 @@ void ActionController::handleCommand(const CmdUpdateTimelineEvent& cmd)
         // 曲线函数、控制点、采样率或终点变化都必须进入同一撤销记录。
         if ( cmd.interpolationOverride )
             newTl.m_interpolation = cmd.interpolationOverride;
-        if ( !canPlaceTimelineInterpolation(
+        if ( !prepareTimelineBeatInterpolation(m_ctx, newTl) ||
+             !canPlaceTimelineInterpolation(
                  m_ctx.timelineRegistry, newTl, cmd.entity) )
             return;
         if ( cmd.metadataOverride ) {
@@ -3236,6 +3277,7 @@ void ActionController::handleCommand(const CmdUpdateTimelineEvents& cmd)
         // 提供替换时一次性复制全部曲线字段，不逐个字段制造独立撤销操作。
         if ( update.interpolationOverride )
             newTimeline.m_interpolation = update.interpolationOverride;
+        if ( !prepareTimelineBeatInterpolation(m_ctx, newTimeline) ) return;
 
         if ( update.metadataOverride ) {
             newTimeline.m_metadata = *update.metadataOverride;
@@ -3396,7 +3438,9 @@ void ActionController::handleCommand(const CmdCreateTimelineEvent& cmd)
     if ( !isValidTimelineValue(cmd.type, cmd.value) ) return;
     TimelineComponent newTl{ cmd.time, cmd.type, cmd.value };
     newTl.m_interpolation = cmd.interpolation;
-    if ( !canPlaceTimelineInterpolation(m_ctx.timelineRegistry, newTl) ) return;
+    if ( !prepareTimelineBeatInterpolation(m_ctx, newTl) ||
+         !canPlaceTimelineInterpolation(m_ctx.timelineRegistry, newTl) )
+        return;
     // 在已有普通起点上拖出段落时，将该点升级为段落而非制造重复红线。
     // 旧元数据和组件进入同一个动作，撤销可准确退回普通时间点。
     // 同一手势从已有点开始只创建一种编辑语义，不同时保留两个同刻起点。

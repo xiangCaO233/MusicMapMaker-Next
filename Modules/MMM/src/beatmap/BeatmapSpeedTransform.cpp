@@ -138,7 +138,9 @@ bool scaleTiming(Timing& timing, double speed)
         // 曲线归一形状不变，贝塞尔时间控制点也无需另行缩放。
         // 只有 BPM 两端随时间速度缩放，滚动等参数继续沿用领域值。
         auto& curve = *timing.m_interpolation;
-        if ( curve.m_curve == TimingCurve::Custom ) {
+        // 拍数与分拍在等比例变速后不变，不能把拍域 t 再乘速度。
+        if ( curve.m_curve == TimingCurve::Custom &&
+             curve.m_variable == TimingVariable::Time ) {
             if ( !curve.m_function ) return false;
             // t 代表秒而非比例，变速要重写自变量；BPM 还要同时缩放输出。
             const auto expression = rescaleTimingFunctionExpression(
@@ -154,6 +156,8 @@ bool scaleTiming(Timing& timing, double speed)
         } else
             curve.m_duration /= speed;
         timing.m_interpolation->m_samplesPerSecond *= speed;
+        // 缓存含秒域锚点，目标 BPM 与所有时间戳缩放完成后重新绑定。
+        curve.m_beatAxis.reset();
         if ( timing.m_timingEffect == TimingEffect::BPM &&
              curve.m_curve != TimingCurve::Custom )
             curve.m_endValue *= speed;

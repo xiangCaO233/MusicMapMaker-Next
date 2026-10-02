@@ -140,10 +140,25 @@ bool isValidTimingInterpolation(const TimingInterpolation& interpolation,
          interpolation.m_duration < 0.001 ||
          interpolation.m_samplesPerSecond <= 0.0 ||
          interpolation.m_duration * interpolation.m_samplesPerSecond <= 0.0 ||
-         interpolation.m_duration * interpolation.m_samplesPerSecond >
-             static_cast<double>(MAX_TIMING_INTERPOLATION_SAMPLES) ||
+         (interpolation.m_variable == TimingVariable::Time &&
+          interpolation.m_duration * interpolation.m_samplesPerSecond >
+              static_cast<double>(MAX_TIMING_INTERPOLATION_SAMPLES)) ||
          interpolation.m_curve < TimingCurve::Linear ||
          interpolation.m_curve > TimingCurve::Custom )
+        return false;
+    // 分拍必须为正且预算有界；BPM 禁止使用自己的拍长定义自变量。
+    // 文件中的派生拍长用于重新编译，播放前由完整红线时间轴重新绑定。
+    if ( interpolation.m_variable != TimingVariable::Time &&
+         interpolation.m_variable != TimingVariable::Beat )
+        return false;
+    if ( interpolation.m_variable == TimingVariable::Beat &&
+         (effect == TimingEffect::BPM || interpolation.m_beatNumerator <= 0 ||
+          interpolation.m_beatDenominator <= 0 ||
+          interpolation.m_beatNumerator > 65536 ||
+          interpolation.m_beatDenominator > 65536 ||
+          !std::isfinite(interpolation.m_beatDuration) ||
+          interpolation.m_beatDuration <= 0 ||
+          timingInterpolationSampleCount(interpolation) == 0) )
         return false;
     // 控制点限制到单位方形，保证正 BPM 不会由曲线过冲变成负数。
     for ( double value : { interpolation.m_controlX1,
@@ -160,13 +175,14 @@ bool isValidTimingInterpolation(const TimingInterpolation& interpolation,
         // 两端来自表达式，外部 Timing 参数不得与函数首值产生跳变。
         if ( !interpolation.m_function ||
              timingFunctionDuration(*interpolation.m_function) !=
-                 interpolation.m_duration ||
+                 timingInterpolationVariableDuration(interpolation) ||
              !sameFunctionValue(
                  evaluateTimingFunction(*interpolation.m_function, 0),
                  startValue) ||
              !sameFunctionValue(
-                 evaluateTimingFunction(*interpolation.m_function,
-                                        interpolation.m_duration),
+                 evaluateTimingFunction(
+                     *interpolation.m_function,
+                     timingInterpolationVariableDuration(interpolation)),
                  interpolation.m_endValue) )
             return false;
         const auto [minimum, maximum] =
@@ -194,15 +210,39 @@ bool isValidTimingInterpolation(const TimingInterpolation& interpolation,
 double evaluateTimingInterpolation(const TimingInterpolation& interpolation,
                                    double startValue, double progress)
 {
-    // 自定义结果是绝对参数，不能再把它当成起终值之间的比例。
+    // 时间比例先转成当前自变量；变 BPM 时不能把拍数当成线性秒数。
+    return evaluateTimingInterpolationVariable(
+        interpolation,
+        startValue,
+        timingInterpolationVariableAtSeconds(
+            interpolation,
+            std::clamp(progress, 0.0, 1.0) * interpolation.m_duration));
+}
+
+/// @brief 在所选自变量域中执行预设或绝对参数函数。
+/// @param variable 距段首的秒数或拍数，由段落轴类型决定。
+/// @note 手绘拟合在此域等距采点，输出预览则先完成时间到拍位换算。
+/// @warning 每帧绘图路径，固定算术与缓存查找，不分配或复制共享所有权。
+// 自定义函数输出绝对参数，预设才使用起终值插值。
+// 贝塞尔横轴坐标属于当前自变量比例，不固定为秒比例。
+// 手绘直接传入拍位，时间预览须先转换为拍位。
+// 分拍不改变函数，也不把连续预览变成导出阶梯。
+// 稀疏输出之间仍可显示真实曲率。
+// 非法域返回首值，避免编辑副本造成除零。
+double evaluateTimingInterpolationVariable(
+    const TimingInterpolation& interpolation, double startValue,
+    double variable)
+{
+    const double duration = timingInterpolationVariableDuration(interpolation);
+    if ( !std::isfinite(duration) || duration <= 0 ) return startValue;
+    variable = std::clamp(variable, 0.0, duration);
+    // 自定义函数直接输出绝对参数，预设只将自变量归一为曲线进度。
     if ( interpolation.m_curve == TimingCurve::Custom &&
          interpolation.m_function )
-        return evaluateTimingFunction(
-            *interpolation.m_function,
-            std::clamp(progress, 0.0, 1.0) * interpolation.m_duration);
+        return evaluateTimingFunction(*interpolation.m_function, variable);
     return std::lerp(startValue,
                      interpolation.m_endValue,
-                     curveProgress(interpolation, progress));
+                     curveProgress(interpolation, variable / duration));
 }
 
 /// @brief 用解析原函数计算 BPM 等参数的累计量。
@@ -223,6 +263,35 @@ double evaluateTimingInterpolation(const TimingInterpolation& interpolation,
 double integrateTimingInterpolation(const TimingInterpolation& interpolation,
                                     double startValue, double elapsedSeconds)
 {
+    // 节拍效果的累计量仍以秒计，不能直接把拍域积分误当作时间积分。
+    // 该分支仅服务非 BPM 参数；红线始终使用下面的解析秒域实现。
+    if ( interpolation.m_variable == TimingVariable::Beat ) {
+        if ( elapsedSeconds <= 0 ) return startValue * elapsedSeconds;
+        const double end = std::min(elapsedSeconds, interpolation.m_duration);
+        constexpr std::array nodes{ -.8611363115940526,
+                                    -.3399810435848563,
+                                    .3399810435848563,
+                                    .8611363115940526 };
+        constexpr std::array weights{ .3478548451374539,
+                                      .6521451548625461,
+                                      .6521451548625461,
+                                      .3478548451374539 };
+        double               result = 0;
+        // 固定分段高斯预算与输出密度分离，低密度不会改变连续参数积分。
+        for ( int part = 0; part < 64; ++part ) {
+            const double middle = end * (part + .5) / 64;
+            const double half   = end / 128;
+            for ( std::size_t i = 0; i < nodes.size(); ++i )
+                result +=
+                    half * weights[i] *
+                    evaluateTimingInterpolation(
+                        interpolation,
+                        startValue,
+                        (middle + half * nodes[i]) / interpolation.m_duration);
+        }
+        return result +
+               std::max(0.0, elapsedSeconds - end) * interpolation.m_endValue;
+    }
     // 首锚点以前沿用首值，因此负拍号仍与旧的等速 BPM 相位兼容。
     // 正时间只在曲线内部积分，再把终点后的常值尾段单独相加。
     if ( interpolation.m_curve == TimingCurve::Custom &&
@@ -330,14 +399,33 @@ double integrateTimingInterpolation(const TimingInterpolation& interpolation,
 /// @note 密度允许非整数，采样周期始终由 1 / Hz 决定。
 /// @note 不能用总数量均分区间，否则非整周期时会改变指定采样率。
 /// @note 数量上限在浮点转整数之前检查，避免不可信输入溢出。
+// 拍域预算取拍长除以有理分拍，与展示平均 Hz 无关。
+// 变 BPM 不让计数与真实反解出现不同数量。
+// 不足完整分拍仍写出段尾，不扩大用户时间范围。
+// 舍入处理只针对积分后接近整数的拍域预算。
+// 秒域保持 ceil(duration * Hz) 的非整周期语义。
+// 非有限预算在 size_t 转换前拒绝。
+// 零数量表示不能提交，不允许尝试创建数组。
 std::size_t timingInterpolationSampleCount(
     const TimingInterpolation& interpolation)
 {
     // 先向上取整间隔数，终点不是完整周期时额外保留最后一个短周期。
     // 周期内的样本仍用整数索引除密度，不改成均分总时长。
     // 上限约束最终数组容量，避免读取极端密度后申请不可控内存。
-    const double intervals =
-        std::ceil(interpolation.m_duration * interpolation.m_samplesPerSecond);
+    double raw =
+        interpolation.m_variable == TimingVariable::Beat
+            ? interpolation.m_beatDuration * interpolation.m_beatDenominator /
+                  interpolation.m_beatNumerator
+            : interpolation.m_duration * interpolation.m_samplesPerSecond;
+    // 红线积分和有理分拍可能把整数预算变成 n+一个舍入误差，不能多插重复尾点。
+    // 只在拍域消除双精度舍入，不改变用户按秒设置的非整周期契约。
+    if ( interpolation.m_variable == TimingVariable::Beat &&
+         std::isfinite(raw) &&
+         std::abs(raw - std::round(raw)) <=
+             16 * std::numeric_limits<double>::epsilon() *
+                 std::max(1.0, std::abs(raw)) )
+        raw = std::round(raw);
+    const double intervals = std::ceil(raw);
     if ( !std::isfinite(intervals) || intervals < 1.0 ||
          intervals > static_cast<double>(MAX_TIMING_INTERPOLATION_SAMPLES) )
         return 0;
@@ -354,7 +442,7 @@ std::size_t timingInterpolationSampleCount(
 /// @note 无插值输入直接返回原列表，旧谱面的重复事件语义不改变。
 /// @warning 保存低频路径，可分配样本容器；不得用于每帧 UI 或更新循环。
 std::vector<Timing> sampleTimingInterpolations(
-    const std::vector<Timing>& timings)
+    const std::vector<Timing>& timings, double fallbackBpm)
 {
     // 没有段落时保持普通时间点的顺序与重复事件语义。
     if ( std::none_of(timings.begin(), timings.end(), [](const auto& timing) {
@@ -369,7 +457,13 @@ std::vector<Timing> sampleTimingInterpolations(
             result.push_back(timing);
             continue;
         }
-        const auto& interpolation = *timing.m_interpolation;
+        auto interpolation = *timing.m_interpolation;
+        // 保存必须消费当前完整红线数据，不能依赖 UI 或旧快照中的拍长。
+        if ( !bindTimingInterpolationBeatAxis(interpolation,
+                                              timing.m_timestamp / 1000.0,
+                                              timings,
+                                              fallbackBpm) )
+            return {};
         if ( !isValidTimingInterpolation(interpolation,
                                          timing.m_timingEffect,
                                          timing.m_timingEffectParameter) )
@@ -379,9 +473,8 @@ std::vector<Timing> sampleTimingInterpolations(
         const auto count = timingInterpolationSampleCount(interpolation);
         for ( std::size_t index = 0; index < count; ++index ) {
             // 最后一次落在精确段尾；之前按 Hz 固定间隔而非均分缩短采样周期。
-            const double elapsed = std::min(
-                interpolation.m_duration,
-                static_cast<double>(index) / interpolation.m_samplesPerSecond);
+            const double elapsed =
+                timingInterpolationSampleElapsed(interpolation, index);
             // 值副本保留格式来源属性和采样相关领域字段。
             // 唯一被删除的语义是插值定义本身与过期的来源拍位。
             auto sampled = timing;
@@ -451,6 +544,14 @@ void to_json(nlohmann::json& json, const TimingInterpolation& interpolation)
                  interpolation.m_controlY1,
                  interpolation.m_controlX2,
                  interpolation.m_controlY2 } } };
+    // 时间轴字段缺省保持兼容；节拍模式同时保存分拍和函数定义域。
+    // 积分映射不写文件，载入后按该谱面的实际红线重新准备。
+    if ( interpolation.m_variable == TimingVariable::Beat ) {
+        json["variable"]      = "beat";
+        json["beat_step"]     = { interpolation.m_beatNumerator,
+                                  interpolation.m_beatDenominator };
+        json["beat_duration"] = interpolation.m_beatDuration;
+    }
     // 只持久化可编辑文本，内部字节码和积分缓存不属于文件协议。
     if ( interpolation.m_curve == TimingCurve::Custom &&
          interpolation.m_function )
@@ -505,14 +606,43 @@ std::optional<TimingInterpolation> readTimingInterpolation(
         if ( !(*control)[index].is_number() ) return std::nullopt;
         *targets[index] = (*control)[index].get<double>();
     }
+    // 轴名称不依赖枚举整数布局，旧文件缺省为时间。
+    // 分拍逐项检查整数范围，禁止强制窄化超大 JSON 数值。
+    // 拍长服务函数编译，完整载入后再按红线准备。
+    // 本入口没有完整时间线，不能反解绝对秒数。
+    // 联机文档复用本入口，远端不能绕过分拍校验。
+    // 源式按当前轴编译，拍域不会误用秒域定义域。
+    // 内部 BPM 片段和积分节点不属于文件协议。
+    // 失败不构造半合法函数或带未知轴的可编辑段落。
+    // 不接受未知轴名或隐式转换，旧文件没有轴字段则仍按时间计算。
+    if ( auto axis = json.find("variable"); axis != json.end() ) {
+        if ( !axis->is_string() ) return std::nullopt;
+        if ( *axis == "beat" ) {
+            interpolation.m_variable = TimingVariable::Beat;
+            auto step                = json.find("beat_step");
+            auto span                = json.find("beat_duration");
+            if ( step == json.end() || !step->is_array() || step->size() != 2 ||
+                 span == json.end() || !span->is_number() )
+                return std::nullopt;
+            for ( std::size_t i = 0; i < 2; ++i ) {
+                if ( !(*step)[i].is_number_integer() ) return std::nullopt;
+                const double value = (*step)[i].get<double>();
+                if ( value < 1 || value > 65536 ) return std::nullopt;
+            }
+            interpolation.m_beatNumerator   = (*step)[0].get<int>();
+            interpolation.m_beatDenominator = (*step)[1].get<int>();
+            interpolation.m_beatDuration    = span->get<double>();
+        } else if ( *axis != "time" )
+            return std::nullopt;
+    }
     double startValue = 1.0;
     if ( interpolation.m_curve == TimingCurve::Custom ) {
         const auto expression = json.find("function");
         if ( expression == json.end() || !expression->is_string() )
             return std::nullopt;
-        auto compiled =
-            compileTimingFunction(expression->get_ref<const std::string&>(),
-                                  interpolation.m_duration);
+        auto compiled = compileTimingFunction(
+            expression->get_ref<const std::string&>(),
+            timingInterpolationVariableDuration(interpolation));
         if ( !compiled ) return std::nullopt;
         interpolation.m_function = std::move(*compiled);
         startValue = evaluateTimingFunction(*interpolation.m_function, 0);
@@ -524,6 +654,12 @@ std::optional<TimingInterpolation> readTimingInterpolation(
     return interpolation;
 }
 /// @brief 定义语义比较，独立编译的同一函数仍属于同一个段落值。
+// 缓存地址不属于用户编辑语义，不比较编译准备过程。
+// 独立编译的同一源式不能产生虚假撤销记录。
+// 时间模式无关的分拍字段不保存，比较时同样忽略。
+// 拍模式比较分拍和定义域，真实轴配置变化仍可撤销。
+// 形状和源式保持原比较契约，不依赖实体身份。
+// 比较函数只借用缓存，不复制共享所有权。
 bool TimingInterpolation::operator==(const TimingInterpolation& other) const
 {
     // 缓存地址和积分准备过程不属于编辑语义，不产生虚假的撤销步骤。
@@ -535,6 +671,11 @@ bool TimingInterpolation::operator==(const TimingInterpolation& other) const
         (!m_function && !other.m_function);
     return m_duration == other.m_duration && m_endValue == other.m_endValue &&
            m_samplesPerSecond == other.m_samplesPerSecond &&
+           m_variable == other.m_variable &&
+           (m_variable == TimingVariable::Time ||
+            (m_beatNumerator == other.m_beatNumerator &&
+             m_beatDenominator == other.m_beatDenominator &&
+             m_beatDuration == other.m_beatDuration)) &&
            m_curve == other.m_curve && m_controlX1 == other.m_controlX1 &&
            m_controlY1 == other.m_controlY1 &&
            m_controlX2 == other.m_controlX2 &&
@@ -554,17 +695,19 @@ bool setTimingInterpolationFunction(TimingInterpolation& interpolation,
                                     std::string_view     expression,
                                     double& startValue, std::string& error)
 {
-    auto compiled = compileTimingFunction(expression, interpolation.m_duration);
+    auto compiled = compileTimingFunction(
+        expression, timingInterpolationVariableDuration(interpolation));
     if ( !compiled ) {
         error = compiled.error();
         return false;
     }
-    // 起终值由实际秒域的表达式推导，不要求用户重复填写相同信息。
+    // 起终值由当前自变量域的表达式推导，不要求用户重复填写相同信息。
     interpolation.m_function = std::move(*compiled);
     interpolation.m_curve    = TimingCurve::Custom;
     startValue = evaluateTimingFunction(*interpolation.m_function, 0);
-    interpolation.m_endValue = evaluateTimingFunction(*interpolation.m_function,
-                                                      interpolation.m_duration);
+    interpolation.m_endValue = evaluateTimingFunction(
+        *interpolation.m_function,
+        timingInterpolationVariableDuration(interpolation));
     error.clear();
     return true;
 }

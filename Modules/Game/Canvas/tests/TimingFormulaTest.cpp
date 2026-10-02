@@ -140,6 +140,52 @@ bool testFitApplication()
     if ( !ok ) XERROR("TimingFormulaTest: 拟合应用或输出预览回归失败");
     return ok;
 }
+/// @brief 手绘拟合在拍域应用，秒数不同不能使合法拍域候选失效。
+/// @details 100 BPM 的 1.2 秒等于两拍；候选定义域应为两拍而非 1.2。
+/// 图形预览依实际秒数换算拍位，输出间隔仍由半拍决定。
+/// @return 应用候选后公式、定义域与实际采样语义全部一致时为真。
+bool testBeatFitApplication()
+{
+    // 秒域和拍域特意不相等，能发现 applyFit 仍比较持续秒数的旧实现。
+    // 拟合候选来自真实求解器，不能手工塞入一个预期函数跳过拟合路径。
+    // 129 点覆盖两拍，二次函数中点与端点值由独立解析样本生成。
+    // 候选函数的完整域合法性由编译器证明，UI 只应用有效候选。
+    // 半拍落点为 0.3 秒，而绝对参数应取 f(0.5)=1.25。
+    // 输出密度由分拍决定，拟合应用不得重置分子、分母或派生密度。
+    // 测试只修改窗口副本，不发布动作或写入实际用户谱面。
+    // 从画布保存到最终模型的事务由逻辑测试另行覆盖。
+    MMM::Timing bpm;
+    bpm.m_bpm = bpm.m_timingEffectParameter = 100;
+    MMM::TimingInterpolation curve;
+    curve.m_variable = MMM::TimingVariable::Beat;
+    curve.m_duration = 1.2;
+    if ( !MMM::bindTimingInterpolationBeatAxis(curve, 0, { bpm }) )
+        return false;
+    std::array<MMM::TimingCurvePoint, 129> points{};
+    // 使用独立拍域样本，不能从被测时间换算器反向生成拟合参考。
+    for ( std::size_t i = 0; i < points.size(); ++i ) {
+        const double beat = 2 * i / 128.0;
+        points[i]         = { beat, 1 + beat * beat };
+    }
+    auto fitted = MMM::fitTimingFunction(points, 2);
+    if ( !fitted ) return false;
+    auto compiled = MMM::compileTimingFunction(fitted->m_expression, 2);
+    if ( !compiled ) return false;
+    MMM::Canvas::TimingFunctionEditorState state;
+    state.m_fit         = std::move(*fitted);
+    state.m_fitFunction = std::move(*compiled);
+    double start        = 0;
+    // 此处同时检查实际 UI 状态 helper，避免模型支持拍轴但拟合仍校验秒域。
+    const bool ok =
+        state.applyFit(curve, MMM::TimingEffect::SCROLL, start) &&
+        state.m_compiledDuration == 2 &&
+        std::abs(MMM::evaluateTimingInterpolation(curve, start, .25) - 1.25) <
+            1e-6 &&
+        std::abs(MMM::timingInterpolationSampleElapsed(curve, 1) - .3) < 1e-7;
+    if ( !ok ) XERROR("TimingFormulaTest: 拍域拟合应用失败");
+    return ok;
+}
+
 /// @brief 验证公式真实提交几何，嵌套分式与聚合上下限不会产生非法顶点。
 /// @param source 使用正式符号或函数式输入的公式。
 /// @param enlargedStyle 模拟较大的内边距及滚动条，复现高 DPI 下的纵向溢出。
@@ -241,6 +287,7 @@ int main(int argc, char** argv)
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
     bool ok = mathLoaded && pixels && width > 0 && height > 0;
     ok &= testFitApplication();
+    ok &= testBeatFitApplication();
     // 不能用替代问号冒充字形存在，直接检查真实合并 face 的字符映射。
     for ( const ImWchar codepoint :
           { 0x03c0, 0x221b, 0x222b, 0x03a3, 0x03a0, 0x221a, 0x2212 } )

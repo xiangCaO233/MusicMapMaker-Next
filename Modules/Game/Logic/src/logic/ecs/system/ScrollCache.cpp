@@ -78,12 +78,37 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
     // 运行时使用固定高密度曲线离散积分，独立于文件输出采样率。
     // 这些临时组件只在脏缓存重建中存在，不成为 ECS 实体或表格行。
     m_interpolations.clear();
+    // 源 registry 在重建时稳定，发布描述持有独立值。
+    // 旧 BPM 缓存非空不等于映射仍有效，必须重新绑定。
+    // 发布新描述不修改旧快照中的数学缓存。
+    // 持续参数仍用运行时高密度预算，与导出密度分离。
+    // Jump 按真实分拍触发，不能用平均 Hz 等距触发。
+    // 红线数据只在脏缓存重建收集一次；各效果不能用自己的附带 BPM 作拍轴。
+    std::vector<Timing> redLines;
+    for ( const auto& entry : m_rebuildScratch ) {
+        const auto& component = *entry.component;
+        if ( component.m_effect != TimingEffect::BPM ) continue;
+        Timing timing;
+        timing.m_timestamp             = component.m_timestamp * 1000;
+        timing.m_timingEffectParameter = component.m_value;
+        timing.m_bpm                   = component.m_value;
+        timing.m_interpolation         = component.m_interpolation;
+        redLines.push_back(std::move(timing));
+    }
+    const double fallback =
+        beatmap && beatmap->m_baseMapMetadata.preference_bpm > 0
+            ? beatmap->m_baseMapMetadata.preference_bpm
+            : 120;
     std::vector<TimelineComponent> curveEvents;
     std::size_t                    runtimeCount = 0;
     for ( const auto& entry : m_rebuildScratch ) {
         const auto& component = *entry.component;
         if ( !component.m_interpolation ) continue;
-        const auto& curve = *component.m_interpolation;
+        auto curve = *component.m_interpolation;
+        // BPM 或范围修改使拍轴缓存失效，虚拟事件始终按当前红线重新准备。
+        if ( !bindTimingInterpolationBeatAxis(
+                 curve, component.m_timestamp, redLines, fallback) )
+            continue;
         if ( !isValidTimingInterpolation(
                  curve, component.m_effect, component.m_value) )
             continue;
@@ -119,9 +144,7 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
         for ( std::size_t index = 1; index < count; ++index ) {
             const double elapsed =
                 segment.effect == TimingEffect::JUMP
-                    ? std::min(
-                          curve.m_duration,
-                          static_cast<double>(index) / curve.m_samplesPerSecond)
+                    ? timingInterpolationSampleElapsed(curve, index)
                     : curve.m_duration * static_cast<double>(index) /
                           static_cast<double>(count - 1);
             TimelineComponent event;

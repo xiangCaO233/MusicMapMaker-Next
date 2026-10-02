@@ -126,7 +126,10 @@ void TimelineCanvas::openInterpolationEditor(
     // 窗口重新打开时丢弃上次副本，避免旧谱面的范围影响新谱面。
     // 实例令牌和路径一起检查，实体编号复用不能造成跨会话误写。
     m_interpolationValidationRows.clear();
-    auto& engine = Logic::EditorEngine::instance();
+    m_interpolationBpmTimings.clear();
+    m_interpolationAxisStart    = -1;
+    m_interpolationAxisDuration = -1;
+    auto& engine                = Logic::EditorEngine::instance();
     {
         // 注册表只在锁内借用，所有绘制与验证读取随后释放锁的副本。
         std::lock_guard lock(engine.getSessionMutex());
@@ -144,7 +147,16 @@ void TimelineCanvas::openInterpolationEditor(
             row.time          = timing.m_timestamp;
             row.interpolation = timing.m_interpolation;
             switch ( timing.m_effect ) {
-            case TimingEffect::BPM: row.bpmEntity = entity; break;
+            case TimingEffect::BPM: {
+                row.bpmEntity = entity;
+                Timing redLine;
+                redLine.m_timestamp             = timing.m_timestamp * 1000;
+                redLine.m_timingEffectParameter = timing.m_value;
+                redLine.m_bpm                   = timing.m_value;
+                redLine.m_interpolation         = timing.m_interpolation;
+                m_interpolationBpmTimings.push_back(std::move(redLine));
+                break;
+            }
             case TimingEffect::SCROLL: row.scrollEntity = entity; break;
             case TimingEffect::JUMP: row.jumpEntity = entity; break;
             case TimingEffect::HS: row.hsEntity = entity; break;
@@ -476,6 +488,62 @@ void TimelineCanvas::renderInterpolationEditor()
         // 用户修改任意端点都会立即刷新时长、曲线图和预计事件数量。
         // 倒置范围保留错误提示，不能用绝对值掩盖用户输入问题。
         curve.m_duration = m_interpolationEnd - edit.time;
+        // 放置范围继续使用秒，轴选择只改变函数横轴含义。
+        // 改变单位后旧候选失效，即使拍数与秒数恰好相等。
+        // 有理分拍保留整数，不把三分之一拍提前舍入毫秒。
+        // 同刻红线和跨段变化由领域映射处理，UI 不重复积分。
+        // 蓝线不随分拍变成阶梯，分拍只控制黄色输出点。
+        // 普通帧比较标量，真实范围或分拍变化才准备缓存。
+        // 窗口快照打开时捕获，最终保存以权威红线再次校验。
+        // 错误输入保留供修正，取消和 Esc 不要求映射成功。
+        // 轴选择不能绕过所属类型，BPM 始终采用时间模式。
+        // 原生保存保留轴配置，再次编辑仍只有一个段落实体。
+        // 红线函数只能选择秒域，自身 BPM 不能同时决定自变量速度。
+        int variable = static_cast<int>(curve.m_variable);
+        ImGui::BeginDisabled(edit.effect == TimingEffect::BPM);
+        bool axisChanged =
+            ImGui::Combo("自变量", &variable, "时间（秒）\0节拍 / 分拍\0");
+        ImGui::EndDisabled();
+        if ( edit.effect == TimingEffect::BPM ) variable = 0;
+        if ( curve.m_variable != static_cast<TimingVariable>(variable) ) {
+            curve.m_variable = static_cast<TimingVariable>(variable);
+            axisChanged      = true;
+            m_timingFunctionEditor.m_compiledDuration = -1;
+            // 单位变化会使手绘与拟合候选失效，不能把秒域候选误当拍域候选。
+            m_timingFunctionEditor.m_fit.reset();
+            m_timingFunctionEditor.m_fitFunction.reset();
+        }
+        if ( curve.m_variable == TimingVariable::Beat ) {
+            axisChanged |=
+                ImGui::InputInt("分拍分子", &curve.m_beatNumerator, 0, 0);
+            axisChanged |=
+                ImGui::InputInt("分拍分母", &curve.m_beatDenominator, 0, 0);
+            // 先准备映射，再由函数编辑器重新编译源文本；非法函数也能修改范围。
+            // 常规帧只比较两个标量，不排序、分配或等待逻辑线程。
+            if ( axisChanged || edit.time != m_interpolationAxisStart ||
+                 curve.m_duration != m_interpolationAxisDuration ) {
+                const auto kind          = curve.m_curve;
+                curve.m_curve            = TimingCurve::Linear;
+                m_interpolationAxisValid = bindTimingInterpolationBeatAxis(
+                    curve,
+                    edit.time,
+                    m_interpolationBpmTimings,
+                    m_currentSnapshot ? m_currentSnapshot->fallbackBpm : 120);
+                curve.m_curve               = kind;
+                m_interpolationAxisStart    = edit.time;
+                m_interpolationAxisDuration = curve.m_duration;
+            }
+            if ( m_interpolationAxisValid )
+                ImGui::TextWrapped(
+                    "每 %d/%d 拍插入一个时间点；t 为距段首的拍数，BPM "
+                    "变化时采样间隔随之变化。",
+                    curve.m_beatNumerator,
+                    curve.m_beatDenominator);
+        } else
+            m_interpolationAxisValid = true;
+        // 预设切换轴后重建初始表达式模板，自定义模式则保留用户源式重编译。
+        if ( axisChanged && curve.m_curve != TimingCurve::Custom )
+            initializeTimingFunctionEditor();
         // 绝对函数首尾由 f(0) 和 f(duration) 推导，避免双重真值来源。
         ImGui::BeginDisabled(curve.m_curve == TimingCurve::Custom);
         ImGui::InputDouble("起始参数", &edit.value, 0.0, 0.0, "%.6g");
@@ -491,7 +559,7 @@ void TimelineCanvas::renderInterpolationEditor()
             m_timingFunctionEditor.m_compiledDuration = -1;
         }
         // 曲线种类切换不会丢弃控制点，切回贝塞尔可继续调整原形状。
-        // 横轴是时间比例，纵轴是参数比例，不是屏幕像素。
+        // 横轴是当前自变量比例，纵轴是参数比例，不是屏幕像素。
         if ( curve.m_curve == TimingCurve::Bezier ) {
             // 控制点有横纵两个坐标，限制单调时间轴并允许自由调整曲率。
             ImGui::InputDouble(
@@ -505,12 +573,35 @@ void TimelineCanvas::renderInterpolationEditor()
             ImGui::TextUnformatted("控制点范围 0–1，X1 ≤ X2。");
         }
         renderTimingFunctionEditor();
-        ImGui::InputDouble(
-            "输出采样密度 (Hz)", &curve.m_samplesPerSecond, 0.0, 0.0, "%.6g");
+        // 拍域密度不接受第二份自由输入，防止保存与预览真值冲突。
+        // 常 BPM 时为 BPM / 60 / 分拍，100 BPM 半拍为 3.333… Hz。
+        // 变 BPM 显示平均密度，落点逐个按拍位反解。
+        // 不足完整分拍的短尾仍保留原终点，预计数量包括它。
+        // 锁定状态直接读取轴枚举，不用密度数值猜模式。
+        // 切回秒域即可自由编辑 Hz，旧文件缺省保持秒域。
+        // 输出图按真实秒数显示，变 BPM 后间距可以不均匀。
+        // 手绘图按所选自变量显示，拍域 t 不能配秒域标签。
+        // 代表点预算只限制绘图次数，真实输出保留全部分拍。
+        // 未准备拍轴不能伪造线性映射，领域错误阻止保存。
+        // 重叠规则与轴无关，不能因分拍而放宽范围限制。
+        // 拍域密度由红线和分拍推导，禁用输入避免出现两个互相矛盾的真值。
+        ImGui::BeginDisabled(curve.m_variable == TimingVariable::Beat);
+        ImGui::InputDouble(curve.m_variable == TimingVariable::Beat
+                               ? "派生平均采样率 (Hz)"
+                               : "输出采样密度 (Hz)",
+                           &curve.m_samplesPerSecond,
+                           0.0,
+                           0.0,
+                           "%.6g");
+        ImGui::EndDisabled();
         // 已有时间点副本用于提前解释冲突，最终命令还会校验最新数据。
         // 联机编辑或队列提交之间出现变化时，逻辑入口拥有最终决定权。
         const char* error =
             interpolationValidationError(edit, m_interpolationValidationRows);
+        if ( !m_interpolationAxisValid )
+            error =
+                "请设置有效的时间范围和正整数分拍，单段不能超过 65536 "
+                "个采样间隔。";
         if ( curve.m_curve == TimingCurve::Custom &&
              !m_timingFunctionEditor.m_error.empty() )
             error = m_timingFunctionEditor.m_error.c_str();
@@ -569,9 +660,8 @@ void TimelineCanvas::renderInterpolationEditor()
             const auto stride = std::max<std::size_t>(1, count / 256);
             for ( std::size_t index = 0; index < count; index += stride )
                 draw->AddCircleFilled(
-                    graphPoint(std::min(
-                        1.0,
-                        index / curve.m_samplesPerSecond / curve.m_duration)),
+                    graphPoint(timingInterpolationSampleElapsed(curve, index) /
+                               curve.m_duration),
                     2.5f,
                     IM_COL32(250, 205, 95, 255));
             // 段尾总是单独显示，非整周期和密集预览抽样也不会漏掉它。

@@ -242,6 +242,13 @@ ImVec2 curvePoint(const ImVec2& origin, const ImVec2& size, double x,
 /// 当前对象拥有全部 UI 状态，关闭窗口不需要跨线程回收。
 void TimelineCanvas::initializeTimingFunctionEditor()
 {
+    // 函数定义域取当前自变量单位，秒数只负责定位段落。
+    // 拍域手绘格点在拍数上均分，而非在真实秒数上均分。
+    // 分拍不改变 t 的拍单位，也不改变拟合的数学形状。
+    // 修改范围后候选须按新域校验，不能沿用旧拍长。
+    // 蓝线与手绘共享自变量域，输出图再映射回时间域。
+    // 源式或域变化才编译，普通帧不遍历红线时间线。
+    // f(t) 记号不变，横轴和说明明确秒或拍单位。
     auto& state       = m_timingFunctionEditor;
     state             = {};
     const auto& edit  = m_interpolationEdit;
@@ -255,7 +262,7 @@ void TimelineCanvas::initializeTimingFunctionEditor()
                        fmt::format("{:.17g}+({:.17g})*t/{:.17g}",
                                    edit.value,
                                    curve.m_endValue - edit.value,
-                                   curve.m_duration));
+                                   timingInterpolationVariableDuration(curve)));
     }
     const auto [minimum, maximum] = timingInterpolationRange(curve, edit.value);
     const double padding =
@@ -313,7 +320,8 @@ void TimelineCanvas::renderTimingFunctionEditor()
     auto& curve = edit.interpolation;
     auto& state = m_timingFunctionEditor;
     if ( state.m_fitFunction &&
-         timingFunctionDuration(*state.m_fitFunction) != curve.m_duration ) {
+         timingFunctionDuration(*state.m_fitFunction) !=
+             timingInterpolationVariableDuration(curve) ) {
         // 绘制点按比例保留，但旧拟合属于旧秒域，范围修改后立即丢弃。
         state.m_fit.reset();
         state.m_fitFunction.reset();
@@ -392,18 +400,21 @@ void TimelineCanvas::renderTimingFunctionEditor()
             mathInputCallback,
             &state);
         ImGui::TextWrapped(
-            "t 是距段落起点的秒数，f(t) "
+            "t 是距段落起点的%s，f(t) "
             "是绝对参数。支持分式、幂、根式、三角、双曲、指数、对数、绝对值及 "
             "定积分、求和、累乘及 min/max 等复合；π、×、÷、−、²、³、√、∛ "
             "可直接输入。例：120 + 20 × "
-            "sin(2 × π × t)。");
+            "sin(2 × π × t)。",
+            curve.m_variable == TimingVariable::Beat ? "拍数" : "秒数");
         // 相同表达式和相同时长沿用不可变缓存，预览不重复工作。
         // 改变时长仍需要重新证明全部定义域，即使文本没有变化。
         // 有效终点由 f(duration) 派生，不能独立修改成与函数矛盾的值。
-        if ( changed || state.m_compiledDuration != curve.m_duration ) {
+        if ( changed || state.m_compiledDuration !=
+                            timingInterpolationVariableDuration(curve) ) {
             // 编译只由真实编辑触发，失败保留文本和最后有效缓存。
             // 保存入口会检查错误说明，不允许旧函数冒充新的输入。
-            state.m_compiledDuration = curve.m_duration;
+            state.m_compiledDuration =
+                timingInterpolationVariableDuration(curve);
             setTimingInterpolationFunction(
                 curve, state.m_expression.data(), edit.value, state.m_error);
         }
@@ -429,7 +440,9 @@ void TimelineCanvas::renderTimingFunctionEditor()
                            std::isfinite(state.m_maximum - state.m_minimum) &&
                            state.m_maximum > state.m_minimum;
     const bool validDuration =
-        std::isfinite(curve.m_duration) && curve.m_duration >= .001;
+        std::isfinite(timingInterpolationVariableDuration(curve)) &&
+        timingInterpolationVariableDuration(curve) > 0 &&
+        curve.m_duration >= .001;
     if ( !validAxis || !validDuration ) {
         ImGui::TextWrapped("请先设置有限且递增的绘制纵轴，以及有效时间范围。");
         return;
@@ -463,7 +476,10 @@ void TimelineCanvas::renderTimingFunctionEditor()
                 origin,
                 size,
                 i / 128.0,
-                evaluateTimingInterpolation(curve, edit.value, i / 128.0),
+                evaluateTimingInterpolationVariable(
+                    curve,
+                    edit.value,
+                    timingInterpolationVariableDuration(curve) * i / 128.0),
                 state.m_minimum,
                 state.m_maximum);
             if ( i )
@@ -535,27 +551,31 @@ void TimelineCanvas::renderTimingFunctionEditor()
         // 拟合结果用另一种颜色显示，用户比较误差后再决定是否保存段落。
         for ( int i = 1; i <= 128; ++i )
             draw->AddLine(
+                curvePoint(origin,
+                           size,
+                           (i - 1) / 128.0,
+                           evaluateTimingFunction(
+                               *state.m_fitFunction,
+                               timingInterpolationVariableDuration(curve) *
+                                   (i - 1) / 128),
+                           state.m_minimum,
+                           state.m_maximum),
                 curvePoint(
                     origin,
                     size,
-                    (i - 1) / 128.0,
-                    evaluateTimingFunction(*state.m_fitFunction,
-                                           curve.m_duration * (i - 1) / 128),
+                    i / 128.0,
+                    evaluateTimingFunction(
+                        *state.m_fitFunction,
+                        timingInterpolationVariableDuration(curve) * i / 128),
                     state.m_minimum,
                     state.m_maximum),
-                curvePoint(origin,
-                           size,
-                           i / 128.0,
-                           evaluateTimingFunction(*state.m_fitFunction,
-                                                  curve.m_duration * i / 128),
-                           state.m_minimum,
-                           state.m_maximum),
                 IM_COL32(80, 205, 255, 255),
                 2);
     }
     draw->PopClipRect();
-    ImGui::Text("横轴：0 – %.6g 秒；纵轴：%.6g – %.6g。",
-                curve.m_duration,
+    ImGui::Text("横轴：0 – %.6g %s；纵轴：%.6g – %.6g。",
+                timingInterpolationVariableDuration(curve),
+                curve.m_variable == TimingVariable::Beat ? "拍" : "秒",
                 state.m_minimum,
                 state.m_maximum);
     ImGui::TextWrapped(
@@ -585,17 +605,21 @@ void TimelineCanvas::renderTimingFunctionEditor()
         else {
             std::array<TimingCurvePoint, 129> points{};
             for ( std::size_t i = 0; i < points.size(); ++i )
-                points[i] = { curve.m_duration * i / 128, state.m_values[i] };
+                points[i] = { timingInterpolationVariableDuration(curve) * i /
+                                  128,
+                              state.m_values[i] };
             // 拟合结果经计算器再次编译，秩合法不代表完整域数学合法。
             // 模型返回 RMS 与最大误差，UI 不用相同拟合点冒充误差为零。
             // 合法拟合直接更新窗口副本，下方预览本帧即读取新函数。
             // 最终保存才发布逻辑命令，取消仍放弃全部中间修改。
-            auto fit = fitTimingFunction(points, curve.m_duration);
+            auto fit = fitTimingFunction(
+                points, timingInterpolationVariableDuration(curve));
             if ( !fit )
                 state.m_fitError = fit.error();
             else {
-                auto compiled =
-                    compileTimingFunction(fit->m_expression, curve.m_duration);
+                auto compiled = compileTimingFunction(
+                    fit->m_expression,
+                    timingInterpolationVariableDuration(curve));
                 if ( !compiled )
                     state.m_fitError = compiled.error();
                 else {
@@ -611,8 +635,8 @@ void TimelineCanvas::renderTimingFunctionEditor()
     // 领域合法性取当前效果，不能沿用另一效果的 BPM 判断。
     // 最终保存仍由外层窗口检查范围碰撞和会话身份。
     const bool currentFit =
-        state.m_fitFunction &&
-        timingFunctionDuration(*state.m_fitFunction) == curve.m_duration;
+        state.m_fitFunction && timingFunctionDuration(*state.m_fitFunction) ==
+                                   timingInterpolationVariableDuration(curve);
     if ( state.m_fit && currentFit ) {
         ImGui::Text("%s；均方根误差 %.6g；最大误差 %.6g。",
                     state.m_fit->m_family.c_str(),

@@ -78,7 +78,7 @@ struct Instruction {
 /// 空求和返回零，空累乘返回一；反向定积分则保留方向符号。
 /// 这些类型不写入谱面，持久化始终保留完整函数式。
 /// 上下限先在外层词法作用域求值，函数体再使用绑定槽。
-/// 变量槽与公开时间分开，所以积分体内仍能引用实际秒数 t。
+/// 变量槽与公开时间分开，所以积分体内仍能引用实际自变量值 t。
 /// 嵌套聚合不创建回调闭包，运行时只传递固定大小值数组。
 enum class AggregateKind { Integral, Sum, Product };
 /// @brief 聚合体保存独立程序，外层只计算上下限并触发有界执行。
@@ -475,7 +475,7 @@ bool binary(Op op)
 /// @brief 固定栈解释后缀程序；栈结构在解析阶段已保证。
 /// @warning 每帧函数查询；不创建容器或复制共享指针。
 /// @param code 结构有效且定义域合法的后缀程序。
-/// @param time 实际秒数，公开入口负责截取到合法定义域。
+/// @param time 实际自变量值，公开入口负责截取到合法定义域。
 /// @return 栈中唯一的表达式结果。
 /// 每次入栈数量不超过指令总数，无需动态扩容。
 /// 二元指令先弹右值，减法和除法不会反转操作数。
@@ -893,8 +893,8 @@ std::optional<Interval> executeInterval(const Program&                  program,
 /// @brief 八点 Gauss 积分只在编译准备阶段执行。
 /// @details 对平滑初等函数比固定梯形法更准确，预算仍由缓存格数限定。
 /// @param code 编译阶段借用的纯数学程序。
-/// @param left 当前积分子区间起点秒数。
-/// @param right 当前积分子区间终点秒数。
+/// @param left 当前积分子区间起点自变量值。
+/// @param right 当前积分子区间终点自变量值。
 /// @return 当前区间积分，不含以前区间的累计量。
 /// 节点在区间内部，根式端点导数奇异不会直接进入求值。
 /// 随后比较两半区间与局部插值，总积分不能证明局部精度。
@@ -941,7 +941,7 @@ public:
     Interval m_range;
     /// @brief 累计积分的有序节点，根式端点附近可自适应细分。
     struct Knot {
-        /// @brief 相对段首秒数，严格递增。
+        /// @brief 相对段首自变量值，严格递增。
         double m_time;
         /// @brief 该节点的函数值，即累计积分的一阶导数。
         double m_value;
@@ -997,7 +997,7 @@ public:
 /// @brief 编译、证明定义域并准备积分缓存后一次发布。
 /// @warning 低频编辑或载入路径；共享所有权保证删除实体后旧 UI 快照仍可使用。
 /// @param expression 原始输入，可包含支持的 Unicode 数学符号。
-/// @param duration 秒域闭区间长度，至少为 1 ms。
+/// @param duration 所选自变量的闭区间长度，必须为有限正数。
 /// @return 只读函数或明确错误，不携带部分可执行程序。
 /// 文本、指令、递归与积分节点预算分别在相应入口检查。
 /// Unicode 只改变输入表示，不改变运算优先级和白名单。
@@ -1007,8 +1007,10 @@ public:
 std::expected<std::shared_ptr<const TimingFunction>, std::string>
 compileTimingFunction(std::string_view expression, double duration)
 {
-    if ( !std::isfinite(duration) || duration < .001 )
-        return std::unexpected("函数段落时长须至少为 1 ms。");
+    // 数学域可以是秒或拍，最小时长约束只属于段落的秒域范围。
+    // 很短的合法秒段可能不足 0.001 拍，不能用毫秒下限拒绝拍域函数。
+    if ( !std::isfinite(duration) || duration <= 0 )
+        return std::unexpected("函数自变量区间必须是有限正数。");
     if ( expression.size() > MAX_SOURCE )
         return std::unexpected("函数超过 2048 UTF-8 字节。");
     std::string normalized;
@@ -1131,12 +1133,12 @@ compileTimingFunction(std::string_view expression, double duration)
                             result->m_program.m_code,
                             { duration * i / 256, duration * (i + 1) / 256 });
         if ( !range )
-            return std::unexpected(
-                fmt::format("在 {:.6g}–{:.6g} "
-                            "秒内无法证明函数有限且有定义，请检查除零、对数、根"
-                            "式或幂的定义域。",
-                            duration * i / 256,
-                            duration * (i + 1) / 256));
+            return std::unexpected(fmt::format(
+                "在 {:.6g}–{:.6g} "
+                "的自变量区间内无法证明函数有限且有定义，请检查除零、对数、根"
+                "式或幂的定义域。",
+                duration * i / 256,
+                duration * (i + 1) / 256));
         result->m_range.m_low = std::min(result->m_range.m_low, range->m_low);
         result->m_range.m_high =
             std::max(result->m_range.m_high, range->m_high);
@@ -1190,8 +1192,8 @@ std::string_view timingFunctionExpression(const TimingFunction& function)
 }
 /// @brief 返回定义域长度，供编辑和加载校验缓存是否适用。
 /// @param function 与积分缓存一起发布的完整对象。
-/// @return 原始闭区间右端秒数。
-/// 表达式变量 t 是秒数，而不是自动归一化的 0–1 进度。
+/// @return 原始闭区间右端自变量值。
+/// 表达式变量 t 是秒数或拍数，而不是自动归一化的 0–1 进度。
 /// 编辑终点改变时旧对象失效，必须重新编译。
 /// 外部采样率变化不影响这里返回的定义域。
 double timingFunctionDuration(const TimingFunction& function)
@@ -1211,7 +1213,7 @@ std::pair<double, double> timingFunctionRange(const TimingFunction& function)
 /// @brief 执行已验证程序，时间超出段落时保持相应端值。
 /// @warning 每帧求值；借用不可变对象，不复制所有权或分配临时容器。
 /// @param function 已完成域检查且资源仍存活的对象。
-/// @param time 段内秒数，段外按最近端点截取。
+/// @param time 段内自变量值，段外按最近端点截取。
 /// @return 实际 Timing 参数值，不再与两个端点作 lerp。
 /// @pre 调用方传入有限时间参数。
 /// 积分与聚合只能访问编译时证明过的绑定范围。
@@ -1225,8 +1227,8 @@ double evaluateTimingFunction(const TimingFunction& function, double time)
 /// @brief 在累计积分缓存中作局部三次插值，域外常值外推。
 /// @warning 每帧拍位查询；固定次数标量操作，没有解析或数值积分。
 /// @param function 拥有按原函数准备的累计积分节点。
-/// @param time 从段落起点起计算的有符号秒数。
-/// @return 从零到 time 的参数积分，单位为参数乘秒。
+/// @param time 从段落起点起计算的有符号自变量值。
+/// @return 从零到 time 的参数积分，单位为参数乘自变量单位。
 /// @pre 时间有限；BPM 拍位调用方另外除以六十。
 /// 前段按起值延伸，尾段按终值延伸，避免负拍位被截为零。
 /// 内部使用二分查找相邻节点，不全量遍历积分容器。

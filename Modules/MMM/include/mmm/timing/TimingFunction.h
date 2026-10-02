@@ -47,7 +47,8 @@ struct TimingMathNode {
 std::span<const TimingMathNode> timingFunctionMathNodes(
     const TimingFunction& function);
 
-/// @brief 从 f(t) 编译受限数学表达式，t 的单位为段首以后的秒。
+/// @brief 从 f(t) 编译受限数学表达式，t
+/// 为距段首的秒数或拍数，单位由调用方选择。
 /// @param expression 只接受数值、变量 t、常数 pi/e 和公开数学函数。
 /// @param duration 需要证明定义域合法的闭区间长度。
 /// @return 编译成功的不可变对象，或包含位置和失败原因的中文说明。
@@ -60,7 +61,7 @@ compileTimingFunction(std::string_view expression, double duration);
 /// @brief 取得原始函数文本，保持可编辑性，不导出内部字节码。
 /// @return 与函数对象生命周期一致的只读视图。
 std::string_view timingFunctionExpression(const TimingFunction& function);
-/// @brief 取得编译时验证的段落时长，修改范围后须重新编译。
+/// @brief 取得编译时验证的自变量域长度，修改范围后须重新编译。
 double timingFunctionDuration(const TimingFunction& function);
 /// @brief 返回整个闭区间的保守参数界限，不只检查端点。
 std::pair<double, double> timingFunctionRange(const TimingFunction& function);
@@ -69,6 +70,7 @@ std::pair<double, double> timingFunctionRange(const TimingFunction& function);
 /// @warning 每帧求值路径；没有解析、分配、共享所有权复制或互斥等待。
 double evaluateTimingFunction(const TimingFunction& function, double time);
 /// @brief 查询预先建立的累计积分，域外按端值外推。
+/// @return 参数乘自变量单位；拍轴的时间积分不能直接消费这个拍域累计量。
 /// @warning
 /// 拍位热路径；只作有界二分和局部插值，不逐次执行数值积分或表达式解析。
 double integrateTimingFunction(const TimingFunction& function, double time);

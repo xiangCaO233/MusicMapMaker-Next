@@ -463,6 +463,12 @@ private:
     /// @brief 模态编辑持有的时间点范围快照，只在打开窗口时收集。
     std::vector<Common::Render::TimelineInteractiveElement>
         m_interpolationValidationRows;
+    /// @brief 打开段落窗口时捕获的红线快照，常规帧不遍历 ECS 或持会话锁。
+    std::vector<Timing> m_interpolationBpmTimings;
+    /// @brief 上次准备拍轴的时间范围，仅真实输入变化时重新构建。
+    double m_interpolationAxisStart{ -1 }, m_interpolationAxisDuration{ -1 };
+    /// @brief 分拍合法性或红线映射错误，取消窗口仍允许退出。
+    bool m_interpolationAxisValid{ true };
 
     std::string                                           m_canvasName;
     bool                                                  m_needReload{ true };

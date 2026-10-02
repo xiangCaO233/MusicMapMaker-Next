@@ -253,6 +253,98 @@ bool testActionsAndCache()
     return ok;
 }
 
+/// @brief 节拍段落经真实命令与缓存重建，范围移动和撤销都应重新取得拍轴。
+/// @details 有意传入无映射的命令副本，验证逻辑层不依赖 UI 已准备缓存。
+/// 修改 BPM 后不重新编辑效果段，仍应在下一次脏重建中反映新分拍。
+/// 撤销范围修改恢复整段，不能只恢复可见首值而遗留新时间轴。
+/// @return 一个可编辑实体、正确分拍和缓存版本均符合预期时为真。
+bool testBeatCommandsAndCache()
+{
+    // 当前效果段从零开始，初始红线与效果可以共享绝对时间而保持独立身份。
+    // 拍域累计从效果段首起算，不把 BPM 实体编号当作相位来源。
+    // 红线修改之后不手工重写效果组件，观察实际缓存重建的派生结果。
+    // 撤销只针对最后一个范围动作，之前红线更新仍是有效的权威状态。
+    // 固定时刻的数值检查不依赖播放线程速度或任何等待窗口。
+    MMM::Logic::SessionContext   context;
+    MMM::Logic::ActionController controller(context);
+    controller.handleCommand(
+        MMM::Logic::CmdCreateTimelineEvent{ 0, MMM::TimingEffect::BPM, 100 });
+    // 同一个权威 registry 同时提供红线和效果，附带 BPM 字段不会参与拍轴。
+    auto view = context.timelineRegistry.view<MMM::Logic::TimelineComponent>();
+    const auto                         bpmEntity = *view.begin();
+    MMM::Logic::CmdCreateTimelineEvent command{ 0,
+                                                MMM::TimingEffect::SCROLL,
+                                                1 };
+    command.interpolation             = MMM::TimingInterpolation{};
+    command.interpolation->m_variable = MMM::TimingVariable::Beat;
+    command.interpolation->m_duration = 1.2;
+    command.interpolation->m_endValue = 3;
+    controller.handleCommand(command);
+    bool ok = check(view.size() == 2, "beat command creates one segment");
+    entt::entity effect = entt::null;
+    for ( auto entity : view )
+        if ( view.get<MMM::Logic::TimelineComponent>(entity).m_effect ==
+             MMM::TimingEffect::SCROLL )
+            effect = entity;
+    if ( effect == entt::null ) return false;
+    const auto& original =
+        *view.get<MMM::Logic::TimelineComponent>(effect).m_interpolation;
+    ok &= check(
+        near(original.m_samplesPerSecond, 10.0 / 3) && original.m_beatAxis,
+        "command prepares authoritative BPM cache");
+    MMM::Config::EditorConfig       config;
+    MMM::Logic::System::ScrollCache cache;
+    cache.rebuild(context.timelineRegistry, config, nullptr);
+    // ScrollCache 重建发布一段可编辑描述，不向 registry 创建虚拟事件。
+    // 首次半拍 300 毫秒是独立参考，不从派生 Hz 反推期望。
+    // 连续参数的运行时曲率与输出周期分离，改变分拍不重写原函数。
+    // 未加载真实 BeatMap 时仍使用显式红线而非回退 BPM。
+    // 运行时描述仍是一段，BPM 更新不需要手工打开并保存插值窗口。
+    ok &=
+        check(cache.getInterpolations().size() == 1 &&
+                  near(MMM::timingInterpolationSampleElapsed(
+                           cache.getInterpolations().front().interpolation, 1),
+                       .3),
+              "runtime half beat sample");
+    controller.handleCommand(
+        MMM::Logic::CmdUpdateTimelineEvent{ bpmEntity, 0, 200 });
+    cache.rebuild(context.timelineRegistry, config, nullptr);
+    ok &= check(near(MMM::timingInterpolationSampleElapsed(
+                         cache.getInterpolations().front().interpolation, 1),
+                     .15),
+                "runtime BPM change rebinds beat axis");
+    // 修改 BPM 与修改效果是两个历史事务，后续撤销只撤回效果范围。
+    // BPM 仍为 200，所以重建后的旧范围应积累四拍。
+    // 不能把撤销恢复的旧 100 BPM 缓存继续用于当前红线。
+    // 命令必须保留新的拍域配置，不能降级成普通时间点通过校验。
+    // 缩短范围不改变实体身份，仍由既有 TimelineAction 保存完整副本。
+    // 修改范围后命令自行准备新域，撤销恢复旧范围而非一批独立样本。
+    MMM::Logic::CmdUpdateTimelineEvent edit{ effect, .1, 1 };
+    edit.interpolationOverride             = command.interpolation;
+    edit.interpolationOverride->m_duration = .6;
+    controller.handleCommand(edit);
+    ok &= check(near(view.get<MMM::Logic::TimelineComponent>(effect)
+                         .m_interpolation->m_beatDuration,
+                     2),
+                "edit command uses latest BPM");
+    // 撤销后从 registry 重新借用，避免将动作前的组件引用误作恢复结果。
+    // 时间锚点和持续时长各自检查，只恢复首值不应通过。
+    // 旧拍域缓存与新红线不一致时，查询依赖下一次脏重建重新准备。
+    // 重新准备没有写入额外动作，之后仍可独立重做本次范围修改。
+    // 这个用例不以空命令或直接覆盖组件代替真实撤销栈调用。
+    // 最终数学域由当前 BPM 决定，撤销不能反向撤回未指定的红线变化。
+    context.actionStack.undo(context);
+    const auto& restored = view.get<MMM::Logic::TimelineComponent>(effect);
+    ok &= check(near(restored.m_timestamp, 0) &&
+                    near(restored.m_interpolation->m_duration, 1.2),
+                "undo restores whole beat segment");
+    cache.rebuild(context.timelineRegistry, config, nullptr);
+    ok &= check(
+        near(cache.getInterpolations().front().interpolation.m_beatDuration, 4),
+        "undo cache reflects current red line");
+    return ok;
+}
+
 /// @brief 验证普通起点升级、共同端点和相邻段协调批量移动。
 /// @details 覆盖手势从已有红线开始及后续表格批量编辑的真实事务边界。
 /// @note 每次查询重新借用 registry，撤销重做可能改变实体身份。
@@ -531,8 +623,10 @@ int main()
 {
     const bool curves     = testCurves();
     const bool actions    = testActionsAndCache();
+    const bool beats      = testBeatCommandsAndCache();
     const bool boundaries = testBoundariesAndBatch();
     const bool clipboard  = testClipboard();
     const bool storage    = testStorage();
-    return curves && actions && boundaries && clipboard && storage ? 0 : 1;
+    return curves && actions && beats && boundaries && clipboard && storage ? 0
+                                                                            : 1;
 }
