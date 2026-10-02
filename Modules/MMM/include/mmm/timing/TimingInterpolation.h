@@ -1,14 +1,19 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <nlohmann/json_fwd.hpp>
 #include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace MMM
 {
 enum class TimingEffect;
 class Timing;
+class TimingFunction;
 
 /// @brief 插值段落支持的归一化曲线；枚举顺序同时用于编辑器下拉选择。
 enum class TimingCurve {
@@ -19,6 +24,17 @@ enum class TimingCurve {
     Sine,
     Exponential,
     Bezier,
+    Cubic,
+    Quartic,
+    Quintic,
+    SquareRoot,
+    CubeRoot,
+    Logarithmic,
+    Reciprocal,
+    SineIn,
+    SineOut,
+    HyperbolicTangent,
+    Custom,
 };
 
 /// @brief 一个时间点后的连续参数变化，时间长度统一使用秒。
@@ -40,8 +56,12 @@ struct TimingInterpolation {
     double m_controlX2{ 0.75 };
     /// @brief 贝塞尔第二控制点的参数比例。
     double m_controlY2{ 0.75 };
-    /// @brief 按值比较用于更新命令的无变化判定。
-    bool operator==(const TimingInterpolation&) const = default;
+    /// @brief 自定义绝对参数函数；预设曲线不使用此缓存。
+    /// @warning 不可变程序跨逻辑与 UI 快照共享，避免实体删除后旧快照悬空。
+    /// 只在描述复制时保留所有权；逐次求值必须借用引用，不复制指针。
+    std::shared_ptr<const TimingFunction> m_function;
+    /// @brief 按源表达式比较语义，不比较编译缓存地址。
+    bool operator==(const TimingInterpolation&) const;
 };
 
 /// @brief 单段最大写出间隔数量，限制不可信文件和编辑输入的内存放大。
@@ -62,6 +82,17 @@ double evaluateTimingInterpolation(const TimingInterpolation& interpolation,
 /// @warning 热路径；使用解析原函数与固定上限贝塞尔反解，禁止分配或遍历实体。
 double integrateTimingInterpolation(const TimingInterpolation& interpolation,
                                     double startValue, double elapsedSeconds);
+
+/// @brief 编译自定义函数并同时更新两端参数，失败保留原工作副本。
+/// @param startValue 成功时写入 f(0)，终值写入段落中的 endValue。
+/// @param error 失败原因，成功时清空。
+bool setTimingInterpolationFunction(TimingInterpolation& interpolation,
+                                    std::string_view     expression,
+                                    double& startValue, std::string& error);
+
+/// @brief 返回整个段落的参数范围，非单调函数也能正确显示。
+std::pair<double, double> timingInterpolationRange(
+    const TimingInterpolation& interpolation, double startValue);
 
 /// @brief 返回包含两个端点的外部格式写出时间点数量。
 std::size_t timingInterpolationSampleCount(

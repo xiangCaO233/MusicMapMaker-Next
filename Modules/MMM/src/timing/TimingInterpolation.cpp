@@ -2,10 +2,12 @@
 
 #include "mmm/timing/BpmNormalization.h"
 #include "mmm/timing/Timing.h"
+#include "mmm/timing/TimingFunction.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <numbers>
 #include <utility>
@@ -14,6 +16,22 @@ namespace MMM
 {
 namespace
 {
+/// @brief 自定义端点允许跨平台数学库的末位舍入差异，仍拒绝实质参数偏离。
+/// @param first 保存的外部 Timing 参数。
+/// @param second 当前平台按同一函数计算的端值。
+/// @return 差值在相对机器精度容差内时为真。
+/// @pre 入口已验证两端有限，不把 NaN 或无穷作为函数参数。
+/// @warning 每次校验只执行常量标量运算，不读取文件或重新编译。
+bool sameFunctionValue(double first, double second)
+{
+    // 公式在平台间重编译，libm 不保证逐位相同；仅容许几十个末位差异。
+    // 保留文件原值而非静默改写，序列化往返仍具有稳定字段语义。
+    const double tolerance =
+        64 * std::numeric_limits<double>::epsilon() *
+        std::max({ 1.0, std::abs(first), std::abs(second) });
+    return std::abs(first - second) <= tolerance;
+}
+
 /// @brief 计算起终点为零和一的三次贝塞尔坐标。
 /// @param t 贝塞尔参数，并非实际时间比例。
 /// @param first 第一控制点在当前轴上的坐标。
@@ -52,6 +70,18 @@ double curveProgress(const TimingInterpolation& interpolation, double x)
     case TimingCurve::SmoothStep: return x * x * (3.0 - 2.0 * x);
     case TimingCurve::Sine: return (1.0 - std::cos(std::numbers::pi * x)) * 0.5;
     case TimingCurve::Exponential: return std::expm1(4.0 * x) / std::expm1(4.0);
+    case TimingCurve::Cubic: return x * x * x;
+    case TimingCurve::Quartic: return x * x * x * x;
+    case TimingCurve::Quintic: return x * x * x * x * x;
+    case TimingCurve::SquareRoot: return std::sqrt(x);
+    case TimingCurve::CubeRoot: return std::cbrt(x);
+    case TimingCurve::Logarithmic: return std::log1p(9 * x) / std::log(10.0);
+    case TimingCurve::Reciprocal: return 2 * x / (1 + x);
+    case TimingCurve::SineIn: return 1 - std::cos(std::numbers::pi * x / 2);
+    case TimingCurve::SineOut: return std::sin(std::numbers::pi * x / 2);
+    case TimingCurve::HyperbolicTangent:
+        return std::tanh(3 * x) / std::tanh(3.0);
+    case TimingCurve::Custom: return x;  // 绝对参数函数由公开求值入口单独处理。
     case TimingCurve::Bezier: {
         // 横轴也有控制点，不能直接把时间比例当成贝塞尔参数。
         // 横轴单调且端点固定为零与一，整个有效解始终位于这个区间。
@@ -84,6 +114,13 @@ double curveProgress(const TimingInterpolation& interpolation, double x)
 /// @note 不包含时间戳与同类型重叠检查，调用方拥有这些上下文。
 /// @note 贝塞尔纵轴同样受限，正 BPM 曲线不会中途过零。
 /// @note 允许负 Scroll 等效果，不能将所有效果套用 BPM 约束。
+/// @details 自定义曲线必须拥有已编译对象，不能只检查枚举或文本。
+/// 函数定义域长度必须与段落时长一致，旧缓存不能直接套到新范围。
+/// 首尾值须与同一函数的端点求值一致，禁止独立端值暗中改写函数。
+/// BPM 检查完整保守包围，其他效果继续接受有符号参数。
+/// 密度与曲线合法性独立，低密度不能掩盖中间奇点或负 BPM。
+/// 所有预设仍保持原来的单位区间范围语义。
+/// 非法定义返回假，由 UI 与逻辑提交分别给出相应反馈。
 bool isValidTimingInterpolation(const TimingInterpolation& interpolation,
                                 TimingEffect effect, double startValue)
 {
@@ -106,7 +143,7 @@ bool isValidTimingInterpolation(const TimingInterpolation& interpolation,
          interpolation.m_duration * interpolation.m_samplesPerSecond >
              static_cast<double>(MAX_TIMING_INTERPOLATION_SAMPLES) ||
          interpolation.m_curve < TimingCurve::Linear ||
-         interpolation.m_curve > TimingCurve::Bezier )
+         interpolation.m_curve > TimingCurve::Custom )
         return false;
     // 控制点限制到单位方形，保证正 BPM 不会由曲线过冲变成负数。
     for ( double value : { interpolation.m_controlX1,
@@ -118,6 +155,25 @@ bool isValidTimingInterpolation(const TimingInterpolation& interpolation,
     // 控制点时间顺序不能反向，否则一个实际时刻可能对应多个参数解。
     // 此限制也让低频编辑器与每帧求值保持同一个合法曲线集合。
     if ( interpolation.m_controlX1 > interpolation.m_controlX2 ) return false;
+    if ( interpolation.m_curve == TimingCurve::Custom ) {
+        // 函数缓存与时长绑定；编辑范围后必须重新编译，不能复用旧定义域。
+        // 两端来自表达式，外部 Timing 参数不得与函数首值产生跳变。
+        if ( !interpolation.m_function ||
+             timingFunctionDuration(*interpolation.m_function) !=
+                 interpolation.m_duration ||
+             !sameFunctionValue(
+                 evaluateTimingFunction(*interpolation.m_function, 0),
+                 startValue) ||
+             !sameFunctionValue(
+                 evaluateTimingFunction(*interpolation.m_function,
+                                        interpolation.m_duration),
+                 interpolation.m_endValue) )
+            return false;
+        const auto [minimum, maximum] =
+            timingFunctionRange(*interpolation.m_function);
+        return effect != TimingEffect::BPM ||
+               (minimum >= MIN_NORMALIZED_BPM && maximum <= MAX_NORMALIZED_BPM);
+    }
     if ( effect == TimingEffect::BPM ) {
         return startValue >= MIN_NORMALIZED_BPM &&
                startValue <= MAX_NORMALIZED_BPM &&
@@ -138,6 +194,12 @@ bool isValidTimingInterpolation(const TimingInterpolation& interpolation,
 double evaluateTimingInterpolation(const TimingInterpolation& interpolation,
                                    double startValue, double progress)
 {
+    // 自定义结果是绝对参数，不能再把它当成起终值之间的比例。
+    if ( interpolation.m_curve == TimingCurve::Custom &&
+         interpolation.m_function )
+        return evaluateTimingFunction(
+            *interpolation.m_function,
+            std::clamp(progress, 0.0, 1.0) * interpolation.m_duration);
     return std::lerp(startValue,
                      interpolation.m_endValue,
                      curveProgress(interpolation, progress));
@@ -152,11 +214,21 @@ double evaluateTimingInterpolation(const TimingInterpolation& interpolation,
 /// @note 段前使用首值、段后使用终值，不另外生成锚点或重启相位。
 /// @note 这一接口与采样器分离，粗密度导出不会降低拍位定位精度。
 /// @note 固定迭代是数值算法上限，不是等待状态或时钟的轮询。
+/// @details 自定义函数采用编译时建立的累计积分缓存。
+/// 缓存精度不取决于导出切分密度，拍位反解可以使用同一映射。
+/// 预设的解析积分与自定义的缓存积分共同返回参数乘秒。
+/// 段前与段后均采用端值外推，避免定义域外丢失拍位。
+/// 返回值不包含外部基准拍位，调用方负责叠加之前的段落。
+/// 同一函数对象不会随查询时间更新节点，不引入播放锁。
 double integrateTimingInterpolation(const TimingInterpolation& interpolation,
                                     double startValue, double elapsedSeconds)
 {
     // 首锚点以前沿用首值，因此负拍号仍与旧的等速 BPM 相位兼容。
     // 正时间只在曲线内部积分，再把终点后的常值尾段单独相加。
+    if ( interpolation.m_curve == TimingCurve::Custom &&
+         interpolation.m_function )
+        return integrateTimingFunction(*interpolation.m_function,
+                                       elapsedSeconds);
     if ( elapsedSeconds <= 0.0 ) return startValue * elapsedSeconds;
     const double inside = std::min(elapsedSeconds, interpolation.m_duration);
     // 先截到曲线内部再归一化；尾段在函数末尾单独累加。
@@ -178,6 +250,35 @@ double integrateTimingInterpolation(const TimingInterpolation& interpolation,
     case TimingCurve::Exponential:
         shapeIntegral = (std::expm1(4.0 * x) / 4.0 - x) / std::expm1(4.0);
         break;
+    // 幂、根式、对数和三角预设各自使用解析积分，不依赖输出密度。
+    case TimingCurve::Cubic: shapeIntegral = std::pow(x, 4) / 4; break;
+    case TimingCurve::Quartic: shapeIntegral = std::pow(x, 5) / 5; break;
+    case TimingCurve::Quintic: shapeIntegral = std::pow(x, 6) / 6; break;
+    case TimingCurve::SquareRoot:
+        shapeIntegral = 2 * std::pow(x, 1.5) / 3;
+        break;
+    case TimingCurve::CubeRoot:
+        shapeIntegral = 3 * std::pow(x, 4.0 / 3.0) / 4;
+        break;
+    case TimingCurve::Logarithmic:
+        shapeIntegral =
+            ((1 + 9 * x) * std::log1p(9 * x) - 9 * x) / (9 * std::log(10.0));
+        break;
+    case TimingCurve::Reciprocal:
+        shapeIntegral = 2 * (x - std::log1p(x));
+        break;
+    case TimingCurve::SineIn:
+        shapeIntegral =
+            x - 2 * std::sin(std::numbers::pi * x / 2) / std::numbers::pi;
+        break;
+    case TimingCurve::SineOut:
+        shapeIntegral =
+            2 * (1 - std::cos(std::numbers::pi * x / 2)) / std::numbers::pi;
+        break;
+    case TimingCurve::HyperbolicTangent:
+        shapeIntegral = std::log(std::cosh(3 * x)) / (3 * std::tanh(3.0));
+        break;
+    case TimingCurve::Custom: break;  // 有效自定义函数已在积分入口提前返回。
     case TimingCurve::Bezier: {
         // 参数曲线的积分是 y(u) * x'(u)，六阶原函数可以精确计算。
         double low = 0.0, high = 1.0;
@@ -335,6 +436,10 @@ std::vector<Timing> sampleTimingInterpolations(
 /// @param interpolation 已校验的值定义，不含所属实体或时间锚点。
 /// @note 控制数组固定为 X1、Y1、X2、Y2，不随图形坐标轴方向改变。
 /// @note 曲线编号有明确范围，新增函数时须维持既有编号含义。
+/// @details 原生格式保留源函数式，不持久化内部指令或积分节点。
+/// 每个文件中的时长决定重新编译时的定义域。
+/// Custom 的文本字段与枚举配套出现，普通预设无需该字段。
+/// 输出密度继续独立保存，重新编辑仍只有一个段落实体。
 void to_json(nlohmann::json& json, const TimingInterpolation& interpolation)
 {
     json = { { "duration", interpolation.m_duration },
@@ -346,6 +451,10 @@ void to_json(nlohmann::json& json, const TimingInterpolation& interpolation)
                  interpolation.m_controlY1,
                  interpolation.m_controlX2,
                  interpolation.m_controlY2 } } };
+    // 只持久化可编辑文本，内部字节码和积分缓存不属于文件协议。
+    if ( interpolation.m_curve == TimingCurve::Custom &&
+         interpolation.m_function )
+        json["function"] = timingFunctionExpression(*interpolation.m_function);
 }
 
 /// @brief 校验类型后读取 JSON，错误文件不会进入异常路径。
@@ -355,6 +464,11 @@ void to_json(nlohmann::json& json, const TimingInterpolation& interpolation)
 /// @note 所属 Timing 随后补充起始参数与 BPM 约束。
 /// @note 未知字段可忽略，但缺少必要字段不得推断成普通时间点。
 /// @note 无效控制点与未知曲线拒绝载入，避免不同平台产生不同曲线。
+/// @details Custom 加载必须重新编译，不能信任文件中的端点声明。
+/// 文本、时长和密度分别预检，旧预设格式仍可按原枚举读取。
+/// 函数终值与文件终值不一致时拒绝，避免显示和运行使用不同参数。
+/// 失败时不构造带空函数缓存的可编辑段落。
+/// 统一读取入口也用于联机定义，协议不能绕过本地数学校验。
 std::optional<TimingInterpolation> readTimingInterpolation(
     const nlohmann::json& json)
 {
@@ -378,7 +492,7 @@ std::optional<TimingInterpolation> readTimingInterpolation(
          control == json.end() || !control->is_array() || control->size() != 4 )
         return std::nullopt;
     const auto curveValue = curve->get<double>();
-    if ( curveValue < 0 || curveValue > static_cast<int>(TimingCurve::Bezier) )
+    if ( curveValue < 0 || curveValue > static_cast<int>(TimingCurve::Custom) )
         return std::nullopt;
     interpolation.m_curve = static_cast<TimingCurve>(curveValue);
     // JSON 数组是存储字段而非可执行函数，逐项读取保持确定顺序。
@@ -391,9 +505,83 @@ std::optional<TimingInterpolation> readTimingInterpolation(
         if ( !(*control)[index].is_number() ) return std::nullopt;
         *targets[index] = (*control)[index].get<double>();
     }
+    double startValue = 1.0;
+    if ( interpolation.m_curve == TimingCurve::Custom ) {
+        const auto expression = json.find("function");
+        if ( expression == json.end() || !expression->is_string() )
+            return std::nullopt;
+        auto compiled =
+            compileTimingFunction(expression->get_ref<const std::string&>(),
+                                  interpolation.m_duration);
+        if ( !compiled ) return std::nullopt;
+        interpolation.m_function = std::move(*compiled);
+        startValue = evaluateTimingFunction(*interpolation.m_function, 0);
+    }
     // 与类型无关的校验在此完成，所属时间点随后补充 BPM 起终边界。
-    if ( !isValidTimingInterpolation(interpolation, TimingEffect::SCROLL, 1.0) )
+    if ( !isValidTimingInterpolation(
+             interpolation, TimingEffect::SCROLL, startValue) )
         return std::nullopt;
     return interpolation;
+}
+/// @brief 定义语义比较，独立编译的同一函数仍属于同一个段落值。
+bool TimingInterpolation::operator==(const TimingInterpolation& other) const
+{
+    // 缓存地址和积分准备过程不属于编辑语义，不产生虚假的撤销步骤。
+    const bool sameFunction =
+        m_curve != TimingCurve::Custom ||
+        (m_function && other.m_function &&
+         timingFunctionExpression(*m_function) ==
+             timingFunctionExpression(*other.m_function)) ||
+        (!m_function && !other.m_function);
+    return m_duration == other.m_duration && m_endValue == other.m_endValue &&
+           m_samplesPerSecond == other.m_samplesPerSecond &&
+           m_curve == other.m_curve && m_controlX1 == other.m_controlX1 &&
+           m_controlY1 == other.m_controlY1 &&
+           m_controlX2 == other.m_controlX2 &&
+           m_controlY2 == other.m_controlY2 && sameFunction;
+}
+/// @brief 整段编译成功才更新工作副本，避免错误文本破坏已有函数。
+/// @param interpolation 编辑中的定义，成功后转成 Custom。
+/// @param expression 可保存的完整数学表达式。
+/// @param startValue 成功后同步为 f(0)，失败不覆盖旧起值。
+/// @param error 成功清空，失败为编译器的具体中文说明。
+/// @return 整个定义域合法且缓存完成时返回真。
+/// 编译先在独立对象中完成，错误不会发布半更新的状态。
+/// 终值始终取 f(duration)，避免与程序语义不一致。
+/// 该入口只处理数学合法性，BPM 全域限制由公共校验器补充。
+/// 所有权只在成功时转移，撤销栈可继续持有旧函数对象。
+bool setTimingInterpolationFunction(TimingInterpolation& interpolation,
+                                    std::string_view     expression,
+                                    double& startValue, std::string& error)
+{
+    auto compiled = compileTimingFunction(expression, interpolation.m_duration);
+    if ( !compiled ) {
+        error = compiled.error();
+        return false;
+    }
+    // 起终值由实际秒域的表达式推导，不要求用户重复填写相同信息。
+    interpolation.m_function = std::move(*compiled);
+    interpolation.m_curve    = TimingCurve::Custom;
+    startValue = evaluateTimingFunction(*interpolation.m_function, 0);
+    interpolation.m_endValue = evaluateTimingFunction(*interpolation.m_function,
+                                                      interpolation.m_duration);
+    error.clear();
+    return true;
+}
+/// @brief 非单调自定义函数使用编译时的区间包围，预设沿用端值范围。
+/// @param interpolation 预设或自定义曲线定义。
+/// @param startValue 普通预设的起值，自定义对象已拥有真实首值。
+/// @return 覆盖整个段内的参数范围。
+/// 预设在单位区间中不越过端值，所以端值即可决定包围。
+/// 自定义函数可有内部峰谷，必须借用完整域证明的包围。
+/// 范围同时用于 UI 图形纵轴与 BPM 参数校验。
+/// 不扫描导出事件，函数身份与实际曲线不会随采样率变化。
+std::pair<double, double> timingInterpolationRange(
+    const TimingInterpolation& interpolation, double startValue)
+{
+    if ( interpolation.m_curve == TimingCurve::Custom &&
+         interpolation.m_function )
+        return timingFunctionRange(*interpolation.m_function);
+    return std::minmax(startValue, interpolation.m_endValue);
 }
 }  // namespace MMM

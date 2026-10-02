@@ -575,6 +575,14 @@ void VKContext::setupFonts()
     m_fontAtlasScaleMain = std::clamp(m_fontAtlasScaleMain, 0.5f, 2.0f);
     ImGui::GetStyle().FontScaleMain = m_fontAtlasScaleMain;
 
+    // 数学后备 face 随预设资源分发，不依赖 Windows/macOS 的系统字体。
+    // 在初始化路径缓存存在性；常规 UI 帧和公式预览不得查询文件系统。
+    // 不覆盖 ASCII/CJK 已有字形，只补足根式、大运算符等缺字。
+    const auto mathFontPath =
+        Config::AppPaths::skinsRootPath() /
+        "mmm-default/resources/font/NotoSansMath-Regular.ttf";
+    const bool hasMathFont = pathExistsNoError(mathFontPath);
+
     // 每次调用创建一个业务字体栈：ASCII 基础 + CJK 合并 + 图标合并。
     auto loadFontWithSize = [&](const std::string& key, float size) {
         // 在 lambda 内重新取 settings 引用，保持偏好读取与当前 AppConfig
@@ -646,6 +654,15 @@ void VKContext::setupFonts()
                 Config::pathToUtf8(cjkFontPath).c_str(),
                 atlasSize,
                 &mergeConfig);
+
+            // 仅补充缺失数学字形；字号、DPI 和单采样规则与正文一致。
+            // 可选资源缺失时保留启动能力，资源更新后重载字体即可补齐。
+            if ( hasMathFont ) {
+                io.Fonts->AddFontFromFileTTF(
+                    Config::pathToUtf8(mathFontPath).c_str(),
+                    atlasSize,
+                    &mergeConfig);
+            }
 
             // 图标 face 使用皮肤资源并合并到相同
             // ImFont，文本和图标可在同一字符串。

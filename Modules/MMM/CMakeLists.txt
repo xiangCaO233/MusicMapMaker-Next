@@ -43,7 +43,10 @@ add_library(
   src/project/AudioResource.cpp
   src/timing/Timing.cpp
   # 曲线领域算法共用于原生模型、编辑器和外部格式采样。
-  src/timing/TimingInterpolation.cpp)
+  src/timing/TimingInterpolation.cpp
+  # 受限表达式编译与拟合只在编辑或载入执行，播放使用只读缓存。
+  src/timing/TimingFunction.cpp
+  src/timing/TimingFunctionFit.cpp)
 
 # 公共 include 目录只发布稳定模型接口，日志、事件和 JSON 则作为传递依赖供 这些接口中的元数据与序列化声明使用。
 target_include_directories(MMM PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
@@ -151,3 +154,10 @@ mmm_add_test_executable(MMM PackageFileTypesTest tests/PackageFileTypesTest.cpp)
 target_link_libraries(PackageFileTypesTest PRIVATE MMM Log)
 mmm_register_test_case(NAME Test_Package_File_Types COMMAND
                        PackageFileTypesTest)
+
+# 数学函数测试覆盖符号语法、闭区间定义域、积分缓存、自由绘制拟合和原生保存。 输出只写构建树，测试不借助用户字体、窗口系统或第三方脚本执行环境。
+# 函数测试只在传入的独立构建输出目录保存回环文件，不访问用户配置。
+mmm_add_test_executable(MMM TimingFunctionTest tests/TimingFunctionTest.cpp)
+target_link_libraries(TimingFunctionTest PRIVATE MMM Log)
+mmm_register_test_case(NAME TimingFunctionTest COMMAND TimingFunctionTest
+                       "${TEST_OUTPUT_DIR}/timing_function")

@@ -14,6 +14,7 @@
 #include <fstream>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <string>
 
 namespace
 {
@@ -48,13 +49,14 @@ bool testCurves()
     curve.m_duration = 2.0;
     curve.m_endValue = 240.0;
     bool ok          = true;
-    // 枚举连续范围覆盖公开的七种函数，新增类型必须同步更新断言范围。
+    // 枚举连续范围覆盖所有预设初等函数，自定义函数在独立场景检查。
     // 起终点必须精确到约定容差，中间曲率可以不同。
     // 首尾一致是用户编辑端值的契约，不只是某一种缓动函数的特征。
     // 每种形状随后独立检查累计拍数的反解闭环。
     // BPM 两端为正，因此拍数严格单调，理论上有唯一的时间解。
     // 查询段前与段后验证的是外推契约，而不是只在合法区间内自洽。
-    for ( int type = 0; type <= static_cast<int>(MMM::TimingCurve::Bezier);
+    for ( int type = 0;
+          type <= static_cast<int>(MMM::TimingCurve::HyperbolicTangent);
           ++type ) {
         curve.m_curve = static_cast<MMM::TimingCurve>(type);
         // 每一种函数都必须准确穿过用户给定的两端，不能暗中改变端值。
@@ -111,6 +113,31 @@ bool testCurves()
     ok &= check(
         near(MMM::integrateTimingInterpolation(curve, 120.0, 2.0), sum, 1e-4),
         "nonlinear Bezier integral");
+    // 自定义函数采用秒域而非比例；锚点不在零时也必须准确累计拍数。
+    // 函数中途升降但 BPM 始终为正，拍位反解仍须唯一且连续。
+    // 同一缓存覆盖段首以前、域内和段尾继承，不重启相位。
+    MMM::TimingInterpolation custom;
+    custom.m_duration       = 2;
+    double      customStart = 120;
+    std::string customError;
+    if ( !MMM::setTimingInterpolationFunction(
+             custom, "120+20*sin(pi*t)", customStart, customError) )
+        return check(false, "custom compile for beat inverse");
+    MMM::Logic::TimelineComponent customTiming{
+        3.0, MMM::TimingEffect::BPM, customStart, {}, custom
+    };
+    for ( double time : { 2.0, 3.0, 3.0001, 3.137, 4.2, 5.0, 8.0 } ) {
+        const auto beat = MMM::Logic::timelineBeatsAt(customTiming, time);
+        ok &= check(
+            near(MMM::Logic::timelineTimeAtBeat(customTiming, beat), time),
+            "custom beat inverse");
+    }
+    // 输出 Hz 只控制写出事件，改变它不能改变自定义函数的拍位累计。
+    const double originalBeat = MMM::Logic::timelineBeatsAt(customTiming, 4.2);
+    customTiming.m_interpolation->m_samplesPerSecond = 1;
+    ok &= check(
+        near(MMM::Logic::timelineBeatsAt(customTiming, 4.2), originalBeat),
+        "custom beat independent of density");
     // 输入边界必须在创建或读入前失败，不允许把 NaN 带到排序和图形投影。
     // 非法持续时间必须先拒绝，不能在后来生成样本时钳制成零。
     // 恢复时长后单独破坏 BPM，隔离每一种输入错误的判据。
@@ -495,6 +522,11 @@ bool testStorage()
 }  // namespace
 
 /// @brief 汇总数学、事务和格式边界，任一失败使 CTest 报告失败。
+/// 自定义 BPM 的积分和反解使用同一真实秒域定义。
+/// 测试包含非零段落锚点，避免把局部 t 与绝对时间混用。
+/// 改变导出密度不能改变编辑器的拍位映射。
+/// 所有新预设均覆盖单位区间端点和解析积分。
+/// 用例输出不写入源码资源目录。
 int main()
 {
     const bool curves     = testCurves();

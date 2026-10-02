@@ -2,6 +2,7 @@
 
 #include "canvas/CanvasSnapshotPrepare.h"
 #include "canvas/TimelineAuxiliaryWindowState.h"
+#include "canvas/TimingFunctionEditorState.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "graphic/imguivk/VKTextureAtlas.h"
 #include "mmm/timing/Timing.h"
@@ -438,6 +439,13 @@ private:
         const Common::Render::TimingInterpolationElement& segment);
     /// @brief 低频段落编辑窗口，提交前校验范围与同类型时间点冲突。
     void renderInterpolationEditor();
+    /// @brief 打开段落窗口时初始化函数输入和绘制轴，不执行逐帧重置。
+    void initializeTimingFunctionEditor();
+    /// @brief 显示函数排版、手绘拟合和错误反馈，只在输入变化时编译。
+    /// @warning 每帧编辑窗口路径；求解与编译仅由输入事件触发。
+    void renderTimingFunctionEditor();
+    /// @brief 取消、绘制或拟合只修改这个模态工作状态。
+    TimingFunctionEditorState m_timingFunctionEditor;
     /// @brief 在拖动期间保留段首，不让手势变成单点放置。
     bool m_isInterpolationDragging{ false };
     /// @brief 段落编辑窗口的值语义工作副本。

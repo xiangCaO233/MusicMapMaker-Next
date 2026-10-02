@@ -1047,6 +1047,8 @@ void NoteRenderSystem::renderMarqueeBox(
 
 /// @brief 根据会话配置生成时间线快照，与其他画布共享专业模式状态。
 /// @warning 逻辑渲染热路径：只读取传入的配置快照和已缓存的时间线数据。
+/// 段落描述复制保留不可变函数的共享所有权，频率为每次时间线快照发布；
+/// UI 可在逻辑删除实体后继续读取旧快照，观察指针无法保证这段跨线程生命周期。
 /// @param snapshot 接收几何及 Timing 交互元素的快照。
 /// @param bpmEvents 已排序的 BPM 观察指针，供分拍线生成使用。
 /// @param batcher 沿用调用方设置的全时间线裁剪。

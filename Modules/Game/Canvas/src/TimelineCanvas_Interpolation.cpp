@@ -46,9 +46,12 @@ constexpr std::array INTERPOLATION_LABELS{ "BPM", "Scroll", "Jump (ms)", "HS" };
 /// @brief 曲线选项与 TimingCurve 的声明顺序一一对应。
 // 这些名称是界面文字，不能把它们作为文件或协议中的曲线标识。
 // 未来翻译名称变动不会改变已保存的曲线编号或计算结果。
-constexpr std::array CURVE_LABELS{ "直线",      "二次渐入", "二次渐出",
-                                   "平滑阶跃",  "正弦渐变", "指数渐变",
-                                   "三次贝塞尔" };
+/// @note 新曲线只能追加稳定枚举，不能移动已发布的贝塞尔编号。
+constexpr std::array CURVE_LABELS{
+    "直线",       "二次渐入", "二次渐出", "平滑阶跃", "正弦渐变", "指数渐变",
+    "三次贝塞尔", "三次幂",   "四次幂",   "五次幂",   "平方根",   "立方根",
+    "对数",       "有理函数", "正弦渐入", "正弦渐出", "双曲正切", "自定义 f(t)"
+};
 
 /// @brief 判定模态工作副本是否与同效果时间点冲突。
 /// @details 只使用打开窗口时捕获的值副本，逻辑提交会再次检查最新注册表。
@@ -115,8 +118,9 @@ void TimelineCanvas::openInterpolationEditor(
     // 打开编辑器须绑定一个真实谱面，不为欢迎页创建悬空工作副本。
     // 表格入口和画布入口均使用这个检查，因此不存在无来源的编辑提交。
     if ( !m_currentSnapshot || !m_currentSnapshot->hasBeatmap ) return;
-    m_interpolationEdit       = segment;
-    m_interpolationEnd        = segment.time + segment.interpolation.m_duration;
+    m_interpolationEdit = segment;
+    m_interpolationEnd  = segment.time + segment.interpolation.m_duration;
+    initializeTimingFunctionEditor();
     m_interpolationBeatmapKey = m_currentSnapshot->beatmapPathKey;
     m_interpolationInstanceId = m_currentSnapshot->beatmapInstanceId;
     // 窗口重新打开时丢弃上次副本，避免旧谱面的范围影响新谱面。
@@ -369,11 +373,10 @@ void TimelineCanvas::renderInterpolationOverlay(const ImVec2& position,
             // 用起终值的数值范围归一横轴；下降曲线依然从较大值向较小值移动。
             // 图示的较大值位于泳道右侧，下降曲线会从右向左。
             // 不使用时间终点位置替代参数的实际增减方向。
-            const double minimum =
-                std::min(segment.value, segment.interpolation.m_endValue);
-            const double span =
-                std::abs(segment.interpolation.m_endValue - segment.value);
-            ImVec2 previous{};
+            const auto [minimum, maximum] =
+                timingInterpolationRange(segment.interpolation, segment.value);
+            const double span = maximum - minimum;
+            ImVec2       previous{};
             for ( int index = 0; index <= 128; ++index ) {
                 const double progress = static_cast<double>(index) / 128.0;
                 const double value    = evaluateTimingInterpolation(
@@ -430,13 +433,21 @@ void TimelineCanvas::renderInterpolationEditor()
     // 未打开编辑器的常规帧不执行校验、数量计算或窗口布局。
     // 请求标记只为延迟到稳定 ID 栈，不承担时长消抖或阻塞等待。
     if ( !m_isInterpolationEditorOpen ) return;
-    ImGui::SetNextWindowSize(ImVec2(620.0f, 0.0f), ImGuiCond_Appearing);
+    const auto   workSize = ImGui::GetMainViewport()->WorkSize;
+    const ImVec2 maximum(std::max(1.f, workSize.x * .95f),
+                         std::max(1.f, workSize.y * .95f));
+    // 初次打开才给定尺寸，重开时沿用用户调整的大小；小屏幕按工作区收敛。
+    ImGui::SetNextWindowSize(
+        ImVec2(std::min(620.f, maximum.x), std::min(820.f, workSize.y * .85f)),
+        ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(std::min(420.f, maximum.x), std::min(320.f, maximum.y)),
+        maximum);
     bool open = true;
     // 标题关闭使用独立布尔量，不能让 ImGui 修改逻辑段落状态。
-    // 宽度首帧给定，内容高度由所选函数所需的控件数量决定。
+    // 允许拖动边缘或右下角缩放；内容超出高度时由窗口滚动，而非强制改回尺寸。
     if ( ImGui::BeginPopupModal("插值时间点段落###TimingInterpolationEditor",
-                                &open,
-                                ImGuiWindowFlags_AlwaysAutoResize) ) {
+                                &open) ) {
         auto& edit  = m_interpolationEdit;
         auto& curve = edit.interpolation;
         int   lane  = interpolationLane(edit.effect);
@@ -454,6 +465,8 @@ void TimelineCanvas::renderInterpolationEditor()
                                          : 120.0)
                     : (edit.effect == TimingEffect::JUMP ? 0.0 : 1.0);
             curve.m_endValue = edit.value;
+            // 新效果的领域限制不同，自定义函数须恢复真实端点后再校验。
+            m_timingFunctionEditor.m_compiledDuration = -1;
         }
         ImGui::EndDisabled();
         // 时间字段统一为秒，与 TimelineComponent 一致。
@@ -463,14 +476,20 @@ void TimelineCanvas::renderInterpolationEditor()
         // 用户修改任意端点都会立即刷新时长、曲线图和预计事件数量。
         // 倒置范围保留错误提示，不能用绝对值掩盖用户输入问题。
         curve.m_duration = m_interpolationEnd - edit.time;
+        // 绝对函数首尾由 f(0) 和 f(duration) 推导，避免双重真值来源。
+        ImGui::BeginDisabled(curve.m_curve == TimingCurve::Custom);
         ImGui::InputDouble("起始参数", &edit.value, 0.0, 0.0, "%.6g");
         ImGui::InputDouble("终点参数", &curve.m_endValue, 0.0, 0.0, "%.6g");
+        ImGui::EndDisabled();
         int function = static_cast<int>(curve.m_curve);
         if ( ImGui::Combo("变化函数",
                           &function,
                           CURVE_LABELS.data(),
-                          static_cast<int>(CURVE_LABELS.size())) )
+                          static_cast<int>(CURVE_LABELS.size())) ) {
             curve.m_curve = static_cast<TimingCurve>(function);
+            // 切换模式需要重编译一次，常规帧不得重复准备积分缓存。
+            m_timingFunctionEditor.m_compiledDuration = -1;
+        }
         // 曲线种类切换不会丢弃控制点，切回贝塞尔可继续调整原形状。
         // 横轴是时间比例，纵轴是参数比例，不是屏幕像素。
         if ( curve.m_curve == TimingCurve::Bezier ) {
@@ -485,12 +504,16 @@ void TimelineCanvas::renderInterpolationEditor()
                 "控制点 2 Y", &curve.m_controlY2, 0.0, 0.0, "%.4f");
             ImGui::TextUnformatted("控制点范围 0–1，X1 ≤ X2。");
         }
+        renderTimingFunctionEditor();
         ImGui::InputDouble(
             "输出采样密度 (Hz)", &curve.m_samplesPerSecond, 0.0, 0.0, "%.6g");
         // 已有时间点副本用于提前解释冲突，最终命令还会校验最新数据。
         // 联机编辑或队列提交之间出现变化时，逻辑入口拥有最终决定权。
         const char* error =
             interpolationValidationError(edit, m_interpolationValidationRows);
+        if ( curve.m_curve == TimingCurve::Custom &&
+             !m_timingFunctionEditor.m_error.empty() )
+            error = m_timingFunctionEditor.m_error.c_str();
         // 路径相同不表示会话相同，实例令牌防止同文件重开后实体 ID 复用。
         // 无效的工作副本允许取消，不能自动提交到后来激活的谱面。
         const bool sameBeatmap =
@@ -513,8 +536,9 @@ void TimelineCanvas::renderInterpolationEditor()
                 ImVec2(origin.x + graphSize.x, origin.y + graphSize.y),
                 IM_COL32(20, 24, 30, 255),
                 4.0f);
-            const double minimum = std::min(edit.value, curve.m_endValue);
-            const double span    = std::abs(edit.value - curve.m_endValue);
+            const auto [minimum, maximum] =
+                timingInterpolationRange(curve, edit.value);
+            const double span = maximum - minimum;
             // 横轴以实际时间比例求值，贝塞尔反解由领域函数统一执行。
             // 纵轴归一仅用于图示；恒定函数显示在图像中间而非底部。
             const auto graphPoint = [&](double x) {

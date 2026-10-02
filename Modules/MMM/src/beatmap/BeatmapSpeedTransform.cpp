@@ -1,5 +1,6 @@
 #include "mmm/beatmap/BeatmapSpeedTransform.h"
 #include "mmm/SafeParse.h"
+#include "mmm/timing/TimingFunction.h"
 
 #include <nlohmann/json.hpp>
 
@@ -118,7 +119,15 @@ void scaleMalodyTimingDelay(Timing& timing, double speed)
 /// @brief 缩放单个时间线事件。
 /// @param timing 需要修改的时间线事件。
 /// @param speed 倍速倍率。
-void scaleTiming(Timing& timing, double speed)
+/// @return 自定义秒域重编译成功时为真，失败阻止整个变速副本发布。
+/// @details Custom 用 g(t)=valueScale*f(speed*t) 保留原曲线时间含义。
+/// 同一采样总数通过密度与时长相反缩放保持。
+/// BPM 输出同时乘速度，Scroll、Jump 与 HS 只缩放自变量。
+/// 失败不能返回带旧函数缓存与新时长的混合定义。
+/// 该函数只修改独立目标副本，原谱面的函数仍不可变。
+/// 局部积分变量不作为时间缩放对象，只重写公开 t。
+/// 编译错误由上层结果字段返回，不抛出异常。
+bool scaleTiming(Timing& timing, double speed)
 {
     // 所有事件锚点和 Malody 局部 delay 都属于绝对时间域。
     timing.m_timestamp = scaledMilliseconds(timing.m_timestamp, speed);
@@ -128,14 +137,30 @@ void scaleTiming(Timing& timing, double speed)
         // 加速使时长缩短，密度同步提高，最终输出事件总数保持一致。
         // 曲线归一形状不变，贝塞尔时间控制点也无需另行缩放。
         // 只有 BPM 两端随时间速度缩放，滚动等参数继续沿用领域值。
-        timing.m_interpolation->m_duration /= speed;
+        auto& curve = *timing.m_interpolation;
+        if ( curve.m_curve == TimingCurve::Custom ) {
+            if ( !curve.m_function ) return false;
+            // t 代表秒而非比例，变速要重写自变量；BPM 还要同时缩放输出。
+            const auto expression = rescaleTimingFunctionExpression(
+                *curve.m_function,
+                speed,
+                timing.m_timingEffect == TimingEffect::BPM ? speed : 1.0);
+            curve.m_duration /= speed;
+            std::string error;
+            double      start = timing.m_timingEffectParameter;
+            if ( !setTimingInterpolationFunction(
+                     curve, expression, start, error) )
+                return false;
+        } else
+            curve.m_duration /= speed;
         timing.m_interpolation->m_samplesPerSecond *= speed;
-        if ( timing.m_timingEffect == TimingEffect::BPM )
-            timing.m_interpolation->m_endValue *= speed;
+        if ( timing.m_timingEffect == TimingEffect::BPM &&
+             curve.m_curve != TimingCurve::Custom )
+            curve.m_endValue *= speed;
     }
     if ( timing.m_timingEffect != TimingEffect::BPM ) {
         // SCROLL/JUMP/HS 的效果参数不是节拍频率，变速时保持数值不变。
-        return;
+        return true;
     }
 
     // 优先使用领域 BPM，兼容旧数据时依次尝试效果参数和正拍长反推。
@@ -149,13 +174,14 @@ void scaleTiming(Timing& timing, double speed)
     }
     if ( bpm <= 0.0 || !std::isfinite(bpm) ) {
         // 无法恢复有效基准时只缩放时间锚点，不制造虚构 BPM。
-        return;
+        return true;
     }
 
     // BPM 与速度同向增长，并同步更新两个兼容字段和反比拍长。
     timing.m_bpm                   = bpm * speed;
     timing.m_timingEffectParameter = timing.m_bpm;
     timing.m_beat_length           = 60000.0 / timing.m_bpm;
+    return true;
 }
 
 /// @brief 复制并缩放折线中的子物件。
@@ -272,13 +298,14 @@ void copyScaledNotes(BeatMap& target, const BeatMap& source, double speed)
 /// @param target 接收结果的新谱面。
 /// @param source 原谱面。
 /// @param speed 倍速倍率。
-void copyScaledTimings(BeatMap& target, const BeatMap& source, double speed)
+bool copyScaledTimings(BeatMap& target, const BeatMap& source, double speed)
 {
     // 值复制保留所有来源扩展属性，随后逐事件只改时间相关字段。
     target.m_timings = source.m_timings;
     for ( auto& timing : target.m_timings ) {
-        scaleTiming(timing, speed);
+        if ( !scaleTiming(timing, speed) ) return false;
     }
+    return true;
 }
 
 /// @brief 复制并缩放自动采样时间线。
@@ -409,7 +436,10 @@ BeatmapSpeedTransformResult BeatmapSpeedTransform::createSpeedVersion(
     }
 
     // 各拥有型容器分别复制，Polyline 子引用在 Note 阶段重建。
-    copyScaledTimings(result.beatmap, source, options.speed);
+    if ( !copyScaledTimings(result.beatmap, source, options.speed) ) {
+        result.errorMessage = "变速后自定义时间函数超出定义域或表达式预算。";
+        return result;
+    }
     copyScaledAudioSamples(result.beatmap, source, options.speed);
     copyScaledNotes(result.beatmap, source, options.speed);
     // 忽略来源声明长度，以缩放后所有实际内容的最晚时间为准。
