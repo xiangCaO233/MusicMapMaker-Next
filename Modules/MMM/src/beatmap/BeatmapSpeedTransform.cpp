@@ -123,6 +123,16 @@ void scaleTiming(Timing& timing, double speed)
     // 所有事件锚点和 Malody 局部 delay 都属于绝对时间域。
     timing.m_timestamp = scaledMilliseconds(timing.m_timestamp, speed);
     scaleMalodyTimingDelay(timing, speed);
+    if ( timing.m_interpolation ) {
+        // 保持曲线形状与事件数量；密度随压缩后的时间域反向缩放。
+        // 加速使时长缩短，密度同步提高，最终输出事件总数保持一致。
+        // 曲线归一形状不变，贝塞尔时间控制点也无需另行缩放。
+        // 只有 BPM 两端随时间速度缩放，滚动等参数继续沿用领域值。
+        timing.m_interpolation->m_duration /= speed;
+        timing.m_interpolation->m_samplesPerSecond *= speed;
+        if ( timing.m_timingEffect == TimingEffect::BPM )
+            timing.m_interpolation->m_endValue *= speed;
+    }
     if ( timing.m_timingEffect != TimingEffect::BPM ) {
         // SCROLL/JUMP/HS 的效果参数不是节拍频率，变速时保持数值不变。
         return;
@@ -299,7 +309,12 @@ double BeatmapSpeedTransform::calculateContentEndTime(const BeatMap& beatmap)
     // Timing 自身锚点也属于可见内容，即使谱面没有玩家物件。
     for ( const auto& timing : beatmap.m_timings ) {
         if ( std::isfinite(timing.m_timestamp) ) {
-            endTime = std::max(endTime, timing.m_timestamp);
+            endTime =
+                std::max(endTime,
+                         timing.m_timestamp +
+                             (timing.m_interpolation
+                                  ? timing.m_interpolation->m_duration * 1000.0
+                                  : 0.0));
         }
     }
     for ( const auto& sample : beatmap.m_audioSamples ) {

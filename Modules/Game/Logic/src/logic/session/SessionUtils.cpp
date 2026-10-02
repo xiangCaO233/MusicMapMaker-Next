@@ -630,7 +630,9 @@ int calculateBeatIndex(double                                       time,
             // 当前段向下取整获取所在拍，微小容差避免整拍边界落回前一拍。
             const double beatDuration = 60.0 / bpm;
             const auto   beatsInBpm   = static_cast<int64_t>(std::floor(
-                (time - currentBpm->m_timestamp) / beatDuration + 1e-6));
+                // 累计拍号使用原函数积分，粗导出密度不能影响编辑器拍号。
+                // 后续 BPM 仍从上一段累计拍数延续，不在每个采样点重新归零。
+                timelineBeatsAt(*currentBpm, time, fallbackBpm) + 1e-6));
             return static_cast<int>(totalBeats + beatsInBpm + 1);
         }
         if ( time >= nextBpmTime ) {
@@ -638,8 +640,8 @@ int calculateBeatIndex(double                                       time,
             const double beatDuration = 60.0 / bpm;
             const double segmentDuration =
                 nextBpmTime - currentBpm->m_timestamp;
-            auto beatsInBpm = static_cast<int64_t>(
-                std::ceil(segmentDuration / beatDuration - 1e-6));
+            auto beatsInBpm = static_cast<int64_t>(std::ceil(
+                timelineBeatsAt(*currentBpm, nextBpmTime, fallbackBpm) - 1e-6));
             if ( segmentDuration > 0.0 ) {
                 // 防止正长度极短段受浮点容差影响被向上取整为零。
                 beatsInBpm = std::max<int64_t>(beatsInBpm, 1);
@@ -1175,8 +1177,26 @@ SnapResult getSnapResult(
         }
         if ( !std::isfinite(bVal) || bVal <= 0.0 ) bVal = 120.0;
         // fallback 本身也可能不可用，最后一步保证传给候选算法的是有限正数。
+        // 连续 BPM 先映射到等速拍位域，复用已有分拍规则后反解真实秒时间。
+        const double placementTime =
+            currentBPM->m_interpolation
+                ? bpmTime +
+                      timelineBeatsAt(*currentBPM, rawTime, bVal) * 60.0 / bVal
+                : rawTime;
+        const double placementEnd =
+            currentBPM->m_interpolation && std::isfinite(nextBpmTime)
+                ? bpmTime + timelineBeatsAt(*currentBPM, nextBpmTime, bVal) *
+                                60.0 / bVal
+                : nextBpmTime;
         auto candidate = calculateObjectPlacementSnap(
-            rawTime, bpmTime, nextBpmTime, bVal, config.settings);
+            placementTime, bpmTime, placementEnd, bVal, config.settings);
+        // 拍位空间吸附保持原规则，实际秒坐标必须由曲线反解。
+        // 输出密度只是保存参数，不参与画布物件的吸附位置。
+        if ( currentBPM->m_interpolation && candidate.isSnapped )
+            candidate.snappedTime = timelineTimeAtBeat(
+                *currentBPM,
+                (candidate.snappedTime - bpmTime) * bVal / 60.0,
+                bVal);
         if ( !candidate.isSnapped ) continue;
 
         // SV 可使时间到纵坐标的映射非匀速，必须通过 ScrollCache 转换候选。

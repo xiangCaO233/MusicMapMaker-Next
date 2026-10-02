@@ -1067,6 +1067,8 @@ void NoteRenderSystem::generateTimelineSnapshot(
     float judgmentLineY, const Config::EditorConfig& config,
     const ScrollCache* cache)
 {
+    // 曲线描述保留原始实体；积分采样不是可交互时间点。
+    snapshot->timingInterpolations = cache->getInterpolations();
     // 空会话没有可解释的 Timing 数据，保持已有快照内容并返回。
     // 背景与交互元素都只在谱面存在时追加。
     if ( !snapshot->hasBeatmap ) return;
@@ -1232,20 +1234,30 @@ void NoteRenderSystem::generateTimelineSnapshot(
                 // 微小容差减少浮点误差把恰在边界上的线跳到下一格。
                 if ( startCalcTime > bpmTime ) {
                     stepOffset = static_cast<int64_t>(std::ceil(
-                        (startCalcTime - bpmTime) / stepDuration - 1e-4));
+                        timelineBeatsAt(*currentBPM, startCalcTime, bpmVal) *
+                            beatDivisor -
+                        1e-4));
                     // 允许首 BPM 向前补线时使用负步数。
                     // 向下取整给出候选，再由下一段循环推进到实际可见起点。
                 } else if ( startCalcTime < bpmTime ) {
                     stepOffset = static_cast<int64_t>(std::floor(
-                        (startCalcTime - bpmTime) / stepDuration + 1e-4));
+                        timelineBeatsAt(*currentBPM, startCalcTime, bpmVal) *
+                            beatDivisor +
+                        1e-4));
                 }
 
-                double t = bpmTime + stepOffset * stepDuration;
+                double t = timelineTimeAtBeat(
+                    *currentBPM,
+                    static_cast<double>(stepOffset) / beatDivisor,
+                    bpmVal);
                 // 校正整数换算后的下界误差，保证正式循环不从窗口前开始。
                 // 这是有限数据步进，不等待时钟或跨线程状态。
                 while ( t < startCalcTime - 1e-4 ) {
                     stepOffset++;
-                    t = bpmTime + stepOffset * stepDuration;
+                    t = timelineTimeAtBeat(
+                        *currentBPM,
+                        static_cast<double>(stepOffset) / beatDivisor,
+                        bpmVal);
                 }
                 // 每一步都由整数偏移重新乘出时间，不连续累加浮点时长。
                 // 同时限制在 BPM 生效段和当前可见区间内。
@@ -1311,7 +1323,10 @@ void NoteRenderSystem::generateTimelineSnapshot(
                     }
 
                     stepOffset++;
-                    t = bpmTime + stepOffset * stepDuration;
+                    t = timelineTimeAtBeat(
+                        *currentBPM,
+                        static_cast<double>(stepOffset) / beatDivisor,
+                        bpmVal);
                 }
             }
         }

@@ -697,6 +697,8 @@ struct CmdUpdateTimelineEvent {
     double newValue;
     /// @brief 可选的新元数据；为空时由逻辑层保留或清理旧元数据。
     std::optional<::MMM::TimingMetadata> metadataOverride;
+    /// @brief 非空时整体更新插值段落；为空时保留原段落定义。
+    std::optional<::MMM::TimingInterpolation> interpolationOverride;
 };
 
 /**
@@ -721,6 +723,8 @@ struct CmdCreateTimelineEvent {
     double              time;
     ::MMM::TimingEffect type;
     double              value;
+    /// @brief 非空时创建一个插值段落，而非展开为独立时间点。
+    std::optional<::MMM::TimingInterpolation> interpolation;
 };
 
 /**
@@ -754,6 +758,8 @@ struct CmdCreateTimelineEvents {
 
         /// @brief 创建后写入 Timeline 组件的原始元数据。
         ::MMM::TimingMetadata metadata;
+        /// @brief 剪贴板与批量创建保留段落形状和外部采样密度。
+        std::optional<::MMM::TimingInterpolation> interpolation;
     };
 
     /// @brief 待创建 Timeline 事件列表。

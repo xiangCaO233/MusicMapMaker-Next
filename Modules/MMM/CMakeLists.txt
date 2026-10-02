@@ -36,9 +36,14 @@
 # MMM 静态库只编译具有独立实现单元的核心模型；各格式读写器以内部头文件形式 由 BeatMap 分派入口包含，避免把格式细节暴露为业务模块的公共链接目标。
 add_library(
   MMM STATIC
-  src/beatmap/BeatMap.cpp src/beatmap/BeatmapSpeedTransform.cpp
-  src/note/Note.cpp src/note/Hold.cpp src/project/AudioResource.cpp
-  src/timing/Timing.cpp)
+  src/beatmap/BeatMap.cpp
+  src/beatmap/BeatmapSpeedTransform.cpp
+  src/note/Note.cpp
+  src/note/Hold.cpp
+  src/project/AudioResource.cpp
+  src/timing/Timing.cpp
+  # 曲线领域算法共用于原生模型、编辑器和外部格式采样。
+  src/timing/TimingInterpolation.cpp)
 
 # 公共 include 目录只发布稳定模型接口，日志、事件和 JSON 则作为传递依赖供 这些接口中的元数据与序列化声明使用。
 target_include_directories(MMM PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)

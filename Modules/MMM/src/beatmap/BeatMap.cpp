@@ -11,6 +11,8 @@
 
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 
@@ -82,6 +84,40 @@ bool BeatMap::saveToFile(std::filesystem::path mapFilePath) const
 {
     // 保存不从当前来源格式推断目标，允许另存为完成格式转换。
     std::string mapFileExtention = Config::pathToUtf8(mapFilePath.extension());
+    // 无效段落禁止静默降级丢弃，保存失败保留编辑数据供用户修正。
+    // 时间戳在文件领域为毫秒，曲线时长为秒，求终点必须先统一单位。
+    // 起点和终点都必须可表示，有限时长并不能单独保证相加后不溢出。
+    for ( const auto& timing : m_timings )
+        if ( timing.m_interpolation &&
+             (!std::isfinite(timing.m_timestamp) || timing.m_timestamp < 0.0 ||
+              !std::isfinite(timing.m_timestamp +
+                             timing.m_interpolation->m_duration * 1000.0) ||
+              !isValidTimingInterpolation(*timing.m_interpolation,
+                                          timing.m_timingEffect,
+                                          timing.m_timingEffectParameter)) )
+            return false;
+    if ( mapFileExtention != ".mmm" &&
+         std::any_of(
+             m_timings.begin(), m_timings.end(), [](const auto& timing) {
+                 return timing.m_interpolation.has_value();
+             }) ) {
+        // 格式写出消费临时采样视图，编辑中的段落定义和撤销历史不受影响。
+        // 只有含段落的低频保存分支复制领域数据，普通保存沿用原入口。
+        BeatMap sampled;
+        // 临时副本只服务同步 writer；来源谱面在整个保存调用期间存活。
+        // NoteData 中共享的折线节点只被只读访问，不修改源父子关系。
+        // 节点语义不依赖曲线采样，不能在导出时重新生成物件身份。
+        // 递归调用面对的所有 Timing 均已清除段落字段，不会重复展开。
+        sampled.m_noteData        = m_noteData;
+        sampled.m_audioSamples    = m_audioSamples;
+        sampled.m_annotations     = m_annotations;
+        sampled.m_metadata        = m_metadata;
+        sampled.m_baseMapMetadata = m_baseMapMetadata;
+        sampled.m_timings         = sampleTimingInterpolations(m_timings);
+        // 重建借用视图以指向临时副本的容器，不能沿用来源视图地址。
+        sampled.sync();
+        return sampled.saveToFile(std::move(mapFilePath));
+    }
     if ( mapFileExtention == ".osu" ) {
         // 目标格式由后缀唯一决定，写出器负责必要的字段降级。
         return saveOSUMap(*this, mapFilePath);

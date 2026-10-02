@@ -561,9 +561,9 @@ void NoteRenderSystem::drawBeatLines(
             const int    numerator   = step / common;
             const int    denominator = divisor / common;
             const double lineTime    = subdivisionPreview.beatStartTime +
-                                    subdivisionPreview.beatDuration *
-                                        static_cast<double>(numerator) /
-                                        static_cast<double>(denominator);
+                                       subdivisionPreview.beatDuration *
+                                           static_cast<double>(numerator) /
+                                           static_cast<double>(denominator);
             // 预览只补拍内线，拍末边界仍由常规网格负责。
             if ( lineTime >= subdivisionPreview.beatEndTime - 1e-6 ) return;
             // BPM 截断一拍时，以实际拍末限制候选，不能只看理论拍长。
@@ -630,9 +630,8 @@ void NoteRenderSystem::drawBeatLines(
                                  ? bpmEvents[i + 1]->m_timestamp
                                  : std::numeric_limits<double>::infinity();
 
-        double beatDuration = 60.0 / bpmVal;
-        // BPM 定义每分钟拍数，时间线使用秒；每拍再分成 beatDivisor 份。
-        double stepDuration = beatDuration / beatDivisor;
+        // BPM 定义每分钟拍数；曲线中的实际步长由拍位反解，不预设固定秒数。
+        // 细分仍按 beatDivisor 切拍，渐变只改变每条线的时间坐标。
 
         for ( const auto& [startTime, endTime] : visibleRanges ) {
             // 先求 BPM 段与可见时间段的交集，省去离屏范围的逐拍推进。
@@ -649,19 +648,36 @@ void NoteRenderSystem::drawBeatLines(
             // 直接算首个候选步号，避免从 BPM 起点循环推进到远处视窗。
             int64_t stepOffset = 0;
             if ( startCalcTime > bpmTime ) {
-                stepOffset = static_cast<int64_t>(
-                    std::ceil((startCalcTime - bpmTime) / stepDuration - 1e-4));
+                stepOffset = static_cast<int64_t>(std::ceil(
+                    timelineBeatsAt(*currentBPM, startCalcTime, bpmVal) *
+                        beatDivisor -
+                    1e-4));
             } else if ( startCalcTime < bpmTime ) {
                 stepOffset = static_cast<int64_t>(std::floor(
-                    (startCalcTime - bpmTime) / stepDuration + 1e-4));
+                    timelineBeatsAt(*currentBPM, startCalcTime, bpmVal) *
+                        beatDivisor +
+                    1e-4));
             }
 
-            double t = bpmTime + stepOffset * stepDuration;
+            // 拍线步进单位仍为拍数，曲线决定每次投影的实际秒位置。
+            // 起始拍取整后反解，保证可见区从任意时间进入都保持相位。
+            // 输出采样密度只服务外部文件，不影响这套原函数网格。
+            // 普通 BPM 通过同一接口退化为线性时间换算。
+            // 后续循环同样反解每一拍，不能再次加固定 beatDuration。
+            // BPM 的合法正值保证每条拍线的时间顺序递增。
+            // 可见区裁剪沿用既有布局规则，不为虚拟采样额外生成网格。
+            double t = timelineTimeAtBeat(
+                *currentBPM,
+                static_cast<double>(stepOffset) / beatDivisor,
+                bpmVal);
             // 步号估算有浮点容差，再用时间条件剔除明显位于交集之前的候选。
             while ( t < startCalcTime - 1e-4 ) {
                 // 校正只推进步号，不改变 BPM 原点和拍位颜色对应关系。
                 stepOffset++;
-                t = bpmTime + stepOffset * stepDuration;
+                t = timelineTimeAtBeat(
+                    *currentBPM,
+                    static_cast<double>(stepOffset) / beatDivisor,
+                    bpmVal);
             }
             while ( t < nextBpmTime && t <= endTime ) {
                 // 下一 BPM 时刻交给下一段生成，避免不同拍长重复生成边界线。
@@ -690,7 +706,10 @@ void NoteRenderSystem::drawBeatLines(
                     if ( cursorRevealAlpha <= 0.0f ) {
                         // 全透明线不占据像素行，后续可见线仍有机会绘制。
                         stepOffset++;
-                        t = bpmTime + stepOffset * stepDuration;
+                        t = timelineTimeAtBeat(
+                            *currentBPM,
+                            static_cast<double>(stepOffset) / beatDivisor,
+                            bpmVal);
                         continue;
                     }
                 }
@@ -739,7 +758,10 @@ void NoteRenderSystem::drawBeatLines(
                 }
                 // 从 BPM 原点与整数步号重算，避免长时间逐次相加累积漂移。
                 stepOffset++;
-                t = bpmTime + stepOffset * stepDuration;
+                t = timelineTimeAtBeat(
+                    *currentBPM,
+                    static_cast<double>(stepOffset) / beatDivisor,
+                    bpmVal);
             }
         }
     }

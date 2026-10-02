@@ -443,3 +443,19 @@ mmm_register_test_case(NAME ProjectOpenOriginTest COMMAND ProjectOpenOriginTest)
 target_link_libraries(BeatmapMutationObserverBindingTest PRIVATE Logic Log)
 mmm_register_test_case(NAME BeatmapMutationObserverBindingTest COMMAND
                        BeatmapMutationObserverBindingTest)
+
+# 插值段落跨领域模型、撤销事务与滚动缓存，使用独立用例覆盖完整存取链路。 临时输出位于构建树，不允许测试覆盖源码谱面或用户项目。 不启动 Vulkan、UI
+# 或音频线程，测试仅操作值模型和隔离注册表。 插值段落覆盖数学、整体撤销、范围冲突和外部格式降级。 输出目录由编译定义传入，所有平台使用相同的测试契约。
+# 生成的往返文件只进入构建树，不能污染 tests/data。
+
+# 真实格式 writer 参与往返断言，不依赖 UI 运行或 GPU 设备。
+mmm_add_test_executable(Logic TimingInterpolationTest
+                        tests/TimingInterpolationTest.cpp)
+target_link_libraries(TimingInterpolationTest PRIVATE Logic Log)
+target_compile_definitions(
+  TimingInterpolationTest
+  PRIVATE
+    MMM_INTERPOLATION_TEST_OUTPUT="${CMAKE_BINARY_DIR}/test_output/timing_interpolation"
+)
+mmm_register_test_case(NAME TimingInterpolationTest COMMAND
+                       TimingInterpolationTest)

@@ -254,8 +254,14 @@ void PlaybackController::resetMetronomeCursor(double time)
     // 当前段锚点决定节拍相位，后续只使用整数拍索引推导时间。
     const double beatLength = 60.0 / bpm;
     // 小容差只修正浮点边界；跳转到拍点之后不补播已过去的节拍。
-    const double index =
-        std::max(0.0, std::ceil((time - origin) / beatLength - 1e-7));
+    const double index = std::max(
+        0.0,
+        std::ceil(
+            (m_metronomeSegmentIndex == 0U
+                 ? (time - origin) / beatLength
+                 : timelineBeatsAt(
+                       *events[m_metronomeSegmentIndex - 1U], time, fallback)) -
+            1e-7));
     // 视觉时间若无效，不能将非有限浮点数转换为拍号整数。
     // 极端远跳超出整数范围时等待下一次有效重置，不保留错误游标。
     if ( !std::isfinite(index) ||
@@ -265,8 +271,16 @@ void PlaybackController::resetMetronomeCursor(double time)
         return;
     }
     m_nextMetronomeBeatIndex = static_cast<std::int64_t>(index);
+    // 曲线下一拍由累计拍数反解，避免用固定段首拍长推进。
+    // 写出密度不影响节拍器相位；只查询当前一个目标，不展开样本。
+    // 起点以前仍走既有等速外推分支，不对负拍强行截到零。
     m_nextMetronomeBeatTime =
-        origin + static_cast<double>(m_nextMetronomeBeatIndex) * beatLength;
+        m_metronomeSegmentIndex == 0U
+            ? origin +
+                  static_cast<double>(m_nextMetronomeBeatIndex) * beatLength
+            : timelineTimeAtBeat(*events[m_metronomeSegmentIndex - 1U],
+                                 static_cast<double>(m_nextMetronomeBeatIndex),
+                                 fallback);
     m_metronomeCursorReady = true;
 }
 
@@ -420,8 +434,13 @@ void PlaybackController::updateMetronome(bool playbackJumped)
                 : ::MMM::normalizeBpmValue(
                       events[m_metronomeSegmentIndex - 1U]->m_value, fallback);
         m_nextMetronomeBeatTime =
-            origin +
-            static_cast<double>(m_nextMetronomeBeatIndex) * (60.0 / bpm);
+            m_metronomeSegmentIndex == 0U
+                ? origin + static_cast<double>(m_nextMetronomeBeatIndex) *
+                               (60.0 / bpm)
+                : timelineTimeAtBeat(
+                      *events[m_metronomeSegmentIndex - 1U],
+                      static_cast<double>(m_nextMetronomeBeatIndex),
+                      fallback);
     }
 }
 
@@ -840,7 +859,8 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
                                       : (beatDuration / beatDivisor);
 
             double relativeVisualTime =
-                visualCurrentTime - currentBPM->m_timestamp;
+                timelineBeatsAt(*currentBPM, visualCurrentTime, fallbackBpm) *
+                60.0 / bVal;
             // 局部格数可以为负，向前用 floor、向后用 ceil 才能保持方向一致。
             double stepCount = relativeVisualTime / stepDuration;
             // 高分辨率滚轮的非零小量也至少跨一格；更大的增量保留多格跳转。
@@ -851,13 +871,17 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
             // 先按方向取整，再乘步长，网格始终以当前 BPM 事件为起点。
             // 偏置的单位是格数，因此会随 BPM 与分拍密度一起缩放。
             if ( wheel > 0 ) {
-                targetVisualTime =
-                    currentBPM->m_timestamp +
-                    std::floor(stepCount - 0.001 - (jump - 1.0)) * stepDuration;
+                targetVisualTime = timelineTimeAtBeat(
+                    *currentBPM,
+                    std::floor(stepCount - 0.001 - (jump - 1.0)) *
+                        stepDuration * bVal / 60.0,
+                    fallbackBpm);
             } else {
-                targetVisualTime =
-                    currentBPM->m_timestamp +
-                    std::ceil(stepCount + 0.001 + (jump - 1.0)) * stepDuration;
+                targetVisualTime = timelineTimeAtBeat(
+                    *currentBPM,
+                    std::ceil(stepCount + 0.001 + (jump - 1.0)) * stepDuration *
+                        bVal / 60.0,
+                    fallbackBpm);
             }
             // 本次使用当前段拍长，下一次输入再按新位置选择节拍段。
             // 写回前撤销显示偏移，不能把视觉时间直接作为音频位置。

@@ -9,12 +9,14 @@
 #include "common/render/CanvasRenderTypes.h"
 #include "common/render/NoteRenderData.h"
 #include "common/render/ScrollRenderData.h"
+#include "common/render/TimingInterpolationRenderData.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -281,6 +283,8 @@ struct Hitbox {
 
 /// @brief 时间线上的 BPM、Scroll、Jump 与 HS 交互元素快照。
 struct TimelineInteractiveElement {
+    /// @brief 表格中的段落定义；普通独立时间点为空。
+    std::optional<TimingInterpolation> interpolation;
     /// @brief 单个 Timing marker 的快照几何范围。
     struct MarkerGeometry {
         /// @brief 该 Timing 标记是否拥有可直接修饰的几何体。
@@ -435,6 +439,8 @@ struct RenderSnapshot {
     float interactionHitboxScaleY{ 1.0F };
     /// @brief 本帧可交互的时间线效果标记。
     std::vector<TimelineInteractiveElement> timelineElements;
+    /// @brief 全部插值段落的轻量描述，允许段首在视口之外。
+    std::vector<TimingInterpolationElement> timingInterpolations;
     /// @brief 可选画布组件的逐实例渲染与布局边界。
     std::vector<CanvasComponentInstanceSnapshot> canvasComponentInstances;
     /// @brief UI 时间换算使用的全量 ScrollCache 分段副本。
@@ -805,6 +811,7 @@ struct RenderSnapshot {
         annotationRevision = 0;
         // 清除时间线、组件布局、滚动缓存和预览密度等派生数据。
         timelineElements.clear();
+        timingInterpolations.clear();
         canvasComponentInstances.clear();
         scrollSegments.clear();
         playerBeatLines.clear();

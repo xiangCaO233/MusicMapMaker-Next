@@ -622,6 +622,9 @@ Json encodeTimelines(const ::MMM::BeatMap& beatmap)
             { "effect", static_cast<std::uint32_t>(timing.m_timingEffect) },
             { "value", timing.m_timingEffectParameter },
             { "metadata", encodeTimingMetadata(timing.m_metadata) },
+            { "interpolation",
+              timing.m_interpolation ? Json(*timing.m_interpolation)
+                                     : Json(nullptr) },
         });
     }
     return result;
@@ -884,6 +887,19 @@ bool decodeTimelines(const Json& source, ::MMM::BeatMap& beatmap)
         }
         // 仅在全部字段及元数据成功后提交已校验的效果枚举。
         timing.m_timingEffect = static_cast<::MMM::TimingEffect>(effect);
+        // 原生段落随协作时间线传递，不能退化为只剩起始点。
+        if ( const auto interpolation = entry.find("interpolation");
+             interpolation != entry.end() && !interpolation->is_null() ) {
+            // 联机快照和单人文件共享曲线定义，协议不展开输出采样。
+            // 拒绝非法段落，避免对端状态进入排序或播放热路径后才失败。
+            auto decoded = ::MMM::readTimingInterpolation(*interpolation);
+            if ( !decoded || !::MMM::isValidTimingInterpolation(
+                                 *decoded,
+                                 timing.m_timingEffect,
+                                 timing.m_timingEffectParameter) )
+                return false;
+            timing.m_interpolation = std::move(decoded);
+        }
     }
     return true;
 }

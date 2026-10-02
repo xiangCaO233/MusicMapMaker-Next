@@ -328,6 +328,8 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
             timing.m_timingEffectParameter);
         // 元数据承载格式扩展与效果属性，不能只复制时间和数值丢掉解释上下文。
         tc.m_metadata = timing.m_metadata;
+        // 一个段落对应一个实体，不为保存或表格展开虚拟采样点。
+        tc.m_interpolation = timing.m_interpolation;
     }
 
     // 用于追踪子物件，防止在折线之外重复绘制
@@ -841,7 +843,8 @@ void SessionUtils::syncBeatmap(SessionContext& ctx)
                 timing.m_bpm         = currentBPM;
                 timing.m_beat_length = tc.m_value;
             }
-            timing.m_metadata = tc.m_metadata;
+            timing.m_metadata      = tc.m_metadata;
+            timing.m_interpolation = tc.m_interpolation;
             // 效果扩展元数据按值保留，不由 BPM 分支重新生成或筛掉未知键。
             newTimings.push_back(timing);
             // 只替换时间点列表，不将最后生效 BPM 写回谱面偏好 BPM。

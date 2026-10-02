@@ -90,9 +90,9 @@ public:
         const std::string& shader_name) override;
     std::string getShaderName(const std::string& shader_module_name) override;
     bool        needReload() override;
-    void        reloadTextures(vk::PhysicalDevice& physicalDevice,
-                               vk::Device& logicalDevice, vk::CommandPool& cmdPool,
-                               vk::Queue& queue) override;
+    void reloadTextures(vk::PhysicalDevice& physicalDevice,
+                        vk::Device& logicalDevice, vk::CommandPool& cmdPool,
+                        vk::Queue& queue) override;
 
     /// @brief 获取时间点批量编辑表格窗口是否打开。
     /// @return 表格窗口当前是否打开。
@@ -425,6 +425,36 @@ private:
     /// @param alpha 透明度。
     /// @return ImGui 颜色。
     ImU32 timingEffectColor(::MMM::TimingEffect effect, int alpha) const;
+
+    /// @brief Shift 手势或段落正文命中处理；已消费输入时返回真。
+    /// @warning 每帧 UI 输入路径；只读取快照，不等待逻辑线程。
+    bool handleInterpolationInteraction(const ImVec2& position,
+                                        const ImVec2& size, bool hovered);
+    /// @brief 绘制段落范围和原函数曲线，与导出密度分离。
+    /// @warning 每帧覆盖层；每个可见段最多绘制 129 个曲线顶点。
+    void renderInterpolationOverlay(const ImVec2& position, const ImVec2& size);
+    /// @brief 在下一次弹窗绘制中开始创建或修改段落。
+    void openInterpolationEditor(
+        const Common::Render::TimingInterpolationElement& segment);
+    /// @brief 低频段落编辑窗口，提交前校验范围与同类型时间点冲突。
+    void renderInterpolationEditor();
+    /// @brief 在拖动期间保留段首，不让手势变成单点放置。
+    bool m_isInterpolationDragging{ false };
+    /// @brief 段落编辑窗口的值语义工作副本。
+    Common::Render::TimingInterpolationElement m_interpolationEdit;
+    /// @brief 用户当前调整的段尾时间，单位秒。
+    double m_interpolationEnd{ 0.0 };
+    /// @brief 下一帧弹出模态段落编辑窗口。
+    bool m_requestInterpolationEditor{ false };
+    /// @brief 已打开的编辑窗口，阻止后台画布消费输入。
+    bool m_isInterpolationEditorOpen{ false };
+    /// @brief 开始编辑时的谱面身份，切换谱面则取消提交。
+    std::string m_interpolationBeatmapKey;
+    /// @brief 同一文件重开后的新实例也会使旧编辑副本失效。
+    std::uintptr_t m_interpolationInstanceId{ 0 };
+    /// @brief 模态编辑持有的时间点范围快照，只在打开窗口时收集。
+    std::vector<Common::Render::TimelineInteractiveElement>
+        m_interpolationValidationRows;
 
     std::string                                           m_canvasName;
     bool                                                  m_needReload{ true };

@@ -497,6 +497,9 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         // 主窗口隐藏不能阻断独立表格快照和交互生命周期。
         commitAudioTimeSliderScrub();
         renderTimingPointsTableWindow();
+        // 插值编辑器是独立模态窗口，隐藏 Timeline 不应丢弃已打开的副本。
+        // 即使只从独立表格进入，也保留确认、取消和 Esc 的完整生命周期。
+        renderInterpolationEditor();
         return;
     }
 
@@ -544,6 +547,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         editorSettings.showTimelineWindow = false;
         appConfig.save();
         renderTimingPointsTableWindow();
+        renderInterpolationEditor();
         return;
     }
 
@@ -928,6 +932,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 renderProfessionalTimelineOverlay(canvasPos, size);
             }
             renderTimingInteractionOverlay(canvasPos, size);
+            renderInterpolationOverlay(canvasPos, size);
 
             // 4. 绘制交互层元件 (齿轮按钮)
             for ( const auto& el : m_currentSnapshot->timelineElements ) {
@@ -966,12 +971,25 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                         // InvisibleButton 没有默认外观，但仍复用统一交互音效。
                         if ( inlineGearCanOpenEditor && gearClicked &&
                              !inlineGearEditorOpened ) {
-                            openInlineGearEditor(
-                                InlineGearHit{ entity,
-                                               el.time,
-                                               el.*(gear.value),
-                                               gear.editType,
-                                               gear.label });
+                            // 齿轮身份对应原实体，不对应运行时的虚拟曲线采样。
+                            // 检索的是已发布段落描述，不借用逻辑线程注册表。
+                            // 段落统一进入范围编辑器，避免单点窗口丢失终值和函数。
+                            const auto segment = std::find_if(
+                                m_currentSnapshot->timingInterpolations.begin(),
+                                m_currentSnapshot->timingInterpolations.end(),
+                                [&](const auto& item) {
+                                    return item.entity == entity;
+                                });
+                            if ( segment !=
+                                 m_currentSnapshot->timingInterpolations.end() )
+                                openInterpolationEditor(*segment);
+                            else
+                                openInlineGearEditor(
+                                    InlineGearHit{ entity,
+                                                   el.time,
+                                                   el.*(gear.value),
+                                                   gear.editType,
+                                                   gear.label });
                             inlineGearEditorOpened = true;
                         }
 
@@ -1034,6 +1052,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
     }
 
     renderTimingPointsTableWindow();
+    renderInterpolationEditor();
     // 表格窗口始终独立绘制，不依赖主时间线是否有有效 descriptor。
 
     if ( m_speedTooltipTimer > 0.0f ) {

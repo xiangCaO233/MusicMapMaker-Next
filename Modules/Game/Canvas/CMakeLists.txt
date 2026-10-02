@@ -38,6 +38,8 @@ add_library(
   src/PreviewCanvas.cpp
   src/TimelineCanvas.cpp
   src/TimelineCanvas_Interaction.cpp
+  # 插值段落编辑与原函数预览独立维护，不在 UI 中展开导出事件。
+  src/TimelineCanvas_Interpolation.cpp
   src/TimelineCanvas_Popups.cpp)
 
 # PUBLIC 依赖构成 Canvas 公开头的传递接口；业务实现需要的新依赖应优先检查 能否保持 PRIVATE，避免继续扩大下游翻译单元的包含和链接范围。

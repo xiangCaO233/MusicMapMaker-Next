@@ -172,6 +172,11 @@ struct TimingTableBeatPoint {
     double bpm{ 120.0 };
     /// @brief 该时间点对应的连续拍位置。
     double beat{ 0.0 };
+    /// @brief 连续 BPM 曲线，普通点为空；不展开采样行。
+    // 表格的拍位换算保留定义，不存储由输出密度生成的独立 Timing。
+    // 同一首 BPM 实体仍是唯一相位锚点，终点以后继承最终参数。
+    // 副本只用于本次表格布局，撤销、修改和粘贴仍操作原实体。
+    std::optional<TimingInterpolation> interpolation;
 };
 
 /// @brief 时间线表格可双向换算的连续拍位时间线。
@@ -264,20 +269,39 @@ TimingTableBeatTimeline buildTimingTableBeatTimeline(
                                       TIMING_TABLE_BEAT_EPSILON ) {
             // 同一时刻没有 beat 距离，只替换该锚点生效 BPM。
             timeline.back().bpm = event.bpm;
+            for ( const auto& segment : snapshot.timingInterpolations )
+                if ( segment.effect == TimingEffect::BPM &&
+                     std::abs(segment.time - event.time) < 1e-9 )
+                    timeline.back().interpolation = segment.interpolation;
             continue;
         }
 
         if ( timeline.empty() ) {
             // 首锚点定义自身 beat 为零；相对换算允许从此向前外推。
             timeline.push_back({ event.time, event.bpm, 0.0 });
+            for ( const auto& segment : snapshot.timingInterpolations )
+                if ( segment.effect == TimingEffect::BPM &&
+                     std::abs(segment.time - event.time) < 1e-9 )
+                    timeline.back().interpolation = segment.interpolation;
             continue;
         }
 
         const auto&  previous = timeline.back();
         const double beat =
-            previous.beat + (event.time - previous.time) * previous.bpm / 60.0;
+            previous.beat +
+            Logic::timelineBeatsAt(
+                Logic::TimelineComponent{ previous.time,
+                                          TimingEffect::BPM,
+                                          previous.bpm,
+                                          {},
+                                          previous.interpolation },
+                event.time);
         // 新锚点累计 beat 使用上一段 BPM 对时间差积分。
         timeline.push_back({ event.time, event.bpm, beat });
+        for ( const auto& segment : snapshot.timingInterpolations )
+            if ( segment.effect == TimingEffect::BPM &&
+                 std::abs(segment.time - event.time) < 1e-9 )
+                timeline.back().interpolation = segment.interpolation;
     }
     return timeline;
 }
@@ -308,7 +332,17 @@ double timingTableTimeToBeat(const TimingTableBeatTimeline& timeline,
                          });
     const auto& point = it == timeline.begin() ? timeline.front() : *(it - 1);
     // 目标早于首锚点时使用首段向前外推，否则使用时间之前最后一段。
-    return point.beat + (time - point.time) * point.bpm / 60.0;
+    // 首点前、段内和段后统一由领域积分处理，不能把段尾当作新红线。
+    // 拍表的全局累计偏移只加一次，避免嵌套换算重复加上之前的段落。
+    // 此处不使用屏幕像素位置或 ScrollCache 的滚动速度推断拍数。
+    // 导出密度改变时表格拍位仍保持不变。
+    return point.beat + Logic::timelineBeatsAt(
+                            Logic::TimelineComponent{ point.time,
+                                                      TimingEffect::BPM,
+                                                      point.bpm,
+                                                      {},
+                                                      point.interpolation },
+                            time);
 }
 
 /// @brief 将连续拍位置转换为秒时间。
@@ -337,7 +371,14 @@ double timingTableBeatToTime(const TimingTableBeatTimeline& timeline,
                          });
     const auto& point = it == timeline.begin() ? timeline.front() : *(it - 1);
     // beat 锚点单调时 upper_bound 取得目标之前最后一个有效分段。
-    return point.time + (beat - point.beat) * 60.0 / point.bpm;
+    // 先去掉此前累计拍数，再反解当前 BPM 区间的局部拍位。
+    // 同一换算供批量移动与粘贴使用，不能另用固定 BPM 估算。
+    // 正值 BPM 保证拍位索引有序，upper_bound 的选择仍然成立。
+    // 段尾以后由终值线性延续，不回退到首参数。
+    return Logic::timelineTimeAtBeat(
+        Logic::TimelineComponent{
+            point.time, TimingEffect::BPM, point.bpm, {}, point.interpolation },
+        beat - point.beat);
 }
 
 /// @brief 将连续拍位置拟合为分数并计算时间误差。
@@ -914,8 +955,12 @@ collectTimelineElements()
     for ( auto entity : view ) {
         const auto& tc = view.get<const Logic::TimelineComponent>(entity);
         Common::Render::TimelineInteractiveElement el;
-        el.time = tc.m_timestamp;
-        el.y    = 0.0f;
+        // registry 中一段就是一个实体，复制定义不会增加表格行。
+        // 运行时虚拟积分点不属于这个 registry，也不进入选择和剪贴板。
+        // 表格可用整体移动与删除，范围细调由专门窗口提交一次动作。
+        el.interpolation = tc.m_interpolation;
+        el.time          = tc.m_timestamp;
+        el.y             = 0.0f;
 
         if ( tc.m_effect == ::MMM::TimingEffect::BPM ) {
             el.effects   = Common::Render::SCROLL_EFFECT_BPM;
@@ -2446,8 +2491,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 trimTimingTableAsciiWhitespace(m_tableSearchValueBuffer.data());
             hasSearchValueText = !searchValueText.empty();
             parsedSearchValue  = hasSearchValueText
-                                                ? parseTimingTableDouble(searchValueText)
-                                                : std::nullopt;
+                                     ? parseTimingTableDouble(searchValueText)
+                                     : std::nullopt;
             hasValidSearchValue =
                 parsedSearchValue && std::isfinite(*parsedSearchValue);
             const bool hasEffectSearchFilter =
@@ -3089,66 +3134,98 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     ImGui::TableSetColumnIndex(4);
                     ImGui::PushStyleColor(ImGuiCol_Text,
                                           getEffectColor(effect));
-                    ImGui::TextUnformatted(getEffectLabel(effect));
+                    ImGui::Text("%s%s",
+                                getEffectLabel(effect),
+                                el.interpolation ? " 段落" : "");
                     ImGui::PopStyleColor();
 
                     // 第 5 列：数值
                     ImGui::TableSetColumnIndex(5);
-                    double vVal =
-                        getDisplayValue(effect, getElementRawValue(el), ent);
-                    ImGui::SetNextItemWidth(-FLT_MIN);
-                    std::string vId = fmt::format("##V_{}", displayIdx);
-                    const bool  isBoundBpm =
-                        m_keepSpeedBindingActive &&
-                        ent == m_keepSpeedBindingBpmEntity &&
-                        effect == ::MMM::TimingEffect::BPM;
-                    const bool isBoundScroll =
-                        m_keepSpeedBindingActive &&
-                        ent == m_keepSpeedBindingScrollEntity &&
-                        effect == ::MMM::TimingEffect::SCROLL;
-                    if ( isBoundBpm && m_keepSpeedBindingFocusBpm ) {
-                        ImGui::SetKeyboardFocusHere();
-                        m_keepSpeedBindingFocusBpm = false;
-                    }
-                    if ( isBoundScroll ) {
-                        ImGui::BeginDisabled();
-                    }
-                    // InputDouble 的返回值同时覆盖文本编辑和步进按钮。
-                    const bool displayValueChanged = ImGui::InputDouble(
-                        vId.c_str(),
-                        &vVal,
-                        effect == ::MMM::TimingEffect::BPM ? 0.1 : 0.01,
-                        effect == ::MMM::TimingEffect::BPM ? 1.0 : 0.1,
-                        "%.4f");
-                    if ( isBoundScroll ) {
-                        ImGui::EndDisabled();
-                        if ( ImGui::IsItemHovered(
-                                 ImGuiHoveredFlags_AllowWhenDisabled) ) {
+                    // 首尾数值使用原字段，不能拿随播放变化的即时值代替端点。
+                    // 普通数值输入框仅编辑一个参数，不适合承载完整段落定义。
+                    // 双端显示让用户在一行内辨识方向与范围，样本不展开。
+                    // 悬浮补充时长和密度，编辑按钮继续关联原实体。
+                    // 参数修改交给统一段落编辑器，保存后可以整体撤销。
+                    if ( el.interpolation ) {
+                        // 段落只有一行；两端、范围和密度进入同一个编辑窗口。
+                        ImGui::Text("%.4g → %.4g",
+                                    getElementRawValue(el),
+                                    el.interpolation->m_endValue);
+                        if ( ImGui::IsItemHovered() )
                             ImGui::SetTooltip(
-                                "保持画布速度联动中，修改 BPM 后自动刷新");
+                                "%.3f–%.3f s；%.4g Hz",
+                                el.time,
+                                el.time + el.interpolation->m_duration,
+                                el.interpolation->m_samplesPerSecond);
+                    } else {
+                        double vVal = getDisplayValue(
+                            effect, getElementRawValue(el), ent);
+                        ImGui::SetNextItemWidth(-FLT_MIN);
+                        std::string vId = fmt::format("##V_{}", displayIdx);
+                        const bool  isBoundBpm =
+                            m_keepSpeedBindingActive &&
+                            ent == m_keepSpeedBindingBpmEntity &&
+                            effect == ::MMM::TimingEffect::BPM;
+                        const bool isBoundScroll =
+                            m_keepSpeedBindingActive &&
+                            ent == m_keepSpeedBindingScrollEntity &&
+                            effect == ::MMM::TimingEffect::SCROLL;
+                        if ( isBoundBpm && m_keepSpeedBindingFocusBpm ) {
+                            ImGui::SetKeyboardFocusHere();
+                            m_keepSpeedBindingFocusBpm = false;
                         }
-                    }
-                    // 表格输入在发布命令前过滤负
-                    // BPM，防止非法值短暂写入快照。
-                    const bool displayValueValid =
-                        isValidTimingEditorValue(effect, vVal);
-                    if ( displayValueChanged && !isBoundScroll &&
-                         displayValueValid ) {
-                        double finalValue = getStoredValue(effect, vVal, ent);
-                        Event::EventBus::instance().publish(
-                            Event::LogicCommandEvent(
-                                Logic::CmdUpdateTimelineEvent{
-                                    ent, el.time, finalValue }));
-                        if ( isBoundBpm ) {
-                            updateKeepSpeedBindingScroll(vVal);
+                        if ( isBoundScroll ) {
+                            ImGui::BeginDisabled();
                         }
-                    }
-                    if ( isBoundBpm && ImGui::IsItemDeactivated() ) {
-                        finishKeepSpeedBinding();
+                        // InputDouble 的返回值同时覆盖文本编辑和步进按钮。
+                        const bool displayValueChanged = ImGui::InputDouble(
+                            vId.c_str(),
+                            &vVal,
+                            effect == ::MMM::TimingEffect::BPM ? 0.1 : 0.01,
+                            effect == ::MMM::TimingEffect::BPM ? 1.0 : 0.1,
+                            "%.4f");
+                        if ( isBoundScroll ) {
+                            ImGui::EndDisabled();
+                            if ( ImGui::IsItemHovered(
+                                     ImGuiHoveredFlags_AllowWhenDisabled) ) {
+                                ImGui::SetTooltip(
+                                    "保持画布速度联动中，修改 BPM 后自动刷新");
+                            }
+                        }
+                        // 表格输入在发布命令前过滤负
+                        // BPM，防止非法值短暂写入快照。
+                        const bool displayValueValid =
+                            isValidTimingEditorValue(effect, vVal);
+                        if ( displayValueChanged && !isBoundScroll &&
+                             displayValueValid ) {
+                            double finalValue =
+                                getStoredValue(effect, vVal, ent);
+                            Event::EventBus::instance().publish(
+                                Event::LogicCommandEvent(
+                                    Logic::CmdUpdateTimelineEvent{
+                                        ent, el.time, finalValue }));
+                            if ( isBoundBpm ) {
+                                updateKeepSpeedBindingScroll(vVal);
+                            }
+                        }
+                        if ( isBoundBpm && ImGui::IsItemDeactivated() ) {
+                            finishKeepSpeedBinding();
+                        }
                     }
 
                     // 第 6 列：操作
                     ImGui::TableSetColumnIndex(6);
+                    if ( el.interpolation ) {
+                        if ( UI::FeedbackButton(
+                                 fmt::format("编辑段落##{}", displayIdx)
+                                     .c_str()) )
+                            openInterpolationEditor({ ent,
+                                                      el.time,
+                                                      getElementRawValue(el),
+                                                      effect,
+                                                      *el.interpolation });
+                        ImGui::SameLine();
+                    }
                     std::string seekId =
                         fmt::format("跳转##Seek_{}", displayIdx);
                     if ( ::MMM::UI::FeedbackButton(seekId.c_str()) ) {

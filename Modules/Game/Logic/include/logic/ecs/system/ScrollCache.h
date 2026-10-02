@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/render/ScrollRenderData.h"
+#include "common/render/TimingInterpolationRenderData.h"
 #include <cstddef>
 #include <cstdint>
 #include <entt/entt.hpp>
@@ -161,8 +162,17 @@ public:
     /// @brief 脏标记，用于触发延迟重建
     bool isDirty{ true };
 
+    /// @brief 借用重建时生成的段落描述，不遍历注册表。
+    const std::vector<Common::Render::TimingInterpolationElement>&
+    getInterpolations() const
+    {
+        return m_interpolations;
+    }
+
 private:
     std::vector<ScrollSegment> m_segments;
+    /// @brief 原始段落定义与运行时积分采样分开保存。
+    std::vector<Common::Render::TimingInterpolationElement> m_interpolations;
 
     /// @brief 记录最后一次 rebuild 使用的目标缩放。
     double m_lastZoom{ 1.0 };
