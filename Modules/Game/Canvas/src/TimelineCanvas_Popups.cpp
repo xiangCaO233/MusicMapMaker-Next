@@ -2477,6 +2477,33 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             ImGui::EndDisabled();
         }
 
+        // 批量保速独立于折叠的高级批量工具；仅在点击时收集选中句柄。
+        // 逻辑端按当前组件筛选红线，因此过滤表格不会遗漏隐藏的选中行。
+        // 无选择时禁用，使批量操作的前置条件可见。
+        // 播放中由外层禁用区阻止编辑，嵌套禁用不能覆盖父级状态。
+        // 混合选择中的非红线由命令端忽略，不改变选择集合。
+        // 统一反馈按钮保持已有悬浮色与点击音效。
+        // 禁用状态仍显示提示，说明补偿规则及插值限制。
+        ImGui::BeginDisabled(m_selectedTimingEntities.empty());
+        if ( ::MMM::UI::FeedbackButton(
+                 TR("ui.timeline.timing_points_table.keep_original_speed")
+                     .data()) ) {
+            Logic::CmdKeepSpeedForBpmEvents command;
+            command.bpmEntities.assign(m_selectedTimingEntities.begin(),
+                                       m_selectedTimingEntities.end());
+            // 结束临时单点联动，防止其旧绑定在批量结果回流后重新覆盖绿线。
+            finishKeepSpeedBinding();
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(std::move(command)));
+        }
+        if ( ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) ) {
+            ImGui::SetTooltip("%s",
+                              TR("ui.timeline.timing_points_table."
+                                 "keep_original_speed_hint")
+                                  .data());
+        }
+        ImGui::EndDisabled();
+
         ImGui::Separator();
 
         std::vector<std::size_t> visibleElementIndices;

@@ -8,6 +8,7 @@
 #include "logic/BeatmapSession.h"
 #include "logic/ProjectController.h"
 #include "logic/ecs/components/SampleComponent.h"
+#include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/beatmap/BeatmapMutationObserver.h"
@@ -30,6 +31,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace
@@ -347,6 +349,97 @@ private:
         return false;
     }
     return true;
+}
+
+/// @brief 验证批量保速命令的会话分派、协作权限和变化通知接线。
+/// @return 未授权提交被拒绝，授权后整批生成绿线并只通知一次时返回 true。
+/// @note 测试走真实命令队列，不以直接调用控制器代替会话集成。
+/// @note 预设 BPM 为 180，避免默认绿线已经满足补偿而产生无变化。
+/// @note 所有命令都是本地写入尝试，不使用权威远端替换来绕过权限。
+[[nodiscard]] bool testKeepSpeedBatchSessionRouting()
+{
+    // 独立会话避免上一个用例的权限、历史和观察者状态串入。
+    // 不启动播放线程，显式 update 是本例的唯一命令消费边界。
+    MMM::Logic::BeatmapSession session;
+    MMM::Config::EditorConfig  config;
+    auto                       beatmap        = makeBeatmap();
+    beatmap->m_baseMapMetadata.preference_bpm = 180.0;
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdLoadBeatmap{ .beatmap = std::move(beatmap) } });
+    session.update(0.0, config, false);
+    // 两条红线时间不同，分别产生 1.5 和 .75 的补偿。
+    // 默认零秒红线不选中，计数只针对显式选择。
+    for ( int index = 1; index <= 2; ++index ) {
+        session.pushCommand(
+            MMM::Logic::LogicCommand{ MMM::Logic::CmdCreateTimelineEvent{
+                .time  = static_cast<double>(index),
+                .type  = MMM::TimingEffect::BPM,
+                .value = 120.0 * index } });
+    }
+    session.update(0.0, config, false);
+    // 创建完成后取真实句柄，不能把持久化 ID 当实体。
+    // 命令载荷按值保存，权限切换后重用同一选择集合。
+    MMM::Logic::CmdKeepSpeedForBpmEvents command;
+    const auto& registry = session.getContext().timelineRegistry;
+    for ( const auto entity :
+          registry.view<const MMM::Logic::TimelineComponent>() ) {
+        const auto& timing =
+            registry.get<const MMM::Logic::TimelineComponent>(entity);
+        if ( timing.m_effect == MMM::TimingEffect::BPM &&
+             timing.m_timestamp >= 1.0 )
+            command.bpmEntities.push_back(entity);
+    }
+    // 基线包含加载时的默认点，不能假设空谱面没有 Timing。
+    // 历史采用相对增量，红线创建动作必须保留在补偿批次以下。
+    const auto initialCount =
+        registry.view<const MMM::Logic::TimelineComponent>().size();
+    const auto initialHistory =
+        session.getContext().actionStack.getUndoStackSize();
+    auto observer = std::make_shared<CountingMutationObserver>();
+    // false 关闭绑定时基线通知，零次通知用于检查拒绝结果。
+    // 观察者只记录变化，不能主动修改谱面来制造通过条件。
+    session.setMutationObserver(observer, false);
+    // 无 Timelines 权限时，不得通过新命令绕过既有协作门闩。
+    session.setCollaborationAllowedMutationFlags(
+        // Metadata 权限仍可编辑，专门验证 Timelines 分类没有遗漏。
+        // 比全局只读更能发现新 variant 被误归为无修改的错误。
+        MMM::BeatmapMutationFlags::Metadata);
+    session.pushCommand(MMM::Logic::LogicCommand{ command });
+    session.update(0.0, config, false);
+    if ( registry.view<const MMM::Logic::TimelineComponent>().size() !=
+             initialCount ||
+         session.getContext().actionStack.getUndoStackSize() !=
+             initialHistory ||
+         observer->notificationCount() != 0 )
+        return false;
+    // 授权后同一载荷应真实到达控制器，创建两条绿线而不是仅发布刷新。
+    session.setCollaborationAllowedMutationFlags(
+        // 不赋予 All，证明补偿不需要采样、物件或元数据写入权限。
+        // 独立 update 后检查通知，不能被同轮其他编辑合并掩盖。
+        MMM::BeatmapMutationFlags::Timelines);
+    session.pushCommand(MMM::Logic::LogicCommand{ command });
+    session.update(0.0, config, false);
+    if ( registry.view<const MMM::Logic::TimelineComponent>().size() !=
+             initialCount + 2U ||
+         session.getContext().actionStack.getUndoStackSize() !=
+             initialHistory + 1U ||
+         observer->notificationCount() != 1 ||
+         observer->lastFlags() != MMM::BeatmapMutationFlags::Timelines ) {
+        XERROR(
+            "Batch keep-speed session routing or mutation notification failed");
+        return false;
+    }
+    // 撤销通过队列验证，通知并非仅初次执行才生效。
+    // 组件值恢复由控制器测试覆盖，这里聚焦数量和变化类别。
+    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdUndo{} });
+    session.update(0.0, config, false);
+    // 只确认本地接线，不推断服务器接收、编码或远端确认结果。
+    // 未运行真实网络连接，观察者累计次数是断言依据。
+    // 单次撤销恢复实体数量，并沿用 Timelines 通知类别。
+    return registry.view<const MMM::Logic::TimelineComponent>().size() ==
+               initialCount &&
+           observer->notificationCount() == 2 &&
+           observer->lastFlags() == MMM::BeatmapMutationFlags::Timelines;
 }
 
 /// @brief 房主补偿时间线后同步本地动作栈并保留可用的重做动作。
@@ -2055,6 +2148,7 @@ int main()
                    testAsyncMalodySaveKeepsPolylineSnapshot() &&
                    testOptionalInitialSnapshot() &&
                    testTimelineCommandsPublishMutations() &&
+                   testKeepSpeedBatchSessionRouting() &&
                    testCollaborationHistoryCorrectionKeepsLocalRedo() &&
                    testBeatmapAnnotationPermissionAndTimestampGrouping() &&
                    testRemoteSynchronizationPreservesActiveBrush() &&

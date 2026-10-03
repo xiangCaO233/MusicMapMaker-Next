@@ -1349,6 +1349,8 @@ return {
 	["ui.timeline.event_creator.type"] = "时间点类型",
 	["ui.timeline.event_creator.value"] = "具体数值",
 	["ui.timeline.event_creator.create"] = "创建",
+	["ui.timeline.timing_points_table.keep_original_speed"] = "一键保持原流速",
+	["ui.timeline.timing_points_table.keep_original_speed_hint"] = "为选中的普通正 BPM 红线添加绿线。\nSV = 谱面预设 BPM / 红线 BPM。\n同位置已有普通绿线会更新，红线不变，整批可一次撤销。\n零 BPM、BPM 插值段及已有 SV 插值段覆盖的位置不处理。",
 	["ui.timeline.event_creator.keep_speed"] = "保持画布速度",
 
 	-- 时间点表格

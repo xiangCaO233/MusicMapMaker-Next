@@ -1350,6 +1350,8 @@ return {
 	["ui.timeline.event_creator.type"] = "Event Type",
 	["ui.timeline.event_creator.value"] = "Specific Value",
 	["ui.timeline.event_creator.create"] = "Create",
+	["ui.timeline.timing_points_table.keep_original_speed"] = "Keep Original Speed",
+	["ui.timeline.timing_points_table.keep_original_speed_hint"] = "Add SV for selected ordinary positive BPM points.\nSV = preferred chart BPM / point BPM.\nUpdate existing ordinary SV at the same time; keep BPM unchanged.\nUndo the batch in one step. Skip zero BPM, BPM curves, and SV curves.",
 	["ui.timeline.event_creator.keep_speed"] = "Keep Canvas Speed",
 
 	-- Timing Points Table

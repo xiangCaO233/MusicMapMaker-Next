@@ -2609,6 +2609,7 @@ bool BeatmapSession::processCommands()
                                std::is_same_v<T, CmdUpdateTimelineEvent> ||
                                std::is_same_v<T, CmdUpdateTimelineEvents> ||
                                std::is_same_v<T, CmdUpdateBpmWithKeepSpeedSv> ||
+                               std::is_same_v<T, CmdKeepSpeedForBpmEvents> ||
                                std::is_same_v<T, CmdDeleteTimelineEvent> ||
                                std::is_same_v<T, CmdCreateTimelineEvent> ||
                                std::is_same_v<T, CmdCreateTimelineEvents> ||
@@ -2869,6 +2870,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdUpdateTimelineEvent> ||
                     std::is_same_v<T, CmdUpdateTimelineEvents> ||
                     std::is_same_v<T, CmdUpdateBpmWithKeepSpeedSv> ||
+                    std::is_same_v<T, CmdKeepSpeedForBpmEvents> ||
                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
                     std::is_same_v<T, CmdCreateTimelineEvents> ||
                     std::is_same_v<T, CmdReplaceBeatmapTimings> ||
@@ -2932,6 +2934,8 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdUpdateTimelineEvent> ||
                     std::is_same_v<T, CmdUpdateTimelineEvents> ||
                     std::is_same_v<T, CmdUpdateBpmWithKeepSpeedSv> ||
+                    // 批量保速只改绿线，仍需收集动作栈的 Timelines 通知。
+                    std::is_same_v<T, CmdKeepSpeedForBpmEvents> ||
                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
                     std::is_same_v<T, CmdCreateTimelineEvent> ||
                     std::is_same_v<T, CmdCreateTimelineEvents> ||
