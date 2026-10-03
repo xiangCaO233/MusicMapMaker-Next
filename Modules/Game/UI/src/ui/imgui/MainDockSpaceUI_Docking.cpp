@@ -7,6 +7,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/FloatingManagerUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/imgui/ToolbarDockLayout.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WelcomeView.h"
 #include <algorithm>
@@ -19,7 +20,7 @@ namespace
 {
 /// @brief 本文件集中维护主工作区的 DockBuilder 默认布局。
 ///
-/// 默认布局只在首次进入或固定工具栏模式切换时重建。项目工作区已经恢复时，
+/// 默认布局只在首次进入且没有现有节点树时建立。项目工作区已经恢复时，
 /// 必须保留项目记录的节点树，避免默认比例覆盖用户保存的停靠关系。
 /// 布局中的窗口名称同时是 ImGui 持久化标识，修改时需要同步窗口创建方。
 
@@ -70,7 +71,7 @@ void dockActiveMainCanvasWindows(ImGuiID dockId)
 /// @param sidebarWidth 固定侧栏占用宽度。
 /// @param toolbarWidth 固定工具栏占用宽度。
 /// @warning UI 热路径：每帧创建宿主窗口；DockBuilder 重建及会话遍历只能发生在
-/// 首帧或布局模式发生变化的低频分支中。
+/// 首次初始化的低频分支中；模式切换只调整工具栏。
 void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
                                          float      menuBarHeight,
                                          float      statusBarHeight,
@@ -145,30 +146,22 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
 
     // 固定字符串保证 ImGui 配置能跨帧识别同一个根节点。
     ImGuiID dockspace_id = ImGui::GetID("MyMainDockSpace");
-    ImGui::DockSpace(
-        dockspace_id, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
-    FeedbackDockNodeControls(dockspace_id);
-
-    if ( titleFont ) ImGui::PopFont();
-
     // 静态状态仅描述此根 DockSpace 的上一帧模式，不持有任何窗口资源。
     static bool lastFixedToolWindow    = true;
     static bool hasLastFixedToolWindow = false;
-    static bool is_first_time          = true;
-    bool        shouldResetLayout =
+    bool        toolbarModeChanged =
         !hasLastFixedToolWindow || lastFixedToolWindow != fixedToolWindow;
     bool projectLayoutLoaded =
         MainDockSpaceUI::consumeProjectWorkspaceLayoutLoaded();
     // 项目布局恢复具有更高优先级：恢复成功后绝不能紧接着重建默认节点树。
     if ( projectLayoutLoaded ) {
-        is_first_time          = false;
         lastFixedToolWindow    = fixedToolWindow;
         hasLastFixedToolWindow = true;
-        shouldResetLayout      = false;
+        toolbarModeChanged     = false;
     }
 
-    // 首帧负责建立缺省树；之后只有固定工具栏模式切换才允许重建。
-    if ( is_first_time || shouldResetLayout ) {
+    // 没有节点树时才建立缺省布局；已有 ini 和项目布局都必须原样继承。
+    if ( !ImGui::DockBuilderGetNode(dockspace_id) ) {
         // 默认节点树的不变量：
         // - 根节点始终对应 RightDockHost 内的 MyMainDockSpace；
         // - 侧栏只占据第一层拆分得到的边缘节点；
@@ -180,11 +173,12 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
         // - 每次重建都从空节点树开始，不能继承上一模式的残余拆分；
         // - Finish 之前不允许其他路径观察并修改尚未完成的节点树。
         // 新窗口必须复用这些语义节点，不能依赖临时 DockNode 指针。
-        is_first_time          = false;
         lastFixedToolWindow    = fixedToolWindow;
         hasLastFixedToolWindow = true;
 
         // 欢迎页先解除旧节点依赖，避免重建期间保留悬空的停靠归属。
+        // 此入口只属于缺失根节点的初始化，不会在工具栏模式切换时调用。
+        // 设置页也因此不会重新收到中心节点的首次停靠请求。
         if ( auto* welcome = sourceManager->getView<WelcomeView>("Welcome") )
             welcome->prepareForDockLayoutChange();
         // DockBuilder 的重建顺序必须是移除、创建、定尺寸、拆分、停靠、完成。
@@ -229,7 +223,7 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
                                                                toolNodeRatio,
                                                                nullptr,
                                                                &dock_id_work);
-            ImGui::DockBuilderDockWindow("Toolbar", dock_id_tool);
+            ImGui::DockBuilderDockWindow(" ###Toolbar", dock_id_tool);
             // 缓存节点 ID 供工具栏约束逻辑使用，不缓存节点指针。
             MainDockSpaceUI::setToolDockId(dock_id_tool);
         } else {
@@ -268,7 +262,35 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
 
         // 所有拆分和窗口归属一次性提交，避免暴露半构建节点树。
         ImGui::DockBuilderFinish(dockspace_id);
+    } else if ( toolbarModeChanged ) {
+        // 模式切换不能触碰设置页、并排画布或欢迎页的停靠归属。
+        // 根宿主尺寸变化交给 ImGui；只在外侧增减工具栏自己的叶节点。
+        const float actualToolbarWidth =
+            std::floor(32.0f * dpiScale) +
+            2.0f * std::floor(aesthetics.windowPadding * dpiScale);
+        MainDockSpaceUI::setToolDockId(updateToolbarDockLayout(
+            dockspace_id,
+            fixedToolWindow,
+            actualToolbarWidth,
+            ImVec2(viewport->WorkSize.x - sidebarWidth - toolbarWidth -
+                       4.0f * floatGap,
+                   viewport->WorkSize.y - menuBarHeight - statusBarHeight -
+                       2.0f * floatGap)));
+    } else if ( projectLayoutLoaded ) {
+        // 项目加载后旧工具节点缓存可能属于被替换的树；只读取新窗口归属。
+        // 不拆分保存的布局，让项目中的设置窗口和画布保持原位置。
+        auto* toolbar = ImGui::FindWindowByName(" ###Toolbar");
+        MainDockSpaceUI::setToolDockId(
+            !fixedToolWindow && toolbar ? toolbar->DockId : 0);
     }
+    lastFixedToolWindow    = fixedToolWindow;
+    hasLastFixedToolWindow = true;
+
+    // 所有低频节点修改先完成，再提交本帧宿主和节点控制按钮。
+    ImGui::DockSpace(
+        dockspace_id, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
+    FeedbackDockNodeControls(dockspace_id);
+    if ( titleFont ) ImGui::PopFont();
 
     // 用户拖动节点后中心节点可能变化，每帧以 ImGui 当前节点树校正缓存。
     if ( ImGuiDockNode* centerNode =

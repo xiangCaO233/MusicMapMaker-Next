@@ -5,6 +5,9 @@
 #include "log/colorful-log.h"
 #include "mmm/project/ProjectSettings.h"
 #include "ui/imgui/CanvasTabManager.h"
+#include "ui/imgui/ToolbarDockLayout.h"
+
+#include <cmath>
 
 #include <string>
 #include <vector>
@@ -17,6 +20,9 @@
 /// 两张画布分别占据左右叶节点；只检查它们已停靠不足以发现并排布局丢失。
 /// 所有 ImGui 上下文均关闭 ini 文件写入，测试不得碰用户个人配置目录。
 /// 测试还覆盖旧工作区与本次实际恢复会话不一致时的捕获门闩初始化。
+/// 工具栏模式切换使用独立根节点，检查三次往返后的画布叶节点身份。
+/// 设置页分别测试停靠和浮动几何，避免仅检查 DockId 漏掉全屏尺寸错误。
+/// 共享工具节点场景保证固定工具栏只移出自身，不移除同节点的其他标签。
 
 namespace
 {
@@ -124,6 +130,8 @@ std::string makeSavedLayout(ImGuiID& firstDockId, ImGuiID& secondDockId)
     ImGui::DockBuilderDockWindow(PANEL_NAME, firstDockId);
     ImGui::DockBuilderDockWindow(SECOND_PANEL_NAME, secondDockId);
     ImGui::DockBuilderFinish(rootId);
+    // 提交宿主后才提交子窗口，让 ImGui 确认新旧节点的实际几何。
+    // 只保存 DockId 而不 Begin 无法验证设置页是否突然填满整个工作区。
     ImGui::DockSpace(rootId);
     ImGui::End();
     ImGui::Begin(PANEL_TITLE);
@@ -291,6 +299,194 @@ bool checkRestore(const std::string& savedIni, ImGuiID firstDockId,
     ImGui::DestroyContext();
     return restored;
 }
+/// @brief 提交工具栏切换回归的一帧，不重建原画布与设置页布局。
+/// @param fixed 工具栏是否在宿主外固定。
+/// @param transition 是否调用生产模式切换入口。
+/// @param initialize 是否创建三栏默认树。
+/// @param floatingSettings 设置页是否作为独立浮动窗口测试。
+/// @return 当前根节点 ID。
+/// @warning 测试 UI 热路径：只在显式初始化/切换帧修改节点树。
+ImGuiID drawToolbarFrame(bool fixed, bool transition, bool initialize = false,
+                         bool floatingSettings = false)
+{
+    ImGui::NewFrame();
+    // 外部工具栏占 50 像素；解除固定后宿主扩展同样宽度。
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(fixed ? 850 : 900, 600));
+    // 零内边距对应生产宿主，防止测试把宿主 padding 当作工具栏宽度变化。
+    // 样式必须在 Begin 后弹出，否则设置页内容区会受到无关的布局影响。
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::Begin(HOST_NAME, nullptr, ImGuiWindowFlags_NoTitleBar);
+    ImGui::PopStyleVar();
+    // 测试根与项目恢复测试根分开，避免一份上下文中的历史节点相互遮蔽。
+    // 初始化和切换都先于 DockSpace，与生产路径采用同样的构建顺序。
+    const ImGuiID rootId = ImGui::GetID("ToolbarTransitionRoot");
+    if ( initialize ) {
+        // 设置页和两张画布各占一个叶节点，重建中心布局会破坏这个关系。
+        ImGui::DockBuilderAddNode(rootId, ImGuiDockNodeFlags_DockSpace);
+        ImGui::DockBuilderSetNodeSize(rootId, ImVec2(850, 600));
+        ImGuiID       canvasRegionId = 0;
+        const ImGuiID settingsId     = ImGui::DockBuilderSplitNode(
+            rootId, ImGuiDir_Right, 0.25f, nullptr, &canvasRegionId);
+        ImGuiID       firstId  = 0;
+        const ImGuiID secondId = ImGui::DockBuilderSplitNode(
+            canvasRegionId, ImGuiDir_Right, 0.5f, nullptr, &firstId);
+        ImGui::DockBuilderDockWindow(PANEL_NAME, firstId);
+        ImGui::DockBuilderDockWindow(SECOND_PANEL_NAME, secondId);
+        if ( !floatingSettings )
+            ImGui::DockBuilderDockWindow("###SettingsWindow", settingsId);
+        ImGui::DockBuilderFinish(rootId);
+    }
+    if ( transition ) {
+        // 测试使用实际生产 helper，覆盖节点拆分和工具栏移出时的合并行为。
+        (void)MMM::UI::updateToolbarDockLayout(
+            rootId, fixed, 50, ImVec2(fixed ? 850 : 900, 600));
+    }
+    // 提交宿主后才提交子窗口，让 ImGui 确认新旧节点的实际几何。
+    // 只保存 DockId 而不 Begin 无法验证设置页是否突然填满整个工作区。
+    ImGui::DockSpace(rootId);
+    ImGui::End();
+    ImGui::Begin(PANEL_TITLE);
+    ImGui::End();
+    ImGui::Begin(SECOND_PANEL_TITLE);
+    ImGui::End();
+    // 独立设置页只在初帧指定尺寸，后续切换不能再给它新的位置或大小。
+    if ( initialize && floatingSettings ) {
+        ImGui::SetNextWindowPos(ImVec2(100, 100));
+        ImGui::SetNextWindowSize(ImVec2(300, 250));
+    }
+    // 使用与真实设置页相同的 ### 稳定后缀，标题文字不参与窗口身份。
+    // 测试不能依靠重建一个新窗口绕过旧窗口 DockId 被清除的错误。
+    ImGui::Begin("设置###SettingsWindow");
+    ImGui::End();
+    // 固定工具栏每帧接收位置和尺寸；其他三个窗口不接收强制几何。
+    // 这模拟真实 UI 的责任边界，避免测试主动纠正被破坏的设置窗口。
+    if ( fixed ) {
+        ImGui::SetNextWindowPos(ImVec2(850, 0));
+        ImGui::SetNextWindowSize(ImVec2(50, 600));
+    }
+    ImGui::Begin(" ###Toolbar",
+                 nullptr,
+                 fixed ? ImGuiWindowFlags_NoDocking : ImGuiWindowFlags_None);
+    ImGui::End();
+    ImGui::Render();
+    return rootId;
+}
+
+/// @brief 验证反复切换固定工具栏不会合并画布或改变设置页的窗口身份。
+/// @param floatingSettings 是否同时检查浮动设置页的精确几何。
+/// @return 两种模式往返后原叶节点和设置页尺寸仍保持时返回 true。
+/// @details 断言发生在窗口 Begin 和 DockSpace 都推进后，不只检查挂起请求。
+/// 停靠窗口允许一个分隔条造成的小幅变化；浮动窗口的位置和尺寸必须完全相同。
+/// 上下文独立且关闭 ini 写入，测试不依赖或修改用户的个人工作区。
+bool checkToolbarTransition(bool floatingSettings)
+{
+    createContext();
+    // 初始化后再推进两帧，排除初次窗口自动适配内容导致的尺寸变化。
+    // 几何基线从已经稳定的布局采集，不以 DockBuilder 的请求尺寸代替。
+    drawToolbarFrame(true, false, true, floatingSettings);
+    drawToolbarFrame(true, false);
+    drawToolbarFrame(true, false);
+    // 窗口对象在同一上下文内保持稳定；不缓存可能在树合并时失效的节点指针。
+    // 每次断言读取窗口当前 DockId，能发现移出、合并或停靠到错误叶节点。
+    auto* first    = ImGui::FindWindowByName(PANEL_NAME);
+    auto* second   = ImGui::FindWindowByName(SECOND_PANEL_NAME);
+    auto* settings = ImGui::FindWindowByName("###SettingsWindow");
+    // 保存精确节点身份，不把左右画布仍在同一宿主误判为原布局未变。
+    // 设置页既可在独立叶节点，也可在工作区外浮动，分别检查两种状态。
+    const ImGuiID firstId      = first->DockId;
+    const ImGuiID secondId     = second->DockId;
+    const ImGuiID settingsId   = settings->DockId;
+    const ImVec2  settingsSize = settings->Size;
+    const ImVec2  settingsPos  = settings->Pos;
+    bool          valid = firstId != 0 && secondId != 0 && firstId != secondId;
+    // 多次往返会暴露未移除的空工具叶节点累积，以及被复用的失效节点缓存。
+    // 不要求新工具节点每次使用相同 ID，它可以由 ImGui 在合并后重新生成。
+    for ( int cycle = 0; cycle < 3; ++cycle ) {
+        for ( bool fixed : { false, true } ) {
+            // 切换帧只执行一次生产操作，之后两帧模拟常态 UI 的自然推进。
+            // 若常态帧重复修正窗口归属，测试可能掩盖模式切换自身的错误。
+            drawToolbarFrame(fixed, true);
+            drawToolbarFrame(fixed, false);
+            drawToolbarFrame(fixed, false);
+            auto* toolbar = ImGui::FindWindowByName(" ###Toolbar");
+            // 同一叶节点是比“窗口仍然停靠”更严格的条件，可以发现分栏被折叠。
+            // 固定工具栏必须脱离节点；解除固定必须获得独立窄栏。
+            valid = valid && first->DockId == firstId &&
+                    second->DockId == secondId &&
+                    settings->DockId == settingsId &&
+                    (fixed ? toolbar->DockId == 0 : toolbar->DockId != 0);
+            // 停靠尺寸容许一个分隔条的舍入差，不容许被放大为主宿主宽度。
+            // 浮动设置页没有节点分隔条影响，必须完全保持自身尺寸。
+            const float sizeTolerance = floatingSettings ? 0.0f : 8.0f;
+            valid =
+                valid &&
+                std::abs(settings->Size.x - settingsSize.x) <= sizeTolerance &&
+                std::abs(settings->Size.y - settingsSize.y) <= sizeTolerance;
+            if ( floatingSettings ) {
+                // 浮动窗口没有理由随主宿主的宽度变化而移动或缩放。
+                valid = valid && settings->Pos.x == settingsPos.x &&
+                        settings->Pos.y == settingsPos.y;
+            }
+            // 失败信息同时输出几何和归属，区分尺寸回归与分栏关系回归。
+            // 保留累计失败状态，后续往返即使恢复也不能掩盖中间错误。
+            if ( !valid ) {
+                XERROR(
+                    "Toolbar transition changed layout: fixed={}, "
+                    "docks={}/{}/{}, expected={}/{}/{}, size={}/{} "
+                    "expected={}/{}",
+                    fixed,
+                    first->DockId,
+                    second->DockId,
+                    settings->DockId,
+                    firstId,
+                    secondId,
+                    settingsId,
+                    settings->Size.x,
+                    settings->Size.y,
+                    settingsSize.x,
+                    settingsSize.y);
+            }
+        }
+    }
+    // 主动销毁上下文使下一场景从独立配置开始，不把浮动状态带到停靠测试。
+    // Render 已结束所有 Begin/End，销毁时不会留下未平衡的窗口或样式栈。
+    ImGui::DestroyContext();
+    return valid;
+}
+/// @brief 验证固定工具栏不会删除与它共用叶节点的设置页。
+/// @return 设置页和并排画布保留，且工具栏成功移出时返回 true。
+/// @details 用户可以把设置页拖入工具栏节点，这时节点不是工具栏独占资源。
+/// 删除这个节点会误移出设置页；生产逻辑必须只解除工具栏窗口的关联。
+bool checkSharedToolbarNode()
+{
+    createContext();
+    drawToolbarFrame(true, false, true);
+    const ImGuiID rootId = drawToolbarFrame(false, true);
+    drawToolbarFrame(false, false);
+    auto*         toolbar  = ImGui::FindWindowByName(" ###Toolbar");
+    const ImGuiID sharedId = toolbar->DockId;
+    // 在两个帧之间改变设置页归属，模拟用户主动合并标签，而非默认布局。
+    // Finish 后推进窗口 Begin，确保共享状态实际接入 ImGui 的节点窗口列表。
+    ImGui::DockBuilderDockWindow("###SettingsWindow", sharedId);
+    ImGui::DockBuilderFinish(rootId);
+    drawToolbarFrame(false, false);
+    const ImGuiID firstId  = ImGui::FindWindowByName(PANEL_NAME)->DockId;
+    const ImGuiID secondId = ImGui::FindWindowByName(SECOND_PANEL_NAME)->DockId;
+    // 固定操作不能移除 sharedId，因为其中还有一个活跃的设置窗口。
+    // 原画布分栏在此边界场景也应保持，不允许回退到全局默认布局。
+    drawToolbarFrame(true, true);
+    drawToolbarFrame(true, false);
+    const bool valid =
+        sharedId != 0 && toolbar->DockId == 0 &&
+        ImGui::FindWindowByName("###SettingsWindow")->DockId == sharedId &&
+        ImGui::FindWindowByName(PANEL_NAME)->DockId == firstId &&
+        ImGui::FindWindowByName(SECOND_PANEL_NAME)->DockId == secondId;
+    if ( !valid )
+        XERROR("Pinning toolbar removed another window from its shared dock");
+    ImGui::DestroyContext();
+    return valid;
+}
 }  // namespace
 
 /// @brief 独立运行默认工作区到项目工作区的停靠恢复回归场景。
@@ -303,7 +499,9 @@ int main()
     const std::string savedIni     = makeSavedLayout(firstDockId, secondDockId);
     return !savedIni.empty() && firstDockId != 0 && secondDockId != 0 &&
                    firstDockId != secondDockId && checkRestorePlan(savedIni) &&
-                   checkRestore(savedIni, firstDockId, secondDockId)
+                   checkRestore(savedIni, firstDockId, secondDockId) &&
+                   checkToolbarTransition(false) &&
+                   checkToolbarTransition(true) && checkSharedToolbarNode()
                ? 0
                : 1;
 }
