@@ -1,4 +1,5 @@
 #include "logic/ProjectCommandService.h"
+#include "audio/AudioMarkerService.h"
 #include "config/AppConfig.h"
 #include "config/CreatorIdentity.h"
 #include "config/Utf8Path.h"
@@ -869,6 +870,17 @@ ProjectCommandService::ImportAudioResult ProjectCommandService::importAudio(
             sourcePath, finalAbsolutePath, filesystemError);
         if ( filesystemError ) {
             XERROR("Failed to copy audio file: {}", filesystemError.message());
+            return result;
+        }
+        // 配套标记以完整音频文件名绑定；资源重命名时不能遗漏它。
+        // 若数据损坏或目的标记冲突，仅回滚本次新建音频，原项目保持不变。
+        filesystemError = Audio::AudioMarkerService::copyCompanion(
+            sourcePath, finalAbsolutePath);
+        if ( filesystemError ) {
+            XERROR("Failed to import audio markers: {}",
+                   filesystemError.message());
+            std::error_code cleanup;
+            std::filesystem::remove(finalAbsolutePath, cleanup);
             return result;
         }
         XINFO("Copied external audio to project: {}",

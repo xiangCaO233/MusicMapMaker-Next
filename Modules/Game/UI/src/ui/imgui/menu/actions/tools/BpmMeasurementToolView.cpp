@@ -1037,6 +1037,10 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
         return;
     }
 
+    // 只轮询已完成的文件任务，不让导出延迟 UI 与节拍播放。
+    // 完成状态提交归 UI 线程所有，后台任务不持有工具对象。
+    consumeMarkerExport();
+
     if ( m_requestFocus ) {
         // 焦点请求延迟到窗口 Begin 前执行，满足 ImGui 的调用时序。
         ImGui::SetNextWindowFocus();
@@ -1268,7 +1272,18 @@ void BpmMeasurementToolView::consumePendingAnalysis()
         return;
     }
 
-    if ( result->autoTimingRequested ) {
+    // 嵌入的精确 BPM 优先于自动猜测，章节独立恢复。
+    // 已保存的首拍和多段 BPM 比自动估算更精确，优先采用。
+    // 恢复仅在首次读取该音频时触发，不覆盖后续用户细调。
+    // 自动应用入口继续复用现有确认与回调，避免新增直接修改谱面的旁路。
+    if ( restoreAudioMarkers(*result) ) {
+        if ( result->autoTimingRequested ) {
+            if ( m_measurementExportCallback )
+                exportMeasuredTimingsToCallback(false);
+            else
+                m_shouldOpenAutoApplyPopup = true;
+        }
+    } else if ( result->autoTimingRequested ) {
         if ( result->autoTimingResult ) {
             // 自动结果先归一化 BPM，再由拍长约束首拍允许的负偏移范围。
             const auto& autoTiming = *result->autoTimingResult;
@@ -1936,6 +1951,7 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
             exportMeasuredTimingsToCallback(true);
         }
     }
+    renderMarkerPanel();
 }
 
 /// @brief 绘制自动测偏移后的应用确认弹窗。
@@ -4524,14 +4540,25 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
     m_analysisStopSource            = std::stop_source{};
     const std::stop_token stopToken = m_analysisStopSource.get_token();
     // track 的共享所有权移动到任务，保证整个解码期间资源存活。
-    m_analysisFuture = appThreadPool->enqueue([this,
-                                               stopToken,
-                                               track    = std::move(track),
-                                               duration = m_duration,
-                                               autoMeasure,
-                                               spectrumProfile]() {
-        analyzeTrack(stopToken, track, duration, autoMeasure, spectrumProfile);
-    });
+    m_analysisFuture = appThreadPool->enqueue(
+        [this,
+         stopToken,
+         track    = std::move(track),
+         duration = m_duration,
+         autoMeasure,
+         spectrumProfile,
+         markerInput = m_markerImportKey != m_selectedAudioSyncKey
+                           ? *path
+                           : std::filesystem::path{}]() {
+            analyzeTrack(stopToken,
+                         track,
+                         duration,
+                         autoMeasure,
+                         spectrumProfile,
+                         markerInput);
+        });
+    // 身份在任务提交后记住，重复分析不会读回旧文件覆盖当前测量。
+    m_markerImportKey = m_selectedAudioSyncKey;
 }
 
 /// @brief 从后台线程发布一次分析失败结果。
@@ -4681,7 +4708,8 @@ void BpmMeasurementToolView::clearAnalysisData()
 void BpmMeasurementToolView::analyzeTrack(
     std::stop_token stopToken, std::shared_ptr<ice::AudioTrack> track,
     double duration, bool autoMeasure,
-    Config::SpectrumDetailProfile spectrumProfile)
+    Config::SpectrumDetailProfile spectrumProfile,
+    const std::filesystem::path&  markerInput)
 {
     if ( !track ) {
         // 防御异步捕获为空，使用统一失败发布路径。
@@ -4753,6 +4781,12 @@ void BpmMeasurementToolView::analyzeTrack(
 
     // 所有结果先构造在线程局部对象，完成后一次性发布。
     AnalysisResult result;
+    // 在已有后台分析任务中读取元数据，不向 UI 热路径增加文件访问。
+    // 元数据与波形分析共享后台任务，只访问确定的当前音频路径。
+    // 损坏标签通过结果状态交给面板，不能影响已经解码的声音。
+    // 文件读取不在 onRender 或每帧传输更新中执行。
+    if ( !markerInput.empty() )
+        result.markers = Audio::AudioMarkerService::read(markerInput);
     result.duration                  = duration;
     result.spectrumSegmentsPerSecond = spectrumSegmentsPerSecond;
     result.spectrumSegmentCount      = spectrumSegmentCount;
@@ -4985,7 +5019,9 @@ void BpmMeasurementToolView::analyzeTrack(
     fftw_free(fftOutput);
 
     if ( autoMeasure ) {
-        if ( duration >= 10.0 ) {
+        const bool savedBpm = result.markers && result.markers->success &&
+                              !result.markers->data.bpmSegments.empty();
+        if ( !savedBpm && duration >= 10.0 ) {
             // 自动检测需要足够节奏样本，短于十秒时保留空结果。
             if ( auto monoSamples =
                      readMonoSamplesForAutoTiming(stopToken, track) ) {

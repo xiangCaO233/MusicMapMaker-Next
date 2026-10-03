@@ -1,5 +1,6 @@
 #pragma once
 
+#include "audio/AudioMarkerService.h"
 #include "config/visual/SpectrumConfig.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "mmm/project/AudioResource.h"
@@ -167,7 +168,30 @@ private:
 
         /// @brief 本次分析是否失败。
         bool failed{ false };
+
+        /// @brief 新音轨的内嵌标记读取快照，普通重新分析不覆盖手工测量。
+        std::optional<Audio::AudioMarkerReadResult> markers;
     };
+
+    /// @brief 绘制标记导出、章节编辑和非阻塞完成反馈。
+    /// @warning UI 热路径：仅绘制缓存；文件操作只在显式点击后提交后台任务。
+    void renderMarkerPanel();
+
+    /// @brief 消费已完成导出结果，不等待正在运行的文件任务。
+    /// @warning 每帧零超时查询 future，禁止改为阻塞等待。
+    void consumeMarkerExport();
+
+    /// @brief 根据用户选择冻结导出参数并提交离线文件事务。
+    /// @warning 低频输入路径：文件选择结束后调用，任务不捕获视图实例。
+    void startMarkerExport(const std::filesystem::path& path);
+
+    /// @brief 打开遵循用户原生或内置偏好的音频保存选择器。
+    /// @warning 原生选择器属于用户触发的低频阻塞路径。
+    void openMarkerExportPicker();
+
+    /// @brief 恢复后台快照中的命名章节和精确 BPM 段。
+    /// @return 已恢复非空 BPM 列表时返回 true，自动检测不得覆盖该列表。
+    bool restoreAudioMarkers(AnalysisResult& result);
 
     /// @brief BPM 工具中一个可手动编辑的变速段落。
     struct BpmTimingSegment {
@@ -496,7 +520,8 @@ private:
     void analyzeTrack(std::stop_token                  stopToken,
                       std::shared_ptr<ice::AudioTrack> track, double duration,
                       bool                          autoMeasure,
-                      Config::SpectrumDetailProfile spectrumProfile);
+                      Config::SpectrumDetailProfile spectrumProfile,
+                      const std::filesystem::path&  markerInput);
 
     /// @brief 读取完整音轨并混合为单声道采样，供自动 BPM 检测使用。
     /// @param stopToken 后台线程停止令牌。
@@ -661,6 +686,19 @@ private:
 
     /// @brief 当前 BPM 工具可编辑的多段 BPM 列表。
     std::vector<BpmTimingSegment> m_timingSegments;
+
+    /// @brief 从音频恢复的命名章节，与 BPM 段保持独立。
+    std::vector<Audio::AudioChapter> m_audioChapters;
+    /// @brief 最近读取标记的音轨身份，防止重新分析覆盖手工修改。
+    std::string m_markerImportKey;
+    /// @brief 离线导出 future 只持有结果，任务不访问视图生命周期。
+    std::future<Audio::AudioMarkerExportResult> m_markerExportFuture;
+    /// @brief 导出原格式、WAV、MP3 的下拉选择。
+    int m_markerExportFormat{ 0 };
+    /// @brief 是否为所有整拍额外生成外部可见的标记。
+    bool m_exportBeatMarkers{ false };
+    /// @brief 独立于分析状态的标记读取、写入反馈。
+    std::string m_markerStatus;
 
     /// @brief 外部流程接收 BPM Timing 测量结果的回调。
     MeasurementExportCallback m_measurementExportCallback;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "audio/AudioMarkerService.h"
+
 #include <algorithm>
 #include <cctype>
 #include <expected>
@@ -84,11 +86,21 @@ importProjectResource(const std::filesystem::path& projectRoot,
          !relative.is_absolute() ) {
         return relative;
     }
+    // 候选文件名与配套标记使用同一个数字后缀。
+    // 两者任一个发生冲突都不能覆盖现有项目数据。
     auto filename = input.filename();
     for ( unsigned suffix = 1;; ++suffix ) {
         // copy_file 默认不覆盖，现有用户资源永远不会被替换。
-        if ( std::filesystem::copy_file(input, root / filename, error) )
-            return filename;
+        if ( std::filesystem::copy_file(input, root / filename, error) ) {
+            // 向导导入与音频管理器共享配套标记迁移，图片和视频不触发音频读取。
+            if ( classifyProjectResource(input) == ProjectResourceType::Audio )
+                error = Audio::AudioMarkerService::copyCompanion(
+                    input, root / filename);
+            if ( !error ) return filename;
+            // 只回滚刚复制的文件，已有同名标记绝不覆盖或删除。
+            std::error_code cleanup;
+            std::filesystem::remove(root / filename, cleanup);
+        }
         // 只有名称冲突继续尝试，其他权限或 I/O 错误立即返回。
         if ( error != std::errc::file_exists ) return std::unexpected(error);
         error.clear();

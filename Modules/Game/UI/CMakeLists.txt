@@ -140,6 +140,8 @@ add_library(
   src/ui/imgui/menu/actions/tools/AlignSelectedToCommonBeatsAction.cpp
   src/ui/imgui/menu/actions/tools/BpmAutoDetector.cpp
   src/ui/imgui/menu/actions/tools/BpmMeasurementToolView.cpp
+  # 测量标记文件事务与章节编辑保持独立于频谱分析绘制。
+  src/ui/imgui/menu/actions/tools/BpmMeasurementToolView_Markers.cpp
   src/ui/imgui/menu/actions/tools/OpenBeatmapSpeedExportAction.cpp
   src/ui/imgui/menu/actions/tools/OpenBpmMeasurementAction.cpp
   src/ui/imgui/menu/actions/tools/OpenDataSourceReplaceWindowAction.cpp
@@ -547,6 +549,8 @@ mmm_register_test_case(NAME WalkthroughSpotlightTest COMMAND
 # 工程资源导入测试覆盖路径解析、冲突处理和输出目录约束。 所有生成文件写入构建树 test_output，不污染 tests/data 源资源。
 mmm_add_test_executable(UI ProjectResourceImportTest
                         tests/ProjectResourceImportTest.cpp)
+# 配套音频标记导入通过正式 Audio 服务校验，测试显式依赖其公开接口。
+target_link_libraries(ProjectResourceImportTest PRIVATE Audio)
 target_include_directories(ProjectResourceImportTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 mmm_register_test_case(
