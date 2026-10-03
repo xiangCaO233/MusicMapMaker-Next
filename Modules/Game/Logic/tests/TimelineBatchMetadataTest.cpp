@@ -3,8 +3,12 @@
 #include "log/colorful-log.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
+#include "mmm/timing/TimingTemplate.h"
+#include <memory>
 
 #include <cmath>
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -591,6 +595,102 @@ bool testNonUndoableDirtyState()
     return true;
 }
 
+/// @brief 模板从权威红线定位整组，并保持单次撤销及失败无部分写入。
+/// @return 实际组件落点、元数据、历史和实例检查全部成立时返回真。
+/// @note 模板请求中不携带预先算好的事件，测试可发现误用旧 UI BPM 的实现。
+/// @note 请求没有预展开事件，落点必须由提交时的 BPM 决定。
+/// @note 普通 HS 允许负值，不能因模板校验误伤效果语义。
+/// @note 检查真实注册表，而非只检查命令的模板字段。
+bool testTemplatePlacementTransaction()
+{
+    MMM::Logic::SessionContext context;
+    // 实例令牌来自真实谱面对象，不能用常量伪造身份检查成功。
+    // 此夹具不打开项目包，生命周期仅由当前独立上下文保持。
+    // 控制器读到的红线完全来自真实创建和更新命令。
+    // 因此可以覆盖从命令队列定义到实际实体写入的完整转换。
+    // 测试结束自动释放值状态，不需要文件清理。
+    context.currentBeatmap = std::make_shared<MMM::BeatMap>();
+    MMM::Logic::ActionController controller(context);
+    controller.handleCommand(
+        MMM::Logic::CmdCreateTimelineEvent{ 0, MMM::TimingEffect::BPM, 100 });
+    const auto bpmEntity = findTimelineEntity(context, MMM::TimingEffect::BPM);
+    // 请求的来源按 100 BPM 定义，但提交前目标红线已经改成 200 BPM。
+    // 半拍应对应 150 ms，不能继续用窗口预览中的 300 ms。
+    MMM::TimingTemplate draft;
+    draft.m_variable = MMM::TimingVariable::Beat;
+    MMM::TimingTemplatePoint before, anchor;
+    before.m_offset                         = -.5;
+    before.m_timing.m_timingEffect          = MMM::TimingEffect::SCROLL;
+    before.m_timing.m_timingEffectParameter = 100;
+    anchor.m_timing.m_timingEffect          = MMM::TimingEffect::HS;
+    anchor.m_timing.m_timingEffectParameter = -2;
+    anchor.m_timing.m_metadata
+        .timing_properties[MMM::TimingMetadataType::OSU]["volume"] = "40";
+    draft.m_points = { before, anchor };
+    draft.m_anchor = 1;
+    MMM::Logic::CmdCreateTimelineEvents command;
+    command.templateDefinition    = draft;
+    command.templateAnchorSeconds = 2;
+    command.templateBeatmapInstanceId =
+        reinterpret_cast<std::uintptr_t>(context.currentBeatmap.get());
+    controller.handleCommand(
+        MMM::Logic::CmdUpdateTimelineEvent{ bpmEntity, 0, 200 });
+    // 创建和更新红线已有两条历史，模板应恰好追加一条。
+    // 后续失败均以这条已成功历史为基线，避免空场景假通过。
+    // 通过实际实体的元数据验证从模板到批量动作的完整复制。
+    const auto baseline = context.actionStack.getUndoStackSize();
+    controller.handleCommand(command);
+    const auto* scroll = findTimeline(context, MMM::TimingEffect::SCROLL);
+    const auto* hs     = findTimeline(context, MMM::TimingEffect::HS);
+    if ( !scroll || !hs || !near(scroll->m_timestamp, 1.85) ||
+         !near(hs->m_timestamp, 2) || !near(hs->m_value, -2) ||
+         hs->m_metadata.timing_properties !=
+             anchor.m_timing.m_metadata.timing_properties ||
+         context.actionStack.getUndoStackSize() != baseline + 1 )
+        return false;
+    // 一次撤销移除整组，重做保留当次已决定的落点和来源属性。
+    // 历史重做不再受后来目标 BPM 换算影响。
+    context.actionStack.undo(context);
+    if ( findTimeline(context, MMM::TimingEffect::SCROLL) ||
+         findTimeline(context, MMM::TimingEffect::HS) )
+        return false;
+    context.actionStack.redo(context);
+    scroll = findTimeline(context, MMM::TimingEffect::SCROLL);
+    if ( !scroll || !near(scroll->m_timestamp, 1.85) ) return false;
+    // 目标 HS 段内部将拒绝另一组；先合法的 Scroll 也不能提前写入。
+    // 先建立占用区间，再观察失败后实体数量与撤销栈都保持不变。
+    MMM::Logic::CmdCreateTimelineEvent segment{ 3, MMM::TimingEffect::HS, 1 };
+    segment.interpolation             = MMM::TimingInterpolation{};
+    segment.interpolation->m_duration = 2;
+    controller.handleCommand(segment);
+    const auto count =
+        context.timelineRegistry.view<MMM::Logic::TimelineComponent>().size();
+    const auto history            = context.actionStack.getUndoStackSize();
+    command.templateAnchorSeconds = 4;
+    controller.handleCommand(command);
+    if ( context.timelineRegistry.view<MMM::Logic::TimelineComponent>()
+                 .size() != count ||
+         context.actionStack.getUndoStackSize() != history )
+        return false;
+    // 旧实例窗口和负实际落点都不能向当前谱面写入任何条目。
+    // 这些失败不得挤掉现有撤销历史或触发空批次动作。
+    // 当前 200 BPM 半拍是 150 ms，基准 50 ms 将使提前点为负。
+    // 领域放置应拒绝整个组，不夹紧到零秒或跳过这一项。
+    // 随后将目标放远但撤销实例身份，单独覆盖旧窗口提交路径。
+    // 合法数值不能弥补失效谱面身份，两个条件都必须成立。
+    command.templateAnchorSeconds = .05;
+    controller.handleCommand(command);
+    command.templateAnchorSeconds     = 8;
+    command.templateBeatmapInstanceId = 0;
+    controller.handleCommand(command);
+    // 最后同时比较实体与历史，证明失败没有分配物件或撤销记录。
+    // 不依赖 UI 弹窗显隐，也不需要实际音频或联机设备。
+    // 协作广播仍由既有对象变更路由观察批量动作产生的实体修改。
+    return context.timelineRegistry.view<MMM::Logic::TimelineComponent>()
+                   .size() == count &&
+           context.actionStack.getUndoStackSize() == history;
+}
+
 }  // namespace
 
 /// @brief 运行批量 Timeline 创建元数据测试。
@@ -603,7 +703,9 @@ int main()
     // 测试不接收外部路径，所有实体和元数据都在本次进程内按确定顺序构造。
     // 各场景独立创建上下文，短路失败不会影响下一次运行的动作栈初态。
     // 退出零才表示全部场景均已运行，不能只凭没有错误日志判断每项都执行过。
-    return testBatchCreatePreservesMetadata() && testBatchUpdateIsAtomic() &&
+    return testTemplatePlacementTransaction() &&
+                   testBatchCreatePreservesMetadata() &&
+                   testBatchUpdateIsAtomic() &&
                    testBpmKeepSpeedCreatesSvAtomically() &&
                    testBpmKeepSpeedUpdatesSvAtomically() &&
                    testNegativeBpmMutationsAreRejected() &&

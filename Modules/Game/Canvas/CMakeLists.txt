@@ -40,6 +40,8 @@ add_library(
   src/TimelineCanvas_Interaction.cpp
   # 插值段落编辑与原函数预览独立维护，不在 UI 中展开导出事件。
   src/TimelineCanvas_Interpolation.cpp
+  # 模板库和整组放置窗口独立编译，不把个人配置 IO 放入画布更新。
+  src/TimelineCanvas_Templates.cpp
   # 函数排版与手绘拟合独立于时间点采样，避免编辑窗口每帧重新解析。
   src/TimelineCanvas_FunctionEditor.cpp
   src/TimingFormula.cpp

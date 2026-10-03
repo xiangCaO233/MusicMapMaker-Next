@@ -3,6 +3,7 @@
 #include "canvas/CanvasSnapshotPrepare.h"
 #include "canvas/TimelineAuxiliaryWindowState.h"
 #include "canvas/TimingFunctionEditorState.h"
+#include "canvas/TimingTemplateEditorState.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "graphic/imguivk/VKTextureAtlas.h"
 #include "mmm/timing/Timing.h"
@@ -108,6 +109,13 @@ public:
 
     /// @brief 激活时间点批量编辑表格；已聚焦可见时关闭，否则恢复并聚焦。
     void activateTimingPointsTable() override;
+
+    /// @brief 工具菜单只置位请求，下一次画布更新负责初始化模板。
+    /// @warning UI 热路径：只修改本地标志，不捕获 ECS 或读取配置文件。
+    void requestTimingTemplateEditor() override
+    {
+        m_requestTimingTemplateEditor = true;
+    }
 
     /// @brief 请求下一帧将时间线窗口聚焦到前台。
     void requestFocus() override;
@@ -439,6 +447,21 @@ private:
         const Common::Render::TimingInterpolationElement& segment);
     /// @brief 低频段落编辑窗口，提交前校验范围与同类型时间点冲突。
     void renderInterpolationEditor();
+    /// @brief 从个人模板库打开点组工具，选区捕获由工具内部触发。
+    void openTimingTemplateEditor();
+    /// @brief 用当前选区替换模板草稿，保留窗口和个人库的生命周期。
+    /// @warning 仅由明确的选区捕获操作调用，允许一次排序和会话读取。
+    bool captureSelectedTimingTemplate();
+    /// @brief 工具菜单的延迟打开请求，不依赖时间线窗口是否可见。
+    bool m_requestTimingTemplateEditor{ false };
+    /// @brief 显式捕获完整时间线，selected 非空时同时复制框选实体。
+    /// @warning 只在按钮事件读取 ECS，不在逐帧绘制时等待会话锁。
+    bool captureTimingTemplateContext(std::vector<Timing>* selected);
+    /// @brief 显示模板工作副本，只在输入变化时换算落点。
+    /// @warning 每帧 UI 入口；持久化和会话捕获仅由按钮触发。
+    void renderTimingTemplateEditor();
+    /// @brief 点组工具的值状态，关闭后不保留注册表地址。
+    TimingTemplateEditorState m_timingTemplateEditor;
     /// @brief 打开段落窗口时初始化函数输入和绘制轴，不执行逐帧重置。
     void initializeTimingFunctionEditor();
     /// @brief 显示函数排版、手绘拟合和错误反馈，只在输入变化时编译。

@@ -500,6 +500,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         // 插值编辑器是独立模态窗口，隐藏 Timeline 不应丢弃已打开的副本。
         // 即使只从独立表格进入，也保留确认、取消和 Esc 的完整生命周期。
         renderInterpolationEditor();
+        renderTimingTemplateEditor();
         return;
     }
 
@@ -548,9 +549,11 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         appConfig.save();
         renderTimingPointsTableWindow();
         renderInterpolationEditor();
+        renderTimingTemplateEditor();
         return;
     }
 
+    // 时间点模板入口由工具菜单提供，时间线不再为入口按钮预留高度。
     ImVec2 size = ImGui::GetContentRegionAvail();
     if ( !m_currentSnapshot || !m_currentSnapshot->hasBeatmap ||
          m_currentSnapshot->totalTime <= 0.0 ) {
@@ -1053,6 +1056,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
     renderTimingPointsTableWindow();
     renderInterpolationEditor();
+    renderTimingTemplateEditor();
     // 表格窗口始终独立绘制，不依赖主时间线是否有有效 descriptor。
 
     if ( m_speedTooltipTimer > 0.0f ) {

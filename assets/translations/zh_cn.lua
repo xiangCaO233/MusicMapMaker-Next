@@ -1151,6 +1151,7 @@ return {
 	["ui.tools"] = "工具(&T)",
 	["ui.tools.metadata_editor"] = "谱面额外元数据编辑",
 	["ui.tools.data_source_replace"] = "数据来源替换工具",
+	["ui.tools.timing_template"] = "时间点模板",
 	["ui.tools.speed_export"] = "谱面倍速制作",
 	["ui.tools.plugin_list"] = "插件列表",
 	["ui.tools.plugin_list.title"] = "插件列表",

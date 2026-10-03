@@ -48,7 +48,9 @@ add_library(
   src/timing/TimingBeatAxis.cpp
   # 受限表达式编译与拟合只在编辑或载入执行，播放使用只读缓存。
   src/timing/TimingFunction.cpp
-  src/timing/TimingFunctionFit.cpp)
+  src/timing/TimingFunctionFit.cpp
+  # 可复用时间点组依据目标红线换算偏移，定义与 UI、ECS 身份分离。
+  src/timing/TimingTemplate.cpp)
 
 # 公共 include 目录只发布稳定模型接口，日志、事件和 JSON 则作为传递依赖供 这些接口中的元数据与序列化声明使用。
 target_include_directories(MMM PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
@@ -172,3 +174,8 @@ target_link_libraries(TimingBeatInterpolationTest PRIVATE MMM Log)
 mmm_register_test_case(
   NAME TimingBeatInterpolationTest COMMAND TimingBeatInterpolationTest
   "${TEST_OUTPUT_DIR}/timing_beat_interpolation")
+
+# 模板测试覆盖任意基准、负分拍、跨 BPM 反解和完整序列化。
+mmm_add_test_executable(MMM TimingTemplateTest tests/TimingTemplateTest.cpp)
+target_link_libraries(TimingTemplateTest PRIVATE MMM Log)
+mmm_register_test_case(NAME TimingTemplateTest COMMAND TimingTemplateTest)

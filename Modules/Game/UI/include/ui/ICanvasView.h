@@ -46,6 +46,10 @@ public:
     /// @brief 设置 Timing 表格打开状态。
     virtual void setTimingPointsTableOpen(bool) {}
 
+    /// @brief 请求在画布更新时打开时间点模板工具。
+    /// @note 仅发布本地请求；库读取与选区捕获由工具响应用户事件。
+    virtual void requestTimingTemplateEditor() {}
+
     /// @brief 激活 Timing 表格菜单项，并按当前可见与聚焦状态切换窗口。
     virtual void activateTimingPointsTable() {}
 };

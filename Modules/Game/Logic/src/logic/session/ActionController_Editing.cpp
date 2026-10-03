@@ -20,6 +20,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/timing/BpmNormalization.h"
+#include "mmm/timing/TimingTemplate.h"
 #include "runtime/AppThreadPool.h"
 #include <algorithm>
 #include <array>
@@ -3474,27 +3475,90 @@ void ActionController::handleCommand(const CmdCreateTimelineEvent& cmd)
 /// @param cmd 待创建事件列表，段落字段随条目一并保存。
 /// @note 同批尚未分配身份的条目也参与重叠检查。
 /// @note 被拒绝条目不增加历史；其余合法条目共同形成一次粘贴事务。
-/// @details 单个非法值被跳过，其余合法事件合并成一次 Paste 撤销动作。
+/// @details 剪贴板逐项过滤；模板整组拒绝，并根据当前红线重新定位。
 /// @note 每个条目的 TimingMetadata 随值组件复制，格式来源信息不会丢失。
 void ActionController::handleCommand(const CmdCreateTimelineEvents& cmd)
 {
-    if ( cmd.events.empty() ) {
-        return;
+    // 模板保持领域定义直到提交；协作或排队期间改变 BPM 时重新求实际落点。
+    // 身份检查先于扫描，旧窗口不能把一组事件写入新打开的谱面。
+    // 输入来自低频命令队列，不在播放更新内逐帧复制注册表。
+    // templateDefinition 非空时忽略 events 中可能过期的预览坐标。
+    // 基准秒数由用户选定，其余点依据当前完整 BPM 红线反解。
+    // 没有谱面或实例失效时直接返回，不分配历史动作。
+    // 模板参数和来源属性仍是独立值副本，不借用 UI 窗口生命周期。
+    std::vector<CmdCreateTimelineEvents::Entry> templateEvents;
+    if ( cmd.templateDefinition ) {
+        if ( !m_ctx.currentBeatmap ||
+             reinterpret_cast<std::uintptr_t>(m_ctx.currentBeatmap.get()) !=
+                 cmd.templateBeatmapInstanceId )
+            return;
+        std::vector<Timing> tempo;
+        const auto          view =
+            m_ctx.timelineRegistry.view<const TimelineComponent>();
+        for ( const auto entity : view ) {
+            const auto& component = view.get<const TimelineComponent>(entity);
+            if ( component.m_effect != TimingEffect::BPM ) continue;
+            Timing line;
+            line.m_timestamp             = component.m_timestamp * 1000.0;
+            line.m_timingEffectParameter = component.m_value;
+            line.m_interpolation         = component.m_interpolation;
+            tempo.push_back(std::move(line));
+        }
+        // 领域转换失败时没有部分输出，不能逐点回退为普通时间线事件。
+        // 首选 BPM 只用于没有真实红线时的回退。
+        // 混合秒域组中的新红线也参与插值段落的目标拍轴绑定。
+        const auto placed = placeTimingTemplate(
+            *cmd.templateDefinition,
+            cmd.templateAnchorSeconds,
+            tempo,
+            m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm);
+        if ( !placed ) {
+            XWARN("时间点模板未放置：{}", placed.error());
+            return;
+        }
+        for ( const auto& line : *placed ) {
+            templateEvents.push_back({ line.m_timestamp / 1000.0,
+                                       line.m_timingEffect,
+                                       line.m_timingEffectParameter,
+                                       line.m_metadata,
+                                       line.m_interpolation });
+        }
     }
+    const auto& events = cmd.templateDefinition ? templateEvents : cmd.events;
+    // 严格规则是模板定义的固有行为，不依赖 UI 有没有正确设置标志。
+    // 旧剪贴板仍允许过滤非法项，保持原批量粘贴的兼容性。
+    // 所有创建项验证完成以后才执行一次 BatchTimelineAction。
+    // 模板定义存在时即使调用方未设置 requireAllValid 也强制整组校验。
+    const bool strict =
+        cmd.requireAllValid || cmd.templateDefinition.has_value();
+    if ( events.empty() ) return;
 
     std::vector<BatchTimelineAction::Entry> entries;
     // 预留命令容量，过滤非法项不会要求容器缩容。
-    entries.reserve(cmd.events.size());
-    for ( const auto& event : cmd.events ) {
+    entries.reserve(events.size());
+    for ( const auto& event : events ) {
         // 批量创建只跳过非法项，合法的零 BPM 与其他事件继续提交。
-        if ( !isValidTimelineValue(event.type, event.value) ) continue;
+        if ( !isValidTimelineValue(event.type, event.value) ||
+             (strict && (!std::isfinite(event.time) || event.time < 0.0)) ) {
+            if ( strict ) return;
+            continue;
+        }
         TimelineComponent timeline{ event.time,
                                     event.type,
                                     event.value,
                                     event.metadata,
                                     event.interpolation };
-        if ( !canPlaceTimelineInterpolation(m_ctx.timelineRegistry, timeline) )
+        // 模板已经根据完整候选 BPM 绑定段落，不能再用旧注册表覆盖新映射。
+        // 普通粘贴的按拍段落仍需用当前会话重新绑定。
+        // canPlace 始终检查实际占用，领域预览不能绕过逻辑提交校验。
+        if ( (!cmd.templateDefinition &&
+              !prepareTimelineBeatInterpolation(m_ctx, timeline)) ||
+             !canPlaceTimelineInterpolation(m_ctx.timelineRegistry,
+                                            timeline) ) {
+            // 严格组在完成全部检查前不执行动作，失败不会留下部分物件。
+            if ( strict ) return;
             continue;
+        }
         // 粘贴内容也可能来自外部输入，检查同批即将创建的段落。
         // 已排队的条目还未成为实体，因此必须另外比较它们的最终范围。
         // 验证前面已经接受的条目，单批内部的两个段落也不能交叠。
@@ -3505,14 +3569,21 @@ void ActionController::handleCommand(const CmdCreateTimelineEvents& cmd)
                 return planned.after &&
                        timelineRangesConflict(timeline, *planned.after);
             });
-        if ( conflicts ) continue;
+        // 已计划事件尚无实体身份，所以内部区间也必须独立比较。
+        // 严格失败在 pushAndExecute 之前，合法前项不会先写入注册表。
+        // 撤销栈保持原样，失败模板不会产生空的历史记录。
+        if ( conflicts ) {
+            if ( strict ) return;
+            continue;
+        }
         entries.push_back({ entt::null, std::nullopt, std::move(timeline) });
     }
 
     if ( entries.empty() ) return;
     // 全部非法时不污染 ActionStack；至少一项合法才提交动作。
-    auto action =
-        std::make_unique<BatchTimelineAction>(std::move(entries), "Paste");
+    auto action = std::make_unique<BatchTimelineAction>(
+        std::move(entries),
+        cmd.templateDefinition ? "Timing template" : "Paste");
     m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
     m_ctx.isBpmEventsDirty = true;
 }

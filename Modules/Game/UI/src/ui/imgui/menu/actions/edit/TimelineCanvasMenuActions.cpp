@@ -3,6 +3,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
+#include "ui/imgui/menu/actions/MainMenuToolsActions.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/utils/UIWidgetUtils.h"
 
@@ -79,6 +80,32 @@ public:
     }
 };
 
+/// @brief 工具菜单的时间点模板入口，通过画布能力发布延迟请求。
+/// @note 选区捕获和库管理统一放在工具内部，菜单只提供一个入口。
+class OpenTimingTemplateAction final : public IMainMenuItemActionHandler
+{
+public:
+    /// @brief 有时间线视图及活动谱面时允许使用模板工具。
+    /// @warning UI 热路径：仅查询能力和活动会话，不枚举时间点。
+    bool isEnabled(const MainMenuContext& context) const override
+    {
+        return timelineCanvas(context) && MenuUtil::hasActiveBeatmap(false);
+    }
+
+    /// @brief 请求独立工具窗口，初始化延迟到画布更新。
+    /// @note 点击时复核活动谱面，防止菜单展示后切换会话。
+    void execute(MainMenuContext&              context,
+                 const MainMenuItemActivation& activation) override
+    {
+        (void)activation;
+        auto* timeline = timelineCanvas(context);
+        // 不缓存画布地址，视图生命周期由当前 UI 管理器保证。
+        if ( !timeline || !MenuUtil::hasActiveBeatmap(false) ) return;
+        timeline->requestTimingTemplateEditor();
+        PlayPopupOpenFeedback();
+    }
+};
+
 /// @brief 打开谱面批注表动作。
 /// @details 通过辅助窗口能力接口操作，避免菜单层依赖具体窗口实现。
 class OpenAnnotationTableAction final : public IMainMenuItemActionHandler
@@ -118,6 +145,13 @@ public:
 std::unique_ptr<IMainMenuItemActionHandler> createOpenTimingPointsTableAction()
 {
     return std::make_unique<OpenTimingPointsTableAction>();
+}
+
+/// @brief 创建时间点模板工具动作，不让菜单依赖具体 Canvas 类型。
+/// @return 独占的无状态处理器；编辑状态由时间线视图持有。
+std::unique_ptr<IMainMenuItemActionHandler> createOpenTimingTemplateAction()
+{
+    return std::make_unique<OpenTimingTemplateAction>();
 }
 
 /// @brief 创建打开谱面批注表动作处理器。

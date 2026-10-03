@@ -1152,6 +1152,7 @@ return {
 	["ui.tools"] = "&Tools",
 	["ui.tools.metadata_editor"] = "Extended Beatmap Metadata Editor",
 	["ui.tools.data_source_replace"] = "Data Source Replacement Tool",
+	["ui.tools.timing_template"] = "Timing Point Templates",
 	["ui.tools.speed_export"] = "Beatmap Speed Export",
 	["ui.tools.plugin_list"] = "Plugin List",
 	["ui.tools.plugin_list.title"] = "Plugin List",

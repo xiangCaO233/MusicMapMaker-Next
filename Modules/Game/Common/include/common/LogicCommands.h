@@ -12,6 +12,7 @@
 #include "mmm/beatmap/MalodyMode.h"
 #include "mmm/project/AudioResource.h"
 #include "mmm/timing/Timing.h"
+#include "mmm/timing/TimingTemplate.h"
 #include <array>
 #include <cstdint>
 #include <entt/entt.hpp>
@@ -764,6 +765,14 @@ struct CmdCreateTimelineEvents {
 
     /// @brief 待创建 Timeline 事件列表。
     std::vector<Entry> events;
+    /// @brief 模板放置必须全部合法；剪贴板保留逐项过滤的兼容行为。
+    bool requireAllValid{ false };
+    /// @brief 非空时由逻辑线程根据最新 BPM 计算条目，忽略 events 副本。
+    std::optional<::MMM::TimingTemplate> templateDefinition;
+    /// @brief 模板基准的目标秒数，不是第一条事件的时间。
+    double templateAnchorSeconds{ 0.0 };
+    /// @brief 模板工作副本绑定的谱面实例，切换或重开后禁止写入。
+    std::uintptr_t templateBeatmapInstanceId{ 0 };
 };
 
 /**
