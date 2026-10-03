@@ -3428,15 +3428,17 @@ ImGuiID Basic2DCanvas::getDockId() const
 /// @brief 判断当前帧是否需要准备画布快照。
 /// @param snapshot 当前帧 UI 快照。
 /// @return 需要准备时返回 true。
-/// @details 只有已建立同步缓冲且标签真实可见时参与并行准备。
+/// @details 已建立同步缓冲且标签可见，或活动音频分析窗口需要其时间时参与准备。
+/// 隐藏标签仅消费快照，不能因此恢复离屏绘制与交互。
 /// 即使窗口已收到关闭请求，保存确认或脏快照仍需要最后一份数据，
 /// 因此这些状态会暂时维持快照消费直到用户完成决策。
 /// @warning UI 调度热路径：每帧调用，只读取稳定标志与当前快照状态。
 bool Basic2DCanvas::needsParallelUiPrepare(
     const UI::UiFrameSnapshot& snapshot) const
 {
-    (void)snapshot;
-    return m_syncBuffer && m_isCanvasVisible &&
+    return m_syncBuffer &&
+           (m_isCanvasVisible ||
+            snapshot.audioAnalysisCameraId == m_cameraId) &&
            (m_isOpen || m_showSaveConfirm ||
             (m_currentSnapshot && m_currentSnapshot->isDirty));
 }
@@ -3450,6 +3452,17 @@ bool Basic2DCanvas::needsParallelUiPrepare(
 void Basic2DCanvas::prepareUiFrameData(const UI::UiFrameSnapshot& snapshot)
 {
     (void)snapshot;
+    if ( !m_isCanvasVisible ) {
+        // 音频分析借用同一读取槽；由画布在准备阶段统一回收，避免绘制阶段
+        // 被第二个消费者归还旧指针。隐藏画布不遍历新快照几何或做播放补间。
+        // 先还原上一帧已应用的偏移，再归还旧槽，恢复显示时不会累积偏移。
+        applyDynamicVertexYOffset(m_lastOffsetSnapshot, -m_lastAppliedYOffset);
+        m_preparedSnapshot    = { m_syncBuffer->pullLatestSnapshot(),
+                                  nullptr,
+                                  0.0F };
+        m_hasPreparedSnapshot = true;
+        return;
+    }
     m_preparedSnapshot = prepareCanvasSnapshot(
         m_syncBuffer.get(), m_lastOffsetSnapshot, m_lastAppliedYOffset, false);
     m_hasPreparedSnapshot = true;

@@ -11,6 +11,7 @@
 #include "mmm/beatmap/BeatmapMutationObserver.h"
 #include "network/collaboration/CollaborationRoom.h"
 #include "ui/IUIView.h"
+#include "ui/UIManager.h"
 #include "ui/imgui/manager/CollaborationEntryPolicy.h"
 
 #include <algorithm>
@@ -197,8 +198,10 @@ CollaborationLogWindow::~CollaborationLogWindow()
 
 /// @brief 推进协作房间网络状态并同步本地会话绑定。
 /// @warning UI 热路径：每帧调用；room->update 不得执行无界阻塞网络等待。
-void CollaborationLogWindow::update(UIManager*)
+void CollaborationLogWindow::update(UIManager* sourceManager)
 {
+    // 资源回调由下面的房间轮询触发，提前提供 UI 线程发布目标。
+    m_sourceManager = sourceManager;
     // 无房间对象时视图保持空闲，不尝试创建替代房间。
     if ( !m_room ) return;
     m_room->update();
@@ -307,6 +310,9 @@ void CollaborationLogWindow::updateSessionBinding()
     }
 
     if ( !m_room->isActive() ) {
+        // 离房不保留浏览绑定；逻辑会话仍持有自己的缓存包供离线播放。
+        if ( m_sourceManager )
+            m_sourceManager->setCollaborationAudioProject(nullptr);
         // 非活动状态完整解除绑定，但访客缓存会话仍保持离线只读。
         if ( bound ) {
             bound->setMutationObserver(nullptr);
@@ -417,6 +423,10 @@ void CollaborationLogWindow::bindPendingResources()
     auto session = m_boundSession.lock();
     // 会话尚未建立时保留 bundle，首次谱面同步后会再次调用。
     if ( !session ) return;
+    // 已认证资源包只通过 const 视图供访客查看，不注册为可写本机项目。
+    if ( m_sourceManager && m_boundSessionIsGuest )
+        m_sourceManager->setCollaborationAudioProject(
+            m_pendingResourceBundle->project);
     session->pushCommand(Logic::LogicCommand{
         // project 共享所有权跨过命令队列，pathRemap 则移动以避免大容器复制。
         Logic::CmdSetCollaborationResources{

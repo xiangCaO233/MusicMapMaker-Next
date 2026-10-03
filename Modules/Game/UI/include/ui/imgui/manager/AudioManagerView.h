@@ -65,6 +65,10 @@ public:
     void swapPreparedUiFrameData() override;
 
 private:
+    /// @brief 所属 UI 管理器的观察指针，首次绘制后用于只读资源布局测量。
+    /// @warning 管理器拥有本视图，指针只在 UI 主线程准备和绘制阶段使用。
+    const UIManager* m_sourceManager{ nullptr };
+
     /// @brief 音频管理器布局输入快照。
     struct LayoutInputSnapshot {
         /// @brief 当前是否有打开的项目。

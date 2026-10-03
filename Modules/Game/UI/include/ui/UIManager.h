@@ -128,6 +128,21 @@ public:
     [[nodiscard]] Network::Collaboration::CollaborationRoom*
     getCollaborationRoom() const;
 
+    /// @brief 发布访客音轨的只读资源包；空值解除音轨浏览绑定。
+    /// @warning 仅在 UI
+    /// 线程资源包到达或离房时调用；共享所有权保持缓存目录存活。
+    void setCollaborationAudioProject(std::shared_ptr<const Project> project);
+
+    /// @brief 获取音轨浏览数据源，访客资源优先于本机项目。
+    /// @return 借用指针仅供本帧使用，不授予项目写入权限。
+    /// @warning UI 热路径：只读取 UI
+    /// 线程已发布数据，不访问会话长锁或复制所有权。
+    [[nodiscard]] const Project* getAudioProject() const;
+
+    /// @brief 判断音轨参数是否只读；谱面可编辑权限不影响此判断。
+    /// @warning UI 热路径：只读资源绑定和房间角色，不读取会话可变上下文。
+    [[nodiscard]] bool isAudioReadOnly() const;
+
     /// @brief 获取无原生装饰窗口的平台行为适配器。
     /// @return 平台适配器观察指针；未绑定或当前平台无适配器时返回 nullptr。
     /// @warning UI 热路径：每帧可能读取；只返回观察指针，不复制所有权。
@@ -370,6 +385,10 @@ private:
     /// @brief 应用级协作房间观察指针，生命周期由注册视图持有的 shared_ptr
     /// 保证。
     Network::Collaboration::CollaborationRoom* m_collaborationRoom{ nullptr };
+
+    /// @brief UI 线程持有的访客只读音频资源包，不作为本机项目打开。
+    /// @warning 共享所有权仅在接收或释放资源时变化，用于保持缓存文件生命周期。
+    std::shared_ptr<const Project> m_collaborationAudioProject;
 
     /// @brief 上一次已应用项目工作区的项目路径。
     std::string m_workspaceProjectPath;

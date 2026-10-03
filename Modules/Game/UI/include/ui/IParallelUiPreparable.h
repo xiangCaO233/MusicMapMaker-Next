@@ -9,6 +9,10 @@ namespace MMM::UI
 
 /// @brief UI 每帧准备阶段使用的只读快照。
 struct UiFrameSnapshot {
+    /// @brief 音频分析窗口需要持续读取的活动主画布身份；无分析窗口时为空。
+    /// 隐藏标签仍消费时间快照，但不得因此恢复离屏渲染或交互。
+    std::string audioAnalysisCameraId;
+
     /// @brief 当前窗口内容缩放，已经至少为 1。
     float dpiScale{ 1.0f };
 

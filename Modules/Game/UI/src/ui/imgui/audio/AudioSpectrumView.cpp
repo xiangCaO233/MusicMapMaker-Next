@@ -119,9 +119,10 @@ AudioSpectrumView::~AudioSpectrumView()
         m_calcFuture = std::future<void>{};
     }
 
-    // VKContext 可能已在应用关闭顺序中释放，只有存在时才等待设备。
+    // 新建后立即关闭的频谱窗口可能尚未初始化逻辑设备，不能等待空句柄。
+    // 上下文存在只说明实例初始化成功，不代表已经创建可提交命令的设备。
     auto context = Graphic::VKContext::get();
-    if ( context ) {
+    if ( context && context->get().getLogicalDevice() ) {
         // waitIdle 保证描述符、纹理和离屏附件不再被 GPU 使用。
         (void)context->get().getLogicalDevice().waitIdle();
     }

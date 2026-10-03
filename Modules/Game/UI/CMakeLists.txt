@@ -440,6 +440,14 @@ target_link_libraries(CollaborationEntryPolicyTest PRIVATE Log)
 mmm_register_test_case(NAME CollaborationEntryPolicyTest COMMAND
                        CollaborationEntryPolicyTest)
 
+# 访客音轨测试使用真实控制器鼠标交互，验证只读参数区仍可打开频谱与波形。 资源包只在内存中构造，不打开本机工程、音频设备或 Vulkan。
+mmm_add_test_executable(UI CollaborationAudioViewTest
+                        tests/CollaborationAudioViewTest.cpp)
+# 隐藏主画布的播放跟随回归驱动真实 Canvas；显式链接其实现而非只检查时间 helper。
+target_link_libraries(CollaborationAudioViewTest PRIVATE UI Canvas 3rd_imgui)
+mmm_register_test_case(NAME CollaborationAudioViewTest COMMAND
+                       CollaborationAudioViewTest)
+
 # 协作房卡封面测试覆盖真实图片居中缩略、Base64 往返和无效输入拒绝。 测试资源通过 MMM_TEST_RESOURCE_DIR
 # 传入，禁止向源码资源目录写输出。
 mmm_add_test_executable(UI CollaborationRoomCoverImageTest

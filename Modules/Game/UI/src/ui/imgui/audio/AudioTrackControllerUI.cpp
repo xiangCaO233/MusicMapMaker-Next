@@ -93,6 +93,13 @@ void AudioTrackControllerUI::requestFocus()
 /// - EQ 在 Clay 内容之后使用 ImGui/ImPlot 单独绘制；
 /// - 无项目配置的主轨以禁用态展示 EQ，避免伪造可编辑状态；
 /// - 未发生变更时不产生逻辑命令或音频池写入。
+/// - 访客资源包仅按 const Project 借用，不将其注册为本机工程。
+/// - 音轨只读独立于谱面对象、时间线等协作变更权限。
+/// - 只读模式仍显示资源音量和 EQ 配置，控件禁用而非隐藏。
+/// - 分析入口在禁用作用域外渲染，读取本机播放缓冲。
+/// - 参数提交再次检查只读，防止遗留滑块草稿绕过视觉禁用。
+/// - 只读状态不修改音效池，也不提交全局速度或音高命令。
+/// - 角色变化立即清空跨帧编辑草稿，释放动作不能误提交。
 /// @warning UI 热路径：窗口打开时每帧执行；不得扫描文件、解码音频或等待逻辑
 /// 命令完成。项目资源遍历限于当前轻量音频资源列表。
 void AudioTrackControllerUI::update(UIManager* sourceManager)
@@ -143,9 +150,19 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
         }
 
         // 下列服务引用只在本帧使用，不延长工程或音频对象生命周期。
-        auto& audio   = Audio::AudioManager::instance();
-        auto& engine  = Logic::EditorEngine::instance();
-        auto* project = engine.getCurrentProject();
+        auto& audio  = Audio::AudioManager::instance();
+        auto& engine = Logic::EditorEngine::instance();
+        // 音轨浏览借用已发布资源包，编辑资格独立于谱面写入权限。
+        const auto* project = sourceManager ? sourceManager->getAudioProject()
+                                            : engine.getCurrentProject();
+        const bool readOnly = sourceManager && sourceManager->isAudioReadOnly();
+        if ( readOnly ) {
+            // 切换角色时丢弃本机滑块草稿，避免释放鼠标后提交旧值。
+            m_speedSliderEditing = false;
+            m_pitchSliderEditing = false;
+            ImGui::TextUnformatted(
+                TR("ui.collaboration.permissions.read_only").data());
+        }
 
         if ( m_pendingDockId != 0 && ImGui::IsWindowDocked() ) {
             // ImGui 已接受停靠后清除请求，允许用户随后自由拖出窗口。
@@ -246,7 +263,9 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
                                       pitch,
                                       speedChanged,
                                       pitchChanged);
-            buildAnalysisButtons(m_contentVBox, rowIndex, sourceManager);
+            // 只读状态在下面禁用参数区之后单独绘制分析入口。
+            if ( !readOnly )
+                buildAnalysisButtons(m_contentVBox, rowIndex, sourceManager);
         }
 
         if ( m_type == TrackType::Effect ) {
@@ -259,21 +278,34 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
 
         // Clay 返回实际高度；推进 ImGui 游标后，后续 EQ 区从其下方开始。
         ImVec2 startPos = ImGui::GetCursorScreenPos();
-        ImVec2 sz       = m_contentVBox.renderInCurrent(
+        ImGui::BeginDisabled(readOnly);
+        ImVec2 sz = m_contentVBox.renderInCurrent(
             startPos, { ImGui::GetContentRegionAvail().x, 0 });
         ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
+
+        ImGui::EndDisabled();
+        if ( readOnly && m_type == TrackType::Main ) {
+            // 分析窗口读取本地播放缓冲，不修改项目，必须置于禁用作用域之外。
+            m_contentVBox.clear();
+            buildAnalysisButtons(m_contentVBox, rowIndex, sourceManager);
+            const auto analysisPosition = ImGui::GetCursorScreenPos();
+            const auto analysisSize     = m_contentVBox.renderInCurrent(
+                analysisPosition, { ImGui::GetContentRegionAvail().x, 0 });
+            ImGui::SetCursorScreenPos(
+                { analysisPosition.x, analysisPosition.y + analysisSize.y });
+        }
 
         // EQ 使用 ImPlot/ImGui 原生布局，不嵌入 Clay 的测量与裁剪流程。
         if ( m_type == TrackType::Main ) {
             // 没有项目配置时仍绘制禁用界面，保持窗口结构和功能提示稳定。
             AudioTrackConfig unavailableConfig;
-            if ( !config ) ImGui::BeginDisabled();
+            ImGui::BeginDisabled(!config || readOnly);
             renderEQSection(config ? *config : unavailableConfig, changed);
-            if ( !config ) ImGui::EndDisabled();
+            ImGui::EndDisabled();
         }
 
         // 资源配置仅在持久化字段变化时更新，不受全局倍速控件影响。
-        if ( changed ) {
+        if ( changed && !readOnly ) {
             if ( config ) {
                 // 把控件结果写回本地草稿，随后整份配置随命令按值发送。
                 config->volume = volume;
@@ -305,11 +337,11 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
                 });
             }
         }
-        if ( speedChanged ) {
+        if ( speedChanged && !readOnly ) {
             // 与画布 Ctrl+Alt 滚轮走同一逻辑命令，不重建资源 PCM 或保存项目。
             engine.pushCommand(Logic::CmdSetPlaybackSpeed{ speed });
         }
-        if ( pitchChanged ) {
+        if ( pitchChanged && !readOnly ) {
             // 主轨变调直接更新全局拉伸器，音频资源和项目文件均不变。
             engine.pushCommand(Logic::CmdSetPlaybackPitch{ pitch });
         }

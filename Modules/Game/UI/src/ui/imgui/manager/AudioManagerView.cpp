@@ -582,9 +582,11 @@ AudioManagerView::captureLayoutInput() const
     // 此处只采集影响行数和页脚展开高度的轻量状态。
     // 音频路径内容不参与布局测量，避免为求最小尺寸遍历资源。
     LayoutInputSnapshot input;
-    auto&               engine  = Logic::EditorEngine::instance();
-    auto*               project = engine.getCurrentProject();
-    input.hasProject            = project != nullptr;
+    auto&               engine = Logic::EditorEngine::instance();
+    // 已发布协作资源的数量同样影响列表高度；准备阶段只借用稳定数据源。
+    const auto* project = m_sourceManager ? m_sourceManager->getAudioProject()
+                                          : engine.getCurrentProject();
+    input.hasProject    = project != nullptr;
     input.permanentSfxCount =
         Config::SkinManager::instance().getData().audioPaths.size();
     input.showGlobalSettings = m_showGlobalSettings;
@@ -773,7 +775,7 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     const float controlRowWidth = footerPadX * 2.0f + labelWidth +
                                   controlColGap + muteButtonSize +
                                   controlColGap + sliderMinW;
-    float minWidth =
+    float       minWidth =
         std::ceil(rootPad * 2.0f + std::max({ controlRowWidth, headerWidth }));
 
     // 列表最小高度按当前资源数量推导，空状态则计算提示占位。
@@ -915,10 +917,13 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     }
 
     // 所有全局对象只在本帧入口解析一次，后续局部绘制器借用这些引用。
-    auto& engine       = Logic::EditorEngine::instance();
-    auto* project      = engine.getCurrentProject();
-    auto& skinCfg      = Config::SkinManager::instance();
-    auto& audioManager = Audio::AudioManager::instance();
+    m_sourceManager = sourceManager;
+    auto& engine    = Logic::EditorEngine::instance();
+    // 查看与写入身份分开，访客资源不能作为项目管理命令的数据源。
+    const auto* project      = sourceManager->getAudioProject();
+    const bool  readOnly     = sourceManager->isAudioReadOnly();
+    auto&       skinCfg      = Config::SkinManager::instance();
+    auto&       audioManager = Audio::AudioManager::instance();
 
     // 文件管理字体与资源表格的视觉语义一致；缺失时沿用当前字体。
     float   dpiScale        = layoutContext.m_dpiScale;
@@ -1778,9 +1783,9 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 const float rowCursorY = ImGui::GetCursorScreenPos().y;
                 // ID 同时包含资源标识、路径和索引，区分潜在同名条目。
                 const std::string rowId   = fmt::format("##AudioRow_{}_{}_{}",
-                                                      rowData.m_id,
-                                                      rowData.m_path,
-                                                      rowIndex);
+                                                        rowData.m_id,
+                                                        rowData.m_path,
+                                                        rowIndex);
                 const bool        clicked = ::MMM::UI::FeedbackSelectable(
                     rowId.c_str(),
                     false,
@@ -1793,7 +1798,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     rowData.m_kind == AudioTableRowKind::ProjectSfx;
                 // 仅项目资源可拖放，且载荷格式要求 ID 能装入固定缓冲区。
                 const bool canDragAudioResource =
-                    isProjectAudioResource &&
+                    isProjectAudioResource && !readOnly &&
                     Common::canStoreAudioResourceDragId(rowData.m_id);
                 if ( canDragAudioResource &&
                      ImGui::BeginDragDropSource(ImGuiDragDropFlags_None) ) {
@@ -1812,7 +1817,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     }
                     ImGui::EndDragDropSource();
                 }
-                if ( isProjectAudioResource ) {
+                if ( isProjectAudioResource && !readOnly ) {
                     // 类型修改和移除只属于项目模型，皮肤资源不开放右键菜单。
                     const std::string contextMenuId =
                         fmt::format("AudioTrackContext_{}_{}_{}",
@@ -1889,7 +1894,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                     rowData.m_path.c_str(),
                                     TR("ui.audio_manager.column_type").data(),
                                     typeText.c_str());
-                    if ( isProjectAudioResource && !canDragAudioResource ) {
+                    if ( isProjectAudioResource && !readOnly &&
+                         !canDragAudioResource ) {
                         // 过长 ID 无法写入固定载荷时明确说明拖放不可用。
                         tooltipText += "\n";
                         tooltipText +=
@@ -2319,7 +2325,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             "Audio_ImportNew",
             Sizing::Grow(),
             Sizing::Fixed(layoutMetrics.importButtonHeight),
-            [&engine](Clay_BoundingBox r, bool isHovered) {
+            [&engine, readOnly](Clay_BoundingBox r, bool isHovered) {
                 // 回调在 Clay 完成本帧布局后立即执行，engine 引用不会跨帧保存。
                 // 原生与内置选择器最终都通过 AudioImportTriggerEvent
                 // 汇入导入流程。
@@ -2352,6 +2358,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                   ImGui::ColorConvertFloat4ToU32(bgCol),
                                   rounding);
 
+                // 访客仅浏览已同步音轨，不能触发本机资源导入或文件选择器。
+                ImGui::BeginDisabled(readOnly);
                 // 可见标签只显示加号，隐藏 ID 保证同帧控件标识唯一。
                 if ( ::MMM::UI::FeedbackButton(
                          fmt::format("{}##ImportAudio", ICON_MMM_PLUS).c_str(),
@@ -2408,6 +2416,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     }
                 }
 
+                ImGui::EndDisabled();
                 // 恢复按钮样式后再恢复四项颜色，维持外层 UI 样式栈。
                 Utils::popFixedButtonStyleVars();
                 ImGui::PopStyleColor(4);
@@ -2422,7 +2431,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             "Audio_ProjectTool",
             Sizing::Grow(),
             Sizing::Fixed(layoutMetrics.importButtonHeight),
-            [sourceManager, project](Clay_BoundingBox r, bool isHovered) {
+            [sourceManager, project, readOnly](Clay_BoundingBox r,
+                                               bool             isHovered) {
                 // project 只作为本帧可用性快照，不在回调外延长项目生命周期。
                 // sourceManager 为空时按钮仍可绘制，但点击不会尝试打开窗口。
                 // 禁用态允许悬浮提示，帮助无项目状态下解释入口前置条件。
@@ -2452,7 +2462,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     ImGui::GetStyle().FrameRounding);
 
                 // 项目是工具的数据源；不存在项目时阻止点击提交。
-                ImGui::BeginDisabled(!project);
+                ImGui::BeginDisabled(!project || readOnly);
                 if ( ::MMM::UI::FeedbackButton(
                          fmt::format("{}##ProjectAudioTool", ICON_MMM_MUSIC)
                              .c_str(),
@@ -2491,6 +2501,12 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     // 行级移除请求先转换为一次 OpenPopup 调用，再清除边沿标志。
     // 待删除 ID 独立于表格行引用，因此缓存重建或滚动不会使确认目标悬空。
     // 确认和取消都会清空该 ID；弹窗关闭后没有残留请求进入下一帧。
+    // 权限或资源身份变化后清除尚未确认的删除，防止旧弹窗跨角色提交。
+    // 只读清理位于弹窗提交前，上一帧的确认按钮不会继续执行删除。
+    if ( readOnly ) {
+        m_openRemoveModal = false;
+        m_removeTrackId.clear();
+    }
     if ( m_openRemoveModal ) {
         ::MMM::UI::FeedbackOpenPopup("RemoveTrackConfirm");
         // 弹窗打开状态由 ImGui 接管，避免后续帧反复重开。
