@@ -904,8 +904,14 @@ struct EditorSettings {
     /// @brief 工具栏各按钮的显示与隐藏配置。
     ToolbarVisibilityConfig toolbarVisibility;
 
-    /// @brief 是否将工具窗口固定在主窗口右侧。
+    /// @brief 是否在保存的工作区边缘预留空间，将工具栏移出停靠树并固定。
     bool fixedToolWindow{ true };
+
+    /// @brief 浮动工具栏是否横向排列；停靠后由所在边缘自动确定方向。
+    bool toolbarHorizontal{ false };
+
+    /// @brief 默认停靠边缘；只接受 top、bottom、left、right 四个稳定值。
+    std::string toolbarDockEdge{ "right" };
 
     /// @brief 是否在左侧管理器图标下方显示简短标签。
     bool showManagerLabels{ true };

@@ -184,6 +184,12 @@ return {
 	["ui.view.toolbar_edit_tools"] = "编辑工具",
 	["ui.view.show_tool_labels"] = "显示工具标签名称",
 	["ui.view.fixed_tool_window"] = "固定工具窗口",
+	["ui.toolbar.layout.vertical"] = "上下排布",
+	["ui.toolbar.layout.horizontal"] = "左右排布",
+	["ui.toolbar.dock.top"] = "停靠主画布顶部",
+	["ui.toolbar.dock.bottom"] = "停靠主画布底部",
+	["ui.toolbar.dock.left"] = "停靠主画布左侧",
+	["ui.toolbar.dock.right"] = "停靠主画布右侧",
 	["ui.view.show_manager_labels"] = "显示管理器标签名称",
 
 	["ui.help"] = "帮助(&H)",

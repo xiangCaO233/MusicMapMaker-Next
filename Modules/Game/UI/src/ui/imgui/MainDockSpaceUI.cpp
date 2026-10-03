@@ -21,6 +21,7 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/SideBarUI.h"
+#include "ui/imgui/ToolbarDockLayout.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -561,12 +562,12 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
     float windowPaddingVal = std::floor(aesthetics.windowPadding * dpiScale);
 
-    // 侧栏和固定工具栏宽度都包含两侧窗口内边距。
+    // 独立侧栏宽度包含两侧窗口内边距，固定工具栏另按四边几何预留。
     float sidebarWidth =
         SideBarUI::GetSidebarWidth(dpiScale) + 2.0f * windowPaddingVal;
-    float toolbarWidth = std::floor(32.0f * dpiScale) + 2.0f * windowPaddingVal;
-    float toolbarLayoutWidth =
-        editorSettings.fixedToolWindow ? toolbarWidth : 0.0f;
+    // 四边工具栏在停靠宿主内统一扣除，菜单不再只为右侧栏单独扣宽度。
+    // 固定几何与宿主共享计算入口，不能让两处布局产生重叠或重复预留。
+    const float toolbarLayoutWidth = 0.0f;
 
     float       extraPaddingY = std::floor(4.0f * dpiScale);
     ImGuiStyle& style         = ImGui::GetStyle();
@@ -609,25 +610,49 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     // 状态栏在 DockSpace 之后绘制，以覆盖底部边界接缝。
     renderStatusBar(sourceManager, statusBarHeight, dpiScale);
 
-    // 工具栏可固定在右侧，也可作为 DockSpace 内的普通停靠窗口。
-    {
-        float floatGap = std::floor(aesthetics.windowGap * dpiScale);
-        if ( editorSettings.fixedToolWindow ) {
-            // 固定模式显式覆盖位置和尺寸，不读取上一次 ImGui 停靠布局。
-            ImGui::SetNextWindowPos(
-                ImVec2(viewport->WorkPos.x + viewport->WorkSize.x -
-                           toolbarWidth - floatGap,
-                       viewport->WorkPos.y + menuBarHeight + floatGap),
-                ImGuiCond_Always);
-            ImGui::SetNextWindowSize(
-                ImVec2(toolbarWidth,
-                       viewport->WorkSize.y - menuBarHeight - statusBarHeight -
-                           2.0f * floatGap));
+    // 固定工具栏直接占据宿主留出的边缘矩形，不使用任何 Dock 节点。
+    // renderDockingSpace 已在移出窗口前记录实际停靠边缘，不能用旧缓存定位。
+    if ( editorSettings.fixedToolWindow ) {
+        const float gap  = std::floor(aesthetics.windowGap * dpiScale);
+        const auto  edge = toolbarDockDirection(editorSettings.toolbarDockEdge);
+        const bool  horizontal = edge == ImGuiDir_Up || edge == ImGuiDir_Down;
+        const float thickness =
+            std::floor(
+                (horizontal && editorSettings.showToolLabels ? 46.0f : 32.0f) *
+                dpiScale) +
+            2.0f * windowPaddingVal;
+        // 左侧包含侧栏外边距和栏间距，右侧仅保留一份外边距。
+        // 与宿主使用同一基础矩形，避免固定工具栏右侧重复留白。
+        const auto geometry = calculateToolbarWorkspaceGeometry(
+            ImVec2(viewport->WorkPos.x + sidebarWidth + 2.0f * gap,
+                   viewport->WorkPos.y + menuBarHeight + gap),
+            ImVec2(viewport->WorkSize.x - sidebarWidth - 3.0f * gap,
+                   viewport->WorkSize.y - menuBarHeight - statusBarHeight -
+                       2.0f * gap),
+            true,
+            edge,
+            thickness,
+            gap);
+        // 始终相对当前视口设定，主窗口缩放和 DPI 改变后仍紧贴同一条边。
+        // 必须在 ToolbarView::Begin 之前提交，停靠标签宿主不再参与固定几何。
+        // 非固定阶段不提交这些约束，用户拖动位置和长轴尺寸由 ImGui 保存。
+        ImGui::SetNextWindowPos(geometry.m_toolbarPos);
+        ImGui::SetNextWindowSize(geometry.m_toolbarSize);
+        // 管理器展开时左侧固定带位于它与画布之间，以本帧占位叶几何定位。
+        // 占位只提供矩形，实际工具窗口仍强制移出 DockSpace 并保持独立固定。
+        if ( edge == ImGuiDir_Left ) {
+            const auto* slotWindow =
+                ImGui::FindWindowByName(TOOLBAR_MANAGER_SLOT_NAME);
+            const auto* slot = slotWindow ? slotWindow->DockNode : nullptr;
+            if ( slot ) {
+                ImGui::SetNextWindowPos(slot->Pos);
+                ImGui::SetNextWindowSize(ImVec2(thickness, slot->Size.y));
+            }
         }
-        // 浮动模式只指定视口，窗口位置由 DockBuilder 或用户布局决定。
-        ImGui::SetNextWindowViewport(viewport->ID);
-        m_toolbarView.update(sourceManager);
+        ImGui::SetNextWindowDockID(0);
     }
+    ImGui::SetNextWindowViewport(viewport->ID);
+    m_toolbarView.update(sourceManager);
 
     // 前景边框在所有主工作区窗口后绘制，确保无边框轮廓不被遮盖。
     renderNativeWindowFrameOverlay(sourceManager, dpiScale);

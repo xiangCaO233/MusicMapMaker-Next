@@ -69,7 +69,7 @@ void dockActiveMainCanvasWindows(ImGuiID dockId)
 /// @param menuBarHeight 顶部菜单栏占用高度。
 /// @param statusBarHeight 底部状态栏占用高度。
 /// @param sidebarWidth 固定侧栏占用宽度。
-/// @param toolbarWidth 固定工具栏占用宽度。
+/// @param toolbarWidth 保留的历史参数；四边占位统一使用当前工具栏设置计算。
 /// @warning UI 热路径：每帧创建宿主窗口；DockBuilder 重建及会话遍历只能发生在
 /// 首次初始化的低频分支中；模式切换只调整工具栏。
 void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
@@ -80,7 +80,7 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
     // 布局坐标约定：
     // - WorkPos/WorkSize 已扣除平台视口保留区域；
     // - menuBarHeight 与 statusBarHeight 由同一帧的外层布局计算；
-    // - sidebarWidth 与 toolbarWidth 仅表示固定模式下的外部占位；
+    // - sidebarWidth 表示独立侧栏占位；工具栏由四边矩形计算单独预留；
     // - floatGap 在各固定区域之间保留一致的视觉间隔。
     // 因此这里不能再次使用 DisplaySize，也不能叠加窗口装饰尺寸。
     // 所有几何量统一基于主视口和当前内容缩放，避免多显示器 DPI 下出现缝隙。
@@ -89,18 +89,62 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
     float dpiScale = Config::AppConfig::instance().getWindowContentScale();
     auto& aesthetics =
         Config::AppConfig::instance().getEditorSettings().aesthetics;
-    const bool fixedToolWindow =
-        Config::AppConfig::instance().getEditorSettings().fixedToolWindow;
-    float floatGap = std::floor(aesthetics.windowGap * dpiScale);
-
-    // 宿主窗口位于四条固定 UI 带之间，间距分别留给皮肤定义的窗口空隙。
-    ImGui::SetNextWindowPos(
+    auto& toolbarSettings = Config::AppConfig::instance().getEditorSettings();
+    // 拖动停靠和四边菜单请求共用入口，在计算宿主矩形前立即转成固定模式。
+    // 只有偏好真正变化时保存，不能因为窗口尺寸逐帧变化而反复写配置。
+    if ( updateToolbarFixedDockIntent(toolbarSettings.fixedToolWindow,
+                                      toolbarSettings.toolbarHorizontal,
+                                      toolbarSettings.toolbarDockEdge) )
+        Config::AppConfig::instance().save();
+    const bool fixedToolWindow = toolbarSettings.fixedToolWindow;
+    float      floatGap        = std::floor(aesthetics.windowGap * dpiScale);
+    // 固定启动或恢复项目时也移出旧工具节点，兼容历史 ini 的内部停靠带。
+    if ( fixedToolWindow ) detachFixedToolbar();
+    const auto fixedEdge =
+        toolbarDockDirection(toolbarSettings.toolbarDockEdge);
+    const bool horizontal =
+        fixedEdge == ImGuiDir_Up || fixedEdge == ImGuiDir_Down;
+    // 固定带的排布由保存边缘决定，不能沿用浮动阶段手动选择的另一方向。
+    // 该赋值不触发配置 I/O；拖动停靠时的持久化仍由工具栏视图处理。
+    if ( fixedToolWindow ) toolbarSettings.toolbarHorizontal = horizontal;
+    // 无标题栏的厚度只包含一行/列图标和内边距，不保留标签栏高度。
+    // 短标签仅增高横排按钮，竖排图标列宽仍保持 32 逻辑像素。
+    const float toolbarThickness =
+        std::floor(
+            (horizontal && toolbarSettings.showToolLabels ? 46.0f : 32.0f) *
+            dpiScale) +
+        2.0f * std::floor(aesthetics.windowPadding * dpiScale);
+    // 基础矩形只扣一次菜单和状态栏，左侧入口条也只在这里扣一次宽度。
+    // 四边共用同一几何入口，顶部/左侧还会移动宿主原点。
+    // 右侧/底部不改原点，工具栏从完整矩形末端定位。
+    // 横向共扣三份间距：侧栏左侧、侧栏与宿主之间、工作区右侧。
+    // 右侧外边距只能扣一份，工具栏和宿主不能各自再扣一次。
+    auto* sideBarManager =
+        sourceManager->getView<FloatingManagerUI>("SideBarManager");
+    auto*         previousHost = ImGui::FindWindowByName("RightDockHost");
+    const ImGuiID previousRoot =
+        previousHost ? previousHost->GetID("MyMainDockSpace") : 0;
+    // 左侧管理器展开时，固定带应从画布工作区扣除，而非放在管理器外侧。
+    // 收起、浮动或移到其他边缘的管理器仍使用完整宿主外部固定带。
+    const bool managerLeft = fixedToolWindow && fixedEdge == ImGuiDir_Left &&
+                             sideBarManager && sideBarManager->isVisible() &&
+                             toolbarManagerWorkNode(previousRoot);
+    const auto geometry    = calculateToolbarWorkspaceGeometry(
         ImVec2(viewport->WorkPos.x + sidebarWidth + 2.0f * floatGap,
-               viewport->WorkPos.y + menuBarHeight + floatGap));
-    ImGui::SetNextWindowSize(ImVec2(
-        viewport->WorkSize.x - sidebarWidth - toolbarWidth - 4.0f * floatGap,
-        viewport->WorkSize.y - menuBarHeight - statusBarHeight -
-            2.0f * floatGap));
+               viewport->WorkPos.y + menuBarHeight + floatGap),
+        ImVec2(viewport->WorkSize.x - sidebarWidth - 3.0f * floatGap,
+               viewport->WorkSize.y - menuBarHeight - statusBarHeight -
+                   2.0f * floatGap),
+        fixedToolWindow && !managerLeft,
+        fixedEdge,
+        toolbarThickness,
+        floatGap);
+    // 工具栏固定带直接从整个中心宿主扣除，顶部/底部扣高，左侧/右侧扣宽。
+    // 宿主只改变矩形，已有设置页、双画布和其他分栏不重新构建。
+    ImGui::SetNextWindowPos(geometry.m_dockPos);
+    ImGui::SetNextWindowSize(geometry.m_dockSize);
+    // 保留外层菜单调用签名，避免旧右侧宽度与四边占位发生二次扣除。
+    (void)toolbarWidth;
     ImGui::SetNextWindowViewport(viewport->ID);
 
     // 宿主仅承载 DockSpace，本身不能响应移动、缩放或再次被停靠。
@@ -137,8 +181,6 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
     ImGui::PopStyleVar(1);
 
     // 调整约束必须先于 DockSpace 提交，否则本帧拖动会使用过期节点尺寸。
-    auto* sideBarManager =
-        sourceManager->getView<FloatingManagerUI>("SideBarManager");
     if ( sideBarManager ) {
         sideBarManager->applyDockResizeConstraintsBeforeDockSpace(
             sourceManager);
@@ -165,11 +207,11 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
         // 默认节点树的不变量：
         // - 根节点始终对应 RightDockHost 内的 MyMainDockSpace；
         // - 侧栏只占据第一层拆分得到的边缘节点；
-        // - 非固定工具栏只占工作区最右侧的窄节点；
+        // - 固定工具栏位于宿主外部，只有非固定工具栏可以拥有叶节点；
         // - 预览区位于剩余工作区右侧；
         // - 时间线位于画布区域右侧，中心节点留给所有主画布标签。
         // - 项目中的全部活动主画布共享中心节点，以标签页形式呈现；
-        // - 不存在可停靠工具栏时，工具节点 ID 必须保持为零；
+        // - 浮动工具栏的节点 ID 为零，不能强制送回默认位置；
         // - 每次重建都从空节点树开始，不能继承上一模式的残余拆分；
         // - Finish 之前不允许其他路径观察并修改尚未完成的节点树。
         // 新窗口必须复用这些语义节点，不能依赖临时 DockNode 指针。
@@ -184,13 +226,7 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
         // DockBuilder 的重建顺序必须是移除、创建、定尺寸、拆分、停靠、完成。
         ImGui::DockBuilderRemoveNode(dockspace_id);
         ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
-        const float dockspaceWidth = viewport->WorkSize.x - sidebarWidth -
-                                     toolbarWidth - 4.0f * floatGap;
-        ImGui::DockBuilderSetNodeSize(
-            dockspace_id,
-            ImVec2(dockspaceWidth,
-                   viewport->WorkSize.y - menuBarHeight - statusBarHeight -
-                       2.0f * floatGap));
+        ImGui::DockBuilderSetNodeSize(dockspace_id, geometry.m_dockSize);
 
         ImGuiID dock_id_left;
         ImGuiID dock_id_right;
@@ -209,28 +245,6 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
             dockspace_id, sidebarDir, sidebarRatio, nullptr, &dock_id_right);
 
         ImGuiID dock_id_work = dock_id_right;
-        if ( !fixedToolWindow ) {
-            // 可停靠工具栏的比例由实际像素宽度换算，并限制到合理窄栏范围。
-            const float toolNodeRatio = std::clamp(
-                (std::floor(32.0f * dpiScale) +
-                 2.0f * std::floor(aesthetics.windowPadding * dpiScale)) /
-                    std::max(dockspaceWidth, 1.0f),
-                0.035f,
-                0.12f);
-            ImGuiID dock_id_tool = 0;
-            dock_id_tool         = ImGui::DockBuilderSplitNode(dock_id_work,
-                                                               ImGuiDir_Right,
-                                                               toolNodeRatio,
-                                                               nullptr,
-                                                               &dock_id_work);
-            ImGui::DockBuilderDockWindow(" ###Toolbar", dock_id_tool);
-            // 缓存节点 ID 供工具栏约束逻辑使用，不缓存节点指针。
-            MainDockSpaceUI::setToolDockId(dock_id_tool);
-        } else {
-            // 固定工具栏位于 DockSpace 外部，因此清除历史工具节点标识。
-            MainDockSpaceUI::setToolDockId(0);
-        }
-
         // 工作区右侧先切出预览，再从剩余区域切出时间线与中心画布。
         ImGuiID dock_id_center_canvas;
         ImGuiID dock_id_preview;
@@ -262,9 +276,12 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
 
         // 所有拆分和窗口归属一次性提交，避免暴露半构建节点树。
         ImGui::DockBuilderFinish(dockspace_id);
+        // 固定带位于宿主外部，非固定初次显示也保持浮动。
+        // 默认创建停靠叶会被误判为用户主动固定，不能在此插入工具节点。
+        MainDockSpaceUI::setToolDockId(0);
     } else if ( toolbarModeChanged ) {
         // 模式切换不能触碰设置页、并排画布或欢迎页的停靠归属。
-        // 根宿主尺寸变化交给 ImGui；只在外侧增减工具栏自己的叶节点。
+        // 固定时只移出工具栏窗口，解除固定后保持浮动，其他窗口不重建。
         const float actualToolbarWidth =
             std::floor(32.0f * dpiScale) +
             2.0f * std::floor(aesthetics.windowPadding * dpiScale);
@@ -280,15 +297,43 @@ void MainDockSpaceUI::renderDockingSpace(UIManager* sourceManager,
         // 项目加载后旧工具节点缓存可能属于被替换的树；只读取新窗口归属。
         // 不拆分保存的布局，让项目中的设置窗口和画布保持原位置。
         auto* toolbar = ImGui::FindWindowByName(" ###Toolbar");
-        MainDockSpaceUI::setToolDockId(
-            !fixedToolWindow && toolbar ? toolbar->DockId : 0);
+        MainDockSpaceUI::setToolDockId(toolbar ? toolbar->DockId : 0);
     }
     lastFixedToolWindow    = fixedToolWindow;
     hasLastFixedToolWindow = true;
 
+    // 用户的边缘请求已在宿主矩形计算前消费，不能在此再次创建工具叶。
+    // 非固定阶段只剩浮动状态，历史节点约束入口仍用于旧布局过渡兼容。
+    // 非固定停靠节点锁定厚度，内部长轴分隔条单独决定长度。
+    // 固定工具栏不属于 DockSpace，因此不会提交工具节点或限制画布分隔条。
+    // 旧 ini 的工具节点限制只在仍停靠的非固定状态清理，避免影响其他窗口。
+    const float toolbarPadding =
+        2.0f * std::floor(aesthetics.windowPadding * dpiScale);
+    if ( !fixedToolWindow )
+        applyToolbarDockConstraints(
+            false,
+            std::floor(32.0f * dpiScale) + toolbarPadding,
+            std::floor((toolbarSettings.showToolLabels ? 46.0f : 32.0f) *
+                       dpiScale) +
+                toolbarPadding);
+
+    // 工具栏长轴在非固定模式提供独立分隔条；厚度仍由外侧节点约束。
+    // 固定工具栏已移出树，不再提交内部长度占位或停靠装饰。
+    if ( !fixedToolWindow ) updateToolbarLengthDock(false);
+    if ( const auto* toolbar = ImGui::FindWindowByName(" ###Toolbar") )
+        MainDockSpaceUI::setToolDockId(toolbar->DockId);
+
+    // 在管理器之后预留固定带；只增减专用占位，不改变已展开管理器的归属。
+    // 隐藏管理器和解除固定时必须收回占位，让画布重新使用全部剩余空间。
+    const ImGuiID managerSlot = updateToolbarManagerLeftSlot(
+        dockspace_id, managerLeft, toolbarThickness);
+    // 拖动固定条画布侧边界改变管理器宽度，厚度约束不应锁住工作区分栏。
+    drawToolbarManagerResizeHandle(managerSlot);
     // 所有低频节点修改先完成，再提交本帧宿主和节点控制按钮。
     ImGui::DockSpace(
         dockspace_id, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
+    drawToolbarManagerLeftSlot(managerSlot);
+    drawToolbarDockRemainder();
     FeedbackDockNodeControls(dockspace_id);
     if ( titleFont ) ImGui::PopFont();
 

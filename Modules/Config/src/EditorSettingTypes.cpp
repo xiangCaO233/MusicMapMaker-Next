@@ -1020,8 +1020,12 @@ void preserveGlobalToolbarDisplaySettings(EditorSettings&       target,
                                           const EditorSettings& source)
 {
     // 标签和固定窗口属于用户工作区布局，不应随谱面项目切换。
-    target.showToolLabels    = source.showToolLabels;
-    target.fixedToolWindow   = source.fixedToolWindow;
+    target.showToolLabels  = source.showToolLabels;
+    target.fixedToolWindow = source.fixedToolWindow;
+    // 排布方向属于软件工作区，不随当前谱面的编辑设置切换。
+    // 项目只提供画布布局，不能把用户选定的工具栏方向覆盖为旧版本默认值。
+    target.toolbarHorizontal = source.toolbarHorizontal;
+    target.toolbarDockEdge   = source.toolbarDockEdge;
     target.showManagerLabels = source.showManagerLabels;
     // 分组按钮可见性整体复制，保证工具栏状态内部一致。
     target.toolbarVisibility = source.toolbarVisibility;
@@ -1130,6 +1134,10 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "showToolLabels", settings.showToolLabels },
         { "toolbarVisibility", settings.toolbarVisibility },
         { "fixedToolWindow", settings.fixedToolWindow },
+        // 方向适用于浮动窗口，边缘用于缺失节点树时的初始停靠。
+        // 具体节点 ID 和分栏比例仍由工作区 ini 保存，不能用边缘字段重建它们。
+        { "toolbarHorizontal", settings.toolbarHorizontal },
+        { "toolbarDockEdge", settings.toolbarDockEdge },
         { "showManagerLabels", settings.showManagerLabels },
         // 外观、调色板和快捷键使用独立子对象降低根层字段耦合。
         { "aesthetics", settings.aesthetics },
@@ -1307,7 +1315,19 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     settings.showToolLabels = json.value("showToolLabels", false);
     settings.toolbarVisibility =
         json.value("toolbarVisibility", ToolbarVisibilityConfig{});
-    settings.fixedToolWindow   = json.value("fixedToolWindow", true);
+    settings.fixedToolWindow = json.value("fixedToolWindow", true);
+    // 历史配置没有工具栏方向和边缘时，继续采用右侧竖排的默认布局。
+    // 使用稳定英文枚举值存储边缘，界面翻译变化不能改变停靠语义。
+    settings.toolbarHorizontal = json.value("toolbarHorizontal", false);
+    settings.toolbarDockEdge =
+        json.value("toolbarDockEdge", std::string("right"));
+    // 手工输入的未知边缘不得传入拆分 API；回退仍保持有空间的边缘布局。
+    if ( settings.toolbarDockEdge != "top" &&
+         settings.toolbarDockEdge != "bottom" &&
+         settings.toolbarDockEdge != "left" &&
+         settings.toolbarDockEdge != "right" ) {
+        settings.toolbarDockEdge = "right";
+    }
     settings.showManagerLabels = json.value("showManagerLabels", true);
     // 外观、调色板和快捷键子结构各自负责内部字段兼容。
     settings.aesthetics    = json.value("aesthetics", UIAestheticsConfig());

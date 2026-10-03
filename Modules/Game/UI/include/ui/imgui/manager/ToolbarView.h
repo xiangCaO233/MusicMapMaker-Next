@@ -65,8 +65,8 @@ private:
     Logic::EditTool m_toolBeforeLayout = Logic::EditTool::Move;
     /// @brief 是否显示布局组件管理弹层。
     bool m_showLayoutPopup{ false };
-    /// @brief 上一帧布局工具按钮的屏幕 Y 坐标，用于定位弹层。
-    float m_lastLayoutBtnY{ 0.0f };
+    /// @brief 本帧布局工具按钮的屏幕左上角坐标，用于定位弹层。
+    glm::vec2 m_lastLayoutBtnPos{ 0.0f, 0.0f };
     /// @brief 布局组件弹层上一帧宽度。
     float m_layoutPopupWidth{ 260.0f };
     /// @brief 布局组件弹层上一帧高度。
@@ -78,27 +78,29 @@ private:
     /// @brief 物件与背景折叠菜单是否有尚未写入配置文件的连续调整。
     bool m_layoutVisualConfigDirty{ false };
     /// @brief 上一帧布局组件颜色选择器是否打开。
-    bool  m_layoutComponentColorPickerOpen{ false };
-    bool  m_showDivisorPopup = false;
-    float m_lastBtnY         = 0.0f;
-    float m_popupWidth       = 160.0f;
-    float m_popupHeight      = 120.0f;
-    bool  m_showKeyPopup     = false;
-    float m_lastKeyBtnY      = 0.0f;
-    float m_keyPopupWidth    = 160.0f;
-    float m_keyPopupHeight   = 120.0f;
+    bool m_layoutComponentColorPickerOpen{ false };
+    bool m_showDivisorPopup = false;
+    /// @brief 本帧分拍数量按钮的完整屏幕锚点。
+    glm::vec2 m_lastBtnPos{ 0.0f, 0.0f };
+    float     m_popupWidth   = 160.0f;
+    float     m_popupHeight  = 120.0f;
+    bool      m_showKeyPopup = false;
+    /// @brief 本帧轨道数按钮的完整屏幕锚点。
+    glm::vec2 m_lastKeyBtnPos{ 0.0f, 0.0f };
+    float     m_keyPopupWidth  = 160.0f;
+    float     m_keyPopupHeight = 120.0f;
     /// @brief 是否显示磁铁工具设置弹窗。
     bool m_showMagnetPopup{ false };
-    /// @brief 上一帧磁铁工具按钮的屏幕 Y 坐标，用于定位弹窗。
-    float m_lastMagnetBtnY{ 0.0f };
+    /// @brief 本帧磁铁工具按钮的屏幕左上角坐标，用于定位弹窗。
+    glm::vec2 m_lastMagnetBtnPos{ 0.0f, 0.0f };
     /// @brief 磁铁工具弹窗上一帧宽度，用于防止视口越界。
     float m_magnetPopupWidth{ 280.0f };
     /// @brief 磁铁工具弹窗上一帧高度，用于防止视口越界。
     float m_magnetPopupHeight{ 360.0f };
     /// @brief 是否显示分拍线模式设置弹窗。
     bool m_showBeatLinePopup{ false };
-    /// @brief 上一帧分拍线模式按钮的屏幕 Y 坐标，用于定位弹窗。
-    float m_lastBeatLineBtnY{ 0.0f };
+    /// @brief 本帧分拍线模式按钮的屏幕左上角坐标，用于定位弹窗。
+    glm::vec2 m_lastBeatLineBtnPos{ 0.0f, 0.0f };
     /// @brief 分拍线模式弹窗上一帧宽度。
     float m_beatLinePopupWidth{ 260.0f };
     /// @brief 分拍线模式弹窗上一帧高度。
@@ -109,16 +111,16 @@ private:
     BeatLineDisplayModeHistory m_beatLineDisplayModeHistory;
     /// @brief 是否显示主音轨倍速详细调整弹窗。
     bool m_showSpeedPopup{ false };
-    /// @brief 上一帧倍速按钮的屏幕 Y 坐标，用于定位弹窗。
-    float m_lastSpeedBtnY{ 0.0f };
+    /// @brief 本帧倍速按钮的屏幕左上角坐标，用于定位弹窗。
+    glm::vec2 m_lastSpeedBtnPos{ 0.0f, 0.0f };
     /// @brief 主音轨倍速弹窗上一帧宽度，用于防止视口越界。
     float m_speedPopupWidth{ 160.0f };
     /// @brief 主音轨倍速弹窗上一帧高度，用于防止视口越界。
     float m_speedPopupHeight{ 120.0f };
     /// @brief 是否显示音效分区与逐轨混音控制工具。
     bool m_showSoundEffectTool{ false };
-    /// @brief 上一帧音效工具按钮的屏幕 Y 坐标，用于定位弹层。
-    float m_lastSoundEffectToolBtnY{ 0.0f };
+    /// @brief 本帧音效工具按钮的屏幕左上角坐标，用于定位弹层。
+    glm::vec2 m_lastSoundEffectToolBtnPos{ 0.0f, 0.0f };
     /// @brief 音效工具上次成功读取的活动会话索引，切换会话时立即清空旧布局。
     int m_soundEffectTrackSessionIndex{ -1 };
     /// @brief 会话锁暂不可用时沿用的玩家轨道数。
@@ -145,8 +147,8 @@ private:
     float m_editorMetronomeGainDraft{ 1.0f };
     /// @brief 是否显示调色盘弹窗。
     bool m_showColorPopup{ false };
-    /// @brief 上一帧调色盘按钮的屏幕 Y 坐标，用于定位弹窗。
-    float m_lastColorBtnY{ 0.0f };
+    /// @brief 本帧调色盘按钮的屏幕左上角坐标，用于定位弹窗。
+    glm::vec2 m_lastColorBtnPos{ 0.0f, 0.0f };
     /// @brief 调色盘弹窗上一帧宽度，用于防止视口越界。
     float m_colorPopupWidth{ 360.0f };
     /// @brief 调色盘弹窗上一帧高度，用于防止视口越界。

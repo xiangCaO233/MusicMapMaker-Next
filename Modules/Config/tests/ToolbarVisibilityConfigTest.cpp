@@ -127,6 +127,8 @@ bool testGlobalToolbarVisibilityPreservation()
     MMM::Config::EditorSettings globalSettings;
     globalSettings.showToolLabels                                  = true;
     globalSettings.fixedToolWindow                                 = false;
+    globalSettings.toolbarHorizontal                               = true;
+    globalSettings.toolbarDockEdge                                 = "bottom";
     globalSettings.showManagerLabels                               = false;
     globalSettings.toolbarVisibility.stateTools.colorBrush         = true;
     globalSettings.toolbarVisibility.independentButtons.trackCount = true;
@@ -145,11 +147,34 @@ bool testGlobalToolbarVisibilityPreservation()
     // 返回表达式抽查刻意设反的代表字段，确认覆盖方向。
     // 同时验证顶层标签、固定模式和两个嵌套按钮分组。
     return projectSettings.showToolLabels && !projectSettings.fixedToolWindow &&
+           projectSettings.toolbarHorizontal &&
+           projectSettings.toolbarDockEdge == "bottom" &&
            !projectSettings.showManagerLabels &&
            projectSettings.toolbarVisibility.stateTools.colorBrush &&
            projectSettings.toolbarVisibility.independentButtons.trackCount;
 }
 
+/// @brief 验证排布与停靠边缘的持久化、历史默认值和非法边缘回退。
+/// @return 横排底部配置可往返，旧配置仍右侧竖排时返回 true。
+bool testToolbarLayoutSettings()
+{
+    MMM::Config::EditorSettings settings;
+    settings.toolbarHorizontal = true;
+    settings.toolbarDockEdge   = "bottom";
+    // 使用完整对象往返，避免只测试孤立字段而遗漏全局编辑设置序列化入口。
+    const nlohmann::json serialized = settings;
+    const auto restored = serialized.get<MMM::Config::EditorSettings>();
+    // 旧配置缺失字段的情况必须单独检查，完整往返无法覆盖这个兼容入口。
+    // 方向默认值与边缘默认值要成对匹配，避免首次布局和按钮排布不一致。
+    const auto legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    // 非法边缘来自手工编辑的配置，不能直接交给 ImGui 拆分方向运算。
+    const auto invalid = nlohmann::json{ { "toolbarDockEdge", "invalid" } }
+                             .get<MMM::Config::EditorSettings>();
+    return restored.toolbarHorizontal && restored.toolbarDockEdge == "bottom" &&
+           !legacy.toolbarHorizontal && legacy.toolbarDockEdge == "right" &&
+           invalid.toolbarDockEdge == "right";
+}
 }  // namespace
 
 /// @brief 运行工具栏按钮可见性持久化与兼容性测试。
@@ -161,7 +186,8 @@ int main()
     return testToolbarVisibilityRoundTrip() &&
                    testToolbarVisibilityDefaults() &&
                    testPartialToolbarVisibilityDefaults() &&
-                   testGlobalToolbarVisibilityPreservation()
+                   testGlobalToolbarVisibilityPreservation() &&
+                   testToolbarLayoutSettings()
                ? 0
                : 1;
 }

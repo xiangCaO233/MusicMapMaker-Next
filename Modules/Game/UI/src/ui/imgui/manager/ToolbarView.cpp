@@ -20,6 +20,8 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/ShortcutUtils.h"
+#include "ui/imgui/ToolbarDockLayout.h"
+#include "ui/imgui/ToolbarPopupLayout.h"
 #include "ui/imgui/manager/SoundEffectToolTrackLayout.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/utils/NativeFileDialog.h"
@@ -49,6 +51,55 @@ namespace MMM::UI
 
 namespace
 {
+/// @brief 读取本帧按钮的完整屏幕锚点，不持有 ImGui 项目状态引用。
+/// @warning UI 热路径：按钮提交后每帧调用，只复制两个坐标。
+glm::vec2 toolbarButtonPosition()
+{
+    const ImVec2 position = ImGui::GetItemRectMin();
+    return { position.x, position.y };
+}
+
+/// @brief 按实际工具栏方向准备所有工具型弹层的下一次 Begin。
+/// @param toolbar 工具栏本帧有效窗口，不缓存跨帧指针。
+/// @param buttonPosition 触发按钮本帧屏幕坐标。
+/// @param popupSize 本弹层的独立尺寸估计，不能借用其他弹层缓存。
+/// @param dpiScale 当前内容缩放，用于安全留白与按钮间距。
+/// @return 可用尺寸上限，供音效工具等固定尺寸浮层同步裁限。
+/// @warning UI 热路径：每个可见弹层每帧调用，不读写文件或修改停靠树。
+ToolbarPopupGeometry positionToolbarPopup(const ImGuiWindow& toolbar,
+                                          glm::vec2          buttonPosition,
+                                          ImVec2 popupSize, float dpiScale)
+{
+    const auto& settings = Config::AppConfig::instance().getEditorSettings();
+    const auto* viewport = ImGui::GetMainViewport();
+    ImGuiDir    edge     = toolbarDockDirection(settings.toolbarDockEdge);
+    // 固定条沿用已确认的边缘；浮窗选空闲空间较大的一侧，不沿用旧停靠偏好。
+    // 横排和竖排分别比较垂直、水平空间，保证弹层仍与按钮位置相关。
+    if ( !settings.fixedToolWindow ) {
+        const int   axis = settings.toolbarHorizontal ? 1 : 0;
+        const float center =
+            viewport->WorkPos[axis] + viewport->WorkSize[axis] * 0.5f;
+        const bool leading =
+            toolbar.Pos[axis] + toolbar.Size[axis] * 0.5f < center;
+        edge = settings.toolbarHorizontal
+                   ? (leading ? ImGuiDir_Up : ImGuiDir_Down)
+                   : (leading ? ImGuiDir_Left : ImGuiDir_Right);
+    }
+    const auto geometry = calculateToolbarPopupGeometry(
+        toolbar.Pos,
+        toolbar.Size,
+        ImVec2(buttonPosition.x, buttonPosition.y),
+        popupSize,
+        viewport->WorkPos,
+        viewport->WorkSize,
+        edge,
+        std::floor(4.0f * dpiScale),
+        std::floor(8.0f * dpiScale));
+    // 所有弹层共用定位协议；最大尺寸约束让高内容滚动而非覆盖工具栏。
+    prepareToolbarPopup(geometry, viewport->ID);
+    return geometry;
+}
+
 /// @brief 绘制文本空间不足时自动滚动的工具栏方形按钮。
 /// @param id 不显示的 ImGui ID。
 /// @param text 按钮显示文本。
@@ -670,8 +721,8 @@ void ToolbarView::updateEditorConfig(const Config::EditorConfig& config) const
 /// 谱面和运行时变化以编辑命令投递。唯一的直接运行时开关是同主音频画布
 /// 同步状态，它由 EditorEngine 提供专用接口且不属于 EditorConfig。
 ///
-/// 锚定弹层在工具栏窗口结束后绘制。各入口保存按钮屏幕 Y 坐标，各弹层
-/// 使用主视口、上帧尺寸与右上角 Pivot 完成边界夹取。窗口 ID 均为稳定隐藏
+/// 锚定弹层在工具栏窗口结束后绘制。各入口保存按钮完整屏幕坐标，各弹层
+/// 使用主视口、上帧尺寸与方向对应的 Pivot 完成边界夹取。窗口 ID 均为稳定隐藏
 /// 标识，显示数值、语言和图标变化不会丢失 ImGui 状态。
 ///
 /// 快捷键采用固定优先级链。若用户把多个动作绑定到同一组合键，只执行链中
@@ -692,7 +743,9 @@ void ToolbarView::updateEditorConfig(const Config::EditorConfig& config) const
 /// - 谱面元数据只在需要倍速或轨道数控件时持短作用域会话锁；
 /// - 所有修改均生成新配置或命令，不原地修改该只读快照。
 /// 这保证同一帧所有按钮显示基于一致起点，下一帧再汇合已应用变化。
-/// @warning UI 热路径：每帧执行；不得引入文件操作、阻塞等待或无条件资源遍历。
+/// @warning UI 热路径：每帧执行；常态不得引入文件操作、阻塞等待或资源遍历。
+/// 工具栏布局偏好仅在菜单激活或停靠方向发生变化的低频分支保存配置。
+/// 保存前比较语义字段，常态节点位置和尺寸变化不会触发磁盘写入。
 void ToolbarView::update(UIManager* sourceManager)
 {
     // 应用服务观察指针每帧同步，UIManager 为空时安全回退只读配置路径。
@@ -724,6 +777,27 @@ void ToolbarView::update(UIManager* sourceManager)
     const auto& independentButtonVisibility =
         toolbarVisibility.independentButtons;
     // 标签开关改变按钮高度，固定窗口开关改变停靠与标题栏行为。
+    // 用户拖动停靠后，按节点拆分方向同步排布，而非按窗口宽高猜测。
+    // 浮动窗口继续使用手动选择；固定状态也不会改变保存的边缘。
+    if ( const auto edge = currentToolbarDockDirection() ) {
+        const bool  horizontal = *edge == ImGuiDir_Up || *edge == ImGuiDir_Down;
+        const char* edgeName   = *edge == ImGuiDir_Up     ? "top"
+                                 : *edge == ImGuiDir_Down ? "bottom"
+                                 : *edge == ImGuiDir_Left ? "left"
+                                                          : "right";
+        // 拖动停靠同样属于用户布局操作，只在方向或边缘语义改变时保存一次。
+        // 不能因为节点位置随宿主缩放变化而逐帧保存；节点几何由 ini 管理。
+        if ( editorSettings.toolbarHorizontal != horizontal ||
+             editorSettings.toolbarDockEdge != edgeName ) {
+            editorSettings.toolbarHorizontal = horizontal;
+            editorSettings.toolbarDockEdge   = edgeName;
+            Config::AppConfig::instance().save();
+        }
+    }
+    // 这里只保存方向和边缘语义，不保存节点指针；下一帧 ImGui 可能合并节点。
+    // 排布不由当前尺寸推断，否则缩小长轴后可能误切换方向并覆盖用户尺寸。
+    // 用户手动选择方向会解除停靠；再次停靠时由边缘重新接管方向。
+    const bool horizontal      = editorSettings.toolbarHorizontal;
     const bool showToolLabels  = editorSettings.showToolLabels;
     const bool fixedToolWindow = editorSettings.fixedToolWindow;
 
@@ -752,7 +826,7 @@ void ToolbarView::update(UIManager* sourceManager)
     //
     // toolbarBaseW 保留未取整的 DPI 乘积供按钮尺寸使用，fixedW 则为窗口约束
     // 的像素宽度。窗口总宽加入两侧主题内边距，保证内容列不因样式变化缩窄。
-    // 短标签模式只增加高度，不扩大宽度，以维持固定工具停靠栏布局。
+    // 短标签模式只增加按钮高度；竖排列宽固定，横排单行高度随标签增高。
     float fixedBaseW   = 32.0f;
     float toolbarBaseW = fixedBaseW * dpiScale;
     float fixedW       = std::floor(fixedBaseW * dpiScale);
@@ -761,23 +835,62 @@ void ToolbarView::update(UIManager* sourceManager)
     float btnHeight   = showToolLabels ? std::floor(46.0f * dpiScale) : btnSize;
     float totalFixedW = fixedW + 2.0f * windowPadding;
 
-    // 最小和最大宽度相同，只允许窗口纵向随内容变化。
-    ImGui::SetNextWindowSizeConstraints(ImVec2(totalFixedW, -1),
-                                        ImVec2(totalFixedW, -1));
+    // 竖排只开放高度，横排只开放宽度；固定时额外禁止用户调整长轴。
+    // 这套约束也用于浮动窗口，停靠分隔条由 WindowClass 的轴标志控制。
+    const float rowHeight = btnHeight + 2.0f * windowPadding +
+                            (fixedToolWindow ? 0.0f : ImGui::GetFrameHeight());
+    // 底部固定带没有标题栏，解除固定后标题栏会增高浮窗。
+    // 仅在这个转换帧校正位置，防止右下角缩放柄落在视口之外而无法拖动。
+    // 常态浮动帧不能强制定位，否则会覆盖用户移动工具栏的连续交互。
+    if ( !fixedToolWindow ) {
+        const auto* previous = ImGui::FindWindowByName(" ###Toolbar");
+        if ( previous && (previous->Flags & ImGuiWindowFlags_NoDocking) ) {
+            const auto*  viewport = ImGui::GetMainViewport();
+            const ImVec2 size(horizontal ? previous->Size.x : totalFixedW,
+                              horizontal ? rowHeight : previous->Size.y);
+            ImVec2       position = previous->Pos;
+            // 整个浮窗需留在可操作区域，不能仅保证标题栏的一小部分可见。
+            // 极小视口仍从起始边定位，避免上下限倒置传给 clamp。
+            for ( int axis = 0; axis < 2; ++axis )
+                position[axis] = std::clamp(
+                    position[axis],
+                    viewport->WorkPos[axis],
+                    std::max(viewport->WorkPos[axis],
+                             viewport->WorkPos[axis] +
+                                 viewport->WorkSize[axis] - size[axis]));
+            ImGui::SetNextWindowPos(position);
+        }
+    }
+    // 首次浮动不创建停靠叶，用主视口长轴提供工具按钮的初始显示空间。
+    // 初始长度留出视口边缘余量，默认浮窗原点偏移后缩放柄仍可见。
+    // 后续帧由 ImGui 保留用户尺寸，不能每帧覆盖其缩放结果。
+    if ( !fixedToolWindow && !ImGui::FindWindowByName(" ###Toolbar") ) {
+        const auto* viewport = ImGui::GetMainViewport();
+        ImGui::SetNextWindowSize(
+            horizontal ? ImVec2(viewport->WorkSize.x * 0.8f, rowHeight)
+                       : ImVec2(totalFixedW, viewport->WorkSize.y * 0.8f),
+            ImGuiCond_FirstUseEver);
+    }
+    const float maximum = std::numeric_limits<float>::max();
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(totalFixedW, rowHeight),
+        horizontal ? ImVec2(maximum, rowHeight) : ImVec2(totalFixedW, maximum));
+    // SizeConstraints 只约束浮动窗口的大小计算，不能阻止 Dock 分隔条拖动。
+    // WindowClass 将同一轴规则交给节点合并标志，让鼠标命中遵守相同约束。
+    // 固定时移出停靠树并使用主宿主预留的边缘空间，解除固定恢复浮动约束。
+    // 解除固定后逐帧重建轻量类值，避免上一次 NoResize 留在窗口类中。
+    prepareToolbarDockClass(horizontal, fixedToolWindow);
 
-    // 工具栏禁止滚动、键盘导航和用户缩放，内容按可见按钮确定高度。
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse |
                              ImGuiWindowFlags_NoScrollbar |
-                             ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoResize;
+                             ImGuiWindowFlags_NoNav;
     if ( fixedToolWindow ) {
-        // 固定模式移除标题、移动与停靠，使工具栏保持预设位置。
-        flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
-                 ImGuiWindowFlags_NoDocking;
-    } else if ( ImGuiID toolDockId = MainDockSpaceUI::getToolDockId();
-                toolDockId != 0 ) {
-        // 非固定模式持续绑定专用工具停靠节点。
-        ImGui::SetNextWindowDockID(toolDockId, ImGuiCond_Always);
+        // 固定工具栏独立于停靠树，不能被其他窗口停靠或重新接入中心节点。
+        flags |= ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoDocking;
     }
+    // 初次停靠和模式切换由主 DockBuilder 完成，常态不强制绑定旧节点。
+    // 用户拖出、重新停靠或缩放之后，应保留 ImGui 已确认的新布局。
 
     float rounding = std::floor(aesthetics.frameRounding * dpiScale);
     // 工具按钮去除间距和边框，形成紧凑垂直工具条。
@@ -805,6 +918,7 @@ void ToolbarView::update(UIManager* sourceManager)
     };
 
     // 窗口自身圆角与控件圆角分别取自美学设置。
+    // 固定和浮动都沿用主题窗口圆角；固定仅去除标题和交互装饰。
     float windowRound = std::floor(aesthetics.windowRounding * dpiScale);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                         ImVec2(windowPadding, windowPadding));
@@ -955,9 +1069,15 @@ void ToolbarView::update(UIManager* sourceManager)
             }
         }
 
-        /// @brief 按配置的垂直间距推进到下一个工具栏项目。
+        /// @brief 根据排布方向推进到下一个工具栏项目。
+        // SameLine 必须在当前可见控件之后提交；隐藏项不能留下空白占位。
+        // 工具提示和图标覆盖仍引用该控件矩形，不改变后续流式布局起点。
+        // 竖排按主题间距增高游标，横排保持基线，不通过整体旋转绘制实现。
         auto advanceItem = [&]() {
-            if ( itemSpacing > 0.0f ) {
+            // 横排所有工具共享同一行；竖排保留原有显式垂直间距。
+            if ( horizontal ) {
+                ImGui::SameLine(0.0f, itemSpacing);
+            } else if ( itemSpacing > 0.0f ) {
                 ImGui::SetCursorPosY(ImGui::GetCursorPosY() + itemSpacing);
             }
         };
@@ -1104,16 +1224,26 @@ void ToolbarView::update(UIManager* sourceManager)
             independentButtonVisibility.beatLineDisplay ||
             independentButtonVisibility.soundEffectTool;
         if ( hasVisibleStateTool && hasVisibleUpperIndependentButton ) {
-            // 分隔线水平内缩，不接触工具栏窗口边缘。
-            ImVec2 sepPos = ImGui::GetCursorScreenPos();
-            float  sepH   = 2.0f * dpiScale;
-            ImGui::GetWindowDrawList()->AddLine(
-                { sepPos.x + 4.0f * dpiScale, sepPos.y + sepH * 0.5f },
-                { sepPos.x + btnSize - 4.0f * dpiScale,
-                  sepPos.y + sepH * 0.5f },
-                IM_COL32(100, 100, 100, 150),
-                1.0f * dpiScale);
-            ImGui::Dummy(ImVec2(btnSize, sepH));
+            // 分隔线垂直于排布长轴，保持同一行或同一列的自然流式布局。
+            const ImVec2 sepPos = ImGui::GetCursorScreenPos();
+            const float  sepH   = 2.0f * dpiScale;
+            if ( horizontal ) {
+                ImGui::GetWindowDrawList()->AddLine(
+                    { sepPos.x + sepH * 0.5f, sepPos.y + 4.0f * dpiScale },
+                    { sepPos.x + sepH * 0.5f,
+                      sepPos.y + btnHeight - 4.0f * dpiScale },
+                    IM_COL32(100, 100, 100, 150),
+                    dpiScale);
+                ImGui::Dummy(ImVec2(sepH, btnHeight));
+            } else {
+                ImGui::GetWindowDrawList()->AddLine(
+                    { sepPos.x + 4.0f * dpiScale, sepPos.y + sepH * 0.5f },
+                    { sepPos.x + btnSize - 4.0f * dpiScale,
+                      sepPos.y + sepH * 0.5f },
+                    IM_COL32(100, 100, 100, 150),
+                    dpiScale);
+                ImGui::Dummy(ImVec2(btnSize, sepH));
+            }
             advanceItem();
         }
 
@@ -1126,7 +1256,7 @@ void ToolbarView::update(UIManager* sourceManager)
         applyProjectPalettePreference();
 
         // 调色盘入口的活动态只表示弹层可见，按钮色块本身始终反映当前槽颜色。
-        // 打开后关闭所有其他锚定弹层，避免多个窗口竞争工具栏左侧同一空间。
+        // 打开后关闭所有其他锚定弹层，避免多个窗口竞争工具栏内侧同一空间。
         // 颜色方案编辑不改变当前编辑工具，因此可与 Move、Draw 等模式共存。
         if ( independentButtonVisibility.notePalette ) {
             // 调色盘按钮活动样式对应浮层打开状态。
@@ -1200,7 +1330,7 @@ void ToolbarView::update(UIManager* sourceManager)
                 }
             }
             // 缓存按钮顶部作为调色盘浮层垂直锚点。
-            m_lastColorBtnY = ImGui::GetItemRectMin().y;
+            m_lastColorBtnPos = toolbarButtonPosition();
             drawTooltip(TR("ui.toolbar.note_palette").data());
             ImGui::PopStyleColor(3);
             advanceItem();
@@ -1230,7 +1360,7 @@ void ToolbarView::update(UIManager* sourceManager)
                 }
             }
             // 记录本帧按钮 Y 供浮层锚定。
-            m_lastMagnetBtnY = ImGui::GetItemRectMin().y;
+            m_lastMagnetBtnPos = toolbarButtonPosition();
             ImGui::PopID();
             drawTooltip(TR("ui.toolbar.magnet_tool").data());
             ImGui::PopStyleColor(3);
@@ -1279,7 +1409,7 @@ void ToolbarView::update(UIManager* sourceManager)
                 }
             }
             // 记录按钮顶部作为分拍线设置浮层锚点。
-            m_lastBeatLineBtnY = ImGui::GetItemRectMin().y;
+            m_lastBeatLineBtnPos = toolbarButtonPosition();
             ImGui::PopID();
             {
                 const std::string tooltipText =
@@ -1322,7 +1452,7 @@ void ToolbarView::update(UIManager* sourceManager)
                 }
             }
             // 音效窗口固定宽度，但仍以按钮顶部作为垂直锚点并执行视口夹取。
-            m_lastSoundEffectToolBtnY = ImGui::GetItemRectMin().y;
+            m_lastSoundEffectToolBtnPos = toolbarButtonPosition();
             ImGui::PopID();
             {
                 // 音效提示额外说明快捷键是“切换击打音”而非单纯打开工具窗口，
@@ -1376,7 +1506,15 @@ void ToolbarView::update(UIManager* sourceManager)
             bottomButtonsH +=
                 itemSpacing * static_cast<float>(bottomButtonCount - 1);
         }
-        if ( bottomButtonCount > 0 ) {
+        if ( horizontal && bottomButtonCount > 0 ) {
+            // 横排的播放与参数组贴近右端，空间不足时接续当前项目而不重叠。
+            const float bottomWidth =
+                btnSize * static_cast<float>(bottomButtonCount) +
+                itemSpacing * static_cast<float>(bottomButtonCount - 1);
+            const float startX = ImGui::GetCursorPosX() +
+                                 ImGui::GetContentRegionAvail().x - bottomWidth;
+            if ( startX > ImGui::GetCursorPosX() ) ImGui::SetCursorPosX(startX);
+        } else if ( bottomButtonCount > 0 ) {
             // 只在下方仍有余量时移动游标；窗口过矮时保持自然流式布局，
             // 让 ImGui 裁剪内容，而不是把按钮反向压到已绘制控件之上。
             float bottomStartY = ImGui::GetCursorPosY() +
@@ -1465,7 +1603,7 @@ void ToolbarView::update(UIManager* sourceManager)
                                                 ImVec2(btnSize, btnSize)) ) {
                     m_showSpeedPopup = !m_showSpeedPopup;
                     if ( m_showSpeedPopup ) {
-                        // 数值弹层共享工具栏左侧空间，任一时刻只保留一个。
+                        // 数值弹层共享工具栏内侧空间，任一时刻只保留一个。
                         m_showKeyPopup        = false;
                         m_showDivisorPopup    = false;
                         m_showBeatLinePopup   = false;
@@ -1474,7 +1612,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     }
                 }
                 // 弹层下一阶段以本帧按钮顶部为锚点。
-                m_lastSpeedBtnY = ImGui::GetItemRectMin().y;
+                m_lastSpeedBtnPos = toolbarButtonPosition();
 
                 if ( hasBeatmap && ImGui::IsItemHovered() ) {
                     // 滚轮调节是可选交互；关闭设置后悬浮仅显示说明。
@@ -1560,7 +1698,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     }
                 }
                 // 保存锚点时使用屏幕坐标，后续可跨窗口定位。
-                m_lastKeyBtnY = ImGui::GetItemRectMin().y;
+                m_lastKeyBtnPos = toolbarButtonPosition();
 
                 if ( hasBeatmap && ImGui::IsItemHovered() ) {
                     // 滚轮每格调整一轨，范围与元数据编辑页保持一致。
@@ -1624,8 +1762,8 @@ void ToolbarView::update(UIManager* sourceManager)
                     m_showSoundEffectTool = false;
                 }
             }
-            // 历史成员名 m_lastBtnY 专用于分拍弹层锚点。
-            m_lastBtnY = ImGui::GetItemRectMin().y;
+            // 历史成员名 m_lastBtnPos 专用于分拍弹层锚点。
+            m_lastBtnPos = toolbarButtonPosition();
             if ( ImGui::IsItemHovered() ) {
                 if ( editorCfg.settings.enableToolbarValueWheelAdjustment ) {
                     const auto& io    = ImGui::GetIO();
@@ -1656,8 +1794,53 @@ void ToolbarView::update(UIManager* sourceManager)
             advanceBottomButton();
         }
 
-        // 字体栈只在图标字体实际存在时恢复。
+        // 弹出菜单使用正文可用字体，不能继承只包含图标的字体作为文字字体。
+        // 恢复字体后仍保留统一 FeedbackButton，以维持鼠标悬浮和点击反馈。
         if ( pushedIconFont ) ImGui::PopFont();
+        if ( ImGui::BeginPopupContextWindow(
+                 "ToolbarLayoutMenu", ImGuiPopupFlags_MouseButtonRight) ) {
+            // 菜单写入布局请求，由下一帧宿主消费，不在活跃 Begin 中重建节点。
+            // 固定状态使用独立边缘带，先解除固定才能拖动或重新选择边缘。
+            // 与视图菜单保持相同的低频保存策略，重启后固定开关应保持一致。
+            if ( ImGui::Checkbox(TR("ui.view.fixed_tool_window").data(),
+                                 &editorSettings.fixedToolWindow) )
+                Config::AppConfig::instance().save();
+            ImGui::BeginDisabled(editorSettings.fixedToolWindow);
+            for ( bool row : { false, true } ) {
+                const char* key = row ? "ui.toolbar.layout.horizontal"
+                                      : "ui.toolbar.layout.vertical";
+                if ( FeedbackButton(TR(key).data()) ) {
+                    editorSettings.toolbarHorizontal = row;
+                    // 手动方向适用于浮动状态，保存不能等到下一次停靠事件。
+                    Config::AppConfig::instance().save();
+                    // 解除停靠在下一帧执行，当前帧继续完成原节点窗口绘制。
+                    // None 是有值请求而非空 optional，不能被消费方当成无操作。
+                    pendingToolbarDockRequest() = ImGuiDir_None;
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            // 四个目标均相对于当前主画布，边缘本身决定排布方向。
+            constexpr ImGuiDir edges[]{
+                ImGuiDir_Up, ImGuiDir_Down, ImGuiDir_Left, ImGuiDir_Right
+            };
+            constexpr const char* keys[]{ "ui.toolbar.dock.top",
+                                          "ui.toolbar.dock.bottom",
+                                          "ui.toolbar.dock.left",
+                                          "ui.toolbar.dock.right" };
+            for ( int index = 0; index < 4; ++index ) {
+                if ( FeedbackButton(TR(keys[index]).data()) ) {
+                    // 只记录最后一个用户请求，宿主消费前不进行任何阻塞等待。
+                    // 用户仍可继续编辑，停靠迁移只发生在明确的低频布局入口。
+                    pendingToolbarDockRequest() = edges[index];
+                    ImGui::CloseCurrentPopup();
+                }
+            }
+            ImGui::EndDisabled();
+            ImGui::EndPopup();
+        }
+
+        // 图标字体已在菜单之前恢复，窗口结束时只恢复其余样式栈。
+        // 固定选项始终可用，方向和边缘操作只有解除固定后才允许提交。
     }
     ImGui::End();
     // 与前面的 PushStyleVar/固定按钮样式严格成对恢复，防止污染其他窗口。
@@ -1682,49 +1865,23 @@ void ToolbarView::update(UIManager* sourceManager)
     // 不与倍速或轨道数弹层共享，以免内容变化造成相互跳动。
     //
     // 定位协议：
-    // - m_lastBtnY 是分拍按钮本帧的屏幕顶部；
+    // - m_lastBtnPos 是分拍按钮本帧的屏幕左上角；
     // - m_popupWidth/Height 是上一帧自动尺寸结果；
-    // - targetX 代表弹层右边缘，因此左边界检查需要加完整宽度；
-    // - targetY 同时夹取顶部留白和底部减窗口高度；
+    // - 横排浮层在工具栏内侧上下展开，竖排浮层在内侧左右展开；
+    // - 超过可用空间的内容在弹层内部滚动，不改变工具栏位置；
     // - 首帧估计只影响一次定位，实际尺寸会在窗口内容绘制后回填。
     //
     // 滑条适合任意合法值，预设列表只提供皮肤认为常用的分母。两种交互都
     // 从本帧 editorCfg 复制完整配置，修改单字段后提交；下帧重新读取结果。
     if ( m_showDivisorPopup ) {
-        // 在 Toolbar 窗口左侧显示悬浮窗
-        // 工具栏存在是本函数正常绘制的前置条件，由主窗口同帧建立。
-        ImVec2 toolbarPos = ImGui::FindWindowByName(" ###Toolbar")->Pos;
-
-        // 所有边界计算限定在主视口，避免多视口模式下弹层跨屏漂移。
-        ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-        float          viewportTop  = mainViewport->Pos.y;
-        float viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
-        float viewportLeft   = mainViewport->Pos.x;
-
-        // 横向位置 = 工具栏左边缘往左 4px
-        // 纵向位置 = 按钮的顶部对齐
-        float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
-        float targetY = m_lastBtnY;
-
-        // 灵活微调 Y 和 X 的起始坐标，确保弹出菜单不会溢出视口边界而被截断
-        // 首帧使用保守估计，之后复用上一帧真实窗口尺寸。
-        float popupW =
-            m_popupWidth > 0.0f ? m_popupWidth : std::floor(160.0f * dpiScale);
-        float popupH  = m_popupHeight > 0.0f ? m_popupHeight
-                                             : std::floor(120.0f * dpiScale);
-        float padding = std::floor(8.0f * dpiScale);
-
-        // 限制 X 以免溢出左侧边界
-        targetX = std::max(targetX, viewportLeft + popupW + padding);
-        // 限制 Y 以免溢出底部与顶部边界
-        targetY = std::min(targetY, viewportBottom - popupH - padding);
-        targetY = std::max(targetY, viewportTop + padding);
-
-        ImVec2 popupPos = ImVec2(targetX, targetY);
-
-        // 枢轴点 (1.0, 0.0) 代表将弹窗的右上角对齐到 popupPos
-        ImGui::SetNextWindowViewport(mainViewport->ID);
-        ImGui::SetNextWindowPos(popupPos, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+        const auto* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar");
+        // 每种弹层保留独立尺寸缓存，方向与边界统一由工具栏定位入口处理。
+        const float popupW =
+            m_popupWidth > 0 ? m_popupWidth : std::floor(160.0f * dpiScale);
+        const float popupH =
+            m_popupHeight > 0 ? m_popupHeight : std::floor(120.0f * dpiScale);
+        positionToolbarPopup(
+            *toolbarWindow, m_lastBtnPos, ImVec2(popupW, popupH), dpiScale);
 
         // 弹层位置完全由锚点控制，不写入 imgui.ini。
         ImGuiWindowFlags popupFlags =
@@ -1837,33 +1994,18 @@ void ToolbarView::update(UIManager* sourceManager)
     // 会话锁覆盖当前弹层绘制是既有同步约束；控件回调只投递命令，不等待
     // 音频线程完成。显示值每帧从 AudioManager 读取，不假设命令已同步执行。
     if ( m_showSpeedPopup ) {
-        // 倍速弹层沿用分拍弹层的锚定与视口夹取策略。
-        ImVec2 toolbarPos = ImGui::FindWindowByName(" ###Toolbar")->Pos;
-
-        ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-        float          viewportTop  = mainViewport->Pos.y;
-        float viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
-        float viewportLeft   = mainViewport->Pos.x;
-
-        float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
-        float targetY = m_lastSpeedBtnY;
-
-        // 独立缓存尺寸，避免不同弹层内容宽高互相干扰。
-        float popupW = m_speedPopupWidth > 0.0f ? m_speedPopupWidth
-                                                : std::floor(160.0f * dpiScale);
-        float popupH = m_speedPopupHeight > 0.0f
-                           ? m_speedPopupHeight
-                           : std::floor(120.0f * dpiScale);
-        float padding = std::floor(8.0f * dpiScale);
-
-        targetX = std::max(targetX, viewportLeft + popupW + padding);
-        targetY = std::min(targetY, viewportBottom - popupH - padding);
-        targetY = std::max(targetY, viewportTop + padding);
-
-        ImVec2 popupPos = ImVec2(targetX, targetY);
-
-        ImGui::SetNextWindowViewport(mainViewport->ID);
-        ImGui::SetNextWindowPos(popupPos, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+        const auto* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar");
+        // 每种弹层保留独立尺寸缓存，方向与边界统一由工具栏定位入口处理。
+        const float popupW = m_speedPopupWidth > 0
+                                 ? m_speedPopupWidth
+                                 : std::floor(160.0f * dpiScale);
+        const float popupH = m_speedPopupHeight > 0
+                                 ? m_speedPopupHeight
+                                 : std::floor(120.0f * dpiScale);
+        positionToolbarPopup(*toolbarWindow,
+                             m_lastSpeedBtnPos,
+                             ImVec2(popupW, popupH),
+                             dpiScale);
 
         ImGuiWindowFlags popupFlags =
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -1970,34 +2112,16 @@ void ToolbarView::update(UIManager* sourceManager)
     // 固定按钮样式只包围常用键数行，并在所有分支结束前恢复。弹层尺寸缓存
     // 独立于分拍与倍速，避免三种内容高度在切换时互相污染锚点计算。
     if ( m_showKeyPopup ) {
-        // 轨道数弹层仅在活动谱面存在时有可编辑目标。
-        ImVec2 toolbarPos = ImGui::FindWindowByName(" ###Toolbar")->Pos;
-
-        ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-        float          viewportTop  = mainViewport->Pos.y;
-        float viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
-        float viewportLeft   = mainViewport->Pos.x;
-
-        // 横向位置 = 工具栏左边缘往左 4px
-        // 纵向位置 = 按钮的顶部对齐
-        float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
-        float targetY = m_lastKeyBtnY;
-
-        // 使用独立上帧尺寸完成视口边缘修正。
-        float popupW  = m_keyPopupWidth > 0.0f ? m_keyPopupWidth
-                                               : std::floor(160.0f * dpiScale);
-        float popupH  = m_keyPopupHeight > 0.0f ? m_keyPopupHeight
-                                                : std::floor(120.0f * dpiScale);
-        float padding = std::floor(8.0f * dpiScale);
-
-        targetX = std::max(targetX, viewportLeft + popupW + padding);
-        targetY = std::min(targetY, viewportBottom - popupH - padding);
-        targetY = std::max(targetY, viewportTop + padding);
-
-        ImVec2 popupPos = ImVec2(targetX, targetY);
-
-        ImGui::SetNextWindowViewport(mainViewport->ID);
-        ImGui::SetNextWindowPos(popupPos, ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+        const auto* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar");
+        // 每种弹层保留独立尺寸缓存，方向与边界统一由工具栏定位入口处理。
+        const float popupW = m_keyPopupWidth > 0
+                                 ? m_keyPopupWidth
+                                 : std::floor(160.0f * dpiScale);
+        const float popupH = m_keyPopupHeight > 0
+                                 ? m_keyPopupHeight
+                                 : std::floor(120.0f * dpiScale);
+        positionToolbarPopup(
+            *toolbarWindow, m_lastKeyBtnPos, ImVec2(popupW, popupH), dpiScale);
 
         ImGuiWindowFlags popupFlags =
             ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -2191,7 +2315,6 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
     const float    viewportTop    = mainViewport->Pos.y;
     const float    viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
-    const float    viewportLeft   = mainViewport->Pos.x;
     const float    edgePadding    = std::floor(8.0F * dpiScale);
     const float    popupWidth     = std::floor(420.0F * dpiScale);
     // 标题高度计入分隔后的标准项目间距。
@@ -2211,21 +2334,15 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     const float popupHeight =
         std::clamp(desiredHeight, minimumHeight, maximumHeight);
 
-    // 以弹层右上角对齐工具栏左侧，避免遮挡纵向工具按钮。
-    float targetX = toolbarWindow->Pos.x - std::floor(4.0F * dpiScale);
-    float targetY = m_lastSoundEffectToolBtnY;
-    // 左边界要计入完整弹层宽度，因为后续使用右上角枢轴定位。
-    targetX = std::max(targetX, viewportLeft + popupWidth + edgePadding);
-    targetY = std::clamp(targetY,
-                         viewportTop + edgePadding,
-                         std::max(viewportTop + edgePadding,
-                                  viewportBottom - popupHeight - edgePadding));
-
-    // 强制位置和尺寸，用户不能拖动此工具型弹层。
-    ImGui::SetNextWindowViewport(mainViewport->ID);
-    ImGui::SetNextWindowPos(
-        { targetX, targetY }, ImGuiCond_Always, { 1.0F, 0.0F });
-    ImGui::SetNextWindowSize({ popupWidth, popupHeight }, ImGuiCond_Always);
+    // 音效列表仍使用固定外框和内部滚动，高度还须受工具栏内侧空间限制。
+    const auto geometry = positionToolbarPopup(*toolbarWindow,
+                                               m_lastSoundEffectToolBtnPos,
+                                               ImVec2(popupWidth, popupHeight),
+                                               dpiScale);
+    ImGui::SetNextWindowSize(
+        ImVec2(std::min(popupWidth, geometry.m_maximumSize.x),
+               std::min(popupHeight, geometry.m_maximumSize.y)),
+        ImGuiCond_Always);
 
     // 外层禁用滚动，唯一滚动源是下方子窗口，标题始终保持可见。
     const ImGuiWindowFlags popupFlags =
@@ -3775,7 +3892,7 @@ void ToolbarView::pushColorCommands(Logic::NoteColorSlot     slot,
 /// @brief 绘制调色盘方案管理、导入导出与颜色编辑浮层。
 /// @param dpiScale 当前窗口内容缩放。
 ///
-/// 浮层锚定工具栏颜色按钮左侧并夹在主视口内，使用无标题自动尺寸窗口。
+/// 浮层锚定工具栏颜色按钮内侧并夹在主视口内，使用无标题自动尺寸窗口。
 /// 上半区管理继承、皮肤默认和自定义方案，下半区按标签页编辑笔记或分拍线槽位。
 /// 方案删除和导入名称均通过二次弹窗确认，文件选择器结果由独立函数推进。
 /// 颜色编辑同时提供选择器与十六进制文本，只有有效值才向画笔或渲染配置推送。
@@ -3806,35 +3923,13 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
     // 工具栏尚未创建或被隐藏时无法定位浮层。
     if ( !toolbarWindow ) return;
 
-    ImVec2 toolbarPos = toolbarWindow->Pos;
-
-    // 浮层固定在主视口，避免跨多视口时出现在错误显示器。
-    ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
-    float          viewportTop    = mainViewport->Pos.y;
-    float          viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
-    float          viewportLeft   = mainViewport->Pos.x;
-
-    // 水平锚点位于工具栏左缘附近，窗口 Pivot 随后使用右上角。
-    float targetX = toolbarPos.x - std::floor(4.0f * dpiScale);
-    float targetY = m_lastColorBtnY;
-
-    // 首帧使用默认尺寸估计，后续使用上帧测得实际浮层宽高进行夹取。
-    float popupW  = m_colorPopupWidth > 0.0f ? m_colorPopupWidth
-                                             : std::floor(360.0f * dpiScale);
-    float popupH  = m_colorPopupHeight > 0.0f ? m_colorPopupHeight
-                                              : std::floor(360.0f * dpiScale);
-    float padding = std::floor(8.0f * dpiScale);
-
-    // 右上角 Pivot 要求目标 X 至少容纳完整窗口和左侧安全留白。
-    targetX = std::max(targetX, viewportLeft + popupW + padding);
-    // Y 轴同时限制在视口上下边界内。
-    targetY = std::min(targetY, viewportBottom - popupH - padding);
-    targetY = std::max(targetY, viewportTop + padding);
-
-    // 每帧显式设置视口和位置，浮层不参与持久化窗口布局。
-    ImGui::SetNextWindowViewport(mainViewport->ID);
-    ImGui::SetNextWindowPos(
-        ImVec2(targetX, targetY), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    // 每种弹层保留独立尺寸缓存，方向与边界统一由工具栏定位入口处理。
+    const float popupW = m_colorPopupWidth > 0 ? m_colorPopupWidth
+                                               : std::floor(360.0f * dpiScale);
+    const float popupH = m_colorPopupHeight > 0 ? m_colorPopupHeight
+                                                : std::floor(360.0f * dpiScale);
+    positionToolbarPopup(
+        *toolbarWindow, m_lastColorBtnPos, ImVec2(popupW, popupH), dpiScale);
 
     // 浮层尺寸由内容自动决定，用户不能单独移动、缩放或保存其位置。
     ImGuiWindowFlags popupFlags =
@@ -4655,10 +4750,10 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
 /// @param showLabel 是否显示短标签。
 ///
 /// 首次进入记录前一工具并打开布局弹窗；活动时再次点击恢复前一工具并关闭弹窗。
-/// 布局按钮还记录屏幕 Y 坐标，供设置浮层在同一行锚定。
+/// 布局按钮记录完整屏幕坐标，供不同方向的设置浮层锚定。
 ///
 /// 若历史工具本身是 Layout，则恢复目标规范为 Move，防止退出动作仍停留在
-/// 布局模式。进入布局时关闭音效工具，因为两个宽弹层共享工具栏左侧锚定区。
+/// 布局模式。进入布局时关闭音效工具，因为两个宽弹层共享工具栏内侧锚定区。
 /// 其他小弹层已由 update 中的互斥规则管理，不在此重复清理。
 /// 此函数与普通工具按钮使用相同三态样式栈和平面图标绘制入口。
 /// @param sourceManager 提供实际可见按钮的引导登记入口。
@@ -4714,8 +4809,8 @@ void ToolbarView::drawLayoutButton(float width, float height, bool showLabel,
             spotlight.completeTarget("personalization.editor.layout-tool",
                                      true);
     }
-    // 在弹窗渲染前缓存本帧按钮顶部屏幕坐标。
-    m_lastLayoutBtnY = ImGui::GetItemRectMin().y;
+    // 在弹窗渲染前缓存本帧按钮左上角屏幕坐标。
+    m_lastLayoutBtnPos = toolbarButtonPosition();
     ImGui::PopID();
     drawTooltip(TR("ui.toolbar.layout").data());
     ImGui::PopStyleColor(3);
@@ -4751,31 +4846,14 @@ void ToolbarView::renderMagnetPopup(float dpiScale)
     // 工具栏不可见时缺少稳定锚点，本帧跳过浮层。
     if ( !toolbarWindow ) return;
 
-    ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
-    const float    viewportTop    = mainViewport->Pos.y;
-    const float    viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
-    const float    viewportLeft   = mainViewport->Pos.x;
-    const float    padding        = std::floor(8.0f * dpiScale);
-    // 用上帧实际尺寸夹取位置，首帧采用安全估计值。
-    const float popupW  = m_magnetPopupWidth > 0.0f
-                              ? m_magnetPopupWidth
-                              : std::floor(280.0f * dpiScale);
-    const float popupH  = m_magnetPopupHeight > 0.0f
-                              ? m_magnetPopupHeight
-                              : std::floor(360.0f * dpiScale);
-    float       targetX = toolbarWindow->Pos.x - std::floor(4.0f * dpiScale);
-    float       targetY = m_lastMagnetBtnY;
-    // 右上角 Pivot 要求目标 X 足以容纳整个窗口左侧范围。
-    targetX                = std::max(targetX, viewportLeft + popupW + padding);
-    const float minTargetY = viewportTop + padding;
-    const float maxTargetY =
-        std::max(minTargetY, viewportBottom - popupH - padding);
-    // 高度超过视口时 maxTargetY 退化到顶部安全边界。
-    targetY = std::clamp(targetY, minTargetY, maxTargetY);
-
-    ImGui::SetNextWindowViewport(mainViewport->ID);
-    ImGui::SetNextWindowPos(
-        ImVec2(targetX, targetY), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    // 每种弹层保留独立尺寸缓存，方向与边界统一由工具栏定位入口处理。
+    const float popupW = m_magnetPopupWidth > 0 ? m_magnetPopupWidth
+                                                : std::floor(280.0f * dpiScale);
+    const float popupH = m_magnetPopupHeight > 0
+                             ? m_magnetPopupHeight
+                             : std::floor(360.0f * dpiScale);
+    positionToolbarPopup(
+        *toolbarWindow, m_lastMagnetBtnPos, ImVec2(popupW, popupH), dpiScale);
 
     // 无标题自动尺寸浮层不写入 ImGui 布局配置。
     const ImGuiWindowFlags popupFlags =
@@ -4942,30 +5020,15 @@ void ToolbarView::renderBeatLinePopup(float dpiScale)
     // 工具栏缺失时保留脏状态，下一帧关闭或恢复后再保存。
     if ( !toolbarWindow ) return;
 
-    ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
-    const float    viewportTop    = mainViewport->Pos.y;
-    const float    viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
-    const float    viewportLeft   = mainViewport->Pos.x;
-    const float    padding        = std::floor(8.0f * dpiScale);
-    // 首帧以估计尺寸定位，之后使用实际缓存尺寸避免越界。
-    const float popupW     = m_beatLinePopupWidth > 0.0f
-                                 ? m_beatLinePopupWidth
-                                 : std::floor(260.0f * dpiScale);
-    const float popupH     = m_beatLinePopupHeight > 0.0f
-                                 ? m_beatLinePopupHeight
-                                 : std::floor(220.0f * dpiScale);
-    float       targetX    = toolbarWindow->Pos.x - std::floor(4.0f * dpiScale);
-    float       targetY    = m_lastBeatLineBtnY;
-    targetX                = std::max(targetX, viewportLeft + popupW + padding);
-    const float minTargetY = viewportTop + padding;
-    const float maxTargetY =
-        std::max(minTargetY, viewportBottom - popupH - padding);
-    // 垂直位置夹在主视口安全留白范围。
-    targetY = std::clamp(targetY, minTargetY, maxTargetY);
-
-    ImGui::SetNextWindowViewport(mainViewport->ID);
-    ImGui::SetNextWindowPos(
-        ImVec2(targetX, targetY), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    // 每种弹层保留独立尺寸缓存，方向与边界统一由工具栏定位入口处理。
+    const float popupW = m_beatLinePopupWidth > 0
+                             ? m_beatLinePopupWidth
+                             : std::floor(260.0f * dpiScale);
+    const float popupH = m_beatLinePopupHeight > 0
+                             ? m_beatLinePopupHeight
+                             : std::floor(220.0f * dpiScale);
+    positionToolbarPopup(
+        *toolbarWindow, m_lastBeatLineBtnPos, ImVec2(popupW, popupH), dpiScale);
 
     // 自动尺寸会随 NearCursor 额外控件变化，位置使用上帧尺寸稳定修正。
     const ImGuiWindowFlags popupFlags =
@@ -5157,33 +5220,14 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
     // 找不到工具栏锚点时保持脏标记，不提前丢失待保存状态。
     if ( !toolbarWindow ) return;
 
-    // Layout 设置只在主视口内出现：组件拖拽也发生在主编辑画布，跨视口弹出会
-    // 破坏按钮与弹层的空间关联。安全留白同时用于四条边；右上角 Pivot 意味着
-    // X 下限必须包含整个弹层宽度，Y 则在顶部和“底部减高度”之间夹取。
-    ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
-    const float    viewportTop    = mainViewport->Pos.y;
-    const float    viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
-    const float    viewportLeft   = mainViewport->Pos.x;
-    const float    padding        = std::floor(8.0f * dpiScale);
-    // 使用上帧实际尺寸或首帧估计值计算主视口内位置。
-    const float popupW     = m_layoutPopupWidth > 0.0f
-                                 ? m_layoutPopupWidth
-                                 : std::floor(260.0f * dpiScale);
-    const float popupH     = m_layoutPopupHeight > 0.0f
-                                 ? m_layoutPopupHeight
-                                 : std::floor(100.0f * dpiScale);
-    float       targetX    = toolbarWindow->Pos.x - std::floor(4.0f * dpiScale);
-    float       targetY    = m_lastLayoutBtnY;
-    targetX                = std::max(targetX, viewportLeft + popupW + padding);
-    const float minTargetY = viewportTop + padding;
-    const float maxTargetY =
-        std::max(minTargetY, viewportBottom - popupH - padding);
-    // 垂直锚点与按钮对齐，并夹取到视口安全范围。
-    targetY = std::clamp(targetY, minTargetY, maxTargetY);
-
-    ImGui::SetNextWindowViewport(mainViewport->ID);
-    ImGui::SetNextWindowPos(
-        ImVec2(targetX, targetY), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    // 每种弹层保留独立尺寸缓存，方向与边界统一由工具栏定位入口处理。
+    const float popupW = m_layoutPopupWidth > 0 ? m_layoutPopupWidth
+                                                : std::floor(260.0f * dpiScale);
+    const float popupH = m_layoutPopupHeight > 0
+                             ? m_layoutPopupHeight
+                             : std::floor(100.0f * dpiScale);
+    positionToolbarPopup(
+        *toolbarWindow, m_lastLayoutBtnPos, ImVec2(popupW, popupH), dpiScale);
 
     // 自动尺寸由展开的折叠分组决定。窗口不可移动或缩放，也不写 imgui.ini，
     // 因为它的生命周期绑定 Layout 工具而非独立工作区面板。上一帧尺寸仅用于

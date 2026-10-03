@@ -2682,7 +2682,8 @@ void Basic2DCanvasInteraction::finishLayoutEditing()
 /// - 释放位置是否仍在画布内不影响手势提交。
 /// - 收尾后不保留吸附目标、参考线或同步 KPS 捕获项。
 /// - 本帧写回后重新读取规范化配置生成编辑辅助几何。
-/// - 辅助几何只写 ImGui 前景绘制列表，不修改 Vulkan 快照。
+/// - 辅助几何只写当前画布窗口绘制列表，不修改 Vulkan 快照。
+/// - 画布纹理先于交互提交，辅助几何覆盖谱面但遵守弹窗层级。
 /// - 绘制裁剪严格限制在当前画布窗口。
 /// - 暗色遮罩突出主轨道矩形但保留谱面上下文。
 /// - 句柄和边线使用一致的悬停高亮判据。
@@ -3871,9 +3872,10 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     const float  judgmentLineY =
         canvasScreenY + judgmentLinePosition * targetHeight;
 
-    // 编辑遮罩和句柄使用前景绘制列表，确保不会被谱面物件覆盖。
+    // 画布纹理已提交，遮罩和句柄追加到同一窗口即可覆盖谱面物件。
+    // 不使用全局前景层，使布局设置和其它弹窗能够完整遮挡辅助几何。
     // clip rect 把相机横移后的几何严格裁剪在当前画布标签页内。
-    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+    ImDrawList* drawList = ImGui::GetWindowDrawList();
     drawList->PushClipRect(canvasMin, canvasMax, true);
     drawList->AddRectFilled(
         canvasMin, { canvasMax.x, layoutMin.y }, IM_COL32(0, 0, 0, 72));
@@ -4210,7 +4212,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 componentColor);
         }
     }
-    // 所有布局辅助几何完成后恢复前景绘制列表的裁剪栈。
+    // 所有布局辅助几何完成后恢复画布窗口绘制列表的裁剪栈。
     drawList->PopClipRect();
 }
 

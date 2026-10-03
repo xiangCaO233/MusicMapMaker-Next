@@ -185,6 +185,12 @@ return {
 	["ui.view.toolbar_edit_tools"] = "Editing Tools",
 	["ui.view.show_tool_labels"] = "Show Tool Labels",
 	["ui.view.fixed_tool_window"] = "Fixed Tool Window",
+	["ui.toolbar.layout.vertical"] = "Vertical layout",
+	["ui.toolbar.layout.horizontal"] = "Horizontal layout",
+	["ui.toolbar.dock.top"] = "Dock above canvas",
+	["ui.toolbar.dock.bottom"] = "Dock below canvas",
+	["ui.toolbar.dock.left"] = "Dock left of canvas",
+	["ui.toolbar.dock.right"] = "Dock right of canvas",
 	["ui.view.show_manager_labels"] = "Show Manager Labels",
 
 	["ui.help"] = "&Help",
