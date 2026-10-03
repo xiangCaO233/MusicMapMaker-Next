@@ -9,6 +9,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/ShortcutUtils.h"
+#include "ui/imgui/manager/SettingsSearchIndex.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -562,6 +563,8 @@ UiFrameSnapshot captureSettingsUiFrameSnapshot(float dpiScale)
 /// 事件订阅捕获 `this`，因此析构前必须使用保存的订阅 ID 取消注册。
 SettingsView::SettingsView(const std::string& viewName) : IUIView(viewName)
 {
+    // 目录只含设置身份与文案，在视图注册的低频构造阶段解析一次。
+    m_settingsSearch = std::make_unique<SettingsSearchIndex>();
     // 外部菜单或快捷入口发布事件后，统一通过 open() 初始化窗口状态。
     // 订阅 ID 保存为成员，生命周期与 SettingsView 实例严格一致。
     m_tabSubId =
@@ -869,6 +872,8 @@ void SettingsView::refreshCollaborationServerInputBuffer()
 /// 协作页时刷新；从侧栏切换时由协作页保持当前待应用草稿。
 void SettingsView::open(Event::SettingsTab tab)
 {
+    // 外部入口要求显示明确分类，不沿用此前的搜索列表或滚动目标。
+    cancelSettingsSearchNavigation();
     // 先设置目标页和可见状态，后续布局测量会以新 tab 为缓存键。
     m_currentTab                    = tab;
     m_isOpen                        = true;
@@ -993,6 +998,8 @@ void SettingsView::update(UIManager* sourceManager)
 /// 热路径：设置窗口可见时每帧调用；不得复制共享所有权或执行阻塞操作。
 void SettingsView::drawContent()
 {
+    // 搜索栏独立于内容 Child 的滚动，长结果列表和离屏设置仍可随时重新查询。
+    drawSettingsSearchBar();
     // SkinManager 提供布局宽度和分类栏所需字体。
     Config::SkinManager& skinCfg = Config::SkinManager::instance();
     // 所有固定像素尺寸按当前内容缩放转换。
@@ -1073,6 +1080,8 @@ void SettingsView::drawContent()
                         "personalization.settings.shortcut-tab", true);
             }
             if ( clicked ) {
+                // 分类按钮是显式浏览动作，应结束旧查询定位和高亮。
+                cancelSettingsSearchNavigation();
                 // 点击仅切换枚举；右侧内容在同一帧后续 switch 中立即更新。
                 m_currentTab = tab;
                 if ( tab != Event::SettingsTab::Shortcut ) {
@@ -1292,7 +1301,15 @@ void SettingsView::drawContent()
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(15.0f, 25.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.0f, 15.0f));
 
-        if ( ImGui::BeginChild("SettingsContent", { 0, 0 }, false) ) {
+        // 搜索与正文使用独立滚动状态，结果列表的高度不影响目标页定位。
+        // 导航只切换显示内容，不重新打开窗口，避免改写停靠尺寸。
+        // 目标行矩形必须由当前 Child 的实际控件登记，不能跨帧沿用。
+        // 页内回调全部完成后再滚动，以实际展开后的正文高度计算目标。
+        if ( ImGui::BeginChild(m_showSettingsSearchResults
+                                   ? "SettingsSearchResults"
+                                   : "SettingsContent",
+                               { 0, 0 },
+                               false) ) {
             // 内容字体仅在有效时压栈，否则沿用当前 ImGui 字体。
             ImFont* contentFont = skinCfg.getFont("content");
             if ( contentFont ) {
@@ -1300,17 +1317,31 @@ void SettingsView::drawContent()
             }
 
             // 每帧只调用当前枚举对应的设置页绘制函数。
-            switch ( m_currentTab ) {
-            case Event::SettingsTab::Software: drawSoftwareSettings(); break;
-            case Event::SettingsTab::Collaboration:
-                drawCollaborationSettings();
-                break;
-            case Event::SettingsTab::Visual: drawVisualSettings(); break;
-            case Event::SettingsTab::Project: drawProjectSettings(); break;
-            case Event::SettingsTab::Beatmap: drawBeatmapSettings(); break;
-            case Event::SettingsTab::Editor: drawEditorSettings(); break;
-            case Event::SettingsTab::Shortcut: drawShortcutSettings(); break;
-            case Event::SettingsTab::Debug: drawDebugSettings(); break;
+            if ( m_showSettingsSearchResults ) {
+                drawSettingsSearchResults();
+            } else {
+                // 矩形仅属于本帧；条件隐藏的行不得沿用上一帧的定位边界。
+                m_settingsSearchSection = {};
+                m_settingsSearchRowBounds.reset();
+                m_settingsSearchHeaderBounds.reset();
+                switch ( m_currentTab ) {
+                case Event::SettingsTab::Software:
+                    drawSoftwareSettings();
+                    break;
+                case Event::SettingsTab::Collaboration:
+                    drawCollaborationSettings();
+                    break;
+                case Event::SettingsTab::Visual: drawVisualSettings(); break;
+                case Event::SettingsTab::Project: drawProjectSettings(); break;
+                case Event::SettingsTab::Beatmap: drawBeatmapSettings(); break;
+                case Event::SettingsTab::Editor: drawEditorSettings(); break;
+                case Event::SettingsTab::Shortcut:
+                    drawShortcutSettings();
+                    break;
+                case Event::SettingsTab::Debug: drawDebugSettings(); break;
+                }
+                // 必须等整页 Clay 回调完成，才能区分目标行和分组回退位置。
+                finishSettingsSearchNavigation();
             }
             // 所有枚举分支都只绘制一个标签页，避免隐藏页产生副作用。
 

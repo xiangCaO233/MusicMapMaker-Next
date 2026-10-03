@@ -219,6 +219,9 @@ void SettingsView::drawShortcutSettings()
         // 使用当前标签页预计算最大标签宽度，使二十行控件起点对齐。
         getCurrentTabLabelWidth(appConfig.getWindowContentScale());
 
+    // 快捷键页没有折叠标题，仍登记所属组以区分导航身份。
+    revealSettingsSearchSection(TR_CACHE("ui.settings.shortcut").data(), 0);
+
     // 所有快捷键共享一个装饰 section，便于整体滚动和冲突边框展示。
     auto& shortcutSection = getSection(sectionIndex++);
     shortcutSection.setDecorated(true).setSpacing(4).setPadding(8, 8, 8, 8);

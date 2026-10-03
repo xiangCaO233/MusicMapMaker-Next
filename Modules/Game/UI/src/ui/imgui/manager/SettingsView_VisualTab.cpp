@@ -91,11 +91,15 @@ void SettingsView::drawVisualSettings()
         // 页面前缀、节序号、行序号和标签共同隔离不同标题的 ImGui 状态。
         std::string baseIdStr = "VS_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
+        // 折叠状态不包含可变行号；搜索展开前面的组时不能重置后面的标题。
+        ImGuiID id = ImGui::GetID((std::string("VS_Header_") + label).c_str());
 
         // 状态先于回调登记读取，用来决定本帧是否构建内容 section。
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
+        // 搜索只展开对应组，不能触发配置修改或保存。
+        const bool forceOpen = revealSettingsSearchSection(label, id);
+        if ( forceOpen ) isOpen = true;
 
         // 标题独占一行，使用当前 ImGui frame 高度以自动适应 DPI。
         auto& row = getRow(rowIndex++);
@@ -106,8 +110,11 @@ void SettingsView::drawVisualSettings()
             (baseIdStr + "_el").c_str(),
             Sizing::Grow(),
             Sizing::Fixed(h),
-            [label, id, defaultOpen](Clay_BoundingBox r, bool) {
+            [this, label, id, defaultOpen, forceOpen](Clay_BoundingBox r,
+                                                      bool) {
                 // Clay 给出绝对屏幕矩形，ImGui 游标需移动到对应起点。
+                // 记录真实标题边界，条件隐藏的设置可以定位到所属组。
+                reportSettingsSearchHeader(label, r);
                 ImGui::SetCursorScreenPos({ r.x, r.y });
                 // 悬浮和按下颜色从主题 Header 色增亮，保持主题基调。
                 ImVec4 bgCol = ImGui::GetStyle().Colors[ImGuiCol_Header];
@@ -134,6 +141,8 @@ void SettingsView::drawVisualSettings()
 
                 // 数值 ID 仅借用指针重载传入，不代表可解引用的对象地址。
                 // CollapsingHeader 形成整行标题，不需要配对调用 TreePop。
+                // Clay 和实际标题必须保持相同的展开状态。
+                if ( forceOpen ) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
                 bool nowOpen = ImGui::TreeNodeEx(
                     (void*)(intptr_t)id,
                     ImGuiTreeNodeFlags_CollapsingHeader |

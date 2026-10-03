@@ -1,0 +1,8 @@
+#pragma once
+
+namespace MMM::UI
+{
+/// @brief 设置搜索目录随程序分发，安装包不依赖源码或外置 assets。
+/// @details 目录只包含翻译键和行身份，禁止嵌入用户配置值。
+inline constexpr const char BUILTIN_SETTINGS_SEARCH[] = R"mmmsearch(@MMM_SETTINGS_SEARCH@)mmmsearch";
+}  // namespace MMM::UI

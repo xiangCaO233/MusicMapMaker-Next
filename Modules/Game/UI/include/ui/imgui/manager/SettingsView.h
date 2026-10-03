@@ -13,7 +13,9 @@
 #include <deque>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -24,6 +26,8 @@ struct ShortcutBinding;
 
 namespace MMM::UI
 {
+/// @brief 搜索目录通过独立实现维护，公开视图头不包含目录解析依赖。
+class SettingsSearchIndex;
 
 /// @brief 编辑器设置面板视图，负责设置分类导航和各设置页渲染。
 class SettingsView : virtual public IUIView, public IParallelUiPreparable
@@ -92,6 +96,9 @@ public:
     void swapPreparedUiFrameData() override;
 
 private:
+    /// @brief 无 GPU 回归夹具检查真实设置行边界、滚动和高亮生命周期。
+    /// @details 仅测试定义此访问器，生产搜索仍由界面输入与结果点击驱动。
+    friend struct SettingsSearchTestAccess;
     /// @brief 设置页快捷键录制目标。
     enum class ShortcutRecordTarget {
         None,
@@ -177,6 +184,27 @@ private:
 
     /// @brief 当前激活的设置分类页。
     Event::SettingsTab m_currentTab = Event::SettingsTab::Software;
+
+    /// @brief 全分类搜索索引，只在输入或翻译变化时重建命中缓存。
+    std::unique_ptr<SettingsSearchIndex> m_settingsSearch;
+    /// @brief 搜索框的固定 UTF-8 缓冲区，避免每帧分配输入文本。
+    std::array<char, 256> m_settingsSearchInput{};
+    /// @brief 搜索列表与实际设置页分开；定位后保留查询供返回结果。
+    bool m_showSettingsSearchResults{ false };
+    /// @brief 导航目标在稳定目录中的索引，不能用翻译文本持久化身份。
+    std::optional<std::size_t> m_settingsSearchTarget;
+    /// @brief 当前登记行所属分组，回调必须值捕获，避免被后续组覆盖。
+    std::string_view m_settingsSearchSection;
+    /// @brief 当前目标在本帧布局中的真实设置行边界。
+    std::optional<Clay_BoundingBox> m_settingsSearchRowBounds;
+    /// @brief 条件隐藏或缺少工程时，用分组标题作为导航回退。
+    std::optional<Clay_BoundingBox> m_settingsSearchHeaderBounds;
+    /// @brief 一次性滚动请求，完成定位后不能继续抢走用户手动滚动。
+    bool m_settingsSearchScrollPending{ false };
+    /// @brief 首次确认目标实际可见后启动的高亮截止时间。
+    double m_settingsSearchHighlightUntil{ 0.0 };
+    /// @brief 目标被条件隐藏时的提示标志，不自动修改前置设置。
+    bool m_settingsSearchTargetUnavailable{ false };
 
     /// @brief 设置页切换事件订阅 ID。
     uint64_t m_tabSubId = 0;
@@ -274,6 +302,38 @@ private:
 
     /// @brief 绘制设置窗口内部内容。
     void drawContent();
+
+    /// @brief 绘制全局设置搜索栏与返回结果入口。
+    /// @warning UI 热路径只读取命中缓存，输入或语言变化才重建搜索文本。
+    void drawSettingsSearchBar();
+    /// @brief 绘制有分类路径的搜索命中列表，不执行隐藏设置页。
+    /// @warning UI 热路径只展示已缓存结果，点击后才提交导航请求。
+    void drawSettingsSearchResults();
+    /// @brief 清除搜索导航并回到普通分类浏览，保留已有设置值。
+    void cancelSettingsSearchNavigation();
+    /// @brief 指向目录中的一行，退出搜索列表并请求下一帧展开和滚动。
+    /// @param index 搜索目录条目索引。
+    void navigateToSetting(std::size_t index);
+    /// @brief 登记当前分组，必要时展开以便目标行参与本帧布局。
+    /// @param label 实际绘制的本地化分组名。
+    /// @param storageId 折叠标题的状态 ID。
+    /// @return 需要同帧强制展开 TreeNode 时返回 true。
+    /// @warning UI 热路径只比较当前导航身份，不读取设置配置。
+    bool revealSettingsSearchSection(const char* label, ImGuiID storageId);
+    /// @brief 记录搜索目标对应的分组标题，以便条件隐藏时回退。
+    /// @param label 当前标题名称。
+    /// @param bounds 本帧真实标题矩形。
+    void reportSettingsSearchHeader(const char* label, Clay_BoundingBox bounds);
+    /// @brief 判断当前布局行是否为搜索目标，分类和分组必须同时匹配。
+    /// @param label 设置行实际标签。
+    /// @return 该行正是本次导航目标时返回 true。
+    bool isSettingsSearchTarget(const char* label) const;
+    /// @brief 收集真实目标行矩形，不在控件回调中提前判断整个页面是否缺失。
+    /// @param bounds 本帧真实整行边界。
+    void reportSettingsSearchRow(Clay_BoundingBox bounds);
+    /// @brief 页面布局结束后滚动并绘制短暂高亮，条件隐藏时定位到分组。
+    /// @warning UI 热路径只做几何检查，高亮超时后不再提交绘制命令。
+    void finishSettingsSearchNavigation();
 
     /// @brief 构造设置窗口布局测量缓存。
     /// @param snapshot 当前帧 UI 快照。

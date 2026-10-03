@@ -525,12 +525,15 @@ void SettingsView::drawSoftwareSettings()
         // 元素与布局继续使用不同后缀，避免 Clay ID 冲突。
         std::string baseIdStr = "SW_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        // 折叠状态不包含可变行号；搜索展开前面的组时不能重置后面的标题。
+        ImGuiID id = ImGui::GetID((std::string("SW_Header_") + label).c_str());
 
         // 在登记回调前读取状态，以决定本帧是否创建内容区。
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
-        bool forceOpen = false;
+        // 搜索导航同帧展开目标分组，后续普通浏览保留用户折叠状态。
+        bool forceOpen = revealSettingsSearchSection(label, id);
+        if ( forceOpen ) isOpen = true;
         if ( guideTarget && m_sourceManager ) {
             const auto& spotlight = m_sourceManager->walkthroughSpotlight();
             // 引导首次到达美化组时展开折叠内容，让六项同时参与布局。
@@ -567,6 +570,8 @@ void SettingsView::drawSoftwareSettings()
                      std::string_view(guideTarget) == AESTHETICS_TARGET )
                     aestheticsHeaderBounds = r;
                 // Clay 给出绝对矩形，ImGui 游标必须移动到标题起点。
+                // 记录真实标题边界，条件隐藏的设置可以定位到所属组。
+                reportSettingsSearchHeader(label, r);
                 ImGui::SetCursorScreenPos({ r.x, r.y });
                 // Header 三态颜色从当前主题基础色逐级增亮。
                 ImVec4 bgCol = ImGui::GetStyle().Colors[ImGuiCol_Header];

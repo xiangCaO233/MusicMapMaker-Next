@@ -107,8 +107,12 @@ void SettingsView::drawCollaborationSettings()
                              std::to_string(rowIndex) + "_H_" + sectionLabel;
     const ImGuiID headerStorageId = ImGui::GetID(headerId.c_str());
     // 未写入状态时默认展开，用户选择只保留在当前 ImGui 上下文。
-    const bool sectionOpen =
+    bool sectionOpen =
         ImGui::GetStateStorage()->GetInt(headerStorageId, 1) != 0;
+    // 搜索导航展开服务器组，保留原有草稿与显式应用流程。
+    const bool forceOpen =
+        revealSettingsSearchSection(sectionLabel, headerStorageId);
+    if ( forceOpen ) sectionOpen = true;
 
     // 折叠标题独占一行并填满内容宽度，点击区域与视觉背景一致。
     auto& headerRow = getRow(rowIndex++);
@@ -118,7 +122,8 @@ void SettingsView::drawCollaborationSettings()
         (headerId + "_el").c_str(),
         Sizing::Grow(),
         Sizing::Fixed(headerHeight),
-        [sectionLabel, headerStorageId](Clay_BoundingBox rect, bool) {
+        [this, sectionLabel, headerStorageId, forceOpen](Clay_BoundingBox rect,
+                                                         bool) {
             // 折叠标题样式契约：
             // - 默认颜色完全来自当前 ImGui Header 色；
             // - Hovered 对 RGB 和 alpha 做轻微提升；
@@ -126,6 +131,7 @@ void SettingsView::drawCollaborationSettings()
             // - 临时 WorkRect 右边界限制点击和底色范围；
             // - StateStorage 以稳定 ImGuiID 保存展开状态。
             // Clay 提供最终屏幕矩形，ImGui 控件游标必须显式移动到该位置。
+            reportSettingsSearchHeader(sectionLabel, rect);
             ImGui::SetCursorScreenPos({ rect.x, rect.y });
             const ImVec4 headerColor =
                 ImGui::GetStyle().Colors[ImGuiCol_Header];
@@ -147,6 +153,8 @@ void SettingsView::drawCollaborationSettings()
             window->WorkRect.Max.x = rect.x + rect.width;
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                                 ImVec2(0.0F, 0.0F));
+            // 实际标题与搜索展开的布局子树同步。
+            if ( forceOpen ) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
             const bool nowOpen = ImGui::TreeNodeEx(
                 reinterpret_cast<void*>(
                     static_cast<std::intptr_t>(headerStorageId)),

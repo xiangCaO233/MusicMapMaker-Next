@@ -104,6 +104,8 @@ void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
                                   CLayBox::DrawFunc widget, bool dangerLabel,
                                   bool decorated, const char* walkthroughTarget)
 {
+    // 布局构造时冻结行身份；绘制回调执行时当前分组已可能改变。
+    const bool searchTarget = isSettingsSearchTarget(label);
     // 主行来自对象池，装饰状态决定内边距与最终行高。
     auto& row = getRow(rowIndex++);
     row.setDecorated(decorated)
@@ -159,12 +161,19 @@ void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
         labelId + "_wgt",
         Sizing::Grow(),
         Sizing::Grow(),
-        [this, widget, walkthroughTarget](Clay_BoundingBox r, bool h) {
+        [this, widget, walkthroughTarget, searchTarget, labelWidth](
+            Clay_BoundingBox r, bool h) {
             // 控件回调接收完整横向区域和 Clay 悬停状态。
             float widgetH = ImGui::GetFrameHeight();
             float offset  = (r.height - widgetH) * 0.5f;
             ImGui::SetCursorScreenPos({ r.x, r.y + offset });
             widget(r, h);
+            // 整行边界同时覆盖名称和控件，高亮不依赖翻译长度或屏幕行号。
+            if ( searchTarget )
+                reportSettingsSearchRow({ r.x - labelWidth - 8.0f,
+                                          r.y,
+                                          r.width + labelWidth + 8.0f,
+                                          r.height });
             // Clay 已给出真实值列位置，避免用翻译文本或行号猜测高亮区。
             // 原控件先完成绘制，再用相同布局矩形定位引导遮罩和描边。
             if ( walkthroughTarget && m_sourceManager ) {
@@ -200,6 +209,8 @@ void SettingsView::addRadioSetting(
     float labelWidth, const std::vector<std::pair<std::string, int>>& options,
     int& current, bool& changed, bool decorated, const char* walkthroughTarget)
 {
+    // 单选组同样通过原设置行导航，不能只定位到某一个选项按钮。
+    const bool searchTarget = isSettingsSearchTarget(label);
     // 使用当前 ImGui 内容区宽度决定单选项换行位置。
     float totalWidth = ImGui::GetContentRegionAvail().x;
 
@@ -225,16 +236,21 @@ void SettingsView::addRadioSetting(
                           std::to_string(rowIndex) + "_L_" + label;
 
     // 标签列固定宽度，使同一标签页的控件起点保持对齐。
-    row.addElement(labelId + "_lbl",
-                   Sizing::Fixed(labelWidth),
-                   Sizing::Grow(),
-                   [label](Clay_BoundingBox r, bool) {
-                       // 标签在 Clay 分配行高中按实际文本高度居中。
-                       float textH  = ImGui::CalcTextSize(label).y;
-                       float offset = (r.height - textH) * 0.5f;
-                       ImGui::SetCursorScreenPos({ r.x, r.y + offset });
-                       ImGui::Text("%s", label);
-                   });
+    row.addElement(
+        labelId + "_lbl",
+        Sizing::Fixed(labelWidth),
+        Sizing::Grow(),
+        [this, label, searchTarget, widgetAvailW](Clay_BoundingBox r, bool) {
+            // 标签在 Clay 分配行高中按实际文本高度居中。
+            float textH  = ImGui::CalcTextSize(label).y;
+            float offset = (r.height - textH) * 0.5f;
+            ImGui::SetCursorScreenPos({ r.x, r.y + offset });
+            ImGui::Text("%s", label);
+            // 标签列高度与整个自动换行行一致，保留完整高亮范围。
+            if ( searchTarget )
+                reportSettingsSearchRow(
+                    { r.x, r.y, r.width + widgetAvailW + 8.0f, r.height });
+        });
 
     // 选项容器按需要建立多行 HBox，自身高度由所有行内容适配。
     auto& containerVBox = getSection(sectionIndex++);

@@ -114,11 +114,15 @@ void SettingsView::drawEditorSettings()
         // 行、节、页面前缀和标题共同隔离不同分组的 ImGui 状态。
         std::string baseIdStr = "S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
+        // 折叠状态不包含可变行号；搜索展开前面的组时不能重置后面的标题。
+        ImGuiID id = ImGui::GetID((std::string("ED_Header_") + label).c_str());
 
         // 在登记标题回调前读取状态，以决定本帧是否创建内容区。
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
+        // 搜索只展开对应组，不能触发配置修改或保存。
+        const bool forceOpen = revealSettingsSearchSection(label, id);
+        if ( forceOpen ) isOpen = true;
 
         // 标题独占一行，并使用 ImGui 当前 frame 高度适配主题与 DPI。
         auto& row = getRow(rowIndex++);
@@ -129,8 +133,11 @@ void SettingsView::drawEditorSettings()
             (baseIdStr + "_el").c_str(),
             Sizing::Grow(),
             Sizing::Fixed(h),
-            [label, id, defaultOpen](Clay_BoundingBox r, bool) {
+            [this, label, id, defaultOpen, forceOpen](Clay_BoundingBox r,
+                                                      bool) {
                 // Clay 给出绝对屏幕矩形，ImGui 游标需显式移动到标题起点。
+                // 记录真实标题边界，条件隐藏的设置可以定位到所属组。
+                reportSettingsSearchHeader(label, r);
                 ImGui::SetCursorScreenPos({ r.x, r.y });
 
                 // 标题颜色基于当前主题，仅为 Hovered 与 Active 状态轻微增亮。
@@ -158,6 +165,8 @@ void SettingsView::drawEditorSettings()
 
                 // 数值 ID 借用指针重载传入，不表示可解引用对象地址。
                 // CollapsingHeader 是无嵌套整行标题，不需要调用 TreePop。
+                // Clay 和实际标题必须保持相同的展开状态。
+                if ( forceOpen ) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
                 bool nowOpen = ImGui::TreeNodeEx(
                     (void*)(intptr_t)id,
                     ImGuiTreeNodeFlags_CollapsingHeader |

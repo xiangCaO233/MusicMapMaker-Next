@@ -52,6 +52,21 @@ configure_file(
   "${CMAKE_CURRENT_BINARY_DIR}/generated/BuiltinToolPlugins.h" @ONLY)
 # 两个工具共享声明式宿主实现，外置工具只需在配置目录新增 Lua 文件。
 
+# 目录资源在配置期编译到二进制，部署时无需额外复制搜索数据文件。 设置搜索只嵌入翻译键、所属行身份和双语别名，不读取或执行隐藏设置页。
+# 将目录列为配置依赖，新增设置或修改别名后普通构建也能更新索引资源。 应用运行时不要求 assets 目录存在，搜索不会触发文件系统扫描。
+
+# 搜索资源与翻译键同步维护：新增条件设置仍保留目录条目，以便提示其前置条件。
+set_property(
+  DIRECTORY
+  APPEND
+  PROPERTY CMAKE_CONFIGURE_DEPENDS
+           "${PROJECT_SOURCE_DIR}/assets/settings/search.json")
+file(READ "${PROJECT_SOURCE_DIR}/assets/settings/search.json"
+     MMM_SETTINGS_SEARCH)
+configure_file(
+  src/ui/imgui/manager/BuiltinSettingsSearch.h.in
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/BuiltinSettingsSearch.h" @ONLY)
+
 # cmake-format: off
 # UI 静态库源文件维护规则：
 # - 只登记本模块自维护实现，不使用递归 glob 自动收集；
@@ -189,6 +204,9 @@ add_library(
   src/ui/imgui/manager/NewBeatmapWizard.cpp
   src/ui/imgui/manager/NewProjectWizard.cpp
   src/ui/imgui/manager/SettingsView.cpp
+  # 搜索索引与导航分开；索引只处理值数据，原设置页继续应用和保存配置。
+  src/ui/imgui/manager/SettingsSearchIndex.cpp
+  src/ui/imgui/manager/SettingsView_Search.cpp
   src/ui/imgui/manager/SettingsView_BeatmapTab.cpp
   # 谱面资源导入在设置页布局与会话锁之外驱动文件选择器。
   src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp
@@ -492,6 +510,13 @@ target_include_directories(ProjectAudioToolSearchTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 mmm_register_test_case(NAME ProjectAudioToolSearchTest COMMAND
                        ProjectAudioToolSearchTest)
+
+# 设置搜索回归复用正式索引和真实 Clay 设置行，覆盖双语近义词与版本缓存。 无 GPU 界面检查验证折叠展开、准确滚动、主题高亮及三秒后自动消失。
+# 默认语言目录只读传入；配置根由测试框架隔离，不访问用户设置。
+mmm_add_test_executable(UI SettingsSearchTest tests/SettingsSearchTest.cpp)
+target_link_libraries(SettingsSearchTest PRIVATE UI 3rd_imgui)
+mmm_register_test_case(NAME SettingsSearchTest COMMAND SettingsSearchTest
+                       "${PROJECT_SOURCE_DIR}/assets/translations")
 
 # cmake-format: off
 # 欢迎页与演练测试约定：

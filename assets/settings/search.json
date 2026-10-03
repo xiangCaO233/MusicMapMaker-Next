@@ -1,0 +1,1423 @@
+{
+  "version": 1,
+  "description": "设置搜索目录：每个实际设置行保留所属分类、分组和标签翻译键；fields 收集该行的选项、说明和提示。新增或改名设置行时同步此文件，不收录按钮或临时状态提示。 aliases 保留内置中英文名称、选项和近义词；修改默认语言文案时检查对应别名，皮肤覆写文案由运行时另行索引。",
+  "entries": [
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.language",
+      "fields": [],
+      "keywords": "software.language language",
+      "aliases": "界面语言 通用设置 软件配置 Language General Settings Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.default_creator",
+      "fields": [
+        "ui.settings.software.default_creator.hint"
+      ],
+      "keywords": "software.default_creator software.default_creator.hint defaultCreator",
+      "aliases": "默认 Creator 通用设置 软件配置 联机写谱必填，并作为新谱面的作者 Default Creator General Settings Software Config Required for collaboration and used as the new beatmap author"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.framelimit",
+      "fields": [
+        "ui.settings.software.framelimit.vsync",
+        "ui.settings.software.framelimit.2x",
+        "ui.settings.software.framelimit.4x",
+        "ui.settings.software.framelimit.8x",
+        "ui.settings.software.framelimit.unlimited"
+      ],
+      "keywords": "software.framelimit frameLimit software.framelimit.vsync software.framelimit.2x software.framelimit.4x software.framelimit.8x software.framelimit.unlimited",
+      "aliases": "帧率限制 通用设置 软件配置 垂直同步 (VSync) 2x 刷新率 4x 刷新率 8x 刷新率 无限制 Frame Limit General Settings Software Config VSync 2x Refresh Rate 4x Refresh Rate 8x Refresh Rate Unlimited fps framerate 帧率 帧数 限帧"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.auto_upload_pgo_profiles",
+      "fields": [],
+      "keywords": "software.auto_upload_pgo_profiles autoUploadPgoProfiles pgoProfileUploadConsentAsked",
+      "aliases": "自动上传性能热点数据 通用设置 软件配置 Auto-upload Performance Profile Data General Settings Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.audio_decoding",
+      "fields": [
+        "ui.settings.software.audio_decoding.cached",
+        "ui.settings.software.audio_decoding.streaming",
+        "ui.settings.software.audio_decoding.help"
+      ],
+      "keywords": "software.audio_decoding audioDecodingMode software.audio_decoding.cached software.audio_decoding.streaming software.audio_decoding.help",
+      "aliases": "音频解码方式 通用设置 软件配置 完整缓存（默认） 流式解码 完整缓存：加载时解码整段音频，跳转和重复播放稳定；长音频占用更多内存，首次加载较慢。 流式解码：后台分块预读，PCM 内存有界、启动较快；播放时持续解码，远距离跳转或预读不足可能短暂静音。 重新加载项目或试听音频后生效。波形分析、音效和资源级离线处理仍使用完整缓存。 Audio Decoding General Settings Software Config Full cache (default) Streaming Full cache: decodes the entire file before use for stable seeking and replay; longer audio uses more memory and takes longer to load. Streaming: prefetches PCM blocks with bounded memory and faster startup; continuous decoding, distant seeks or underruns may cause brief silence. Applies when reloading a project or audition audio. Waveform analysis, sound effects and offline resource processing still use full caching."
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.audio_backend",
+      "fields": [
+        "ui.settings.software.audio_backend.sdl",
+        "ui.settings.software.audio_backend.openal"
+      ],
+      "keywords": "software.audio_backend audioPlaybackBackend software.audio_backend.sdl software.audio_backend.openal",
+      "aliases": "音频播放后端 通用设置 软件配置 SDL OpenAL Audio Playback Backend General Settings Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.openal_spatial",
+      "fields": [],
+      "keywords": "software.openal_spatial openALSpatialConfig.enabled openALSpatialConfig",
+      "aliases": "OpenAL 空间化输出 通用设置 软件配置 OpenAL Spatial Output General Settings Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.openal_direction_x",
+      "fields": [],
+      "keywords": "software.openal_direction_x openALSpatialConfig.directionX",
+      "aliases": "OpenAL 方向 X 通用设置 软件配置 OpenAL Direction X General Settings Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.openal_direction_y",
+      "fields": [],
+      "keywords": "software.openal_direction_y openALSpatialConfig.directionY",
+      "aliases": "OpenAL 方向 Y 通用设置 软件配置 OpenAL Direction Y General Settings Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.openal_direction_z",
+      "fields": [],
+      "keywords": "software.openal_direction_z openALSpatialConfig.directionZ",
+      "aliases": "OpenAL 方向 Z 通用设置 软件配置 OpenAL Direction Z General Settings Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.openal_distance",
+      "fields": [],
+      "keywords": "software.openal_distance openALSpatialConfig.distance",
+      "aliases": "OpenAL 距离 通用设置 软件配置 OpenAL Distance General Settings Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.openal_reference_distance",
+      "fields": [],
+      "keywords": "software.openal_reference_distance openALSpatialConfig.referenceDistance",
+      "aliases": "OpenAL 参考距离 通用设置 软件配置 OpenAL Reference Distance General Settings Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.openal_max_distance",
+      "fields": [],
+      "keywords": "software.openal_max_distance openALSpatialConfig.maxDistance",
+      "aliases": "OpenAL 最大距离 通用设置 软件配置 OpenAL Max Distance General Settings Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.openal_rolloff",
+      "fields": [],
+      "keywords": "software.openal_rolloff openALSpatialConfig.rolloffFactor",
+      "aliases": "OpenAL 衰减倍率 通用设置 软件配置 OpenAL Rolloff General Settings Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.skin",
+      "fields": [
+        "ui.settings.software.skin.none",
+        "ui.settings.software.skin.open_directory",
+        "ui.settings.software.skin.import",
+        "ui.settings.software.skin.export",
+        "ui.settings.software.skin.open_directory_failed",
+        "ui.settings.software.skin.import_dialog_title",
+        "ui.settings.software.skin.export_dialog_title",
+        "ui.settings.software.skin.import_success",
+        "ui.settings.software.skin.import_failed",
+        "ui.settings.software.skin.export_success",
+        "ui.settings.software.skin.export_failed"
+      ],
+      "keywords": "software.skin software.skin.none software.skin.open_directory software.skin.import software.skin.export",
+      "aliases": "皮肤 通用设置 软件配置 未找到可用皮肤 打开皮肤目录 导入 MSK 皮肤 导出当前皮肤为 MSK 无法打开皮肤目录 导出 MSK 皮肤 皮肤导入成功 皮肤导入失败 皮肤导出成功 皮肤导出失败 Skin General Settings Software Config No Available Skins Open Skins Directory Import MSK Skin Export Current Skin as MSK Failed to Open Skins Directory Export MSK Skin Skin Imported Skin Import Failed Skin Exported Skin Export Failed"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.theme",
+      "fields": [
+        "ui.settings.software.theme.auto"
+      ],
+      "keywords": "software.theme theme software.theme.auto theme.c_str",
+      "aliases": "UI 主题 通用设置 软件配置 自动 (跟随系统与皮肤) UI Theme General Settings Software Config Auto (Follow System and Skin)"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.font.ascii",
+      "fields": [
+        "ui.settings.software.font.default",
+        "ui.settings.software.font.browse"
+      ],
+      "keywords": "software.font.ascii preferredAsciiFont.empty preferredAsciiFont software.font.default font filePickerStyle software.font.browse",
+      "aliases": "ASCII 字体 通用设置 软件配置 默认 (皮肤提供) 选择系统字体文件 ASCII Font General Settings Software Config Default (Skin Provided) Browse System Font"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.font.cjk",
+      "fields": [
+        "ui.settings.software.font.default",
+        "ui.settings.software.font.browse"
+      ],
+      "keywords": "software.font.cjk preferredCjkFont.empty preferredCjkFont software.font.default font filePickerStyle software.font.browse",
+      "aliases": "CJK 字体 通用设置 软件配置 默认 (皮肤提供) 选择系统字体文件 CJK Font General Settings Software Config Default (Skin Provided) Browse System Font"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.ui_scale.multiplier",
+      "fields": [
+        "ui.settings.software.font.restart"
+      ],
+      "keywords": "software.ui_scale.multiplier uiScaleMultiplier software.font.restart",
+      "aliases": "界面全局缩放倍率 通用设置 软件配置 字体已更改，需重启生效 UI Global Scale Multiplier General Settings Software Config Font changed, requires restart to apply"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
+      "label": "ui.settings.software.font.multiplier",
+      "fields": [
+        "ui.settings.software.font.restart"
+      ],
+      "keywords": "software.font.multiplier fontSizeMultiplier software.font.restart",
+      "aliases": "界面字体大小倍率 通用设置 软件配置 字体已更改，需重启生效 UI Font Size Multiplier General Settings Software Config Font changed, requires restart to apply"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.cursor_params",
+      "label": "ui.settings.editor.cursor_style",
+      "fields": [
+        "ui.settings.editor.cursor_software",
+        "ui.settings.editor.cursor_system"
+      ],
+      "keywords": "editor.cursor_style editor.cursor_software editor.cursor_system cursorStyle cursor",
+      "aliases": "光标样式 内置光标参数 软件配置 软件内置 (带拖尾) 系统原生 Cursor Style Internal Cursor Parameters Software Config Software (With Trail) System Native"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.cursor_params",
+      "label": "ui.settings.software.cursor_size",
+      "fields": [],
+      "keywords": "software.cursor_size softwareCursorConfig.cursorSize",
+      "aliases": "光标头大小 内置光标参数 软件配置 Cursor Head Size Internal Cursor Parameters Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.cursor_params",
+      "label": "ui.settings.software.trail_size",
+      "fields": [],
+      "keywords": "software.trail_size softwareCursorConfig.trailSize",
+      "aliases": "拖尾基础大小 内置光标参数 软件配置 Trail Base Size Internal Cursor Parameters Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.cursor_params",
+      "label": "ui.settings.software.trail_life",
+      "fields": [],
+      "keywords": "software.trail_life softwareCursorConfig.trailLifeTime",
+      "aliases": "拖尾存活时间 内置光标参数 软件配置 Trail Life Time Internal Cursor Parameters Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.cursor_params",
+      "label": "ui.settings.software.smoke_size",
+      "fields": [],
+      "keywords": "software.smoke_size softwareCursorConfig.smokeSize",
+      "aliases": "烟雾初始大小 内置光标参数 软件配置 Smoke Initial Size Internal Cursor Parameters Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.cursor_params",
+      "label": "ui.settings.software.cursor_bpm_sync",
+      "fields": [],
+      "keywords": "software.cursor_bpm_sync softwareCursorConfig.enableBpmSyncSmokeLife",
+      "aliases": "烟雾时间同步 BPM 内置光标参数 软件配置 Sync Smoke Life with BPM Internal Cursor Parameters Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.cursor_params",
+      "label": "ui.settings.software.smoke_life",
+      "fields": [],
+      "keywords": "software.smoke_life softwareCursorConfig.enableBpmSyncSmokeLife softwareCursorConfig.smokeLifeTime",
+      "aliases": "烟雾存活时间 内置光标参数 软件配置 Smoke Life Time Internal Cursor Parameters Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.aesthetics",
+      "label": "ui.settings.software.aesthetics.window_rounding",
+      "fields": [],
+      "keywords": "software.aesthetics.window_rounding aesthetics.windowRounding",
+      "aliases": "全局窗口圆角半径 界面美化设置 软件配置 Global Window Rounding UI Appearance Software Config rounding rounded 圆角 窗口圆角"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.aesthetics",
+      "label": "ui.settings.software.aesthetics.frame_rounding",
+      "fields": [],
+      "keywords": "software.aesthetics.frame_rounding aesthetics.frameRounding",
+      "aliases": "全局组件圆角半径 界面美化设置 软件配置 Global Widget Rounding UI Appearance Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.aesthetics",
+      "label": "ui.settings.software.aesthetics.window_gap",
+      "fields": [],
+      "keywords": "software.aesthetics.window_gap aesthetics.windowGap",
+      "aliases": "窗口/面板间隙 界面美化设置 软件配置 Window/Panel Gap UI Appearance Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.aesthetics",
+      "label": "ui.settings.software.aesthetics.item_spacing",
+      "fields": [],
+      "keywords": "software.aesthetics.item_spacing aesthetics.itemSpacing",
+      "aliases": "容器内部组件间距 界面美化设置 软件配置 Internal Item Spacing UI Appearance Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.aesthetics",
+      "label": "ui.settings.software.aesthetics.window_padding",
+      "fields": [],
+      "keywords": "software.aesthetics.window_padding aesthetics.windowPadding",
+      "aliases": "全局窗口内边距 界面美化设置 软件配置 Global Window Padding UI Appearance Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.aesthetics",
+      "label": "ui.settings.software.aesthetics.animation_transition",
+      "fields": [],
+      "keywords": "software.aesthetics.animation_transition aesthetics.animationTransitionDuration",
+      "aliases": "UI 动效过渡时间 界面美化设置 软件配置 UI Animation Transition UI Appearance Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.picker_style",
+      "fields": [
+        "ui.settings.software.picker_unified",
+        "ui.settings.software.picker_native"
+      ],
+      "keywords": "software.picker_style software.picker_unified software.picker_native filePickerStyle",
+      "aliases": "选择器样式 同步与时钟 软件配置 编辑器统一选择器 系统原生选择器 Picker Style Sync & Clock Software Config Unified File Picker Native File Picker"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.save_format",
+      "fields": [
+        "ui.settings.software.save_format.original",
+        "ui.settings.software.save_format.force_mmm"
+      ],
+      "keywords": "software.save_format software.save_format.original software.save_format.force_mmm saveFormatPreference",
+      "aliases": "Ctrl+S 保存为 同步与时钟 软件配置 保存原始文件格式 强制保存为 .mmm Ctrl+S Save As Sync & Clock Software Config Keep original format Force .mmm"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.auto_save.mode",
+      "fields": [
+        "ui.settings.software.auto_save.mode.disabled",
+        "ui.settings.software.auto_save.mode.timed",
+        "ui.settings.software.auto_save.mode.event"
+      ],
+      "keywords": "software.auto_save.mode software.auto_save.mode.disabled software.auto_save.mode.timed software.auto_save.mode.event autoSave.mode",
+      "aliases": "自动保存 同步与时钟 软件配置 关闭 定时 事件触发 Auto Save Sync & Clock Software Config Disabled Timed Event triggered autosave 自动保存 定时保存"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.auto_save.interval_unit",
+      "fields": [
+        "ui.settings.software.auto_save.interval_unit.seconds",
+        "ui.settings.software.auto_save.interval_unit.minutes"
+      ],
+      "keywords": "software.auto_save.interval_unit software.auto_save.interval_unit.seconds software.auto_save.interval_unit.minutes autoSave.intervalUnit",
+      "aliases": "定时单位 同步与时钟 软件配置 秒 分钟 Interval Unit Sync & Clock Software Config Seconds Minutes"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.auto_save.interval",
+      "fields": [],
+      "keywords": "software.auto_save.interval autoSave.intervalValue",
+      "aliases": "定时间隔 同步与时钟 软件配置 Interval Sync & Clock Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.auto_save.on_object_modified",
+      "fields": [],
+      "keywords": "software.auto_save.on_object_modified autoSave.onObjectModified",
+      "aliases": "修改任意物件 同步与时钟 软件配置 Any object modified Sync & Clock Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.auto_save.on_beatmap_switch",
+      "fields": [],
+      "keywords": "software.auto_save.on_beatmap_switch autoSave.onBeatmapSwitch",
+      "aliases": "切换谱面 同步与时钟 软件配置 Beatmap switched Sync & Clock Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.auto_save.on_imgui_focus_lost",
+      "fields": [],
+      "keywords": "software.auto_save.on_imgui_focus_lost autoSave.onImGuiWindowFocusLost",
+      "aliases": "ImGui 窗口丢失焦点 同步与时钟 软件配置 ImGui window focus lost Sync & Clock Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.auto_save.on_native_focus_lost",
+      "fields": [],
+      "keywords": "software.auto_save.on_native_focus_lost autoSave.onNativeWindowFocusLost",
+      "aliases": "程序窗口丢失焦点 同步与时钟 软件配置 Application focus lost Sync & Clock Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.auto_backup.mode",
+      "fields": [
+        "ui.settings.software.auto_backup.mode.disabled",
+        "ui.settings.software.auto_backup.mode.timed",
+        "ui.settings.software.auto_backup.mode.event"
+      ],
+      "keywords": "software.auto_backup.mode software.auto_backup.mode.disabled software.auto_backup.mode.timed software.auto_backup.mode.event autoBackup.mode",
+      "aliases": "谱面自动备份 同步与时钟 软件配置 关闭 定时 事件触发 Beatmap Auto Backup Sync & Clock Software Config Disabled Timed Event triggered backup 自动备份 备份"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.auto_backup.interval_unit",
+      "fields": [
+        "ui.settings.software.auto_backup.interval_unit.seconds",
+        "ui.settings.software.auto_backup.interval_unit.minutes"
+      ],
+      "keywords": "software.auto_backup.interval_unit software.auto_backup.interval_unit. autoBackup.intervalUnit",
+      "aliases": "备份定时单位 同步与时钟 软件配置 秒 分钟 Backup Interval Unit Sync & Clock Software Config Seconds Minutes"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.auto_backup.interval",
+      "fields": [],
+      "keywords": "software.auto_backup.interval autoBackup.intervalValue",
+      "aliases": "备份定时间隔 同步与时钟 软件配置 Backup Interval Sync & Clock Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.auto_backup.on_object_modified",
+      "fields": [],
+      "keywords": "software.auto_backup.on_object_modified autoBackup.onObjectModified",
+      "aliases": "修改任意谱面内容 同步与时钟 软件配置 Any beatmap content modified Sync & Clock Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.auto_backup.on_beatmap_switch",
+      "fields": [],
+      "keywords": "software.auto_backup.on_beatmap_switch autoBackup.onBeatmapSwitch",
+      "aliases": "切换谱面 同步与时钟 软件配置 Beatmap switched Sync & Clock Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.auto_backup.on_imgui_focus_lost",
+      "fields": [],
+      "keywords": "software.auto_backup.on_imgui_focus_lost autoBackup.onImGuiWindowFocusLost",
+      "aliases": "ImGui 窗口丢失焦点 同步与时钟 软件配置 ImGui window focus lost Sync & Clock Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.auto_backup.on_native_focus_lost",
+      "fields": [],
+      "keywords": "software.auto_backup.on_native_focus_lost autoBackup.onNativeWindowFocusLost",
+      "aliases": "程序窗口丢失焦点 同步与时钟 软件配置 Application focus lost Sync & Clock Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.auto_backup.max_count",
+      "fields": [],
+      "keywords": "software.auto_backup.max_count autoBackup.maxBackupCount",
+      "aliases": "每个谱面保留份数 同步与时钟 软件配置 Backups per Beatmap Sync & Clock Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.time_format",
+      "fields": [
+        "ui.settings.software.time_format.clock",
+        "ui.settings.software.time_format.seconds",
+        "ui.settings.software.time_format.milliseconds",
+        "ui.settings.software.time_format.beat"
+      ],
+      "keywords": "software.time_format timeFormatPreference software.time_format.clock software.time_format.seconds software.time_format.milliseconds software.time_format.beat",
+      "aliases": "画布时间格式 同步与时钟 软件配置 时:分:秒.毫秒 秒 (三位小数) 纯毫秒 拍号 + 分拍位 Canvas Time Format Sync & Clock Software Config HH:MM:SS.mmm Seconds (3 decimals) Milliseconds Beat + Fraction"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.recent_limit",
+      "fields": [],
+      "keywords": "software.recent_limit recentProjectsLimit",
+      "aliases": "最近项目显示上限 同步与时钟 软件配置 Recent Projects Limit Sync & Clock Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.sync_mode",
+      "fields": [
+        "ui.settings.software.sync_mode.none",
+        "ui.settings.software.sync_mode.integral",
+        "ui.settings.software.sync_mode.watertank"
+      ],
+      "keywords": "software.sync_mode syncConfig.mode software.sync_mode.none software.sync_mode.integral software.sync_mode.watertank",
+      "aliases": "音频同步模式 同步与时钟 软件配置 无 (None) 积分平滑 (Integral) 水箱缓冲 (WaterTank) Audio Sync Mode Sync & Clock Software Config None Integral Water Tank"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.sync_factor",
+      "fields": [],
+      "keywords": "software.sync_factor syncConfig.integralFactor",
+      "aliases": "积分追踪系数 同步与时钟 软件配置 Integral Tracking Factor Sync & Clock Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.sync_buffer",
+      "fields": [],
+      "keywords": "software.sync_buffer syncConfig.waterTankBuffer",
+      "aliases": "水箱缓冲时间 同步与时钟 软件配置 WaterTank Buffer Sync & Clock Software Config"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.sync",
+      "label": "ui.settings.software.sync_interval",
+      "fields": [],
+      "keywords": "software.sync_interval syncConfig.syncInterval",
+      "aliases": "同步时间间隔 同步与时钟 软件配置 Sync Interval Sync & Clock Software Config"
+    },
+    {
+      "tab": "Collaboration",
+      "section": "ui.settings.collaboration.server",
+      "label": "ui.collaboration.server_address",
+      "fields": [
+        "ui.collaboration.server_address_hint"
+      ],
+      "keywords": "",
+      "aliases": "服务器地址 协作服务器 协作配置 服务器域名或地址，例如 xiang233.top Server Address Collaboration Server Collaboration Config Server domain or address, e.g. xiang233.top"
+    },
+    {
+      "tab": "Collaboration",
+      "section": "ui.settings.collaboration.server",
+      "label": "ui.collaboration.signaling_port",
+      "fields": [],
+      "keywords": "",
+      "aliases": "信令端口 协作服务器 协作配置 Signaling Port Collaboration Server Collaboration Config"
+    },
+    {
+      "tab": "Collaboration",
+      "section": "ui.settings.collaboration.server",
+      "label": "ui.collaboration.use_tls",
+      "fields": [],
+      "keywords": "",
+      "aliases": "使用 TLS/WSS 协作服务器 协作配置 Use TLS/WSS Collaboration Server Collaboration Config"
+    },
+    {
+      "tab": "Collaboration",
+      "section": "ui.settings.collaboration.server",
+      "label": "ui.collaboration.directory.status",
+      "fields": [
+        "ui.collaboration.unavailable"
+      ],
+      "keywords": "",
+      "aliases": "房间目录 协作服务器 协作配置 协作模块当前不可用 Room Directory Collaboration Server Collaboration Config The collaboration module is unavailable"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.hit_effects",
+      "label": "ui.settings.visual.flick_hit_effect_mode",
+      "fields": [
+        "ui.settings.visual.flick_hit_effect_mode.head_only",
+        "ui.settings.visual.flick_hit_effect_mode.tail_only",
+        "ui.settings.visual.flick_hit_effect_mode.head_to_tail"
+      ],
+      "keywords": "visual.flick_hit_effect_mode flickHitEffectMode visual.flick_hit_effect_mode.head_only visual.flick_hit_effect_mode.tail_only visual.flick_hit_effect_mode.head_to_tail",
+      "aliases": "滑键打击特效播放模式 打击特效 视觉配置 仅头部播放 仅尾部播放 头到尾全部播放 Flick hit effect playback mode Hit effects Visual Config Head only Tail only All lanes from head to tail"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.hit_effects",
+      "label": "ui.settings.visual.polyline_internal_flick_effects",
+      "fields": [],
+      "keywords": "visual.polyline_internal_flick_effects enablePolylineInternalFlickEffects",
+      "aliases": "折线中间滑键打击特效（不含首尾） 打击特效 视觉配置 Internal polyline Flick effect (excluding head/tail) Hit effects Visual Config"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.offset",
+      "label": "ui.settings.visual.visual_offset",
+      "fields": [],
+      "keywords": "visual.visual_offset visualOffset",
+      "aliases": "全局渲染偏移 (秒) 视觉偏移 视觉配置 Global Render Offset (s) Visual Offset Visual Config offset 偏移 误差 校准 校正 时间差 延迟 latency calibration delay global 全局 渲染 视觉 render visual error discrepancy 偏差 不同步 对不齐 提前 滞后"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.offset",
+      "label": "ui.settings.visual.waveform_visual_offset",
+      "fields": [],
+      "keywords": "visual.waveform_visual_offset waveformVisualOffset",
+      "aliases": "波形图额外偏移 (秒) 视觉偏移 视觉配置 Waveform Extra Offset (s) Visual Offset Visual Config offset 偏移 误差 校准 校正 时间差 延迟 latency calibration delay waveform 波形 波形图 error discrepancy 偏差 不同步 对不齐 提前 滞后"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.offset",
+      "label": "ui.settings.visual.spectrum_visual_offset",
+      "fields": [],
+      "keywords": "visual.spectrum_visual_offset spectrumVisualOffset",
+      "aliases": "信号对数谱图额外偏移 (秒) 视觉偏移 视觉配置 Log Spectrum Extra Offset (s) Visual Offset Visual Config offset 偏移 误差 校准 校正 时间差 延迟 latency calibration delay spectrum spectrogram heatmap FFT 对数图 对数谱图 信号对数谱图 频谱 热力图 error discrepancy 偏差 不同步 对不齐 提前 滞后"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.beat_line",
+      "label": "ui.settings.visual.beat_line_before_first_timing",
+      "fields": [],
+      "keywords": "visual.beat_line_before_first_timing drawBeatLinesBeforeFirstTiming",
+      "aliases": "首个红线前分拍线 分拍线 视觉配置 Before First Timing Line Beat Line Visual Config"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.preview",
+      "label": "ui.settings.visual.preview_ratio",
+      "fields": [],
+      "keywords": "visual.preview_ratio previewConfig.areaRatio",
+      "aliases": "预览视口倍率 预览区 视觉配置 Preview Viewport Ratio Preview Area Visual Config"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.preview",
+      "label": "ui.settings.visual.preview_edge_scroll_sensitivity",
+      "fields": [],
+      "keywords": "visual.preview_edge_scroll_sensitivity previewConfig.edgeScrollSensitivity",
+      "aliases": "边缘自动滚动灵敏度 预览区 视觉配置 Edge Auto-Scroll Sensitivity Preview Area Visual Config"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.preview",
+      "label": "ui.settings.visual.preview_margin_left",
+      "fields": [],
+      "keywords": "visual.preview_margin_left previewConfig.margin.left",
+      "aliases": "视口左留白 预览区 视觉配置 Margin Left Preview Area Visual Config"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.preview",
+      "label": "ui.settings.visual.preview_margin_top",
+      "fields": [],
+      "keywords": "visual.preview_margin_top previewConfig.margin.top",
+      "aliases": "视口上留白 预览区 视觉配置 Margin Top Preview Area Visual Config"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.preview",
+      "label": "ui.settings.visual.preview_margin_right",
+      "fields": [],
+      "keywords": "visual.preview_margin_right previewConfig.margin.right",
+      "aliases": "视口右留白 预览区 视觉配置 Margin Right Preview Area Visual Config"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.preview",
+      "label": "ui.settings.visual.preview_margin_bottom",
+      "fields": [],
+      "keywords": "visual.preview_margin_bottom previewConfig.margin.bottom",
+      "aliases": "视口下留白 预览区 视觉配置 Margin Bottom Preview Area Visual Config"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.preview",
+      "label": "ui.settings.visual.preview_draw_beat_lines",
+      "fields": [],
+      "keywords": "visual.preview_draw_beat_lines previewConfig.drawBeatLines",
+      "aliases": "绘制分拍线 预览区 视觉配置 Draw Beat Lines Preview Area Visual Config"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.preview",
+      "label": "ui.settings.visual.preview_draw_timing_lines",
+      "fields": [],
+      "keywords": "visual.preview_draw_timing_lines previewConfig.drawTimingLines",
+      "aliases": "绘制 Timing 线 预览区 视觉配置 Draw Timing Lines Preview Area Visual Config"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.canvas_interaction",
+      "label": "ui.settings.visual.timeline_zoom",
+      "fields": [
+        "ui.settings.visual.timeline_zoom_tooltip"
+      ],
+      "keywords": "visual.timeline_zoom timelineZoom visual.timeline_zoom_tooltip",
+      "aliases": "时间线缩放 画布交互 视觉配置 在画布上： - 使用 Ctrl+滚轮 快速缩放时间线 - 使用 Ctrl+Shift+滚轮 加速缩放时间线 Timeline Zoom Canvas Interaction Visual Config On canvas: - Use Ctrl+Scroll to quickly zoom the timeline - Use Ctrl+Shift+Scroll for accelerated zooming"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.canvas_interaction",
+      "label": "ui.settings.visual.scroll_animation_duration",
+      "fields": [
+        "ui.settings.visual.scroll_animation_tooltip"
+      ],
+      "keywords": "visual.scroll_animation_duration scrollAnimationDuration visual.scroll_animation_tooltip",
+      "aliases": "滚动动画时间 画布交互 视觉配置 作用于暂停时的视觉滚动、跳转和时间线缩放过渡。播放中与同音轨跟随画布会继续锁定音频时间。 Scroll Animation Duration Canvas Interaction Visual Config Applies to paused visual scrolling, seeking, and timeline zoom transitions. Playback and audio-following canvases stay locked to audio time."
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.canvas_interaction",
+      "label": "ui.settings.visual.simulate_autoplay",
+      "fields": [
+        "ui.settings.visual.simulate_autoplay_tooltip"
+      ],
+      "keywords": "visual.simulate_autoplay simulateAutoplay visual.simulate_autoplay_tooltip",
+      "aliases": "自动游玩模拟 画布交互 视觉配置 播放时长条头停在判定区，隐藏已判定的身体，结束后整体消失；暂停时显示完整物件。 Autoplay Simulation Canvas Interaction Visual Config During playback, pin active hold heads to the judgment line, hide judged body sections, and hide completed holds. Pausing restores complete notes."
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.canvas_interaction",
+      "label": "ui.settings.visual.hide_judged_notes",
+      "fields": [],
+      "keywords": "visual.hide_judged_notes simulateAutoplay hideJudgedNotes",
+      "aliases": "↳ 判定后隐藏单 Note 画布交互 视觉配置 ↳ Hide Judged Tap Notes Canvas Interaction Visual Config"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.canvas_interaction",
+      "label": "ui.settings.visual.hide_judged_flicks",
+      "fields": [],
+      "keywords": "visual.hide_judged_flicks simulateAutoplay hideJudgedFlicks",
+      "aliases": "↳ 判定后隐藏滑键 画布交互 视觉配置 ↳ Hide Judged Flick Notes Canvas Interaction Visual Config"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.canvas_interaction",
+      "label": "ui.settings.visual.linear_scroll",
+      "fields": [],
+      "keywords": "visual.linear_scroll enableLinearScrollMapping",
+      "aliases": "线性流速映射 画布交互 视觉配置 Linear Scroll Mapping Canvas Interaction Visual Config"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.canvas_interaction",
+      "label": "ui.settings.visual.snap_threshold",
+      "fields": [],
+      "keywords": "visual.snap_threshold snapThreshold",
+      "aliases": "磁吸阈值 (像素) 画布交互 视觉配置 Snap Threshold (px) Canvas Interaction Visual Config"
+    },
+    {
+      "tab": "Visual",
+      "section": "ui.settings.visual.spectrum",
+      "label": "ui.settings.visual.spectrum_detail",
+      "fields": [
+        "ui.settings.visual.spectrum_detail.tooltip",
+        "ui.settings.visual.spectrum_detail.performance",
+        "ui.settings.visual.spectrum_detail.balanced",
+        "ui.settings.visual.spectrum_detail.fine",
+        "ui.settings.visual.spectrum_detail.ultra",
+        "ui.settings.visual.spectrum_detail.extreme",
+        "ui.settings.visual.spectrum_detail.experimental",
+        "ui.settings.visual.spectrum_detail.segments_per_second",
+        "ui.settings.visual.spectrum_detail.bins",
+        "ui.settings.visual.spectrum_detail.memory_prefix",
+        "ui.settings.visual.spectrum_detail.minute",
+        "ui.settings.visual.spectrum_detail.stereo",
+        "ui.settings.visual.spectrum_detail.bpm_mono",
+        "ui.settings.visual.spectrum_detail.option"
+      ],
+      "keywords": "visual.spectrum_detail spectrumDetailLevel visual.spectrum_detail.tooltip",
+      "aliases": "频谱图精细度 频谱图 视觉配置 估算不含驱动对齐、描述符和 CPU 侧缓存。独立频谱窗口上传 R8 强度纹理并通过 Vulkan 离屏表面渲染；BPM 测量工具使用混合单声道 RGBA8 频谱。 性能 平衡 精细 极致 极限 实验 段/秒 频段 显存约 分钟 双声道 BPM 单声道 {} - {:.0f} 段/秒 x {} 频段；显存约 {:.2f} MiB/分钟(双声道)，{:.2f} MiB/分钟(BPM 单声道) Spectrum Detail Spectrum Visual Config Estimate excludes driver alignment, descriptor, and CPU-side cache overhead. The standalone spectrum window uploads R8 intensity textures and renders them through an offscreen Vulkan surface; the BPM tool uses a mixed mono RGBA8 spectrum. Performance Balanced Fine Ultra Extreme Experimental segments/s bins VRAM approx. min stereo BPM mono {} - {:.0f} segments/s x {} bins; VRAM approx. {:.2f} MiB/min (stereo), {:.2f} MiB/min (BPM mono)"
+    },
+    {
+      "tab": "Project",
+      "section": "ui.settings.project.info",
+      "label": "ui.settings.project.path",
+      "fields": [],
+      "keywords": "project.path",
+      "aliases": "项目物理路径 项目基本信息 项目配置 Physical Path Project Information Project Config"
+    },
+    {
+      "tab": "Project",
+      "section": "ui.settings.project.info",
+      "label": "ui.settings.project.note_palette",
+      "fields": [
+        "ui.settings.project.note_palette.inherit",
+        "ui.toolbar.note_palette.skin_default_scheme"
+      ],
+      "keywords": "project.note_palette m_colorPaletteSchemeName project.note_palette.inherit",
+      "aliases": "项目调色方案 项目基本信息 项目配置 继承软件默认 皮肤默认 Project Palette Project Information Project Config Use Software Default Skin Default"
+    },
+    {
+      "tab": "Project",
+      "section": "ui.settings.project.auto_backup",
+      "label": "ui.settings.project.auto_backup.override",
+      "fields": [],
+      "keywords": "project.auto_backup.override",
+      "aliases": "使用项目级配置 谱面自动备份 项目配置 Use Project Configuration Beatmap Auto Backup Project Config backup 自动备份 备份"
+    },
+    {
+      "tab": "Project",
+      "section": "ui.settings.project.auto_backup",
+      "label": "ui.settings.software.auto_backup.mode",
+      "fields": [
+        "ui.settings.project.auto_backup.inherit_hint",
+        "ui.settings.software.auto_backup.mode.disabled",
+        "ui.settings.software.auto_backup.mode.timed",
+        "ui.settings.software.auto_backup.mode.event"
+      ],
+      "keywords": "software.auto_backup.mode project.auto_backup.inherit_hint software.auto_backup.mode software.auto_backup.mode.disabled software.auto_backup.mode.timed software.auto_backup.mode.event",
+      "aliases": "谱面自动备份 项目配置 当前继承软件级自动备份配置 关闭 定时 事件触发 Beatmap Auto Backup Project Config Currently inherits the software auto-backup configuration Disabled Timed Event triggered backup 自动备份 备份 谱面自动备份 项目配置 关闭 定时 事件触发 Beatmap Auto Backup Project Config Disabled Timed Event triggered backup 自动备份 备份"
+    },
+    {
+      "tab": "Project",
+      "section": "ui.settings.project.auto_backup",
+      "label": "ui.settings.software.auto_backup.interval_unit",
+      "fields": [
+        "ui.settings.software.auto_backup.interval_unit.seconds",
+        "ui.settings.software.auto_backup.interval_unit.minutes"
+      ],
+      "keywords": "software.auto_backup.interval_unit software.auto_backup.interval_",
+      "aliases": "备份定时单位 谱面自动备份 项目配置 秒 分钟 Backup Interval Unit Beatmap Auto Backup Project Config Seconds Minutes"
+    },
+    {
+      "tab": "Project",
+      "section": "ui.settings.project.auto_backup",
+      "label": "ui.settings.software.auto_backup.interval",
+      "fields": [],
+      "keywords": "software.auto_backup.interval",
+      "aliases": "备份定时间隔 谱面自动备份 项目配置 Backup Interval Beatmap Auto Backup Project Config"
+    },
+    {
+      "tab": "Project",
+      "section": "ui.settings.project.auto_backup",
+      "label": "ui.settings.software.auto_backup.on_object_modified",
+      "fields": [],
+      "keywords": "software.auto_backup.on_object_modified",
+      "aliases": "修改任意谱面内容 谱面自动备份 项目配置 Any beatmap content modified Beatmap Auto Backup Project Config"
+    },
+    {
+      "tab": "Project",
+      "section": "ui.settings.project.auto_backup",
+      "label": "ui.settings.software.auto_backup.on_beatmap_switch",
+      "fields": [],
+      "keywords": "software.auto_backup.on_beatmap_switch",
+      "aliases": "切换谱面 谱面自动备份 项目配置 Beatmap switched Beatmap Auto Backup Project Config"
+    },
+    {
+      "tab": "Project",
+      "section": "ui.settings.project.auto_backup",
+      "label": "ui.settings.software.auto_backup.max_count",
+      "fields": [],
+      "keywords": "software.auto_backup.max_count",
+      "aliases": "每个谱面保留份数 谱面自动备份 项目配置 Backups per Beatmap Beatmap Auto Backup Project Config"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.info",
+      "label": "ui.settings.beatmap.name",
+      "fields": [],
+      "keywords": "name",
+      "aliases": "内部名称 谱面元数据 谱面配置 Internal Name Beatmap Metadata Beatmap Config"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.info",
+      "label": "ui.settings.beatmap.title",
+      "fields": [],
+      "keywords": "title",
+      "aliases": "歌曲标题 谱面元数据 谱面配置 Song Title Beatmap Metadata Beatmap Config"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.info",
+      "label": "ui.settings.beatmap.title_unicode",
+      "fields": [],
+      "keywords": "title_unicode",
+      "aliases": "标题 (Unicode) 谱面元数据 谱面配置 Title (Unicode) Beatmap Metadata Beatmap Config"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.info",
+      "label": "ui.settings.beatmap.artist",
+      "fields": [],
+      "keywords": "artist",
+      "aliases": "曲作者 谱面元数据 谱面配置 Artist Beatmap Metadata Beatmap Config"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.info",
+      "label": "ui.settings.beatmap.artist_unicode",
+      "fields": [],
+      "keywords": "artist_unicode",
+      "aliases": "艺术家 (Unicode) 谱面元数据 谱面配置 Artist (Unicode) Beatmap Metadata Beatmap Config"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.info",
+      "label": "ui.settings.beatmap.album",
+      "fields": [],
+      "keywords": "album",
+      "aliases": "唱片集 谱面元数据 谱面配置 Album Beatmap Metadata Beatmap Config"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.info",
+      "label": "ui.settings.beatmap.mapper",
+      "fields": [],
+      "keywords": "mapper",
+      "aliases": "谱师/作者 谱面元数据 谱面配置 Mapper/Author Beatmap Metadata Beatmap Config"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.info",
+      "label": "ui.settings.beatmap.version",
+      "fields": [],
+      "keywords": "version",
+      "aliases": "难度名称 谱面元数据 谱面配置 Difficulty Name Beatmap Metadata Beatmap Config"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.info",
+      "label": "ui.settings.beatmap.path",
+      "fields": [],
+      "keywords": "beatmap.path",
+      "aliases": "谱面文件路径 谱面元数据 谱面配置 Beatmap File Path Beatmap Metadata Beatmap Config"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.cover_type",
+      "label": "ui.settings.beatmap.cover_type",
+      "fields": [
+        "ui.settings.beatmap.cover_type.image",
+        "ui.settings.beatmap.cover_type.video"
+      ],
+      "keywords": "beatmap.cover_type beatmap.cover_type.image beatmap.cover_type.video",
+      "aliases": "背景类型 谱面配置 图片 视频 Background Type Beatmap Config Image Video"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.cover_type",
+      "label": "ui.settings.beatmap.video_start",
+      "fields": [],
+      "keywords": "beatmap.video_start",
+      "aliases": "视频开始时间 (ms) 背景类型 谱面配置 Video Start Time (ms) Background Type Beatmap Config"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.cover_type",
+      "label": "ui.settings.beatmap.bg_offset",
+      "fields": [],
+      "keywords": "beatmap.bg_offset",
+      "aliases": "背景偏移 (X/Y) 背景类型 谱面配置 Background Offset (X/Y) Background Type Beatmap Config"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.preference",
+      "label": "ui.settings.beatmap.bpm",
+      "fields": [],
+      "keywords": "beatmap.bpm",
+      "aliases": "BPM 预设 谱面配置 Preset Beatmap Config"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.preference",
+      "label": "ui.settings.beatmap.tracks",
+      "fields": [],
+      "keywords": "beatmap.tracks",
+      "aliases": "轨道数 预设 谱面配置 Track Count Preset Beatmap Config"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.preference",
+      "label": "ui.settings.beatmap.draft_tracks",
+      "fields": [
+        "ui.settings.beatmap.draft_tracks_remove",
+        "ui.settings.beatmap.draft_tracks_add"
+      ],
+      "keywords": "beatmap.draft_tracks beatmap.draft_tracks_remove beatmap.draft_tracks_add",
+      "aliases": "草稿区轨道数 预设 谱面配置 仅在最左侧草稿轨为空时删除它 增加一条持久草稿轨道 Draft Lane Count Preset Beatmap Config Remove the leftmost draft lane if it is empty Add one persistent draft lane"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.preference",
+      "label": "ui.settings.beatmap.bgm_tracks",
+      "fields": [
+        "ui.settings.beatmap.bgm_tracks_remove",
+        "ui.settings.beatmap.bgm_tracks_add"
+      ],
+      "keywords": "beatmap.bgm_tracks beatmap.bgm_tracks_remove beatmap.bgm_tracks_add",
+      "aliases": "BGM 轨道数 预设 谱面配置 仅在末尾 BGM 轨为空时删除它 增加一条持久 BGM 轨道 BGM Lane Count Preset Beatmap Config Remove the last BGM lane if it is empty Add one persistent BGM lane"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.preference",
+      "label": "ui.settings.beatmap.length",
+      "fields": [],
+      "keywords": "beatmap.length",
+      "aliases": "总时长 预设 谱面配置 Total Length Preset Beatmap Config"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.resource",
+      "label": "ui.settings.beatmap.audio",
+      "fields": [],
+      "keywords": "beatmap.audio",
+      "aliases": "音频文件 谱面资源 谱面配置 Audio File Beatmap Resources Beatmap Config"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.resource",
+      "label": "ui.settings.beatmap.cover",
+      "fields": [],
+      "keywords": "beatmap.cover",
+      "aliases": "封面 谱面资源 谱面配置 Cover Beatmap Resources Beatmap Config"
+    },
+    {
+      "tab": "Beatmap",
+      "section": "ui.settings.beatmap.resource",
+      "label": "ui.settings.beatmap.background",
+      "fields": [],
+      "keywords": "beatmap.background",
+      "aliases": "背景 谱面资源 谱面配置 Background Beatmap Resources Beatmap Config"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.behavior",
+      "label": "ui.settings.editor.default_palette",
+      "fields": [
+        "ui.toolbar.note_palette.skin_default_scheme",
+        "ui.settings.editor.default_palette_tooltip"
+      ],
+      "keywords": "editor.default_palette defaultColorPaletteSchemeName colorPalettes.schemes editor.default_palette_tooltip",
+      "aliases": "软件默认配色方案 基础行为 编辑器配置 皮肤默认 新建项目和没有 .mmm 项目配置的谱面默认使用此方案；已有项目可在项目设置中选择继承软件默认。 Software Default Color Palette Behavior Editor Config Skin Default Used by new projects and beatmaps without .mmm project settings. Existing projects can inherit the software default in project settings."
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.behavior",
+      "label": "ui.settings.editor.reverse_scroll",
+      "fields": [],
+      "keywords": "editor.reverse_scroll reverseScroll",
+      "aliases": "反转鼠标滚轮方向 基础行为 编辑器配置 Reverse Scroll Direction Behavior Editor Config"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.behavior",
+      "label": "ui.settings.editor.snap_floor",
+      "fields": [
+        "ui.settings.editor.snap_floor_tooltip"
+      ],
+      "keywords": "editor.snap_floor snapFloor editor.snap_floor_tooltip",
+      "aliases": "吸附向下取整 基础行为 编辑器配置 开启后总是吸附到早于鼠标位置的分拍线 Snap Downward Behavior Editor Config Always snap to the beat line before the mouse position"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.behavior",
+      "label": "ui.settings.editor.stop_playback_on_scroll",
+      "fields": [],
+      "keywords": "editor.stop_playback_on_scroll stopPlaybackOnScroll",
+      "aliases": "播放时滚动则停止播放 基础行为 编辑器配置 Stop Playback on Scroll Behavior Editor Config"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.behavior",
+      "label": "ui.settings.editor.toolbar_value_wheel_adjustment",
+      "fields": [],
+      "keywords": "editor.toolbar_value_wheel_adjustment enableToolbarValueWheelAdjustment editor.toolbar_value_",
+      "aliases": "悬浮滚轮调整工具栏数值 基础行为 编辑器配置 Adjust Toolbar Values on Hover Wheel Behavior Editor Config"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.behavior",
+      "label": "ui.settings.editor.hit_effects",
+      "fields": [],
+      "keywords": "editor.hit_effects enableHitEffects",
+      "aliases": "启用打击特效动画 基础行为 编辑器配置 Enable Hit Visual Effects Behavior Editor Config"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.behavior",
+      "label": "ui.settings.editor.sync_same_main_audio",
+      "fields": [],
+      "keywords": "editor.sync_same_main_audio",
+      "aliases": "同步同音频时间线画布时间 基础行为 编辑器配置 Sync Canvases Using the Same Audio Timeline Behavior Editor Config"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.behavior",
+      "label": "ui.settings.editor.scroll_snap",
+      "fields": [],
+      "keywords": "editor.scroll_snap scrollSnap",
+      "aliases": "鼠标滚动时启用磁吸 基础行为 编辑器配置 Enable Scroll Snap Behavior Editor Config"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.behavior",
+      "label": "ui.settings.editor.disable_scroll_accel_while_drawing",
+      "fields": [],
+      "keywords": "editor.disable_scroll_accel_while_drawing disableScrollAccelerationWhileDrawing",
+      "aliases": "绘制物件(Shift)时屏蔽滚动加速 基础行为 编辑器配置 Disable Scroll Accel While Drawing Behavior Editor Config"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.behavior",
+      "label": "ui.settings.editor.remove_objects_on_polyline_path",
+      "fields": [],
+      "keywords": "editor.remove_objects_on_polyline_path removeObjectsOnPolylinePath",
+      "aliases": "移除折线路径上的物件 基础行为 编辑器配置 Remove objects on polyline path Behavior Editor Config"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.behavior",
+      "label": "ui.settings.editor.select_pasted_objects",
+      "fields": [],
+      "keywords": "editor.select_pasted_objects selectPastedObjects",
+      "aliases": "粘贴后选中粘贴的物件 基础行为 编辑器配置 Select pasted objects after paste Behavior Editor Config"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.behavior",
+      "label": "ui.settings.editor.copy_paste_time_basis",
+      "fields": [
+        "ui.settings.editor.copy_paste_time_basis.timestamp",
+        "ui.settings.editor.copy_paste_time_basis.beat"
+      ],
+      "keywords": "editor.copy_paste_time_basis editor.copy_paste_time_basis.timestamp editor.copy_paste_time_basis.beat copyPasteTimeBasis",
+      "aliases": "复制粘贴基准 基础行为 编辑器配置 时间戳 小节/分拍 Copy/Paste Basis Behavior Editor Config Timestamp Measure/Beat"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.behavior",
+      "label": "ui.settings.editor.scroll_multiplier",
+      "fields": [
+        "ui.settings.editor.scroll_multiplier_tooltip"
+      ],
+      "keywords": "editor.scroll_multiplier scrollSpeedMultiplier editor.scroll_multiplier_tooltip",
+      "aliases": "Shift滚动加速倍率 基础行为 编辑器配置 在画布上： - 使用 滚轮 滚动时间线 - 使用 Shift+滚轮 以此乘数加速滚动 Shift Scroll Multiplier Behavior Editor Config On canvas: - Use Scroll to scroll the timeline - Use Shift+Scroll to accelerate scrolling by this multiplier"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.behavior",
+      "label": "ui.settings.editor.beat_divisor",
+      "fields": [
+        "ui.settings.editor.beat_divisor_tooltip"
+      ],
+      "keywords": "editor.beat_divisor beatDivisor editor.beat_divisor_tooltip",
+      "aliases": "全局分拍数设置 基础行为 编辑器配置 在画布上： - 使用 Alt+滚轮 逐级调整分拍数量 - 使用 Alt+Shift+滚轮 快速在预设常用分拍间切换 Global Beat Divisor Behavior Editor Config On canvas: - Use Alt+Scroll to adjust beat divisor step-by-step - Use Alt+Shift+Scroll to cycle through preset common divisors"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.behavior",
+      "label": "ui.settings.editor.overlap_time_window",
+      "fields": [],
+      "keywords": "editor.overlap_time_window overlapTimeWindowMs",
+      "aliases": "重叠检测时间窗口 基础行为 编辑器配置 Overlap Detection Window Behavior Editor Config"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.selection",
+      "label": "ui.settings.editor.selection",
+      "fields": [
+        "ui.settings.editor.selection.strict",
+        "ui.settings.editor.selection.intersection",
+        "ui.settings.editor.selection.thickness",
+        "ui.settings.editor.selection.rounding"
+      ],
+      "keywords": "editor.selection editor.selection.strict editor.selection.intersection selectionMode",
+      "aliases": "框选工具行为 编辑器配置 严格 (完全包含) 相交 (部分接触) 选框边框宽度 选框圆角半径 Selection (Marquee) Behavior Editor Config Strict (Full Inclusion) Intersection (Touch) Marquee Thickness Marquee Rounding"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.selection",
+      "label": "ui.settings.editor.timeline_selection_includes_bpm",
+      "fields": [],
+      "keywords": "editor.timeline_selection_includes_bpm timelineSelectionIncludesBpm",
+      "aliases": "时间线多选包含红色 BPM 线 框选工具行为 编辑器配置 Include red BPM lines in timeline multi-select Selection (Marquee) Behavior Editor Config bpm 红线 框选 多选 red timing"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.selection",
+      "label": "ui.settings.editor.selection.thickness",
+      "fields": [],
+      "keywords": "editor.selection.thickness marqueeThickness",
+      "aliases": "选框边框宽度 框选工具行为 编辑器配置 Marquee Thickness Selection (Marquee) Behavior Editor Config"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.selection",
+      "label": "ui.settings.editor.selection.rounding",
+      "fields": [],
+      "keywords": "editor.selection.rounding marqueeRounding",
+      "aliases": "选框圆角半径 框选工具行为 编辑器配置 Marquee Rounding Selection (Marquee) Behavior Editor Config"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.sfx",
+      "label": "ui.settings.editor.polyline_internal_flick_sfx",
+      "fields": [],
+      "keywords": "editor.polyline_internal_flick_sfx sfxConfig.enablePolylineInternalFlickSfx",
+      "aliases": "折线中间滑键打击音效（不含首尾） 音效触发策略 编辑器配置 Internal polyline Flick sound (excluding head/tail) SFX Trigger Strategy Editor Config"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.sfx",
+      "label": "ui.settings.editor.sfx_flick_scale",
+      "fields": [],
+      "keywords": "editor.sfx_flick_scale sfxConfig.enableFlickWidthVolumeScaling",
+      "aliases": "Flick音量随宽度增益 音效触发策略 编辑器配置 Flick Volume Scaling SFX Trigger Strategy Editor Config"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.sfx",
+      "label": "ui.settings.editor.sfx_flick_mul",
+      "fields": [],
+      "keywords": "editor.sfx_flick_mul sfxConfig.flickWidthVolumeMultiplier",
+      "aliases": "每轨道增益倍率 音效触发策略 编辑器配置 Per-Track Volume Multiplier SFX Trigger Strategy Editor Config"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.sfx",
+      "label": "ui.settings.editor.sfx_stereo_hit_effects",
+      "fields": [],
+      "keywords": "editor.sfx_stereo_hit_effects sfxConfig.enableStereoHitEffects",
+      "aliases": "立体打击音效 音效触发策略 编辑器配置 Stereo Hit Effects SFX Trigger Strategy Editor Config"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.sfx",
+      "label": "ui.settings.editor.sfx_sync_speed",
+      "fields": [],
+      "keywords": "editor.sfx_sync_speed sfxConfig.hitSfxSyncSpeed",
+      "aliases": "皮肤音效速率跟随主音轨 音效触发策略 编辑器配置 Sync Skin SFX Speed with Main Track SFX Trigger Strategy Editor Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.tool_move",
+      "fields": [],
+      "keywords": "shortcut.tool_move toolMove shortcut",
+      "aliases": "抓取工具 快捷键配置 Grab Tool Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.tool_marquee",
+      "fields": [],
+      "keywords": "shortcut.tool_marquee toolMarquee",
+      "aliases": "选取工具 快捷键配置 Marquee Tool Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.tool_draw",
+      "fields": [],
+      "keywords": "shortcut.tool_draw toolDraw",
+      "aliases": "绘制工具 快捷键配置 Draw Tool Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.tool_color_brush",
+      "fields": [],
+      "keywords": "shortcut.tool_color_brush toolColorBrush",
+      "aliases": "配色笔刷 快捷键配置 Color Brush Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.tool_color_eraser",
+      "fields": [],
+      "keywords": "shortcut.tool_color_eraser toolColorEraser",
+      "aliases": "配色橡皮 快捷键配置 Color Eraser Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.mirror",
+      "fields": [],
+      "keywords": "shortcut.mirror mirror",
+      "aliases": "镜像 快捷键配置 Mirror Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.mirror_paste",
+      "fields": [],
+      "keywords": "shortcut.mirror_paste mirrorPaste",
+      "aliases": "镜像粘贴 快捷键配置 Mirror Paste Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.edit_selected_volume",
+      "fields": [],
+      "keywords": "shortcut.edit_selected_volume editSelectedVolume",
+      "aliases": "编辑选中物件音量 快捷键配置 Edit Selected Object Volume Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.add_selected_annotation",
+      "fields": [],
+      "keywords": "shortcut.add_selected_annotation addSelectedAnnotation",
+      "aliases": "给选中物件添加批注 快捷键配置 Annotate Selected Object Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.delete_selected",
+      "fields": [],
+      "keywords": "shortcut.delete_selected deleteSelected",
+      "aliases": "删除 快捷键配置 Delete Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.toggle_playback",
+      "fields": [],
+      "keywords": "shortcut.toggle_playback togglePlayback",
+      "aliases": "切换播放 / 暂停 快捷键配置 Toggle Play / Pause Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.toggle_reverse_scroll",
+      "fields": [],
+      "keywords": "shortcut.toggle_reverse_scroll toggleReverseScroll",
+      "aliases": "切换反转滚动 快捷键配置 Toggle Reverse Scroll Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.toggle_scroll_snap",
+      "fields": [],
+      "keywords": "shortcut.toggle_scroll_snap toggleScrollSnap",
+      "aliases": "切换滚动磁吸 快捷键配置 Toggle Scroll Snap Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.toggle_snap_floor",
+      "fields": [],
+      "keywords": "shortcut.toggle_snap_floor toggleSnapFloor",
+      "aliases": "切换吸附向下取整 快捷键配置 Toggle Snap Floor Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.toggle_scroll_timing_mapping",
+      "fields": [],
+      "keywords": "shortcut.toggle_scroll_timing_mapping toggleScrollTimingMapping",
+      "aliases": "切换 SCROLLTIMING 映射 快捷键配置 Toggle SCROLLTIMING Mapping Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.toggle_beat_lines",
+      "fields": [],
+      "keywords": "shortcut.toggle_beat_lines toggleBeatLines",
+      "aliases": "切换分拍线显示模式 快捷键配置 Cycle Beat Line Display Mode Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.toggle_stop_playback_on_scroll",
+      "fields": [],
+      "keywords": "shortcut.toggle_stop_playback_on_scroll toggleStopPlaybackOnScroll",
+      "aliases": "切换滚动停止播放 快捷键配置 Toggle Stop Playback on Scroll Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.toggle_hit_sfx",
+      "fields": [],
+      "keywords": "shortcut.toggle_hit_sfx toggleHitSfx",
+      "aliases": "切换打击音效 快捷键配置 Toggle Hit SFX Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.toggle_hit_effects",
+      "fields": [],
+      "keywords": "shortcut.toggle_hit_effects toggleHitEffects",
+      "aliases": "切换打击特效 快捷键配置 Toggle Hit Effects Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.toggle_sync_same_main_audio",
+      "fields": [],
+      "keywords": "shortcut.toggle_sync_same_main_audio toggleSyncSameMainAudio",
+      "aliases": "切换同音频时间线同步 快捷键配置 Toggle Same Audio Timeline Sync Shortcut Config"
+    },
+    {
+      "tab": "Debug",
+      "section": "ui.settings.debug.rendering",
+      "label": "ui.settings.debug.draw_hitboxes",
+      "fields": [],
+      "keywords": "debug.draw_hitboxes debugDrawHitboxes",
+      "aliases": "绘制物件交互包围盒 渲染调试 调试配置 Draw Object Interaction Hitboxes Render Debug Debug Config"
+    },
+    {
+      "tab": "Debug",
+      "section": "ui.settings.debug.rendering",
+      "label": "ui.settings.debug.hitbox_scale_x",
+      "fields": [],
+      "keywords": "debug.hitbox_scale_x interactionHitboxScaleX",
+      "aliases": "交互包围盒横向缩放 渲染调试 调试配置 Interaction Hitbox Horizontal Scale Render Debug Debug Config"
+    },
+    {
+      "tab": "Debug",
+      "section": "ui.settings.debug.rendering",
+      "label": "ui.settings.debug.hitbox_scale_y",
+      "fields": [],
+      "keywords": "debug.hitbox_scale_y interactionHitboxScaleY",
+      "aliases": "交互包围盒纵向缩放 渲染调试 调试配置 Interaction Hitbox Vertical Scale Render Debug Debug Config"
+    },
+    {
+      "tab": "Debug",
+      "section": "ui.settings.debug.rendering",
+      "label": "ui.settings.debug.render_profile_logging",
+      "fields": [],
+      "keywords": "debug.render_profile_logging renderProfileLogging",
+      "aliases": "输出渲染阶段耗时日志 渲染调试 调试配置 Log Render Stage Timings Render Debug Debug Config"
+    },
+    {
+      "tab": "Debug",
+      "section": "ui.settings.debug.networking",
+      "label": "ui.settings.debug.rtc_diagnostic_logging",
+      "fields": [],
+      "keywords": "debug.rtc_diagnostic_logging rtcDiagnosticLogging",
+      "aliases": "输出 WebRTC/ICE 底层日志（可能包含 IP 地址） 网络调试 调试配置 Log WebRTC/ICE Internals (May Include IP Addresses) Network Debug Debug Config"
+    }
+  ]
+}
