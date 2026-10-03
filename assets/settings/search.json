@@ -5,6 +5,16 @@
     {
       "tab": "Software",
       "section": "ui.settings.software.general",
+      "label": "ui.settings.software.professional_mode",
+      "fields": [
+        "ui.settings.software.professional_mode.hint"
+      ],
+      "keywords": "professionalMode enableBmsEditing",
+      "aliases": "专业编辑模式 更详细的编辑 专业版编辑 高级编辑 BMS 项目音频工具 采样 professional expert advanced editing detailed editing project audio samples"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
       "label": "ui.settings.software.language",
       "fields": [],
       "keywords": "software.language language",

@@ -523,7 +523,8 @@ void NoteRenderSystem::renderNotes(
         renderScaleY,
         trackCount,
         generatePolylineHitboxes,
-        config.visual.showBoundSampleLabels &&
+        config.settings.professionalMode &&
+            config.visual.showBoundSampleLabels &&
             SessionUtils::isMainCanvasCameraId(cameraId),
         laneProjection);
 

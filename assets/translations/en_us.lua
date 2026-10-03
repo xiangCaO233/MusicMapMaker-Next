@@ -282,6 +282,9 @@ return {
 	["ui.settings.collaboration.apply_success"] = "The server endpoint was saved; connecting to the room directory.",
 	["ui.settings.collaboration.apply_failed"] = "The server endpoint is invalid or could not be saved. Check the address and port.",
 	-- 设置搜索覆盖全部分类，定位后沿用原控件的权限、应用和保存流程。
+	["ui.settings.software.professional_mode"] = "Professional editing mode",
+	["ui.settings.software.professional_mode.hint"] = "Enable advanced toolbar controls, timeline, draft lanes, BMS, project audio tools and multi-track sample editing. Turning off uses a single main-audio binding, hides advanced controls and clears sample placement. Existing chart audio keeps playing.",
+	["ui.settings.software.professional_required"] = "Enable Professional editing mode in Settings → Software first.",
 	["ui.settings.search.hint"] = "Search settings, descriptions, options or synonyms…",
 	["ui.settings.search.back"] = "Back to search results",
 	["ui.settings.search.clear"] = "Clear search",

@@ -1388,7 +1388,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         // 区域开关来自会话最后接收的配置状态。
         // 它们必须与统一轨号解释一起交给消费端，不能只发布玩家轨数。
         snapshot->bmsEditingEnabled =
-            m_ctx->lastConfig.settings.enableBmsEditing;
+            m_ctx->lastConfig.settings.isBmsEditingEnabled();
         // 创作教学保留草稿数据作为内部答案，但不向画布发布草稿区域。
         snapshot->draftLanesEnabled =
             m_ctx->lastConfig.settings.professionalMode &&
@@ -1496,7 +1496,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                         config.visual.trackLayout,
                         camera.horizontalOffsetX,
                         true,
-                        config.settings.enableBmsEditing,
+                        config.settings.isBmsEditingEnabled(),
                         snapshot->draftLanesEnabled,
                         m_ctx->draftTrackCount,
                         true);
@@ -1928,7 +1928,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     }
                     // 非空资源 ID 才提供试听属性。
                     // 这里只发布引用和音量，不能在快照线程临时解码音效。
-                    if ( sampleBinding &&
+                    if ( config.settings.professionalMode && sampleBinding &&
                          !sampleBinding->m_audioResourceId.empty() ) {
                         inspect.showAudioPreview = true;
                         inspect.audioResourceId =

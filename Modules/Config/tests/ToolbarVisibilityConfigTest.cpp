@@ -175,6 +175,55 @@ bool testToolbarLayoutSettings()
            !legacy.toolbarHorizontal && legacy.toolbarDockEdge == "right" &&
            invalid.toolbarDockEdge == "right";
 }
+
+/// @brief 验证普通模式过滤旧配置中的高级入口，专业模式恢复原显示偏好。
+/// @return 模式过滤、用户隐藏偏好和持久化往返均保持一致时返回 true。
+/// @details 使用历史全显示配置，覆盖从专业模式切回时高级按钮仍为 true 的情况。
+/// 能力掩码不写回源对象；用户主动隐藏的基础工具也不能被总开关重新打开。
+/// @par 回归边界
+/// - 全显示偏好与有效显示分别检查，避免默认 false 掩盖能力漏项。
+/// - 磁吸、映射、分拍线、音效与底部播放入口在普通模式仍可显示。
+/// - 软件配置序列化保存用户偏好，不保存本帧能力掩码。
+/// - 模式往返不改基础工具的手动隐藏状态。
+/// 本用例不创建 UI 窗口，浮层关闭由 ToolbarView 使用同一有效配置执行。
+/// 配色工具的活动策略退出另由会话测试覆盖，不从按钮不可见推断已禁用输入。
+bool testProfessionalToolbarVisibility()
+{
+    MMM::Config::EditorSettings settings;
+    // 把默认隐藏的高级按钮全部打开，模拟用户已定制过的专业工具栏。
+    auto& tools      = settings.toolbarVisibility.stateTools;
+    tools.colorBrush = tools.colorEraser = true;
+    auto& buttons       = settings.toolbarVisibility.independentButtons;
+    buttons.notePalette = buttons.playbackSpeed = buttons.trackCount =
+        buttons.beatDivisor                     = true;
+    settings.professionalMode                   = false;
+    const auto basic = settings.effectiveToolbarVisibility();
+    // 普通模式固定能力集合，但仍允许用户在集合内自行隐藏基础按钮。
+    if ( !matchesDefaultToolbarVisibility(basic) ) {
+        XERROR("Ordinary mode exposed advanced toolbar controls");
+        return false;
+    }
+    // 过滤后序列化仍保存原偏好，不能把临时能力状态持久化为用户选择。
+    const nlohmann::json serialized = settings;
+    auto restored             = serialized.get<MMM::Config::EditorSettings>();
+    restored.professionalMode = true;
+    const auto advanced       = restored.effectiveToolbarVisibility();
+    if ( !advanced.stateTools.colorBrush || !advanced.stateTools.colorEraser ||
+         !advanced.independentButtons.notePalette ||
+         !advanced.independentButtons.playbackSpeed ||
+         !advanced.independentButtons.trackCount ||
+         !advanced.independentButtons.beatDivisor ) {
+        XERROR("Professional mode lost saved toolbar visibility");
+        return false;
+    }
+    // 原偏好保持完整；总开关往返不应强制恢复用户手动隐藏的基础项。
+    settings.toolbarVisibility.stateTools.draw           = false;
+    settings.toolbarVisibility.independentButtons.magnet = false;
+    const auto hidden = settings.effectiveToolbarVisibility();
+    return !hidden.stateTools.draw && !hidden.independentButtons.magnet &&
+           settings.toolbarVisibility.stateTools.colorBrush &&
+           settings.toolbarVisibility.independentButtons.notePalette;
+}
 }  // namespace
 
 /// @brief 运行工具栏按钮可见性持久化与兼容性测试。
@@ -187,7 +236,8 @@ int main()
                    testToolbarVisibilityDefaults() &&
                    testPartialToolbarVisibilityDefaults() &&
                    testGlobalToolbarVisibilityPreservation() &&
-                   testToolbarLayoutSettings()
+                   testToolbarLayoutSettings() &&
+                   testProfessionalToolbarVisibility()
                ? 0
                : 1;
 }

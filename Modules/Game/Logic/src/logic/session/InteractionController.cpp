@@ -1,4 +1,5 @@
 #include "logic/session/InteractionController.h"
+#include "common/EditTool.h"
 #include "common/LogicCommands.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -229,7 +230,7 @@ void detachMarqueeSelection(SessionContext& ctx)
         ctx.lastConfig.visual.trackLayout,
         camera->second.horizontalOffsetX,
         true,
-        ctx.lastConfig.settings.enableBmsEditing,
+        ctx.lastConfig.settings.isBmsEditingEnabled(),
         ctx.lastConfig.settings.professionalMode &&
             ctx.composeLessonInputMode == ComposeLessonInputMode::Off,
         ctx.draftTrackCount,
@@ -530,7 +531,7 @@ SelectionScreenContext makeSelectionScreenContext(
             ctx.lastConfig.visual.trackLayout,
             cameraIt->second.horizontalOffsetX,
             true,
-            ctx.lastConfig.settings.enableBmsEditing,
+            ctx.lastConfig.settings.isBmsEditingEnabled(),
             ctx.lastConfig.settings.professionalMode &&
                 ctx.composeLessonInputMode == ComposeLessonInputMode::Off,
             ctx.draftTrackCount,
@@ -1705,6 +1706,8 @@ void InteractionController::handleCommand(const CmdEndDrag& cmd)
 /// ScrollCache 和拍点缓存换算位置，不允许文件系统访问。
 void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
 {
+    // 输入命令同样验证实际能力，旧弹窗和拖放载荷不能绕过专业模式。
+    if ( !m_ctx.lastConfig.settings.isBmsEditingEnabled() ) return;
     // 仅允许暂停且已载入谱面的主画布放置，并排除非有限鼠标输入。
     // 此入口不从辅助视图坐标推测 BGM 轨道。
     if ( m_ctx.isPlaying || !m_ctx.currentBeatmap ||
@@ -1748,7 +1751,7 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
         m_ctx.lastConfig.visual.trackLayout,
         camera.horizontalOffsetX,
         true,
-        m_ctx.lastConfig.settings.enableBmsEditing,
+        m_ctx.lastConfig.settings.isBmsEditingEnabled(),
         m_ctx.lastConfig.settings.professionalMode &&
             m_ctx.composeLessonInputMode == ComposeLessonInputMode::Off,
         m_ctx.draftTrackCount,
@@ -1815,6 +1818,8 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
 void InteractionController::handleCommand(
     const CmdUpdateAudioSampleProperties& cmd)
 {
+    // 输入命令同样验证实际能力，旧弹窗和拖放载荷不能绕过专业模式。
+    if ( !m_ctx.lastConfig.settings.isBmsEditingEnabled() ) return;
     if ( m_ctx.isPlaying || cmd.entity == entt::null ||
          !m_ctx.sampleRegistry.valid(cmd.entity) ||
          !m_ctx.sampleRegistry.all_of<SampleComponent>(cmd.entity) ) {
@@ -1932,6 +1937,8 @@ void InteractionController::handleCommand(const CmdUpdateObjectTimestamp& cmd)
     }
 
     if ( cmd.kind == ChartObjectKind::AudioSample ) {
+        // 简化编辑中主音轨锚点不可移动，精确时间命令也不能绕过门禁。
+        if ( !m_ctx.lastConfig.settings.isBmsEditingEnabled() ) return;
         if ( !m_ctx.sampleRegistry.valid(cmd.entity) ||
              !m_ctx.sampleRegistry.all_of<SampleComponent>(cmd.entity) ) {
             return;
@@ -2019,6 +2026,8 @@ void InteractionController::handleCommand(const CmdUpdateObjectTimestamp& cmd)
 void InteractionController::handleCommand(
     const CmdUpdateObjectSampleVolume& cmd)
 {
+    // 绑定采样的音量编辑属于专业功能，普通音符属性不受影响。
+    if ( !m_ctx.lastConfig.settings.professionalMode ) return;
     if ( cmd.entity == entt::null || !std::isfinite(cmd.volume) ||
          cmd.volume < 0.0F ) {
         m_ctx.lastActionMessage =
@@ -2088,6 +2097,8 @@ void InteractionController::handleCommand(
 void InteractionController::handleCommand(
     const CmdUpdateSelectedObjectSampleVolume& cmd)
 {
+    // 绑定采样的音量编辑属于专业功能，普通音符属性不受影响。
+    if ( !m_ctx.lastConfig.settings.professionalMode ) return;
     if ( !std::isfinite(cmd.volume) || cmd.volume < 0.0F ) {
         m_ctx.lastActionMessage =
             TR("ui.edit.sample_properties.invalid_volume").data();
@@ -2362,6 +2373,8 @@ void InteractionController::handleCommand(const CmdUpdateTrackCount& cmd)
 /// @warning 低频布局编辑：减轨检查所有采样占用，禁止放入连续渲染路径。
 void InteractionController::handleCommand(const CmdUpdateBgmTrackCount& cmd)
 {
+    // 简化编辑不允许增加或迁移 BGM 轨道，已有数量保持原样。
+    if ( !m_ctx.lastConfig.settings.isBmsEditingEnabled() ) return;
     if ( !m_ctx.currentBeatmap || cmd.bgmTrackCount < 0 ||
          cmd.bgmTrackCount == m_ctx.bgmTrackCount ) {
         return;
@@ -2488,7 +2501,9 @@ void InteractionController::handleCommand(const CmdUpdateDraftTrackCount& cmd)
 /// @note 只改变路由状态，当前手势的结束由对应输入流程负责。
 void InteractionController::handleCommand(const CmdChangeTool& cmd)
 {
-    m_ctx.currentTool = cmd.tool;
+    // 会话命令可能来自旧窗口或独立调用，仍须复核当前软件模式。
+    m_ctx.currentTool = resolveEditToolForMode(
+        cmd.tool, m_ctx.lastConfig.settings.professionalMode);
 }
 
 /// @brief 修改画笔的单个颜色覆盖槽。
@@ -2521,6 +2536,12 @@ void InteractionController::handleCommand(const CmdSetBrushNotePalette& cmd)
 /// @note 不加载或解码资源，非有限音量回退默认倍率。
 void InteractionController::handleCommand(const CmdSetBrushAudioResource& cmd)
 {
+    // 模式关闭后仍可能收到旧窗口入队的选择命令，空资源是唯一允许的状态。
+    if ( !m_ctx.lastConfig.settings.professionalMode ) {
+        m_ctx.brushState.selectedAudioResourceId.clear();
+        m_ctx.brushState.selectedAudioTrackType = AudioTrackType::Effect;
+        return;
+    }
     m_ctx.brushState.selectedAudioResourceId = cmd.audioResourceId;
     m_ctx.brushState.selectedAudioTrackType  = cmd.audioTrackType;
     // 负音量钳制到零，NaN 或无穷使用一倍默认值。

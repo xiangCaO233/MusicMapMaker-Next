@@ -1,5 +1,6 @@
 #include "logic/EditorEngine.h"
 #include "audio/AudioManager.h"
+#include "common/EditTool.h"
 #include "config/AppConfig.h"
 #include "config/FrameLimitUtils.h"
 #include "config/Utf8Path.h"
@@ -1487,9 +1488,13 @@ void EditorEngine::restoreProjectWorkspace(
         return;
     }
 
-    m_currentTool.store(workspaceNameToEditTool(
-                            project->m_settings.m_workspace.m_activeEditTool),
-                        std::memory_order_relaxed);
+    // 旧工作区保存的高级工具不能在普通模式恢复为活动输入策略。
+    m_currentTool.store(
+        resolveEditToolForMode(
+            workspaceNameToEditTool(
+                project->m_settings.m_workspace.m_activeEditTool),
+            Config::AppConfig::instance().getEditorSettings().professionalMode),
+        std::memory_order_relaxed);
     // 工具先写入引擎缓存，随后创建的每个会话都收到同一初始工具命令。
 
     // 有历史相机身份时先清理不匹配的 Logo，避免占用恢复布局的画布位置。
@@ -1820,6 +1825,15 @@ bool EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
     m_pendingWorkspaceActiveIndex = -1;
     if ( auto* project = ProjectController::instance().currentProject() ) {
         setProjectAutoBackupOverride(project->m_settings.m_autoBackupOverride);
+        // 新项目可能没有工具栏快照，也必须先作废旧专业工具选择再恢复画布。
+        // 此处在打开项目的低频路径处理，防止之后开启工具时读回旧资源身份。
+        if ( !Config::AppConfig::instance()
+                  .getEditorSettings()
+                  .professionalMode ) {
+            project->m_settings.m_workspace.m_projectAudioToolSelectedResourceId
+                .clear();
+            project->m_settings.m_workspace.m_projectAudioToolOpen = false;
+        }
         const auto& workspace = project->m_settings.m_workspace;
         // 资源 ID 只在项目内有效，先清空旧选择，再匹配新资源表中的记录。
         m_brushAudioResourceId.clear();
@@ -1829,7 +1843,10 @@ bool EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
             std::isfinite(workspace.m_projectAudioToolBrushVolume)
                 ? std::max(0.0F, workspace.m_projectAudioToolBrushVolume)
                 : 1.0F;
-        if ( !workspace.m_projectAudioToolSelectedResourceId.empty() ) {
+        if ( Config::AppConfig::instance()
+                 .getEditorSettings()
+                 .professionalMode &&
+             !workspace.m_projectAudioToolSelectedResourceId.empty() ) {
             // 保存的 ID 必须仍存在于当前资源表；删除或损坏引用按无选择恢复。
             const auto resourceIterator = std::find_if(
                 project->m_audioResources.begin(),
@@ -1844,8 +1861,14 @@ bool EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
                 m_brushAudioTrackType  = resourceIterator->m_type;
             }
         }
-        m_currentTool.store(workspaceNameToEditTool(workspace.m_activeEditTool),
-                            std::memory_order_relaxed);
+        // 恢复工具早于画布创建，模式门禁须在引擎缓存层先应用。
+        m_currentTool.store(
+            resolveEditToolForMode(
+                workspaceNameToEditTool(workspace.m_activeEditTool),
+                Config::AppConfig::instance()
+                    .getEditorSettings()
+                    .professionalMode),
+            std::memory_order_relaxed);
         // 已保存的项目工具栏覆盖当前配置；旧项目保留全局偏好，仅重置同步开关。
         if ( workspace.m_toolbarState.m_valid ) {
             // 旧项目没有 valid 工具栏快照时保持全局配置，并恢复默认同步开关。
@@ -2554,7 +2577,10 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
 
     // 编辑工具是编辑器级选择：立即发布查询值，并给全部现有会话排队切换。
     if ( std::holds_alternative<CmdChangeTool>(cmd) ) {
-        auto tool = std::get<CmdChangeTool>(cmd).tool;
+        // 快捷键、延迟命令与工具栏采用同一能力规则，不能只隐藏按钮。
+        const auto tool = resolveEditToolForMode(
+            std::get<CmdChangeTool>(cmd).tool,
+            Config::AppConfig::instance().getEditorSettings().professionalMode);
         // 枚举立即供 UI 查询，命令再让每个会话清理旧工具状态并接收新工具。
         // relaxed 只发布工具选择，不表示会话已经处理完命令。
         m_currentTool.store(tool, std::memory_order_relaxed);
@@ -2579,8 +2605,15 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     // 项目音频画笔同样跨画布共享，资源、类型和音量作为不可拆分状态传播。
     if ( const auto* audioResource =
              std::get_if<CmdSetBrushAudioResource>(&cmd) ) {
-        m_brushAudioResourceId = audioResource->audioResourceId;
-        m_brushAudioTrackType  = audioResource->audioTrackType;
+        // 总门禁也约束引擎缓存，禁止旧窗口命令在下一次开启时复活选择。
+        // 空资源的类型回退 Effect，不保留不可用的 Main 放置语义。
+        // 广播采用清洗后的缓存值，所有会话接收相同的空选择。
+        const bool professional =
+            Config::AppConfig::instance().getEditorSettings().professionalMode;
+        m_brushAudioResourceId =
+            professional ? audioResource->audioResourceId : std::string{};
+        m_brushAudioTrackType = professional ? audioResource->audioTrackType
+                                             : AudioTrackType::Effect;
         // 与工作区恢复采用相同音量边界，非有限输入回退默认增益。
         m_brushAudioVolume = std::isfinite(audioResource->volume)
                                  ? std::max(0.0F, audioResource->volume)
@@ -3962,12 +3995,36 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
     sfxConfig.boundHitSfxGain =
         Config::sanitizeHitSfxGain(sfxConfig.boundHitSfxGain);
     preserveGlobalAppManagedSettings(updatedConfig, globalConfig);
+    // 会话只清理自己的画笔；引擎级缓存也必须清空，防止新画布恢复旧选择。
+    // 已有采样的数据、音量和播放计划保持在谱面域中，不受放置偏好清理影响。
+    if ( !updatedConfig.settings.professionalMode ) {
+        m_brushAudioResourceId.clear();
+        m_brushAudioTrackType = AudioTrackType::Effect;
+        // UI 立即读取基础工具，旧手势由各会话的配置命令在更新边界清理。
+        // relaxed 只公布活动工具枚举，不承诺会话已消费配置命令。
+        // 清洗使用本次待提交配置，不能读取 AppConfig 尚未发布的新模式。
+        // 标准工具原样保留，只有不再可用的配色工具回退 Move。
+        m_currentTool.store(
+            resolveEditToolForMode(
+                m_currentTool.load(std::memory_order_relaxed), false),
+            std::memory_order_relaxed);
+    }
     // 限频偏好单独发布给逻辑循环的快速路径；完整配置仍通过修订快照传播。
     m_frameLimitPreference.store(updatedConfig.settings.frameLimit,
                                  std::memory_order_relaxed);
     if ( auto* project = ProjectController::instance().currentProject() ) {
         // 当前项目立即记录本次工具栏状态，后续项目切换可恢复独立偏好。
         // 这里只修改内存设置，实际项目文件保存仍由保存或关闭入口负责。
+        // 总开关关闭后旧工作区放置身份不可恢复，不触碰谱面中的实际采样。
+        if ( !updatedConfig.settings.professionalMode ) {
+            project->m_settings.m_workspace.m_projectAudioToolSelectedResourceId
+                .clear();
+            project->m_settings.m_workspace.m_projectAudioToolOpen = false;
+            // 新保存的工作区记录实际活动工具，不能带回已经隐藏的配色策略。
+            project->m_settings.m_workspace.m_activeEditTool =
+                editToolToWorkspaceName(
+                    m_currentTool.load(std::memory_order_relaxed));
+        }
         captureToolbarWorkspaceState(
             project->m_settings.m_workspace,
             updatedConfig,

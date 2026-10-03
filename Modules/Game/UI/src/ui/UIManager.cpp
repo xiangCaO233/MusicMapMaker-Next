@@ -908,6 +908,9 @@ bool UIManager::isAudioReadOnly() const
 /// 使项目工作区恢复能够保留该工具。
 void UIManager::openProjectAudioTool()
 {
+    // 专业模式是所有打开来源的共同门禁，包括菜单、工作区与外部工具请求。
+    if ( !Config::AppConfig::instance().getEditorSettings().professionalMode )
+        return;
     // 工具依赖活动项目资源，不能在无项目或切换窗口中使用。
     if ( !hasActiveProjectUiState() || isProjectTransitionInProgress() ) {
         return;
@@ -934,6 +937,32 @@ void UIManager::openProjectAudioTool()
     }
     if ( !wasOpen ) {
         ::MMM::UI::PlayPopupOpenFeedback();
+    }
+}
+
+/// @brief 在专业模式关闭边沿收起项目音频工具并清除持久放置选择。
+/// @details 只修改工具状态，不改谱面采样、资源或音频播放计划。
+/// 模式来自软件配置，不依赖活动会话锁，也不复制会话共享所有权。
+/// 工作区内存先清除，后续正常保存沿用原有项目持久化流程。
+/// 关闭视图由本帧正常清理阶段销毁，不在遍历视图更新中删除。
+/// @warning UI 热路径常态只有一个布尔比较；关闭边沿才访问工具与项目。
+void UIManager::synchronizeProfessionalEditingMode()
+{
+    const bool enabled =
+        Config::AppConfig::instance().getEditorSettings().professionalMode;
+    if ( enabled == m_lastProfessionalEditingMode ) return;
+    m_lastProfessionalEditingMode = enabled;
+    if ( enabled ) return;
+    // 旧工具可能在关闭后仍持有选择；关闭之前显式撤销它的放置状态。
+    if ( auto* tool =
+             getView<ProjectAudioToolView>(PROJECT_AUDIO_TOOL_VIEW_NAME) ) {
+        tool->disableProfessionalEditing();
+    }
+    // 即使工具尚未恢复，也不能把旧工作区的采样选择带入下一次开启。
+    if ( auto* project = Logic::EditorEngine::instance().getCurrentProject() ) {
+        project->m_settings.m_workspace.m_projectAudioToolSelectedResourceId
+            .clear();
+        project->m_settings.m_workspace.m_projectAudioToolOpen = false;
     }
 }
 
@@ -1328,7 +1357,8 @@ void UIManager::restoreProjectWorkspaceViews(
         }
     }
 
-    if ( workspace.m_projectAudioToolOpen &&
+    if ( Config::AppConfig::instance().getEditorSettings().professionalMode &&
+         workspace.m_projectAudioToolOpen &&
          !getView<ProjectAudioToolView>(PROJECT_AUDIO_TOOL_VIEW_NAME) ) {
         // 项目音频工具按单例键恢复。
         registerView(PROJECT_AUDIO_TOOL_VIEW_NAME,
@@ -1611,6 +1641,8 @@ void UIManager::onUpdateUI()
     ProcessGlobalMouseFeedback();
 
     consumePendingProjectLifecycleUpdates();
+    // 常态帧只比较总开关；实际收起视图与清理选择只在关闭边沿执行。
+    synchronizeProfessionalEditingMode();
     syncProjectWorkspaceState();
 
     // 先收集关闭视图名称，避免遍历注册表时直接 erase。

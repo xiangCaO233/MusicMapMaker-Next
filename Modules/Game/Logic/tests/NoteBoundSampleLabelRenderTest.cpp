@@ -156,6 +156,7 @@ bool glyphGeometryEqual(const std::vector<GlyphVertex>& lhs,
 /// @param snapshotSysTime 标签滚动使用的单调时钟秒数。
 /// @param noteScaleX 物件横向缩放。
 /// @param useDraftLane 是否在自定义草稿轨道渲染绑定物件。
+/// @param professional 是否允许专业模式的绑定音频标签。
 /// @pre snapshot 是本次检查独占的新快照，不复用前一次绘制的顶点与图集。
 /// @note 每次重建注册表和配置，避免不同开关用例之间遗留渲染状态。
 /// @note 资源名称只用于标签排版，测试不会创建或解码同名 WAV。
@@ -163,7 +164,8 @@ bool glyphGeometryEqual(const std::vector<GlyphVertex>& lhs,
 /// @note useDraftLane 为 true 时仍使用同一 Tap 类型，不混入长条或折线差异。
 void renderBoundTap(MMM::Logic::RenderSnapshot& snapshot, bool enabled,
                     std::string_view cameraId, double snapshotSysTime,
-                    float noteScaleX = 1.2F, bool useDraftLane = false)
+                    float noteScaleX = 1.2F, bool useDraftLane = false,
+                    bool professional = true)
 {
     entt::registry noteRegistry;
     entt::registry sampleRegistry;
@@ -180,14 +182,15 @@ void renderBoundTap(MMM::Logic::RenderSnapshot& snapshot, bool enabled,
         });
 
     MMM::Config::EditorConfig config;
-    config.visual.trackLayout.left  = 0.1F;
-    config.visual.trackLayout.right = 0.5F;
+    // 标签能力由总开关约束；其余几何参数保持相同以隔离显示权限。
+    config.settings.professionalMode = professional;
+    config.visual.trackLayout.left   = 0.1F;
+    config.visual.trackLayout.right  = 0.5F;
     // 玩家区域宽 320 像素，四条轨道各 80 像素，与断言常量保持一致。
     if ( useDraftLane ) {
         // 使用不同于玩家轨宽的草稿区，能暴露错误复用玩家轨边界的实现。
         config.visual.trackLayout.draftLanes.left  = -0.21F;
         config.visual.trackLayout.draftLanes.width = 0.06F;
-        config.settings.professionalMode           = true;
         // 草稿物件依赖专业模式可见性，不能把模式隐藏误判成标签漏绘。
     }
     config.visual.noteScaleX            = noteScaleX;
@@ -284,6 +287,15 @@ bool testBoundLabelToggleAndMainCanvasScope()
         XERROR("Enabled bound sample label did not render player glyphs");
         return false;
     }
+
+    MMM::Logic::RenderSnapshot ordinary;
+    // 即使用户保存了显示偏好，关闭专业模式后也不能泄露资源标签。
+    // 同时保留音符本体顶点，排除整张画布被清空的假通过。
+    // 新快照与上方专业模式使用相同布局，变化只能来自能力开关。
+    renderBoundTap(ordinary, true, "Basic2DCanvas", 0.0, 1.2F, false, false);
+    if ( !collectFirstLaneGlyphs(ordinary).empty() ||
+         ordinary.vertices.empty() )
+        return false;
 
     MMM::Logic::RenderSnapshot preview;
     // 预览区即便开启配置也不展示主画布标签，不能只验证全局开关为 false。

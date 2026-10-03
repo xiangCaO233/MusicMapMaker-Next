@@ -281,6 +281,9 @@ return {
 	["ui.settings.collaboration.apply_success"] = "服务器配置已保存，正在连接房间目录。",
 	["ui.settings.collaboration.apply_failed"] = "服务器配置无效或无法保存，请检查地址和端口。",
 	-- 设置搜索覆盖全部分类，定位后沿用原控件的权限、应用和保存流程。
+	["ui.settings.software.professional_mode"] = "专业编辑模式",
+	["ui.settings.software.professional_mode.hint"] = "开启高级工具栏、专业时间线、草稿、BMS、项目音频工具与多音轨采样编辑；关闭时使用单主音轨绑定，隐藏高级入口并清除采样放置选择。已有谱面音频保留播放。",
+	["ui.settings.software.professional_required"] = "请先在“设置 → 软件”中开启专业编辑模式。",
 	["ui.settings.search.hint"] = "搜索设置名称、说明、选项或近义词…",
 	["ui.settings.search.back"] = "返回搜索结果",
 	["ui.settings.search.clear"] = "清空搜索",

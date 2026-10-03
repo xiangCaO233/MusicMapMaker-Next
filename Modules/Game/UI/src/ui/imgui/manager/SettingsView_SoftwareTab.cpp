@@ -667,6 +667,28 @@ void SettingsView::drawSoftwareSettings()
         // 常规组包含程序级身份、帧调度、音频、皮肤、字体与光标设置。
         // 采用统一标签宽度，使动态 OpenAL 参数和字体行保持同一值列起点。
 
+        // 总开关放在常规组首部，默认用户只需要单主音轨与普通谱面编辑。
+        // 总开关属于软件配置，不写入单个谱面的元数据。
+        // 共用 changed 提交路径，保证多会话配置同步。
+        // 统一设置行身份让搜索能够展开分组并高亮真实控件。
+        // 提示说明既有数据保留，模式切换仅约束显示和编辑入口。
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.software.professional_mode").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox, bool) {
+                if ( FeedbackCheckbox("##ProfessionalEditing",
+                                      &settings.professionalMode) ) {
+                    changed = true;
+                }
+                if ( ImGui::IsItemHovered() ) {
+                    Utils::renderTooltip(
+                        TR_CACHE("ui.settings.software.professional_mode.hint")
+                            .data());
+                }
+            });
+
         // 语言选择使用固定自描述名称，选中后立即切换 Translator。
         addSettingItem(
             *sec,

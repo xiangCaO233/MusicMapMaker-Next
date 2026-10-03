@@ -1430,6 +1430,8 @@ private:
     config.visual.judgeline_pos     = 0.5F;
     // 先打开 BMS 编辑功能，使失败来自协作权限而非功能未启用。
     // 固定布局让 550 像素输入落到 BGM 区，150 像素落到玩家区。
+    // 开启专业总门禁，使本例只检验协作权限的拒绝与撤销通知。
+    config.settings.professionalMode = true;
     config.settings.enableBmsEditing = true;
 
     auto beatmap = makeBeatmap();

@@ -18,4 +18,19 @@ enum class EditTool {
     Layout,  ///< 画布布局调整工具。
 };
 
+/// @brief 将当前或待恢复工具约束到软件模式允许的交互集合。
+/// @param tool 用户请求或项目工作区保存的工具。
+/// @param professionalMode 当前软件级专业编辑开关。
+/// @return 配色工具在普通模式下回退为 Move，其他工具保持原值。
+/// @details 工具栏隐藏只是显示规则；命令与工作区恢复必须采用相同门禁。
+/// @warning UI 与逻辑热路径只判断枚举和布尔值，不访问配置或会话锁。
+inline EditTool resolveEditToolForMode(EditTool tool, bool professionalMode)
+{
+    // 基础工具和布局可独立使用，不能随高级工具一起被禁用。
+    return !professionalMode && (tool == EditTool::ColorBrush ||
+                                 tool == EditTool::ColorEraser)
+               ? EditTool::Move
+               : tool;
+}
+
 }  // namespace MMM::Logic

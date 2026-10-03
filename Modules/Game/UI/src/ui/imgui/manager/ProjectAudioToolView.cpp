@@ -1053,6 +1053,25 @@ void ProjectAudioToolView::clearActiveItem()
         }));
 }
 
+/// @brief 退出专业编辑时清除工具选择和未结束的方块手势，并关闭窗口。
+/// @details 音频资源与布局数据保留，只有下次放置的资源身份作废。
+/// 不提交布局保存，防止取消中的拖动覆盖用户之前保存的位置。
+/// 焦点请求同时作废，重新开启专业模式也不自动弹出工具。
+/// 逻辑空资源命令仅提交一次，后续关闭帧不重复入队。
+/// @warning 低频模式关闭路径，只访问工具本地缓存与命令队列。
+void ProjectAudioToolView::disableProfessionalEditing()
+{
+    if ( !m_isOpen && m_selectedAudioResourceId.empty() ) return;
+    clearActiveItem();
+    // 取消未提交手势，不能在鼠标松开时继续保存隐藏工具布局。
+    m_draggingItem.reset();
+    m_resizingItem.reset();
+    m_batchDragging    = false;
+    m_marqueeSelecting = false;
+    m_requestFocus     = false;
+    m_isOpen           = false;
+}
+
 /// @brief 开始单个方块拖动并准备吸附与可见性约束。
 /// @param itemIndex 命中的当前数组索引。
 /// @param mousePosition 按下时的逻辑画布坐标。
@@ -1752,6 +1771,11 @@ ImVec2 ProjectAudioToolView::calculateContentSize(float visibleWidth,
 /// 状态栏文本使用裁剪区保护右侧缩放控件的固定交互面积。
 void ProjectAudioToolView::update(UIManager* sourceManager)
 {
+    // 外部插件直接构造视图也不能绕过专业门禁，不提交 Begin 或焦点请求。
+    if ( !Config::AppConfig::instance().getEditorSettings().professionalMode ) {
+        disableProfessionalEditing();
+        return;
+    }
     // 翻译缓存先于窗口创建刷新，保证标题和弹窗 ID 在本帧一致。
     refreshTranslationCache();
     if ( m_requestFocus ) {

@@ -2,6 +2,7 @@
 
 #include "audio/AudioManager.h"
 #include "audio/AudioOriginAlignmentService.h"
+#include "common/EditTool.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -2624,7 +2625,10 @@ bool BeatmapSession::processCommands()
                 if constexpr ( std::is_same_v<T, CmdChangeTool> ) {
                     // 工具枚举映射翻译键，未知状态以“就绪”文本作为安全回退。
                     std::string toolName = TR("ui.status.ready").data();
-                    switch ( arg.tool ) {
+                    // 状态文字展示真正采用的工具，不能报告已拒绝的配色请求。
+                    switch ( resolveEditToolForMode(
+                        arg.tool,
+                        m_ctx->lastConfig.settings.professionalMode) ) {
                     case EditTool::Move:
                         toolName = TR("ui.status.tool.select_move").data();
                         break;
@@ -3210,7 +3214,7 @@ void BeatmapSession::handleCommand(const CmdSetCollaborationResources& cmd)
 /// @brief 应用全局编辑配置，并结束已隐藏草稿区的交互状态。
 /// @param cmd 新的完整编辑器配置快照。
 /// @details
-/// 关闭专业模式时只清理 Draft 相关选择、悬停和手势；关闭 Polyline 或 BMS
+/// 关闭专业模式时清理 Draft、采样放置与 BMS 相关交互；关闭 Polyline 或 BMS
 /// 编辑能力时清理所有新配置下不可编辑的对应对象。配置提交后把 ScrollCache
 /// 标脏，使轨道布局、判定线和滚动映射在下一次更新中使用新参数。
 ///
@@ -3218,14 +3222,41 @@ void BeatmapSession::handleCommand(const CmdSetCollaborationResources& cmd)
 /// 优先走标准 EndDrag，复用控制器已经实现的提交或撤销规则；选中集合和悬停
 /// 身份随后清理，避免 UI 继续引用新配置下不可见的实体。
 ///
-/// Professional、Polyline 和 BMS 是三个独立能力域。关闭 Professional 只影响
-/// Draft；关闭 Polyline 按新的 isNoteEditable 规则筛选 Note；关闭 BMS 则清空
-/// Sample Registry 的全部交互状态。一个能力域的清理不能误伤其他类型选择。
+/// Professional 是 Draft 与 BMS 的总门禁，BMS 子偏好仍单独保存。
+/// Polyline 继续按 isNoteEditable 筛选 Note；实际 BMS 能力关闭时清空
+/// Sample Registry 交互状态。能力清理不能删除或改写谱面对象数据。
 /// @warning
 /// 配置变更低频路径：草稿清理仅访问已选索引与当前交互实体，禁止整谱扫描。
 void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
 {
     if ( !cmd.config.settings.professionalMode ) {
+        const auto availableTool =
+            resolveEditToolForMode(m_ctx->currentTool, false);
+        if ( availableTool != m_ctx->currentTool ) {
+            // 配色手势未提交的目标只作撤销，避免隐藏工具后松键继续改写物件。
+            // 配色目标集合仅是暂存输入，清空不触碰正式 Note 或撤销历史。
+            // 必须先停用手势再替换工具，否则释放事件会交给基础工具处理旧目标。
+            // 当前工具已经属于基础集合时不执行此分支，保持正常绘制连续性。
+            m_ctx->brushState.isActive  = false;
+            m_ctx->eraserState.isActive = false;
+            m_ctx->eraserState.targetEntities.clear();
+            m_ctx->currentTool = availableTool;
+        }
+        // 专业能力关闭先结束采样或绑定音效的活动画笔，禁止松开鼠标后隐式提交。
+        if ( m_ctx->brushState.isActive &&
+             (m_ctx->brushState.createsAudioSample ||
+              m_ctx->brushState.activeSampleBinding) ) {
+            m_ctx->brushState.isActive           = false;
+            m_ctx->brushState.createsAudioSample = false;
+        }
+        // 仅清理放置偏好，不删除谱面中已存在的采样或绑定音频数据。
+        // 活动资源和选择资源分别属于手势快照与工具偏好，二者都必须清空。
+        // 只清空工具选择会让已开始的手势在后续 EndBrush 中继续生成采样。
+        // 普通音符且无音频绑定的活动画笔保留，避免切换误伤基础编辑。
+        m_ctx->brushState.selectedAudioResourceId.clear();
+        m_ctx->brushState.activeAudioResourceId.clear();
+        m_ctx->brushState.activeSampleBinding.reset();
+        m_ctx->brushState.selectedAudioTrackType = AudioTrackType::Effect;
         // 选择集合是局部索引，可快速判断拖动组中是否含 Draft，不遍历 Registry。
         const bool hasSelectedDraft = std::any_of(
             m_ctx->selectedNoteEntities.begin(),
@@ -3282,10 +3313,23 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
     const bool disablePolylineEditing =
         m_ctx->lastConfig.settings.enablePolylineEditing &&
         !cmd.config.settings.enablePolylineEditing;
+    // update 可能已经安装本轮配置，不能只比较 lastConfig 推断能力关闭边沿。
+    // 对新配置禁止的实际残留交互执行清理；空状态后续设置变更不会遍历采样域。
     const bool disableBmsEditing =
-        m_ctx->lastConfig.settings.enableBmsEditing &&
-        !cmd.config.settings.enableBmsEditing;
-    // 先根据旧新值计算能力关闭边沿，再提交新配置供 isNoteEditable 判断。
+        !cmd.config.settings.isBmsEditingEnabled() &&
+        (m_ctx->lastConfig.settings.isBmsEditingEnabled() ||
+         !m_ctx->selectedSampleEntities.empty() ||
+         m_ctx->hoveredObjectKind == ChartObjectKind::AudioSample ||
+         m_ctx->brushState.createsAudioSample ||
+         (m_ctx->isDragging &&
+          m_ctx->draggedObjectKind == ChartObjectKind::AudioSample));
+    // 隐藏采样前通过标准结束路径释放拖动状态，防止画布继续被旧手势占用。
+    if ( disableBmsEditing && m_ctx->isDragging &&
+         (m_ctx->draggedObjectKind == ChartObjectKind::AudioSample ||
+          !m_ctx->selectedSampleEntities.empty()) ) {
+        m_interaction->handleCommand(CmdEndDrag{});
+    }
+    // 先判断需清理的能力与交互，再提交配置供 isNoteEditable 判断。
     m_ctx->lastConfig = cmd.config;
     if ( disablePolylineEditing ) {
         // 能力关闭是低频设置动作，允许遍历 Note 交互视图清理不可编辑对象。

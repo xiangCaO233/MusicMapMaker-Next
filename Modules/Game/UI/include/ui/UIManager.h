@@ -213,6 +213,10 @@ public:
     /// @brief 打开项目音频工具并聚焦到前台。
     void openProjectAudioTool();
 
+    /// @brief 根据专业编辑总开关收起工具并清除音频放置状态。
+    /// @warning 每帧入口只比较缓存值，具体清理仅在关闭边沿发生。
+    void synchronizeProfessionalEditingMode();
+
     /// @brief 重新加载当前已打开控制器引用的项目音效。
     /// @warning 低频皮肤重载路径：每个已打开音效控制器最多触发一次单文件
     /// 解码，禁止放入每帧 UI 更新。
@@ -453,6 +457,9 @@ private:
 
     /// @brief 无项目默认工作区是否已经应用。
     bool m_noProjectWorkspaceDefaultApplied{ false };
+
+    /// @brief 上次应用的专业模式，首次普通编辑帧也必须清除恢复前的旧选择。
+    bool m_lastProfessionalEditingMode{ true };
 
     /// @brief 是否已请求重载皮肤相关图形资源。
     bool m_skinResourceReloadRequested{ false };

@@ -268,7 +268,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
             ctx.lastConfig.visual.trackLayout,
             itCamera->second.horizontalOffsetX,
             true,
-            ctx.lastConfig.settings.enableBmsEditing,
+            ctx.lastConfig.settings.isBmsEditingEnabled(),
             ctx.lastConfig.settings.professionalMode &&
                 ctx.composeLessonInputMode == ComposeLessonInputMode::Off,
             ctx.draftTrackCount,
@@ -284,7 +284,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     // 主音轨资源只能作为自动采样使用，不能附着到点击物件。
     // 门禁在激活之前执行，拒绝时只提供原因而不生成历史。
     const bool createsAudioSample = targetLane->kind == CanvasLaneKind::Bgm;
-    if ( !createsAudioSample &&
+    if ( ctx.lastConfig.settings.professionalMode && !createsAudioSample &&
          !ctx.brushState.selectedAudioResourceId.empty() &&
          ctx.brushState.selectedAudioTrackType ==
              ::MMM::AudioTrackType::Main ) {
@@ -307,7 +307,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     ctx.brushState.resumedEntity          = entt::null;
     ctx.brushState.resumedPracticeSlot    = -1;
     ctx.brushState.resumedPracticeToken   = 0;
-    if ( !createsAudioSample &&
+    if ( ctx.lastConfig.settings.professionalMode && !createsAudioSample &&
          !ctx.brushState.selectedAudioResourceId.empty() ) {
         // 音符绑定保留资源引用及实例音量，资源自身的公共音量不在此修改。
         // BGM 资源采用 activeAudioResourceId，避免同时保存两套绑定语义。
@@ -707,7 +707,7 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
             ctx.lastConfig.visual.trackLayout,
             itCamera->second.horizontalOffsetX,
             true,
-            ctx.lastConfig.settings.enableBmsEditing,
+            ctx.lastConfig.settings.isBmsEditingEnabled(),
             ctx.lastConfig.settings.professionalMode &&
                 ctx.composeLessonInputMode == ComposeLessonInputMode::Off,
             ctx.draftTrackCount,

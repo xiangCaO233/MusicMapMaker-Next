@@ -451,7 +451,7 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
         ctx.lastConfig.visual.trackLayout,
         isMainCanvas ? camera.horizontalOffsetX : 0.0F,
         isMainCanvas,
-        isMainCanvas && ctx.lastConfig.settings.enableBmsEditing,
+        isMainCanvas && ctx.lastConfig.settings.isBmsEditingEnabled(),
         // 拖拽落点使用与教学快照一致的可见轨道，不能落到隐藏草稿区。
         isMainCanvas && ctx.lastConfig.settings.professionalMode &&
             ctx.composeLessonInputMode == ComposeLessonInputMode::Off,

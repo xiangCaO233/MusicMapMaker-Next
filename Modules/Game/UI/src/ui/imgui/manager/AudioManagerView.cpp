@@ -1797,8 +1797,14 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     rowData.m_kind == AudioTableRowKind::MainTrack ||
                     rowData.m_kind == AudioTableRowKind::ProjectSfx;
                 // 仅项目资源可拖放，且载荷格式要求 ID 能装入固定缓冲区。
+                // 简化模式仍可管理用于单主音轨绑定的资源，但不生成采样拖放载荷。
+                // 资源表和正在播放的控制器继续保留，关闭能力不删除导入的音频。
+                // 门禁取软件配置，避免列表缓存过期时仍允许拖动上一帧资源。
                 const bool canDragAudioResource =
                     isProjectAudioResource && !readOnly &&
+                    Config::AppConfig::instance()
+                        .getEditorSettings()
+                        .professionalMode &&
                     Common::canStoreAudioResourceDragId(rowData.m_id);
                 if ( canDragAudioResource &&
                      ImGui::BeginDragDropSource(ImGuiDragDropFlags_None) ) {
@@ -1817,7 +1823,10 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     }
                     ImGui::EndDragDropSource();
                 }
-                if ( isProjectAudioResource && !readOnly ) {
+                if ( isProjectAudioResource && !readOnly &&
+                     Config::AppConfig::instance()
+                         .getEditorSettings()
+                         .professionalMode ) {
                     // 类型修改和移除只属于项目模型，皮肤资源不开放右键菜单。
                     const std::string contextMenuId =
                         fmt::format("AudioTrackContext_{}_{}_{}",
@@ -1895,6 +1904,9 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                     TR("ui.audio_manager.column_type").data(),
                                     typeText.c_str());
                     if ( isProjectAudioResource && !readOnly &&
+                         Config::AppConfig::instance()
+                             .getEditorSettings()
+                             .professionalMode &&
                          !canDragAudioResource ) {
                         // 过长 ID 无法写入固定载荷时明确说明拖放不可用。
                         tooltipText += "\n";
@@ -2462,7 +2474,14 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     ImGui::GetStyle().FrameRounding);
 
                 // 项目是工具的数据源；不存在项目时阻止点击提交。
-                ImGui::BeginDisabled(!project || readOnly);
+                // 简化编辑保留灰色入口，解释专业模式前置条件。
+                // 专业能力与协作只读权限同时约束工具入口，不能互相替代。
+                // 禁用提示可悬浮读取，用户因此能够找到设置中的启用位置。
+                // UIManager 也复核能力，防止快捷操作或恢复工作区绕过灰色按钮。
+                const bool professional = Config::AppConfig::instance()
+                                              .getEditorSettings()
+                                              .professionalMode;
+                ImGui::BeginDisabled(!project || readOnly || !professional);
                 if ( ::MMM::UI::FeedbackButton(
                          fmt::format("{}##ProjectAudioTool", ICON_MMM_MUSIC)
                              .c_str(),
@@ -2480,7 +2499,10 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                          ImGuiHoveredFlags_AllowWhenDisabled) ) {
                     // 即使无项目也显示提示，让用户理解入口用途。
                     Utils::renderTooltip(
-                        TR("ui.audio_manager.open_project_audio_tool").data());
+                        TR(professional
+                               ? "ui.audio_manager.open_project_audio_tool"
+                               : "ui.settings.software.professional_required")
+                            .data());
                 }
             });
 

@@ -151,7 +151,8 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
     case Event::SettingsTab::Software: {
         // 软件页标签最多，覆盖外观、保存、自动任务、时间与同步配置。
         // 数组顺序按页面分组排列，便于与 SoftwareTab 的控件清单人工核对。
-        const std::array<const char*, 46> labels{
+        const std::array<const char*, 47> labels{
+            TR_CACHE("ui.settings.software.professional_mode").data(),
             TR_CACHE("ui.settings.software.language").data(),
             TR_CACHE("ui.settings.software.default_creator").data(),
             TR_CACHE("ui.settings.software.framelimit").data(),

@@ -48,6 +48,9 @@ void MainMenuActionItem::update(MainMenuContext& context)
 /// @note 业务处理器可按当前上下文覆盖默认图标与快捷键提示。
 void MainMenuActionItem::render(MainMenuContext& context)
 {
+    // 隐藏高级入口时不生成菜单控件；延迟窗口仍由动作处理器负责收起。
+    // 可见性与权限分开，其他禁用条目继续保留原有置灰反馈。
+    if ( m_actionHandler && !m_actionHandler->isVisible(context) ) return;
     const bool enabled =
         !m_actionHandler || m_actionHandler->isEnabled(context);
     const char* icon =

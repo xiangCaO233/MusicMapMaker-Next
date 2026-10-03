@@ -767,12 +767,15 @@ void ToolbarView::update(UIManager* sourceManager)
     // 可见性和美学设置使用同一编辑器设置引用，贯穿本帧绘制。
     //
     // toolbarVisibility 把控件分为状态工具和独立按钮，两组各自保持配置顺序。
-    // 隐藏某项只影响本帧布局，不关闭其对应编辑器功能；若某个已打开弹层入口
-    // 被设置隐藏，入口互斥与后续渲染函数仍会根据成员状态处理现有窗口。
+    // 专业能力先过滤用户偏好；隐藏入口也关闭现有浮层，避免留下无锚点窗口。
+    // 原偏好不被掩码改写，重新开启专业模式后可以恢复用户的工具栏布局。
     // aesthetics 引用仅用于读取尺寸，不在工具栏内修改主题配置。
     auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
-    auto& aesthetics     = editorSettings.aesthetics;
-    const auto& toolbarVisibility   = editorSettings.toolbarVisibility;
+    // 无应用服务时也不能保留隐藏配色工具；布局返回工具仍由命令层再次约束。
+    m_currentTool = Logic::resolveEditToolForMode(
+        m_currentTool, editorSettings.professionalMode);
+    auto&       aesthetics        = editorSettings.aesthetics;
+    const auto  toolbarVisibility = editorSettings.effectiveToolbarVisibility();
     const auto& stateToolVisibility = toolbarVisibility.stateTools;
     const auto& independentButtonVisibility =
         toolbarVisibility.independentButtons;
@@ -2309,7 +2312,12 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     const int draftRows  = trackLayout.draftRows;
     const int bgmRows    = trackLayout.bgmRows;
     // totalRows 已包含各区域标题、总控和零轨道占位。
-    const int totalRows = trackLayout.totalRows;
+    // 普通模式只展示打击音、节拍器与玩家轨混音；草稿和 BGM 属于专业区域。
+    // 裁剪总行数同时缩短弹层高度，不绘制占位行或留下可点击的隐藏控件。
+    const int totalRows =
+        Config::AppConfig::instance().getEditorSettings().professionalMode
+            ? trackLayout.totalRows
+            : 8 + playerRows;
 
     // 音效工具不跨视口，定位和高度上限都以主视口为边界。
     ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
@@ -5423,14 +5431,18 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                                 .data());
             }
 
-            // 绑定采样标签属于离散显示开关，切换后立即保存。
-            visual = appConfig.getVisualConfig();
-            if ( ::MMM::UI::FeedbackCheckbox(
-                     TR("ui.settings.visual.note_bound_sample_labels").data(),
-                     &visual.showBoundSampleLabels) ) {
-                applyVisualConfig(visual);
-                appConfig.save();
-                m_layoutVisualConfigDirty = false;
+            // 高级采样辅助文字属于专业编辑，关闭时不展示其控制项。
+            if ( appConfig.getEditorSettings().professionalMode ) {
+                // 绑定采样标签属于离散显示开关，切换后立即保存。
+                visual = appConfig.getVisualConfig();
+                if ( ::MMM::UI::FeedbackCheckbox(
+                         TR("ui.settings.visual.note_bound_sample_labels")
+                             .data(),
+                         &visual.showBoundSampleLabels) ) {
+                    applyVisualConfig(visual);
+                    appConfig.save();
+                    m_layoutVisualConfigDirty = false;
+                }
             }
 
             // 填充模式通过整数适配 ImGui Combo，再显式转换回强类型枚举。

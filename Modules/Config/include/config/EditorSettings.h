@@ -855,8 +855,8 @@ struct EditorSettings {
     /// @brief 移除折线路径上的物件
     bool removeObjectsOnPolylinePath{ false };
 
-    /// @brief 各画布共用的专业模式，统一控制时间线专业分轨与草稿区显示和编辑。
-    /// @details 由 AppConfig 全局持久化，BMS 与折线编辑开关保持独立。
+    /// @brief 软件级专业编辑模式，统一控制高级时间线、草稿与项目音频编辑。
+    /// @details 默认关闭；保留 BMS 子开关偏好，但只有专业模式允许它生效。
     bool professionalMode{ false };
 
     /// @brief 是否允许编辑 Flick、Polyline 及折线子物件。
@@ -864,6 +864,37 @@ struct EditorSettings {
 
     /// @brief 是否显示并允许编辑 BGM 轨道及自动采样。
     bool enableBmsEditing{ true };
+
+    /// @brief 判断 BMS 轨道和自动采样的实际编辑能力。
+    /// @return 专业模式与 BMS 子开关同时开启时返回 true。
+    /// @details 偏好仍独立持久化，退出专业模式不擦除用户的子开关选择。
+    /// 所有几何、绘制和输入路径共用此判断，避免仅菜单置灰而仍可放置。
+    /// 已有谱面资源和播放计划不由此能力判断删除或改变。
+    /// @warning 渲染与逻辑热路径只读取两个值语义标志，无锁与分配。
+    bool isBmsEditingEnabled() const
+    {
+        return professionalMode && enableBmsEditing;
+    }
+
+    /// @brief 按专业能力过滤本帧工具栏显示，不改写用户保存的显示偏好。
+    /// @return 普通模式只保留移动、框选、绘制、布局、四个辅助项与播放按钮。
+    /// @details 配色工具和参数快捷入口在普通模式下无有效显示状态。
+    /// 开启专业模式后仍沿用原显示偏好，避免每次切换都要重新配置工具栏。
+    /// @warning UI 热路径只复制固定数量的布尔值，无锁、分配或持久化操作。
+    ToolbarVisibilityConfig effectiveToolbarVisibility() const
+    {
+        auto visibility = toolbarVisibility;
+        if ( !professionalMode ) {
+            // 能力掩码独立于可见性偏好，旧工作区和菜单都不能绕过总开关。
+            visibility.stateTools.colorBrush            = false;
+            visibility.stateTools.colorEraser           = false;
+            visibility.independentButtons.notePalette   = false;
+            visibility.independentButtons.playbackSpeed = false;
+            visibility.independentButtons.trackCount    = false;
+            visibility.independentButtons.beatDivisor   = false;
+        }
+        return visibility;
+    }
 
     /// @brief 粘贴后是否清空旧选择并选中新粘贴出的物件
     bool selectPastedObjects{ false };

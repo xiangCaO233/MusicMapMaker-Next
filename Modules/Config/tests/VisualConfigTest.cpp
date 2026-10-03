@@ -357,7 +357,7 @@ bool testBmsEditingConfigRoundTrip()
 /// @note false 和 true 均执行，以覆盖迁移条件两端而非单一默认值。
 /// @details 当前格式只应写 professionalMode，不再产生两个废弃字段。
 /// 旧 timelineProfessionalMode 仍能恢复，且新字段同时存在时优先。
-/// 独立编辑开关刻意取反，证明迁移不会把专业模式扩散到它们。
+/// 子开关偏好仍独立保存，实际 BMS 能力要求专业模式与子开关同时开启。
 bool testProfessionalModeConfigMigration()
 {
     // 循环两种布尔值，确保迁移不是仅对启用状态特判。
@@ -392,6 +392,22 @@ bool testProfessionalModeConfigMigration()
                 "Global professional mode migration or independent editing "
                 "preferences failed");
             return false;
+        }
+    }
+    // 直接构造、写出再读取两条路径共同保护有效能力与持久偏好的分工。
+    // 模式切换不会修改用户的子开关值，也不依赖 UI 是否曾打开设置页。
+    // 完整组合验证总门禁：子偏好为真也不能绕过默认关闭的专业能力。
+    // 序列化应保留子偏好，重新启用专业模式后恢复用户原先的选择。
+    for ( const bool professional : { false, true } ) {
+        for ( const bool bms : { false, true } ) {
+            MMM::Config::EditorSettings source;
+            source.professionalMode = professional;
+            source.enableBmsEditing = bms;
+            const auto restored =
+                nlohmann::json(source).get<MMM::Config::EditorSettings>();
+            if ( restored.enableBmsEditing != bms ||
+                 restored.isBmsEditingEnabled() != (professional && bms) )
+                return false;
         }
     }
     // 循环之外额外比较直接构造和空 JSON 的默认状态。

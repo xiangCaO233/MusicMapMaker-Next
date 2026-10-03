@@ -5,6 +5,11 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/SettingsSearchIndex.h"
 #include "ui/imgui/manager/SettingsView.h"
+#include "ui/imgui/menu/MainMenuTypes.h"
+#include "ui/imgui/menu/actions/MainMenuEditActions.h"
+#include "ui/imgui/menu/interfaces/IMainMenuItemActionHandler.h"
+#include "ui/imgui/menu/interfaces/IMainMenuToggleItemActionHandler.h"
+#include "ui/imgui/status/IStatusMessageSink.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -122,6 +127,56 @@ std::set<std::string> matches(SettingsSearchIndex& index,
     for ( const auto& match : index.results() )
         result.insert(index.entries()[match.m_index].m_labelKey);
     return result;
+}
+
+/// @brief 菜单查询测试的状态接收器，不持有真正状态栏或原生窗口。
+/// @details 本场景只查询入口能力，不应产生消息；接收器满足生产上下文契约。
+class MenuQueryStatusSink final : public MMM::UI::IStatusMessageSink
+{
+public:
+    /// @brief 接收并忽略不参与能力判断的状态消息。
+    /// @param message 查询测试不检查的临时文本。
+    /// @param durationSeconds 不启动真实计时器的显示时长。
+    void showStatusMessage(std::string message, float durationSeconds) override
+    {
+        (void)message;
+        (void)durationSeconds;
+    }
+};
+
+/// @brief 验证专业总开关约束高级菜单，并保留 BMS 子开关偏好。
+/// @return 普通模式入口隐藏或禁用，专业模式恢复且子偏好未被修改时返回 true。
+/// @details 使用生产动作处理器，不调用 execute 或 save，也不创建项目会话。
+/// 展示值与持久偏好分别检查，避免把置灰的勾选误解为仍可使用 BMS。
+/// 测试先关闭再开启总开关，保证不依赖动作构造时的模式快照。
+/// 音量菜单需要真正隐藏；仅禁止点击不足以简化普通编辑的入口。
+/// 模式恢复时复用相同动作实例，检查其查询会采用最新软件配置。
+/// 两个原始配置值均在返回前恢复，失败路径也不会污染其他套件用例。
+/// 不消费快捷键或提交命令，逻辑命令拒绝另由会话回归覆盖。
+bool checkProfessionalMenuPolicy()
+{
+    auto& settings = MMM::Config::AppConfig::instance().getEditorSettings();
+    const auto originalProfessional = settings.professionalMode;
+    const auto originalBms          = settings.enableBmsEditing;
+    auto       bms                  = MMM::UI::createBmsEditingToggleAction();
+    auto       volume = MMM::UI::createEditSelectedObjectVolumeAction();
+    MenuQueryStatusSink      sink;
+    MMM::UI::MainMenuContext context{ sink };
+    settings.enableBmsEditing = true;
+    settings.professionalMode = false;
+    // 菜单展示有效状态，但不能把普通模式的 false 写回已保存的子偏好。
+    const bool disabled = !bms->isEnabled(context) && !*bms->value(context) &&
+                          !volume->isVisible(context) &&
+                          !volume->isEnabled(context) &&
+                          settings.enableBmsEditing;
+    settings.professionalMode = true;
+    const bool restored = bms->isEnabled(context) && *bms->value(context) &&
+                          volume->isVisible(context) &&
+                          volume->isEnabled(context);
+    // 恢复测试前的配置，避免在同进程套件中影响其他 UI 用例。
+    settings.professionalMode = originalProfessional;
+    settings.enableBmsEditing = originalBms;
+    return disabled && restored;
 }
 
 /// @brief 检查分类覆盖与复合身份唯一性，防止同名字段跨页合并。
@@ -343,7 +398,13 @@ bool checkNavigation(MMM::UI::UIManager& manager)
     // 此检查不调用 save，也不创建音频、光标纹理或原生窗口。
     settings.cursorStyle = original;
     if ( !hidden ) XERROR("设置搜索测试：隐藏设置未回退到所属分组");
-    return hidden;
+    if ( !hidden ) return false;
+    // 专业模式位于软件页通用组，搜索导航应能定位到真实开关并绘制高亮。
+    const bool professionalChosen = SettingsSearchTestAccess::choose(
+        view, SettingsTab::Software, "ui.settings.software.professional_mode");
+    frame();
+    frame();
+    return professionalChosen && SettingsSearchTestAccess::highlighted(view);
 }
 }  // namespace
 
@@ -362,7 +423,8 @@ bool checkNavigation(MMM::UI::UIManager& manager)
 /// 所有资源都通过值语义或上下文作用域释放，无跨线程等待。
 int main(int argc, char** argv)
 {
-    if ( argc != 2 || !checkCatalog() ) return 1;
+    if ( argc != 2 || !checkCatalog() || !checkProfessionalMenuPolicy() )
+        return 1;
     auto&      translator   = MMM::Translation::getActiveTranslator();
     const auto translations = std::filesystem::path(argv[1]);
     if ( !translator.loadLanguage("zh_cn",
