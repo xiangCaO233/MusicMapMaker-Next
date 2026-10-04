@@ -39,6 +39,26 @@ static bool hasMalodyMetadata(const TimelineComponent& tl)
         ::MMM::TimingMetadataType::MALODY);
 }
 
+/// @brief 持续效果保留最低积分精度，并接受更高的真实输出密度。
+/// @param curve 已验证并绑定拍轴的段落，输出数量有领域上限。
+/// @param effect Jump 是离散脉冲，不能补点以提高积分精度。
+/// @return 包含两端的运行时事件数量，供预分配和生成共同使用。
+/// @warning 仅脏缓存重建调用，不引入逐帧采样或额外 ECS 实体。
+/// @note 高密度时使用输出时间网格，拍域或非整周期尾点不能均分替代。
+static std::size_t runtimeInterpolationSampleCount(
+    const TimingInterpolation& curve, TimingEffect effect)
+{
+    const auto outputCount = timingInterpolationSampleCount(curve);
+    // 用户降低输出密度时仍保留原来的 240 Hz / 最少 128 段精度。
+    // 提高密度则必须参与实际运行，不能让 5000 Hz 段落仍只有 240 Hz。
+    if ( effect == TimingEffect::JUMP ) return outputCount;
+    const auto minimumCount =
+        static_cast<std::size_t>(
+            std::clamp(std::ceil(curve.m_duration * 240.0), 128.0, 65536.0)) +
+        1;
+    return std::max(outputCount, minimumCount);
+}
+
 /// @brief 根据时间线注册表重建滚动缓存。
 /// @pre 时间点的时间戳满足排序要求；注册表在整个重建期间保持稳定。
 /// @param timelineRegistry 时间线注册表。
@@ -75,13 +95,13 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
             { entity, &tlView.get<const TimelineComponent>(entity) });
     }
 
-    // 运行时使用固定高密度曲线离散积分，独立于文件输出采样率。
+    // 运行时保留最低积分密度；更高的文件输出采样率同时提升实际精度。
     // 这些临时组件只在脏缓存重建中存在，不成为 ECS 实体或表格行。
     m_interpolations.clear();
     // 源 registry 在重建时稳定，发布描述持有独立值。
     // 旧 BPM 缓存非空不等于映射仍有效，必须重新绑定。
     // 发布新描述不修改旧快照中的数学缓存。
-    // 持续参数仍用运行时高密度预算，与导出密度分离。
+    // 持续参数的采样数量不低于导出密度，避免播放与写出高频曲线不一致。
     // Jump 按真实分拍触发，不能用平均 Hz 等距触发。
     // 红线数据只在脏缓存重建收集一次；各效果不能用自己的附带 BPM 作拍轴。
     std::vector<Timing> redLines;
@@ -119,34 +139,29 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
                                      curve });
         // Jump 是离散位移脉冲，运行时必须与实际写出的次数一致。
         const auto count =
-            component.m_effect == TimingEffect::JUMP
-                ? timingInterpolationSampleCount(curve)
-                : static_cast<std::size_t>(std::clamp(
-                      std::ceil(curve.m_duration * 240.0), 128.0, 65536.0)) +
-                      1;
+            runtimeInterpolationSampleCount(curve, component.m_effect);
         runtimeCount += count - 1;
     }
     // 提前一次性保留空间，生成期间组件指针不会因容器扩张而失效。
     // 全部曲线都先算数量，再开始存储借用指针，禁止生成过程中扩容失效。
     // 单次重建完成后这些临时组件可以销毁，永久缓存只保存数值积分段。
     curveEvents.reserve(runtimeCount);
-    // 持续参数使用固定运行时预算，导出密度很低时也不降低画布表现。
+    // 持续参数保留运行时精度下限，导出密度很低时也不降低画布表现。
     // Jump 是事件脉冲而非持续状态，次数必须与写出数量一致。
     // 各类参数共享曲线求值入口，但积分与位移应用仍由已有效果逻辑处理。
     for ( const auto& segment : m_interpolations ) {
         const auto& curve = segment.interpolation;
         const auto  count =
-            segment.effect == TimingEffect::JUMP
-                ? timingInterpolationSampleCount(curve)
-                : static_cast<std::size_t>(std::clamp(
-                      std::ceil(curve.m_duration * 240.0), 128.0, 65536.0)) +
-                      1;
+            runtimeInterpolationSampleCount(curve, segment.effect);
+        // 达到精度下限后逐点复用输出网格；不将非整周期或分拍网格等分。
+        // 低密度持续效果继续用原有均分积分网格，Jump 始终按真实脉冲触发。
+        const bool useOutputGrid =
+            count == timingInterpolationSampleCount(curve);
         for ( std::size_t index = 1; index < count; ++index ) {
             const double elapsed =
-                segment.effect == TimingEffect::JUMP
-                    ? timingInterpolationSampleElapsed(curve, index)
-                    : curve.m_duration * static_cast<double>(index) /
-                          static_cast<double>(count - 1);
+                useOutputGrid ? timingInterpolationSampleElapsed(curve, index)
+                              : curve.m_duration * static_cast<double>(index) /
+                                    static_cast<double>(count - 1);
             TimelineComponent event;
             // 虚拟采样的身份为 null，因此不能成为可编辑标记或时间线表格行。
             // 贝塞尔控制点按真实时间求值，不直接把采样下标当成贝塞尔参数。

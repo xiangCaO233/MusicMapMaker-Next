@@ -3,6 +3,7 @@
 #include "canvas/CanvasSnapshotPrepare.h"
 #include "canvas/TimelineAuxiliaryWindowState.h"
 #include "canvas/TimingFunctionEditorState.h"
+#include "canvas/TimingInterpolationPreview.h"
 #include "canvas/TimingTemplateEditorState.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "graphic/imguivk/VKTextureAtlas.h"
@@ -439,8 +440,8 @@ private:
     /// @warning 每帧 UI 输入路径；只读取快照，不等待逻辑线程。
     bool handleInterpolationInteraction(const ImVec2& position,
                                         const ImVec2& size, bool hovered);
-    /// @brief 绘制段落范围和原函数曲线，与导出密度分离。
-    /// @warning 每帧覆盖层；每个可见段最多绘制 129 个曲线顶点。
+    /// @brief 绘制段落范围，使用与编辑窗口一致的峰谷保留预览。
+    /// @warning 每帧复用缓存；每段最多 4096 个像素桶，每桶最多四个顶点。
     void renderInterpolationOverlay(const ImVec2& position, const ImVec2& size);
     /// @brief 在下一次弹窗绘制中开始创建或修改段落。
     void openInterpolationEditor(
@@ -469,6 +470,11 @@ private:
     void renderTimingFunctionEditor();
     /// @brief 取消、绘制或拟合只修改这个模态工作状态。
     TimingFunctionEditorState m_timingFunctionEditor;
+    /// @brief 按快照槽复用完整曲线的像素代表点，移动视口不重新求值。
+    /// @warning 每帧只借用缓存；定义或像素预算变化才捕获不可变函数所有权。
+    std::vector<TimingInterpolationPreview> m_interpolationOverlayPreviews;
+    /// @brief 新建手势独立复用预览，不能覆盖已保存段落的缓存。
+    TimingInterpolationPreview m_interpolationDragPreview;
     /// @brief 在拖动期间保留段首，不让手势变成单点放置。
     bool m_isInterpolationDragging{ false };
     /// @brief 段落编辑窗口的值语义工作副本。

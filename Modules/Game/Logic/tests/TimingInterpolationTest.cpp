@@ -8,6 +8,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/beatmap/BeatmapSpeedTransform.h"
+#include "mmm/timing/Timing.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -201,9 +202,9 @@ bool testActionsAndCache()
     overlap.time = 2.0;
     controller.handleCommand(overlap);
     ok &= check(view.size() == 1, "overlapping segment rejected");
-    // 改变输出密度不得改变编辑器中缓存积分的形状或节拍相位。
+    // 低于运行时精度下限的输出密度不应降低编辑器的积分精度。
     // 两个缓存都从同一实体状态建立，唯一差异是写出采样密度。
-    // 比较段内投影位置，可以发现把输出密度错误用于运行时积分的回归。
+    // 比较段内投影位置，防止低密度输出使原有积分网格退化。
     // 使用固定查询时间避免播放状态与 UI 更新影响结果。
     // 快照描述数量额外确认段落仍有可编辑的整体身份。
     // 虚拟采样不应伪造 effects 标记，表格只展示原实体。
@@ -611,6 +612,93 @@ bool testStorage()
     }
     return ok;
 }
+/// @brief 高频插值的运行时状态与导出网格一致，积分仍保留实际振荡。
+/// @details 使用截图中的 5000 Hz 正弦定义，旧 240 Hz 网格无法通过。
+/// @return 全部导出点间状态、累计距离和精确段尾符合预期时为真。
+/// @note 查询落在两个样本之间，验证真实阶梯状态而非恰好命中数学端点。
+/// @note 原生段落保持一个实体，虚拟采样不能增加可编辑时间线对象。
+/// @note 秒域持续效果的阶梯语义与外部格式落点一致，非 Jump 的脉冲累加。
+/// @note 所有查询读取已准备缓存，不用等待播放线程推进来验证精度。
+bool testHighDensityRuntime()
+{
+    MMM::TimingInterpolation curve;
+    curve.m_duration         = 2.11587;
+    curve.m_samplesPerSecond = 5000;
+    // 5000 Hz 指每秒输出点密度，100 指公式角频率，两者不能混为周期数。
+    // 时长尾部不落在 0.2 毫秒网格，用它覆盖精确端点的独立处理。
+    double      startValue = 0;
+    std::string error;
+    if ( !MMM::setTimingInterpolationFunction(
+             curve, "sin(100*t)", startValue, error) )
+        return check(false, "high density formula");
+    entt::registry registry;
+    const auto     entity = registry.create();
+    // 单一真实 Scroll 实体足以覆盖运行时展开，不需要加载谱面文件。
+    // 注册表保持稳定，缓存重建期间没有动作线程修改组件。
+    registry.emplace<MMM::Logic::TimelineComponent>(entity,
+                                                    1.0,
+                                                    MMM::TimingEffect::SCROLL,
+                                                    startValue,
+                                                    MMM::TimingMetadata{},
+                                                    curve);
+    MMM::Config::EditorConfig config;
+    // 显式开启实际滚动映射，不能用恒速显示让积分错误隐藏在配置后面。
+    // 固定缩放使距离单位为每秒 500 像素，便于独立解析检查。
+    config.visual.enableLinearScrollMapping = false;
+    config.visual.timelineZoom              = 1;
+    MMM::Logic::System::ScrollCache cache;
+    cache.rebuild(registry, config, nullptr);
+    // 空谱面指针选择保守参考 BPM，初始 BPM 比例仍为一。
+    // 这里关注 SV 本身的积分，不混入红线重置 SV 的格式差异。
+    MMM::Timing timing;
+    // 领域时间戳是毫秒，运行时是秒；非零段首覆盖两套单位之间的转换。
+    // 导出只展开独立时间点，不修改 registry 或原生段落定义。
+    timing.m_timestamp             = 1000;
+    timing.m_timingEffect          = MMM::TimingEffect::SCROLL;
+    timing.m_timingEffectParameter = startValue;
+    timing.m_interpolation         = curve;
+    const auto output = MMM::sampleTimingInterpolations({ timing });
+    bool       ok = check(output.size() == 10581, "high density output count");
+    // 数量异常也继续收集其他失败，末点查询不依赖数组非空。
+    // 输出模型的端值检查与运行时积分检查分别报告，便于定位退化层次。
+    // 每个点到下一个点的中间时刻应使用前一个实际输出参数。
+    // 独立 sin 真值保证导出和运行时不能共同用错函数而互相掩盖。
+    // 最后短周期也纳入积分，不能将全段按相同点数重新均分。
+    double integral = 0;
+    for ( std::size_t index = 1; index < output.size(); ++index ) {
+        // 时间戳已按真实落点排序，循环只扫描一次且不修改导出数组。
+        // 累计量直接采用导出阶梯值，不能从被测 ScrollCache 段表反推。
+        const auto&  previous = output[index - 1];
+        const double begin    = previous.m_timestamp / 1000;
+        const double end      = output[index].m_timestamp / 1000;
+        const double query    = (begin + end) / 2;
+        ok &=
+            near(previous.m_timingEffectParameter, std::sin(100 * (begin - 1)));
+        ok &= near(cache.getTimingStateAt(query).sv,
+                   previous.m_timingEffectParameter);
+        integral += (end - begin) * previous.m_timingEffectParameter;
+    }
+    // 段前默认流速为一，累计的初始 500 像素不属于正弦区间。
+    // 左端阶梯积分允许有限截断误差，但 5000 Hz 不能仍按 240 Hz 计算。
+    const double endTime = 1 + curve.m_duration;
+    // 解析积分对完整时长求值，独立于两套采样器及其索引舍入。
+    // 距离误差与状态误差分别检查，防止正确尾值掩盖中间漏采样。
+    const double expectedIntegral =
+        (1 - std::cos(100 * curve.m_duration)) / 100;
+    ok &= check(near(cache.getAbsY(endTime), 500 + 500 * integral, 1e-6),
+                "runtime distance matches high density output");
+    ok &= check(near(cache.getAbsY(endTime), 500 + 500 * expectedIntegral, .11),
+                "runtime distance retains high frequency integral");
+    // 尾参数应精确保持用户指定时长，超过段尾也继承该值。
+    ok &= check(near(cache.getTimingStateAt(endTime + .001).sv,
+                     std::sin(100 * curve.m_duration)),
+                "high density endpoint");
+    ok &= check(registry.view<MMM::Logic::TimelineComponent>().size() == 1 &&
+                    cache.getInterpolations().size() == 1,
+                "high density retains one editable segment");
+    // 内部数万次积分事件仅属于派生缓存，撤销和保存对象仍是完整段落。
+    return check(ok, "high density state matches exported samples");
+}
 }  // namespace
 
 /// @brief 汇总数学、事务和格式边界，任一失败使 CTest 报告失败。
@@ -621,12 +709,15 @@ bool testStorage()
 /// 用例输出不写入源码资源目录。
 int main()
 {
-    const bool curves     = testCurves();
-    const bool actions    = testActionsAndCache();
-    const bool beats      = testBeatCommandsAndCache();
-    const bool boundaries = testBoundariesAndBatch();
-    const bool clipboard  = testClipboard();
-    const bool storage    = testStorage();
-    return curves && actions && beats && boundaries && clipboard && storage ? 0
-                                                                            : 1;
+    const bool curves      = testCurves();
+    const bool actions     = testActionsAndCache();
+    const bool beats       = testBeatCommandsAndCache();
+    const bool boundaries  = testBoundariesAndBatch();
+    const bool clipboard   = testClipboard();
+    const bool storage     = testStorage();
+    const bool highDensity = testHighDensityRuntime();
+    return curves && actions && beats && boundaries && clipboard && storage &&
+                   highDensity
+               ? 0
+               : 1;
 }

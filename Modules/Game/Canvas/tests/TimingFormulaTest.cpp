@@ -74,6 +74,35 @@ bool testInterpolationPreview()
     // 只检查布尔返回不足以发现暗中重建，数组身份也必须保持不变。
     ok &= !preview.update(curve, start, 1100) &&
           preview.points().data() == cached;
+    // 时间线与弹窗共享相同缓存：纵向时间预算仍以像素长度提供。
+    // 复现 sin(100*t)、5000 Hz 和非整周期时长，约有 67 次过零。
+    // 全段高密度采样不能退化为 128 段，每相邻点的参数差应小于百分之一。
+    curve.m_duration         = 2.11587;
+    curve.m_samplesPerSecond = 5000;
+    if ( !MMM::setTimingInterpolationFunction(
+             curve, "sin(100*t)", start, error) )
+        return false;
+    ok &= preview.update(curve, start, 1100);
+    ok &= preview.visibleSampleCount() == 10581 && crossings() == 67;
+    // 独立解析式验证缓存真值，并检查实际连线的中点误差。
+    // 后者能发现点本身正确、相邻点却太稀疏造成的折线失真。
+    // 容差使用参数值单位，不随图表的横纵轴方向改变。
+    const auto& timelinePoints = preview.points();
+    for ( std::size_t index = 1; index < timelinePoints.size(); ++index ) {
+        const auto&  previous = timelinePoints[index - 1];
+        const auto&  current  = timelinePoints[index];
+        const double midpoint = (previous.m_progress + current.m_progress) / 2;
+        const double interpolated = (previous.m_value + current.m_value) / 2;
+        ok &= std::abs(current.m_value - std::sin(100 * curve.m_duration *
+                                                  current.m_progress)) < 1e-8;
+        ok &= std::abs(interpolated -
+                       std::sin(100 * curve.m_duration * midpoint)) < .01;
+    }
+    // 播放平移不会改变定义和像素长度，数组身份必须稳定以免逐帧重新求值。
+    cached = preview.points().data();
+    ok &= !preview.update(curve, start, 1100) &&
+          preview.points().data() == cached;
+    curve.m_samplesPerSecond = 1000;
     // 更长区间有六万个输出点，但几何仍受屏幕宽度预算限制。
     // 每个像素跨过多个周期，保留峰谷才能避免伪造一条低频曲线。
     // 六十秒保持输出数量压力，振荡频率受领域积分缓存的合法性预算约束。

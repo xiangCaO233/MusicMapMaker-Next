@@ -359,7 +359,7 @@ bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
 }
 
 /// @brief 绘制完整区间带和连续原函数，既保留整体段落又能看出变化方向。
-/// @warning 每帧覆盖层，采样上限固定，不随输出 Hz 或持续时间增加。
+/// @warning 每帧只投影像素代表点；定义或缩放改变才重建有界采样缓存。
 /// @param position 图像屏幕坐标，不依赖 Vulkan 视口的原点。
 /// @param size 图像实际尺寸，决定泳道与纵向时间投影。
 /// @pre 当前段落描述来自稳定的只读快照。
@@ -381,10 +381,14 @@ void TimelineCanvas::renderInterpolationOverlay(const ImVec2& position,
     draw->PushClipRect(
         position, ImVec2(position.x + size.x, position.y + size.y), true);
     // 同一绘制回调也服务活动拖动，用户能即时看到自己选中的范围。
-    // 每个段落预览固定曲线顶点预算，不随写出密度无限放大。
+    // 与编辑窗口共用峰谷保留规则，完整段落缓存避免播放平移时重复求值。
+    // 槽位数量只随段落增删改变；快照重排由缓存自身的定义键检测。
+    m_interpolationOverlayPreviews.resize(
+        m_currentSnapshot->timingInterpolations.size());
     const auto render =
         [&](const Common::Render::TimingInterpolationElement& segment,
-            double                                            end) {
+            double                                            end,
+            TimingInterpolationPreview&                       preview) {
             const float laneWidth = professional ? size.x / 4.0f : size.x;
             const float left =
                 position.x +
@@ -414,35 +418,55 @@ void TimelineCanvas::renderInterpolationOverlay(const ImVec2& position,
             const auto [minimum, maximum] =
                 timingInterpolationRange(segment.interpolation, segment.value);
             const double span = maximum - minimum;
-            ImVec2       previous{};
-            for ( int index = 0; index <= 128; ++index ) {
-                const double progress = static_cast<double>(index) / 128.0;
-                const double value    = evaluateTimingInterpolation(
-                    segment.interpolation, segment.value, progress);
+            // 时间沿纵轴展开，预算取画布高度和整段投影跨度，而非泳道宽度。
+            // 真实输出点也参与压缩，密集振荡保留峰谷，不能固定只画 128 段。
+            // 缓存内部最多 4096 个像素桶，每桶最多四点，限制几何与内存开销。
+            // 平移只改变屏幕原点；相同定义和预算直接复用稳定缓存。
+            // 纵向压缩保持原始时间顺序，峰谷之间不会因重排产生交叉连线。
+            // 预算按 64 像素分档，播放平移的浮点投影误差不能反复触发重建。
+            // 向上留一档保证分档后精度不低于实际纵向长度。
+            // 缩放跨过档位时即时重建，不等待交互结束才改善图示。
+            const float pixelBudget =
+                (std::round(std::max(size.y, bottom - top) / 64.0f) + 1.0f) *
+                64.0f;
+            preview.update(segment.interpolation, segment.value, pixelBudget);
+            ImVec2 previous{};
+            bool   hasPrevious = false;
+            for ( const auto& sample : preview.points() ) {
                 const double ratio =
-                    span > 1e-12 ? (value - minimum) / span : 0.5;
+                    span > 1e-12 ? (sample.m_value - minimum) / span : 0.5;
                 const ImVec2 point(
                     left + 3.0f +
                         static_cast<float>(ratio) *
                             std::max(0.0f, right - left - 6.0f),
                     position.y +
                         static_cast<float>(canvasYAtTime(
-                            size, std::lerp(segment.time, end, progress))));
+                            size,
+                            std::lerp(segment.time, end, sample.m_progress))));
                 // 首顶点没有前一段连线，从第二点开始才追加几何。
                 // 正文曲线原函数求值，不使用 ScrollCache 的数值积分虚拟点。
-                if ( index ) draw->AddLine(previous, point, color, 2.0f);
-                previous = point;
+                if ( hasPrevious ) draw->AddLine(previous, point, color, 2.0f);
+                previous    = point;
+                hasPrevious = true;
             }
             draw->AddText(ImVec2(left + 3.0f, std::max(top, position.y) + 3.0f),
                           color,
                           "插值段落");
         };
-    for ( const auto& segment : m_currentSnapshot->timingInterpolations )
-        render(segment, segment.time + segment.interpolation.m_duration);
+    for ( std::size_t index = 0;
+          index < m_currentSnapshot->timingInterpolations.size();
+          ++index ) {
+        const auto& segment = m_currentSnapshot->timingInterpolations[index];
+        render(segment,
+               segment.time + segment.interpolation.m_duration,
+               m_interpolationOverlayPreviews[index]);
+    }
     // 活动预览只借用 UI 的两个端点，正式描述仍来自逻辑快照。
     // 松手进入窗口后不继续画出旧手势，防止范围修改显示两份结果。
     if ( m_isInterpolationDragging )
-        render(m_interpolationEdit, m_interpolationEnd);
+        render(m_interpolationEdit,
+               m_interpolationEnd,
+               m_interpolationDragPreview);
     draw->PopClipRect();
 }
 
