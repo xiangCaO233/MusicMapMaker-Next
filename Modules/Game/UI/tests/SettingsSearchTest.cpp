@@ -9,6 +9,7 @@
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
 #include "ui/imgui/menu/interfaces/IMainMenuItemActionHandler.h"
 #include "ui/imgui/menu/interfaces/IMainMenuToggleItemActionHandler.h"
+#include "ui/imgui/menu/items/MainMenuToggleItem.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
 
 #include "imgui.h"
@@ -21,6 +22,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <utility>
 
 /// @file SettingsSearchTest.cpp
 /// @brief 搜索目录、跨语言近义词和真实设置页定位高亮的无 GPU 回归。
@@ -165,14 +167,19 @@ bool checkProfessionalMenuPolicy()
     settings.enableBmsEditing = true;
     settings.professionalMode = false;
     // 菜单展示有效状态，但不能把普通模式的 false 写回已保存的子偏好。
+    const char* reason = bms->disabledTooltipKey(context);
+    // 原因由动作提供，空原因不能构造 string_view 或误判为模式限制。
     const bool disabled = !bms->isEnabled(context) && !*bms->value(context) &&
                           !volume->isVisible(context) &&
                           !volume->isEnabled(context) &&
-                          settings.enableBmsEditing;
+                          settings.enableBmsEditing && reason &&
+                          std::string_view(reason) ==
+                              "ui.settings.software.professional_required";
     settings.professionalMode = true;
     const bool restored = bms->isEnabled(context) && *bms->value(context) &&
                           volume->isVisible(context) &&
-                          volume->isEnabled(context);
+                          volume->isEnabled(context) &&
+                          !bms->disabledTooltipKey(context);
     // 恢复测试前的配置，避免在同进程套件中影响其他 UI 用例。
     settings.professionalMode = originalProfessional;
     settings.enableBmsEditing = originalBms;
@@ -298,6 +305,92 @@ bool hasHighlightVertices(const ImGuiWindow& content, Clay_BoundingBox bounds)
                                   std::abs(vertex.pos.y - bounds.y) < 2.0f &&
                                   std::abs(vertex.pos.x - bounds.x) < 4.0f;
                        });
+}
+
+/// @brief 通过真实禁用菜单项验证专业模式提示能在悬浮时绘制。
+/// @return 普通模式有提示且不改变 BMS 偏好，专业模式不再显示限制时为 true。
+/// @details 不以单独检查翻译键代替控件渲染，覆盖提示内部再次判断悬浮的回归。
+/// @note 使用与主菜单相同的动作、图标菜单项和动画提示入口。
+/// @note 鼠标事件送入 ImGui，矩形来自生产控件，不猜测文字宽度或行高。
+/// @note 不创建真实系统窗口或 GPU，检查当前帧 Tooltip 窗口的可见几何。
+/// @note 暂时修改的模式与 BMS 偏好在返回前恢复，不污染导航测试。
+/// @note 只测试原因提示，不消费快捷键、不调用配置持久化。
+/// @warning 无 GPU 测试仅推进有限帧，动画用 DeltaTime 演进而非阻塞等待。
+bool checkProfessionalDisabledTooltip()
+{
+    auto& settings = MMM::Config::AppConfig::instance().getEditorSettings();
+    const bool originalProfessional = settings.professionalMode;
+    const bool originalBms          = settings.enableBmsEditing;
+    // 故意保留已开启的 BMS 偏好，覆盖切回普通模式后的禁用状态。
+    // 专业限制只能改变可操作性，不能因绘制提示而清除用户偏好。
+    settings.professionalMode = false;
+    settings.enableBmsEditing = true;
+    MenuQueryStatusSink      sink;
+    MMM::UI::MainMenuContext context{ sink };
+    // 图标分支与真实 BMS 菜单一致，动作负责决定禁用及原因。
+    MMM::UI::MainMenuToggleItem item("BMS Editing",
+                                     MMM::UI::MainMenuItemTextKind::Literal,
+                                     MMM::UI::createBmsEditingToggleAction(),
+                                     "*");
+    auto&                       io = ImGui::GetIO();
+    ImVec2                      itemCenter;
+    bool                        initialFrame = true;
+    const auto                  frame        = [&]() {
+        // 用独立窗口 ID 隔离导航页；禁用提示动画仍由生产组件管理。
+        // 固定尺寸让鼠标命中不受此前设置页的布局与滚动位置影响。
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({ 0, 0 });
+        ImGui::SetNextWindowSize({ 400, 200 });
+        ImGui::Begin("ProfessionalTooltipTest",
+                     nullptr,
+                     ImGuiWindowFlags_NoSavedSettings);
+        item.render(context);
+        // 首帧没有提示，LastItem 是菜单项，可安全读取真实矩形供后续悬浮。
+        if ( initialFrame ) {
+            const auto low  = ImGui::GetItemRectMin();
+            const auto high = ImGui::GetItemRectMax();
+            itemCenter   = { (low.x + high.x) * .5f, (low.y + high.y) * .5f };
+            initialFrame = false;
+        }
+        ImGui::End();
+        ImGui::Render();
+        // 只看本帧活动且非隐藏的 Tooltip，旧帧留下的窗口对象不能算通过。
+        // 检查顶点同时排除存在窗口但内容未提交的首帧布局占位。
+        // 不要求具体顶点数量，字体与主题变化不应改变提示可见性结论。
+        for ( const auto* window : ImGui::GetCurrentContext()->Windows ) {
+            if ( (window->Flags & ImGuiWindowFlags_Tooltip) && window->Active &&
+                 !window->Hidden && !window->DrawList->VtxBuffer.empty() )
+                return true;
+        }
+        return false;
+    };
+    // 先建立窗口及菜单项布局，窗口命中由下一帧鼠标事件计算。
+    io.AddMousePosEvent(-100.0f, -100.0f);
+    frame();
+    io.AddMousePosEvent(itemCenter.x, itemCenter.y);
+    bool displayed = false;
+    // 有限帧推进现有提示动画，不能通过直接改动画缓存伪造提示可见。
+    // 持续悬浮而不发送点击，专门覆盖灰色菜单项仍可解释禁用原因。
+    // 多帧结果取并集，允许 ImGui 在首次出现时先完成弹窗布局。
+    for ( int index = 0; index < 8; ++index ) displayed |= frame();
+    const bool preserved = settings.enableBmsEditing;
+    // 模式恢复后同一个动作立即停止给出限制，不靠重新构造菜单生效。
+    settings.professionalMode = true;
+    // 先推进一帧撤销旧提示，再检查下一帧，避免旧帧几何造成假失败。
+    frame();
+    const bool cleared        = !frame();
+    settings.professionalMode = originalProfessional;
+    settings.enableBmsEditing = originalBms;
+    // 失败也先恢复配置，日志和后续检查不得观察临时测试模式。
+    // 鼠标位置也恢复到窗口外，避免后续导航测试意外悬浮某个设置。
+    io.AddMousePosEvent(-100.0f, -100.0f);
+    if ( !displayed || !cleared || !preserved ) {
+        XERROR("专业模式禁用提示回归失败：显示={}，恢复={}，偏好={}",
+               displayed,
+               cleared,
+               preserved);
+    }
+    return displayed && cleared && preserved;
 }
 
 /// @brief 驱动真实视觉页，验证展开、滚动、三秒高亮及手动滚动不被抢回。
@@ -447,7 +540,7 @@ int main(int argc, char** argv)
     {
         // 管理器初始化 Clay 文本测量，并早于 ImGui 上下文析构释放视图。
         MMM::UI::UIManager manager;
-        passed = checkNavigation(manager);
+        passed = checkProfessionalDisabledTooltip() && checkNavigation(manager);
     }
     ImGui::DestroyContext();
     return passed ? 0 : 5;

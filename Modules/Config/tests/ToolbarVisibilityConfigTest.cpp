@@ -183,6 +183,7 @@ bool testToolbarLayoutSettings()
 /// @par 回归边界
 /// - 全显示偏好与有效显示分别检查，避免默认 false 掩盖能力漏项。
 /// - 磁吸、映射、分拍线、音效与底部播放入口在普通模式仍可显示。
+/// - 倍速、主轨数和分拍数量属于基础参数入口，普通模式不能强制隐藏。
 /// - 软件配置序列化保存用户偏好，不保存本帧能力掩码。
 /// - 模式往返不改基础工具的手动隐藏状态。
 /// 本用例不创建 UI 窗口，浮层关闭由 ToolbarView 使用同一有效配置执行。
@@ -199,8 +200,17 @@ bool testProfessionalToolbarVisibility()
     settings.professionalMode                   = false;
     const auto basic = settings.effectiveToolbarVisibility();
     // 普通模式固定能力集合，但仍允许用户在集合内自行隐藏基础按钮。
-    if ( !matchesDefaultToolbarVisibility(basic) ) {
-        XERROR("Ordinary mode exposed advanced toolbar controls");
+    auto compact                             = basic;
+    compact.independentButtons.playbackSpeed = false;
+    compact.independentButtons.trackCount    = false;
+    compact.independentButtons.beatDivisor   = false;
+    // 基础参数开关应保留 true，其他按钮仍遵循默认布局和配色过滤。
+    // 比较前只在测试副本恢复默认隐藏，不得把这三个偏好写回生产配置。
+    if ( !matchesDefaultToolbarVisibility(compact) ||
+         !basic.independentButtons.playbackSpeed ||
+         !basic.independentButtons.trackCount ||
+         !basic.independentButtons.beatDivisor ) {
+        XERROR("Ordinary mode did not preserve basic toolbar controls");
         return false;
     }
     // 过滤后序列化仍保存原偏好，不能把临时能力状态持久化为用户选择。
@@ -219,8 +229,13 @@ bool testProfessionalToolbarVisibility()
     // 原偏好保持完整；总开关往返不应强制恢复用户手动隐藏的基础项。
     settings.toolbarVisibility.stateTools.draw           = false;
     settings.toolbarVisibility.independentButtons.magnet = false;
+    // 基础参数允许用户关闭，模式切换不能把手动隐藏的按钮重新打开。
+    buttons.playbackSpeed = buttons.trackCount = buttons.beatDivisor = false;
     const auto hidden = settings.effectiveToolbarVisibility();
     return !hidden.stateTools.draw && !hidden.independentButtons.magnet &&
+           !hidden.independentButtons.playbackSpeed &&
+           !hidden.independentButtons.trackCount &&
+           !hidden.independentButtons.beatDivisor &&
            settings.toolbarVisibility.stateTools.colorBrush &&
            settings.toolbarVisibility.independentButtons.notePalette;
 }

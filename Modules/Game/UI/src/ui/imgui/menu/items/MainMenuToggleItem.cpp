@@ -48,6 +48,15 @@ void MainMenuToggleItem::render(MainMenuContext& context)
                      m_icon, resolveLabel(), nullptr, enabled, value && *value)
                : ::MMM::UI::FeedbackMenuItem(
                      resolveLabel(), nullptr, value, enabled);
+    // 禁用原因由动作提供，避免把无谱面或协作只读误说成专业模式限制。
+    // 提示紧跟原菜单项，仍使用其 LastItem 几何与禁用状态。
+    // 原因为空时沿用旧行为，普通不可用项不会收到专业模式提示。
+    if ( !enabled && m_actionHandler ) {
+        if ( const char* key = m_actionHandler->disabledTooltipKey(context) ) {
+            Utils::renderTooltip(
+                TR(key).data(), Utils::TooltipDir::Right, true);
+        }
+    }
     if ( clicked && value ) {
         if ( m_icon ) {
             // 自绘图标菜单项不会由 ImGui 自动翻转状态，需要在此显式切换。

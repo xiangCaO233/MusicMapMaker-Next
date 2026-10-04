@@ -877,8 +877,8 @@ struct EditorSettings {
     }
 
     /// @brief 按专业能力过滤本帧工具栏显示，不改写用户保存的显示偏好。
-    /// @return 普通模式只保留移动、框选、绘制、布局、四个辅助项与播放按钮。
-    /// @details 配色工具和参数快捷入口在普通模式下无有效显示状态。
+    /// @return 普通模式保留基础工具、布局、辅助项、播放及倍速、轨数、分拍入口。
+    /// @details 普通模式只过滤配色工具，基础参数快捷入口仍遵循用户显示偏好。
     /// 开启专业模式后仍沿用原显示偏好，避免每次切换都要重新配置工具栏。
     /// @warning UI 热路径只复制固定数量的布尔值，无锁、分配或持久化操作。
     ToolbarVisibilityConfig effectiveToolbarVisibility() const
@@ -886,12 +886,9 @@ struct EditorSettings {
         auto visibility = toolbarVisibility;
         if ( !professionalMode ) {
             // 能力掩码独立于可见性偏好，旧工作区和菜单都不能绕过总开关。
-            visibility.stateTools.colorBrush            = false;
-            visibility.stateTools.colorEraser           = false;
-            visibility.independentButtons.notePalette   = false;
-            visibility.independentButtons.playbackSpeed = false;
-            visibility.independentButtons.trackCount    = false;
-            visibility.independentButtons.beatDivisor   = false;
+            visibility.stateTools.colorBrush          = false;
+            visibility.stateTools.colorEraser         = false;
+            visibility.independentButtons.notePalette = false;
         }
         return visibility;
     }

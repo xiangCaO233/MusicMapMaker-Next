@@ -535,10 +535,13 @@ bool testNegativeBpmMutationsAreRejected()
 
 /// @brief 验证选中红线批量补偿、已有绿线更新及整批历史恢复。
 /// @return 混合选择只产生目标 SV，重复提交幂等且撤销重做完整时返回 true。
-/// @note 使用非默认预设 BPM，确保倍率来自当前谱面而不是硬编码 120。
+/// @note 使用非默认参考 BPM，确保倍率来自谱面设置而不是硬编码 120。
 /// @note 直接建立夹具不产生历史，以精确断言一次批量动作的边界。
 /// @note 快照或窗口是否打开不影响命令有效性，测试不引入 UI 依赖。
 /// @note 秒时间保留导入舍入差，恢复断言不能用显示精度近似代替。
+/// @note 修改参考 BPM 后复用同一控制器，覆盖参考值被构造期缓存的回归。
+/// @note 每轮补偿只建立一条历史，不能因选中红线数量拆分撤销。
+/// @note 补偿撤销只恢复 SV，参考 BPM 的独立修改不能被回滚。
 bool testSelectedBpmKeepSpeedBatch()
 {
     // 纯内存夹具没有项目路径、音频设备或配置文件副作用。
@@ -684,9 +687,37 @@ bool testSelectedBpmKeepSpeedBatch()
     context.isPlaying = false;
     controller.handleCommand(
         MMM::Logic::CmdKeepSpeedForBpmEvents{ { zero, curve, existing } });
-    // 最终历史仍为一条重做后的动作，没有隐含逐项提交。
-    // 控制器的无操作保证不应只依赖 UI 按钮禁用。
-    return context.actionStack.getUndoStackSize() == 1U;
+    // 无效提交后历史仍为一条重做后的动作，不依赖 UI 按钮禁用。
+    if ( context.actionStack.getUndoStackSize() != 1U ) return false;
+    // 谱面设置修改的是 preference_bpm；复用控制器与原选择，检验读取最新值。
+    // 新参考值与首条红线、已有 SV 对应速度均不同，不能误用任一旧状态。
+    context.currentBeatmap->m_baseMapMetadata.preference_bpm = 270.0;
+    controller.handleCommand(command);
+    // 120 * 2.25 与 240 * 1.125 都等于最新参考 BPM，仍是一条批量历史。
+    // 补偿本身不得修改参考 BPM；新增历史才能单独撤销这一轮补偿。
+    if ( context.actionStack.getUndoStackSize() != 2U ||
+         !near(registry.get<MMM::Logic::TimelineComponent>(existing).m_value,
+               1.125) ||
+         !near(context.currentBeatmap->m_baseMapMetadata.preference_bpm,
+               270.0) )
+        return false;
+    // 重做后新增绿线的身份可能改变，按稳定时间与类型查找其新倍率。
+    bool updatedFirst = false;
+    for ( const auto entity : registry.view<MMM::Logic::TimelineComponent>() ) {
+        const auto& timing =
+            registry.get<MMM::Logic::TimelineComponent>(entity);
+        if ( timing.m_effect == MMM::TimingEffect::SCROLL &&
+             near(timing.m_timestamp, 1.0) )
+            updatedFirst = near(timing.m_value, 2.25);
+    }
+    // 撤销只恢复本批绿线，不把谱面设置中的参考 BPM 回滚成旧值。
+    // 它与最初整批创建的撤销不同，覆盖已有补偿被再次更新的路径。
+    context.actionStack.undo(context);
+    return updatedFirst && context.actionStack.getUndoStackSize() == 1U &&
+           near(registry.get<MMM::Logic::TimelineComponent>(existing).m_value,
+                .75) &&
+           near(context.currentBeatmap->m_baseMapMetadata.preference_bpm,
+                270.0);
 }
 
 /// @brief 验证重复时间的红线覆盖规则和 SV 插值段保护。

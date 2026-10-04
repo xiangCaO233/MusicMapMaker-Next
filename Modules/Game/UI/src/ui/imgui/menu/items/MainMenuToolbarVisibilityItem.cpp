@@ -26,6 +26,15 @@ bool drawVisibilityToggle(const char* translationKey, bool& visible,
         TR(translationKey).data(), nullptr, &displayed, enabled);
     if ( changed && enabled ) visible = displayed;
     ImGui::PopItemFlag();
+    // enabled 仅由专业能力决定，提示不能根据其他菜单的只读条件猜测。
+    // 灰色菜单项默认不参与悬浮检测，提示入口显式允许禁用控件悬浮。
+    // 保留原显示偏好，悬浮说明不得改变被过滤功能的保存值。
+    if ( !enabled ) {
+        Utils::renderTooltip(
+            TR("ui.settings.software.professional_required").data(),
+            Utils::TooltipDir::Right,
+            true);
+    }
     // 将变更结果交给上层合并，统一决定是否持久化配置。
     return changed;
 }
@@ -89,13 +98,13 @@ void MainMenuToolbarVisibilityItem::render(MainMenuContext& context)
     // 播放按钮可独立于速度控件显示，兼容紧凑工具栏布局。
     changed |= drawVisibilityToggle("ui.toolbar.play_pause", buttons.playback);
     // 播放速度与轨道数量属于当前编辑会话的快速参数入口。
-    changed |= drawVisibilityToggle(
-        "ui.toolbar.playback_speed", buttons.playbackSpeed, professional);
-    changed |= drawVisibilityToggle(
-        "ui.settings.beatmap.tracks", buttons.trackCount, professional);
+    changed |= drawVisibilityToggle("ui.toolbar.playback_speed",
+                                    buttons.playbackSpeed);
+    changed |=
+        drawVisibilityToggle("ui.settings.beatmap.tracks", buttons.trackCount);
     // 节拍细分按钮保留为独立入口，便于只展示节奏编辑控件。
-    changed |= drawVisibilityToggle(
-        "ui.toolbar.beat_divisor", buttons.beatDivisor, professional);
+    changed |=
+        drawVisibilityToggle("ui.toolbar.beat_divisor", buttons.beatDivisor);
 
     // 只有实际切换过开关才写配置，避免展开菜单导致无效磁盘写入。
     if ( changed ) {

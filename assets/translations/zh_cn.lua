@@ -283,7 +283,7 @@ return {
 	-- 设置搜索覆盖全部分类，定位后沿用原控件的权限、应用和保存流程。
 	["ui.settings.software.professional_mode"] = "专业编辑模式",
 	["ui.settings.software.professional_mode.hint"] = "开启高级工具栏、专业时间线、草稿、BMS、项目音频工具与多音轨采样编辑；关闭时使用单主音轨绑定，隐藏高级入口并清除采样放置选择。已有谱面音频保留播放。",
-	["ui.settings.software.professional_required"] = "请先在“设置 → 软件”中开启专业编辑模式。",
+	["ui.settings.software.professional_required"] = "此功能请在专业模式中使用。\n请在“设置 → 软件”中开启专业编辑模式。",
 	["ui.settings.search.hint"] = "搜索设置名称、说明、选项或近义词…",
 	["ui.settings.search.back"] = "返回搜索结果",
 	["ui.settings.search.clear"] = "清空搜索",
@@ -1350,7 +1350,7 @@ return {
 	["ui.timeline.event_creator.value"] = "具体数值",
 	["ui.timeline.event_creator.create"] = "创建",
 	["ui.timeline.timing_points_table.keep_original_speed"] = "一键保持原流速",
-	["ui.timeline.timing_points_table.keep_original_speed_hint"] = "为选中的普通正 BPM 红线添加绿线。\nSV = 谱面预设 BPM / 红线 BPM。\n同位置已有普通绿线会更新，红线不变，整批可一次撤销。\n零 BPM、BPM 插值段及已有 SV 插值段覆盖的位置不处理。",
+	["ui.timeline.timing_points_table.keep_original_speed_hint"] = "为选中的普通正 BPM 红线添加绿线。\nSV = 谱面设置中的参考 BPM / 红线 BPM。\n同位置已有普通绿线会更新，红线不变，整批可一次撤销。\n零 BPM、BPM 插值段及已有 SV 插值段覆盖的位置不处理。",
 	["ui.timeline.event_creator.keep_speed"] = "保持画布速度",
 
 	-- 时间点表格

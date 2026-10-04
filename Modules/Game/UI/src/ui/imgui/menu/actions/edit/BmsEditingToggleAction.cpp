@@ -26,6 +26,19 @@ public:
             .professionalMode;
     }
 
+    /// @brief 普通模式提示 BMS 编辑需要专业模式，启用后不显示限制说明。
+    /// @param context 单帧菜单上下文，与能力查询保持相同来源。
+    /// @return 禁用时的稳定翻译键，专业模式下为空。
+    /// @warning 菜单热路径仅读取配置标志，不分配或获取会话锁。
+    const char* disabledTooltipKey(
+        const MainMenuContext& context) const override
+    {
+        // 能力恢复后立即停止展示限制原因，不缓存上次打开菜单的模式。
+        return isEnabled(context)
+                   ? nullptr
+                   : "ui.settings.software.professional_required";
+    }
+
     /// @brief 获取 BMS 编辑设置。
     /// @param context 单帧主菜单上下文。
     /// @return AppConfig 中持久化的 BMS 编辑开关地址。

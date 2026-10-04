@@ -284,7 +284,7 @@ return {
 	-- 设置搜索覆盖全部分类，定位后沿用原控件的权限、应用和保存流程。
 	["ui.settings.software.professional_mode"] = "Professional editing mode",
 	["ui.settings.software.professional_mode.hint"] = "Enable advanced toolbar controls, timeline, draft lanes, BMS, project audio tools and multi-track sample editing. Turning off uses a single main-audio binding, hides advanced controls and clears sample placement. Existing chart audio keeps playing.",
-	["ui.settings.software.professional_required"] = "Enable Professional editing mode in Settings → Software first.",
+	["ui.settings.software.professional_required"] = "This feature requires Professional editing mode.\nEnable it in Settings → Software.",
 	["ui.settings.search.hint"] = "Search settings, descriptions, options or synonyms…",
 	["ui.settings.search.back"] = "Back to search results",
 	["ui.settings.search.clear"] = "Clear search",
@@ -1351,7 +1351,7 @@ return {
 	["ui.timeline.event_creator.value"] = "Specific Value",
 	["ui.timeline.event_creator.create"] = "Create",
 	["ui.timeline.timing_points_table.keep_original_speed"] = "Keep Original Speed",
-	["ui.timeline.timing_points_table.keep_original_speed_hint"] = "Add SV for selected ordinary positive BPM points.\nSV = preferred chart BPM / point BPM.\nUpdate existing ordinary SV at the same time; keep BPM unchanged.\nUndo the batch in one step. Skip zero BPM, BPM curves, and SV curves.",
+	["ui.timeline.timing_points_table.keep_original_speed_hint"] = "Add SV for selected ordinary positive BPM points.\nSV = reference BPM in Beatmap Settings / point BPM.\nUpdate existing ordinary SV at the same time; keep BPM unchanged.\nUndo the batch in one step. Skip zero BPM, BPM curves, and SV curves.",
 	["ui.timeline.event_creator.keep_speed"] = "Keep Canvas Speed",
 
 	-- Timing Points Table

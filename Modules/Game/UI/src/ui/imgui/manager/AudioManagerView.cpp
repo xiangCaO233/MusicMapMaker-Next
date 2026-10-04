@@ -2497,12 +2497,15 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 ImGui::PopStyleColor(4);
                 if ( ImGui::IsItemHovered(
                          ImGuiHoveredFlags_AllowWhenDisabled) ) {
+                    // 提示内部也须允许禁用悬浮，否则外层检测通过仍无法绘制。
                     // 即使无项目也显示提示，让用户理解入口用途。
                     Utils::renderTooltip(
                         TR(professional
                                ? "ui.audio_manager.open_project_audio_tool"
                                : "ui.settings.software.professional_required")
-                            .data());
+                            .data(),
+                        Utils::TooltipDir::Right,
+                        true);
                 }
             });
 

@@ -28,6 +28,17 @@ public:
     /// @return 可交互时返回 true。
     virtual bool isEnabled(const MainMenuContext& context) const;
 
+    /// @brief 返回禁用原因的翻译键，默认不为普通不可用状态添加解释。
+    /// @param context 单帧主菜单上下文。
+    /// @return 稳定翻译键；为空时不绘制原因提示。
+    /// @warning 菜单热路径只读现有状态，禁止阻塞查询或创建字符串。
+    /// @note 由动作区分专业能力与其他禁用条件，渲染器不猜测原因。
+    virtual const char* disabledTooltipKey(const MainMenuContext& context) const
+    {
+        (void)context;
+        return nullptr;
+    }
+
     /// @brief 获取当前勾选项绑定的布尔状态。
     /// @param context 单帧主菜单上下文。
     /// @return 可修改的布尔状态指针；为空时菜单项会禁用。
