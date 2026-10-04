@@ -1,11 +1,13 @@
 #include "canvas/TimelineCanvas.h"
 
+#include "canvas/TimingInterpolationControls.h"
 #include "canvas/TimingInterpolationPreview.h"
 
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
@@ -122,7 +124,29 @@ void TimelineCanvas::openInterpolationEditor(
     if ( !m_currentSnapshot || !m_currentSnapshot->hasBeatmap ) return;
     m_interpolationEdit = segment;
     m_interpolationEnd  = segment.time + segment.interpolation.m_duration;
+    // 新段使用上次工具选项；已有实体始终保留其原来的函数和采样定义。
+    // ECS 身份是新建与重开的分界，不能仅凭类型或旧窗口状态决定是否恢复。
+    // 时长在恢复前已经由手势确定，偏好不会移动本次框选的起终时间。
+    const auto& preferences = Config::AppConfig::instance()
+                                  .getEditorSettings()
+                                  .m_interpolationPreferences;
+    if ( segment.entity == entt::null )
+        applyTimingInterpolationPreferences(
+            m_interpolationEdit.interpolation, segment.effect, preferences);
     initializeTimingFunctionEditor();
+    // 自定义模式仅继承源码，拍轴准备后由编辑器按新域编译，不复用旧缓存。
+    if ( segment.entity == entt::null &&
+         m_interpolationEdit.interpolation.m_curve == TimingCurve::Custom ) {
+        auto& expression = m_timingFunctionEditor.m_expression;
+        // 初始线性模板可能比上次公式长，先清零避免新文本尾部残留旧模板。
+        // 配置读取器整体拒绝超长源码；复制仍按缓冲容量防御内部调用变化。
+        expression.fill('\0');
+        std::copy_n(
+            preferences.m_expression.data(),
+            std::min(preferences.m_expression.size(), expression.size() - 1),
+            expression.data());
+        expression.back() = '\0';
+    }
     m_interpolationBeatmapKey = m_currentSnapshot->beatmapPathKey;
     m_interpolationInstanceId = m_currentSnapshot->beatmapInstanceId;
     // 窗口重新打开时丢弃上次副本，避免旧谱面的范围影响新谱面。
@@ -563,6 +587,14 @@ void TimelineCanvas::renderInterpolationEditor()
         // 曲线种类切换不会丢弃控制点，切回贝塞尔可继续调整原形状。
         // 横轴是当前自变量比例，纵轴是参数比例，不是屏幕像素。
         if ( curve.m_curve == TimingCurve::Bezier ) {
+            // 图形与数值输入共享控制点，拖动不会产生独立曲线或中间逻辑命令。
+            renderTimingBezierControls(
+                curve,
+                { std::max(180.f, ImGui::GetContentRegionAvail().x), 220.f });
+            // 图表显示归一化曲率，起终参数相同也能先调整形状再修改端值。
+            // 数值控件仍保留，用于精确输入而不是强迫用户靠鼠标对齐。
+            ImGui::TextUnformatted(
+                "拖动控制点 1、2 调整曲线；起终参数仍由上方输入设置。");
             // 控制点有横纵两个坐标，限制单调时间轴并允许自由调整曲率。
             ImGui::InputDouble(
                 "控制点 1 X", &curve.m_controlX1, 0.0, 0.0, "%.4f");
@@ -690,6 +722,13 @@ void TimelineCanvas::renderInterpolationEditor()
         ImGui::BeginDisabled(error != nullptr);
         // 保存是唯一发布编辑命令的入口，图形预览没有中间写入。
         if ( UI::FeedbackButton("保存段落") ) {
+            // 仅确认有效段落时更新工具默认，取消不会覆盖上次成功使用的选项。
+            // 配置写入是低频用户动作，禁止移入逐帧绘制或拖动更新分支。
+            auto& app = Config::AppConfig::instance();
+            app.getEditorSettings().m_interpolationPreferences =
+                captureTimingInterpolationPreferences(curve);
+            // 写入失败不阻断合法谱面命令；内存默认仍在本次运行中可复用。
+            if ( !app.save() ) XERROR("保存插值工具选项失败");
             // 沿用时间线命令与权限路由；不在 UI 线程直接写注册表。
             // 新段没有 ECS 身份，由创建动作分配实体；旧段保留稳定身份。
             // 两种操作都携带整段定义，不逐样本发布大量指令。

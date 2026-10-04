@@ -1,6 +1,7 @@
 #include "config/AudioPlaybackConfig.h"
 #include "config/CreatorIdentity.h"
 #include "config/EditorConfig.h"
+#include "config/TimingInterpolationPreferences.h"
 
 #include <nlohmann/json.hpp>
 
@@ -1101,6 +1102,8 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "marqueeRounding", settings.marqueeRounding },
         { "saveFormatPreference", settings.saveFormatPreference },
         { "autoSave", settings.autoSave },
+        // 工具偏好不包含谱面缓存，跟随用户配置而非某个项目保存。
+        { "timingInterpolation", settings.m_interpolationPreferences },
         { "autoBackup", settings.autoBackup },
         { "autoAddStoreModeExtForMalodyExport",
           settings.autoAddStoreModeExtForMalodyExport },
@@ -1263,7 +1266,10 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     settings.saveFormatPreference =
         json.value("saveFormatPreference", SaveFormatPreference::ForceMMM);
     // 自动保存与自动备份分开读取，任何一侧缺失都不会影响另一侧。
-    settings.autoSave   = json.value("autoSave", AutoSaveConfig{});
+    settings.autoSave = json.value("autoSave", AutoSaveConfig{});
+    // 旧配置缺少此字段时保留线性与 16 Hz；嵌套字段由专用读取器检查类型。
+    settings.m_interpolationPreferences =
+        json.value("timingInterpolation", TimingInterpolationPreferences{});
     settings.autoBackup = json.value("autoBackup", AutoBackupConfig{});
     settings.autoAddStoreModeExtForMalodyExport =
         json.value("autoAddStoreModeExtForMalodyExport", false);

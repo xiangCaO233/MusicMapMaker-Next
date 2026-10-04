@@ -47,6 +47,8 @@ add_library(
   src/TimingFormula.cpp
   # 插值预览按像素保留峰谷，缓存重建与每帧几何投影分离。
   src/TimingInterpolationPreview.cpp
+  # 贝塞尔拖拽和工具选项映射可独立测试，不依赖画布会话或图形后端。
+  src/TimingInterpolationControls.cpp
   src/TimelineCanvas_Popups.cpp)
 
 # PUBLIC 依赖构成 Canvas 公开头的传递接口；业务实现需要的新依赖应优先检查 能否保持 PRIVATE，避免继续扩大下游翻译单元的包含和链接范围。
@@ -270,6 +272,18 @@ mmm_add_test_executable(
 target_include_directories(TimingFormulaTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(TimingFormulaTest PRIVATE MMM Log 3rd_imgui)
+
+# 控制点测试直接发送 ImGui 鼠标输入，并通过 Config 根验证工具选项往返。 仅编译独立控件实现，不为交互回归加载会话、音频或 Vulkan 设备。
+mmm_add_test_executable(
+  Canvas TimingInterpolationControlsTest
+  tests/TimingInterpolationControlsTest.cpp src/TimingInterpolationControls.cpp)
+target_include_directories(TimingInterpolationControlsTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(TimingInterpolationControlsTest PRIVATE Config MMM Log
+                                                              3rd_imgui)
+# 独立登记用例，鼠标输入夹具不写用户配置和 imgui.ini。
+mmm_register_test_case(NAME TimingInterpolationControlsTest COMMAND
+                       TimingInterpolationControlsTest)
 # 使用分发包中的实际数学字体检查缺字，禁止测试仅靠默认问号回退通过。
 mmm_register_test_case(
   NAME

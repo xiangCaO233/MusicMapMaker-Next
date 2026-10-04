@@ -3,6 +3,7 @@
 #include "config/BeatLinePalette.h"
 #include "config/FrameLimitPreference.h"
 #include "config/NotePalette.h"
+#include "config/TimingInterpolationPreferences.h"
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -830,6 +831,9 @@ struct EditorSettings {
 
     /// @brief 对所有项目生效的软件全局自动保存配置。
     AutoSaveConfig autoSave;
+
+    /// @brief 上次确认的插值工具选项，新建段落时恢复，不影响已有段落。
+    TimingInterpolationPreferences m_interpolationPreferences;
 
     /// @brief 项目未覆盖时使用的软件全局谱面自动备份配置。
     AutoBackupConfig autoBackup;

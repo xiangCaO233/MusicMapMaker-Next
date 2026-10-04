@@ -12,6 +12,8 @@ add_library(
   src/AppConfig.cpp
   src/CreatorIdentity.cpp
   src/EditorSettingTypes.cpp
+  # 插值工具偏好仅保存源文本和标量，保持 Config 不依赖谱面模型。
+  src/TimingInterpolationPreferences.cpp
   src/FontPreferenceValidator.cpp
   src/ColorPaletteFile.cpp
   src/VisualConfig.cpp)
