@@ -1,20 +1,166 @@
 #include "canvas/TimingFormula.h"
 #include "canvas/TimingFunctionEditorState.h"
+#include "canvas/TimingInterpolationPreview.h"
 
 #include "log/colorful-log.h"
 #include "mmm/timing/Timing.h"
 #include "mmm/timing/TimingFunction.h"
+#include <imgui.h>
+#include <imgui_internal.h>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <imgui.h>
-#include <imgui_internal.h>
+#include <cstddef>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 namespace
 {
+/// @brief 用截图中的高频公式覆盖长区间的峰谷、真实采样与缓存复用。
+/// @return 原曲线没有混叠成低频、局部缩放恢复细节且真实绘制坐标有限时为真。
+/// @details 周期与落点来自独立 cos 解析式，不能用被测折线生成预期答案。
+/// 长段全景允许按像素压缩，但峰谷不能因 stride 抽取而消失。
+/// 放大局部后检查周期数，防止只画一个填充色带掩盖真实函数。
+/// 末尾不是完整采样周期，仍必须保留用户指定的精确终点。
+/// 缓存原函数而非屏幕坐标，移动窗口不能触发表达式重新求值。
+/// 本用例只修改内存工作副本，不载入活动谱面或创建音频设备。
+bool testInterpolationPreview()
+{
+    // 截图使用 cos(1000*t)，1000 是角频率而非每秒周期数。
+    // 周期约为 6.28 毫秒，一毫秒输出间隔足以表达该曲线。
+    // 因此这里的低频外观应归因于显示抽取，不能降低用户输出密度。
+    MMM::TimingInterpolation curve;
+    curve.m_duration         = 2.22973;
+    curve.m_samplesPerSecond = 1000;
+    double      start        = 0;
+    std::string error;
+    if ( !MMM::setTimingInterpolationFunction(
+             curve, "cos(1000*t)", start, error) )
+        return false;
+    MMM::Canvas::TimingInterpolationPreview preview;
+    bool ok = preview.update(curve, start, 1100);
+    // 2.22973 秒应有约 710 个过零，旧 128 段折线只能表达不超过 128 次。
+    // 检查整个蓝线的有序真值，不以黄色标记数量替代波形精度。
+    const auto crossings = [&]() {
+        std::size_t count  = 0;
+        const auto& points = preview.points();
+        for ( std::size_t i = 1; i < points.size(); ++i )
+            count += std::signbit(points[i - 1].m_value) !=
+                     std::signbit(points[i].m_value);
+        return count;
+    };
+    ok &= crossings() >= 709 && crossings() <= 710;
+    // 非整周期时段尾仍单独写出；向下取整会丢失用户指定的终点。
+    // 数量检查与位置检查分开，避免等分相同点数但错误网格蒙混通过。
+    ok &= preview.visibleSampleCount() == 2231;
+    // 所有黄色代表点都必须落在真实毫秒网格；最后短周期端点例外。
+    // 解析值直接由原秒时间算出，不能用显示蓝线做另一份近似。
+    // 坐标采用相对整段比例，缩放后也能还原同一绝对时间。
+    // 毫秒整数检查留出浮点乘除误差，不能将误差误判为新采样点。
+    // 最后端点不强制对齐毫秒网格，它代表用户输入的精确时长。
+    for ( const auto& point : preview.samples() ) {
+        const double time = point.m_progress * curve.m_duration;
+        ok &= std::abs(point.m_value - std::cos(1000 * time)) < 1e-8;
+        ok &= point.m_progress == 1.0 ||
+              std::abs(time * 1000 - std::round(time * 1000)) < 1e-8;
+    }
+    ok &= !preview.samples().empty() &&
+          preview.samples().back().m_progress == 1.0;
+    // 相同键返回缓存，保留数组身份；稳定绘制帧不得重新遍历全部采样。
+    const auto* cached = preview.points().data();
+    // 只检查布尔返回不足以发现暗中重建，数组身份也必须保持不变。
+    ok &= !preview.update(curve, start, 1100) &&
+          preview.points().data() == cached;
+    // 更长区间有六万个输出点，但几何仍受屏幕宽度预算限制。
+    // 每个像素跨过多个周期，保留峰谷才能避免伪造一条低频曲线。
+    // 六十秒保持输出数量压力，振荡频率受领域积分缓存的合法性预算约束。
+    // 40 弧度每秒仍有约 382 个完整周期，足以暴露固定 128 段的混叠。
+    // 本测试针对显示层，不提高数学编译器的节点或递归上限。
+    curve.m_duration = 60;
+    if ( !MMM::setTimingInterpolationFunction(
+             curve, "cos(40*t)", start, error) )
+        return false;
+    ok &= preview.update(curve, start, 1100);
+    ok &= preview.visibleSampleCount() == 60001 &&
+          preview.points().size() <= 4400;
+    bool hasPeak = false, hasTrough = false;
+    // 点数预算不是正确性的充分条件：保留端点但丢掉极值同样会失真。
+    // 正负峰分别检查，不能以绝对值最大值替代两侧振荡包围。
+    for ( const auto& point : preview.points() ) {
+        hasPeak |= point.m_value > .99;
+        hasTrough |= point.m_value < -.99;
+    }
+    ok &= hasPeak && hasTrough;
+    // 缩放围绕中点保留锚点，局部长度变为 .6 秒，约有八次过零。
+    // 真实输出仍是每毫秒一个点，视野变化不能改变谱面采样密度。
+    preview.zoomAt(.5, .01);
+    // 同一函数缓存对象只改变视野，仍要重建；不能仅比较表达式身份。
+    ok &= preview.update(curve, start, 1100);
+    ok &= crossings() >= 7 && crossings() <= 9;
+    ok &= preview.visibleSampleCount() >= 599 &&
+          preview.visibleSampleCount() <= 601;
+    // 拖动到边缘保持缩放倍率，恢复全景重新生成对应缓存。
+    const double span = preview.viewEnd() - preview.viewStart();
+    // 大位移故意超过边界，验证夹取不会把局部窗口扩大成全景。
+    preview.pan(10000);
+    ok &= std::abs(preview.viewEnd() - 1) < 1e-12 &&
+          std::abs(preview.viewEnd() - preview.viewStart() - span) < 1e-12;
+    preview.resetView();
+    ok &= preview.update(curve, start, 1100) && preview.viewStart() == 0 &&
+          preview.viewEnd() == 1;
+    // 真正走绘制 helper，验证被压缩的高频图没有非法坐标或预算膨胀。
+    // 不需要 GPU 也能检查生产 DrawList，解析精度由前面的断言独立保障。
+    // 第一帧允许 ImGui 建立窗口状态，第二帧检查实际提交的可见几何。
+    // 与公式排版测试共用上下文，但使用独立窗口名以隔离布局缓存。
+    for ( int frame = 0; frame < 2; ++frame ) {
+        ImGui::NewFrame();
+        // 图表坐标固定在窗口内部，避免默认窗口位置导致全部几何被剪裁。
+        ImGui::SetNextWindowPos({ 0, 0 });
+        ImGui::SetNextWindowSize({ 640, 560 });
+        ImGui::Begin("Interpolation preview test",
+                     nullptr,
+                     ImGuiWindowFlags_NoSavedSettings);
+        MMM::Canvas::drawTimingInterpolationPreview(
+            preview,
+            { 20, 50 },
+            { 600, 150 },
+            -1,
+            1,
+            IM_COL32(70, 195, 255, 255),
+            IM_COL32(250, 205, 95, 255));
+        ImGui::End();
+        ImGui::Render();
+    }
+    const auto* data = ImGui::GetDrawData();
+    // 最低顶点数排除空窗口假阳性，上限发现输出点未经压缩直接绘制。
+    ok &= data && data->TotalVtxCount > 100 && data->TotalVtxCount < 100000;
+    if ( data )
+        for ( const auto* list : data->CmdLists )
+            for ( const auto& vertex : list->VtxBuffer )
+                ok &=
+                    std::isfinite(vertex.pos.x) && std::isfinite(vertex.pos.y);
+    // 预览也承担拍域自变量图，映射不使用平均 Hz 偷换成秒域。
+    curve.m_variable     = MMM::TimingVariable::Beat;
+    curve.m_beatDuration = 3;
+    // 此时六十秒只对应三拍，参考图的函数终值应为四而不是六十一。
+    // 拍域参考图没有导出黄点，避免将拍坐标伪装成毫秒落点。
+    if ( !MMM::setTimingInterpolationFunction(curve, "1+t", start, error) )
+        return false;
+    ok &= preview.update(curve, start, 1100, true) && preview.samples().empty();
+    ok &= std::abs(preview.points().front().m_value - 1) < 1e-9 &&
+          std::abs(preview.points().back().m_value - 4) < 1e-9;
+    // 函数参数改变必须失效，不能只在窗口宽度变化时刷新图形。
+    if ( !MMM::setTimingInterpolationFunction(curve, "2+t", start, error) )
+        return false;
+    // 宽度和定义域未变，仅函数值变化，能隔离缓存源键遗漏的问题。
+    ok &= preview.update(curve, start, 1100, true) &&
+          std::abs(preview.points().front().m_value - 2) < 1e-9;
+    if ( !ok ) XERROR("TimingFormulaTest: 高频插值预览、采样或缓存回归失败");
+    return ok;
+}
 /// @brief 从真实字形四边形检查墨迹重叠，防止包围盒只在数值上看起来合法。
 /// @param list 已完成本帧绘制的单个窗口几何，不跨窗口比较。
 /// @return 任意两枚可见字形没有超过像素容差的交叠时返回真。
@@ -288,6 +434,7 @@ int main(int argc, char** argv)
     bool ok = mathLoaded && pixels && width > 0 && height > 0;
     ok &= testFitApplication();
     ok &= testBeatFitApplication();
+    ok &= testInterpolationPreview();
     // 不能用替代问号冒充字形存在，直接检查真实合并 face 的字符映射。
     for ( const ImWchar codepoint :
           { 0x03c0, 0x221b, 0x222b, 0x03a3, 0x03a0, 0x221a, 0x2212 } )

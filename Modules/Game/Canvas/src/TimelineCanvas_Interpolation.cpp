@@ -1,5 +1,7 @@
 #include "canvas/TimelineCanvas.h"
 
+#include "canvas/TimingInterpolationPreview.h"
+
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "event/core/EventBus.h"
@@ -629,46 +631,49 @@ void TimelineCanvas::renderInterpolationEditor()
                 4.0f);
             const auto [minimum, maximum] =
                 timingInterpolationRange(curve, edit.value);
-            const double span = maximum - minimum;
-            // 横轴以实际时间比例求值，贝塞尔反解由领域函数统一执行。
-            // 纵轴归一仅用于图示；恒定函数显示在图像中间而非底部。
-            const auto graphPoint = [&](double x) {
-                const double value =
-                    evaluateTimingInterpolation(curve, edit.value, x);
-                return ImVec2(
-                    origin.x + 6.0f +
-                        static_cast<float>(x) * (graphSize.x - 12.0f),
-                    origin.y + graphSize.y - 6.0f -
-                        static_cast<float>(
-                            span > 1e-12 ? (value - minimum) / span : 0.5) *
-                            (graphSize.y - 12.0f));
-            };
-            for ( int index = 1; index <= 128; ++index )
-                draw->AddLine(graphPoint((index - 1) / 128.0),
-                              graphPoint(index / 128.0),
-                              IM_COL32(70, 195, 255, 255),
-                              2.0f);
-            // 曲线连线与采样点使用不同预算，稀疏输出也能看清真实曲率。
-            // 密集输出只减少图上的点数，实际文件仍会写出全部所选样本。
-            const auto count = timingInterpolationSampleCount(curve);
-            // 点数过多时只显示代表样本，预览线的精度不受其密度影响。
-            // 预览点按照真实周期抽取，不能用等分图宽暗示错误采样间隔。
-            // 单独补段尾使非整周期的最后短间隔也有可见落点。
-            // 固定图形预算只限制绘制数量，不更改外部格式事件数量。
-            // 原生保存保留函数和密度，重新打开时仍能继续二次编辑。
-            // 图示没有自己的撤销历史，所有控件共同组成一次保存动作。
-            const auto stride = std::max<std::size_t>(1, count / 256);
-            for ( std::size_t index = 0; index < count; index += stride )
-                draw->AddCircleFilled(
-                    graphPoint(timingInterpolationSampleElapsed(curve, index) /
-                               curve.m_duration),
-                    2.5f,
-                    IM_COL32(250, 205, 95, 255));
-            // 段尾总是单独显示，非整周期和密集预览抽样也不会漏掉它。
-            // 黄色点不是可直接修改的 Timing 事件，用户通过段落参数统一调整。
-            draw->AddCircleFilled(
-                graphPoint(1.0), 2.5f, IM_COL32(250, 205, 95, 255));
-            ImGui::Dummy(graphSize);
+            auto& preview = m_timingFunctionEditor.m_outputPreview;
+            // 缓存保留原函数与输出点真值，绘制层不解析公式或重建导出数组。
+            // 源定义或拍轴变化由缓存键检测，模式切换不会沿用旧坐标映射。
+            // 预览命中区仅调整本地视野，不操作段落、采样密度或逻辑事件。
+            // InvisibleButton 没有普通按钮外观，拖动不需要通用按钮反馈。
+            ImGui::InvisibleButton("##TimingOutputPreview", graphSize);
+            if ( ImGui::IsItemHovered() ) {
+                // 鼠标滚轮由图表拥有，缩放时不能同时滚动整个弹窗。
+                ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+                const auto& io = ImGui::GetIO();
+                // 锚点按图表内光标计算，放大连续多个周期时保持检查目标稳定。
+                if ( io.MouseWheel != 0.0f )
+                    preview.zoomAt((io.MousePos.x - origin.x) / graphSize.x,
+                                   std::pow(0.75, io.MouseWheel));
+                if ( ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) )
+                    preview.resetView();
+            }
+            // 活动拖动离开图表仍继续平移，边界约束由视图状态统一维护。
+            if ( ImGui::IsItemActive() &&
+                 ImGui::IsMouseDragging(ImGuiMouseButton_Left) )
+                preview.pan(-ImGui::GetIO().MouseDelta.x / graphSize.x);
+            // 每个真实输出样本先参与缓存，再按像素保留首尾和峰谷。
+            // 稳定帧只读缓存；放大后重新展现局部样本，不跳过高频波峰。
+            preview.update(curve, edit.value, graphSize.x - 12.0f);
+            // 留白只影响投影，横轴比例仍对应真实段落起终时间。
+            // 恒定曲线的纵轴跨度为零，绘图 helper 会放在垂直中线。
+            drawTimingInterpolationPreview(
+                preview,
+                ImVec2(origin.x + 6.0f, origin.y + 6.0f),
+                ImVec2(graphSize.x - 12.0f, graphSize.y - 12.0f),
+                minimum,
+                maximum,
+                IM_COL32(70, 195, 255, 255),
+                IM_COL32(250, 205, 95, 255));
+            ImGui::Text("预览：%.6g – %.6g 秒；可见 %zu 个真实采样点。",
+                        curve.m_duration * preview.viewStart(),
+                        curve.m_duration * preview.viewEnd(),
+                        preview.visibleSampleCount());
+            // 密集区域显示包围而非每个独立圆点，文字明确说明需要放大查看。
+            // 可见数量来自真实样本集合，不能把屏幕代表点数说成实际输出数。
+            ImGui::TextWrapped(
+                "蓝线为原函数，黄色为真实输出采样。密集区域按像素保留峰谷；"
+                "滚轮放大局部，拖动平移，双击恢复完整区间。");
             ImGui::TextUnformatted(
                 "双击画布段落或点击表格中的“编辑段落”可再次修改。Shift "
                 "拖动创建，Esc 取消。");

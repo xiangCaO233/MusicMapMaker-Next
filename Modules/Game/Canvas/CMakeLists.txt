@@ -45,6 +45,8 @@ add_library(
   # 函数排版与手绘拟合独立于时间点采样，避免编辑窗口每帧重新解析。
   src/TimelineCanvas_FunctionEditor.cpp
   src/TimingFormula.cpp
+  # 插值预览按像素保留峰谷，缓存重建与每帧几何投影分离。
+  src/TimingInterpolationPreview.cpp
   src/TimelineCanvas_Popups.cpp)
 
 # PUBLIC 依赖构成 Canvas 公开头的传递接口；业务实现需要的新依赖应优先检查 能否保持 PRIVATE，避免继续扩大下游翻译单元的包含和链接范围。
@@ -261,8 +263,10 @@ mmm_register_test_case(NAME TimelineAuxiliaryWindowStateTest COMMAND
 
 # 数学排版测试直接编译绘制实现，避免引入会话、音频或 Vulkan 后端。 表达式树来自 MMM 的编译结果，上下限和分式必须经过真实 ImGui 绘制。
 # 图集在测试内构建且不写入磁盘，CI 不需要可用的显示器或图形设备。 与领域数值测试分开登记，渲染成功不能代替函数计算正确。
-mmm_add_test_executable(Canvas TimingFormulaTest tests/TimingFormulaTest.cpp
-                        src/TimingFormula.cpp)
+# 同时直接编译插值预览实现，覆盖长区间高频曲线、真实采样落点和缩放缓存。
+mmm_add_test_executable(
+  Canvas TimingFormulaTest tests/TimingFormulaTest.cpp src/TimingFormula.cpp
+  src/TimingInterpolationPreview.cpp)
 target_include_directories(TimingFormulaTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(TimingFormulaTest PRIVATE MMM Log 3rd_imgui)

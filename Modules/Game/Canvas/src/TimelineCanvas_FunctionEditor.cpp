@@ -1,6 +1,7 @@
 #include "canvas/TimelineCanvas.h"
 
 #include "canvas/TimingFormula.h"
+#include "canvas/TimingInterpolationPreview.h"
 #include "mmm/timing/TimingFunction.h"
 #include "mmm/timing/TimingFunctionFit.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -470,22 +471,15 @@ void TimelineCanvas::renderTimingFunctionEditor()
     }
     if ( isValidTimingInterpolation(curve, edit.effect, edit.value) ) {
         // 暗色参考线只用于对照，未画过的格点不能参与拟合。
-        ImVec2 previous{};
-        for ( int i = 0; i <= 128; ++i ) {
-            const auto point = curvePoint(
-                origin,
-                size,
-                i / 128.0,
-                evaluateTimingInterpolationVariable(
-                    curve,
-                    edit.value,
-                    timingInterpolationVariableDuration(curve) * i / 128.0),
-                state.m_minimum,
-                state.m_maximum);
-            if ( i )
-                draw->AddLine(previous, point, IM_COL32(110, 145, 175, 100));
-            previous = point;
-        }
+        // 显示分辨率不受手绘的 129 个格点限制，否则长段高频函数会混叠。
+        // 拍域参考线按拍数取值，不能套用下方输出图的秒域均分。
+        state.m_referencePreview.update(curve, edit.value, size.x, true);
+        drawTimingInterpolationPreview(state.m_referencePreview,
+                                       origin,
+                                       size,
+                                       state.m_minimum,
+                                       state.m_maximum,
+                                       IM_COL32(110, 145, 175, 100));
     }
     // InvisibleButton 是没有可见按钮外观的绘制命中区，不触发普通按钮样式。
     ImGui::InvisibleButton("函数自由绘制区域", size);
@@ -549,28 +543,37 @@ void TimelineCanvas::renderTimingFunctionEditor()
                           2);
     if ( state.m_fitFunction ) {
         // 拟合结果用另一种颜色显示，用户比较误差后再决定是否保存段落。
-        for ( int i = 1; i <= 128; ++i )
-            draw->AddLine(
-                curvePoint(origin,
-                           size,
-                           (i - 1) / 128.0,
-                           evaluateTimingFunction(
-                               *state.m_fitFunction,
-                               timingInterpolationVariableDuration(curve) *
-                                   (i - 1) / 128),
-                           state.m_minimum,
-                           state.m_maximum),
-                curvePoint(
-                    origin,
-                    size,
-                    i / 128.0,
-                    evaluateTimingFunction(
-                        *state.m_fitFunction,
-                        timingInterpolationVariableDuration(curve) * i / 128),
-                    state.m_minimum,
-                    state.m_maximum),
-                IM_COL32(80, 205, 255, 255),
-                2);
+        // 成功应用后就是同一函数，复用参考图的细节缓存，不重复稀疏求值。
+        if ( curve.m_function == state.m_fitFunction )
+            drawTimingInterpolationPreview(state.m_referencePreview,
+                                           origin,
+                                           size,
+                                           state.m_minimum,
+                                           state.m_maximum,
+                                           IM_COL32(80, 205, 255, 255));
+        else
+            for ( int i = 1; i <= 128; ++i )
+                draw->AddLine(
+                    curvePoint(origin,
+                               size,
+                               (i - 1) / 128.0,
+                               evaluateTimingFunction(
+                                   *state.m_fitFunction,
+                                   timingInterpolationVariableDuration(curve) *
+                                       (i - 1) / 128),
+                               state.m_minimum,
+                               state.m_maximum),
+                    curvePoint(origin,
+                               size,
+                               i / 128.0,
+                               evaluateTimingFunction(
+                                   *state.m_fitFunction,
+                                   timingInterpolationVariableDuration(curve) *
+                                       i / 128),
+                               state.m_minimum,
+                               state.m_maximum),
+                    IM_COL32(80, 205, 255, 255),
+                    2);
     }
     draw->PopClipRect();
     ImGui::Text("横轴：0 – %.6g %s；纵轴：%.6g – %.6g。",

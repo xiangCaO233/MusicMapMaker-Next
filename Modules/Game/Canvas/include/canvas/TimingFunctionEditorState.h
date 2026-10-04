@@ -1,5 +1,6 @@
 #pragma once
 
+#include "canvas/TimingInterpolationPreview.h"
 #include "mmm/timing/TimingFunction.h"
 #include "mmm/timing/TimingFunctionFit.h"
 #include "mmm/timing/TimingInterpolation.h"
@@ -40,6 +41,10 @@ struct TimingFunctionEditorState {
     std::shared_ptr<const TimingFunction> m_fitFunction;
     /// @brief 绘制、拟合及领域约束产生的提示。
     std::string m_fitError;
+    /// @brief 秒域输出预览与局部视野，仅模型、窗口宽度或视野变化时重建。
+    TimingInterpolationPreview m_outputPreview;
+    /// @brief 手绘参考图采用自变量域，独立于输出预览的缩放和拍轴投影。
+    TimingInterpolationPreview m_referencePreview;
 
     /// @brief 将合法拟合一次性应用到编辑副本，让公式和输出预览使用同一函数。
     /// @param curve 窗口拥有的段落副本，保存前不修改逻辑会话。
