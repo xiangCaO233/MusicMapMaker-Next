@@ -1,4 +1,5 @@
 #include "canvas/TimingInterpolationControls.h"
+#include "canvas/CanvasModalInput.h"
 
 #include "config/EditorSettings.h"
 #include "config/TimingInterpolationPreferences.h"
@@ -248,6 +249,164 @@ bool testDragging()
                curve.m_controlY2);
     return ok;
 }
+/// @brief 用实际模态窗口验证画布输入隔离、内部点击和关闭后的恢复。
+/// @return 弹窗内外都不触发底层输入，弹窗自己的命中区仍能点击时为真。
+/// @details 模拟时间线在提交模态窗口之前读取原始输入的实际顺序。
+/// 特别覆盖父窗口焦点回退：弹窗属于其发起窗口，却不能代表画布焦点。
+/// 鼠标事件逐帧推进，不修改 ImGui 内部焦点或绕过正式弹窗生命周期。
+/// 无后端夹具只验证输入路由，不依赖 Vulkan 或用户谱面资源。
+bool testModalInputIsolation()
+{
+    // 使用独立上下文隔离前一个贝塞尔拖动用例的焦点和活动控件。
+    ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    // 禁止持久化测试窗口位置，复跑不能依赖上一次本机布局。
+    io.IniFilename = nullptr;
+    // 本用例按帧显式分隔按下和释放，要求同批不同设备事件同帧消费。
+    // 否则队列分帧规则会把测试的移动推迟，干扰输入门禁断言时刻。
+    io.ConfigInputTrickleEventQueue = false;
+    // 画布覆盖整个视口，弹窗内外坐标都落在底层画布几何内。
+    io.DisplaySize = { 500, 400 };
+    // 固定步长只模拟 ImGui 输入边沿计时，不等待真实墙钟推进。
+    io.DeltaTime = 1.f / 60;
+    // 字体图集是 ImGui NewFrame 的前置条件，不需要上传到 GPU。
+    io.Fonts->AddFontDefault();
+    unsigned char* pixels = nullptr;
+    int            width = 0, height = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    // 输入位置和窗口范围均固定，测试不读取真实桌面坐标。
+    // 请求变量与观察结果分开，避免把尚未 Begin 的窗口误当作已打开。
+    bool requestOpen  = false;
+    bool requestClose = false;
+    // 观察值每帧覆盖，断言检查真正的画布路由时刻。
+    bool blocked             = false;
+    bool focused             = false;
+    bool inheritedPopupFocus = false;
+    bool rawDrag             = false;
+    // 各输入通道分别计数，不能只靠焦点是否变化判定成功。
+    int        canvasClicks = 0;
+    int        modalClicks  = 0;
+    int        canvasWheels = 0;
+    int        canvasKeys   = 0;
+    const auto frame        = [&]() {
+        // 输入通过正式事件队列消费，不直接赋值 MouseClicked 或 NavWindow。
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({ 0, 0 });
+        ImGui::SetNextWindowSize({ 500, 400 });
+        ImGui::Begin(
+            "Timeline modal test", nullptr, ImGuiWindowFlags_NoSavedSettings);
+        // 画布的输入处理先于本帧弹窗提交，和 TimelineCanvas 顺序一致。
+        // 模态之外的画布路径也读取原始鼠标，必须使用共同输入门禁。
+        blocked = MMM::Canvas::isCanvasInputBlockedByModal();
+        focused = MMM::Canvas::isCanvasWindowFocused();
+        // 保留旧查询作为对照，证明夹具确实触发弹窗父子焦点问题。
+        inheritedPopupFocus =
+            ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+        // 原始拖动不受模态自动过滤，覆盖旧手势更新可能穿透的入口。
+        rawDrag = ImGui::IsMouseDragging(ImGuiMouseButton_Left);
+        if ( MMM::Canvas::isCanvasWindowHovered() &&
+             ImGui::IsMouseClicked(ImGuiMouseButton_Left) )
+            // 这里模拟底层谱面点击命令，计数不包含弹窗自己的操作。
+            ++canvasClicks;
+        if ( MMM::Canvas::isCanvasWindowHovered() && io.MouseWheel != 0 )
+            ++canvasWheels;
+        // 不启用文本输入也必须阻挡播放快捷键，不能依赖 WantTextInput。
+        if ( focused && ImGui::IsKeyPressed(ImGuiKey_Space) ) ++canvasKeys;
+        // 与生产代码一样，OpenPopup 和 BeginPopupModal 使用相同 ID 栈。
+        if ( requestOpen ) {
+            ImGui::OpenPopup("Interpolation modal test");
+            requestOpen = false;
+        }
+        // 固定弹窗尺寸保证测试不依赖自动居中、字体测量或缩放设置。
+        ImGui::SetNextWindowPos({ 80, 80 });
+        ImGui::SetNextWindowSize({ 220, 160 });
+        if ( ImGui::BeginPopupModal("Interpolation modal test",
+                                    nullptr,
+                                    ImGuiWindowFlags_NoSavedSettings) ) {
+            // 不可见命中区模拟弹窗内部控件，不能因画布门禁而丢失点击。
+            ImGui::SetCursorScreenPos({ 100, 120 });
+            if ( ImGui::InvisibleButton("Modal input", { 120, 40 }) )
+                ++modalClicks;
+            // 从模态自身关闭，让 ImGui 执行正式焦点恢复和弹窗栈清理。
+            if ( requestClose ) {
+                ImGui::CloseCurrentPopup();
+                requestClose = false;
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::End();
+        // 完成一帧后再发送下一批输入，保持鼠标按下、移动、释放顺序。
+        ImGui::Render();
+    };
+    // 预热后先确认正常画布可点击，防止测试被始终禁用的策略蒙混通过。
+    // 这个坐标位于画布中，却在模态矩形之外。
+    io.AddMousePosEvent(430, 320);
+    frame();
+    frame();
+    io.AddMouseButtonEvent(0, true);
+    frame();
+    io.AddMouseButtonEvent(0, false);
+    frame();
+    // 点击基线不能为零，否则后续不穿透只是画布根本没有获得输入。
+    bool ok = canvasClicks == 1;
+    // 打开时弹窗有首帧隐藏测量，先推进到稳定可交互状态。
+    requestOpen = true;
+    frame();
+    frame();
+    // 父子焦点查询确实会包含弹窗；修复后的画布焦点必须排除它。
+    // 同时要求旧查询为真和新查询为假，排除夹具没有实际取得弹窗焦点。
+    ok &= blocked && inheritedPopupFocus && !focused;
+    // 目标在模态内部命中区中央，同一位置也属于父画布矩形。
+    io.AddMousePosEvent(130, 140);
+    frame();
+    io.AddMouseButtonEvent(0, true);
+    frame();
+    io.AddMouseButtonEvent(0, false);
+    frame();
+    // 弹窗点击正常且底层计数不变，两个要求必须同时满足。
+    ok &= modalClicks == 1 && canvasClicks == 1 && blocked;
+    // 弹窗外的底层画布同样不能点击、滚动或用 Space 操作播放状态。
+    io.AddMousePosEvent(430, 320);
+    frame();
+    io.AddMouseButtonEvent(0, true);
+    // 滚轮和 Space 与点击同批到达，复现多输入同时派发的情况。
+    io.AddMouseWheelEvent(0, 1);
+    io.AddKeyEvent(ImGuiKey_Space, true);
+    frame();
+    // 按住左键跨越拖动阈值，模拟弹窗操作产生原始拖动状态。
+    io.AddMousePosEvent(460, 340);
+    frame();
+    // 原始拖动查询仍为真，证明模态门禁不能仅依赖 IsMouseDragging。
+    ok &= rawDrag && blocked && canvasClicks == 1 && canvasWheels == 0 &&
+          canvasKeys == 0;
+    io.AddMouseButtonEvent(0, false);
+    // 释放不计入键盘操作，清理输入避免关闭模态后 Space 重复触发。
+    io.AddKeyEvent(ImGuiKey_Space, false);
+    frame();
+    // 释放全部输入再关闭，恢复测试不能误消费模态中尚未释放的按键。
+    // 关闭通过模态自身调用，不能直接清空内部弹窗栈来强制通过测试。
+    requestClose = true;
+    frame();
+    frame();
+    // 关闭模态后新手势立即恢复，不使用固定等待窗口。
+    io.AddMouseButtonEvent(0, true);
+    frame();
+    io.AddMouseButtonEvent(0, false);
+    frame();
+    // 第二次底层点击必须由新的按下产生，不能依赖关闭时残留的边沿。
+    // 恢复是下一帧生效，不能永久锁住底层编辑器。
+    ok &= !blocked && canvasClicks == 2;
+    // 完整结束帧之后释放上下文，不影响随后其它模块的无后端测试。
+    ImGui::DestroyContext();
+    // 输出独立通道计数，区分内部控件被禁用与底层某类输入泄漏。
+    if ( !ok )
+        XERROR("模态输入隔离失败：画布点击 {}，弹窗点击 {}，滚轮 {}，键盘 {}",
+               canvasClicks,
+               modalClicks,
+               canvasWheels,
+               canvasKeys);
+    return ok;
+}
 }  // namespace
 
 /// @brief 运行配置持久化、新段默认恢复及实际鼠标拖动三类回归。
@@ -258,5 +417,6 @@ int main()
     bool ok = testPreferences();
     ok &= testApplication();
     ok &= testDragging();
+    ok &= testModalInputIsolation();
     return ok ? 0 : 1;
 }

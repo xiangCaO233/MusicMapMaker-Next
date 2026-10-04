@@ -22,6 +22,7 @@
 #include "canvas/AnnotationDetailLayout.h"
 #include "canvas/AnnotationTargetHint.h"
 #include "canvas/CanvasBlockedGesture.h"
+#include "canvas/CanvasModalInput.h"
 #include "canvas/HoverLayerSelection.h"
 #include "canvas/ObjectDragAutoPan.h"
 #include "common/AudioResourceDragPayload.h"
@@ -2337,9 +2338,7 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
 
     // 允许 active 控件阻挡时仍判断根窗口归属，实际谱包/文件只交给
     // 鼠标所在画布，避免多谱面窗口重复打开。
-    bool isHovered =
-        ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows |
-                               ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+    bool isHovered = isCanvasWindowHovered();
 
     if ( isHovered ) {
         for ( const auto& drop : m_pendingDrops ) {
@@ -5009,10 +5008,12 @@ void Basic2DCanvasInteraction::handleInteractions(
         hasValidMousePos && targetWidth > 0.0f && targetHeight > 0.0f &&
         localMousePos.x >= 0.0f && localMousePos.x <= targetWidth &&
         localMousePos.y >= 0.0f && localMousePos.y <= targetHeight;
-    bool isHovered = isInsideCanvas && ImGui::IsWindowHovered();
+    const bool modalBlocked = isCanvasInputBlockedByModal();
+    bool       isHovered =
+        !modalBlocked && isInsideCanvas && ImGui::IsWindowHovered();
     // 中键平移允许从被活动控件覆盖的画布区域开始，提供全局导航手势。
     const bool middlePanStartHovered =
-        isInsideCanvas &&
+        !modalBlocked && isInsideCanvas &&
         ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     const bool middleClicked =
         middlePanStartHovered &&
@@ -5022,7 +5023,8 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_isMiddleCanvasPanning      = true;
         m_lastMiddlePanMousePosition = { localMousePos.x, localMousePos.y };
     }
-    const bool isDragging = !m_isMiddleCanvasPanning && hasValidMousePos &&
+    const bool isDragging = !modalBlocked && !m_isMiddleCanvasPanning &&
+                            hasValidMousePos &&
                             ImGui::IsMouseDragging(ImGuiMouseButton_Left);
     // 中键占用期间不得把左键拖拽状态继续报告给逻辑层。
 
@@ -5167,6 +5169,79 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_lastMouseCommand.viewportHeight = targetHeight;
         m_lastMouseCommand.isHovering     = isHovered;
         m_lastMouseCommand.isDragging     = isDragging;
+    }
+
+    if ( modalBlocked ) {
+        // 鼠标命令已经将 dragging 和 hovering 同步为 false；旧逻辑快照
+        // 仍可能保留上一帧状态，因此下方不能依赖快照来决定是否拦截。
+        // 结束事务只读取本地手势锁存，后续模态帧不重复发送结束命令。
+        // 画布和弹窗同帧更新，不使用延迟窗口来等待焦点恢复。
+        // 原始按键查询不受 ImGui 模态规则自动阻挡。模态接管时先收尾旧
+        // 手势，不能继续消费弹窗中的拖动，也不能把它锁存为下一次编辑。
+        // 对象拖动按自身锁存优先收尾，不能按当前工具误当作框选。
+        if ( m_leftPressStartedObjectDrag ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
+        } else if ( m_leftPressStartedOnCanvas &&
+                    currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
+        } else if ( m_leftPressStartedOnCanvas &&
+                    currentSnapshot->currentTool == Logic::EditTool::Draw ) {
+            // 尚未提交的画笔取消，模态内部点击不能成为放置确认。
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdEndBrush{ .cameraId = m_cameraId, .cancel = true }));
+        }
+        // 擦除与左键事务可以独立存在，结束左键不能代替结束擦除。
+        if ( m_rightEraseActive ) {
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdEndErase{ m_cameraId }));
+        }
+        if ( m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
+             m_horizontalRegionDragHandle != HorizontalRegionDragHandle::None ||
+             m_noteScaleDragTarget.has_value() ||
+             m_canvasComponentDragTarget.has_value() ||
+             m_layoutConfigurationChanged ) {
+            // 保存模态出现前的配置变化，不再跟随弹窗内鼠标更新句柄。
+            finishLayoutEditing();
+        }
+        // 平移只缓存局部增量；取消标记即可阻止下一帧继续移动相机。
+        m_isMiddleCanvasPanning = false;
+        // 清空全部按下来源，防止弹窗中的释放被解释为空白点击取消选择。
+        // 拖动和绘制的逻辑结束命令已发送，UI 缓存不能再次提交同一事务。
+        m_leftPressStartedOnCanvas      = false;
+        m_leftPressStartedInTrackLayout = false;
+        m_leftPressStartedOnEntity      = false;
+        m_leftPressStartedObjectDrag    = false;
+        m_leftPressDragged              = false;
+        m_rightEraseActive              = false;
+        // 一次性画笔取消请求只属于被中断的手势，不能带到下次操作。
+        m_cancelBrushOnNextRelease = false;
+        // 颜色工具的去重集合不跨手势复用，连续命令基线也同时失效。
+        m_colorStrokeEntities.clear();
+        resetContinuousEditCommands();
+        // 无物件悬停时不发布空命令；持续显示模态不会反复发送结束事件。
+        if ( m_hasLastHovered && m_lastHoveredEntity != entt::null ) {
+            // 逻辑层只接收一次悬停退出，不能保留被遮住物件的高亮。
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdSetHoveredEntity{ entt::null, 0, -1 }));
+            m_lastHoveredEntity   = entt::null;
+            m_lastHoveredPart     = 0;
+            m_lastHoveredSubIndex = -1;
+        }
+        // 这里仅终止画布输入，不跳过整个 UI update，提示计时照常推进。
+        // 也不重置 ImGui 输入队列；弹窗内控件必须继续看到本帧按键。
+        // 批注编辑器也由本入口提交。仍绘制其模态窗口，让确认、取消和
+        // 关闭按钮正常工作；底层批注栏只接收禁用悬停的几何信息。
+        renderAnnotationGutter(*currentSnapshot,
+                               windowPos.x,
+                               windowPos.y,
+                               targetWidth,
+                               targetHeight,
+                               localMousePos.x,
+                               localMousePos.y,
+                               false);
+        return;
     }
 
     if ( m_isMiddleCanvasPanning ) {

@@ -15,6 +15,7 @@
 /// 避免重复绑定；皮肤资源和 shader 文件只在低频重载路径访问。
 #include "canvas/TimelineCanvas.h"
 #include "audio/AudioManager.h"
+#include "canvas/CanvasModalInput.h"
 #include "canvas/TimelineTableWindowState.h"
 #include "canvas/TimelineTimingTooltip.h"
 #include "common/render/RenderSnapshotBuffer.h"
@@ -513,7 +514,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
     if ( m_shouldFocusNextFrame ) {
         // 聚焦请求在 Begin 前设置，并在本帧立即清除避免持续抢焦点。
-        ImGui::SetNextWindowFocus();
+        // 模态窗口独占输入时丢弃旧聚焦请求，不能把焦点抢回时间线。
+        if ( !isCanvasInputBlockedByModal() ) ImGui::SetNextWindowFocus();
         m_shouldFocusNextFrame = false;
     }
     UI::LayoutContext lctx(m_layoutCtx,
@@ -536,7 +538,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
     }
     m_lastDockId = ImGui::IsWindowDocked() ? ImGui::GetWindowDockID() : 0;
     // 独立表格需要最近 Dock ID 恢复到时间线所属区域。
-    if ( ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) ) {
+    if ( isCanvasWindowFocused() ) {
         m_hasTimingInteractionFocus = true;
     }
     m_wasFocusedLastFrame = m_hasTimingInteractionFocus;
@@ -638,19 +640,18 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             // descriptor 有效后把离屏结果作为一个 ImGui Image 嵌入窗口。
             ImGui::Image((ImTextureID)(VkDescriptorSet)texID, size);
 
-            ImVec2 canvasPos = ImGui::GetItemRectMin();
-            ImVec2 mousePos  = ImGui::GetMousePos();
-            bool   isHovered =
-                ImGui::IsItemHovered(
-                    ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) ||
-                (ImGui::IsWindowHovered(
-                     ImGuiHoveredFlags_RootAndChildWindows |
-                     ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
-                 mousePos.x >= canvasPos.x &&
-                 mousePos.x <= canvasPos.x + size.x &&
-                 mousePos.y >= canvasPos.y &&
-                 mousePos.y <= canvasPos.y + size.y);
-            // 几何回退覆盖 InvisibleButton 等 active item 阻挡的情况。
+            ImVec2     canvasPos    = ImGui::GetItemRectMin();
+            ImVec2     mousePos     = ImGui::GetMousePos();
+            const bool modalBlocked = isCanvasInputBlockedByModal();
+            bool       isHovered =
+                !modalBlocked &&
+                (ImGui::IsItemHovered(
+                     ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) ||
+                 (isCanvasWindowHovered() && mousePos.x >= canvasPos.x &&
+                  mousePos.x <= canvasPos.x + size.x &&
+                  mousePos.y >= canvasPos.y &&
+                  mousePos.y <= canvasPos.y + size.y));
+            // 几何回退覆盖 active item；弹窗子窗口和模态遮罩始终排除。
             const ImGuiIO& io    = ImGui::GetIO();
             float          wheel = io.MouseWheel;
             if ( isHovered && std::abs(wheel) > 0.01f ) {
@@ -669,8 +670,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             }
 
             // 3. 处理 Timeline Timing 的工具交互和反馈
-            bool windowFocused =
-                ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+            bool       windowFocused           = isCanvasWindowFocused();
             const bool toolbarFocusedOrHovered = isToolbarFocusedOrHovered();
             const bool timelineMouseClicked =
                 isHovered && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
@@ -680,7 +680,24 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 !isHovered && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
                                ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
                                ImGui::IsMouseClicked(ImGuiMouseButton_Middle));
-            if ( windowFocused || timelineMouseClicked ) {
+            if ( modalBlocked ) {
+                // 锁存焦点只能用于普通工具栏；模态操作不能复用它编辑底层。
+                m_hasTimingInteractionFocus = false;
+                // Timing 手势状态只存于 UI，不需要向逻辑层发送结束命令。
+                // 模态出现前尚未提交的 Timing 预览直接取消，避免关闭后
+                // 复用旧拖动起点。已经提交的谱面修改不在此处撤销。
+                m_hoveredTimingEntity = entt::null;
+                // 拖拽、框选、绘制与插值共用原始按键；必须全部释放所有权。
+                m_isTimingDragging         = false;
+                m_isTimingMarqueeSelecting = false;
+                m_isTimingDrawPreviewing   = false;
+                m_isInterpolationDragging  = false;
+                m_isTimingErasing          = false;
+                // 预览位移和擦除目标必须同步清空，不能只隐藏句柄。
+                m_timingDragPreviewDelta = 0.0;
+                m_timingDragEntries.clear();
+                m_timingEraseTargetEntities.clear();
+            } else if ( windowFocused || timelineMouseClicked ) {
                 // 鼠标点击可以恢复此前因其它窗口点击而释放的焦点锁存。
                 m_hasTimingInteractionFocus = true;
                 if ( timelineMouseClicked ) {
