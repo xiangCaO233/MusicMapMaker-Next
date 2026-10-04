@@ -8,6 +8,8 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
+
 namespace MMM::Logic
 {
 
@@ -27,6 +29,10 @@ void EditorActionStack::pushAndExecute(std::unique_ptr<IEditorAction> action,
     // 累积类别而非覆盖，允许会话在一次发布前执行多个不同领域的动作。
     m_pendingMutationFlags |= action->mutationFlags();
     m_undoStack.push_back(std::move(action));
+    // 观察者通知发生在会话同步之后，此时先保存动作身份。
+    // 后续若协作层接受这次编辑，序号应归属刚入栈的动作。
+    m_lastActionAwaitingCollaborationSequence = m_undoStack.back().get();
+    m_lastActionAppliedAfterMutation          = true;
     // 新编辑使原来的重做分支失效，旧动作及其保存的快照随之释放。
     m_redoStack.clear();
     if ( ctx.m_needsTimingsSync || ctx.m_needsSamplesSync ) {
@@ -54,6 +60,10 @@ void EditorActionStack::undo(SessionContext& ctx)
     // 撤销同样改变数据，必须向后续观察者发布该动作涉及的类别。
     m_pendingMutationFlags |= action->mutationFlags();
     m_redoStack.push_back(std::move(action));
+    // 撤销也是独立的协作操作，记录其“未应用”方向。
+    // 房主若撤回此次撤销，需要把动作重新放回撤销栈。
+    m_lastActionAwaitingCollaborationSequence = m_redoStack.back().get();
+    m_lastActionAppliedAfterMutation          = false;
     if ( ctx.m_needsTimingsSync || ctx.m_needsSamplesSync ) {
         SessionUtils::syncBeatmap(ctx);
     }
@@ -104,10 +114,85 @@ void EditorActionStack::redo(SessionContext& ctx)
     // 只移动当前栈顶，不清空其余重做记录，后续动作仍可依次恢复。
     m_pendingMutationFlags |= action->mutationFlags();
     m_undoStack.push_back(std::move(action));
+    // 重做沿用动作身份，但会取得新的协作序号。
+    // 保存方向使房主能撤回这次重做而不误处理首次创建。
+    m_lastActionAwaitingCollaborationSequence = m_undoStack.back().get();
+    m_lastActionAppliedAfterMutation          = true;
     if ( ctx.m_needsTimingsSync || ctx.m_needsSamplesSync ) {
         SessionUtils::syncBeatmap(ctx);
     }
     ProjectDraftLaneService::sync(ctx);
+}
+
+/// @brief 把协作观察者序号绑定到刚变更的本地动作。
+/// @param sequence 非零的本地谱面变化序号。
+/// @details 编辑动作和网络修订使用不同的编号空间。首次本地编码完成后，把
+///         observer 序号保存在动作上；稍后房主广播补偿时可通过该值定位。
+///         普通 Undo/Redo 也产生独立协作序号，并保存操作完成后的应用方向。
+void EditorActionStack::markLatestCollaborationSequence(std::uint64_t sequence)
+{
+    if ( sequence == 0 || !m_lastActionAwaitingCollaborationSequence ) {
+        return;
+    }
+    // 房主最多留 128 条全局历史，动作无需无限保留更旧的本地序号。
+    auto& mutations =
+        m_lastActionAwaitingCollaborationSequence->m_collaborationMutations;
+    mutations.emplace_back(sequence, m_lastActionAppliedAfterMutation);
+    if ( mutations.size() > 128U ) {
+        mutations.erase(mutations.begin());
+    }
+    m_lastActionAwaitingCollaborationSequence = nullptr;
+}
+
+/// @brief 根据房主权威补偿移动本地动作栈，不再次改变谱面实体。
+/// @param sequence 被补偿操作的本地协作变化序号。
+/// @param redo 房主是否恢复该原始操作。
+/// @return 精确找到动作时返回 true，历史缺失时保守清空并返回 false。
+/// @details 权威谱面快照紧随此命令入队，所以这里仅转移动作所有权。
+///         再调用 action->undo 或 redo 会把同一变化应用两次。
+///         找不到动作表示网络与本地历史已失去一一对应关系，此时清空旧栈
+///         比允许后续本地撤销恢复过时实体更安全。
+bool EditorActionStack::reconcileCollaborationHistory(std::uint64_t sequence,
+                                                      bool          redo)
+{
+    // 被撤回的原操作本身可能是 Undo：其补偿目标此时应是“已应用”。
+    const auto mutationFor = [sequence](const auto& action) {
+        return std::find_if(
+            action->m_collaborationMutations.begin(),
+            action->m_collaborationMutations.end(),
+            [sequence](const auto& item) { return item.first == sequence; });
+    };
+    const auto matches = [&mutationFor](const auto& action) {
+        return mutationFor(action) != action->m_collaborationMutations.end();
+    };
+    auto foundUndo =
+        std::find_if(m_undoStack.begin(), m_undoStack.end(), matches);
+    auto foundRedo =
+        std::find_if(m_redoStack.begin(), m_redoStack.end(), matches);
+    if ( sequence == 0 ||
+         (foundUndo == m_undoStack.end() && foundRedo == m_redoStack.end()) ) {
+        // 本地动作已被其他操作淘汰，旧栈无法再保证语义安全。
+        clear();
+        return false;
+    }
+    const bool originallyApplied = foundUndo != m_undoStack.end()
+                                       ? mutationFor(*foundUndo)->second
+                                       : mutationFor(*foundRedo)->second;
+    // 这里恢复的是被补偿的“那次操作”的结果，而非动作首次创建的方向。
+    // 同一动作可能依次经历本地撤销、重做，序号分别指向不同状态。
+    const bool targetApplied = redo ? originallyApplied : !originallyApplied;
+    m_lastActionAwaitingCollaborationSequence = nullptr;
+    if ( targetApplied && foundRedo != m_redoStack.end() ) {
+        // 实体由随后到达的权威快照更新，这里只改变本地撤销所有权。
+        m_undoStack.push_back(std::move(*foundRedo));
+        m_redoStack.erase(foundRedo);
+    } else if ( !targetApplied && foundUndo != m_undoStack.end() ) {
+        // 保留动作快照，允许原作者此后通过本地重做再次提交操作。
+        m_redoStack.push_back(std::move(*foundUndo));
+        m_undoStack.erase(foundUndo);
+    }
+    ++m_changeRevision;
+    return true;
 }
 
 /// @brief 丢弃全部历史并恢复初始保存状态。
@@ -116,6 +201,8 @@ void EditorActionStack::clear()
 {
     m_undoStack.clear();
     m_redoStack.clear();
+    m_lastActionAwaitingCollaborationSequence = nullptr;
+    m_lastActionAppliedAfterMutation          = false;
     // 新的历史基线不继承旧会话的保存位置、非撤销修改或待发布类别。
     m_saveIndex             = 0;
     m_hasNonUndoableChanges = false;

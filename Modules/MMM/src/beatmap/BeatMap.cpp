@@ -11,6 +11,8 @@
 
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 
@@ -82,6 +84,90 @@ bool BeatMap::saveToFile(std::filesystem::path mapFilePath) const
 {
     // 保存不从当前来源格式推断目标，允许另存为完成格式转换。
     std::string mapFileExtention = Config::pathToUtf8(mapFilePath.extension());
+    // 节拍定义的派生域可能因后续 BPM 编辑而失效，保存消费最新红线副本。
+    // 原生保存保留段落；外部保存仍经过同一个采样入口，不能单独沿用旧缓存。
+    if ( std::any_of(
+             m_timings.begin(), m_timings.end(), [](const Timing& timing) {
+                 return timing.m_interpolation &&
+                        timing.m_interpolation->m_variable ==
+                            TimingVariable::Beat;
+             }) ) {
+        // 独立容器只供同步 writer，来源模型保持不变。
+        // 子 Note 引用借用稳定源数据，不修改任何物件。
+        // 全部段落成功后才写出，不能部分使用旧拍域。
+        // 数学域失败拒绝保存，不降级成普通时间点。
+        // 临时副本不成为新撤销基线，不修改来源元数据。
+        // writer 不保留局部地址，来源在调用结束前存活。
+        // 原生和外部格式消费同一条已准备红线时间轴。
+        BeatMap prepared;
+        prepared.m_noteData        = m_noteData;
+        prepared.m_audioSamples    = m_audioSamples;
+        prepared.m_annotations     = m_annotations;
+        prepared.m_metadata        = m_metadata;
+        prepared.m_baseMapMetadata = m_baseMapMetadata;
+        prepared.m_timings         = m_timings;
+        const double fallback      = m_baseMapMetadata.preference_bpm > 0
+                                         ? m_baseMapMetadata.preference_bpm
+                                         : 120;
+        for ( auto& timing : prepared.m_timings ) {
+            if ( !timing.m_interpolation ) continue;
+            if ( !bindTimingInterpolationBeatAxis(*timing.m_interpolation,
+                                                  timing.m_timestamp / 1000,
+                                                  m_timings,
+                                                  fallback) ||
+                 !isValidTimingInterpolation(*timing.m_interpolation,
+                                             timing.m_timingEffect,
+                                             timing.m_timingEffectParameter) ||
+                 !std::isfinite(timing.m_timestamp) || timing.m_timestamp < 0 )
+                return false;
+        }
+        // 原生 writer 可直接消费值容器，避免含拍域段落时递归准备同一副本。
+        if ( mapFileExtention == ".mmm" )
+            return saveMMMMap(prepared, mapFilePath);
+        // 原生保存保留一个段落，只有外部格式展开独立点。
+        // 展开后无段落，递归 writer 分派能安全终止。
+        // 原生副本不能递归 saveToFile，避免无终止准备。
+        // 失败以布尔返回，原曲线与缓存仍完整。
+        prepared.m_timings =
+            sampleTimingInterpolations(prepared.m_timings, fallback);
+        if ( prepared.m_timings.empty() ) return false;
+        prepared.sync();
+        return prepared.saveToFile(std::move(mapFilePath));
+    }
+    // 无效段落禁止静默降级丢弃，保存失败保留编辑数据供用户修正。
+    // 时间戳在文件领域为毫秒，曲线时长为秒，求终点必须先统一单位。
+    // 起点和终点都必须可表示，有限时长并不能单独保证相加后不溢出。
+    for ( const auto& timing : m_timings )
+        if ( timing.m_interpolation &&
+             (!std::isfinite(timing.m_timestamp) || timing.m_timestamp < 0.0 ||
+              !std::isfinite(timing.m_timestamp +
+                             timing.m_interpolation->m_duration * 1000.0) ||
+              !isValidTimingInterpolation(*timing.m_interpolation,
+                                          timing.m_timingEffect,
+                                          timing.m_timingEffectParameter)) )
+            return false;
+    if ( mapFileExtention != ".mmm" &&
+         std::any_of(
+             m_timings.begin(), m_timings.end(), [](const auto& timing) {
+                 return timing.m_interpolation.has_value();
+             }) ) {
+        // 格式写出消费临时采样视图，编辑中的段落定义和撤销历史不受影响。
+        // 只有含段落的低频保存分支复制领域数据，普通保存沿用原入口。
+        BeatMap sampled;
+        // 临时副本只服务同步 writer；来源谱面在整个保存调用期间存活。
+        // NoteData 中共享的折线节点只被只读访问，不修改源父子关系。
+        // 节点语义不依赖曲线采样，不能在导出时重新生成物件身份。
+        // 递归调用面对的所有 Timing 均已清除段落字段，不会重复展开。
+        sampled.m_noteData        = m_noteData;
+        sampled.m_audioSamples    = m_audioSamples;
+        sampled.m_annotations     = m_annotations;
+        sampled.m_metadata        = m_metadata;
+        sampled.m_baseMapMetadata = m_baseMapMetadata;
+        sampled.m_timings         = sampleTimingInterpolations(m_timings);
+        // 重建借用视图以指向临时副本的容器，不能沿用来源视图地址。
+        sampled.sync();
+        return sampled.saveToFile(std::move(mapFilePath));
+    }
     if ( mapFileExtention == ".osu" ) {
         // 目标格式由后缀唯一决定，写出器负责必要的字段降级。
         return saveOSUMap(*this, mapFilePath);
@@ -109,6 +195,23 @@ bool BeatMap::saveToFile(std::filesystem::path mapFilePath) const
 /// 必须再次同步。Polyline 子节点不作为顶层项重复加入，排序提供确定性次键。
 void BeatMap::sync()
 {
+    // 模型同步是载入、变速和编辑保存共同的准备边界。
+    // 绑定不排序原 Timing，同刻稳定覆盖顺序保持不变。
+    // 函数只在定义域改变时编译，不依赖曾打开编辑窗口。
+    // 全部数据读取后决定拍长，文件事件顺序不影响结果。
+    // 全部 Timing 已读入后才能准备拍域函数，避免文件事件顺序影响结果。
+    // 同步只属于模型变更的低频入口，播放查询借用准备好的不可变映射。
+    const double fallback = m_baseMapMetadata.preference_bpm > 0
+                                ? m_baseMapMetadata.preference_bpm
+                                : 120;
+    for ( auto& timing : m_timings ) {
+        if ( timing.m_interpolation &&
+             timing.m_interpolation->m_variable == TimingVariable::Beat )
+            bindTimingInterpolationBeatAxis(*timing.m_interpolation,
+                                            timing.m_timestamp / 1000,
+                                            m_timings,
+                                            fallback);
+    }
     // 清空旧借用引用，防止容器变更后继续持有失效地址。
     m_allNotes.clear();
     // 按分类容器顺序收集后再统一排序，不依赖各容器原有排列。

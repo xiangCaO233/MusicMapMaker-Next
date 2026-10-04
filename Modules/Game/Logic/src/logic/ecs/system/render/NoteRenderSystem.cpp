@@ -380,17 +380,17 @@ void NoteRenderSystem::generateSnapshot(
         // 专业模式下草稿可能有独立轨数与宽度。
         // 不按玩家轨宽向左简单延伸，否则自定义布局后特效会错位。
         if ( isMainCanvas && snapshot->draftLanesEnabled ) {
-            const auto laneProjection =
-                calculateCanvasLaneProjection(viewportWidth,
-                                              trackCount,
-                                              bgmTrackCount,
-                                              config.visual.trackLayout,
-                                              snapshot->canvasHorizontalOffsetX,
-                                              true,
-                                              config.settings.enableBmsEditing,
-                                              true,
-                                              draftTrackCount,
-                                              true);
+            const auto laneProjection = calculateCanvasLaneProjection(
+                viewportWidth,
+                trackCount,
+                bgmTrackCount,
+                config.visual.trackLayout,
+                snapshot->canvasHorizontalOffsetX,
+                true,
+                config.settings.isBmsEditingEnabled(),
+                true,
+                draftTrackCount,
+                true);
             // 实际草稿轨数由投影结果决定。
             // 特效区域身份通过最后的草稿标志传入，避免套用玩家轨号。
             const auto visibleDraftTrackCount =
@@ -576,17 +576,17 @@ void NoteRenderSystem::generateSnapshot(
         }
 
         if ( isMainCanvas && shouldDrawBeatLines ) {
-            const auto laneProjection =
-                calculateCanvasLaneProjection(viewportWidth,
-                                              trackCount,
-                                              bgmTrackCount,
-                                              config.visual.trackLayout,
-                                              snapshot->canvasHorizontalOffsetX,
-                                              true,
-                                              config.settings.enableBmsEditing,
-                                              snapshot->draftLanesEnabled,
-                                              draftTrackCount,
-                                              true);
+            const auto laneProjection = calculateCanvasLaneProjection(
+                viewportWidth,
+                trackCount,
+                bgmTrackCount,
+                config.visual.trackLayout,
+                snapshot->canvasHorizontalOffsetX,
+                true,
+                config.settings.isBmsEditingEnabled(),
+                snapshot->draftLanesEnabled,
+                draftTrackCount,
+                true);
             // 草稿几何可能部分移出视口，裁剪仅取其可见交集。
             // 投影原点仍保留真实位置，不能用裁剪边缘改写轨道坐标。
             const float visibleDraftLeft =
@@ -701,17 +701,17 @@ void NoteRenderSystem::generateSnapshot(
         CanvasLaneProjection        noteLaneProjection;
         const CanvasLaneProjection* noteLaneProjectionPtr = nullptr;
         if ( isMainCanvas ) {
-            noteLaneProjection =
-                calculateCanvasLaneProjection(viewportWidth,
-                                              trackCount,
-                                              bgmTrackCount,
-                                              config.visual.trackLayout,
-                                              snapshot->canvasHorizontalOffsetX,
-                                              true,
-                                              config.settings.enableBmsEditing,
-                                              snapshot->draftLanesEnabled,
-                                              draftTrackCount,
-                                              true);
+            noteLaneProjection = calculateCanvasLaneProjection(
+                viewportWidth,
+                trackCount,
+                bgmTrackCount,
+                config.visual.trackLayout,
+                snapshot->canvasHorizontalOffsetX,
+                true,
+                config.settings.isBmsEditingEnabled(),
+                snapshot->draftLanesEnabled,
+                draftTrackCount,
+                true);
             // 有投影时，音符生成可使用独立辅助区域布局。
             // Preview 继续传空指针，沿用简化的统一轨道布局。
             noteLaneProjectionPtr    = &noteLaneProjection;
@@ -749,17 +749,17 @@ void NoteRenderSystem::generateSnapshot(
                                       renderScaleY,
                                       noteLaneProjectionPtr);
         if ( isMainCanvas ) {
-            const auto laneProjection =
-                calculateCanvasLaneProjection(viewportWidth,
-                                              trackCount,
-                                              bgmTrackCount,
-                                              config.visual.trackLayout,
-                                              snapshot->canvasHorizontalOffsetX,
-                                              true,
-                                              config.settings.enableBmsEditing,
-                                              snapshot->draftLanesEnabled,
-                                              draftTrackCount,
-                                              true);
+            const auto laneProjection = calculateCanvasLaneProjection(
+                viewportWidth,
+                trackCount,
+                bgmTrackCount,
+                config.visual.trackLayout,
+                snapshot->canvasHorizontalOffsetX,
+                true,
+                config.settings.isBmsEditingEnabled(),
+                snapshot->draftLanesEnabled,
+                draftTrackCount,
+                true);
             // 自动采样只在主画布展示，不混入缩略 Preview。
             // 已排序实体与最大结束时间前缀供可见区筛选使用。
             // 不能在这个每帧调用点重新建立全部索引。
@@ -786,17 +786,17 @@ void NoteRenderSystem::generateSnapshot(
                 viewportHeight - config.visual.previewConfig.margin.bottom;
             batcher.setScissor(lx, ty, rx - lx, by - ty);
         } else if ( isMainCanvas ) {
-            const auto laneProjection =
-                calculateCanvasLaneProjection(viewportWidth,
-                                              trackCount,
-                                              bgmTrackCount,
-                                              config.visual.trackLayout,
-                                              snapshot->canvasHorizontalOffsetX,
-                                              true,
-                                              config.settings.enableBmsEditing,
-                                              snapshot->draftLanesEnabled,
-                                              draftTrackCount,
-                                              true);
+            const auto laneProjection = calculateCanvasLaneProjection(
+                viewportWidth,
+                trackCount,
+                bgmTrackCount,
+                config.visual.trackLayout,
+                snapshot->canvasHorizontalOffsetX,
+                true,
+                config.settings.isBmsEditingEnabled(),
+                snapshot->draftLanesEnabled,
+                draftTrackCount,
+                true);
             const auto  contentBounds = laneProjection.contentBounds();
             const float clipLeft      = std::max(0.0F, contentBounds.leftX);
             const float clipRight =
@@ -1047,6 +1047,8 @@ void NoteRenderSystem::renderMarqueeBox(
 
 /// @brief 根据会话配置生成时间线快照，与其他画布共享专业模式状态。
 /// @warning 逻辑渲染热路径：只读取传入的配置快照和已缓存的时间线数据。
+/// 段落描述复制保留不可变函数的共享所有权，频率为每次时间线快照发布；
+/// UI 可在逻辑删除实体后继续读取旧快照，观察指针无法保证这段跨线程生命周期。
 /// @param snapshot 接收几何及 Timing 交互元素的快照。
 /// @param bpmEvents 已排序的 BPM 观察指针，供分拍线生成使用。
 /// @param batcher 沿用调用方设置的全时间线裁剪。
@@ -1067,6 +1069,8 @@ void NoteRenderSystem::generateTimelineSnapshot(
     float judgmentLineY, const Config::EditorConfig& config,
     const ScrollCache* cache)
 {
+    // 曲线描述保留原始实体；积分采样不是可交互时间点。
+    snapshot->timingInterpolations = cache->getInterpolations();
     // 空会话没有可解释的 Timing 数据，保持已有快照内容并返回。
     // 背景与交互元素都只在谱面存在时追加。
     if ( !snapshot->hasBeatmap ) return;
@@ -1232,20 +1236,30 @@ void NoteRenderSystem::generateTimelineSnapshot(
                 // 微小容差减少浮点误差把恰在边界上的线跳到下一格。
                 if ( startCalcTime > bpmTime ) {
                     stepOffset = static_cast<int64_t>(std::ceil(
-                        (startCalcTime - bpmTime) / stepDuration - 1e-4));
+                        timelineBeatsAt(*currentBPM, startCalcTime, bpmVal) *
+                            beatDivisor -
+                        1e-4));
                     // 允许首 BPM 向前补线时使用负步数。
                     // 向下取整给出候选，再由下一段循环推进到实际可见起点。
                 } else if ( startCalcTime < bpmTime ) {
                     stepOffset = static_cast<int64_t>(std::floor(
-                        (startCalcTime - bpmTime) / stepDuration + 1e-4));
+                        timelineBeatsAt(*currentBPM, startCalcTime, bpmVal) *
+                            beatDivisor +
+                        1e-4));
                 }
 
-                double t = bpmTime + stepOffset * stepDuration;
+                double t = timelineTimeAtBeat(
+                    *currentBPM,
+                    static_cast<double>(stepOffset) / beatDivisor,
+                    bpmVal);
                 // 校正整数换算后的下界误差，保证正式循环不从窗口前开始。
                 // 这是有限数据步进，不等待时钟或跨线程状态。
                 while ( t < startCalcTime - 1e-4 ) {
                     stepOffset++;
-                    t = bpmTime + stepOffset * stepDuration;
+                    t = timelineTimeAtBeat(
+                        *currentBPM,
+                        static_cast<double>(stepOffset) / beatDivisor,
+                        bpmVal);
                 }
                 // 每一步都由整数偏移重新乘出时间，不连续累加浮点时长。
                 // 同时限制在 BPM 生效段和当前可见区间内。
@@ -1311,7 +1325,10 @@ void NoteRenderSystem::generateTimelineSnapshot(
                     }
 
                     stepOffset++;
-                    t = bpmTime + stepOffset * stepDuration;
+                    t = timelineTimeAtBeat(
+                        *currentBPM,
+                        static_cast<double>(stepOffset) / beatDivisor,
+                        bpmVal);
                 }
             }
         }
@@ -1733,7 +1750,7 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                                           config.visual.trackLayout,
                                           snapshot->canvasHorizontalOffsetX,
                                           true,
-                                          config.settings.enableBmsEditing,
+                                          config.settings.isBmsEditingEnabled(),
                                           snapshot->draftLanesEnabled,
                                           draftTrackCount,
                                           true);

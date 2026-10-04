@@ -100,17 +100,17 @@ constexpr std::size_t MAX_BOUND_SOUND_PREFETCH_EVENTS_PER_TICK = 256U;
         return ::MMM::BeatmapMutationFlags::Objects;
     }
     // 权限判断复用实际绘制的轨道布局，包含横向偏移、专业模式与草稿区。
-    const auto lanes =
-        calculateCanvasLaneProjection(camera->second.viewportWidth,
-                                      ctx.trackCount,
-                                      ctx.bgmTrackCount,
-                                      ctx.lastConfig.visual.trackLayout,
-                                      camera->second.horizontalOffsetX,
-                                      true,
-                                      ctx.lastConfig.settings.enableBmsEditing,
-                                      ctx.lastConfig.settings.professionalMode,
-                                      ctx.draftTrackCount,
-                                      true);
+    const auto lanes = calculateCanvasLaneProjection(
+        camera->second.viewportWidth,
+        ctx.trackCount,
+        ctx.bgmTrackCount,
+        ctx.lastConfig.visual.trackLayout,
+        camera->second.horizontalOffsetX,
+        true,
+        ctx.lastConfig.settings.isBmsEditingEnabled(),
+        ctx.lastConfig.settings.professionalMode,
+        ctx.draftTrackCount,
+        true);
     const auto lane = lanes.laneAt(mouseX);
     // 按投影后的横坐标命中轨道，不能把鼠标像素直接转换为绝对轨号。
     // 只有明确命中 BGM 轨道才归类为样本，其他位置保留普通物件权限要求。

@@ -184,9 +184,12 @@ private:
                             float labelWidth, float& volume, bool& muted,
                             bool& changed);
     /// @brief 构建速度和音高区域的 Clay 布局
+    /// @param speedChanged 全局预览倍率需要单独提交时置为 true。
+    /// @param pitchChanged 全局实时音高需要单独提交时置为 true。
     void buildSpeedAndPitchSection(CLayVBox& parent, size_t& rowIndex,
                                    float labelWidth, float availWidgetW,
-                                   float& speed, float& pitch, bool& changed);
+                                   float& speed, float& pitch,
+                                   bool& speedChanged, bool& pitchChanged);
     /// @brief 渲染项目音频资源自身的 EQ 配置。
     /// @param config 当前项目音频资源配置。
     /// @param changed 任一持久化字段发生变化时置为 true。

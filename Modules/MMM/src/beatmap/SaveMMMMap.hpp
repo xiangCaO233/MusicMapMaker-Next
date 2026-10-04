@@ -214,6 +214,9 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
         // 枚举以稳定名称写出，避免把内部数值布局固化为文件格式 ABI。
         t["effect"] = timingEffectToString(timing.m_timingEffect);
         t["param"]  = timing.m_timingEffectParameter;
+        // 原生文件保存一条段落定义，采样点只在外部格式写出时生成。
+        if ( timing.m_interpolation )
+            t["interpolation"] = *timing.m_interpolation;
 
         auto& tExtra = t["extra"];
         tExtra       = json::array();

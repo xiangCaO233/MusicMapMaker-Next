@@ -39,6 +39,26 @@ static bool hasMalodyMetadata(const TimelineComponent& tl)
         ::MMM::TimingMetadataType::MALODY);
 }
 
+/// @brief 持续效果保留最低积分精度，并接受更高的真实输出密度。
+/// @param curve 已验证并绑定拍轴的段落，输出数量有领域上限。
+/// @param effect Jump 是离散脉冲，不能补点以提高积分精度。
+/// @return 包含两端的运行时事件数量，供预分配和生成共同使用。
+/// @warning 仅脏缓存重建调用，不引入逐帧采样或额外 ECS 实体。
+/// @note 高密度时使用输出时间网格，拍域或非整周期尾点不能均分替代。
+static std::size_t runtimeInterpolationSampleCount(
+    const TimingInterpolation& curve, TimingEffect effect)
+{
+    const auto outputCount = timingInterpolationSampleCount(curve);
+    // 用户降低输出密度时仍保留原来的 240 Hz / 最少 128 段精度。
+    // 提高密度则必须参与实际运行，不能让 5000 Hz 段落仍只有 240 Hz。
+    if ( effect == TimingEffect::JUMP ) return outputCount;
+    const auto minimumCount =
+        static_cast<std::size_t>(
+            std::clamp(std::ceil(curve.m_duration * 240.0), 128.0, 65536.0)) +
+        1;
+    return std::max(outputCount, minimumCount);
+}
+
 /// @brief 根据时间线注册表重建滚动缓存。
 /// @pre 时间点的时间戳满足排序要求；注册表在整个重建期间保持稳定。
 /// @param timelineRegistry 时间线注册表。
@@ -75,6 +95,91 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
             { entity, &tlView.get<const TimelineComponent>(entity) });
     }
 
+    // 运行时保留最低积分密度；更高的文件输出采样率同时提升实际精度。
+    // 这些临时组件只在脏缓存重建中存在，不成为 ECS 实体或表格行。
+    m_interpolations.clear();
+    // 源 registry 在重建时稳定，发布描述持有独立值。
+    // 旧 BPM 缓存非空不等于映射仍有效，必须重新绑定。
+    // 发布新描述不修改旧快照中的数学缓存。
+    // 持续参数的采样数量不低于导出密度，避免播放与写出高频曲线不一致。
+    // Jump 按真实分拍触发，不能用平均 Hz 等距触发。
+    // 红线数据只在脏缓存重建收集一次；各效果不能用自己的附带 BPM 作拍轴。
+    std::vector<Timing> redLines;
+    for ( const auto& entry : m_rebuildScratch ) {
+        const auto& component = *entry.component;
+        if ( component.m_effect != TimingEffect::BPM ) continue;
+        Timing timing;
+        timing.m_timestamp             = component.m_timestamp * 1000;
+        timing.m_timingEffectParameter = component.m_value;
+        timing.m_bpm                   = component.m_value;
+        timing.m_interpolation         = component.m_interpolation;
+        redLines.push_back(std::move(timing));
+    }
+    const double fallback =
+        beatmap && beatmap->m_baseMapMetadata.preference_bpm > 0
+            ? beatmap->m_baseMapMetadata.preference_bpm
+            : 120;
+    std::vector<TimelineComponent> curveEvents;
+    std::size_t                    runtimeCount = 0;
+    for ( const auto& entry : m_rebuildScratch ) {
+        const auto& component = *entry.component;
+        if ( !component.m_interpolation ) continue;
+        auto curve = *component.m_interpolation;
+        // BPM 或范围修改使拍轴缓存失效，虚拟事件始终按当前红线重新准备。
+        if ( !bindTimingInterpolationBeatAxis(
+                 curve, component.m_timestamp, redLines, fallback) )
+            continue;
+        if ( !isValidTimingInterpolation(
+                 curve, component.m_effect, component.m_value) )
+            continue;
+        m_interpolations.push_back({ entry.entity,
+                                     component.m_timestamp,
+                                     component.m_value,
+                                     component.m_effect,
+                                     curve });
+        // Jump 是离散位移脉冲，运行时必须与实际写出的次数一致。
+        const auto count =
+            runtimeInterpolationSampleCount(curve, component.m_effect);
+        runtimeCount += count - 1;
+    }
+    // 提前一次性保留空间，生成期间组件指针不会因容器扩张而失效。
+    // 全部曲线都先算数量，再开始存储借用指针，禁止生成过程中扩容失效。
+    // 单次重建完成后这些临时组件可以销毁，永久缓存只保存数值积分段。
+    curveEvents.reserve(runtimeCount);
+    // 持续参数保留运行时精度下限，导出密度很低时也不降低画布表现。
+    // Jump 是事件脉冲而非持续状态，次数必须与写出数量一致。
+    // 各类参数共享曲线求值入口，但积分与位移应用仍由已有效果逻辑处理。
+    for ( const auto& segment : m_interpolations ) {
+        const auto& curve = segment.interpolation;
+        const auto  count =
+            runtimeInterpolationSampleCount(curve, segment.effect);
+        // 达到精度下限后逐点复用输出网格；不将非整周期或分拍网格等分。
+        // 低密度持续效果继续用原有均分积分网格，Jump 始终按真实脉冲触发。
+        const bool useOutputGrid =
+            count == timingInterpolationSampleCount(curve);
+        for ( std::size_t index = 1; index < count; ++index ) {
+            const double elapsed =
+                useOutputGrid ? timingInterpolationSampleElapsed(curve, index)
+                              : curve.m_duration * static_cast<double>(index) /
+                                    static_cast<double>(count - 1);
+            TimelineComponent event;
+            // 虚拟采样的身份为 null，因此不能成为可编辑标记或时间线表格行。
+            // 贝塞尔控制点按真实时间求值，不直接把采样下标当成贝塞尔参数。
+            event.m_timestamp = segment.time + elapsed;
+            event.m_effect    = segment.effect;
+            event.m_value     = evaluateTimingInterpolation(
+                curve, segment.value, elapsed / curve.m_duration);
+            curveEvents.push_back(std::move(event));
+        }
+    }
+    // 指针只在本次重建的局部数组存活期使用，发布缓存不保存这些指针。
+    // 数组已经完整填充，之后不再 push，防止扩容使借用地址失效。
+    // 真实实体仍来自原 registry，虚拟事件仅帮助数值积分。
+    // 重建之后查询只访问发布的 ScrollSegment，不能继续借用局部容器。
+    // 所有曲线的临时值属于本次低频重建，不在每帧反复生成。
+    for ( const auto& event : curveEvents )
+        m_rebuildScratch.push_back({ entt::null, &event });
+
     // 空时间线也是一次有效重建，必须清除旧谱面的派生索引和跳变窗口。
     if ( m_rebuildScratch.empty() ) {
         // 没有任何事件时不生成默认积分段，后续查询按各自的空缓存约定处理。
@@ -99,9 +204,14 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
                 return a.component->m_timestamp < b.component->m_timestamp;
             }
             if ( a.component->m_effect != b.component->m_effect ) {
+                // 同刻效果先处理
+                // BPM，再应用独立滚动参数，维持原有状态组合顺序。
                 return a.component->m_effect == ::MMM::TimingEffect::BPM;
             }
-            return false;  // 保持原始顺序
+            // 虚拟段尾先应用；同刻真实点或后一段的起点拥有最终控制权。
+            if ( (a.entity == entt::null) != (b.entity == entt::null) )
+                return a.entity == entt::null;
+            return false;  // 同类真实点保持原始顺序
         });
 
     // 新段落在局部容器内构造，避免在读取旧缓存时暴露部分重建结果。
@@ -219,13 +329,21 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
         }
 
         if ( tl->m_effect == ::MMM::TimingEffect::BPM ) {
-            newSegments.back().effects |= SCROLL_EFFECT_BPM;
-            newSegments.back().bpmEntity = entry.entity;
-            newSegments.back().bpmValue  = tl->m_value;
+            // 真实段首保留可交互身份；内部积分点仅更新活动状态，不追加红线。
+            // 同刻多个类型继续合并到已有滚动段，各自拥有独立实体列。
+            if ( entry.entity != entt::null ) {
+                newSegments.back().effects |= SCROLL_EFFECT_BPM;
+                newSegments.back().bpmEntity = entry.entity;
+                newSegments.back().bpmValue  = tl->m_value;
+            }
             // 实体 ID 和原始字段用于定位编辑对象，活动字段用于查询当前状态。
             // 编辑展示保留原始值，实际速度计算使用规范后的 BPM。
             currentBPM = ::MMM::normalizeBpmValue(tl->m_value, refBPM);
-            if ( !hasMalodyMetadata(*tl) ) {
+            // 普通 osu! 红线仍按原规则重置 SV。
+            // 曲线内部的 BPM 变化不构成新的编辑红线，不能每个虚拟点重置 SV。
+            // 否则同时变化的 Scroll 曲线会被大量 BPM 虚拟事件反复覆盖。
+            if ( entry.entity != entt::null && !tl->m_interpolation &&
+                 !hasMalodyMetadata(*tl) ) {
                 // osu! 红线会重置 SV；Malody 的 BPM 不改变 effect 状态。
                 activeScrollValue = 1.0;
                 if ( enableEffects ) {
@@ -233,9 +351,11 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
                 }
             }
         } else if ( tl->m_effect == ::MMM::TimingEffect::SCROLL ) {
-            newSegments.back().effects |= SCROLL_EFFECT_SCROLL;
-            newSegments.back().scrollEntity = entry.entity;
-            newSegments.back().scrollValue  = tl->m_value;
+            if ( entry.entity != entt::null ) {
+                newSegments.back().effects |= SCROLL_EFFECT_SCROLL;
+                newSegments.back().scrollEntity = entry.entity;
+                newSegments.back().scrollValue  = tl->m_value;
+            }
             // 同时刻的多个同类事件仍只留一个段，最后处理的事件成为该类编辑目标。
             // mmm/Malody 内部均存储原始 SV 倍率；osu! 的负 inherited
             // beatLength 已在导入边界转换。
@@ -247,10 +367,12 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
                 }
             }
         } else if ( tl->m_effect == ::MMM::TimingEffect::JUMP ) {
-            newSegments.back().effects |= SCROLL_EFFECT_JUMP;
-            newSegments.back().jumpEntity = entry.entity;
-            newSegments.back().jumpValue  = tl->m_value;
-            m_hasJumpEffects              = true;
+            if ( entry.entity != entt::null ) {
+                newSegments.back().effects |= SCROLL_EFFECT_JUMP;
+                newSegments.back().jumpEntity = entry.entity;
+                newSegments.back().jumpValue  = tl->m_value;
+            }
+            m_hasJumpEffects = true;
             // 即使线性映射禁用了位移，也保留存在 Jump 事件的事实。
             if ( enableEffects ) {
                 // Malody Jump 在滚动积分上制造瞬时断层。
@@ -259,9 +381,11 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
                 newSegments.back().absY = currentAbsY;
             }
         } else if ( tl->m_effect == ::MMM::TimingEffect::HS ) {
-            newSegments.back().effects |= SCROLL_EFFECT_HS;
-            newSegments.back().hsEntity = entry.entity;
-            newSegments.back().hsValue  = tl->m_value;
+            if ( entry.entity != entt::null ) {
+                newSegments.back().effects |= SCROLL_EFFECT_HS;
+                newSegments.back().hsEntity = entry.entity;
+                newSegments.back().hsValue  = tl->m_value;
+            }
             // 原始 HS 值可用于编辑展示，实际应用值在线性模式下保持中性状态。
             if ( enableEffects ) {
                 currentHs = tl->m_value;

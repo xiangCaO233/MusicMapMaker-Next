@@ -159,6 +159,10 @@ constexpr std::size_t MAX_REMOTE_LOG_RESULTS_PER_UPDATE = 256;
 /// @brief 逻辑线程等待 UI 网络循环提交的最大操作数。
 /// @note 队列满时观察入口返回零，不进行无界内存增长。
 constexpr std::size_t MAX_QUEUED_LOCAL_OPERATIONS = 4096;
+/// @brief 房主最多保留的成员操作数，防止长会话历史无限增长。
+constexpr std::size_t MAX_MEMBER_HISTORY_ENTRIES = 128;
+/// @brief 房主补偿增量总预算，超限时淘汰最旧操作。
+constexpr std::size_t MAX_MEMBER_HISTORY_BYTES = 64U * 1024U * 1024U;
 /// @brief 房主完整重同步快照的最短刷新间隔；普通操作增量不受此限制。
 /// @note 新修订只覆盖 pending revision，截止时压缩最新文档一次。
 constexpr auto HOST_SNAPSHOT_REFRESH_INTERVAL = std::chrono::seconds(1);
@@ -247,6 +251,69 @@ public:
         /// @brief 本次权威提交已经确认的本地变化序号。
         /// @note 非本地提交或无法关联在途 payload 时为零。
         std::uint64_t committedLocalMutationSequence{ 0 };
+        /// @brief 非零时本修订是房主对该原始修订的撤回或重做。
+        std::uint64_t historyRevision{ 0 };
+        /// @brief 对 historyRevision 执行重做；false 为撤回。
+        bool historyRedo{ false };
+    };
+
+    /// @brief 房主向串行文档消费者提交的成员历史请求。
+    /// @details 只带稳定参与者身份，不保存 PeerId；成员断线或被移出后路由
+    ///         槽位可以复用，但历史归属仍必须保持不变。
+    ///         请求进入与权威操作相同的单消费者，避免读取半应用的谱面。
+    struct HistoryRequest {
+        /// @brief 原操作所属的持久参与者身份。
+        ParticipantId participantId;
+        /// @brief false 撤回；true 恢复最近可重做的动作。
+        bool redo{ false };
+    };
+
+    /// @brief 后台按最新文档生成的安全补偿建议。
+    /// @details 这里只完成候选选择和内容冲突检查，不直接广播网络提交。
+    ///         UI 线程在提交前还会比较 expectedRevision 与 Peer 当前修订；
+    ///         两次检查共同阻止后台生成建议期间插入的新编辑被旧补丁覆盖。
+    ///         sourceRevision 指向最初编辑，而不是补偿修订本身。
+    struct HistoryProposal {
+        /// @brief 断线后仍可定位历史的稳定成员身份。
+        ParticipantId participantId;
+        /// @brief 区分同一成员再次加入后产生的操作序列。
+        OperationSessionId sessionId;
+        /// @brief 原成员提交时使用的客户端单调序列。
+        std::uint64_t clientSequence{ 0 };
+        /// @brief 原编辑在房主日志中的修订号。
+        std::uint64_t sourceRevision{ 0 };
+        /// @brief 建议依据的最新权威修订号。
+        std::uint64_t expectedRevision{ 0 };
+        /// @brief 控制所用补丁方向和最终历史状态。
+        bool redo{ false };
+        /// @brief 已经按目标谱面计算的规范化增量。
+        ByteBuffer payload;
+        /// @brief 无历史或源值冲突时留下的稳定错误代码。
+        std::string error;
+    };
+
+    /// @brief 一条房主持有的原始成员操作及两个方向的补偿增量。
+    /// @details 只保留受影响类别的补丁，后续其他成员新增的对象不进入补偿目标。
+    ///         历史跟随房主房间生命周期，独立于成员在线状态和本地动作栈。
+    ///         原始修订作为恢复动作的唯一索引；补偿提交不产生新的历史条目。
+    ///         内存预算同时限制条目数量与两个方向负载之和。
+    struct HistoryEntry {
+        /// @brief 权限变化和断线都不会改变的操作归属。
+        ParticipantId participantId;
+        /// @brief 原操作所属的客户端会话。
+        OperationSessionId sessionId;
+        /// @brief 离线列表继续展示最后的成员名称。
+        std::string creator;
+        /// @brief 定位此原始操作的房主修订号。
+        std::uint64_t revision{ 0 };
+        /// @brief 在线原作者本地动作栈映射使用的客户端序号。
+        std::uint64_t clientSequence{ 0 };
+        /// @brief 重做时从撤回状态恢复编辑后的受影响值。
+        ByteBuffer forward;
+        /// @brief 撤回时从编辑后状态恢复编辑前的受影响值。
+        ByteBuffer inverse;
+        /// @brief 当前房主文档是否已经应用对应的撤回补丁。
+        bool undone{ false };
     };
 
     /// @brief 后台协作文档流水线交还 UI 线程的有界结果。
@@ -264,6 +331,8 @@ public:
         std::string creator;
         /// @brief 提交修订号。
         std::uint64_t revision{ 0 };
+        /// @brief 房主历史补偿的原始成员动作身份。
+        std::vector<CollaborationHistoryCorrection> historyCorrections;
         /// @brief 后台合并成功后需要替换的谱面类别。
         /// @note 批量 delivery 为所有需回灌成功修订 flags 的并集。
         ::MMM::BeatmapMutationFlags flags{ ::MMM::BeatmapMutationFlags::None };
@@ -292,6 +361,23 @@ public:
     moodycamel::ConcurrentQueue<Result> results;
     /// @brief 不得阻塞最新谱面交付的独立操作日志队列。
     moodycamel::ConcurrentQueue<Result> operationLogs;
+    /// @brief UI 到后台的房主历史请求；由同一文档消费者串行处理。
+    moodycamel::ConcurrentQueue<HistoryRequest> historyRequests;
+    /// @brief 后台交还 UI 的补偿建议和冲突原因。
+    moodycamel::ConcurrentQueue<HistoryProposal> historyProposals;
+    /// @brief 后台按修订发布的成员历史摘要。
+    /// @note 摘要只含计数和显示名，不把可执行补丁暴露给 UI 绘制路径。
+    moodycamel::ConcurrentQueue<std::vector<CollaborationMemberHistory>>
+        historySummaries;
+    /// @brief 仅由后台文档消费者读写的有界原始操作历史。
+    /// @note 前端按钮不直接访问此容器，避免跨线程读写和错误回滚。
+    std::deque<HistoryEntry> history;
+    /// @brief history 中两向补丁的总字节数。
+    /// @note 淘汰条目和清除重做分支时必须同步扣除。
+    std::size_t historyBytes{ 0 };
+    /// @brief 后台已应用的最后连续修订，用于阻止过期建议提交。
+    /// @note Peer 可能已经分配更新的修订，UI 提交前还需再次比对。
+    std::uint64_t lastAppliedRevision{ 0 };
     /// @brief 后台消费者状态：0 为空闲、1 为运行、2 为运行且收到新唤醒。
     /// @warning UI 线程在提交任务后使用 acq_rel 更新，后台消费者在排空边界
     /// 使用 acq_rel 交接；只协调唯一消费者，不承载文档数据同步。
@@ -699,6 +785,13 @@ void CollaborationRoom::setLocalMutationAcknowledgedCallback(
     m_localMutationAcknowledgedCallback = std::move(callback);
 }
 
+/// @brief 设置房主定向补偿对应的本地动作历史同步入口。
+void CollaborationRoom::setHistoryCorrectedCallback(
+    HistoryCorrectedCallback callback)
+{
+    m_historyCorrectedCallback = std::move(callback);
+}
+
 /// @brief 设置访客完整资源包落盘后的交付回调。
 /// @param callback 接收资源重定位后的项目 bundle。
 void CollaborationRoom::setResourceBundleCallback(
@@ -916,6 +1009,7 @@ void CollaborationRoom::update()
     }
     // 每帧只消费有界后台结果，再尝试释放等待快照发布的访客连接。
     processRemoteOperationResults();
+    processMemberHistoryProposals();
     processPendingPeerConnections();
     if ( !m_transport ) return;
 
@@ -968,6 +1062,67 @@ SubmitOperationResult CollaborationRoom::submitOperation(
 {
     if ( !m_peer ) return SubmitOperationResult::InvalidPeer;
     return m_peer->submitOperation(payload);
+}
+
+/// @brief 将房主的定向撤回请求投递给权威文档消费者。
+/// @param participantId 原编辑者的稳定身份。
+/// @return 当前房间是房主且没有尚未完成的历史请求时返回 true。
+/// @details 不要求目标仍在成员列表，也不检查其当前写入权限。
+///         请求只含稳定身份，候选动作由后台按最新权威文档确定。
+///         同一时间只接受一个房主历史请求，避免两次点击复用旧基线。
+/// @warning UI 交互路径仅入队，不在这里解码或复制整张谱面。
+bool CollaborationRoom::requestMemberUndo(std::string_view participantId)
+{
+    if ( !m_isHost || !m_peer || participantId.empty() ||
+         m_memberHistoryRequestPending ) {
+        return false;
+    }
+    m_memberHistoryError.clear();
+    // UI 立即看到处理中状态；失败或实际补偿提交后才释放门闩。
+    m_memberHistoryRequestPending = true;
+    m_remoteOperationPipeline->historyRequests.enqueue(
+        RemoteOperationPipeline::HistoryRequest{ std::string(participantId),
+                                                 false });
+    scheduleRemoteOperationWorker();
+    return true;
+}
+
+/// @brief 将房主的定向重做请求投递给权威文档消费者。
+/// @param participantId 原编辑者的稳定身份。
+/// @return 当前房间是房主且没有尚未完成的历史请求时返回 true。
+/// @details 重做与撤回共用同一串行队列，但候选顺序由后台按照历史栈规则
+///         决定；离线和只读成员仍按其原始稳定身份索引。
+/// @warning UI 交互路径只入队，不等待网络或后台消费者。
+bool CollaborationRoom::requestMemberRedo(std::string_view participantId)
+{
+    if ( !m_isHost || !m_peer || participantId.empty() ||
+         m_memberHistoryRequestPending ) {
+        return false;
+    }
+    m_memberHistoryError.clear();
+    // 新编辑会淘汰该成员旧重做分支，按钮计数以后台摘要为准。
+    m_memberHistoryRequestPending = true;
+    m_remoteOperationPipeline->historyRequests.enqueue(
+        RemoteOperationPipeline::HistoryRequest{ std::string(participantId),
+                                                 true });
+    scheduleRemoteOperationWorker();
+    return true;
+}
+
+/// @brief 读取当前 UI 已收到的成员历史摘要。
+/// @return 仅含稳定身份、展示名和可操作数量的只读列表。
+/// @note 可能比最新网络修订落后一帧，不得用它执行补丁选择。
+const std::vector<CollaborationMemberHistory>&
+CollaborationRoom::memberHistories() const
+{
+    return m_memberHistories;
+}
+
+/// @brief 读取最近一次房主成员历史请求的拒绝原因。
+/// @return 翻译键；空值表示最近一次请求没有错误。
+const std::string& CollaborationRoom::memberHistoryError() const
+{
+    return m_memberHistoryError;
 }
 
 /// @brief 向当前房间提交聊天文本。
@@ -1352,6 +1507,8 @@ void CollaborationRoom::appendLog(CollaborationLogEventType type, PeerId peerId,
 ///
 /// @details 只接受当前参与者表中的 peer，身份和 creator 从权威表补齐，不信任
 /// 消息自带显示字段。记录按会话相对时间编号，超过上限删除最旧前缀。
+/// 同时保存本机接收时的绝对时钟，切换 UI 时间模式无需重写已有记录。
+/// 绝对时间不进入协议，避免依赖远端设备的时钟准确性。
 ///
 /// @note Peer 已完成聊天文本格式验证；Room 只绑定权威身份并维护 UI 有界历史，
 ///       不把聊天写入 BeatMap 或操作日志。
@@ -1363,13 +1520,18 @@ void CollaborationRoom::handleChatMessage(
 
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - m_startedAt);
-    m_chatMessages.push_back({ m_nextChatSequence++,
-                               static_cast<std::uint64_t>(
-                                   std::max<std::int64_t>(0, elapsed.count())),
-                               message.peerId,
-                               participant->second.participantId,
-                               participant->second.creator,
-                               message.text });
+    // 两种时间都只在接收时采样一次，系统时间后来变化不会改写历史。
+    m_chatMessages.push_back(
+        { m_nextChatSequence++,
+          static_cast<std::uint64_t>(
+              std::max<std::int64_t>(0, elapsed.count())),
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::system_clock::now().time_since_epoch())
+              .count(),
+          message.peerId,
+          participant->second.participantId,
+          participant->second.creator,
+          message.text });
     if ( m_chatMessages.size() > MAX_COLLABORATION_CHAT_ENTRIES ) {
         m_chatMessages.erase(
             m_chatMessages.begin(),
@@ -1622,6 +1784,12 @@ void CollaborationRoom::ensureGuestPeer()
 /// 找到序列。 远端提交会标记 UI
 /// 应用等待；若仍有本地操作，后续交付必须重放本地状态。
 ///
+/// @par 补偿修订
+/// 即使补偿由房主自己提交，它也是对原本地动作的权威反向修改，不能当成
+/// 普通本地编辑回执跳过 UI 回灌。待补偿原修订号仅在同步提交回调期间有效，
+/// 随 Task 入队后后台独占使用；其他修订不应继承这个身份。
+/// 客户端收到的补偿带原操作三元组，供在线原作者移动本地动作栈。
+///
 /// @warning 此函数不解码文档，只做有界状态更新和无锁入队；完整应用在后台。
 void CollaborationRoom::handleCommittedOperation(
     const CommittedOperation& operation)
@@ -1638,9 +1806,11 @@ void CollaborationRoom::handleCommittedOperation(
                                     ? std::string{}
                                     : participant->second.creator;
     // sessionId 同时匹配才能排除同一稳定身份旧连接产生的迟到操作。
-    const bool originatedLocally = operation.participantId == m_participantId &&
-                                   operation.sessionId == m_operationSessionId;
-    bool       reapplyLocalState = false;
+    const bool originatedLocally =
+        operation.participantId == m_participantId &&
+        operation.sessionId == m_operationSessionId &&
+        !operation.historyCorrection;
+    bool          reapplyLocalState              = false;
     std::uint64_t committedLocalMutationSequence = 0;
     {
         std::lock_guard lock(m_localOperationMutex);
@@ -1679,6 +1849,9 @@ void CollaborationRoom::handleCommittedOperation(
     task.reapplyLocalState              = reapplyLocalState;
     task.originatedLocally              = originatedLocally;
     task.committedLocalMutationSequence = committedLocalMutationSequence;
+    // 补偿提交在本线程同步回调，临时标记只覆盖这一条权威修订。
+    task.historyRevision = m_pendingHistoryRevision;
+    task.historyRedo     = m_pendingHistoryRedo;
     m_remoteOperationPipeline->tasks.enqueue(std::move(task));
     scheduleRemoteOperationWorker();
 }
@@ -1781,15 +1954,37 @@ void CollaborationRoom::scheduleRemoteOperationWorker()
 /// @par 空任务快照
 /// snapshot dirty 到期但没有新 Task 时，消费者仍可生成独立 snapshotDelivery。
 /// update 中的截止检查会唤醒 worker，从而无需伪造谱面操作来刷新加入者快照。
+///
+/// @par 房主成员历史
+/// 每条成功的原始增量先克隆修改前规范文档，再只针对本次 flags 计算前后
+/// 两个方向的补丁。临时完整文档不进入历史队列，因此离线成员历史仍有界。
+/// 补偿修订携带原修订号，仅翻转其 undone 状态，不再次记录新历史动作。
+/// 新操作会清除同一成员已撤回的分支；其他成员的分支互不影响。
+/// 128 条和 64 MiB 双预算阻止长期开放房间积累无界内存。
+///
+/// @par 历史候选顺序
+/// 撤回从新到旧取未撤回动作；重做从旧到新取已撤回动作。
+/// 这种顺序对应普通栈连续撤回后的恢复顺序，尤其在相邻操作编辑同一 Note 时
+/// 不会错把最新动作先应用到最初状态。
+/// 候选必须在本消费者应用已到达的全部修订后生成；其 expectedRevision
+/// 随后还会由 UI 线程与 Peer 修订比较，避免异步交接期间的竞态。
+///
+/// @par 交付次序
+/// 补偿身份与物化 BeatMap 放在同一 delivery 中，原作者收到后先向逻辑队列
+/// 发布动作栈移动命令，再发布权威替换命令。若多个修订同批完成，身份按应用
+/// 顺序保留在 vector 中，不让最后一个修订覆盖前面的栈移动。
+/// 房主同时广播补偿给其他在线成员；离线原作者只在房主保留历史计数。
 void CollaborationRoom::processRemoteOperations()
 {
     std::vector<RemoteOperationPipeline::Result> batchResults;
     ::MMM::BeatmapMutationFlags                  batchVisibleFlags =
         ::MMM::BeatmapMutationFlags::None;
-    std::uint64_t              batchCommittedLocalMutationSequence = 0;
-    bool                       batchNeedsMaterialization           = false;
-    bool                       batchHost                           = false;
-    std::optional<std::size_t> lastSuccessfulResult;
+    std::uint64_t batchCommittedLocalMutationSequence = 0;
+    bool          batchNeedsMaterialization           = false;
+    bool          batchHost                           = false;
+    bool          historyChanged                      = false;
+    std::vector<CollaborationHistoryCorrection> batchHistoryCorrections;
+    std::optional<std::size_t>                  lastSuccessfulResult;
     // 快照构建闭包只在 dirty 且截止时间到达时压缩最新 document。
     const auto buildHostSnapshotIfDue =
         [this](RemoteOperationPipeline::Result& delivery) {
@@ -1828,6 +2023,12 @@ void CollaborationRoom::processRemoteOperations()
             result.creator       = std::move(task.creator);
             result.revision      = task.operation.revision;
 
+            // 历史仅保留本修订触及的双向增量；完整文档副本只活到本轮应用结束。
+            // 只在房主记录原始编辑：访客无需保存别人的可执行历史，快照
+            // 也没有单一成员的可撤销语义。
+            auto before = task.host && task.historyRevision == 0
+                              ? m_documentCodec.cloneDocument()
+                              : nullptr;
             // Codec 失败不会推进文档；该修订只产生独立错误结果。
             auto patch = m_documentCodec.apply(task.operation.payload);
             if ( !patch.has_value() ) {
@@ -1836,6 +2037,72 @@ void CollaborationRoom::processRemoteOperations()
                 continue;
             }
             m_hasDocument.store(true, std::memory_order_release);
+            if ( task.operation.historyCorrection ) {
+                // 网络身份随权威修订记录，不能只靠房主侧临时标记推断原作者。
+                batchHistoryCorrections.push_back(
+                    *task.operation.historyCorrection);
+            }
+            m_remoteOperationPipeline->lastAppliedRevision =
+                task.operation.revision;
+            if ( task.host && task.historyRevision != 0 ) {
+                // 原始记录保持不变；切换方向只更新可撤回/可重做计数。
+                const auto entry = std::find_if(
+                    m_remoteOperationPipeline->history.begin(),
+                    m_remoteOperationPipeline->history.end(),
+                    [&task](const auto& item) {
+                        return item.revision == task.historyRevision;
+                    });
+                if ( entry != m_remoteOperationPipeline->history.end() ) {
+                    entry->undone  = !task.historyRedo;
+                    historyChanged = true;
+                }
+            } else if ( task.host && before && !patch->isSnapshot ) {
+                // 两个方向均从同一原始编辑的前后状态计算，避免普通
+                // EditorAction 引用的 ECS 实体跨会话或断线后失效。
+                auto forward =
+                    before->makeHistoryDeltaTo(m_documentCodec, patch->flags);
+                auto inverse =
+                    m_documentCodec.makeHistoryDeltaTo(*before, patch->flags);
+                if ( forward && inverse &&
+                     forward->size() + inverse->size() <=
+                         MAX_MEMBER_HISTORY_BYTES ) {
+                    // 单个过大的补丁不入历史；它已正常提交谱面，不阻断编辑。
+                    // 同一成员提交新编辑后，其原有重做分支不再可重放。
+                    auto& history = m_remoteOperationPipeline->history;
+                    for ( auto it = history.begin(); it != history.end(); ) {
+                        if ( it->participantId ==
+                                 task.operation.participantId &&
+                             it->undone ) {
+                            m_remoteOperationPipeline->historyBytes -=
+                                it->forward.size() + it->inverse.size();
+                            it = history.erase(it);
+                        } else {
+                            ++it;
+                        }
+                    }
+                    m_remoteOperationPipeline->historyBytes +=
+                        forward->size() + inverse->size();
+                    history.push_back(RemoteOperationPipeline::HistoryEntry{
+                        .participantId  = task.operation.participantId,
+                        .sessionId      = task.operation.sessionId,
+                        .creator        = result.creator,
+                        .revision       = task.operation.revision,
+                        .clientSequence = task.operation.clientSequence,
+                        .forward        = std::move(*forward),
+                        .inverse        = std::move(*inverse),
+                    });
+                    while ( history.size() > MAX_MEMBER_HISTORY_ENTRIES ||
+                            m_remoteOperationPipeline->historyBytes >
+                                MAX_MEMBER_HISTORY_BYTES ) {
+                        // 同时更新字节预算，确保最旧的离线记录也可被淘汰。
+                        m_remoteOperationPipeline->historyBytes -=
+                            history.front().forward.size() +
+                            history.front().inverse.size();
+                        history.pop_front();
+                    }
+                    historyChanged = true;
+                }
+            }
             result.flags = patch->flags;
             batchHost    = task.host;
             batchCommittedLocalMutationSequence =
@@ -1856,6 +2123,89 @@ void CollaborationRoom::processRemoteOperations()
             batchResults.push_back(std::move(result));
         }
 
+        // 请求在全部已到达修订之后检查，保证冲突判断使用最新权威文档。
+        // 此队列与谱面操作共享唯一消费者，因此候选与当前文档读取无需额外锁。
+        RemoteOperationPipeline::HistoryRequest historyRequest;
+        while ( m_remoteOperationPipeline->historyRequests.try_dequeue(
+            historyRequest) ) {
+            RemoteOperationPipeline::HistoryProposal proposal;
+            proposal.participantId = std::move(historyRequest.participantId);
+            proposal.redo          = historyRequest.redo;
+            proposal.expectedRevision =
+                m_remoteOperationPipeline->lastAppliedRevision;
+            // 离线成员已从 Peer 路由表消失，这里只能依据历史中的持久身份。
+            const auto& history = m_remoteOperationPipeline->history;
+            const auto  matches = [&proposal](const auto& item) {
+                return item.participantId == proposal.participantId &&
+                       item.undone == proposal.redo;
+            };
+            // 撤回取最近尚在谱面上的动作；重做取最早被撤回的动作，遵循
+            // 连续撤回后的栈顺序。
+            const RemoteOperationPipeline::HistoryEntry* selected = nullptr;
+            if ( proposal.redo ) {
+                // 从最早已撤回项开始恢复，符合连续撤销产生的重做栈顶部。
+                const auto entry =
+                    std::find_if(history.begin(), history.end(), matches);
+                if ( entry != history.end() ) selected = &*entry;
+            } else {
+                // 最新未撤回项才是该成员当前可撤销的上一步。
+                const auto entry =
+                    std::find_if(history.rbegin(), history.rend(), matches);
+                if ( entry != history.rend() ) selected = &*entry;
+            }
+            if ( !selected ) {
+                // 空历史是正常用户操作反馈，不应产生谱面修订。
+                proposal.error = "no_member_history";
+            } else {
+                const auto& payload =
+                    proposal.redo ? selected->forward : selected->inverse;
+                const auto& opposite =
+                    proposal.redo ? selected->inverse : selected->forward;
+                if ( !m_documentCodec.matchesHistoryDeltaSource(payload,
+                                                                opposite) ) {
+                    // 受影响值已被后续编辑改写时拒绝恢复，保留其他人的工作。
+                    proposal.error = "member_history_conflict";
+                } else {
+                    proposal.sourceRevision = selected->revision;
+                    proposal.sessionId      = selected->sessionId;
+                    proposal.clientSequence = selected->clientSequence;
+                    proposal.payload        = payload;
+                }
+            }
+            m_remoteOperationPipeline->historyProposals.enqueue(
+                std::move(proposal));
+        }
+
+        if ( historyChanged ) {
+            // UI 只接收汇总，不复制有界但可能很大的二进制补丁。
+            std::vector<CollaborationMemberHistory> summary;
+            for ( const auto& entry : m_remoteOperationPipeline->history ) {
+                auto member = std::find_if(
+                    summary.begin(), summary.end(), [&entry](const auto& item) {
+                        return item.participantId == entry.participantId;
+                    });
+                if ( member == summary.end() ) {
+                    // 历史存在即可展示离线成员，无需再查询在线路由表。
+                    summary.push_back(CollaborationMemberHistory{
+                        .participantId = entry.participantId,
+                        .creator       = entry.creator,
+                    });
+                    member = std::prev(summary.end());
+                }
+                member->creator = entry.creator;
+                if ( entry.undone ) {
+                    // 两类计数分别控制按钮可用性和延迟 tooltip。
+                    ++member->redoCount;
+                } else {
+                    ++member->undoCount;
+                }
+            }
+            m_remoteOperationPipeline->historySummaries.enqueue(
+                std::move(summary));
+            // 下一轮只有状态再次改变才重新发布，避免逐帧扫描历史。
+            historyChanged = false;
+        }
+
         std::uint8_t expected = 2U;
         if ( m_remoteOperationPipeline->workerState.compare_exchange_strong(
                  expected,
@@ -1871,12 +2221,13 @@ void CollaborationRoom::processRemoteOperations()
             // 批量交付采用最后成功修订的身份，并合并全部需要回灌的 flags。
             const auto& latest = batchResults[*lastSuccessfulResult];
             RemoteOperationPipeline::Result delivery;
-            delivery.logOperation  = false;
-            delivery.peerId        = latest.peerId;
-            delivery.participantId = latest.participantId;
-            delivery.creator       = latest.creator;
-            delivery.revision      = latest.revision;
-            delivery.flags         = batchVisibleFlags;
+            delivery.logOperation       = false;
+            delivery.peerId             = latest.peerId;
+            delivery.participantId      = latest.participantId;
+            delivery.creator            = latest.creator;
+            delivery.revision           = latest.revision;
+            delivery.flags              = batchVisibleFlags;
+            delivery.historyCorrections = std::move(batchHistoryCorrections);
             delivery.includedLocalMutationSequence =
                 batchCommittedLocalMutationSequence;
             if ( batchNeedsMaterialization ) {
@@ -1955,6 +2306,87 @@ void CollaborationRoom::processRemoteOperations()
     }
 }
 
+/// @brief 交付成员历史摘要，并把已校验的补偿增量提交为房主修订。
+/// @warning UI 每帧低预算队列消费；冲突计算只在后台消费者执行。
+/// @details 后台只生成建议；Peer 的当前修订是提交前最后一道防线。
+///         若网络回调先分配了新修订，则将原请求重排到后台重新选取候选。
+///         非 QueueFull 的失败会释放单请求门闩，并向 UI 留下翻译键。
+///
+/// @par 同步提交
+/// commitHostCorrection 会同步触发 handleCommittedOperation，临时的
+/// pendingHistoryRevision 因此能精确写入补偿 Task。调用返回后立刻清零，
+/// 后续正常修订不会被误认为同一原始动作的补偿。
+///
+/// @par 安全边界
+/// 补偿不使用目标成员当前权限：房主权限与历史身份是独立维度。
+/// 生成冲突时不调用 Peer，也不会影响权威修订或成员本地动作栈。
+void CollaborationRoom::processMemberHistoryProposals()
+{
+    std::vector<CollaborationMemberHistory> summary;
+    // 连续提交仅保留最新摘要，避免每帧重复重绘中间计数。
+    // 摘要队列与建议队列各自消费，离线成员列表不依赖待处理请求。
+    for ( std::size_t index = 0;
+          index < 16 &&
+          m_remoteOperationPipeline->historySummaries.try_dequeue(summary);
+          ++index ) {
+        m_memberHistories = std::move(summary);
+    }
+    RemoteOperationPipeline::HistoryProposal proposal;
+    if ( !m_remoteOperationPipeline->historyProposals.try_dequeue(proposal) ) {
+        return;
+    }
+    if ( !m_isHost || !m_peer ) {
+        // 房间已经关闭时丢弃旧建议，不能跨下一次建房使用历史身份。
+        m_memberHistoryRequestPending = false;
+        return;
+    }
+    if ( !proposal.error.empty() ) {
+        // UI 使用翻译键展示原因，网络层不依赖当前界面语言。
+        m_memberHistoryError =
+            proposal.error == "member_history_conflict"
+                ? "ui.collaboration.member_history_conflict"
+                : "ui.collaboration.member_history_unavailable";
+        m_memberHistoryRequestPending = false;
+        return;
+    }
+    // Peer 已分配但后台尚未应用的修订会使建议过期，重排请求后重新校验。
+    if ( proposal.expectedRevision != m_peer->appliedRevision() ) {
+        // 重新计算源值匹配，不能直接在更新后的文档上提交旧补丁。
+        m_remoteOperationPipeline->historyRequests.enqueue(
+            RemoteOperationPipeline::HistoryRequest{
+                std::move(proposal.participantId), proposal.redo });
+        scheduleRemoteOperationWorker();
+        return;
+    }
+    m_pendingHistoryRevision = proposal.sourceRevision;
+    m_pendingHistoryRedo     = proposal.redo;
+    const auto submitted     = m_peer->commitHostCorrection(
+        proposal.payload,
+        CollaborationHistoryCorrection{
+            .participantId  = proposal.participantId,
+            .sessionId      = proposal.sessionId,
+            .clientSequence = proposal.clientSequence,
+            .redo           = proposal.redo,
+        });
+    m_pendingHistoryRevision = 0;
+    m_pendingHistoryRedo     = false;
+    if ( submitted == SubmitOperationResult::QueueFull ) {
+        // 房主还有尚未排序的请求时，下帧先处理它们，再按最新文档重新校验。
+        m_remoteOperationPipeline->historyRequests.enqueue(
+            RemoteOperationPipeline::HistoryRequest{
+                std::move(proposal.participantId), proposal.redo });
+        scheduleRemoteOperationWorker();
+        return;
+    }
+    m_memberHistoryRequestPending = false;
+    // 无论成功还是明确失败，都让下一次用户点击重新从最新文档生成候选。
+    if ( submitted != SubmitOperationResult::Accepted ) {
+        m_memberHistoryError = "ui.collaboration.member_history_too_large";
+    } else {
+        m_memberHistoryError.clear();
+    }
+}
+
 /// @brief 在逻辑更新线程有界消费后台谱面结果和逐操作日志。
 ///
 /// @details 同一帧最多消费四个谱面交付和 256 个日志结果。多个 BeatMap 只保留
@@ -1974,7 +2406,14 @@ void CollaborationRoom::processRemoteOperations()
 /// @par 基线握手
 /// 后台编码基线先进入最多 16 项的 pending deque，并随 revision 和 included
 /// local sequence 标记。上层应用完成后通过 onAuthoritativeBeatmapApplied
-/// 精确匹配安装； 过旧未确认项会被有界淘汰，不阻塞正常谱面交付。
+/// 精确匹配安装；过旧未确认项会被有界淘汰，不阻塞正常谱面交付。
+///
+/// @par 在线原作者栈同步
+/// 只有补偿记录的 participantId 与 sessionId 同时匹配本进程，才向本地
+/// 逻辑队列发送历史移动命令。原始 clientSequence 经提交时记录的映射换成
+/// 逻辑线程动作序号；映射已淘汰时发送零，要求逻辑线程清理过期栈。
+/// 这些命令先于合并后的权威谱面替换入队，确保动作只移动一次，不重复执行。
+/// 跨类别替换只有在本地历史已同步时才可保留这份动作栈。
 void CollaborationRoom::processRemoteOperationResults()
 {
     std::shared_ptr<::MMM::BeatMap>         mergedBeatmap;
@@ -1985,6 +2424,7 @@ void CollaborationRoom::processRemoteOperationResults()
     std::uint64_t               mergedLocalMutationSequence       = 0;
     std::uint64_t               acknowledgedLocalMutationSequence = 0;
     std::uint64_t               mergedRevision                    = 0;
+    bool                        correctedLocalHistory             = false;
     // 同一消费器统一处理 results 与 operationLogs，后者通常只写日志和确认。
     const auto consumeResult = [&](RemoteOperationPipeline::Result result) {
         if ( result.logOperation ) {
@@ -2001,6 +2441,29 @@ void CollaborationRoom::processRemoteOperationResults()
                       std::move(result.error),
                       std::move(result.participantId));
             return;
+        }
+        if ( m_historyCorrectedCallback ) {
+            for ( const auto& correction : result.historyCorrections ) {
+                // 其他成员仍需应用谱面，但不能动当前成员自己的 Undo 栈。
+                if ( correction.participantId != m_participantId ||
+                     correction.sessionId != m_operationSessionId ) {
+                    continue;
+                }
+                correctedLocalHistory = true;
+                // 本地变化序号由 observer 分配，不能直接把网络序号当动作 ID。
+                const auto local = std::find_if(
+                    m_localSequenceByClientSequence.begin(),
+                    m_localSequenceByClientSequence.end(),
+                    [&correction](const auto& item) {
+                        return item.first == correction.clientSequence;
+                    });
+                // 映射被淘汰时以零通知逻辑层清理过期历史。
+                m_historyCorrectedCallback(
+                    local == m_localSequenceByClientSequence.end()
+                        ? 0
+                        : local->second,
+                    correction.redo);
+            }
         }
         // 只有仍为房主且 Peer 存活时发布后台压缩好的完整快照。
         if ( result.hostSnapshot && m_isHost && m_peer ) {
@@ -2088,7 +2551,8 @@ void CollaborationRoom::processRemoteOperationResults()
                                mergedFlags,
                                mergedLocalMutationSequence,
                                mergedRevision,
-                               std::move(mergedObjectDeltaIdentities));
+                               std::move(mergedObjectDeltaIdentities),
+                               correctedLocalHistory);
     }
     if ( acknowledgedLocalMutationSequence != 0 &&
          m_localMutationAcknowledgedCallback ) {
@@ -2122,6 +2586,11 @@ void CollaborationRoom::processPendingPeerConnections()
 /// 队列、复位原子门闩、可见文档、快照状态与本地待安装对象基线。最后清零延迟
 /// 连接、已发布修订并 reset 权威 Codec。
 ///
+/// @par 历史生命周期
+/// 房主只在当前房间保存成员历史。断开后释放原始补丁、离线列表、请求门闩和
+/// 客户端序号映射；重新建房不能沿用旧文档修订或旧成员会话身份。
+/// 清队列发生在 worker future 退出后，避免后台再次发布已释放历史摘要。
+///
 /// @warning 这是建房、加入、断开和析构的低频阻塞路径，禁止从每帧交互调用。
 ///
 /// @par 原子复位
@@ -2141,6 +2610,24 @@ void CollaborationRoom::resetRemoteOperationPipeline()
     while ( m_remoteOperationPipeline->results.try_dequeue(pendingResult) ) {}
     while (
         m_remoteOperationPipeline->operationLogs.try_dequeue(pendingResult) ) {}
+    RemoteOperationPipeline::HistoryRequest pendingHistoryRequest;
+    while ( m_remoteOperationPipeline->historyRequests.try_dequeue(
+        pendingHistoryRequest) ) {}
+    RemoteOperationPipeline::HistoryProposal pendingHistoryProposal;
+    while ( m_remoteOperationPipeline->historyProposals.try_dequeue(
+        pendingHistoryProposal) ) {}
+    std::vector<CollaborationMemberHistory> pendingHistorySummary;
+    while ( m_remoteOperationPipeline->historySummaries.try_dequeue(
+        pendingHistorySummary) ) {}
+    m_remoteOperationPipeline->history.clear();
+    m_remoteOperationPipeline->historyBytes        = 0;
+    m_remoteOperationPipeline->lastAppliedRevision = 0;
+    m_memberHistories.clear();
+    m_memberHistoryError.clear();
+    m_memberHistoryRequestPending = false;
+    m_pendingHistoryRevision      = 0;
+    m_pendingHistoryRedo          = false;
+    m_localSequenceByClientSequence.clear();
     m_remoteOperationPipeline->workerState.store(0U, std::memory_order_release);
     m_remoteOperationPipeline->visibleDocument.reset();
     m_remoteOperationPipeline->hostSnapshotDirty.store(
@@ -2201,7 +2688,9 @@ void CollaborationRoom::submitQueuedLocalOperations()
             return;
         }
         // Peer 接受后再次核对队首序列和 payload，防止并发状态变化误移除其他项。
-        const auto result = m_peer->submitOperation(operation.payload);
+        std::uint64_t acceptedClientSequence = 0;
+        const auto    result =
+            m_peer->submitOperation(operation.payload, &acceptedClientSequence);
         if ( result == SubmitOperationResult::Accepted ) {
             std::lock_guard lock(m_localOperationMutex);
             if ( !m_localOperationQueue.empty() &&
@@ -2210,6 +2699,11 @@ void CollaborationRoom::submitQueuedLocalOperations()
                 m_inFlightLocalOperations.push_back(
                     std::move(m_localOperationQueue.front()));
                 m_localOperationQueue.pop_front();
+            }
+            m_localSequenceByClientSequence.emplace_back(acceptedClientSequence,
+                                                         operation.sequence);
+            if ( m_localSequenceByClientSequence.size() > 4096U ) {
+                m_localSequenceByClientSequence.pop_front();
             }
             m_localOperationSubmitBlocked = false;
             continue;

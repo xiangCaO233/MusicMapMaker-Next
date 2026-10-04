@@ -2355,6 +2355,138 @@ bool testProfessionalModeHidesDraftArea()
     return true;
 }
 
+/// @brief 验证关闭专业模式清理放置状态，并阻止旧窗口命令修改主音轨。
+/// @return 既有采样保存、旧选择清空、普通音符可编辑且采样不可编辑时返回 true。
+/// @details 走真实会话配置队列，再向同一上下文提交延迟的资源选择与属性命令。
+/// 不创建音频设备：检查播放数据未删改，不将此断言视为实际播放验收。
+/// 子开关保持开启，用于证明禁止能力来自专业总开关而不是 BMS 偏好重置。
+/// @par 验证顺序
+/// 首先在专业上下文建立采样及活动手势，再通过实际配置广播关闭能力。
+/// 选中实体保持存在，便于检查清理交互不等于清理谱面数据。
+/// 随后模拟工具关闭之前已经排队的输入命令，验证逻辑层独立拒绝它们。
+/// 最后提交普通音符，确认门禁没有整体禁用画布编辑。
+/// @par 边界说明
+/// - 主音轨原始时间戳与轨道号必须完整保留。
+/// - 音频资源引用不改为元数据提示或空字符串。
+/// - 禁用命令不产生可撤销的空操作。
+/// - 配置中的 BMS 子偏好保持原值，重新开启专业模式时可恢复。
+/// - 旧资源选择不能重新成为活动画笔绑定。
+/// - 悬停与选中索引必须一起释放，避免属性窗口引用隐藏采样。
+/// - 基础音符创建仍生成可撤销的正式对象。
+/// - 同一上下文内的顺序测试模拟真实切换，不复制门禁实现。
+/// 实体通过 ECS 注册表创建，命令通过生产控制器处理，不使用模拟操作栈。
+/// 测试不验证设备混音或资源解码，只检查进入音频时间线的描述符数据。
+bool testProfessionalModeClearsAudioPlacement()
+{
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    configureObjectEditingCanvas(context);
+    // 真实会话 update 会回读领域轨数，夹具元数据须与初始 BGM 轨一致。
+    context.currentBeatmap->m_baseMapMetadata.bgm_track_count = 1;
+    // 主音轨实体模拟从已有谱面载入的数据；切换模式只能改变交互能力。
+    const auto sample = context.sampleRegistry.create();
+    context.sampleRegistry.emplace<MMM::Logic::SampleComponent>(
+        sample,
+        MMM::Logic::SampleComponent{ .m_timestamp       = 1.0,
+                                     .m_track           = 4,
+                                     .m_audioResourceId = "main.ogg" });
+    MMM::Logic::setChartObjectSelected(
+        context, MMM::Logic::ChartObjectKind::AudioSample, sample, true);
+    context.hoveredEntity     = sample;
+    context.hoveredObjectKind = MMM::Logic::ChartObjectKind::AudioSample;
+    context.brushState.selectedAudioResourceId = "effect";
+    context.brushState.activeAudioResourceId   = "effect";
+    context.brushState.isActive                = true;
+    context.brushState.createsAudioSample      = true;
+    // 切换前正在使用的高级工具必须退出，不能仅移除其按钮。
+    context.currentTool              = MMM::Logic::EditTool::ColorBrush;
+    context.eraserState.isActive     = true;
+    auto config                      = context.lastConfig;
+    config.settings.professionalMode = false;
+    session.pushCommand(MMM::Logic::CmdUpdateEditorConfig{ config });
+    // 调度轮次已经提供新配置，清理不能依赖 lastConfig 仍保存旧模式的假设。
+    // 与真实引擎一致先传入关闭后的配置，再让会话处理队列中的配置命令。
+    // 若仅直接调用处理器，旧配置的边沿判断会掩盖实际残留选择的缺陷。
+    session.update(0.0, config, true);
+    // 隐藏实体的选择与悬停必须同时清空，不能继续出现在属性窗口。
+    // 空资源字符串不等于采样退出交互，实体索引与活动画笔需要分别检查。
+    // 失败输出区分悬停、放置身份与配置能力，数据保留不能被误判成编辑可用。
+    if ( !context.selectedSampleEntities.empty() ||
+         context.hoveredEntity == sample || context.brushState.isActive ||
+         !context.brushState.selectedAudioResourceId.empty() ||
+         !context.brushState.activeAudioResourceId.empty() ||
+         context.currentTool != MMM::Logic::EditTool::Move ||
+         context.eraserState.isActive ||
+         !context.lastConfig.settings.enableBmsEditing ||
+         context.lastConfig.settings.isBmsEditingEnabled() ) {
+        XERROR(
+            "Professional audio cleanup failed: selected={}, hover={}, "
+            "active={}, resource={}, activeResource={}, bmsPreference={}, "
+            "bmsEffective={}",
+            context.selectedSampleEntities.size(),
+            context.hoveredEntity == sample,
+            context.brushState.isActive,
+            context.brushState.selectedAudioResourceId,
+            context.brushState.activeAudioResourceId,
+            context.lastConfig.settings.enableBmsEditing,
+            context.lastConfig.settings.isBmsEditingEnabled());
+        return false;
+    }
+    MMM::Logic::InteractionController controller(context);
+    // 独立会话命令也不能重新启用隐藏工具；专业模式下相同请求仍应被接受。
+    // 两种配色工具都验证，避免只对当前使用的工具清理而漏掉另一入口。
+    for ( const auto tool : { MMM::Logic::EditTool::ColorBrush,
+                              MMM::Logic::EditTool::ColorEraser } ) {
+        controller.handleCommand(MMM::Logic::CmdChangeTool{ tool });
+        if ( context.currentTool != MMM::Logic::EditTool::Move ) return false;
+    }
+    // 命令持有实体身份而不是当前可见轨道，所以必须在控制器入口复核能力。
+    // 此处不依赖悬停和选择被清空的副作用，直接提供仍有效的采样实体。
+    // 同时请求跨轨、偏移和资源替换，检查拒绝是完整事务而非只锁定时间轴。
+    // 旧工具窗口已入队的命令不能重新启用采样选择或移动主音轨锚点。
+    controller.handleCommand(MMM::Logic::CmdSetBrushAudioResource{
+        .audioResourceId = "effect",
+        .audioTrackType  = MMM::AudioTrackType::Effect });
+    controller.handleCommand(MMM::Logic::CmdUpdateObjectTimestamp{
+        .entity    = sample,
+        .kind      = MMM::Logic::ChartObjectKind::AudioSample,
+        .timestamp = 2.0 });
+    controller.handleCommand(MMM::Logic::CmdUpdateAudioSampleProperties{
+        .entity          = sample,
+        .audioResourceId = "replacement",
+        .bgmLane         = 1,
+        .offsetMs        = 300 });
+    controller.handleCommand(MMM::Logic::CmdUpdateBgmTrackCount{ 2 });
+    const auto& preserved =
+        context.sampleRegistry.get<MMM::Logic::SampleComponent>(sample);
+    if ( !context.brushState.selectedAudioResourceId.empty() ||
+         preserved.m_audioResourceId != "main.ogg" ||
+         !near(preserved.m_timestamp, 1.0) || preserved.m_track != 4 ||
+         context.bgmTrackCount != 1 ||
+         context.actionStack.getUndoStackSize() != 0 ) {
+        XERROR("Professional mode audio cleanup or command rejection failed");
+        return false;
+    }
+    // 普通音符画笔仍可使用；即使残留状态来自旧快照，也不能附着音频。
+    context.brushState.selectedAudioResourceId = "effect";
+    MMM::Logic::DrawTool drawTool;
+    drawTool.handleStartBrush(
+        context,
+        MMM::Logic::CmdStartBrush{
+            .cameraId = "Basic2DCanvas", .mouseX = 150.0F, .mouseY = 300.0F });
+    drawTool.handleEndBrush(
+        context, MMM::Logic::CmdEndBrush{ .cameraId = "Basic2DCanvas" });
+    const auto notes = context.noteRegistry.view<MMM::Logic::NoteComponent>();
+    // 基础画笔断言直接检查产物数量，避免空集合满足“没有绑定”的条件。
+    // 绑定读取只在唯一物件存在时进行，失败不会解引用无效实体。
+    // 原主音轨依然留在独立注册表，与此新增玩家物件相互独立。
+    if ( notes.size() != 1 )
+        XERROR("Ordinary brush created {} notes", notes.size());
+    return notes.size() == 1 &&
+           !notes.get<MMM::Logic::NoteComponent>(*notes.begin())
+                .m_sampleBinding;
+}
+
 /// @brief 验证共用专业模式同步时间线与多个主画布，并保留草稿数据和独立开关。
 /// @details
 /// 此用例覆盖配置更新从 BeatmapSession 命令队列传播到所有相机快照的完整路径。
@@ -4670,6 +4802,8 @@ bool testExplicitBgmTrackCountAction()
     // Undo/Redo 同时覆盖配置、Sample 索引和缓存结果。
     // 该用例隔离验证公共轨数动作的直接调用契约。
     MMM::Logic::SessionContext context;
+    // 此处验证专业编辑动作的成功与撤销，不使用普通模式的能力拒绝作为前提。
+    context.lastConfig.settings.professionalMode = true;
     context.currentBeatmap = std::make_shared<MMM::BeatMap>();
     context.currentBeatmap->m_baseMapMetadata.track_count     = 4;
     context.currentBeatmap->m_baseMapMetadata.bgm_track_count = 2;
@@ -5135,7 +5269,9 @@ bool testObjectTimestampCommand()
     context.currentBeatmap             = std::make_shared<MMM::BeatMap>();
     context.currentBeatmap->m_baseMapMetadata.track_count = 4;
     context.trackCount                                    = 4;
-    context.lastConfig.settings.enablePolylineEditing     = true;
+    // 自动采样时间编辑属于专业模式，玩家折线仍走相同队列入口。
+    context.lastConfig.settings.professionalMode      = true;
+    context.lastConfig.settings.enablePolylineEditing = true;
 
     // 两节点折线同时建立内嵌数据和独立子实体，便于检查同步闭包。
     const auto                rootEntity  = context.noteRegistry.create();
@@ -5302,6 +5438,8 @@ bool testObjectSampleVolumeCommand()
     // Undo/Redo 检查原值与新值的准确恢复。
     // mutationFlags 还需表明这是对象属性变化而非资源变化。
     MMM::Logic::SessionContext context;
+    // 此处验证专业编辑动作的成功与撤销，不使用普通模式的能力拒绝作为前提。
+    context.lastConfig.settings.professionalMode = true;
     context.currentBeatmap = std::make_shared<MMM::BeatMap>();
     context.trackCount     = 4;
     context.bgmTrackCount  = 1;
@@ -5447,7 +5585,10 @@ bool testObjectSampleVolumeCommandRoutesThroughSession()
             .volume = 0.4F,
         } });
     // update 是队列的消费边界；此前组件仍保持初始音量 1.0。
-    session.update(0.0, MMM::Config::EditorConfig{}, false);
+    // 队列消费使用专业配置，避免被软件总门禁拒绝而未覆盖动作路由。
+    MMM::Config::EditorConfig config;
+    config.settings.professionalMode = true;
+    session.update(0.0, config, false);
 
     // 值和历史项同时成立，证明分派没有绕过 ActionStack 直接写组件。
     return near(context.sampleRegistry.get<MMM::Logic::SampleComponent>(entity)
@@ -5531,7 +5672,10 @@ bool testSelectedObjectSampleVolumeCommand()
 
     session.pushCommand(MMM::Logic::LogicCommand{
         MMM::Logic::CmdUpdateSelectedObjectSampleVolume{ .volume = 0.8F } });
-    session.update(0.0, MMM::Config::EditorConfig{}, false);
+    // 队列消费使用专业配置，避免被软件总门禁拒绝而未覆盖动作路由。
+    MMM::Config::EditorConfig config;
+    config.settings.professionalMode = true;
+    session.update(0.0, config, false);
 
     // 统一助手在执行、撤销和重做阶段复用，并始终校验未选对象不变。
     const auto volumesEqual = [&](float expectedNote,
@@ -8529,6 +8673,7 @@ int main()
                    testDraggedDraftLayoutExpandsAwayFromPlayer() &&
                    testProfessionalModeHidesDraftArea() &&
                    testProfessionalModeUpdatesAllCanvases() &&
+                   testProfessionalModeClearsAudioPlacement() &&
                    testPerBeatmapDraftLaneSharingAndIsolation() &&
                    testDraftMirrorStaysInDraftDomain() &&
                    testDraftMirrorUsesDynamicDraftTrackCount() &&

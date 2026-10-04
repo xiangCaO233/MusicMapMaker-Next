@@ -428,11 +428,15 @@ void SettingsView::drawBeatmapSettings()
         // 页面前缀、行、节和标题共同隔离各分组的控件状态。
         std::string baseIdStr = "MAP_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        // 折叠状态不包含可变行号；搜索展开前面的组时不能重置后面的标题。
+        ImGuiID id = ImGui::GetID((std::string("MAP_Header_") + label).c_str());
 
         // 提前读取展开状态，决定本帧是否登记该组内部控件。
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
+        // 搜索只展开对应组，不能触发配置修改或保存。
+        const bool forceOpen = revealSettingsSearchSection(label, id);
+        if ( forceOpen ) isOpen = true;
 
         // 标题独占一行并采用当前 ImGui frame 高度以适应 DPI。
         auto& row = getRow(rowIndex++);
@@ -443,8 +447,11 @@ void SettingsView::drawBeatmapSettings()
             (baseIdStr + "_el").c_str(),
             Sizing::Grow(),
             Sizing::Fixed(h),
-            [label, id, defaultOpen](Clay_BoundingBox r, bool) {
+            [this, label, id, defaultOpen, forceOpen](Clay_BoundingBox r,
+                                                      bool) {
                 // Clay 分配绝对矩形，ImGui 游标必须移动到标题起点。
+                // 记录真实标题边界，条件隐藏的设置可以定位到所属组。
+                reportSettingsSearchHeader(label, r);
                 ImGui::SetCursorScreenPos({ r.x, r.y });
                 // 悬浮与按下色从当前主题 Header 色轻微增亮。
                 ImVec4 bgCol = ImGui::GetStyle().Colors[ImGuiCol_Header];
@@ -471,6 +478,8 @@ void SettingsView::drawBeatmapSettings()
 
                 // 数值 ID 借用指针重载传入，不代表可解引用地址。
                 // CollapsingHeader 无嵌套内容，不需要配对 TreePop。
+                // Clay 和实际标题必须保持相同的展开状态。
+                if ( forceOpen ) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
                 bool nowOpen = ImGui::TreeNodeEx(
                     (void*)(intptr_t)id,
                     ImGuiTreeNodeFlags_CollapsingHeader |
@@ -762,57 +771,65 @@ void SettingsView::drawBeatmapSettings()
                 }
             });
 
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.beatmap.draft_tracks").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                // SessionContext 是当前显示数量的权威来源，至少保留一条草稿轨。
-                const auto draftTrackCount =
-                    std::max(1, session->getContext().draftTrackCount);
-                drawTrackCountStepper(
-                    r,
-                    draftTrackCount,
-                    1,
-                    "DraftTrackCount",
-                    TR("ui.settings.beatmap.draft_tracks_remove").data(),
-                    TR("ui.settings.beatmap.draft_tracks_add").data(),
-                    [&](std::int32_t count) {
-                        // 回调只向 Engine 入队，避免持锁 UI 路径直接重建轨道。
-                        engine.pushCommand(Logic::CmdUpdateDraftTrackCount{
-                            count,
+        // 简化编辑不展示隐藏辅助区的数量编辑；既有轨道与数据继续保留。
+        if ( Config::AppConfig::instance()
+                 .getEditorSettings()
+                 .professionalMode ) {
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE("ui.settings.beatmap.draft_tracks").data(),
+                maxLabelW,
+                [&](Clay_BoundingBox r, bool) {
+                    // SessionContext
+                    // 是当前显示数量的权威来源，至少保留一条草稿轨。
+                    const auto draftTrackCount =
+                        std::max(1, session->getContext().draftTrackCount);
+                    drawTrackCountStepper(
+                        r,
+                        draftTrackCount,
+                        1,
+                        "DraftTrackCount",
+                        TR("ui.settings.beatmap.draft_tracks_remove").data(),
+                        TR("ui.settings.beatmap.draft_tracks_add").data(),
+                        [&](std::int32_t count) {
+                            // 回调只向 Engine 入队，避免持锁 UI
+                            // 路径直接重建轨道。
+                            engine.pushCommand(Logic::CmdUpdateDraftTrackCount{
+                                count,
+                            });
+                            // 当前帧显示值仍来自锁定的
+                            // SessionContext，下一帧读取命令结果。
                         });
-                        // 当前帧显示值仍来自锁定的
-                        // SessionContext，下一帧读取命令结果。
-                    });
-            });
+                });
 
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.beatmap.bgm_tracks").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                // BGM 轨允许为零，负值上下文按零显示以保护步进边界。
-                const auto bgmTrackCount =
-                    std::max(0, session->getContext().bgmTrackCount);
-                drawTrackCountStepper(
-                    r,
-                    bgmTrackCount,
-                    0,
-                    "BgmTrackCount",
-                    TR("ui.settings.beatmap.bgm_tracks_remove").data(),
-                    TR("ui.settings.beatmap.bgm_tracks_add").data(),
-                    [&](std::int32_t count) {
-                        // 专用命令维护 BGM 轨资源与 SessionContext 的一致性。
-                        engine.pushCommand(Logic::CmdUpdateBgmTrackCount{
-                            count,
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE("ui.settings.beatmap.bgm_tracks").data(),
+                maxLabelW,
+                [&](Clay_BoundingBox r, bool) {
+                    // BGM 轨允许为零，负值上下文按零显示以保护步进边界。
+                    const auto bgmTrackCount =
+                        std::max(0, session->getContext().bgmTrackCount);
+                    drawTrackCountStepper(
+                        r,
+                        bgmTrackCount,
+                        0,
+                        "BgmTrackCount",
+                        TR("ui.settings.beatmap.bgm_tracks_remove").data(),
+                        TR("ui.settings.beatmap.bgm_tracks_add").data(),
+                        [&](std::int32_t count) {
+                            // 专用命令维护 BGM 轨资源与 SessionContext
+                            // 的一致性。
+                            engine.pushCommand(Logic::CmdUpdateBgmTrackCount{
+                                count,
+                            });
+                            // 不提前修改上下文，避免 UI
+                            // 与逻辑线程各自维护一份计数。
                         });
-                        // 不提前修改上下文，避免 UI
-                        // 与逻辑线程各自维护一份计数。
-                    });
-            });
+                });
+        }
 
         addSettingItem(*sec,
                        rowIndex,

@@ -11,6 +11,7 @@
 #include "mmm/beatmap/BeatmapMutationObserver.h"
 #include "network/collaboration/CollaborationRoom.h"
 #include "ui/IUIView.h"
+#include "ui/UIManager.h"
 #include "ui/imgui/manager/CollaborationEntryPolicy.h"
 
 #include <algorithm>
@@ -45,13 +46,17 @@ CollaborationLogWindow::CollaborationLogWindow(
 {
     if ( m_room ) {
         // 谱面回调同时覆盖访客首次建会话和已绑定会话的增量替换。
+        // 历史补偿的栈同步命令由房间先入队，权威替换后入队；两者共享
+        // 当前会话队列，防止网络回调直接跨线程改动 EditorActionStack。
         m_room->setApplyBeatmapCallback(
             [this](std::shared_ptr<::MMM::BeatMap> beatmap,
                    ::MMM::BeatmapMutationFlags     flags,
                    std::uint64_t includedLocalMutationSequence,
                    std::uint64_t authoritativeRevision,
                    std::optional<std::vector<std::string>>
-                       objectDeltaIdentities) {
+                        objectDeltaIdentities,
+                   bool preserveCollaborationHistory) {
+                // 此布尔值只对补偿原作者有效；其他在线成员照常应用权威谱面。
                 // weak_ptr 防止会话销毁后回调延长其生命周期。
                 auto session = m_boundSession.lock();
                 // 空谱面不能建立会话或替换数据，直接忽略异常通知。
@@ -114,6 +119,10 @@ CollaborationLogWindow::CollaborationLogWindow(
                         .notifyMutationObserver = false,
                         // 远端权威替换不可再次回传 observer，避免协作回环。
                         .authoritativeRemote = true,
+                        .preserveCollaborationHistory =
+                            preserveCollaborationHistory,
+                        // 跨类别补偿已转移动作所有权时保留栈，避免权威
+                        // 替换的常规清理误删刚同步好的本地撤销记录。
                         .includedLocalMutationSequence =
                             includedLocalMutationSequence,
                         .objectDeltaIdentities =
@@ -134,6 +143,17 @@ CollaborationLogWindow::CollaborationLogWindow(
                         }));
                 }
             });
+        m_room->setHistoryCorrectedCallback([this](std::uint64_t sequence,
+                                                   bool          redo) {
+            if ( auto session = m_boundSession.lock() ) {
+                // 与下一份权威谱面替换同队列排序；本地不执行动作本身。
+                session->pushCommand(
+                    Logic::LogicCommand(Logic::CmdReconcileCollaborationHistory{
+                        .sequence = sequence,
+                        .redo     = redo,
+                    }));
+            }
+        });
         // 资源包可早于会话到达，因此先保存共享载荷再尝试绑定。
         m_room->setResourceBundleCallback(
             [this](Network::Collaboration::CollaborationResourceBundle bundle) {
@@ -171,14 +191,17 @@ CollaborationLogWindow::~CollaborationLogWindow()
         // 三个回调都捕获 this，析构结束前必须全部置空。
         m_room->setApplyBeatmapCallback(nullptr);
         m_room->setLocalMutationAcknowledgedCallback(nullptr);
+        m_room->setHistoryCorrectedCallback(nullptr);
         m_room->setResourceBundleCallback(nullptr);
     }
 }
 
 /// @brief 推进协作房间网络状态并同步本地会话绑定。
 /// @warning UI 热路径：每帧调用；room->update 不得执行无界阻塞网络等待。
-void CollaborationLogWindow::update(UIManager*)
+void CollaborationLogWindow::update(UIManager* sourceManager)
 {
+    // 资源回调由下面的房间轮询触发，提前提供 UI 线程发布目标。
+    m_sourceManager = sourceManager;
     // 无房间对象时视图保持空闲，不尝试创建替代房间。
     if ( !m_room ) return;
     m_room->update();
@@ -287,6 +310,9 @@ void CollaborationLogWindow::updateSessionBinding()
     }
 
     if ( !m_room->isActive() ) {
+        // 离房不保留浏览绑定；逻辑会话仍持有自己的缓存包供离线播放。
+        if ( m_sourceManager )
+            m_sourceManager->setCollaborationAudioProject(nullptr);
         // 非活动状态完整解除绑定，但访客缓存会话仍保持离线只读。
         if ( bound ) {
             bound->setMutationObserver(nullptr);
@@ -397,6 +423,10 @@ void CollaborationLogWindow::bindPendingResources()
     auto session = m_boundSession.lock();
     // 会话尚未建立时保留 bundle，首次谱面同步后会再次调用。
     if ( !session ) return;
+    // 已认证资源包只通过 const 视图供访客查看，不注册为可写本机项目。
+    if ( m_sourceManager && m_boundSessionIsGuest )
+        m_sourceManager->setCollaborationAudioProject(
+            m_pendingResourceBundle->project);
     session->pushCommand(Logic::LogicCommand{
         // project 共享所有权跨过命令队列，pathRemap 则移动以避免大容器复制。
         Logic::CmdSetCollaborationResources{

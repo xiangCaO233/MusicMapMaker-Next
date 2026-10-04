@@ -12,6 +12,7 @@
 #include "mmm/beatmap/MalodyMode.h"
 #include "mmm/project/AudioResource.h"
 #include "mmm/timing/Timing.h"
+#include "mmm/timing/TimingTemplate.h"
 #include <array>
 #include <cstdint>
 #include <entt/entt.hpp>
@@ -356,6 +357,11 @@ struct CmdSetPlaybackSpeed {
     double speed;
 };
 
+/// @brief 设置全局预览播放音高，不修改谱面资源配置。
+struct CmdSetPlaybackPitch {
+    double semitones;  ///< 相对原音高的半音偏移。
+};
+
 /// @brief Key 音所在的画布轨道区域。
 enum class KeySoundTrackArea : std::uint8_t {
     Player,  ///< 玩家操作轨道区。
@@ -692,6 +698,8 @@ struct CmdUpdateTimelineEvent {
     double newValue;
     /// @brief 可选的新元数据；为空时由逻辑层保留或清理旧元数据。
     std::optional<::MMM::TimingMetadata> metadataOverride;
+    /// @brief 非空时整体更新插值段落；为空时保留原段落定义。
+    std::optional<::MMM::TimingInterpolation> interpolationOverride;
 };
 
 /**
@@ -716,6 +724,8 @@ struct CmdCreateTimelineEvent {
     double              time;
     ::MMM::TimingEffect type;
     double              value;
+    /// @brief 非空时创建一个插值段落，而非展开为独立时间点。
+    std::optional<::MMM::TimingInterpolation> interpolation;
 };
 
 /**
@@ -730,6 +740,16 @@ struct CmdUpdateBpmWithKeepSpeedSv {
     double newBpm{ 120.0 };
     /// @brief 根据预设 BPM 计算出的 Scroll 值。
     double scrollValue{ 1.0 };
+};
+
+/**
+ * @brief 为选中的普通正 BPM 红线批量添加保持预设流速的 SV。
+ * @details 逻辑层读取当前预设 BPM 和红线值，同时间已有普通 SV 时更新。
+ * 红线保持原样，整批绿线修改共用一条撤销记录；插值段不参与补偿。
+ */
+struct CmdKeepSpeedForBpmEvents {
+    /// @brief 当前会话的选中实体；失效句柄和非 BPM 项在执行时忽略。
+    std::vector<entt::entity> bpmEntities;
 };
 
 /**
@@ -749,10 +769,20 @@ struct CmdCreateTimelineEvents {
 
         /// @brief 创建后写入 Timeline 组件的原始元数据。
         ::MMM::TimingMetadata metadata;
+        /// @brief 剪贴板与批量创建保留段落形状和外部采样密度。
+        std::optional<::MMM::TimingInterpolation> interpolation;
     };
 
     /// @brief 待创建 Timeline 事件列表。
     std::vector<Entry> events;
+    /// @brief 模板放置必须全部合法；剪贴板保留逐项过滤的兼容行为。
+    bool requireAllValid{ false };
+    /// @brief 非空时由逻辑线程根据最新 BPM 计算条目，忽略 events 副本。
+    std::optional<::MMM::TimingTemplate> templateDefinition;
+    /// @brief 模板基准的目标秒数，不是第一条事件的时间。
+    double templateAnchorSeconds{ 0.0 };
+    /// @brief 模板工作副本绑定的谱面实例，切换或重开后禁止写入。
+    std::uintptr_t templateBeatmapInstanceId{ 0 };
 };
 
 /**
@@ -844,6 +874,9 @@ struct CmdReplaceBeatmapData {
     /// 权威替换不进入本地撤销栈，并会废弃引用旧 ECS 实体的历史动作。
     bool authoritativeRemote{ false };
 
+    /// @brief 历史补偿已同步动作栈时，跨类别权威替换保留该动作栈。
+    bool preserveCollaborationHistory{ false };
+
     /// @brief 该权威状态已经包含的本机变化序号。
     /// 逻辑线程只允许覆盖不新于此序号的本地编辑，0 表示没有待确认本地变化。
     std::uint64_t includedLocalMutationSequence{ 0 };
@@ -862,6 +895,14 @@ struct CmdReplaceBeatmapData {
 struct CmdAcknowledgeCollaborationMutation {
     /// @brief 已由房主提交的本地变化序号。
     std::uint64_t sequence{ 0 };
+};
+
+/// @brief 房主历史补偿后只调整本地动作栈，不再次执行领域编辑。
+struct CmdReconcileCollaborationHistory {
+    /// @brief 原动作首次创建对应的本地变化序号；零表示映射已过期。
+    std::uint64_t sequence{ 0 };
+    /// @brief true 将动作移回撤销栈；false 移入重做栈。
+    bool redo{ false };
 };
 
 /// @brief 将已经完整校验的协作资源绑定到当前访客会话。
@@ -1009,11 +1050,11 @@ using LogicCommand = std::variant<
     CmdUpdateObjectSampleVolume, CmdUpdateSelectedObjectSampleVolume,
     CmdUpdateTrackCount, CmdUpdateBgmTrackCount, CmdUpdateDraftTrackCount,
     CmdSeek, CmdCaptureComposeLessonNotes, CmdSetComposeLessonInputLimit,
-    CmdSetPlaybackSpeed, CmdSetKeySoundTrackMute, CmdSetKeySoundTrackGain,
-    CmdSetKeySoundEffectGroupGain, CmdSetDraftKeySoundAreaMute,
-    CmdSetBgmKeySoundAreaMute, CmdChangeTool, CmdSetMousePosition, CmdUndo,
-    CmdRedo, CmdCopy, CmdPaste, CmdCut, CmdDeleteSelected,
-    CmdRemoveComposeLessonNote, CmdMirrorSelected,
+    CmdSetPlaybackSpeed, CmdSetPlaybackPitch, CmdSetKeySoundTrackMute,
+    CmdSetKeySoundTrackGain, CmdSetKeySoundEffectGroupGain,
+    CmdSetDraftKeySoundAreaMute, CmdSetBgmKeySoundAreaMute, CmdChangeTool,
+    CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste, CmdCut,
+    CmdDeleteSelected, CmdRemoveComposeLessonNote, CmdMirrorSelected,
     CmdAlignSelectedToCommonBeats, CmdSelectAll, CmdSetBrushNoteColor,
     CmdApplyNoteColorToSelection, CmdSetBrushNotePalette,
     CmdSetBrushAudioResource, CmdApplyNotePaletteToSelection,
@@ -1021,10 +1062,11 @@ using LogicCommand = std::variant<
     CmdClearAllNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
     CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
     CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
-    CmdUpdateBpmWithKeepSpeedSv, CmdCreateTimelineEvents,
-    CmdReplaceBeatmapTimings, CmdSetNoteAnnotation, CmdUpsertBeatmapAnnotation,
-    CmdRemoveBeatmapAnnotation, CmdReplaceBeatmapData,
-    CmdAcknowledgeCollaborationMutation, CmdSetCollaborationResources,
+    CmdUpdateBpmWithKeepSpeedSv, CmdKeepSpeedForBpmEvents,
+    CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdSetNoteAnnotation,
+    CmdUpsertBeatmapAnnotation, CmdRemoveBeatmapAnnotation,
+    CmdReplaceBeatmapData, CmdAcknowledgeCollaborationMutation,
+    CmdReconcileCollaborationHistory, CmdSetCollaborationResources,
     CmdSetCollaborationOfflineReadOnly, CmdSetCollaborationClipboardIsolation,
     CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
     CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
@@ -1060,6 +1102,7 @@ using LogicCommand = std::variant<
                 std::is_same_v<T, CmdCaptureComposeLessonNotes> ||
                 std::is_same_v<T, CmdSetComposeLessonInputLimit> ||
                 std::is_same_v<T, CmdSetPlaybackSpeed> ||
+                std::is_same_v<T, CmdSetPlaybackPitch> ||
                 std::is_same_v<T, CmdSetKeySoundTrackMute> ||
                 std::is_same_v<T, CmdSetKeySoundTrackGain> ||
                 std::is_same_v<T, CmdSetKeySoundEffectGroupGain> ||
@@ -1073,6 +1116,7 @@ using LogicCommand = std::variant<
                 std::is_same_v<T, CmdScroll> ||
                 std::is_same_v<T, CmdPanCanvas> ||
                 std::is_same_v<T, CmdAcknowledgeCollaborationMutation> ||
+                std::is_same_v<T, CmdReconcileCollaborationHistory> ||
                 std::is_same_v<T, CmdSetCollaborationResources> ||
                 std::is_same_v<T, CmdSetCollaborationOfflineReadOnly> ||
                 std::is_same_v<T, CmdSetCollaborationClipboardIsolation>;

@@ -51,6 +51,10 @@ add_library(
   src/AudioManager_Playback.cpp
   src/AudioManager_SFX.cpp
   # 独立服务与固定控制库放在管理器实现之后，便于审查源清单。
+  # 标记服务只重封装编码数据；WAVE 标记块独立处理以保留 PCM。
+  src/AudioMarkerService.cpp
+  src/AudioMarkerContainer.cpp
+  src/AudioMarkerWave.cpp
   src/AudioSpeedExportService.cpp
   src/KeySoundControl.cpp
   src/SoundEffectPool.cpp)
@@ -68,7 +72,9 @@ target_link_libraries(
          3rd_rubberband
          # 项目模型和配置类型出现在 AudioManager 的公开加载接口中。
          MMM
-         Config)
+         Config
+  # FFmpeg 公共容器接口用于无解码复制和章节元数据读写。
+  PRIVATE 3rd_ffmpeg)
 
 if(WIN32)
   # Windows 音频加速导出路径直接使用采样率转换和 SDL 头文件；优先链接项目 包装 target，以继承 static/shared
@@ -229,3 +235,13 @@ if(SOURCES_BUILD)
   # 门闩或析构协议回归不能让整个 CTest 无期限挂起。 三十秒只约束测试进程上界，不进入产品播放或同步逻辑。
   set_tests_properties(StreamingDecoderTest PROPERTIES TIMEOUT 30)
 endif()
+
+# 标记往返测试在构建树生成真实容器，并逐字节比较原音频编码包。
+mmm_add_test_executable(Audio AudioMarkerServiceTest
+                        tests/AudioMarkerServiceTest.cpp)
+target_link_libraries(AudioMarkerServiceTest PRIVATE Audio 3rd_ffmpeg Log
+                                                     Runtime)
+# 来源和输出均为临时夹具，不向源码资源目录写入任何音频。
+mmm_register_test_case(
+  NAME AudioMarkerServiceTest COMMAND AudioMarkerServiceTest
+  "${CMAKE_BINARY_DIR}/test_output/audio_markers")

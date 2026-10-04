@@ -18,6 +18,7 @@
 #include "runtime/AppThreadPool.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/audio/SpectrumTimeMapping.h"
 #include "ui/imgui/menu/actions/tools/BpmAutomaticMeasurementPolicy.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIThemeUtils.h"
@@ -62,7 +63,7 @@
 /// - 画布时间描述叠加视觉偏移后的 UI 秒数；
 /// - 波形和频谱可以分别使用专用视觉偏移；
 /// - Timing 段、首拍和节拍标记始终位于画布时间域；
-/// - 节拍器调度始终位于音频时间域，不能重复叠加视觉偏移。
+/// - 节拍器预约位于音频时间域，画布拍点需先减去一次有效视觉偏移。
 ///
 /// 生命周期约定：
 /// - 同一时刻至多有一个后台分析任务；
@@ -157,7 +158,8 @@
 /// - visualTime = audioTime + effectiveVisualOffset；
 /// - audioTime = canvasTime - effectiveVisualOffset；
 /// - waveCanvasTime = waveSampleTime + waveformVisualOffset；
-/// - spectrumPixel = (canvasTime - spectrumVisualOffset) * segmentsPerSecond；
+/// - spectrumPixel = (canvasTime - spectrumVisualOffset - 半窗时长) *
+/// segmentsPerSecond；
 /// - screenX = rectMinX + (time - viewStart) / viewRange * rectWidth；
 /// - time = viewStart + normalizedMouseX * viewRange；
 /// - beatTime = segmentStart + integerBeatIndex * beatLength；
@@ -219,7 +221,7 @@
 /// - 不在后台线程中调用 ImGui、ImPlot 或 Vulkan；
 /// - 不让后台线程直接移动 UI 当前使用的容器；
 /// - 不让独立试听操作影响编辑器主播放状态；
-/// - 不让视觉偏移进入节拍器的真实音频调度；
+/// - 首拍和段边界从画布域转换到音频域后再进行节拍器调度；
 /// - 不用固定 sleep 等待分析、播放或用户交互状态；
 /// - 不在拖动期间连续写配置文件或连续提交昂贵 seek。
 ///
@@ -1037,6 +1039,10 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
         return;
     }
 
+    // 只轮询已完成的文件任务，不让导出延迟 UI 与节拍播放。
+    // 完成状态提交归 UI 线程所有，后台任务不持有工具对象。
+    consumeMarkerExport();
+
     if ( m_requestFocus ) {
         // 焦点请求延迟到窗口 Begin 前执行，满足 ImGui 的调用时序。
         ImGui::SetNextWindowFocus();
@@ -1268,7 +1274,18 @@ void BpmMeasurementToolView::consumePendingAnalysis()
         return;
     }
 
-    if ( result->autoTimingRequested ) {
+    // 嵌入的精确 BPM 优先于自动猜测，章节独立恢复。
+    // 已保存的首拍和多段 BPM 比自动估算更精确，优先采用。
+    // 恢复仅在首次读取该音频时触发，不覆盖后续用户细调。
+    // 自动应用入口继续复用现有确认与回调，避免新增直接修改谱面的旁路。
+    if ( restoreAudioMarkers(*result) ) {
+        if ( result->autoTimingRequested ) {
+            if ( m_measurementExportCallback )
+                exportMeasuredTimingsToCallback(false);
+            else
+                m_shouldOpenAutoApplyPopup = true;
+        }
+    } else if ( result->autoTimingRequested ) {
         if ( result->autoTimingResult ) {
             // 自动结果先归一化 BPM，再由拍长约束首拍允许的负偏移范围。
             const auto& autoTiming = *result->autoTimingResult;
@@ -1936,6 +1953,7 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
             exportMeasuredTimingsToCallback(true);
         }
     }
+    renderMarkerPanel();
 }
 
 /// @brief 绘制自动测偏移后的应用确认弹窗。
@@ -2450,7 +2468,7 @@ void BpmMeasurementToolView::followPlaybackIfNeeded()
 /// - 播放跨入新的 BPM 段；
 /// - 用户修改首拍或 BPM；
 /// - 播放位置倒退或发生大幅前跳。
-/// 编辑器同步路由使用短前瞻计划播放，独立试听按帧补响刚越过的拍点；
+/// 两种路由都使用各自音频源的短前瞻预约，UI 帧率不决定有效出声点；
 /// 每帧触发数设有上限，过旧拍点只推进索引而不会集中播放。
 void BpmMeasurementToolView::updateMetronomePlayback()
 {
@@ -2491,11 +2509,15 @@ void BpmMeasurementToolView::updateMetronomePlayback()
         return;
     }
 
-    // 节拍调度使用原始音频时间，不使用含视觉偏移的画布时间。
+    // 独立工具的首拍来自文件时间，自动测量没有应用全局视觉偏移。
+    // 同步编辑器时才转换画布坐标；显示校准不能改变独立音频的听感落点。
     const double audioTime = std::clamp(
         getPlaybackCurrentTime(m_playbackRoute, audio), 0.0, totalTime);
-    const std::size_t activeSegmentIndex = findSegmentIndexForTime(audioTime);
-    const double      activeFirstBeatTime =
+    const double visualOffset =
+        bpmMetronomeCoordinateOffset(m_playbackRoute, playbackVisualOffset());
+    const std::size_t activeSegmentIndex =
+        findSegmentIndexForTime(audioTime + visualOffset);
+    const double activeFirstBeatTime =
         m_timingSegments[activeSegmentIndex].timestampSeconds;
     const double activeBeatLength =
         segmentBeatLengthSeconds(activeSegmentIndex);
@@ -2504,21 +2526,27 @@ void BpmMeasurementToolView::updateMetronomePlayback()
         m_metronomeScheduledSegmentIndex != activeSegmentIndex ||
         std::abs(m_metronomeScheduledFirstBeatTime - activeFirstBeatTime) >
             1e-9 ||
+        std::abs(m_metronomeScheduledVisualOffset - visualOffset) > 1e-9 ||
         std::abs(m_metronomeScheduledBeatLength - activeBeatLength) > 1e-9;
     // 超过两拍或逆向移动视为 seek，不能沿用连续播放游标。
     const double jumpThreshold = std::max(0.25, activeBeatLength * 2.0);
     const bool   jumped = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
                           audioTime - m_lastMetronomeAudioTime > jumpThreshold;
+    // 修改视觉偏移使未来预约失效，不能让旧时间的一拍与新时间的一拍同时响。
+    // 只清除本工具的两个音效池，不改动歌曲 transport 或其他编辑器音效。
+    if ( m_metronomeScheduleInitialized && (gridChanged || jumped) ) {
+        audio.stopSoundEffect(BPM_METRONOME_LOW_KEY);
+        audio.stopSoundEffect(BPM_METRONOME_HIGH_KEY);
+    }
     if ( !m_metronomeScheduleInitialized || gridChanged || jumped ) {
         // 重置从当前时间附近寻找首个可触发拍点。
         resetMetronomeScheduler(audioTime);
     }
 
     const bool synchronizedPlayback = isPlaybackSynchronizedWithEditor();
-    // 独立试听不借用主 BGM 的计划时钟，按帧即时补响以避免编辑器
-    // seek/stop 清理全局预定音效时造成后续拍点漏触发。
-    const double scheduleLookahead =
-        synchronizedPlayback ? BPM_METRONOME_SCHEDULE_LOOKAHEAD_SECONDS : 1e-4;
+    // 试听歌曲与节拍在同一拉伸前级混合，使用源帧预约消除 UI 帧抖动。
+    // 前瞻按音轨秒坐标计算，倍率只由共享变速器处理。
+    const double scheduleLookahead = BPM_METRONOME_SCHEDULE_LOOKAHEAD_SECONDS;
     // 前瞻窗口不能越过音轨末尾。
     const double scheduleEndAudioTime =
         std::min(totalTime, audioTime + scheduleLookahead);
@@ -2530,23 +2558,19 @@ void BpmMeasurementToolView::updateMetronomePlayback()
     // 当前 BPM 段的调度必须在下一段起点前终止。
     const double scheduledSegmentEnd =
         m_metronomeScheduledSegmentIndex + 1 < m_timingSegments.size()
-            ? m_timingSegments[m_metronomeScheduledSegmentIndex + 1]
-                  .timestampSeconds
+            ? bpmMetronomeAudioTime(
+                  m_timingSegments[m_metronomeScheduledSegmentIndex + 1]
+                      .timestampSeconds,
+                  visualOffset)
             : totalTime;
     while ( scheduledCount < BPM_METRONOME_MAX_TRIGGERED_PER_FRAME ) {
         // 索引相对当前段首拍，可为负值以覆盖零点前首拍模型。
-        const double beatAudioTime =
+        const double beatAudioTime = bpmMetronomeAudioTime(
             m_metronomeScheduledFirstBeatTime +
-            static_cast<double>(m_nextMetronomeBeatIndex) *
-                m_metronomeScheduledBeatLength;
-        const bool latestBeatCrossedSinceLastUpdate =
-            // 独立试听没有后端计划队列，只补发本帧刚越过的最新拍点。
-            !synchronizedPlayback &&
-            beatAudioTime > m_lastMetronomeAudioTime + 1e-4 &&
-            beatAudioTime <= audioTime + 1e-4 &&
-            beatAudioTime + m_metronomeScheduledBeatLength > audioTime + 1e-4;
-        if ( beatAudioTime < audioTime - pastTriggerWindow &&
-             !latestBeatCrossedSinceLastUpdate ) {
+                static_cast<double>(m_nextMetronomeBeatIndex) *
+                    m_metronomeScheduledBeatLength,
+            visualOffset);
+        if ( beatAudioTime < audioTime - pastTriggerWindow ) {
             // 过期拍点不可集中补响，只推进到当前时间附近。
             ++m_nextMetronomeBeatIndex;
             continue;
@@ -2560,8 +2584,8 @@ void BpmMeasurementToolView::updateMetronomePlayback()
             break;
         }
 
-        // 节拍器按真实音频/谱面时间轴调度；波形/频谱视觉偏移只影响绘制，
-        // 不能在这里二次叠加。
+        // 同步拍点反向转换到音频域，独立测量保留原始文件时间。
+        // 波形/频谱专用偏移和 FFT 半窗只影响图像，不进入声音预约。
         if ( beatAudioTime >= 0.0 && beatAudioTime <= totalTime ) {
             int64_t beatMod = m_nextMetronomeBeatIndex % 4;
             if ( beatMod < 0 ) {
@@ -2570,7 +2594,11 @@ void BpmMeasurementToolView::updateMetronomePlayback()
             }
             const char* key =
                 beatMod == 0 ? BPM_METRONOME_HIGH_KEY : BPM_METRONOME_LOW_KEY;
-            if ( beatAudioTime <= audioTime + 1e-4 ) {
+            if ( !synchronizedPlayback ) {
+                // 独立源的预约由音频回调完成，与歌曲同块定位并一起拉伸。
+                audio.playAuditionSoundEffectScheduled(
+                    key, beatAudioTime, BPM_METRONOME_VOLUME_FACTOR);
+            } else if ( beatAudioTime <= audioTime + 1e-4 ) {
                 // 已跨过或恰好命中的拍点立即播放。
                 audio.playSoundEffect(key, BPM_METRONOME_VOLUME_FACTOR);
             } else if ( synchronizedPlayback ) {
@@ -2584,7 +2612,7 @@ void BpmMeasurementToolView::updateMetronomePlayback()
         ++scheduledCount;
     }
 
-    // 保存本帧时间用于下帧识别 seek 和独立试听的跨越拍点。
+    // 保存本帧源时间，下一帧用来识别 seek 并重建预约游标。
     m_lastMetronomeAudioTime = audioTime;
 }
 
@@ -2662,8 +2690,11 @@ void BpmMeasurementToolView::resetMetronomeScheduler(double audioTime)
     }
 
     // 以当前生效段独立计算拍长，支持中途变速。
-    const std::size_t segmentIndex = findSegmentIndexForTime(audioTime);
-    const double      beatLength   = segmentBeatLengthSeconds(segmentIndex);
+    const double visualOffset =
+        bpmMetronomeCoordinateOffset(m_playbackRoute, playbackVisualOffset());
+    const std::size_t segmentIndex =
+        findSegmentIndexForTime(audioTime + visualOffset);
+    const double beatLength = segmentBeatLengthSeconds(segmentIndex);
     if ( beatLength <= 1e-6 ) {
         // 极小或无效拍长不能安全参与除法和循环调度。
         m_metronomeScheduleInitialized = false;
@@ -2674,11 +2705,14 @@ void BpmMeasurementToolView::resetMetronomeScheduler(double audioTime)
         m_timingSegments[segmentIndex].timestampSeconds;
     const double pastTriggerWindow = metronomePastTriggerWindow(beatLength);
     // ceil 选择不早于容差窗口的首个拍点，避免恢复时重放旧拍。
-    m_nextMetronomeBeatIndex = static_cast<int64_t>(std::ceil(
-        (audioTime - firstBeatTime - pastTriggerWindow) / beatLength - 1e-6));
+    // 坐标转换由路由统一选择，独立测量不让视觉校准改变声音索引。
+    // 倍速由 transport 改变推进速度，此处的拍点仍是音轨秒坐标。
+    m_nextMetronomeBeatIndex = bpmMetronomeNextBeatIndex(
+        audioTime, firstBeatTime, beatLength, pastTriggerWindow, visualOffset);
     m_lastMetronomeAudioTime = audioTime;
     // 保存网格快照，后续热路径通过比较检测参数变化。
     m_metronomeScheduledFirstBeatTime = firstBeatTime;
+    m_metronomeScheduledVisualOffset  = visualOffset;
     m_metronomeScheduledBeatLength    = beatLength;
     m_metronomeScheduledSegmentIndex  = segmentIndex;
     m_metronomeScheduleInitialized    = true;
@@ -2822,7 +2856,7 @@ void BpmMeasurementToolView::renderWaveformPlot(const ImVec2& size)
 /// @brief 绘制频谱图，并把分块纹理映射到当前画布时间范围。
 /// @param size 绘制区域尺寸。
 /// @warning UI 热路径：每帧执行；仅遍历已上传的固定宽度纹理分块。
-/// @details 当前画布范围先移除频谱专用偏移，再换算为全局纹理像素列；
+/// @details 当前画布范围先移除频谱专用偏移和 FFT 半窗，再换算为全局纹理像素列；
 /// 每个相交分块分别计算 UV 和屏幕范围。纹理绘制完成后使用与波形相同的
 /// 覆盖层和交互处理器，保证两个视图的行为一致。
 void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
@@ -2835,12 +2869,16 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
     const double viewEnd = std::min(std::max(canvasDuration, viewStart + 0.001),
                                     clampedCenter + m_zoomSeconds);
     const double viewRange = std::max(0.001, viewEnd - viewStart);
-    // 纹理像素位于原始音频时间，先移除视觉画布偏移再换算横向段号。
+    // 缓存列按 FFT 读取起点索引，显示时必须按窗口中心对齐音频内容。
+    // 与音频工具共用半窗补偿，用户的频谱偏移在两处都只应用一次。
     const double spectrumOffset = spectrumCanvasOffset();
-    const double audioViewStart = viewStart - spectrumOffset;
-    const double audioViewEnd   = viewEnd - spectrumOffset;
-    const double pixelStart     = audioViewStart * m_spectrumSegmentsPerSecond;
-    const double pixelEnd       = audioViewEnd * m_spectrumSegmentsPerSecond;
+    const double sampleRate     = ice::ICEConfig::internal_format.samplerate;
+    const double audioViewStart =
+        spectrumWindowStartAtVisualTime(viewStart, spectrumOffset, sampleRate);
+    const double audioViewEnd =
+        spectrumWindowStartAtVisualTime(viewEnd, spectrumOffset, sampleRate);
+    const double pixelStart = audioViewStart * m_spectrumSegmentsPerSecond;
+    const double pixelEnd   = audioViewEnd * m_spectrumSegmentsPerSecond;
     // 最小像素跨度避免极端缩放或空分析数据导致除零。
     const double pixelWidth = std::max(1.0, pixelEnd - pixelStart);
 
@@ -4055,10 +4093,14 @@ void BpmMeasurementToolView::refreshPlaybackRoute()
         m_metronomeScheduleInitialized = false;
     }
 
-    if ( m_playbackRoute == BpmPlaybackRoute::SynchronizedWithEditor ) {
-        // 同步模式下编辑器是倍速真源，工具只镜像其当前请求值。
-        m_playbackSpeed = std::clamp(
+    if ( isSelectedTrackLoadedForPlayback() ) {
+        // 两种 transport 都经过主拉伸器，编辑器和工具不能保存不同倍率。
+        const double speed = std::clamp(
             Audio::AudioManager::instance().getPlaybackSpeed(), 0.25, 2.0);
+        if ( speed != m_playbackSpeed ) {
+            m_metronomeScheduleInitialized = false;
+            m_playbackSpeed                = speed;
+        }
     }
 }
 
@@ -4158,7 +4200,7 @@ bool BpmMeasurementToolView::loadSelectedTrackForPlayback()
         audio.seekAudition(startAudioTime);
     }
     // 即使复用已加载轨道，也要同步可能刚修改的工具倍速。
-    audio.setAuditionPlaybackSpeed(m_playbackSpeed);
+    applyPlaybackSpeed(m_playbackSpeed);
     return true;
 }
 
@@ -4184,20 +4226,25 @@ bool BpmMeasurementToolView::isSelectedTrackLoadedForPlayback() const
            audio.getLoadedAuditionSyncKey() == m_selectedAudioSyncKey;
 }
 
-/// @brief 应用 BPM 工具倍速；同轨时同步编辑器，异轨时只修改独立试听。
+/// @brief 应用 BPM 工具与主画布共用的拉伸倍率。
 /// @param speed 目标倍速。
 /// @note 未加载音轨时只缓存请求值，首次加载后再应用到后端。
 void BpmMeasurementToolView::applyPlaybackSpeed(double speed)
 {
     // UI 与音频后端共同支持 0.25x–2.0x，入口统一钳制。
+    // 倍速切换会清除旧拉伸历史及预约，下一帧从当前源位置重新计算拍序。
+    if ( m_playbackSpeed != std::clamp(speed, 0.25, 2.0) ) {
+        m_metronomeScheduleInitialized = false;
+    }
     m_playbackSpeed = std::clamp(speed, 0.25, 2.0);
     if ( isSelectedTrackLoadedForPlayback() ) {
-        if ( isPlaybackSynchronizedWithEditor() ) {
-            // 编辑器路由通过命令队列更新，以纳入逻辑线程状态管理。
-            Logic::EditorEngine::instance().pushCommand(
-                Logic::CmdSetPlaybackSpeed{ m_playbackSpeed });
+        auto& engine = Logic::EditorEngine::instance();
+        if ( engine.hasActiveBeatmap() ) {
+            // 活动画布通过命令同步视觉时钟，音频和画布倍率保持一致。
+            engine.pushCommand(Logic::CmdSetPlaybackSpeed{ m_playbackSpeed });
         } else {
-            // 独立试听不影响谱面会话，可直接调用专用 transport。
+            // 新建项目向导没有谱面会话，投递命令会被丢弃。
+            // 专用入口仍转交同一个主拉伸器，不恢复独立的 DSP 分支。
             Audio::AudioManager::instance().setAuditionPlaybackSpeed(
                 m_playbackSpeed);
         }
@@ -4524,14 +4571,25 @@ void BpmMeasurementToolView::requestAnalyzeSelectedTrack(bool autoMeasure)
     m_analysisStopSource            = std::stop_source{};
     const std::stop_token stopToken = m_analysisStopSource.get_token();
     // track 的共享所有权移动到任务，保证整个解码期间资源存活。
-    m_analysisFuture = appThreadPool->enqueue([this,
-                                               stopToken,
-                                               track    = std::move(track),
-                                               duration = m_duration,
-                                               autoMeasure,
-                                               spectrumProfile]() {
-        analyzeTrack(stopToken, track, duration, autoMeasure, spectrumProfile);
-    });
+    m_analysisFuture = appThreadPool->enqueue(
+        [this,
+         stopToken,
+         track    = std::move(track),
+         duration = m_duration,
+         autoMeasure,
+         spectrumProfile,
+         markerInput = m_markerImportKey != m_selectedAudioSyncKey
+                           ? *path
+                           : std::filesystem::path{}]() {
+            analyzeTrack(stopToken,
+                         track,
+                         duration,
+                         autoMeasure,
+                         spectrumProfile,
+                         markerInput);
+        });
+    // 身份在任务提交后记住，重复分析不会读回旧文件覆盖当前测量。
+    m_markerImportKey = m_selectedAudioSyncKey;
 }
 
 /// @brief 从后台线程发布一次分析失败结果。
@@ -4681,7 +4739,8 @@ void BpmMeasurementToolView::clearAnalysisData()
 void BpmMeasurementToolView::analyzeTrack(
     std::stop_token stopToken, std::shared_ptr<ice::AudioTrack> track,
     double duration, bool autoMeasure,
-    Config::SpectrumDetailProfile spectrumProfile)
+    Config::SpectrumDetailProfile spectrumProfile,
+    const std::filesystem::path&  markerInput)
 {
     if ( !track ) {
         // 防御异步捕获为空，使用统一失败发布路径。
@@ -4741,7 +4800,7 @@ void BpmMeasurementToolView::analyzeTrack(
         std::max(1, static_cast<int>(duration * spectrumSegmentsPerSecond) + 1);
     const int spectrumBinCount = spectrumProfile.frequencyBins;
     // 固定 FFT 大小平衡低频分辨率和后台分析成本。
-    const int fftSize = 2048;
+    const int fftSize = SPECTRUM_FFT_WINDOW_FRAMES;
     // hopSize 将目标每秒段数换算为解码帧步进。
     const size_t hopSize = std::max<size_t>(
         1, static_cast<size_t>(sampleRate / spectrumSegmentsPerSecond));
@@ -4753,6 +4812,12 @@ void BpmMeasurementToolView::analyzeTrack(
 
     // 所有结果先构造在线程局部对象，完成后一次性发布。
     AnalysisResult result;
+    // 在已有后台分析任务中读取元数据，不向 UI 热路径增加文件访问。
+    // 元数据与波形分析共享后台任务，只访问确定的当前音频路径。
+    // 损坏标签通过结果状态交给面板，不能影响已经解码的声音。
+    // 文件读取不在 onRender 或每帧传输更新中执行。
+    if ( !markerInput.empty() )
+        result.markers = Audio::AudioMarkerService::read(markerInput);
     result.duration                  = duration;
     result.spectrumSegmentsPerSecond = spectrumSegmentsPerSecond;
     result.spectrumSegmentCount      = spectrumSegmentCount;
@@ -4985,7 +5050,9 @@ void BpmMeasurementToolView::analyzeTrack(
     fftw_free(fftOutput);
 
     if ( autoMeasure ) {
-        if ( duration >= 10.0 ) {
+        const bool savedBpm = result.markers && result.markers->success &&
+                              !result.markers->data.bpmSegments.empty();
+        if ( !savedBpm && duration >= 10.0 ) {
             // 自动检测需要足够节奏样本，短于十秒时保留空结果。
             if ( auto monoSamples =
                      readMonoSamplesForAutoTiming(stopToken, track) ) {

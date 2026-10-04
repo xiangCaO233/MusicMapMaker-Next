@@ -434,6 +434,39 @@ bool testBackgroundSessionCannotControlTransport()
     return true;
 }
 
+/// @brief 验证主音轨实时变调只接受活动会话的命令。
+/// @return 活动命令更新全局音高且后台命令无效时返回 true。
+/// @note 测试结束恢复进程内音高，不依赖真实音频设备或资源加载。
+bool testPlaybackPitchUsesActiveGlobalPreview()
+{
+    auto& audio = MMM::Audio::AudioManager::instance();
+    // 全局单例会被其他用例复用，先保存原值以免测试顺序改变结果。
+    const double                   originalPitch = audio.getPlaybackPitch();
+    MMM::Logic::SessionContext     context;
+    MMM::Logic::PlaybackController controller(context);
+
+    // 后台谱面发出的命令不能影响当前主轨的实时拉伸器。
+    // 直接检查全局音高，避免只验证命令被接收却没有作用于音频管理器。
+    context.isActiveSession = false;
+    controller.handleCommand(MMM::Logic::CmdSetPlaybackPitch{ 7.0 });
+    const bool backgroundIgnored =
+        near(audio.getPlaybackPitch(), originalPitch);
+
+    // 同一个会话取得活动身份后应直接设置音高，无需写项目资源。
+    // 复用控制器确认权限切换立即生效，不依赖重新构造控制器。
+    context.isActiveSession = true;
+    controller.handleCommand(MMM::Logic::CmdSetPlaybackPitch{ 7.0 });
+    const bool activeApplied = near(audio.getPlaybackPitch(), 7.0);
+    // 即使断言失败也先恢复进程单例，后续测试不会继承本例的变调。
+    audio.setPlaybackPitch(originalPitch);
+    if ( !backgroundIgnored || !activeApplied ) {
+        XERROR(
+            "Playback pitch command did not respect active session ownership");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证后台会话不能改写全局玩家轨道音效增益。
 /// @return 后台命令被忽略且活动会话命令生效时返回 true。
 /// @note 修改进程内 AudioManager 控制值，结束前恢复原始增益。
@@ -753,6 +786,7 @@ int main()
                    testComposePracticeRestartsFromLessonBeginning() &&
                    testPauseClampsVisualClockToTimelineEnd() &&
                    testBackgroundSessionCannotControlTransport() &&
+                   testPlaybackPitchUsesActiveGlobalPreview() &&
                    testBackgroundSessionCannotControlKeySoundGain() &&
                    testDraftKeySoundControlsRequireActiveSession() &&
                    testEditorConfigSynchronizesGlobalKeySoundControls() &&

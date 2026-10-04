@@ -41,6 +41,9 @@ public:
     std::uint64_t m_walkthroughToken{ 0 };
     /// @brief 替换式续接沿用原练习槽位；普通创建按音符类型选择槽位。
     int m_walkthroughSlot{ -1 };
+    /// @brief 此动作每次提交协作编辑后的本地序号与应用方向。
+    /// @note 成员自己的 Undo/Redo 也是可被房主定向撤回的原始操作。
+    std::vector<std::pair<std::uint64_t, bool>> m_collaborationMutations;
     /// @brief 构造只移除本动作教学产物的补偿动作；默认不支持。
     /// @note 不重放普通 undo，以免恢复布局或覆盖其他后续编辑。
     virtual std::unique_ptr<IEditorAction> walkthroughRollback(SessionContext&)
@@ -70,6 +73,16 @@ public:
     /// @brief 执行重做
     /// @param ctx 会话上下文引用
     void redo(SessionContext& ctx);
+
+    /// @brief 标记最近一次动作执行、撤销或重做对应的协作变化序号。
+    /// @param sequence 房间观察者接受本地编码时分配的序号。
+    void markLatestCollaborationSequence(std::uint64_t sequence);
+
+    /// @brief 按房主补偿结果移动本地动作所有权，不再执行动作本身。
+    /// @param sequence 被补偿操作对应的本地变化序号。
+    /// @param redo true 重做原操作，false 撤回原操作。
+    /// @return 找到精确动作时返回 true；否则清理过期历史并返回 false。
+    bool reconcileCollaborationHistory(std::uint64_t sequence, bool redo);
 
     /// @brief 清空所有栈
     void clear();
@@ -113,6 +126,10 @@ public:
 private:
     std::vector<std::unique_ptr<IEditorAction>> m_undoStack;  ///< 撤销栈
     std::vector<std::unique_ptr<IEditorAction>> m_redoStack;  ///< 重做栈
+    /// @brief 尚待观察者分配协作序号的最近变更动作；仅由逻辑线程访问。
+    IEditorAction* m_lastActionAwaitingCollaborationSequence{ nullptr };
+    /// @brief 上一待编号动作完成后是否位于撤销栈。
+    bool   m_lastActionAppliedAfterMutation{ false };
     size_t m_saveIndex{ 0 };  ///< 上次保存时的撤销栈深度
 
     /// @brief 是否存在未进入撤销栈且尚未保存的编辑。

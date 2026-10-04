@@ -11,16 +11,30 @@ namespace
 /// @brief 绘制一个直接切换持久化布尔值的工具栏可见性菜单项。
 /// @param translationKey 菜单文本翻译键。
 /// @param visible 对应按钮的可见性状态。
+/// @param enabled 当前软件模式是否允许开启该按钮。
 /// @return 状态在本帧被用户修改时返回 true。
 /// @warning UI 热路径：只调用统一菜单项反馈入口。
 /// @note 禁用弹窗自动关闭，使用户可连续配置多个工具栏按钮。
-bool drawVisibilityToggle(const char* translationKey, bool& visible)
+bool drawVisibilityToggle(const char* translationKey, bool& visible,
+                          bool enabled = true)
 {
     // 标志作用域严格包围单个菜单项，避免影响后续菜单控件。
     ImGui::PushItemFlag(ImGuiItemFlags_AutoClosePopups, false);
-    const bool changed = ::MMM::UI::FeedbackMenuItem(
-        TR(translationKey).data(), nullptr, &visible, true);
+    // 禁用项显示未勾选的有效状态，不能把它写回专业模式的已保存偏好。
+    bool       displayed = enabled && visible;
+    const bool changed   = ::MMM::UI::FeedbackMenuItem(
+        TR(translationKey).data(), nullptr, &displayed, enabled);
+    if ( changed && enabled ) visible = displayed;
     ImGui::PopItemFlag();
+    // enabled 仅由专业能力决定，提示不能根据其他菜单的只读条件猜测。
+    // 灰色菜单项默认不参与悬浮检测，提示入口显式允许禁用控件悬浮。
+    // 保留原显示偏好，悬浮说明不得改变被过滤功能的保存值。
+    if ( !enabled ) {
+        Utils::renderTooltip(
+            TR("ui.settings.software.professional_required").data(),
+            Utils::TooltipDir::Right,
+            true);
+    }
     // 将变更结果交给上层合并，统一决定是否持久化配置。
     return changed;
 }
@@ -41,9 +55,10 @@ void MainMenuToolbarVisibilityItem::render(MainMenuContext& context)
     }
 
     // 直接引用持久化配置，所有开关均更新同一份权威状态。
-    auto& visibility =
-        Config::AppConfig::instance().getEditorSettings().toolbarVisibility;
-    bool changed = false;
+    auto&      settings     = Config::AppConfig::instance().getEditorSettings();
+    auto&      visibility   = settings.toolbarVisibility;
+    const bool professional = settings.professionalMode;
+    bool       changed      = false;
 
     // 状态工具组对应互斥或协作的画布操作模式入口。
     ImGui::SeparatorText(TR("ui.view.toolbar_switch_tools").data());
@@ -56,9 +71,11 @@ void MainMenuToolbarVisibilityItem::render(MainMenuContext& context)
         drawVisibilityToggle("ui.toolbar.draw", visibility.stateTools.draw);
     // 颜色笔刷和橡皮擦共享颜色编辑职责，但可独立隐藏。
     changed |= drawVisibilityToggle("ui.toolbar.color_brush",
-                                    visibility.stateTools.colorBrush);
+                                    visibility.stateTools.colorBrush,
+                                    professional);
     changed |= drawVisibilityToggle("ui.toolbar.color_eraser",
-                                    visibility.stateTools.colorEraser);
+                                    visibility.stateTools.colorEraser,
+                                    professional);
     // 布局工具单独控制轨道布局编辑模式入口。
     changed |=
         drawVisibilityToggle("ui.toolbar.layout", visibility.stateTools.layout);
@@ -68,8 +85,8 @@ void MainMenuToolbarVisibilityItem::render(MainMenuContext& context)
     // 使用短引用降低后续成员访问噪声，不改变配置所有权。
     auto& buttons = visibility.independentButtons;
     // 调色板与磁吸工具提供高频编辑辅助入口。
-    changed |=
-        drawVisibilityToggle("ui.toolbar.note_palette", buttons.notePalette);
+    changed |= drawVisibilityToggle(
+        "ui.toolbar.note_palette", buttons.notePalette, professional);
     changed |= drawVisibilityToggle("ui.toolbar.magnet_tool", buttons.magnet);
     changed |= drawVisibilityToggle("ui.toolbar.scroll_timing_mapping",
                                     buttons.scrollTimingMapping);

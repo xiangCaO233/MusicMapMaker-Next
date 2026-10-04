@@ -8,6 +8,7 @@
 #include "logic/BeatmapSession.h"
 #include "logic/ProjectController.h"
 #include "logic/ecs/components/SampleComponent.h"
+#include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/beatmap/BeatmapMutationObserver.h"
@@ -22,12 +23,15 @@
 #include <condition_variable>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <latch>
 #include <memory>
 #include <mutex>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace
@@ -345,6 +349,268 @@ private:
         return false;
     }
     return true;
+}
+
+/// @brief 验证批量保速命令的会话分派、协作权限和变化通知接线。
+/// @return 未授权提交被拒绝，授权后整批生成绿线并只通知一次时返回 true。
+/// @note 测试走真实命令队列，不以直接调用控制器代替会话集成。
+/// @note 预设 BPM 为 180，避免默认绿线已经满足补偿而产生无变化。
+/// @note 所有命令都是本地写入尝试，不使用权威远端替换来绕过权限。
+[[nodiscard]] bool testKeepSpeedBatchSessionRouting()
+{
+    // 独立会话避免上一个用例的权限、历史和观察者状态串入。
+    // 不启动播放线程，显式 update 是本例的唯一命令消费边界。
+    MMM::Logic::BeatmapSession session;
+    MMM::Config::EditorConfig  config;
+    auto                       beatmap        = makeBeatmap();
+    beatmap->m_baseMapMetadata.preference_bpm = 180.0;
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdLoadBeatmap{ .beatmap = std::move(beatmap) } });
+    session.update(0.0, config, false);
+    // 两条红线时间不同，分别产生 1.5 和 .75 的补偿。
+    // 默认零秒红线不选中，计数只针对显式选择。
+    for ( int index = 1; index <= 2; ++index ) {
+        session.pushCommand(
+            MMM::Logic::LogicCommand{ MMM::Logic::CmdCreateTimelineEvent{
+                .time  = static_cast<double>(index),
+                .type  = MMM::TimingEffect::BPM,
+                .value = 120.0 * index } });
+    }
+    session.update(0.0, config, false);
+    // 创建完成后取真实句柄，不能把持久化 ID 当实体。
+    // 命令载荷按值保存，权限切换后重用同一选择集合。
+    MMM::Logic::CmdKeepSpeedForBpmEvents command;
+    const auto& registry = session.getContext().timelineRegistry;
+    for ( const auto entity :
+          registry.view<const MMM::Logic::TimelineComponent>() ) {
+        const auto& timing =
+            registry.get<const MMM::Logic::TimelineComponent>(entity);
+        if ( timing.m_effect == MMM::TimingEffect::BPM &&
+             timing.m_timestamp >= 1.0 )
+            command.bpmEntities.push_back(entity);
+    }
+    // 基线包含加载时的默认点，不能假设空谱面没有 Timing。
+    // 历史采用相对增量，红线创建动作必须保留在补偿批次以下。
+    const auto initialCount =
+        registry.view<const MMM::Logic::TimelineComponent>().size();
+    const auto initialHistory =
+        session.getContext().actionStack.getUndoStackSize();
+    auto observer = std::make_shared<CountingMutationObserver>();
+    // false 关闭绑定时基线通知，零次通知用于检查拒绝结果。
+    // 观察者只记录变化，不能主动修改谱面来制造通过条件。
+    session.setMutationObserver(observer, false);
+    // 无 Timelines 权限时，不得通过新命令绕过既有协作门闩。
+    session.setCollaborationAllowedMutationFlags(
+        // Metadata 权限仍可编辑，专门验证 Timelines 分类没有遗漏。
+        // 比全局只读更能发现新 variant 被误归为无修改的错误。
+        MMM::BeatmapMutationFlags::Metadata);
+    session.pushCommand(MMM::Logic::LogicCommand{ command });
+    session.update(0.0, config, false);
+    if ( registry.view<const MMM::Logic::TimelineComponent>().size() !=
+             initialCount ||
+         session.getContext().actionStack.getUndoStackSize() !=
+             initialHistory ||
+         observer->notificationCount() != 0 )
+        return false;
+    // 授权后同一载荷应真实到达控制器，创建两条绿线而不是仅发布刷新。
+    session.setCollaborationAllowedMutationFlags(
+        // 不赋予 All，证明补偿不需要采样、物件或元数据写入权限。
+        // 独立 update 后检查通知，不能被同轮其他编辑合并掩盖。
+        MMM::BeatmapMutationFlags::Timelines);
+    session.pushCommand(MMM::Logic::LogicCommand{ command });
+    session.update(0.0, config, false);
+    if ( registry.view<const MMM::Logic::TimelineComponent>().size() !=
+             initialCount + 2U ||
+         session.getContext().actionStack.getUndoStackSize() !=
+             initialHistory + 1U ||
+         observer->notificationCount() != 1 ||
+         observer->lastFlags() != MMM::BeatmapMutationFlags::Timelines ) {
+        XERROR(
+            "Batch keep-speed session routing or mutation notification failed");
+        return false;
+    }
+    // 撤销通过队列验证，通知并非仅初次执行才生效。
+    // 组件值恢复由控制器测试覆盖，这里聚焦数量和变化类别。
+    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdUndo{} });
+    session.update(0.0, config, false);
+    // 只确认本地接线，不推断服务器接收、编码或远端确认结果。
+    // 未运行真实网络连接，观察者累计次数是断言依据。
+    // 单次撤销恢复实体数量，并沿用 Timelines 通知类别。
+    return registry.view<const MMM::Logic::TimelineComponent>().size() ==
+               initialCount &&
+           observer->notificationCount() == 2 &&
+           observer->lastFlags() == MMM::BeatmapMutationFlags::Timelines;
+}
+
+/// @brief 房主补偿时间线后同步本地动作栈并保留可用的重做动作。
+/// @return 权威替换不重复撤销，原作者仍可本地重做时返回 true。
+/// @details 时间线属于通常会清空动作栈的跨类别权威替换，因此此用例
+///         同时验证补偿身份、命令顺序和 preserveCollaborationHistory。
+///         observer 首次本地编辑分配序号一；补偿命令先移栈，随后
+///         权威替换安装编辑前状态，不再执行同一个动作的 undo。
+///
+/// @par 本地动作身份
+/// 原编辑通过正常 CmdCreateTimelineEvent 进入 ActionStack，而不是测试
+/// 直接构造私有动作。observer 分配的序号随后随房主补偿命令返回，
+/// 这样能覆盖“网络序号正确但本地动作未打标”的接线错误。
+///
+/// @par 权威替换顺序
+/// 两条命令在同一 Session update 依次执行。先移动历史所有权，
+/// 再把时间线恢复为初始数据；权威替换不回传 observer，避免产生
+/// 第二次本地协作操作。保存的动作仍可通过本地 CmdRedo 再次执行。
+///
+/// @par 验收边界
+/// 同时比较通知次数、动作栈深度和领域时间线数量；只比较单一
+/// 结果可能把无动作的界面假象误判为成功。重做后撤销栈重新拥有动作，
+/// 证明补偿没有创建一份只可显示、不可再次执行的伪历史记录。
+/// 此测试不依赖 P2P 房间，网络序号映射另由协作集成测试覆盖。
+///
+/// @par 后续历史操作
+/// 原作者在房主补偿后先本地重做，再本地撤销。两次操作均通过
+/// 同一个动作实例发布，但各自有独立的协作序号；随后房主撤回
+/// 原作者的撤销，再重做这次撤销。这个顺序同时检查动作身份
+/// 不丢失、序号不会只绑定首次创建，以及操作方向的反转。
+///
+/// @par 栈与谱面分工
+/// 栈补偿只移动动作所有权，权威替换负责改变时间线。测试
+/// 每一阶段都核对两者，防止单独正确而组合后执行两次撤销。
+/// 权威替换不向 observer 反馈，可排除远端补偿生成新本地序号。
+[[nodiscard]] bool testCollaborationHistoryCorrectionKeepsLocalRedo()
+{
+    MMM::Logic::BeatmapSession session;
+    MMM::Config::EditorConfig  config;
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdLoadBeatmap{ .beatmap = makeBeatmap() },
+    });
+    session.update(0.0, config, false);
+    auto observer = std::make_shared<CountingMutationObserver>();
+    session.setMutationObserver(observer, false);
+
+    // 本地动作进入撤销栈，观察者把首次变化编号为一。
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdCreateTimelineEvent{
+            .time  = 1.25,
+            .type  = MMM::TimingEffect::SCROLL,
+            .value = 1.5,
+        },
+    });
+    session.update(0.0, config, false);
+    const auto originalTimingCount =
+        session.getContext().currentBeatmap->m_timings.size();
+    // 空白基线可能带有默认时间线，因此只比较编辑前后数量。
+    // 首次通知数必须精确为一，后续补偿才能稳定引用该序号。
+    if ( observer->notificationCount() != 1 ||
+         session.getContext().actionStack.getUndoStackSize() != 1U ||
+         originalTimingCount == 0U ) {
+        return false;
+    }
+
+    // 在线原作者先接收栈同步，再应用房主撤回后的权威时间线。
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdReconcileCollaborationHistory{
+            .sequence = 1,
+            .redo     = false,
+        },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdReplaceBeatmapData{
+            .sourceBeatmap                 = makeBeatmap(),
+            .replaceTimelines              = true,
+            .notifyMutationObserver        = false,
+            .authoritativeRemote           = true,
+            .preserveCollaborationHistory  = true,
+            .includedLocalMutationSequence = 1,
+        },
+    });
+    session.update(0.0, config, false);
+    // 栈中已存在可重做动作，但权威时间线仍应保持撤回结果。
+    // observer 次数不变说明房主补偿未被误认为成员再次编辑。
+    if ( session.getContext().actionStack.getUndoStackSize() != 0U ||
+         session.getContext().actionStack.getRedoStackSize() != 1U ||
+         session.getContext().currentBeatmap->m_timings.size() >=
+             originalTimingCount ||
+         observer->notificationCount() != 1 ) {
+        XERROR("Collaboration history correction did not preserve local redo");
+        return false;
+    }
+
+    // 后续本地重做复用原动作；若栈被跨类别替换清空，此处不会恢复事件。
+    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdRedo{} });
+    session.update(0.0, config, false);
+    // 本地重做验证补偿没有损坏动作持有的时间线事件数据。
+    // 这里恢复的是原事件，不能凭空增加另一条重复时间线。
+    if ( session.getContext().actionStack.getUndoStackSize() != 1U ||
+         session.getContext().actionStack.getRedoStackSize() != 0U ||
+         session.getContext().currentBeatmap->m_timings.size() !=
+             originalTimingCount ) {
+        return false;
+    }
+    const auto appliedTimings = session.getContext().currentBeatmap->m_timings;
+
+    // 成员自己再次撤销也形成独立网络操作，序号三的完成方向为未应用。
+    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdUndo{} });
+    session.update(0.0, config, false);
+    // 第二次本地操作的序号为三：一是创建，二是重做。
+    // 这次撤销结束后动作在重做栈，供房主反向补偿验证。
+    if ( observer->notificationCount() != 3 ||
+         session.getContext().actionStack.getRedoStackSize() != 1U ) {
+        return false;
+    }
+
+    // 房主撤回这次“撤销”应把原动作移回撤销栈，而不是再移入重做栈。
+    auto restored       = makeBeatmap();
+    restored->m_timings = appliedTimings;
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdReconcileCollaborationHistory{
+            .sequence = 3,
+            .redo     = false,
+        },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdReplaceBeatmapData{
+            .sourceBeatmap                 = std::move(restored),
+            .replaceTimelines              = true,
+            .notifyMutationObserver        = false,
+            .authoritativeRemote           = true,
+            .preserveCollaborationHistory  = true,
+            .includedLocalMutationSequence = 3,
+        },
+    });
+    session.update(0.0, config, false);
+    // 房主撤回成员的 Undo 后应恢复事件及动作的已应用状态。
+    // 如果只看首次创建的方向，本次会错误地留在重做栈。
+    if ( session.getContext().actionStack.getUndoStackSize() != 1U ||
+         session.getContext().actionStack.getRedoStackSize() != 0U ||
+         session.getContext().currentBeatmap->m_timings.size() !=
+             originalTimingCount ) {
+        XERROR("Host reversal of a member undo left the local stack stale");
+        return false;
+    }
+
+    // 房主重做原成员的 Undo 时，再按方向把动作转移回本地重做栈。
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdReconcileCollaborationHistory{
+            .sequence = 3,
+            .redo     = true,
+        },
+    });
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdReplaceBeatmapData{
+            .sourceBeatmap                 = makeBeatmap(),
+            .replaceTimelines              = true,
+            .notifyMutationObserver        = false,
+            .authoritativeRemote           = true,
+            .preserveCollaborationHistory  = true,
+            .includedLocalMutationSequence = 3,
+        },
+    });
+    session.update(0.0, config, false);
+    // 再恢复成员的 Undo，验证同一序号在两个房主方向上可往返。
+    // 谱面和本地重做栈应回到房主撤回前的状态。
+    return session.getContext().actionStack.getUndoStackSize() == 0U &&
+           session.getContext().actionStack.getRedoStackSize() == 1U &&
+           session.getContext().currentBeatmap->m_timings.size() <
+               originalTimingCount;
 }
 
 /// @brief 验证多批注的 Creator 门禁、物件定位、时间分组与协作权限。
@@ -1257,6 +1523,8 @@ private:
     config.visual.judgeline_pos     = 0.5F;
     // 先打开 BMS 编辑功能，使失败来自协作权限而非功能未启用。
     // 固定布局让 550 像素输入落到 BGM 区，150 像素落到玩家区。
+    // 开启专业总门禁，使本例只检验协作权限的拒绝与撤销通知。
+    config.settings.professionalMode = true;
     config.settings.enableBmsEditing = true;
 
     auto beatmap = makeBeatmap();
@@ -1711,11 +1979,177 @@ int main()
         appThreadPool.shutdown();
         return usesDedicatedFilePool && responsive && saved;
     };
+    /// @brief 验证后台保存 `.mc` 时折线子节点与活动谱面彻底分离。
+    /// @return 写出仍保留快照几何及折线父子关系时返回 true。
+    /// @note 文件门闩固定快照与写盘的先后顺序，避免依赖线程调度时机。
+    /// @details 测试创建一条由 Hold 接 Flick 构成的 Slide 折线。
+    /// 活动谱面先通过正常载入命令建立 ECS，再通过保存命令创建独立快照。
+    /// 文件工作线程被门闩挡住时，在逻辑侧改变原 Flick 的位移方向。
+    /// 放行写盘后，若快照仍借用源节点，导出的横向偏移会跟着反向。
+    /// 断言固定为创建快照时的正向偏移，可直接识别跨线程借用问题。
+    /// Malody 将同拍 Hold 尾与 Flick 合并成一个 seg，断言遵循该格式规则。
+    /// 最后重新载入写出的 `.mc`，检查根折线与两类子节点的引用视图。
+    /// 单看文件存在或成功事件不能证明父子关系，因此同时检查编码与重载。
+    /// 测试仅使用会话、文件池和临时文件，不依赖渲染器或音频设备。
+    /// 测试文件位于系统临时目录，避免写入版本化测试资源。
+    /// 事件订阅只消费本轮目标路径，防止并发保存误报成功。
+    /// 负向改动只发生在源谱面，不通过会话再次生成快照。
+    /// 门闩在检查结果前释放，避免测试自己阻断文件工作线程。
+    const auto testAsyncMalodySaveKeepsPolylineSnapshot = []() {
+        auto& appThreadPool = MMM::Runtime::AppThreadPool::instance();
+        // 使用正式独立文件池，测试才覆盖实际异步保存边界。
+        appThreadPool.init();
+        const auto      outputPath = std::filesystem::temp_directory_path() /
+                                     "mmm_async_polyline_snapshot_test.mc";
+        std::error_code removeError;
+        // 遗留文件不能代替本轮写入结果，开始前先清除。
+        std::filesystem::remove(outputPath, removeError);
+
+        // 目标扩展名和 Malody mode 必须保留，确保进入原格式 Slide 编码器。
+        auto beatmap                              = makeBeatmap();
+        beatmap->m_baseMapMetadata.map_path       = outputPath;
+        beatmap->m_baseMapMetadata.preference_bpm = 120.0;
+        beatmap->m_metadata
+            .map_properties[MMM::MapMetadataType::MALODY]["mode"] = "7";
+        MMM::Timing timing;
+        // 明确零点 BPM，使段落拍位无需依赖导出器默认值。
+        timing.m_timestamp             = 0.0;
+        timing.m_bpm                   = 120.0;
+        timing.m_beat_length           = 500.0;
+        timing.m_timingEffect          = MMM::TimingEffect::BPM;
+        timing.m_timingEffectParameter = 120.0;
+        beatmap->m_timings.push_back(timing);
+
+        // Hold 从第二拍开始，Flick 在尾部右移一轨。
+        // 两者归属于同一根，不能被当作两个独立顶层物件。
+        auto& hold        = beatmap->m_noteData.holds.emplace_back();
+        hold.m_timestamp  = 1000.0;
+        hold.m_duration   = 500.0;
+        hold.m_track      = 1;
+        hold.m_isSubNote  = true;
+        auto& flick       = beatmap->m_noteData.flicks.emplace_back();
+        flick.m_timestamp = 1500.0;
+        flick.m_track     = 1;
+        flick.m_dtrack    = 1;
+        flick.m_isSubNote = true;
+        // 同时建立通用顺序与分类引用，检验三组借用视图都重绑。
+        auto& polyline       = beatmap->m_noteData.polylines.emplace_back();
+        polyline.m_timestamp = 1000.0;
+        polyline.m_track     = 1;
+        polyline.m_subNotes.emplace_back(hold);
+        polyline.m_subNotes.emplace_back(flick);
+        polyline.m_subHolds.emplace_back(hold);
+        polyline.m_subFlicks.emplace_back(flick);
+        // 载入前重建顶层视图，避免夹具自身缺少根物件。
+        beatmap->sync();
+
+        // 通过会话命令进入保存路径，而不是直接绕过快照调用编码器。
+        MMM::Logic::BeatmapSession session;
+        MMM::Config::EditorConfig  config;
+        session.pushCommand(MMM::Logic::LogicCommand{
+            MMM::Logic::CmdLoadBeatmap{ .beatmap = beatmap },
+        });
+        session.update(0.0, config, false);
+
+        std::mutex              resultMutex;
+        std::condition_variable resultCondition;
+        bool                    saveFinished = false;
+        // 保存结果由文件线程发出，只接受本测试目标文件的事件。
+        // 事件可能在逻辑线程下次 update 前到达，因此使用独立条件变量。
+        const auto subscription =
+            MMM::Event::EventBus::instance()
+                .subscribe<MMM::Event::BeatmapSaveResultEvent>(
+                    [&](const auto& event) {
+                        if ( event.path != MMM::Config::pathToUtf8(outputPath) )
+                            return;
+                        std::lock_guard resultLock(resultMutex);
+                        saveFinished = event.success;
+                        resultCondition.notify_one();
+                    });
+
+        // 后台任务在门闩处等待，允许确认快照建立后再修改原谱面。
+        // 门闩只锁住文件操作，不阻塞逻辑侧创建命令快照。
+        // 强制指定 Original，避免编辑器默认格式掩盖 `.mc` 路径。
+        std::unique_lock fileGate(MMM::Event::beatmapFileOperationGate());
+        session.pushCommand(MMM::Logic::LogicCommand{
+            MMM::Logic::CmdSaveBeatmap{
+                .formatOverride =
+                    MMM::Logic::BeatmapSaveFormatOverride::Original },
+        });
+        session.update(0.0, config, false);
+        // 修改时文件线程尚未编码，借用源 Flick 的快照会读到负位移。
+        // 正确的深快照则仍持有创建瞬间的正位移。
+        beatmap->m_noteData.flicks.front().m_dtrack = -1;
+        // 放行后不再触碰文件产物，读取仅在完成事件到达后进行。
+        fileGate.unlock();
+
+        {
+            // 有界等待防止保存回归时让整组 CTest 永久挂起。
+            // 谓词抵御通知先于 wait 的线程交错。
+            std::unique_lock resultLock(resultMutex);
+            resultCondition.wait_for(resultLock,
+                                     std::chrono::seconds(5),
+                                     [&]() { return saveFinished; });
+        }
+        // 消费文件线程的结果并移除事件订阅，避免污染后续用例。
+        session.update(0.0, config, false);
+        MMM::Event::EventBus::instance()
+            .unsubscribe<MMM::Event::BeatmapSaveResultEvent>(subscription);
+
+        bool hasSnapshotSeg = false;
+        if ( saveFinished ) {
+            // `seg.x` 直接体现 Flick 的跨轨方向，可区别两个谱面版本。
+            // 读取真实产物；成功事件仅说明写盘完成，不说明内容正确。
+            // 使用非抛异常解析，坏文件由断言路径统一报告。
+            std::ifstream input(outputPath);
+            const auto    data = nlohmann::json::parse(input, nullptr, false);
+            if ( !data.is_discarded() && data.contains("note") ) {
+                for ( const auto& note : data["note"] ) {
+                    // 只检查折线根的 seg，普通音符不承担父子编码契约。
+                    if ( !note.contains("seg") || !note["seg"].is_array() ||
+                         note["seg"].size() != 1U )
+                        continue;
+                    // Hold 尾与同拍 Flick 会合成一个带 x 的 seg。
+                    // 原谱面方向已反转，正向位移只可能来自独立快照。
+                    hasSnapshotSeg = note["seg"][0].value("x", 0) > 0;
+                }
+            }
+        }
+        bool hasPolylineRelationship = false;
+        if ( saveFinished ) {
+            // 若源关系丢失，导出器可能仍写出独立音符，必须检查根节点。
+            // 再经正式读取器构造 NoteData，验证编码可回读。
+            // 分类引用和通用顺序引用都必须恢复到同一条折线。
+            auto reloaded = MMM::BeatMap::loadFromFile(outputPath);
+            hasPolylineRelationship =
+                reloaded.m_noteData.polylines.size() == 1U &&
+                reloaded.m_noteData.polylines.front().m_subNotes.size() == 2U &&
+                reloaded.m_noteData.polylines.front().m_subHolds.size() == 1U &&
+                reloaded.m_noteData.polylines.front().m_subFlicks.size() == 1U;
+        }
+        if ( !saveFinished || !hasSnapshotSeg || !hasPolylineRelationship ) {
+            // 日志保留失败维度，定位 CI 中异步顺序问题。
+            // 三个布尔量区分写盘、几何快照与父子关系失败。
+            XERROR(
+                "Async Malody snapshot regression: saved={}, seg={}, "
+                "relationship={}",
+                saveFinished,
+                hasSnapshotSeg,
+                hasPolylineRelationship);
+        }
+        // 清理测试产物并关闭独立文件池，后续用例不继承线程状态。
+        std::filesystem::remove(outputPath, removeError);
+        appThreadPool.shutdown();
+        return saveFinished && hasSnapshotSeg && hasPolylineRelationship;
+    };
     // 先覆盖持锁延后，再验证同步与权限，失败通过短路返回非零。
     // 各用例必须自行释放订阅和恢复单例状态，不能依赖后续用例清理。
     return testDeferredFileCommands() && testAsyncSaveKeepsLogicResponsive() &&
+                   testAsyncMalodySaveKeepsPolylineSnapshot() &&
                    testOptionalInitialSnapshot() &&
                    testTimelineCommandsPublishMutations() &&
+                   testKeepSpeedBatchSessionRouting() &&
+                   testCollaborationHistoryCorrectionKeepsLocalRedo() &&
                    testBeatmapAnnotationPermissionAndTimestampGrouping() &&
                    testRemoteSynchronizationPreservesActiveBrush() &&
                    testRemoteSynchronizationWaitsForLocalMutationReceipt() &&

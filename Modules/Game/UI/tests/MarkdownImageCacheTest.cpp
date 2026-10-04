@@ -1,4 +1,5 @@
 #include "ui/imgui/markdown/MarkdownImageCache.h"
+#include "log/colorful-log.h"
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -13,7 +14,7 @@
 /// 静态模式用于依赖尚不支持动画时单独验证 URL 和非法输入边界。
 /// 内联 GIF 避免测试依赖源码目录或外部资源文件。
 /// 真实 CanonRock GIF 则单独验证分发资源的帧处理兼容性；资源只读。
-/// 这些动画经缩放后应进入 stb 的有界内存路径，不依赖 FFmpeg 的 GIF 模块。
+/// 原始高清动画应进入有界内存路径，不依赖 FFmpeg 的 GIF 模块。
 
 /// @brief 验证地址策略和两帧 GIF 的解码、时间变化及非法资源回退。
 /// @param argc 可选模式或远程图片 URL 数量。
@@ -60,15 +61,14 @@ int main(int argc, char** argv)
     if ( cache.findImage("walkthrough-gif:place-tap.gif").failed ||
          !cache.findImage("walkthrough-gif:../secret.gif").failed )
         return 10;
-    // 全部打包动画经过缩放后在 macOS 无 GIF FFmpeg 解码器时也必须
-    // 走有界内存解码；逐张验收可发现某一段的帧 disposal 兼容问题。
+    // 全部打包原图在 macOS 无 GIF FFmpeg 解码器时也必须走有界内存解码。
+    // 逐张验收分辨率与帧 disposal，防止素材再次被预压缩或运行时缩小。
     if ( !staticOnly ) {
         std::error_code error;
         // 不跟随项目列表加载配置根；直接检查构建时打包的源码资产。
         const auto directory =
             std::filesystem::path(MMM_WALKTHROUGH_GIF_DIRECTORY);
-        std::size_t count      = 0;
-        std::size_t atlasBytes = 0;
+        std::size_t count = 0;
         // 顺序无关：每个文件独立解码且在本轮迭代后释放图集内存。
         for ( std::filesystem::directory_iterator iterator(directory, error),
               end;
@@ -83,21 +83,20 @@ int main(int argc, char** argv)
                 std::istreambuf_iterator<char>{ source },
                 std::istreambuf_iterator<char>{}
             };
-            const auto image = decodeUpdateImage(bytes, 192U);
-            // 教程图集必须有多帧，且单帧不能突破 192 像素预算。
+            const auto image =
+                decodeUpdateImage(bytes, 1280U, 512U * 1024U * 1024U);
+            // 打包源最窄仍有 948 像素；显示帧须保留 900 像素以上。
+            // 每段图集限制在 128 MiB，切步时由缓存回收前一段纹理。
             if ( image.pixels.empty() || image.frames < 2U ||
-                 image.frameWidth > 192U || image.frameHeight > 192U )
+                 image.frameWidth < 900U || image.frameHeight > 1280U ||
+                 image.pixels.size() > 128U * 1024U * 1024U )
                 return 7;
-            // 运行时缓存不逐段销毁 GPU 纹理，所有图集必须留在
-            // 共享的 192 MiB 配额内，否则后面的进阶教学会无图。
-            atlasBytes += image.pixels.size();
             ++count;
         }
         // 文件缺失和迭代失败都应显式失败，避免空目录得到假通过。
         // 数量断言与批注目录一致，新增段落时需要同步增加动画。
         // 这里不依赖文件遍历顺序，便于不同文件系统得到同一结果。
         if ( error || count != 14U ) return 8;
-        if ( atlasBytes > 192U * 1024U * 1024U ) return 9;
     }
     // 显式传入 URL 时才进行网络探针，常规测试完全离线。
     for ( int index = staticOnly ? 2 : 1; index < argc; ++index ) {
@@ -109,6 +108,24 @@ int main(int argc, char** argv)
         if ( std::string(argv[index]).ends_with(".gif") && remote.frames < 2U )
             // 显式 GIF URL 必须保留动画而非退化为单帧。
             return 5;
+        // 网络探针同时请求与放大弹窗相同的高清解码路径，防止只验证缩略图。
+        // 远程 GIF 可能走 FFmpeg 逐帧路径，不能以可信本地源的较高预算代替。
+        const auto preview = loadUpdateImage(argv[index], 1280U);
+        // 宽高分别检查，竖向图片不能只凭最长边判断是否退回了正文尺寸。
+        // 单图字节上限也覆盖最后一行空槽，避免高清修复无意突破图集预算。
+        if ( preview.pixels.empty() || preview.frameWidth < remote.frameWidth ||
+             preview.frameHeight < remote.frameHeight ||
+             preview.pixels.size() > 128U * 1024U * 1024U )
+            return 11;
+        // 记录两档的实际分辨率与容量，复查网络原图和客户端是否一致。
+        // 此日志只由显式探针触发，正常离线 CTest 不访问站点。
+        XINFO("更新图片探针: 缩略图 {}x{} / {} 字节，高清 {}x{} / {} 字节",
+              remote.frameWidth,
+              remote.frameHeight,
+              remote.pixels.size(),
+              preview.frameWidth,
+              preview.frameHeight,
+              preview.pixels.size());
     }
     return 0;
 }

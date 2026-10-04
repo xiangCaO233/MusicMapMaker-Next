@@ -174,7 +174,17 @@ public:
     /// @param payload 与 UI 坐标、渲染状态和 ECS 实体无关的操作负载。
     /// @return 请求入房主队列或访客传输队列后的结果。
     [[nodiscard]] SubmitOperationResult submitOperation(
-        std::span<const std::uint8_t> payload);
+        std::span<const std::uint8_t> payload,
+        std::uint64_t*                acceptedClientSequence = nullptr);
+
+    /// @brief 房主立即提交一条已在权威文档后台验证过的补偿增量。
+    /// @param payload 规范化文档增量。
+    /// @param correction 被补偿原操作的稳定身份和方向。
+    /// @return 提交失败原因；仅房主可调用。
+    /// @warning UI 低频历史操作路径；同步分配连续修订并广播，不等待网络。
+    [[nodiscard]] SubmitOperationResult commitHostCorrection(
+        std::span<const std::uint8_t>  payload,
+        CollaborationHistoryCorrection correction);
 
     /// @brief 向当前房间发送一条单行 UTF-8 文字消息。
     /// @param text 不超过协议上限的非空单行正文。

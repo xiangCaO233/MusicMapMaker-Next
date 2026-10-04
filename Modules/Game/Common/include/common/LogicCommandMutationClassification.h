@@ -106,6 +106,7 @@ namespace MMM::Logic
                                   std::is_same_v<T, CmdUpdateTimelineEvents> ||
                                   std::is_same_v<T,
                                                  CmdUpdateBpmWithKeepSpeedSv> ||
+                                  std::is_same_v<T, CmdKeepSpeedForBpmEvents> ||
                                   std::is_same_v<T, CmdDeleteTimelineEvent> ||
                                   std::is_same_v<T, CmdCreateTimelineEvent> ||
                                   std::is_same_v<T, CmdCreateTimelineEvents> ||

@@ -134,6 +134,27 @@ SelectedVolumeState inspectSelectedVolumeState()
 class EditSelectedObjectVolumeAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 普通模式隐藏采样音量菜单，避免展示无法使用的高级功能。
+    /// @param context 单帧主菜单上下文。
+    /// @return 与专业编辑能力一致的入口可见性。
+    /// @warning 每帧只读取总开关，不读取会话或遍历选择。
+    bool isVisible(const MainMenuContext& context) const override
+    {
+        return isEnabled(context);
+    }
+
+    /// @brief 采样实例音量属于专业编辑，普通模式禁用菜单和快捷键。
+    /// @param context 当前菜单上下文，无需读取会话。
+    /// @return 专业模式开启时返回 true。
+    /// @warning UI 热路径只读取软件配置标志，不获取会话锁。
+    bool isEnabled(const MainMenuContext& context) const override
+    {
+        (void)context;
+        return Config::AppConfig::instance()
+            .getEditorSettings()
+            .professionalMode;
+    }
+
     /// @brief 获取用户配置的批量音量编辑快捷键提示。
     /// @param context 单帧主菜单上下文，本查询无需读取。
     /// @param fallbackShortcut 配置无法格式化时使用的静态提示。
@@ -162,6 +183,7 @@ public:
     {
         (void)context;
         (void)activation;
+        if ( !isEnabled(context) ) return;
         // 在打开瞬间拍摄选择摘要，使输入与用户触发时的状态一致。
         const auto state = inspectSelectedVolumeState();
 
@@ -182,7 +204,9 @@ public:
     /// @note 画布编辑快捷键被抑制时不检查用户绑定。
     bool handleShortcut(MainMenuContext& context) override
     {
-        if ( !MenuUtil::canTriggerCanvasEditingShortcut() ) return false;
+        if ( !isEnabled(context) ||
+             !MenuUtil::canTriggerCanvasEditingShortcut() )
+            return false;
         // 每帧引用最新配置，使运行时重绑无需重建菜单动作。
         const auto& shortcutConfig =
             Config::AppConfig::instance().getEditorSettings().shortcutConfig;
@@ -201,6 +225,8 @@ public:
     /// @note 对象数量每帧刷新，选择变化会立即影响应用按钮可用性。
     void renderDeferred(MainMenuContext& context) override
     {
+        // 关闭专业模式立即撤下旧弹窗，不让隐藏采样留有编辑入口。
+        if ( !isEnabled(context) ) m_showWindow = false;
         // 窗口关闭时不锁会话，也不遍历选择索引。
         if ( !m_showWindow ) return;
 

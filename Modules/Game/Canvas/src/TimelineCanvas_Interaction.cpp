@@ -646,11 +646,24 @@ double TimelineCanvas::snapTimingTime(const ImVec2& size, double rawTime,
             continue;
         }
 
-        double relativeTime = rawTime - point.time;
+        // 只有实际 BPM 段定义决定相位，运行时积分虚拟点不成为拍位锚点。
+        Logic::TimelineComponent timing{ point.time,
+                                         TimingEffect::BPM,
+                                         point.bpm };
+        for ( const auto& segment : m_currentSnapshot->timingInterpolations )
+            if ( segment.effect == TimingEffect::BPM &&
+                 std::abs(segment.time - point.time) < 1e-9 )
+                timing.m_interpolation = segment.interpolation;
+        // 沿用既有吸附舍入规则，但先换算到连续拍数而非等长毫秒。
+        // 还原时间也必须使用同一曲线反解，不能用起始 BPM 乘回去。
+        // 下一个真实 BPM 仍是边界，采样点不构成新的吸附相位。
+        double relativeTime =
+            timelineBeatsAt(timing, rawTime) * 60.0 / point.bpm;
         double stepCount = editorConfig.settings.snapFloor
                                ? std::floor(relativeTime / stepDuration + 1e-6)
                                : std::round(relativeTime / stepDuration);
-        double nearestStepTime = point.time + stepCount * stepDuration;
+        double nearestStepTime =
+            timelineTimeAtBeat(timing, stepCount / beatDivisor);
         if ( nearestStepTime > nextBpmTime ) {
             nearestStepTime = nextBpmTime;
         }
@@ -782,11 +795,20 @@ double TimelineCanvas::snapTimeToBeatLine(double rawTime) const
             continue;
         }
 
-        double relativeTime = rawTime - point.time;
+        // 只有实际 BPM 段定义决定相位，运行时积分虚拟点不成为拍位锚点。
+        Logic::TimelineComponent timing{ point.time,
+                                         TimingEffect::BPM,
+                                         point.bpm };
+        for ( const auto& segment : m_currentSnapshot->timingInterpolations )
+            if ( segment.effect == TimingEffect::BPM &&
+                 std::abs(segment.time - point.time) < 1e-9 )
+                timing.m_interpolation = segment.interpolation;
+        double relativeTime =
+            timelineBeatsAt(timing, rawTime) * 60.0 / point.bpm;
         double stepCount = editorConfig.settings.snapFloor
                                ? std::floor(relativeTime / stepDuration + 1e-6)
                                : std::round(relativeTime / stepDuration);
-        double candidate = point.time + stepCount * stepDuration;
+        double candidate = timelineTimeAtBeat(timing, stepCount / beatDivisor);
         if ( candidate > nextBpmTime ) {
             candidate = nextBpmTime;
         }
@@ -1287,10 +1309,17 @@ void TimelineCanvas::copySelectedTimingEvents(bool cut)
         entry.hasBeatPosition = true;
         m_timingClipboard.push_back(entry);
 
+        // 画布和表格使用共享剪贴板，段落定义也需要跨入口保持。
+        // 相对偏移只移动首时间；持续时间、函数和输出密度原样保留。
+        // 粘贴合法性由逻辑批量入口检查，不能在 UI 中拆成独立样本。
         Logic::TimelineClipboardItem sharedEntry;
-        sharedEntry.timeline        = Logic::TimelineComponent{ target.time,
-                                                                target.effect,
-                                                                target.value };
+        sharedEntry.timeline = Logic::TimelineComponent{ target.time,
+                                                         target.effect,
+                                                         target.value };
+        // 段落剪贴板保留曲线参数，粘贴不能退化成单个起点。
+        for ( const auto& segment : m_currentSnapshot->timingInterpolations )
+            if ( segment.entity == target.entity )
+                sharedEntry.timeline.m_interpolation = segment.interpolation;
         sharedEntry.relativeTime    = entry.relativeTime;
         sharedEntry.relativeBeat    = entry.relativeBeat;
         sharedEntry.hasBeatPosition = entry.hasBeatPosition;
@@ -1373,7 +1402,8 @@ void TimelineCanvas::pasteTimingClipboard(double anchorTime)
         batch.events.push_back({ std::max(0.0, targetTime),
                                  entry.timeline.m_effect,
                                  entry.timeline.m_value,
-                                 entry.timeline.m_metadata });
+                                 entry.timeline.m_metadata,
+                                 entry.timeline.m_interpolation });
     }
     if ( !batch.events.empty() ) {
         Event::EventBus::instance().publish(
@@ -1584,8 +1614,9 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     if ( m_currentSnapshot->isPlaying ) {
         // 播放时禁止开始新编辑，但保留播放前已开始的抓取或框选，使交互
         // 在时间线滚动期间持续更新，并允许按住鼠标再次切换播放状态。
-        m_isTimingDrawPreviewing = false;
-        m_isTimingErasing        = false;
+        m_isTimingDrawPreviewing  = false;
+        m_isInterpolationDragging = false;
+        m_isTimingErasing         = false;
         m_timingEraseTargetEntities.clear();
         if ( !m_isTimingDragging && !m_isTimingMarqueeSelecting ) {
             return;
@@ -1603,6 +1634,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     const bool anyPopupOpen = ImGui::IsPopupOpen(
         nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
     if ( anyPopupOpen || m_isPopupOpen || m_isCreatePopupOpen ||
+         m_isInterpolationEditorOpen || m_requestInterpolationEditor ||
          overMenuButton || io.WantTextInput ||
          UI::ShortcutUtils::isShortcutRecordingActive() ) {
         if ( m_isTimingErasing &&
@@ -1612,6 +1644,10 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         }
         return;
     }
+
+    if ( handleInterpolationInteraction(
+             canvasPos, size, isHovered && !overMenuButton) )
+        return;
 
     const bool  ctrl              = io.KeyCtrl;
     const bool  shift             = io.KeyShift;

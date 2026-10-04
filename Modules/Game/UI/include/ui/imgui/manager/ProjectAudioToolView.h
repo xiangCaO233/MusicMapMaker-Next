@@ -38,6 +38,10 @@ public:
     /// @brief 请求下一帧把工具窗口聚焦到前台。
     void requestFocus();
 
+    /// @brief 专业模式关闭时取消工具选择和手势，不删除资源或谱面音频。
+    /// @warning 低频模式切换路径，空画笔命令只提交一次。
+    void disableProfessionalEditing();
+
 private:
     /// @brief 方块缩放时被拖动的边或角。
     enum class ResizeHandle {

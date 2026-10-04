@@ -494,6 +494,12 @@ AudioTimelineDescriptor buildAudioTimelineDescriptor(
             }
             event.filePath       = pathIterator->second;
             event.resourceConfig = resource->m_config;
+            if ( resource->m_type == AudioTrackType::Main ) {
+                // 主音轨倍率与音高属于全局实时预览；旧项目保存的资源值不得
+                // 触发整首音频离线处理，也不应改变谱面时长或描述符指纹。
+                event.resourceConfig.playbackSpeed = 1.0F;
+                event.resourceConfig.playbackPitch = 0.0F;
+            }
         }
         if ( resource && resource->m_type == AudioTrackType::Main ) {
             // 无法解析的引用不推测 Main
@@ -565,8 +571,8 @@ AudioTimelineDescriptor buildAudioTimelineDescriptor(
                     .m_eventId        = eventId,
                     .m_audioReference = pending.m_originalReference,
                     .m_message        = "无法解析自动采样音频资源引用 '" +
-                                 pending.m_originalReference +
-                                 "'，该事件将以缺失资源载入",
+                                        pending.m_originalReference +
+                                        "'，该事件将以缺失资源载入",
                 });
         }
         // 即使存在诊断也交付事件，缺失资源处理由统一加载流程决定而非在此静默丢弃。

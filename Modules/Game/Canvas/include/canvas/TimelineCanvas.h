@@ -2,6 +2,9 @@
 
 #include "canvas/CanvasSnapshotPrepare.h"
 #include "canvas/TimelineAuxiliaryWindowState.h"
+#include "canvas/TimingFunctionEditorState.h"
+#include "canvas/TimingInterpolationPreview.h"
+#include "canvas/TimingTemplateEditorState.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "graphic/imguivk/VKTextureAtlas.h"
 #include "mmm/timing/Timing.h"
@@ -90,9 +93,9 @@ public:
         const std::string& shader_name) override;
     std::string getShaderName(const std::string& shader_module_name) override;
     bool        needReload() override;
-    void        reloadTextures(vk::PhysicalDevice& physicalDevice,
-                               vk::Device& logicalDevice, vk::CommandPool& cmdPool,
-                               vk::Queue& queue) override;
+    void reloadTextures(vk::PhysicalDevice& physicalDevice,
+                        vk::Device& logicalDevice, vk::CommandPool& cmdPool,
+                        vk::Queue& queue) override;
 
     /// @brief 获取时间点批量编辑表格窗口是否打开。
     /// @return 表格窗口当前是否打开。
@@ -107,6 +110,13 @@ public:
 
     /// @brief 激活时间点批量编辑表格；已聚焦可见时关闭，否则恢复并聚焦。
     void activateTimingPointsTable() override;
+
+    /// @brief 工具菜单只置位请求，下一次画布更新负责初始化模板。
+    /// @warning UI 热路径：只修改本地标志，不捕获 ECS 或读取配置文件。
+    void requestTimingTemplateEditor() override
+    {
+        m_requestTimingTemplateEditor = true;
+    }
 
     /// @brief 请求下一帧将时间线窗口聚焦到前台。
     void requestFocus() override;
@@ -425,6 +435,69 @@ private:
     /// @param alpha 透明度。
     /// @return ImGui 颜色。
     ImU32 timingEffectColor(::MMM::TimingEffect effect, int alpha) const;
+
+    /// @brief Shift 手势或段落正文命中处理；已消费输入时返回真。
+    /// @warning 每帧 UI 输入路径；只读取快照，不等待逻辑线程。
+    bool handleInterpolationInteraction(const ImVec2& position,
+                                        const ImVec2& size, bool hovered);
+    /// @brief 绘制段落范围，使用与编辑窗口一致的峰谷保留预览。
+    /// @warning 每帧复用缓存；每段最多 4096 个像素桶，每桶最多四个顶点。
+    void renderInterpolationOverlay(const ImVec2& position, const ImVec2& size);
+    /// @brief 在下一次弹窗绘制中开始创建或修改段落。
+    void openInterpolationEditor(
+        const Common::Render::TimingInterpolationElement& segment);
+    /// @brief 低频段落编辑窗口，提交前校验范围与同类型时间点冲突。
+    void renderInterpolationEditor();
+    /// @brief 从个人模板库打开点组工具，选区捕获由工具内部触发。
+    void openTimingTemplateEditor();
+    /// @brief 用当前选区替换模板草稿，保留窗口和个人库的生命周期。
+    /// @warning 仅由明确的选区捕获操作调用，允许一次排序和会话读取。
+    bool captureSelectedTimingTemplate();
+    /// @brief 工具菜单的延迟打开请求，不依赖时间线窗口是否可见。
+    bool m_requestTimingTemplateEditor{ false };
+    /// @brief 显式捕获完整时间线，selected 非空时同时复制框选实体。
+    /// @warning 只在按钮事件读取 ECS，不在逐帧绘制时等待会话锁。
+    bool captureTimingTemplateContext(std::vector<Timing>* selected);
+    /// @brief 显示模板工作副本，只在输入变化时换算落点。
+    /// @warning 每帧 UI 入口；持久化和会话捕获仅由按钮触发。
+    void renderTimingTemplateEditor();
+    /// @brief 点组工具的值状态，关闭后不保留注册表地址。
+    TimingTemplateEditorState m_timingTemplateEditor;
+    /// @brief 打开段落窗口时初始化函数输入和绘制轴，不执行逐帧重置。
+    void initializeTimingFunctionEditor();
+    /// @brief 显示函数排版、手绘拟合和错误反馈，只在输入变化时编译。
+    /// @warning 每帧编辑窗口路径；求解与编译仅由输入事件触发。
+    void renderTimingFunctionEditor();
+    /// @brief 取消、绘制或拟合只修改这个模态工作状态。
+    TimingFunctionEditorState m_timingFunctionEditor;
+    /// @brief 按快照槽复用完整曲线的像素代表点，移动视口不重新求值。
+    /// @warning 每帧只借用缓存；定义或像素预算变化才捕获不可变函数所有权。
+    std::vector<TimingInterpolationPreview> m_interpolationOverlayPreviews;
+    /// @brief 新建手势独立复用预览，不能覆盖已保存段落的缓存。
+    TimingInterpolationPreview m_interpolationDragPreview;
+    /// @brief 在拖动期间保留段首，不让手势变成单点放置。
+    bool m_isInterpolationDragging{ false };
+    /// @brief 段落编辑窗口的值语义工作副本。
+    Common::Render::TimingInterpolationElement m_interpolationEdit;
+    /// @brief 用户当前调整的段尾时间，单位秒。
+    double m_interpolationEnd{ 0.0 };
+    /// @brief 下一帧弹出模态段落编辑窗口。
+    bool m_requestInterpolationEditor{ false };
+    /// @brief 已打开的编辑窗口，阻止后台画布消费输入。
+    bool m_isInterpolationEditorOpen{ false };
+    /// @brief 开始编辑时的谱面身份，切换谱面则取消提交。
+    std::string m_interpolationBeatmapKey;
+    /// @brief 同一文件重开后的新实例也会使旧编辑副本失效。
+    std::uintptr_t m_interpolationInstanceId{ 0 };
+    /// @brief 模态编辑持有的时间点范围快照，只在打开窗口时收集。
+    std::vector<Common::Render::TimelineInteractiveElement>
+        m_interpolationValidationRows;
+    /// @brief 打开段落窗口时捕获的红线快照，常规帧不遍历 ECS 或持会话锁。
+    std::vector<Timing> m_interpolationBpmTimings;
+    /// @brief 上次准备拍轴的时间范围，仅真实输入变化时重新构建。
+    double m_interpolationAxisStart{ -1 }, m_interpolationAxisDuration{ -1 };
+    /// @brief 分拍合法性或红线映射错误，取消窗口仍允许退出。
+    bool m_interpolationAxisValid{ true };
 
     std::string                                           m_canvasName;
     bool                                                  m_needReload{ true };

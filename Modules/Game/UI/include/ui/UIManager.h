@@ -128,6 +128,21 @@ public:
     [[nodiscard]] Network::Collaboration::CollaborationRoom*
     getCollaborationRoom() const;
 
+    /// @brief 发布访客音轨的只读资源包；空值解除音轨浏览绑定。
+    /// @warning 仅在 UI
+    /// 线程资源包到达或离房时调用；共享所有权保持缓存目录存活。
+    void setCollaborationAudioProject(std::shared_ptr<const Project> project);
+
+    /// @brief 获取音轨浏览数据源，访客资源优先于本机项目。
+    /// @return 借用指针仅供本帧使用，不授予项目写入权限。
+    /// @warning UI 热路径：只读取 UI
+    /// 线程已发布数据，不访问会话长锁或复制所有权。
+    [[nodiscard]] const Project* getAudioProject() const;
+
+    /// @brief 判断音轨参数是否只读；谱面可编辑权限不影响此判断。
+    /// @warning UI 热路径：只读资源绑定和房间角色，不读取会话可变上下文。
+    [[nodiscard]] bool isAudioReadOnly() const;
+
     /// @brief 获取无原生装饰窗口的平台行为适配器。
     /// @return 平台适配器观察指针；未绑定或当前平台无适配器时返回 nullptr。
     /// @warning UI 热路径：每帧可能读取；只返回观察指针，不复制所有权。
@@ -197,6 +212,10 @@ public:
 
     /// @brief 打开项目音频工具并聚焦到前台。
     void openProjectAudioTool();
+
+    /// @brief 根据专业编辑总开关收起工具并清除音频放置状态。
+    /// @warning 每帧入口只比较缓存值，具体清理仅在关闭边沿发生。
+    void synchronizeProfessionalEditingMode();
 
     /// @brief 重新加载当前已打开控制器引用的项目音效。
     /// @warning 低频皮肤重载路径：每个已打开音效控制器最多触发一次单文件
@@ -371,6 +390,10 @@ private:
     /// 保证。
     Network::Collaboration::CollaborationRoom* m_collaborationRoom{ nullptr };
 
+    /// @brief UI 线程持有的访客只读音频资源包，不作为本机项目打开。
+    /// @warning 共享所有权仅在接收或释放资源时变化，用于保持缓存文件生命周期。
+    std::shared_ptr<const Project> m_collaborationAudioProject;
+
     /// @brief 上一次已应用项目工作区的项目路径。
     std::string m_workspaceProjectPath;
 
@@ -434,6 +457,9 @@ private:
 
     /// @brief 无项目默认工作区是否已经应用。
     bool m_noProjectWorkspaceDefaultApplied{ false };
+
+    /// @brief 上次应用的专业模式，首次普通编辑帧也必须清除恢复前的旧选择。
+    bool m_lastProfessionalEditingMode{ true };
 
     /// @brief 是否已请求重载皮肤相关图形资源。
     bool m_skinResourceReloadRequested{ false };

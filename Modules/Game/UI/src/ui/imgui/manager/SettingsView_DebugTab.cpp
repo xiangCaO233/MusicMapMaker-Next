@@ -59,11 +59,15 @@ void SettingsView::drawDebugSettings()
                                 std::to_string(rowIndex) + "_H_" + label;
         // ImGuiID 用于跨帧保存折叠状态，不依赖 Clay 节点地址。
         // 可见标签参与哈希，因此同一页不同本地化标题仍保持相互独立。
-        ImGuiID id = ImGui::GetID(baseIdStr.c_str());
+        // 折叠状态不包含可变行号；搜索展开前面的组时不能重置后面的标题。
+        ImGuiID id = ImGui::GetID((std::string("DBG_Header_") + label).c_str());
 
         // 首次出现使用 defaultOpen，之后读取窗口 StateStorage 中的选择。
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
+        // 搜索只展开对应组，不能触发配置修改或保存。
+        const bool forceOpen = revealSettingsSearchSection(label, id);
+        if ( forceOpen ) isOpen = true;
 
         // 标题占用对象池中的标准横向行。
         auto& row = getRow(rowIndex++);
@@ -77,8 +81,11 @@ void SettingsView::drawDebugSettings()
             (baseIdStr + "_el").c_str(),
             Sizing::Grow(),
             Sizing::Fixed(h),
-            [label, id, defaultOpen](Clay_BoundingBox r, bool) {
+            [this, label, id, defaultOpen, forceOpen](Clay_BoundingBox r,
+                                                      bool) {
                 // 将 ImGui 游标移动到 Clay 计算出的标题左上角。
+                // 记录真实标题边界，条件隐藏的设置可以定位到所属组。
+                reportSettingsSearchHeader(label, r);
                 ImGui::SetCursorScreenPos({ r.x, r.y });
                 // 以当前 Header 色为基准构造悬浮与按下变体。
                 ImVec4 bgCol = ImGui::GetStyle().Colors[ImGuiCol_Header];
@@ -106,6 +113,8 @@ void SettingsView::drawDebugSettings()
                                     { 0.0f, 0.0f });
 
                 // 指针形式 ID 仅由整数哈希转换，不解引用地址。
+                // Clay 和实际标题必须保持相同的展开状态。
+                if ( forceOpen ) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
                 bool nowOpen = ImGui::TreeNodeEx(
                     (void*)(intptr_t)id,
                     ImGuiTreeNodeFlags_CollapsingHeader |

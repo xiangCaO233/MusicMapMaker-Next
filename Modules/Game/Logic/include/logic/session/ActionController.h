@@ -81,6 +81,11 @@ public:
     /// @param cmd BPM 和 Scroll 的目标状态。
     void handleCommand(const CmdUpdateBpmWithKeepSpeedSv& cmd);
 
+    /// @brief 保留选中红线并批量创建或更新配套普通绿线。
+    /// @param cmd 选中实体集合；数值与权限在权威编辑路径重新校验。
+    /// @warning 仅用户提交时扫描并索引时间线，不用于每帧或播放更新。
+    void handleCommand(const CmdKeepSpeedForBpmEvents& cmd);
+
     /// @brief 处理删除时间轴事件的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdDeleteTimelineEvent& cmd);

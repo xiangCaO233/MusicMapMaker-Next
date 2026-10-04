@@ -15,6 +15,7 @@
 #include "logic/EditorEngine.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/audio/SpectrumTimeMapping.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -119,9 +120,10 @@ AudioSpectrumView::~AudioSpectrumView()
         m_calcFuture = std::future<void>{};
     }
 
-    // VKContext 可能已在应用关闭顺序中释放，只有存在时才等待设备。
+    // 新建后立即关闭的频谱窗口可能尚未初始化逻辑设备，不能等待空句柄。
+    // 上下文存在只说明实例初始化成功，不代表已经创建可提交命令的设备。
     auto context = Graphic::VKContext::get();
-    if ( context ) {
+    if ( context && context->get().getLogicalDevice() ) {
         // waitIdle 保证描述符、纹理和离屏附件不再被 GPU 使用。
         (void)context->get().getLogicalDevice().waitIdle();
     }
@@ -593,11 +595,12 @@ void AudioSpectrumView::buildChannelGeometry(
     // FFT 窗口中心相对读取起点延迟半个窗口，需要从显示时间中扣除。
     const double sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
-    const double fftOffset =
-        sampleRate > 0.0 ? (2048.0 / 2.0) / sampleRate : 0.0;
     // 视觉时间先扣频谱专用偏移和 FFT 中心偏移，得到缓存音频时间。
-    const double audioViewStart = viewStart - spectrumVisualOffset - fftOffset;
-    const double audioViewEnd   = viewEnd - spectrumVisualOffset - fftOffset;
+    // 两种工具共用转换，防止 BPM 图表漏掉半窗而出现固定延迟差。
+    const double audioViewStart = spectrumWindowStartAtVisualTime(
+        viewStart, spectrumVisualOffset, sampleRate);
+    const double audioViewEnd = spectrumWindowStartAtVisualTime(
+        viewEnd, spectrumVisualOffset, sampleRate);
     // 秒数乘缓存段密度映射到全局横向像素坐标。
     const double pixelStart = audioViewStart * m_cacheSegmentsPerSecond;
     const double pixelEnd   = audioViewEnd * m_cacheSegmentsPerSecond;
@@ -1149,7 +1152,7 @@ void AudioSpectrumView::backgroundRecalculate(
     uint16_t numChannels = ice::ICEConfig::internal_format.channels;
 
     // 2048 点 FFT 在时间与频率分辨率之间保持现有平衡。
-    const int fftSize = 2048;
+    const int fftSize = SPECTRUM_FFT_WINDOW_FRAMES;
     // hopSize 把每秒段数映射为相邻 FFT 窗起点帧距。
     const size_t hopSize = static_cast<size_t>(sampleRate / segmentsPerSecond);
 

@@ -357,7 +357,7 @@ bool testBmsEditingConfigRoundTrip()
 /// @note false 和 true 均执行，以覆盖迁移条件两端而非单一默认值。
 /// @details 当前格式只应写 professionalMode，不再产生两个废弃字段。
 /// 旧 timelineProfessionalMode 仍能恢复，且新字段同时存在时优先。
-/// 独立编辑开关刻意取反，证明迁移不会把专业模式扩散到它们。
+/// 子开关偏好仍独立保存，实际 BMS 能力要求专业模式与子开关同时开启。
 bool testProfessionalModeConfigMigration()
 {
     // 循环两种布尔值，确保迁移不是仅对启用状态特判。
@@ -392,6 +392,22 @@ bool testProfessionalModeConfigMigration()
                 "Global professional mode migration or independent editing "
                 "preferences failed");
             return false;
+        }
+    }
+    // 直接构造、写出再读取两条路径共同保护有效能力与持久偏好的分工。
+    // 模式切换不会修改用户的子开关值，也不依赖 UI 是否曾打开设置页。
+    // 完整组合验证总门禁：子偏好为真也不能绕过默认关闭的专业能力。
+    // 序列化应保留子偏好，重新启用专业模式后恢复用户原先的选择。
+    for ( const bool professional : { false, true } ) {
+        for ( const bool bms : { false, true } ) {
+            MMM::Config::EditorSettings source;
+            source.professionalMode = professional;
+            source.enableBmsEditing = bms;
+            const auto restored =
+                nlohmann::json(source).get<MMM::Config::EditorSettings>();
+            if ( restored.enableBmsEditing != bms ||
+                 restored.isBmsEditingEnabled() != (professional && bms) )
+                return false;
         }
     }
     // 循环之外额外比较直接构造和空 JSON 的默认状态。
@@ -471,6 +487,36 @@ bool testCollaborationViewportRenderModeRoundTrip()
             "compatibility");
         return false;
     }
+    return true;
+}
+
+/// @brief 验证聊天时间偏好默认北京时间并允许保存联机时长模式。
+/// @return 新旧配置与显式切换均恢复预期值时返回 true。
+/// @details 不建立协作连接，只验证本地偏好向 JSON 的兼容读写。
+/// 缺失字段代表既有用户配置，必须与新建配置的北京默认行为一致。
+/// false 代表用户明确改选联机时长，不能在重新加载后恢复默认值。
+bool testCollaborationChatTimePreference()
+{
+    // 空配置代表升级前的用户设置，必须采用北京时间作为默认选项。
+    const auto legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    MMM::Config::EditorSettings elapsed;
+    // 选用非默认值写出，确保序列化没有只依赖字段初始化。
+    elapsed.collaborationChatBeijingTime = false;
+    const nlohmann::json encoded         = elapsed;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+
+    // 同时检查 JSON 中确实存在 false 与恢复后的字段，避免单向实现遗漏。
+    if ( !legacy.collaborationChatBeijingTime ||
+         encoded.value("collaborationChatBeijingTime", true) ||
+         restored.collaborationChatBeijingTime ) {
+        // 日志直接指出时间偏好边界，便于与视野模式用例区分。
+        XERROR(
+            "Collaboration chat time preference did not preserve defaults or "
+            "choice");
+        return false;
+    }
+    // 通过表示旧配置与新配置的选择都已得到保存。
     return true;
 }
 
@@ -1037,6 +1083,7 @@ int main()
                    testProfessionalModeConfigMigration() &&
                    testVerticalObjectDragConfigRoundTrip() &&
                    testCollaborationViewportRenderModeRoundTrip() &&
+                   testCollaborationChatTimePreference() &&
                    testSelectedVolumeShortcutRoundTrip() &&
                    testSelectedAnnotationShortcutRoundTrip() &&
                    testAnnotationDetailVisibilityRoundTrip() &&

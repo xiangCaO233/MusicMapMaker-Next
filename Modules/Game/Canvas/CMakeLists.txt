@@ -38,6 +38,17 @@ add_library(
   src/PreviewCanvas.cpp
   src/TimelineCanvas.cpp
   src/TimelineCanvas_Interaction.cpp
+  # 插值段落编辑与原函数预览独立维护，不在 UI 中展开导出事件。
+  src/TimelineCanvas_Interpolation.cpp
+  # 模板库和整组放置窗口独立编译，不把个人配置 IO 放入画布更新。
+  src/TimelineCanvas_Templates.cpp
+  # 函数排版与手绘拟合独立于时间点采样，避免编辑窗口每帧重新解析。
+  src/TimelineCanvas_FunctionEditor.cpp
+  src/TimingFormula.cpp
+  # 插值预览按像素保留峰谷，缓存重建与每帧几何投影分离。
+  src/TimingInterpolationPreview.cpp
+  # 贝塞尔拖拽和工具选项映射可独立测试，不依赖画布会话或图形后端。
+  src/TimingInterpolationControls.cpp
   src/TimelineCanvas_Popups.cpp)
 
 # PUBLIC 依赖构成 Canvas 公开头的传递接口；业务实现需要的新依赖应优先检查 能否保持 PRIVATE，避免继续扩大下游翻译单元的包含和链接范围。
@@ -251,3 +262,33 @@ target_include_directories(TimelineAuxiliaryWindowStateTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 mmm_register_test_case(NAME TimelineAuxiliaryWindowStateTest COMMAND
                        TimelineAuxiliaryWindowStateTest)
+
+# 数学排版测试直接编译绘制实现，避免引入会话、音频或 Vulkan 后端。 表达式树来自 MMM 的编译结果，上下限和分式必须经过真实 ImGui 绘制。
+# 图集在测试内构建且不写入磁盘，CI 不需要可用的显示器或图形设备。 与领域数值测试分开登记，渲染成功不能代替函数计算正确。
+# 同时直接编译插值预览实现，覆盖长区间高频曲线、真实采样落点和缩放缓存。
+mmm_add_test_executable(
+  Canvas TimingFormulaTest tests/TimingFormulaTest.cpp src/TimingFormula.cpp
+  src/TimingInterpolationPreview.cpp)
+target_include_directories(TimingFormulaTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(TimingFormulaTest PRIVATE MMM Log 3rd_imgui)
+
+# 控制点测试直接发送 ImGui 鼠标输入，并通过 Config 根验证工具选项往返。 仅编译独立控件实现，不为交互回归加载会话、音频或 Vulkan 设备。
+mmm_add_test_executable(
+  Canvas TimingInterpolationControlsTest
+  tests/TimingInterpolationControlsTest.cpp src/TimingInterpolationControls.cpp)
+target_include_directories(TimingInterpolationControlsTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(TimingInterpolationControlsTest PRIVATE Config MMM Log
+                                                              3rd_imgui)
+# 独立登记用例，鼠标输入夹具不写用户配置和 imgui.ini。
+mmm_register_test_case(NAME TimingInterpolationControlsTest COMMAND
+                       TimingInterpolationControlsTest)
+# 使用分发包中的实际数学字体检查缺字，禁止测试仅靠默认问号回退通过。
+mmm_register_test_case(
+  NAME
+  TimingFormulaTest
+  COMMAND
+  TimingFormulaTest
+  "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/font/NotoSansMath-Regular.ttf"
+)

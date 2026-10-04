@@ -130,12 +130,22 @@ bool testPaletteRestoredAfterSessionClose()
 /// @note 未覆盖跨项目资源 ID 的有效性判断，不能据此宣称跨项目资源可用。
 bool testAudioResourceRestoredAfterSessionClose()
 {
-    auto& engine = MMM::Logic::EditorEngine::instance();
+    auto& engine   = MMM::Logic::EditorEngine::instance();
+    auto& settings = MMM::Config::AppConfig::instance().getEditorSettings();
+    const bool originalProfessional = settings.professionalMode;
+    const auto originalTool         = engine.getCurrentTool();
+    // 专业能力开启时才允许跨会话恢复音频放置选择，普通模式必须保持空选择。
+    settings.professionalMode = true;
+    engine.setEditorConfig(
+        MMM::Config::AppConfig::instance().getEditorConfig());
     while ( engine.getSessionCount() > 0 ) {
         engine.closeSession(engine.getSessionCount() - 1, false);
     }
 
     engine.createSession(nullptr, "Audio Source", false);
+    // 同时选择高级工具，确认总开关约束的是全局工具缓存而非单个视图。
+    engine.pushCommand(
+        MMM::Logic::CmdChangeTool{ MMM::Logic::EditTool::ColorBrush });
     // 主音轨类型须与资源 ID 一同恢复，避免选择被解释成其他音轨类别。
     // 非默认音量可发现只恢复资源 ID、却丢失其附属参数的情况。
     engine.pushCommand(MMM::Logic::CmdSetBrushAudioResource{
@@ -151,6 +161,10 @@ bool testAudioResourceRestoredAfterSessionClose()
     auto session = engine.getActiveSession();
     if ( !session ) {
         XERROR("Audio target session was not created");
+        settings.professionalMode = originalProfessional;
+        engine.setEditorConfig(
+            MMM::Config::AppConfig::instance().getEditorConfig());
+        engine.pushCommand(MMM::Logic::CmdChangeTool{ originalTool });
         return false;
     }
     session->update(0.0, engine.getEditorConfig(), true);
@@ -158,6 +172,8 @@ bool testAudioResourceRestoredAfterSessionClose()
     const auto& brush = session->getContext().brushState;
     // 三个字段构成同一次音频选择，不能仅凭资源字符串相同判定恢复成功。
     const bool matches =
+        engine.getCurrentTool() == MMM::Logic::EditTool::ColorBrush &&
+        session->getContext().currentTool == MMM::Logic::EditTool::ColorBrush &&
         brush.selectedAudioResourceId == "main-track" &&
         brush.selectedAudioTrackType == MMM::AudioTrackType::Main &&
         std::abs(brush.selectedAudioVolume - 0.65F) < 1e-6F;
@@ -166,7 +182,50 @@ bool testAudioResourceRestoredAfterSessionClose()
     if ( !matches ) {
         XERROR("New session did not restore the editor audio selection");
     }
-    return matches;
+    // 配置通过正式引擎入口广播，同时观察工作区外的跨画布缓存。
+    // 新目标为空谱面，因此不可能从采样列表反推出刚才选择的资源。
+    // 总开关重新打开并不构成新的资源选择动作，选择必须仍然为空。
+    // 该往返覆盖源会话已销毁的情况，不能仅依赖源上下文的清理。
+    // 测试不保存项目文件，所有身份传播均发生在内存命令队列中。
+    // 空选择仍允许普通画笔工作，其基本放置另由画布测试负责覆盖。
+    // 关闭总开关后同时模拟一个迟到的选择命令，防止引擎缓存复活该资源。
+    // 再次开启并创建新画布，不能从已关闭的源会话或工作区恢复旧选择。
+    // 普通模式的命令不会改变已保存的音频数据，只撤销下次放置的身份。
+    settings.professionalMode = false;
+    engine.setEditorConfig(
+        MMM::Config::AppConfig::instance().getEditorConfig());
+    // 隐藏按钮之外还需立即发布基础工具；迟到请求不能在重开专业模式后复活。
+    // 此处源会话已关闭，检查覆盖的是引擎级缓存而非会话状态的偶然回退。
+    // 接着恢复专业能力并建立新会话，验证它收到清洗后的工具和空采样选择。
+    // 只恢复能力不重新请求工具，因此新会话仍须使用 Move。
+    const bool toolCleared =
+        engine.getCurrentTool() == MMM::Logic::EditTool::Move;
+    engine.pushCommand(
+        MMM::Logic::CmdChangeTool{ MMM::Logic::EditTool::ColorEraser });
+    engine.pushCommand(MMM::Logic::CmdSetBrushAudioResource{
+        .audioResourceId = "stale-track",
+        .audioTrackType  = MMM::AudioTrackType::Effect });
+    settings.professionalMode = true;
+    engine.setEditorConfig(
+        MMM::Config::AppConfig::instance().getEditorConfig());
+    engine.createSession(nullptr, "Cleared Audio Target", true);
+    auto clearedSession = engine.getActiveSession();
+    if ( clearedSession )
+        clearedSession->update(0.0, engine.getEditorConfig(), true);
+    const bool cleared =
+        clearedSession &&
+        clearedSession->getContext()
+            .brushState.selectedAudioResourceId.empty() &&
+        clearedSession->getContext().currentTool == MMM::Logic::EditTool::Move;
+    // 用例结束时先关闭新增画布再恢复软件配置，避免向后续用例广播残留选择。
+    // 原模式可能为 true 或 false，两种状态均按进入用例之前的值复原。
+    engine.closeSession(0, false);
+    settings.professionalMode = originalProfessional;
+    engine.setEditorConfig(
+        MMM::Config::AppConfig::instance().getEditorConfig());
+    // 恢复原工具，防止单例后续用例继承本次能力切换的活动状态。
+    engine.pushCommand(MMM::Logic::CmdChangeTool{ originalTool });
+    return matches && cleared && toolCleared;
 }
 
 /// @brief 验证主画布鼠标位置按 cameraId 路由到后台 Session。

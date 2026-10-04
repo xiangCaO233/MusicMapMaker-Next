@@ -17,6 +17,7 @@
 #include "mmm/project/Project.h"
 #include "network/collaboration/CollaborationBuildFingerprint.h"
 #include "network/collaboration/CollaborationRoom.h"
+#include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/CollaborationEntryPolicy.h"
 #include "ui/imgui/manager/CollaborationLogWindow.h"
@@ -77,6 +78,30 @@ constexpr std::string_view HOST_ROOM_COVER_TEXTURE_KEY = "##HostRoomCover";
 /// 打开和后续帧 Display 查询均使用同一非本地化标识。
 constexpr const char* ROOM_COVER_FILE_DIALOG_ID =
     "CollaborationRoomCoverPicker";
+
+/// @brief 将 Unix 毫秒时间换算为固定 UTC+8 的当日时分秒。
+/// @param unixMilliseconds 本机收到消息时记录的绝对时间。
+/// @return 与操作系统本地时区无关的北京时间时分秒。
+/// @warning UI 热路径：每条可见消息每帧调用，仅执行常量次整数运算。
+/// @details UTC+8 是固定偏移，不读取本地时区，也不应用夏令时。
+/// 历史记录在收到消息时已经固定，格式化仅做当天秒数的计算。
+[[nodiscard]] constexpr std::array<std::int64_t, 3> beijingClockTime(
+    std::int64_t unixMilliseconds)
+{
+    // 负时间使用向下取整，确保 Unix 纪元前的边界仍可正确回卷。
+    auto seconds = unixMilliseconds / 1000;
+    if ( unixMilliseconds < 0 && unixMilliseconds % 1000 != 0 ) --seconds;
+    constexpr std::int64_t SECONDS_PER_DAY = 24 * 60 * 60;
+    // 先加北京偏移再进行正模回卷，跨 UTC 日期时只保留钟面时间。
+    const auto secondsOfDay =
+        ((seconds + 8 * 60 * 60) % SECONDS_PER_DAY + SECONDS_PER_DAY) %
+        SECONDS_PER_DAY;
+    return { secondsOfDay / 3600, secondsOfDay / 60 % 60, secondsOfDay % 60 };
+}
+
+static_assert(beijingClockTime(16LL * 60 * 60 * 1000) ==
+              std::array<std::int64_t, 3>{ 0, 0, 0 });
+static_assert(beijingClockTime(-1) == std::array<std::int64_t, 3>{ 7, 59, 59 });
 
 /// @brief 判断编辑器是否仍存在非欢迎页谱面会话。
 /// @return 任一会话不是 Logo 占位时返回 true。
@@ -282,6 +307,64 @@ void drawLocalPermissionSummary(
         Network::Collaboration::CollaborationPermission::Annotations);
 }
 
+/// @brief 绘制房主针对稳定成员身份的撤回和重做图标。
+/// @param room 当前房间。
+/// @param participantId 操作历史的稳定成员身份。
+/// @param inlineWithPrevious 是否紧接当前单元格已绘制的控件。
+/// @warning UI 每帧成员列表路径；只读取后台发布的有界历史摘要。
+/// @details 在线成员在跟随或权限按钮后内联显示两个小图标；离线成员
+///         从空白第二列开始绘制，因此首个图标不调用 SameLine。
+///         可用状态由房主已发布的成员历史计数决定，权限为只读或
+///         成员断线都不会隐藏历史按钮。
+///
+/// @par 提示与身份
+/// ImGui ID 外层由 participantId 区分，同名成员不会共享按钮状态。
+/// 悬停使用 ImGui 自带的正常延迟，防止鼠标经过表格时立刻弹出提示。
+/// 点击只提交稳定身份给房间层，UI 不直接更改谱面或动作栈。
+void drawMemberHistoryActions(Network::Collaboration::CollaborationRoom& room,
+                              std::string_view participantId,
+                              bool             inlineWithPrevious = true)
+{
+    const auto& histories = room.memberHistories();
+    const auto  history   = std::find_if(
+        histories.begin(), histories.end(), [participantId](const auto& item) {
+            return item.participantId == participantId;
+        });
+    // 摘要可能尚未交付，缺失时两个操作都保持禁用。
+    const bool canUndo = history != histories.end() && history->undoCount > 0;
+    const bool canRedo = history != histories.end() && history->redoCount > 0;
+    // 禁用按钮仍可在悬停延迟后解释其作用，避免用户猜测图标含义。
+    if ( inlineWithPrevious ) ImGui::SameLine();
+    ImGui::BeginDisabled(!canUndo);
+    const std::string undoLabel = std::string(ICON_MMM_UNDO) + "##memberUndo";
+    if ( FeedbackSmallButton(undoLabel.c_str()) ) {
+        // 房间后台先检查目标值和当前修订，拒绝冲突时按钮不做本地回滚。
+        static_cast<void>(room.requestMemberUndo(participantId));
+    }
+    ImGui::EndDisabled();
+    // 延时提示在按钮禁用时仍可解释操作，但不会触发房间请求。
+    if ( ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal |
+                              ImGuiHoveredFlags_AllowWhenDisabled) ) {
+        // 复用 ImGui 延迟计时，不额外维护逐成员悬停时间状态。
+        ImGui::SetTooltip("%s",
+                          TR("ui.collaboration.member_undo_tooltip").data());
+    }
+    ImGui::SameLine();
+    // 两个图标共享成员级 ID，额外的后缀区分撤回与重做。
+    ImGui::BeginDisabled(!canRedo);
+    const std::string redoLabel = std::string(ICON_MMM_REDO) + "##memberRedo";
+    if ( FeedbackSmallButton(redoLabel.c_str()) ) {
+        // 重做取房主持有的历史条目，成员本地栈只在权威广播后同步。
+        static_cast<void>(room.requestMemberRedo(participantId));
+    }
+    ImGui::EndDisabled();
+    if ( ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal |
+                              ImGuiHoveredFlags_AllowWhenDisabled) ) {
+        ImGui::SetTooltip("%s",
+                          TR("ui.collaboration.member_redo_tooltip").data());
+    }
+}
+
 /// @brief 绘制一名协作成员的表格行和可选跟随按钮。
 /// @param room 当前协作房间。
 /// @param peerId 成员 PeerId。
@@ -295,6 +378,7 @@ void drawLocalPermissionSummary(
 /// 值仍保留在局部 掩码中；重新开启 Edit
 /// 后可恢复之前细分选择。实际授权由网络层同时考虑主位。
 /// follow、权限更新和移除都只传递稳定 PeerId，不以可重名 Creator 定位成员。
+
 void drawParticipantRow(
     Network::Collaboration::CollaborationRoom&         room,
     Network::Collaboration::PeerId                     peerId,
@@ -332,6 +416,9 @@ void drawParticipantRow(
         // 本地成员不能跟随、移除或修改自己的房主权限。
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("%s", TR("ui.collaboration.you_suffix").data());
+        if ( room.isHost() ) {
+            drawMemberHistoryActions(room, identity.participantId);
+        }
     } else {
         // 同一按钮在跟随中切换为停止跟随。
         const char* actionLabel =
@@ -342,6 +429,7 @@ void drawParticipantRow(
             static_cast<void>(room.setFollowedPeer(following ? 0 : peerId));
         }
         if ( room.isHost() ) {
+            drawMemberHistoryActions(room, identity.participantId);
             // 权限管理和移除仅对房主可见。
             ImGui::SameLine();
             if ( FeedbackSmallButton(
@@ -424,6 +512,33 @@ void drawParticipantRow(
     }
     ImGui::PopID();
 }
+
+/// @brief 保留已离线成员的历史入口，房主仍可撤回其操作。
+/// @param room 当前房主房间。
+/// @param history 成员最近一次操作留下的稳定身份和展示名。
+/// @warning UI 成员列表路径；每帧最多扫描有界历史摘要。
+/// @details 离线行没有 PeerId，因此不显示跟随、权限与移除按钮。
+///         身份仍以 participantId 为 ImGui ID，断线重连后不与其他
+///         成员同名行冲突。历史计数由房主持有，不依赖成员是否在线。
+void drawOfflineMemberHistoryRow(
+    Network::Collaboration::CollaborationRoom&                room,
+    const Network::Collaboration::CollaborationMemberHistory& history)
+{
+    ImGui::PushID(history.participantId.c_str());
+    ImGui::TableNextRow(ImGuiTableRowFlags_None, ImGui::GetFrameHeight());
+    ImGui::TableSetColumnIndex(0);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(history.creator.c_str());
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%.*s, %s)",
+                        8,
+                        history.participantId.c_str(),
+                        TR("ui.collaboration.member_offline").data());
+    ImGui::TableSetColumnIndex(1);
+    // 第二列起始处直接绘制图标，不借用上一行按钮的 SameLine 位置。
+    drawMemberHistoryActions(room, history.participantId, false);
+    ImGui::PopID();
+}
 }  // namespace
 
 /// @brief 创建协作侧栏并接管房间服务共享所有权。
@@ -482,7 +597,7 @@ void CollaborationView::onUpdate(LayoutContext&, UIManager* sourceManager)
 
     if ( m_room->isActive() ) {
         // 活动房间先绘制可改变连接状态的主区。
-        drawActiveRoom();
+        drawActiveRoom(sourceManager);
         // drawActiveRoom 可能处理断开按钮，因此聊天前复查。
         if ( m_room->isActive() ) drawChatSection();
         drawLogSection(sourceManager);
@@ -1422,12 +1537,18 @@ void CollaborationView::advancePendingHostStart()
 }
 
 /// @brief 绘制已连接房间的详情、请求、同步设置、参与者和断开操作。
+/// @param sourceManager 用于打开实际生效的自动备份设置页。
 ///
 /// 房间详情对所有成员只读；加入请求与权限管理仅房主可见。资源同步进度来自房间
 /// 快照，视野发布率在滑块编辑结束时提交，渲染模式属于本机设置并立即持久化。
 /// 断开按钮可能使 room 在本帧转为非活动，调用方会在进入聊天前再次检查。
+/// 房主还会看到自动备份风险提示，判断使用项目覆盖后的有效配置。
+/// 提示本身不改动备份设置；只有点击入口才打开对应的设置页。
+/// 即使尚无待审批访客，房主也能在开房后立即看到备份风险。
+/// 房间退出后不再绘制该提醒，避免误指向普通离线编辑状态。
+/// 项目覆盖与软件默认值只在 UI 线程读取，不跨线程修改会话配置。
 /// @warning UI
-/// 热路径：活动房间每帧执行，只读取内存快照；网络写入由明确控件触发。
+/// 热路径：活动房间每帧执行，只读取内存快照；网络写入和打开设置由明确控件触发。
 /// @details 加入申请循环先记录
 /// requestId，结束表格遍历后才调用批准或拒绝接口，避免 房间服务同步更新
 /// pendingJoinRequests 导致正在遍历的引用失效。同一帧批准优先。
@@ -1437,7 +1558,8 @@ void CollaborationView::advancePendingHostStart()
 ///
 /// 参与者表把本地 Peer 固定放在首行，远端随后按快照顺序绘制；访客额外看到自己
 /// 权限的只读摘要，房主则在每个远端行内管理权限和移除成员。
-void CollaborationView::drawActiveRoom()
+/// 审批区说明新成员默认只读，避免把“同意入房”误解为“授予编辑权限”。
+void CollaborationView::drawActiveRoom(UIManager* sourceManager)
 {
     // 样式引用用于计算表格标签和动作列宽度。
     const auto& style = ImGui::GetStyle();
@@ -1490,10 +1612,58 @@ void CollaborationView::drawActiveRoom()
     }
 
     if ( m_room->isHost() ) {
+        // 项目级覆盖优先于软件设置，提醒必须依据会话真正使用的配置。
+        // 全局备份即使开启，项目覆盖为关闭时也仍应提醒房主。
+        const auto* project =
+            Logic::EditorEngine::instance().getCurrentProject();
+        const auto& softwareBackup =
+            Config::AppConfig::instance().getEditorSettings().autoBackup;
+        const bool projectOverride =
+            project && project->m_settings.m_autoBackupOverride.has_value();
+        // 无项目覆盖时保持对 AppConfig 内存值的引用，不复制重配置。
+        const auto& backup = projectOverride
+                                 ? *project->m_settings.m_autoBackupOverride
+                                 : softwareBackup;
+        // 事件模式如果没有任何触发条件，也不会实际产生自动备份。
+        // 定时模式的间隔由既有配置校验负责，这里只检查是否会被调度。
+        const bool backupEnabled =
+            backup.mode == Config::AutoSaveMode::Timed ||
+            (backup.mode == Config::AutoSaveMode::EventTriggered &&
+             (backup.onObjectModified || backup.onBeatmapSwitch ||
+              backup.onImGuiWindowFocusLost || backup.onNativeWindowFocusLost));
+        if ( !backupEnabled ) {
+            // 提醒只在房主侧出现，不向访客暴露本机备份策略。
+            ImGui::Spacing();
+            // 窄侧栏使用换行文本，完整风险说明不因窗口尺寸被截断。
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  ImVec4(1.0F, 0.65F, 0.25F, 1.0F));
+            ImGui::TextWrapped("%s",
+                               TR("ui.collaboration.backup_disabled").data());
+            ImGui::PopStyleColor();
+            if ( sourceManager &&
+                 FeedbackButton(
+                     TR(projectOverride
+                            ? "ui.collaboration.backup_open_project_settings"
+                            : "ui.collaboration.backup_open_software_settings")
+                         .data()) ) {
+                // 设置页定位与生效层级保持一致，避免房主改了未生效的全局项。
+                sourceManager->openSettingsWindow(
+                    projectOverride ? Event::SettingsTab::Project
+                                    : Event::SettingsTab::Software);
+            }
+        }
+
         // 访客不接收或审批其他人的加入请求。
         ImGui::Spacing();
         if ( FeedbackCollapsingHeader(
                  TR("ui.collaboration.join_requests").data(), headerFlags) ) {
+            // 与权威 Peer 默认值一致，审批不隐含任何谱面写权限。
+            // 窄侧栏中提示需要自动换行，避免默认权限说明被裁掉。
+            ImGui::PushStyleColor(
+                ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped(
+                "%s", TR("ui.collaboration.join_read_only_hint").data());
+            ImGui::PopStyleColor();
             // pendingJoinRequests 是房间服务发布的只读快照。
             const auto& requests = m_room->pendingJoinRequests();
             if ( requests.empty() ) {
@@ -1695,7 +1865,7 @@ void CollaborationView::drawActiveRoom()
             ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp;
         if ( ImGui::BeginTable(
                  "CollaborationParticipantsTable", 2, tableFlags) ) {
-            // 动作列按访客跟随按钮和房主额外两个按钮的总宽度计算。
+            // 动作列包含跟随、撤回重做、权限和移除，避免图标被表格裁剪。
             const float actionWidth =
                 ImGui::CalcTextSize(
                     TR("ui.collaboration.stop_following").data())
@@ -1709,7 +1879,11 @@ void CollaborationView::drawActiveRoom()
                            ImGui::CalcTextSize(
                                TR("ui.collaboration.remove_participant").data())
                                .x +
-                           style.FramePadding.x * 2.0F + style.ItemSpacing.x
+                           style.FramePadding.x * 2.0F + style.ItemSpacing.x +
+                           ImGui::CalcTextSize(ICON_MMM_UNDO).x +
+                           ImGui::CalcTextSize(ICON_MMM_REDO).x +
+                           style.FramePadding.x * 4.0F +
+                           style.ItemSpacing.x * 2.0F
                      : 0.0F);
             ImGui::TableSetupColumn(TR("ui.collaboration.user").data(),
                                     ImGuiTableColumnFlags_WidthStretch);
@@ -1730,7 +1904,31 @@ void CollaborationView::drawActiveRoom()
                     drawParticipantRow(*m_room, peerId, identity);
                 }
             }
+            if ( m_room->isHost() ) {
+                // 离线身份仍对应房主保存的独立历史，直到该历史被淘汰。
+                // 当前在线表先绘制完毕，再按稳定身份排除重复行。
+                // 只读用户仍属于在线成员，不应错误显示为已离线。
+                for ( const auto& history : m_room->memberHistories() ) {
+                    const bool online =
+                        std::any_of(participants.begin(),
+                                    participants.end(),
+                                    [&history](const auto& item) {
+                                        return item.second.participantId ==
+                                               history.participantId;
+                                    });
+                    if ( !online ) {
+                        // 没有历史的离线用户无需占据成员表空间。
+                        drawOfflineMemberHistoryRow(*m_room, history);
+                    }
+                }
+            }
             ImGui::EndTable();
+        }
+        if ( m_room->isHost() && !m_room->memberHistoryError().empty() ) {
+            // 冲突和超限均是本次请求反馈；谱面已保持原状。
+            ImGui::TextColored(ImVec4(1.0F, 0.4F, 0.4F, 1.0F),
+                               "%s",
+                               TR(m_room->memberHistoryError().c_str()).data());
         }
         if ( !m_room->isHost() ) {
             // 访客在表格下方查看房主授予自己的只读权限摘要。
@@ -1748,8 +1946,10 @@ void CollaborationView::drawActiveRoom()
 /// 校验为协议最大字节数加终止符；Enter
 /// 和按钮共用发送路径，失败保留原输入供重试。
 /// @warning UI 热路径：活动房间每帧绘制内存消息；网络发送只在显式提交时发生。
-/// @details 聊天历史的时间是进入房间后的相对经过时间，不表示本地时区墙钟。消息
-/// sequence 同时用于行 ID 和判断是否有新末尾消息，只有后者变化才自动滚动。
+/// @details 时间偏好只影响本机显示，默认用消息接收时的固定 UTC+8 时钟；切换
+/// 为联机时长时使用进入房间后的相对时间。sequence 用于行 ID 和自动滚动判断。
+/// 时间选择保存在本机 EditorSettings，不向协作房间广播；旧配置沿用北京默认值。
+/// 接收时刻来自本机墙钟，远端发送者时钟和网络传输时间均不参与计算。
 ///
 /// 发送结果不是 Accepted 时保留输入缓冲并显示错误；无论成功失败都请求下一帧重新
 /// 聚焦输入框，使连续聊天和修正重试都不需要再次点击。
@@ -1766,6 +1966,28 @@ void CollaborationView::drawChatSection()
         return;
     }
 
+    // 时间显示偏好只影响本地历史，切换后已有消息立即按所选方式重绘。
+    // 下拉框紧贴标题，保持聊天内容和输入区的固定布局。
+    auto& settings = Config::AppConfig::instance().getEditorSettings();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(TR("ui.collaboration.chat.time_mode").data());
+    ImGui::SameLine();
+    int timeMode = settings.collaborationChatBeijingTime ? 0 : 1;
+    // 顺序与 timeMode 的 0/1 取值对应，零值保持北京时间默认。
+    const char* timeModes[]{
+        TR("ui.collaboration.chat.time_mode.beijing").data(),
+        TR("ui.collaboration.chat.time_mode.elapsed").data(),
+    };
+    ImGui::SetNextItemWidth(-1.0F);
+    if ( FeedbackCombo("##CollaborationChatTimeMode",
+                       &timeMode,
+                       timeModes,
+                       IM_ARRAYSIZE(timeModes)) ) {
+        // 明确选择时才落盘，避免每帧执行文件系统操作。
+        settings.collaborationChatBeijingTime = timeMode == 0;
+        Config::AppConfig::instance().save();
+    }
+
     // 消息快照由房间服务拥有，历史区固定八行便于侧栏滚动。
     const auto& messages      = m_room->chatMessages();
     const float historyHeight = ImGui::GetTextLineHeightWithSpacing() * 8.0F;
@@ -1777,15 +1999,27 @@ void CollaborationView::drawChatSection()
             ImGui::TextDisabled("%s", TR("ui.collaboration.chat.empty").data());
         } else {
             for ( const auto& message : messages ) {
-                // elapsedMilliseconds 转为房间内相对分钟和秒数。
-                const auto totalSeconds = message.elapsedMilliseconds / 1000U;
-                const auto minutes      = totalSeconds / 60U;
-                const auto seconds      = totalSeconds % 60U;
                 // sequence 低位作为本帧稳定 ImGui ID，文本本身无需隐藏后缀。
                 ImGui::PushID(static_cast<int>(message.sequence & 0x7FFFFFFFU));
-                ImGui::TextDisabled("[%02llu:%02llu]",
-                                    static_cast<unsigned long long>(minutes),
-                                    static_cast<unsigned long long>(seconds));
+                if ( settings.collaborationChatBeijingTime ) {
+                    // 已记录的绝对时间不随系统时区或切换偏好改变。
+                    // 固定八位钟面宽度适合窄侧栏，消息仍可按正文自动折行。
+                    const auto clock =
+                        beijingClockTime(message.receivedUnixMilliseconds);
+                    ImGui::TextDisabled("[%02lld:%02lld:%02lld]",
+                                        static_cast<long long>(clock[0]),
+                                        static_cast<long long>(clock[1]),
+                                        static_cast<long long>(clock[2]));
+                } else {
+                    // 兼容旧版的房间相对分钟和秒数展示。
+                    // 分钟不按小时回卷，长时间联机仍能看到完整经过时长。
+                    const auto totalSeconds =
+                        message.elapsedMilliseconds / 1000U;
+                    ImGui::TextDisabled(
+                        "[%02llu:%02llu]",
+                        static_cast<unsigned long long>(totalSeconds / 60U),
+                        static_cast<unsigned long long>(totalSeconds % 60U));
+                }
                 ImGui::SameLine();
                 // Creator 使用主题选中色，与普通消息正文区分。
                 ImGui::TextColored(

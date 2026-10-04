@@ -45,6 +45,8 @@ MMM::Project makeProject()
     project.m_projectRoot = root / "mmm-audio-timeline-descriptor-test";
 
     // 非默认速度、音高和 EQ 用于识别字段丢失。
+    // Main 的历史控制值刻意保留非零，验证构造事件时才归一化。
+    // Effect 的非零值应继续原样进入离线资源处理路径。
     // 增益数组和 Q 数组使用不同数据，避免误交换仍通过比较。
     // EQ 预设和手动频带同时保存，两者都属于持久化配置。
     MMM::AudioTrackConfig mainConfig;
@@ -294,16 +296,19 @@ bool testCanonicalDescriptor()
         return false;
     }
 
-    // 两种资源类型都必须解析绝对路径及完整配置。
+    // 两种资源类型都必须解析绝对路径；Main 的旧资源倍率归一为实时预览倍率。
     // 这里只检查路径形态，不要求真实媒体存在。
     // 先检查观察指针有效，再解引用配置，失败断言不能自身崩溃。
-    const auto* mainEvent   = findEvent(descriptor, "main-id");
-    const auto* effectEvent = findEvent(descriptor, "effect-id");
+    const auto* mainEvent            = findEvent(descriptor, "main-id");
+    const auto* effectEvent          = findEvent(descriptor, "effect-id");
+    auto        expectedMainConfig   = project.m_audioResources[0].m_config;
+    expectedMainConfig.playbackSpeed = 1.0F;
+    // Main 的旧音高与旧倍率一起归零，EQ 和音量仍按资源原值比较。
+    expectedMainConfig.playbackPitch = 0.0F;
     if ( !mainEvent || !effectEvent ||
          !MMM::Config::utf8ToPath(mainEvent->filePath).is_absolute() ||
          !MMM::Config::utf8ToPath(effectEvent->filePath).is_absolute() ||
-         !sameConfig(mainEvent->resourceConfig,
-                     project.m_audioResources[0].m_config) ||
+         !sameConfig(mainEvent->resourceConfig, expectedMainConfig) ||
          !sameConfig(effectEvent->resourceConfig,
                      project.m_audioResources[1].m_config) ) {
         XERROR("Main or Effect resources were not fully resolved");
@@ -506,7 +511,7 @@ bool testNonAudioFieldsAreExcluded()
 }
 
 /// @brief 验证全部资源配置、物件音量和谱面结束时间参与指纹。
-/// @return 任一听觉语义变化均产生不同指纹。
+/// @return 资源实际听觉语义变化均产生不同指纹。
 /// @note 逐字段扰动用于验证失效条件，不以哈希字面值作为黄金数据。
 /// @note 资源级处理与实例级控制分别覆盖，避免相同响度掩盖语义差异。
 /// @note 失败日志指出首个未参与身份的维度。
@@ -527,11 +532,12 @@ bool testFingerprintSensitivity()
 
     /// @brief 验证单个资源配置修改能够改变指纹。
     const auto configChangesFingerprint = [&](auto&&      mutate,
-                                              const char* fieldName) {
+                                              const char* fieldName,
+                                              std::size_t resourceIndex = 0U) {
         // 仅修改一个资源配置字段，其他输入和基准相同。
         // 字段名用于错误日志，不参与被测指纹。
         auto project = makeProject();
-        mutate(project.m_audioResources.front().m_config);
+        mutate(project.m_audioResources[resourceIndex].m_config);
         const auto beatMap = makeBeatMap(false);
         const auto changed = MMM::Logic::buildAudioTimelineDescriptor(
             beatMap,
@@ -546,7 +552,8 @@ bool testFingerprintSensitivity()
         return true;
     };
 
-    // 分别扰动所有持久化资源参数。
+    // 分别扰动参与时间线播放的资源参数；Main 旧控制值另有归一化测试。
+    // Main 音高不参与音频资源指纹；Effect 音高仍决定处理结果。
     // EQ 开关和预设分别检查，不能只哈希最终启用状态。
     // 追加频带元素还能检查数组长度是否参与身份。
     // 短路失败保留首个字段名，便于定位缺失的语义维度。
@@ -557,12 +564,14 @@ bool testFingerprintSensitivity()
              [](MMM::AudioTrackConfig& config) {
                  config.playbackSpeed += 0.01F;
              },
-             "playbackSpeed") ||
+             "effect playbackSpeed",
+             1U) ||
          !configChangesFingerprint(
              [](MMM::AudioTrackConfig& config) {
                  config.playbackPitch += 0.25F;
              },
-             "playbackPitch") ||
+             "effect playbackPitch",
+             1U) ||
          !configChangesFingerprint(
              [](MMM::AudioTrackConfig& config) { config.muted = true; },
              "muted") ||
@@ -618,6 +627,56 @@ bool testFingerprintSensitivity()
         XERROR(
             "Event volume, BGM track routing or chart end was absent from "
             "fingerprint");
+        return false;
+    }
+    return true;
+}
+
+/// @brief 验证旧项目 Main 资源倍率和音高都不会触发重开时的离线处理。
+/// @return Main 配置归一且指纹稳定，同时 Effect 的配置仍保留时返回 true。
+/// @details 以不同持久化值重建同一谱面描述符，模拟旧项目重新打开。
+/// 加载事件携带中性值，避免历史半音偏移重建整首音频 PCM。
+/// 指纹等价意味着旧 Main 控制字段不会被误判为另一份音频调度。
+/// Effect 倍速和音高继续传给资源处理器，归一化只作用于主音轨。
+bool testLegacyMainControlsUseGlobalPreview()
+{
+    // 两份项目仅在历史 Main 速度和音高字段上不同，加载语义应相同。
+    // 夹具保留非默认 EQ，确认其他资源配置没有被重置。
+    auto baselineProject = makeProject();
+    auto slowProject     = makeProject();
+    baselineProject.m_audioResources.front().m_config.playbackSpeed = 1.0F;
+    slowProject.m_audioResources.front().m_config.playbackSpeed     = 0.25F;
+    baselineProject.m_audioResources.front().m_config.playbackPitch = 0.0F;
+    slowProject.m_audioResources.front().m_config.playbackPitch     = 10.0F;
+    // 同一自动采样序列避免事件数量和顺序掩盖速度差异。
+    const auto beatMap  = makeBeatMap(false);
+    const auto baseline = MMM::Logic::buildAudioTimelineDescriptor(
+        beatMap,
+        baselineProject,
+        MMM::Config::utf8ToPath(std::string(BEATMAP_PATH)),
+        10.0);
+    const auto slow = MMM::Logic::buildAudioTimelineDescriptor(
+        beatMap,
+        slowProject,
+        MMM::Config::utf8ToPath(std::string(BEATMAP_PATH)),
+        10.0);
+    const auto* mainEvent   = findEvent(slow, "main-id");
+    const auto* effectEvent = findEvent(slow, "effect-id");
+    // 缺任一资源时直接失败，不能让后续配置比较读取无效指针。
+    // 显式检查 Main 加载参数，防止旧 0.25 倍率和 10 半音进入离线处理。
+    // Effect 的非默认速度及音高证明归一化限定在主音轨。
+    // 还比较完整事件，防止只改指纹而未改传给加载器的配置。
+    // 反过来只改事件但未改指纹，也会在这里被发现。
+    if ( !mainEvent || !effectEvent ||
+         mainEvent->resourceConfig.playbackSpeed != 1.0F ||
+         mainEvent->resourceConfig.playbackPitch != 0.0F ||
+         effectEvent->resourceConfig.playbackSpeed !=
+             slowProject.m_audioResources[1].m_config.playbackSpeed ||
+         effectEvent->resourceConfig.playbackPitch !=
+             slowProject.m_audioResources[1].m_config.playbackPitch ||
+         baseline.m_fingerprint != slow.m_fingerprint ||
+         !sameLoadEvents(baseline.m_events, slow.m_events) ) {
+        XERROR("Legacy Main resource controls leaked into timeline processing");
         return false;
     }
     return true;
@@ -986,6 +1045,7 @@ int main()
                    testNonAudioFieldsAreExcluded() &&
                    testMainAudioSyncFingerprintUsesResourcesAndPositions() &&
                    testFingerprintSensitivity() &&
+                   testLegacyMainControlsUseGlobalPreview() &&
                    testDescriptorResourceReferenceLookup() &&
                    testBulkStableIdResolutionUsesFirstResource() &&
                    testCrossModeConflictPreservesResourceOrder() &&

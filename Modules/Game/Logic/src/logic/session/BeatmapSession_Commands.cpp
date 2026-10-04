@@ -2,6 +2,7 @@
 
 #include "audio/AudioManager.h"
 #include "audio/AudioOriginAlignmentService.h"
+#include "common/EditTool.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -144,7 +145,15 @@ namespace
 {
 /// @brief 为后台文件编码复制一份不借用会话容器的谱面快照。
 /// @param source 已同步 ECS、时间线与打击事件的当前谱面。
-/// @return 拥有全部持久化数据并重建物件引用表的独立谱面。
+/// @return 拥有全部持久化数据并重建物件引用表的独立谱面；引用无效时返回空。
+/// @details NoteData 的默认复制只复制拥有型 deque 中的对象，不会调整
+/// Polyline 内 reference_wrapper 的目标地址。若仅重建 m_allNotes，后台
+/// 保存仍通过折线节点访问活动谱面，既可能读到新编辑，也可能读取失效对象。
+/// 地址映射使用源对象身份作为键；时间和轨道允许相同，不能用于寻找对应节点。
+/// 目标对象按各拥有型容器的同一索引确定，因此保留原始节点顺序和重复引用。
+/// 通用节点序列与 Hold、Flick 分类序列分别重建，以兼容不同保存器的遍历方式。
+/// 任一原引用不属于当前 BeatMap 时拒绝复制，避免把不完整折线写成有效文件。
+/// 在返回快照后，文件线程只能读取快照；原谱面的后续编辑不改变本次保存。
 /// @warning 保存低频路径：按谱面规模复制容器；不得放入普通逻辑更新分支。
 std::shared_ptr<MMM::BeatMap> cloneBeatMapForSave(const MMM::BeatMap& source)
 {
@@ -156,7 +165,67 @@ std::shared_ptr<MMM::BeatMap> cloneBeatMapForSave(const MMM::BeatMap& source)
     snapshot->m_loadDiagnostics = source.m_loadDiagnostics;
     snapshot->m_baseMapMetadata = source.m_baseMapMetadata;
     snapshot->m_metadata        = source.m_metadata;
-    // m_allNotes 保存引用，不能从源对象复制；按新容器地址重新建立稳定引用。
+
+    // 三类拥有型容器的顺序和元素数在本次复制中保持一致。
+    // 用基类地址统一查找，通用 m_subNotes 才能保留 Hold 与 Flick 混合顺序。
+    // 不读取来源节点内容即可完成映射；仅检查其地址是否确实属于源谱面。
+    std::unordered_map<const MMM::Note*, MMM::Note*> copiedNotes;
+    copiedNotes.reserve(source.m_noteData.notes.size() +
+                        source.m_noteData.holds.size() +
+                        source.m_noteData.flicks.size());
+    // reserve 只影响临时哈希表；节点指针指向已复制的 deque
+    // 元素，不依赖哈希表槽位。
+    for ( size_t i = 0; i < source.m_noteData.notes.size(); ++i ) {
+        // 普通 Note 也可能作为折线头部或转折节点，不能只登记 Hold/Flick。
+        copiedNotes.emplace(&source.m_noteData.notes[i],
+                            &snapshot->m_noteData.notes[i]);
+    }
+    for ( size_t i = 0; i < source.m_noteData.holds.size(); ++i ) {
+        // 分类容器一一对应，不能按时间寻找，否则同拍重叠节点会被混同。
+        copiedNotes.emplace(&source.m_noteData.holds[i],
+                            &snapshot->m_noteData.holds[i]);
+    }
+    for ( size_t i = 0; i < source.m_noteData.flicks.size(); ++i ) {
+        // 滑键与长条共用 Note 键空间，仍能恢复交错的折线路径。
+        copiedNotes.emplace(&source.m_noteData.flicks[i],
+                            &snapshot->m_noteData.flicks[i]);
+    }
+    // 按根折线索引重建，避免不同折线共享子节点时改变原有关系。
+    for ( size_t i = 0; i < source.m_noteData.polylines.size(); ++i ) {
+        const auto& original = source.m_noteData.polylines[i];
+        auto&       copied   = snapshot->m_noteData.polylines[i];
+        // 默认复制留下的全部源引用必须先丢弃，之后才允许向快照写入新引用。
+        copied.m_subNotes.clear();
+        copied.m_subHolds.clear();
+        copied.m_subFlicks.clear();
+        // 通用序列顺序决定 Malody seg 的路径，不允许按分类重新排序。
+        for ( const auto& child : original.m_subNotes ) {
+            const auto it = copiedNotes.find(&child.get());
+            // 悬空或外部借用节点无法安全编码；拒绝保存比遗漏一个节点更可靠。
+            if ( it == copiedNotes.end() ) return {};
+            copied.m_subNotes.emplace_back(*it->second);
+        }
+        for ( const auto& child : original.m_subHolds ) {
+            // 分类视图还供其他格式和编辑路径访问，不能只修通用序列。
+            const auto it = copiedNotes.find(&child.get());
+            // 分类视图的目标类型要再次核对，避免将错误类型强转成 Hold。
+            if ( it == copiedNotes.end() ||
+                 it->second->m_type != MMM::NoteType::HOLD )
+                return {};
+            copied.m_subHolds.emplace_back(
+                static_cast<MMM::Hold&>(*it->second));
+        }
+        for ( const auto& child : original.m_subFlicks ) {
+            const auto it = copiedNotes.find(&child.get());
+            // 与 Hold 相同，分类视图必须与通用节点映射到同一批拥有型对象。
+            if ( it == copiedNotes.end() ||
+                 it->second->m_type != MMM::NoteType::FLICK )
+                return {};
+            copied.m_subFlicks.emplace_back(
+                static_cast<MMM::Flick&>(*it->second));
+        }
+    }
+    // 最后重建顶层索引；sync 不会替代上面的折线子节点重绑。
     snapshot->sync();
     return snapshot;
 }
@@ -2237,6 +2306,10 @@ bool BeatmapSession::processCommands()
             SessionUtils::syncBeatmap(*m_ctx);
             const auto sequence = observer->onBeatmapMutated(
                 *m_ctx->currentBeatmap, mutationFlags);
+            if ( sequence != 0 ) {
+                // 房主之后按网络修订定位原动作；首次创建序号只绑定一次。
+                m_ctx->actionStack.markLatestCollaborationSequence(sequence);
+            }
             if ( sequence != 0 &&
                  mutationFlags == ::MMM::BeatmapMutationFlags::Objects ) {
                 // 仅纯物件变更使用本地序号与远端对象快照协调；混合类别等待
@@ -2372,6 +2445,16 @@ bool BeatmapSession::processCommands()
             processed = true;
             continue;
         }
+        if ( const auto* correction =
+                 std::get_if<CmdReconcileCollaborationHistory>(&cmd) ) {
+            // 房主补偿已经通过权威替换改变谱面；这里只移动本地撤销所有权。
+            // 零序号表示房间侧映射已经淘汰，动作栈会主动清理过期记录。
+            // 必须先于随后排队的 CmdReplaceBeatmapData 执行，避免重复修改 ECS。
+            static_cast<void>(m_ctx->actionStack.reconcileCollaborationHistory(
+                correction->sequence, correction->redo));
+            processed = true;
+            continue;
+        }
         auto* authoritativeReplacement =
             std::get_if<CmdReplaceBeatmapData>(&cmd);
         // 只有明确标记 authoritativeRemote 的全量替换参与协作延后与序号协议。
@@ -2421,6 +2504,9 @@ bool BeatmapSession::processCommands()
                 deferred.replaceAudioSamples;
             authoritativeReplacement->replaceAnnotations |=
                 deferred.replaceAnnotations;
+            authoritativeReplacement->preserveCollaborationHistory |=
+                deferred.preserveCollaborationHistory;
+            // 合并延后权威替换时不能丢失先前补偿已完成的栈同步语义。
         }
         const bool preservesActiveBrush =
             authoritativeSynchronization &&
@@ -2523,6 +2609,7 @@ bool BeatmapSession::processCommands()
                                std::is_same_v<T, CmdUpdateTimelineEvent> ||
                                std::is_same_v<T, CmdUpdateTimelineEvents> ||
                                std::is_same_v<T, CmdUpdateBpmWithKeepSpeedSv> ||
+                               std::is_same_v<T, CmdKeepSpeedForBpmEvents> ||
                                std::is_same_v<T, CmdDeleteTimelineEvent> ||
                                std::is_same_v<T, CmdCreateTimelineEvent> ||
                                std::is_same_v<T, CmdCreateTimelineEvents> ||
@@ -2539,7 +2626,10 @@ bool BeatmapSession::processCommands()
                 if constexpr ( std::is_same_v<T, CmdChangeTool> ) {
                     // 工具枚举映射翻译键，未知状态以“就绪”文本作为安全回退。
                     std::string toolName = TR("ui.status.ready").data();
-                    switch ( arg.tool ) {
+                    // 状态文字展示真正采用的工具，不能报告已拒绝的配色请求。
+                    switch ( resolveEditToolForMode(
+                        arg.tool,
+                        m_ctx->lastConfig.settings.professionalMode) ) {
                     case EditTool::Move:
                         toolName = TR("ui.status.tool.select_move").data();
                         break;
@@ -2728,6 +2818,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdSetComposeLessonInputLimit> ||
                     std::is_same_v<T, CmdSeek> ||
                     std::is_same_v<T, CmdSetPlaybackSpeed> ||
+                    std::is_same_v<T, CmdSetPlaybackPitch> ||
                     std::is_same_v<T, CmdSetKeySoundTrackMute> ||
                     std::is_same_v<T, CmdSetKeySoundTrackGain> ||
                     std::is_same_v<T, CmdSetKeySoundEffectGroupGain> ||
@@ -2779,6 +2870,7 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdUpdateTimelineEvent> ||
                     std::is_same_v<T, CmdUpdateTimelineEvents> ||
                     std::is_same_v<T, CmdUpdateBpmWithKeepSpeedSv> ||
+                    std::is_same_v<T, CmdKeepSpeedForBpmEvents> ||
                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
                     std::is_same_v<T, CmdCreateTimelineEvents> ||
                     std::is_same_v<T, CmdReplaceBeatmapTimings> ||
@@ -2842,6 +2934,8 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdUpdateTimelineEvent> ||
                     std::is_same_v<T, CmdUpdateTimelineEvents> ||
                     std::is_same_v<T, CmdUpdateBpmWithKeepSpeedSv> ||
+                    // 批量保速只改绿线，仍需收集动作栈的 Timelines 通知。
+                    std::is_same_v<T, CmdKeepSpeedForBpmEvents> ||
                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
                     std::is_same_v<T, CmdCreateTimelineEvent> ||
                     std::is_same_v<T, CmdCreateTimelineEvents> ||
@@ -3124,7 +3218,7 @@ void BeatmapSession::handleCommand(const CmdSetCollaborationResources& cmd)
 /// @brief 应用全局编辑配置，并结束已隐藏草稿区的交互状态。
 /// @param cmd 新的完整编辑器配置快照。
 /// @details
-/// 关闭专业模式时只清理 Draft 相关选择、悬停和手势；关闭 Polyline 或 BMS
+/// 关闭专业模式时清理 Draft、采样放置与 BMS 相关交互；关闭 Polyline 或 BMS
 /// 编辑能力时清理所有新配置下不可编辑的对应对象。配置提交后把 ScrollCache
 /// 标脏，使轨道布局、判定线和滚动映射在下一次更新中使用新参数。
 ///
@@ -3132,14 +3226,41 @@ void BeatmapSession::handleCommand(const CmdSetCollaborationResources& cmd)
 /// 优先走标准 EndDrag，复用控制器已经实现的提交或撤销规则；选中集合和悬停
 /// 身份随后清理，避免 UI 继续引用新配置下不可见的实体。
 ///
-/// Professional、Polyline 和 BMS 是三个独立能力域。关闭 Professional 只影响
-/// Draft；关闭 Polyline 按新的 isNoteEditable 规则筛选 Note；关闭 BMS 则清空
-/// Sample Registry 的全部交互状态。一个能力域的清理不能误伤其他类型选择。
+/// Professional 是 Draft 与 BMS 的总门禁，BMS 子偏好仍单独保存。
+/// Polyline 继续按 isNoteEditable 筛选 Note；实际 BMS 能力关闭时清空
+/// Sample Registry 交互状态。能力清理不能删除或改写谱面对象数据。
 /// @warning
 /// 配置变更低频路径：草稿清理仅访问已选索引与当前交互实体，禁止整谱扫描。
 void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
 {
     if ( !cmd.config.settings.professionalMode ) {
+        const auto availableTool =
+            resolveEditToolForMode(m_ctx->currentTool, false);
+        if ( availableTool != m_ctx->currentTool ) {
+            // 配色手势未提交的目标只作撤销，避免隐藏工具后松键继续改写物件。
+            // 配色目标集合仅是暂存输入，清空不触碰正式 Note 或撤销历史。
+            // 必须先停用手势再替换工具，否则释放事件会交给基础工具处理旧目标。
+            // 当前工具已经属于基础集合时不执行此分支，保持正常绘制连续性。
+            m_ctx->brushState.isActive  = false;
+            m_ctx->eraserState.isActive = false;
+            m_ctx->eraserState.targetEntities.clear();
+            m_ctx->currentTool = availableTool;
+        }
+        // 专业能力关闭先结束采样或绑定音效的活动画笔，禁止松开鼠标后隐式提交。
+        if ( m_ctx->brushState.isActive &&
+             (m_ctx->brushState.createsAudioSample ||
+              m_ctx->brushState.activeSampleBinding) ) {
+            m_ctx->brushState.isActive           = false;
+            m_ctx->brushState.createsAudioSample = false;
+        }
+        // 仅清理放置偏好，不删除谱面中已存在的采样或绑定音频数据。
+        // 活动资源和选择资源分别属于手势快照与工具偏好，二者都必须清空。
+        // 只清空工具选择会让已开始的手势在后续 EndBrush 中继续生成采样。
+        // 普通音符且无音频绑定的活动画笔保留，避免切换误伤基础编辑。
+        m_ctx->brushState.selectedAudioResourceId.clear();
+        m_ctx->brushState.activeAudioResourceId.clear();
+        m_ctx->brushState.activeSampleBinding.reset();
+        m_ctx->brushState.selectedAudioTrackType = AudioTrackType::Effect;
         // 选择集合是局部索引，可快速判断拖动组中是否含 Draft，不遍历 Registry。
         const bool hasSelectedDraft = std::any_of(
             m_ctx->selectedNoteEntities.begin(),
@@ -3196,10 +3317,23 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
     const bool disablePolylineEditing =
         m_ctx->lastConfig.settings.enablePolylineEditing &&
         !cmd.config.settings.enablePolylineEditing;
+    // update 可能已经安装本轮配置，不能只比较 lastConfig 推断能力关闭边沿。
+    // 对新配置禁止的实际残留交互执行清理；空状态后续设置变更不会遍历采样域。
     const bool disableBmsEditing =
-        m_ctx->lastConfig.settings.enableBmsEditing &&
-        !cmd.config.settings.enableBmsEditing;
-    // 先根据旧新值计算能力关闭边沿，再提交新配置供 isNoteEditable 判断。
+        !cmd.config.settings.isBmsEditingEnabled() &&
+        (m_ctx->lastConfig.settings.isBmsEditingEnabled() ||
+         !m_ctx->selectedSampleEntities.empty() ||
+         m_ctx->hoveredObjectKind == ChartObjectKind::AudioSample ||
+         m_ctx->brushState.createsAudioSample ||
+         (m_ctx->isDragging &&
+          m_ctx->draggedObjectKind == ChartObjectKind::AudioSample));
+    // 隐藏采样前通过标准结束路径释放拖动状态，防止画布继续被旧手势占用。
+    if ( disableBmsEditing && m_ctx->isDragging &&
+         (m_ctx->draggedObjectKind == ChartObjectKind::AudioSample ||
+          !m_ctx->selectedSampleEntities.empty()) ) {
+        m_interaction->handleCommand(CmdEndDrag{});
+    }
+    // 先判断需清理的能力与交互，再提交配置供 isNoteEditable 判断。
     m_ctx->lastConfig = cmd.config;
     if ( disablePolylineEditing ) {
         // 能力关闭是低频设置动作，允许遍历 Note 交互视图清理不可编辑对象。
@@ -3416,6 +3550,18 @@ bool BeatmapSession::beginAsyncBeatmapSave(const CmdSaveBeatmap& cmd)
     SessionUtils::syncBeatmap(*m_ctx);
     refreshCurrentProjectSongFileHint(*m_ctx->currentBeatmap);
     auto snapshot = cloneBeatMapForSave(*m_ctx->currentBeatmap);
+    if ( !snapshot ) {
+        // 快照不完整时保持原谱面与保存点不变，并向 UI 返回明确失败原因。
+        XERROR("SaveBeatmap: polyline references do not belong to beatmap");
+        Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
+            .path         = Config::pathToUtf8(savePath),
+            .success      = false,
+            .isExport     = false,
+            .errorMessage = "折线子物件引用无效，无法保存谱面",
+            .presentation = savePresentationFor(cmd.kind),
+        });
+        return true;
+    }
 
     auto operation            = std::make_shared<AsyncSaveOperation>();
     operation->sourceBeatmap  = m_ctx->currentBeatmap;

@@ -519,6 +519,9 @@ void popFixedButtonStyleVars();
 /// @param text 文本内容。
 /// @param dir 弹出方向，相对于当前 Item。
 /// @warning UI 热路径：只在当前 Item 悬浮时绘制 Tooltip，不执行资源加载。
-void renderTooltip(const char* text, TooltipDir dir = TooltipDir::Right);
+/// @param allowWhenDisabled 是否允许禁用控件的悬浮提示，默认保留原交互规则。
+/// @note 仅放开提示检测，不让灰色控件响应点击或播放启用态悬浮反馈。
+void renderTooltip(const char* text, TooltipDir dir = TooltipDir::Right,
+                   bool allowWhenDisabled = false);
 
 }  // namespace MMM::UI::Utils

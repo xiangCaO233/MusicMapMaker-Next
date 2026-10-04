@@ -1051,6 +1051,72 @@ bool testLargeSnapshotCompression()
            first != restored->m_noteData.notes.end() &&
            first->m_timestamp == 1.0;
 }
+
+/// @brief 历史补丁只恢复原操作触及的对象，并拒绝覆盖随后同 ID 编辑。
+/// @return 独立修改可保留、同对象修改会冲突且正反向补丁可互换时为 true。
+/// @details 先把单个 Note 的更改编码为前向和反向补丁，再让另一个成员
+///         修改不同的 Flick。反向补丁应只恢复 Note，而不重置 Flick。
+///         恢复后前向补丁必须仍可通过源值校验，证明双向历史对称。
+///
+/// @par 冲突边界
+/// 后续再修改同一个稳定 Note ID 时，旧补丁必须在提交前拒绝。
+/// 此用例直接检查 Codec 的源值比较，不依赖房间或 UI 的按钮状态。
+/// 所有对象有独立稳定 ID，测试不使用数组位置作为冲突归属依据。
+bool testMemberHistoryDeltaConflict()
+{
+    auto                 beatmap = makeCompleteBeatmap("History Test");
+    BeatmapDocumentCodec sender;
+    BeatmapDocumentCodec document;
+    const auto           snapshot =
+        sender.encode(*beatmap, BeatmapMutationFlags::All, true);
+    // 快照先建立两份可比较的规范文档；历史只从其后增量开始。
+    if ( !snapshot || !document.apply(*snapshot) ) return false;
+    auto before = document.cloneDocument();
+    // before 在 document 应用编辑后仍应保持旧 Note 值。
+    if ( !before ) return false;
+
+    // 一名成员修改根 Note，房主据真实前后文档生成双向增量。
+    beatmap->m_noteData.notes.front().m_timestamp = 1100.0;
+    const auto edit =
+        sender.encode(*beatmap, BeatmapMutationFlags::Objects, false);
+    if ( !edit || !document.apply(*edit) ) return false;
+    auto forward =
+        before->makeHistoryDeltaTo(document, BeatmapMutationFlags::Objects);
+    auto inverse =
+        document.makeHistoryDeltaTo(*before, BeatmapMutationFlags::Objects);
+    // 首次反向校验的源状态恰好是原编辑完成后的规范文档。
+    if ( !forward || !inverse ||
+         !document.matchesHistoryDeltaSource(*inverse, *forward) ) {
+        return false;
+    }
+
+    // 另一名成员改动不同根对象，撤回首个成员的 Note 不应丢失该修改。
+    beatmap->m_noteData.flicks.front().m_timestamp = 1600.0;
+    const auto independent =
+        sender.encode(*beatmap, BeatmapMutationFlags::Objects, false);
+    // 第二次编辑应与原 Note 使用不同 collaboration ID。
+    if ( !independent || !document.apply(*independent) ||
+         !document.matchesHistoryDeltaSource(*inverse, *forward) ||
+         !document.apply(*inverse) ) {
+        return false;
+    }
+    const auto restored = document.materialize();
+    // 同时断言旧 Note 回来且新 Flick 留下，禁止全量快照式撤回。
+    if ( !restored ||
+         restored->m_noteData.notes.front().m_timestamp != 1000.0 ||
+         restored->m_noteData.flicks.front().m_timestamp != 1600.0 ||
+         !document.matchesHistoryDeltaSource(*forward, *inverse) ) {
+        return false;
+    }
+
+    // 原 Note 被第三人再次修改时，旧恢复补丁必须拒绝覆盖当前值。
+    beatmap->m_noteData.notes.front().m_timestamp = 1250.0;
+    const auto conflict =
+        sender.encode(*beatmap, BeatmapMutationFlags::Objects, false);
+    // 冲突检查发生在应用第三人编辑之后，测试真实当前源值。
+    return conflict && document.apply(*conflict) &&
+           !document.matchesHistoryDeltaSource(*inverse, *forward);
+}
 }  // namespace
 
 /// @brief 运行协作谱面文档编解码完整回归。
@@ -1068,6 +1134,7 @@ bool testLargeSnapshotCompression()
 /// - concurrent annotation deltas 验证批注集合合并。
 /// - changed object identities 验证界面可见根对象差异。
 /// - payload inspection 验证授权前只读分类。
+/// - member history delta 验证定向撤回与源值冲突保护。
 /// - invalid payloads 验证错误类型边界。
 /// - large snapshot compression 验证消息规模上限。
 /// @par 诊断约束
@@ -1105,7 +1172,9 @@ int main()
                          "payload inspection") &&
                    check(testInvalidPayloads(), "invalid payloads") &&
                    check(testLargeSnapshotCompression(),
-                         "large snapshot compression")
+                         "large snapshot compression") &&
+                   check(testMemberHistoryDeltaConflict(),
+                         "member history conflict")
                ? 0
                : 1;
 }

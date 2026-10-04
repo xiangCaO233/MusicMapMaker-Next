@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -39,7 +40,7 @@ enum class CollaborationPermission : std::uint32_t {
 /// @brief 一组可序列化的协作权限位。
 using CollaborationPermissionMask = std::uint32_t;
 
-/// @brief 默认授予已获准访客的完整权限集合。
+/// @brief 协议允许房主显式授予的完整权限集合。
 inline constexpr CollaborationPermissionMask COLLABORATION_PERMISSION_ALL =
     static_cast<CollaborationPermissionMask>(CollaborationPermission::Edit) |
     static_cast<CollaborationPermissionMask>(CollaborationPermission::Objects) |
@@ -79,6 +80,18 @@ struct EditRequest {
     ByteBuffer payload;
 };
 
+/// @brief 房主对原成员操作作出的权威历史调整。
+struct CollaborationHistoryCorrection {
+    /// @brief 原编辑者的稳定身份。
+    ParticipantId participantId;
+    /// @brief 原编辑所属加入会话，防止重连后序号复用。
+    OperationSessionId sessionId;
+    /// @brief 原编辑在其会话中的请求序号。
+    std::uint64_t clientSequence{ 0 };
+    /// @brief true 表示重做，false 表示撤回。
+    bool redo{ false };
+};
+
 /// @brief 房主已经排序并分配版本的增量编辑操作。
 struct CommittedOperation {
     /// @brief 房间内严格连续递增的谱面版本。
@@ -91,6 +104,8 @@ struct CommittedOperation {
     std::uint64_t clientSequence = 0;
     /// @brief 可直接应用到本地谱面模型的规范化操作负载。
     ByteBuffer payload;
+    /// @brief 非空时本修订由房主历史操作生成，接收端需同步本地动作栈。
+    std::optional<CollaborationHistoryCorrection> historyCorrection;
 };
 
 /// @brief 房间内可展示的客户端 Creator 身份。

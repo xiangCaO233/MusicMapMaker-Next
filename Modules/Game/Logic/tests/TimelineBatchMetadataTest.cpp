@@ -3,10 +3,17 @@
 #include "log/colorful-log.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
+#include "mmm/timing/TimingInterpolation.h"
+#include "mmm/timing/TimingTemplate.h"
+#include <memory>
 
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace
 {
@@ -526,6 +533,255 @@ bool testNegativeBpmMutationsAreRejected()
            context.actionStack.getUndoStackSize() == 3U;
 }
 
+/// @brief 验证选中红线批量补偿、已有绿线更新及整批历史恢复。
+/// @return 混合选择只产生目标 SV，重复提交幂等且撤销重做完整时返回 true。
+/// @note 使用非默认参考 BPM，确保倍率来自谱面设置而不是硬编码 120。
+/// @note 直接建立夹具不产生历史，以精确断言一次批量动作的边界。
+/// @note 快照或窗口是否打开不影响命令有效性，测试不引入 UI 依赖。
+/// @note 秒时间保留导入舍入差，恢复断言不能用显示精度近似代替。
+/// @note 修改参考 BPM 后复用同一控制器，覆盖参考值被构造期缓存的回归。
+/// @note 每轮补偿只建立一条历史，不能因选中红线数量拆分撤销。
+/// @note 补偿撤销只恢复 SV，参考 BPM 的独立修改不能被回滚。
+bool testSelectedBpmKeepSpeedBatch()
+{
+    // 纯内存夹具没有项目路径、音频设备或配置文件副作用。
+    // 所有实体在本例创建，句柄不与其他 Registry 混用。
+    // 补偿参数与 UI 相同，由逻辑端读取当前元数据后计算。
+    MMM::Logic::SessionContext context;
+    context.currentBeatmap = std::make_shared<MMM::BeatMap>();
+    // 180 让两个倍率都不等于默认 1，可识别创建成功却没计算的问题。
+    // 不设置渲染偏移，位置来自原始时间而非视觉时间。
+    context.currentBeatmap->m_baseMapMetadata.preference_bpm = 180.0;
+    MMM::Logic::ActionController controller(context);
+    auto&                        registry = context.timelineRegistry;
+    // 此助手只构造独立组件；动作本身仍通过生产控制器进入动作栈。
+    // 不模拟加载器的默认 BPM 或默认 SV，避免默认点掩盖本次补偿效果。
+    const auto add = [&](double time, MMM::TimingEffect effect, double value) {
+        const auto entity = registry.create();
+        registry.emplace<MMM::Logic::TimelineComponent>(
+            entity, time, effect, value);
+        return entity;
+    };
+    // 一项缺绿线，另一项已有绿线，两种分支共同进入一条历史。
+    // 不同 BPM 能检测错误复用第一个选中项倍率的行为。
+    // 第三项提供负向覆盖，不能按全谱面自动补偿。
+    const auto first      = add(1.0, MMM::TimingEffect::BPM, 120.0);
+    const auto second     = add(2.0, MMM::TimingEffect::BPM, 240.0);
+    const auto unselected = add(3.0, MMM::TimingEffect::BPM, 360.0);
+    // 零 BPM 在模型中合法，但固定 SV 无法补偿，预期无修改。
+    // 插值首值虽正，整段仍不能用常量倍率抵消。
+    const auto zero  = add(4.0, MMM::TimingEffect::BPM, 0.0);
+    const auto curve = add(5.0, MMM::TimingEffect::BPM, 120.0);
+    registry.get<MMM::Logic::TimelineComponent>(curve).m_interpolation =
+        MMM::TimingInterpolation{};
+    // 半微秒误差模拟格式的秒换算，不应再创建另一条绿线。
+    // 原倍率故意不正确，避免更新分支被幂等返回绕过。
+    // 撤销必须恢复微小时间差，不能只恢复整数秒。
+    const auto existing = add(2.0000005, MMM::TimingEffect::SCROLL, 2.0);
+    // beat 是位置缓存，custom 是与位置无关的格式字段。
+    // 同时设置二者才能区分派生键清理与误删整个来源分组。
+    auto& metadata =
+        registry.get<MMM::Logic::TimelineComponent>(existing).m_metadata;
+    metadata.timing_properties[MMM::TimingMetadataType::MALODY]["beat"] =
+        "[2,0,1]";
+    metadata.timing_properties[MMM::TimingMetadataType::MALODY]["custom"] =
+        "keep";
+    // 基线在夹具完成后记录，不因无效选择或循环顺序改变。
+    // 空动作栈要求整批补偿成为唯一可撤销动作。
+    const auto initialCount =
+        registry.view<MMM::Logic::TimelineComponent>().size();
+    // 重复句柄、非 BPM、失效句柄都不能扩大修改集合。
+    MMM::Logic::CmdKeepSpeedForBpmEvents command{
+        { first, second, first, zero, curve, existing, entt::null }
+    };
+    controller.handleCommand(command);
+    // 按时间和类型找新增绿线，不依赖遍历顺序或实体递增规则。
+    // 保存其身份供撤销后检查销毁，而非只看全表计数。
+    entt::entity created = entt::null;
+    for ( const auto entity : registry.view<MMM::Logic::TimelineComponent>() ) {
+        const auto& timing =
+            registry.get<MMM::Logic::TimelineComponent>(entity);
+        if ( timing.m_effect == MMM::TimingEffect::SCROLL &&
+             near(timing.m_timestamp, 1.0) )
+            created = entity;
+    }
+    // 两条红线分别得到 1.5 和 .75；现有绿线身份不能被删除重建。
+    // 对齐近似时间戳时清除派生 beat，但保留其他格式私有字段。
+    // 同时约束值、定位、数量和元数据，单有绿线不能证明正确。
+    // 120*1.5 与 240*.75 均应等于预设 180。
+    // 总数只增一项，更新已有绿线不能删除后重建副本。
+    if ( created == entt::null ||
+         context.actionStack.getUndoStackSize() != 1U ||
+         registry.view<MMM::Logic::TimelineComponent>().size() !=
+             initialCount + 1U ||
+         !near(registry.get<MMM::Logic::TimelineComponent>(created).m_value,
+               1.5) ||
+         !near(registry.get<MMM::Logic::TimelineComponent>(existing).m_value,
+               .75) ||
+         !near(
+             registry.get<MMM::Logic::TimelineComponent>(existing).m_timestamp,
+             2.0) ||
+         timingMetadataValue(
+             registry.get<MMM::Logic::TimelineComponent>(existing).m_metadata,
+             MMM::TimingMetadataType::MALODY,
+             "beat") ||
+         timingMetadataValue(
+             registry.get<MMM::Logic::TimelineComponent>(existing).m_metadata,
+             MMM::TimingMetadataType::MALODY,
+             "custom") != "keep" ) {
+        XERROR(
+            "Selected BPM keep-speed batch produced incorrect SV or metadata");
+        return false;
+    }
+    // 源 BPM 不能被顺便规范化或删除，仍承担节拍定位职责。
+    // 红线值与时间分开检查，避免只验证绿线这一半结果。
+    // 插值保留证明跳过规则没有把曲线退化成普通点。
+    // 红线保持数值、时间和插值结构，未选中红线也不能参与补偿。
+    if ( !near(registry.get<MMM::Logic::TimelineComponent>(first).m_value,
+               120.0) ||
+         !near(registry.get<MMM::Logic::TimelineComponent>(second).m_timestamp,
+               2.0) ||
+         !near(registry.get<MMM::Logic::TimelineComponent>(unselected).m_value,
+               360.0) ||
+         !registry.get<MMM::Logic::TimelineComponent>(curve).m_interpolation )
+        return false;
+    controller.handleCommand(command);
+    // 二次提交应识别出已正确的新绿线。
+    // 若新增第二条历史，即使值相同也得多次撤销才能恢复。
+    if ( context.actionStack.getUndoStackSize() != 1U ) return false;
+    // 只撤销一次，不能循环逐条撤销掩盖批次拆散的问题。
+    // 红线不是动作条目，撤销后仍应作为稳定实体存在。
+    context.actionStack.undo(context);
+    // 一次撤销既移除新增绿线，又恢复已有绿线的时间、值和 beat 元数据。
+    if ( registry.valid(created) ||
+         context.actionStack.getUndoStackSize() != 0U ||
+         registry.view<MMM::Logic::TimelineComponent>().size() !=
+             initialCount ||
+         !near(
+             registry.get<MMM::Logic::TimelineComponent>(existing).m_timestamp,
+             2.0000005) ||
+         !near(registry.get<MMM::Logic::TimelineComponent>(existing).m_value,
+               2.0) ||
+         timingMetadataValue(
+             registry.get<MMM::Logic::TimelineComponent>(existing).m_metadata,
+             MMM::TimingMetadataType::MALODY,
+             "beat") != "[2,0,1]" )
+        return false;
+    // 重做使用原动作，不依赖 UI 重选或再次计算倍率。
+    // 旧绿线句柄稳定，仍可查询恢复后的值。
+    context.actionStack.redo(context);
+    // 重做恢复同一批目标，不额外修改红线或生成多余事件。
+    if ( registry.view<MMM::Logic::TimelineComponent>().size() !=
+             initialCount + 1U ||
+         !near(registry.get<MMM::Logic::TimelineComponent>(existing).m_value,
+               .75) )
+        return false;
+    // 用此前未补偿的目标，播放限制失效必然新增实体或历史。
+    // 已幂等目标无法区分播放拒绝和正常执行。
+    context.isPlaying = true;
+    controller.handleCommand(
+        MMM::Logic::CmdKeepSpeedForBpmEvents{ { unselected } });
+    // 播放中以及无可补偿红线的提交都不产生历史。
+    // 恢复编辑后提交无效混合选择，空批次不能进入动作栈。
+    // 它与播放保护是两条独立的无操作路径。
+    context.isPlaying = false;
+    controller.handleCommand(
+        MMM::Logic::CmdKeepSpeedForBpmEvents{ { zero, curve, existing } });
+    // 无效提交后历史仍为一条重做后的动作，不依赖 UI 按钮禁用。
+    if ( context.actionStack.getUndoStackSize() != 1U ) return false;
+    // 谱面设置修改的是 preference_bpm；复用控制器与原选择，检验读取最新值。
+    // 新参考值与首条红线、已有 SV 对应速度均不同，不能误用任一旧状态。
+    context.currentBeatmap->m_baseMapMetadata.preference_bpm = 270.0;
+    controller.handleCommand(command);
+    // 120 * 2.25 与 240 * 1.125 都等于最新参考 BPM，仍是一条批量历史。
+    // 补偿本身不得修改参考 BPM；新增历史才能单独撤销这一轮补偿。
+    if ( context.actionStack.getUndoStackSize() != 2U ||
+         !near(registry.get<MMM::Logic::TimelineComponent>(existing).m_value,
+               1.125) ||
+         !near(context.currentBeatmap->m_baseMapMetadata.preference_bpm,
+               270.0) )
+        return false;
+    // 重做后新增绿线的身份可能改变，按稳定时间与类型查找其新倍率。
+    bool updatedFirst = false;
+    for ( const auto entity : registry.view<MMM::Logic::TimelineComponent>() ) {
+        const auto& timing =
+            registry.get<MMM::Logic::TimelineComponent>(entity);
+        if ( timing.m_effect == MMM::TimingEffect::SCROLL &&
+             near(timing.m_timestamp, 1.0) )
+            updatedFirst = near(timing.m_value, 2.25);
+    }
+    // 撤销只恢复本批绿线，不把谱面设置中的参考 BPM 回滚成旧值。
+    // 它与最初整批创建的撤销不同，覆盖已有补偿被再次更新的路径。
+    context.actionStack.undo(context);
+    return updatedFirst && context.actionStack.getUndoStackSize() == 1U &&
+           near(registry.get<MMM::Logic::TimelineComponent>(existing).m_value,
+                .75) &&
+           near(context.currentBeatmap->m_baseMapMetadata.preference_bpm,
+                270.0);
+}
+
+/// @brief 验证重复时间的红线覆盖规则和 SV 插值段保护。
+/// @return 同时间只生成一条绿线，段首及段内不被固定补偿破坏时返回 true。
+/// @note 段尾是合法的新状态边界，应该允许普通保速点接续。
+bool testSelectedBpmKeepSpeedBoundaries()
+{
+    MMM::Logic::SessionContext context;
+    context.currentBeatmap = std::make_shared<MMM::BeatMap>();
+    context.currentBeatmap->m_baseMapMetadata.preference_bpm = 120.0;
+    MMM::Logic::ActionController controller(context);
+    auto&                        registry = context.timelineRegistry;
+    const auto add = [&](double time, MMM::TimingEffect effect, double value) {
+        const auto entity = registry.create();
+        registry.emplace<MMM::Logic::TimelineComponent>(
+            entity, time, effect, value);
+        return entity;
+    };
+    // 同时间以较大实体值的选中项覆盖，输入顺序特意反转。
+    // 只能得到一个 .5 绿线，不能按不稳定选择顺序生成两个倍率。
+    const auto earlier = add(1.0, MMM::TimingEffect::BPM, 120.0);
+    const auto later   = add(1.0, MMM::TimingEffect::BPM, 240.0);
+    const auto start   = add(2.0, MMM::TimingEffect::BPM, 240.0);
+    const auto inside  = add(2.5, MMM::TimingEffect::BPM, 240.0);
+    const auto end     = add(3.0, MMM::TimingEffect::BPM, 240.0);
+    // 默认曲线长一秒，2、2.5、3 秒分别为段首、内部和段尾。
+    // 段首保护曲线，内部保护互斥区间，段尾允许接续。
+    const auto scroll = add(2.0, MMM::TimingEffect::SCROLL, 1.0);
+    registry.get<MMM::Logic::TimelineComponent>(scroll).m_interpolation =
+        MMM::TimingInterpolation{};
+    const auto initialCount =
+        registry.view<MMM::Logic::TimelineComponent>().size();
+    controller.handleCommand(MMM::Logic::CmdKeepSpeedForBpmEvents{
+        { later, earlier, start, inside, end } });
+    // 排除原曲线，只看新增点，避免原事件干扰倍率断言。
+    // 错误创建段首或内部点会使时间集合检查失败。
+    std::size_t compensated = 0;
+    for ( const auto entity : registry.view<MMM::Logic::TimelineComponent>() ) {
+        const auto& timing =
+            registry.get<MMM::Logic::TimelineComponent>(entity);
+        if ( timing.m_effect != MMM::TimingEffect::SCROLL || entity == scroll )
+            continue;
+        // 只允许重复时间合并后的点和插值段尾，二者都应得到 .5 倍率。
+        if ( (!near(timing.m_timestamp, 1.0) &&
+              !near(timing.m_timestamp, 3.0)) ||
+             !near(timing.m_value, .5) )
+            return false;
+        ++compensated;
+    }
+    // 任一合法目标缺失都失败，全部跳过不能伪装安全通过。
+    // 也必须保留插值描述，否则数量正确仍可能破坏段落。
+    if ( compensated != 2U ||
+         !registry.get<MMM::Logic::TimelineComponent>(scroll).m_interpolation )
+        return false;
+    context.actionStack.undo(context);
+    // 段落完整意味着不必重新创建曲线或设置参数。
+    // 此处只约束显式编辑结果和历史，不对连续播放性能作结论。
+    // 撤销只移除补偿点，原插值段与全部红线仍然存在。
+    return registry.view<MMM::Logic::TimelineComponent>().size() ==
+               initialCount &&
+           registry.get<MMM::Logic::TimelineComponent>(scroll)
+               .m_interpolation.has_value();
+}
+
 /// @brief 验证未进入撤销栈的元数据编辑仍会参与未保存状态判断。
 /// @return 标脏、保存和清空语义符合预期时返回 true。
 /// @note markSaved 仅更新内存中的保存基线，不调用文件写入或验证磁盘内容。
@@ -591,6 +847,102 @@ bool testNonUndoableDirtyState()
     return true;
 }
 
+/// @brief 模板从权威红线定位整组，并保持单次撤销及失败无部分写入。
+/// @return 实际组件落点、元数据、历史和实例检查全部成立时返回真。
+/// @note 模板请求中不携带预先算好的事件，测试可发现误用旧 UI BPM 的实现。
+/// @note 请求没有预展开事件，落点必须由提交时的 BPM 决定。
+/// @note 普通 HS 允许负值，不能因模板校验误伤效果语义。
+/// @note 检查真实注册表，而非只检查命令的模板字段。
+bool testTemplatePlacementTransaction()
+{
+    MMM::Logic::SessionContext context;
+    // 实例令牌来自真实谱面对象，不能用常量伪造身份检查成功。
+    // 此夹具不打开项目包，生命周期仅由当前独立上下文保持。
+    // 控制器读到的红线完全来自真实创建和更新命令。
+    // 因此可以覆盖从命令队列定义到实际实体写入的完整转换。
+    // 测试结束自动释放值状态，不需要文件清理。
+    context.currentBeatmap = std::make_shared<MMM::BeatMap>();
+    MMM::Logic::ActionController controller(context);
+    controller.handleCommand(
+        MMM::Logic::CmdCreateTimelineEvent{ 0, MMM::TimingEffect::BPM, 100 });
+    const auto bpmEntity = findTimelineEntity(context, MMM::TimingEffect::BPM);
+    // 请求的来源按 100 BPM 定义，但提交前目标红线已经改成 200 BPM。
+    // 半拍应对应 150 ms，不能继续用窗口预览中的 300 ms。
+    MMM::TimingTemplate draft;
+    draft.m_variable = MMM::TimingVariable::Beat;
+    MMM::TimingTemplatePoint before, anchor;
+    before.m_offset                         = -.5;
+    before.m_timing.m_timingEffect          = MMM::TimingEffect::SCROLL;
+    before.m_timing.m_timingEffectParameter = 100;
+    anchor.m_timing.m_timingEffect          = MMM::TimingEffect::HS;
+    anchor.m_timing.m_timingEffectParameter = -2;
+    anchor.m_timing.m_metadata
+        .timing_properties[MMM::TimingMetadataType::OSU]["volume"] = "40";
+    draft.m_points = { before, anchor };
+    draft.m_anchor = 1;
+    MMM::Logic::CmdCreateTimelineEvents command;
+    command.templateDefinition    = draft;
+    command.templateAnchorSeconds = 2;
+    command.templateBeatmapInstanceId =
+        reinterpret_cast<std::uintptr_t>(context.currentBeatmap.get());
+    controller.handleCommand(
+        MMM::Logic::CmdUpdateTimelineEvent{ bpmEntity, 0, 200 });
+    // 创建和更新红线已有两条历史，模板应恰好追加一条。
+    // 后续失败均以这条已成功历史为基线，避免空场景假通过。
+    // 通过实际实体的元数据验证从模板到批量动作的完整复制。
+    const auto baseline = context.actionStack.getUndoStackSize();
+    controller.handleCommand(command);
+    const auto* scroll = findTimeline(context, MMM::TimingEffect::SCROLL);
+    const auto* hs     = findTimeline(context, MMM::TimingEffect::HS);
+    if ( !scroll || !hs || !near(scroll->m_timestamp, 1.85) ||
+         !near(hs->m_timestamp, 2) || !near(hs->m_value, -2) ||
+         hs->m_metadata.timing_properties !=
+             anchor.m_timing.m_metadata.timing_properties ||
+         context.actionStack.getUndoStackSize() != baseline + 1 )
+        return false;
+    // 一次撤销移除整组，重做保留当次已决定的落点和来源属性。
+    // 历史重做不再受后来目标 BPM 换算影响。
+    context.actionStack.undo(context);
+    if ( findTimeline(context, MMM::TimingEffect::SCROLL) ||
+         findTimeline(context, MMM::TimingEffect::HS) )
+        return false;
+    context.actionStack.redo(context);
+    scroll = findTimeline(context, MMM::TimingEffect::SCROLL);
+    if ( !scroll || !near(scroll->m_timestamp, 1.85) ) return false;
+    // 目标 HS 段内部将拒绝另一组；先合法的 Scroll 也不能提前写入。
+    // 先建立占用区间，再观察失败后实体数量与撤销栈都保持不变。
+    MMM::Logic::CmdCreateTimelineEvent segment{ 3, MMM::TimingEffect::HS, 1 };
+    segment.interpolation             = MMM::TimingInterpolation{};
+    segment.interpolation->m_duration = 2;
+    controller.handleCommand(segment);
+    const auto count =
+        context.timelineRegistry.view<MMM::Logic::TimelineComponent>().size();
+    const auto history            = context.actionStack.getUndoStackSize();
+    command.templateAnchorSeconds = 4;
+    controller.handleCommand(command);
+    if ( context.timelineRegistry.view<MMM::Logic::TimelineComponent>()
+                 .size() != count ||
+         context.actionStack.getUndoStackSize() != history )
+        return false;
+    // 旧实例窗口和负实际落点都不能向当前谱面写入任何条目。
+    // 这些失败不得挤掉现有撤销历史或触发空批次动作。
+    // 当前 200 BPM 半拍是 150 ms，基准 50 ms 将使提前点为负。
+    // 领域放置应拒绝整个组，不夹紧到零秒或跳过这一项。
+    // 随后将目标放远但撤销实例身份，单独覆盖旧窗口提交路径。
+    // 合法数值不能弥补失效谱面身份，两个条件都必须成立。
+    command.templateAnchorSeconds = .05;
+    controller.handleCommand(command);
+    command.templateAnchorSeconds     = 8;
+    command.templateBeatmapInstanceId = 0;
+    controller.handleCommand(command);
+    // 最后同时比较实体与历史，证明失败没有分配物件或撤销记录。
+    // 不依赖 UI 弹窗显隐，也不需要实际音频或联机设备。
+    // 协作广播仍由既有对象变更路由观察批量动作产生的实体修改。
+    return context.timelineRegistry.view<MMM::Logic::TimelineComponent>()
+                   .size() == count &&
+           context.actionStack.getUndoStackSize() == history;
+}
+
 }  // namespace
 
 /// @brief 运行批量 Timeline 创建元数据测试。
@@ -603,9 +955,13 @@ int main()
     // 测试不接收外部路径，所有实体和元数据都在本次进程内按确定顺序构造。
     // 各场景独立创建上下文，短路失败不会影响下一次运行的动作栈初态。
     // 退出零才表示全部场景均已运行，不能只凭没有错误日志判断每项都执行过。
-    return testBatchCreatePreservesMetadata() && testBatchUpdateIsAtomic() &&
+    return testTemplatePlacementTransaction() &&
+                   testBatchCreatePreservesMetadata() &&
+                   testBatchUpdateIsAtomic() &&
                    testBpmKeepSpeedCreatesSvAtomically() &&
                    testBpmKeepSpeedUpdatesSvAtomically() &&
+                   testSelectedBpmKeepSpeedBatch() &&
+                   testSelectedBpmKeepSpeedBoundaries() &&
                    testNegativeBpmMutationsAreRejected() &&
                    testNonUndoableDirtyState()
                ? 0

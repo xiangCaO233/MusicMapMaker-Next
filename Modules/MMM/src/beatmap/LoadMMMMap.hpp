@@ -546,6 +546,20 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
             t.m_timingEffect =
                 timingEffectFromString(readMMMString(tJson, "effect", "bpm"));
             t.m_timingEffectParameter = readMMMDouble(tJson, "param", 0.0);
+            // 旧文件没有此字段，继续保留普通点；损坏段落不升级成半合法曲线。
+            if ( const auto interpolation = tJson.find("interpolation");
+                 interpolation != tJson.end() ) {
+                // 段落字段是可选扩展，旧文件缺失时仍表示普通时间点。
+                // 文件中的数值和枚举必须经公共解析，不能直接信任 JSON。
+                // 再按当前效果约束端值，正 BPM 曲线不会在运行时穿过零。
+                auto decoded = readTimingInterpolation(*interpolation);
+                if ( !decoded ||
+                     !isValidTimingInterpolation(*decoded,
+                                                 t.m_timingEffect,
+                                                 t.m_timingEffectParameter) )
+                    continue;
+                t.m_interpolation = std::move(decoded);
+            }
 
             // 私有来源属性在公共 Timing 字段完成后附加。
             auto timingExtraIt = tJson.find("extra");

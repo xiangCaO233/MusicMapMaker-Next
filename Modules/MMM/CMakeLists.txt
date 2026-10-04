@@ -36,9 +36,21 @@
 # MMM 静态库只编译具有独立实现单元的核心模型；各格式读写器以内部头文件形式 由 BeatMap 分派入口包含，避免把格式细节暴露为业务模块的公共链接目标。
 add_library(
   MMM STATIC
-  src/beatmap/BeatMap.cpp src/beatmap/BeatmapSpeedTransform.cpp
-  src/note/Note.cpp src/note/Hold.cpp src/project/AudioResource.cpp
-  src/timing/Timing.cpp)
+  src/beatmap/BeatMap.cpp
+  src/beatmap/BeatmapSpeedTransform.cpp
+  src/note/Note.cpp
+  src/note/Hold.cpp
+  src/project/AudioResource.cpp
+  src/timing/Timing.cpp
+  # 曲线领域算法共用于原生模型、编辑器和外部格式采样。
+  src/timing/TimingInterpolation.cpp
+  # 节拍自变量从红线积分反解采样时间，缓存只在低频编辑和载入准备。
+  src/timing/TimingBeatAxis.cpp
+  # 受限表达式编译与拟合只在编辑或载入执行，播放使用只读缓存。
+  src/timing/TimingFunction.cpp
+  src/timing/TimingFunctionFit.cpp
+  # 可复用时间点组依据目标红线换算偏移，定义与 UI、ECS 身份分离。
+  src/timing/TimingTemplate.cpp)
 
 # 公共 include 目录只发布稳定模型接口，日志、事件和 JSON 则作为传递依赖供 这些接口中的元数据与序列化声明使用。
 target_include_directories(MMM PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
@@ -146,3 +158,24 @@ mmm_add_test_executable(MMM PackageFileTypesTest tests/PackageFileTypesTest.cpp)
 target_link_libraries(PackageFileTypesTest PRIVATE MMM Log)
 mmm_register_test_case(NAME Test_Package_File_Types COMMAND
                        PackageFileTypesTest)
+
+# 数学函数测试覆盖符号语法、闭区间定义域、积分缓存、自由绘制拟合和原生保存。 输出只写构建树，测试不借助用户字体、窗口系统或第三方脚本执行环境。
+# 函数测试只在传入的独立构建输出目录保存回环文件，不访问用户配置。
+mmm_add_test_executable(MMM TimingFunctionTest tests/TimingFunctionTest.cpp)
+target_link_libraries(TimingFunctionTest PRIVATE MMM Log)
+mmm_register_test_case(NAME TimingFunctionTest COMMAND TimingFunctionTest
+                       "${TEST_OUTPUT_DIR}/timing_function")
+
+# 节拍轴定义和秒域定义共用 MMM target，测试必须链接生产映射实现。 使用独占输出目录避免原生往返与其他格式测试相互覆盖文件。
+# 节拍轴测试覆盖实际分拍落点、渐变红线反解、原生保存与倍速语义。 所有写出文件使用测试独占的构建输出目录，不访问用户项目或静态夹具。
+mmm_add_test_executable(MMM TimingBeatInterpolationTest
+                        tests/TimingBeatInterpolationTest.cpp)
+target_link_libraries(TimingBeatInterpolationTest PRIVATE MMM Log)
+mmm_register_test_case(
+  NAME TimingBeatInterpolationTest COMMAND TimingBeatInterpolationTest
+  "${TEST_OUTPUT_DIR}/timing_beat_interpolation")
+
+# 模板测试覆盖任意基准、负分拍、跨 BPM 反解和完整序列化。
+mmm_add_test_executable(MMM TimingTemplateTest tests/TimingTemplateTest.cpp)
+target_link_libraries(TimingTemplateTest PRIVATE MMM Log)
+mmm_register_test_case(NAME TimingTemplateTest COMMAND TimingTemplateTest)

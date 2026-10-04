@@ -127,6 +127,8 @@ bool testGlobalToolbarVisibilityPreservation()
     MMM::Config::EditorSettings globalSettings;
     globalSettings.showToolLabels                                  = true;
     globalSettings.fixedToolWindow                                 = false;
+    globalSettings.toolbarHorizontal                               = true;
+    globalSettings.toolbarDockEdge                                 = "bottom";
     globalSettings.showManagerLabels                               = false;
     globalSettings.toolbarVisibility.stateTools.colorBrush         = true;
     globalSettings.toolbarVisibility.independentButtons.trackCount = true;
@@ -145,11 +147,98 @@ bool testGlobalToolbarVisibilityPreservation()
     // 返回表达式抽查刻意设反的代表字段，确认覆盖方向。
     // 同时验证顶层标签、固定模式和两个嵌套按钮分组。
     return projectSettings.showToolLabels && !projectSettings.fixedToolWindow &&
+           projectSettings.toolbarHorizontal &&
+           projectSettings.toolbarDockEdge == "bottom" &&
            !projectSettings.showManagerLabels &&
            projectSettings.toolbarVisibility.stateTools.colorBrush &&
            projectSettings.toolbarVisibility.independentButtons.trackCount;
 }
 
+/// @brief 验证排布与停靠边缘的持久化、历史默认值和非法边缘回退。
+/// @return 横排底部配置可往返，旧配置仍右侧竖排时返回 true。
+bool testToolbarLayoutSettings()
+{
+    MMM::Config::EditorSettings settings;
+    settings.toolbarHorizontal = true;
+    settings.toolbarDockEdge   = "bottom";
+    // 使用完整对象往返，避免只测试孤立字段而遗漏全局编辑设置序列化入口。
+    const nlohmann::json serialized = settings;
+    const auto restored = serialized.get<MMM::Config::EditorSettings>();
+    // 旧配置缺失字段的情况必须单独检查，完整往返无法覆盖这个兼容入口。
+    // 方向默认值与边缘默认值要成对匹配，避免首次布局和按钮排布不一致。
+    const auto legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    // 非法边缘来自手工编辑的配置，不能直接交给 ImGui 拆分方向运算。
+    const auto invalid = nlohmann::json{ { "toolbarDockEdge", "invalid" } }
+                             .get<MMM::Config::EditorSettings>();
+    return restored.toolbarHorizontal && restored.toolbarDockEdge == "bottom" &&
+           !legacy.toolbarHorizontal && legacy.toolbarDockEdge == "right" &&
+           invalid.toolbarDockEdge == "right";
+}
+
+/// @brief 验证普通模式过滤旧配置中的高级入口，专业模式恢复原显示偏好。
+/// @return 模式过滤、用户隐藏偏好和持久化往返均保持一致时返回 true。
+/// @details 使用历史全显示配置，覆盖从专业模式切回时高级按钮仍为 true 的情况。
+/// 能力掩码不写回源对象；用户主动隐藏的基础工具也不能被总开关重新打开。
+/// @par 回归边界
+/// - 全显示偏好与有效显示分别检查，避免默认 false 掩盖能力漏项。
+/// - 磁吸、映射、分拍线、音效与底部播放入口在普通模式仍可显示。
+/// - 倍速、主轨数和分拍数量属于基础参数入口，普通模式不能强制隐藏。
+/// - 软件配置序列化保存用户偏好，不保存本帧能力掩码。
+/// - 模式往返不改基础工具的手动隐藏状态。
+/// 本用例不创建 UI 窗口，浮层关闭由 ToolbarView 使用同一有效配置执行。
+/// 配色工具的活动策略退出另由会话测试覆盖，不从按钮不可见推断已禁用输入。
+bool testProfessionalToolbarVisibility()
+{
+    MMM::Config::EditorSettings settings;
+    // 把默认隐藏的高级按钮全部打开，模拟用户已定制过的专业工具栏。
+    auto& tools      = settings.toolbarVisibility.stateTools;
+    tools.colorBrush = tools.colorEraser = true;
+    auto& buttons       = settings.toolbarVisibility.independentButtons;
+    buttons.notePalette = buttons.playbackSpeed = buttons.trackCount =
+        buttons.beatDivisor                     = true;
+    settings.professionalMode                   = false;
+    const auto basic = settings.effectiveToolbarVisibility();
+    // 普通模式固定能力集合，但仍允许用户在集合内自行隐藏基础按钮。
+    auto compact                             = basic;
+    compact.independentButtons.playbackSpeed = false;
+    compact.independentButtons.trackCount    = false;
+    compact.independentButtons.beatDivisor   = false;
+    // 基础参数开关应保留 true，其他按钮仍遵循默认布局和配色过滤。
+    // 比较前只在测试副本恢复默认隐藏，不得把这三个偏好写回生产配置。
+    if ( !matchesDefaultToolbarVisibility(compact) ||
+         !basic.independentButtons.playbackSpeed ||
+         !basic.independentButtons.trackCount ||
+         !basic.independentButtons.beatDivisor ) {
+        XERROR("Ordinary mode did not preserve basic toolbar controls");
+        return false;
+    }
+    // 过滤后序列化仍保存原偏好，不能把临时能力状态持久化为用户选择。
+    const nlohmann::json serialized = settings;
+    auto restored             = serialized.get<MMM::Config::EditorSettings>();
+    restored.professionalMode = true;
+    const auto advanced       = restored.effectiveToolbarVisibility();
+    if ( !advanced.stateTools.colorBrush || !advanced.stateTools.colorEraser ||
+         !advanced.independentButtons.notePalette ||
+         !advanced.independentButtons.playbackSpeed ||
+         !advanced.independentButtons.trackCount ||
+         !advanced.independentButtons.beatDivisor ) {
+        XERROR("Professional mode lost saved toolbar visibility");
+        return false;
+    }
+    // 原偏好保持完整；总开关往返不应强制恢复用户手动隐藏的基础项。
+    settings.toolbarVisibility.stateTools.draw           = false;
+    settings.toolbarVisibility.independentButtons.magnet = false;
+    // 基础参数允许用户关闭，模式切换不能把手动隐藏的按钮重新打开。
+    buttons.playbackSpeed = buttons.trackCount = buttons.beatDivisor = false;
+    const auto hidden = settings.effectiveToolbarVisibility();
+    return !hidden.stateTools.draw && !hidden.independentButtons.magnet &&
+           !hidden.independentButtons.playbackSpeed &&
+           !hidden.independentButtons.trackCount &&
+           !hidden.independentButtons.beatDivisor &&
+           settings.toolbarVisibility.stateTools.colorBrush &&
+           settings.toolbarVisibility.independentButtons.notePalette;
+}
 }  // namespace
 
 /// @brief 运行工具栏按钮可见性持久化与兼容性测试。
@@ -161,7 +250,9 @@ int main()
     return testToolbarVisibilityRoundTrip() &&
                    testToolbarVisibilityDefaults() &&
                    testPartialToolbarVisibilityDefaults() &&
-                   testGlobalToolbarVisibilityPreservation()
+                   testGlobalToolbarVisibilityPreservation() &&
+                   testToolbarLayoutSettings() &&
+                   testProfessionalToolbarVisibility()
                ? 0
                : 1;
 }

@@ -361,7 +361,9 @@ bool testDraggedTapUsesBgmLaneBounds()
         MMM::Config::BeatLineDisplayMode::Always;
     config.visual.previewConfig.drawBeatLines   = false;
     config.visual.previewConfig.drawTimingLines = false;
-    config.settings.enableBmsEditing            = true;
+    // 本例验证专业 BGM 拖动投影，必须显式开启总能力而非依赖子开关默认值。
+    config.settings.professionalMode = true;
+    config.settings.enableBmsEditing = true;
 
     // 提供正常时间映射，零秒物件应落在可见判定线附近。
     // 不手工写 Transform 屏幕位置，让快照生成器计算实际位置。

@@ -594,13 +594,19 @@ void popFixedButtonStyleVars()
 /// @param text 文本内容。
 /// @param dir 弹出方向，相对于当前 Item。
 /// @warning UI 热路径：只在当前 Item 悬浮时绘制 Tooltip，不执行资源加载。
-void renderTooltip(const char* text, TooltipDir dir)
+/// @param allowWhenDisabled 显式允许读取禁用项的悬浮，供能力限制说明使用。
+/// @note 普通工具提示保持默认禁用规则，调用点必须明确说明开启原因。
+void renderTooltip(const char* text, TooltipDir dir, bool allowWhenDisabled)
 {
     if ( text == nullptr || text[0] == '\0' ) {
         return;
     }
 
-    const bool    isHovered = ImGui::IsItemHovered();
+    // 提示动画使用与调用点相同的悬浮规则，不能再次过滤掉灰色控件。
+    // 该标志仅影响提示可见性，不修改 Item 的可交互状态。
+    const bool isHovered = ImGui::IsItemHovered(
+        allowWhenDisabled ? ImGuiHoveredFlags_AllowWhenDisabled
+                          : ImGuiHoveredFlags_None);
     const ImGuiID rawItemId = ImGui::GetItemID();
     const ImGuiID itemId    = rawItemId != 0 ? rawItemId : ImGui::GetID(text);
     const float   amount    = updateTooltipAnimationAmount(itemId, isHovered);

@@ -2,6 +2,7 @@
 #include "audio/AudioManager.h"
 #include "audio/AudioTimelineMixerNode.h"
 #include "audio/AudioTimelineResourceProcessor.h"
+#include "audio/AuditionSourceMixerNode.h"
 #include "audio/KeySoundControl.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
@@ -423,7 +424,7 @@ AudioTimelineLoadResult AudioManager::loadAudioTimeline(
     refreshAudioTimelineVolume();
     // setter 同步现有 stretcher，使换图后延续用户预览参数。
     setPlaybackSpeed(m_speed);
-    setPlaybackPitch(m_playbackPitch);
+    setPlaybackPitch(getPlaybackPitch());
     setPlaybackQuality(m_playbackQuality);
 
     result.success         = true;
@@ -488,7 +489,9 @@ void AudioManager::unloadAudioTimeline()
             "timeline schedule.");
     }
     if ( m_stretcher ) {
-        m_stretcher->set_paused(true);
+        // 卸载主谱面不能暂停仍在播放的资源试听。
+        m_stretcher->set_paused(
+            !m_auditionPlaying.load(std::memory_order_relaxed));
     }
     static_cast<void>(releaseUnusedTrackCache());
     // 最后清理 AudioPool，避免旧项目源轨被缓存自身长期保活。
@@ -792,11 +795,12 @@ const std::string& AudioManager::getLoadedBGMPath() const
 /// @warning 低频资源路径：可能触发音频解码缓存加载，禁止在每帧热路径中调用。
 ///
 /// 新文件先完整取得强引用，确认成功后才卸载旧试听，保证失败不会破坏当前试听。
-/// SourceNode 接 TimeStretcher 后直接进入主混音器，不经过谱面时间线。
+/// 歌曲与专用节拍池先混合，再进入效果音轨的主时间线拉伸前级。
 bool AudioManager::loadAuditionTrack(const std::string&      filePath,
                                      const AudioTrackConfig& config)
 {
-    if ( !m_audioPool || !m_threadPool || !m_mainMixer || filePath.empty() ) {
+    if ( !m_audioPool || !m_threadPool || !m_timingEffectMixer ||
+         filePath.empty() ) {
         return false;
     }
 
@@ -821,11 +825,19 @@ bool AudioManager::loadAuditionTrack(const std::string&      filePath,
     m_auditionSyncKey     = makeAudioPathSyncKey(filePath);
     m_auditionTrackVolume = std::clamp(config.volume, 0.0f, 1.0f);
     m_auditionTrackMuted  = config.muted;
-    // SourceNode 负责独立位置，Stretcher 只负责试听倍率。
-    m_auditionSource    = std::make_shared<ice::SourceNode>(m_auditionTrack);
-    m_auditionStretcher = std::make_shared<ice::TimeStretcher>();
-    m_auditionStretcher->set_inputnode(m_auditionSource);
-    m_mainMixer->add_source(m_auditionStretcher);
+    // 歌曲的资源静音只控制 SourceNode，节拍器继续使用自己的池增益。
+    // SourceNode 保留资源秒坐标；歌曲与节拍不再拥有第二个拉伸器。
+    m_auditionSource = std::make_shared<ice::SourceNode>(m_auditionTrack);
+    // 预留主拉伸器最大输入请求，禁止回调期间扩大暂存空间。
+    const std::size_t maximumInputFrames =
+        std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U) * 10U +
+        1U;
+    m_auditionMixer =
+        std::make_shared<AuditionSourceMixerNode>(m_auditionSource,
+                                                  m_auditionEffectMixer,
+                                                  m_auditionBlockStartFrame,
+                                                  maximumInputFrames);
+    m_timingEffectMixer->add_source(m_auditionMixer);
     // 加入图后保持 Stopped，调用方显式 playAudition 才开始推进。
     m_auditionStatus = PlaybackStatus::Stopped;
 
@@ -837,22 +849,21 @@ bool AudioManager::loadAuditionTrack(const std::string&      filePath,
 
 /// @brief 卸载独立试听音轨并断开其混音节点。
 ///
-/// 先停止 SourceNode，再从主混音器移除 stretcher，最后释放节点和 track。所有
-/// 运行时配置恢复中性值，下一次加载不会继承前一资源的音量或倍率。
+/// 先停止 SourceNode，再从效果音轨断开歌曲与节拍混合节点，最后释放 track。
+/// 资源增益恢复中性值，共用主拉伸器的倍率不因卸载而重置。
 void AudioManager::unloadAuditionTrack()
 {
     stopAudition();
 
-    if ( m_mainMixer && m_auditionStretcher ) {
-        // 先断开图边，避免主混音器继续持有 stretcher 共享所有权。
-        m_mainMixer->remove_source(m_auditionStretcher);
+    if ( m_timingEffectMixer && m_auditionMixer ) {
+        // 先断开父图边，再释放本层所有权；主拉伸器继续服务谱面。
+        m_timingEffectMixer->remove_source(m_auditionMixer);
     }
 
     const bool hadAuditionTrack = m_auditionTrack || m_auditionSource ||
-                                  m_auditionStretcher ||
-                                  !m_auditionPath.empty();
+                                  m_auditionMixer || !m_auditionPath.empty();
     // 记录清理前状态，使重复卸载保持幂等且不产生误导日志。
-    m_auditionStretcher.reset();
+    m_auditionMixer.reset();
     m_auditionSource.reset();
     m_auditionTrack.reset();
     m_auditionPath.clear();
@@ -860,7 +871,6 @@ void AudioManager::unloadAuditionTrack()
     m_auditionStatus      = PlaybackStatus::Stopped;
     m_auditionTrackVolume = 1.0f;
     m_auditionTrackMuted  = false;
-    m_auditionSpeed       = 1.0;
 
     if ( hadAuditionTrack ) {
         XINFO("Audition track unloaded.");

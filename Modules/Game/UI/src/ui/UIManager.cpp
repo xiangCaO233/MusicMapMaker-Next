@@ -17,6 +17,8 @@
 #include "graphic/imguivk/VKRenderer.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
+#include "logic/EditorEngine.h"
+#include "network/collaboration/CollaborationRoom.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/IAuxiliaryWindowView.h"
 #include "ui/ICanvasView.h"
@@ -872,12 +874,43 @@ void UIManager::openAudioTrackController(const std::string& trackId,
     }
 }
 
+/// @brief 在 UI 线程发布或释放已校验的访客音频资源包。
+/// @warning 低频资源事件调用，共享所有权延长缓存目录寿命；逐帧查询只借用指针。
+void UIManager::setCollaborationAudioProject(
+    std::shared_ptr<const Project> project)
+{
+    // 与本机项目独立保存，避免资源浏览意外开启工程编辑或保存入口。
+    m_collaborationAudioProject = std::move(project);
+}
+
+/// @brief 获取音轨浏览使用的只读项目数据源。
+/// @warning UI 每帧查询，只借用已发布资源，不复制 shared_ptr 或获取会话互斥锁。
+const Project* UIManager::getAudioProject() const
+{
+    // 已认证的访客资源包包含映射后的缓存路径；不能回退为房主原始路径。
+    if ( m_collaborationAudioProject ) return m_collaborationAudioProject.get();
+    return Logic::EditorEngine::instance().getCurrentProject();
+}
+
+/// @brief 访客音轨始终只读，即使房主授予全部谱面变更权限。
+/// @warning UI 每帧查询，只检查角色与 UI 线程资源所有权，不检查会话变更权限。
+bool UIManager::isAudioReadOnly() const
+{
+    // 缓存包存在时包括断线收尾帧；入房尚未收到资源时也阻止本机音轨写操作。
+    return m_collaborationAudioProject ||
+           (m_collaborationRoom && m_collaborationRoom->isActive() &&
+            !m_collaborationRoom->isHost());
+}
+
 /// @brief 打开或聚焦当前项目的音频资源布局工具。
 ///
 /// 过渡中或无项目时拒绝打开。视图惰性创建，打开状态通过应用服务立即标记并请求保存，
 /// 使项目工作区恢复能够保留该工具。
 void UIManager::openProjectAudioTool()
 {
+    // 专业模式是所有打开来源的共同门禁，包括菜单、工作区与外部工具请求。
+    if ( !Config::AppConfig::instance().getEditorSettings().professionalMode )
+        return;
     // 工具依赖活动项目资源，不能在无项目或切换窗口中使用。
     if ( !hasActiveProjectUiState() || isProjectTransitionInProgress() ) {
         return;
@@ -904,6 +937,32 @@ void UIManager::openProjectAudioTool()
     }
     if ( !wasOpen ) {
         ::MMM::UI::PlayPopupOpenFeedback();
+    }
+}
+
+/// @brief 在专业模式关闭边沿收起项目音频工具并清除持久放置选择。
+/// @details 只修改工具状态，不改谱面采样、资源或音频播放计划。
+/// 模式来自软件配置，不依赖活动会话锁，也不复制会话共享所有权。
+/// 工作区内存先清除，后续正常保存沿用原有项目持久化流程。
+/// 关闭视图由本帧正常清理阶段销毁，不在遍历视图更新中删除。
+/// @warning UI 热路径常态只有一个布尔比较；关闭边沿才访问工具与项目。
+void UIManager::synchronizeProfessionalEditingMode()
+{
+    const bool enabled =
+        Config::AppConfig::instance().getEditorSettings().professionalMode;
+    if ( enabled == m_lastProfessionalEditingMode ) return;
+    m_lastProfessionalEditingMode = enabled;
+    if ( enabled ) return;
+    // 旧工具可能在关闭后仍持有选择；关闭之前显式撤销它的放置状态。
+    if ( auto* tool =
+             getView<ProjectAudioToolView>(PROJECT_AUDIO_TOOL_VIEW_NAME) ) {
+        tool->disableProfessionalEditing();
+    }
+    // 即使工具尚未恢复，也不能把旧工作区的采样选择带入下一次开启。
+    if ( auto* project = Logic::EditorEngine::instance().getCurrentProject() ) {
+        project->m_settings.m_workspace.m_projectAudioToolSelectedResourceId
+            .clear();
+        project->m_settings.m_workspace.m_projectAudioToolOpen = false;
     }
 }
 
@@ -1298,7 +1357,8 @@ void UIManager::restoreProjectWorkspaceViews(
         }
     }
 
-    if ( workspace.m_projectAudioToolOpen &&
+    if ( Config::AppConfig::instance().getEditorSettings().professionalMode &&
+         workspace.m_projectAudioToolOpen &&
          !getView<ProjectAudioToolView>(PROJECT_AUDIO_TOOL_VIEW_NAME) ) {
         // 项目音频工具按单例键恢复。
         registerView(PROJECT_AUDIO_TOOL_VIEW_NAME,
@@ -1581,6 +1641,8 @@ void UIManager::onUpdateUI()
     ProcessGlobalMouseFeedback();
 
     consumePendingProjectLifecycleUpdates();
+    // 常态帧只比较总开关；实际收起视图与清理选择只在关闭边沿执行。
+    synchronizeProfessionalEditingMode();
     syncProjectWorkspaceState();
 
     // 先收集关闭视图名称，避免遍历注册表时直接 erase。
@@ -1639,7 +1701,14 @@ void UIManager::onUpdateUI()
 
     if ( !m_uiPrepareCandidates.empty() ) {
         // 一份不可变快照共享给本帧全部准备任务。
-        const UiFrameSnapshot snapshot = captureUiFrameSnapshot();
+        UiFrameSnapshot snapshot = captureUiFrameSnapshot();
+        // 分析窗口读取主画布时间与视野；标签隐藏时也须推进其读取快照。
+        // 在并行准备之前发布需求，不能让分析窗口自行回收画布正在使用的快照。
+        if ( getView<IUIView>("AudioSpectrum") ||
+             getView<IUIView>("AudioWaveform") ) {
+            snapshot.audioAnalysisCameraId =
+                Logic::EditorEngine::instance().getActiveCameraId();
+        }
         m_uiPrepareViews.reserve(m_uiPrepareCandidates.size());
         m_mainThreadUiPrepareViews.reserve(m_uiPrepareCandidates.size());
         m_parallelUiPrepareViews.reserve(m_uiPrepareCandidates.size());

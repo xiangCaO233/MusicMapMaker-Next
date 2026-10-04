@@ -49,6 +49,15 @@ MainMenuTools::MainMenuTools()
         MainMenuItemTextKind::TranslationKey,
         "Ctrl+F",
         createAlignSelectedToCommonBeatsAction()));
+    // 时间点模板作为单个工具入口；新建和选区捕获由工具内部管理。
+    // 菜单只发出打开请求，避免展开工具菜单时读取个人库。
+    // 关闭时间线主窗口不会隐藏这个独立模板工具。
+    registerItem(std::make_unique<MainMenuActionItem>(
+        ICON_MMM_BARS,
+        "ui.tools.timing_template",
+        MainMenuItemTextKind::TranslationKey,
+        nullptr,
+        createOpenTimingTemplateAction()));
     // 倍速导出作为文件生成工具，保留独立动作处理器。
     registerItem(std::make_unique<MainMenuActionItem>(
         ICON_MMM_MUSIC,

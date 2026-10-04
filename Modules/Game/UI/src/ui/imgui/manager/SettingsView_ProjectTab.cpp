@@ -107,12 +107,16 @@ void SettingsView::drawProjectSettings()
         // 节、行索引和标签共同构造稳定 ID，防止不同折叠区状态串扰。
         std::string baseIdStr = "PRJ_S" + std::to_string(sectionIndex) + "_R" +
                                 std::to_string(rowIndex) + "_H_" + label;
-        ImGuiID     id        = ImGui::GetID(baseIdStr.c_str());
+        // 折叠状态不包含可变行号；搜索展开前面的组时不能重置后面的标题。
+        ImGuiID id = ImGui::GetID((std::string("PRJ_Header_") + label).c_str());
 
         // StateStorage 缺少条目时使用调用方指定的默认展开状态。
         // 读取发生在登记回调之前，决定当前帧是否创建后续内容布局。
         bool isOpen =
             ImGui::GetStateStorage()->GetInt(id, defaultOpen ? 1 : 0) != 0;
+        // 搜索只展开对应组，不能触发配置修改或保存。
+        const bool forceOpen = revealSettingsSearchSection(label, id);
+        if ( forceOpen ) isOpen = true;
 
         // 标题独占一行并填满宽度，点击范围与 Clay 分配矩形一致。
         // 高度取当前 ImGui frame，能够随 DPI 和主题样式自动缩放。
@@ -124,10 +128,13 @@ void SettingsView::drawProjectSettings()
             (baseIdStr + "_el").c_str(),
             Sizing::Grow(),
             Sizing::Fixed(h),
-            [label, id, defaultOpen](Clay_BoundingBox r, bool) {
+            [this, label, id, defaultOpen, forceOpen](Clay_BoundingBox r,
+                                                      bool) {
                 // Clay 给出屏幕矩形，ImGui 游标必须显式移动到标题起点。
                 // 回调参数中的 hover 状态不用作标题状态，交互由 ImGui
                 // 自己判定。
+                // 记录真实标题边界，条件隐藏的设置可以定位到所属组。
+                reportSettingsSearchHeader(label, r);
                 ImGui::SetCursorScreenPos({ r.x, r.y });
                 ImVec4 bgCol = ImGui::GetStyle().Colors[ImGuiCol_Header];
                 // Hovered 和 Active 颜色从主题 Header
@@ -156,6 +163,8 @@ void SettingsView::drawProjectSettings()
                 // 指针形式 ID 由数值 ImGuiID 转换，不引用实际对象地址。
                 // CollapsingHeader 标志使节点本身成为整行可点击的无嵌套标题。
                 // 默认展开标志只影响首次出现，之后以 StateStorage 的值为准。
+                // Clay 和实际标题必须保持相同的展开状态。
+                if ( forceOpen ) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
                 bool nowOpen = ImGui::TreeNodeEx(
                     (void*)(intptr_t)id,
                     ImGuiTreeNodeFlags_CollapsingHeader |

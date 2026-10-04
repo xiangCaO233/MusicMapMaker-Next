@@ -3,6 +3,7 @@
 #include "common/VideoFrameDecoder.h"
 #include "config/AppPaths.h"
 #include "graphic/imguivk/VKTexture.h"
+#include "log/colorful-log.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/imgui/markdown/MarkdownParser.h"
 
@@ -32,21 +33,29 @@
 ///
 /// 资源限制：
 /// - 单次下载最多 32 MiB；
-/// - 内存 GIF 源帧数据最多 128 MiB，超出时交给逐帧视频解码器；
+/// - 远程 GIF 源帧内存预算 128 MiB，可信打包教程原图最多 512 MiB；
 /// - 单张输入宽高最多 4096 像素；
 /// - GIF 时长最多 120 秒；
 /// - GIF 采样最多 96 帧且目标约 15 FPS；
-/// - 动画单帧最长边缩小到 320 像素；
+/// - 更新日志缩略动画单帧最长边 320 像素，放大和教程最多 1280 像素；
+/// - 单个高清图集最多使用 128 MiB，采样帧数按尺寸自适应；
 /// - 静态图最长边缩小到 1280 像素；
 /// - 图集单行宽度不超过 4096 像素；
-/// - 全缓存已上传 RGBA 数据预算为 192 MiB；
+/// - 正文与教程已上传 RGBA 数据预算为 192 MiB，更新放大预览独占 128 MiB；
 /// - 文档缓存最多接纳 32 个不同目标；
 /// - 同时只运行一个下载与解码任务。
 /// - 失败目标保留条目状态，避免可见帧反复发起相同请求。
+/// 正文与放大预览使用同一 URL、不同缓存键：正文保持小帧，放大时才申请
+/// 高清帧。预览尚未就绪或失败时继续显示正文帧，避免弹窗出现长时间空白。
+/// 高清图集只保留最近打开的一张；切换时先等待已提交的 GPU 命令结束，
+/// 再销毁旧页和扣除预算。纹理页按完整帧行切分，帧与描述符一一对应。
+/// 正文可能包含多段动画，不能挤占用户双击打开的高清预览预算。
+/// 两类计数独立，预览关闭或切换时归还自己的容量，总驻留上限为 320 MiB。
+/// 图集帧数随分辨率缩减，但持续时间不变，因此较大原图可能降低采样帧率。
 /// 教程 GIF 的来源仅限同步到配置根的打包资源，Markdown 的远程地址
-/// 解析仍只允许 HTTP(S)；两条来源复用相同的字节与图集大小上限。
-/// 为适配没有 FFmpeg GIF 解码器的预编译包，打包动画先降至 480 像素，
-/// 使完整源帧低于内存解码上限；显示图集再降至 192 像素。
+/// 解析仍只允许 HTTP(S)；两条来源复用输入字节与图集大小上限。
+/// 原始教程动画按可信资源的 512 MiB 源帧上限用 stb 解码，避免依赖
+/// 没有 GIF 解码器的 FFmpeg 预编译包；仅保留当前段落的高清 GPU 图集。
 
 namespace MMM::UI
 {
@@ -56,10 +65,16 @@ constexpr std::size_t MAX_DOWNLOAD_BYTES =
     32U * 1024U * 1024U;  ///< 单个下载上限。
 constexpr std::size_t MAX_CACHE_BYTES =
     192U * 1024U * 1024U;  ///< GPU 图集总预算。
-constexpr std::size_t MAX_MEMORY_GIF_BYTES =
-    128U * 1024U * 1024U;  ///< 内存 GIF 源帧总预算。
+constexpr std::size_t MAX_WALKTHROUGH_SOURCE_BYTES =
+    512U * 1024U * 1024U;  ///< 可信教程原始 GIF 的源帧预算。
+constexpr std::size_t MAX_ATLAS_BYTES =
+    128U * 1024U * 1024U;                     ///< 单张动画图集的 RGBA 上限。
+constexpr unsigned MAX_TEXTURE_EDGE = 4096U;  ///< 单页 Vulkan 图集边长。
+constexpr unsigned PREVIEW_GIF_EDGE = 1280U;  ///< 放大预览目标最长边。
 /// @brief 与网络 URL 命名空间隔离的内置资源键前缀。
 constexpr std::string_view WALKTHROUGH_GIF_PREFIX = "walkthrough-gif:";
+/// @brief 高清预览的内部缓存键，不接受外部 Markdown 直接构造。
+constexpr std::string_view PREVIEW_IMAGE_PREFIX = "update-preview:";
 
 /// @brief 只接受单个 ASCII 文件名，阻止教程图片键逃出资源目录。
 /// @param destination 由教学步骤提供的完整媒体键。
@@ -103,8 +118,9 @@ MarkdownImagePixels loadWalkthroughGif(const std::string& destination)
     // 文件在读取期间被替换或截断时不把残缺字节交给 GIF 解码器。
     if ( !file || file.gcount() != static_cast<std::streamsize>(bytes.size()) )
         return {};
-    // 内置操作动画使用较小图集，14 段同时浏览也能留在 GPU 预算内。
-    return decodeUpdateImage(bytes, 192U);
+    // 可信的打包原图可以在后台展开较大的源帧；GPU 图集仍受单图上限约束。
+    // 每次切步会回收上一张教程图集，不把十四段高清动画同时留在显存。
+    return decodeUpdateImage(bytes, 1280U, MAX_WALKTHROUGH_SOURCE_BYTES);
 }
 
 /// @brief 跳过 GIF 扩展或图像数据的连续子块。
@@ -130,17 +146,19 @@ bool skipGifSubBlocks(std::span<const unsigned char> bytes, std::size_t& offset)
 /// @param bytes 已通过签名和尺寸校验的 GIF 文件。
 /// @param width 逻辑画布宽度。
 /// @param height 逻辑画布高度。
+/// @param sourceFrameBudget 本次来源允许展开的源帧字节数。
 /// @return 可安全整图解码时返回帧数，否则返回零并交给逐帧解码路径。
 /// @pre width 和 height 已由 stbi_info_from_memory 验证为正且不超过 4096。
 /// @details 逐块解析 GIF 容器，只读取长度和标记，不解压 LZW 数据。
 /// 每个图像块最多产生一张完整逻辑画布，故帧数乘画布字节数是源帧容量上界。
 std::size_t boundedGifFrameCount(std::span<const unsigned char> bytes,
-                                 unsigned width, unsigned height)
+                                 unsigned width, unsigned height,
+                                 std::size_t sourceFrameBudget)
 {
     // GIF 每帧由完整逻辑画布构成；先限制单帧，再逐个图像块累计数量。
     const std::size_t frameBytes =
         static_cast<std::size_t>(width) * height * 4U;
-    if ( bytes.size() < 13U || frameBytes > MAX_MEMORY_GIF_BYTES ) return 0U;
+    if ( bytes.size() < 13U || frameBytes > sourceFrameBudget ) return 0U;
     std::size_t offset = 13U;
     // 逻辑屏幕描述符后可能紧跟全局调色板，位数由 packed 低三位决定。
     if ( (bytes[10] & 0x80U) != 0U ) {
@@ -176,7 +194,7 @@ std::size_t boundedGifFrameCount(std::span<const unsigned char> bytes,
         ++offset;
         if ( !skipGifSubBlocks(bytes, offset) ) return 0U;
         // 在解码前累计帧数，防止高度压缩的长动画放大内存。
-        if ( ++frames > MAX_MEMORY_GIF_BYTES / frameBytes ) return 0U;
+        if ( ++frames > sourceFrameBudget / frameBytes ) return 0U;
     }
     return 0U;
 }
@@ -238,15 +256,15 @@ MarkdownImagePixels makeAtlas(unsigned width, unsigned height, unsigned frames,
                               double duration, unsigned animatedEdge)
 {
     MarkdownImagePixels out;
-    // 动画采用较小上限控制多帧内存，静态图保留更高阅读分辨率。
+    // 按时长区分动画与静态图，单采样帧的短 GIF 也要遵守动画尺寸预算。
     const double scale =
         std::min(1.0,
-                 (frames > 1U ? static_cast<double>(animatedEdge) : 1280.0) /
+                 (duration > 0.0 ? static_cast<double>(animatedEdge) : 1280.0) /
                      std::max(width, height));
     out.frameWidth  = std::max(1U, static_cast<unsigned>(width * scale));
     out.frameHeight = std::max(1U, static_cast<unsigned>(height * scale));
-    // 列数同时受帧数和 4096 像素图集宽度限制。
-    out.columns = std::min(frames, 4096U / out.frameWidth);
+    // 列数同时受帧数和单页 Vulkan 纹理宽度限制。
+    out.columns = std::min(frames, MAX_TEXTURE_EDGE / out.frameWidth);
     out.frames  = frames;
     out.width   = out.columns * out.frameWidth;
     // 向上取整行数，最后一行允许未填满。
@@ -255,6 +273,37 @@ MarkdownImagePixels makeAtlas(unsigned width, unsigned height, unsigned frames,
     // 一次分配完整图集，后续帧直接写入对应区域。
     out.pixels.resize(static_cast<std::size_t>(out.width) * out.height * 4U);
     return out;
+}
+
+/// @brief 按 RGBA 图集预算收紧采样帧数，保留尽可能高的预览分辨率。
+/// @param width GIF 逻辑画布宽度。
+/// @param height GIF 逻辑画布高度。
+/// @param requested 按时长计算的目标采样帧数。
+/// @param animatedEdge 本次缓存允许的单帧最长边。
+/// @return 带有最后一行空槽开销时仍能落在单图预算内的帧数。
+/// @details 帧宽先按最终缩放倍率计算，再用与 makeAtlas 相同的列数和
+/// 行数公式估算实际分配容量；只减少采样数量，不把高清图再次缩成缩略图。
+/// 采样仍覆盖完整 GIF 时长，播放索引无需知道源帧被压缩多少。
+/// 保留至少一帧，防止极端输入导致零尺寸图集。
+/// 图集预算仅计算 CPU RGBA 与对应 GPU 像素，网络源字节另受下载上限约束。
+unsigned boundedAtlasFrames(unsigned width, unsigned height, unsigned requested,
+                            unsigned animatedEdge)
+{
+    const double scale = std::min(
+        1.0, static_cast<double>(animatedEdge) / std::max(width, height));
+    const unsigned frameWidth =
+        std::max(1U, static_cast<unsigned>(width * scale));
+    const unsigned frameHeight =
+        std::max(1U, static_cast<unsigned>(height * scale));
+    // 按 makeAtlas 的列布局计入最后一行空槽，防止仅计算有效帧后超预算。
+    for ( unsigned frames = requested; frames > 1U; --frames ) {
+        const auto columns = std::min(frames, MAX_TEXTURE_EDGE / frameWidth);
+        const auto rows    = (frames + columns - 1U) / columns;
+        const auto bytes   = static_cast<std::size_t>(columns) * frameWidth *
+                             rows * frameHeight * 4U;
+        if ( bytes <= MAX_ATLAS_BYTES ) return frames;
+    }
+    return 1U;
 }
 
 /// @brief 使用 stb_image 在内存中解码有界 GIF，并按播放时间采样为图集。
@@ -303,8 +352,10 @@ MarkdownImagePixels decodeBoundedGif(std::span<const unsigned char> bytes,
     }
     const double duration = durationMs / 1000.0;
     // 图集帧数只依赖总时长，不随源文件的帧数线性增长。
-    const unsigned frames =
+    const unsigned requested =
         std::clamp(static_cast<unsigned>(std::ceil(duration * 15.0)), 1U, 96U);
+    const unsigned frames = boundedAtlasFrames(
+        expectedWidth, expectedHeight, requested, animatedEdge);
     auto out = makeAtlas(
         expectedWidth, expectedHeight, frames, duration, animatedEdge);
     const auto frameBytes =
@@ -375,7 +426,8 @@ std::string resolveUpdateImageUrl(std::string_view destination)
 /// @param url 由 resolveUpdateImageUrl 生成的 HTTP(S) URL。
 /// @return 成功时返回有界 RGBA 图集，失败时返回空布局。
 /// @warning 后台低频路径：执行网络请求，禁止从 UI 或渲染热路径直接调用。
-MarkdownImagePixels loadUpdateImage(const std::string& url)
+MarkdownImagePixels loadUpdateImage(const std::string& url,
+                                    unsigned           animatedEdge)
 {
     // 下载字节容器由 curl 回调按 32 MiB 上限增长。
     std::vector<unsigned char> bytes;
@@ -400,20 +452,24 @@ MarkdownImagePixels loadUpdateImage(const std::string& url)
     curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &bytes);
     // 空响应或任意传输错误都不进入图片解码器。
     if ( curl_easy_perform(curl.get()) != CURLE_OK || bytes.empty() ) return {};
-    return decodeUpdateImage(bytes);
+    return decodeUpdateImage(bytes, animatedEdge);
 }
 
 /// @brief 将下载字节解码为静态或动画 RGBA 图集。
 /// @param bytes 受下载上限约束的图片文件内容。
-/// @param animatedEdge 动画缩略帧的最长边，不允许超过远程图片原上限。
+/// @param animatedEdge 动画帧的最长边，放大预览可高于缩略图上限。
+/// @param sourceFrameBudget 仅可信教程资源可使用较大的源帧展开预算。
 /// @return 解码和尺寸校验成功时返回图集，否则返回空。
 /// @warning 后台低频路径：GIF 会创建任务专属临时目录并逐帧调用解码器。
 MarkdownImagePixels decodeUpdateImage(std::span<const unsigned char> bytes,
-                                      unsigned animatedEdge)
+                                      unsigned    animatedEdge,
+                                      std::size_t sourceFrameBudget)
 {
     // 直接调用场景也必须执行与下载回调相同的大小边界。
     if ( bytes.empty() || bytes.size() > MAX_DOWNLOAD_BYTES ||
-         animatedEdge == 0U || animatedEdge > 320U )
+         animatedEdge == 0U || animatedEdge > PREVIEW_GIF_EDGE ||
+         sourceFrameBudget == 0U ||
+         sourceFrameBudget > MAX_WALKTHROUGH_SOURCE_BYTES )
         return {};
     // 先读取头部尺寸，拒绝无效或超过 GPU 支持边界的图像。
     int width = 0, height = 0, channels = 0;
@@ -447,7 +503,10 @@ MarkdownImagePixels decodeUpdateImage(std::span<const unsigned char> bytes,
     }
     // 常见小型 GIF 直接从内存读取，避免依赖各平台预编译 FFmpeg 的 GIF 能力。
     // 大型 GIF 保留原有逐帧解码路径，以免一次展开全部源帧。
-    const auto boundedFrames = boundedGifFrameCount(bytes, width, height);
+    // 打包教程有固定且受版本管理的输入，可使用更高的源帧预算。
+    // 下载图片始终沿用较低的默认预算，不能由远程内容自行提高上限。
+    const auto boundedFrames =
+        boundedGifFrameCount(bytes, width, height, sourceFrameBudget);
     if ( boundedFrames > 0U ) {
         auto decoded =
             decodeBoundedGif(bytes, width, height, boundedFrames, animatedEdge);
@@ -492,8 +551,10 @@ MarkdownImagePixels decodeUpdateImage(std::span<const unsigned char> bytes,
     if ( !std::isfinite(duration) || duration <= 0.0 || duration > 120.0 )
         return {};
     // 约 15 FPS 采样并限制为 1–96 帧，长动画会降低实际采样率。
-    const unsigned frames =
+    const unsigned requested =
         std::clamp(static_cast<unsigned>(std::ceil(duration * 15.0)), 1U, 96U);
+    const unsigned frames =
+        boundedAtlasFrames(width, height, requested, animatedEdge);
     auto out = makeAtlas(width, height, frames, duration, animatedEdge);
     for ( unsigned index = 0; index < frames; ++index ) {
         // 在整个动画时长内均匀取样，不保存解码器原始全部帧。
@@ -505,21 +566,31 @@ MarkdownImagePixels decodeUpdateImage(std::span<const unsigned char> bytes,
 }
 
 /// @brief 缓存仅在 UI/资源准备线程访问，工作任务只返回独占 CPU 数据。
+/// @details m_entries 保存正文和高清键；任务通过 m_active 关联唯一结果。
+/// 工作线程只捕获键并返回像素，不读取或修改本结构，UI 查询无需锁。
+/// 已上传字节数只在完整纹理页发布或销毁时改变，失败页不进入预算。
 struct MarkdownImageCache::Impl {
     /// @brief 单个 Markdown 目标的 GPU 纹理、动画布局和失败状态。
     struct Entry {
-        std::unique_ptr<Graphic::VKTexture> m_texture;  ///< 图集 GPU 所有权。
-        MarkdownImagePixels                 m_layout;  ///< 不保留像素的帧布局。
-        ImTextureID m_id{};         ///< 资源准备阶段注册的描述符。
-        double      m_startTime{};  ///< 动画起播时钟。
-        bool        m_failed{};     ///< 失败后不逐帧重复请求。
+        std::vector<std::unique_ptr<Graphic::VKTexture>>
+                                 m_textures;     ///< 各图集页的 GPU 所有权。
+        std::vector<ImTextureID> m_ids;          ///< 与页索引对应的描述符。
+        MarkdownImagePixels      m_layout;       ///< 不保留像素的帧布局。
+        double                   m_startTime{};  ///< 动画起播时钟。
+        bool                     m_failed{};     ///< 失败后不逐帧重复请求。
     };
     std::map<std::string, Entry, std::less<>>
                                      m_entries;  ///< 按 Markdown 目标去重。
     std::vector<std::string>         m_pending;  ///< 有界、尚未开始下载的键。
     std::string                      m_active;   ///< 当前任务键。
     std::future<MarkdownImagePixels> m_future;   ///< 单任务非阻塞交接。
-    std::size_t                      m_bytes{};  ///< 已上传图集总大小。
+    std::size_t                      m_bytes{};  ///< 正文与教程的已上传容量。
+    std::size_t m_previewBytes{};     ///< 独立高清预览容量，不受正文动画挤占。
+    std::size_t m_documentEntries{};  ///< 远程文档图片条目数量。
+    std::string m_previewKey;         ///< 当前放大预览唯一保留的高清键。
+    bool        m_previewReleasePending{};  ///< 关闭或切换预览后等待安全回收。
+    std::string m_walkthroughKey;           ///< 当前教学段落唯一保留的动画键。
+    bool        m_walkthroughReleasePending{};  ///< 切步或退出后等待安全回收。
 };
 /// @brief 创建空图片缓存，不启动网络请求或 GPU 上传。
 MarkdownImageCache::MarkdownImageCache()
@@ -551,15 +622,68 @@ void MarkdownImageCache::prepareDocument(std::string_view markdown)
 /// @warning UI 低频路径：只登记键和排队，真正读盘由线程池完成。
 void MarkdownImageCache::prepareImage(std::string_view destination)
 {
+    const bool walkthrough = validWalkthroughGif(destination);
+    if ( walkthrough && m_impl->m_walkthroughKey != destination ) {
+        // 教程只保留当前段落：切步先登记新身份，再异步回收旧纹理。
+        // 身份更新也使旧后台任务的结果在上传阶段自动失效。
+        m_impl->m_walkthroughKey.assign(destination);
+        m_impl->m_walkthroughReleasePending = true;
+    }
     if ( m_impl->m_entries.contains(destination) ||
-         m_impl->m_entries.size() >= 32U )
+         (!walkthrough && m_impl->m_documentEntries >= 32U) )
         return;
     auto  key   = std::string(destination);
     auto& entry = m_impl->m_entries[key];
     // 本地路径只有受限教程 scheme 可用，远程 Markdown 仍按旧策略解析。
-    entry.m_failed =
-        !validWalkthroughGif(key) && resolveUpdateImageUrl(key).empty();
+    entry.m_failed = !walkthrough && resolveUpdateImageUrl(key).empty();
+    // 教程图片由独立身份管理，不占正文最多 32 张的缓存配额。
+    // 否则长路线反复切步会耗尽配额，后续段落无法再次排队。
+    if ( !walkthrough ) ++m_impl->m_documentEntries;
     if ( !entry.m_failed ) m_impl->m_pending.push_back(std::move(key));
+}
+
+/// @brief 将放大预览登记为独立高清键，保留正文缩略图的显存成本。
+/// @param destination 更新日志中的原始 Markdown 图片目标。
+/// @details 只有 URL 解析通过的目标可进入此分支；内部前缀不传给网络。
+/// 已登记键复用纹理与播放相位，新目标只更新当前预览身份并排队。
+/// @warning 低频 UI 路径：只修改队列，不同步访问网络或 GPU。
+void MarkdownImageCache::preparePreviewImage(std::string_view destination)
+{
+    if ( destination.empty() || resolveUpdateImageUrl(destination).empty() )
+        return;
+    const auto original = m_impl->m_entries.find(destination);
+    // 静态图片已按 1280 像素上限上传；只有动画需要独立高清图集。
+    // 以时长区分来源，短 GIF 即使只采到一帧仍需按动画处理。
+    if ( original != m_impl->m_entries.end() &&
+         !original->second.m_textures.empty() &&
+         original->second.m_layout.duration <= 0.0 )
+        return;
+    auto key = std::string(PREVIEW_IMAGE_PREFIX) + std::string(destination);
+    // 若此前保留的是另一张图，资源准备阶段先归还旧图集预算。
+    if ( m_impl->m_previewKey != key ) m_impl->m_previewReleasePending = true;
+    m_impl->m_previewKey = key;
+    if ( m_impl->m_entries.contains(key) ) return;
+    m_impl->m_entries.emplace(key, Impl::Entry{});
+    // 用户明确打开的高清图优先于尚未开始的正文图片，避免长时间显示缩略帧。
+    // 在途任务仍由原有单任务交接完成，不并行展开多张动画或阻塞 UI。
+    m_impl->m_pending.insert(m_impl->m_pending.begin(), std::move(key));
+}
+
+/// @brief 关闭放大窗口时撤销当前预览请求并安排 GPU 安全回收。
+/// @details 在途后台解码不能中断，但返回后会因键已失效而直接丢弃。
+/// @warning 低频 UI 操作：这里只标记状态，不等待设备或销毁纹理。
+void MarkdownImageCache::releasePreviewImage()
+{
+    m_impl->m_previewKey.clear();
+    m_impl->m_previewReleasePending = true;
+}
+
+/// @brief 结束教学时使当前教程图集失效，留待资源准备阶段安全销毁。
+/// @warning 低频 UI 操作：这里只更新身份，不等待设备或访问文件。
+void MarkdownImageCache::releaseWalkthroughImage()
+{
+    m_impl->m_walkthroughKey.clear();
+    m_impl->m_walkthroughReleasePending = true;
 }
 
 /// @brief 重新进入一个教学阶段时让现有动画从首帧播放。
@@ -567,14 +691,27 @@ void MarkdownImageCache::prepareImage(std::string_view destination)
 void MarkdownImageCache::restartImage(std::string_view destination)
 {
     const auto it = m_impl->m_entries.find(destination);
-    if ( it != m_impl->m_entries.end() && it->second.m_texture )
+    if ( it != m_impl->m_entries.end() && !it->second.m_textures.empty() )
         it->second.m_startTime = ImGui::GetTime();
 }
 /// @brief 启动下一后台图片任务并非阻塞轮询当前任务完成状态。
 /// @return 当前 future 已就绪、需要进入纹理准备阶段时返回 true。
+/// @details 未启动的旧预览和教程任务可直接丢弃；已开始的任务不可取消，
+/// 其结果由 reloadTextures 检查当前身份后决定是否保留。
+/// 普通正文键保持原顺序，不因用户快速切换预览被错误移除。
 /// @warning UI 热路径：不等待任务；至多在队列切换时提交一个线程池工作。
 bool MarkdownImageCache::needReload()
 {
+    // 连续切换时跳过尚未开始的旧任务，不浪费网络与本地解码预算。
+    // 普通文档图片保持原顺序；只有失效的预览或教程键会被移除。
+    while ( !m_impl->m_pending.empty() &&
+            ((m_impl->m_pending.front().starts_with(PREVIEW_IMAGE_PREFIX) &&
+              m_impl->m_pending.front() != m_impl->m_previewKey) ||
+             (m_impl->m_pending.front().starts_with(WALKTHROUGH_GIF_PREFIX) &&
+              m_impl->m_pending.front() != m_impl->m_walkthroughKey)) ) {
+        m_impl->m_entries.erase(m_impl->m_pending.front());
+        m_impl->m_pending.erase(m_impl->m_pending.begin());
+    }
     if ( !m_impl->m_future.valid() && !m_impl->m_pending.empty() ) {
         // 单任务模型防止多个大图同时占用下载和解码内存。
         auto* pool = Runtime::AppThreadPool::instance().get();
@@ -586,26 +723,79 @@ bool MarkdownImageCache::needReload()
         // 本地与远程均在工作线程执行，needReload 继续保持零等待轮询。
         const auto key   = m_impl->m_active;
         m_impl->m_future = pool->enqueue([key]() {
-            return validWalkthroughGif(key)
-                       ? loadWalkthroughGif(key)
-                       : loadUpdateImage(resolveUpdateImageUrl(key));
+            if ( validWalkthroughGif(key) ) return loadWalkthroughGif(key);
+            // 高清键只由预览入口生成；先剥离内部前缀再解析真实 URL。
+            if ( key.starts_with(PREVIEW_IMAGE_PREFIX) ) {
+                return loadUpdateImage(
+                    resolveUpdateImageUrl(std::string_view(key).substr(
+                        PREVIEW_IMAGE_PREFIX.size())),
+                    PREVIEW_GIF_EDGE);
+            }
+            return loadUpdateImage(resolveUpdateImageUrl(key));
         });
     }
     // 零秒 wait_for 只查询状态，不阻塞 UI 线程。
-    return m_impl->m_future.valid() &&
-           m_impl->m_future.wait_for(std::chrono::seconds(0)) ==
-               std::future_status::ready;
+    return m_impl->m_previewReleasePending ||
+           m_impl->m_walkthroughReleasePending ||
+           (m_impl->m_future.valid() &&
+            m_impl->m_future.wait_for(std::chrono::seconds(0)) ==
+                std::future_status::ready);
 }
 /// @brief 消费已完成 CPU 图集并创建对应 Vulkan 纹理。
 /// @param physical Vulkan 物理设备。
 /// @param device Vulkan 逻辑设备。
 /// @param pool 上传命令池。
 /// @param queue 执行上传的 Vulkan 队列。
-/// @warning 低频资源准备路径：仅 future 就绪时分配和上传 GPU 资源。
+/// @details 高清图集可能高于单张 Vulkan 纹理的最低尺寸保证，
+/// 因此沿完整帧行切成多个 4096 像素以内的页，再批量发布描述符。
+/// 每页使用连续的源 RGBA 行，上传完成后立即释放整份 CPU 图集。
+/// 当前帧查询按原图集行号计算页号和页内 UV，不改变动画起播时间。
+/// 旧高清页销毁前必须等待设备空闲，否则在途 ImGui 命令可能仍引用它。
+/// 普通正文图不主动回收，受 192 MiB 预算约束；预览独享 128 MiB。
+/// @warning 低频资源准备路径：仅 future 就绪时分配和上传 GPU 资源；
+/// 用户切换放大图片或教学段落时可能触发一次 device.waitIdle，不得逐帧调用。
 void MarkdownImageCache::reloadTextures(vk::PhysicalDevice& physical,
                                         vk::Device&         device,
                                         vk::CommandPool& pool, vk::Queue& queue)
 {
+    if ( m_impl->m_previewReleasePending ||
+         m_impl->m_walkthroughReleasePending ) {
+        // ImGui 可能仍在消费上一帧描述符，只对真正持有纹理的旧页等待。
+        // 两种缓存同时失效时共用一次等待，避免重复阻塞渲染线程。
+        const auto stale = [this](const auto& item) {
+            return (m_impl->m_previewReleasePending &&
+                    item.first.starts_with(PREVIEW_IMAGE_PREFIX) &&
+                    item.first != m_impl->m_previewKey) ||
+                   (m_impl->m_walkthroughReleasePending &&
+                    item.first.starts_with(WALKTHROUGH_GIF_PREFIX) &&
+                    item.first != m_impl->m_walkthroughKey);
+        };
+        const bool hasOldTexture = std::any_of(
+            m_impl->m_entries.begin(),
+            m_impl->m_entries.end(),
+            [&stale](const auto& item) {
+                return stale(item) && !item.second.m_textures.empty();
+            });
+        if ( hasOldTexture ) (void)device.waitIdle();
+        for ( auto old = m_impl->m_entries.begin();
+              old != m_impl->m_entries.end(); ) {
+            if ( stale(*old) ) {
+                const auto& layout = old->second.m_layout;
+                // 预览与正文分开记账，关闭高清页不能扣减正文已占用的容量。
+                // 未上传的空条目尺寸为零，不会向任一计数器归还额外空间。
+                auto& used = old->first.starts_with(PREVIEW_IMAGE_PREFIX)
+                                 ? m_impl->m_previewBytes
+                                 : m_impl->m_bytes;
+                used -=
+                    static_cast<std::size_t>(layout.width) * layout.height * 4U;
+                old = m_impl->m_entries.erase(old);
+            } else {
+                ++old;
+            }
+        }
+        m_impl->m_previewReleasePending     = false;
+        m_impl->m_walkthroughReleasePending = false;
+    }
     // 防御渲染器提前调用，未完成任务绝不在此等待。
     if ( !m_impl->m_future.valid() ||
          m_impl->m_future.wait_for(std::chrono::seconds(0)) !=
@@ -615,35 +805,95 @@ void MarkdownImageCache::reloadTextures(vk::PhysicalDevice& physical,
     auto       data = m_impl->m_future.get();
     const auto it   = m_impl->m_entries.find(m_impl->m_active);
     if ( it == m_impl->m_entries.end() ) return;
-    auto& entry = it->second;
-    if ( data.pixels.empty() ||
-         data.pixels.size() > MAX_CACHE_BYTES - m_impl->m_bytes ) {
-        // 解码失败或缓存预算不足时永久标记该目标失败。
+    auto&      entry   = it->second;
+    const bool preview = m_impl->m_active.starts_with(PREVIEW_IMAGE_PREFIX);
+    const bool walkthrough =
+        m_impl->m_active.starts_with(WALKTHROUGH_GIF_PREFIX);
+    // 已切换到另一张预览时丢弃迟到的解码结果，不能覆盖最新选择。
+    if ( preview && m_impl->m_active != m_impl->m_previewKey ) {
+        m_impl->m_entries.erase(it);
+        return;
+    }
+    // 教学段落已结束或切换时，同样不能上传迟到的旧动画。
+    if ( walkthrough && m_impl->m_active != m_impl->m_walkthroughKey ) {
+        m_impl->m_entries.erase(it);
+        return;
+    }
+    if ( data.pixels.empty() ) {
+        // 解码失败独立于显存预算；不能把两种原因都当作原图画质不足。
+        // 错误只在任务结果交接时记录，后续每帧查询不重复刷日志。
+        XERROR("更新图片解码失败: {}", m_impl->m_active);
         entry.m_failed = true;
         return;
     }
-    // CPU RGBA 图集作为单张纹理上传，动画帧选择通过 UV 完成。
-    auto texture = std::make_unique<Graphic::VKTexture>(data.pixels.data(),
-                                                        data.width,
-                                                        data.height,
-                                                        physical,
-                                                        device,
-                                                        pool,
-                                                        queue);
-    if ( !texture->isValid() ) {
-        // 无效 GPU 资源不计入预算，也不暴露描述符给渲染器。
+    // 放大图集有独立保留空间，正文已经加载很多 GIF 时也应上传高清帧。
+    // 教程仍沿用正文池；预览池始终只保留当前一张，不能无界增长。
+    auto&      used   = preview ? m_impl->m_previewBytes : m_impl->m_bytes;
+    const auto budget = preview ? MAX_ATLAS_BYTES : MAX_CACHE_BYTES;
+    // used 只在完整上传和安全回收处改变，始终不超过其对应预算。
+    // 两条资源生命周期分支必须使用同一分类，避免减错池造成无符号下溢。
+    if ( data.pixels.size() > budget - used ) {
+        // 预算拒绝只发生一次；保留具体容量，便于区分低清回退和解码失败。
+        XERROR("更新图片图集预算不足: {}，需要 {} 字节，已用 {}，上限 {}",
+               m_impl->m_active,
+               data.pixels.size(),
+               used,
+               budget);
         entry.m_failed = true;
         return;
     }
-    // 先保存描述符与所有权，再累计实际上传字节预算。
-    entry.m_id      = texture->getImTextureID();
-    entry.m_texture = std::move(texture);
-    m_impl->m_bytes += data.pixels.size();
+    // 每页仅包含完整的帧行，避免大图集超过 Vulkan 保证的 4096 像素边长。
+    // 不在同一帧的上下半段分割，当前帧的 UV 始终落在单个纹理中。
+    const unsigned rowsPerPage = MAX_TEXTURE_EDGE / data.frameHeight;
+    const unsigned pageRows    = rowsPerPage * data.frameHeight;
+    std::vector<std::unique_ptr<Graphic::VKTexture>> textures;
+    std::vector<ImTextureID>                         ids;
+    for ( unsigned top = 0U; top < data.height; top += pageRows ) {
+        const unsigned pageHeight = std::min(pageRows, data.height - top);
+        auto           texture    = std::make_unique<Graphic::VKTexture>(
+            data.pixels.data() +
+                static_cast<std::size_t>(top) * data.width * 4U,
+            data.width,
+            pageHeight,
+            physical,
+            device,
+            pool,
+            queue);
+        if ( !texture->isValid() ) {
+            // 已创建的页尚未暴露给绘制，失败时由局部容器自动回收。
+            entry.m_failed = true;
+            return;
+        }
+        ids.push_back(texture->getImTextureID());
+        textures.push_back(std::move(texture));
+    }
+    // 全部页成功后才发布描述符；半张动画不可进入 UI 绘制。
+    // 局部容器先接管每一页，任意上传失败可整体回滚 GPU 所有权。
+    entry.m_ids      = std::move(ids);
+    entry.m_textures = std::move(textures);
+    used += data.pixels.size();
+    // 高清发布后记录实际帧尺寸，避免仅凭弹窗大小判断是否真的加载了原图。
+    if ( preview )
+        XINFO("更新高清预览已上传: {}，帧 {}x{}，{} 帧，{} 字节",
+              m_impl->m_active,
+              data.frameWidth,
+              data.frameHeight,
+              data.frames,
+              data.pixels.size());
     // 上传完成后主动释放大像素容量，只保留轻量帧布局。
     std::vector<unsigned char>().swap(data.pixels);
     entry.m_layout = std::move(data);
     // 每张动画从纹理就绪时开始独立循环计时。
     entry.m_startTime = ImGui::GetTime();
+    if ( preview ) {
+        const auto original = std::string_view(m_impl->m_active)
+                                  .substr(PREVIEW_IMAGE_PREFIX.size());
+        const auto thumb    = m_impl->m_entries.find(original);
+        // 放大切换时与正文缩略动画使用同一相位，避免突然跳回首帧。
+        if ( thumb != m_impl->m_entries.end() &&
+             !thumb->second.m_textures.empty() )
+            entry.m_startTime = thumb->second.m_startTime;
+    }
 }
 /// @brief 查询目标图片当前应显示的纹理、尺寸和 UV。
 /// @param destination 原始 Markdown 图片目标。
@@ -656,7 +906,7 @@ MarkdownImage MarkdownImageCache::findImage(std::string_view destination) const
     if ( it == m_impl->m_entries.end() ) return { .failed = true };
     const auto& entry = it->second;
     // 无纹理且 failed=false 表示任务仍在排队或处理中。
-    if ( !entry.m_texture ) return { .failed = entry.m_failed };
+    if ( entry.m_textures.empty() ) return { .failed = entry.m_failed };
     const auto& layout = entry.m_layout;
     // 动画按 ImGui 单调时间循环，静态图固定使用第零帧。
     const unsigned frame =
@@ -670,17 +920,42 @@ MarkdownImage MarkdownImageCache::findImage(std::string_view destination) const
                       layout.duration * layout.frames))
             : 0U;
     // 帧索引按图集列数转换为左上角像素位置。
+    // 行号再映射到页号；页内高度可能比完整页短，UV 必须用实际高度。
     const float x =
         static_cast<float>((frame % layout.columns) * layout.frameWidth);
+    const unsigned row         = frame / layout.columns;
+    const unsigned rowsPerPage = MAX_TEXTURE_EDGE / layout.frameHeight;
+    const unsigned page        = row / rowsPerPage;
+    const unsigned pageTop     = page * rowsPerPage * layout.frameHeight;
+    const unsigned pageHeight =
+        std::min(rowsPerPage * layout.frameHeight, layout.height - pageTop);
     const float y =
-        static_cast<float>((frame / layout.columns) * layout.frameHeight);
+        static_cast<float>((row % rowsPerPage) * layout.frameHeight);
     // UV 内缩半个像素，减少相邻动画帧双线性采样串色。
-    return { entry.m_id,
+    return { entry.m_ids[page],
              { static_cast<float>(layout.frameWidth),
                static_cast<float>(layout.frameHeight) },
-             { (x + 0.5F) / layout.width, (y + 0.5F) / layout.height },
+             { (x + 0.5F) / layout.width, (y + 0.5F) / pageHeight },
              { (x + layout.frameWidth - 0.5F) / layout.width,
-               (y + layout.frameHeight - 0.5F) / layout.height },
+               (y + layout.frameHeight - 0.5F) / pageHeight },
              false };
+}
+
+/// @brief 放大预览在高清解码和上传完成前沿用已加载的正文帧。
+/// @param destination 当前弹窗对应的原始 Markdown 目标。
+/// @return 高清就绪时返回当前页，否则返回正文缩略帧。
+/// @details 只比较已记录的预览键，避免每帧拼接字符串或创建临时条目。
+/// @warning UI 每帧调用，只进行有序表查询和当前帧 UV 计算。
+MarkdownImage MarkdownImageCache::findPreviewImage(
+    std::string_view destination) const
+{
+    const auto key = std::string_view(m_impl->m_previewKey);
+    if ( key.starts_with(PREVIEW_IMAGE_PREFIX) &&
+         key.substr(PREVIEW_IMAGE_PREFIX.size()) == destination ) {
+        const auto it = m_impl->m_entries.find(key);
+        if ( it != m_impl->m_entries.end() && !it->second.m_textures.empty() )
+            return findImage(key);
+    }
+    return findImage(destination);
 }
 }  // namespace MMM::UI

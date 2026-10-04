@@ -622,6 +622,9 @@ Json encodeTimelines(const ::MMM::BeatMap& beatmap)
             { "effect", static_cast<std::uint32_t>(timing.m_timingEffect) },
             { "value", timing.m_timingEffectParameter },
             { "metadata", encodeTimingMetadata(timing.m_metadata) },
+            { "interpolation",
+              timing.m_interpolation ? Json(*timing.m_interpolation)
+                                     : Json(nullptr) },
         });
     }
     return result;
@@ -884,6 +887,19 @@ bool decodeTimelines(const Json& source, ::MMM::BeatMap& beatmap)
         }
         // 仅在全部字段及元数据成功后提交已校验的效果枚举。
         timing.m_timingEffect = static_cast<::MMM::TimingEffect>(effect);
+        // 原生段落随协作时间线传递，不能退化为只剩起始点。
+        if ( const auto interpolation = entry.find("interpolation");
+             interpolation != entry.end() && !interpolation->is_null() ) {
+            // 联机快照和单人文件共享曲线定义，协议不展开输出采样。
+            // 拒绝非法段落，避免对端状态进入排序或播放热路径后才失败。
+            auto decoded = ::MMM::readTimingInterpolation(*interpolation);
+            if ( !decoded || !::MMM::isValidTimingInterpolation(
+                                 *decoded,
+                                 timing.m_timingEffect,
+                                 timing.m_timingEffectParameter) )
+                return false;
+            timing.m_interpolation = std::move(decoded);
+        }
     }
     return true;
 }
@@ -2098,6 +2114,146 @@ BeatmapDocumentCodec::cloneDocument() const
     clone->m_impl->document    = m_impl->document;
     clone->m_impl->hasDocument = true;
     return clone;
+}
+
+/// @brief 从当前文档计算恢复历史文档所需的最小分类补丁。
+/// @param target 历史恢复目标。
+/// @param flags 原编辑触及的类别。
+/// @return 无变化或编码失败时返回空。
+/// @details 房主分别以编辑前、编辑后文档调用此函数，得到前向和反向
+///         两份补丁。只要求本次声明的类别进入增量，避免撤回时把其他
+///         成员随后新增的无关对象一起恢复成旧快照。
+///         线格式仍使用普通文档负载编码，因此补偿可以沿已有权威
+///         修订通道传播，不需要独立的谱面应用器。
+/// @warning 房主后台消费者的低频历史路径；不得从每帧渲染调用。
+std::optional<ByteBuffer> BeatmapDocumentCodec::makeHistoryDeltaTo(
+    const BeatmapDocumentCodec& target, ::MMM::BeatmapMutationFlags flags) const
+{
+    if ( !m_impl->hasDocument || !target.m_impl->hasDocument ) {
+        // 初始快照之前没有可恢复基线，不能生成伪空补丁。
+        return std::nullopt;
+    }
+    // 不传强制对象集合，保证草稿和正式对象按实际前后差异进入补丁。
+    auto patch = makeIncrementalPatch(
+        m_impl->document, target.m_impl->document, flags, std::nullopt);
+    if ( !patch ) return std::nullopt;
+    // 预算由房主持有历史的队列校验，此处只保证负载本身可编码。
+    auto encoded = encodeDocumentPayload(*patch);
+    if ( !encoded ) return std::nullopt;
+    return std::move(*encoded);
+}
+
+/// @brief 验证撤回或重做没有覆盖随后对同一值的编辑。
+/// @param payload 将要提交的恢复补丁。
+/// @param oppositePayload 反向补丁，其元数据目标就是本补丁预期的源状态。
+/// @return 受影响的稳定身份和值仍与历史源状态一致时返回 true。
+/// @details 补偿不是盲目把整张谱面还原到旧版本。此校验只检查补丁要删除
+///         或替换的当前值，容许其他成员后来增加互不相关的物件。
+///         已经被后续编辑改动的同 ID 对象必须拒绝恢复，以免丢失新工作。
+///
+/// @par 类别差异
+/// metadata 仍采用整对象替换，所以任一元数据字段后续变化均视为冲突。
+/// objects 和 annotations 有稳定协作 ID，按 ID 与完整值验证。
+/// timelines 与 audio_samples 的增量不总能可靠辨认原始所有权，
+/// 因而以值和重复次数校验；当待恢复的相同值已存在时保守拒绝。
+///
+/// @par 失败语义
+/// 解码失败、缺少必要增量结构和文档未初始化均返回 false。
+/// 失败只阻止房主提交补偿修订，不回滚或改变当前权威文档。
+/// @warning 房主后台历史请求路径；本函数会扫描受影响类别数组。
+bool BeatmapDocumentCodec::matchesHistoryDeltaSource(
+    std::span<const std::uint8_t> payload,
+    std::span<const std::uint8_t> oppositePayload) const
+{
+    if ( !m_impl->hasDocument ) return false;
+    const auto decoded  = decodeDocumentPayload(payload);
+    const auto opposite = decodeDocumentPayload(oppositePayload);
+    if ( !decoded || !opposite || !decoded->is_object() ||
+         !opposite->is_object() ) {
+        // 两个方向必须来自同一原始编辑，单边损坏不能进行源值匹配。
+        return false;
+    }
+    // 元数据使用整对象替换；只在当前值等于原操作写入值时允许恢复。
+    if ( decoded->contains("metadata") &&
+         (!opposite->contains("metadata") ||
+          m_impl->document.value("metadata", Json{}) !=
+              opposite->at("metadata")) ) {
+        return false;
+    }
+    const auto matchesArray = [&](std::string_view category,
+                                  std::string_view deltaKey,
+                                  bool             identityAddressed) {
+        const auto delta = decoded->find(deltaKey);
+        // 本操作没有触及的类别不参与冲突判断。
+        if ( delta == decoded->end() ) return true;
+        const auto current = m_impl->document.find(category);
+        if ( current == m_impl->document.end() || !current->is_array() ||
+             !delta->is_object() || !delta->contains("removed") ||
+             !delta->contains("added") || !delta->at("removed").is_array() ||
+             !delta->at("added").is_array() ) {
+            // 分类字段畸形时不能依据部分列表恢复。
+            return false;
+        }
+        if ( identityAddressed ) {
+            // 同 ID 的旧值必须逐字段相等；纯新增则要求 ID 尚未被别人占用。
+            for ( const auto& value : delta->at("removed") ) {
+                // removed 表示本次补偿会改写的当前源值。
+                const auto* id = collaborationIdentity(value);
+                if ( !id ) return false;
+                const auto found = std::find_if(
+                    current->begin(), current->end(), [id](const Json& item) {
+                        const auto* itemId = collaborationIdentity(item);
+                        return itemId && *itemId == *id;
+                    });
+                if ( found == current->end() || *found != value ) return false;
+            }
+            for ( const auto& value : delta->at("added") ) {
+                // 纯新增不能覆盖后来由他人占用的同一稳定身份。
+                const auto* id = collaborationIdentity(value);
+                if ( !id ) return false;
+                const auto wasRemoved = std::any_of(
+                    delta->at("removed").begin(),
+                    delta->at("removed").end(),
+                    [id](const Json& item) {
+                        const auto* itemId = collaborationIdentity(item);
+                        return itemId && *itemId == *id;
+                    });
+                // 被本补丁替换的 ID 已在 removed 分支验证，无需再次查不存在。
+                if ( wasRemoved ) continue;
+                const auto exists = std::any_of(
+                    current->begin(), current->end(), [id](const Json& item) {
+                        const auto* itemId = collaborationIdentity(item);
+                        return itemId && *itemId == *id;
+                    });
+                if ( exists ) return false;
+            }
+            return true;
+        }
+        // 无稳定 ID 的时间线和样本按完整值的多重集计数校验。
+        for ( const auto& value : delta->at("removed") ) {
+            // 重复值必须至少有相同数量的当前副本，不能只判断存在性。
+            const auto required = std::count(delta->at("removed").begin(),
+                                             delta->at("removed").end(),
+                                             value);
+            if ( std::count(current->begin(), current->end(), value) <
+                 required ) {
+                return false;
+            }
+        }
+        // 重建已删除的值时，已有同值副本的归属不可区分，保守拒绝。
+        for ( const auto& value : delta->at("added") ) {
+            // 缺少稳定 ID 时，同值副本来源无法区分，宁可阻止模糊恢复。
+            if ( std::find(current->begin(), current->end(), value) !=
+                 current->end() ) {
+                return false;
+            }
+        }
+        return true;
+    };
+    return matchesArray("objects", "objects_delta", true) &&
+           matchesArray("annotations", "annotations_delta", true) &&
+           matchesArray("timelines", "timelines_delta", false) &&
+           matchesArray("audio_samples", "audio_samples_delta", false);
 }
 
 std::optional<std::vector<std::string>>

@@ -31,6 +31,9 @@ createAlignSelectedToCommonBeatsAction();
 std::unique_ptr<IMainMenuItemActionHandler>
 createOpenBeatmapSpeedExportAction();
 
+/// @brief 创建时间点模板工具入口，选区捕获在工具窗口内部完成。
+std::unique_ptr<IMainMenuItemActionHandler> createOpenTimingTemplateAction();
+
 /// @brief 创建打开插件列表窗口动作处理器。
 std::unique_ptr<IMainMenuItemActionHandler> createOpenPluginListAction();
 

@@ -20,20 +20,24 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/timing/BpmNormalization.h"
+#include "mmm/timing/TimingTemplate.h"
 #include "runtime/AppThreadPool.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <fmt/format.h>
 #include <ice/thread/ThreadPool.hpp>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 /**
@@ -254,6 +258,8 @@ struct ClipboardBeatTimelinePoint {
     double timestamp{ 0.0 };  ///< BPM 时间点，单位秒
     double bpm{ 120.0 };      ///< 当前段 BPM
     double beat{ 0.0 };       ///< 该时间点对应的连续拍数
+    /// @brief 拍位换算保留原 BPM 曲线，不使用写出采样近似。
+    std::optional<TimingInterpolation> interpolation;
 };
 
 /// @brief 复制粘贴分拍换算用的连续 BPM 时间线。
@@ -294,6 +300,10 @@ double sanitizeClipboardBpm(double bpm, double fallbackBpm)
 /// @param fallbackBpm BPM 无效时使用的默认 BPM。
 /// @return 按时间排序的 BPM/beat 锚点列表。
 /// @warning 低频编辑路径：复制或按分拍粘贴时调用，允许在 BPM 脏时重建缓存。
+/// @note 每个点保存原函数定义，快照只在当前复制或粘贴事务中使用。
+/// @note 输出样本不是拍位锚点，段内累计拍数必须来自曲线积分。
+/// @note 段尾之后继承终 BPM，直到下一个真实 BPM 定义接替。
+/// @note 不保存 BPM 指针，构建后使用值副本避免 registry 变化影响查询。
 ClipboardBeatTimeline buildClipboardBeatTimeline(SessionContext& ctx,
                                                  double          fallbackBpm)
 {
@@ -309,7 +319,8 @@ ClipboardBeatTimeline buildClipboardBeatTimeline(SessionContext& ctx,
         const double bpm = sanitizeClipboardBpm(event->m_value, fallbackBpm);
         if ( timeline.empty() ) {
             // 第一段定义连续拍零点；其时间可以不是歌曲零秒。
-            timeline.push_back({ event->m_timestamp, bpm, 0.0 });
+            timeline.push_back(
+                { event->m_timestamp, bpm, 0.0, event->m_interpolation });
             continue;
         }
 
@@ -317,8 +328,14 @@ ClipboardBeatTimeline buildClipboardBeatTimeline(SessionContext& ctx,
         // 使用上一段 BPM 对两个事件之间的秒差积分，得到新段起点累计拍数。
         const double beat =
             previous.beat +
-            (event->m_timestamp - previous.timestamp) * previous.bpm / 60.0;
-        timeline.push_back({ event->m_timestamp, bpm, beat });
+            timelineBeatsAt(TimelineComponent{ previous.timestamp,
+                                               TimingEffect::BPM,
+                                               previous.bpm,
+                                               {},
+                                               previous.interpolation },
+                            event->m_timestamp);
+        timeline.push_back(
+            { event->m_timestamp, bpm, beat, event->m_interpolation });
     }
     return timeline;
 }
@@ -348,7 +365,14 @@ double clipboardTimeToBeat(const ClipboardBeatTimeline& timeline,
         });
     // upper_bound 找到首个更晚段；时间位于首段前时向前线性外推。
     const auto& point = it == timeline.begin() ? timeline.front() : *(it - 1);
-    return point.beat + (timestamp - point.timestamp) * point.bpm / 60.0;
+    // 复制锚点用连续积分，来源曲线的输出密度不影响相对拍数。
+    return point.beat +
+           timelineBeatsAt(TimelineComponent{ point.timestamp,
+                                              TimingEffect::BPM,
+                                              point.bpm,
+                                              {},
+                                              point.interpolation },
+                           timestamp);
 }
 
 /// @brief 将连续 beat 位置转换为秒时间。
@@ -376,7 +400,13 @@ double clipboardBeatToTime(const ClipboardBeatTimeline& timeline, double beat,
         });
     // 连续拍数单调递增，可采用与时间查询对称的上界搜索定位分段。
     const auto& point = it == timeline.begin() ? timeline.front() : *(it - 1);
-    return point.timestamp + (beat - point.beat) * 60.0 / point.bpm;
+    // 目标曲线以同一个累计拍数反解，粘贴落点与画布拍网格一致。
+    return timelineTimeAtBeat(TimelineComponent{ point.timestamp,
+                                                 TimingEffect::BPM,
+                                                 point.bpm,
+                                                 {},
+                                                 point.interpolation },
+                              beat - point.beat);
 }
 
 /// @brief 为剪贴板条目记录复制瞬间的 beat 位置。
@@ -764,6 +794,115 @@ bool isValidTimelineValue(::MMM::TimingEffect effect, double value)
            (effect != ::MMM::TimingEffect::BPM || value >= 0.0);
 }
 
+/// @brief 判定两个已校验时间点是否占用同效果的互斥区间。
+/// @details 普通点不占长度，段首和段尾允许另一个独立状态锚点。
+/// @note 两段完全同起点也属于重叠，不能只检查端点是否在内部。
+/// @note 统一服务单项、批量创建和批量更新，避免不同入口拥有不同规则。
+/// @warning 编辑提交低频路径，只进行常量级区间计算。
+bool timelineRangesConflict(const TimelineComponent& left,
+                            const TimelineComponent& right)
+{
+    if ( left.m_effect != right.m_effect ) return false;
+    const double leftEnd =
+        left.m_timestamp +
+        (left.m_interpolation ? left.m_interpolation->m_duration : 0.0);
+    const double rightEnd =
+        right.m_timestamp +
+        (right.m_interpolation ? right.m_interpolation->m_duration : 0.0);
+    // 普通点与段落内部互斥，但边界不阻挡两个段落接续。
+    if ( left.m_interpolation && right.m_timestamp > left.m_timestamp + 1e-9 &&
+         right.m_timestamp < leftEnd - 1e-9 )
+        return true;
+    if ( right.m_interpolation && left.m_timestamp > right.m_timestamp + 1e-9 &&
+         left.m_timestamp < rightEnd - 1e-9 )
+        return true;
+    // 包含关系同样拒绝，区间交集必须为空或仅为共同端点。
+    return left.m_interpolation && right.m_interpolation &&
+           std::min(leftEnd, rightEnd) -
+                   std::max(left.m_timestamp, right.m_timestamp) >
+               1e-9;
+}
+
+/// @brief 在编辑提交边界使用当前红线重建节拍定义，拒绝过期 UI 映射。
+/// @param context 拥有权威时间线的会话，调用方已经处于逻辑编辑路径。
+/// @param candidate 独立的新值，失败时不执行任何撤销动作。
+/// @warning 用户命令低频入口会复制 BPM 字段，禁止放入每帧展示查询。
+// 窗口打开后协作编辑可能改变 BPM，提交不能信任旧 UI 域。
+// 源组件由会话同步约束保护，借用仅存活于本次命令。
+// 只修改候选，失败不执行动作，不改写原注册表。
+// 拍域终值按当前红线准备，不直接沿用旧工作副本缓存。
+// 撤销保留完整 before/after，映射不能拆成独立事务。
+// 普通点和秒域事件不遍历红线，保持原成本边界。
+// 最后范围和数学合法性仍交给 canPlace 检查。
+bool prepareTimelineBeatInterpolation(const SessionContext& context,
+                                      TimelineComponent&    candidate)
+{
+    if ( !candidate.m_interpolation ||
+         candidate.m_interpolation->m_variable != TimingVariable::Beat )
+        return true;
+    std::vector<Timing> redLines;
+    // 时间戳只在 ECS 与领域模型边界转换一次，不混用毫秒与秒。
+    const auto view = context.timelineRegistry.view<const TimelineComponent>();
+    for ( auto entity : view ) {
+        const auto& item = view.get<const TimelineComponent>(entity);
+        if ( item.m_effect != TimingEffect::BPM ) continue;
+        Timing timing;
+        timing.m_timestamp             = item.m_timestamp * 1000;
+        timing.m_timingEffectParameter = item.m_value;
+        timing.m_bpm                   = item.m_value;
+        timing.m_interpolation         = item.m_interpolation;
+        redLines.push_back(std::move(timing));
+    }
+    const double fallback =
+        context.currentBeatmap &&
+                context.currentBeatmap->m_baseMapMetadata.preference_bpm > 0
+            ? context.currentBeatmap->m_baseMapMetadata.preference_bpm
+            : 120;
+    // 绑定只修改候选副本，源组件和旧撤销记录的缓存保持不可变。
+    return bindTimingInterpolationBeatAxis(
+        *candidate.m_interpolation, candidate.m_timestamp, redLines, fallback);
+}
+
+/// @brief 校验插值段落和同类型时间点的互斥范围。
+/// @details 起终边界可相接，内部不能包含同类型普通点或另一段落。
+///           UI 只作提示，逻辑入口重新验证，避免排队期间谱面变化使旧校验失效。
+/// @warning 低频编辑提交路径；遍历时间线，不用于悬停或逐帧绘制。
+// 候选值已经通过该效果的基本数值校验，这里只处理时间与范围。
+// excluded 是正在更新的实体，excludedBatch 是整批最终状态替换集合。
+// 单项提交与批量提交均复用同一规则，不能通过粘贴绕过重叠约束。
+// 更新自己的曲线时排除旧范围，保证缩短或扩大范围不会自冲突。
+// 终点的有限性单独检查，因为两个有限数之和仍可能溢出。
+bool canPlaceTimelineInterpolation(
+    const entt::registry& registry, const TimelineComponent& candidate,
+    entt::entity                            excluded      = entt::null,
+    const std::unordered_set<entt::entity>* excludedBatch = nullptr)
+{
+    if ( !std::isfinite(candidate.m_timestamp) ) return false;
+    if ( candidate.m_interpolation &&
+         (candidate.m_timestamp < 0.0 ||
+          !::MMM::isValidTimingInterpolation(*candidate.m_interpolation,
+                                             candidate.m_effect,
+                                             candidate.m_value)) )
+        return false;
+    const double end =
+        candidate.m_timestamp + (candidate.m_interpolation
+                                     ? candidate.m_interpolation->m_duration
+                                     : 0.0);
+    // 有限起点与时长相加仍可能溢出；区间运算之前单独验证终点。
+    if ( !std::isfinite(end) ) return false;
+    auto view = registry.view<const TimelineComponent>();
+    for ( auto entity : view ) {
+        // 批量更新的旧组件暂不参与冲突，调用方随后检查所有新组件之间的关系。
+        if ( entity == excluded ||
+             (excludedBatch && excludedBatch->contains(entity)) )
+            continue;
+        if ( timelineRangesConflict(candidate,
+                                    view.get<const TimelineComponent>(entity)) )
+            return false;
+    }
+    return true;
+}
+
 /// @brief 归一化批量替换后的 Timeline 列表。
 /// @param timelines 来自命令或权威谱面的未校验组件列表。
 /// @return 删除非法项、稳定排序并合并同时间 BPM 后的列表。
@@ -777,7 +916,12 @@ std::vector<TimelineComponent> normalizeReplacementTimelines(
     std::erase_if(timelines, [](const auto& timeline) {
         // 批量替换同样经过统一数值约束，防止绕过普通编辑命令。
         return !std::isfinite(timeline.m_timestamp) ||
-               !isValidTimelineValue(timeline.m_effect, timeline.m_value);
+               !isValidTimelineValue(timeline.m_effect, timeline.m_value) ||
+               (timeline.m_interpolation &&
+                (timeline.m_timestamp < 0.0 ||
+                 !isValidTimingInterpolation(*timeline.m_interpolation,
+                                             timeline.m_effect,
+                                             timeline.m_value)));
     });
 
     std::stable_sort(
@@ -1055,7 +1199,8 @@ std::vector<TimelineComponent> makeTimelineComponentsFromBeatMap(
             timeline.m_value =
                 ::MMM::normalizeBpmValue(timeline.m_value, timing.m_bpm);
         }
-        timeline.m_metadata = timing.m_metadata;
+        timeline.m_metadata      = timing.m_metadata;
+        timeline.m_interpolation = timing.m_interpolation;
         timelines.push_back(std::move(timeline));
     }
     return normalizeReplacementTimelines(std::move(timelines));
@@ -3021,6 +3166,18 @@ void ActionController::handleCommand(const CmdPaste& cmd)
             }
 
             newTimeline.m_timestamp = std::max(0.0, targetTime);
+            // 全局快捷键粘贴复用范围规则，不能绕过画布和表格的段落校验。
+            // 既检查原 registry，也检查本批尚未创建的条目。
+            if ( !canPlaceTimelineInterpolation(m_ctx.timelineRegistry,
+                                                newTimeline) ||
+                 std::any_of(timelineEntries.begin(),
+                             timelineEntries.end(),
+                             [&](const auto& planned) {
+                                 return planned.after &&
+                                        timelineRangesConflict(newTimeline,
+                                                               *planned.after);
+                             }) )
+                continue;
             // 负目标时间按零夹取；非法值则已在上方过滤，不加入部分动作。
             timelineEntries.push_back(
                 { entt::null, std::nullopt, newTimeline });
@@ -3064,6 +3221,14 @@ void ActionController::handleCommand(const CmdUpdateTimelineEvent& cmd)
         auto newTl        = oldTl;
         newTl.m_timestamp = cmd.newTime;
         newTl.m_value     = cmd.newValue;
+        // 段落更新使用已有时间线动作，before 和 after 均拥有完整值副本。
+        // 曲线函数、控制点、采样率或终点变化都必须进入同一撤销记录。
+        if ( cmd.interpolationOverride )
+            newTl.m_interpolation = cmd.interpolationOverride;
+        if ( !prepareTimelineBeatInterpolation(m_ctx, newTl) ||
+             !canPlaceTimelineInterpolation(
+                 m_ctx.timelineRegistry, newTl, cmd.entity) )
+            return;
         if ( cmd.metadataOverride ) {
             // 显式覆盖代表调用方已经提供与新时间一致的格式私有元数据。
             newTl.m_metadata = *cmd.metadataOverride;
@@ -3080,7 +3245,11 @@ void ActionController::handleCommand(const CmdUpdateTimelineEvent& cmd)
 }
 
 /// @brief 批量更新多个既有 Timeline 事件。
-/// @param cmd 多个独立目标及其新时间、值和可选元数据。
+/// @param cmd 多个独立目标及其新时间、值、可选元数据和段落覆盖。
+/// @note 整批范围检查针对所有最终值，排除即将被替换的旧组件。
+/// @note 未变化条目仍属于既有约束，不能从冲突检查中无条件排除。
+/// @note 已失效条目可以跳过，段落范围冲突则拒绝整批有效更新。
+/// @note 每个有效条目保存自己的完整旧值，撤销不依赖再次求曲线样本。
 /// @details 失效或非法条目逐项跳过，其余变化合并为一次撤销动作。
 /// @note 时间和值在极小容差内相同且无元数据覆盖的条目视为无操作。
 void ActionController::handleCommand(const CmdUpdateTimelineEvents& cmd)
@@ -3108,6 +3277,12 @@ void ActionController::handleCommand(const CmdUpdateTimelineEvents& cmd)
         auto newTimeline        = oldTimeline;
         newTimeline.m_timestamp = update.newTime;
         newTimeline.m_value     = update.newValue;
+        // 未提供段落替换时只修改原事件的时间与首值，原曲线定义完整保留。
+        // 提供替换时一次性复制全部曲线字段，不逐个字段制造独立撤销操作。
+        if ( update.interpolationOverride )
+            newTimeline.m_interpolation = update.interpolationOverride;
+        if ( !prepareTimelineBeatInterpolation(m_ctx, newTimeline) ) return;
+
         if ( update.metadataOverride ) {
             newTimeline.m_metadata = *update.metadataOverride;
         } else if ( std::abs(newTimeline.m_timestamp -
@@ -3119,7 +3294,8 @@ void ActionController::handleCommand(const CmdUpdateTimelineEvents& cmd)
             std::abs(newTimeline.m_timestamp - oldTimeline.m_timestamp) >
                 1e-12 ||
             std::abs(newTimeline.m_value - oldTimeline.m_value) > 1e-12;
-        if ( !coreFieldsChanged && !update.metadataOverride ) {
+        if ( !coreFieldsChanged && !update.metadataOverride &&
+             !update.interpolationOverride ) {
             // 时间和值均相同且没有私有元数据替换时不产生空动作条目。
             continue;
         }
@@ -3130,6 +3306,25 @@ void ActionController::handleCommand(const CmdUpdateTimelineEvents& cmd)
     if ( entries.empty() ) {
         return;
     }
+    // 以整批最终状态验证，相邻段一起平移时不能拿旧位置误判重叠。
+    // 只排除实际要更新的实体，无效或无变化条目仍作为现有约束。
+    // 排除集合仅包含真正提交的更新条目，不放宽对未更新实体的约束。
+    // 将所有最终范围检查完再执行，后续失败不能留下半批已移动结果。
+    // 单个命令仍保留对排队期间已删除实体的跳过行为。
+    std::unordered_set<entt::entity> excluded;
+    for ( const auto& entry : entries ) excluded.insert(entry.entity);
+    for ( std::size_t index = 0; index < entries.size(); ++index ) {
+        if ( !canPlaceTimelineInterpolation(m_ctx.timelineRegistry,
+                                            *entries[index].after,
+                                            entries[index].entity,
+                                            &excluded) )
+            return;
+        for ( std::size_t previous = 0; previous < index; ++previous )
+            if ( timelineRangesConflict(*entries[index].after,
+                                        *entries[previous].after) )
+                return;
+    }
+    // 全部校验通过后才执行一次事务，失败不会留下局部移动结果。
     auto action = std::make_unique<BatchTimelineAction>(
         std::move(entries), "Batch Timeline Update");
     m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
@@ -3214,6 +3409,199 @@ void ActionController::handleCommand(const CmdUpdateBpmWithKeepSpeedSv& cmd)
     m_ctx.isBpmEventsDirty = true;
 }
 
+/// @brief 为选中红线按预设 BPM 批量生成恒定画布速度的普通 SV。
+/// @param cmd 当前会话实体集合，允许包含重复、失效或其他类型的选择。
+/// @details 比例使用当前谱面元数据，避免 UI 快照过期后写入错误补偿值。
+/// 同位置普通 SV 保留格式元数据，红线不修改，全部修改一次撤销。
+/// @warning 用户点击的低频编辑入口；只扫描一次 SCROLL，并排序临时索引。
+/// 禁止从每帧更新调用，也不能逐条调用单项联动命令重复扫描或拆散撤销。
+/// @note 未选中的旧绿线维持原状，本命令不合并或删除其他时间上的速度变化。
+void ActionController::handleCommand(const CmdKeepSpeedForBpmEvents& cmd)
+{
+    // 排队期间可能开始播放或关闭谱面，执行边界再次检查当前状态。
+    if ( m_ctx.isPlaying || !m_ctx.currentBeatmap || cmd.bpmEntities.empty() )
+        return;
+    // 预设 BPM 与画布积分使用同一规范范围，非法历史配置不会导致零除。
+    // 读取逻辑端当前元数据，选择与提交之间的预设修改立即生效。
+    // 操作只生成补偿倍率，不改写谱面的预设值。
+    const double referenceBpm = normalizeBpmValue(
+        m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm);
+    auto& registry = m_ctx.timelineRegistry;
+
+    /// @brief 本次提交的时间索引，仅借用 Registry 中稳定的实体句柄。
+    struct IndexedTiming {
+        /// @brief 秒时间用于排序、去重和附近绿线查找。
+        double time;
+        /// @brief 候选实体，组件在生成动作快照时再读取。
+        entt::entity entity;
+    };
+    // 句柄不持有组件所有权，本次动作执行前不会销毁或重排 Registry。
+    // 不缓存组件地址到撤销栈，before/after 在下面按值构造。
+    std::vector<IndexedTiming>       targets;
+    std::unordered_set<entt::entity> seen;
+    targets.reserve(cmd.bpmEntities.size());
+    for ( const auto entity : cmd.bpmEntities ) {
+        // 选择来源可以混合类型；失效句柄不能进入组件访问。
+        if ( !seen.insert(entity).second || !registry.valid(entity) ||
+             !registry.all_of<TimelineComponent>(entity) )
+            continue;
+        const auto& bpm = registry.get<TimelineComponent>(entity);
+        // 一个固定 SV 无法抵消连续变化的 BPM；零值也无法进行除法补偿。
+        if ( bpm.m_effect != ::MMM::TimingEffect::BPM || bpm.m_interpolation ||
+             !std::isfinite(bpm.m_timestamp) || bpm.m_timestamp < 0.0 ||
+             !std::isfinite(bpm.m_value) || bpm.m_value <= 0.0 )
+            continue;
+        // 时间单位保持秒，写回模型时由同步路径转换成毫秒。
+        // 不能从显示文本解析时间，以免视觉偏移参与补偿定位。
+        targets.push_back({ bpm.m_timestamp, entity });
+    }
+    // 无合格红线时不扫描绿线，混合无效选择没有编辑副作用。
+    // 不要为了展示刷新而压入空动作或制造未保存状态。
+    if ( targets.empty() ) return;
+
+    // 时间相同的红线按实体顺序决定覆盖结果，与已有联动入口保持一致。
+    const auto orderByTime = [](const IndexedTiming& left,
+                                const IndexedTiming& right) {
+        return left.time != right.time ? left.time < right.time
+                                       : entt::to_integral(left.entity) <
+                                             entt::to_integral(right.entity);
+    };
+    // 排序用严格大小关系，容差仅用于分组，避免破坏严格弱序。
+    // 选择集合遍历顺序不稳定，排序确保批次结果可重复。
+    std::sort(targets.begin(), targets.end(), orderByTime);
+    std::vector<IndexedTiming> scrolls;
+    const auto                 view = registry.view<const TimelineComponent>();
+    for ( const auto entity : view ) {
+        const auto& timing = view.get<const TimelineComponent>(entity);
+        // 只建立绿线索引，不复制不相关的红线、Jump 或 HS 组件。
+        if ( timing.m_effect == ::MMM::TimingEffect::SCROLL &&
+             std::isfinite(timing.m_timestamp) )
+            scrolls.push_back({ timing.m_timestamp, entity });
+    }
+    std::sort(scrolls.begin(), scrolls.end(), orderByTime);
+
+    // 前缀最大段尾支持对数时间判断段内冲突，也能防御旧谱面中重叠的段落。
+    // 普通点不贡献区间；不在每个目标处重新遍历全部插值段。
+    // 索引和段尾数组一一对应，二分结果可直接访问此前所有段的最远终点。
+    // 段尾严格在目标之后才视为冲突，允许在曲线结束处恢复固定速度。
+    // 维护最大值而非仅看邻近一段，可以兼容尚未消除重叠的旧资源。
+    std::vector<double> segmentEnds;
+    segmentEnds.reserve(scrolls.size());
+    double furthestEnd = -std::numeric_limits<double>::infinity();
+    for ( const auto& item : scrolls ) {
+        const auto& timing = registry.get<TimelineComponent>(item.entity);
+        if ( timing.m_interpolation )
+            furthestEnd = std::max(
+                furthestEnd, item.time + timing.m_interpolation->m_duration);
+        segmentEnds.push_back(furthestEnd);
+    }
+
+    std::vector<BatchTimelineAction::Entry> entries;
+    std::unordered_set<entt::entity>        usedScrolls;
+    // 规划规模至多为有效选择数，不按全表大小复制完整组件。
+    // 原 Registry 在规划期间保持未修改，索引一直有效。
+    entries.reserve(targets.size());
+    // 匹配窗口沿用单条联动的微秒容差，兼容格式换算产生的舍入差。
+    // usedScrolls 保证一条旧绿线在整批 before/after 中最多出现一次。
+    // 两个目标的窗口可能相交，后一个目标此时应创建独立点。
+    constexpr double MATCH_TOLERANCE = 1e-6;
+    for ( std::size_t index = 0; index < targets.size(); ) {
+        auto         target     = targets[index++];
+        const double groupStart = target.time;
+        // 近似同时间的选择合并成一个补偿点，重复点击不持续堆积绿线。
+        while ( index < targets.size() &&
+                targets[index].time - groupStart <= MATCH_TOLERANCE ) {
+            if ( entt::to_integral(targets[index].entity) >
+                 entt::to_integral(target.entity) )
+                target = targets[index];
+            ++index;
+        }
+        // 仅查询目标之前起始的曲线，段首不算段内，随后另行保护其定义。
+        // 这里不修改实体，候选跳过不会留下半个动作。
+        const auto interior =
+            std::lower_bound(scrolls.begin(),
+                             scrolls.end(),
+                             target.time - 1e-9,
+                             [](const IndexedTiming& item, double time) {
+                                 return item.time < time;
+                             });
+        if ( interior != scrolls.begin() &&
+             segmentEnds[static_cast<std::size_t>(interior - scrolls.begin() -
+                                                  1)] > target.time + 1e-9 ) {
+            // 不向现有 SV 段内部插入普通点，否则会破坏时间线区间互斥约束。
+            continue;
+        }
+        // 画布按规范化 BPM 积分，越界红线也须使用同一有效 BPM 来求倍率。
+        // 保留红线原值，只对补偿计算规范化，避免修正原始数据。
+        // 倍率再次验证有限与正值，错误结果不能进入动作栈。
+        const double scrollValue =
+            referenceBpm /
+            normalizeBpmValue(
+                registry.get<TimelineComponent>(target.entity).m_value);
+        if ( !std::isfinite(scrollValue) || scrollValue <= 0.0 ) continue;
+
+        entt::entity companion      = entt::null;
+        bool         touchesSegment = false;
+        auto         candidate =
+            std::lower_bound(scrolls.begin(),
+                             scrolls.end(),
+                             target.time - MATCH_TOLERANCE,
+                             [](const IndexedTiming& item, double time) {
+                                 return item.time < time;
+                             });
+        for ( ; candidate != scrolls.end() &&
+                candidate->time <= target.time + MATCH_TOLERANCE;
+              ++candidate ) {
+            // 保留已有插值段，不能用一键操作静默删掉曲线定义。
+            touchesSegment |= registry.get<TimelineComponent>(candidate->entity)
+                                  .m_interpolation.has_value();
+            if ( !usedScrolls.contains(candidate->entity) &&
+                 (companion == entt::null ||
+                  entt::to_integral(candidate->entity) >
+                      entt::to_integral(companion)) )
+                companion = candidate->entity;
+        }
+        // 附近段首已含完整曲线，普通补偿不能覆盖或新建重复段首。
+        // 跳过仅影响该目标，其余普通红线仍以同一批次完成。
+        if ( touchesSegment ) continue;
+        if ( companion == entt::null ) {
+            // 创建条目在动作执行时分配实体，撤销重做仍由批量动作维护身份。
+            entries.push_back({ entt::null,
+                                std::nullopt,
+                                TimelineComponent{ target.time,
+                                                   ::MMM::TimingEffect::SCROLL,
+                                                   scrollValue } });
+        } else {
+            // 先记录使用身份，即使已正确也不能再给邻近目标复用。
+            // 读取完整旧值，使元数据恢复不依赖 UI 的删减投影。
+            usedScrolls.insert(companion);
+            const auto before = registry.get<TimelineComponent>(companion);
+            // 相同状态是幂等无操作，不污染撤销历史或协作广播。
+            if ( before.m_timestamp == target.time &&
+                 before.m_value == scrollValue )
+                continue;
+            // 只移动匹配误差并更新 SV，私有字段仍属于同一个事件。
+            // beat 是位置派生缓存，改变秒时间后不能沿用旧拍位。
+            auto after        = before;
+            after.m_timestamp = target.time;
+            after.m_value     = scrollValue;
+            if ( std::abs(after.m_timestamp - before.m_timestamp) > 1e-12 )
+                clearMalodyTimingBeatMetadata(after.m_metadata);
+            entries.push_back({ companion, before, std::move(after) });
+        }
+    }
+    // 临时索引仅存在于提交期间，不写入会话或共享快照。
+    // 所有目标均跳过或已正确时，不发布本地协作变化序号。
+    if ( entries.empty() ) return;
+    // 先完成所有候选规划，再一次提交；红线既不移动也不进入撤销修改集。
+    auto action = std::make_unique<BatchTimelineAction>(
+        std::move(entries), "Batch BPM Keep Speed SV");
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    // 动作负责 timing 同步与变更类别，此处失效时间线指针缓存。
+    // 只在确实修改后标脏，重复点击保持保存状态与历史稳定。
+    m_ctx.isBpmEventsDirty = true;
+}
+
 /// @brief 删除单个有效 Timeline 实体。
 /// @param cmd 待删除实体。
 /// @note 删除动作保存完整旧组件，支持原位置撤销恢复。
@@ -3233,7 +3621,10 @@ void ActionController::handleCommand(const CmdDeleteTimelineEvent& cmd)
 }
 
 /// @brief 创建单个 Timeline 事件。
-/// @param cmd 目标时间、类型和值。
+/// @param cmd 目标时间、类型、首值及可选的完整段落定义。
+/// @note 普通创建没有持续时间，段落创建还要求非负起点和合法终点。
+/// @note 同类型区间内部互斥，不同效果可以同时作用于同一时间范围。
+/// @note 边界接续合法，普通起点升级不会改变原实体身份。
 /// @note 非有限值或负 BPM 被统一拒绝。
 /// @details
 /// 命令时间由上游定位逻辑提供，本入口保持其值；创建动作以 null 实体表示需要在
@@ -3243,6 +3634,32 @@ void ActionController::handleCommand(const CmdCreateTimelineEvent& cmd)
     // 所有单项创建入口统一拒绝负 BPM 与非有限数值。
     if ( !isValidTimelineValue(cmd.type, cmd.value) ) return;
     TimelineComponent newTl{ cmd.time, cmd.type, cmd.value };
+    newTl.m_interpolation = cmd.interpolation;
+    if ( !prepareTimelineBeatInterpolation(m_ctx, newTl) ||
+         !canPlaceTimelineInterpolation(m_ctx.timelineRegistry, newTl) )
+        return;
+    // 在已有普通起点上拖出段落时，将该点升级为段落而非制造重复红线。
+    // 旧元数据和组件进入同一个动作，撤销可准确退回普通时间点。
+    // 同一手势从已有点开始只创建一种编辑语义，不同时保留两个同刻起点。
+    // 旧组件复制包含格式私有字段；升级不是丢弃来源元数据的重建。
+    // 原点升级后段尾值和曲线参数都属于同一个实体的可撤销状态。
+    // 查找只发生在确认新建段落的低频分支，正常播放不扫描这些候选。
+    if ( cmd.interpolation ) {
+        const auto view =
+            m_ctx.timelineRegistry.view<const TimelineComponent>();
+        for ( auto entity : view ) {
+            const auto& existing = view.get<const TimelineComponent>(entity);
+            if ( existing.m_effect != cmd.type || existing.m_interpolation ||
+                 std::abs(existing.m_timestamp - cmd.time) > 1e-9 )
+                continue;
+            newTl.m_metadata = existing.m_metadata;
+            auto action      = std::make_unique<TimelineAction>(
+                TimelineAction::Type::Update, entity, existing, newTl);
+            m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+            m_ctx.isBpmEventsDirty = true;
+            return;
+        }
+    }
     // 新建条目使用 null 实体，由 TimelineAction 执行时创建稳定句柄。
     auto action = std::make_unique<TimelineAction>(
         TimelineAction::Type::Create, entt::null, std::nullopt, newTl);
@@ -3251,32 +3668,118 @@ void ActionController::handleCommand(const CmdCreateTimelineEvent& cmd)
 }
 
 /// @brief 批量创建多个 Timeline 事件。
-/// @param cmd 待创建事件列表。
-/// @details 单个非法值被跳过，其余合法事件合并成一次 Paste 撤销动作。
+/// @param cmd 待创建事件列表，段落字段随条目一并保存。
+/// @note 同批尚未分配身份的条目也参与重叠检查。
+/// @note 被拒绝条目不增加历史；其余合法条目共同形成一次粘贴事务。
+/// @details 剪贴板逐项过滤；模板整组拒绝，并根据当前红线重新定位。
 /// @note 每个条目的 TimingMetadata 随值组件复制，格式来源信息不会丢失。
 void ActionController::handleCommand(const CmdCreateTimelineEvents& cmd)
 {
-    if ( cmd.events.empty() ) {
-        return;
+    // 模板保持领域定义直到提交；协作或排队期间改变 BPM 时重新求实际落点。
+    // 身份检查先于扫描，旧窗口不能把一组事件写入新打开的谱面。
+    // 输入来自低频命令队列，不在播放更新内逐帧复制注册表。
+    // templateDefinition 非空时忽略 events 中可能过期的预览坐标。
+    // 基准秒数由用户选定，其余点依据当前完整 BPM 红线反解。
+    // 没有谱面或实例失效时直接返回，不分配历史动作。
+    // 模板参数和来源属性仍是独立值副本，不借用 UI 窗口生命周期。
+    std::vector<CmdCreateTimelineEvents::Entry> templateEvents;
+    if ( cmd.templateDefinition ) {
+        if ( !m_ctx.currentBeatmap ||
+             reinterpret_cast<std::uintptr_t>(m_ctx.currentBeatmap.get()) !=
+                 cmd.templateBeatmapInstanceId )
+            return;
+        std::vector<Timing> tempo;
+        const auto          view =
+            m_ctx.timelineRegistry.view<const TimelineComponent>();
+        for ( const auto entity : view ) {
+            const auto& component = view.get<const TimelineComponent>(entity);
+            if ( component.m_effect != TimingEffect::BPM ) continue;
+            Timing line;
+            line.m_timestamp             = component.m_timestamp * 1000.0;
+            line.m_timingEffectParameter = component.m_value;
+            line.m_interpolation         = component.m_interpolation;
+            tempo.push_back(std::move(line));
+        }
+        // 领域转换失败时没有部分输出，不能逐点回退为普通时间线事件。
+        // 首选 BPM 只用于没有真实红线时的回退。
+        // 混合秒域组中的新红线也参与插值段落的目标拍轴绑定。
+        const auto placed = placeTimingTemplate(
+            *cmd.templateDefinition,
+            cmd.templateAnchorSeconds,
+            tempo,
+            m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm);
+        if ( !placed ) {
+            XWARN("时间点模板未放置：{}", placed.error());
+            return;
+        }
+        for ( const auto& line : *placed ) {
+            templateEvents.push_back({ line.m_timestamp / 1000.0,
+                                       line.m_timingEffect,
+                                       line.m_timingEffectParameter,
+                                       line.m_metadata,
+                                       line.m_interpolation });
+        }
     }
+    const auto& events = cmd.templateDefinition ? templateEvents : cmd.events;
+    // 严格规则是模板定义的固有行为，不依赖 UI 有没有正确设置标志。
+    // 旧剪贴板仍允许过滤非法项，保持原批量粘贴的兼容性。
+    // 所有创建项验证完成以后才执行一次 BatchTimelineAction。
+    // 模板定义存在时即使调用方未设置 requireAllValid 也强制整组校验。
+    const bool strict =
+        cmd.requireAllValid || cmd.templateDefinition.has_value();
+    if ( events.empty() ) return;
 
     std::vector<BatchTimelineAction::Entry> entries;
     // 预留命令容量，过滤非法项不会要求容器缩容。
-    entries.reserve(cmd.events.size());
-    for ( const auto& event : cmd.events ) {
+    entries.reserve(events.size());
+    for ( const auto& event : events ) {
         // 批量创建只跳过非法项，合法的零 BPM 与其他事件继续提交。
-        if ( !isValidTimelineValue(event.type, event.value) ) continue;
-        entries.push_back(
-            { entt::null,
-              std::nullopt,
-              TimelineComponent{
-                  event.time, event.type, event.value, event.metadata } });
+        if ( !isValidTimelineValue(event.type, event.value) ||
+             (strict && (!std::isfinite(event.time) || event.time < 0.0)) ) {
+            if ( strict ) return;
+            continue;
+        }
+        TimelineComponent timeline{ event.time,
+                                    event.type,
+                                    event.value,
+                                    event.metadata,
+                                    event.interpolation };
+        // 模板已经根据完整候选 BPM 绑定段落，不能再用旧注册表覆盖新映射。
+        // 普通粘贴的按拍段落仍需用当前会话重新绑定。
+        // canPlace 始终检查实际占用，领域预览不能绕过逻辑提交校验。
+        if ( (!cmd.templateDefinition &&
+              !prepareTimelineBeatInterpolation(m_ctx, timeline)) ||
+             !canPlaceTimelineInterpolation(m_ctx.timelineRegistry,
+                                            timeline) ) {
+            // 严格组在完成全部检查前不执行动作，失败不会留下部分物件。
+            if ( strict ) return;
+            continue;
+        }
+        // 粘贴内容也可能来自外部输入，检查同批即将创建的段落。
+        // 已排队的条目还未成为实体，因此必须另外比较它们的最终范围。
+        // 验证前面已经接受的条目，单批内部的两个段落也不能交叠。
+        // 普通点彼此仍允许同刻，保留已有多效果时间点的粘贴行为。
+        // 过滤不合法输入不会创建动作，所以撤销栈没有空粘贴记录。
+        const bool conflicts = std::any_of(
+            entries.begin(), entries.end(), [&](const auto& planned) {
+                return planned.after &&
+                       timelineRangesConflict(timeline, *planned.after);
+            });
+        // 已计划事件尚无实体身份，所以内部区间也必须独立比较。
+        // 严格失败在 pushAndExecute 之前，合法前项不会先写入注册表。
+        // 撤销栈保持原样，失败模板不会产生空的历史记录。
+        if ( conflicts ) {
+            if ( strict ) return;
+            continue;
+        }
+        entries.push_back({ entt::null, std::nullopt, std::move(timeline) });
     }
 
     if ( entries.empty() ) return;
     // 全部非法时不污染 ActionStack；至少一项合法才提交动作。
-    auto action =
-        std::make_unique<BatchTimelineAction>(std::move(entries), "Paste");
+    auto action = std::make_unique<BatchTimelineAction>(
+        std::move(entries),
+        cmd.templateDefinition ? "Timing template" : "Paste");
     m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
     m_ctx.isBpmEventsDirty = true;
 }
@@ -3332,10 +3835,11 @@ void ActionController::handleCommand(const CmdReplaceBeatmapTimings& cmd)
         bpm = ::MMM::normalizeBpmValue(bpm);
         // 有限越界 BPM 夹到最近合法边界，NaN 已在上方过滤。
         TimelineComponent timeline;
-        timeline.m_timestamp = timing.m_timestamp / 1000.0;
-        timeline.m_effect    = ::MMM::TimingEffect::BPM;
-        timeline.m_value     = bpm;
-        timeline.m_metadata  = timing.m_metadata;
+        timeline.m_timestamp     = timing.m_timestamp / 1000.0;
+        timeline.m_effect        = ::MMM::TimingEffect::BPM;
+        timeline.m_value         = bpm;
+        timeline.m_metadata      = timing.m_metadata;
+        timeline.m_interpolation = timing.m_interpolation;
         after.push_back(timeline);
         if ( !hasBpm ) {
             // 排序前的首个有效来源 BPM 定义谱面首选值。
@@ -3854,7 +4358,7 @@ void ActionController::handleCommand(const CmdReplaceBeatmapData& cmd)
             (cmd.replaceObjects || cmd.replaceAnnotations) &&
             !cmd.replaceTimelines && !cmd.replaceMetadata &&
             !cmd.replaceAudioSamples;
-        if ( !preservesNoteHistory ) {
+        if ( !preservesNoteHistory && !cmd.preserveCollaborationHistory ) {
             // 跨域替换会改变本地动作解释基准，只能丢弃历史保证后续安全。
             m_ctx.actionStack.clear();
         }

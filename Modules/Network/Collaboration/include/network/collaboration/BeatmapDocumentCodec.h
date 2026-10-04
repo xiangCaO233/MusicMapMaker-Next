@@ -102,6 +102,24 @@ public:
     /// 压缩，仍应仅在确实存在待重放增量时使用。
     [[nodiscard]] std::unique_ptr<BeatmapDocumentCodec> cloneDocument() const;
 
+    /// @brief 生成从当前权威文档恢复到指定文档的分类增量。
+    /// @param target 待恢复的历史文档。
+    /// @param flags 原操作涉及的类别。
+    /// @return 两份文档存在实际差异时返回可直接提交的补丁。
+    /// @warning 仅协作后台消费者调用；会比较所涉及类别的完整内存文档。
+    [[nodiscard]] std::optional<ByteBuffer> makeHistoryDeltaTo(
+        const BeatmapDocumentCodec& target,
+        ::MMM::BeatmapMutationFlags flags) const;
+
+    /// @brief 检查历史补丁触及的值仍处于该补丁预期的源状态。
+    /// @param payload 将要提交的补丁。
+    /// @param oppositePayload 同一历史操作反方向的补丁，提供元数据源值。
+    /// @return 后续编辑未改动该操作触及的值时返回 true。
+    /// @warning 仅协作后台消费者调用；不修改文档或执行领域物化。
+    [[nodiscard]] bool matchesHistoryDeltaSource(
+        std::span<const std::uint8_t> payload,
+        std::span<const std::uint8_t> oppositePayload) const;
+
     /// @brief 计算当前文档相对旧可见文档发生变化的根物件稳定标识。
     /// @param previous 上一次已经交付给逻辑线程的可见文档。
     /// @return 标识完整且唯一时返回增删改标识；否则返回空并要求完整替换。

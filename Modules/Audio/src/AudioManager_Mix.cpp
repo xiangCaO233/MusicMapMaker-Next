@@ -90,19 +90,19 @@ bool AudioManager::isMainTrackMuted() const
     return m_mainTrackMuted;
 }
 
-/// @brief 按试听轨道配置、全局音量和 BGM 总线增益刷新独立试听源音量。
+/// @brief 按试听轨道配置、全局音量和效果音轨增益刷新试听源音量。
 ///
 /// 试听源是资源浏览使用的独立 SourceNode，不经过复合时间线主增益，但仍属于
-/// BGM 分类并服从应用全局音量。节点未创建时保留管理器状态，加载后再应用。
+/// 效果音轨分类并服从应用全局音量。节点未创建时保留状态，加载后再应用。
 void AudioManager::refreshAuditionTrackVolume()
 {
     if ( !m_auditionSource ) {
         return;
     }
 
-    // 试听音轨属于 BGM 区域，因此同时受试听、全局和 BGM 三层增益控制。
-    float effectiveVolume = m_auditionTrackVolume * m_globalVolume * m_bgmGain;
-    if ( m_auditionTrackMuted || m_globalMuted || m_bgmGainMuted ) {
+    // BPM 试听歌曲与节拍共用效果音轨音量，不继承主音轨独立增益。
+    float effectiveVolume = m_auditionTrackVolume * m_globalVolume * m_sfxGain;
+    if ( m_auditionTrackMuted || m_globalMuted || m_sfxGainMuted ) {
         effectiveVolume = 0.0f;
     }
     m_auditionSource->setvolume(effectiveVolume);
@@ -314,14 +314,14 @@ MixerChannelMode AudioManager::getMainMixerChannelMode() const
 /// BGM 分类包含复合时间线和资源试听，两条路由都必须在同次配置变更后刷新。
 void AudioManager::setBGMGain(float gain)
 {
-    // BGM 总线增益同时作用于谱面时间线与独立试听源。
+    // BGM 总线增益作用于谱面时间线，试听歌曲继承效果音轨增益。
     m_bgmGain = std::clamp(gain, 0.0f, 1.0f);
 
     auto& settings   = Config::AppConfig::instance().getEditorSettings();
     settings.bgmGain = m_bgmGain;
     Config::AppConfig::instance().save();
 
-    // 时间线和试听节点各自计算有效增益，二者都需要刷新。
+    // 资源节点各自计算所属音轨增益，刷新不会改变试听的效果音轨分类。
     setMainTrackVolume(m_mainTrackVolume);
     refreshAuditionTrackVolume();
 }
@@ -372,6 +372,8 @@ void AudioManager::setSFXGain(float gain, bool persist)
     }
 
     refreshSFXEffectiveVolumes();
+    // 效果音轨总控也作用于试听歌曲，不能只更新节拍池。
+    refreshAuditionTrackVolume();
 }
 
 /// @brief 获取 SFX 全局增益。
@@ -392,6 +394,8 @@ void AudioManager::setSFXGainMute(bool muted)
     Config::AppConfig::instance().save();
 
     refreshSFXEffectiveVolumes();
+    // 效果音轨总控也作用于试听歌曲，不能只更新节拍池。
+    refreshAuditionTrackVolume();
 }
 
 /// @brief 获取 SFX 增益是否静音。

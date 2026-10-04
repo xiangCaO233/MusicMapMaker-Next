@@ -1388,7 +1388,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         // 区域开关来自会话最后接收的配置状态。
         // 它们必须与统一轨号解释一起交给消费端，不能只发布玩家轨数。
         snapshot->bmsEditingEnabled =
-            m_ctx->lastConfig.settings.enableBmsEditing;
+            m_ctx->lastConfig.settings.isBmsEditingEnabled();
         // 创作教学保留草稿数据作为内部答案，但不向画布发布草稿区域。
         snapshot->draftLanesEnabled =
             m_ctx->lastConfig.settings.professionalMode &&
@@ -1496,7 +1496,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                         config.visual.trackLayout,
                         camera.horizontalOffsetX,
                         true,
-                        config.settings.enableBmsEditing,
+                        config.settings.isBmsEditingEnabled(),
                         snapshot->draftLanesEnabled,
                         m_ctx->draftTrackCount,
                         true);
@@ -1632,12 +1632,14 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     // 拟合只描述当前位置，不把物件时间修改到拟合时间。
                     for ( int den : denominators ) {
                         double stepDuration = beatDuration / den;
-                        double relative     = time - activeBpm->m_timestamp;
+                        double relative =
+                            timelineBeatsAt(*activeBpm, time, fallbackBpm) *
+                            beatDuration;
                         // 先按候选网格量化，再计算真实时间误差。
                         // 不同分母的误差以秒为同一单位比较。
-                        double steps = std::round(relative / stepDuration);
-                        double fitTime =
-                            activeBpm->m_timestamp + steps * stepDuration;
+                        double steps   = std::round(relative / stepDuration);
+                        double fitTime = timelineTimeAtBeat(
+                            *activeBpm, steps / den, fallbackBpm);
                         double error = std::abs(time - fitTime);
 
                         int64_t totalSteps = static_cast<int64_t>(steps);
@@ -1668,11 +1670,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                         }
                     }
 
-                    double rel = time - activeBpm->m_timestamp;
                     // 整数拍定位与前面的最简分数拟合分开计算。
                     // 拍区间必须锚定 BPM 原点，不能跟随候选分母改变相位。
-                    int64_t beatsInActive = static_cast<int64_t>(
-                        std::floor(rel / beatDuration + 1e-6));
+                    int64_t beatsInActive = static_cast<int64_t>(std::floor(
+                        timelineBeatsAt(*activeBpm, time, fallbackBpm) + 1e-6));
 
                     // 首 BPM 前的整拍使用零分子兼容负拍显示。
                     // 只改显示分数，不改变实际时间或拍区间。
@@ -1688,13 +1689,20 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                   time, bpmEvents, snapshotFallbackBpm);
                     point.numerator   = bestNum;
                     point.denominator = bestDen;
+                    // 两端都由连续拍数反解，渐变 BPM 下不能只修正拍尾。
+                    // 当前拍长用于显示实际跨度，不再沿用段首的固定间隔。
                     point.beatStartTime =
-                        activeBpm->m_timestamp +
-                        static_cast<double>(beatsInActive) * beatDuration;
-                    point.beatEndTime = point.beatStartTime + beatDuration;
+                        timelineTimeAtBeat(*activeBpm,
+                                           static_cast<double>(beatsInActive),
+                                           fallbackBpm);
+                    point.beatEndTime = timelineTimeAtBeat(
+                        *activeBpm,
+                        static_cast<double>(beatsInActive + 1),
+                        fallbackBpm);
                     // 原始拍长保留用于细分间距，区间末端随后可以被 BPM
                     // 边界截短。 截断范围不等于重新定义该段的节拍速度。
-                    point.beatDuration = beatDuration;
+                    point.beatDuration =
+                        point.beatEndTime - point.beatStartTime;
                     // 拍区间若跨过下一 BPM，要在变化点截断。
                     // 分拍提示不能把旧 BPM 的拍长延伸进新段。
                     if ( !isBeforeFirstBpm &&
@@ -1920,7 +1928,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                     }
                     // 非空资源 ID 才提供试听属性。
                     // 这里只发布引用和音量，不能在快照线程临时解码音效。
-                    if ( sampleBinding &&
+                    if ( config.settings.professionalMode && sampleBinding &&
                          !sampleBinding->m_audioResourceId.empty() ) {
                         inspect.showAudioPreview = true;
                         inspect.audioResourceId =

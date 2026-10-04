@@ -310,6 +310,9 @@ void AudioManager::init()
     m_mainMixer         = std::make_shared<ice::MixBus>();
     m_preStretcherMixer = std::make_shared<ice::MixBus>();
     m_hitEffectMixer    = std::make_shared<ice::MixBus>();
+    // 专用节拍先与试听歌曲混合，再一起接到主拉伸前级。
+    m_auditionEffectMixer = std::make_shared<ice::MixBus>();
+    m_timingEffectMixer   = std::make_shared<ice::MixBus>();
     const std::size_t maximumBlockFrames =
         std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U);
     // 三个 MixBus 都预留同一最大 block，回调期只复用内部缓冲而不扩容。
@@ -318,6 +321,13 @@ void AudioManager::init()
                                  maximumBlockFrames);
     m_hitEffectMixer->prepare(ice::ICEConfig::internal_format,
                               maximumBlockFrames);
+    // 试听节拍总线常驻，换歌曲不使已发布的源帧 provider 上下文失效。
+    m_auditionEffectMixer->prepare(ice::ICEConfig::internal_format,
+                                   maximumBlockFrames);
+    // 该子总线由主预拉伸总线拉取，容量在启动后端前确定。
+    // 最大倍率输入空间与试听节点一致，不在播放过程中重新 prepare。
+    m_timingEffectMixer->prepare(ice::ICEConfig::internal_format,
+                                 maximumBlockFrames * 10U + 1U);
     m_audioTimelineNode = std::make_shared<AudioTimelineMixerNode>(
         std::vector<PreparedTimelineClip>{},
         0,
@@ -332,16 +342,40 @@ void AudioManager::init()
     static_cast<void>(m_stretcher->prepare(ice::ICEConfig::internal_format,
                                            maximumBlockFrames));
     m_stretcher->set_playback_ratio(m_speed);
-    m_stretcher->set_pitch_semitones(m_playbackPitch);
+    m_stretcher->set_pitch_semitones(getPlaybackPitch());
     m_stretcher->set_discontinuity_generation_provider(
         m_audioTimelineNode.get(), &readTimelineEpoch);
     // epoch 与输入边界回调让拉伸器在 Seek、循环和自然结束时清空旧缓存。
-    m_stretcher->set_input_boundary_provider(m_audioTimelineNode.get(),
-                                             &readTimelineInputBoundary);
-    m_audioTimelineNode->setFinalInputListener(m_stretcher.get(),
-                                               &requestFinalStretcherInput);
+    /// @warning 下列两个回调每音频块执行，只借用常驻图指针及读取 relaxed
+    /// 播放标量，禁止复制共享所有权、分配和等待。
+    // 管理器生命周期覆盖后端回调；节点指针在后端关闭后才释放。
+    // 试听正在播放时，谱面尾部不能提交整个混音流的 final 输入。
+    m_stretcher->set_input_boundary_provider(
+        this, [](void* context, std::size_t maximumFrames) noexcept {
+            auto& manager = *static_cast<AudioManager*>(context);
+            auto  span    = readTimelineInputBoundary(
+                manager.m_audioTimelineNode.get(), maximumFrames);
+            // 仍处理谱面控制邮箱和 discontinuity；只延长停止或尾部区间。
+            // 标量邮箱不发布资源，MixBus 独立负责图边的安全更新。
+            if ( manager.m_auditionPlaying.load(std::memory_order_relaxed) &&
+                 span.boundary !=
+                     ice::TimeStretcher::InputBoundary::Discontinuity ) {
+                span.frameCount = maximumFrames;
+                span.boundary   = ice::TimeStretcher::InputBoundary::None;
+            }
+            return span;
+        });
+    m_audioTimelineNode->setFinalInputListener(
+        this, [](void* context) noexcept {
+            auto& manager = *static_cast<AudioManager*>(context);
+            // 主谱面停止时，试听仍必须经同一个拉伸器完成自己的输出。
+            if ( !manager.m_auditionPlaying.load(std::memory_order_relaxed) )
+                requestFinalStretcherInput(manager.m_stretcher.get());
+        });
     // 主时间线先进入频谱捕获，再加入预拉伸总线。
     m_preStretcherMixer->add_source(m_bgmSpectrumCapture);
+    // 效果音轨的时序子总线固定在主拉伸器之前，不服从打击音效的可选路由。
+    m_preStretcherMixer->add_source(m_timingEffectMixer);
     m_mainMixer->add_source(m_stretcher);
     m_hitEffectSpectrumCapture =
         std::make_shared<BackgroundSpectrumCaptureNode>(m_hitEffectMixer);
@@ -411,6 +445,8 @@ void AudioManager::shutdown()
     m_backgroundSpectrumAnalyzer.reset();
     m_hitEffectSpectrumCapture.reset();
     m_hitEffectMixer.reset();
+    m_auditionEffectMixer.reset();
+    m_timingEffectMixer.reset();
     m_mainMixer.reset();
     m_preStretcherMixer.reset();
     m_player.reset();

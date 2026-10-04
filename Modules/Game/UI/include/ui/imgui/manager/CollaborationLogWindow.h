@@ -68,6 +68,9 @@ private:
     /// @brief 将已经完成的资源包排队绑定到固定协作会话。
     void bindPendingResources();
 
+    /// @brief UI 管理器观察指针；控制器由该管理器拥有，仅在 UI 线程使用。
+    UIManager* m_sourceManager{ nullptr };
+
     /// @brief 应用级协作房间。
     std::shared_ptr<Network::Collaboration::CollaborationRoom> m_room;
     /// @brief 房间启动时固定绑定的谱面会话，切换标签不会改变协作目标。

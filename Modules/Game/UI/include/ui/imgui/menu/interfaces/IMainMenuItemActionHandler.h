@@ -23,6 +23,16 @@ public:
     /// @warning UI 热路径：每帧执行；默认实现不消费。
     virtual bool handleShortcut(MainMenuContext& context);
 
+    /// @brief 决定是否展示菜单入口，默认保留既有动作的可见性。
+    /// @param context 当前帧菜单上下文。
+    /// @return false 时不绘制该条目；能力与快捷键仍由 isEnabled 验证。
+    /// @warning UI 热路径只允许读取已发布配置，不得执行阻塞查询。
+    virtual bool isVisible(const MainMenuContext& context) const
+    {
+        (void)context;
+        return true;
+    }
+
     /// @brief 获取当前菜单项是否可用。
     /// @param context 单帧主菜单上下文。
     /// @return 可点击时返回 true。

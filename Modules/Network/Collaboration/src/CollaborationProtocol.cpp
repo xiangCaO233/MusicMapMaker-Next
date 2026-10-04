@@ -445,6 +445,28 @@ std::expected<ByteBuffer, ProtocolError> encodeCollaborationMessage(
         appendStableIdentity(body, sessionId);
         appendUint64(body, committed->clientSequence);
         appendPayload(body, committed->payload);
+        // 房主补偿修订携带原始动作身份，供在线成员同步本地历史。
+        // 显式 presence 字节保持普通提交与补偿提交同一消息类型，接收端
+        // 不需要根据发送者名称或 payload 内容猜测操作语义。
+        // 协议版本已提升，旧客户端不会把新增尾字段误当有效旧帧。
+        body.push_back(committed->historyCorrection ? 1U : 0U);
+        if ( const auto& correction = committed->historyCorrection ) {
+            const auto originalParticipantId =
+                Config::normalizeCollaborationStableId(
+                    correction->participantId);
+            const auto originalSessionId =
+                Config::normalizeCollaborationStableId(correction->sessionId);
+            if ( originalParticipantId.empty() || originalSessionId.empty() ||
+                 correction->clientSequence == 0 ) {
+                // 原身份不合法时整个权威提交都不能编码，避免两端历史分歧。
+                return std::unexpected(ProtocolError::InvalidStableIdentity);
+            }
+            // 顺序固定为参与者、连接会话、客户端序号与恢复方向。
+            appendStableIdentity(body, originalParticipantId);
+            appendStableIdentity(body, originalSessionId);
+            appendUint64(body, correction->clientSequence);
+            body.push_back(correction->redo ? 1U : 0U);
+        }
     } else if ( const auto* ack = std::get_if<RevisionAck>(&message) ) {
         // Ack 正文只含接收方已连续应用到的修订号。
         kind = CollaborationMessageKind::RevisionAck;
@@ -709,7 +731,31 @@ std::expected<CollaborationMessage, ProtocolError> decodeCollaborationMessage(
         if ( !reader.readBytes(payloadBytes, committed.payload) ) {
             return std::unexpected(ProtocolError::TruncatedMessage);
         }
+        std::uint8_t hasHistoryCorrection = 0;
+        // 即使普通操作也必须带零标记；截断的尾部不能默认解释为无补偿。
+        if ( !reader.readUint8(hasHistoryCorrection) ||
+             hasHistoryCorrection > 1U ) {
+            return std::unexpected(ProtocolError::InvalidMessageLength);
+        }
+        if ( hasHistoryCorrection != 0U ) {
+            // 稳定身份三元组只用来定位原作者历史，不改变外层权威来源。
+            // 无标记的正常提交不消耗下列字段。
+            CollaborationHistoryCorrection correction;
+            std::uint8_t                   redo = 0;
+            if ( !readStableIdentity(reader, correction.participantId) ||
+                 !readStableIdentity(reader, correction.sessionId) ||
+                 !reader.readUint64(correction.clientSequence) ||
+                 !reader.readUint8(redo) || correction.clientSequence == 0 ||
+                 redo > 1U ) {
+                // 方向只接受 0/1；任何半字段都视为无效修订。
+                return std::unexpected(ProtocolError::InvalidStableIdentity);
+            }
+            // 验证全部字段后才向上层暴露可选补偿信息。
+            correction.redo             = redo != 0U;
+            committed.historyCorrection = std::move(correction);
+        }
         // 提交消息没有可选尾随字段，剩余字节必须为零。
+        // 对额外尾部保守拒绝，避免未来协议扩展被当前实现静默吞掉。
         if ( reader.remaining() != 0 ) {
             return std::unexpected(ProtocolError::InvalidMessageLength);
         }

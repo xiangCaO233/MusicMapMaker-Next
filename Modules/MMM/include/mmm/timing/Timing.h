@@ -1,6 +1,8 @@
 #pragma once
 
 #include "mmm/Metadata.h"
+#include "mmm/timing/TimingInterpolation.h"
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -56,6 +58,9 @@ public:
 
     /// @brief 所有时间线元数据
     TimingMetadata m_metadata;
+
+    /// @brief 非空时该 Timing 表示一个可整体编辑的插值段落。
+    std::optional<TimingInterpolation> m_interpolation;
 
     /// @brief 从osu的字符串读取
     void from_osu_description(std::vector<std::string>& description);
