@@ -1,13 +1,16 @@
 #include "ui/imgui/menu/actions/tools/BpmPlaybackRouting.h"
 #include "ui/imgui/WindowIdUtils.h"
+#include "ui/imgui/audio/SpectrumTimeMapping.h"
 #include "ui/imgui/menu/actions/tools/BpmAutomaticMeasurementPolicy.h"
 
+#include <cmath>
+#include <initializer_list>
 #include <string_view>
 
 /// @file BpmPlaybackRoutingTest.cpp
 /// @brief BPM 测量工具的音轨播放、空格所有权和稳定窗口 ID 路由测试。
 /// @details 场景覆盖与编辑器同轨同步、异轨试听、工具输入拦截、双重 `###`
-/// 标题解析以及自动测量启动门槛，所有路径均为纯策略调用。
+/// 标题解析、自动测量启动门槛和频谱半窗映射，所有路径均为纯策略调用。
 
 namespace
 {
@@ -43,6 +46,29 @@ int main()
 {
     // ok 累积所有运行时条件，使后续策略在前项失败后仍得到执行。
     bool ok = true;
+    // 48 kHz 的 2048 帧窗口从 1 秒开始，其能量中心位于 1.021333… 秒。
+    // 该中心在图表中必须仍对应缓存第 1 秒，防止 BPM 图比音频工具提前半窗。
+    // 这里只允许浮点运算舍入误差，不能使用毫秒级容限掩盖漏掉的补偿。
+    constexpr double HALF_WINDOW_48K = 1024.0 / 48000.0;
+    ok &= std::abs(MMM::UI::spectrumWindowStartAtVisualTime(
+                       1.0 + HALF_WINDOW_48K, 0.0, 48000.0) -
+                   1.0) < 1e-12;
+    // 正负专用偏移只改变内容显示位置，回查同一窗口时都应得到相同起点。
+    // 用户用额外偏移校准过音频工具时，BPM 工具必须保持同样的偏移符号。
+    for ( double offset : { -0.035, 0.0, 0.15 } ) {
+        ok &= std::abs(MMM::UI::spectrumWindowStartAtVisualTime(
+                           1.0 + HALF_WINDOW_48K + offset, offset, 48000.0) -
+                       1.0) < 1e-12;
+    }
+    // 不同内部采样率使用自己的半窗时长，不能固定为某个毫秒补偿值。
+    // 文件若经重采样，读取窗宽度依据内部格式，不能依据导入文件元数据。
+    ok &= std::abs(MMM::UI::spectrumWindowStartAtVisualTime(
+                       2.0 + 1024.0 / 44100.0, 0.0, 44100.0) -
+                   2.0) < 1e-12;
+    // 音频开始前仍保留负坐标供裁剪，不把频谱硬移到零秒。
+    ok &= MMM::UI::spectrumWindowStartAtVisualTime(0.0, 0.0, 48000.0) < 0.0;
+    // 未准备好采样格式时仍保留专用偏移，但不产生无限或未定义时间。
+    ok &= MMM::UI::spectrumWindowStartAtVisualTime(1.0, 0.2, 0.0) == 0.8;
     // 工具与活动谱面选择同一音轨时复用编辑器 transport。
     ok &= checkRoute("/project/audio/main.ogg",
                      "/project/audio/main.ogg",

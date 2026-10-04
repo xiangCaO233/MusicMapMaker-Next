@@ -15,6 +15,7 @@
 #include "logic/EditorEngine.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/audio/SpectrumTimeMapping.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -594,11 +595,12 @@ void AudioSpectrumView::buildChannelGeometry(
     // FFT 窗口中心相对读取起点延迟半个窗口，需要从显示时间中扣除。
     const double sampleRate =
         static_cast<double>(ice::ICEConfig::internal_format.samplerate);
-    const double fftOffset =
-        sampleRate > 0.0 ? (2048.0 / 2.0) / sampleRate : 0.0;
     // 视觉时间先扣频谱专用偏移和 FFT 中心偏移，得到缓存音频时间。
-    const double audioViewStart = viewStart - spectrumVisualOffset - fftOffset;
-    const double audioViewEnd   = viewEnd - spectrumVisualOffset - fftOffset;
+    // 两种工具共用转换，防止 BPM 图表漏掉半窗而出现固定延迟差。
+    const double audioViewStart = spectrumWindowStartAtVisualTime(
+        viewStart, spectrumVisualOffset, sampleRate);
+    const double audioViewEnd = spectrumWindowStartAtVisualTime(
+        viewEnd, spectrumVisualOffset, sampleRate);
     // 秒数乘缓存段密度映射到全局横向像素坐标。
     const double pixelStart = audioViewStart * m_cacheSegmentsPerSecond;
     const double pixelEnd   = audioViewEnd * m_cacheSegmentsPerSecond;
@@ -1150,7 +1152,7 @@ void AudioSpectrumView::backgroundRecalculate(
     uint16_t numChannels = ice::ICEConfig::internal_format.channels;
 
     // 2048 点 FFT 在时间与频率分辨率之间保持现有平衡。
-    const int fftSize = 2048;
+    const int fftSize = SPECTRUM_FFT_WINDOW_FRAMES;
     // hopSize 把每秒段数映射为相邻 FFT 窗起点帧距。
     const size_t hopSize = static_cast<size_t>(sampleRate / segmentsPerSecond);
 

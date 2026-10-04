@@ -3,6 +3,7 @@
 #include "common/VideoFrameDecoder.h"
 #include "config/AppPaths.h"
 #include "graphic/imguivk/VKTexture.h"
+#include "log/colorful-log.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/imgui/markdown/MarkdownParser.h"
 
@@ -40,7 +41,7 @@
 /// - 单个高清图集最多使用 128 MiB，采样帧数按尺寸自适应；
 /// - 静态图最长边缩小到 1280 像素；
 /// - 图集单行宽度不超过 4096 像素；
-/// - 全缓存已上传 RGBA 数据预算为 192 MiB；
+/// - 正文与教程已上传 RGBA 数据预算为 192 MiB，更新放大预览独占 128 MiB；
 /// - 文档缓存最多接纳 32 个不同目标；
 /// - 同时只运行一个下载与解码任务。
 /// - 失败目标保留条目状态，避免可见帧反复发起相同请求。
@@ -48,6 +49,8 @@
 /// 高清帧。预览尚未就绪或失败时继续显示正文帧，避免弹窗出现长时间空白。
 /// 高清图集只保留最近打开的一张；切换时先等待已提交的 GPU 命令结束，
 /// 再销毁旧页和扣除预算。纹理页按完整帧行切分，帧与描述符一一对应。
+/// 正文可能包含多段动画，不能挤占用户双击打开的高清预览预算。
+/// 两类计数独立，预览关闭或切换时归还自己的容量，总驻留上限为 320 MiB。
 /// 图集帧数随分辨率缩减，但持续时间不变，因此较大原图可能降低采样帧率。
 /// 教程 GIF 的来源仅限同步到配置根的打包资源，Markdown 的远程地址
 /// 解析仍只允许 HTTP(S)；两条来源复用输入字节与图集大小上限。
@@ -581,9 +584,10 @@ struct MarkdownImageCache::Impl {
     std::vector<std::string>         m_pending;  ///< 有界、尚未开始下载的键。
     std::string                      m_active;   ///< 当前任务键。
     std::future<MarkdownImagePixels> m_future;   ///< 单任务非阻塞交接。
-    std::size_t                      m_bytes{};  ///< 已上传图集总大小。
-    std::size_t m_documentEntries{};             ///< 远程文档图片条目数量。
-    std::string m_previewKey;               ///< 当前放大预览唯一保留的高清键。
+    std::size_t                      m_bytes{};  ///< 正文与教程的已上传容量。
+    std::size_t m_previewBytes{};     ///< 独立高清预览容量，不受正文动画挤占。
+    std::size_t m_documentEntries{};  ///< 远程文档图片条目数量。
+    std::string m_previewKey;         ///< 当前放大预览唯一保留的高清键。
     bool        m_previewReleasePending{};  ///< 关闭或切换预览后等待安全回收。
     std::string m_walkthroughKey;           ///< 当前教学段落唯一保留的动画键。
     bool        m_walkthroughReleasePending{};  ///< 切步或退出后等待安全回收。
@@ -660,7 +664,9 @@ void MarkdownImageCache::preparePreviewImage(std::string_view destination)
     m_impl->m_previewKey = key;
     if ( m_impl->m_entries.contains(key) ) return;
     m_impl->m_entries.emplace(key, Impl::Entry{});
-    m_impl->m_pending.push_back(std::move(key));
+    // 用户明确打开的高清图优先于尚未开始的正文图片，避免长时间显示缩略帧。
+    // 在途任务仍由原有单任务交接完成，不并行展开多张动画或阻塞 UI。
+    m_impl->m_pending.insert(m_impl->m_pending.begin(), std::move(key));
 }
 
 /// @brief 关闭放大窗口时撤销当前预览请求并安排 GPU 安全回收。
@@ -745,7 +751,7 @@ bool MarkdownImageCache::needReload()
 /// 每页使用连续的源 RGBA 行，上传完成后立即释放整份 CPU 图集。
 /// 当前帧查询按原图集行号计算页号和页内 UV，不改变动画起播时间。
 /// 旧高清页销毁前必须等待设备空闲，否则在途 ImGui 命令可能仍引用它。
-/// 普通正文图不主动回收，始终受共享 192 MiB 预算约束。
+/// 普通正文图不主动回收，受 192 MiB 预算约束；预览独享 128 MiB。
 /// @warning 低频资源准备路径：仅 future 就绪时分配和上传 GPU 资源；
 /// 用户切换放大图片或教学段落时可能触发一次 device.waitIdle，不得逐帧调用。
 void MarkdownImageCache::reloadTextures(vk::PhysicalDevice& physical,
@@ -775,8 +781,12 @@ void MarkdownImageCache::reloadTextures(vk::PhysicalDevice& physical,
               old != m_impl->m_entries.end(); ) {
             if ( stale(*old) ) {
                 const auto& layout = old->second.m_layout;
-                // 未上传的空条目尺寸为零，已上传条目按原图集字节数归还预算。
-                m_impl->m_bytes -=
+                // 预览与正文分开记账，关闭高清页不能扣减正文已占用的容量。
+                // 未上传的空条目尺寸为零，不会向任一计数器归还额外空间。
+                auto& used = old->first.starts_with(PREVIEW_IMAGE_PREFIX)
+                                 ? m_impl->m_previewBytes
+                                 : m_impl->m_bytes;
+                used -=
                     static_cast<std::size_t>(layout.width) * layout.height * 4U;
                 old = m_impl->m_entries.erase(old);
             } else {
@@ -810,12 +820,25 @@ void MarkdownImageCache::reloadTextures(vk::PhysicalDevice& physical,
         return;
     }
     if ( data.pixels.empty() ) {
-        // 解码失败或缓存预算不足时永久标记该目标失败。
+        // 解码失败独立于显存预算；不能把两种原因都当作原图画质不足。
+        // 错误只在任务结果交接时记录，后续每帧查询不重复刷日志。
+        XERROR("更新图片解码失败: {}", m_impl->m_active);
         entry.m_failed = true;
         return;
     }
-    if ( data.pixels.size() > MAX_CACHE_BYTES - m_impl->m_bytes ) {
-        // 正文纹理占用过多时仍可回退到已有缩略图，不超额分配显存。
+    // 放大图集有独立保留空间，正文已经加载很多 GIF 时也应上传高清帧。
+    // 教程仍沿用正文池；预览池始终只保留当前一张，不能无界增长。
+    auto&      used   = preview ? m_impl->m_previewBytes : m_impl->m_bytes;
+    const auto budget = preview ? MAX_ATLAS_BYTES : MAX_CACHE_BYTES;
+    // used 只在完整上传和安全回收处改变，始终不超过其对应预算。
+    // 两条资源生命周期分支必须使用同一分类，避免减错池造成无符号下溢。
+    if ( data.pixels.size() > budget - used ) {
+        // 预算拒绝只发生一次；保留具体容量，便于区分低清回退和解码失败。
+        XERROR("更新图片图集预算不足: {}，需要 {} 字节，已用 {}，上限 {}",
+               m_impl->m_active,
+               data.pixels.size(),
+               used,
+               budget);
         entry.m_failed = true;
         return;
     }
@@ -848,7 +871,15 @@ void MarkdownImageCache::reloadTextures(vk::PhysicalDevice& physical,
     // 局部容器先接管每一页，任意上传失败可整体回滚 GPU 所有权。
     entry.m_ids      = std::move(ids);
     entry.m_textures = std::move(textures);
-    m_impl->m_bytes += data.pixels.size();
+    used += data.pixels.size();
+    // 高清发布后记录实际帧尺寸，避免仅凭弹窗大小判断是否真的加载了原图。
+    if ( preview )
+        XINFO("更新高清预览已上传: {}，帧 {}x{}，{} 帧，{} 字节",
+              m_impl->m_active,
+              data.frameWidth,
+              data.frameHeight,
+              data.frames,
+              data.pixels.size());
     // 上传完成后主动释放大像素容量，只保留轻量帧布局。
     std::vector<unsigned char>().swap(data.pixels);
     entry.m_layout = std::move(data);

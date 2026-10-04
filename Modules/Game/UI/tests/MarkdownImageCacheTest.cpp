@@ -1,4 +1,5 @@
 #include "ui/imgui/markdown/MarkdownImageCache.h"
+#include "log/colorful-log.h"
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -107,6 +108,24 @@ int main(int argc, char** argv)
         if ( std::string(argv[index]).ends_with(".gif") && remote.frames < 2U )
             // 显式 GIF URL 必须保留动画而非退化为单帧。
             return 5;
+        // 网络探针同时请求与放大弹窗相同的高清解码路径，防止只验证缩略图。
+        // 远程 GIF 可能走 FFmpeg 逐帧路径，不能以可信本地源的较高预算代替。
+        const auto preview = loadUpdateImage(argv[index], 1280U);
+        // 宽高分别检查，竖向图片不能只凭最长边判断是否退回了正文尺寸。
+        // 单图字节上限也覆盖最后一行空槽，避免高清修复无意突破图集预算。
+        if ( preview.pixels.empty() || preview.frameWidth < remote.frameWidth ||
+             preview.frameHeight < remote.frameHeight ||
+             preview.pixels.size() > 128U * 1024U * 1024U )
+            return 11;
+        // 记录两档的实际分辨率与容量，复查网络原图和客户端是否一致。
+        // 此日志只由显式探针触发，正常离线 CTest 不访问站点。
+        XINFO("更新图片探针: 缩略图 {}x{} / {} 字节，高清 {}x{} / {} 字节",
+              remote.frameWidth,
+              remote.frameHeight,
+              remote.pixels.size(),
+              preview.frameWidth,
+              preview.frameHeight,
+              preview.pixels.size());
     }
     return 0;
 }

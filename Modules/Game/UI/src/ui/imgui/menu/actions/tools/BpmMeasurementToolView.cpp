@@ -18,6 +18,7 @@
 #include "runtime/AppThreadPool.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/audio/SpectrumTimeMapping.h"
 #include "ui/imgui/menu/actions/tools/BpmAutomaticMeasurementPolicy.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIThemeUtils.h"
@@ -157,7 +158,8 @@
 /// - visualTime = audioTime + effectiveVisualOffset；
 /// - audioTime = canvasTime - effectiveVisualOffset；
 /// - waveCanvasTime = waveSampleTime + waveformVisualOffset；
-/// - spectrumPixel = (canvasTime - spectrumVisualOffset) * segmentsPerSecond；
+/// - spectrumPixel = (canvasTime - spectrumVisualOffset - 半窗时长) *
+/// segmentsPerSecond；
 /// - screenX = rectMinX + (time - viewStart) / viewRange * rectWidth；
 /// - time = viewStart + normalizedMouseX * viewRange；
 /// - beatTime = segmentStart + integerBeatIndex * beatLength；
@@ -2838,7 +2840,7 @@ void BpmMeasurementToolView::renderWaveformPlot(const ImVec2& size)
 /// @brief 绘制频谱图，并把分块纹理映射到当前画布时间范围。
 /// @param size 绘制区域尺寸。
 /// @warning UI 热路径：每帧执行；仅遍历已上传的固定宽度纹理分块。
-/// @details 当前画布范围先移除频谱专用偏移，再换算为全局纹理像素列；
+/// @details 当前画布范围先移除频谱专用偏移和 FFT 半窗，再换算为全局纹理像素列；
 /// 每个相交分块分别计算 UV 和屏幕范围。纹理绘制完成后使用与波形相同的
 /// 覆盖层和交互处理器，保证两个视图的行为一致。
 void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
@@ -2851,12 +2853,16 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
     const double viewEnd = std::min(std::max(canvasDuration, viewStart + 0.001),
                                     clampedCenter + m_zoomSeconds);
     const double viewRange = std::max(0.001, viewEnd - viewStart);
-    // 纹理像素位于原始音频时间，先移除视觉画布偏移再换算横向段号。
+    // 缓存列按 FFT 读取起点索引，显示时必须按窗口中心对齐音频内容。
+    // 与音频工具共用半窗补偿，用户的频谱偏移在两处都只应用一次。
     const double spectrumOffset = spectrumCanvasOffset();
-    const double audioViewStart = viewStart - spectrumOffset;
-    const double audioViewEnd   = viewEnd - spectrumOffset;
-    const double pixelStart     = audioViewStart * m_spectrumSegmentsPerSecond;
-    const double pixelEnd       = audioViewEnd * m_spectrumSegmentsPerSecond;
+    const double sampleRate     = ice::ICEConfig::internal_format.samplerate;
+    const double audioViewStart =
+        spectrumWindowStartAtVisualTime(viewStart, spectrumOffset, sampleRate);
+    const double audioViewEnd =
+        spectrumWindowStartAtVisualTime(viewEnd, spectrumOffset, sampleRate);
+    const double pixelStart = audioViewStart * m_spectrumSegmentsPerSecond;
+    const double pixelEnd   = audioViewEnd * m_spectrumSegmentsPerSecond;
     // 最小像素跨度避免极端缩放或空分析数据导致除零。
     const double pixelWidth = std::max(1.0, pixelEnd - pixelStart);
 
@@ -4769,7 +4775,7 @@ void BpmMeasurementToolView::analyzeTrack(
         std::max(1, static_cast<int>(duration * spectrumSegmentsPerSecond) + 1);
     const int spectrumBinCount = spectrumProfile.frequencyBins;
     // 固定 FFT 大小平衡低频分辨率和后台分析成本。
-    const int fftSize = 2048;
+    const int fftSize = SPECTRUM_FFT_WINDOW_FRAMES;
     // hopSize 将目标每秒段数换算为解码帧步进。
     const size_t hopSize = std::max<size_t>(
         1, static_cast<size_t>(sampleRate / spectrumSegmentsPerSecond));
