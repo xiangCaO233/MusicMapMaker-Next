@@ -1,14 +1,18 @@
 #include "audio/AudioTimelineMixerNode.h"
+#include "audio/AuditionSourceMixerNode.h"
 #include "audio/KeySoundControl.h"
 #include "audio/SoundEffectPool.h"
 #include "log/colorful-log.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
 #include <ice/config/config.hpp>
 #include <ice/core/MixBus.hpp>
+#include <ice/core/SourceNode.hpp>
+#include <ice/core/effect/TimeStretcher.hpp>
 #include <ice/manage/AudioBuffer.hpp>
 #include <ice/manage/AudioPool.hpp>
 #include <ice/manage/AudioTrack.hpp>
@@ -39,7 +43,7 @@ namespace
 // 可混用，否则预览倍率不是一时会提前或延后触发。
 //
 // 样本级比较使用常量 PCM 与未控制 reference 池。controlled 池的期望结果由
-// reference 样本乘以轨道增益和类别增益得到，避免把引擎自身淡入或声道处理
+// reference 样本乘以轨道增益和类别增益得到，避免把引擎自身采样或声道处理
 // 误判为控制错误。
 //
 // 每个场景验证的故障模式互不重叠：
@@ -112,6 +116,234 @@ public:
         return std::make_unique<EmptyDecoder>();
     }
 };
+
+/// @brief 提供确定性的双声道脉冲歌曲，不依赖音频文件或输出设备。
+/// 左声道有声音，右声道留给节拍器，便于比较实际输出峰值位置。
+/// 缓存解码可以请求不同块大小，输出内容必须只依赖绝对源帧。
+/// 零样本不能被当成 EOF，三秒尾端才返回零帧。
+class PulseDecoder final : public ice::IDecoderInstance
+{
+public:
+    /// @brief 将解码游标定位到目标输入帧。
+    /// @param frame 使用内部采样率的绝对帧；越界定位随后读到 EOF。
+    /// @return 生成资源始终允许定位，不访问外部文件。
+    bool seek(std::size_t frame) override
+    {
+        m_frame = frame;
+        return true;
+    }
+    /// @brief 在 0.7 秒处生成短脉冲，其余帧保持静音。
+    /// 平滑单峰避免算法输出的矩形平台产生不稳定峰值选择。
+    /// @param output 调用方提供的内部格式平面声道缓冲。
+    /// @param count 此次解码请求的帧数，不是总声道样本数量。
+    /// @return 剩余长度不足时短读，EOF 后不再推进游标。
+    std::size_t read(float** output, std::size_t count) override
+    {
+        // 从剩余长度计算短读，避免解码器缓存阶段越过声明的总时长。
+        const auto available =
+            m_frame < totalFrames() ? totalFrames() - m_frame : 0U;
+        count = std::min(count, available);
+        // 每次写满全部有效声道，不能依赖缓存初始化为零。
+        // 同一绝对帧在多次定位后必须产生完全相同的 PCM。
+        for ( std::size_t channel = 0;
+              channel < ice::ICEConfig::internal_format.channels;
+              ++channel ) {
+            for ( std::size_t i = 0; i < count; ++i ) {
+                const auto frame   = m_frame + i;
+                output[channel][i] = channel == 0 && frame >= pulseFrame() &&
+                                             frame < pulseFrame() + 512U
+                                         ? pulseSample(frame - pulseFrame())
+                                         : 0.0F;
+            }
+        }
+        // 只推进实际输出长度；文件末尾的零帧调用保持 EOF 游标。
+        m_frame += count;
+        return count;
+    }
+    /// @brief 与生产管线使用相同的内部音频格式。
+    /// @return 借用全局初始化后不变的格式，不创建临时对象。
+    const ice::AudioDataFormat& get_source_format() const override
+    {
+        return ice::ICEConfig::internal_format;
+    }
+    /// @brief 三秒歌曲允许慢速拉伸充分输出测试脉冲。
+    /// @return 输入帧数，调用方按所选速度换算输出预算。
+    std::size_t get_source_total_frames() const override
+    {
+        return totalFrames();
+    }
+    /// @brief 返回固定脉冲的源帧，不根据被测调度器计算期望。
+    /// @return 0.7 秒对应的整数源帧，不经过视觉偏移或前瞻窗口。
+    static std::size_t pulseFrame()
+    {
+        return ice::ICEConfig::internal_format.samplerate * 7U / 10U;
+    }
+    /// @brief 用平滑单峰脉冲避免矩形平台的浮点最大值歧义。
+    /// @param frame 脉冲内部的帧位置，范围为零到 511。
+    /// @return 正弦窗幅度，歌曲和节拍使用同一份形状。
+    static float pulseSample(std::size_t frame)
+    {
+        const double phase = 3.141592653589793 * frame / 511.0;
+        const double value = std::sin(phase);
+        return static_cast<float>(0.2 * value * value);
+    }
+
+    /// @brief 返回歌曲总帧数。
+    /// @return 三秒输入长度，元信息与解码器共用同一长度契约。
+    static std::size_t totalFrames()
+    {
+        return ice::ICEConfig::internal_format.samplerate * 3U;
+    }
+
+private:
+    /// @brief 解码器单线程维护的下一输入帧。
+    std::size_t m_frame{ 0U };
+};
+
+/// @brief 建立与文件解码相同的 AudioTrack 缓存，内容由脉冲生成器提供。
+/// 不生成临时 WAV，测试不引入资源格式编码与磁盘访问误差。
+/// 探测长度与解码器长度必须一致，才能覆盖真实 SourceNode 的读取路径。
+class PulseDecoderFactory final : public ice::IDecoderFactory
+{
+public:
+    /// @brief 探测结果明确给出总帧数及内部格式。
+    /// @param info 输出元信息，其他字段保持默认空值。
+    /// @return 生成资源无需查磁盘，始终返回成功。
+    bool probe(std::string_view, ice::MediaInfo& info) const override
+    {
+        info             = {};
+        info.format      = ice::ICEConfig::internal_format;
+        info.frame_count = PulseDecoder::totalFrames();
+        return true;
+    }
+    /// @brief 各缓存任务拥有独立解码游标。
+    /// @return 新实例与生产缓存解码使用同一接口，不共享可变读取位置。
+    std::unique_ptr<ice::IDecoderInstance> create_instance(
+        std::string_view, const ice::AudioDataFormat&) const override
+    {
+        return std::make_unique<PulseDecoder>();
+    }
+};
+
+/// @brief 读取生产试听混音节点在推进歌曲前发布的输入块起点。
+/// @warning 模拟音频回调，只读取帧邮箱，不读取 UI 时钟。
+/// @param context 测试栈上邮箱，生命周期覆盖混音图全部处理。
+/// @return 当前输入块起始帧；relaxed 无需同步其他对象。
+std::size_t readAuditionTestFrame(const void* context) noexcept
+{
+    return static_cast<const std::atomic<std::size_t>*>(context)->load(
+        std::memory_order_relaxed);
+}
+
+/// @brief 验证 1x 与慢放下歌曲、节拍实际输出仍在同一帧发声。
+/// 左声道歌曲脉冲和右声道节拍脉冲在共享拉伸后比较输出，覆盖真实算法延迟。
+/// 测试不以输入游标相等代替听感输出对齐，也不硬编码算法毫秒补偿。
+/// @return 全部倍速均有两路有效输出且峰值误差不超过 32 源帧时成功。
+/// 单位倍率覆盖无算法历史的直通分支，慢放覆盖真实 RubberBand 分支。
+/// 四组场景独立建图，避免上一组速度的缓存历史掩盖结果。
+/// 宽脉冲保证峰值可重复，首个非零样本不适合测量拉伸前响。
+/// 比较的是同一输出设备帧域，不把输入帧误差当作墙钟毫秒。
+/// UI 卡顿和刷新率不参与这个离线图测试，因此不能解释为 UI 性能改善。
+/// 声卡驱动延迟同时影响两路，只验证它们进入设备前的相对同步。
+bool testAuditionMetronomeSpeedAlignment()
+{
+    // 缓存任务使用线程池，真正的音频图随后由本线程确定性推进。
+    // 强引用保持缓存有效，不需要生产中的资源重新加载。
+    ice::ThreadPool workers(2);
+    auto            track =
+        ice::AudioTrack::create("audition-pulse",
+                                workers,
+                                std::make_shared<PulseDecoderFactory>(),
+                                ice::CachingStrategy::CACHY);
+    if ( !track ) return false;
+    // 节拍资源先留一段前导静音，验证预约必须提前而非到拍点才启动文件。
+    // 1013 不对齐常用音频块，覆盖拍点落在块内时的样本定位。
+    constexpr std::size_t LEAD_IN_FRAMES = 1013U;
+    // 右声道使用相同脉冲形状，左声道静音，使两路来源可独立观察。
+    std::vector<std::vector<float>> channels(
+        ice::ICEConfig::internal_format.channels,
+        std::vector<float>(LEAD_IN_FRAMES + 512U, 0.0F));
+    for ( std::size_t frame = 0; frame < 512U; ++frame ) {
+        channels[1][LEAD_IN_FRAMES + frame] = PulseDecoder::pulseSample(frame);
+    }
+    const auto clickAudio =
+        MMM::Audio::PreparedTimelineAudio::fromOwnedChannels(
+            std::move(channels));
+    for ( const double speed : { 1.0, 0.75, 0.5, 0.25 } ) {
+        auto source  = std::make_shared<ice::SourceNode>(track);
+        auto effects = std::make_shared<ice::MixBus>();
+        MMM::Audio::SoundEffectPool click(clickAudio);
+        // 预热一个 voice 足够覆盖单次预约，测量期间不触发池扩容。
+        click.init(1);
+        effects->add_source(click.getMixer());
+        // 邮箱初始化到源起点，第一块处理前没有陈旧歌曲的参考位置。
+        std::atomic<std::size_t> blockStart{ 0U };
+        auto input = std::make_shared<MMM::Audio::AuditionSourceMixerNode>(
+            source, effects, blockStart, 2561U);
+        ice::TimeStretcher stretcher;
+        // 固定输出块与生产同类回调一致，慢速输入块会按倍率变小。
+        // 混音节点必须以实际输入块长度发布时钟，不能使用设备块长度。
+        stretcher.prepare(ice::ICEConfig::internal_format, 256U);
+        // 与生产图一致：效果音轨子总线先汇入主拉伸前级，没有试听拉伸器。
+        auto effectTrack = std::make_shared<ice::MixBus>();
+        auto mainInput   = std::make_shared<ice::MixBus>();
+        effectTrack->prepare(ice::ICEConfig::internal_format, 2561U);
+        mainInput->prepare(ice::ICEConfig::internal_format, 256U);
+        effectTrack->add_source(input);
+        mainInput->add_source(effectTrack);
+        stretcher.set_inputnode(mainInput);
+        stretcher.set_playback_ratio(speed);
+        // 提前扣除资源起音延迟，最终有效脉冲仍须与歌曲同帧。
+        // 速度只能由后级变速器应用一次，lead-in 不在输出域重复转换。
+        click.playScheduled(1.0F,
+                            PulseDecoder::pulseFrame() - LEAD_IN_FRAMES,
+                            &blockStart,
+                            &readAuditionTestFrame,
+                            {},
+                            PulseDecoder::pulseFrame() - LEAD_IN_FRAMES);
+        source->play();
+        ice::AudioBuffer output(ice::ICEConfig::internal_format, 256U);
+        float            peaks[2]{ 0.0F, 0.0F };
+        std::size_t      peakFrames[2]{ 0U, 0U };
+        const auto       outputFrames =
+            static_cast<std::size_t>(PulseDecoder::totalFrames() / speed);
+        for ( std::size_t start = 0; start < outputFrames; start += 256U ) {
+            // 直接消费最终 PCM，源位置虽提前推进仍不作为验收结果。
+            stretcher.process(output);
+            for ( std::size_t channel = 0; channel < 2U; ++channel ) {
+                for ( std::size_t i = 0; i < output.num_frames(); ++i ) {
+                    const float amplitude =
+                        std::abs(output.raw_ptrs()[channel][i]);
+                    // 记录最高幅度的实际输出帧，不以源帧直接推算。
+                    if ( amplitude > peaks[channel] ) {
+                        peaks[channel]      = amplitude;
+                        peakFrames[channel] = start + i;
+                    }
+                }
+            }
+        }
+        // 允许数值运算的小幅峰值变化，但不能偏移一个输入块。
+        // 32 源帧按倍率换算后始终代表同一个源域容差。
+        // 默认采样率下远小于原先几十毫秒的声音错位。
+        // 两路无声不算同步成功，必须同时达到有效峰值下限。
+        const auto delta =
+            std::abs(static_cast<double>(peakFrames[0]) - peakFrames[1]);
+        if ( peaks[0] < 0.01F || peaks[1] < 0.01F || delta > 32.0 / speed ) {
+            XERROR(
+                "Audition metronome mismatch: speed={}, song={}, click={}, "
+                "delta={}",
+                speed,
+                peakFrames[0],
+                peakFrames[1],
+                delta);
+            return false;
+        }
+        XINFO("Audition metronome aligned: speed={}, deltaFrames={}",
+              speed,
+              delta);
+    }
+    return true;
+}
 
 /// @brief 从测试上下文读取当前参考帧。
 /// @param context 指向测试栈上 referenceFrame 的观察指针。
@@ -494,7 +726,8 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    const bool passed = testDozensOfIndependentSampleVoices(samplePath) &&
+    const bool passed = testAuditionMetronomeSpeedAlignment() &&
+                        testDozensOfIndependentSampleVoices(samplePath) &&
                         testPreviewSpeedScheduleRouting() &&
                         testZeroFrameTrackDoesNotOccupyVoice(samplePath) &&
                         testStopThenImmediatePlayKeepsNewVoice(track) &&

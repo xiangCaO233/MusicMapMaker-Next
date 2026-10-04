@@ -7,6 +7,7 @@
 #include "log/colorful-log.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <memory>
@@ -118,6 +119,13 @@ std::size_t readTimelineBlockStart(const void* context) noexcept
     const auto  position = timeline->blockStartFrame();
     // 负时间线预滚无法表示为 size_t，调度参考统一钳制到零。
     return position > 0 ? static_cast<std::size_t>(position) : 0U;
+}
+/// @brief 读取独立试听本块开始时的源帧，而非主时间线或已推进的源末帧。
+/// @warning 音频回调热路径：只读取稳定邮箱，不持有歌曲节点。
+std::size_t readAuditionBlockStart(const void* context) noexcept
+{
+    return static_cast<const std::atomic<std::size_t>*>(context)->load(
+        std::memory_order_relaxed);
 }
 }  // namespace
 
@@ -236,7 +244,15 @@ void AudioManager::updateSFXSyncSpeedRouting(bool syncSpeed)
         m_mainMixer->remove_source(mixer);
         m_preStretcherMixer->remove_source(mixer);
         m_hitEffectMixer->remove_source(mixer);
-        if ( usesHitEffectRouting(key) ) {
+        m_timingEffectMixer->remove_source(mixer);
+        m_auditionEffectMixer->remove_source(mixer);
+        if ( key.starts_with("metronome.") ) {
+            // 只由歌曲混合节点消费，禁止又接到主输出而重复推进 voice。
+            m_auditionEffectMixer->add_source(mixer);
+        } else if ( key.starts_with(EDITOR_METRONOME_KEY_PREFIX) ) {
+            // 编辑器节拍器固定跟随主拉伸器，与打击音效可选设置无关。
+            m_timingEffectMixer->add_source(mixer);
+        } else if ( usesHitEffectRouting(key) ) {
             // HitEffect 统一进入专用总线，普通和交互音效直达主总线。
             m_hitEffectMixer->add_source(mixer);
         } else {
@@ -521,7 +537,13 @@ bool AudioManager::attachSoundEffectPool(
     pool->setVolume(activeVolume);
     pool->updateEffectiveVolume(getSFXEffectiveGain(key), getSFXPoolMute(key));
 
-    if ( usesHitEffectRouting(key) ) {
+    if ( key.starts_with("metronome.") ) {
+        // BPM 工具节拍器只进入歌曲源帧混合节点，避免倍速改变相对声音延迟。
+        m_auditionEffectMixer->add_source(pool->getMixer());
+    } else if ( key.starts_with(EDITOR_METRONOME_KEY_PREFIX) ) {
+        // 主画布节拍器使用效果音量分组，并固定进入主时间线拉伸前级。
+        m_timingEffectMixer->add_source(pool->getMixer());
+    } else if ( usesHitEffectRouting(key) ) {
         // HitEffect 专用总线的位置由 updateSFXSyncSpeedRouting 整体决定。
         m_hitEffectMixer->add_source(pool->getMixer());
     } else {
@@ -548,6 +570,9 @@ void AudioManager::detachSoundEffectPool(const std::string& key)
         if ( m_mainMixer ) m_mainMixer->remove_source(mixer);
         if ( m_preStretcherMixer ) m_preStretcherMixer->remove_source(mixer);
         if ( m_hitEffectMixer ) m_hitEffectMixer->remove_source(mixer);
+        if ( m_timingEffectMixer ) m_timingEffectMixer->remove_source(mixer);
+        if ( m_auditionEffectMixer )
+            m_auditionEffectMixer->remove_source(mixer);
     }
     m_sfxPools.erase(pool);
     // lead-in 与可播放池同步清除，登记中的原始值仍保留供再次 attach。
@@ -975,10 +1000,12 @@ void AudioManager::playSoundEffectScheduled(
     // 逻辑位置允许负预滚，调度 planner 的无符号当前帧按零处理。
     const std::size_t currentReferenceFrame =
         currentPosition > 0 ? static_cast<std::size_t>(currentPosition) : 0U;
-    const bool                    syncSpeed = Config::AppConfig::instance()
-                                                  .getEditorSettings()
-                                                  .sfxConfig.hitSfxSyncSpeed;
-    const SoundEffectSchedulePlan schedule  = planSoundEffectSchedule(
+    // 节拍器固定在主拉伸前，绝不能使用除以倍率的输出域延迟。
+    const bool syncSpeed = key.starts_with(EDITOR_METRONOME_KEY_PREFIX) ||
+                           Config::AppConfig::instance()
+                               .getEditorSettings()
+                               .sfxConfig.hitSfxSyncSpeed;
+    const SoundEffectSchedulePlan schedule = planSoundEffectSchedule(
         targetFrame, currentReferenceFrame, m_speed, syncSpeed);
     // OpenAL 负责空间化输出，不叠加 SDL 使用的手工左右包络。
     const StereoGainEnvelope effectiveEnvelope =
@@ -1003,6 +1030,51 @@ void AudioManager::playSoundEffectScheduled(
         it->second->playScheduledRelative(
             volumeFactor, schedule.frame, effectiveEnvelope, playbackControl);
     }
+}
+
+/// @brief 按试听源帧预约专用节拍器，不使用编辑器 transport 或 UI 即时补响。
+/// @param key 专用节拍池标识，其他类别不能使用试听源帧。
+/// @param targetTime 资源有效出声点对应的歌曲秒坐标。
+/// @param volumeFactor 与池基础音量相乘的单次增益。
+/// 参考邮箱不拥有当前歌曲，换资源时池停止而邮箱地址仍然稳定。
+/// 拍点的速度换算交给共享拉伸器，资源自身的起始静音也一起拉伸。
+/// 不调用通用 planner，源帧直接交给主拉伸器，避免重复换算倍率。
+/// @warning 播放热入口仅访问已准备池；参考邮箱存活到音频后端关闭后。
+void AudioManager::playAuditionSoundEffectScheduled(const std::string& key,
+                                                    double targetTime,
+                                                    float  volumeFactor)
+{
+    // 限定专用总线，避免其他音效误用与其图路由不同的源帧时钟。
+    if ( !m_auditionSource || !key.starts_with("metronome.") ||
+         !std::isfinite(targetTime) || getSFXPoolMute(key) )
+        return;
+    // 这里只查缓存，未加载的节拍由打开工具时预热，不在拍点临时解码。
+    const auto pool = m_sfxPools.find(key);
+    if ( pool == m_sfxPools.end() ) return;
+    const auto   leadIn    = m_sfxLeadInSeconds.find(key);
+    const double startTime = std::max(
+        0.0,
+        targetTime -
+            (leadIn != m_sfxLeadInSeconds.end() ? leadIn->second : 0.0));
+    const auto targetFrame = static_cast<std::size_t>(
+        startTime * ice::ICEConfig::internal_format.samplerate);
+    const auto currentFrame = m_auditionSource->get_playpos();
+    // 两路都在拉伸前级，所以不除以倍率；由同一个后端统一变速和缓冲。
+    pool->second->playScheduled(
+        volumeFactor,
+        targetFrame,
+        &m_auditionBlockStartFrame,
+        &readAuditionBlockStart,
+        {},
+        targetFrame > currentFrame ? targetFrame - currentFrame : 0U);
+}
+
+/// @brief 清理固定两个试听节拍池，暂停和定位不能遗留旧位置预约。
+/// @warning 低频控制入口，不遍历其他谱面采样或交互音效。
+void AudioManager::clearAuditionSoundEffects()
+{
+    stopSoundEffect("metronome.beat_low");
+    stopSoundEffect("metronome.downbeat_high");
 }
 
 /// @brief 清空并停止所有音效池中正在播放和预定的音效。

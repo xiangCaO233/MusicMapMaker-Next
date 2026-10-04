@@ -139,11 +139,13 @@ bool testEmptyTimelineClock(MMM::Audio::AudioManager& manager)
     manager.play();
     if ( !waitUntil(
              [&]() {
+                 // 播放命令刚提交时仍可能读到上一块的 Stopped；
+                 // 必须同时观察到尾端位置，不能把尚未启动当作自然结束。
                  return manager.getStatus() ==
-                        MMM::Audio::PlaybackStatus::Stopped;
+                            MMM::Audio::PlaybackStatus::Stopped &&
+                        manager.getCurrentTime() >= 0.075;
              },
-             1000ms) ||
-         manager.getCurrentTime() < 0.075 ) {
+             1000ms) ) {
         XERROR("Empty timeline did not reach its chart-defined end");
         return false;
     }
@@ -820,6 +822,87 @@ bool testEditorMetronomePoolGain(MMM::Audio::AudioManager& manager,
     return passed;
 }
 
+/// @brief 验证试听与主谱面共用拉伸器时，各自停止不会冻结另一来源。
+/// @param manager 已初始化音频管理器。
+/// @param samplePath 可解码音频与节拍资源。
+/// @return 倍率共用、停止隔离及节拍固定路由均有效时返回 true。
+/// 这里通过真实后端推进源帧，能发现试听错误接到暂停的拉伸后级或
+/// 主时间线的停止边界截断试听。音频峰值同步另由 PCM 测试验证。
+bool testSharedMainStretcher(MMM::Audio::AudioManager& manager,
+                             const std::string&        samplePath)
+{
+    constexpr const char* EDITOR_BEAT   = "editor.metronome.route_test";
+    constexpr const char* AUDITION_BEAT = "metronome.beat_low";
+    // 空谱面提供独立时钟，不混入歌曲，便于观察停止和恢复边界。
+    bool passed =
+        manager.loadAudioTimeline({}, 10.0, "shared-stretcher-test").success;
+    passed = passed &&
+             manager.loadAuditionTrack(samplePath, MMM::AudioTrackConfig{});
+    passed = passed && manager.preloadSoundEffect(EDITOR_BEAT, samplePath);
+    passed = passed && manager.preloadSoundEffect(AUDITION_BEAT, samplePath);
+    if ( passed ) {
+        manager.stop();
+        manager.setAuditionPlaybackSpeed(0.5);
+        // 试听入口必须改变同一个主倍率；后续主入口也须反映在试听 getter。
+        passed = std::abs(manager.getPlaybackSpeed() - 0.5) < 1.0e-9;
+        manager.setPlaybackSpeed(0.75);
+        passed = passed &&
+                 std::abs(manager.getAuditionPlaybackSpeed() - 0.75) < 1.0e-9;
+        manager.playAudition();
+        passed = passed && waitUntil([&] {
+                     return manager.getAuditionCurrentTime() > 0.01;
+                 });
+        // 主时钟停止仍能拉取试听，不能由空谱面的零输入区间把它截断。
+        passed = passed && manager.getCurrentTime() < 1.0e-9;
+        manager.pauseAudition();
+        // 非 Playing 的源即使仍在总线图中也应输出静音，不能继续消费节拍。
+        // 不以主时钟推进成功替代这一检查，两条来源使用不同的输入坐标。
+        // 暂停状态下即刻触发一个音效，若接错到输出总线，其游标就会前进。
+        // 这里不测声卡墙钟延迟，只验证可观察的 voice 消费方向。
+        // 先清掉旧试听历史，保证下一段检查处于稳定暂停状态。
+        manager.playSoundEffect(EDITOR_BEAT);
+        manager.updateSFXSyncSpeedRouting(false);
+        std::this_thread::sleep_for(30ms);
+        // 禁用打击音效同步也不能把节拍器移到主输出；主暂停时它应冻结。
+        passed = passed && manager.getSFXPlaybackTime(EDITOR_BEAT) < 1.0e-9;
+        manager.stopSoundEffect(EDITOR_BEAT);
+        manager.play();
+        passed = passed &&
+                 waitUntil([&] { return manager.getCurrentTime() > 0.01; });
+        manager.stopAudition();
+        // stopAudition 回零会清理公共拉伸历史，但不能暂停正在播放的谱面。
+        // 前后位置均取同一个主时钟，避免试听秒数造成误判。
+        const double before = manager.getCurrentTime();
+        passed              = passed && waitUntil([&] {
+                     return manager.getCurrentTime() > before + 0.01;
+                              });
+        // 主谱面仍在播放时，BPM 节拍只能跟随暂停的试听源，不能被主总线消费。
+        manager.playSoundEffect(AUDITION_BEAT);
+        manager.updateSFXSyncSpeedRouting(true);
+        // 两次切换分别覆盖拉伸前和拉伸后；试听节拍均须保持唯一父图边。
+        // 它的 SourceNode 已暂停，因此错误地被主输出再次消费能稳定暴露。
+        std::this_thread::sleep_for(30ms);
+        passed = passed && manager.getSFXPlaybackTime(AUDITION_BEAT) < 1.0e-9;
+    }
+    // 无论失败点在哪里都恢复共享状态，避免污染后面的复合播放场景。
+    // 卸载试听不恢复旧倍率，因而测试负责显式回到中性主倍率。
+    // 路由切换属于运行时操作，末尾按原用户配置恢复普通打击音效。
+    // 测试没有向配置写入音量、路由或设备的临时文件。
+    // 音效池可能已经排入后端，卸载先明确停止，不能遗留到后续场景。
+    manager.stopSoundEffect(EDITOR_BEAT);
+    manager.unloadSoundEffect(EDITOR_BEAT);
+    manager.unloadSoundEffect(AUDITION_BEAT);
+    manager.unloadAuditionTrack();
+    manager.unloadAudioTimeline();
+    manager.setPlaybackSpeed(1.0);
+    manager.updateSFXSyncSpeedRouting(MMM::Config::AppConfig::instance()
+                                          .getEditorSettings()
+                                          .sfxConfig.hitSfxSyncSpeed);
+    if ( !passed )
+        XERROR("Shared main stretcher transport or metronome routing failed");
+    return passed;
+}
+
 }  // namespace
 
 /// @brief 运行 AudioManager 自动采样时间线集成测试。
@@ -870,7 +953,8 @@ int main(int argc, char** argv)
         testLegacyBgmWrapper(manager, samplePath) &&
         testCompositePlayback(manager, samplePath) &&
         testTimelineUnloadReleasesDecodedTrack(manager, samplePath) &&
-        testStreamingSelection(manager, samplePath);
+        testStreamingSelection(manager, samplePath) &&
+        testSharedMainStretcher(manager, samplePath);
 
     // 先停止音频后端和释放图，再关闭资源线程池。
     manager.shutdown();

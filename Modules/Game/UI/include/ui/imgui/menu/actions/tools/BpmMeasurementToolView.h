@@ -640,6 +640,8 @@ private:
 
     /// @brief 上一帧节拍器看到的音频调度时间，单位为秒。
     double m_lastMetronomeAudioTime{ 0.0 };
+    /// @brief 上次调度的有效视觉偏移，配置变化时撤销旧预约并重建拍序。
+    double m_metronomeScheduledVisualOffset{ 0.0 };
 
     /// @brief 当前节拍器触发游标对应的首拍位置，单位为秒。
     double m_metronomeScheduledFirstBeatTime{

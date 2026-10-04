@@ -31,7 +31,7 @@ namespace
 // 让拉伸器在 block 边界丢弃历史；提交 Seek 额外清除排定音效。这样拖动期间不
 // 遍历所有音效池，鼠标释放时仍能保证旧位置的音效不会继续播放。
 //
-// 试听通道使用独立 SourceNode 与 TimeStretcher，不参与主时间线时钟。其状态
+// 试听通道使用独立 SourceNode 秒坐标，音频与节拍共用主 TimeStretcher。其状态
 // 缓存用于区分 SourceNode 当前未播放时的 Paused 与 Stopped，因为底层单一
 // isplaying 标志无法表达这两个业务状态。
 // 所有 getter 都允许在未加载或关闭过程中调用，并以零值或 Stopped 作为稳定
@@ -108,7 +108,8 @@ void AudioManager::pause()
         m_audioTimelineNode->pause();
         if ( m_stretcher ) {
             // 下游暂停阻止已缓存采样在时间线冻结后继续送往设备。
-            m_stretcher->set_paused(true);
+            m_stretcher->set_paused(
+                !m_auditionPlaying.load(std::memory_order_relaxed));
         }
     }
 }
@@ -123,7 +124,8 @@ void AudioManager::stop()
         // stop 改变上游 epoch，手动请求同时覆盖下游尚未观察到新 epoch 的窗口。
         resetMainTimeStretcher();
         if ( m_stretcher ) {
-            m_stretcher->set_paused(true);
+            m_stretcher->set_paused(
+                !m_auditionPlaying.load(std::memory_order_relaxed));
         }
         clearAllScheduledSoundEffects();
         // 旧时间点触发的长音效不能跨越一次显式停止继续发声。
@@ -172,6 +174,8 @@ PlaybackStatus AudioManager::getStatus() const
                        : PlaybackStatus::Stopped;
         }
         if ( m_audioTimelineNode->finished() ) {
+            if ( m_auditionPlaying.load(std::memory_order_relaxed) )
+                return PlaybackStatus::Stopped;
             // final 输入仍在拉伸器时继续报告 Playing，直到输出完全排空。
             return m_stretcher && !m_stretcher->is_final_input_drained()
                        ? PlaybackStatus::Playing
@@ -238,6 +242,11 @@ AudioManager::getAudioTimelineClockSnapshot() const noexcept
         return snapshot;
     }
     if ( snapshot.finished ) {
+        // 试听延长的是混音流，不能把已经结束的谱面状态延长为 Playing。
+        if ( m_auditionPlaying.load(std::memory_order_relaxed) ) {
+            snapshot.state = AudioTimelinePlaybackState::Stopped;
+            return snapshot;
+        }
         // finished 后等待 stretcher drain，保持自然尾音和视觉状态一致。
         snapshot.state = m_stretcher && !m_stretcher->is_final_input_drained()
                              ? AudioTimelinePlaybackState::Playing
@@ -277,7 +286,11 @@ void AudioManager::resetMainTimeStretcher()
 /// PCM，也不改变 getTotalTime 返回的谱面时长。
 void AudioManager::setPlaybackSpeed(double speed)
 {
-    m_speed = std::isfinite(speed) ? std::clamp(speed, 0.1, 4.0) : 1.0;
+    const double nextSpeed =
+        std::isfinite(speed) ? std::clamp(speed, 0.1, 4.0) : 1.0;
+    // 拉伸器换状态可能清理预读输入；后续 UI 按当前源帧重新预约节拍。
+    if ( nextSpeed != m_speed ) clearAuditionSoundEffects();
+    m_speed = nextSpeed;
     // 成员始终先更新，即使图尚未初始化也能在 init 时恢复用户请求。
     if ( m_stretcher ) {
         m_stretcher->set_playback_ratio(m_speed);
@@ -364,7 +377,11 @@ void AudioManager::playAudition()
     if ( totalTime > 0.0 && getAuditionCurrentTime() >= totalTime - 0.001 ) {
         seekAudition(0.0);
     }
+    // 先解除主谱面尾部对混音流的 final 限制，再恢复共享拉伸器。
+    m_auditionPlaying.store(true, std::memory_order_relaxed);
+    resetMainTimeStretcher();
     m_auditionSource->play();
+    if ( m_stretcher ) m_stretcher->set_paused(false);
     m_auditionStatus = PlaybackStatus::Playing;
 }
 
@@ -377,7 +394,18 @@ void AudioManager::pauseAudition()
         return;
     }
 
+    clearAuditionSoundEffects();
     m_auditionSource->pause();
+    m_auditionPlaying.store(false, std::memory_order_relaxed);
+    // 读取的是请求状态，无需等待主音频块确认暂停或启动。
+    // 只有非结束的主 Playing 请求需要共同下游继续工作。
+    // 单独暂停歌曲；主谱面仍在播放时不能冻结共同下游。
+    const bool mainPlaying = m_audioTimelineNode &&
+                             m_audioTimelineNode->requestedState() ==
+                                 AudioTimelinePlaybackState::Playing &&
+                             !m_audioTimelineNode->finished();
+    if ( m_stretcher ) m_stretcher->set_paused(!mainPlaying);
+    resetMainTimeStretcher();
     if ( m_auditionStatus != PlaybackStatus::Stopped ) {
         m_auditionStatus = PlaybackStatus::Paused;
     }
@@ -388,11 +416,25 @@ void AudioManager::pauseAudition()
 /// SourceNode 没有独立 stop，使用 pause 加零帧位置实现业务停止。
 void AudioManager::stopAudition()
 {
+    clearAuditionSoundEffects();
+    const bool hadAudition = static_cast<bool>(m_auditionSource);
+    m_auditionPlaying.store(false, std::memory_order_relaxed);
     if ( m_auditionSource ) {
         m_auditionSource->pause();
         m_auditionSource->set_playpos(static_cast<size_t>(0));
     }
     m_auditionStatus = PlaybackStatus::Stopped;
+    // 重复卸载空试听不能清掉主谱面的拉伸历史。
+    if ( hadAudition ) {
+        // 生命周期清理与暂停使用相同条件，空资源重复卸载不操作共享 DSP。
+        // 不能用试听缓存状态推断主谱面是否需要输出。
+        const bool mainPlaying = m_audioTimelineNode &&
+                                 m_audioTimelineNode->requestedState() ==
+                                     AudioTimelinePlaybackState::Playing &&
+                                 !m_audioTimelineNode->finished();
+        if ( m_stretcher ) m_stretcher->set_paused(!mainPlaying);
+        resetMainTimeStretcher();
+    }
 }
 
 /// @brief 跳转独立试听音轨播放位置。
@@ -409,7 +451,11 @@ void AudioManager::seekAudition(double seconds)
     // 先读取状态再修改位置，避免底层 Seek 瞬间影响 isplaying 判断。
     const double clampedTime =
         std::clamp(seconds, 0.0, std::max(0.0, getAuditionTotalTime()));
+    // 先停止旧 voice 再发布位置，防止预约在新歌曲位置误触发。
+    clearAuditionSoundEffects();
     m_auditionSource->set_playpos(std::chrono::duration<double>(clampedTime));
+    // 歌曲跳转必须同时丢弃拉伸器旧 PCM，不能继续播放旧位置缓存。
+    resetMainTimeStretcher();
     if ( statusBeforeSeek == PlaybackStatus::Stopped ) {
         m_auditionStatus = PlaybackStatus::Stopped;
     }
@@ -466,31 +512,25 @@ double AudioManager::getAuditionTotalTime() const
 /// @brief 设置独立试听音轨播放倍率。
 /// @param speed 目标播放倍率。
 ///
-/// 试听倍率与主时间线倍率独立保存；调用方可在编辑同时预听原速资源。
+/// 试听与主画布共用一个拉伸器，因此倍率、音高和质量使用相同控制源。
 void AudioManager::setAuditionPlaybackSpeed(double speed)
 {
-    m_auditionSpeed = std::clamp(speed, 0.1, 4.0);
-    // 试听接口由受控 UI 数值调用，沿用既有有限输入前置条件并钳制范围。
-    if ( m_auditionStretcher ) {
-        m_auditionStretcher->set_playback_ratio(m_auditionSpeed);
-    }
+    // 请求转交主时间线入口，避免 UI 显示独立倍率而实际共用另一倍率。
+    setPlaybackSpeed(speed);
 }
 
 /// @brief 获取独立试听音轨请求的播放倍率。
 /// @return 当前请求的播放倍率。
 double AudioManager::getAuditionPlaybackSpeed() const
 {
-    return m_auditionSpeed;
+    return getPlaybackSpeed();
 }
 
-/// @brief 获取独立试听拉伸器实际生效的播放倍率。
+/// @brief 获取试听共用的主时间线拉伸器实际生效倍率。
 /// @return 当前实际播放倍率。
 double AudioManager::getActualAuditionPlaybackSpeed() const
 {
-    if ( m_auditionStretcher ) {
-        return m_auditionStretcher->get_actual_playback_ratio();
-    }
-    return m_auditionSpeed;
+    return getActualPlaybackSpeed();
 }
 
 }  // namespace MMM::Audio

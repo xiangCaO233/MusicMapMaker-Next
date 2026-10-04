@@ -34,6 +34,7 @@ namespace MMM::Audio
 {
 
 class SoundEffectPool;
+class AuditionSourceMixerNode;
 class KeySoundControlBank;
 class AudioTimelineMixerNode;
 class PreparedTimelineAudio;
@@ -477,7 +478,7 @@ public:
     /// @return 总时长，单位为秒。
     double getAuditionTotalTime() const;
 
-    /// @brief 设置独立试听音轨播放倍率。
+    /// @brief 设置试听与主画布共用的播放倍率。
     /// @param speed 目标播放倍率。
     void setAuditionPlaybackSpeed(double speed);
 
@@ -485,7 +486,7 @@ public:
     /// @return 当前请求的播放倍率。
     double getAuditionPlaybackSpeed() const;
 
-    /// @brief 获取独立试听拉伸器实际生效的播放倍率。
+    /// @brief 获取试听共用的主拉伸器实际生效倍率。
     /// @return 当前实际播放倍率。
     double getActualAuditionPlaybackSpeed() const;
 
@@ -819,6 +820,19 @@ public:
     /// @brief 清空并停止所有正在播放和预定的音效
     void clearAllScheduledSoundEffects();
 
+    /// @brief 按试听源秒坐标预约 metronome. 专用节拍池。
+    /// @param key 已加载的专用节拍池。
+    /// @param targetTime 有效出声点，先扣除资源 lead-in 再换成源帧。
+    /// @param volumeFactor 单次音量倍率。
+    /// @warning 热路径只查已加载池；歌曲与节拍由同一个拉伸器处理。
+    void playAuditionSoundEffectScheduled(const std::string& key,
+                                          double             targetTime,
+                                          float volumeFactor = 1.0F);
+
+    /// @brief 停止试听节拍器旧预约，保留其他 UI 和编辑器音效。
+    /// @warning 低频播放控制路径，只处理固定两个专用节拍池。
+    void clearAuditionSoundEffects();
+
     /// @brief 获取当前时间线首个成功加载的轨道数据，供旧可视化入口兼容。
     std::shared_ptr<ice::AudioTrack> getBGMTrack() const;
 
@@ -1060,8 +1074,25 @@ private:
     /// @brief 当前独立试听播放源节点。
     std::shared_ptr<ice::SourceNode> m_auditionSource;
 
-    /// @brief 当前独立试听时间拉伸节点。
-    std::shared_ptr<ice::TimeStretcher> m_auditionStretcher;
+    /// @brief 试听拉伸前的专用节拍总线，歌曲卸载时仍保持常驻。
+    std::shared_ptr<ice::MixBus> m_auditionEffectMixer;
+
+    /// @brief 试听源最近一块输入的起点，供专用节拍器绝对帧调度读取。
+    /// @warning 音频回调单写者及音效 provider 读取者；relaxed 仅传递帧值，
+    /// 不承担图生命周期发布，同一个回调内先记录再处理节拍池。
+    std::atomic<std::size_t> m_auditionBlockStartFrame{ 0U };
+
+    /// @brief 试听歌曲和节拍共用的源帧混合节点，接入主拉伸器前级。
+    std::shared_ptr<AuditionSourceMixerNode> m_auditionMixer;
+
+    /// @brief 试听是否需要主拉伸器继续拉取输入。
+    /// @warning 控制线程写、音频回调读；relaxed 仅传递播放标量，图节点另由
+    /// MixBus 发布。避免主时间线停止或结束时截断仍在播放的试听。
+    std::atomic<bool> m_auditionPlaying{ false };
+
+    /// @brief 效果音轨中始终随主时间线拉伸的试听与节拍器子总线。
+    /// 普通打击音效的可选变速路由不能移动这个子总线。
+    std::shared_ptr<ice::MixBus> m_timingEffectMixer;
 
     /// @brief 主输出混音器。
     std::shared_ptr<ice::MixBus> m_mainMixer;
@@ -1216,9 +1247,6 @@ private:
 
     /// @brief 当前复合时间线全局拉伸质量。
     StretchQuality m_playbackQuality{ StretchQuality::Finer };
-
-    /// @brief 当前独立试听通道请求的播放倍率。
-    double m_auditionSpeed{ 1.0 };
 
     /// @brief 音效池静音状态表。
     std::unordered_map<std::string, bool> m_sfxMutes;

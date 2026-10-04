@@ -37,6 +37,58 @@ bool checkRoute(std::string_view selectedKey, std::string_view activeKey,
     // 键值只表示逻辑音轨身份，不要求对应文件实际存在。
     return resolveBpmPlaybackRoute(selectedKey, activeKey) == expected;
 }
+
+/// @brief 验证 BPM 节拍器使用与播放头一致的视觉/音频时间转换。
+/// @return 固定偏移的符号、慢速播放和临近拍点索引都正确时为真。
+/// @note 使用独立预期时间，不以频谱半窗补偿代替声音校准。
+bool checkMetronomeTiming()
+{
+    using MMM::UI::bpmMetronomeAudioTime;
+    using MMM::UI::bpmMetronomeNextBeatIndex;
+    bool ok = true;
+    // 独立首拍来自音频分析；任何视觉校准值都不能移动其声音落点。
+    // 同步编辑器路由仍保留画布到音频的转换，以免改变既有播放契约。
+    for ( double visualOffset : { -.035, 0.0, .15 } ) {
+        const double independentOffset = MMM::UI::bpmMetronomeCoordinateOffset(
+            MMM::UI::BpmPlaybackRoute::Audition, visualOffset);
+        ok &= independentOffset == 0.0;
+        ok &= MMM::UI::bpmMetronomeCoordinateOffset(
+                  MMM::UI::BpmPlaybackRoute::SynchronizedWithEditor,
+                  visualOffset) == visualOffset;
+        for ( double rate : { .25, .5, .75, 1.0 } ) {
+            // 实际首拍仍在一秒源位置，只按播放速度换算墙钟时刻。
+            ok &= bpmMetronomeAudioTime(1.0, independentOffset) / rate ==
+                  1.0 / rate;
+        }
+        // 不受显示偏移影响的调度游标必须保留尚未到达的一秒拍点。
+        ok &= bpmMetronomeNextBeatIndex(.99, 1, .5, 0, independentOffset) == 0;
+        ok &= bpmMetronomeNextBeatIndex(1.01, 1, .5, 0, independentOffset) == 1;
+    }
+    // 编辑器同步路由下，-35 ms 画布偏移需反向转换为 1.035 秒。
+    // 反号会变成 0.965 秒，漏掉偏移则仍在一秒响，两者都不能通过。
+    ok &= std::abs(bpmMetronomeAudioTime(1, -.035) - 1.035) < 1e-12;
+    // 播放到 1.025 秒时该拍仍在前方，不能因错误索引跳过这次声音。
+    // 已跨过 1.035 秒且不允许补响时，才进入下一拍。
+    ok &= bpmMetronomeNextBeatIndex(1.025, 1, .5, 0, -.035) == 0;
+    ok &= bpmMetronomeNextBeatIndex(1.04, 1, .5, 0, -.035) == 1;
+    // 短补响窗口允许刚错过的拍立即响，窗口外不集中追赶历史拍点。
+    ok &= bpmMetronomeNextBeatIndex(1.04, 1, .5, .01, -.035) == 0;
+    // 正偏移的行为反向，不能把补偿方向写死为推迟声音。
+    ok &= std::abs(bpmMetronomeAudioTime(1, .035) - .965) < 1e-12;
+    ok &= bpmMetronomeNextBeatIndex(.97, 1, .5, 0, .035) == 1;
+    ok &= bpmMetronomeAudioTime(1, 0) == 1;
+    // 偏移按音轨秒应用，慢速下的墙钟差会自然扩大，不能再乘一次倍率。
+    // 0.25x 下 35 ms 音轨差对应 140 ms 听感差，而非 8.75 ms。
+    for ( double rate : { .25, 1.0, 2.0 } ) {
+        const double beatWallTime = bpmMetronomeAudioTime(1, -.035) / rate;
+        ok &= std::abs(beatWallTime - 1 / rate - .035 / rate) < 1e-12;
+    }
+    // 段首与预约时刻使用相同变换，变速边界不能提前切到下一段。
+    ok &= bpmMetronomeAudioTime(2, -.035) > 2.025;
+    // 零点前拍线保留有符号时间，硬件范围裁剪由实际调度循环负责。
+    ok &= bpmMetronomeAudioTime(-.1, -.035) < 0;
+    return ok;
+}
 }  // namespace
 
 /// @brief 覆盖同轨同步、异轨隔离、聚焦空格、无活动谱面和无选择场景。
@@ -46,6 +98,7 @@ int main()
 {
     // ok 累积所有运行时条件，使后续策略在前项失败后仍得到执行。
     bool ok = true;
+    ok &= checkMetronomeTiming();
     // 48 kHz 的 2048 帧窗口从 1 秒开始，其能量中心位于 1.021333… 秒。
     // 该中心在图表中必须仍对应缓存第 1 秒，防止 BPM 图比音频工具提前半窗。
     // 这里只允许浮点运算舍入误差，不能使用毫秒级容限掩盖漏掉的补偿。
