@@ -2,7 +2,9 @@
 
 #include "common/render/RenderSnapshot.h"
 #include "config/skin/SkinConfig.h"
+#include "config/visual/BackgroundConfig.h"
 
+#include <algorithm>
 #include <array>
 #include <string>
 
@@ -26,18 +28,18 @@ float skinTextureScale(Common::Render::TextureID texture)
     static const std::array<std::string,
                             static_cast<std::size_t>(TextureID::HoldHead) + 1>
                 KEYS{ "",
-              "",
-              "note.note",
-              "note.node",
-              "note.holdbodyvertical",
-              "note.holdbodyhorizontal",
-              "note.holdend",
-              "note.arrowleft",
-              "note.arrowright",
-              "panel.track.background",
-              "panel.track.judgearea",
-              "logo",
-              "note.holdhead" };
+                      "",
+                      "note.note",
+                      "note.node",
+                      "note.holdbodyvertical",
+                      "note.holdbodyhorizontal",
+                      "note.holdend",
+                      "note.arrowleft",
+                      "note.arrowright",
+                      "panel.track.background",
+                      "panel.track.judgearea",
+                      "logo",
+                      "note.holdhead" };
     const auto  id   = static_cast<std::uint32_t>(texture);
     const auto& skin = Config::SkinManager::instance();
     if ( id < KEYS.size() ) {
@@ -52,5 +54,50 @@ float skinTextureScale(Common::Render::TextureID texture)
     }
     // 非皮肤 ID 必须原样绘制，尤其不能放大文字、拍线或交互辅助图形。
     return 1.0F;
+}
+/// @brief 为 Note 的点状部件选择统一的固定锚点，不复用皮肤资产参数。
+/// @param texture 当前点状部件的逻辑纹理 ID。
+/// @param position 布局设置选择的中心或底边位置。
+/// @return 乘最终显示高度的位移比例，负值沿画布上方向移动。
+/// @note 是否进入 Note 绘制范围由批处理器的作用域状态控制。
+/// @warning 热路径只比较枚举；未知纹理、辅助标记及竖向连接体返回零位移。
+float noteTextureVerticalOffset(Common::Render::TextureID   texture,
+                                Config::NoteTexturePosition position)
+{
+    using Common::Render::TextureID;
+    if ( position != Config::NoteTexturePosition::Bottom ) return 0.0F;
+    // 动态帧只在打击动画入口开启位置作用域，其他资源不继承该偏移。
+    const auto id = static_cast<std::uint32_t>(texture);
+    if ( id >= static_cast<std::uint32_t>(TextureID::EffectStart) &&
+         id < static_cast<std::uint32_t>(TextureID::AsciiGlyphStart) )
+        return -0.5F;
+    // 连接体保留时轨跨度，其端点由可见头尾的视觉中心单独决定。
+    switch ( texture ) {
+    case TextureID::Note:
+    case TextureID::HoldHead:
+    case TextureID::HoldEnd:
+    case TextureID::Node:
+    case TextureID::FlickArrowLeft:
+    case TextureID::FlickArrowRight:
+    // 判定区由专用绘制入口启用作用域，不改变其他轨道图像的位置。
+    case TextureID::JudgeArea: return -0.5F;
+    default: return 0.0F;
+    }
+}
+/// @brief 在底边模式下取得点贴图最终视觉中心的纵向偏移。
+/// @note 输入尺寸已含独立皮肤倍率，不再次乘倍率或改变时间锚点。
+/// @warning 每个连接点与拾取部件调用一次，仅使用常量时间运算。
+float noteTextureCenterShiftY(Common::Render::TextureID texture, float width,
+                              float height, float aspect,
+                              Config::BackgroundFillMode  fillMode,
+                              Config::NoteTexturePosition position)
+{
+    const float offset = noteTextureVerticalOffset(texture, position);
+    if ( offset == 0.0F ) return 0.0F;
+    // Fit 的留白不是实际图像，连接点必须落在收缩后的可见矩形中心。
+    if ( fillMode == Config::BackgroundFillMode::AspectFit && aspect > 0.0F )
+        height = std::min(height, width / aspect);
+    // Center、Stretch 和 Fill 的纵向框保持既有布局尺寸。
+    return height * offset;
 }
 }  // namespace MMM::Logic::System

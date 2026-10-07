@@ -192,6 +192,51 @@ bool testBoundSampleLabelConfigRoundTrip()
     return true;
 }
 
+/// @brief 验证 Note 固定贴图位置的持久化与旧配置兼容。
+/// @return 两种位置往返一致且非法、缺失字段恢复中心时返回真。
+/// @note 使用稳定字符串保存，枚举序号变化不影响已保存的配置。
+/// @note 首次启动、现有配置、损坏输入分别走独立观察点。
+/// @note 当前格式必须明确写出选项，不能仅依赖读取端默认值。
+/// @note 未知文本可模拟未来版本的布局选项，旧版本仍应安全读取。
+/// @note 数字和布尔输入模拟手工编辑错误，不应传给字符串转换。
+bool testNoteTexturePositionRoundTrip()
+{
+    using MMM::Config::NoteTexturePosition;
+    MMM::Config::VisualConfig source;
+    // 首次启动与未携带字段的旧配置都保留原有中心对齐。
+    if ( source.noteTexturePosition != NoteTexturePosition::Center )
+        return false;
+    source.noteTexturePosition   = NoteTexturePosition::Bottom;
+    const nlohmann::json encoded = source;
+    if ( encoded.value("noteTexturePosition", "") != "bottom" ||
+         encoded.get<MMM::Config::VisualConfig>().noteTexturePosition !=
+             NoteTexturePosition::Bottom )
+        return false;
+    // 两种合法位置都经过写出与读取，避免只能切到底边而无法恢复中心。
+    source.noteTexturePosition = NoteTexturePosition::Center;
+    // 从已设置过底边的对象切回中心，覆盖双向持久化转换。
+    // 编码结果独立于枚举内部数值，配置协议只依赖两个公开字符串。
+    // 中心值也应显式持久化，不能被当成未初始化字段丢弃。
+    const nlohmann::json centered = source;
+    if ( centered.value("noteTexturePosition", "") != "center" ||
+         centered.get<MMM::Config::VisualConfig>().noteTexturePosition !=
+             NoteTexturePosition::Center )
+        return false;
+    // 非法类型不得抛出 JSON 类型错误；未知选项采用兼容默认值。
+    for ( const auto& input :
+          { nlohmann::json::object(),
+            nlohmann::json{ { "noteTexturePosition", "unknown" } },
+            nlohmann::json{ { "noteTexturePosition", 1 } },
+            nlohmann::json{ { "noteTexturePosition", true } } } ) {
+        if ( input.get<MMM::Config::VisualConfig>().noteTexturePosition !=
+             NoteTexturePosition::Center ) {
+            XERROR("Note texture position compatibility failed");
+            return false;
+        }
+    }
+    return true;
+}
+
 /// @brief 验证交互拾取包围盒横纵缩放能够持久化并限制到调试界面范围。
 /// @return 往返、缺省值和上下界限制均正确时返回 true。
 /// @note 横纵轴使用不同有效值和相反越界方向，覆盖独立处理。
@@ -700,6 +745,10 @@ bool testRenderingDefaultsReset()
     config.visual.nonHoldHitEffectDuration = 0.76F;
     config.visual.showBoundSampleLabels    = false;
     config.visual.noteFillMode = MMM::Config::BackgroundFillMode::Center;
+    // 复位测试使用非默认位置，防止字段漏入复位分组。
+    // 后续按全新默认对象比较，无需硬编码未来默认枚举。
+    config.visual.noteTexturePosition =
+        MMM::Config::NoteTexturePosition::Bottom;
     // 调色方案名称属于物件渲染复位范围，需要随缩放和填充共同恢复。
     config.settings.defaultColorPaletteSchemeName = "Custom";
     // 背景字段也设为非默认，用于证明物件复位不会越界修改背景。
@@ -724,6 +773,8 @@ bool testRenderingDefaultsReset()
          config.visual.showBoundSampleLabels !=
              defaults.visual.showBoundSampleLabels ||
          config.visual.noteFillMode != defaults.visual.noteFillMode ||
+         config.visual.noteTexturePosition !=
+             defaults.visual.noteTexturePosition ||
          config.settings.defaultColorPaletteSchemeName !=
              defaults.settings.defaultColorPaletteSchemeName ||
          config.visual.background.fillMode !=
@@ -1075,6 +1126,7 @@ int main()
                    testHoverSubdivisionLineExtensionRatioConfig() &&
                    testPreviewAreaLineDefaults() &&
                    testBoundSampleLabelConfigRoundTrip() &&
+                   testNoteTexturePositionRoundTrip() &&
                    testInteractionHitboxScaleConfig() &&
                    testNonHoldHitEffectDurationConfig() &&
                    testPolylineEditingConfigRoundTrip() &&

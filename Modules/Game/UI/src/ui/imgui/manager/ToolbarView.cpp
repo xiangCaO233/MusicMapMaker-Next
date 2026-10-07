@@ -8,6 +8,7 @@
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
+#include "config/visual/NoteTexturePosition.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
@@ -5443,6 +5444,33 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                     appConfig.save();
                     m_layoutVisualConfigDirty = false;
                 }
+            }
+
+            // 固定位置只提供中心与底边，不让用户输入任意偏移或编辑皮肤文件。
+            // 离散布局切换立即应用并保存，主画布、预览和拾取共用同一配置。
+            visual           = appConfig.getVisualConfig();
+            int notePosition = static_cast<int>(visual.noteTexturePosition);
+            const char* positions[] = {
+                TR("ui.settings.visual.note_texture_position.center").data(),
+                TR("ui.settings.visual.note_texture_position.bottom").data(),
+            };
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.note_texture_position").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackCombo("##LayoutNoteTexturePosition",
+                                          &notePosition,
+                                          positions,
+                                          IM_ARRAYSIZE(positions)) ) {
+                visual.noteTexturePosition =
+                    static_cast<Config::NoteTexturePosition>(notePosition);
+                applyVisualConfig(visual);
+                appConfig.save();
+                m_layoutVisualConfigDirty = false;
+            }
+            if ( ImGui::IsItemHovered() ) {
+                drawTooltip(
+                    TR("ui.settings.visual.note_texture_position.tooltip")
+                        .data());
             }
 
             // 填充模式通过整数适配 ImGui Combo，再显式转换回强类型枚举。

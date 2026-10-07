@@ -142,19 +142,41 @@ void NoteRenderSystem::renderHold(
     const float clipTop    = std::min(topY, bottomY);
     const float clipBottom = std::max(topY, bottomY);
 
+    // 固定贴图已经采用底边定位，连接体必须接到各自最终视觉中心。
+    // 头尾可有不同皮肤倍率和 Fit 留白，不能给整条 Body 加同一偏移。
+    // 偏移仅作用于几何，原始时间与 HS 投影仍保留 double 精度。
+    const float headShift =
+        noteTextureCenterShiftY(headTexture,
+                                headSize.x * skinTextureScale(headTexture),
+                                headSize.y * skinTextureScale(headTexture),
+                                getTexAspect(snapshot, headTexture),
+                                config.visual.noteFillMode,
+                                config.visual.noteTexturePosition);
+    const float endShift = noteTextureCenterShiftY(
+        TextureID::HoldEnd,
+        endSize.x * skinTextureScale(TextureID::HoldEnd),
+        endSize.y * skinTextureScale(TextureID::HoldEnd),
+        getTexAspect(snapshot, TextureID::HoldEnd),
+        config.visual.noteFillMode,
+        config.visual.noteTexturePosition);
+    const double bodyHeadY = headY + headShift;
+    // 活动长条仍收敛到驻留头部中心，不因头尾高度不同反向伸出短主体。
+    const double bodyEndY =
+        holding ? std::min(endY + endShift, bodyHeadY) : endY + endShift;
+
     // 1. 连接体只向 Batcher 提交视口内坐标，防止超长三角形触发光栅精度异常。
     if ( (glowPart == HoverPart::None || glowPart == HoverPart::HoldBody) &&
-         std::isfinite(headY) && std::isfinite(endY) ) {
+         std::isfinite(bodyHeadY) && std::isfinite(bodyEndY) ) {
         // 非有限投影不会进入 Batcher，避免污染整个顶点缓冲。
         // 起点与终点分别裁剪，正向和负向滚动都能保留可见跨度。
         // 仅在范围收敛后转换为 float，保证提交坐标接近视口量级。
         const float clippedHeadY =
-            static_cast<float>(std::clamp(headY,
+            static_cast<float>(std::clamp(bodyHeadY,
                                           static_cast<double>(clipTop),
                                           static_cast<double>(clipBottom)));
         // 尾部使用相同边界，主体两侧因此始终共享同一组 Y。
         const float clippedEndY =
-            static_cast<float>(std::clamp(endY,
+            static_cast<float>(std::clamp(bodyEndY,
                                           static_cast<double>(clipTop),
                                           static_cast<double>(clipBottom)));
         // 完全离屏的连接体会折叠到同一边界，不生成退化三角形。
@@ -181,9 +203,11 @@ void NoteRenderSystem::renderHold(
     };
 
     // 2. 头部。
-    // 可见性使用最终倍率，提交尺寸保持原值，由 Batcher 统一围绕中心缩放。
+    // 可见性按最终中心或底边位置判断，提交原尺寸供 Batcher 完成统一定位。
+    // 端点可见性与连接点采用相同视觉中心，谱面时轨端点保持原值。
+    // 底边定位不能混入持续时间或滚动缓存的积分。
     if ( (glowPart == HoverPart::None || glowPart == HoverPart::Head) &&
-         isEndpointVisible(headY,
+         isEndpointVisible(headY + headShift,
                            headSize.y * skinTextureScale(headTexture)) ) {
         // 可见头部保持原始中心坐标，不对固定尺寸纹理进行拉伸。
         batcher.setTexture(headTexture);
@@ -198,7 +222,7 @@ void NoteRenderSystem::renderHold(
 
     // 3. 尾部。
     if ( (glowPart == HoverPart::None || glowPart == HoverPart::HoldEnd) &&
-         isEndpointVisible(endY,
+         isEndpointVisible(endY + endShift,
                            endSize.y * skinTextureScale(TextureID::HoldEnd)) ) {
         // 可见尾部同样保持皮肤尺寸，只有完全离屏时才跳过。
         batcher.setTexture(TextureID::HoldEnd);
@@ -237,6 +261,15 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
             : TextureID::Note;
     glm::vec2 headSize = getDrawSize(snapshot, headTexture, w, h);
     float     headX    = x + (w - headSize.x) * 0.5f;
+    // 横滑整体以起点贴图的视觉中心定位；箭头大小不改变连接方向。
+    // 偏移在填充和皮肤倍率确定后计算，不改变时间或终轨坐标。
+    const float headShift =
+        noteTextureCenterShiftY(headTexture,
+                                headSize.x * skinTextureScale(headTexture),
+                                headSize.y * skinTextureScale(headTexture),
+                                getTexAspect(snapshot, headTexture),
+                                config.visual.noteFillMode,
+                                config.visual.noteTexturePosition);
 
     // 1. 横向连接体。
     // 零轨道偏移只画头部，不生成退化连接体或方向箭头。
@@ -246,15 +279,29 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
             static_cast<uint32_t>(TextureID::HoldBodyHorizontal));
         if ( itBodyH != snapshot->uvMap.end() ) {
             // 横向主体只按皮肤比例调整厚度，跨度由两端实际中心决定。
-            float drawH = h * (itBodyH->second.w /
-                               snapshot->uvMap.at(uint32_t(TextureID::Note)).w);
+            float drawH =
+                std::max(1.5F,
+                         h * (itBodyH->second.w /
+                              snapshot->uvMap.at(uint32_t(TextureID::Note)).w));
             // 连接体直接跨越根节点与真实终点中心，保留独立区域之间的间隙。
             const float headCenterX = x + w * 0.5F;
             const float drawW       = std::abs(endpointCenterX - headCenterX);
             const float bodyX       = std::min(headCenterX, endpointCenterX);
 
+            // 头部、连接体和箭头共用一条中心线，资源高度差不能画成斜线。
+            // 起点仍按底边或中心规则定位，箭头随后围绕这个参考中心绘制。
+            // 终轨尺寸只决定箭头外观，不参与横向主体的纵坐标。
+            // Body 只缩放自身厚度，跨度由真实轨道中心确定。
+            // UV 和左右方向保持原值，悬浮发光复用相同几何。
+            // 四角已经补偿位置，批处理器不得再按 Body 高度整体移动。
+            const float leftY  = y + headShift;
+            const float rightY = leftY;
             batcher.setTexture(TextureID::HoldBodyHorizontal);
-            batcher.pushQuad(bodyX, y + drawH * 0.5f, drawW, drawH, bodyColor);
+            batcher.pushFreeQuad({ bodyX, leftY + drawH * 0.5F },
+                                 { bodyX + drawW, rightY + drawH * 0.5F },
+                                 { bodyX + drawW, rightY - drawH * 0.5F },
+                                 { bodyX, leftY - drawH * 0.5F },
+                                 bodyColor);
         }
     }
 
@@ -280,9 +327,12 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
         glm::vec2 arrowSize =
             getDrawSize(snapshot, arrowId, endpointW, endpointH);
         const float arrowX = endpointCenterX - arrowSize.x * 0.5F;
+        // 箭头跟随头部中心，禁用自身底边位移以避免再次按较小高度偏移。
+        const NoteTexturePositionScope arrowPosition(
+            batcher, Config::NoteTexturePosition::Center);
         batcher.setTexture(arrowId);
         batcher.pushFilledQuad(arrowX,
-                               y + arrowSize.y * 0.5f,
+                               y + headShift + arrowSize.y * 0.5f,
                                arrowSize.x,
                                arrowSize.y,
                                { getTexAspect(snapshot, arrowId), 1.0f },

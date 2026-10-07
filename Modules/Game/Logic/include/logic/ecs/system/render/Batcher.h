@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config/visual/BackgroundConfig.h"
+#include "config/visual/NoteTexturePosition.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/system/render/SkinTextureScale.h"
 #include <glm/glm.hpp>
@@ -28,6 +29,12 @@ struct Batcher {
     TextureID currentTex = TextureID::None;
     /// @brief 当前纹理的独立视觉倍率，切换纹理时刷新且不影响图集合批。
     float m_textureScale = 1.0F;
+    /// @brief 当前绘制范围的 Note 对齐方式，默认关闭底边模式以保护其他图像。
+    Config::NoteTexturePosition m_noteTexturePosition{
+        Config::NoteTexturePosition::Center
+    };
+    /// @brief 当前逻辑纹理的对齐比例，切换纹理或绘制范围时刷新。
+    float m_noteTextureOffsetY{ 0.0F };
     /// @brief 尚未提交的连续索引范围及其绘制状态。
     Common::Render::CanvasDrawCmd currentCmd;
 
@@ -114,8 +121,21 @@ struct Batcher {
         }
         currentTex     = tex;
         m_textureScale = skinTextureScale(tex);
+        m_noteTextureOffsetY =
+            noteTextureVerticalOffset(tex, m_noteTexturePosition);
         // 同图集的纹理可拥有不同倍率，不切批也必须刷新当前几何状态。
         // 即使无需切批，也必须更新逻辑纹理，否则后续 UV 会沿用旧条目。
+    }
+
+    /// @brief 切换当前 Note 绘制范围的固定位置，同图集也刷新几何状态。
+    /// @warning 热路径只更新轻量枚举与比例，不切批或查询外部配置。
+    void setNoteTexturePosition(Config::NoteTexturePosition position)
+    {
+        // 作用域退出也走本入口，确保同图集缓存同步恢复中心。
+        // 状态只影响后续追加的顶点，已提交的几何无需重建。
+        // 同一纹理连续绘制时也要刷新比例，不能只依赖 setTexture。
+        m_noteTexturePosition = position;
+        m_noteTextureOffsetY  = noteTextureVerticalOffset(currentTex, position);
     }
 
     /// @brief 切换后续图元的混合规则，即使共用图集也必须切批。
@@ -193,6 +213,8 @@ struct Batcher {
         y += h * (scaleY - 1.0F) * 0.5F;
         w *= scaleX;
         h *= scaleY;
+        // 填充与缩放已完成，底边模式上移自身最终半高，保持 UV 不变。
+        y += h * m_noteTextureOffsetY;
         // 只在最终入口缩放，pushFilledQuad 的比例适配不会再叠乘一次。
         // 这里只追加几何，调用方必须先用 setTexture 选择实际采样资源。
         // UV 可超出常规范围，本函数不裁剪或自动修正调用方的采样策略。
@@ -359,6 +381,16 @@ struct Batcher {
             p2 = anchor2 + (p2 - anchor2) * m_textureScale;
             p3 = anchor3 + (p3 - anchor3) * m_textureScale;
             p4 = anchor4 + (p4 - anchor4) * m_textureScale;
+        }
+        // 中心模式跳过平移运算，保留既有自由图元的角点坐标。
+        if ( m_noteTextureOffsetY != 0.0F ) {
+            // 使用贴图局部纵向边向量整体平移，避免旋转时按屏幕 AABB 锚定。
+            const glm::vec2 shift =
+                ((p1 - p4) + (p2 - p3)) * (0.5F * m_noteTextureOffsetY);
+            p1 += shift;
+            p2 += shift;
+            p3 += shift;
+            p4 += shift;
         }
         // 该入口不施加最小高度，斜边和折线连接体可以保持其原始形状。
         // 不重新排序角点，几何方向和纹理方向都由传入顺序决定。
@@ -579,4 +611,37 @@ struct Batcher {
     }
 };
 
+}  // namespace MMM::Logic::System
+
+namespace MMM::Logic::System
+{
+/// @brief 将底边对齐限制在 Note 绘制范围，退出时恢复共享批处理器状态。
+/// @note 时间线标记与音频采样可能复用 Note 纹理 ID，必须隔离其语义范围。
+/// @warning 热路径栈上作用域对象，只修改枚举，不分配或执行线程同步。
+class NoteTexturePositionScope
+{
+    /// @brief 借用的批处理器，生命周期覆盖作用域对象。
+    Batcher& m_batcher;
+    /// @brief 进入前位置，嵌套或提前返回时也须恢复。
+    Config::NoteTexturePosition m_previous;
+
+public:
+    /// @brief 在当前 Note 阶段启用统一位置，兼容已选中的同图集纹理。
+    NoteTexturePositionScope(Batcher&                    batcher,
+                             Config::NoteTexturePosition position)
+        : m_batcher(batcher), m_previous(batcher.m_noteTexturePosition)
+    {
+        m_batcher.setNoteTexturePosition(position);
+    }
+    /// @brief 恢复进入前状态，防止后续非 Note 图像受布局选项影响。
+    ~NoteTexturePositionScope()
+    {
+        m_batcher.setNoteTexturePosition(m_previous);
+    }
+    /// @brief 禁止复制作用域，避免多次恢复同一借用批处理器。
+    NoteTexturePositionScope(const NoteTexturePositionScope&) = delete;
+    /// @brief 禁止复制赋值，恢复职责固定属于构造时的范围。
+    NoteTexturePositionScope& operator=(const NoteTexturePositionScope&) =
+        delete;
+};
 }  // namespace MMM::Logic::System

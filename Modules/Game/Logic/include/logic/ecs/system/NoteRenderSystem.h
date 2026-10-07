@@ -308,6 +308,8 @@ private:
     /// 开启时执行；默认渲染路径不得调用。
     static void debugRenderHitboxes(Batcher& batcher, RenderSnapshot* snapshot);
 
+    /// @brief 生成折线主体，并按当前贴图位置补偿横向连接点。
+    /// @param config 同一快照的布局配置，供点贴图填充和视觉中心换算使用。
     /// @warning 热路径：Polyline body 几何生成时执行；禁止动态资源加载或完整
     /// registry 遍历。
     static void drawPolylineBody(
@@ -317,7 +319,8 @@ private:
         double currentTime, float topY, float bottomY, float noteW, float noteH,
         glm::vec4 colorHold, entt::entity entity, bool generateHitboxes,
         HoverPart glowPart, int glowSubIndex,
-        const CanvasLaneProjection* laneProjection, bool simulateJudgment);
+        const CanvasLaneProjection* laneProjection, bool simulateJudgment,
+        const Config::EditorConfig& config);
 
     /// @warning 热路径：Polyline 可见性判断内联执行；保持纯计算且不可引入分配。
     static bool isCarrierVisible(double startOffset, double endOffset,

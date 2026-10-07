@@ -1,5 +1,6 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 
+#include "config/EditorConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -216,7 +217,7 @@ void NoteRenderSystem::drawTrackBackground(Batcher& batcher, int32_t trackCount,
 /// @param batcher 当前图元批处理器。
 /// @param trackCount 当前区域轨道数。
 /// @param leftX 区域左边界。
-/// @param judgmentLineY 判定区中心纵坐标。
+/// @param judgmentLineY 判定区时间锚点，按 Note 位置选择中心或底边对齐。
 /// @param singleTrackW 单轨基础宽度。
 /// @param trackAreaW 无纹理回退线的总跨度。
 /// @param config 提供判定区沿用的物件横纵缩放。
@@ -231,6 +232,10 @@ void NoteRenderSystem::drawJudgmentArea(Batcher& batcher, int32_t trackCount,
                                         const Config::EditorConfig& config,
                                         glm::vec4                   color)
 {
+    // 判定区必须与到达当前时间的 Note 使用相同位置规则。
+    // 独立作用域只覆盖此区域，退出后不影响底板、拍线和其他辅助图像。
+    const NoteTexturePositionScope position(batcher,
+                                            config.visual.noteTexturePosition);
     batcher.setTexture(TextureID::JudgeArea);
     auto judgeUvIt = batcher.snapshot->uvMap.find(
         static_cast<uint32_t>(TextureID::JudgeArea));
@@ -243,7 +248,7 @@ void NoteRenderSystem::drawJudgmentArea(Batcher& batcher, int32_t trackCount,
         if ( texW > 0 && texH > 0 ) {
             float aspect = texW / texH;
             float drawW  = singleTrackW * config.visual.noteScaleX;
-            // 横纵缩放独立应用，中心锚点仍固定在对应轨道和判定线上。
+            // 横纵缩放独立应用，Batcher 在最终尺寸确定后统一对齐判定锚点。
             float drawH = (singleTrackW / aspect) * config.visual.noteScaleY;
 
             const float halfPixelU = 0.5f / 2048.0f;
@@ -273,8 +278,13 @@ void NoteRenderSystem::drawJudgmentArea(Batcher& batcher, int32_t trackCount,
     } else {
         // 只在纹理键缺失时采用细线；已有但尺寸无效的条目由上方检查跳过。
         batcher.setTexture(TextureID::None);
+        // 缺省细线也采用对应对齐方式，逻辑时间锚点始终保持不变。
+        const float halfHeight = config.visual.noteTexturePosition ==
+                                         Config::NoteTexturePosition::Bottom
+                                     ? 0.0F
+                                     : 1.0F;
         batcher.pushQuad(
-            leftX, judgmentLineY + 2.0f * 0.5f, trackAreaW, 2.0f, color);
+            leftX, judgmentLineY + halfHeight, trackAreaW, 2.0f, color);
     }
 }
 

@@ -1496,34 +1496,37 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
             hasDecoration = true;
         };
 
-    auto appendPreviewMarker =
-        [&](float y, ::MMM::TimingEffect effect, float alpha) {
-            const MarkerDrawRect rect = markerDrawRect(effect);
-            const uint32_t       previewIndexOffset =
-                static_cast<uint32_t>(m_currentSnapshot->indices.size());
-            Logic::System::Batcher previewBatcher(m_currentSnapshot,
-                                                  &m_currentSnapshot->cmds);
-            // 临时 Batcher 直接追加到快照尾部，基线计数保证下一帧可截断。
-            previewBatcher.setTexture(Common::Render::TextureID::Note);
-            previewBatcher.pushFilledQuad(
-                rect.x,
-                y + rect.h * 0.5f,
-                rect.w,
-                rect.h,
-                { 1.0f, 1.0f },
-                Config::AppConfig::instance().getVisualConfig().noteFillMode,
-                timelineEffectColor(effect, alpha));
-            previewBatcher.flush();
+    auto appendPreviewMarker = [&](float               y,
+                                   ::MMM::TimingEffect effect,
+                                   float               alpha) {
+        const MarkerDrawRect rect = markerDrawRect(effect);
+        const uint32_t       previewIndexOffset =
+            static_cast<uint32_t>(m_currentSnapshot->indices.size());
+        Logic::System::Batcher previewBatcher(m_currentSnapshot,
+                                              &m_currentSnapshot->cmds);
+        // 临时 Batcher 直接追加到快照尾部，基线计数保证下一帧可截断。
+        // 拖动和创建预览复用正式标记的对齐规则，原始 y 继续用于时间换算。
+        const auto& visual = Config::AppConfig::instance().getVisualConfig();
+        previewBatcher.setNoteTexturePosition(visual.noteTexturePosition);
+        previewBatcher.setTexture(Common::Render::TextureID::Note);
+        previewBatcher.pushFilledQuad(rect.x,
+                                      y + rect.h * 0.5f,
+                                      rect.w,
+                                      rect.h,
+                                      { 1.0f, 1.0f },
+                                      visual.noteFillMode,
+                                      timelineEffectColor(effect, alpha));
+        previewBatcher.flush();
 
-            const uint32_t previewIndexCount =
-                static_cast<uint32_t>(m_currentSnapshot->indices.size()) -
-                previewIndexOffset;
-            const uint64_t previewKey =
-                timelineMarkerKey(previewIndexOffset, previewIndexCount);
-            appendGlowRange(previewIndexOffset, previewIndexCount, previewKey);
-            // 预览 marker 同时进入普通层和 glow 层，维持与实体 marker
-            // 一致外观。
-        };
+        const uint32_t previewIndexCount =
+            static_cast<uint32_t>(m_currentSnapshot->indices.size()) -
+            previewIndexOffset;
+        const uint64_t previewKey =
+            timelineMarkerKey(previewIndexOffset, previewIndexCount);
+        appendGlowRange(previewIndexOffset, previewIndexCount, previewKey);
+        // 预览 marker 同时进入普通层和 glow 层，维持与实体 marker
+        // 一致外观。
+    };
 
     auto transformMarkerColor =
         [&](uint32_t                                     vertexOffset,

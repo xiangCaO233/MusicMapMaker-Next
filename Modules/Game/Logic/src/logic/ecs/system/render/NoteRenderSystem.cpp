@@ -7,6 +7,7 @@
 #include "logic/ecs/system/SampleRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include "logic/ecs/system/render/SkinTextureScale.h"
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
@@ -128,17 +129,39 @@ TimelineInteractiveElement::MarkerGeometry& markerGeometryForEffect(
     return element.scrollMarker;
 }
 
+/// @brief 按点状物件的最终可见高度确定辅助判定框尺寸。
+/// @param width 对应视图物件的原始布局宽度，尚未应用皮肤倍率。
+/// @param height 对应视图物件的原始布局高度。
+/// @param aspect 绘制入口使用的纹理比例，时间线标记沿用一比一。
+/// @param fillMode 当前物件填充方式，Fit 的留白不计入可见高度。
+/// @return 与 Batcher 生成的普通 Note 图元相同的最终高度。
+/// @note 先处理绘制下限和填充，再应用皮肤倍率，避免二次缩放。
+/// @warning 每个辅助视图快照调用一次，只计算标量并读内存皮肤配置。
+float judgmentGuideHeight(float width, float height, float aspect,
+                          Config::BackgroundFillMode fillMode)
+{
+    // 与点贴图入口的尺寸下限一致，极小视图也不得出现退化几何。
+    width  = std::max(width, 1.0F);
+    height = std::max(height, 1.5F);
+    // Fit 的高度由宽度约束，Stretch、Fill 和比例输入的 Center 保留布局高。
+    if ( fillMode == Config::BackgroundFillMode::AspectFit && aspect > 0.0F )
+        height = std::min(height, width / aspect);
+    return height * skinTextureScale(TextureID::Note);
+}
+
 /// @brief 绘制时间线/预览用的小型判定框。
 /// @warning 热路径：每个 Timeline/Preview 快照生成时执行；只推送固定数量几何。
 /// @param batcher 接收矩形与边框的批处理器。
 /// @param leftX 判定框左边界，单位为像素。
-/// @param centerY 框中心的屏幕 Y。
+/// @param anchorY 当前时间的屏幕 Y，按位置选项解释为中心或底边。
 /// @param width 框宽，过窄时不提交几何。
 /// @param height 框高，过薄时不提交几何。
+/// @param position 与 Note 共用的位置选项，按判定框自身高度对齐。
 /// @note 使用无纹理几何；当前裁剪状态由调用方选择。
 /// @note 本函数不恢复调用前的纹理状态，也不主动提交尾批。
-void drawJudgmentGuideBox(Batcher& batcher, float leftX, float centerY,
-                          float width, float height)
+void drawJudgmentGuideBox(Batcher& batcher, float leftX, float anchorY,
+                          float width, float height,
+                          Config::NoteTexturePosition position)
 {
     // 过小尺寸既不可辨认，也容易形成退化边框。
     // 跳过时不改变批处理器的纹理和裁剪状态。
@@ -150,9 +173,16 @@ void drawJudgmentGuideBox(Batcher& batcher, float leftX, float centerY,
     constexpr float strokeWidth = 2.0f;
 
     // pushQuad 接收底边坐标，描边入口则接收两端边界。
-    // 两套接口共享同一中心与半高，避免填充和描边偏移。
-    const float topY    = centerY - height * 0.5f;
-    const float bottomY = centerY + height * 0.5f;
+    // 两套接口共享最终边界；底边模式不改变原始时间坐标。
+    const float bottomY =
+        anchorY + (position == Config::NoteTexturePosition::Bottom
+                       ? 0.0F
+                       : height * 0.5F);
+    const float topY = bottomY - height;
+    // 调用方按当前视图的物件最终高度传入尺寸，不复用主画布像素高度。
+    // 辅助框不再乘判定贴图倍率，避免与作为尺寸基准的 Note 重复缩放。
+    // 纯色几何没有贴图定位语义，因此显式计算边界后交给 None 批次。
+    // 填充和描边均在该边界上提交，避免两层覆盖物各自重复补偿。
     batcher.setTexture(TextureID::None);
     batcher.pushQuad(leftX,
                      bottomY,
@@ -933,7 +963,11 @@ void NoteRenderSystem::generateSnapshot(
             // 在鼠标位置绘制临时的判定线预览
             batcher.pushQuad(
                 leftX,
-                snapshot->previewHoverY + 2.0f * 0.5f,
+                snapshot->previewHoverY +
+                    (config.visual.noteTexturePosition ==
+                             Config::NoteTexturePosition::Bottom
+                         ? 0.0F
+                         : 1.0F),
                 trackAreaW,
                 2.0f,
                 { hoverBoxCol.r, hoverBoxCol.g, hoverBoxCol.b, 0.6f });
@@ -943,7 +977,25 @@ void NoteRenderSystem::generateSnapshot(
         // 先提交悬浮覆盖层，再追加判定框。
         // 判定框位置不随目标悬浮时间移动，用于区分当前判定基准。
         batcher.flush();
-        drawJudgmentGuideBox(batcher, leftX, judgmentLineY, trackAreaW, 18.0f);
+        // 预览物件按本视图轨宽计算尺寸，纵向压缩只影响时间跨度。
+        // 判定框使用普通 Note 的最终高度；不依赖当前是否有可见音符。
+        float noteAspect = 1.0F;
+        if ( const auto uv =
+                 snapshot->uvMap.find(static_cast<uint32_t>(TextureID::Note));
+             uv != snapshot->uvMap.end() && uv->second.z > 0.0F &&
+             uv->second.w > 0.0F )
+            noteAspect = uv->second.z / uv->second.w;
+        const float guideHeight = judgmentGuideHeight(
+            singleTrackW * config.visual.noteScaleX,
+            singleTrackW / noteAspect * config.visual.noteScaleY,
+            noteAspect,
+            config.visual.noteFillMode);
+        drawJudgmentGuideBox(batcher,
+                             leftX,
+                             judgmentLineY,
+                             trackAreaW,
+                             guideHeight,
+                             config.visual.noteTexturePosition);
     }
 
     batcher.flush();
@@ -1334,6 +1386,10 @@ void NoteRenderSystem::generateTimelineSnapshot(
         }
     }
 
+    // 标记几何跟随布局位置，交互记录的 y 仍保存真实时间锚点用于吸附。
+    // 作用域在函数末尾恢复批处理器，避免影响其他画布或音频采样。
+    const NoteTexturePositionScope timingPositionScope(
+        batcher, config.visual.noteTexturePosition);
     // 5. 绘制 Timing 事件为普通 Note 形状。
     // Timing 标记使用独立尺寸策略，不直接沿用主画布单轨宽度。
     // 专业模式给左右边缘留缝，普通模式填满中央标记宽度。
@@ -1594,7 +1650,15 @@ void NoteRenderSystem::generateTimelineSnapshot(
 
     // 6. 绘制当前时间判定框，作为时间线最上层覆盖物。
     batcher.flush();
-    drawJudgmentGuideBox(batcher, paddingX, judgmentLineY, lineW, 18.0f);
+    // 专业模式覆盖全部类型泳道，普通模式保留中央标记区域的左右边距。
+    // 高度匹配当前标记图元，不随其他画布尺寸或固定像素常量漂移。
+    drawJudgmentGuideBox(
+        batcher,
+        professionalMode ? 0.0F : paddingX,
+        judgmentLineY,
+        professionalMode ? viewportWidth : lineW,
+        judgmentGuideHeight(noteW, noteH, 1.0F, config.visual.noteFillMode),
+        config.visual.noteTexturePosition);
 }
 
 /// @brief 计算预览轨道布局及相对主画布的纵向缩放。

@@ -539,6 +539,13 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
     auto&           skinManager = Config::SkinManager::instance();
     float           baseFps     = skinManager.getEffectBaseFps();
     const auto      layoutMode  = skinManager.getHitEffectLayoutMode();
+    // 固定尺寸打击帧跟随 Note 对齐方式；整轨动画仍覆盖完整轨道区。
+    // 独立作用域确保后续音频采样、辅助图像不继承特效的位置状态。
+    const NoteTexturePositionScope position(
+        batcher,
+        layoutMode == Config::HitEffectLayoutMode::TrackFill
+            ? Config::NoteTexturePosition::Center
+            : config.visual.noteTexturePosition);
 
     for ( const auto& [track, active] : m_trackActiveEffects ) {
         (void)track;
@@ -587,7 +594,7 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
         // 先以宽整数计算终点再钳位，异常大偏移不能溢出或造成无界绘制循环。
         const int64_t renderTrack = static_cast<int64_t>(active.trackIndex) +
                                     (active.isDraft ? trackCount : 0);
-        const int headTrack = static_cast<int>(
+        const int     headTrack   = static_cast<int>(
             std::clamp<int64_t>(renderTrack, 0, trackCount - 1));
         const int tailTrack  = static_cast<int>(std::clamp<int64_t>(
             renderTrack + active.trackOffset, 0, trackCount - 1));
