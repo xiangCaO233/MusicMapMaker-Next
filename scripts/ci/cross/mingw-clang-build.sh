@@ -26,6 +26,8 @@ Options:
   --toolchain <path>      CMake toolchain file. Default: cmake/toolchain/cross-mingw-clang.cmake
   --sources-build         Configure with SOURCES_BUILD=ON.
   --vulkan-validation-layers Enable Vulkan validation layers. Default: disabled.
+  --pgo-instrument            Enable LLVM PGO instrumentation (default).
+  --no-pgo-instrument         Disable PGO instrumentation.
   --prebuilt-targets      Build only third-party targets used for staging.
   --configure-only        Configure and generate, then stop
   --fresh                 Remove the build directory before configuring
@@ -299,6 +301,10 @@ toolchainFile="cmake/toolchain/cross-mingw-clang.cmake"
 sourcesBuild="OFF"
 # 每次配置都写入验证层状态，避免旧 CMake 缓存残留。
 vulkanValidationLayers="OFF"
+# 默认采集业务模块 profile，预编译生产流程显式关闭。
+pgoInstrument="ON"
+# 插桩仅采集 profile，不代表本次构建已经应用 profile 优化。
+# CMake 参数每次显式传入，复用构建树也能关闭旧的采样设置。
 # 流程开关分别控制目标集合、停止点和构建树生命周期。
 prebuiltTargets=0
 configureOnly=0
@@ -307,6 +313,16 @@ freshBuild=0
 # 在修改 PATH 或构建树前完整解析参数。
 while (( $# > 0 )); do
     case "$1" in
+        --pgo-instrument)
+            # 显式开关按命令行顺序覆盖默认采样状态。
+            pgoInstrument="ON"
+            shift
+            ;;
+        --no-pgo-instrument)
+            # 普通构建与依赖生产流程可显式关闭采样。
+            pgoInstrument="OFF"
+            shift
+            ;;
         --build-dir)
             # 构建目录稍后统一解析为绝对路径。
             if (( $# < 2 )); then
@@ -426,6 +442,11 @@ while (( $# > 0 )); do
             ;;
     esac
 done
+
+# 仅生产预编译依赖时不创建采样产物，也不要求目标 profile 运行库。
+if (( prebuiltTargets )); then
+    pgoInstrument="OFF"
+fi
 
 if [[ -n "${llvmMingwRoot}" ]]; then
     # 路径规范化后再验证 bin，避免相对路径依赖当前目录。
@@ -549,7 +570,7 @@ cmake -G "${CMAKE_GENERATOR:-Ninja}" \
     -DICE_LINKAGE="${projectLinkage}" \
     -DPROJECT_PREBUILT_COMPILER_TAG="${compilerTag}" \
     -DICE_PREBUILT_COMPILER_TAG="${compilerTag}" \
-    -DMMM_PGO_INSTRUMENT=OFF \
+    -DMMM_PGO_INSTRUMENT="${pgoInstrument}" \
     -DMMM_PGO_USE=OFF \
     -S "${projectRoot}" \
     -B "${buildDir}"
@@ -626,7 +647,7 @@ fi
 # 维护约束：shared 模式不得消费 static 配置路径。
 # 维护约束：静态模式不得混入 shared 运行时布局。
 # 维护约束：交叉构建禁止同步翻译或默认皮肤到宿主配置。
-# 维护约束：PGO 插桩和使用在该交叉流程中保持关闭。
+# 维护约束：PGO 插桩默认开启，PGO 使用由独立优化构建负责。
 # 维护约束：第三方源码依赖构建也不得启用主项目 PGO。
 # 维护约束：所有 CMake 参数保持双引号以支持路径空格。
 # 维护约束：续行反斜杠之后不得插入注释或额外 token。

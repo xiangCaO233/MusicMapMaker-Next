@@ -2,10 +2,21 @@
 # 所有外部命令通过统一 helper 传播退出码，避免 PowerShell 静默继续。
 # build_msvc 是可重建的专用构建树，不与 MinGW 或本机构建共享缓存。
 param(
-    [switch]$VulkanValidationLayers
+    [switch]$VulkanValidationLayers,
+    # 默认请求插桩；原生 cl.exe 不兼容 LLVM profile，由 CMake 提示并关闭。
+    [switch]$PgoInstrument,
+    # 无采样构建使用此参数，不能与显式启用同时指定。
+    [switch]$NoPgoInstrument
 )
 
 $ErrorActionPreference = 'Stop'
+
+# 冲突在下载与清理构建树之前报错，避免参数意图不明确。
+if ($PgoInstrument -and $NoPgoInstrument) {
+    Write-Error 'PgoInstrument and NoPgoInstrument cannot be used together.'
+    exit 1
+}
+$pgoInstrumentValue = if ($NoPgoInstrument) { 'OFF' } else { 'ON' }
 
 # 执行原生命令并在非零退出时立即以相同状态结束脚本。
 function Invoke-Native {
@@ -54,7 +65,7 @@ Invoke-Native git lfs pull "--include=$mainLfsIncludes" '--exclude='
 Remove-Item -Recurse -Force -LiteralPath build_msvc -ErrorAction SilentlyContinue
 # CI 构建不得写入 Runner 的用户配置目录。
 $vulkanValidationValue = if ($VulkanValidationLayers) { 'ON' } else { 'OFF' }
-Invoke-Native cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DSOURCES_BUILD=OFF -DBUILD_TESTING=ON "-DMMM_ENABLE_VULKAN_VALIDATION_LAYERS=$vulkanValidationValue" -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF -DMMM_PGO_INSTRUMENT=OFF -DMMM_PGO_USE=OFF -S . -B build_msvc
+Invoke-Native cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DSOURCES_BUILD=OFF -DBUILD_TESTING=ON "-DMMM_ENABLE_VULKAN_VALIDATION_LAYERS=$vulkanValidationValue" -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF "-DMMM_PGO_INSTRUMENT=$pgoInstrumentValue" -DMMM_PGO_USE=OFF -S . -B build_msvc
 # 构建与 CTest 都通过 helper 严格传播原生工具失败。
 Invoke-Native cmake --build build_msvc --parallel $ciBuildJobs
 Invoke-Native ctest --test-dir build_msvc --output-on-failure

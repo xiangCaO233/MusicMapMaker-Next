@@ -17,6 +17,12 @@ on:
         options:
           - website-release
           - ci-build
+      pgo_instrument:
+        # 采样版本默认开启；手动诊断可生成无插桩的对照构建。
+        description: "启用业务模块 PGO 插桩采集（需要 LLVM 工具链）"
+        required: true
+        type: boolean
+        default: true
 
 concurrency:
   # 同一 ref 的 CI 共享并发组，避免写同一个固定 checkout。
@@ -28,6 +34,9 @@ concurrency:
 env:
   # Checkout 与分支同步阶段禁止隐式下载 LFS；预编译构建脚本按工具链精确拉取。
   GIT_LFS_SKIP_SMUDGE: "1"
+  # push 默认采样，手动任务保留显式 false，避免布尔回退把关闭请求改为开启。
+  MMM_CI_PGO_OPTION: ${{ github.event_name != 'workflow_dispatch' && '--pgo-instrument' || inputs.pgo_instrument && '--pgo-instrument' || '--no-pgo-instrument' }}
+  # 同一选项传给各平台入口，比较采样与普通构建时保持矩阵一致。
 
 jobs:
   mmm-debian-ci:
@@ -93,31 +102,31 @@ jobs:
           # 每个构建步骤独立启用严格模式，不依赖上一 shell 状态。
           set -euo pipefail
           # 默认参数选择 windows/msvc/2026 的预编译消费构建。
-          bash scripts/ci/cross/msvc-clang-build.sh
+          bash scripts/ci/cross/msvc-clang-build.sh "${MMM_CI_PGO_OPTION}"
 
       - name: ci->Windows MinGW GCC Cross Build
         run: |
           # UCRT64 GCC 与 clang-cl 使用独立构建目录。
           set -euo pipefail
-          bash scripts/ci/cross/mingw-gcc-build.sh
+          bash scripts/ci/cross/mingw-gcc-build.sh "${MMM_CI_PGO_OPTION}"
 
       - name: ci->Windows MinGW Clang Cross Build
         run: |
           # clang64 路径在 helper 内验证 UCRT 与 libc++。
           set -euo pipefail
-          bash scripts/ci/cross/mingw-clang-build.sh
+          bash scripts/ci/cross/mingw-clang-build.sh "${MMM_CI_PGO_OPTION}"
 
       - name: ci->Linux GCC 14 Native Build
         run: |
           # 原生 GCC 构建同时注册测试目标和 Linux 产物。
           set -euo pipefail
-          bash scripts/ci/linux-build.sh --compiler gcc14
+          bash scripts/ci/linux-build.sh --compiler gcc14 "${MMM_CI_PGO_OPTION}"
 
       - name: ci->Linux Clang 19 Native Build
         run: |
           # 原生 Clang 构建使用独立 cache 和预编译 ABI 目录。
           set -euo pipefail
-          bash scripts/ci/linux-build.sh --compiler clang19
+          bash scripts/ci/linux-build.sh --compiler clang19 "${MMM_CI_PGO_OPTION}"
 
       - name: ci->Package Release
         run: |
@@ -194,6 +203,7 @@ jobs:
           # helper 会验证宿主架构、SDK、AppleClang 和预编译标签。
           set -euo pipefail
           bash scripts/ci/macos-build.sh \
+            "${MMM_CI_PGO_OPTION}" \
             --arch arm64 \
             --build-dir build_ci_macos_arm64
 

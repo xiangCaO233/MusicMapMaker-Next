@@ -27,6 +27,8 @@ Options:
   --jobs <count>             Parallel build jobs. Default: 75% of CPU threads
   --linkage <mode>           PROJECT_LINKAGE value: static or shared. Default: static
   --vulkan-validation-layers Enable Vulkan validation layers. Default: disabled.
+  --pgo-instrument            Enable LLVM PGO instrumentation (default).
+  --no-pgo-instrument         Disable PGO instrumentation.
   --sources-build            Configure with SOURCES_BUILD=ON.
   --prebuilt-targets         Build only third-party targets used for staging.
   --configure-only           Configure and generate, then stop.
@@ -137,15 +139,6 @@ detectClangCompilerTag() {
 scriptDir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 projectRoot="$(cd "${scriptDir}/../.." && pwd)"
 
-if [[ "$(uname -s)" != "Darwin" ]]; then
-    # SDK、xcrun 与原生产物要求 Darwin 宿主。
-    printf "error: scripts/ci/macos-build.sh must run on macOS\n" >&2
-    exit 1
-fi
-
-requireCommand cmake
-requireCommand xcrun
-
 # 架构默认跟随环境覆盖或当前宿主。
 targetArch="${MACOS_PREBUILT_ARCH:-$(uname -m)}"
 # 编译器空值在参数解析后通过 xcrun 补齐。
@@ -163,6 +156,10 @@ projectLinkage="static"
 sourcesBuild="OFF"
 # 显式关闭默认值，避免复用构建目录时沿用旧缓存。
 vulkanValidationLayers="OFF"
+# 默认采集业务模块 profile，预编译生产流程显式关闭。
+pgoInstrument="ON"
+# 插桩仅采集 profile，不代表本次构建已经应用 profile 优化。
+# CMake 参数每次显式传入，复用构建树也能关闭旧的采样设置。
 # 三个流程开关分别控制目标集合、停止点和目录生命周期。
 prebuiltTargets=0
 configureOnly=0
@@ -171,6 +168,16 @@ freshBuild=0
 # 在探测 SDK 或修改构建树前完整解析选项。
 while (( $# > 0 )); do
     case "$1" in
+        --pgo-instrument)
+            # 显式启用可以覆盖先前参数的关闭请求。
+            pgoInstrument="ON"
+            shift
+            ;;
+        --no-pgo-instrument)
+            # 无采样构建每次都将关闭状态写回 CMake 缓存。
+            pgoInstrument="OFF"
+            shift
+            ;;
         --arch)
             # 架构值稍后与宿主规范名称进行比较。
             if (( $# < 2 )); then
@@ -309,6 +316,19 @@ while (( $# > 0 )); do
     esac
 done
 
+# 仅生产预编译依赖时不创建采样产物，也不要求目标 profile 运行库。
+if (( prebuiltTargets )); then
+    pgoInstrument="OFF"
+fi
+
+if [[ "$(uname -s)" != "Darwin" ]]; then
+    # 帮助与参数错误无需 SDK；真正构建仍要求 Darwin 宿主。
+    printf "error: scripts/ci/macos-build.sh must run on macOS\n" >&2
+    exit 1
+fi
+requireCommand cmake
+requireCommand xcrun
+
 # 架构比较采用规范值，避免别名造成假不匹配。
 targetArch="$(normalizeArchitecture "${targetArch}")"
 hostArch="$(normalizeArchitecture "$(uname -m)")"
@@ -441,9 +461,9 @@ cmakeArgs=(
     -DICE_PREBUILT_TOOLCHAIN="${prebuiltToolchain}"
     -DICE_PREBUILT_COMPILER_TAG="${compilerTag}"
     -DICE_LINKAGE="${projectLinkage}"
-    # PGO 在 macOS 发布构建中保持关闭。
+    # 发布构建默认收集 LLVM profile，调用者可显式关闭。
     -DMMM_DISABLE_CLANG_LTO="${disableClangLto}"
-    -DMMM_PGO_INSTRUMENT=OFF
+    -DMMM_PGO_INSTRUMENT="${pgoInstrument}"
     -DMMM_PGO_USE=OFF
     -DMMM_MACOS_CODESIGN_IDENTITY="${MACOS_CODESIGN_IDENTITY:--}"
     # 部署下限同时影响系统 API 可用性和链接器 load command。
