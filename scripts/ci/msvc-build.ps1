@@ -58,7 +58,7 @@ function Get-CiBuildJobs {
 $ciBuildJobs = Get-CiBuildJobs
 
 # LFS include 精确覆盖 MSVC 2026、资源、测试夹具和 Windows 图标。
-$mainLfsIncludes = '3rdpty/prebuilts/headers/**,3rdpty/prebuilts/binaries/windows/*/libs/x86_64/msvc/2026/RelWithDebInfo/**,assets/**,tests/data/**,Modules/Main/src/logo.svg'
+$mainLfsIncludes = '3rdpty/prebuilts/headers/**,3rdpty/prebuilts/binaries/windows/*/libs/x86_64/msvc/2026/RelWithDebInfo/**,assets/**,tests/data/**,Modules/Main/src/logo.*'
 Invoke-Native git lfs pull "--include=$mainLfsIncludes" '--exclude='
 
 # 构建树属于 CI 临时产物，删除时使用 LiteralPath 防止通配符展开。

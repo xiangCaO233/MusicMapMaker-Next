@@ -246,7 +246,7 @@ fi
 includes=(
     "3rdpty/prebuilts/headers/**"
     "assets/**"
-    "Modules/Main/src/logo.svg"
+    "Modules/Main/src/logo.*"
 )
 
 if (( includeTests )); then
