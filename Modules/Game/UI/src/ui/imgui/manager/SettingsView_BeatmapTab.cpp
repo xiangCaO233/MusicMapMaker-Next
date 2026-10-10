@@ -876,7 +876,7 @@ void SettingsView::drawBeatmapSettings()
             TR_CACHE("ui.settings.beatmap.import_image").data();
         const float importButtonWidth = ImGui::GetFrameHeight();
         // 框高已经包含主题垂直内边距，不叠加额外的固定像素尺寸。
-        // 导入图标沿用打开文件夹字形，重命名沿用铅笔字形，避免新增字体依赖。
+        // 导入沿用加号字形，重命名沿用铅笔字形，避免新增字体依赖。
         // 可见标签只保留字形，完整动作名称由 Tooltip 提供。
         /// @brief 为资源行的下拉框预留右侧两个图标按钮宽度。
         /// @note 极窄窗口仍保留正宽度，避免负值传给 ImGui 布局。
@@ -890,87 +890,95 @@ void SettingsView::drawBeatmapSettings()
         /// @brief 记录资源导入请求，实际选择与复制交给锁外的低频路径。
         /// @note 目标枚举区分同名的封面与背景“导入图片”按钮。
         // 只借用受本函数 session 锁保护的谱面；其余分组局部状态按值捕获。
-        const auto drawResourceImportButton = [this,
-                                               project,
-                                               beatmapPtr = &beatmap,
-                                               importButtonWidth,
-                                               &meta](
-                                                  const char*           label,
-                                                  BeatmapResourceTarget target,
-                                                  const std::filesystem::path&
-                                                      resourcePath) {
-            ImGui::SameLine();
-            ImGui::PushID(static_cast<int>(target));
-            // 三行共享相同的按钮几何，资源路径再长也不能改变动作列宽度。
-            // 相同的隐藏按钮名在资源位置作用域内唯一，封面和背景不会串触发。
-            const bool readOnly = project && project->m_isTemporaryProject;
-            ImGui::BeginDisabled(!project || readOnly);
-            // 无工程时资源缺少持久归属，按钮保留占位但不能触发。
-            if ( ::MMM::UI::FeedbackButton(
-                     (std::string(ICON_MMM_FOLDER_OPEN) + "##ImportResource")
-                         .c_str(),
-                     ImVec2(importButtonWidth, importButtonWidth)) ) {
-                m_beatmapResourceTarget     = target;
-                m_openBeatmapResourcePicker = true;
-                // 保存点击时的媒体类型，跨帧选择器不能随草稿变动串绑。
-                m_importBackgroundVideo =
-                    target == BeatmapResourceTarget::Background &&
-                    meta.cover_type == CoverType::VIDEO;
-                m_resourceImportProjectRoot = project->m_projectRoot;
-                m_resourceImportBeatmapPath =
-                    beatmapPtr->m_baseMapMetadata.map_path;
-                // 请求仅保存值，不把 project 或 beatmap
-                // 观察指针带到弹窗下一帧。
-                // 对话框可能跨帧返回，结果必须与这两项身份重新比较。
-                m_beatmapResourceImportError.clear();
-            }
-            if ( ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) ) {
-                // 禁用状态仍提供动作说明，图标本身不承担全部语义。
-                ImGui::SetTooltip("%s", label);
-            }
-            ImGui::SameLine();
-            // 没有绑定资源时只能导入，重命名按钮仍保留对齐占位。
-            ImGui::BeginDisabled(resourcePath.empty());
-            if ( FeedbackButton(
-                     (std::string(ICON_MMM_PEN) + "##RenameResource").c_str(),
-                     ImVec2(importButtonWidth, importButtonWidth)) ) {
-                const auto filename =
-                    Config::pathToUtf8(resourcePath.filename());
-                // 只编辑最后一个路径分量，子目录位置保持不变。
-                // 实际源路径单独保存，不能由输入框的显示名称反推文件身份。
-                // 不截断 UTF-8 文件名，避免提交一个用户未确认的残缺名称。
-                if ( filename.size() >= m_resourceRenameBuffer.size() ) {
-                    m_beatmapResourceImportError =
-                        TR("ui.settings.beatmap.rename_name_too_long")
-                            .toString();
-                } else {
-                    m_renameResourceTarget = target;
-                    m_resourceRenamePath   = resourcePath;
-                    // 旧路径只用于确认时的身份复核，不在本帧移动文件。
-                    m_resourceRenameProjectRoot = project->m_projectRoot;
-                    m_resourceRenameBeatmapPath =
+        const auto drawResourceImportButton =
+            [this, project, beatmapPtr = &beatmap, importButtonWidth, &meta](
+                const char*                  label,
+                BeatmapResourceTarget        target,
+                const std::filesystem::path& resourcePath) {
+                ImGui::SameLine();
+                ImGui::PushID(static_cast<int>(target));
+                // 三行共享相同的按钮几何，资源路径再长也不能改变动作列宽度。
+                // 相同的隐藏按钮名在资源位置作用域内唯一，封面和背景不会串触发。
+                const bool readOnly = project && project->m_isTemporaryProject;
+                ImGui::BeginDisabled(!project || readOnly);
+                /// @brief 隔离文字按钮内边距，在固定方形中居中绘制资源图标。
+                /// @return 当前按钮有效点击时返回 true。
+                /// @warning 每帧绘制路径：仅临时压入样式，不加载字体或资源。
+                const auto drawIconButton =
+                    [importButtonWidth](const char* icon) {
+                        // 主题横向内边距可大于半个按钮，不能用于固定宽度图标按钮。
+                        // 绘制后立即恢复样式，提示框和后续组合框不继承局部覆盖。
+                        Utils::pushFixedButtonStyleVars();
+                        const bool clicked = FeedbackButton(
+                            icon, ImVec2(importButtonWidth, importButtonWidth));
+                        Utils::popFixedButtonStyleVars();
+                        return clicked;
+                    };
+                // 无工程时资源缺少持久归属，按钮保留占位但不能触发。
+                if ( drawIconButton(
+                         (std::string(ICON_MMM_PLUS) + "##ImportResource")
+                             .c_str()) ) {
+                    m_beatmapResourceTarget     = target;
+                    m_openBeatmapResourcePicker = true;
+                    // 保存点击时的媒体类型，跨帧选择器不能随草稿变动串绑。
+                    m_importBackgroundVideo =
+                        target == BeatmapResourceTarget::Background &&
+                        meta.cover_type == CoverType::VIDEO;
+                    m_resourceImportProjectRoot = project->m_projectRoot;
+                    m_resourceImportBeatmapPath =
                         beatmapPtr->m_baseMapMetadata.map_path;
-                    m_resourceRenameBuffer.fill('\0');
-                    // 文件扩展名保留在初始输入内，用户可看见格式不变的约束。
-                    // 完整清零后复制原名，短文件名不会带入上一次输入的尾部字节。
-                    std::memcpy(m_resourceRenameBuffer.data(),
-                                filename.data(),
-                                filename.size());
-                    m_openResourceRenamePopup = true;
-                    // 焦点与打开请求分别消费，输入期间不再反复全选。
-                    m_focusResourceRenameInput = true;
+                    // 请求仅保存值，不把 project 或 beatmap
+                    // 观察指针带到弹窗下一帧。
+                    // 对话框可能跨帧返回，结果必须与这两项身份重新比较。
                     m_beatmapResourceImportError.clear();
                 }
-            }
-            if ( ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) ) {
-                ImGui::SetTooltip(
-                    "%s", TR("ui.settings.beatmap.rename_resource").data());
-            }
-            ImGui::EndDisabled();
-            // 空绑定禁用区和项目只读禁用区各自配对，不能提前退出回调。
-            ImGui::EndDisabled();
-            ImGui::PopID();
-        };
+                // 统一提示入口显式采用美学配置，不继承设置窗口放大的内边距。
+                // 禁用状态仍提供动作说明，图标本身不承担全部语义。
+                Utils::renderTooltip(label, Utils::TooltipDir::Left, true);
+                ImGui::SameLine();
+                // 没有绑定资源时只能导入，重命名按钮仍保留对齐占位。
+                ImGui::BeginDisabled(resourcePath.empty());
+                if ( drawIconButton(
+                         (std::string(ICON_MMM_PEN) + "##RenameResource")
+                             .c_str()) ) {
+                    const auto filename =
+                        Config::pathToUtf8(resourcePath.filename());
+                    // 只编辑最后一个路径分量，子目录位置保持不变。
+                    // 实际源路径单独保存，不能由输入框的显示名称反推文件身份。
+                    // 不截断 UTF-8 文件名，避免提交一个用户未确认的残缺名称。
+                    if ( filename.size() >= m_resourceRenameBuffer.size() ) {
+                        m_beatmapResourceImportError =
+                            TR("ui.settings.beatmap.rename_name_too_long")
+                                .toString();
+                    } else {
+                        m_renameResourceTarget = target;
+                        m_resourceRenamePath   = resourcePath;
+                        // 旧路径只用于确认时的身份复核，不在本帧移动文件。
+                        m_resourceRenameProjectRoot = project->m_projectRoot;
+                        m_resourceRenameBeatmapPath =
+                            beatmapPtr->m_baseMapMetadata.map_path;
+                        m_resourceRenameBuffer.fill('\0');
+                        // 文件扩展名保留在初始输入内，用户可看见格式不变的约束。
+                        // 完整清零后复制原名，短文件名不会带入上一次输入的尾部字节。
+                        std::memcpy(m_resourceRenameBuffer.data(),
+                                    filename.data(),
+                                    filename.size());
+                        m_openResourceRenamePopup = true;
+                        // 焦点与打开请求分别消费，输入期间不再反复全选。
+                        m_focusResourceRenameInput = true;
+                        m_beatmapResourceImportError.clear();
+                    }
+                }
+                // 向左展开避免提示框覆盖窗口右侧操作区，禁用按钮仍能说明用途。
+                Utils::renderTooltip(
+                    TR("ui.settings.beatmap.rename_resource").data(),
+                    Utils::TooltipDir::Left,
+                    true);
+                ImGui::EndDisabled();
+                // 空绑定禁用区和项目只读禁用区各自配对，不能提前退出回调。
+                ImGui::EndDisabled();
+                ImGui::PopID();
+            };
 
         // 音频选择优先使用外部格式提示字段，并限定为 Project 登记的主音频资源。
         addSettingItem(
