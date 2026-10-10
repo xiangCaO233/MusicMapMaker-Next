@@ -1269,6 +1269,11 @@ return {
 	["ui.tools.bpm_measure.apply_target"] = "Target Beatmap",
 	["ui.tools.bpm_measure.no_apply_target"] = "No open beatmap can be updated.",
 	["ui.tools.bpm_measure.apply_done"] = "Applied BPM measurement to the target beatmap.",
+	["ui.tools.bpm_measure.reference_popup_title"] = "Set reference BPM",
+	["ui.tools.bpm_measure.reference_required"] = "Preserving scroll speed requires a reference BPM for the target beatmap. Enter it here to apply it together with the measured timings.",
+	["ui.tools.bpm_measure.reference_bpm"] = "Reference BPM",
+	["ui.tools.bpm_measure.reference_set_apply"] = "Set and apply",
+	["ui.tools.bpm_measure.preserve_curve_unsupported"] = "The target contains BPM or scroll curves. Exact curve speed preservation is not supported; nothing was applied.",
 	["ui.tools.bpm_measure.export_to_wizard"] = "Export to New Wizard",
 	["ui.tools.bpm_measure.export_done"] = "Exported BPM measurement to the new beatmap wizard.",
 

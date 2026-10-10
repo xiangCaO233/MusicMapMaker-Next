@@ -1268,6 +1268,11 @@ return {
 	["ui.tools.bpm_measure.apply_target"] = "目标谱面",
 	["ui.tools.bpm_measure.no_apply_target"] = "当前没有可应用的已打开谱面。",
 	["ui.tools.bpm_measure.apply_done"] = "已应用 BPM 测量结果到目标谱面。",
+	["ui.tools.bpm_measure.reference_popup_title"] = "设置参考 BPM",
+	["ui.tools.bpm_measure.reference_required"] = "保留原流速需要先设置目标谱面的参考 BPM。请填写参考值，确认后将与测量结果一起应用。",
+	["ui.tools.bpm_measure.reference_bpm"] = "参考 BPM",
+	["ui.tools.bpm_measure.reference_set_apply"] = "设置并应用",
+	["ui.tools.bpm_measure.preserve_curve_unsupported"] = "目标谱面含 BPM 或流速曲线，暂不支持精确保留曲线流速；此次未应用。",
 	["ui.tools.bpm_measure.export_to_wizard"] = "导出到新建向导",
 	["ui.tools.bpm_measure.export_done"] = "已将 BPM 测量结果回填到新建谱面向导。",
 

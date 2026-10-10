@@ -35,6 +35,9 @@ namespace MMM::UI
 class BpmMeasurementToolView : public ITextureLoader
 {
 public:
+    /// @brief 供定向测试检查工具本地历史，不开放生产代码的内部状态。
+    friend struct BpmMeasurementHistoryTestAccess;
+
     /// @brief 构造 BPM 测量工具窗口。
     explicit BpmMeasurementToolView(const std::string& name);
 
@@ -95,6 +98,30 @@ public:
     /// @brief 由全局快捷键路由切换 BPM 工具当前音轨的播放状态。
     /// @warning UI 输入路径：只在 BPM 工具聚焦且按下无修饰空格时调用。
     void togglePlaybackFromShortcut();
+
+    /// @brief 沿用主画布 Ctrl+Alt+滚轮的倍速档位切换。
+    /// @param delta 滚轮方向；正值升档，负值降档。
+    void adjustPlaybackSpeedFromShortcut(double delta);
+
+    /// @brief 从 BPM 工具聚焦快捷键撤销最近一次手工测量操作。
+    /// @warning 低频输入路径：只恢复工具状态与必要的播放命令。
+    void undoMeasurementFromShortcut();
+
+    /// @brief 从 BPM 工具聚焦快捷键重做最近一次手工测量操作。
+    /// @warning 低频输入路径：只恢复工具状态与必要的播放命令。
+    void redoMeasurementFromShortcut();
+
+    /// @brief 在当前视图中心新建 BPM 段落并写入工具本地历史。
+    /// @warning 低频输入路径：仅用户按下配置的工具快捷键时调用。
+    void addSegmentAtViewCenterFromShortcut();
+
+    /// @brief 当前 BPM 工具是否存在可撤销的手工测量操作。
+    /// @return 撤销栈非空时返回 true。
+    bool canUndoMeasurement() const;
+
+    /// @brief 当前 BPM 工具是否存在可重做的手工测量操作。
+    /// @return 重做栈非空时返回 true。
+    bool canRedoMeasurement() const;
 
     /// @brief 更新并绘制 BPM 测量工具 UI。
     /// @param sourceManager 当前 UI 管理器。
@@ -201,6 +228,69 @@ private:
         /// @brief 段落 BPM。
         double bpm{ 120.0 };
     };
+
+    /// @brief 一次用户操作前后的 BPM 工具本地状态快照。
+    struct MeasurementHistorySnapshot {
+        /// @brief 当前音轨身份，用于阻止跨音轨还原。
+        std::string audioTrackId;
+        /// @brief 用户可编辑 BPM 段落完整列表。
+        std::vector<BpmTimingSegment> timingSegments;
+        /// @brief 与第一段同步的兼容 BPM 字段。
+        double bpm{ 120.0 };
+        /// @brief 与 BPM 对应的单拍秒数。
+        double beatLengthSeconds{ 0.5 };
+        /// @brief 第一段首拍时间。
+        double firstBeatTime{ 0.0 };
+        /// @brief 拍框视觉宽度，单位毫秒。
+        double markerWidthMs{ 80.0 };
+        /// @brief 分拍线切分数量。
+        int beatDivisor{ 4 };
+        /// @brief 用户选择的视图半宽与中心。
+        double zoomSeconds{ 8.0 };
+        double viewCenter{ 0.0 };
+        /// @brief 工具播放倍速。
+        double playbackSpeed{ 1.0 };
+        /// @brief 显式 seek 使用的画布时间；普通播放推进不写历史。
+        double seekCanvasTime{ 0.0 };
+    };
+
+    /// @brief 一次可撤销手工操作的前后状态与副作用标识。
+    struct MeasurementHistoryEntry {
+        /// @brief 操作前状态。
+        MeasurementHistorySnapshot before;
+        /// @brief 操作后状态。
+        MeasurementHistorySnapshot after;
+        /// @brief 本操作是否明确执行播放跳转。
+        bool seekChanged{ false };
+        /// @brief 本操作是否明确修改视图位置或缩放。
+        bool viewChanged{ false };
+    };
+
+    /// @brief 在用户连续操作开始时冻结一次历史起点。
+    /// @warning 低频输入边界：拖动期间不得每帧重复调用。
+    void beginMeasurementHistoryGesture();
+
+    /// @brief 在用户操作提交时记录单条历史；无状态变化则丢弃。
+    /// @param seekChanged 是否由用户明确执行 seek。
+    /// @param viewChanged 是否由用户明确改变视野。
+    /// @param explicitSeekCanvasTime 异步 seek 的目标画布时间。
+    void finishMeasurementHistoryGesture(
+        bool seekChanged = false, bool viewChanged = false,
+        std::optional<double> explicitSeekCanvasTime = std::nullopt);
+
+    /// @brief 音轨身份变化时清空本地历史与未完成的拖动事务。
+    void clearMeasurementHistory();
+
+    /// @brief 捕获当前工具状态，不扫描音频、谱面或文件系统。
+    MeasurementHistorySnapshot captureMeasurementHistorySnapshot() const;
+
+    /// @brief 还原一次历史快照，并按标识执行必要外部副作用。
+    /// @param snapshot 要恢复的用户操作状态。
+    /// @param seekChanged 是否恢复显式播放位置。
+    /// @param viewChanged 是否将视野恢复到记录值。
+    void restoreMeasurementHistorySnapshot(
+        const MeasurementHistorySnapshot& snapshot, bool seekChanged,
+        bool viewChanged);
 
     /// @brief BPM 测量线当前拖动语义。
     enum class BeatMarkerDragMode {
@@ -411,7 +501,9 @@ private:
     void requestOpenApplyTimingPopup();
 
     /// @brief 将测量结果应用到当前弹窗选中的谱面。
-    void applyMeasuredTimingsToSelectedBeatmap();
+    /// @return 通过校验并投递时为 true；缺少参考 BPM 时打开设置提示。
+    bool applyMeasuredTimingsToSelectedBeatmap(
+        std::optional<double> referenceBpm = std::nullopt);
 
     /// @brief 查找当前项目默认用于 BPM 自动测量的音频资源 ID。
     /// @return 优先返回主音轨 ID，否则返回首个音频资源 ID；不存在时为空。
@@ -689,6 +781,21 @@ private:
     /// @brief 当前 BPM 工具可编辑的多段 BPM 列表。
     std::vector<BpmTimingSegment> m_timingSegments;
 
+    /// @brief 已提交的用户手工操作历史，尾部为最近一次。
+    std::vector<MeasurementHistoryEntry> m_measurementUndoHistory;
+    /// @brief 最近撤销的操作历史，尾部优先重做。
+    std::vector<MeasurementHistoryEntry> m_measurementRedoHistory;
+    /// @brief 当前连续手势开始时的快照；空值表示未记录手势。
+    std::optional<MeasurementHistorySnapshot> m_measurementGestureBefore;
+    /// @brief 当前用户手势是否明确提交过 seek，避免播放推进进入历史。
+    bool m_measurementHistorySeekChanged{ false };
+    /// @brief 当前用户手势是否明确修改视图，自动跟随不得写入。
+    bool m_measurementHistoryViewChanged{ false };
+    /// @brief 异步 seek 最终画布目标，避免提交时读到旧播放头。
+    std::optional<double> m_measurementHistorySeekCanvasTime;
+    /// @brief 还原历史期间屏蔽递归记录。
+    bool m_restoringMeasurementHistory{ false };
+
     /// @brief 从音频恢复的命名章节，与 BPM 段保持独立。
     std::vector<Audio::AudioChapter> m_audioChapters;
     /// @brief 最近读取标记的音轨身份，防止重新分析覆盖手工修改。
@@ -724,6 +831,15 @@ private:
 
     /// @brief 当前应用目标 Session 索引。
     int32_t m_applyTargetSessionIndex{ -1 };
+
+    /// @brief 应用目标的稳定相机身份，防止关闭标签后索引指向另一谱面。
+    std::string m_applyTargetCameraId;
+
+    /// @brief 缺少参考 BPM 时的现场输入值，确认前不修改谱面。
+    float m_applyReferenceBpm{ 120.0f };
+
+    /// @brief 应用校验失败提示，在确认弹窗内显示而非被 Modal 遮挡。
+    std::string m_applyValidationError;
 
     /// @brief 当前节拍器调度游标对应的 BPM 段落索引。
     std::size_t m_metronomeScheduledSegmentIndex{ 0 };
