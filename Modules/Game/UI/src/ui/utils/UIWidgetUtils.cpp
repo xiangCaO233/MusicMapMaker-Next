@@ -146,7 +146,7 @@ float updateTooltipAnimationAmount(ImGuiID itemId, bool isHovered)
     // 负 DeltaTime 防御性钳制，速度由全局审美配置换算。
     const float step = std::max(0.0f, ImGui::GetIO().DeltaTime) *
                        getUiAnimationTransitionSpeed();
-    amount           = std::min(1.0f, amount + step);
+    amount = std::min(1.0f, amount + step);
 
     // 写回进度与帧号供下一帧连续推进。
     storage->SetFloat(amountKey, amount);
@@ -592,7 +592,7 @@ void popFixedButtonStyleVars()
 
 /// @brief 绘制标准的、带有审美风格的 Tooltip。
 /// @param text 文本内容。
-/// @param dir 弹出方向，相对于当前 Item。
+/// @param dir 优先弹出方向，空间不足时自动翻转并限制到主视口内。
 /// @warning UI 热路径：只在当前 Item 悬浮时绘制 Tooltip，不执行资源加载。
 /// @param allowWhenDisabled 显式允许读取禁用项的悬浮，供能力限制说明使用。
 /// @note 普通工具提示保持默认禁用规则，调用点必须明确说明开启原因。
@@ -625,22 +625,6 @@ void renderTooltip(const char* text, TooltipDir dir, bool allowWhenDisabled)
     const ImVec2 pos = ImGui::GetItemRectMin();
     const ImVec2 max = ImGui::GetItemRectMax();
     const float  gap = 6.0f * dpiScale;
-    ImVec2       target{ 0.0f, 0.0f };
-    ImVec2       pivot{ 0.0f, 0.0f };
-
-    if ( dir == TooltipDir::Left ) {
-        target = { pos.x - gap, pos.y };
-        pivot  = { 1.0f, 0.0f };
-        target.x += TOOLTIP_SLIDE_X * dpiScale * (1.0f - eased);
-    } else {
-        target = { max.x + gap, pos.y };
-        pivot  = { 0.0f, 0.0f };
-        target.x -= TOOLTIP_SLIDE_X * dpiScale * (1.0f - eased);
-    }
-    target.y += TOOLTIP_SLIDE_Y * dpiScale * (1.0f - eased);
-
-    ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
-    ImGui::SetNextWindowPos(target, ImGuiCond_Always, pivot);
 
     const float currentAlpha = ImGui::GetStyle().Alpha;
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, currentAlpha * eased);
@@ -653,8 +637,59 @@ void renderTooltip(const char* text, TooltipDir dir, bool allowWhenDisabled)
         ImGui::PushFont(contentFont, contentFont->LegacySize);
     }
 
+    // 必须在实际字体压栈后测量，否则主题字号变化会让边界判断失准。
+    // 使用主视口工作区而非显示器范围，避免原生窗口边缘裁掉提示。
+    const auto*  viewport = ImGui::GetMainViewport();
+    const ImVec2 low{ viewport->WorkPos.x + gap, viewport->WorkPos.y + gap };
+    const ImVec2 high{ viewport->WorkPos.x + viewport->WorkSize.x - gap,
+                       viewport->WorkPos.y + viewport->WorkSize.y - gap };
+    const float  availableWidth  = std::max(1.0f, high.x - low.x);
+    const float  availableHeight = std::max(1.0f, high.y - low.y);
+    // 换行上限同时受审美宽度与可见工作区限制，不能按原始字符数量估算。
+    // 极小视口仍向文本测量传入正宽度，避免负值恢复成不换行模式。
+    float wrapWidth = std::max(
+        1.0f, std::min(400.0f * dpiScale, availableWidth - 2.0f * winPadding));
+    ImVec2      textSize = ImGui::CalcTextSize(text, nullptr, false, wrapWidth);
+    const float leftSpace    = std::max(0.0f, pos.x - gap - low.x);
+    const float rightSpace   = std::max(0.0f, high.x - max.x - gap);
+    const float naturalWidth = textSize.x + 2.0f * winPadding;
+    bool        useLeft      = dir == TooltipDir::Left;
+    // 优先方向能放下时保持原位；否则先尝试另一侧，而不是直接覆盖控件。
+    if ( (useLeft ? leftSpace : rightSpace) < naturalWidth ) {
+        const float otherSpace = useLeft ? rightSpace : leftSpace;
+        if ( otherSpace >= naturalWidth )
+            useLeft = !useLeft;
+        else {
+            // 两侧都不足时选较宽的一侧重新排版；极窄边界保留可读宽度，
+            // 最终通过视口钳制允许覆盖控件，但绝不能伸出原生窗口。
+            useLeft               = leftSpace > rightSpace;
+            const float sideSpace = useLeft ? leftSpace : rightSpace;
+            if ( sideSpace >= 120.0f * dpiScale + 2.0f * winPadding ) {
+                wrapWidth = std::min(wrapWidth, sideSpace - 2.0f * winPadding);
+                textSize = ImGui::CalcTextSize(text, nullptr, false, wrapWidth);
+            }
+        }
+    }
+    const ImVec2 size{ std::min(availableWidth, textSize.x + 2.0f * winPadding),
+                       std::min(availableHeight,
+                                textSize.y + 2.0f * winPadding) };
+    ImVec2       target{ useLeft ? pos.x - gap - size.x : max.x + gap, pos.y };
+    // 动画偏移也必须参与边界钳制，不能只保证动画终点处于视口内。
+    target.x +=
+        (useLeft ? 1.0f : -1.0f) * TOOLTIP_SLIDE_X * dpiScale * (1.0f - eased);
+    target.y += TOOLTIP_SLIDE_Y * dpiScale * (1.0f - eased);
+    target.x = std::clamp(target.x, low.x, std::max(low.x, high.x - size.x));
+    target.y = std::clamp(target.y, low.y, std::max(low.y, high.y - size.y));
+    ImGui::SetNextWindowViewport(viewport->ID);
+    ImGui::SetNextWindowPos(target, ImGuiCond_Always);
+    // 多行文字也可能比整个视口更高，窗口尺寸约束兜底避免背景越界。
+    // 定位已由测量结果计算，不能依赖上一帧自动尺寸导致首帧向外闪现。
+    ImGui::SetNextWindowSizeConstraints({ 0.0f, 0.0f },
+                                        { availableWidth, availableHeight });
     if ( ImGui::BeginTooltip() ) {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrapWidth);
         ImGui::TextUnformatted(text);
+        ImGui::PopTextWrapPos();
         ImGui::EndTooltip();
     }
 
@@ -1220,8 +1255,8 @@ float updateMenuPopupAmount(ImGuiID id, ImGuiStorage* storage, bool open)
         wasDrawnLastFrame ? storage->GetFloat(amountKey, 0.0f) : 0.0f;
     const float target = open ? 1.0f : 0.0f;
     const float step   = std::min(1.0f,
-                                  std::max(0.0f, ImGui::GetIO().DeltaTime) *
-                                      Utils::getUiAnimationTransitionSpeed());
+                                std::max(0.0f, ImGui::GetIO().DeltaTime) *
+                                    Utils::getUiAnimationTransitionSpeed());
 
     if ( amount < target ) {
         amount = std::min(target, amount + step);
@@ -1328,7 +1363,7 @@ void renderDockTabCloseHover(ImGuiWindow* window, ImGuiID closeButtonId)
     }
 
     const bool  centralTab = (tab->Flags & (ImGuiTabItemFlags_Leading |
-                                            ImGuiTabItemFlags_Trailing)) == 0;
+                                           ImGuiTabItemFlags_Trailing)) == 0;
     const float tabX =
         tabBar->BarRect.Min.x +
         (centralTab ? std::trunc(tab->Offset - tabBar->ScrollingAnim)
