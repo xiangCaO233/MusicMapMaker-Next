@@ -12,6 +12,7 @@
 #    include <commctrl.h>  // For DefSubclassProc
 #    include <dwmapi.h>
 #    include <filesystem>
+#    include <fmt/format.h>
 #    include <fstream>
 #    include <iterator>
 #    include <memory>
@@ -91,10 +92,12 @@ void refreshShellIconCacheForExecutable()
     }
 
     // 带版本前缀的身份允许未来修改通知策略；同一安装的正常启动不重复刷新全局缓存。
+    // libc++ 的文件时钟可使用 128 位计数，不能交给 std::to_string 或截断为 64
+    // 位。 fmt 保留完整计数，避免不同 EXE 的更新时间在刷新身份中发生截断碰撞。
     const std::string identity =
         "mmm-windows-icons-v1\n" + Config::pathToUtf8(executablePath) + "\n" +
         std::to_string(fileSize) + "\n" +
-        std::to_string(modified.time_since_epoch().count());
+        fmt::format("{}", modified.time_since_epoch().count());
     const auto markerPath =
         Config::AppPaths::configRootPath() / "windows-icon-cache.version";
     std::ifstream previous(markerPath, std::ios::binary);
