@@ -1,13 +1,24 @@
 #ifdef _WIN32
 
 #    include "graphic/glfw/window/adapters/Win32WindowAdapter.h"
+#    include "config/AppPaths.h"
+#    include "config/Utf8Path.h"
 #    include "event/core/EventBus.h"
 #    include "log/colorful-log.h"
 #    include <GLFW/glfw3.h>
 #    define GLFW_EXPOSE_NATIVE_WIN32
 #    include <GLFW/glfw3native.h>
+#    include <array>
 #    include <commctrl.h>  // For DefSubclassProc
 #    include <dwmapi.h>
+#    include <filesystem>
+#    include <fstream>
+#    include <iterator>
+#    include <memory>
+#    include <shlobj.h>
+#    include <string>
+#    include <system_error>
+#    include <type_traits>
 #    include <windowsx.h>
 
 namespace MMM::Graphic
@@ -30,6 +41,96 @@ constexpr UINT CLEAR_RESTORE_IGNORE_MESSAGE = WM_APP + 0x0313;
 
 /// @brief 要求 Win32 最小化恢复时回到最大化状态的 WINDOWPLACEMENT 标志。
 constexpr UINT RESTORE_TO_MAXIMIZED_FLAG = 0x0002;
+
+/// @brief 为应用独占加载的图标提供进程结束时的资源释放。
+struct IconDeleter {
+    /// @brief 窗口使用图标期间不得释放；仅由进程生命周期的持有者调用。
+    /// @param icon 非共享的 LoadImageW 图标句柄。
+    void operator()(HICON icon) const
+    {
+        if ( icon ) DestroyIcon(icon);
+    }
+};
+
+/// @brief 大小图标分别持有独占句柄，避免 LR_SHARED 按资源名命中错误尺寸。
+using OwnedIcon = std::unique_ptr<std::remove_pointer_t<HICON>, IconDeleter>;
+
+/// @brief 当前 EXE 发生变化时请求 Shell 重新读取图标，并记录本次通知身份。
+///
+/// 路径、修改时间和文件大小共同标识当前安装，覆盖自动更新和手动替换 EXE。
+/// 标记只表示已请求刷新，Shell 的实际显示更新时间由 Windows 决定。
+/// @warning 仅在应用主窗口初始化时调用；包含文件 I/O 和 Shell
+/// 通知，禁止逐帧调用。
+void refreshShellIconCacheForExecutable()
+{
+    // 支持 Windows 扩展路径；缓冲区截断时不使用不完整的路径作为更新身份。
+    std::array<wchar_t, 32768> executableBuffer{};
+    const DWORD                length =
+        GetModuleFileNameW(nullptr,
+                           executableBuffer.data(),
+                           static_cast<DWORD>(executableBuffer.size()));
+    if ( length == 0 || length >= executableBuffer.size() ) {
+        XWARN("Cannot determine executable path for Shell icon refresh: {}",
+              GetLastError());
+        return;
+    }
+    const std::filesystem::path executablePath(executableBuffer.data());
+    std::error_code             error;
+    const auto fileSize = std::filesystem::file_size(executablePath, error);
+    if ( error ) {
+        XWARN("Cannot inspect executable for Shell icon refresh: {}",
+              error.message());
+        return;
+    }
+    const auto modified =
+        std::filesystem::last_write_time(executablePath, error);
+    if ( error ) {
+        XWARN("Cannot inspect executable timestamp for Shell icon refresh: {}",
+              error.message());
+        return;
+    }
+
+    // 带版本前缀的身份允许未来修改通知策略；同一安装的正常启动不重复刷新全局缓存。
+    const std::string identity =
+        "mmm-windows-icons-v1\n" + Config::pathToUtf8(executablePath) + "\n" +
+        std::to_string(fileSize) + "\n" +
+        std::to_string(modified.time_since_epoch().count());
+    const auto markerPath =
+        Config::AppPaths::configRootPath() / "windows-icon-cache.version";
+    std::ifstream previous(markerPath, std::ios::binary);
+    if ( previous ) {
+        const std::string previousIdentity{ std::istreambuf_iterator<char>(
+                                                previous),
+                                            std::istreambuf_iterator<char>() };
+        if ( previousIdentity == identity ) return;
+    }
+    // 写回前关闭读取句柄，避免 Windows 文件共享规则阻止覆盖同一个标记。
+    previous.close();
+
+    // PATHW 通知只接受 MAX_PATH 内的路径；长路径仍由下面的缓存失效通知覆盖。
+    if ( length < MAX_PATH ) {
+        SHChangeNotify(SHCNE_UPDATEITEM,
+                       SHCNF_PATHW | SHCNF_FLUSHNOWAIT,
+                       executablePath.c_str(),
+                       nullptr);
+    }
+    // 官方缓存失效通知不删除缓存数据库，也不终止 Explorer；不等待 Shell
+    // 消费事件。
+    SHChangeNotify(
+        SHCNE_ASSOCCHANGED, SHCNF_IDLIST | SHCNF_FLUSHNOWAIT, nullptr, nullptr);
+    XINFO("Requested Windows Shell icon cache refresh for {}",
+          Config::pathToUtf8(executablePath));
+
+    // 无法保存标记时下次启动可以重试，不能把失败写入视为已经持久化成功。
+    if ( !Config::AppPaths::ensureConfigRootPath() ) return;
+    std::ofstream marker(markerPath, std::ios::binary | std::ios::trunc);
+    marker.write(identity.data(),
+                 static_cast<std::streamsize>(identity.size()));
+    marker.close();
+    if ( !marker )
+        XWARN("Cannot save Shell icon refresh marker: {}",
+              Config::pathToUtf8(markerPath));
+}
 
 /// @brief 判断 Win32 placement 是否直接表示当前窗口最大化。
 ///
@@ -181,19 +282,10 @@ Win32WindowAdapter::Win32WindowAdapter(GLFWwindow* window) : m_window(window)
                  0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
 
-    // 修改 style 后重新把模块资源图标同时应用到实例与 class，保持任务栏、标题
-    // 切换器和小图标一致。先尝试命名资源，再兼容数值 ID 1。
-    HICON hIcon = LoadIcon(GetModuleHandle(nullptr), "IDI_ICON1");
-    if ( !hIcon ) {
-        hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(1));
-    }
-    if ( hIcon ) {
-        // LoadIcon 返回共享资源句柄，不由本适配器 DestroyIcon。
-        SendMessage(m_hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIcon);
-        SendMessage(m_hwnd, WM_SETICON, ICON_SMALL, (LPARAM)hIcon);
-        SetClassLongPtr(m_hwnd, GCLP_HICON, (LONG_PTR)hIcon);
-        SetClassLongPtr(m_hwnd, GCLP_HICONSM, (LONG_PTR)hIcon);
-    }
+    // 主窗口与独立窗口使用相同的 EXE 内嵌资源，不受用户目录旧皮肤 PNG 的影响。
+    applyApplicationIcons(m_hwnd);
+    // 启动完成后只为发生变化的安装请求一次系统缓存刷新。
+    refreshShellIconCacheForExecutable();
 
     // 1px frame extension 让 DWM 为无边框窗口保留系统阴影合成。
     const MARGINS shadow_margin = { 1, 1, 1, 1 };
@@ -268,6 +360,52 @@ void Win32WindowAdapter::refreshFrameShape()
         m_hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &count, sizeof(count));
 }
 
+/// @brief 从 EXE 图标组选择系统要求的大小尺寸，并同时更新窗口实例和窗口类。
+/// @param window 目标原生窗口；空句柄不执行任何操作。
+/// @warning
+/// 窗口初始化或归属变化低频路径；图标在进程生命周期内保持有效，不逐帧调用。
+void Win32WindowAdapter::applyApplicationIcons(HWND window)
+{
+    if ( !window ) return;
+    const HMODULE module = GetModuleHandleW(nullptr);
+    // 独占加载分别选取所需尺寸；LR_SHARED 的资源名缓存会忽略第二次请求的尺寸。
+    const auto loadIcon = [module](int width, int height) {
+        HICON icon = static_cast<HICON>(
+            LoadImageW(module, L"IDI_ICON1", IMAGE_ICON, width, height, 0));
+        // 兼容仍使用数值 ID 1 的构建资源，命名资源为当前打包方式。
+        if ( !icon )
+            icon = static_cast<HICON>(LoadImageW(
+                module, MAKEINTRESOURCEW(1), IMAGE_ICON, width, height, 0));
+        return icon;
+    };
+    // 窗口实例和窗口类都借用句柄，主窗口关闭后其他视口仍可能使用，故保留到进程退出。
+    // 静态持有者只初始化一次，退出时才释放；应用销毁窗口后不再使用这些图标。
+    static const OwnedIcon largeIcon(
+        loadIcon(GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON)));
+    static const OwnedIcon smallIcon(
+        loadIcon(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON)));
+    // 分别请求对应尺寸，避免把同一个低分辨率图标交给 Windows 反复缩放。
+    if ( largeIcon ) {
+        SendMessageW(window,
+                     WM_SETICON,
+                     ICON_BIG,
+                     reinterpret_cast<LPARAM>(largeIcon.get()));
+        SetClassLongPtrW(
+            window, GCLP_HICON, reinterpret_cast<LONG_PTR>(largeIcon.get()));
+    }
+    if ( smallIcon ) {
+        SendMessageW(window,
+                     WM_SETICON,
+                     ICON_SMALL,
+                     reinterpret_cast<LPARAM>(smallIcon.get()));
+        SetClassLongPtrW(
+            window, GCLP_HICONSM, reinterpret_cast<LONG_PTR>(smallIcon.get()));
+    }
+    // 资源缺失时保留已有图标，日志供排查发布包是否正确嵌入 ICO。
+    if ( !largeIcon || !smallIcon )
+        XWARN("Embedded application icon is unavailable: {}", GetLastError());
+}
+
 /// @brief 将独立 ImGui viewport 归入主窗口的 owner 与任务栏状态组。
 ///
 /// Owner 关系保证主窗口最小化/激活语义，私有 HWND 属性供线程枚举时精准识别组
@@ -276,7 +414,7 @@ void Win32WindowAdapter::refreshFrameShape()
 /// @param window 要关联的独立平台窗口。
 /// @param mainWindow 作为 owner 和任务栏组身份的主窗口。
 /// @warning 渲染热路径可能重复调用；常态只做句柄/属性查询，只有归属变化时写入
-/// owner、刷新 frame 并设置属性。
+/// owner、刷新 frame、加载内嵌图标并设置属性。
 void Win32WindowAdapter::associateTaskbarGroupWindow(HWND window,
                                                      HWND mainWindow)
 {
@@ -316,6 +454,8 @@ void Win32WindowAdapter::associateTaskbarGroupWindow(HWND window,
                          SWP_FRAMECHANGED);
     }
 
+    // 只有新窗口或归属变化走到这里，避免每帧重新加载图标资源。
+    applyApplicationIcons(window);
     // 属性写入失败只影响后续组最小化识别，不撤销已经成功建立的 owner 关系。
     if ( !SetPropW(window, TASKBAR_WINDOW_GROUP_PROP, expectedGroup) ) {
         XWARN("Failed to mark Win32 taskbar window group: error={}",

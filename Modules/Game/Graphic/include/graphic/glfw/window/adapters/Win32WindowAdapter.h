@@ -58,6 +58,11 @@ public:
     /// @brief 刷新 Win32 无边框窗口的 DWM 外观状态。
     void refreshFrameShape() override;
 
+    /// @brief 从当前 EXE 的内嵌资源设置窗口及窗口类的大小图标。
+    /// @param window 需要更新图标的原生窗口。
+    /// @warning 仅在窗口初始化、归属变化或显式重载时调用；禁止逐帧加载图标。
+    static void applyApplicationIcons(HWND window);
+
     /// @brief 将独立平台窗口登记为主窗口所有的任务栏窗口组成员。
     /// @param window 待登记的独立平台窗口。
     /// @param mainWindow 任务栏窗口组对应的主窗口。

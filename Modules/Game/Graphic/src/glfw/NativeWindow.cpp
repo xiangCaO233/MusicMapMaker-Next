@@ -947,9 +947,10 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle,
     refreshWindowFrameShape();
 }
 
-/// @brief 从当前资源目录重新加载主窗口图标。
+/// @brief 重新加载当前平台的应用窗口图标。
 ///
-/// 图标路径由 AppPaths 解析，文件完整读入内存后由 stb_image 解码为
+/// Windows 使用当前 EXE 内嵌图标，避免旧皮肤覆盖新版本的系统图标。
+/// 其他平台的图标路径由 AppPaths 解析，文件完整读入内存后由 stb_image 解码为
 /// RGBA8，并只在
 /// glfwSetWindowIcon 调用期间借用像素。Wayland 顶层图标交给
 /// desktop 文件/compositor。
@@ -961,10 +962,15 @@ void NativeWindow::reloadWindowIcon()
 {
     // 没有窗口句柄时无法设置平台图标。
     if ( !m_windowHandle ) return;
-#if defined(__linux__)
+#if defined(_WIN32)
+    // 启动提示窗口也直接使用 EXE 内嵌资源，不等待资源同步或主窗口适配器初始化。
+    Win32WindowAdapter::applyApplicationIcons(
+        glfwGetWin32Window(m_windowHandle));
+#else
+#    if defined(__linux__)
     // Wayland 协议不允许客户端直接设置顶层图标，避免调用无效 GLFW 路径。
     if ( glfwGetPlatform() == GLFW_PLATFORM_WAYLAND ) return;
-#endif
+#    endif
 
     // AppPaths 指向当前已安装/同步资源目录，不依赖进程工作目录。
     const std::filesystem::path iconPath =
@@ -1001,6 +1007,7 @@ void NativeWindow::reloadWindowIcon()
     GLFWimage image{ .width = width, .height = height, .pixels = pixels };
     glfwSetWindowIcon(m_windowHandle, 1, &image);
     stbi_image_free(pixels);
+#endif
 }
 
 /// @brief 按逻辑尺寸调整窗口并在当前显示器工作区居中。

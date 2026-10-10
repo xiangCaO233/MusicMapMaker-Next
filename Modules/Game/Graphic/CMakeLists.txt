@@ -83,8 +83,9 @@ target_link_libraries(
          Vulkan::Vulkan)
 
 if(WIN32)
-  # Win32 窗框使用 DWM 与通用控件 API，注册表主题探测使用 Advapi32。
-  target_link_libraries(Graphic PRIVATE dwmapi comctl32 advapi32)
+  # Win32 窗框使用 DWM 与通用控件 API，注册表主题探测使用 Advapi32。 Shell32
+  # 提供更新后首次启动的图标缓存失效通知，避免要求用户重启 Explorer。
+  target_link_libraries(Graphic PRIVATE dwmapi comctl32 advapi32 shell32)
 endif()
 
 # 主题插件测试覆盖 Lua 解析、内置主题继承以及重载时清除旧实例。 mmm_add_test_executable
