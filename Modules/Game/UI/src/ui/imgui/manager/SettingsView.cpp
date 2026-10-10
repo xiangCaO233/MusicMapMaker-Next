@@ -459,24 +459,17 @@ float measureSettingsTabWidgetWidth(Event::SettingsTab     tab,
     case Event::SettingsTab::Beatmap: {
         // 谱面页确保图片/视频封面类型选项完整显示。
         // 资源路径组合框可横向裁剪，但须给并排导入按钮留出固定宽度。
-        // 使用翻译后的最长按钮文案，语言切换会由布局缓存重新测量。
+        // 导入与重命名采用两个方形图标，宽度只随主题框高与间距变化。
         // 下拉箭头也占用一帧高的宽度，不能让按钮把它挤成零宽。
         // 额外逻辑像素留给路径预览，不随实际工程路径长度增长。
         addOptions(std::array<const char*, 2>{
             TR_CACHE("ui.settings.beatmap.cover_type.image").data(),
             TR_CACHE("ui.settings.beatmap.cover_type.video").data() });
-        const float importLabelWidth =
-            std::max(measureSettingsText(
-                         TR_CACHE("ui.settings.beatmap.import_audio").data(),
-                         font,
-                         snapshot.fontSize),
-                     measureSettingsText(
-                         TR_CACHE("ui.settings.beatmap.import_image").data(),
-                         font,
-                         snapshot.fontSize));
-        minWidth = std::max(minWidth,
-                            importLabelWidth + framePad + comboArrow +
-                                std::floor(110.0f * scale));
+        minWidth =
+            std::max(minWidth,
+                     snapshot.frameHeight * 2.0F +
+                         std::floor(snapshot.itemSpacing * scale) * 2.0F +
+                         comboArrow + std::floor(110.0f * scale));
         break;
     }
     case Event::SettingsTab::Editor: {
@@ -972,6 +965,8 @@ void SettingsView::update(UIManager* sourceManager)
     // 内置选择器同样由本层跨帧驱动，避免与 Clay 行回调生命周期耦合。
     // 此时普通设置窗口作用域仍有效，可作为文件模态框的 ImGui 父上下文。
     renderBeatmapResourcePicker(dpiScale);
+    // 重命名同样不能在 Clay 行回调持锁期间执行磁盘事务。
+    renderBeatmapResourceRename(dpiScale);
     if ( !m_isOpen ) {
         // 关闭窗口立即结束快捷键录制，避免全局按键被隐藏页面截获。
         m_recordingShortcutTarget = ShortcutRecordTarget::None;
