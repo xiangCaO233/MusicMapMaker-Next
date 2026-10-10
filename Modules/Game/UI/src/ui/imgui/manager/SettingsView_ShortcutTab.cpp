@@ -87,9 +87,9 @@ void SettingsView::drawShortcutBindingControl(Config::ShortcutBinding& binding,
     const char* clearLabel  = TR_CACHE("ui.settings.shortcut.clear").data();
     const float spacing     = ImGui::GetStyle().ItemSpacing.x;
     const float recordW     = ImGui::CalcTextSize(recordLabel).x +
-                              ImGui::GetStyle().FramePadding.x * 2.0f;
-    const float clearW      = ImGui::CalcTextSize(clearLabel).x +
-                              ImGui::GetStyle().FramePadding.x * 2.0f;
+                          ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float clearW = ImGui::CalcTextSize(clearLabel).x +
+                         ImGui::GetStyle().FramePadding.x * 2.0f;
     const float displayW =
         // 展示区至少保留 80 像素，窄窗口也能看见当前绑定。
         std::max(80.0f, width - recordW - clearW - spacing * 2.0f);
@@ -230,7 +230,7 @@ void SettingsView::drawShortcutSettings()
 
     // 指针数组既定义冲突比较全集，也避免复制每个 ShortcutBinding。
     auto& shortcutConfig = settings.shortcutConfig;
-    const std::array<const Config::ShortcutBinding*, 20> shortcutBindings{
+    const std::array<const Config::ShortcutBinding*, 21> shortcutBindings{
         // 工具选择组。
         &shortcutConfig.toolMove,
         &shortcutConfig.toolMarquee,
@@ -244,6 +244,7 @@ void SettingsView::drawShortcutSettings()
         &shortcutConfig.addSelectedAnnotation,
         &shortcutConfig.deleteSelected,
         &shortcutConfig.togglePlayback,
+        &shortcutConfig.addBpmSegmentAtViewCenter,
         // 编辑器状态切换组。
         &shortcutConfig.toggleReverseScroll,
         &shortcutConfig.toggleScrollSnap,
@@ -370,6 +371,14 @@ void SettingsView::drawShortcutSettings()
                    shortcutConfig.togglePlayback,
                    ShortcutRecordTarget::TogglePlayback,
                    "TogglePlayback");
+    // BPM 工具动作只在工具窗口聚焦时执行，仍参与全局绑定冲突检测。
+    // 设置页可录制该组合，不需要先打开测量工具窗口。
+    addShortcutRow(
+        shortcutSection,
+        TR_CACHE("ui.settings.shortcut.add_bpm_segment_at_view_center").data(),
+        shortcutConfig.addBpmSegmentAtViewCenter,
+        ShortcutRecordTarget::AddBpmSegmentAtViewCenter,
+        "AddBpmSegmentAtViewCenter");
 
     // 编辑器状态切换组：滚动方向、吸附、节拍线、音效和同步策略。
     // 这些动作改变持续设置而非选择工具，但使用相同录制与冲突规则。

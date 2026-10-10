@@ -600,6 +600,7 @@ return {
 	["ui.settings.shortcut.add_selected_annotation"] = "Annotate Selected Object",
 	["ui.settings.shortcut.delete_selected"] = "Delete",
 	["ui.settings.shortcut.toggle_playback"] = "Toggle Play / Pause",
+	["ui.settings.shortcut.add_bpm_segment_at_view_center"] = "BPM Tool: Add Segment at View Center",
 	["ui.settings.shortcut.toggle_reverse_scroll"] = "Toggle Reverse Scroll",
 	["ui.settings.shortcut.toggle_scroll_snap"] = "Toggle Scroll Snap",
 	["ui.settings.shortcut.toggle_snap_floor"] = "Toggle Snap Floor",

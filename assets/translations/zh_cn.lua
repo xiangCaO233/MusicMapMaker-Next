@@ -599,6 +599,7 @@ return {
 	["ui.settings.shortcut.add_selected_annotation"] = "给选中物件添加批注",
 	["ui.settings.shortcut.delete_selected"] = "删除",
 	["ui.settings.shortcut.toggle_playback"] = "切换播放 / 暂停",
+	["ui.settings.shortcut.add_bpm_segment_at_view_center"] = "BPM工具：在视图中心添加段落",
 	["ui.settings.shortcut.toggle_reverse_scroll"] = "切换反转滚动",
 	["ui.settings.shortcut.toggle_scroll_snap"] = "切换滚动磁吸",
 	["ui.settings.shortcut.toggle_snap_floor"] = "切换吸附向下取整",

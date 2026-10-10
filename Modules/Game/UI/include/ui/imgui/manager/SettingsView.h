@@ -113,6 +113,7 @@ private:
         AddSelectedAnnotation,
         DeleteSelected,
         TogglePlayback,
+        AddBpmSegmentAtViewCenter,
         ToggleReverseScroll,
         ToggleScrollSnap,
         ToggleSnapFloor,

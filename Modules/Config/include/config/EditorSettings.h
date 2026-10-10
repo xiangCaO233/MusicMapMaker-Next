@@ -280,6 +280,10 @@ struct ShortcutConfig {
     /// @brief 切换谱面播放与暂停状态。
     ShortcutBinding togglePlayback{ true, "Space", false, false, false, false };
 
+    /// @brief BPM 测量工具聚焦时在视图中心添加段落。
+    ShortcutBinding addBpmSegmentAtViewCenter{ true,  "B",  true,
+                                               false, true, false };
+
     /// @brief 切换反转滚动方向。
     ShortcutBinding toggleReverseScroll{
         false, "", false, false, false, false

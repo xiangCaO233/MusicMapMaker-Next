@@ -339,7 +339,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
     case Event::SettingsTab::Shortcut: {
         // 快捷键页每个可录制动作都参与标签列宽度估算。
         // 快捷键字符串和操作按钮的宽度在 widget 测量函数中单独计算。
-        const std::array<const char*, 20> labels{
+        const std::array<const char*, 21> labels{
             TR_CACHE("ui.settings.shortcut.tool_move").data(),
             TR_CACHE("ui.settings.shortcut.tool_marquee").data(),
             TR_CACHE("ui.settings.shortcut.tool_draw").data(),
@@ -351,6 +351,8 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.shortcut.add_selected_annotation").data(),
             TR_CACHE("ui.settings.shortcut.delete_selected").data(),
             TR_CACHE("ui.settings.shortcut.toggle_playback").data(),
+            TR_CACHE("ui.settings.shortcut.add_bpm_segment_at_view_center")
+                .data(),
             TR_CACHE("ui.settings.shortcut.toggle_reverse_scroll").data(),
             TR_CACHE("ui.settings.shortcut.toggle_scroll_snap").data(),
             TR_CACHE("ui.settings.shortcut.toggle_snap_floor").data(),
@@ -712,7 +714,7 @@ SettingsView::LayoutMetricsCache SettingsView::buildLayoutMetrics(
     const float categorySize    = std::floor(sidebarBaseW * scale);
     const float categorySpacing = std::floor(snapshot.itemSpacing * scale);
     const float categoryHeight  = std::floor(8.0f * scale) * 2.0f +
-                                  categorySize * 8.0f + categorySpacing * 7.0f;
+                                 categorySize * 8.0f + categorySpacing * 7.0f;
 
     // 标签列额外留出间隔，使文字与右侧控件不贴合。
     cache.tabLabelWidth =
@@ -1130,9 +1132,9 @@ void SettingsView::drawContent()
                 // 标签在分隔线右侧留出固定缩放 padding，并垂直居中。
                 ImVec2 labelSize       = ImGui::CalcTextSize(label.c_str());
                 float  textLeftPadding = std::floor(8.0f * dpiScale);
-                ImVec2 labelPos = { sepX + textLeftPadding,
-                                    rect.y +
-                                        (rect.height - labelSize.y) * 0.5f };
+                ImVec2 labelPos        = { sepX + textLeftPadding,
+                                           rect.y +
+                                               (rect.height - labelSize.y) * 0.5f };
                 ImGui::GetWindowDrawList()->AddText(
                     menuFont,
                     ImGui::GetFontSize(),

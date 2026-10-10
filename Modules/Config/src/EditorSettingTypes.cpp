@@ -365,6 +365,7 @@ void to_json(nlohmann::json& json, const ShortcutConfig& config)
         { "deleteSelected", config.deleteSelected },
         // 剩余字段为播放及视图状态切换，不保存瞬时 UI 状态。
         { "togglePlayback", config.togglePlayback },
+        { "addBpmSegmentAtViewCenter", config.addBpmSegmentAtViewCenter },
         { "toggleReverseScroll", config.toggleReverseScroll },
         { "toggleScrollSnap", config.toggleScrollSnap },
         { "toggleSnapFloor", config.toggleSnapFloor },
@@ -410,6 +411,8 @@ void from_json(const nlohmann::json& json, ShortcutConfig& config)
         json.value("deleteSelected", defaults.deleteSelected);
     config.togglePlayback =
         json.value("togglePlayback", defaults.togglePlayback);
+    config.addBpmSegmentAtViewCenter = json.value(
+        "addBpmSegmentAtViewCenter", defaults.addBpmSegmentAtViewCenter);
     config.toggleReverseScroll =
         json.value("toggleReverseScroll", defaults.toggleReverseScroll);
     config.toggleScrollSnap =
