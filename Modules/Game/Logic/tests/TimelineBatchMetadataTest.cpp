@@ -1,16 +1,18 @@
 #include "logic/session/ActionController.h"
 
+#include "config/EditorConfig.h"
 #include "log/colorful-log.h"
 #include "logic/ecs/components/TimelineComponent.h"
+#include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/timing/TimingInterpolation.h"
 #include "mmm/timing/TimingTemplate.h"
-#include <memory>
-
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -943,6 +945,166 @@ bool testTemplatePlacementTransaction()
            context.actionStack.getUndoStackSize() == history;
 }
 
+/// @brief 验证测量 BPM 替换对旧红绿线逐段保速并可整体撤销。
+/// @return 所有段的实际缓存速度、特效和参考 BPM 均正确时返回 true。
+/// @note 测试真实 ScrollCache，避免只检查生成的绿线数值却遗漏基准变化。
+/// @details 样本覆盖旧绿线、旧红线重置和新红线新增的三个速度边界。
+/// 还检查 Jump 后的积分位置，证明保速没有只在采样点碰巧成立。
+/// 比较缓存中原始速度，避免 UI 线性映射开关掩盖变速错误。
+/// 显式参考值设置为 120，而旧最长 BPM 为 240，确保基准规则生效。
+/// 旧绿线和旧红线不处于同刻，覆盖重置与继续滚动两个分支。
+/// 新红线在 3 秒改变 BPM，检测新增红线同刻补偿。
+/// 样本还覆盖新红线之后的尾段，防止只修复旧时间点。
+bool testMeasuredBpmReplacementKeepsVisualSpeed()
+{
+    MMM::Logic::SessionContext context;
+    context.currentBeatmap = std::make_shared<MMM::BeatMap>();
+    context.currentBeatmap->m_baseMapMetadata.preference_bpm = 120.0;
+    context.currentBeatmap->m_baseMapMetadata.map_length     = 8.0;
+    // 参考 BPM 与旧最长段 BPM 故意不同，检测缓存是否误用最长段。
+    // 独立会话动作历史不继承其他测试先前的编辑记录。
+    MMM::Logic::ActionController controller(context);
+    auto&                        registry = context.timelineRegistry;
+    const auto add = [&](double time, MMM::TimingEffect effect, double value) {
+        // 真实 ECS 组件是命令处理器的权威输入，不使用领域容器代替。
+        // 每种效果给定独立时刻，便于定位遗漏的状态边界。
+        registry.emplace<MMM::Logic::TimelineComponent>(
+            registry.create(),
+            MMM::Logic::TimelineComponent{ time, effect, value });
+    };
+    // 旧绿线在 1 秒将速度加倍，旧红线在 2 秒重置 SV；两处均须成为补偿边界。
+    add(0.0, MMM::TimingEffect::BPM, 120.0);
+    add(1.0, MMM::TimingEffect::SCROLL, 2.0);
+    add(2.0, MMM::TimingEffect::BPM, 240.0);
+    add(2.5, MMM::TimingEffect::JUMP, 50.0);
+    add(2.7, MMM::TimingEffect::HS, 0.5);
+    // Jump 和 HS 是非 BPM 特效，替换时须保留原值与原时刻。
+    // 旧缓存先按原红绿线重建，速度断言来自运行时公式。
+
+    MMM::Config::EditorConfig config;
+    config.visual.enableLinearScrollMapping = false;
+    MMM::Logic::System::ScrollCache cache;
+    const auto                      refresh = [&] {
+        // 替换和撤销后都重建缓存，避免拿旧的派生状态断言。
+        cache.rebuild(registry, config, context.currentBeatmap.get());
+    };
+    refresh();
+    const std::array<double, 4> samples{ 0.5, 1.5, 2.5, 3.5 };
+    std::array<double, 4>       originalSpeeds;
+    for ( std::size_t i = 0; i < samples.size(); ++i )
+        originalSpeeds[i] = cache.getSpeedAt(samples[i]);
+    const double originalPosition = cache.getUnscaledRawAbsY(4.0);
+    // 四个样本落在每个状态边界后的稳定区间。
+    // 绝对位置样本跨过 Jump，能检测位移幅度变化。
+
+    MMM::Logic::CmdReplaceBeatmapTimings command;
+    command.keepNonBpmTimings = true;
+    for ( const auto& [time, bpm] :
+          { std::pair{ 0.0, 180.0 }, std::pair{ 3.0, 90.0 } } ) {
+        // 来源时间戳是毫秒，内部 ECS 时间由命令转换为秒。
+        // 新红线与旧红线不完全重合，用于检测遗漏旧边界。
+        MMM::Timing timing;
+        timing.m_timestamp             = time * 1000.0;
+        timing.m_timingEffect          = MMM::TimingEffect::BPM;
+        timing.m_timingEffectParameter = bpm;
+        command.timings.push_back(timing);
+    }
+    controller.handleCommand(command);
+    // 命令一次提交红线、补偿绿线和参考元数据，再观察缓存状态。
+    refresh();
+    for ( std::size_t i = 0; i < samples.size(); ++i ) {
+        if ( !near(cache.getSpeedAt(samples[i]), originalSpeeds[i]) ) {
+            XERROR("Measured BPM replacement changed visual scroll speed");
+            return false;
+        }
+    }
+    // Jump 以当前速度形成位移，等速也应让后续绝对位置保持一致。
+    // 只匹配瞬时速度仍可能遗漏 Jump 导致的累计位置变化。
+    // 特效实体必须仍存在，不能通过删除 Jump 伪造位置一致。
+    if ( !near(cache.getUnscaledRawAbsY(4.0), originalPosition) ||
+         !findTimeline(context, MMM::TimingEffect::JUMP) ||
+         !findTimeline(context, MMM::TimingEffect::HS) ||
+         context.currentBeatmap->m_baseMapMetadata.preference_bpm != 120.0 )
+        return false;
+    context.actionStack.undo(context);
+    refresh();
+    // 一次撤销应删除生成的补偿线，并恢复原有五条时间点。
+    // 撤销后重新计算速度，不能只检查组件数量。
+    if ( registry.view<MMM::Logic::TimelineComponent>().size() != 5 ||
+         !near(cache.getSpeedAt(1.5), originalSpeeds[1]) )
+        return false;
+    return true;
+}
+
+/// @brief 验证缺失参考 BPM 和曲线时拒绝保速替换，显式设置与替换同撤销。
+/// @return 拒绝无副作用、有效设置可撤销恢复零值时返回 true。
+/// @details 参考值作为命令的一部分进入同一动作，不依赖另一个元数据命令。
+/// 旧曲线拒绝须发生在动作入栈之前，避免部分红线替换。
+/// 测试先以缺失参考值拒绝，再以同一命令显式补足并成功提交。
+/// 成功提交后撤销必须恢复未设置状态，不能退化为首条新红线 BPM。
+/// 最后插入旧曲线，确认预检在动作执行之前完成。
+/// 三个阶段共用同一控制器以检查历史记录没有意外累积。
+/// 缺失参考值时先从旧缓存读取速度，再验证新参考值不会改变屏幕速度。
+/// 原谱面没有显式参考值，撤销也必须恢复这个缺省状态。
+bool testMeasuredBpmReplacementRequiresReference()
+{
+    MMM::Logic::SessionContext context;
+    context.currentBeatmap = std::make_shared<MMM::BeatMap>();
+    context.currentBeatmap->m_baseMapMetadata.preference_bpm = 0.0;
+    context.currentBeatmap->m_baseMapMetadata.map_length     = 10.0;
+    // 零值代表目标未设置参考 BPM，不使用来源首红线隐式填入。
+    MMM::Logic::ActionController controller(context);
+    auto&                        registry = context.timelineRegistry;
+    // 旧缓存以唯一的 120 BPM 红线为隐式基准，绿线把原速放大为 1.5 倍。
+    registry.emplace<MMM::Logic::TimelineComponent>(
+        registry.create(),
+        MMM::Logic::TimelineComponent{ 0.0, MMM::TimingEffect::BPM, 120.0 });
+    registry.emplace<MMM::Logic::TimelineComponent>(
+        registry.create(),
+        MMM::Logic::TimelineComponent{ 0.0, MMM::TimingEffect::SCROLL, 1.5 });
+    MMM::Config::EditorConfig config;
+    config.visual.enableLinearScrollMapping = false;
+    MMM::Logic::System::ScrollCache cache;
+    cache.rebuild(registry, config, context.currentBeatmap.get());
+    const double                         originalSpeed = cache.getSpeedAt(1.0);
+    MMM::Logic::CmdReplaceBeatmapTimings command;
+    command.keepNonBpmTimings = true;
+    MMM::Timing red;
+    red.m_timingEffect          = MMM::TimingEffect::BPM;
+    red.m_timingEffectParameter = 180.0;
+    command.timings.push_back(red);
+    // 预先放入有效来源红线；拒绝不能误归因于空输入。
+    // 无显式参考值不得根据新 BPM 猜测，也不能创建撤销记录。
+    controller.handleCommand(command);
+    if ( context.actionStack.getUndoStackSize() != 0 ||
+         registry.view<MMM::Logic::TimelineComponent>().size() != 2 )
+        return false;
+    command.referenceBpmToSet = 150.0;
+    controller.handleCommand(command);
+    cache.rebuild(registry, config, context.currentBeatmap.get());
+    // 显式参考 BPM 与替换同批提交，恰好增加一条撤销记录。
+    if ( context.actionStack.getUndoStackSize() != 1 ||
+         context.currentBeatmap->m_baseMapMetadata.preference_bpm != 150.0 ||
+         !near(cache.getSpeedAt(1.0), originalSpeed) )
+        return false;
+    context.actionStack.undo(context);
+    // 撤销恢复原始零值，而非回退为新红线的 180 BPM。
+    // 元数据与 Timeline 任一残留都说明动作没有保持整体边界。
+    if ( context.currentBeatmap->m_baseMapMetadata.preference_bpm != 0.0 ||
+         registry.view<MMM::Logic::TimelineComponent>().size() != 2 )
+        return false;
+
+    // 旧滚动曲线不能由若干离散补点精确替代，拒绝且不增加历史。
+    MMM::Logic::TimelineComponent curve{ 0.0, MMM::TimingEffect::SCROLL, 1.0 };
+    curve.m_interpolation = MMM::TimingInterpolation{};
+    // 曲线参数形状不参与拒绝判定；其语义是连续变化而非普通点。
+    registry.emplace<MMM::Logic::TimelineComponent>(registry.create(), curve);
+    controller.handleCommand(command);
+    // 曲线仍在原地，历史仍为空，证明没有做部分替换。
+    return context.actionStack.getUndoStackSize() == 0 &&
+           registry.view<MMM::Logic::TimelineComponent>().size() == 3;
+}
+
 }  // namespace
 
 /// @brief 运行批量 Timeline 创建元数据测试。
@@ -962,6 +1124,8 @@ int main()
                    testBpmKeepSpeedUpdatesSvAtomically() &&
                    testSelectedBpmKeepSpeedBatch() &&
                    testSelectedBpmKeepSpeedBoundaries() &&
+                   testMeasuredBpmReplacementKeepsVisualSpeed() &&
+                   testMeasuredBpmReplacementRequiresReference() &&
                    testNegativeBpmMutationsAreRejected() &&
                    testNonUndoableDirtyState()
                ? 0

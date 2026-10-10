@@ -218,7 +218,7 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
     std::vector<ScrollSegment> newSegments;
     newSegments.reserve(m_rebuildScratch.size() + 1);
 
-    // 1. 完整版 osu! 逻辑：计算最常见 BPM 作为基准，并获取 SliderMultiplier。
+    // 显式参考 BPM 优先；旧谱面没有设置时沿用持续时长最长的 BPM。
     double refBPM           = 120.0;
     double sliderMultiplier = 1.0;
     // 无谱面对象时保持中性倍率；有谱面但没有 osu! 属性时采用格式默认值。
@@ -264,6 +264,10 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
         if ( hasBpmEvent ) {
             refBPM = ::MMM::normalizeBpmValue(refBPM);
         }
+        // 用户设置的参考值固定视觉速度基准，替换红线时不随最长段漂移。
+        const double explicitBpm = beatmap->m_baseMapMetadata.preference_bpm;
+        if ( std::isfinite(explicitBpm) && explicitBpm > 0.0 )
+            refBPM = ::MMM::normalizeBpmValue(explicitBpm);
     }
 
     double currentBPM = refBPM;

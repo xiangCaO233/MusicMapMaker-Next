@@ -802,6 +802,9 @@ struct CmdReplaceBeatmapTimings {
 
     /// @brief 是否保留当前谱面中非 BPM 的流速/特效 Timing。
     bool keepNonBpmTimings{ false };
+
+    /// @brief 应用时可选地设置目标谱面的显式参考 BPM；空值沿用已设置值。
+    std::optional<double> referenceBpmToSet;
 };
 
 /// @brief 修改一个玩家物件或折线子物件的编辑器注释。
