@@ -15,9 +15,9 @@ namespace MMM::UI
 /// @details 菜单按欢迎入口、更新、支持目录和版本信息分组。
 MainMenuHelp::MainMenuHelp()
 {
-    // 欢迎页作为首项，提供新用户入口和基础导航。
+    // 欢迎页使用引导手册图标，与关于窗口的版本信息图标区分。
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_INFO_CIRCLE,
+        ICON_MMM_BOOK,
         "ui.welcome.title",
         MainMenuItemTextKind::TranslationKey,
         nullptr,
@@ -38,15 +38,15 @@ MainMenuHelp::MainMenuHelp()
         MainMenuItemTextKind::TranslationKey,
         nullptr,
         createOpenSoftwareConfigurationAction()));
-    // 配置文件入口尝试定位具体文件，目录入口只打开目标文件夹。
+    // 目录入口按内容职责标识，避免皮肤与插件都显示通用文件夹。
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_FOLDER_OPEN,
+        ICON_MMM_PAINT_BRUSH,
         "ui.help.open_skins_directory",
         MainMenuItemTextKind::TranslationKey,
         nullptr,
         createOpenSkinsDirectoryAction()));
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_FOLDER_OPEN,
+        ICON_MMM_PUZZLE,
         "ui.help.open_plugins_directory",
         MainMenuItemTextKind::TranslationKey,
         nullptr,

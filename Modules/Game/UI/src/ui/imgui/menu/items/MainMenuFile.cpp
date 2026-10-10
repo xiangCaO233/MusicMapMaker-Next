@@ -55,9 +55,9 @@ MainMenuFile::MainMenuFile()
     // 最近项目项动态读取配置列表，不在构造器复制路径集合。
     registerItem(std::make_unique<MainMenuRecentProjectsItem>(
         createOpenRecentProjectAction()));
-    // 目录定位和关闭项目只在有效项目上下文中启用。
+    // 目录定位使用静态文件夹，与载入项目的打开文件夹区分职责。
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_FOLDER_OPEN,
+        ICON_MMM_FOLDER,
         "ui.file.open_project_directory",
         MainMenuItemTextKind::TranslationKey,
         nullptr,
@@ -78,9 +78,9 @@ MainMenuFile::MainMenuFile()
         MainMenuItemTextKind::TranslationKey,
         "Ctrl+S",
         createSaveBeatmapAction()));
-    // 普通保存优先复用现有目标路径，不弹出路径选择器。
+    // 另存为依靠文字与快捷键区分，不重复普通保存的磁盘图标。
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_SAVE,
+        nullptr,
         "ui.file.save_as",
         MainMenuItemTextKind::TranslationKey,
         "Ctrl+Shift+S",
