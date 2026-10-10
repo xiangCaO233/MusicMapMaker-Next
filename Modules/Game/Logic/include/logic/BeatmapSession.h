@@ -6,10 +6,13 @@
 #include <concurrentqueue.h>
 #include <cstdint>
 #include <deque>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace MMM::Config
 {
@@ -142,6 +145,21 @@ public:
     {
         return m_metadataAutoSavePending;
     }
+
+    /// @brief 判断当前会话是否有可能覆盖磁盘资源改名结果的后台谱面保存。
+    /// @return 后台保存已启动且尚未由逻辑线程提交时返回 true。
+    /// @warning 仅在 SessionRegistry 锁保护下的低频资源操作入口读取。
+    [[nodiscard]] bool hasInFlightBeatmapSave() const
+    {
+        return static_cast<bool>(m_asyncSaveOperation);
+    }
+
+    /// @brief 记录外部媒体资源改名，供尚未消费的元数据命令迁移旧路径。
+    /// @param oldPath 改名前的项目相对路径。
+    /// @param newPath 改名后的项目相对路径。
+    /// @warning 只在持有 SessionRegistry 锁时调用；元数据命令为低频消费路径。
+    void recordResourceRename(const std::filesystem::path& oldPath,
+                              const std::filesystem::path& newPath);
 
     /// @brief 立即落盘尚在等待空闲期的元数据自动保存。
     /// @return 没有待保存内容或保存成功时返回 true。
@@ -313,6 +331,26 @@ private:
     /// @brief 当前会话唯一的后台谱面保存任务。
     /// @warning 逻辑线程独占；后台任务只持有独立谱面副本和 future 共享状态。
     std::shared_ptr<AsyncSaveOperation> m_asyncSaveOperation;
+
+    /// @brief 一次文件改名及提交它时的会话代次。
+    struct ResourceRenameAlias {
+        /// @brief 改名前的项目相对路径。
+        std::filesystem::path m_oldPath;
+
+        /// @brief 改名后的项目相对路径。
+        std::filesystem::path m_newPath;
+
+        /// @brief 改名提交后的单调代次。
+        std::uint64_t m_generation{ 0U };
+    };
+
+    /// @brief 供入队生产者标记元数据命令所属资源身份代次。
+    /// @warning UI 线程仅对元数据命令读取，逻辑线程只在显式改名时写入；
+    /// relaxed 足够，因为两端只传递数字身份，别名数据仍由会话锁保护。
+    std::atomic_uint64_t m_resourceRenameGeneration{ 0U };
+
+    /// @brief 改名后的旧路径映射，仅迁移早于对应代次入队的元数据命令。
+    std::vector<ResourceRenameAlias> m_resourceRenameAliases;
 
     /// @brief 当前低频谱面变化观察者。
     /// @warning 跨线程访问通过 shared_ptr 原子自由函数完成；只在谱面发生实际

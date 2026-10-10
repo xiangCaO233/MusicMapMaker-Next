@@ -4622,6 +4622,7 @@ void EditorEngine::handleUpdateAudioResource(const CmdUpdateAudioResource& cmd)
 
 /// @brief 增量重命名项目音频文件、资源 ID 和全部内存引用。
 /// @param cmd 旧资源 ID 与新文件名。
+/// @param errorMessage 同步调用者可选的失败原因，成功时清空。
 /// @details
 /// 重命名同时涉及物理文件、项目资源表、磁盘谱面、打开会话 ECS、工作区引用、
 /// 音效池和当前音频画笔。流程先完成所有无副作用校验，再改名文件、迁移路径，
@@ -4630,11 +4631,55 @@ void EditorEngine::handleUpdateAudioResource(const CmdUpdateAudioResource& cmd)
 /// @warning 低频项目资源路径：执行文件系统改名、谱面引用事务写回和
 /// 已打开会话增量同步，禁止从每帧热路径调用。
 /// @post 成功时旧资源 ID 不再出现在项目工作区、打开 ECS 或 Effect 登记中。
-void EditorEngine::handleRenameAudioResource(const CmdRenameAudioResource& cmd)
+/// @note 元数据撤销快照和未消费命令同步迁移；文件改名不增加谱面撤销动作。
+/// @note 后台保存未完成时返回重试原因，不等待保存线程或占用渲染帧。
+void EditorEngine::handleRenameAudioResource(const CmdRenameAudioResource& cmd,
+                                             std::string* errorMessage)
 {
+    if ( errorMessage ) errorMessage->clear();
+    // 可选输出属于同步调用方；函数返回后不保留该地址。
+    /// @brief 同步调用者获取失败原因，同时保留原有的全局事件反馈。
+    /// @note 不订阅临时回调，避免延迟事件借用栈上错误缓冲。
+    const auto publishAudioResourceMutationResult =
+        [errorMessage](Event::AudioResourceMutationOperation operation,
+                       const std::string&                    resourceId,
+                       bool                                  success,
+                       const std::vector<std::string>& blockingBeatmapPaths,
+                       const std::string&              message) {
+            // 所有失败出口经过同一包装，成功不会残留上一次诊断。
+            if ( errorMessage )
+                *errorMessage = success ? std::string{} : message;
+            // 不取消既有广播，项目音频列表和通知栏仍依据同一结果刷新。
+            ::MMM::Logic::publishAudioResourceMutationResult(
+                operation, resourceId, success, blockingBeatmapPaths, message);
+        };
     // 文件、项目模型、打开会话和 AudioManager 必须作为一个串行事务更新；
     // 注册表递归锁也允许内部 saveProject 复用工作区捕获入口。
     std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    if ( ProjectController::instance().isCurrentProjectTemporary() ) {
+        // 同步设置入口也必须遵循临时谱包只读规则，不能绕过命令路由门禁。
+        publishAudioResourceMutationResult(
+            Event::AudioResourceMutationOperation::Rename,
+            cmd.id,
+            false,
+            {},
+            "临时项目为只读，请先保存到正式目录");
+        return;
+    }
+    for ( const auto& entry : m_sessionRegistry.entriesUnsafe() ) {
+        // 保存任务写的是独立谱面副本，注册表锁无法改变已经交给它的旧引用。
+        if ( entry.session && entry.session->hasInFlightBeatmapSave() ) {
+            // 后台快照仍含旧文件名，等待用户下一次确认，而不是阻塞渲染线程。
+            publishAudioResourceMutationResult(
+                Event::AudioResourceMutationOperation::Rename,
+                cmd.id,
+                false,
+                {},
+                "谱面正在后台保存，请稍后重试音频资源重命名");
+            return;
+        }
+    }
+    // 无在途保存后才进入原有文件事务，避免旧快照晚于改名结果落盘。
     auto* project = ProjectController::instance().currentProject();
     if ( !project ) {
         publishAudioResourceMutationResult(
@@ -4873,6 +4918,30 @@ void EditorEngine::handleRenameAudioResource(const CmdRenameAudioResource& cmd)
         if ( entry.isLogoPlaceholder || !entry.session ) continue;
         auto& ctx = entry.session->getContextMutable();
         if ( !ctx.currentBeatmap ) continue;
+
+        // 文件重命名不可由谱面 Undo 单独撤销，历史与已排队草稿必须跟随新路径。
+        // 只迁移资源字段，保留原有标题、作者和音符操作的撤销语义。
+        const auto oldStoredPath = Config::utf8ToPath(previousResource.m_path);
+        const auto newStoredPath = Config::utf8ToPath(resourceIterator->m_path);
+        ctx.actionStack.remapResourcePaths(oldStoredPath, newStoredPath);
+        // 原格式或历史命令可能保存绝对路径，不能仅迁移当前项目相对写法。
+        ctx.actionStack.remapResourcePaths(oldPath, newPath);
+        ctx.actionStack.remapResourcePaths(Config::utf8ToPath(cmd.id),
+                                           Config::utf8ToPath(newResourceId));
+        // 主音频提示也允许纯资源 ID，需和文件路径同时迁移。
+        entry.session->recordResourceRename(
+            // 命令消费已相对化资源字段，别名也按项目根对齐同一表示。
+            oldStoredPath.is_absolute()
+                ? oldStoredPath.lexically_relative(project->m_projectRoot)
+                : oldStoredPath,
+            newStoredPath.is_absolute()
+                ? newStoredPath.lexically_relative(project->m_projectRoot)
+                : newStoredPath);
+        // 别名按入队代次生效，改名之后的新选择不会被过去的映射覆盖。
+        entry.session->recordResourceRename(Config::utf8ToPath(cmd.id),
+                                            Config::utf8ToPath(newResourceId));
+        // 历史快照只改引用，不创建新的编辑动作，也不清空已有撤销链。
+        // 当前 BeatMap 和 ECS 的同步仍由下面原有资源服务负责。
 
         const auto domainChanged =
             ProjectResourceService::remapBeatmapAudioResourceId(

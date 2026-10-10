@@ -4004,6 +4004,30 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
     });
 }
 
+/// @brief 记录媒体资源改名别名，供稍后消费的元数据命令校正路径。
+/// @param oldPath 改名前的项目相对路径。
+/// @param newPath 改名后的项目相对路径。
+/// @warning 低频资源变更路径；调用方持有会话注册表锁。
+/// @note 每次改名递增会话代次，随后入队的元数据命令使用新身份。
+/// @note 别名只由逻辑线程消费；跨线程生产者仅接触原子代次。
+/// @note 这里使用 relaxed，因为代次只是顺序标记，不发布别名容器内存。
+/// @note 新旧路径都以项目相对表示传入，和元数据命令规范化结果一致。
+/// @note 同一源文件再次改名时可形成链，消费按改名记录顺序连续投影。
+/// @note 不遍历既有队列，保留并发生产者和文件操作原有的入队顺序。
+void BeatmapSession::recordResourceRename(const std::filesystem::path& oldPath,
+                                          const std::filesystem::path& newPath)
+{
+    if ( oldPath != newPath ) {
+        // 先登记别名、再发布代次，提交途中的 UI 草稿仍按旧资源迁移。
+        // 代次不发布别名内存；别名仅在注册表锁内由逻辑线程读取。
+        const auto generation =
+            m_resourceRenameGeneration.load(std::memory_order_relaxed) + 1U;
+        m_resourceRenameAliases.push_back(
+            ResourceRenameAlias{ oldPath, newPath, generation });
+        m_resourceRenameGeneration.store(generation, std::memory_order_relaxed);
+    }
+}
+
 /// @brief 更新谱面元数据，并同步主音轨提示对应的首个 Main BGM 采样。
 /// @param cmd 新的谱面基础元数据。
 /// @return 自动采样发生同步替换时包含 AudioSamples，否则返回 None。
@@ -4034,6 +4058,25 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
         auto       updatedMeta = cmd.baseMeta;
         // UI 输入在进入会话后统一规范化路径和结构边界，避免多个入口行为不一。
         normalizeCurrentProjectMetadataPaths(updatedMeta);
+        // 只迁移命令入队以后发生的改名；后来新建同名文件时的新命令不受影响。
+        // 此处只读取别名表和命令代次，不增加逻辑 update 中的文件系统访问。
+        for ( const auto& alias : m_resourceRenameAliases ) {
+            if ( alias.m_generation <= cmd.m_resourceRenameGeneration ) {
+                continue;
+            }
+            if ( updatedMeta.main_audio_path == alias.m_oldPath ) {
+                updatedMeta.main_audio_path = alias.m_newPath;
+            }
+            if ( updatedMeta.song_file_hint == alias.m_oldPath ) {
+                updatedMeta.song_file_hint = alias.m_newPath;
+            }
+            if ( updatedMeta.cover_path == alias.m_oldPath ) {
+                updatedMeta.cover_path = alias.m_newPath;
+            }
+            if ( updatedMeta.main_cover_path == alias.m_oldPath ) {
+                updatedMeta.main_cover_path = alias.m_newPath;
+            }
+        }
         updatedMeta.track_count = std::max(1, updatedMeta.track_count);
         // BGM 轨道数由专门交互命令维护，元数据编辑不能绕过采样迁移逻辑覆盖。
         updatedMeta.bgm_track_count = m_ctx->bgmTrackCount;

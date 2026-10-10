@@ -141,9 +141,19 @@ public:
 
     /// @brief 增量重命名项目音频文件、资源 ID 和全部内存引用。
     /// @param cmd 旧资源 ID 与新文件名。
+    /// @param errorMessage 可选的失败原因输出；成功时清空。
     /// @warning 低频项目资源路径：执行文件系统改名、谱面引用事务写回和
     /// 已打开会话增量同步，禁止从每帧热路径调用。
-    void handleRenameAudioResource(const CmdRenameAudioResource& cmd);
+    void handleRenameAudioResource(const CmdRenameAudioResource& cmd,
+                                   std::string* errorMessage = nullptr);
+
+    /// @brief 重命名项目中的封面图片或图片、视频背景并更新谱面引用。
+    /// @param oldPath 当前项目内资源的绝对路径或项目相对路径。
+    /// @param newFileName 不含目录的新文件名；省略扩展名时沿用原扩展名。
+    /// @return 成功时为空，失败时为可直接展示的原因。
+    /// @warning 用户触发的低频路径：会同步改名文件、项目谱面和全部打开会话。
+    std::string renameBeatmapVisualResource(
+        const std::filesystem::path& oldPath, const std::string& newFileName);
 
     /// @brief 更新音频资源的完整持久化 DSP 配置并使引用它的时间线失效。
     /// @param cmd 目标资源 ID 与替换配置。

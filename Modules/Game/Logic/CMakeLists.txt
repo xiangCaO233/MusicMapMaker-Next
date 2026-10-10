@@ -51,6 +51,9 @@ add_library(
   src/logic/ProjectController.cpp
   # EditorEngine 聚合会话调度，其实现留在 Logic，启动程序仅负责装配。
   src/logic/EditorEngine.cpp
+  # 视觉资源改名包含独立的谱面磁盘事务与会话同步，避免扩张调度主文件。
+  src/logic/EditorEngine_VisualResource.cpp
+  src/logic/VisualResourceRenameService.cpp
   # 音频时间描述和视觉时钟仍属于编辑逻辑，底层播放能力通过 Audio 依赖获得。
   src/logic/audio/AudioTimelineDescriptor.cpp
   src/logic/audio/PlaybackVisualClock.cpp
@@ -155,6 +158,15 @@ mmm_add_test_executable(Logic ProjectCompatibilityTest
 target_link_libraries(ProjectCompatibilityTest PRIVATE Logic Log)
 mmm_register_test_case(NAME ProjectCompatibilityTest COMMAND
                        ProjectCompatibilityTest)
+
+# 视觉资源改名测试在构建树创建独立项目，覆盖谱面路径事务和失败保护。 图片与视频共享同一逻辑服务，单一测试入口验证两种资源的不同元数据语义。 测试目录经
+# helper 显式传入，不从源码测试资源目录推断可写位置。
+mmm_add_test_executable(Logic VisualResourceRenameTest
+                        tests/VisualResourceRenameTest.cpp)
+target_link_libraries(VisualResourceRenameTest PRIVATE Logic Log)
+mmm_register_test_case(
+  NAME VisualResourceRenameTest COMMAND VisualResourceRenameTest
+  "${CMAKE_BINARY_DIR}/test_output/visual_resource_rename")
 
 # 谱面自动备份测试覆盖原生快照写入、单谱面数量轮转和路径隔离。 可写输出置于构建树，不允许将备份产物写入 tests/data 源资源目录。
 mmm_add_test_executable(Logic BeatmapBackupServiceTest

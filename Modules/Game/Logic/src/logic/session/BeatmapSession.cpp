@@ -272,6 +272,12 @@ void BeatmapSession::pushCommand(LogicCommand&& cmd)
          blockCollaborationUnauthorizedEdit(cmd) ) {
         return;
     }
+    if ( auto* metadata = std::get_if<CmdUpdateBeatmapMetadata>(&cmd) ) {
+        // 仅元数据命令读取改名代次，其他鼠标和渲染命令不承担额外原子访问。
+        // 后续资源改名只迁移入队时仍旧的路径，不改变新选择的文件身份。
+        metadata->m_resourceRenameGeneration =
+            m_resourceRenameGeneration.load(std::memory_order_relaxed);
+    }
     // 不在提交线程直接执行命令，维持会话状态更新的统一入口。
     m_commandQueue.enqueue(std::move(cmd));
 }

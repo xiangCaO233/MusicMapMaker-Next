@@ -237,7 +237,8 @@ struct CmdUpdateMarquee {
 /**
  * @brief 结束框选指令
  */
-struct CmdEndMarquee {};
+struct CmdEndMarquee {
+};
 
 /**
  * @brief 移除指定位置的框选区域
@@ -484,7 +485,8 @@ struct CmdClearNoteColorOverrides {
 };
 
 /// @brief 清除当前谱面全部正式音符及折线子段的自定义颜色。
-struct CmdClearAllNoteColorOverrides {};
+struct CmdClearAllNoteColorOverrides {
+};
 
 /**
  * @brief 撤销指令
@@ -499,12 +501,14 @@ struct CmdUndo {
 /**
  * @brief 重做指令
  */
-struct CmdRedo {};
+struct CmdRedo {
+};
 
 /**
  * @brief 复制指令
  */
-struct CmdCopy {};
+struct CmdCopy {
+};
 
 /**
  * @brief 粘贴指令
@@ -520,12 +524,14 @@ struct CmdPaste {
 /**
  * @brief 剪切指令
  */
-struct CmdCut {};
+struct CmdCut {
+};
 
 /**
  * @brief 删除选中物件指令
  */
-struct CmdDeleteSelected {};
+struct CmdDeleteSelected {
+};
 
 /// @brief 删除创作教学红框指定的错误根物件，避免普通撤销误伤其它编辑。
 struct CmdRemoveComposeLessonNote {
@@ -540,12 +546,14 @@ struct CmdRemoveComposeLessonNote {
 /**
  * @brief 镜像选中物件指令
  */
-struct CmdMirrorSelected {};
+struct CmdMirrorSelected {
+};
 
 /**
  * @brief 对齐选中物件至常用分拍指令
  */
-struct CmdAlignSelectedToCommonBeats {};
+struct CmdAlignSelectedToCommonBeats {
+};
 
 /// @brief 全选命令的轨道区范围。
 enum class SelectAllScope : std::uint8_t {
@@ -976,10 +984,15 @@ struct CmdCreateBeatmap {
  */
 struct CmdUpdateBeatmapMetadata {
     ::MMM::BaseMapMeta baseMeta;
+
+    /// @brief 入队时会话已完成的媒体资源改名代次。
+    /// @note 零值保留直接调用命令处理器的旧测试与聚合初始化兼容。
+    std::uint64_t m_resourceRenameGeneration{ 0U };
 };
 
 /// @brief 标记直接修改的扩展谱面元数据，并请求尾随自动保存。
-struct CmdMarkBeatmapMetadataDirty {};
+struct CmdMarkBeatmapMetadataDirty {
+};
 
 /**
  * @brief 导入音频指令

@@ -1974,6 +1974,36 @@ public:
         return flags;
     }
 
+    /// @brief 定向迁移元数据替换动作前后快照中的媒体文件引用。
+    /// @details 两个方向都改写，保留 Undo 原本的背景选择语义，同时避免
+    /// 后续重放写回已经不存在的旧文件名。
+    /// @param oldPath 改名前的元数据路径或资源 ID。
+    /// @param newPath 改名后的对应路径或资源 ID。
+    /// @note 只访问本动作持有的元数据快照，不遍历普通音符动作。
+    /// @note 不把资源改名作为本动作的一次新编辑，也不清空重做分支。
+    /// @warning 显式资源改名低频路径；两个方向的值都必须同步。
+    void remapResourcePaths(const std::filesystem::path& oldPath,
+                            const std::filesystem::path& newPath) override
+    {
+        if ( !m_replaceMetadata ) return;
+        // 只迁移与旧资源精确相等的字段，原本指向其他资源的选择保留。
+        const auto remapSnapshot = [&](BeatmapMetadataSnapshot& snapshot) {
+            auto& base = snapshot.baseMeta;
+            if ( base.main_audio_path == oldPath ) {
+                base.main_audio_path = newPath;
+            }
+            if ( base.song_file_hint == oldPath ) {
+                base.song_file_hint = newPath;
+            }
+            if ( base.cover_path == oldPath ) base.cover_path = newPath;
+            if ( base.main_cover_path == oldPath ) {
+                base.main_cover_path = newPath;
+            }
+        };
+        remapSnapshot(m_beforeMetadata);
+        remapSnapshot(m_afterMetadata);
+    }
+
 private:
     /// @brief 应用指定方向的替换快照。
     /// @param ctx 当前会话上下文。

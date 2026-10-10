@@ -3,6 +3,7 @@
 #include "mmm/beatmap/BeatmapMutationObserver.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <utility>
@@ -36,6 +37,15 @@ public:
 
     /// @brief 返回该操作执行、撤销或重做会修改的谱面数据类别。
     [[nodiscard]] virtual ::MMM::BeatmapMutationFlags mutationFlags() const = 0;
+
+    /// @brief 外部资源改名后迁移动作保存的媒体资源路径快照。
+    /// @param oldPath 改名前的谱面元数据路径。
+    /// @param newPath 改名后的谱面元数据路径。
+    /// @note 不持有元数据快照的动作保持默认空实现。
+    virtual void remapResourcePaths(const std::filesystem::path&,
+                                    const std::filesystem::path&)
+    {
+    }
 
     /// @brief 教学创建所属步骤；普通动作保持零，不受引导回退影响。
     std::uint64_t m_walkthroughToken{ 0 };
@@ -107,6 +117,13 @@ public:
     /// @brief 标记一次未进入撤销栈的编辑为未保存。
     void markDirty();
 
+    /// @brief 定向迁移撤销栈与重做栈中持久保存的媒体资源引用。
+    /// @param oldPath 改名前的谱面元数据路径。
+    /// @param newPath 改名后的谱面元数据路径。
+    /// @warning 用户触发的低频路径；线性扫描历史，不用于每帧逻辑更新。
+    void remapResourcePaths(const std::filesystem::path& oldPath,
+                            const std::filesystem::path& newPath);
+
     /// @brief 取出尚未由 BeatmapSession 发布的操作变化类别。
     /// @return 自上次取出后执行、撤销或重做所修改的谱面数据类别。
     [[nodiscard]] ::MMM::BeatmapMutationFlags takePendingMutationFlags();
@@ -171,6 +188,10 @@ public:
 
     /// @brief 合并全部子操作的数据类别。
     [[nodiscard]] ::MMM::BeatmapMutationFlags mutationFlags() const override;
+
+    /// @brief 将媒体资源改名转发到全部子动作保存的快照。
+    void remapResourcePaths(const std::filesystem::path& oldPath,
+                            const std::filesystem::path& newPath) override;
 
 private:
     std::vector<std::unique_ptr<IEditorAction>> m_actions;  ///< 子操作。
