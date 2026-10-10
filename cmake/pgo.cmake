@@ -128,6 +128,10 @@ if(MMM_PGO_INSTRUMENT AND MMM_PGO_IS_MSVC_LIKE_CLANG_CROSS)
         _mmm_pgo_runtime_hints
         "${MSVC_BASE}/../../Llvm/x64/lib/clang/${_mmm_pgo_llvm_major}/lib/windows"
       )
+      # 新版 MSVC toolset 也将 compiler-rt profile 库随 CRT 一起安装在 lib/x64。 优先使用上面的所选
+      # LLVM 安装；仅在其没有目标库时采用 toolset 提供的兼容运行库。 固定 x64 子目录，避免误选同名的 x86、ARM64 或
+      # OneCore 变体。
+      list(APPEND _mmm_pgo_runtime_hints "${MSVC_BASE}/lib/x64")
     endif()
     find_file(
       _mmm_pgo_runtime
