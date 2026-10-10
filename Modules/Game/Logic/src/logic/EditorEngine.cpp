@@ -1569,10 +1569,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                                displayName,
-                                                false,
-                                                state.m_cameraId,
-                                                !state.m_cameraId.empty());
+                                      displayName,
+                                      false,
+                                      state.m_cameraId,
+                                      !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
         // fallback 始终指向最后成功创建项，活动路径丢失时仍给用户可用画布。
 
@@ -3456,10 +3456,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 顺序投递初始化命令，保证载图处理看到完整编辑环境。
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName = displayName.empty()
-                                              ? beatmap->m_baseMapMetadata.name
-                                              : displayName;
-                sessions[i].beatmapPathKey = requestedBeatmapKey;
+                sessions[i].displayName              = displayName.empty()
+                                                           ? beatmap->m_baseMapMetadata.name
+                                                           : displayName;
+                sessions[i].beatmapPathKey           = requestedBeatmapKey;
                 // 占位条目的旧音频身份必须覆盖为空，等待载图命令生成新描述符。
                 sessions[i].audioTimelineFingerprint =
                     requestedAudioTimelineFingerprint;
@@ -3480,6 +3480,14 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 restoreBrushAudioResourceUnsafe(*sessions[i].session);
                 sessions[i].session->pushCommand(
                     LogicCommand(CmdLoadBeatmap{ beatmap }));
+                // 后台占位可能从未显示，不能依赖首次 Resize 才建立主相机。
+                // 缓存尺寸不存在时使用单位视口，真实窗口尺寸到达后正常覆盖。
+                const auto viewport =
+                    m_renderSyncRegistry.getViewportSize(sessions[i].cameraId);
+                sessions[i].session->pushCommand(
+                    CmdUpdateViewport{ sessions[i].cameraId,
+                                       viewport ? viewport->x : 1.0F,
+                                       viewport ? viewport->y : 1.0F });
                 /// @brief 复用占位画布前的活动 Session，用于补交谱面切换事件。
                 const int32_t previousIndex = m_sessionRegistry.activeIndex();
                 // 离开旧活动谱面前请求切换触发的自动保存；复用同一活动槽时
@@ -3543,6 +3551,15 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
 
     // 预注册主画布缓冲区，使 UI 在会话快照发布后可以立即取得同步目标。
     getSyncBuffer(cameraId);
+
+    // 工作区恢复时编辑器可能一直藏在欢迎页后，主相机仍须发布谱名快照。
+    // 这只是会话初始视口，不创建 GPU 资源，也不要求 UI 切换焦点。
+    // 有历史尺寸就复用；否则单位视口由后续正常 Resize 命令替换。
+    const auto mainViewport = m_renderSyncRegistry.getViewportSize(cameraId);
+    newSession->pushCommand(
+        CmdUpdateViewport{ cameraId,
+                           mainViewport ? mainViewport->x : 1.0F,
+                           mainViewport ? mainViewport->y : 1.0F });
 
     // 初始命令顺序是会话契约：先配置，再工具与画笔，最后才加载谱面。
     // 载图后的派生系统因此不需要处理未初始化的主题或交互偏好。

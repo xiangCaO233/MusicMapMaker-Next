@@ -20,7 +20,7 @@ namespace
 {
 /// @brief 验证主画布隐藏后音频分析仍读取最新播放、暂停与跳转状态。
 /// @param manager 本进程唯一的 UI 管理器，保持 Clay 上下文生命周期连续。
-/// @return 隐藏画布不绘制且只在分析需要时消费快照，返回 true。
+/// @return 隐藏画布持续消费标题和分析快照但不恢复绘制时返回 true。
 /// @details 使用真实折叠窗口进入生产可见性分支，不初始化 GPU。
 bool checkHiddenCanvasPlayback(MMM::UI::UIManager& manager)
 {
@@ -34,13 +34,14 @@ bool checkHiddenCanvasPlayback(MMM::UI::UIManager& manager)
     ImGui::SetNextWindowCollapsed(true, ImGuiCond_Always);
     canvas.update(&manager);
     ImGui::Render();
-    // 无分析窗口时保持既有隐藏标签优化，不能仅为消费快照恢复渲染。
+    // 无分析窗口也要消费标题元数据，但不能仅为消费快照恢复渲染。
     MMM::UI::UiFrameSnapshot frame;
     bool passed = !canvas.isDirty() && !canvas.shouldRecordOffscreen() &&
-                  !canvas.needsParallelUiPrepare(frame);
-    // 多谱面场景只有活动相机允许例外；另一个分析目标不能唤醒本画布。
+                  canvas.needsParallelUiPrepare(frame);
+    // 其它分析目标不影响标签元数据消费，也不允许唤醒此画布的离屏绘制。
     frame.audioAnalysisCameraId = "OtherCamera";
-    passed &= !canvas.needsParallelUiPrepare(frame);
+    passed &=
+        canvas.needsParallelUiPrepare(frame) && !canvas.shouldRecordOffscreen();
     frame.audioAnalysisCameraId = "AnalysisTestCamera";
     passed &= canvas.needsParallelUiPrepare(frame);
     // 连续发布两个播放时刻，再暂停跳转；不能由旧快照无限外推掩盖更新丢失。
@@ -82,9 +83,10 @@ bool checkHiddenCanvasPlayback(MMM::UI::UIManager& manager)
                  ? reading->resolveCurrentTimeAt(resolveAt) == expectedTime
                  : reading->resolveCurrentTimeAt(resolveAt) > expectedTime);
     }
-    // 分析窗口关闭后不再请求隐藏主画布准备，保留原有后台优化。
+    // 分析窗口关闭后仍轻量消费标签状态，但保持后台绘制关闭。
     frame.audioAnalysisCameraId.clear();
-    passed &= !canvas.needsParallelUiPrepare(frame);
+    passed &=
+        canvas.needsParallelUiPrepare(frame) && !canvas.shouldRecordOffscreen();
     if ( !passed ) XERROR("Hidden canvas audio playback snapshot regression");
     return passed;
 }

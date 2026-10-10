@@ -103,11 +103,12 @@ target_include_directories(LayoutEditingTest
 target_link_libraries(LayoutEditingTest PRIVATE Common Config)
 mmm_register_test_case(NAME LayoutEditingTest COMMAND LayoutEditingTest)
 
-# 画布标签测试覆盖长标题省略时仍固定显示前置脏标志。 标题和协作标记均为头内纯逻辑，因此无需引入 UI 或会话目标；窗口固定 ID 与停靠行为由实际
-# Canvas 集成负责。
+# 画布标签测试覆盖标题格式与隐藏主画布的实际快照消费。 显式链接 Canvas 以验证无 GPU 的准备/交换入口，不以复制可见性判断代替生产路径。
 mmm_add_test_executable(Canvas CanvasTabTitleTest tests/CanvasTabTitleTest.cpp)
 target_include_directories(CanvasTabTitleTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+# 不初始化 Vulkan：Canvas 构造仅建立控制器，资源由运行时延后创建。 名称、脏标志和空谱面经真实快照池发布，覆盖标签未激活时的消费调度。
+target_link_libraries(CanvasTabTitleTest PRIVATE Canvas)
 mmm_register_test_case(NAME CanvasTabTitleTest COMMAND CanvasTabTitleTest)
 
 # 欢迎占位页可见性测试覆盖无谱面时隐藏状态与悬浮检视内容。 可见性 helper 归属 UI，显式链接 UI

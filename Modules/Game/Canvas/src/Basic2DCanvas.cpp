@@ -768,8 +768,8 @@ bool Basic2DCanvas::updateComposeLessonHints(
                                          : ImTextureID{};
     const TextureID   headTexture =
         uvMap.contains(static_cast<std::uint32_t>(TextureID::HoldHead))
-            ? TextureID::HoldHead
-            : TextureID::Note;
+              ? TextureID::HoldHead
+              : TextureID::Note;
     // 头部可选是皮肤协议的一部分，普通 Note 是旧皮肤的兼容回退。
     // 必须在求尺寸之前确定最终纹理，否则头部与真实物件宽高不同。
     // Hold、Flick 和 Polyline 均共享这个选择；Tap 始终使用 Note。
@@ -2708,9 +2708,13 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                                        .data();
     }
 
+    // 会话结构重置先于新渲染快照发布，占位身份必须立即压过旧谱名。
+    // 不等待逻辑线程生成下一份画面，也不能让旧 dirty 标志留在标签上。
+    const bool titleHasBeatmap = !isLogoPlaceholder && m_currentSnapshot &&
+                                 m_currentSnapshot->hasBeatmap;
     const std::string title = makeCanvasTabTitle(
         TR("canvas.editor").data(),
-        m_currentSnapshot && m_currentSnapshot->hasBeatmap,
+        titleHasBeatmap,
         m_currentSnapshot ? m_currentSnapshot->beatmapName : std::string_view{},
         m_currentSnapshot && m_currentSnapshot->isDirty,
         collaborationStatusLabel);
@@ -2965,9 +2969,9 @@ void Basic2DCanvas::updateCollaborationViewports(
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
     // 渲染模式是本地显示偏好，不写入 ParticipantViewport；不同用户
     // 可独立选择填充、轮廓或轨道边缘而不影响网络协议。
-    const auto  viewportRenderMode = Config::AppConfig::instance()
-                                         .getEditorSettings()
-                                         .collaborationViewportRenderMode;
+    const auto viewportRenderMode = Config::AppConfig::instance()
+                                        .getEditorSettings()
+                                        .collaborationViewportRenderMode;
     const auto& layout =
         visual.trackLayoutForKeyCount(m_currentSnapshot->trackCount);
     // 使用当前轨道数对应布局，使动态扩轨后的协作范围立即跟随
@@ -3428,19 +3432,19 @@ ImGuiID Basic2DCanvas::getDockId() const
 /// @brief 判断当前帧是否需要准备画布快照。
 /// @param snapshot 当前帧 UI 快照。
 /// @return 需要准备时返回 true。
-/// @details 已建立同步缓冲且标签可见，或活动音频分析窗口需要其时间时参与准备。
-/// 隐藏标签仅消费快照，不能因此恢复离屏绘制与交互。
+/// @details 所有仍打开的标签均消费最新快照，使谱名和脏状态不依赖标签焦点。
+/// 隐藏标签只拉取快照，不做几何准备、离屏绘制或交互。
 /// 即使窗口已收到关闭请求，保存确认或脏快照仍需要最后一份数据，
 /// 因此这些状态会暂时维持快照消费直到用户完成决策。
 /// @warning UI 调度热路径：每帧调用，只读取稳定标志与当前快照状态。
 bool Basic2DCanvas::needsParallelUiPrepare(
     const UI::UiFrameSnapshot& snapshot) const
 {
-    return m_syncBuffer &&
-           (m_isCanvasVisible ||
-            snapshot.audioAnalysisCameraId == m_cameraId) &&
-           (m_isOpen || m_showSaveConfirm ||
-            (m_currentSnapshot && m_currentSnapshot->isDirty));
+    (void)snapshot;
+    // 标签内容隐藏不等于标签元数据隐藏；生产端仍会在命令或会话变更后发布。
+    // 继续消费无锁队列即可刷新标题，不能为此重新开启后台画布绘制。
+    return m_syncBuffer && (m_isOpen || m_showSaveConfirm ||
+                            (m_currentSnapshot && m_currentSnapshot->isDirty));
 }
 
 /// @brief 在线程池中拉取并准备画布渲染快照。
@@ -3453,7 +3457,7 @@ void Basic2DCanvas::prepareUiFrameData(const UI::UiFrameSnapshot& snapshot)
 {
     (void)snapshot;
     if ( !m_isCanvasVisible ) {
-        // 音频分析借用同一读取槽；由画布在准备阶段统一回收，避免绘制阶段
+        // 标签标题与音频分析借用同一读取槽；由画布统一回收，避免绘制阶段
         // 被第二个消费者归还旧指针。隐藏画布不遍历新快照几何或做播放补间。
         // 先还原上一帧已应用的偏移，再归还旧槽，恢复显示时不会累积偏移。
         applyDynamicVertexYOffset(m_lastOffsetSnapshot, -m_lastAppliedYOffset);
