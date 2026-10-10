@@ -25,6 +25,9 @@ namespace MMM::UI
 /// 窗口 StateStorage 中，不写入项目或软件配置。
 /// @note RTC 日志开关除写入配置外还立即更新网络层运行时门闩，其余选项通过
 /// CmdUpdateEditorConfig 在帧末同步给逻辑线程。
+/// @note 摄像机角度仅用于实验观察，本页不改变画布世界几何。
+/// @note 零度保持原二维视图，非零角度的编辑交互边界由画布层统一处理。
+/// @note 固定一个世界单位的高度是渲染端约束，不另设可编辑项。
 /// @warning UI 热路径：设置窗口打开且当前页为调试页时每帧执行。
 /// 禁止加入文件系统扫描或重型资源重建。
 void SettingsView::drawDebugSettings()
@@ -33,7 +36,7 @@ void SettingsView::drawDebugSettings()
     auto& appConfig = Config::AppConfig::instance();
     // 通用编辑器选项保存渲染日志与 RTC 诊断开关。
     auto& settings = appConfig.getEditorSettings();
-    // 视觉配置保存命中框显示和缩放系数。
+    // 视觉配置保存画布观察角、命中框显示和缩放系数。
     auto& visual = appConfig.getVisualConfig();
     // 所有控件共享变化标记，本帧末统一同步与保存。
     // 标题展开状态不计入该标记，因为它只属于临时窗口状态。
@@ -158,7 +161,31 @@ void SettingsView::drawDebugSettings()
     // 渲染诊断分组默认展开，方便开发构建快速访问命中框工具。
     if ( auto* sec =
              addHeader(TR_CACHE("ui.settings.debug.rendering").data(), true) ) {
-        // 第一项控制画布是否额外绘制交互命中框轮廓。
+        // 第一项仅改变实验摄像机的俯视偏转角。
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.debug.canvas_camera_angle").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                // 角度滑杆占满控件列，度数后缀明确表达俯视偏转。
+                ImGui::SetNextItemWidth(r.width);
+                changed |= ::MMM::UI::FeedbackSliderFloat(
+                    "##DebugCanvasCameraAngle",
+                    &visual.debugCanvasCameraAngleDegrees,
+                    Config::VisualConfig::MIN_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES,
+                    Config::VisualConfig::MAX_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES,
+                    "%.1f°");
+                if ( ImGui::IsItemHovered() ) {
+                    // 实验边界只在用户检查控件时显示，避免挤占设置行。
+                    Utils::renderTooltip(
+                        TR("ui.settings.debug.canvas_camera_angle_tooltip")
+                            .data(),
+                        Utils::TooltipDir::Right);
+                }
+            });
+
+        // 其余诊断项用于检查二维拾取几何与渲染阶段。
         addSettingItem(
             *sec,
             rowIndex,

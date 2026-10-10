@@ -14,6 +14,7 @@
 #include "canvas/Basic2DCanvas.h"
 
 #include "canvas/BackgroundVideoTiming.h"
+#include "canvas/PlanarObservationCamera.h"
 #include "common/UnicodeFontData.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
@@ -36,6 +37,42 @@
 
 namespace MMM::Canvas
 {
+glm::mat4 Basic2DCanvas::getCanvasProjectionMatrix()
+{
+    // 仅改变录制阶段，不修改快照或会话的时间、轨道坐标。
+    // 背景与音符共用平面，全屏后处理不进入该变换。
+    // 渲染线程只读 UI 同线程维护的配置，不访问会话更新长锁。
+    const float angle =
+        planarObservationAngle(Config::AppConfig::instance()
+                                   .getVisualConfig()
+                                   .debugCanvasCameraAngleDegrees);
+    m_isObservationCamera = angle > 0.0f;
+    // 后续批次裁剪复用该矩阵，发光降采样不改变逻辑空间。
+    m_observationProjection =
+        planarObservationProjection(static_cast<float>(m_logicalWidth),
+                                    static_cast<float>(m_logicalHeight),
+                                    m_yOffset,
+                                    angle);
+    return m_observationProjection;
+}
+
+vk::Rect2D Basic2DCanvas::getCanvasScissor(
+    Common::Render::CanvasScissor scissor) const
+{
+    // 包围框允许少量边缘溢出，精确梯形裁剪留待后续实验。
+    // 此处不重建几何，二维鼠标拾取由观察模式入口单独禁用。
+    // 零角度不经浮点四角投影，保持旧二维裁剪像素完全一致。
+    if ( m_isObservationCamera ) {
+        scissor = planarObservationScissor(scissor,
+                                           m_observationProjection,
+                                           static_cast<float>(m_logicalWidth),
+                                           static_cast<float>(m_logicalHeight));
+    }
+    // 先完成场景投影，再使用当前目标（含 glow）的 DPI 比例。
+    return getPhysicalScissor(vk::Rect2D{ { scissor.x, scissor.y },
+                                          { scissor.width, scissor.height } });
+}
+
 namespace
 {
 
@@ -643,9 +680,7 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
         if ( cmd.scissor != lastScissor ) {
             // 快照 scissor 使用逻辑坐标，录制前按当前 framebuffer 比例
             // 转成物理像素；相邻相同裁剪区不重复设置。
-            vk::Rect2D physicalScissor = getPhysicalScissor(
-                vk::Rect2D{ { cmd.scissor.x, cmd.scissor.y },
-                            { cmd.scissor.width, cmd.scissor.height } });
+            vk::Rect2D physicalScissor = getCanvasScissor(cmd.scissor);
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }
@@ -728,9 +763,7 @@ void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
 
         if ( cmd.scissor != lastScissor ) {
             // 发光 pass 使用与主层相同逻辑裁剪约定。
-            vk::Rect2D physicalScissor = getPhysicalScissor(
-                vk::Rect2D{ { cmd.scissor.x, cmd.scissor.y },
-                            { cmd.scissor.width, cmd.scissor.height } });
+            vk::Rect2D physicalScissor = getCanvasScissor(cmd.scissor);
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }
@@ -808,9 +841,7 @@ void Basic2DCanvas::onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
 
         if ( cmd.scissor != lastScissor ) {
             // 每个覆盖层分组保留逻辑 scissor，防止标签越出轨道区域。
-            vk::Rect2D physicalScissor = getPhysicalScissor(
-                vk::Rect2D{ { cmd.scissor.x, cmd.scissor.y },
-                            { cmd.scissor.width, cmd.scissor.height } });
+            vk::Rect2D physicalScissor = getCanvasScissor(cmd.scissor);
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }

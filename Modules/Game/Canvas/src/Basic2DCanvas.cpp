@@ -32,6 +32,7 @@
 #include "canvas/ComposeHoldTarget.h"
 #include "canvas/ComposeLessonHintGeometry.h"
 #include "canvas/ComposeTargetEligibility.h"
+#include "canvas/PlanarObservationCamera.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
@@ -2809,7 +2810,12 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         const ImVec2 canvasScreenPosition = ImGui::GetCursorScreenPos();
         const ImVec2 canvasSize           = rctx.getRenderSize();
         rctx.renderSurface();
-        if ( m_currentSnapshot )
+        // 透视观察不复用二维命中区域；播放与媒体更新仍正常推进。
+        const bool cameraObservationOnly =
+            planarObservationAngle(Config::AppConfig::instance()
+                                       .getVisualConfig()
+                                       .debugCanvasCameraAngleDegrees) > 0.0f;
+        if ( m_currentSnapshot && !cameraObservationOnly )
             // 快照与刚绘制的纹理使用同一代布局，避免教学框和画面错位。
             reportCanvasWalkthroughTargets(sourceManager,
                                            *m_currentSnapshot,
@@ -2832,7 +2838,11 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                 m_cameraId);
         }
 
-        if ( isActiveCanvas ) {
+        if ( cameraObservationOnly ) {
+            // 保留弹窗等瞬态 UI，但不消费鼠标编辑、拖入和教学操作。
+            // 拾取逆投影尚未接入，不能让屏幕位置直接修改二维谱面。
+            m_interaction->updateTransientUi();
+        } else if ( isActiveCanvas ) {
             // 活动画布先发布并绘制协作视野，再运行编辑交互；后者可在
             // 同一 ImGui 层建立命中区域，而覆盖层始终使用本帧快照。
             updateCollaborationViewports(

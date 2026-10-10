@@ -267,6 +267,8 @@ return {
 	["ui.settings.debug"] = "调试配置",
 	["ui.settings.debug.short"] = "调试",
 	["ui.settings.debug.rendering"] = "渲染调试",
+	["ui.settings.debug.canvas_camera_angle"] = "画布摄像机俯视偏转角",
+	["ui.settings.debug.canvas_camera_angle_tooltip"] = "实验性观察选项：画布高度定义为 1 世界单位，摄像机位于平面上方 1 单位。倾斜时暂停画布鼠标编辑，可继续播放；设为 0° 恢复二维观察和编辑。",
 	["ui.settings.debug.draw_hitboxes"] = "绘制物件交互包围盒",
 	["ui.settings.debug.hitbox_scale_x"] = "交互包围盒横向缩放",
 	["ui.settings.debug.hitbox_scale_y"] = "交互包围盒纵向缩放",

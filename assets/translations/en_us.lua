@@ -268,6 +268,8 @@ return {
 	["ui.settings.debug"] = "Debug Config",
 	["ui.settings.debug.short"] = "Debug",
 	["ui.settings.debug.rendering"] = "Render Debug",
+	["ui.settings.debug.canvas_camera_angle"] = "Canvas Camera Top-Down Tilt",
+	["ui.settings.debug.canvas_camera_angle_tooltip"] = "Experimental view: canvas height defines 1 world unit, and the camera is 1 unit above the plane. Tilting pauses canvas mouse editing but allows playback; set 0° to restore 2D viewing and editing.",
 	["ui.settings.debug.draw_hitboxes"] = "Draw Object Interaction Hitboxes",
 	["ui.settings.debug.hitbox_scale_x"] = "Interaction Hitbox Horizontal Scale",
 	["ui.settings.debug.hitbox_scale_y"] = "Interaction Hitbox Vertical Scale",

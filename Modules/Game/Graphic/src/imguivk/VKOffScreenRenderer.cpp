@@ -8,6 +8,18 @@
 namespace MMM::Graphic
 {
 
+glm::mat4 VKOffScreenRenderer::getCanvasProjectionMatrix()
+{
+    // 默认保留所有已有离屏视图的坐标与亚帧补偿约定。
+    // 高层画布可替换投影，不向底层引入业务设置或 UI 类型。
+    return glm::ortho(0.0f,
+                      static_cast<float>(m_logicalWidth),
+                      -m_yOffset,
+                      static_cast<float>(m_logicalHeight) - m_yOffset,
+                      -1.0f,
+                      1.0f);
+}
+
 /// @brief 选择预先创建且布局兼容的主画布混合管线。
 ///
 /// 普通 Alpha 与加法管线共享 descriptor set layout、push constant 范围和顶点
@@ -190,7 +202,10 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
     m_indexBuffers[frameIndex]->uploadData(indices.data(),
                                            indices.size() * sizeof(uint32_t));
 
-    // 主离屏 pass 覆盖完整物理 framebuffer，逻辑坐标通过下方正交矩阵映射。
+    // 一次读取投影，避免普通层、发光层和覆盖层在同帧使用不同角度。
+    // 默认仍为二维正交；业务观察摄像机由派生画布提供。
+    const glm::mat4 ortho = getCanvasProjectionMatrix();
+    // 主离屏 pass 覆盖完整物理 framebuffer，逻辑坐标通过投影矩阵映射。
     // RenderPass 的 final layout 允许结束后把主图像作为 ImGui 或后处理采样源。
     vk::RenderPassBeginInfo rpBegin;
     rpBegin.setRenderPass(m_offScreenRenderPass->getRenderPass())
@@ -203,12 +218,6 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
         // 管线把 viewport/scissor
         // 声明为动态状态，每次录制都按当前物理尺寸写入。
         // 正交投影仍使用逻辑尺寸，并把亚帧 yOffset 纳入上下边界。
-        glm::mat4    ortho = glm::ortho(0.0f,
-                                        (float)m_logicalWidth,
-                                        0.0f - m_yOffset,
-                                        (float)m_logicalHeight - m_yOffset,
-                                        -1.0f,
-                                        1.0f);
         vk::Viewport viewport(
             0.0f, 0.0f, (float)m_width, (float)m_height, 0.0f, 1.0f);
         vk::Rect2D scissor({ 0, 0 }, { m_width, m_height });
@@ -292,12 +301,6 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
         {
             // 逻辑投影与主画布一致，但 viewport/scissor 使用较小的 glow
             // 物理尺寸。
-            glm::mat4    ortho = glm::ortho(0.0f,
-                                            (float)m_logicalWidth,
-                                            0.0f - m_yOffset,
-                                            (float)m_logicalHeight - m_yOffset,
-                                            -1.0f,
-                                            1.0f);
             vk::Viewport viewport(0.0f,
                                   0.0f,
                                   (float)m_glowWidth,
@@ -531,12 +534,6 @@ void VKOffScreenRenderer::recordCmds(vk::CommandBuffer& cmdBuf,
         cmdBuf.beginRenderPass(rpBegin, vk::SubpassContents::eInline);
         {
             // 与普通层使用相同投影，确保诊断轮廓精确覆盖目标几何。
-            glm::mat4    ortho = glm::ortho(0.0f,
-                                            (float)m_logicalWidth,
-                                            0.0f - m_yOffset,
-                                            (float)m_logicalHeight - m_yOffset,
-                                            -1.0f,
-                                            1.0f);
             vk::Viewport viewport(
                 0.0f, 0.0f, (float)m_width, (float)m_height, 0.0f, 1.0f);
             vk::Rect2D scissor({ 0, 0 }, { m_width, m_height });

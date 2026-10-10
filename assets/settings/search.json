@@ -1400,6 +1400,16 @@
     {
       "tab": "Debug",
       "section": "ui.settings.debug.rendering",
+      "label": "ui.settings.debug.canvas_camera_angle",
+      "fields": [
+        "ui.settings.debug.canvas_camera_angle_tooltip"
+      ],
+      "keywords": "debug.canvas_camera_angle debugCanvasCameraAngleDegrees camera angle top-down tilt experimental 2D 1 world unit",
+      "aliases": "画布摄像机俯视偏转角 实验性观察 摄像机视角 二维观察 一世界单位 渲染调试 调试配置 Canvas Camera Top-Down Tilt Experimental View Camera Angle 2D View One World Unit Render Debug Debug Config"
+    },
+    {
+      "tab": "Debug",
+      "section": "ui.settings.debug.rendering",
       "label": "ui.settings.debug.draw_hitboxes",
       "fields": [],
       "keywords": "debug.draw_hitboxes debugDrawHitboxes",

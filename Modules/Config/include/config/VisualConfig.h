@@ -71,6 +71,12 @@ struct VisualConfig {
     static constexpr float MIN_INTERACTION_HITBOX_SCALE{ 0.25f };
     /// @brief 物件交互拾取包围盒允许的最大缩放。
     static constexpr float MAX_INTERACTION_HITBOX_SCALE{ 4.0f };
+    /// @brief 调试画布摄像机俯视偏转角的默认值，单位度。
+    static constexpr float DEFAULT_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES{ 0.0f };
+    /// @brief 调试画布摄像机俯视偏转角的最小值，单位度。
+    static constexpr float MIN_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES{ 0.0f };
+    /// @brief 调试画布摄像机俯视偏转角的最大值，单位度。
+    static constexpr float MAX_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES{ 45.0f };
 
     /// @brief 旧版或无有效 Key 数时使用的轨道布局模板。
     TrackLayout trackLayout;
@@ -226,6 +232,11 @@ struct VisualConfig {
     float nonHoldHitEffectDuration{ DEFAULT_NON_HOLD_HIT_EFFECT_DURATION };
     /// @brief 是否绘制音符悬浮拾取包围盒。
     bool debugDrawHitboxes{ false };
+    /// @brief 调试用画布摄像机俯视偏转角，零度保持二维观察。
+    /// @note 摄像机到画布平面的高度固定为一个世界单位。
+    float debugCanvasCameraAngleDegrees{
+        DEFAULT_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES
+    };
     /// @brief 物件交互拾取包围盒相对原始几何的横向缩放。
     float interactionHitboxScaleX{ DEFAULT_INTERACTION_HITBOX_SCALE };
     /// @brief 物件交互拾取包围盒相对原始几何的纵向缩放。
