@@ -280,6 +280,87 @@ bool testInternalSwitches()
                     }
     return true;
 }
+/// @brief 覆盖折线听感模式的持久化与所有角色、类型、绑定组合。
+/// @return 旧默认行为不变、体感过滤不改首节点或独立物件时为 true。
+/// @note 策略只决定音频是否调度，不能影响同一事件的视觉分类。
+/// 头部无论是普通键、长键或滑键都不能被体感模式省略。
+/// 内部和尾部的非滑键是体感模式相对严格逻辑的唯一差异。
+/// 首尾仍由原始节点顺序分类，不按命中时间重新猜测角色。
+/// 测试构造不一致身份反例，防止仅凭 role 误伤独立物件。
+/// 绑定采样不是新的物件类型，资源存在与否不影响角色规则。
+/// 内部滑键的用户开关可以叠加两种模式，不能被新选项覆盖。
+bool testPolylineSfxModes()
+{
+    using SfxMode = MMM::Config::PolylineSfxMode;
+    // 相同事件分别输入两种策略，避免只检查体感而漏掉兼容默认行为。
+    for ( const auto mode : { SfxMode::Strict, SfxMode::Gameplay } ) {
+        MMM::Config::SfxConfig config;
+        config.polylineSfxMode = mode;
+        // 完整配置往返确保新字段接入，不只是验证孤立枚举。
+        const auto restored =
+            nlohmann::json(config).get<MMM::Config::SfxConfig>();
+        if ( restored.polylineSfxMode != mode ) return false;
+        // None 角色覆盖身份不完整时的保守行为，不仅检查正常节点组合。
+        for ( const bool sub : { false, true } )
+            for ( const auto role :
+                  { Role::None, Role::Head, Role::Internal, Role::Tail } )
+                for ( const auto type : { MMM::NoteType::NOTE,
+                                          MMM::NoteType::HOLD,
+                                          MMM::NoteType::FLICK } )
+                    // 同一节点覆盖默认键音与用户绑定，不依赖真实解码结果。
+                    for ( const bool bound : { false, true } )
+                        for ( const bool internalEnabled : { false, true } ) {
+                            auto event = makeEvent();
+                            // 每次创建新事件，上一轮绑定不能泄漏到未绑定用例。
+                            event.isSubNote = sub;
+                            event.role      = role;
+                            event.type      = type;
+                            event.isDraft   = bound;
+                            // 绑定资源与草稿身份不能绕开折线模式，但独立物件保持原行为。
+                            if ( bound ) {
+                                // 非空资源 ID
+                                // 足以标识绑定，无需创建音频池或播放设备。
+                                event.sampleBinding.emplace();
+                                event.sampleBinding->m_audioResourceId =
+                                    "test-sound";
+                            }
+                            config.enablePolylineInternalFlickSfx =
+                                internalEnabled;
+                            // 预期由输入条件独立计算，不复用生产 helper
+                            // 自证正确。
+                            const bool gameplayMuted =
+                                mode == SfxMode::Gameplay && sub &&
+                                (role == Role::Internal ||
+                                 role == Role::Tail) &&
+                                type != MMM::NoteType::FLICK;
+                            const bool internalMuted =
+                                sub && role == Role::Internal &&
+                                type == MMM::NoteType::FLICK &&
+                                !internalEnabled;
+                            // 两种过滤原因取并集，模式不能强行恢复关闭的内部滑键。
+                            // 尾部滑键不是内部开关的目标，必须保持可播放。
+                            // 这里只查询策略，不触发音频或视觉实例的副作用。
+                            // 原内部滑键开关继续优先，模式不是强行开启所有滑音的捷径。
+                            if ( System::shouldScheduleHitAudio(event,
+                                                                config) !=
+                                 (!gameplayMuted && !internalMuted) )
+                                return false;
+                        }
+    }
+    // 升级缺少字段时必须保持严格逻辑；未知类型和值也保守回退。
+    // 空配置要经过实际读取入口，而非仅检查默认构造对象。
+    if ( nlohmann::json::object()
+             .get<MMM::Config::SfxConfig>()
+             .polylineSfxMode != SfxMode::Strict )
+        return false;
+    for ( const nlohmann::json bad : { nlohmann::json(nullptr),
+                                       nlohmann::json(7),
+                                       nlohmann::json("future") } ) {
+        // 未知版本字段不得传播为无效 UI 选项索引。
+        if ( bad.get<SfxMode>() != SfxMode::Strict ) return false;
+    }
+    return true;
+}
 }  // namespace
 
 /// @brief 从真实皮肤加载配置后验证纯 CPU 播放逻辑。
@@ -290,7 +371,7 @@ bool testInternalSwitches()
 /// 每次加载皮肤后都重新查询序列，不跨加载保留帧指针或纹理 ID。
 int main(int argc, char* argv[])
 {
-    if ( argc != 3 || !testPersistence() ) return 1;
+    if ( argc != 3 || !testPersistence() || !testPolylineSfxModes() ) return 1;
     // 短路失败不会把尚未执行的其他皮肤算成通过；日志给出失败皮肤名称。
     // 四套皮肤包含不同混合与缩放设置，覆盖模式不能依赖单一纹理尺寸。
     // 资源只用于序列分配，真实 GPU 合成与音频听感仍需交互验收。

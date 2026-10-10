@@ -91,7 +91,8 @@ public:
     [[nodiscard]] static bool isPolylineInternalFlick(
         const HitEvent& ev) noexcept;
 
-    /// @brief 判断事件是否通过内部滑键静音策略，其他全局混音开关由音频侧处理。
+    /// @brief 判断事件是否通过折线听感策略与内部滑键开关。
+    /// @note 不重写节点类型或绑定，其他全局混音开关由音频侧处理。
     /// @warning 预调度热路径：在申请音效通道前检查，不触发资源操作。
     [[nodiscard]] static bool shouldScheduleHitAudio(
         const HitEvent& ev, const Config::SfxConfig& config) noexcept;

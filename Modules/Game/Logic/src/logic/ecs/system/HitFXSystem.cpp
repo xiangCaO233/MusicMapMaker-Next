@@ -142,7 +142,17 @@ bool HitFXSystem::isPolylineInternalFlick(const HitEvent& ev) noexcept
 bool HitFXSystem::shouldScheduleHitAudio(
     const HitEvent& ev, const Config::SfxConfig& config) noexcept
 {
-    // 首尾、独立滑键与非滑键总是继续进入原有音频控制链路。
+    if ( config.polylineSfxMode == Config::PolylineSfxMode::Gameplay &&
+         ev.isSubNote &&
+         (ev.role == HitEvent::Role::Internal ||
+          ev.role == HitEvent::Role::Tail) &&
+         ev.type != ::MMM::NoteType::FLICK ) {
+        // 体感模式不叠加后续面条节点键音；首节点仍按实际类型发声。
+        // 不将普通节点伪装为滑键，否则竖向连接也会多出不应存在的滑音。
+        // 显式绑定同样服从节点是否发声的策略，绑定优先级由资源选择保留。
+        return false;
+    }
+    // 策略允许的事件继续受内部滑键开关控制，独立滑键不受该开关影响。
     return config.enablePolylineInternalFlickSfx ||
            !isPolylineInternalFlick(ev);
 }
@@ -594,7 +604,7 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
         // 先以宽整数计算终点再钳位，异常大偏移不能溢出或造成无界绘制循环。
         const int64_t renderTrack = static_cast<int64_t>(active.trackIndex) +
                                     (active.isDraft ? trackCount : 0);
-        const int     headTrack   = static_cast<int>(
+        const int headTrack = static_cast<int>(
             std::clamp<int64_t>(renderTrack, 0, trackCount - 1));
         const int tailTrack  = static_cast<int>(std::clamp<int64_t>(
             renderTrack + active.trackOffset, 0, trackCount - 1));

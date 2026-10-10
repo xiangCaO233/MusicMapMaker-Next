@@ -40,8 +40,22 @@ void to_json(nlohmann::json& json, const SyncConfig& config);
 /// @brief 从 JSON 读取同步配置。
 void from_json(const nlohmann::json& json, SyncConfig& config);
 
+/// @brief 折线节点键音的两种听感策略，不改变物件与视觉特效。
+enum class PolylineSfxMode {
+    Strict,   ///< 严格逻辑：按各节点实际类型播放，保持历史行为。
+    Gameplay  ///< 游玩体感：首节点按实际类型，后续仅播放滑键节点。
+};
+
+/// @brief 以稳定文本保存折线音效模式。
+void to_json(nlohmann::json& json, const PolylineSfxMode& mode);
+/// @brief 读取折线音效模式，未知值回退严格逻辑。
+void from_json(const nlohmann::json& json, PolylineSfxMode& mode);
+
 /// @brief 打击音效的独立开关、声像、增益与资源混音设置。
 struct SfxConfig {
+    /// @brief 折线播放策略，默认保留现有听感而不在升级时自动切换。
+    PolylineSfxMode polylineSfxMode{ PolylineSfxMode::Strict };
+
     /// @brief 是否播放严格位于折线内部的滑键键音，不影响首尾或独立滑键。
     bool enablePolylineInternalFlickSfx{ true };
 
