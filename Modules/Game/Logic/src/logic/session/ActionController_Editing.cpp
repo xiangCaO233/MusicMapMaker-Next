@@ -31,6 +31,7 @@
 #include <ice/thread/ThreadPool.hpp>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -957,6 +958,154 @@ std::vector<TimelineComponent> normalizeReplacementTimelines(
         normalized.push_back(timeline);
     }
     return normalized;
+}
+
+/// @brief 复现旧滚动缓存无显式参考值时的最长 BPM 段基准。
+/// @param timelines 按时间排序的当前谱面时间点。
+/// @param mapLength 谱面结束时间，单位秒。
+/// @return 无 BPM 时为 120，否则为累计持续时长最长的 BPM。
+/// @warning 仅在测量结果应用时全量扫描，不用于逐帧查询。
+/// @note 不把第一条之前的空白时间计入任何 BPM 的持续时长。
+/// @note 最后一条红线延续到谱面长度，与 ScrollCache 的分段口径一致。
+/// @note 相同时长采用有序 map 的首项，使选择结果稳定。
+double implicitScrollReferenceBpm(
+    const std::vector<TimelineComponent>& timelines, double mapLength)
+{
+    std::map<double, double> durations;
+    double                   lastTime = 0.0;
+    double                   current  = 0.0;
+    bool                     hasBpm   = false;
+    for ( const auto& line : timelines ) {
+        if ( line.m_effect != ::MMM::TimingEffect::BPM ) continue;
+        if ( hasBpm ) durations[current] += line.m_timestamp - lastTime;
+        current  = ::MMM::normalizeBpmValue(line.m_value);
+        lastTime = line.m_timestamp;
+        hasBpm   = true;
+    }
+    if ( !hasBpm ) return 120.0;
+    durations[current] += mapLength - lastTime;
+    double reference = 120.0;
+    double longest   = -1.0;
+    // 与缓存一致：有序 BPM map 在持续时长相同时选择较小的 BPM。
+    for ( const auto& [bpm, duration] : durations ) {
+        if ( duration > longest ) {
+            reference = bpm;
+            longest   = duration;
+        }
+    }
+    return reference;
+}
+
+/// @brief 在旧红绿线及新红线边界补偿替换后的滚动速度。
+/// @param before 当前谱面的完整时间点。
+/// @param replacementBpm 已规范化的新 BPM 红线。
+/// @param oldReference 应用前实际缓存采用的参考 BPM。
+/// @param newReference 应用后显式设置的参考 BPM。
+/// @param after 接收原有非滚动效果和补偿后的 SCROLL 时间点。
+/// @return 不能精确保速时返回 false，调用方不得提交部分替换。
+/// @details 速度由 BPM / 基准 BPM 乘 SV 决定；旧绿线仅在旧红线、新红线和
+/// 自身边界重算倍率。保留旧绿线元数据，普通新补偿点没有来源元数据。
+/// 旧红线可能把旧 SV 重置为一，即使该位置没有绿线也需要成为补偿边界。
+/// 新红线同样先重置新 SV，再由同刻补偿绿线恢复目标速度。
+/// 原有绿线时刻保留绿线身份和私有字段，只换算效果参数。
+/// Jump 和 HS 不属于基础积分倍率，调用方保留其原组件即可。
+/// 原红线与新红线时刻不同时，旧速度变化仍需单独保留。
+/// 零倍率表示合法停滚，不可因非正数过滤而丢失。
+/// 反向倍率同样要保留符号，不能取绝对值再计算。
+/// 旧参考值未设置时取最长 BPM 段；新参考值来自当前或本次设置。
+/// @warning 用户确认后的低频路径；不得放入每帧更新或滚动查询。
+bool appendSpeedPreservingScrolls(
+    const std::vector<TimelineComponent>& before,
+    const std::vector<TimelineComponent>& replacementBpm, double oldReference,
+    double newReference, std::vector<TimelineComponent>& after)
+{
+    // 曲线有连续变化状态，有限个普通 SV 点无法精确保留其积分速度。
+    // 红线曲线和绿线曲线均会在段内产生连续变速，而非只有端点变化。
+    // 不把曲线采样展开为大量普通绿线，以免改变原有编辑段落结构。
+    // 拒绝整个动作，避免复选框被选中时静默生成错误谱面。
+    const auto hasSpeedCurve = [](const auto& lines) {
+        return std::any_of(lines.begin(), lines.end(), [](const auto& line) {
+            return (line.m_effect == ::MMM::TimingEffect::BPM ||
+                    line.m_effect == ::MMM::TimingEffect::SCROLL) &&
+                   line.m_interpolation.has_value();
+        });
+    };
+    if ( hasSpeedCurve(before) || hasSpeedCurve(replacementBpm) ) return false;
+
+    double      oldBpm    = oldReference;
+    double      newBpm    = newReference;
+    double      oldScroll = 1.0;
+    double      newScroll = 1.0;
+    std::size_t oldIndex  = 0;
+    std::size_t newIndex  = 0;
+
+    // 两个输入都已按秒时间排序，双指针逐个走过全部速度状态边界。
+    // 不依赖 Registry 的实体顺序；同刻不同效果沿 BPM 后 SV 的规则应用。
+    // 只有旧时间点可能携带 Scroll，来源命令的非 BPM 效果会被忽略。
+    // 首红线之前两边各以自身参考值作为当前 BPM，初始视觉速度相同。
+    while ( oldIndex < before.size() || newIndex < replacementBpm.size() ) {
+        const double             oldTime = oldIndex < before.size()
+                                               ? before[oldIndex].m_timestamp
+                                               : std::numeric_limits<double>::infinity();
+        const double             newTime = newIndex < replacementBpm.size()
+                                               ? replacementBpm[newIndex].m_timestamp
+                                               : std::numeric_limits<double>::infinity();
+        const double             time    = std::min(oldTime, newTime);
+        const TimelineComponent* originalScroll = nullptr;
+        // 旧红线先重置旧 SV，随后旧绿线在同刻取得最终控制权。
+        // Malody BPM 不重置旧 SV；此来源差异由元数据分组判定。
+        // 同刻多个旧绿线沿稳定列表顺序覆盖，最后一条为可保存的状态。
+        while ( oldIndex < before.size() &&
+                before[oldIndex].m_timestamp <= time + 1e-9 ) {
+            const auto& line = before[oldIndex++];
+            if ( line.m_effect == ::MMM::TimingEffect::BPM ) {
+                oldBpm = ::MMM::normalizeBpmValue(line.m_value, oldReference);
+                if ( !line.m_metadata.timing_properties.contains(
+                         ::MMM::TimingMetadataType::MALODY) )
+                    oldScroll = 1.0;
+            } else if ( line.m_effect == ::MMM::TimingEffect::SCROLL ) {
+                if ( !std::isfinite(line.m_value) ) return false;
+                oldScroll      = line.m_value;
+                originalScroll = &line;
+            }
+        }
+        while ( newIndex < replacementBpm.size() &&
+                replacementBpm[newIndex].m_timestamp <= time + 1e-9 ) {
+            const auto& line = replacementBpm[newIndex++];
+            newBpm = ::MMM::normalizeBpmValue(line.m_value, newReference);
+            if ( !line.m_metadata.timing_properties.contains(
+                     ::MMM::TimingMetadataType::MALODY) )
+                newScroll = 1.0;
+        }
+
+        // 使用扩展精度计算比率，最后再检查可持久化的 double 范围。
+        // 滑条倍率前后相同；参考 BPM 不同时仍须参与精确换算。
+        // 旧 SV 可为零或负值，补偿必须保留停止或反向滚动的符号。
+        // 即使 BPM 都合法，极端输入的倍率乘积仍可能超出 double 范围。
+        const long double adjusted =
+            static_cast<long double>(oldScroll) * oldBpm * newReference /
+            (static_cast<long double>(oldReference) * newBpm);
+        const double targetScroll = static_cast<double>(adjusted);
+        if ( !std::isfinite(targetScroll) ||
+             !isValidTimelineValue(::MMM::TimingEffect::SCROLL, targetScroll) )
+            return false;
+        // 原有绿线始终保留一条，其参数按新 BPM 比例换算；新边界仅在必要时补点。
+        // 当新红线与旧绿线同刻，不能保留未换算的旧值再叠加第二条绿线。
+        // 原有元数据可能含来源格式字段，复制组件比重新构造更安全。
+        // 若旧红线重置导致期望值变化，即使此刻没有绿线也要补一条。
+        if ( originalScroll || targetScroll != newScroll ) {
+            TimelineComponent compensated =
+                originalScroll ? *originalScroll
+                               : TimelineComponent{ time,
+                                                    ::MMM::TimingEffect::SCROLL,
+                                                    targetScroll };
+            compensated.m_value = targetScroll;
+            after.push_back(std::move(compensated));
+        }
+        newScroll = targetScroll;
+        // 下一边界前，新谱面以本次补偿值持续积分，不重新扫描历史事件。
+    }
+    return true;
 }
 
 /// @brief 收集当前会话中可作为整体替换快照的物件组件。
@@ -1972,6 +2121,36 @@ public:
             flags |= ::MMM::BeatmapMutationFlags::Annotations;
         }
         return flags;
+    }
+
+    /// @brief 定向迁移元数据替换动作前后快照中的媒体文件引用。
+    /// @details 两个方向都改写，保留 Undo 原本的背景选择语义，同时避免
+    /// 后续重放写回已经不存在的旧文件名。
+    /// @param oldPath 改名前的元数据路径或资源 ID。
+    /// @param newPath 改名后的对应路径或资源 ID。
+    /// @note 只访问本动作持有的元数据快照，不遍历普通音符动作。
+    /// @note 不把资源改名作为本动作的一次新编辑，也不清空重做分支。
+    /// @warning 显式资源改名低频路径；两个方向的值都必须同步。
+    void remapResourcePaths(const std::filesystem::path& oldPath,
+                            const std::filesystem::path& newPath) override
+    {
+        if ( !m_replaceMetadata ) return;
+        // 只迁移与旧资源精确相等的字段，原本指向其他资源的选择保留。
+        const auto remapSnapshot = [&](BeatmapMetadataSnapshot& snapshot) {
+            auto& base = snapshot.baseMeta;
+            if ( base.main_audio_path == oldPath ) {
+                base.main_audio_path = newPath;
+            }
+            if ( base.song_file_hint == oldPath ) {
+                base.song_file_hint = newPath;
+            }
+            if ( base.cover_path == oldPath ) base.cover_path = newPath;
+            if ( base.main_cover_path == oldPath ) {
+                base.main_cover_path = newPath;
+            }
+        };
+        remapSnapshot(m_beforeMetadata);
+        remapSnapshot(m_afterMetadata);
     }
 
 private:
@@ -3787,37 +3966,49 @@ void ActionController::handleCommand(const CmdCreateTimelineEvents& cmd)
 /// @brief 用外部 Timing 列表替换当前谱面的全部 BPM 红线。
 /// @param cmd 来源 Timing 及是否保留现有非 BPM 事件。
 /// @details
-/// 来源只采纳有效 BPM，时间从毫秒换算为秒并规范 BPM 边界。可选保留当前 SV 等
-/// 非 BPM 事件；第一条有效新 BPM 同步成为 afterPreferenceBpm。完整 before/after
-/// 列表和首选 BPM 共同进入 ReplaceTimelinesAction。
+/// 来源只采纳有效 BPM，时间从毫秒换算为秒并规范 BPM 边界。保速模式依照目标
+/// 显式参考 BPM 补偿旧红绿线和新红线边界，保留 Jump/HS；其余模式以首条有效
+/// 新 BPM 作为首选值。完整 before/after 列表和首选 BPM 共同进入动作。
 ///
 /// 该入口不会导入来源中的其他 TimingEffect，即使 keepNonBpmTimings 为 false；
-/// 该标志只决定是否保留目标会话已有非 BPM 事件。至少需要一个有效来源 BPM，
-/// 否则拒绝动作，避免因为空或损坏输入意外清空全部红线。
+/// 该标志要求目标已有或命令同时设置显式参考 BPM；曲线型 BPM/SV 无法精确补偿
+/// 时拒绝整个动作。至少需要一个有效来源 BPM，避免损坏输入清空全部红线。
 void ActionController::handleCommand(const CmdReplaceBeatmapTimings& cmd)
 {
     // 空会话没有可关联的首选 BPM 元数据，拒绝替换。
     if ( !m_ctx.currentBeatmap ) {
         return;
     }
+    const double beforePreferenceBpm =
+        m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm;
+    // 可选参考值是用户在同一应用流程填写的字段，失败不得写入谱面。
+    // 规范化只发生在校验通过后，NaN 和非正数不能退化成默认 BPM。
+    if ( cmd.referenceBpmToSet && (!std::isfinite(*cmd.referenceBpmToSet) ||
+                                   *cmd.referenceBpmToSet <= 0.0) )
+        return;
+    const double referenceBpm =
+        cmd.referenceBpmToSet ? *cmd.referenceBpmToSet : beforePreferenceBpm;
+    // 勾选保速需要可解释的基准；缺失时必须先由 UI 获取用户选择。
+    if ( cmd.keepNonBpmTimings &&
+         (!std::isfinite(referenceBpm) || referenceBpm <= 0.0) )
+        return;
 
     const std::vector<TimelineComponent> before =
         collectSortedTimelineComponents(m_ctx);
     std::vector<TimelineComponent> after;
     if ( cmd.keepNonBpmTimings ) {
-        // 只复制非 BPM 现有事件，新 BPM 始终来自命令输入。
+        // SV 必须按新 BPM 换算；Jump/HS 原值和元数据无需改变。
         for ( const auto& timeline : before ) {
-            if ( timeline.m_effect != ::MMM::TimingEffect::BPM ) {
+            if ( timeline.m_effect != ::MMM::TimingEffect::BPM &&
+                 timeline.m_effect != ::MMM::TimingEffect::SCROLL ) {
                 after.push_back(timeline);
             }
         }
     }
 
-    double afterPreferenceBpm =
-        m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm > 0.0
-            ? m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
-            : 120.0;
-    bool hasBpm = false;
+    double                         afterPreferenceBpm = beforePreferenceBpm;
+    std::vector<TimelineComponent> replacementBpm;
+    bool                           hasBpm = false;
     for ( const auto& timing : cmd.timings ) {
         // 外部列表中的非 BPM 数据不由此入口导入。
         if ( timing.m_timingEffect != ::MMM::TimingEffect::BPM ) {
@@ -3840,11 +4031,12 @@ void ActionController::handleCommand(const CmdReplaceBeatmapTimings& cmd)
         timeline.m_value         = bpm;
         timeline.m_metadata      = timing.m_metadata;
         timeline.m_interpolation = timing.m_interpolation;
-        after.push_back(timeline);
+        replacementBpm.push_back(timeline);
         if ( !hasBpm ) {
-            // 排序前的首个有效来源 BPM 定义谱面首选值。
-            afterPreferenceBpm = bpm;
-            hasBpm             = true;
+            // 普通替换仍以首个有效红线更新首选 BPM；保速模式固定参考值。
+            if ( !cmd.keepNonBpmTimings && !cmd.referenceBpmToSet )
+                afterPreferenceBpm = bpm;
+            hasBpm = true;
         }
     }
 
@@ -3853,12 +4045,29 @@ void ActionController::handleCommand(const CmdReplaceBeatmapTimings& cmd)
         return;
     }
 
+    replacementBpm = normalizeReplacementTimelines(std::move(replacementBpm));
+    if ( cmd.keepNonBpmTimings ) {
+        // 未设置旧参考值时，旧画面仍按最长 BPM 段积分；弹窗新值不能
+        // 追溯改变应用前画面的速度基准。
+        const double oldReference =
+            std::isfinite(beforePreferenceBpm) && beforePreferenceBpm > 0.0
+                ? ::MMM::normalizeBpmValue(beforePreferenceBpm)
+                : implicitScrollReferenceBpm(
+                      before,
+                      m_ctx.currentBeatmap->m_baseMapMetadata.map_length);
+        if ( !appendSpeedPreservingScrolls(
+                 before,
+                 replacementBpm,
+                 oldReference,
+                 ::MMM::normalizeBpmValue(referenceBpm),
+                 after) )
+            return;
+    }
+    after.insert(after.end(), replacementBpm.begin(), replacementBpm.end());
     after = normalizeReplacementTimelines(std::move(after));
-    // 规范化处理同时间重复 BPM，并给动作稳定的目标顺序。
-    const double beforePreferenceBpm =
-        m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm > 0.0
-            ? m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
-            : afterPreferenceBpm;
+    // 参考值与全部红绿线写入同一动作；撤销可恢复原先未设置的零值。
+    if ( cmd.referenceBpmToSet )
+        afterPreferenceBpm = ::MMM::normalizeBpmValue(*cmd.referenceBpmToSet);
 
     auto action = std::make_unique<ReplaceTimelinesAction>(
         before, after, beforePreferenceBpm, afterPreferenceBpm);

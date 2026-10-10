@@ -80,6 +80,22 @@ void from_json(const nlohmann::json& json, SyncConfig& config)
     config.syncInterval    = json.value("syncInterval", 10.0);
 }
 
+/// @brief 写出折线键音策略，不依赖枚举数值与声明顺序。
+void to_json(nlohmann::json& json, const PolylineSfxMode& mode)
+{
+    // 未知内存值沿用旧行为，不能让非法索引选择更激进的过滤策略。
+    json = mode == PolylineSfxMode::Gameplay ? "Gameplay" : "Strict";
+}
+
+/// @brief 读取两种折线键音策略，兼容缺失或未知配置。
+void from_json(const nlohmann::json& json, PolylineSfxMode& mode)
+{
+    mode = PolylineSfxMode::Strict;
+    // 错误 JSON 类型不走隐式转换，避免配置损坏触发异常。
+    if ( json.is_string() && json.get_ref<const std::string&>() == "Gameplay" )
+        mode = PolylineSfxMode::Gameplay;
+}
+
 /// @brief 序列化编辑器打击音效和声道控制配置。
 /// @param json 接收完整音效配置对象。
 /// @param config 待保存的音效策略、开关、增益与永久通道状态。
@@ -88,6 +104,7 @@ void to_json(nlohmann::json& json, const SfxConfig& config)
 {
     // 内部滑键开关与宽度缩放独立保存，不再写出旧版物件类型替换策略。
     json = nlohmann::json{
+        { "polylineSfxMode", config.polylineSfxMode },
         { "enablePolylineInternalFlickSfx",
           config.enablePolylineInternalFlickSfx },
         { "enableFlickWidthVolumeScaling",
@@ -118,6 +135,9 @@ void to_json(nlohmann::json& json, const SfxConfig& config)
 /// @note 缺失字段保持历史默认体验，增益统一限制到有效线性范围。
 void from_json(const nlohmann::json& json, SfxConfig& config)
 {
+    // 新策略独立于已废弃的 polylineStrategy；升级仍保持严格逻辑。
+    config.polylineSfxMode =
+        json.value("polylineSfxMode", PolylineSfxMode::Strict);
     // 忽略旧 polylineStrategy；各物件使用自身音效，内部滑键由独立开关控制。
     // 旧配置缺少开关时仍播放内部滑键，不能把普通键音策略误迁移为静音。
     config.enablePolylineInternalFlickSfx =
@@ -365,6 +385,7 @@ void to_json(nlohmann::json& json, const ShortcutConfig& config)
         { "deleteSelected", config.deleteSelected },
         // 剩余字段为播放及视图状态切换，不保存瞬时 UI 状态。
         { "togglePlayback", config.togglePlayback },
+        { "addBpmSegmentAtViewCenter", config.addBpmSegmentAtViewCenter },
         { "toggleReverseScroll", config.toggleReverseScroll },
         { "toggleScrollSnap", config.toggleScrollSnap },
         { "toggleSnapFloor", config.toggleSnapFloor },
@@ -410,6 +431,8 @@ void from_json(const nlohmann::json& json, ShortcutConfig& config)
         json.value("deleteSelected", defaults.deleteSelected);
     config.togglePlayback =
         json.value("togglePlayback", defaults.togglePlayback);
+    config.addBpmSegmentAtViewCenter = json.value(
+        "addBpmSegmentAtViewCenter", defaults.addBpmSegmentAtViewCenter);
     config.toggleReverseScroll =
         json.value("toggleReverseScroll", defaults.toggleReverseScroll);
     config.toggleScrollSnap =

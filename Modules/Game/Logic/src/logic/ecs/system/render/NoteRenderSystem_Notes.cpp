@@ -1,3 +1,5 @@
+#include "config/EditorConfig.h"
+#include "config/VisualConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/InteractionComponent.h"
@@ -72,12 +74,39 @@ static glm::vec2 scaledNotePartSize(const RenderSnapshot& snapshot,
     return size * skinTextureScale(texture);
 }
 
+/// @brief 求点贴图在填充后的位置偏移，同步既有布局拾取框。
+/// @param snapshot 当前图集，宽高比不包含布局横纵缩放。
+/// @param texture 命中部件的实际纹理，包括头部回退后的资源。
+/// @param size 已应用皮肤倍率的布局宽高，不再次缩放。
+/// @param visual 当前固定位置和填充方式。
+/// @return 画布纵向像素位移；中心模式返回零。
+/// @note AspectFit 可能缩短图像高度，偏移必须使用实际显示半高。
+/// @warning 逐部件热路径只计算标量与查询现有图集，不分配或同步。
+static float notePartVerticalShift(const RenderSnapshot& snapshot,
+                                   TextureID texture, glm::vec2 size,
+                                   const Config::VisualConfig& visual)
+{
+    // 连接点、点贴图拾取和实际绘制共用同一填充高度契约。
+    const auto  part   = snapshot.uvMap.find(static_cast<uint32_t>(texture));
+    const float aspect = part != snapshot.uvMap.end() && part->second.w > 0.0F
+                             ? part->second.z / part->second.w
+                             : 1.0F;
+    return noteTextureCenterShiftY(texture,
+                                   size.x,
+                                   size.y,
+                                   aspect,
+                                   visual.noteFillMode,
+                                   visual.noteTexturePosition);
+}
+
 /// @brief 求所有定高音符部件相对普通 Note 高度的保守可见性余量。
 /// @param snapshot 当前快照图集；竖向连接体不参与高度倍率，因为其时间跨度固定。
+/// @param position 中心或底边布局，底边模式还需覆盖半高平移。
 /// @return 至少为一的高度系数，防止放大的部件在中心离屏后过早剔除。
 /// @note 取最大值只扩大候选窗口，不改变拍线、时间索引或实际裁剪区。
 /// @warning 每个绘制阶段只计算一次，固定数量纹理查询，不扫描音符或纹理集合。
-static float noteVisualPaddingScale(const RenderSnapshot& snapshot)
+static float noteVisualPaddingScale(const RenderSnapshot&       snapshot,
+                                    Config::NoteTexturePosition position)
 {
     float scale = 1.0F;
     // 横向连接体的倍率会改变厚度，其余这些纹理都是独立的中心贴片。
@@ -89,7 +118,9 @@ static float noteVisualPaddingScale(const RenderSnapshot& snapshot)
                                  TextureID::FlickArrowRight,
                                  TextureID::HoldBodyHorizontal } ) {
         scale = std::max(scale,
-                         scaledNotePartSize(snapshot, texture, 1.0F, 1.0F).y);
+                         scaledNotePartSize(snapshot, texture, 1.0F, 1.0F).y *
+                             (1.0F + 2.0F * std::abs(noteTextureVerticalOffset(
+                                                texture, position))));
     }
     return scale;
 }
@@ -372,6 +403,10 @@ void NoteRenderSystem::renderNotes(
     float bottomY, float singleTrackW, float renderScaleY,
     const CanvasLaneProjection* laneProjection)
 {
+    // 提前返回时作用域析构也恢复状态，不能依赖函数尾部手工复位。
+    // 同一批处理器还会绘制采样和时间线标记，位置设置只在音符阶段启用。
+    const NoteTexturePositionScope notePosition(
+        batcher, config.visual.noteTexturePosition);
     // 1. 准备上下文与颜色
     NoteRenderSystem::NoteRenderContext ctx =
         NoteRenderSystem::prepareNoteRenderContext(
@@ -402,7 +437,9 @@ void NoteRenderSystem::renderNotes(
         topY,
         bottomY,
         renderScaleY,
-        std::max(ctx.noteH * noteVisualPaddingScale(*snapshot), 1.0f),
+        std::max(ctx.noteH * noteVisualPaddingScale(
+                                 *snapshot, config.visual.noteTexturePosition),
+                 1.0f),
         snapshot->isPlaying
             ? std::abs(snapshot->playbackSpeed) * MAX_UI_INTERPOLATION_SECONDS
             : 0.0,
@@ -1435,7 +1472,8 @@ void NoteRenderSystem::generateNoteHitboxes(
     float renderScaleY, const Config::EditorConfig& config,
     const CanvasLaneProjection* laneProjection)
 {
-    const float visualPaddingScale = noteVisualPaddingScale(*snapshot);
+    const float visualPaddingScale =
+        noteVisualPaddingScale(*snapshot, config.visual.noteTexturePosition);
     // 两遍命中共享同一皮肤余量；局部轨宽只在候选内换算，不重新扫描资源。
     // 第一遍：连接体，优先级较低。
     for ( auto entity : noteEntities ) {
@@ -1533,7 +1571,33 @@ void NoteRenderSystem::generateNoteHitboxes(
                              snapshot->uvMap.at(uint32_t(TextureID::Note)).w);
                 }
                 // 横向连接体仅缩放厚度，不改变两个轨道中心之间的编辑跨度。
-                drawH *= skinTextureScale(TextureID::HoldBodyHorizontal);
+                drawH = std::max(drawH, 1.5F) *
+                        skinTextureScale(TextureID::HoldBodyHorizontal);
+
+                // 连接中心分别跟随可见头部和箭头，尺寸不同时允许两端高度不同。
+                // 不再按 Body 自身底边平移，避免薄连接体贴在头部和箭头的下缘。
+                // 连接体定位取实际头部资源，终点尺寸不参与中心线计算。
+                // 拾取阶段不能复用上一个 Batcher
+                // 的纹理状态，因此直接使用只读尺寸。
+                // 这里的尺寸已含皮肤倍率；中心 helper 不再进行第二次缩放。
+                const auto headTexture =
+                    snapshot->uvMap.contains(
+                        static_cast<uint32_t>(TextureID::HoldHead))
+                        ? TextureID::HoldHead
+                        : TextureID::Note;
+                const float headShift = notePartVerticalShift(
+                    *snapshot,
+                    headTexture,
+                    scaledNotePartSize(
+                        *snapshot, headTexture, ctx.noteW, ctx.noteH),
+                    config.visual);
+                // 横向连接与箭头共用起点中心，不把资源高度差加入命中包络。
+                // 方向只交换左右端点，屏幕纵坐标和最终厚度始终一致。
+                // 尺寸仍由主体纹理倍率决定，不扩大到箭头的外观高度。
+                // 当前根实体身份与原始时间吸附保持不变。
+                // 高亮与拾取采用同一中心线，防止反馈留在旧的斜向包络内。
+                const float bodyTop    = screenY + headShift - drawH * 0.5F;
+                const float bodyHeight = drawH;
 
                 // Flick
                 // 横向连接体沿两个真实轨道中心覆盖整个区间，包括分区间隙。
@@ -1542,9 +1606,9 @@ void NoteRenderSystem::generateNoteHitboxes(
                                                HoverPart::HoldBody,
                                                -1,
                                                bodyX,
-                                               screenY - drawH * 0.5f,
+                                               bodyTop,
                                                drawW,
-                                               drawH });
+                                               bodyHeight });
             } else if ( note.m_type == ::MMM::NoteType::HOLD &&
                         std::abs(visualH) > ctx.noteH * 0.1f ) {
                 // Hold 身体宽度跟随竖向主体纹理的相对宽度，不直接使用整轨宽度。
@@ -1560,15 +1624,47 @@ void NoteRenderSystem::generateNoteHitboxes(
                         snapshot->uvMap.at(uint32_t(TextureID::Note)).z;
                     bodyW = ctx.noteW * (itBody->second.z / baseWRatio);
                 }
-                // 竖向连接体只放大横截面，持续时间对应的纵向端点保持不变。
+                // 竖向连接体只放大横截面，显示端点另按点贴图中心定位。
                 bodyW *= skinTextureScale(TextureID::HoldBodyVertical);
 
                 float bodyX = leftX + note.m_trackIndex * singleTrackW +
                               (singleTrackW - bodyW) * 0.5f;
                 // 用两端较小 Y 作为矩形上边缘，保持逆向滚动下的正高度约定。
-                // 主体区域只连接中心线，头尾图像额外半高由第二遍独立覆盖。
-                float bodyY = std::min(screenY, screenY + visualH);
-                float bodyH = std::abs(visualH);
+                // 持续区间仍由原时间投影决定，拾取包络只跟随显示头尾中心。
+                // 底边布局下 Head 与 HoldEnd 的独立倍率可能不同，需分别取中心。
+                // 不能用 Body 的高度做位置补偿，否则偏移会随长条时长增大。
+                // Fit 的留白只属于布局，不是可见头尾，中心计算会扣除这部分。
+                // 图集和配置与本帧渲染一致，不借用上一次快照的尺寸状态。
+                // 源时间点继续保存在组件中，拾取修正不改变持续区间的吸附。
+                // 屏幕纵向顺序可能反转，后续按两中心的并集构造正高度框。
+                // 两个中心补偿均使用点纹理的倍率，不再次缩放 Body 的纵向跨度。
+                // 普通长条没有子节点，部件身份始终归属于根实体的 HoldBody。
+                // 判定消隐仍由外层生命周期处理，命中框不会重新激活已结束物件。
+                const auto headTexture =
+                    snapshot->uvMap.contains(
+                        static_cast<uint32_t>(TextureID::HoldHead))
+                        ? TextureID::HoldHead
+                        : TextureID::Note;
+                const float bodyHeadY =
+                    screenY +
+                    notePartVerticalShift(
+                        *snapshot,
+                        headTexture,
+                        scaledNotePartSize(
+                            *snapshot, headTexture, ctx.noteW, ctx.noteH),
+                        config.visual);
+                const float bodyEndY =
+                    screenY + visualH +
+                    notePartVerticalShift(*snapshot,
+                                          TextureID::HoldEnd,
+                                          scaledNotePartSize(*snapshot,
+                                                             TextureID::HoldEnd,
+                                                             ctx.noteW,
+                                                             ctx.noteH),
+                                          config.visual);
+                // 正向与反向滚动使用同一包络公式，尺寸差不会改变根实体身份。
+                float bodyY = std::min(bodyHeadY, bodyEndY);
+                float bodyH = std::abs(bodyHeadY - bodyEndY);
 
                 snapshot->hitboxes.push_back({ entity,
                                                HoverPart::HoldBody,
@@ -1635,6 +1731,8 @@ void NoteRenderSystem::generateNoteHitboxes(
                 : TextureID::Note;
         const auto headSize =
             scaledNotePartSize(*snapshot, headTexture, ctx.noteW, ctx.noteH);
+        const float headShift = notePartVerticalShift(
+            *snapshot, headTexture, headSize, config.visual);
         const float headX =
             resolveNoteTrackLeftX(note, laneProjection, leftX, singleTrackW) +
             (singleTrackW - headSize.x) * 0.5f;
@@ -1643,13 +1741,14 @@ void NoteRenderSystem::generateNoteHitboxes(
         // 防止同一折线头同时出现普通 Head 与 PolylineNode 两种命中身份。
         if ( !note.m_isSubNote && note.m_type != ::MMM::NoteType::POLYLINE ) {
             // 所有非 Polyline 音符的 Head
-            snapshot->hitboxes.push_back({ entity,
-                                           HoverPart::Head,
-                                           -1,
-                                           headX,
-                                           screenY - headSize.y * 0.5f,
-                                           headSize.x,
-                                           headSize.y });
+            snapshot->hitboxes.push_back(
+                { entity,
+                  HoverPart::Head,
+                  -1,
+                  headX,
+                  screenY - headSize.y * 0.5f + headShift,
+                  headSize.x,
+                  headSize.y });
 
             if ( note.m_type == ::MMM::NoteType::FLICK && note.m_dtrack != 0 ) {
                 const auto flickEndpoint =
@@ -1689,13 +1788,17 @@ void NoteRenderSystem::generateNoteHitboxes(
                 // 图像本身的宽度已经包含纹理比例，无需再加轨差。
                 const float arrowX = flickEndpoint.centerX() - arrowW * 0.5F;
 
-                snapshot->hitboxes.push_back({ entity,
-                                               HoverPart::FlickArrow,
-                                               -1,
-                                               arrowX,
-                                               screenY - arrowH * 0.5f,
-                                               arrowW,
-                                               arrowH });
+                // 箭头外观保留终轨尺寸，纵向命中中心与起点贴图完全一致。
+                // 不能按箭头自身半高重新取偏移，否则横向连接又会倾斜。
+                const float arrowShift = headShift;
+                snapshot->hitboxes.push_back(
+                    { entity,
+                      HoverPart::FlickArrow,
+                      -1,
+                      arrowX,
+                      screenY - arrowH * 0.5f + arrowShift,
+                      arrowW,
+                      arrowH });
             } else if ( note.m_type == ::MMM::NoteType::HOLD ) {
                 auto it = snapshot->uvMap.find(
                     static_cast<uint32_t>(TextureID::HoldEnd));
@@ -1716,13 +1819,18 @@ void NoteRenderSystem::generateNoteHitboxes(
                 endW *= endScale;
                 endH *= endScale;
 
+                // 尾部按自身最终高度定位，不改变 duration 或头部拍位。
+                const float endShift = notePartVerticalShift(*snapshot,
+                                                             TextureID::HoldEnd,
+                                                             { endW, endH },
+                                                             config.visual);
                 snapshot->hitboxes.push_back(
                     { entity,
                       HoverPart::HoldEnd,
                       -1,
                       leftX + note.m_trackIndex * singleTrackW +
                           (singleTrackW - endW) * 0.5f,
-                      endY - endH * 0.5f,
+                      endY - endH * 0.5f + endShift,
                       endW,
                       endH });
             }
@@ -1763,7 +1871,8 @@ void NoteRenderSystem::renderNoteBaseLayer(
     int32_t trackCount, bool generateHitboxes, bool showBoundSampleLabels,
     const CanvasLaneProjection* laneProjection)
 {
-    const float visualPaddingScale = noteVisualPaddingScale(*snapshot);
+    const float visualPaddingScale =
+        noteVisualPaddingScale(*snapshot, config.visual.noteTexturePosition);
     // 候选粗筛后还需普通主体的显示包络检查。
     // 当前实现使用局部向量保存结果，仍存在每次调用的容量分配成本。
     std::vector<entt::entity> visibleEntities;
@@ -2109,6 +2218,8 @@ void NoteRenderSystem::renderNoteGlowLayer(
     // 发光写入独立命令列表，后续合成可应用不同效果。
     // 裁剪覆盖实际轨道区，不能让描边越过可编辑视野边界。
     Batcher glowBatcher(snapshot, &snapshot->glowCmds);
+    // 独立发光批次须和基础音符使用同一固定位置，不能回到中心造成重影。
+    glowBatcher.setNoteTexturePosition(config.visual.noteTexturePosition);
     glowBatcher.setScissor(clipLeftX, topY, rightX - clipLeftX, bottomY - topY);
     // 发光列表保留输入候选相对顺序，反向绘制与基础层保持一致。
     // 候选可能来自分桶和拖动补入，不能假定它严格按时间排列。
@@ -3208,6 +3319,9 @@ void NoteRenderSystem::renderBrushPreview(
     float fallbackLeftX, float fallbackTrackWidth, float renderScaleY,
     const CanvasLaneProjection* laneProjection)
 {
+    // 放置预览复用音符固定位置，提前返回也自动恢复共享批处理器状态。
+    const NoteTexturePositionScope notePosition(
+        batcher, config.visual.noteTexturePosition);
     // 借用快照中的画笔状态，绘制期间不回读逻辑线程的活动工具。
     // 避免同一帧根几何与子列表来自不同次鼠标更新。
     const auto& brush = snapshot->brush;

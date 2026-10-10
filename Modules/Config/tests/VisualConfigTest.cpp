@@ -192,6 +192,51 @@ bool testBoundSampleLabelConfigRoundTrip()
     return true;
 }
 
+/// @brief 验证 Note 固定贴图位置的持久化与旧配置兼容。
+/// @return 两种位置往返一致且非法、缺失字段恢复中心时返回真。
+/// @note 使用稳定字符串保存，枚举序号变化不影响已保存的配置。
+/// @note 首次启动、现有配置、损坏输入分别走独立观察点。
+/// @note 当前格式必须明确写出选项，不能仅依赖读取端默认值。
+/// @note 未知文本可模拟未来版本的布局选项，旧版本仍应安全读取。
+/// @note 数字和布尔输入模拟手工编辑错误，不应传给字符串转换。
+bool testNoteTexturePositionRoundTrip()
+{
+    using MMM::Config::NoteTexturePosition;
+    MMM::Config::VisualConfig source;
+    // 首次启动与未携带字段的旧配置都保留原有中心对齐。
+    if ( source.noteTexturePosition != NoteTexturePosition::Center )
+        return false;
+    source.noteTexturePosition   = NoteTexturePosition::Bottom;
+    const nlohmann::json encoded = source;
+    if ( encoded.value("noteTexturePosition", "") != "bottom" ||
+         encoded.get<MMM::Config::VisualConfig>().noteTexturePosition !=
+             NoteTexturePosition::Bottom )
+        return false;
+    // 两种合法位置都经过写出与读取，避免只能切到底边而无法恢复中心。
+    source.noteTexturePosition = NoteTexturePosition::Center;
+    // 从已设置过底边的对象切回中心，覆盖双向持久化转换。
+    // 编码结果独立于枚举内部数值，配置协议只依赖两个公开字符串。
+    // 中心值也应显式持久化，不能被当成未初始化字段丢弃。
+    const nlohmann::json centered = source;
+    if ( centered.value("noteTexturePosition", "") != "center" ||
+         centered.get<MMM::Config::VisualConfig>().noteTexturePosition !=
+             NoteTexturePosition::Center )
+        return false;
+    // 非法类型不得抛出 JSON 类型错误；未知选项采用兼容默认值。
+    for ( const auto& input :
+          { nlohmann::json::object(),
+            nlohmann::json{ { "noteTexturePosition", "unknown" } },
+            nlohmann::json{ { "noteTexturePosition", 1 } },
+            nlohmann::json{ { "noteTexturePosition", true } } } ) {
+        if ( input.get<MMM::Config::VisualConfig>().noteTexturePosition !=
+             NoteTexturePosition::Center ) {
+            XERROR("Note texture position compatibility failed");
+            return false;
+        }
+    }
+    return true;
+}
+
 /// @brief 验证交互拾取包围盒横纵缩放能够持久化并限制到调试界面范围。
 /// @return 往返、缺省值和上下界限制均正确时返回 true。
 /// @note 横纵轴使用不同有效值和相反越界方向，覆盖独立处理。
@@ -252,8 +297,8 @@ bool testNonHoldHitEffectDurationConfig()
     // 两个读取夹具分别低于和高于产品允许时长。
     const auto tooShort = nlohmann::json{ { "nonHoldHitEffectDuration", 0.0F } }
                               .get<MMM::Config::VisualConfig>();
-    const auto tooLong  = nlohmann::json{ { "nonHoldHitEffectDuration", 8.0F } }
-                              .get<MMM::Config::VisualConfig>();
+    const auto tooLong = nlohmann::json{ { "nonHoldHitEffectDuration", 8.0F } }
+                             .get<MMM::Config::VisualConfig>();
     // 默认值和最小最大常量直接来自类型，避免测试复制实现数值。
     if ( !near(restored.nonHoldHitEffectDuration, 0.48F) ||
          !near(
@@ -371,8 +416,8 @@ bool testProfessionalModeConfigMigration()
         // 当前格式、旧字段格式和新旧字段同时存在三种输入分别恢复。
         const auto restored = encoded.get<MMM::Config::EditorSettings>();
         const auto legacy   = nlohmann::json{
-            { "timelineProfessionalMode", enabled },
-            { "enableDraftLanes", !enabled }
+              { "timelineProfessionalMode", enabled },
+              { "enableDraftLanes", !enabled }
         }.get<MMM::Config::EditorSettings>();
         // 新字段必须优先于值相反的旧字段，保证升级后的显式选择稳定。
         const auto explicitSetting = nlohmann::json{
@@ -654,6 +699,37 @@ bool testPlaybackShortcutRoundTrip()
     return true;
 }
 
+/// @brief 验证 BPM 段落快捷键的默认值和用户绑定均可恢复。
+/// @return 自定义值往返无损且旧配置得到 Ctrl+Alt+B 时返回 true。
+/// @note 工具焦点约束由 UI 路由负责，配置层只保存完整六元绑定。
+/// @details 新字段缺失代表旧版配置，必须选择当前默认键位。
+/// 自定义绑定特意使用 Shift 而不是 Alt，以便发现修饰键串位。
+/// 配置轮换测试不需要创建 ImGui 上下文或打开真实工具窗口。
+/// 此测试只保护序列化与兼容性，不推断运行时焦点状态。
+bool testBpmSegmentShortcutRoundTrip()
+{
+    // 自定义组合与默认组合分别检查，避免新增字段只写不读。
+    MMM::Config::EditorSettings source;
+    source.shortcutConfig.addBpmSegmentAtViewCenter =
+        MMM::Config::ShortcutBinding{ true, "G", true, true, false, false };
+    const nlohmann::json encoded  = source;
+    const auto           restored = encoded.get<MMM::Config::EditorSettings>();
+    const auto           legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    const auto& binding = restored.shortcutConfig.addBpmSegmentAtViewCenter;
+    const auto& legacyBinding = legacy.shortcutConfig.addBpmSegmentAtViewCenter;
+    // 逐项比较修饰键，防止绑定迁移时产生意外的全局编辑手势。
+    if ( !binding.enabled || binding.key != "G" || !binding.ctrl ||
+         !binding.shift || binding.alt || binding.super ||
+         !legacyBinding.enabled || legacyBinding.key != "B" ||
+         !legacyBinding.ctrl || legacyBinding.shift || !legacyBinding.alt ||
+         legacyBinding.super ) {
+        XERROR("BPM segment shortcut did not preserve compatibility");
+        return false;
+    }
+    return true;
+}
+
 /// @brief 验证快捷键冲突仅匹配完全相同的有效按键组合。
 /// @return 相同组合冲突，禁用、空键位和不同修饰键均不冲突时返回 true。
 /// @note 直接测试纯值 helper，不依赖 JSON 往返。
@@ -700,6 +776,10 @@ bool testRenderingDefaultsReset()
     config.visual.nonHoldHitEffectDuration = 0.76F;
     config.visual.showBoundSampleLabels    = false;
     config.visual.noteFillMode = MMM::Config::BackgroundFillMode::Center;
+    // 复位测试使用非默认位置，防止字段漏入复位分组。
+    // 后续按全新默认对象比较，无需硬编码未来默认枚举。
+    config.visual.noteTexturePosition =
+        MMM::Config::NoteTexturePosition::Bottom;
     // 调色方案名称属于物件渲染复位范围，需要随缩放和填充共同恢复。
     config.settings.defaultColorPaletteSchemeName = "Custom";
     // 背景字段也设为非默认，用于证明物件复位不会越界修改背景。
@@ -724,6 +804,8 @@ bool testRenderingDefaultsReset()
          config.visual.showBoundSampleLabels !=
              defaults.visual.showBoundSampleLabels ||
          config.visual.noteFillMode != defaults.visual.noteFillMode ||
+         config.visual.noteTexturePosition !=
+             defaults.visual.noteTexturePosition ||
          config.settings.defaultColorPaletteSchemeName !=
              defaults.settings.defaultColorPaletteSchemeName ||
          config.visual.background.fillMode !=
@@ -1075,6 +1157,7 @@ int main()
                    testHoverSubdivisionLineExtensionRatioConfig() &&
                    testPreviewAreaLineDefaults() &&
                    testBoundSampleLabelConfigRoundTrip() &&
+                   testNoteTexturePositionRoundTrip() &&
                    testInteractionHitboxScaleConfig() &&
                    testNonHoldHitEffectDurationConfig() &&
                    testPolylineEditingConfigRoundTrip() &&
@@ -1088,6 +1171,7 @@ int main()
                    testSelectedAnnotationShortcutRoundTrip() &&
                    testAnnotationDetailVisibilityRoundTrip() &&
                    testPlaybackShortcutRoundTrip() &&
+                   testBpmSegmentShortcutRoundTrip() &&
                    testShortcutConflictDetection() &&
                    // 复位与背景频谱测试在基础字段兼容确认后执行。
                    testRenderingDefaultsReset() &&

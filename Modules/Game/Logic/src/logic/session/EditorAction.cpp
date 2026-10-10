@@ -257,6 +257,24 @@ void EditorActionStack::markDirty()
     ++m_changeRevision;
 }
 
+/// @brief 迁移两侧历史中保存的媒体资源路径，防止 Undo 恢复已消失的文件名。
+/// @warning 显式资源改名低频调用，历史长度决定扫描成本。
+/// @note 改名不新增动作；历史深度与保存点保持原有编辑语义。
+/// @note 默认动作没有元数据快照，只有替换动作实际修改保存的路径。
+/// @note 已撤销动作仍在重做栈，必须和撤销栈同步迁移。
+void EditorActionStack::remapResourcePaths(const std::filesystem::path& oldPath,
+                                           const std::filesystem::path& newPath)
+{
+    if ( oldPath == newPath ) return;
+    // 重命名本身不创建可撤销动作；只校正现有动作快照的外部资源身份。
+    for ( auto& action : m_undoStack ) {
+        action->remapResourcePaths(oldPath, newPath);
+    }
+    for ( auto& action : m_redoStack ) {
+        action->remapResourcePaths(oldPath, newPath);
+    }
+}
+
 /// @brief 消费自上次读取以来累积的变更类别。
 /// @return 多次执行、撤销和重做的类别并集；无新增变化时返回 None。
 ::MMM::BeatmapMutationFlags EditorActionStack::takePendingMutationFlags()
@@ -331,6 +349,15 @@ std::string CompositeEditorAction::getName() const
     auto flags = ::MMM::BeatmapMutationFlags::None;
     for ( const auto& action : m_actions ) flags |= action->mutationFlags();
     return flags;
+}
+
+/// @brief 对组合动作中每个子动作应用相同的外部资源路径迁移。
+void CompositeEditorAction::remapResourcePaths(
+    const std::filesystem::path& oldPath, const std::filesystem::path& newPath)
+{
+    for ( auto& action : m_actions ) {
+        action->remapResourcePaths(oldPath, newPath);
+    }
 }
 
 }  // namespace MMM::Logic

@@ -983,6 +983,11 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
         { "noteScaleY", config.noteScaleY },
         { "showBoundSampleLabels", config.showBoundSampleLabels },
         { "noteFillMode", config.noteFillMode },
+        // 使用稳定文本而非枚举序值保存布局选项，便于旧配置缺省与检查。
+        { "noteTexturePosition",
+          config.noteTexturePosition == NoteTexturePosition::Bottom
+              ? "bottom"
+              : "center" },
         // 三类视觉时间偏移分别保存，避免波形或频谱校准相互覆盖。
         { "visualOffset", config.visualOffset },
         { "waveformVisualOffset", config.waveformVisualOffset },
@@ -1079,6 +1084,16 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
     config.showBoundSampleLabels =
         j.value("showBoundSampleLabels", VisualConfig{}.showBoundSampleLabels);
     config.noteFillMode = j.value("noteFillMode", BackgroundFillMode::Stretch);
+    // 只接受两个公开布局值；缺失、非法类型和未知文本均保持旧中心位置。
+    // 不把枚举序号作为协议，未来增加选项时仍能安全识别已有文件。
+    // 手工配置可能携带数字或布尔值，必须先检查类型再读取字符串。
+    // 回退仅改变视觉位置，不涉及谱面时间与音频播放。
+    const auto position = j.find("noteTexturePosition");
+    config.noteTexturePosition =
+        position != j.end() && position->is_string() &&
+                position->get<std::string>() == "bottom"
+            ? NoteTexturePosition::Bottom
+            : NoteTexturePosition::Center;
     // 三类时间偏移独立恢复，缺失值均表示无校准偏移。
     config.visualOffset            = j.value("visualOffset", 0.0f);
     config.waveformVisualOffset    = j.value("waveformVisualOffset", 0.0f);

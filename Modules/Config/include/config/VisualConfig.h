@@ -4,6 +4,7 @@
 #include "config/NotePalette.h"
 #include "config/visual/BackgroundConfig.h"
 #include "config/visual/CanvasComponentConfig.h"
+#include "config/visual/NoteTexturePosition.h"
 #include "config/visual/PreviewAreaConfig.h"
 #include "config/visual/SpectrumConfig.h"
 #include "config/visual/TrackLayoutConfig.h"
@@ -150,6 +151,9 @@ struct VisualConfig {
     /// @brief 自动游玩模拟的同级子选项：独立滑键判定后整体消隐。
     /// @note 与单点开关独立，折线内部横段仍遵循长条分段判定。
     bool hideJudgedFlicks{ true };
+    /// @brief 所有 Note 贴图统一采用中心或底边中点对齐。
+    /// @note 同步头尾连接点、判定区和固定尺寸打击动画；不改变谱面时刻。
+    NoteTexturePosition noteTexturePosition{ NoteTexturePosition::Center };
     /// @brief 音符填充模式。
     BackgroundFillMode noteFillMode{ BackgroundFillMode::Stretch };
     /// @brief 视觉偏移。

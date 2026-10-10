@@ -1,15 +1,25 @@
 #!/usr/bin/env bash
 # 在 MSYS2 UCRT64 Runner 上使用 GCC ABI 预编译库执行完整构建与测试。
-# 入口只拉取 ucrt64 静态依赖，并关闭不适用于 GCC 的 LLVM PGO 插桩。
+# 入口只拉取 ucrt64 静态依赖；GCC 不兼容 LLVM profile，由 CMake 提示并关闭插桩。
 # 独立 build_gcc 防止与 clang64 的 libc++ 产物或缓存混用。
 set -euo pipefail
 
 # CI 默认不启用验证层，显式参数用于诊断构建。
 vulkanValidationLayers="OFF"
-# 仅接受显式诊断开关，拼错参数时在下载依赖前报错。
+# 默认请求业务模块采样，编译器能力由 CMake 校验。
+pgoInstrument="ON"
+# 插桩仅采集 profile，不代表本次构建已经应用 profile 优化。
+# CMake 参数每次显式传入，复用构建树也能关闭旧的采样设置。
+# 参数在下载依赖前解析，最后一个采样开关生效。
 for option in "$@"; do
     case "${option}" in
         --vulkan-validation-layers) vulkanValidationLayers="ON" ;;
+        --pgo-instrument) pgoInstrument="ON" ;;
+        --no-pgo-instrument) pgoInstrument="OFF" ;;
+        -h|--help)
+            printf "Usage: scripts/ci/mingw-ucrt64-build.sh [--vulkan-validation-layers] [--pgo-instrument|--no-pgo-instrument]\nPGO instrumentation defaults to ON; requires an LLVM compiler.\n"
+            exit 0
+            ;;
         *) printf "error: unknown option: %s\n" "${option}" >&2; exit 1 ;;
     esac
 done
@@ -72,7 +82,7 @@ cmake -G Ninja \
     -DBUILD_TESTING=ON \
     -DMMM_ENABLE_VULKAN_VALIDATION_LAYERS="${vulkanValidationLayers}" \
     -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF \
-    -DMMM_PGO_INSTRUMENT=OFF \
+    -DMMM_PGO_INSTRUMENT="${pgoInstrument}" \
     -DMMM_PGO_USE=OFF \
     -S . \
     -B build_gcc

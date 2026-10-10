@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=MusicMapMaker-Next
+Comment=Rhythm game beatmap editor
+Comment[zh_CN]=音乐游戏谱面编辑器
+Exec=MusicMapMaker-Next
+Icon=MusicMapMaker-Next
+Terminal=false
+Categories=AudioVideo;Audio;Music;
+StartupWMClass=MusicMapMaker-Next

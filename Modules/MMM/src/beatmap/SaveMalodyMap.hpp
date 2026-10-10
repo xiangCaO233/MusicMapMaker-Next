@@ -188,7 +188,8 @@ using json = nlohmann::json;
 /// - 只合并时间连续的相邻同类段；
 /// - Hold 合并持续时间；
 /// - Flick 合并轨道位移；
-/// - 删除紧邻同时间 Flick 之前的冗余 Hold；
+/// - 按 RM 段落语义将连续 Hold/Flick 写成一个终点；
+/// - 容忍 IMD 整毫秒与编辑器分拍混合产生的至多 1 ms 尾部误差；
 /// - 合并与删除反复执行到固定点；
 /// - 唯一根时刻 Flick 可直接导出 dir；
 /// - 无剩余段时退化为普通点击；
@@ -1093,15 +1094,19 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
                     }
                 }
 
-                // 紧邻 Flick 前的零偏移 Hold 不增加 Malody seg 几何，移除它。
+                // RM seg 表示前轨长按及末端横移，不另写同拍角点。
+                // IMD 使用整毫秒，分拍编辑后接点可能相差不足 1 ms。
+                // 只折叠同轨且尾部相接的 Hold/Flick，以 Flick 时间为最终端点；
+                // 真实时间间隔或跨轨的不连续结构仍保留独立段落。
                 if ( cleanSubs.size() > 1 ) {
                     for ( size_t i = 0; i < cleanSubs.size() - 1; ) {
                         auto& curr = cleanSubs[i];
                         auto& next = cleanSubs[i + 1];
                         if ( curr.type == NoteType::HOLD &&
                              next.type == NoteType::FLICK &&
+                             curr.track == next.track &&
                              std::abs((curr.timestamp + curr.duration) -
-                                      next.timestamp) < 1e-5 ) {
+                                      next.timestamp) <= 1.0 ) {
                             cleanSubs.erase(cleanSubs.begin() + i);
                             changed = true;
                             continue;

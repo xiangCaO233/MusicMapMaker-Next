@@ -38,6 +38,32 @@ elseif(WIN32)
 else()
   # Linux 使用普通可执行目标，图标由桌面集成包单独安装。
   add_executable(MusicMapMaker-Next src/main.cpp)
+  # Wayland 不接受客户端窗口图标，桌面文件名必须匹配 GLFW_WAYLAND_APP_ID。 安装入口与 hicolor 图标同名，X11
+  # 同时使用 StartupWMClass 匹配现有窗口类。
+  include(GNUInstallDirs)
+  # 应用入口进入标准 bin；不在配置或构建期间写入宿主桌面目录。
+  install(TARGETS MusicMapMaker-Next
+          RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+  # SVG 是桌面环境的可缩放主图标，PNG 是不读取 SVG 的环境的兼容回退。 两种格式都由 logo.svg 母版生成，不根据系统主题烘焙不同背景。
+  # 组件支持先暂存桌面资源验证，不要求安装主二进制或修改当前桌面设置。 使用相对 GNUInstallDirs 路径，保证用户级 prefix
+  # 与打包暂存目录均可重定位。
+  install(
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/logo.svg"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps"
+    RENAME MusicMapMaker-Next.svg
+    COMPONENT DesktopIntegration)
+  # PNG 回退保留透明通道，避免桌面面板切换深浅主题后出现固定底色方块。
+  install(
+    FILES
+      "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/image/logo.png"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/512x512/apps"
+    RENAME MusicMapMaker-Next.png
+    COMPONENT DesktopIntegration)
+  # 桌面注册只发生在显式 install，供发行包或用户级安装使用。
+  install(
+    FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/MusicMapMaker-Next.desktop"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/applications"
+    COMPONENT DesktopIntegration)
 endif()
 
 # 本机显式构建应用目标时也先同步默认资源；关闭开关后目标不存在且不产生写入。

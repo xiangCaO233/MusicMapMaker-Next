@@ -1320,6 +1320,14 @@
     {
       "tab": "Shortcut",
       "section": "ui.settings.shortcut",
+      "label": "ui.settings.shortcut.add_bpm_segment_at_view_center",
+      "fields": [],
+      "keywords": "shortcut.add_bpm_segment_at_view_center addBpmSegmentAtViewCenter",
+      "aliases": "BPM工具 在视图中心添加段落 快捷键配置 BPM Tool Add Segment at View Center Shortcut Config"
+    },
+    {
+      "tab": "Shortcut",
+      "section": "ui.settings.shortcut",
       "label": "ui.settings.shortcut.toggle_reverse_scroll",
       "fields": [],
       "keywords": "shortcut.toggle_reverse_scroll toggleReverseScroll",

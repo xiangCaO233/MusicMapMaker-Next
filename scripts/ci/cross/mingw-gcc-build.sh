@@ -24,6 +24,8 @@ Options:
   --toolchain <path>      CMake toolchain file. Default: cmake/toolchain/cross-mingw-gcc.cmake
   --sources-build         Configure with SOURCES_BUILD=ON.
   --vulkan-validation-layers Enable Vulkan validation layers. Default: disabled.
+  --pgo-instrument            Request LLVM PGO instrumentation (default; GCC unsupported).
+  --no-pgo-instrument         Disable PGO instrumentation.
   --prebuilt-targets      Build only third-party targets used for staging.
   --configure-only        Configure and generate, then stop
   --fresh                 Remove the build directory before configuring
@@ -139,6 +141,10 @@ toolchainFile="cmake/toolchain/cross-mingw-gcc.cmake"
 sourcesBuild="OFF"
 # 每次配置都写入验证层状态，避免旧 CMake 缓存残留。
 vulkanValidationLayers="OFF"
+# 统一入口默认请求采样；GCC 不兼容 LLVM profile，由 CMake 提示并关闭。
+pgoInstrument="ON"
+# 插桩仅采集 profile，不代表本次构建已经应用 profile 优化。
+# CMake 参数每次显式传入，复用构建树也能关闭旧的采样设置。
 # 流程开关分别控制目标集合、停止点和目录生命周期。
 prebuiltTargets=0
 configureOnly=0
@@ -147,6 +153,16 @@ freshBuild=0
 # 在拉取依赖或修改构建树前完整解析参数。
 while (( $# > 0 )); do
     case "$1" in
+        --pgo-instrument)
+            # 请求状态保持与其他 CI 入口一致。
+            pgoInstrument="ON"
+            shift
+            ;;
+        --no-pgo-instrument)
+            # 显式关闭可避免不兼容编译器的采样提示。
+            pgoInstrument="OFF"
+            shift
+            ;;
         --build-dir)
             # 路径稍后统一解析为绝对路径。
             if (( $# < 2 )); then
@@ -258,6 +274,11 @@ while (( $# > 0 )); do
     esac
 done
 
+# 仅生产预编译依赖时不创建采样产物，也不要求目标 profile 运行库。
+if (( prebuiltTargets )); then
+    pgoInstrument="OFF"
+fi
+
 if [[ -z "${mingwSysroot}" ]]; then
     # 仅在参数没有固定 sysroot 时运行自动探测。
     mingwSysroot="$(detectMingwSysroot "${toolPrefix}")"
@@ -355,7 +376,7 @@ cmake -G "${CMAKE_GENERATOR:-Ninja}" \
     -DICE_LINKAGE="${projectLinkage}" \
     -DPROJECT_PREBUILT_COMPILER_TAG="${compilerTag}" \
     -DICE_PREBUILT_COMPILER_TAG="${compilerTag}" \
-    -DMMM_PGO_INSTRUMENT=OFF \
+    -DMMM_PGO_INSTRUMENT="${pgoInstrument}" \
     -DMMM_PGO_USE=OFF \
     -S "${projectRoot}" \
     -B "${buildDir}"
@@ -418,7 +439,7 @@ fi
 # 维护约束：shared 模式不得消费 static 预编译目录。
 # 维护约束：静态模式不得混入 shared 运行时布局。
 # 维护约束：交叉构建禁止同步翻译或默认皮肤到宿主配置。
-# 维护约束：PGO 插桩和使用在该交叉流程中保持关闭。
+# 维护约束：LLVM profile 与 GCC 不兼容，实际插桩状态由 CMake 校验。
 # 维护约束：所有续行参数必须保持双引号和反斜杠结构。
 # 维护约束：续行反斜杠之后不得插入注释。
 # 维护约束：所有删除目标必须先转换为绝对路径。

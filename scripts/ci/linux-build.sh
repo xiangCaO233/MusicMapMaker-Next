@@ -24,7 +24,7 @@ Options:
   --jobs <count>              Parallel build jobs. Default: 75% of CPU threads
   --linkage <mode>            PROJECT_LINKAGE value: static or shared. Default: static
   --vulkan-validation-layers  Enable Vulkan validation layers. Default: disabled.
-  --pgo-instrument            Force MMM_PGO_INSTRUMENT=ON.
+  --pgo-instrument            Enable LLVM PGO instrumentation (default).
   --no-pgo-instrument         Force MMM_PGO_INSTRUMENT=OFF.
   --sources-build             Configure with SOURCES_BUILD=ON.
   --prebuilt-targets          Build only third-party targets used for staging.
@@ -169,7 +169,8 @@ vulkanValidationLayers="OFF"
 prebuiltTargets=0
 configureOnly=0
 freshBuild=0
-pgoInstrument="auto"
+# 默认收集业务模块 profile；不支持 LLVM profile 的编译器由 CMake 明确提示。
+pgoInstrument="ON"
 
 # 在产生任何构建副作用前完整解析参数。
 while (( $# > 0 )); do
@@ -304,6 +305,11 @@ while (( $# > 0 )); do
     esac
 done
 
+# 仅生产预编译依赖时不创建采样产物，也不要求目标 profile 运行库。
+if (( prebuiltTargets )); then
+    pgoInstrument="OFF"
+fi
+
 # 参数覆盖完成后再补齐预设默认值。
 applyCompilerPreset
 
@@ -346,15 +352,6 @@ if [[ "${sourcesBuild}" == "OFF" ]]; then
         --build-type "${buildType}" \
         --linkage "${projectLinkage}" \
         --include-tests
-fi
-
-if [[ "${pgoInstrument}" == "auto" ]]; then
-    # 自动策略只给 Clang RelWithDebInfo 主业务模块启用插桩。
-    pgoInstrument="OFF"
-    if [[ "${buildType}" == "RelWithDebInfo" && "${prebuiltToolchain}" == "clang" ]]; then
-        # 其他编译器或配置保持普通构建。
-        pgoInstrument="ON"
-    fi
 fi
 
 requireCommand cmake
@@ -517,8 +514,8 @@ fi
 # 维护约束：宿主架构由 LFS helper 单独读取并验证。
 # 维护约束：当前 staging 布局固定 x86_64 时 CI 必须使用匹配 Runner。
 # 维护约束：CMAKE_POSITION_INDEPENDENT_CODE 对静态依赖保持开启。
-# 维护约束：RelWithDebInfo Clang 自动 PGO 仅作用于业务模块。
-# 维护约束：显式 PGO 开关必须覆盖 auto 判定。
+# 维护约束：默认 PGO 采集仅作用于业务模块，不绑定构建配置。
+# 维护约束：显式关闭开关必须覆盖默认采集策略。
 # 维护约束：PGO_USE 始终关闭，profile 使用由独立构建阶段负责。
 # 维护约束：切换编译器、linkage 或 SOURCES_BUILD 时应使用新目录。
 # 维护约束：构建类型变化应重新验证预编译配置映射。

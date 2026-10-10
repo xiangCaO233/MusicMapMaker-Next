@@ -68,13 +68,8 @@ if(MMM_PGO_USE)
       "PGO: MMM_PGO_USE is enabled. Disabling PGO instrumentation (MMM_PGO_INSTRUMENT=OFF)."
   )
 else()
-  # PGO 插桩默认只在 LLVM GNU-like 工具链启用；clang-cl 交叉 MSVC 链接阶段依赖的 compiler-rt profile
-  # 库不稳定，必须显式禁用。
+  # LLVM 工具链默认采集 profile；交叉 clang-cl 在下方显式解析目标运行库。
   set(MMM_PGO_INSTRUMENT_DEFAULT ${MMM_PGO_IS_LLVM_COMPILER})
-  # MSVC ABI 交叉链接缺少稳定的 compiler-rt profile 库搜索路径。
-  if(MMM_PGO_IS_MSVC_LIKE_CLANG_CROSS)
-    set(MMM_PGO_INSTRUMENT_DEFAULT OFF)
-  endif()
   option(MMM_PGO_INSTRUMENT
          "Build with PGO instrumentation for profile collection"
          ${MMM_PGO_INSTRUMENT_DEFAULT})
@@ -91,15 +86,84 @@ if(MMM_PGO_INSTRUMENT AND NOT MMM_PGO_IS_LLVM_COMPILER)
       CACHE BOOL "Build with PGO instrumentation for profile collection" FORCE)
 endif()
 
-# clang-cl 交叉场景即使被命令行强制开启，也必须回退为无插桩构建。
+# 交叉链接直接调用 lld-link，不能依赖 clang-cl 驱动补齐 compiler-rt 搜索路径。 允许 CI 显式挂载与所选 LLVM
+# 版本匹配的 Windows x86_64 profile 运行库。
+set(MMM_PGO_PROFILE_RUNTIME
+    ""
+    CACHE FILEPATH "Windows compiler-rt profile library for cross clang-cl PGO")
+# 公共缓存只保存目标 Windows 运行库。 未插桩或非交叉构建不会因该缓存为空而增加依赖要求， 宿主 Linux 的 compiler-rt
+# 安装仍由原有编译器驱动处理。
 if(MMM_PGO_INSTRUMENT AND MMM_PGO_IS_MSVC_LIKE_CLANG_CROSS)
-  message(
-    WARNING
-      "PGO: disabling instrumentation for cross clang-cl/MSVC-like builds "
-      "because lld-link may not find clang_rt.profile.lib.")
-  set(MMM_PGO_INSTRUMENT
-      OFF
-      CACHE BOOL "Build with PGO instrumentation for profile collection" FORCE)
+  if("${MMM_PGO_PROFILE_RUNTIME}" STREQUAL "")
+    # 资源目录来自实际编译器，避免 PATH 上另一 LLVM 版本的运行库混入。 Linux 安装通常只提供宿主库，查询成功不能代替目标运行库存在检查。
+    # 查询失败统一交由后续缺库错误处理，用户仍可通过公共缓存提供独立挂载的运行库。
+    execute_process(
+      COMMAND "${CMAKE_CXX_COMPILER}" /clang:-print-resource-dir
+      OUTPUT_VARIABLE _mmm_pgo_resource_dir
+      OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+    string(REGEX MATCH "^[0-9]+" _mmm_pgo_llvm_major
+                 "${CMAKE_CXX_COMPILER_VERSION}")
+    # 主版本取自 CMake 已识别的编译器，交叉脚本选择其他 LLVM 版本时同步改变搜索目录。 编译器资源目录保留完整安装信息，挂载默认路径则使用
+    # LLVM 的主版本目录约定。 仅搜索 Windows 布局；宿主 Linux 的同名归档不适用于 MSVC ABI。
+    set(_mmm_pgo_runtime_hints
+        "${_mmm_pgo_resource_dir}/lib/windows"
+        "${_mmm_pgo_resource_dir}/lib/x86_64-pc-windows-msvc")
+    # 传统 Windows 子目录和按目标 triple 安装的子目录均可提供 MSVC ABI 库。 候选中不包含资源目录的 Linux
+    # 子目录，不允许同名 ELF 归档替代 COFF 运行库。
+    if(WINDOWS_CROSS_ROOT)
+      # 挂载布局兼容独立 LLVM 安装及 Windows 默认 Program Files 目录。
+      list(
+        APPEND
+        _mmm_pgo_runtime_hints
+        "${WINDOWS_CROSS_ROOT}/LLVM/lib/clang/${_mmm_pgo_llvm_major}/lib/windows"
+        "${WINDOWS_CROSS_ROOT}/Program Files/LLVM/lib/clang/${_mmm_pgo_llvm_major}/lib/windows"
+      )
+    endif()
+    if(MSVC_BASE)
+      # Visual Studio 的 LLVM 位于 VC/Tools/Llvm/x64，与 MSVC toolset 并列。 从 MSVC
+      # 具体版本返回两层得到 Tools；SDK 的 UCRT 目录没有 LLVM profile 运行库。 路径仍从用户指定的 MSVC_BASE
+      # 派生，避免把固定 Visual Studio 版本写入 PGO 模块。
+      list(
+        APPEND
+        _mmm_pgo_runtime_hints
+        "${MSVC_BASE}/../../Llvm/x64/lib/clang/${_mmm_pgo_llvm_major}/lib/windows"
+      )
+      # 新版 MSVC toolset 也将 compiler-rt profile 库随 CRT 一起安装在 lib/x64。 优先使用上面的所选
+      # LLVM 安装；仅在其没有目标库时采用 toolset 提供的兼容运行库。 固定 x64 子目录，避免误选同名的 x86、ARM64 或
+      # OneCore 变体。
+      list(APPEND _mmm_pgo_runtime_hints "${MSVC_BASE}/lib/x64")
+    endif()
+    find_file(
+      _mmm_pgo_runtime
+      NAMES clang_rt.profile-x86_64.lib clang_rt.profile.lib
+      HINTS ${_mmm_pgo_runtime_hints}
+      NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH NO_CACHE)
+    # 禁止默认搜索和再次应用 sysroot，保持挂载绝对路径的含义不变。 临时搜索结果不缓存，失败后重新配置仍能发现随后安装或挂载的目标库。
+    if(_mmm_pgo_runtime)
+      # 自动发现也记录为显式绝对路径，后续链接不再猜测默认库名。
+      set(MMM_PGO_PROFILE_RUNTIME
+          "${_mmm_pgo_runtime}"
+          CACHE FILEPATH
+                "Windows compiler-rt profile library for cross clang-cl PGO"
+                FORCE)
+    endif()
+  endif()
+  # 配置失败代替静默关闭；调用方可以提供运行库或明确选择普通构建。 显式无效路径不能被自动发现覆盖，否则会隐藏 CI 参数或挂载错误。
+  # 绝对路径让配置验证与直接链接引用同一文件，不受生成器工作目录影响。 扩展名拒绝宿主 .a 归档，实际架构及 LLVM 版本兼容性仍由运行库提供方保证。
+  if(NOT IS_ABSOLUTE "${MMM_PGO_PROFILE_RUNTIME}"
+     OR NOT EXISTS "${MMM_PGO_PROFILE_RUNTIME}"
+     OR IS_DIRECTORY "${MMM_PGO_PROFILE_RUNTIME}"
+     OR NOT MMM_PGO_PROFILE_RUNTIME MATCHES "\\.lib$")
+    message(
+      FATAL_ERROR
+        "PGO: cross clang-cl instrumentation requires a Windows x86_64 compiler-rt profile .lib matching the selected LLVM version. "
+        "Set -DMMM_PGO_PROFILE_RUNTIME=/absolute/path/to/clang_rt.profile-x86_64.lib, "
+        "or disable instrumentation with --no-pgo-instrument in the CI build script (-DMMM_PGO_INSTRUMENT=OFF in CMake)."
+    )
+  endif()
+  message(STATUS "PGO: Windows profile runtime = ${MMM_PGO_PROFILE_RUNTIME}")
+  # 已缓存的运行库不会随编译器切换自动替换。 调整 LLVM 主版本时，应使用独立构建目录， 或通过 MMM_PGO_PROFILE_RUNTIME
+  # 显式同步替换目标运行库，避免跨版本链接。
 endif()
 
 # --- 数据源 (三选一) ---
@@ -287,11 +351,23 @@ if(MMM_PGO_INSTRUMENT)
     "$<$<COMPILE_LANG_AND_ID:C,Clang,AppleClang>:-fprofile-instr-generate=${DEFAULT_PGO_PATH}>"
     "$<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-fprofile-instr-generate=${DEFAULT_PGO_PATH}>"
   )
-  add_link_options(
-    # 链接阶段同步启用 profile 运行库，缺失时插桩符号将无法解析。
-    "$<$<LINK_LANG_AND_ID:C,Clang,AppleClang>:-fprofile-instr-generate=${DEFAULT_PGO_PATH}>"
-    "$<$<LINK_LANG_AND_ID:CXX,Clang,AppleClang>:-fprofile-instr-generate=${DEFAULT_PGO_PATH}>"
-  )
+  if(MMM_PGO_IS_MSVC_LIKE_CLANG_CROSS)
+    # 禁止对象写入猜测的默认库名，直接链接已验证的 Windows 运行库路径。 默认库名可能随 LLVM 安装布局变化，不能依靠固定
+    # clang_rt.profile.lib 别名。 关闭的仅是 compiler-rt 隐式指令，MSVC CRT 的 libcmt
+    # 等默认库指令仍由编译器保留。
+    add_compile_options(
+      "$<$<COMPILE_LANG_AND_ID:C,Clang>:-fno-rtlib-defaultlib>"
+      "$<$<COMPILE_LANG_AND_ID:CXX,Clang>:-fno-rtlib-defaultlib>")
+    link_libraries("${MMM_PGO_PROFILE_RUNTIME}")
+    # 目录级链接依赖只进入此后创建的业务目标，与插桩编译选项使用相同作用范围。 lld-link 直接接收库文件路径，不接收只由 Clang
+    # 驱动解释的插桩参数。
+  else()
+    # 其他工具链由 Clang 驱动在链接阶段解析 profile 运行库。
+    add_link_options(
+      "$<$<LINK_LANG_AND_ID:C,Clang,AppleClang>:-fprofile-instr-generate=${DEFAULT_PGO_PATH}>"
+      "$<$<LINK_LANG_AND_ID:CXX,Clang,AppleClang>:-fprofile-instr-generate=${DEFAULT_PGO_PATH}>"
+    )
+  endif()
   add_compile_definitions(MMM_PGO_INSTRUMENT=1)
 
   # 上传地址只在插桩构建生成，普通与优化构建不会暴露该编译常量。

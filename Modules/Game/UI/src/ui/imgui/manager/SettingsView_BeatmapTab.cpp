@@ -9,12 +9,14 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
+#include "ui/Icons.h"
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <filesystem>
 #include <initializer_list>
 #include <limits>
@@ -198,7 +200,10 @@ void SettingsView::drawBeatmapSettings()
         // 右侧工具栏和原始元数据编辑器可直接修改这些字段，设置页需要同步外部变更。
         // 这里只同步会由其他 UI
         // 即时修改的结构字段，文本输入草稿继续由本页保留。
-        m_editingMeta.track_count     = currentMeta.track_count;
+        m_editingMeta.track_count = currentMeta.track_count;
+        // 音频管理器可在设置页外重命名资源，路径字段不属于需保留的文本输入。
+        m_editingMeta.song_file_hint  = currentMeta.song_file_hint;
+        m_editingMeta.main_audio_path = currentMeta.main_audio_path;
         m_editingMeta.main_cover_path = currentMeta.main_cover_path;
         m_editingMeta.cover_path      = currentMeta.cover_path;
         m_editingMeta.cover_type      = currentMeta.cover_type;
@@ -853,7 +858,7 @@ void SettingsView::drawBeatmapSettings()
         // 采用统一标签宽度，使音频、封面与背景组合框对齐。
         // 每行右侧导入按钮把外部资源复制到当前工程并绑定此谱面。
         // 下拉框仍只列工程内候选，失效引用可以通过导入按钮修复。
-        // 背景行仅导入图片，导入成功后同步切换背景媒体类型。
+        // 背景导入遵循当前图片/视频类型，重命名不改变媒体类型。
 
         if ( isImd ) {
             // IMD 资源字段在此页不可安全回写，整组保留只读展示。
@@ -861,47 +866,116 @@ void SettingsView::drawBeatmapSettings()
             ImGui::BeginDisabled();
         }
 
-        // 导入按钮与组合框并排；宽度取两种文案的较大值，三行值列保持对齐。
+        // 导入与重命名采用等宽方形图标，三行值列保持对齐。
         // 这里只记录请求和当时的项目/谱面身份；文件选择器在会话锁外打开。
-        // 宽度随当前语言与字体变化，SettingsView 的最小宽度测量同步覆盖。
+        // 宽度随当前字体框高变化，SettingsView 的最小宽度测量同步覆盖。
         // 长路径只裁剪组合框预览，不能挤掉固定宽的可点击导入按钮。
         const char* audioImportLabel =
             TR_CACHE("ui.settings.beatmap.import_audio").data();
         const char* imageImportLabel =
             TR_CACHE("ui.settings.beatmap.import_image").data();
-        const float importButtonWidth =
-            std::max(ImGui::CalcTextSize(audioImportLabel).x,
-                     ImGui::CalcTextSize(imageImportLabel).x) +
-            ImGui::GetStyle().FramePadding.x * 2.0F;
-        /// @brief 为资源行的下拉框预留右侧导入按钮宽度。
+        const float importButtonWidth = ImGui::GetFrameHeight();
+        // 框高已经包含主题垂直内边距，不叠加额外的固定像素尺寸。
+        // 导入沿用加号字形，重命名沿用铅笔字形，避免新增字体依赖。
+        // 可见标签只保留字形，完整动作名称由 Tooltip 提供。
+        /// @brief 为资源行的下拉框预留右侧两个图标按钮宽度。
         /// @note 极窄窗口仍保留正宽度，避免负值传给 ImGui 布局。
         // Clay 在本分组作用域结束后才执行回调，宽度必须按值进入回调。
         const auto resourceComboWidth =
             [importButtonWidth](Clay_BoundingBox bounds) {
                 return std::max(1.0F,
-                                bounds.width - importButtonWidth -
-                                    ImGui::GetStyle().ItemSpacing.x);
+                                bounds.width - importButtonWidth * 2.0F -
+                                    ImGui::GetStyle().ItemSpacing.x * 2.0F);
             };
         /// @brief 记录资源导入请求，实际选择与复制交给锁外的低频路径。
         /// @note 目标枚举区分同名的封面与背景“导入图片”按钮。
         // 只借用受本函数 session 锁保护的谱面；其余分组局部状态按值捕获。
         const auto drawResourceImportButton =
-            [this, project, beatmapPtr = &beatmap, importButtonWidth](
-                const char* label, BeatmapResourceTarget target) {
+            [this, project, beatmapPtr = &beatmap, importButtonWidth, &meta](
+                const char*                  label,
+                BeatmapResourceTarget        target,
+                const std::filesystem::path& resourcePath) {
                 ImGui::SameLine();
                 ImGui::PushID(static_cast<int>(target));
-                ImGui::BeginDisabled(!project);
+                // 三行共享相同的按钮几何，资源路径再长也不能改变动作列宽度。
+                // 相同的隐藏按钮名在资源位置作用域内唯一，封面和背景不会串触发。
+                const bool readOnly = project && project->m_isTemporaryProject;
+                ImGui::BeginDisabled(!project || readOnly);
+                /// @brief 隔离文字按钮内边距，在固定方形中居中绘制资源图标。
+                /// @return 当前按钮有效点击时返回 true。
+                /// @warning 每帧绘制路径：仅临时压入样式，不加载字体或资源。
+                const auto drawIconButton =
+                    [importButtonWidth](const char* icon) {
+                        // 主题横向内边距可大于半个按钮，不能用于固定宽度图标按钮。
+                        // 绘制后立即恢复样式，提示框和后续组合框不继承局部覆盖。
+                        Utils::pushFixedButtonStyleVars();
+                        const bool clicked = FeedbackButton(
+                            icon, ImVec2(importButtonWidth, importButtonWidth));
+                        Utils::popFixedButtonStyleVars();
+                        return clicked;
+                    };
                 // 无工程时资源缺少持久归属，按钮保留占位但不能触发。
-                if ( ::MMM::UI::FeedbackButton(
-                         label, ImVec2(importButtonWidth, 0.0F)) ) {
+                if ( drawIconButton(
+                         (std::string(ICON_MMM_PLUS) + "##ImportResource")
+                             .c_str()) ) {
                     m_beatmapResourceTarget     = target;
                     m_openBeatmapResourcePicker = true;
+                    // 保存点击时的媒体类型，跨帧选择器不能随草稿变动串绑。
+                    m_importBackgroundVideo =
+                        target == BeatmapResourceTarget::Background &&
+                        meta.cover_type == CoverType::VIDEO;
                     m_resourceImportProjectRoot = project->m_projectRoot;
                     m_resourceImportBeatmapPath =
                         beatmapPtr->m_baseMapMetadata.map_path;
+                    // 请求仅保存值，不把 project 或 beatmap
+                    // 观察指针带到弹窗下一帧。
                     // 对话框可能跨帧返回，结果必须与这两项身份重新比较。
                     m_beatmapResourceImportError.clear();
                 }
+                // 统一提示入口显式采用美学配置，不继承设置窗口放大的内边距。
+                // 禁用状态仍提供动作说明，图标本身不承担全部语义。
+                Utils::renderTooltip(label, Utils::TooltipDir::Left, true);
+                ImGui::SameLine();
+                // 没有绑定资源时只能导入，重命名按钮仍保留对齐占位。
+                ImGui::BeginDisabled(resourcePath.empty());
+                if ( drawIconButton(
+                         (std::string(ICON_MMM_PEN) + "##RenameResource")
+                             .c_str()) ) {
+                    const auto filename =
+                        Config::pathToUtf8(resourcePath.filename());
+                    // 只编辑最后一个路径分量，子目录位置保持不变。
+                    // 实际源路径单独保存，不能由输入框的显示名称反推文件身份。
+                    // 不截断 UTF-8 文件名，避免提交一个用户未确认的残缺名称。
+                    if ( filename.size() >= m_resourceRenameBuffer.size() ) {
+                        m_beatmapResourceImportError =
+                            TR("ui.settings.beatmap.rename_name_too_long")
+                                .toString();
+                    } else {
+                        m_renameResourceTarget = target;
+                        m_resourceRenamePath   = resourcePath;
+                        // 旧路径只用于确认时的身份复核，不在本帧移动文件。
+                        m_resourceRenameProjectRoot = project->m_projectRoot;
+                        m_resourceRenameBeatmapPath =
+                            beatmapPtr->m_baseMapMetadata.map_path;
+                        m_resourceRenameBuffer.fill('\0');
+                        // 文件扩展名保留在初始输入内，用户可看见格式不变的约束。
+                        // 完整清零后复制原名，短文件名不会带入上一次输入的尾部字节。
+                        std::memcpy(m_resourceRenameBuffer.data(),
+                                    filename.data(),
+                                    filename.size());
+                        m_openResourceRenamePopup = true;
+                        // 焦点与打开请求分别消费，输入期间不再反复全选。
+                        m_focusResourceRenameInput = true;
+                        m_beatmapResourceImportError.clear();
+                    }
+                }
+                // 向左展开避免提示框覆盖窗口右侧操作区，禁用按钮仍能说明用途。
+                Utils::renderTooltip(
+                    TR("ui.settings.beatmap.rename_resource").data(),
+                    Utils::TooltipDir::Left,
+                    true);
+                ImGui::EndDisabled();
+                // 空绑定禁用区和项目只读禁用区各自配对，不能提前退出回调。
                 ImGui::EndDisabled();
                 ImGui::PopID();
             };
@@ -972,8 +1046,8 @@ void SettingsView::drawBeatmapSettings()
                 }
                 // 未打开组合框时，补回预览阶段压入的警告颜色。
                 if ( audioPushed ) ImGui::PopStyleColor();
-                drawResourceImportButton(audioImportLabel,
-                                         BeatmapResourceTarget::Audio);
+                drawResourceImportButton(
+                    audioImportLabel, BeatmapResourceTarget::Audio, audioHint);
                 // 主音频的工程登记和谱面绑定由统一导入结果完成。
             });
 
@@ -1039,7 +1113,8 @@ void SettingsView::drawBeatmapSettings()
                 // 保持 PushStyleColor 与所有控制流路径严格配对。
                 if ( coverPushed ) ImGui::PopStyleColor();
                 drawResourceImportButton(imageImportLabel,
-                                         BeatmapResourceTarget::Cover);
+                                         BeatmapResourceTarget::Cover,
+                                         meta.cover_path);
                 // 封面导入不隐式覆盖背景字段。
             });
 
@@ -1138,8 +1213,14 @@ void SettingsView::drawBeatmapSettings()
                 }
                 // 未打开弹窗时恢复预览阶段可能压入的警告颜色。
                 if ( bgPushed ) ImGui::PopStyleColor();
-                drawResourceImportButton(imageImportLabel,
-                                         BeatmapResourceTarget::Background);
+                drawResourceImportButton(
+                    TR(meta.cover_type == CoverType::VIDEO
+                           ? "ui.settings.beatmap.import_video"
+                           : "ui.settings.beatmap.import_image")
+                        .data(),
+                    BeatmapResourceTarget::Background,
+                    meta.main_cover_path);
+                // 同一背景行的导入提示与过滤器共享当前类型，不影响封面行。
                 // 背景导入保留用户已有的显式封面选择。
             });
 

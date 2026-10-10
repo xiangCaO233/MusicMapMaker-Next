@@ -39,14 +39,29 @@ Windows 与 Linux 正式产物是单可执行文件：下载后可放在任意�
 
 | 产物目录 | 编译器与 ABI | 优化程度与用途 | 建议 |
 | --- | --- | --- | --- |
-| `windows-msvc-clang` | LLVM clang-cl 22，MSVC 14.51 / Windows SDK 10.0.26100 ABI | `RelWithDebInfo`，PGO 关闭；兼容 MSVC 生态，官网 Windows 默认产物 | 大多数 Windows 用户首选 |
+| `windows-msvc-clang` | LLVM clang-cl 22，MSVC 14.51 / Windows SDK 10.0.26100 ABI | `RelWithDebInfo`，默认 PGO 插桩采集，需要匹配的 Windows compiler-rt profile 库；官网 Windows 默认产物 | 大多数 Windows 用户首选 |
 | `windows-mingw-gcc` | MinGW-w64 UCRT，GCC 14 系列 | `RelWithDebInfo`，PGO 关闭；GNU 工具链替代版 | 需要 GCC/UCRT 兼容性时选择 |
-| `windows-mingw-clang` | MinGW-w64 UCRT，LLVM/Clang 22，`clang64` 布局 | `RelWithDebInfo`，PGO 关闭；LLVM MinGW 替代版 | 需要 LLVM MinGW ABI 时选择 |
+| `windows-mingw-clang` | MinGW-w64 UCRT，LLVM/Clang 22，`clang64` 布局 | `RelWithDebInfo`，默认 PGO 插桩采集；LLVM MinGW 替代版 | 需要 LLVM MinGW ABI 时选择 |
 | `linux-gcc14` | GCC 14，GNU/Linux x86_64 | `RelWithDebInfo`，PGO 关闭；官网 Linux 默认产物 | 大多数 Linux 用户首选 |
 | `linux-clang19` | Clang 19，GNU/Linux x86_64 | `RelWithDebInfo`，当前开启 PGO **插桩采集**，并未使用 profile 做最终优化，运行会有采集开销 | 用于 LLVM 兼容性测试和 PGO 数据采集 |
-| `macos-arm64` | AppleClang，ARM64；当前预编译依赖标签为 `clang17` | `RelWithDebInfo`，PGO 关闭；DMG 与 `.app` ZIP | Apple Silicon Mac 用户 |
+| `macos-arm64` | AppleClang，ARM64；当前预编译依赖标签为 `clang17` | `RelWithDebInfo`，默认 PGO 插桩采集；DMG 与 `.app` ZIP | Apple Silicon Mac 用户 |
 
-本地 `scripts/ci/msvc-build.ps1` 使用当前 Visual Studio 环境中的原生 `cl.exe`，版本由本机决定；它消费 `msvc/2026` 预编译依赖、使用 `RelWithDebInfo` 并关闭 PGO，不等同于 CI 中在 Linux 上交叉编译的 `windows-msvc-clang` 产物。
+本地 `scripts/ci/msvc-build.ps1` 使用当前 Visual Studio 环境中的原生 `cl.exe`，版本由本机决定；它消费 `msvc/2026` 预编译依赖并使用 `RelWithDebInfo`。入口默认请求插桩，但原生 MSVC 与 GCC 不支持本项目的 LLVM `.profraw/.profdata` 工作流，CMake 会明确提示并关闭插桩；它不等同于 CI 中在 Linux 上交叉编译的 `windows-msvc-clang` 产物。
+
+#### PGO 性能分析数据（从 0.6.2 开始）
+
+从后续 **0.6.2** 版本起，支持 LLVM profile 的发布版本默认启用 PGO 插桩，收集真实编辑和播放过程的性能热点计数，用于后续版本的编译优化。插桩采集会产生额外开销，采样构建本身尚未使用这些 profile 做最终优化。自动上传仍遵循软件内的用户授权选项，默认未授权；构建开关不会替代用户授权。
+
+所有 Bash 主程序构建入口统一支持 `--pgo-instrument`（默认开启）和 `--no-pgo-instrument`；PowerShell 入口支持 `-PgoInstrument` 和 `-NoPgoInstrument`。CI 手动任务的 `pgo_instrument` 选项默认勾选，push 构建默认开启。GCC/原生 MSVC 产物目前不采集 LLVM profile，`--prebuilt-targets` 依赖生产流程始终关闭插桩，第三方依赖不参与采样。
+
+```bash
+# 默认采样构建
+bash scripts/ci/linux-build.sh --compiler clang19 --pgo-instrument
+# 无采样的对照构建（重新配置时也会覆盖旧缓存）
+bash scripts/ci/linux-build.sh --compiler clang19 --no-pgo-instrument
+```
+
+clang-cl 交叉构建需要与编译器版本、Windows x86_64 目标匹配的 compiler-rt profile `.lib`。缺少运行库时配置会报错；可通过 `--pgo-profile-runtime /absolute/path/to/clang_rt.profile-x86_64.lib` 或 `MMM_PGO_PROFILE_RUNTIME` 环境变量指定路径，或使用 `--no-pgo-instrument` 构建无采样版本。直接使用 CMake 时，对应开关为 `-DMMM_PGO_INSTRUMENT=ON/OFF` 和 `-DMMM_PGO_PROFILE_RUNTIME=/absolute/path/to/clang_rt.profile-x86_64.lib`；采集入口始终保持 `MMM_PGO_USE=OFF`。
 
 编译器与构建工具官方下载入口：
 
@@ -218,14 +233,22 @@ All builds provide the same application features. Their main differences are the
 
 | Artifact directory | Compiler and ABI | Optimization and purpose | Recommendation |
 | --- | --- | --- | --- |
-| `windows-msvc-clang` | LLVM clang-cl 22 with the MSVC 14.51 / Windows SDK 10.0.26100 ABI | `RelWithDebInfo`, PGO off; MSVC ecosystem compatibility and the website's default Windows build | First choice for most Windows users |
+| `windows-msvc-clang` | LLVM clang-cl 22 with the MSVC 14.51 / Windows SDK 10.0.26100 ABI | `RelWithDebInfo`, PGO instrumentation on by default; requires a matching Windows compiler-rt profile library; the website's default Windows build | First choice for most Windows users |
 | `windows-mingw-gcc` | MinGW-w64 UCRT, GCC 14 series | `RelWithDebInfo`, PGO off; GNU toolchain alternative | Choose when GCC/UCRT compatibility is required |
-| `windows-mingw-clang` | MinGW-w64 UCRT, LLVM/Clang 22, `clang64` layout | `RelWithDebInfo`, PGO off; LLVM MinGW alternative | Choose when the LLVM MinGW ABI is required |
+| `windows-mingw-clang` | MinGW-w64 UCRT, LLVM/Clang 22, `clang64` layout | `RelWithDebInfo`, PGO instrumentation on by default; LLVM MinGW alternative | Choose when the LLVM MinGW ABI is required |
 | `linux-gcc14` | GCC 14, GNU/Linux x86_64 | `RelWithDebInfo`, PGO off; the website's default Linux build | First choice for most Linux users |
 | `linux-clang19` | Clang 19, GNU/Linux x86_64 | `RelWithDebInfo` with PGO **instrumentation for collection** currently enabled; it does not consume a profile for final optimization and therefore has collection overhead | LLVM compatibility testing and PGO data collection |
-| `macos-arm64` | AppleClang, ARM64; current prebuilt dependency tag `clang17` | `RelWithDebInfo`, PGO off; DMG and `.app` ZIP | Apple Silicon Macs |
+| `macos-arm64` | AppleClang, ARM64; current prebuilt dependency tag `clang17` | `RelWithDebInfo`, PGO instrumentation on by default; DMG and `.app` ZIP | Apple Silicon Macs |
 
-The local `scripts/ci/msvc-build.ps1` script uses the native `cl.exe` from the active Visual Studio environment, so its compiler version is determined by the machine. It consumes the `msvc/2026` prebuilts, uses `RelWithDebInfo`, and disables PGO. It is different from the `windows-msvc-clang` CI artifact cross-compiled with clang-cl on Linux.
+The local `scripts/ci/msvc-build.ps1` script uses the native `cl.exe` from the active Visual Studio environment, so its compiler version is determined by the machine. It consumes the `msvc/2026` prebuilts and uses `RelWithDebInfo`. Build entries request instrumentation by default, but native MSVC and GCC do not support this project's LLVM `.profraw/.profdata` workflow; CMake reports this and disables instrumentation. This differs from the `windows-msvc-clang` CI artifact cross-compiled with clang-cl on Linux.
+
+#### PGO performance data starting with 0.6.2
+
+Starting with the upcoming **0.6.2** release, LLVM-compatible builds enable PGO instrumentation by default to collect execution counters during editing and playback for future compiler optimization. Instrumentation has collection overhead and does not itself apply collected profiles for optimization. Automatic uploads still require the existing in-app user consent, which is off by default.
+
+All Bash application build scripts accept `--pgo-instrument` (default) and `--no-pgo-instrument`; the PowerShell entry accepts `-PgoInstrument` and `-NoPgoInstrument`. The manual CI `pgo_instrument` input defaults to true; push builds enable it by default. GCC/native MSVC do not collect LLVM profiles. Dependency-only `--prebuilt-targets` builds always disable instrumentation; third-party dependencies remain uninstrumented.
+
+Cross clang-cl builds require a matching Windows x86_64 compiler-rt profile `.lib`. Pass `--pgo-profile-runtime /absolute/path/to/clang_rt.profile-x86_64.lib` or set the `MMM_PGO_PROFILE_RUNTIME` environment variable if automatic discovery fails. Pass `--no-pgo-instrument` for an uninstrumented build. Direct CMake equivalents are `-DMMM_PGO_INSTRUMENT=ON/OFF` and `-DMMM_PGO_PROFILE_RUNTIME=/absolute/path/to/clang_rt.profile-x86_64.lib`. Collection scripts keep `MMM_PGO_USE=OFF`.
 
 Official compiler and build-tool downloads:
 

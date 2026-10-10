@@ -339,7 +339,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
     case Event::SettingsTab::Shortcut: {
         // 快捷键页每个可录制动作都参与标签列宽度估算。
         // 快捷键字符串和操作按钮的宽度在 widget 测量函数中单独计算。
-        const std::array<const char*, 20> labels{
+        const std::array<const char*, 21> labels{
             TR_CACHE("ui.settings.shortcut.tool_move").data(),
             TR_CACHE("ui.settings.shortcut.tool_marquee").data(),
             TR_CACHE("ui.settings.shortcut.tool_draw").data(),
@@ -351,6 +351,8 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
             TR_CACHE("ui.settings.shortcut.add_selected_annotation").data(),
             TR_CACHE("ui.settings.shortcut.delete_selected").data(),
             TR_CACHE("ui.settings.shortcut.toggle_playback").data(),
+            TR_CACHE("ui.settings.shortcut.add_bpm_segment_at_view_center")
+                .data(),
             TR_CACHE("ui.settings.shortcut.toggle_reverse_scroll").data(),
             TR_CACHE("ui.settings.shortcut.toggle_scroll_snap").data(),
             TR_CACHE("ui.settings.shortcut.toggle_snap_floor").data(),
@@ -459,24 +461,17 @@ float measureSettingsTabWidgetWidth(Event::SettingsTab     tab,
     case Event::SettingsTab::Beatmap: {
         // 谱面页确保图片/视频封面类型选项完整显示。
         // 资源路径组合框可横向裁剪，但须给并排导入按钮留出固定宽度。
-        // 使用翻译后的最长按钮文案，语言切换会由布局缓存重新测量。
+        // 导入与重命名采用两个方形图标，宽度只随主题框高与间距变化。
         // 下拉箭头也占用一帧高的宽度，不能让按钮把它挤成零宽。
         // 额外逻辑像素留给路径预览，不随实际工程路径长度增长。
         addOptions(std::array<const char*, 2>{
             TR_CACHE("ui.settings.beatmap.cover_type.image").data(),
             TR_CACHE("ui.settings.beatmap.cover_type.video").data() });
-        const float importLabelWidth =
-            std::max(measureSettingsText(
-                         TR_CACHE("ui.settings.beatmap.import_audio").data(),
-                         font,
-                         snapshot.fontSize),
-                     measureSettingsText(
-                         TR_CACHE("ui.settings.beatmap.import_image").data(),
-                         font,
-                         snapshot.fontSize));
-        minWidth = std::max(minWidth,
-                            importLabelWidth + framePad + comboArrow +
-                                std::floor(110.0f * scale));
+        minWidth =
+            std::max(minWidth,
+                     snapshot.frameHeight * 2.0F +
+                         std::floor(snapshot.itemSpacing * scale) * 2.0F +
+                         comboArrow + std::floor(110.0f * scale));
         break;
     }
     case Event::SettingsTab::Editor: {
@@ -719,7 +714,7 @@ SettingsView::LayoutMetricsCache SettingsView::buildLayoutMetrics(
     const float categorySize    = std::floor(sidebarBaseW * scale);
     const float categorySpacing = std::floor(snapshot.itemSpacing * scale);
     const float categoryHeight  = std::floor(8.0f * scale) * 2.0f +
-                                  categorySize * 8.0f + categorySpacing * 7.0f;
+                                 categorySize * 8.0f + categorySpacing * 7.0f;
 
     // 标签列额外留出间隔，使文字与右侧控件不贴合。
     cache.tabLabelWidth =
@@ -972,6 +967,8 @@ void SettingsView::update(UIManager* sourceManager)
     // 内置选择器同样由本层跨帧驱动，避免与 Clay 行回调生命周期耦合。
     // 此时普通设置窗口作用域仍有效，可作为文件模态框的 ImGui 父上下文。
     renderBeatmapResourcePicker(dpiScale);
+    // 重命名同样不能在 Clay 行回调持锁期间执行磁盘事务。
+    renderBeatmapResourceRename(dpiScale);
     if ( !m_isOpen ) {
         // 关闭窗口立即结束快捷键录制，避免全局按键被隐藏页面截获。
         m_recordingShortcutTarget = ShortcutRecordTarget::None;
@@ -1135,9 +1132,9 @@ void SettingsView::drawContent()
                 // 标签在分隔线右侧留出固定缩放 padding，并垂直居中。
                 ImVec2 labelSize       = ImGui::CalcTextSize(label.c_str());
                 float  textLeftPadding = std::floor(8.0f * dpiScale);
-                ImVec2 labelPos = { sepX + textLeftPadding,
-                                    rect.y +
-                                        (rect.height - labelSize.y) * 0.5f };
+                ImVec2 labelPos        = { sepX + textLeftPadding,
+                                           rect.y +
+                                               (rect.height - labelSize.y) * 0.5f };
                 ImGui::GetWindowDrawList()->AddText(
                     menuFont,
                     ImGui::GetFontSize(),

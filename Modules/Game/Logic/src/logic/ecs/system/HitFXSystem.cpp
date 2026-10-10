@@ -142,7 +142,17 @@ bool HitFXSystem::isPolylineInternalFlick(const HitEvent& ev) noexcept
 bool HitFXSystem::shouldScheduleHitAudio(
     const HitEvent& ev, const Config::SfxConfig& config) noexcept
 {
-    // 首尾、独立滑键与非滑键总是继续进入原有音频控制链路。
+    if ( config.polylineSfxMode == Config::PolylineSfxMode::Gameplay &&
+         ev.isSubNote &&
+         (ev.role == HitEvent::Role::Internal ||
+          ev.role == HitEvent::Role::Tail) &&
+         ev.type != ::MMM::NoteType::FLICK ) {
+        // 体感模式不叠加后续面条节点键音；首节点仍按实际类型发声。
+        // 不将普通节点伪装为滑键，否则竖向连接也会多出不应存在的滑音。
+        // 显式绑定同样服从节点是否发声的策略，绑定优先级由资源选择保留。
+        return false;
+    }
+    // 策略允许的事件继续受内部滑键开关控制，独立滑键不受该开关影响。
     return config.enablePolylineInternalFlickSfx ||
            !isPolylineInternalFlick(ev);
 }
@@ -539,6 +549,13 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
     auto&           skinManager = Config::SkinManager::instance();
     float           baseFps     = skinManager.getEffectBaseFps();
     const auto      layoutMode  = skinManager.getHitEffectLayoutMode();
+    // 固定尺寸打击帧跟随 Note 对齐方式；整轨动画仍覆盖完整轨道区。
+    // 独立作用域确保后续音频采样、辅助图像不继承特效的位置状态。
+    const NoteTexturePositionScope position(
+        batcher,
+        layoutMode == Config::HitEffectLayoutMode::TrackFill
+            ? Config::NoteTexturePosition::Center
+            : config.visual.noteTexturePosition);
 
     for ( const auto& [track, active] : m_trackActiveEffects ) {
         (void)track;

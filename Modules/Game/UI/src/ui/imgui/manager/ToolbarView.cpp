@@ -8,6 +8,7 @@
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
+#include "config/visual/NoteTexturePosition.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
@@ -2225,6 +2226,14 @@ void ToolbarView::update(UIManager* sourceManager)
 ///
 /// 增益滑条区分即时试听和持久化：拖动时把值应用到运行时，控件失活后
 /// 才写配置。这样既能连续试听，也避免每个鼠标采样点触发磁盘保存。
+///
+/// 每个可操作项使用同尺寸圆角背景，标签和控件分列到上下两行。布局不依赖
+/// 翻译文本宽度，因此中英文标签都不会挤占百分比滑条。卡片尺寸同时作为
+/// 虚拟列表的逻辑槽高度，滚动裁剪与实际点击区域始终使用同一几何基准。
+///
+/// 折线音效模式位于打击音分组末尾：严格逻辑保留既有逐节点行为，游玩体感
+/// 由逻辑层筛选首节点之后的非滑键音效。此视图只保存枚举选择，不复制业务
+/// 判定，也不直接改变已经排队的音效事件。
 /// @warning UI 热路径：弹层打开时每帧执行，仅绘制滚动区可见控制行。
 void ToolbarView::renderSoundEffectTool(float dpiScale)
 {
@@ -2303,7 +2312,19 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     const float windowRounding =
         std::floor(aesthetics.windowRounding * dpiScale);
     const float frameRounding = std::floor(aesthetics.frameRounding * dpiScale);
-    const float rowHeight     = ImGui::GetFrameHeightWithSpacing();
+    // 控制项采用两行卡片：标签独占首行，按钮与百分比滑条位于次行。
+    // 这样窄弹层中的长翻译不会再挤压控件，行间距也保持一致。
+    // 卡片高度只由两个标准 Frame 和紧凑内边距组成，不随标签内容波动。
+    // 固定高度是下方虚拟滚动定位的前提，不能改为内容自适应高度。
+    // DPI 缩放后取整能避免相邻卡片边缘落在半像素造成模糊。
+    const float cardPadding = std::max(4.0F, std::floor(6.0F * dpiScale));
+    const float cardInnerSpacing =
+        std::max(1.0F, std::floor(ImGui::GetStyle().ItemSpacing.y * 0.25F));
+    const float cardHeight =
+        ImGui::GetFrameHeight() * 2.0F + cardInnerSpacing + cardPadding * 2.0F;
+    const float cardSpacing =
+        std::max(3.0F, std::floor(ImGui::GetStyle().ItemSpacing.y * 0.75F));
+    const float rowHeight = cardHeight + cardSpacing;
     // 布局 helper 保证三个区域至少拥有一个可见占位行。
     const auto trackLayout = calculateSoundEffectToolTrackLayout(
         playerTrackCount, draftTrackCount, bgmTrackCount);
@@ -2317,14 +2338,14 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     const int totalRows =
         Config::AppConfig::instance().getEditorSettings().professionalMode
             ? trackLayout.totalRows
-            : 8 + playerRows;
+            : 9 + playerRows;
 
     // 音效工具不跨视口，定位和高度上限都以主视口为边界。
     ImGuiViewport* mainViewport   = ImGui::GetMainViewport();
     const float    viewportTop    = mainViewport->Pos.y;
     const float    viewportBottom = mainViewport->Pos.y + mainViewport->Size.y;
     const float    edgePadding    = std::floor(8.0F * dpiScale);
-    const float    popupWidth     = std::floor(420.0F * dpiScale);
+    const float    popupWidth     = std::floor(460.0F * dpiScale);
     // 标题高度计入分隔后的标准项目间距。
     const float titleHeight =
         ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
@@ -2336,7 +2357,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
         std::max(std::floor(180.0F * dpiScale),
                  viewportBottom - viewportTop - edgePadding * 2.0F);
     const float maximumHeight =
-        std::min(availableHeight, std::floor(480.0F * dpiScale));
+        std::min(availableHeight, std::floor(540.0F * dpiScale));
     const float minimumHeight =
         std::min(maximumHeight, std::floor(180.0F * dpiScale));
     const float popupHeight =
@@ -2409,6 +2430,42 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                       ImGuiChildFlags_None,
                       ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
+    // 所有设置卡片共享宽度、圆角、内边距和低对比度背景。
+    // 背景沿用主题 FrameBg，只降低透明度，不引入额外强调色。
+    // 宽度在滚动子窗口内计算，天然扣除常驻纵向滚动条。
+    // 卡片不绘制边框，避免密集轨道列表产生过多水平视觉线。
+    const float cardWidth      = ImGui::GetContentRegionAvail().x;
+    ImVec4      cardBackground = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+    cardBackground.w *= 0.65F;
+
+    /// @brief 开始绘制当前 ID 栈中的圆角设置卡片。
+    ///
+    /// 调用者必须先压入能标识设置项或轨道的 ID，并与
+    /// endSettingCard 成对调用。AlwaysUseWindowPadding 保证无边框子窗口仍
+    /// 接受局部 WindowPadding；这是标签与背景边缘保持距离的必要条件。
+    /// 子窗口禁止独立滚动，所有滚轮输入都继续交给外层列表。
+    const auto beginSettingCard = [&]() {
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, cardBackground);
+        ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, frameRounding);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                            ImVec2(cardPadding, cardPadding));
+        ImGui::BeginChild(
+            "##SettingCard",
+            ImVec2(cardWidth, cardHeight),
+            ImGuiChildFlags_AlwaysUseWindowPadding,
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+    };
+
+    /// @brief 结束圆角设置卡片并恢复局部样式。
+    ///
+    /// EndChild 即使对应 BeginChild 被裁剪也必须调用；随后按压栈逆序恢复
+    /// 两个 StyleVar 和一个 StyleColor，避免污染同帧后续工具栏窗口。
+    const auto endSettingCard = [&]() {
+        ImGui::EndChild();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
+    };
+
     /// @brief 根据静音态和增益选择图标，并绘制统一大小的状态按钮。
     ///
     /// applyChange 接收目标静音态，调用者决定写入全局音频状态、配置开关
@@ -2459,14 +2516,18 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                                      bool        muted,
                                      const auto& applyMute) {
         ImGui::PushID(id);
+        beginSettingCard();
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(label);
-        ImGui::SameLine();
-        // 若标签已经超过目标列则保持当前位置，避免游标向左回退并重叠。
-        ImGui::SetCursorPosX(
-            std::max(ImGui::GetCursorPosX(),
-                     ImGui::GetWindowContentRegionMax().x - muteButtonSize));
+        // 直接定位第二行而不插入 Dummy，避免 ImGui 自动 ItemSpacing
+        // 叠加后让卡片实际内容高度超过虚拟化声明高度。
+        ImGui::SetCursorPosY(cardPadding + ImGui::GetFrameHeight() +
+                             cardInnerSpacing);
+        // 次行按钮统一右对齐，标签长度不再改变控制列位置。
+        ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x -
+                             muteButtonSize);
         drawMuteStateButton(muted, 1.0F, applyMute);
+        endSettingCard();
         ImGui::PopID();
     };
 
@@ -2484,15 +2545,17 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                                 const auto& applyGain,
                                 const auto& persistGain) {
         ImGui::PushID(id);
+        beginSettingCard();
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(label);
-        ImGui::SameLine();
-        // 控件组作为整体右对齐，标签长度不会改变滑条列位置。
+        // 两行基线由同一公式确定，混音项与仅静音项纵向对齐。
+        ImGui::SetCursorPosY(cardPadding + ImGui::GetFrameHeight() +
+                             cardInnerSpacing);
+        // 控件组在卡片次行整体右对齐，百分比与标签之间留出稳定呼吸感。
         const float controlWidth =
             muteButtonSize + controlSpacing + gainSliderWidth;
-        ImGui::SetCursorPosX(
-            std::max(ImGui::GetCursorPosX(),
-                     ImGui::GetWindowContentRegionMax().x - controlWidth));
+        ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x -
+                             controlWidth);
         drawMuteStateButton(muted, gain, applyMute);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(gainSliderWidth);
@@ -2511,12 +2574,69 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
         if ( ImGui::IsItemHovered() ) {
             Utils::renderTooltip(TR("ui.key_sound_tool.gain").data());
         }
+        endSettingCard();
+        ImGui::PopID();
+    };
+
+    /// @brief 绘制折线音效模式的双选卡片。
+    ///
+    /// 两个选项平分次行宽度，选中态由统一反馈按钮呈现；点击边沿才持久化，
+    /// 不在每帧重复写配置。
+    /// 严格逻辑保留历史行为；游玩体感只改变折线后续节点的键音筛选，
+    /// 不在 UI 层替换资源或修改谱面物件类型。
+    const auto drawPolylineSfxModeRow = [&]() {
+        ImGui::PushID("PolylineSfxMode");
+        beginSettingCard();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted(
+            TR("ui.key_sound_tool.polyline_sfx_mode").data());
+        ImGui::SetCursorPosY(cardPadding + ImGui::GetFrameHeight() +
+                             cardInnerSpacing);
+
+        // 使用本帧配置快照绘制选中态；提交后由配置修订在下一帧刷新缓存。
+        const auto currentMode =
+            editorConfig.settings.sfxConfig.polylineSfxMode;
+        const float selectorSpacing = ImGui::GetStyle().ItemSpacing.x;
+        const float selectorWidth =
+            (ImGui::GetContentRegionAvail().x - selectorSpacing) * 0.5F;
+        // 已选按钮仍保留悬浮反馈，但不会重复触发配置写入。
+        if ( ::MMM::UI::FeedbackSelectableButton(
+                 TR("ui.key_sound_tool.polyline_sfx_strict").data(),
+                 currentMode == Config::PolylineSfxMode::Strict,
+                 ImVec2(selectorWidth, 0.0F)) &&
+             currentMode != Config::PolylineSfxMode::Strict ) {
+            auto config = currentEditorConfig();
+            config.settings.sfxConfig.polylineSfxMode =
+                Config::PolylineSfxMode::Strict;
+            updateEditorConfig(config);
+        }
+        if ( ImGui::IsItemHovered() ) {
+            Utils::renderTooltip(
+                TR("ui.key_sound_tool.polyline_sfx_strict_help").data());
+        }
+        // 第二个选项紧邻首项，按钮间仅保留主题标准水平间距。
+        ImGui::SameLine();
+        if ( ::MMM::UI::FeedbackSelectableButton(
+                 TR("ui.key_sound_tool.polyline_sfx_gameplay").data(),
+                 currentMode == Config::PolylineSfxMode::Gameplay,
+                 ImVec2(selectorWidth, 0.0F)) &&
+             currentMode != Config::PolylineSfxMode::Gameplay ) {
+            auto config = currentEditorConfig();
+            config.settings.sfxConfig.polylineSfxMode =
+                Config::PolylineSfxMode::Gameplay;
+            updateEditorConfig(config);
+        }
+        if ( ImGui::IsItemHovered() ) {
+            Utils::renderTooltip(
+                TR("ui.key_sound_tool.polyline_sfx_gameplay_help").data());
+        }
+        endSettingCard();
         ImGui::PopID();
     };
 
     // 行索引由前方区域长度递推，保持虚拟化循环中的分支互斥。
-    // 固定的四行击打音控制后依次排列玩家、草稿和 BGM 区域。
-    // 击打音区域固定占四行：标题、全部总线、未绑定组和绑定组。
+    // 固定的五行击打音控制后依次排列玩家、草稿和 BGM 区域。
+    // 击打音区域包含标题、三个混音项和折线音效模式选择器。
     // 全部总线属于 AudioManager 全局运行时，两个分类组属于 EditorConfig。
     // 分类滑条允许提升到 200%，以补偿单个采样响度；总线限制为 100%，避免
     // 在分类补偿基础上再次无界放大。分类开关使用 enable 字段，静音 UI 语义
@@ -2525,16 +2645,17 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     const int allHitSoundRow     = 1;
     const int unboundHitSoundRow = 2;
     const int boundHitSoundRow   = 3;
+    const int polylineSfxModeRow = 4;
     // 节拍器有独立标题和混音行，不属于打击音或逐轨键声分组。
-    const int metronomeHeaderRow = 4;
-    const int editorMetronomeRow = 5;
-    // 玩家区域从第七行开始：标题、区域总开关，然后是每个玩家轨道。
+    const int metronomeHeaderRow = 5;
+    const int editorMetronomeRow = 6;
+    // 玩家区域从第八行开始：标题、区域总开关，然后是每个玩家轨道。
     // 该总开关沿用 enableHitSfx 持久配置，逐轨静音和增益则是运行时命令。
     // 即使没有谱面，布局 helper 也保留一条占位轨道行，向用户解释不可用原因，
     // 后方草稿和 BGM 区域的索引仍保持连续且可预测。
-    const int playerHeaderRow  = 6;
-    const int playerMasterRow  = 7;
-    const int playerTrackBegin = 8;
+    const int playerHeaderRow  = 7;
+    const int playerMasterRow  = 8;
+    const int playerTrackBegin = 9;
     // 草稿区域轨道数来自 SessionContext，而不是谱面持久元数据。草稿轨道可能
     // 随临时编辑状态变化，因此每帧在短锁内重新读取并重建逻辑行数。区域总控
     // 和逐轨值都是 EditorEngine 命令，不写入常规击打音 enable 配置。
@@ -2548,6 +2669,8 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     const int bgmMasterRow  = bgmHeaderRow + 1;
     const int bgmTrackBegin = bgmMasterRow + 1;
     // contentStart 是逻辑行零点，所有虚拟行都用绝对子窗口游标定位。
+    // rowHeight 精确等于卡片高度与卡片间距之和，防止滚动后点击区域漂移。
+    // 区域标题也占用同一逻辑槽，换组时仍维持可预测的滚动步长。
     const ImVec2 contentStart = ImGui::GetCursorPos();
     const float  scrollY      = ImGui::GetScrollY();
     // 可见高度扣除子窗口内边距，至少保留一个像素防止退化除法语义。
@@ -2574,6 +2697,9 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
         // 以下分支按递增边界覆盖每个逻辑行且每次 continue，避免一行绘制多控件。
         if ( row == hitSoundHeaderRow ) {
             // 分隔标题占用标准行高，便于后续索引直接相加。
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() +
+                                 (cardHeight - ImGui::GetTextLineHeight()) *
+                                     0.5F);
             ImGui::SeparatorText(TR("ui.key_sound_tool.hit_sound_area").data());
             continue;
         }
@@ -2653,9 +2779,17 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
                 });
             continue;
         }
+        if ( row == polylineSfxModeRow ) {
+            // 模式选择位于打击音分组末尾，保持与三项混音设置相同的卡片层级。
+            drawPolylineSfxModeRow();
+            continue;
+        }
         // 节拍器标题占独立逻辑行，滚动虚拟化不会把它并入打击音区域。
         // 固定行高也保证窄窗口下能滚动到后续轨道分组。
         if ( row == metronomeHeaderRow ) {
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() +
+                                 (cardHeight - ImGui::GetTextLineHeight()) *
+                                     0.5F);
             ImGui::SeparatorText(TR("ui.key_sound_tool.metronome_area").data());
             continue;
         }
@@ -2705,6 +2839,9 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
         }
         if ( row == playerHeaderRow ) {
             // 玩家区域始终出现，即使当前没有活动谱面。
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() +
+                                 (cardHeight - ImGui::GetTextLineHeight()) *
+                                     0.5F);
             ImGui::SeparatorText(TR("ui.key_sound_tool.player_area").data());
             continue;
         }
@@ -2774,6 +2911,9 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
         }
         if ( row == draftHeaderRow ) {
             // 草稿区域与玩家区域使用独立音频总线。
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() +
+                                 (cardHeight - ImGui::GetTextLineHeight()) *
+                                     0.5F);
             ImGui::SeparatorText(TR("ui.key_sound_tool.draft_area").data());
             continue;
         }
@@ -2843,6 +2983,9 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
         }
         if ( row == bgmHeaderRow ) {
             // BGM 音效轨道是最后一个区域，标题后仍有总控行。
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() +
+                                 (cardHeight - ImGui::GetTextLineHeight()) *
+                                     0.5F);
             ImGui::SeparatorText(TR("ui.key_sound_tool.bgm_area").data());
             continue;
         }
@@ -5443,6 +5586,33 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                     appConfig.save();
                     m_layoutVisualConfigDirty = false;
                 }
+            }
+
+            // 固定位置只提供中心与底边，不让用户输入任意偏移或编辑皮肤文件。
+            // 离散布局切换立即应用并保存，主画布、预览和拾取共用同一配置。
+            visual           = appConfig.getVisualConfig();
+            int notePosition = static_cast<int>(visual.noteTexturePosition);
+            const char* positions[] = {
+                TR("ui.settings.visual.note_texture_position.center").data(),
+                TR("ui.settings.visual.note_texture_position.bottom").data(),
+            };
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.note_texture_position").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            if ( ::MMM::UI::FeedbackCombo("##LayoutNoteTexturePosition",
+                                          &notePosition,
+                                          positions,
+                                          IM_ARRAYSIZE(positions)) ) {
+                visual.noteTexturePosition =
+                    static_cast<Config::NoteTexturePosition>(notePosition);
+                applyVisualConfig(visual);
+                appConfig.save();
+                m_layoutVisualConfigDirty = false;
+            }
+            if ( ImGui::IsItemHovered() ) {
+                drawTooltip(
+                    TR("ui.settings.visual.note_texture_position.tooltip")
+                        .data());
             }
 
             // 填充模式通过整数适配 ImGui Combo，再显式转换回强类型枚举。

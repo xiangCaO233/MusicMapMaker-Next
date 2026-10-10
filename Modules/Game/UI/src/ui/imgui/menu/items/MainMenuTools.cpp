@@ -1,8 +1,13 @@
 #include "ui/imgui/menu/items/MainMenuTools.h"
+#include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "ui/Icons.h"
+#include "ui/UIManager.h"
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuToolsActions.h"
+#include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
+#include "ui/imgui/menu/actions/tools/BpmShortcutFocus.h"
 #include "ui/imgui/menu/items/MainMenuActionItem.h"
 #include <memory>
 #include <utility>
@@ -28,23 +33,23 @@ MainMenuTools::MainMenuTools()
         MainMenuItemTextKind::TranslationKey,
         nullptr,
         createToggleOverlapCheckWindowAction()));
-    // 重叠检查窗口负责呈现诊断结果，菜单只提供切换入口。
+    // 元数据属于文字编辑，用笔形区分参数设置类的齿轮入口。
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_COG,
+        ICON_MMM_PEN,
         "ui.tools.metadata_editor",
         MainMenuItemTextKind::TranslationKey,
         nullptr,
         createToggleMetadataEditorWindowAction()));
     // 数据源替换和节拍对齐属于批量编辑辅助工具。
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_BARS,
+        ICON_MMM_EXCHANGE,
         "ui.tools.data_source_replace",
         MainMenuItemTextKind::TranslationKey,
         nullptr,
         createOpenDataSourceReplaceWindowAction()));
-    // 数据源替换具有独立延迟窗口，不在菜单展开作用域内渲染。
+    // 对齐操作使用吸附磁铁，与数据源交换和时间模板保持视觉区别。
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_BARS,
+        ICON_MMM_MAGNET,
         "ui.tools.format",
         MainMenuItemTextKind::TranslationKey,
         "Ctrl+F",
@@ -53,28 +58,28 @@ MainMenuTools::MainMenuTools()
     // 菜单只发出打开请求，避免展开工具菜单时读取个人库。
     // 关闭时间线主窗口不会隐藏这个独立模板工具。
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_BARS,
+        ICON_MMM_CLOCK,
         "ui.tools.timing_template",
         MainMenuItemTextKind::TranslationKey,
         nullptr,
         createOpenTimingTemplateAction()));
     // 倍速导出作为文件生成工具，保留独立动作处理器。
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_MUSIC,
+        ICON_MMM_SPEEDOMETER,
         "ui.tools.speed_export",
         MainMenuItemTextKind::TranslationKey,
         nullptr,
         createOpenBeatmapSpeedExportAction()));
     // 插件列表和重载入口相邻，形成插件管理区域。
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_BARS,
+        ICON_MMM_PUZZLE,
         "ui.tools.plugin_list",
         MainMenuItemTextKind::TranslationKey,
         nullptr,
         createOpenPluginListAction()));
     // 插件列表用于查看状态，重载动作负责显式刷新实例。
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_COG,
+        ICON_MMM_REFRESH,
         "ui.tools.reload_plugins",
         MainMenuItemTextKind::TranslationKey,
         nullptr,
@@ -129,9 +134,29 @@ void MainMenuTools::render(MainMenuContext& context)
 /// @return 有菜单项消费快捷键时返回 true。
 /// @warning UI 热路径：每帧执行；仅转发给菜单项。
 /// @note 首个命中项停止遍历，防止配置冲突导致重复执行。
+/// @note BPM 工具添加段落绑定由设置页录制，仅视图聚焦时生效。
+/// 工具动作先于菜单工具项遍历，以免已有工具项抢占相同绑定。
 bool MainMenuTools::handleShortcut(MainMenuContext& context)
 {
+    // 视图专属绑定只有工具窗口聚焦时才占用，普通编辑器不受影响。
+    // 配置引用仅在本帧使用，避免复制整份编辑设置。
+    const auto& binding = Config::AppConfig::instance()
+                              .getEditorSettings()
+                              .shortcutConfig.addBpmSegmentAtViewCenter;
+    if ( ShortcutUtils::isShortcutPressed(binding) &&
+         isBpmMeasurementToolFocused(ImGui::GetCurrentContext()) ) {
+        // 无实例时也消费工具专属组合键，不向背后的谱面发送编辑命令。
+        // 文本输入和弹窗已由主菜单入口过滤，不会在输入框内添加段落。
+        auto* tool =
+            context.sourceManager
+                ? context.sourceManager->getView<BpmMeasurementToolView>(
+                      "BpmMeasurementTool")
+                : nullptr;
+        if ( tool ) tool->addSegmentAtViewCenterFromShortcut();
+        return true;
+    }
     // 注册顺序定义工具快捷键冲突时的稳定优先级。
+    // 无工具专属命中时维持原有工具菜单路由顺序。
     for ( auto& item : m_items ) {
         if ( item && item->handleShortcut(context) ) return true;
     }

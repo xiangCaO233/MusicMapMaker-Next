@@ -55,9 +55,9 @@ MainMenuEdit::MainMenuEdit()
         MainMenuItemTextKind::TranslationKey,
         "Ctrl+V",
         createPasteAction()));
-    // 镜像粘贴使用可配置快捷键，因此不提供静态提示文本。
+    // 镜像粘贴依靠文字区分复合动作，不重复原地镜像的箭头图标。
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_MIRROR,
+        nullptr,
         "ui.edit.mirror_paste",
         MainMenuItemTextKind::TranslationKey,
         nullptr,
@@ -71,23 +71,24 @@ MainMenuEdit::MainMenuEdit()
         createMirrorAction()));
     // 分隔剪贴板操作与选择范围、属性编辑操作。
     registerItem(std::make_unique<MainMenuSeparatorItem>());
+    // 全选范围由文字和快捷键表达，避免相同选择图标掩盖作用域差异。
     // Ctrl+A 只选择鼠标所在轨道区域内的对象。
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_SELECT_ALL,
+        nullptr,
         "ui.edit.select_all",
         MainMenuItemTextKind::TranslationKey,
         "Ctrl+A",
         createSelectAllAction()));
     // Ctrl+Shift+A 显式扩大到所有轨道区域。
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_SELECT_ALL,
+        nullptr,
         "ui.edit.select_all_objects",
         MainMenuItemTextKind::TranslationKey,
         "Ctrl+Shift+A",
         createSelectAllObjectsAction()));
     // 元数据动作打开当前选中音符的结构化属性编辑入口。
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_COG,
+        ICON_MMM_PEN,
         "ui.edit.note_metadata",
         MainMenuItemTextKind::TranslationKey,
         nullptr,
@@ -116,14 +117,14 @@ MainMenuEdit::MainMenuEdit()
         ICON_MMM_SLIDERS));
     // Timing 表由 Timeline 画布能力接口打开，菜单不依赖具体视图类型。
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_BARS,
+        ICON_MMM_CLOCK,
         "ui.timeline.menu.open_timing_table",
         MainMenuItemTextKind::TranslationKey,
         nullptr,
         createOpenTimingPointsTableAction()));
-    // 批注表通过辅助窗口能力接口激活，保持菜单层解耦。
+    // 批注表使用列表图标，与新增单条批注的气泡图标区分。
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_COMMENT,
+        ICON_MMM_BARS,
         "ui.annotation.menu.open_table",
         MainMenuItemTextKind::TranslationKey,
         nullptr,
@@ -155,7 +156,7 @@ MainMenuEdit::MainMenuEdit()
     registerItem(std::make_unique<MainMenuSeparatorItem>());
     // 设置入口打开当前活动谱面的配置窗口，不直接修改字段。
     registerItem(std::make_unique<MainMenuActionItem>(
-        ICON_MMM_FILE,
+        ICON_MMM_COG,
         "ui.edit.beatmap_settings",
         MainMenuItemTextKind::TranslationKey,
         nullptr,

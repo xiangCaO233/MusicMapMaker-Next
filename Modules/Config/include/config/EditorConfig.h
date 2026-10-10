@@ -23,8 +23,8 @@ struct EditorConfig {
 
     /// @brief 将物件渲染选项恢复为应用默认配置。
     /// @details
-    /// 恢复横纵缩放、非 Hold 打击特效时长、绑定音效标签、长条填充模式和
-    /// 打开项目时的默认调色方案。
+    /// 恢复横纵缩放、非 Hold 打击特效时长、绑定音效标签、长条填充模式、Note
+    /// 贴图位置和 打开项目时的默认调色方案。
     void resetNoteRenderingToDefaults()
     {
         // 临时默认对象集中提供字段初值，避免在重置路径重复维护常量。
@@ -35,6 +35,8 @@ struct EditorConfig {
             defaults.visual.nonHoldHitEffectDuration;
         visual.showBoundSampleLabels = defaults.visual.showBoundSampleLabels;
         visual.noteFillMode          = defaults.visual.noteFillMode;
+        // 固定位置与缩放归属同一复位分组，不能保留上次底边设置。
+        visual.noteTexturePosition = defaults.visual.noteTexturePosition;
         settings.defaultColorPaletteSchemeName =
             defaults.settings.defaultColorPaletteSchemeName;
     }

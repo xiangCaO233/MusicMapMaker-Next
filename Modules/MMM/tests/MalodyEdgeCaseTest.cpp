@@ -771,6 +771,145 @@ void test_polyline_all_cleaned_degrade_to_note()
 }
 
 /**
+ * @brief 验证分拍编辑与 IMD 整毫秒混合后仍按 RM 规则导出阶梯段落。
+ *
+ * RM 的一个 seg 表示先在前轨长按，再在段尾横移。显式写两个同拍端点
+ * 会产生额外虚拟段落。整毫秒 Hold 尾与分拍 Flick 的误差则可能导致
+ * 导出拍号倒退，必须在同轨连续连接处折叠，并以 Flick 的时间为准。
+ *
+ * 测试经过 MMM 保存重开，直接检查端点数量、时间顺序与每次转向。
+ * 回到根轨时偏移为零，同样必须保留这一段，避免下一段从错误轨道开始。
+ *
+ * @par RM 外部消费规则
+ * 皮肤的第一个长按从根轨开始，后续长按从上一 seg 的目标轨开始。
+ * 每段的终轨取 root.x + seg.x；横移跨度取两个连续端点的差。
+ * 因此四次转向应有四个 seg，而不是八个几何角点。
+ * 双端点会使皮肤创建零时长长按，不能通过“同拍即无害”放宽断言。
+ *
+ * @par 时间精度边界
+ * 125 ms 对应 120 BPM 的四分之一拍，预期公开拍号完全确定。
+ * 误差分别放在 Hold 的持续时间中，Flick 的转向时间保持不变。
+ * 略晚的尾部可触发拍号倒退，略早的尾部可生成额外极短长按。
+ * 两种方向都必须折叠为相同的标准输出，不能仅修复倒退的情况。
+ */
+void testQuantizedStaircaseExportsRmSegments()
+{
+    auto  map            = makeMinimalBeatMap(7, 4);
+    auto& polyline       = map.m_noteData.polylines.emplace_back();
+    polyline.m_timestamp = 1000.0;
+    polyline.m_track     = 3;
+    constexpr std::array<int, 5> tracks{ 3, 2, 1, 2, 3 };
+    // 同时覆盖精确接点、尾部略晚与略早的整毫秒量化误差。
+    constexpr std::array<double, 4> errors{ 0.0, 1.0 / 3, -1.0 / 3, 0.0 };
+    for ( size_t i = 0; i < errors.size(); ++i ) {
+        auto& hold       = map.m_noteData.holds.emplace_back();
+        hold.m_timestamp = 1000.0 + 125.0 * i;
+        hold.m_track     = tracks[i];
+        hold.m_duration  = 125.0 + errors[i];
+        hold.m_isSubNote = true;
+        polyline.m_subNotes.push_back(hold);
+        polyline.m_subHolds.push_back(hold);
+        // Flick 是实际转向时刻；误差只在导出投影中消除，不修改源 Hold。
+        auto& flick       = map.m_noteData.flicks.emplace_back();
+        flick.m_timestamp = 1000.0 + 125.0 * (i + 1);
+        flick.m_track     = tracks[i];
+        flick.m_dtrack    = tracks[i + 1] - tracks[i];
+        flick.m_isSubNote = true;
+        polyline.m_subNotes.push_back(flick);
+        polyline.m_subFlicks.push_back(flick);
+    }
+    // 与用户操作一致：先同步、持久化，再从磁盘建立新的对象关系。
+    // 这样检查的是另存后打包入口，而不是刚绘制完的内存引用状态。
+    map.sync();
+    const auto mmmPath = fs::temp_directory_path() / "edge_rm_staircase.mmm";
+    const auto mcPath  = fs::temp_directory_path() / "edge_rm_staircase.mc";
+    TEST_ASSERT(map.saveToFile(mmmPath), "staircase should save to MMM");
+    auto saved = MMM::BeatMap::loadFromFile(mmmPath);
+    saved.sync();
+    TEST_ASSERT(saved.saveToFile(mcPath), "saved MMM should export to MC");
+    std::ifstream input(mcPath);
+    const auto    document = json::parse(input, nullptr, false);
+    TEST_ASSERT(!document.is_discarded(), "MC should contain valid JSON");
+    // 自动采样也位于 note 数组，不能假定玩家折线固定排在第一项。
+    const auto node =
+        std::find_if(document["note"].begin(),
+                     document["note"].end(),
+                     [](const json& value) { return value.contains("seg"); });
+    TEST_ASSERT(node != document["note"].end(), "staircase root should exist");
+    const auto& segments = (*node)["seg"];
+    // 先限定段落数量，再逐段索引，避免缺失节点变成无关的 JSON 断言。
+    // 多出一段即代表游戏会建立额外虚拟长按，不能只比较最终落轨。
+    TEST_ASSERT(segments.size() == 4, "each RM corner requires one segment");
+    for ( size_t i = 0; i < tracks.size() - 1; ++i ) {
+        const json expectedBeat = i == 3   ? json::array({ 1, 0, 1 })
+                                  : i == 1 ? json::array({ 0, 1, 2 })
+                                           : json::array({ 0, i + 1, 4 });
+        TEST_ASSERT(segments[i]["beat"] == expectedBeat,
+                    "segment time must follow the actual Flick endpoint");
+        TEST_ASSERT(segments[i].value("x", 0) == 64 * (tracks[i + 1] - 3),
+                    "RM segment must end on the next lane relative to root");
+        // 按 RM 皮肤的读取规则核对长按起轨与横移终轨，而非本项目往返。
+        const int previousX = i == 0 ? 0 : segments[i - 1].value("x", 0);
+        TEST_ASSERT(previousX == 64 * (tracks[i] - 3),
+                    "RM Hold must start on the previous segment lane");
+    }
+    // 导出容差属于目标格式投影，原谱面保留自身的精确编辑结果。
+    // 该断言同时防止保存操作偷偷改动后续撤销或其它格式的输出。
+    TEST_ASSERT(std::abs(map.m_noteData.holds[1].m_duration -
+                         (125.0 + errors[1])) < 1e-7,
+                "export cleanup must not mutate the source duration");
+}
+
+/**
+ * @brief 验证尾部容差只用于同轨相接的 Hold/Flick，不跨越真实间隔。
+ *
+ * 不同轨的邻接节点不应按时间误差折叠；超过 IMD 整毫秒精度的间隔
+ * 也必须保留。此场景绕过 MMM 的合并流程，专门限定保存器的清理边界。
+ *
+ * 两个反例均由单个 Hold 与单个 Flick 构成，排除同类型合并的干扰。
+ * 时间反例保留 2 ms 间隔，明确超过 1 ms 的格式量化范围。
+ * 轨道反例在完全相同的端点时间发生，但起轨不同，不能视为一个角点。
+ * 此测试只限定输出段落数，不要求加载器修复这些不连续输入的语义。
+ */
+void testRmCornerCleanupRespectsContinuity()
+{
+    for ( const bool wrongTrack : { false, true } ) {
+        auto  map         = makeMinimalBeatMap(7, 4);
+        auto& poly        = map.m_noteData.polylines.emplace_back();
+        poly.m_timestamp  = 1000.0;
+        poly.m_track      = 0;
+        auto& hold        = map.m_noteData.holds.emplace_back();
+        hold.m_timestamp  = 1000.0;
+        hold.m_duration   = 125.0;
+        hold.m_track      = 0;
+        hold.m_isSubNote  = true;
+        auto& flick       = map.m_noteData.flicks.emplace_back();
+        flick.m_timestamp = wrongTrack ? 1125.0 : 1127.0;
+        flick.m_track     = wrongTrack ? 1 : 0;
+        flick.m_dtrack    = 1;
+        flick.m_isSubNote = true;
+        // 两个场景分别隔离轨道不连续和时间不连续，不能被容差扩大吞掉。
+        poly.m_subNotes.push_back(hold);
+        poly.m_subNotes.push_back(flick);
+        poly.m_subHolds.push_back(hold);
+        poly.m_subFlicks.push_back(flick);
+        map.sync();
+        const auto path = fs::temp_directory_path() / "edge_rm_separate.mc";
+        TEST_ASSERT(map.saveToFile(path), "separate segments should export");
+        std::ifstream input(path);
+        const auto    document = json::parse(input, nullptr, false);
+        TEST_ASSERT(!document.is_discarded(), "separate MC should be valid");
+        const auto node = std::find_if(
+            document["note"].begin(),
+            document["note"].end(),
+            [](const json& value) { return value.contains("seg"); });
+        TEST_ASSERT(
+            node != document["note"].end() && (*node)["seg"].size() == 2,
+            "discontinuous segments must not be collapsed");
+    }
+}
+
+/**
  * @brief 验证 Key Hold 使用 column 与绝对 endbeat，而不是 Slide seg。
  *
  * 500ms 持续时间在 120 BPM 下正好是一拍，适合检查结束拍号字段是否存在。
@@ -3969,6 +4108,8 @@ int main()
     test_zero_length_hold_degrade_to_flick();
     test_multiple_zero_holds_same_flicks_merge();
     test_polyline_all_cleaned_degrade_to_note();
+    testQuantizedStaircaseExportsRmSegments();
+    testRmCornerCleanupRespectsContinuity();
     test_key_mode_hold_uses_endbeat();
     test_slide_mode_saves_xw();
     test_slide_mode_7k_8k_uses_skin_compatible_layout();

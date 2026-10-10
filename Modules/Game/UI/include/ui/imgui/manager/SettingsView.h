@@ -113,6 +113,7 @@ private:
         AddSelectedAnnotation,
         DeleteSelected,
         TogglePlayback,
+        AddBpmSegmentAtViewCenter,
         ToggleReverseScroll,
         ToggleScrollSnap,
         ToggleSnapFloor,
@@ -240,6 +241,28 @@ private:
 
     /// @brief 按钮点击后等待在会话锁外打开文件选择器。
     bool m_openBeatmapResourcePicker{ false };
+
+    /// @brief 背景导入请求的媒体类型快照，不随弹窗期间的类型切换变化。
+    bool m_importBackgroundVideo{ false };
+
+    /// @brief 重命名请求的资源位置；None 表示没有活动重命名事务。
+    BeatmapResourceTarget m_renameResourceTarget{ BeatmapResourceTarget::None };
+
+    /// @brief 在行回调结束后打开重命名弹窗的一次性请求。
+    bool m_openResourceRenamePopup{ false };
+
+    /// @brief 重命名输入框首帧需要自动聚焦并选中旧文件名。
+    bool m_focusResourceRenameInput{ false };
+
+    /// @brief 重命名请求的项目与谱面身份，用于拒绝跨会话旧请求。
+    std::filesystem::path m_resourceRenameProjectRoot;
+    /// @brief 发起重命名时的谱面路径，不借用会话内部存储。
+    std::filesystem::path m_resourceRenameBeatmapPath;
+    /// @brief 发起重命名时绑定的资源路径，确认前再次核对。
+    std::filesystem::path m_resourceRenamePath;
+
+    /// @brief 固定 UTF-8 文件名输入缓冲；过长旧名称拒绝而不是截断。
+    std::array<char, 1024> m_resourceRenameBuffer{};
 
     /// @brief 选择器打开时的项目根目录，用于拒绝跨项目误绑定。
     std::filesystem::path m_resourceImportProjectRoot;
@@ -439,7 +462,7 @@ private:
     /// @brief 绘制谱面设置页。
     void drawBeatmapSettings();
 
-    /// @brief 在谱面会话锁外打开并驱动音频或图片文件选择器。
+    /// @brief 在谱面会话锁外打开并驱动音频、图片或视频文件选择器。
     /// @param dpiScale 当前内容缩放。
     /// @warning 文件对话框可能阻塞；仅在用户点击导入时打开。
     void renderBeatmapResourcePicker(float dpiScale);
@@ -448,6 +471,16 @@ private:
     /// @param source 用户选中的本地文件。
     /// @warning 低频导入路径：可能复制文件并保存项目资源表。
     void importBeatmapResource(const std::filesystem::path& source);
+
+    /// @brief 在会话锁外绘制资源重命名弹窗，确认时执行低频文件事务。
+    /// @param dpiScale 当前内容缩放。
+    /// @warning 每帧只绘制活动弹窗；文件操作仅在用户确认时发生。
+    void renderBeatmapResourceRename(float dpiScale);
+
+    /// @brief 核对资源绑定身份并同步重命名文件及全部关联引用。
+    /// @return 操作成功时返回 true；失败原因保留在资源错误信息中。
+    /// @warning 低频确认路径：可能扫描项目谱面并保存资源引用。
+    bool renameBeatmapResource();
 
     /// @brief 绘制编辑器设置页。
     void drawEditorSettings();

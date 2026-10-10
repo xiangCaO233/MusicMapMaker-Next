@@ -186,6 +186,8 @@ protected:
     void invalidateShaderSourceCache() override;
 
 private:
+    /// @brief 无 GPU 回归仅设置隐藏状态并核对实际快照消费，不暴露业务接口。
+    friend struct CanvasTabSnapshotTestAccess;
     /// @brief 当前教学路径的几何语义，防止步骤切换复用上一种物件的目标。
     enum class WalkthroughPlacementKind : std::uint8_t {
         Note,   ///< 跨轨、跨拍移动后放下单键。

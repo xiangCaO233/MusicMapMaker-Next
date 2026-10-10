@@ -56,7 +56,7 @@ private:
     /// @brief 当前手势涉及的自动采样初始状态。
     std::unordered_map<entt::entity, SampleInitialState> m_initialSampleStates;
 
-    /// @brief 记录当前是否为折线内部子段拖拽模式
+    /// @brief 记录折线内部子段或末端参数的局部拖拽模式，禁止整条跨域转换。
     bool m_isPolylineSubDrag{ false };
 
     /// @brief 首子段身体拖动只移动原折线后缀，并在释放时补建前置连接段。
@@ -77,7 +77,7 @@ private:
     /// @brief 当前拖拽手势上一次应用的目标轨道。
     int m_lastAppliedDragTargetTrack{ 0 };
 
-    /// @brief 将父折线的 m_subNotes 数据同步到所有子物件实体
+    /// @brief 将父折线的子列表同步到起拖时记录的子实体，不遍历整张谱面。
     void syncPolylineSubEntities(SessionContext& ctx, entt::entity parent,
                                  const NoteComponent& note);
 

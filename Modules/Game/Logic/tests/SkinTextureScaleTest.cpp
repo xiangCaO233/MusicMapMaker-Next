@@ -202,6 +202,45 @@ bool testAtlasBatching()
            checkUv(snapshot, 4, { 0.2F, 0.3F }, { 0.7F, 0.8F });
 }
 
+/// @brief 验证底边位置按最终贴图尺寸移动，且只在 Note 绘制范围内生效。
+/// @pre 合成夹具的 Note 倍率为 0.5，Node 倍率为 2。
+/// @return 点纹理底边对齐、连接体不移位且范围退出恢复中心时返回真。
+/// @note 第一张图元记录默认中心几何，与退出作用域后的图元直接对照。
+/// @note 皮肤倍率不同可识别先平移再缩放或按基础尺寸平移的错误。
+/// @note 范围外重复使用 Note 纹理，模拟音频采样与时间线标记的资源复用。
+bool testNoteTexturePosition()
+{
+    RenderSnapshot snapshot;
+    Batcher        batcher(&snapshot);
+    batcher.setTexture(TextureID::Note);
+    batcher.pushQuad(10, 80, 40, 20, glm::vec4(1));
+    {
+        // 原时间位置是矩形中心 Y=70；缩放后底边必须准确回到该位置。
+        const MMM::Logic::System::NoteTexturePositionScope scope(
+            batcher, MMM::Config::NoteTexturePosition::Bottom);
+        batcher.pushQuad(10, 80, 40, 20, glm::vec4(1));
+        batcher.setTexture(TextureID::Node);
+        // 不同资源倍率产生不同像素偏移，不能复用 Note 的半高。
+        batcher.pushUVQuad(100, 200, 10, 30, { 0, 0 }, { 1, 1 }, glm::vec4(1));
+        batcher.setTexture(TextureID::HoldBodyVertical);
+        batcher.pushQuad(200, 300, 10, 100, glm::vec4(1));
+        // Logo 不属于 Note，即使位于同一批处理器内也只执行原倍率。
+        batcher.setTexture(TextureID::Logo);
+        batcher.pushQuad(300, 100, 100, 50, glm::vec4(1));
+    }
+    // 退出范围后恢复原位置，防止下一个绘制系统继承底边模式。
+    batcher.setTexture(TextureID::Note);
+    batcher.pushQuad(10, 80, 40, 20, glm::vec4(1));
+    // 所有期望均为固定坐标，没有调用被测位移 helper 计算结果。
+    // 连接体纵向两端不变；Logo 使用其独立倍率并保持中心。
+    return checkRect(snapshot, 0, 20, 75, 20, 10) &&
+           checkRect(snapshot, 4, 20, 70, 20, 10) &&
+           checkRect(snapshot, 8, 95, 185, 20, 60) &&
+           checkRect(snapshot, 12, 197, 300, 16, 100) &&
+           checkRect(snapshot, 16, 290, 105, 120, 60) &&
+           checkRect(snapshot, 20, 20, 75, 20, 10);
+}
+
 /// @brief 验证普通自由四边形围绕四角平均中心缩放。
 /// @note 使用斜四边形，防止实现只处理轴对齐矩形。
 /// @pre 已加载合成夹具，Node 倍率为 2。
@@ -446,39 +485,58 @@ bool testBuiltInHitEffects(const std::filesystem::path& skinsRoot,
             system.update(0, { event }, 4, config);
             // 每类物件单独触发，避免同轨覆盖规则混入前一类特效。
             // 跨首帧验证缓存覆盖后续动画帧；两时刻均处于普通特效寿命内。
-            for ( const double time : { 0.0, 0.041 } ) {
-                const auto frame = HitFXSystem::loopingEffectFrameIndex(
-                    time, skin.getEffectBaseFps(), sequence->frames.size());
-                if ( !frame ) return false;
-                RenderSnapshot snapshot;
-                snapshot.uvMap[sequence->startId +
-                               static_cast<std::uint32_t>(*frame)] = {
-                    0.2F, 0.3F, 0.1F, 0.2F
-                };
-                Batcher batcher(&snapshot);
-                system.generateSnapshot(
-                    batcher, time, config, 4, 250, 40, 20, 620, 100);
-                // 合成图集帧宽高比为 1/2，固定框缩放前为 125×150。
-                // 只登记当前期望帧，误选另一特效会直接缺少几何。
-                // UV 给出的比例固定，不依赖 PNG 解码或显示器 DPI。
-                // Flick 的终点位于第三轨，其他类型仍位于第二轨。
-                // 判定线位于 250，而整轨纵向中心为 320，故能识别布局混用。
-                const float width   = (trackFill ? 100 : 125) * scale;
-                const float height  = (trackFill ? 600 : 150) * scale;
-                const float centerX = type == MMM::NoteType::FLICK ? 290 : 190;
-                const float centerY = trackFill ? 320 : 250;
-                // 继续检查 UV，排除把裁掉中心图像错误实现为视觉放大。
-                if ( snapshot.vertices.size() != 4 ||
-                     !checkRect(snapshot,
-                                0,
-                                centerX - width / 2,
-                                centerY + height / 2,
-                                width,
-                                height) ||
-                     !checkUv(snapshot, 0, { 0.2F, 0.3F }, { 0.3F, 0.5F }) ) {
-                    XERROR(
-                        "Built-in hit effect scale mismatch: {} {}", name, key);
-                    return false;
+            // 同一事件切换位置设置，动画不能保留触发时的旧位置。
+            for ( const bool bottom : { false, true } ) {
+                config.visual.noteTexturePosition =
+                    bottom ? MMM::Config::NoteTexturePosition::Bottom
+                           : MMM::Config::NoteTexturePosition::Center;
+                for ( const double time : { 0.0, 0.041 } ) {
+                    const auto frame = HitFXSystem::loopingEffectFrameIndex(
+                        time, skin.getEffectBaseFps(), sequence->frames.size());
+                    if ( !frame ) return false;
+                    RenderSnapshot snapshot;
+                    snapshot.uvMap[sequence->startId +
+                                   static_cast<std::uint32_t>(*frame)] = {
+                        0.2F, 0.3F, 0.1F, 0.2F
+                    };
+                    Batcher batcher(&snapshot);
+                    system.generateSnapshot(
+                        batcher, time, config, 4, 250, 40, 20, 620, 100);
+                    // 合成图集帧宽高比为 1/2，固定框缩放前为 125×150。
+                    // 只登记当前期望帧，误选另一特效会直接缺少几何。
+                    // UV 给出的比例固定，不依赖 PNG 解码或显示器 DPI。
+                    // Flick 的终点位于第三轨，其他类型仍位于第二轨。
+                    // 判定线位于 250，而整轨纵向中心为 320，故能识别布局混用。
+                    const float width  = (trackFill ? 100 : 125) * scale;
+                    const float height = (trackFill ? 600 : 150) * scale;
+                    const float centerX =
+                        type == MMM::NoteType::FLICK ? 290 : 190;
+                    // 固定帧用自身最终高度对齐底边；整轨帧不应移出轨道。
+                    // RM 动画倍率 1.6，必须先缩放再偏移，不能只减去原始半高。
+                    // Hold 事件在两个时刻仍持续，偏移应同时覆盖普通与持续动画。
+                    // 作用域退出后恢复中心状态，避免后续界面图元继承动画偏移。
+                    const float centerY =
+                        trackFill ? 320 : (bottom ? 250 - height / 2 : 250);
+                    // 继续检查 UV，排除把裁掉中心图像错误实现为视觉放大。
+                    if ( snapshot.vertices.size() != 4 ||
+                         !checkRect(snapshot,
+                                    0,
+                                    centerX - width / 2,
+                                    centerY + height / 2,
+                                    width,
+                                    height) ||
+                         !checkUv(
+                             snapshot, 0, { 0.2F, 0.3F }, { 0.3F, 0.5F }) ||
+                         batcher.m_noteTexturePosition !=
+                             MMM::Config::NoteTexturePosition::Center ) {
+                        XERROR(
+                            "Built-in hit effect scale mismatch: {} {} "
+                            "bottom={}",
+                            name,
+                            key,
+                            bottom);
+                        return false;
+                    }
                 }
             }
         }
@@ -503,9 +561,9 @@ int main(int argc, char* argv[])
         return 1;
     }
     if ( !loadFixture(argv[1], argv[2]) || !testAtlasBatching() ||
-         !testFreeQuad() || !testFillModes() || !testConnectionBodies() ||
-         !testResourceMapping() || !testSequenceFrames() ||
-         !testBuiltInHitEffects(argv[3], argv[2]) )
+         !testNoteTexturePosition() || !testFreeQuad() || !testFillModes() ||
+         !testConnectionBodies() || !testResourceMapping() ||
+         !testSequenceFrames() || !testBuiltInHitEffects(argv[3], argv[2]) )
         return 1;
     XINFO("Skin texture scale geometry tests passed");
     return 0;

@@ -729,16 +729,16 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
     if ( cmd.entity == entt::null ) return;
     entt::entity draggedEntity = cmd.entity;
     // 音符与采样必须分领域校验，两个 Registry 的同号实体并非同一对象。
-    // 草稿子实体可提升到父折线，后面据父对象保存初始状态。
+    // 两个轨道域的子实体都提升到父折线，后面据父对象保存初始状态。
     if ( cmd.kind == ChartObjectKind::PlayerNote ||
          cmd.kind == ChartObjectKind::DraftNote ) {
         const auto* note =
             ctx.noteRegistry.try_get<const NoteComponent>(draggedEntity);
-        if ( cmd.kind == ChartObjectKind::DraftNote && note &&
-             note->m_isSubNote && note->m_parentPolyline != entt::null &&
+        if ( note && note->m_isSubNote &&
+             note->m_parentPolyline != entt::null &&
              ctx.noteRegistry.valid(note->m_parentPolyline) &&
              ctx.noteRegistry.all_of<NoteComponent>(note->m_parentPolyline) ) {
-            // 草稿子实体提升到父后，重新取得父组件以检查当前编辑模式。
+            // 子实体提升到父后，重新取得父组件以检查当前编辑模式。
             // 不能继续用原子组件指针为父实体保存初始内容。
             draggedEntity = note->m_parentPolyline;
             note = ctx.noteRegistry.try_get<const NoteComponent>(draggedEntity);
@@ -761,18 +761,31 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
     // 内部节点编辑沿用折线子段局部拖动：当前子项与后缀一起移动，
     // 前一连接段随之伸缩。首节点仍保留整条折线移动语义。
     // 未选中折线的内部身体也使用这一路径；选中组不能抢走节点手势。
-    if ( cmd.kind == ChartObjectKind::PlayerNote ) {
+    if ( cmd.kind == ChartObjectKind::PlayerNote ||
+         cmd.kind == ChartObjectKind::DraftNote ) {
         const auto* note =
             ctx.noteRegistry.try_get<const NoteComponent>(draggedEntity);
         const bool internalSub =
             note && note->m_type == ::MMM::NoteType::POLYLINE &&
             ctx.draggedSubIndex > 0 &&
             ctx.draggedSubIndex < static_cast<int>(note->m_subNotes.size());
+        // 末端参数编辑与内部节点一样属于局部事务，不依赖折线是否选中。
+        // 尾部即使位于索引零，也不能按根锚点计算整条折线位移。
+        // 仅接受最后子项的尾命中，内部连接的身体不能误当作独立尾端。
+        // 索引来自按下帧，与提升后的父列表核对后才建立编辑模式。
+        const bool tailPart =
+            note && note->m_type == ::MMM::NoteType::POLYLINE &&
+            ctx.draggedSubIndex >= 0 &&
+            ctx.draggedSubIndex ==
+                static_cast<int>(note->m_subNotes.size()) - 1 &&
+            (ctx.draggedPart == HoverPart::HoldEnd ||
+             ctx.draggedPart == HoverPart::FlickArrow);
         m_isPolylineSubDrag =
-            internalSub &&
-            (ctx.draggedPart == HoverPart::PolylineNode ||
-             (ctx.draggedPart == HoverPart::HoldBody &&
-              !isEntitySelected(ctx.noteRegistry, draggedEntity)));
+            tailPart ||
+            (internalSub &&
+             (ctx.draggedPart == HoverPart::PolylineNode ||
+              (ctx.draggedPart == HoverPart::HoldBody &&
+               !isEntitySelected(ctx.noteRegistry, draggedEntity))));
     }
     // 折线首节点头与身体共享索引零，必须再用命中部位区别拖动意图。
     // 只对能产生正交前置载体的 Hold/Flick 启用这种结构编辑。
@@ -790,8 +803,8 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
     }
     // 草稿从起始帧就使用统一有符号轨号，不能先进入只接受玩家轨的兼容路径。
     // 后面是否包含采样不会取消这一最初的跨域要求。
-    if ( cmd.kind == ChartObjectKind::DraftNote &&
-         !m_isFirstPolylineBodyDrag ) {
+    if ( cmd.kind == ChartObjectKind::DraftNote && !m_isFirstPolylineBodyDrag &&
+         !m_isPolylineSubDrag ) {
         // 首段身体有自己的有符号轨号计算，不进入整条折线跨域平移。
         m_usesUnifiedObjectDrag = true;
     }
@@ -1403,9 +1416,9 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                 ctx.lastConfig.visual.trackLayout.top) *
                                mainViewportHeight;
-        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by           = it->second.viewportHeight -
-                             ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float ty = ctx.lastConfig.visual.previewConfig.margin.top;
+        float by = it->second.viewportHeight -
+                   ctx.lastConfig.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         renderScaleY =
             previewDrawH /
@@ -1452,9 +1465,43 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         SessionUtils::isMainCanvasCameraId(cmd.cameraId)
             ? it->second.horizontalOffsetX
             : 0.0F);
-    const float leftX        = projection.leftX;
-    const float singleTrackW = projection.singleTrackWidth;
-    int         targetTrack  = projection.trackAt(cmd.mouseX, ctx.trackCount);
+    float leftX        = projection.leftX;
+    float singleTrackW = projection.singleTrackWidth;
+    int   targetTrack  = projection.trackAt(cmd.mouseX, ctx.trackCount);
+    int   minimumTrack = 0;
+    int   maximumTrack = ctx.trackCount - 1;
+    // 草稿局部编辑沿原轨道域钳制，不把玩家像素投影套到负轨号上。
+    // 草稿区可能独立移动或改变宽度，原点取其右边界（绝对轨零）。
+    if ( m_isPolylineSubDrag &&
+         m_initialStates.find(ctx.draggedEntity)->second.note.m_trackIndex <
+             0 ) {
+        const auto lanes = calculateCanvasLaneProjection(
+            it->second.viewportWidth,
+            ctx.trackCount,
+            ctx.bgmTrackCount,
+            ctx.lastConfig.visual.trackLayout,
+            it->second.horizontalOffsetX,
+            true,
+            ctx.lastConfig.settings.isBmsEditingEnabled(),
+            ctx.lastConfig.settings.professionalMode &&
+                ctx.composeLessonInputMode == ComposeLessonInputMode::Off,
+            ctx.draftTrackCount,
+            true);
+        if ( !lanes.valid || lanes.draftLaneCount == 0 ||
+             lanes.draftLaneWidth <= 0.0F )
+            return;
+        minimumTrack = -static_cast<int>(lanes.draftLaneCount);
+        maximumTrack = -1;
+        // 可访问数量取真实投影，包含运行时附加草稿轨，不仅取配置中的数量。
+        // 上界始终为负，鼠标进入玩家区也不能改变本次局部编辑的对象领域。
+        leftX        = lanes.draftRightX;
+        singleTrackW = lanes.draftLaneWidth;
+        // 先在浮点域限制鼠标位置，避免远离画布的输入转换成无界整数。
+        targetTrack = static_cast<int>(
+            std::floor(std::clamp((cmd.mouseX - leftX) / singleTrackW,
+                                  static_cast<float>(minimumTrack),
+                                  static_cast<float>(maximumTrack))));
+    }
 
     // --- 2. 计算参考点的初始位置 ---
     // 以鼠标抓取的那个点作为参考，计算位移增量
@@ -1464,7 +1511,7 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
 
     // 抓住折线节点时以该节点初始位置作参考，避免物件瞬间跳到根节点。
     // 先校验子索引范围，再读取初始子列表。
-    if ( ctx.draggedPart == HoverPart::PolylineNode &&
+    if ( (ctx.draggedPart == HoverPart::PolylineNode || m_isPolylineSubDrag) &&
          ctx.draggedSubIndex >= 0 &&
          ctx.draggedSubIndex <
              (int)primaryInitialState.note.m_subNotes.size() ) {
@@ -1557,46 +1604,51 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         int         subIdx       = ctx.draggedSubIndex;
         const auto& initSub      = initSubNotes[subIdx];
 
-        if ( initSub.type == ::MMM::NoteType::HOLD ) {
+        // 末梢只改变自己的持续时间或横向跨度；起点和前缀保持原值。
+        // 零参数先作为可逆预览保留，释放时统一清理并生成完整撤销批次。
+        if ( ctx.draggedPart == HoverPart::HoldEnd &&
+             initSub.type == ::MMM::NoteType::HOLD ) {
+            note->m_subNotes[subIdx].duration =
+                std::max(0.0, targetTime - initSub.timestamp);
+        } else if ( ctx.draggedPart == HoverPart::FlickArrow &&
+                    initSub.type == ::MMM::NoteType::FLICK ) {
+            // 折线尾箭头允许回到起轨并产生零跨度，不强行选取左右一轨。
+            // 与独立 Flick 的方向兜底不同，零跨度是删除末段的明确操作。
+            // 始终从原起轨算轨差，拖过起点可直接反向，不累计上一预览跨度。
+            note->m_subNotes[subIdx].dtrack =
+                std::clamp(targetTrack, minimumTrack, maximumTrack) -
+                initSub.trackIndex;
+        } else if ( initSub.type == ::MMM::NoteType::HOLD ) {
             // 拖动内部 Hold 身体改变该段及后续段的轨道，时间保持不动。
             // 限制共同轨差以保留后续折线的横向结构。
             int localDelta = targetTrack - initSub.trackIndex;
 
+            // 所有后缀节点和箭头终点先求共同允许区间，再钳制一次。
+            // 逐段改写增量可能再次越过前一段边界，导致释放时丢弃整个对象。
+            int minimumDelta = std::numeric_limits<int>::min();
+            int maximumDelta = std::numeric_limits<int>::max();
             for ( size_t j = subIdx; j < initSubNotes.size(); ++j ) {
-                // 后缀使用同一个轨差，前缀不参加这次整体横移。
-                // 边界检验针对玩家域；不能把此分支直接复用到有符号草稿轨。
-                int newTrack = initSubNotes[j].trackIndex + localDelta;
-                if ( newTrack < 0 ) localDelta = -initSubNotes[j].trackIndex;
-                if ( newTrack >= ctx.trackCount )
-                    localDelta =
-                        ctx.trackCount - 1 - initSubNotes[j].trackIndex;
-                if ( initSubNotes[j].type == ::MMM::NoteType::FLICK ) {
-                    // Flick 的箭头端点也占轨道范围，不能只限制其起点。
-                    // 此处保留现有逐段限制顺序，不把校验改成独立逐对象钳制。
-                    int endTrack = newTrack + initSubNotes[j].dtrack;
-                    if ( endTrack < 0 )
-                        localDelta = -(initSubNotes[j].trackIndex +
-                                       initSubNotes[j].dtrack);
-                    if ( endTrack >= ctx.trackCount )
-                        localDelta = ctx.trackCount - 1 -
-                                     (initSubNotes[j].trackIndex +
-                                      initSubNotes[j].dtrack);
-                }
+                const auto& sub = initSubNotes[j];
+                const int   end =
+                    sub.trackIndex +
+                    (sub.type == ::MMM::NoteType::FLICK ? sub.dtrack : 0);
+                minimumDelta = std::max(
+                    minimumDelta, minimumTrack - std::min(sub.trackIndex, end));
+                maximumDelta = std::min(
+                    maximumDelta, maximumTrack - std::max(sub.trackIndex, end));
             }
             if ( subIdx > 0 &&
                  initSubNotes[subIdx - 1].type == ::MMM::NoteType::FLICK ) {
                 // 若前段是 Flick，其连接终点会随当前 Hold 的轨道变化。
                 // 把前段终点也纳入边界限制，避免连接处被推到玩家区外。
-                int prevEnd = initSubNotes[subIdx - 1].trackIndex +
-                              initSubNotes[subIdx - 1].dtrack + localDelta;
-                if ( prevEnd < 0 )
-                    localDelta = -(initSubNotes[subIdx - 1].trackIndex +
-                                   initSubNotes[subIdx - 1].dtrack);
-                if ( prevEnd >= ctx.trackCount )
-                    localDelta = ctx.trackCount - 1 -
-                                 (initSubNotes[subIdx - 1].trackIndex +
-                                  initSubNotes[subIdx - 1].dtrack);
+                const int prevEnd = initSubNotes[subIdx - 1].trackIndex +
+                                    initSubNotes[subIdx - 1].dtrack;
+                minimumDelta = std::max(minimumDelta, minimumTrack - prevEnd);
+                maximumDelta = std::min(maximumDelta, maximumTrack - prevEnd);
             }
+            // 输入自身无法完整放入当前域时保持上一次合法预览，不删除根对象。
+            if ( minimumDelta > maximumDelta ) return;
+            localDelta = std::clamp(localDelta, minimumDelta, maximumDelta);
 
             // 从当前子段起统一应用轨差，前面的节点位置保持不变。
             // 前一 Flick 只改变轨差，让它的末端继续接到移动后的段。
@@ -2417,8 +2469,7 @@ void GrabTool::handleEndDrag(SessionContext& ctx, const CmdEndDrag& cmd)
 /// @param ctx 包含父子实体的会话。
 /// @param parent 要同步的父实体身份。
 /// @param note 已更新的父组件，调用期间保持有效。
-/// @warning 拖动调用链中的既有扫描点：当前完整遍历 NoteComponent 查找子实体；
-/// 该实现不具备常量查找成本，禁止再加入排序、文件访问或阻塞操作。
+/// @warning 连续拖动仅遍历按下时保存的参与实体，禁止扫描整个谱面、排序或阻塞。
 /// @note 不创建缺失子实体、不删除失效索引的子实体，结构维护由结束批次完成。
 /// @note 同步属性不包含父子身份字段，既有 entity 与 subIndex 保持不变。
 /// @pre 父组件内嵌列表在整个同步循环中保持结构稳定。
@@ -2426,9 +2477,17 @@ void GrabTool::handleEndDrag(SessionContext& ctx, const CmdEndDrag& cmd)
 void GrabTool::syncPolylineSubEntities(SessionContext& ctx, entt::entity parent,
                                        const NoteComponent& note)
 {
-    auto subView = ctx.noteRegistry.view<NoteComponent>();
-    for ( auto subEnt : subView ) {
-        auto& subNC = subView.get<NoteComponent>(subEnt);
+    // 起拖已经保存父子集合；末端编辑每帧只同步本次手势的子投影。
+    // 不改变集合结构，也不重新扫描与当前折线无关的所有音符。
+    // 集合持有的是撤销前值，下面只写 Registry 当前组件，不能改写 before。
+    // 同一实体可能是根或其它选中对象，仍须按父身份过滤后才同步。
+    // 结构创建或删除发生在释放阶段，连续预览期间只覆盖已有子实体字段。
+    for ( const auto& [subEnt, state] : m_initialStates ) {
+        (void)state;
+        auto* component = ctx.noteRegistry.try_get<NoteComponent>(subEnt);
+        // 外部删除参与对象时跳过失效组件，不能为本次同步重新创建它。
+        if ( !component ) continue;
+        auto& subNC = *component;
         if ( !subNC.m_isSubNote || subNC.m_parentPolyline != parent ) continue;
         // 旧子索引可能因结构变化不再有效，跳过而不越界访问父列表。
         // 本函数只同步现有合法子项，新增或删除实体由结构收尾负责。
@@ -2473,7 +2532,11 @@ bool GrabTool::tryPolylineSubDragMerge(SessionContext& ctx)
     int subIdx = ctx.draggedSubIndex;
     // 只有内部子段手势进入此结构清理，根部拖动留给普通提交。
     // 索引必须仍落在当前子列表中，不能根据旧悬浮索引越界。
-    if ( subIdx <= 0 || subIdx >= static_cast<int>(note->m_subNotes.size()) ) {
+    const bool tailPart = ctx.draggedPart == HoverPart::HoldEnd ||
+                          ctx.draggedPart == HoverPart::FlickArrow;
+    // 尾部归零复用内部退化清理，位置与节点删除共用同一份按下前快照。
+    if ( subIdx < 0 || (!tailPart && subIdx == 0) ||
+         subIdx >= static_cast<int>(note->m_subNotes.size()) ) {
         return false;
     }
 

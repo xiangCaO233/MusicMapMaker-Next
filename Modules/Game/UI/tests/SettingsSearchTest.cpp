@@ -11,6 +11,7 @@
 #include "ui/imgui/menu/interfaces/IMainMenuToggleItemActionHandler.h"
 #include "ui/imgui/menu/items/MainMenuToggleItem.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
+#include "ui/utils/UIWidgetUtils.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -349,7 +350,7 @@ bool checkProfessionalDisabledTooltip()
         if ( initialFrame ) {
             const auto low  = ImGui::GetItemRectMin();
             const auto high = ImGui::GetItemRectMax();
-            itemCenter   = { (low.x + high.x) * .5f, (low.y + high.y) * .5f };
+            itemCenter = { (low.x + high.x) * .5f, (low.y + high.y) * .5f };
             initialFrame = false;
         }
         ImGui::End();
@@ -391,6 +392,96 @@ bool checkProfessionalDisabledTooltip()
                preserved);
     }
     return displayed && cleared && preserved;
+}
+
+/// @brief 验证提示左右翻转、底部避让与长文本换行后的真实窗口边界。
+/// @return 每个场景均出现完整位于主视口内的提示时为 true。
+/// @note 使用真实提示入口与鼠标命中，不复制生产定位公式。
+/// @details 右侧不足应翻到左侧，左侧不足应翻到右侧。
+/// 方向检查独立于包含性检查，防止仅把提示压到边缘被误判为正确。
+/// 底部场景使用超长文本，同时验证换行后的高度参与避让。
+/// 无空格文本覆盖单词宽度超限时的字符级折行，不依赖中文字体资源。
+/// 可见窗口必须来自当前帧，旧提示残留对象不能计入结果。
+/// 所有几何以工作区为准，不假设视口原点或某个固定窗口尺寸。
+/// 不通过手工修改 Tooltip 窗口位置或尺寸伪造成功。
+/// 测试失败仍恢复共享 ImGui 时钟与鼠标位置。
+/// @warning 无 GPU 有限帧测试；动画通过 DeltaTime 推进，不阻塞等待。
+bool checkTooltipViewportBounds()
+{
+    using MMM::UI::Utils::TooltipDir;
+    auto&       io            = ImGui::GetIO();
+    const float originalDelta = io.DeltaTime;
+    // 边缘位置来自测试视口而不是某套皮肤，避免依赖实际显示器尺寸。
+    const auto check = [&](ImVec2 itemPos, TooltipDir dir, bool longText) {
+        // 两种长度都经过实际字体测量，短提示只需要正常单行宽度。
+        // 长提示必须超过默认最大宽度，才能触发换行与底部避让组合。
+        const std::string text =
+            longText ? std::string(240, 'W') : "Tooltip direction test";
+        bool displayed = false;
+        bool valid     = true;
+        // 每个场景先解除上一控件悬浮，避免延续上个方向的动画结果。
+        // 不调用渲染后端，窗口顶点和几何已足够验证原生窗口裁剪风险。
+        io.AddMousePosEvent(-100.0f, -100.0f);
+        for ( int frame = 0; frame < 10; ++frame ) {
+            // 首帧建立命中矩形，后续帧持续悬浮以覆盖进入动画及最终位置。
+            if ( frame == 1 )
+                io.AddMousePosEvent(itemPos.x + 10.0f, itemPos.y + 10.0f);
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos({ 0, 0 });
+            ImGui::SetNextWindowSize(io.DisplaySize);
+            ImGui::Begin(
+                "TooltipBoundsTest",
+                nullptr,
+                ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar);
+            ImGui::SetCursorScreenPos(itemPos);
+            // 无可见外观的命中区域不播放反馈音，只提供真实 Item 矩形。
+            ImGui::InvisibleButton("TooltipAnchor", { 40.0f, 24.0f });
+            MMM::UI::Utils::renderTooltip(text.c_str(), dir);
+            ImGui::End();
+            ImGui::Render();
+            // BeginTooltip 首次建立尺寸时可能暂时隐藏，不把布局占位算显示。
+            // 随后的任意可见帧越界都判失败，不能只检查动画最终落点。
+            for ( const auto* window : ImGui::GetCurrentContext()->Windows ) {
+                if ( !(window->Flags & ImGuiWindowFlags_Tooltip) ||
+                     !window->Active || window->Hidden ||
+                     window->DrawList->VtxBuffer.empty() )
+                    continue;
+                displayed            = true;
+                const auto* viewport = ImGui::GetMainViewport();
+                // 几何检查包含整块背景，不允许仅文字留在窗口内。
+                valid &=
+                    window->Pos.x >= viewport->WorkPos.x &&
+                    window->Pos.y >= viewport->WorkPos.y &&
+                    window->Pos.x + window->Size.x <=
+                        viewport->WorkPos.x + viewport->WorkSize.x + 1.0f &&
+                    window->Pos.y + window->Size.y <=
+                        viewport->WorkPos.y + viewport->WorkSize.y + 1.0f;
+                // 左右边缘必须翻转，而不是仅钳制到边缘遮住触发项。
+                if ( !longText ) {
+                    // 短提示有足够对侧空间，必须整体位于触发项另一侧。
+                    valid &= dir == TooltipDir::Right
+                                 ? window->Pos.x + window->Size.x <= itemPos.x
+                                 : window->Pos.x >= itemPos.x + 40.0f;
+                }
+            }
+        }
+        if ( !displayed || !valid )
+            XERROR("Tooltip 边界回归失败：显示={}，边界={}", displayed, valid);
+        return displayed && valid;
+    };
+    io.DeltaTime = 0.05f;
+    // 固定模拟步长让有限帧覆盖动画过程，不受测试机器运行速度影响。
+    // 短路失败不跳过末尾恢复逻辑，避免污染同一套件其他测试。
+    const bool passed =
+        check({ io.DisplaySize.x - 70.0f, 100.0f }, TooltipDir::Right, false) &&
+        check({ 15.0f, 100.0f }, TooltipDir::Left, false) &&
+        check({ io.DisplaySize.x * 0.5f, io.DisplaySize.y - 40.0f },
+              TooltipDir::Right,
+              true);
+    // 所有返回路径统一恢复时钟与鼠标，避免影响后续导航计时测试。
+    io.DeltaTime = originalDelta;
+    io.AddMousePosEvent(-100.0f, -100.0f);
+    return passed;
 }
 
 /// @brief 驱动真实视觉页，验证展开、滚动、三秒高亮及手动滚动不被抢回。
@@ -540,7 +631,8 @@ int main(int argc, char** argv)
     {
         // 管理器初始化 Clay 文本测量，并早于 ImGui 上下文析构释放视图。
         MMM::UI::UIManager manager;
-        passed = checkProfessionalDisabledTooltip() && checkNavigation(manager);
+        passed = checkProfessionalDisabledTooltip() &&
+                 checkTooltipViewportBounds() && checkNavigation(manager);
     }
     ImGui::DestroyContext();
     return passed ? 0 : 5;

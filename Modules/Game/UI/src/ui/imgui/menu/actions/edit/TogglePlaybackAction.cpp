@@ -7,6 +7,7 @@
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
 #include "ui/imgui/menu/actions/edit/PlaybackShortcutRouting.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
+#include "ui/imgui/menu/actions/tools/BpmShortcutFocus.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include <imgui.h>
 #include <string>
@@ -15,31 +16,11 @@ namespace MMM::UI
 {
 namespace
 {
-/// @brief 判断 BPM 测量工具根窗口或其任意子窗口是否拥有键盘焦点。
-/// @param context 当前 ImGui 上下文。
-/// @return BPM 测量工具窗口层级内拥有焦点时返回 true。
-/// @warning UI 热路径：空格按下时只沿当前焦点窗口的父级链执行短字符串比较。
-/// @note 使用稳定窗口 ID 比较，窗口可见标题本地化不会影响焦点识别。
-bool isBpmMeasurementToolFocused(const ImGuiContext* context)
-{
-    // ImGui 上下文或导航窗口缺失时自然得到空起点。
-    const ImGuiWindow* window = context ? context->NavWindow : nullptr;
-    // 子窗口聚焦时沿父链查找工具根窗口，避免只识别最外层标题。
-    while ( window ) {
-        // Name 为空时跳过比较，仍继续检查父窗口。
-        if ( window->Name &&
-             isBpmMeasurementToolStableWindowId(
-                 ShortcutUtils::stableWindowId(window->Name)) ) {
-            return true;
-        }
-        // ParentWindow 链由 ImGui 管理，仅在本次输入处理期间观察。
-        window = window->ParentWindow;
-    }
-    return false;
-}
-
 /// @brief 播放暂停切换动作。
 /// @details 统一动态图标、配置快捷键、BPM 工具空格路由与编辑器播放命令。
+/// @note 工具焦点与测量历史动作共用稳定窗口 ID 判定。
+/// 焦点 helper 检查子窗口父链，空格动作单独决定修饰键与输入策略。
+/// 这样工具内输入焦点移动时，不会将空格重新交给活动谱面。
 class TogglePlaybackAction final : public IMainMenuItemActionHandler
 {
 public:

@@ -23,6 +23,9 @@ Options:
   --toolchain <path>     CMake toolchain file. Default: cmake/toolchain/cross-msvc.cmake
   --sources-build        Configure with SOURCES_BUILD=ON.
   --vulkan-validation-layers Enable Vulkan validation layers. Default: disabled.
+  --pgo-instrument            Request LLVM PGO instrumentation (default).
+  --no-pgo-instrument         Disable PGO instrumentation.
+  --pgo-profile-runtime <path> Windows compiler-rt profile .lib (absolute path).
   --prebuilt-targets     Build only third-party targets used for staging.
   --configure-only       Configure and generate, then stop
   --fresh                Remove the build directory before configuring
@@ -31,6 +34,7 @@ Options:
 Environment overrides:
   MSVC_PREBUILT_COMPILER_TAG  Default prebuilt compiler tag
   MSVC_LLVM_VERSION      Default LLVM tool suite major version
+  MMM_PGO_PROFILE_RUNTIME  Windows compiler-rt profile library override
   WINDOWS_CROSS_ROOT     Default: /mnt/cross/windows
   VULKAN_SDK             Default: ${WINDOWS_CROSS_ROOT}/VulkanSDK/1.4.350.0
   CMAKE_GENERATOR        Default: Ninja
@@ -123,6 +127,14 @@ toolchainFile="cmake/toolchain/cross-msvc.cmake"
 sourcesBuild="OFF"
 # 复用构建目录时仍显式采用本次请求的验证层状态。
 vulkanValidationLayers="OFF"
+# 默认请求业务模块采样，目标 profile 运行库能力由 CMake 校验。
+# 运行库缺失时配置失败，避免发布名义采样却没有计数器的产物。
+# 可通过关闭参数生成对照构建，不改变目标 MSVC ABI。
+pgoInstrument="ON"
+# 目标平台运行库必须独立于 Linux 宿主 LLVM 运行库。
+pgoProfileRuntime="${MMM_PGO_PROFILE_RUNTIME:-}"
+# Windows 运行库由 compiler-rt 发布，不能替换成宿主的 ELF 静态库。
+# 插桩只用于采集，优化版本需要在另一个构建目录消费 profile。
 # 流程开关分别控制目标集合、停止点和构建树生命周期。
 prebuiltTargets=0
 configureOnly=0
@@ -131,6 +143,26 @@ freshBuild=0
 # 在拉取依赖或修改构建树前完整解析参数。
 while (( $# > 0 )); do
     case "$1" in
+        --pgo-profile-runtime)
+            # 显式路径便于 CI 使用与编译器匹配的 Windows compiler-rt。
+            if (( $# < 2 )); then
+                printf "error: --pgo-profile-runtime requires a value\n" >&2
+                exit 1
+            fi
+            pgoProfileRuntime="$2"
+            # 参数边界保留带空格的路径，存在性与目标格式在 CMake 中检查。
+            shift 2
+            ;;
+        --pgo-instrument)
+            # 允许调用者显式恢复默认采样状态。
+            pgoInstrument="ON"
+            shift
+            ;;
+        --no-pgo-instrument)
+            # 依赖生产和普通构建可显式关闭插桩。
+            pgoInstrument="OFF"
+            shift
+            ;;
         --build-dir)
             # 路径稍后统一解析为绝对路径。
             if (( $# < 2 )); then
@@ -232,6 +264,11 @@ while (( $# > 0 )); do
             ;;
     esac
 done
+
+# 仅生产预编译依赖时不创建采样产物，也不要求目标 profile 运行库。
+if (( prebuiltTargets )); then
+    pgoInstrument="OFF"
+fi
 
 if [[ ! "${buildJobs}" =~ ^[0-9]+$ ]] || (( buildJobs < 1 )); then
     # CMake 并行度仅接受正整数。
@@ -368,7 +405,8 @@ cmake -G "${CMAKE_GENERATOR:-Ninja}" \
     -DICE_PREBUILT_TOOLCHAIN=msvc \
     -DICE_PREBUILT_COMPILER_TAG="${compilerTag}" \
     -DMMM_DISABLE_CLANG_LTO=ON \
-    -DMMM_PGO_INSTRUMENT=OFF \
+    -DMMM_PGO_INSTRUMENT="${pgoInstrument}" \
+    -DMMM_PGO_PROFILE_RUNTIME="${pgoProfileRuntime}" \
     -DMMM_PGO_USE=OFF \
     -S "${projectRoot}" \
     -B "${buildDir}"
@@ -452,7 +490,7 @@ fi
 # 维护约束：shared 模式需要匹配动态 MSVC 运行库配置。
 # 维护约束：交叉构建禁止同步翻译或默认皮肤到宿主配置。
 # 维护约束：Clang LTO 在此工具链流程中保持显式关闭。
-# 维护约束：PGO 插桩和使用在交叉流程中保持关闭。
+# 维护约束：默认请求 PGO 采样，PGO 使用由独立优化构建负责。
 # 维护约束：Meson NUL 兼容文件不得创建到源码目录。
 # 维护约束：NUL 文件只在 SOURCES_BUILD=ON 的构建树内创建。
 # 维护约束：所有续行参数必须保持双引号和反斜杠结构。

@@ -637,17 +637,406 @@ bool runInternalNodeCase(bool selected, bool flick)
                  : redone.m_subNotes[1].dtrack == 2 &&
                        redone.m_subNotes[4].trackIndex == 3;
 }
+
+/// @brief 验证折线末端参数拖动、零参数退化及结构历史。
+/// @param draft 是否在草稿轨道编辑。
+/// @param flick 末端是 Flick 箭头；否则是 Hold 尾端。
+/// @param selected 根折线开始拖动前是否已选中。
+/// @return 参数预览同步且归零后的折线退化可撤销、可重做时返回 true。
+/// @note 两节点结构覆盖尾项归零移除、普通 Note 退化及历史往返。
+/// @note 鼠标坐标由统一轨道投影和 ScrollCache 反算，命中信息在 Start 固定。
+/// @note 父锚点与子实体投影需在预览、提交、Undo 和 Redo 各阶段保持一致。
+bool runPolylineEndpointCase(bool draft, bool flick, bool selected)
+{
+    // Arrange 阶段构造父折线、两个子节点及实际 ECS 子投影。
+    // Act 阶段只通过 GrabTool 的开始、更新、结束命令修改数据。
+    // 根实体保留为历史批次主键，子实体负责暴露即时拾取同步状态。
+    // 鼠标轨道取自统一画布投影，Draft 与 Player 各自使用实际轨宽。
+    // 时间位置通过 ScrollCache 逆映射生成，避免把秒数近似为像素。
+    // Ctrl 修饰绕过吸附，让两次位置更新保持确定的目标时间。
+    // Start 显式锁定部位与子索引，不依赖先前帧留下的 hover 状态。
+    // 首次更新将端点参数带离零值，验证局部字段确实收到输入。
+    // 预览同时核对父列表和子投影，防止松键才补齐视觉状态。
+    // 第二次更新回到零值，仍属于同一个历史事务。
+    // 释放后检查退化根与子实体清理，确认结构只由收尾阶段转换。
+    // Undo 对照按下前结构，Redo 对照提交后普通 Note。
+    // 选择状态和对象域组合变化，确保端点不会误入整体移动路径。
+    // 只创建内存会话，避免外部谱面或皮肤影响拖动路径。
+    using Note = MMM::Logic::NoteComponent;
+    MMM::Logic::SessionContext ctx;
+    // 共用现有画布布局和滚动缓存，隔离选择及端点类型差异。
+    configure(ctx);
+    // 投影包含追加草稿槽，编辑域仍由会话中的持久草稿轨数限制。
+    ctx.draftTrackCount                      = 4;
+    ctx.lastConfig.settings.professionalMode = true;
+
+    // 根保持在各自区域内部，末端更新不应改变其逻辑地址。
+    const int track = draft ? -2 : 1;
+    Note      parent;
+    // 首节点用于降级后的独立 Note，尾节点单独承载端部参数。
+    // 用单根和两节点构成最小有效折线，根位置在两种域中均合法。
+    // 尾 Hold 的零值由持续时间表达；Flick 的零值由终轨与起轨重合表达。
+    parent.m_type       = MMM::NoteType::POLYLINE;
+    parent.m_timestamp  = 1.0;
+    parent.m_trackIndex = track;
+    parent.m_isDraft    = draft;
+    // 头节点保留原始根锚点，尾节点是此手势唯一的编辑目标。
+    // 两种端点都接在普通头部之后，归零时尾段清理会将子列表缩为单项。
+    // 子项共用根起点，便于把参数变化与对象整体平移区分开来。
+    // Flick 轨差初值向右，Draft/Player 用相同绝对轨语义表达方向。
+    parent.m_subNotes = {
+        Note::SubNote{ .type       = MMM::NoteType::NOTE,
+                       .timestamp  = 1.0,
+                       .trackIndex = track },
+        Note::SubNote{ .type =
+                           flick ? MMM::NoteType::FLICK : MMM::NoteType::HOLD,
+                       .timestamp  = 1.0,
+                       .duration   = flick ? 0.0 : 0.5,
+                       .trackIndex = track,
+                       .dtrack     = flick ? 1 : 0 },
+    };
+    MMM::Logic::ensureNoteCollaborationIdentity(parent);
+    // 先分配协作身份再创建投影，历史比较不依赖 ECS 分配顺序。
+    // 先生成稳定协作 ID 再建立子投影，使历史结构核对不受实体编号影响。
+    const auto root = ctx.noteRegistry.create();
+    ctx.noteRegistry.emplace<Note>(root, parent);
+    ctx.noteRegistry.emplace<MMM::Logic::TransformComponent>(root);
+    ctx.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
+        root, MMM::Logic::InteractionComponent{ .isSelected = selected });
+
+    std::vector<entt::entity> children;
+    // 父数据和子投影以相同索引创建，确保操作输入能定位尾节点。
+    // 子组件暂不预设 Draft 标志，拖动同步应从父根复制真实域状态。
+    // 这样草稿用例可以检测同步逻辑是否更新了非几何字段。
+    // 保存真实子实体句柄，后续同步断言直接检查原投影。
+    // 记录按原始索引建立的子实体，后续预览通过原身份检查同步结果。
+    for ( std::size_t index = 0; index < parent.m_subNotes.size(); ++index ) {
+        // 生产转换函数补齐颜色、绑定、父实体和子索引等投影字段。
+        const auto entity = ctx.noteRegistry.create();
+        ctx.noteRegistry.emplace<Note>(
+            entity,
+            MMM::Logic::makeNoteComponentFromSubNote(
+                parent.m_subNotes[index], true, root, static_cast<int>(index)));
+        ctx.noteRegistry.emplace<MMM::Logic::InteractionComponent>(entity);
+        children.push_back(entity);
+    }
+
+    const auto& camera = ctx.cameras.at("Basic2DCanvas");
+    // 和主画布统一目标使用相同的分区开关及追加草稿槽。
+    // 各测试会话使用相同生产布局入口；Draft 与 Player 不共享轨宽假设。
+    const auto projection = MMM::Logic::calculateCanvasLaneProjection(
+        camera.viewportWidth,
+        ctx.trackCount,
+        ctx.bgmTrackCount,
+        ctx.lastConfig.visual.trackLayout,
+        camera.horizontalOffsetX,
+        true,
+        true,
+        true,
+        ctx.draftTrackCount,
+        true);
+    // 绝对轨必须按本次投影的草稿轨数换算，包含追加槽后的实际地址布局。
+    const auto address = MMM::Logic::CanvasLaneAddress::fromAbsoluteTrack(
+        track, projection.playerLaneCount, projection.draftLaneCount);
+    const auto laneBounds = projection.bounds(address);
+    // 检查布局和地址有效后，才用该轨中心生成按下位置。
+    if ( !projection.valid || !laneBounds ) return false;
+    // 取区域内中心点，避免坐标恰好落在相邻轨的半开边界上。
+    const float rootX = (laneBounds->leftX + laneBounds->rightX) * 0.5F;
+
+    const auto& cache =
+        ctx.timelineRegistry.ctx().get<MMM::Logic::System::ScrollCache>();
+    // 将歌曲时间映射成主画布鼠标位置，避免直接假定滚动积分是线性的。
+    // 滚动绝对位置以动画时间为锚点，鼠标 y 对应测试指定的歌曲时刻。
+    const float judgmentY =
+        camera.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
+    // getTime 的输入是绝对滚动位置；此差值恰好抵消锚点所在时间。
+    // 因此生成的 mouseY 经生产逆映射后仍回到指定 time。
+    const auto yForTime = [&](double time) {
+        // 把目标时间相对当前动画锚点的积分差反算成视口坐标。
+        return static_cast<float>(judgmentY + cache.getAbsY(ctx.animateTime) -
+                                  cache.getAbsY(time));
+    };
+
+    const auto part = flick ? MMM::Logic::HoverPart::FlickArrow
+                            : MMM::Logic::HoverPart::HoldEnd;
+    const auto kind = draft ? MMM::Logic::ChartObjectKind::DraftNote
+                            : MMM::Logic::ChartObjectKind::PlayerNote;
+    // 两种根类别刻意共享相同节点和坐标，隔离类别路由对端点操作的影响。
+    // Draft 输入从命中的末端子实体开始，Player 输入仍从折线根开始。
+    const auto           hitEntity = draft ? children[1] : root;
+    MMM::Logic::GrabTool tool;
+    // 命中部位和索引按按下帧固定，不依赖可能滞后的悬停状态。
+    // 命中信息来自按下帧，尾部索引固定为父折线的第二个子项。
+    tool.handleStartDrag(ctx,
+                         MMM::Logic::CmdStartDrag{
+                             hitEntity,
+                             "Basic2DCanvas",
+                             false,
+                             kind,
+                             static_cast<std::uint8_t>(part),
+                             1,
+                         });
+    // Draft 子实体应提升到父实体，整个事务都围绕原根记录。
+    // Draft 子实体应提升到其父折线；Player 的根身份则原样保留。
+    if ( !ctx.isDragging || ctx.draggedEntity != root ) return false;
+
+    // 先把尾端拉到非零参数，确认根锚点不变且独立子投影即时跟随。
+    // Hold 只改时间端点，Flick 只改箭头终轨，两者都不移动根锚点。
+    float expandedX = rootX;
+    float expandedY = yForTime(2.0);
+    if ( flick ) {
+        // Flick 通过目标终轨改写 dtrack；起点仍保持在根所在轨道。
+        // 目标选在 Draft 内另一轨或 Player 轨 3，保持完整落在各自编辑域。
+        const int  expandedTrack = draft ? -3 : 3;
+        const auto expandedAddress =
+            MMM::Logic::CanvasLaneAddress::fromAbsoluteTrack(
+                expandedTrack,
+                projection.playerLaneCount,
+                projection.draftLaneCount);
+        const auto expandedBounds = projection.bounds(expandedAddress);
+        // 用目标轨道自己的边界取中心，不混用草稿和玩家轨宽。
+        if ( !expandedBounds ) return false;
+        expandedX = (expandedBounds->leftX + expandedBounds->rightX) * 0.5F;
+        expandedY = yForTime(1.0);
+    }
+    tool.handleUpdateDrag(ctx,
+                          MMM::Logic::CmdUpdateDrag{
+                              "Basic2DCanvas", expandedX, expandedY, true });
+    // 第一次更新只看预览数据，保证鼠标仍按住时拾取位置已同步。
+    // 第一次更新必须可见地改变参数，但不应把整个根移到指针位置。
+    // 在预览中立刻核对双表示，不能只在释放时重新构建出正确状态。
+    const auto& expanded      = ctx.noteRegistry.get<const Note>(root);
+    const auto& expandedChild = ctx.noteRegistry.get<const Note>(children[1]);
+    const bool  expandedCorrect =
+        expanded.m_type == MMM::NoteType::POLYLINE &&
+        expanded.m_timestamp == 1.0 && expanded.m_trackIndex == track &&
+        expanded.m_subNotes.size() == 2U &&
+        // Hold 参数必须延长；Flick 轨差必须精确对应选定的目标轨。
+        (flick ? expanded.m_subNotes[1].dtrack == (draft ? -1 : 2)
+               : expanded.m_subNotes[1].duration > 0.5) &&
+        expandedChild.m_dtrack == expanded.m_subNotes[1].dtrack &&
+        expandedChild.m_duration == expanded.m_subNotes[1].duration &&
+        expandedChild.m_trackIndex == expanded.m_subNotes[1].trackIndex &&
+        // 子投影的 Draft 状态属于同步字段，不能沿用默认组件值。
+        expandedChild.m_isDraft == draft;
+    if ( !expandedCorrect ) return false;
+
+    // 参数归零后释放；尾子项应从父列表和子实体投影一并移除。
+    // 连续手势回到根轨与起始时间，分别对应 Flick 零轨差和 Hold 零时长。
+    // 同一手势返回起始端点位置，覆盖连续拖动中的正反向变化。
+    const float zeroX = rootX;
+    // 目标退回初始末端，验证连续移动后参数可精确回到零。
+    const float zeroY = yForTime(1.0);
+    // 两个端点分别按当前字段单位归零，而非把对象移到负时间或其他轨。
+    tool.handleUpdateDrag(
+        ctx, MMM::Logic::CmdUpdateDrag{ "Basic2DCanvas", zeroX, zeroY, true });
+    tool.handleEndDrag(ctx, MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+
+    const auto& collapsed = ctx.noteRegistry.get<const Note>(root);
+    // 注册表计数只纳入子投影，不把其他类型组件或普通根 Note 混在一起。
+    // 仅统计引用当前根的投影，不把其他 Note 实体计入退化结果。
+    const auto countChildren = [&ctx, root]() {
+        // 结构收尾会销毁投影，故以父关系计数而不使用之前的句柄数。
+        std::size_t count = 0;
+        // 只读查询不改动注册表，撤销和重做均可重复执行该断言。
+        for ( const auto entity : ctx.noteRegistry.view<const Note>() ) {
+            const auto& note = ctx.noteRegistry.get<const Note>(entity);
+            if ( note.m_isSubNote && note.m_parentPolyline == root ) ++count;
+        }
+        return count;
+    };
+    // 仅剩头部 Note 时由原根接管普通物件语义，尾投影必须销毁。
+    if ( collapsed.m_type != MMM::NoteType::NOTE ||
+         collapsed.m_timestamp != 1.0 || collapsed.m_trackIndex != track ||
+         !collapsed.m_subNotes.empty() || countChildren() != 0U ||
+         ctx.actionStack.getUndoStackSize() != 1U || ctx.isDragging ) {
+        return false;
+    }
+
+    // Root 仍然有效，但其 NoteType、参数字段与子列表已变为独立普通物件。
+    // 原末端子投影删除后不得继续参与命中或后续结构同步。
+    // Undo 应恢复完整折线和两个子投影；Redo 再次退化为普通 Note。
+    // 先撤销完整结构，再核对 Redo 是否能恢复已提交的退化态。
+    ctx.actionStack.undo(ctx);
+    // 根实体保留身份，撤销只恢复其原折线字段和子实体关系。
+    // Undo 需恢复同一根实体中的完整节点列表与对应子投影集合。
+    const auto& restored = ctx.noteRegistry.get<const Note>(root);
+    if ( restored.m_type != MMM::NoteType::POLYLINE ||
+         restored.m_timestamp != 1.0 || restored.m_trackIndex != track ||
+         restored.m_subNotes.size() != 2U || countChildren() != 2U ||
+         // 撤销比较原始尾参数，排除历史仅保存归零后的当前组件副本。
+         restored.m_subNotes[1].type !=
+             (flick ? MMM::NoteType::FLICK : MMM::NoteType::HOLD) ||
+         (flick ? restored.m_subNotes[1].dtrack != 1
+                : restored.m_subNotes[1].duration != 0.5) ) {
+        return false;
+    }
+    // Redo 应直接使用历史 after 快照，不读取当前鼠标与工具缓存。
+    ctx.actionStack.redo(ctx);
+    // 重做后再验证子投影集合为空，避免只检查根的类型字段。
+    // Redo 再次检查最终领域形态，不能只验证 Undo 可逆。
+    const auto& redone = ctx.noteRegistry.get<const Note>(root);
+    return redone.m_type == MMM::NoteType::NOTE && redone.m_timestamp == 1.0 &&
+           redone.m_trackIndex == track && redone.m_subNotes.empty() &&
+           countChildren() == 0U;
+}
+
+/// @brief 验证草稿折线内部 Hold 越域拖动不会丢失或转成整根移动。
+/// @return Hold 后缀被限制在草稿轨、根保持原位且可撤销时返回 true。
+/// @note 目标位于有效玩家轨，起始对象却处于草稿域；局部编辑应保持可撤销。
+bool runDraftInternalHoldBoundaryCase()
+{
+    // 起始对象属于草稿域，鼠标目标则落在可交互的玩家轨上。
+    // 两者的轨道几何来自统一投影，不依赖屏幕上固定的像素常量。
+    // 节点和后缀共享初始轨差，拖动必须保持段间连接。
+    // 根的锚点和域标记不随内部节点目标一同改变。
+    // 子实体投影用于验证预览中的拾取位置与父列表一致。
+    // 超出草稿边界的增量应按域限制，不应迁移或隐藏整个物件。
+    // 目标时间固定在内部 Hold 起点，只改变轨道变量。
+    // 释放提交一条动作，Undo 从独立初始结构恢复所有节点。
+    // 每个历史断言都通过原始实体句柄读取，不依据枚举顺序。
+    // 此用例不构造选择组，隔离单个内部节点的拖动语义。
+    // 预览与撤销都检查 Draft 标记，防止只保留负轨号但切换领域。
+    // 玩家区域内的目标仍是合法输入，不能触发越界坐标的早退。
+    using Note = MMM::Logic::NoteComponent;
+    MMM::Logic::SessionContext ctx;
+    configure(ctx);
+    ctx.draftTrackCount = 4;
+
+    Note parent;
+    // 三节点结构让内部 Hold 带有后缀哨兵，可发现只约束当前节点的错位。
+    parent.m_type       = MMM::NoteType::POLYLINE;
+    parent.m_timestamp  = 1.0;
+    parent.m_trackIndex = -2;
+    parent.m_isDraft    = true;
+    parent.m_subNotes   = {
+        Note::SubNote{
+              .type = MMM::NoteType::NOTE, .timestamp = 1.0, .trackIndex = -2 },
+        Note::SubNote{ .type       = MMM::NoteType::HOLD,
+                         .timestamp  = 1.5,
+                         .duration   = 0.5,
+                         .trackIndex = -3 },
+        Note::SubNote{
+              .type = MMM::NoteType::NOTE, .timestamp = 2.0, .trackIndex = -3 },
+    };
+    MMM::Logic::ensureNoteCollaborationIdentity(parent);
+    // 父根保持未选中，命令明确命中内部节点而不是进入整组拖动。
+    const auto root = ctx.noteRegistry.create();
+    ctx.noteRegistry.emplace<Note>(root, parent);
+    ctx.noteRegistry.emplace<MMM::Logic::InteractionComponent>(root);
+    std::vector<entt::entity> children;
+    for ( std::size_t index = 0; index < parent.m_subNotes.size(); ++index ) {
+        const auto entity = ctx.noteRegistry.create();
+        ctx.noteRegistry.emplace<Note>(
+            entity,
+            MMM::Logic::makeNoteComponentFromSubNote(
+                parent.m_subNotes[index], true, root, static_cast<int>(index)));
+        ctx.noteRegistry.emplace<MMM::Logic::InteractionComponent>(entity);
+        children.push_back(entity);
+    }
+
+    const auto& camera = ctx.cameras.at("Basic2DCanvas");
+    // 计算合法玩家目标中心，越域意图不依赖玩家轨宽的硬编码像素值。
+    const auto projection = MMM::Logic::calculateCanvasLaneProjection(
+        camera.viewportWidth,
+        ctx.trackCount,
+        ctx.bgmTrackCount,
+        ctx.lastConfig.visual.trackLayout,
+        camera.horizontalOffsetX,
+        true,
+        true,
+        true,
+        ctx.draftTrackCount,
+        true);
+    const auto playerBounds = projection.bounds(
+        MMM::Logic::CanvasLaneAddress{ MMM::Logic::CanvasLaneKind::Player, 1 });
+    if ( !projection.valid || !playerBounds ) return false;
+    const float outsideDraftX =
+        (playerBounds->leftX + playerBounds->rightX) * 0.5F;
+    const auto& cache =
+        ctx.timelineRegistry.ctx().get<MMM::Logic::System::ScrollCache>();
+    const float judgmentY =
+        camera.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
+    const float holdY = static_cast<float>(
+        judgmentY + cache.getAbsY(ctx.animateTime) - cache.getAbsY(1.5));
+
+    MMM::Logic::GrabTool tool;
+    // DraftNote 命令和 PolylineNode/1 一起锁定草稿内部编辑语义。
+    tool.handleStartDrag(
+        ctx,
+        MMM::Logic::CmdStartDrag{
+            root,
+            "Basic2DCanvas",
+            false,
+            MMM::Logic::ChartObjectKind::DraftNote,
+            static_cast<std::uint8_t>(MMM::Logic::HoverPart::PolylineNode),
+            1,
+        });
+    if ( !ctx.isDragging || ctx.draggedEntity != root ) return false;
+    tool.handleUpdateDrag(ctx,
+                          MMM::Logic::CmdUpdateDrag{
+                              "Basic2DCanvas", outsideDraftX, holdY, true });
+
+    // 同时检查 Hold、后缀和父锚点，以发现整根位移或结构丢失。
+    const auto& preview = ctx.noteRegistry.get<const Note>(root);
+    const auto& child   = ctx.noteRegistry.get<const Note>(children[1]);
+    if ( !preview.m_isDraft || preview.m_trackIndex != -2 ||
+         preview.m_timestamp != 1.0 || preview.m_subNotes.size() != 3U ||
+         preview.m_subNotes[1].trackIndex >= 0 ||
+         preview.m_subNotes[2].trackIndex >= 0 ||
+         child.m_trackIndex != preview.m_subNotes[1].trackIndex ||
+         child.m_duration != preview.m_subNotes[1].duration ) {
+        return false;
+    }
+
+    tool.handleEndDrag(ctx, MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+    // 越域边界钳制仍是一项有效局部编辑，因此只产生一条历史记录。
+    if ( ctx.actionStack.getUndoStackSize() != 1U ||
+         ctx.noteRegistry.get<const Note>(root).m_type !=
+             MMM::NoteType::POLYLINE ) {
+        return false;
+    }
+    ctx.actionStack.undo(ctx);
+    // 通过既有实体句柄验证子投影撤销，而不是仅数父列表元素。
+    // 时间值也逐个回到初始位置，防止撤销只修复轨道投影。
+    const auto& restored = ctx.noteRegistry.get<const Note>(root);
+    for ( std::size_t index = 0; index < children.size(); ++index ) {
+        const auto& restoredChild =
+            ctx.noteRegistry.get<const Note>(children[index]);
+        if ( restoredChild.m_trackIndex !=
+                 parent.m_subNotes[index].trackIndex ||
+             restoredChild.m_timestamp != parent.m_subNotes[index].timestamp ) {
+            return false;
+        }
+    }
+    return restored.m_isDraft && restored.m_trackIndex == -2 &&
+           restored.m_subNotes.size() == parent.m_subNotes.size() &&
+           restored.m_subNotes[1].trackIndex == -3 &&
+           restored.m_subNotes[2].trackIndex == -3;
+}
 }  // namespace
 
-/// @brief 运行首段两种身体拖动与头部整体拖动的回归矩阵。
+/// @brief 运行折线身体、内部节点、末端和草稿边界的回归矩阵。
 /// @return 任一结构或撤销断言失败时返回非零。
+/// @note 端点覆盖两域、两类型和两种选择状态的全组合，避免选择状态抢占局部手势。
+/// @note 所有场景分别创建会话，不把前一场景的撤销记录或拖动标记带入后一场景。
 int main()
 {
     return runCase(DragCase::HoldBody) && runCase(DragCase::FlickBody) &&
                    runCase(DragCase::HoldHead) &&
                    runInternalNodeCase(false, false) &&
                    runInternalNodeCase(true, false) &&
-                   runInternalNodeCase(true, true)
+                   runInternalNodeCase(true, true) &&
+                   runPolylineEndpointCase(false, false, false) &&
+                   runPolylineEndpointCase(false, false, true) &&
+                   runPolylineEndpointCase(false, true, false) &&
+                   runPolylineEndpointCase(false, true, true) &&
+                   runPolylineEndpointCase(true, false, false) &&
+                   runPolylineEndpointCase(true, false, true) &&
+                   runPolylineEndpointCase(true, true, false) &&
+                   runPolylineEndpointCase(true, true, true) &&
+                   runDraftInternalHoldBoundaryCase()
                ? 0
                : 1;
 }

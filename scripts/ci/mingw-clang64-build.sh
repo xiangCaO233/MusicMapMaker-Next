@@ -6,10 +6,20 @@ set -euo pipefail
 
 # CI 默认不启用验证层，显式参数用于诊断构建。
 vulkanValidationLayers="OFF"
-# 仅接受显式诊断开关，拼错参数时在下载依赖前报错。
+# 默认请求业务模块采样，编译器能力由 CMake 校验。
+pgoInstrument="ON"
+# 插桩仅采集 profile，不代表本次构建已经应用 profile 优化。
+# CMake 参数每次显式传入，复用构建树也能关闭旧的采样设置。
+# 参数在下载依赖前解析，最后一个采样开关生效。
 for option in "$@"; do
     case "${option}" in
         --vulkan-validation-layers) vulkanValidationLayers="ON" ;;
+        --pgo-instrument) pgoInstrument="ON" ;;
+        --no-pgo-instrument) pgoInstrument="OFF" ;;
+        -h|--help)
+            printf "Usage: scripts/ci/mingw-clang64-build.sh [--vulkan-validation-layers] [--pgo-instrument|--no-pgo-instrument]\nPGO instrumentation defaults to ON; requires an LLVM compiler.\n"
+            exit 0
+            ;;
         *) printf "error: unknown option: %s\n" "${option}" >&2; exit 1 ;;
     esac
 done
@@ -73,7 +83,7 @@ cmake -G Ninja \
     -DBUILD_TESTING=ON \
     -DMMM_ENABLE_VULKAN_VALIDATION_LAYERS="${vulkanValidationLayers}" \
     -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF \
-    -DMMM_PGO_INSTRUMENT=ON \
+    -DMMM_PGO_INSTRUMENT="${pgoInstrument}" \
     -DMMM_PGO_USE=OFF \
     -S . \
     -B build_clang
