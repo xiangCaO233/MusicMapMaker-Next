@@ -1020,6 +1020,8 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
           config.enablePolylineInternalFlickEffects },
         { "nonHoldHitEffectDuration", config.nonHoldHitEffectDuration },
         { "debugDrawHitboxes", config.debugDrawHitboxes },
+        { "debugCanvasCameraAngleDegrees",
+          config.debugCanvasCameraAngleDegrees },
         { "interactionHitboxScaleX", config.interactionHitboxScaleX },
         { "interactionHitboxScaleY", config.interactionHitboxScaleY }
     };
@@ -1155,14 +1157,30 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
         std::clamp(config.nonHoldHitEffectDuration,
                    VisualConfig::MIN_NON_HOLD_HIT_EFFECT_DURATION,
                    VisualConfig::MAX_NON_HOLD_HIT_EFFECT_DURATION);
-    // 调试绘制默认关闭，横纵拾取缩放允许独立校准。
+    // 调试绘制默认关闭，观察角和横纵拾取缩放可独立校准。
     config.debugDrawHitboxes = j.value("debugDrawHitboxes", false);
+    config.debugCanvasCameraAngleDegrees =
+        j.value("debugCanvasCameraAngleDegrees",
+                VisualConfig::DEFAULT_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES);
+    // 该字段只描述俯视偏转，摄像机高度由渲染实验固定。
+    // 零度是兼容旧配置的二维观察状态，不需要额外迁移标记。
+    // 仅持久化角度可避免用户配置与世界空间布局参数耦合。
     config.interactionHitboxScaleX =
         j.value("interactionHitboxScaleX",
                 VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE);
     config.interactionHitboxScaleY =
         j.value("interactionHitboxScaleY",
                 VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE);
+    // 非有限角度回退二维观察，避免投影计算传播 NaN。
+    if ( !std::isfinite(config.debugCanvasCameraAngleDegrees) ) {
+        config.debugCanvasCameraAngleDegrees =
+            VisualConfig::DEFAULT_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES;
+    }
+    // 存档不得越过实验支持的俯视范围。
+    config.debugCanvasCameraAngleDegrees =
+        std::clamp(config.debugCanvasCameraAngleDegrees,
+                   VisualConfig::MIN_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES,
+                   VisualConfig::MAX_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES);
     // 非有限缩放回退标准值，避免比较和几何计算传播 NaN。
     if ( !std::isfinite(config.interactionHitboxScaleX) ) {
         config.interactionHitboxScaleX =

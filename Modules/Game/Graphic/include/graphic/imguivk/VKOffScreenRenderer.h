@@ -1,4 +1,5 @@
 #pragma once
+#include <glm/mat4x4.hpp>
 
 #include "event/canvas/interactive/ResizeEvent.h"
 #include "event/core/EventBus.h"
@@ -241,6 +242,10 @@ protected:
         (void)cmdBuf;
         (void)frameIndex;
     }
+
+    /// @brief 提供同一帧各几何层共用的逻辑坐标投影。
+    /// @warning 每帧调用一次；不得等待逻辑线程或重建渲染资源。
+    virtual glm::mat4 getCanvasProjectionMatrix();
 
     /**
      * @brief 录制具体的绘制指令 (抽象方法，由 UI 层实现)

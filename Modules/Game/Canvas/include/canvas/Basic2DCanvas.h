@@ -146,6 +146,17 @@ protected:
     void onRecordResourceUploads(vk::CommandBuffer& cmdBuf,
                                  uint32_t           frameIndex) override;
 
+    /// @brief 缓存当前观察矩阵，保持绘制与裁剪使用同一代角度。
+    /// @warning 每帧一次，仅执行固定规模矩阵计算。
+    glm::mat4 getCanvasProjectionMatrix() override;
+    /// @brief 把逻辑裁剪区域转换到当前摄像机的物理视口。
+    /// @warning 每批次调用；仅投影四个角点，不遍历物件。
+    vk::Rect2D getCanvasScissor(Common::Render::CanvasScissor scissor) const;
+    /// @brief 当前帧各几何层共用的观察矩阵。
+    glm::mat4 m_observationProjection{ 1.0f };
+    /// @brief 是否启用透视裁剪；零角度保持原二维裁剪路径。
+    bool m_isObservationCamera{ false };
+
     /// @warning
     /// 热路径：每帧离屏命令录制时执行；只允许遍历当前快照命令并绑定已存在的
     /// descriptor。

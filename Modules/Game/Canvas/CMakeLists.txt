@@ -111,6 +111,17 @@ target_include_directories(CanvasTabTitleTest
 target_link_libraries(CanvasTabTitleTest PRIVATE Canvas)
 mmm_register_test_case(NAME CanvasTabTitleTest COMMAND CanvasTabTitleTest)
 
+# 摄像机实验使用纯数学测试，不需要启动 Vulkan 或窗口。 覆盖零角兼容、边界倾角和裁剪投影，避免观察功能改变二维数据。 Common 提供裁剪
+# DTO，GLM 提供矩阵运算；不依赖业务画布实例。 此测试不检查运行时皮肤或输入拾取；倾斜后的鼠标编辑在原型中禁用。
+mmm_add_test_executable(Canvas PlanarObservationCameraTest
+                        tests/PlanarObservationCameraTest.cpp)
+target_include_directories(PlanarObservationCameraTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+# 显式引入数学依赖，保证测试不会依赖 Canvas 的传递头文件。
+target_link_libraries(PlanarObservationCameraTest PRIVATE Common Config 3rd_glm)
+mmm_register_test_case(NAME PlanarObservationCameraTest COMMAND
+                       PlanarObservationCameraTest)
+
 # 欢迎占位页可见性测试覆盖无谱面时隐藏状态与悬浮检视内容。 可见性 helper 归属 UI，显式链接 UI
 # 避免依赖其它测试的传递链接顺序，并固定占位页与真实谱面的信息边界。
 mmm_add_test_executable(Canvas CanvasContentVisibilityTest

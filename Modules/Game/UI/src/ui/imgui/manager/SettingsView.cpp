@@ -368,9 +368,10 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Debug: {
-        // 调试页仅测量公开给用户的诊断开关和命中框缩放。
+        // 调试页测量观察角、诊断开关和命中框缩放。
         // 调试日志运行态输出不属于设置标签，不在此列表中出现。
-        const std::array<const char*, 5> labels{
+        const std::array<const char*, 6> labels{
+            TR_CACHE("ui.settings.debug.canvas_camera_angle").data(),
             TR_CACHE("ui.settings.debug.draw_hitboxes").data(),
             TR_CACHE("ui.settings.debug.hitbox_scale_x").data(),
             TR_CACHE("ui.settings.debug.hitbox_scale_y").data(),
