@@ -381,8 +381,8 @@ bool testVerticalBodyPosition(bool polyline, bool bottom, bool fit,
     if ( polyline )
         note.m_subNotes.push_back({ .type       = MMM::NoteType::HOLD,
                                     .timestamp  = 0,
-                                    .trackIndex = 1,
-                                    .duration   = duration });
+                                    .duration   = duration,
+                                    .trackIndex = 1 });
     // 独立长条和单竖段折线保留不同身份，以覆盖两套拾取框生成路径。
     // 尾部的三倍皮肤倍率在主函数最后一次夹具加载后保持稳定。
     const auto entity = scene.add(note);
@@ -750,8 +750,8 @@ bool testFlickHoldConnection(bool bottom, bool preview, bool fit)
                                 .dtrack     = 1 });
     note.m_subNotes.push_back({ .type       = MMM::NoteType::HOLD,
                                 .timestamp  = 0,
-                                .trackIndex = 1,
-                                .duration   = 0.1 });
+                                .duration   = 0.1,
+                                .trackIndex = 1 });
     const auto entity = scene.add(note);
     scene.render(0.0, preview);
     glm::vec4 body{}, head{}, node{};
