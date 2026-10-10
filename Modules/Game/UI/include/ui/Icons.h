@@ -94,6 +94,22 @@ constexpr const char* ICON_MMM_BARS =
     "\xef\x83\x89";  ///< \uf0c9 bars (for beat divisor)
 /// @}
 
+/// @name 工具菜单图标
+/// @brief 以交换、时间、速度和插件形状区分不同工具职责。
+/// @note 采用内置 Nerd Font 覆盖的传统 FontAwesome 码位。
+/// @{
+/// @brief 数据源替换的双向交换箭头（U+F0EC）。
+constexpr const char* ICON_MMM_EXCHANGE = "\xef\x83\xac";
+/// @brief 时间点模板的时钟（U+F017）。
+constexpr const char* ICON_MMM_CLOCK = "\xef\x80\x97";
+/// @brief 倍速制作的速度表（U+F0E4）。
+constexpr const char* ICON_MMM_SPEEDOMETER = "\xef\x83\xa4";
+/// @brief 插件管理的拼图块（U+F12E）。
+constexpr const char* ICON_MMM_PUZZLE = "\xef\x84\xae";
+/// @brief 重载操作的循环箭头（U+F021）。
+constexpr const char* ICON_MMM_REFRESH = "\xef\x80\xa1";
+/// @}
+
 /// @name 音频图标
 /// @brief 音量等级、静音、音效与视觉效果入口使用的符号。
 /// @note MUTE 当前回退到 volume-off 字形，业务代码仍使用独立语义名称。
