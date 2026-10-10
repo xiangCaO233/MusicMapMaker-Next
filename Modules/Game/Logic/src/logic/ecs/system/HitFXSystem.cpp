@@ -604,7 +604,7 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
         // 先以宽整数计算终点再钳位，异常大偏移不能溢出或造成无界绘制循环。
         const int64_t renderTrack = static_cast<int64_t>(active.trackIndex) +
                                     (active.isDraft ? trackCount : 0);
-        const int     headTrack   = static_cast<int>(
+        const int headTrack = static_cast<int>(
             std::clamp<int64_t>(renderTrack, 0, trackCount - 1));
         const int tailTrack  = static_cast<int>(std::clamp<int64_t>(
             renderTrack + active.trackOffset, 0, trackCount - 1));
