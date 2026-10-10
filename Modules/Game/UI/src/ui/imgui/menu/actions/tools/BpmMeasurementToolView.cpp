@@ -1941,29 +1941,83 @@ void BpmMeasurementToolView::renderControlPanel(UIManager* sourceManager)
 /// @details 第一段作为基准不可删除；新增段继承当前视野处的 BPM；
 /// 所有编辑在本帧末尾统一归一化并重置节拍器。应用和向导导出共享
 /// 同一个标准化 Timing 转换入口。
+/// 表格仅改变布局，不替换段落的数据结构或拖动精度。
+/// 时间与 BPM 的最小宽度随当前字体变化，保证主题大字号也能读完整数值。
+/// 横向滚动只在容器宽度不足时出现，普通宽度仍自动铺满控制栏。
+/// 固定的首列让横向滚动时仍可辨认段落编号。
 void BpmMeasurementToolView::renderTimingSegmentsPanel()
 {
     ImGui::Spacing();
     ImGui::SeparatorText(TR("ui.tools.bpm_measure.segments").data());
 
-    // 面板显示约三至四行并启用内部滚动，防止变速谱面挤占全部控制栏。
-    const float rowHeight = ImGui::GetFrameHeightWithSpacing();
-    const float childHeight =
-        std::min(170.0f, std::max(rowHeight * 3.0f, rowHeight * 4.5f));
-    bool changed = false;
+    // 表头和段落共用滚动容器，固定表头便于长变速谱面辨认列含义。
+    const float rowHeight   = ImGui::GetFrameHeightWithSpacing();
+    const float childHeight = rowHeight * 5.5f;
+    bool        changed     = false;
     {
         // 滚动条样式仅作用于段落子区域，离开作用域自动恢复。
         Utils::VerticalScrollbarStyleScope scrollbarStyle;
-        if ( ImGui::BeginChild("##BpmMeasureSegments",
+        // 两个数值列平分剩余宽度，序号与操作列只占文本所需空间。
+        // 最小宽度按当前字体测量，包含符号与小数精度，不使用固定像素输入框。
+        // 超窄面板通过横向滚动保留可读宽度，不能再压缩成只露出部分数字。
+        const float cellPadding = ImGui::GetStyle().CellPadding.x * 2.0f;
+        // 编号按常见三位段落数量预留，避免序号占用两个编辑列的伸缩空间。
+        const float indexWidth = ImGui::CalcTextSize("#999").x;
+        // 操作列同时容纳本地化表头与删除按钮，不以中文字符串宽度硬编码。
+        const float actionWidth =
+            std::max(ImGui::CalcTextSize(TR("ui.common.delete").data()).x,
+                     ImGui::CalcTextSize(
+                         TR("ui.tools.bpm_measure.segment_action").data())
+                         .x) +
+            ImGui::GetStyle().FramePadding.x * 2.0f;
+        const float numericWidth =
+            // 正负时间和三位小数都需要显示；列宽也不能小于单位表头。
+            std::max(ImGui::CalcTextSize("-12345.678").x,
+                     ImGui::CalcTextSize(
+                         TR("ui.tools.bpm_measure.segment_time_column").data())
+                         .x) +
+            ImGui::GetStyle().FramePadding.x * 2.0f;
+        const float innerWidth = std::max(
+            // 为纵向滚动条留出空间，避免普通宽度下出现无意义的水平滚动。
+            ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ScrollbarSize,
+            indexWidth + actionWidth + numericWidth * 2.0f +
+                cellPadding * 4.0f);
+        // 不提供表格排序：段落顺序必须由首拍时间归一化，不能只改展示顺序。
+        const auto tableFlags =
+            ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+            ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX |
+            ImGuiTableFlags_SizingStretchSame;
+        if ( ImGui::BeginTable("##BpmMeasureSegments",
+                               4,
+                               tableFlags,
                                ImVec2(0.0f, childHeight),
-                               ImGuiChildFlags_Borders) ) {
+                               innerWidth) ) {
+            ImGui::TableSetupColumn(
+                "#", ImGuiTableColumnFlags_WidthFixed, indexWidth);
+            ImGui::TableSetupColumn(
+                TR("ui.tools.bpm_measure.segment_time_column").data(),
+                ImGuiTableColumnFlags_WidthStretch,
+                1.0f);
+            ImGui::TableSetupColumn(
+                "BPM", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+            ImGui::TableSetupColumn(
+                TR("ui.tools.bpm_measure.segment_action").data(),
+                ImGuiTableColumnFlags_WidthFixed,
+                actionWidth);
+            ImGui::TableSetupScrollFreeze(1, 1);
+            // 表头只展示字段与单位，数据编辑仍使用各行独立 ID。
+            ImGui::TableHeadersRow();
             for ( std::size_t i = 0; i < m_timingSegments.size(); ++i ) {
                 // 索引作为 ImGui ID，归一化排序后下一帧自然重建稳定控件。
                 auto& segment = m_timingSegments[i];
                 ImGui::PushID(static_cast<int>(i));
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::AlignTextToFramePadding();
                 ImGui::Text("#%zu", i + 1);
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(78.0f);
+                ImGui::TableSetColumnIndex(1);
+                // 输入占满本列；单位留在表头，不挤占数字显示空间。
+                ImGui::SetNextItemWidth(-1.0f);
                 float time = static_cast<float>(segment.timestampSeconds);
                 if ( ::MMM::UI::FeedbackDragFloat(
                          "##SegmentTime",
@@ -1973,17 +2027,17 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
                              60.0 / ::MMM::normalizeBpmValue(segment.bpm))),
                          static_cast<float>(
                              std::max(0.001, playbackCanvasDuration())),
-                         "%.3fs") ) {
+                         "%.3f") ) {
                     // 拖动期间暂存原始值，循环结束后统一排序和限幅。
                     segment.timestampSeconds = time;
                     changed                  = true;
                 }
                 if ( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip(
-                        "%s", TR("ui.tools.bpm_measure.segment_time").data());
+                    Utils::renderTooltip(
+                        TR("ui.tools.bpm_measure.segment_time").data());
                 }
-                ImGui::SameLine();
-                ImGui::SetNextItemWidth(76.0f);
+                ImGui::TableSetColumnIndex(2);
+                ImGui::SetNextItemWidth(-1.0f);
                 float bpm = static_cast<float>(segment.bpm);
                 if ( ::MMM::UI::FeedbackDragFloat(
                          "##SegmentBpm",
@@ -1997,10 +2051,11 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
                     changed     = true;
                 }
                 if ( ImGui::IsItemHovered() ) {
-                    ImGui::SetTooltip(
-                        "%s", TR("ui.tools.bpm_measure.segment_bpm").data());
+                    Utils::renderTooltip(
+                        TR("ui.tools.bpm_measure.segment_bpm").data());
                 }
-                ImGui::SameLine();
+                ImGui::TableSetColumnIndex(3);
+                // 禁用范围只包围第一段的删除按钮，不影响时间或 BPM 编辑。
                 if ( i == 0 ) {
                     // 第一段是基准 Timing，不允许删除以维持非空不变量。
                     ImGui::BeginDisabled();
@@ -2025,8 +2080,9 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
                 }
                 ImGui::PopID();
             }
+            // 删除提前退出循环也必须结束表格，保持内部窗口与列栈配对。
+            ImGui::EndTable();
         }
-        ImGui::EndChild();
     }
 
     if ( changed ) {

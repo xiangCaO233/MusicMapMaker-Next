@@ -1249,6 +1249,8 @@ return {
 	["ui.tools.bpm_measure.duration"] = "时长:",
 	["ui.tools.bpm_measure.segments"] = "BPM段落",
 	["ui.tools.bpm_measure.segment_time"] = "段落首拍时间",
+	["ui.tools.bpm_measure.segment_time_column"] = "首拍时间（秒）",
+	["ui.tools.bpm_measure.segment_action"] = "操作",
 	["ui.tools.bpm_measure.segment_bpm"] = "段落BPM",
 	["ui.tools.bpm_measure.markers_title"] = "音频时间标记",
 	["ui.tools.bpm_measure.markers_original_format"] = "保持原始格式（推荐）",

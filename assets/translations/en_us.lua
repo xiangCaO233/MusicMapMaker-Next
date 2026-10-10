@@ -1250,6 +1250,8 @@ return {
 	["ui.tools.bpm_measure.duration"] = "Duration:",
 	["ui.tools.bpm_measure.segments"] = "BPM Segments",
 	["ui.tools.bpm_measure.segment_time"] = "Segment first beat",
+	["ui.tools.bpm_measure.segment_time_column"] = "First beat (s)",
+	["ui.tools.bpm_measure.segment_action"] = "Actions",
 	["ui.tools.bpm_measure.segment_bpm"] = "Segment BPM",
 	["ui.tools.bpm_measure.markers_title"] = "Audio time markers",
 	["ui.tools.bpm_measure.markers_original_format"] = "Keep original format (recommended)",
