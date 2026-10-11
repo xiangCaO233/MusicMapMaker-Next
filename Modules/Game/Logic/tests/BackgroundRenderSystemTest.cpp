@@ -57,7 +57,8 @@ bool testMissingBackgroundUsesFixedOverlay()
     if ( snapshot.vertices.size() != 4 || snapshot.indices.size() != 6 ||
          snapshot.cmds.size() != 1 ||
          snapshot.cmds.front().customTextureId !=
-             static_cast<uint32_t>(MMM::Logic::TextureID::None) ) {
+             static_cast<uint32_t>(MMM::Logic::TextureID::None) ||
+         !snapshot.cmds.front().screenSpace ) {
         XERROR("Missing background did not generate a solid overlay draw call");
         return false;
     }
@@ -83,7 +84,15 @@ bool testMissingBackgroundUsesFixedOverlay()
         }
     }
 
-    return true;
+    // 后续轨道即使使用相同纯色图集，也必须分批并恢复场景空间。
+    // 同时确认背景裁剪为完整视口，不继承默认的超大兼容裁剪。
+    const auto backgroundScissor = snapshot.cmds.front().scissor;
+    // 保持同一批处理器，验证真实状态切换而不是构造新的默认实例。
+    batcher.pushQuad(80, 120, 40, 30, glm::vec4(1.0F));
+    batcher.flush();
+    return snapshot.cmds.size() == 2 && !snapshot.cmds.back().screenSpace &&
+           backgroundScissor ==
+               MMM::Common::Render::CanvasScissor{ 0, 0, 320, 180 };
 }
 
 /// @brief 验证存在背景资源时仍使用专用背景纹理。
@@ -112,7 +121,9 @@ bool testConfiguredBackgroundKeepsTexture()
     // 不检查纹理句柄有效性；customTextureId 是资源解析前的语义标识。
     if ( snapshot.cmds.size() != 1 ||
          snapshot.cmds.front().customTextureId !=
-             static_cast<uint32_t>(MMM::Logic::TextureID::Background) ) {
+             static_cast<uint32_t>(MMM::Logic::TextureID::Background) ||
+         !snapshot.cmds.front().screenSpace ||
+         batcher.currentCmd.screenSpace ) {
         XERROR("Configured background stopped using its dedicated texture");
         return false;
     }

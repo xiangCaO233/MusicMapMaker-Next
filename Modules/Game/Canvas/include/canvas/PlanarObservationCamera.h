@@ -31,7 +31,7 @@ inline float planarObservationAngle(float degrees)
 /// @note 平面仍是二维谱面，摄像机不向物件写入 Z 坐标。
 /// @note 倾角绕横轴变化，摄像机高度固定，水平退距随倾角变化。
 /// @note 输入是逻辑像素，与窗口 DPI 和发光降采样无关。
-/// @note 各几何层必须共用本帧返回值，不能分别读取可变设置。
+/// @note 各轨道几何层必须共用本帧返回值，固定背景层使用独立屏幕投影。
 /// @note 两种模式的深度矩阵不同，但零角附近 XY 尺寸连续。
 /// @note 近平面和远平面仅覆盖单位平面实验，不作为通用场景参数。
 /// @note 逻辑宽高来自离屏视口，最小尺寸保护用于避免除零。
@@ -65,6 +65,18 @@ inline glm::mat4 planarObservationProjection(float width, float height,
     // Vulkan 正高度 viewport 的 Y 方向与传统透视相反，仅在投影处翻转。
     projection[1][1] *= -1.0F;
     return projection * view * model;
+}
+
+/// @brief 为固定背景层生成无播放补偿的屏幕投影。
+/// @param width 逻辑视口宽度，独立于背景资源尺寸。
+/// @param height 逻辑视口高度，独立于轨道布局范围。
+/// @return 将完整背景映射到视口的正交矩阵。
+/// @warning 每帧录制调用一次，仅计算固定大小矩阵，不读取摄像机配置。
+inline glm::mat4 canvasBackgroundProjection(float width, float height)
+{
+    // 背景覆盖整个视口；播放亚帧偏移只能移动轨道，不能使背景边缘露底。
+    return glm::ortho(
+        0.0F, std::max(1.0F, width), 0.0F, std::max(1.0F, height), -1.0F, 1.0F);
 }
 
 /// @brief 将原二维裁剪区投影为保守屏幕包围矩形。

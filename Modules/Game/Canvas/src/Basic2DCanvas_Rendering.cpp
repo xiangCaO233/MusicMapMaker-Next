@@ -40,12 +40,15 @@ namespace MMM::Canvas
 glm::mat4 Basic2DCanvas::getCanvasProjectionMatrix()
 {
     // 仅改变录制阶段，不修改快照或会话的时间、轨道坐标。
-    // 背景与音符共用平面，全屏后处理不进入该变换。
+    // 轨道与音符共用平面，背景层和全屏后处理不进入该变换。
     // 渲染线程只读 UI 同线程维护的配置，不访问会话更新长锁。
+    // 空会话没有轨道场景，Logo 占位仍使用二维投影而非实验摄像机。
     const float angle =
-        planarObservationAngle(Config::AppConfig::instance()
-                                   .getVisualConfig()
-                                   .debugCanvasCameraAngleDegrees);
+        m_currentSnapshot && m_currentSnapshot->hasBeatmap
+            ? planarObservationAngle(Config::AppConfig::instance()
+                                         .getVisualConfig()
+                                         .debugCanvasCameraAngleDegrees)
+            : 0.0F;
     m_isObservationCamera = angle > 0.0f;
     // 后续批次裁剪复用该矩阵，发光降采样不改变逻辑空间。
     m_observationProjection =
@@ -626,6 +629,14 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
 
     vk::DescriptorSet             lastBoundTexture = VK_NULL_HANDLE;
     Common::Render::CanvasScissor lastScissor;
+    // 每帧背景独立使用屏幕正交投影，不跟随倾角或亚帧播放补偿。
+    // 背景矩阵只依赖视口大小，不能从纹理尺寸推导，否则填充模式会改变覆盖范围。
+    // 图片和视频共用这条录制路径，流式上传不改变所属坐标空间。
+    const auto backgroundProjection =
+        canvasBackgroundProjection(static_cast<float>(m_logicalWidth),
+                                   static_cast<float>(m_logicalHeight));
+    // 渲染器已上传轨道投影；仅跨层时更新 push constant，并强制刷新裁剪。
+    bool screenSpace = false;
     // 缓存只在本次命令列表内有效，不能跨帧保留 Vulkan 状态假设；
     // 每个 RenderPass 开始时都从显式初始状态重新推导。
     // 默认构造的 lastScissor 作为首条命令比较基线；若恰好相等，
@@ -677,10 +688,32 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
             lastBoundTexture = actualTexture;
         }
 
-        if ( cmd.scissor != lastScissor ) {
+        const bool spaceChanged = screenSpace != cmd.screenSpace;
+        // 空视频批次已在上方跳过，不应更新当前有效投影状态。
+        // 标志按命令而非纹理选择，纯色铺底也必须保持屏幕空间。
+        if ( spaceChanged ) {
+            screenSpace = cmd.screenSpace;
+            const auto& projection =
+                screenSpace ? backgroundProjection : m_observationProjection;
+            // 两个层使用兼容管线布局，只切矩阵，不创建额外离屏目标。
+            cmdBuf.pushConstants(pipelineLayout,
+                                 vk::ShaderStageFlagBits::eVertex |
+                                     vk::ShaderStageFlagBits::eFragment,
+                                 0,
+                                 sizeof(glm::mat4),
+                                 &projection);
+        }
+        if ( spaceChanged || cmd.scissor != lastScissor ) {
+            // 跨层强制更新裁剪，与背景/轨道刚好使用相同矩形的情况兼容。
+            // 固定层不经过四角透视包围框，避免缩小后的裁剪截断背景。
             // 快照 scissor 使用逻辑坐标，录制前按当前 framebuffer 比例
             // 转成物理像素；相邻相同裁剪区不重复设置。
-            vk::Rect2D physicalScissor = getCanvasScissor(cmd.scissor);
+            // 相同逻辑矩形在两种空间内的物理裁剪不同，不能沿用上一层缓存。
+            vk::Rect2D physicalScissor =
+                screenSpace ? getPhysicalScissor(vk::Rect2D{
+                                  { cmd.scissor.x, cmd.scissor.y },
+                                  { cmd.scissor.width, cmd.scissor.height } })
+                            : getCanvasScissor(cmd.scissor);
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }

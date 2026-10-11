@@ -87,6 +87,37 @@ bool testTilt()
     return rect.x >= 0 && rect.y >= 0 && rect.width > 0 && rect.height > 0 &&
            rect.x + rect.width <= 800 && rect.y + rect.height <= 600;
 }
+/// @brief 验证独立背景层始终铺满视口，轨道仍保留观察角度和播放补偿。
+/// @return 固定背景四角及场景矩阵保持各自契约时通过。
+/// @note CPU 回归只检查生产投影函数，不代替实际 GPU 显示验收。
+bool testBackgroundLayer()
+{
+    const auto background = MMM::Canvas::canvasBackgroundProjection(800, 600);
+    // 非正方形视口覆盖横纵比例，不能把固定层误当成单位正方形。
+    // 背景四角的齐次分母必须恒定，不能随摄像机倾斜形成梯形。
+    for ( float x : { 0.0F, 800.0F } ) {
+        for ( float y : { 0.0F, 600.0F } ) {
+            const auto point = background * glm::vec4(x, y, 0, 1);
+            // 逐角检查而非只看中心；中心不变仍可能存在背景缩小问题。
+            if ( !near(point.w, 1) || !near(point.x, x == 0 ? -1 : 1) ||
+                 !near(point.y, y == 0 ? -1 : 1) )
+                return false;
+        }
+    }
+    // 轨道录制独立保留亚帧补偿，在关闭观察模式时也不能移动固定背景。
+    const auto flat = MMM::Canvas::planarObservationProjection(800, 600, 20, 0);
+    // 最大合法倾角与非零补偿组合，覆盖最明显的背景倾斜回归。
+    const auto tilted =
+        MMM::Canvas::planarObservationProjection(800, 600, 20, 45);
+    const auto origin           = glm::vec4(0, 0, 0, 1);
+    const auto backgroundOrigin = background * origin;
+    // 正交轨道的纵向偏移与透视轨道的齐次分母分别验证两个独立约束。
+    const auto flatOrigin   = flat * origin;
+    const auto tiltedOrigin = tilted * origin;
+    // 背景不依赖轨道矩阵，拒绝再次把整个画布统一应用摄像机。
+    return !near(backgroundOrigin.y, flatOrigin.y) &&
+           !near(backgroundOrigin.w, tiltedOrigin.w);
+}
 }  // namespace
 
 /// @brief 运行不依赖 GPU 的实验摄像机回归。
@@ -101,5 +132,7 @@ int main()
          planarObservationAngle(std::numeric_limits<float>::quiet_NaN()) != 0 )
         return 1;
     // 分别验证关闭实验模式与观察模式，失败统一返回非零。
-    return testFlat() && testTilt() && testConfig() ? 0 : 1;
+    return testFlat() && testTilt() && testConfig() && testBackgroundLayer()
+               ? 0
+               : 1;
 }

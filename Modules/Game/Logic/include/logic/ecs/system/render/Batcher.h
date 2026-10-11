@@ -148,6 +148,17 @@ struct Batcher {
         currentCmd.additiveBlend = additive;
     }
 
+    /// @brief 切换固定屏幕层与轨道场景层，防止同图集跨坐标空间合批。
+    /// @param screenSpace 为真时不应用轨道观察变换或播放补偿。
+    /// @warning 快照生成热路径：仅提交已有批次，不分配独立几何缓冲或等待 GPU。
+    void setScreenSpace(bool screenSpace)
+    {
+        if ( currentCmd.screenSpace == screenSpace ) return;
+        // 同纹理和裁剪也不能合并不同空间，先提交旧几何再改变后续状态。
+        flush();
+        currentCmd.screenSpace = screenSpace;
+    }
+
     /// @brief 推送一个矩形 (y 为底边坐标，向上绘制)
     /// @param x 矩形左边界。
     /// @param y 矩形底边坐标，高度向负 Y 方向展开。
