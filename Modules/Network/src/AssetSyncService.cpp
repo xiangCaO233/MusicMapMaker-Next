@@ -1343,6 +1343,7 @@ AssetSyncResult AssetSyncService::sync(const AssetSyncOptions& options)
             insertion,
             std::string(separator) + "mmm_check=" + std::to_string(checkId));
     }
+    // 查询参数只影响清单的新鲜度，不改变文件哈希验证与资源版本判断。
     const bool manifestDownloaded =
         downloadString(manifestRequestUrl,
                        manifestText,
