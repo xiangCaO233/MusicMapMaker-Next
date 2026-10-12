@@ -1,0 +1,270 @@
+#!/bin/sh
+# @brief dpkg configure 阶段注册包内公钥约束的 MMM APT 源。
+# Debian Policy 要求维护脚本幂等；恢复安装或重复 configure 均可安全重入。
+# 升级错误恢复调用不应重置当前源，因此只处理 configure 动作。
+set -eu
+case "${1:-}" in configure) mode=configure ;; *) exit 0 ;; esac
+
+# @brief 架构来自包构建配置，未指定时读取 dpkg 的原生架构。
+# 显式限定 token 格式，防止多行字段或 shell 特殊字符进入 deb822。
+architecture='@MMM_DEB_ARCHITECTURE@'
+if [ -z "$architecture" ]; then architecture=$(dpkg --print-architecture); fi
+case "$architecture" in ''|[!a-z0-9]*|*[!a-z0-9-]*) echo "MMM: invalid Debian architecture" >&2; exit 1 ;; esac
+
+# 所有路径均为发行包固定位置；不接受环境变量重定向生产维护操作。
+# 测试复制模板并替换这些字面路径，因此测试进程不能写入系统目录。
+apt_dir=/etc/apt
+source_dir=/etc/apt/sources.list.d
+canonical=/etc/apt/sources.list.d/mmm.sources
+keyring=/usr/share/keyrings/mmm-archive-keyring.gpg
+stage=
+committing=no
+
+# @brief 失败时恢复本次已提交的文件，并清除 APT 扫描目录外的暂存区。
+# 原文件以 cp -p 保存权限；新建的 canonical 文件没有备份，回滚时删除。
+# 不在 sources.list.d 中存放 .bak 等文件，避免 APT 忽略扩展名警告。
+# @return 保留触发清理的原始退出码，供 dpkg 标记安装或卸载失败。
+# trap 安装早于 mktemp，部分初始化失败也不遗留临时目录。
+# 未进入 committing 状态时只清理暂存，不重写任何已有源。
+# 回滚覆盖所有 manifest 条目，因此尚未提交的文件也恢复同一快照。
+# 新 canonical 没有 original，回滚时不能误留指向缺失 key 的源。
+# HUP、INT、TERM 转为非零退出，复用同一回滚路径。
+# 成功提交后解除 committing 状态，清理不会撤销已完成的迁移。
+cleanup()
+{
+    status=$?
+    trap - 0 HUP INT TERM
+    if [ -n "$stage" ]; then
+        if [ "$status" -ne 0 ] && [ "$committing" = yes ]; then
+            # 只恢复已登记的本产品变更；其他源及用户 pin 始终不参与事务。
+            while IFS= read -r index; do
+                target=$(cat "$stage/$index.path")
+                if [ -f "$stage/$index.original" ]; then
+                    cp -p "$stage/$index.original" "$target" || :
+                else
+                    rm -f "$target" || :
+                fi
+            done < "$stage/manifest"
+        fi
+        rm -rf "$stage"
+    fi
+    exit "$status"
+}
+trap cleanup 0
+trap 'exit 1' HUP INT TERM
+
+# @brief 将一个源文件中的 MMM 条目过滤到暂存文件，保留其他软件源。
+# .list 按行移除，deb822 按段解析；混合 URIs 仅删除 MMM 的 URI token。
+# 多行 URIs、大小写字段、Enabled: no 和带选项的 .list 都按 APT 语法处理。
+# 只精确匹配本产品的已确认 URL，不凭文件名、域名子串或注释猜测归属。
+# @param $1 源格式，仅接受调用方从后缀推导的 list 或 sources。
+# @param $2 只读输入路径；不由 awk 就地覆盖原文件。
+# @param $3 变更标记路径，供 shell 判定该文件是否属于提交范围。
+# @return awk 正常输出为过滤结果；异常重复 URIs 字段返回非零状态。
+# 字段扫描只收集 URIs，不解释其他包的 Signed-By 或修改其信任配置。
+# URI 匹配区分路径且不允许附加参数，避免误删同域的其它发布渠道。
+# 一行多个 URI 是 deb822 的笛卡尔展开，删除其中一个不能丢弃其他 URI。
+# URIs 折行先收集完整 token，再一次性回写，防止只处理第一行的残留源。
+# 注释行不加入 URI token，不从普通管理员说明文字推断源归属。
+# 段的字段顺序无需固定，Types 与 Enabled 都保留原有管理员配置。
+# 纯 MMM 段可移除，混合段只替换 URI 字段以及其续行。
+# 重复 URIs 字段拒绝自动修复，失败必须先于任何持久源文件变更。
+# awk 在 stdout 输出结果，使用独立标记报告语义变化而非比较格式。
+# 没有变化的候选即使缺少 EOF 换行也会被 shell 丢弃，不引入格式噪音。
+# 暂存输出始终处于私有事务目录，绝不会被 APT 当作新的重复源读取。
+filter_source()
+{
+    awk -v format="$1" -v changed_file="$3" '
+    # @brief 允许旧 HTTP 与尾斜杠，拒绝相似域名、其它路径和查询参数。
+    # URL 以完整 token 比较，避免误删同站点托管的其他仓库。
+    function is_mmm(uri) {
+        return uri ~ /^https?:\/\/mmm[.]xiang233[.]top\/apt\/?$/
+    }
+    # @brief 清空单个 deb822 段的解析状态，数组只覆盖当前段。
+    # 每段独立判断，混合文件中其他段不受 MMM 的字段配置影响。
+    function reset_stanza( i) {
+        for (i in lines) delete lines[i]
+        for (i in uri_lines) delete uri_lines[i]
+        count = 0; current = ""; uris = ""; uri_count = 0; first_uri = 0
+    }
+    # @brief 输出段，只有包含 MMM URI 时才改写 URIs 字段。
+    # 字段之外的行保持原样，保留其他 URI 所需的 Suites、Components 等。
+    function flush_stanza( i,n,parts,kept,found) {
+        if (!count) return
+        n = split(uris, parts, /[ \t\r\n]+/)
+        kept = ""; found = 0
+        for (i = 1; i <= n; i++) {
+            if (is_mmm(parts[i])) found = 1
+            else if (parts[i] != "") kept = kept (kept == "" ? "" : " ") parts[i]
+        }
+        # 重复 URIs 字段没有可证明正确的合并语义，先失败再提交任何文件。
+        # 无 MMM 的异常段完全不归本包维护，保持用户现状。
+        if (found && uri_count != 1) exit 42
+        if (found) changed = 1
+        if (!found || kept != "") {
+            for (i = 1; i <= count; i++) {
+                if (!found || !uri_lines[i]) print lines[i]
+                else if (i == first_uri) print "URIs: " kept
+            }
+        }
+        reset_stanza()
+    }
+    BEGIN { reset_stanza() }
+    format == "list" {
+        # 注释掉的完整 deb 行也是历史配置；普通说明性注释不参与判断。
+        # 先去掉整行禁用标记，再越过 [] 选项，定位 URI 字段。
+        candidate = $0
+        sub(/^[ \t]*#[ \t]*/, "", candidate)
+        sub(/^[ \t]+/, "", candidate)
+        if (candidate ~ /^deb(-src)?[ \t]+/) {
+            sub(/^deb(-src)?[ \t]+/, "", candidate)
+            if (candidate ~ /^\[/) sub(/^\[[^]]*\][ \t]+/, "", candidate)
+            split(candidate, fields, /[ \t]+/)
+            if (is_mmm(fields[1])) { changed = 1; next }
+        }
+        print; next
+    }
+    {
+        # 空白行是 deb822 的段边界；保留原分隔行，避免挪动无关段注释。
+        # 首列 # 注释不结束字段，URIs 的后续缩进行仍可继续。
+        if ($0 ~ /^[ \t\r]*$/) { flush_stanza(); print; next }
+        lines[++count] = $0
+        if ($0 ~ /^#/) next
+        if ($0 ~ /^[ \t]/) {
+            if (current == "uris") { uris = uris " " $0; uri_lines[count] = 1 }
+        } else {
+            current = tolower($0)
+            sub(/:.*/, "", current)
+            if (current == "uris") {
+                uri_count++; first_uri = count; uri_lines[count] = 1
+                value = $0; sub(/^[^:]*:[ \t]*/, "", value)
+                uris = uris " " value
+            }
+        }
+    }
+    END {
+        if (format != "list") flush_stanza()
+        if (changed) print "changed" > changed_file
+    }' "$2"
+}
+
+# @brief 为每个待改文件登记独立备份与路径，直到全部检查成功才提交。
+# 保留现有权限；拒绝改写符号链接，防止跨出明确的 APT 配置边界。
+# 文件名按 APT 支持的字符集筛选，清单不会受到换行或路径分隔符干扰。
+# @param $1 候选源的绝对路径；缺失的 glob 结果直接忽略。
+# @param $2 按后缀确定的格式，主 sources.list 固定使用 list。
+# @return 解析、权限或备份失败返回非零，set -e 将中止尚未开始的提交。
+# 计数器的间隙没有含义，只允许 manifest 决定真正修改哪些文件。
+# 所有备份必须先于持久写操作完成，避免源集合处于新旧混合状态。
+# 原文件 mode 继承给暂存结果，管理员设置不会被 umask 意外覆盖。
+# canonical 中若存在其他软件段，过滤器对其使用同等保护规则。
+# 路径本身来自固定目录，管理员的源内容不会作为 shell 命令执行。
+prepare_source()
+{
+    source=$1
+    format=$2
+    [ -e "$source" ] || [ -L "$source" ] || return 0
+    [ -f "$source" ] && [ -r "$source" ] || {
+        echo "MMM: cannot read source file: $source" >&2; return 1;
+    }
+    index=$((index + 1))
+    filter_source "$format" "$source" "$stage/$index.changed" > "$stage/$index.filtered"
+    # 未发现 MMM 的候选文件不参与提交，不更改末尾换行或任何权限。
+    # canonical 例外：configure 时将在保留段之后追加标准 MMM 配置。
+    if [ ! -f "$stage/$index.changed" ] && ! { [ "$mode" = configure ] && [ "$source" = "$canonical" ]; }; then
+        return 0
+    fi
+    [ ! -L "$source" ] && [ -w "$source" ] && [ -w "$(dirname "$source")" ] || {
+        echo "MMM: refusing unsafe source path: $source" >&2; return 1;
+    }
+    cp -p "$source" "$stage/$index.original"
+    cp -p "$source" "$stage/$index.output"
+    cat "$stage/$index.filtered" > "$stage/$index.output"
+    # 配置文件路径单独保存，整个准备阶段不向用户源目录写入内容。
+    # 清单只包含改变 MMM 条目的文件，因此移除不需要公钥仍能完成。
+    printf '%s\n' "$source" > "$stage/$index.path"
+    printf '%s\n' "$index" >> "$stage/manifest"
+    if [ "$source" = "$canonical" ]; then canonical_index=$index; fi
+}
+
+# @brief 建立 APT 目录并检查 canonical 的路径类型，避免覆盖目录或链接。
+# 普通卸载时目录可能已被管理员删除，此时无需重新创建配置目录。
+# 暂存目录权限仅限当前用户；退出或信号失败都会清理和回滚。
+if [ "$mode" = configure ]; then
+    [ -f "$keyring" ] && [ -r "$keyring" ] && [ -s "$keyring" ] && [ ! -L "$keyring" ] || {
+        echo "MMM: missing packaged archive keyring: $keyring" >&2; exit 1;
+    }
+    mkdir -p "$source_dir"
+    # 新建 canonical 的父目录也必须在提交前验证，而不是等到 rename 才发现。
+    # 只检查目录可写性，不修改管理员为其他源设置的文件权限。
+    [ -w "$source_dir" ] || { echo "MMM: source directory is not writable" >&2; exit 1; }
+else
+    [ -d "$apt_dir" ] || exit 0
+fi
+if [ -e "$canonical" ] || [ -L "$canonical" ]; then
+    [ -f "$canonical" ] && [ ! -L "$canonical" ] || {
+        echo "MMM: refusing unsafe canonical source: $canonical" >&2; exit 1;
+    }
+fi
+stage=$(mktemp -d "$apt_dir/.mmm-maintenance.XXXXXX")
+: > "$stage/manifest"
+index=0
+canonical_index=
+
+# APT 同时读取主 sources.list 与支持后缀的目录文件，二者都可能留有旧源。
+# 不扫描 preferences、不探测网络，也不读取本产品之外的仓库内容。
+prepare_source "$apt_dir/sources.list" list
+for source in "$source_dir"/*.list "$source_dir"/*.sources; do
+    name=${source##*/}
+    case "$name" in *[!a-zA-Z0-9_.-]*) continue ;; esac
+    case "$source" in *.sources) format=sources ;; *) format=list ;; esac
+    prepare_source "$source" "$format"
+done
+
+if [ "$mode" = configure ]; then
+    # canonical 文件可能包含其他软件的段；标准源追加到过滤结果之后。
+    # 仅在没有此文件时创建全新结果，已存在文件的权限继续保留。
+    if [ -z "$canonical_index" ]; then
+        index=$((index + 1)); canonical_index=$index
+        : > "$stage/$index.output"
+        chmod 644 "$stage/$index.output"
+        printf '%s\n' "$canonical" > "$stage/$index.path"
+        printf '%s\n' "$index" >> "$stage/manifest"
+    fi
+    output=$stage/$canonical_index.output
+    # 过滤产生的空段统一在 canonical 尾部去掉，使重复 configure 字节稳定。
+    # 其他文件只移除本包条目，不统一风格或重新排列管理员的内容。
+    awk '{ lines[NR] = $0; if ($0 !~ /^[ \t\r]*$/) last = NR }
+         END { for (i = 1; i <= last; i++) print lines[i] }' "$output" > "$stage/canonical.trimmed"
+    cat "$stage/canonical.trimmed" > "$output"
+    [ ! -s "$output" ] || printf '\n' >> "$output"
+    cat >> "$output" <<EOF
+Types: deb
+URIs: https://mmm.xiang233.top/apt/
+Suites: stable
+Components: main
+Architectures: $architecture
+Signed-By: $keyring
+EOF
+fi
+
+# 所有文件已解析并保存备份，公钥与架构也已检查，此刻才开始提交。
+# 单文件用 rename 替换；发生后续失败时 EXIT trap 按清单恢复原内容。
+# 不执行 apt update：dpkg 持锁期间递归包管理会阻塞安装并引入网络失败。
+committing=yes
+while IFS= read -r index; do
+    target=$(cat "$stage/$index.path")
+    output=$stage/$index.output
+    if [ -f "$stage/$index.original" ] && cmp -s "$stage/$index.original" "$output"; then
+        continue
+    fi
+    # remove/purge 过滤后只有空白的文件可删除，含管理员注释则保留。
+    # 配置阶段必须保留 canonical，任何其他软件源段也永远不会整体删除。
+    if [ "$mode" != configure ] && ! awk 'NF { found = 1 } END { exit !found }' "$output"; then
+        rm -f "$target"
+    else
+        mv -f "$output" "$target"
+    fi
+done < "$stage/manifest"
+committing=no
+exit 0

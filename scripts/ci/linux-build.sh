@@ -391,6 +391,7 @@ export CXX="${cxxCompiler}"
 unset VULKAN_SDK VK_SDK_PATH
 
 # CI 与预编译构建不得写入 Runner 的用户配置目录。
+# 每轮清除外部 ELF 与旧源码身份覆盖，DEB 必须对应本次 Debian 13 的原生编译。
 # 清除旧 Vulkan cache 项，避免构建目录复用遗留 Windows SDK 路径。
 # 每次配置都覆盖缓存中的验证层状态，确保诊断开关按本次参数生效。
 cmake -U "Vulkan_*" \
@@ -399,6 +400,9 @@ cmake -U "Vulkan_*" \
     -DBUILD_TESTING=ON \
     -DMMM_ENABLE_VULKAN_VALIDATION_LAYERS="${vulkanValidationLayers}" \
     -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF \
+    -DMMM_ENABLE_DEB_PACKAGING=ON -UMMM_DEB_REVISION \
+    -DMMM_DEB_EXECUTABLE= \
+    -DMMM_DEB_SOURCE_COMMIT= \
     -DSOURCES_BUILD="${sourcesBuild}" \
     -DPROJECT_LINKAGE="${projectLinkage}" \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \

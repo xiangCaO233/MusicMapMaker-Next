@@ -215,8 +215,11 @@ add_subdirectory("Modules")
 # 模块声明完成后统一组装测试程序，数量限制与分派细节留在 helper 中。
 mmm_finalize_test_suites()
 
-# macOS 需要把应用束、Vulkan 运行时和更新器组合为可分发的 DMG；Windows/Linux 继续直接发布单可执行文件。
+# 平台打包分别管理应用束与系统包；Windows 保留原有单可执行文件发布方式。
 if(APPLE)
   # 打包逻辑仅在 Apple 主机构建中定义，其他平台不解析其专用工具。
   include("macos-package")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  # DEB 只收集主程序的专用组件，不把普通 install 与第三方规则打入系统包。
+  include("linux-package")
 endif()

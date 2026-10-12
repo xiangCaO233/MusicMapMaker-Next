@@ -164,6 +164,18 @@ jobs:
           copy_bin build_linux_gcc14 linux-gcc14
           copy_bin build_linux_clang19 linux-clang19
 
+          # DEB 使用同一 Debian 13 GCC14 构建树，不能在开发机重新包装不同 ABI。
+          # 只复制本次版本，保留 build/packages 中的历史文件而不混入 release。
+          cpack -G DEB --config /home/xiang/MusicMapMaker-Next/build_linux_gcc14/CPackConfig.cmake
+          deb_name="$(python3 - <<'PY_DEB'
+          import json
+          with open("build_linux_gcc14/generated/debian/build-info.json") as source:
+              info = json.load(source)
+          print("musicmapmaker-next_" + info["version"] + "-" + info["deb_revision"] + "_" + info["architecture"] + ".deb")
+          PY_DEB
+          )"
+          cp "build_linux_gcc14/packages/${deb_name}" release/linux-gcc14/
+
           if [[ ! -d assets ]]; then
             # 运行资源是所有平台共享的强制发布组成。
             printf "error: assets directory not found\n" >&2
@@ -413,3 +425,9 @@ jobs:
           bash scripts/ci/publish-website-release.sh \
             --source-release /home/xiang/MusicMapMaker-Next/release \
             --website-dir /home/xiang/mmm-website
+
+          # 签名 APT 仓库使用独立文档根，不被网站部署的 --delete 清空。
+          # 同版本历史包保留，确保 Gentoo Manifest 的下载地址始终可验证。
+          # helper 验证包名、公钥身份与不变版本，再在服务器完成索引签名。
+          bash scripts/apt/publish_repository.sh \
+            /home/xiang/MusicMapMaker-Next/release/linux-gcc14/musicmapmaker-next_*.deb

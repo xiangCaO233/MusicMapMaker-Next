@@ -1,0 +1,10 @@
+# CPack 暂存根由 DESTDIR 与安装前缀共同组成，禁止把链接直接写入构建宿主。 链接使用相对目标，提取 DEB
+# 到任意根目录后仍指向同一暂存树中的程序。
+set(_mmm_install_root "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}")
+# 目录由当前安装组件拥有，普通用户无需向系统 /usr/bin 写入即可检查包内容。
+file(MAKE_DIRECTORY "${_mmm_install_root}/usr/bin")
+# 重复暂存安装前只清理指定链接，不递归删除目录，也不操作其他命令入口。
+file(REMOVE "${_mmm_install_root}/usr/bin/MusicMapMaker-Next")
+# 相对路径从 usr/bin 回到安装根，然后进入 opt/mmm。
+file(CREATE_LINK "../../opt/mmm/MusicMapMaker-Next"
+     "${_mmm_install_root}/usr/bin/MusicMapMaker-Next" SYMBOLIC)

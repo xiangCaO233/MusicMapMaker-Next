@@ -1,0 +1,8 @@
+{
+  "version": "@PROJECT_VERSION@",
+  "deb_revision": "@MMM_DEB_REVISION@",
+  "source_commit": "@MMM_DEB_SOURCE_COMMIT@",
+  "architecture": "@MMM_DEB_ARCHITECTURE@",
+  "compiler": "@CMAKE_CXX_COMPILER_ID@",
+  "compiler_version": "@CMAKE_CXX_COMPILER_VERSION@"
+}

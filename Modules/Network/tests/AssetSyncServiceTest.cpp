@@ -10,10 +10,12 @@
 #include "log/colorful-log.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <miniz.h>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -22,6 +24,50 @@ using namespace MMM::Network;
 
 namespace
 {
+
+/// @brief 临时覆盖进程环境变量，并在测试结束时恢复原值。
+/// @details 环境变量属于进程全局状态；本测试单线程执行，因此在作用域内设置后
+/// 可直接验证默认配置读取结果。析构时恢复原值或还原为未设置状态。
+class ScopedEnvironmentVariable final
+{
+public:
+    /// @brief 保存旧值，后续通过 set 设置临时测试值。
+    /// @param name 环境变量名称。
+    explicit ScopedEnvironmentVariable(const char* name) : m_name(name)
+    {
+        // 复制环境存储中的旧值，后续 setenv 可能替换该存储。
+        if ( const char* previous = std::getenv(name) ) {
+            m_previous = previous;
+        }
+    }
+
+    /// @brief 析构时恢复环境变量原值。
+    /// @details set 使用 C 环境 API，不抛出异常；清理错误不覆盖测试断言结果。
+    ~ScopedEnvironmentVariable() { set(m_previous); }
+
+    ScopedEnvironmentVariable(const ScopedEnvironmentVariable&) = delete;
+    ScopedEnvironmentVariable& operator=(const ScopedEnvironmentVariable&) =
+        delete;
+
+    /// @brief 设置或清除变量，并报告系统调用结果。
+    /// @param value 新值；空 optional 表示清除变量。
+    /// @return 环境变量操作成功时返回 true。
+    bool set(const std::optional<std::string>& value)
+    {
+#if defined(_WIN32)
+        return _putenv_s(m_name.c_str(), value ? value->c_str() : "") == 0;
+#else
+        if ( value ) return setenv(m_name.c_str(), value->c_str(), 1) == 0;
+        return unsetenv(m_name.c_str()) == 0;
+#endif
+    }
+
+private:
+    /// @brief 变量名称在恢复期间保持有效。
+    std::string m_name;
+    /// @brief 构造前的值；空值表示原本未设置。
+    std::optional<std::string> m_previous;
+};
 
 /// @brief 创建唯一临时目录。
 /// @return 已尝试创建的测试根路径；失败时后续写入断言负责报告。
@@ -258,6 +304,91 @@ int testResolveDownloadUrl()
         "absolute URL preserved");
 
     // 三种斜杠与 scheme 组合都符合下载器预期后返回零。
+    return fail;
+}
+
+/// @brief 测试默认资源地址及环境变量覆盖优先级。
+/// @return 默认 CDN 地址或显式环境变量覆盖不符合预期时返回失败数。
+/// @note 每个变量在测试结束时恢复，避免污染同一进程中的其它用例。
+/// @details
+/// - 清除继承环境，确认出厂配置使用已选定的 CDN 域名。
+/// - 单独覆盖 base URL，检查默认 manifest 与 package 随之迁移。
+/// - 再分别覆盖端点 URL，确认完整地址拥有最高优先级。
+/// - 所有 URL 都是纯配置断言，不会发起公网请求。
+int testDefaultOptionsUsesCdnAndHonorsEnvironment()
+{
+    int                       fail = 0;
+    ScopedEnvironmentVariable baseUrl("MMM_ASSET_BASE_URL");
+    ScopedEnvironmentVariable manifestUrl("MMM_ASSET_MANIFEST_URL");
+    ScopedEnvironmentVariable packageUrl("MMM_ASSET_PACKAGE_URL");
+
+    const bool cleared = baseUrl.set(std::nullopt) &&
+                         manifestUrl.set(std::nullopt) &&
+                         packageUrl.set(std::nullopt);
+    // 默认值测试必须先隔离调用进程可能携带的镜像配置。
+    fail += expectTrue(cleared, "clear asset URL overrides for defaults");
+    // 清理失败时不读取不确定配置，后续仍执行恢复作用域。
+    if ( cleared ) {
+        // 三个默认地址都应由同一 CDN 根生成，避免清单与完整包分流。
+        const auto defaults = AssetSyncService::defaultOptions();
+        // baseUrl 自身也属于公开选项，避免只验证拼出的两个端点。
+        fail += expectTrue(defaults.baseUrl == "https://downloads.xiang233.top",
+                           "default asset base URL uses Cloudflare CDN");
+        // manifest 位于专用子路径，完整值可发现拼接路径改变。
+        fail += expectTrue(
+            defaults.manifestUrl ==
+                "https://downloads.xiang233.top/download/assets/manifest.json",
+            "default manifest URL uses Cloudflare CDN");
+        // 首装 zip 是独立回退端点，也必须落在相同 CDN 主机。
+        fail +=
+            expectTrue(defaults.packageUrl ==
+                           "https://downloads.xiang233.top/download/assets.zip",
+                       "default package URL uses Cloudflare CDN");
+    }
+
+    // 只覆盖 baseUrl 时，未单独配置的两个地址应随之改指镜像根。
+    const bool setBase =
+        baseUrl.set(std::string("https://mirror.example.test"));
+    // 独立清除两项地址，才能观察 baseUrl 的派生行为。
+    if ( setBase && manifestUrl.set(std::nullopt) &&
+         packageUrl.set(std::nullopt) ) {
+        const auto baseOverridden = AssetSyncService::defaultOptions();
+        // 根相对 manifest 地址应保留服务端定义的目录层级。
+        fail += expectTrue(
+            baseOverridden.manifestUrl ==
+                "https://mirror.example.test/download/assets/manifest.json",
+            "base URL override redirects default manifest");
+        // 完整包也必须跟随 base 覆盖，防止冷启动绕过镜像。
+        fail +=
+            expectTrue(baseOverridden.packageUrl ==
+                           "https://mirror.example.test/download/assets.zip",
+                       "base URL override redirects default package");
+    } else {
+        fail += expectTrue(false, "prepare base-only URL override");
+    }
+
+    // 分别给端点配置绝对地址，验证它们优先于镜像根派生值。
+    const bool setManifest = manifestUrl.set(
+        std::string("https://manifest.example.test/assets.json"));
+    const bool setPackage =
+        packageUrl.set(std::string("https://package.example.test/assets.zip"));
+    // 三项设置全部成功后再观察快照，避免部分环境状态造成误判。
+    fail += expectTrue(setBase && setManifest && setPackage,
+                       "set explicit asset URL overrides");
+    if ( setBase && setManifest && setPackage ) {
+        // 完整 URL 覆盖需逐项保持，不能再被 baseUrl 拼接或重写。
+        const auto overridden = AssetSyncService::defaultOptions();
+        fail += expectTrue(overridden.baseUrl == "https://mirror.example.test",
+                           "base URL environment override is preserved");
+        // 清单可单独留在控制域名，文件 URL 由清单另行指向 CDN。
+        fail += expectTrue(overridden.manifestUrl ==
+                               "https://manifest.example.test/assets.json",
+                           "manifest URL environment override is preserved");
+        // 独立 package 覆盖用于清单不可用时的首次安装回退。
+        fail += expectTrue(
+            overridden.packageUrl == "https://package.example.test/assets.zip",
+            "package URL environment override is preserved");
+    }
     return fail;
 }
 
@@ -694,6 +825,7 @@ int main()
     // 先覆盖纯解析帮助器，再进入需要临时文件系统的场景。
     fail += testParseManifest();
     fail += testResolveDownloadUrl();
+    fail += testDefaultOptionsUsesCdnAndHonorsEnvironment();
     fail += testCollectOutdatedFiles();
     // ZIP 安全测试位于同步策略前，失败也不阻止后续临时场景清理自身。
     fail += testExtractZipArchive();

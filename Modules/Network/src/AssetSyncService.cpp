@@ -20,9 +20,9 @@ namespace MMM::Network
 namespace
 {
 
-/// @brief 官方网站根 URL。
+/// @brief 默认资源 CDN 根 URL。
 /// @note 仅在环境变量未覆盖时使用，所有站内相对地址都以此补全。
-constexpr const char* kDefaultAssetBaseUrl = "https://mmm.xiang233.top";
+constexpr const char* kDefaultAssetBaseUrl = "https://downloads.xiang233.top";
 
 /// @brief 默认资源清单路径。
 /// @note 清单优先于完整包，已有资源目录可据此执行逐文件校验与更新。
