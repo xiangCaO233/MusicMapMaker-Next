@@ -250,6 +250,24 @@ set(MMM_VERSION_SUFFIX
     ""
     CACHE STRING "可选版本后缀 (如 -alpha.1)")
 
+# 人工 hotfix 构建显式传入修订号；普通构建始终回到零，避免复用缓存串版。 修订号独立于
+# PROJECT_VERSION，只参与同一正式版本内的更新比较。
+set(MMM_HOTFIX_REVISION 0)
+# 修订进入生成头文件，必须在编译前验证为有界正整数。 新普通构建复用缓存时，也不得继承上次热修复的身份。 环境只影响本次配置，不写回下一次正式发布的持久配置。
+if(DEFINED ENV{MMM_HOTFIX_REVISION} AND NOT "$ENV{MMM_HOTFIX_REVISION}"
+                                        STREQUAL "")
+  if(NOT "$ENV{MMM_HOTFIX_REVISION}" MATCHES "^[1-9][0-9]*$")
+    # 编译身份不得接受浮点、负数、零或命令片段。
+    message(FATAL_ERROR "MMM_HOTFIX_REVISION 必须为正整数")
+  endif()
+  if("$ENV{MMM_HOTFIX_REVISION}" GREATER 2147483647)
+    # 清单解析与构建配置共用同一个有界整数契约。
+    message(FATAL_ERROR "MMM_HOTFIX_REVISION 超出支持范围")
+  endif()
+  set(MMM_HOTFIX_REVISION "$ENV{MMM_HOTFIX_REVISION}")
+  # 只向本次生成头发布通过验证的值，不改 APPVER。
+endif()
+
 if(WIN32)
   # 发布元数据使用稳定的小写平台标识，与更新服务协议保持一致。
   set(MMM_PLATFORM "windows")

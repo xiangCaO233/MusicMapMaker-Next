@@ -20,6 +20,9 @@
 /// @brief 修订版本号
 #define MMM_VERSION_PATCH @PROJECT_VERSION_PATCH@
 
+/// @brief 同一正式版本的程序热修复修订号，普通发布为零。
+#define MMM_HOTFIX_REVISION @MMM_HOTFIX_REVISION@
+
 /// @brief 完整版本字符串 (如 "v0.2.0" 或 "v0.2.0-alpha.1")
 #define MMM_VERSION_STRING "v@PROJECT_VERSION@@MMM_VERSION_SUFFIX@"
 

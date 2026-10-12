@@ -1,0 +1,198 @@
+name: Reusable Hotfix Release
+
+# 主 CI 下拉菜单的 hotfix 入口；基线检查必须早于构建和服务器写入。
+on:
+  workflow_call:
+    inputs:
+      source_ref:
+        # 入口只传入当前事件 SHA，校验、构建与发布必须绑定同一对象。
+        required: true
+        type: string
+      scope:
+        # 白名单由 preflight 复核，不能让任意字符串选择未知发布路径。
+        required: true
+        type: string
+      revision:
+        # 修订是正整数且有明确上限，程序与资源各自要求严格递增。
+        required: true
+        type: string
+      asset_paths:
+        # 资源选择只在准备资产时使用，程序模式可以留空。
+        type: string
+        default: ""
+      pgo_instrument:
+        # 复用原跨平台采样选项，不另外引入一套编译器配置。
+        type: boolean
+        default: true
+
+concurrency:
+  # 发布串行组保持到整个 hotfix 流程结束，普通网站发布在此期间等待。
+  # 和普通网站发布共享组，公开清单不能同时切换。
+  group: musicmapmaker-publish
+  cancel-in-progress: false
+
+env:
+  # 人工文本通过环境传递，不能进入 shell 命令展开。
+  HOTFIX_SCOPE: ${{ inputs.scope }}
+  # 文本值经环境进入 Python，不通过 eval 或拼接 shell 执行。
+  HOTFIX_REVISION: ${{ inputs.revision }}
+  HOTFIX_PATHS: ${{ inputs.asset_paths }}
+  HOTFIX_COMMIT: ${{ inputs.source_ref }}
+  # checkout 先不拉全部 LFS，准备器只需要资源，构建 helper 自行选择预编译依赖。
+  GIT_LFS_SKIP_SMUDGE: "1"
+
+jobs:
+  preflight:
+    # 基线文件属于维护代码，不是任意用户输入的远端引用。
+    # 失败必须传播到所有下游任务，不允许错误基线只跳过后继续发布。
+    runs-on: [self-hosted, Linux, X64, debian]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # 完整历史用于第一父链和后续 release tag 检查。
+          ref: ${{ inputs.source_ref }}
+          # tag 身份和第一父链不接受浅历史中的猜测结果。
+          fetch-depth: 0
+          path: hotfix-source
+          persist-credentials: false
+          # GitHub Release 查询用短期 token，通过 env 传给只读验证器。
+      - name: Validate published release base
+        working-directory: hotfix-source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 分支错、基线错或无已发布 Release 时立刻失败，不消费构建资源。
+          set -euo pipefail
+          [[ "${GITHUB_REF}" == refs/heads/hotfix ]]
+          # pin 文件只能在 tag 后首个维护提交声明；后补文件不放行。
+          # 同名 tag 移动、源码版本不符或新正式 tag 混入都会拒绝。
+          # 普通第二父链功能合并不改变维护基线，可以正常通过。
+          python3 scripts/hotfix/validate_base.py --release
+          python3 -m unittest discover -s scripts/hotfix -p 'test_*.py' -v
+          python3 - <<'PY'
+          # 修订号先在编译前验证，CMake 配置和发布器还会再次复核。
+          import json, os, re
+          from pathlib import Path
+          revision = os.environ['HOTFIX_REVISION']
+          # 避免负数、零、浮点、指数文本和无界整数进入构建身份。
+          if not re.fullmatch(r'[1-9][0-9]*', revision) or int(revision) > 2147483647:
+              raise ValueError('invalid hotfix revision')
+          scope = os.environ['HOTFIX_SCOPE']
+          # 只有三种互斥范围，不允许通过未知选项绕过构建。
+          if scope not in ('program', 'assets', 'both'):
+              raise ValueError('invalid hotfix scope')
+          base = json.loads(Path('hotfix-base.json').read_text())['tag']
+          # 老客户端只能识别正式版本升级；不能向 0.6.2 推送同版本程序热修复。
+          if scope != 'assets' and tuple(map(int, base[1:].split('.'))) < (0, 6, 3):
+              raise ValueError('program hotfix support starts with v0.6.3')
+          if scope != 'program' and not os.environ['HOTFIX_PATHS'].strip():
+              raise ValueError('asset paths are required; use * for all assets')
+          PY
+
+  program-build:
+    # 失败和取消的构建不生成可被发布器接受的本次聚合身份。
+    # needs 保证 Release 和历史校验完成后才占用原跨平台 Runner。
+    # 只有明确选择程序时才构建全部平台；资产发布无需编译。
+    needs: preflight
+    if: inputs.scope != 'assets'
+    uses: ./.github/workflows/build.yaml
+    with:
+      source_ref: ${{ inputs.source_ref }}
+      pgo_instrument: ${{ inputs.pgo_instrument }}
+      hotfix_revision: ${{ inputs.revision }}
+      # 原程序打包形式保持不变：Windows/Linux 单文件，macOS 完整 App ZIP。
+
+  publish:
+    # 所有下载、摘要、解包和 SDK 操作只在低频 CI 发布路径执行。
+    # 只有资产模式允许跳过程序构建，其他范围必须消费本次成功聚合。
+    # always 只用于允许 assets 模式跳过 build，绝不忽略 preflight 或构建失败。
+    needs: [preflight, program-build]
+    if: always() && needs.preflight.result == 'success' && (inputs.scope == 'assets' || needs.program-build.result == 'success')
+    runs-on: [self-hosted, Linux, X64, debian]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # 发布读取同一精确提交，不追随维护分支在构建期间的推进。
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 0
+          # 第二次 checkout 同一 SHA，不能读 hotfix 分支在等待期间的新提交。
+          path: hotfix-source
+          persist-credentials: false
+      - name: Prepare immutable release candidate
+        working-directory: hotfix-source
+        run: |
+          # 输入来自人工触发，但所有路径和身份仍由工具严格校验。
+          set -euo pipefail
+          python3 scripts/hotfix/validate_base.py
+          git lfs pull --include='assets/**' --exclude=''
+          # 线上原清单通过 SSH 读取原始字节，摘要用于最终切换前并发检查。
+          mkdir baseline
+          # 两个清单即使只发布其中一个，也读取以明确当前正式版本背景。
+          scp -P 22 podman@xiang233.top:/home/podman/data/caddy/web/mmm/download/assets/manifest.json baseline/manifest.json
+          scp -P 22 podman@xiang233.top:/home/podman/data/caddy/web/mmm/download/check/check.json baseline/program.json
+          # Python 准备阶段只读线上基线，不读取服务器密钥或安装 SDK。
+          python3 - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          from urllib.parse import urlsplit
+          from urllib.request import Request, urlopen
+          sys.path.insert(0, str(Path('scripts/hotfix').resolve()))
+          from prepare_assets import prepare as prepare_assets
+          from prepare_program import prepare as prepare_program
+          base = json.loads(Path('hotfix-base.json').read_text())['tag']
+          # 资源修订与程序修订独立存储，但组合发布统一使用本次输入数值。
+          revision, scope = int(os.environ['HOTFIX_REVISION']), os.environ['HOTFIX_SCOPE']
+          if scope != 'program':
+              # 不从分支 assets 整树重新发布，未选择项必须继承线上完整包。
+              manifest = json.loads(Path('baseline/manifest.json').read_text())
+              url = manifest['package']['url']
+              if url.startswith('/'):
+                  # 兼容未经过 CDN 重写的旧相对 URL，仍限定为官方 HTTPS 主机。
+                  url = 'https://mmm.xiang233.top' + url
+              if urlsplit(url).scheme != 'https' or urlsplit(url).netloc not in ('mmm.xiang233.top', 'downloads.xiang233.top'):
+                  raise ValueError('untrusted baseline package URL')
+              # 按流写入大包，包和每个资源随后都要核对摘要。
+              with urlopen(Request(url, headers={'User-Agent': 'MusicMapMaker-Hotfix/1.0'}), timeout=120) as response, Path('baseline/assets.zip').open('wb') as target:
+                  while block := response.read(1024 * 1024):
+                      target.write(block)
+              selected = [p.strip() for p in os.environ['HOTFIX_PATHS'].splitlines() if p.strip()]
+              # 仅单独的星号具有全选语义，其他项是明确文件或目录。
+              if selected == ['*']:
+                  selected = [p.name for p in Path('assets').iterdir()]
+              prepare_assets('assets', 'baseline/manifest.json', 'baseline/assets.zip', selected, base, revision, 'hotfix-output')
+              # 准备器同时校验归档成员、旧文件摘要和输出目录，不执行 extractall。
+          if scope != 'assets':
+              # 程序候选包含三平台主包和独立更新器，每件都有完整摘要。
+              # 按运行 ID 隔离的快照不会被下一次 CI 构建覆盖。
+              release = Path('/home/xiang/MusicMapMaker-Next/.git/mmm-hotfix-releases') / os.environ['GITHUB_RUN_ID']
+              prepare_program(release, 'baseline/program.json', base, revision, os.environ['HOTFIX_COMMIT'], 'hotfix-output')
+          PY
+
+      - uses: actions/upload-artifact@v4
+        # 公开服务器上传之前先持久化候选，便于失败后核对实际生成内容。
+        # Artifact 保存本次实际候选，不能只上传日志宣称程序已经可更新。
+        with:
+          # 上传可审阅清单和制品，即使后续网络发布失败也保留诊断材料。
+          name: hotfix-${{ github.run_id }}
+          path: hotfix-source/hotfix-output
+          if-no-files-found: error
+
+      - name: Publish selected program and assets
+        # 所有失败传播为 workflow 非零结果，不伪装成公开发布成功。
+        working-directory: hotfix-source
+        run: |
+          # 远端暂存路径只使用 GitHub 的数字运行身份。
+          set -euo pipefail
+          stage="/home/podman/.local/share/mmm-cdn/hotfix-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # 暂存目录按运行和尝试隔离，失败内容不会被后续发布静默复用。
+          ssh -p 22 podman@xiang233.top "mkdir -p '${stage}/tools'"
+          scp -P 22 -r hotfix-output/. "podman@xiang233.top:${stage}/"
+          scp -P 22 scripts/hotfix/prepare_assets.py scripts/hotfix/prepare_program.py scripts/hotfix/publish_assets.py "podman@xiang233.top:${stage}/tools/"
+          # 密钥只留在 podman 主机，CI 不下载或打印 credentials.env。
+          # 上传器先核对原清单、全部制品和公开 CDN 字节，最后切换清单。
+          # 同版本目录不可覆盖不同内容，重试只能复用相同对象。
+          # 资产清单先切换，程序清单最后切换，资源须兼容旧修订。
+          # 此步骤不重新部署网站，也不调用会改写两个清单的普通 CDN main。
+          # 只切换选择范围的清单，网站构建和普通 release 元数据不被重写。
+          ssh -p 22 podman@xiang233.top "/home/podman/.local/share/mmm-cdn/venv/bin/python '${stage}/tools/publish_assets.py' --stage '${stage}' --root /home/podman/data/caddy/web/mmm --apply"

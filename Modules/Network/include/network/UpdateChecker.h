@@ -23,10 +23,12 @@ enum class UpdateStatus : uint8_t {
 /// @brief 版本更新信息（线程安全：主线程只读，工作线程写入）
 struct UpdateInfo {
     UpdateStatus status{ UpdateStatus::kChecking };
-    std::string  latestVersion;      ///< 远程最新版本号
-    std::string  currentVersion;     ///< 当前应用版本号
-    std::string  changelog;          ///< 更新日志
-    std::string  releaseDate;        ///< 发布日期
+    std::string  latestVersion;               ///< 远程最新版本号
+    std::string  currentVersion;              ///< 当前应用版本号
+    std::int64_t latestHotfixRevision{ 0 };   ///< 远端同版本热修复修订号。
+    std::int64_t currentHotfixRevision{ 0 };  ///< 当前编译热修复修订号。
+    std::string  changelog;                   ///< 更新日志
+    std::string  releaseDate;                 ///< 发布日期
     std::string  downloadUrl;        ///< 下载地址（单文件或 App ZIP，平台相关）
     int64_t      downloadSize{ 0 };  ///< 下载文件总大小（字节）
     std::string  checksum;           ///< SHA256 校验和
@@ -95,8 +97,12 @@ public:
     static bool parseVersion(const std::string& verStr, int& major, int& minor,
                              int& patch);
 
-    /// @brief 比较两个版本号（返回 true 表示 remote > local）
-    static bool isNewer(const std::string& remote, const std::string& local);
+    /// @brief 先比较正式版本，再比较同版本下的热修复修订号。
+    /// @param remoteRevision 远端热修复修订号，旧清单默认为零。
+    /// @param localRevision 当前编译热修复修订号，普通发布为零。
+    static bool isNewer(const std::string& remote, const std::string& local,
+                        std::int64_t remoteRevision = 0,
+                        std::int64_t localRevision  = 0);
 
     /// @brief 归一化 SHA256 文本，兼容可选的 `sha256:` 前缀。
     /// @param value 原始 SHA256 文本。

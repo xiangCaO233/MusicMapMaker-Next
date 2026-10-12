@@ -1,0 +1,375 @@
+name: Reusable Cross Platform Build
+# 保留原 CI 的平台构建、CTest、打包和聚合；由主入口决定调用。
+on:
+  workflow_call:
+    inputs:
+      source_ref:
+        # 必须由入口传入精确提交，固定工作树只 checkout 这个身份。
+        required: true
+        type: string
+      pgo_instrument:
+        # 共享一份采样开关，Linux、Windows 与 macOS 保持一致。
+        type: boolean
+        default: true
+      hotfix_revision:
+        # 默认空表示普通版本，CMake 会重新归零而不是继承旧缓存。
+        type: string
+        default: ""
+concurrency:
+  # 固定工作树和构建目录跨分支共用，完整构建集合必须串行。
+  group: musicmapmaker-cross-platform-build
+  cancel-in-progress: false
+env:
+  GIT_LFS_SKIP_SMUDGE: "1"
+  MMM_SOURCE_REF: ${{ inputs.source_ref }}
+  # 构建 helper 子进程继承修订环境，生成头与清单必须使用同一数值。
+  MMM_HOTFIX_REVISION: ${{ inputs.hotfix_revision }}
+  # 普通调用为空，CMake 显式归零；维护调用由 preflight 验证范围。
+  # 构建脚本无需新增参数，各平台都继承同一份修订环境。
+  MMM_CI_PGO_OPTION: ${{ inputs.pgo_instrument && '--pgo-instrument' || '--no-pgo-instrument' }}
+jobs:
+  mmm-debian-ci:
+    # push 或人工 ci-build 才运行 Linux 宿主上的五套构建。
+    # push 与手动构建的条件表达式必须在三个构建 job 中保持一致。
+    # 标签固定到保存 Windows 交叉 SDK 和 Linux 工具链的 Runner。
+    runs-on: [self-hosted, Linux, X64, debian]
+
+    defaults:
+      run:
+        # 内嵌命令统一采用 Bash，避免默认 shell 差异。
+        # 所有多行 shell 都必须保持 set -euo pipefail 或等价保护。
+        shell: bash
+        # 固定 checkout 由同步步骤串行更新，不使用临时 actions/checkout 目录。
+        working-directory: /home/xiang/MusicMapMaker-Next
+
+    steps:
+      - name: ci->Sync Repository
+        run: |
+          # 同步失败、未定义变量或管道失败都终止后续构建。
+          # 固定 checkout 的所有 Git 更新必须持有同一个同步锁。
+          # CI 工作流不负责强推开发分支或覆盖用户工作树。
+          set -euo pipefail
+
+          # 与 GitHub Release 工作流共用仓库级文件锁。
+          ci_git_sync_lock="/home/xiang/MusicMapMaker-Next/.git/mmm-ci-sync.lock"
+          exec 9>"${ci_git_sync_lock}"
+          flock 9
+
+          if [[ -e .git/index.lock ]]; then
+            # 只有确认没有当前用户的 Git 进程后才移除陈旧锁。
+            # 删除 index.lock 前必须确认当前用户没有活跃 Git 进程。
+            active_git_processes="$(
+              ps -u "$(id -u)" -o pid=,comm=,args= \
+                | awk '$2 == "git" || $2 ~ /^git-/ { print }'
+            )"
+            if [[ -n "${active_git_processes}" ]]; then
+              # 活跃 Git 存在时保留 lock 并输出进程证据。
+              printf "error: .git/index.lock exists and git is still running:\n%s\n" "${active_git_processes}" >&2
+              exit 1
+            fi
+
+            # 无活跃进程时该文件来自异常终止，可安全删除单一 lock。
+            printf "warning: removing stale git index lock: .git/index.lock\n" >&2
+            rm -f .git/index.lock
+          fi
+
+          # 精确获取入口提交，普通构建与热修复构建不追随运行中的分支变化。
+          git fetch --prune origin "${MMM_SOURCE_REF}"
+          # 仅清理 CI 脚本和 workflow 的未跟踪残留，保留构建缓存。
+          # 构建 job 不得清理被忽略的增量构建目录。
+          git clean -fd -- scripts/ci .github/workflows
+          # 分离 HEAD 保留精确构建身份，不改写固定本地维护分支。
+          git checkout --force --detach FETCH_HEAD
+          # reset 保证 tracked 内容与远端完全一致。
+          git reset --hard FETCH_HEAD
+          # 子模块递归同步到父仓记录的精确修订。
+          git submodule update --init --recursive
+
+      - name: ci->Windows MSVC Clang Cross Build
+        run: |
+          # 每个构建步骤独立启用严格模式，不依赖上一 shell 状态。
+          set -euo pipefail
+          # 默认参数选择 windows/msvc/2026 的预编译消费构建。
+          bash scripts/ci/cross/msvc-clang-build.sh "${MMM_CI_PGO_OPTION}"
+
+      - name: ci->Windows MinGW GCC Cross Build
+        run: |
+          # UCRT64 GCC 与 clang-cl 使用独立构建目录。
+          set -euo pipefail
+          bash scripts/ci/cross/mingw-gcc-build.sh "${MMM_CI_PGO_OPTION}"
+
+      - name: ci->Windows MinGW Clang Cross Build
+        run: |
+          # clang64 路径在 helper 内验证 UCRT 与 libc++。
+          set -euo pipefail
+          bash scripts/ci/cross/mingw-clang-build.sh "${MMM_CI_PGO_OPTION}"
+
+      - name: ci->Linux GCC 14 Native Build
+        run: |
+          # 原生 GCC 构建同时注册测试目标和 Linux 产物。
+          set -euo pipefail
+          bash scripts/ci/linux-build.sh --compiler gcc14 "${MMM_CI_PGO_OPTION}"
+
+      - name: ci->Linux Clang 19 Native Build
+        run: |
+          # 原生 Clang 构建使用独立 cache 和预编译 ABI 目录。
+          set -euo pipefail
+          bash scripts/ci/linux-build.sh --compiler clang19 "${MMM_CI_PGO_OPTION}"
+
+      - name: ci->Package Release
+        run: |
+          # 只有五套构建全部成功后才聚合 Linux/Windows 产物。
+          # 五套 Debian 构建必须全部成功后才重建 release。
+          # 新增构建变体需同步构建步骤、copy_bin 和发布脚本清单。
+          set -euo pipefail
+
+          # 将一个构建树 bin 目录完整复制到命名发布变体。
+          copy_bin() {
+            local build_dir="$1"
+            local release_name="$2"
+            local source_dir="${build_dir}/bin"
+            local target_dir="release/${release_name}"
+
+            if [[ ! -d "${source_dir}" ]]; then
+              # 缺少任一变体输出都禁止形成部分 release。
+              printf "error: build output directory not found: %s\n" "${source_dir}" >&2
+              exit 1
+            fi
+
+            # cp -a 保留可执行位、符号文件和子目录结构。
+            mkdir -p "${target_dir}"
+            cp -a "${source_dir}/." "${target_dir}/"
+          }
+
+          # 聚合目录由本任务独占，先清理上一轮内容。
+          rm -rf release
+          mkdir -p release
+
+          # 变体名进入网站和 GitHub 发布脚本的稳定选择契约。
+          copy_bin build_cross_msvc windows-msvc-clang
+          copy_bin build_cross_mingw_gcc windows-mingw-gcc
+          copy_bin build_cross_mingw_clang windows-mingw-clang
+          copy_bin build_linux_gcc14 linux-gcc14
+          copy_bin build_linux_clang19 linux-clang19
+
+          # DEB 使用同一 Debian 13 GCC14 构建树，不能在开发机重新包装不同 ABI。
+          # 只复制本次版本，保留 build/packages 中的历史文件而不混入 release。
+          cpack -G DEB --config /home/xiang/MusicMapMaker-Next/build_linux_gcc14/CPackConfig.cmake
+          deb_name="$(python3 - <<'PY_DEB'
+          import json
+          with open("build_linux_gcc14/generated/debian/build-info.json") as source:
+              info = json.load(source)
+          print("musicmapmaker-next_" + info["version"] + "-" + info["deb_revision"] + "_" + info["architecture"] + ".deb")
+          PY_DEB
+          )"
+          cp "build_linux_gcc14/packages/${deb_name}" release/linux-gcc14/
+
+          if [[ ! -d assets ]]; then
+            # 运行资源是所有平台共享的强制发布组成。
+            printf "error: assets directory not found\n" >&2
+            exit 1
+          fi
+
+          # 资源保持 assets 顶层，供打包和网站流程直接消费。
+          cp -a assets release/assets
+          # 排序清单为后续聚合阶段提供可审查的产物证据。
+          find release -maxdepth 2 -type f | sort
+
+  mmm-macos-ci:
+    # 与 Debian job 使用相同触发条件，但运行在原生 Apple Silicon 主机。
+    # 自定义标签避免调度到缺少项目缓存和签名环境的通用 Runner。
+    runs-on: [self-hosted, macOS, ARM64, musicmapmaker-next]
+
+    defaults:
+      run:
+        # actions/checkout 管理工作目录，因此此处只固定 shell。
+        shell: bash
+
+    steps:
+      - name: ci->Checkout Repository
+        # macOS 使用标准 checkout action，同时保留忽略的增量构建树。
+        # workflow action 主版本升级前需核对 checkout 清理和子模块语义。
+        uses: actions/checkout@v6
+        with:
+          # 自托管 macOS Runner 保留被 Git 忽略的 build_ci_macos_arm64 增量缓存。
+          clean: false
+          ref: ${{ inputs.source_ref }}
+          # LFS 对象由 macOS 构建脚本按 AppleClang 标签拉取。
+          lfs: false
+          submodules: recursive
+
+      - name: ci->macOS AppleClang ARM64 Build
+        run: |
+          # helper 会验证宿主架构、SDK、AppleClang 和预编译标签。
+          set -euo pipefail
+          bash scripts/ci/macos-build.sh \
+            "${MMM_CI_PGO_OPTION}" \
+            --arch arm64 \
+            --build-dir build_ci_macos_arm64
+
+      - name: ci->macOS CTest
+        run: |
+          # 只在完整构建成功后执行该构建树注册的全部测试。
+          set -euo pipefail
+          # 并行度跟随 macOS 逻辑处理器数量。
+          ctest --test-dir build_ci_macos_arm64 \
+            --parallel "$(sysctl -n hw.logicalcpu)" \
+            --output-on-failure
+
+      - name: ci->Package and Stage macOS Release
+        run: |
+          # 打包、校验和跨主机传输作为单一严格模式事务执行。
+          # macOS 测试必须在打包和跨主机传输之前完成。
+          # 新增 macOS 架构需提供独立构建、传输和最终目录。
+          set -euo pipefail
+
+          if [[ ! "${GITHUB_RUN_ID}" =~ ^[0-9]+$ ]]; then
+            # 运行 ID 会进入远端路径，必须限制为纯数字。
+            printf "error: invalid GitHub run id: %s\n" "${GITHUB_RUN_ID}" >&2
+            exit 1
+          fi
+
+          # package、transfer 和远端 staging 均按本次运行隔离。
+          # 跨主机传输目录必须按 GITHUB_RUN_ID 隔离。
+          package_dir="build_ci_macos_arm64/packages"
+          transfer_dir="build_ci_macos_arm64/transfer"
+          remote_staging="/home/xiang/MusicMapMaker-Next/.git/mmm-ci-transfer/${GITHUB_RUN_ID}/macos-arm64"
+
+          # 删除范围固定为当前构建树内的两个生成目录。
+          rm -rf "${package_dir}" "${transfer_dir}"
+          # 复用已完成测试的构建树，仅执行 CPack 和更新器收集。
+          bash scripts/ci/macos-package.sh \
+            --arch arm64 \
+            --build-dir build_ci_macos_arm64 \
+            --package-dir "${package_dir}" \
+            --build-type RelWithDebInfo \
+            --package-only
+
+          # 三类发布文件分别定位并验证为普通文件。
+          dmg_path="$(find "${package_dir}" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+          app_zip_path="$(find "${package_dir}" -maxdepth 1 -type f -name '*.zip' -print -quit)"
+          updater_path="${package_dir}/MusicMapMaker-Updater"
+          [[ -n "${dmg_path}" && -f "${dmg_path}" ]]
+          [[ -n "${app_zip_path}" && -f "${app_zip_path}" ]]
+          [[ -f "${updater_path}" ]]
+
+          # 传输目录使用固定文件名，解除 CPack 版本化名称差异。
+          mkdir -p "${transfer_dir}"
+          cp "${dmg_path}" "${transfer_dir}/MusicMapMaker-Next.dmg"
+          cp "${app_zip_path}" "${transfer_dir}/MusicMapMaker-Next.app.zip"
+          cp "${updater_path}" "${transfer_dir}/MusicMapMaker-Updater"
+          (
+            # 子 shell 在 transfer 根生成覆盖三件套的 SHA-256 清单。
+            cd "${transfer_dir}"
+            shasum -a 256 \
+              MusicMapMaker-Next.dmg \
+              MusicMapMaker-Next.app.zip \
+              MusicMapMaker-Updater > SHA256SUMS
+          )
+
+          # 远端只创建本次 run ID 专用目录，不触碰最终 release。
+          # 任何远端删除都必须继续受纯数字 run ID 路径约束。
+          # 远端 staging 不得直接覆盖最终 macOS release 目录。
+          ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            xiang@192.168.31.12 \
+            "rm -rf -- '${remote_staging}' && mkdir -p '${remote_staging}'"
+          # rsync --delete 确保远端 staging 与本地校验集合完全一致。
+          rsync -av --delete \
+            -e "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new" \
+            "${transfer_dir}/" \
+            "xiang@192.168.31.12:${remote_staging}/"
+
+  mmm-release-aggregate:
+    # Debian 与 macOS 两个生产 job 都成功后才更新最终聚合目录。
+    # needs 同时保证依赖顺序和失败传播。
+    # 发布聚合 job 必须继续显式 needs 两个平台构建。
+    needs: [mmm-debian-ci, mmm-macos-ci]
+    runs-on: [self-hosted, Linux, X64, debian]
+
+    defaults:
+      run:
+        # 聚合发生在保存 Linux/Windows release 的固定 checkout。
+        shell: bash
+        working-directory: /home/xiang/MusicMapMaker-Next
+
+    steps:
+      - name: ci->Aggregate macOS Release
+        run: |
+          # 校验、复制和目录切换任一步失败都终止事务。
+          # 最终目录替换必须保留失败回滚到 previous 的能力。
+          set -euo pipefail
+
+          if [[ ! "${GITHUB_RUN_ID}" =~ ^[0-9]+$ ]]; then
+            # 与 macOS staging 使用同一纯数字运行身份。
+            printf "error: invalid GitHub run id: %s\n" "${GITHUB_RUN_ID}" >&2
+            exit 1
+          fi
+
+          # next/previous 目录实现最终 macOS 目录的可回滚替换。
+          transfer_root="/home/xiang/MusicMapMaker-Next/.git/mmm-ci-transfer/${GITHUB_RUN_ID}"
+          source_dir="${transfer_root}/macos-arm64"
+          target_dir="/home/xiang/MusicMapMaker-Next/release/macos-arm64"
+          next_dir="/home/xiang/MusicMapMaker-Next/release/.macos-arm64-${GITHUB_RUN_ID}.next"
+          previous_dir="/home/xiang/MusicMapMaker-Next/release/.macos-arm64-${GITHUB_RUN_ID}.previous"
+
+          # 三件套和源目录必须全部存在后才校验哈希。
+          [[ -d "${source_dir}" ]]
+          [[ -f "${source_dir}/MusicMapMaker-Next.dmg" ]]
+          [[ -f "${source_dir}/MusicMapMaker-Next.app.zip" ]]
+          [[ -f "${source_dir}/MusicMapMaker-Updater" ]]
+          (
+            # SHA256SUMS 在传输源目录内验证固定文件名。
+            # 哈希必须在发送端生成并在聚合端验证。
+            cd "${source_dir}"
+            sha256sum -c SHA256SUMS
+          )
+
+          # 清除仅属于本次 run ID 的陈旧事务目录。
+          rm -rf "${next_dir}" "${previous_dir}"
+          # next 完整复制成功前不修改当前 target。
+          mkdir -p "${next_dir}"
+          cp -a "${source_dir}/." "${next_dir}/"
+
+          if [[ -e "${target_dir}" ]]; then
+            # 现有发布先重命名为 previous，保留回滚能力。
+            mv "${target_dir}" "${previous_dir}"
+          fi
+          if ! mv "${next_dir}" "${target_dir}"; then
+            # 最终切换失败时尽力恢复原目录后传播失败。
+            if [[ -e "${previous_dir}" ]]; then
+              # 只有 previous 确实存在时才执行恢复。
+              mv "${previous_dir}" "${target_dir}"
+            fi
+            exit 1
+          fi
+
+          # 成功切换后移除备份和本次跨主机传输根。
+          rm -rf "${previous_dir}" "${transfer_root}"
+          # 最终清单记录聚合后的实际文件名与大小。
+          find "${target_dir}" -maxdepth 1 -type f -printf '%f\t%s bytes\n' | sort
+
+      - name: Record release provenance
+        # 元数据写入发生在原平台测试和聚合成功之后，不提前标记成功。
+        # 公开发布仍需独立人工入口，构建完成本身不切换线上清单。
+        # 本记录不参与普通版本判定，只用于热修复消费产物前的身份校验。
+        # 精确 SHA 与修订号防止误发上次构建生成的缓存程序。
+        run: |
+          # 完整测试及聚合成功后记录身份，防止发布消费旧运行产物。
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          record = {'commit': os.environ['MMM_SOURCE_REF'], 'hotfix_revision': int(os.environ.get('MMM_HOTFIX_REVISION') or '0')}
+          Path('release/hotfix-build.json').write_text(json.dumps(record) + '\n')
+          PY
+          if [[ -n "${MMM_HOTFIX_REVISION}" ]]; then
+            # 只有维护发布需要快照，普通构建保留原 release 目录布局。
+            # 路径来自数字 run ID，不包含分支或人工资源选择文本。
+            # 已存在目录直接失败，不能把另一运行的文件混入本次候选。
+            # 快照复制在完整构建串行组内执行，源集合不会并发变化。
+            # 发布使用运行专属快照，不再读取可被下一次构建覆盖的 release 根。
+            snapshot="/home/xiang/MusicMapMaker-Next/.git/mmm-hotfix-releases/${GITHUB_RUN_ID}"
+            [[ ! -e "${snapshot}" ]]
+            mkdir -p "${snapshot}"
+            cp -a release/. "${snapshot}/"
+          fi

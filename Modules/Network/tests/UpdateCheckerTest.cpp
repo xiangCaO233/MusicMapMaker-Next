@@ -524,6 +524,19 @@ int main()
     // 版本解析是比较的前置契约，两者保持相邻执行便于诊断。
     totalFail += testParseVersion();
     totalFail += testIsNewer();
+    // 同版本升级、降级、重复和旧正式版本的大修订号都必须具有稳定判定。
+    // 数值修订不依赖后缀解析，旧响应零修订继续使用既有三段版本比较。
+    // 新正式版本覆盖高本地修订，进入下一版本后不会被旧热修复阻挡。
+    // 负修订属于无效发布输入，不能进入更新候选。
+    if ( !UpdateChecker::isNewer("v0.6.3", "v0.6.3", 1, 0) ||
+         UpdateChecker::isNewer("v0.6.3", "v0.6.3", 1, 1) ||
+         UpdateChecker::isNewer("v0.6.3", "v0.6.3", 1, 2) ||
+         UpdateChecker::isNewer("v0.6.2", "v0.6.3", 99, 0) ||
+         !UpdateChecker::isNewer("v0.6.4", "v0.6.3", 0, 99) ||
+         UpdateChecker::isNewer("v0.6.3", "v0.6.3", -1, 0) ) {
+        XERROR("Hotfix revision comparison contract failed");
+        ++totalFail;
+    }
     // 摘要规范化和标记文件覆盖发布完整性与启动收尾路径。
     totalFail += testNormalizeSha256();
     totalFail += testUpdateSuccessMarker();
