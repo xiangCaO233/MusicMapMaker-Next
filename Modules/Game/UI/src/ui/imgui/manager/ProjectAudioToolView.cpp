@@ -10,6 +10,8 @@
 #include "ui/imgui/manager/ProjectAudioToolSearch.h"
 #include "ui/utils/UIWidgetUtils.h"
 
+#include <imgui_internal.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -699,8 +701,8 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
         const auto saved = savedPlacements.find(resource.m_id);
         if ( saved != savedPlacements.end() ) {
             // 零值表示使用自动尺寸；非有限或负值也按未自定义处理。
-            const bool hasSavedWidth  = std::isfinite(saved->second.m_width) &&
-                                        saved->second.m_width > 0.0F;
+            const bool hasSavedWidth = std::isfinite(saved->second.m_width) &&
+                                       saved->second.m_width > 0.0F;
             const bool hasSavedHeight = std::isfinite(saved->second.m_height) &&
                                         saved->second.m_height > 0.0F;
             // 自定义标志决定后续保存时是否写回真实尺寸或零占位。
@@ -893,11 +895,11 @@ void ProjectAudioToolView::refreshInteractionLabelRects()
     const auto activeItem = m_draggingItem ? m_draggingItem : m_resizingItem;
     for ( std::size_t index = 0; index < m_items.size(); ++index ) {
         // 移动项自身标签使用完整当前矩形，固定项从缓存基础区开始。
-        const bool movingItem = m_batchDragging
-                                    ? m_items[index].batchSelected
-                                    : activeItem && *activeItem == index;
-        auto visibleRect      = movingItem ? m_items[index].rect
-                                           : m_interactionBaseLabelRects[index];
+        const bool movingItem  = m_batchDragging
+                                     ? m_items[index].batchSelected
+                                     : activeItem && *activeItem == index;
+        auto       visibleRect = movingItem ? m_items[index].rect
+                                            : m_interactionBaseLabelRects[index];
 
         if ( m_batchDragging ) {
             // 只有层级高于当前固定项的移动方块才会遮挡其标签。
@@ -1769,6 +1771,12 @@ ImVec2 ProjectAudioToolView::calculateContentSize(float visibleWidth,
 /// 右键重命名只在几何手势空闲且指针不位于试听控件时触发。
 /// 参考线和框选框均在方块之后绘制，但在流式 Dummy 之前提交。
 /// 状态栏文本使用裁剪区保护右侧缩放控件的固定交互面积。
+/// 滚轮偏移直接由画布消费，不依赖 Dock 宿主的滚动目标选择。
+/// 外层工具窗口禁止滚轮冒泡，搜索结果仍保留独立的原生滚动。
+/// 内容范围显式包含视口外方块，视口尺寸单独从 InnerRect 测量。
+/// 原生滚动条继续由 ImGui 处理，与滚轮共享同一内容坐标和边界。
+/// @note 内容范围使用逻辑方块边界；滚动条和鼠标输入使用屏幕像素。
+/// @note Shift 轴交换遵循平台约定，macOS 保留系统提供的滚轮方向。
 void ProjectAudioToolView::update(UIManager* sourceManager)
 {
     // 外部插件直接构造视图也不能绕过专业门禁，不提交 Begin 或焦点请求。
@@ -1793,7 +1801,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     LayoutContext layoutContext(m_layoutCtx,
                                 m_translationCache.windowTitle,
                                 true,
-                                ImGuiWindowFlags_None,
+                                ImGuiWindowFlags_NoScrollWithMouse,
                                 &m_isOpen);
 
     // 项目切换期间模型指针和资源集合不稳定，只展示统一占位。
@@ -1994,17 +2002,47 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     }
     // 搜索区域结束后用固定分隔线明确主画布起点。
     ImGui::Separator();
-    // 状态栏高度从剩余区域扣除，画布子窗口占据其余全部空间。
-    ImVec2 childSize = ImGui::GetContentRegionAvail();
-    childSize.y      = std::max(1.0F, childSize.y - statusHeight);
-    // 画布使用独立双轴滚动，并禁止子窗口因内容拖动改变自身位置。
-    ImGui::BeginChild(
-        "ProjectAudioToolCanvas",
-        childSize,
-        true,
-        ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoMove);
-    // BeginChild 后读取扣除滚动条后的真实可见像素尺寸。
-    const ImVec2      visibleSizePixels = ImGui::GetContentRegionAvail();
+    // 画布只能占据工具窗口实际可见的剩余区域，不能采用内容驱动的剩余范围。
+    // 停靠宿主或平台视口裁剪后，超出 ClipRect 的高度不属于可见画布；否则
+    // 内容会被误判为已经全部可见，纵向滚动范围随之归零。
+    const auto*  toolWindow = ImGui::GetCurrentWindow();
+    const ImVec2 childStart = ImGui::GetCursorScreenPos();
+    const ImVec2 childSize{
+        std::max(
+            1.0F,
+            std::min(toolWindow->InnerRect.Max.x, toolWindow->ClipRect.Max.x) -
+                toolWindow->WindowPadding.x - childStart.x),
+        std::max(
+            1.0F,
+            std::min(toolWindow->InnerRect.Max.y, toolWindow->ClipRect.Max.y) -
+                toolWindow->WindowPadding.y - childStart.y - statusHeight),
+    };
+    // 绝对绘制的方块可能被停靠视口裁剪，不能只靠末尾 Dummy 推导内容边界。
+    // 显式提交全部缓存方块的范围，让滚动条始终覆盖视口外的资源；首次重建
+    // 仍由本帧末尾 Dummy 声明边界，下一帧使用更新后的缓存尺寸。
+    const ImVec2 cachedContent = calculateContentSize(0.0F, 0.0F);
+    ImGui::SetNextWindowContentSize(
+        { cachedContent.x * dpiScale * m_canvasZoom,
+          cachedContent.y * dpiScale * m_canvasZoom });
+    // 画布自行处理滚轮，避免停靠后的父子窗口路由与自定义相机争用滚动。
+    // 原生滚动条仍负责拖动；NoMove 只禁止内容手势移动子窗口本身。
+    ImGui::BeginChild("ProjectAudioToolCanvas",
+                      childSize,
+                      true,
+                      ImGuiWindowFlags_HorizontalScrollbar |
+                          ImGuiWindowFlags_NoMove |
+                          ImGuiWindowFlags_NoScrollWithMouse);
+    // 显式内容尺寸会让 GetContentRegionAvail 返回整张内容的剩余范围。
+    // InnerRect 扣除滚动条，进一步扣除内边距才是与滚动无关的可见视口。
+    const auto*  canvasWindow = ImGui::GetCurrentWindow();
+    const ImVec2 visibleSizePixels{
+        std::max(1.0F,
+                 canvasWindow->InnerRect.GetWidth() -
+                     canvasWindow->WindowPadding.x * 2.0F),
+        std::max(1.0F,
+                 canvasWindow->InnerRect.GetHeight() -
+                     canvasWindow->WindowPadding.y * 2.0F),
+    };
     const std::string projectRoot = Config::pathToUtf8(project->m_projectRoot);
     if ( projectRoot != m_cachedProjectRoot ) {
         // 项目切换先恢复视角默认值，方块缓存稍后在统一脏判断中重建。
@@ -2082,6 +2120,31 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         std::max(0.0F, contentLogical.x * canvasScale - visibleSizePixels.x),
         std::max(0.0F, contentLogical.y * canvasScale - visibleSizePixels.y),
     };
+    // 普通滚轮直接移动本画布，不能依赖停靠宿主是否具有可滚动内容。
+    // Ctrl 保留指针锚定缩放，Shift 将纵向滚轮转为横向平移。
+    if ( canvasHovered && !io.KeyCtrl &&
+         (io.MouseWheel != 0.0F || io.MouseWheelH != 0.0F) ) {
+        // 纵向到达边界也不自动换轴，用户只有按 Shift 才请求横向滚动。
+        const bool  horizontalWheel = io.KeyShift && !io.ConfigMacOSXBehaviors;
+        const float wheelX =
+            io.MouseWheelH + (horizontalWheel ? io.MouseWheel : 0.0F);
+        const float wheelY = horizontalWheel ? 0.0F : io.MouseWheel;
+        // 步长随字体和视口变化，小停靠面板每次最多移动约三分之二视口。
+        const float fontStep = ImGui::GetFontSize() * 5.0F;
+        scroll.x             = std::clamp(
+            scroll.x - wheelX * std::min(fontStep, visibleSizePixels.x * 0.67F),
+            0.0F,
+            maximumScroll.x);
+        scroll.y = std::clamp(
+            scroll.y - wheelY * std::min(fontStep, visibleSizePixels.y * 0.67F),
+            0.0F,
+            maximumScroll.y);
+        // 当前帧绘制和命中立即采用同一偏移，ImGui 在下一帧应用滚动目标。
+        canvasOrigin = { unscrolledCanvasOrigin.x - scroll.x,
+                         unscrolledCanvasOrigin.y - scroll.y };
+        ImGui::SetScrollX(scroll.x);
+        ImGui::SetScrollY(scroll.y);
+    }
     // 项目、DPI 或缩放变化后，旧滚动位置可能超出新的内容边界。
     const ImVec2 constrainedScroll{
         std::clamp(scroll.x, 0.0F, maximumScroll.x),

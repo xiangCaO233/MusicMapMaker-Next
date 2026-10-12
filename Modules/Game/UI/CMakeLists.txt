@@ -598,3 +598,11 @@ target_include_directories(ProjectResourceImportTest
 mmm_register_test_case(
   NAME ProjectResourceImportTest COMMAND ProjectResourceImportTest
   "${CMAKE_BINARY_DIR}/test_output")
+
+# 覆盖项目音频工具停靠后的画布滚动。 测试驱动真实视图和共享 Dock 标签，不初始化 GPU 或音频设备。
+# 项目夹具由隔离配置目录和构建树输出承载，不读取用户媒体资源。
+mmm_add_test_executable(UI ProjectAudioToolScrollTest
+                        tests/ProjectAudioToolScrollTest.cpp)
+target_link_libraries(ProjectAudioToolScrollTest PRIVATE UI 3rd_imgui)
+mmm_register_test_case(NAME ProjectAudioToolScrollTest COMMAND
+                       ProjectAudioToolScrollTest)
