@@ -11,6 +11,10 @@
 #        define NOMINMAX
 #    endif
 #    include <windows.h>
+// Windows SDK 为兼容旧式内存模型定义了 near 宏，公共头不得将其泄漏给调用方。
+#    ifdef near
+#        undef near
+#    endif
 #endif
 
 namespace MMM::Config
