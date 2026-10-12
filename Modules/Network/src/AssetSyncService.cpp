@@ -4,6 +4,7 @@
 #include "log/colorful-log.h"
 
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <curl/curl.h>
@@ -456,7 +457,7 @@ std::string sha256Bytes(const std::vector<std::uint8_t>& input)
             const std::uint32_t s1 = sha256RotateRight(words[i - 2U], 17U) ^
                                      sha256RotateRight(words[i - 2U], 19U) ^
                                      (words[i - 2U] >> 10U);
-            words[i]               = words[i - 16U] + s0 + words[i - 7U] + s1;
+            words[i] = words[i - 16U] + s0 + words[i - 7U] + s1;
         }
 
         std::uint32_t a = state[0];
@@ -477,9 +478,9 @@ std::string sha256Bytes(const std::vector<std::uint8_t>& input)
             const std::uint32_t ch = (e & f) ^ ((~e) & g);
             const std::uint32_t tmp1 =
                 h + s1 + ch + kSha256RoundConstants[i] + words[i];
-            const std::uint32_t s0   = sha256RotateRight(a, 2U) ^
-                                       sha256RotateRight(a, 13U) ^
-                                       sha256RotateRight(a, 22U);
+            const std::uint32_t s0 = sha256RotateRight(a, 2U) ^
+                                     sha256RotateRight(a, 13U) ^
+                                     sha256RotateRight(a, 22U);
             const std::uint32_t maj  = (a & b) ^ (a & c) ^ (b & c);
             const std::uint32_t tmp2 = s0 + maj;
 
@@ -1322,8 +1323,28 @@ AssetSyncResult AssetSyncService::sync(const AssetSyncOptions& options)
                      0,
                      0,
                  });
+    // 清单描述当前版本，不能复用 CDN 对固定地址保留的历史响应。
+    // 每次检查使用新的缓存键；大文件仍使用清单中的内容摘要缓存键。
+    std::string manifestRequestUrl = options.manifestUrl;
+    if ( startsWith(manifestRequestUrl, "https://") ||
+         startsWith(manifestRequestUrl, "http://") ) {
+        // 本地 file:// 测试与离线镜像不添加查询串，避免改变文件路径语义。
+        const auto fragment  = manifestRequestUrl.find('#');
+        const auto insertion = fragment == std::string::npos
+                                   ? manifestRequestUrl.size()
+                                   : fragment;
+        // 追加参数放在 fragment 之前；保留调用方已有查询串与覆盖地址。
+        const auto  query     = manifestRequestUrl.find('?');
+        const char* separator = query < insertion ? "&" : "?";
+        // 只在低频远端校验阶段读取时间，渲染与逻辑更新路径不参与网络等待。
+        const auto checkId =
+            std::chrono::system_clock::now().time_since_epoch().count();
+        manifestRequestUrl.insert(
+            insertion,
+            std::string(separator) + "mmm_check=" + std::to_string(checkId));
+    }
     const bool manifestDownloaded =
-        downloadString(options.manifestUrl,
+        downloadString(manifestRequestUrl,
                        manifestText,
                        manifestDownloadError,
                        options.cancellationCallback);
