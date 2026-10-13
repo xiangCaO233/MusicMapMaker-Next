@@ -347,7 +347,7 @@ bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
         // 段落不是一组采样点，右键只发送一次删除指令。
         // 复用常规时间线权限与联机路由，不直接调用注册表销毁。
         if ( ImGui::IsMouseClicked(ImGuiMouseButton_Right) ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            publishTimelineCommand(Event::LogicCommandEvent(
                 Logic::CmdDeleteTimelineEvent{ segment.entity }));
             return true;
         }
@@ -761,14 +761,14 @@ void TimelineCanvas::renderInterpolationEditor()
                                                        edit.effect,
                                                        edit.value };
                 command.interpolation = curve;
-                Event::EventBus::instance().publish(
+                publishTimelineCommand(
                     Event::LogicCommandEvent(std::move(command)));
             } else {
                 Logic::CmdUpdateTimelineEvent command{ edit.entity,
                                                        edit.time,
                                                        edit.value };
                 command.interpolationOverride = curve;
-                Event::EventBus::instance().publish(
+                publishTimelineCommand(
                     Event::LogicCommandEvent(std::move(command)));
             }
             m_isInterpolationEditorOpen = false;

@@ -1155,6 +1155,8 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "snapFloor", settings.snapFloor },
         { "showTimelineWindow", settings.showTimelineWindow },
         { "professionalMode", settings.professionalMode },
+        // 只保存提示偏好，不缓存当前谱面的能力，以免切换格式后沿用旧状态。
+        { "hideTimelineFormatWarning", settings.hideTimelineFormatWarning },
         { "showPreviewWindow", settings.showPreviewWindow },
         { "showAnnotationDetails", settings.showAnnotationDetails },
         { "showToolLabels", settings.showToolLabels },
@@ -1333,6 +1335,9 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     settings.stopPlaybackOnScroll = json.value("stopPlaybackOnScroll", false);
     settings.snapFloor            = json.value("snapFloor", false);
     settings.showTimelineWindow   = json.value("showTimelineWindow", true);
+    // 老配置没有格式警告偏好时默认启用，避免静默丢失用户的新修改。
+    settings.hideTimelineFormatWarning =
+        json.value("hideTimelineFormatWarning", false);
     // 当前 professionalMode 优先，缺失时读取旧 timelineProfessionalMode。
     settings.professionalMode =
         json.contains("professionalMode")

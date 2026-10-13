@@ -881,6 +881,9 @@ struct EditorSettings {
     /// @details 默认关闭；保留 BMS 子开关偏好，但只有专业模式允许它生效。
     bool professionalMode{ false };
 
+    /// @brief 不再提示时间线修改无法由原谱面格式保存；不影响编辑能力。
+    bool hideTimelineFormatWarning{ false };
+
     /// @brief 是否允许编辑 Flick、Polyline 及折线子物件。
     bool enablePolylineEditing{ true };
 

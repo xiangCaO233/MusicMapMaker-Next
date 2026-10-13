@@ -1169,7 +1169,7 @@ void TimelineCanvas::deleteSelectedTimingEvents()
 
     auto selected = m_selectedTimingEntities;
     for ( auto entity : selected ) {
-        Event::EventBus::instance().publish(
+        publishTimelineCommand(
             Event::LogicCommandEvent(Logic::CmdDeleteTimelineEvent{ entity }));
     }
     m_selectedTimingEntities.clear();
@@ -1225,7 +1225,7 @@ void TimelineCanvas::commitTimingEraseTargets()
                     m_timingEraseTargetEntities.end());
 
     for ( auto entity : toDelete ) {
-        Event::EventBus::instance().publish(
+        publishTimelineCommand(
             Event::LogicCommandEvent(Logic::CmdDeleteTimelineEvent{ entity }));
         m_selectedTimingEntities.erase(entity);
     }
@@ -1406,8 +1406,7 @@ void TimelineCanvas::pasteTimingClipboard(double anchorTime)
                                  entry.timeline.m_interpolation });
     }
     if ( !batch.events.empty() ) {
-        Event::EventBus::instance().publish(
-            Event::LogicCommandEvent{ std::move(batch) });
+        publishTimelineCommand(Event::LogicCommandEvent{ std::move(batch) });
     }
 }
 
@@ -1598,7 +1597,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     const auto finishTimingDrag = [&]() {
         if ( std::abs(m_timingDragPreviewDelta) > 1e-6 ) {
             for ( const auto& entry : m_timingDragEntries ) {
-                Event::EventBus::instance().publish(
+                publishTimelineCommand(
                     Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
                         entry.entity,
                         std::max(0.0,
@@ -1655,14 +1654,13 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     const auto& settings = Config::AppConfig::instance().getEditorSettings();
     bool        handledKeyboardCommand = m_currentSnapshot->isPlaying;
     if ( !handledKeyboardCommand && ctrl && ImGui::IsKeyPressed(ImGuiKey_Z) ) {
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+        publishTimelineCommand(Event::LogicCommandEvent(
             shift ? Logic::LogicCommand{ Logic::CmdRedo{} }
                   : Logic::LogicCommand{ Logic::CmdUndo{} }));
         handledKeyboardCommand = true;
     }
     if ( !handledKeyboardCommand && ctrl && ImGui::IsKeyPressed(ImGuiKey_Y) ) {
-        Event::EventBus::instance().publish(
-            Event::LogicCommandEvent(Logic::CmdRedo{}));
+        publishTimelineCommand(Event::LogicCommandEvent(Logic::CmdRedo{}));
         handledKeyboardCommand = true;
     }
     const std::array<Logic::EditTool, 5> editableTools{
@@ -1677,7 +1675,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         for ( Logic::EditTool tool : editableTools ) {
             if ( UI::ShortcutUtils::isShortcutPressed(
                      UI::ShortcutUtils::getToolShortcut(settings, tool)) ) {
-                Event::EventBus::instance().publish(
+                publishTimelineCommand(
                     Event::LogicCommandEvent(Logic::CmdChangeTool{ tool }));
                 handledKeyboardCommand = true;
                 break;
@@ -1968,9 +1966,8 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                     const double visualOffset = Config::AppConfig::instance()
                                                     .getVisualConfig()
                                                     .getEffectiveVisualOffset();
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(Logic::CmdSeek{
-                            autoScrollTargetTime - visualOffset }));
+                    publishTimelineCommand(Event::LogicCommandEvent(
+                        Logic::CmdSeek{ autoScrollTargetTime - visualOffset }));
                 }
             }
             m_timingMarqueeEndX    = localMouseX;

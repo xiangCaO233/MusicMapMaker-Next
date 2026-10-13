@@ -1,4 +1,9 @@
 #include "canvas/TimelineTimingTooltip.h"
+#include "canvas/TimelineFormatSupport.h"
+
+#include <array>
+#include <cstddef>
+#include <initializer_list>
 
 namespace
 {
@@ -29,10 +34,62 @@ bool testTimingTooltipDescriptors()
 
 }  // namespace
 
+/// @brief 验证三个外部格式的完整支持矩阵及扩展名边界。
+/// @return 区分原格式保存能力且未知格式沿用原行为时返回 true。
+/// @details 同一编辑器标签可切换格式，因此每次查询必须根据当前路径判断。
+/// 测试不依赖真实文件，避免把目录存在与否混入格式识别结果。
+/// mmm 是无损保存的推荐格式，不能继承前一个外部格式的限制。
+/// mc 的四种当前类型都受支持，不能错误套用 osu 的子集。
+/// IMD 大写后缀是 Windows 常见输入，必须与小写格式同等处理。
+bool testTimelineFormatSupport()
+{
+    using MMM::TimingEffect;
+    constexpr std::array effects{ TimingEffect::BPM,
+                                  TimingEffect::SCROLL,
+                                  TimingEffect::JUMP,
+                                  TimingEffect::HS };
+    // 每一种类型都单独验证，避免只测试各格式的首个支持项。
+    // 使用四个固定枚举，防止默认类型使测试跳过 Jump 与 HS。
+    // 混合大小写与不同路径分隔符分别覆盖两种来源路径。
+    for ( std::size_t i = 0; i < effects.size(); ++i ) {
+        if ( MMM::Canvas::timelineFormatSupport("folder/chart.IMD")
+                 .supports(effects[i]) != (i == 0) )
+            return false;
+        if ( MMM::Canvas::timelineFormatSupport("C:\\maps\\chart.OsU")
+                 .supports(effects[i]) != (i < 2) )
+            return false;
+        if ( !MMM::Canvas::timelineFormatSupport("chart.mc")
+                  .supports(effects[i]) )
+            return false;
+        if ( !MMM::Canvas::timelineFormatSupport("chart.mmm")
+                  .supports(effects[i]) )
+            return false;
+    }
+    // 不从目录、备份后缀或未知格式推测限制，保护其他导入流程。
+    // 文件名没有扩展名时，目录里的 .osu 不能决定保存能力。
+    // 备份文件按最后一个后缀识别，不能因路径包含 osu 而误警告。
+    // BMS 未列入本次需求，不在测试中擅自扩展其能力约束。
+    // 空路径覆盖尚未获得文件名的谱面，保持原有编辑行为。
+    for ( const auto path :
+          { "folder.osu/chart", "chart.osu.bak", "chart.bms", "" } ) {
+        if ( !MMM::Canvas::timelineFormatSupport(path).extension.empty() )
+            return false;
+    }
+    // 文案列表必须与矩阵一致，且标准格式保留所有当前时间点类型。
+    return MMM::Canvas::timelineFormatSupport("chart.imd").supportedTypes ==
+               "BPM" &&
+           MMM::Canvas::timelineFormatSupport("chart.osu").supportedTypes ==
+               "BPM、SCROLL" &&
+           MMM::Canvas::timelineFormatSupport("chart.mc").supportedTypes ==
+               "BPM、SCROLL、JUMP、HS";
+}
+
 /// @brief 运行 Timeline Timing 悬浮提示描述回归测试。
 /// @return 全部术语与单位映射正确时返回 0。
+/// @note 同时核对提示使用的格式能力，不依赖 ImGui 或真实谱面文件。
 int main()
 {
     // 函数为 constexpr 纯映射，运行测试仍能覆盖实际头文件调用结果。
-    return testTimingTooltipDescriptors() ? 0 : 1;
+    return testTimingTooltipDescriptors() && testTimelineFormatSupport() ? 0
+                                                                         : 1;
 }

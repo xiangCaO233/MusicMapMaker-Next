@@ -502,6 +502,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         // 即使只从独立表格进入，也保留确认、取消和 Esc 的完整生命周期。
         renderInterpolationEditor();
         renderTimingTemplateEditor();
+        // 独立表格仍可修改时间点，主窗口隐藏时也必须完成风险提示。
+        renderTimingFormatWarning();
         return;
     }
 
@@ -1074,6 +1076,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
     renderTimingPointsTableWindow();
     renderInterpolationEditor();
     renderTimingTemplateEditor();
+    // 警告晚于所有编辑窗口绘制，不在用户确认前抢占编辑弹窗。
+    renderTimingFormatWarning();
     // 表格窗口始终独立绘制，不依赖主时间线是否有有效 descriptor。
 
     if ( m_speedTooltipTimer > 0.0f ) {

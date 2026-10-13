@@ -297,8 +297,8 @@ bool testNonHoldHitEffectDurationConfig()
     // 两个读取夹具分别低于和高于产品允许时长。
     const auto tooShort = nlohmann::json{ { "nonHoldHitEffectDuration", 0.0F } }
                               .get<MMM::Config::VisualConfig>();
-    const auto tooLong = nlohmann::json{ { "nonHoldHitEffectDuration", 8.0F } }
-                             .get<MMM::Config::VisualConfig>();
+    const auto tooLong  = nlohmann::json{ { "nonHoldHitEffectDuration", 8.0F } }
+                              .get<MMM::Config::VisualConfig>();
     // 默认值和最小最大常量直接来自类型，避免测试复制实现数值。
     if ( !near(restored.nonHoldHitEffectDuration, 0.48F) ||
          !near(
@@ -409,15 +409,17 @@ bool testProfessionalModeConfigMigration()
     for ( const bool enabled : { false, true } ) {
         // 两个独立编辑开关刻意取反，验证专业模式不会覆盖它们。
         MMM::Config::EditorSettings source;
-        source.professionalMode      = enabled;
-        source.enableBmsEditing      = !enabled;
-        source.enablePolylineEditing = !enabled;
-        const nlohmann::json encoded = source;
+        source.professionalMode = enabled;
+        // 时间线风险提示独立持久化，不得与专业模式相互覆盖。
+        source.hideTimelineFormatWarning = enabled;
+        source.enableBmsEditing          = !enabled;
+        source.enablePolylineEditing     = !enabled;
+        const nlohmann::json encoded     = source;
         // 当前格式、旧字段格式和新旧字段同时存在三种输入分别恢复。
         const auto restored = encoded.get<MMM::Config::EditorSettings>();
         const auto legacy   = nlohmann::json{
-              { "timelineProfessionalMode", enabled },
-              { "enableDraftLanes", !enabled }
+            { "timelineProfessionalMode", enabled },
+            { "enableDraftLanes", !enabled }
         }.get<MMM::Config::EditorSettings>();
         // 新字段必须优先于值相反的旧字段，保证升级后的显式选择稳定。
         const auto explicitSetting = nlohmann::json{
@@ -426,6 +428,10 @@ bool testProfessionalModeConfigMigration()
         }.get<MMM::Config::EditorSettings>();
         // 当前写出禁止继续产生旧字段，读取兼容只保留在迁移入口。
         if ( encoded.at("professionalMode") != enabled ||
+             encoded.at("hideTimelineFormatWarning") != enabled ||
+             restored.hideTimelineFormatWarning != enabled ||
+             // 没有新字段的旧配置应继续提醒，不隐式继承专业模式值。
+             legacy.hideTimelineFormatWarning ||
              encoded.contains("timelineProfessionalMode") ||
              encoded.contains("enableDraftLanes") ||
              restored.professionalMode != enabled ||

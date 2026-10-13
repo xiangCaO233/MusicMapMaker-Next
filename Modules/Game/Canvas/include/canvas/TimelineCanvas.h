@@ -2,6 +2,7 @@
 
 #include "canvas/CanvasSnapshotPrepare.h"
 #include "canvas/TimelineAuxiliaryWindowState.h"
+#include "canvas/TimelineFormatSupport.h"
 #include "canvas/TimingFunctionEditorState.h"
 #include "canvas/TimingInterpolationPreview.h"
 #include "canvas/TimingTemplateEditorState.h"
@@ -26,6 +27,11 @@ namespace MMM::Logic
 {
 class BeatmapSession;
 }  // namespace MMM::Logic
+
+namespace MMM::Event
+{
+struct LogicCommandEvent;
+}  // namespace MMM::Event
 
 namespace MMM::Canvas
 {
@@ -171,6 +177,24 @@ protected:
     void invalidateShaderSourceCache() override;
 
 private:
+    /// @brief 提交时间线命令，记录原格式无法保存的修改但始终允许编辑。
+    /// @param event 待发布的时间线操作；批量命令共用一次提示。
+    /// @warning 低频提交路径：只读取快照，不访问可变 ECS 或文件系统。
+    void publishTimelineCommand(const Event::LogicCommandEvent& event);
+
+    /// @brief 在编辑手势及其它弹窗结束后显示格式支持度警告。
+    /// @warning UI 热路径：每帧只检查本地标志；配置仅在用户确认时保存。
+    void renderTimingFormatWarning();
+
+    /// @brief 连续编辑和同帧批量提交合并为一次待显示提示。
+    bool m_timingFormatWarningPending{ false };
+    /// @brief 当前警告模态窗口是否打开，与编辑弹窗使用独立状态。
+    bool m_isTimingFormatWarningOpen{ false };
+    /// @brief 提交当时的格式描述，避免切换谱面后提示错误的扩展名。
+    TimelineFormatSupport m_timingWarningFormat;
+    /// @brief 用户在警告内的临时偏好，确认后持久化。
+    bool m_hideTimingFormatWarning{ false };
+
     /// @brief Timeline 画布中的一个可拾取 Timing 目标。
     struct TimelineHitTarget;
 

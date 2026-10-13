@@ -1198,7 +1198,7 @@ void TimelineCanvas::renderTimingTemplateEditor()
                 command.templateDefinition        = draft;
                 command.templateAnchorSeconds     = state.m_anchorSeconds;
                 command.templateBeatmapInstanceId = state.m_instanceId;
-                Event::EventBus::instance().publish(
+                publishTimelineCommand(
                     Event::LogicCommandEvent(std::move(command)));
                 // 命令已发布不代表逻辑最终接受，提示只说明已经提交。
                 // 权限与冲突的最终结果仍通过既有命令反馈路由展示。
