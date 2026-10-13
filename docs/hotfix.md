@@ -2,6 +2,16 @@
 
 这套逻辑随 0.6.3 正式版本发布。0.6.2 到 0.6.3 仍使用原有三段版本更新；0.6.3 起程序支持同版本内递增的 `hotfix_revision`。程序更新需要重启，资产在启动同步时按 SHA256 下载差异文件。
 
+## 包管理器热修复同步
+
+`program` / `both` 模式在网页程序发布成功后同步签名 APT 源和 Gentoo overlay；`assets` 模式沿用应用的资源更新，不重建程序包。软件源同步失败会使整个发布任务失败，不能只因网页已切换就宣称完整发布成功。
+
+DEB 包保持应用版本不变，以 `0.6.3-2+hotfix.1`、`0.6.3-2+hotfix.2` 递增。包内主 ELF 必须与网页发布的 Linux 程序摘要一致，源码提交、包内记录、控制字段和文件名也必须匹配本次修订。包从原 CI run 的不可变聚合快照取出并随 hotfix Artifact 保存，不从共享 release 缓存猜测。
+
+Gentoo 源码新增 `musicmapmaker-next-0.6.3-r1.ebuild`，固定到不可变的 `v0.6.3-hotfix.1` tag，并在配置时写入相同应用修订。Gentoo 二进制包新增 `musicmapmaker-next-bin-0.6.3-r2.ebuild`（原正式二进制为 r1），绑定同一热修复 DEB 的固定 CDN 地址和 Manifest 摘要。标签只允许新建或复用同 SHA，不移动正式 tag，也不另建正式 Release。
+
+如果网页程序已公开，但 APT 或 Gentoo 同步失败，运行 `mmm-hotfix-package-sync`，输入原 `ci.yaml` hotfix 发布 run ID。恢复读取原 Artifact，检查本仓 hotfix 人工运行身份和精确 SHA，再对照当前公开清单与 DEB 载荷，只重试两个软件源；纯资产、未公开候选和已过期修订不能通过恢复。Artifact 过期或丢失时不得用重新编译的包冒充原发布对象。
+
 ## 分支与基线
 
 实现提交到 `develop`，本批不推送维护分支或改动线上发布。0.6.3 发布并建立 `v0.6.3` tag 后，从该 tag 建立持久 `hotfix` 分支。
@@ -45,6 +55,7 @@ CI 在 debsrv 准备候选，通过 SSH 将文件送到 podman 网站服务器�
 | `.github/workflows/website-release.yaml` | 原完整网站与 APT 发布 |
 | `.github/workflows/hotfix-release.yaml` | 基线检查、范围构建、准备及发布 |
 | `.github/workflows/hotfix.yaml` | hotfix 分支 push 的离线验证 |
+| `.github/workflows/hotfix-packages.yaml` | 已公开程序的 APT/Gentoo 同步恢复 |
 
 完整构建使用共享并发组保护固定工作树；普通网站发布和热修复使用另一共享并发组保护清单切换。普通 `ci-build`、ci push 和 `website-release` 的步骤与产物路径保留。首次启用前应将这批工作流随正式版本合入默认分支，使 GitHub 页面能够发现人工入口。
 
@@ -58,28 +69,18 @@ ctest --test-dir build --output-on-failure -R "^(UpdateCheckerTest|AssetSyncServ
 
 离线测试覆盖资源部分覆盖与完整包、制品篡改、基线变化、程序聚合身份、0.6.2 禁止程序热修复，以及正常合并和错误分支来源。GitHub 和服务器的实际公开发布留待 v0.6.3 建立 tag 后从维护分支执行。
 
-## 本批注释率检查
+## 最近修改文件的注释率检查
 
-2026-10-12，按 cloc 逐文件计算；纯数据基线 JSON 和文档不参与。
+2026-10-13，仅统计本批修改的自维护代码，按 cloc 逐文件计算；文档不参与。热修复 unittest 24 项通过，本机构建通过；Linux 隔离小程序完成正式版、hotfix 1、hotfix 2 的真实 CPack DEB 打包、载荷校验和 dpkg 升级顺序检查。原 Debian 维护测试 13 项和 APT 发布测试 7 项通过；APT 索引集成测试因隔离容器缺少 apt-ftparchive 跳过。Gentoo 配方与 Manifest 的生成、幂等恢复和回退拒绝检查通过；完整 Gentoo 安装未执行。
 
 | 路径 | 注释行 | 代码行 | 比例 |
 | --- | ---: | ---: | ---: |
-| `Modules/Network/src/UpdateChecker.cpp` | 368 | 857 | 30.04% |
-| `Modules/Game/UI/src/ui/imgui/menu/actions/help/CheckUpdateAction.cpp` | 212 | 493 | 30.07% |
-| `Modules/Network/tests/UpdateCheckerTest.cpp` | 152 | 351 | 30.22% |
-| `.github/workflows/build.yaml` | 100 | 233 | 30.03% |
-| `cmake/project-configure.cmake` | 83 | 188 | 30.63% |
-| `scripts/hotfix/publish_assets.py` | 58 | 135 | 30.05% |
-| `.github/workflows/hotfix-release.yaml` | 57 | 133 | 30.00% |
-| `scripts/hotfix/prepare_assets.py` | 57 | 131 | 30.32% |
-| `scripts/hotfix/prepare_program.py` | 39 | 81 | 32.50% |
-| `Modules/Network/include/network/UpdateChecker.h` | 44 | 75 | 36.97% |
-| `scripts/hotfix/test_assets.py` | 30 | 68 | 30.61% |
-| `scripts/hotfix/validate_base.py` | 28 | 65 | 30.11% |
-| `scripts/hotfix/test_program.py` | 25 | 56 | 30.86% |
-| `scripts/hotfix/test_base.py` | 24 | 54 | 30.77% |
-| `.github/workflows/ci.yaml` | 23 | 52 | 30.67% |
-| `.github/workflows/website-release.yaml` | 24 | 49 | 32.88% |
-| `.github/workflows/hotfix.yaml` | 9 | 19 | 32.14% |
-| `.github/actionlint.yaml` | 3 | 4 | 42.86% |
-| `cmake/mmmversion.h.in`（按 C++ 模板统计） | 16 | 10 | 61.54% |
+| `.github/workflows/hotfix-release.yaml` | 74 | 171 | 30.20% |
+| `.github/workflows/hotfix-packages.yaml` | 27 | 63 | 30.00% |
+| `.github/workflows/ci.yaml` | 24 | 56 | 30.00% |
+| `cmake/linux-package.cmake` | 69 | 160 | 30.13% |
+| `scripts/ci/update-gentoo-overlay.sh` | 37 | 85 | 30.33% |
+| `scripts/hotfix/validate_deb.py` | 31 | 71 | 30.39% |
+| `scripts/hotfix/sync_packages.py` | 13 | 29 | 30.95% |
+| `scripts/hotfix/test_packages.py` | 32 | 73 | 30.48% |
+| `C:/coding/mmm-gentoo-overlay/scripts/update-source-release.py` | 40 | 86 | 31.75% |

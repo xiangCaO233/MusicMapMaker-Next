@@ -24,12 +24,21 @@ on:
         # 复用原跨平台采样选项，不另外引入一套编译器配置。
         type: boolean
         default: true
+    secrets:
+      # 显式传递最小凭据集合，不通过 secrets: inherit 暴露其他发布密钥。
+      GENTOO_OVERLAY_SSH_KEY:
+        # 纯资产不需要软件源凭据，程序发布在 preflight 检查存在性。
+        required: false
 
 concurrency:
   # 发布串行组保持到整个 hotfix 流程结束，普通网站发布在此期间等待。
   # 和普通网站发布共享组，公开清单不能同时切换。
   group: musicmapmaker-publish
   cancel-in-progress: false
+
+permissions:
+  # 校验与构建默认只读，只有最终发布 job 可创建热修复源码 tag。
+  contents: read
 
 env:
   # 人工文本通过环境传递，不能进入 shell 命令展开。
@@ -60,10 +69,16 @@ jobs:
         working-directory: hotfix-source
         env:
           GH_TOKEN: ${{ github.token }}
+          MMM_GENTOO_OVERLAY_SSH_KEY: ${{ secrets.GENTOO_OVERLAY_SSH_KEY }}
         run: |
           # 分支错、基线错或无已发布 Release 时立刻失败，不消费构建资源。
           set -euo pipefail
           [[ "${GITHUB_REF}" == refs/heads/hotfix ]]
+          # 在构建和公开写入前检查凭据，纯资产保持原路径。
+          if [[ "${HOTFIX_SCOPE}" != assets ]]; then
+            # 失败发生在构建之前，避免消耗完整矩阵后才发现不能同步软件源。
+            test -n "${MMM_GENTOO_OVERLAY_SSH_KEY}"
+          fi
           # pin 文件只能在 tag 后首个维护提交声明；后补文件不放行。
           # 同名 tag 移动、源码版本不符或新正式 tag 混入都会拒绝。
           # 普通第二父链功能合并不改变维护基线，可以正常通过。
@@ -103,6 +118,9 @@ jobs:
       # 原程序打包形式保持不变：Windows/Linux 单文件，macOS 完整 App ZIP。
 
   publish:
+    permissions:
+      # 只追加不可变的 hotfix tag；正式 tag 和 Release 保持不变。
+      contents: write
     # 所有下载、摘要、解包和 SDK 操作只在低频 CI 发布路径执行。
     # 只有资产模式允许跳过程序构建，其他范围必须消费本次成功聚合。
     # always 只用于允许 assets 模式跳过 build，绝不忽略 preflight 或构建失败。
@@ -169,6 +187,28 @@ jobs:
               prepare_program(release, 'baseline/program.json', base, revision, os.environ['HOTFIX_COMMIT'], 'hotfix-output')
           PY
 
+      - name: Validate and preserve package candidate
+        # 程序热修复才发布软件包；纯资产不重建或递增包版本。
+        if: inputs.scope != 'assets'
+        working-directory: hotfix-source
+        run: |
+          set -euo pipefail
+          base="$(python3 -c "import json; print(json.load(open('hotfix-base.json'))['tag'])")"
+          # 使用运行专属快照，不能读取可能被下一轮 CI 覆盖的 release 根。
+          snapshot="/home/xiang/MusicMapMaker-Next/.git/mmm-hotfix-releases/${GITHUB_RUN_ID}"
+          # glob 必须恰好命中一个包；缺包与多个版本残留都禁止自动猜测。
+          debs=("${snapshot}"/linux-gcc14/musicmapmaker-next_*.deb)
+          [[ "${#debs[@]}" == 1 && -f "${debs[0]}" ]]
+          # 包内版本、源码身份和主 ELF 必须与本次公开候选完全一致。
+          python3 scripts/hotfix/validate_deb.py --deb "${debs[0]}" --base "${base}" \
+            --revision "${HOTFIX_REVISION}" --commit "${HOTFIX_COMMIT}" \
+            --program "${snapshot}/linux-gcc14/MusicMapMaker-Next"
+          # DEB 随不可变 Artifact 保存，失败恢复无需重新编译另一份包。
+          mkdir -p hotfix-output/packages
+          # 保留标准 dpkg 文件名，恢复时仍能核对文件名与包内控制字段。
+          cp "${debs[0]}" hotfix-output/packages/
+          # Artifact 包与线上主程序同源，恢复时仍需再对照当前公开清单。
+
       - uses: actions/upload-artifact@v4
         # 公开服务器上传之前先持久化候选，便于失败后核对实际生成内容。
         # Artifact 保存本次实际候选，不能只上传日志宣称程序已经可更新。
@@ -196,3 +236,21 @@ jobs:
           # 此步骤不重新部署网站，也不调用会改写两个清单的普通 CDN main。
           # 只切换选择范围的清单，网站构建和普通 release 元数据不被重写。
           ssh -p 22 podman@xiang233.top "/home/podman/.local/share/mmm-cdn/venv/bin/python '${stage}/tools/publish_assets.py' --stage '${stage}' --root /home/podman/data/caddy/web/mmm --apply"
+
+      - name: Publish APT and Gentoo hotfix packages
+        # 后半流程失败不回滚已公开的网页程序，Artifact 用于仅恢复软件源。
+        # 网页程序先发布成功，再对照公开身份更新包管理器，失败明确标记任务失败。
+        if: inputs.scope != 'assets'
+        working-directory: hotfix-source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MMM_GENTOO_OVERLAY_SSH_KEY: ${{ secrets.GENTOO_OVERLAY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          base="$(python3 -c "import json; print(json.load(open('hotfix-base.json'))['tag'])")"
+          debs=("${PWD}"/hotfix-output/packages/musicmapmaker-next_*.deb)
+          # 所有输入来自前面已验证的本轮候选，禁止从共享构建缓存选包。
+          [[ "${#debs[@]}" == 1 && -f "${debs[0]}" ]]
+          # 恢复入口只镜像已公开程序，绝不重新切换网页或移动正式 tag。
+          python3 scripts/hotfix/sync_packages.py --deb "${debs[0]}" --base "${base}" \
+            --revision "${HOTFIX_REVISION}" --commit "${HOTFIX_COMMIT}"

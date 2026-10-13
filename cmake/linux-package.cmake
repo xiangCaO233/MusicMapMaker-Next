@@ -53,6 +53,10 @@ set(MMM_DEB_REVISION
 if(NOT MMM_DEB_REVISION MATCHES "^[1-9][0-9]*$")
   message(FATAL_ERROR "MMM_DEB_REVISION 必须为正整数。")
 endif()
+# 程序热修复保持应用版本不变，但 DEB 版本必须高于原正式包且随修订递增。 派生值不写回缓存，下一次普通构建不能继承上一轮 hotfix 的包版本。
+if(MMM_HOTFIX_REVISION GREATER 0)
+  set(MMM_DEB_REVISION "${MMM_DEB_REVISION}+hotfix.${MMM_HOTFIX_REVISION}")
+endif()
 # 公共地址由安装脚本固定声明；离线安装也使用包内公钥，不在安装期间下载密钥。
 set(MMM_DEB_MAINTAINER
     "xiangCaO233 <odokoei@outlook.com>"

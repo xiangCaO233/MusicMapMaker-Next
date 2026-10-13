@@ -63,7 +63,12 @@ jobs:
   hotfix:
     # 错误分支要在 preflight 显式失败，不能仅用 if 条件静默跳过。
     # 0.6.2 程序热修复会被拒绝，0.6.3 起才能比较同版本修订号。
-    # 发布只沿用服务器凭据，不授予 GitHub token 额外写权限。
+    # 热修复源码以新不可变 tag 固定，其他构建 job 仍只有读取权限。
+    permissions:
+      # 写权限只服务新增不可变的热修复 tag，不影响普通 ci-build。
+      contents: write
+    secrets:
+      GENTOO_OVERLAY_SSH_KEY: ${{ secrets.GENTOO_OVERLAY_SSH_KEY }}
     # 分支与基线检查由被调用工作流在构建前执行。
     if: github.event_name == 'workflow_dispatch' && inputs.job == 'hotfix'
     uses: ./.github/workflows/hotfix-release.yaml
