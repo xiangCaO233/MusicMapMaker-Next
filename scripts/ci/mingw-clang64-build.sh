@@ -77,6 +77,7 @@ rm -rf build_clang
 # 源码根和构建根显式给出，避免依赖调用者目录推断。
 # CI 构建不得写入 Runner 的用户配置目录。
 # 即使复用 CI 构建目录，也让本次参数决定缓存值。
+# CI 显式关闭耗时诊断，避免旧构建缓存重新启用逐单元采集和排序。
 cmake -G Ninja \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DSOURCES_BUILD=OFF \
@@ -85,6 +86,7 @@ cmake -G Ninja \
     -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF \
     -DMMM_PGO_INSTRUMENT="${pgoInstrument}" \
     -DMMM_PGO_USE=OFF \
+    -DMMM_ENABLE_BUILD_TIMING=OFF \
     -S . \
     -B build_clang
 # 完整构建后运行构建树中注册的全部测试。

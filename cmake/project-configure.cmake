@@ -4,6 +4,10 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 # 生成第三方预编译库时禁用 Clang ThinLTO，避免把 bitcode / whole-program-vtables 状态写入可复用静态库。
 option(MMM_DISABLE_CLANG_LTO "Disable Clang ThinLTO for this configure." OFF)
 
+# 编译耗时诊断默认关闭，避免日常构建和打包生成大量 trace 或逐单元报告。 只有定位编译性能时才显式开启；同一开关也控制链接后的 Top 10 排序。
+option(MMM_ENABLE_BUILD_TIMING "Enable compiler timing and build-time ranking."
+       OFF)
+
 # 编译器家族决定后续全局优化参数语法。
 if(MSVC)
   # MSVC 的运行库和字符集已在根 CMake 中统一配置，此处无需 GNU 风格参数。
@@ -49,8 +53,10 @@ else()
     add_compile_options("-fno-math-errno")
     # 唯一内部链接名可避免 ThinLTO 合并不同翻译单元中的同名局部符号。
     add_compile_options("-funique-internal-linkage-names")
-    # 时间跟踪文件供构建耗时分析脚本使用，不改变生成代码语义。
-    add_compile_options("-ftime-trace")
+    # 只在显式诊断时生成时间跟踪文件，不让普通构建承担采集开销。
+    if(MMM_ENABLE_BUILD_TIMING)
+      add_compile_options("-ftime-trace")
+    endif()
 
     # LTO 可由依赖预编译流程显式关闭。 使用 GCC driver 做最终链接时不能启用 LLVM ThinLTO，否则链接器无法消费 clang
     # 生成的 bitcode。
@@ -94,7 +100,9 @@ else()
   else()
     # 非 Clang 编译器统一走 GCC 兼容配置，不启用 LLVM ThinLTO。
     message(STATUS "Compiler is GCC. Disable LTO.")
-    if(WIN32 AND CMAKE_CROSSCOMPILING)
+    if(NOT MMM_ENABLE_BUILD_TIMING)
+      # GCC 耗时报告与 Clang 跟踪共用开关，关闭时不输出逐翻译单元统计。
+    elseif(WIN32 AND CMAKE_CROSSCOMPILING)
       # Windows 交叉 GCC 的 CI 构建日志需要保持可读，默认不输出每个翻译单元的 GCC 内部耗时表。
       message(STATUS "GCC time report disabled for Windows cross builds.")
     elseif(CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 14

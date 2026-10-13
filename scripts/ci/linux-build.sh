@@ -416,6 +416,7 @@ cmake -U "Vulkan_*" \
     -DMMM_DISABLE_CLANG_LTO="${disableClangLto}" \
     -DMMM_PGO_INSTRUMENT="${pgoInstrument}" \
     -DMMM_PGO_USE=OFF \
+    -DMMM_ENABLE_BUILD_TIMING=OFF \
     -S "${projectRoot}" \
     -B "${buildDir}"
 

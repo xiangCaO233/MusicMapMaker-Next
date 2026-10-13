@@ -572,6 +572,7 @@ cmake -G "${CMAKE_GENERATOR:-Ninja}" \
     -DICE_PREBUILT_COMPILER_TAG="${compilerTag}" \
     -DMMM_PGO_INSTRUMENT="${pgoInstrument}" \
     -DMMM_PGO_USE=OFF \
+    -DMMM_ENABLE_BUILD_TIMING=OFF \
     -S "${projectRoot}" \
     -B "${buildDir}"
 

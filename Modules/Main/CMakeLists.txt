@@ -81,17 +81,21 @@ add_mingw_clang_pdb(MusicMapMaker-Next)
 # 仅发布型配置剥离主二进制，外置符号仍由前述 helper 保存。
 add_strip_command_for_release(MusicMapMaker-Next)
 
-# 构建完成后分析 Clang -ftime-trace 并打印编译耗时 Top 10。 Python 不可用时跳过报告，不应阻止主程序配置与构建。
-find_package(Python3 QUIET)
-if(Python3_EXECUTABLE)
-  # POST_BUILD 只读取构建目录中的 trace，不参与可执行文件内容生成。
-  add_custom_command(
-    TARGET MusicMapMaker-Next
-    POST_BUILD
-    COMMAND
-      "${Python3_EXECUTABLE}"
-      "${CMAKE_SOURCE_DIR}/scripts/analyze_build_times.py" "${CMAKE_BINARY_DIR}"
-    COMMENT "Analyzing compile times (Top 10 slowest TUs)...")
+# 仅显式开启编译耗时诊断时分析 trace，关闭时连旧 trace 的扫描排序也不执行。
+if(MMM_ENABLE_BUILD_TIMING)
+  # Python 不可用时跳过报告，不应阻止主程序配置与构建。
+  find_package(Python3 QUIET)
+  if(Python3_EXECUTABLE)
+    # POST_BUILD 只读取构建目录中的 trace，不参与可执行文件内容生成。
+    add_custom_command(
+      TARGET MusicMapMaker-Next
+      POST_BUILD
+      COMMAND
+        "${Python3_EXECUTABLE}"
+        "${CMAKE_SOURCE_DIR}/scripts/analyze_build_times.py"
+        "${CMAKE_BINARY_DIR}"
+      COMMENT "Analyzing compile times (Top 10 slowest TUs)...")
+  endif()
 endif()
 
 # 启动辅助实现归入主目标，不额外暴露静态库或跨模块链接接口。

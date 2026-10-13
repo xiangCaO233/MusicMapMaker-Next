@@ -364,6 +364,7 @@ fi
 # 交叉编译不得写入宿主机的用户配置目录。
 # CMake 参数明确固定目标 sysroot、依赖来源和两级 ABI 标签。
 # 每次配置明确覆盖旧缓存，避免上次诊断构建影响默认产物。
+# CI 显式关闭耗时诊断，避免旧构建缓存重新启用逐单元报告和排序。
 cmake -G "${CMAKE_GENERATOR:-Ninja}" \
     -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF \
     -DCMAKE_BUILD_TYPE="${buildType}" \
@@ -378,6 +379,7 @@ cmake -G "${CMAKE_GENERATOR:-Ninja}" \
     -DICE_PREBUILT_COMPILER_TAG="${compilerTag}" \
     -DMMM_PGO_INSTRUMENT="${pgoInstrument}" \
     -DMMM_PGO_USE=OFF \
+    -DMMM_ENABLE_BUILD_TIMING=OFF \
     -S "${projectRoot}" \
     -B "${buildDir}"
 

@@ -408,6 +408,7 @@ cmake -G "${CMAKE_GENERATOR:-Ninja}" \
     -DMMM_PGO_INSTRUMENT="${pgoInstrument}" \
     -DMMM_PGO_PROFILE_RUNTIME="${pgoProfileRuntime}" \
     -DMMM_PGO_USE=OFF \
+    -DMMM_ENABLE_BUILD_TIMING=OFF \
     -S "${projectRoot}" \
     -B "${buildDir}"
 
