@@ -1,0 +1,47 @@
+name: mmm-gentoo-overlay-sync
+# 独立恢复入口只更新软件源，不改变网站、GitHub Release 或源码 tag。
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        # 用于正式发布后的同步恢复；不能借此创建或覆盖 Release。
+        # helper 还会检查它确实是最新的公开正式版本。
+        description: "同步最新正式发布 tag 的源码 ebuild，例如 v0.6.3"
+        required: true
+        type: string
+
+permissions:
+  # 主仓 token 只读取发布元数据，跨仓写入由专用部署密钥完成。
+  contents: read
+
+concurrency:
+  # 与正式发布使用同一串行组，避免两次同步同时创建版本配方。
+  group: musicmapmaker-next-github-release
+  cancel-in-progress: false
+# 与发布串行执行，已有同步不能被新请求中断在 git commit 与 push 之间。
+
+jobs:
+  sync:
+    # 无需重建应用或占用自托管产物目录。
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # 凭据与临时 checkout 由 helper 在退出时统一清理。
+    steps:
+      - uses: actions/checkout@v4
+        # 只读取触发 ref 的脚本，发布版本身份仍取输入 tag 的远端对象。
+        with:
+          # 同步只需要脚本，不下载项目依赖与 LFS 二进制。
+          lfs: false
+          submodules: false
+          persist-credentials: false
+      - name: Sync published stable source ebuild
+        # 专用密钥只能写 overlay，GH_TOKEN 仅用于读取主仓发布身份。
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          MMM_GENTOO_OVERLAY_SSH_KEY: ${{ secrets.GENTOO_OVERLAY_SSH_KEY }}
+        run: |
+          # 输入仅通过带引号的 argv 传递，校验和幂等性由 helper 负责。
+          # 缺失密钥、旧标签或并发 push 冲突均返回失败，不降级或强推。
+          bash scripts/ci/update-gentoo-overlay.sh "${RELEASE_TAG}"
