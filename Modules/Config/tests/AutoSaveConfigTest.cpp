@@ -91,7 +91,7 @@ bool testEventAutoSaveRoundTrip()
 }
 
 /// @brief 验证自动备份配置的定时、事件与保留数量可稳定持久化。
-/// @return 往返值一致、旧配置默认关闭且非法数量被限制时返回 true。
+/// @return 往返值一致、缺失配置启用定时备份且非法数量被限制时返回 true。
 /// @details 事件模式仍保存秒制间隔，确保切换模式不会丢失备用参数。
 bool testAutoBackupRoundTrip()
 {
@@ -133,8 +133,8 @@ bool testAutoBackupRoundTrip()
          !restored.autoBackup.onBeatmapSwitch ||
          restored.autoBackup.onImGuiWindowFocusLost ||
          restored.autoBackup.maxBackupCount != 24 ||
-         // 缺失分组安全关闭自动备份，不能继承 source 的事件模式。
-         legacy.autoBackup.mode != MMM::Config::AutoSaveMode::Disabled ||
+         // 缺失分组采用新的五分钟默认值，不继承 source 的事件模式。
+         legacy.autoBackup.mode != MMM::Config::AutoSaveMode::Timed ||
          tooFew.autoBackup.maxBackupCount !=
              MMM::Config::AUTO_BACKUP_COUNT_MIN ||
          tooMany.autoBackup.maxBackupCount !=
@@ -144,6 +144,87 @@ bool testAutoBackupRoundTrip()
         return false;
     }
     // 所有正常、缺失和越界输入通过后返回成功。
+    return true;
+}
+
+/// @brief 验证备份默认值迁移、用户选择标记与项目覆盖隔离。
+/// @return 未设置者采用五分钟备份且明确选择跨启动保持时返回 true。
+/// @note JSON 往返模拟退出保存，不等待真实备份计时器。
+/// @details 软件默认和项目覆盖使用同一配置类型，但迁移只属于 EditorSettings。
+/// 旧完整默认值没有用户意图证据，按升级策略启用；非默认值证明已有配置。
+/// 新标记既记录选择，也让自动写出的完整策略具有明确的迁移代际。
+bool testAutoBackupDefaultMigration()
+{
+    using MMM::Config::AutoBackupConfig;
+    using MMM::Config::AutoSaveMode;
+    using MMM::Config::EditorSettings;
+
+    // 新用户无需进入设置页即可使用五分钟备份，普通保存不记录用户选择。
+    // 使用默认构造覆盖配置文件不存在时的启动路径。
+    // 同时验证 intervalSeconds，避免数值为 5 但误用秒单位。
+    const EditorSettings fresh;
+    const auto untouched = nlohmann::json(fresh).get<EditorSettings>();
+    if ( fresh.autoBackup.mode != AutoSaveMode::Timed ||
+         fresh.autoBackup.intervalSeconds() != 300.0 ||
+         untouched.autoBackup != fresh.autoBackup ||
+         untouched.m_autoBackupUserConfigured ) {
+        XERROR("Untouched backup defaults did not survive exit persistence");
+        return false;
+    }
+
+    // 旧版退出自动写出的完整默认关闭策略，升级后启用五分钟并只迁移一次。
+    // 使用完整 AutoBackupConfig 而非只填 mode，模拟旧序列化器实际输出。
+    // 二次恢复包含新标记，确认升级结果不会每次启动都被重新解释。
+    const auto legacy = nlohmann::json{
+        { "autoBackup", AutoBackupConfig{} }
+    }.get<EditorSettings>();
+    const auto migrated = nlohmann::json(legacy).get<EditorSettings>();
+    if ( legacy.autoBackup != fresh.autoBackup ||
+         migrated.autoBackup != fresh.autoBackup ||
+         legacy.m_autoBackupUserConfigured ) {
+        XERROR("Legacy default backup policy did not migrate once");
+        return false;
+    }
+
+    // 旧自定义配置即使关闭，也不能因为模式为 Disabled 而被迁移覆盖。
+    // 保留数量是隐藏字段：关闭状态下也应承认用户先前做过调整。
+    // 事件模式再使用同一自定义值，验证已启用策略同样不会重置为定时。
+    AutoBackupConfig custom;
+    custom.maxBackupCount = 24;
+    const auto customized =
+        nlohmann::json{ { "autoBackup", custom } }.get<EditorSettings>();
+    custom.mode = AutoSaveMode::EventTriggered;
+    const auto events =
+        nlohmann::json{ { "autoBackup", custom } }.get<EditorSettings>();
+    if ( customized.autoBackup.mode != AutoSaveMode::Disabled ||
+         customized.autoBackup.maxBackupCount != 24 ||
+         !customized.m_autoBackupUserConfigured ||
+         events.autoBackup != custom || !events.m_autoBackupUserConfigured ) {
+        // 配置保留和已设置标记必须同时正确，才能避免下一次升级覆盖。
+        XERROR("Legacy custom backup policy was overwritten");
+        return false;
+    }
+
+    // 用户主动关闭后连续保存两次，确认标记不会被退出路径清除。
+    // 模拟 UI 已明确登记选择，只改变模式，保留默认的五分钟隐藏间隔。
+    // 这与旧版自动保存的 Disabled 表面相同，必须依靠新标记区别。
+    EditorSettings disabled             = fresh;
+    disabled.autoBackup.mode            = AutoSaveMode::Disabled;
+    disabled.m_autoBackupUserConfigured = true;
+    const auto reopened      = nlohmann::json(disabled).get<EditorSettings>();
+    const auto reopenedAgain = nlohmann::json(reopened).get<EditorSettings>();
+    // 项目覆盖直接读取 AutoBackupConfig，不参与软件默认值迁移。
+    // 禁用项目覆盖必须优先于启用的软件默认，不允许升级暗中改变项目行为。
+    // 此处直接解析嵌套类型，对照上面的 EditorSettings 迁移入口。
+    const auto projectDisabled =
+        nlohmann::json(AutoBackupConfig{}).get<AutoBackupConfig>();
+    if ( reopenedAgain.autoBackup.mode != AutoSaveMode::Disabled ||
+         !reopenedAgain.m_autoBackupUserConfigured ||
+         projectDisabled.mode != AutoSaveMode::Disabled ) {
+        // 两次往返仍关闭说明普通持久化不会清除选择或触发默认回填。
+        XERROR("Explicit backup opt-out or project override was lost");
+        return false;
+    }
     return true;
 }
 
@@ -157,7 +238,7 @@ int main()
     // 每个子测试自行记录失败类别，main 只汇总返回码。
     return testTimedAutoSaveRoundTrip() && testEventAutoSaveRoundTrip() &&
                    // 自动备份最后执行，确认字段不会误写入 autoSave 分组。
-                   testAutoBackupRoundTrip()
+                   testAutoBackupRoundTrip() && testAutoBackupDefaultMigration()
                ? 0
                : 1;
 }

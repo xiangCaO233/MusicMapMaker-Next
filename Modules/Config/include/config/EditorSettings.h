@@ -453,6 +453,10 @@ struct AutoBackupConfig {
     /// @brief 每个谱面保留的备份数量，超出后删除最旧备份。
     int maxBackupCount{ 10 };
 
+    /// @brief 比较完整备份策略，用于识别旧默认值和设置页的实际修改。
+    /// @note 仅比较值类型字段，不分配内存或读取文件。
+    bool operator==(const AutoBackupConfig&) const = default;
+
     /// @brief 将配置的 5~60 定时间隔换算为秒。
     /// @return 可供逻辑调度器使用的秒数。
     [[nodiscard]] double intervalSeconds() const
@@ -853,8 +857,13 @@ struct EditorSettings {
     /// @brief 上次确认的插值工具选项，新建段落时恢复，不影响已有段落。
     TimingInterpolationPreferences m_interpolationPreferences;
 
-    /// @brief 项目未覆盖时使用的软件全局谱面自动备份配置。
-    AutoBackupConfig autoBackup;
+    /// @brief 项目未覆盖时使用的软件全局策略，默认每五分钟备份。
+    /// @note 项目覆盖类型仍默认关闭，避免修改已明确禁用的项目策略。
+    AutoBackupConfig autoBackup{ AutoSaveMode::Timed };
+
+    /// @brief 用户是否修改过软件备份策略；普通退出保存不改变此标记。
+    /// @note 旧自定义策略迁移为已设置，旧原始默认策略迁移为五分钟备份。
+    bool m_autoBackupUserConfigured{ false };
 
     /// @brief 导出 MC/打包 MCZ 时是否自动写入上架皮肤 mode_ext。
     bool autoAddStoreModeExtForMalodyExport{ false };

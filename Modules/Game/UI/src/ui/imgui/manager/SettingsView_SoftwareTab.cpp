@@ -459,6 +459,8 @@ void SettingsView::drawSoftwareSettings()
     // EditorSettings 由 AppConfig 持有，本函数只借用当前帧引用。
     // 函数结束后不缓存该引用，也不转移配置对象所有权。
     auto& settings = Config::AppConfig::instance().getEditorSettings();
+    // 值类型快照只比较备份字段，其他设置变化或仅打开页面不算备份选择。
+    const auto previousAutoBackup = settings.autoBackup;
     // changed 汇总需要统一发布和持久化的普通配置变化。
     // 即时副作用成功但字段未变化时也不应触发额外保存。
     bool changed = false;
@@ -2400,6 +2402,13 @@ void SettingsView::drawSoftwareSettings()
     // 皮肤导入/导出模态在根布局后渲染，成功导入可标记配置变化。
     changed |= renderSkinPackageFileDialogs(
         Config::AppConfig::instance().getWindowContentScale());
+
+    // Clay 控件回调在布局时执行，必须在回调结束后识别实际策略变化。
+    // 主动关闭与调整间隔均记录选择，下一次启动不会再覆盖用户策略。
+    if ( settings.autoBackup != previousAutoBackup ) {
+        settings.m_autoBackupUserConfigured = true;
+        changed                             = true;
+    }
 
     if ( changed ) {
         // 一帧内全部普通设置变化合并为一次逻辑命令和一次磁盘保存。
