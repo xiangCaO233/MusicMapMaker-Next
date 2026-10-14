@@ -199,6 +199,8 @@ add_library(
   src/ui/imgui/manager/SearchView.cpp
   src/ui/imgui/manager/AudioManagerView.cpp
   src/ui/imgui/manager/ProjectAudioToolView.cpp
+  # 表格展示独立于方块手势，两个入口共享资源缓存和试听池。
+  src/ui/imgui/manager/ProjectAudioToolView_Table.cpp
   src/ui/imgui/manager/BeatMapManagerView.cpp
   src/ui/imgui/manager/CollaborationLogWindow.cpp
   src/ui/imgui/manager/CollaborationRoomCoverImage.cpp

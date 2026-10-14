@@ -701,8 +701,8 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
         const auto saved = savedPlacements.find(resource.m_id);
         if ( saved != savedPlacements.end() ) {
             // 零值表示使用自动尺寸；非有限或负值也按未自定义处理。
-            const bool hasSavedWidth = std::isfinite(saved->second.m_width) &&
-                                       saved->second.m_width > 0.0F;
+            const bool hasSavedWidth  = std::isfinite(saved->second.m_width) &&
+                                        saved->second.m_width > 0.0F;
             const bool hasSavedHeight = std::isfinite(saved->second.m_height) &&
                                         saved->second.m_height > 0.0F;
             // 自定义标志决定后续保存时是否写回真实尺寸或零占位。
@@ -798,6 +798,8 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
     rebuildLabelRects();
     // 标签或资源 ID 可能变化，搜索结果必须在需要时重新评分。
     m_searchResultsDirty = true;
+    // 两种展示共用资源缓存，不能让表格继续引用重建前的行下标。
+    m_tableRowsDirty = true;
 }
 
 /// @brief 按当前 Z 序重建每个方块可用于绘制标签的最大可见矩形。
@@ -895,11 +897,11 @@ void ProjectAudioToolView::refreshInteractionLabelRects()
     const auto activeItem = m_draggingItem ? m_draggingItem : m_resizingItem;
     for ( std::size_t index = 0; index < m_items.size(); ++index ) {
         // 移动项自身标签使用完整当前矩形，固定项从缓存基础区开始。
-        const bool movingItem  = m_batchDragging
-                                     ? m_items[index].batchSelected
-                                     : activeItem && *activeItem == index;
-        auto       visibleRect = movingItem ? m_items[index].rect
-                                            : m_interactionBaseLabelRects[index];
+        const bool movingItem = m_batchDragging
+                                    ? m_items[index].batchSelected
+                                    : activeItem && *activeItem == index;
+        auto visibleRect      = movingItem ? m_items[index].rect
+                                           : m_interactionBaseLabelRects[index];
 
         if ( m_batchDragging ) {
             // 只有层级高于当前固定项的移动方块才会遮挡其标签。
@@ -964,7 +966,8 @@ void ProjectAudioToolView::persistWorkspace()
     engine.saveProject();
 }
 
-/// @brief 激活指定方块并把它提升到最上层。
+/// @brief 激活指定音频资源，并按展示模式决定是否提升方块层级。
+/// @param raiseToFront 方块交互提升层级，表格选择保留稳定行序。
 /// @param itemIndex 当前方块数组索引。
 /// @return 重排后的活动索引；输入无效或结果为空时返回空。
 ///
@@ -974,26 +977,30 @@ void ProjectAudioToolView::persistWorkspace()
 /// 激活总会重排 Z 序，即使该项已经位于数组末尾也保持结果语义一致。
 /// 方块标签和音轨类型同步到状态栏缓存，避免后续重复查找。
 std::optional<std::size_t> ProjectAudioToolView::activateItem(
-    std::size_t itemIndex)
+    std::size_t itemIndex, bool raiseToFront)
 {
     // 防御由旧命中结果或项目刷新造成的越界索引。
     if ( itemIndex >= m_items.size() ) return std::nullopt;
 
     // 先移出值再擦除原位置，避免持有会失效的引用。
-    Item selected = std::move(m_items[itemIndex]);
-    m_items.erase(m_items.begin() + static_cast<std::ptrdiff_t>(itemIndex));
-    m_items.push_back(std::move(selected));
-    // 数组末尾表示最高层，所有层级重新编号为连续值。
-    for ( std::size_t index = 0; index < m_items.size(); ++index ) {
-        m_items[index].zOrder = static_cast<std::int32_t>(index);
+    // 表格选择不提升层级，避免选中后资源行跳到末尾或修改方块叠放。
+    if ( raiseToFront ) {
+        Item selected = std::move(m_items[itemIndex]);
+        m_items.erase(m_items.begin() + static_cast<std::ptrdiff_t>(itemIndex));
+        m_items.push_back(std::move(selected));
+        // 数组末尾表示最高层，所有层级重新编号为连续值。
+        for ( std::size_t index = 0; index < m_items.size(); ++index ) {
+            m_items[index].zOrder = static_cast<std::int32_t>(index);
+        }
     }
 
     // 正常情况下刚追加后不会为空，该检查保留容器状态防御。
     if ( m_items.empty() ) return std::nullopt;
-    const std::size_t activeIndex = m_items.size() - 1;
-    auto&             item        = m_items[activeIndex];
+    const std::size_t activeIndex =
+        raiseToFront ? m_items.size() - 1 : itemIndex;
+    auto& item = m_items[activeIndex];
     // 提升到最高层后活动项暂时不受其他方块遮挡。
-    item.labelRect            = item.rect;
+    if ( raiseToFront ) item.labelRect = item.rect;
     m_selectedAudioResourceId = item.audioResourceId;
     m_selectedAudioLabel      = item.label;
     m_selectedAudioTrackType  = item.type;
@@ -1817,8 +1824,12 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         return;
     }
 
-    // 使用自动换行提示，窄窗口不会横向扩大工具尺寸。
-    ImGui::TextWrapped("%s", m_translationCache.hint);
+    // 展示模式只切换当前窗口，资源画笔和项目内已保存的方块布局共用。
+    if ( FeedbackRadioButton("方块视图", !m_tableView) ) setTableView(false);
+    ImGui::SameLine();
+    if ( FeedbackRadioButton("表格视图", m_tableView) ) setTableView(true);
+    // 方块操作说明仅在方块视图显示，避免误导表格用户拖动行来布局。
+    if ( !m_tableView ) ImGui::TextWrapped("%s", m_translationCache.hint);
 
     // 选择 Effect 时是否自动试听属于项目工作区偏好。
     auto& previewEffectOnSelection =
@@ -1829,6 +1840,13 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
              &previewEffectOnSelection) ) {
         // 设置变化低频发生，可立即保存以保证重新打开项目后恢复。
         Logic::EditorEngine::instance().saveProject();
+    }
+
+    if ( m_tableView ) {
+        // 表格与方块互斥绘制，保持重命名模态入口的共同生命周期。
+        renderTableView(dpiScale);
+        renderRenamePopup(dpiScale);
+        return;
     }
 
     // 搜索框占满可用宽度，Enter 提交当前高亮结果。

@@ -45,14 +45,16 @@ ImGuiWindow* findCanvas()
 /// @param focusOther 是否激活同节点中的另一个标签。
 /// @param height 工具所在宿主的高度。
 /// @param shift 是否按住 Shift，显式请求横向滚动。
+/// @param pointer 指针位置，表格场景使用真实行坐标选择资源。
 /// @warning 测试帧入口：只推进 ImGui 内存状态，不等待真实时间。
 void drawFrame(MMM::UI::UIManager& manager, MMM::UI::ProjectAudioToolView& view,
                bool docked, float wheel = 0.0F, bool focusOther = false,
-               float height = 450.0F, bool shift = false)
+               float height = 450.0F, bool shift = false,
+               ImVec2 pointer = ImVec2(200.0F, 250.0F))
 {
     auto& io = ImGui::GetIO();
     // 指针放在画布空白处，避免点击音频预览或拖动资源。
-    io.AddMousePosEvent(200.0F, 250.0F);
+    io.AddMousePosEvent(pointer.x, pointer.y);
     // 输入必须先于 NewFrame 排队，与真实 GLFW 后端的事件时序一致。
     io.AddMouseWheelEvent(0.0F, wheel);
     io.AddKeyEvent(ImGuiMod_Shift, shift);
@@ -204,6 +206,72 @@ bool checkScrolling(MMM::UI::UIManager&            manager,
     drawFrame(manager, view, true, 0.0F, false, 3200.0F);
     return canvas->Scroll.x > previousX;
 }
+/// @brief 验证真实表格替代方块绘制，选择资源不改写已有布局。
+/// @return 模式切换、行选择和切回方块都保持工作区正确时返回 true。
+/// @note 使用同一个工具实例和同一套项目资源，避免新建视图掩盖状态丢失。
+/// @details 表格子窗口必须实际出现，不能只检查模式布尔值。
+/// 方块窗口必须停止提交，证明切换式展示没有叠加两个交互区域。
+/// 真实行点击验证共享画笔选择，而非直接修改工具私有状态。
+/// 布局逐项比较包括资源身份和 Z 序，避免数量相同却顺序被改变。
+bool checkTableView(MMM::UI::UIManager&            manager,
+                    MMM::UI::ProjectAudioToolView& view)
+{
+    auto* project = MMM::Logic::ProjectController::instance().currentProject();
+    if ( !project ) return false;
+    auto& workspace = project->m_settings.m_workspace;
+    // 测试不依赖音频文件；关闭选择自动试听以只验证表格操作契约。
+    workspace.m_projectAudioToolPreviewEffectOnSelection = false;
+    // 清空持久选择，不能让上次测试保存的值掩盖本次行点击没有生效。
+    workspace.m_projectAudioToolSelectedResourceId.clear();
+    const auto original = workspace.m_projectAudioToolPlacements;
+    // 先保留布局，再切换；重建表格不能以新布局覆盖用来比较的基线。
+    view.setTableView(true);
+    for ( int frame = 0; frame < 3; ++frame ) drawFrame(manager, view, true);
+    ImGuiWindow* table = nullptr;
+    // 三帧覆盖首次创建、测量与稳定状态，不引入真实时间等待。
+    for ( auto* window : ImGui::GetCurrentContext()->Windows ) {
+        // 使用稳定内部 ID 找到表格滚动子窗口，不依赖窗口的本地化标题。
+        if ( window->Active &&
+             std::string_view(window->Name).find("ProjectAudioToolTable") !=
+                 std::string_view::npos )
+            table = window;
+    }
+    if ( !view.isTableView() || !table ||
+         (findCanvas() && findCanvas()->Active) )
+        return false;
+    // 指针放在首行文件名列，按真实按下/松开时序激活公共 Selectable。
+    // 使用实际表格几何而非固定坐标，避免顶部工具栏增加后点击到搜索框。
+    // 先移动再按下，保持与 GLFW 后端逐帧投递输入的时序一致。
+    const ImVec2 pointer(
+        table->InnerRect.Min.x + 30.0F,
+        table->InnerRect.Min.y + ImGui::GetFrameHeightWithSpacing() + 5.0F);
+    drawFrame(manager, view, true, 0.0F, false, 450.0F, false, pointer);
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    drawFrame(manager, view, true, 0.0F, false, 450.0F, false, pointer);
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    drawFrame(manager, view, true, 0.0F, false, 450.0F, false, pointer);
+    if ( workspace.m_projectAudioToolSelectedResourceId.empty() ) return false;
+    // 选择只通过公共 UI 入口完成，工作区值证明提交已经发生。
+    // 选择必须保存画笔资源，但不可像方块抓取那样提升 Z 序或挪动位置。
+    const auto& current = workspace.m_projectAudioToolPlacements;
+    if ( original.size() != current.size() ) return false;
+    for ( std::size_t i = 0; i < current.size(); ++i ) {
+        if ( original[i].m_audioResourceId != current[i].m_audioResourceId ||
+             original[i].m_x != current[i].m_x ||
+             original[i].m_y != current[i].m_y ||
+             original[i].m_width != current[i].m_width ||
+             original[i].m_height != current[i].m_height ||
+             original[i].m_zOrder != current[i].m_zOrder )
+            return false;
+    }
+    const auto selected = workspace.m_projectAudioToolSelectedResourceId;
+    // 复用原实例切回，不能依靠析构重建恢复默认布局来通过测试。
+    view.setTableView(false);
+    for ( int frame = 0; frame < 3; ++frame ) drawFrame(manager, view, true);
+    // 切回后方块恢复绘制，表格选中的资源仍然是当前音频画笔。
+    return !view.isTableView() && findCanvas() && findCanvas()->Active &&
+           workspace.m_projectAudioToolSelectedResourceId == selected;
+}
 }  // namespace
 
 /// @brief 在隔离配置和项目目录中运行真实 UI 回归。
@@ -212,9 +280,9 @@ int main()
 {
     // 单例按生产依赖顺序创建，避免事件订阅者晚于事件总线析构。
     MMM::Logic::EditorEngine::instance();
-    auto&      controller = MMM::Logic::ProjectController::instance();
-    const auto root       = std::filesystem::current_path() /
-                      "test_output/ProjectAudioToolScrollTest";
+    auto&           controller = MMM::Logic::ProjectController::instance();
+    const auto      root       = std::filesystem::current_path() /
+                                 "test_output/ProjectAudioToolScrollTest";
     std::error_code error;
     std::filesystem::create_directories(root, error);
     // 目录失败时不进入控制器；打开失败时不解引用当前项目指针。
@@ -241,7 +309,7 @@ int main()
         // UI 对象先于 ImGui context 释放，保持 Clay 和窗口的生命周期配对。
         MMM::UI::UIManager            manager;
         MMM::UI::ProjectAudioToolView view("AudioToolScrollTest");
-        passed = checkScrolling(manager, view);
+        passed = checkScrolling(manager, view) && checkTableView(manager, view);
     }
     // 先关闭生产项目数据源，再销毁 ImGui；控制器不保留工具视图的窗口指针。
     controller.closeProject();
