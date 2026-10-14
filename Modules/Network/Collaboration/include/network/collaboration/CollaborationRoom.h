@@ -376,6 +376,16 @@ public:
     /// @brief 获取用户列表当前选择的持续跟随目标。
     /// @return 远端 PeerId；未跟随时为 0。
     [[nodiscard]] PeerId followedPeerId() const;
+    /// @brief 设置当前房间是否跟随远端播放，默认关闭且不跨房间继承。
+    void setFollowPlaybackEnabled(bool enabled);
+    /// @brief 查询跟随播放开关；独立于视角跟随是否已有目标。
+    [[nodiscard]] bool followPlaybackEnabled() const;
+    /// @brief 对最新远端视口进行端到端延迟补偿后的时间外推。
+    [[nodiscard]] double estimateFollowPlaybackTime(
+        const ParticipantViewport& viewport) const;
+    /// @brief 顺序取出跟随对象播放切换，普通视口不能覆盖这些边界。
+    [[nodiscard]] std::optional<ParticipantViewport>
+    popFollowPlaybackTransition();
     /// @brief 获取当前 P2P 主画布状态发送频率。
     /// @return 5～60 Hz 范围内的本地发送频率。
     [[nodiscard]] std::uint32_t viewportPublishRateHz() const;
@@ -626,6 +636,8 @@ private:
     std::uint32_t m_viewportPublishRateHz = 10;
     /// @brief 用户列表选择的持续跟随稳定身份；为空表示未跟随。
     ParticipantId m_followedParticipantId;
+    /// @brief 当前房间的跟随音频选择，结束房间时恢复关闭。
+    bool m_followPlaybackEnabled{ false };
     /// @brief 尚未获准建立 P2P 连接的访客请求。
     std::vector<CollaborationPendingJoinRequest> m_pendingJoinRequests;
     /// @brief 无 Peer 时返回的空参与者表。

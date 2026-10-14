@@ -768,8 +768,8 @@ bool Basic2DCanvas::updateComposeLessonHints(
                                          : ImTextureID{};
     const TextureID   headTexture =
         uvMap.contains(static_cast<std::uint32_t>(TextureID::HoldHead))
-              ? TextureID::HoldHead
-              : TextureID::Note;
+            ? TextureID::HoldHead
+            : TextureID::Note;
     // 头部可选是皮肤协议的一部分，普通 Note 是旧皮肤的兼容回退。
     // 必须在求尺寸之前确定最终纹理，否则头部与真实物件宽高不同。
     // Hold、Flick 和 Polyline 均共享这个选择；Tap 始终使用 Note。
@@ -2712,7 +2712,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
     // 不等待逻辑线程生成下一份画面，也不能让旧 dirty 标志留在标签上。
     const bool titleHasBeatmap = !isLogoPlaceholder && m_currentSnapshot &&
                                  m_currentSnapshot->hasBeatmap;
-    const std::string title = makeCanvasTabTitle(
+    const std::string title    = makeCanvasTabTitle(
         TR("canvas.editor").data(),
         titleHasBeatmap,
         m_currentSnapshot ? m_currentSnapshot->beatmapName : std::string_view{},
@@ -2959,6 +2959,17 @@ void Basic2DCanvas::updateCollaborationViewports(
     }
     auto* room = sourceManager->getCollaborationRoom();
     if ( !room || !room->isActive() || room->localPeerId() == 0 ) {
+        // 只停止跟随功能接管的音频，不影响从未启用此功能的本地播放。
+        if ( m_playbackFollowTracker.update(
+                 0,
+                 nullptr,
+                 false,
+                 0.0,
+                 0.0,
+                 false,
+                 Network::Collaboration::playbackSteadySeconds()) )
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdSetPlayState{ false }));
         // 房间结束后清空跟随去重状态，下一次进入房间即使 peerId
         // 恰好复用也会从 sequence 零开始重新同步。
         m_lastFollowedPeerId           = 0;
@@ -2969,9 +2980,9 @@ void Basic2DCanvas::updateCollaborationViewports(
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
     // 渲染模式是本地显示偏好，不写入 ParticipantViewport；不同用户
     // 可独立选择填充、轮廓或轨道边缘而不影响网络协议。
-    const auto viewportRenderMode = Config::AppConfig::instance()
-                                        .getEditorSettings()
-                                        .collaborationViewportRenderMode;
+    const auto  viewportRenderMode = Config::AppConfig::instance()
+                                         .getEditorSettings()
+                                         .collaborationViewportRenderMode;
     const auto& layout =
         visual.trackLayoutForKeyCount(m_currentSnapshot->trackCount);
     // 使用当前轨道数对应布局，使动态扩轨后的协作范围立即跟随
@@ -2981,7 +2992,11 @@ void Basic2DCanvas::updateCollaborationViewports(
     // 合法轨道布局随后会把范围收窄到实际谱面轨道区域。
     Network::Collaboration::ParticipantViewport localViewport;
     localViewport.playbackTime = m_currentSnapshot->playbackTime;
-    localViewport.visualTime   = m_currentSnapshot->currentTime;
+    localViewport.playing      = m_currentSnapshot->isPlaying;
+    localViewport.playbackRate = m_currentSnapshot->playbackSpeed;
+    // 采用逻辑快照真正采样时刻，补偿 UI 与网络限频之间的处理时间。
+    localViewport.sampledAt  = m_currentSnapshot->snapshotSysTime;
+    localViewport.visualTime = m_currentSnapshot->currentTime;
     // playbackTime 用于点击/跟随跳转，visualTime 用于判断远端在当前
     // 视野上方或下方；两者不能因视觉偏移而混用。
     localViewport.visibleTimeStart = m_currentSnapshot->visibleTimeStart;
@@ -3042,9 +3057,11 @@ void Basic2DCanvas::updateCollaborationViewports(
     // 快照重建，不能再叠加本地 Pan Y。
     const auto jumpToViewport =
         [this, &canvasSize](
-            const Network::Collaboration::ParticipantViewport& viewport) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdSeek{ viewport.playbackTime }));
+            const Network::Collaboration::ParticipantViewport& viewport,
+            bool                                               seek = true) {
+            if ( seek )
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                    Logic::CmdSeek{ viewport.playbackTime }));
             const float desiredHorizontalOffset =
                 static_cast<float>(viewport.horizontalOffsetRatio *
                                    static_cast<double>(canvasSize.x));
@@ -3073,10 +3090,79 @@ void Basic2DCanvas::updateCollaborationViewports(
         if ( followed != viewports.end() &&
              followed->second.sequence != m_lastFollowedViewportSequence ) {
             const auto& viewport = followed->second;
-            jumpToViewport(viewport);
+            // 跟随音频时由下方漂移判定负责 Seek，视角更新仅同步横向位置。
+            jumpToViewport(viewport, !room->followPlaybackEnabled());
             m_lastFollowedViewportSequence = viewport.sequence;
         }
     }
+
+    // 先消费所有播放状态边界，再使用最新视口校正持续播放的漂移。
+    // 边界不能被缓存覆盖：同一轮收到播放、暂停、播放仍逐个发布逻辑命令。
+    // 本地音频负责两次广播之间的连续播放，不能用收到视口包的频率驱动声音。
+    // 当前快照属于逻辑线程，UI 只读取并发布命令，不能原地改写 isPlaying。
+    // 远端时间是未加视觉偏移的谱面时间，不能把判定线位置传给音频 Seek。
+    // 暂停时原样使用远端暂停位置，不额外加网络传播时间。
+    // 取消跟随会产生一次暂停动作，此后不再干预本地手动播放。
+    // 切换目标按对方当前状态重新对齐，不把旧目标序号用于新目标去重。
+    // 两秒过期判定只停止本功能启动的播放，避免断流后音乐一直播放。
+    // 倍率变更与 Seek 先于启动命令进入同一有序逻辑队列。
+    // 收到多个边界时，每个动作都保留，不能使用 changed 布尔合并它们。
+    // 边界队列有固定上限，不随远端持续播放时长增长。
+    // 水平跟随仍使用普通视口缓存，不为每个音频边界额外发布 Pan。
+    // 模态或 UI 短暂卡顿后，校准时钟可补偿采样至当前帧的时间差。
+    // 网络不对称仍会留下误差，漂移阈值用于避免微小误差造成可闻重定位。
+    // 不通过 sleep 或 wait_for 对齐两端，否则会阻塞用户本地交互。
+    // 音频资源加载和播放失败继续由既有 PlaybackController 返回状态处理。
+    // 同一帧可能连续收到不同倍率，比较已排队倍率而非始终比较旧逻辑快照。
+    // 此局部值只描述本帧动作，不修改跨线程共享配置。
+    // 下一帧仍以新快照为准，底层传输失败不会被永久当作成功。
+    double     queuedPlaybackRate = m_currentSnapshot->playbackSpeed;
+    const auto applyFollow =
+        [&](const Network::Collaboration::ParticipantViewport* viewport) {
+            const double now = Network::Collaboration::playbackSteadySeconds();
+            const double target =
+                viewport ? room->estimateFollowPlaybackTime(*viewport) : 0.0;
+            const double localTime =
+                m_currentSnapshot->playbackTime +
+                (m_currentSnapshot->isPlaying
+                     ? std::clamp(
+                           now - m_currentSnapshot->snapshotSysTime, 0.0, 0.1) *
+                           m_currentSnapshot->playbackSpeed
+                     : 0.0);
+            const auto action =
+                m_playbackFollowTracker.update(followedPeerId,
+                                               viewport,
+                                               room->followPlaybackEnabled(),
+                                               target,
+                                               localTime,
+                                               m_currentSnapshot->isPlaying,
+                                               now);
+            if ( !action ) return;
+            // 暂停先冻结传输再定位；播放先对齐倍率和位置再启动，保持边界顺序。
+            if ( !action->playing )
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdSetPlayState{ false }));
+            if ( action->seek ) {
+                if ( queuedPlaybackRate != action->rate ) {
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(
+                            Logic::CmdSetPlaybackSpeed{ action->rate }));
+                    queuedPlaybackRate = action->rate;
+                }
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdSeek{ action->time }));
+            }
+            if ( action->playing )
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdSetPlayState{ true }));
+        };
+    while ( const auto transition = room->popFollowPlaybackTransition() ) {
+        applyFollow(&*transition);
+    }
+    const auto followedPlayback = viewports.find(followedPeerId);
+    applyFollow(followedPlayback == viewports.end()
+                    ? nullptr
+                    : &followedPlayback->second);
 
     const auto& participants = room->participants();
     const auto  localId      = room->localPeerId();

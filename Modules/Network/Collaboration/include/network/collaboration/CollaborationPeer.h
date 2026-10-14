@@ -1,5 +1,6 @@
 #pragma once
 
+#include "network/collaboration/CollaborationPlaybackSync.h"
 #include "network/collaboration/CollaborationProtocol.h"
 #include "network/collaboration/ICollaborationTransport.h"
 
@@ -215,6 +216,15 @@ public:
     /// @return 状态有效且已经写入本地状态表并发送时返回 true。
     [[nodiscard]] bool publishViewport(ParticipantViewport viewport);
 
+    /// @brief 非阻塞探测跟随目标时钟，每秒最多一次，不等待网络回应。
+    /// @warning 房间每帧路径；只在截止时间到达时发送固定大小消息。
+    void probePlaybackClock(PeerId peerId);
+    /// @brief 按校准后的远端时钟外推播放位置，无校准时从接收时刻外推。
+    [[nodiscard]] double estimatePlaybackTime(
+        const ParticipantViewport& viewport) const;
+    /// @brief 顺序取出当前跟随对象的一次播放切换，不与普通视口覆盖合并。
+    [[nodiscard]] std::optional<ParticipantViewport> popPlaybackTransition();
+
     /// @brief 发送一条已由资源同步状态机校验的资源消息。
     /// @param recipientId 接收客户端；访客只能向房主发送请求。
     /// @param message 资源清单、请求或分块。
@@ -228,6 +238,19 @@ public:
     void update();
 
 private:
+    /// @brief 校验探测来源、沿房主路由，并匹配本地尚未完成的探测。
+    void handlePlaybackClockProbe(PeerId                    senderId,
+                                  const PlaybackClockProbe& probe);
+    /// @brief 当前单一跟随目标的时钟状态，切换目标后不复用旧偏移。
+    PeerId m_playbackClockPeer = 0;
+    /// @brief 本轮请求的发送时刻，用于拒绝伪造或过期回复。
+    double m_playbackClockSent = 0.0;
+    /// @brief 非阻塞探测下次允许发送的时间。
+    double m_nextPlaybackClockProbe = 0.0;
+    /// @brief 最近可用偏移估计；尚未校准时为空。
+    std::optional<PlaybackClockEstimate> m_playbackClockEstimate;
+    /// @brief 有界播放切换队列；仅缓存当前跟随目标，避免所有参与者队列增长。
+    std::deque<ParticipantViewport> m_playbackTransitions;
     /// @brief 把请求加入房主的有界权威队列。
     /// @param request 待处理请求。
     /// @return 入队成功时返回 true。

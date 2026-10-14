@@ -11,7 +11,7 @@ namespace MMM::Network::Collaboration
 {
 /// @brief 当前协作线协议主版本。
 /// @note 不兼容的帧布局或语义变更必须递增版本并由解码器显式拒绝旧值。
-inline constexpr std::uint16_t COLLABORATION_PROTOCOL_VERSION = 8;
+inline constexpr std::uint16_t COLLABORATION_PROTOCOL_VERSION = 9;
 
 /// @brief 线协议允许的消息类型。
 enum class CollaborationMessageKind : std::uint8_t {
@@ -28,6 +28,8 @@ enum class CollaborationMessageKind : std::uint8_t {
     ParticipantViewport    = 11,
     ChatMessage            = 12,
     ParticipantPermissions = 13,
+    /// @brief 跟随音频计时消息，不参与权威文档 revision。
+    PlaybackClockProbe = 14,
 };
 
 /// @brief 访客确认已经连续应用到的版本。
@@ -88,7 +90,7 @@ using CollaborationMessage =
                  ParticipantIdentity, ParticipantLeft, StateSnapshot,
                  ResourceManifest, ResourceRequest, ResourceChunk,
                  ParticipantViewport, CollaborationChatMessage,
-                 ParticipantPermissions>;
+                 ParticipantPermissions, PlaybackClockProbe>;
 
 /// @brief 协作消息编解码失败原因。
 enum class ProtocolError : std::uint8_t {

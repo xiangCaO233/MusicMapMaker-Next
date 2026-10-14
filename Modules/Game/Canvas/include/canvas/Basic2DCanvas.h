@@ -8,6 +8,7 @@
 #include "common/render/RenderSnapshotBuffer.h"
 #include "event/core/EventBus.h"
 #include "graphic/imguivk/VKTextureAtlas.h"
+#include "network/collaboration/CollaborationPlaybackSync.h"
 #include "ui/ICanvasView.h"
 #include "ui/IParallelUiPreparable.h"
 #include "ui/IRenderableView.h"
@@ -455,6 +456,8 @@ private:
 
     /// @brief 已经应用到逻辑相机的远端视口状态序号。
     std::uint64_t m_lastFollowedViewportSequence{ 0 };
+    /// @brief 仅当前画布接管的跟随音频状态；取消或失联后停止其播放。
+    Network::Collaboration::PlaybackFollowTracker m_playbackFollowTracker;
 
     /// @brief 当前主画布是否已经绑定过协作谱面会话。
     bool m_isCollaborationCanvas{ false };

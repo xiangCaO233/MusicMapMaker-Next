@@ -201,6 +201,8 @@ constexpr std::uint32_t MAX_VIEWPORT_PUBLISH_RATE_HZ = 60;
     constexpr double OFFSET_EPSILON = 0.0001;
     return std::abs(previous.playbackTime - current.playbackTime) >
                TIME_EPSILON ||
+           previous.playing != current.playing ||
+           previous.playbackRate != current.playbackRate ||
            std::abs(previous.visualTime - current.visualTime) > TIME_EPSILON ||
            std::abs(previous.visibleTimeStart - current.visibleTimeStart) >
                TIME_EPSILON ||
@@ -504,6 +506,7 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     m_localViewportPublishDeferred = false;
     m_nextViewportPublish          = std::chrono::steady_clock::now();
     m_followedParticipantId.clear();
+    m_followPlaybackEnabled = false;
     m_pendingJoinRequests.clear();
     resetRemoteOperationPipeline();
     m_hasDocument.store(false, std::memory_order_relaxed);
@@ -634,6 +637,7 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
     m_localViewportPublishDeferred = false;
     m_nextViewportPublish          = std::chrono::steady_clock::now();
     m_followedParticipantId.clear();
+    m_followPlaybackEnabled = false;
     m_pendingJoinRequests.clear();
     resetRemoteOperationPipeline();
     m_hasDocument.store(false, std::memory_order_relaxed);
@@ -993,6 +997,7 @@ void CollaborationRoom::resetOnlineSessionState()
     m_lastPublishedLocalViewport.reset();
     m_localViewportPublishDeferred = false;
     m_followedParticipantId.clear();
+    m_followPlaybackEnabled = false;
     m_pendingJoinRequests.clear();
     m_hasDocument.store(false, std::memory_order_relaxed);
     m_localPermissions.store(0U, std::memory_order_release);
@@ -1053,6 +1058,9 @@ void CollaborationRoom::update()
         const auto previousPermissions =
             m_localPermissions.load(std::memory_order_acquire);
         // Peer 更新可能改变本地权限；前后快照用于精确处理收紧情况。
+        // 在接收消息前登记跟随目标，边界队列只收集这一参与者的状态。
+        m_peer->probePlaybackClock(m_followPlaybackEnabled ? followedPeerId()
+                                                           : 0);
         m_peer->update();
         const auto permission =
             m_peer->participantPermissions().find(m_peer->localPeerId());
@@ -1191,6 +1199,43 @@ void CollaborationRoom::publishLocalViewport(ParticipantViewport viewport,
     viewport.peerId        = 0;
     viewport.sequence      = 0;
     m_pendingLocalViewport = viewport;
+    // 播放与暂停必须立即发送；不受视口限频或 Seek 拖动消抖影响。
+    // 连续状态切换不能留在 pending 中被后续状态覆盖成最终值。
+    if ( !m_lastPublishedLocalViewport ||
+         m_lastPublishedLocalViewport->playing != viewport.playing ||
+         m_lastPublishedLocalViewport->playbackRate != viewport.playbackRate ) {
+        if ( m_peer->publishViewport(viewport) )
+            m_lastPublishedLocalViewport = viewport;
+    }
+}
+
+/// @brief 更新房间音频跟随选择，关闭时清空尚未消费的远端边界。
+void CollaborationRoom::setFollowPlaybackEnabled(bool enabled)
+{
+    m_followPlaybackEnabled = enabled;
+    if ( m_peer ) m_peer->probePlaybackClock(enabled ? followedPeerId() : 0);
+}
+
+/// @brief 返回当前房间是否启用跟随音频。
+bool CollaborationRoom::followPlaybackEnabled() const
+{
+    return m_followPlaybackEnabled;
+}
+
+/// @brief 使用 Peer 校准时钟进行位置外推；离线时保留原始位置。
+double CollaborationRoom::estimateFollowPlaybackTime(
+    const ParticipantViewport& viewport) const
+{
+    return m_peer ? m_peer->estimatePlaybackTime(viewport)
+                  : viewport.playbackTime;
+}
+
+/// @brief 消费跟随对象状态边界；关闭或断开后不返回残留切换。
+std::optional<ParticipantViewport>
+CollaborationRoom::popFollowPlaybackTransition()
+{
+    return m_peer && m_followPlaybackEnabled ? m_peer->popPlaybackTransition()
+                                             : std::nullopt;
 }
 
 /// @brief 设置视口广播频率并限制到安全范围。

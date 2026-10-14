@@ -1913,6 +1913,12 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
     }
     if ( FeedbackCollapsingHeader(TR("ui.collaboration.participants").data(),
                                   headerFlags) ) {
+        // 音频跟随由各客户端自行选择，不改变房主权限或远端播放状态。
+        bool followPlayback = m_room->followPlaybackEnabled();
+        if ( FeedbackCheckbox("跟随播放音乐", &followPlayback) )
+            m_room->setFollowPlaybackEnabled(followPlayback);
+        ImGui::TextWrapped(
+            "跟随视角时同步对方的播放、暂停和播放速度；延迟补偿为近似值。");
         // 参与者 map 由房间快照维护，绘制期间不持久化元素指针。
         const auto&           participants = m_room->participants();
         const ImGuiTableFlags tableFlags =
