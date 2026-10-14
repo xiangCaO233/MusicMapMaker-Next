@@ -206,6 +206,8 @@ add_library(
   src/ui/imgui/manager/CollaborationRoomCoverImage.cpp
   src/ui/imgui/manager/CollaborationView.cpp
   src/ui/imgui/manager/NewBeatmapWizard.cpp
+  # 向导的资源改名只在确认后执行事务，与普通逐帧表单绘制分开维护。
+  src/ui/imgui/manager/NewBeatmapWizard_ResourceRename.cpp
   src/ui/imgui/manager/NewProjectWizard.cpp
   src/ui/imgui/manager/SettingsView.cpp
   # 搜索索引与导航分开；索引只处理值数据，原设置页继续应用和保存配置。
@@ -608,3 +610,13 @@ mmm_add_test_executable(UI ProjectAudioToolScrollTest
 target_link_libraries(ProjectAudioToolScrollTest PRIVATE UI 3rd_imgui)
 mmm_register_test_case(NAME ProjectAudioToolScrollTest COMMAND
                        ProjectAudioToolScrollTest)
+
+# 新建向导资源改名验证真实文件事务、共享图片绑定和音频测量草稿保留。 输出目录明确位于构建树，测试不得创建或清理源码资源目录中的文件。
+mmm_add_test_executable(UI NewBeatmapWizardResourceRenameTest
+                        tests/NewBeatmapWizardResourceRenameTest.cpp)
+# 直接调用生产向导和逻辑事务，不需要 Vulkan、音频输出设备或已有谱面。
+target_link_libraries(NewBeatmapWizardResourceRenameTest PRIVATE UI)
+mmm_register_test_case(
+  NAME NewBeatmapWizardResourceRenameTest COMMAND
+  NewBeatmapWizardResourceRenameTest
+  "${CMAKE_BINARY_DIR}/test_output/NewBeatmapWizardResourceRenameTest")

@@ -4,6 +4,7 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/timing/Timing.h"
 #include "ui/IUIView.h"
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -43,12 +44,40 @@ public:
     void close();
 
 private:
+    /// @brief 仅向回归测试开放向导资源草稿，不增加产品测试接口。
+    friend struct NewBeatmapWizardResourceRenameTestAccess;
     /// @brief 导入后需要自动选中的资源用途。
     enum class ResourceTarget {
         Audio,      ///< 主音轨。
         Cover,      ///< 封面图片。
         Background  ///< 背景图片或视频。
     };
+
+    /// @brief 记录资源原身份并准备名称输入，项目变更后不得复用请求。
+    void requestResourceRename(ResourceTarget target);
+    /// @brief 在向导父模态内部驱动资源重命名输入与确认。
+    /// @warning 每帧仅绘制，磁盘事务只发生于显式确认。
+    void renderResourceRename(float dpiScale);
+    /// @brief 校验项目及选择身份，复用现有事务改名并迁移向导草稿。
+    /// @return 成功时为 true，失败保留原选择及可见错误。
+    /// @warning 低频文件操作入口，不从逐帧路径直接调用。
+    bool renameSelectedResource();
+    /// @brief 本次改名的资源用途，不与导入选择器共用状态。
+    ResourceTarget m_renameTarget{ ResourceTarget::Audio };
+    /// @brief 请求开始时的正式项目根，确认时复核上下文。
+    std::filesystem::path m_renameProjectRoot;
+    /// @brief 请求开始时的选中资源路径，防止改名另一个资源。
+    std::filesystem::path m_renameSourcePath;
+    /// @brief 主音轨原 ID，事务完成后根据新文件名同步选择。
+    std::string m_renameAudioId;
+    /// @brief 跨帧文件名输入，容量校验后才复制旧名称。
+    std::array<char, 512> m_renameNameBuffer{};
+    /// @brief 只在点击入口时打开弹窗，不重复触发。
+    bool m_openRenamePopup{ false };
+    /// @brief 弹窗首次显示时选中原名称，后续不反复抢焦点。
+    bool m_focusRenameInput{ false };
+    /// @brief 改名失败原因，重试时保留用户输入。
+    std::string m_resourceRenameError;
 
     /// @brief 打开遵循用户设置的资源选择器。
     /// @warning 用户点击时调用；原生选择器会阻塞至用户完成选择。
