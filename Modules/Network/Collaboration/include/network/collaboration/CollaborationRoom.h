@@ -204,6 +204,19 @@ public:
     [[nodiscard]] bool setParticipantPermissions(
         PeerId peerId, CollaborationPermissionMask permissions);
 
+    /// @brief 房主设置新成员默认权限，仅影响后续新加入的协助者。
+    /// @param enabled 自动授权开关，默认关闭且不跨房间保存。
+    /// @param permissions 完整权限选择，关闭开关时仍保留本房间选择。
+    /// @return 当前房间的房主 Peer 接受合法配置时返回 true。
+    bool setDefaultParticipantPermissions(
+        bool enabled, CollaborationPermissionMask permissions);
+    /// @brief 查询本房间是否启用新成员自动授权，离线时为 false。
+    /// @warning UI 热路径：仅读取本地 Peer 固定大小状态，不等待网络。
+    bool defaultParticipantPermissionsEnabled() const;
+    /// @brief 查询新成员权限选择，离线时为零。
+    /// @warning UI 热路径：只读固定大小状态，不访问可变谱面或文件系统。
+    CollaborationPermissionMask defaultParticipantPermissions() const;
+
     /// @brief 设置离线房间浏览使用的中心服务器。
     /// @param endpoint 地址、信令端口和 TLS 配置。
     /// @return 当前未加入房间且配置有效时返回 true。

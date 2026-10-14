@@ -740,6 +740,33 @@ bool CollaborationRoom::setParticipantPermissions(
     return m_peer && m_peer->setParticipantPermissions(peerId, permissions);
 }
 
+/// @brief 将新成员授权策略交给当前房主 Peer 保存。
+/// @param enabled 自动授权开关。
+/// @param permissions 新加入协助者的完整权限选择。
+/// @return 非房主、离线或未知权限位不会修改任何策略。
+bool CollaborationRoom::setDefaultParticipantPermissions(
+    bool enabled, CollaborationPermissionMask permissions)
+{
+    // Peer 随房间断开销毁，新房间不会继承好友局中的自动授权。
+    return m_peer &&
+           m_peer->setDefaultParticipantPermissions(enabled, permissions);
+}
+
+/// @brief 获取当前房间自动授权开关，未建立 Peer 时保持关闭。
+/// @warning UI 热路径：与房间更新同线程，只读取本地配置。
+bool CollaborationRoom::defaultParticipantPermissionsEnabled() const
+{
+    return m_peer && m_peer->defaultParticipantPermissionsEnabled();
+}
+
+/// @brief 获取房主为新成员选择的权限，不引用现有成员的权限表。
+/// @warning UI 热路径：只读取一个固定大小掩码。
+CollaborationPermissionMask
+CollaborationRoom::defaultParticipantPermissions() const
+{
+    return m_peer ? m_peer->defaultParticipantPermissions() : 0U;
+}
+
 /// @brief 在离线状态切换公开目录与信令端点。
 /// @param endpoint 新端点配置。
 /// @return 房间未活动且端点可生成有效 URL 时返回 true。

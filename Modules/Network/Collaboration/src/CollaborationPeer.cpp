@@ -235,13 +235,17 @@ bool CollaborationPeer::addParticipant(PeerId             peerId,
                                         std::move(sessionId),
                                         std::move(creator) };
     m_participantIdentities.emplace(peerId, identity);
-    // 新访客初始只读；只有房主显式授权后才能提交谱面变更。
-    m_participantPermissions.emplace(peerId, 0U);
+    // 只在首次登记时应用房主显式配置；重复登记不会覆盖单独授权结果。
+    // 未启用仍保持只读，新权限与身份一起广播，不等待 UI 事后补发。
+    const auto initialPermissions =
+        m_defaultPermissionsEnabled ? m_defaultPermissions : 0U;
+    m_participantPermissions.emplace(peerId, initialPermissions);
     // 向所有访客广播新身份与权限，新访客也会收到自身权威镜像。
     for ( const PeerId participantId : m_participants ) {
         static_cast<void>(sendMessage(participantId, identity));
         static_cast<void>(
-            sendMessage(participantId, ParticipantPermissions{ peerId, 0U }));
+            sendMessage(participantId,
+                        ParticipantPermissions{ peerId, initialPermissions }));
     }
     // 两条广播各自独立，部分发送失败不会撤销已发送或本地登记。
     // 若房主已有可独立恢复快照，新访客可跳过日志起点限制直接追平。
@@ -343,6 +347,24 @@ bool CollaborationPeer::setParticipantPermissions(
         // 广播包含目标本人，所有访客镜像相同完整权限表。
         static_cast<void>(sendMessage(participantId, message));
     }
+    return true;
+}
+
+/// @brief 更新房主的入房授权策略，不广播或改写既有成员权限。
+/// @param enabled 是否让之后的新成员获得指定权限。
+/// @param permissions 房主保存的完整选择，必须只包含协议已知位。
+/// @return 非房主或非法掩码返回 false，旧策略保持不变。
+/// @warning UI 低频操作：与 addParticipant 同线程执行，只更新两个值。
+bool CollaborationPeer::setDefaultParticipantPermissions(
+    bool enabled, CollaborationPermissionMask permissions)
+{
+    // 不接受访客配置，也不能把未知权限位带入后续权限广播。
+    if ( !m_valid || !m_config.isHost ||
+         !isCollaborationPermissionMaskValid(permissions) )
+        return false;
+    // 关闭只阻止后续授权，已有成员仍由单人权限管理入口负责。
+    m_defaultPermissionsEnabled = enabled;
+    m_defaultPermissions        = permissions;
     return true;
 }
 
