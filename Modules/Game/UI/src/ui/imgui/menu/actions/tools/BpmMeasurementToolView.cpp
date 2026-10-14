@@ -791,7 +791,7 @@ PlaybackTimelineState readPlaybackTimelineState(BpmPlaybackRoute route)
     state.visualTime = state.audioTime + state.visualOffset;
     state.totalTime  = getPlaybackTotalTime(route, audioManager);
     state.isPlaying  = getPlaybackStatus(route, audioManager) ==
-                      Audio::PlaybackStatus::Playing;
+                       Audio::PlaybackStatus::Playing;
 
     if ( route != BpmPlaybackRoute::SynchronizedWithEditor ) {
         // audition 路由到此已经获得完整状态，无需查询画布同步缓冲。
@@ -1865,6 +1865,11 @@ void BpmMeasurementToolView::renderControlPanel(UIManager* sourceManager)
     }
 
     int beatDivisor = m_beatDivisor;
+    // 导航磁吸属于显示偏好，不能加入 BPM 数据的撤销历史。
+    if ( FeedbackCheckbox("滚轮吸附分拍线", &m_wheelSnapEnabled) ) {
+        m_wheelSnapRemainder = 0.0;
+        markUserPreferencesChanged(true, false);
+    }
     if ( ::MMM::UI::FeedbackSliderInt(
              TR("ui.tools.bpm_measure.beat_divisor").data(),
              &beatDivisor,
@@ -2742,8 +2747,8 @@ void BpmMeasurementToolView::updateMetronomePlayback()
         std::abs(m_metronomeScheduledBeatLength - activeBeatLength) > 1e-9;
     // 超过两拍或逆向移动视为 seek，不能沿用连续播放游标。
     const double jumpThreshold = std::max(0.25, activeBeatLength * 2.0);
-    const bool   jumped        = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
-                        audioTime - m_lastMetronomeAudioTime > jumpThreshold;
+    const bool   jumped = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
+                          audioTime - m_lastMetronomeAudioTime > jumpThreshold;
     // 修改视觉偏移使未来预约失效，不能让旧时间的一拍与新时间的一拍同时响。
     // 只清除本工具的两个音效池，不改动歌曲 transport 或其他编辑器音效。
     if ( m_metronomeScheduleInitialized && (gridChanged || jumped) ) {
@@ -2846,7 +2851,7 @@ bool BpmMeasurementToolView::ensureMetronomeSoundEffects()
     // 皮肤可分别覆盖普通拍和重拍音效；缺项时回退内置资源路径。
     const auto& skinData         = Config::SkinManager::instance().getData();
     auto        resolveAudioPath = [&](const char*                  key,
-                                const std::filesystem::path& fallback) {
+                                       const std::filesystem::path& fallback) {
         if ( const auto it = skinData.audioPaths.find(key);
              it != skinData.audioPaths.end() ) {
             // 皮肤表记录的路径已经由 SkinManager 解析为文件系统路径。
@@ -3117,9 +3122,9 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
             const double intersectStart = std::max(texStart, pixelStart);
             const double intersectEnd   = std::min(texEnd, pixelEnd);
             const float  uv0x = static_cast<float>((intersectStart - texStart) /
-                                                  texture->width());
+                                                   texture->width());
             const float  uv1x = static_cast<float>((intersectEnd - texStart) /
-                                                  texture->width());
+                                                   texture->width());
             const float  screenX0 =
                 imageMin.x + static_cast<float>((intersectStart - pixelStart) /
                                                 pixelWidth * size.x);
@@ -4034,8 +4039,8 @@ void BpmMeasurementToolView::handlePlaybackCursorDrag(
         // 限制单帧时间跨度，避免窗口恢复或调试暂停后一次越过过长距离。
         const double frameSeconds = std::clamp<double>(io.DeltaTime, 0.0, 0.1);
         const double scrollDelta  = static_cast<double>(edgeDistance) *
-                                   edgeScrollSensitivity * frameSeconds;
-        m_viewCenter = std::clamp<double>(
+                                    edgeScrollSensitivity * frameSeconds;
+        m_viewCenter              = std::clamp<double>(
             m_viewCenter + scrollDelta, 0.0, playbackCanvasDuration());
         // 边缘滚动属于用户视野选择，需要纳入持久化偏好。
         markUserPreferencesChanged(false, true);
@@ -4157,14 +4162,9 @@ void BpmMeasurementToolView::handleTimelineNavigation(const ImVec2& rectMin,
         // 正方向向更早位置移动，与时间线浏览方向保持一致。
         // seek 入口负责音频时间与视觉时间的偏移转换及边界裁切。
         // 事件只由当前悬浮画布处理，不同时在波形和频谱重复提交。
-        const auto playback     = readPlaybackTimelineState(m_playbackRoute);
-        const auto segmentIndex = findSegmentIndexForTime(playback.visualTime);
-        const double bpm        = m_timingSegments.empty()
-                                      ? m_bpm
-                                      : m_timingSegments[segmentIndex].bpm;
-        const double step =
-            60.0 / std::max(bpm, 1.0) / std::max(m_beatDivisor, 1);
-        seekPlaybackToCanvasTime(playback.visualTime - io.MouseWheel * step);
+        const auto playback = readPlaybackTimelineState(m_playbackRoute);
+        seekPlaybackToCanvasTime(
+            wheelSeekTarget(playback.visualTime, io.MouseWheel));
         markUserPreferencesChanged(false, true);
     } else if ( hover && io.MouseWheel != 0.0f ) {
         // 缩放锚定鼠标下的时间，避免波形内容在滚轮时横向漂移。
@@ -4440,7 +4440,8 @@ bool BpmMeasurementToolView::loadSelectedTrackForPlayback()
         audio.getLoadedAuditionSyncKey() != m_selectedAudioSyncKey;
     if ( needsAuditionLoad ) {
         // 资源配置包含音量、偏移和解码设置，必须随路径一起交给后端。
-        if ( !audio.loadAuditionTrack(pathString, resource->m_config) ) {
+        if ( !audio.loadAuditionTrack(
+                 pathString, resource->m_config, resource->m_type) ) {
             m_statusText = TR("ui.tools.bpm_measure.load_failed").data();
             return false;
         }
@@ -4517,7 +4518,8 @@ void BpmMeasurementToolView::restoreUserPreferences()
                                  4.0,
                                  1000.0);
     // 分拍数是整数，不需要有限值检查。
-    m_beatDivisor = std::clamp(preferences.beatDivisor, 1, 64);
+    m_beatDivisor      = std::clamp(preferences.beatDivisor, 1, 64);
+    m_wheelSnapEnabled = preferences.wheelSnapEnabled;
     // 视图偏好不能恢复到音频零点前，实际时长稍后再进一步钳制。
     m_viewCenter = std::max(0.0,
                             std::isfinite(preferences.viewCenterSeconds)
@@ -4540,18 +4542,15 @@ void BpmMeasurementToolView::restoreUserPreferences()
 void BpmMeasurementToolView::markUserPreferencesChanged(
     bool measurementDisplayChanged, bool viewChanged)
 {
-    // 人工视野操作单独标记，避免将播放中的自动居中视为一次编辑。
-    if ( viewChanged && !m_restoringMeasurementHistory &&
-         m_measurementGestureBefore )
-        m_measurementHistoryViewChanged = true;
     // 直接更新内存配置，使同进程内重新打开窗口可立即读取最新值。
     auto& preferences = Config::AppConfig::instance()
                             .getEditorSettings()
                             .bpmMeasurementToolPreferences;
     if ( measurementDisplayChanged ) {
         // 显示类参数一起提交，避免不同控件各自触发保存计时器。
-        preferences.markerWidthMs = std::clamp(m_markerWidthMs, 4.0, 1000.0);
-        preferences.beatDivisor   = std::clamp(m_beatDivisor, 1, 64);
+        preferences.markerWidthMs    = std::clamp(m_markerWidthMs, 4.0, 1000.0);
+        preferences.beatDivisor      = std::clamp(m_beatDivisor, 1, 64);
+        preferences.wheelSnapEnabled = m_wheelSnapEnabled;
     }
     if ( viewChanged ) {
         // 只持久化非负中心和受支持半宽，不记录临时拖动标志。
@@ -4666,14 +4665,6 @@ void BpmMeasurementToolView::seekPlaybackToAudioTime(double audioTime)
 
     const double commandAudioTime =
         std::clamp(audioTime, minTime, std::max(minTime, totalTime));
-    if ( !m_restoringMeasurementHistory && m_measurementGestureBefore ) {
-        // 逻辑队列尚未消费 seek 时也记录目标值，不回读陈旧的后端时间。
-        // before 保存手势开始的播放位置，after 保存用户最终请求的位置。
-        // 播放本身的时间推进不会置该标记，因此普通参数撤销不跳播放头。
-        m_measurementHistorySeekChanged    = true;
-        m_measurementHistoryViewChanged    = true;
-        m_measurementHistorySeekCanvasTime = commandAudioTime + visualOffset;
-    }
     if ( isPlaybackSynchronizedWithEditor() ) {
         // 主时间线只能通过逻辑命令修改，不能跨线程直写播放位置。
         Logic::EditorEngine::instance().pushCommand(
@@ -5289,7 +5280,7 @@ void BpmMeasurementToolView::analyzeTrack(
                 // 使用模平方比较避免循环内重复开方。
                 const double magSq = fftOutput[i][0] * fftOutput[i][0] +
                                      fftOutput[i][1] * fftOutput[i][1];
-                maxMagnitude = std::max(maxMagnitude, magSq);
+                maxMagnitude       = std::max(maxMagnitude, magSq);
             }
             // 仅峰值确定后开方并归一化到 FFT 大小，再转换为 dB。
             const double db =
@@ -5519,6 +5510,68 @@ std::array<unsigned char, 4> BpmMeasurementToolView::spectrumColorFromDb(
              static_cast<unsigned char>(g * 255.0),
              static_cast<unsigned char>(b * 255.0),
              255 };
+}
+
+/// @brief 计算滚轮导航位置，磁吸时每个刻度落在下一条真实分拍线。
+/// @param currentTime 当前播放头所在画布时间，单位秒。
+/// @param wheelDelta 正值向前浏览，负值向后浏览，允许触控板小数刻度。
+/// @return 导航目标，音频边界由统一 Seek 入口最终裁切。
+/// @warning 用户滚轮路径只做有界步进，不执行文件操作或等待播放头更新。
+double BpmMeasurementToolView::wheelSeekTarget(double currentTime,
+                                               double wheelDelta)
+{
+    if ( !std::isfinite(currentTime) || !std::isfinite(wheelDelta) )
+        return currentTime;
+    // 段落数据异常时回退一百二十 BPM，不能把非有限间距用于网格计算。
+    const auto bpmAt = [&](std::size_t index) {
+        const double bpm =
+            m_timingSegments.empty() ? m_bpm : m_timingSegments[index].bpm;
+        return std::isfinite(bpm) && bpm > 0.0 ? bpm : 120.0;
+    };
+    // 分拍设置使用与绘制一致的边界，避免零除和过密步进。
+    const int divisor = std::clamp(m_beatDivisor, 1, 64);
+    if ( !m_wheelSnapEnabled ) {
+        // 关闭时保留原有相对步进，不把用户当前精确位置强制拉到网格。
+        m_wheelSnapRemainder = 0.0;
+        const auto index     = findSegmentIndexForTime(currentTime);
+        return currentTime - wheelDelta * 60.0 / bpmAt(index) / divisor;
+    }
+    // 累积高精度触控板刻度，一个完整刻度才跨一条线，避免小数输入连续抖动。
+    m_wheelSnapRemainder =
+        std::clamp(m_wheelSnapRemainder + wheelDelta, -64.0, 64.0);
+    // 取整数部分保留剩余小数，正负方向都不依赖四舍五入。
+    const int ticks = static_cast<int>(m_wheelSnapRemainder);
+    // 最多六十四格与输入余量上限一致，异常滚轮报告不会阻塞这一帧。
+    m_wheelSnapRemainder -= ticks;
+    // 滚轮正方向浏览更早位置，与工具既有时间轴方向一致。
+    const bool earlier = ticks > 0;
+    double     target  = currentTime;
+    for ( int tick = 0; tick < std::abs(ticks); ++tick ) {
+        // 每次重新选段，多个刻度跨 BPM 边界后必须切到该段的分拍间距。
+        auto   index  = findSegmentIndexForTime(target + 1e-9);
+        double anchor = m_timingSegments.empty()
+                            ? m_firstBeatTime
+                            : m_timingSegments[index].timestampSeconds;
+        if ( earlier && index > 0 && target <= anchor + 1e-9 ) {
+            // 向前跨段首时，从前一段网格取最后一条线，不用新段 BPM 向后外推。
+            --index;
+            anchor = m_timingSegments[index].timestampSeconds;
+        }
+        const double step = 60.0 / bpmAt(index) / divisor;
+        // 网格索引使用当前段首拍为原点，不能以歌曲零秒替代首拍偏移。
+        const double position = (target - anchor) / step;
+        // epsilon 只消除落在线上的浮点误差，必须严格前进到相邻线而非留在原线。
+        const double grid = earlier ? std::ceil(position - 1e-8) - 1.0
+                                    : std::floor(position + 1e-8) + 1.0;
+        double       next = anchor + grid * step;
+        if ( !earlier && index + 1 < m_timingSegments.size() ) {
+            // 段首本身就是新网格的零线；不能跨过它直接跳到旧段的一条延长线。
+            next = std::min(next, m_timingSegments[index + 1].timestampSeconds);
+        }
+        target = next;
+    }
+    // 最终音频边界仍由 Seek 路由裁切，网格算法不直接操作音频源。
+    return target;
 }
 
 }  // namespace MMM::UI

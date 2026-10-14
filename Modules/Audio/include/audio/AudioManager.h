@@ -444,14 +444,19 @@ public:
     /// @brief 将音轨加载到独立试听通道，不替换当前 BGM。
     /// @param filePath 音频文件绝对路径。
     /// @param config 试听音轨的音量、静音和初始倍速配置。
+    /// @param type 资源音轨类型，主音频使用 BGM 增益，音效使用 SFX 增益。
     /// @return 加载并接入主混音器成功时返回 true。
     /// @warning
     /// 低频资源路径：可能触发音频解码缓存加载，禁止在每帧热路径中调用。
     bool loadAuditionTrack(const std::string&      filePath,
-                           const AudioTrackConfig& config);
+                           const AudioTrackConfig& config,
+                           AudioTrackType          type = AudioTrackType::Main);
 
     /// @brief 卸载独立试听音轨并断开其混音节点。
     void unloadAuditionTrack();
+    /// @brief 读取独立试听源已经应用的增益，用于低频音量诊断。
+    /// @return 未加载时为零，不读取或改变节拍器的音量。
+    float getAuditionEffectiveVolume() const;
 
     /// @brief 开始或恢复独立试听音轨播放。
     void playAudition();
@@ -1206,6 +1211,8 @@ private:
 
     /// @brief 当前独立试听音轨音量。
     float m_auditionTrackVolume{ 1.0f };
+    /// @brief 独立试听资源的音量分类，歌曲使用 BGM，音效使用 SFX。
+    AudioTrackType m_auditionTrackType{ AudioTrackType::Main };
 
     /// @brief 当前独立试听音轨是否静音。
     bool m_auditionTrackMuted{ false };

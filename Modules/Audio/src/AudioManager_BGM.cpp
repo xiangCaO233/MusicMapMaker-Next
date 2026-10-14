@@ -797,7 +797,8 @@ const std::string& AudioManager::getLoadedBGMPath() const
 /// 新文件先完整取得强引用，确认成功后才卸载旧试听，保证失败不会破坏当前试听。
 /// 歌曲与专用节拍池先混合，再进入效果音轨的主时间线拉伸前级。
 bool AudioManager::loadAuditionTrack(const std::string&      filePath,
-                                     const AudioTrackConfig& config)
+                                     const AudioTrackConfig& config,
+                                     AudioTrackType          type)
 {
     if ( !m_audioPool || !m_threadPool || !m_timingEffectMixer ||
          filePath.empty() ) {
@@ -825,6 +826,8 @@ bool AudioManager::loadAuditionTrack(const std::string&      filePath,
     m_auditionSyncKey     = makeAudioPathSyncKey(filePath);
     m_auditionTrackVolume = std::clamp(config.volume, 0.0f, 1.0f);
     m_auditionTrackMuted  = config.muted;
+    // 歌曲音量分类独立于节拍器，不能因为共享拉伸器就继承 SFX 总控。
+    m_auditionTrackType = type;
     // 歌曲的资源静音只控制 SourceNode，节拍器继续使用自己的池增益。
     // SourceNode 保留资源秒坐标；歌曲与节拍不再拥有第二个拉伸器。
     m_auditionSource = std::make_shared<ice::SourceNode>(m_auditionTrack);

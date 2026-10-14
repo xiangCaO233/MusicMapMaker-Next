@@ -90,22 +90,32 @@ bool AudioManager::isMainTrackMuted() const
     return m_mainTrackMuted;
 }
 
-/// @brief 按试听轨道配置、全局音量和效果音轨增益刷新试听源音量。
+/// @brief 按试听资源类型、全局音量和所属总控增益刷新试听源音量。
 ///
 /// 试听源是资源浏览使用的独立 SourceNode，不经过复合时间线主增益，但仍属于
-/// 效果音轨分类并服从应用全局音量。节点未创建时保留状态，加载后再应用。
+/// 资源的 BGM/SFX 分类并服从应用全局音量。节点未创建时保留状态，加载后再应用。
 void AudioManager::refreshAuditionTrackVolume()
 {
     if ( !m_auditionSource ) {
         return;
     }
 
-    // BPM 试听歌曲与节拍共用效果音轨音量，不继承主音轨独立增益。
-    float effectiveVolume = m_auditionTrackVolume * m_globalVolume * m_sfxGain;
-    if ( m_auditionTrackMuted || m_globalMuted || m_sfxGainMuted ) {
+    // 歌曲服从 BGM 总控；音效仍服从 SFX，节拍器不被歌曲总线静音。
+    const bool music           = m_auditionTrackType == AudioTrackType::Main;
+    float      effectiveVolume = m_auditionTrackVolume * m_globalVolume *
+                                 (music ? m_bgmGain : m_sfxGain);
+    if ( m_auditionTrackMuted || m_globalMuted ||
+         (music ? m_bgmGainMuted : m_sfxGainMuted) ) {
         effectiveVolume = 0.0f;
     }
     m_auditionSource->setvolume(effectiveVolume);
+}
+
+/// @brief 读取真实试听 SourceNode 的当前增益，验证总控已同步到音频图。
+/// @warning 低频控制与诊断路径，不放入音频回调或逐帧业务绘制。
+float AudioManager::getAuditionEffectiveVolume() const
+{
+    return m_auditionSource ? m_auditionSource->getvolume() : 0.0F;
 }
 
 /// @brief 按主增益、全局音量和 BGM 总线状态刷新复合时间线音量。
@@ -314,14 +324,14 @@ MixerChannelMode AudioManager::getMainMixerChannelMode() const
 /// BGM 分类包含复合时间线和资源试听，两条路由都必须在同次配置变更后刷新。
 void AudioManager::setBGMGain(float gain)
 {
-    // BGM 总线增益作用于谱面时间线，试听歌曲继承效果音轨增益。
+    // BGM 总控同时作用于谱面时间线和 Main 类型试听歌曲。
     m_bgmGain = std::clamp(gain, 0.0f, 1.0f);
 
     auto& settings   = Config::AppConfig::instance().getEditorSettings();
     settings.bgmGain = m_bgmGain;
     Config::AppConfig::instance().save();
 
-    // 资源节点各自计算所属音轨增益，刷新不会改变试听的效果音轨分类。
+    // 资源按自身类型选择音量分类，不改变节拍器的 SFX 分类。
     setMainTrackVolume(m_mainTrackVolume);
     refreshAuditionTrackVolume();
 }
@@ -372,7 +382,7 @@ void AudioManager::setSFXGain(float gain, bool persist)
     }
 
     refreshSFXEffectiveVolumes();
-    // 效果音轨总控也作用于试听歌曲，不能只更新节拍池。
+    // 效果音轨总控只影响 Effect 类型试听，Main 歌曲不随其变化。
     refreshAuditionTrackVolume();
 }
 

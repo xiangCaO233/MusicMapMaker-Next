@@ -835,6 +835,7 @@ void to_json(nlohmann::json&                      json,
     // 四个字段共同恢复测量窗口，但不保存任何谱面分析结果。
     json =
         nlohmann::json{ { "markerWidthMs", preferences.markerWidthMs },
+                        { "wheelSnapEnabled", preferences.wheelSnapEnabled },
                         { "beatDivisor", preferences.beatDivisor },
                         { "viewCenterSeconds", preferences.viewCenterSeconds },
                         { "viewHalfWidthSeconds",
@@ -850,6 +851,7 @@ void from_json(const nlohmann::json&          json,
 {
     // 视野默认覆盖中心前后八秒，便于首次打开时观察多个拍点。
     preferences.markerWidthMs        = json.value("markerWidthMs", 80.0);
+    preferences.wheelSnapEnabled     = json.value("wheelSnapEnabled", false);
     preferences.beatDivisor          = json.value("beatDivisor", 4);
     preferences.viewCenterSeconds    = json.value("viewCenterSeconds", 0.0);
     preferences.viewHalfWidthSeconds = json.value("viewHalfWidthSeconds", 8.0);

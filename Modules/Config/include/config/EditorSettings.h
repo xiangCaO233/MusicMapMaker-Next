@@ -570,6 +570,8 @@ inline constexpr void setCommonBeatDivisorEnabled(std::uint32_t& mask,
 
 /// @brief BPM 测量工具中不依赖具体项目或音轨的用户偏好。
 struct BpmMeasurementToolPreferences {
+    /// @brief 普通滚轮是否磁吸当前 BPM 段的分拍线，默认保留自由步进。
+    bool wheelSnapEnabled{ false };
     /// @brief 黄色拍框宽度，单位为毫秒。
     double markerWidthMs{ 80.0 };
 
