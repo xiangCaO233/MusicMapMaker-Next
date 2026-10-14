@@ -5478,310 +5478,12 @@ void Basic2DCanvasInteraction::handleInteractions(
                                          localMousePos.y);
     // 音频预览按钮位于谱面对象上方，按钮命中时必须阻止底层选择和拖动。
 
-    // 精确时间提示只在静止、可交互且未被音频按钮覆盖时显示。
-    if ( MMM::UI::Utils::shouldShowCanvasHoverInspection(
-             currentSnapshot->hasBeatmap,
-             audioPreviewOverlayBlocksCanvas,
-             isHovered,
-             currentSnapshot->isHoveringCanvas,
-             currentSnapshot->isPlaying) ) {
-        if ( isMouseInTrackLayout ) {
-            // Move/Marquee 只在存在吸附或对象检查内容时显示；绘制类工具
-            // 始终需要时间与拍点反馈。
-            bool isEditTool =
-                (currentSnapshot->currentTool != Logic::EditTool::Move &&
-                 currentSnapshot->currentTool != Logic::EditTool::Marquee);
-
-            if ( currentSnapshot->isSnapped || isEditTool ||
-                 currentSnapshot->hoverInspect.show ) {
-                // 使用紧凑 padding 和 spacing，避免详细对象信息遮挡过多轨道。
-                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
-                                    ImVec2(CANVAS_HOVER_OVERLAY_PADDING,
-                                           CANVAS_HOVER_OVERLAY_PADDING));
-                ImGui::PushStyleVar(
-                    ImGuiStyleVar_ItemSpacing,
-                    ImVec2(CANVAS_HOVER_OVERLAY_ITEM_SPACING_X,
-                           CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y));
-
-                const bool showHoverOverlay = beginCanvasHoverOverlay(mousePos);
-                if ( showHoverOverlay ) {
-                    if ( currentSnapshot->hoverInspect.show ) {
-                        // hoverInspect 由逻辑快照提供，UI 只负责格式化，不在此
-                        // 重新解释谱面实体组件。
-                        const auto& inspect = currentSnapshot->hoverInspect;
-                        auto        drawPoint =
-                            [currentSnapshot](
-                                const char*                           labelKey,
-                                const Common::Render::HoverBeatPoint& point,
-                                bool showTrack) {
-                                // 一个检查对象可能只有头、体或尾中的部分点有效。
-                                if ( !point.show ) return;
-                                // 拍号分数保留逻辑层给出的既约表示，与吸附算法
-                                // 使用的节奏位置保持一致。
-                                const auto label = TR(labelKey);
-                                ImGui::TextColored(
-                                    ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                    "%s %s: %d + %d/%d",
-                                    label.data(),
-                                    TR("ui.canvas.note_fraction").data(),
-                                    point.beatIndex,
-                                    point.numerator,
-                                    point.denominator);
-                                const auto timeText =
-                                    MMM::UI::Utils::formatCanvasTime(
-                                        point.time, currentSnapshot);
-                                // 时间格式沿用当前谱面显示精度和偏移配置。
-                                ImGui::TextColored(
-                                    ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                    "%s %s: %s",
-                                    label.data(),
-                                    TR("ui.canvas.note_time").data(),
-                                    timeText.c_str());
-                                if ( showTrack ) {
-                                    // 轨道标签同时理解主轨、草稿轨和越界状态。
-                                    const ImVec4 color(0.5f, 1.0f, 0.5f, 1.0f);
-                                    renderHoverTrack(
-                                        label.data(),
-                                        point.track,
-                                        currentSnapshot->trackCount,
-                                        currentSnapshot->draftTrackCount,
-                                        &color);
-                                }
-                            };
-
-                        switch ( inspect.kind ) {
-                        // 普通音符只有一个头点。
-                        case Common::Render::HoverInspectKind::Note:
-                            drawPoint("ui.canvas.hover.note",
-                                      inspect.head,
-                                      inspect.showTrack);
-                            break;
-                        // 长条头尾分别使用独立标签，便于核对持续时间。
-                        case Common::Render::HoverInspectKind::HoldHead:
-                            drawPoint(
-                                "ui.canvas.hover.head", inspect.head, true);
-                            break;
-                        case Common::Render::HoverInspectKind::HoldEnd:
-                        case Common::Render::HoverInspectKind::PolylineHoldEnd:
-                            drawPoint(
-                                "ui.canvas.hover.hold_end", inspect.end, true);
-                            break;
-                        // 滑键的头、体、尾可能位于不同轨道；体节点不重复
-                        // 展示轨道，除非快照明确要求。
-                        case Common::Render::HoverInspectKind::FlickHead:
-                            drawPoint("ui.canvas.hover.flick_head",
-                                      inspect.head,
-                                      true);
-                            break;
-                        case Common::Render::HoverInspectKind::FlickBody:
-                        case Common::Render::HoverInspectKind::
-                            PolylineFlickBody:
-                            drawPoint("ui.canvas.hover.flick_body",
-                                      inspect.body,
-                                      false);
-                            break;
-                        case Common::Render::HoverInspectKind::FlickEnd:
-                        case Common::Render::HoverInspectKind::PolylineFlickEnd:
-                            drawPoint(
-                                "ui.canvas.hover.flick_end", inspect.end, true);
-                            break;
-                        case Common::Render::HoverInspectKind::PolylineHead:
-                            // 折线头与折线节点都存放在 body 槽位，由 kind
-                            // 区分。
-                            drawPoint("ui.canvas.hover.polyline_head",
-                                      inspect.body,
-                                      inspect.showTrack);
-                            break;
-                        case Common::Render::HoverInspectKind::PolylineNode:
-                            drawPoint("ui.canvas.hover.polyline_node",
-                                      inspect.body,
-                                      inspect.showTrack);
-                            break;
-                        case Common::Render::HoverInspectKind::
-                            AudioSampleAnchor:
-                        case Common::Render::HoverInspectKind::
-                            AudioSampleTrigger:
-                            drawPoint("ui.canvas.hover.sample_anchor",
-                                      inspect.head,
-                                      inspect.showTrack);
-                            drawPoint("ui.canvas.hover.sample_trigger",
-                                      inspect.end,
-                                      inspect.showTrack);
-                            break;
-                        // HoldBody 只在下方补充轨道，不重复绘制拍点。
-                        case Common::Render::HoverInspectKind::HoldBody:
-                        case Common::Render::HoverInspectKind::PolylineHoldBody:
-                        case Common::Render::HoverInspectKind::None: break;
-                        }
-
-                        if ( inspect.showDuration ) {
-                            // 持续时长使用相对时间格式，不叠加谱面视觉偏移。
-                            const auto durationText =
-                                MMM::UI::Utils::formatCanvasDuration(
-                                    inspect.duration);
-                            ImGui::TextColored(
-                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                "%s: %s",
-                                TR("ui.canvas.hover.duration").data(),
-                                durationText.c_str());
-                        }
-                        if ( inspect.showDtrack ) {
-                            // dtrack 是格式原始属性，保留带符号整数语义。
-                            ImGui::TextColored(
-                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                "%s: %d",
-                                TR("ui.canvas.hover.dtrack").data(),
-                                inspect.dtrack);
-                        }
-                        if ( inspect.showTrack &&
-                             (inspect.kind ==
-                                  Common::Render::HoverInspectKind::HoldBody ||
-                              inspect.kind == Common::Render::HoverInspectKind::
-                                                  PolylineHoldBody) ) {
-                            // 长条主体没有独立拍点，但仍需要展示所在轨道。
-                            const ImVec4 color(0.5f, 1.0f, 0.5f, 1.0f);
-                            renderHoverTrack(nullptr,
-                                             inspect.track,
-                                             currentSnapshot->trackCount,
-                                             currentSnapshot->draftTrackCount,
-                                             &color);
-                        }
-                        if ( inspect.showAudioPreview ) {
-                            // 音频资源 ID 可能较长，使用 TextWrapped
-                            // 保持浮层宽度。
-                            ImGui::TextWrapped(
-                                "%s: %s",
-                                TR("ui.canvas.hover.audio_resource").data(),
-                                inspect.audioResourceId.c_str());
-                            ImGui::TextColored(
-                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                "%s: %.1f%%",
-                                TR("ui.canvas.hover.volume").data(),
-                                inspect.volume * 100.0F);
-                        }
-                        if ( inspect.showAudioSample ) {
-                            // 采样偏移带正负号，明确表示相对触发点的方向。
-                            ImGui::TextColored(
-                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                "%s: %+lld ms",
-                                TR("ui.canvas.hover.offset").data(),
-                                static_cast<long long>(inspect.offsetMs));
-                        }
-
-                        // 重叠数量沿用渲染遮罩的检测结果，避免回退到旧的包围盒计数。
-                        // inspect.overlapCount
-                        // 是当前候选的基础计数，遮罩可能包含
-                        // 更完整的几何重叠集合，二者取最大值。
-                        int overlappingCount =
-                            std::max(1, inspect.overlapCount);
-                        for ( const auto& mask :
-                              currentSnapshot->overlapMasks ) {
-                            // 遮罩命中使用画布局部坐标，与渲染生成的矩形一致。
-                            if ( localMousePos.x >= mask.x &&
-                                 localMousePos.x <= mask.x + mask.w &&
-                                 localMousePos.y >= mask.y &&
-                                 localMousePos.y <= mask.y + mask.h ) {
-                                overlappingCount = std::max(overlappingCount,
-                                                            mask.objectCount);
-                            }
-                        }
-
-                        if ( overlappingCount > 1 ) {
-                            // 多个对象重叠时突出警告，并提示可切换 hover 层。
-                            ImGui::TextColored(
-                                ImVec4(1.0f, 0.2f, 0.2f, 1.0f),
-                                "%s: %d%s",
-                                TR("ui.canvas.overlapping_hitboxes").data(),
-                                overlappingCount,
-                                TR("ui.canvas.overlapping_warning").data());
-                        } else {
-                            // 单对象仍显示计数，便于确认拾取与视觉一致。
-                            ImGui::TextColored(
-                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                                "%s: %d",
-                                TR("ui.canvas.overlapping_hitboxes").data(),
-                                overlappingCount);
-                        }
-
-                        ImGui::Spacing();
-                        ImGui::Separator();
-                        ImGui::Spacing();
-                    }
-
-                    if ( currentSnapshot->isSnapped ) {
-                        // 吸附时间优先于连续
-                        // hoveredTime，颜色用于提示将要落点。
-                        const auto timeText = MMM::UI::Utils::formatCanvasTime(
-                            currentSnapshot->snappedTime, currentSnapshot);
-                        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
-                                           "%s: %s",
-                                           TR("ui.canvas.snap").data(),
-                                           timeText.c_str());
-
-                        if ( currentSnapshot->snappedNumerator == 1 &&
-                             currentSnapshot->snappedDenominator == 1 ) {
-                            // 整拍单独使用高对比色，快速区分 1/1 与细分拍。
-                            ImGui::TextColored(
-                                ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
-                                "%s (1/1)",
-                                TR("ui.canvas.beat_fraction").data());
-                        } else {
-                            ImGui::TextColored(
-                                ImVec4(0.8f, 0.9f, 1.0f, 1.0f),
-                                "%s (%d/%d)",
-                                TR("ui.canvas.beat_fraction").data(),
-                                currentSnapshot->snappedNumerator,
-                                currentSnapshot->snappedDenominator);
-                        }
-                    } else {
-                        // 未吸附时显示连续时间，不伪造拍号分数。
-                        const auto timeText = MMM::UI::Utils::formatCanvasTime(
-                            currentSnapshot->hoveredTime, currentSnapshot);
-                        ImGui::Text("%s: %s",
-                                    TR("ui.canvas.time").data(),
-                                    timeText.c_str());
-                    }
-
-                    if ( currentSnapshot->hoveredBeatIndex > 0 ) {
-                        // 无有效节拍时索引为非正值，此时隐藏字段。
-                        ImGui::Text("%s: %d",
-                                    TR("ui.canvas.beat_index").data(),
-                                    currentSnapshot->hoveredBeatIndex);
-                    }
-
-                    renderHoverTrack(nullptr,
-                                     currentSnapshot->hoveredTrack,
-                                     currentSnapshot->trackCount,
-                                     currentSnapshot->draftTrackCount);
-                    // 当前轨道展示与对象详情中的轨道格式完全一致。
-
-                    ImGui::Spacing();
-                    ImGui::Separator();
-                    ImGui::Spacing();
-
-                    ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f),
-                                       "%s: %d",
-                                       TR("ui.canvas.beat_divisor").data(),
-                                       currentSnapshot->currentBeatDivisor);
-                    // 分拍数说明当前画笔/吸附粒度，不代表谱面的拍号分母。
-                    if ( m_hoverLayerCount > 1 ) {
-                        // 只有实际存在重叠候选时显示层序和切换提示。
-                        ImGui::TextColored(
-                            ImVec4(0.8f, 0.9f, 1.0f, 1.0f),
-                            "%s: %d/%d  %s",
-                            TR("ui.canvas.hover.layer").data(),
-                            m_hoverLayerIndex + 1,
-                            m_hoverLayerCount,
-                            TR("ui.canvas.hover.layer_hint").data());
-                    }
-                }
-
-                ImGui::End();
-                // 无论窗口是否被 Begin 折叠，都必须恢复两项样式。
-                ImGui::PopStyleVar(2);
-            }
-        }
-    }
+    renderHoverInspection(currentSnapshot,
+                          mousePos.x,
+                          mousePos.y,
+                          isHovered,
+                          isMouseInTrackLayout,
+                          audioPreviewOverlayBlocksCanvas);
 
     if ( audioPreviewOverlayBlocksCanvas ) {
         // 覆盖层已经消费输入；tooltip 可以显示，但不得继续实体拾取。
@@ -6301,6 +6003,432 @@ void Basic2DCanvasInteraction::handleInteractions(
             }
         }
     }
+}
+
+/// @brief 复用同一份快照格式化逻辑绘制分拍、精确时间及物件检视。
+/// @warning UI 每帧路径只展示不可变快照，不切换会话，不消费鼠标或键盘编辑输入。
+void Basic2DCanvasInteraction::renderHoverInspection(
+    const Common::Render::RenderSnapshot* currentSnapshot, float mouseX,
+    float mouseY, bool isHovered, bool isMouseInTrackLayout,
+    bool overlayBlocksCanvas)
+{
+    if ( !currentSnapshot ) return;
+    const ImVec2 mousePos{ mouseX, mouseY };
+    // 物件颜色遮罩使用画布局部位置，必须在打开提示窗口之前保存原画布原点。
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const ImVec2 localMousePos{ mouseX - origin.x, mouseY - origin.y };
+    // 精确时间提示只在静止、可交互且未被音频按钮覆盖时显示。
+    if ( MMM::UI::Utils::shouldShowCanvasHoverInspection(
+             currentSnapshot->hasBeatmap,
+             overlayBlocksCanvas,
+             isHovered,
+             currentSnapshot->isHoveringCanvas,
+             currentSnapshot->isPlaying) ) {
+        if ( isMouseInTrackLayout ) {
+            // Move/Marquee 只在存在吸附或对象检查内容时显示；绘制类工具
+            // 始终需要时间与拍点反馈。
+            bool isEditTool =
+                (currentSnapshot->currentTool != Logic::EditTool::Move &&
+                 currentSnapshot->currentTool != Logic::EditTool::Marquee);
+
+            if ( currentSnapshot->isSnapped || isEditTool ||
+                 currentSnapshot->hoverInspect.show ) {
+                // 使用紧凑 padding 和 spacing，避免详细对象信息遮挡过多轨道。
+                ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                                    ImVec2(CANVAS_HOVER_OVERLAY_PADDING,
+                                           CANVAS_HOVER_OVERLAY_PADDING));
+                ImGui::PushStyleVar(
+                    ImGuiStyleVar_ItemSpacing,
+                    ImVec2(CANVAS_HOVER_OVERLAY_ITEM_SPACING_X,
+                           CANVAS_HOVER_OVERLAY_ITEM_SPACING_Y));
+
+                const bool showHoverOverlay = beginCanvasHoverOverlay(mousePos);
+                if ( showHoverOverlay ) {
+                    if ( currentSnapshot->hoverInspect.show ) {
+                        // hoverInspect 由逻辑快照提供，UI 只负责格式化，不在此
+                        // 重新解释谱面实体组件。
+                        const auto& inspect = currentSnapshot->hoverInspect;
+                        auto        drawPoint =
+                            [currentSnapshot](
+                                const char*                           labelKey,
+                                const Common::Render::HoverBeatPoint& point,
+                                bool showTrack) {
+                                // 一个检查对象可能只有头、体或尾中的部分点有效。
+                                if ( !point.show ) return;
+                                // 拍号分数保留逻辑层给出的既约表示，与吸附算法
+                                // 使用的节奏位置保持一致。
+                                const auto label = TR(labelKey);
+                                ImGui::TextColored(
+                                    ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                    "%s %s: %d + %d/%d",
+                                    label.data(),
+                                    TR("ui.canvas.note_fraction").data(),
+                                    point.beatIndex,
+                                    point.numerator,
+                                    point.denominator);
+                                const auto timeText =
+                                    MMM::UI::Utils::formatCanvasTime(
+                                        point.time, currentSnapshot);
+                                // 时间格式沿用当前谱面显示精度和偏移配置。
+                                ImGui::TextColored(
+                                    ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                    "%s %s: %s",
+                                    label.data(),
+                                    TR("ui.canvas.note_time").data(),
+                                    timeText.c_str());
+                                if ( showTrack ) {
+                                    // 轨道标签同时理解主轨、草稿轨和越界状态。
+                                    const ImVec4 color(0.5f, 1.0f, 0.5f, 1.0f);
+                                    renderHoverTrack(
+                                        label.data(),
+                                        point.track,
+                                        currentSnapshot->trackCount,
+                                        currentSnapshot->draftTrackCount,
+                                        &color);
+                                }
+                            };
+
+                        switch ( inspect.kind ) {
+                        // 普通音符只有一个头点。
+                        case Common::Render::HoverInspectKind::Note:
+                            drawPoint("ui.canvas.hover.note",
+                                      inspect.head,
+                                      inspect.showTrack);
+                            break;
+                        // 长条头尾分别使用独立标签，便于核对持续时间。
+                        case Common::Render::HoverInspectKind::HoldHead:
+                            drawPoint(
+                                "ui.canvas.hover.head", inspect.head, true);
+                            break;
+                        case Common::Render::HoverInspectKind::HoldEnd:
+                        case Common::Render::HoverInspectKind::PolylineHoldEnd:
+                            drawPoint(
+                                "ui.canvas.hover.hold_end", inspect.end, true);
+                            break;
+                        // 滑键的头、体、尾可能位于不同轨道；体节点不重复
+                        // 展示轨道，除非快照明确要求。
+                        case Common::Render::HoverInspectKind::FlickHead:
+                            drawPoint("ui.canvas.hover.flick_head",
+                                      inspect.head,
+                                      true);
+                            break;
+                        case Common::Render::HoverInspectKind::FlickBody:
+                        case Common::Render::HoverInspectKind::
+                            PolylineFlickBody:
+                            drawPoint("ui.canvas.hover.flick_body",
+                                      inspect.body,
+                                      false);
+                            break;
+                        case Common::Render::HoverInspectKind::FlickEnd:
+                        case Common::Render::HoverInspectKind::PolylineFlickEnd:
+                            drawPoint(
+                                "ui.canvas.hover.flick_end", inspect.end, true);
+                            break;
+                        case Common::Render::HoverInspectKind::PolylineHead:
+                            // 折线头与折线节点都存放在 body 槽位，由 kind
+                            // 区分。
+                            drawPoint("ui.canvas.hover.polyline_head",
+                                      inspect.body,
+                                      inspect.showTrack);
+                            break;
+                        case Common::Render::HoverInspectKind::PolylineNode:
+                            drawPoint("ui.canvas.hover.polyline_node",
+                                      inspect.body,
+                                      inspect.showTrack);
+                            break;
+                        case Common::Render::HoverInspectKind::
+                            AudioSampleAnchor:
+                        case Common::Render::HoverInspectKind::
+                            AudioSampleTrigger:
+                            drawPoint("ui.canvas.hover.sample_anchor",
+                                      inspect.head,
+                                      inspect.showTrack);
+                            drawPoint("ui.canvas.hover.sample_trigger",
+                                      inspect.end,
+                                      inspect.showTrack);
+                            break;
+                        // HoldBody 只在下方补充轨道，不重复绘制拍点。
+                        case Common::Render::HoverInspectKind::HoldBody:
+                        case Common::Render::HoverInspectKind::PolylineHoldBody:
+                        case Common::Render::HoverInspectKind::None: break;
+                        }
+
+                        if ( inspect.showDuration ) {
+                            // 持续时长使用相对时间格式，不叠加谱面视觉偏移。
+                            const auto durationText =
+                                MMM::UI::Utils::formatCanvasDuration(
+                                    inspect.duration);
+                            ImGui::TextColored(
+                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                "%s: %s",
+                                TR("ui.canvas.hover.duration").data(),
+                                durationText.c_str());
+                        }
+                        if ( inspect.showDtrack ) {
+                            // dtrack 是格式原始属性，保留带符号整数语义。
+                            ImGui::TextColored(
+                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                "%s: %d",
+                                TR("ui.canvas.hover.dtrack").data(),
+                                inspect.dtrack);
+                        }
+                        if ( inspect.showTrack &&
+                             (inspect.kind ==
+                                  Common::Render::HoverInspectKind::HoldBody ||
+                              inspect.kind == Common::Render::HoverInspectKind::
+                                                  PolylineHoldBody) ) {
+                            // 长条主体没有独立拍点，但仍需要展示所在轨道。
+                            const ImVec4 color(0.5f, 1.0f, 0.5f, 1.0f);
+                            renderHoverTrack(nullptr,
+                                             inspect.track,
+                                             currentSnapshot->trackCount,
+                                             currentSnapshot->draftTrackCount,
+                                             &color);
+                        }
+                        if ( inspect.showAudioPreview ) {
+                            // 音频资源 ID 可能较长，使用 TextWrapped
+                            // 保持浮层宽度。
+                            ImGui::TextWrapped(
+                                "%s: %s",
+                                TR("ui.canvas.hover.audio_resource").data(),
+                                inspect.audioResourceId.c_str());
+                            ImGui::TextColored(
+                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                "%s: %.1f%%",
+                                TR("ui.canvas.hover.volume").data(),
+                                inspect.volume * 100.0F);
+                        }
+                        if ( inspect.showAudioSample ) {
+                            // 采样偏移带正负号，明确表示相对触发点的方向。
+                            ImGui::TextColored(
+                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                "%s: %+lld ms",
+                                TR("ui.canvas.hover.offset").data(),
+                                static_cast<long long>(inspect.offsetMs));
+                        }
+
+                        // 重叠数量沿用渲染遮罩的检测结果，避免回退到旧的包围盒计数。
+                        // inspect.overlapCount
+                        // 是当前候选的基础计数，遮罩可能包含
+                        // 更完整的几何重叠集合，二者取最大值。
+                        int overlappingCount =
+                            std::max(1, inspect.overlapCount);
+                        for ( const auto& mask :
+                              currentSnapshot->overlapMasks ) {
+                            // 遮罩命中使用画布局部坐标，与渲染生成的矩形一致。
+                            if ( localMousePos.x >= mask.x &&
+                                 localMousePos.x <= mask.x + mask.w &&
+                                 localMousePos.y >= mask.y &&
+                                 localMousePos.y <= mask.y + mask.h ) {
+                                overlappingCount = std::max(overlappingCount,
+                                                            mask.objectCount);
+                            }
+                        }
+
+                        if ( overlappingCount > 1 ) {
+                            // 多个对象重叠时突出警告，并提示可切换 hover 层。
+                            ImGui::TextColored(
+                                ImVec4(1.0f, 0.2f, 0.2f, 1.0f),
+                                "%s: %d%s",
+                                TR("ui.canvas.overlapping_hitboxes").data(),
+                                overlappingCount,
+                                TR("ui.canvas.overlapping_warning").data());
+                        } else {
+                            // 单对象仍显示计数，便于确认拾取与视觉一致。
+                            ImGui::TextColored(
+                                ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                                "%s: %d",
+                                TR("ui.canvas.overlapping_hitboxes").data(),
+                                overlappingCount);
+                        }
+
+                        ImGui::Spacing();
+                        ImGui::Separator();
+                        ImGui::Spacing();
+                    }
+
+                    if ( currentSnapshot->isSnapped ) {
+                        // 吸附时间优先于连续
+                        // hoveredTime，颜色用于提示将要落点。
+                        const auto timeText = MMM::UI::Utils::formatCanvasTime(
+                            currentSnapshot->snappedTime, currentSnapshot);
+                        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f),
+                                           "%s: %s",
+                                           TR("ui.canvas.snap").data(),
+                                           timeText.c_str());
+
+                        if ( currentSnapshot->snappedNumerator == 1 &&
+                             currentSnapshot->snappedDenominator == 1 ) {
+                            // 整拍单独使用高对比色，快速区分 1/1 与细分拍。
+                            ImGui::TextColored(
+                                ImVec4(1.0f, 1.0f, 1.0f, 1.0f),
+                                "%s (1/1)",
+                                TR("ui.canvas.beat_fraction").data());
+                        } else {
+                            ImGui::TextColored(
+                                ImVec4(0.8f, 0.9f, 1.0f, 1.0f),
+                                "%s (%d/%d)",
+                                TR("ui.canvas.beat_fraction").data(),
+                                currentSnapshot->snappedNumerator,
+                                currentSnapshot->snappedDenominator);
+                        }
+                    } else {
+                        // 未吸附时显示连续时间，不伪造拍号分数。
+                        const auto timeText = MMM::UI::Utils::formatCanvasTime(
+                            currentSnapshot->hoveredTime, currentSnapshot);
+                        ImGui::Text("%s: %s",
+                                    TR("ui.canvas.time").data(),
+                                    timeText.c_str());
+                    }
+
+                    if ( currentSnapshot->hoveredBeatIndex > 0 ) {
+                        // 无有效节拍时索引为非正值，此时隐藏字段。
+                        ImGui::Text("%s: %d",
+                                    TR("ui.canvas.beat_index").data(),
+                                    currentSnapshot->hoveredBeatIndex);
+                    }
+
+                    renderHoverTrack(nullptr,
+                                     currentSnapshot->hoveredTrack,
+                                     currentSnapshot->trackCount,
+                                     currentSnapshot->draftTrackCount);
+                    // 当前轨道展示与对象详情中的轨道格式完全一致。
+
+                    ImGui::Spacing();
+                    ImGui::Separator();
+                    ImGui::Spacing();
+
+                    ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f),
+                                       "%s: %d",
+                                       TR("ui.canvas.beat_divisor").data(),
+                                       currentSnapshot->currentBeatDivisor);
+                    // 分拍数说明当前画笔/吸附粒度，不代表谱面的拍号分母。
+                    if ( m_hoverLayerCount > 1 ) {
+                        // 只有实际存在重叠候选时显示层序和切换提示。
+                        ImGui::TextColored(
+                            ImVec4(0.8f, 0.9f, 1.0f, 1.0f),
+                            "%s: %d/%d  %s",
+                            TR("ui.canvas.hover.layer").data(),
+                            m_hoverLayerIndex + 1,
+                            m_hoverLayerCount,
+                            TR("ui.canvas.hover.layer_hint").data());
+                    }
+                }
+
+                ImGui::End();
+                // 无论窗口是否被 Begin 折叠，都必须恢复两项样式。
+                ImGui::PopStyleVar(2);
+            }
+        }
+    }
+}
+
+/// @brief 以只读方式更新后台画布悬浮状态并显示该谱面的详情。
+/// @param currentSnapshot 当前画布独立的物件命中框、轨道及悬浮详情。
+/// @param targetWidth 画布逻辑宽度，与当前纹理展示尺寸一致。
+/// @param targetHeight 画布逻辑高度，用于真实轨道范围判定。
+/// @details 后台检视与编辑焦点分离，不能为显示提示临时激活另一个会话。
+/// 鼠标位置先提交所属相机，逻辑线程下一轮再发布对应分拍和物件详情。
+/// 本帧只显示已发布快照，不同步等待逻辑线程回流。
+/// 实体拾取仅观察可见包围盒，按渲染逆序选取最上层物件。
+/// 部位、子索引和注册表类别共同参与去重，实体数值不是跨谱面身份。
+/// 离开窗口或被模态遮挡时仅清空该后台会话，不操作活动谱面。
+/// 后台不消费方向键、试听按钮或编辑手势，避免抢占聚焦窗口输入。
+/// 时间、分拍与轨道格式复用活动窗口绘制器，保证两个入口一致。
+/// 投影遵循该谱面的轨道数与辅助区域，不借用全局活动布局。
+/// 失效快照只清理鼠标状态，不以活动谱面数据替代后台数据。
+/// 物件详情有一次逻辑更新的自然延迟，UI 必须继续推进而非等待同步。
+/// 提示属于只读无输入窗口，不会抢走导航焦点或阻挡原画布悬停。
+/// @warning 每帧仅扫描当前可见快照命中框；不读取 ECS、不处理编辑或切换焦点。
+void Basic2DCanvasInteraction::updateReadOnlyHover(
+    const Common::Render::RenderSnapshot* currentSnapshot, float targetWidth,
+    float targetHeight)
+{
+    // 位置仍通过原有相机路由更新，逻辑线程据此计算精确分拍与吸附。
+    // 沿用鼠标命令去重，静止指针不会重复刷新后台会话队列。
+    updateHoverState(targetWidth, targetHeight);
+    // 无快照只保留鼠标同步，不以其他谱面的数据补足。
+    if ( !currentSnapshot ) return;
+    // 鼠标位置使用屏幕坐标，下面投影到当前窗口局部区域。
+    const ImVec2 mousePos = ImGui::GetMousePos();
+    const ImVec2 origin   = ImGui::GetCursorScreenPos();
+    const bool   hovered =
+        m_lastMouseCommand.isHovering && !isCanvasInputBlockedByModal();
+    // hovered 已排除无效位置，非有限坐标不会进入物件比较。
+    const glm::vec2 local{ mousePos.x - origin.x, mousePos.y - origin.y };
+
+    // 默认空候选参与去重，退出悬浮只清空一次。
+    HoverLayerCandidate candidate;
+    if ( hovered && currentSnapshot->hasBeatmap ) {
+        // 只选择渲染最上层物件，不在未聚焦窗口消费方向键或修改选中状态。
+        // 命中框携带注册表类别、部位及子索引，不能只保存可能重名的实体 ID。
+        // 只扫描快照可见命中框，禁止遍历全谱实体。
+        for ( auto it = currentSnapshot->hitboxes.rbegin();
+              it != currentSnapshot->hitboxes.rend();
+              ++it ) {
+            // 命中缩放保持用户偏好，不改变物件的渲染几何。
+            const auto hitbox = Common::Render::scaleInteractionHitbox(
+                *it,
+                currentSnapshot->interactionHitboxScaleX,
+                currentSnapshot->interactionHitboxScaleY);
+            if ( local.x >= hitbox.x && local.x <= hitbox.x + hitbox.w &&
+                 local.y >= hitbox.y && local.y <= hitbox.y + hitbox.h ) {
+                candidate = { hitbox.entity,
+                              hitbox.kind,
+                              static_cast<std::uint8_t>(hitbox.part),
+                              hitbox.subIndex };
+                // 首个命中已是顶层，无需分配完整候选集合或排序。
+                break;
+            }
+        }
+    }
+    // 鼠标离开或被模态遮挡时清空后台悬浮；命令绑定当前相机，不干扰左侧谱面。
+    if ( !m_hasLastHovered || m_lastHoveredEntity != candidate.entity ||
+         m_lastHoveredObjectKind != candidate.kind ||
+         m_lastHoveredPart != candidate.part ||
+         m_lastHoveredSubIndex != candidate.subIndex ) {
+        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            Logic::CmdSetHoveredEntity{ candidate.entity,
+                                        candidate.part,
+                                        candidate.subIndex,
+                                        candidate.kind,
+                                        m_cameraId }));
+        // 缓存完整复合身份，避免静止指针反复发出物件命令。
+        m_hasLastHovered        = true;
+        m_lastHoveredEntity     = candidate.entity;
+        m_lastHoveredObjectKind = candidate.kind;
+        m_lastHoveredPart       = candidate.part;
+        m_lastHoveredSubIndex   = candidate.subIndex;
+    }
+    // 后台仅检视顶层对象，不提供需要编辑焦点的重叠层快捷键提示。
+    // 层数只影响提示，不触发后台方向键切换或物件选择。
+    m_hoverLayerCount  = candidate.entity == entt::null ? 0 : 1;
+    m_hoverLayerIndex  = 0;
+    const auto& visual = Config::AppConfig::instance().getVisualConfig();
+    const auto& layout =
+        visual.trackLayoutForKeyCount(currentSnapshot->trackCount);
+    const auto projection = Logic::calculateCanvasLaneProjection(
+        targetWidth,
+        currentSnapshot->trackCount,
+        currentSnapshot->bgmTrackCount,
+        layout,
+        currentSnapshot->canvasHorizontalOffsetX,
+        true,
+        currentSnapshot->bmsEditingEnabled,
+        currentSnapshot->draftLanesEnabled,
+        currentSnapshot->draftTrackCount,
+        true);
+    // 辅助区域合并后的内容范围排除窗口边缘空白。
+    const auto bounds = projection.contentBounds();
+    // 轨道投影与活动检视一致，BGM、草稿轨及横向平移都包含在有效区域内。
+    const bool insideTracks = hovered && projection.valid &&
+                              targetHeight > 0.0F && local.x >= bounds.leftX &&
+                              local.x <= bounds.rightX &&
+                              local.y >= layout.top * targetHeight &&
+                              local.y <= layout.bottom * targetHeight;
+    // 复用纯展示入口，使活动和后台的分拍格式完全一致。
+    renderHoverInspection(
+        currentSnapshot, mousePos.x, mousePos.y, hovered, insideTracks, false);
 }
 
 }  // namespace MMM::Canvas

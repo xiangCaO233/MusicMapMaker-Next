@@ -89,6 +89,8 @@ struct CmdSetHoveredEntity {
     int          subIndex;  // 悬停的具体子索引
     /// @brief 实体所在的独立 ECS 注册表。
     ChartObjectKind kind{ ChartObjectKind::PlayerNote };
+    /// @brief 悬浮所属主画布；为空时兼容旧入口并路由到活动会话。
+    std::string cameraId;
 };
 
 /**

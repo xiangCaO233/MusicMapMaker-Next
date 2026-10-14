@@ -69,6 +69,15 @@ public:
     /// 鼠标位置命令，禁止扩展为绘制、拾取或拖拽处理。
     void updateHoverState(float targetWidth, float targetHeight);
 
+    /// @brief 只读检视未聚焦画布的分拍位置和物件详情，不切换活动会话。
+    /// @param currentSnapshot 该画布所属谱面的不可变快照。
+    /// @param targetWidth 画布逻辑宽度。
+    /// @param targetHeight 画布逻辑高度。
+    /// @warning 可见后台画布每帧调用，仅扫描可见命中框并按变化发布视觉命令。
+    void updateReadOnlyHover(
+        const Common::Render::RenderSnapshot* currentSnapshot,
+        float targetWidth, float targetHeight);
+
     /// @brief 推进并绘制交互层的临时 UI。
     /// @warning UI 热路径：每帧最多绘制一个播放速度提示窗口。
     void updateTransientUi();
@@ -88,6 +97,18 @@ public:
         bool                                  allowSelectionScroll = true);
 
 private:
+    /// @brief 统一绘制活动和后台画布的只读悬浮详情，不消费编辑手势。
+    /// @param currentSnapshot 所属谱面的悬浮、分拍与物件详情快照。
+    /// @param mouseX 鼠标屏幕横坐标。
+    /// @param mouseY 鼠标屏幕纵坐标。
+    /// @param isHovered 当前画布内容区是否悬停。
+    /// @param isMouseInTrackLayout 指针是否位于真实轨道区域。
+    /// @param overlayBlocksCanvas 是否被音频控制等覆盖层占用。
+    /// @warning UI 每帧路径仅读取快照，不访问 ECS 或改变活动谱面。
+    void renderHoverInspection(
+        const Common::Render::RenderSnapshot* currentSnapshot, float mouseX,
+        float mouseY, bool isHovered, bool isMouseInTrackLayout,
+        bool overlayBlocksCanvas);
     /// @brief 批注交互层对当前画布输入的处理结果。
     struct AnnotationGutterInteractionResult {
         /// @brief 是否阻断画布的点击、拖拽等指针交互。

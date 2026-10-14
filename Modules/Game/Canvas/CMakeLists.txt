@@ -121,6 +121,16 @@ target_link_libraries(CanvasContentVisibilityTest PRIVATE UI)
 mmm_register_test_case(NAME CanvasContentVisibilityTest COMMAND
                        CanvasContentVisibilityTest)
 
+# 未聚焦画布测试使用真实 ImGui 双窗口，覆盖只读检视与相机目标隔离。 不初始化 Vulkan 或音频设备，避免将渲染硬件要求引入悬浮回归。
+mmm_add_test_executable(Canvas CanvasReadOnlyHoverTest
+                        tests/CanvasReadOnlyHoverTest.cpp)
+# 直接链接生产实现，不能以复制检视判断逻辑替代真实入口。
+target_link_libraries(CanvasReadOnlyHoverTest PRIVATE Canvas)
+mmm_register_test_case(NAME CanvasReadOnlyHoverTest COMMAND
+                       CanvasReadOnlyHoverTest)
+
+# 此用例无文件输出，悬浮状态通过事件捕获与内存窗口检查验证。
+
 # 批注区阻挡手势测试覆盖拖入浮层后继续按住及在浮层内释放的收尾行为。 Common 提供 EditTool 枚举，测试本身不创建画布或 ImGui
 # 输入状态，全部手势组合在编译期求值。
 mmm_add_test_executable(Canvas CanvasBlockedGestureTest

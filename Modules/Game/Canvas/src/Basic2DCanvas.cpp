@@ -2866,7 +2866,8 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
             // 后台画布仍接受文件拖入，并清理悬浮/瞬态 UI，保证鼠标
             // 离开旧标签后不会残留高亮；编辑工具命令则完全跳过。
             m_interaction->handleDrops(sourceManager);
-            m_interaction->updateHoverState(m_logicalWidth, m_logicalHeight);
+            m_interaction->updateReadOnlyHover(
+                m_currentSnapshot, m_logicalWidth, m_logicalHeight);
             m_interaction->updateTransientUi();
         }
     }
