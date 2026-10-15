@@ -769,8 +769,8 @@ bool Basic2DCanvas::updateComposeLessonHints(
                                          : ImTextureID{};
     const TextureID   headTexture =
         uvMap.contains(static_cast<std::uint32_t>(TextureID::HoldHead))
-            ? TextureID::HoldHead
-            : TextureID::Note;
+              ? TextureID::HoldHead
+              : TextureID::Note;
     // 头部可选是皮肤协议的一部分，普通 Note 是旧皮肤的兼容回退。
     // 必须在求尺寸之前确定最终纹理，否则头部与真实物件宽高不同。
     // Hold、Flick 和 Polyline 均共享这个选择；Tap 始终使用 Note。
@@ -2623,6 +2623,11 @@ void Basic2DCanvas::updateComposeWalkthrough(
 /// 处理完整滚轮语义。
 void Basic2DCanvas::update(UI::UIManager* sourceManager)
 {
+    // 标签不可见时也要清除已释放的手势，避免早退分支遗留右键所有权。
+    // 新一次按下先释放旧门闩，只有下方命中当前画布后才能重新获取。
+    if ( !ImGui::IsMouseDown(ImGuiMouseButton_Right) ||
+         ImGui::IsMouseClicked(ImGuiMouseButton_Right) )
+        m_isObservationCameraDragging = false;
     auto& engine = Logic::EditorEngine::instance();
     // cameraId 是窗口与会话的稳定连接键；索引会随标签关闭和重排变化，
     // 因此需要使用时重新解析，不能跨帧缓存旧索引。
@@ -2713,7 +2718,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
     // 不等待逻辑线程生成下一份画面，也不能让旧 dirty 标志留在标签上。
     const bool titleHasBeatmap = !isLogoPlaceholder && m_currentSnapshot &&
                                  m_currentSnapshot->hasBeatmap;
-    const std::string title    = makeCanvasTabTitle(
+    const std::string title = makeCanvasTabTitle(
         TR("canvas.editor").data(),
         titleHasBeatmap,
         m_currentSnapshot ? m_currentSnapshot->beatmapName : std::string_view{},
@@ -2810,11 +2815,17 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         const ImVec2 canvasScreenPosition = ImGui::GetCursorScreenPos();
         const ImVec2 canvasSize           = rctx.getRenderSize();
         rctx.renderSurface();
-        // 透视观察不复用二维命中区域；播放与媒体更新仍正常推进。
+        // 观察参数只改本机摄像机；任一参数偏离默认值时不复用二维命中区域。
+        // 旋转到默认角度的同一手势仍只用于观察，不能中途变成右键擦除。
+        auto& cameraVisual = Config::AppConfig::instance().getVisualConfig();
+        const bool hasCameraScene =
+            m_currentSnapshot && m_currentSnapshot->hasBeatmap;
         const bool cameraObservationOnly =
-            planarObservationAngle(Config::AppConfig::instance()
-                                       .getVisualConfig()
-                                       .debugCanvasCameraAngleDegrees) > 0.0f;
+            hasCameraScene && (planarObservationEnabled(
+                                   cameraVisual.debugCanvasCameraAngleDegrees,
+                                   cameraVisual.debugCanvasCameraYawDegrees,
+                                   cameraVisual.debugCanvasCameraDistance) ||
+                               m_isObservationCameraDragging);
         if ( m_currentSnapshot && !cameraObservationOnly )
             // 快照与刚绘制的纹理使用同一代布局，避免教学框和画面错位。
             reportCanvasWalkthroughTargets(sourceManager,
@@ -2838,7 +2849,50 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                 m_cameraId);
         }
 
+        // 手势只由按下时悬停的活动画布获取；出界可继续，失焦切换立即取消。
+        // 无谱面和恢复二维时必须释放旧门闩，不能让下一次右键被吞掉。
+        if ( !cameraObservationOnly || !isActiveCanvas ||
+             !ImGui::IsMouseDown(ImGuiMouseButton_Right) ) {
+            m_isObservationCameraDragging = false;
+        }
         if ( cameraObservationOnly ) {
+            // 画面矩形不包含窗口标题和停靠标签；在设置页或滚动条上按下不能旋转。
+            // 窗口 hover 同时排除模态窗口遮挡，避免隔着弹窗改变底层视角。
+            // 活跃控件拥有输入优先权，摄像机不能抢占其它 ImGui 控件的手势。
+            const bool cameraHovered =
+                isActiveCanvas && ImGui::IsWindowHovered() &&
+                ImGui::IsMouseHoveringRect(
+                    canvasScreenPosition,
+                    ImVec2(canvasScreenPosition.x + canvasSize.x,
+                           canvasScreenPosition.y + canvasSize.y)) &&
+                !ImGui::IsAnyItemActive();
+            if ( cameraHovered &&
+                 ImGui::IsMouseClicked(ImGuiMouseButton_Right) )
+                m_isObservationCameraDragging = true;
+            if ( m_isObservationCameraDragging ) {
+                // 只使用相邻帧逻辑像素增量，不用延时窗口或重建谱面几何。
+                // 边界约束与绕周处理集中在纯函数，平台无效增量不会污染配置。
+                // 所有写入都位于 UI
+                // 线程，录制阶段只读取同一线程维护的观察参数。
+                // 不在此重录命令或等待 GPU，后续正常绘制自然消费最新视角。
+                const auto delta = ImGui::GetIO().MouseDelta;
+                const auto orbit = planarObservationDrag(
+                    cameraVisual.debugCanvasCameraAngleDegrees,
+                    cameraVisual.debugCanvasCameraYawDegrees,
+                    delta.x,
+                    delta.y);
+                cameraVisual.debugCanvasCameraAngleDegrees = orbit.x;
+                cameraVisual.debugCanvasCameraYawDegrees   = orbit.y;
+            }
+            if ( cameraHovered && ImGui::GetIO().MouseWheel != 0.0F ) {
+                // 滚轮只改摄像机距离，不发送画布时间、谱面缩放或联机命令。
+                // 距离以乘法变化，拉近和拉远互为逆操作，边界由数学层统一保护。
+                // 鼠标移出画面后停止消费滚轮，不能影响另一窗口的滚动。
+                cameraVisual.debugCanvasCameraDistance = planarObservationZoom(
+                    cameraVisual.debugCanvasCameraDistance,
+                    ImGui::GetIO().MouseWheel);
+            }
+            // 连续控制只更新内存；配置沿用正常退出保存，不在每帧路径写盘。
             // 保留弹窗等瞬态 UI，但不消费鼠标编辑、拖入和教学操作。
             // 拾取逆投影尚未接入，不能让屏幕位置直接修改二维谱面。
             m_interaction->updateTransientUi();
@@ -2991,9 +3045,9 @@ void Basic2DCanvas::updateCollaborationViewports(
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
     // 渲染模式是本地显示偏好，不写入 ParticipantViewport；不同用户
     // 可独立选择填充、轮廓或轨道边缘而不影响网络协议。
-    const auto  viewportRenderMode = Config::AppConfig::instance()
-                                         .getEditorSettings()
-                                         .collaborationViewportRenderMode;
+    const auto viewportRenderMode = Config::AppConfig::instance()
+                                        .getEditorSettings()
+                                        .collaborationViewportRenderMode;
     const auto& layout =
         visual.trackLayoutForKeyCount(m_currentSnapshot->trackCount);
     // 使用当前轨道数对应布局，使动态扩轨后的协作范围立即跟随

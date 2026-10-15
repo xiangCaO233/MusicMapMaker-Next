@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
+#include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
@@ -14,35 +15,93 @@ namespace MMM::Canvas
 {
 /// @brief 将实验观察角限制到可安全观察平面的范围。
 /// @param degrees 离开正视方向的角度，单位度。
-/// @return 非有限输入回退零，其余限制到零至四十五度。
+/// @return 非有限输入回退零，其余限制到零至七十五度。
 inline float planarObservationAngle(float degrees)
 {
     // 零角同时是关闭实验模式的哨兵，损坏配置不能意外启用观察模式。
-    return std::isfinite(degrees) ? std::clamp(degrees, 0.0F, 45.0F) : 0.0F;
+    return std::isfinite(degrees) ? std::clamp(degrees, 0.0F, 75.0F) : 0.0F;
 }
 
-/// @brief 为二维像素画布构造高度固定为一的平面观察摄像机。
+/// @brief 将水平旋转约束到一周内，损坏值恢复默认朝向。
+inline float planarObservationYaw(float degrees)
+{
+    return std::isfinite(degrees) ? std::clamp(degrees, -180.0F, 180.0F) : 0.0F;
+}
+
+/// @brief 限制摄像机距离倍率，非有限输入恢复原型距离。
+inline float planarObservationDistance(float distance)
+{
+    return std::isfinite(distance) ? std::clamp(distance, 0.5F, 4.0F) : 1.0F;
+}
+
+/// @brief 判断观察参数是否偏离原二维视图，绘制与输入共用此判定。
+/// @warning 每帧调用，仅作有界数值检查，不访问配置或会话锁。
+inline bool planarObservationEnabled(float degrees, float yaw = 0.0F,
+                                     float distance = 1.0F)
+{
+    return planarObservationAngle(degrees) != 0.0F ||
+           planarObservationYaw(yaw) != 0.0F ||
+           planarObservationDistance(distance) != 1.0F;
+}
+
+/// @brief 将相邻帧右键拖动转换为俯仰和水平旋转，结果依次存于 x/y。
+/// @param degrees 当前俯仰角，单位度。
+/// @param yaw 当前水平角，单位度。
+/// @param dx 本帧横向逻辑像素增量。
+/// @param dy 本帧纵向逻辑像素增量。
+/// @return 限制后的俯仰角及绕周连续的水平角。
+/// @warning 连续手势每帧调用，不分配、不等待，也不累计固定时间窗口。
+inline glm::vec2 planarObservationDrag(float degrees, float yaw, float dx,
+                                       float dy)
+{
+    // 拒绝平台失焦时的无效增量；合法的历史角度仍需规范化。
+    const float pitch   = planarObservationAngle(degrees);
+    const float heading = planarObservationYaw(yaw);
+    if ( !std::isfinite(dx) || !std::isfinite(dy) ) return { pitch, heading };
+    // 每四个逻辑像素对应一度，跨越正负一百八十度时保持连续朝向。
+    return { planarObservationAngle(pitch + dy * 0.25F),
+             std::remainder(heading + dx * 0.25F, 360.0F) };
+}
+
+/// @brief 以乘法比例改变观察距离，正滚轮表示拉近，负滚轮表示拉远。
+/// @warning 每次滚轮输入仅执行固定规模运算，不读取或修改谱面缩放。
+inline float planarObservationZoom(float distance, float wheel)
+{
+    const float current = planarObservationDistance(distance);
+    if ( !std::isfinite(wheel) ) return current;
+    // 限制单次外部增量，既避免指数溢出，也不延迟连续滚轮的本地反馈。
+    return planarObservationDistance(
+        current * std::exp2(-std::clamp(wheel, -16.0F, 16.0F) / 8.0F));
+}
+
+/// @brief 为二维像素画布构造可旋转、可调整距离的平面观察摄像机。
 /// @param width 逻辑画布宽度，不能使用物理 framebuffer 宽度。
 /// @param height 逻辑画布高度，同时定义一个世界单位的长度。
 /// @param yOffset 旧二维投影的播放补偿，单位逻辑像素。
-/// @param degrees 离开俯视方向的倾角；零角保留原二维矩阵。
+/// @param degrees 离开俯视方向的倾角。
+/// @param yaw 绕画布中心的水平旋转角，单位度。
+/// @param distance 沿观察方向的距离倍率，一表示保留原型距离。
 /// @return 像素坐标直接进入现有 Shader 的复合变换矩阵。
 /// @warning 每帧录制调用一次：仅作固定规模矩阵运算，禁止分配与锁等待。
 /// @note 平面仍是二维谱面，摄像机不向物件写入 Z 坐标。
-/// @note 倾角绕横轴变化，摄像机高度固定，水平退距随倾角变化。
+/// @note 先绕平面中心旋转，再按倾角观察，距离改变不会移动观察中心。
 /// @note 输入是逻辑像素，与窗口 DPI 和发光降采样无关。
 /// @note 各轨道几何层必须共用本帧返回值，固定背景层使用独立屏幕投影。
 /// @note 两种模式的深度矩阵不同，但零角附近 XY 尺寸连续。
 /// @note 近平面和远平面仅覆盖单位平面实验，不作为通用场景参数。
 /// @note 逻辑宽高来自离屏视口，最小尺寸保护用于避免除零。
 inline glm::mat4 planarObservationProjection(float width, float height,
-                                             float yOffset, float degrees)
+                                             float yOffset, float degrees,
+                                             float yaw      = 0.0F,
+                                             float distance = 1.0F)
 {
     const float safeWidth  = std::max(1.0F, width);
     const float safeHeight = std::max(1.0F, height);
     const float angle      = planarObservationAngle(degrees);
+    const float heading    = planarObservationYaw(yaw);
+    const float range      = planarObservationDistance(distance);
     // 零角精确保留旧正交路径及其 Z 约定，不改变既有二维皮肤效果。
-    if ( angle == 0.0F ) {
+    if ( !planarObservationEnabled(angle, heading, range) ) {
         return glm::ortho(
             0.0F, safeWidth, -yOffset, safeHeight - yOffset, -1.0F, 1.0F);
     }
@@ -53,18 +112,27 @@ inline glm::mat4 planarObservationProjection(float width, float height,
     model[1][1] = -1.0F / safeHeight;
     model[3][0] = -safeWidth * 0.5F / safeHeight;
     model[3][1] = 0.5F - yOffset / safeHeight;
-    // 倾斜时始终看向平面中心；沿地面后退而不是降低摄像机的 Z 高度。
+    // 水平角绕平面中心旋转，保持旋转前后的时间轴与轨道坐标不变。
+    // 摄像机 up 随水平角一起变化，零俯仰时也能旋转而不会退化为奇异视线。
+    const auto orbit = glm::rotate(glm::mat4(1.0F),
+                                   heading * 0.017453292519943295F,
+                                   glm::vec3(0.0F, 0.0F, 1.0F));
+    // 倾斜时始终看向平面中心；距离倍率同时作用于高度和水平退距。
     const float     radians = angle * 0.017453292519943295F;
-    const glm::vec3 eye(0.0F, -std::tan(radians), 1.0F);
+    const glm::vec3 eye     = glm::vec3(0.0F, -std::tan(radians), 1.0F) * range;
     const auto      view =
         glm::lookAtRH(eye, glm::vec3(0.0F), glm::vec3(0.0F, 1.0F, 0.0F));
     // 半高为 0.5、正视距离为一，视角据此固定，零角附近与二维尺寸连续。
     // 显式使用 Vulkan 的零至一深度范围，不依赖全局 GLM 编译宏。
-    auto projection = glm::perspectiveRH_ZO(
-        2.0F * std::atan(0.5F), safeWidth / safeHeight, 0.01F, 4.0F);
+    // 远平面覆盖观察距离和视口对角线，拉远后不能把整张轨道裁掉。
+    // 下界保持旧版四单位覆盖范围，不对每帧场景做几何扫描。
+    const float diagonal = std::hypot(safeWidth / safeHeight, 1.0F);
+    const float farPlane = std::max(4.0F, std::hypot(eye.y, eye.z) + diagonal);
+    auto        projection = glm::perspectiveRH_ZO(
+        2.0F * std::atan(0.5F), safeWidth / safeHeight, 0.01F, farPlane);
     // Vulkan 正高度 viewport 的 Y 方向与传统透视相反，仅在投影处翻转。
     projection[1][1] *= -1.0F;
-    return projection * view * model;
+    return projection * view * orbit * model;
 }
 
 /// @brief 为固定背景层生成无播放补偿的屏幕投影。

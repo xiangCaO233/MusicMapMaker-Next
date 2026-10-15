@@ -54,7 +54,35 @@ bool testConfig()
     // 外部编辑配置超过范围时，读取入口应限制到最大倾角。
     stored["debugCanvasCameraAngleDegrees"] = 100;
     from_json(stored, config);
-    return config.debugCanvasCameraAngleDegrees == 45;
+    if ( config.debugCanvasCameraAngleDegrees != 75 ) return false;
+    // 新观察参数缺失时保持默认方向与距离，不改变旧存档的观察比例。
+    if ( config.debugCanvasCameraYawDegrees != 0 ||
+         config.debugCanvasCameraDistance != 1 )
+        return false;
+    config.debugCanvasCameraYawDegrees = -60;
+    config.debugCanvasCameraDistance   = 2.5F;
+    to_json(stored, config);
+    from_json(stored, config);
+    if ( config.debugCanvasCameraYawDegrees != -60 ||
+         config.debugCanvasCameraDistance != 2.5F )
+        return false;
+    // 手工编辑配置中的异常范围在读取边界校正，不能扩散到渲染矩阵。
+    stored["debugCanvasCameraYawDegrees"] = 1000;
+    stored["debugCanvasCameraDistance"]   = -1;
+    from_json(stored, config);
+    if ( config.debugCanvasCameraYawDegrees != 180 ||
+         config.debugCanvasCameraDistance != 0.5F )
+        return false;
+    // 错误类型和非有限值独立回退，手工编辑损坏不能触发类型转换异常。
+    stored["debugCanvasCameraAngleDegrees"] = "invalid";
+    stored["debugCanvasCameraYawDegrees"]   = nullptr;
+    stored["debugCanvasCameraDistance"] =
+        std::numeric_limits<double>::infinity();
+    // 配置读取边界须在矩阵计算前修复值，不能只依靠渲染端掩盖损坏状态。
+    from_json(stored, config);
+    return config.debugCanvasCameraAngleDegrees == 0 &&
+           config.debugCanvasCameraYawDegrees == 0 &&
+           config.debugCanvasCameraDistance == 1;
 }
 /// @brief 验证最大倾角下可见平面的深度与中心位置。
 /// @return 中心、深度和裁剪边界满足契约时通过。
@@ -118,6 +146,96 @@ bool testBackgroundLayer()
     return !near(backgroundOrigin.y, flatOrigin.y) &&
            !near(backgroundOrigin.w, tiltedOrigin.w);
 }
+
+/// @brief 验证全周水平旋转、拉远距离与更大俯仰角仍围绕同一轨道中心。
+/// @return 中心位置、距离和深度均保持有效时通过。
+/// @note 不要求旋转后的矩形始终完整出现在视锥内，放大允许裁切边缘。
+/// @note 遍历多个宽高比，防止使用方形视口掩盖横纵比例错误。
+bool testOrbitAndDistance()
+{
+    // 组合矩阵必须对所有合法参数保持有限，而不仅是默认倾角的一张截图。
+    // 窄视口和宽视口分别覆盖旋转后横向范围的不同约束。
+    using namespace MMM::Canvas;
+    for ( const float width : { 480.0F, 800.0F, 1600.0F } ) {
+        for ( const float pitch : { 0.0F, 30.0F, 75.0F } ) {
+            for ( const float yaw : { -180.0F, -90.0F, 0.0F, 90.0F, 180.0F } ) {
+                for ( const float distance : { 0.5F, 1.0F, 4.0F } ) {
+                    // 非零播放补偿在所有组合中一致，控制新增后不能使中心漂移。
+                    const auto matrix = planarObservationProjection(
+                        width, 600, 20, pitch, yaw, distance);
+                    // 模型先补偿播放偏移，旋转与拉远都不能改变观察锚点。
+                    // y=280 是高度六百像素时向上补偿二十像素的真实中心。
+                    const auto center =
+                        matrix * glm::vec4(width * 0.5F, 280, 0, 1);
+                    if ( !near(center.x, 0) || !near(center.y, 0) ||
+                         !std::isfinite(center.w) || center.w <= 0 )
+                        return false;
+                    // 原二维路径使用正交深度约定，其余组合使用 Vulkan
+                    // 零至一深度。
+                    // 只检查中心深度，近距离旋转允许部分边角超出视锥。
+                    if ( planarObservationEnabled(pitch, yaw, distance) &&
+                         (center.z < 0 || center.z > center.w) )
+                        return false;
+                    // 屏幕内外裁剪都必须产生有界矩形，不能因旋转出现无符号下溢。
+                    // 向外取整允许少量边缘溢出，最终仍须限制到视口。
+                    const auto rect = planarObservationScissor(
+                        { 0, 0, static_cast<std::uint32_t>(width), 600 },
+                        matrix,
+                        width,
+                        600);
+                    if ( rect.x < 0 || rect.y < 0 ||
+                         rect.x + rect.width > width ||
+                         rect.y + rect.height > 600 )
+                        return false;
+                }
+            }
+        }
+    }
+    // 水平九十度后右侧点转向纵向，且更远距离使相同偏移投影更小。
+    // 右侧一百像素的固定点在零俯仰下排除了额外纵向透视缩短。
+    // 同一方向拉远只影响尺寸，不能让屏幕方向反转。
+    const auto rotated = planarObservationProjection(800, 600, 0, 0, 90);
+    const auto right   = rotated * glm::vec4(500, 300, 0, 1);
+    const auto far     = planarObservationProjection(800, 600, 0, 0, 90, 4) *
+                     glm::vec4(500, 300, 0, 1);
+    return near(right.x, 0) && !near(right.y, 0) &&
+           std::abs(far.y / far.w) < std::abs(right.y / right.w);
+}
+
+/// @brief 验证拖动、滚轮的即时变化及边界保护，不依赖平台输入设备。
+/// @return 标准视图判定、环绕角连续性与距离边界全部正确时通过。
+/// @note 无输入不改变视角，非有限平台增量不能传播为 NaN。
+bool testControls()
+{
+    // 测试数值增量不依赖帧率、平台鼠标后端或 GPU。
+    // 共用生产函数，避免另写一份不同的角度更新算法。
+    using namespace MMM::Canvas;
+    // 独立改变水平角或距离同样启用只读观察，不可误回到二维编辑分支。
+    if ( planarObservationEnabled(0) || !planarObservationEnabled(0, 20) ||
+         !planarObservationEnabled(0, 0, 2) )
+        return false;
+    // 横向八像素对应两度，跨越一百八十度后应连续绕回。
+    // 纵向四十像素对应十度，不能误当成整段手势累计距离。
+    const auto drag = planarObservationDrag(20, 179, 8, 40);
+    if ( !near(drag.x, 30) || !near(drag.y, -179) ) return false;
+    // 越过俯仰范围时钳位，不越过平面或翻转摄像机。
+    const auto limit = planarObservationDrag(70, 0, 0, 100);
+    if ( limit.x != 75 ) return false;
+    // 正八格使距离减半，负八格使距离加倍；已到上界时保持稳定。
+    // 断言精确倍率，避免错误的线性缩放仍满足单调性而假通过。
+    if ( !near(planarObservationZoom(1, 8), 0.5F) ||
+         !near(planarObservationZoom(1, -8), 2) ||
+         !near(planarObservationZoom(4, -16), 4) )
+        return false;
+    // 平台无效输入退回当前合法值，配置损坏则恢复默认二维视角。
+    const float nan     = std::numeric_limits<float>::quiet_NaN();
+    const auto  invalid = planarObservationDrag(20, 30, nan, 2);
+    // 损坏配置全部回退后不能误启用只读模式。
+    // 无效鼠标增量保留合法视角，窗口失焦时不应跳变。
+    return near(invalid.x, 20) && near(invalid.y, 30) &&
+           !planarObservationEnabled(nan, nan, nan) &&
+           near(planarObservationZoom(2, nan), 2);
+}
 }  // namespace
 
 /// @brief 运行不依赖 GPU 的实验摄像机回归。
@@ -128,11 +246,12 @@ int main()
 {
     // 配置损坏回退二维，越界角度不得穿越近平面。
     using MMM::Canvas::planarObservationAngle;
-    if ( planarObservationAngle(-2) != 0 || planarObservationAngle(80) != 45 ||
+    if ( planarObservationAngle(-2) != 0 || planarObservationAngle(80) != 75 ||
          planarObservationAngle(std::numeric_limits<float>::quiet_NaN()) != 0 )
         return 1;
     // 分别验证关闭实验模式与观察模式，失败统一返回非零。
-    return testFlat() && testTilt() && testConfig() && testBackgroundLayer()
+    return testFlat() && testTilt() && testConfig() && testBackgroundLayer() &&
+                   testOrbitAndDistance() && testControls()
                ? 0
                : 1;
 }

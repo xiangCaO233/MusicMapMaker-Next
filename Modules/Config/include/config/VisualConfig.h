@@ -76,7 +76,19 @@ struct VisualConfig {
     /// @brief 调试画布摄像机俯视偏转角的最小值，单位度。
     static constexpr float MIN_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES{ 0.0f };
     /// @brief 调试画布摄像机俯视偏转角的最大值，单位度。
-    static constexpr float MAX_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES{ 45.0f };
+    static constexpr float MAX_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES{ 75.0f };
+    /// @brief 水平观察旋转默认与二维轨道朝向一致，单位度。
+    static constexpr float DEFAULT_DEBUG_CANVAS_CAMERA_YAW_DEGREES{ 0.0f };
+    /// @brief 水平旋转下界，与正一百八十度表示相同朝向。
+    static constexpr float MIN_DEBUG_CANVAS_CAMERA_YAW_DEGREES{ -180.0f };
+    /// @brief 水平旋转上界，完整覆盖绕平面法线的一周。
+    static constexpr float MAX_DEBUG_CANVAS_CAMERA_YAW_DEGREES{ 180.0f };
+    /// @brief 原型摄像机观察距离倍率，默认保持旧版尺寸。
+    static constexpr float DEFAULT_DEBUG_CANVAS_CAMERA_DISTANCE{ 1.0f };
+    /// @brief 最近观察距离倍率，避免摄像机进入平面。
+    static constexpr float MIN_DEBUG_CANVAS_CAMERA_DISTANCE{ 0.5f };
+    /// @brief 最远观察距离倍率，控制可见几何的浮点精度范围。
+    static constexpr float MAX_DEBUG_CANVAS_CAMERA_DISTANCE{ 4.0f };
 
     /// @brief 旧版或无有效 Key 数时使用的轨道布局模板。
     TrackLayout trackLayout;
@@ -232,11 +244,17 @@ struct VisualConfig {
     float nonHoldHitEffectDuration{ DEFAULT_NON_HOLD_HIT_EFFECT_DURATION };
     /// @brief 是否绘制音符悬浮拾取包围盒。
     bool debugDrawHitboxes{ false };
-    /// @brief 调试用画布摄像机俯视偏转角，零度保持二维观察。
-    /// @note 摄像机到画布平面的高度固定为一个世界单位。
+    /// @brief 调试用画布摄像机俯视偏转角，单位度。
+    /// @note 俯仰、水平旋转为零且距离为一时保持原二维观察。
     float debugCanvasCameraAngleDegrees{
         DEFAULT_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES
     };
+    /// @brief 绕轨道中心的水平观察旋转，单位度，不写入谱面几何。
+    float debugCanvasCameraYawDegrees{
+        DEFAULT_DEBUG_CANVAS_CAMERA_YAW_DEGREES
+    };
+    /// @brief 沿观察方向调整摄像机距离，缩放不改变谱面尺寸或时间。
+    float debugCanvasCameraDistance{ DEFAULT_DEBUG_CANVAS_CAMERA_DISTANCE };
     /// @brief 物件交互拾取包围盒相对原始几何的横向缩放。
     float interactionHitboxScaleX{ DEFAULT_INTERACTION_HITBOX_SCALE };
     /// @brief 物件交互拾取包围盒相对原始几何的纵向缩放。

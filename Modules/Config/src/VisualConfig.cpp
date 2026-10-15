@@ -12,6 +12,25 @@ namespace MMM::Config
 
 namespace
 {
+/// @brief 从本机视觉配置读取一项有限的观察参数。
+/// @param j 用户配置对象，缺失键或错误类型视为旧版配置。
+/// @param key 摄像机数值字段名。
+/// @param fallback 非法或缺失参数的默认值。
+/// @param minimum 允许范围下界。
+/// @param maximum 允许范围上界。
+/// @return 不传播 NaN 或无穷值的有界参数。
+float readObservationValue(const nlohmann::json& j, const char* key,
+                           float fallback, float minimum, float maximum)
+{
+    // 摄像机参数来自可手工编辑的文件，先检查类型再转换，避免 JSON 类型异常。
+    const auto value = j.find(key);
+    if ( value == j.end() || !value->is_number() ) return fallback;
+    const float number = value->get<float>();
+    // 极大 JSON 数值转为 float 后也可能溢出，必须在转换之后检查有限性。
+    return std::isfinite(number) ? std::clamp(number, minimum, maximum)
+                                 : fallback;
+}
+
 /// @brief 旧版拍号与分拍线时间相对局部区间高度的默认字号比例。
 constexpr float LEGACY_REPEATED_TEXT_FONT_SIZE_RATIO = 0.18f;
 // 该常量只用于读取缺少坐标系标记的旧布局，不写回当前格式。
@@ -1022,6 +1041,8 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
         { "debugDrawHitboxes", config.debugDrawHitboxes },
         { "debugCanvasCameraAngleDegrees",
           config.debugCanvasCameraAngleDegrees },
+        { "debugCanvasCameraYawDegrees", config.debugCanvasCameraYawDegrees },
+        { "debugCanvasCameraDistance", config.debugCanvasCameraDistance },
         { "interactionHitboxScaleX", config.interactionHitboxScaleX },
         { "interactionHitboxScaleY", config.interactionHitboxScaleY }
     };
@@ -1159,28 +1180,34 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
                    VisualConfig::MAX_NON_HOLD_HIT_EFFECT_DURATION);
     // 调试绘制默认关闭，观察角和横纵拾取缩放可独立校准。
     config.debugDrawHitboxes = j.value("debugDrawHitboxes", false);
-    config.debugCanvasCameraAngleDegrees =
-        j.value("debugCanvasCameraAngleDegrees",
-                VisualConfig::DEFAULT_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES);
-    // 该字段只描述俯视偏转，摄像机高度由渲染实验固定。
-    // 零度是兼容旧配置的二维观察状态，不需要额外迁移标记。
-    // 仅持久化角度可避免用户配置与世界空间布局参数耦合。
+    // 三项观察参数分别读取，旧配置缺失的新键不影响原有俯仰角。
+    // 同一安全入口保证文件导入与设置页允许的范围一致。
+    // 这些字段只属于视觉配置，既不改变轨道布局，也不作为谱面内容同步。
+    // 单个错误字段独立回退，不能因距离损坏而丢弃合法的水平朝向。
+    config.debugCanvasCameraAngleDegrees = readObservationValue(
+        j,
+        "debugCanvasCameraAngleDegrees",
+        VisualConfig::DEFAULT_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES,
+        VisualConfig::MIN_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES,
+        VisualConfig::MAX_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES);
+    config.debugCanvasCameraYawDegrees = readObservationValue(
+        j,
+        "debugCanvasCameraYawDegrees",
+        VisualConfig::DEFAULT_DEBUG_CANVAS_CAMERA_YAW_DEGREES,
+        VisualConfig::MIN_DEBUG_CANVAS_CAMERA_YAW_DEGREES,
+        VisualConfig::MAX_DEBUG_CANVAS_CAMERA_YAW_DEGREES);
+    config.debugCanvasCameraDistance =
+        readObservationValue(j,
+                             "debugCanvasCameraDistance",
+                             VisualConfig::DEFAULT_DEBUG_CANVAS_CAMERA_DISTANCE,
+                             VisualConfig::MIN_DEBUG_CANVAS_CAMERA_DISTANCE,
+                             VisualConfig::MAX_DEBUG_CANVAS_CAMERA_DISTANCE);
     config.interactionHitboxScaleX =
         j.value("interactionHitboxScaleX",
                 VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE);
     config.interactionHitboxScaleY =
         j.value("interactionHitboxScaleY",
                 VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE);
-    // 非有限角度回退二维观察，避免投影计算传播 NaN。
-    if ( !std::isfinite(config.debugCanvasCameraAngleDegrees) ) {
-        config.debugCanvasCameraAngleDegrees =
-            VisualConfig::DEFAULT_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES;
-    }
-    // 存档不得越过实验支持的俯视范围。
-    config.debugCanvasCameraAngleDegrees =
-        std::clamp(config.debugCanvasCameraAngleDegrees,
-                   VisualConfig::MIN_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES,
-                   VisualConfig::MAX_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES);
     // 非有限缩放回退标准值，避免比较和几何计算传播 NaN。
     if ( !std::isfinite(config.interactionHitboxScaleX) ) {
         config.interactionHitboxScaleX =

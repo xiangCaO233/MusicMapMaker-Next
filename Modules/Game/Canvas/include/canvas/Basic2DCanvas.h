@@ -157,6 +157,8 @@ protected:
     glm::mat4 m_observationProjection{ 1.0f };
     /// @brief 是否启用透视裁剪；零角度保持原二维裁剪路径。
     bool m_isObservationCamera{ false };
+    /// @brief 观察模式中由当前画布取得的右键旋转手势，释放前不转交二维编辑。
+    bool m_isObservationCameraDragging{ false };
 
     /// @warning
     /// 热路径：每帧离屏命令录制时执行；只允许遍历当前快照命令并绑定已存在的

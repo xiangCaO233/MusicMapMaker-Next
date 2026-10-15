@@ -1404,8 +1404,35 @@
       "fields": [
         "ui.settings.debug.canvas_camera_angle_tooltip"
       ],
-      "keywords": "debug.canvas_camera_angle debugCanvasCameraAngleDegrees camera angle top-down tilt experimental 2D 1 world unit",
-      "aliases": "画布摄像机俯视偏转角 实验性观察 摄像机视角 二维观察 一世界单位 渲染调试 调试配置 Canvas Camera Top-Down Tilt Experimental View Camera Angle 2D View One World Unit Render Debug Debug Config"
+      "keywords": "debug.canvas_camera_angle debugCanvasCameraAngleDegrees camera angle pitch top-down tilt experimental 2D read-only playback",
+      "aliases": "画布摄像机俯仰角 实验性观察 摄像机视角 二维观察 只读观察 播放 渲染调试 调试配置 Canvas Camera Pitch Top-Down Tilt Experimental View Camera Angle 2D View Read Only Playback Render Debug Debug Config"
+    },
+    {
+      "tab": "Debug",
+      "section": "ui.settings.debug.rendering",
+      "label": "ui.settings.debug.canvas_camera_yaw",
+      "fields": [],
+      "keywords": "debug.canvas_camera_yaw debugCanvasCameraYawDegrees camera yaw horizontal rotation -180 180",
+      "aliases": "画布摄像机水平旋转 水平角 yaw 偏航角 渲染调试 调试配置 Canvas Camera Horizontal Rotation Yaw Render Debug Debug Config"
+    },
+    {
+      "tab": "Debug",
+      "section": "ui.settings.debug.rendering",
+      "label": "ui.settings.debug.canvas_camera_distance",
+      "fields": [],
+      "keywords": "debug.canvas_camera_distance debugCanvasCameraDistance camera distance zoom 0.5 4",
+      "aliases": "画布摄像机观察距离 摄像机距离 缩放 渲染调试 调试配置 Canvas Camera View Distance Zoom Render Debug Debug Config"
+    },
+    {
+      "tab": "Debug",
+      "section": "ui.settings.debug.rendering",
+      "label": "ui.settings.debug.canvas_camera_actions",
+      "fields": [
+        "ui.settings.debug.canvas_camera_reset",
+        "ui.settings.debug.canvas_camera_reset_tooltip"
+      ],
+      "keywords": "debug.canvas_camera_reset resetDebugCanvasCamera reset camera default view 0 0 1",
+      "aliases": "复位摄像机 恢复默认视角 重置观察角度 恢复二维 渲染调试 调试配置 Reset Canvas Camera Restore Default View Reset Camera Render Debug Debug Config"
     },
     {
       "tab": "Debug",

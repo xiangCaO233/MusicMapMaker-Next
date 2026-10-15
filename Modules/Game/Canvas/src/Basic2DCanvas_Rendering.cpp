@@ -43,19 +43,21 @@ glm::mat4 Basic2DCanvas::getCanvasProjectionMatrix()
     // 轨道与音符共用平面，背景层和全屏后处理不进入该变换。
     // 渲染线程只读 UI 同线程维护的配置，不访问会话更新长锁。
     // 空会话没有轨道场景，Logo 占位仍使用二维投影而非实验摄像机。
-    const float angle =
-        m_currentSnapshot && m_currentSnapshot->hasBeatmap
-            ? planarObservationAngle(Config::AppConfig::instance()
-                                         .getVisualConfig()
-                                         .debugCanvasCameraAngleDegrees)
-            : 0.0F;
-    m_isObservationCamera = angle > 0.0f;
+    const auto& visual   = Config::AppConfig::instance().getVisualConfig();
+    const bool  hasScene = m_currentSnapshot && m_currentSnapshot->hasBeatmap;
+    const float angle = hasScene ? visual.debugCanvasCameraAngleDegrees : 0.0F;
+    const float yaw   = hasScene ? visual.debugCanvasCameraYawDegrees : 0.0F;
+    const float distance = hasScene ? visual.debugCanvasCameraDistance : 1.0F;
+    // 与输入层共用启用条件，单独旋转或改变距离也不能误用二维拾取。
+    m_isObservationCamera = planarObservationEnabled(angle, yaw, distance);
     // 后续批次裁剪复用该矩阵，发光降采样不改变逻辑空间。
     m_observationProjection =
         planarObservationProjection(static_cast<float>(m_logicalWidth),
                                     static_cast<float>(m_logicalHeight),
                                     m_yOffset,
-                                    angle);
+                                    angle,
+                                    yaw,
+                                    distance);
     return m_observationProjection;
 }
 

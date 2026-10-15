@@ -23,10 +23,10 @@ namespace MMM::UI
 /// @brief 渲染调试设置页。
 /// @details 渲染与网络选项分为两个可折叠段落，展开状态存放在当前 ImGui
 /// 窗口 StateStorage 中，不写入项目或软件配置。
-/// @note RTC 日志开关除写入配置外还立即更新网络层运行时门闩，其余选项通过
-/// CmdUpdateEditorConfig 在帧末同步给逻辑线程。
-/// @note 摄像机角度仅用于实验观察，本页不改变画布世界几何。
-/// @note 零度保持原二维视图，非零角度的编辑交互边界由画布层统一处理。
+/// @note 摄像机变化逐帧发布 CmdUpdateEditorConfig，磁盘保存延迟到控件释放后。
+/// @note RTC 日志开关除写入配置外还立即更新网络层运行时门闩。
+/// @note 摄像机参数仅用于只读实验观察，本页不改变画布世界几何或背景。
+/// @note 任一参数偏离默认值时进入观察模式，右键拖动调整角度、滚轮调整距离。
 /// @note 固定一个世界单位的高度是渲染端约束，不另设可编辑项。
 /// @warning UI 热路径：设置窗口打开且当前页为调试页时每帧执行。
 /// 禁止加入文件系统扫描或重型资源重建。
@@ -36,11 +36,13 @@ void SettingsView::drawDebugSettings()
     auto& appConfig = Config::AppConfig::instance();
     // 通用编辑器选项保存渲染日志与 RTC 诊断开关。
     auto& settings = appConfig.getEditorSettings();
-    // 视觉配置保存画布观察角、命中框显示和缩放系数。
+    /// 视觉配置保存画布摄像机参数、命中框显示和缩放系数。
     auto& visual = appConfig.getVisualConfig();
-    // 所有控件共享变化标记，本帧末统一同步与保存。
-    // 标题展开状态不计入该标记，因为它只属于临时窗口状态。
+    /// 标准设置项使用本帧变化标记；摄像机另行延迟持久化。
+    /// 标题展开状态只属于临时窗口状态，不触发配置更新。
     bool changed = false;
+    /// 摄像机拖动逐帧同步运行配置，但只在交互结束后持久化一次。
+    bool cameraChanged = false;
 
     // 内容容器来自成员缓存，每帧先移除上一帧节点。
     m_contentVBox.clear();
@@ -161,25 +163,104 @@ void SettingsView::drawDebugSettings()
     // 渲染诊断分组默认展开，方便开发构建快速访问命中框工具。
     if ( auto* sec =
              addHeader(TR_CACHE("ui.settings.debug.rendering").data(), true) ) {
-        // 第一项仅改变实验摄像机的俯视偏转角。
+        /// 俯仰角限定在配置公开范围内，零度对应默认二维视图。
+        /// 三个摄像机滑杆均启用 AlwaysClamp，手动文本输入也受边界约束。
+        /// 这样持久化值与观察相机收到的范围保持一致。
         addSettingItem(
             *sec,
             rowIndex,
             TR_CACHE("ui.settings.debug.canvas_camera_angle").data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
-                // 角度滑杆占满控件列，度数后缀明确表达俯视偏转。
+                /// 角度滑杆占满控件列，度数后缀明确表达俯仰角。
                 ImGui::SetNextItemWidth(r.width);
-                changed |= ::MMM::UI::FeedbackSliderFloat(
+                /// 俯仰边界由 VisualConfig 统一维护，UI
+                /// 与配置反序列化共享同一范围。
+                /// 控件只写入观察相机参数，不创建或修改谱面物件。
+                cameraChanged |= ::MMM::UI::FeedbackSliderFloat(
                     "##DebugCanvasCameraAngle",
                     &visual.debugCanvasCameraAngleDegrees,
                     Config::VisualConfig::MIN_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES,
                     Config::VisualConfig::MAX_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES,
-                    "%.1f°");
+                    "%.1f°",
+                    ImGuiSliderFlags_AlwaysClamp);
                 if ( ImGui::IsItemHovered() ) {
                     // 实验边界只在用户检查控件时显示，避免挤占设置行。
                     Utils::renderTooltip(
                         TR("ui.settings.debug.canvas_camera_angle_tooltip")
+                            .data(),
+                        Utils::TooltipDir::Right);
+                }
+            });
+
+        /// 水平旋转允许绕画布完整旋转一周，度数格式与俯仰角一致。
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.debug.canvas_camera_yaw").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                /// 水平角范围包含两端点，可完整转向且边界稳定。
+                cameraChanged |= ::MMM::UI::FeedbackSliderFloat(
+                    "##DebugCanvasCameraYaw",
+                    &visual.debugCanvasCameraYawDegrees,
+                    Config::VisualConfig::MIN_DEBUG_CANVAS_CAMERA_YAW_DEGREES,
+                    Config::VisualConfig::MAX_DEBUG_CANVAS_CAMERA_YAW_DEGREES,
+                    "%.1f°",
+                    ImGuiSliderFlags_AlwaysClamp);
+            });
+
+        /// 距离倍率只影响观察相机，不改动画、谱面或画布背景。
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.debug.canvas_camera_distance").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                /// 距离下限保持正值，避免观察相机越过画布平面；上限限制观察尺度。
+                /// 该倍率只交给画布观察相机使用，不作为谱面缩放或内容变换保存。
+                cameraChanged |= ::MMM::UI::FeedbackSliderFloat(
+                    "##DebugCanvasCameraDistance",
+                    &visual.debugCanvasCameraDistance,
+                    Config::VisualConfig::MIN_DEBUG_CANVAS_CAMERA_DISTANCE,
+                    Config::VisualConfig::MAX_DEBUG_CANVAS_CAMERA_DISTANCE,
+                    "%.2f",
+                    ImGuiSliderFlags_AlwaysClamp);
+            });
+
+        /// 复位一次恢复三个摄像机参数，便于立即返回默认二维编辑状态。
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.debug.canvas_camera_actions").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                ImGui::SetCursorScreenPos(
+                    { r.x, r.y + (r.height - ImGui::GetFrameHeight()) * 0.5f });
+                if ( ::MMM::UI::FeedbackButton(
+                         TR("ui.settings.debug.canvas_camera_reset").data()) ) {
+                    /// 先比较三个值再赋值，使重复点击默认状态保持幂等且不触发写盘。
+                    /// 默认值来自配置类型，避免 UI 维护与序列化默认值分叉。
+                    /// 复位只触碰 visual 摄像机字段，不覆盖其它编辑器选项。
+                    const float defaultAngle = Config::VisualConfig::
+                        DEFAULT_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES;
+                    const float defaultYaw = Config::VisualConfig::
+                        DEFAULT_DEBUG_CANVAS_CAMERA_YAW_DEGREES;
+                    const float defaultDistance = Config::VisualConfig::
+                        DEFAULT_DEBUG_CANVAS_CAMERA_DISTANCE;
+                    cameraChanged =
+                        visual.debugCanvasCameraAngleDegrees != defaultAngle ||
+                        visual.debugCanvasCameraYawDegrees != defaultYaw ||
+                        visual.debugCanvasCameraDistance != defaultDistance;
+                    visual.debugCanvasCameraAngleDegrees = defaultAngle;
+                    visual.debugCanvasCameraYawDegrees   = defaultYaw;
+                    visual.debugCanvasCameraDistance     = defaultDistance;
+                }
+                if ( ImGui::IsItemHovered() ) {
+                    Utils::renderTooltip(
+                        TR("ui.settings.debug.canvas_camera_reset_tooltip")
                             .data(),
                         Utils::TooltipDir::Right);
                 }
@@ -286,13 +367,38 @@ void SettingsView::drawDebugSettings()
     // 将 ImGui 游标推进到 Clay 实际高度之后，维持滚动内容范围。
     ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 
-    if ( changed ) {
-        // 折叠标题变化不设置 changed，因此不会造成无意义配置保存。
+    /// StateStorage 跨帧保存脏状态，避免连续拖动时同步执行磁盘写入。
+    const ImGuiID cameraDirtyId = ImGui::GetID("DebugCanvasCameraDirty");
+    /// 固定 ID 使同一设置窗口每帧访问同一状态槽位。
+    /// dirty 属于设置窗口而非单个控件，因此切换角度、yaw、距离滑杆时不会丢失。
+    /// 复位操作也走同一脏标记，使一次多参数变更与滑杆调整使用相同提交路径。
+    bool cameraDirty = ImGui::GetStateStorage()->GetInt(cameraDirtyId, 0) != 0;
+    if ( cameraChanged ) cameraDirty = true;
+    /// 任一 ImGui 项仍处于交互态时保留脏标记；松开后在本帧提交最终内存值。
+    /// 使用全局活跃项判断可覆盖鼠标拖动、键盘调节及控件之间的连续切换。
+    const bool saveCamera = cameraDirty && !ImGui::IsAnyItemActive();
+    /// 提交后立即清除标记，避免重新进入调试页时重复落盘。
+    ImGui::GetStateStorage()->SetInt(cameraDirtyId,
+                                     cameraDirty && !saveCamera ? 1 : 0);
+
+    /// 切换出调试页时此函数暂停，脏标记保留到重新进入后继续检查。
+    /// 关闭设置窗口期间不访问状态槽，应用退出保存仍读取当前内存配置。
+    if ( changed || cameraChanged || saveCamera ) {
+        /// 折叠标题变化不设置标记，因此不会造成无意义配置保存。
+        /// 逻辑命令只发布配置快照；谱面事件与谱面文件内容不在此处传递。
         // 逻辑线程接收完整 EditorConfig 快照，避免跨线程读取 AppConfig。
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
-            Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
+        if ( changed || cameraChanged ) {
+            /// 只在配置值变化时发布快照，等待磁盘提交时不重复发送逻辑命令。
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
+        }
         // UI 线程随后持久化本帧所有变化，合并多个控件写盘。
-        appConfig.save();
+        /// 摄像机拖动只在所有控件释放后写盘；普通设置仍沿用即时保存。
+        /// AppConfig::save 同步写文件，拖动期间只更新内存和逻辑快照。
+        /// 若用户切换设置分类，脏值仍保存在窗口状态中，回到调试页后完成低频保存。
+        /// 关闭设置窗口时最终配置仍由应用既有退出保存路径覆盖。
+        /// 无待保存变更时重复复位不会置脏，避免无变化的文件写入。
+        if ( changed || saveCamera ) appConfig.save();
     }
 }
 
