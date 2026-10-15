@@ -1404,8 +1404,8 @@
       "fields": [
         "ui.settings.debug.canvas_camera_angle_tooltip"
       ],
-      "keywords": "debug.canvas_camera_angle debugCanvasCameraAngleDegrees camera angle pitch top-down tilt experimental 2D read-only playback",
-      "aliases": "画布摄像机俯仰角 实验性观察 摄像机视角 二维观察 只读观察 播放 渲染调试 调试配置 Canvas Camera Pitch Top-Down Tilt Experimental View Camera Angle 2D View Read Only Playback Render Debug Debug Config"
+      "keywords": "debug.canvas_camera_angle debugCanvasCameraAngleDegrees camera angle pitch top-down tilt experimental 2D 3D editing picking marquee drag playback",
+      "aliases": "画布摄像机俯仰角 实验性观察 摄像机视角 二维观察 倾斜编辑 拾取 框选 拖拽 播放 渲染调试 调试配置 Canvas Camera Pitch Top-Down Tilt Experimental View Camera Angle 2D View Tilted Editing Picking Marquee Drag Playback Render Debug Debug Config"
     },
     {
       "tab": "Debug",

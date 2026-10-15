@@ -216,6 +216,10 @@ struct CmdSetMousePosition {
     bool        isHovering;
     bool        isDragging{ false };
     double      hoverTime{ -1.0 };  ///< 可选：直接指定悬停时间 (如果 >= 0)
+    /// @brief 鼠标已由 UI 从真实视口逆投影到平面逻辑坐标。
+    /// @note 平面坐标可能超出原二维视口；isHovering 已表示真实窗口边界。
+    /// @note 启用时要求视口尺寸有限且为正，屏幕边缘滚动由 UI 按真实位置处理。
+    bool isUnprojected{ false };
 };
 
 /**

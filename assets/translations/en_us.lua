@@ -269,7 +269,7 @@ return {
 	["ui.settings.debug.short"] = "Debug",
 	["ui.settings.debug.rendering"] = "Render Debug",
 	["ui.settings.debug.canvas_camera_angle"] = "Canvas Camera Pitch",
-	["ui.settings.debug.canvas_camera_angle_tooltip"] = "Experimental read-only view: canvas height defines 1 world unit, and the background stays fixed. Any non-default camera setting pauses 2D editing while playback remains available. Right-drag to adjust pitch and yaw; use the wheel to change distance. Restore all defaults to return to 2D editing.",
+	["ui.settings.debug.canvas_camera_angle_tooltip"] = "Experimental camera view: pick, select along the chart plane, and drag objects. Alt + right-drag rotates; Alt + wheel changes distance. Normal mouse input edits the chart, while the background stays fixed. Restore the default 2D view for layout editing.",
 	["ui.settings.debug.canvas_camera_yaw"] = "Canvas Camera Yaw",
 	["ui.settings.debug.canvas_camera_distance"] = "Canvas Camera Distance",
 	["ui.settings.debug.canvas_camera_actions"] = "View Controls",

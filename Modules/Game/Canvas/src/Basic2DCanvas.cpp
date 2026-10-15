@@ -2815,19 +2815,32 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         const ImVec2 canvasScreenPosition = ImGui::GetCursorScreenPos();
         const ImVec2 canvasSize           = rctx.getRenderSize();
         rctx.renderSurface();
-        // 观察参数只改本机摄像机；任一参数偏离默认值时不复用二维命中区域。
-        // 旋转到默认角度的同一手势仍只用于观察，不能中途变成右键擦除。
+        // 纹理展示区域定义真实输入边界，窗口标题和其它停靠内容不属于该区域。
+        // 观察矩阵处理逻辑像素；不能把 framebuffer 的 DPI 尺寸带入鼠标映射。
+        // 动态插值另行传递，因为它只移动谱面顶点，没有更新原始命中框。
+        // 输入映射与待录制的轨道投影共用矩阵；背景仍使用自己的屏幕投影。
+        // 每帧只构造一次平面逆矩阵，后续拾取和拖动都复用固定大小缓存。
         auto& cameraVisual = Config::AppConfig::instance().getVisualConfig();
         const bool hasCameraScene =
             m_currentSnapshot && m_currentSnapshot->hasBeatmap;
-        const bool cameraObservationOnly =
-            hasCameraScene && (planarObservationEnabled(
-                                   cameraVisual.debugCanvasCameraAngleDegrees,
-                                   cameraVisual.debugCanvasCameraYawDegrees,
-                                   cameraVisual.debugCanvasCameraDistance) ||
-                               m_isObservationCameraDragging);
-        if ( m_currentSnapshot && !cameraObservationOnly )
-            // 快照与刚绘制的纹理使用同一代布局，避免教学框和画面错位。
+        const bool cameraViewEnabled =
+            hasCameraScene &&
+            planarObservationEnabled(cameraVisual.debugCanvasCameraAngleDegrees,
+                                     cameraVisual.debugCanvasCameraYawDegrees,
+                                     cameraVisual.debugCanvasCameraDistance);
+        const bool cameraNavigationAvailable =
+            hasCameraScene &&
+            (cameraViewEnabled || m_isObservationCameraDragging);
+        // 默认二维视图让映射缓存走恒等路径，保留原来的工具坐标约定。
+        // 仅摄像机旋转手势尚未结束时，也必须保留导航入口直到右键松开。
+        m_interaction->setInputProjection(
+            makePlanarObservationInputProjection(getCanvasProjectionMatrix(),
+                                                 canvasSize.x,
+                                                 canvasSize.y,
+                                                 cameraViewEnabled),
+            m_lastAppliedYOffset);
+        if ( m_currentSnapshot && !cameraViewEnabled )
+            // 教学屏幕提示未投影，仅在二维视图沿用旧的目标定位。
             reportCanvasWalkthroughTargets(sourceManager,
                                            *m_currentSnapshot,
                                            canvasScreenPosition,
@@ -2851,11 +2864,12 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
 
         // 手势只由按下时悬停的活动画布获取；出界可继续，失焦切换立即取消。
         // 无谱面和恢复二维时必须释放旧门闩，不能让下一次右键被吞掉。
-        if ( !cameraObservationOnly || !isActiveCanvas ||
+        if ( !cameraNavigationAvailable || !isActiveCanvas ||
              !ImGui::IsMouseDown(ImGuiMouseButton_Right) ) {
             m_isObservationCameraDragging = false;
         }
-        if ( cameraObservationOnly ) {
+        bool cameraZoomed = false;
+        if ( cameraNavigationAvailable ) {
             // 画面矩形不包含窗口标题和停靠标签；在设置页或滚动条上按下不能旋转。
             // 窗口 hover 同时排除模态窗口遮挡，避免隔着弹窗改变底层视角。
             // 活跃控件拥有输入优先权，摄像机不能抢占其它 ImGui 控件的手势。
@@ -2866,7 +2880,13 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                     ImVec2(canvasScreenPosition.x + canvasSize.x,
                            canvasScreenPosition.y + canvasSize.y)) &&
                 !ImGui::IsAnyItemActive();
-            if ( cameraHovered &&
+            // 这里先读取上一帧编辑门闩，释放帧仍属于旧事务，不能被 Alt 接管。
+            // 右键导航只在按下边沿获取所有权；中途补按 Alt 不改变擦除手势身份。
+            // 左键和中键的实际按下状态同时排除尚未建立工具门闩的同帧竞争。
+            if ( cameraHovered && ImGui::GetIO().KeyAlt &&
+                 !m_interaction->hasActivePointerGesture() &&
+                 !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+                 !ImGui::IsMouseDown(ImGuiMouseButton_Middle) &&
                  ImGui::IsMouseClicked(ImGuiMouseButton_Right) )
                 m_isObservationCameraDragging = true;
             if ( m_isObservationCameraDragging ) {
@@ -2884,7 +2904,11 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                 cameraVisual.debugCanvasCameraAngleDegrees = orbit.x;
                 cameraVisual.debugCanvasCameraYawDegrees   = orbit.y;
             }
-            if ( cameraHovered && ImGui::GetIO().MouseWheel != 0.0F ) {
+            if ( cameraHovered && ImGui::GetIO().KeyAlt &&
+                 !m_interaction->hasActivePointerGesture() &&
+                 !ImGui::IsAnyMouseDown() &&
+                 ImGui::GetIO().MouseWheel != 0.0F ) {
+                cameraZoomed = true;
                 // 滚轮只改摄像机距离，不发送画布时间、谱面缩放或联机命令。
                 // 距离以乘法变化，拉近和拉远互为逆操作，边界由数学层统一保护。
                 // 鼠标移出画面后停止消费滚轮，不能影响另一窗口的滚动。
@@ -2893,16 +2917,22 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                     ImGui::GetIO().MouseWheel);
             }
             // 连续控制只更新内存；配置沿用正常退出保存，不在每帧路径写盘。
-            // 保留弹窗等瞬态 UI，但不消费鼠标编辑、拖入和教学操作。
-            // 拾取逆投影尚未接入，不能让屏幕位置直接修改二维谱面。
+        }
+        if ( m_isObservationCameraDragging || cameraZoomed ) {
+            // 摄像机手势独占输入到松开，不能把右键旋转中途解释为擦除。
+            // 本分支没有开始新的谱面事务，也不能补发使用旧观察矩阵的编辑命令。
+            // 瞬态提示仍逐帧推进，导航期间不等待逻辑线程或渲染资源重建。
             m_interaction->updateTransientUi();
         } else if ( isActiveCanvas ) {
             // 活动画布先发布并绘制协作视野，再运行编辑交互；后者可在
             // 同一 ImGui 层建立命中区域，而覆盖层始终使用本帧快照。
-            updateCollaborationViewports(
-                sourceManager, canvasScreenPosition, canvasSize);
+            if ( !cameraViewEnabled )
+                // 协作视野框仍以二维屏幕矩形绘制，不能用它覆盖倾斜后的谱面。
+                updateCollaborationViewports(
+                    sourceManager, canvasScreenPosition, canvasSize);
             bool lessonButtonHovered = false;
-            if ( m_currentSnapshot ) {
+            if ( m_currentSnapshot && !cameraViewEnabled ) {
+                // 教学命中装饰同样依赖二维像素，透视模式跳过装饰而保留普通编辑。
                 // 教程先判定本帧释放是否合法，以便交互控制器随后选择提交或
                 // 取消 CmdEndBrush；目标装饰不创建 ImGui Item，不拦截画布输入。
                 updateComposeWalkthrough(sourceManager,

@@ -30,7 +30,10 @@
 #include "mmm/beatmap/BeatmapMutationObserver.h"
 #include "mmm/project/Project.h"
 
+#include <glm/vec2.hpp>
+
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -1471,8 +1474,8 @@ bool testBrushAudioResourcePlacementRules()
     for ( const auto entity : samples ) {
         const auto& sample = samples.get<MMM::Logic::SampleComponent>(entity);
         foundMain          = foundMain || (sample.m_track == 5 &&
-                                           sample.m_audioResourceId == "main" &&
-                                           near(sample.m_volume, 0.7));
+                                  sample.m_audioResourceId == "main" &&
+                                  near(sample.m_volume, 0.7));
     }
     if ( !foundMain ) return false;
 
@@ -2894,7 +2897,7 @@ bool testPerBeatmapDraftLaneSharingAndIsolation()
     entt::entity concurrentOuter = entt::null;
     entt::entity concurrentStale = entt::null;
     const auto   concurrentView  = afterConcurrentGrowth.noteRegistry
-                                       .view<const MMM::Logic::NoteComponent>();
+                                    .view<const MMM::Logic::NoteComponent>();
     for ( const auto entity : concurrentView ) {
         const auto& note =
             concurrentView.get<const MMM::Logic::NoteComponent>(entity);
@@ -3055,25 +3058,25 @@ bool testAlignCommonBeatsPreservesEmbeddedPolylineNodes()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-            .type       = MMM::NoteType::HOLD,
-            .timestamp  = 1.013,
-            .duration   = 0.241,
-            .trackIndex = 0,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::HOLD,
+              .timestamp  = 1.013,
+              .duration   = 0.241,
+              .trackIndex = 0,
+              .dtrack     = 0,
         },
         {
-            .type       = MMM::NoteType::FLICK,
-            .timestamp  = 1.254,
-            .duration   = 0.0,
-            .trackIndex = 0,
-            .dtrack     = 1,
+              .type       = MMM::NoteType::FLICK,
+              .timestamp  = 1.254,
+              .duration   = 0.0,
+              .trackIndex = 0,
+              .dtrack     = 1,
         },
         {
-            .type       = MMM::NoteType::HOLD,
-            .timestamp  = 1.254,
-            .duration   = 0.246,
-            .trackIndex = 1,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::HOLD,
+              .timestamp  = 1.254,
+              .duration   = 0.246,
+              .trackIndex = 1,
+              .dtrack     = 0,
         },
     };
 
@@ -3563,6 +3566,294 @@ bool testBackgroundSessionPublishesCanvasHover()
         return false;
     }
     return true;
+}
+
+/// @brief 验证逆投影鼠标通过真实会话命令队列保留窗口边界契约。
+/// @details 平面位置超出二维视口仍可悬停，但无效输入不能借逆投影标志写入。
+/// 辅助相机拖动还须保留相机归属、窗口外续拖和无效尺寸释放的既有规则。
+/// @par 坐标契约
+/// - mouseX/mouseY 是已经完成逆投影的平面逻辑像素。
+/// - viewportWidth/viewportHeight 描述产生该输入的真实画布视口。
+/// - isHovering 是 UI 对窗口几何、遮挡和输入所有权的判断。
+/// - 逆投影标志不扩大窗口的可交互区域，只改变坐标范围的复核方式。
+/// - 平面位置无需位于零至视口尺寸之间，有限性仍是必需条件。
+/// - 有效尺寸是逆投影的前提，不能走旧二维缺省尺寸的兼容分支。
+/// @par 命令与会话边界
+/// 每次输入均进入 BeatmapSession 队列，再经一次后台更新消费。
+/// 断言检查持久的会话交互状态，不依赖某帧渲染快照是否被发布。
+/// 使用后台更新避免测试因焦点切换修改 EditorEngine 的活动谱面。
+/// 两个会话拥有不同的主画布 ID，坐标不能借全局当前相机串入另一上下文。
+/// 第一个会话的最后有效位置作为哨兵，验证第二次更新没有覆盖它。
+/// @par 拖动状态
+/// Preview 的鼠标命令负责辅助拖动起止，适合验证共享状态的生命周期。
+/// 正在拖动时，新窗口悬停不能改写 mouseCameraId 或最后位置。
+/// 原相机拖出物理窗口后仍能更新有限平面坐标，保持手势连续。
+/// 拖动中暂时失去有效尺寸时保留最后位置，不能把无意义坐标写入状态。
+/// 释放是状态清理事件，即使此时视口失效也必须清除拖动归属。
+/// @par 边缘滚动
+/// 测试预置非零速度，防止只验证默认零值而遗漏旧状态残留。
+/// 逆投影后的负 Y 可能对应屏幕中央，不能触发旧预览边缘滚动。
+/// 二维对照使用窗口顶部的有效坐标，确认旧速度计算仍然工作。
+/// 本测试不积分实际时间，不把逻辑速度断言当作 UI 自动滚动验收。
+/// @par 失败输入
+/// 零宽、负宽、零高、无穷宽与 NaN 高覆盖视口前提的主要退化形式。
+/// NaN 鼠标单独测试，避免尺寸校验先失败而掩盖坐标有限性检查。
+/// 所有拒绝分支都应保留最后有效位置，不得制造非有限历史状态。
+/// @par 测试边界
+/// 不构造真实窗口，不验证透视矩阵的准确性或平台鼠标事件来源。
+/// UI 的逆投影往返与窗口碰撞属于 Canvas 测试，本处只验证命令消费契约。
+/// @return 逆投影、二维兼容、跨相机隔离和拖动释放均符合约束时返回 true。
+bool testUnprojectedMouseSessionBoundary()
+{
+    MMM::Logic::BeatmapSession session;
+    auto&                      context = session.getContextMutable();
+    configureObjectEditingCanvas(context);
+    context.cameras.emplace(
+        "Preview", MMM::Logic::CameraInfo{ "Preview", 1000.0F, 600.0F });
+    // 固定同一配置快照，避免输入检查混入轨道布局切换。
+    // dt 为零使预览边缘速度只作为状态被验证，不推动播放时间。
+    const auto config = context.lastConfig;
+    /// @brief 经队列和真实会话更新消费鼠标命令，不直接调用控制器。
+    const auto sendMouse = [&](const MMM::Logic::CmdSetMousePosition& command) {
+        session.pushCommand(command);
+        session.update(0.0, config, false);
+    };
+    MMM::Logic::CmdSetMousePosition command{
+        .cameraId       = "Basic2DCanvas",
+        .mouseX         = 1250.0F,
+        .mouseY         = -80.0F,
+        .viewportWidth  = 1000.0F,
+        .viewportHeight = 600.0F,
+        .isHovering     = true,
+        .isUnprojected  = true,
+    };
+    // 真实窗口内点可能投到二维画布外，逻辑不能再次用平面范围取消悬停。
+    sendMouse(command);
+    if ( !context.isMouseInCanvas ||
+         context.mouseCameraId != command.cameraId ||
+         !near(context.lastMousePos.x, 1250.0) ||
+         !near(context.lastMousePos.y, -80.0) ||
+         !near(context.lastMainCanvasMousePos.x, 1250.0) ) {
+        XERROR("Unprojected session mouse lost physical-window hover");
+        return false;
+    }
+
+    // 同一坐标关闭标志后必须恢复原二维越界行为，不能扩大旧调用者的范围。
+    command.isUnprojected = false;
+    sendMouse(command);
+    if ( context.isMouseInCanvas || !context.mouseCameraId.empty() ) {
+        XERROR("Ordinary session mouse accepted out-of-viewport coordinates");
+        return false;
+    }
+    command.isUnprojected = true;
+    const float invalid   = std::numeric_limits<float>::quiet_NaN();
+    const float infinity  = std::numeric_limits<float>::infinity();
+    // 逆投影需要真实有效视口；零、负数和非有限尺寸均不能触发兼容回退。
+    for ( const auto viewport :
+          std::array<glm::vec2, 5>{ glm::vec2{ 0.0F, 600.0F },
+                                    glm::vec2{ -1.0F, 600.0F },
+                                    glm::vec2{ 1000.0F, 0.0F },
+                                    glm::vec2{ infinity, 600.0F },
+                                    glm::vec2{ 1000.0F, invalid } } ) {
+        command.viewportWidth  = viewport.x;
+        command.viewportHeight = viewport.y;
+        sendMouse(command);
+        if ( context.isMouseInCanvas || !context.mouseCameraId.empty() ||
+             !near(context.lastMousePos.x, 1250.0) ||
+             !near(context.lastMousePos.y, -80.0) ) {
+            XERROR("Unprojected session mouse accepted an invalid viewport");
+            return false;
+        }
+    }
+    // 尺寸先恢复有效，确保下面的拒绝仅由鼠标 NaN 引起。
+    command.viewportWidth  = 1000.0F;
+    command.viewportHeight = 600.0F;
+    command.mouseX         = invalid;
+    sendMouse(command);
+    if ( context.isMouseInCanvas || !std::isfinite(context.lastMousePos.x) ) {
+        XERROR("Unprojected session mouse accepted a non-finite position");
+        return false;
+    }
+
+    // 两个真实会话独立消费自己的相机输入，后台更新不能改写另一谱面的坐标。
+    MMM::Logic::BeatmapSession otherSession;
+    auto&                      otherContext = otherSession.getContextMutable();
+    configureObjectEditingCanvas(otherContext);
+    otherContext.cameras.emplace(
+        "Canvas_42", MMM::Logic::CameraInfo{ "Canvas_42", 1000.0F, 600.0F });
+    // 新会话采用另一个负横坐标，既验证越界许可，也区分两个位置哨兵。
+    command.cameraId = "Canvas_42";
+    command.mouseX   = -250.0F;
+    otherSession.pushCommand(command);
+    otherSession.update(0.0, otherContext.lastConfig, false);
+    if ( !otherContext.isMouseInCanvas ||
+         otherContext.mouseCameraId != "Canvas_42" ||
+         !near(otherContext.lastMousePos.x, -250.0) ||
+         context.isMouseInCanvas || !near(context.lastMousePos.x, 1250.0) ) {
+        XERROR("Unprojected mouse crossed session camera boundaries");
+        return false;
+    }
+
+    command.cameraId                  = "Preview";
+    command.mouseX                    = 500.0F;
+    command.mouseY                    = -60.0F;
+    command.isDragging                = true;
+    context.previewEdgeScrollVelocity = 17.0;
+    // 平面 Y 接近旧视口边缘不代表屏幕接近边缘，必须停止旧自动滚动速度。
+    sendMouse(command);
+    if ( !context.isDragging || context.mouseCameraId != "Preview" ||
+         context.dragCameraId != "Preview" ||
+         !near(context.previewEdgeScrollVelocity, 0.0) ) {
+        XERROR("Unprojected mouse reused plane coordinates for edge scrolling");
+        return false;
+    }
+    command.cameraId = "Basic2DCanvas";
+    command.mouseX   = 1500.0F;
+    sendMouse(command);
+    // 拖动相机已锁定，另一个窗口的悬停不能抢走所属相机和最后位置。
+    if ( context.mouseCameraId != "Preview" ||
+         !near(context.lastMousePos.x, 500.0) ) {
+        XERROR("Another camera stole an active unprojected drag");
+        return false;
+    }
+    // 切回原会话的辅助相机，后续锁定测试只在这一会话内运行。
+    command.cameraId   = "Preview";
+    command.mouseX     = 1600.0F;
+    command.isHovering = false;
+    sendMouse(command);
+    if ( !context.isDragging || context.mouseCameraId != "Preview" ||
+         !near(context.lastMousePos.x, 1600.0) ) {
+        XERROR("Unprojected drag stopped when leaving the physical viewport");
+        return false;
+    }
+    // 无效视口不能通过活动拖动的续拖分支写入位置，但释放仍必须可靠收尾。
+    command.mouseX        = 1700.0F;
+    command.viewportWidth = 0.0F;
+    sendMouse(command);
+    if ( !near(context.lastMousePos.x, 1600.0) ) {
+        XERROR(
+            "Unprojected drag accepted coordinates without a valid viewport");
+        return false;
+    }
+    command.isDragging = false;
+    sendMouse(command);
+    if ( context.isDragging || context.isMouseInCanvas ||
+         !context.mouseCameraId.empty() || !context.dragCameraId.empty() ||
+         !near(context.previewEdgeScrollVelocity, 0.0) ) {
+        XERROR("Unprojected auxiliary drag did not release its camera state");
+        return false;
+    }
+
+    // 普通二维预览仍按真实局部像素计算边缘速度，缺省标志不得禁用旧功能。
+    command.isUnprojected = false;
+    command.viewportWidth = 1000.0F;
+    command.mouseX        = 500.0F;
+    command.mouseY        = 5.0F;
+    command.isHovering    = true;
+    command.isDragging    = true;
+    sendMouse(command);
+    return context.isDragging && context.previewEdgeScrollVelocity > 0.0;
+}
+
+/// @brief 验证画布外平面像素复用既有世界矩形框选和对象拖动规则。
+/// @details 横移相机使玩家物件位于原二维视口外；输入直接表示逆投影后的平面点。
+/// 不引用 Canvas 层数学 helper，逻辑只负责连续轨道、时间、选择与动作语义。
+/// @par 框选语义
+/// 框选端点仍记录秒时间与连续轨道位置，不增加屏幕四边形数据。
+/// 原二维轴对齐矩形经过透视显示后会成为四边形，逻辑集合保持不变。
+/// 因而此处直接输入平面点，而不是把屏幕矩形四角取外包框。
+/// 该边界避免观察摄像机改变同一手势覆盖的谱面对象集合。
+/// @par 场景
+/// 固定视口宽一千像素，相机横移一千一百像素。
+/// 玩家轨道区因此整体处于旧二维视口外，所有输入横坐标均大于视口宽度。
+/// 目标 Note 位于玩家第二轨，哨兵 Note 位于同时间的第四轨。
+/// 两个对象故意使用相同时间，确保横向筛选也参与最后的选择判定。
+/// @par 框选端点
+/// 起点与终点从相反的 Y 方向建立区域，验证时间端点不被提前排序或钳制。
+/// 横向使用小数轨道边界，避免只验证整轨吸附的退化情况。
+/// 通过 ScrollCache 计算预期时间，不把固定像素差当作固定秒数。
+/// 框选以真实 Start/Update/End 命令进入工具，再调用选择脏刷新入口。
+/// 选择结果检查实体身份，不能仅以数量正确判定通过。
+/// @par 拖动事务
+/// 框选完成后保留 Marquee 工具，命中实体拖动应继续委托既有 Move 工具。
+/// 按下命令明确携带 Head，避免测试依赖上一帧共享悬停部位。
+/// 拖动目标仍属于玩家区，不混入跨数据域转换或资源查找行为。
+/// 更新命令关闭吸附，只验证原平面像素到轨道和时间的换算。
+/// 松开后不应残留 isDragging，整次移动只生成一个撤销项。
+/// 撤销恢复原始轨道和时间，哨兵对象不能被一起移动。
+/// @par 测试边界
+/// 这里不验证透视图像的裁剪、拾取扩大尺寸或 GPU 矩阵上传。
+/// 若本用例通过而屏幕拖动错位，应先检查 UI 使用了哪一代观察矩阵。
+/// 若只有框选边缘错位，应检查世界矩形与屏幕矩形是否被错误混用。
+/// 若对象目标正确但撤销失败，应检查 GrabTool 的动作快照而非逆投影。
+/// @return 框选选中预期对象且拖动、释放、撤销均正确时返回 true。
+bool testPlaneCoordinatesReuseMarqueeAndDrag()
+{
+    MMM::Logic::SessionContext context;
+    configureObjectEditingCanvas(context);
+    context.cameras.at("Basic2DCanvas").horizontalOffsetX = 1100.0F;
+    context.currentTool = MMM::Logic::EditTool::Marquee;
+    const auto entity   = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        entity,
+        MMM::Logic::NoteComponent{ .m_timestamp = 1.0, .m_trackIndex = 1 });
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(entity);
+    // 另一轨上的哨兵防止框选仅凭时间或原视口边界扩大选择集合。
+    const auto outside = context.noteRegistry.create();
+    context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
+        outside,
+        MMM::Logic::NoteComponent{ .m_timestamp = 1.0, .m_trackIndex = 3 });
+    context.noteRegistry.emplace<MMM::Logic::InteractionComponent>(outside);
+    context.sortedNoteEntities     = { entity, outside };
+    context.sortedNoteMaxEndPrefix = { 1.0, 1.0 };
+    auto* cache =
+        context.timelineRegistry.ctx().find<MMM::Logic::System::ScrollCache>();
+    if ( !cache ) return false;
+    const double currentAbsY = cache->getAbsY(context.animateTime);
+    MMM::Logic::InteractionController controller(context);
+    controller.handleCommand(
+        MMM::Logic::CmdStartMarquee{ "Basic2DCanvas", 1290.0F, 350.0F, false });
+    controller.handleCommand(MMM::Logic::CmdUpdateMarquee{ 1410.0F, 250.0F });
+    controller.handleCommand(MMM::Logic::CmdEndMarquee{});
+    controller.updateMarqueeSelection();
+    // 两点建立世界轴对齐框，连续轨道边缘与反向时间端点都不应被钳制。
+    if ( context.marqueeBoxes.size() != 1U ||
+         !near(context.marqueeBoxes.front().startTrack, 0.9) ||
+         !near(context.marqueeBoxes.front().endTrack, 2.1) ||
+         !near(context.marqueeBoxes.front().startTime,
+               cache->getTime(currentAbsY - 50.0)) ||
+         !near(context.marqueeBoxes.front().endTime,
+               cache->getTime(currentAbsY + 50.0)) ||
+         !context.selectedNoteEntities.contains(entity) ||
+         context.selectedNoteEntities.contains(outside) ) {
+        XERROR("Plane-coordinate marquee changed world rectangle selection");
+        return false;
+    }
+
+    const float targetY =
+        300.0F - static_cast<float>(cache->getAbsY(1.5) - currentAbsY);
+    controller.handleCommand(MMM::Logic::CmdStartDrag{
+        .entity   = entity,
+        .cameraId = "Basic2DCanvas",
+        .hitPart  = static_cast<std::uint8_t>(MMM::Logic::HoverPart::Head),
+    });
+    controller.handleCommand(
+        MMM::Logic::CmdUpdateDrag{ "Basic2DCanvas", 1450.0F, targetY, true });
+    controller.handleCommand(MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+    const auto& moved =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(entity);
+    // 关闭吸附以检验像素到时间的原始换算，世界位置与一次撤销事务同时验收。
+    if ( moved.m_trackIndex != 2 || !near(moved.m_timestamp, 1.5) ||
+         context.isDragging || context.actionStack.getUndoStackSize() != 1U ) {
+        XERROR("Plane-coordinate drag changed track/time or release semantics");
+        return false;
+    }
+    context.actionStack.undo(context);
+    const auto& restored =
+        context.noteRegistry.get<MMM::Logic::NoteComponent>(entity);
+    return restored.m_trackIndex == 1 && near(restored.m_timestamp, 1.0) &&
+           context.noteRegistry.get<MMM::Logic::NoteComponent>(outside)
+                   .m_trackIndex == 3;
 }
 
 /// @brief 验证新建正式音符直接增量维护领域谱面和渲染统计缓存。
@@ -4070,8 +4361,8 @@ bool testComposeLessonSegmentReplacement()
         context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
             entity,
             MMM::Logic::NoteComponent{ .m_type       = MMM::NoteType::NOTE,
-                                       .m_timestamp  = time,
-                                       .m_trackIndex = track });
+                                         .m_timestamp  = time,
+                                         .m_trackIndex = track });
     };
     addActual(0.5, 0);   // 前一段的用户成果。
     addActual(1.5, 1);   // 返回目标段内的错误物件。
@@ -5931,25 +6222,25 @@ bool testSelectedPolylineTailEraseWithOtherSelection()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-            .type       = MMM::NoteType::NOTE,
-            .timestamp  = 1.0,
-            .duration   = 0.0,
-            .trackIndex = 0,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::NOTE,
+              .timestamp  = 1.0,
+              .duration   = 0.0,
+              .trackIndex = 0,
+              .dtrack     = 0,
         },
         {
-            .type       = MMM::NoteType::HOLD,
-            .timestamp  = 2.0,
-            .duration   = 0.5,
-            .trackIndex = 1,
-            .dtrack     = 0,
+              .type       = MMM::NoteType::HOLD,
+              .timestamp  = 2.0,
+              .duration   = 0.5,
+              .trackIndex = 1,
+              .dtrack     = 0,
         },
         {
-            .type       = MMM::NoteType::FLICK,
-            .timestamp  = 3.0,
-            .duration   = 0.0,
-            .trackIndex = 1,
-            .dtrack     = 1,
+              .type       = MMM::NoteType::FLICK,
+              .timestamp  = 3.0,
+              .duration   = 0.0,
+              .trackIndex = 1,
+              .dtrack     = 1,
         },
     };
 
@@ -8077,7 +8368,7 @@ bool testCompositeConversionUsesTypedIdentity()
                 .entity = sampleEntity,
                 .before = context.sampleRegistry
                               .get<MMM::Logic::SampleComponent>(sampleEntity),
-                .after  = std::nullopt,
+                .after          = std::nullopt,
                 .beforeSelected = true,
             },
         }));
@@ -8172,11 +8463,11 @@ bool testMarqueeSelectsTypedSamplesOnlyOnMainCanvas()
     context.sortedSampleMaxEndPrefix = { 1.0 };
     context.marqueeBoxes             = {
         MMM::Logic::MarqueeBox{
-            .startTime  = 0.9,
-            .endTime    = 1.1,
-            .startTrack = 4.05F,
-            .endTrack   = 4.95F,
-            .cameraId   = "Basic2DCanvas",
+                        .startTime  = 0.9,
+                        .endTime    = 1.1,
+                        .startTrack = 4.05F,
+                        .endTrack   = 4.95F,
+                        .cameraId   = "Basic2DCanvas",
         },
     };
     context.isMarqueeSelectionDirty = true;
@@ -8255,10 +8546,10 @@ bool testMarqueeKeepsOffscreenHoldsOnRelease()
     auto&      shared = context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
         sharedEntity,
         MMM::Logic::NoteComponent{
-            .m_type       = MMM::NoteType::HOLD,
-            .m_timestamp  = 1.0,
-            .m_duration   = 0.4,
-            .m_trackIndex = 2,
+                 .m_type       = MMM::NoteType::HOLD,
+                 .m_timestamp  = 1.0,
+                 .m_duration   = 0.4,
+                 .m_trackIndex = 2,
         });
     shared.m_metadata.note_properties[MMM::NoteMetadataType::MMM]
                                      ["hold_independent_end_hs"] = "false";
@@ -8269,11 +8560,11 @@ bool testMarqueeKeepsOffscreenHoldsOnRelease()
     context.sortedNoteMaxEndPrefix = { 1.4, 1.4 };
     context.marqueeBoxes           = {
         MMM::Logic::MarqueeBox{
-            .startTime  = 0.8,
-            .endTime    = 1.6,
-            .startTrack = 0.8F,
-            .endTrack   = 3.2F,
-            .cameraId   = "Basic2DCanvas",
+                      .startTime  = 0.8,
+                      .endTime    = 1.6,
+                      .startTrack = 0.8F,
+                      .endTrack   = 3.2F,
+                      .cameraId   = "Basic2DCanvas",
         },
     };
 
@@ -8685,6 +8976,8 @@ int main()
                    testTrackCountActionMigratesAllSamples() &&
                    testSessionSelectsKeyCountLayout() &&
                    testBackgroundSessionPublishesCanvasHover() &&
+                   testUnprojectedMouseSessionBoundary() &&
+                   testPlaneCoordinatesReuseMarqueeAndDrag() &&
                    testDeferredNoteSyncDoesNotKeepRenderSnapshotDirty() &&
                    testQueuedBrushUsesKeyCountLayout() &&
                    testTrackCountOverflowIsRejectedAtomically() &&

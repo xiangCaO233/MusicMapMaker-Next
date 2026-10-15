@@ -65,7 +65,7 @@ vk::Rect2D Basic2DCanvas::getCanvasScissor(
     Common::Render::CanvasScissor scissor) const
 {
     // 包围框允许少量边缘溢出，精确梯形裁剪留待后续实验。
-    // 此处不重建几何，二维鼠标拾取由观察模式入口单独禁用。
+    // 此处只裁剪绘制范围，鼠标拾取由独立的平面逆投影处理。
     // 零角度不经浮点四角投影，保持旧二维裁剪像素完全一致。
     if ( m_isObservationCamera ) {
         scissor = planarObservationScissor(scissor,

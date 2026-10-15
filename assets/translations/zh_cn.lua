@@ -268,7 +268,7 @@ return {
 	["ui.settings.debug.short"] = "调试",
 	["ui.settings.debug.rendering"] = "渲染调试",
 	["ui.settings.debug.canvas_camera_angle"] = "画布摄像机俯仰角",
-	["ui.settings.debug.canvas_camera_angle_tooltip"] = "实验性只读观察模式：画布高度定义为 1 世界单位，背景保持固定。任一摄像机参数偏离默认值时暂停二维编辑，但可继续播放；右键拖动调整俯仰与水平角，滚轮调整距离。参数恢复默认值后回到二维编辑。",
+	["ui.settings.debug.canvas_camera_angle_tooltip"] = "实验性摄像机视角：支持物件拾取、沿谱面平面的框选和拖拽。Alt+右键拖动旋转，Alt+滚轮调整距离；普通鼠标继续编辑，背景保持固定。布局调节请先恢复默认二维视角。",
 	["ui.settings.debug.canvas_camera_yaw"] = "画布摄像机水平旋转角",
 	["ui.settings.debug.canvas_camera_distance"] = "画布摄像机观察距离",
 	["ui.settings.debug.canvas_camera_actions"] = "观察视角操作",
