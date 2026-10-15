@@ -75,6 +75,7 @@ bool BpmMeasurementToolView::restoreAudioMarkers(AnalysisResult& result)
 /// @details 文件线程只返回值语义结果，不回调已关闭的工具。
 /// 使用零超时检查，导出期间音频和 UI 继续运行。
 /// 成功状态区分内嵌和配套模式，后者明确显示配套路径。
+/// AU XMP 始终随音频导出，独立展示路径以便用户一起分享。
 /// 所有字符串提交都在 UI 所属线程完成。
 /// @warning 每次 UI 更新调用；不得新增文件探测或阻塞 future 等待。
 void BpmMeasurementToolView::consumeMarkerExport()
@@ -96,6 +97,11 @@ void BpmMeasurementToolView::consumeMarkerExport()
         // 配套路径必须明确展示，用户分享时才能带上完整标记。
         m_markerStatus = TR_FMT("ui.tools.bpm_measure.markers_sidecar",
                                 Config::pathToUtf8(result.sidecarPath));
+    }
+    if ( result.success ) {
+        // XMP 是 AU 的外部标记载体，内嵌成功也不能隐藏此配套路径。
+        // 固定格式名不需要翻译；沿用成功提示所在区域，避免新增交互步骤。
+        m_markerStatus += "\nAU XMP: " + Config::pathToUtf8(result.xmpPath);
     }
 }
 

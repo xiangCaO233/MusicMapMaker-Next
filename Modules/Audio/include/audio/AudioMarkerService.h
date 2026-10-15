@@ -61,6 +61,8 @@ struct AudioMarkerExportResult {
     std::string error;
     /// @brief 不支持内嵌的容器使用此配套路径，必须与音频一起传递。
     std::filesystem::path sidecarPath;
+    /// @brief AU 的同名 XMP 配套文件；成功后须与音频一起传递并同步改名。
+    std::filesystem::path xmpPath;
 };
 
 /// @brief 音频元数据读写服务，不向音频样本混入节拍声。
@@ -78,7 +80,7 @@ public:
     /// @brief 读取内嵌章节、测量 BPM 或版本化配套文件。
     /// @warning 低频文件路径；需在后台线程或显式文件操作中调用。
     static AudioMarkerReadResult read(const std::filesystem::path& path);
-    /// @brief 保持原格式复制编码数据并写入标记，必要时使用配套文件。
+    /// @brief 保留编码数据并写入标记，同时生成 AU XMP；必要时另存精确配套数据。
     /// @warning 后台文件事务；会遍历音频包，但不修改原文件或执行实时 DSP。
     static AudioMarkerExportResult exportFile(
         const AudioMarkerExportOptions& options);

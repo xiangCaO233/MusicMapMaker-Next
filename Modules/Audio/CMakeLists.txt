@@ -55,6 +55,8 @@ add_library(
   src/AudioMarkerService.cpp
   src/AudioMarkerContainer.cpp
   src/AudioMarkerWave.cpp
+  # Adobe XMP 配套标记与声音编码分离，所有导出格式共享相同的可见时间点。
+  src/AudioMarkerXmp.cpp
   src/AudioSpeedExportService.cpp
   src/KeySoundControl.cpp
   src/SoundEffectPool.cpp)
@@ -241,7 +243,8 @@ mmm_add_test_executable(Audio AudioMarkerServiceTest
                         tests/AudioMarkerServiceTest.cpp)
 target_link_libraries(AudioMarkerServiceTest PRIVATE Audio 3rd_ffmpeg Log
                                                      Runtime)
-# 来源和输出均为临时夹具，不向源码资源目录写入任何音频。
+# 声音夹具与输出只写构建树；用户提供的 AU 13 FLAC XMP 原样保存为只读 LFS 基线。
 mmm_register_test_case(
   NAME AudioMarkerServiceTest COMMAND AudioMarkerServiceTest
-  "${CMAKE_BINARY_DIR}/test_output/audio_markers")
+  "${CMAKE_BINARY_DIR}/test_output/audio_markers"
+  "${MMM_TEST_RESOURCE_DIR}/audio_markers/audition-13-flac-cue.xmp")
