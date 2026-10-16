@@ -209,29 +209,30 @@ void CameraLayoutEditor::drawParameterWindow(const std::string&    id,
                        actions,
                        UI::Sizing::Grow(),
                        UI::Sizing::Fixed(rowHeight));
-        // 长度是可见范围，不是变换缩放；提交后由逻辑线程补齐远端物件。
-        // Enter 确认精确输入，未提交的中间文本不触发昂贵的配置广播。
+        // 长度是可见范围，不是变换缩放；变化后由逻辑线程补齐远端物件。
+        // 拖动逐帧更新预览；Ctrl+点击允许输入精确数值，无需 Enter 才生效。
         // 单位始终是原窗口高度，不受相机位置、俯仰或滚动速度影响。
         // 只允许向远端延长，避免缩短到判定线之前产生不可编辑区域。
-        // 用局部值接收文本输入；只有确认成功才改变权威视觉配置。
-        // 无步进按钮，按住鼠标不会连续发布完整配置。
-        // 切回元素布局不清空长度，退出调整后仍使用最后确认值。
+        // 用局部值接收输入，拒绝非法值后才改变权威视觉配置。
+        // 静止或抵达边界时不产生变化，调用方不重复发布配置。
+        // 切回元素布局不清空长度，退出调整后仍使用最后调整值。
         root.addElement(
             "length",
             UI::Sizing::Grow(),
             UI::Sizing::Fixed(rowHeight +
                               ImGui::GetTextLineHeightWithSpacing()),
             [&](Clay_BoundingBox rect, bool) {
-                ImGui::TextUnformatted("画布长度（1–32 倍，Enter 确认）");
+                ImGui::TextUnformatted("画布长度（拖动调整，Ctrl+点击输入）");
                 ImGui::SetNextItemWidth(rect.width);
                 float length = visual.canvasCameraLength;
                 // 拒绝非有限输入，保持投影与候选区间查询的有限边界。
-                if ( ImGui::InputFloat("##CanvasLength",
-                                       &length,
-                                       0,
-                                       0,
-                                       "%.3f",
-                                       ImGuiInputTextFlags_EnterReturnsTrue) &&
+                if ( ImGui::DragFloat("##CanvasLength",
+                                      &length,
+                                      0.02F,
+                                      1.0F,
+                                      32.0F,
+                                      "%.3f",
+                                      ImGuiSliderFlags_AlwaysClamp) &&
                      std::isfinite(length) )
                     visual.canvasCameraLength = std::clamp(length, 1.0F, 32.0F);
             });
