@@ -157,6 +157,11 @@ bool checkWindows()
         const auto* preview =
             ImGui::FindWindowByName("实际视角预览###CameraLayoutPreview_test");
         passed &= (preview && preview->Active) == mode;
+        // 参数窗口必须与预览同帧显示或撤销，不能遗留独立编辑入口。
+        // 反复进入模式也覆盖专用 Clay 上下文的释放与重建。
+        const auto* parameters =
+            ImGui::FindWindowByName("摄像机参数###CameraLayoutParameters_test");
+        passed &= (parameters && parameters->Active) == mode;
     }
     // 退出只撤掉辅助视图，不回滚已经确认的位置。
     passed &= visual.canvasCameraPoseEnabled;

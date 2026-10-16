@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ui/layout/CLayWrapperCore.h"
 #include <array>
 #include <glm/mat4x4.hpp>
 #include <glm/vec2.hpp>
@@ -18,9 +19,17 @@ namespace MMM::Canvas
 class CameraLayoutEditor
 {
 public:
+    /// @brief 默认构造不分配 Clay 内存，首次显示参数窗口时才创建。
+    CameraLayoutEditor() = default;
+    /// @brief 布局退出时释放参数窗口专用的 Clay 内存。
+    ~CameraLayoutEditor();
+    /// @brief 禁止复制窗口上下文所有权，避免重复释放。
+    CameraLayoutEditor(const CameraLayoutEditor&) = delete;
+    /// @brief 禁止覆盖现有窗口上下文所有权。
+    CameraLayoutEditor& operator=(const CameraLayoutEditor&) = delete;
     /// @brief 查询本帧是否绘制摄像机操作空间。
     bool cameraMode() const { return m_cameraMode; }
-    /// @brief 在调用方工具窗口中绘制模式切换和精确数值控件。
+    /// @brief 在调用方工具窗口中仅绘制元素与相机模式切换。
     /// @warning 每帧只访问 UI 线程配置，不获取会话锁或执行磁盘 IO。
     void drawControls(Config::VisualConfig& visual);
     /// @brief 绘制三维操作空间及实际视角预览。
@@ -30,6 +39,12 @@ public:
                 ImTextureID texture, Config::VisualConfig& visual);
 
 private:
+    /// @brief 参数窗口独享的 Clay 上下文，只在相机模式存在。
+    UI::CLayWrapperCore::WindowContext m_parameterLayout{};
+    /// @brief 在独立窗口中用 Clay 排列工具和精确数值。
+    /// @warning 每帧固定控件；上下文仅在首次显示时分配。
+    void drawParameterWindow(const std::string&    id,
+                             Config::VisualConfig& visual);
     /// @brief 无 GPU 回归仅控制模式切换，实际绘制仍调用生产入口。
     friend struct CameraLayoutEditorTestAccess;
     /// @brief 摄像机模式与元素模式互斥；默认进入正视元素布局。
