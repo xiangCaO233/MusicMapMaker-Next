@@ -209,6 +209,32 @@ void CameraLayoutEditor::drawParameterWindow(const std::string&    id,
                        actions,
                        UI::Sizing::Grow(),
                        UI::Sizing::Fixed(rowHeight));
+        // 长度是可见范围，不是变换缩放；提交后由逻辑线程补齐远端物件。
+        // Enter 确认精确输入，未提交的中间文本不触发昂贵的配置广播。
+        // 单位始终是原窗口高度，不受相机位置、俯仰或滚动速度影响。
+        // 只允许向远端延长，避免缩短到判定线之前产生不可编辑区域。
+        // 用局部值接收文本输入；只有确认成功才改变权威视觉配置。
+        // 无步进按钮，按住鼠标不会连续发布完整配置。
+        // 切回元素布局不清空长度，退出调整后仍使用最后确认值。
+        root.addElement(
+            "length",
+            UI::Sizing::Grow(),
+            UI::Sizing::Fixed(rowHeight +
+                              ImGui::GetTextLineHeightWithSpacing()),
+            [&](Clay_BoundingBox rect, bool) {
+                ImGui::TextUnformatted("画布长度（1–32 倍，Enter 确认）");
+                ImGui::SetNextItemWidth(rect.width);
+                float length = visual.canvasCameraLength;
+                // 拒绝非有限输入，保持投影与候选区间查询的有限边界。
+                if ( ImGui::InputFloat("##CanvasLength",
+                                       &length,
+                                       0,
+                                       0,
+                                       "%.3f",
+                                       ImGuiInputTextFlags_EnterReturnsTrue) &&
+                     std::isfinite(length) )
+                    visual.canvasCameraLength = std::clamp(length, 1.0F, 32.0F);
+            });
         // 提示参与同一纵向布局，窄窗口使用滚动而不挤压精确数值行。
         root.addElement(
             "help",
@@ -405,8 +431,16 @@ void CameraLayoutEditor::drawScene(ImVec2 origin, ImVec2 size,
                                             { halfWidth, -0.5F, 0 },
                                             { halfWidth, 0.5F, 0 },
                                             { -halfWidth, 0.5F, 0 } } };
+    // 白框向世界正 Y 延伸，底边和宽度不变，与真实内容坐标保持一致。
+    // 原始单位平面继续用于相机视锥，画布长度不能改变相机 FOV。
+    auto extendedPlane = plane;
+    extendedPlane[2].y += visual.canvasCameraExtension();
+    extendedPlane[3].y += visual.canvasCameraExtension();
     for ( int i = 0; i < 4; ++i )
-        line(plane[i], plane[(i + 1) % 4], IM_COL32(235, 235, 235, 255), 2);
+        line(extendedPlane[i],
+             extendedPlane[(i + 1) % 4],
+             IM_COL32(235, 235, 235, 255),
+             2);
     // 相机对象与最终渲染共用同一世界变换。
     // 局部负 Z 为观察前方。
     // 移动坐标轴以相机位置为原点，但始终沿世界轴。

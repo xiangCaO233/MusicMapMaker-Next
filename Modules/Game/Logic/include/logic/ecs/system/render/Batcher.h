@@ -37,6 +37,9 @@ struct Batcher {
     float m_noteTextureOffsetY{ 0.0F };
     /// @brief 尚未提交的连续索引范围及其绘制状态。
     Common::Render::CanvasDrawCmd currentCmd;
+    /// @brief 可投影内容允许的最小逻辑 Y；二维批次默认在零处截断。
+    /// @note 三维主画布显式设置负边界，GPU 裁剪仍在投影后限制到视口。
+    float m_minScissorY{ 0.0F };
 
     /// @brief 在现有快照末尾开始追加，不清除调用方已生成的几何。
     /// @param s 非空输出快照，图集映射须在绘制前准备完成。
@@ -65,11 +68,15 @@ struct Batcher {
     /// @warning 热路径仅转换边界及追加命令，不执行 GPU 同步。
     void setScissor(float x, float y, float w, float h)
     {
-        // 向外取整保留边缘像素，负边界截到零后再计算非负宽高。
+        // 向外取整保留边缘像素；三维内容可以位于原视口顶部之外。
+        // 只有显式启用负边界的批次保留这些坐标，普通二维行为不变。
+        // 宽高仍为非负值，逻辑裁剪不是可直接传给 Vulkan 的物理裁剪。
         int32_t ix = static_cast<int32_t>(std::max(0.0f, std::floor(x)));
-        int32_t iy = static_cast<int32_t>(std::max(0.0f, std::floor(y)));
+        int32_t iy =
+            static_cast<int32_t>(std::max(m_minScissorY, std::floor(y)));
         int32_t ir = static_cast<int32_t>(std::max(0.0f, std::ceil(x + w)));
-        int32_t ib = static_cast<int32_t>(std::max(0.0f, std::ceil(y + h)));
+        int32_t ib =
+            static_cast<int32_t>(std::max(m_minScissorY, std::ceil(y + h)));
 
         Common::Render::CanvasScissor nextScissor;
         nextScissor.x      = ix;

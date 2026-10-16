@@ -258,6 +258,11 @@ struct VisualConfig {
     float debugCanvasCameraDistance{ DEFAULT_DEBUG_CANVAS_CAMERA_DISTANCE };
     /// @brief 使用布局编辑器保存的自由相机；关闭时兼容旧观察参数。
     bool canvasCameraPoseEnabled{ false };
+    /// @brief 三维画布长度，以原始画布高度为单位，仅向远端扩展。
+    float canvasCameraLength{ 1.0F };
+    /// @brief 返回需额外绘制的高度倍数；二维模式不扩展。
+    /// @warning 快照热路径常量检查，非法值回退为无扩展。
+    float canvasCameraExtension() const;
     /// @brief 世界位置，画布中心为原点，高度为一单位，Z 朝向观察者。
     std::array<float, 3> canvasCameraPosition{ 0.0F, 0.0F, 1.0F };
     /// @brief 相机局部姿态的 XYZ 欧拉角（度），零姿态朝向世界负 Z。

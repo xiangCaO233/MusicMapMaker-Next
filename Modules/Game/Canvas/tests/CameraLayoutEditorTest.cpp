@@ -1,13 +1,21 @@
 #include "canvas/CameraLayoutEditor.h"
 #include "canvas/CameraLayoutMath.h"
+#include "config/EditorConfig.h"
 #include "config/VisualConfig.h"
 #include "log/colorful-log.h"
+#include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/TimelineComponent.h"
+#include "logic/ecs/components/TransformComponent.h"
+#include "logic/ecs/system/NoteRenderSystem.h"
+#include "logic/ecs/system/ScrollCache.h"
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <glm/vec4.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <nlohmann/json.hpp>
+#include <vector>
 
 namespace MMM::Canvas
 {
@@ -30,6 +38,133 @@ struct CameraLayoutEditorTestAccess {
 }  // namespace MMM::Canvas
 namespace
 {
+/// @brief 延长真实可见范围必须增加远端音符，而不是拉伸现有物件。
+/// @return 一倍与三倍画布的物件、裁剪、尺寸及配置往返均正确时返回 true。
+/// @note 使用独占 UV 识别音符，不把辅助图元数量误认作物件数量。
+/// @note 两轮生成复用同一索引和滚动映射，唯一变量是画布长度。
+bool checkCanvasLength()
+{
+    using namespace MMM;
+    // 独立注册表不连接会话或 GPU，直接检查生产快照几何。
+    // 每次调用构建全新夹具，不读取用户正在编辑的谱面。
+    // 默认速度缓存使用正式 rebuild 路径，不能以简化线性函数替代。
+    // 自动游玩关闭，避免物件因判定状态消失而干扰可见范围断言。
+    // 拍线单独隐藏，便于把几何差异归因到真实音符。
+    entt::registry       notes, samples, timeline;
+    Config::EditorConfig config;
+    config.visual.canvasCameraPoseEnabled = true;
+    config.visual.simulateAutoplay        = false;
+    config.visual.beatLineDisplayMode     = Config::BeatLineDisplayMode::Hidden;
+    auto& cache = timeline.ctx().emplace<Logic::System::ScrollCache>();
+    cache.rebuild(timeline, config, nullptr);
+    // 缓存逆映射让物件分别落在判定线上方 100 和 1000 像素。
+    // 不假定默认 BPM 或滚速，后一个物件必须位于原视口之外。
+    // 判定线固定在 550，因此两个头部分别落在 Y=450 和 Y=-450。
+    // 三倍高度向远端多出 1200 像素，足以包含完整远端音符。
+    // 物件位于同一轨，避免横向轨宽差异掩盖纵向缩放错误。
+    // 时间按递增滚动距离插入，与常规正速缓存的排序要求一致。
+    std::vector<entt::entity> sortedNotes;
+    for ( double distance : { 100.0, 1000.0 } ) {
+        const auto           entity = notes.create();
+        Logic::NoteComponent note;
+        note.m_type       = NoteType::NOTE;
+        note.m_timestamp  = cache.getTime(cache.getAbsY(0) + distance);
+        note.m_trackIndex = 0;
+        notes.emplace<Logic::NoteComponent>(entity, note);
+        notes.emplace<Logic::TransformComponent>(entity);
+        sortedNotes.push_back(entity);
+    }
+    // 渲染器借用排序索引，局部向量必须存活到两轮生成结束。
+    // TransformComponent 与生产实体保持一致，让候选走正常渲染路径。
+    // 不设置 hovered 或 selected，避免描边重复顶点影响四角数量。
+    // 两轮都从空快照开始，防止上一轮几何残留假装新增远端内容。
+    notes.ctx().emplace<const std::vector<entt::entity>*>(&sortedNotes);
+    std::vector<glm::vec2> nearVertices;
+    for ( float length : { 1.0F, 3.0F } ) {
+        config.visual.canvasCameraLength = length;
+        Logic::RenderSnapshot snapshot;
+        snapshot.hasBeatmap = true;
+        // 音符独占此 UV 区域，底板和纯色线不会被计入。
+        // 非正方形 UV 保留真实纹理比例，可发现高度被独立放大的错误。
+        // 不依赖磁盘皮肤图片，测试结果不受当前主题或纹理资源影响。
+        // 直接调用完整生成入口，同时覆盖布局上界向物件筛选的传递。
+        snapshot.uvMap.emplace(
+            static_cast<std::uint32_t>(Logic::TextureID::Note),
+            glm::vec4(0.2F, 0.3F, 0.1F, 0.05F));
+        Logic::System::NoteRenderSystem::generateSnapshot(notes,
+                                                          samples,
+                                                          {},
+                                                          {},
+                                                          timeline,
+                                                          {},
+                                                          &snapshot,
+                                                          "Basic2DCanvas",
+                                                          0,
+                                                          800,
+                                                          600,
+                                                          550,
+                                                          4,
+                                                          0,
+                                                          0,
+                                                          config,
+                                                          600);
+        std::vector<glm::vec2> currentNear;
+        int                    farCount = 0;
+        for ( const auto& vertex : snapshot.vertices ) {
+            if ( vertex.uv.u < 0.19F || vertex.uv.u > 0.31F ||
+                 vertex.uv.v < 0.29F || vertex.uv.v > 0.36F )
+                continue;
+            // Tap 为四顶点；负 Y 物件只允许在扩展范围后出现。
+            // 只比较 UV 命中的顶点，不能把底板变长误当作物件变多。
+            // 近端四角按原始顺序记录，逐点对照同时检查宽高与锚点。
+            // 测试不把相机透视后的远小近大误认作源几何缩放。
+            if ( vertex.pos.y < 0 )
+                ++farCount;
+            else
+                currentNear.emplace_back(vertex.pos.x, vertex.pos.y);
+        }
+        if ( currentNear.size() != 4 || farCount != (length > 1 ? 4 : 0) )
+            return false;
+        if ( length == 1 ) nearVertices = currentNear;
+        // 逐顶点相等同时覆盖尺寸、位置和原有时间到像素比例。
+        else if ( currentNear != nearVertices )
+            return false;
+        if ( length > 1 ) {
+            // 只有几何没有有效裁剪仍会不可见，必须检查提交命令。
+            // 命令保存逻辑负坐标，渲染录制阶段才转换成非负屏幕矩形。
+            // 此断言能捕获批处理器仍把上界截到零的旧行为。
+            // 不要求所有批次扩展，背景与界面组件仍可使用屏幕空间。
+            if ( !std::any_of(snapshot.cmds.begin(),
+                              snapshot.cmds.end(),
+                              [](const auto& command) {
+                                  return command.scissor.y < 0;
+                              }) )
+                return false;
+        }
+    }
+    // 真实序列化保留长度，旧配置继续使用一倍高度。
+    // 每次从 JSON 创建新对象，不能由内存中的旧值补上遗漏字段。
+    // 删除键模拟旧版配置，而不是给该键显式填写默认值。
+    nlohmann::json saved = config.visual;
+    if ( saved.get<Config::VisualConfig>().canvasCameraLength != 3 )
+        return false;
+    saved.erase("canvasCameraLength");
+    if ( saved.get<Config::VisualConfig>().canvasCameraLength != 1 )
+        return false;
+    // 越界数值夹取，错误类型回退，不依赖异常捕获。
+    // 上限同时保护每帧候选数量与底板平铺开销。
+    // 字符串不能自动解析为长度，配置语义须与其它浮点字段一致。
+    // 这些读取不能修改原始配置对象，否则前面的三倍夹具可能污染默认值。
+    // 旧键缺失、数字越界和类型错误分别检查，覆盖三种不同恢复路径。
+    saved["canvasCameraLength"] = 1000;
+    if ( saved.get<Config::VisualConfig>().canvasCameraLength != 32 )
+        return false;
+    saved["canvasCameraLength"] = "invalid";
+    if ( saved.get<Config::VisualConfig>().canvasCameraLength != 1 )
+        return false;
+    return true;
+}
+
 /// @brief 比较投影后的屏幕位置，深度区间差异不影响二维视觉兼容。
 bool sameScreen(const glm::mat4& a, const glm::mat4& b)
 {
@@ -231,7 +366,7 @@ bool checkWindows()
 /// @brief 执行相机迁移和模式生命周期回归，不读写用户配置。
 int main()
 {
-    if ( !checkMath() || !checkWindows() ) {
+    if ( !checkMath() || !checkCanvasLength() || !checkWindows() ) {
         XERROR("CameraLayoutEditorTest failed");
         return 1;
     }

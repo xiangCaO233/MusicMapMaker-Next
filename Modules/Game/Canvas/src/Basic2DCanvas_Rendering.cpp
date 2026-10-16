@@ -32,6 +32,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <system_error>
@@ -83,6 +84,16 @@ vk::Rect2D Basic2DCanvas::getCanvasScissor(
     // 包围框允许少量边缘溢出，精确梯形裁剪留待后续实验。
     // 此处只裁剪绘制范围，鼠标拾取由独立的平面逆投影处理。
     // 零角度不经浮点四角投影，保持旧二维裁剪像素完全一致。
+    // 元素布局临时使用正交视角，快照仍可能含三维远端的负坐标。
+    // Vulkan 物理裁剪不允许负偏移，正交路径先与窗口高度取交集。
+    // 三维路径必须先投影，不能在逻辑零点截掉远端物件。
+    if ( !m_isObservationCamera && scissor.y < 0 ) {
+        const auto bottom =
+            static_cast<std::int64_t>(scissor.y) + scissor.height;
+        scissor.y      = 0;
+        scissor.height = static_cast<std::uint32_t>(
+            std::clamp<std::int64_t>(bottom, 0, m_logicalHeight));
+    }
     if ( m_isObservationCamera ) {
         scissor = planarObservationScissor(scissor,
                                            m_observationProjection,

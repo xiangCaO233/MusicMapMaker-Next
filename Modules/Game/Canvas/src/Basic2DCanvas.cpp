@@ -2832,7 +2832,10 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         // 输入映射与待录制的轨道投影共用矩阵；背景仍使用自己的屏幕投影。
         // 每帧只构造一次平面逆矩阵，后续拾取和拖动都复用固定大小缓存。
         auto& cameraVisual = Config::AppConfig::instance().getVisualConfig();
-        const bool hasCameraScene =
+        // 长度以确认输入提交，只有数值发生变化才发布完整配置。
+        // 普通相机拖动仅影响 UI 投影，不进入逻辑配置发布路径。
+        const float previousExtension = cameraVisual.canvasCameraExtension();
+        const bool  hasCameraScene =
             m_currentSnapshot && m_currentSnapshot->hasBeatmap;
         // 模式切换先于本帧投影；相机预览借用同一离屏纹理，不创建第二套 GPU
         // 资源。
@@ -2844,6 +2847,11 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                 canvasSize,
                 (ImTextureID)(VkDescriptorSet)getDescriptorSet(),
                 cameraVisual);
+        // 扩展范围由逻辑线程生成真实物件，通过既有配置命令异步生效。
+        // 输入框按 Enter 提交，避免每次按键或稳定帧广播配置。
+        if ( previousExtension != cameraVisual.canvasCameraExtension() )
+            engine.setEditorConfig(
+                Config::AppConfig::instance().getEditorConfig());
         const bool cameraViewEnabled =
             hasCameraScene && !layoutEditing &&
             (cameraVisual.canvasCameraPoseEnabled ||

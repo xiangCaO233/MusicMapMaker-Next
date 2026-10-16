@@ -53,6 +53,17 @@ std::array<float, 4> sanitizeBackgroundLevelColor(
 }
 }  // namespace
 
+/// @brief 提供远端扩展倍数，不改变坐标单位、滚动速度或判定线。
+/// @warning 每帧常量计算；直接构造的运行时配置也须拒绝非有限长度。
+float VisualConfig::canvasCameraExtension() const
+{
+    // 未启用三维观察时沿用原始可见范围，长度设置仍保留供下次使用。
+    if ( !canvasCameraPoseEnabled || !std::isfinite(canvasCameraLength) )
+        return 0;
+    // 上限约束可见候选与网格数量；一倍长度精确返回零扩展。
+    return std::clamp(canvasCameraLength, 1.0F, 32.0F) - 1.0F;
+}
+
 /// @brief 保存滑键特效范围；非法枚举值按兼容模式写出。
 /// @param j 接收稳定英文模式标识的 JSON 值。
 /// @param mode 只影响命中轨道范围，不影响皮肤动画序列选择。
@@ -1045,6 +1056,7 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
         { "debugCanvasCameraYawDegrees", config.debugCanvasCameraYawDegrees },
         { "debugCanvasCameraDistance", config.debugCanvasCameraDistance },
         { "canvasCameraPoseEnabled", config.canvasCameraPoseEnabled },
+        { "canvasCameraLength", config.canvasCameraLength },
         { "canvasCameraPosition", config.canvasCameraPosition },
         { "canvasCameraRotation", config.canvasCameraRotation },
         { "interactionHitboxScaleX", config.interactionHitboxScaleX },
@@ -1206,6 +1218,11 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
                              VisualConfig::DEFAULT_DEBUG_CANVAS_CAMERA_DISTANCE,
                              VisualConfig::MIN_DEBUG_CANVAS_CAMERA_DISTANCE,
                              VisualConfig::MAX_DEBUG_CANVAS_CAMERA_DISTANCE);
+    // 长度只影响远端可见范围，旧配置保持一倍高度。
+    // 限制最大范围以约束逐帧拍线和物件生成量，不允许无穷画布。
+    // 与数值输入共用合法区间，错误类型和非有限值使用默认值。
+    config.canvasCameraLength =
+        readObservationValue(j, "canvasCameraLength", 1.0F, 1.0F, 32.0F);
     // 自由相机与旧观察参数独立保存，缺失字段不改变旧配置的显示。
     // 旧配置缺失启用键时保持原观察模式，不能自动迁移为自由相机。
     // JSON 数字不能隐式解释为布尔开关。
