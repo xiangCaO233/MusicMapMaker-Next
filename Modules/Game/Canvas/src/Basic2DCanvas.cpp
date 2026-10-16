@@ -26,6 +26,7 @@
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/AnnotationTargetHint.h"
 #include "canvas/Basic2DCanvasInteraction.h"
+#include "canvas/CameraLayoutEditor.h"
 #include "canvas/CanvasTabTitle.h"
 #include "canvas/CollaborationPeerColor.h"
 #include "canvas/CollaborationViewportProjection.h"
@@ -60,6 +61,7 @@
 #include <fmt/format.h>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -769,8 +771,8 @@ bool Basic2DCanvas::updateComposeLessonHints(
                                          : ImTextureID{};
     const TextureID   headTexture =
         uvMap.contains(static_cast<std::uint32_t>(TextureID::HoldHead))
-              ? TextureID::HoldHead
-              : TextureID::Note;
+            ? TextureID::HoldHead
+            : TextureID::Note;
     // 头部可选是皮肤协议的一部分，普通 Note 是旧皮肤的兼容回退。
     // 必须在求尺寸之前确定最终纹理，否则头部与真实物件宽高不同。
     // Hold、Flick 和 Polyline 均共享这个选择；Tap 始终使用 Note。
@@ -2623,12 +2625,21 @@ void Basic2DCanvas::updateComposeWalkthrough(
 /// 处理完整滚轮语义。
 void Basic2DCanvas::update(UI::UIManager* sourceManager)
 {
-    // 标签不可见时也要清除已释放的手势，避免早退分支遗留右键所有权。
-    // 新一次按下先释放旧门闩，只有下方命中当前画布后才能重新获取。
-    if ( !ImGui::IsMouseDown(ImGuiMouseButton_Right) ||
-         ImGui::IsMouseClicked(ImGuiMouseButton_Right) )
-        m_isObservationCameraDragging = false;
     auto& engine = Logic::EditorEngine::instance();
+    // 布局状态只在进入/退出边沿创建和释放；退出恢复保存的实际相机投影。
+    // 全局工具退出时所有画布都会释放各自的辅助编辑状态。
+    // 保持原始相机配置，真正的最终视角由随后的录制阶段应用。
+    const bool layoutEditing =
+        engine.getCurrentTool() == Logic::EditTool::Layout &&
+        m_currentSnapshot && m_currentSnapshot->hasBeatmap;
+    if ( layoutEditing && !m_layoutEditor )
+        // 状态对象只在工具进入边沿分配，不在连续拖动帧重复创建。
+        m_layoutEditor = std::make_unique<CameraLayoutEditor>();
+    if ( !layoutEditing && m_layoutEditor ) {
+        m_layoutEditor.reset();
+        // 仅工具切换的低频路径保存配置，拖动过程不会执行文件 IO。
+        Config::AppConfig::instance().save();
+    }
     // cameraId 是窗口与会话的稳定连接键；索引会随标签关闭和重排变化，
     // 因此需要使用时重新解析，不能跨帧缓存旧索引。
     auto findSessionIndex = [this, &engine]() -> int32_t {
@@ -2718,7 +2729,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
     // 不等待逻辑线程生成下一份画面，也不能让旧 dirty 标志留在标签上。
     const bool titleHasBeatmap = !isLogoPlaceholder && m_currentSnapshot &&
                                  m_currentSnapshot->hasBeatmap;
-    const std::string title = makeCanvasTabTitle(
+    const std::string title    = makeCanvasTabTitle(
         TR("canvas.editor").data(),
         titleHasBeatmap,
         m_currentSnapshot ? m_currentSnapshot->beatmapName : std::string_view{},
@@ -2823,16 +2834,24 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         auto& cameraVisual = Config::AppConfig::instance().getVisualConfig();
         const bool hasCameraScene =
             m_currentSnapshot && m_currentSnapshot->hasBeatmap;
+        // 模式切换先于本帧投影；相机预览借用同一离屏纹理，不创建第二套 GPU
+        // 资源。
+        const bool layoutInputConsumed =
+            m_layoutEditor &&
+            m_layoutEditor->update(
+                m_cameraId,
+                canvasScreenPosition,
+                canvasSize,
+                (ImTextureID)(VkDescriptorSet)getDescriptorSet(),
+                cameraVisual);
         const bool cameraViewEnabled =
-            hasCameraScene &&
-            planarObservationEnabled(cameraVisual.debugCanvasCameraAngleDegrees,
-                                     cameraVisual.debugCanvasCameraYawDegrees,
-                                     cameraVisual.debugCanvasCameraDistance);
-        const bool cameraNavigationAvailable =
-            hasCameraScene &&
-            (cameraViewEnabled || m_isObservationCameraDragging);
-        // 默认二维视图让映射缓存走恒等路径，保留原来的工具坐标约定。
-        // 仅摄像机旋转手势尚未结束时，也必须保留导航入口直到右键松开。
+            hasCameraScene && !layoutEditing &&
+            (cameraVisual.canvasCameraPoseEnabled ||
+             planarObservationEnabled(
+                 cameraVisual.debugCanvasCameraAngleDegrees,
+                 cameraVisual.debugCanvasCameraYawDegrees,
+                 cameraVisual.debugCanvasCameraDistance));
+        // 元素模式保持正视输入；相机模式独占输入，不把操纵轴误当谱面物件。
         m_interaction->setInputProjection(
             makePlanarObservationInputProjection(getCanvasProjectionMatrix(),
                                                  canvasSize.x,
@@ -2862,66 +2881,8 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                 m_cameraId);
         }
 
-        // 手势只由按下时悬停的活动画布获取；出界可继续，失焦切换立即取消。
-        // 无谱面和恢复二维时必须释放旧门闩，不能让下一次右键被吞掉。
-        if ( !cameraNavigationAvailable || !isActiveCanvas ||
-             !ImGui::IsMouseDown(ImGuiMouseButton_Right) ) {
-            m_isObservationCameraDragging = false;
-        }
-        bool cameraZoomed = false;
-        if ( cameraNavigationAvailable ) {
-            // 画面矩形不包含窗口标题和停靠标签；在设置页或滚动条上按下不能旋转。
-            // 窗口 hover 同时排除模态窗口遮挡，避免隔着弹窗改变底层视角。
-            // 活跃控件拥有输入优先权，摄像机不能抢占其它 ImGui 控件的手势。
-            const bool cameraHovered =
-                isActiveCanvas && ImGui::IsWindowHovered() &&
-                ImGui::IsMouseHoveringRect(
-                    canvasScreenPosition,
-                    ImVec2(canvasScreenPosition.x + canvasSize.x,
-                           canvasScreenPosition.y + canvasSize.y)) &&
-                !ImGui::IsAnyItemActive();
-            // 这里先读取上一帧编辑门闩，释放帧仍属于旧事务，不能被 Alt 接管。
-            // 右键导航只在按下边沿获取所有权；中途补按 Alt 不改变擦除手势身份。
-            // 左键和中键的实际按下状态同时排除尚未建立工具门闩的同帧竞争。
-            if ( cameraHovered && ImGui::GetIO().KeyAlt &&
-                 !m_interaction->hasActivePointerGesture() &&
-                 !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
-                 !ImGui::IsMouseDown(ImGuiMouseButton_Middle) &&
-                 ImGui::IsMouseClicked(ImGuiMouseButton_Right) )
-                m_isObservationCameraDragging = true;
-            if ( m_isObservationCameraDragging ) {
-                // 只使用相邻帧逻辑像素增量，不用延时窗口或重建谱面几何。
-                // 边界约束与绕周处理集中在纯函数，平台无效增量不会污染配置。
-                // 所有写入都位于 UI
-                // 线程，录制阶段只读取同一线程维护的观察参数。
-                // 不在此重录命令或等待 GPU，后续正常绘制自然消费最新视角。
-                const auto delta = ImGui::GetIO().MouseDelta;
-                const auto orbit = planarObservationDrag(
-                    cameraVisual.debugCanvasCameraAngleDegrees,
-                    cameraVisual.debugCanvasCameraYawDegrees,
-                    delta.x,
-                    delta.y);
-                cameraVisual.debugCanvasCameraAngleDegrees = orbit.x;
-                cameraVisual.debugCanvasCameraYawDegrees   = orbit.y;
-            }
-            if ( cameraHovered && ImGui::GetIO().KeyAlt &&
-                 !m_interaction->hasActivePointerGesture() &&
-                 !ImGui::IsAnyMouseDown() &&
-                 ImGui::GetIO().MouseWheel != 0.0F ) {
-                cameraZoomed = true;
-                // 滚轮只改摄像机距离，不发送画布时间、谱面缩放或联机命令。
-                // 距离以乘法变化，拉近和拉远互为逆操作，边界由数学层统一保护。
-                // 鼠标移出画面后停止消费滚轮，不能影响另一窗口的滚动。
-                cameraVisual.debugCanvasCameraDistance = planarObservationZoom(
-                    cameraVisual.debugCanvasCameraDistance,
-                    ImGui::GetIO().MouseWheel);
-            }
-            // 连续控制只更新内存；配置沿用正常退出保存，不在每帧路径写盘。
-        }
-        if ( m_isObservationCameraDragging || cameraZoomed ) {
-            // 摄像机手势独占输入到松开，不能把右键旋转中途解释为擦除。
-            // 本分支没有开始新的谱面事务，也不能补发使用旧观察矩阵的编辑命令。
-            // 瞬态提示仍逐帧推进，导航期间不等待逻辑线程或渲染资源重建。
+        if ( layoutInputConsumed ) {
+            // 编辑面板及三维手势完全独占输入，预览不发送物件、时间或联机命令。
             m_interaction->updateTransientUi();
         } else if ( isActiveCanvas ) {
             // 活动画布先发布并绘制协作视野，再运行编辑交互；后者可在
@@ -3075,9 +3036,9 @@ void Basic2DCanvas::updateCollaborationViewports(
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
     // 渲染模式是本地显示偏好，不写入 ParticipantViewport；不同用户
     // 可独立选择填充、轮廓或轨道边缘而不影响网络协议。
-    const auto viewportRenderMode = Config::AppConfig::instance()
-                                        .getEditorSettings()
-                                        .collaborationViewportRenderMode;
+    const auto  viewportRenderMode = Config::AppConfig::instance()
+                                         .getEditorSettings()
+                                         .collaborationViewportRenderMode;
     const auto& layout =
         visual.trackLayoutForKeyCount(m_currentSnapshot->trackCount);
     // 使用当前轨道数对应布局，使动态扩轨后的协作范围立即跟随
@@ -3694,6 +3655,19 @@ bool Basic2DCanvas::isDirty() const
 bool Basic2DCanvas::shouldRecordOffscreen() const
 {
     return m_isCanvasVisible;
+}
+
+/// @brief 将相机编辑器控件嵌入调用方的布局工具窗口。
+/// @warning UI 每帧借用本地编辑器；不分配资源或获取会话锁。
+bool Basic2DCanvas::drawCameraLayoutControls()
+{
+    // 编辑器的创建销毁仍属于画布布局生命周期，工具栏不能延长其寿命。
+    // 首帧尚未创建时跳过，下一帧自动显示；不在工具栏重复建立状态。
+    if ( !m_layoutEditor ) return false;
+    // 共用同一实例，按钮切换和三维手势不会出现两份模式状态。
+    m_layoutEditor->drawControls(
+        Config::AppConfig::instance().getVisualConfig());
+    return m_layoutEditor->cameraMode();
 }
 
 /// @brief 查询窗口在会话关闭规则下的有效打开状态。

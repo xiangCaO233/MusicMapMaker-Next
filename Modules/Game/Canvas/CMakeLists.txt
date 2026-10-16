@@ -30,6 +30,8 @@ add_library(
   src/AuxiliaryWindowUi.cpp
   src/BackgroundVideoPlayer.cpp
   src/Basic2DCanvas.cpp
+  # 相机布局采用 UI 辅助几何并复用主画布最终纹理，不增加离屏资源所有者。
+  src/CameraLayoutEditor.cpp
   # 编辑练习的快照核对与目标投影单独编译，减轻主画布更新文件的职责。
   src/Basic2DCanvas_WalkthroughEditing.cpp
   src/Basic2DCanvas_Interaction.cpp
@@ -121,6 +123,14 @@ target_include_directories(PlanarObservationCameraTest
 target_link_libraries(PlanarObservationCameraTest PRIVATE Common Config 3rd_glm)
 mmm_register_test_case(NAME PlanarObservationCameraTest COMMAND
                        PlanarObservationCameraTest)
+
+# 自由相机测试同时验证旧投影迁移、配置边界与真实 ImGui 预览窗口生命周期。 不创建 Vulkan
+# 设备；预览只测试窗口存在性，数学部分检查最终成像的坐标。
+mmm_add_test_executable(Canvas CameraLayoutEditorTest
+                        tests/CameraLayoutEditorTest.cpp)
+target_link_libraries(CameraLayoutEditorTest PRIVATE Canvas)
+mmm_register_test_case(NAME CameraLayoutEditorTest COMMAND
+                       CameraLayoutEditorTest)
 
 # 欢迎占位页可见性测试覆盖无谱面时隐藏状态与悬浮检视内容。 可见性 helper 归属 UI，显式链接 UI
 # 避免依赖其它测试的传递链接顺序，并固定占位页与真实谱面的信息边界。

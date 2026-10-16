@@ -1,6 +1,7 @@
 #include "config/VisualConfig.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -1043,6 +1044,9 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
           config.debugCanvasCameraAngleDegrees },
         { "debugCanvasCameraYawDegrees", config.debugCanvasCameraYawDegrees },
         { "debugCanvasCameraDistance", config.debugCanvasCameraDistance },
+        { "canvasCameraPoseEnabled", config.canvasCameraPoseEnabled },
+        { "canvasCameraPosition", config.canvasCameraPosition },
+        { "canvasCameraRotation", config.canvasCameraRotation },
         { "interactionHitboxScaleX", config.interactionHitboxScaleX },
         { "interactionHitboxScaleY", config.interactionHitboxScaleY }
     };
@@ -1202,6 +1206,38 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
                              VisualConfig::DEFAULT_DEBUG_CANVAS_CAMERA_DISTANCE,
                              VisualConfig::MIN_DEBUG_CANVAS_CAMERA_DISTANCE,
                              VisualConfig::MAX_DEBUG_CANVAS_CAMERA_DISTANCE);
+    // 自由相机与旧观察参数独立保存，缺失字段不改变旧配置的显示。
+    // 旧配置缺失启用键时保持原观察模式，不能自动迁移为自由相机。
+    // JSON 数字不能隐式解释为布尔开关。
+    // 每次载入都明确写回默认值，避免复用配置对象时保留旧状态。
+    const auto enabled = j.find("canvasCameraPoseEnabled");
+    config.canvasCameraPoseEnabled =
+        enabled != j.end() && enabled->is_boolean() && enabled->get<bool>();
+    // 各分量独立验证，损坏数组不能将 NaN 或无穷写进投影矩阵。
+    // 数组长度必须恰为三，以保证 XYZ 字段意义固定。
+    // 损坏的单个分量回退，不丢弃同数组中的其它有效坐标。
+    // 位置范围与数值控件保持一致，最终投影覆盖这个有限区域。
+    const auto readPose =
+        [&](const char* key, std::array<float, 3> fallback, float limit) {
+            const auto entry = j.find(key);
+            if ( entry == j.end() || !entry->is_array() || entry->size() != 3 )
+                return fallback;
+            for ( size_t i = 0; i < 3; ++i ) {
+                if ( !(*entry)[i].is_number() ) continue;
+                // 先按双精度读取，再夹取到浮点存储范围。
+                // 过大的合法 JSON 数字不会在转换时直接溢出为无穷。
+                // 非有限数据保留对应的默认分量。
+                const auto value = (*entry)[i].get<double>();
+                if ( std::isfinite(value) )
+                    fallback[i] = static_cast<float>(
+                        std::clamp(value, -double(limit), double(limit)));
+            }
+            return fallback;
+        };
+    config.canvasCameraPosition =
+        readPose("canvasCameraPosition", { 0, 0, 1 }, 100.0F);
+    config.canvasCameraRotation =
+        readPose("canvasCameraRotation", { 0, 0, 0 }, 180.0F);
     config.interactionHitboxScaleX =
         j.value("interactionHitboxScaleX",
                 VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE);

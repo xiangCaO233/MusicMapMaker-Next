@@ -371,10 +371,6 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         /// 调试页测量摄像机控制、诊断开关和命中框缩放。
         // 调试日志运行态输出不属于设置标签，不在此列表中出现。
         const std::array<const char*, 9> labels{
-            TR_CACHE("ui.settings.debug.canvas_camera_angle").data(),
-            TR_CACHE("ui.settings.debug.canvas_camera_yaw").data(),
-            TR_CACHE("ui.settings.debug.canvas_camera_distance").data(),
-            TR_CACHE("ui.settings.debug.canvas_camera_actions").data(),
             TR_CACHE("ui.settings.debug.draw_hitboxes").data(),
             TR_CACHE("ui.settings.debug.hitbox_scale_x").data(),
             TR_CACHE("ui.settings.debug.hitbox_scale_y").data(),
@@ -718,7 +714,7 @@ SettingsView::LayoutMetricsCache SettingsView::buildLayoutMetrics(
     const float categorySize    = std::floor(sidebarBaseW * scale);
     const float categorySpacing = std::floor(snapshot.itemSpacing * scale);
     const float categoryHeight  = std::floor(8.0f * scale) * 2.0f +
-                                 categorySize * 8.0f + categorySpacing * 7.0f;
+                                  categorySize * 8.0f + categorySpacing * 7.0f;
 
     // 标签列额外留出间隔，使文字与右侧控件不贴合。
     cache.tabLabelWidth =
@@ -1136,9 +1132,9 @@ void SettingsView::drawContent()
                 // 标签在分隔线右侧留出固定缩放 padding，并垂直居中。
                 ImVec2 labelSize       = ImGui::CalcTextSize(label.c_str());
                 float  textLeftPadding = std::floor(8.0f * dpiScale);
-                ImVec2 labelPos        = { sepX + textLeftPadding,
-                                           rect.y +
-                                               (rect.height - labelSize.y) * 0.5f };
+                ImVec2 labelPos = { sepX + textLeftPadding,
+                                    rect.y +
+                                        (rect.height - labelSize.y) * 0.5f };
                 ImGui::GetWindowDrawList()->AddText(
                     menuFont,
                     ImGui::GetFontSize(),

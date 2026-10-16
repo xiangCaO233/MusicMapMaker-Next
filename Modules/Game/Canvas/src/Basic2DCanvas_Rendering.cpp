@@ -14,6 +14,8 @@
 #include "canvas/Basic2DCanvas.h"
 
 #include "canvas/BackgroundVideoTiming.h"
+#include "canvas/CameraLayoutEditor.h"
+#include "canvas/CameraLayoutMath.h"
 #include "canvas/PlanarObservationCamera.h"
 #include "common/UnicodeFontData.h"
 #include "config/AppConfig.h"
@@ -44,7 +46,21 @@ glm::mat4 Basic2DCanvas::getCanvasProjectionMatrix()
     // 渲染线程只读 UI 同线程维护的配置，不访问会话更新长锁。
     // 空会话没有轨道场景，Logo 占位仍使用二维投影而非实验摄像机。
     const auto& visual   = Config::AppConfig::instance().getVisualConfig();
-    const bool  hasScene = m_currentSnapshot && m_currentSnapshot->hasBeatmap;
+    const bool  hasScene = m_currentSnapshot && m_currentSnapshot->hasBeatmap &&
+                           (!m_layoutEditor || m_layoutEditor->cameraMode());
+    // 元素布局只临时覆盖观察矩阵，保留已保存的自由相机姿态。
+    // 自由相机预览与退出布局后的渲染完全共用这条路径。
+    // 元素布局通过 hasScene 临时回到正交矩阵。
+    // 因此切换模式不需要重建顶点或等待逻辑线程重新发布快照。
+    if ( hasScene && visual.canvasCameraPoseEnabled ) {
+        m_isObservationCamera = true;
+        m_observationProjection =
+            canvasCameraPoseProjection(static_cast<float>(m_logicalWidth),
+                                       static_cast<float>(m_logicalHeight),
+                                       m_yOffset,
+                                       visual);
+        return m_observationProjection;
+    }
     const float angle = hasScene ? visual.debugCanvasCameraAngleDegrees : 0.0F;
     const float yaw   = hasScene ? visual.debugCanvasCameraYawDegrees : 0.0F;
     const float distance = hasScene ? visual.debugCanvasCameraDistance : 1.0F;

@@ -24,7 +24,8 @@
 namespace MMM::Canvas
 {
 class Basic2DCanvasInteraction;
-}
+class CameraLayoutEditor;
+}  // namespace MMM::Canvas
 
 namespace MMM::Event
 {
@@ -54,6 +55,10 @@ public:
     /// @warning 热路径：主渲染线程每帧执行；禁止文件系统访问、完整 ECS
     /// 遍历、完整排序和共享指针所有权复制。
     void update(UI::UIManager* sourceManager) override;
+
+    /// @brief 把当前布局编辑器控件绘制到工具栏附着窗口。
+    /// @warning UI 每帧调用，只借用已有编辑器，不分配或取得会话锁。
+    bool drawCameraLayoutControls() override;
 
     /// @brief 获取窗口是否打开，用于拦截未保存的关闭
     bool isOpen() const override;
@@ -157,8 +162,8 @@ protected:
     glm::mat4 m_observationProjection{ 1.0f };
     /// @brief 是否启用透视裁剪；零角度保持原二维裁剪路径。
     bool m_isObservationCamera{ false };
-    /// @brief 观察模式中由当前画布取得的右键旋转手势，释放前不转交二维编辑。
-    bool m_isObservationCameraDragging{ false };
+    /// @brief 仅布局工具期间存在的相机编辑状态，退出即释放预览和手势。
+    std::unique_ptr<CameraLayoutEditor> m_layoutEditor;
 
     /// @warning
     /// 热路径：每帧离屏命令录制时执行；只允许遍历当前快照命令并绑定已存在的

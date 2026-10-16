@@ -16,6 +16,11 @@ public:
     /// @brief 获取画布所在 Dock 节点。
     [[nodiscard]] virtual ImGuiID getDockId() const = 0;
 
+    /// @brief 在布局工具附着窗口绘制当前画布的模式及相机控件。
+    /// @return 正在编辑相机时返回 true，以隐藏互斥的元素布局控件。
+    /// @warning 每帧调用，仅访问 UI 本地状态；默认无此能力。
+    virtual bool drawCameraLayoutControls() { return false; }
+
     /// @brief 请求下一次 UI 更新时聚焦画布。
     virtual void requestFocus() {}
 

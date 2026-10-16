@@ -9,6 +9,7 @@
 #include "config/visual/SpectrumConfig.h"
 #include "config/visual/TrackLayoutConfig.h"
 
+#include <array>
 #include <cstdint>
 #include <nlohmann/json_fwd.hpp>
 #include <vector>
@@ -255,6 +256,12 @@ struct VisualConfig {
     };
     /// @brief 沿观察方向调整摄像机距离，缩放不改变谱面尺寸或时间。
     float debugCanvasCameraDistance{ DEFAULT_DEBUG_CANVAS_CAMERA_DISTANCE };
+    /// @brief 使用布局编辑器保存的自由相机；关闭时兼容旧观察参数。
+    bool canvasCameraPoseEnabled{ false };
+    /// @brief 世界位置，画布中心为原点，高度为一单位，Z 朝向观察者。
+    std::array<float, 3> canvasCameraPosition{ 0.0F, 0.0F, 1.0F };
+    /// @brief 相机局部姿态的 XYZ 欧拉角（度），零姿态朝向世界负 Z。
+    std::array<float, 3> canvasCameraRotation{ 0.0F, 0.0F, 0.0F };
     /// @brief 物件交互拾取包围盒相对原始几何的横向缩放。
     float interactionHitboxScaleX{ DEFAULT_INTERACTION_HITBOX_SCALE };
     /// @brief 物件交互拾取包围盒相对原始几何的纵向缩放。
