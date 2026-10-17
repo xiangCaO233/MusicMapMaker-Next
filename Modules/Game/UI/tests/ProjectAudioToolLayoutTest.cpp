@@ -589,6 +589,109 @@ bool testSliderCameraZoom()
            near(anchorBeforeY, anchorAfterY);
 }
 
+/// @brief 复现从左侧拖向密集音频块时被避让到指针右侧的问题。
+/// @return 约束结果只沿拖动方向前进，并保留下层至少 35% 可见面积。
+/// @note 指针正对下层块时，旧的四向避让会优先选择其右侧位置。
+/// 测试要求从左侧接近时在左侧截停，而不是换到任意另一个合法位置。
+/// @details 第一行相邻音频块与下一行共同构成密集布局，活动块从左侧接近。
+/// 合法截停点由实际可见面积决定，与约束遍历或四向候选枚举顺序无关。
+/// 完全合法的最终目标仍立即采用，不能为消除跳动而让所有拖动都变得迟滞。
+bool testDragDoesNotJumpAcrossTarget()
+{
+    using namespace MMM::UI::ProjectAudioToolLayout;
+    const Rect base{ 100, 100, 100, 100 };
+    // 主目标右侧和下一行仍有音频块，模拟动图中密集排列的相邻约束。
+    // 其余方块必须保持位置不变，活动块只能改变自己的坐标。
+    const std::array constraints{
+        prepareVisibilityConstraint(base, std::span<const Rect>{}),
+        prepareVisibilityConstraint(Rect{ 200, 100, 100, 100 },
+                                    std::span<const Rect>{}),
+        prepareVisibilityConstraint(Rect{ 100, 200, 100, 100 },
+                                    std::span<const Rect>{})
+    };
+    const Rect previous{ 0, 100, 100, 100 };
+    SnapLocks  locks;
+    // 两轴刚吸附到目标左上角，但该位置会完全遮住下层块。
+    locks.x.position   = 100;
+    locks.x.targetLine = 100;
+    locks.y.position   = 100;
+    locks.y.targetLine = 100;
+    // 同高的 100x100 目标至少露出 35% 时，最多允许覆盖 65 单位宽。
+    // 从左接近应停在约 x=65，不能跳到指针右侧的 x=135。
+    const auto result = constrainMoveVisibility(
+        previous, base, Rect{ 0, 0, 500, 500 }, constraints, 0.35F, locks);
+    if ( result.x < previous.x || result.x > 65.01F || result.x < 64.9F ||
+         !near(result.y, previous.y) )
+        return false;
+    // 只有横向锁已被约束否定，仍真实成立的纵向锁应保留。
+    if ( locks.x.position || locks.x.targetLine || !locks.y.position )
+        return false;
+    // 位置连续性不能以牺牲原来的最低可见比例为代价。
+    // 这里检查所有固定方块的公开几何约束，防止只顾第一个目标。
+    if ( visibilityDeficit(result, constraints, 0.35F) > 1e-4F ) return false;
+    // 指针继续压向被遮住的块时，最终位置保持稳定，不左右来回跳。
+    // 模拟指针停留在遮挡区域的下一帧，检查不会积累反向位移。
+    const auto repeated = constrainMoveVisibility(
+        result, base, Rect{ 0, 0, 500, 500 }, constraints, 0.35F, locks);
+    if ( std::abs(repeated.x - result.x) > 0.05F ||
+         !near(repeated.y, result.y) )
+        return false;
+    // 移到无遮挡空间应立即恢复跟手，无需松开鼠标重新起笔。
+    // 合法候选不能继承此前被拒绝的横向锁或被限速到旧位置。
+    // 此目标对右侧音频块的覆盖也未超过阈值，应直接采用指针位置。
+    // 无需经过额外的追赶动画或等待后续若干帧才解除遮挡约束。
+    const Rect freeTarget{ 230, 80, 100, 100 };
+    const auto free = constrainMoveVisibility(repeated,
+                                              freeTarget,
+                                              Rect{ 0, 0, 500, 500 },
+                                              constraints,
+                                              0.35F,
+                                              locks);
+    return near(free.x, freeTarget.x) && near(free.y, freeTarget.y);
+}
+
+/// @brief 验证反向接近、画布边界和批量修正后的吸附锁一致性。
+/// @note 从右侧接近应在右侧截停，不依赖候选数组的枚举顺序。
+/// 边界夹取也可能否定吸附，此时下一帧必须重新竞争合法目标。
+/// @return 两个接近方向保持对称，且只清理实际已失效的轴向锁时为真。
+/// @details 平移锁的 position 是左上角坐标，不能拿目标参考线替代它比较。
+/// 清理锁时也要清理其参考线，避免界面继续画出没有对应实际吸附的辅助线。
+bool testConstrainedMoveLocks()
+{
+    using namespace MMM::UI::ProjectAudioToolLayout;
+    const Rect       base{ 100, 100, 100, 100 };
+    const std::array constraints{ prepareVisibilityConstraint(
+        base, std::span<const Rect>{}) };
+    SnapLocks        locks;
+    const auto       right = constrainMoveVisibility(Rect{ 220, 100, 100, 100 },
+                                                     base,
+                                                     Rect{ 0, 0, 500, 500 },
+                                                     constraints,
+                                                     0.35F,
+                                                     locks);
+    if ( right.x < 134.99F || right.x > 135.1F || !near(right.y, 100) )
+        return false;
+    locks.x.position   = -4;
+    locks.x.targetLine = 0;
+    // 没有下层限制时也要清除已超出画布的锁。
+    const auto bounded = constrainMoveVisibility(Rect{ 5, 5, 20, 20 },
+                                                 Rect{ -4, 5, 20, 20 },
+                                                 Rect{ 0, 0, 500, 500 },
+                                                 {},
+                                                 0.35F,
+                                                 locks);
+    if ( !near(bounded.x, 0) || locks.x.position ) return false;
+    // 批量拖动使用组合外框，锁清理也必须按最终外框逐轴判断。
+    // X 已偏离吸附位置而 Y 仍对齐，不能简单把两轴全部清空。
+    locks.x.position   = 100;
+    locks.x.targetLine = 100;
+    locks.y.position   = 100;
+    locks.y.targetLine = 100;
+    releaseDisplacedMoveLocks(Rect{ 65, 100, 150, 100 }, locks);
+    return !locks.x.position && !locks.x.targetLine && locks.y.position &&
+           locks.y.targetLine;
+}
+
 }  // namespace
 
 /// @brief 运行项目音频工具几何布局测试。
@@ -618,6 +721,9 @@ int main()
     if ( !testMouseAnchoredCameraZoom() ) return 16;
     if ( !testCameraZoomLimits() ) return 17;
     if ( !testSliderCameraZoom() ) return 18;
+    // 19 至 20 覆盖音频块拖动避让不能越过指针、约束后的锁必须同步释放。
+    if ( !testDragDoesNotJumpAcrossTarget() ) return 19;
+    if ( !testConstrainedMoveLocks() ) return 20;
     // 所有场景均通过时返回标准成功码。
     return 0;
 }

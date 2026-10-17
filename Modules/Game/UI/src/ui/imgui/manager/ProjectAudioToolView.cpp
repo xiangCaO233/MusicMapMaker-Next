@@ -2525,8 +2525,10 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                                                      SNAP_THRESHOLD,
                                                      SNAP_RELEASE_THRESHOLD,
                                                      m_snapLocks);
-                // 内容边界以本帧逻辑画布尺寸为限，并保护固定方块最低可见比例。
-                item.rect = ProjectAudioToolLayout::constrainVisibility(
+                // 只沿上一帧到指针目标的移动方向截停，不把方块避让到另一侧。
+                // 同步释放已被可见性约束拒绝的吸附锁，避免下一帧继续抢回旧位置。
+                item.rect = ProjectAudioToolLayout::constrainMoveVisibility(
+                    item.rect,
                     rawRect,
                     ProjectAudioToolLayout::Rect{
                         0.0F,
@@ -2535,7 +2537,8 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                         contentLogical.y,
                     },
                     m_dragVisibilityConstraints,
-                    MINIMUM_VISIBLE_RATIO);
+                    MINIMUM_VISIBLE_RATIO,
+                    m_snapLocks);
                 // 活动项位于最高层，其自身标签可使用完整当前矩形。
                 item.labelRect = item.rect;
                 refreshInteractionLabelRects();
@@ -2591,6 +2594,9 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                     },
                     m_dragVisibilityConstraints,
                     MINIMUM_VISIBLE_RATIO);
+            // 批量移动同样不能保留被可见性修正拒绝的吸附锁。
+            ProjectAudioToolLayout::releaseDisplacedMoveLocks(
+                m_batchDragCurrentBounds, m_snapLocks);
             // 约束后的总体包围盒与初始包围盒差值即为最终统一位移。
             const float deltaX =
                 m_batchDragCurrentBounds.x - m_batchDragInitialBounds.x;
