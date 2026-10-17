@@ -52,6 +52,8 @@
 #include <variant>
 #include <vector>
 
+#include <utility>
+
 namespace MMM::Canvas
 {
 namespace
@@ -2852,13 +2854,19 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 ImGui::TableSetColumnIndex(2);
                 if ( ::MMM::UI::FeedbackButton("应用时间偏移") &&
                      std::abs(bulkOffsetValue) > 1e-6 ) {
+                    // 一次应用偏移对应一次历史，保留各事件自身数值与身份。
+                    // 整批交给命令层校验，不能先移动前一项再拿旧位置检查后一项。
+                    Logic::CmdUpdateTimelineEvents command;
+                    command.events.reserve(elements.size());
                     for ( const auto& el : elements ) {
-                        entt::entity ent    = getElementEntity(el);
-                        double       rawVal = getElementRawValue(el);
-                        publishTimelineCommand(Event::LogicCommandEvent(
-                            Logic::CmdUpdateTimelineEvent{
-                                ent, el.time + bulkOffsetValue, rawVal }));
+                        command.events.push_back({ getElementEntity(el),
+                                                   el.time + bulkOffsetValue,
+                                                   getElementRawValue(el) });
                     }
+                    // 无匹配项时不入队，避免空动作干扰已有撤销栈。
+                    if ( !command.events.empty() )
+                        publishTimelineCommand(
+                            Event::LogicCommandEvent(std::move(command)));
                     bulkOffsetValue = 0.0;
                 }
 
@@ -2873,6 +2881,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 ImGui::TableSetColumnIndex(2);
                 if ( ::MMM::UI::FeedbackButton("应用流速缩放") &&
                      std::abs(bulkScaleValue - 1.0) > 1e-6 ) {
+                    // 显示流速先逐项换回存储值，全部计算完再提交一次。
+                    // 该批次只含绿线，其他类型保持原值与原撤销身份。
+                    Logic::CmdUpdateTimelineEvents command;
+                    command.events.reserve(elements.size());
                     for ( const auto& el : elements ) {
                         if ( el.effects &
                              Common::Render::SCROLL_EFFECT_SCROLL ) {
@@ -2885,11 +2897,14 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                 getStoredValue(::MMM::TimingEffect::SCROLL,
                                                newDisp,
                                                el.scrollEntity);
-                            publishTimelineCommand(Event::LogicCommandEvent(
-                                Logic::CmdUpdateTimelineEvent{
-                                    el.scrollEntity, el.time, newVal }));
+                            command.events.push_back(
+                                { el.scrollEntity, el.time, newVal });
                         }
                     }
+                    // 没有绿线时不生成历史，重复倍率仍由命令层过滤无变化项。
+                    if ( !command.events.empty() )
+                        publishTimelineCommand(
+                            Event::LogicCommandEvent(std::move(command)));
                     bulkScaleValue = 1.0;
                 }
 

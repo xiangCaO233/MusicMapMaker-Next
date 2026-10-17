@@ -29,6 +29,8 @@
 #include <limits>
 #include <optional>
 
+#include <utility>
+
 namespace MMM::Canvas
 {
 namespace
@@ -1604,14 +1606,21 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     };
     const auto finishTimingDrag = [&]() {
         if ( std::abs(m_timingDragPreviewDelta) > 1e-6 ) {
+            // 一次拖动释放只提交一个批次，撤销和重做均恢复整个选择。
+            // 复用命令层的整批范围校验，相邻插值段平移不与彼此旧位置冲突。
+            Logic::CmdUpdateTimelineEvents command;
+            command.events.reserve(m_timingDragEntries.size());
             for ( const auto& entry : m_timingDragEntries ) {
-                publishTimelineCommand(
-                    Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
-                        entry.entity,
-                        std::max(0.0,
-                                 entry.originalTime + m_timingDragPreviewDelta),
-                        entry.value }));
+                command.events.push_back(
+                    { entry.entity,
+                      std::max(0.0,
+                               entry.originalTime + m_timingDragPreviewDelta),
+                      entry.value });
             }
+            // 空选择不产生历史；预览阶段继续只更新本地位移。
+            if ( !command.events.empty() )
+                publishTimelineCommand(
+                    Event::LogicCommandEvent(std::move(command)));
         }
         m_isTimingDragging       = false;
         m_timingDragPreviewDelta = 0.0;

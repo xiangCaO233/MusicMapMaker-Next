@@ -270,7 +270,49 @@ bool testBatchUpdateIsAtomic()
         // 重做也只调用一次，不能用循环 redo 隐藏批次拆成多条动作的问题。
         return false;
     }
-    return true;
+    // 接着模拟多选拖动：两种效果沿时间轴移动相同距离。
+    // 此时已有创建和参数编辑历史，移动必须只增加一条新历史。
+    // 不清空栈，可以检测撤销是否误吞前一次独立操作。
+    const auto previousHistory = context.actionStack.getUndoStackSize();
+    MMM::Logic::CmdUpdateTimelineEvents moveCommand;
+    moveCommand.events.push_back({ bpmEntity, 7.5, 180.0 });
+    moveCommand.events.push_back({ scrollEntity, 8.5, 10.0 });
+    controller.handleCommand(moveCommand);
+    // 旧 Malody beat 与移动后的秒时间不再一致，应在移动时清除。
+    // 撤销则恢复完整旧元数据，不能仅恢复时间和数值。
+    /// @brief 检查整组平移前后位置及元数据，不复用执行前的组件引用。
+    /// @param bpmTime BPM 的预期位置。
+    /// @param scrollTime 绿线的预期位置。
+    /// @param hasBeat 是否仍应保留移动前的 Malody 拍位。
+    const auto matches = [&](double bpmTime, double scrollTime, bool hasBeat) {
+        const auto& bpm =
+            context.timelineRegistry.get<const MMM::Logic::TimelineComponent>(
+                bpmEntity);
+        const auto& scroll =
+            context.timelineRegistry.get<const MMM::Logic::TimelineComponent>(
+                scrollEntity);
+        const auto beat = timingMetadataValue(
+            bpm.m_metadata, MMM::TimingMetadataType::MALODY, "beat");
+        return near(bpm.m_timestamp, bpmTime) &&
+               near(scroll.m_timestamp, scrollTime) &&
+               near(bpm.m_value, 180.0) && near(scroll.m_value, 10.0) &&
+               (hasBeat ? beat && *beat == "[4,0,1]" : !beat);
+    };
+    // 同时检查历史长度和真实组件，不能用批次数量代替执行结果。
+    if ( context.actionStack.getUndoStackSize() != previousHistory + 1 ||
+         !matches(7.5, 8.5, false) )
+        return false;
+    context.actionStack.undo(context);
+    // 一次撤销恢复两个不同位置；此前参数编辑仍然保留。
+    // 连续两次撤销才成功的实现会在这里立即失败。
+    if ( context.actionStack.getUndoStackSize() != previousHistory ||
+         !matches(5.0, 6.0, true) )
+        return false;
+    context.actionStack.redo(context);
+    // 重做同样只调用一次，验证两种效果与元数据状态同步恢复。
+    // 原实体身份不变，防止实现以删旧建新掩盖时间变化。
+    return context.actionStack.getUndoStackSize() == previousHistory + 1 &&
+           matches(7.5, 8.5, false);
 }
 
 /// @brief 验证 BPM 编辑与新增保速 SV 合并为一次撤销。
