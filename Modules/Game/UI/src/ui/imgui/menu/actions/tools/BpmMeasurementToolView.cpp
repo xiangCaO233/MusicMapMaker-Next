@@ -5545,14 +5545,21 @@ double BpmMeasurementToolView::wheelSeekTarget(double currentTime,
     m_wheelSnapRemainder -= ticks;
     // 滚轮正方向浏览更早位置，与工具既有时间轴方向一致。
     const bool earlier = ticks > 0;
-    double     target  = currentTime;
+    // SourceNode 的秒转帧会截断；逻辑时钟回流也可能有一个采样帧的舍入差。
+    // 以实际引擎采样率容纳两帧误差，不把精确网格误判成仍在上一格内。
+    const double sampleRate =
+        static_cast<double>(ice::ICEConfig::internal_format.samplerate);
+    const double frameTolerance =
+        2.0 / (sampleRate > 0.0 ? sampleRate : 48000.0);
+    double target = currentTime;
     for ( int tick = 0; tick < std::abs(ticks); ++tick ) {
         // 每次重新选段，多个刻度跨 BPM 边界后必须切到该段的分拍间距。
-        auto   index  = findSegmentIndexForTime(target + 1e-9);
+        // 段首读回稍早时同样视为已经到达新段，避免跨 BPM 后反复吸回段首。
+        auto   index  = findSegmentIndexForTime(target + frameTolerance);
         double anchor = m_timingSegments.empty()
                             ? m_firstBeatTime
                             : m_timingSegments[index].timestampSeconds;
-        if ( earlier && index > 0 && target <= anchor + 1e-9 ) {
+        if ( earlier && index > 0 && target <= anchor + frameTolerance ) {
             // 向前跨段首时，从前一段网格取最后一条线，不用新段 BPM 向后外推。
             --index;
             anchor = m_timingSegments[index].timestampSeconds;
@@ -5560,9 +5567,12 @@ double BpmMeasurementToolView::wheelSeekTarget(double currentTime,
         const double step = 60.0 / bpmAt(index) / divisor;
         // 网格索引使用当前段首拍为原点，不能以歌曲零秒替代首拍偏移。
         const double position = (target - anchor) / step;
-        // epsilon 只消除落在线上的浮点误差，必须严格前进到相邻线而非留在原线。
-        const double grid = earlier ? std::ceil(position - 1e-8) - 1.0
-                                    : std::floor(position + 1e-8) + 1.0;
+        // 将音频采样精度转换为当前分拍间距的比例，两个方向对称处理。
+        // 上限四分之一格，密集网格中也不能因容差直接跳过相邻拍线。
+        const double epsilon =
+            std::min(0.25, std::max(1e-8, frameTolerance / step));
+        const double grid = earlier ? std::ceil(position - epsilon) - 1.0
+                                    : std::floor(position + epsilon) + 1.0;
         double       next = anchor + grid * step;
         if ( !earlier && index + 1 < m_timingSegments.size() ) {
             // 段首本身就是新网格的零线；不能跨过它直接跳到旧段的一条延长线。

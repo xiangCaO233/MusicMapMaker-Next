@@ -2,6 +2,7 @@
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 
 #include <cmath>
+#include <ice/config/config.hpp>
 #include <nlohmann/json.hpp>
 
 namespace MMM::UI
@@ -118,6 +119,28 @@ struct BpmMeasurementHistoryTestAccess {
              !close(tool.wheelSeekTarget(1.0, -1.0), 1.25) ||
              !close(tool.wheelSeekTarget(1.0, 1.0), 0.95) ||
              !close(tool.wheelSeekTarget(0.95, -2.0), 1.25) )
+            return false;
+        // 音频 Seek 会截断到整数采样帧，读回值可能略早于准确拍线。
+        // 若把该位置误认成尚未到线，向后滚动就会反复选择同一条线。
+        const double frame = 1.0 / ice::ICEConfig::internal_format.samplerate;
+        if ( !close(tool.wheelSeekTarget(0.325 - frame * 0.5, -1.0), 0.45) ||
+             !close(tool.wheelSeekTarget(0.325 + frame * 0.5, 1.0), 0.2) )
+            return false;
+        // 段首也可能读回前半帧，两个方向均应跨入正确段落。
+        // 同时验证多刻度跨段，不能在内部下一步继续卡在段首。
+        if ( !close(tool.wheelSeekTarget(1.0 - frame * 0.5, -1.0), 1.25) ||
+             !close(tool.wheelSeekTarget(1.0 + frame * 0.5, 1.0), 0.95) ||
+             !close(tool.wheelSeekTarget(0.95 - frame * 0.5, -2.0), 1.25) )
+            return false;
+        // 连续二十次滚动，每次都让后端读回值丢失一部分采样精度。
+        // 应稳定向前推进，而不是依赖第二次滚轮或等待播放自然越过拍线。
+        double cursor = 1.25;
+        for ( int tick = 0; tick < 20; ++tick ) {
+            cursor = tool.wheelSeekTarget(cursor - frame * 0.5, -1.0);
+            if ( !close(cursor, 1.25 + (tick + 1) * 0.25) ) return false;
+        }
+        // 明显偏离拍线时仍吸到最近的下一条，不能用粗糙取整吞掉一格。
+        if ( !close(tool.wheelSeekTarget(0.325 - 0.001, -1.0), 0.325) )
             return false;
         // 小数输入从空余量开始，避免前一场景恰好贡献一个刻度。
         tool.m_wheelSnapRemainder = 0.0;
