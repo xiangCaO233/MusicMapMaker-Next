@@ -463,3 +463,11 @@ copyIceLib "zlib" "libz.a" "3rdpty/zlib_inst/lib/libz.a"
 # 维护约束：空 packages 值仍表示完整清单，不表示不复制。
 # 维护约束：复制完成后调用方负责执行预编译消费验证。
 # 维护约束：发布前应使用 file 或 lipo 复核最终目标目录。
+
+# 归档依赖拥有独立分包规则；只在主仓暂存时执行，保留增量包过滤。
+# 该步骤依赖 libarchive_project 已完成，输入缺失将直接阻止发布残缺包。
+if [[ "${stageScope}" != "ice" ]]; then
+    cmake "-DBUILD_DIR=${buildDir}" -DPLATFORM=macos "-DARCH=${targetArch}" \
+        "-DTOOLCHAIN=${prebuiltToolchain}" "-DCOMPILER_TAG=${compilerTag}" "-DCONFIG=${buildType}" \
+        "-DPACKAGES=${packageFilter}" -P "${projectRoot}/cmake/StageArchivePrebuilts.cmake"
+fi

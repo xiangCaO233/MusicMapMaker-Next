@@ -17,6 +17,7 @@
 /// 批注详情卡片完全基于快照数据绘制，不查询 ECS 或项目文件。
 /// 文件拖放只收集系统事件，在对应画布获得处理机会时再分类发布。
 #include "canvas/Basic2DCanvasInteraction.h"
+#include "mmm/project/PackageFileTypes.h"
 
 #include "audio/AudioManager.h"
 #include "canvas/AnnotationDetailLayout.h"
@@ -666,7 +667,7 @@ std::string toLowerAscii(std::string value)
     return value;
 }
 
-/// @brief 判断拖拽路径是否为 zip 兼容谱面包。
+/// @brief 判断拖拽路径是否为 受支持的归档谱面包。
 /// @param path 拖拽路径。
 /// @return 扩展名匹配临时阅览包格式时返回 true。
 /// @details 比较不区分 ASCII 大小写；zip/7z 是通用容器，
@@ -676,8 +677,7 @@ bool isTemporaryPackagePath(const std::filesystem::path& path)
 {
     // path.extension 保留前导点，统一转小写后与固定白名单比较。
     const auto extension = toLowerAscii(Config::pathToUtf8(path.extension()));
-    return extension == ".zip" || extension == ".7z" || extension == ".mcz" ||
-           extension == ".osz" || extension == ".mpk";
+    return MMM::isProjectArchiveExtension(extension);
 }
 
 /// @brief 跳转到主画布当前悬浮时间点。

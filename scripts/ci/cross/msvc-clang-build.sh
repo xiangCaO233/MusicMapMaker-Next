@@ -266,6 +266,7 @@ while (( $# > 0 )); do
 done
 
 # 仅生产预编译依赖时不创建采样产物，也不要求目标 profile 运行库。
+# 归档目标会先安装压缩器，不能只构建 libarchive 的空接口目标。
 if (( prebuiltTargets )); then
     pgoInstrument="OFF"
 fi
@@ -424,6 +425,7 @@ if (( configureOnly )); then
     exit 0
 fi
 
+# 归档目标会先安装压缩器，不能只构建 libarchive 的空接口目标。
 if (( prebuiltTargets )); then
     # 清单只包含后续 staging 所需第三方归档。
     # Xiph COFF 归档按当前配置的静态 CRT 单独构建。
@@ -441,6 +443,7 @@ if (( prebuiltTargets )); then
         IonCachyEngine-static \
         3rd_implot \
         3rd_miniz \
+        libarchive_project \
         imgui-static \
         freetype \
         glfw \

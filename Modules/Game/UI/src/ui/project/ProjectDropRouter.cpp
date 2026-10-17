@@ -3,6 +3,7 @@
 #include "event/core/EventBus.h"
 #include "event/input/glfw/GLFWDropEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
+#include "mmm/project/PackageFileTypes.h"
 #include "ui/walkthrough/WalkthroughService.h"
 #include <algorithm>
 #include <cctype>
@@ -87,9 +88,7 @@ void ProjectDropRouter::update(bool enabled)
             extension.end(),
             extension.begin(),
             [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if ( extension == ".osz" || extension == ".mcz" ||
-             extension == ".mpk" || extension == ".zip" ||
-             extension == ".7z" ) {
+        if ( MMM::isProjectArchiveExtension(extension) ) {
             // 包投放进入临时项目解包流程，不把压缩包当作普通目录打开。
             Event::OpenTemporaryProjectPackageEvent event;
             event.m_packagePath = path;

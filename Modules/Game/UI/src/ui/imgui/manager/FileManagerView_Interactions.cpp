@@ -6,6 +6,7 @@
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "imgui.h"
 #include "log/colorful-log.h"
+#include "mmm/project/PackageFileTypes.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/manager/FileManagerView.h"
@@ -47,7 +48,7 @@ std::string toLowerAscii(std::string value)
     return value;
 }
 
-/// @brief 判断拖拽文件是否为 zip 兼容谱面包。
+/// @brief 判断拖拽文件是否为受支持的归档谱面包。
 /// @param path 拖拽文件路径。
 /// @return 支持按临时项目打开时返回 true。
 /// @note 只按末级扩展名分类，不读取或验证归档内容。
@@ -56,8 +57,7 @@ bool isTemporaryPackagePath(const std::filesystem::path& path)
     // 路径扩展名先转换为 UTF-8，再做与平台无关的 ASCII 折叠。
     const auto extension = toLowerAscii(Config::pathToUtf8(path.extension()));
     // 列表与主窗口临时项目包路由支持的容器类型保持一致。
-    return extension == ".zip" || extension == ".7z" || extension == ".mcz" ||
-           extension == ".osz" || extension == ".mpk";
+    return MMM::isProjectArchiveExtension(extension);
 }
 }  // namespace
 

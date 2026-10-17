@@ -318,3 +318,11 @@ copyIceLib "sdl" "lib/libSDL3.a" "libSDL3.a"
 copyIceLib "spdlog" "${spdlogLib}" "${spdlogOutputName}"
 # 最后一项 zlib 使用依赖安装前缀中的规范归档名。
 copyIceLib "zlib" "3rdpty/zlib_inst/lib/libz.a" "libz.a"
+
+# 归档依赖拥有独立分包规则；只在主仓暂存时执行，保留增量包过滤。
+# 该步骤依赖 libarchive_project 已完成，输入缺失将直接阻止发布残缺包。
+if [[ "${stageScope}" != "ice" ]]; then
+    cmake "-DBUILD_DIR=${buildDir}" -DPLATFORM=windows "-DARCH=x86_64" \
+        "-DTOOLCHAIN=mingw" "-DCOMPILER_TAG=${compilerTag}" "-DCONFIG=${buildType}" \
+        "-DPACKAGES=${packageFilter}" -P "${projectRoot}/cmake/StageArchivePrebuilts.cmake"
+fi

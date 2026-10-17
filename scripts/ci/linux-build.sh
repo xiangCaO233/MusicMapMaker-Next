@@ -447,6 +447,7 @@ if (( prebuiltTargets )); then
         IonCachyEngine-static \
         3rd_implot \
         3rd_miniz \
+        libarchive_project \
         imgui-static \
         freetype \
         glfw \

@@ -228,6 +228,27 @@ inline constexpr std::array<PackageSupportedFileTypes, 3>
     return false;
 }
 
+/// @brief 判断临时项目入口支持的归档后缀，最终格式仍由内容检测。
+/// @param extension 最后一级扩展名；复合后缀 tar.gz 使用 .gz。
+/// @return 可交给内置归档读取器时返回 true。
+/// @note 与导出格式表分离，读取容器不代表能够写出同一格式。
+[[nodiscard]] constexpr bool isProjectArchiveExtension(
+    std::string_view extension)
+{
+    // 四个 ZIP 谱包别名继续使用既有 Unicode 名称兼容路径。
+    // 其余格式共用流式读取；不注册裸压缩流，以免把任意数据当成项目。
+    constexpr std::array extensions{ ".zip", ".mcz",  ".osz",  ".mpk", ".7z",
+                                     ".rar", ".tar",  ".gz",   ".tgz", ".bz2",
+                                     ".tbz", ".tbz2", ".xz",   ".txz", ".lzma",
+                                     ".lz",  ".zst",  ".tzst", ".Z",   ".cab",
+                                     ".iso", ".cpio", ".lha",  ".lzh" };
+    for ( const auto item : extensions ) {
+        // ASCII 大小写规则不依赖操作系统语言。
+        if ( packageExtensionEquals(item, extension) ) return true;
+    }
+    return false;
+}
+
 /// @brief 判断扩展名是否属于常见资源类型。
 /// @param resourceType 资源分类。
 /// @param extension 待检查资源扩展名，可带或不带前导点。
