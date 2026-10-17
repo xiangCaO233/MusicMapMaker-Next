@@ -2,6 +2,7 @@
 
 #include "EditorConfig.h"
 #include "config/AudioPresets.h"
+#include "config/LayoutPresets.h"
 
 #include <filesystem>
 #include <mutex>
@@ -24,6 +25,11 @@ public:
     AudioPresets& getAudioPresets() { return m_audioPresets; }
     /// @brief 获取预设库的只读视图。
     const AudioPresets& getAudioPresets() const { return m_audioPresets; }
+
+    /// @brief 获取客户端布局预设库，不参与项目工作区快照。
+    LayoutPresets& getLayoutPresets() { return m_layoutPresets; }
+    /// @brief 只读访问布局预设集合。
+    const LayoutPresets& getLayoutPresets() const { return m_layoutPresets; }
 
     /// @brief 获取视觉配置
     VisualConfig&       getVisualConfig() { return m_editorConfig.visual; }
@@ -53,6 +59,10 @@ public:
     /// @brief 保存配置到文件
     /// @param path 配置文件路径，若为空则使用默认路径
     bool save(const std::filesystem::path& path = "") const;
+
+    /// @brief 在布局实际修改时立即选中用户方案并排队保存不可变快照。
+    /// @warning 只由修改事件调用，后台写盘不阻塞连续拖动。
+    void saveLayoutChanges(const std::filesystem::path& path = "");
 
     /// @brief 重置为默认配置
     void reset();
@@ -104,10 +114,17 @@ private:
     /// @return 用户目录/.config/mmm/user_config.json。
     std::filesystem::path getDefaultConfigPath() const;
 
+    /// @brief 冻结完整配置文档；后台线程不读取实时可变字段。
+    /// @warning 低频保存或明确布局修改路径调用，禁止空闲帧轮询。
+    nlohmann::json snapshotForSave() const;
+
     /// @brief 当前进程读取和修改的完整编辑器配置。
     EditorConfig m_editorConfig;
     /// @brief 独立于项目快照，防止切换项目覆盖个人听音方案。
     AudioPresets m_audioPresets;
+    /// @brief 客户端布局集合，保存时捕获当前实时布局。
+    // const 保存入口可更新派生的预设身份，但不会改变实时视觉布局。
+    mutable LayoutPresets m_layoutPresets;
     /// @brief 当前应用配置持久化的协作者稳定标识。
     std::string        m_collaborationParticipantId;
     mutable std::mutex m_mutex;

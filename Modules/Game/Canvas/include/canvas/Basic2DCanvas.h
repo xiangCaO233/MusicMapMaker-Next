@@ -60,6 +60,10 @@ public:
     /// @warning UI 每帧调用，只借用已有编辑器，不分配或取得会话锁。
     bool drawCameraLayoutControls() override;
 
+    /// @brief 返回当前已准备画布快照的玩家键数，未载谱时为零。
+    /// @warning UI 每帧只读本地稳定快照，不复制所有权或取得会话锁。
+    [[nodiscard]] int layoutKeyCount() const override;
+
     /// @brief 获取窗口是否打开，用于拦截未保存的关闭
     bool isOpen() const override;
 

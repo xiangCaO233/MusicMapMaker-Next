@@ -23,6 +23,7 @@
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/ToolbarDockLayout.h"
 #include "ui/imgui/ToolbarPopupLayout.h"
+#include "ui/imgui/manager/LayoutPresetControls.h"
 #include "ui/imgui/manager/SoundEffectToolTrackLayout.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/utils/NativeFileDialog.h"
@@ -701,6 +702,8 @@ void ToolbarView::updateEditorConfig(const Config::EditorConfig& config) const
     if ( m_editorApplicationService ) {
         // 服务负责应用、保存并广播配置变化。
         m_editorApplicationService->updateEditorConfig(config);
+        // 布局字段实际变化时立即建立用户项；文件写入走后台单槽队列。
+        Config::AppConfig::instance().saveLayoutChanges();
     }
 }
 
@@ -1863,6 +1866,8 @@ void ToolbarView::update(UIManager* sourceManager)
     renderColorPalettePopup(dpiScale);
     renderPaletteExportFileDialog(dpiScale);
     renderPaletteImportFileDialog(dpiScale);
+    // 文件选择器独立推进，避免布局弹层关闭后留下未完成模态窗口。
+    drawLayoutPresetFileDialogs();
     renderLayoutPopup(dpiScale, sourceManager);
     renderMagnetPopup(dpiScale);
     renderBeatLinePopup(dpiScale);
@@ -5422,6 +5427,19 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                 ? sourceManager->getCanvasView(
                       Logic::EditorEngine::instance().getActiveCameraId())
                 : nullptr;
+        // 键数来自画布本地发布快照；显示提示不能等待逻辑更新长锁。
+        const std::int32_t keyCount = canvas ? canvas->layoutKeyCount() : 0;
+        // 明确编辑作用域，其他键数保留独立布局，不会随当前拖动改变。
+        if ( keyCount > 0 )
+            ImGui::Text("正在调整：%d Key 布局", keyCount);
+        else
+            ImGui::TextUnformatted("正在调整：通用布局（未打开谱面）");
+        ImGui::TextWrapped(
+            "轨道与组件按键数分别保存；摄像机参数由所有键数共用。");
+        // 预设入口位于相机模式提前返回之前，两种布局编辑模式均可切换。
+        drawLayoutPresetControls();
+        ImGui::Separator();
+
         const bool cameraMode = canvas && canvas->drawCameraLayoutControls();
         ImGui::Separator();
         // 元素和相机控件互斥，切回元素后恢复原有配置分组。
@@ -5436,22 +5454,6 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
             return;
         }
         auto& appConfig = Config::AppConfig::instance();
-        // 默认无谱面时轨道数为零，相关控件可据此禁用或隐藏。
-        std::int32_t keyCount = 0;
-        {
-            // 会话互斥只覆盖指针获取和 track_count 读取，不包围 UI 绘制。
-            auto& engine = Logic::EditorEngine::instance();
-            std::lock_guard<std::recursive_mutex> sessionLock(
-                engine.getSessionMutex());
-            const auto session = engine.getActiveSession();
-            if ( session && session->getContext().currentBeatmap ) {
-                // 合法谱面轨道数至少按一处理，避免下游范围退化。
-                keyCount = std::max(
-                    1,
-                    session->getContext()
-                        .currentBeatmap->m_baseMapMetadata.track_count);
-            }
-        }
         {
             // 禁止垂直拖动属于编辑器设置，不是视觉配置。
             auto& dragSettings = appConfig.getEditorSettings();

@@ -103,6 +103,8 @@ add_library(
   src/ui/utils/UIWidgetUtils.cpp
   src/ui/utils/VolumeSlider.cpp
   src/ui/imgui/audio/AudioPresetControls.cpp
+  # 布局预设与文件对话框独立于相机模式，关闭布局面板仍能结束导入。
+  src/ui/imgui/manager/LayoutPresetControls.cpp
   # 主窗口固定区域、停靠布局和浮动管理器。
   src/ui/imgui/MainDockSpaceUI.cpp
   src/ui/imgui/MainDockSpaceUI_MenuBar.cpp

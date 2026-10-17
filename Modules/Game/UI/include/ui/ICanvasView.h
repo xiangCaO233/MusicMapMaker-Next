@@ -21,6 +21,12 @@ public:
     /// @warning 每帧调用，仅访问 UI 本地状态；默认无此能力。
     virtual bool drawCameraLayoutControls() { return false; }
 
+    /// @brief 获取当前画布已发布布局快照对应的键数，未载谱时为零。
+    /// @return 当前实际显示谱面的玩家轨道数，不包含草稿或 BGM 轨道。
+    /// @warning UI 每帧调用，只借用本地已准备快照，不取得会话锁。
+    /// @note 用于标明布局编辑范围，不直接访问可变 SessionContext。
+    [[nodiscard]] virtual int layoutKeyCount() const { return 0; }
+
     /// @brief 请求下一次 UI 更新时聚焦画布。
     virtual void requestFocus() {}
 

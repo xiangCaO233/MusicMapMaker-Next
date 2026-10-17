@@ -278,9 +278,9 @@ void renderAnnotationTargetTransferHint(ImVec2 source, ImVec2 destination,
     constexpr ImU32 SHADOW = IM_COL32(0, 0, 0, 235);
     constexpr ImU32 CORE   = IM_COL32(231, 250, 255, 255);
     const ImVec2    start{ canvasPosition.x + source.x,
-                        canvasPosition.y + source.y };
+                           canvasPosition.y + source.y };
     const ImVec2    end{ canvasPosition.x + destination.x,
-                      canvasPosition.y + destination.y };
+                         canvasPosition.y + destination.y };
     ImDrawList*     drawList = ImGui::GetWindowDrawList();
     drawList->PushClipRect(
         canvasPosition,
@@ -646,14 +646,14 @@ void drawCanvasComponentEditableRegionMask(
 
     constexpr float edgeEpsilon  = 0.5f;
     const bool      coversCanvas = left <= edgeEpsilon && top <= edgeEpsilon &&
-                              right >= canvasWidth - edgeEpsilon &&
-                              bottom >= canvasHeight - edgeEpsilon;
+                                   right >= canvasWidth - edgeEpsilon &&
+                                   bottom >= canvasHeight - edgeEpsilon;
     // 普通组件允许覆盖整张画布，边框与遮罩都没有额外信息价值。
     if ( coversCanvas ) return;
 
     const ImVec2    canvasMin{ canvasScreenX, canvasScreenY };
     const ImVec2    canvasMax{ canvasScreenX + canvasWidth,
-                            canvasScreenY + canvasHeight };
+                               canvasScreenY + canvasHeight };
     const ImVec2    allowedMin{ canvasScreenX + left, canvasScreenY + top };
     const ImVec2    allowedMax{ canvasScreenX + right, canvasScreenY + bottom };
     constexpr ImU32 maskColor = IM_COL32(0, 0, 0, 118);
@@ -1360,9 +1360,9 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
 
         const float cardTopY    = placement.topY;
         const float cardBottomY = cardTopY + placement.height;
-        const bool  hovered     = canvasHovered && pointerX >= cardLeftX &&
-                             pointerX <= cardRightX && pointerY >= cardTopY &&
-                             pointerY <= cardBottomY;
+        const bool  hovered = canvasHovered && pointerX >= cardLeftX &&
+                              pointerX <= cardRightX && pointerY >= cardTopY &&
+                              pointerY <= cardBottomY;
         // 多张卡片理论上不重叠；若边界恰好共享，只保留首个命中，
         // 保持滚轮和目标提示归属稳定。
         if ( hovered && !result.marker ) {
@@ -3326,6 +3326,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
             // 标记仅用于释放时合并持久化和反馈，不在连续拖动中写磁盘。
             m_layoutConfigurationChanged = true;
+            // 修改边沿立即收存并排队写盘，默认项自动转为自定义方案。
+            Config::AppConfig::instance().saveLayoutChanges();
         }
     }
 
@@ -3695,6 +3697,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
             m_layoutConfigurationChanged = true;
+            // 修改边沿立即收存并排队写盘，默认项自动转为自定义方案。
+            Config::AppConfig::instance().saveLayoutChanges();
         }
     }
 
@@ -3783,7 +3787,9 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             Event::EventBus::instance().publish(Event::LogicCommandEvent(
                 Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
             m_layoutConfigurationChanged = true;
-            layout                       = candidate;
+            // 修改边沿立即收存并排队写盘，默认项自动转为自定义方案。
+            Config::AppConfig::instance().saveLayoutChanges();
+            layout = candidate;
         }
     }
 
@@ -3823,7 +3829,9 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                     Event::LogicCommandEvent(Logic::CmdUpdateEditorConfig{
                         appConfig.getEditorConfig() }));
                 m_layoutConfigurationChanged = true;
-                judgmentLinePosition         = candidatePosition;
+                // 修改边沿立即收存并排队写盘，默认项自动转为自定义方案。
+                Config::AppConfig::instance().saveLayoutChanges();
+                judgmentLinePosition = candidatePosition;
             }
         } else {
             // 边缘缩放只改变对应轴；中心句柄同时移动四条边。
@@ -3954,7 +3962,9 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                     Event::LogicCommandEvent(Logic::CmdUpdateEditorConfig{
                         appConfig.getEditorConfig() }));
                 m_layoutConfigurationChanged = true;
-                layout                       = candidate;
+                // 修改边沿立即收存并排队写盘，默认项自动转为自定义方案。
+                Config::AppConfig::instance().saveLayoutChanges();
+                layout = candidate;
             }
         }
     }
@@ -4481,9 +4491,9 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
     const float topY          = layout.top * targetHeight;
     const float bottomY       = layout.bottom * targetHeight;
     const bool  gutterHovered = projection.valid && canvasHovered &&
-                               pointerX >= projection.annotationLeftX &&
-                               pointerX <= projection.annotationRightX &&
-                               pointerY >= topY && pointerY <= bottomY;
+                                pointerX >= projection.annotationLeftX &&
+                                pointerX <= projection.annotationRightX &&
+                                pointerY >= topY && pointerY <= bottomY;
 
     // hoveredMarker 指向当前快照，生命周期仅限本帧，不保存为成员。
     // detail index 只有在详情卡命中具体条目时才存在；普通气泡命中默认
@@ -4933,7 +4943,7 @@ void Basic2DCanvasInteraction::updateHoverState(float targetWidth,
     const bool hasValidMousePos = hasValidScreenMouse && planeMouse &&
                                   std::isfinite(planeMouse->x) &&
                                   std::isfinite(planeMouse->y);
-    ImVec2 localMousePos{ 0.0F, 0.0F };
+    ImVec2     localMousePos{ 0.0F, 0.0F };
     if ( hasValidMousePos ) {
         // 逻辑命令使用当前画布窗口的局部坐标，而非桌面屏幕坐标。
         localMousePos = { planeMouse->x, planeMouse->y };
@@ -5154,7 +5164,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     const bool hasValidMousePos = hasValidScreenMouse && planeMouse &&
                                   std::isfinite(planeMouse->x) &&
                                   std::isfinite(planeMouse->y);
-    ImVec2 localMousePos{ 0.0f, 0.0f };
+    ImVec2     localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         // 所有逻辑工具共享相对于画布内容原点的坐标系。
         localMousePos = { planeMouse->x, planeMouse->y };

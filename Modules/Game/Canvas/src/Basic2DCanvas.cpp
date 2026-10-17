@@ -2835,7 +2835,11 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         // 长度拖动与精确输入即时生效，只有数值发生变化才发布配置。
         // 普通相机拖动仅影响 UI 投影，不进入逻辑配置发布路径。
         const float previousExtension = cameraVisual.canvasCameraExtension();
-        const bool  hasCameraScene =
+        // 固定大小参数用于识别实际编辑，无变化帧不构造预设 JSON 或排队写盘。
+        const auto previousPosition = cameraVisual.canvasCameraPosition;
+        const auto previousRotation = cameraVisual.canvasCameraRotation;
+        const auto previousLength   = cameraVisual.canvasCameraLength;
+        const bool hasCameraScene =
             m_currentSnapshot && m_currentSnapshot->hasBeatmap;
         // 模式切换先于本帧投影；相机预览借用同一离屏纹理，不创建第二套 GPU
         // 资源。
@@ -2847,6 +2851,12 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                 canvasSize,
                 (ImTextureID)(VkDescriptorSet)getDescriptorSet(),
                 cameraVisual);
+        if ( previousPosition != cameraVisual.canvasCameraPosition ||
+             previousRotation != cameraVisual.canvasCameraRotation ||
+             previousLength != cameraVisual.canvasCameraLength ) {
+            // 摄像机手势与数值输入共用即时方案捕获，磁盘写入不会等待在 UI。
+            Config::AppConfig::instance().saveLayoutChanges();
+        }
         // 扩展范围由逻辑线程生成真实物件，通过既有配置命令异步生效。
         // 不等手势结束；远端物件范围必须跟随当前长度，稳定帧不广播。
         if ( previousExtension != cameraVisual.canvasCameraExtension() )
@@ -3663,6 +3673,19 @@ bool Basic2DCanvas::isDirty() const
 bool Basic2DCanvas::shouldRecordOffscreen() const
 {
     return m_isCanvasVisible;
+}
+
+/// @brief 从已发布的画布现场读取布局编辑键数。
+/// @return 当前玩家轨道数；欢迎页或尚未准备快照时返回零。
+/// @warning UI 每帧仅访问由画布准备流程管理生命周期的快照，不取得会话锁。
+/// @note 与实际布局绘制使用同一数据来源，避免显示另一会话的键数。
+int Basic2DCanvas::layoutKeyCount() const
+{
+    // 指针只在 UI 准备阶段更换，工具栏绘制阶段不跨线程改变它。
+    // hasBeatmap 区分欢迎页的默认轨道占位值与真实可编辑谱面。
+    return m_currentSnapshot && m_currentSnapshot->hasBeatmap
+               ? std::max(1, m_currentSnapshot->trackCount)
+               : 0;
 }
 
 /// @brief 将相机编辑器控件嵌入调用方的布局工具窗口。
