@@ -584,6 +584,8 @@ private:
     std::string  m_editType;  ///< @brief 编辑中的 Timing 类型名称
     /// @brief 应用 BPM 编辑时是否新增或更新保持预设 BPM 流速的 SV。
     bool m_keepSpeedOnBpmEdit{ false };
+    /// @brief STOP 弹窗是否用 iBMSC 的 1/48 拍单位；实际参数始终保存秒数。
+    bool m_stopUsesBmsUnits{ false };
 
     // 创建弹窗状态
     bool   m_isCreatePopupOpen{ false };

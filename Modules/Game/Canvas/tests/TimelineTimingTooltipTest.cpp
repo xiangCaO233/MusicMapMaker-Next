@@ -1,9 +1,12 @@
 #include "canvas/TimelineTimingTooltip.h"
 #include "canvas/TimelineFormatSupport.h"
+#include "canvas/TimelineStopDuration.h"
 
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <initializer_list>
+#include <limits>
 
 namespace
 {
@@ -30,6 +33,43 @@ bool testTimingTooltipDescriptors()
            sv.valueSuffix.empty() && jump.label == "Jump" &&
            jump.valueSuffix == " ms" && hs.label == "HS" &&
            hs.valueSuffix.empty();
+}
+
+/// @brief 验证 STOP 输入单位、往返换算和可提交范围。
+/// @return 与 iBMSC 数值定义及秒数草稿约束一致时返回 true。
+/// @note iBMSC Form1.vb 的 #STOP 导入乘一万、导出除一万，仅作定点存储。
+/// 一小节 192 单位，对应标准四拍；因此 48 单位是一拍。
+/// @note 不依赖真实音频设备，本场景只验证参数换算，不宣称完成听感验收。
+bool testStopDurationUnits()
+{
+    using namespace MMM::Canvas;
+    // 120 BPM 每拍半秒：48 单位半秒、192 单位两秒。
+    // 多组 BPM 防止错误实现把 STOP 单位直接固定为毫秒。
+    for ( double bpm : { 60.0, 120.0, 180.0, 240.0 } ) {
+        const double seconds = stopDurationSeconds(48.0, bpm, true);
+        if ( std::abs(seconds - 60.0 / bpm) > 1e-12 ) return false;
+        // 切换单位本身不改变秒数，往返误差限制在 double 舍入范围。
+        if ( std::abs(stopDurationDisplayValue(seconds, bpm, true) - 48.0) >
+             1e-10 )
+            return false;
+        // 普通模式不使用 BPM，所有输入都按原始秒数解释。
+        if ( stopDurationSeconds(0.375, bpm, false) != 0.375 ||
+             stopDurationDisplayValue(0.375, bpm, false) != 0.375 )
+            return false;
+    }
+    // 标准小节覆盖用户常见的 192 输入，验证不是整拍或整小节偏差。
+    if ( stopDurationSeconds(192.0, 120.0, true) != 2.0 ) return false;
+    // 清空、负号和小数输入的中间态不能在转换层被强制钳制。
+    // 提交校验单独拒绝它们，保证用户能从零重新输入一个正数。
+    if ( stopDurationSeconds(0.0, 120.0, true) != 0.0 ||
+         stopDurationSeconds(-48.0, 120.0, true) != -0.5 )
+        return false;
+    // 极短正时长保持原精度，不再被每帧改写成一微秒。
+    // 无穷与 NaN 不能成为播放层等待帧数的来源。
+    return isValidStopDuration(1e-8) && !isValidStopDuration(0.0) &&
+           !isValidStopDuration(-1.0) &&
+           !isValidStopDuration(std::numeric_limits<double>::infinity()) &&
+           !isValidStopDuration(std::numeric_limits<double>::quiet_NaN());
 }
 
 }  // namespace
@@ -107,6 +147,8 @@ bool testTimelineFormatSupport()
 int main()
 {
     // 函数为 constexpr 纯映射，运行测试仍能覆盖实际头文件调用结果。
-    return testTimingTooltipDescriptors() && testTimelineFormatSupport() ? 0
-                                                                         : 1;
+    return testTimingTooltipDescriptors() && testTimelineFormatSupport() &&
+                   testStopDurationUnits()
+               ? 0
+               : 1;
 }

@@ -14,6 +14,7 @@
 
 #include "canvas/AuxiliaryWindowUi.h"
 #include "canvas/TimelineCanvas.h"
+#include "canvas/TimelineStopDuration.h"
 #include "canvas/TimelineTableSnapshotState.h"
 #include "canvas/TimelineTableWindowState.h"
 #include "canvas/TimingTableFraction.h"
@@ -1157,10 +1158,14 @@ double getStoredValue(::MMM::TimingEffect, double displayValue,
 /// 最终 BPM 规范化和边界处理仍由逻辑层公共入口负责。
 /// @param effect Timeline 类型。
 /// @param value 待提交的显示值。
-/// @return 数值有限，且 BPM 不小于零时返回 true。
+/// @return 数值有限、BPM 非负且 STOP 时长严格为正时返回 true。
 /// @warning UI 热路径：仅执行常量时间数值判断，不得增加状态查询。
 bool isValidTimingEditorValue(::MMM::TimingEffect effect, double value)
 {
+    // STOP 草稿可暂时清空，但只能提交有限正时长。
+    // 其余特效保持既有符号约束，不能把 SV 的负值规则套到 STOP。
+    if ( effect == ::MMM::TimingEffect::STOP )
+        return isValidStopDuration(value);
     // 其他特效沿用既有有符号值语义，只有 BPM 禁止负数。
     return std::isfinite(value) &&
            (effect != ::MMM::TimingEffect::BPM || value >= 0.0);
@@ -1306,12 +1311,13 @@ bool drawTimeEditor(const char* id, double& value,
 /// - helper 不发布逻辑命令，外层 Apply/Create 再提交。
 /// @param time 弹窗草稿时间；仅显式编辑拍位时写回，避免拟合改变原时间。
 /// @param snapshot 当前谱面快照。
+/// @return 编辑后位置的有效 BPM，供 STOP 输入换算使用。
 /// @warning UI 热路径：仅在弹窗首次显示时构建 BPM 换算基准；打开期间复用
 /// 基准，避免每帧排序，也避免编辑 BPM 自身时定位基准随草稿变化。
-void drawPopupBeatPositionEditor(double&                               time,
-                                 const Common::Render::RenderSnapshot* snapshot)
+double drawPopupBeatPositionEditor(
+    double& time, const Common::Render::RenderSnapshot* snapshot)
 {
-    if ( !snapshot ) return;
+    if ( !snapshot ) return 120.0;
 
     /// @brief 当前模态弹窗打开时捕获的谱面节奏定位基准。
     static TimingTableBeatTimeline timeline;
@@ -1346,6 +1352,51 @@ void drawPopupBeatPositionEditor(double&                               time,
             time = std::max(0.0, requestedTime);
         }
     }
+    // 返回编辑后位置的有效 BPM，STOP 单位必须随时间字段变化。
+    // 复用弹窗首次显示时捕获的基准，常态只做二分查找。
+    auto point = std::upper_bound(
+        timeline.begin(),
+        timeline.end(),
+        time,
+        [](double target, const auto& entry) { return target < entry.time; });
+    if ( point == timeline.begin() ) return fallbackBpm;
+    --point;
+    if ( !point->interpolation ) return point->bpm;
+    // 原生谱面允许 BPM 曲线；段尾之后继承终值，与其他拍位计算一致。
+    const auto&  curve = *point->interpolation;
+    const double progress =
+        curve.m_duration > 0.0
+            ? std::clamp((time - point->time) / curve.m_duration, 0.0, 1.0)
+            : 0.0;
+    return sanitizeTimingTableBpm(
+        evaluateTimingInterpolation(curve, point->bpm, progress), fallbackBpm);
+}
+
+/// @brief 绘制 STOP 停顿时长与 iBMSC 单位切换。
+/// @param seconds 内部秒数草稿，不在输入期间强制改写下限。
+/// @param bpm 事件所在位置的有效 BPM。
+/// @param bmsUnits 当前弹窗单位偏好，创建和修改共用。
+/// @warning UI 热路径：只换算本地草稿，Apply/Create 才发布命令。
+void drawStopDurationEditor(double& seconds, double bpm, bool& bmsUnits)
+{
+    ::MMM::UI::FeedbackCheckbox("老 BMS 单位（iBMSC）", &bmsUnits);
+    ImGui::TextUnformatted(bmsUnits ? "停顿时长（1/48 拍）" : "停顿时长（秒）");
+    // 不同单位使用不同输入 ID，避免切换时复用旧单位的活动文本缓冲。
+    ImGui::PushID(bmsUnits ? 1 : 0);
+    double display = stopDurationDisplayValue(seconds, bpm, bmsUnits);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if ( ImGui::InputDouble("##StopDuration",
+                            &display,
+                            bmsUnits ? 1.0 : 0.01,
+                            bmsUnits ? 48.0 : 0.1,
+                            "%.6f") )
+        seconds = stopDurationSeconds(display, bpm, bmsUnits);
+    ImGui::PopID();
+    // 单位说明常驻可见，清晰区分时长与事件发生时间。
+    if ( bmsUnits )
+        ImGui::TextWrapped("48 单位 = 1 拍；按此处 BPM %.6g 换算为秒。", bpm);
+    if ( !isValidStopDuration(seconds) )
+        ImGui::TextUnformatted("停顿时长必须是大于 0 的有限数值。");
 }
 
 /// @brief 绘制占满弹窗内容区宽度的双精度输入框。
@@ -1549,7 +1600,8 @@ void TimelineCanvas::renderEventEditorPopup()
 
         ImGui::TextUnformatted(TR("ui.timeline.event_editor.timestamp").data());
         drawTimeEditor("##Time", m_editTime, m_currentSnapshot);
-        drawPopupBeatPositionEditor(m_editTime, m_currentSnapshot);
+        const double stopBpm =
+            drawPopupBeatPositionEditor(m_editTime, m_currentSnapshot);
 
         ::MMM::TimingEffect editEffect =
             (m_editType == "BPM")    ? ::MMM::TimingEffect::BPM
@@ -1583,10 +1635,7 @@ void TimelineCanvas::renderEventEditorPopup()
             // 正值下限只约束用户输入，不在这里把等待转换为音频帧。
             // 实际调度帧率由 AudioManager 统一决定。
         } else if ( editEffect == ::MMM::TimingEffect::STOP ) {
-            ImGui::TextUnformatted("STOP (秒)");
-            drawFullWidthInputDouble(
-                "##StopSeconds", m_editValue, 0.01, 0.1, "%.6f");
-            m_editValue = std::max(0.000001, m_editValue);
+            drawStopDurationEditor(m_editValue, stopBpm, m_stopUsesBmsUnits);
         } else if ( editEffect == ::MMM::TimingEffect::HS ) {
             ImGui::TextUnformatted("HS");
             drawFullWidthInputDouble("##Value", m_editValue, 0.01, 0.1, "%.4f");
@@ -1785,7 +1834,8 @@ void TimelineCanvas::renderEventCreationPopup()
 
         ImGui::TextUnformatted(TR("ui.timeline.event_editor.timestamp").data());
         drawTimeEditor("##CreateTime", m_createTimeManual, m_currentSnapshot);
-        drawPopupBeatPositionEditor(m_createTimeManual, m_currentSnapshot);
+        const double stopBpm =
+            drawPopupBeatPositionEditor(m_createTimeManual, m_currentSnapshot);
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -1846,10 +1896,7 @@ void TimelineCanvas::renderEventCreationPopup()
             // 事件仍通过标准逻辑命令提交，因此支持现有撤销和协作流程。
             // 不能通过插值入口创建，否则每个采样点会变为额外等待。
         } else if ( createEffect == ::MMM::TimingEffect::STOP ) {
-            ImGui::TextUnformatted("STOP (秒)");
-            drawFullWidthInputDouble(
-                "##StopSeconds", m_createValue, 0.01, 0.1, "%.6f");
-            m_createValue = std::max(0.000001, m_createValue);
+            drawStopDurationEditor(m_createValue, stopBpm, m_stopUsesBmsUnits);
         } else if ( createEffect == ::MMM::TimingEffect::HS ) {
             ImGui::TextUnformatted("HS");
             drawFullWidthInputDouble(
@@ -3293,7 +3340,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                             &vVal,
                             effect == ::MMM::TimingEffect::BPM ? 0.1 : 0.01,
                             effect == ::MMM::TimingEffect::BPM ? 1.0 : 0.1,
-                            "%.4f");
+                            effect == ::MMM::TimingEffect::STOP ? "%.6f s"
+                                                                : "%.4f");
                         if ( isBoundScroll ) {
                             ImGui::EndDisabled();
                             if ( ImGui::IsItemHovered(
