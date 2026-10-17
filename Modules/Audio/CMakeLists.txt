@@ -248,3 +248,9 @@ mmm_register_test_case(
   NAME AudioMarkerServiceTest COMMAND AudioMarkerServiceTest
   "${CMAKE_BINARY_DIR}/test_output/audio_markers"
   "${MMM_TEST_RESOURCE_DIR}/audio_markers/audition-13-flac-cue.xmp")
+
+# BMS 暂停回归使用程序化资源，输出只放到构建目录。
+mmm_add_test_executable(Audio TimelineStopGateTest
+                        tests/TimelineStopGateTest.cpp)
+target_link_libraries(TimelineStopGateTest PRIVATE Audio Log Config)
+mmm_register_test_case(NAME TimelineStopGateTest COMMAND TimelineStopGateTest)

@@ -19,6 +19,9 @@ struct TimelineFormatSupport {
     bool supportsScroll{ true };
     /// @brief 是否可保存 Jump 和 HS，两者共享当前格式能力。
     bool supportsJumpAndHs{ true };
+    /// @brief 是否可持久化冻结音频的 STOP 等待。
+    // 原生 MMM 与 BMS 保留等待；其余格式不得把 STOP 冒充成 SV。
+    bool supportsStop{ true };
 
     /// @brief 查询类型能否随原格式保存，禁止据此阻止用户提交。
     /// @param effect 本次实际修改的时间点类型。
@@ -29,6 +32,7 @@ struct TimelineFormatSupport {
         // 显式匹配枚举，避免将新增类型误归为某个已知类型。
         switch ( effect ) {
         case TimingEffect::BPM: return true;
+        case TimingEffect::STOP: return supportsStop;
         case TimingEffect::SCROLL: return supportsScroll;
         case TimingEffect::JUMP:
         case TimingEffect::HS: return supportsJumpAndHs;
@@ -66,9 +70,12 @@ struct TimelineFormatSupport {
         return true;
     };
     // 保存能力仅覆盖用户指定的三种格式，不推测其他导出器的能力。
-    if ( equals("imd") ) return { ".imd", "BPM", false, false };
-    if ( equals("osu") ) return { ".osu", "BPM、SCROLL", true, false };
-    if ( equals("mc") ) return { ".mc", "BPM、SCROLL、JUMP、HS", true, true };
+    if ( equals("imd") ) return { ".imd", "BPM", false, false, false };
+    if ( equals("osu") ) return { ".osu", "BPM、SCROLL", true, false, false };
+    if ( equals("mc") )
+        return { ".mc", "BPM、SCROLL、JUMP、HS", true, true, false };
+    if ( equals("bms") || equals("bme") || equals("bml") || equals("pms") )
+        return { ".bms", "BPM、STOP", false, false, true };
     return {};
 }
 }  // namespace MMM::Canvas

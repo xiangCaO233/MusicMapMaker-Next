@@ -77,7 +77,7 @@ constexpr float TIMING_TABLE_SCROLLBAR_SIZE = 24.0f;
 constexpr float TIMING_TABLE_SCROLLBAR_GRAB_MIN_SIZE = 28.0f;
 
 /// @brief 时间点表格可搜索的 Timing 属性数量。
-constexpr std::size_t TIMING_TABLE_SEARCH_EFFECT_COUNT = 4;
+constexpr std::size_t TIMING_TABLE_SEARCH_EFFECT_COUNT = 5;
 
 /// @brief 在 Timeline 快照尚未到达时绘制可关闭的时间点表格窗口。
 ///
@@ -781,6 +781,8 @@ void renderTimingTableHeaderContextMenu()
     if ( el.effects & Common::Render::SCROLL_EFFECT_JUMP ) {
         return ::MMM::TimingEffect::JUMP;
     }
+    if ( el.effects & Common::Render::SCROLL_EFFECT_STOP )
+        return ::MMM::TimingEffect::STOP;
     if ( el.effects & Common::Render::SCROLL_EFFECT_HS ) {
         return ::MMM::TimingEffect::HS;
     }
@@ -799,6 +801,7 @@ entt::entity getElementEntity(
     case ::MMM::TimingEffect::BPM: return el.bpmEntity;
     case ::MMM::TimingEffect::JUMP: return el.jumpEntity;
     case ::MMM::TimingEffect::HS: return el.hsEntity;
+    case ::MMM::TimingEffect::STOP: return el.stopEntity;
     case ::MMM::TimingEffect::SCROLL: return el.scrollEntity;
     }
     return entt::null;
@@ -815,6 +818,7 @@ double getElementRawValue(const Common::Render::TimelineInteractiveElement& el)
     case ::MMM::TimingEffect::BPM: return el.bpmValue;
     case ::MMM::TimingEffect::JUMP: return el.jumpValue;
     case ::MMM::TimingEffect::HS: return el.hsValue;
+    case ::MMM::TimingEffect::STOP: return el.stopValue;
     case ::MMM::TimingEffect::SCROLL: return el.scrollValue;
     }
     return 0.0;
@@ -831,6 +835,7 @@ const char* getEffectLabel(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::SCROLL: return "流速 (SV)";
     case ::MMM::TimingEffect::JUMP: return "Jump";
     case ::MMM::TimingEffect::HS: return "HS";
+    case ::MMM::TimingEffect::STOP: return "STOP";
     }
     return "Timing";
 }
@@ -848,6 +853,7 @@ std::size_t getTimingTableSearchEffectIndex(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::SCROLL: return 1;
     case ::MMM::TimingEffect::JUMP: return 2;
     case ::MMM::TimingEffect::HS: return 3;
+    case ::MMM::TimingEffect::STOP: return 4;
     }
     return 0;
 }
@@ -880,6 +886,7 @@ ImVec4 getEffectColor(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::SCROLL: return ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
     case ::MMM::TimingEffect::JUMP: return ImVec4(0.35f, 0.6f, 1.0f, 1.0f);
     case ::MMM::TimingEffect::HS: return ImVec4(1.0f, 0.88f, 0.25f, 1.0f);
+    case ::MMM::TimingEffect::STOP: return ImVec4(1.0f, 0.88f, 0.25f, 1.0f);
     }
     return ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
 }
@@ -977,6 +984,10 @@ collectTimelineElements()
             el.effects    = Common::Render::SCROLL_EFFECT_JUMP;
             el.jumpEntity = entity;
             el.jumpValue  = tc.m_value;
+        } else if ( tc.m_effect == ::MMM::TimingEffect::STOP ) {
+            el.effects    = Common::Render::SCROLL_EFFECT_STOP;
+            el.stopEntity = entity;
+            el.stopValue  = tc.m_value;
         } else if ( tc.m_effect == ::MMM::TimingEffect::HS ) {
             el.effects  = Common::Render::SCROLL_EFFECT_HS;
             el.hsEntity = entity;
@@ -1160,6 +1171,7 @@ bool isValidTimingEditorValue(::MMM::TimingEffect effect, double value)
     case 0: return ::MMM::TimingEffect::BPM;
     case 2: return ::MMM::TimingEffect::JUMP;
     case 3: return ::MMM::TimingEffect::HS;
+    case 4: return ::MMM::TimingEffect::STOP;
     case 1:
     default: return ::MMM::TimingEffect::SCROLL;
     }
@@ -1173,6 +1185,7 @@ double getDefaultCreateValue(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::SCROLL: return 1.0;
     case ::MMM::TimingEffect::JUMP: return 1000.0;
     case ::MMM::TimingEffect::HS: return 1.0;
+    case ::MMM::TimingEffect::STOP: return 0.5;
     }
     return 1.0;
 }
@@ -1539,6 +1552,7 @@ void TimelineCanvas::renderEventEditorPopup()
         ::MMM::TimingEffect editEffect =
             (m_editType == "BPM")    ? ::MMM::TimingEffect::BPM
             : (m_editType == "Jump") ? ::MMM::TimingEffect::JUMP
+            : (m_editType == "STOP") ? ::MMM::TimingEffect::STOP
             : (m_editType == "HS")   ? ::MMM::TimingEffect::HS
                                      : ::MMM::TimingEffect::SCROLL;
         // 可见字符串只作为兼容映射，内部提交统一使用强类型 effect。
@@ -1562,6 +1576,15 @@ void TimelineCanvas::renderEventEditorPopup()
         } else if ( editEffect == ::MMM::TimingEffect::JUMP ) {
             ImGui::TextUnformatted("Jump (ms)");
             drawFullWidthInputDouble("##Value", m_editValue, 1.0, 10.0, "%.4f");
+            // STOP 的数值是等待秒数，不沿用 BPM 或 SV 的倍数编辑语义。
+            // 保留小数精度，使从 BMS 单位换算来的短等待可继续修改。
+            // 正值下限只约束用户输入，不在这里把等待转换为音频帧。
+            // 实际调度帧率由 AudioManager 统一决定。
+        } else if ( editEffect == ::MMM::TimingEffect::STOP ) {
+            ImGui::TextUnformatted("STOP (秒)");
+            drawFullWidthInputDouble(
+                "##StopSeconds", m_editValue, 0.01, 0.1, "%.6f");
+            m_editValue = std::max(0.000001, m_editValue);
         } else if ( editEffect == ::MMM::TimingEffect::HS ) {
             ImGui::TextUnformatted("HS");
             drawFullWidthInputDouble("##Value", m_editValue, 0.01, 0.1, "%.4f");
@@ -1790,6 +1813,9 @@ void TimelineCanvas::renderEventCreationPopup()
                     getDefaultCreateValue(getCreateEffect(m_createType));
             }
 
+            wrapToNextLineIfNoSpace(getRadioButtonWidth("STOP"));
+            if ( ::MMM::UI::FeedbackRadioButton("STOP", &m_createType, 4) )
+                m_createValue = 0.5;
             wrapToNextLineIfNoSpace(getRadioButtonWidth("HS"));
 
             if ( ::MMM::UI::FeedbackRadioButton("HS", &m_createType, 3) ) {
@@ -1813,6 +1839,15 @@ void TimelineCanvas::renderEventCreationPopup()
             ImGui::TextUnformatted("Jump (ms)");
             drawFullWidthInputDouble(
                 "##JumpValue", m_createValue, 1.0, 10.0, "%.4f");
+            // 新建 STOP 与编辑已有 STOP 使用同一单位和范围。
+            // 默认半秒仅作为新事件初值，不影响已导入文件的参数。
+            // 事件仍通过标准逻辑命令提交，因此支持现有撤销和协作流程。
+            // 不能通过插值入口创建，否则每个采样点会变为额外等待。
+        } else if ( createEffect == ::MMM::TimingEffect::STOP ) {
+            ImGui::TextUnformatted("STOP (秒)");
+            drawFullWidthInputDouble(
+                "##StopSeconds", m_createValue, 0.01, 0.1, "%.6f");
+            m_createValue = std::max(0.000001, m_createValue);
         } else if ( createEffect == ::MMM::TimingEffect::HS ) {
             ImGui::TextUnformatted("HS");
             drawFullWidthInputDouble(
@@ -2465,6 +2500,23 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
         }
         ImGui::SameLine();
+        // 表格入口和画布入口提交同一类型，避免保存后丢失等待语义。
+        // 创建后沿用最后创建事件的高亮定位，而非直接访问 ECS 注册表。
+        // 按钮只在用户点击时生成命令，界面绘制不会重复创建事件。
+        // 标记秒数与其他类型分列展示，筛选逻辑也有独立 STOP 槽位。
+        // STOP 不改变 BPM、SV、Jump 或 HS 的后续累积值。
+        // 播放时是否冻结由音频调度处理，UI 不使用 sleep 模拟暂停。
+        // 对不支持的保存格式仍使用能力提示，不改变用户当前编辑权限。
+        if ( ::MMM::UI::FeedbackButton("添加 STOP") ) {
+            publishTimelineCommand(
+                Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
+                    tableCurrentTime, ::MMM::TimingEffect::STOP, 0.5 }));
+            m_lastCreatedTimingTime   = tableCurrentTime;
+            m_lastCreatedTimingEffect = ::MMM::TimingEffect::STOP;
+            m_lastCreatedTimingHighlightUntil =
+                ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
+        }
+        ImGui::SameLine();
         if ( ::MMM::UI::FeedbackButton("添加 HS") ) {
             publishTimelineCommand(
                 Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
@@ -2610,13 +2662,15 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     "ui.timeline.timing_points_table.search.effect.bpm",
                     "ui.timeline.timing_points_table.search.effect.sv",
                     "ui.timeline.timing_points_table.search.effect.jump",
-                    "ui.timeline.timing_points_table.search.effect.hs"
+                    "ui.timeline.timing_points_table.search.effect.hs",
+                    "STOP"
                 };
             const std::array<const char*, TIMING_TABLE_SEARCH_EFFECT_COUNT>
                 searchEffectIds{ "TimingTableSearchBpm",
                                  "TimingTableSearchSv",
                                  "TimingTableSearchJump",
-                                 "TimingTableSearchHs" };
+                                 "TimingTableSearchHs",
+                                 "TimingTableSearchStop" };
             for ( std::size_t filterIndex = 0;
                   filterIndex < TIMING_TABLE_SEARCH_EFFECT_COUNT;
                   ++filterIndex ) {

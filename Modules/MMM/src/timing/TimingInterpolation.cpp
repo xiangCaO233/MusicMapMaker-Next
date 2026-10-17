@@ -124,6 +124,8 @@ double curveProgress(const TimingInterpolation& interpolation, double x)
 bool isValidTimingInterpolation(const TimingInterpolation& interpolation,
                                 TimingEffect effect, double startValue)
 {
+    // STOP 是等待事件，不能采样成一串累计等待。
+    if ( effect == TimingEffect::STOP ) return false;
     // 统一集中有限性检查，密度和控制点同样不能带 NaN 或无穷。
     // startValue 属于外部 Timing 字段，也必须加入校验集合。
     // 先拒绝非有限值，再比较界限，避免 NaN 的比较结果绕过限制。

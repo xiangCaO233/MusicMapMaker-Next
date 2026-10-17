@@ -1145,6 +1145,28 @@ bool testMemberHistoryDeltaConflict()
 /// @note 大谱面场景最后执行，避免早期契约失败时承担无关压缩成本。
 /// @note 成功退出前所有 shared_ptr 均按普通作用域生命周期释放。
 /// @return 全部编解码场景通过时返回 0。
+/// @brief STOP 必须通过协作快照接收校验，不能只在本地 MMM 文件保存。
+/// @note 单独构造此类型，避免完整夹具的其他计数变化掩盖协议回归。
+bool testStopSnapshot()
+{
+    BeatmapDocumentCodec encoder, receiver;
+    auto                 source = makeCompleteBeatmap("STOP");
+    // 保留完整模型其他类别，只替换现有时间点类型和参数。
+    // 编号上界校验若仍停留在 HS，materialize 将失败。
+    source->m_timings.front().m_timingEffect          = MMM::TimingEffect::STOP;
+    source->m_timings.front().m_timingEffectParameter = .375;
+    auto snapshot = encoder.encode(*source, BeatmapMutationFlags::All, true);
+    if ( !snapshot || !receiver.apply(*snapshot) ) return false;
+    const auto restored = receiver.materialize();
+    // 比较等待秒数而非 BPM 派生字段，防止 STOP 被错误转换成红线。
+    // 此处只验证协议往返，音频冻结由 Audio 模块的独立测试负责。
+    return restored && restored->m_timings.size() == 1 &&
+           restored->m_timings.front().m_timingEffect ==
+               MMM::TimingEffect::STOP &&
+           std::abs(restored->m_timings.front().m_timingEffectParameter -
+                    .375) < 1e-9;
+}
+
 int main()
 {
     // 统一失败日志使用项目日志宏，不向标准输出直接写入。
@@ -1153,7 +1175,9 @@ int main()
         return result;
     };
     // 逻辑与保持首个失败后不再运行后续场景，缩短故障反馈并保留定位日志。
-    return check(testCompleteSnapshotRoundTrip(), "complete snapshot") &&
+    return check(testStopSnapshot(), "STOP snapshot") &&
+                   check(testCompleteSnapshotRoundTrip(),
+                         "complete snapshot") &&
                    check(testPolylineReferencesPreventDuplicateRootObjects(),
                          "polyline references") &&
                    check(testStrictCategoryIsolation(), "category isolation") &&

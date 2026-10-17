@@ -56,6 +56,13 @@ add_library(
 target_include_directories(MMM PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
 target_link_libraries(MMM PUBLIC Log Event 3rd_nlohmann_json)
 
+# 传统 BMS 使用 CP932；Windows 使用系统 Win32 转换，POSIX 使用系统 Iconv。
+# 这是平台文字编码接口，不从第三方源码自动构建缺失依赖。
+if(NOT WIN32)
+  find_package(Iconv REQUIRED)
+  target_link_libraries(MMM PRIVATE Iconv::Iconv)
+endif()
+
 # 所有测试夹具都从源码目录只读加载，生成文件统一进入构建目录，禁止覆盖基准。
 set(TEST_DATA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
 set(TEST_OUTPUT_DIR "${CMAKE_BINARY_DIR}/test_output")
@@ -179,3 +186,9 @@ mmm_register_test_case(
 mmm_add_test_executable(MMM TimingTemplateTest tests/TimingTemplateTest.cpp)
 target_link_libraries(TimingTemplateTest PRIVATE MMM Log)
 mmm_register_test_case(NAME TimingTemplateTest COMMAND TimingTemplateTest)
+
+# BMS 暂停回归使用程序化资源，输出只放到构建目录。
+mmm_add_test_executable(MMM BmsFormatTest tests/BmsFormatTest.cpp)
+target_link_libraries(BmsFormatTest PRIVATE MMM Log Config)
+mmm_register_test_case(NAME BmsFormatTest COMMAND BmsFormatTest
+                       "${CMAKE_BINARY_DIR}/test_output/bms")

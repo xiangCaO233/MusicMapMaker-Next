@@ -37,7 +37,7 @@ constexpr double TIMELINE_UI_PLAYBACK_INTERPOLATION_WINDOW_SECONDS =
     1.0 / 120.0;
 
 /// @brief Timeline 专业模式轨道数量。
-constexpr int PROFESSIONAL_TIMELINE_LANE_COUNT = 4;
+constexpr int PROFESSIONAL_TIMELINE_LANE_COUNT = 5;
 
 /// @brief 草稿轨道纹理叠加色键，避免快照热路径构造临时字符串。
 const std::string DRAFT_TRACK_TEXTURE_TINT_COLOR_KEY =
@@ -90,6 +90,7 @@ int professionalTimelineLane(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::SCROLL: return 1;
     case ::MMM::TimingEffect::JUMP: return 2;
     case ::MMM::TimingEffect::HS: return 3;
+    case ::MMM::TimingEffect::STOP: return 4;
     }
     return 0;
 }
@@ -106,6 +107,7 @@ uint32_t timelineEffectMask(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::SCROLL: return SCROLL_EFFECT_SCROLL;
     case ::MMM::TimingEffect::JUMP: return SCROLL_EFFECT_JUMP;
     case ::MMM::TimingEffect::HS: return SCROLL_EFFECT_HS;
+    case ::MMM::TimingEffect::STOP: return SCROLL_EFFECT_STOP;
     }
     return 0;
 }
@@ -125,6 +127,7 @@ TimelineInteractiveElement::MarkerGeometry& markerGeometryForEffect(
     case ::MMM::TimingEffect::SCROLL: return element.scrollMarker;
     case ::MMM::TimingEffect::JUMP: return element.jumpMarker;
     case ::MMM::TimingEffect::HS: return element.hsMarker;
+    case ::MMM::TimingEffect::STOP: return element.stopMarker;
     }
     return element.scrollMarker;
 }
@@ -1149,12 +1152,11 @@ void NoteRenderSystem::generateTimelineSnapshot(
     if ( professionalMode ) {
         // 颜色顺序与 professionalTimelineLane 的类型映射保持一致。
         // 底色较淡，避免盖过后续标记与拍线。
-        // 这里是固定四类效果，不能用当前事件数作为轨道数量。
+        // 这里是固定五类效果，不能用当前事件数作为轨道数量。
         constexpr glm::vec4 laneColors[PROFESSIONAL_TIMELINE_LANE_COUNT] = {
-            { 1.0f, 0.28f, 0.28f, 0.20f },
-            { 0.28f, 1.0f, 0.38f, 0.18f },
-            { 0.34f, 0.55f, 1.0f, 0.18f },
-            { 1.0f, 0.87f, 0.28f, 0.18f },
+            { 1.0f, 0.28f, 0.28f, 0.20f }, { 0.28f, 1.0f, 0.38f, 0.18f },
+            { 0.34f, 0.55f, 1.0f, 0.18f }, { 1.0f, 0.87f, 0.28f, 0.18f },
+            { 0.75f, 0.4f, 1.0f, 0.18f },
         };
         const float laneWidth =
             viewportWidth /
@@ -1456,6 +1458,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
             return glm::vec4{ 0.2f, 1.0f, 0.2f, 0.8f };
         case ::MMM::TimingEffect::JUMP:
             return glm::vec4{ 0.2f, 0.45f, 1.0f, 0.8f };
+        case ::MMM::TimingEffect::STOP:
         case ::MMM::TimingEffect::HS:
             return glm::vec4{ 1.0f, 0.85f, 0.2f, 0.8f };
         }
@@ -1505,10 +1508,12 @@ void NoteRenderSystem::generateTimelineSnapshot(
         el.scrollEntity = seg.scrollEntity;
         el.jumpEntity   = seg.jumpEntity;
         el.hsEntity     = seg.hsEntity;
+        el.stopEntity   = seg.stopEntity;
         el.bpmValue     = seg.bpmValue;
         el.scrollValue  = seg.scrollValue;
         el.jumpValue    = seg.jumpValue;
         el.hsValue      = seg.hsValue;
+        el.stopValue    = seg.stopValue;
         // 保存下标而非指向 vector 元素的指针。
         // 后续向该容器追加内容可能扩容，下标仍能重新定位元素。
         snapshot->timelineElements.push_back(el);
@@ -1518,10 +1523,9 @@ void NoteRenderSystem::generateTimelineSnapshot(
             // 固定顺序也决定通用几何槽选用哪个首个标记。
             // 每种效果仍有独立槽，不能把多个专业轨道合并为同一个命中框。
             constexpr ::MMM::TimingEffect professionalEffects[] = {
-                ::MMM::TimingEffect::BPM,
-                ::MMM::TimingEffect::SCROLL,
-                ::MMM::TimingEffect::JUMP,
-                ::MMM::TimingEffect::HS,
+                ::MMM::TimingEffect::BPM,  ::MMM::TimingEffect::SCROLL,
+                ::MMM::TimingEffect::JUMP, ::MMM::TimingEffect::HS,
+                ::MMM::TimingEffect::STOP,
             };
             for ( auto effect : professionalEffects ) {
                 // 只绘制本段实际包含的类型。
@@ -1635,6 +1639,10 @@ void NoteRenderSystem::generateTimelineSnapshot(
         if ( seg.effects & SCROLL_EFFECT_JUMP ) {
             writeMarkerGeometry(
                 element.jumpMarker, markerVertexOffset, markerIndexOffset);
+        }
+        if ( seg.effects & SCROLL_EFFECT_STOP ) {
+            writeMarkerGeometry(
+                element.stopMarker, markerVertexOffset, markerIndexOffset);
         }
         if ( seg.effects & SCROLL_EFFECT_HS ) {
             writeMarkerGeometry(

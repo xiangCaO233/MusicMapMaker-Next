@@ -28,6 +28,8 @@ timelineTimingTooltipDescriptor(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::BPM: return { "BPM", "" };
     case ::MMM::TimingEffect::SCROLL: return { "SV", "" };
     case ::MMM::TimingEffect::JUMP: return { "Jump", " ms" };
+    // STOP 使用秒数，与 Jump 的毫秒单位分别展示。
+    case ::MMM::TimingEffect::STOP: return { "STOP", " s" };
     case ::MMM::TimingEffect::HS: return { "HS", "" };
     }
     // 未知枚举值使用中性名称，保证新增类型尚未适配时仍有可读提示。

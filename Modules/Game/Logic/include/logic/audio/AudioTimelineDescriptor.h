@@ -45,6 +45,9 @@ struct AudioTimelineDescriptor {
     /// @brief 按规范音频元组稳定排序的加载事件。
     std::vector<MMM::Audio::AudioTimelineLoadEvent> m_events;
 
+    /// @brief 按音乐位置排列的暂停事件，纳入音频指纹与统一图调度。
+    std::vector<MMM::Audio::AudioTimelineStop> m_stops;
+
     /// @brief 资源引用解析阶段产生的非致命诊断。
     std::vector<AudioTimelineDescriptorDiagnostic> m_diagnostics;
 

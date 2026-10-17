@@ -262,7 +262,8 @@ void AudioManager::updateSFXSyncSpeedRouting(bool syncSpeed)
     m_mainMixer->remove_source(m_hitEffectSpectrumCapture);
     // 频谱捕获包装 HitEffect 总线，必须与总线一起位于拉伸前或拉伸后。
     m_preStretcherMixer->remove_source(m_hitEffectSpectrumCapture);
-    if ( syncSpeed ) {
+    // 含 STOP 时 Key 必须在 Gate 上游，否则静音期间仍会消耗源样本。
+    if ( syncSpeed || m_timelineHasStops ) {
         m_preStretcherMixer->add_source(m_hitEffectSpectrumCapture);
     } else {
         m_mainMixer->add_source(m_hitEffectSpectrumCapture);
@@ -1001,7 +1002,8 @@ void AudioManager::playSoundEffectScheduled(
     const std::size_t currentReferenceFrame =
         currentPosition > 0 ? static_cast<std::size_t>(currentPosition) : 0U;
     // 节拍器固定在主拉伸前，绝不能使用除以倍率的输出域延迟。
-    const bool syncSpeed = key.starts_with(EDITOR_METRONOME_KEY_PREFIX) ||
+    const bool syncSpeed = m_timelineHasStops ||
+                           key.starts_with(EDITOR_METRONOME_KEY_PREFIX) ||
                            Config::AppConfig::instance()
                                .getEditorSettings()
                                .sfxConfig.hitSfxSyncSpeed;

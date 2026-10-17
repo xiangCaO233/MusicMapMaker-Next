@@ -34,6 +34,7 @@ int interpolationLane(TimingEffect effect)
     case TimingEffect::SCROLL: return 1;
     case TimingEffect::JUMP: return 2;
     case TimingEffect::HS: return 3;
+    case TimingEffect::STOP: return 4;
     }
     return 0;
 }
@@ -122,6 +123,8 @@ void TimelineCanvas::openInterpolationEditor(
     // 打开编辑器须绑定一个真实谱面，不为欢迎页创建悬空工作副本。
     // 表格入口和画布入口均使用这个检查，因此不存在无来源的编辑提交。
     if ( !m_currentSnapshot || !m_currentSnapshot->hasBeatmap ) return;
+    // STOP 是一次等待事件，不能插值成大量连续等待。
+    if ( segment.effect == TimingEffect::STOP ) return;
     m_interpolationEdit = segment;
     m_interpolationEnd  = segment.time + segment.interpolation.m_duration;
     // 新段使用上次工具选项；已有实体始终保留其原来的函数和采样定义。
@@ -186,6 +189,7 @@ void TimelineCanvas::openInterpolationEditor(
             case TimingEffect::SCROLL: row.scrollEntity = entity; break;
             case TimingEffect::JUMP: row.jumpEntity = entity; break;
             case TimingEffect::HS: row.hsEntity = entity; break;
+            case TimingEffect::STOP: continue;
             }
             m_interpolationValidationRows.push_back(std::move(row));
         }
@@ -216,14 +220,16 @@ bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
     // 普通模式使用当前创建类型，专业模式由按下时的泳道决定类型。
     // 手势开始后不随鼠标横向越过泳道而偷偷改变正在绘制的参数。
     // 泳道边缘留出四像素，使相邻类型范围不会共享命中外观。
-    const float laneWidth = professional ? size.x / 4.0f : size.x;
+    const float laneWidth = professional ? size.x / 5.0f : size.x;
     const int lane = std::clamp(static_cast<int>((io.MousePos.x - position.x) /
                                                  std::max(1.0f, laneWidth)),
                                 0,
-                                3);
+                                4);
     if ( !m_isInterpolationDragging && hovered && io.KeyShift && !io.KeyCtrl &&
          m_currentSnapshot->currentTool == Logic::EditTool::Draw &&
          ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+        // 第五泳道只允许普通 STOP 点，不能回退为 HS 曲线。
+        if ( (professional ? lane : m_createType) == 4 ) return false;
         // 新手势不继承旧的编辑实体，否则确认可能覆盖上一个段落。
         // 保留首点直到松手，连续拖动只改变当前尾点。
         // 手势也绑定谱面实例，跨标签切换后松手不能写入新的谱面。
@@ -389,7 +395,7 @@ void TimelineCanvas::renderInterpolationOverlay(const ImVec2& position,
         [&](const Common::Render::TimingInterpolationElement& segment,
             double                                            end,
             TimingInterpolationPreview&                       preview) {
-            const float laneWidth = professional ? size.x / 4.0f : size.x;
+            const float laneWidth = professional ? size.x / 5.0f : size.x;
             const float left =
                 position.x +
                 (professional ? interpolationLane(segment.effect) * laneWidth

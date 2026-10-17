@@ -57,6 +57,8 @@ uint32_t getTimingEffectMask(::MMM::TimingEffect effect)
         return Common::Render::SCROLL_EFFECT_SCROLL;
     case ::MMM::TimingEffect::JUMP: return Common::Render::SCROLL_EFFECT_JUMP;
     case ::MMM::TimingEffect::HS: return Common::Render::SCROLL_EFFECT_HS;
+    // STOP 使用独立命中类型，不能与同刻 BPM 共用实体身份。
+    case ::MMM::TimingEffect::STOP: return Common::Render::SCROLL_EFFECT_STOP;
     }
     return 0;
 }
@@ -75,6 +77,7 @@ entt::entity getTimingEntity(
     case ::MMM::TimingEffect::SCROLL: return element.scrollEntity;
     case ::MMM::TimingEffect::JUMP: return element.jumpEntity;
     case ::MMM::TimingEffect::HS: return element.hsEntity;
+    case ::MMM::TimingEffect::STOP: return element.stopEntity;
     }
     return entt::null;
 }
@@ -92,6 +95,7 @@ double getTimingValue(const Common::Render::TimelineInteractiveElement& element,
     case ::MMM::TimingEffect::SCROLL: return element.scrollValue;
     case ::MMM::TimingEffect::JUMP: return element.jumpValue;
     case ::MMM::TimingEffect::HS: return element.hsValue;
+    case ::MMM::TimingEffect::STOP: return element.stopValue;
     }
     return 0.0;
 }
@@ -112,6 +116,7 @@ getTimingMarkerGeometry(
     case ::MMM::TimingEffect::SCROLL: return element.scrollMarker;
     case ::MMM::TimingEffect::JUMP: return element.jumpMarker;
     case ::MMM::TimingEffect::HS: return element.hsMarker;
+    case ::MMM::TimingEffect::STOP: return element.stopMarker;
     }
     return element.scrollMarker;
 }
@@ -119,9 +124,8 @@ getTimingMarkerGeometry(
 /// @brief Timeline 画布中按类型排列的 Timing 类型列表。
 /// @details 该顺序同时决定目标展开、等距拾取与同时间复制的稳定次序。
 constexpr ::MMM::TimingEffect TIMELINE_EFFECT_ORDER[] = {
-    ::MMM::TimingEffect::BPM,
-    ::MMM::TimingEffect::JUMP,
-    ::MMM::TimingEffect::HS,
+    ::MMM::TimingEffect::BPM,    ::MMM::TimingEffect::JUMP,
+    ::MMM::TimingEffect::HS,     ::MMM::TimingEffect::STOP,
     ::MMM::TimingEffect::SCROLL,
 };
 
@@ -136,6 +140,7 @@ int professionalTimingLane(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::SCROLL: return 1;
     case ::MMM::TimingEffect::JUMP: return 2;
     case ::MMM::TimingEffect::HS: return 3;
+    case ::MMM::TimingEffect::STOP: return 4;
     }
     return 0;
 }
@@ -153,7 +158,7 @@ std::optional<int> professionalCreateTypeAtX(const ImVec2& size,
         return std::nullopt;
     }
 
-    constexpr int laneCount = 4;
+    constexpr int laneCount = 5;
     const float   laneWidth = size.x / static_cast<float>(laneCount);
     int           lane =
         static_cast<int>(std::floor(localMouseX / std::max(1.0f, laneWidth)));
@@ -330,6 +335,7 @@ double timelineClipboardBeatToTime(
     case 0: return ::MMM::TimingEffect::BPM;
     case 2: return ::MMM::TimingEffect::JUMP;
     case 3: return ::MMM::TimingEffect::HS;
+    case 4: return ::MMM::TimingEffect::STOP;
     case 1:
     default: return ::MMM::TimingEffect::SCROLL;
     }
@@ -347,6 +353,7 @@ double defaultTimingCreateValue(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::SCROLL: return 1.0;
     case ::MMM::TimingEffect::JUMP: return 1000.0;
     case ::MMM::TimingEffect::HS: return 1.0;
+    case ::MMM::TimingEffect::STOP: return 0.5;
     }
     return 1.0;
 }
@@ -967,7 +974,7 @@ float TimelineCanvas::timingTargetCenterX(const TimelineHitTarget& target,
                                           const ImVec2&            size) const
 {
     if ( Config::AppConfig::instance().getEditorSettings().professionalMode ) {
-        constexpr float laneCount = 4.0f;
+        constexpr float laneCount = 5.0f;
         const int       lane      = professionalTimingLane(target.effect);
         return canvasPos.x +
                size.x * (static_cast<float>(lane) + 0.5f) / laneCount;
@@ -1134,6 +1141,7 @@ ImU32 TimelineCanvas::timingEffectColor(::MMM::TimingEffect effect,
     case ::MMM::TimingEffect::SCROLL: return IM_COL32(78, 255, 104, alpha);
     case ::MMM::TimingEffect::JUMP: return IM_COL32(80, 135, 255, alpha);
     case ::MMM::TimingEffect::HS: return IM_COL32(255, 222, 72, alpha);
+    case ::MMM::TimingEffect::STOP: return IM_COL32(255, 222, 72, alpha);
     }
     return IM_COL32(255, 255, 255, alpha);
 }

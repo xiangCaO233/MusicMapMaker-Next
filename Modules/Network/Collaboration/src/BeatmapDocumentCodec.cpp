@@ -878,13 +878,15 @@ bool decodeTimelines(const Json& source, ::MMM::BeatMap& beatmap)
              !readValue(entry, "timestamp", timing.m_timestamp) ||
              !readValue(entry, "bpm", timing.m_bpm) ||
              !readValue(entry, "beat_length", timing.m_beat_length) ||
-             !readValue(entry, "effect", effect) || effect > 3U ||
+             !readValue(entry, "effect", effect) ||
+             effect > static_cast<std::uint32_t>(::MMM::TimingEffect::STOP) ||
              !readValue(entry, "value", timing.m_timingEffectParameter) ||
              metadataIt == entry.end() ||
              !decodePropertyMap(*metadataIt,
                                 timing.m_metadata.timing_properties) ) {
             return false;
         }
+        // STOP 追加到稳定枚举末尾，原来四种效果编号保持不变。
         // 仅在全部字段及元数据成功后提交已校验的效果枚举。
         timing.m_timingEffect = static_cast<::MMM::TimingEffect>(effect);
         // 原生段落随协作时间线传递，不能退化为只剩起始点。

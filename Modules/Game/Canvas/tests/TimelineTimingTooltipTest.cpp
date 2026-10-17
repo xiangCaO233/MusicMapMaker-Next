@@ -68,13 +68,30 @@ bool testTimelineFormatSupport()
     // 不从目录、备份后缀或未知格式推测限制，保护其他导入流程。
     // 文件名没有扩展名时，目录里的 .osu 不能决定保存能力。
     // 备份文件按最后一个后缀识别，不能因路径包含 osu 而误警告。
-    // BMS 未列入本次需求，不在测试中擅自扩展其能力约束。
+    // BMS 已有明确能力矩阵，未知后缀仍保持原有宽松提示。
     // 空路径覆盖尚未获得文件名的谱面，保持原有编辑行为。
-    for ( const auto path :
-          { "folder.osu/chart", "chart.osu.bak", "chart.bms", "" } ) {
+    for ( const auto path : { "folder.osu/chart", "chart.osu.bak", "" } ) {
         if ( !MMM::Canvas::timelineFormatSupport(path).extension.empty() )
             return false;
     }
+    // BMS 只持久化 BPM 与 STOP，等待单位明确为秒。
+    // 外部不支持格式必须提示；原生 MMM 则保留冻结事件。
+    // 等待能力独立于 Jump/HS，不能因为支持瞬时跳转就声称支持冻结。
+    // 大写后缀验证识别规则与 Windows 文件名一致。
+    // 秒单位防止同表格中的 Jump 毫秒说明被复用。
+    const auto bms = MMM::Canvas::timelineFormatSupport("chart.BMS");
+    const auto stop =
+        MMM::Canvas::timelineTimingTooltipDescriptor(TimingEffect::STOP);
+    if ( !bms.supports(TimingEffect::BPM) ||
+         !bms.supports(TimingEffect::STOP) ||
+         bms.supports(TimingEffect::SCROLL) || bms.supports(TimingEffect::HS) ||
+         bms.supports(TimingEffect::JUMP) || stop.label != "STOP" ||
+         stop.valueSuffix != " s" ||
+         MMM::Canvas::timelineFormatSupport("chart.mc")
+             .supports(TimingEffect::STOP) ||
+         !MMM::Canvas::timelineFormatSupport("chart.mmm")
+              .supports(TimingEffect::STOP) )
+        return false;
     // 文案列表必须与矩阵一致，且标准格式保留所有当前时间点类型。
     return MMM::Canvas::timelineFormatSupport("chart.imd").supportedTypes ==
                "BPM" &&

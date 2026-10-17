@@ -33,6 +33,14 @@ class GraphicEqualizer;
 namespace MMM::Audio
 {
 
+/// @brief 由谱面加载路径提交的音乐暂停描述，单位为秒。
+struct AudioTimelineStop {
+    /// @brief 不包含暂停等待的音乐时间位置。
+    double position{};
+    /// @brief 按正常速度计算的暂停秒数。
+    double duration{};
+};
+
 class SoundEffectPool;
 class AuditionSourceMixerNode;
 class KeySoundControlBank;
@@ -248,7 +256,8 @@ public:
     /// 或音频回调热路径。
     [[nodiscard]] AudioTimelineLoadResult loadAudioTimeline(
         const std::vector<AudioTimelineLoadEvent>& events,
-        double chartEndSeconds, const std::string& fingerprint);
+        double chartEndSeconds, const std::string& fingerprint,
+        const std::vector<AudioTimelineStop>& stops = {});
 
     /// @brief 卸载自动采样时间线并断开主时间线音频图。
     /// @warning 低频资源切换路径；会停止全部已调度 HitEffect。
@@ -1029,6 +1038,9 @@ private:
 
     /// @brief 未应用运行时逐轨静音的当前自动采样片段表。
     std::vector<PreparedTimelineClip> m_audioTimelineBaseClips;
+    /// @brief 当前谱面含暂停事件时强制 Key 音走统一拉伸前级。
+    /// @warning 只由逻辑控制线程读写，音频线程消费独立不可变调度。
+    bool m_timelineHasStops{ false };
 
     /// @brief 当前自动采样时间线由谱面内容要求的排除结束帧。
     std::int64_t m_audioTimelineRequestedEndFrame{ 0 };

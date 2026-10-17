@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fmt/format.h>
 #include <set>
 #include <string>
 #include <string_view>
@@ -529,8 +530,35 @@ AudioTimelineDescriptor buildAudioTimelineDescriptor(
     // 完整指纹用于加载内容变化判断，同步指纹只用于主音轨时间关系分组。
     descriptor.m_fingerprint =
         buildFingerprint(pendingEvents, chartContentEndSeconds);
+    // STOP 修改必须使音频描述失效，不能只按 WAV 事件判断是否重建。
+    // 等待序列属于调度身份，修改 STOP 必须触发音频图重新接管。
+    // 保持同刻事件的稳定顺序，时长由音频线程逐项消费而非在这里累加。
+    // 秒数来自模型参数，时间戳从模型毫秒转换为传输秒。
+    // 非有限值和负位置不发布到实时调度，避免帧转换溢出。
+    // 该遍历只发生在描述符脏标记刷新时，不能放进逐帧读取路径。
+    // 普通音源指纹不包含等待，下面同时扩展本地与跟随播放身份。
+    for ( const auto& timing : beatMap.m_timings ) {
+        if ( timing.m_timingEffect != TimingEffect::STOP ) continue;
+        if ( !std::isfinite(timing.m_timestamp) ||
+             !std::isfinite(timing.m_timingEffectParameter) ||
+             timing.m_timestamp < 0 || timing.m_timingEffectParameter <= 0 )
+            continue;
+        descriptor.m_stops.push_back(
+            { timing.m_timestamp / 1000.0, timing.m_timingEffectParameter });
+    }
+    std::stable_sort(
+        descriptor.m_stops.begin(),
+        descriptor.m_stops.end(),
+        [](const auto& a, const auto& b) { return a.position < b.position; });
+    for ( const auto& stop : descriptor.m_stops )
+        descriptor.m_fingerprint +=
+            fmt::format("/stop:{:.17g}:{:.17g}", stop.position, stop.duration);
     descriptor.m_mainAudioSyncFingerprint =
         buildMainAudioSyncFingerprint(std::move(mainAudioSyncEvents));
+    // 跟随播放必须同时匹配等待序列，否则相同音源仍可能使用不同音乐时钟。
+    for ( const auto& stop : descriptor.m_stops )
+        descriptor.m_mainAudioSyncFingerprint +=
+            fmt::format("/stop:{:.17g}:{:.17g}", stop.position, stop.duration);
     descriptor.m_events.reserve(pendingEvents.size());
     descriptor.m_diagnostics.reserve(pendingEvents.size());
 

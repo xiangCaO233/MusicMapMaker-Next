@@ -23,6 +23,14 @@ namespace MMM::Audio
 
 class KeySoundControlBank;
 
+/// @brief 音乐时间线上的暂停事件；等待时不推进音乐位置。
+struct TimelineStopEvent {
+    /// @brief 冻结的音乐时间位置，单位为内部采样帧。
+    AudioTimelineFrame position{};
+    /// @brief 拉伸前静音帧数，遵循统一播放倍率。
+    AudioTimelineFrame duration{};
+};
+
 /// @brief 下一段时间线输入结束处的语义。
 enum class AudioTimelineInputBoundaryKind : std::uint8_t {
     None,
@@ -174,7 +182,8 @@ public:
     /// 起点交换指针，旧状态由控制线程延迟回收。
     std::uint64_t replaceSchedule(std::vector<PreparedTimelineClip> clips,
                                   AudioTimelineFrame requestedTimelineEndFrame,
-                                  std::size_t        maximumProcessFrames);
+                                  std::size_t        maximumProcessFrames,
+                                  std::vector<TimelineStopEvent> stops = {});
 
     /// @brief 在非实时控制线程释放全部已由音频线程退役的调度状态。
     /// @return 本次完成释放的调度状态数量。
@@ -248,6 +257,10 @@ public:
     /// 在不推进时间的前提下接收控制邮箱，供下游变速器按边界拆分输入。
     [[nodiscard]] AudioTimelineInputBoundary prepareInputBoundary(
         std::size_t maximumFrames) noexcept;
+
+    /// @brief 消费 STOP 静音块；只有边界回调固定了暂停输入时返回真。
+    /// @warning 同一音频线程调用，不分配、不等待，也不拉取任何上游采样。
+    bool consumeStopFrames(std::size_t frameCount) noexcept;
 
     /// @brief 获取最近一个已完成音频 block 的播放状态。
     [[nodiscard]] AudioTimelinePlaybackState state() const noexcept;
@@ -323,6 +336,16 @@ private:
         ice::AudioBuffer sourceScratch;
         /// @brief 回调外预分配的活跃片段结果缓存。
         std::vector<AudioTimelineActiveSpan> activeSpanScratch;
+        /// @brief 构建时排序的暂停事件表，音频线程只增量推进索引。
+        std::vector<TimelineStopEvent> stops;
+        /// @brief 下一个尚未完成的暂停事件。
+        std::size_t nextStop{};
+        /// @brief 当前暂停尚需输出的静音帧数。
+        AudioTimelineFrame stopRemaining{};
+        /// @brief 最近定位纪元，用于 Seek 和循环后重置暂停索引。
+        std::uint64_t stopEpoch{ UINT64_MAX };
+        /// @brief 本次边界预告是否固定为暂停块。
+        bool stopInput{};
         /// @brief 音频线程退役栈中的下一个状态。
         ScheduleState* nextRetired{ nullptr };
     };
@@ -535,6 +558,11 @@ private:
     /// @warning
     /// 音频线程写入、逻辑线程读取；relaxed 顺序足以提供独立状态快照。
     std::atomic<bool> m_publishedFinished{ false };
+
+    /// @brief 当前发布的音乐时钟是否因 STOP 冻结。
+    /// @warning 音频线程写、逻辑线程在时钟序列锁内读；relaxed
+    /// 载荷由序列锁发布。
+    std::atomic<bool> m_publishedStopFrozen{ false };
 
     /// @brief 一致时钟快照的序列锁版本。
     ///

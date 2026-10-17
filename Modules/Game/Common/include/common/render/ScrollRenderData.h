@@ -25,6 +25,8 @@ struct ScrollSegment {
     entt::entity jumpEntity{ entt::null };
     /// @brief 当前时间点的 HS 实体。
     entt::entity hsEntity{ entt::null };
+    /// @brief 当前暂停事件实体。
+    entt::entity stopEntity{ entt::null };
     /// @brief BPM 事件原始值。
     double bpmValue{ 0.0 };
     /// @brief SV 事件原始值。
@@ -33,6 +35,8 @@ struct ScrollSegment {
     double jumpValue{ 0.0 };
     /// @brief HS 事件原始值。
     double hsValue{ 1.0 };
+    /// @brief STOP 持续秒数，不参与滚动速度积分。
+    double stopValue{ 0.0 };
     /// @brief 当前区间生效的 HS 倍率。
     double hs{ 1.0 };
     /// @brief 当前区间生效的 BPM。
@@ -49,6 +53,8 @@ inline constexpr std::uint32_t SCROLL_EFFECT_SCROLL = 1U << 1U;
 inline constexpr std::uint32_t SCROLL_EFFECT_JUMP = 1U << 2U;
 /// @brief 滚动分段中的 HS 事件位。
 inline constexpr std::uint32_t SCROLL_EFFECT_HS = 1U << 3U;
+/// @brief 暂停事件位，等待由音频时钟执行。
+inline constexpr std::uint32_t SCROLL_EFFECT_STOP = 1U << 4U;
 
 /// @brief 预览窗口全谱物件密度的固定时长滑动窗口快照。
 struct PreviewDensitySnapshot {

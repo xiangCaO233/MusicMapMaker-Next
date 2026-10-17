@@ -311,12 +311,16 @@ struct TimelineInteractiveElement {
     entt::entity scrollEntity{ entt::null };
     entt::entity jumpEntity{ entt::null };  /// @brief Jump 效果实体
     entt::entity hsEntity{ entt::null };    /// @brief HS 效果实体
+    /// @brief 当前暂停事件实体。
+    entt::entity stopEntity{ entt::null };
     /// @brief BPM 效果的原始数值。
     double bpmValue{ 0.0 };
     /// @brief Scroll 效果的原始数值。
     double scrollValue{ 0.0 };
     double jumpValue{ 0.0 };  /// @brief Jump 原始参数，单位毫秒
     double hsValue{ 1.0 };    /// @brief HS 原始参数
+    /// @brief STOP 持续秒数，不参与滚动速度积分。
+    double stopValue{ 0.0 };
     /// @brief BPM 标记的快照几何范围。
     MarkerGeometry bpmMarker;
     /// @brief Scroll 标记的快照几何范围。
@@ -325,6 +329,8 @@ struct TimelineInteractiveElement {
     MarkerGeometry jumpMarker;
     /// @brief HS 标记的快照几何范围。
     MarkerGeometry hsMarker;
+    /// @brief 暂停标记对应的交互几何。
+    MarkerGeometry stopMarker;
     /// @brief 该 Timing 标记是否拥有可直接修饰的几何体。
     bool hasMarkerGeometry{ false };
     /// @brief 该 Timing 标记在快照顶点数组中的起点。

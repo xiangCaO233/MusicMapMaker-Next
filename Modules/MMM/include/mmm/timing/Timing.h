@@ -17,6 +17,8 @@ enum class TimingEffect {
     JUMP,
     /// @brief Malody hs音符速度效果
     HS,
+    /// @brief 冻结谱面与全部播放采样；参数为持续秒数。
+    STOP,
 };
 
 /// @brief 将时间线效果类型转换为持久化字符串

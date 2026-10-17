@@ -573,7 +573,7 @@ private:
     /// @brief 时间点表格是否只显示 BPM 行。
     bool m_tableOnlyShowBpm{ false };
     /// @brief 时间点表格搜索启用的 BPM、SV、Jump 与 HS 属性。
-    std::array<bool, 4> m_tableSearchEffectFilters{};
+    std::array<bool, 5> m_tableSearchEffectFilters{};
     /// @brief 时间点表格精确数值搜索文本。
     std::array<char, 64> m_tableSearchValueBuffer{};
     /// @brief 时间点表格搜索结果的批量替换值。

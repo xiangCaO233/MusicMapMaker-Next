@@ -107,8 +107,9 @@ inline constexpr std::array<std::string_view, 1> MPK_PACKAGE_BEATMAP_EXTENSIONS{
 };
 
 /// @brief 可被打包流程加载并转换的谱面源扩展名。
-inline constexpr std::array<std::string_view, 4>
-    PACKAGE_BEATMAP_SOURCE_EXTENSIONS{ ".mmm", ".mc", ".osu", ".imd" };
+inline constexpr std::array<std::string_view, 8>
+    PACKAGE_BEATMAP_SOURCE_EXTENSIONS{ ".mmm", ".mc",  ".osu", ".imd",
+                                       ".bms", ".bme", ".bml", ".pms" };
 
 /// @brief 通配音频资源发现时使用的常见音频扩展名。
 inline constexpr std::array<std::string_view, 15>

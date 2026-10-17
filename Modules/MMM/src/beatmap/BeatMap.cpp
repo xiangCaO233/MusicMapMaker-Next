@@ -1,9 +1,11 @@
 #include "mmm/beatmap/BeatMap.h"
 
+#include "BmsFormat.hpp"
 #include "LoadMMMMap.hpp"
 #include "LoadMalodyMap.hpp"
 #include "LoadOSUMap.hpp"
 #include "LoadRMMap.hpp"
+#include "SaveBmsMap.hpp"
 #include "SaveMMMMap.hpp"
 #include "SaveMalodyMap.hpp"
 #include "SaveOSUMap.hpp"
@@ -56,6 +58,21 @@ BeatMap BeatMap::loadFromFile(std::filesystem::path mapFilePath)
     }
     // UTF-8 转换只作用于扩展名；实际路径继续以 filesystem::path 传递。
     std::string mapFileExtention = Config::pathToUtf8(mapFilePath.extension());
+    // BMS 家族共用文本协议，PMS 根据后缀使用独立九键映射。
+    // STOP 保留成等待事件，不修改后续物件的音乐时间戳。
+    // 相同入口也用于原生保存后的再次导出，不能只在文件浏览器识别后缀。
+    // 解析失败保留源文件，保存失败向调用方返回明确错误。
+    // 大小写后缀都进入同一解析器，Windows 保存名称不影响格式识别。
+    // BME/BML 的常见长条写法由文本声明决定，不按后缀强行覆盖。
+    // 导入保留绑定路径与等待，原生格式往返应保持这些领域字段。
+    // 只有外部导出器负责单位转换，BeatMap 分派不重复计算时间。
+    if ( Bms::upper(mapFileExtention) == ".BMS" ||
+         Bms::upper(mapFileExtention) == ".BME" ||
+         Bms::upper(mapFileExtention) == ".BML" ||
+         Bms::upper(mapFileExtention) == ".PMS" ) {
+        // BMS 家族复用通道解析，PMS 单独解释九键轨道。
+        return Bms::load(mapFilePath);
+    }
     if ( mapFileExtention == ".osu" ) {
         // osu! 是带节区的文本格式，由专用读取器完成字段兼容。
         return loadOSUMap(mapFilePath);
@@ -167,6 +184,22 @@ bool BeatMap::saveToFile(std::filesystem::path mapFilePath) const
         // 重建借用视图以指向临时副本的容器，不能沿用来源视图地址。
         sampled.sync();
         return sampled.saveToFile(std::move(mapFilePath));
+    }
+    if ( Bms::upper(mapFileExtention) == ".BMS" ||
+         Bms::upper(mapFileExtention) == ".BME" ||
+         Bms::upper(mapFileExtention) == ".BML" ||
+         Bms::upper(mapFileExtention) == ".PMS" ) {
+        // 不可表达的效果由 writer 拒绝，不静默丢弃谱面内容。
+        return Bms::save(*this, mapFilePath);
+    }
+    if ( mapFileExtention != ".mmm" &&
+         std::any_of(m_timings.begin(), m_timings.end(), [](const Timing& t) {
+             return t.m_timingEffect == TimingEffect::STOP;
+         }) ) {
+        XERROR(
+            "Target format cannot preserve STOP audio freezing; use MMM or "
+            "BMS.");
+        return false;
     }
     if ( mapFileExtention == ".osu" ) {
         // 目标格式由后缀唯一决定，写出器负责必要的字段降级。

@@ -125,7 +125,8 @@ void FileManagerView::handleDragDrop(UIManager* sourceManager)
         auto ext = Config::pathToUtf8(p.extension());
         // 未识别类型默认保留文件浏览器，便于查看原文件位置。
         SideBarTab targetTab = SideBarTab::FileExplorer;
-        if ( ext == ".osu" || ext == ".imd" || ext == ".mc" ) {
+        if ( ext == ".bms" || ext == ".bme" || ext == ".bml" || ext == ".pms" ||
+             ext == ".osu" || ext == ".imd" || ext == ".mc" ) {
             // 已知谱面格式直接切换谱面浏览器。
             targetTab = SideBarTab::BeatMapExplorer;
         } else if ( ext == ".mp3" || ext == ".ogg" || ext == ".wav" ||

@@ -191,13 +191,18 @@ std::string definitionError(const TimingTemplate& value)
         if ( line.m_timingEffect != TimingEffect::BPM &&
              line.m_timingEffect != TimingEffect::SCROLL &&
              line.m_timingEffect != TimingEffect::JUMP &&
-             line.m_timingEffect != TimingEffect::HS )
+             line.m_timingEffect != TimingEffect::HS &&
+             line.m_timingEffect != TimingEffect::STOP )
             return "未知的时间点类型。";
         if ( !std::isfinite(point.m_offset) ||
              !std::isfinite(line.m_timingEffectParameter) ||
              (line.m_timingEffect == TimingEffect::BPM &&
               line.m_timingEffectParameter < 0) )
             return "偏移和参数须为有限值，BPM 不能为负。";
+        // STOP 是持续等待，负值或零值都不能形成有效调度。
+        if ( line.m_timingEffect == TimingEffect::STOP &&
+             line.m_timingEffectParameter <= 0 )
+            return "STOP 等待秒数必须大于零。";
         // 禁止含红线的拍域模板是定义规则，文件和 UI 都不能绕过。
         // 其他三个类型可以混合使用同一拍轴和同一基准。
         // 不依据名称或当前播放 BPM 推断模板类型。

@@ -232,7 +232,7 @@ private:
             // 原生选择器在当前调用内阻塞，显示前播放统一弹窗反馈。
             ::MMM::UI::PlayPopupOpenFeedback();
             nfdu8char_t*      outPath = nullptr;
-            nfdu8filteritem_t filters[4];
+            nfdu8filteritem_t filters[5];
             int               filterCount = 0;
 
             // 指定扩展名时只加入对应过滤器，空值则依次加入全部格式。
@@ -249,6 +249,10 @@ private:
                 filters[filterCount++] = { "Malody Chart", "mc" };
             }
 
+            if ( ext == ".bms" || ext == ".bme" || ext == ".bml" ||
+                 ext == ".pms" || ext.empty() ) {
+                filters[filterCount++] = { "BMS Beatmap", "bms,bme,bml,pms" };
+            }
             // NFD 接收 UTF-8 默认目录和文件名，并返回其分配的 UTF-8 路径。
             nfdresult_t result =
                 NativeFileDialog::saveFile(&outPath,
@@ -286,7 +290,7 @@ private:
         else if ( ext == ".mc" )
             filterStr = ".mc";
         else
-            filterStr = ".mmm,.osu,.imd,.mc";
+            filterStr = ".mmm,.osu,.imd,.mc,.bms,.bme,.bml,.pms";
 
         // 记录打开前状态，仅在新打开时播放声音反馈。
         const bool wasOpen =
@@ -392,6 +396,16 @@ private:
                     selectedExtension = ".mc";
                 }
 
+                // BMS 使用单文件导出，不自动创建资源包或重编码音频。
+                // 保存处理器会把项目音效 ID 转成相对 WAV 路径。
+                // 此入口仅选择格式，真正的兼容性检查仍由保存器负责。
+                // PMS 保持单独后缀，以免九键被误当作键盘双人布局。
+                if ( MenuUtil::drawCenteredButton("BMS Beatmap (.bms)",
+                                                  buttonSize) )
+                    selectedExtension = ".bms";
+                if ( MenuUtil::drawCenteredButton("PMS Beatmap (.pms)",
+                                                  buttonSize) )
+                    selectedExtension = ".pms";
                 // 取消区与格式选项用分隔线隔开。
                 ImGui::Spacing();
                 ImGui::Separator();

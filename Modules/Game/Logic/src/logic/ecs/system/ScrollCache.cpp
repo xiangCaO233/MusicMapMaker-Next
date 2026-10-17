@@ -384,6 +384,11 @@ void ScrollCache::rebuild(const entt::registry&       timelineRegistry,
                 // Jump 值按毫秒换算为秒，不改变事件时间戳，只调整累计位置。
                 newSegments.back().absY = currentAbsY;
             }
+        } else if ( tl->m_effect == ::MMM::TimingEffect::STOP ) {
+            // 暂停冻结统一音乐时钟，缓存仅记录标记，不叠加零速或额外位移。
+            newSegments.back().effects |= SCROLL_EFFECT_STOP;
+            newSegments.back().stopEntity = entry.entity;
+            newSegments.back().stopValue  = tl->m_value;
         } else if ( tl->m_effect == ::MMM::TimingEffect::HS ) {
             if ( entry.entity != entt::null ) {
                 newSegments.back().effects |= SCROLL_EFFECT_HS;
