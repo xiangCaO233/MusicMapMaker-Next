@@ -1085,6 +1085,15 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
     // BPM 测量工具偏好跨项目共享，避免打开项目时重置用户输入习惯。
     target.settings.bpmMeasurementToolPreferences =
         source.settings.bpmMeasurementToolPreferences;
+    // 画布观察由 UI 直接更新本机配置，不属于项目工作区或谱面几何。
+    // 旧引擎快照只可恢复其目标设置，不能把正在观察的相机还原到旧状态。
+    // 三项必须一起保留，包含恢复二维所用的零角度和单位距离。
+    target.visual.debugCanvasCameraAngleDegrees =
+        source.visual.debugCanvasCameraAngleDegrees;
+    target.visual.debugCanvasCameraYawDegrees =
+        source.visual.debugCanvasCameraYawDegrees;
+    target.visual.debugCanvasCameraDistance =
+        source.visual.debugCanvasCameraDistance;
 }
 
 /// @brief 判断逻辑指令是否会修改临时项目内容。

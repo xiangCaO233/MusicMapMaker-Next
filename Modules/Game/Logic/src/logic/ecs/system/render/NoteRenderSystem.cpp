@@ -360,9 +360,14 @@ void NoteRenderSystem::generateSnapshot(
     // 批处理器借用快照中的几何容器。
     // 布局输出统一在栈上初始化，空谱面分支可保留零范围。
     Batcher batcher(snapshot);
-    float   leftX = 0, rightX = 0, topY = 0, bottomY = 0, trackAreaW = 0,
-            singleTrackW = 0;
-    float   renderScaleY = 1.0f;
+    // 三维画布只扩大远端可见范围，原像素坐标与时间映射保持不变。
+    // Timeline 和缩略预览继续使用自己的二维范围，不能继承该扩展。
+    if ( isMainCanvas )
+        batcher.m_minScissorY =
+            -std::ceil(viewportHeight * config.visual.canvasCameraExtension());
+    float leftX = 0, rightX = 0, topY = 0, bottomY = 0, trackAreaW = 0,
+          singleTrackW = 0;
+    float renderScaleY = 1.0f;
 
     // 第一阶段：静态布局与打击特效预生成。
     // 打击特效顶点不随谱面滚动，因此在静态顶点边界前生成，
@@ -1795,8 +1800,12 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
         const float lx = projection.leftX;
         const float rx = projection.rightX;
         // 扩展垂直方向的裁剪区域，给予上下各 0.5 倍视口的余量。
+        // 顶部裁剪必须覆盖完整扩展高度，否则底板在原画布顶部被切断。
+        // 近端仍沿用原有余量，不移动判定区或改变分拍间距。
+        const float clipTop =
+            std::min(-viewportHeight * 0.5F, batcher.m_minScissorY);
         batcher.setScissor(
-            lx, -viewportHeight * 0.5f, rx - lx, viewportHeight * 2.0f);
+            lx, clipTop, rx - lx, viewportHeight * 1.5F - clipTop);
         NoteRenderSystem::renderTrackLayout(batcher,
                                             viewportWidth,
                                             viewportHeight,

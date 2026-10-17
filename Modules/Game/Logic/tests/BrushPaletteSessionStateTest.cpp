@@ -2,12 +2,17 @@
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/session/ActionController.h"
+#include "logic/session/EditorAction.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
+#include "config/VisualConfig.h"
 #include "log/colorful-log.h"
+#include "mmm/Metadata.h"
+#include "mmm/note/Note.h"
 
 #include <array>
 #include <atomic>
@@ -409,6 +414,121 @@ bool testSkinSelectionSurvivesPaletteRefresh()
     return ok;
 }
 
+/// @brief 验证旧引擎快照不能覆盖本机观察参数或将其写入谱面模型。
+/// @return 观察参数、二维复位及谱面只读边界均保持时返回 true。
+/// @note 配置持久化使用测试启动器隔离的路径，不访问个人设置。
+/// @details 本机参数模拟画布直接写入，候选配置模拟稍后的项目恢复。
+/// 测试同时检查权威配置、引擎缓存和会话消费，避免只修复单个读取端。
+/// 谱面断言检查保存入口使用的同步模型，不依赖窗口或 GPU 状态。
+/// 本测试不创建或写出谱面文件，也不宣称覆盖其它谱面导出格式。
+bool testObservationCameraSurvivesStaleConfig()
+{
+    auto& app    = MMM::Config::AppConfig::instance();
+    auto& engine = MMM::Logic::EditorEngine::instance();
+    // 在创建夹具前保存两份独立配置；测试结束时按原权威来源恢复单例。
+    const auto originalApp    = app.getEditorConfig();
+    const auto originalEngine = engine.getEditorConfig();
+    while ( engine.getSessionCount() > 0 ) {
+        // 既有测试可能保留活动会话，先关闭才能让本例的索引零明确对应夹具。
+        engine.closeSession(engine.getSessionCount() - 1, false);
+    }
+
+    // 使用真实谱面和物件，以便配置命令确实经过会话而非仅检查全局缓存。
+    // 基础 BPM 和轨道数保持有效，避免无效谱面的规范化混入观察参数断言。
+    auto beatmap                           = std::make_shared<MMM::BeatMap>();
+    beatmap->m_baseMapMetadata.track_count = 4;
+    beatmap->m_baseMapMetadata.preference_bpm = 120;
+    // 来源扩展放入一个哨兵值，既检查内容保留，也检查没有附加摄像机键。
+    beatmap->m_metadata.map_properties[MMM::MapMetadataType::MALODY]["keep"] =
+        "source";
+    MMM::Note note;
+    // 时间和轨道使用非零值，能发现观察被错误实现为谱面几何变换。
+    note.m_timestamp = 1000;
+    note.m_track     = 2;
+    // 原生物件元数据另作检查，防止参数只避开谱面元数据却写入单个物件。
+    note.m_metadata.note_properties[MMM::NoteMetadataType::MMM]["annotation"] =
+        "keep";
+    beatmap->m_noteData.notes.push_back(note);
+    // 必须保留值副本；随后同步会重建物件容器，引用会掩盖意外写入。
+    const auto mapProperties  = beatmap->m_metadata.map_properties;
+    const auto noteProperties = note.m_metadata.note_properties;
+    engine.createSession(beatmap, "Observation Config", false);
+    // 创建失败仍走统一恢复路径，不能让测试失败污染后续单例使用者。
+    auto session = engine.getActiveSession();
+    bool ok      = session != nullptr;
+    if ( session ) {
+        // 初始化布局之后建立未修改基线；随后只允许配置传播而不执行编辑动作。
+        // 初始规范化是否产生状态与本修复无关，后面比较相同会话的前后状态。
+        session->update(0.0, engine.getEditorConfig(), true);
+        const bool wasDirty = session->getContext().actionStack.isDirty();
+        // 两组分别覆盖非默认观察以及复位二维；旧快照总与当前三值不同。
+        // 负 yaw 与非整数距离同时覆盖符号及倍率，不能只保留原型俯仰字段。
+        // 第二组也防止实现使用非零判断，从而把二维默认误判为缺失值。
+        const std::array<std::array<float, 3>, 2> cameras{
+            std::array<float, 3>{ 65.0F, -135.0F, 2.5F },
+            std::array<float, 3>{ 0.0F, 0.0F, 1.0F }
+        };
+        for ( const auto& camera : cameras ) {
+            // 模拟右拖/滚轮仅先写 AppConfig，随后项目恢复提交旧引擎快照。
+            // 候选值不取当前 AppConfig，保证修复前会真实覆盖三项观察参数。
+            auto staleConfig = engine.getEditorConfig();
+            staleConfig.visual.debugCanvasCameraAngleDegrees = 10.0F;
+            staleConfig.visual.debugCanvasCameraYawDegrees   = 45.0F;
+            staleConfig.visual.debugCanvasCameraDistance     = 3.0F;
+            // 无关视觉开关属于候选值，后面用它确认配置合并仍正常执行。
+            staleConfig.visual.overrideBeatLineColors =
+                !originalEngine.visual.overrideBeatLineColors;
+            auto& visual = app.getVisualConfig();
+            // 写入权威来源后不能先发布一份新配置，否则旧缓存场景会被绕过。
+            visual.debugCanvasCameraAngleDegrees = camera[0];
+            visual.debugCanvasCameraYawDegrees   = camera[1];
+            visual.debugCanvasCameraDistance     = camera[2];
+            engine.setEditorConfig(staleConfig);
+            // 引擎缓存必须同步保留当前值，否则下一个配置消费者仍会得到旧视角。
+            const auto merged = engine.getEditorConfig();
+            // 同时检查无关设置仍应用，禁止靠丢弃整个旧配置来保护摄像机。
+            ok = ok &&
+                 near(merged.visual.debugCanvasCameraAngleDegrees, camera[0]) &&
+                 near(merged.visual.debugCanvasCameraYawDegrees, camera[1]) &&
+                 near(merged.visual.debugCanvasCameraDistance, camera[2]) &&
+                 merged.visual.overrideBeatLineColors ==
+                     staleConfig.visual.overrideBeatLineColors;
+            // 经正式保存和重新加载核对三值，确保修复覆盖下一次启动的配置。
+            // 读取前人为破坏内存距离，使加载成功不能被已有正确内存值掩盖。
+            ok                               = app.save() && ok;
+            visual.debugCanvasCameraDistance = 0.5F;
+            ok                               = app.load() && ok;
+            // AppConfig 加载会替换内部值，此处重新取得引用后只读取最终结果。
+            const auto& loaded = app.getVisualConfig();
+            ok = ok && near(loaded.debugCanvasCameraAngleDegrees, camera[0]) &&
+                 near(loaded.debugCanvasCameraYawDegrees, camera[1]) &&
+                 near(loaded.debugCanvasCameraDistance, camera[2]);
+            // 会话消费广播后同步保存模型，观察字段不能变成物件或元数据。
+            // 零时间步只推进命令与派生状态，不引入播放位置变化。
+            session->update(0.0, merged, true);
+            MMM::Logic::SessionUtils::syncBeatmap(session->getContextMutable());
+            // 撤销脏标记检查编辑副作用，元数据全表比较检查持久化字段泄漏。
+            // 物件数量先判定，再用短路求值访问首项，失败时同样保持测试可诊断。
+            ok = ok &&
+                 session->getContext().actionStack.isDirty() == wasDirty &&
+                 beatmap->m_metadata.map_properties == mapProperties &&
+                 beatmap->m_noteData.notes.size() == 1 &&
+                 beatmap->m_noteData.notes.front().m_timestamp ==
+                     note.m_timestamp &&
+                 beatmap->m_noteData.notes.front().m_track == note.m_track &&
+                 beatmap->m_noteData.notes.front().m_metadata.note_properties ==
+                     noteProperties;
+        }
+    }
+    // 即使断言失败也关闭夹具并恢复配置，后续同进程测试不能继承观察状态。
+    // 先恢复 AppConfig，再调用合并入口，保留规则才会消费原来的权威值。
+    engine.closeSession(0, false);
+    app.getEditorConfig() = originalApp;
+    engine.setEditorConfig(originalEngine);
+    if ( !ok ) XERROR("Stale config overwrote camera or mutated beatmap");
+    return ok;
+}
+
 /// @brief 验证全谱清理会清除新旧颜色字段、折线子段，并可撤销。
 /// @return 正式模型和运行时视图一致且无关数据保留时返回 true。
 /// @details
@@ -551,6 +671,7 @@ int main()
     // 先验证跨会话共享状态，再验证目标路由隔离，最后执行配置并发读取回归。
     return testClearAllNoteColors() &&
                    testSkinSelectionSurvivesPaletteRefresh() &&
+                   testObservationCameraSurvivesStaleConfig() &&
                    testPaletteRestoredAfterSessionClose() &&
                    testAudioResourceRestoredAfterSessionClose() &&
                    testBackgroundCanvasMousePositionRouting() &&

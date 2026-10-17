@@ -26,12 +26,14 @@
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/AnnotationTargetHint.h"
 #include "canvas/Basic2DCanvasInteraction.h"
+#include "canvas/CameraLayoutEditor.h"
 #include "canvas/CanvasTabTitle.h"
 #include "canvas/CollaborationPeerColor.h"
 #include "canvas/CollaborationViewportProjection.h"
 #include "canvas/ComposeHoldTarget.h"
 #include "canvas/ComposeLessonHintGeometry.h"
 #include "canvas/ComposeTargetEligibility.h"
+#include "canvas/PlanarObservationCamera.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
@@ -59,6 +61,7 @@
 #include <fmt/format.h>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -2623,6 +2626,20 @@ void Basic2DCanvas::updateComposeWalkthrough(
 void Basic2DCanvas::update(UI::UIManager* sourceManager)
 {
     auto& engine = Logic::EditorEngine::instance();
+    // 布局状态只在进入/退出边沿创建和释放；退出恢复保存的实际相机投影。
+    // 全局工具退出时所有画布都会释放各自的辅助编辑状态。
+    // 保持原始相机配置，真正的最终视角由随后的录制阶段应用。
+    const bool layoutEditing =
+        engine.getCurrentTool() == Logic::EditTool::Layout &&
+        m_currentSnapshot && m_currentSnapshot->hasBeatmap;
+    if ( layoutEditing && !m_layoutEditor )
+        // 状态对象只在工具进入边沿分配，不在连续拖动帧重复创建。
+        m_layoutEditor = std::make_unique<CameraLayoutEditor>();
+    if ( !layoutEditing && m_layoutEditor ) {
+        m_layoutEditor.reset();
+        // 仅工具切换的低频路径保存配置，拖动过程不会执行文件 IO。
+        Config::AppConfig::instance().save();
+    }
     // cameraId 是窗口与会话的稳定连接键；索引会随标签关闭和重排变化，
     // 因此需要使用时重新解析，不能跨帧缓存旧索引。
     auto findSessionIndex = [this, &engine]() -> int32_t {
@@ -2809,8 +2826,48 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         const ImVec2 canvasScreenPosition = ImGui::GetCursorScreenPos();
         const ImVec2 canvasSize           = rctx.getRenderSize();
         rctx.renderSurface();
-        if ( m_currentSnapshot )
-            // 快照与刚绘制的纹理使用同一代布局，避免教学框和画面错位。
+        // 纹理展示区域定义真实输入边界，窗口标题和其它停靠内容不属于该区域。
+        // 观察矩阵处理逻辑像素；不能把 framebuffer 的 DPI 尺寸带入鼠标映射。
+        // 动态插值另行传递，因为它只移动谱面顶点，没有更新原始命中框。
+        // 输入映射与待录制的轨道投影共用矩阵；背景仍使用自己的屏幕投影。
+        // 每帧只构造一次平面逆矩阵，后续拾取和拖动都复用固定大小缓存。
+        auto& cameraVisual = Config::AppConfig::instance().getVisualConfig();
+        // 长度拖动与精确输入即时生效，只有数值发生变化才发布配置。
+        // 普通相机拖动仅影响 UI 投影，不进入逻辑配置发布路径。
+        const float previousExtension = cameraVisual.canvasCameraExtension();
+        const bool  hasCameraScene =
+            m_currentSnapshot && m_currentSnapshot->hasBeatmap;
+        // 模式切换先于本帧投影；相机预览借用同一离屏纹理，不创建第二套 GPU
+        // 资源。
+        const bool layoutInputConsumed =
+            m_layoutEditor &&
+            m_layoutEditor->update(
+                m_cameraId,
+                canvasScreenPosition,
+                canvasSize,
+                (ImTextureID)(VkDescriptorSet)getDescriptorSet(),
+                cameraVisual);
+        // 扩展范围由逻辑线程生成真实物件，通过既有配置命令异步生效。
+        // 不等手势结束；远端物件范围必须跟随当前长度，稳定帧不广播。
+        if ( previousExtension != cameraVisual.canvasCameraExtension() )
+            engine.setEditorConfig(
+                Config::AppConfig::instance().getEditorConfig());
+        const bool cameraViewEnabled =
+            hasCameraScene && !layoutEditing &&
+            (cameraVisual.canvasCameraPoseEnabled ||
+             planarObservationEnabled(
+                 cameraVisual.debugCanvasCameraAngleDegrees,
+                 cameraVisual.debugCanvasCameraYawDegrees,
+                 cameraVisual.debugCanvasCameraDistance));
+        // 元素模式保持正视输入；相机模式独占输入，不把操纵轴误当谱面物件。
+        m_interaction->setInputProjection(
+            makePlanarObservationInputProjection(getCanvasProjectionMatrix(),
+                                                 canvasSize.x,
+                                                 canvasSize.y,
+                                                 cameraViewEnabled),
+            m_lastAppliedYOffset);
+        if ( m_currentSnapshot && !cameraViewEnabled )
+            // 教学屏幕提示未投影，仅在二维视图沿用旧的目标定位。
             reportCanvasWalkthroughTargets(sourceManager,
                                            *m_currentSnapshot,
                                            canvasScreenPosition,
@@ -2832,13 +2889,19 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                 m_cameraId);
         }
 
-        if ( isActiveCanvas ) {
+        if ( layoutInputConsumed ) {
+            // 编辑面板及三维手势完全独占输入，预览不发送物件、时间或联机命令。
+            m_interaction->updateTransientUi();
+        } else if ( isActiveCanvas ) {
             // 活动画布先发布并绘制协作视野，再运行编辑交互；后者可在
             // 同一 ImGui 层建立命中区域，而覆盖层始终使用本帧快照。
-            updateCollaborationViewports(
-                sourceManager, canvasScreenPosition, canvasSize);
+            if ( !cameraViewEnabled )
+                // 协作视野框仍以二维屏幕矩形绘制，不能用它覆盖倾斜后的谱面。
+                updateCollaborationViewports(
+                    sourceManager, canvasScreenPosition, canvasSize);
             bool lessonButtonHovered = false;
-            if ( m_currentSnapshot ) {
+            if ( m_currentSnapshot && !cameraViewEnabled ) {
+                // 教学命中装饰同样依赖二维像素，透视模式跳过装饰而保留普通编辑。
                 // 教程先判定本帧释放是否合法，以便交互控制器随后选择提交或
                 // 取消 CmdEndBrush；目标装饰不创建 ImGui Item，不拦截画布输入。
                 updateComposeWalkthrough(sourceManager,
@@ -3600,6 +3663,19 @@ bool Basic2DCanvas::isDirty() const
 bool Basic2DCanvas::shouldRecordOffscreen() const
 {
     return m_isCanvasVisible;
+}
+
+/// @brief 将相机编辑器控件嵌入调用方的布局工具窗口。
+/// @warning UI 每帧借用本地编辑器；不分配资源或获取会话锁。
+bool Basic2DCanvas::drawCameraLayoutControls()
+{
+    // 编辑器的创建销毁仍属于画布布局生命周期，工具栏不能延长其寿命。
+    // 首帧尚未创建时跳过，下一帧自动显示；不在工具栏重复建立状态。
+    if ( !m_layoutEditor ) return false;
+    // 共用同一实例，按钮切换和三维手势不会出现两份模式状态。
+    m_layoutEditor->drawControls(
+        Config::AppConfig::instance().getVisualConfig());
+    return m_layoutEditor->cameraMode();
 }
 
 /// @brief 查询窗口在会话关闭规则下的有效打开状态。

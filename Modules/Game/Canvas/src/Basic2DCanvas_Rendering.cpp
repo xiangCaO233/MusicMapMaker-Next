@@ -14,6 +14,9 @@
 #include "canvas/Basic2DCanvas.h"
 
 #include "canvas/BackgroundVideoTiming.h"
+#include "canvas/CameraLayoutEditor.h"
+#include "canvas/CameraLayoutMath.h"
+#include "canvas/PlanarObservationCamera.h"
 #include "common/UnicodeFontData.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
@@ -29,6 +32,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <system_error>
@@ -36,6 +40,71 @@
 
 namespace MMM::Canvas
 {
+glm::mat4 Basic2DCanvas::getCanvasProjectionMatrix()
+{
+    // 仅改变录制阶段，不修改快照或会话的时间、轨道坐标。
+    // 轨道与音符共用平面，背景层和全屏后处理不进入该变换。
+    // 渲染线程只读 UI 同线程维护的配置，不访问会话更新长锁。
+    // 空会话没有轨道场景，Logo 占位仍使用二维投影而非实验摄像机。
+    const auto& visual   = Config::AppConfig::instance().getVisualConfig();
+    const bool  hasScene = m_currentSnapshot && m_currentSnapshot->hasBeatmap &&
+                           (!m_layoutEditor || m_layoutEditor->cameraMode());
+    // 元素布局只临时覆盖观察矩阵，保留已保存的自由相机姿态。
+    // 自由相机预览与退出布局后的渲染完全共用这条路径。
+    // 元素布局通过 hasScene 临时回到正交矩阵。
+    // 因此切换模式不需要重建顶点或等待逻辑线程重新发布快照。
+    if ( hasScene && visual.canvasCameraPoseEnabled ) {
+        m_isObservationCamera = true;
+        m_observationProjection =
+            canvasCameraPoseProjection(static_cast<float>(m_logicalWidth),
+                                       static_cast<float>(m_logicalHeight),
+                                       m_yOffset,
+                                       visual);
+        return m_observationProjection;
+    }
+    const float angle = hasScene ? visual.debugCanvasCameraAngleDegrees : 0.0F;
+    const float yaw   = hasScene ? visual.debugCanvasCameraYawDegrees : 0.0F;
+    const float distance = hasScene ? visual.debugCanvasCameraDistance : 1.0F;
+    // 与输入层共用启用条件，单独旋转或改变距离也不能误用二维拾取。
+    m_isObservationCamera = planarObservationEnabled(angle, yaw, distance);
+    // 后续批次裁剪复用该矩阵，发光降采样不改变逻辑空间。
+    m_observationProjection =
+        planarObservationProjection(static_cast<float>(m_logicalWidth),
+                                    static_cast<float>(m_logicalHeight),
+                                    m_yOffset,
+                                    angle,
+                                    yaw,
+                                    distance);
+    return m_observationProjection;
+}
+
+vk::Rect2D Basic2DCanvas::getCanvasScissor(
+    Common::Render::CanvasScissor scissor) const
+{
+    // 包围框允许少量边缘溢出，精确梯形裁剪留待后续实验。
+    // 此处只裁剪绘制范围，鼠标拾取由独立的平面逆投影处理。
+    // 零角度不经浮点四角投影，保持旧二维裁剪像素完全一致。
+    // 元素布局临时使用正交视角，快照仍可能含三维远端的负坐标。
+    // Vulkan 物理裁剪不允许负偏移，正交路径先与窗口高度取交集。
+    // 三维路径必须先投影，不能在逻辑零点截掉远端物件。
+    if ( !m_isObservationCamera && scissor.y < 0 ) {
+        const auto bottom =
+            static_cast<std::int64_t>(scissor.y) + scissor.height;
+        scissor.y      = 0;
+        scissor.height = static_cast<std::uint32_t>(
+            std::clamp<std::int64_t>(bottom, 0, m_logicalHeight));
+    }
+    if ( m_isObservationCamera ) {
+        scissor = planarObservationScissor(scissor,
+                                           m_observationProjection,
+                                           static_cast<float>(m_logicalWidth),
+                                           static_cast<float>(m_logicalHeight));
+    }
+    // 先完成场景投影，再使用当前目标（含 glow）的 DPI 比例。
+    return getPhysicalScissor(vk::Rect2D{ { scissor.x, scissor.y },
+                                          { scissor.width, scissor.height } });
+}
+
 namespace
 {
 
@@ -589,6 +658,14 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
 
     vk::DescriptorSet             lastBoundTexture = VK_NULL_HANDLE;
     Common::Render::CanvasScissor lastScissor;
+    // 每帧背景独立使用屏幕正交投影，不跟随倾角或亚帧播放补偿。
+    // 背景矩阵只依赖视口大小，不能从纹理尺寸推导，否则填充模式会改变覆盖范围。
+    // 图片和视频共用这条录制路径，流式上传不改变所属坐标空间。
+    const auto backgroundProjection =
+        canvasBackgroundProjection(static_cast<float>(m_logicalWidth),
+                                   static_cast<float>(m_logicalHeight));
+    // 渲染器已上传轨道投影；仅跨层时更新 push constant，并强制刷新裁剪。
+    bool screenSpace = false;
     // 缓存只在本次命令列表内有效，不能跨帧保留 Vulkan 状态假设；
     // 每个 RenderPass 开始时都从显式初始状态重新推导。
     // 默认构造的 lastScissor 作为首条命令比较基线；若恰好相等，
@@ -640,12 +717,32 @@ void Basic2DCanvas::onRecordDrawCmds(vk::CommandBuffer&      cmdBuf,
             lastBoundTexture = actualTexture;
         }
 
-        if ( cmd.scissor != lastScissor ) {
+        const bool spaceChanged = screenSpace != cmd.screenSpace;
+        // 空视频批次已在上方跳过，不应更新当前有效投影状态。
+        // 标志按命令而非纹理选择，纯色铺底也必须保持屏幕空间。
+        if ( spaceChanged ) {
+            screenSpace = cmd.screenSpace;
+            const auto& projection =
+                screenSpace ? backgroundProjection : m_observationProjection;
+            // 两个层使用兼容管线布局，只切矩阵，不创建额外离屏目标。
+            cmdBuf.pushConstants(pipelineLayout,
+                                 vk::ShaderStageFlagBits::eVertex |
+                                     vk::ShaderStageFlagBits::eFragment,
+                                 0,
+                                 sizeof(glm::mat4),
+                                 &projection);
+        }
+        if ( spaceChanged || cmd.scissor != lastScissor ) {
+            // 跨层强制更新裁剪，与背景/轨道刚好使用相同矩形的情况兼容。
+            // 固定层不经过四角透视包围框，避免缩小后的裁剪截断背景。
             // 快照 scissor 使用逻辑坐标，录制前按当前 framebuffer 比例
             // 转成物理像素；相邻相同裁剪区不重复设置。
-            vk::Rect2D physicalScissor = getPhysicalScissor(
-                vk::Rect2D{ { cmd.scissor.x, cmd.scissor.y },
-                            { cmd.scissor.width, cmd.scissor.height } });
+            // 相同逻辑矩形在两种空间内的物理裁剪不同，不能沿用上一层缓存。
+            vk::Rect2D physicalScissor =
+                screenSpace ? getPhysicalScissor(vk::Rect2D{
+                                  { cmd.scissor.x, cmd.scissor.y },
+                                  { cmd.scissor.width, cmd.scissor.height } })
+                            : getCanvasScissor(cmd.scissor);
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }
@@ -728,9 +825,7 @@ void Basic2DCanvas::onRecordGlowCmds(vk::CommandBuffer&      cmdBuf,
 
         if ( cmd.scissor != lastScissor ) {
             // 发光 pass 使用与主层相同逻辑裁剪约定。
-            vk::Rect2D physicalScissor = getPhysicalScissor(
-                vk::Rect2D{ { cmd.scissor.x, cmd.scissor.y },
-                            { cmd.scissor.width, cmd.scissor.height } });
+            vk::Rect2D physicalScissor = getCanvasScissor(cmd.scissor);
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }
@@ -808,9 +903,7 @@ void Basic2DCanvas::onRecordOverlayCmds(vk::CommandBuffer&      cmdBuf,
 
         if ( cmd.scissor != lastScissor ) {
             // 每个覆盖层分组保留逻辑 scissor，防止标签越出轨道区域。
-            vk::Rect2D physicalScissor = getPhysicalScissor(
-                vk::Rect2D{ { cmd.scissor.x, cmd.scissor.y },
-                            { cmd.scissor.width, cmd.scissor.height } });
+            vk::Rect2D physicalScissor = getCanvasScissor(cmd.scissor);
             cmdBuf.setScissor(0, 1, &physicalScissor);
             lastScissor = cmd.scissor;
         }

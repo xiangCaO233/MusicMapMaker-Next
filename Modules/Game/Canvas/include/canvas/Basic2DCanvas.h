@@ -24,7 +24,8 @@
 namespace MMM::Canvas
 {
 class Basic2DCanvasInteraction;
-}
+class CameraLayoutEditor;
+}  // namespace MMM::Canvas
 
 namespace MMM::Event
 {
@@ -54,6 +55,10 @@ public:
     /// @warning 热路径：主渲染线程每帧执行；禁止文件系统访问、完整 ECS
     /// 遍历、完整排序和共享指针所有权复制。
     void update(UI::UIManager* sourceManager) override;
+
+    /// @brief 把当前布局编辑器控件绘制到工具栏附着窗口。
+    /// @warning UI 每帧调用，只借用已有编辑器，不分配或取得会话锁。
+    bool drawCameraLayoutControls() override;
 
     /// @brief 获取窗口是否打开，用于拦截未保存的关闭
     bool isOpen() const override;
@@ -146,6 +151,19 @@ protected:
     /// staging 槽复制固定尺寸 RGBA 数据并录制传输命令。
     void onRecordResourceUploads(vk::CommandBuffer& cmdBuf,
                                  uint32_t           frameIndex) override;
+
+    /// @brief 缓存当前观察矩阵，保持绘制与裁剪使用同一代角度。
+    /// @warning 每帧一次，仅执行固定规模矩阵计算。
+    glm::mat4 getCanvasProjectionMatrix() override;
+    /// @brief 把逻辑裁剪区域转换到当前摄像机的物理视口。
+    /// @warning 每批次调用；仅投影四个角点，不遍历物件。
+    vk::Rect2D getCanvasScissor(Common::Render::CanvasScissor scissor) const;
+    /// @brief 当前帧各几何层共用的观察矩阵。
+    glm::mat4 m_observationProjection{ 1.0f };
+    /// @brief 是否启用透视裁剪；零角度保持原二维裁剪路径。
+    bool m_isObservationCamera{ false };
+    /// @brief 仅布局工具期间存在的相机编辑状态，退出即释放预览和手势。
+    std::unique_ptr<CameraLayoutEditor> m_layoutEditor;
 
     /// @warning
     /// 热路径：每帧离屏命令录制时执行；只允许遍历当前快照命令并绑定已存在的

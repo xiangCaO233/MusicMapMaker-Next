@@ -1,5 +1,6 @@
 #pragma once
 
+#include "canvas/PlanarObservationInput.h"
 #include "canvas/TrackLayoutEditing.h"
 #include "common/CanvasComponentLayout.h"
 #include "common/ChartObjectKind.h"
@@ -39,6 +40,20 @@ public:
     void update(UI::UIManager*                        sourceManager,
                 const Common::Render::RenderSnapshot* currentSnapshot,
                 float targetWidth, float targetHeight);
+
+    /// @brief 发布与当前画面同一组观察矩阵和动态顶点插值偏移。
+    /// @param projection 屏幕与谱面平面的双向映射，二维模式为恒等映射。
+    /// @param snapshotYOffset 当前帧动态顶点相对原命中框的播放插值。
+    /// @warning 每帧固定大小值复制，不读会话状态、不加锁，也不执行文件操作。
+    void setInputProjection(const PlanarObservationInputProjection& projection,
+                            float snapshotYOffset = 0.0F);
+    /// @brief 判断画布是否持有未结束的编辑手势，防止摄像机抢走释放事件。
+    /// @warning 每帧常量时间读取 UI 本地门闩，不读取逻辑线程状态。
+    bool hasActivePointerGesture() const
+    {
+        return m_leftPressStartedOnCanvas || m_leftPressStartedObjectDrag ||
+               m_rightEraseActive || m_isMiddleCanvasPanning;
+    }
 
     /// @brief 请求本帧左键释放时丢弃画笔而不是提交物件。
     /// @details 供上层事务式教学在发现拖拽落点错误后撤销本次临时放置；
@@ -97,6 +112,10 @@ public:
         bool                                  allowSelectionScroll = true);
 
 private:
+    /// @brief 当前可见画布的坐标桥，仅由 UI 线程读写，不访问可变会话数据。
+    PlanarObservationInputProjection m_inputProjection;
+    /// @brief 动态物件命中框需要移除的播放插值，逻辑命令仍接收显示平面坐标。
+    float m_snapshotInputYOffset{ 0.0F };
     /// @brief 统一绘制活动和后台画布的只读悬浮详情，不消费编辑手势。
     /// @param currentSnapshot 所属谱面的悬浮、分拍与物件详情快照。
     /// @param mouseX 鼠标屏幕横坐标。

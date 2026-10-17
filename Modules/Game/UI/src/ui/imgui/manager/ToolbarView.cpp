@@ -5414,6 +5414,27 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         ImGui::TextUnformatted(TR("ui.toolbar.layout_settings").data());
         ImGui::Separator();
 
+        // 通过画布能力接口借用当前编辑器，UI 不依赖 Canvas 具体实现。
+        // 模式切换与精确数值入口固定附着于布局按钮，避免遮住操作空间。
+        // 当前画布由已有稳定 ID 定位，不复制会话所有权或获取会话长锁。
+        auto* canvas =
+            sourceManager
+                ? sourceManager->getCanvasView(
+                      Logic::EditorEngine::instance().getActiveCameraId())
+                : nullptr;
+        const bool cameraMode = canvas && canvas->drawCameraLayoutControls();
+        ImGui::Separator();
+        // 元素和相机控件互斥，切回元素后恢复原有配置分组。
+        if ( cameraMode ) {
+            // 相机模式同样缓存真实尺寸，保持弹层贴着布局按钮。
+            const ImVec2 size   = ImGui::GetWindowSize();
+            m_layoutPopupWidth  = size.x;
+            m_layoutPopupHeight = size.y;
+            // 提前返回仍须配对 Begin 和样式栈，不能影响后续工具窗口。
+            ImGui::End();
+            ImGui::PopStyleVar(3);
+            return;
+        }
         auto& appConfig = Config::AppConfig::instance();
         // 默认无谱面时轨道数为零，相关控件可据此禁用或隐藏。
         std::int32_t keyCount = 0;
@@ -5444,9 +5465,9 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
             }
             if ( ImGui::IsItemHovered() ) {
                 // 详细行为通过悬浮提示说明，主标签保持简洁。
-                drawTooltip(
-                    TR("ui.toolbar.layout_disable_vertical_object_drag_hint")
-                        .data());
+                drawTooltip(TR("ui.toolbar.layout_disable_vertical_object_"
+                               "drag_hint")
+                                .data());
             }
         }
         ImGui::Separator();
@@ -5465,7 +5486,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         bool anyColorPickerOpen = false;
         /// @brief 把局部 VisualConfig 快照合并回完整编辑器配置并应用。
         const auto applyVisualConfig = [&](const Config::VisualConfig& visual) {
-            // 每次从最新 EditorConfig 复制后只替换 visual，保留音效、快捷键和
+            // 每次从最新 EditorConfig 复制后只替换
+            // visual，保留音效、快捷键和
             // 其他设置在同一帧可能产生的变化。应用服务负责广播新快照。
             auto updatedConfig   = appConfig.getEditorConfig();
             updatedConfig.visual = visual;
@@ -5487,7 +5509,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                                                   auto&&      resetConfig) {
             // id
             // 区分音符与背景分组，虽然两个按钮显示相同本地化文本。resetConfig
-            // 接收完整 EditorConfig，使配置类型自身的默认重置函数维护关联字段。
+            // 接收完整
+            // EditorConfig，使配置类型自身的默认重置函数维护关联字段。
             ImGui::PushID(id);
             // 按钮在可用空间足够时靠右，窄窗口保持当前起点避免负偏移。
             const float remainingWidth = ImGui::GetContentRegionAvail().x;
@@ -5523,7 +5546,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         //
         // 前三项连续值使用“即时应用、失活保存”，离散项立即保存。默认调色盘
         // 是软件设置引用，不会改变当前项目已经显式选择的方案，也不会把当前
-        // 画笔颜色应用到已有选择。恢复按钮只调用 note rendering 默认重置入口。
+        // 画笔颜色应用到已有选择。恢复按钮只调用 note rendering
+        // 默认重置入口。
         if ( ::MMM::UI::FeedbackCollapsingHeader(
                  TR("ui.settings.visual.note").data()) ) {
             // 恢复默认保留背景、画布组件和其他编辑器设置。
@@ -5576,7 +5600,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                 applyVisualConfig(visual);
                 m_layoutVisualConfigDirty = true;
             }
-            // 在调用保存 helper 前缓存悬浮态，因为后续 ImGui 项会改变查询对象。
+            // 在调用保存 helper 前缓存悬浮态，因为后续 ImGui
+            // 项会改变查询对象。
             const bool hitEffectDurationHovered = ImGui::IsItemHovered();
             saveVisualAfterEdit();
             if ( hitEffectDurationHovered ) {
@@ -5803,9 +5828,11 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
 
         // 下方组件列表编辑按轨道数分组保存的可见性、颜色和位置默认值。
         //
-        // 每个 CanvasComponentPlacement 至少包含可见性、颜色和布局位置。位置由
-        // Layout 工具在画布上直接拖动，此弹层提供可见性、颜色与恢复默认入口。
-        // 配置按 keyCount 隔离，因为不同轨道数的画布宽度和合理组件位置不同。
+        // 每个 CanvasComponentPlacement
+        // 至少包含可见性、颜色和布局位置。位置由 Layout
+        // 工具在画布上直接拖动，此弹层提供可见性、颜色与恢复默认入口。
+        // 配置按 keyCount
+        // 隔离，因为不同轨道数的画布宽度和合理组件位置不同。
         //
         // 通用控件不假设组件的渲染实现。BackgroundSpectrum 是唯一兼容特例：
         // 它既有组件 placement，又保留 background.spectrum.enabled 和专用
@@ -5942,7 +5969,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                     .editableCanvasComponentsForKeyCount(keyCount)
                     .resetPlacementToDefault(type);
                 if ( type == Config::CanvasComponentType::BackgroundSpectrum ) {
-                    // 频谱尺寸属于独立配置结构，组件 placement 重置不会覆盖它。
+                    // 频谱尺寸属于独立配置结构，组件 placement
+                    // 重置不会覆盖它。
                     // 因此额外恢复宽、高和基线，形成用户理解中的完整组件复位。
                     const Config::BackgroundSpectrumConfig defaults;
                     updatedConfig.visual.background.spectrum.widthRatio =
@@ -6016,8 +6044,9 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         // - leftBarColor 与 rightBarColor 区分双声道柱颜色；
         // - opacity 和 includeHitEffects 控制最终混合与分析输入。
         //
-        // 连续数值及颜色共用 m_layoutSpectrumConfigDirty。滑条失活、颜色取色器
-        // 关闭、Layout 弹层关闭三条路径都能保存最终值，且任一路径保存后清除
+        // 连续数值及颜色共用
+        // m_layoutSpectrumConfigDirty。滑条失活、颜色取色器 关闭、Layout
+        // 弹层关闭三条路径都能保存最终值，且任一路径保存后清除
         // 标志，避免重复磁盘写入。离散 includeHitEffects
         // 和匹配画布按钮立即保存。
         if ( ::MMM::UI::FeedbackCollapsingHeader(
@@ -6028,8 +6057,9 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
             /// @brief 合并频谱快照并维持组件可见性作为 enabled 权威值。
             const auto applySpectrumConfig =
                 [&](const Config::BackgroundSpectrumConfig& spectrum) {
-                    // 频谱局部副本不拥有 enabled 权威值；它始终跟随当前键数布局
-                    // 中 BackgroundSpectrum placement 的 visible 字段。
+                    // 频谱局部副本不拥有 enabled
+                    // 权威值；它始终跟随当前键数布局 中 BackgroundSpectrum
+                    // placement 的 visible 字段。
                     auto updatedConfig = appConfig.getEditorConfig();
                     updatedConfig.visual.background.spectrum = spectrum;
                     // enabled 不从可能过时的局部 spectrum 副本读取。
@@ -6041,7 +6071,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                 };
             /// @brief 在连续频谱控件结束编辑时一次性保存最终值。
             const auto saveSpectrumAfterEdit = [&]() {
-                // 与普通视觉 helper 相同，此函数必须在目标控件之后立即调用。
+                // 与普通视觉 helper
+                // 相同，此函数必须在目标控件之后立即调用。
                 if ( ImGui::IsItemDeactivatedAfterEdit() &&
                      m_layoutSpectrumConfigDirty ) {
                     appConfig.save();
@@ -6225,8 +6256,9 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         // - syncKpsTrackRelativePositions 同步轨道内的相对位置；
         // - syncAllKpsComponentPositions 把同步扩展到所有 KPS 组件。
         //
-        // 后两项通过配置对象 setter 修改，因为它们可能维护关联字段或默认值。
-        // UI 只提交 setter 产出的完整配置，不能直接推导同步传播规则。三个开关
+        // 后两项通过配置对象 setter
+        // 修改，因为它们可能维护关联字段或默认值。 UI 只提交 setter
+        // 产出的完整配置，不能直接推导同步传播规则。三个开关
         // 都是离散设置，改变后立即保存，不参与颜色或连续参数脏标记。
         if ( ::MMM::UI::FeedbackCollapsingHeader(
                  TR("ui.toolbar.layout_kps_sync_settings").data(),

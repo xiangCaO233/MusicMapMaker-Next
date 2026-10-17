@@ -97,9 +97,12 @@ void NoteRenderSystem::renderTrackLayout(
     // 水平相机偏移作用于内容坐标，纵向布局仍由视口比例决定。
     const float horizontalOffsetX =
         batcher.snapshot ? batcher.snapshot->canvasHorizontalOffsetX : 0.0F;
-    leftX      = viewportWidth * l + horizontalOffsetX;
-    rightX     = viewportWidth * r + horizontalOffsetX;
-    topY       = viewportHeight * t;
+    leftX  = viewportWidth * l + horizontalOffsetX;
+    rightX = viewportWidth * r + horizontalOffsetX;
+    // 只把远端边界向负 Y 推进；音符和拍线继续使用原像素/时间比例。
+    // 下游可见区间查询直接使用 topY，因此会纳入更远处的真实物件。
+    // 判定线和底边不参与缩放，不能通过拉伸已有顶点模拟延长。
+    topY       = viewportHeight * (t - config.visual.canvasCameraExtension());
     bottomY    = viewportHeight * b;
     trackAreaW = rightX - leftX;
     // 无有效轨道时仍提供有限的宽度输出，具体纹理绘制再按轨道数量跳过。

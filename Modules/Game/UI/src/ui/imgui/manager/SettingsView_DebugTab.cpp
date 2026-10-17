@@ -23,8 +23,7 @@ namespace MMM::UI
 /// @brief 渲染调试设置页。
 /// @details 渲染与网络选项分为两个可折叠段落，展开状态存放在当前 ImGui
 /// 窗口 StateStorage 中，不写入项目或软件配置。
-/// @note RTC 日志开关除写入配置外还立即更新网络层运行时门闩，其余选项通过
-/// CmdUpdateEditorConfig 在帧末同步给逻辑线程。
+/// @note RTC 日志开关除写入配置外还立即更新网络层运行时门闩。
 /// @warning UI 热路径：设置窗口打开且当前页为调试页时每帧执行。
 /// 禁止加入文件系统扫描或重型资源重建。
 void SettingsView::drawDebugSettings()
@@ -33,10 +32,10 @@ void SettingsView::drawDebugSettings()
     auto& appConfig = Config::AppConfig::instance();
     // 通用编辑器选项保存渲染日志与 RTC 诊断开关。
     auto& settings = appConfig.getEditorSettings();
-    // 视觉配置保存命中框显示和缩放系数。
+    /// 视觉配置提供命中框显示和缩放系数。
     auto& visual = appConfig.getVisualConfig();
-    // 所有控件共享变化标记，本帧末统一同步与保存。
-    // 标题展开状态不计入该标记，因为它只属于临时窗口状态。
+    /// 标准设置项使用本帧变化标记，折叠标题不触发保存。
+    /// 标题展开状态只属于临时窗口状态，不触发配置更新。
     bool changed = false;
 
     // 内容容器来自成员缓存，每帧先移除上一帧节点。
@@ -158,7 +157,7 @@ void SettingsView::drawDebugSettings()
     // 渲染诊断分组默认展开，方便开发构建快速访问命中框工具。
     if ( auto* sec =
              addHeader(TR_CACHE("ui.settings.debug.rendering").data(), true) ) {
-        // 第一项控制画布是否额外绘制交互命中框轮廓。
+        // 其余诊断项用于检查二维拾取几何与渲染阶段。
         addSettingItem(
             *sec,
             rowIndex,
@@ -259,12 +258,11 @@ void SettingsView::drawDebugSettings()
     // 将 ImGui 游标推进到 Clay 实际高度之后，维持滚动内容范围。
     ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 
+    // 调试页只保留诊断设置；相机布局由画布工具独占并负责保存。
+    // 已移除相机控件，不再维护旧实验滑杆的延迟保存状态。
     if ( changed ) {
-        // 折叠标题变化不设置 changed，因此不会造成无意义配置保存。
-        // 逻辑线程接收完整 EditorConfig 快照，避免跨线程读取 AppConfig。
         Event::EventBus::instance().publish(Event::LogicCommandEvent(
             Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
-        // UI 线程随后持久化本帧所有变化，合并多个控件写盘。
         appConfig.save();
     }
 }
