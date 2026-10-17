@@ -628,3 +628,10 @@ mmm_add_test_executable(UI VolumeSliderTest tests/VolumeSliderTest.cpp)
 target_link_libraries(VolumeSliderTest PRIVATE UI)
 # 输入事件逐帧注入，测试不访问真实音频设备与用户配置目录。
 mmm_register_test_case(NAME VolumeSliderTest COMMAND VolumeSliderTest)
+
+# 拖放测试直接驱动正式路由和事件总线，不创建 GLFW 窗口或图形设备。 最小 ImGui 上下文只提供主视口边界；验证空工作区也能识别 BMS 家族。
+mmm_add_test_executable(UI ProjectDropRouterTest
+                        tests/ProjectDropRouterTest.cpp)
+# 链接正式 UI 库，避免复制生产扩展名白名单而漏测真实入口。
+target_link_libraries(ProjectDropRouterTest PRIVATE UI)
+mmm_register_test_case(NAME ProjectDropRouterTest COMMAND ProjectDropRouterTest)

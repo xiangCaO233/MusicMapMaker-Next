@@ -41,7 +41,7 @@ ProjectDropRouter::~ProjectDropRouter()
 /// @param enabled 当前 UI 是否允许接受主窗口投放。
 /// @warning UI 热路径：空队列时常数时间返回；仅真实投放时查询文件系统。
 /// @details
-/// 只接受主视口内的单一路径，目录按项目打开，支持的压缩包按临时项目打开。
+/// 只接受主视口内的单一路径，目录和 BMS 谱面按项目打开，压缩包按临时项目打开。
 /// 投放处理保持以下约束：
 /// - 模态弹窗打开时不延迟执行用户此前的投放；
 /// - 每个 GLFW 事件只消费一次；
@@ -88,6 +88,18 @@ void ProjectDropRouter::update(bool enabled)
             extension.end(),
             extension.begin(),
             [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        // BMS 家族由主窗口接收，空工作区也可投放，不依赖已有画布悬浮。
+        // 旧格式仍由画布处理，本入口不重复发布原有画布已消费的文件事件。
+        // 统一使用完整谱面路径，让项目服务打开父目录后自动选择对应谱面。
+        if ( extension == ".bms" || extension == ".bme" ||
+             extension == ".bml" || extension == ".pms" ) {
+            Event::OpenProjectEvent event;
+            event.m_projectPath = path;
+            event.m_origin      = Event::ProjectOpenOrigin::BeatmapDrop;
+            Event::EventBus::instance().publish(event);
+            // 一次投放只能落入一种打开策略，不能再作为压缩包处理。
+            continue;
+        }
         if ( MMM::isProjectArchiveExtension(extension) ) {
             // 包投放进入临时项目解包流程，不把压缩包当作普通目录打开。
             Event::OpenTemporaryProjectPackageEvent event;
