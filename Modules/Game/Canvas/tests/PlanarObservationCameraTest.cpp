@@ -1,5 +1,6 @@
 #include "canvas/PlanarObservationCamera.h"
 #include "canvas/PlanarObservationInput.h"
+#include "common/render/CanvasCameraMath.h"
 #include "config/VisualConfig.h"
 #include "log/colorful-log.h"
 
@@ -221,7 +222,7 @@ bool testOrbitAndDistance()
     const auto rotated = planarObservationProjection(800, 600, 0, 0, 90);
     const auto right   = rotated * glm::vec4(500, 300, 0, 1);
     const auto far     = planarObservationProjection(800, 600, 0, 0, 90, 4) *
-                     glm::vec4(500, 300, 0, 1);
+                         glm::vec4(500, 300, 0, 1);
     return near(right.x, 0) && !near(right.y, 0) &&
            std::abs(far.y / far.w) < std::abs(right.y / right.w);
 }
@@ -471,6 +472,63 @@ bool testInputProjectionRejection()
         return false;
     return true;
 }
+
+/// @brief 对实际透视视锥验证两侧、远端及近平面跨越的源坐标筛选。
+/// @return 所有投影后可见的采样点均落入保守包围框时为真。
+/// @note 网格点只在测试中遍历；生产路径始终使用固定六平面裁剪。
+/// @note 测试保留负 X 和超过二维宽度的坐标，不允许用旧窗口范围作答案。
+/// @note 相机高度和水平偏移独立变化，覆盖用户的抬高与左右移动场景。
+bool testVisiblePlaneBounds()
+{
+    using namespace MMM::Common::Render;
+    MMM::Config::VisualConfig visual;
+    visual.canvasCameraPoseEnabled = true;
+    visual.canvasCameraRotation    = { 45, 0, 0 };
+    // 轨道长度三倍，横向覆盖左右辅助区；近平面交点也由有限场景限制。
+    const CanvasPlaneBounds scene{ -600, -1200, 1600, 600 };
+    bool                    sawLeft = false, sawRight = false, sawFar = false;
+    // 低机位覆盖视锥穿过轨道的情况，高机位覆盖全长和两侧同时可见。
+    // 横向位置使用世界单位，不能误当作窗口像素平移。
+    for ( float height : { 0.3F, 0.9F, 2.5F } ) {
+        for ( float x : { -0.6F, 0.0F, 0.6F } ) {
+            visual.canvasCameraPosition = { x, -0.8F, height };
+            // 每组参数都重新构造正式相机矩阵，不复用上一机位的包围框。
+            // 以非正方形视口验证宽高比也参与左右可见范围的计算。
+            const auto matrix = canvasCameraPoseProjection(800, 600, 0, visual);
+            const auto bounds = canvasPlaneVisibleBounds(matrix, scene);
+            // 独立点投影只作可见性真值，不复制多边形裁剪算法。
+            // 只要任一可见点丢失，即表明候选窗口存在错误剔除。
+            for ( float py = -1200; py <= 600; py += 50 ) {
+                for ( float px = -600; px <= 1600; px += 50 ) {
+                    const auto clip = matrix * glm::vec4(px, py, 0, 1);
+                    if ( clip.w <= 0 || std::abs(clip.x) > clip.w ||
+                         std::abs(clip.y) > clip.w || clip.z < 0 ||
+                         clip.z > clip.w )
+                        continue;
+                    if ( !bounds || px < bounds->m_left - 0.01F ||
+                         px > bounds->m_right + 0.01F ||
+                         py < bounds->m_top - 0.01F ||
+                         py > bounds->m_bottom + 0.01F )
+                        return false;
+                    // 三个标志证明用例确实命中过旧窗口之外，不能空遍历通过。
+                    // 被测包围框既须覆盖这些点，也须留在有限的轨道场景内。
+                    sawLeft |= px < 0;
+                    sawRight |= px > 800;
+                    sawFar |= py < 0;
+                }
+            }
+        }
+    }
+    // 完全在相机背面的平面必须为空，不能因负 w 将其镜像误认成可见。
+    // 背面负例使用零旋转，确保整个有限矩形都在相机背后而非仅部分越界。
+    // 它与上面的近裁剪交叉案例一起覆盖无交集及部分可见两类返回值。
+    // 不采用二维窗口夹取作为期望值，以免测试和旧错误逻辑一致。
+    visual.canvasCameraPosition = { 0, 0, -1 };
+    visual.canvasCameraRotation = { 0, 0, 0 };
+    const auto behind           = canvasPlaneVisibleBounds(
+        canvasCameraPoseProjection(800, 600, 0, visual), scene);
+    return sawLeft && sawRight && sawFar && !behind;
+}
 }  // namespace
 
 /// @brief 运行不依赖 GPU 的实验摄像机回归。
@@ -494,7 +552,9 @@ int main()
     // 初始化器按顺序执行全部
     // helper，失败汇总记录具体职责，避免短路隐藏后续诊断。
     // 标签保留 helper 名称并概括约束，日志无需依赖调试器或本地断点。
-    const std::array<std::pair<const char*, bool>, 9> checks{ {
+    const std::array<std::pair<const char*, bool>, 10> checks{ {
+        { "testVisiblePlaneBounds: projected scene culling",
+          testVisiblePlaneBounds() },
         { "testFlat: zero-angle compatibility", testFlat() },
         { "testTilt: projection and clipping", testTilt() },
         { "testConfig: camera setting round trip", testConfig() },
@@ -509,7 +569,7 @@ int main()
         { "testInputProjectionRejection: invalid and clipped points",
           testInputProjectionRejection() },
     } };
-    bool                                              allPassed = true;
+    bool                                               allPassed = true;
     for ( const auto& [label, passed] : checks ) {
         if ( passed ) continue;
         XERROR("PlanarObservationCameraTest: {} failed", label);

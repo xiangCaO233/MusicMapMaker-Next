@@ -40,6 +40,20 @@ struct Batcher {
     /// @brief 可投影内容允许的最小逻辑 Y；二维批次默认在零处截断。
     /// @note 三维主画布显式设置负边界，GPU 裁剪仍在投影后限制到视口。
     float m_minScissorY{ 0.0F };
+    /// @brief 三维批次允许保留的负 X 边界，二维批次保持零。
+    float m_minScissorX{ 0.0F };
+    /// @brief 本帧摄像机可见的源平面左边界，不能按窗口零点再次裁剪。
+    float m_viewLeftX{ 0.0F };
+    /// @brief 本帧源平面右边界；默认由调用方传入的二维宽度限制。
+    float m_viewRightX{ 0.0F };
+
+    /// @brief 解析本帧可见右界；独立二维批次仍使用调用方视口宽度。
+    /// @warning 每层常量查询，不读取全局相机配置或会话状态。
+    float viewRightX(float viewportWidth) const
+    {
+        // 未显式设置范围的测试和独立批次保持旧二维行为。
+        return m_viewRightX > m_viewLeftX ? m_viewRightX : viewportWidth;
+    }
 
     /// @brief 在现有快照末尾开始追加，不清除调用方已生成的几何。
     /// @param s 非空输出快照，图集映射须在绘制前准备完成。
@@ -71,10 +85,12 @@ struct Batcher {
         // 向外取整保留边缘像素；三维内容可以位于原视口顶部之外。
         // 只有显式启用负边界的批次保留这些坐标，普通二维行为不变。
         // 宽高仍为非负值，逻辑裁剪不是可直接传给 Vulkan 的物理裁剪。
-        int32_t ix = static_cast<int32_t>(std::max(0.0f, std::floor(x)));
+        int32_t ix =
+            static_cast<int32_t>(std::max(m_minScissorX, std::floor(x)));
         int32_t iy =
             static_cast<int32_t>(std::max(m_minScissorY, std::floor(y)));
-        int32_t ir = static_cast<int32_t>(std::max(0.0f, std::ceil(x + w)));
+        int32_t ir =
+            static_cast<int32_t>(std::max(m_minScissorX, std::ceil(x + w)));
         int32_t ib =
             static_cast<int32_t>(std::max(m_minScissorY, std::ceil(y + h)));
 

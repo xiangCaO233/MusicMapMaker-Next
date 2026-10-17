@@ -1,4 +1,5 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
+#include "common/render/CanvasCameraMath.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/ecs/components/TimelineComponent.h"
@@ -362,9 +363,86 @@ void NoteRenderSystem::generateSnapshot(
     Batcher batcher(snapshot);
     // 三维画布只扩大远端可见范围，原像素坐标与时间映射保持不变。
     // Timeline 和缩略预览继续使用自己的二维范围，不能继承该扩展。
-    if ( isMainCanvas )
+    // 基础二维视口先作为兼容范围，只有主画布能添加透视可见的额外区域。
+    // 辅助预览不能继承主摄像机配置，否则缩略图也会错误增加横向候选。
+    batcher.m_viewRightX = viewportWidth;
+    if ( isMainCanvas ) {
         batcher.m_minScissorY =
             -std::ceil(viewportHeight * config.visual.canvasCameraExtension());
+        // config 是本次快照的值配置，不从渲染线程借用正在修改的相机状态。
+        const auto& visual = config.visual;
+        if ( visual.canvasCameraPoseEnabled ||
+             Common::Render::planarObservationEnabled(
+                 visual.debugCanvasCameraAngleDegrees,
+                 visual.debugCanvasCameraYawDegrees,
+                 visual.debugCanvasCameraDistance) ) {
+            // 与最终录制共用相机投影公式，布局尺度和世界轴约定完全相同。
+            // 场景覆盖实际分区和用户配置长度，不以二维视口先截掉左右轨道。
+            // 区域数量与生成底板时保持一致，包含临时追加轨但遵守隐藏区开关。
+            // 横向相机偏移已经进入布局坐标，不再叠加到透视矩阵中。
+            const auto lanes = calculateCanvasLaneProjection(
+                viewportWidth,
+                trackCount,
+                bgmTrackCount,
+                visual.trackLayout,
+                snapshot->canvasHorizontalOffsetX,
+                true,
+                config.settings.isBmsEditingEnabled(),
+                snapshot->draftLanesEnabled,
+                draftTrackCount,
+                true);
+            // 分区可重叠或交换左右顺序，使用实际并集外包而非玩家轨数推测。
+            // 批注沟槽也在该范围中，避免两侧轨道之间出现被提前截掉的空洞。
+            const auto content = lanes.contentBounds();
+            // 自由姿态和旧实验观察使用各自原有矩阵，不能用倾角近似自由相机。
+            // 仅查询当前帧的固定投影，不缓存跨配置变化的视锥结果。
+            const auto matrix =
+                visual.canvasCameraPoseEnabled
+                    ? Common::Render::canvasCameraPoseProjection(
+                          viewportWidth, viewportHeight, 0, visual)
+                    : Common::Render::planarObservationProjection(
+                          viewportWidth,
+                          viewportHeight,
+                          0,
+                          visual.debugCanvasCameraAngleDegrees,
+                          visual.debugCanvasCameraYawDegrees,
+                          visual.debugCanvasCameraDistance);
+            // 包含贴图边缘与效果的余量，避免中心在视锥外但图元仍有可见像素。
+            // 余量仅影响候选，实际区域边框、轨宽和本体坐标始终保留原始数值。
+            // 不能把整个二维画布按相机距离缩小来换取更多显示内容。
+            const float padding =
+                std::max(64.0F,
+                         std::max({ lanes.player.singleTrackWidth,
+                                    lanes.draftLaneWidth,
+                                    lanes.bgmLaneWidth }) *
+                             std::max(1.0F, visual.noteScaleX) *
+                             std::max(1.0F, skinTextureScale(TextureID::Note)));
+            // 有限场景包含全长轨道；抬高相机时远端候选不会在原高度处截止。
+            // 六平面裁剪处理地平线与近远深度，无需对每条音符作反投影。
+            const auto visible = Common::Render::canvasPlaneVisibleBounds(
+                matrix,
+                { content.leftX - padding,
+                  viewportHeight * (visual.trackLayout.top -
+                                    visual.canvasCameraExtension()) -
+                      padding,
+                  content.rightX + padding,
+                  viewportHeight * 1.5F + padding });
+            // 视锥无交集时沿用二维候选作为安全回退，后续 GPU 自然不会产生像素。
+            // 不据一次空交集隐藏整份快照，布局编辑可临时切回正交投影。
+            if ( visible ) {
+                // 保留原二维候选作为保守余量，真正新增的是投影后可见的两侧区域。
+                batcher.m_viewLeftX =
+                    std::min(0.0F, std::floor(visible->m_left - padding) - 1);
+                batcher.m_viewRightX = std::max(
+                    viewportWidth, std::ceil(visible->m_right + padding) + 1);
+                // 包围框额外膨胀贴图余量，保留中心在视锥外但边缘仍可见的物件。
+                // 再向外留一个源像素，防止平面裁剪舍入把接触边界的轨道排除。
+                // 负 X 必须同时进入批次状态，否则轨道虽被查询仍会被命令截断。
+                // 最终 Vulkan 裁剪只接收投影后的非负屏幕坐标。
+                batcher.m_minScissorX = batcher.m_viewLeftX;
+            }
+        }
+    }
     float leftX = 0, rightX = 0, topY = 0, bottomY = 0, trackAreaW = 0,
           singleTrackW = 0;
     float renderScaleY = 1.0f;
@@ -628,9 +706,9 @@ void NoteRenderSystem::generateSnapshot(
             // 草稿几何可能部分移出视口，裁剪仅取其可见交集。
             // 投影原点仍保留真实位置，不能用裁剪边缘改写轨道坐标。
             const float visibleDraftLeft =
-                std::max(0.0F, laneProjection.draftLeftX);
-            const float visibleDraftRight =
-                std::min(viewportWidth, laneProjection.draftRightX);
+                std::max(batcher.m_viewLeftX, laneProjection.draftLeftX);
+            const float visibleDraftRight = std::min(
+                batcher.viewRightX(viewportWidth), laneProjection.draftRightX);
             // 空交集不提交裁剪和拍线。
             // 负宽度不能作为“不可见”的隐式标记传给批处理器。
             if ( visibleDraftRight > visibleDraftLeft ) {
@@ -666,8 +744,10 @@ void NoteRenderSystem::generateSnapshot(
                                                          float regionRight) {
                 // 先和全视口相交，辅助区域完全移出时立即结束。
                 // 纵向范围保持和玩家区一致，确保同时间拍线对齐。
-                const float visibleLeft  = std::max(0.0F, regionLeft);
-                const float visibleRight = std::min(viewportWidth, regionRight);
+                const float visibleLeft =
+                    std::max(batcher.m_viewLeftX, regionLeft);
+                const float visibleRight =
+                    std::min(batcher.viewRightX(viewportWidth), regionRight);
                 if ( visibleRight <= visibleLeft ) return;
                 batcher.setScissor(visibleLeft,
                                    topY,
@@ -756,14 +836,21 @@ void NoteRenderSystem::generateSnapshot(
             const auto contentBounds = noteLaneProjection.contentBounds();
             // 草稿与 BGM 区域
             // 可被移动到任意一侧，音符与遮罩裁剪统一覆盖真实外包范围。
-            noteRenderClipLeftX =
-                std::clamp(contentBounds.leftX, 0.0F, viewportWidth);
+            noteRenderClipLeftX = std::clamp(contentBounds.leftX,
+                                             batcher.m_viewLeftX,
+                                             batcher.viewRightX(viewportWidth));
             noteRenderClipRightX =
-                std::clamp(contentBounds.rightX, 0.0F, viewportWidth);
+                std::clamp(contentBounds.rightX,
+                           batcher.m_viewLeftX,
+                           batcher.viewRightX(viewportWidth));
             // 真实右边界不钳位，避免把局部滚出视口的物件压缩到边缘。
             // GPU 裁剪放宽到画布，再由音符生成使用真实区域边界。
             noteRenderRightX = contentBounds.rightX;
-            batcher.setScissor(0.0F, topY, viewportWidth, bottomY - topY);
+            batcher.setScissor(
+                batcher.m_viewLeftX,
+                topY,
+                batcher.viewRightX(viewportWidth) - batcher.m_viewLeftX,
+                bottomY - topY);
         } else {
             batcher.setScissor(leftX, topY, trackAreaW, bottomY - topY);
         }
@@ -836,9 +923,10 @@ void NoteRenderSystem::generateSnapshot(
                 draftTrackCount,
                 true);
             const auto  contentBounds = laneProjection.contentBounds();
-            const float clipLeft      = std::max(0.0F, contentBounds.leftX);
-            const float clipRight =
-                std::min(viewportWidth, contentBounds.rightX);
+            const float clipLeft =
+                std::max(batcher.m_viewLeftX, contentBounds.leftX);
+            const float clipRight = std::min(batcher.viewRightX(viewportWidth),
+                                             contentBounds.rightX);
             // 水平裁剪覆盖全部真实内容区域。
             // 纵向额外留出余量，使跨越上下边界的调试线框仍可显示。
             // 宽度钳为非负，完全滚出时形成空区域。
@@ -1836,9 +1924,9 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
                                           draftTrackCount,
                                           true);
         const float visibleDraftLeft =
-            std::max(0.0F, laneProjection.draftLeftX);
-        const float visibleDraftRight =
-            std::min(viewportWidth, laneProjection.draftRightX);
+            std::max(batcher.m_viewLeftX, laneProjection.draftLeftX);
+        const float visibleDraftRight = std::min(
+            batcher.viewRightX(viewportWidth), laneProjection.draftRightX);
         // 草稿背景只在与视口有交集时生成。
         // 原始区域边界仍用于纹理和边框，裁剪仅限制显示范围。
         if ( visibleDraftRight > visibleDraftLeft ) {

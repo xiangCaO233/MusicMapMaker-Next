@@ -208,10 +208,12 @@ void SampleRenderSystem::renderLaneLayout(
         // 无有效区域时不改变批处理状态，避免产生负高度裁剪矩形。
         return;
     }
+    // 透视视锥在源平面中的范围可以越过窗口零点和宽度。
+    const float viewLeft  = batcher.m_viewLeftX;
+    const float viewRight = batcher.viewRightX(viewportWidth);
     // 横向只处理与视口相交的侧栏，允许独立区域随画布平移部分离屏。
-    const float gutterLeft = std::max(0.0F, projection.annotationLeftX);
-    const float gutterRight =
-        std::min(viewportWidth, projection.annotationRightX);
+    const float gutterLeft  = std::max(viewLeft, projection.annotationLeftX);
+    const float gutterRight = std::min(viewRight, projection.annotationRightX);
     if ( gutterRight > gutterLeft ) {
         // 背景与边框分别回退，皮肤可以只覆盖其中一种颜色。
         const auto gutterBackground =
@@ -246,13 +248,12 @@ void SampleRenderSystem::renderLaneLayout(
 
     // 投影直接给出可见轨索引区间，避免遍历全部持久化草稿轨。
     const auto visibleDraftRange =
-        projection.visibleDraftRange(0.0F, viewportWidth);
+        projection.visibleDraftRange(viewLeft, viewRight);
     if ( visibleDraftRange ) {
-        const auto  draftLabel  = laneColor(DRAFT_TRACK_LABEL_COLOR_KEY,
-                                            { 0.96F, 0.69F, 0.52F, 0.92F });
-        const float visibleLeft = std::max(0.0F, projection.draftLeftX);
-        const float visibleRight =
-            std::min(viewportWidth, projection.draftRightX);
+        const auto  draftLabel   = laneColor(DRAFT_TRACK_LABEL_COLOR_KEY,
+                                             { 0.96F, 0.69F, 0.52F, 0.92F });
+        const float visibleLeft  = std::max(viewLeft, projection.draftLeftX);
+        const float visibleRight = std::min(viewRight, projection.draftRightX);
         // 侧栏区域独立裁剪，草稿标题不可延伸到玩家轨或批注栏。
         batcher.setScissor(
             visibleLeft, topY, visibleRight - visibleLeft, bottomY - topY);
@@ -304,7 +305,7 @@ void SampleRenderSystem::renderLaneLayout(
     // 草稿与批注侧栏已独立处理，BGM 为空不应提前跳过前面的区域。
     if ( projection.bgmLaneCount == 0 ) return;
     // 返回前可能已写入草稿标题；这里不清空已有命令，也不重置调用方的批处理器。
-    const auto visibleRange = projection.visibleBgmRange(0.0F, viewportWidth);
+    const auto visibleRange = projection.visibleBgmRange(viewLeft, viewRight);
     if ( !visibleRange ) return;
 
     // BGM 完全不可见时连皮肤色也不查询；颜色不随轨号变化的部分只取一次。
@@ -319,8 +320,8 @@ void SampleRenderSystem::renderLaneLayout(
     const auto label =
         laneColor(BGM_TRACK_LABEL_COLOR_KEY, { 0.72F, 0.88F, 0.96F, 0.92F });
 
-    const float visibleLeft  = std::max(0.0F, projection.bgmLeftX);
-    const float visibleRight = std::min(viewportWidth, projection.bgmRightX);
+    const float visibleLeft  = std::max(viewLeft, projection.bgmLeftX);
+    const float visibleRight = std::min(viewRight, projection.bgmRightX);
     // 整个 BGM 区共用一份裁剪框，单轨底色可按完整轨宽提交再由它截断。
     // 不把左右半截轨道重新均分，否则横向滚动时标题和本体会变宽或变窄。
     batcher.setScissor(
@@ -370,7 +371,7 @@ void SampleRenderSystem::renderLaneLayout(
                                      batcher.snapshot->snapshotSysTime);
     }
 
-    if ( projection.bgmLeftX >= 0.0F && projection.bgmLeftX <= viewportWidth ) {
+    if ( projection.bgmLeftX >= viewLeft && projection.bgmLeftX <= viewRight ) {
         // 分隔线只标识 BGM 区真实起点，不在横向裁剪后的视口边缘补画。
         batcher.setTexture(TextureID::None);
         batcher.pushQuad(projection.bgmLeftX - 1.5F,
@@ -420,8 +421,11 @@ void SampleRenderSystem::renderSamples(
         // 这里只退出当前层，不清除调用方在同一快照中已生成的其他物件命中框。
         return;
     }
-    const auto visibleLaneRange =
-        projection.visibleBgmRange(0.0F, viewportWidth);
+    // 透视视锥在源平面中的范围可以越过窗口零点和宽度。
+    const float viewLeft  = batcher.m_viewLeftX;
+    const float viewRight = batcher.viewRightX(viewportWidth);
+    const auto  visibleLaneRange =
+        projection.visibleBgmRange(viewLeft, viewRight);
 
     // 像素窗口先反解到滚动绝对坐标，再由缓存求所有可见时间段；
     // 有符号缩放允许视觉方向翻转，不能直接把 topY 当作最早时间。
@@ -532,7 +536,7 @@ void SampleRenderSystem::renderSamples(
         }
     };
 
-    batcher.setScissor(0.0F, topY, viewportWidth, bottomY - topY);
+    batcher.setScissor(viewLeft, topY, viewRight - viewLeft, bottomY - topY);
     // 命中框另行记录完整几何；这里的裁剪只约束最终可见图元。
     bool hasSampleGlow = false;
 
@@ -563,8 +567,8 @@ void SampleRenderSystem::renderSamples(
         // 跨区拖动使用目标轨道的真实边界，不将样本强制夹回原 BGM 区。
         // 拖动目标没有有效投影时不伪造一个与命中区域不一致的可见本体。
         const auto bounds = projection.bounds(address);
-        if ( !bounds || bounds->rightX <= 0.0F ||
-             bounds->leftX >= viewportWidth ) {
+        if ( !bounds || bounds->rightX <= viewLeft ||
+             bounds->leftX >= viewRight ) {
             continue;
         }
 
@@ -749,8 +753,12 @@ void SampleRenderSystem::renderSamples(
         // 没有选中或悬浮的可见候选时，不创建额外的发光批处理器。
         batcher.flush();
         Batcher glowBatcher(snapshot, &snapshot->glowCmds);
+        // 独立发光批次也要保留透视可见的负坐标及完整远端长度。
+        glowBatcher.m_minScissorX = batcher.m_minScissorX;
+        glowBatcher.m_minScissorY = batcher.m_minScissorY;
         // 独立命令列表仍向同一快照提交几何，必须显式设置其裁剪状态。
-        glowBatcher.setScissor(0.0F, topY, viewportWidth, bottomY - topY);
+        glowBatcher.setScissor(
+            viewLeft, topY, viewRight - viewLeft, bottomY - topY);
         for ( const auto entity : snapshot->sampleQueryScratch ) {
             // 复用本帧候选，不为发光再次执行可见时间反查或 Registry 全量扫描。
             if ( !registry.valid(entity) ||
@@ -779,8 +787,8 @@ void SampleRenderSystem::renderSamples(
                 continue;
             }
             const auto bounds = projection.bounds(address);
-            if ( !bounds || bounds->rightX <= 0.0F ||
-                 bounds->leftX >= viewportWidth ) {
+            if ( !bounds || bounds->rightX <= viewLeft ||
+                 bounds->leftX >= viewRight ) {
                 continue;
             }
 
@@ -835,8 +843,8 @@ void SampleRenderSystem::renderSamples(
         return;
     }
     const auto brushBounds = projection.bounds(brushAddress);
-    if ( !brushBounds || brushBounds->rightX <= 0.0F ||
-         brushBounds->leftX >= viewportWidth ) {
+    if ( !brushBounds || brushBounds->rightX <= viewLeft ||
+         brushBounds->leftX >= viewRight ) {
         return;
     }
     // 预览的尺寸来源与已存在样本相同，正式创建后不会因使用另一轨宽而突然跳变。

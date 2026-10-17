@@ -78,6 +78,10 @@ glm::mat4 Basic2DCanvas::getCanvasProjectionMatrix()
     return m_observationProjection;
 }
 
+/// @brief 将快照源平面裁剪转换为当前目标的物理屏幕裁剪。
+/// @param scissor 允许包含负坐标的逻辑矩形，所属空间由本帧相机模式决定。
+/// @return Vulkan 可接受的非负视口内矩形。
+/// @warning 每批次录制热路径：复用投影矩阵，不加载资源或等待 GPU。
 vk::Rect2D Basic2DCanvas::getCanvasScissor(
     Common::Render::CanvasScissor scissor) const
 {
@@ -87,6 +91,15 @@ vk::Rect2D Basic2DCanvas::getCanvasScissor(
     // 元素布局临时使用正交视角，快照仍可能含三维远端的负坐标。
     // Vulkan 物理裁剪不允许负偏移，正交路径先与窗口高度取交集。
     // 三维路径必须先投影，不能在逻辑零点截掉远端物件。
+    if ( !m_isObservationCamera && scissor.x < 0 ) {
+        // 布局模式临时回到二维，旧快照的负 X 也要在提交 Vulkan 前收回窗口。
+        // 这里只修正二维物理裁剪，不能回写快照或改变真实轨道的位置。
+        // 右端用宽整型相加，避免负原点与无符号宽度混算产生回绕。
+        const auto right = static_cast<std::int64_t>(scissor.x) + scissor.width;
+        scissor.x        = 0;
+        scissor.width    = static_cast<std::uint32_t>(
+            std::clamp<std::int64_t>(right, 0, m_logicalWidth));
+    }
     if ( !m_isObservationCamera && scissor.y < 0 ) {
         const auto bottom =
             static_cast<std::int64_t>(scissor.y) + scissor.height;

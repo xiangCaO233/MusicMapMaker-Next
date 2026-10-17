@@ -2220,6 +2220,8 @@ void NoteRenderSystem::renderNoteGlowLayer(
     Batcher glowBatcher(snapshot, &snapshot->glowCmds);
     // 独立效果批次须保留与主体相同的远端范围，避免延长区物件缺少效果。
     // 二维 topY 非负时保持零下界，负范围最后由投影裁剪转换为屏幕区域。
+    // 横向与主层共用源平面范围，不能在零点截断左侧草稿物件。
+    glowBatcher.m_minScissorX = std::min(0.0F, std::floor(clipLeftX));
     glowBatcher.m_minScissorY = std::min(0.0F, std::floor(topY));
     // 独立发光批次须和基础音符使用同一固定位置，不能回到中心造成重影。
     glowBatcher.setNoteTexturePosition(config.visual.noteTexturePosition);
@@ -3282,6 +3284,8 @@ void NoteRenderSystem::renderOverlapMasks(
     Batcher overlayBatcher(snapshot, &snapshot->overlayCmds);
     // 独立效果批次须保留与主体相同的远端范围，避免延长区物件缺少效果。
     // 二维 topY 非负时保持零下界，负范围最后由投影裁剪转换为屏幕区域。
+    // 遮罩保留相同的负横坐标，避免效果层比主体更早消失。
+    overlayBatcher.m_minScissorX = std::min(0.0F, std::floor(clipLeftX));
     overlayBatcher.m_minScissorY = std::min(0.0F, std::floor(topY));
     // 草稿区可能独立位于玩家区左侧，遮罩裁剪必须覆盖统一可见范围。
     overlayBatcher.setScissor(
