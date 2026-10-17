@@ -11,8 +11,15 @@
 #        define NOMINMAX
 #    endif
 #    include <windows.h>
-// Windows SDK 为兼容旧式内存模型定义了 near 宏，公共头不得将其泄漏给调用方。
+// Win32 的 near 是空兼容宏，但 NEAR 仍通过它展开；两者必须一起处理。
+// 仅删除 near 会让之后包含的 commctrl.h 把 NEAR 展开为普通标识符，
+// 导致 TBBUTTON 等声明解析失败。先将大写别名固定为空，再清除小写宏。
+// 保留 NEAR 的空展开语义，允许调用方继续包含其他 Windows SDK 头。
 #    ifdef near
+#        ifdef NEAR
+#            undef NEAR
+#            define NEAR
+#        endif
 #        undef near
 #    endif
 #endif

@@ -271,3 +271,11 @@ target_link_libraries(AudioPresetsTest PRIVATE Config Log)
 # 为持久化回归分配专用输出路径，禁止向测试资源目录写入。
 mmm_register_test_case(NAME AudioPresetsTest COMMAND AudioPresetsTest
                        "${CMAKE_BINARY_DIR}/test_output/audio_presets")
+
+# 路径头必须同时兼容后续 Windows SDK 声明及调用方的小写 near 函数。
+mmm_add_test_executable(Config Utf8PathCompatibilityTest
+                        tests/Utf8PathCompatibilityTest.cpp)
+target_link_libraries(Utf8PathCompatibilityTest PRIVATE Config)
+# Unicode 往返只操作 path 值，Windows 交叉构建同时验证 SDK 包含顺序。
+mmm_register_test_case(NAME Utf8PathCompatibilityTest COMMAND
+                       Utf8PathCompatibilityTest)
