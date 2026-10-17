@@ -260,7 +260,7 @@ public:
             ImGui::Spacing();
             ImGui::SetNextItemWidth(220.0F * context.dpiScale);
             ::MMM::UI::FeedbackVolumeSlider(
-                TR("ui.edit.sample_properties.volume").data(), &m_volume);
+                TR("ui.edit.sample_properties.volume").data(), &m_volume, 200);
 
             // 音量允许超过 1.0，但必须为有限非负值。
             const bool validVolume =

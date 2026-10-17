@@ -640,8 +640,9 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
     m_batchDragEntries.clear();
     m_batchDragUnionCells.clear();
     m_marqueeBaseSelection.clear();
-    // 音量弹窗锚定旧方块屏幕位置，重建后让用户重新打开。
-    m_openVolumeEditorResourceId.clear();
+    // 音量弹窗按稳定资源 ID 锚定；同项目保存触发重建不能结束当前编辑。
+    // 只有切换项目才立即清除，资源删除由重建完成后的有效性检查处理。
+    if ( projectChanged ) m_openVolumeEditorResourceId.clear();
     m_resizeHandle = ResizeHandle::None;
     m_snapLocks    = {};
 
@@ -772,6 +773,13 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
     for ( std::size_t index = 0; index < m_items.size(); ++index ) {
         m_items[index].zOrder = static_cast<std::int32_t>(index);
     }
+
+    // 资源确实删除时关闭弹层；普通保存、重排或 DPI 更新保持用户编辑上下文。
+    if ( !m_openVolumeEditorResourceId.empty() &&
+         std::ranges::find(m_items,
+                           m_openVolumeEditorResourceId,
+                           &Item::audioResourceId) == m_items.end() )
+        m_openVolumeEditorResourceId.clear();
 
     // 资源删除后不能保留指向不存在 ID 的活动画笔状态。
     const bool selectedStillExists =

@@ -194,10 +194,13 @@ bool FeedbackSliderFloat(const char* label, float* value, float minValue,
                          float maxValue, const char* format = "%.4f",
                          ImGuiSliderFlags flags = 0);
 
-/// @brief 音量按零到一百整数显示，鼠标五点步进、四方向键一点步进。
+/// @brief 音量按整数百分数显示，鼠标五点步进、四方向键一点步进。
 /// @param value 输入输出线性音量，控件在交互时转换百分数。
+/// @param maximumPercent 百分数上限，支持 1 至 200；混音器默认 100，采样使用
+/// 200。
 /// @warning 每帧 UI 路径，只处理本地输入，不执行配置持久化。
-bool FeedbackVolumeSlider(const char* label, float* value);
+bool FeedbackVolumeSlider(const char* label, float* value,
+                          int maximumPercent = 100);
 
 /// @brief 绘制带统一反馈的 ImGui Int 滑块。
 /// @warning UI 热路径：每帧只处理 ImGui 状态和已预加载反馈音效。

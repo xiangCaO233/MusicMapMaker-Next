@@ -8,17 +8,21 @@ namespace MMM::UI
 {
 /// @brief 音量统一使用整数百分数，磁盘与混音器仍使用线性倍率。
 /// @param label 稳定的控件标识。
-/// @param value 输入输出线性音量；交互范围为零到一。
+/// @param value 输入输出线性音量；显示上限由 maximumPercent 指定。
+/// @param maximumPercent 整数百分数上限，采样为 200，其余默认 100。
 /// @return 只有实际倍率改变时才返回 true。
 /// @warning 每帧 UI 路径，仅操作当前控件状态，禁止文件写入和跨线程等待。
-bool FeedbackVolumeSlider(const char* label, float* value)
+bool FeedbackVolumeSlider(const char* label, float* value, int maximumPercent)
 {
     // 百分数只存在于交互层，避免改动资源格式和音频 API 的单位。
     // 不编辑时不量化原始值，旧谱面的高精度音量仍可无损保存。
     // 非有限输入显示为零，只有用户有效编辑才写回数据。
+    // 上限限制在显示缓冲可容纳的三位数范围，方向步长仍固定为一个百分点。
+    const int     maximum  = std::clamp(maximumPercent, 1, 200);
     const ImGuiID id       = ImGui::GetID(label);
     const int     previous = static_cast<int>(std::lround(
-        std::clamp(std::isfinite(*value) ? *value : 0.0F, 0.0F, 1.0F) *
+        std::clamp(
+            std::isfinite(*value) ? *value : 0.0F, 0.0F, maximum * 0.01F) *
         100.0F));
     // 使用整数草稿让键盘一格准确表示一个百分点。
     // 相反方向同时按下时抵消，不能因处理顺序产生漂移。
@@ -52,18 +56,18 @@ bool FeedbackVolumeSlider(const char* label, float* value)
     const bool changed = FeedbackSliderInt(label,
                                            &percent,
                                            0,
-                                           100,
+                                           maximum,
                                            nativeText ? "%d" : "",
                                            ImGuiSliderFlags_AlwaysClamp);
     // 鼠标定位取最近五点格；Ctrl 点击的整数输入不受五点格限制。
     if ( ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
          !ImGui::TempInputIsActive(id) ) {
         percent = std::clamp(
-            static_cast<int>(std::lround(percent / 5.0F)) * 5, 0, 100);
+            static_cast<int>(std::lround(percent / 5.0F)) * 5, 0, maximum);
     }
     // 用交互前的值计算，覆盖原生 Slider 的方向步进，避免一次按键加两次。
     // 不采用原生 Slider 的百分比导航步长，用户定义的精度优先。
-    if ( delta != 0 ) percent = std::clamp(previous + delta, 0, 100);
+    if ( delta != 0 ) percent = std::clamp(previous + delta, 0, maximum);
     // 原生滑块先计算鼠标位置，之后才完成五点格量化。
     // 普通状态自行绘制最终整数，避免实际为 35 时仍显示未量化的 33。
     // Ctrl 文本编辑继续使用原生格式与输入框，不覆盖输入中的字符。

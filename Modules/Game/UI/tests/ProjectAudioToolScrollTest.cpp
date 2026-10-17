@@ -1,6 +1,8 @@
 #include "ui/imgui/manager/ProjectAudioToolView.h"
 
 #include "config/AppConfig.h"
+#include "event/core/EventBus.h"
+#include "event/project/ProjectEvents.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectController.h"
@@ -10,6 +12,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <string>
@@ -75,7 +78,9 @@ void drawFrame(MMM::UI::UIManager& manager, MMM::UI::ProjectAudioToolView& view,
     }
     // 测试显式选择工具标签，避免新建的辅助标签默认抢走初始焦点。
     // focusOther 分支故意不给工具焦点，以真实经过隐藏内容帧。
-    if ( !focusOther ) view.requestFocus();
+    // 活动弹层必须保留自身焦点，不能由测试夹具每帧强行聚焦背景窗口。
+    if ( !focusOther && ImGui::GetCurrentContext()->OpenPopupStack.empty() )
+        view.requestFocus();
     view.update(&manager);
     // 真实标签切换会隐藏工具内容；重新激活后必须仍可滚动。
     if ( docked ) {
@@ -123,6 +128,88 @@ void prepareResources(MMM::Project& project)
                                             .m_width           = 140.0F,
                                             .m_height          = 100.0F,
                                             .m_zOrder          = 24 });
+}
+
+/// @brief 通过真实鼠标操作验证音量松手、保存重建及移开指针均不关闭弹层。
+/// @param manager 真实工具管理器，测试不调用视图私有状态。
+/// @param view 与后续滚动测试共用的生产视图。
+/// @return 只有明确点击外部才关闭时为真。
+/// @details 使用实际 Popup 的窗口与激活状态断言，不能仅检查残留的打开栈。
+/// 资源保存事件走真实订阅回调，覆盖缓存重建导致锚定 ID 被误清除的路径。
+bool checkVolumePopup(MMM::UI::UIManager&            manager,
+                      MMM::UI::ProjectAudioToolView& view)
+{
+    auto* project = MMM::Logic::ProjectController::instance().currentProject();
+    if ( !project ) return false;
+    project->m_settings.m_workspace.m_projectAudioToolPreviewEffectOnSelection =
+        false;
+    // 夹具第一张卡片固定为 140x100，位于逻辑坐标 24,24。
+    for ( int frame = 0; frame < 4; ++frame ) drawFrame(manager, view, false);
+    auto* canvas = findCanvas();
+    if ( !canvas ) return false;
+    const auto& style  = ImGui::GetStyle();
+    const float button = ImGui::GetFrameHeight();
+    const float spacing =
+        std::max(1.0F, std::min(style.ItemInnerSpacing.x, 4.0F));
+    // 固定四按钮居中排列，最后一个为音量按钮；不直接调用 OpenPopup。
+    const ImVec2 buttonPoint{ canvas->DC.CursorStartPos.x + 24 +
+                                  (140 - (button * 4 + spacing * 3)) * 0.5F +
+                                  (button + spacing) * 3 + button * 0.5F,
+                              canvas->DC.CursorStartPos.y + 24 + 100 -
+                                  std::max(1.0F, style.FramePadding.y) -
+                                  button * 0.5F };
+    /// @brief 固定工具窗口几何，只推进指针位置及此前排队的输入事件。
+    /// @param pointer 本帧鼠标屏幕坐标，弹层内外都通过真实窗口命中处理。
+    /// @note 不直接设置私有锚定状态，确保缓存重建走完整生产交互路径。
+    auto frameAt = [&](ImVec2 pointer) {
+        drawFrame(manager, view, false, 0, false, 450, false, pointer);
+    };
+    frameAt(buttonPoint);
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frameAt(buttonPoint);
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frameAt(buttonPoint);
+    auto& context = *ImGui::GetCurrentContext();
+    if ( context.OpenPopupStack.empty() ||
+         !context.OpenPopupStack.back().Window )
+        return false;
+    // 稳定 PopupId 表示同一次编辑上下文，不应关闭后自动重开一个新弹层。
+    // 同时检查窗口 Active，避免把未被绘制的残留打开栈误判为可继续使用。
+    const auto popupId = context.OpenPopupStack.back().PopupId;
+    auto*      popup   = context.OpenPopupStack.back().Window;
+    // 弹层先完成一帧自动测量，避免首帧尺寸影响滑块点击坐标。
+    frameAt({ popup->Pos.x + 15, popup->Pos.y + 10 });
+    if ( !popup->Active ) return false;
+    // 输入区位于最后一行，点击七成位置可同时覆盖大于 100 的采样音量。
+    // 不借用视图私有音量指针，确保测试经历真实控件编辑和提交路径。
+    const ImVec2 sliderPoint{ popup->Pos.x + popup->Size.x * 0.7F,
+                              popup->Pos.y + popup->Size.y -
+                                  popup->WindowPadding.y - button * 0.5F };
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frameAt(sliderPoint);
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frameAt(sliderPoint);
+    // 释放后不再有任何按住的鼠标按钮，弹层持续显示不能依赖 active 滑块。
+    // 保存事件是用户提交音量的正常后果，不代表用户要求结束编辑。
+    // 松手提交音量后，额外触发保存通知，强制走方块缓存重建路径。
+    // 移开鼠标不构成关闭意图，Popup 应仍每帧被真实提交。
+    MMM::Event::EventBus::instance().publish(MMM::Event::ProjectSavedEvent{});
+    // 指针移到画布空白区，排除仍悬浮在原方块附近而被动保持显示的可能。
+    const ImVec2 outside{ 580, 400 };
+    // 两个稳定帧覆盖事件消费与后续普通显示，均不进行真实时间等待。
+    frameAt(outside);
+    frameAt(outside);
+    if ( context.OpenPopupStack.empty() ||
+         context.OpenPopupStack.back().PopupId != popupId || !popup->Active )
+        return false;
+    // 只有在外部按下鼠标后才允许原生 Popup 规则关闭。
+    // 按下和释放分别推进，避免同一帧两个边沿被 ImGui 输入队列合并。
+    // 结束后继续复用工具实例，后面的滚动测试能检出遗留输入捕获。
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frameAt(outside);
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frameAt(outside);
+    return context.OpenPopupStack.empty() && !popup->Active;
 }
 
 /// @brief 验证浮动、停靠、后台标签恢复及横向溢出的实际滚动结果。
@@ -309,7 +396,8 @@ int main()
         // UI 对象先于 ImGui context 释放，保持 Clay 和窗口的生命周期配对。
         MMM::UI::UIManager            manager;
         MMM::UI::ProjectAudioToolView view("AudioToolScrollTest");
-        passed = checkScrolling(manager, view) && checkTableView(manager, view);
+        passed = checkVolumePopup(manager, view) &&
+                 checkScrolling(manager, view) && checkTableView(manager, view);
     }
     // 先关闭生产项目数据源，再销毁 ImGui；控制器不保留工具视图的窗口指针。
     controller.closeProject();

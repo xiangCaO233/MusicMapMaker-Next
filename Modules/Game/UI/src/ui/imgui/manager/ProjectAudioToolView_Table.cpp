@@ -397,8 +397,8 @@ void ProjectAudioToolView::renderTableView(float dpiScale)
                     if ( FeedbackSmallButton("选择后调节") ) selectRow(index);
                 } else {
                     ImGui::SetNextItemWidth(-1.0F);
-                    if ( FeedbackVolumeSlider("##TableAudioVolume",
-                                              &m_brushAudioVolume) ) {
+                    if ( FeedbackVolumeSlider(
+                             "##TableAudioVolume", &m_brushAudioVolume, 200) ) {
                         Logic::EditorEngine::instance().pushCommand(
                             Logic::LogicCommand(Logic::CmdSetBrushAudioResource{
                                 item.audioResourceId,

@@ -2755,7 +2755,7 @@ void renderSelectedSampleProperties(
                        &state.offsetMs);
     ImGui::SetNextItemWidth(180.0F * dpiScale);
     ::MMM::UI::FeedbackVolumeSlider(
-        TR("ui.edit.sample_properties.volume").data(), &state.volume);
+        TR("ui.edit.sample_properties.volume").data(), &state.volume, 200);
 
     // 用户可能在本帧切换资源，校验前重新解析指针。
     selectedResource = resolveResource(state.audioResourceId);

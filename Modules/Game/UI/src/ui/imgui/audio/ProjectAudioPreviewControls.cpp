@@ -448,10 +448,11 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
 
             ImGui::TextUnformatted(
                 TR("ui.edit.sample_properties.volume").data());
-            // 采样创作音量也使用一致的整数输入，不改变保存时的线性单位。
+            // 采样允许二倍原始增益，显示 0 至 200，保存单位仍为线性倍率。
+            // 松手仅提交音量，不主动关闭弹窗；外部点击沿用原生 Popup 关闭规则。
             ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12.0F);
             const bool volumeChanged = FeedbackVolumeSlider(
-                "##ProjectAudioPreviewVolumeValue", editableVolume);
+                "##ProjectAudioPreviewVolumeValue", editableVolume, 200);
             // 方向键可在仅有导航焦点时调整，没有释放边沿也需要提交。
             if ( ImGui::IsItemDeactivatedAfterEdit() ||
                  (volumeChanged && !ImGui::IsItemActive()) ) {
