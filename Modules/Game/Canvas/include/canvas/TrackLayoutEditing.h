@@ -3,7 +3,9 @@
 #include "config/visual/TrackLayoutConfig.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <span>
@@ -369,6 +371,169 @@ struct HorizontalResizeSnapResult {
     start.left += deltaX;
     // 只更新 left，原宽度经规范化后保持不变。
     return sanitizeHorizontalRegionBounds(start);
+}
+
+/// @brief 辅助区整体移动的边缘吸附结果。
+struct HorizontalMoveSnapResult {
+    HorizontalRegionBounds bounds;            ///< 保持宽度的最终归一化边界。
+    bool                   snapped{ false };  ///< 最终边界是否确实到达参考线。
+    float                  target{ 0.0F };    ///< 命中的世界像素横坐标。
+};
+
+/// @brief 整体移动时让辅助区左边或右边吸附到最近目标。
+/// @param bounds 尚未吸附的归一化区域。
+/// @param viewportWidth 逻辑像素画布宽度。
+/// @param targets 手势开始时冻结的世界像素目标。
+/// @param threshold 最大逻辑像素吸附距离。
+/// @warning UI 热路径：只扫描冻结的一维目标，不分配或查询其他线程。
+[[nodiscard]] inline HorizontalMoveSnapResult snapHorizontalRegionMove(
+    HorizontalRegionBounds bounds, float viewportWidth,
+    std::span<const float> targets, float threshold)
+{
+    HorizontalMoveSnapResult result{ sanitizeHorizontalRegionBounds(bounds) };
+    if ( !std::isfinite(viewportWidth) || viewportWidth <= 0.0F ) return result;
+    const float left      = result.bounds.left * viewportWidth;
+    const float right     = result.bounds.right() * viewportWidth;
+    const auto  leftSnap  = snapHorizontalResizeEdge(left, targets, threshold);
+    const auto  rightSnap = snapHorizontalResizeEdge(right, targets, threshold);
+    // 两侧同时命中时选择所需平移最小的一侧，等距时稳定优先左侧。
+    const bool useLeft =
+        leftSnap.snapped &&
+        (!rightSnap.snapped || std::abs(leftSnap.position - left) <=
+                                   std::abs(rightSnap.position - right));
+    const auto& snap = useLeft ? leftSnap : rightSnap;
+    if ( !snap.snapped ) return result;
+    const float delta = snap.position - (useLeft ? left : right);
+    result.bounds = moveHorizontalRegion(result.bounds, delta / viewportWidth);
+    // 位置钳制后必须复核，不能显示并未真正贴合的参考线。
+    const float edge =
+        (useLeft ? result.bounds.left : result.bounds.right()) * viewportWidth;
+    result.snapped = std::abs(edge - snap.target) <= 0.25F;
+    result.target  = snap.target;
+    return result;
+}
+
+/// @brief 主轨道、草稿、批注和 BGM 的冻结横向边界，顺序与辅助区枚举对应。
+using HorizontalLayoutBounds = std::array<HorizontalRegionBounds, 4>;
+
+/// @brief 缩放交界处时平移原本贴合该侧的相邻区域及连续相邻链。
+/// @param start 按下时冻结的四个区域边界。
+/// @param active 被调整区域的数组下标，零代表主轨道。
+/// @param candidate 当前区域按自身约束缩放后的候选边界。
+/// @param leftEdge 是否拖动左边界。
+/// @param contactTolerance 认定原本相接的归一化误差，仅用于冻结起点。
+/// @return 整组最终边界；相邻区域宽度不变，未贴合区域保持起点。
+/// @pre start 来自同一次手势开始时的合法投影。
+/// @pre candidate 已经过当前区域自身的最小宽度约束。
+/// @note 位置受限时整组共同缩小位移，不会单独拉开任一个接缝。
+/// @warning UI 热路径：固定四区、固定轮数，无堆分配、锁或持久化操作。
+[[nodiscard]] inline HorizontalLayoutBounds resizeJoinedHorizontalRegions(
+    const HorizontalLayoutBounds& start, std::size_t active,
+    HorizontalRegionBounds candidate, bool leftEdge, float contactTolerance)
+{
+    // 结果首先完整复制起点，未连接成员不受候选位置或浮点累积影响。
+    // 输入来自已规整投影；不在联动计算中重新推导可选配置。
+    auto result = start;
+    if ( active >= start.size() ) return result;
+    std::array<bool, 4> joined{};
+    // 活动区只提供扩展起点，其自身在后续位移循环中始终单独处理。
+    joined[active] = true;
+    // 仅沿被拖边一侧追踪首尾相接关系，不把同边对齐或重叠区域当邻居。
+    // 重复固定轮数覆盖任意数组顺序，已加入标记阻止闭环重复处理。
+    for ( std::size_t pass = 0; pass < start.size(); ++pass ) {
+        for ( std::size_t i = 0; i < start.size(); ++i ) {
+            if ( joined[i] ) continue;
+            for ( std::size_t j = 0; j < start.size(); ++j ) {
+                if ( !joined[j] ) continue;
+                // 只匹配相反两条边，中心线或同侧边重合不构成连接。
+                const float distance = leftEdge
+                                           ? start[i].right() - start[j].left
+                                           : start[i].left - start[j].right();
+                if ( std::abs(distance) <= contactTolerance ) joined[i] = true;
+            }
+        }
+    }
+    // 保持活动区另一侧边不动，统一位移只描述交接边缘的变化。
+    const float oldEdge = leftEdge ? start[active].left : start[active].right();
+    float delta = (leftEdge ? candidate.left : candidate.right()) - oldEdge;
+    if ( !std::isfinite(delta) ) return result;
+    // 统一约束组位移，避免单独钳制邻居后把交界重新拉开。
+    // 主轨道必须留在画布内；辅助区继续支持相机视口外的配置空间。
+    for ( std::size_t i = 0; i < start.size(); ++i ) {
+        if ( i == active || !joined[i] ) continue;
+        // 起点保证零位移合法，所以依次求交不会制造反向跳动。
+        const float minLeft = i == 0 ? 0.0F : -4.0F;
+        const float maxLeft = i == 0 ? 1.0F - start[i].width : 4.0F;
+        delta =
+            std::clamp(delta, minLeft - start[i].left, maxLeft - start[i].left);
+    }
+    // 受邻居边界限制后重新构造活动宽度，不继续使用未经组约束的候选。
+    // 从起点重建也允许鼠标改变方向，联动效果立即可逆。
+    result[active] = start[active];
+    if ( leftEdge ) {
+        result[active].left += delta;
+        result[active].width -= delta;
+    } else {
+        result[active].width += delta;
+    }
+    // 所有跟随区域采用同一位移，保留各自宽度及相互接缝。
+    for ( std::size_t i = 0; i < start.size(); ++i )
+        if ( i != active && joined[i] ) result[i].left += delta;
+    return result;
+}
+
+/// @brief 将完整横向区域边界写回配置，统一处理单轨宽度和锚点方向。
+/// @param layout 本次手势的配置候选。
+/// @param index 主轨道零，草稿一，批注二，BGM 三。
+/// @param bounds 整个区域的归一化边界。
+/// @param draftCount 草稿组轨道数。
+/// @param bgmCount BGM 组轨道数。
+/// @warning UI 热路径：仅写内存值，保存配置由鼠标释放路径统一执行。
+inline void storeHorizontalLayoutBounds(Config::TrackLayout&   layout,
+                                        std::size_t            index,
+                                        HorizontalRegionBounds bounds,
+                                        std::uint32_t          draftCount,
+                                        std::uint32_t          bgmCount)
+{
+    if ( index == 0 ) {
+        layout.left  = bounds.left;
+        layout.right = bounds.right();
+        return;
+    }
+    // 拒绝无效区域编号，不能把未知枚举默认为 BGM 覆盖配置。
+    if ( index > 3 ) return;
+    auto& region = index == 1   ? layout.draftLanes
+                   : index == 2 ? layout.annotation
+                                : layout.bgmLanes;
+    // 草稿向左增长，继续锁定右锚；其他区域使用左锚，清除竞争的旧右锚。
+    if ( index == 1 ) {
+        region.left.reset();
+        region.right = bounds.right();
+    } else {
+        region.left = bounds.left;
+        region.right.reset();
+    }
+    // 数量变化前后仍按单轨语义存储，零轨道使用一作为防御性分母。
+    // 轨道组的总宽度只用于本轮屏幕交互，不作为新的持久化字段。
+    const auto count = index == 1   ? std::max(draftCount, 1U)
+                       : index == 3 ? std::max(bgmCount, 1U)
+                                    : 1U;
+    region.width     = bounds.width / static_cast<float>(count);
+}
+
+/// @brief 比较布局候选是否需要发布，包含辅助区域可选锚点的存在状态。
+/// @warning UI 热路径：固定字段比较，不序列化配置或执行文件操作。
+[[nodiscard]] inline bool horizontalLayoutsEqual(const Config::TrackLayout& a,
+                                                 const Config::TrackLayout& b)
+{
+    // 相同指针位置从同一冻结起点计算，精确比较即可消除静止帧重复发布。
+    const auto sameRegion = [](const auto& x, const auto& y) {
+        return x.left == y.left && x.right == y.right && x.width == y.width;
+    };
+    return a.left == b.left && a.right == b.right && a.top == b.top &&
+           a.bottom == b.bottom && sameRegion(a.draftLanes, b.draftLanes) &&
+           sameRegion(a.annotation, b.annotation) &&
+           sameRegion(a.bgmLanes, b.bgmLanes);
 }
 
 /// @brief 在像素空间命中辅助区域横向句柄。

@@ -409,6 +409,10 @@ private:
     HorizontalRegionDragHandle m_horizontalRegionDragHandle{
         HorizontalRegionDragHandle::None
     };
+    /// @brief 宽度手势开始时冻结四区边界，联动不依赖逐帧回流快照。
+    HorizontalLayoutBounds m_joinedLayoutDragBounds{};
+    /// @brief 联动手势起始配置，移回起点时完整恢复未物化的可选锚点。
+    Config::TrackLayout m_joinedLayoutDragStart;
     /// @brief 辅助区域拖动开始时的已解析归一化边界。
     HorizontalRegionBounds m_horizontalRegionDragStart;
     /// @brief 辅助区域拖动开始时的归一化横坐标。

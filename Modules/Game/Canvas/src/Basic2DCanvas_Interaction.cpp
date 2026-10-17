@@ -2863,6 +2863,56 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                                  bounds.right - cameraOffsetX);
             }
         };
+    /// @brief 冻结相接区域与起始配置，之后每帧直接由手势起点重算。
+    /// @param active 被抓取的区域编号。
+    /// @param leftEdge 是否正在调整左侧交界。
+    // 只在按下时物化几何，不在拖动帧扫描 ECS 或解析持久化布局。
+    // 四个槽位固定，后续候选计算没有动态容器或跨线程访问。
+    const auto freezeJoinedResize = [&](std::size_t active, bool leftEdge) {
+        m_joinedLayoutDragStart  = layout;
+        m_joinedLayoutDragBounds = {
+            { { layout.left, layout.right - layout.left },
+              regionBounds(AuxiliaryLayoutRegion::Draft),
+              regionBounds(AuxiliaryLayoutRegion::Annotation),
+              regionBounds(AuxiliaryLayoutRegion::Bgm) }
+        };
+        const auto& bounds = m_joinedLayoutDragBounds[active];
+        const float edge =
+            (leftEdge ? bounds.left : bounds.right()) * targetWidth;
+        // 原本贴合的交界跟随本次手势，不再充当把句柄锁回起点的吸附目标。
+        std::erase_if(m_canvasComponentSnapTargetsX, [&](float value) {
+            return std::abs(value - edge) <= 0.5F;
+        });
+    };
+    /// @brief 在冻结起点上计算整组联动，并返回配置与修正后的活动边界。
+    /// @param active 被缩放区域编号。
+    /// @param bounds 输入候选并输出整组约束后的真实边界。
+    /// @param leftEdge 控制邻接链向左或向右传播。
+    /// @return 包含本区域及所有跟随区域的同一份配置候选。
+    const auto joinedResizeCandidate = [&](std::size_t             active,
+                                           HorizontalRegionBounds& bounds,
+                                           bool                    leftEdge) {
+        const auto result =
+            resizeJoinedHorizontalRegions(m_joinedLayoutDragBounds,
+                                          active,
+                                          bounds,
+                                          leftEdge,
+                                          0.5F / targetWidth);
+        bounds         = result[active];
+        auto candidate = m_joinedLayoutDragStart;
+        for ( std::size_t i = 0; i < result.size(); ++i ) {
+            // 未变区域保留推导式旧配置，不无故物化所有辅助区。
+            const auto& start = m_joinedLayoutDragBounds[i];
+            if ( i == active || result[i].left != start.left ||
+                 result[i].width != start.width )
+                storeHorizontalLayoutBounds(candidate,
+                                            i,
+                                            result[i],
+                                            auxiliaryProjection.draftLaneCount,
+                                            auxiliaryProjection.bgmLaneCount);
+        }
+        return candidate;
+    };
     // 整体移动沿用二维边缘与中心吸附，宽度缩放则进入下面两个专用状态。
     const bool movingCanvasComponent =
         m_canvasComponentDragTarget.has_value() &&
@@ -2871,7 +2921,9 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         !m_noteScaleDragTarget.has_value() &&
         !m_canvasComponentDragTarget.has_value() &&
         m_trackLayoutDragHandle == TrackLayoutDragHandle::Move;
-    // 辅助区域只有左右句柄改变宽度，中心 Move 不应复用冻结目标。
+    const bool movingHorizontalRegion =
+        m_horizontalRegionDragHandle == HorizontalRegionDragHandle::Move;
+    // 辅助区域整体移动和宽度拖动都保留吸附参考线。
     const bool resizingHorizontalRegion =
         m_horizontalRegionDragHandle == HorizontalRegionDragHandle::Left ||
         m_horizontalRegionDragHandle == HorizontalRegionDragHandle::Right;
@@ -2881,7 +2933,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         m_trackLayoutDragHandle == TrackLayoutDragHandle::Right;
     // 仅活动吸附手势可以保留参考线；松开鼠标会在提交配置前立即清理。
     if ( (!movingCanvasComponent && !movingTrackLayout &&
-          !resizingHorizontalRegion && !resizingTrackWidth) ||
+          !movingHorizontalRegion && !resizingHorizontalRegion &&
+          !resizingTrackWidth) ||
          !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
         m_canvasComponentSnapGuideX.reset();
         m_canvasComponentSnapGuideY.reset();
@@ -3143,14 +3196,14 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             m_horizontalRegionDragStart  = regionBounds(hoveredAuxiliaryRegion);
             // 指针起点按画布宽度归一化，与持久化区域坐标保持同域。
             m_horizontalRegionPointerStart = worldPointerX / targetWidth;
-            if ( hoveredHorizontalHandle == HorizontalRegionDragHandle::Left ||
-                 hoveredHorizontalHandle ==
-                     HorizontalRegionDragHandle::Right ) {
-                // Move 不改变宽度，因此无需冻结边缘目标。
-                // 活动区域自身不作为吸附目标，另一侧边缘仍由缩放函数固定。
-                collectHorizontalResizeSnapTargets(true,
-                                                   hoveredAuxiliaryRegion);
-            }
+            // 整体移动保留按下点偏移，不会因中心把手吸附而瞬移。
+            // Move 同样冻结其他区域与组件的边缘，避免拖动时吸附目标漂移。
+            collectHorizontalResizeSnapTargets(true, hoveredAuxiliaryRegion);
+            if ( hoveredHorizontalHandle != HorizontalRegionDragHandle::Move )
+                freezeJoinedResize(
+                    static_cast<std::size_t>(hoveredAuxiliaryRegion),
+                    hoveredHorizontalHandle ==
+                        HorizontalRegionDragHandle::Left);
         } else if ( hoveredHandle != TrackLayoutDragHandle::None ) {
             // 主轨道手势冻结完整矩形、判定线另由成员当前值读取，
             // 指针起点同时保存归一化 X/Y。
@@ -3166,6 +3219,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 // 主轨道区缩放时只收集其他区域与组件，避免吸附到自身固定边。
                 collectHorizontalResizeSnapTargets(false,
                                                    AuxiliaryLayoutRegion::None);
+                freezeJoinedResize(
+                    0, hoveredHandle == TrackLayoutDragHandle::Left);
             }
         }
     }
@@ -3569,7 +3624,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
          ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
         // 辅助区拖动与文本组件拖动互斥；前面的条件确保同一帧只有一个
         // 布局对象能消费左键手势。
-        // 默认结果保留原始指针，Move 句柄因此无需单独分支关闭吸附。
+        // 缩放吸附指针边缘；整体移动随后比较候选区域的左右两侧。
         HorizontalResizeSnapResult edgeSnap{ .position = worldPointerX };
         if ( m_horizontalRegionDragHandle == HorizontalRegionDragHandle::Left ||
              m_horizontalRegionDragHandle ==
@@ -3588,12 +3643,38 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             candidateBounds = moveHorizontalRegion(
                 m_horizontalRegionDragStart,
                 normalizedX - m_horizontalRegionPointerStart);
+            const auto snap =
+                snapHorizontalRegionMove(candidateBounds,
+                                         targetWidth,
+                                         m_canvasComponentSnapTargetsX,
+                                         componentSnapDistance);
+            candidateBounds = snap.bounds;
+            m_canvasComponentSnapGuideX.reset();
+            m_canvasComponentSnapGuideY.reset();
+            if ( snap.snapped )
+                m_canvasComponentSnapGuideX = snap.target + cameraOffsetX;
         } else {
             candidateBounds =
                 resizeHorizontalRegion(m_horizontalRegionDragStart,
                                        m_horizontalRegionDragHandle,
                                        normalizedX);
         }
+        // 只在宽度手势传播相接关系，整体 Move 仍独立移动当前区域。
+        Config::TrackLayout candidate = layout;
+        const auto          activeRegion =
+            static_cast<std::size_t>(m_auxiliaryLayoutRegion);
+        if ( m_horizontalRegionDragHandle == HorizontalRegionDragHandle::Move )
+            storeHorizontalLayoutBounds(candidate,
+                                        activeRegion,
+                                        candidateBounds,
+                                        auxiliaryProjection.draftLaneCount,
+                                        auxiliaryProjection.bgmLaneCount);
+        else
+            candidate =
+                joinedResizeCandidate(activeRegion,
+                                      candidateBounds,
+                                      m_horizontalRegionDragHandle ==
+                                          HorizontalRegionDragHandle::Left);
         if ( m_horizontalRegionDragHandle == HorizontalRegionDragHandle::Left ||
              m_horizontalRegionDragHandle ==
                  HorizontalRegionDragHandle::Right ) {
@@ -3613,60 +3694,16 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             }
         }
 
-        Config::TrackLayout             candidate   = layout;
-        Config::HorizontalRegionLayout* target      = nullptr;
-        float                           storedWidth = candidateBounds.width;
-        bool                            anchorRight = false;
-        // 草稿与 BGM 配置保存单轨宽度，批注区保存整个区域宽度。
-        // 这里把屏幕上看到的总宽度还原为配置模型的存储语义，避免轨道数
-        // 改变后辅助区宽度被重复放大。
-        switch ( m_auxiliaryLayoutRegion ) {
-        case AuxiliaryLayoutRegion::Draft:
-            target      = &candidate.draftLanes;
-            anchorRight = true;
-            storedWidth /= static_cast<float>(
-                std::max(auxiliaryProjection.draftLaneCount, 1U));
-            break;
-        case AuxiliaryLayoutRegion::Annotation:
-            target = &candidate.annotation;
-            break;
-        case AuxiliaryLayoutRegion::Bgm:
-            target = &candidate.bgmLanes;
-            storedWidth /= static_cast<float>(
-                std::max(auxiliaryProjection.bgmLaneCount, 1U));
-            break;
-        case AuxiliaryLayoutRegion::None: break;
-        }
-        if ( target ) {
-            constexpr float layoutEpsilon = 1e-6F;
-            const float     storedAnchor =
-                anchorRight ? candidateBounds.right() : candidateBounds.left;
-            const auto& currentAnchor =
-                anchorRight ? target->right : target->left;
-            const bool changed =
-                !currentAnchor || !target->width ||
-                std::abs(*currentAnchor - storedAnchor) > layoutEpsilon ||
-                std::abs(*target->width - storedWidth) > layoutEpsilon ||
-                (anchorRight && target->left.has_value());
-            if ( changed ) {
-                // optional anchor 的存在性也是配置状态的一部分；即使数值相同，
-                // 从左锚切到右锚仍必须写回。
-                // 草稿区锁定右边界，新增轨只会向左扩展；其余区域锁定左边界。
-                if ( anchorRight ) {
-                    target->left.reset();
-                    target->right = storedAnchor;
-                } else {
-                    target->left = storedAnchor;
-                }
-                target->width = storedWidth;
-                appConfig.getVisualConfig().editableTrackLayoutForKeyCount(
-                    keyCount) = candidate;
-                Event::EventBus::instance().publish(
-                    Event::LogicCommandEvent(Logic::CmdUpdateEditorConfig{
-                        appConfig.getEditorConfig() }));
-                m_layoutConfigurationChanged = true;
-                layout                       = candidate;
-            }
+        // 比较整个候选，邻居跟随和可选锚点变化也属于可见布局更新。
+        // 鼠标停住时结果不变，不重复发送完整编辑器配置。
+        if ( !horizontalLayoutsEqual(layout, candidate) ) {
+            // 当前区与所有跟随区在同一个命令中预览，释放时仍只保存一次。
+            appConfig.getVisualConfig().editableTrackLayoutForKeyCount(
+                keyCount) = candidate;
+            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
+            m_layoutConfigurationChanged = true;
+            layout                       = candidate;
         }
     }
 
@@ -3794,6 +3831,16 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
 
             if ( m_trackLayoutDragHandle == TrackLayoutDragHandle::Left ||
                  m_trackLayoutDragHandle == TrackLayoutDragHandle::Right ) {
+                // 先完成主区域自身跨度约束，再计算相邻链可接受的共同位移。
+                // 即使邻居推到了画布边界，活动区与邻居也保持相同交接位置。
+                // 玩家区改宽同样带动已贴合的草稿、批注或 BGM 邻接链。
+                HorizontalRegionBounds bounds{
+                    candidate.left, candidate.right - candidate.left
+                };
+                candidate = joinedResizeCandidate(
+                    0,
+                    bounds,
+                    m_trackLayoutDragHandle == TrackLayoutDragHandle::Left);
                 // 布局最小跨度或视口边界钳制后，仅对真实重合的边缘保留参考线。
                 const float resizedEdge =
                     (m_trackLayoutDragHandle == TrackLayoutDragHandle::Left
