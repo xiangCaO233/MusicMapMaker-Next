@@ -35,6 +35,11 @@ set(_archive_args
     "-DBUILD_SHARED_LIBS=${_archive_shared}"
     -DBUILD_TESTING=OFF
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON)
+# MinGW 的 sysroot 已具备完整链接环境，归档库的函数探针必须检查实际符号。 只生成静态归档会把 nl_langinfo、fstatat 等不可用
+# POSIX 接口误判为存在。 此覆盖仅传入归档依赖的外部工程，不改变其他依赖的默认交叉自检策略。
+if(MINGW)
+  list(APPEND _archive_args -DCMAKE_TRY_COMPILE_TARGET_TYPE=EXECUTABLE)
+endif()
 # * 不传播主工程业务目标的编译定义、PGO 或链接时优化属性。
 foreach(
   _var

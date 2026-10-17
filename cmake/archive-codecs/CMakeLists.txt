@@ -39,7 +39,7 @@ function(buildArchiveZlib)
   add_subdirectory(
     "${MMM_ROOT}/3rdpty/sources/IonCachyEngine/3rdpty/sources/zlib" zlib)
 endfunction()
-# * XZ 只提供 liblzma，7z 的 LZMA/LZMA2 与压缩 TAR 共用此库。
+# @brief 构建 liblzma，统一 7z 和压缩 TAR 的 LZMA/LZMA2 依赖及导出路径。
 function(buildArchiveLzma)
   # * 禁止命令行、翻译与文档构建，避免交叉编译依赖宿主生成工具。
   foreach(_option XZ_TOOL_XZ XZ_TOOL_XZDEC XZ_TOOL_LZMADEC XZ_TOOL_LZMAINFO
@@ -51,6 +51,23 @@ function(buildArchiveLzma)
   endforeach()
   # * XZ 自身遵循 BUILD_SHARED_LIBS，不需要第二套库类型开关。
   add_subdirectory("${MMM_ROOT}/3rdpty/sources/xz" xz)
+  # MinGW 链接器在编码器工程根执行，而上游导出表后处理在 liblzma 子目录执行。 将导出表输出改为绝对路径，保证 Ninja
+  # 的两个阶段读取同一个文件。 只修正包装层目标属性，不改写上游 CMake 或生成脚本。
+  if(MINGW AND BUILD_SHARED_LIBS)
+    # 从目标取得真实二进制目录，不能假定上游生成文件位于工程根。
+    get_target_property(_lzma_binary_dir liblzma BINARY_DIR)
+    # 新旧上游分别使用列表选项和旧字符串属性，两种表达都保持原有顺序。
+    foreach(_property LINK_OPTIONS LINK_FLAGS)
+      get_target_property(_link_value liblzma ${_property})
+      if(_link_value)
+        # 只替换已知导出表参数，保留其他链接器选项及上游的序号清理步骤。
+        string(REPLACE "--output-def,liblzma.def.in"
+                       "--output-def,${_lzma_binary_dir}/liblzma.def.in"
+                       _link_value "${_link_value}")
+        set_property(TARGET liblzma PROPERTY ${_property} "${_link_value}")
+      endif()
+    endforeach()
+  endif()
 endfunction()
 # * zstd 使用其官方 CMake 入口，只输出应用要分发的编码器库。
 function(buildArchiveZstd)

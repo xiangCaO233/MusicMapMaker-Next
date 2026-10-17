@@ -97,6 +97,31 @@ foreach(_package libarchive archive_zlib lzma bzip2 zstd)
     # * DLL 进入相同 ABI 和配置坐标，不能借用其他配置的运行时。
     file(COPY ${_runtime} DESTINATION "${_destination}/bin/${_suffix}")
   endif()
+  # macOS 共享库链接后只保留调试映射，需要在构建对象仍存在时生成可搬移的 dSYM。 静态归档的 DWARF 已位于对象中，不额外复制整棵构建目录。
+  if(PLATFORM STREQUAL "macos" AND LINKAGE STREQUAL "shared")
+    # 使用原生 Mac Runner 的工具解析链接调试映射，不以开发机 LLVM 版本替代。
+    # 缺少工具直接失败，不能发布依赖本机对象路径才能调试的共享库。
+    find_program(_dsymutil NAMES dsymutil REQUIRED)
+    # 符号包采用与 dylib 相同的平台、架构、编译器、链接类型和配置坐标。 bundle 内含 UUID 与 DWARF，整体保留以供离线符号化。
+    file(MAKE_DIRECTORY "${_destination}/symbols/${_suffix}")
+    foreach(_library IN LISTS _libraries)
+      # 版本化符号链接共享同一实体，只为真实 dylib 生成一次符号包。
+      if(IS_SYMLINK "${_library}")
+        continue()
+      endif()
+      get_filename_component(_library_name "${_library}" NAME)
+      # 必须读取安装树中的真实库，不能针对链接名猜测版本或相邻构建目录。 不执行 strip，生成符号包不会改变原 dylib 的 UUID
+      # 和导出符号。
+      execute_process(
+        COMMAND "${_dsymutil}" "${_library}" -o
+                "${_destination}/symbols/${_suffix}/${_library_name}.dSYM"
+        RESULT_VARIABLE _symbol_result)
+      # 任一真实库符号提取失败都阻止本次暂存成功，避免漏包却报告完成。
+      if(NOT _symbol_result EQUAL 0)
+        message(FATAL_ERROR "归档依赖 dSYM 生成失败：${_library_name}")
+      endif()
+    endforeach()
+  endif()
   # * /Z7 静态库的符号在归档内；共享库的链接 PDB 仍须收集。
   # * 只搜索这两个专用构建树，避免收集应用或其他库的 PDB。
   file(GLOB_RECURSE _symbols "${BUILD_DIR}/3rdpty/archive_bld/*${_stem}*.pdb"

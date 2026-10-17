@@ -88,6 +88,9 @@ cmake-format -i <absolute_file_path>
 
 ### 3.5 预编译库
 
+- **构建来源固定**：Linux 与 Windows 的预编译发布产物必须在 `debsrv` 的固定 GitHub Runner 镜像环境中构建，再同步回本机提交；禁止用开发机较新的编译器、系统库或运行库生成替代产物，也禁止仅改目录标签冒充目标工具链。
+- **macOS 构建来源**：使用现有原生 macOS Runner 的 AppleClang、SDK 和部署下限生成预编译库，不使用 Linux 开发机替代；同步时同样保留头文件、调试符号以及 Debug、RelWithDebInfo 配置。
+
 - `SOURCES_BUILD` 是第三方依赖来源的唯一开关，默认值必须为 `OFF`：
   - `SOURCES_BUILD=ON` 时使用 `3rdpty/sources` 源码构建。
   - `SOURCES_BUILD=OFF` 时只使用预编译库，禁止自动回退到源码构建；缺少预编译包、头文件或库文件时必须 `FATAL_ERROR`。
