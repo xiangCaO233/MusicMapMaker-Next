@@ -148,7 +148,7 @@ int professionalTimingLane(::MMM::TimingEffect effect)
 }
 
 /// @brief 将专业模式轨道位置转换为创建弹窗类型索引。
-/// @details X 坐标先按四等分泳道取 floor，再钳制末端像素到最后泳道；
+/// @details X 坐标先按五等分泳道取 floor，再钳制末端像素到最后泳道；
 /// 退化宽度或画布外坐标返回空，避免隐式选择错误 Timing 类型。
 /// @param size 当前 Timeline 画布尺寸。
 /// @param localMouseX 鼠标相对画布左上角的 X 坐标。
@@ -170,6 +170,8 @@ std::optional<int> professionalCreateTypeAtX(const ImVec2& size,
     case 1: return 1;
     case 2: return 2;
     case 3: return 3;
+    // 第五列与 STOP 创建类型四一致，不能把可见泳道当成无效空白。
+    case 4: return 4;
     default: return std::nullopt;
     }
 }
@@ -837,7 +839,7 @@ double TimelineCanvas::snapTimeToBeatLine(double rawTime) const
 }
 
 /// @brief 在指定画布 Y 坐标处准备并打开 Timing 创建弹窗。
-/// @details 专业模式先按鼠标 X 选择 BPM、Scroll、Jump 或 HS 泳道；
+/// @details 专业模式先按鼠标 X 选择 BPM、Scroll、Jump、HS 或 STOP 泳道；
 /// 随后同时保存原始时间和吸附时间，位置来源可选择鼠标或当前播放头。
 /// 默认参数按 TimingEffect 初始化，实际创建留给弹窗确认命令。
 /// @warning UI 低频入口：只在创建手势触发时调用，不访问文件系统。

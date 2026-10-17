@@ -3523,8 +3523,10 @@ void TimelineCanvas::publishTimelineCommand(
          !m_currentSnapshot->isPlaying ) {
         const auto format =
             timelineFormatSupport(m_currentSnapshot->beatmapPathKey);
-        // 类型均受支持的格式无需遍历实体；mc、mmm 不产生多余提示。
-        if ( !format.supportsScroll || !format.supportsJumpAndHs ) {
+        // 只要任一类型受限就检查，MC 虽支持原四类，仍不支持 STOP。
+        // MMM 的全部类型均可保存，保持无需检查实体的快速路径。
+        if ( !format.supportsScroll || !format.supportsJumpAndHs ||
+             !format.supportsStop ) {
             const auto unsupported = [format](TimingEffect effect) {
                 return !format.supports(effect);
             };
@@ -3544,6 +3546,9 @@ void TimelineCanvas::publishTimelineCommand(
                         return unsupported(TimingEffect::JUMP);
                     if ( element.hsEntity == entity )
                         return unsupported(TimingEffect::HS);
+                    // 已有 STOP 的修改、删除与批量编辑也需要原格式风险提示。
+                    if ( element.stopEntity == entity )
+                        return unsupported(TimingEffect::STOP);
                 }
                 return false;
             };

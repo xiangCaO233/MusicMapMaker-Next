@@ -177,6 +177,8 @@ protected:
     void invalidateShaderSourceCache() override;
 
 private:
+    /// @brief 测试直接驱动画笔创建与命令警告入口，不替换生产映射或发布逻辑。
+    friend struct TimelineStopCreationTestAccess;
     /// @brief 提交时间线命令，记录原格式无法保存的修改但始终允许编辑。
     /// @param event 待发布的时间线操作；批量命令共用一次提示。
     /// @warning 低频提交路径：只读取快照，不访问可变 ECS 或文件系统。

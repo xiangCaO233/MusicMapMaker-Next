@@ -324,3 +324,11 @@ mmm_register_test_case(
   TimingFormulaTest
   "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/font/NotoSansMath-Regular.ttf"
 )
+
+# STOP 回归通过真实 ImGui 鼠标边沿驱动画笔入口，不能只验证格式能力表。 测试直接调用 TimelineCanvas 私有交互入口，Canvas
+# 是其直接链接依赖。
+mmm_add_test_executable(Canvas TimelineStopCreationTest
+                        tests/TimelineStopCreationTest.cpp)
+target_link_libraries(TimelineStopCreationTest PRIVATE Canvas)
+mmm_register_test_case(NAME TimelineStopCreationTest COMMAND
+                       TimelineStopCreationTest)
