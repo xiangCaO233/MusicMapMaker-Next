@@ -46,7 +46,7 @@ bool FeedbackVolumeSlider(const char* label, float* value, int maximumPercent)
         }
     }
     // 保留标准反馈、焦点与 Ctrl 点击输入能力。
-    // AlwaysClamp 也约束直接输入的数值，禁止负音量和超过一百。
+    // AlwaysClamp 也约束直接输入，禁止负音量或超过当前百分数上限。
     // 保存原生滑块框宽，不包含标签文字，否则居中文本会偏向标签。
     // 后续仅补绘数值，不创建额外 Item，因此激活 ID 与释放边沿保持一致。
     const float frameWidth = ImGui::CalcItemWidth();
@@ -58,7 +58,8 @@ bool FeedbackVolumeSlider(const char* label, float* value, int maximumPercent)
                                            0,
                                            maximum,
                                            nativeText ? "%d" : "",
-                                           ImGuiSliderFlags_AlwaysClamp);
+                                           ImGuiSliderFlags_AlwaysClamp,
+                                           true);
     // 鼠标定位取最近五点格；Ctrl 点击的整数输入不受五点格限制。
     if ( ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
          !ImGui::TempInputIsActive(id) ) {
@@ -89,6 +90,11 @@ bool FeedbackVolumeSlider(const char* label, float* value, int maximumPercent)
         *value = percent * 0.01F;
         // 保留业务面板依赖的编辑结束边沿，键盘与鼠标都能触发持久化。
         ImGui::MarkItemEdited(id);
+        // 只能在五点鼠标量化或一点键盘步进完成后播放，原始整数草稿不发声。
+        playSliderValueChangeFeedback(static_cast<float>(previous),
+                                      static_cast<float>(percent),
+                                      0.0F,
+                                      static_cast<float>(maximum));
         return true;
     }
     // 五点格内的鼠标小幅移动不产生业务更新，避免重复保存相同数值。

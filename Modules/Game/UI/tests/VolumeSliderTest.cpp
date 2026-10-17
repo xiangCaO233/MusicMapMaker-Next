@@ -11,7 +11,8 @@ namespace
 /// @warning 仅测试渲染路径；无文件操作、网络或真实设备访问。
 /// 测试固定窗口坐标，确保鼠标目标落在滑块轨道而不是文字标签。
 /// @param maximumPercent 本轮真实滑块范围；默认总线与采样分别为 100 和 200。
-void frame(float& value, int maximumPercent = 100)
+/// @return 最后一次滑动音效请求的时间，用于验证是否重复触发。
+float frame(float& value, int maximumPercent = 100)
 {
     ImGui::NewFrame();
     ImGui::SetNextWindowPos({ 0, 0 });
@@ -24,9 +25,15 @@ void frame(float& value, int maximumPercent = 100)
     // 控件宽度与显示尺寸独立，输入区不会因自动布局变化而漂移。
     ImGui::SetNextItemWidth(250);
     MMM::UI::FeedbackVolumeSlider("gain", &value, maximumPercent);
+    // 读取真实反馈路径记录的时间；不初始化音频设备也能判断是否请求发声。
+    // 盐值对应公共滑块反馈的状态键，不在测试中复制触发或量化算法。
+    constexpr ImGuiID SOUND_TIME_SALT = 0x6D6D5321u;
+    const float       soundTime       = ImGui::GetStateStorage()->GetFloat(
+        ImGui::GetID("gain") ^ SOUND_TIME_SALT, -1000.0F);
     // 完整结束并渲染这一帧，使下一次注入具有真实的跨帧激活状态。
     ImGui::End();
     ImGui::Render();
+    return soundTime;
 }
 /// @brief 模拟一次完整按下/释放，避免重复计时或残留键状态干扰步长。
 /// @param key 需要验证的方向键。
@@ -79,7 +86,23 @@ int main()
     // 鼠标位置刻意不落在整五点上，结果必须吸附到相邻五点格。
     io.AddMousePosEvent(103, 15);
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
-    frame(value);
+    const float firstSoundTime = frame(value);
+    const float heldValue      = value;
+    // 固定鼠标位置跨过多轮音效限频周期，必须保持最终值与发声时间不变。
+    // 此位置的原始整数与五点量化结果不同，可复现旧版每帧重新发声。
+    valid &= firstSoundTime > 0;
+    for ( int i = 0; i < 20; ++i ) {
+        valid &= frame(value) == firstSoundTime;
+        valid &= value == heldValue;
+    }
+    // 在同一量化格内移动仍不发声，只有跨到下一有效数值才提交反馈。
+    io.AddMousePosEvent(102, 15);
+    valid &= frame(value) == firstSoundTime && value == heldValue;
+    io.AddMousePosEvent(118, 15);
+    const float nextSoundTime = frame(value);
+    valid &= value != heldValue && nextSoundTime > firstSoundTime;
+    // 新数值停住后也不能补发排队音效，模拟时间推进不依赖实际休眠。
+    for ( int i = 0; i < 20; ++i ) valid &= frame(value) == nextSoundTime;
     valid &= value > 0 && value < 1 &&
              static_cast<int>(std::lround(value * 100)) % 5 == 0;
     // 释放结束交互，检查销毁上下文前不存在仍按下的输入。
