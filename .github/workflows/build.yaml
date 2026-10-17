@@ -90,40 +90,35 @@ jobs:
           # 每个构建步骤独立启用严格模式，不依赖上一 shell 状态。
           set -euo pipefail
           # 默认参数选择 windows/msvc/2026 的预编译消费构建。
-          # 显式补齐新增归档库，再执行严格的预编译消费构建。
-          bash scripts/ci/prepare-archive-prebuilts.sh scripts/ci/cross/msvc-clang-build.sh
+          # 归档库与其他依赖均由已提交的预编译包提供，普通 CI 不重建第三方库。
           bash scripts/ci/cross/msvc-clang-build.sh "${MMM_CI_PGO_OPTION}"
 
       - name: ci->Windows MinGW GCC Cross Build
         run: |
           # UCRT64 GCC 与 clang-cl 使用独立构建目录。
           set -euo pipefail
-          # 显式补齐新增归档库，再执行严格的预编译消费构建。
-          bash scripts/ci/prepare-archive-prebuilts.sh scripts/ci/cross/mingw-gcc-build.sh
+          # 归档库与其他依赖均由已提交的预编译包提供，普通 CI 不重建第三方库。
           bash scripts/ci/cross/mingw-gcc-build.sh "${MMM_CI_PGO_OPTION}"
 
       - name: ci->Windows MinGW Clang Cross Build
         run: |
           # clang64 路径在 helper 内验证 UCRT 与 libc++。
           set -euo pipefail
-          # 显式补齐新增归档库，再执行严格的预编译消费构建。
-          bash scripts/ci/prepare-archive-prebuilts.sh scripts/ci/cross/mingw-clang-build.sh
+          # 归档库与其他依赖均由已提交的预编译包提供，普通 CI 不重建第三方库。
           bash scripts/ci/cross/mingw-clang-build.sh "${MMM_CI_PGO_OPTION}"
 
       - name: ci->Linux GCC 14 Native Build
         run: |
           # 原生 GCC 构建同时注册测试目标和 Linux 产物。
           set -euo pipefail
-          # 显式补齐新增归档库，再执行严格的预编译消费构建。
-          bash scripts/ci/prepare-archive-prebuilts.sh scripts/ci/linux-build.sh --compiler gcc14
+          # 归档库与其他依赖均由已提交的预编译包提供，普通 CI 不重建第三方库。
           bash scripts/ci/linux-build.sh --compiler gcc14 "${MMM_CI_PGO_OPTION}"
 
       - name: ci->Linux Clang 19 Native Build
         run: |
           # 原生 Clang 构建使用独立 cache 和预编译 ABI 目录。
           set -euo pipefail
-          # 显式补齐新增归档库，再执行严格的预编译消费构建。
-          bash scripts/ci/prepare-archive-prebuilts.sh scripts/ci/linux-build.sh --compiler clang19
+          # 归档库与其他依赖均由已提交的预编译包提供，普通 CI 不重建第三方库。
           bash scripts/ci/linux-build.sh --compiler clang19 "${MMM_CI_PGO_OPTION}"
 
       - name: ci->Package Release
@@ -212,8 +207,7 @@ jobs:
         run: |
           # helper 会验证宿主架构、SDK、AppleClang 和预编译标签。
           set -euo pipefail
-          # 归档库按本机 AppleClang 和目标架构独立构建、暂存。
-          bash scripts/ci/prepare-archive-prebuilts.sh scripts/ci/macos-build.sh --arch arm64
+          # AppleClang 与架构选择对应预编译包，缺包由查找模块明确报错。
           bash scripts/ci/macos-build.sh \
             "${MMM_CI_PGO_OPTION}" \
             --arch arm64 \
