@@ -47,6 +47,7 @@ add_library(
   # AudioManager 按职责拆分实现，仍共同访问同一私有状态。
   src/AudioManager_BGM.cpp
   src/AudioManager_EQ.cpp
+  src/AudioManager_Presets.cpp
   src/AudioManager_Mix.cpp
   src/AudioManager_Playback.cpp
   src/AudioManager_SFX.cpp
@@ -254,3 +255,10 @@ mmm_add_test_executable(Audio TimelineStopGateTest
                         tests/TimelineStopGateTest.cpp)
 target_link_libraries(TimelineStopGateTest PRIVATE Audio Log Config)
 mmm_register_test_case(NAME TimelineStopGateTest COMMAND TimelineStopGateTest)
+
+# 客户端预设必须更新实际混音和均衡器节点，不能仅通过配置往返测试。
+mmm_add_test_executable(Audio AudioPresetApplyTest
+                        tests/AudioPresetApplyTest.cpp)
+target_link_libraries(AudioPresetApplyTest PRIVATE Audio Config Log)
+# 不初始化输出后端，验证不依赖 CI 主机是否存在声卡。
+mmm_register_test_case(NAME AudioPresetApplyTest COMMAND AudioPresetApplyTest)

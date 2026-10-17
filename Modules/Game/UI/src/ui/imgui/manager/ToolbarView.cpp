@@ -1654,6 +1654,12 @@ void ToolbarView::update(UIManager* sourceManager)
                             const double newSpeed = presets[bestIndex];
                             if ( std::abs(newSpeed - currentSpeed) > 0.0001 ) {
                                 // 命令队列负责跨线程应用；反馈只在值确实变化时播放。
+                                auto& app = Config::AppConfig::instance();
+                                app.getAudioPresets().current().m_speed =
+                                    newSpeed;
+                                // 弹层只修改个人方案，不改变项目资源的离线处理速度。
+                                // 继续投递命令以保持播放中的视觉时钟连续。
+                                app.save();
                                 engine.pushCommand(
                                     Logic::CmdSetPlaybackSpeed{ newSpeed });
                                 ::MMM::UI::PlayInteractionMouseUpFeedback();
@@ -2041,6 +2047,10 @@ void ToolbarView::update(UIManager* sourceManager)
                 // 所有入口统一夹取合法倍速，防止预设与滑条范围漂移。
                 /// @brief 夹取弹层输入并投递统一倍速命令。
                 auto applyPopupSpeed = [&engine](double speed) {
+                    auto& app = Config::AppConfig::instance();
+                    app.getAudioPresets().current().m_speed =
+                        std::clamp(speed, 0.25, 2.0);
+                    app.save();
                     engine.pushCommand(Logic::CmdSetPlaybackSpeed{
                         std::clamp(speed, 0.25, 2.0) });
                 };
@@ -2534,8 +2544,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     /// @brief 绘制带静音按钮和百分比增益滑条的完整混音行。
     ///
     /// applyGain 用于拖动期间即时试听，persistGain 只在编辑结束边沿调用。
-    /// maximumGain 按音效类别限制范围，全局总增益为 100%，分类和逐轨可到
-    /// 200%，为较弱采样保留补偿空间。
+    /// 各分类统一显示零到一百，音频接口仍使用线性倍率。
     const auto drawMixRow = [&](const char* label,
                                 const char* id,
                                 bool        muted,
@@ -2559,17 +2568,19 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
         drawMuteStateButton(muted, gain, applyMute);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(gainSliderWidth);
-        // UI 使用百分比显示，音频接口继续接收线性 0..maximumGain 值。
-        const float maximumGainPercent = maximumGain * 100.0F;
-        float gainPercent = std::clamp(gain * 100.0F, 0.0F, maximumGainPercent);
-        if ( ::MMM::UI::FeedbackSliderFloat(
-                 "##Gain", &gainPercent, 0.0F, maximumGainPercent, "%.0f%%") ) {
-            // 拖动每帧只更新内存/命令队列，不触发配置文件写入。
-            applyGain(gainPercent * 0.01F);
+        // 统一整数显示及鼠标/键盘步进，音频接口仍接收线性倍率。
+        const bool gainChanged =
+            ::MMM::UI::FeedbackVolumeSlider("##Gain", &gain);
+        // 预览回调仅发布实际变化，五点格内的小幅鼠标移动不会重复提交。
+        // 键盘的一点步进由公共控件返回，不能在此再次量化为五点格。
+        if ( gainChanged ) {
+            applyGain(gain);
         }
-        if ( ImGui::IsItemDeactivatedAfterEdit() ) {
-            // 鼠标释放或键盘编辑结束时提交最终持久值。
-            persistGain(gainPercent * 0.01F);
+        if ( ImGui::IsItemDeactivatedAfterEdit() ||
+             (gainChanged && !ImGui::IsItemActive()) ) {
+            // 焦点方向键无需激活滑块，必须直接保存；拖动则等释放边沿。
+            // 编辑结束才写入当前方案，拖动期间只发布实时增益。
+            persistGain(gain);
         }
         if ( ImGui::IsItemHovered() ) {
             Utils::renderTooltip(TR("ui.key_sound_tool.gain").data());

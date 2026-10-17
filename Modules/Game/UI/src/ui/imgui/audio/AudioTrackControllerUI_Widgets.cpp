@@ -748,8 +748,7 @@ void AudioTrackControllerUI::buildVolumeSection(CLayVBox& parent,
             float sliderWidth = r.width - btnWidth - rowSpacing - lrWidth;
             sliderWidth       = std::max(sliderWidth, 40.0f);
             ImGui::SetNextItemWidth(sliderWidth);
-            if ( ::MMM::UI::FeedbackSliderFloat(
-                     "##Volume", &volume, 0.0f, 1.0f, "%.4f") ) {
+            if ( ::MMM::UI::FeedbackVolumeSlider("##Volume", &volume) ) {
                 // 滑块变化由外层统一应用到对应音轨。
                 changed = true;
                 if ( muted && volume > 0.0f ) {
@@ -1085,7 +1084,11 @@ void AudioTrackControllerUI::buildSpeedAndPitchSection(
                 audio.setPlaybackQuality(
                     static_cast<Audio::AudioManager::StretchQuality>(
                         currentQuality));
-                // 质量只属于运行时拉伸器，不修改项目音频资源配置。
+                // 质量跟随个人预设，下次启动继续使用；不写入项目资源。
+                auto& app = Config::AppConfig::instance();
+                app.getAudioPresets().current().m_quality = currentQuality;
+                // 与音量共用个人方案持久化入口，重新打开项目也保留此选择。
+                app.save();
             }
         });
 

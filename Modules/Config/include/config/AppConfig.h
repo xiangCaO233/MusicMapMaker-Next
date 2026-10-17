@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EditorConfig.h"
+#include "config/AudioPresets.h"
 
 #include <filesystem>
 #include <mutex>
@@ -18,6 +19,11 @@ public:
     /// @brief 获取编辑器配置
     EditorConfig&       getEditorConfig() { return m_editorConfig; }
     const EditorConfig& getEditorConfig() const { return m_editorConfig; }
+
+    /// @brief 获取仅属于客户端的音频预设库。
+    AudioPresets& getAudioPresets() { return m_audioPresets; }
+    /// @brief 获取预设库的只读视图。
+    const AudioPresets& getAudioPresets() const { return m_audioPresets; }
 
     /// @brief 获取视觉配置
     VisualConfig&       getVisualConfig() { return m_editorConfig.visual; }
@@ -100,6 +106,8 @@ private:
 
     /// @brief 当前进程读取和修改的完整编辑器配置。
     EditorConfig m_editorConfig;
+    /// @brief 独立于项目快照，防止切换项目覆盖个人听音方案。
+    AudioPresets m_audioPresets;
     /// @brief 当前应用配置持久化的协作者稳定标识。
     std::string        m_collaborationParticipantId;
     mutable std::mutex m_mutex;

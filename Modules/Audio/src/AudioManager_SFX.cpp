@@ -173,7 +173,8 @@ void AudioManager::setSFXPoolVolume(const std::string& key, float volume,
     volume = sanitizedPoolVolume(key, volume);
     // 登记值供未来重新加载使用，项目资源配置保持与默认音量一致。
     auto registration = m_registeredSoundEffects.find(key);
-    if ( registration != m_registeredSoundEffects.end() ) {
+    // 永久覆盖属于当前预设，必须保留皮肤原始默认值供其他方案回退。
+    if ( registration != m_registeredSoundEffects.end() && !isPermanent ) {
         registration->second.m_defaultVolume         = volume;
         registration->second.m_resourceConfig.volume = volume;
     }
@@ -208,7 +209,8 @@ void AudioManager::setSFXPoolMute(const std::string& key, bool muted,
     // 先更新运行时映射，后续 getter 和异步 attach 都能看到新值。
     m_sfxMutes[key] = muted;
     if ( auto registration = m_registeredSoundEffects.find(key);
-         registration != m_registeredSoundEffects.end() ) {
+         registration != m_registeredSoundEffects.end() && !isPermanent ) {
+        // 项目资源修改更新登记，客户端永久静音则只保存在预设映射。
         registration->second.m_resourceConfig.muted = muted;
     }
 

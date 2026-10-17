@@ -448,35 +448,13 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
 
             ImGui::TextUnformatted(
                 TR("ui.edit.sample_properties.volume").data());
-            if ( FeedbackButton("-25%##ProjectAudioPreviewVolumeDecrease") ) {
-                // 音量允许超过 1.0，仅下限钳制为静音。
-                *editableVolume      = std::max(0.0F, *editableVolume - 0.25F);
-                result.volumeChanged = true;
-            }
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(
-                std::max(72.0F, ImGui::GetFontSize() * 5.5F));
-            if ( ImGui::InputFloat("##ProjectAudioPreviewVolumeValue",
-                                   editableVolume,
-                                   0.0F,
-                                   0.0F,
-                                   "%.2f") ) {
-                if ( std::isfinite(*editableVolume) ) {
-                    // 手工输入保留任意非负倍率，负值统一归零。
-                    *editableVolume = std::max(0.0F, *editableVolume);
-                } else {
-                    // NaN 或无穷回退到单位倍率，避免传播到音频播放接口。
-                    *editableVolume = 1.0F;
-                }
-            }
-            if ( ImGui::IsItemDeactivatedAfterEdit() ) {
-                // 文本编辑完成才请求持久化，输入过程不重复写项目配置。
-                result.volumeChanged = true;
-            }
-            ImGui::SameLine();
-            if ( FeedbackButton("+25%##ProjectAudioPreviewVolumeIncrease") ) {
-                // 步进按钮立即构成一次完整编辑，直接置变更标志。
-                *editableVolume      = std::max(0.0F, *editableVolume + 0.25F);
+            // 采样创作音量也使用一致的整数输入，不改变保存时的线性单位。
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12.0F);
+            const bool volumeChanged = FeedbackVolumeSlider(
+                "##ProjectAudioPreviewVolumeValue", editableVolume);
+            // 方向键可在仅有导航焦点时调整，没有释放边沿也需要提交。
+            if ( ImGui::IsItemDeactivatedAfterEdit() ||
+                 (volumeChanged && !ImGui::IsItemActive()) ) {
                 result.volumeChanged = true;
             }
             ImGui::EndPopup();

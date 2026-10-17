@@ -10,6 +10,7 @@ add_library(
   src/skin/translation/Translation.cpp
   src/AppPaths.cpp
   src/AppConfig.cpp
+  src/AudioPresets.cpp
   src/CreatorIdentity.cpp
   src/EditorSettingTypes.cpp
   # 插值工具偏好仅保存源文本和标量，保持 Config 不依赖谱面模型。
@@ -263,3 +264,10 @@ mmm_register_test_case(
   NAME DefaultTranslationParityTest COMMAND DefaultTranslationParityTest
   "${CMAKE_SOURCE_DIR}/assets/translations/zh_cn.lua"
   "${CMAKE_SOURCE_DIR}/assets/translations/en_us.lua")
+
+# 个人音频方案覆盖隔离、旧版迁移及真实配置保存恢复，不访问用户配置。
+mmm_add_test_executable(Config AudioPresetsTest tests/AudioPresetsTest.cpp)
+target_link_libraries(AudioPresetsTest PRIVATE Config Log)
+# 为持久化回归分配专用输出路径，禁止向测试资源目录写入。
+mmm_register_test_case(NAME AudioPresetsTest COMMAND AudioPresetsTest
+                       "${CMAKE_BINARY_DIR}/test_output/audio_presets")

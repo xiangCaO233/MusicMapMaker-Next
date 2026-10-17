@@ -101,6 +101,8 @@ add_library(
   src/ui/utils/DesktopPathUtils.cpp
   src/ui/utils/NativeFileDialog.cpp
   src/ui/utils/UIWidgetUtils.cpp
+  src/ui/utils/VolumeSlider.cpp
+  src/ui/imgui/audio/AudioPresetControls.cpp
   # 主窗口固定区域、停靠布局和浮动管理器。
   src/ui/imgui/MainDockSpaceUI.cpp
   src/ui/imgui/MainDockSpaceUI_MenuBar.cpp
@@ -620,3 +622,9 @@ mmm_register_test_case(
   NAME NewBeatmapWizardResourceRenameTest COMMAND
   NewBeatmapWizardResourceRenameTest
   "${CMAKE_BINARY_DIR}/test_output/NewBeatmapWizardResourceRenameTest")
+
+# 使用真实无后端 ImGui 控件验证音量四方向键步进与鼠标五点格。
+mmm_add_test_executable(UI VolumeSliderTest tests/VolumeSliderTest.cpp)
+target_link_libraries(VolumeSliderTest PRIVATE UI)
+# 输入事件逐帧注入，测试不访问真实音频设备与用户配置目录。
+mmm_register_test_case(NAME VolumeSliderTest COMMAND VolumeSliderTest)

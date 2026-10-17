@@ -378,14 +378,21 @@ bool testSkinSelectionSurvivesPaletteRefresh()
     auto stalePaletteConfig                           = originalEngine;
     stalePaletteConfig.settings.selectedSkinDirectory = "mmm-default";
     // 模拟设置页先更新软件皮肤，再用旧引擎快照发布拍线配色。
-    app.getEditorSettings().selectedSkinDirectory    = "rm";
+    // 模拟混音面板也已更新音量，旧配色快照不能把当前方案回滚。
+    app.getEditorSettings().globalVolume          = 0.37F;
+    app.getEditorSettings().bgmGain               = 0.63F;
+    app.getEditorSettings().selectedSkinDirectory = "rm";
+    // 配色变化必须继续生效，不能用拒绝整份旧快照来规避混音覆盖。
+    // 同时验证全局配置与引擎快照，避免下次提交再次传播旧增益。
     stalePaletteConfig.visual.overrideBeatLineColors = true;
     engine.setEditorConfig(stalePaletteConfig);
     // 同时断言新配色仍生效，禁止通过丢弃整份配置来保住皮肤。
     // 两侧都必须一致，否则下一次引擎快照仍会继续传播旧值。
     bool ok = app.getEditorSettings().selectedSkinDirectory == "rm" &&
               engine.getEditorConfig().settings.selectedSkinDirectory == "rm" &&
-              engine.getEditorConfig().visual.overrideBeatLineColors;
+              engine.getEditorConfig().visual.overrideBeatLineColors &&
+              app.getEditorSettings().globalVolume == 0.37F &&
+              engine.getEditorConfig().settings.bgmGain == 0.63F;
     // 完整走生产保存和读取路径，防止只修复当前窗口却仍保存旧选择。
     if ( ok ) {
         // 写入后清除内存选择，读取结果必须真正来自持久化文件。

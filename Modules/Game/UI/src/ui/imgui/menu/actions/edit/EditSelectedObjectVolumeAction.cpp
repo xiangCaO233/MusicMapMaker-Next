@@ -259,11 +259,8 @@ public:
             // 输入宽度按 DPI 缩放，数值步进保持业务单位不变。
             ImGui::Spacing();
             ImGui::SetNextItemWidth(220.0F * context.dpiScale);
-            ImGui::InputFloat(TR("ui.edit.sample_properties.volume").data(),
-                              &m_volume,
-                              0.05F,
-                              0.25F,
-                              "%.3f");
+            ::MMM::UI::FeedbackVolumeSlider(
+                TR("ui.edit.sample_properties.volume").data(), &m_volume);
 
             // 音量允许超过 1.0，但必须为有限非负值。
             const bool validVolume =

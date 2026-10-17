@@ -394,6 +394,8 @@ void AudioManager::init()
         m_mainMixer->add_source(m_hitEffectSpectrumCapture);
     }
 
+    // 音频图完整后、后端开始拉取前恢复客户端效果器和混音方案。
+    applyAudioPreset();
     if ( createPlaybackBackend(m_playbackBackend) ) {
         XINFO("Audio playback backend opened with configured backend: {}.",
               getPlaybackBackendName(m_playbackBackend));

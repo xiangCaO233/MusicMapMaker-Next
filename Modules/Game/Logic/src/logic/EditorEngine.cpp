@@ -1047,6 +1047,8 @@ void applyToolbarWorkspaceState(
 void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
                                       const Config::EditorConfig& source)
 {
+    // 总线由音频面板直接维护，局部配置提交不能回滚当前预设音量。
+    Config::preserveAudioMixerSettings(target.settings, source.settings);
     // 皮肤选择先由设置页写入 AppConfig；配色刷新可能仍携带旧引擎快照。
     // 保留软件级选择，避免当前已热加载新皮肤却把旧目录保存供下次启动。
     target.settings.selectedSkinDirectory =

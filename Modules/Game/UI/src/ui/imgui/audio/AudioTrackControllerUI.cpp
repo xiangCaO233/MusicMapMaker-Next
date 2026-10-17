@@ -190,6 +190,22 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
             }
         }
 
+        if ( m_type == TrackType::Main ) {
+            // 主轨面板编辑客户端听音方案，资源原始参数仍供谱面导出使用。
+            // 草稿仍复用现有 EQ 编辑器的数据形状。
+            // 仅在用户实际改变值后写回个人库，不影响原始资源 DSP。
+            // 主轨面板无项目资源时也可调整全局监听方案。
+            const auto& preset =
+                Config::AppConfig::instance().getAudioPresets().current();
+            editedConfig.volume      = audio.getBGMGain();
+            editedConfig.muted       = audio.isBGMGainMuted();
+            editedConfig.eqEnabled   = preset.m_eqPreset != 0;
+            editedConfig.eqPreset    = preset.m_eqPreset;
+            editedConfig.eqBandGains = preset.m_eqGains;
+            editedConfig.eqBandQs    = preset.m_eqQs;
+            config                   = &editedConfig;
+        }
+
         if ( config ) {
             // 项目配置提供资源音量与静音；主轨速度和音高另读全局预览状态。
             volume = config->volume;
@@ -305,7 +321,20 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
         }
 
         // 资源配置仅在持久化字段变化时更新，不受全局倍速控件影响。
-        if ( changed && !readOnly ) {
+        if ( changed && !readOnly && m_type == TrackType::Main ) {
+            auto& app                       = Config::AppConfig::instance();
+            auto& preset                    = app.getAudioPresets().current();
+            app.getEditorSettings().bgmGain = volume;
+            app.getEditorSettings().bgmGainMuted = muted;
+            preset.m_eqPreset = config->eqEnabled ? config->eqPreset : 0;
+            preset.m_eqGains  = config->eqBandGains;
+            preset.m_eqQs     = config->eqBandQs;
+            // 只更新试听图，不提交项目资源命令，也不改变导出的原始音量。
+            audio.applyAudioPreset(false);
+            // 保存会捕获最新总线数值，未选中预设不参与覆盖。
+            app.save();
+        }
+        if ( changed && !readOnly && m_type != TrackType::Main ) {
             if ( config ) {
                 // 把控件结果写回本地草稿，随后整份配置随命令按值发送。
                 config->volume = volume;
@@ -337,12 +366,23 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
                 });
             }
         }
+        // 倍速和音高走原有命令队列，继续保持画布时钟的切换边界。
+        // 参数先记入客户端库，退出后重启也能恢复用户最终选择。
+        // 这些试听参数不参与项目脏标记和谱面导出。
         if ( speedChanged && !readOnly ) {
             // 与画布 Ctrl+Alt 滚轮走同一逻辑命令，不重建资源 PCM 或保存项目。
+            // 当前预设名称保持不变，修改只更新其 EQ 与混音字段。
+            // 完整重建资源会改变导出结果，这里只发布实时试听节点。
+            auto& app = Config::AppConfig::instance();
+            app.getAudioPresets().current().m_speed = speed;
+            app.save();
             engine.pushCommand(Logic::CmdSetPlaybackSpeed{ speed });
         }
         if ( pitchChanged && !readOnly ) {
             // 主轨变调直接更新全局拉伸器，音频资源和项目文件均不变。
+            auto& app = Config::AppConfig::instance();
+            app.getAudioPresets().current().m_pitch = pitch;
+            app.save();
             engine.pushCommand(Logic::CmdSetPlaybackPitch{ pitch });
         }
     } else {

@@ -194,9 +194,13 @@ bool FeedbackSliderFloat(const char* label, float* value, float minValue,
                          float maxValue, const char* format = "%.4f",
                          ImGuiSliderFlags flags = 0);
 
+/// @brief 音量按零到一百整数显示，鼠标五点步进、四方向键一点步进。
+/// @param value 输入输出线性音量，控件在交互时转换百分数。
+/// @warning 每帧 UI 路径，只处理本地输入，不执行配置持久化。
+bool FeedbackVolumeSlider(const char* label, float* value);
+
 /// @brief 绘制带统一反馈的 ImGui Int 滑块。
-/// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、
-/// 样式栈操作和已预加载 SFX pool 的即时触发。
+/// @warning UI 热路径：每帧只处理 ImGui 状态和已预加载反馈音效。
 bool FeedbackSliderInt(const char* label, int* value, int minValue,
                        int maxValue, const char* format = "%d",
                        ImGuiSliderFlags flags = 0);

@@ -624,6 +624,12 @@ public:
     /// @brief 设置主音轨拉伸质量
     void setPlaybackQuality(StretchQuality quality);
 
+    /// @brief 应用当前客户端听音预设，不修改谱面资源或写入磁盘。
+    /// @warning 仅在初始化和用户切换预设时调用，会重建 EQ 并遍历音效池。
+    /// @param applyPlayback
+    /// 是否直接恢复速度与音高；活动会话由逻辑命令同步时钟。
+    void applyAudioPreset(bool applyPlayback = true);
+
     /// @brief 获取主音轨拉伸质量
     StretchQuality getPlaybackQuality() const;
 

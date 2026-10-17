@@ -37,6 +37,7 @@ void AppConfig::reset()
     // 整体替换保证新增字段自动采用 EditorConfig 的成员默认值。
     std::lock_guard<std::mutex> lock(m_mutex);
     m_editorConfig = EditorConfig();
+    m_audioPresets = AudioPresets();
 }
 
 /// @brief 从指定或默认 JSON 文件加载编辑器配置与协作者稳定标识。
@@ -113,6 +114,17 @@ bool AppConfig::load(const std::filesystem::path& path)
         std::lock_guard<std::mutex> lock(m_mutex);
         // EditorConfig 的 from_json 自行处理缺失字段与范围约束。
         m_editorConfig = j.get<EditorConfig>();
+        // 旧配置迁移时保留用户已有音量，新配置以所选预设为准。
+        m_audioPresets = AudioPresets();
+        if ( const auto presets = j.find("audioPresets"); presets != j.end() ) {
+            m_audioPresets = presets->get<AudioPresets>();
+            applyAudioPreset(m_audioPresets.current(), m_editorConfig.settings);
+        } else {
+            captureAudioPreset(m_audioPresets.current(),
+                               m_editorConfig.settings);
+            // 迁移后的实际分类音量也受新范围约束，避免显示与听感不一致。
+            applyAudioPreset(m_audioPresets.current(), m_editorConfig.settings);
+        }
         if ( !generatedCollaborationParticipantId ) {
             // 有效持久化身份优先，确保跨启动与协作重连保持一致。
             m_collaborationParticipantId = collaborationParticipantId;
@@ -160,7 +172,14 @@ bool AppConfig::save(const std::filesystem::path& path) const
     {
         // 编辑器配置与稳定身份同时复制，磁盘文件不会混合两个时刻的值。
         std::lock_guard<std::mutex> lock(m_mutex);
-        j                               = m_editorConfig;
+        j = m_editorConfig;
+        // 保存快照收取当前调整，只更新所选项，其他预设保持原样。
+        // 副本保证 const 保存不修改内存库，也不改变其他预设的缓存。
+        // 活动设置是音量的最新来源，保存前不能只序列化库内旧值。
+        // 效果器字段不在 EditorSettings 中，因此捕获函数必须保留它们。
+        auto presets = m_audioPresets;
+        captureAudioPreset(presets.current(), m_editorConfig.settings);
+        j["audioPresets"]               = presets;
         j["collaborationParticipantId"] = m_collaborationParticipantId;
     }
 
