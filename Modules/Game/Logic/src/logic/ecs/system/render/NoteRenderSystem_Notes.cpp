@@ -594,6 +594,8 @@ void NoteRenderSystem::renderNotes(
                                              leftX,
                                              singleTrackW,
                                              renderScaleY,
+                                             topY,
+                                             bottomY,
                                              laneProjection);
     }
 
@@ -3328,9 +3330,10 @@ void NoteRenderSystem::renderBrushPreview(
     const NoteRenderSystem::NoteRenderContext& baseContext,
     const Config::EditorConfig& config, Batcher& batcher, float judgmentLineY,
     float fallbackLeftX, float fallbackTrackWidth, float renderScaleY,
-    const CanvasLaneProjection* laneProjection)
+    float topY, float bottomY, const CanvasLaneProjection* laneProjection)
 {
     // 放置预览复用音符固定位置，提前返回也自动恢复共享批处理器状态。
+    // topY/bottomY 已包含画布长度与视锥范围，不在各类型分支重新估算。
     const NoteTexturePositionScope notePosition(
         batcher, config.visual.noteTexturePosition);
     // 借用快照中的画笔状态，绘制期间不回读逻辑线程的活动工具。
@@ -3444,8 +3447,8 @@ void NoteRenderSystem::renderBrushPreview(
                                      ctx.currentTime,
                                      judgmentLineY,
                                      renderScaleY,
-                                     0.0f,
-                                     judgmentLineY * 2.0f);
+                                     topY,
+                                     bottomY);
     } else if ( brush.type == ::MMM::NoteType::FLICK ) {
         // 终点可落在与根不同的分区宽度，使用原玩家尺寸重新解析。
         // 连接体由根与终点真实中心连接，箭头尺寸取终点领域。
@@ -3484,11 +3487,8 @@ void NoteRenderSystem::renderBrushPreview(
             tempNote.m_trackIndex = tempNote.m_subNotes.front().trackIndex;
         }
 
-        // 预览目前采用判定线上下对称的兼容包围范围，不等于实际视口全部高度。
-        // 真实画布裁剪由批处理上层状态继续约束。
-        float topY    = 0.0f;
-        float bottomY = judgmentLineY * 2.0f;  // 简单包围盒
-
+        // 与正式物件共用当前帧的源平面边界，保留三维长度扩展后的负 Y。
+        // 不能再用零和判定线的两倍近似，否则远端折线会在 GPU 投影前消失。
         // 预览传入空实体身份且关闭命中生成，不能成为可选择的正式折线。
         // 局部高亮部件也保持 None，预览颜色已经在本函数统一处理。
         NoteRenderSystem::renderPolyline(ctx.cache,

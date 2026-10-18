@@ -135,14 +135,18 @@ private:
     /// 列表必须由调用方提供缓存，禁止此处完整遍历或排序 timeline registry；临时
     /// 分拍预览的单拍切分数必须限制在 128 以内，常用分拍并集只能读取固定的
     /// 1/2 至 1/24 位掩码。
+    /// @param viewportWidth
+    /// 实际逻辑视口宽度，三维线宽换算不能使用某个分区宽度。
+    /// @param isMainCanvas 仅主画布应用三维屏幕线宽保护，缩略预览保持二维。
     static void drawBeatLines(
-        Batcher& batcher, float viewportHeight, float judgmentLineY,
-        const Config::EditorConfig&                  config,
+        Batcher& batcher, float viewportWidth, float viewportHeight,
+        float judgmentLineY, const Config::EditorConfig& config,
         const std::vector<const TimelineComponent*>& bpmEvents,
         double currentTime, const ScrollCache* cache, float leftX, float topY,
         float bottomY, float trackAreaW, float renderScaleY,
         bool revealNearCursor, float opacityScale,
-        bool allowHoverSubdivisionPreview, bool collectPlayerBeatLines);
+        bool allowHoverSubdivisionPreview, bool collectPlayerBeatLines,
+        bool isMainCanvas);
 
     /// @warning 热路径：Preview timing 线每次动态快照生成时执行；只遍历
     /// ScrollCache 已缓存段。
@@ -377,13 +381,16 @@ private:
                                  const ScrollCache* cache, double renderTime,
                                  float viewportWidth, float viewportHeight);
 
+    /// @param topY 与正式物件共用的源平面上界，允许三维扩展产生负坐标。
+    /// @param bottomY 同一画布的源平面下界，不能从判定线位置反推。
     /// @warning 热路径：绘制工具预览时执行；不得提交逻辑命令或访问文件系统。
     static void renderBrushPreview(RenderSnapshot*             snapshot,
                                    const NoteRenderContext&    ctx,
                                    const Config::EditorConfig& config,
                                    Batcher& batcher, float judgmentLineY,
                                    float leftX, float singleTrackW,
-                                   float                       renderScaleY,
+                                   float renderScaleY, float topY,
+                                   float                       bottomY,
                                    const CanvasLaneProjection* laneProjection);
 };
 

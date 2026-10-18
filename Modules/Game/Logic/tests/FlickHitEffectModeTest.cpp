@@ -190,6 +190,53 @@ bool testLaneModes()
                 if ( std::abs(center - (10 + (track + 0.5f) * 100)) > 0.001f )
                     return false;
             }
+            // 同一个活动特效直接切换三维厚度，验证无需重新触发音符即可刷新。
+            // 固定尺寸特效应绕判定线增高；整轨皮肤继续覆盖原有轨道范围。
+            // 同时覆盖关闭三维后的回退，避免客户端参数污染普通二维绘制。
+            // 固定尺寸与整轨分支由四套真实皮肤提供，不篡改皮肤内部配置。
+            // 两次生成均处于触发时刻，特效消失不能被当作补偿后的合法结果。
+            // 音效调度与实例寿命沿用同一次 update，本次只验证视觉几何。
+            // 当前布局为中心对齐，底边对齐的通用行为继续由批处理器负责。
+            config.visual.canvasThicknessCompensation = 100;
+            for ( bool spatial : { false, true } ) {
+                config.visual.canvasCameraPoseEnabled = spatial;
+                MMM::Logic::RenderSnapshot compensated;
+                fillUvs(compensated);
+                MMM::Logic::System::Batcher compensatedBatcher(&compensated);
+                system.generateSnapshot(compensatedBatcher,
+                                        0,
+                                        config,
+                                        4,
+                                        300,
+                                        10,
+                                        0,
+                                        600,
+                                        100,
+                                        lane.draft);
+                // 数量先行检查，确保逐顶点比较失败时不会访问空图集结果。
+                // 覆盖多个轨道副本，不能只补偿滑键头部而漏掉尾部。
+                if ( compensated.vertices.size() != snapshot.vertices.size() )
+                    return false;
+                const bool trackFill =
+                    MMM::Config::SkinManager::instance()
+                        .getHitEffectLayoutMode() ==
+                    MMM::Config::HitEffectLayoutMode::TrackFill;
+                const float scale = spatial && !trackFill ? 2.0F : 1.0F;
+                for ( std::size_t i = 0; i < snapshot.vertices.size(); ++i ) {
+                    const auto before = snapshot.vertices[i].pos;
+                    const auto after  = compensated.vertices[i].pos;
+                    // 基准采用生产生成的原始几何，包含皮肤自身的帧倍率。
+                    // 中心对齐配置下所有纵向偏移应以判定线三百像素为锚点。
+                    // 横向尺寸不属于厚度补偿，不能随高度一起缩放。
+                    const float expectedY = 300 + (before.y - 300) * scale;
+                    if ( std::abs(after.x - before.x) > 0.001F ||
+                         std::abs(after.y - expectedY) > 0.001F )
+                        return false;
+                }
+            }
+            // 后续画布隔离断言沿用原始二维状态，不让补偿参数影响其他职责。
+            config.visual.canvasCameraPoseEnabled     = false;
+            config.visual.canvasThicknessCompensation = 0;
             // 同一事件不能泄漏到另一画布区域，即使局部轨道数相同。
             // 对照区域也提供有效纹理，空结果不能归因于 UV 缺失。
             // 使用独立快照，保证当前区域的旧顶点不会残留在对照结果里。

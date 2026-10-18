@@ -56,6 +56,13 @@ bool checkCanvasLength()
     config.visual.canvasCameraPoseEnabled = true;
     config.visual.simulateAutoplay        = false;
     config.visual.beatLineDisplayMode     = Config::BeatLineDisplayMode::Hidden;
+    // 真实 BPM 同时供滚动缓存与自动拍线使用，不能用空列表绕过网格生成。
+    const auto  bpmEntity = timeline.create();
+    const auto& bpm       = timeline.emplace<Logic::TimelineComponent>(
+        bpmEntity,
+        Logic::TimelineComponent{
+            .m_timestamp = 0, .m_effect = TimingEffect::BPM, .m_value = 120 });
+    const std::vector<const Logic::TimelineComponent*> bpms{ &bpm };
     auto& cache = timeline.ctx().emplace<Logic::System::ScrollCache>();
     cache.rebuild(timeline, config, nullptr);
     // 缓存逆映射让物件分别落在判定线上方 100 和 1000 像素。
@@ -80,6 +87,26 @@ bool checkCanvasLength()
     // 不设置 hovered 或 selected，避免描边重复顶点影响四角数量。
     // 两轮都从空快照开始，防止上一轮几何残留假装新增远端内容。
     notes.ctx().emplace<const std::vector<entt::entity>*>(&sortedNotes);
+    // 复用完整生成入口，普通物件、活动画笔和光标拍线必须经历相同布局边界。
+    const auto generate = [&](Logic::RenderSnapshot& snapshot) {
+        Logic::System::NoteRenderSystem::generateSnapshot(notes,
+                                                          samples,
+                                                          {},
+                                                          {},
+                                                          timeline,
+                                                          bpms,
+                                                          &snapshot,
+                                                          "Basic2DCanvas",
+                                                          0,
+                                                          800,
+                                                          600,
+                                                          550,
+                                                          4,
+                                                          0,
+                                                          0,
+                                                          config,
+                                                          600);
+    };
     std::vector<glm::vec2> nearVertices;
     // 第三轮只改变厚度，复用同一完整快照生成入口验证真实物件几何。
     for ( const auto settings :
@@ -96,23 +123,7 @@ bool checkCanvasLength()
         snapshot.uvMap.emplace(
             static_cast<std::uint32_t>(Logic::TextureID::Note),
             glm::vec4(0.2F, 0.3F, 0.1F, 0.05F));
-        Logic::System::NoteRenderSystem::generateSnapshot(notes,
-                                                          samples,
-                                                          {},
-                                                          {},
-                                                          timeline,
-                                                          {},
-                                                          &snapshot,
-                                                          "Basic2DCanvas",
-                                                          0,
-                                                          800,
-                                                          600,
-                                                          550,
-                                                          4,
-                                                          0,
-                                                          0,
-                                                          config,
-                                                          600);
+        generate(snapshot);
         std::vector<glm::vec2> currentNear;
         int                    farCount = 0;
         for ( const auto& vertex : snapshot.vertices ) {
@@ -161,6 +172,116 @@ bool checkCanvasLength()
                 return false;
         }
     }
+    // 操作预览的终点落在二维视口之外，仍应保留扩展范围内的真实半透明几何。
+    // 不直接调用内部画笔函数，防止测试绕过范围向预览入口的传递。
+    config.visual.canvasThicknessCompensation = 0;
+    // 两个时间沿正向滚动递增，长条持续时间必须保持非负。
+    // 近端处于原画布内，远端处于扩展区，能识别只画出一半的错误预览。
+    // 所有坐标仍用当前滚动缓存，不通过改变速度或平移判定线制造扩展效果。
+    const double nearTime = cache.getTime(cache.getAbsY(0) + 100);
+    const double farTime  = cache.getTime(cache.getAbsY(0) + 1000);
+    for ( auto type : { NoteType::HOLD, NoteType::POLYLINE } ) {
+        Logic::RenderSnapshot preview;
+        preview.hasBeatmap = true;
+        // 独立图块用于分辨正式 Note 与画笔的尾部、节点；不依赖当前磁盘皮肤。
+        // 三种图块均为合法正尺寸，缺图不能成为远端几何缺失的替代解释。
+        preview.uvMap.emplace(static_cast<uint32_t>(Logic::TextureID::Note),
+                              glm::vec4(.2F, .3F, .1F, .05F));
+        preview.uvMap.emplace(static_cast<uint32_t>(Logic::TextureID::HoldEnd),
+                              glm::vec4(.5F, .3F, .1F, .05F));
+        preview.uvMap.emplace(static_cast<uint32_t>(Logic::TextureID::Node),
+                              glm::vec4(.6F, .3F, .1F, .05F));
+        // 画笔保存在快照而非注册表，避免正式音符误满足预览端点的断言。
+        // 每个类型使用新快照，上一轮几何和命令不能残留到下一轮。
+        preview.brush.isActive = true;
+        preview.brush.type     = type;
+        preview.brush.time     = nearTime;
+        preview.brush.duration = farTime - nearTime;
+        // 折线使用一个竖段再横移，涵盖离屏末端节点与连接段的裁剪。
+        // 原始时间通过滚动缓存反解，不将秒数直接当成画布像素。
+        preview.brush.polylineSegments = {
+            { .type       = NoteType::HOLD,
+              .timestamp  = nearTime,
+              .duration   = farTime - nearTime,
+              .trackIndex = 0 },
+            { .type = NoteType::NOTE, .timestamp = farTime, .trackIndex = 1 }
+        };
+        generate(preview);
+        const float targetU     = type == NoteType::HOLD ? .5F : .6F;
+        const bool  farGeometry = std::any_of(
+            preview.vertices.begin(),
+            preview.vertices.end(),
+            [&](const auto& vertex) {
+                return vertex.pos.y < -100 && vertex.uv.u >= targetU - .001F &&
+                       vertex.uv.u <= targetU + .101F;
+            });
+        if ( !farGeometry ) return false;
+    }
+    // 自动拍线在负 Y 光标附近也按扩展轨道高度计算渐隐范围。
+    // 高分拍保证窗口内有候选，不把某条特定 BPM 网格位置当作固定结果。
+    config.visual.beatLineDisplayMode = Config::BeatLineDisplayMode::NearCursor;
+    config.visual.beatLineCursorVisibleRatio = .2F;
+    config.visual.beatLineCursorFadeRatio    = .1F;
+    config.settings.beatDivisor              = 128;
+    // 独立快照只开启悬浮状态，不能要求画笔激活后自动拍线才可显示。
+    // 正式物件可以继续存在，拍线断言使用专用收集结果排除音符几何干扰。
+    // 该模式必须经过正常玩家域收集，不直接调用渐隐数学函数自证正确。
+    Logic::RenderSnapshot reveal;
+    reveal.hasBeatmap       = true;
+    reveal.isHoveringCanvas = true;
+    reveal.hoveredTime      = farTime;
+    reveal.uvMap.emplace(static_cast<uint32_t>(Logic::TextureID::Note),
+                         glm::vec4(.2F, .3F, .1F, .05F));
+    // 原始画布高度仍为六百，不增大 viewport 参数来掩盖长度倍率未传递。
+    // 当前三倍长度来自前面的配置，测试与真实三维布局采用同一扩展入口。
+    generate(reveal);
+    // 光标在负四百五十像素附近，离它一百至一百五十像素的网格仍在扩展显示带内。
+    // 原二维渐隐总半径只有九十像素，旧实现无法输出此区间的可见拍线。
+    // 只要求此连续区间存在候选，不绑定具体 BPM 步号或浮点步进顺序。
+    // 测试范围远离扩展轨道边界，因此失败可归因于渐隐半径而非最外侧裁剪。
+    // 这里检查逻辑可见线；实际 GPU 透视与鼠标逆投影仍由相机套件覆盖。
+    if ( !std::any_of(
+             reveal.playerBeatLines.begin(),
+             reveal.playerBeatLines.end(),
+             [](const auto& line) { return line.y < -550 && line.y > -600; }) )
+        return false;
+    // 常显模式排除光标渐隐，直接验证远处分拍线的最终屏幕厚度。
+    // 此处使用原有皮肤线宽，不在测试中人为加粗来满足屏幕像素下限。
+    // 绘制快照与验证矩阵共用当前四键配置，避免只验证另一套相机参数。
+    // 下限检查针对生成后的四边形，不能仅验证 helper 返回值大于一。
+    // 使用内置斜轨姿态，让源平面上的细线明显受到透视压缩。
+    // 单独的纯色标识筛选网格，底板、音符和轨道边框不能使断言误通过。
+    config.visual.beatLineDisplayMode    = Config::BeatLineDisplayMode::Always;
+    config.visual.canvasCameraPosition   = { 0, -.8F, .9F };
+    config.visual.canvasCameraRotation   = { 45, 0, 0 };
+    config.visual.overrideBeatLineColors = true;
+    for ( auto& color : config.visual.beatLineColors )
+        color = { .123F, .456F, .789F, 1 };
+    Logic::RenderSnapshot always;
+    always.hasBeatmap = true;
+    generate(always);
+    const auto matrix =
+        MMM::Canvas::canvasCameraPoseProjection(800, 600, 0, config.visual, 4);
+    int distantLines = 0;
+    // 批处理器每个网格矩形输出四顶点，零和三分别是同侧的下、上边。
+    // 只检查原二维视口上方的图元，近端线足够粗不能证明远端没有丢失。
+    for ( std::size_t i = 0; i + 3 < always.vertices.size(); i += 4 ) {
+        const auto& first = always.vertices[i];
+        if ( std::abs(first.color.r - .123F) > .001F || first.pos.y > -100 )
+            continue;
+        const auto& last   = always.vertices[i + 3];
+        const auto  bottom = matrix * glm::vec4(first.pos.x, first.pos.y, 0, 1);
+        const auto  top    = matrix * glm::vec4(last.pos.x, last.pos.y, 0, 1);
+        // 相机前方才能参与除法；厚度必须在透视除法和视口缩放后度量。
+        // 此测试不以提高颜色 alpha 代替几何覆盖，也不依赖 GPU 抗锯齿设置。
+        if ( bottom.w <= 0 || top.w <= 0 ) return false;
+        const float pixels =
+            std::abs(bottom.y / bottom.w - top.y / top.w) * 300;
+        if ( pixels < 1.0F ) return false;
+        ++distantLines;
+    }
+    // 防止整个远端范围都没生成网格时，空集合比较反而被视作成功。
+    if ( distantLines == 0 ) return false;
     // 真实序列化保留长度，旧配置继续使用一倍高度。
     // 每次从 JSON 创建新对象，不能由内存中的旧值补上遗漏字段。
     // 删除键模拟旧版配置，而不是给该键显式填写默认值。

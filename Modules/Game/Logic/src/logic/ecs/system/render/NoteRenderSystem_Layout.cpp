@@ -1,5 +1,6 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 
+#include "common/render/CanvasCameraMath.h"
 #include "config/EditorConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/ecs/components/TimelineComponent.h"
@@ -11,6 +12,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <numeric>
 #include <vector>
 
@@ -314,13 +316,13 @@ void NoteRenderSystem::drawJudgmentArea(Batcher& batcher, int32_t trackCount,
 /// @warning 快照生成路径含可见区间查询和逐线绘制，不得加入磁盘访问或阻塞等待。
 /// @note 本实现每次调用创建像素行占用表，不能将其描述成完全无分配路径。
 void NoteRenderSystem::drawBeatLines(
-    Batcher& batcher, float viewportHeight, float judgmentLineY,
-    const Config::EditorConfig&                  config,
+    Batcher& batcher, float viewportWidth, float viewportHeight,
+    float judgmentLineY, const Config::EditorConfig& config,
     const std::vector<const TimelineComponent*>& bpmEvents, double currentTime,
     const ScrollCache* cache, float leftX, float topY, float bottomY,
     float trackAreaW, float renderScaleY, bool revealNearCursor,
     float opacityScale, bool allowHoverSubdivisionPreview,
-    bool collectPlayerBeatLines)
+    bool collectPlayerBeatLines, bool isMainCanvas)
 {
     if ( !cache ) return;
     // 自动显示依赖当前画布悬浮状态，不以编辑会话焦点代替鼠标命中。
@@ -358,6 +360,10 @@ void NoteRenderSystem::drawBeatLines(
 
     float visibleTop    = std::min(topY, bottomY);
     float visibleBottom = std::max(topY, bottomY);
+    // 三维源平面可以比屏幕高数倍，渐隐范围应与当前完整轨道范围使用同一尺度。
+    // 保留二维至少一个视口的旧语义，不让布局边距意外缩小光标显示半径。
+    const float revealHeight =
+        std::max(viewportHeight, visibleBottom - visibleTop);
     // 上下边界都允许绘制，额外一行容纳恰好落在整数高度底边的候选。
     int rowCount = std::max(
         1, static_cast<int>(std::ceil(visibleBottom - visibleTop)) + 1);
@@ -477,9 +483,83 @@ void NoteRenderSystem::drawBeatLines(
         if ( !revealNearCursor ) return 1.0F;
         return calculateCursorRevealAlpha(
             std::abs(y - cursorY),
-            viewportHeight,
+            revealHeight,
             config.visual.beatLineCursorVisibleRatio,
             config.visual.beatLineCursorFadeRatio);
+    };
+    // 三维细线会被透视压成亚像素宽，即使常显且 alpha 为一也可能完全漏过采样点。
+    // 为同一次区域绘制只构造一次投影；二维与缩略预览继续沿用原始线宽。
+    const auto& visual = config.visual;
+    const bool  spatial =
+        isMainCanvas && (visual.canvasCameraPoseEnabled ||
+                         Common::Render::planarObservationEnabled(
+                             visual.debugCanvasCameraAngleDegrees,
+                             visual.debugCanvasCameraYawDegrees,
+                             visual.debugCanvasCameraDistance));
+    // 矩阵按值保留在本次调用栈上，不复制会话所有权或在逐线循环中读取配置。
+    // 自由姿态包含运动补偿；旧观察角仍走既有兼容投影。
+    // 当前键数决定判定线锚点，与最终录制和逆投影保持一致。
+    glm::mat4 projection(1);
+    if ( spatial ) {
+        projection = visual.canvasCameraPoseEnabled
+                         ? Common::Render::canvasCameraPoseProjection(
+                               viewportWidth,
+                               viewportHeight,
+                               0,
+                               visual,
+                               batcher.snapshot->trackCount)
+                         : Common::Render::planarObservationProjection(
+                               viewportWidth,
+                               viewportHeight,
+                               0,
+                               visual.debugCanvasCameraAngleDegrees,
+                               visual.debugCanvasCameraYawDegrees,
+                               visual.debugCanvasCameraDistance);
+    }
+    /// @brief 按最终屏幕上的垂直厚度保留远端细线，不改变拍位中心或颜色。
+    /// @warning 每条可见线最多检查三个横向位置，仅执行固定数量矩阵乘法。
+    const auto visibleLineWidth = [&](float x,
+                                      float width,
+                                      float y,
+                                      float requested) {
+        if ( !spatial ) return requested;
+        float minimumScale = std::numeric_limits<float>::max();
+        // 相机可侧向旋转，左右端缩放不同；取三个位置中最薄的垂直分量。
+        // 使用与横线切向垂直的距离，而非屏幕 Y，兼容相机绕 Z 轴旋转。
+        for ( float fraction : { 0.0F, 0.5F, 1.0F } ) {
+            const float sx     = x + width * fraction;
+            const auto  center = projection * glm::vec4(sx, y, 0, 1);
+            const auto  along  = projection * glm::vec4(sx + 1, y, 0, 1);
+            const auto  across = projection * glm::vec4(sx, y + 1, 0, 1);
+            // 近平面后的样本不参与除法，避免无效极值把整条横线扩大。
+            // 保留能投影的其他采样点，而不是因一个端点离屏丢掉整条线。
+            if ( center.w <= .0001F || along.w <= .0001F || across.w <= .0001F )
+                continue;
+            // NDC 差值必须转换为逻辑屏幕像素；DPI 由后续物理视口统一应用。
+            // 不能只用透视矩阵的某个元素推测缩放，旋转和位置都会影响结果。
+            const glm::vec2 pixels(viewportWidth * .5F, viewportHeight * .5F);
+            const auto      tangent =
+                (glm::vec2(along) / along.w - glm::vec2(center) / center.w) *
+                pixels;
+            const auto normal =
+                (glm::vec2(across) / across.w - glm::vec2(center) / center.w) *
+                pixels;
+            // 横向边退化为点时没有稳定法向，不用近零长度作除数。
+            // 投影后的叉积除以切向长度给出一个源像素对应的法向屏幕厚度。
+            const float length = glm::length(tangent);
+            if ( length <= .000001F ) continue;
+            const float scale =
+                std::abs(tangent.x * normal.y - tangent.y * normal.x) / length;
+            if ( std::isfinite(scale) && scale > .000001F )
+                minimumScale = std::min(minimumScale, scale);
+        }
+        // 只增厚至一个逻辑屏幕像素的安全覆盖范围，不把近端粗线反向缩细。
+        // 四分之一像素余量覆盖中心差分近似与透视四边形两边的轻微缩放差异。
+        // 无合法投影样本时保留原宽度，最终 GPU 裁剪继续决定是否可见。
+        // 保留原透明度和约分配色，不以提高亮度掩盖几何没有覆盖采样点的问题。
+        return minimumScale < std::numeric_limits<float>::max()
+                   ? std::max(requested, 1.25F / minimumScale)
+                   : requested;
     };
     // 分段绘制允许只挖掉目标轨道该拍内的旧分拍线，同时保留其它轨道。
     /// @brief 绘制一段水平网格及可选吸附光晕，不改变全局占行状态。
@@ -497,6 +577,7 @@ void NoteRenderSystem::drawBeatLines(
                                          bool      glow) {
         // 挖去目标轨道或裁剪延伸范围后，左右残段可能为空或方向反转。
         if ( segmentWidth <= 0.001F ) return;
+        lineWidth = visibleLineWidth(x, segmentWidth, y, lineWidth);
         if ( glow ) {
             // 光晕是同一快照内的纯色图元，不写独立发光后处理命令。
             // 先绘制三层宽且逐渐透明的光晕，再覆盖清晰的中心线。
@@ -714,7 +795,7 @@ void NoteRenderSystem::drawBeatLines(
                 if ( revealNearCursor ) {
                     cursorRevealAlpha = calculateCursorRevealAlpha(
                         std::abs(y - cursorY),
-                        viewportHeight,
+                        revealHeight,
                         config.visual.beatLineCursorVisibleRatio,
                         config.visual.beatLineCursorFadeRatio);
                     if ( cursorRevealAlpha <= 0.0f ) {

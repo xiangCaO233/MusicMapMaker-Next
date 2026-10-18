@@ -671,9 +671,13 @@ void NoteRenderSystem::generateSnapshot(
         }
 
         // 先绘制玩家区拍线，随后再绘制低透明度辅助区域。
+        // 传递真实视口宽高与画布类型，使远端线宽按同一最终投影校正。
+        // 辅助分区也使用整个画布的投影，不能把局部轨宽当作视口宽度。
+        // Preview 即使恰好与主画布等大，也不能继承主画布的三维相机。
         // 主画布标志控制主区域专属信息，辅助区不重复绘制它。
         if ( shouldDrawBeatLines ) {
             NoteRenderSystem::drawBeatLines(batcher,
+                                            viewportWidth,
                                             viewportHeight,
                                             judgmentLineY,
                                             config,
@@ -687,6 +691,7 @@ void NoteRenderSystem::generateSnapshot(
                                             renderScaleY,
                                             revealBeatLinesNearCursor,
                                             1.0F,
+                                            isMainCanvas,
                                             isMainCanvas,
                                             isMainCanvas);
         }
@@ -718,6 +723,7 @@ void NoteRenderSystem::generateSnapshot(
                                    bottomY - topY);
                 NoteRenderSystem::drawBeatLines(
                     batcher,
+                    viewportWidth,
                     viewportHeight,
                     judgmentLineY,
                     config,
@@ -732,7 +738,8 @@ void NoteRenderSystem::generateSnapshot(
                     revealBeatLinesNearCursor,
                     0.42F,
                     false,
-                    false);
+                    false,
+                    isMainCanvas);
             }
             // 此助手只负责一个连续可见区域。
             // 批注与 BGM 的合并策略由外层决定，避免跨空白区域连接拍线。
@@ -754,6 +761,7 @@ void NoteRenderSystem::generateSnapshot(
                                    visibleRight - visibleLeft,
                                    bottomY - topY);
                 NoteRenderSystem::drawBeatLines(batcher,
+                                                viewportWidth,
                                                 viewportHeight,
                                                 judgmentLineY,
                                                 config,
@@ -768,7 +776,8 @@ void NoteRenderSystem::generateSnapshot(
                                                 revealBeatLinesNearCursor,
                                                 0.28F,
                                                 false,
-                                                false);
+                                                false,
+                                                isMainCanvas);
             };
             // 批注与 BGM 相交时绘制一次并集，分离时分别绘制，避免拍线穿越空隙。
             // 使用严格相交判断，边缘刚好相接也可分区绘制。

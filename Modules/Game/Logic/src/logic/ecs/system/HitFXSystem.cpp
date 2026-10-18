@@ -598,13 +598,15 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
 
         // 固定模式继续复用物件横纵缩放；整轨模式只使用其纵横比采样纹理。
         const float fixedWidth = singleTrackW * config.visual.noteScaleX;
+        // 固定尺寸特效与音符共用三维厚度补偿，保持判定线上的视觉高度一致。
+        // 整轨模式的上下边界仍由轨道范围决定，不能把整条覆盖层额外拉长。
         const float fixedHeight =
-            (singleTrackW / texAspect) * config.visual.noteScaleY;
+            (singleTrackW / texAspect) * config.visual.canvasNoteScaleY();
         // 草稿负索引转为本次区域内索引，玩家索引无需转换。
         // 先以宽整数计算终点再钳位，异常大偏移不能溢出或造成无界绘制循环。
         const int64_t renderTrack = static_cast<int64_t>(active.trackIndex) +
                                     (active.isDraft ? trackCount : 0);
-        const int headTrack = static_cast<int>(
+        const int     headTrack   = static_cast<int>(
             std::clamp<int64_t>(renderTrack, 0, trackCount - 1));
         const int tailTrack  = static_cast<int>(std::clamp<int64_t>(
             renderTrack + active.trackOffset, 0, trackCount - 1));
