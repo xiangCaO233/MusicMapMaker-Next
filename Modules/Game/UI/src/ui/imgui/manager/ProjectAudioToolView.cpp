@@ -701,7 +701,18 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
 
         // 保存记录存在时先恢复合法自定义尺寸，再处理位置与层级。
         const auto saved = savedPlacements.find(resource.m_id);
+        // 旧版只知道最后选中采样的倍率，不能把它复制到其他全部资源。
+        // 每个有独立保存值的采样优先恢复自身倍率；未编辑资源保持原音量。
+        item.audioVolume = resource.m_id == m_selectedAudioResourceId
+                               ? std::clamp(m_brushAudioVolume, 0.0F, 2.0F)
+                               : 1.0F;
         if ( saved != savedPlacements.end() ) {
+            if ( saved->second.m_audioVolume ) {
+                const float volume = *saved->second.m_audioVolume;
+                item.audioVolume   = std::isfinite(volume)
+                                         ? std::clamp(volume, 0.0F, 2.0F)
+                                         : 1.0F;
+            }
             // 零值表示使用自动尺寸；非有限或负值也按未自定义处理。
             const bool hasSavedWidth  = std::isfinite(saved->second.m_width) &&
                                         saved->second.m_width > 0.0F;
@@ -801,6 +812,8 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
         if ( selected != m_items.end() ) {
             m_selectedAudioLabel     = selected->label;
             m_selectedAudioTrackType = selected->type;
+            // 旧画笔快照只镜像当前选中采样，不能成为其余行的音量源。
+            m_brushAudioVolume = selected->audioVolume;
         }
     }
     // 所有矩形和层级确定后再计算被上层遮挡的最大标签区域。
@@ -969,10 +982,44 @@ void ProjectAudioToolView::persistWorkspace()
                 .m_width  = item.widthCustomized ? item.rect.width : 0.0F,
                 .m_height = item.heightCustomized ? item.rect.height : 0.0F,
                 .m_zOrder = item.zOrder,
+                // 两种视图共用同一稳定资源记录，重开项目也保留独立倍率。
+                .m_audioVolume = item.audioVolume,
             });
     }
     // 所有字段更新完成后一次保存，避免产生部分工作区快照。
     engine.saveProject();
+}
+
+/// @brief 重置当前项目全部采样倍率，不改变选择、方块布局或音频资源 DSP。
+/// @details 此处重置的是工具为试听和新建物件使用的采样倍率。
+/// 已存在物件的独立音量不被重写，避免一次界面重置改写整张谱面。
+/// 原始音频资源的 EQ、静音及基础增益仍由资源配置负责。
+/// @warning 用户显式操作的低频路径，缓存失效时重建一次并执行一次项目保存。
+void ProjectAudioToolView::resetSampleVolumes()
+{
+    auto&       engine  = Logic::EditorEngine::instance();
+    const auto* project = engine.getCurrentProject();
+    if ( !project ) return;
+    // 按钮位于两种视图的公共工具区，点击时可能尚未消费资源变化事件。
+    // 先恢复当前项目完整缓存，搜索筛选不能缩小“全部采样”的作用范围。
+    const float dpiScale =
+        Config::AppConfig::instance().getWindowContentScale();
+    if ( m_itemsDirty.exchange(false, std::memory_order_acq_rel) ||
+         m_cachedProjectRoot != Config::pathToUtf8(project->m_projectRoot) ||
+         std::abs(dpiScale - m_cachedDpiScale) > 1e-4F ) {
+        rebuildItems(
+            std::max(1.0F, ImGui::GetContentRegionAvail().x / dpiScale),
+            dpiScale);
+    }
+    // 修改所有资源缓存，隐藏行及视口外方块同样恢复原音量。
+    for ( auto& item : m_items ) item.audioVolume = 1.0F;
+    m_brushAudioVolume = 1.0F;
+    // 不激活其他资源，不触发试听；选中的资源后续放置也立即采用 100。
+    engine.pushCommand(
+        Logic::CmdSetBrushAudioResource{ m_selectedAudioResourceId,
+                                         m_selectedAudioTrackType,
+                                         m_brushAudioVolume });
+    persistWorkspace();
 }
 
 /// @brief 激活指定音频资源，并按展示模式决定是否提升方块层级。
@@ -1013,6 +1060,8 @@ std::optional<std::size_t> ProjectAudioToolView::activateItem(
     m_selectedAudioResourceId = item.audioResourceId;
     m_selectedAudioLabel      = item.label;
     m_selectedAudioTrackType  = item.type;
+    // 切换采样时恢复它自己的倍率，随后绘制的新物件不会继承前一采样音量。
+    m_brushAudioVolume = item.audioVolume;
     // 通过逻辑命令同步画布放置工具使用的音频 ID、类型和音量。
     Logic::EditorEngine::instance().pushCommand(
         Logic::LogicCommand(Logic::CmdSetBrushAudioResource{
@@ -1042,12 +1091,12 @@ void ProjectAudioToolView::previewEffectSelection(const Item& item) const
         return;
     }
 
-    // 使用方块预先生成的独立池键，并沿用当前画笔音量试听。
+    // 试听使用该采样自身的物件倍率，资源基础增益仍由预览池只应用一次。
     (void)controlProjectAudioPreview(*project,
                                      item.audioResourceId,
                                      item.previewPoolKey,
                                      ProjectAudioPreviewAction::Restart,
-                                     m_brushAudioVolume);
+                                     item.audioVolume);
 }
 
 /// @brief 清除当前活动音频方块并同步空画笔资源。
@@ -1869,6 +1918,9 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     // 开启状态不强制生成锁，只有实际进入参考线容差后才由算法创建。
     if ( !snapEnabled ) m_snapLocks = {};
 
+    // 公共入口同时覆盖表格与方块视图，重置全部资源而非当前选中项。
+    if ( FeedbackButton("重置所有采样音量") ) resetSampleVolumes();
+
     if ( m_tableView ) {
         // 表格与方块互斥绘制，保持重命名模态入口的共同生命周期。
         renderTableView(dpiScale);
@@ -2329,7 +2381,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     // 试听控件结果在方块绘制后处理，使按钮覆盖在卡片内容之上。
     bool        audioControlsHovered = false;
     std::string volumeEditorResourceId;
-    bool        brushVolumeChanged = false;
+    bool        sampleVolumeChanged = false;
     if ( audioControlsItem && *audioControlsItem < m_items.size() ) {
         // 索引检查防御同帧激活重排后潜在的旧候选值。
         auto& item = m_items[*audioControlsItem];
@@ -2345,14 +2397,14 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         // 整体控件区命中用于阻止后续方块拖动状态机接管左键。
         const bool controlsPointerInside = containsItemAudioControls(
             controls.controls, ImGui::GetIO().MousePos);
-        // 公共控件同时驱动预览播放和画笔音量编辑，并返回交互摘要。
+        // 公共控件直接编辑当前采样倍率，其他方块的缓存不参与本次写入。
         const auto result =
             renderProjectAudioPreviewControls(item.audioResourceId.c_str(),
                                               *project,
                                               item.audioResourceId,
                                               item.previewPoolKey,
-                                              m_brushAudioVolume,
-                                              &m_brushAudioVolume,
+                                              item.audioVolume,
+                                              &item.audioVolume,
                                               controls.controls,
                                               controlsPointerInside);
         // 弹窗打开也视为控件占用输入，避免点击弹窗时触发画布手势。
@@ -2363,7 +2415,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             m_openVolumeEditorResourceId = item.audioResourceId;
             volumeEditorResourceId       = item.audioResourceId;
             // 合并本帧变化，后续统一同步画笔命令和项目工作区。
-            brushVolumeChanged = brushVolumeChanged || result.volumeChanged;
+            sampleVolumeChanged = result.volumeChanged;
         } else if ( m_openVolumeEditorResourceId == item.audioResourceId ) {
             m_openVolumeEditorResourceId.clear();
         }
@@ -2382,8 +2434,9 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                      std::distance(m_items.begin(), volumeItem))) ) {
                 rebuildLabelRects();
             }
-        } else if ( brushVolumeChanged ) {
-            // 当前资源不变时只提交带新音量的画笔资源命令。
+        } else if ( sampleVolumeChanged && volumeItem != m_items.end() ) {
+            // 当前资源不变时镜像自己的新倍率，再提交画笔资源命令。
+            m_brushAudioVolume = volumeItem->audioVolume;
             Logic::EditorEngine::instance().pushCommand(
                 Logic::LogicCommand(Logic::CmdSetBrushAudioResource{
                     m_selectedAudioResourceId,
@@ -2391,7 +2444,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                     m_brushAudioVolume,
                 }));
         }
-        if ( resourceChanged || brushVolumeChanged ) {
+        if ( resourceChanged || sampleVolumeChanged ) {
             // 仅状态实际变化时保存，悬浮控件不会产生磁盘写入。
             persistWorkspace();
         }

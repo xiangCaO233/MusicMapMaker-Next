@@ -69,8 +69,8 @@ void ProjectAudioToolView::setTableView(bool enabled)
 /// @details 交互约束：
 /// - 文件名列承担选择入口，操作列承担已有重命名入口。
 /// - 选择沿用画笔命令，并以不提升层级的方式激活 Item。
-/// - 选择同一资源不重复自动试听，选择其他 Effect 仍尊重项目开关。
-/// - 未选中的音频可独立试听，但不提供当前画笔音量编辑器。
+/// - 每次点击 Effect 行都尊重项目试听开关，并立即从头重播。
+/// - 每个采样独立试听和编辑倍率，编辑时同步对应画笔资源。
 /// - 只有音量实际变化时才提交新的画笔命令并保存工作区。
 /// - 每行按钮使用资源稳定 ID，重名文件不能共享弹窗状态。
 /// - 表格结束后外层再绘制重命名模态，不把模态留在滚动裁剪区内。
@@ -148,7 +148,7 @@ void ProjectAudioToolView::renderTableView(float dpiScale)
 
     // 音量列沿用单行控件高度，不把 Popup 高度计入资源行。
     // 列隐藏不会清空画笔，重新显示后仍可继续调节当前选择。
-    // 独立列不会生成每资源音量副本，避免与实际放置命令的语义冲突。
+    // 独立列读写资源缓存的倍率，切换选择时同步到实际放置命令。
     // 试听组仍使用同一资源池键，调整显示方式不会重复创建播放实例。
     // 行高必须包含进度条和按钮组，否则裁剪器会跳过错误的资源区间。
     // 所有尺寸跟随 DPI，表格的纵向步长与实际控件高度保持一致。
@@ -381,7 +381,7 @@ void ProjectAudioToolView::renderTableView(float dpiScale)
                     *project,
                     item.audioResourceId,
                     item.previewPoolKey,
-                    selected ? m_brushAudioVolume : 1.0F,
+                    item.audioVolume,
                     nullptr,
                     controls));
                 // 绝对布局的试听组不负责流式行高，恢复游标再声明占位。
@@ -390,15 +390,15 @@ void ProjectAudioToolView::renderTableView(float dpiScale)
             }
             // 操作列也检查可见性，滚动出视口后按钮不能覆盖相邻列。
             if ( ImGui::TableSetColumnIndex(4) ) {
-                // 每行直接提供画笔倍率编辑，首次调节同时激活对应资源。
-                // 音量仍是下一次放置的物件倍率，不修改音频文件的基础配置。
+                // 每行从自己的采样倍率开始编辑，不能读取共享画笔快照。
+                // 倍率同时用于试听和后续放置，不重复叠加到资源基础配置。
                 // 使用局部候选值，未操作行不能在绘制时抢走当前画笔资源。
                 // 编辑不触发选行试听，连续拖动不会反复从头播放采样。
-                float volume = m_brushAudioVolume;
+                float volume = item.audioVolume;
                 ImGui::SetNextItemWidth(-1.0F);
                 if ( FeedbackVolumeSlider(
                          "##TableAudioVolume", &volume, 200) ) {
-                    m_brushAudioVolume = volume;
+                    item.audioVolume = volume;
                     // 不提升层级，确保本帧行引用与表格排序继续有效。
                     if ( activateItem(index, false) ) persistWorkspace();
                 }

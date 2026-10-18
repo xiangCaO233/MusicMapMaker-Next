@@ -120,7 +120,7 @@ struct ProjectWorkspaceAudioControllerState {
                                    m_trackId, m_trackName, m_trackType)
 };
 
-/// @brief 项目音频工具中一个资源方块的持久化布局。
+/// @brief 项目音频工具中一个资源方块的持久化布局与采样音量。
 /// @details
 /// 坐标和尺寸使用工具画布逻辑单位；宽高为零保留自动布局语义。资源缺失时记录
 /// 仍可保留，待同一稳定 ID 再次出现后恢复位置。
@@ -143,13 +143,16 @@ struct ProjectAudioToolItemPlacement {
     /// @brief 方块叠层顺序，数值越大越靠上。
     std::int32_t m_zOrder{ 0 };
 
+    /// @brief 该采样试听及新建物件使用的倍率；空值表示旧版本尚未独立保存。
+    std::optional<float> m_audioVolume;
+
     /// @brief 序列化项目音频工具方块布局。
     /// @param json 接收对象的 JSON 节点。
     /// @param placement 待保存的逻辑布局。
     friend void to_json(nlohmann::json&                      json,
                         const ProjectAudioToolItemPlacement& placement)
     {
-        // 仅保存稳定资源 ID 和逻辑几何，不保存瞬态选择与拖动状态。
+        // 稳定资源 ID 同时关联几何和采样倍率，不保存瞬态选择与拖动状态。
         json = nlohmann::json{
             { "m_audioResourceId", placement.m_audioResourceId },
             { "m_x", placement.m_x },
@@ -158,6 +161,10 @@ struct ProjectAudioToolItemPlacement {
             { "m_height", placement.m_height },
             { "m_zOrder", placement.m_zOrder },
         };
+        // 缺失独立音量的旧记录保持缺失，供工具只迁移原选中采样的画笔倍率。
+        if ( placement.m_audioVolume ) {
+            json["m_audioVolume"] = *placement.m_audioVolume;
+        }
     }
 
     /// @brief 反序列化项目音频工具方块布局并兼容缺失字段。
@@ -174,6 +181,15 @@ struct ProjectAudioToolItemPlacement {
         placement.m_width  = json.value("m_width", 0.0F);
         placement.m_height = json.value("m_height", 0.0F);
         placement.m_zOrder = json.value("m_zOrder", 0);
+        // 复用对象先清空旧值；不把别的采样音量带入缺失字段的历史记录。
+        placement.m_audioVolume.reset();
+        const auto volume = json.find("m_audioVolume");
+        if ( volume != json.end() && volume->is_number() ) {
+            // 只接收有限倍率；损坏值按原音量恢复，显示和播放统一限于 0～200。
+            const float value = volume->get<float>();
+            placement.m_audioVolume =
+                std::isfinite(value) ? std::clamp(value, 0.0F, 2.0F) : 1.0F;
+        }
     }
 };
 
@@ -350,7 +366,7 @@ struct ProjectWorkspaceState {
     /// @brief 项目音频工具上次选中的资源 ID。
     std::string m_projectAudioToolSelectedResourceId;
 
-    /// @brief 项目音频工具为后续新建物件设置的音量倍率。
+    /// @brief 当前选中采样的画笔倍率快照；旧项目用它迁移该采样独立音量。
     float m_projectAudioToolBrushVolume{ 1.0F };
 
     /// @brief 选中 Effect 音频资源时是否自动试听一次采样。

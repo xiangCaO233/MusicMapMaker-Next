@@ -88,6 +88,9 @@ private:
         /// @brief Main 或 Effect 资源类型。
         AudioTrackType type{ AudioTrackType::Effect };
 
+        /// @brief 当前采样独立的试听及新建物件音量倍率，范围为 0～2。
+        float audioVolume{ 1.0F };
+
         /// @brief 方块在逻辑画布中的布局矩形。
         ProjectAudioToolLayout::Rect rect;
 
@@ -202,6 +205,10 @@ private:
 
     /// @brief 把当前方块位置、叠层和选择写回项目工作区。
     void persistWorkspace();
+
+    /// @brief 将全部采样的工具倍率恢复为 100，并同步当前画笔及项目保存。
+    /// @warning 仅由重置按钮触发，允许重建脏缓存并保存一次，不得每帧调用。
+    void resetSampleVolumes();
 
     /// @brief 选择方块并将其提升到最上层。
     /// @param itemIndex 方块缓存下标。
@@ -397,7 +404,7 @@ private:
     /// @brief 当前选中资源的 Main/Effect 类型。
     AudioTrackType m_selectedAudioTrackType{ AudioTrackType::Effect };
 
-    /// @brief 当前选中资源创建新物件时写入的物件音量倍率。
+    /// @brief 当前选中采样音量的兼容快照；各行编辑以 Item 独立倍率为准。
     float m_brushAudioVolume{ 1.0F };
 
     /// @brief 当前保持音量编辑弹窗的资源 ID。

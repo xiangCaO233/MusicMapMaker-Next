@@ -113,8 +113,12 @@ void prepareResources(MMM::Project& project)
 {
     // 清除上次运行的磁盘恢复状态，资源布局只由本次夹具决定。
     project.m_audioResources.clear();
-    auto& placements =
-        project.m_settings.m_workspace.m_projectAudioToolPlacements;
+    auto& workspace = project.m_settings.m_workspace;
+    // 每轮布局夹具显式模拟旧项目：只有选中采样曾保存画笔倍率。
+    // 其余采样没有独立记录，升级后应保持 100，不能全继承 65。
+    workspace.m_projectAudioToolSelectedResourceId = "pf1_0";
+    workspace.m_projectAudioToolBrushVolume        = 0.65F;
+    auto& placements = workspace.m_projectAudioToolPlacements;
     // 避免同名旧 placement 合并后改变首帧资源位置和 Z 序。
     placements.clear();
     for ( int index = 0; index < 24; ++index ) {
@@ -297,6 +301,14 @@ bool checkRapidPreview(MMM::UI::UIManager&            manager,
 /// @return 只有明确点击外部才关闭时为真。
 /// @details 使用实际 Popup 的窗口与激活状态断言，不能仅检查残留的打开栈。
 /// 资源保存事件走真实订阅回调，覆盖缓存重建导致锚定 ID 被误清除的路径。
+/// @details 夹具使用旧版只保存当前画笔倍率的工作区，首先确认兼容值没有丢失。
+/// 弹层标题长度与滑块宽度不同，命中点必须位于真实输入控件内。
+/// Ctrl 输入 175 同时覆盖整数百分数输入和一倍以上的增益范围。
+/// 文本提交后应完成一次工作区保存，再接受外部保存通知重建资源缓存。
+/// 该通知模拟自动保存或资源列表刷新，不意味着用户要求关闭弹层。
+/// 音量归属按稳定资源 ID 判断，不能假定激活后的方块还位于数组首项。
+/// 第一张卡片应得到新的独立倍率，其余旧记录首次保存后应明确为 100。
+/// 最后仍通过外部鼠标点击结束弹层，确保后续场景不继承输入捕获。
 bool checkVolumePopup(MMM::UI::UIManager&            manager,
                       MMM::UI::ProjectAudioToolView& view)
 {
@@ -308,6 +320,9 @@ bool checkVolumePopup(MMM::UI::UIManager&            manager,
     for ( int frame = 0; frame < 4; ++frame ) drawFrame(manager, view, false);
     auto* canvas = findCanvas();
     if ( !canvas ) return false;
+    // 第一次选择保存前，直接点开旧项目选中采样，兼容倍率必须仍是 65。
+    const auto& before = project->m_settings.m_workspace;
+    if ( before.m_projectAudioToolBrushVolume != 0.65F ) return false;
     const auto& style  = ImGui::GetStyle();
     const float button = ImGui::GetFrameHeight();
     const float spacing =
@@ -341,14 +356,27 @@ bool checkVolumePopup(MMM::UI::UIManager&            manager,
     // 弹层先完成一帧自动测量，避免首帧尺寸影响滑块点击坐标。
     frameAt({ popup->Pos.x + 15, popup->Pos.y + 10 });
     if ( !popup->Active ) return false;
-    // 输入区位于最后一行，点击七成位置可同时覆盖大于 100 的采样音量。
-    // 不借用视图私有音量指针，确保测试经历真实控件编辑和提交路径。
-    const ImVec2 sliderPoint{ popup->Pos.x + popup->Size.x * 0.7F,
+    // 输入区位于最后一行，宽度为十二个字高，弹层可能被更长的标题撑宽。
+    // 按输入区宽度定位 Ctrl 点击，不能以整个弹层宽度误击旁边空白。
+    // 不借用视图私有音量指针，通过真实文本输入覆盖大于 100 的倍率。
+    const ImVec2 sliderPoint{ popup->Pos.x + popup->WindowPadding.x +
+                                  ImGui::GetFontSize() * 12.0F * 0.7F,
                               popup->Pos.y + popup->Size.y -
                                   popup->WindowPadding.y - button * 0.5F };
+    frameAt(sliderPoint);
+    ImGui::GetIO().AddKeyEvent(ImGuiMod_Ctrl, true);
     ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
     frameAt(sliderPoint);
     ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frameAt(sliderPoint);
+    // 原生 Ctrl 点击会选中当前数值；释放 Ctrl 后输入完整的新百分数。
+    // 不用直接写入 InputText 状态，文本必须经过控件自己的解析和钳制。
+    ImGui::GetIO().AddKeyEvent(ImGuiMod_Ctrl, false);
+    ImGui::GetIO().AddInputCharactersUTF8("175");
+    frameAt(sliderPoint);
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true);
+    frameAt(sliderPoint);
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, false);
     frameAt(sliderPoint);
     // 释放后不再有任何按住的鼠标按钮，弹层持续显示不能依赖 active 滑块。
     // 保存事件是用户提交音量的正常后果，不代表用户要求结束编辑。
@@ -363,6 +391,30 @@ bool checkVolumePopup(MMM::UI::UIManager&            manager,
     if ( context.OpenPopupStack.empty() ||
          context.OpenPopupStack.back().PopupId != popupId || !popup->Active )
         return false;
+    // 编辑第一张卡片后，其他采样必须仍为 100；保存事件重建也不得串值。
+    // 这里检查真实鼠标编辑产生的工作区，不直接写入视图缓存或调用编辑 helper。
+    const auto& placements =
+        project->m_settings.m_workspace.m_projectAudioToolPlacements;
+    for ( const auto& placement : placements ) {
+        const bool edited = placement.m_audioResourceId == "pf1_0";
+        if ( !placement.m_audioVolume ||
+             (edited ? *placement.m_audioVolume <= 1.0F
+                     : *placement.m_audioVolume != 1.0F) ) {
+            XERROR(
+                "Card sample volume leaked to {}: saved={}, brush={}, "
+                "point={},{} popup={},{} size={},{}",
+                placement.m_audioResourceId,
+                placement.m_audioVolume.value_or(-1.0F),
+                project->m_settings.m_workspace.m_projectAudioToolBrushVolume,
+                sliderPoint.x,
+                sliderPoint.y,
+                popup->Pos.x,
+                popup->Pos.y,
+                popup->Size.x,
+                popup->Size.y);
+            return false;
+        }
+    }
     // 只有在外部按下鼠标后才允许原生 Popup 规则关闭。
     // 按下和释放分别推进，避免同一帧两个边沿被 ImGui 输入队列合并。
     // 结束后继续复用工具实例，后面的滚动测试能检出遗留输入捕获。
@@ -590,6 +642,19 @@ bool checkScrolling(MMM::UI::UIManager&            manager,
 /// 音量提交后验证画笔倍率与资源 ID 同时保存，排除只改变显示的情况。
 /// 横向裁剪下先导航到音量列，再依据实际列边界确定鼠标目标。
 /// 切回方块后继续保留刚调节的音量目标，不还原首次点击的资源。
+/// @details 独立倍率回归分为编辑、重建、重选和重置四个阶段。
+/// 编辑第二行之前保存所有资源的独立记录，作为不受本次编辑影响的基线。
+/// 所有非目标 ID 都需保持原倍率，不能只检查当前画笔恰好发生变化。
+/// 当前画笔快照仍用于引擎后续放置，但不能反过来覆盖每个资源的记录。
+/// 缓存刷新由正常保存事件触发，避免直接重建视图掩盖状态迁移错误。
+/// 重新选择第一行时，该资源的旧倍率应恢复到画笔快照。
+/// 第二行的独立记录在这次切换后也必须仍等于刚编辑的数值。
+/// 这些断言同时覆盖共享滑块值、保存广播和选择继承前一资源三种错误。
+/// 重置按钮通过真实鼠标边沿操作，不能只调用底层函数后观察内存。
+/// 按钮的命中点使用宿主内容原点和标准控件行高计算，不受滚动表格影响。
+/// 重置检查遍历全部持久记录，屏幕外资源同样应恢复到原音量。
+/// 当前选择在重置前后保持一致，重置不应意外选择最后一个遍历的采样。
+/// 最后切回方块继续使用同一视图，确认两种展示共用同一份资源音量。
 bool checkTableView(MMM::UI::UIManager&            manager,
                     MMM::UI::ProjectAudioToolView& view)
 {
@@ -750,13 +815,88 @@ bool checkTableView(MMM::UI::UIManager&            manager,
             volumePointer.y);
         return false;
     }
-    const auto selected = workspace.m_projectAudioToolSelectedResourceId;
+    const auto  selected     = workspace.m_projectAudioToolSelectedResourceId;
+    const float editedVolume = workspace.m_projectAudioToolBrushVolume;
+    // 第二行的新倍率只归属该资源；第一行和所有其他行仍与编辑前完全一致。
+    // 对照的是持久化条目，能同时捕获共享滑块和保存时广播倍率的问题。
+    for ( const auto& placement : workspace.m_projectAudioToolPlacements ) {
+        const auto old = std::find_if(
+            original.begin(), original.end(), [&](const auto& previous) {
+                return previous.m_audioResourceId ==
+                       placement.m_audioResourceId;
+            });
+        if ( old == original.end() || !placement.m_audioVolume ) return false;
+        const float expected = placement.m_audioResourceId == selected
+                                   ? editedVolume
+                                   : old->m_audioVolume.value_or(1.0F);
+        if ( std::abs(*placement.m_audioVolume - expected) > 0.001F ) {
+            XERROR("Table sample volume leaked to {}",
+                   placement.m_audioResourceId);
+            return false;
+        }
+    }
+    // 先触发生产保存刷新，再点回第一行，画笔必须恢复它自己的倍率。
+    // 音量列横向溢出，返回文件名列后通过原有 Selectable 入口切换采样。
+    MMM::Event::EventBus::instance().publish(MMM::Event::ProjectSavedEvent{});
+    ImGui::SetScrollX(table, 0);
+    for ( int frame = 0; frame < 3; ++frame ) drawFrame(manager, view, true);
+    drawFrame(manager, view, true, 0, false, 450, false, pointer);
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    drawFrame(manager, view, true, 0, false, 450, false, pointer);
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    drawFrame(manager, view, true, 0, false, 450, false, pointer);
+    // 只读取原始记录作比较，避免把刚提交的新工作区当成期望值。
+    // 原始记录缺失倍率时按旧项目未调节采样的 100 解释。
+    const auto restored = std::find_if(
+        original.begin(), original.end(), [&](const auto& placement) {
+            return placement.m_audioResourceId == previousResource;
+        });
+    if ( restored == original.end() ||
+         workspace.m_projectAudioToolSelectedResourceId != previousResource ||
+         workspace.m_projectAudioToolBrushVolume !=
+             restored->m_audioVolume.value_or(1.0F) ) {
+        XERROR("Reselecting sample did not restore its own volume");
+        return false;
+    }
+    // 第二张卡片的倍率在缓存刷新和切回前一采样后仍应保留。
+    const auto edited =
+        std::find_if(workspace.m_projectAudioToolPlacements.begin(),
+                     workspace.m_projectAudioToolPlacements.end(),
+                     [&](const auto& placement) {
+                         return placement.m_audioResourceId == selected;
+                     });
+    if ( edited == workspace.m_projectAudioToolPlacements.end() ||
+         edited->m_audioVolume != editedVolume )
+        return false;
+    // 点击两种视图共用的重置按钮，不直接调用私有 helper。
+    // 表格模式在按钮前只有展示选择和自动试听两行，位置取真实宿主内容起点。
+    const auto*  host = table->ParentWindow;
+    const ImVec2 resetPoint{ host->DC.CursorStartPos.x + 20.0F,
+                             host->DC.CursorStartPos.y +
+                                 ImGui::GetFrameHeightWithSpacing() * 2.0F +
+                                 ImGui::GetFrameHeight() * 0.5F };
+    drawFrame(manager, view, true, 0, false, 450, false, resetPoint);
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    drawFrame(manager, view, true, 0, false, 450, false, resetPoint);
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    drawFrame(manager, view, true, 0, false, 450, false, resetPoint);
+    // 全部资源包括屏幕外行都恢复为 100；选择保留，下一次放置也使用 100。
+    for ( const auto& placement : workspace.m_projectAudioToolPlacements ) {
+        if ( placement.m_audioVolume != 1.0F ) {
+            XERROR("Reset all sample volumes missed {}",
+                   placement.m_audioResourceId);
+            return false;
+        }
+    }
+    // 记录全部重置之外，还要确认引擎读取的当前画笔快照同步恢复。
+    // 只重置列表会留下“显示为 100，下一次放置仍用旧音量”的不一致。
+    if ( workspace.m_projectAudioToolBrushVolume != 1.0F ) return false;
     // 复用原实例切回，不能依靠析构重建恢复默认布局来通过测试。
     view.setTableView(false);
     for ( int frame = 0; frame < 3; ++frame ) drawFrame(manager, view, true);
     // 切回后方块恢复绘制，表格选中的资源仍然是当前音频画笔。
     return !view.isTableView() && findCanvas() && findCanvas()->Active &&
-           workspace.m_projectAudioToolSelectedResourceId == selected;
+           workspace.m_projectAudioToolSelectedResourceId == previousResource;
 }
 }  // namespace
 
