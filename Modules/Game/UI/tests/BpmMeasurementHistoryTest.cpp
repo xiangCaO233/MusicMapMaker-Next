@@ -1,10 +1,14 @@
 #include "config/AppConfig.h"
+#include "log/colorful-log.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 
 #include <imgui.h>
 
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <ice/config/config.hpp>
+#include <initializer_list>
 #include <nlohmann/json.hpp>
 
 namespace MMM::UI
@@ -36,6 +40,9 @@ struct BpmMeasurementHistoryTestAccess {
         unsigned char* pixels = nullptr;
         int            width = 0, height = 0;
         io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        // 先发布鼠标位置并完成准备帧，避免事件队列把首次移动与滚轮分批消费。
+        // 后续每个滚轮刻度都在已经悬停的同一区域内独立提交。
+        io.AddMousePosEvent(300, 120);
         ImGui::NewFrame();
         ImGui::SetNextWindowPos({ 0, 0 });
         ImGui::SetNextWindowSize({ 640, 480 });
@@ -78,6 +85,59 @@ struct BpmMeasurementHistoryTestAccess {
         // 字体图集与顶点缓冲由本轮上下文统一销毁，不留下跨用例引用。
         ImGui::End();
         ImGui::Render();
+        // 分析完成但从未按下播放时，滚轮必须以可见准备位置连续推进。
+        // 使用真实鼠标滚轮事件和导航入口，不能只测纯网格算法的返回值。
+        tool.m_selectedAudioSyncKey = "unloaded-preview";
+        tool.m_timingSegments       = { { 0.0, 120.0 } };
+        tool.m_firstBeatTime        = 0.0;
+        tool.m_beatDivisor          = 4;
+        tool.m_bpm                  = 120.0;
+        // 两种吸附设置都应能从零秒向后滚动，并在反向时逐格回到零秒。
+        // 正向越过零边界只应钳制当前位置，不能锁死随后反方向的输入。
+        // 120 BPM 的四分拍间距为 0.125 秒，两个方向使用同一精确网格。
+        // 第一格是边界外滚动，末尾反向输入验证边界钳制后仍能正常继续。
+        // 中途连续后移两格可发现每次都重新从后端零秒计算的旧行为。
+        // 该序列不按播放按钮，显示位置与准备播放位置必须始终一致。
+        // 视图缩放保持不变，避免把缩放造成的内容移动误当成播放定位成功。
+        constexpr std::array<float, 7>  wheels{ 1, -1, -1, 1, 1, 1, -1 };
+        constexpr std::array<double, 7> positions{ 0, 0.125, 0.25, 0.125,
+                                                   0, 0,     0.125 };
+        for ( const bool snap : { false, true } ) {
+            // 两轮使用同一工具，先清空小数余量，避免上一轮输入改变吸附步数。
+            // 重置准备中心不建立音频实例，模拟首次打开分析面板的边界状态。
+            tool.m_wheelSnapEnabled   = snap;
+            tool.m_wheelSnapRemainder = 0;
+            tool.m_viewCenter         = 0;
+            for ( std::size_t step = 0; step < wheels.size(); ++step ) {
+                // 每个输入独立成帧，确保后续滚动读取到上一帧的本地准备位置。
+                // 不初始化音频设备，也不通过按播放来绕过首次导航场景。
+                io.AddMousePosEvent(300, 120);
+                io.AddMouseWheelEvent(0, wheels[step]);
+                ImGui::NewFrame();
+                ImGui::Begin("BpmCursorRegression");
+                tool.handleTimelineNavigation(
+                    { 100, 80 }, { 500, 200 }, 0, 2, true);
+                // 必须检查视图中心的实际提交结果，未加载音频时后端时间始终不变。
+                // 源保持未加载也证明导航没有通过隐式启动音频绕过准备位置问题。
+                const bool navigated =
+                    close(tool.m_viewCenter, positions[step]) &&
+                    !tool.isSelectedTrackLoadedForPlayback();
+                if ( !navigated ) {
+                    XERROR(
+                        "Unloaded BPM wheel failed: snap={}, step={}, "
+                        "wheel={}, expected={}, actual={}",
+                        snap,
+                        step,
+                        io.MouseWheel,
+                        positions[step],
+                        tool.m_viewCenter);
+                }
+                passed = passed && navigated;
+                // 即使某一步失败也结束本帧，避免异常的 ImGui 栈掩盖导航回归。
+                ImGui::End();
+                ImGui::Render();
+            }
+        }
         // ImGui 生命周期在工具析构前结束，工具不得持有本轮绘制列表指针。
         ImGui::DestroyContext();
         return passed;

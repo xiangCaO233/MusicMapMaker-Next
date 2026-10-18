@@ -4179,8 +4179,15 @@ void BpmMeasurementToolView::handleTimelineNavigation(const ImVec2& rectMin,
         // seek 入口负责音频时间与视觉时间的偏移转换及边界裁切。
         // 事件只由当前悬浮画布处理，不同时在波形和频谱重复提交。
         const auto playback = readPlaybackTimelineState(m_playbackRoute);
-        seekPlaybackToCanvasTime(
-            wheelSeekTarget(playback.visualTime, io.MouseWheel));
+        // 未加载试听时后端始终返回零秒，不能把它当作连续滚动的当前位置。
+        // 与播放光标绘制使用同一准备位置，下一次滚轮从上一次 seek 结果继续。
+        // 零点钳制也与可见光标一致，负视觉偏移不应吞掉开始处的一格。
+        const double currentTime =
+            std::clamp(isSelectedTrackLoadedForPlayback() ? playback.visualTime
+                                                          : m_viewCenter,
+                       0.0,
+                       canvasDuration);
+        seekPlaybackToCanvasTime(wheelSeekTarget(currentTime, io.MouseWheel));
         markUserPreferencesChanged(false, true);
     } else if ( hover && io.MouseWheel != 0.0f ) {
         // 缩放锚定鼠标下的时间，避免波形内容在滚轮时横向漂移。
