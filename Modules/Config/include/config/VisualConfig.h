@@ -260,6 +260,13 @@ struct VisualConfig {
     bool canvasCameraPoseEnabled{ false };
     /// @brief 三维画布长度，以原始画布高度为单位，仅向远端扩展。
     float canvasCameraLength{ 1.0F };
+    /// @brief 三维纵向透视运动补偿，零为原效果，一百为消除纵向远慢近快。
+    float canvasMotionCompensation{ 0.0F };
+    /// @brief 三维平面物件额外高度百分数，零保留皮肤尺寸，三百增加到四倍。
+    float canvasThicknessCompensation{ 0.0F };
+    /// @brief 返回包含三维厚度补偿的物件纵向比例，二维保留原值。
+    /// @warning 逐物件固定数值运算，不读取全局配置、不分配或访问文件。
+    float canvasNoteScaleY() const;
     /// @brief 返回需额外绘制的高度倍数；二维模式不扩展。
     /// @warning 快照热路径常量检查，非法值回退为无扩展。
     float canvasCameraExtension() const;

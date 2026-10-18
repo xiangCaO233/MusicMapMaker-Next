@@ -2837,9 +2837,11 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         // 普通相机拖动仅影响 UI 投影，不进入逻辑配置发布路径。
         const float previousExtension = cameraVisual.canvasCameraExtension();
         // 固定大小参数用于识别实际编辑，无变化帧不构造预设 JSON 或排队写盘。
-        const auto previousPosition = cameraVisual.canvasCameraPosition;
-        const auto previousRotation = cameraVisual.canvasCameraRotation;
-        const auto previousLength   = cameraVisual.canvasCameraLength;
+        const auto previousPosition  = cameraVisual.canvasCameraPosition;
+        const auto previousRotation  = cameraVisual.canvasCameraRotation;
+        const auto previousLength    = cameraVisual.canvasCameraLength;
+        const auto previousMotion    = cameraVisual.canvasMotionCompensation;
+        const auto previousThickness = cameraVisual.canvasThicknessCompensation;
         const bool hasCameraScene =
             m_currentSnapshot && m_currentSnapshot->hasBeatmap;
         // 模式切换先于本帧投影；相机预览借用同一离屏纹理，不创建第二套 GPU
@@ -2854,13 +2856,17 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                 cameraVisual);
         if ( previousPosition != cameraVisual.canvasCameraPosition ||
              previousRotation != cameraVisual.canvasCameraRotation ||
-             previousLength != cameraVisual.canvasCameraLength ) {
+             previousLength != cameraVisual.canvasCameraLength ||
+             previousMotion != cameraVisual.canvasMotionCompensation ||
+             previousThickness != cameraVisual.canvasThicknessCompensation ) {
             // 摄像机手势与数值输入共用即时方案捕获，磁盘写入不会等待在 UI。
             Config::AppConfig::instance().saveLayoutChanges();
         }
         // 扩展范围由逻辑线程生成真实物件，通过既有配置命令异步生效。
         // 不等手势结束；远端物件范围必须跟随当前长度，稳定帧不广播。
-        if ( previousExtension != cameraVisual.canvasCameraExtension() )
+        if ( previousExtension != cameraVisual.canvasCameraExtension() ||
+             previousMotion != cameraVisual.canvasMotionCompensation ||
+             previousThickness != cameraVisual.canvasThicknessCompensation )
             engine.setEditorConfig(
                 Config::AppConfig::instance().getEditorConfig());
         const bool cameraViewEnabled =

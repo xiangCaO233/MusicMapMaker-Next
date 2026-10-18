@@ -252,7 +252,8 @@ void NoteRenderSystem::drawJudgmentArea(Batcher& batcher, int32_t trackCount,
             float aspect = texW / texH;
             float drawW  = singleTrackW * config.visual.noteScaleX;
             // 横纵缩放独立应用，Batcher 在最终尺寸确定后统一对齐判定锚点。
-            float drawH = (singleTrackW / aspect) * config.visual.noteScaleY;
+            float drawH =
+                (singleTrackW / aspect) * config.visual.canvasNoteScaleY();
 
             const float halfPixelU = 0.5f / 2048.0f;
             // 和底板使用相同图集规格，采样边界内缩避免邻接纹理串色。

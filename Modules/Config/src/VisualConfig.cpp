@@ -53,8 +53,23 @@ std::array<float, 4> sanitizeBackgroundLevelColor(
 }
 }  // namespace
 
-/// @brief 提供远端扩展倍数，不改变坐标单位、滚动速度或判定线。
-/// @warning 每帧常量计算；直接构造的运行时配置也须拒绝非有限长度。
+/// @brief 计算三维局部物件高度，兼容普通二维皮肤比例。
+/// @warning 逐物件固定数值计算，不查询外部资源或共享状态。
+float VisualConfig::canvasNoteScaleY() const
+{
+    // 普通二维配置沿用皮肤高度，补偿不能写回原始缩放配置。
+    const bool spatial =
+        canvasCameraPoseEnabled || debugCanvasCameraAngleDegrees != 0 ||
+        debugCanvasCameraYawDegrees != 0 || debugCanvasCameraDistance != 1;
+    if ( !spatial || !std::isfinite(canvasThicknessCompensation) )
+        return noteScaleY;
+    // 仅放大局部物件高度，不缩放持续时长或连接节点的时间坐标。
+    return noteScaleY *
+           (1 + std::clamp(canvasThicknessCompensation, 0.0F, 300.0F) / 100);
+}
+
+/// @brief 返回三维画布向远端额外扩展的高度。
+/// @warning 每帧常量计算，非有限长度回退为零扩展。
 float VisualConfig::canvasCameraExtension() const
 {
     // 未启用三维观察时沿用原始可见范围，长度设置仍保留供下次使用。
@@ -1057,6 +1072,8 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
         { "debugCanvasCameraDistance", config.debugCanvasCameraDistance },
         { "canvasCameraPoseEnabled", config.canvasCameraPoseEnabled },
         { "canvasCameraLength", config.canvasCameraLength },
+        { "canvasMotionCompensation", config.canvasMotionCompensation },
+        { "canvasThicknessCompensation", config.canvasThicknessCompensation },
         { "canvasCameraPosition", config.canvasCameraPosition },
         { "canvasCameraRotation", config.canvasCameraRotation },
         { "interactionHitboxScaleX", config.interactionHitboxScaleX },
@@ -1221,6 +1238,11 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
     // 长度只影响远端可见范围，旧配置保持一倍高度。
     // 限制最大范围以约束逐帧拍线和物件生成量，不允许无穷画布。
     // 与数值输入共用合法区间，错误类型和非有限值使用默认值。
+    // 缺省为零保证升级后画面不变；有限范围同时约束手工修改的配置。
+    config.canvasMotionCompensation =
+        readObservationValue(j, "canvasMotionCompensation", 0.0F, 0.0F, 100.0F);
+    config.canvasThicknessCompensation = readObservationValue(
+        j, "canvasThicknessCompensation", 0.0F, 0.0F, 300.0F);
     config.canvasCameraLength =
         readObservationValue(j, "canvasCameraLength", 1.0F, 1.0F, 32.0F);
     // 自由相机与旧观察参数独立保存，缺失字段不改变旧配置的显示。

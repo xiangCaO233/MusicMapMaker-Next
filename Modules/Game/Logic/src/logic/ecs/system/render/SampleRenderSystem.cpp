@@ -490,10 +490,11 @@ void SampleRenderSystem::renderSamples(
     // 无纹理时用正方形比例计算本体高度，与圆角回退形状保持一致。
     // 不取上一个采样或上一份快照的纹理比例，避免皮肤切换后的尺寸残留。
     // 这里的回退仅用于偏移标签字号，不改变配置或本体几何的缩放语义。
-    const float sampleTextScale = std::isfinite(config.visual.noteScaleY) &&
-                                          config.visual.noteScaleY > 0.0F
-                                      ? config.visual.noteScaleY
-                                      : 1.0F;
+    const float sampleTextScale =
+        std::isfinite(config.visual.canvasNoteScaleY()) &&
+                config.visual.canvasNoteScaleY() > 0.0F
+            ? config.visual.canvasNoteScaleY()
+            : 1.0F;
     // 本体宽高与文字字号并非同一参数链，水平缩放不能改变偏移标签的字号。
     /// @brief 使用与基础层一致的几何绘制采样本体，供基础层和发光层复用。
     /// @param targetBatcher 目标批处理器。
@@ -592,7 +593,7 @@ void SampleRenderSystem::renderSamples(
         const float laneWidth = bounds->rightX - bounds->leftX;
         const float bodyWidth = laneWidth * config.visual.noteScaleX;
         const float bodyHeight =
-            (laneWidth / noteTextureAspect) * config.visual.noteScaleY;
+            (laneWidth / noteTextureAspect) * config.visual.canvasNoteScaleY();
         // 横向缩放只影响宽度，高度仍以原始轨宽和纹理宽高比计算。
         // 因而调窄本体不会间接改变纵向高度或偏移手柄的触发时间。
         // 连线跨入窗口时，即使两端本体不在窗口内，也不能仅按锚点剔除。
@@ -708,7 +709,7 @@ void SampleRenderSystem::renderSamples(
                                bounds->leftX,
                                anchorY - bodyHeight * 0.5F,
                                laneWidth,
-                               config.visual.noteScaleY,
+                               config.visual.canvasNoteScaleY(),
                                sampleTextColor,
                                snapshot->snapshotSysTime);
         // 标签锚在本体上边缘，不能使用
@@ -800,10 +801,10 @@ void SampleRenderSystem::renderSamples(
                     sample.m_timestamp, currentAbsY, sample.m_timestamp)) *
                     renderScaleY;
             // 发光层沿用实际目标轨道宽度，避免拖动预览错位。
-            const float laneWidth = bounds->rightX - bounds->leftX;
-            const float bodyWidth = laneWidth * config.visual.noteScaleX;
-            const float bodyHeight =
-                (laneWidth / noteTextureAspect) * config.visual.noteScaleY;
+            const float laneWidth  = bounds->rightX - bounds->leftX;
+            const float bodyWidth  = laneWidth * config.visual.noteScaleX;
+            const float bodyHeight = (laneWidth / noteTextureAspect) *
+                                     config.visual.canvasNoteScaleY();
             // 发光仅覆盖本体，不覆盖偏移连线，因此这里直接按本体范围裁剪。
             if ( anchorY + bodyHeight * 0.5F < topY ||
                  anchorY - bodyHeight * 0.5F > bottomY ) {
@@ -853,7 +854,7 @@ void SampleRenderSystem::renderSamples(
     const float laneWidth = brushBounds->rightX - brushBounds->leftX;
     const float bodyWidth = laneWidth * config.visual.noteScaleX;
     const float bodyHeight =
-        (laneWidth / noteTextureAspect) * config.visual.noteScaleY;
+        (laneWidth / noteTextureAspect) * config.visual.canvasNoteScaleY();
     const float anchorY =
         judgmentLineY - static_cast<float>(cache->getDisplayDelta(
                             brush.time, currentAbsY, brush.time)) *
@@ -897,7 +898,7 @@ void SampleRenderSystem::renderSamples(
                            brushBounds->leftX,
                            anchorY - bodyHeight * 0.5F,
                            laneWidth,
-                           config.visual.noteScaleY,
+                           config.visual.canvasNoteScaleY(),
                            previewTextColor,
                            snapshot->snapshotSysTime);
 }

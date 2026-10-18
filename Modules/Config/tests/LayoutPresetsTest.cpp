@@ -44,6 +44,9 @@ VisualConfig configured()
     // 三个旋转分量均设为非零，防止只保存倾斜角。
     visual.canvasCameraRotation = { 30, 5, 10 };
     visual.canvasCameraLength   = 4;
+    // 新增补偿与相机姿态一起参与所有预设往返、迁移和内置保护案例。
+    visual.canvasMotionCompensation    = 35;
+    visual.canvasThicknessCompensation = 75;
     return visual;
 }
 /// @brief 比较全部布局，而非仅比较主轨道的某一个坐标。

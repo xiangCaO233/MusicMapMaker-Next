@@ -1,5 +1,6 @@
 #include "canvas/CameraLayoutEditor.h"
 #include "canvas/CameraLayoutMath.h"
+#include "canvas/PlanarObservationInput.h"
 #include "config/EditorConfig.h"
 #include "config/VisualConfig.h"
 #include "log/colorful-log.h"
@@ -80,8 +81,12 @@ bool checkCanvasLength()
     // 两轮都从空快照开始，防止上一轮几何残留假装新增远端内容。
     notes.ctx().emplace<const std::vector<entt::entity>*>(&sortedNotes);
     std::vector<glm::vec2> nearVertices;
-    for ( float length : { 1.0F, 3.0F } ) {
-        config.visual.canvasCameraLength = length;
+    // 第三轮只改变厚度，复用同一完整快照生成入口验证真实物件几何。
+    for ( const auto settings :
+          { glm::vec2(1, 0), glm::vec2(3, 0), glm::vec2(3, 100) } ) {
+        const float length                        = settings.x;
+        config.visual.canvasThicknessCompensation = settings.y;
+        config.visual.canvasCameraLength          = length;
         Logic::RenderSnapshot snapshot;
         snapshot.hasBeatmap = true;
         // 音符独占此 UV 区域，底板和纯色线不会被计入。
@@ -127,8 +132,22 @@ bool checkCanvasLength()
             return false;
         if ( length == 1 ) nearVertices = currentNear;
         // 逐顶点相等同时覆盖尺寸、位置和原有时间到像素比例。
-        else if ( currentNear != nearVertices )
+        else if ( settings.y == 0 && currentNear != nearVertices )
             return false;
+        if ( settings.y > 0 ) {
+            // 只提高局部高度，横向位置、宽度及中心时间不能随补偿改变。
+            // 不以顶点总数替代尺寸检查，底板变长不能满足此断言。
+            for ( std::size_t i = 0; i < currentNear.size(); ++i ) {
+                if ( currentNear[i].x != nearVertices[i].x ) return false;
+            }
+            // 纹理四角按批处理器固定顺序提交，零与二分别位于两条高度边。
+            // 尺寸比较允许浮点舍入误差，不允许相机长度改变实际音符厚度。
+            const float oldHeight =
+                std::abs(nearVertices[0].y - nearVertices[2].y);
+            const float newHeight =
+                std::abs(currentNear[0].y - currentNear[2].y);
+            if ( std::abs(newHeight - oldHeight * 2) > 0.01F ) return false;
+        }
         if ( length > 1 ) {
             // 只有几何没有有效裁剪仍会不可见，必须检查提交命令。
             // 命令保存逻辑负坐标，渲染录制阶段才转换成非负屏幕矩形。
@@ -163,6 +182,103 @@ bool checkCanvasLength()
     if ( saved.get<Config::VisualConfig>().canvasCameraLength != 1 )
         return false;
     return true;
+}
+
+/// @brief 验证运动补偿在判定线固定的条件下消除纵向透视加速。
+/// @return 匀速、分母边界和配置兼容均符合预期时为真。
+/// @note 直接测量投影屏幕位置，而不是把配置数值当作渲染结果。
+bool checkCompensation()
+{
+    using namespace MMM;
+    Config::VisualConfig visual;
+    visual.canvasCameraPoseEnabled                    = true;
+    visual.canvasCameraPosition                       = { 0, -0.8F, 0.9F };
+    visual.canvasCameraRotation                       = { 45, 0, 0 };
+    visual.editableJudgmentLinePositionForKeyCount(4) = 0.8F;
+    const auto original =
+        Canvas::canvasCameraPoseProjection(800, 600, 0, visual, 4);
+    // 多种强度共享原始判定线位置，不能在增大补偿时整体漂移。
+    // 使用独立四键判定线覆盖非默认位置，避免只在公共回退值下保持锚点。
+    // 零强度仍构造完整矩阵，验证兼容分支不是测试绕过了生产投影。
+    // 相机采用内置斜轨方案的角度和位置，保证测试覆盖实际推荐用法。
+    for ( float amount : { 0.0F, 50.0F, 100.0F } ) {
+        visual.canvasMotionCompensation = amount;
+        const auto matrix =
+            Canvas::canvasCameraPoseProjection(800, 600, 0, visual, 4);
+        // 使用生产输入映射验证补偿后的矩阵，不复制内部逆投影公式。
+        // 相同源坐标必须可从屏幕位置恢复，避免只有画面变化而鼠标仍用旧投影。
+        // 取画布内点保证位于相机前方；离屏外推另由观察相机测试覆盖。
+        // 该检查分别经过零、中间与完全补偿，不仅检查最终极值。
+        const auto input = Canvas::makePlanarObservationInputProjection(
+            matrix, 800, 600, true);
+        const glm::vec2 source(360, 400);
+        const auto screen = Canvas::planarObservationProject(input, source);
+        if ( !screen ) return false;
+        const auto recovered =
+            Canvas::planarObservationUnproject(input, *screen);
+        if ( !recovered || glm::length(*recovered - source) > 0.01F )
+            return false;
+        // 下一组比较固定判定线，输入可逆不能代替视觉锚点保持的验证。
+        // 投影返回的深度仍须合法，否则可逆但不可见的结果不能用于实际编辑。
+        // 拾取容差只覆盖浮点运算，不允许接近一个逻辑像素的系统性偏移。
+        // 三维参数不写入谱面模型，因此 source 始终是原始时间/轨道平面坐标。
+        // 左、中、右三点均应保持，不能只固定判定线与中轴的交点。
+        // 比较透视除法后的 XY，齐次矩阵整体倍数不属于视觉漂移。
+        for ( float x : { 100.0F, 400.0F, 700.0F } ) {
+            const auto before = original * glm::vec4(x, 480, 0, 1);
+            const auto after  = matrix * glm::vec4(x, 480, 0, 1);
+            if ( glm::length(glm::vec2(before) / before.w -
+                             glm::vec2(after) / after.w) > 0.0001F )
+                return false;
+        }
+        if ( amount == 100 ) {
+            // 相同世界 Y 间隔应产生相同屏幕间隔，涵盖远端原视口之外的部分。
+            // 同时检查深度，修改透视 W 后不能误将整段物件裁掉。
+            // 首个差分作为基准，后续三个差分逐个比较，不只比较首尾平均速度。
+            // 五个采样点包含远端负像素坐标，覆盖画布长度扩展后的区域。
+            // 只检查数学均匀性，不将该测试宣称为 GPU 或实机播放帧率测试。
+            float previous = 0, spacing = 0;
+            for ( int i = 0; i < 5; ++i ) {
+                const auto point =
+                    matrix * glm::vec4(400, -600 + i * 250, 0, 1);
+                if ( point.w <= 0 || point.z < 0 || point.z > point.w )
+                    return false;
+                const float y = point.y / point.w;
+                if ( i == 1 ) spacing = y - previous;
+                if ( i > 1 && std::abs(y - previous - spacing) > 0.0001F )
+                    return false;
+                previous = y;
+            }
+        }
+    }
+    // 持久化前保留非零的两项设置，缺失字段不能凭默认零值侥幸通过。
+    // JSON 使用真实 VisualConfig 的 ADL 定义，不自建测试专用字段映射。
+    // 原始配置仍留在栈上，反序列化结果必须来自独立对象。
+    visual.canvasThicknessCompensation = 80;
+    nlohmann::json saved               = visual;
+    const auto     restored            = saved.get<Config::VisualConfig>();
+    // 导入使用正式 ADL，旧文件缺少字段时必须恢复无补偿的旧视觉。
+    // 无效类型和超范围各覆盖一次，避免外部编辑的配置污染矩阵。
+    if ( restored.canvasMotionCompensation != 100 ||
+         restored.canvasThicknessCompensation != 80 )
+        return false;
+    // 删除键模拟旧版文件；不能仅填写零，否则无法发现错误的缺省策略。
+    // 两个字段互相独立，缺失任意一个都不应从另一个推导数值。
+    saved.erase("canvasMotionCompensation");
+    saved.erase("canvasThicknessCompensation");
+    const auto legacy = saved.get<Config::VisualConfig>();
+    if ( legacy.canvasMotionCompensation != 0 ||
+         legacy.canvasThicknessCompensation != 0 )
+        return false;
+    saved["canvasMotionCompensation"]    = 200;
+    saved["canvasThicknessCompensation"] = "invalid";
+    const auto invalid                   = saved.get<Config::VisualConfig>();
+    if ( invalid.canvasMotionCompensation != 100 ||
+         invalid.canvasThicknessCompensation != 0 )
+        return false;
+    // 二维不会沿用三维厚度；原 noteScaleY 仍可独立调整和保存。
+    visual.canvasCameraPoseEnabled = false;
+    return visual.canvasNoteScaleY() == visual.noteScaleY;
 }
 
 /// @brief 比较投影后的屏幕位置，深度区间差异不影响二维视觉兼容。
@@ -366,7 +482,8 @@ bool checkWindows()
 /// @brief 执行相机迁移和模式生命周期回归，不读写用户配置。
 int main()
 {
-    if ( !checkMath() || !checkCanvasLength() || !checkWindows() ) {
+    if ( !checkMath() || !checkCanvasLength() || !checkCompensation() ||
+         !checkWindows() ) {
         XERROR("CameraLayoutEditorTest failed");
         return 1;
     }

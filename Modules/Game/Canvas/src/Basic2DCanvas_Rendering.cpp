@@ -59,7 +59,8 @@ glm::mat4 Basic2DCanvas::getCanvasProjectionMatrix()
             canvasCameraPoseProjection(static_cast<float>(m_logicalWidth),
                                        static_cast<float>(m_logicalHeight),
                                        m_yOffset,
-                                       visual);
+                                       visual,
+                                       m_currentSnapshot->trackCount);
         return m_observationProjection;
     }
     const float angle = hasScene ? visual.debugCanvasCameraAngleDegrees : 0.0F;

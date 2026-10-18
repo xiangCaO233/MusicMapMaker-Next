@@ -399,7 +399,7 @@ void NoteRenderSystem::generateSnapshot(
             const auto matrix =
                 visual.canvasCameraPoseEnabled
                     ? Common::Render::canvasCameraPoseProjection(
-                          viewportWidth, viewportHeight, 0, visual)
+                          viewportWidth, viewportHeight, 0, visual, trackCount)
                     : Common::Render::planarObservationProjection(
                           viewportWidth,
                           viewportHeight,
@@ -1083,7 +1083,7 @@ void NoteRenderSystem::generateSnapshot(
             noteAspect = uv->second.z / uv->second.w;
         const float guideHeight = judgmentGuideHeight(
             singleTrackW * config.visual.noteScaleX,
-            singleTrackW / noteAspect * config.visual.noteScaleY,
+            singleTrackW / noteAspect * config.visual.canvasNoteScaleY(),
             noteAspect,
             config.visual.noteFillMode);
         drawJudgmentGuideBox(batcher,

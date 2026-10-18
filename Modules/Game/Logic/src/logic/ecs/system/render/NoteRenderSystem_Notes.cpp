@@ -646,7 +646,8 @@ NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
     ctx.baseAspect = itBase->second.z / itBase->second.w;
 
     ctx.noteW = singleTrackW * config.visual.noteScaleX;
-    ctx.noteH = (singleTrackW / ctx.baseAspect) * config.visual.noteScaleY;
+    ctx.noteH =
+        (singleTrackW / ctx.baseAspect) * config.visual.canvasNoteScaleY();
 
     auto& skin      = Config::SkinManager::instance();
     auto  color_tap = skin.getColor("note_tap");
@@ -2126,7 +2127,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
                                              bottomY,
                                              singleTrackW,
                                              renderScaleY,
-                                             config.visual.noteScaleY,
+                                             config.visual.canvasNoteScaleY(),
                                              labelColor,
                                              laneProjection);
                 }
@@ -2157,7 +2158,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
                                          bottomY,
                                          singleTrackW,
                                          renderScaleY,
-                                         config.visual.noteScaleY,
+                                         config.visual.canvasNoteScaleY(),
                                          labelColor,
                                          laneProjection);
             }

@@ -91,10 +91,13 @@ inline void enableCanvasCameraPose(Config::VisualConfig& visual)
 }
 
 /// @brief 自由相机投影，画布像素仍位于固定 XY 平面，不改谱面几何。
+/// @param keyCount 当前玩家轨道数量，用于读取该键数实际使用的判定线锚点。
+/// @note 运动补偿只修改齐次投影，不改变时间积分、SV 或实际播放倍率。
 /// @warning 每帧仅执行固定矩阵运算，与拾取共用结果。
 inline glm::mat4 canvasCameraPoseProjection(float width, float height,
                                             float                       offset,
-                                            const Config::VisualConfig& visual)
+                                            const Config::VisualConfig& visual,
+                                            int keyCount = 0)
 {
     const float w = std::max(width, 1.0F), h = std::max(height, 1.0F);
     glm::mat4   model(1);
@@ -109,7 +112,28 @@ inline glm::mat4 canvasCameraPoseProjection(float width, float height,
     auto projection =
         glm::perspectiveRH_ZO(2 * std::atan(0.5F), w / h, 0.01F, 512.0F);
     projection[1][1] *= -1;
-    return projection * glm::inverse(canvasCameraTransform(visual)) * model;
+    auto result =
+        projection * glm::inverse(canvasCameraTransform(visual)) * model;
+    // 将纵向透视分母连续混合到判定线处的常量，百分之百时纵向匀速。
+    // 同一矩阵用于 GPU、逆投影拾取和源平面可见性，不能只移动显示顶点。
+    // 横向透视仍保留；判定线整条横线的齐次分母不变，因此位置不会跳动。
+    const float amount =
+        std::isfinite(visual.canvasMotionCompensation)
+            ? std::clamp(visual.canvasMotionCompensation, 0.0F, 100.0F) / 100
+            : 0;
+    if ( amount > 0 ) {
+        const float anchor =
+            h * visual.judgmentLinePositionForKeyCount(keyCount) - offset;
+        const float delta = result[1][3] * amount;
+        result[1][3] -= delta;
+        result[3][3] += delta * anchor;
+        // 深度分子必须随新的 W 一起变化，否则远端平面会被错误裁到远面外。
+        // 该系数与上方透视近远平面一致，仍保持深度逆变换可逆。
+        const float depth = 512.0F / (512.0F - 0.01F);
+        result[1][2] -= delta * depth;
+        result[3][2] += delta * anchor * depth;
+    }
+    return result;
 }
 
 /// @brief 世界点映射到操作视图屏幕坐标；近平面后方不产生可点击句柄。

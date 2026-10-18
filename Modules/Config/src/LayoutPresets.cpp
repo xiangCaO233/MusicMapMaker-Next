@@ -29,6 +29,8 @@ constexpr const char* FIELDS[] = {
     "debugCanvasCameraDistance",
     "canvasCameraPoseEnabled",
     "canvasCameraLength",
+    "canvasMotionCompensation",
+    "canvasThicknessCompensation",
     "canvasCameraPosition",
     "canvasCameraRotation",
     "interactionHitboxScaleX",
@@ -248,8 +250,12 @@ void applyLayoutPreset(const LayoutPreset& preset, VisualConfig& visual)
     // poseEnabled 决定当前实际使用哪一种，不能仅恢复位置和角度。
     visual.canvasCameraPoseEnabled = preset.m_visual.canvasCameraPoseEnabled;
     visual.canvasCameraLength      = preset.m_visual.canvasCameraLength;
-    visual.canvasCameraPosition    = preset.m_visual.canvasCameraPosition;
-    visual.canvasCameraRotation    = preset.m_visual.canvasCameraRotation;
+    // 补偿属于相机布局方案，切换、导入和内置保护均采用同一组字段。
+    visual.canvasMotionCompensation = preset.m_visual.canvasMotionCompensation;
+    visual.canvasThicknessCompensation =
+        preset.m_visual.canvasThicknessCompensation;
+    visual.canvasCameraPosition = preset.m_visual.canvasCameraPosition;
+    visual.canvasCameraRotation = preset.m_visual.canvasCameraRotation;
     // 物件缩放改变后包围盒应沿用同一方案的交互比例。
     // 音符命中仍使用原始时间坐标，此处不移动任何谱面物件。
     visual.interactionHitboxScaleX = preset.m_visual.interactionHitboxScaleX;
