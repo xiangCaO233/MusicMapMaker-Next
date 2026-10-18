@@ -225,7 +225,8 @@ bool controlProjectAudioPreview(const Project&            project,
         project.m_projectRoot / Config::utf8ToPath(resource->m_path);
     audio.registerSoundEffect(
         previewPoolKey, Config::pathToUtf8(absolutePath), resource->m_config);
-    if ( audio.isSFXPaused(previewPoolKey) ) {
+    if ( action == ProjectAudioPreviewAction::Play &&
+         audio.isSFXPaused(previewPoolKey) ) {
         // 已暂停实例不重新加载或从头开始，保持用户预期的继续播放。
         audio.resumeSoundEffect(previewPoolKey);
         return true;
@@ -233,7 +234,8 @@ bool controlProjectAudioPreview(const Project&            project,
     // 首次播放只有在音频层确认资源可用后才继续。
     if ( !audio.ensureSoundEffectLoaded(previewPoolKey) ) return false;
 
-    // 非暂停播放总是先停止旧实例，保证从时间零开始试听。
+    // 显式重新试听无论播放或暂停都停止旧实例，不设置重触发间隔。
+    // 普通播放按钮仍允许续播；资源选择始终要求新的零点播放周期。
     audio.stopSoundEffect(previewPoolKey);
     audio.playSoundEffect(
         previewPoolKey,

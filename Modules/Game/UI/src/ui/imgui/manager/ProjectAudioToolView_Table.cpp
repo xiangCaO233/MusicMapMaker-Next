@@ -1,6 +1,5 @@
 #include "ui/imgui/manager/ProjectAudioToolView.h"
 
-#include "common/LogicCommands.h"
 #include "config/Utf8Path.h"
 #include "logic/EditorEngine.h"
 #include "mmm/project/Project.h"
@@ -130,12 +129,11 @@ void ProjectAudioToolView::renderTableView(float dpiScale)
 
     // 统一选择入口只改变画笔状态，表格明确禁止提升方块层级。
     const auto selectRow = [&](std::size_t index) {
-        const bool changed =
-            m_selectedAudioResourceId != m_items[index].audioResourceId;
         // 不移动 m_items 元素，正在绘制的行引用与后续行索引保持有效。
         // 画笔选择的持久化格式与方块模式一致，旧项目无需迁移。
         if ( auto active = activateItem(index, false) ) {
-            if ( changed ) previewEffectSelection(m_items[*active]);
+            // 重复点击当前行同样重播，不把选中状态当作试听冷却。
+            previewEffectSelection(m_items[*active]);
             persistWorkspace();
         }
     };
@@ -347,7 +345,7 @@ void ProjectAudioToolView::renderTableView(float dpiScale)
                 m_selectedAudioResourceId == item.audioResourceId;
             if ( FeedbackSelectable(item.label.c_str(),
                                     selected,
-                                    ImGuiSelectableFlags_None,
+                                    ImGuiSelectableFlags_AllowDoubleClick,
                                     ImVec2(0.0F, contentHeight)) )
                 selectRow(index);
             if ( ImGui::IsItemHovered() ) {
@@ -363,7 +361,7 @@ void ProjectAudioToolView::renderTableView(float dpiScale)
             ImGui::TextUnformatted(item.audioResourceId.c_str());
 
             // 试听与音量分列，播放控制不再隐式承担音量弹窗入口。
-            // 非选中行允许试听，但不能误改当前画笔音量。
+            // 非选中行可直接试听；音量列发生实际编辑时再切换画笔目标。
             // 横向滚动隐藏试听列时不提交绝对定位控件，防止越界命中。
             if ( ImGui::TableSetColumnIndex(3) ) {
                 const ImVec2 start = ImGui::GetCursorScreenPos();
@@ -389,23 +387,17 @@ void ProjectAudioToolView::renderTableView(float dpiScale)
             }
             // 操作列也检查可见性，滚动出视口后按钮不能覆盖相邻列。
             if ( ImGui::TableSetColumnIndex(4) ) {
-                // 画笔音量属于当前选中资源，不假装为每份采样保存独立音量。
-                // 未选中资源提供明确入口，选择后与方块画笔共用同一个值。
-                // 整数百分比控件沿用五点拖动、一点方向键调节的公共行为。
-                // 不修改资源文件本身，后续放置命令才携带此画笔音量。
-                if ( m_selectedAudioResourceId != item.audioResourceId ) {
-                    if ( FeedbackSmallButton("选择后调节") ) selectRow(index);
-                } else {
-                    ImGui::SetNextItemWidth(-1.0F);
-                    if ( FeedbackVolumeSlider(
-                             "##TableAudioVolume", &m_brushAudioVolume, 200) ) {
-                        Logic::EditorEngine::instance().pushCommand(
-                            Logic::LogicCommand(Logic::CmdSetBrushAudioResource{
-                                item.audioResourceId,
-                                item.type,
-                                m_brushAudioVolume }));
-                        persistWorkspace();
-                    }
+                // 每行直接提供画笔倍率编辑，首次调节同时激活对应资源。
+                // 音量仍是下一次放置的物件倍率，不修改音频文件的基础配置。
+                // 使用局部候选值，未操作行不能在绘制时抢走当前画笔资源。
+                // 编辑不触发选行试听，连续拖动不会反复从头播放采样。
+                float volume = m_brushAudioVolume;
+                ImGui::SetNextItemWidth(-1.0F);
+                if ( FeedbackVolumeSlider(
+                         "##TableAudioVolume", &volume, 200) ) {
+                    m_brushAudioVolume = volume;
+                    // 不提升层级，确保本帧行引用与表格排序继续有效。
+                    if ( activateItem(index, false) ) persistWorkspace();
                 }
             }
             if ( ImGui::TableSetColumnIndex(5) ) {

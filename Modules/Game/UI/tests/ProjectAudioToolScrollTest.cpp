@@ -1,5 +1,6 @@
 #include "ui/imgui/manager/ProjectAudioToolView.h"
 
+#include "audio/AudioManager.h"
 #include "config/AppConfig.h"
 #include "event/core/EventBus.h"
 #include "event/project/ProjectEvents.h"
@@ -7,20 +8,27 @@
 #include "logic/EditorEngine.h"
 #include "logic/ProjectController.h"
 #include "mmm/project/Project.h"
+#include "runtime/AppThreadPool.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/audio/ProjectAudioPreviewControls.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <vector>
 
 /// @file ProjectAudioToolScrollTest.cpp
 /// @brief 使用真实工具视图验证停靠、标签切换和双轴滚动。
-/// @details 不启动 GPU 或音频设备；资源只有内存 ID，不读取用户媒体文件。
+/// @details 不启动 GPU；连续试听通过 SDL 虚拟设备消费构建树中的合成 PCM。
 /// 所有项目写入都位于构建树，ImGui 禁止写入个人工作区 ini。
 namespace
 {
@@ -112,8 +120,10 @@ void prepareResources(MMM::Project& project)
     for ( int index = 0; index < 24; ++index ) {
         // ID 与布局记录一一对应；文件名外观无需真实 wav 文件支持。
         const auto id = "pf1_" + std::to_string(index);
-        project.m_audioResources.push_back(MMM::AudioResource{
-            .m_id = id, .m_type = MMM::AudioTrackType::Effect });
+        project.m_audioResources.push_back(
+            MMM::AudioResource{ .m_id   = id,
+                                .m_path = "preview.wav",
+                                .m_type = MMM::AudioTrackType::Effect });
         // 固定宽高保证溢出来自位置，而不是字体或主题自动尺寸。
         placements.push_back(
             MMM::ProjectAudioToolItemPlacement{ .m_audioResourceId = id,
@@ -123,8 +133,10 @@ void prepareResources(MMM::Project& project)
                                                 .m_height = 100.0F,
                                                 .m_zOrder = index });
     }
-    project.m_audioResources.push_back(MMM::AudioResource{
-        .m_id = "horizontal", .m_type = MMM::AudioTrackType::Effect });
+    project.m_audioResources.push_back(
+        MMM::AudioResource{ .m_id   = "horizontal",
+                            .m_path = "preview.wav",
+                            .m_type = MMM::AudioTrackType::Effect });
     // 高宿主可容纳整列，只留下横向溢出，Shift 滚轮可查看右侧资源。
     placements.push_back(
         MMM::ProjectAudioToolItemPlacement{ .m_audioResourceId = "horizontal",
@@ -133,6 +145,150 @@ void prepareResources(MMM::Project& project)
                                             .m_width           = 140.0F,
                                             .m_height          = 100.0F,
                                             .m_zOrder          = 24 });
+}
+
+/// @brief 写入两秒单声道 PCM，避免测试依赖皮肤或用户项目媒体。
+/// @param root 构建树中的临时项目目录。
+/// @return 文件完整写入时为真。
+/// @details 固定 PCM 格式避免各平台编码器的预延迟影响源位置判断。
+/// 文件保留在构建树，重复运行直接覆盖本测试自己的输出。
+bool writePreviewFixture(const std::filesystem::path& root)
+{
+    // 手工输出固定小端 WAV 头，跨宿主端序保持一致。
+    std::ofstream output(root / "preview.wav", std::ios::binary);
+    /// @brief 按 WAV 小端编码写入指定宽度的无符号字段。
+    /// @param value 宿主字节序中的字段值。
+    /// @param bytes 文件字段宽度，只使用标准 WAV 的二或四字节字段。
+    const auto writeInteger = [&](std::uint32_t value, int bytes) {
+        for ( int i = 0; i < bytes; ++i )
+            output.put(static_cast<char>((value >> (8 * i)) & 0xff));
+    };
+    // 两秒长度足以让测试暂停在中途，不能让自然播完冒充停止重置。
+    // 单声道十六位每帧两字节，RIFF 长度不包含前八个字节。
+    constexpr std::uint32_t frames = 96000;
+    output.write("RIFF", 4);
+    writeInteger(36 + frames * 2, 4);
+    // PCM 的 fmt 块固定十六字节，不写浮点扩展或压缩格式附加字段。
+    output.write("WAVEfmt ", 8);
+    writeInteger(16, 4);
+    writeInteger(1, 2);
+    writeInteger(1, 2);
+    // 字节率等于采样率乘块对齐，和后面的数据长度必须一致。
+    writeInteger(48000, 4);
+    writeInteger(96000, 4);
+    writeInteger(2, 2);
+    writeInteger(16, 2);
+    // data 长度只描述有效 PCM，禁止把资源写到只读源码夹具目录。
+    output.write("data", 4);
+    writeInteger(frames * 2, 4);
+    // 静音仍有完整源游标；断言读取源位置而非猜测墙钟或实际听感。
+    const std::vector<char> silence(frames * 2, 0);
+    output.write(silence.data(), static_cast<std::streamsize>(silence.size()));
+    // 流状态承载创建或写入失败，不依赖异常机制继续运行测试。
+    return output.good();
+}
+
+/// @brief 连续点击同一资源，验证每次选择都从零重播。
+/// @param manager 真实 UI 管理器。
+/// @param view 正在显示的工具实例。
+/// @return 方块与表格均通过重复点击、双击和暂停后重播时为真。
+/// @details 后续点击前让真实音源前进，交替暂停以区分续播和重新起播。
+/// 同资源不切换 ID，因此可检测仅在选中资源变化时播放的错误门控。
+/// 所有点击保持同一坐标和按键，不以移动指针强制重建悬浮状态。
+/// 音源长度远大于断言阈值，自然播完不能满足测试的前进条件。
+/// ImGui 帧时间连续推进，不插入双击超时来规避第二次点击被吞。
+/// 等待只用于测试后端消费 PCM，不加入任何生产交互路径。
+bool checkRapidPreview(MMM::UI::UIManager&            manager,
+                       MMM::UI::ProjectAudioToolView& view)
+{
+    auto* project = MMM::Logic::ProjectController::instance().currentProject();
+    if ( !project ) return false;
+    // 当前项目由控制器拥有，整个点击序列中资源列表保持稳定。
+    // 预览池由 AudioManager 管理，视图只通过公开状态查询验证行为。
+    auto& workspace = project->m_settings.m_workspace;
+    auto& audio     = MMM::Audio::AudioManager::instance();
+    workspace.m_projectAudioToolPreviewEffectOnSelection = true;
+    // 两种模式使用相同独立池键；切换模式不能掩盖既有暂停状态。
+    for ( bool tableMode : { false, true } ) {
+        // 先稳定模式切换和表格测量；首次创建时的隐藏帧不属于点击序列。
+        // 同一视图跨模式复用，不能以销毁旧实例的方式清除暂停位置。
+        view.setTableView(tableMode);
+        for ( int frame = 0; frame < 4; ++frame )
+            drawFrame(manager, view, false);
+        ImVec2 pointer;
+        if ( tableMode ) {
+            // 稳定表格 ID 不依赖翻译标题，避免 CI 语言差异影响命中。
+            // 只选当前活动窗口，不能误用上一模式留下的非活动表格。
+            ImGuiWindow* table = nullptr;
+            for ( auto* window : ImGui::GetCurrentContext()->Windows )
+                if ( window->Active && std::string_view(window->Name)
+                                               .find("ProjectAudioToolTable") !=
+                                           std::string_view::npos )
+                    table = window;
+            if ( !table ) return false;
+            pointer = { table->InnerRect.Min.x + 30,
+                        table->InnerRect.Min.y +
+                            ImGui::GetFrameHeightWithSpacing() + 5 };
+        } else {
+            // 方块主体避开底部播放按钮与边缘控制柄。
+            const auto* canvas = findCanvas();
+            if ( !canvas ) return false;
+            pointer = { canvas->DC.CursorStartPos.x + 94,
+                        canvas->DC.CursorStartPos.y + 64 };
+        }
+        /// @brief 在稳定窗口几何下推进同坐标点击的一个输入边沿。
+        /// @warning 测试帧只驱动生产入口，不注入额外的选择或重播命令。
+        const auto at = [&] {
+            drawFrame(manager, view, false, 0, false, 450, false, pointer);
+        };
+        at();
+        // 四次同坐标点击覆盖单击、双击的第二次按下和下一组点击。
+        for ( int click = 0; click < 4; ++click ) {
+            // 第一击负责创建预览池，后续点击验证既有池的重复触发。
+            // 不在各击之间重新注册资源，避免资源替换掩盖播放状态错误。
+            if ( click > 0 ) {
+                const auto key = MMM::UI::makeProjectAudioPreviewPoolKey(
+                    "tool/" + workspace.m_projectAudioToolSelectedResourceId);
+                // 超时只决定测试失败，不能把设备未前进当作零点重播成功。
+                // 使用单调时钟避免系统时间调整延长等待或提前结束。
+                const auto deadline =
+                    std::chrono::steady_clock::now() + std::chrono::seconds(2);
+                // 首次重播后的源位置必须真正前进，暂停状态才有续播意义。
+                while ( audio.getSFXPlaybackTime(key) < 0.15 &&
+                        std::chrono::steady_clock::now() < deadline )
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                if ( audio.getSFXPlaybackTime(key) < 0.15 ) return false;
+                // 交替覆盖正在播放和暂停两种状态；两者都必须重置源位置。
+                if ( click % 2 != 0 ) audio.pauseSoundEffect(key);
+            }
+            // 真实后端按下和释放分帧；不直接操作 ImGui 的双击计数。
+            // 因而连续点击必须经过与用户相同的双击判定与拖动状态机。
+            ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            at();
+            ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            at();
+            const auto key = MMM::UI::makeProjectAudioPreviewPoolKey(
+                "tool/" + workspace.m_projectAudioToolSelectedResourceId);
+            // 新播放周期不能继承暂停位置，也不能继续保持暂停。
+            // 读取的是最新实例源游标，旧实例自然排空不会使本断言误过。
+            // 容许音频线程在点击帧之间消费少量 PCM，但不容许保留旧进度。
+            // 没有加载成功的空池也必须失败，不能仅以零位置判断重播成功。
+            if ( !audio.isSFXPlaying(key) ||
+                 audio.getSFXPlaybackTime(key) >= 0.15 ) {
+                XERROR("Preview restart failed: table={}, click={}, time={}",
+                       tableMode,
+                       click,
+                       audio.getSFXPlaybackTime(key));
+                return false;
+            }
+        }
+    }
+    // 后续几何测试不需要自动试听，恢复方块模式与项目开关。
+    // 保留点击生成的布局，后续吸附夹具会通过正常保存事件重新建立基线。
+    // 这里只恢复测试开关，不卸载再重建池来修饰序列中的播放结果。
+    workspace.m_projectAudioToolPreviewEffectOnSelection = false;
+    view.setTableView(false);
+    return true;
 }
 
 /// @brief 通过真实鼠标操作验证音量松手、保存重建及移开指针均不关闭弹层。
@@ -430,6 +586,10 @@ bool checkScrolling(MMM::UI::UIManager&            manager,
 /// 方块窗口必须停止提交，证明切换式展示没有叠加两个交互区域。
 /// 真实行点击验证共享画笔选择，而非直接修改工具私有状态。
 /// 布局逐项比较包括资源身份和 Z 序，避免数量相同却顺序被改变。
+/// 未选中行的音量通过真实 Slider 输入调整，不能先借助行按钮激活。
+/// 音量提交后验证画笔倍率与资源 ID 同时保存，排除只改变显示的情况。
+/// 横向裁剪下先导航到音量列，再依据实际列边界确定鼠标目标。
+/// 切回方块后继续保留刚调节的音量目标，不还原首次点击的资源。
 bool checkTableView(MMM::UI::UIManager&            manager,
                     MMM::UI::ProjectAudioToolView& view)
 {
@@ -481,6 +641,61 @@ bool checkTableView(MMM::UI::UIManager&            manager,
              original[i].m_zOrder != current[i].m_zOrder )
             return false;
     }
+    // 窄宿主中的音量列位于横向溢出区，先把真实表格滚动到右侧。
+    // 调整的是窗口滚动目标，列宽和控件命中仍由生产表格生成。
+    ImGui::SetScrollX(table, table->ScrollMax.x);
+    for ( int frame = 0; frame < 2; ++frame ) drawFrame(manager, view, true);
+    // 第二行尚未选中，直接拖动其音量必须同时激活资源并保存新倍率。
+    // 不先点击文件名，防止“先选择后调节”的旧入口伪装成通过。
+    auto* columns = ImGui::GetCurrentContext()->Tables.GetByKey(
+        table->ParentWindow->GetID("ProjectAudioToolTableV2"));
+    if ( !columns || columns->ColumnsCount != 6 ) {
+        XERROR("Project audio table columns unavailable");
+        return false;
+    }
+    const auto& volumeColumn = columns->Columns[4];
+    const float left =
+        std::max(volumeColumn.WorkMinX, volumeColumn.ClipRect.Min.x);
+    const float right =
+        std::min(volumeColumn.WorkMaxX, volumeColumn.ClipRect.Max.x);
+    // 以实际可见列区域定位，不把隐藏或裁剪区域当作可用控件。
+    if ( right - left < 10 ) {
+        XERROR("Project audio volume column clipped: left={}, right={}",
+               left,
+               right);
+        return false;
+    }
+    const float rowHeight =
+        ImGui::GetFrameHeight() + 9 + ImGui::GetStyle().CellPadding.y * 2;
+    // 根据旧倍率选择相反半区，重复运行也不会恰好点中当前滑块值。
+    const float fraction =
+        workspace.m_projectAudioToolBrushVolume < 1.0F ? 0.8F : 0.2F;
+    const ImVec2 volumePointer{ left + (right - left) * fraction,
+                                pointer.y + rowHeight };
+    const auto   previousResource =
+        workspace.m_projectAudioToolSelectedResourceId;
+    const float previousVolume = workspace.m_projectAudioToolBrushVolume;
+    // 移动、按下和释放各自独立成帧，覆盖真实滑块激活和最终提交。
+    drawFrame(manager, view, true, 0, false, 450, false, volumePointer);
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    drawFrame(manager, view, true, 0, false, 450, false, volumePointer);
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    drawFrame(manager, view, true, 0, false, 450, false, volumePointer);
+    // 断言生产持久化结果，不借用视图私有音量或直接调用选择 helper。
+    if ( workspace.m_projectAudioToolSelectedResourceId == previousResource ||
+         std::abs(workspace.m_projectAudioToolBrushVolume - previousVolume) <
+             0.001F ) {
+        XERROR(
+            "Unselected table row volume edit failed: resource={} -> {}, "
+            "volume={} -> {}, pointer={},{}",
+            previousResource,
+            workspace.m_projectAudioToolSelectedResourceId,
+            previousVolume,
+            workspace.m_projectAudioToolBrushVolume,
+            volumePointer.x,
+            volumePointer.y);
+        return false;
+    }
     const auto selected = workspace.m_projectAudioToolSelectedResourceId;
     // 复用原实例切回，不能依靠析构重建恢复默认布局来通过测试。
     view.setTableView(false);
@@ -492,7 +707,9 @@ bool checkTableView(MMM::UI::UIManager&            manager,
 }  // namespace
 
 /// @brief 在隔离配置和项目目录中运行真实 UI 回归。
-/// @return 全部滚动行为通过时返回零。
+/// @return 滚动、音量编辑与连续重播行为全部通过时返回零。
+/// @details 后端在 UI 交互期间消费真实 PCM，不以固定零游标伪造重播成功。
+/// 虚拟设备不提供实际听感验收，音频断言只覆盖源游标和播放状态。
 int main()
 {
     // 单例按生产依赖顺序创建，避免事件订阅者晚于事件总线析构。
@@ -506,6 +723,15 @@ int main()
     if ( error || !controller.openProject(root).m_opened ) return 1;
     // 开放控制器接口提供生产视图的数据源，不改私有状态或使用测试替身。
     prepareResources(*controller.currentProject());
+    if ( !writePreviewFixture(root) ) return 1;
+    // CTest 显式选择 dummy 驱动；真实音频图用于验证源游标复位。
+    auto& audioSettings =
+        MMM::Config::AppConfig::instance().getEditorSettings();
+    audioSettings.audioPlaybackBackend = MMM::Config::AudioPlaybackBackend::SDL;
+    audioSettings.sdlAudioOutputDeviceName.clear();
+    MMM::Runtime::AppThreadPool::instance().init();
+    auto& audio = MMM::Audio::AudioManager::instance();
+    audio.init();
     // CTest 已隔离 AppConfig 根；这里只修改本进程测试偏好。
     MMM::Config::AppConfig::instance().getEditorSettings().professionalMode =
         true;
@@ -532,6 +758,10 @@ int main()
         passed = checkVolumePopup(manager, view);
         if ( !passed ) XERROR("Project audio volume popup regression");
         if ( passed ) {
+            passed = checkRapidPreview(manager, view);
+            if ( !passed ) XERROR("Project audio repeated preview regression");
+        }
+        if ( passed ) {
             passed = checkSnapToggle(manager, view);
             if ( !passed ) XERROR("Project audio snapping toggle regression");
         }
@@ -547,6 +777,10 @@ int main()
     // 先关闭生产项目数据源，再销毁 ImGui；控制器不保留工具视图的窗口指针。
     controller.closeProject();
     ImGui::DestroyContext();
+    // 图形视图先析构再停止音频，避免 UI 的试听状态查询访问已清理的池。
+    // 音频后台全部退出后再销毁线程池，准备任务不能失去执行资源。
+    audio.shutdown();
+    MMM::Runtime::AppThreadPool::instance().shutdown();
     if ( !passed ) XERROR("Project audio tool docked scrolling regression");
     return passed ? 0 : 1;
 }

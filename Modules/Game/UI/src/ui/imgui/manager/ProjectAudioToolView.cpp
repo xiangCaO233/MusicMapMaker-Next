@@ -1046,7 +1046,7 @@ void ProjectAudioToolView::previewEffectSelection(const Item& item) const
     (void)controlProjectAudioPreview(*project,
                                      item.audioResourceId,
                                      item.previewPoolKey,
-                                     ProjectAudioPreviewAction::Play,
+                                     ProjectAudioPreviewAction::Restart,
                                      m_brushAudioVolume);
 }
 

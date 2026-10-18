@@ -607,13 +607,16 @@ mmm_register_test_case(
   NAME ProjectResourceImportTest COMMAND ProjectResourceImportTest
   "${CMAKE_BINARY_DIR}/test_output")
 
-# 覆盖项目音频工具停靠后的画布滚动。 测试驱动真实视图和共享 Dock 标签，不初始化 GPU 或音频设备。
+# 覆盖项目音频工具滚动、音量和连续重播。测试使用真实视图和 SDL 虚拟音频输出，不初始化 GPU。
 # 项目夹具由隔离配置目录和构建树输出承载，不读取用户媒体资源。
 mmm_add_test_executable(UI ProjectAudioToolScrollTest
                         tests/ProjectAudioToolScrollTest.cpp)
 target_link_libraries(ProjectAudioToolScrollTest PRIVATE UI 3rd_imgui)
 mmm_register_test_case(NAME ProjectAudioToolScrollTest COMMAND
                        ProjectAudioToolScrollTest)
+# 虚拟后端仅消费测试合成 PCM，不占用用户声卡，也不会在 CI 发出声音。
+set_tests_properties(ProjectAudioToolScrollTest
+                     PROPERTIES ENVIRONMENT "SDL_AUDIODRIVER=dummy")
 
 # 新建向导资源改名验证真实文件事务、共享图片绑定和音频测量草稿保留。 输出目录明确位于构建树，测试不得创建或清理源码资源目录中的文件。
 mmm_add_test_executable(UI NewBeatmapWizardResourceRenameTest
