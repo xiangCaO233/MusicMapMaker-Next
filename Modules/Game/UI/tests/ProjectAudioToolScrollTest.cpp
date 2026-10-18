@@ -730,11 +730,79 @@ bool checkTableView(MMM::UI::UIManager&            manager,
         XERROR("Project audio table context menu ID conflict");
         return false;
     }
-    // 本轮只验证菜单内容与 ID；关闭弹窗作为测试清理，不额外测试焦点策略。
-    // 使用 ImGui 的关闭入口恢复栈，不能销毁工具来掩盖菜单产生的表格状态。
-    ImGui::ClosePopupToLevel(0, true);
-    // 下一帧让表格消费关闭状态，再继续同一视图的行选择和音量操作。
-    at(header);
+    // 同一弹层中的列菜单还必须真实生效，不能只满足 ID 唯一性。
+    // 保存所属表格指针仅用于本测试同步帧，不以 popup 的当前表格作目标。
+    auto* targetTable = context.Tables.GetByKey(
+        table->ParentWindow->GetID("ProjectAudioToolTableV2"));
+    if ( !targetTable ) return false;
+    // 每列分别隐藏再显示，操作过程中其他五列保持可见。
+    // 固定使用物理列号匹配菜单字段，表头的可见位置不代表资源字段身份。
+    // 每一轮先恢复完整可见状态，下一轮不会因上轮隐藏项而改变预期集合。
+    // 六个物理列都经过实际菜单点击，覆盖固定列、伸缩列及不可排序列。
+    for ( int key = 5; key >= 0; --key ) {
+        for ( const bool enabled : { false, true } ) {
+            if ( context.OpenPopupStack.empty() ) {
+                // 菜单通常由上次点击关闭；再次从真实表头右键打开。
+                // 隐藏文件名后，同一表头区域仍属于外层表格，右键入口必须可用。
+                // 先移回表头再投递按下边沿，让上一帧悬停状态匹配实际窗口。
+                at(header);
+                ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right,
+                                                   true);
+                at(header);
+                ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right,
+                                                   false);
+                at(header);
+                at(header);
+            }
+            if ( context.OpenPopupStack.empty() ||
+                 !context.OpenPopupStack.back().Window )
+                return false;
+            // 每次重新取本轮弹层窗口，不把旧弹层的几何当作当前命中范围。
+            // 这里只读取实际打开栈，不能直接 OpenPopup 来绕过生产表头逻辑。
+            popup = context.OpenPopupStack.back().Window;
+            // 自动测量完成后按底部六个连续菜单项定位，不依赖中文文本宽度。
+            // 弹层可能使用独立行距，必须从最后一行布局读出实际步长。
+            // 不能套用测试宿主的 ItemSpacing，累计偏差会让上方菜单项误命中。
+            at(header);
+            at(header);
+            const ImVec2 columnItem{ popup->Pos.x + popup->WindowPadding.x + 20,
+                                     popup->DC.CursorPosPrevLine.y +
+                                         popup->DC.PrevLineSize.y * 0.5F -
+                                         (5 - key) *
+                                             (popup->DC.CursorPos.y -
+                                              popup->DC.CursorPosPrevLine.y) };
+            at(columnItem);
+            ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            at(columnItem);
+            ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            at(columnItem);
+            // 列显隐在下一轮表格布局应用，不能只检查请求位就宣称已隐藏。
+            // 同时检查最终状态和下一帧状态，排除被每帧初始化覆盖的情况。
+            // IsEnabled 表示用户显隐结果，不用横向裁剪造成的 IsVisible 作判断。
+            // 表格较窄时试听列可能暂时在视口外，这不应被当作用户已经隐藏。
+            at(header);
+            for ( int column = 0; column < 6; ++column ) {
+                // 目标列可变，其余列必须保持开启，防止弹层错误关联另一列。
+                // 恢复开启也走同一个菜单项，验证取消勾选后仍能找到该资源字段。
+                const bool expected = column == key ? enabled : true;
+                if ( targetTable->Columns[column].IsEnabled != expected ||
+                     targetTable->Columns[column].IsUserEnabledNextFrame !=
+                         expected ) {
+                    XERROR(
+                        "Table column visibility failed: clicked={}, "
+                        "column={}, expected={}",
+                        key,
+                        column,
+                        expected);
+                    return false;
+                }
+            }
+        }
+    }
+    // 菜单点击应自行关闭，不能用关闭栈的清理调用掩盖点击未被接受。
+    // 后续行选择和音量编辑沿用同一表格，留下的弹层会继续阻挡实际点击。
+    // 因此关闭状态同样属于菜单操作契约，不只是测试之间的可选清理。
+    if ( !context.OpenPopupStack.empty() ) return false;
     // 指针放在首行文件名列，按真实按下/松开时序激活公共 Selectable。
     // 使用实际表格几何而非固定坐标，避免顶部工具栏增加后点击到搜索框。
     // 先移动再按下，保持与 GLFW 后端逐帧投递输入的时序一致。

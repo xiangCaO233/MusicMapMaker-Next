@@ -219,6 +219,13 @@ void ProjectAudioToolView::renderTableView(float dpiScale)
     // 不额外叠加独立窗口，否则会留下两个互相竞争的右键菜单。
     auto* table = ImGui::GetCurrentTable();
     if ( ImGui::TableBeginContextMenuPopup(table) ) {
+        /// @brief 将菜单中的列显隐请求排队到所属表格的下一次布局。
+        /// @warning 只由菜单点击调用；弹层中不能依赖 ImGui 的当前表格上下文。
+        const auto setColumnEnabled = [table](int key, bool enabled) {
+            // Popup 拥有独立窗口，TableSetColumnEnabled 找不到外层表格。
+            // 直接针对借用的目标表排队，与其他资源表保持相同处理方式。
+            table->Columns[key].IsUserEnabledNextFrame = enabled;
+        };
         // 右键可能落在表头后的空白区域，不能将该值用于列数组下标。
         // 当前列适配只有有效物理列才开放，全表适配始终可用。
         const int column = table->ContextPopupColumn;
@@ -263,8 +270,7 @@ void ProjectAudioToolView::renderTableView(float dpiScale)
             // 显隐请求下一轮布局时生效，不打断当前表头提交。
             // 即使试听或音量列被隐藏，也能从这里恢复访问入口。
             if ( FeedbackMenuItem("显示所有列") ) {
-                for ( int key = 0; key < 6; ++key )
-                    ImGui::TableSetColumnEnabled(key, true);
+                for ( int key = 0; key < 6; ++key ) setColumnEnabled(key, true);
             }
             // 只恢复文件名升序，保留其余布局定制。
             // 单字段排序禁止累加旧字段，点击表头行为与菜单一致。
@@ -286,7 +292,7 @@ void ProjectAudioToolView::renderTableView(float dpiScale)
                                   nullptr,
                                   enabled,
                                   !enabled || enabledCount > 1) )
-                ImGui::TableSetColumnEnabled(key, !enabled);
+                setColumnEnabled(key, !enabled);
         }
         ImGui::EndPopup();
     }
