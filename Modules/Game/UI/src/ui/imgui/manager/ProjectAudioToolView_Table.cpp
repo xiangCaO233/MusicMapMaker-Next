@@ -413,12 +413,19 @@ void ProjectAudioToolView::renderTableView(float dpiScale)
                 // 编辑不触发选行试听，连续拖动不会反复从头播放采样。
                 float volume = item.audioVolume;
                 ImGui::SetNextItemWidth(-1.0F);
-                if ( FeedbackVolumeSlider(
-                         "##TableAudioVolume", &volume, 200) ) {
+                const bool volumeChanged =
+                    FeedbackVolumeSlider("##TableAudioVolume", &volume, 200);
+                if ( volumeChanged ) {
                     item.audioVolume = volume;
+                    // 数值与画笔立即同步，拖动期间不保存项目或触发全部方块重建。
                     // 不提升层级，确保本帧行引用与表格排序继续有效。
-                    if ( activateItem(index, false) ) persistWorkspace();
+                    activateItem(index, false);
                 }
+                // 松手提交一次最终状态；方向键等非激活编辑则按实际修改提交。
+                // 即使释放帧数值未再变化，也要保存前面拖动产生的最终倍率。
+                if ( ImGui::IsItemDeactivatedAfterEdit() ||
+                     (volumeChanged && !ImGui::IsItemActive()) )
+                    persistWorkspace();
             }
             if ( ImGui::TableSetColumnIndex(5) ) {
                 // 文件名列已有选择入口，操作列专注复用已有重命名弹窗。

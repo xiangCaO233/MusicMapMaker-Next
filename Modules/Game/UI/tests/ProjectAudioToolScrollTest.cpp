@@ -990,12 +990,38 @@ bool checkTableView(MMM::UI::UIManager&            manager,
     const auto   previousResource =
         workspace.m_projectAudioToolSelectedResourceId;
     const float previousVolume = workspace.m_projectAudioToolBrushVolume;
+    // 统计真实项目保存通知，拖动期间不得保存整份项目或使资源布局缓存反复失效。
+    // 仅观察事件，不屏蔽生产保存回调，也不直接改写工作区来模拟提交。
+    int        saves            = 0;
+    const auto saveSubscription = MMM::Event::EventBus::instance()
+                                      .subscribe<MMM::Event::ProjectSavedEvent>(
+                                          [&](const auto&) { ++saves; });
     // 移动、按下和释放各自独立成帧，覆盖真实滑块激活和最终提交。
     drawFrame(manager, view, true, 0, false, 450, false, volumePointer);
     ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
     drawFrame(manager, view, true, 0, false, 450, false, volumePointer);
+    // 保持按下并连续移动，覆盖多个实际百分数变化，而非只测试单击设置。
+    for ( int frame = 0; frame < 8; ++frame ) {
+        const ImVec2 moving{ left + (right - left) * (0.3F + frame * 0.06F),
+                             volumePointer.y };
+        drawFrame(manager, view, true, 0, false, 450, false, moving);
+    }
+    // 松开帧即使不再产生数值变化，也必须提交此前积累的最终音量。
+    // 使用实际保存事件核对提交次数，避免仅凭界面数值判断已落盘。
+    // 测试不允许临时禁用项目事件来掩盖拖动过程中的缓存重建。
+    // 后续既有断言还会验证独立采样值，防止合并保存破坏音量归属。
+    const int savesWhileDragging = saves;
     ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
     drawFrame(manager, view, true, 0, false, 450, false, volumePointer);
+    // 先取消观察订阅再判断，失败分支也不能留下捕获栈变量的回调。
+    MMM::Event::EventBus::instance().unsubscribe<MMM::Event::ProjectSavedEvent>(
+        saveSubscription);
+    if ( savesWhileDragging != 0 || saves != 1 ) {
+        XERROR("Sample volume saves during drag={}, total={}",
+               savesWhileDragging,
+               saves);
+        return false;
+    }
     // 断言生产持久化结果，不借用视图私有音量或直接调用选择 helper。
     if ( workspace.m_projectAudioToolSelectedResourceId == previousResource ||
          std::abs(workspace.m_projectAudioToolBrushVolume - previousVolume) <

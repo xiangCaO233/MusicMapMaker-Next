@@ -80,6 +80,35 @@ int main()
             audio.getPlaybackPitch(),
             static_cast<int>(audio.getPlaybackQuality()));
     }
+    // 连续主轨调参只能更新 BGM 和 EQ，不能顺带把其他预设字段重新应用。
+    // 故意令配置里的 Key 增益、全局音量与变速参数不同于当前运行值。
+    app.getEditorSettings().globalVolume              = 0.9F;
+    app.getEditorSettings().bgmGain                   = 0.7F;
+    app.getEditorSettings().sfxConfig.boundHitSfxGain = 0.8F;
+    preset.m_speed                                    = 1.5;
+    preset.m_pitch                                    = 5;
+    preset.m_quality                                  = 0;
+    // 配置与运行时故意不一致，使误用完整预设入口可被直接检测。
+    // 循环模拟一次连续拖动的多个变化边沿，不依赖系统时钟或睡眠。
+    // 本用例不将控制参数正确性推断为真实播放帧率或硬件音频延迟。
+    for ( int step = 0; step < 20; ++step ) {
+        // 同类型 EQ 的单频段更新应立即生效，不能等到松手或重新播放。
+        // 每轮采用不同值，避免仅验证最后一次重复设置造成的空操作。
+        const float gain    = -5.0F + step * 0.1F;
+        preset.m_eqGains[3] = gain;
+        audio.applyMainTrackPreviewParameters();
+        valid &= std::abs(audio.getMainTrackEQBandGain(3) - gain) < 0.001F;
+        valid &= audio.getMainTrackEQBandCount() == 10 &&
+                 audio.getGlobalVolume() == 0.3F && audio.getBGMGain() == 0.7F;
+        // 拉伸器质量和速度与本次 EQ 操作无关，不能被完整预设应用覆盖。
+        valid &= audio.getPlaybackSpeed() == 0.75 &&
+                 audio.getPlaybackPitch() == -3 &&
+                 audio.getPlaybackQuality() ==
+                     MMM::Audio::AudioManager::StretchQuality::Best;
+        valid &= std::abs(audio.getKeySoundEffectGroupGain(
+                              MMM::Audio::KeySoundEffectGroup::Bound) -
+                          0.2F) < 1.0F / 32768.0F;
+    }
     // 关闭 EQ 必须拆除节点，不能只隐藏控件后继续处理声音。
     // 保留已设置的数组，仅关闭布局，验证开关而不是空数组导致旁路。
     // 与解除静音同时执行，覆盖一次应用处理多个不同状态的能力。

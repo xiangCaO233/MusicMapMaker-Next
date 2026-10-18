@@ -55,23 +55,10 @@ void AudioManager::applyAudioPreset(bool applyPlayback)
         }
     }
     // 所有基础值落定后刷新有效增益，避免沿用旧分组乘积。
-    refreshAudioTimelineVolume();
-    refreshAuditionTrackVolume();
     refreshSFXEffectiveVolumes();
     updateSFXSyncSpeedRouting(sfx.hitSfxSyncSpeed);
-    // EQ 是客户端试听节点，切换不会触发项目资源的离线重采样。
-    // 只有 EQ 类型改变时才分配节点；同类型参数更新复用现有滤波器。
-    // 关闭 EQ 走既有路由拆除入口，保持频谱采集链不断开。
-    const auto eq = static_cast<EQPreset>(preset.m_eqPreset);
-    if ( getMainTrackEQPreset() != eq ) createMainTrackEQ(eq);
-    // 类型定义实际段数，缺少数组成员采用中性增益及默认 Q。
-    // 多余数组元素不扩展音频图，也不创建未知中心频率。
-    for ( size_t i = 0; i < getMainTrackEQBandCount(); ++i ) {
-        setMainTrackEQBandGain(
-            i, i < preset.m_eqGains.size() ? preset.m_eqGains[i] : 0.0F);
-        setMainTrackEQBandQ(
-            i, i < preset.m_eqQs.size() ? preset.m_eqQs[i] : 1.414F);
-    }
+    // 主轨参数使用与连续调节相同的增量入口，避免重复发布相同滤波链。
+    applyMainTrackPreviewParameters();
     // 既有 setter 维护拉伸器 discontinuity 与音效调度边界。
     // 它们只改变试听，不把速度、音高烘焙进谱面文件。
     // 速度、音高和质量必须一起恢复，避免只恢复界面读数。
@@ -82,5 +69,35 @@ void AudioManager::applyAudioPreset(bool applyPlayback)
         setPlaybackPitch(preset.m_pitch);
     }
     setPlaybackQuality(static_cast<StretchQuality>(preset.m_quality));
+}
+/// @brief 仅更新主轨监听参数，保留音效池、PCM 调度和拉伸器状态。
+/// @warning 用户连续调参路径；不执行文件操作、音效池遍历或全局路由重接。
+void AudioManager::applyMainTrackPreviewParameters()
+{
+    const auto& app      = Config::AppConfig::instance();
+    const auto& settings = app.getEditorSettings();
+    const auto& preset   = app.getAudioPresets().current();
+    // 主轨音量是总线标量，只刷新时间线与独立试听的有效增益。
+    m_bgmGain      = settings.bgmGain;
+    m_bgmGainMuted = settings.bgmGainMuted;
+    refreshAudioTimelineVolume();
+    refreshAuditionTrackVolume();
+    // 切换频段类型才创建节点；拖动单频段不重新接线或替换解码缓存。
+    const auto eq = static_cast<EQPreset>(preset.m_eqPreset);
+    if ( getMainTrackEQPreset() != eq ) createMainTrackEQ(eq);
+    // 段数由实际节点决定，损坏或旧版配置数组不能扩展运行时滤波器。
+    // 缺少的元素使用中性值，多余元素留在配置中但不访问未知频段。
+    // 比较运行时值而非另存影子副本，兼容其他入口切换或关闭 EQ。
+    const auto bands = getMainTrackEQBandCount();
+    for ( size_t i = 0; i < bands; ++i ) {
+        const float gain =
+            i < preset.m_eqGains.size() ? preset.m_eqGains[i] : 0.0F;
+        const float q = i < preset.m_eqQs.size() ? preset.m_eqQs[i] : 1.414F;
+        // ICE 单频段 setter 会发布完整滤波状态，只对实际改变的参数调用。
+        // 这样拖动一个增益不会对全部十段或十五段重复构造两遍状态。
+        if ( getMainTrackEQBandGain(i) != gain )
+            setMainTrackEQBandGain(i, gain);
+        if ( getMainTrackEQBandQ(i) != q ) setMainTrackEQBandQ(i, q);
+    }
 }
 }  // namespace MMM::Audio

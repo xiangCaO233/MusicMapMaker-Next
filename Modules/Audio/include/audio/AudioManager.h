@@ -630,6 +630,11 @@ public:
     /// 是否直接恢复速度与音高；活动会话由逻辑命令同步时钟。
     void applyAudioPreset(bool applyPlayback = true);
 
+    /// @brief 实时应用当前预设的 BGM 增益与 EQ，不遍历音效池或改变拉伸路由。
+    /// @warning 仅由参数修改边沿调用；同类型 EQ
+    /// 只向变化频段发布参数，不读写磁盘。
+    void applyMainTrackPreviewParameters();
+
     /// @brief 获取主音轨拉伸质量
     StretchQuality getPlaybackQuality() const;
 

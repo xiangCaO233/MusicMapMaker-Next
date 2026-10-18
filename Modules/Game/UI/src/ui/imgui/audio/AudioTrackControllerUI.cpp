@@ -53,6 +53,13 @@ AudioTrackControllerUI::AudioTrackControllerUI(const std::string& trackId,
 {
 }
 
+/// @brief 关闭视图生命周期时保存最后一次实时调参结果。
+/// @warning 低频销毁路径，只在仍有未提交参数时进行一次配置保存。
+AudioTrackControllerUI::~AudioTrackControllerUI()
+{
+    if ( m_audioSettingsSavePending ) Config::AppConfig::instance().save();
+}
+
 /// @brief 请求下一次显示时停靠到指定 Dock 节点。
 /// @param dockId 目标 ImGui Dock 节点 ID，0 表示不改变停靠位置。
 /// @warning UI 状态写入；实际 Docking 只在后续 update 开始时提交。
@@ -105,6 +112,11 @@ void AudioTrackControllerUI::requestFocus()
 void AudioTrackControllerUI::update(UIManager* sourceManager)
 {
     if ( !m_isOpen ) {
+        // 窗口隐藏也必须提交最后参数，不能等待用户下次打开才持久化。
+        if ( m_audioSettingsSavePending ) {
+            Config::AppConfig::instance().save();
+            m_audioSettingsSavePending = false;
+        }
         // 窗口关闭时撤销尚未提交的拖动草稿，不带入下次打开。
         m_speedSliderEditing = false;
         m_pitchSliderEditing = false;
@@ -330,9 +342,9 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
             preset.m_eqGains  = config->eqBandGains;
             preset.m_eqQs     = config->eqBandQs;
             // 只更新试听图，不提交项目资源命令，也不改变导出的原始音量。
-            audio.applyAudioPreset(false);
-            // 保存会捕获最新总线数值，未选中预设不参与覆盖。
-            app.save();
+            audio.applyMainTrackPreviewParameters();
+            // 运行参数立即生效，连续拖动不序列化完整配置或进行磁盘保存。
+            m_audioSettingsSavePending = true;
         }
         if ( changed && !readOnly && m_type != TrackType::Main ) {
             if ( config ) {
@@ -375,20 +387,27 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
             // 完整重建资源会改变导出结果，这里只发布实时试听节点。
             auto& app = Config::AppConfig::instance();
             app.getAudioPresets().current().m_speed = speed;
-            app.save();
+            m_audioSettingsSavePending              = true;
             engine.pushCommand(Logic::CmdSetPlaybackSpeed{ speed });
         }
         if ( pitchChanged && !readOnly ) {
             // 主轨变调直接更新全局拉伸器，音频资源和项目文件均不变。
             auto& app = Config::AppConfig::instance();
             app.getAudioPresets().current().m_pitch = pitch;
-            app.save();
+            m_audioSettingsSavePending              = true;
             engine.pushCommand(Logic::CmdSetPlaybackPitch{ pitch });
         }
     } else {
         // 折叠窗口不提交未完成的交互，下一次展开从项目配置读取。
         m_speedSliderEditing = false;
         m_pitchSliderEditing = false;
+    }
+    // 只在手势结束后保存一次；光标停留但仍按住滑块时不能写盘。
+    // 这里不延迟本地声音反馈，也不以固定等待窗口阻塞 UI。
+    if ( m_audioSettingsSavePending && !ImGui::IsAnyItemActive() &&
+         !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        Config::AppConfig::instance().save();
+        m_audioSettingsSavePending = false;
     }
     // Begin 无论是否展开内容都必须配对 End。
     ImGui::End();

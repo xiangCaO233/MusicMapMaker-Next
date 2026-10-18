@@ -41,7 +41,8 @@ public:
     AudioTrackControllerUI(const std::string& trackId,
                            const std::string& trackName, TrackType type);
 
-    ~AudioTrackControllerUI() override = default;
+    /// @brief 在控制器销毁时收尾尚未落盘的客户端调参状态。
+    ~AudioTrackControllerUI() override;
 
     void update(UIManager* sourceManager) override;
 
@@ -88,6 +89,9 @@ public:
     TrackType getTrackType() const { return m_type; }
 
 private:
+    /// @brief 实时主轨参数已更新，等待手势结束后保存一次客户端配置。
+    bool m_audioSettingsSavePending{ false };
+
     /// @brief 音轨控制器布局测量缓存。
     struct LayoutMetricsCache {
         /// @brief 缓存是否可用。
