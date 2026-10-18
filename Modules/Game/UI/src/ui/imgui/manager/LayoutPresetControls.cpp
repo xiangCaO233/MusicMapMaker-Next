@@ -118,7 +118,7 @@ void openFile(bool exporting)
 /// @warning 每帧只借用 AppConfig，容器复制仅发生在明确操作边沿。
 /// @details 相机模式和元素模式共用入口，避免切换编辑模式后找不到方案。
 /// 名称输入只修改临时草稿，复制与重命名通过库执行冲突检查。
-/// 下拉选择不改变集合结构，管理按钮在枚举结束后才可能增删元素。
+/// 下拉选择可能自动建立自定义副本，因此操作成功后立即结束原容器枚举。
 /// 状态文案持续显示，用户无需从日志判断导入是否成功。
 bool drawLayoutPresetControls()
 {
@@ -126,12 +126,17 @@ bool drawLayoutPresetControls()
     auto& library = app.getLayoutPresets();
     bool  changed = false;
     // 下拉框显示全部方案，选择前库会捕获当前尚未保存的拖动结果。
-    if ( ImGui::BeginCombo("布局预设", library.m_selected.c_str()) ) {
+    if ( ImGui::BeginCombo("布局预设", library.current().displayName()) ) {
         for ( const auto& item : library.m_items ) {
-            if ( ImGui::Selectable(item.m_name.c_str(),
-                                   item.m_name == library.m_selected) ) {
+            // 显示名添加内置标志，ID
+            // 仍按稳定名称隔离，避免与同名自定义展示冲突。
+            ImGui::PushID(item.m_name.c_str());
+            const bool selected = FeedbackSelectable(
+                item.displayName(), item.m_name == library.m_selected);
+            ImGui::PopID();
+            if ( selected ) {
                 changed = library.select(item.m_name, app.getVisualConfig());
-                // 自动收存默认现场可能插入新项，选择后不再继续使用旧迭代器。
+                // 自动收存内置现场可能插入新项，选择后不再继续使用旧迭代器。
                 break;
             }
         }
@@ -152,15 +157,15 @@ bool drawLayoutPresetControls()
         }
         ImGui::SameLine();
         // 改名保留布局和所有键数覆盖，不进行按当前键数裁剪。
-        // 软件默认是固定基准，只允许复制后再命名或编辑。
-        ImGui::BeginDisabled(library.m_selected == "默认");
+        // 内置方案都是固定基准，只允许复制后再命名或编辑。
+        ImGui::BeginDisabled(library.current().isBuiltIn());
         if ( FeedbackButton("重命名") ) {
             changed = library.rename(state.m_name.data());
             if ( !changed ) state.m_status = "名称不能为空或重复。";
         }
         ImGui::EndDisabled();
         // 删除最后一个方案会使实时布局失去归属，因此保持禁用。
-        ImGui::BeginDisabled(library.m_selected == "默认" ||
+        ImGui::BeginDisabled(library.current().isBuiltIn() ||
                              library.m_items.size() <= 1);
         if ( FeedbackButton("删除当前预设") )
             changed = library.remove(app.getVisualConfig());
@@ -177,7 +182,8 @@ bool drawLayoutPresetControls()
         changed = true;
     }
     ImGui::TextWrapped(
-        "默认布局来自软件代码；首次修改会自动建立自定义预设并实时保存。");
+        "标有(内置)"
+        "的布局来自软件代码；首次修改会自动建立自定义预设并实时保存。");
     // 一次交互只发布一次配置；空闲帧不复制方案或保存文件。
     // 管理项引用已在上方失效前使用完毕，发布不会借用旧容器元素。
     // 成功反馈来自实际配置写入结果，避免磁盘满时假报保存成功。

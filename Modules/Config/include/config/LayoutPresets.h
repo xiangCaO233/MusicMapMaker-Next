@@ -16,13 +16,18 @@ struct LayoutPreset {
     std::string m_name{ "默认" };
     /// @brief 布局快照，包含未定制键数使用的回退模板。
     VisualConfig m_visual;
+    /// @brief 判断是否为代码定义的保留方案，不信任文件中的只读标志。
+    bool isBuiltIn() const;
+    /// @brief 返回界面名称；内置项带标志，稳定身份与持久名称保持不变。
+    /// @warning 每帧界面读取仅返回已有字符串，不分配显示名副本。
+    const char* displayName() const;
 };
 /// @brief 只属于客户端的布局方案集合，至少保留一项。
 /// @note 修改边沿立即捕获；连续拖动只排队快照，磁盘写入由后台完成。
 struct LayoutPresets {
     /// @brief 构造普通布局与用户指定的斜轨预览布局。
     LayoutPresets();
-    /// @brief 方案列表，名称为稳定身份；“默认”始终保持代码基准。
+    /// @brief 方案列表，名称为稳定身份；所有内置项始终保持代码基准。
     std::vector<LayoutPreset> m_items;
     /// @brief 当前方案名称，也是重启后的选择。
     std::string m_selected{ "默认" };
@@ -32,16 +37,16 @@ struct LayoutPresets {
     const LayoutPreset& current() const;
     /// @brief 捕获离开的方案，再应用目标方案的全部键数布局。
     bool select(const std::string& name, VisualConfig& visual);
-    /// @brief 收存实时修改；默认项被修改时自动建立并选中自定义副本。
+    /// @brief 收存实时修改；内置项被修改时自动建立并选中自定义副本。
     /// @return 布局内容或当前方案身份发生变化时为真。
     bool captureCurrent(const VisualConfig& visual);
     /// @brief 收存当前现场并切回代码默认布局，不删除已有自定义项。
     void resetToDefault(VisualConfig& visual);
     /// @brief 复制当前实时布局并选中副本，拒绝空名和重名。
     bool duplicate(const std::string& name, const VisualConfig& visual);
-    /// @brief 重命名当前方案，拒绝空名和重名。
+    /// @brief 重命名当前自定义方案，拒绝内置项、空名和重名。
     bool rename(const std::string& name);
-    /// @brief 删除当前方案并恢复首项，禁止删除最后一项。
+    /// @brief 删除当前自定义方案并恢复首项，禁止删除内置项或最后一项。
     bool remove(VisualConfig& visual);
     /// @brief 导入单项并选中；失败不改变库或实时配置。
     bool importFile(const std::filesystem::path& path, VisualConfig& visual,

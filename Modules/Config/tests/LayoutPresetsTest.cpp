@@ -2,6 +2,7 @@
 #include "ConfigSnapshotWriter.h"
 #include "config/AppConfig.h"
 #include "log/colorful-log.h"
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <filesystem>
@@ -168,8 +169,109 @@ bool persistence(const std::filesystem::path& root)
     if ( !app.save(file) ) return false;
     // 重置进程内状态，防止把内存中的残留误判为磁盘恢复成功。
     app.reset();
-    return app.load(file) && app.getLayoutPresets().m_selected == "斜轨预览" &&
+    // 对内置斜轨的修改必须在保存时自动成为自定义项，重启仍选择该副本。
+    return app.load(file) &&
+           app.getLayoutPresets().m_selected == "自定义布局 (2)" &&
            sameLayout(expected, app.getVisualConfig());
+}
+/// @brief 验证斜轨内置保护、自动复制以及已有用户斜轨配置的兼容迁移。
+/// @param root 测试独立目录，不访问用户正在使用的布局配置。
+/// @return 编辑、切回和重启均保持内置定义且完整保留用户改动时为真。
+/// @details 名称后缀只用于显示，序列化和选择仍保持稳定的原始名称。
+/// 自动副本应包含全部键数与公共相机，不能只复制当前画布上的键数。
+/// 历史配置已存在自定义名称时，迁移不能覆盖同名用户数据。
+/// 重复加载必须幂等，不能在每次启动时继续创建斜轨副本。
+bool builtInProtection(const std::filesystem::path& root)
+{
+    LayoutPresets library;
+    VisualConfig  visual;
+    // 两个内置名称都显示标志，自定义项不由文件字段声明只读身份。
+    if ( !library.current().isBuiltIn() ||
+         std::string(library.current().displayName()) != "默认(内置)" ||
+         !library.select("斜轨预览", visual) ||
+         std::string(library.current().displayName()) != "斜轨预览(内置)" )
+        return false;
+    // 原始快照包含全部布局字段，不能只用三个相机数值判断内置项未被污染。
+    const auto original = visual;
+    const auto count    = library.m_items.size();
+    // 只读保护不仅体现在界面禁用按钮，底层命名和删除同样必须拒绝。
+    // 名称与布局各自检查，避免仅加显示标志却仍允许修改保留项身份。
+    if ( library.rename("覆盖内置") || library.remove(visual) ) return false;
+    visual.editableTrackLayoutForKeyCount(4).left  = 0.2F;
+    visual.editableTrackLayoutForKeyCount(7).right = 0.8F;
+    visual.canvasCameraPosition                    = { 0.1F, -0.6F, 1.1F };
+    // 第一帧改变就立即切到新项，不能等到切换预设或退出程序才创建。
+    const auto edited = visual;
+    if ( !library.captureCurrent(visual) || library.current().isBuiltIn() ||
+         library.m_selected != "自定义布局" ||
+         library.m_items.size() != count + 1 ||
+         !sameLayout(edited, library.current().m_visual) ||
+         std::string(library.current().displayName()) != "自定义布局" )
+        return false;
+    // 连续修改仍更新同一副本，停止调整后切回内置必须恢复精确代码参数。
+    // 第二次只改公共相机长度，与第一次的按键数修改走不同字段路径。
+    // 连续捕获后数量稳定，证明保存会继续写同一副本而非每帧复制内置项。
+    visual.canvasCameraLength = 5;
+    if ( !library.captureCurrent(visual) ||
+         library.m_items.size() != count + 1 ||
+         !library.select("斜轨预览", visual) || !sameLayout(original, visual) )
+        return false;
+
+    // 模拟上一版允许覆盖斜轨预设，同时用户已有一个同名自动自定义方案。
+    // 直接构造旧记录用于迁移测试，正常编辑不能绕过 captureCurrent 的保护。
+    LayoutPresets legacy;
+    // 旧记录仍用保留名称，加载器需要用布局内容区分改动与正常代码基准。
+    // 文件没有额外只读标记，不能靠用户可编辑的布尔值决定是否保护。
+    captureLayoutPreset(legacy.m_items[1], edited);
+    LayoutPreset existing;
+    existing.m_name = "自定义布局";
+    // 原有自定义使用与斜轨副本不同的布局，名称避让后也必须恢复各自内容。
+    captureLayoutPreset(existing, configured());
+    legacy.m_items.push_back(existing);
+    legacy.m_selected = "斜轨预览";
+    auto& app         = AppConfig::instance();
+    app.reset();
+    app.getVisualConfig() = edited;
+    nlohmann::json json   = app.getEditorConfig();
+    json["layoutPresets"] = legacy;
+    const auto file       = root / "legacy-slanted.json";
+    {
+        // 走真实配置读取和自动迁移保存，不把纯 JSON 转换当成重启验收。
+        std::ofstream output(file);
+        output << json.dump();
+    }
+    if ( !app.load(file) ||
+         app.getLayoutPresets().m_selected != "自定义布局 (2)" ||
+         !sameLayout(edited, app.getVisualConfig()) )
+        return false;
+    // 后续重启比较数量，额外重复副本即使当前现场正确也应判定迁移失败。
+    const auto size = app.getLayoutPresets().m_items.size();
+    // 原有自定义方案和新迁移方案必须都保留，而不是覆盖名字相同的旧方案。
+    const auto oldCustom = std::ranges::find(app.getLayoutPresets().m_items,
+                                             std::string("自定义布局"),
+                                             &LayoutPreset::m_name);
+    if ( oldCustom == app.getLayoutPresets().m_items.end() ||
+         !sameLayout(configured(), oldCustom->m_visual) )
+        return false;
+    // 丢弃内存库，不能让测试把未落盘的迁移选择误认为持久化成功。
+    app.reset();
+    // 再加载时保持同一个副本和完整现场，确认第一次迁移确实已经持久化。
+    if ( !app.load(file) || app.getLayoutPresets().m_items.size() != size ||
+         app.getLayoutPresets().m_selected != "自定义布局 (2)" ||
+         !sameLayout(edited, app.getVisualConfig()) )
+        return false;
+    // 用户可以随时返回代码斜轨原型，迁移后的自定义项不会反向影响基准。
+    if ( !app.getLayoutPresets().select("斜轨预览", app.getVisualConfig()) ||
+         !sameLayout(original, app.getVisualConfig()) )
+        return false;
+    // 配置中完全缺少某个内置项时也须补回，不从用户副本猜测代码基准。
+    json["layoutPresets"]["items"].erase(1);
+    // 省略内置项是合法的旧配置形态，补齐规则不依赖导出时是否列出了它。
+    LayoutPresets restored;
+    from_json(json["layoutPresets"], restored);
+    // 切换前先采用恢复库的当前现场，避免测试自身制造一次额外布局编辑。
+    visual = restored.current().m_visual;
+    return restored.select("斜轨预览", visual) && sameLayout(original, visual);
 }
 /// @brief 验证文件往返、同名导入及不可信 JSON 的拒绝语义。
 /// @note 错误类型深入到逐轨 KPS 和相机数组，防止表层校验掩盖类型崩溃。
@@ -357,6 +459,11 @@ int main(int argc, char** argv)
     // 真实 AppConfig 用例验证库与视觉字段的集成保存顺序。
     if ( !persistence(root) ) {
         XERROR("Layout preset persistence failed");
+        return 1;
+    }
+    // 斜轨和软件默认遵守同一只读规则，历史调整必须迁移而非被强行清空。
+    if ( !builtInProtection(root) ) {
+        XERROR("Built-in layout protection failed");
         return 1;
     }
     // 独立文件校验覆盖导入导出入口，而不是只测 JSON 往返。

@@ -269,7 +269,22 @@ void captureLayoutPreset(LayoutPreset& preset, const VisualConfig& visual)
     source.m_visual = visual;
     applyLayoutPreset(source, preset.m_visual);
 }
-/// @brief 建立可编辑默认方案与内置斜轨预览方案。
+/// @brief 按代码保留的稳定名称判断只读内置方案。
+/// @note 文件导入会为重名项生成新名称，不能冒充已有代码基准。
+bool LayoutPreset::isBuiltIn() const
+{
+    return m_name == "默认" || m_name == "斜轨预览";
+}
+/// @brief 提供不改变持久身份的内置名称标志。
+/// @warning 界面热路径：返回静态文本或成员缓冲，不构造临时字符串。
+const char* LayoutPreset::displayName() const
+{
+    // 标志只属于展示，选择、迁移与名称冲突检查仍使用原始名称。
+    if ( m_name == "默认" ) return "默认(内置)";
+    if ( m_name == "斜轨预览" ) return "斜轨预览(内置)";
+    return m_name.c_str();
+}
+/// @brief 建立只读默认方案与只读斜轨预览方案。
 /// @details 普通默认值沿用 VisualConfig，首次迁移由 AppConfig 收取旧值。
 /// 斜轨位置采用画布相机坐标，旋转单位为角度。
 /// 左右边界为画布归一化坐标，九成宽度两侧各留百分之五。
@@ -313,7 +328,7 @@ const LayoutPreset& LayoutPresets::current() const
 /// @param name 库内已存在的方案名称。
 /// @param visual 当前配置，同时作为旧项来源和新项接收端。
 /// @return 目标存在并已应用时为真，不存在时不修改任何项。
-/// @note 不插入或删除元素，UI 可在选择列表中调用。
+/// @note 收存内置现场可能插入新项，UI 选择成功后必须结束原容器枚举。
 bool LayoutPresets::select(const std::string& name, VisualConfig& visual)
 {
     // 收存可能创建新项并使 vector 引用失效，先保存目标名称再查找。
@@ -327,7 +342,7 @@ bool LayoutPresets::select(const std::string& name, VisualConfig& visual)
     m_selected = target;
     return true;
 }
-/// @brief 在实际修改边沿收存布局，保护代码默认方案不受编辑覆盖。
+/// @brief 在实际修改边沿收存布局，保护所有代码内置方案不受编辑覆盖。
 /// @param visual 当前实时布局，包括所有键数和相机姿态。
 /// @return 已建立自定义项或更新所选项时为真，无变化时为假。
 /// @warning 仅在用户修改或加载迁移时比较，不用于空闲帧轮询。
@@ -339,11 +354,11 @@ bool LayoutPresets::captureCurrent(const VisualConfig& visual)
         return false;
     // 自动项只在离开代码基准时建立，后续连续变化更新同一个项。
     // 与已存在的自定义名称冲突时生成后缀，绝不覆盖旧用户布局。
-    if ( m_selected == "默认" ) {
+    if ( current().isBuiltIn() ) {
         LayoutPreset custom;
         custom.m_name = uniqueName(m_items, "自定义布局");
         captureLayoutPreset(custom, visual);
-        // 当前默认保持代码值；新副本在本次修改内立即成为活动项。
+        // 当前内置项保持代码值；新副本在本次修改内立即成为活动项。
         m_selected = custom.m_name;
         m_items.push_back(std::move(custom));
     } else
@@ -388,8 +403,8 @@ bool LayoutPresets::duplicate(const std::string&  name,
 /// @note 布局内容不改变，因此不重新捕获实时配置。
 bool LayoutPresets::rename(const std::string& name)
 {
-    // 默认是稳定的代码基准，不能改名成用户项。
-    if ( m_selected == "默认" ) return false;
+    // 两个内置项都是稳定的代码基准，只能复制后再改名。
+    if ( current().isBuiltIn() ) return false;
     if ( name.find_first_not_of(" \t\r\n") == std::string::npos ||
          name.size() > 256 ||
          std::ranges::find(m_items, name, &LayoutPreset::m_name) !=
@@ -405,7 +420,7 @@ bool LayoutPresets::rename(const std::string& name)
 /// @note 删除不再捕获旧项，避免将已删除现场污染到剩余项。
 bool LayoutPresets::remove(VisualConfig& visual)
 {
-    if ( m_selected == "默认" || m_items.size() <= 1 ) return false;
+    if ( current().isBuiltIn() || m_items.size() <= 1 ) return false;
     const std::string name = current().m_name;
     std::erase_if(m_items,
                   [&](const auto& item) { return item.m_name == name; });
@@ -519,28 +534,33 @@ void from_json(const nlohmann::json& json, LayoutPresets& presets)
                                &LayoutPreset::m_name) != presets.m_items.end() )
             presets.m_selected = selected;
     }
-    // 旧版本允许直接修改“默认”，必须迁移为用户项后补回代码默认。
-    // 基准必须重新由代码构造，不能从文件里的“默认”字段复制。
-    // 文件只描述用户偏好，不能替换软件默认布局的定义。
-    const LayoutPreset codeDefault;
-    const auto         oldDefault = std::ranges::find(
-        presets.m_items, std::string("默认"), &LayoutPreset::m_name);
-    if ( oldDefault != presets.m_items.end() &&
-         comparableLayout(oldDefault->m_visual) !=
-             comparableLayout(codeDefault.m_visual) ) {
-        const auto name    = uniqueName(presets.m_items, "自定义布局");
-        oldDefault->m_name = name;
-        if ( presets.m_selected == "默认" ) presets.m_selected = name;
-    }
-    // 没有默认项或它刚被迁移时，恢复真正的程序默认基准。
-    if ( std::ranges::find(presets.m_items,
-                           std::string("默认"),
-                           &LayoutPreset::m_name) == presets.m_items.end() )
-        presets.m_items.insert(presets.m_items.begin(), codeDefault);
-    else {
+    // 文件不能重定义内置方案；先保留旧版本改过的完整布局，再恢复代码基准。
+    // 普通默认和斜轨预览统一迁移，未选中的旧自定义斜轨布局也不能被丢弃。
+    const LayoutPresets codePresets;
+    for ( const auto& builtIn : codePresets.m_items ) {
+        const auto previous = std::ranges::find(
+            presets.m_items, builtIn.m_name, &LayoutPreset::m_name);
+        if ( previous != presets.m_items.end() &&
+             comparableLayout(previous->m_visual) !=
+                 comparableLayout(builtIn.m_visual) ) {
+            // 只重命名旧数据；全部键数覆盖与相机姿态仍按值保留。
+            // 新名称必须避让已存在的用户项，已选中的旧方案继续作为当前现场。
+            const auto name  = uniqueName(presets.m_items, "自定义布局");
+            previous->m_name = name;
+            if ( presets.m_selected == builtIn.m_name )
+                presets.m_selected = name;
+        }
+        // 迁移后原名可能不存在；恢复缺失内置项，也覆盖文件里等价的冗余表示。
         const auto entry = std::ranges::find(
-            presets.m_items, std::string("默认"), &LayoutPreset::m_name);
-        entry->m_visual = codeDefault.m_visual;
+            presets.m_items, builtIn.m_name, &LayoutPreset::m_name);
+        if ( entry != presets.m_items.end() ) {
+            entry->m_visual = builtIn.m_visual;
+        } else if ( builtIn.m_name == "默认" ) {
+            // 默认仍位于首项，保持失效选择和删除用户项时的既有回退语义。
+            presets.m_items.insert(presets.m_items.begin(), builtIn);
+        } else {
+            presets.m_items.push_back(builtIn);
+        }
     }
 }
 }  // namespace MMM::Config
