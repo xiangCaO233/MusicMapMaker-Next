@@ -1228,12 +1228,120 @@ bool testPerspectiveAuxiliaryLanes()
 /// @return 全部测试通过时返回 0。
 /// @note 用布尔短路保留首个失败用例的日志，退出码供 CTest 判断。
 /// @note 测试数据全部在内存中构造，不生成资源文件或音频输出。
+/// @brief 用正式快照入口验证 BMS/PMS 标识及普通轨道不会误标。
+/// @return 转盘、普通键的字形数量与布局匹配时返回 true。
+/// @note 字体由内存夹具提供，不依赖安装字体或 GPU 设备。
+/// @details 使用正式主画布快照入口，覆盖静态布局、字形选择与区域裁剪。
+/// 转盘字形和普通键字形分别计数，避免只显示一类标记也判定通过。
+/// 双人布局必须出现两个转盘，PMS 则必须完全没有转盘字形。
+/// 普通六轨与被手动改成四轨的来源布局作为负例，不允许误标。
+/// 两种相机都使用三倍轨道长度，防止标签放在延长后远端而消失。
+/// 此测试验证生成的字形几何，不替代真实 GPU 的字体清晰度检查。
+bool testBmsLaneLabels()
+{
+    using namespace MMM;
+    using namespace MMM::Logic;
+    // 各布局覆盖单人、双人、PMS 以及没有 BMS 来源语义的普通六轨谱面。
+    // 第一项为来源普通键数，第二项为总轨数，第三项为应出现的转盘数。
+    for ( const auto spec : { std::array{ 5, 6, 1 },
+                              std::array{ 7, 8, 1 },
+                              std::array{ 5, 12, 2 },
+                              std::array{ 7, 16, 2 },
+                              std::array{ 9, 9, 0 },
+                              std::array{ 0, 6, 0 },
+                              std::array{ 5, 4, 0 } } ) {
+        // 同一来源分别生成平面和空间快照，确保不是只在一种视角添加标识。
+        // 不共享顶点数组，第一轮输出不会污染第二轮的字形数量。
+        // 每种布局都显式设置来源字段，不能通过总轨数偶然推断而通过。
+        for ( bool perspective : { false, true } ) {
+            Config::EditorConfig config;
+            config.visual.canvasCameraPoseEnabled = perspective;
+            config.visual.canvasCameraLength      = 3.0F;
+            config.visual.beatLineDisplayMode =
+                Config::BeatLineDisplayMode::Hidden;
+            RenderSnapshot snapshot;
+            snapshot.hasBeatmap     = true;
+            snapshot.bmsKeysPerSide = spec[0];
+            configureAsciiFont(snapshot);
+            entt::registry notes, samples, timelines;
+            // 正式绘制要求时间映射缓存，即使只检查静态轨道也不能省略。
+            // 使用单个 BPM 构造有效时间域，避免缺少缓存导致提前返回。
+            const auto bpm = timelines.create();
+            timelines.emplace<TimelineComponent>(
+                bpm,
+                TimelineComponent{ .m_timestamp = 0,
+                                   .m_effect    = TimingEffect::BPM,
+                                   .m_value     = 120 });
+            auto& cache = timelines.ctx().emplace<System::ScrollCache>();
+            cache.rebuild(timelines, config, nullptr);
+            // 空音符索引仍通过生产入口注册，不让无对象路径绕开静态布局。
+            // 每轮重建快照，防止复用旧字形导致误以为标签仍在显示。
+            const std::vector<entt::entity> sorted;
+            notes.ctx().emplace<const std::vector<entt::entity>*>(&sorted);
+            const std::vector<double> ends;
+            // 空的自动采样和时间线输入维持最小生产模型，不靠额外音符触发标签。
+            // 主画布名称与实际编辑器一致，不能误用不绘制玩家布局的预览入口。
+            // 判定线处于视口内部，字符缺失只能来自标记或裁剪逻辑。
+            System::NoteRenderSystem::generateSnapshot(notes,
+                                                       samples,
+                                                       sorted,
+                                                       ends,
+                                                       timelines,
+                                                       {},
+                                                       &snapshot,
+                                                       "Basic2DCanvas",
+                                                       0,
+                                                       1200,
+                                                       800,
+                                                       640,
+                                                       spec[1],
+                                                       0,
+                                                       0,
+                                                       config,
+                                                       800);
+            // S 仅出现在 SCR，K 仅出现在 KEY；两个字形采用独立 UV 起点。
+            // 不按总顶点数判断，以免背景或边框增加也让测试通过。
+            const auto glyphU = [](char value) {
+                return 0.6F +
+                       static_cast<float>(value - Common::ASCII_GLYPH_FIRST) *
+                           0.001F;
+            };
+            // UV 是测试字体分配的字形身份，颜色或空间投影不会改变它。
+            // 因此两种视角共享同一断言，不需要复制生产相机矩阵算法。
+            // 原生键数为六并不能产生标签，必须同时存在明确的 BMS 来源。
+            // PMS 的九键不会把第六轨误当成标准 BMS 的转盘。
+            // 无效来源轨数的负例还覆盖用户在导入后手动改变键数的情况。
+            int scratches = 0, keys = 0;
+            for ( const auto& vertex : snapshot.vertices ) {
+                if ( near(vertex.uv.u, glyphU('S')) ) ++scratches;
+                if ( near(vertex.uv.u, glyphU('K')) ) ++keys;
+            }
+            // 每个字形左侧两个顶点使用起始 U；右侧两顶点另有宽度偏移。
+            // 不兼容的手动轨数和普通谱面都不应显示 BMS 标记。
+            // 对普通谱面要求两类字形同时为零，而不是仅要求没有转盘。
+            // 六轨被视为普通还是 BMS 完全由来源字段决定。
+            const bool valid = spec[0] != 0 && !(spec[0] == 5 && spec[1] == 4);
+            if ( scratches != spec[2] * 2 ||
+                 keys != (valid ? spec[1] - spec[2] : 0) * 2 ) {
+                XERROR("BMS label mismatch: layout={}, tracks={}, S={}, K={}",
+                       spec[0],
+                       spec[1],
+                       scratches,
+                       keys);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 int main()
 {
     // 先验证公共布局，再验证采样本体和标签，便于首条日志定位失败职责。
     // 每个用例自建状态，短路执行不会改变后续用例所需的全局初始化。
-    return testPerspectiveAuxiliaryLanes() && testLaneLayoutVisuals() &&
-                   testDraftLaneLabels() && testNarrowLaneLabelMarquee() &&
+    return testBmsLaneLabels() && testPerspectiveAuxiliaryLanes() &&
+                   testLaneLayoutVisuals() && testDraftLaneLabels() &&
+                   testNarrowLaneLabelMarquee() &&
                    testSampleBodyMatchesTapTextureAndSize() &&
                    testSampleUsesIndependentBgmLaneWidth() &&
                    testSampleBrushPreview() && testSampleErasePreview() &&

@@ -364,14 +364,25 @@ bool checkVolumePopup(MMM::UI::UIManager&            manager,
                               popup->Pos.y + popup->Size.y -
                                   popup->WindowPadding.y - button * 0.5F };
     frameAt(sliderPoint);
-    ImGui::GetIO().AddKeyEvent(ImGuiMod_Ctrl, true);
+    // AddKeyEvent 接收平台原始修饰键，macOS 的 Command(Super) 会映射成逻辑
+    // Ctrl。 直接注入物理 Ctrl
+    // 会变成右键菜单，既无法进入文本编辑也不会保存音量。
+    const ImGuiKey inputModifier =
+        ImGui::GetIO().ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl;
+    ImGui::GetIO().AddKeyEvent(inputModifier, true);
     ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
     frameAt(sliderPoint);
     ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
     frameAt(sliderPoint);
     // 原生 Ctrl 点击会选中当前数值；释放 Ctrl 后输入完整的新百分数。
     // 不用直接写入 InputText 状态，文本必须经过控件自己的解析和钳制。
-    ImGui::GetIO().AddKeyEvent(ImGuiMod_Ctrl, false);
+    // 在发送文本前验证真实控件已进入输入态，避免将按键模拟失败误报为音量串值。
+    if ( context.TempInputId == 0 ) {
+        XERROR("Card sample volume text input not activated: macOS={}",
+               ImGui::GetIO().ConfigMacOSXBehaviors);
+        return false;
+    }
+    ImGui::GetIO().AddKeyEvent(inputModifier, false);
     ImGui::GetIO().AddInputCharactersUTF8("175");
     frameAt(sliderPoint);
     ImGui::GetIO().AddKeyEvent(ImGuiKey_Enter, true);

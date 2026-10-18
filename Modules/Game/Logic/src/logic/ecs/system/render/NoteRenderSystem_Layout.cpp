@@ -5,15 +5,19 @@
 #include "config/skin/SkinConfig.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/ecs/system/render/AudioObjectLabelRenderer.h"
 #include "logic/ecs/system/render/Batcher.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/timing/BpmNormalization.h"
+#include <fmt/format.h>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <numeric>
+#include <string_view>
 #include <vector>
 
 #include "logic/ecs/system/HitFXSystem.h"
@@ -133,6 +137,64 @@ void NoteRenderSystem::renderTrackLayout(
                                        singleTrackW,
                                        trackAreaW,
                                        config);
+
+    // 来源布局作为值随快照传递；普通 6K/8K 不自动获得转盘语义。
+    // 键数被编辑为不兼容布局时隐藏标记，不能把过时元数据强加给新轨道。
+    // PMS 的九颗键跨越两组文件通道，但在编辑器中仍是一组连续九轨。
+    // 普通 BMS 的每侧宽度为普通键数加一，额外的一轨正是转盘。
+    // 总轨数只允许一侧或两侧，其他手工布局继续使用普通编辑器显示。
+    const int  keys = batcher.snapshot ? batcher.snapshot->bmsKeysPerSide : 0;
+    const bool pms  = keys == 9 && trackCount == 9;
+    const int  sideSize = keys + 1;
+    const bool bms = (keys == 5 || keys == 7) &&
+                     (trackCount == sideSize || trackCount == sideSize * 2);
+    if ( pms || bms ) {
+        // 标签靠近判定线，在延长后的远端顶边放置会让斜轨视角完全看不到。
+        // 文本与轨道共用投影；栈缓冲只在本次提交期间借用，不逐轨分配字符串。
+        const float labelY = std::clamp(
+            judgmentLineY + 8.0F, topY, std::max(topY, bottomY - 18.0F));
+        // 判定线下方的固定偏移不随轨道长度倍率变大，保证近端标签可见。
+        // 下边界留出一行字体空间；极小布局至少不让 clamp 上下界倒置。
+        // 轨数上限来自已验证的 BMS 布局，不遍历 ECS，也不扫描整首谱面。
+        for ( int track = 0; track < trackCount; ++track ) {
+            std::array<char, 32> buffer{};
+            const int            key  = pms ? track + 1 : track % sideSize;
+            const int            side = pms ? 1 : track / sideSize + 1;
+            // 文件通道不是连续键号，界面显示逻辑键序，避免让用户手算 18/19。
+            // 双人布局每侧从 KEY 1 重新编号，不能将第二侧显示成接续普通键。
+            // 短标签为窄轨保留空间，导出确认另用中文解释 SCR 和 KEY 的含义。
+            const auto result =
+                pms ? fmt::format_to_n(
+                          buffer.data(), buffer.size() - 1, "KEY {}", key)
+                    : (key == 0 ? fmt::format_to_n(buffer.data(),
+                                                   buffer.size() - 1,
+                                                   "{}P SCR",
+                                                   side)
+                                : fmt::format_to_n(buffer.data(),
+                                                   buffer.size() - 1,
+                                                   "{}P KEY {}",
+                                                   side,
+                                                   key));
+            // format_to_n 返回实际写入终点，借用长度不依赖零终止符。
+            // 最大标签远小于缓冲容量，不会因两位轨号越过栈数组边界。
+            // 宽度由当前轨宽限制，文字不能延伸到相邻普通键或转盘区域。
+            const std::string_view label(
+                buffer.data(),
+                static_cast<std::size_t>(result.out - buffer.data()));
+            // 转盘使用醒目的暖色，其余键位保持浅色；标识不创建拾取区域。
+            // 标签仅说明已有轨号映射，不改变物件位置、音频路由或编辑工具。
+            renderCanvasAsciiText(batcher,
+                                  label,
+                                  leftX + track * singleTrackW + 3.0F,
+                                  labelY,
+                                  14.0F,
+                                  std::max(0.0F, singleTrackW - 6.0F),
+                                  !pms && key == 0
+                                      ? glm::vec4{ 1.0F, 0.75F, 0.3F, 1.0F }
+                                      : glm::vec4{ 0.85F, 0.9F, 1.0F, 0.95F },
+                                  true);
+        }
+    }
 }
 
 /// @brief 按单轨纹理纵向平铺底板，保持各轨道纹理起点一致。

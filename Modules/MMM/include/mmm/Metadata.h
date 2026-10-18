@@ -37,6 +37,8 @@ enum class MapMetadataType {
     MALODY,
     /// @brief Rhythm Master 来源字段。
     RM,
+    /// @brief BMS/PMS 来源键位语义，原生保存后继续用于标识转盘。
+    BMS,
 };
 
 /// @brief 保存谱面级来源格式扩展属性。

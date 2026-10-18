@@ -280,6 +280,10 @@ inline BeatMap load(const std::filesystem::path& path)
     meta.main_cover_path = Config::utf8ToPath(headers["STAGEFILE"]);
     meta.preference_bpm  = initialBpm;
     meta.track_count     = tracks;
+    // 保留来源布局语义，避免另存 MMM 后转盘又被当作普通键显示。
+    // 只记录每侧普通键数；总轨数仍由基础元数据维护。
+    map.m_metadata.map_properties[MapMetadataType::BMS]["keys_per_side"] =
+        pms ? "9" : (seven ? "7" : "5");
     meta.bgm_track_count = 1;
     double bpm = initialBpm, previousBeat = 0, milliseconds = 0;
     // Timing 的毫秒时间与 BPM 派生字段一并初始化，供已有编辑器使用。

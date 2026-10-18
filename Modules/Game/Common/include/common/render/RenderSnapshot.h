@@ -646,6 +646,9 @@ struct RenderSnapshot {
     double previewHoverTime{ 0.0f };
     bool   isPreviewDragging{ false };
 
+    /// @brief BMS 每侧普通键数，5/7 含独立转盘，9 表示无转盘 PMS；0 不标记。
+    /// @note 逻辑线程从来源元数据发布，渲染线程不读取可变谱面或文件路径。
+    int32_t bmsKeysPerSide{ 0 };
     int32_t trackCount{ 4 };  ///< 谱面玩家轨道数量。
     /// @brief 持久化草稿轨道数量，不包含最左侧运行时追加轨。
     int32_t draftTrackCount{ 4 };
@@ -886,6 +889,8 @@ struct RenderSnapshot {
         // 橡皮擦恢复玩家音符领域和无子物件的初始状态。
         erasingObjectKind = ChartObjectKind::PlayerNote;
         erasingSubIndex   = -1;
+        // 清除来源键位，切换到普通谱面时不能沿用上次的转盘标记。
+        bmsKeysPerSide    = 0;
         hasBeatmap        = false;
         beatmapInstanceId = 0;
         beatmapPathKey.clear();

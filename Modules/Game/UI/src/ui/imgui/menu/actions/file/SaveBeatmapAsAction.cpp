@@ -16,6 +16,7 @@
 #include "ui/utils/UIWidgetUtils.h"
 
 #include <ImGuiFileDialog.h>
+#include <algorithm>
 #include <filesystem>
 #include <imgui.h>
 #include <mutex>
@@ -362,19 +363,32 @@ private:
         {
             // 居中样式的 RAII 生命周期严格包围模态弹窗。
             Utils::CenteredModalPopupScope popupStyle(dpiScale);
+            // 当前字体可能随用户设置放大，不能只按 DPI 推算固定按钮宽度。
+            // 窗口额外留出两侧内边距，最长格式名称必须完整放进按钮。
+            const auto& style = ImGui::GetStyle();
+            const float buttonWidth =
+                std::max(300.0f * dpiScale,
+                         ImGui::CalcTextSize("MusicMapMaker Beatmap (.mmm)").x +
+                             style.FramePadding.x * 2.0f);
+            // 额外外边距用于保持格式按钮组与提示、分隔线的层次。
+            // 按钮文字仍由同一当前字体绘制，避免测量与实际渲染字号不一致。
+            const float windowWidth =
+                buttonWidth + style.WindowPadding.x * 2.0f + 32.0f * dpiScale;
             if ( popupStyle.begin(
                      popupId,
                      &m_exportFormatPickerOpen,
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking,
-                     ImVec2(360.0f * dpiScale, 0.0f)) ) {
+                     ImVec2(windowWidth, 0.0f)) ) {
                 // 提示与按钮组使用分隔线形成明确选择层次。
                 ImGui::TextUnformatted("选择另存为格式：");
                 ImGui::Spacing();
                 ImGui::Separator();
                 ImGui::Spacing();
 
-                // 所有格式按钮使用相同逻辑宽度并居中。
-                const ImVec2 buttonSize(300.0f * dpiScale, 0.0f);
+                // 同组按钮等宽，使用可用区域兼容视口对窗口宽度的限制。
+                const ImVec2 buttonSize(
+                    std::min(buttonWidth, ImGui::GetContentRegionAvail().x),
+                    0.0f);
                 if ( MenuUtil::drawCenteredButton(
                          "MusicMapMaker Beatmap (.mmm)", buttonSize) ) {
                     // 原生项目格式使用 .mmm。

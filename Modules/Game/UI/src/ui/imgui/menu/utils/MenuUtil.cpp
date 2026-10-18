@@ -471,7 +471,7 @@ std::string MenuUtil::lowerExtension(const std::string& path)
 
 /// @brief 根据导出格式生成推荐文件名。
 /// @param extension 目标扩展名。
-/// @param currentFileName 当前文件名，用于保留非 RM/IMD 格式的主文件名。
+/// @param currentFileName 当前文件名；非空时保留用户输入的主文件名。
 /// @return 推荐文件名。
 /// @warning 低频文件选择路径：锁定活动 Session 并读取谱面元数据。
 std::string MenuUtil::makeExportFileNameForExtension(
@@ -489,8 +489,8 @@ std::string MenuUtil::makeExportFileNameForExtension(
     const std::string normalizedExt =
         extension.empty() ? ".mmm" : toLowerAscii(extension);
 
-    if ( normalizedExt == ".imd" ) {
-        // IMD 文件名编码标题、键数和难度版本三个字段。
+    if ( normalizedExt == ".imd" && currentFileName.empty() ) {
+        // 仅在尚无用户输入时推荐传统名称，确认保存不能重写用户命名。
         std::string title    = "map";
         int32_t     keyCount = 0;
         std::string version  = "default";
@@ -559,7 +559,7 @@ std::string MenuUtil::applySaveAsSelectedFormatToPath(const std::string& path)
         return path;
     }
 
-    // 目录部分保持不变，只重新生成符合格式约定的文件名。
+    // 保留用户输入的目录和主体，只规范所选格式的扩展名。
     std::filesystem::path outputPath = Config::utf8ToPath(path);
     std::string currentFileName = Config::pathToUtf8(outputPath.filename());
     std::string nextFileName =
@@ -598,7 +598,10 @@ std::vector<std::string> MenuUtil::collectExportCompatibilityWarnings(
     // 扩展名决定目标格式能力集合。
     const std::string ext = lowerExtension(path);
     // 原生 MMM 与未知格式没有本 helper 定义的兼容性警告。
-    if ( ext != ".osu" && ext != ".imd" && ext != ".mc" ) return warnings;
+    const bool isBms =
+        ext == ".bms" || ext == ".bme" || ext == ".bml" || ext == ".pms";
+    if ( ext != ".osu" && ext != ".imd" && ext != ".mc" && !isBms )
+        return warnings;
 
     // 锁住活动 Session，保证整个兼容性快照来自同一谱面版本。
     auto& engine = Logic::EditorEngine::instance();
@@ -608,6 +611,93 @@ std::vector<std::string> MenuUtil::collectExportCompatibilityWarnings(
 
     // 谱面引用只在当前锁区间内使用。
     const BeatMap& beatMap = *session->getContext().currentBeatmap;
+
+    // BMS 在选择路径后、实际写盘前展示转换摘要。
+    // 警告仅描述目标差异，不改变当前会话或项目配置。
+    if ( isBms ) {
+        // 画布使用短标签适应窄轨，确认窗口提供完整含义以免只懂缩写的用户受益。
+        // 此说明与具体映射同时显示，不要求用户另外查阅 BMS 文件通道表。
+        warnings.push_back(
+            "轨道标记：SCR 表示转盘，KEY 表示普通键，1P/2P 表示两侧玩家。");
+        // .bms/.bme/.bml 共用含转盘的键位协议，.pms 保持独立九键协议。
+        // 六键和八键来源已经包含转盘，不应再补一轨导致原键位偏移。
+        // 这里只给非标准普通键布局提供补位提示，与 writer 的判断保持一致。
+        // 导出后再次导入会显示标准总轨数，不承诺保留原界面的 4K 标签。
+        // 音乐时间和 STOP 不属于视觉降级，不允许在这里移除。
+        // 标准 BMS 将普通键布局补齐成含转盘的布局，保留实际物件键序。
+        // 在确认框列出所有降级，不要求用户猜测泛化的保存失败原因。
+        const int tracks = beatMap.m_baseMapMetadata.track_count;
+        if ( ext != ".pms" && ((tracks >= 1 && tracks <= 5) || tracks == 7) )
+            warnings.push_back(
+                fmt::format("{}K 将转换为标准 {} 键加转盘布局：当前第 1～{} "
+                            "轨对应 1P 键 1～{}；"
+                            "目标转盘及其余普通键留空。原项目布局不变。",
+                            tracks,
+                            tracks == 7 ? 7 : 5,
+                            tracks,
+                            tracks));
+        // 总轨数含转盘与纯普通键同名，不能仅凭界面显示的 6K/8K 隐含转换。
+        // 这两种布局不增加轨数，但首轨在目标格式中的用途必须明确告知。
+        else if ( ext != ".pms" && (tracks == 6 || tracks == 8) )
+            // 原生普通 6K/8K 也可能导出 BMS，必须明确首轨会被解释为转盘。
+            warnings.push_back(
+                fmt::format("按标准 BMS 布局导出：当前第 1 轨对应 1P 转盘，第 "
+                            "2～{} 轨对应 1P 键 1～{}。",
+                            tracks,
+                            tracks - 1));
+        else if ( ext != ".pms" && (tracks == 12 || tracks == 16) ) {
+            // 双人两侧分别包含一个转盘，不把第二侧首轨继续编号成普通键。
+            // 原轨道顺序不变；每侧首轨的语义转换独立说明。
+            // 两侧普通键都从一开始编号，不把它们误解为连续十或十四颗键。
+            const int sideTracks = tracks / 2;
+            warnings.push_back(fmt::format(
+                "按双人 BMS 布局导出：第 1、{} 轨分别为 1P、2P 转盘；"
+                "每侧随后 {} 轨依次对应该侧普通键。",
+                sideTracks + 1,
+                sideTracks - 1));
+        } else if ( ext == ".pms" && tracks == 9 )
+            // PMS 九键没有转盘，不能套用六轨或八轨的首轨解释。
+            warnings.push_back(
+                "按 PMS 九键导出：当前第 1～9 轨依次对应键 1～9，没有转盘。");
+        if ( std::any_of(beatMap.m_timings.begin(),
+                         beatMap.m_timings.end(),
+                         [](const auto& timing) {
+                             return timing.m_timingEffect !=
+                                        TimingEffect::BPM &&
+                                    timing.m_timingEffect != TimingEffect::STOP;
+                         }) )
+            warnings.push_back(
+                "标准 BMS 导出只保留 BPM 和 STOP；Scroll、Jump、HS "
+                "等视觉效果将被忽略。");
+        // 自动采样和玩家绑定分别检查；只要存在差异便在同一个确认流程告知。
+        bool hasVolume = std::any_of(
+            beatMap.m_audioSamples.begin(),
+            beatMap.m_audioSamples.end(),
+            [](const auto& sample) { return sample.m_volume != 1.0F; });
+        // 两个玩家物件容器使用相同契约，避免只检查普通音符漏掉长条。
+        // 折线仍属于不支持的物件，单独在下方提示用户先转换。
+        const auto containsVolume = [](const auto& notes) {
+            return std::any_of(
+                notes.begin(), notes.end(), [](const auto& note) {
+                    return note.m_sampleBinding &&
+                           note.m_sampleBinding->m_volume != 1.0F;
+                });
+        };
+        hasVolume = hasVolume || containsVolume(beatMap.m_noteData.notes) ||
+                    containsVolume(beatMap.m_noteData.holds);
+        // 每类差异只生成一条文案，不按每颗音符重复填充确认窗口。
+        // 资源文件本身不重编码，这里的音量变化只发生在目标谱面的事件上。
+        if ( hasVolume )
+            warnings.push_back(
+                "标准 BMS 不保存逐物件采样音量，导出后均恢复为 "
+                "100；原项目音量保持不变。");
+        if ( !beatMap.m_noteData.flicks.empty() ||
+             !beatMap.m_noteData.polylines.empty() )
+            warnings.push_back(
+                "当前 BMS 导出暂不支持 Flick "
+                "或折线，请先转换这些物件，否则无法保存。");
+        return warnings;
+    }
 
     // 先收集跨格式共用的特性标志，后续按目标格式生成文案。
     bool hasJumpOrHsTiming        = false;
