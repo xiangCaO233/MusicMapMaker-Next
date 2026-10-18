@@ -177,7 +177,9 @@ bool testProjectAudioToolWorkspaceRoundTrip()
     source.m_projectAudioToolSelectedResourceId = "main";
     source.m_projectAudioToolBrushVolume        = 0.75F;
     source.m_projectAudioToolSnapEnabled        = false;
-    source.m_projectAudioToolPlacements         = {
+    // 显式开启非默认显示状态，往返不能依赖默认值恰好相同。
+    source.m_projectAudioToolShowVolume = true;
+    source.m_projectAudioToolPlacements = {
         // 第一项显式提供尺寸，覆盖用户调整过的自由布局。
         MMM::ProjectAudioToolItemPlacement{
             .m_audioResourceId = "main",
@@ -212,7 +214,12 @@ bool testProjectAudioToolWorkspaceRoundTrip()
     const auto legacyWorkspace =
         json::object().get<MMM::ProjectWorkspaceState>();
     // 开关、选择和画笔状态属于工作区级字段，均应逐项保持。
-    return check(!restored.m_projectAudioToolSnapEnabled,
+    // 历史文件缺失显示开关时保持原来的方块外观，升级不主动增加文字。
+    return check(restored.m_projectAudioToolShowVolume &&
+                     !legacyWorkspace.m_projectAudioToolShowVolume,
+                 "sample volume visibility should round trip and default to "
+                 "hidden") &&
+           check(!restored.m_projectAudioToolSnapEnabled,
                  "disabled project audio snapping should round trip") &&
            check(
                legacyWorkspace.m_projectAudioToolSnapEnabled,

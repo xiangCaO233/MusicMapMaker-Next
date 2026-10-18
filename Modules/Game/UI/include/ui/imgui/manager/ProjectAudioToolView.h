@@ -283,9 +283,10 @@ private:
     /// @param canvasOrigin 逻辑画布原点对应的屏幕坐标。
     /// @param canvasScale 逻辑画布坐标到屏幕像素的相机缩放。
     /// @param dpiScale 当前内容缩放。
+    /// @param showVolume 是否显示该方块独立音量的整数百分数。
     /// @param drawList 当前 ImGui 绘制列表。
     void drawItem(const Item& item, ImVec2 canvasOrigin, float canvasScale,
-                  float dpiScale, bool hovered, bool pressed,
+                  float dpiScale, bool hovered, bool pressed, bool showVolume,
                   ImDrawList& drawList) const;
 
     /// @brief 计算可容纳全部方块的画布尺寸。

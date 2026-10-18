@@ -13,6 +13,7 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -1646,7 +1647,7 @@ void ProjectAudioToolView::rebuildBatchDragConstraints()
 /// 试听控件随后覆盖在方块底部，标签区域已提前为其留空。
 void ProjectAudioToolView::drawItem(const Item& item, ImVec2 canvasOrigin,
                                     float canvasScale, float dpiScale,
-                                    bool hovered, bool pressed,
+                                    bool hovered, bool pressed, bool showVolume,
                                     ImDrawList& drawList) const
 {
     // 所有几何先统一转换到屏幕空间，后续 DrawList 不混用逻辑坐标。
@@ -1733,6 +1734,39 @@ void ProjectAudioToolView::drawItem(const Item& item, ImVec2 canvasOrigin,
         { minimum.x + horizontalPadding, minimum.y + verticalPadding },
         ImGui::GetColorU32(ImVec4(0.06F, 0.08F, 0.11F, 0.78F)),
         typeLabel);
+
+    if ( showVolume ) {
+        // 直接读取当前方块的独立倍率，不能使用选中项共享的画笔快照。
+        // 与音量滑块采用同一整数百分数，零为静音，一百为原始采样倍率。
+        // 转换使用栈缓冲，不在逐方块绘制路径分配字符串或查询音频后端。
+        // 有界整数最多三位，固定缓冲包含足够空间，结束位置显式传给绘制接口。
+        // 这里只显示资源级局部倍率，不混入主音量、静音或设备输出增益。
+        // 因此切换客户端音频预设时，项目各采样的数值不会一起跳动。
+        // 显示无需选中或悬浮该方块，避免离开音量编辑器后失去当前值。
+        std::array<char, 8> text{};
+        const int           volume = static_cast<int>(
+            std::lround(std::clamp(item.audioVolume, 0.0F, 2.0F) * 100.0F));
+        const auto formatted =
+            std::to_chars(text.data(), text.data() + text.size(), volume);
+        const float textWidth =
+            ImGui::CalcTextSize(text.data(), formatted.ptr).x;
+        const ImVec2 position{ maximum.x - horizontalPadding - textWidth,
+                               minimum.y + verticalPadding };
+        // 与类型标识共用顶行，文件名和底部试听按钮的位置保持稳定。
+        // 极窄卡片不覆盖类型文字；恢复宽度后无需重建缓存即可显示数值。
+        if ( position.x > minimum.x + horizontalPadding * 2 +
+                              ImGui::CalcTextSize(typeLabel).x ) {
+            // 卡片可能部分超出视口，裁剪仍与该卡片的屏幕矩形取交集。
+            // 数值跟随每次实时音量修改刷新，显示开关本身不改变任何音量。
+            drawList.PushClipRect(minimum, maximum, true);
+            drawList.AddText(
+                position,
+                ImGui::GetColorU32(ImVec4(0.06F, 0.08F, 0.11F, 1.0F)),
+                text.data(),
+                formatted.ptr);
+            drawList.PopClipRect();
+        }
+    }
 
     if ( item.batchSelected ) {
         // 绿色内框与外层活动边框分离，表达多选集合而非主选择。
@@ -1910,6 +1944,14 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             m_snapLocks = {};
             Logic::EditorEngine::instance().saveProject();
         }
+    }
+    auto& showVolume =
+        project->m_settings.m_workspace.m_projectAudioToolShowVolume;
+    if ( !m_tableView ) {
+        // 只在方块视图显示开关，表格本来就提供每行音量滑块和读数。
+        // 切换时才保存项目；普通显示帧不产生文件操作或采样资源更新。
+        if ( FeedbackCheckbox("显示物件音量（0–200）", &showVolume) )
+            Logic::EditorEngine::instance().saveProject();
     }
     // 外部工作区恢复也能改变开关；关闭后所有交互层都不应保留参考线。
     // 该分支每帧只清理两个可选轴锁，不重建方块索引或查询磁盘配置。
@@ -2375,6 +2417,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                  (m_draggingItem == index || m_resizingItem == index ||
                   (m_batchDragging && item.batchSelected)) &&
                      ImGui::IsMouseDown(ImGuiMouseButton_Left),
+                 showVolume,
                  *drawList);
     }
 
