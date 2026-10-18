@@ -246,10 +246,15 @@ void CameraLayoutEditor::drawParameterWindow(const std::string&    id,
         // 高度仅增加平面可见厚度，不改变 Key 音效或物件的播放时间。
         // 两个补偿都不需要重新解码皮肤纹理或重建 Vulkan 离屏资源。
         // 运动改变共同投影；厚度只改变物件局部高度，不改变谱面时间。
+        // 两个滑块、四行文本之间还有五处 ImGui 间距，不能按六个框高估算。
+        // ItemSpacing 可以独立于字体和 FramePadding 调整，须使用当前样式实值。
+        const float compensationHeight = rowHeight * 2 +
+                                         ImGui::GetTextLineHeight() * 4 +
+                                         ImGui::GetStyle().ItemSpacing.y * 5;
         root.addElement(
             "compensation",
             UI::Sizing::Grow(),
-            UI::Sizing::Fixed(rowHeight * 6),
+            UI::Sizing::Fixed(compensationHeight),
             [&](Clay_BoundingBox rect, bool) {
                 ImGui::TextUnformatted("3D 运动补偿");
                 ImGui::SetNextItemWidth(rect.width);
