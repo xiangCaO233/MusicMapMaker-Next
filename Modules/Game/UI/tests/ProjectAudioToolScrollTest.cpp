@@ -616,6 +616,60 @@ bool checkTableView(MMM::UI::UIManager&            manager,
     if ( !view.isTableView() || !table ||
          (findCanvas() && findCanvas()->Active) )
         return false;
+    // 从真实表头右键打开菜单，覆盖 TableHeadersRow 的默认菜单提交时机。
+    // 不能直接调用自定义菜单或只检查禁用标记，否则标记设置过晚仍可能漏测。
+    const ImVec2 header{ table->InnerRect.Min.x + 30,
+                         table->InnerRect.Min.y + 5 };
+    /// @brief 在真实表格和弹层之间投递一个菜单输入帧。
+    /// @param point 目标屏幕坐标，不直接改写表格的打开状态。
+    /// @warning 测试不关闭冲突检测，也不绕过原生右键捕获。
+    const auto at = [&](ImVec2 point) {
+        drawFrame(manager, view, true, 0, false, 450, false, point);
+    };
+    at(header);
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+    at(header);
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+    at(header);
+    // 原生表头可在行结束阶段排队打开请求，下一帧才创建对应弹窗窗口。
+    at(header);
+    auto& context = *ImGui::GetCurrentContext();
+    if ( context.OpenPopupStack.empty() ||
+         !context.OpenPopupStack.back().Window ) {
+        XERROR("Project audio table header context popup did not open");
+        return false;
+    }
+    auto* popup = context.OpenPopupStack.back().Window;
+    // 弹窗首帧测量和下一帧实际尺寸分别推进，不能拿自动测量前的窗口判断高度。
+    at(header);
+    at(header);
+    // 自定义菜单仅十项；原生尺寸、重置和第二套列显隐项不能在上方被追加。
+    // 使用字体高度的宽容上界，允许主题留白但拒绝两套完整菜单叠加。
+    // 此时没有展开子菜单，父弹窗只能包含自身的显隐及操作入口。
+    // 列数固定为六，资源数量增加不能改变该菜单的结构与高度。
+    if ( popup->Size.y >= ImGui::GetFrameHeightWithSpacing() * 14 ) {
+        XERROR("Project audio table contains duplicated default context menu");
+        return false;
+    }
+    const ImVec2 menuItem{ popup->Pos.x + popup->WindowPadding.x + 20,
+                           popup->Pos.y + popup->Size.y -
+                               popup->WindowPadding.y -
+                               ImGui::GetTextLineHeight() * 0.5F };
+    // 悬停最后一项列显隐菜单，与截图中的重复列标签走相同的 ID 检测路径。
+    // 连续帧让 ImGui 用上一帧 HoveredId 统计本轮同 ID 的可见项数量。
+    for ( int frame = 0; frame < 3; ++frame ) at(menuItem);
+    // 不关闭冲突提示选项、不放宽重复 ID，只允许当前菜单项被提交一次。
+    // HoveredId 非空还能保证测试实际命中菜单，而非在空白处误判没有冲突。
+    if ( context.HoveredWindow != popup || context.HoveredId == 0 ||
+         context.HoveredIdPreviousFrameItemCount != 1 ) {
+        XERROR("Project audio table context menu ID conflict");
+        return false;
+    }
+    // 本轮只验证菜单内容与 ID；关闭弹窗作为测试清理，不额外测试焦点策略。
+    // 使用 ImGui 的关闭入口恢复栈，不能销毁工具来掩盖菜单产生的表格状态。
+    ImGui::ClosePopupToLevel(0, true);
+    // 下一帧让表格消费关闭状态，再继续同一视图的行选择和音量操作。
+    at(header);
     // 指针放在首行文件名列，按真实按下/松开时序激活公共 Selectable。
     // 使用实际表格几何而非固定坐标，避免顶部工具栏增加后点击到搜索框。
     // 先移动再按下，保持与 GLFW 后端逐帧投递输入的时序一致。

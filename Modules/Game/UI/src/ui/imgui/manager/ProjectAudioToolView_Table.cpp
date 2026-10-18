@@ -203,16 +203,19 @@ void ProjectAudioToolView::renderTableView(float dpiScale)
         "操作",
         ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort,
         90.0F * dpiScale);
+    // TableHeadersRow 会触发表格布局并绘制默认菜单，必须在它之前关闭默认入口。
+    // 自定义菜单沿用同一弹窗身份，但不能与默认列显隐项重复提交相同标签 ID。
+    ImGui::GetCurrentTable()->DisableDefaultContextMenu = true;
     ImGui::TableSetupScrollFreeze(0, 1);
     // 表头不占资源索引，裁剪器从第一条真实音频资源开始计数。
     ImGui::TableHeadersRow();
 
     // 表格内部 ID 使用新版本，避免旧五列表格设置误映射到六列布局。
     // 后续窗口重开仍由 ImGui 保存列宽、顺序和隐藏状态。
-    // 复用项目其他资源表的上下文弹窗入口，抢先消费默认菜单。
+    // 复用项目其他资源表的上下文弹窗入口，替换已经禁用的默认菜单。
     // 显隐和宽度修改由 ImGui 排队，不在当前行绘制期间重建布局。
     // 内部表格指针仅在 BeginTable/EndTable 之间借用，不跨帧保存。
-    // 菜单必须在默认 EndTable 菜单之前提交，才能使用同一弹窗身份。
+    // 默认菜单在布局阶段就可能提交，不能依靠后绘制自定义内容将其覆盖。
     // 不额外叠加独立窗口，否则会留下两个互相竞争的右键菜单。
     auto* table = ImGui::GetCurrentTable();
     if ( ImGui::TableBeginContextMenuPopup(table) ) {
