@@ -356,6 +356,9 @@ struct ProjectWorkspaceState {
     /// @brief 选中 Effect 音频资源时是否自动试听一次采样。
     bool m_projectAudioToolPreviewEffectOnSelection{ false };
 
+    /// @brief 方块移动、批量移动及尺寸调整是否自动对齐，旧项目默认保持开启。
+    bool m_projectAudioToolSnapEnabled{ true };
+
     /// @brief 上次是否打开了项目音频工具窗口。
     bool m_projectAudioToolOpen{ false };
 
@@ -410,6 +413,8 @@ struct ProjectWorkspaceState {
               workspace.m_projectAudioToolBrushVolume },
             { "m_projectAudioToolPreviewEffectOnSelection",
               workspace.m_projectAudioToolPreviewEffectOnSelection },
+            { "m_projectAudioToolSnapEnabled",
+              workspace.m_projectAudioToolSnapEnabled },
             { "m_projectAudioToolOpen", workspace.m_projectAudioToolOpen },
             { "m_projectAudioToolPlacements",
               workspace.m_projectAudioToolPlacements },
@@ -464,6 +469,9 @@ struct ProjectWorkspaceState {
             std::max(0.0F, workspace.m_projectAudioToolBrushVolume);
         workspace.m_projectAudioToolPreviewEffectOnSelection =
             j.value("m_projectAudioToolPreviewEffectOnSelection", false);
+        // 历史工作区没有此字段，默认开启以保持升级前的方块对齐行为。
+        workspace.m_projectAudioToolSnapEnabled =
+            j.value("m_projectAudioToolSnapEnabled", true);
         workspace.m_projectAudioToolOpen =
             j.value("m_projectAudioToolOpen", false);
         workspace.m_projectAudioToolPlacements =

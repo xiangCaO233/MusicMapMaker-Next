@@ -160,6 +160,9 @@ private:
         /// @brief 选中音效后自动试听的选项文本。
         const char* previewEffectOnSelection{ "" };
 
+        /// @brief 方块布局吸附开关的文本，复用画布通用翻译。
+        const char* snap{ "" };
+
         /// @brief 搜索输入提示文本。
         const char* searchHint{ "" };
 

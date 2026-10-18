@@ -217,6 +217,96 @@ bool checkVolumePopup(MMM::UI::UIManager&            manager,
     return context.OpenPopupStack.empty() && !popup->Active;
 }
 
+/// @brief 用真实方块拖动验证吸附开关，并覆盖已有锁在关闭后立即释放。
+/// @param manager 工具依赖的真实 UI 管理器。
+/// @param view 跨场景复用的工具，不通过重建视图隐藏缓存状态问题。
+/// @return 开启时对齐、关闭时跟随原始指针，并能中途解除吸附时为真。
+/// @note 工作区直接设置模拟已保存偏好，移动与松手仍通过正常鼠标事件提交。
+/// @warning 仅测试帧路径，不操作用户媒体文件或等待真实时间。
+bool checkSnapToggle(MMM::UI::UIManager&            manager,
+                     MMM::UI::ProjectAudioToolView& view)
+{
+    auto* project = MMM::Logic::ProjectController::instance().currentProject();
+    if ( !project ) return false;
+    auto& workspace = project->m_settings.m_workspace;
+    // 前三轮检验移动的开启、关闭和手势中关闭；后两轮检验右边缘缩放。
+    // 截图中的边缘调整必须受同一开关控制，不能只修好方块平移。
+    // 每轮重置夹具布局，但保留同一个视图及其缓存，检测残留锁是否干扰新手势。
+    for ( int scenario = 0; scenario < 5; ++scenario ) {
+        prepareResources(*project);
+        workspace.m_projectAudioToolSnapEnabled =
+            scenario != 1 && scenario != 4;
+        MMM::Event::EventBus::instance().publish(
+            MMM::Event::ProjectSavedEvent{});
+        for ( int frame = 0; frame < 4; ++frame )
+            drawFrame(manager, view, false);
+        auto* canvas = findCanvas();
+        if ( !canvas ) return false;
+        // 卡片内部避开边框缩放柄及底部试听按钮，确保进入正常的单项移动。
+        // 屏幕原点取实际子窗口，新增工具栏不能改变手势命中位置。
+        const bool resize = scenario >= 3;
+        // 右边缘内一像素用于命中实际缩放柄，非边缘轮次仍从方块内部开始。
+        const ImVec2 start{ canvas->DC.CursorStartPos.x + (resize ? 163 : 94),
+                            canvas->DC.CursorStartPos.y + 64 };
+        const ImVec2 target{ start.x + 5, start.y + (resize ? 0 : 12) };
+        /// @brief 复用固定浮动窗口，提交同一拖动手势的屏幕指针位置。
+        /// @param pointer 已按真实子窗口原点转换的屏幕坐标。
+        auto at = [&](ImVec2 pointer) {
+            drawFrame(manager, view, false, 0, false, 450, false, pointer);
+        };
+        at(start);
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        at(start);
+        // 平移越过拖动阈值，缩放柄则直接响应；两者均进入邻卡边缘的吸附容差。
+        // 不直接调用吸附算法，以覆盖工作区开关到实际交互入口的完整路径。
+        at(target);
+        if ( scenario == 2 ) {
+            // 保持鼠标不动来关闭开关，旧滞回锁不应继续决定下一帧位置。
+            // 与单独开始一轮禁用状态相比，这还能检出参考线残留的状态错误。
+            workspace.m_projectAudioToolSnapEnabled = false;
+            at(target);
+        }
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        at(target);
+        // 松手后只读取正常持久化的布局，不借用视图的私有矩形或吸附锁。
+        // 不使用快照或视图缓存作答案，持久位置也必须反映最终开关状态。
+        // 方块被提升层级后顺序会改变，因此按资源身份查找，不能只读首项。
+        const auto& placements = workspace.m_projectAudioToolPlacements;
+        const auto  item       = std::find_if(
+            placements.begin(),
+            placements.end(),
+            [](const MMM::ProjectAudioToolItemPlacement& placement) {
+                return placement.m_audioResourceId == "pf1_0";
+            });
+        if ( item == placements.end() ) return false;
+        // 第一轮的底边贴到下一卡片顶边；另两轮必须精确保留指针目标位移。
+        // 两个轴分别比较，防止只关闭横轴吸附而遗漏竖轴。
+        const float expectedX = resize || scenario == 0 ? 24.0F : 29.0F;
+        const float expectedY = resize ? 24.0F : scenario == 0 ? 34.0F : 36.0F;
+        // 禁用缩放吸附后保留五像素宽度变化，开启时右边与固定卡片对齐。
+        const float expectedWidth = scenario == 4 ? 145.0F : 140.0F;
+        if ( std::abs(item->m_x - expectedX) > 0.1F ||
+             std::abs(item->m_y - expectedY) > 0.1F ||
+             std::abs(item->m_width - expectedWidth) > 0.1F ) {
+            XERROR(
+                "Project audio snap toggle failed: scenario={}, position=({}, "
+                "{}), width={}",
+                scenario,
+                item->m_x,
+                item->m_y,
+                item->m_width);
+            return false;
+        }
+    }
+    // 后续滚动和表格案例仍使用原始布局与默认吸附状态。
+    // 恢复也通过正式资源保存通知使缓存失效，不能直接重建测试专用视图。
+    // 所有按下事件已经配对释放，后续弹层与滚轮不继承活动拖动。
+    workspace.m_projectAudioToolSnapEnabled = true;
+    prepareResources(*project);
+    MMM::Event::EventBus::instance().publish(MMM::Event::ProjectSavedEvent{});
+    return true;
+}
+
 /// @brief 验证浮动、停靠、后台标签恢复及横向溢出的实际滚动结果。
 /// @return 所有场景均可查看视口外资源时返回 true。
 bool checkScrolling(MMM::UI::UIManager&            manager,
@@ -441,6 +531,10 @@ int main()
         // 诊断只输出所属阶段，不跳过断言、不重试输入，也不降低通过条件。
         passed = checkVolumePopup(manager, view);
         if ( !passed ) XERROR("Project audio volume popup regression");
+        if ( passed ) {
+            passed = checkSnapToggle(manager, view);
+            if ( !passed ) XERROR("Project audio snapping toggle regression");
+        }
         if ( passed ) {
             passed = checkScrolling(manager, view);
             if ( !passed ) XERROR("Project audio scrolling regression");

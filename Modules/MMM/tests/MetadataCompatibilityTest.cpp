@@ -176,6 +176,7 @@ bool testProjectAudioToolWorkspaceRoundTrip()
     source.m_annotationTableOpen                = true;
     source.m_projectAudioToolSelectedResourceId = "main";
     source.m_projectAudioToolBrushVolume        = 0.75F;
+    source.m_projectAudioToolSnapEnabled        = false;
     source.m_projectAudioToolPlacements         = {
         // 第一项显式提供尺寸，覆盖用户调整过的自由布局。
         MMM::ProjectAudioToolItemPlacement{
@@ -207,8 +208,16 @@ bool testProjectAudioToolWorkspaceRoundTrip()
             { "m_zOrder", 1 },
         }
             .get<MMM::ProjectAudioToolItemPlacement>();
+    // 缺字段的历史工作区保持原来的吸附行为，不能因升级直接关闭。
+    const auto legacyWorkspace =
+        json::object().get<MMM::ProjectWorkspaceState>();
     // 开关、选择和画笔状态属于工作区级字段，均应逐项保持。
-    return check(restored.m_projectAudioToolOpen,
+    return check(!restored.m_projectAudioToolSnapEnabled,
+                 "disabled project audio snapping should round trip") &&
+           check(
+               legacyWorkspace.m_projectAudioToolSnapEnabled,
+               "legacy project audio workspace should keep snapping enabled") &&
+           check(restored.m_projectAudioToolOpen,
                  "project audio tool open state should round trip") &&
            check(restored.m_timingPointsTableOpen,
                  "timing table open state should round trip") &&

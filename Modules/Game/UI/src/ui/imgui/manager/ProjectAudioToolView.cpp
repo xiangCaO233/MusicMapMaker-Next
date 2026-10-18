@@ -542,6 +542,7 @@ void ProjectAudioToolView::refreshTranslationCache()
     m_translationCache.hint = translate("ui.project_audio_tool.hint").data();
     m_translationCache.previewEffectOnSelection =
         translate("ui.project_audio_tool.preview_effect_on_selection").data();
+    m_translationCache.snap = translate("ui.canvas.snap").data();
     m_translationCache.searchHint =
         translate("ui.project_audio_tool.search_hint").data();
     m_translationCache.noSearchResults =
@@ -1850,6 +1851,24 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         Logic::EditorEngine::instance().saveProject();
     }
 
+    // 布局吸附随项目工作区保存，表格视图没有移动或缩放操作，不显示此选项。
+    auto& snapEnabled =
+        project->m_settings.m_workspace.m_projectAudioToolSnapEnabled;
+    if ( !m_tableView ) {
+        ImGui::SameLine();
+        if ( FeedbackCheckbox(m_translationCache.snap, &snapEnabled) ) {
+            // 立即丢弃旧手势的滞回状态，重新开启时不能抢回上次的参考线。
+            m_snapLocks = {};
+            Logic::EditorEngine::instance().saveProject();
+        }
+    }
+    // 外部工作区恢复也能改变开关；关闭后所有交互层都不应保留参考线。
+    // 该分支每帧只清理两个可选轴锁，不重建方块索引或查询磁盘配置。
+    // 移动与缩放仍保留可见面积和最小尺寸约束，开关只影响布局自动对齐。
+    // 三种手势共用这一状态，避免批量移动或边角缩放漏掉关闭行为。
+    // 开启状态不强制生成锁，只有实际进入参考线容差后才由算法创建。
+    if ( !snapEnabled ) m_snapLocks = {};
+
     if ( m_tableView ) {
         // 表格与方块互斥绘制，保持重命名模态入口的共同生命周期。
         renderTableView(dpiScale);
@@ -2526,13 +2545,15 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                     item.rect.height,
                 };
                 // 先应用边缘和中心吸附，再执行底层方块可见性约束。
-                rawRect =
-                    ProjectAudioToolLayout::snapRect(rawRect,
-                                                     visibleCanvas,
-                                                     m_dragSnapTargets,
-                                                     SNAP_THRESHOLD,
-                                                     SNAP_RELEASE_THRESHOLD,
-                                                     m_snapLocks);
+                if ( snapEnabled ) {
+                    rawRect =
+                        ProjectAudioToolLayout::snapRect(rawRect,
+                                                         visibleCanvas,
+                                                         m_dragSnapTargets,
+                                                         SNAP_THRESHOLD,
+                                                         SNAP_RELEASE_THRESHOLD,
+                                                         m_snapLocks);
+                }
                 // 只沿上一帧到指针目标的移动方向截停，不把方块避让到另一侧。
                 // 同步释放已被可见性约束拒绝的吸附锁，避免下一帧继续抢回旧位置。
                 item.rect = ProjectAudioToolLayout::constrainMoveVisibility(
@@ -2581,12 +2602,15 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 m_batchDragInitialBounds.height,
             };
             // 吸附针对整体包围盒，参考线与整个选择集合的边缘或中心对齐。
-            rawBounds = ProjectAudioToolLayout::snapRect(rawBounds,
-                                                         visibleCanvas,
-                                                         m_dragSnapTargets,
-                                                         SNAP_THRESHOLD,
-                                                         SNAP_RELEASE_THRESHOLD,
-                                                         m_snapLocks);
+            if ( snapEnabled ) {
+                rawBounds =
+                    ProjectAudioToolLayout::snapRect(rawBounds,
+                                                     visibleCanvas,
+                                                     m_dragSnapTargets,
+                                                     SNAP_THRESHOLD,
+                                                     SNAP_RELEASE_THRESHOLD,
+                                                     m_snapLocks);
+            }
             // 结合选择并集单元，约束平移后所有固定方块的最低可见比例。
             m_batchDragCurrentBounds =
                 ProjectAudioToolLayout::constrainTranslatedVisibility(
@@ -2709,17 +2733,19 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                                  m_resizeStartRect.y);
             }
             // 尺寸下限应用后再吸附活动边，避免吸附产生过小矩形。
-            rawRect =
-                ProjectAudioToolLayout::snapResizeRect(rawRect,
-                                                       horizontalEdge,
-                                                       verticalEdge,
-                                                       visibleCanvas,
-                                                       m_dragSnapTargets,
-                                                       minimumWidth,
-                                                       minimumHeight,
-                                                       SNAP_THRESHOLD,
-                                                       SNAP_RELEASE_THRESHOLD,
-                                                       m_snapLocks);
+            if ( snapEnabled ) {
+                rawRect = ProjectAudioToolLayout::snapResizeRect(
+                    rawRect,
+                    horizontalEdge,
+                    verticalEdge,
+                    visibleCanvas,
+                    m_dragSnapTargets,
+                    minimumWidth,
+                    minimumHeight,
+                    SNAP_THRESHOLD,
+                    SNAP_RELEASE_THRESHOLD,
+                    m_snapLocks);
+            }
             // 最终约束保护被活动方块覆盖的固定方块最低可见面积。
             item.rect = ProjectAudioToolLayout::constrainResizeVisibility(
                 item.rect,
@@ -2767,7 +2793,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             snapGuideBounds = m_items[*activeItem].rect;
         }
     }
-    if ( snapGuideBounds ) {
+    if ( snapEnabled && snapGuideBounds ) {
         // 可见逻辑边界转换为屏幕坐标，参考线不会绘制到画布窗口外。
         const ImVec2 visibleMinimum{
             canvasOrigin.x + visibleCanvas.x * canvasScale,
