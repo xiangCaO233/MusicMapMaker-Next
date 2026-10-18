@@ -631,6 +631,131 @@ bool checkScrolling(MMM::UI::UIManager&            manager,
     io.ConfigMacOSXBehaviors = originalMacOSBehavior;
     return horizontalPassed;
 }
+/// @brief 通过真实多级菜单验证字段排序与排序重置，不直接调用表格排序 API。
+/// @param manager 真实工具依赖的 UI 管理器。
+/// @param view 当前工具实例，过程中不销毁或重建。
+/// @param window 表格的滚动子窗口，供表头右键命中使用。
+/// @param table 当前表格状态，仅用于读取最终排序结果。
+/// @return 三个字段均能升降序，并能从重置菜单恢复文件名升序时为真。
+/// @details 截图中的降序位于三级弹层，必须经过实际的父菜单展开才能复现。
+/// 不能直接设置排序规格或全局 CurrentTable，否则会绕过空上下文崩溃。
+/// 所有等待只推进测试 UI 帧，不阻塞生产线程或真实等待固定时间。
+bool checkTableSortingMenus(MMM::UI::UIManager&            manager,
+                            MMM::UI::ProjectAudioToolView& view,
+                            ImGuiWindow* window, ImGuiTable* table)
+{
+    // 保留外层表的观察指针只用于读取结果，不把它写入弹层的全局当前表。
+    // 这样测试仍能覆盖原先调用内部 API 时缺少表格上下文的真实失败路径。
+    auto&        context = *ImGui::GetCurrentContext();
+    const ImVec2 header{ window->InnerRect.Min.x + 30,
+                         window->InnerRect.Min.y + 5 };
+    /// @brief 向生产工具投递一帧指针状态，让原生菜单处理其展开和关闭。
+    const auto at = [&](ImVec2 pointer) {
+        drawFrame(manager, view, true, 0, false, 450, false, pointer);
+    };
+    /// @brief 按弹层实际行高定位菜单项，避免主题行距不同造成相邻项误命中。
+    const auto rowPoint = [](ImGuiWindow* popup, int row) {
+        // 弹层可能与背景使用不同 ItemSpacing，采用其最后一行的布局步长。
+        const float stride =
+            popup->DC.CursorPos.y - popup->DC.CursorPosPrevLine.y;
+        return ImVec2{ popup->Pos.x + popup->WindowPadding.x + 20,
+                       popup->DC.CursorStartPos.y + row * stride +
+                           popup->DC.PrevLineSize.y * 0.5F };
+    };
+    /// @brief 从表头右键打开根菜单，返回完成测量的真实弹层窗口。
+    /// @note 根菜单只是入口；后续必须继续展开字段和方向两级菜单。
+    const auto openContext = [&]() -> ImGuiWindow* {
+        // 先移动到表头，鼠标按下和释放分别进入后端输入队列。
+        at(header);
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+        at(header);
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+        at(header);
+        // 表头可能在行结束时排队打开；额外帧同时完成弹层自动尺寸计算。
+        at(header);
+        at(header);
+        if ( context.OpenPopupStack.empty() ) return nullptr;
+        return context.OpenPopupStack.back().Window;
+    };
+    /// @brief 悬停指定父项并取得其子菜单，遵循 ImGui 原生悬停展开时序。
+    const auto openChild = [&](ImGuiWindow* parent, int row) -> ImGuiWindow* {
+        // 打开失败向调用方返回空值，不能跳过菜单路径却继续断言原排序状态。
+        if ( !parent ) return nullptr;
+        // 使用父层深度识别新弹层，不能把仍在显示的父菜单当成展开成功。
+        const auto depth = context.OpenPopupStack.size();
+        const auto point = rowPoint(parent, row);
+        // 有界推进输入帧，直到子菜单窗口真正出现；不直接篡改打开栈。
+        // 子菜单的创建和测量分属不同帧，取得窗口后仍需完成测量。
+        for ( int frame = 0; frame < 30; ++frame ) {
+            at(point);
+            if ( context.OpenPopupStack.size() > depth &&
+                 context.OpenPopupStack.back().Window ) {
+                at(point);
+                return context.OpenPopupStack.back().Window;
+            }
+        }
+        return nullptr;
+    };
+    /// @brief 点击实际菜单叶项，原生关闭弹层后让外层表格消费排序请求。
+    const auto clickRow = [&](ImGuiWindow* popup, int row) {
+        if ( !popup ) return false;
+        const auto point = rowPoint(popup, row);
+        // 移动、按下和释放分帧，保证原生菜单收到独立的点击边沿。
+        // 叶项关闭后再推进表格，验证排序在正常宿主上下文中落地。
+        at(point);
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        at(point);
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        at(point);
+        // 不主动关闭弹层；若点击未被接受，残留菜单应直接导致用例失败。
+        at(header);
+        return context.OpenPopupStack.empty();
+    };
+    // 前三列分别为名称、类型与 ID；同一“降序”文本应命中不同字段的稳定身份。
+    // 每个组合都重新打开菜单，不能只覆盖首次排序后沿用旧的弹层上下文。
+    for ( int column = 0; column < 3; ++column ) {
+        for ( const auto direction : { ImGuiSortDirection_Ascending,
+                                       ImGuiSortDirection_Descending } ) {
+            auto* sort  = openChild(openContext(), 2);
+            auto* field = openChild(sort, column);
+            if ( !clickRow(
+                     field,
+                     direction == ImGuiSortDirection_Ascending ? 0 : 1) ) {
+                XERROR(
+                    "Project audio sort menu click failed: column={}, "
+                    "direction={}",
+                    column,
+                    static_cast<int>(direction));
+                return false;
+            }
+            // 同时检查表头规格与原始列状态，确保请求没有仅改动菜单内的临时变量。
+            // 单列排序必须恰好有一个规格，不能保留先前字段的累加优先级。
+            // SortOrder 为零表示该字段确实成为主排序列，而非仅显示了箭头。
+            // 同时核验列索引与方向，只有“不崩溃”不能证明点中了预期菜单项。
+            const auto& spec = table->SortSpecs;
+            if ( spec.SpecsCount != 1 || !spec.Specs ||
+                 spec.Specs[0].ColumnIndex != column ||
+                 spec.Specs[0].SortDirection != direction ||
+                 table->Columns[column].SortOrder != 0 ) {
+                XERROR(
+                    "Project audio sort menu did not apply: column={}, "
+                    "direction={}",
+                    column,
+                    static_cast<int>(direction));
+                return false;
+            }
+        }
+    }
+    // “重置排序”原先走同一个危险接口，也必须经真实子菜单验证。
+    // 重置之后后续行选择测试仍可沿用文件名升序，不继承最后的 ID 降序。
+    // 前一轮最后是资源 ID 降序，和文件名升序不同，重置无效不会误通过。
+    // 重置也只能由菜单叶项触发，不能直接改列字段来准备后续测试。
+    auto* reset = openChild(openContext(), 3);
+    return clickRow(reset, 3) && table->SortSpecs.SpecsCount == 1 &&
+           table->SortSpecs.Specs[0].ColumnIndex == 0 &&
+           table->SortSpecs.Specs[0].SortDirection ==
+               ImGuiSortDirection_Ascending;
+}
 /// @brief 验证真实表格替代方块绘制，选择资源不改写已有布局。
 /// @return 模式切换、行选择和切回方块都保持工作区正确时返回 true。
 /// @note 使用同一个工具实例和同一套项目资源，避免新建视图掩盖状态丢失。
@@ -803,6 +928,9 @@ bool checkTableView(MMM::UI::UIManager&            manager,
     // 后续行选择和音量编辑沿用同一表格，留下的弹层会继续阻挡实际点击。
     // 因此关闭状态同样属于菜单操作契约，不只是测试之间的可选清理。
     if ( !context.OpenPopupStack.empty() ) return false;
+    // 排序菜单与列显隐共用弹层，但排序要等退出弹层后才能使用表格上下文。
+    if ( !checkTableSortingMenus(manager, view, table, targetTable) )
+        return false;
     // 指针放在首行文件名列，按真实按下/松开时序激活公共 Selectable。
     // 使用实际表格几何而非固定坐标，避免顶部工具栏增加后点击到搜索框。
     // 先移动再按下，保持与 GLFW 后端逐帧投递输入的时序一致。

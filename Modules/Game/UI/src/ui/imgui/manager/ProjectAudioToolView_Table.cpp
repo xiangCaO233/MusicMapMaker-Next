@@ -218,6 +218,15 @@ void ProjectAudioToolView::renderTableView(float dpiScale)
     // 默认菜单在布局阶段就可能提交，不能依靠后绘制自定义内容将其覆盖。
     // 不额外叠加独立窗口，否则会留下两个互相竞争的右键菜单。
     auto* table = ImGui::GetCurrentTable();
+    // 弹层拥有独立窗口，排序接口不能在里面读取 CurrentTable。
+    // 只记录本帧请求，退出全部菜单后再由真实表格上下文执行。
+    int                requestedSortColumn    = -1;
+    ImGuiSortDirection requestedSortDirection = ImGuiSortDirection_Ascending;
+    /// @brief 暂存菜单排序选择，不在弹层上下文中调用表格排序接口。
+    const auto requestSort = [&](int column, ImGuiSortDirection direction) {
+        requestedSortColumn    = column;
+        requestedSortDirection = direction;
+    };
     if ( ImGui::TableBeginContextMenuPopup(table) ) {
         /// @brief 将菜单中的列显隐请求排队到所属表格的下一次布局。
         /// @warning 只由菜单点击调用；弹层中不能依赖 ImGui 的当前表格上下文。
@@ -245,11 +254,9 @@ void ProjectAudioToolView::renderTableView(float dpiScale)
                 ImGui::PushID(key);
                 if ( FeedbackBeginMenu(labels[key]) ) {
                     if ( FeedbackMenuItem("升序") )
-                        ImGui::TableSetColumnSortDirection(
-                            key, ImGuiSortDirection_Ascending, false);
+                        requestSort(key, ImGuiSortDirection_Ascending);
                     if ( FeedbackMenuItem("降序") )
-                        ImGui::TableSetColumnSortDirection(
-                            key, ImGuiSortDirection_Descending, false);
+                        requestSort(key, ImGuiSortDirection_Descending);
                     FeedbackEndMenu();
                 }
                 ImGui::PopID();
@@ -275,8 +282,7 @@ void ProjectAudioToolView::renderTableView(float dpiScale)
             // 只恢复文件名升序，保留其余布局定制。
             // 单字段排序禁止累加旧字段，点击表头行为与菜单一致。
             if ( FeedbackMenuItem("重置排序") )
-                ImGui::TableSetColumnSortDirection(
-                    0, ImGuiSortDirection_Ascending, false);
+                requestSort(0, ImGuiSortDirection_Ascending);
             FeedbackEndMenu();
         }
         ImGui::Separator();
@@ -296,6 +302,11 @@ void ProjectAudioToolView::renderTableView(float dpiScale)
         }
         ImGui::EndPopup();
     }
+    // EndPopup 已恢复所属表格；此处与表头点击使用同一接口和排序规格。
+    // 菜单选择在本帧生效，不等待下一轮输入，也不临时篡改 ImGui 全局上下文。
+    if ( requestedSortColumn >= 0 )
+        ImGui::TableSetColumnSortDirection(
+            requestedSortColumn, requestedSortDirection, false);
     // 资源事件、搜索或用户排序操作才触发排序，常态帧仅访问可见行。
     // 同键时以稳定 ID 打破平局，避免重命名和资源刷新造成随机跳动。
     if ( auto* specs = ImGui::TableGetSortSpecs();
