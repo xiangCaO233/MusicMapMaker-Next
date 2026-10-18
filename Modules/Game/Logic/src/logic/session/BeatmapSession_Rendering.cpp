@@ -1,4 +1,5 @@
 #include "logic/BeatmapSession.h"
+#include "mmm/Metadata.h"
 
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
@@ -1068,10 +1069,31 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
     double      snapshotBackgroundVideoStartTime = 0.0;
     std::string snapshotBeatmapPathKey;
     std::string snapshotBeatmapName;
-    bool        snapshotIsDirty     = false;
-    double      snapshotFallbackBpm = ::MMM::DEFAULT_NORMALIZED_BPM;
+    int         snapshotBmsKeysPerSide = 0;
+    bool        snapshotIsDirty        = false;
+    double      snapshotFallbackBpm    = ::MMM::DEFAULT_NORMALIZED_BPM;
     if ( m_ctx->currentBeatmap ) {
         const auto& metadata = m_ctx->currentBeatmap->m_baseMapMetadata;
+        // 本函数在会话逻辑线程生成快照，来源表沿用已有会话生命周期。
+        // 不增加跨线程锁，也不把属性容器或字符串引用传给渲染线程。
+        // 元数据缺失或字段未知时保持零，旧普通 MMM 不会被启发式重新分类。
+        // 各相机复制标量后可独立消费，清空快照会同时清除此来源标记。
+        // 来源语义只查内存属性表一次，各相机复用同一整数值。
+        // 不通过 6K/8K 猜测转盘，避免把普通键谱面误标为 BMS。
+        const auto& properties =
+            m_ctx->currentBeatmap->m_metadata.map_properties;
+        if ( const auto origin = properties.find(MapMetadataType::BMS);
+             origin != properties.end() ) {
+            const auto layout = origin->second.find("keys_per_side");
+            if ( layout != origin->second.end() ) {
+                if ( layout->second == "5" )
+                    snapshotBmsKeysPerSide = 5;
+                else if ( layout->second == "7" )
+                    snapshotBmsKeysPerSide = 7;
+                else if ( layout->second == "9" )
+                    snapshotBmsKeysPerSide = 9;
+            }
+        }
         snapshotFallbackBpm = ::MMM::normalizeBpmValue(metadata.preference_bpm);
 
         if ( !metadata.main_cover_path.empty() ) {
@@ -1311,6 +1333,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             // 分发到多个相机时不要再次转换持久化的毫秒单位。
             snapshot->backgroundVideoStartTime =
                 snapshotBackgroundVideoStartTime;
+            // 来源布局须先于几何生成发布，轨道标题不再访问活动谱面。
+            // 与路径和标题来自同一批会话状态，避免切换相机时混用旧来源。
+            snapshot->bmsKeysPerSide = snapshotBmsKeysPerSide;
             snapshot->beatmapPathKey = snapshotBeatmapPathKey;
             snapshot->beatmapName    = snapshotBeatmapName;
             snapshot->isDirty        = snapshotIsDirty;

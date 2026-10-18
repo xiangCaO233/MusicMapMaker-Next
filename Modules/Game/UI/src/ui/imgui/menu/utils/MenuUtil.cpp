@@ -615,6 +615,10 @@ std::vector<std::string> MenuUtil::collectExportCompatibilityWarnings(
     // BMS 在选择路径后、实际写盘前展示转换摘要。
     // 警告仅描述目标差异，不改变当前会话或项目配置。
     if ( isBms ) {
+        // 画布使用短标签适应窄轨，确认窗口提供完整含义以免只懂缩写的用户受益。
+        // 此说明与具体映射同时显示，不要求用户另外查阅 BMS 文件通道表。
+        warnings.push_back(
+            "轨道标记：SCR 表示转盘，KEY 表示普通键，1P/2P 表示两侧玩家。");
         // .bms/.bme/.bml 共用含转盘的键位协议，.pms 保持独立九键协议。
         // 六键和八键来源已经包含转盘，不应再补一轨导致原键位偏移。
         // 这里只给非标准普通键布局提供补位提示，与 writer 的判断保持一致。
@@ -625,10 +629,36 @@ std::vector<std::string> MenuUtil::collectExportCompatibilityWarnings(
         const int tracks = beatMap.m_baseMapMetadata.track_count;
         if ( ext != ".pms" && ((tracks >= 1 && tracks <= 5) || tracks == 7) )
             warnings.push_back(
-                fmt::format("{}K 将转换为标准 {} "
-                            "键加转盘布局：原有键序不变，转盘及其余键留空。",
+                fmt::format("{}K 将转换为标准 {} 键加转盘布局：当前第 1～{} "
+                            "轨对应 1P 键 1～{}；"
+                            "目标转盘及其余普通键留空。原项目布局不变。",
                             tracks,
-                            tracks == 7 ? 7 : 5));
+                            tracks == 7 ? 7 : 5,
+                            tracks,
+                            tracks));
+        // 总轨数含转盘与纯普通键同名，不能仅凭界面显示的 6K/8K 隐含转换。
+        // 这两种布局不增加轨数，但首轨在目标格式中的用途必须明确告知。
+        else if ( ext != ".pms" && (tracks == 6 || tracks == 8) )
+            // 原生普通 6K/8K 也可能导出 BMS，必须明确首轨会被解释为转盘。
+            warnings.push_back(
+                fmt::format("按标准 BMS 布局导出：当前第 1 轨对应 1P 转盘，第 "
+                            "2～{} 轨对应 1P 键 1～{}。",
+                            tracks,
+                            tracks - 1));
+        else if ( ext != ".pms" && (tracks == 12 || tracks == 16) ) {
+            // 双人两侧分别包含一个转盘，不把第二侧首轨继续编号成普通键。
+            // 原轨道顺序不变；每侧首轨的语义转换独立说明。
+            // 两侧普通键都从一开始编号，不把它们误解为连续十或十四颗键。
+            const int sideTracks = tracks / 2;
+            warnings.push_back(fmt::format(
+                "按双人 BMS 布局导出：第 1、{} 轨分别为 1P、2P 转盘；"
+                "每侧随后 {} 轨依次对应该侧普通键。",
+                sideTracks + 1,
+                sideTracks - 1));
+        } else if ( ext == ".pms" && tracks == 9 )
+            // PMS 九键没有转盘，不能套用六轨或八轨的首轨解释。
+            warnings.push_back(
+                "按 PMS 九键导出：当前第 1～9 轨依次对应键 1～9，没有转盘。");
         if ( std::any_of(beatMap.m_timings.begin(),
                          beatMap.m_timings.end(),
                          [](const auto& timing) {

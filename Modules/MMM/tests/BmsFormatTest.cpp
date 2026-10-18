@@ -71,13 +71,25 @@ int main(int argc, char** argv)
     // 从而同时验证编辑器加载路径能够到达新的读取器。
     auto map = MMM::BeatMap::loadFromFile(source);
     if ( !verify(map) ) return 3;
+    // 标准 BMS 的来源语义独立于总轨数，用于识别转盘而非猜测普通 6K。
+    if ( map.m_metadata.map_properties[MMM::MapMetadataType::BMS]
+                                      ["keys_per_side"] != "5" )
+        return 18;
     // 两条实际 writer 都经过公共分派，能发现后缀或序列化遗漏。
     for ( const auto* extension : { ".mmm", ".bms" } ) {
         const auto target = root / (std::string("roundtrip") + extension);
         // 原生格式须保存秒数，BMS 须反算 1/48 拍定义。
         // 两种重载结果都与同一人工算出的期望比较。
         if ( !map.saveToFile(target) ) return 4;
-        if ( !verify(MMM::BeatMap::loadFromFile(target)) ) return 5;
+        const auto restored = MMM::BeatMap::loadFromFile(target);
+        if ( !verify(restored) ) return 5;
+        // 改为 .mmm 后仍保留 BMS 键位来源，标签不能依赖当前文件扩展名。
+        const auto origin =
+            restored.m_metadata.map_properties.find(MMM::MapMetadataType::BMS);
+        if ( origin == restored.m_metadata.map_properties.end() ||
+             origin->second.find("keys_per_side") == origin->second.end() ||
+             origin->second.find("keys_per_side")->second != "5" )
+            return 19;
     }
     // 拒绝导出也属于用户数据完整性契约。
     // 若 writer 默默忽略 STOP，文件能打开但节奏和音频语义已经改变。

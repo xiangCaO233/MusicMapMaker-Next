@@ -522,6 +522,9 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                         type = MapMetadataType::MALODY;
                     else if ( it.key() == "rm" )
                         type = MapMetadataType::RM;
+                    else if ( it.key() == "bms" )
+                        // 恢复 BMS 转盘和键位标识，普通 MMM 不凭键数猜测来源。
+                        type = MapMetadataType::BMS;
                     else
                         continue;
 

@@ -191,6 +191,9 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
             sourceName = "malody";
         else if ( type == MapMetadataType::RM )
             sourceName = "rm";
+        else if ( type == MapMetadataType::BMS )
+            // BMS 来源布局在原生文件中持久化，不依赖当前文件后缀。
+            sourceName = "bms";
 
         if ( sourceName.empty() ) continue;
 
