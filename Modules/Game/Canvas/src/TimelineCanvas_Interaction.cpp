@@ -11,6 +11,7 @@
 
 #include "canvas/MarqueeAutoScroll.h"
 #include "canvas/TimelineTimingTooltip.h"
+#include "common/LogicCommands.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "event/core/EventBus.h"
@@ -1171,7 +1172,7 @@ void TimelineCanvas::pruneInvalidTimingSelection()
 }
 
 /// @brief 删除当前选中的 Timing 事件。
-/// @details 复制选择集合后逐实体发布删除命令，避免发布过程中快照更新影响
+/// @details 复制选择集合后一次发布批量删除命令，避免发布过程中快照更新影响
 /// 当前迭代；最后立即清空本地选择，视觉状态无需等待逻辑快照回流。
 void TimelineCanvas::deleteSelectedTimingEvents()
 {
@@ -1179,11 +1180,11 @@ void TimelineCanvas::deleteSelectedTimingEvents()
         return;
     }
 
-    auto selected = m_selectedTimingEntities;
-    for ( auto entity : selected ) {
-        publishTimelineCommand(
-            Event::LogicCommandEvent(Logic::CmdDeleteTimelineEvent{ entity }));
-    }
+    Logic::CmdDeleteTimelineEvents command;
+    command.entities.assign(m_selectedTimingEntities.begin(),
+                            m_selectedTimingEntities.end());
+    // 一次按键或菜单操作只有一条命令，逻辑层按完整批次记录历史。
+    publishTimelineCommand(Event::LogicCommandEvent(std::move(command)));
     m_selectedTimingEntities.clear();
 }
 
@@ -1208,7 +1209,7 @@ void TimelineCanvas::updateTimingEraseTarget(
 /// - 若目标未选中，则只删除当前擦除目标。
 /// - 擦除目标始终并入最终集合，避免选择状态竞争遗漏。
 /// - unordered_set 对多来源实体 ID 去重。
-/// - 每个实体发布一条 `CmdDeleteTimelineEvent`。
+/// - 整个集合只发布一条 `CmdDeleteTimelineEvents`，撤销一次完整恢复。
 /// - 已提交实体同步从本地选择集合移除。
 /// - 逻辑层负责实体有效性与撤销历史。
 /// - 本函数不直接修改 Timeline 或 registry。
@@ -1236,11 +1237,11 @@ void TimelineCanvas::commitTimingEraseTargets()
     toDelete.insert(m_timingEraseTargetEntities.begin(),
                     m_timingEraseTargetEntities.end());
 
-    for ( auto entity : toDelete ) {
-        publishTimelineCommand(
-            Event::LogicCommandEvent(Logic::CmdDeleteTimelineEvent{ entity }));
-        m_selectedTimingEntities.erase(entity);
-    }
+    Logic::CmdDeleteTimelineEvents command;
+    command.entities.assign(toDelete.begin(), toDelete.end());
+    // 擦除选中对象会连同整个选区删除，不能再按对象拆成多条历史。
+    publishTimelineCommand(Event::LogicCommandEvent(std::move(command)));
+    for ( const auto entity : toDelete ) m_selectedTimingEntities.erase(entity);
 }
 
 /// @brief 将当前选中的 Timing 复制到编辑器级 Timeline 剪贴板。

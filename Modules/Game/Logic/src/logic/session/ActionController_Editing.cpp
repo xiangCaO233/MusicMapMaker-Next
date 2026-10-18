@@ -3799,6 +3799,37 @@ void ActionController::handleCommand(const CmdDeleteTimelineEvent& cmd)
     }
 }
 
+/// @brief 将同一次用户操作的全部 Timeline 删除提交为一条批量动作。
+/// @param cmd 目标实体集合，可包含重复或已由其他命令删除的句柄。
+/// @details 条目保存完整旧组件，元数据、STOP 单位和插值曲线随整批一起恢复。
+/// 空批次与全失效批次不产生历史记录，也不改变已保存状态。
+/// @warning 仅用户提交时遍历本批实体，不在每帧更新或播放路径执行。
+void ActionController::handleCommand(const CmdDeleteTimelineEvents& cmd)
+{
+    std::vector<BatchTimelineAction::Entry> entries;
+    entries.reserve(cmd.entities.size());
+    std::unordered_set<entt::entity> seen;
+    for ( const auto entity : cmd.entities ) {
+        // 命令排队期间目标可能失效，非时间线实体不能访问 TimelineComponent。
+        // 去重保证同一旧组件只记录一次，撤销不会因重放重复条目覆盖恢复结果。
+        if ( !m_ctx.timelineRegistry.valid(entity) ||
+             !m_ctx.timelineRegistry.all_of<TimelineComponent>(entity) ||
+             !seen.insert(entity).second )
+            continue;
+        entries.push_back(
+            { entity,
+              m_ctx.timelineRegistry.get<TimelineComponent>(entity),
+              std::nullopt });
+    }
+    if ( entries.empty() ) return;
+    // 全部旧值先捕获再执行，动作栈只接收一次提交；撤销和重做以同一批次重放。
+    auto action = std::make_unique<BatchTimelineAction>(
+        std::move(entries), "Batch Timeline Delete");
+    m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+    // 与单项删除保持相同缓存失效语义，整批只重建一次时间线派生数据。
+    m_ctx.isBpmEventsDirty = true;
+}
+
 /// @brief 创建单个 Timeline 事件。
 /// @param cmd 目标时间、类型、首值及可选的完整段落定义。
 /// @note 普通创建没有持续时间，段落创建还要求非负起点和合法终点。

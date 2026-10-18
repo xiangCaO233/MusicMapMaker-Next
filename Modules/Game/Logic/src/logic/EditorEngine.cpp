@@ -1141,6 +1141,8 @@ bool isTemporaryProjectMutationCommand(const LogicCommand& cmd)
          std::holds_alternative<CmdUpdateBpmWithKeepSpeedSv>(cmd) ||
          std::holds_alternative<CmdKeepSpeedForBpmEvents>(cmd) ||
          std::holds_alternative<CmdDeleteTimelineEvent>(cmd) ||
+         // 批量删除同样必须发送到当前活动谱面会话。
+         std::holds_alternative<CmdDeleteTimelineEvents>(cmd) ||
          std::holds_alternative<CmdCreateTimelineEvent>(cmd) ||
          std::holds_alternative<CmdCreateTimelineEvents>(cmd) ||
          std::holds_alternative<CmdReplaceBeatmapTimings>(cmd) ||

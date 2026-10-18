@@ -9,10 +9,12 @@
 
 #include <imgui.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace MMM::Canvas
 {
@@ -34,6 +36,32 @@ struct TimelineStopCreationTestAccess {
         canvas.m_currentSnapshot = &snapshot;
         canvas.handleTimingCanvasInteraction(
             origin, { 500.0F, 500.0F }, true, true);
+    }
+    /// @brief 使用正式删除入口提交同一选区，不复制批量命令的组装逻辑。
+    /// @param canvas 绑定测试快照的时间线。
+    /// @param entities 本次用户操作选中的多个实体。
+    /// @details 仅建立选择前置状态，命令组装、清理与发布全部由生产入口执行。
+    /// 两种删除共享同一选区，不把右键命中的一项当成整次用户意图。
+    /// @param rightErase 为真时从已选物件发起右键擦除，否则模拟 Delete
+    /// 共用入口。
+    static bool eraseSelection(TimelineCanvas&                  canvas,
+                               const std::vector<entt::entity>& entities,
+                               bool                             rightErase)
+    {
+        // 选区使用稳定实体集合，允许生产实现按任意顺序组装批量载荷。
+        // 断言比较成员身份与数量，不依赖 unordered_set 的遍历顺序。
+        canvas.m_selectedTimingEntities.insert(entities.begin(),
+                                               entities.end());
+        if ( rightErase ) {
+            // 右键仅命中第一项，生产入口应扩展为删除整个选区。
+            canvas.m_timingEraseTargetEntities.insert(entities.front());
+            canvas.commitTimingEraseTargets();
+            canvas.m_timingEraseTargetEntities.clear();
+        } else {
+            canvas.deleteSelectedTimingEvents();
+        }
+        // 本地高亮必须随删除立即清空，不能等异步逻辑快照返回后才消失。
+        return canvas.m_selectedTimingEntities.empty();
     }
     /// @brief 检查松开画笔后确实打开 STOP 创建草稿。
     /// @return 弹窗、类型及默认停顿时长全部正确时返回 true。
@@ -161,8 +189,47 @@ bool checkStopCreation()
         passed &=
             Canvas::TimelineStopCreationTestAccess::publish(
                 canvas, Event::LogicCommandEvent(batch)) == expectedWarning;
-        passed &= published == before + 4;
+        // 合并删除后仍需按完整选区检查 STOP 的原格式保存能力。
+        passed &= Canvas::TimelineStopCreationTestAccess::publish(
+                      canvas,
+                      Event::LogicCommandEvent(Logic::CmdDeleteTimelineEvents{
+                          { existing.stopEntity } })) == expectedWarning;
+        passed &= published == before + 5;
     }
+    // Delete 与右键擦除都只能发布一条批量命令，不允许继续散发单项删除。
+    // 订阅正式事件总线，避免用直接构造正确 DTO 的测试掩盖 UI 仍逐项发布。
+    // 本轮单项计数从零开始，前面格式能力检查中的单项删除不计入批量回归。
+    // 新订阅在本轮返回前解除，不能让引用本地变量的闭包泄漏到后续测试。
+    std::size_t                     batches = 0, singles = 0;
+    const std::vector<entt::entity> selected{ static_cast<entt::entity>(42),
+                                              static_cast<entt::entity>(43) };
+    const auto                      batchSubscription =
+        bus.subscribe<Event::LogicCommandEvent>([&](const auto& event) {
+            if ( const auto* cmd = std::get_if<Logic::CmdDeleteTimelineEvents>(
+                     &event.command) ) {
+                // 每条批量命令必须覆盖完整选择，两条各含一项也应被判失败。
+                ++batches;
+                passed &= cmd->entities.size() == selected.size();
+                for ( const auto entity : selected )
+                    passed &= std::find(cmd->entities.begin(),
+                                        cmd->entities.end(),
+                                        entity) != cmd->entities.end();
+            }
+            singles += std::holds_alternative<Logic::CmdDeleteTimelineEvent>(
+                           event.command)
+                           ? 1
+                           : 0;
+        });
+    // 共用同一个画布实例，上一操作必须真实完成选择清理后再开始下一操作。
+    // 右键只命中其中一项，能够检出擦除分支没有携带其他已选目标的回归。
+    for ( const bool rightErase : { false, true } ) {
+        const auto before = batches;
+        // 快照保持同一实例，选择清理必须由正式入口完成，不能通过重建视图掩盖。
+        passed &= Canvas::TimelineStopCreationTestAccess::eraseSelection(
+            canvas, selected, rightErase);
+        passed &= batches == before + 1 && singles == 0;
+    }
+    bus.unsubscribe<Event::LogicCommandEvent>(batchSubscription);
     bus.unsubscribe<Event::LogicCommandEvent>(subscription);
     return passed;
 }

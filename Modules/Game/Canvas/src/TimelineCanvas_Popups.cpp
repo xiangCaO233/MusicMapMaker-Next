@@ -3569,6 +3569,13 @@ void TimelineCanvas::publishTimelineCommand(
                               &event.command) )
                 warn = unsupportedEntity(cmd->entity);
             else if ( const auto* cmd =
+                          std::get_if<Logic::CmdDeleteTimelineEvents>(
+                              &event.command) )
+                // 批量删除仍检查全部目标，不能因合并命令漏掉原格式风险提示。
+                warn = std::any_of(cmd->entities.begin(),
+                                   cmd->entities.end(),
+                                   unsupportedEntity);
+            else if ( const auto* cmd =
                           std::get_if<Logic::CmdUpdateTimelineEvents>(
                               &event.command) )
                 warn = std::any_of(cmd->events.begin(),

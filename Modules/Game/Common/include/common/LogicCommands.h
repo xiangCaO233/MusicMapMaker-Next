@@ -731,6 +731,12 @@ struct CmdDeleteTimelineEvent {
     entt::entity entity;
 };
 
+/// @brief 将一次选择或擦除操作涉及的时间线删除合并为单条撤销记录。
+struct CmdDeleteTimelineEvents {
+    /// @brief 待删除实体；执行时忽略重复、失效和非 Timeline 句柄。
+    std::vector<entt::entity> entities;
+};
+
 /**
  * @brief 创建时间线事件指令
  */
@@ -1083,17 +1089,18 @@ using LogicCommand = std::variant<
     CmdApplyBrushPaletteToEntity, CmdClearNoteColorOverrides,
     CmdClearAllNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
     CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
-    CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
-    CmdUpdateBpmWithKeepSpeedSv, CmdKeepSpeedForBpmEvents,
-    CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdSetNoteAnnotation,
-    CmdUpsertBeatmapAnnotation, CmdRemoveBeatmapAnnotation,
-    CmdReplaceBeatmapData, CmdAcknowledgeCollaborationMutation,
-    CmdReconcileCollaborationHistory, CmdSetCollaborationResources,
-    CmdSetCollaborationOfflineReadOnly, CmdSetCollaborationClipboardIsolation,
-    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
-    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
-    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
-    CmdImportAudio, CmdUpdateAudioResource, CmdRenameAudioResource,
+    CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdDeleteTimelineEvents,
+    CmdCreateTimelineEvent, CmdUpdateBpmWithKeepSpeedSv,
+    CmdKeepSpeedForBpmEvents, CmdCreateTimelineEvents, CmdReplaceBeatmapTimings,
+    CmdSetNoteAnnotation, CmdUpsertBeatmapAnnotation,
+    CmdRemoveBeatmapAnnotation, CmdReplaceBeatmapData,
+    CmdAcknowledgeCollaborationMutation, CmdReconcileCollaborationHistory,
+    CmdSetCollaborationResources, CmdSetCollaborationOfflineReadOnly,
+    CmdSetCollaborationClipboardIsolation, CmdStartMarquee, CmdUpdateMarquee,
+    CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush,
+    CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
+    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
+    CmdUpdateAudioResource, CmdRenameAudioResource,
     CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
     CmdExportImdPackage, CmdSaveTemporaryProject>;
 

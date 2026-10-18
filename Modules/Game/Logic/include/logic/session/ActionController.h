@@ -90,6 +90,10 @@ public:
     /// @param cmd 命令数据
     void handleCommand(const CmdDeleteTimelineEvent& cmd);
 
+    /// @brief 一次删除整组时间线，并完整保存元数据和插值段供撤销恢复。
+    /// @param cmd 同一次用户操作选择的实体集合。
+    void handleCommand(const CmdDeleteTimelineEvents& cmd);
+
     /// @brief 处理创建时间轴事件的命令
     /// @param cmd 命令数据
     void handleCommand(const CmdCreateTimelineEvent& cmd);
