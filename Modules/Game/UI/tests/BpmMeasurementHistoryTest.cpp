@@ -1,6 +1,8 @@
 #include "config/AppConfig.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 
+#include <imgui.h>
+
 #include <cmath>
 #include <ice/config/config.hpp>
 #include <nlohmann/json.hpp>
@@ -13,6 +15,72 @@ struct BpmMeasurementHistoryTestAccess {
     static bool close(double lhs, double rhs)
     {
         return std::abs(lhs - rhs) < 1e-9;
+    }
+
+    /// @brief 验证分析完成但试听尚未加载时，波形和频谱仍提交播放指针几何。
+    /// @return 两个区域都有指针，离开视野或未选音轨时不绘制无效指针。
+    /// @details 使用真实 ImGui 顶点缓冲，不复制播放指针的显隐判断。
+    /// 不初始化音频后端，确保显示准备位置不依赖先按一次播放。
+    /// 断言顶部三角的内部顶点，不能把已有拍线误认成恢复了播放手柄。
+    /// 未播放的准备位置与视图中心一致，符合首次播放从当前视野开始的契约。
+    /// 离屏场景只改变视野范围，不修改音轨身份来人为触发重新显示。
+    /// 测试不执行首次拖动加载；该低频路径仍由生产加载失败状态处理。
+    static bool checkPlaybackCursor(BpmMeasurementToolView& tool)
+    {
+        ImGui::CreateContext();
+        auto& io       = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.DisplaySize = { 640, 480 };
+        io.DeltaTime   = 1.0F / 60.0F;
+        // 无平台后端也要建立字体图集，满足真实 UI 帧的初始化契约。
+        unsigned char* pixels = nullptr;
+        int            width = 0, height = 0;
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({ 0, 0 });
+        ImGui::SetNextWindowSize({ 640, 480 });
+        ImGui::Begin("BpmCursorRegression");
+        auto& list                  = *ImGui::GetWindowDrawList();
+        tool.m_selectedAudioSyncKey = "unloaded-preview";
+        tool.m_playbackRoute        = BpmPlaybackRoute::Audition;
+        tool.m_duration             = 60;
+        tool.m_viewCenter           = 0;
+        bool passed                 = !tool.isSelectedTrackLoadedForPlayback();
+        // 零秒指针与首拍线重合时仍需绘制顶部三角，不能把红色拍线当成成功。
+        // 两种面板高度不同，但共享播放位置和时长；均调用生产绘制函数。
+        for ( float bottom : { 200.0F, 400.0F } ) {
+            const int before = list.VtxBuffer.Size;
+            tool.drawPlaybackCursor(list, { 100, 80 }, { 500, bottom }, 0, 2);
+            // 红线端点只位于上下边界，三角手柄必须产生顶部内部的实色顶点。
+            // 因此只剩首拍线或播放竖线的回归不能靠“有顶点”绕过断言。
+            bool triangle = false;
+            for ( int vertex = before; vertex < list.VtxBuffer.Size;
+                  ++vertex ) {
+                const auto& point = list.VtxBuffer[vertex];
+                triangle =
+                    triangle || (point.col == IM_COL32(255, 40, 40, 255) &&
+                                 point.pos.y > 82 && point.pos.y < 98);
+            }
+            passed = passed && list.VtxBuffer.Size > before && triangle;
+        }
+        // 记录同一个绘制列表的当前末尾，后续断言只关注生产入口新增的几何。
+        // 不把窗口背景或先前区域的红色顶点重复计入指针显示结果。
+        const int before = list.VtxBuffer.Size;
+        // 纯粹平移到不包含准备位置的视野，仍应遵守既有离屏隐藏规则。
+        tool.drawPlaybackCursor(list, { 100, 80 }, { 500, 400 }, 5, 7);
+        passed = passed && list.VtxBuffer.Size == before;
+        tool.m_selectedAudioSyncKey.clear();
+        // 清空选择后不能遗留上一首歌的指针；绘制也不能暗中加载试听资源。
+        tool.drawPlaybackCursor(list, { 100, 80 }, { 500, 400 }, 0, 2);
+        passed = passed && list.VtxBuffer.Size == before &&
+                 !tool.isSelectedTrackLoadedForPlayback();
+        // 所有失败也先配对结束窗口和帧，避免断言失败掩盖 ImGui 生命周期问题。
+        // 字体图集与顶点缓冲由本轮上下文统一销毁，不留下跨用例引用。
+        ImGui::End();
+        ImGui::Render();
+        // ImGui 生命周期在工具析构前结束，工具不得持有本轮绘制列表指针。
+        ImGui::DestroyContext();
+        return passed;
     }
 
     /// @brief 验证 BPM 编辑可撤销，导航与显示偏好既不入栈也不被还原。
@@ -185,7 +253,8 @@ int main()
     const bool passed =
         persisted && !legacy &&
         MMM::UI::BpmMeasurementHistoryTestAccess::checkHistory(tool) &&
-        MMM::UI::BpmMeasurementHistoryTestAccess::checkWheel(tool);
+        MMM::UI::BpmMeasurementHistoryTestAccess::checkWheel(tool) &&
+        MMM::UI::BpmMeasurementHistoryTestAccess::checkPlaybackCursor(tool);
     // 先恢复偏好再抑制析构落盘，保持测试无用户设置副作用。
     settings.bpmMeasurementToolPreferences = original;
     MMM::UI::BpmMeasurementHistoryTestAccess::suppressPreferenceSave(tool);

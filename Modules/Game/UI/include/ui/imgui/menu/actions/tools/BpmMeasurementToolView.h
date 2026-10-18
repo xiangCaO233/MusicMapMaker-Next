@@ -413,7 +413,8 @@ private:
     /// @param ownerId 发起拖拽的视图标识，用于区分波形和频谱区域。
     /// @warning UI 热路径约束如下。
     /// 热路径：波形图和频谱图每帧执行；拖到边缘时只滚动视野并更新预览，
-    /// 松手后才执行实际播放跳转，不访问文件系统。
+    /// 松手后才执行实际播放跳转；首次按下可加载试听，其余帧不访问文件系统。
+    /// @note 首次明确按下播放手柄时可惰性加载音轨，普通帧只作内存几何计算。
     void handlePlaybackCursorDrag(const ImVec2& rectMin, const ImVec2& rectMax,
                                   double viewStart, double viewEnd,
                                   bool interactionHovered, int ownerId);

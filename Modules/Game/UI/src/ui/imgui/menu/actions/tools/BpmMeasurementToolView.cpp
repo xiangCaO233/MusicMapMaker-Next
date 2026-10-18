@@ -3495,6 +3495,7 @@ void BpmMeasurementToolView::drawBeatSubdivisionLines(ImDrawList&   drawList,
 /// @details 指针使用路由快照中的视觉时间，只有位于当前视野时才绘制。
 /// 深色外线提高亮背景对比，红色内线表达当前位置，顶部三角同时提供明确
 /// 的拖动手柄视觉。该函数只绘制，命中和 seek 由独立处理器负责。
+/// 音轨分析后即显示准备位置；首次拖动再按需加载，不让加载状态隐藏整条指针。
 void BpmMeasurementToolView::drawPlaybackCursor(ImDrawList&   drawList,
                                                 const ImVec2& rectMin,
                                                 const ImVec2& rectMax,
@@ -3502,8 +3503,8 @@ void BpmMeasurementToolView::drawPlaybackCursor(ImDrawList&   drawList,
                                                 double        viewEnd) const
 {
     if ( viewEnd <= viewStart || rectMax.x <= rectMin.x ||
-         rectMax.y <= rectMin.y || !isSelectedTrackLoadedForPlayback() ) {
-        // 只有有效画布和已加载 transport 才能提供可靠游标位置。
+         rectMax.y <= rectMin.y || m_selectedAudioSyncKey.empty() ) {
+        // 选中音轨且已有分析时长即可显示准备位置，不强制提前加载 transport。
         return;
     }
 
@@ -3515,7 +3516,13 @@ void BpmMeasurementToolView::drawPlaybackCursor(ImDrawList&   drawList,
         return;
     }
 
-    const double canvasTime = playbackState.visualTime;
+    // 分析完成后尚未加载试听时，播放会从当前视图中心开始，先显示同一准备位置。
+    // 负视觉偏移只影响显示零点；不允许把零秒游标移到画布范围之外。
+    const double canvasTime =
+        std::clamp(isSelectedTrackLoadedForPlayback() ? playbackState.visualTime
+                                                      : m_viewCenter,
+                   0.0,
+                   totalTime);
     if ( canvasTime < viewStart || canvasTime > viewEnd ) {
         // 游标不在当前视野时无需提交任何几何。
         return;
@@ -3909,7 +3916,7 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(
 /// @param ownerId 发起拖拽的视图标识，用于区分波形和频谱区域。
 /// @warning UI 热路径约束如下。
 /// 热路径：波形图和频谱图每帧执行；拖到边缘时只滚动视野并更新预览，
-/// 松手后才执行实际播放跳转，不访问文件系统。
+/// 松手后才执行实际播放跳转。首次按下手柄可惰性加载试听，其余帧不访问文件系统。
 /// @details 捕获后仅更新待提交画布时间并绘制半透明预览游标；鼠标进入
 /// 左右边缘区会按帧时间连续移动视野。松手时只发送一次最终 seek，避免
 /// 高频重置音频图；ownerId 防止波形和频谱同时处理同一次拖动。
@@ -3918,7 +3925,7 @@ void BpmMeasurementToolView::handlePlaybackCursorDrag(
     double viewEnd, bool interactionHovered, int ownerId)
 {
     if ( viewEnd <= viewStart || rectMax.x <= rectMin.x ||
-         rectMax.y <= rectMin.y || !isSelectedTrackLoadedForPlayback() ) {
+         rectMax.y <= rectMin.y || m_selectedAudioSyncKey.empty() ) {
         if ( m_playbackCursorDragOwner == ownerId ) {
             // 所属画布失效时取消预览，避免松手后跳转到过期位置。
             m_isPlaybackCursorDragging = false;
@@ -3948,7 +3955,12 @@ void BpmMeasurementToolView::handlePlaybackCursorDrag(
     }
 
     // 命中位置使用实际播放视觉时间；拖动后另存预览值而不改后端。
-    const double canvasTime  = playbackState.visualTime;
+    // 命中与绘制使用相同的准备位置和零点钳制，不能显示手柄却无法抓取。
+    const double canvasTime =
+        std::clamp(isSelectedTrackLoadedForPlayback() ? playbackState.visualTime
+                                                      : m_viewCenter,
+                   0.0,
+                   totalTime);
     const bool cursorVisible = canvasTime >= viewStart && canvasTime <= viewEnd;
     const float lineX =
         rectMin.x +
@@ -3994,6 +4006,10 @@ void BpmMeasurementToolView::handlePlaybackCursorDrag(
     }
 
     if ( hoverHandle && ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+        // 只有明确按下手柄才加载试听；普通绘制和悬浮不会触发文件读取。
+        if ( !isSelectedTrackLoadedForPlayback() &&
+             !loadSelectedTrackForPlayback() )
+            return;
         // 捕获时冻结发起区域身份，并取消可能存在的画布平移。
         m_isPlaybackCursorDragging = true;
         m_isTimelinePanning        = false;
