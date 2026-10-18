@@ -76,6 +76,9 @@ mmm_add_test_executable(Canvas CollaborationViewportProjectionTest
                         tests/CollaborationViewportProjectionTest.cpp)
 target_include_directories(CollaborationViewportProjectionTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+# 相机覆盖层测试显式复用场景矩阵与数学头，不引入 Canvas、GPU 或 UI 单例。
+target_link_libraries(CollaborationViewportProjectionTest PRIVATE Common
+                                                                  3rd_glm)
 mmm_register_test_case(NAME CollaborationViewportProjectionTest COMMAND
                        CollaborationViewportProjectionTest)
 

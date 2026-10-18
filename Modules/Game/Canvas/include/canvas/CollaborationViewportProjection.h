@@ -1,12 +1,121 @@
 #pragma once
 
+#include <glm/mat4x4.hpp>
+#include <glm/vec2.hpp>
+#include <glm/vec4.hpp>
+
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <optional>
 
 namespace MMM::Canvas
 {
+
+/// @brief 视野四边形经过相机裁剪后的固定容量凸多边形。
+struct CollaborationViewportPolygon {
+    /// @brief 画布局部屏幕坐标，按顺时针排列以供抗锯齿填充。
+    std::array<glm::vec2, 16> points{};
+    /// @brief 有效顶点数量；小于三表示范围完全不可见。
+    std::size_t count{ 0 };
+};
+
+/// @brief 用实际场景矩阵投影并裁剪远端视野，不在原二维画布边界预裁剪。
+/// @param matrix 当前谱面场景到 Vulkan 裁剪空间的矩阵。
+/// @param minimum 源平面矩形左上角，包含渲染使用的绝对 Y 偏移。
+/// @param maximum 源平面矩形右下角。
+/// @param size 画布逻辑像素尺寸。
+/// @return 视锥内的凸多边形；退化或无效输入返回空多边形。
+/// @details 对四条矩形边进行六平面 Sutherland-Hodgman 裁剪。
+/// 原矩形可以越出正视画布，也可以跨越近平面，不能先用二维 AABB 判空。
+/// 返回顶点只供本帧使用，不包含桌面坐标；调用方需叠加画布屏幕原点。
+/// 输出保留可见裁剪边，因此跟随姓名可锚定在实际可见范围上。
+/// 不把矩阵存入网络消息，各客户端仍用自己的相机观察同一个时间范围。
+/// @warning 每帧每位参与者执行固定规模裁剪，不分配内存或访问会话锁。
+inline CollaborationViewportPolygon projectCollaborationViewportPolygon(
+    const glm::mat4& matrix, glm::vec2 minimum, glm::vec2 maximum,
+    glm::vec2 size)
+{
+    CollaborationViewportPolygon result;
+    if ( !std::isfinite(size.x) || !std::isfinite(size.y) || size.x <= 0 ||
+         size.y <= 0 || maximum.x <= minimum.x || maximum.y <= minimum.y )
+        return result;
+    // 在齐次空间裁剪后才做透视除法；跨近平面的框不能因一个角在身后而整框消失。
+    // 两份固定缓冲轮换输入输出，交点插入不会使正在遍历的边失效。
+    // 六轮后保留同一源面的凸性，调用方无需逐帧构造新的几何对象。
+    std::array<glm::dvec4, 16> polygon{}, output{};
+    const glm::dmat4           transform(matrix);
+    polygon[0] = transform * glm::dvec4(minimum.x, minimum.y, 0, 1);
+    polygon[1] = transform * glm::dvec4(maximum.x, minimum.y, 0, 1);
+    polygon[2] = transform * glm::dvec4(maximum.x, maximum.y, 0, 1);
+    polygon[3] = transform * glm::dvec4(minimum.x, maximum.y, 0, 1);
+    // 转到 double 后执行插值，减少远距离源坐标与接近近平面时的误差。
+    // 任一矩阵点积非有限都会污染后续交点，必须在裁剪前整体拒绝。
+    std::size_t count = 4;
+    for ( std::size_t i = 0; i < count; ++i )
+        for ( int axis = 0; axis < 4; ++axis )
+            if ( !std::isfinite(polygon[i][axis]) ) return result;
+    /// @brief 裁剪半空间的有符号距离，非负侧保留。
+    /// @note Vulkan 深度为零到 w，不能套用 OpenGL 的负 w 近平面。
+    const auto distance = [](const glm::dvec4& point, int plane) {
+        switch ( plane ) {
+        case 0: return point.w + point.x;
+        case 1: return point.w - point.x;
+        case 2: return point.w + point.y;
+        case 3: return point.w - point.y;
+        case 4: return point.z;
+        default: return point.w - point.z;
+        }
+    };
+    // 凸四边形依次裁剪六个半空间最多产生十个角，固定容量保留边界余量。
+    for ( int plane = 0; plane < 6 && count >= 3; ++plane ) {
+        std::size_t written          = 0;
+        auto        previous         = polygon[count - 1];
+        double      previousDistance = distance(previous, plane);
+        for ( std::size_t i = 0; i < count; ++i ) {
+            const auto   current         = polygon[i];
+            const double currentDistance = distance(current, plane);
+            if ( (previousDistance >= 0) != (currentDistance >= 0) ) {
+                // 只有跨半空间时才求交，分母不为零且比例位于零到一之间。
+                if ( written >= output.size() ) return result;
+                const double ratio =
+                    previousDistance / (previousDistance - currentDistance);
+                output[written++] = previous + ratio * (current - previous);
+            }
+            if ( currentDistance >= 0 ) {
+                if ( written >= output.size() ) return result;
+                output[written++] = current;
+            }
+            previous         = current;
+            previousDistance = currentDistance;
+        }
+        count   = written;
+        polygon = output;
+    }
+    // 只有点或线的交集不构成可填充范围，避免退化多边形进入 ImGui。
+    if ( count < 3 ) return result;
+    // 透视除法只消费已裁剪点，输出不会因相机旋转越过画布剪裁边界。
+    for ( std::size_t i = 0; i < count; ++i ) {
+        if ( polygon[i].w <= 1e-12 ) return {};
+        result.points[i] =
+            glm::vec2((polygon[i].x / polygon[i].w + 1) * size.x * 0.5,
+                      (polygon[i].y / polygon[i].w + 1) * size.y * 0.5);
+    }
+    // 翻转相机可能反转绕序；填充仍必须保持屏幕顺时针，避免内侧抗锯齿毛边。
+    // 面积判定还排除角点重复造成的退化，不以任意相机角度作为显隐开关。
+    double area = 0;
+    for ( std::size_t i = 0; i < count; ++i ) {
+        const auto& a = result.points[i];
+        const auto& b = result.points[(i + 1) % count];
+        area += static_cast<double>(a.x) * b.y - static_cast<double>(b.x) * a.y;
+    }
+    if ( std::abs(area) <= 1e-8 ) return {};
+    if ( area < 0 )
+        std::reverse(result.points.begin(), result.points.begin() + count);
+    result.count = count;
+    return result;
+}
 
 /// @brief 远端视口在本地画布中的横向可见范围。
 struct CollaborationViewportHorizontalRange {
@@ -238,7 +347,7 @@ inline std::optional<double> unprojectCollaborationViewportTime(
 
     // 像素 epsilon 用于识别判定线锚点和退化的局部 Y 区间。
     constexpr double POSITION_EPSILON = 1e-6;
-    const auto       interpolate      = [](float  value,
+    const auto interpolate = [](float  value,
                                 float  firstY,
                                 float  secondY,
                                 double firstTime,

@@ -34,6 +34,7 @@
 #include "canvas/ComposeLessonHintGeometry.h"
 #include "canvas/ComposeTargetEligibility.h"
 #include "canvas/PlanarObservationCamera.h"
+#include "common/render/CanvasCameraMath.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
@@ -2905,10 +2906,9 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         } else if ( isActiveCanvas ) {
             // 活动画布先发布并绘制协作视野，再运行编辑交互；后者可在
             // 同一 ImGui 层建立命中区域，而覆盖层始终使用本帧快照。
-            if ( !cameraViewEnabled )
-                // 协作视野框仍以二维屏幕矩形绘制，不能用它覆盖倾斜后的谱面。
-                updateCollaborationViewports(
-                    sourceManager, canvasScreenPosition, canvasSize);
+            // 相机只改变投影，不能中断视野发布、跟随和远端覆盖层更新。
+            updateCollaborationViewports(
+                sourceManager, canvasScreenPosition, canvasSize);
             bool lessonButtonHovered = false;
             if ( m_currentSnapshot && !cameraViewEnabled ) {
                 // 教学命中装饰同样依赖二维像素，透视模式跳过装饰而保留普通编辑。
@@ -3062,6 +3062,27 @@ void Basic2DCanvas::updateCollaborationViewports(
     // 使用当前轨道数对应布局，使动态扩轨后的协作范围立即跟随
     // 新轨道外包边界，而不是沿用固定主题默认矩形。
 
+    // 轨道投影统一考虑 BGM、BMS、草稿轨与水平偏移；协作矩形只覆盖
+    // 实际内容外包边界，不把左右辅助区或布局间隙误算为远端视野。
+    const auto localLaneProjection = Logic::calculateCanvasLaneProjection(
+        canvasSize.x,
+        m_currentSnapshot->trackCount,
+        m_currentSnapshot->bgmTrackCount,
+        layout,
+        m_currentSnapshot->canvasHorizontalOffsetX,
+        true,
+        m_currentSnapshot->bmsEditingEnabled,
+        m_currentSnapshot->draftLanesEnabled,
+        m_currentSnapshot->draftTrackCount,
+        true);
+    if ( !localLaneProjection.valid ) {
+        return;
+    }
+    // 独立辅助区可以互换顺序或留出空隙，统一取所有区域外包边界。
+    const auto contentBounds = localLaneProjection.contentBounds();
+    // contentBounds 会合并普通轨、BGM 区和草稿轨，避免只取主轨道
+    // 时远端视野在扩展编辑模式下显得过窄。
+
     // 快照时间已经位于统一视觉域，先复制全画布可见范围作为回退；
     // 合法轨道布局随后会把范围收窄到实际谱面轨道区域。
     Network::Collaboration::ParticipantViewport localViewport;
@@ -3075,6 +3096,11 @@ void Basic2DCanvas::updateCollaborationViewports(
     // 视野上方或下方；两者不能因视觉偏移而混用。
     localViewport.visibleTimeStart = m_currentSnapshot->visibleTimeStart;
     localViewport.visibleTimeEnd   = m_currentSnapshot->visibleTimeEnd;
+    // 使用实际相机裁剪后的源范围，不能用快照原正视窗口冒充三维可见时间。
+    // 同步仍发布时间与偏移值，不把本地相机矩阵发送给其他参与者。
+    // 接收端用自己的观察矩阵绘制同一范围，允许双方使用不同视角。
+    // 视野跟随和播放跟随继续通过原有序列水位去重，不改变网络协议。
+    const auto sceneProjection = getCanvasProjectionMatrix();
     if ( std::isfinite(layout.top) && std::isfinite(layout.bottom) &&
          layout.top < layout.bottom ) {
         // 轨道上下边界是归一化画布坐标，转换为局部 Y 后以判定线
@@ -3082,10 +3108,24 @@ void Basic2DCanvas::updateCollaborationViewports(
         const float judgmentLineY =
             canvasSize.y * visual.judgmentLinePositionForKeyCount(
                                std::max(m_currentSnapshot->trackCount, 1));
-        const float trackTopY =
-            canvasSize.y * std::clamp(layout.top, 0.0F, 1.0F);
-        const float trackBottomY =
+        float trackTopY = canvasSize.y * std::clamp(layout.top, 0.0F, 1.0F);
+        float trackBottomY =
             canvasSize.y * std::clamp(layout.bottom, 0.0F, 1.0F);
+        if ( m_isObservationCamera ) {
+            // 视锥裁剪使用局部源 Y；播放偏移已由矩阵承担，不能再加一次。
+            auto localProjection = sceneProjection;
+            localProjection[3] -= localProjection[1] * m_yOffset;
+            const auto visible = Common::Render::canvasPlaneVisibleBounds(
+                localProjection,
+                { contentBounds.leftX,
+                  canvasSize.y * (layout.top - visual.canvasCameraExtension()),
+                  contentBounds.rightX,
+                  canvasSize.y * 1.5F });
+            if ( visible ) {
+                trackTopY    = visible->m_top;
+                trackBottomY = visible->m_bottom;
+            }
+        }
         // 分别反投影两条物理边界，不假设当前 SV 为正或时间与 Y
         // 保持简单线性关系；helper 在无可靠解时返回空值。
         const auto trackBottomTime = unprojectCollaborationViewportTime(
@@ -3242,34 +3282,14 @@ void Basic2DCanvas::updateCollaborationViewports(
     const auto  localId      = room->localPeerId();
     // 本地范围先规范为 minimum/maximum，兼容未来向上导致端点顺序
     // 与数值增减方向不一致的快照表示。
-    const double localMinimum = std::min(m_currentSnapshot->visibleTimeStart,
-                                         m_currentSnapshot->visibleTimeEnd);
-    const double localMaximum = std::max(m_currentSnapshot->visibleTimeStart,
-                                         m_currentSnapshot->visibleTimeEnd);
+    const double localMinimum =
+        std::min(localViewport.visibleTimeStart, localViewport.visibleTimeEnd);
+    const double localMaximum =
+        std::max(localViewport.visibleTimeStart, localViewport.visibleTimeEnd);
     if ( !std::isfinite(localMinimum) || !std::isfinite(localMaximum) ) {
         return;
     }
 
-    // 轨道投影统一考虑 BGM、BMS、草稿轨与水平偏移；协作矩形只覆盖
-    // 实际内容外包边界，不把左右辅助区或布局间隙误算为远端视野。
-    const auto localLaneProjection = Logic::calculateCanvasLaneProjection(
-        canvasSize.x,
-        m_currentSnapshot->trackCount,
-        m_currentSnapshot->bgmTrackCount,
-        layout,
-        m_currentSnapshot->canvasHorizontalOffsetX,
-        true,
-        m_currentSnapshot->bmsEditingEnabled,
-        m_currentSnapshot->draftLanesEnabled,
-        m_currentSnapshot->draftTrackCount,
-        true);
-    if ( !localLaneProjection.valid ) {
-        return;
-    }
-    // 独立辅助区可以互换顺序或留出空隙，统一取所有区域外包边界。
-    const auto contentBounds = localLaneProjection.contentBounds();
-    // contentBounds 会合并普通轨、BGM 区和草稿轨，避免只取主轨道
-    // 时远端视野在扩展编辑模式下显得过窄。
     const auto horizontalRange = projectCollaborationViewportHorizontalRange(
         contentBounds.leftX, contentBounds.rightX, canvasSize.x);
     if ( !horizontalRange ) {
@@ -3363,23 +3383,38 @@ void Basic2DCanvas::updateCollaborationViewports(
                 *m_currentSnapshot, viewport.visibleTimeStart, canvasSize.y);
             float secondY = collaborationTimeToCanvasY(
                 *m_currentSnapshot, viewport.visibleTimeEnd, canvasSize.y);
-            float topY = std::clamp(
-                std::min(firstY, secondY), 1.0F, canvasSize.y - 1.0F);
-            float bottomY = std::clamp(
-                std::max(firstY, secondY), 1.0F, canvasSize.y - 1.0F);
+            float topY    = std::min(firstY, secondY);
+            float bottomY = std::max(firstY, secondY);
+            if ( !m_isObservationCamera ) {
+                topY    = std::clamp(topY, 1.0F, canvasSize.y - 1.0F);
+                bottomY = std::clamp(bottomY, 1.0F, canvasSize.y - 1.0F);
+            }
             // 极短或刚接触边界的视野仍保留至少三像素高度，确保
             // 轮廓在高倍率与相近颜色背景中可见。
             if ( bottomY - topY < 3.0F ) {
                 bottomY = topY + 3.0F;
             }
-            const ImVec2 rectangleMinimum{
-                canvasScreenPosition.x + leftX,
-                canvasScreenPosition.y + topY,
-            };
-            const ImVec2 rectangleMaximum{
-                canvasScreenPosition.x + rightX,
-                canvasScreenPosition.y + std::min(bottomY, canvasSize.y - 1.0F),
-            };
+            // 保留原场景范围，让最终相机视锥决定哪些部分可见。
+            const auto polygon = projectCollaborationViewportPolygon(
+                sceneProjection,
+                { m_isObservationCamera ? contentBounds.leftX : leftX,
+                  topY - m_yOffset },
+                { m_isObservationCamera ? contentBounds.rightX : rightX,
+                  bottomY - m_yOffset },
+                { canvasSize.x, canvasSize.y });
+            if ( polygon.count < 3 ) continue;
+            std::array<ImVec2, 16> screenPoints{};
+            ImVec2                 rectangleMinimum = canvasMaximum;
+            for ( std::size_t i = 0; i < polygon.count; ++i ) {
+                screenPoints[i] = {
+                    canvasScreenPosition.x + polygon.points[i].x,
+                    canvasScreenPosition.y + polygon.points[i].y
+                };
+                rectangleMinimum.x =
+                    std::min(rectangleMinimum.x, screenPoints[i].x);
+                rectangleMinimum.y =
+                    std::min(rectangleMinimum.y, screenPoints[i].y);
+            }
             // following 仅增强轮廓，不改变参与者底色，用户可以同时
             // 识别身份颜色与当前跟随目标。
             const float outlineThickness = following ? 3.0F : 2.0F;
@@ -3387,40 +3422,60 @@ void Basic2DCanvas::updateCollaborationViewports(
                  Config::CollaborationViewportRenderMode::Filled ) {
                 // Filled 模式使用低透明度同色背景，轮廓仍在后面绘制，
                 // 避免遮挡谱面物件同时保留范围整体感。
-                drawList->AddRectFilled(
-                    rectangleMinimum,
-                    rectangleMaximum,
+                drawList->AddConvexPolyFilled(
+                    screenPoints.data(),
+                    static_cast<int>(polygon.count),
                     collaborationPeerColor(participant->second.participantId,
                                            24));
             }
             if ( viewportRenderMode ==
                  Config::CollaborationViewportRenderMode::TrackEdge ) {
-                // TrackEdge 只在内容左缘绘制括号，适合减少多人协作时
-                // 横跨全部轨道的线框重叠。
-                constexpr float BRACKET_CAP_WIDTH = 12.0F;
-                const float     bracketRight      = std::min(
-                    rectangleMinimum.x + BRACKET_CAP_WIDTH, rectangleMaximum.x);
-                drawList->AddLine(rectangleMinimum,
-                                  { rectangleMinimum.x, rectangleMaximum.y },
-                                  color,
-                                  outlineThickness);
-                drawList->AddLine(rectangleMinimum,
-                                  { bracketRight, rectangleMinimum.y },
-                                  color,
-                                  outlineThickness);
-                drawList->AddLine({ rectangleMinimum.x, rectangleMaximum.y },
-                                  { bracketRight, rectangleMaximum.y },
-                                  color,
-                                  outlineThickness);
+                // 在最终投影轮廓上选择屏幕左侧边，正视和相机视角均保留括号显示模式。
+                // 裁剪可能把四边形变成更多边，不再假设左边永远对应固定顶点下标。
+                // 裁剪生成的边也可作为提示边，源轨道左侧离屏时仍显示可见范围入口。
+                // 端帽沿相邻边向框内延伸，不覆盖已经被视锥排除的区域。
+                // 旋转相机后保持屏幕像素线宽，远端标记不会随世界尺度缩成细点。
+                std::size_t edge           = 0;
+                float       minimumCenterX = canvasMaximum.x * 2;
+                for ( std::size_t i = 0; i < polygon.count; ++i ) {
+                    const float center =
+                        screenPoints[i].x +
+                        screenPoints[(i + 1) % polygon.count].x;
+                    if ( center < minimumCenterX ) {
+                        minimumCenterX = center;
+                        edge           = i;
+                    }
+                }
+                const auto first  = screenPoints[edge];
+                const auto second = screenPoints[(edge + 1) % polygon.count];
+                drawList->AddLine(first, second, color, outlineThickness);
+                /// @brief 从括号端点沿相邻投影边绘制不超过十二像素的端帽。
+                /// @note 屏幕长度保持固定，相机拉远不会让标记缩成不可见的细点。
+                const auto cap = [&](ImVec2 start, ImVec2 neighbor) {
+                    const float dx     = neighbor.x - start.x;
+                    const float dy     = neighbor.y - start.y;
+                    const float length = std::hypot(dx, dy);
+                    // 重复裁剪顶点产生零长边时不做归一化，避免除零传播到绘制列表。
+                    if ( length <= 0 ) return;
+                    const float scale = std::min(12.0F / length, 1.0F);
+                    drawList->AddLine(
+                        start,
+                        { start.x + dx * scale, start.y + dy * scale },
+                        color,
+                        outlineThickness);
+                };
+                cap(first,
+                    screenPoints[(edge + polygon.count - 1) % polygon.count]);
+                cap(second, screenPoints[(edge + 2) % polygon.count]);
             } else {
-                // Outline 与 Filled 都使用完整矩形轮廓；跟随对象通过
+                // Outline 与 Filled 都使用完整投影轮廓；跟随对象通过
                 // 更粗线宽与普通远端用户区分。
-                drawList->AddRect(rectangleMinimum,
-                                  rectangleMaximum,
-                                  color,
-                                  0.0F,
-                                  0,
-                                  outlineThickness);
+                // 使用逐边线段兼容现有 ImGui 版本，并保持与填充相同的投影轮廓。
+                for ( std::size_t i = 0; i < polygon.count; ++i )
+                    drawList->AddLine(screenPoints[i],
+                                      screenPoints[(i + 1) % polygon.count],
+                                      color,
+                                      outlineThickness);
             }
 
             const ImVec2 textSize =
