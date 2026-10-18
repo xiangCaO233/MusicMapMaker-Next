@@ -1,8 +1,10 @@
 #include "config/AppConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "log/colorful-log.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 
 #include <array>
 #include <cmath>
@@ -277,6 +279,101 @@ struct BpmMeasurementHistoryTestAccess {
                close(tool.wheelSeekTarget(0.27, -0.6), 0.325);
     }
 
+    /// @brief 实际点击章节删除按钮，覆盖多行、单行到空列表的裁剪器生命周期。
+    /// @return 每次删除只移除目标章节且下一帧仍能绘制时返回 true。
+    /// @details 不直接擦除容器，鼠标事件必须经过生产面板和可见按钮。
+    /// 多行状态覆盖删除后引用移动，单行状态覆盖数量归零后的收尾。
+    /// 测试在独立 ImGui 上下文运行，不依赖 GPU、音频设备或外部资源。
+    /// 面板仍使用真实本地化标签，展开状态与生产窗口的 ID 计算一致。
+    /// 每次释放后立即核对结果，禁止用多次点击掩盖首次删除失败。
+    static bool checkChapterDeletion(BpmMeasurementToolView& tool)
+    {
+        ImGui::CreateContext();
+        auto& io              = ImGui::GetIO();
+        io.IniFilename        = nullptr;
+        io.DisplaySize        = { 800, 700 };
+        io.DeltaTime          = 1.0F / 60.0F;
+        unsigned char* pixels = nullptr;
+        int            width = 0, height = 0;
+        // 无平台后端时手动建立字体图集，否则控件尺寸和输入布局不可用。
+        // 此缓冲由 ImGui 上下文持有，不自行释放或延长其生命周期。
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        // 时间范围独立于试听加载状态，章节删除不应要求先播放音频。
+        // 三个章节使用不同时间与名称，使移动下标后的错误目标可被识别。
+        tool.m_duration      = 60;
+        tool.m_audioChapters = { { 1, "first" },
+                                 { 2, "second" },
+                                 { 3, "third" } };
+        // 固定宿主尺寸保证三行均可见，位置从实际子窗口获取而非固定屏幕坐标。
+        const auto draw = [&] {
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos({ 0, 0 });
+            ImGui::SetNextWindowSize({ 800, 700 });
+            ImGui::Begin("BpmChapterRegression");
+            // 只预设章节树展开状态，不伪造按钮返回值或裁剪器内部状态。
+            // 每一帧仍完整配对 Begin/End，让窗口和子窗口正常布局。
+            ImGui::GetStateStorage()->SetInt(
+                ImGui::GetID(
+                    TR("ui.tools.bpm_measure.markers_chapters").data()),
+                1);
+            tool.renderMarkerPanel();
+            ImGui::End();
+            ImGui::Render();
+        };
+        draw();
+        bool passed = true;
+        // 删除首行会移动后续下标，最后一行删除则覆盖裁剪器只剩一个条目的情况。
+        // 每次都验证保留行顺序，不能仅以“不崩溃”掩盖删错章节。
+        for ( int remaining = 3; remaining > 0; --remaining ) {
+            // 子窗口名称带宿主前缀，只匹配固定内部 ID，避免依赖显示语言。
+            // 借用指针仅在当前上下文存活期间使用，不跨销毁保存。
+            ImGuiWindow* child = nullptr;
+            for ( auto* window : ImGui::GetCurrentContext()->Windows ) {
+                if ( window->Name && std::string_view(window->Name)
+                                             .find("##AudioChapterList") !=
+                                         std::string_view::npos )
+                    child = window;
+            }
+            if ( !child ) {
+                passed = false;
+                break;
+            }
+            const auto&  style = ImGui::GetStyle();
+            const ImVec2 pointer{
+                child->WorkRect.Max.x - 50 + style.ItemSpacing.x +
+                    style.FramePadding.x + ImGui::CalcTextSize("X").x * 0.5F,
+                child->DC.CursorStartPos.y + ImGui::GetFrameHeight() * 0.5F
+            };
+            // 先移动预热，再独立按下和松开，避免输入队列拆分导致未命中。
+            io.AddMousePosEvent(pointer.x, pointer.y);
+            draw();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            draw();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            draw();
+            passed &= tool.m_audioChapters.size() ==
+                      static_cast<std::size_t>(remaining - 1);
+            // 数量不符时先停止点击，避免后续输入改变失败现场或越过空列表。
+            if ( !passed ) break;
+            // 首行连续删除应依次留下第二、第三章，时间字段作为稳定身份。
+            if ( remaining > 1 )
+                passed &= tool.m_audioChapters.front().seconds == 5 - remaining;
+            draw();
+        }
+        // 空列表再绘制一帧，确保后续 Step 和窗口栈仍有效。
+        // 空列表没有任何行控件，不能沿用上一轮的删除按钮 ID。
+        // 删除后的显示刷新只允许跨正常帧推进，不通过睡眠等待清理。
+        // 本测试刻意不加载文件，排除音频解码线程导致的无关失败。
+        // 崩溃发生在 UI 控制流，因此真实输入与裁剪循环是本例验证边界。
+        // Windows 转储定位仍保留独立日志，不把本机通过视作 Windows 二进制复测。
+        draw();
+        // 失败也走相同销毁路径，不把本用例的活动 ID 带入后续工具测试。
+        // 这里只改工具草稿，未提交导出任务，也不会写入真实音频元数据。
+        ImGui::DestroyContext();
+        if ( !passed ) XERROR("BPM chapter delete regression failed");
+        return passed;
+    }
+
     /// @brief 阻止测试析构把临时显示偏好保存到个人配置。
     static void suppressPreferenceSave(BpmMeasurementToolView& tool)
     {
@@ -288,7 +385,7 @@ struct BpmMeasurementHistoryTestAccess {
 }  // namespace MMM::UI
 
 /// @brief 验证 BPM 专属历史、磁吸跨段导航与新开关持久化兼容。
-/// @return 所有路径成立时返回零，不创建音频设备或 ImGui 上下文。
+/// @return 所有路径成立时返回零；仅使用测试 ImGui 上下文，不创建音频设备。
 int main()
 {
     // JSON 与工具行为分别验证，避免偏好默认值恰好掩盖序列化缺失。
@@ -314,7 +411,8 @@ int main()
         persisted && !legacy &&
         MMM::UI::BpmMeasurementHistoryTestAccess::checkHistory(tool) &&
         MMM::UI::BpmMeasurementHistoryTestAccess::checkWheel(tool) &&
-        MMM::UI::BpmMeasurementHistoryTestAccess::checkPlaybackCursor(tool);
+        MMM::UI::BpmMeasurementHistoryTestAccess::checkPlaybackCursor(tool) &&
+        MMM::UI::BpmMeasurementHistoryTestAccess::checkChapterDeletion(tool);
     // 先恢复偏好再抑制析构落盘，保持测试无用户设置副作用。
     settings.bpmMeasurementToolPreferences = original;
     MMM::UI::BpmMeasurementHistoryTestAccess::suppressPreferenceSave(tool);
