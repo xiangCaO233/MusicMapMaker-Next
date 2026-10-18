@@ -49,17 +49,22 @@ ImGuiWindow* findCanvas()
 /// @param height 工具所在宿主的高度。
 /// @param shift 是否按住 Shift，显式请求横向滚动。
 /// @param pointer 指针位置，表格场景使用真实行坐标选择资源。
+/// @param horizontalWheel 后端已转换的横轴滚轮增量，负值向右。
+/// @note 横轴与纵轴分别注入，允许测试真实触控板事件而非只模拟传统鼠标。
+/// @note Shift 状态仍独立进入队列，不能通过移除修饰键来绕过平台行为。
+/// @note 本入口接收 ImGui 后端事件，不负责模拟操作系统的 Shift 轴转换。
 /// @warning 测试帧入口：只推进 ImGui 内存状态，不等待真实时间。
 void drawFrame(MMM::UI::UIManager& manager, MMM::UI::ProjectAudioToolView& view,
                bool docked, float wheel = 0.0F, bool focusOther = false,
                float height = 450.0F, bool shift = false,
-               ImVec2 pointer = ImVec2(200.0F, 250.0F))
+               ImVec2 pointer         = ImVec2(200.0F, 250.0F),
+               float  horizontalWheel = 0.0F)
 {
     auto& io = ImGui::GetIO();
     // 指针放在画布空白处，避免点击音频预览或拖动资源。
     io.AddMousePosEvent(pointer.x, pointer.y);
     // 输入必须先于 NewFrame 排队，与真实 GLFW 后端的事件时序一致。
-    io.AddMouseWheelEvent(0.0F, wheel);
+    io.AddMouseWheelEvent(horizontalWheel, wheel);
     io.AddKeyEvent(ImGuiMod_Shift, shift);
     ImGui::NewFrame();
     // 固定宿主几何，隔离系统 DPI、用户布局及动画时钟。
@@ -285,13 +290,48 @@ bool checkScrolling(MMM::UI::UIManager&            manager,
     drawFrame(manager, view, true, 0.0F, false, 3200.0F);
     // 无纵向溢出意味着纵轮在边界停止，不能隐式重解释为横向请求。
     if ( canvas->Scroll.x != previousX ) return false;
-    // 单独按 Shift 再滚轮，验证横向入口保留而默认方向没有歧义。
-    // 修饰键先独立预热，隔离 ImGui 输入队列的跨帧事件合并策略。
-    // 这样测试失败只表示横向请求未生效，而不是 Shift 尚未进入状态。
-    drawFrame(manager, view, true, 0.0F, false, 3200.0F, true);
-    drawFrame(manager, view, true, -1.0F, false, 3200.0F, true);
-    drawFrame(manager, view, true, 0.0F, false, 3200.0F);
-    return canvas->Scroll.x > previousX;
+    // 不同平台的后端事件不同：普通平台由 ImGui 处理 Shift，macOS 已由系统换轴。
+    // 两种输入在每台测试机上都验证，避免仅在 Linux 上通过而漏掉 Apple
+    // 默认行为。
+    auto&      io                    = ImGui::GetIO();
+    const bool originalMacOSBehavior = io.ConfigMacOSXBehaviors;
+    bool       horizontalPassed      = true;
+    for ( bool macOSBehavior : { false, true } ) {
+        // 仅替换内存输入约定，不启动平台后端或修改用户持久配置。
+        // 轮次末尾恢复宿主默认值，后续表格用例仍按原平台规则解释输入。
+        io.ConfigMacOSXBehaviors = macOSBehavior;
+        // 起点取真实滚动结果，不假设字体、主题与平台决定的每次步长相同。
+        // 两个轮次顺序推进，第二轮不能借用第一轮产生的位移通过断言。
+        const float before = canvas->Scroll.x;
+        // Shift 先独立预热，保证修饰键已在滚轮到来前进入输入状态。
+        // macOS 直接提供横向增量，不能再要求生产控件把同一事件换轴一次。
+        drawFrame(manager, view, true, 0.0F, false, 3200.0F, true);
+        drawFrame(manager,
+                  view,
+                  true,
+                  macOSBehavior ? 0.0F : -1.0F,
+                  false,
+                  3200.0F,
+                  true,
+                  { 200.0F, 250.0F },
+                  macOSBehavior ? -1.0F : 0.0F);
+        // 后续无输入帧让原生滚动目标落地，断言真实子窗口位置而非请求值。
+        drawFrame(manager, view, true, 0.0F, false, 3200.0F);
+        if ( canvas->Scroll.x <= before ) {
+            XERROR(
+                "Project audio horizontal scroll failed: before={}, after={}, "
+                "macOS={}",
+                before,
+                canvas->Scroll.x,
+                macOSBehavior);
+            horizontalPassed = false;
+            break;
+        }
+    }
+    // 失败分支也走这里，确保错误日志之后的正常析构不继承临时输入配置。
+    // 只要求方向和非零位移，不将平台相关的滚动像素数硬编码为预期结果。
+    io.ConfigMacOSXBehaviors = originalMacOSBehavior;
+    return horizontalPassed;
 }
 /// @brief 验证真实表格替代方块绘制，选择资源不改写已有布局。
 /// @return 模式切换、行选择和切回方块都保持工作区正确时返回 true。
@@ -396,8 +436,19 @@ int main()
         // UI 对象先于 ImGui context 释放，保持 Clay 和窗口的生命周期配对。
         MMM::UI::UIManager            manager;
         MMM::UI::ProjectAudioToolView view("AudioToolScrollTest");
-        passed = checkVolumePopup(manager, view) &&
-                 checkScrolling(manager, view) && checkTableView(manager, view);
+        // 分阶段记录失败入口，平台差异不能只留下一个笼统的末尾错误。
+        // 保留原有短路顺序：弹层失败时，不让后续滚动覆盖最先出现的输入异常。
+        // 诊断只输出所属阶段，不跳过断言、不重试输入，也不降低通过条件。
+        passed = checkVolumePopup(manager, view);
+        if ( !passed ) XERROR("Project audio volume popup regression");
+        if ( passed ) {
+            passed = checkScrolling(manager, view);
+            if ( !passed ) XERROR("Project audio scrolling regression");
+        }
+        if ( passed ) {
+            passed = checkTableView(manager, view);
+            if ( !passed ) XERROR("Project audio table view regression");
+        }
     }
     // 先关闭生产项目数据源，再销毁 ImGui；控制器不保留工具视图的窗口指针。
     controller.closeProject();
