@@ -1,5 +1,6 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -50,7 +51,7 @@ int main(int argc, char** argv)
 {
     // 输出目录由 CTest 传入构建树，测试不会写入只读资源目录。
     // 独立命令运行同样必须明确提供输出位置。
-    if ( argc != 2 ) return 1;
+    if ( argc != 2 && argc != 3 ) return 1;
     const std::filesystem::path root(argv[1]);
     std::error_code             error;
     std::filesystem::create_directories(root, error);
@@ -150,6 +151,93 @@ int main(int argc, char** argv)
          encoded.m_noteData.notes.front().m_sampleBinding->m_audioResourceId !=
              "テスト.wav" )
         return 11;
+    // 四颗普通键转标准五键加转盘：空转盘位于零，原物件顺移一轨。
+    // 毫秒量化位置、非默认增益和视觉滚速共同覆盖外部谱面的常见导出路径。
+    auto keyboard = MMM::BeatMap::loadFromFile(root / "source.bms");
+    keyboard.m_baseMapMetadata.track_count = 4;
+    // 普通键补位夹具不沿用原六轨长条，避免来源键数与物件轨号互相矛盾。
+    // 原来的长条往返已由 verify 覆盖，这里专门检查四轨转换边界。
+    keyboard.m_noteData.holds.clear();
+    keyboard.m_noteData.notes.front().m_track     = 0;
+    keyboard.m_noteData.notes.front().m_timestamp = 628;
+    keyboard.m_noteData.notes.back().m_track      = 3;
+    keyboard.m_noteData.notes.back().m_timestamp  = 1234;
+    // 非默认音量必须来自真实绑定，空绑定无法触发事件增益兼容分支。
+    // 自动采样另设不同增益，防止 writer 只处理其中一种音频来源。
+    keyboard.m_noteData.notes.front().m_sampleBinding->m_volume = 0.4F;
+    keyboard.m_audioSamples.front().m_volume                    = 0.5F;
+    // 新增视觉时间线不应影响四分音符积分，也不应使整个导出失败。
+    // STOP 和 BPM 仍沿用原夹具，用于检查降级不会误删可支持的效果。
+    MMM::Timing visual;
+    visual.m_timingEffect          = MMM::TimingEffect::SCROLL;
+    visual.m_timingEffectParameter = 1.25;
+    keyboard.m_timings.push_back(visual);
+    // 目标名称独立于 roundtrip 夹具，失败不会被旧文件掩盖。
+    // saveToFile 的成功和后续重新导入必须同时满足，不能只检查磁盘存在。
+    if ( !keyboard.saveToFile(root / "keyboard.bms") ) return 12;
+    // 读取器仍按标准通道判断布局，验证结果不依赖私有键数元数据。
+    // 首、末轨分别覆盖补转盘和右侧保留空键两个边界。
+    const auto converted = MMM::BeatMap::loadFromFile(root / "keyboard.bms");
+    // 重载标准布局而不是私有扩展，且两个音符均保留在普通键上。
+    // 导出不能把修改写回来源模型的键数、轨号或增益。
+    if ( converted.m_baseMapMetadata.track_count != 6 ||
+         converted.m_noteData.notes.size() != 2 ||
+         converted.m_noteData.notes.front().m_track != 1 ||
+         converted.m_noteData.notes.back().m_track != 4 ||
+         std::abs(converted.m_noteData.notes.front().m_timestamp - 628) >
+             0.01 ||
+         std::abs(converted.m_noteData.notes.back().m_timestamp - 1234) >
+             0.01 ||
+         keyboard.m_noteData.notes.front().m_sampleBinding->m_volume != 0.4F ||
+         keyboard.m_baseMapMetadata.track_count != 4 )
+        return 13;
+    // 可选外部谱面探针用于用户现场复测，标准 CTest 不依赖本机目录。
+    // 产物仍全部写入调用方给出的构建输出目录。
+    if ( argc == 3 ) {
+        // 现场输入使用公共格式分派，覆盖 OSU 载入而非手工重建近似模型。
+        // 源文件只读，输出固定为 external.bms，避免覆盖用户已保存的谱面。
+        // 预期轨号来自原布局加一个空转盘，与生产通道计算独立比较。
+        const auto external = MMM::BeatMap::loadFromFile(argv[2]);
+        if ( !external.saveToFile(root / "external.bms") ) return 14;
+        const auto result = MMM::BeatMap::loadFromFile(root / "external.bms");
+        if ( result.m_noteData.notes.size() !=
+                 external.m_noteData.notes.size() ||
+             result.m_noteData.holds.size() !=
+                 external.m_noteData.holds.size() )
+            return 15;
+        // 音符数量相同还不足以证明转换正确，逐项核对键序和时间。
+        // 红线自身的分数近似可能逐段累积，因此现场探针允许四分之一毫秒。
+        // 该容差远小于原 OSU 整数毫秒，不能把明显吸附错误当作转换成功。
+        // Hold 尾部也必须检查，避免只保留头部而丢失持续长度。
+        // 测试读取源模型而不修改它，所有误差均与原始导入结果比较。
+        // 同刻多轨对象经分数近似后可能重新排序，不能按容器下标比较。
+        // 使用轨号和时间共同匹配，避免把和弦内部换序误判为丢失长条。
+        // 两侧数量已经独立核对，匹配同时检查每个来源对象的目标位置。
+        const auto matches = [](const auto& sourceNotes,
+                                const auto& targetNotes) {
+            for ( const auto& sourceNote : sourceNotes ) {
+                const auto target = std::find_if(
+                    targetNotes.begin(),
+                    targetNotes.end(),
+                    [&](const auto& note) {
+                        return note.m_track == sourceNote.m_track + 1 &&
+                               std::abs(note.m_timestamp -
+                                        sourceNote.m_timestamp) <= 0.25;
+                    });
+                if ( target == targetNotes.end() ) return false;
+                // Note 没有持续时长，Hold 则额外检查尾部；共用同一匹配标准。
+                if constexpr ( requires { sourceNote.m_duration; } ) {
+                    if ( std::abs(target->m_duration - sourceNote.m_duration) >
+                         0.25 )
+                        return false;
+                }
+            }
+            return true;
+        };
+        if ( !matches(external.m_noteData.notes, result.m_noteData.notes) ||
+             !matches(external.m_noteData.holds, result.m_noteData.holds) )
+            return 16;
+    }
     XINFO("BMS import/export and native STOP persistence passed");
     return 0;
 }

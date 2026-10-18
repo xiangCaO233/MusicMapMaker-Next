@@ -8,7 +8,7 @@ namespace MMM::Bms
 {
 /// @brief 写出标准通道文本，先在内存验证，再打开目标文件。
 /// @details BMS 的 STOP 单位为四分音符的 1/48，MMM 的参数为秒。
-/// 不可表达的物件与效果返回失败，禁止静默保存丢失编辑内容的文件。
+/// 普通键布局补齐标准空轨；忽略的滚速和增益由导出界面事先提示。
 /// @param map 已同步完成的导出快照，音频引用必须为实际路径。
 /// @param path 目标 BMS/BME/BML/PMS 文件名。
 /// @return 所有类型可表达且文件写入成功时返回 true。
@@ -20,17 +20,20 @@ namespace MMM::Bms
 inline bool save(const BeatMap& map, const std::filesystem::path& path)
 {
     // 目标后缀决定 PMS 键位协议，不能单凭九轨猜测其他格式。
-    // 转盘计入键数；标准布局因此为六、八、十二或十六轨。
+    // 转盘计入标准键数；普通键谱面在左侧补空转盘，不移动原有键序。
     const auto& meta   = map.m_baseMapMetadata;
     const bool  pms    = upper(Config::pathToUtf8(path.extension())) == ".PMS";
     const int   tracks = meta.track_count;
+    const bool  keyboardOnly =
+        !pms && ((tracks >= 1 && tracks <= 5) || tracks == 7);
     // Flick 和折线没有这里实现的 BMS 通道表示。
     // 提前拒绝可避免只保存可转换子集、丢失其余物件。
     if ( (pms && tracks != 9) ||
-         (!pms && tracks != 6 && tracks != 8 && tracks != 12 && tracks != 16) ||
+         (!pms && !keyboardOnly && tracks != 6 && tracks != 8 && tracks != 12 &&
+          tracks != 16) ||
          !map.m_noteData.flicks.empty() || !map.m_noteData.polylines.empty() )
         return false;
-    const bool seven    = tracks == 8 || tracks == 16;
+    const bool seven    = tracks == 7 || tracks == 8 || tracks == 16;
     const int  sideSize = seven ? 8 : 6;
     // 内部轨道保留转盘位置，PMS 使用自己的九键通道映射。
     // 轨道数已经在入口限制，下面只处理标准布局。
@@ -39,6 +42,8 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     // PMS 使用独立九键映射，不包含转盘。
     const auto channel = [&](int track) {
         if ( pms ) return track < 5 ? 0x11 + track : 0x22 + track - 5;
+        // 无转盘来源的第一颗普通键写入 11，而不是转盘通道 16。
+        if ( keyboardOnly ) ++track;
         const int key = track % sideSize;
         return 0x10 * (track / sideSize + 1) + (key == 0   ? 6
                                                 : key <= 5 ? key
@@ -49,16 +54,16 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     std::vector<const Timing*> timings;
     for ( const auto& t : map.m_timings ) {
         // 外部协议没有负小节；非法或无限时间不能参与拍位积分。
-        // 单位滚速允许跳过，其他不支持效果必须明确拒绝。
+        // 视觉效果不进入音乐拍位积分，可表达事件仍需验证数值。
         if ( !std::isfinite(t.m_timestamp) || t.m_timestamp < 0 ) return false;
         if ( t.m_timingEffect != TimingEffect::BPM &&
              t.m_timingEffect != TimingEffect::STOP ) {
-            // 单位滚速不改变标准 BMS，其他效果不可编码。
-            if ( (t.m_timingEffect == TimingEffect::SCROLL ||
-                  t.m_timingEffect == TimingEffect::HS) &&
-                 t.m_timingEffectParameter == 1 )
-                continue;
-            return false;
+            // 标准通道不携带视觉滚速；保留 BPM/STOP 的实际音乐时间。
+            // 界面预先列出降级差异，独立保存调用也留下明确日志。
+            XWARN("BMS 导出：忽略不支持的 timing 类型 {}，位置 {} ms",
+                  static_cast<int>(t.m_timingEffect),
+                  t.m_timestamp);
+            continue;
         }
         if ( !std::isfinite(t.m_timingEffectParameter) ||
              t.m_timingEffectParameter <= 0 || t.m_interpolation )
@@ -93,6 +98,13 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         }
         return beat + (ms - last) * bpm / 60000;
     };
+    // 使用全谱最低 BPM 将拍位误差约束在 0.01 毫秒内。
+    // 毫秒量化的外部谱面通常不落在简单分数上，机器精度会制造巨型零串。
+    double minimumBpm = initial;
+    for ( const auto* t : timings )
+        if ( t->m_timingEffect == TimingEffect::BPM )
+            minimumBpm = std::min(minimumBpm, t->m_timingEffectParameter);
+    const double fractionTolerance = minimumBpm * 0.01 / 240000.0;
     // 固定两位资源编号容量为 36²，零编号不代表有效事件。
     // 所有调用先限制为 1–1295，避免字符串表越界。
     const auto encode = [](int value) {
@@ -151,7 +163,7 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         for ( ; denominator <= 65536; ++denominator ) {
             numerator = static_cast<int>(std::round(fraction * denominator));
             if ( std::abs(fraction - static_cast<double>(numerator) /
-                                         denominator) <= 1e-8 )
+                                         denominator) <= fractionTolerance )
                 break;
         }
         if ( denominator > 65536 ) return false;
@@ -208,9 +220,10 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         if ( note.m_track >= static_cast<unsigned>(tracks) || note.m_isSubNote )
             return false;
         if ( note.m_sampleBinding && note.m_sampleBinding->m_volume != 1.0F )
-            return false;
+            XWARN("BMS 导出：物件采样音量恢复为 100，位置 {} ms",
+                  note.m_timestamp);
         // 空采样仍分配非零编号，使静音 Note 的判定信息得以保留。
-        // 事件级增益无法用共享 WAV 定义忠实表达，调用前已经拒绝。
+        // 共享 WAV 无法携带事件增益，导出确认中已说明恢复为默认音量。
         const int sound = resource(note.m_sampleBinding
                                        ? note.m_sampleBinding->m_audioResourceId
                                        : "");
@@ -228,8 +241,10 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     // 自动采样统一写入 01，不把 BGM 错当玩家键位。
     // effectiveTimestamp 包含事件自身偏移，导出位置应与实际触发一致。
     for ( const auto& sample : map.m_audioSamples ) {
-        if ( sample.m_volume != 1.0F ||
-             !emit(sample.effectiveTimestamp(),
+        if ( sample.m_volume != 1.0F )
+            XWARN("BMS 导出：自动采样音量恢复为 100，位置 {} ms",
+                  sample.m_timestamp);
+        if ( !emit(sample.effectiveTimestamp(),
                    1,
                    resource(sample.m_audioResourceId)) )
             return false;

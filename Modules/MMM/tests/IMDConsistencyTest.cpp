@@ -96,6 +96,22 @@ int main(int argc, char* argv[])
     // 保存失败已由导出器记录具体兼容性原因，此处直接终止避免比较残留文件。
     if ( !m1.saveToFile(output) ) return 1;
 
+    // 任意命名只影响外部资源发现，不改变 IMD 二进制内容。
+    // 在有显式音频的模型上另存到中文、空格及无下划线名称，覆盖旧前缀检查。
+    // 文件位于 CTest 的输出目录，不修改输入谱面及其伴随音频。
+    // 重新加载独立模型，避免修改后影响后续二进制和逻辑一致性比较。
+    // 音频引用故意与输出名称无关，防止仅空采样模型绕过旧检查而误通过。
+    auto renamed = MMM::BeatMap::loadFromFile(input);
+    renamed.m_audioSamples.clear();
+    MMM::AudioSampleEvent sample;
+    sample.m_track =
+        static_cast<uint32_t>(renamed.m_baseMapMetadata.track_count);
+    sample.m_audioResourceId                  = "subdir/unrelated.ogg";
+    renamed.m_baseMapMetadata.bgm_track_count = 1;
+    renamed.m_audioSamples.push_back(sample);
+    if ( !renamed.saveToFile(output.parent_path() / "自由命名 test.imd") )
+        return 1;
+
     MMM::BeatMap m2 = MMM::BeatMap::loadFromFile(output);
     // 第二次同步重建派生索引，使逻辑比较不受加载器内部构造顺序影响。
     m2.sync();
@@ -120,7 +136,7 @@ int main(int argc, char* argv[])
     // FLAC 发现属于明确的兼容性契约，也必须独立通过。
     int totalPassed = binaryPassed + (logicPassed ? 1 : 0) +
                       (flacAudioResolutionPassed ? 1 : 0);
-    int totalTests = TOTAL_IMD_CHUNKS + 2;
+    int totalTests  = TOTAL_IMD_CHUNKS + 2;
     XINFO("========================================");
     bool isConsideredPassed =
         // 完全一致是理想结果；历史样本至少要求三个核心区块及全部逻辑通过。

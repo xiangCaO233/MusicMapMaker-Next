@@ -96,11 +96,11 @@ inline std::optional<int32_t> parseRMInt32(std::string_view text)
 
 /// @brief 将谱面保存为 RM/IMD 二进制格式。
 /// @param beatMap 已同步的统一谱面模型。
-/// @param path 目标 IMD 文件路径，文件名应满足 Title_nk_Version.imd 约定。
+/// @param path 目标 IMD 文件路径，允许用户自定义文件名。
 /// @return 全部兼容性检查和文件写出成功时返回 true。
 /// @details 导出器先拒绝 IMD 无法无损表达的采样绑定，再依次写入时长、BPM
 /// 表、固定标记和扁平物件表。折线会保持为连续记录块，避免全局排序打散节点。
-/// @note IMD 不携带完整资源引用，单音频必须能由输出文件名前缀唯一推导。
+/// @note IMD 不携带资源引用；文件命名只影响外部软件发现伴随资源，不限制写出。
 inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
 {
     /// @brief RM/IMD 隐式音频零点允许的最大时间误差，单位为毫秒。
@@ -191,38 +191,9 @@ inline bool saveRMMap(const BeatMap& beatMap, std::filesystem::path path)
             return false;
         }
 
-        // 输出文件名的标题段必须与资源 stem 一致，且资源不能位于子目录。
-        // 这是加载器无需额外清单即可重新找到相同音频的必要条件。
-        const std::string outputFilename = Config::pathToUtf8(path.filename());
-        const size_t      firstSeparator = outputFilename.find('_');
-        const std::string audioPrefix =
-            firstSeparator == std::string::npos
-                ? std::string{}
-                : outputFilename.substr(0, firstSeparator);
-        const std::filesystem::path audioReference =
-            Config::utf8ToPath(legacyAudioSample->m_audioResourceId);
-        // 与加载器共享相同的可发现扩展名集合，防止写出后无法重新定位。
-        static constexpr std::array<std::string_view, 7> AUDIO_EXTENSIONS{
-            ".mp3", ".wav", ".ogg", ".flac", ".opus", ".aac", ".m4a"
-        };
-        const std::string audioExtension =
-            Config::pathToUtf8(audioReference.extension());
-        const bool supportedExtension =
-            std::find(AUDIO_EXTENSIONS.begin(),
-                      AUDIO_EXTENSIONS.end(),
-                      audioExtension) != AUDIO_EXTENSIONS.end();
-        if ( audioPrefix.empty() || audioReference.has_parent_path() ||
-             Config::pathToUtf8(audioReference.stem()) != audioPrefix ||
-             !supportedExtension ) {
-            XERROR(
-                "RM/IMD 导出失败：音频引用 '{}' 无法由输出文件名 '{}' "
-                "的同名前缀规则表达",
-                legacyAudioSample->m_audioResourceId,
-                outputFilename);
-            return false;
-        }
-        // legacyAudioSample 此后无需写入文件体；通过验证即意味着文件名前缀
-        // 已能完整承载它的资源身份，加载器会据此重新构造显式采样事件。
+        // IMD 文件体不编码音频文件名，用户可能自行组织伴随资源。
+        // 保存器只检查事件是否可表达，不把外部播放器的查找约定当作路径限制。
+        // 此处不复制或重命名音频，也不替换用户选择的输出文件名。
     }
 
     // 所有可表达性检查结束后才创建文件，避免失败导出留下半成品。
