@@ -3,7 +3,7 @@
 
 namespace MMM::UI
 {
-/// @brief 主窗口级文件夹与谱包拖放路由，与演练窗口和具体画布解耦。
+/// @brief 主窗口级文件夹、BMS 谱面与谱包拖放路由，与演练窗口和具体画布解耦。
 /// @details GLFW 投放先进入内部队列，再由 UI
 /// 更新阶段验证位置和类型后发布项目事件。
 class ProjectDropRouter

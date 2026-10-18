@@ -1552,10 +1552,28 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
                                   ImGui::GetStyle().FramePadding.x * 2.0f;
     const float autoBpmWidth    = ImGui::CalcTextSize(autoBpmLabel).x +
                                   ImGui::GetStyle().FramePadding.x * 2.0f;
-    const float comboWidth =
-        std::max(1.0f,
-                 ImGui::GetContentRegionAvail().x - importButtonWidth -
-                     ImGui::GetStyle().ItemSpacing.x);
+    const auto  renameLabel = TR("ui.file_manager.context.rename").toString();
+    const float renameButtonWidth = ImGui::CalcTextSize(renameLabel.c_str()).x +
+                                    ImGui::GetStyle().FramePadding.x * 2.0F;
+    // 三行同时预留导入和改名按钮，不能覆盖下拉框箭头或截断长路径。
+    const float comboWidth = std::max(
+        1.0F,
+        ImGui::GetContentRegionAvail().x - importButtonWidth -
+            renameButtonWidth - ImGui::GetStyle().ItemSpacing.x * 2.0F);
+    // 改名与导入并排，资源选择继续使用原有拖放命中区域。
+    // 用途随按钮传递，不依赖导入选择器保存的目标类型。
+    const auto drawRename = [&](ResourceTarget               target,
+                                const std::filesystem::path& selected) {
+        ImGui::SameLine();
+        // 三种资源共享标签，但用途 ID 保证按钮状态互不串线。
+        ImGui::PushID(static_cast<int>(target));
+        // 未绑定资源或临时只读项目不能重命名；音频仍受外层自动分析禁用约束。
+        ImGui::BeginDisabled(selected.empty() || project->m_isTemporaryProject);
+        if ( FeedbackButton(renameLabel.c_str(), { renameButtonWidth, 0.0F }) )
+            requestResourceRename(target);
+        ImGui::EndDisabled();
+        ImGui::PopID();
+    };
 
     // 音频下拉、导入和拖放作为一个整体受自动分析状态约束。
     if ( backgroundAutomaticMeasurementActive ) {
@@ -1593,6 +1611,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
         handleResourceDrop(ResourceTarget::Audio);
     if ( FeedbackButton(importAudioLabel, ImVec2(importButtonWidth, 0.0f)) )
         openResourcePicker(ResourceTarget::Audio);
+    // 音频改名与导入一起服从自动分析期间的禁用约束。
+    drawRename(ResourceTarget::Audio, m_selectedAudioPath);
     if ( sourceManager )
         sourceManager->walkthroughSpotlight().reportTarget(
             "new-beatmap.audio",
@@ -1752,6 +1772,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     ImGui::SameLine();
     if ( FeedbackButton(importCoverLabel, ImVec2(importButtonWidth, 0.0f)) )
         openResourcePicker(ResourceTarget::Cover);
+    // 封面入口传独立用途，不能把背景字段误当作目标。
+    drawRename(ResourceTarget::Cover, m_selectedCoverImgPath);
 
     // 背景允许图片或视频，预览同样显示项目相对路径。
     std::string coverPreview =
@@ -1814,6 +1836,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     if ( FeedbackButton(importBackgroundLabel,
                         ImVec2(importButtonWidth, 0.0f)) )
         openResourcePicker(ResourceTarget::Background);
+    // 背景既可为图片也可为视频，改名不改变媒体类型。
+    drawRename(ResourceTarget::Background, m_selectedCoverPath);
     // 合并矩形覆盖元数据、封面和背景，表达同一人工复核阶段。
     // 起止坐标均来自现有控件，不增加 Child 或改变滚动内容高度。
     if ( sourceManager )
@@ -1882,6 +1906,8 @@ void NewBeatmapWizard::update(UIManager* sourceManager)
     m_pendingDrops.clear();
     // 内置文件选择器也作为向导帧的一部分驱动。
     renderResourcePicker();
+    // 改名弹窗必须与资源选择器一样处于父向导的模态生命周期内。
+    renderResourceRename(dpiScale);
     if ( sourceManager && !m_selectedAudioPath.empty() )
         // 选择器在资源区之后提交，成功导入仍须在同一帧完成音频目标。
         sourceManager->walkthroughSpotlight().completeTarget(
@@ -1965,6 +1991,13 @@ void NewBeatmapWizard::reset()
     // 清理瞬时输入和上一轮可见错误。
     m_pendingDrops.clear();
     m_resourceImportError.clear();
+    m_resourceRenameError.clear();
+    m_openRenamePopup  = false;
+    m_focusRenameInput = false;
+    m_renameProjectRoot.clear();
+    m_renameSourcePath.clear();
+    // 音轨 ID 与路径分别清空，下一次改名重新捕获当前选择。
+    m_renameAudioId.clear();
     // 使用值初始化的 BaseMapMeta 清除所有遗留元数据字段。
     m_meta = MMM::BaseMapMeta();
 

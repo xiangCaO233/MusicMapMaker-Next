@@ -1,6 +1,7 @@
 #include "config/VisualConfig.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <nlohmann/json.hpp>
@@ -12,6 +13,25 @@ namespace MMM::Config
 
 namespace
 {
+/// @brief 从本机视觉配置读取一项有限的观察参数。
+/// @param j 用户配置对象，缺失键或错误类型视为旧版配置。
+/// @param key 摄像机数值字段名。
+/// @param fallback 非法或缺失参数的默认值。
+/// @param minimum 允许范围下界。
+/// @param maximum 允许范围上界。
+/// @return 不传播 NaN 或无穷值的有界参数。
+float readObservationValue(const nlohmann::json& j, const char* key,
+                           float fallback, float minimum, float maximum)
+{
+    // 摄像机参数来自可手工编辑的文件，先检查类型再转换，避免 JSON 类型异常。
+    const auto value = j.find(key);
+    if ( value == j.end() || !value->is_number() ) return fallback;
+    const float number = value->get<float>();
+    // 极大 JSON 数值转为 float 后也可能溢出，必须在转换之后检查有限性。
+    return std::isfinite(number) ? std::clamp(number, minimum, maximum)
+                                 : fallback;
+}
+
 /// @brief 旧版拍号与分拍线时间相对局部区间高度的默认字号比例。
 constexpr float LEGACY_REPEATED_TEXT_FONT_SIZE_RATIO = 0.18f;
 // 该常量只用于读取缺少坐标系标记的旧布局，不写回当前格式。
@@ -32,6 +52,32 @@ std::array<float, 4> sanitizeBackgroundLevelColor(
     return color;
 }
 }  // namespace
+
+/// @brief 计算三维局部物件高度，兼容普通二维皮肤比例。
+/// @warning 逐物件固定数值计算，不查询外部资源或共享状态。
+float VisualConfig::canvasNoteScaleY() const
+{
+    // 普通二维配置沿用皮肤高度，补偿不能写回原始缩放配置。
+    const bool spatial =
+        canvasCameraPoseEnabled || debugCanvasCameraAngleDegrees != 0 ||
+        debugCanvasCameraYawDegrees != 0 || debugCanvasCameraDistance != 1;
+    if ( !spatial || !std::isfinite(canvasThicknessCompensation) )
+        return noteScaleY;
+    // 仅放大局部物件高度，不缩放持续时长或连接节点的时间坐标。
+    return noteScaleY *
+           (1 + std::clamp(canvasThicknessCompensation, 0.0F, 300.0F) / 100);
+}
+
+/// @brief 返回三维画布向远端额外扩展的高度。
+/// @warning 每帧常量计算，非有限长度回退为零扩展。
+float VisualConfig::canvasCameraExtension() const
+{
+    // 未启用三维观察时沿用原始可见范围，长度设置仍保留供下次使用。
+    if ( !canvasCameraPoseEnabled || !std::isfinite(canvasCameraLength) )
+        return 0;
+    // 上限约束可见候选与网格数量；一倍长度精确返回零扩展。
+    return std::clamp(canvasCameraLength, 1.0F, 32.0F) - 1.0F;
+}
 
 /// @brief 保存滑键特效范围；非法枚举值按兼容模式写出。
 /// @param j 接收稳定英文模式标识的 JSON 值。
@@ -1020,6 +1066,16 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
           config.enablePolylineInternalFlickEffects },
         { "nonHoldHitEffectDuration", config.nonHoldHitEffectDuration },
         { "debugDrawHitboxes", config.debugDrawHitboxes },
+        { "debugCanvasCameraAngleDegrees",
+          config.debugCanvasCameraAngleDegrees },
+        { "debugCanvasCameraYawDegrees", config.debugCanvasCameraYawDegrees },
+        { "debugCanvasCameraDistance", config.debugCanvasCameraDistance },
+        { "canvasCameraPoseEnabled", config.canvasCameraPoseEnabled },
+        { "canvasCameraLength", config.canvasCameraLength },
+        { "canvasMotionCompensation", config.canvasMotionCompensation },
+        { "canvasThicknessCompensation", config.canvasThicknessCompensation },
+        { "canvasCameraPosition", config.canvasCameraPosition },
+        { "canvasCameraRotation", config.canvasCameraRotation },
         { "interactionHitboxScaleX", config.interactionHitboxScaleX },
         { "interactionHitboxScaleY", config.interactionHitboxScaleY }
     };
@@ -1155,8 +1211,72 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
         std::clamp(config.nonHoldHitEffectDuration,
                    VisualConfig::MIN_NON_HOLD_HIT_EFFECT_DURATION,
                    VisualConfig::MAX_NON_HOLD_HIT_EFFECT_DURATION);
-    // 调试绘制默认关闭，横纵拾取缩放允许独立校准。
+    // 调试绘制默认关闭，观察角和横纵拾取缩放可独立校准。
     config.debugDrawHitboxes = j.value("debugDrawHitboxes", false);
+    // 三项观察参数分别读取，旧配置缺失的新键不影响原有俯仰角。
+    // 同一安全入口保证文件导入与设置页允许的范围一致。
+    // 这些字段只属于视觉配置，既不改变轨道布局，也不作为谱面内容同步。
+    // 单个错误字段独立回退，不能因距离损坏而丢弃合法的水平朝向。
+    config.debugCanvasCameraAngleDegrees = readObservationValue(
+        j,
+        "debugCanvasCameraAngleDegrees",
+        VisualConfig::DEFAULT_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES,
+        VisualConfig::MIN_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES,
+        VisualConfig::MAX_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES);
+    config.debugCanvasCameraYawDegrees = readObservationValue(
+        j,
+        "debugCanvasCameraYawDegrees",
+        VisualConfig::DEFAULT_DEBUG_CANVAS_CAMERA_YAW_DEGREES,
+        VisualConfig::MIN_DEBUG_CANVAS_CAMERA_YAW_DEGREES,
+        VisualConfig::MAX_DEBUG_CANVAS_CAMERA_YAW_DEGREES);
+    config.debugCanvasCameraDistance =
+        readObservationValue(j,
+                             "debugCanvasCameraDistance",
+                             VisualConfig::DEFAULT_DEBUG_CANVAS_CAMERA_DISTANCE,
+                             VisualConfig::MIN_DEBUG_CANVAS_CAMERA_DISTANCE,
+                             VisualConfig::MAX_DEBUG_CANVAS_CAMERA_DISTANCE);
+    // 长度只影响远端可见范围，旧配置保持一倍高度。
+    // 限制最大范围以约束逐帧拍线和物件生成量，不允许无穷画布。
+    // 与数值输入共用合法区间，错误类型和非有限值使用默认值。
+    // 缺省为零保证升级后画面不变；有限范围同时约束手工修改的配置。
+    config.canvasMotionCompensation =
+        readObservationValue(j, "canvasMotionCompensation", 0.0F, 0.0F, 100.0F);
+    config.canvasThicknessCompensation = readObservationValue(
+        j, "canvasThicknessCompensation", 0.0F, 0.0F, 300.0F);
+    config.canvasCameraLength =
+        readObservationValue(j, "canvasCameraLength", 1.0F, 1.0F, 32.0F);
+    // 自由相机与旧观察参数独立保存，缺失字段不改变旧配置的显示。
+    // 旧配置缺失启用键时保持原观察模式，不能自动迁移为自由相机。
+    // JSON 数字不能隐式解释为布尔开关。
+    // 每次载入都明确写回默认值，避免复用配置对象时保留旧状态。
+    const auto enabled = j.find("canvasCameraPoseEnabled");
+    config.canvasCameraPoseEnabled =
+        enabled != j.end() && enabled->is_boolean() && enabled->get<bool>();
+    // 各分量独立验证，损坏数组不能将 NaN 或无穷写进投影矩阵。
+    // 数组长度必须恰为三，以保证 XYZ 字段意义固定。
+    // 损坏的单个分量回退，不丢弃同数组中的其它有效坐标。
+    // 位置范围与数值控件保持一致，最终投影覆盖这个有限区域。
+    const auto readPose =
+        [&](const char* key, std::array<float, 3> fallback, float limit) {
+            const auto entry = j.find(key);
+            if ( entry == j.end() || !entry->is_array() || entry->size() != 3 )
+                return fallback;
+            for ( size_t i = 0; i < 3; ++i ) {
+                if ( !(*entry)[i].is_number() ) continue;
+                // 先按双精度读取，再夹取到浮点存储范围。
+                // 过大的合法 JSON 数字不会在转换时直接溢出为无穷。
+                // 非有限数据保留对应的默认分量。
+                const auto value = (*entry)[i].get<double>();
+                if ( std::isfinite(value) )
+                    fallback[i] = static_cast<float>(
+                        std::clamp(value, -double(limit), double(limit)));
+            }
+            return fallback;
+        };
+    config.canvasCameraPosition =
+        readPose("canvasCameraPosition", { 0, 0, 1 }, 100.0F);
+    config.canvasCameraRotation =
+        readPose("canvasCameraRotation", { 0, 0, 0 }, 180.0F);
     config.interactionHitboxScaleX =
         j.value("interactionHitboxScaleX",
                 VisualConfig::DEFAULT_INTERACTION_HITBOX_SCALE);

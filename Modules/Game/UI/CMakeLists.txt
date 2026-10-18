@@ -101,6 +101,10 @@ add_library(
   src/ui/utils/DesktopPathUtils.cpp
   src/ui/utils/NativeFileDialog.cpp
   src/ui/utils/UIWidgetUtils.cpp
+  src/ui/utils/VolumeSlider.cpp
+  src/ui/imgui/audio/AudioPresetControls.cpp
+  # 布局预设与文件对话框独立于相机模式，关闭布局面板仍能结束导入。
+  src/ui/imgui/manager/LayoutPresetControls.cpp
   # 主窗口固定区域、停靠布局和浮动管理器。
   src/ui/imgui/MainDockSpaceUI.cpp
   src/ui/imgui/MainDockSpaceUI_MenuBar.cpp
@@ -199,11 +203,15 @@ add_library(
   src/ui/imgui/manager/SearchView.cpp
   src/ui/imgui/manager/AudioManagerView.cpp
   src/ui/imgui/manager/ProjectAudioToolView.cpp
+  # 表格展示独立于方块手势，两个入口共享资源缓存和试听池。
+  src/ui/imgui/manager/ProjectAudioToolView_Table.cpp
   src/ui/imgui/manager/BeatMapManagerView.cpp
   src/ui/imgui/manager/CollaborationLogWindow.cpp
   src/ui/imgui/manager/CollaborationRoomCoverImage.cpp
   src/ui/imgui/manager/CollaborationView.cpp
   src/ui/imgui/manager/NewBeatmapWizard.cpp
+  # 向导的资源改名只在确认后执行事务，与普通逐帧表单绘制分开维护。
+  src/ui/imgui/manager/NewBeatmapWizard_ResourceRename.cpp
   src/ui/imgui/manager/NewProjectWizard.cpp
   src/ui/imgui/manager/SettingsView.cpp
   # 搜索索引与导航分开；索引只处理值数据，原设置页继续应用和保存配置。
@@ -598,3 +606,37 @@ target_include_directories(ProjectResourceImportTest
 mmm_register_test_case(
   NAME ProjectResourceImportTest COMMAND ProjectResourceImportTest
   "${CMAKE_BINARY_DIR}/test_output")
+
+# 覆盖项目音频工具滚动、音量和连续重播。测试使用真实视图和 SDL 虚拟音频输出，不初始化 GPU。
+# 项目夹具由隔离配置目录和构建树输出承载，不读取用户媒体资源。
+mmm_add_test_executable(UI ProjectAudioToolScrollTest
+                        tests/ProjectAudioToolScrollTest.cpp)
+target_link_libraries(ProjectAudioToolScrollTest PRIVATE UI 3rd_imgui)
+mmm_register_test_case(NAME ProjectAudioToolScrollTest COMMAND
+                       ProjectAudioToolScrollTest)
+# 虚拟后端仅消费测试合成 PCM，不占用用户声卡，也不会在 CI 发出声音。
+set_tests_properties(ProjectAudioToolScrollTest
+                     PROPERTIES ENVIRONMENT "SDL_AUDIODRIVER=dummy")
+
+# 新建向导资源改名验证真实文件事务、共享图片绑定和音频测量草稿保留。 输出目录明确位于构建树，测试不得创建或清理源码资源目录中的文件。
+mmm_add_test_executable(UI NewBeatmapWizardResourceRenameTest
+                        tests/NewBeatmapWizardResourceRenameTest.cpp)
+# 直接调用生产向导和逻辑事务，不需要 Vulkan、音频输出设备或已有谱面。
+target_link_libraries(NewBeatmapWizardResourceRenameTest PRIVATE UI)
+mmm_register_test_case(
+  NAME NewBeatmapWizardResourceRenameTest COMMAND
+  NewBeatmapWizardResourceRenameTest
+  "${CMAKE_BINARY_DIR}/test_output/NewBeatmapWizardResourceRenameTest")
+
+# 使用真实无后端 ImGui 控件验证音量四方向键步进与鼠标五点格。
+mmm_add_test_executable(UI VolumeSliderTest tests/VolumeSliderTest.cpp)
+target_link_libraries(VolumeSliderTest PRIVATE UI)
+# 输入事件逐帧注入，测试不访问真实音频设备与用户配置目录。
+mmm_register_test_case(NAME VolumeSliderTest COMMAND VolumeSliderTest)
+
+# 拖放测试直接驱动正式路由和事件总线，不创建 GLFW 窗口或图形设备。 最小 ImGui 上下文只提供主视口边界；验证空工作区也能识别 BMS 家族。
+mmm_add_test_executable(UI ProjectDropRouterTest
+                        tests/ProjectDropRouterTest.cpp)
+# 链接正式 UI 库，避免复制生产扩展名白名单而漏测真实入口。
+target_link_libraries(ProjectDropRouterTest PRIVATE UI)
+mmm_register_test_case(NAME ProjectDropRouterTest COMMAND ProjectDropRouterTest)

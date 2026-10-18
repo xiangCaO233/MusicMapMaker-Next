@@ -78,6 +78,52 @@ std::string bytes(const std::filesystem::path& path)
     return { std::istreambuf_iterator<char>(input), {} };
 }
 
+/// @brief 读取 XMP sidecar 文本，供协议字段断言使用。
+/// @param path XMP 文件路径。
+/// @return 文件全部 UTF-8 字节；打不开时为空。
+/// @details 测试使用可读文本检查协议契约，不依赖特定 XML 库的转义策略。
+/// XMP 内容很小，整文件读取不会影响产品路径性能。
+/// 空结果由调用方与必需的根元素断言共同判为失败。
+std::string xmpText(const std::filesystem::path& path)
+{
+    return bytes(path);
+}
+
+/// @brief 清理测试专属音频及其 XMP，保证测试可以重复执行。
+/// @param audio 构建树中由当前用例独占的导出路径，禁止传入来源资源。
+/// @param error 与既有测试文件操作共用的错误码。
+/// @details 产品拒绝覆盖任何旧 XMP，测试必须主动清理上一轮成功产物。
+/// JSON 的清理由原有用例控制，避免改变精确载荷冲突测试的前置条件。
+void removeExport(const std::filesystem::path& audio, std::error_code& error)
+{
+    // 不按目录或通配符清理，保留其他用例及源码资源的文件所有权。
+    std::filesystem::remove(audio, error);
+    auto xmp = audio;
+    xmp.replace_extension(".xmp");
+    std::filesystem::remove(xmp, error);
+}
+
+/// @brief 取出简单 XML 元素的文本值，用于验证关联字段。
+/// @param xml XMP 文本。
+/// @param element 完整元素名，包含命名空间前缀。
+/// @param from 搜索起点，默认从文档开头查找。
+/// @return 元素内容；标签缺失或未闭合时返回空字符串。
+/// @details 字段值均为 GUID，不含子元素；名称正文的转义另行断言。
+/// 从 key 之后搜索 value 可验证同一 cue 参数的键值配对。
+/// 测试仅解析约定字段，不替代生产 XML 库的完整文档校验。
+std::string xmlValue(const std::string& xml, const std::string& element,
+                     std::size_t from = 0)
+{
+    const auto open  = "<" + element + ">";
+    const auto close = "</" + element + ">";
+    const auto begin = xml.find(open, from);
+    if ( begin == std::string::npos ) return {};
+    const auto valueBegin = begin + open.size();
+    const auto end        = xml.find(close, valueBegin);
+    if ( end == std::string::npos ) return {};
+    return xml.substr(valueBegin, end - valueBegin);
+}
+
 /// @brief 抽取真实解复用后的音频编码载荷，验证无二次有损编码。
 /// @details 不比较可变化的容器头、章节或编码器延迟标签。
 /// @param path 来源或导出容器。
@@ -184,8 +230,8 @@ bool check(bool condition, const char* name)
 
 /// @brief 检查真实容器往返、来源保护、标准 cue、Unicode 和坏标签处理。
 /// @details 夹具由正式音频服务编码；只在当前预编译包没有编码器时跳过可选格式。
-/// @param argc 必须包含独立输出目录参数。
-/// @param argv argv[1] 指向构建树的测试输出根目录。
+/// @param argc 必须包含独立输出目录和 AU 原始 XMP 基线两个参数。
+/// @param argv argv[1] 是构建树输出目录，argv[2] 是只读 AU 13 FLAC XMP。
 /// @return 所有必选能力满足契约时为零，任一失败为一。
 /// @details 格式集合同时覆盖 RIFF、ID3、VorbisComment 和 MP4 容器。
 /// WAV/MP3 是必选格式；其他格式仅因缺少夹具编码器可以跳过。
@@ -197,7 +243,7 @@ bool check(bool condition, const char* name)
 /// 测试从不打开声音设备，也不以人工听感判定音频是否被污染。
 int main(int argc, char** argv)
 {
-    if ( argc != 2 ) return 2;
+    if ( argc != 3 ) return 2;
     XLogger::init("AudioMarkerServiceTest");
     MMM::Runtime::AppThreadPool::instance().init();
     const auto      root = MMM::Config::utf8ToPath(argv[1]);
@@ -215,13 +261,23 @@ int main(int argc, char** argv)
     // BPM 首段起点在音频外，标准章节不能替代它的精确恢复。
     // 名称含引号和中文，验证序列化转义不会改变用户内容。
     const MMM::Audio::AudioMarkerData data{
-        { { 0.123456789, "序章 \"intro\"" }, { 0.912345678, "副歌" } },
+        { { 0.123456789, "序章 <intro> & \"intro\" 'quote'\r\n\t\x01" },
+          { 0.912345678, "副歌" } },
         { { -0.125, 100.123456 }, { 0.7, 180.987654 } }
     };
     MMM::Audio::AudioMarkerExportOptions options{
         source, root / "marked.wav", data, true
     };
     bool ok = true;
+    // 此文件来自用户实际使用的 Audition 13，保留原始字节，不由被测实现生成。
+    // 采样刻度与名称固定检查，缺失 LFS 内容不能被当作普通无标记文件跳过。
+    const auto auSample = bytes(MMM::Config::utf8ToPath(argv[2]));
+    ok &= check(xmlValue(auSample, "xmpDM:trackName") == "CuePoint Markers" &&
+                    xmlValue(auSample, "xmpDM:trackType") == "Cue" &&
+                    xmlValue(auSample, "xmpDM:frameRate") == "f48000" &&
+                    xmlValue(auSample, "xmpDM:startTime") == "903271" &&
+                    xmlValue(auSample, "xmpDM:name") == "标记 01",
+                "original Audition XMP fixture is available and unchanged");
     for ( const auto* suffix : { "wav",
                                  "mp3",
                                  "flac",
@@ -267,7 +323,13 @@ int main(int argc, char** argv)
         // 目标清理仅涉及本测试专属路径，不能清理输入文件。
         options.inputPath  = input;
         options.outputPath = root / (std::string("marked.") + suffix);
-        std::filesystem::remove(options.outputPath, ec);
+        removeExport(options.outputPath, ec);
+        // 此测试有意让各扩展名共用 marked stem，先清除上轮 sidecar
+        // 才能测新写出。 产品必须拒绝覆盖已有
+        // XMP，因此不能把该冲突行为交给下一轮清理掩盖。
+        auto xmpPath = options.outputPath;
+        xmpPath.replace_extension(".xmp");
+        std::filesystem::remove(xmpPath, ec);
         auto companion = options.outputPath;
         companion += ".mmm-timing.json";
         std::filesystem::remove(companion, ec);
@@ -283,6 +345,51 @@ int main(int argc, char** argv)
         /// 每个成功格式同时验证标记精度、声音身份和来源保护。
         /// 只查看成功标志不足以证明元数据实际进入分发文件。
         if ( !exported.success ) continue;
+        // XMP 是独立交换副本；旧 JSON sidecarPath 仍只表示 MMM 配套数据。
+        // 所有输出扩展名都必须映射到同名 .xmp，包含内嵌和原样复制格式。
+        // Adobe cue 名称需要 XML 转义，整数时间使用统一微秒时间基准。
+        // 样本将 cue 的 GUID 放在参数列表之后，读取时保持同一资源的关联。
+        // GUID 取 cue 自身标识，marker_guid 从参数 value 读取并需与之相同。
+        // 二者相等保证第三方软件能以稳定身份关联 cue 参数。
+        const auto xmp        = xmpText(xmpPath);
+        const auto markerKey  = xmp.find("marker_guid");
+        const auto guid       = markerKey == std::string::npos
+                                    ? std::string{}
+                                    : xmlValue(xmp, "xmpDM:guid", markerKey);
+        const auto markerGuid = markerKey == std::string::npos
+                                    ? std::string{}
+                                    : xmlValue(xmp, "xmpDM:value", markerKey);
+        ok &= check(!exported.xmpPath.empty() && exported.xmpPath == xmpPath &&
+                        !xmp.empty() &&
+                        xmp.find("xmpDM:Tracks") != std::string::npos &&
+                        xmp.find("xmpDM:trackName>CuePoint Markers") !=
+                            std::string::npos &&
+                        xmp.find("xmpDM:trackType>Cue") != std::string::npos &&
+                        xmp.find("xmpDM:markers") != std::string::npos &&
+                        xmp.find("rdf:Seq") != std::string::npos &&
+                        xmp.find("xmpDM:cuePointParams") != std::string::npos &&
+                        xmp.find("f1000000") != std::string::npos,
+                    "XMP result path and Adobe track timebase");
+        // 同时确认 DynamicMedia 的 cue 容器和内部参数序列都存在。
+        // 若遗漏任一层级，简单名称或时间字符串仍可能造成假阳性。
+        // 时间值直接匹配整数文本，避免浮点容差掩盖单位或舍入错误。
+        // 同一列表同时含命名章节和整拍，确保 includeBeats 影响可见输出。
+        ok &= check(xmp.find("<intro>") == std::string::npos &&
+                        xmp.find("&lt;intro&gt;") != std::string::npos &&
+                        xmp.find("&amp;") != std::string::npos &&
+                        xmp.find("&quot;") != std::string::npos &&
+                        xmp.find("&apos;") != std::string::npos &&
+                        xmp.find("&#13;") != std::string::npos &&
+                        xmp.find("&#xFFFD;") != std::string::npos &&
+                        xmp.find("Beat ") != std::string::npos &&
+                        xmp.find("123457") != std::string::npos &&
+                        xmp.find("912346") != std::string::npos &&
+                        markerKey != std::string::npos && !guid.empty() &&
+                        guid == markerGuid,
+                    "XMP escaped cue names, times, and matching GUID");
+        ok &= check(exported.sidecarPath.empty() ||
+                        exported.sidecarPath.extension() == ".json",
+                    "JSON sidecar path retains its existing meaning");
         ok &= check(
             matches(MMM::Audio::AudioMarkerService::read(options.outputPath),
                     data),
@@ -320,7 +427,7 @@ int main(int argc, char** argv)
         options.outputPath   = root / "shortened.ogg";
         options.data         = { { { 0.1, "only chapter" } }, {} };
         options.includeBeats = false;
-        std::filesystem::remove(options.outputPath, ec);
+        removeExport(options.outputPath, ec);
         const auto shortened =
             MMM::Audio::AudioMarkerService::exportFile(options);
         ok &= check(
@@ -344,7 +451,7 @@ int main(int argc, char** argv)
         const bool toMp3   = std::string_view(suffix) == "mp3";
         options.inputPath  = toMp3 ? source : root / "fixture.mp3";
         options.outputPath = root / (std::string("converted.") + suffix);
-        std::filesystem::remove(options.outputPath, ec);
+        removeExport(options.outputPath, ec);
         // 转换目标的旧配套文件也清理，避免回读优先级误命中上一次产物。
         // 这种清理只适用于隔离测试，不代表产品允许覆盖既有用户文件。
         // 正式服务始终拒绝已有目标或同名配套路径。
@@ -372,7 +479,7 @@ int main(int argc, char** argv)
     options.inputPath    = opaque;
     options.outputPath   = root / "marked.audio";
     options.includeBeats = false;
-    std::filesystem::remove(options.outputPath, ec);
+    removeExport(options.outputPath, ec);
     auto opaqueSidecar = options.outputPath;
     opaqueSidecar += ".mmm-timing.json";
     std::filesystem::remove(opaqueSidecar, ec);
@@ -386,6 +493,73 @@ int main(int argc, char** argv)
             matches(MMM::Audio::AudioMarkerService::read(options.outputPath),
                     data),
         "opaque original format uses companion without guessing duration");
+    auto opaqueXmp = options.outputPath;
+    opaqueXmp.replace_extension(".xmp");
+    ok &= check(retained.success && retained.xmpPath == opaqueXmp &&
+                    std::filesystem::exists(opaqueXmp),
+                "opaque export creates XMP sidecar");
+    // 未知时长在关闭整拍展开时仍导出非负命名章节。
+    // 重新导出前先移除两类旧副本，避免覆盖拒绝掩盖时长行为。
+    options.includeBeats = false;
+    options.outputPath   = root / "unknown-duration.audio";
+    removeExport(options.outputPath, ec);
+    auto unknownJson = options.outputPath;
+    unknownJson += ".mmm-timing.json";
+    std::filesystem::remove(unknownJson, ec);
+    auto unknownXmp = options.outputPath;
+    unknownXmp.replace_extension(".xmp");
+    std::filesystem::remove(unknownXmp, ec);
+    const auto unknownDuration =
+        MMM::Audio::AudioMarkerService::exportFile(options);
+    const auto unknownText = xmpText(unknownXmp);
+    ok &= check(unknownDuration.success &&
+                    unknownText.find("123457") != std::string::npos &&
+                    unknownText.find("912346") != std::string::npos,
+                "unknown duration keeps nonnegative chapters with beat "
+                "expansion disabled");
+    // 真实 AU 样本的 48000 Hz 采样刻度必须与导出的微秒刻度指向同一时刻。
+    // 使用无时长且关闭整拍的输入，仅验证元数据变换，不臆造配套歌曲内容。
+    // 标记名称直接取自原始样本；整份基线始终只读，输出仍位于构建树。
+    options.outputPath = root / "audition-reference.audio";
+    removeExport(options.outputPath, ec);
+    auto referenceJson = options.outputPath;
+    referenceJson += ".mmm-timing.json";
+    std::filesystem::remove(referenceJson, ec);
+    options.data = {
+        { { 903271.0 / 48000.0, xmlValue(auSample, "xmpDM:name") } }, {}
+    };
+    const auto reference = MMM::Audio::AudioMarkerService::exportFile(options);
+    const auto referenceText = xmpText(reference.xmpPath);
+    // 903271 / 48000 秒按最近微秒舍入为 18818146，禁止误用毫秒或帧数原值。
+    // 名称与轨道类型分别对照来源，时间换算正确不能掩盖字段遗漏。
+    ok &= check(reference.success &&
+                    xmlValue(referenceText, "xmpDM:startTime") == "18818146" &&
+                    xmlValue(referenceText, "xmpDM:name") ==
+                        xmlValue(auSample, "xmpDM:name") &&
+                    xmlValue(referenceText, "xmpDM:trackType") ==
+                        xmlValue(auSample, "xmpDM:trackType"),
+                "Audition reference marker keeps its time and name in XMP");
+    // 后续来源保护与私有载荷用例继续使用最初的高精度快照。
+    options.data = data;
+    // 未知扩展名没有可探测时长；此处只要求有效章节进入 XMP。
+    // includeBeats=false 保持既有无时长导出边界，不推导拍点。
+    // 预存 XMP 属于用户数据，冲突必须整体拒绝且不能创建目标音频。
+    // 使用新的目标名保留精确哨兵内容，检查拒绝没有截断或替换 sidecar。
+    options.outputPath = root / "xmp-conflict.audio";
+    auto conflictXmp   = options.outputPath;
+    conflictXmp.replace_extension(".xmp");
+    {
+        // 哨兵模拟用户已有伴随数据，冲突检查应在发布任何输出前发生。
+        std::ofstream sentinel(conflictXmp, std::ios::binary);
+        sentinel << "keep existing XMP";
+    }
+    const auto conflict = MMM::Audio::AudioMarkerService::exportFile(options);
+    ok &= check(!conflict.success &&
+                    !std::filesystem::exists(options.outputPath) &&
+                    bytes(conflictXmp) == "keep existing XMP" &&
+                    bytes(opaque) == "unchanged opaque media",
+                "existing XMP rejects export and preserves source and sidecar");
+    // 目标音频不存在与哨兵字节不变共同证明失败没有部分提交。
     // 配套数据应随着项目导入的新名称一起迁移，不依赖可选编码器。
     const auto paired        = root / "marked.audio";
     const auto copiedAudio   = root / "project-copy.audio";
@@ -440,7 +614,7 @@ int main(int argc, char** argv)
     /// 这一场景同时验证文件服务和格式读取器的路径转换。
     /// 文件名的空格也必须经由路径 API 保留。
     const auto unicode = root / MMM::Config::utf8ToPath("中文 标记.wav");
-    std::filesystem::remove(unicode, ec);
+    removeExport(unicode, ec);
     options.outputPath = unicode;
     ok &=
         check(MMM::Audio::AudioMarkerService::exportFile(options).success &&
@@ -486,7 +660,7 @@ int main(int argc, char** argv)
     // 重新导出标记 WAV 不能积累第二个 cue 块。
     options.inputPath  = unicode;
     options.outputPath = root / "second.wav";
-    std::filesystem::remove(options.outputPath, ec);
+    removeExport(options.outputPath, ec);
     /// 重新标记属于替换旧测量信息，不应追加互相矛盾的 cue 表。
     /// 输入本身带章节时同样需要保持来源只读。
     /// 输出必须仍可解复用，长度回写错误会被正式服务的回读发现。

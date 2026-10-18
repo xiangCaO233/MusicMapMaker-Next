@@ -1047,6 +1047,8 @@ void applyToolbarWorkspaceState(
 void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
                                       const Config::EditorConfig& source)
 {
+    // 总线由音频面板直接维护，局部配置提交不能回滚当前预设音量。
+    Config::preserveAudioMixerSettings(target.settings, source.settings);
     // 皮肤选择先由设置页写入 AppConfig；配色刷新可能仍携带旧引擎快照。
     // 保留软件级选择，避免当前已热加载新皮肤却把旧目录保存供下次启动。
     target.settings.selectedSkinDirectory =
@@ -1083,6 +1085,15 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
     // BPM 测量工具偏好跨项目共享，避免打开项目时重置用户输入习惯。
     target.settings.bpmMeasurementToolPreferences =
         source.settings.bpmMeasurementToolPreferences;
+    // 画布观察由 UI 直接更新本机配置，不属于项目工作区或谱面几何。
+    // 旧引擎快照只可恢复其目标设置，不能把正在观察的相机还原到旧状态。
+    // 三项必须一起保留，包含恢复二维所用的零角度和单位距离。
+    target.visual.debugCanvasCameraAngleDegrees =
+        source.visual.debugCanvasCameraAngleDegrees;
+    target.visual.debugCanvasCameraYawDegrees =
+        source.visual.debugCanvasCameraYawDegrees;
+    target.visual.debugCanvasCameraDistance =
+        source.visual.debugCanvasCameraDistance;
 }
 
 /// @brief 判断逻辑指令是否会修改临时项目内容。
@@ -1130,6 +1141,8 @@ bool isTemporaryProjectMutationCommand(const LogicCommand& cmd)
          std::holds_alternative<CmdUpdateBpmWithKeepSpeedSv>(cmd) ||
          std::holds_alternative<CmdKeepSpeedForBpmEvents>(cmd) ||
          std::holds_alternative<CmdDeleteTimelineEvent>(cmd) ||
+         // 批量删除同样必须发送到当前活动谱面会话。
+         std::holds_alternative<CmdDeleteTimelineEvents>(cmd) ||
          std::holds_alternative<CmdCreateTimelineEvent>(cmd) ||
          std::holds_alternative<CmdCreateTimelineEvents>(cmd) ||
          std::holds_alternative<CmdReplaceBeatmapTimings>(cmd) ||
@@ -1569,10 +1582,10 @@ void EditorEngine::restoreProjectWorkspace(
                                       ? map->m_baseMapMetadata.name
                                       : state.m_displayName;
         int32_t     index       = createSession(map,
-                                      displayName,
-                                      false,
-                                      state.m_cameraId,
-                                      !state.m_cameraId.empty());
+                                                displayName,
+                                                false,
+                                                state.m_cameraId,
+                                                !state.m_cameraId.empty());
         fallbackActiveIndex     = index;
         // fallback 始终指向最后成功创建项，活动路径丢失时仍给用户可用画布。
 
@@ -2654,16 +2667,18 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
 
     // 主画布悬停坐标按 cameraId 精确路由，使后台 Session 能独立生成
     // NearCursor 分拍线；坐标只影响视觉悬停，不改变活动会话身份。
-    if ( std::holds_alternative<CmdSetMousePosition>(cmd) ) {
-        const auto& mouse = std::get<CmdSetMousePosition>(cmd);
+    const auto* mouse = std::get_if<CmdSetMousePosition>(&cmd);
+    const auto* hover = std::get_if<CmdSetHoveredEntity>(&cmd);
+    if ( mouse || (hover && !hover->cameraId.empty()) ) {
+        // 鼠标坐标与悬浮实体必须进入同一谱面，后台检视不能误用活动谱面实体 ID。
+        const auto& cameraId = mouse ? mouse->cameraId : hover->cameraId;
         // 鼠标位置是纯视觉状态；拥有型发布快照在标签关闭后仍保证队列存活。
         // 关闭瞬间投给旧会话的悬停更新会随旧会话丢弃，不会误投新标签。
-        const auto snapshot = m_sessionRegistry.publishedSnapshot();
-        const bool isMainCanvas =
-            SessionUtils::isMainCanvasCameraId(mouse.cameraId);
+        const auto snapshot     = m_sessionRegistry.publishedSnapshot();
+        const bool isMainCanvas = SessionUtils::isMainCanvasCameraId(cameraId);
         const int32_t activeIndex = m_sessionRegistry.activeIndex();
         for ( const auto& entry : snapshot->sessions ) {
-            if ( (isMainCanvas && entry.cameraId == mouse.cameraId) ||
+            if ( (isMainCanvas && entry.cameraId == cameraId) ||
                  (!isMainCanvas && entry.index == activeIndex) ) {
                 entry.session->pushCommand(std::move(cmd));
                 return;
@@ -3456,10 +3471,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 顺序投递初始化命令，保证载图处理看到完整编辑环境。
                 sessions[i].isLogoPlaceholder        = false;
                 sessions[i].restoreDockFromWorkspace = restoreDockFromWorkspace;
-                sessions[i].displayName              = displayName.empty()
-                                                           ? beatmap->m_baseMapMetadata.name
-                                                           : displayName;
-                sessions[i].beatmapPathKey           = requestedBeatmapKey;
+                sessions[i].displayName = displayName.empty()
+                                              ? beatmap->m_baseMapMetadata.name
+                                              : displayName;
+                sessions[i].beatmapPathKey = requestedBeatmapKey;
                 // 占位条目的旧音频身份必须覆盖为空，等待载图命令生成新描述符。
                 sessions[i].audioTimelineFingerprint =
                     requestedAudioTimelineFingerprint;

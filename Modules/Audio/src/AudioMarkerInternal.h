@@ -27,6 +27,11 @@ bool makeVisibleChapters(const AudioMarkerExportOptions& options,
                          double duration, std::vector<AudioChapter>& chapters);
 /// @brief 将配套名附加到完整音频文件名，避免同名不同格式互相覆盖。
 std::filesystem::path sidecarPath(const std::filesystem::path& audio);
+/// @brief 使用同目录同主文件名的 Adobe XMP 配套路径，不保留音频扩展名。
+std::filesystem::path xmpPath(const std::filesystem::path& audio);
+/// @brief 将非负可见标记写成 Audition Cue 轨道，失败时由事务清理临时文件。
+bool writeXmp(const std::filesystem::path&     path,
+              const std::vector<AudioChapter>& visible, std::string& error);
 /// @brief 读取标准 RIFF/WAVE cue、标签及精确私有块。
 AudioMarkerReadResult readWave(const std::filesystem::path& path);
 /// @brief 流式复制 WAVE 块，仅替换标记块，PCM 字节保持原样。

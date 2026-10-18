@@ -4,6 +4,8 @@ add_library(
   src/BeatmapDocumentCodec.cpp
   src/CollaborationBuildFingerprint.cpp
   src/CollaborationPeer.cpp
+  # 跟随播放的时钟探测独立维护，不将音频引擎依赖引入网络内核。
+  src/CollaborationPeer_Playback.cpp
   src/CollaborationDirectoryClient.cpp
   src/CollaborationResourceCipher.cpp
   src/CollaborationResourceSync.cpp
@@ -61,6 +63,17 @@ mmm_add_test_executable(Collaboration CollaborationPeerTest
 target_link_libraries(CollaborationPeerTest PRIVATE NetworkCollaboration)
 # 多参与者状态机作为普通 CTest 回归项运行。
 mmm_register_test_case(NAME CollaborationPeerTest COMMAND CollaborationPeerTest)
+
+# 跟随音频测试覆盖往返时钟校准、连续播放暂停队列和漂移控制。 使用三名 Loopback 成员模拟访客经房主跟随另一访客，不依赖公网服务。
+# 使用显式时间输入，不通过 sleep 或音频设备模拟传播延迟。
+
+# 新测试沿用统一入口及构建树输出位置，禁止写入源码资源目录。
+mmm_add_test_executable(Collaboration CollaborationPlaybackSyncTest
+                        tests/CollaborationPlaybackSyncTest.cpp)
+target_link_libraries(CollaborationPlaybackSyncTest
+                      PRIVATE NetworkCollaboration)
+mmm_register_test_case(NAME CollaborationPlaybackSyncTest COMMAND
+                       CollaborationPlaybackSyncTest)
 
 # 视野同步设置测试覆盖默认频率以及 5～60 Hz 房间层边界限制。
 mmm_add_test_executable(Collaboration CollaborationViewportSettingsTest

@@ -840,7 +840,8 @@ bool activateAudioTimeline(SessionContext& ctx, bool shouldPlay)
         const auto result =
             audio.loadAudioTimeline(descriptor.m_events,
                                     descriptor.m_chartEndSeconds,
-                                    descriptor.m_fingerprint);
+                                    descriptor.m_fingerprint,
+                                    descriptor.m_stops);
         // 本次激活请求已尝试消费，失败诊断通过结果返回，不留标志导致逐帧重试。
         // 后续是否重新请求加载由上层交互或描述变化决定。
         ctx.isAudioTimelineActivationPending = false;

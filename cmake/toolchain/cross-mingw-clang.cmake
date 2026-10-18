@@ -215,8 +215,11 @@ set(CMAKE_NM
     "${MMM_MINGW_NM}"
     CACHE FILEPATH "Symbol table tool for MinGW cross builds.")
 
-# try-compile 只生成静态库，避免配置阶段依赖尚未完整建立的运行库链接。
-set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+# try-compile 只生成静态库，避免配置阶段依赖尚未完整建立的运行库链接。 默认编译器自检不要求链接；依赖的函数存在性检查可显式要求真实链接。
+# 不覆盖调用方传入的 EXECUTABLE，否则缺失函数会因只生成静态归档被误判存在。
+if(NOT DEFINED CMAKE_TRY_COMPILE_TARGET_TYPE)
+  set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+endif()
 
 # 查找根只描述目标侧头文件和库。 工具程序使用宿主 Linux 环境；库和包同时允许 sysroot 与仓库内显式 预编译库路径，避免 CMake 把
 # 3rdpty/prebuilts 的绝对路径重映射到 sysroot。

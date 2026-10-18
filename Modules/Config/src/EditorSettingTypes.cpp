@@ -835,6 +835,7 @@ void to_json(nlohmann::json&                      json,
     // 四个字段共同恢复测量窗口，但不保存任何谱面分析结果。
     json =
         nlohmann::json{ { "markerWidthMs", preferences.markerWidthMs },
+                        { "wheelSnapEnabled", preferences.wheelSnapEnabled },
                         { "beatDivisor", preferences.beatDivisor },
                         { "viewCenterSeconds", preferences.viewCenterSeconds },
                         { "viewHalfWidthSeconds",
@@ -850,6 +851,7 @@ void from_json(const nlohmann::json&          json,
 {
     // 视野默认覆盖中心前后八秒，便于首次打开时观察多个拍点。
     preferences.markerWidthMs        = json.value("markerWidthMs", 80.0);
+    preferences.wheelSnapEnabled     = json.value("wheelSnapEnabled", false);
     preferences.beatDivisor          = json.value("beatDivisor", 4);
     preferences.viewCenterSeconds    = json.value("viewCenterSeconds", 0.0);
     preferences.viewHalfWidthSeconds = json.value("viewHalfWidthSeconds", 8.0);
@@ -1128,6 +1130,8 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         // 工具偏好不包含谱面缓存，跟随用户配置而非某个项目保存。
         { "timingInterpolation", settings.m_interpolationPreferences },
         { "autoBackup", settings.autoBackup },
+        // 独立记录用户选择，不能把完整配置的自动写出当成用户操作。
+        { "autoBackupUserConfigured", settings.m_autoBackupUserConfigured },
         { "autoAddStoreModeExtForMalodyExport",
           settings.autoAddStoreModeExtForMalodyExport },
         // 时间显示、文件选择器历史和绘制限制属于编辑工作流偏好。
@@ -1155,6 +1159,8 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "snapFloor", settings.snapFloor },
         { "showTimelineWindow", settings.showTimelineWindow },
         { "professionalMode", settings.professionalMode },
+        // 只保存提示偏好，不缓存当前谱面的能力，以免切换格式后沿用旧状态。
+        { "hideTimelineFormatWarning", settings.hideTimelineFormatWarning },
         { "showPreviewWindow", settings.showPreviewWindow },
         { "showAnnotationDetails", settings.showAnnotationDetails },
         { "showToolLabels", settings.showToolLabels },
@@ -1294,6 +1300,21 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     settings.m_interpolationPreferences =
         json.value("timingInterpolation", TimingInterpolationPreferences{});
     settings.autoBackup = json.value("autoBackup", AutoBackupConfig{});
+    // 只有缺少新标记的旧配置需要迁移；已有标记时保留保存的策略。
+    // 精确比较全部字段，曾配置事件、间隔或保留数量的用户不会被覆盖。
+    if ( !json.contains("autoBackupUserConfigured") ) {
+        settings.m_autoBackupUserConfigured =
+            settings.autoBackup != AutoBackupConfig{};
+        if ( !settings.m_autoBackupUserConfigured ) {
+            // 旧版退出曾自动写出 Disabled，无法区分主动关闭与未设置。
+            // 仅将原始默认策略升级为五分钟，不改变项目覆盖读取规则。
+            settings.autoBackup = EditorSettings{}.autoBackup;
+        }
+    } else {
+        // 未操作也会保存 false；标记存在本身说明已经完成默认策略迁移。
+        settings.m_autoBackupUserConfigured =
+            json.value("autoBackupUserConfigured", false);
+    }
     settings.autoAddStoreModeExtForMalodyExport =
         json.value("autoAddStoreModeExtForMalodyExport", false);
     settings.timeFormatPreference =
@@ -1333,6 +1354,9 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     settings.stopPlaybackOnScroll = json.value("stopPlaybackOnScroll", false);
     settings.snapFloor            = json.value("snapFloor", false);
     settings.showTimelineWindow   = json.value("showTimelineWindow", true);
+    // 老配置没有格式警告偏好时默认启用，避免静默丢失用户的新修改。
+    settings.hideTimelineFormatWarning =
+        json.value("hideTimelineFormatWarning", false);
     // 当前 professionalMode 优先，缺失时读取旧 timelineProfessionalMode。
     settings.professionalMode =
         json.contains("professionalMode")

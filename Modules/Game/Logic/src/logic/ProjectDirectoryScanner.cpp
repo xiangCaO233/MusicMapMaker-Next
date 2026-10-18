@@ -5,6 +5,7 @@
 #include <cctype>
 #include <system_error>
 
+// BMS 文本与现有谱面一起被发现，资源解析仍由各格式读取器负责。
 namespace MMM::Logic
 {
 
@@ -91,8 +92,9 @@ bool ProjectDirectoryScanner::isBeatmapFile(const std::filesystem::path& path)
     // 这是候选格式白名单，不根据文件存在性或内部 JSON 判定可加载性。
     /// @brief 规范化后的文件扩展名。
     const auto extension = normalizedExtension(path);
-    return extension == ".osu" || extension == ".imd" || extension == ".mc" ||
-           extension == ".mmm";
+    return extension == ".bms" || extension == ".bme" || extension == ".bml" ||
+           extension == ".pms" || extension == ".osu" || extension == ".imd" ||
+           extension == ".mc" || extension == ".mmm";
 }
 
 /// @brief 判断路径扩展名是否属于支持的音频格式。

@@ -94,6 +94,8 @@ MMM::Project makeProject()
             .m_width           = 128.0F,
             .m_height          = 96.0F,
             .m_zOrder          = 2,
+            // 独立倍率必须随音频工具分片保存，不能只保存当前画笔快照。
+            .m_audioVolume = 1.75F,
         },
     };
     project.m_audioResources = {
@@ -275,6 +277,12 @@ bool testSplitRoundTrip(const std::filesystem::path& root)
            check(loaded.m_project.m_settings.m_workspace
                      .m_projectAudioToolPreviewEffectOnSelection,
                  "audio tool selection preview should round trip") &&
+           // 资源倍率与当前画笔快照刻意不同，防止用共享值重建所有采样。
+           // optional 必须有明确保存值，缺失字段的旧格式不能冒充独立音量。
+           check(loaded.m_project.m_settings.m_workspace
+                         .m_projectAudioToolPlacements.front()
+                         .m_audioVolume == 1.75F,
+                 "sample volume should round trip independently") &&
            // 宽度用非默认数值验证，不能以重新生成一个默认布局块代替回读。
            check(std::abs(loaded.m_project.m_settings.m_workspace
                               .m_projectAudioToolPlacements.front()

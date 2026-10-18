@@ -10,7 +10,10 @@
 #include "ui/imgui/manager/ProjectAudioToolSearch.h"
 #include "ui/utils/UIWidgetUtils.h"
 
+#include <imgui_internal.h>
+
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -540,6 +543,7 @@ void ProjectAudioToolView::refreshTranslationCache()
     m_translationCache.hint = translate("ui.project_audio_tool.hint").data();
     m_translationCache.previewEffectOnSelection =
         translate("ui.project_audio_tool.preview_effect_on_selection").data();
+    m_translationCache.snap = translate("ui.canvas.snap").data();
     m_translationCache.searchHint =
         translate("ui.project_audio_tool.search_hint").data();
     m_translationCache.noSearchResults =
@@ -638,8 +642,9 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
     m_batchDragEntries.clear();
     m_batchDragUnionCells.clear();
     m_marqueeBaseSelection.clear();
-    // 音量弹窗锚定旧方块屏幕位置，重建后让用户重新打开。
-    m_openVolumeEditorResourceId.clear();
+    // 音量弹窗按稳定资源 ID 锚定；同项目保存触发重建不能结束当前编辑。
+    // 只有切换项目才立即清除，资源删除由重建完成后的有效性检查处理。
+    if ( projectChanged ) m_openVolumeEditorResourceId.clear();
     m_resizeHandle = ResizeHandle::None;
     m_snapLocks    = {};
 
@@ -697,7 +702,18 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
 
         // 保存记录存在时先恢复合法自定义尺寸，再处理位置与层级。
         const auto saved = savedPlacements.find(resource.m_id);
+        // 旧版只知道最后选中采样的倍率，不能把它复制到其他全部资源。
+        // 每个有独立保存值的采样优先恢复自身倍率；未编辑资源保持原音量。
+        item.audioVolume = resource.m_id == m_selectedAudioResourceId
+                               ? std::clamp(m_brushAudioVolume, 0.0F, 2.0F)
+                               : 1.0F;
         if ( saved != savedPlacements.end() ) {
+            if ( saved->second.m_audioVolume ) {
+                const float volume = *saved->second.m_audioVolume;
+                item.audioVolume   = std::isfinite(volume)
+                                         ? std::clamp(volume, 0.0F, 2.0F)
+                                         : 1.0F;
+            }
             // 零值表示使用自动尺寸；非有限或负值也按未自定义处理。
             const bool hasSavedWidth  = std::isfinite(saved->second.m_width) &&
                                         saved->second.m_width > 0.0F;
@@ -771,6 +787,13 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
         m_items[index].zOrder = static_cast<std::int32_t>(index);
     }
 
+    // 资源确实删除时关闭弹层；普通保存、重排或 DPI 更新保持用户编辑上下文。
+    if ( !m_openVolumeEditorResourceId.empty() &&
+         std::ranges::find(m_items,
+                           m_openVolumeEditorResourceId,
+                           &Item::audioResourceId) == m_items.end() )
+        m_openVolumeEditorResourceId.clear();
+
     // 资源删除后不能保留指向不存在 ID 的活动画笔状态。
     const bool selectedStillExists =
         std::ranges::any_of(m_items, [this](const Item& item) {
@@ -790,12 +813,16 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
         if ( selected != m_items.end() ) {
             m_selectedAudioLabel     = selected->label;
             m_selectedAudioTrackType = selected->type;
+            // 旧画笔快照只镜像当前选中采样，不能成为其余行的音量源。
+            m_brushAudioVolume = selected->audioVolume;
         }
     }
     // 所有矩形和层级确定后再计算被上层遮挡的最大标签区域。
     rebuildLabelRects();
     // 标签或资源 ID 可能变化，搜索结果必须在需要时重新评分。
     m_searchResultsDirty = true;
+    // 两种展示共用资源缓存，不能让表格继续引用重建前的行下标。
+    m_tableRowsDirty = true;
 }
 
 /// @brief 按当前 Z 序重建每个方块可用于绘制标签的最大可见矩形。
@@ -956,13 +983,48 @@ void ProjectAudioToolView::persistWorkspace()
                 .m_width  = item.widthCustomized ? item.rect.width : 0.0F,
                 .m_height = item.heightCustomized ? item.rect.height : 0.0F,
                 .m_zOrder = item.zOrder,
+                // 两种视图共用同一稳定资源记录，重开项目也保留独立倍率。
+                .m_audioVolume = item.audioVolume,
             });
     }
     // 所有字段更新完成后一次保存，避免产生部分工作区快照。
     engine.saveProject();
 }
 
-/// @brief 激活指定方块并把它提升到最上层。
+/// @brief 重置当前项目全部采样倍率，不改变选择、方块布局或音频资源 DSP。
+/// @details 此处重置的是工具为试听和新建物件使用的采样倍率。
+/// 已存在物件的独立音量不被重写，避免一次界面重置改写整张谱面。
+/// 原始音频资源的 EQ、静音及基础增益仍由资源配置负责。
+/// @warning 用户显式操作的低频路径，缓存失效时重建一次并执行一次项目保存。
+void ProjectAudioToolView::resetSampleVolumes()
+{
+    auto&       engine  = Logic::EditorEngine::instance();
+    const auto* project = engine.getCurrentProject();
+    if ( !project ) return;
+    // 按钮位于两种视图的公共工具区，点击时可能尚未消费资源变化事件。
+    // 先恢复当前项目完整缓存，搜索筛选不能缩小“全部采样”的作用范围。
+    const float dpiScale =
+        Config::AppConfig::instance().getWindowContentScale();
+    if ( m_itemsDirty.exchange(false, std::memory_order_acq_rel) ||
+         m_cachedProjectRoot != Config::pathToUtf8(project->m_projectRoot) ||
+         std::abs(dpiScale - m_cachedDpiScale) > 1e-4F ) {
+        rebuildItems(
+            std::max(1.0F, ImGui::GetContentRegionAvail().x / dpiScale),
+            dpiScale);
+    }
+    // 修改所有资源缓存，隐藏行及视口外方块同样恢复原音量。
+    for ( auto& item : m_items ) item.audioVolume = 1.0F;
+    m_brushAudioVolume = 1.0F;
+    // 不激活其他资源，不触发试听；选中的资源后续放置也立即采用 100。
+    engine.pushCommand(
+        Logic::CmdSetBrushAudioResource{ m_selectedAudioResourceId,
+                                         m_selectedAudioTrackType,
+                                         m_brushAudioVolume });
+    persistWorkspace();
+}
+
+/// @brief 激活指定音频资源，并按展示模式决定是否提升方块层级。
+/// @param raiseToFront 方块交互提升层级，表格选择保留稳定行序。
 /// @param itemIndex 当前方块数组索引。
 /// @return 重排后的活动索引；输入无效或结果为空时返回空。
 ///
@@ -972,29 +1034,35 @@ void ProjectAudioToolView::persistWorkspace()
 /// 激活总会重排 Z 序，即使该项已经位于数组末尾也保持结果语义一致。
 /// 方块标签和音轨类型同步到状态栏缓存，避免后续重复查找。
 std::optional<std::size_t> ProjectAudioToolView::activateItem(
-    std::size_t itemIndex)
+    std::size_t itemIndex, bool raiseToFront)
 {
     // 防御由旧命中结果或项目刷新造成的越界索引。
     if ( itemIndex >= m_items.size() ) return std::nullopt;
 
     // 先移出值再擦除原位置，避免持有会失效的引用。
-    Item selected = std::move(m_items[itemIndex]);
-    m_items.erase(m_items.begin() + static_cast<std::ptrdiff_t>(itemIndex));
-    m_items.push_back(std::move(selected));
-    // 数组末尾表示最高层，所有层级重新编号为连续值。
-    for ( std::size_t index = 0; index < m_items.size(); ++index ) {
-        m_items[index].zOrder = static_cast<std::int32_t>(index);
+    // 表格选择不提升层级，避免选中后资源行跳到末尾或修改方块叠放。
+    if ( raiseToFront ) {
+        Item selected = std::move(m_items[itemIndex]);
+        m_items.erase(m_items.begin() + static_cast<std::ptrdiff_t>(itemIndex));
+        m_items.push_back(std::move(selected));
+        // 数组末尾表示最高层，所有层级重新编号为连续值。
+        for ( std::size_t index = 0; index < m_items.size(); ++index ) {
+            m_items[index].zOrder = static_cast<std::int32_t>(index);
+        }
     }
 
     // 正常情况下刚追加后不会为空，该检查保留容器状态防御。
     if ( m_items.empty() ) return std::nullopt;
-    const std::size_t activeIndex = m_items.size() - 1;
-    auto&             item        = m_items[activeIndex];
+    const std::size_t activeIndex =
+        raiseToFront ? m_items.size() - 1 : itemIndex;
+    auto& item = m_items[activeIndex];
     // 提升到最高层后活动项暂时不受其他方块遮挡。
-    item.labelRect            = item.rect;
+    if ( raiseToFront ) item.labelRect = item.rect;
     m_selectedAudioResourceId = item.audioResourceId;
     m_selectedAudioLabel      = item.label;
     m_selectedAudioTrackType  = item.type;
+    // 切换采样时恢复它自己的倍率，随后绘制的新物件不会继承前一采样音量。
+    m_brushAudioVolume = item.audioVolume;
     // 通过逻辑命令同步画布放置工具使用的音频 ID、类型和音量。
     Logic::EditorEngine::instance().pushCommand(
         Logic::LogicCommand(Logic::CmdSetBrushAudioResource{
@@ -1024,12 +1092,12 @@ void ProjectAudioToolView::previewEffectSelection(const Item& item) const
         return;
     }
 
-    // 使用方块预先生成的独立池键，并沿用当前画笔音量试听。
+    // 试听使用该采样自身的物件倍率，资源基础增益仍由预览池只应用一次。
     (void)controlProjectAudioPreview(*project,
                                      item.audioResourceId,
                                      item.previewPoolKey,
-                                     ProjectAudioPreviewAction::Play,
-                                     m_brushAudioVolume);
+                                     ProjectAudioPreviewAction::Restart,
+                                     item.audioVolume);
 }
 
 /// @brief 清除当前活动音频方块并同步空画笔资源。
@@ -1579,7 +1647,7 @@ void ProjectAudioToolView::rebuildBatchDragConstraints()
 /// 试听控件随后覆盖在方块底部，标签区域已提前为其留空。
 void ProjectAudioToolView::drawItem(const Item& item, ImVec2 canvasOrigin,
                                     float canvasScale, float dpiScale,
-                                    bool hovered, bool pressed,
+                                    bool hovered, bool pressed, bool showVolume,
                                     ImDrawList& drawList) const
 {
     // 所有几何先统一转换到屏幕空间，后续 DrawList 不混用逻辑坐标。
@@ -1666,6 +1734,39 @@ void ProjectAudioToolView::drawItem(const Item& item, ImVec2 canvasOrigin,
         { minimum.x + horizontalPadding, minimum.y + verticalPadding },
         ImGui::GetColorU32(ImVec4(0.06F, 0.08F, 0.11F, 0.78F)),
         typeLabel);
+
+    if ( showVolume ) {
+        // 直接读取当前方块的独立倍率，不能使用选中项共享的画笔快照。
+        // 与音量滑块采用同一整数百分数，零为静音，一百为原始采样倍率。
+        // 转换使用栈缓冲，不在逐方块绘制路径分配字符串或查询音频后端。
+        // 有界整数最多三位，固定缓冲包含足够空间，结束位置显式传给绘制接口。
+        // 这里只显示资源级局部倍率，不混入主音量、静音或设备输出增益。
+        // 因此切换客户端音频预设时，项目各采样的数值不会一起跳动。
+        // 显示无需选中或悬浮该方块，避免离开音量编辑器后失去当前值。
+        std::array<char, 8> text{};
+        const int           volume = static_cast<int>(
+            std::lround(std::clamp(item.audioVolume, 0.0F, 2.0F) * 100.0F));
+        const auto formatted =
+            std::to_chars(text.data(), text.data() + text.size(), volume);
+        const float textWidth =
+            ImGui::CalcTextSize(text.data(), formatted.ptr).x;
+        const ImVec2 position{ maximum.x - horizontalPadding - textWidth,
+                               minimum.y + verticalPadding };
+        // 与类型标识共用顶行，文件名和底部试听按钮的位置保持稳定。
+        // 极窄卡片不覆盖类型文字；恢复宽度后无需重建缓存即可显示数值。
+        if ( position.x > minimum.x + horizontalPadding * 2 +
+                              ImGui::CalcTextSize(typeLabel).x ) {
+            // 卡片可能部分超出视口，裁剪仍与该卡片的屏幕矩形取交集。
+            // 数值跟随每次实时音量修改刷新，显示开关本身不改变任何音量。
+            drawList.PushClipRect(minimum, maximum, true);
+            drawList.AddText(
+                position,
+                ImGui::GetColorU32(ImVec4(0.06F, 0.08F, 0.11F, 1.0F)),
+                text.data(),
+                formatted.ptr);
+            drawList.PopClipRect();
+        }
+    }
 
     if ( item.batchSelected ) {
         // 绿色内框与外层活动边框分离，表达多选集合而非主选择。
@@ -1769,6 +1870,12 @@ ImVec2 ProjectAudioToolView::calculateContentSize(float visibleWidth,
 /// 右键重命名只在几何手势空闲且指针不位于试听控件时触发。
 /// 参考线和框选框均在方块之后绘制，但在流式 Dummy 之前提交。
 /// 状态栏文本使用裁剪区保护右侧缩放控件的固定交互面积。
+/// 滚轮偏移直接由画布消费，不依赖 Dock 宿主的滚动目标选择。
+/// 外层工具窗口禁止滚轮冒泡，搜索结果仍保留独立的原生滚动。
+/// 内容范围显式包含视口外方块，视口尺寸单独从 InnerRect 测量。
+/// 原生滚动条继续由 ImGui 处理，与滚轮共享同一内容坐标和边界。
+/// @note 内容范围使用逻辑方块边界；滚动条和鼠标输入使用屏幕像素。
+/// @note Shift 轴交换遵循平台约定，macOS 保留系统提供的滚轮方向。
 void ProjectAudioToolView::update(UIManager* sourceManager)
 {
     // 外部插件直接构造视图也不能绕过专业门禁，不提交 Begin 或焦点请求。
@@ -1793,7 +1900,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     LayoutContext layoutContext(m_layoutCtx,
                                 m_translationCache.windowTitle,
                                 true,
-                                ImGuiWindowFlags_None,
+                                ImGuiWindowFlags_NoScrollWithMouse,
                                 &m_isOpen);
 
     // 项目切换期间模型指针和资源集合不稳定，只展示统一占位。
@@ -1809,8 +1916,12 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         return;
     }
 
-    // 使用自动换行提示，窄窗口不会横向扩大工具尺寸。
-    ImGui::TextWrapped("%s", m_translationCache.hint);
+    // 展示模式只切换当前窗口，资源画笔和项目内已保存的方块布局共用。
+    if ( FeedbackRadioButton("方块视图", !m_tableView) ) setTableView(false);
+    ImGui::SameLine();
+    if ( FeedbackRadioButton("表格视图", m_tableView) ) setTableView(true);
+    // 方块操作说明仅在方块视图显示，避免误导表格用户拖动行来布局。
+    if ( !m_tableView ) ImGui::TextWrapped("%s", m_translationCache.hint);
 
     // 选择 Effect 时是否自动试听属于项目工作区偏好。
     auto& previewEffectOnSelection =
@@ -1821,6 +1932,42 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
              &previewEffectOnSelection) ) {
         // 设置变化低频发生，可立即保存以保证重新打开项目后恢复。
         Logic::EditorEngine::instance().saveProject();
+    }
+
+    // 布局吸附随项目工作区保存，表格视图没有移动或缩放操作，不显示此选项。
+    auto& snapEnabled =
+        project->m_settings.m_workspace.m_projectAudioToolSnapEnabled;
+    if ( !m_tableView ) {
+        ImGui::SameLine();
+        if ( FeedbackCheckbox(m_translationCache.snap, &snapEnabled) ) {
+            // 立即丢弃旧手势的滞回状态，重新开启时不能抢回上次的参考线。
+            m_snapLocks = {};
+            Logic::EditorEngine::instance().saveProject();
+        }
+    }
+    auto& showVolume =
+        project->m_settings.m_workspace.m_projectAudioToolShowVolume;
+    if ( !m_tableView ) {
+        // 只在方块视图显示开关，表格本来就提供每行音量滑块和读数。
+        // 切换时才保存项目；普通显示帧不产生文件操作或采样资源更新。
+        if ( FeedbackCheckbox("显示物件音量（0–200）", &showVolume) )
+            Logic::EditorEngine::instance().saveProject();
+    }
+    // 外部工作区恢复也能改变开关；关闭后所有交互层都不应保留参考线。
+    // 该分支每帧只清理两个可选轴锁，不重建方块索引或查询磁盘配置。
+    // 移动与缩放仍保留可见面积和最小尺寸约束，开关只影响布局自动对齐。
+    // 三种手势共用这一状态，避免批量移动或边角缩放漏掉关闭行为。
+    // 开启状态不强制生成锁，只有实际进入参考线容差后才由算法创建。
+    if ( !snapEnabled ) m_snapLocks = {};
+
+    // 公共入口同时覆盖表格与方块视图，重置全部资源而非当前选中项。
+    if ( FeedbackButton("重置所有采样音量") ) resetSampleVolumes();
+
+    if ( m_tableView ) {
+        // 表格与方块互斥绘制，保持重命名模态入口的共同生命周期。
+        renderTableView(dpiScale);
+        renderRenamePopup(dpiScale);
+        return;
     }
 
     // 搜索框占满可用宽度，Enter 提交当前高亮结果。
@@ -1994,17 +2141,47 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     }
     // 搜索区域结束后用固定分隔线明确主画布起点。
     ImGui::Separator();
-    // 状态栏高度从剩余区域扣除，画布子窗口占据其余全部空间。
-    ImVec2 childSize = ImGui::GetContentRegionAvail();
-    childSize.y      = std::max(1.0F, childSize.y - statusHeight);
-    // 画布使用独立双轴滚动，并禁止子窗口因内容拖动改变自身位置。
-    ImGui::BeginChild(
-        "ProjectAudioToolCanvas",
-        childSize,
-        true,
-        ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoMove);
-    // BeginChild 后读取扣除滚动条后的真实可见像素尺寸。
-    const ImVec2      visibleSizePixels = ImGui::GetContentRegionAvail();
+    // 画布只能占据工具窗口实际可见的剩余区域，不能采用内容驱动的剩余范围。
+    // 停靠宿主或平台视口裁剪后，超出 ClipRect 的高度不属于可见画布；否则
+    // 内容会被误判为已经全部可见，纵向滚动范围随之归零。
+    const auto*  toolWindow = ImGui::GetCurrentWindow();
+    const ImVec2 childStart = ImGui::GetCursorScreenPos();
+    const ImVec2 childSize{
+        std::max(
+            1.0F,
+            std::min(toolWindow->InnerRect.Max.x, toolWindow->ClipRect.Max.x) -
+                toolWindow->WindowPadding.x - childStart.x),
+        std::max(
+            1.0F,
+            std::min(toolWindow->InnerRect.Max.y, toolWindow->ClipRect.Max.y) -
+                toolWindow->WindowPadding.y - childStart.y - statusHeight),
+    };
+    // 绝对绘制的方块可能被停靠视口裁剪，不能只靠末尾 Dummy 推导内容边界。
+    // 显式提交全部缓存方块的范围，让滚动条始终覆盖视口外的资源；首次重建
+    // 仍由本帧末尾 Dummy 声明边界，下一帧使用更新后的缓存尺寸。
+    const ImVec2 cachedContent = calculateContentSize(0.0F, 0.0F);
+    ImGui::SetNextWindowContentSize(
+        { cachedContent.x * dpiScale * m_canvasZoom,
+          cachedContent.y * dpiScale * m_canvasZoom });
+    // 画布自行处理滚轮，避免停靠后的父子窗口路由与自定义相机争用滚动。
+    // 原生滚动条仍负责拖动；NoMove 只禁止内容手势移动子窗口本身。
+    ImGui::BeginChild("ProjectAudioToolCanvas",
+                      childSize,
+                      true,
+                      ImGuiWindowFlags_HorizontalScrollbar |
+                          ImGuiWindowFlags_NoMove |
+                          ImGuiWindowFlags_NoScrollWithMouse);
+    // 显式内容尺寸会让 GetContentRegionAvail 返回整张内容的剩余范围。
+    // InnerRect 扣除滚动条，进一步扣除内边距才是与滚动无关的可见视口。
+    const auto*  canvasWindow = ImGui::GetCurrentWindow();
+    const ImVec2 visibleSizePixels{
+        std::max(1.0F,
+                 canvasWindow->InnerRect.GetWidth() -
+                     canvasWindow->WindowPadding.x * 2.0F),
+        std::max(1.0F,
+                 canvasWindow->InnerRect.GetHeight() -
+                     canvasWindow->WindowPadding.y * 2.0F),
+    };
     const std::string projectRoot = Config::pathToUtf8(project->m_projectRoot);
     if ( projectRoot != m_cachedProjectRoot ) {
         // 项目切换先恢复视角默认值，方块缓存稍后在统一脏判断中重建。
@@ -2082,6 +2259,31 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         std::max(0.0F, contentLogical.x * canvasScale - visibleSizePixels.x),
         std::max(0.0F, contentLogical.y * canvasScale - visibleSizePixels.y),
     };
+    // 普通滚轮直接移动本画布，不能依赖停靠宿主是否具有可滚动内容。
+    // Ctrl 保留指针锚定缩放，Shift 将纵向滚轮转为横向平移。
+    if ( canvasHovered && !io.KeyCtrl &&
+         (io.MouseWheel != 0.0F || io.MouseWheelH != 0.0F) ) {
+        // 纵向到达边界也不自动换轴，用户只有按 Shift 才请求横向滚动。
+        const bool  horizontalWheel = io.KeyShift && !io.ConfigMacOSXBehaviors;
+        const float wheelX =
+            io.MouseWheelH + (horizontalWheel ? io.MouseWheel : 0.0F);
+        const float wheelY = horizontalWheel ? 0.0F : io.MouseWheel;
+        // 步长随字体和视口变化，小停靠面板每次最多移动约三分之二视口。
+        const float fontStep = ImGui::GetFontSize() * 5.0F;
+        scroll.x             = std::clamp(
+            scroll.x - wheelX * std::min(fontStep, visibleSizePixels.x * 0.67F),
+            0.0F,
+            maximumScroll.x);
+        scroll.y = std::clamp(
+            scroll.y - wheelY * std::min(fontStep, visibleSizePixels.y * 0.67F),
+            0.0F,
+            maximumScroll.y);
+        // 当前帧绘制和命中立即采用同一偏移，ImGui 在下一帧应用滚动目标。
+        canvasOrigin = { unscrolledCanvasOrigin.x - scroll.x,
+                         unscrolledCanvasOrigin.y - scroll.y };
+        ImGui::SetScrollX(scroll.x);
+        ImGui::SetScrollY(scroll.y);
+    }
     // 项目、DPI 或缩放变化后，旧滚动位置可能超出新的内容边界。
     const ImVec2 constrainedScroll{
         std::clamp(scroll.x, 0.0F, maximumScroll.x),
@@ -2215,13 +2417,14 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                  (m_draggingItem == index || m_resizingItem == index ||
                   (m_batchDragging && item.batchSelected)) &&
                      ImGui::IsMouseDown(ImGuiMouseButton_Left),
+                 showVolume,
                  *drawList);
     }
 
     // 试听控件结果在方块绘制后处理，使按钮覆盖在卡片内容之上。
     bool        audioControlsHovered = false;
     std::string volumeEditorResourceId;
-    bool        brushVolumeChanged = false;
+    bool        sampleVolumeChanged = false;
     if ( audioControlsItem && *audioControlsItem < m_items.size() ) {
         // 索引检查防御同帧激活重排后潜在的旧候选值。
         auto& item = m_items[*audioControlsItem];
@@ -2237,14 +2440,14 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         // 整体控件区命中用于阻止后续方块拖动状态机接管左键。
         const bool controlsPointerInside = containsItemAudioControls(
             controls.controls, ImGui::GetIO().MousePos);
-        // 公共控件同时驱动预览播放和画笔音量编辑，并返回交互摘要。
+        // 公共控件直接编辑当前采样倍率，其他方块的缓存不参与本次写入。
         const auto result =
             renderProjectAudioPreviewControls(item.audioResourceId.c_str(),
                                               *project,
                                               item.audioResourceId,
                                               item.previewPoolKey,
-                                              m_brushAudioVolume,
-                                              &m_brushAudioVolume,
+                                              item.audioVolume,
+                                              &item.audioVolume,
                                               controls.controls,
                                               controlsPointerInside);
         // 弹窗打开也视为控件占用输入，避免点击弹窗时触发画布手势。
@@ -2255,7 +2458,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             m_openVolumeEditorResourceId = item.audioResourceId;
             volumeEditorResourceId       = item.audioResourceId;
             // 合并本帧变化，后续统一同步画笔命令和项目工作区。
-            brushVolumeChanged = brushVolumeChanged || result.volumeChanged;
+            sampleVolumeChanged = result.volumeChanged;
         } else if ( m_openVolumeEditorResourceId == item.audioResourceId ) {
             m_openVolumeEditorResourceId.clear();
         }
@@ -2274,8 +2477,9 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                      std::distance(m_items.begin(), volumeItem))) ) {
                 rebuildLabelRects();
             }
-        } else if ( brushVolumeChanged ) {
-            // 当前资源不变时只提交带新音量的画笔资源命令。
+        } else if ( sampleVolumeChanged && volumeItem != m_items.end() ) {
+            // 当前资源不变时镜像自己的新倍率，再提交画笔资源命令。
+            m_brushAudioVolume = volumeItem->audioVolume;
             Logic::EditorEngine::instance().pushCommand(
                 Logic::LogicCommand(Logic::CmdSetBrushAudioResource{
                     m_selectedAudioResourceId,
@@ -2283,7 +2487,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                     m_brushAudioVolume,
                 }));
         }
-        if ( resourceChanged || brushVolumeChanged ) {
+        if ( resourceChanged || sampleVolumeChanged ) {
             // 仅状态实际变化时保存，悬浮控件不会产生磁盘写入。
             persistWorkspace();
         }
@@ -2437,15 +2641,19 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                     item.rect.height,
                 };
                 // 先应用边缘和中心吸附，再执行底层方块可见性约束。
-                rawRect =
-                    ProjectAudioToolLayout::snapRect(rawRect,
-                                                     visibleCanvas,
-                                                     m_dragSnapTargets,
-                                                     SNAP_THRESHOLD,
-                                                     SNAP_RELEASE_THRESHOLD,
-                                                     m_snapLocks);
-                // 内容边界以本帧逻辑画布尺寸为限，并保护固定方块最低可见比例。
-                item.rect = ProjectAudioToolLayout::constrainVisibility(
+                if ( snapEnabled ) {
+                    rawRect =
+                        ProjectAudioToolLayout::snapRect(rawRect,
+                                                         visibleCanvas,
+                                                         m_dragSnapTargets,
+                                                         SNAP_THRESHOLD,
+                                                         SNAP_RELEASE_THRESHOLD,
+                                                         m_snapLocks);
+                }
+                // 只沿上一帧到指针目标的移动方向截停，不把方块避让到另一侧。
+                // 同步释放已被可见性约束拒绝的吸附锁，避免下一帧继续抢回旧位置。
+                item.rect = ProjectAudioToolLayout::constrainMoveVisibility(
+                    item.rect,
                     rawRect,
                     ProjectAudioToolLayout::Rect{
                         0.0F,
@@ -2454,7 +2662,8 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                         contentLogical.y,
                     },
                     m_dragVisibilityConstraints,
-                    MINIMUM_VISIBLE_RATIO);
+                    MINIMUM_VISIBLE_RATIO,
+                    m_snapLocks);
                 // 活动项位于最高层，其自身标签可使用完整当前矩形。
                 item.labelRect = item.rect;
                 refreshInteractionLabelRects();
@@ -2489,12 +2698,15 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 m_batchDragInitialBounds.height,
             };
             // 吸附针对整体包围盒，参考线与整个选择集合的边缘或中心对齐。
-            rawBounds = ProjectAudioToolLayout::snapRect(rawBounds,
-                                                         visibleCanvas,
-                                                         m_dragSnapTargets,
-                                                         SNAP_THRESHOLD,
-                                                         SNAP_RELEASE_THRESHOLD,
-                                                         m_snapLocks);
+            if ( snapEnabled ) {
+                rawBounds =
+                    ProjectAudioToolLayout::snapRect(rawBounds,
+                                                     visibleCanvas,
+                                                     m_dragSnapTargets,
+                                                     SNAP_THRESHOLD,
+                                                     SNAP_RELEASE_THRESHOLD,
+                                                     m_snapLocks);
+            }
             // 结合选择并集单元，约束平移后所有固定方块的最低可见比例。
             m_batchDragCurrentBounds =
                 ProjectAudioToolLayout::constrainTranslatedVisibility(
@@ -2510,6 +2722,9 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                     },
                     m_dragVisibilityConstraints,
                     MINIMUM_VISIBLE_RATIO);
+            // 批量移动同样不能保留被可见性修正拒绝的吸附锁。
+            ProjectAudioToolLayout::releaseDisplacedMoveLocks(
+                m_batchDragCurrentBounds, m_snapLocks);
             // 约束后的总体包围盒与初始包围盒差值即为最终统一位移。
             const float deltaX =
                 m_batchDragCurrentBounds.x - m_batchDragInitialBounds.x;
@@ -2614,17 +2829,19 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                                  m_resizeStartRect.y);
             }
             // 尺寸下限应用后再吸附活动边，避免吸附产生过小矩形。
-            rawRect =
-                ProjectAudioToolLayout::snapResizeRect(rawRect,
-                                                       horizontalEdge,
-                                                       verticalEdge,
-                                                       visibleCanvas,
-                                                       m_dragSnapTargets,
-                                                       minimumWidth,
-                                                       minimumHeight,
-                                                       SNAP_THRESHOLD,
-                                                       SNAP_RELEASE_THRESHOLD,
-                                                       m_snapLocks);
+            if ( snapEnabled ) {
+                rawRect = ProjectAudioToolLayout::snapResizeRect(
+                    rawRect,
+                    horizontalEdge,
+                    verticalEdge,
+                    visibleCanvas,
+                    m_dragSnapTargets,
+                    minimumWidth,
+                    minimumHeight,
+                    SNAP_THRESHOLD,
+                    SNAP_RELEASE_THRESHOLD,
+                    m_snapLocks);
+            }
             // 最终约束保护被活动方块覆盖的固定方块最低可见面积。
             item.rect = ProjectAudioToolLayout::constrainResizeVisibility(
                 item.rect,
@@ -2672,7 +2889,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             snapGuideBounds = m_items[*activeItem].rect;
         }
     }
-    if ( snapGuideBounds ) {
+    if ( snapEnabled && snapGuideBounds ) {
         // 可见逻辑边界转换为屏幕坐标，参考线不会绘制到画布窗口外。
         const ImVec2 visibleMinimum{
             canvasOrigin.x + visibleCanvas.x * canvasScale,

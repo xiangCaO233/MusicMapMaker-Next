@@ -17,7 +17,8 @@ inline constexpr std::size_t COLLABORATION_RESOURCE_KEY_BYTES = 32U;
 /// @brief 加密容器的固定明文分块大小，与资源协议请求上限一致。
 inline constexpr std::uint32_t COLLABORATION_RESOURCE_BLOCK_BYTES = 64U * 1024U;
 
-/// @brief 只驻留于当前进程内存的资源会话密钥。
+/// @brief
+/// 资源认证密钥；持久缓存可在当前用户私有目录保存副本，禁止通过网络传播。
 using CollaborationResourceKey =
     std::array<std::uint8_t, COLLABORATION_RESOURCE_KEY_BYTES>;
 

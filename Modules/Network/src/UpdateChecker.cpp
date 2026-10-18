@@ -469,7 +469,9 @@ bool UpdateChecker::parseVersion(const std::string& verStr, int& major,
 /// @param remote 远端清单版本文本。
 /// @param local 当前程序版本文本。
 /// @return 远端三个数值段按字典序严格更大时返回 true。
-bool UpdateChecker::isNewer(const std::string& remote, const std::string& local)
+bool UpdateChecker::isNewer(const std::string& remote, const std::string& local,
+                            std::int64_t remoteRevision,
+                            std::int64_t localRevision)
 {
     int rMajor, rMinor, rPatch;
     int lMajor, lMinor, lPatch;
@@ -477,7 +479,7 @@ bool UpdateChecker::isNewer(const std::string& remote, const std::string& local)
     bool rOk = parseVersion(remote, rMajor, rMinor, rPatch);
     bool lOk = parseVersion(local, lMajor, lMinor, lPatch);
 
-    if ( !rOk || !lOk ) {
+    if ( !rOk || !lOk || remoteRevision < 0 || localRevision < 0 ) {
         // 无法建立可靠数值顺序时，不把格式差异当作新版本。
         return false;
     }
@@ -485,7 +487,12 @@ bool UpdateChecker::isNewer(const std::string& remote, const std::string& local)
     if ( rMajor != lMajor ) return rMajor > lMajor;
     if ( rMinor != lMinor ) return rMinor > lMinor;
     if ( rPatch != lPatch ) return rPatch > lPatch;
-    return false;
+    // 修订号只在正式三元组相同时参与比较，不能让旧正式版本靠大修订号升级。
+    // 普通正式更新优先于热修复，无论本地修订号曾经多大。
+    // 两侧修订均为零时保持相等版本不升级的既有行为。
+    // 负修订在前置校验中拒绝，不作为未知旧版本兜底。
+    // 该比较只在启动或手动检查中执行，不参与帧级渲染。
+    return remoteRevision > localRevision;
 }
 
 /// @brief 使用平台默认浏览器打开更新页面。
@@ -781,8 +788,9 @@ void UpdateChecker::checkAsync()
     {
         std::lock_guard<std::mutex> lock(m_infoMutex);
         // UI 立即看到检查状态和当前编译版本，网络结果稍后覆盖其余字段。
-        m_info.status         = UpdateStatus::kChecking;
-        m_info.currentVersion = MMM_VERSION_STRING;
+        m_info.status                = UpdateStatus::kChecking;
+        m_info.currentVersion        = MMM_VERSION_STRING;
+        m_info.currentHotfixRevision = MMM_HOTFIX_REVISION;
     }
 
     m_checkFuture = appThreadPool->enqueue([this]() {
@@ -793,8 +801,9 @@ void UpdateChecker::checkAsync()
         while ( retries < maxRetries && !isCancelRequested() ) {
             // 每次重试构造独立结果，避免残留上一轮部分响应字段。
             UpdateInfo result;
-            result.status         = UpdateStatus::kChecking;
-            result.currentVersion = MMM_VERSION_STRING;
+            result.status                = UpdateStatus::kChecking;
+            result.currentVersion        = MMM_VERSION_STRING;
+            result.currentHotfixRevision = MMM_HOTFIX_REVISION;
 
             CURL* curl = curl_easy_init();
             // libcurl 初始化失败无法通过重试改善，直接发布终态错误。
@@ -891,7 +900,22 @@ void UpdateChecker::checkAsync()
                 XERROR("UpdateChecker: {}", result.errorMessage);
             } else {
                 result.latestVersion = jsonString(data, "version");
+                // 旧响应没有该字段时按零处理；负数、非整数和超范围值拒绝为未知发布。
+                const auto revisionIt    = data.find("hotfix_revision");
+                bool       validRevision = revisionIt == data.end();
+                if ( revisionIt != data.end() &&
+                     revisionIt->is_number_integer() ) {
+                    const auto revision = revisionIt->get<std::int64_t>();
+                    validRevision = revision >= 0 && revision <= 2147483647;
+                    if ( validRevision ) result.latestHotfixRevision = revision;
+                }
                 // 可选展示字段缺失时保留空值，不影响版本判断。
+                // 普通网站发布可能保留旧扩展字段；修订只对声明的正式基线生效。
+                // 正式版本升级后旧修订失效，避免新普通程序反复收到同版更新。
+                if ( jsonString(data, "hotfix_base_tag") !=
+                     result.latestVersion ) {
+                    result.latestHotfixRevision = 0;
+                }
                 result.changelog   = jsonString(data, "changelog");
                 result.releaseDate = jsonString(data, "release_date");
 
@@ -931,12 +955,17 @@ void UpdateChecker::checkAsync()
                     }
                 }
 
-                if ( result.latestVersion.empty() ) {
+                if ( !validRevision ) {
+                    result.status       = UpdateStatus::kError;
+                    result.errorMessage = "Invalid hotfix revision";
+                } else if ( result.latestVersion.empty() ) {
                     // version 是唯一必需顶层字段，缺失时不能声明已是最新。
                     result.status       = UpdateStatus::kError;
                     result.errorMessage = "No version info in response";
                 } else if ( isNewer(result.latestVersion,
-                                    result.currentVersion) ) {
+                                    result.currentVersion,
+                                    result.latestHotfixRevision,
+                                    result.currentHotfixRevision) ) {
                     result.status = UpdateStatus::kUpdateFound;
                     XINFO("UpdateChecker: New version found: {} -> {}",
                           result.currentVersion,

@@ -4,6 +4,7 @@
 #include "audio/AudioTimelineResourceProcessor.h"
 #include "audio/AuditionSourceMixerNode.h"
 #include "audio/KeySoundControl.h"
+#include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/project/AudioResource.h"
@@ -258,7 +259,7 @@ AudioManager::getOrPrepareAudioTimelineResource(
 /// 谱面时钟，因此不能把零片段视为 unload。
 AudioTimelineLoadResult AudioManager::loadAudioTimeline(
     const std::vector<AudioTimelineLoadEvent>& events, double chartEndSeconds,
-    const std::string& fingerprint)
+    const std::string& fingerprint, const std::vector<AudioTimelineStop>& stops)
 {
     AudioTimelineLoadResult result;
     // 三项设施共同构成加载前置条件，缺任一项都不能安全发布调度。
@@ -405,10 +406,34 @@ AudioTimelineLoadResult AudioManager::loadAudioTimeline(
         secondsToTimelineFrame(normalizedChartEnd);
     m_audioTimelineMaximumProcessFrames =
         std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U);
+    // 等待定义在低频载入阶段转换为引擎帧，不在实时回调解析秒数。
+    // 使用与歌曲相同的采样率，倍速仅由共享拉伸器处理一次。
+    // STOP 位于最后物件时仍须保留一点音乐尾部，让等待可被调度到。
+    // 事件资源缺失不影响纯谱面时钟和 STOP 的有效性。
+    // 原始时间戳不增加暂停秒数，避免导入与播放各补偿一遍。
+    std::vector<TimelineStopEvent> preparedStops;
+    for ( const auto& stop : stops ) {
+        if ( !std::isfinite(stop.position) || !std::isfinite(stop.duration) ||
+             stop.position < 0 || stop.duration <= 0 )
+            continue;
+        preparedStops.push_back({ secondsToTimelineFrame(stop.position),
+                                  secondsToTimelineFrame(stop.duration) });
+        // 最后一个 STOP 仍需进入边界处理，保留其后一帧的正常结束位置。
+        m_audioTimelineRequestedEndFrame =
+            std::max(m_audioTimelineRequestedEndFrame,
+                     secondsToTimelineFrame(stop.position + 0.001));
+    }
+    // Key 路由与调度一同刷新，避免沿用上个无 STOP 谱面的旁路。
+    // 卸载时恢复用户选项，不把此次强制路由写回持久配置。
+    m_timelineHasStops = !preparedStops.empty();
+    updateSFXSyncSpeedRouting(Config::AppConfig::instance()
+                                  .getEditorSettings()
+                                  .sfxConfig.hitSfxSyncSpeed);
     result.scheduleGeneration = m_audioTimelineNode->replaceSchedule(
         m_audioTimelineBaseClips,
         m_audioTimelineRequestedEndFrame,
-        m_audioTimelineMaximumProcessFrames);
+        m_audioTimelineMaximumProcessFrames,
+        std::move(preparedStops));
     // 发布新代次后清理拉伸历史，避免上一调度残留进入首个 block。
     resetMainTimeStretcher();
     m_audioTimelineLoaded = true;
@@ -465,6 +490,10 @@ void AudioManager::unloadAudioTimeline()
             std::max<std::size_t>(ice::ICEConfig::default_buffer_size, 1U));
     // 空调度仍有 generation，用于证明回调不再引用旧 clip 快照。
     m_audioTimelineBaseClips.clear();
+    m_timelineHasStops = false;
+    updateSFXSyncSpeedRouting(Config::AppConfig::instance()
+                                  .getEditorSettings()
+                                  .sfxConfig.hitSfxSyncSpeed);
     // 控制线程副本立即清空；退休调度由回调接管后再释放。
     m_audioTimelineRequestedEndFrame    = 0;
     m_audioTimelineMaximumProcessFrames = 1U;
@@ -797,7 +826,8 @@ const std::string& AudioManager::getLoadedBGMPath() const
 /// 新文件先完整取得强引用，确认成功后才卸载旧试听，保证失败不会破坏当前试听。
 /// 歌曲与专用节拍池先混合，再进入效果音轨的主时间线拉伸前级。
 bool AudioManager::loadAuditionTrack(const std::string&      filePath,
-                                     const AudioTrackConfig& config)
+                                     const AudioTrackConfig& config,
+                                     AudioTrackType          type)
 {
     if ( !m_audioPool || !m_threadPool || !m_timingEffectMixer ||
          filePath.empty() ) {
@@ -825,6 +855,8 @@ bool AudioManager::loadAuditionTrack(const std::string&      filePath,
     m_auditionSyncKey     = makeAudioPathSyncKey(filePath);
     m_auditionTrackVolume = std::clamp(config.volume, 0.0f, 1.0f);
     m_auditionTrackMuted  = config.muted;
+    // 歌曲音量分类独立于节拍器，不能因为共享拉伸器就继承 SFX 总控。
+    m_auditionTrackType = type;
     // 歌曲的资源静音只控制 SourceNode，节拍器继续使用自己的池增益。
     // SourceNode 保留资源秒坐标；歌曲与节拍不再拥有第二个拉伸器。
     m_auditionSource = std::make_shared<ice::SourceNode>(m_auditionTrack);

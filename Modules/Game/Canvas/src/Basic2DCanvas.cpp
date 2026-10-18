@@ -26,12 +26,15 @@
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/AnnotationTargetHint.h"
 #include "canvas/Basic2DCanvasInteraction.h"
+#include "canvas/CameraLayoutEditor.h"
 #include "canvas/CanvasTabTitle.h"
 #include "canvas/CollaborationPeerColor.h"
 #include "canvas/CollaborationViewportProjection.h"
 #include "canvas/ComposeHoldTarget.h"
 #include "canvas/ComposeLessonHintGeometry.h"
 #include "canvas/ComposeTargetEligibility.h"
+#include "canvas/PlanarObservationCamera.h"
+#include "common/render/CanvasCameraMath.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
@@ -59,6 +62,7 @@
 #include <fmt/format.h>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -768,8 +772,8 @@ bool Basic2DCanvas::updateComposeLessonHints(
                                          : ImTextureID{};
     const TextureID   headTexture =
         uvMap.contains(static_cast<std::uint32_t>(TextureID::HoldHead))
-              ? TextureID::HoldHead
-              : TextureID::Note;
+            ? TextureID::HoldHead
+            : TextureID::Note;
     // 头部可选是皮肤协议的一部分，普通 Note 是旧皮肤的兼容回退。
     // 必须在求尺寸之前确定最终纹理，否则头部与真实物件宽高不同。
     // Hold、Flick 和 Polyline 均共享这个选择；Tap 始终使用 Note。
@@ -2623,6 +2627,20 @@ void Basic2DCanvas::updateComposeWalkthrough(
 void Basic2DCanvas::update(UI::UIManager* sourceManager)
 {
     auto& engine = Logic::EditorEngine::instance();
+    // 布局状态只在进入/退出边沿创建和释放；退出恢复保存的实际相机投影。
+    // 全局工具退出时所有画布都会释放各自的辅助编辑状态。
+    // 保持原始相机配置，真正的最终视角由随后的录制阶段应用。
+    const bool layoutEditing =
+        engine.getCurrentTool() == Logic::EditTool::Layout &&
+        m_currentSnapshot && m_currentSnapshot->hasBeatmap;
+    if ( layoutEditing && !m_layoutEditor )
+        // 状态对象只在工具进入边沿分配，不在连续拖动帧重复创建。
+        m_layoutEditor = std::make_unique<CameraLayoutEditor>();
+    if ( !layoutEditing && m_layoutEditor ) {
+        m_layoutEditor.reset();
+        // 仅工具切换的低频路径保存配置，拖动过程不会执行文件 IO。
+        Config::AppConfig::instance().save();
+    }
     // cameraId 是窗口与会话的稳定连接键；索引会随标签关闭和重排变化，
     // 因此需要使用时重新解析，不能跨帧缓存旧索引。
     auto findSessionIndex = [this, &engine]() -> int32_t {
@@ -2712,7 +2730,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
     // 不等待逻辑线程生成下一份画面，也不能让旧 dirty 标志留在标签上。
     const bool titleHasBeatmap = !isLogoPlaceholder && m_currentSnapshot &&
                                  m_currentSnapshot->hasBeatmap;
-    const std::string title = makeCanvasTabTitle(
+    const std::string title    = makeCanvasTabTitle(
         TR("canvas.editor").data(),
         titleHasBeatmap,
         m_currentSnapshot ? m_currentSnapshot->beatmapName : std::string_view{},
@@ -2809,8 +2827,64 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         const ImVec2 canvasScreenPosition = ImGui::GetCursorScreenPos();
         const ImVec2 canvasSize           = rctx.getRenderSize();
         rctx.renderSurface();
-        if ( m_currentSnapshot )
-            // 快照与刚绘制的纹理使用同一代布局，避免教学框和画面错位。
+        // 纹理展示区域定义真实输入边界，窗口标题和其它停靠内容不属于该区域。
+        // 观察矩阵处理逻辑像素；不能把 framebuffer 的 DPI 尺寸带入鼠标映射。
+        // 动态插值另行传递，因为它只移动谱面顶点，没有更新原始命中框。
+        // 输入映射与待录制的轨道投影共用矩阵；背景仍使用自己的屏幕投影。
+        // 每帧只构造一次平面逆矩阵，后续拾取和拖动都复用固定大小缓存。
+        auto& cameraVisual = Config::AppConfig::instance().getVisualConfig();
+        // 长度拖动与精确输入即时生效，只有数值发生变化才发布配置。
+        // 普通相机拖动仅影响 UI 投影，不进入逻辑配置发布路径。
+        const float previousExtension = cameraVisual.canvasCameraExtension();
+        // 固定大小参数用于识别实际编辑，无变化帧不构造预设 JSON 或排队写盘。
+        const auto previousPosition  = cameraVisual.canvasCameraPosition;
+        const auto previousRotation  = cameraVisual.canvasCameraRotation;
+        const auto previousLength    = cameraVisual.canvasCameraLength;
+        const auto previousMotion    = cameraVisual.canvasMotionCompensation;
+        const auto previousThickness = cameraVisual.canvasThicknessCompensation;
+        const bool hasCameraScene =
+            m_currentSnapshot && m_currentSnapshot->hasBeatmap;
+        // 模式切换先于本帧投影；相机预览借用同一离屏纹理，不创建第二套 GPU
+        // 资源。
+        const bool layoutInputConsumed =
+            m_layoutEditor &&
+            m_layoutEditor->update(
+                m_cameraId,
+                canvasScreenPosition,
+                canvasSize,
+                (ImTextureID)(VkDescriptorSet)getDescriptorSet(),
+                cameraVisual);
+        if ( previousPosition != cameraVisual.canvasCameraPosition ||
+             previousRotation != cameraVisual.canvasCameraRotation ||
+             previousLength != cameraVisual.canvasCameraLength ||
+             previousMotion != cameraVisual.canvasMotionCompensation ||
+             previousThickness != cameraVisual.canvasThicknessCompensation ) {
+            // 摄像机手势与数值输入共用即时方案捕获，磁盘写入不会等待在 UI。
+            Config::AppConfig::instance().saveLayoutChanges();
+        }
+        // 扩展范围由逻辑线程生成真实物件，通过既有配置命令异步生效。
+        // 不等手势结束；远端物件范围必须跟随当前长度，稳定帧不广播。
+        if ( previousExtension != cameraVisual.canvasCameraExtension() ||
+             previousMotion != cameraVisual.canvasMotionCompensation ||
+             previousThickness != cameraVisual.canvasThicknessCompensation )
+            engine.setEditorConfig(
+                Config::AppConfig::instance().getEditorConfig());
+        const bool cameraViewEnabled =
+            hasCameraScene && !layoutEditing &&
+            (cameraVisual.canvasCameraPoseEnabled ||
+             planarObservationEnabled(
+                 cameraVisual.debugCanvasCameraAngleDegrees,
+                 cameraVisual.debugCanvasCameraYawDegrees,
+                 cameraVisual.debugCanvasCameraDistance));
+        // 元素模式保持正视输入；相机模式独占输入，不把操纵轴误当谱面物件。
+        m_interaction->setInputProjection(
+            makePlanarObservationInputProjection(getCanvasProjectionMatrix(),
+                                                 canvasSize.x,
+                                                 canvasSize.y,
+                                                 cameraViewEnabled),
+            m_lastAppliedYOffset);
+        if ( m_currentSnapshot && !cameraViewEnabled )
+            // 教学屏幕提示未投影，仅在二维视图沿用旧的目标定位。
             reportCanvasWalkthroughTargets(sourceManager,
                                            *m_currentSnapshot,
                                            canvasScreenPosition,
@@ -2832,13 +2906,18 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                 m_cameraId);
         }
 
-        if ( isActiveCanvas ) {
+        if ( layoutInputConsumed ) {
+            // 编辑面板及三维手势完全独占输入，预览不发送物件、时间或联机命令。
+            m_interaction->updateTransientUi();
+        } else if ( isActiveCanvas ) {
             // 活动画布先发布并绘制协作视野，再运行编辑交互；后者可在
             // 同一 ImGui 层建立命中区域，而覆盖层始终使用本帧快照。
+            // 相机只改变投影，不能中断视野发布、跟随和远端覆盖层更新。
             updateCollaborationViewports(
                 sourceManager, canvasScreenPosition, canvasSize);
             bool lessonButtonHovered = false;
-            if ( m_currentSnapshot ) {
+            if ( m_currentSnapshot && !cameraViewEnabled ) {
+                // 教学命中装饰同样依赖二维像素，透视模式跳过装饰而保留普通编辑。
                 // 教程先判定本帧释放是否合法，以便交互控制器随后选择提交或
                 // 取消 CmdEndBrush；目标装饰不创建 ImGui Item，不拦截画布输入。
                 updateComposeWalkthrough(sourceManager,
@@ -2866,7 +2945,8 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
             // 后台画布仍接受文件拖入，并清理悬浮/瞬态 UI，保证鼠标
             // 离开旧标签后不会残留高亮；编辑工具命令则完全跳过。
             m_interaction->handleDrops(sourceManager);
-            m_interaction->updateHoverState(m_logicalWidth, m_logicalHeight);
+            m_interaction->updateReadOnlyHover(
+                m_currentSnapshot, m_logicalWidth, m_logicalHeight);
             m_interaction->updateTransientUi();
         }
     }
@@ -2959,6 +3039,17 @@ void Basic2DCanvas::updateCollaborationViewports(
     }
     auto* room = sourceManager->getCollaborationRoom();
     if ( !room || !room->isActive() || room->localPeerId() == 0 ) {
+        // 只停止跟随功能接管的音频，不影响从未启用此功能的本地播放。
+        if ( m_playbackFollowTracker.update(
+                 0,
+                 nullptr,
+                 false,
+                 0.0,
+                 0.0,
+                 false,
+                 Network::Collaboration::playbackSteadySeconds()) )
+            Event::EventBus::instance().publish(
+                Event::LogicCommandEvent(Logic::CmdSetPlayState{ false }));
         // 房间结束后清空跟随去重状态，下一次进入房间即使 peerId
         // 恰好复用也会从 sequence 零开始重新同步。
         m_lastFollowedPeerId           = 0;
@@ -2969,23 +3060,53 @@ void Basic2DCanvas::updateCollaborationViewports(
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
     // 渲染模式是本地显示偏好，不写入 ParticipantViewport；不同用户
     // 可独立选择填充、轮廓或轨道边缘而不影响网络协议。
-    const auto viewportRenderMode = Config::AppConfig::instance()
-                                        .getEditorSettings()
-                                        .collaborationViewportRenderMode;
+    const auto  viewportRenderMode = Config::AppConfig::instance()
+                                         .getEditorSettings()
+                                         .collaborationViewportRenderMode;
     const auto& layout =
         visual.trackLayoutForKeyCount(m_currentSnapshot->trackCount);
     // 使用当前轨道数对应布局，使动态扩轨后的协作范围立即跟随
     // 新轨道外包边界，而不是沿用固定主题默认矩形。
 
+    // 轨道投影统一考虑 BGM、BMS、草稿轨与水平偏移；协作矩形只覆盖
+    // 实际内容外包边界，不把左右辅助区或布局间隙误算为远端视野。
+    const auto localLaneProjection = Logic::calculateCanvasLaneProjection(
+        canvasSize.x,
+        m_currentSnapshot->trackCount,
+        m_currentSnapshot->bgmTrackCount,
+        layout,
+        m_currentSnapshot->canvasHorizontalOffsetX,
+        true,
+        m_currentSnapshot->bmsEditingEnabled,
+        m_currentSnapshot->draftLanesEnabled,
+        m_currentSnapshot->draftTrackCount,
+        true);
+    if ( !localLaneProjection.valid ) {
+        return;
+    }
+    // 独立辅助区可以互换顺序或留出空隙，统一取所有区域外包边界。
+    const auto contentBounds = localLaneProjection.contentBounds();
+    // contentBounds 会合并普通轨、BGM 区和草稿轨，避免只取主轨道
+    // 时远端视野在扩展编辑模式下显得过窄。
+
     // 快照时间已经位于统一视觉域，先复制全画布可见范围作为回退；
     // 合法轨道布局随后会把范围收窄到实际谱面轨道区域。
     Network::Collaboration::ParticipantViewport localViewport;
     localViewport.playbackTime = m_currentSnapshot->playbackTime;
-    localViewport.visualTime   = m_currentSnapshot->currentTime;
+    localViewport.playing      = m_currentSnapshot->isPlaying;
+    localViewport.playbackRate = m_currentSnapshot->playbackSpeed;
+    // 采用逻辑快照真正采样时刻，补偿 UI 与网络限频之间的处理时间。
+    localViewport.sampledAt  = m_currentSnapshot->snapshotSysTime;
+    localViewport.visualTime = m_currentSnapshot->currentTime;
     // playbackTime 用于点击/跟随跳转，visualTime 用于判断远端在当前
     // 视野上方或下方；两者不能因视觉偏移而混用。
     localViewport.visibleTimeStart = m_currentSnapshot->visibleTimeStart;
     localViewport.visibleTimeEnd   = m_currentSnapshot->visibleTimeEnd;
+    // 使用实际相机裁剪后的源范围，不能用快照原正视窗口冒充三维可见时间。
+    // 同步仍发布时间与偏移值，不把本地相机矩阵发送给其他参与者。
+    // 接收端用自己的观察矩阵绘制同一范围，允许双方使用不同视角。
+    // 视野跟随和播放跟随继续通过原有序列水位去重，不改变网络协议。
+    const auto sceneProjection = getCanvasProjectionMatrix();
     if ( std::isfinite(layout.top) && std::isfinite(layout.bottom) &&
          layout.top < layout.bottom ) {
         // 轨道上下边界是归一化画布坐标，转换为局部 Y 后以判定线
@@ -2993,10 +3114,24 @@ void Basic2DCanvas::updateCollaborationViewports(
         const float judgmentLineY =
             canvasSize.y * visual.judgmentLinePositionForKeyCount(
                                std::max(m_currentSnapshot->trackCount, 1));
-        const float trackTopY =
-            canvasSize.y * std::clamp(layout.top, 0.0F, 1.0F);
-        const float trackBottomY =
+        float trackTopY = canvasSize.y * std::clamp(layout.top, 0.0F, 1.0F);
+        float trackBottomY =
             canvasSize.y * std::clamp(layout.bottom, 0.0F, 1.0F);
+        if ( m_isObservationCamera ) {
+            // 视锥裁剪使用局部源 Y；播放偏移已由矩阵承担，不能再加一次。
+            auto localProjection = sceneProjection;
+            localProjection[3] -= localProjection[1] * m_yOffset;
+            const auto visible = Common::Render::canvasPlaneVisibleBounds(
+                localProjection,
+                { contentBounds.leftX,
+                  canvasSize.y * (layout.top - visual.canvasCameraExtension()),
+                  contentBounds.rightX,
+                  canvasSize.y * 1.5F });
+            if ( visible ) {
+                trackTopY    = visible->m_top;
+                trackBottomY = visible->m_bottom;
+            }
+        }
         // 分别反投影两条物理边界，不假设当前 SV 为正或时间与 Y
         // 保持简单线性关系；helper 在无可靠解时返回空值。
         const auto trackBottomTime = unprojectCollaborationViewportTime(
@@ -3042,9 +3177,11 @@ void Basic2DCanvas::updateCollaborationViewports(
     // 快照重建，不能再叠加本地 Pan Y。
     const auto jumpToViewport =
         [this, &canvasSize](
-            const Network::Collaboration::ParticipantViewport& viewport) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdSeek{ viewport.playbackTime }));
+            const Network::Collaboration::ParticipantViewport& viewport,
+            bool                                               seek = true) {
+            if ( seek )
+                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                    Logic::CmdSeek{ viewport.playbackTime }));
             const float desiredHorizontalOffset =
                 static_cast<float>(viewport.horizontalOffsetRatio *
                                    static_cast<double>(canvasSize.x));
@@ -3073,43 +3210,92 @@ void Basic2DCanvas::updateCollaborationViewports(
         if ( followed != viewports.end() &&
              followed->second.sequence != m_lastFollowedViewportSequence ) {
             const auto& viewport = followed->second;
-            jumpToViewport(viewport);
+            // 跟随音频时由下方漂移判定负责 Seek，视角更新仅同步横向位置。
+            jumpToViewport(viewport, !room->followPlaybackEnabled());
             m_lastFollowedViewportSequence = viewport.sequence;
         }
     }
+
+    // 先消费所有播放状态边界，再使用最新视口校正持续播放的漂移。
+    // 边界不能被缓存覆盖：同一轮收到播放、暂停、播放仍逐个发布逻辑命令。
+    // 本地音频负责两次广播之间的连续播放，不能用收到视口包的频率驱动声音。
+    // 当前快照属于逻辑线程，UI 只读取并发布命令，不能原地改写 isPlaying。
+    // 远端时间是未加视觉偏移的谱面时间，不能把判定线位置传给音频 Seek。
+    // 暂停时原样使用远端暂停位置，不额外加网络传播时间。
+    // 取消跟随会产生一次暂停动作，此后不再干预本地手动播放。
+    // 切换目标按对方当前状态重新对齐，不把旧目标序号用于新目标去重。
+    // 两秒过期判定只停止本功能启动的播放，避免断流后音乐一直播放。
+    // 倍率变更与 Seek 先于启动命令进入同一有序逻辑队列。
+    // 收到多个边界时，每个动作都保留，不能使用 changed 布尔合并它们。
+    // 边界队列有固定上限，不随远端持续播放时长增长。
+    // 水平跟随仍使用普通视口缓存，不为每个音频边界额外发布 Pan。
+    // 模态或 UI 短暂卡顿后，校准时钟可补偿采样至当前帧的时间差。
+    // 网络不对称仍会留下误差，漂移阈值用于避免微小误差造成可闻重定位。
+    // 不通过 sleep 或 wait_for 对齐两端，否则会阻塞用户本地交互。
+    // 音频资源加载和播放失败继续由既有 PlaybackController 返回状态处理。
+    // 同一帧可能连续收到不同倍率，比较已排队倍率而非始终比较旧逻辑快照。
+    // 此局部值只描述本帧动作，不修改跨线程共享配置。
+    // 下一帧仍以新快照为准，底层传输失败不会被永久当作成功。
+    double     queuedPlaybackRate = m_currentSnapshot->playbackSpeed;
+    const auto applyFollow =
+        [&](const Network::Collaboration::ParticipantViewport* viewport) {
+            const double now = Network::Collaboration::playbackSteadySeconds();
+            const double target =
+                viewport ? room->estimateFollowPlaybackTime(*viewport) : 0.0;
+            const double localTime =
+                m_currentSnapshot->playbackTime +
+                (m_currentSnapshot->isPlaying
+                     ? std::clamp(
+                           now - m_currentSnapshot->snapshotSysTime, 0.0, 0.1) *
+                           m_currentSnapshot->playbackSpeed
+                     : 0.0);
+            const auto action =
+                m_playbackFollowTracker.update(followedPeerId,
+                                               viewport,
+                                               room->followPlaybackEnabled(),
+                                               target,
+                                               localTime,
+                                               m_currentSnapshot->isPlaying,
+                                               now);
+            if ( !action ) return;
+            // 暂停先冻结传输再定位；播放先对齐倍率和位置再启动，保持边界顺序。
+            if ( !action->playing )
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdSetPlayState{ false }));
+            if ( action->seek ) {
+                if ( queuedPlaybackRate != action->rate ) {
+                    Event::EventBus::instance().publish(
+                        Event::LogicCommandEvent(
+                            Logic::CmdSetPlaybackSpeed{ action->rate }));
+                    queuedPlaybackRate = action->rate;
+                }
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdSeek{ action->time }));
+            }
+            if ( action->playing )
+                Event::EventBus::instance().publish(
+                    Event::LogicCommandEvent(Logic::CmdSetPlayState{ true }));
+        };
+    while ( const auto transition = room->popFollowPlaybackTransition() ) {
+        applyFollow(&*transition);
+    }
+    const auto followedPlayback = viewports.find(followedPeerId);
+    applyFollow(followedPlayback == viewports.end()
+                    ? nullptr
+                    : &followedPlayback->second);
 
     const auto& participants = room->participants();
     const auto  localId      = room->localPeerId();
     // 本地范围先规范为 minimum/maximum，兼容未来向上导致端点顺序
     // 与数值增减方向不一致的快照表示。
-    const double localMinimum = std::min(m_currentSnapshot->visibleTimeStart,
-                                         m_currentSnapshot->visibleTimeEnd);
-    const double localMaximum = std::max(m_currentSnapshot->visibleTimeStart,
-                                         m_currentSnapshot->visibleTimeEnd);
+    const double localMinimum =
+        std::min(localViewport.visibleTimeStart, localViewport.visibleTimeEnd);
+    const double localMaximum =
+        std::max(localViewport.visibleTimeStart, localViewport.visibleTimeEnd);
     if ( !std::isfinite(localMinimum) || !std::isfinite(localMaximum) ) {
         return;
     }
 
-    // 轨道投影统一考虑 BGM、BMS、草稿轨与水平偏移；协作矩形只覆盖
-    // 实际内容外包边界，不把左右辅助区或布局间隙误算为远端视野。
-    const auto localLaneProjection = Logic::calculateCanvasLaneProjection(
-        canvasSize.x,
-        m_currentSnapshot->trackCount,
-        m_currentSnapshot->bgmTrackCount,
-        layout,
-        m_currentSnapshot->canvasHorizontalOffsetX,
-        true,
-        m_currentSnapshot->bmsEditingEnabled,
-        m_currentSnapshot->draftLanesEnabled,
-        m_currentSnapshot->draftTrackCount,
-        true);
-    if ( !localLaneProjection.valid ) {
-        return;
-    }
-    // 独立辅助区可以互换顺序或留出空隙，统一取所有区域外包边界。
-    const auto contentBounds = localLaneProjection.contentBounds();
-    // contentBounds 会合并普通轨、BGM 区和草稿轨，避免只取主轨道
-    // 时远端视野在扩展编辑模式下显得过窄。
     const auto horizontalRange = projectCollaborationViewportHorizontalRange(
         contentBounds.leftX, contentBounds.rightX, canvasSize.x);
     if ( !horizontalRange ) {
@@ -3203,23 +3389,38 @@ void Basic2DCanvas::updateCollaborationViewports(
                 *m_currentSnapshot, viewport.visibleTimeStart, canvasSize.y);
             float secondY = collaborationTimeToCanvasY(
                 *m_currentSnapshot, viewport.visibleTimeEnd, canvasSize.y);
-            float topY = std::clamp(
-                std::min(firstY, secondY), 1.0F, canvasSize.y - 1.0F);
-            float bottomY = std::clamp(
-                std::max(firstY, secondY), 1.0F, canvasSize.y - 1.0F);
+            float topY    = std::min(firstY, secondY);
+            float bottomY = std::max(firstY, secondY);
+            if ( !m_isObservationCamera ) {
+                topY    = std::clamp(topY, 1.0F, canvasSize.y - 1.0F);
+                bottomY = std::clamp(bottomY, 1.0F, canvasSize.y - 1.0F);
+            }
             // 极短或刚接触边界的视野仍保留至少三像素高度，确保
             // 轮廓在高倍率与相近颜色背景中可见。
             if ( bottomY - topY < 3.0F ) {
                 bottomY = topY + 3.0F;
             }
-            const ImVec2 rectangleMinimum{
-                canvasScreenPosition.x + leftX,
-                canvasScreenPosition.y + topY,
-            };
-            const ImVec2 rectangleMaximum{
-                canvasScreenPosition.x + rightX,
-                canvasScreenPosition.y + std::min(bottomY, canvasSize.y - 1.0F),
-            };
+            // 保留原场景范围，让最终相机视锥决定哪些部分可见。
+            const auto polygon = projectCollaborationViewportPolygon(
+                sceneProjection,
+                { m_isObservationCamera ? contentBounds.leftX : leftX,
+                  topY - m_yOffset },
+                { m_isObservationCamera ? contentBounds.rightX : rightX,
+                  bottomY - m_yOffset },
+                { canvasSize.x, canvasSize.y });
+            if ( polygon.count < 3 ) continue;
+            std::array<ImVec2, 16> screenPoints{};
+            ImVec2                 rectangleMinimum = canvasMaximum;
+            for ( std::size_t i = 0; i < polygon.count; ++i ) {
+                screenPoints[i] = {
+                    canvasScreenPosition.x + polygon.points[i].x,
+                    canvasScreenPosition.y + polygon.points[i].y
+                };
+                rectangleMinimum.x =
+                    std::min(rectangleMinimum.x, screenPoints[i].x);
+                rectangleMinimum.y =
+                    std::min(rectangleMinimum.y, screenPoints[i].y);
+            }
             // following 仅增强轮廓，不改变参与者底色，用户可以同时
             // 识别身份颜色与当前跟随目标。
             const float outlineThickness = following ? 3.0F : 2.0F;
@@ -3227,40 +3428,60 @@ void Basic2DCanvas::updateCollaborationViewports(
                  Config::CollaborationViewportRenderMode::Filled ) {
                 // Filled 模式使用低透明度同色背景，轮廓仍在后面绘制，
                 // 避免遮挡谱面物件同时保留范围整体感。
-                drawList->AddRectFilled(
-                    rectangleMinimum,
-                    rectangleMaximum,
+                drawList->AddConvexPolyFilled(
+                    screenPoints.data(),
+                    static_cast<int>(polygon.count),
                     collaborationPeerColor(participant->second.participantId,
                                            24));
             }
             if ( viewportRenderMode ==
                  Config::CollaborationViewportRenderMode::TrackEdge ) {
-                // TrackEdge 只在内容左缘绘制括号，适合减少多人协作时
-                // 横跨全部轨道的线框重叠。
-                constexpr float BRACKET_CAP_WIDTH = 12.0F;
-                const float     bracketRight      = std::min(
-                    rectangleMinimum.x + BRACKET_CAP_WIDTH, rectangleMaximum.x);
-                drawList->AddLine(rectangleMinimum,
-                                  { rectangleMinimum.x, rectangleMaximum.y },
-                                  color,
-                                  outlineThickness);
-                drawList->AddLine(rectangleMinimum,
-                                  { bracketRight, rectangleMinimum.y },
-                                  color,
-                                  outlineThickness);
-                drawList->AddLine({ rectangleMinimum.x, rectangleMaximum.y },
-                                  { bracketRight, rectangleMaximum.y },
-                                  color,
-                                  outlineThickness);
+                // 在最终投影轮廓上选择屏幕左侧边，正视和相机视角均保留括号显示模式。
+                // 裁剪可能把四边形变成更多边，不再假设左边永远对应固定顶点下标。
+                // 裁剪生成的边也可作为提示边，源轨道左侧离屏时仍显示可见范围入口。
+                // 端帽沿相邻边向框内延伸，不覆盖已经被视锥排除的区域。
+                // 旋转相机后保持屏幕像素线宽，远端标记不会随世界尺度缩成细点。
+                std::size_t edge           = 0;
+                float       minimumCenterX = canvasMaximum.x * 2;
+                for ( std::size_t i = 0; i < polygon.count; ++i ) {
+                    const float center =
+                        screenPoints[i].x +
+                        screenPoints[(i + 1) % polygon.count].x;
+                    if ( center < minimumCenterX ) {
+                        minimumCenterX = center;
+                        edge           = i;
+                    }
+                }
+                const auto first  = screenPoints[edge];
+                const auto second = screenPoints[(edge + 1) % polygon.count];
+                drawList->AddLine(first, second, color, outlineThickness);
+                /// @brief 从括号端点沿相邻投影边绘制不超过十二像素的端帽。
+                /// @note 屏幕长度保持固定，相机拉远不会让标记缩成不可见的细点。
+                const auto cap = [&](ImVec2 start, ImVec2 neighbor) {
+                    const float dx     = neighbor.x - start.x;
+                    const float dy     = neighbor.y - start.y;
+                    const float length = std::hypot(dx, dy);
+                    // 重复裁剪顶点产生零长边时不做归一化，避免除零传播到绘制列表。
+                    if ( length <= 0 ) return;
+                    const float scale = std::min(12.0F / length, 1.0F);
+                    drawList->AddLine(
+                        start,
+                        { start.x + dx * scale, start.y + dy * scale },
+                        color,
+                        outlineThickness);
+                };
+                cap(first,
+                    screenPoints[(edge + polygon.count - 1) % polygon.count]);
+                cap(second, screenPoints[(edge + 2) % polygon.count]);
             } else {
-                // Outline 与 Filled 都使用完整矩形轮廓；跟随对象通过
+                // Outline 与 Filled 都使用完整投影轮廓；跟随对象通过
                 // 更粗线宽与普通远端用户区分。
-                drawList->AddRect(rectangleMinimum,
-                                  rectangleMaximum,
-                                  color,
-                                  0.0F,
-                                  0,
-                                  outlineThickness);
+                // 使用逐边线段兼容现有 ImGui 版本，并保持与填充相同的投影轮廓。
+                for ( std::size_t i = 0; i < polygon.count; ++i )
+                    drawList->AddLine(screenPoints[i],
+                                      screenPoints[(i + 1) % polygon.count],
+                                      color,
+                                      outlineThickness);
             }
 
             const ImVec2 textSize =
@@ -3513,6 +3734,32 @@ bool Basic2DCanvas::isDirty() const
 bool Basic2DCanvas::shouldRecordOffscreen() const
 {
     return m_isCanvasVisible;
+}
+
+/// @brief 从已发布的画布现场读取布局编辑键数。
+/// @return 当前玩家轨道数；欢迎页或尚未准备快照时返回零。
+/// @warning UI 每帧仅访问由画布准备流程管理生命周期的快照，不取得会话锁。
+/// @note 与实际布局绘制使用同一数据来源，避免显示另一会话的键数。
+int Basic2DCanvas::layoutKeyCount() const
+{
+    // 指针只在 UI 准备阶段更换，工具栏绘制阶段不跨线程改变它。
+    // hasBeatmap 区分欢迎页的默认轨道占位值与真实可编辑谱面。
+    return m_currentSnapshot && m_currentSnapshot->hasBeatmap
+               ? std::max(1, m_currentSnapshot->trackCount)
+               : 0;
+}
+
+/// @brief 将相机编辑器控件嵌入调用方的布局工具窗口。
+/// @warning UI 每帧借用本地编辑器；不分配资源或获取会话锁。
+bool Basic2DCanvas::drawCameraLayoutControls()
+{
+    // 编辑器的创建销毁仍属于画布布局生命周期，工具栏不能延长其寿命。
+    // 首帧尚未创建时跳过，下一帧自动显示；不在工具栏重复建立状态。
+    if ( !m_layoutEditor ) return false;
+    // 共用同一实例，按钮切换和三维手势不会出现两份模式状态。
+    m_layoutEditor->drawControls(
+        Config::AppConfig::instance().getVisualConfig());
+    return m_layoutEditor->cameraMode();
 }
 
 /// @brief 查询窗口在会话关闭规则下的有效打开状态。

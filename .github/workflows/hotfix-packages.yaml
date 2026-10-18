@@ -1,0 +1,94 @@
+name: mmm-hotfix-package-sync
+
+# 只恢复已公开程序的包管理器同步，不重新部署网页或重新编译。
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        # 原发布失败也允许恢复，但程序清单必须已经成功公开。
+        # 输入原 hotfix 发布 run 的数字 ID，读取其保留的不可变候选 Artifact。
+        description: "已公开程序 hotfix 的原 CI run ID"
+        required: true
+        type: string
+
+permissions:
+  # 下载指定运行制品需要 actions 读取，新增源码 hotfix tag 需要 contents 写入。
+  # 不修改正式 Release，也不移动已有 tag。
+  actions: read
+  contents: write
+  # 其他 Actions 能力不额外授予；制品与源码身份都由当前仓库约束。
+
+concurrency:
+  # 和完整 hotfix、普通网站发布互斥，恢复期间公开程序身份不能被切换。
+  group: musicmapmaker-publish
+  cancel-in-progress: false
+  # 后续请求等待现有同步结束，不在签名仓库切换过程中取消任务。
+
+jobs:
+  recover:
+    # 签名 APT 和 SSH 依赖沿用原自托管发布环境，不复制服务器私钥。
+    runs-on: [self-hosted, Linux, X64, debian]
+    timeout-minutes: 30
+    # 恢复不调用完整矩阵，超时只代表同步未完成，不创建替代包。
+    steps:
+      - name: Validate run identity
+        # 在 artifact API 查询前拒绝未知文本，后续不拼接人工路径。
+        env:
+          SOURCE_RUN: ${{ inputs.run_id }}
+        run: |
+          # 数字白名单不能被路径或命令参数替代。
+          [[ "${SOURCE_RUN}" =~ ^[0-9]+$ ]]
+      - uses: actions/checkout@v6
+        with:
+          # 只读取发布脚本，单独目录不替换原构建和 hotfix 的 checkout。
+          path: hotfix-package-recovery
+          persist-credentials: false
+          # 代码 checkout 不保留写权限，跨仓写入只由专用密钥完成。
+          lfs: false
+          submodules: false
+      - uses: actions/download-artifact@v4
+        # 指定原运行需要显式短期 token；缺失或过期制品直接失败。
+        with:
+          # 制品来自指定原始运行，不选最近一次构建或重新生成另一个 DEB。
+          name: hotfix-${{ inputs.run_id }}
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+          path: hotfix-package-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          # 不合并任意名称的其他 Artifact，目录只包含这个发布候选。
+      - name: Recover APT and Gentoo synchronization
+        working-directory: hotfix-package-recovery
+        env:
+          # 私钥通过环境传入，绝不写入 Summary 或上传为恢复制品。
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: ${{ inputs.run_id }}
+          MMM_GENTOO_OVERLAY_SSH_KEY: ${{ secrets.GENTOO_OVERLAY_SSH_KEY }}
+          RECOVERY_CANDIDATE: ${{ github.workspace }}/hotfix-package-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          # 包身份和当前公开清单再次校验，通过后才写软件源。
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path('scripts/hotfix').resolve()))
+          from sync_packages import sync
+          # metadata 来自 GitHub API，而不是候选包中可自行填写的字段。
+          # 运行必须来自本仓的 hotfix 人工入口，禁止把其他制品注入签名源。
+          run = json.loads(subprocess.check_output(['gh', 'api', f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['SOURCE_RUN']}"]))
+          if (run['head_repository']['full_name'] != os.environ['GITHUB_REPOSITORY']
+                  # fork 仓与其他分支都不能成为签名软件源的输入来源。
+                  or run['head_branch'] != 'hotfix' or run['event'] != 'workflow_dispatch'
+                  or run['status'] != 'completed' or run['path'] != '.github/workflows/ci.yaml'):
+              raise ValueError('artifact run is not a completed hotfix publication')
+          candidate = Path(os.environ['RECOVERY_CANDIDATE'])
+          # 程序和纯资产使用不同计划；缺少 program.json 的纯资产制品会被拒绝。
+          published = json.loads((candidate / 'program.json').read_text())
+          # 记录来自同一次构建 SHA，不能用相同版本号掩盖不同源码。
+          if published['hotfix_commit'] != run['head_sha']:
+              raise ValueError('candidate commit differs from original run')
+          debs = list((candidate / 'packages').glob('musicmapmaker-next_*.deb'))
+          # 多包意味着身份不唯一，不能凭文件名排序自行选择一个。
+          if len(debs) != 1:
+              raise ValueError('expected exactly one preserved DEB')
+          # sync 还会对照当前网页和包内 ELF，不接受已经过期的修订。
+          sync(debs[0], published['hotfix_base_tag'], published['hotfix_revision'], published['hotfix_commit'])
+          # APT 与 Gentoo 都成功返回后，本次恢复才会显示成功。
+          PY

@@ -146,7 +146,7 @@ float updateTooltipAnimationAmount(ImGuiID itemId, bool isHovered)
     // 负 DeltaTime 防御性钳制，速度由全局审美配置换算。
     const float step = std::max(0.0f, ImGui::GetIO().DeltaTime) *
                        getUiAnimationTransitionSpeed();
-    amount = std::min(1.0f, amount + step);
+    amount           = std::min(1.0f, amount + step);
 
     // 写回进度与帧号供下一帧连续推进。
     storage->SetFloat(amountKey, amount);
@@ -1255,8 +1255,8 @@ float updateMenuPopupAmount(ImGuiID id, ImGuiStorage* storage, bool open)
         wasDrawnLastFrame ? storage->GetFloat(amountKey, 0.0f) : 0.0f;
     const float target = open ? 1.0f : 0.0f;
     const float step   = std::min(1.0f,
-                                std::max(0.0f, ImGui::GetIO().DeltaTime) *
-                                    Utils::getUiAnimationTransitionSpeed());
+                                  std::max(0.0f, ImGui::GetIO().DeltaTime) *
+                                      Utils::getUiAnimationTransitionSpeed());
 
     if ( amount < target ) {
         amount = std::min(target, amount + step);
@@ -1363,7 +1363,7 @@ void renderDockTabCloseHover(ImGuiWindow* window, ImGuiID closeButtonId)
     }
 
     const bool  centralTab = (tab->Flags & (ImGuiTabItemFlags_Leading |
-                                           ImGuiTabItemFlags_Trailing)) == 0;
+                                            ImGuiTabItemFlags_Trailing)) == 0;
     const float tabX =
         tabBar->BarRect.Min.x +
         (centralTab ? std::trunc(tab->Offset - tabBar->ScrollingAnim)
@@ -1855,6 +1855,23 @@ bool FeedbackCombo(const char* label, int* currentItem,
     return changed;
 }
 
+/// @brief 根据最终有效值提交上一条滑块的变化音效，而非临时输入草稿。
+/// @param previous 控件开始本次编辑前的数值。
+/// @param value 应用业务精度后的最终数值。
+/// @param minValue 数值范围下限。
+/// @param maxValue 数值范围上限。
+/// @note 不保存待播变化；未变化或被限频的帧不会在停住后补播。
+/// @warning UI 热路径：只检查标量与已有 Item 状态，音频资源必须预先加载。
+void playSliderValueChangeFeedback(float previous, float value, float minValue,
+                                   float maxValue)
+{
+    // 量化回原值、抵达边界或按住不动都不会提交变化音效。
+    if ( previous == value || !std::isfinite(value) ) return;
+    playSliderChangeFeedback(GImGui->LastItemData.ID,
+                             true,
+                             calcSliderPercent(value, minValue, maxValue));
+}
+
 /// @brief 绘制带统一反馈的 ImGui Float 滑块。
 /// @param label 可见文本和 ImGui ID。
 /// @param value 当前浮点值指针。
@@ -1873,18 +1890,22 @@ bool FeedbackSliderFloat(const char* label, float* value, float minValue,
     const ImGuiID id               = ImGui::GetID(label);
     const float   hoverAmount      = updateButtonHoverAmount(id);
     const int     pushedColorCount = pushAnimatedFrameColors(hoverAmount, true);
-    const bool    changed =
-        ImGui::SliderFloat(label, value, minValue, maxValue, format, flags);
+    const float   previous         = *value;
+    // 原生控件先按格式精度完成取整，再以真实前后值判断是否有变化。
+    const bool changed =
+        ImGui::SliderFloat(label, value, minValue, maxValue, format, flags) &&
+        previous != *value;
     const bool clicked = isLastItemFeedbackActivated();
     // 当前百分比映射到统一滑块音效音高。
-    const float percent = calcSliderPercent(*value, minValue, maxValue);
     ImGui::PopStyleColor(pushedColorCount);
-    playSliderChangeFeedback(id, changed, percent);
+    if ( changed )
+        playSliderValueChangeFeedback(previous, *value, minValue, maxValue);
     finishLastItemFeedback(id, clicked);
     return changed;
 }
 
 /// @brief 绘制带统一反馈的 ImGui Int 滑块。
+/// @param deferChangeFeedback 复合控件为 true，待外层量化完成后提交变化音效。
 /// @param label 可见文本和 ImGui ID。
 /// @param value 当前整数值指针。
 /// @param minValue 滑块最小值。
@@ -1895,20 +1916,25 @@ bool FeedbackSliderFloat(const char* label, float* value, float minValue,
 /// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、
 /// 样式栈操作和已预加载 SFX pool 的即时触发。
 bool FeedbackSliderInt(const char* label, int* value, int minValue,
-                       int maxValue, const char* format, ImGuiSliderFlags flags)
+                       int maxValue, const char* format, ImGuiSliderFlags flags,
+                       bool deferChangeFeedback)
 {
     // 整数范围转成 float 百分比仅用于音效，不改变控件数值语义。
     const ImGuiID id               = ImGui::GetID(label);
     const float   hoverAmount      = updateButtonHoverAmount(id);
     const int     pushedColorCount = pushAnimatedFrameColors(hoverAmount, true);
+    const int     previous         = *value;
     const bool    changed =
-        ImGui::SliderInt(label, value, minValue, maxValue, format, flags);
-    const bool  clicked = isLastItemFeedbackActivated();
-    const float percent = calcSliderPercent(static_cast<float>(*value),
-                                            static_cast<float>(minValue),
-                                            static_cast<float>(maxValue));
+        ImGui::SliderInt(label, value, minValue, maxValue, format, flags) &&
+        previous != *value;
+    const bool clicked = isLastItemFeedbackActivated();
     ImGui::PopStyleColor(pushedColorCount);
-    playSliderChangeFeedback(id, changed, percent);
+    // 复合控件只抑制中间数值的滑动音效，保留统一悬浮动画及焦点行为。
+    if ( changed && !deferChangeFeedback )
+        playSliderValueChangeFeedback(static_cast<float>(previous),
+                                      static_cast<float>(*value),
+                                      static_cast<float>(minValue),
+                                      static_cast<float>(maxValue));
     finishLastItemFeedback(id, clicked);
     return changed;
 }
@@ -1932,12 +1958,15 @@ bool FeedbackVSliderFloat(const char* label, const ImVec2& size, float* value,
     const ImGuiID id               = ImGui::GetID(label);
     const float   hoverAmount      = updateButtonHoverAmount(id);
     const int     pushedColorCount = pushAnimatedFrameColors(hoverAmount, true);
-    const bool    changed          = ImGui::VSliderFloat(
-        label, size, value, minValue, maxValue, format, flags);
-    const bool  clicked = isLastItemFeedbackActivated();
-    const float percent = calcSliderPercent(*value, minValue, maxValue);
+    const float   previous         = *value;
+    const bool    changed =
+        ImGui::VSliderFloat(
+            label, size, value, minValue, maxValue, format, flags) &&
+        previous != *value;
+    const bool clicked = isLastItemFeedbackActivated();
     ImGui::PopStyleColor(pushedColorCount);
-    playSliderChangeFeedback(id, changed, percent);
+    if ( changed )
+        playSliderValueChangeFeedback(previous, *value, minValue, maxValue);
     finishLastItemFeedback(id, clicked);
     return changed;
 }

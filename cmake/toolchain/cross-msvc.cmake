@@ -189,8 +189,12 @@ set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT
           FORCE)
 
 # --- 核心：配置头文件搜索路径 (-imsvc 模拟 MSVC 的包含逻辑) ---
-# 额外包含 lowercase 代理目录以解决 Linux 大小写敏感问题 代理路径位于项目根，内容由 lowercase 生成脚本维护。
-set(PROXY_INCLUDE "${CMAKE_SOURCE_DIR}/include_proxy")
+# 额外包含 lowercase 代理目录以解决 Linux 大小写敏感问题 代理路径位于项目根，内容由 lowercase 生成脚本维护。 独立依赖工程的
+# CMAKE_SOURCE_DIR 不再是仓库根，代理路径必须锚定工具链位置。 否则 ExternalProject 重新加载工具链时会丢失 SDK
+# 大小写别名。
+get_filename_component(MMM_CROSS_PROXY_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.."
+                       ABSOLUTE)
+set(PROXY_INCLUDE "${MMM_CROSS_PROXY_ROOT}/include_proxy")
 
 # include_proxy 提供 Windows SDK 大小写别名，其余目录保持 cl.exe 搜索顺序。 MSVC 与 ATL/MFC 头位于
 # toolset 根，UCRT、Win32 和 WinRT 头位于 SDK 根。
@@ -210,7 +214,7 @@ set(MSVC_LIB_PATHS
     "/libpath:\"${MSVC_BASE}/atlmfc/lib/x64\""
     "/libpath:\"${WINSDK_BASE}/Lib/${WINSDK_VER}/ucrt/x64\""
     "/libpath:\"${WINSDK_BASE}/Lib/${WINSDK_VER}/um/x64\""
-    "/libpath:\"${CMAKE_SOURCE_DIR}/lib_proxy\"")
+    "/libpath:\"${MMM_CROSS_PROXY_ROOT}/lib_proxy\"")
 
 string(REPLACE ";" " " MSVC_INCLUDE_STR "${MSVC_INCLUDE}")
 # CMake 初始 flags 接受单字符串，因此把列表边界转换为空格。

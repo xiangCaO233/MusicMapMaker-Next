@@ -86,7 +86,8 @@ bool isBeatmapExtension(const std::string& extension)
 {
     // 扩展名比较大小写不敏感，并要求保留前导点。
     const auto ext = toLowerAscii(extension);
-    return ext == ".osu" || ext == ".imd" || ext == ".mc" || ext == ".mmm";
+    return ext == ".bms" || ext == ".bme" || ext == ".bml" || ext == ".pms" ||
+           ext == ".osu" || ext == ".imd" || ext == ".mc" || ext == ".mmm";
 }
 
 /// @brief 判断扩展名是否为音频文件。

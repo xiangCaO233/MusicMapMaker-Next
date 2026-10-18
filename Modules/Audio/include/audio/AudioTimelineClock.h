@@ -55,6 +55,9 @@ struct AudioTimelineClockSnapshot {
     /// @brief 非循环时间线是否已经生成完最后一段输入。
     bool finished{ false };
 
+    /// @brief 正在播放 STOP 静音，音乐位置保持不动但播放意图仍为 Playing。
+    bool stopFrozen{ false };
+
     /// @brief 快照是否来自已加载且一致的时间线。
     bool valid{ false };
 

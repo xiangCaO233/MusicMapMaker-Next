@@ -18,6 +18,7 @@
 #include "mmm/project/AudioResource.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/audio/AudioPresetControls.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/NativeFileDialog.h"
@@ -799,7 +800,7 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     }
 
     // 页脚标题始终存在，展开后再加入五个固定高度控制行。
-    float footerH = cache.footerHeaderHeight;
+    float footerH = 2.0F * cache.footerHeaderHeight + footerSpacing;
     if ( input.showGlobalSettings ) {
         footerH += 5.0f * controlRowH + 5.0f * footerSpacing;
     }
@@ -1098,12 +1099,8 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                 ImGui::SetNextItemWidth(r.width);
                 // 使用局部副本让 ImGui 编辑；产生变化后才调用业务回调。
                 float val = volume;
-                if ( ::MMM::UI::FeedbackSliderFloat(
-                         (std::string("##Slider") + id).c_str(),
-                         &val,
-                         minVal,
-                         maxVal,
-                         format) ) {
+                if ( ::MMM::UI::FeedbackVolumeSlider(
+                         (std::string("##Slider") + id).c_str(), &val) ) {
                     onVolumeChange(val);
                 }
                 if ( ImGui::IsItemHovered() ) {
@@ -2155,6 +2152,15 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                   TR("ui.audio_manager.global_settings").data(),
                                   &m_showGlobalSettings,
                                   r);
+                          });
+
+    // 个人方案入口始终可见，折叠混音控制后仍能切换设备场景。
+    footerVBox.addElement("AudioPresets",
+                          Sizing::Grow(),
+                          Sizing::Fixed(layoutMetrics.footerHeaderHeight),
+                          [&](Clay_BoundingBox r, bool) {
+                              ImGui::SetCursorScreenPos({ r.x, r.y });
+                              drawAudioPresetControls();
                           });
 
     if ( m_showGlobalSettings ) {

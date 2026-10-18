@@ -235,13 +235,17 @@ bool CollaborationPeer::addParticipant(PeerId             peerId,
                                         std::move(sessionId),
                                         std::move(creator) };
     m_participantIdentities.emplace(peerId, identity);
-    // 新访客初始只读；只有房主显式授权后才能提交谱面变更。
-    m_participantPermissions.emplace(peerId, 0U);
+    // 只在首次登记时应用房主显式配置；重复登记不会覆盖单独授权结果。
+    // 未启用仍保持只读，新权限与身份一起广播，不等待 UI 事后补发。
+    const auto initialPermissions =
+        m_defaultPermissionsEnabled ? m_defaultPermissions : 0U;
+    m_participantPermissions.emplace(peerId, initialPermissions);
     // 向所有访客广播新身份与权限，新访客也会收到自身权威镜像。
     for ( const PeerId participantId : m_participants ) {
         static_cast<void>(sendMessage(participantId, identity));
         static_cast<void>(
-            sendMessage(participantId, ParticipantPermissions{ peerId, 0U }));
+            sendMessage(participantId,
+                        ParticipantPermissions{ peerId, initialPermissions }));
     }
     // 两条广播各自独立，部分发送失败不会撤销已发送或本地登记。
     // 若房主已有可独立恢复快照，新访客可跳过日志起点限制直接追平。
@@ -307,6 +311,8 @@ void CollaborationPeer::removeParticipant(PeerId peerId)
     // 确认、视口、聊天序号和权限均以临时 PeerId 为生命周期边界。
     m_lastAcknowledgedRevision.erase(peerId);
     m_participantViewports.erase(peerId);
+    // 断开后清除同一槽位的时钟偏移，重连必须重新校准。
+    if ( m_playbackClockPeer == peerId ) probePlaybackClock(0);
     m_lastChatSequence.erase(peerId);
     m_participantPermissions.erase(peerId);
     // 身份已经缺失说明状态不完整，此时不再广播重复离开通知。
@@ -343,6 +349,24 @@ bool CollaborationPeer::setParticipantPermissions(
         // 广播包含目标本人，所有访客镜像相同完整权限表。
         static_cast<void>(sendMessage(participantId, message));
     }
+    return true;
+}
+
+/// @brief 更新房主的入房授权策略，不广播或改写既有成员权限。
+/// @param enabled 是否让之后的新成员获得指定权限。
+/// @param permissions 房主保存的完整选择，必须只包含协议已知位。
+/// @return 非房主或非法掩码返回 false，旧策略保持不变。
+/// @warning UI 低频操作：与 addParticipant 同线程执行，只更新两个值。
+bool CollaborationPeer::setDefaultParticipantPermissions(
+    bool enabled, CollaborationPermissionMask permissions)
+{
+    // 不接受访客配置，也不能把未知权限位带入后续权限广播。
+    if ( !m_valid || !m_config.isHost ||
+         !isCollaborationPermissionMaskValid(permissions) )
+        return false;
+    // 关闭只阻止后续授权，已有成员仍由单人权限管理入口负责。
+    m_defaultPermissionsEnabled = enabled;
+    m_defaultPermissions        = permissions;
     return true;
 }
 
@@ -500,6 +524,10 @@ bool CollaborationPeer::publishViewport(ParticipantViewport viewport)
     // 路由身份和单调序号始终由 Peer 覆盖，调用方不能伪造。
     viewport.peerId   = m_config.peerId;
     viewport.sequence = m_nextViewportSequence++;
+    // 非 UI 发布者可省略采样时刻；产品入口提供实际快照采样时间。
+    if ( viewport.sampledAt == 0.0 )
+        viewport.sampledAt = playbackSteadySeconds();
+    viewport.receivedAt = playbackSteadySeconds();
     m_participantViewports.insert_or_assign(m_config.peerId, viewport);
     if ( m_config.isHost ) {
         // 房主向全部访客广播，并累计而不因单个失败停止其他发送。
@@ -593,6 +621,11 @@ bool CollaborationPeer::enqueueHostRequest(EditRequest request)
 void CollaborationPeer::handleMessage(PeerId                      senderId,
                                       const CollaborationMessage& message)
 {
+    // 时钟探测有独立的源与目标校验，房主和访客复用同一个中继处理器。
+    if ( const auto* probe = std::get_if<PlaybackClockProbe>(&message) ) {
+        handlePlaybackClockProbe(senderId, *probe);
+        return;
+    }
     // 分派过程不复制消息变体，可变负载仅在后续入队时按需复制。
     if ( m_config.isHost ) {
         // 房主只接受请求、确认、补发、视口、聊天和访客资源请求。
@@ -835,6 +868,7 @@ void CollaborationPeer::handleParticipantLeft(
     // 身份、视口、聊天水位和权限共享同一 PeerId 生命周期。
     m_participantIdentities.erase(participantLeft.peerId);
     m_participantViewports.erase(participantLeft.peerId);
+    if ( m_playbackClockPeer == participantLeft.peerId ) probePlaybackClock(0);
     m_lastChatSequence.erase(participantLeft.peerId);
     m_participantPermissions.erase(participantLeft.peerId);
     // 访客不维护 m_participants 或请求队列，因此无需额外清理。
@@ -903,7 +937,21 @@ void CollaborationPeer::handleParticipantViewport(
         return;
     }
     // 最新状态整体替换，避免历史视口队列增长。
-    m_participantViewports.insert_or_assign(viewport.peerId, viewport);
+    ParticipantViewport received = viewport;
+    // 此时间属于当前接收端，绝不能替换原始 sampledAt 后转发。
+    received.receivedAt = playbackSteadySeconds();
+    // 仅状态边界进入队列；普通连续播放位置仍只保留最新值。
+    // 先比较旧缓存再替换，连续收到播放、暂停、播放也能保留全部边界。
+    if ( viewport.peerId == m_playbackClockPeer &&
+         (existing == m_participantViewports.end() ||
+          existing->second.playing != viewport.playing ||
+          existing->second.playbackRate != viewport.playbackRate) ) {
+        // 三十二次未消费切换说明接收端长期未推进，保留最近状态限制内存。
+        if ( m_playbackTransitions.size() == 32U )
+            m_playbackTransitions.pop_front();
+        m_playbackTransitions.push_back(received);
+    }
+    m_participantViewports.insert_or_assign(viewport.peerId, received);
 
     if ( m_config.isHost ) {
         // 房主转发给除原发送方外的所有访客，避免无意义回显。

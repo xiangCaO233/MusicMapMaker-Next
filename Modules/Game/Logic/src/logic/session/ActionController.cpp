@@ -646,6 +646,9 @@ std::string BatchTimelineAction::getName() const
     // 用途映射不改变条目的执行方式，实际创建、更新或删除仍由前后值决定。
     if ( m_name == "Paste" ) {
         nameKey = "ui.status.action.paste";
+    } else if ( m_name == "Batch Timeline Delete" ) {
+        // 删除名称复用事件删除翻译，条目数由批量动作统一追加。
+        nameKey = "ui.status.action.delete_event";
     } else if ( m_name == "Batch Timeline Update" ) {
         nameKey = "ui.status.action.batch_timing_update";
     }

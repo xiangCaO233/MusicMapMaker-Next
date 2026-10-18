@@ -11,6 +11,7 @@
 
 #include "canvas/MarqueeAutoScroll.h"
 #include "canvas/TimelineTimingTooltip.h"
+#include "common/LogicCommands.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "event/core/EventBus.h"
@@ -28,6 +29,8 @@
 #include <fmt/format.h>
 #include <limits>
 #include <optional>
+
+#include <utility>
 
 namespace MMM::Canvas
 {
@@ -57,6 +60,8 @@ uint32_t getTimingEffectMask(::MMM::TimingEffect effect)
         return Common::Render::SCROLL_EFFECT_SCROLL;
     case ::MMM::TimingEffect::JUMP: return Common::Render::SCROLL_EFFECT_JUMP;
     case ::MMM::TimingEffect::HS: return Common::Render::SCROLL_EFFECT_HS;
+    // STOP 使用独立命中类型，不能与同刻 BPM 共用实体身份。
+    case ::MMM::TimingEffect::STOP: return Common::Render::SCROLL_EFFECT_STOP;
     }
     return 0;
 }
@@ -75,6 +80,7 @@ entt::entity getTimingEntity(
     case ::MMM::TimingEffect::SCROLL: return element.scrollEntity;
     case ::MMM::TimingEffect::JUMP: return element.jumpEntity;
     case ::MMM::TimingEffect::HS: return element.hsEntity;
+    case ::MMM::TimingEffect::STOP: return element.stopEntity;
     }
     return entt::null;
 }
@@ -92,6 +98,7 @@ double getTimingValue(const Common::Render::TimelineInteractiveElement& element,
     case ::MMM::TimingEffect::SCROLL: return element.scrollValue;
     case ::MMM::TimingEffect::JUMP: return element.jumpValue;
     case ::MMM::TimingEffect::HS: return element.hsValue;
+    case ::MMM::TimingEffect::STOP: return element.stopValue;
     }
     return 0.0;
 }
@@ -112,6 +119,7 @@ getTimingMarkerGeometry(
     case ::MMM::TimingEffect::SCROLL: return element.scrollMarker;
     case ::MMM::TimingEffect::JUMP: return element.jumpMarker;
     case ::MMM::TimingEffect::HS: return element.hsMarker;
+    case ::MMM::TimingEffect::STOP: return element.stopMarker;
     }
     return element.scrollMarker;
 }
@@ -119,9 +127,8 @@ getTimingMarkerGeometry(
 /// @brief Timeline 画布中按类型排列的 Timing 类型列表。
 /// @details 该顺序同时决定目标展开、等距拾取与同时间复制的稳定次序。
 constexpr ::MMM::TimingEffect TIMELINE_EFFECT_ORDER[] = {
-    ::MMM::TimingEffect::BPM,
-    ::MMM::TimingEffect::JUMP,
-    ::MMM::TimingEffect::HS,
+    ::MMM::TimingEffect::BPM,    ::MMM::TimingEffect::JUMP,
+    ::MMM::TimingEffect::HS,     ::MMM::TimingEffect::STOP,
     ::MMM::TimingEffect::SCROLL,
 };
 
@@ -136,12 +143,13 @@ int professionalTimingLane(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::SCROLL: return 1;
     case ::MMM::TimingEffect::JUMP: return 2;
     case ::MMM::TimingEffect::HS: return 3;
+    case ::MMM::TimingEffect::STOP: return 4;
     }
     return 0;
 }
 
 /// @brief 将专业模式轨道位置转换为创建弹窗类型索引。
-/// @details X 坐标先按四等分泳道取 floor，再钳制末端像素到最后泳道；
+/// @details X 坐标先按五等分泳道取 floor，再钳制末端像素到最后泳道；
 /// 退化宽度或画布外坐标返回空，避免隐式选择错误 Timing 类型。
 /// @param size 当前 Timeline 画布尺寸。
 /// @param localMouseX 鼠标相对画布左上角的 X 坐标。
@@ -153,7 +161,7 @@ std::optional<int> professionalCreateTypeAtX(const ImVec2& size,
         return std::nullopt;
     }
 
-    constexpr int laneCount = 4;
+    constexpr int laneCount = 5;
     const float   laneWidth = size.x / static_cast<float>(laneCount);
     int           lane =
         static_cast<int>(std::floor(localMouseX / std::max(1.0f, laneWidth)));
@@ -163,6 +171,8 @@ std::optional<int> professionalCreateTypeAtX(const ImVec2& size,
     case 1: return 1;
     case 2: return 2;
     case 3: return 3;
+    // 第五列与 STOP 创建类型四一致，不能把可见泳道当成无效空白。
+    case 4: return 4;
     default: return std::nullopt;
     }
 }
@@ -330,6 +340,7 @@ double timelineClipboardBeatToTime(
     case 0: return ::MMM::TimingEffect::BPM;
     case 2: return ::MMM::TimingEffect::JUMP;
     case 3: return ::MMM::TimingEffect::HS;
+    case 4: return ::MMM::TimingEffect::STOP;
     case 1:
     default: return ::MMM::TimingEffect::SCROLL;
     }
@@ -347,6 +358,7 @@ double defaultTimingCreateValue(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::SCROLL: return 1.0;
     case ::MMM::TimingEffect::JUMP: return 1000.0;
     case ::MMM::TimingEffect::HS: return 1.0;
+    case ::MMM::TimingEffect::STOP: return 0.5;
     }
     return 1.0;
 }
@@ -828,7 +840,7 @@ double TimelineCanvas::snapTimeToBeatLine(double rawTime) const
 }
 
 /// @brief 在指定画布 Y 坐标处准备并打开 Timing 创建弹窗。
-/// @details 专业模式先按鼠标 X 选择 BPM、Scroll、Jump 或 HS 泳道；
+/// @details 专业模式先按鼠标 X 选择 BPM、Scroll、Jump、HS 或 STOP 泳道；
 /// 随后同时保存原始时间和吸附时间，位置来源可选择鼠标或当前播放头。
 /// 默认参数按 TimingEffect 初始化，实际创建留给弹窗确认命令。
 /// @warning UI 低频入口：只在创建手势触发时调用，不访问文件系统。
@@ -967,7 +979,7 @@ float TimelineCanvas::timingTargetCenterX(const TimelineHitTarget& target,
                                           const ImVec2&            size) const
 {
     if ( Config::AppConfig::instance().getEditorSettings().professionalMode ) {
-        constexpr float laneCount = 4.0f;
+        constexpr float laneCount = 5.0f;
         const int       lane      = professionalTimingLane(target.effect);
         return canvasPos.x +
                size.x * (static_cast<float>(lane) + 0.5f) / laneCount;
@@ -1134,6 +1146,7 @@ ImU32 TimelineCanvas::timingEffectColor(::MMM::TimingEffect effect,
     case ::MMM::TimingEffect::SCROLL: return IM_COL32(78, 255, 104, alpha);
     case ::MMM::TimingEffect::JUMP: return IM_COL32(80, 135, 255, alpha);
     case ::MMM::TimingEffect::HS: return IM_COL32(255, 222, 72, alpha);
+    case ::MMM::TimingEffect::STOP: return IM_COL32(255, 222, 72, alpha);
     }
     return IM_COL32(255, 255, 255, alpha);
 }
@@ -1159,7 +1172,7 @@ void TimelineCanvas::pruneInvalidTimingSelection()
 }
 
 /// @brief 删除当前选中的 Timing 事件。
-/// @details 复制选择集合后逐实体发布删除命令，避免发布过程中快照更新影响
+/// @details 复制选择集合后一次发布批量删除命令，避免发布过程中快照更新影响
 /// 当前迭代；最后立即清空本地选择，视觉状态无需等待逻辑快照回流。
 void TimelineCanvas::deleteSelectedTimingEvents()
 {
@@ -1167,11 +1180,11 @@ void TimelineCanvas::deleteSelectedTimingEvents()
         return;
     }
 
-    auto selected = m_selectedTimingEntities;
-    for ( auto entity : selected ) {
-        Event::EventBus::instance().publish(
-            Event::LogicCommandEvent(Logic::CmdDeleteTimelineEvent{ entity }));
-    }
+    Logic::CmdDeleteTimelineEvents command;
+    command.entities.assign(m_selectedTimingEntities.begin(),
+                            m_selectedTimingEntities.end());
+    // 一次按键或菜单操作只有一条命令，逻辑层按完整批次记录历史。
+    publishTimelineCommand(Event::LogicCommandEvent(std::move(command)));
     m_selectedTimingEntities.clear();
 }
 
@@ -1196,7 +1209,7 @@ void TimelineCanvas::updateTimingEraseTarget(
 /// - 若目标未选中，则只删除当前擦除目标。
 /// - 擦除目标始终并入最终集合，避免选择状态竞争遗漏。
 /// - unordered_set 对多来源实体 ID 去重。
-/// - 每个实体发布一条 `CmdDeleteTimelineEvent`。
+/// - 整个集合只发布一条 `CmdDeleteTimelineEvents`，撤销一次完整恢复。
 /// - 已提交实体同步从本地选择集合移除。
 /// - 逻辑层负责实体有效性与撤销历史。
 /// - 本函数不直接修改 Timeline 或 registry。
@@ -1224,11 +1237,11 @@ void TimelineCanvas::commitTimingEraseTargets()
     toDelete.insert(m_timingEraseTargetEntities.begin(),
                     m_timingEraseTargetEntities.end());
 
-    for ( auto entity : toDelete ) {
-        Event::EventBus::instance().publish(
-            Event::LogicCommandEvent(Logic::CmdDeleteTimelineEvent{ entity }));
-        m_selectedTimingEntities.erase(entity);
-    }
+    Logic::CmdDeleteTimelineEvents command;
+    command.entities.assign(toDelete.begin(), toDelete.end());
+    // 擦除选中对象会连同整个选区删除，不能再按对象拆成多条历史。
+    publishTimelineCommand(Event::LogicCommandEvent(std::move(command)));
+    for ( const auto entity : toDelete ) m_selectedTimingEntities.erase(entity);
 }
 
 /// @brief 将当前选中的 Timing 复制到编辑器级 Timeline 剪贴板。
@@ -1406,8 +1419,7 @@ void TimelineCanvas::pasteTimingClipboard(double anchorTime)
                                  entry.timeline.m_interpolation });
     }
     if ( !batch.events.empty() ) {
-        Event::EventBus::instance().publish(
-            Event::LogicCommandEvent{ std::move(batch) });
+        publishTimelineCommand(Event::LogicCommandEvent{ std::move(batch) });
     }
 }
 
@@ -1597,14 +1609,21 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     };
     const auto finishTimingDrag = [&]() {
         if ( std::abs(m_timingDragPreviewDelta) > 1e-6 ) {
+            // 一次拖动释放只提交一个批次，撤销和重做均恢复整个选择。
+            // 复用命令层的整批范围校验，相邻插值段平移不与彼此旧位置冲突。
+            Logic::CmdUpdateTimelineEvents command;
+            command.events.reserve(m_timingDragEntries.size());
             for ( const auto& entry : m_timingDragEntries ) {
-                Event::EventBus::instance().publish(
-                    Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
-                        entry.entity,
-                        std::max(0.0,
-                                 entry.originalTime + m_timingDragPreviewDelta),
-                        entry.value }));
+                command.events.push_back(
+                    { entry.entity,
+                      std::max(0.0,
+                               entry.originalTime + m_timingDragPreviewDelta),
+                      entry.value });
             }
+            // 空选择不产生历史；预览阶段继续只更新本地位移。
+            if ( !command.events.empty() )
+                publishTimelineCommand(
+                    Event::LogicCommandEvent(std::move(command)));
         }
         m_isTimingDragging       = false;
         m_timingDragPreviewDelta = 0.0;
@@ -1655,14 +1674,13 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     const auto& settings = Config::AppConfig::instance().getEditorSettings();
     bool        handledKeyboardCommand = m_currentSnapshot->isPlaying;
     if ( !handledKeyboardCommand && ctrl && ImGui::IsKeyPressed(ImGuiKey_Z) ) {
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+        publishTimelineCommand(Event::LogicCommandEvent(
             shift ? Logic::LogicCommand{ Logic::CmdRedo{} }
                   : Logic::LogicCommand{ Logic::CmdUndo{} }));
         handledKeyboardCommand = true;
     }
     if ( !handledKeyboardCommand && ctrl && ImGui::IsKeyPressed(ImGuiKey_Y) ) {
-        Event::EventBus::instance().publish(
-            Event::LogicCommandEvent(Logic::CmdRedo{}));
+        publishTimelineCommand(Event::LogicCommandEvent(Logic::CmdRedo{}));
         handledKeyboardCommand = true;
     }
     const std::array<Logic::EditTool, 5> editableTools{
@@ -1677,7 +1695,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         for ( Logic::EditTool tool : editableTools ) {
             if ( UI::ShortcutUtils::isShortcutPressed(
                      UI::ShortcutUtils::getToolShortcut(settings, tool)) ) {
-                Event::EventBus::instance().publish(
+                publishTimelineCommand(
                     Event::LogicCommandEvent(Logic::CmdChangeTool{ tool }));
                 handledKeyboardCommand = true;
                 break;
@@ -1968,9 +1986,8 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                     const double visualOffset = Config::AppConfig::instance()
                                                     .getVisualConfig()
                                                     .getEffectiveVisualOffset();
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(Logic::CmdSeek{
-                            autoScrollTargetTime - visualOffset }));
+                    publishTimelineCommand(Event::LogicCommandEvent(
+                        Logic::CmdSeek{ autoScrollTargetTime - visualOffset }));
                 }
             }
             m_timingMarqueeEndX    = localMouseX;

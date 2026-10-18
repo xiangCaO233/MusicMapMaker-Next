@@ -465,6 +465,7 @@ cmakeArgs=(
     -DMMM_DISABLE_CLANG_LTO="${disableClangLto}"
     -DMMM_PGO_INSTRUMENT="${pgoInstrument}"
     -DMMM_PGO_USE=OFF
+    -DMMM_ENABLE_BUILD_TIMING=OFF
     -DMMM_MACOS_CODESIGN_IDENTITY="${MACOS_CODESIGN_IDENTITY:--}"
     # 部署下限同时影响系统 API 可用性和链接器 load command。
     -DCMAKE_OSX_DEPLOYMENT_TARGET="${deploymentTarget}"
@@ -497,6 +498,7 @@ if (( prebuiltTargets )); then
         IonCachyEngine-static \
         3rd_implot \
         3rd_miniz \
+        libarchive_project \
         imgui-static \
         freetype \
         glfw \

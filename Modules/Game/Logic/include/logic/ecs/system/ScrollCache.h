@@ -47,6 +47,10 @@ inline constexpr std::uint32_t SCROLL_EFFECT_JUMP =
 inline constexpr std::uint32_t SCROLL_EFFECT_HS =
     Common::Render::SCROLL_EFFECT_HS;
 
+/// @brief 暂停标记位，不参与滚动速度积分。
+inline constexpr std::uint32_t SCROLL_EFFECT_STOP =
+    Common::Render::SCROLL_EFFECT_STOP;
+
 /**
  * @brief 全局流速映射缓存类
  *

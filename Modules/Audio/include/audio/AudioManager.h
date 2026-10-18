@@ -33,6 +33,14 @@ class GraphicEqualizer;
 namespace MMM::Audio
 {
 
+/// @brief 由谱面加载路径提交的音乐暂停描述，单位为秒。
+struct AudioTimelineStop {
+    /// @brief 不包含暂停等待的音乐时间位置。
+    double position{};
+    /// @brief 按正常速度计算的暂停秒数。
+    double duration{};
+};
+
 class SoundEffectPool;
 class AuditionSourceMixerNode;
 class KeySoundControlBank;
@@ -248,7 +256,8 @@ public:
     /// 或音频回调热路径。
     [[nodiscard]] AudioTimelineLoadResult loadAudioTimeline(
         const std::vector<AudioTimelineLoadEvent>& events,
-        double chartEndSeconds, const std::string& fingerprint);
+        double chartEndSeconds, const std::string& fingerprint,
+        const std::vector<AudioTimelineStop>& stops = {});
 
     /// @brief 卸载自动采样时间线并断开主时间线音频图。
     /// @warning 低频资源切换路径；会停止全部已调度 HitEffect。
@@ -444,14 +453,19 @@ public:
     /// @brief 将音轨加载到独立试听通道，不替换当前 BGM。
     /// @param filePath 音频文件绝对路径。
     /// @param config 试听音轨的音量、静音和初始倍速配置。
+    /// @param type 资源音轨类型，主音频使用 BGM 增益，音效使用 SFX 增益。
     /// @return 加载并接入主混音器成功时返回 true。
     /// @warning
     /// 低频资源路径：可能触发音频解码缓存加载，禁止在每帧热路径中调用。
     bool loadAuditionTrack(const std::string&      filePath,
-                           const AudioTrackConfig& config);
+                           const AudioTrackConfig& config,
+                           AudioTrackType          type = AudioTrackType::Main);
 
     /// @brief 卸载独立试听音轨并断开其混音节点。
     void unloadAuditionTrack();
+    /// @brief 读取独立试听源已经应用的增益，用于低频音量诊断。
+    /// @return 未加载时为零，不读取或改变节拍器的音量。
+    float getAuditionEffectiveVolume() const;
 
     /// @brief 开始或恢复独立试听音轨播放。
     void playAudition();
@@ -609,6 +623,17 @@ public:
 
     /// @brief 设置主音轨拉伸质量
     void setPlaybackQuality(StretchQuality quality);
+
+    /// @brief 应用当前客户端听音预设，不修改谱面资源或写入磁盘。
+    /// @warning 仅在初始化和用户切换预设时调用，会重建 EQ 并遍历音效池。
+    /// @param applyPlayback
+    /// 是否直接恢复速度与音高；活动会话由逻辑命令同步时钟。
+    void applyAudioPreset(bool applyPlayback = true);
+
+    /// @brief 实时应用当前预设的 BGM 增益与 EQ，不遍历音效池或改变拉伸路由。
+    /// @warning 仅由参数修改边沿调用；同类型 EQ
+    /// 只向变化频段发布参数，不读写磁盘。
+    void applyMainTrackPreviewParameters();
 
     /// @brief 获取主音轨拉伸质量
     StretchQuality getPlaybackQuality() const;
@@ -1024,6 +1049,9 @@ private:
 
     /// @brief 未应用运行时逐轨静音的当前自动采样片段表。
     std::vector<PreparedTimelineClip> m_audioTimelineBaseClips;
+    /// @brief 当前谱面含暂停事件时强制 Key 音走统一拉伸前级。
+    /// @warning 只由逻辑控制线程读写，音频线程消费独立不可变调度。
+    bool m_timelineHasStops{ false };
 
     /// @brief 当前自动采样时间线由谱面内容要求的排除结束帧。
     std::int64_t m_audioTimelineRequestedEndFrame{ 0 };
@@ -1206,6 +1234,8 @@ private:
 
     /// @brief 当前独立试听音轨音量。
     float m_auditionTrackVolume{ 1.0f };
+    /// @brief 独立试听资源的音量分类，歌曲使用 BGM，音效使用 SFX。
+    AudioTrackType m_auditionTrackType{ AudioTrackType::Main };
 
     /// @brief 当前独立试听音轨是否静音。
     bool m_auditionTrackMuted{ false };

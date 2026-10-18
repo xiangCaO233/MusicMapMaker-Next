@@ -194,12 +194,31 @@ bool FeedbackSliderFloat(const char* label, float* value, float minValue,
                          float maxValue, const char* format = "%.4f",
                          ImGuiSliderFlags flags = 0);
 
+/// @brief 音量按整数百分数显示，鼠标五点步进、四方向键一点步进。
+/// @param value 输入输出线性音量，控件在交互时转换百分数。
+/// @param maximumPercent 百分数上限，支持 1 至 200；混音器默认 100，采样使用
+/// 200。
+/// @warning 每帧 UI 路径，只处理本地输入，不执行配置持久化。
+bool FeedbackVolumeSlider(const char* label, float* value,
+                          int maximumPercent = 100);
+
 /// @brief 绘制带统一反馈的 ImGui Int 滑块。
-/// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、
-/// 样式栈操作和已预加载 SFX pool 的即时触发。
+/// @warning UI 热路径：每帧只处理 ImGui 状态和已预加载反馈音效。
+/// @param deferChangeFeedback 外层还需量化时为
+/// true，由外层按最终值提交变化音效。
 bool FeedbackSliderInt(const char* label, int* value, int minValue,
                        int maxValue, const char* format = "%d",
-                       ImGuiSliderFlags flags = 0);
+                       ImGuiSliderFlags flags               = 0,
+                       bool             deferChangeFeedback = false);
+
+/// @brief 按上一条 Slider 的最终业务值变化播放一次变化音效。
+/// @param previous 应用业务步进前的有效数值。
+/// @param value 完成量化、钳制和键盘步进后的实际数值。
+/// @param minValue 当前滑块范围下限，用于音高映射。
+/// @param maxValue 当前滑块范围上限，用于音高映射。
+/// @warning UI 热路径：必须紧跟同一个控件调用；不排队延迟音效，不加载资源。
+void playSliderValueChangeFeedback(float previous, float value, float minValue,
+                                   float maxValue);
 
 /// @brief 绘制带统一反馈的 ImGui 垂直 Float 滑块。
 /// @warning UI 热路径：每帧滑块绘制路径调用，只做 ImGui 状态读写、

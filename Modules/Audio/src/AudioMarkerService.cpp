@@ -337,7 +337,7 @@ std::error_code AudioMarkerService::copyCompanion(
 
 /// @brief 以新文件事务导出音频标记，保持来源只读。
 /// @param options 输入路径、目标路径、测量快照和整拍选项。
-/// @return 成功时 sidecarPath 指明是否需要携带配套文件。
+/// @return 成功时 xmpPath 指明 AU 配套文件，sidecarPath 指明额外精确载荷。
 /// @details 规范路径及已有文件检查先于任何目标文件创建。
 /// 来源与目标相同、已有硬链接或符号链接目标均不会被截断。
 /// 同格式路径只复制编码包，WAV 则直接复制原始 RIFF 音频块。
@@ -347,6 +347,8 @@ std::error_code AudioMarkerService::copyCompanion(
 /// 容器写出后先回读精确数据，容器丢弃标签必须触发回退。
 /// 回退复制音频字节，并把精确数据写入版本化配套文件。
 /// 配套文件也完成回读后，才与音频一起进入发布流程。
+/// AU 始终获得独立 XMP；它与精确 BPM 的版本化载荷职责不同。
+/// 同主文件名的不同格式共享 XMP 名称，已有配套文件时拒绝导出。
 /// 失败不发布部分音频，临时文件由作用域所有者清理。
 /// 输入音频即使来自另一次标记导出，也不会被就地更新。
 /// @warning 后台事务可读写完整音频，不能在 UI 线程执行。
@@ -377,6 +379,15 @@ AudioMarkerExportResult AudioMarkerService::exportFile(
         result.error = "请使用尚不存在的新文件名，不能覆盖原始音频或已有导出";
         return result;
     }
+    // Adobe 配套文件替换扩展名；单独检查，不能只检查 JSON 配套路径。
+    // 保留用户原有元数据，也避免将 .xmp 音频路径误用为自身配套文件。
+    const auto auXmp = xmpPath(destination);
+    if ( auXmp == destination || std::filesystem::exists(auXmp, ec) || ec ||
+         std::filesystem::is_symlink(auXmp, ec) ) {
+        result.error = "AU XMP 配套路径已存在或无效，请使用新的文件名";
+        return result;
+    }
+    ec.clear();
     /// 此前检查已确保最终文件未存在。
     /// 下面的临时文件只属于当前导出，不复用来源所在的文件名。
     /// 临时名保留最终扩展名，使编码器和 muxer 使用正确容器。
@@ -386,7 +397,8 @@ AudioMarkerExportResult AudioMarkerService::exportFile(
         encoded.parent_path() /
         Config::utf8ToPath(Config::pathToUtf8(encoded.stem()) + "-marked" +
                            Config::pathToUtf8(encoded.extension()));
-    staged.paths                = { encoded, tagged, sidecarPath(tagged) };
+    const auto temporaryXmp = xmpPath(tagged);
+    staged.paths = { encoded, tagged, sidecarPath(tagged), temporaryXmp };
     std::filesystem::path input = source;
     /// 比较扩展名采用固定 ASCII 大小写归一化。
     /// 同格式时不能因为重新挂载标签而经过音频 DSP 图。
@@ -413,11 +425,15 @@ AudioMarkerExportResult AudioMarkerService::exportFile(
     const double              duration = audioDuration(input);
     std::vector<AudioChapter> visible;
     if ( (options.includeBeats && !(duration > 0.0)) ||
-         (duration > 0.0 &&
-          !makeVisibleChapters(options, duration, visible)) ) {
+         !makeVisibleChapters(
+             options, duration > 0.0 ? duration : 1e9, visible) ) {
         result.error = "音频时长无效或整拍标记超过 65536 个，请关闭整拍导出";
         return result;
     }
+    // 未知时长且关闭整拍时仍可导出已有非负章节和 BPM 锚点。
+    // 有界秒数上限仅用于筛选，不推算音频结束位置或臆造拍线。
+    // 先写临时 XMP，失败时不发布音频，也不修改来源元数据。
+    if ( !writeXmp(temporaryXmp, visible, result.error) ) return result;
     /// WAV 由块复制实现，其 fmt、位深及声道信息保持来源值。
     /// 压缩容器由重封装实现，原编码包的负时间戳也保留。
     /// 两种实现都必须把失败原因交回事务层。
@@ -439,7 +455,7 @@ AudioMarkerExportResult AudioMarkerService::exportFile(
     /// 成功创建音频文件本身不代表标记导出成功。
     if ( embedded ) {
         const auto restored = read(tagged);
-        embedded = restored.success &&
+        embedded            = restored.success &&
                    encodeData(restored.data) == encodeData(options.data);
     }
     if ( !embedded ) {
@@ -477,8 +493,18 @@ AudioMarkerExportResult AudioMarkerService::exportFile(
             return result;
         }
     }
-    // 回退路径中的临时音频和标记已经完整回读校验。
-    // 两次重命名期间不会有修改原音频的操作。
+    // XMP 先发布，随后的任何失败由临时资源所有者撤回它。
+    // copy_file 的不覆盖模式同时保护预检查后才出现的配套文件。
+    // 直到音频也发布成功，最终 XMP 都保留在事务回滚列表中。
+    std::filesystem::copy_file(
+        temporaryXmp, auXmp, std::filesystem::copy_options::none, ec);
+    if ( ec ) {
+        result.error = "AU XMP 标记文件发布失败: " + ec.message();
+        return result;
+    }
+    staged.paths.push_back(auXmp);
+    // 回退路径中的临时音频和精确标记已经完整回读校验。
+    // 发布期间不会有修改原音频的操作。
     // 若最终发布失败，只删除本次发布的配套路径。
     // 发布配套文件后再发布音频，失败时回收刚发布的配套文件。
     if ( !embedded ) {
@@ -502,6 +528,10 @@ AudioMarkerExportResult AudioMarkerService::exportFile(
     /// 用户依据 sidecarPath 判断内嵌或配套模式，而非依据旧错误字符串。
     /// success 的设置是最后一步，不能在音频写完但标记未写完时提前设置。
     result.error.clear();
+    result.xmpPath = auXmp;
+    // 音频与全部配套文件均已发布，移除最终 XMP 的回滚责任。
+    // 临时 XMP 仍由作用域所有者回收，不污染导出目录。
+    staged.paths.pop_back();
     result.success = true;
     return result;
 }

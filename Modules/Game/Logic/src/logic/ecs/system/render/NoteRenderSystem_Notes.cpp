@@ -594,6 +594,8 @@ void NoteRenderSystem::renderNotes(
                                              leftX,
                                              singleTrackW,
                                              renderScaleY,
+                                             topY,
+                                             bottomY,
                                              laneProjection);
     }
 
@@ -646,7 +648,8 @@ NoteRenderSystem::NoteRenderContext NoteRenderSystem::prepareNoteRenderContext(
     ctx.baseAspect = itBase->second.z / itBase->second.w;
 
     ctx.noteW = singleTrackW * config.visual.noteScaleX;
-    ctx.noteH = (singleTrackW / ctx.baseAspect) * config.visual.noteScaleY;
+    ctx.noteH =
+        (singleTrackW / ctx.baseAspect) * config.visual.canvasNoteScaleY();
 
     auto& skin      = Config::SkinManager::instance();
     auto  color_tap = skin.getColor("note_tap");
@@ -2126,7 +2129,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
                                              bottomY,
                                              singleTrackW,
                                              renderScaleY,
-                                             config.visual.noteScaleY,
+                                             config.visual.canvasNoteScaleY(),
                                              labelColor,
                                              laneProjection);
                 }
@@ -2157,7 +2160,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
                                          bottomY,
                                          singleTrackW,
                                          renderScaleY,
-                                         config.visual.noteScaleY,
+                                         config.visual.canvasNoteScaleY(),
                                          labelColor,
                                          laneProjection);
             }
@@ -2218,6 +2221,11 @@ void NoteRenderSystem::renderNoteGlowLayer(
     // 发光写入独立命令列表，后续合成可应用不同效果。
     // 裁剪覆盖实际轨道区，不能让描边越过可编辑视野边界。
     Batcher glowBatcher(snapshot, &snapshot->glowCmds);
+    // 独立效果批次须保留与主体相同的远端范围，避免延长区物件缺少效果。
+    // 二维 topY 非负时保持零下界，负范围最后由投影裁剪转换为屏幕区域。
+    // 横向与主层共用源平面范围，不能在零点截断左侧草稿物件。
+    glowBatcher.m_minScissorX = std::min(0.0F, std::floor(clipLeftX));
+    glowBatcher.m_minScissorY = std::min(0.0F, std::floor(topY));
     // 独立发光批次须和基础音符使用同一固定位置，不能回到中心造成重影。
     glowBatcher.setNoteTexturePosition(config.visual.noteTexturePosition);
     glowBatcher.setScissor(clipLeftX, topY, rightX - clipLeftX, bottomY - topY);
@@ -3277,6 +3285,11 @@ void NoteRenderSystem::renderOverlapMasks(
     // 顶层遮罩使用独立命令列表，避免和基础纹理批次混合状态。
     // 统一裁剪范围必须包含主画布草稿、玩家等全部可见分区。
     Batcher overlayBatcher(snapshot, &snapshot->overlayCmds);
+    // 独立效果批次须保留与主体相同的远端范围，避免延长区物件缺少效果。
+    // 二维 topY 非负时保持零下界，负范围最后由投影裁剪转换为屏幕区域。
+    // 遮罩保留相同的负横坐标，避免效果层比主体更早消失。
+    overlayBatcher.m_minScissorX = std::min(0.0F, std::floor(clipLeftX));
+    overlayBatcher.m_minScissorY = std::min(0.0F, std::floor(topY));
     // 草稿区可能独立位于玩家区左侧，遮罩裁剪必须覆盖统一可见范围。
     overlayBatcher.setScissor(
         clipLeftX, topY, clipRightX - clipLeftX, bottomY - topY);
@@ -3317,9 +3330,10 @@ void NoteRenderSystem::renderBrushPreview(
     const NoteRenderSystem::NoteRenderContext& baseContext,
     const Config::EditorConfig& config, Batcher& batcher, float judgmentLineY,
     float fallbackLeftX, float fallbackTrackWidth, float renderScaleY,
-    const CanvasLaneProjection* laneProjection)
+    float topY, float bottomY, const CanvasLaneProjection* laneProjection)
 {
     // 放置预览复用音符固定位置，提前返回也自动恢复共享批处理器状态。
+    // topY/bottomY 已包含画布长度与视锥范围，不在各类型分支重新估算。
     const NoteTexturePositionScope notePosition(
         batcher, config.visual.noteTexturePosition);
     // 借用快照中的画笔状态，绘制期间不回读逻辑线程的活动工具。
@@ -3433,8 +3447,8 @@ void NoteRenderSystem::renderBrushPreview(
                                      ctx.currentTime,
                                      judgmentLineY,
                                      renderScaleY,
-                                     0.0f,
-                                     judgmentLineY * 2.0f);
+                                     topY,
+                                     bottomY);
     } else if ( brush.type == ::MMM::NoteType::FLICK ) {
         // 终点可落在与根不同的分区宽度，使用原玩家尺寸重新解析。
         // 连接体由根与终点真实中心连接，箭头尺寸取终点领域。
@@ -3473,11 +3487,8 @@ void NoteRenderSystem::renderBrushPreview(
             tempNote.m_trackIndex = tempNote.m_subNotes.front().trackIndex;
         }
 
-        // 预览目前采用判定线上下对称的兼容包围范围，不等于实际视口全部高度。
-        // 真实画布裁剪由批处理上层状态继续约束。
-        float topY    = 0.0f;
-        float bottomY = judgmentLineY * 2.0f;  // 简单包围盒
-
+        // 与正式物件共用当前帧的源平面边界，保留三维长度扩展后的负 Y。
+        // 不能再用零和判定线的两倍近似，否则远端折线会在 GPU 投影前消失。
         // 预览传入空实体身份且关闭命中生成，不能成为可选择的正式折线。
         // 局部高亮部件也保持 None，预览颜色已经在本函数统一处理。
         NoteRenderSystem::renderPolyline(ctx.cache,

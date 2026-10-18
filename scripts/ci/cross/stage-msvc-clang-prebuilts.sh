@@ -516,3 +516,11 @@ stageIceLibWithPdb "zlib" "${zlibOutputName}" "zlib.pdb" "3rdpty/zlib_inst/lib/l
 # 维护约束：新增命令行选项必须同步 showUsage 文本。
 # 维护约束：任何删除行为都必须继续受 embedded-symbols 显式开关约束。
 # 维护约束：脚本不得递归删除 symbols 或其他预编译目录。
+
+# 归档依赖拥有独立分包规则；只在主仓暂存时执行，保留增量包过滤。
+# 该步骤依赖 libarchive_project 已完成，输入缺失将直接阻止发布残缺包。
+if [[ "${stageScope}" != "ice" ]]; then
+    cmake "-DBUILD_DIR=${buildDir}" -DPLATFORM=windows "-DARCH=x86_64" \
+        "-DTOOLCHAIN=msvc" "-DCOMPILER_TAG=${compilerTag}" "-DCONFIG=${buildType}" \
+        "-DPACKAGES=${packageFilter}" -P "${projectRoot}/cmake/StageArchivePrebuilts.cmake"
+fi

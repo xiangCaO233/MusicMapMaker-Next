@@ -30,6 +30,8 @@ add_library(
   src/AuxiliaryWindowUi.cpp
   src/BackgroundVideoPlayer.cpp
   src/Basic2DCanvas.cpp
+  # 相机布局采用 UI 辅助几何并复用主画布最终纹理，不增加离屏资源所有者。
+  src/CameraLayoutEditor.cpp
   # 编辑练习的快照核对与目标投影单独编译，减轻主画布更新文件的职责。
   src/Basic2DCanvas_WalkthroughEditing.cpp
   src/Basic2DCanvas_Interaction.cpp
@@ -74,6 +76,9 @@ mmm_add_test_executable(Canvas CollaborationViewportProjectionTest
                         tests/CollaborationViewportProjectionTest.cpp)
 target_include_directories(CollaborationViewportProjectionTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+# 相机覆盖层测试显式复用场景矩阵与数学头，不引入 Canvas、GPU 或 UI 单例。
+target_link_libraries(CollaborationViewportProjectionTest PRIVATE Common
+                                                                  3rd_glm)
 mmm_register_test_case(NAME CollaborationViewportProjectionTest COMMAND
                        CollaborationViewportProjectionTest)
 
@@ -111,6 +116,25 @@ target_include_directories(CanvasTabTitleTest
 target_link_libraries(CanvasTabTitleTest PRIVATE Canvas)
 mmm_register_test_case(NAME CanvasTabTitleTest COMMAND CanvasTabTitleTest)
 
+# 摄像机实验使用纯数学测试，不需要启动 Vulkan 或窗口。 覆盖零角兼容、边界倾角和裁剪投影，避免观察功能改变二维数据。 Common 提供裁剪
+# DTO，GLM 提供矩阵运算；不依赖业务画布实例。 此测试不检查运行时皮肤或输入拾取；倾斜后的鼠标编辑在原型中禁用。
+mmm_add_test_executable(Canvas PlanarObservationCameraTest
+                        tests/PlanarObservationCameraTest.cpp)
+target_include_directories(PlanarObservationCameraTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+# 显式引入数学依赖，保证测试不会依赖 Canvas 的传递头文件。
+target_link_libraries(PlanarObservationCameraTest PRIVATE Common Config 3rd_glm)
+mmm_register_test_case(NAME PlanarObservationCameraTest COMMAND
+                       PlanarObservationCameraTest)
+
+# 自由相机测试同时验证旧投影迁移、配置边界与真实 ImGui 预览窗口生命周期。 不创建 Vulkan
+# 设备；预览只测试窗口存在性，数学部分检查最终成像的坐标。
+mmm_add_test_executable(Canvas CameraLayoutEditorTest
+                        tests/CameraLayoutEditorTest.cpp)
+target_link_libraries(CameraLayoutEditorTest PRIVATE Canvas)
+mmm_register_test_case(NAME CameraLayoutEditorTest COMMAND
+                       CameraLayoutEditorTest)
+
 # 欢迎占位页可见性测试覆盖无谱面时隐藏状态与悬浮检视内容。 可见性 helper 归属 UI，显式链接 UI
 # 避免依赖其它测试的传递链接顺序，并固定占位页与真实谱面的信息边界。
 mmm_add_test_executable(Canvas CanvasContentVisibilityTest
@@ -120,6 +144,16 @@ target_include_directories(CanvasContentVisibilityTest
 target_link_libraries(CanvasContentVisibilityTest PRIVATE UI)
 mmm_register_test_case(NAME CanvasContentVisibilityTest COMMAND
                        CanvasContentVisibilityTest)
+
+# 未聚焦画布测试使用真实 ImGui 双窗口，覆盖只读检视与相机目标隔离。 不初始化 Vulkan 或音频设备，避免将渲染硬件要求引入悬浮回归。
+mmm_add_test_executable(Canvas CanvasReadOnlyHoverTest
+                        tests/CanvasReadOnlyHoverTest.cpp)
+# 直接链接生产实现，不能以复制检视判断逻辑替代真实入口。
+target_link_libraries(CanvasReadOnlyHoverTest PRIVATE Canvas)
+mmm_register_test_case(NAME CanvasReadOnlyHoverTest COMMAND
+                       CanvasReadOnlyHoverTest)
+
+# 此用例无文件输出，悬浮状态通过事件捕获与内存窗口检查验证。
 
 # 批注区阻挡手势测试覆盖拖入浮层后继续按住及在浮层内释放的收尾行为。 Common 提供 EditTool 枚举，测试本身不创建画布或 ImGui
 # 输入状态，全部手势组合在编译期求值。
@@ -293,3 +327,11 @@ mmm_register_test_case(
   TimingFormulaTest
   "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/resources/font/NotoSansMath-Regular.ttf"
 )
+
+# STOP 回归通过真实 ImGui 鼠标边沿驱动画笔入口，不能只验证格式能力表。 测试直接调用 TimelineCanvas 私有交互入口，Canvas
+# 是其直接链接依赖。
+mmm_add_test_executable(Canvas TimelineStopCreationTest
+                        tests/TimelineStopCreationTest.cpp)
+target_link_libraries(TimelineStopCreationTest PRIVATE Canvas)
+mmm_register_test_case(NAME TimelineStopCreationTest COMMAND
+                       TimelineStopCreationTest)

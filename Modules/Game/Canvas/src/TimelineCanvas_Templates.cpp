@@ -544,8 +544,8 @@ void renderTemplatePoints(TimingTemplateEditorState& state, bool editable,
                 if ( ImGui::Combo("##Type",
                                   &effect,
                                   draft.m_variable == TimingVariable::Beat
-                                      ? "Scroll\0Jump\0HS\0"
-                                      : "BPM\0Scroll\0Jump\0HS\0") ) {
+                                      ? "Scroll\0Jump\0HS\0STOP\0"
+                                      : "BPM\0Scroll\0Jump\0HS\0STOP\0") ) {
                     timing.m_timingEffect = static_cast<TimingEffect>(
                         effect +
                         (draft.m_variable == TimingVariable::Beat ? 1 : 0));
@@ -553,9 +553,10 @@ void renderTemplatePoints(TimingTemplateEditorState& state, bool editable,
                 }
                 ImGui::EndDisabled();
             } else {
-                // 只读模板均来自领域校验或已知初始化，效果枚举在四种类型内。
+                // 只读模板均来自领域校验或已知初始化，效果枚举在五种类型内。
                 // 文本显示不会制造可以操作却没有实际行为的禁用控件。
-                const char* names[] = { "BPM", "Scroll", "Jump", "HS" };
+                // STOP 也可来自选区模板，必须提供对应槽位避免越界读取名称。
+                const char* names[] = { "BPM", "Scroll", "Jump", "HS", "STOP" };
                 ImGui::TextUnformatted(
                     names[static_cast<int>(timing.m_timingEffect)]);
             }
@@ -1198,7 +1199,7 @@ void TimelineCanvas::renderTimingTemplateEditor()
                 command.templateDefinition        = draft;
                 command.templateAnchorSeconds     = state.m_anchorSeconds;
                 command.templateBeatmapInstanceId = state.m_instanceId;
-                Event::EventBus::instance().publish(
+                publishTimelineCommand(
                     Event::LogicCommandEvent(std::move(command)));
                 // 命令已发布不代表逻辑最终接受，提示只说明已经提交。
                 // 权限与冲突的最终结果仍通过既有命令反馈路由展示。

@@ -16,6 +16,8 @@ namespace MMM::UI
 /// @brief 项目音频单资源试听动作。
 enum class ProjectAudioPreviewAction {
     Play,
+    /// @brief 忽略暂停位置，明确从资源起点重新试听。
+    Restart,
     Pause,
     Stop,
 };
@@ -66,7 +68,7 @@ struct ProjectAudioPreviewControlsLayout {
 /// @param project 当前项目。
 /// @param audioResourceId 项目音频资源 ID。
 /// @param previewPoolKey 由 makeProjectAudioPreviewPoolKey 构造的独立池标识。
-/// @param action 播放、暂停或停止动作。
+/// @param action 播放、重新试听、暂停或停止动作。
 /// @param volumeFactor 物件自身叠加到资源音量之上的倍率。
 /// @return 找到资源且动作已成功提交时返回 true。
 /// @warning 低频按钮动作路径：Play 首次触发时可能同步解码文件并执行资源

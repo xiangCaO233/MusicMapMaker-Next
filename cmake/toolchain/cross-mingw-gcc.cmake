@@ -88,8 +88,11 @@ set(CMAKE_OBJCOPY
     ${MINGW_GCC_OBJCOPY}
     CACHE FILEPATH "Objcopy tool for MinGW cross builds.")
 
-# 配置探针只编译静态库，不要求 Windows 运行库在此阶段已经可链接。
-set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+# 配置探针只编译静态库，不要求 Windows 运行库在此阶段已经可链接。 默认编译器自检不要求链接；依赖的函数存在性检查可显式要求真实链接。
+# 不覆盖调用方传入的 EXECUTABLE，否则缺失函数会因只生成静态归档被误判存在。
+if(NOT DEFINED CMAKE_TRY_COMPILE_TARGET_TYPE)
+  set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+endif()
 
 # sysroot 限定目标文件的默认搜索范围。 工具程序使用宿主 Linux 环境；库和包同时允许 sysroot 与仓库内显式预编译库路径。 这样可避免
 # CMake 把 3rdpty/prebuilts 的绝对路径重映射到 sysroot。

@@ -1,0 +1,7 @@
+# 当前仓库使用原生 Apple Silicon 与 Debian 自托管 Runner。
+# 标签与可复用构建工作流一致，只扩展静态验证的允许列表。
+# 不改变 GitHub Runner 调度，也不屏蔽其他工作流语义错误。
+self-hosted-runner:
+  labels:
+    - debian
+    - musicmapmaker-next

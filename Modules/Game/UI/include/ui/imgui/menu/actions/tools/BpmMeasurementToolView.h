@@ -241,17 +241,6 @@ private:
         double beatLengthSeconds{ 0.5 };
         /// @brief 第一段首拍时间。
         double firstBeatTime{ 0.0 };
-        /// @brief 拍框视觉宽度，单位毫秒。
-        double markerWidthMs{ 80.0 };
-        /// @brief 分拍线切分数量。
-        int beatDivisor{ 4 };
-        /// @brief 用户选择的视图半宽与中心。
-        double zoomSeconds{ 8.0 };
-        double viewCenter{ 0.0 };
-        /// @brief 工具播放倍速。
-        double playbackSpeed{ 1.0 };
-        /// @brief 显式 seek 使用的画布时间；普通播放推进不写历史。
-        double seekCanvasTime{ 0.0 };
     };
 
     /// @brief 一次可撤销手工操作的前后状态与副作用标识。
@@ -260,10 +249,6 @@ private:
         MeasurementHistorySnapshot before;
         /// @brief 操作后状态。
         MeasurementHistorySnapshot after;
-        /// @brief 本操作是否明确执行播放跳转。
-        bool seekChanged{ false };
-        /// @brief 本操作是否明确修改视图位置或缩放。
-        bool viewChanged{ false };
     };
 
     /// @brief 在用户连续操作开始时冻结一次历史起点。
@@ -271,12 +256,7 @@ private:
     void beginMeasurementHistoryGesture();
 
     /// @brief 在用户操作提交时记录单条历史；无状态变化则丢弃。
-    /// @param seekChanged 是否由用户明确执行 seek。
-    /// @param viewChanged 是否由用户明确改变视野。
-    /// @param explicitSeekCanvasTime 异步 seek 的目标画布时间。
-    void finishMeasurementHistoryGesture(
-        bool seekChanged = false, bool viewChanged = false,
-        std::optional<double> explicitSeekCanvasTime = std::nullopt);
+    void finishMeasurementHistoryGesture();
 
     /// @brief 音轨身份变化时清空本地历史与未完成的拖动事务。
     void clearMeasurementHistory();
@@ -284,13 +264,10 @@ private:
     /// @brief 捕获当前工具状态，不扫描音频、谱面或文件系统。
     MeasurementHistorySnapshot captureMeasurementHistorySnapshot() const;
 
-    /// @brief 还原一次历史快照，并按标识执行必要外部副作用。
+    /// @brief 只还原 BPM 测量数据，不恢复导航、播放状态或显示偏好。
     /// @param snapshot 要恢复的用户操作状态。
-    /// @param seekChanged 是否恢复显式播放位置。
-    /// @param viewChanged 是否将视野恢复到记录值。
     void restoreMeasurementHistorySnapshot(
-        const MeasurementHistorySnapshot& snapshot, bool seekChanged,
-        bool viewChanged);
+        const MeasurementHistorySnapshot& snapshot);
 
     /// @brief BPM 测量线当前拖动语义。
     enum class BeatMarkerDragMode {
@@ -436,7 +413,8 @@ private:
     /// @param ownerId 发起拖拽的视图标识，用于区分波形和频谱区域。
     /// @warning UI 热路径约束如下。
     /// 热路径：波形图和频谱图每帧执行；拖到边缘时只滚动视野并更新预览，
-    /// 松手后才执行实际播放跳转，不访问文件系统。
+    /// 松手后才执行实际播放跳转；首次按下可加载试听，其余帧不访问文件系统。
+    /// @note 首次明确按下播放手柄时可惰性加载音轨，普通帧只作内存几何计算。
     void handlePlaybackCursorDrag(const ImVec2& rectMin, const ImVec2& rectMax,
                                   double viewStart, double viewEnd,
                                   bool interactionHovered, int ownerId);
@@ -710,6 +688,13 @@ private:
 
     /// @brief 分拍线切分数量。
     int m_beatDivisor{ 4 };
+    /// @brief 滚轮磁吸当前分拍网格，导航变化不进入 BPM 撤销历史。
+    bool m_wheelSnapEnabled{ false };
+    /// @brief 触控板不足一个滚轮刻度的余量，切换磁吸模式时清空。
+    double m_wheelSnapRemainder{ 0.0 };
+    /// @brief 按滚轮方向计算下一条分拍线，跨 BPM 段时使用新段网格。
+    /// @warning 仅实际滚轮输入调用，最多处理六十四个刻度，不等待音频后端。
+    double wheelSeekTarget(double currentTime, double wheelDelta);
 
     /// @brief BPM
     /// 工具播放倍速；异轨试听不写回项目配置，同轨沿用编辑器同步语义。
@@ -787,12 +772,6 @@ private:
     std::vector<MeasurementHistoryEntry> m_measurementRedoHistory;
     /// @brief 当前连续手势开始时的快照；空值表示未记录手势。
     std::optional<MeasurementHistorySnapshot> m_measurementGestureBefore;
-    /// @brief 当前用户手势是否明确提交过 seek，避免播放推进进入历史。
-    bool m_measurementHistorySeekChanged{ false };
-    /// @brief 当前用户手势是否明确修改视图，自动跟随不得写入。
-    bool m_measurementHistoryViewChanged{ false };
-    /// @brief 异步 seek 最终画布目标，避免提交时读到旧播放头。
-    std::optional<double> m_measurementHistorySeekCanvasTime;
     /// @brief 还原历史期间屏蔽递归记录。
     bool m_restoringMeasurementHistory{ false };
 

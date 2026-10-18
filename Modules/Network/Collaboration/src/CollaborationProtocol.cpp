@@ -307,6 +307,10 @@ private:
            std::isfinite(viewport.visibleTimeStart) &&
            std::isfinite(viewport.visibleTimeEnd) &&
            std::isfinite(viewport.horizontalOffsetRatio) &&
+           // 倍率严格为正且有界，防止非法输入污染播放时间外推。
+           std::isfinite(viewport.playbackRate) &&
+           viewport.playbackRate > 0.0 && viewport.playbackRate <= 10.0 &&
+           std::isfinite(viewport.sampledAt) && viewport.sampledAt >= 0.0 &&
            std::abs(viewport.playbackTime) <= MAX_TIME_MAGNITUDE &&
            std::abs(viewport.visualTime) <= MAX_TIME_MAGNITUDE &&
            std::abs(visibleMinimum) <= MAX_TIME_MAGNITUDE &&
@@ -572,8 +576,8 @@ std::expected<ByteBuffer, ProtocolError> encodeCollaborationMessage(
             return std::unexpected(ProtocolError::InvalidViewportState);
         }
         kind = CollaborationMessageKind::ParticipantViewport;
-        // 两个 uint64_t 加五个 double，正文固定 56 字节。
-        body.reserve(56U);
+        // 原视口末尾追加播放标志、倍率与单调采样时刻，版本九固定 73 字节。
+        body.reserve(73U);
         appendUint64(body, viewport->peerId);
         appendUint64(body, viewport->sequence);
         appendDouble(body, viewport->playbackTime);
@@ -582,6 +586,31 @@ std::expected<ByteBuffer, ProtocolError> encodeCollaborationMessage(
         appendDouble(body, viewport->visibleTimeEnd);
         // 水平偏移作为最后一个 double，固定布局便于高频解码。
         appendDouble(body, viewport->horizontalOffsetRatio);
+        body.push_back(viewport->playing ? 1U : 0U);
+        // 使用单字节布尔而非 C++ bool 内存布局，跨平台线格式保持确定。
+        appendDouble(body, viewport->playbackRate);
+        // 采样时刻对应播放位置，发送限频期间位置仍能按原时刻正确外推。
+        // receivedAt 属于接收端私有时钟，不写入正文，房主转发保留原采样值。
+        appendDouble(body, viewport->sampledAt);
+    } else if ( const auto* probe =
+                    std::get_if<PlaybackClockProbe>(&message) ) {
+        // 时钟探测只承载有限单调时间，身份与请求匹配由 Peer 再验证。
+        if ( probe->source == 0 || probe->target == 0 ||
+             !std::isfinite(probe->sentAt) || probe->sentAt < 0.0 ||
+             !std::isfinite(probe->receivedAt) || probe->receivedAt < 0.0 ||
+             !std::isfinite(probe->repliedAt) || probe->repliedAt < 0.0 )
+            return std::unexpected(ProtocolError::InvalidViewportState);
+        kind = CollaborationMessageKind::PlaybackClockProbe;
+        // 身份是端到端源和目标，传输头的直接发送者仍由连接提供。
+        // 两跳路由必须保留这两个值，接收器据此拒绝访客伪造另一成员。
+        appendUint64(body, probe->source);
+        appendUint64(body, probe->target);
+        body.push_back(probe->reply ? 1U : 0U);
+        appendDouble(body, probe->sentAt);
+        // 请求携带零值远端时间，回复再补齐；字段数量不因方向而改变。
+        appendDouble(body, probe->receivedAt);
+        appendDouble(body, probe->repliedAt);
+        // 不附带文档或资源数据，探测消息大小始终为常量。
     } else if ( const auto* chat =
                     std::get_if<CollaborationChatMessage>(&message) ) {
         // 聊天要求非零发送者、单调序号和完整 UTF-8 可见文本。
@@ -935,25 +964,59 @@ std::expected<CollaborationMessage, ProtocolError> decodeCollaborationMessage(
         return CollaborationMessage(std::move(chunk));
     }
     case CollaborationMessageKind::ParticipantViewport: {
-        // 视口正文固定为 peerId、sequence 和五个 IEEE 754 double。
+        // 播放标志独立读取，拒绝除零和一以外的位模式。
         ParticipantViewport viewport;
+        std::uint8_t        playing = 0;
         if ( !reader.readUint64(viewport.peerId) ||
              !reader.readUint64(viewport.sequence) ||
              !reader.readDouble(viewport.playbackTime) ||
              !reader.readDouble(viewport.visualTime) ||
              !reader.readDouble(viewport.visibleTimeStart) ||
              !reader.readDouble(viewport.visibleTimeEnd) ||
-             !reader.readDouble(viewport.horizontalOffsetRatio) ) {
+             !reader.readDouble(viewport.horizontalOffsetRatio) ||
+             !reader.readUint8(playing) ||
+             !reader.readDouble(viewport.playbackRate) ||
+             !reader.readDouble(viewport.sampledAt) ) {
             // 任一浮点位模式不足都属于截断，而非数值范围错误。
             return std::unexpected(ProtocolError::TruncatedMessage);
         }
         // 固定正文必须耗尽，随后统一检查有限性、跨度和幅度边界。
-        if ( reader.remaining() != 0 || !isViewportStateValid(viewport) ) {
+        viewport.playing = playing == 1U;
+        // 非零位模式不能任意转换为 true，必须显式拒绝未定义布尔值。
+        // 时间样本与播放位置一起验证，确保后续外推不会产生 NaN。
+        if ( playing > 1U || reader.remaining() != 0 ||
+             !isViewportStateValid(viewport) ) {
             // 尾随字段和非法数值都不能进入高频远端视口表。
             return std::unexpected(ProtocolError::InvalidViewportState);
         }
         // 验证后的轻量视口对象按值进入消息变体。
         return CollaborationMessage(viewport);
+    }
+    case CollaborationMessageKind::PlaybackClockProbe: {
+        // 路由消息没有任意长度负载，未知或额外字节必须在本入口拒绝。
+        // 原发送时刻按 double 位模式回传，用于匹配尚未完成的请求。
+        // 探测不计入操作 payload 上限，但必须遵守固定长度和数值约束。
+        // 时钟可处于不同启动纪元，因此只检查有限与非负，不限制相对偏移。
+        PlaybackClockProbe probe;
+        std::uint8_t       reply = 0;
+        // 四十一个固定字节不允许尾随内容，避免不同版本误解字段。
+        if ( !reader.readUint64(probe.source) ||
+             !reader.readUint64(probe.target) || !reader.readUint8(reply) ||
+             !reader.readDouble(probe.sentAt) ||
+             !reader.readDouble(probe.receivedAt) ||
+             !reader.readDouble(probe.repliedAt) )
+            return std::unexpected(ProtocolError::TruncatedMessage);
+        if ( reader.remaining() != 0 || reply > 1U || probe.source == 0 ||
+             probe.target == 0 || !std::isfinite(probe.sentAt) ||
+             probe.sentAt < 0.0 || !std::isfinite(probe.receivedAt) ||
+             probe.receivedAt < 0.0 || !std::isfinite(probe.repliedAt) ||
+             probe.repliedAt < 0.0 )
+            return std::unexpected(ProtocolError::InvalidViewportState);
+        // 不同设备使用各自启动纪元，解码器不直接比较两端绝对时间。
+        // 倒序和超时要等当前请求配对完成后再由四时间估计判断。
+        probe.reply = reply == 1U;
+        // 是否为当前未完成请求由 Peer 判定，编解码器不保存会话状态。
+        return CollaborationMessage(probe);
     }
     case CollaborationMessageKind::ChatMessage: {
         // 聊天正文为发送者、序号、16 位字节长度和 UTF-8 文本。

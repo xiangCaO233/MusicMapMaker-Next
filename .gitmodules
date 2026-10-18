@@ -75,3 +75,15 @@
 [submodule "3rdpty/sources/libdatachannel"]
 	path = 3rdpty/sources/libdatachannel
 	url = https://github.com/paullouisageneau/libdatachannel.git
+[submodule "3rdpty/sources/libarchive"]
+	path = 3rdpty/sources/libarchive
+	url = https://github.com/libarchive/libarchive.git
+[submodule "3rdpty/sources/xz"]
+	path = 3rdpty/sources/xz
+	url = https://github.com/tukaani-project/xz.git
+[submodule "3rdpty/sources/bzip2"]
+	path = 3rdpty/sources/bzip2
+	url = https://github.com/libarchive/bzip2.git
+[submodule "3rdpty/sources/zstd"]
+	path = 3rdpty/sources/zstd
+	url = https://github.com/facebook/zstd.git

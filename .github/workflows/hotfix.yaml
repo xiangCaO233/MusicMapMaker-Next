@@ -1,0 +1,28 @@
+name: Validate Hotfix Branch
+# 持久分支 push 只验证，公开发布通过 ci.yaml 的 hotfix 任务。
+on:
+  push:
+    # 维护提交不会自动把未经人工选择的程序或资源推到线上。
+    branches: [hotfix]
+permissions:
+  # 离线验证只读取当前仓库，不创建 tag、提交或公开制品。
+  contents: read
+jobs:
+  validate:
+    # 和正式流水线使用相同 Debian 宿主，但 checkout 位于独立 workspace。
+    runs-on: [self-hosted, Linux, X64, debian]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # 基线检查需要完整第一父链和所有正式 tag。
+          fetch-depth: 0
+          # 验证完成后不保留短期 token，避免工具误用写入凭据。
+          persist-credentials: false
+      - name: Validate release base and tests
+        run: |
+          # 入口没有构建或公开发布副作用。
+          set -euo pipefail
+          python3 scripts/hotfix/validate_base.py
+          # 测试夹具创建临时 Git 仓库，普通 merge 的允许与拒绝契约都覆盖。
+          # 资源与程序制品用小型合成文件验证，不下载真实发布包。
+          python3 -m unittest discover -s scripts/hotfix -p 'test_*.py' -v

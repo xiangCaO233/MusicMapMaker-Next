@@ -33,6 +33,29 @@ Windows 与 Linux 正式产物是单可执行文件：下载后可放在任意�
 - [反馈主页](https://feedback.xiang233.top)：问题反馈与建议入口。
 - [GitHub 仓库](https://github.com/xiangCaO233/MusicMapMaker-Next)：源代码、提交记录与开发进度。
 
+
+#### Debian / Ubuntu：添加软件源与安装
+
+打开 [Linux 下载页](https://mmm.xiang233.top/apt/)，下载 DEB 后，在下载目录执行：
+
+```bash
+sudo apt install ./musicmapmaker-next_0.6.2-2_amd64.deb
+```
+
+安装时会自动添加 MMM 软件源。之后使用系统软件管理器更新，或执行：
+
+```bash
+sudo apt update
+sudo apt upgrade musicmapmaker-next
+```
+
+#### Gentoo
+
+按照 [Gentoo overlay 安装说明](https://github.com/xiangCaO233/mmm-gentoo-overlay#中文) 添加仓库，然后选择安装：
+
+- `app-editors/musicmapmaker-next-bin`：直接安装二进制版。
+- `app-editors/musicmapmaker-next`：从最新 `ci` 分支源码编译。
+
 #### 我该下载哪个版本？
 
 各版本功能相同，区别主要在目标平台、ABI、C/C++ 运行时和编译器优化器。发布构建统一使用 `RelWithDebInfo`：开启发布级优化并保留调试符号；它不是 `Debug` 构建。编译器之间不存在对所有谱面和硬件都成立的固定性能排名。
@@ -226,6 +249,29 @@ Official Windows and Linux builds are single executable files. Download the file
 - [Official download page](https://mmm.xiang233.top/download): direct Windows, Linux, and macOS downloads.
 - [Feedback home](https://feedback.xiang233.top): issue reports and suggestions.
 - [GitHub repository](https://github.com/xiangCaO233/MusicMapMaker-Next): source, history, and development progress.
+
+
+#### Debian / Ubuntu: repository setup and installation
+
+Visit the [Linux download page](https://mmm.xiang233.top/apt/), download the DEB, then run this in your download directory:
+
+```bash
+sudo apt install ./musicmapmaker-next_0.6.2-2_amd64.deb
+```
+
+Installation automatically adds the MMM repository. Update through your system's software manager, or run:
+
+```bash
+sudo apt update
+sudo apt upgrade musicmapmaker-next
+```
+
+#### Gentoo
+
+Follow the [Gentoo overlay installation instructions](https://github.com/xiangCaO233/mmm-gentoo-overlay#english) to add the repository, then choose:
+
+- `app-editors/musicmapmaker-next-bin`: install the binary package.
+- `app-editors/musicmapmaker-next`: compile the latest `ci` branch source.
 
 #### Which build should I download?
 

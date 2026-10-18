@@ -9,6 +9,7 @@
 #include "config/visual/SpectrumConfig.h"
 #include "config/visual/TrackLayoutConfig.h"
 
+#include <array>
 #include <cstdint>
 #include <nlohmann/json_fwd.hpp>
 #include <vector>
@@ -71,6 +72,24 @@ struct VisualConfig {
     static constexpr float MIN_INTERACTION_HITBOX_SCALE{ 0.25f };
     /// @brief 物件交互拾取包围盒允许的最大缩放。
     static constexpr float MAX_INTERACTION_HITBOX_SCALE{ 4.0f };
+    /// @brief 调试画布摄像机俯视偏转角的默认值，单位度。
+    static constexpr float DEFAULT_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES{ 0.0f };
+    /// @brief 调试画布摄像机俯视偏转角的最小值，单位度。
+    static constexpr float MIN_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES{ 0.0f };
+    /// @brief 调试画布摄像机俯视偏转角的最大值，单位度。
+    static constexpr float MAX_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES{ 75.0f };
+    /// @brief 水平观察旋转默认与二维轨道朝向一致，单位度。
+    static constexpr float DEFAULT_DEBUG_CANVAS_CAMERA_YAW_DEGREES{ 0.0f };
+    /// @brief 水平旋转下界，与正一百八十度表示相同朝向。
+    static constexpr float MIN_DEBUG_CANVAS_CAMERA_YAW_DEGREES{ -180.0f };
+    /// @brief 水平旋转上界，完整覆盖绕平面法线的一周。
+    static constexpr float MAX_DEBUG_CANVAS_CAMERA_YAW_DEGREES{ 180.0f };
+    /// @brief 原型摄像机观察距离倍率，默认保持旧版尺寸。
+    static constexpr float DEFAULT_DEBUG_CANVAS_CAMERA_DISTANCE{ 1.0f };
+    /// @brief 最近观察距离倍率，避免摄像机进入平面。
+    static constexpr float MIN_DEBUG_CANVAS_CAMERA_DISTANCE{ 0.5f };
+    /// @brief 最远观察距离倍率，控制可见几何的浮点精度范围。
+    static constexpr float MAX_DEBUG_CANVAS_CAMERA_DISTANCE{ 4.0f };
 
     /// @brief 旧版或无有效 Key 数时使用的轨道布局模板。
     TrackLayout trackLayout;
@@ -226,6 +245,35 @@ struct VisualConfig {
     float nonHoldHitEffectDuration{ DEFAULT_NON_HOLD_HIT_EFFECT_DURATION };
     /// @brief 是否绘制音符悬浮拾取包围盒。
     bool debugDrawHitboxes{ false };
+    /// @brief 调试用画布摄像机俯视偏转角，单位度。
+    /// @note 俯仰、水平旋转为零且距离为一时保持原二维观察。
+    float debugCanvasCameraAngleDegrees{
+        DEFAULT_DEBUG_CANVAS_CAMERA_ANGLE_DEGREES
+    };
+    /// @brief 绕轨道中心的水平观察旋转，单位度，不写入谱面几何。
+    float debugCanvasCameraYawDegrees{
+        DEFAULT_DEBUG_CANVAS_CAMERA_YAW_DEGREES
+    };
+    /// @brief 沿观察方向调整摄像机距离，缩放不改变谱面尺寸或时间。
+    float debugCanvasCameraDistance{ DEFAULT_DEBUG_CANVAS_CAMERA_DISTANCE };
+    /// @brief 使用布局编辑器保存的自由相机；关闭时兼容旧观察参数。
+    bool canvasCameraPoseEnabled{ false };
+    /// @brief 三维画布长度，以原始画布高度为单位，仅向远端扩展。
+    float canvasCameraLength{ 1.0F };
+    /// @brief 三维纵向透视运动补偿，零为原效果，一百为消除纵向远慢近快。
+    float canvasMotionCompensation{ 0.0F };
+    /// @brief 三维平面物件额外高度百分数，零保留皮肤尺寸，三百增加到四倍。
+    float canvasThicknessCompensation{ 0.0F };
+    /// @brief 返回包含三维厚度补偿的物件纵向比例，二维保留原值。
+    /// @warning 逐物件固定数值运算，不读取全局配置、不分配或访问文件。
+    float canvasNoteScaleY() const;
+    /// @brief 返回需额外绘制的高度倍数；二维模式不扩展。
+    /// @warning 快照热路径常量检查，非法值回退为无扩展。
+    float canvasCameraExtension() const;
+    /// @brief 世界位置，画布中心为原点，高度为一单位，Z 朝向观察者。
+    std::array<float, 3> canvasCameraPosition{ 0.0F, 0.0F, 1.0F };
+    /// @brief 相机局部姿态的 XYZ 欧拉角（度），零姿态朝向世界负 Z。
+    std::array<float, 3> canvasCameraRotation{ 0.0F, 0.0F, 0.0F };
     /// @brief 物件交互拾取包围盒相对原始几何的横向缩放。
     float interactionHitboxScaleX{ DEFAULT_INTERACTION_HITBOX_SCALE };
     /// @brief 物件交互拾取包围盒相对原始几何的纵向缩放。

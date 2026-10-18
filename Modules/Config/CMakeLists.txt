@@ -10,6 +10,11 @@ add_library(
   src/skin/translation/Translation.cpp
   src/AppPaths.cpp
   src/AppConfig.cpp
+  # 配置快照使用单槽后台写入队列，连续布局编辑不等待磁盘。
+  src/ConfigSnapshotWriter.cpp
+  src/AudioPresets.cpp
+  # 布局预设独立于项目快照，文件读写与结构校验集中在配置层。
+  src/LayoutPresets.cpp
   src/CreatorIdentity.cpp
   src/EditorSettingTypes.cpp
   # 插值工具偏好仅保存源文本和标量，保持 Config 不依赖谱面模型。
@@ -25,6 +30,9 @@ target_include_directories(Config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 # LuaJIT、sol2 和 JSON 属于公开头契约，消费方需继承其包含与链接要求。
 target_link_libraries(Config PUBLIC luajit::luajit 3rd_nlohmann_json 3rd_sol2
                                     fmt::fmt Log)
+# 配置后台写入器使用标准线程，显式声明线程运行库，避免依赖图形库传递链接。
+find_package(Threads REQUIRED)
+target_link_libraries(Config PRIVATE Threads::Threads)
 # miniz 只在皮肤包实现文件中使用，不向其他模块传播归档库依赖。
 target_link_libraries(Config PRIVATE 3rd_miniz)
 
@@ -263,3 +271,28 @@ mmm_register_test_case(
   NAME DefaultTranslationParityTest COMMAND DefaultTranslationParityTest
   "${CMAKE_SOURCE_DIR}/assets/translations/zh_cn.lua"
   "${CMAKE_SOURCE_DIR}/assets/translations/en_us.lua")
+
+# 个人音频方案覆盖隔离、旧版迁移及真实配置保存恢复，不访问用户配置。
+mmm_add_test_executable(Config AudioPresetsTest tests/AudioPresetsTest.cpp)
+target_link_libraries(AudioPresetsTest PRIVATE Config Log)
+# 为持久化回归分配专用输出路径，禁止向测试资源目录写入。
+mmm_register_test_case(NAME AudioPresetsTest COMMAND AudioPresetsTest
+                       "${CMAKE_BINARY_DIR}/test_output/audio_presets")
+
+# 路径头必须同时兼容后续 Windows SDK 声明及调用方的小写 near 函数。
+mmm_add_test_executable(Config Utf8PathCompatibilityTest
+                        tests/Utf8PathCompatibilityTest.cpp)
+target_link_libraries(Utf8PathCompatibilityTest PRIVATE Config)
+# Unicode 往返只操作 path 值，Windows 交叉构建同时验证 SDK 包含顺序。
+mmm_register_test_case(NAME Utf8PathCompatibilityTest COMMAND
+                       Utf8PathCompatibilityTest)
+
+# 布局方案验证所有键数、摄像机姿态、客户端迁移及不可信文件导入边界。
+mmm_add_test_executable(Config LayoutPresetsTest tests/LayoutPresetsTest.cpp)
+target_link_libraries(LayoutPresetsTest PRIVATE Config Log)
+# 只向测试暴露私有快照写入器，以真实完成通知验证后台保存的顺序。
+target_include_directories(LayoutPresetsTest
+                           PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+# 文件往返输出只写构建目录，不访问用户的配置或源码测试资源。
+mmm_register_test_case(NAME LayoutPresetsTest COMMAND LayoutPresetsTest
+                       "${CMAKE_BINARY_DIR}/test_output/layout_presets")

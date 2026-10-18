@@ -349,3 +349,11 @@ copyIceLib "zlib" "libz.a" "3rdpty/zlib_inst/lib/libz.a"
 # 维护约束：新增配置名需要同步 Find 模块的配置映射规则。
 # 维护约束：动态库布局不由本脚本处理，禁止混入 shared 子目录。
 # 维护约束：成功到达文件末尾表示所有选中归档均已复制。
+
+# 归档依赖拥有独立分包规则；只在主仓暂存时执行，保留增量包过滤。
+# 该步骤依赖 libarchive_project 已完成，输入缺失将直接阻止发布残缺包。
+if [[ "${stageScope}" != "ice" ]]; then
+    cmake "-DBUILD_DIR=${buildDir}" -DPLATFORM=linux "-DARCH=x86_64" \
+        "-DTOOLCHAIN=${prebuiltToolchain}" "-DCOMPILER_TAG=${compilerTag}" "-DCONFIG=${buildType}" \
+        "-DPACKAGES=${packageFilter}" -P "${projectRoot}/cmake/StageArchivePrebuilts.cmake"
+fi

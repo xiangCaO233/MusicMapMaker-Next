@@ -1,0 +1,81 @@
+name: Reusable Website Release
+# 普通发布仍使用原 ci 分支和完整网站发布 helper。
+on:
+  workflow_call:
+    # 普通入口不增加输入；原 ci 分支同步和发布步骤完整保留。
+concurrency:
+  # 两种发布共用网站目录，不能互相取消或并发覆盖。
+  group: musicmapmaker-publish
+  cancel-in-progress: false
+env:
+  GIT_LFS_SKIP_SMUDGE: "1"
+jobs:
+  mmm-website-release:
+    # 网站发布仅由人工明确选择，绝不随 ci 分支 push 自动执行。
+    # 网站发布不得触发完整构建或改写聚合产物来源。
+    # 网站仓和聚合 release 都位于指定 Debian 自托管 Runner。
+    runs-on: [self-hosted, Linux, X64, debian]
+
+    defaults:
+      run:
+        # 发布脚本依赖 Bash 数组和严格模式。
+        shell: bash
+        working-directory: /home/xiang/MusicMapMaker-Next
+
+    steps:
+      - name: ci->Sync Repository
+        run: |
+          # 网站发布前把固定 checkout 同步到远端 ci 分支。
+          set -euo pipefail
+
+          # 与构建和 GitHub 发布任务共用仓库级同步锁。
+          ci_git_sync_lock="/home/xiang/MusicMapMaker-Next/.git/mmm-ci-sync.lock"
+          exec 9>"${ci_git_sync_lock}"
+          flock 9
+
+          if [[ -e .git/index.lock ]]; then
+            # 先检查活跃 Git 进程，避免删除有效 index lock。
+            active_git_processes="$(
+              ps -u "$(id -u)" -o pid=,comm=,args= \
+                | awk '$2 == "git" || $2 ~ /^git-/ { print }'
+            )"
+            if [[ -n "${active_git_processes}" ]]; then
+              # 活跃进程证据输出后立即停止同步。
+              printf "error: .git/index.lock exists and git is still running:\n%s\n" "${active_git_processes}" >&2
+              exit 1
+            fi
+
+            # 没有活跃 Git 时只删除确认陈旧的单个 lock 文件。
+            printf "warning: removing stale git index lock: .git/index.lock\n" >&2
+            rm -f .git/index.lock
+          fi
+
+          # 更新远端引用并只清理 CI 脚本相关未跟踪残留。
+          git fetch --prune origin +refs/heads/ci:refs/remotes/origin/ci
+          git clean -fd -- scripts/ci .github/workflows
+          git checkout --force -B ci origin/ci
+          # tracked 内容最终强制对齐刚获取的远端提交。
+          git reset --hard origin/ci
+
+      - name: ci->Publish Website Release
+        run: |
+          # 用户 bashrc 提供 Node 和 DeepSeek 环境，失败不阻断后续显式校验。
+          # 自托管 Runner 路径变化需同步所有固定 working-directory。
+          if [[ -f "${HOME}/.bashrc" ]]; then
+            source "${HOME}/.bashrc" || true
+          fi
+          # 加载环境后启用严格模式并调用单一发布 helper。
+          set -euo pipefail
+          # 网站发布成功条件由 publish-website-release.sh 完整事务定义。
+          # 成功构建只准备聚合目录，公开发布仍需人工工作流。
+          # 工作流成功后仍需由人工入口决定网站或 GitHub 的公开发布。
+          # 流程变更后应同时运行 YAML 解析和内嵌 Bash 语法检查。
+          bash scripts/ci/publish-website-release.sh \
+            --source-release /home/xiang/MusicMapMaker-Next/release \
+            --website-dir /home/xiang/mmm-website
+
+          # 签名 APT 仓库使用独立文档根，不被网站部署的 --delete 清空。
+          # 同版本历史包保留，确保 Gentoo Manifest 的下载地址始终可验证。
+          # helper 验证包名、公钥身份与不变版本，再在服务器完成索引签名。
+          bash scripts/apt/publish_repository.sh \
+            /home/xiang/MusicMapMaker-Next/release/linux-gcc14/musicmapmaker-next_*.deb

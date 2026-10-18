@@ -156,7 +156,7 @@ void NoteRenderSystem::renderPolyline(
     float noteW = singleTrackW * config.visual.noteScaleX;
     // 高度以单轨宽度和普通纹理比例为基准，不随 noteScaleX 二次伸缩。
     float noteH = (singleTrackW / getTexAspect(snapshot, TextureID::Note)) *
-                  config.visual.noteScaleY;
+                  config.visual.canvasNoteScaleY();
 
     // 主体先画，后续节点覆盖连接处，避免粗线压住头部和节点纹理。
     drawPolylineBody(batcher,

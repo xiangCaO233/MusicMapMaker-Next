@@ -2611,6 +2611,9 @@ bool BeatmapSession::processCommands()
                                std::is_same_v<T, CmdUpdateBpmWithKeepSpeedSv> ||
                                std::is_same_v<T, CmdKeepSpeedForBpmEvents> ||
                                std::is_same_v<T, CmdDeleteTimelineEvent> ||
+                               // 批量删除沿用 Timing
+                               // 的权限、派生缓存及协作变更路由。
+                               std::is_same_v<T, CmdDeleteTimelineEvents> ||
                                std::is_same_v<T, CmdCreateTimelineEvent> ||
                                std::is_same_v<T, CmdCreateTimelineEvents> ||
                                std::is_same_v<T, CmdReplaceBeatmapTimings> ||
@@ -2872,6 +2875,8 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdUpdateBpmWithKeepSpeedSv> ||
                     std::is_same_v<T, CmdKeepSpeedForBpmEvents> ||
                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
+                    // 批量删除沿用 Timing 的权限、派生缓存及协作变更路由。
+                    std::is_same_v<T, CmdDeleteTimelineEvents> ||
                     std::is_same_v<T, CmdCreateTimelineEvents> ||
                     std::is_same_v<T, CmdReplaceBeatmapTimings> ||
                     std::is_same_v<T, CmdSetNoteAnnotation> ||
@@ -2937,6 +2942,8 @@ bool BeatmapSession::processCommands()
                     // 批量保速只改绿线，仍需收集动作栈的 Timelines 通知。
                     std::is_same_v<T, CmdKeepSpeedForBpmEvents> ||
                     std::is_same_v<T, CmdDeleteTimelineEvent> ||
+                    // 批量删除沿用 Timing 的权限、派生缓存及协作变更路由。
+                    std::is_same_v<T, CmdDeleteTimelineEvents> ||
                     std::is_same_v<T, CmdCreateTimelineEvent> ||
                     std::is_same_v<T, CmdCreateTimelineEvents> ||
                     std::is_same_v<T, CmdReplaceBeatmapTimings> ||
@@ -3782,12 +3789,85 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
         SessionUtils::syncBeatmap(*m_ctx);
         SessionUtils::ensureHitEvents(*m_ctx);
         auto savePath = resolveCurrentProjectPath(Config::utf8ToPath(cmd.path));
-        bool ok       = saveBeatmapWithMalodyExportOptions(
-            *m_ctx->currentBeatmap,
-            savePath,
-            cmd.malodyExportMode,
-            cmd.addStoreModeExtForMalodyExport,
-            nullptr);
+        // BMS 的 WAV 字段只能是文件路径，不能泄漏 MMM 项目资源 ID。
+        // 仅改写导出快照，当前编辑会话仍保留稳定 ID 和原保存位置。
+        // 单文件导出必须保留资源定位语义，项目表 ID 不能直接写进 WAV。
+        // 使用原谱面路径解析引用，使用输出谱面目录计算新的相对路径。
+        // 跨目录导出不会移动原音频，也不会更改项目资源表。
+        // BMS/PMS 的键位差异交给模型保存器处理，此层只负责资源定位。
+        // 独立谱面没有项目表时仍可按原文件旁的相对路径解析。
+        // 资源找不到时终止导出，不能回退成恰好同名的无效 ID。
+        const auto extension = Config::pathToUtf8(savePath.extension());
+        const bool isBms     = packageExtensionEquals(extension, ".bms") ||
+                               packageExtensionEquals(extension, ".bme") ||
+                               packageExtensionEquals(extension, ".bml") ||
+                               packageExtensionEquals(extension, ".pms");
+        auto       exportMap =
+            isBms ? cloneBeatMapForSave(*m_ctx->currentBeatmap) : nullptr;
+        bool referencesValid = !isBms || static_cast<bool>(exportMap);
+        if ( exportMap ) {
+            const auto& sourcePath =
+                m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
+            const auto references =
+                ProjectResourceService::collectBeatmapAudioReferences(
+                    *exportMap, Config::pathToUtf8(sourcePath));
+            const auto* project = EditorEngine::instance().getCurrentProject();
+            // 收集结果持有自己的字符串，后续改写快照不会使其失效。
+            // 音效引用可出现在普通 Note、Hold
+            // 和自动采样中，统一通过服务重映射。
+            // 同文件被多处引用仍解析为同一路径，由 BMS writer 去重声明。
+            // 未绑定的静音 Note 没有文件引用，不要求构造虚假的 WAV 文件。
+            for ( const auto& reference : references ) {
+                if ( reference.m_audioReference.empty() ) continue;
+                auto resourcePath =
+                    Config::utf8ToPath(reference.m_audioReference);
+                const auto* resource =
+                    project
+                        ? ProjectResourceService::findAudioResourceForReference(
+                              *project, sourcePath, reference.m_audioReference)
+                        : nullptr;
+                if ( resource ) {
+                    resourcePath = resolveProjectResourcePath(
+                        *project,
+                        sourcePath,
+                        Config::utf8ToPath(resource->m_path));
+                } else if ( resourcePath.is_relative() ) {
+                    resourcePath = sourcePath.parent_path() / resourcePath;
+                }
+                // 资源缺失时明确失败，避免生成有音符却无声音的成功导出。
+                std::error_code error;
+                if ( !std::filesystem::is_regular_file(resourcePath, error) ||
+                     error ) {
+                    referencesValid = false;
+                    break;
+                }
+                // 使用 error_code
+                // 遵守无异常约定；跨盘等无法计算相对路径时失败。
+                // 不降级为绝对路径，避免导出物只在当前机器偶然可用。
+                // 路径规范后仍保持真实资源文件名的大小写。
+                // 所有改写只作用于快照，活动模型及撤销历史保持原样。
+                auto relative = std::filesystem::relative(
+                    resourcePath, savePath.parent_path(), error);
+                if ( error || relative.empty() ) {
+                    referencesValid = false;
+                    break;
+                }
+                ProjectResourceService::remapBeatmapAudioResourceId(
+                    *exportMap,
+                    reference.m_audioReference,
+                    Config::pathToUtf8(relative));
+            }
+        }
+        // 资源准备失败时短路，不打开目标文件。
+        // 保存器自身还会拒绝不可表示的物件、增益和时间线效果。
+        // 结果事件沿用现有失败路径，成功也不会接管当前谱面保存位置。
+        bool ok = referencesValid &&
+                  saveBeatmapWithMalodyExportOptions(
+                      exportMap ? *exportMap : *m_ctx->currentBeatmap,
+                      savePath,
+                      cmd.malodyExportMode,
+                      cmd.addStoreModeExtForMalodyExport,
+                      nullptr);
         if ( !ok ) {
             // IMD 单文件失败提供资源包替代建议，其他格式沿用通用导出失败提示。
             XERROR("SaveBeatmapAs: failed to save to {}", cmd.path);

@@ -75,6 +75,7 @@ bool BpmMeasurementToolView::restoreAudioMarkers(AnalysisResult& result)
 /// @details 文件线程只返回值语义结果，不回调已关闭的工具。
 /// 使用零超时检查，导出期间音频和 UI 继续运行。
 /// 成功状态区分内嵌和配套模式，后者明确显示配套路径。
+/// AU XMP 始终随音频导出，独立展示路径以便用户一起分享。
 /// 所有字符串提交都在 UI 所属线程完成。
 /// @warning 每次 UI 更新调用；不得新增文件探测或阻塞 future 等待。
 void BpmMeasurementToolView::consumeMarkerExport()
@@ -96,6 +97,11 @@ void BpmMeasurementToolView::consumeMarkerExport()
         // 配套路径必须明确展示，用户分享时才能带上完整标记。
         m_markerStatus = TR_FMT("ui.tools.bpm_measure.markers_sidecar",
                                 Config::pathToUtf8(result.sidecarPath));
+    }
+    if ( result.success ) {
+        // XMP 是 AU 的外部标记载体，内嵌成功也不能隐藏此配套路径。
+        // 固定格式名不需要翻译；沿用成功提示所在区域，避免新增交互步骤。
+        m_markerStatus += "\nAU XMP: " + Config::pathToUtf8(result.xmpPath);
     }
 }
 
@@ -269,6 +275,8 @@ void BpmMeasurementToolView::renderMarkerPanel()
         /// clipper 的固定行高与同一行时间、名称、删除控件保持一致。
         /// 只遍历可见行，章节文件读取不属于绘制职责。
         ImGui::BeginChild("##AudioChapterList", ImVec2(0.0f, 180.0f));
+        // 裁剪器整个遍历期间保持章节数量不变，删除请求在绘制结束后提交。
+        int              chapterToDelete = -1;
         ImGuiListClipper clipper;
         clipper.Begin(static_cast<int>(m_audioChapters.size()),
                       ImGui::GetFrameHeightWithSpacing());
@@ -299,19 +307,16 @@ void BpmMeasurementToolView::renderMarkerPanel()
                 if ( ImGui::InputText("##Title", title.data(), title.size()) )
                     chapter.title = title.data();
                 ImGui::SameLine();
-                if ( FeedbackSmallButton("X") ) {
-                    /// 当前 vector 擦除使后续下标变化，必须立即结束本轮裁剪。
-                    /// 删除仅作用于命名草稿，不删除对应 BPM 段或音频文件。
-                    /// 下一帧重新计算裁剪范围，避免使用旧 DisplayEnd 越界。
-                    m_audioChapters.erase(m_audioChapters.begin() + i);
-                    ImGui::PopID();
-                    clipper.End();
-                    break;
-                }
+                // 只登记当前下标，不使本轮 DisplayEnd 或章节引用提前失效。
+                if ( FeedbackSmallButton("X") ) chapterToDelete = i;
                 ImGui::PopID();
             }
         }
         ImGui::EndChild();
+        // Step 返回 false 已完成裁剪器收尾，之后不再手动 End 或继续 Step。
+        // 擦除只改变章节草稿，不删除对应 BPM 段或原音频文件。
+        if ( chapterToDelete >= 0 )
+            m_audioChapters.erase(m_audioChapters.begin() + chapterToDelete);
     }
     // 跨帧对话框只在确认时读取文件路径。
     // 取消和关闭均结束选择器，不修改原音频或章节草稿。

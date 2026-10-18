@@ -902,8 +902,91 @@ bool testLegacyRepeatedTextSizeMigration()
 /// 测试使用纯值对象和 JSON 内存往返，不读取用户配置或写入资源目录。
 /// 因此可在隔离配置环境中稳定重复执行。
 /// 新增布局职责时应分配新的唯一退出码并在此保持顺序。
+/// @brief 验证辅助区移动吸附、相邻区域链式跟随与配置锚点写回。
+/// @return 宽度、连接点和合法位置均符合交互约束时返回 true。
+/// @details 吸附目标采用世界像素，区域边界采用归一化比例。
+/// @details 相接关系固定在手势开始时，鼠标往回移动不能累计漂移。
+/// @details 邻接链只沿被抓取一侧延伸，不牵动对侧或有间隙的区域。
+/// @details 测试同时包含玩家区域，防止辅助区移动把主轨道推出画布。
+/// @details 左侧邻居采用多段链，右侧邻居采用单一区域。
+/// @details 数值检查同时覆盖活动边与对侧边，防止缩放退化为整体移动。
+/// @details 轨道数使用不同值，检查草稿与 BGM 不会混用宽度分母。
+/// @details 所有数据均在栈上生成，不加载谱面、皮肤或个人配置。
+bool testJoinedHorizontalLayouts()
+{
+    using namespace MMM::Canvas;
+    const std::array<float, 3> targets{ 100.0F, 400.0F, 700.0F };
+    const auto                 left =
+        snapHorizontalRegionMove({ 0.104F, 0.2F }, 1000.0F, targets, 8.0F);
+    const auto right =
+        snapHorizontalRegionMove({ 0.202F, 0.195F }, 1000.0F, targets, 8.0F);
+    // 任意一侧可以吸附，整体宽度不能随选择的参考边发生变化。
+    if ( !left.snapped || !near(left.bounds.left, 0.1F) || !right.snapped ||
+         !near(right.bounds.right(), 0.4F) ||
+         !near(right.bounds.width, 0.195F) )
+        return false;
+    // 超出像素阈值时保持原始位置，不能总是选择某条最近边。
+    const auto free =
+        snapHorizontalRegionMove({ 0.51F, 0.2F }, 1000.0F, targets, 8.0F);
+    if ( free.snapped || !near(free.bounds.left, 0.51F) ) return false;
+    // 相机横移后的负世界坐标也是合法目标，不要求目标位于当前视口内。
+    const std::array<float, 1> negativeTarget{ -50.0F };
+    if ( !snapHorizontalRegionMove(
+              { -0.047F, 0.2F }, 1000.0F, negativeTarget, 8.0F)
+              .snapped )
+        return false;
+    // 数组顺序是主轨道、草稿、批注、BGM，空间顺序刻意与数组顺序不同。
+    // 草稿与批注连续相接，批注再贴住玩家区，BGM 接在玩家右侧。
+    const HorizontalLayoutBounds start{
+        { { 0.3F, 0.3F }, { 0.0F, 0.2F }, { 0.2F, 0.1F }, { 0.6F, 0.2F } }
+    };
+    const auto wider =
+        resizeJoinedHorizontalRegions(start, 0, { 0.3F, 0.4F }, false, 0.0005F);
+    // 玩家右边增加 0.1，只推动右侧 BGM，左侧草稿和批注保持原位。
+    if ( !near(wider[3].left, 0.7F) || !near(wider[3].width, 0.2F) ||
+         !near(wider[1].left, 0.0F) || !near(wider[2].left, 0.2F) )
+        return false;
+    const auto narrower = resizeJoinedHorizontalRegions(
+        start, 0, { 0.35F, 0.25F }, true, 0.0005F);
+    // 左边界移动时批注与草稿同时跟随，原先的两个接缝均需保留。
+    // 这也覆盖多轮追踪：草稿的数组下标小于首先被发现的批注。
+    if ( !near(narrower[2].right(), narrower[0].left) ||
+         !near(narrower[1].right(), narrower[2].left) ||
+         !near(narrower[1].width, 0.2F) || !near(narrower[3].left, 0.6F) )
+        return false;
+    auto separated     = start;
+    separated[2].width = 0.09F;
+    const auto gap     = resizeJoinedHorizontalRegions(
+        separated, 0, { 0.35F, 0.25F }, true, 0.0005F);
+    // 一像素以上的真实间隙不视为之前已经吸附，不应把无关区域拉走。
+    if ( !near(gap[2].left, 0.2F) || !near(gap[1].left, 0.0F) ) return false;
+    const auto limited = resizeJoinedHorizontalRegions(
+        start, 3, { 0.25F, 0.55F }, true, 0.0005F);
+    // BGM 向左扩展会推动玩家及整条左链，但玩家左边界不能小于零。
+    // 整组使用同一受限位移，不能各自钳制后留下裂缝。
+    if ( !near(limited[0].left, 0.0F) ||
+         !near(limited[0].right(), limited[3].left) ||
+         !near(limited[0].width, 0.3F) || !near(limited[3].right(), 0.8F) )
+        return false;
+    const auto returned =
+        resizeJoinedHorizontalRegions(start, 0, start[0], false, 0.0005F);
+    // 移回起点必须从冻结状态恢复，不以已经移动过的配置再次累加。
+    if ( !near(returned[3].left, start[3].left) ) return false;
+    MMM::Config::TrackLayout layout;
+    storeHorizontalLayoutBounds(layout, 1, { 0.05F, 0.2F }, 2, 4);
+    storeHorizontalLayoutBounds(layout, 3, { 0.7F, 0.2F }, 2, 4);
+    // 多轨组保存单轨宽度，草稿采用右锚，BGM 采用左锚。
+    // 不能把整组宽度写入单轨字段，导致下一帧被轨道数重复放大。
+    return layout.draftLanes.right && !layout.draftLanes.left &&
+           near(*layout.draftLanes.right, 0.25F) &&
+           near(*layout.draftLanes.width, 0.1F) && layout.bgmLanes.left &&
+           !layout.bgmLanes.right && near(*layout.bgmLanes.left, 0.7F) &&
+           near(*layout.bgmLanes.width, 0.05F);
+}
+
 int main()
 {
+    if ( !testJoinedHorizontalLayouts() ) return 20;
     // 1：异常轨道布局规范化。
     if ( !testSanitizeInvalidLayout() ) {
         return 1;

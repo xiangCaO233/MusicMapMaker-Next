@@ -705,6 +705,8 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
             // 通过 EditorEngine 统一发布配置，逻辑相机和持久化流程
             // 可以在自己的线程边界观察变化，UI 不直接修改会话对象。
             Logic::EditorEngine::instance().setEditorConfig(editorCfg);
+            // 预览倍率属于布局方案，滚轮修改也立即收存并在后台保存。
+            appConfig.saveLayoutChanges();
         }
     }
 }

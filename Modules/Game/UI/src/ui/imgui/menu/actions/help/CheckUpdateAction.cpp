@@ -12,6 +12,7 @@
 #include "ui/utils/UIWidgetUtils.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <imgui.h>
 #include <memory>
@@ -459,11 +460,26 @@ private:
             };
 
             // 当前版本和最新版本始终显示，形成最小可比较信息。
+            // 热修复保留正式版本号，显示独立修订避免同版本更新看起来毫无变化。
+            // 格式化只用于展示，网络比较仍使用正式版本和整数修订两个字段。
+            // 普通发布不附加零修订，保持原显示格式和翻译表契约。
+            // 字符串在整个表格绘制期间存活，不传递临时 c_str。
+            // 重启仍由既有按钮接管，展示修订不改变安装时机。
+            const auto displayVersion = [](const std::string& version,
+                                           std::int64_t       revision) {
+                return revision > 0
+                           ? version + "-hotfix." + std::to_string(revision)
+                           : version;
+            };
+            const auto currentDisplay =
+                displayVersion(info.currentVersion, info.currentHotfixRevision);
+            const auto latestDisplay =
+                displayVersion(info.latestVersion, info.latestHotfixRevision);
             addRow(TR("ui.help.current_version").data(),
-                   info.currentVersion.c_str());
+                   currentDisplay.c_str());
             ImVec4 green(0.3f, 1.0f, 0.3f, 1.0f);
             addRow(TR("ui.help.latest_version").data(),
-                   info.latestVersion.c_str(),
+                   latestDisplay.c_str(),
                    &green);
 
             // 服务端未提供发布日期时省略整行，不显示空值。

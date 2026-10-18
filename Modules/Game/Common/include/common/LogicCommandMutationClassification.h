@@ -108,6 +108,9 @@ namespace MMM::Logic
                                                  CmdUpdateBpmWithKeepSpeedSv> ||
                                   std::is_same_v<T, CmdKeepSpeedForBpmEvents> ||
                                   std::is_same_v<T, CmdDeleteTimelineEvent> ||
+                                  // 批量删除沿用 Timing
+                                  // 的权限、派生缓存及协作变更路由。
+                                  std::is_same_v<T, CmdDeleteTimelineEvents> ||
                                   std::is_same_v<T, CmdCreateTimelineEvent> ||
                                   std::is_same_v<T, CmdCreateTimelineEvents> ||
                                   std::is_same_v<T,

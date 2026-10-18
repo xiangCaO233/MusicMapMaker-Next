@@ -22,6 +22,11 @@ void BackgroundRenderSystem::render(Batcher& batcher, float viewportWidth,
     // 空会话既不铺背景，也不请求频谱；占位内容由其他绘制流程负责。
     if ( !snapshot->hasBeatmap ) return;
 
+    // 背景与频谱独立铺在视口底层；轨道摄像机不能缩小或倾斜这层内容。
+    // 明确裁剪整个视口，不能继承上一批轨道的局部范围。
+    batcher.setScreenSpace(true);
+    batcher.setScissor(0.0f, 0.0f, viewportWidth, viewportHeight);
+
     // 暗化作用于 RGB 乘色，透明度单独交给混合阶段，避免两者互相替代。
     // 此处使用配置值本身，不额外改变配置层约定的取值范围。
     const float darkenRatio = config.visual.background.darken_ratio;
@@ -72,6 +77,9 @@ void BackgroundRenderSystem::render(Batcher& batcher, float viewportWidth,
                                                spectrumPlacement,
                                                levels);
     }
+    // 切回场景空间前提交背景，缺少图片的纯色底层也不能与轨道图集合批。
+    // 不改变快照的共享顶点缓冲，仅在命令层保存两种投影的边界。
+    batcher.setScreenSpace(false);
 }
 
 }  // namespace MMM::Logic::System

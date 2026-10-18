@@ -1,5 +1,6 @@
 #include "logic/session/ActionController.h"
 
+#include "common/LogicCommandMutationClassification.h"
 #include "config/EditorConfig.h"
 #include "log/colorful-log.h"
 #include "logic/ecs/components/TimelineComponent.h"
@@ -183,6 +184,91 @@ bool testBatchCreatePreservesMetadata()
     return true;
 }
 
+/// @brief 混合 BPM、SV 和 STOP 的批量删除只需一次撤销，并完整恢复原组件。
+/// @return 删除、撤销、重做及失效目标过滤均符合约定时为真。
+/// @details 初始组件直接建立在隔离 Registry 中，不用创建动作占用撤销历史。
+/// 保留格式元数据与插值定义，防止只恢复时间和值的简化删除实现误过。
+/// 一次撤销要求三个实体同帧恢复，不能用历史条目计数代替真实 Registry 状态。
+/// 单次重做要求整个批次消失，恢复后的实体也不能被遗留为重复副本。
+/// 删除命令还需归入 Timelines 权限域，避免联机只读状态下漏掉新命令。
+/// 所有数据仅存在于本次会话上下文，不依赖谱面文件或 UI 快照回流。
+bool testBatchDeleteIsAtomic()
+{
+    using namespace MMM;
+    using namespace MMM::Logic;
+    SessionContext                   context;
+    ActionController                 controller(context);
+    const std::array                 effects{ TimingEffect::BPM,
+                                              TimingEffect::SCROLL,
+                                              TimingEffect::STOP };
+    std::array<entt::entity, 3>      entities{};
+    std::array<TimelineComponent, 3> original{};
+    for ( std::size_t i = 0; i < entities.size(); ++i ) {
+        original[i] = TimelineComponent{ 2.0 + i, effects[i], 120.0 + i };
+        original[i]
+            .m_metadata.timing_properties[TimingMetadataType::MALODY]["beat"] =
+            "[4,1,2]";
+        entities[i] = context.timelineRegistry.create();
+        context.timelineRegistry.emplace<TimelineComponent>(entities[i],
+                                                            original[i]);
+    }
+    // 原曲线必须作为值快照保留，删除后无法再从 ECS 或 UI 快照补回。
+    original[1].m_interpolation = TimingInterpolation{};
+    context.timelineRegistry.get<TimelineComponent>(entities[1]) = original[1];
+    // 其他类型实体可以共享同一个 Registry，但批量 Timing 删除不能销毁它们。
+    // 单独保存该实体身份，在删除后确认它仍然存活。
+    const auto nonTimeline = context.timelineRegistry.create();
+    const auto expired     = context.timelineRegistry.create();
+    context.timelineRegistry.destroy(expired);
+    // 重复、空、已销毁和非 Timeline 句柄不能制造额外条目或触发无效组件读取。
+    CmdDeleteTimelineEvents command;
+    command.entities.assign(entities.begin(), entities.end());
+    command.entities.insert(command.entities.end(),
+                            { entities[1], entt::null, expired, nonTimeline });
+    // UI 发布新命令之后，权限门闩必须看到时间线变更，而非默认的只读命令。
+    // 这里只验证类别，房间授予或拒绝该类别仍由现有协作策略负责。
+    if ( requiredBeatmapMutationFlags(command) !=
+         BeatmapMutationFlags::Timelines )
+        return false;
+    controller.handleCommand(command);
+    // 初始撤销栈为空，删除后的唯一条目必须就是本次选择的全部目标。
+    // 同时检查 ECS 已清空，不能让只合并历史但没有执行删除的实现通过。
+    if ( !context.timelineRegistry.view<const TimelineComponent>().empty() ||
+         context.actionStack.getUndoStackSize() != 1 ||
+         !context.timelineRegistry.valid(nonTimeline) )
+        return false;
+    // 直接使用生产 ActionStack 撤销一次，不循环发出多次 undo 来拼出整批恢复。
+    context.actionStack.undo(context);
+    // 单次撤销恢复整批；重新按稳定实体身份读取，不保留删除前的组件指针。
+    for ( std::size_t i = 0; i < entities.size(); ++i ) {
+        if ( !context.timelineRegistry.all_of<TimelineComponent>(entities[i]) )
+            return false;
+        // 删除前观察指针已失效；按实体重新查询还可检测错误的重建身份。
+        // 元数据比较整个来源映射，不只检查某个可能恰好默认存在的键。
+        const auto& restored =
+            context.timelineRegistry.get<TimelineComponent>(entities[i]);
+        if ( restored.m_effect != original[i].m_effect ||
+             !near(restored.m_timestamp, original[i].m_timestamp) ||
+             !near(restored.m_value, original[i].m_value) ||
+             restored.m_metadata.timing_properties !=
+                 original[i].m_metadata.timing_properties ||
+             restored.m_interpolation != original[i].m_interpolation )
+            return false;
+    }
+    // 一次 undo 就应回到初始历史水位，不能残留同批其他目标等待继续撤销。
+    if ( context.actionStack.getUndoStackSize() != 0 ) return false;
+    context.actionStack.redo(context);
+    if ( !context.timelineRegistry.view<const TimelineComponent>().empty() ||
+         context.actionStack.getUndoStackSize() != 1 )
+        return false;
+    // 此次重做复用 BatchTimelineAction 内保存的条目，不能重新从 UI 选择取目标。
+    // 全失效批次不占历史；反复按 Delete 不能产生空撤销步骤。
+    // 原命令包含已删除句柄以及非 Timeline 实体，二次执行应保持幂等。
+    controller.handleCommand(command);
+    controller.handleCommand(CmdDeleteTimelineEvents{});
+    return context.actionStack.getUndoStackSize() == 1;
+}
+
 /// @brief 验证批量更新合并为一次撤销并保留 Timing metadata。
 /// @return 批量更新、撤销和重做均符合预期时返回 true。
 /// @note 更新命令不显式提供 metadata，应保持原组件中的格式扩展信息。
@@ -270,7 +356,49 @@ bool testBatchUpdateIsAtomic()
         // 重做也只调用一次，不能用循环 redo 隐藏批次拆成多条动作的问题。
         return false;
     }
-    return true;
+    // 接着模拟多选拖动：两种效果沿时间轴移动相同距离。
+    // 此时已有创建和参数编辑历史，移动必须只增加一条新历史。
+    // 不清空栈，可以检测撤销是否误吞前一次独立操作。
+    const auto previousHistory = context.actionStack.getUndoStackSize();
+    MMM::Logic::CmdUpdateTimelineEvents moveCommand;
+    moveCommand.events.push_back({ bpmEntity, 7.5, 180.0 });
+    moveCommand.events.push_back({ scrollEntity, 8.5, 10.0 });
+    controller.handleCommand(moveCommand);
+    // 旧 Malody beat 与移动后的秒时间不再一致，应在移动时清除。
+    // 撤销则恢复完整旧元数据，不能仅恢复时间和数值。
+    /// @brief 检查整组平移前后位置及元数据，不复用执行前的组件引用。
+    /// @param bpmTime BPM 的预期位置。
+    /// @param scrollTime 绿线的预期位置。
+    /// @param hasBeat 是否仍应保留移动前的 Malody 拍位。
+    const auto matches = [&](double bpmTime, double scrollTime, bool hasBeat) {
+        const auto& bpm =
+            context.timelineRegistry.get<const MMM::Logic::TimelineComponent>(
+                bpmEntity);
+        const auto& scroll =
+            context.timelineRegistry.get<const MMM::Logic::TimelineComponent>(
+                scrollEntity);
+        const auto beat = timingMetadataValue(
+            bpm.m_metadata, MMM::TimingMetadataType::MALODY, "beat");
+        return near(bpm.m_timestamp, bpmTime) &&
+               near(scroll.m_timestamp, scrollTime) &&
+               near(bpm.m_value, 180.0) && near(scroll.m_value, 10.0) &&
+               (hasBeat ? beat && *beat == "[4,0,1]" : !beat);
+    };
+    // 同时检查历史长度和真实组件，不能用批次数量代替执行结果。
+    if ( context.actionStack.getUndoStackSize() != previousHistory + 1 ||
+         !matches(7.5, 8.5, false) )
+        return false;
+    context.actionStack.undo(context);
+    // 一次撤销恢复两个不同位置；此前参数编辑仍然保留。
+    // 连续两次撤销才成功的实现会在这里立即失败。
+    if ( context.actionStack.getUndoStackSize() != previousHistory ||
+         !matches(5.0, 6.0, true) )
+        return false;
+    context.actionStack.redo(context);
+    // 重做同样只调用一次，验证两种效果与元数据状态同步恢复。
+    // 原实体身份不变，防止实现以删旧建新掩盖时间变化。
+    return context.actionStack.getUndoStackSize() == previousHistory + 1 &&
+           matches(7.5, 8.5, false);
 }
 
 /// @brief 验证 BPM 编辑与新增保速 SV 合并为一次撤销。
@@ -1119,7 +1247,7 @@ int main()
     // 退出零才表示全部场景均已运行，不能只凭没有错误日志判断每项都执行过。
     return testTemplatePlacementTransaction() &&
                    testBatchCreatePreservesMetadata() &&
-                   testBatchUpdateIsAtomic() &&
+                   testBatchUpdateIsAtomic() && testBatchDeleteIsAtomic() &&
                    testBpmKeepSpeedCreatesSvAtomically() &&
                    testBpmKeepSpeedUpdatesSvAtomically() &&
                    testSelectedBpmKeepSpeedBatch() &&

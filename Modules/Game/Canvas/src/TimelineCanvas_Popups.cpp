@@ -14,15 +14,18 @@
 
 #include "canvas/AuxiliaryWindowUi.h"
 #include "canvas/TimelineCanvas.h"
+#include "canvas/TimelineStopDuration.h"
 #include "canvas/TimelineTableSnapshotState.h"
 #include "canvas/TimelineTableWindowState.h"
 #include "canvas/TimingTableFraction.h"
+#include "common/LogicCommands.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "imgui.h"
+#include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
@@ -30,6 +33,7 @@
 #include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/timing/BpmNormalization.h"
+#include "mmm/timing/TimingTemplate.h"
 #include "ui/imgui/ClipboardBridge.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -46,7 +50,10 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <variant>
 #include <vector>
+
+#include <utility>
 
 namespace MMM::Canvas
 {
@@ -73,7 +80,7 @@ constexpr float TIMING_TABLE_SCROLLBAR_SIZE = 24.0f;
 constexpr float TIMING_TABLE_SCROLLBAR_GRAB_MIN_SIZE = 28.0f;
 
 /// @brief 时间点表格可搜索的 Timing 属性数量。
-constexpr std::size_t TIMING_TABLE_SEARCH_EFFECT_COUNT = 4;
+constexpr std::size_t TIMING_TABLE_SEARCH_EFFECT_COUNT = 5;
 
 /// @brief 在 Timeline 快照尚未到达时绘制可关闭的时间点表格窗口。
 ///
@@ -616,14 +623,14 @@ std::string makeMalodyBeatMetadataValue(double beat)
 /// @param rawValue 当前 Timing 原始参数。
 /// @param timeline 表格拍位换算时间线。
 /// @param fallbackBpm 无 BPM 锚点时使用的回退 BPM。
-void publishTimingBeatPositionUpdate(entt::entity entity, int beatIndex,
-                                     double fraction, double rawValue,
-                                     const TimingTableBeatTimeline& timeline,
-                                     double                         fallbackBpm)
+/// @return 输入有效时返回独立指令，调用方负责格式提醒和统一提交。
+std::optional<Logic::CmdUpdateTimelineEvent> makeTimingBeatPositionUpdate(
+    entt::entity entity, int beatIndex, double fraction, double rawValue,
+    const TimingTableBeatTimeline& timeline, double fallbackBpm)
 {
     if ( entity == entt::null || !std::isfinite(fraction) ||
          !std::isfinite(rawValue) ) {
-        return;
+        return std::nullopt;
     }
 
     const double requestedBeat = static_cast<double>(beatIndex) + fraction;
@@ -631,12 +638,11 @@ void publishTimingBeatPositionUpdate(entt::entity entity, int beatIndex,
         0.0, timingTableBeatToTime(timeline, requestedBeat, fallbackBpm));
     const double exportBeat =
         timingTableTimeToBeat(timeline, newTime, fallbackBpm);
-    Event::EventBus::instance().publish(
-        Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
-            entity,
-            newTime,
-            rawValue,
-            makeTimelineMetadataWithMalodyBeat(entity, exportBeat) }));
+    return Logic::CmdUpdateTimelineEvent{ entity,
+                                          newTime,
+                                          rawValue,
+                                          makeTimelineMetadataWithMalodyBeat(
+                                              entity, exportBeat) };
 }
 
 /// @brief 查询表格列当前是否有效显示。
@@ -778,6 +784,8 @@ void renderTimingTableHeaderContextMenu()
     if ( el.effects & Common::Render::SCROLL_EFFECT_JUMP ) {
         return ::MMM::TimingEffect::JUMP;
     }
+    if ( el.effects & Common::Render::SCROLL_EFFECT_STOP )
+        return ::MMM::TimingEffect::STOP;
     if ( el.effects & Common::Render::SCROLL_EFFECT_HS ) {
         return ::MMM::TimingEffect::HS;
     }
@@ -796,6 +804,7 @@ entt::entity getElementEntity(
     case ::MMM::TimingEffect::BPM: return el.bpmEntity;
     case ::MMM::TimingEffect::JUMP: return el.jumpEntity;
     case ::MMM::TimingEffect::HS: return el.hsEntity;
+    case ::MMM::TimingEffect::STOP: return el.stopEntity;
     case ::MMM::TimingEffect::SCROLL: return el.scrollEntity;
     }
     return entt::null;
@@ -812,6 +821,7 @@ double getElementRawValue(const Common::Render::TimelineInteractiveElement& el)
     case ::MMM::TimingEffect::BPM: return el.bpmValue;
     case ::MMM::TimingEffect::JUMP: return el.jumpValue;
     case ::MMM::TimingEffect::HS: return el.hsValue;
+    case ::MMM::TimingEffect::STOP: return el.stopValue;
     case ::MMM::TimingEffect::SCROLL: return el.scrollValue;
     }
     return 0.0;
@@ -828,6 +838,7 @@ const char* getEffectLabel(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::SCROLL: return "流速 (SV)";
     case ::MMM::TimingEffect::JUMP: return "Jump";
     case ::MMM::TimingEffect::HS: return "HS";
+    case ::MMM::TimingEffect::STOP: return "STOP";
     }
     return "Timing";
 }
@@ -845,6 +856,7 @@ std::size_t getTimingTableSearchEffectIndex(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::SCROLL: return 1;
     case ::MMM::TimingEffect::JUMP: return 2;
     case ::MMM::TimingEffect::HS: return 3;
+    case ::MMM::TimingEffect::STOP: return 4;
     }
     return 0;
 }
@@ -877,6 +889,7 @@ ImVec4 getEffectColor(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::SCROLL: return ImVec4(0.4f, 1.0f, 0.4f, 1.0f);
     case ::MMM::TimingEffect::JUMP: return ImVec4(0.35f, 0.6f, 1.0f, 1.0f);
     case ::MMM::TimingEffect::HS: return ImVec4(1.0f, 0.88f, 0.25f, 1.0f);
+    case ::MMM::TimingEffect::STOP: return ImVec4(1.0f, 0.88f, 0.25f, 1.0f);
     }
     return ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
 }
@@ -974,6 +987,10 @@ collectTimelineElements()
             el.effects    = Common::Render::SCROLL_EFFECT_JUMP;
             el.jumpEntity = entity;
             el.jumpValue  = tc.m_value;
+        } else if ( tc.m_effect == ::MMM::TimingEffect::STOP ) {
+            el.effects    = Common::Render::SCROLL_EFFECT_STOP;
+            el.stopEntity = entity;
+            el.stopValue  = tc.m_value;
         } else if ( tc.m_effect == ::MMM::TimingEffect::HS ) {
             el.effects  = Common::Render::SCROLL_EFFECT_HS;
             el.hsEntity = entity;
@@ -1141,10 +1158,14 @@ double getStoredValue(::MMM::TimingEffect, double displayValue,
 /// 最终 BPM 规范化和边界处理仍由逻辑层公共入口负责。
 /// @param effect Timeline 类型。
 /// @param value 待提交的显示值。
-/// @return 数值有限，且 BPM 不小于零时返回 true。
+/// @return 数值有限、BPM 非负且 STOP 时长严格为正时返回 true。
 /// @warning UI 热路径：仅执行常量时间数值判断，不得增加状态查询。
 bool isValidTimingEditorValue(::MMM::TimingEffect effect, double value)
 {
+    // STOP 草稿可暂时清空，但只能提交有限正时长。
+    // 其余特效保持既有符号约束，不能把 SV 的负值规则套到 STOP。
+    if ( effect == ::MMM::TimingEffect::STOP )
+        return isValidStopDuration(value);
     // 其他特效沿用既有有符号值语义，只有 BPM 禁止负数。
     return std::isfinite(value) &&
            (effect != ::MMM::TimingEffect::BPM || value >= 0.0);
@@ -1157,6 +1178,7 @@ bool isValidTimingEditorValue(::MMM::TimingEffect effect, double value)
     case 0: return ::MMM::TimingEffect::BPM;
     case 2: return ::MMM::TimingEffect::JUMP;
     case 3: return ::MMM::TimingEffect::HS;
+    case 4: return ::MMM::TimingEffect::STOP;
     case 1:
     default: return ::MMM::TimingEffect::SCROLL;
     }
@@ -1170,6 +1192,7 @@ double getDefaultCreateValue(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::SCROLL: return 1.0;
     case ::MMM::TimingEffect::JUMP: return 1000.0;
     case ::MMM::TimingEffect::HS: return 1.0;
+    case ::MMM::TimingEffect::STOP: return 0.5;
     }
     return 1.0;
 }
@@ -1200,15 +1223,17 @@ double getKeepSpeedScrollValue(double bpm)
     return scrollSpeed > 1e-6 ? scrollSpeed : 1.0;
 }
 
-/// @brief 创建与新 BPM 同时间点的保持速度流速事件。
-/// @details 只计算最终 Scroll 参数并发布创建命令；实体关联由快照回流后的
-/// keep-speed binding 按时间和最新实体 ID 完成。
-void createKeepSpeedScrollEvent(double time, double bpm)
+/// @brief 构造与新 BPM 同时间点的保持速度流速事件指令。
+/// @details 只计算最终 Scroll
+/// 参数，调用方统一发布并检查格式支持；实体关联由快照回流后的 keep-speed
+/// binding 按时间和最新实体 ID 完成。
+/// @param time 新 BPM 所在秒时间。
+/// @param bpm 用于计算补偿流速的 BPM。
+/// @return 仅含计算结果的创建指令，不绕过画布的风险提示入口。
+Logic::CmdCreateTimelineEvent makeKeepSpeedScrollEvent(double time, double bpm)
 {
     double finalScrollValue = getKeepSpeedScrollValue(bpm);
-    Event::EventBus::instance().publish(
-        Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
-            time, ::MMM::TimingEffect::SCROLL, finalScrollValue }));
+    return { time, ::MMM::TimingEffect::SCROLL, finalScrollValue };
 }
 
 /// @brief 绘制按偏好格式显示、仍可编辑原始秒值的时间输入控件。
@@ -1286,12 +1311,13 @@ bool drawTimeEditor(const char* id, double& value,
 /// - helper 不发布逻辑命令，外层 Apply/Create 再提交。
 /// @param time 弹窗草稿时间；仅显式编辑拍位时写回，避免拟合改变原时间。
 /// @param snapshot 当前谱面快照。
+/// @return 编辑后位置的有效 BPM，供 STOP 输入换算使用。
 /// @warning UI 热路径：仅在弹窗首次显示时构建 BPM 换算基准；打开期间复用
 /// 基准，避免每帧排序，也避免编辑 BPM 自身时定位基准随草稿变化。
-void drawPopupBeatPositionEditor(double&                               time,
-                                 const Common::Render::RenderSnapshot* snapshot)
+double drawPopupBeatPositionEditor(
+    double& time, const Common::Render::RenderSnapshot* snapshot)
 {
-    if ( !snapshot ) return;
+    if ( !snapshot ) return 120.0;
 
     /// @brief 当前模态弹窗打开时捕获的谱面节奏定位基准。
     static TimingTableBeatTimeline timeline;
@@ -1326,6 +1352,51 @@ void drawPopupBeatPositionEditor(double&                               time,
             time = std::max(0.0, requestedTime);
         }
     }
+    // 返回编辑后位置的有效 BPM，STOP 单位必须随时间字段变化。
+    // 复用弹窗首次显示时捕获的基准，常态只做二分查找。
+    auto point = std::upper_bound(
+        timeline.begin(),
+        timeline.end(),
+        time,
+        [](double target, const auto& entry) { return target < entry.time; });
+    if ( point == timeline.begin() ) return fallbackBpm;
+    --point;
+    if ( !point->interpolation ) return point->bpm;
+    // 原生谱面允许 BPM 曲线；段尾之后继承终值，与其他拍位计算一致。
+    const auto&  curve = *point->interpolation;
+    const double progress =
+        curve.m_duration > 0.0
+            ? std::clamp((time - point->time) / curve.m_duration, 0.0, 1.0)
+            : 0.0;
+    return sanitizeTimingTableBpm(
+        evaluateTimingInterpolation(curve, point->bpm, progress), fallbackBpm);
+}
+
+/// @brief 绘制 STOP 停顿时长与 iBMSC 单位切换。
+/// @param seconds 内部秒数草稿，不在输入期间强制改写下限。
+/// @param bpm 事件所在位置的有效 BPM。
+/// @param bmsUnits 当前弹窗单位偏好，创建和修改共用。
+/// @warning UI 热路径：只换算本地草稿，Apply/Create 才发布命令。
+void drawStopDurationEditor(double& seconds, double bpm, bool& bmsUnits)
+{
+    ::MMM::UI::FeedbackCheckbox("老 BMS 单位（iBMSC）", &bmsUnits);
+    ImGui::TextUnformatted(bmsUnits ? "停顿时长（1/48 拍）" : "停顿时长（秒）");
+    // 不同单位使用不同输入 ID，避免切换时复用旧单位的活动文本缓冲。
+    ImGui::PushID(bmsUnits ? 1 : 0);
+    double display = stopDurationDisplayValue(seconds, bpm, bmsUnits);
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    if ( ImGui::InputDouble("##StopDuration",
+                            &display,
+                            bmsUnits ? 1.0 : 0.01,
+                            bmsUnits ? 48.0 : 0.1,
+                            "%.6f") )
+        seconds = stopDurationSeconds(display, bpm, bmsUnits);
+    ImGui::PopID();
+    // 单位说明常驻可见，清晰区分时长与事件发生时间。
+    if ( bmsUnits )
+        ImGui::TextWrapped("48 单位 = 1 拍；按此处 BPM %.6g 换算为秒。", bpm);
+    if ( !isValidStopDuration(seconds) )
+        ImGui::TextUnformatted("停顿时长必须是大于 0 的有限数值。");
 }
 
 /// @brief 绘制占满弹窗内容区宽度的双精度输入框。
@@ -1429,7 +1500,7 @@ void TimelineCanvas::updateKeepSpeedBindingScroll(double bpm)
         return;
     }
 
-    Event::EventBus::instance().publish(Event::LogicCommandEvent(
+    publishTimelineCommand(Event::LogicCommandEvent(
         Logic::CmdUpdateTimelineEvent{ m_keepSpeedBindingScrollEntity,
                                        m_keepSpeedBindingTime,
                                        getKeepSpeedScrollValue(bpm) }));
@@ -1529,11 +1600,13 @@ void TimelineCanvas::renderEventEditorPopup()
 
         ImGui::TextUnformatted(TR("ui.timeline.event_editor.timestamp").data());
         drawTimeEditor("##Time", m_editTime, m_currentSnapshot);
-        drawPopupBeatPositionEditor(m_editTime, m_currentSnapshot);
+        const double stopBpm =
+            drawPopupBeatPositionEditor(m_editTime, m_currentSnapshot);
 
         ::MMM::TimingEffect editEffect =
             (m_editType == "BPM")    ? ::MMM::TimingEffect::BPM
             : (m_editType == "Jump") ? ::MMM::TimingEffect::JUMP
+            : (m_editType == "STOP") ? ::MMM::TimingEffect::STOP
             : (m_editType == "HS")   ? ::MMM::TimingEffect::HS
                                      : ::MMM::TimingEffect::SCROLL;
         // 可见字符串只作为兼容映射，内部提交统一使用强类型 effect。
@@ -1557,6 +1630,12 @@ void TimelineCanvas::renderEventEditorPopup()
         } else if ( editEffect == ::MMM::TimingEffect::JUMP ) {
             ImGui::TextUnformatted("Jump (ms)");
             drawFullWidthInputDouble("##Value", m_editValue, 1.0, 10.0, "%.4f");
+            // STOP 的数值是等待秒数，不沿用 BPM 或 SV 的倍数编辑语义。
+            // 保留小数精度，使从 BMS 单位换算来的短等待可继续修改。
+            // 正值下限只约束用户输入，不在这里把等待转换为音频帧。
+            // 实际调度帧率由 AudioManager 统一决定。
+        } else if ( editEffect == ::MMM::TimingEffect::STOP ) {
+            drawStopDurationEditor(m_editValue, stopBpm, m_stopUsesBmsUnits);
         } else if ( editEffect == ::MMM::TimingEffect::HS ) {
             ImGui::TextUnformatted("HS");
             drawFullWidthInputDouble("##Value", m_editValue, 0.01, 0.1, "%.4f");
@@ -1588,7 +1667,7 @@ void TimelineCanvas::renderEventEditorPopup()
             if ( editEffect == ::MMM::TimingEffect::BPM &&
                  m_keepSpeedOnBpmEdit ) {
                 // 组合命令在逻辑线程原子处理 BPM 与联动 Scroll 更新。
-                Event::EventBus::instance().publish(
+                publishTimelineCommand(
                     Event::LogicCommandEvent(Logic::CmdUpdateBpmWithKeepSpeedSv{
                         .bpmEntity   = m_editingEntity,
                         .newTime     = m_editTime,
@@ -1596,7 +1675,7 @@ void TimelineCanvas::renderEventEditorPopup()
                         .scrollValue = getKeepSpeedScrollValue(m_editValue),
                     }));
             } else {
-                Event::EventBus::instance().publish(
+                publishTimelineCommand(
                     Event::LogicCommandEvent(Logic::CmdUpdateTimelineEvent{
                         m_editingEntity, m_editTime, finalValue }));
             }
@@ -1610,7 +1689,7 @@ void TimelineCanvas::renderEventEditorPopup()
         if ( ::MMM::UI::FeedbackButton(
                  TR("ui.timeline.event_editor.delete").data(),
                  ImVec2(actionButtonWidth, 0)) ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            publishTimelineCommand(Event::LogicCommandEvent(
                 Logic::CmdDeleteTimelineEvent{ m_editingEntity }));
             ImGui::CloseCurrentPopup();
             m_isPopupOpen = false;
@@ -1755,7 +1834,8 @@ void TimelineCanvas::renderEventCreationPopup()
 
         ImGui::TextUnformatted(TR("ui.timeline.event_editor.timestamp").data());
         drawTimeEditor("##CreateTime", m_createTimeManual, m_currentSnapshot);
-        drawPopupBeatPositionEditor(m_createTimeManual, m_currentSnapshot);
+        const double stopBpm =
+            drawPopupBeatPositionEditor(m_createTimeManual, m_currentSnapshot);
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -1785,6 +1865,9 @@ void TimelineCanvas::renderEventCreationPopup()
                     getDefaultCreateValue(getCreateEffect(m_createType));
             }
 
+            wrapToNextLineIfNoSpace(getRadioButtonWidth("STOP"));
+            if ( ::MMM::UI::FeedbackRadioButton("STOP", &m_createType, 4) )
+                m_createValue = 0.5;
             wrapToNextLineIfNoSpace(getRadioButtonWidth("HS"));
 
             if ( ::MMM::UI::FeedbackRadioButton("HS", &m_createType, 3) ) {
@@ -1808,6 +1891,12 @@ void TimelineCanvas::renderEventCreationPopup()
             ImGui::TextUnformatted("Jump (ms)");
             drawFullWidthInputDouble(
                 "##JumpValue", m_createValue, 1.0, 10.0, "%.4f");
+            // 新建 STOP 与编辑已有 STOP 使用同一单位和范围。
+            // 默认半秒仅作为新事件初值，不影响已导入文件的参数。
+            // 事件仍通过标准逻辑命令提交，因此支持现有撤销和协作流程。
+            // 不能通过插值入口创建，否则每个采样点会变为额外等待。
+        } else if ( createEffect == ::MMM::TimingEffect::STOP ) {
+            drawStopDurationEditor(m_createValue, stopBpm, m_stopUsesBmsUnits);
         } else if ( createEffect == ::MMM::TimingEffect::HS ) {
             ImGui::TextUnformatted("HS");
             drawFullWidthInputDouble(
@@ -1838,7 +1927,7 @@ void TimelineCanvas::renderEventCreationPopup()
             const auto type       = createEffect;
             double     finalValue = getStoredValue(type, m_createValue);
 
-            Event::EventBus::instance().publish(
+            publishTimelineCommand(
                 Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
                     m_createTimeManual, type, finalValue }));
             // 最近创建标识只用于 UI 高亮，不作为实体身份或命令结果。
@@ -1849,7 +1938,9 @@ void TimelineCanvas::renderEventCreationPopup()
 
             if ( type == ::MMM::TimingEffect::BPM && m_keepSpeedOnBpmChange ) {
                 // 两条创建命令异步回流，binding 以时间和最新实体 ID 重新关联。
-                createKeepSpeedScrollEvent(m_createTimeManual, m_createValue);
+                publishTimelineCommand(
+                    Event::LogicCommandEvent(makeKeepSpeedScrollEvent(
+                        m_createTimeManual, m_createValue)));
                 beginKeepSpeedBinding(m_createTimeManual);
             }
 
@@ -2053,7 +2144,7 @@ void TimelineCanvas::renderEventCreationPopup()
 /// - 拍号列展示连续 beat 的整数部分。
 /// - 分拍列展示拟合后的分数。
 /// - 分拍误差超过三毫秒时显示警告色。
-/// - 拍号或分拍提交共用 `publishTimingBeatPositionUpdate`。
+/// - 拍号或分拍提交共用 `makeTimingBeatPositionUpdate`，统一检查保存能力。
 /// - 更新命令同时保留当前参数值。
 /// - Malody beat metadata 按最终钳制时间重新生成。
 /// - BPM 时间线在当前表格帧内复用。
@@ -2416,7 +2507,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         if ( ::MMM::UI::FeedbackButton("添加 BPM") ) {
             // 工具栏快速新增使用活动 Session 时间，而非快照视觉偏移时间。
             constexpr double DEFAULT_BPM_VALUE = 120.0;
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            publishTimelineCommand(Event::LogicCommandEvent(
                 Logic::CmdCreateTimelineEvent{ tableCurrentTime,
                                                ::MMM::TimingEffect::BPM,
                                                DEFAULT_BPM_VALUE }));
@@ -2427,7 +2518,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
 
             if ( m_keepSpeedOnBpmChange ) {
                 // 联动创建后按时间追踪异步回流的最新 BPM 与 Scroll 实体。
-                createKeepSpeedScrollEvent(tableCurrentTime, DEFAULT_BPM_VALUE);
+                publishTimelineCommand(
+                    Event::LogicCommandEvent(makeKeepSpeedScrollEvent(
+                        tableCurrentTime, DEFAULT_BPM_VALUE)));
                 beginKeepSpeedBinding(tableCurrentTime);
             }
         }
@@ -2437,7 +2530,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             &m_keepSpeedOnBpmChange);
         ImGui::SameLine();
         if ( ::MMM::UI::FeedbackButton("添加流速 (SV)") ) {
-            Event::EventBus::instance().publish(
+            publishTimelineCommand(
                 Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
                     tableCurrentTime, ::MMM::TimingEffect::SCROLL, 1.0 }));
             m_lastCreatedTimingTime   = tableCurrentTime;
@@ -2447,7 +2540,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         }
         ImGui::SameLine();
         if ( ::MMM::UI::FeedbackButton("添加 Jump") ) {
-            Event::EventBus::instance().publish(
+            publishTimelineCommand(
                 Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
                     tableCurrentTime, ::MMM::TimingEffect::JUMP, 1000.0 }));
             m_lastCreatedTimingTime   = tableCurrentTime;
@@ -2456,8 +2549,25 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
         }
         ImGui::SameLine();
+        // 表格入口和画布入口提交同一类型，避免保存后丢失等待语义。
+        // 创建后沿用最后创建事件的高亮定位，而非直接访问 ECS 注册表。
+        // 按钮只在用户点击时生成命令，界面绘制不会重复创建事件。
+        // 标记秒数与其他类型分列展示，筛选逻辑也有独立 STOP 槽位。
+        // STOP 不改变 BPM、SV、Jump 或 HS 的后续累积值。
+        // 播放时是否冻结由音频调度处理，UI 不使用 sleep 模拟暂停。
+        // 对不支持的保存格式仍使用能力提示，不改变用户当前编辑权限。
+        if ( ::MMM::UI::FeedbackButton("添加 STOP") ) {
+            publishTimelineCommand(
+                Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
+                    tableCurrentTime, ::MMM::TimingEffect::STOP, 0.5 }));
+            m_lastCreatedTimingTime   = tableCurrentTime;
+            m_lastCreatedTimingEffect = ::MMM::TimingEffect::STOP;
+            m_lastCreatedTimingHighlightUntil =
+                ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
+        }
+        ImGui::SameLine();
         if ( ::MMM::UI::FeedbackButton("添加 HS") ) {
-            Event::EventBus::instance().publish(
+            publishTimelineCommand(
                 Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
                     tableCurrentTime, ::MMM::TimingEffect::HS, 1.0 }));
             m_lastCreatedTimingTime   = tableCurrentTime;
@@ -2493,7 +2603,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                        m_selectedTimingEntities.end());
             // 结束临时单点联动，防止其旧绑定在批量结果回流后重新覆盖绿线。
             finishKeepSpeedBinding();
-            Event::EventBus::instance().publish(
+            publishTimelineCommand(
                 Event::LogicCommandEvent(std::move(command)));
         }
         if ( ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) ) {
@@ -2601,13 +2711,15 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     "ui.timeline.timing_points_table.search.effect.bpm",
                     "ui.timeline.timing_points_table.search.effect.sv",
                     "ui.timeline.timing_points_table.search.effect.jump",
-                    "ui.timeline.timing_points_table.search.effect.hs"
+                    "ui.timeline.timing_points_table.search.effect.hs",
+                    "STOP"
                 };
             const std::array<const char*, TIMING_TABLE_SEARCH_EFFECT_COUNT>
                 searchEffectIds{ "TimingTableSearchBpm",
                                  "TimingTableSearchSv",
                                  "TimingTableSearchJump",
-                                 "TimingTableSearchHs" };
+                                 "TimingTableSearchHs",
+                                 "TimingTableSearchStop" };
             for ( std::size_t filterIndex = 0;
                   filterIndex < TIMING_TABLE_SEARCH_EFFECT_COUNT;
                   ++filterIndex ) {
@@ -2697,7 +2809,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                           getStoredValue(
                               effect, m_tableSearchReplacementValue, entity) });
                 }
-                Event::EventBus::instance().publish(
+                publishTimelineCommand(
                     Event::LogicCommandEvent(std::move(command)));
             }
             if ( !canReplaceSearchResults ) {
@@ -2789,14 +2901,19 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 ImGui::TableSetColumnIndex(2);
                 if ( ::MMM::UI::FeedbackButton("应用时间偏移") &&
                      std::abs(bulkOffsetValue) > 1e-6 ) {
+                    // 一次应用偏移对应一次历史，保留各事件自身数值与身份。
+                    // 整批交给命令层校验，不能先移动前一项再拿旧位置检查后一项。
+                    Logic::CmdUpdateTimelineEvents command;
+                    command.events.reserve(elements.size());
                     for ( const auto& el : elements ) {
-                        entt::entity ent    = getElementEntity(el);
-                        double       rawVal = getElementRawValue(el);
-                        Event::EventBus::instance().publish(
-                            Event::LogicCommandEvent(
-                                Logic::CmdUpdateTimelineEvent{
-                                    ent, el.time + bulkOffsetValue, rawVal }));
+                        command.events.push_back({ getElementEntity(el),
+                                                   el.time + bulkOffsetValue,
+                                                   getElementRawValue(el) });
                     }
+                    // 无匹配项时不入队，避免空动作干扰已有撤销栈。
+                    if ( !command.events.empty() )
+                        publishTimelineCommand(
+                            Event::LogicCommandEvent(std::move(command)));
                     bulkOffsetValue = 0.0;
                 }
 
@@ -2811,6 +2928,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 ImGui::TableSetColumnIndex(2);
                 if ( ::MMM::UI::FeedbackButton("应用流速缩放") &&
                      std::abs(bulkScaleValue - 1.0) > 1e-6 ) {
+                    // 显示流速先逐项换回存储值，全部计算完再提交一次。
+                    // 该批次只含绿线，其他类型保持原值与原撤销身份。
+                    Logic::CmdUpdateTimelineEvents command;
+                    command.events.reserve(elements.size());
                     for ( const auto& el : elements ) {
                         if ( el.effects &
                              Common::Render::SCROLL_EFFECT_SCROLL ) {
@@ -2823,12 +2944,14 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                 getStoredValue(::MMM::TimingEffect::SCROLL,
                                                newDisp,
                                                el.scrollEntity);
-                            Event::EventBus::instance().publish(
-                                Event::LogicCommandEvent(
-                                    Logic::CmdUpdateTimelineEvent{
-                                        el.scrollEntity, el.time, newVal }));
+                            command.events.push_back(
+                                { el.scrollEntity, el.time, newVal });
                         }
                     }
+                    // 没有绿线时不生成历史，重复倍率仍由命令层过滤无变化项。
+                    if ( !command.events.empty() )
+                        publishTimelineCommand(
+                            Event::LogicCommandEvent(std::move(command)));
                     bulkScaleValue = 1.0;
                 }
 
@@ -3095,10 +3218,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                              tId.c_str(), tVal, m_currentSnapshot) ) {
                         entt::entity ent    = getElementEntity(el);
                         double       rawVal = getElementRawValue(el);
-                        Event::EventBus::instance().publish(
-                            Event::LogicCommandEvent(
-                                Logic::CmdUpdateTimelineEvent{
-                                    ent, tVal, rawVal }));
+                        publishTimelineCommand(Event::LogicCommandEvent(
+                            Logic::CmdUpdateTimelineEvent{
+                                ent, tVal, rawVal }));
                     }
 
                     const double continuousBeat = timingTableTimeToBeat(
@@ -3118,12 +3240,16 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     const bool beatIndexChanged =
                         ImGui::InputInt(beatId.c_str(), &beatIndexValue, 1, 4);
                     if ( beatIndexChanged ) {
-                        publishTimingBeatPositionUpdate(ent,
-                                                        beatIndexValue,
-                                                        fractionFit.fraction,
-                                                        getElementRawValue(el),
-                                                        beatTimeline,
-                                                        tableFallbackBpm);
+                        if ( auto command = makeTimingBeatPositionUpdate(
+                                 ent,
+                                 beatIndexValue,
+                                 fractionFit.fraction,
+                                 getElementRawValue(el),
+                                 beatTimeline,
+                                 tableFallbackBpm) ) {
+                            publishTimelineCommand(
+                                Event::LogicCommandEvent(std::move(*command)));
+                        }
                     }
 
                     // 第 3 列：分拍位
@@ -3142,12 +3268,16 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                     }
                     if ( drawTimingTableFractionInput(
                              fractionId.c_str(), fractionFit, fractionValue) ) {
-                        publishTimingBeatPositionUpdate(ent,
-                                                        fractionFit.beatIndex,
-                                                        fractionValue,
-                                                        getElementRawValue(el),
-                                                        beatTimeline,
-                                                        tableFallbackBpm);
+                        if ( auto command = makeTimingBeatPositionUpdate(
+                                 ent,
+                                 fractionFit.beatIndex,
+                                 fractionValue,
+                                 getElementRawValue(el),
+                                 beatTimeline,
+                                 tableFallbackBpm) ) {
+                            publishTimelineCommand(
+                                Event::LogicCommandEvent(std::move(*command)));
+                        }
                     }
                     if ( hasFractionWarning ) {
                         if ( ImGui::IsItemHovered() ) {
@@ -3210,7 +3340,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                             &vVal,
                             effect == ::MMM::TimingEffect::BPM ? 0.1 : 0.01,
                             effect == ::MMM::TimingEffect::BPM ? 1.0 : 0.1,
-                            "%.4f");
+                            effect == ::MMM::TimingEffect::STOP ? "%.6f s"
+                                                                : "%.4f");
                         if ( isBoundScroll ) {
                             ImGui::EndDisabled();
                             if ( ImGui::IsItemHovered(
@@ -3227,10 +3358,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                              displayValueValid ) {
                             double finalValue =
                                 getStoredValue(effect, vVal, ent);
-                            Event::EventBus::instance().publish(
-                                Event::LogicCommandEvent(
-                                    Logic::CmdUpdateTimelineEvent{
-                                        ent, el.time, finalValue }));
+                            publishTimelineCommand(Event::LogicCommandEvent(
+                                Logic::CmdUpdateTimelineEvent{
+                                    ent, el.time, finalValue }));
                             if ( isBoundBpm ) {
                                 updateKeepSpeedBindingScroll(vVal);
                             }
@@ -3259,17 +3389,15 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         float visualOffset = Config::AppConfig::instance()
                                                  .getVisualConfig()
                                                  .getEffectiveVisualOffset();
-                        Event::EventBus::instance().publish(
-                            Event::LogicCommandEvent(
-                                Logic::CmdSeek{ el.time - visualOffset }));
+                        publishTimelineCommand(Event::LogicCommandEvent(
+                            Logic::CmdSeek{ el.time - visualOffset }));
                     }
                     ImGui::SameLine();
                     std::string delId = fmt::format("删除##Del_{}", displayIdx);
                     if ( ::MMM::UI::FeedbackButton(delId.c_str()) ) {
                         entt::entity ent = getElementEntity(el);
-                        Event::EventBus::instance().publish(
-                            Event::LogicCommandEvent(
-                                Logic::CmdDeleteTimelineEvent{ ent }));
+                        publishTimelineCommand(Event::LogicCommandEvent(
+                            Logic::CmdDeleteTimelineEvent{ ent }));
                         m_selectedTimingEntities.erase(ent);
                         m_tableSelectionAnchorEntity = entt::null;
                     }
@@ -3367,6 +3495,213 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     ImGui::End();
 
     ImGui::PopStyleVar(6);
+}
+
+/// @brief 检查命令涉及的类型并保持既有异步提交行为。
+/// @details 只在用户提交时检查快照实体，不读取逻辑线程的可变注册表。
+/// 连续输入、批量删除和 BPM 联动产生的多条命令共用一次待显示警告。
+/// @warning 低频提交路径：禁止通过此处执行磁盘查询或等待会话锁。
+/// @param event 调用方已构造好的逻辑事件，类型检查不改写其载荷。
+/// @details 提醒与执行相互独立：
+/// - 是否弹窗由用户偏好和打开文件的格式共同决定。
+/// - 受支持的时间点仍直接提交，不强迫用户确认普通操作。
+/// - 不支持的类型同样提交，用户可以稍后另存为无损格式。
+/// - 提醒不承担保存验证，不能承诺外部导出器支持所有参数。
+/// - 提示记录提交时的格式，延后显示时不再次读取活动标签的文件名。
+/// - 一个批次含任意不支持类型就提醒，不为每条事件弹出窗口。
+/// - 连续手势的提示合并由 pending 标志负责，不使用计时等待。
+/// - 用户关闭提示后，下一次不支持的修改重新置位 pending。
+/// - 全局关闭提醒只跳过检查，不改变任何时间线命令的可执行性。
+/// - 实体身份只在快照中解析，失效实体沿用逻辑线程原有检查。
+/// - 本地提示不发送到其他联机用户，避免远端命令重复弹窗。
+/// - 命令中的元数据与插值内容原样传递，不能因能力检查被裁剪。
+void TimelineCanvas::publishTimelineCommand(
+    const Event::LogicCommandEvent& event)
+{
+    const auto& settings = Config::AppConfig::instance().getEditorSettings();
+    if ( m_currentSnapshot && !settings.hideTimelineFormatWarning &&
+         !m_currentSnapshot->isPlaying ) {
+        const auto format =
+            timelineFormatSupport(m_currentSnapshot->beatmapPathKey);
+        // 只要任一类型受限就检查，MC 虽支持原四类，仍不支持 STOP。
+        // MMM 的全部类型均可保存，保持无需检查实体的快速路径。
+        if ( !format.supportsScroll || !format.supportsJumpAndHs ||
+             !format.supportsStop ) {
+            const auto unsupported = [format](TimingEffect effect) {
+                return !format.supports(effect);
+            };
+            const auto unsupportedEntity = [&](entt::entity entity) {
+                // 表格与画布共用完整时间点快照，离屏行也能解析类型。
+                // 空句柄可能命中大量未使用的类型槽，必须先排除。
+                // 同一秒的多个类型拥有不同实体，不能只按时间推断类型。
+                // 找不到实体时不猜测，提交后的合法性仍由逻辑层负责。
+                if ( entity == entt::null ) return false;
+                for ( const auto& element :
+                      m_currentSnapshot->timelineElements ) {
+                    if ( element.bpmEntity == entity )
+                        return unsupported(TimingEffect::BPM);
+                    if ( element.scrollEntity == entity )
+                        return unsupported(TimingEffect::SCROLL);
+                    if ( element.jumpEntity == entity )
+                        return unsupported(TimingEffect::JUMP);
+                    if ( element.hsEntity == entity )
+                        return unsupported(TimingEffect::HS);
+                    // 已有 STOP 的修改、删除与批量编辑也需要原格式风险提示。
+                    if ( element.stopEntity == entity )
+                        return unsupported(TimingEffect::STOP);
+                }
+                return false;
+            };
+            bool warn = false;
+            // 明确列出写入命令，Seek、选区、复制和撤销不误报为新修改。
+            // 创建命令已经携带类型，无需等待异步回流得到新实体。
+            // 更新和删除引用已有实体，只读取提交时的只读快照。
+            // 批量更新短路到首个不支持项，提示数量与选区大小无关。
+            if ( const auto* cmd = std::get_if<Logic::CmdCreateTimelineEvent>(
+                     &event.command) )
+                warn = unsupported(cmd->type);
+            else if ( const auto* cmd =
+                          std::get_if<Logic::CmdUpdateTimelineEvent>(
+                              &event.command) )
+                warn = unsupportedEntity(cmd->entity);
+            else if ( const auto* cmd =
+                          std::get_if<Logic::CmdDeleteTimelineEvent>(
+                              &event.command) )
+                warn = unsupportedEntity(cmd->entity);
+            else if ( const auto* cmd =
+                          std::get_if<Logic::CmdDeleteTimelineEvents>(
+                              &event.command) )
+                // 批量删除仍检查全部目标，不能因合并命令漏掉原格式风险提示。
+                warn = std::any_of(cmd->entities.begin(),
+                                   cmd->entities.end(),
+                                   unsupportedEntity);
+            else if ( const auto* cmd =
+                          std::get_if<Logic::CmdUpdateTimelineEvents>(
+                              &event.command) )
+                warn = std::any_of(cmd->events.begin(),
+                                   cmd->events.end(),
+                                   [&](const auto& item) {
+                                       return unsupportedEntity(item.entity);
+                                   });
+            else if ( std::holds_alternative<
+                          Logic::CmdUpdateBpmWithKeepSpeedSv>(event.command) )
+                // 保持速度会写入 Scroll，即使用户修改的是受支持的 BPM。
+                warn = unsupported(TimingEffect::SCROLL);
+            else if ( const auto* cmd =
+                          std::get_if<Logic::CmdKeepSpeedForBpmEvents>(
+                              &event.command) )
+                // 空批次没有新增补偿流速，不能仅因 IMD 格式就提示。
+                warn = !cmd->bpmEntities.empty() &&
+                       unsupported(TimingEffect::SCROLL);
+            else if ( const auto* cmd =
+                          std::get_if<Logic::CmdCreateTimelineEvents>(
+                              &event.command) ) {
+                warn = std::any_of(
+                    cmd->events.begin(),
+                    cmd->events.end(),
+                    [&](const auto& item) { return unsupported(item.type); });
+                // 模板命令携带定义而非最终展开列表，须检查原定义中的类型。
+                if ( cmd->templateDefinition )
+                    warn |= std::any_of(
+                        cmd->templateDefinition->m_points.begin(),
+                        cmd->templateDefinition->m_points.end(),
+                        [&](const auto& item) {
+                            return unsupported(item.m_timing.m_timingEffect);
+                        });
+            }
+            if ( warn ) {
+                // 这里只登记消息，不能在表格子窗口或编辑弹窗内抢开模态。
+                // 不复制完整谱面或文件路径，描述中的文字均有静态生命周期。
+                m_timingWarningFormat        = format;
+                m_timingFormatWarningPending = true;
+            }
+        }
+    }
+    // 能力不足只产生提醒，始终保留命令、撤销和联机同步原有路径。
+    Event::EventBus::instance().publish(event);
+}
+
+/// @brief 展示原格式保存风险，用户确认只关闭提示、不撤销编辑。
+/// @warning 每帧只检查状态；只有勾选偏好并确认时才低频写入配置。
+/// @details 弹窗生命周期：
+/// - 提交当帧可能仍处于表格输入或模态编辑窗口，先保留待提示状态。
+/// - 鼠标按住时保持原拖动反馈，松开后才有资格显示警告。
+/// - 其他 popup 开着时不堆叠本提示，避免改变原来的关闭与确认语义。
+/// - 显示条件不使用固定时间窗口，因此不会增加输入延迟。
+/// - 弹窗使用稳定内部 ID，中文标题不会改变状态归属。
+/// - 确认按钮只关闭提示，已有修改继续保留在内存和撤销历史。
+/// - 关闭按钮允许暂不改变提醒偏好，下次修改仍会弹出。
+/// - 偏好草稿每次打开时重置，不能继承未确认的勾选。
+/// - 确认后保存全局偏好，下一次启动也不重复提醒。
+/// - 保存偏好失败由日志记录，本次会话仍遵守用户的选择。
+/// - 红色加粗只用于丢失结果，其他说明沿用皮肤正文颜色。
+/// - 皮肤无需提供粗体字体，中文缺字回退也保持同一字体覆盖范围。
+void TimelineCanvas::renderTimingFormatWarning()
+{
+    auto& config = Config::AppConfig::instance();
+    if ( config.getEditorSettings().hideTimelineFormatWarning ) {
+        // 偏好可能由配置重载改变，丢弃尚未显示的提示而非延后补弹。
+        m_timingFormatWarningPending = false;
+        return;
+    }
+    constexpr const char* popup =
+        "时间线格式支持度提示###TimelineFormatWarning";
+    // 输入仍激活或编辑弹窗未关时延后显示，避免打断连续输入和拖动。
+    if ( m_timingFormatWarningPending && !ImGui::IsAnyItemActive() &&
+         !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+         !ImGui::IsMouseDown(ImGuiMouseButton_Right) &&
+         !ImGui::IsPopupOpen(
+             nullptr,
+             ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) ) {
+        m_timingFormatWarningPending = false;
+        m_isTimingFormatWarningOpen  = true;
+        m_hideTimingFormatWarning    = false;
+        UI::FeedbackOpenPopup(popup);
+    }
+    const float                        scale = config.getWindowContentScale();
+    UI::Utils::CenteredModalPopupScope scope(scale);
+    if ( scope.begin(popup,
+                     &m_isTimingFormatWarningOpen,
+                     ImGuiWindowFlags_None,
+                     ImVec2(480.0f * scale, 0.0f)) ) {
+        // 支持列表描述原文件格式，不把全局另存偏好误当作已完成保存。
+        // 明确给出无损保存入口，让继续编辑的用户能够选择正确目标格式。
+        ImGui::TextWrapped("%s 格式谱面仅支持 %s 类型的时间点。",
+                           m_timingWarningFormat.extension.data(),
+                           m_timingWarningFormat.supportedTypes.data());
+        ImGui::Spacing();
+        ImGui::TextWrapped(
+            "若要无损保留所有类型的修改，请使用 .mmm 格式。\n"
+            "若不保存为 .mmm 或支持此次修改的格式，下次打开此 %s 文件时，",
+            m_timingWarningFormat.extension.data());
+        ImGui::TextUnformatted("你的此编辑将会");
+        ImGui::SameLine(0.0f, 0.0f);
+        const ImVec4 red(1.0f, 0.2f, 0.2f, 1.0f);
+        // 使用当前中文字体叠加小幅描边加粗，不依赖皮肤提供专用粗体字体。
+        const ImVec2 textPos = ImGui::GetCursorScreenPos();
+        ImGui::TextColored(red, "%s", "丢失");
+        ImGui::GetWindowDrawList()->AddText(
+            ImVec2(textPos.x + 0.7f * scale, textPos.y),
+            ImGui::ColorConvertFloat4ToU32(red),
+            "丢失");
+        ImGui::SameLine(0.0f, 0.0f);
+        ImGui::TextUnformatted("！");
+        ImGui::Spacing();
+        UI::FeedbackCheckbox("不再显示", &m_hideTimingFormatWarning);
+        // 此选项仅作用于警告窗口，不修改导入或导出能力。
+        // 勾选是本地草稿，只有确认按钮才写入持久配置。
+        // 关闭窗口不改变偏好，下次修改仍应提醒。
+        if ( UI::FeedbackButton("我知道了", ImVec2(-1.0f, 0.0f)) ) {
+            if ( m_hideTimingFormatWarning ) {
+                // 偏好只控制风险提示，不能影响可编辑类型或保存格式选择。
+                config.getEditorSettings().hideTimelineFormatWarning = true;
+                if ( !config.save() ) XERROR("保存时间线格式警告偏好失败");
+            }
+            m_isTimingFormatWarningOpen = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 }
 
 }  // namespace MMM::Canvas

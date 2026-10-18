@@ -1,19 +1,25 @@
 #include "logic/ProjectController.h"
+#include "ArchiveReadLocale.h"
 #include "config/AppConfig.h"
 #include "config/CreatorIdentity.h"
 #include "config/Utf8Path.h"
 #include "event/project/ProjectEvents.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "log/colorful-log.h"
+#include "mmm/project/PackageFileTypes.h"
 
+#include <archive.h>
+#include <archive_entry.h>
 #include <fmt/format.h>
 #include <miniz.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <system_error>
@@ -75,16 +81,15 @@ std::string toLowerAscii(std::string value)
     return value;
 }
 
-/// @brief 判断文件扩展名是否是可按 zip 读取的谱面包。
+/// @brief 判断文件扩展名是否是可作为临时项目读取的归档。
 /// @param path 待检查路径。
 /// @return 扩展名受支持时返回 true。
-/// @note 包含 .7z 后缀入口，但内容仍由 ZIP 读取器验证，不承诺通用 7z 解码。
+/// @note 所有入口共用归档后缀表，内容和压缩算法由读取器验证。
 bool isTemporaryPackagePath(const std::filesystem::path& path)
 {
     // 这里只按后缀分派打开流程；是否确实可解码仍由后续归档读取判定。
     const auto extension = toLowerAscii(Config::pathToUtf8(path.extension()));
-    return extension == ".zip" || extension == ".7z" || extension == ".mcz" ||
-           extension == ".osz" || extension == ".mpk";
+    return MMM::isProjectArchiveExtension(extension);
 }
 
 /// @brief 将文件名片段净化为临时目录名可用的 ASCII 字符串。
@@ -99,7 +104,7 @@ std::string sanitizeTemporaryFolderName(std::string name)
     // 保留的 ASCII 集合不含路径分隔符，因此不会由包名引入额外目录层级。
     for ( char& ch : name ) {
         const unsigned char byte = static_cast<unsigned char>(ch);
-        const bool          ok   = (byte >= 'a' && byte <= 'z') ||
+        const bool ok = (byte >= 'a' && byte <= 'z') ||
                         (byte >= 'A' && byte <= 'Z') ||
                         (byte >= '0' && byte <= '9') || ch == '-' || ch == '_';
         if ( !ok ) ch = '_';
@@ -598,7 +603,7 @@ std::filesystem::path makeAbsoluteNormalizedPath(
     return path.lexically_normal();
 }
 
-/// @brief 将 zip 兼容谱面包安全解压到目标目录。
+/// @brief 将 受支持的归档谱面包安全解压到目标目录。
 /// @param packagePath 谱面包路径。
 /// @param destinationRoot 解压目标目录。
 /// @note 目标根由准备阶段创建；此函数不能用于向已有正式项目合并任意谱包。
@@ -706,6 +711,208 @@ bool extractZipPackageToDirectory(const std::filesystem::path& packagePath,
     mz_zip_reader_end(&zipArchive);
     // 读取器结束后 packageBytes 才可随函数退出释放，库不能继续借用输入缓冲。
     return success;
+}
+
+/// @brief 流式解压通用归档，只接受普通文件和目录。
+/// @param packagePath 源归档；不会修改原文件。
+/// @param destinationRoot 本次专用的空临时目录。
+/// @param errorMessage 失败原因；上层负责清理部分写入。
+/// @return 所有条目及归档尾部检查均成功时返回 true。
+/// @warning 仅用于低频项目打开，文件 IO 不得进入逐帧路径。
+bool extractArchivePackageToDirectory(
+    const std::filesystem::path& packagePath,
+    const std::filesystem::path& destinationRoot, std::string& errorMessage)
+{
+    // ZIP 家族保留 Unicode Path extra field 与旧谱包的既有处理规则。
+    // 容器后缀只选择兼容读取路径，不作为文件内容可信的证据。
+    // ZIP 导出、旧 MCZ 路径额外字段和 Unicode 回归均不受新解码器影响。
+    const auto extension =
+        toLowerAscii(Config::pathToUtf8(packagePath.extension()));
+    if ( extension == ".zip" || extension == ".mcz" || extension == ".osz" ||
+         extension == ".mpk" ) {
+        return extractZipPackageToDirectory(
+            packagePath, destinationRoot, errorMessage);
+    }
+    // 转换表作用域必须覆盖整个读取器生命周期，且不能改动其他线程的 locale。
+    // locale 对象先于读取器创建，逆序析构确保转换上下文最后释放。
+    // 路径解码需要的线程状态不进入 ProjectController 的持久化配置。
+    MMM::Logic::ArchiveReadLocale locale;
+    // 环境失败时不创建任何文件，避免保存无法重新引用的乱码名称。
+    if ( !locale.ready() ) {
+        errorMessage = "无法为归档文件名建立 UTF-8 字符环境";
+        return false;
+    }
+    // deleter 管理库句柄，任何失败分支都无需手工释放或异常处理。
+    // 采用库专属释放函数，不能用普通智能指针默认删除器。
+    // archive_read_free 同时结束尚未显式关闭的读取过程。
+    std::unique_ptr<archive, decltype(&archive_read_free)> reader(
+        archive_read_new(), archive_read_free);
+    if ( !reader ) {
+        errorMessage = "无法创建归档读取器";
+        return false;
+    }
+    /// @brief 把库错误保留在用户可见的失败消息中。
+    // 库错误字符串的生命周期属于句柄，这里复制后再交给上层。
+    // 不得把返回的原始指针保存到异步 UI 事件。
+    const auto fail = [&]() {
+        const char* detail = archive_error_string(reader.get());
+        errorMessage =
+            std::string("无法解压谱面包（文件损坏、加密或缺少分卷）：") +
+            (detail ? detail : "归档读取失败");
+        return false;
+    };
+    // 仅注册内置过滤器，不能使用 filter_all 的外部命令回退。
+    // 缺少编译期解码能力时直接失败，避免不同机器静默获得不同能力。
+    // 过滤器集合与源码构建启用项一致；可选外部程序不参与格式探测。
+    for ( const auto setup : { archive_read_support_filter_none,
+                               archive_read_support_filter_gzip,
+                               archive_read_support_filter_bzip2,
+                               archive_read_support_filter_xz,
+                               archive_read_support_filter_lzma,
+                               archive_read_support_filter_lzip,
+                               archive_read_support_filter_zstd,
+                               archive_read_support_filter_compress } ) {
+        if ( setup(reader.get()) != ARCHIVE_OK ) return fail();
+    }
+    // 同时避免读取器根据文本指令引用源归档之外的宿主文件。
+    // 不注册 mtree/raw：前者可能读取外部文件，后者会把任意数据当作单文件归档。
+    for ( const auto setup : { archive_read_support_format_7zip,
+                               archive_read_support_format_rar,
+                               archive_read_support_format_rar5,
+                               archive_read_support_format_tar,
+                               archive_read_support_format_zip,
+                               archive_read_support_format_cab,
+                               archive_read_support_format_iso9660,
+                               archive_read_support_format_cpio,
+                               archive_read_support_format_lha } ) {
+        if ( setup(reader.get()) != ARCHIVE_OK ) return fail();
+    }
+    // Windows 使用原生宽字符路径，避免系统代码页破坏中文包名。
+#ifdef _WIN32
+    const int openResult =
+        archive_read_open_filename_w(reader.get(), packagePath.c_str(), 65536);
+#else
+    const int openResult =
+        archive_read_open_filename(reader.get(), packagePath.c_str(), 65536);
+#endif
+    // 打开失败尚未产生输出，上层仍会回收刚分配的空缓存目录。
+    // 只读取一个指定文件；缺少分卷时不会自动搜索用户其他目录。
+    if ( openResult != ARCHIVE_OK ) return fail();
+
+    // 限制总输出和条目数；流式读取本身不能防止压缩炸弹耗尽磁盘。
+    // 总量使用无符号 64 位计数，后续以剩余容量比较以避免加法溢出。
+    // 上限统计实际解压字节，不能使用压缩文件大小代替。
+    constexpr std::uint64_t MAX_BYTES   = 32ULL * 1024 * 1024 * 1024;
+    constexpr std::size_t   MAX_ENTRIES = 100000;
+    std::uint64_t           written     = 0;
+    std::size_t             count       = 0;
+    // 固定缓冲使峰值工作内存不随单个音频文件大小增长。
+    // 读取器内部仍可能为 solid 归档分配算法需要的缓冲。
+    std::array<char, 65536> buffer{};
+    // entry 由 reader 持有，每次读取下一个头都会使旧观察指针失效。
+    archive_entry* entry = nullptr;
+    for ( ;; ) {
+        const int status = archive_read_next_header(reader.get(), &entry);
+        // 只有容器声明的正常结尾才结束，截断与算法错误必须进入失败路径。
+        if ( status == ARCHIVE_EOF ) break;
+        // WARN 也可能表示校验失败，不能笼统当作成功跳过。
+        if ( status != ARCHIVE_OK ) return fail();
+        // 大量空文件同样会耗尽文件系统资源，因此计数不依赖条目大小。
+        if ( ++count > MAX_ENTRIES ) {
+            errorMessage = "谱面包条目数量超过限制（100000）";
+            return false;
+        }
+        // 链接与特殊设备不属于谱面资源；禁止借助链接逃出新建的临时根目录。
+        // 普通目录和文件的允许列表不包含 FIFO、socket 或设备节点。
+        const auto type = archive_entry_filetype(entry);
+        // 即使链接目标看似留在根内，也不接受依赖后续条目顺序的链接。
+        if ( archive_entry_symlink(entry) || archive_entry_hardlink(entry) ||
+             (type != AE_IFREG && type != AE_IFDIR) ) {
+            errorMessage = "谱面包包含不支持的链接或特殊文件";
+            return false;
+        }
+        // 不弹出密码输入循环，也不把密文读取失败写成零字节资源。
+        if ( archive_entry_is_encrypted(entry) ) {
+            errorMessage = "暂不支持加密谱面包，请先解密后打开";
+            return false;
+        }
+        // UTF-8 访问器按容器编码解码；无法转换时不猜测乱码路径。
+        // 归档编码由库按格式处理，后续路径检查只接收统一的 UTF-8。
+        const char* name = archive_entry_pathname_utf8(entry);
+        if ( !name || !isValidArchiveUtf8(name) ) {
+            errorMessage = "谱面包路径无法转换为有效 UTF-8";
+            return false;
+        }
+        // Windows 打包器的反斜杠在 POSIX 也应作为路径分隔符处理。
+        // 先统一分隔符再校验，避免反斜杠绕过父路径判断。
+        const auto normalized = normalizeArchiveName(name);
+        // 所有路径检查均发生在 create_directories 和文件打开之前。
+        // 保留 Windows 设备名限制，让不同平台对同一包给出一致结果。
+        if ( auto reason = describeUnsafeArchiveName(normalized) ) {
+            errorMessage = *reason + "：" + normalized;
+            return false;
+        }
+        // 已拒绝绝对路径和父路径，此处规范化只消除普通路径中的冗余分隔。
+        const auto destination =
+            (destinationRoot / Config::utf8ToPath(normalized))
+                .lexically_normal();
+        // 新缓存目录由本次准备过程独占；不在已有用户项目中覆盖解包。
+        std::error_code ec;
+        std::filesystem::create_directories(
+            type == AE_IFDIR ? destination : destination.parent_path(), ec);
+        if ( ec ) {
+            errorMessage = "创建临时项目目录失败：" + ec.message();
+            return false;
+        }
+        // 目录条目不创建普通文件，空目录仍能被保留。
+        // 不恢复目录时间戳和权限，临时项目采用应用默认权限。
+        if ( type == AE_IFDIR ) continue;
+        // 检查声明大小，也在实际读取中再次累计，防止伪造头部绕过上限。
+        // 头部可能未知或恶意伪造，实际读取累计是第二道独立检查。
+        // 本入口不提供稀疏文件恢复；读取的数据按连续资源字节保存。
+        const auto size = archive_entry_size(entry);
+        if ( size < 0 ||
+             static_cast<std::uint64_t>(size) > MAX_BYTES - written ) {
+            errorMessage = "谱面包解压大小超过限制（32 GiB）";
+            return false;
+        }
+        // 普通资源按二进制写出，不进行换行、字符集或权限转换。
+        std::ofstream output(destination, std::ios::binary | std::ios::trunc);
+        if ( !output ) {
+            errorMessage = "无法写入临时项目文件：" + normalized;
+            return false;
+        }
+        // 条目数据必须消费到结束，才能触发读取器的完整性校验。
+        for ( ;; ) {
+            const auto bytes =
+                archive_read_data(reader.get(), buffer.data(), buffer.size());
+            // 负数携带解码或校验错误，不可转换为无符号字节数。
+            if ( bytes < 0 ) return fail();
+            // 零表示当前条目结束，不代表整个归档结束。
+            if ( bytes == 0 ) break;
+            if ( static_cast<std::uint64_t>(bytes) > MAX_BYTES - written ) {
+                errorMessage = "谱面包解压大小超过限制（32 GiB）";
+                return false;
+            }
+            // 计数先通过容量比较再增加，始终维持 written 不超过上限。
+            written += static_cast<std::uint64_t>(bytes);
+            // 输出失败立即停止，后续条目不能掩盖前一文件的不完整状态。
+            output.write(buffer.data(), static_cast<std::streamsize>(bytes));
+            if ( !output ) {
+                errorMessage = "写入临时项目失败：" + normalized;
+                return false;
+            }
+        }
+        // 显式检查 close 才能发现延迟写入错误，不能把磁盘满误报为成功。
+        output.close();
+        if ( !output ) {
+            errorMessage = "保存临时项目失败：" + normalized;
+            return false;
+        }
+    }
+    // 显式关闭结果也属于成功条件，不能只因为读到了 EOF 就交付项目。
+    if ( archive_read_close(reader.get()) != ARCHIVE_OK ) return fail();
+    return true;
 }
 
 /// @brief 创建唯一的临时项目目录。
@@ -1846,7 +2053,7 @@ ProjectController::prepareTemporaryProjectPackage(
     }
 
     // 提前准备不替换当前项目；解压途中失败只清理本次创建的缓存根。
-    if ( !extractZipPackageToDirectory(
+    if ( !extractArchivePackageToDirectory(
              packagePath, *tempProjectRoot, errorMessage) ) {
         std::filesystem::remove_all(*tempProjectRoot, filesystemError);
         result.m_errorMessage = errorMessage;

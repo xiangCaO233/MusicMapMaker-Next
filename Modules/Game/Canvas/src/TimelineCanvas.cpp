@@ -328,6 +328,9 @@ struct TimelineGearInfo {
     case 0: return ::MMM::TimingEffect::BPM;
     case 2: return ::MMM::TimingEffect::JUMP;
     case 3: return ::MMM::TimingEffect::HS;
+    // 第五泳道专用于等待，保留前三种效果和 HS 的既有顺序。
+    // 类型与颜色分别映射，避免新增枚举依赖旧数组下标。
+    case 4: return ::MMM::TimingEffect::STOP;
     case 1:
     default: return ::MMM::TimingEffect::SCROLL;
     }
@@ -342,6 +345,7 @@ glm::vec4 timelineEffectColor(::MMM::TimingEffect effect, float alpha)
     case ::MMM::TimingEffect::SCROLL: return { 0.28f, 1.0f, 0.34f, alpha };
     case ::MMM::TimingEffect::JUMP: return { 0.32f, 0.53f, 1.0f, alpha };
     case ::MMM::TimingEffect::HS: return { 1.0f, 0.87f, 0.28f, alpha };
+    case ::MMM::TimingEffect::STOP: return { 1.0f, 0.87f, 0.28f, alpha };
     }
     return { 1.0f, 1.0f, 1.0f, alpha };
 }
@@ -355,6 +359,7 @@ int professionalTimingLane(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::SCROLL: return 1;
     case ::MMM::TimingEffect::JUMP: return 2;
     case ::MMM::TimingEffect::HS: return 3;
+    case ::MMM::TimingEffect::STOP: return 4;
     }
     return 0;
 }
@@ -502,6 +507,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         // 即使只从独立表格进入，也保留确认、取消和 Esc 的完整生命周期。
         renderInterpolationEditor();
         renderTimingTemplateEditor();
+        // 独立表格仍可修改时间点，主窗口隐藏时也必须完成风险提示。
+        renderTimingFormatWarning();
         return;
     }
 
@@ -781,6 +788,14 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                   "HS",
                   ImVec4(1.0f, 0.85f, 0.2f, 1.0f),
                   true },
+                { Common::Render::SCROLL_EFFECT_STOP,
+                  ::MMM::TimingEffect::STOP,
+                  &Common::Render::TimelineInteractiveElement::stopEntity,
+                  &Common::Render::TimelineInteractiveElement::stopValue,
+                  "STOP",
+                  "STOP",
+                  ImVec4(1.0f, 0.85f, 0.2f, 1.0f),
+                  true },
             };
 
             auto isNearInlineGearTime =
@@ -814,7 +829,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                     int                                               count) {
                     if ( editorSettings.professionalMode ) {
                         // 专业模式忽略左右侧配置，按 TimingEffect 固定泳道。
-                        constexpr float laneCount = 4.0f;
+                        constexpr float laneCount = 5.0f;
                         const int   lane = professionalTimingLane(gear.effect);
                         const float centerX =
                             canvasPos.x +
@@ -1074,6 +1089,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
     renderTimingPointsTableWindow();
     renderInterpolationEditor();
     renderTimingTemplateEditor();
+    // 警告晚于所有编辑窗口绘制，不在用户确认前抢占编辑弹窗。
+    renderTimingFormatWarning();
     // 表格窗口始终独立绘制，不依赖主时间线是否有有效 descriptor。
 
     if ( m_speedTooltipTimer > 0.0f ) {
@@ -1102,10 +1119,12 @@ void TimelineCanvas::renderProfessionalTimelineOverlay(const ImVec2& canvasPos,
     drawList->PushClipRect(canvasPos, clipMax, true);
     // 外层裁剪保证标签不会溢出当前时间线 Dock 窗口。
 
-    constexpr int laneCount = 4;
+    constexpr int laneCount = 5;
     const float   laneWidth = size.x / static_cast<float>(laneCount);
-    const char*   laneLabels[laneCount] = { "BPM", "Scroll", "Jump", "HS" };
-    const ImU32   laneTextColor         = IM_COL32(240, 235, 225, 210);
+    const char*   laneLabels[laneCount] = {
+        "BPM", "Scroll", "Jump", "HS", "STOP"
+    };
+    const ImU32 laneTextColor = IM_COL32(240, 235, 225, 210);
 
     for ( int lane = 0; lane < laneCount; ++lane ) {
         // 最后一泳道直接使用 clipMax，吸收浮点等分后的尾部误差。
@@ -1454,7 +1473,7 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
         float noteW = std::max(1.0f, size.x - paddingX * 2.0f);
         float noteX = paddingX;
         if ( professionalMode ) {
-            constexpr float laneCount = 4.0f;
+            constexpr float laneCount = 5.0f;
             const float     laneWidth = size.x / laneCount;
             const int       lane      = professionalTimingLane(effect);
             noteW                     = std::max(1.0f, laneWidth - 2.0f);

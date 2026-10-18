@@ -822,13 +822,59 @@ bool testSharedRenderSnapshotResolution()
 /// @brief 运行连续播放视觉时钟与共享 UI 补间测试。
 /// @return 全部场景通过返回零；首个失败通过短路使程序返回一。
 /// @note 无测试选择参数，直接运行全部既有场景直到首个失败。
+/// @brief STOP 在不同倍速下都冻结到权威音乐位置，而非保留预测误差。
+/// @details 等待期间壁钟继续推进，音乐位置保持不变；恢复时重新开始外推。
+/// @note 先制造视觉超前，再接收冻结快照，覆盖精确锚点纠偏。
+/// @note 等待期间仍保持 Playing，避免测试退化成普通暂停场景。
+/// @note 同一快照在远处壁钟重复消费，验证没有累计等待时间。
+/// @note 恢复后验证短距离外推，而非仅检查恢复瞬间位置。
+/// @note 测试不验证真实设备延迟，音频样本推进由独立 PCM 测试覆盖。
+bool testTimelineStopFreeze()
+{
+    // 三种倍率验证冻结不依赖播放斜率，恢复后才继续按倍率推进。
+    // 音频快照的音乐位置不累计等待墙钟，因此始终是 1.02 秒。
+    // 等待期间不发送新的用户 pause 命令，播放序号保持不变。
+    // 这能区分真实 STOP 与误用普通用户暂停导致的状态切换。
+    for ( const double rate : { 0.25, 1.0, 2.0 } ) {
+        MMM::Logic::PlaybackVisualClock clock;
+        MMM::Config::SyncConfig         config;
+        auto                            snapshot =
+            makeSnapshot(1000,
+                         10.0,
+                         MMM::Audio::AudioTimelinePlaybackState::Playing,
+                         1,
+                         1,
+                         2,
+                         2,
+                         rate);
+        static_cast<void>(clock.update(snapshot, 10.0, config));
+        // 故意先把视觉预测推进，保证 STOP 会纠正而非锁住旧估计。
+        static_cast<void>(clock.update(snapshot, 10.05, config));
+        snapshot.positionFrame         = 1020;
+        snapshot.stopFrozen            = true;
+        snapshot.sequence              = 2;
+        snapshot.steadyTimeNanoseconds = 10'060'000'000;
+        if ( !near(clock.update(snapshot, 10.06, config), 1.02) ||
+             !near(clock.update(snapshot, 12.0, config), 1.02) )
+            return false;
+        // 播放状态始终为 Playing，仅解除等待标志。
+        snapshot.stopFrozen            = false;
+        snapshot.sequence              = 3;
+        snapshot.steadyTimeNanoseconds = 12'000'000'000;
+        if ( !near(clock.update(snapshot, 12.0, config), 1.02) ||
+             !near(clock.update(snapshot, 12.01, config), 1.02 + .01 * rate) )
+            return false;
+    }
+    return true;
+}
+
 int main()
 {
     // 使用确定性壁钟与局部状态，场景顺序不用于模拟真实线程调度。
     // 返回码不代表真实设备延迟或 UI 观感已验收。
     // 快照在当前线程按值构造，不使用日志到达顺序作为同步证据。
     // 不写测试资源，结果由断言和进程返回码表达。
-    return testSameBlockContinuousAdvance() &&
+    return testTimelineStopFreeze() && testSameBlockContinuousAdvance() &&
                    testNewBlockDoesNotCalibrateBeforeSyncInterval() &&
                    testPauseAndDiscontinuities() &&
                    testPendingSeekAppliedAckKeepsContinuousTime() &&

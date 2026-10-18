@@ -19,6 +19,7 @@ std::string timingEffectToString(TimingEffect effect)
     case TimingEffect::SCROLL: return "scroll";
     case TimingEffect::JUMP: return "jump";
     case TimingEffect::HS: return "hs";
+    case TimingEffect::STOP: return "stop";
     }
     return "scroll";
 }
@@ -31,6 +32,7 @@ TimingEffect timingEffectFromString(const std::string& effect)
     if ( effect == "bpm" ) return TimingEffect::BPM;
     if ( effect == "jump" ) return TimingEffect::JUMP;
     if ( effect == "hs" ) return TimingEffect::HS;
+    if ( effect == "stop" ) return TimingEffect::STOP;
     return TimingEffect::SCROLL;
 }
 
@@ -180,6 +182,8 @@ std::string Timing::to_osu_description()
             << ",";
         break;
     }
+    case TimingEffect::STOP:
+        return {};  // osu 无法表达音频冻结，调用方须拒绝此类导出。
     case TimingEffect::JUMP:
     case TimingEffect::HS: {
         oss << std::fixed << std::setprecision(12) << m_beat_length << ",";

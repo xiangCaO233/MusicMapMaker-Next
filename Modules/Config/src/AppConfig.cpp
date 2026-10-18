@@ -1,4 +1,5 @@
 #include "config/AppConfig.h"
+#include "ConfigSnapshotWriter.h"
 #include "config/AppPaths.h"
 #include "config/CreatorIdentity.h"
 #include "config/Utf8Path.h"
@@ -36,7 +37,9 @@ void AppConfig::reset()
 {
     // 整体替换保证新增字段自动采用 EditorConfig 的成员默认值。
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_editorConfig = EditorConfig();
+    m_editorConfig  = EditorConfig();
+    m_audioPresets  = AudioPresets();
+    m_layoutPresets = LayoutPresets();
 }
 
 /// @brief 从指定或默认 JSON 文件加载编辑器配置与协作者稳定标识。
@@ -108,11 +111,39 @@ bool AppConfig::load(const std::filesystem::path& path)
     // 记录是否需要补写新字段，避免加载后再次从 JSON 推断迁移条件。
     const bool generatedCollaborationParticipantId =
         collaborationParticipantId.empty();
+    bool layoutMigrated = false;
     {
         // JSON 转换和身份切换作为单个配置状态提交，读取方不会看到半更新值。
         std::lock_guard<std::mutex> lock(m_mutex);
         // EditorConfig 的 from_json 自行处理缺失字段与范围约束。
         m_editorConfig = j.get<EditorConfig>();
+        // 升级时把现有全部键数布局收为默认项，不覆盖用户已有编辑结果。
+        m_layoutPresets = LayoutPresets();
+
+        if ( const auto presets = j.find("layoutPresets");
+             presets != j.end() ) {
+            // 损坏的预设集合保留刚捕获的旧布局，避免启动时重置现场。
+            from_json(*presets, m_layoutPresets);
+            // 已存在的用户方案以自身完整内容恢复；默认现场仍须检测旧版改动。
+            if ( m_layoutPresets.m_selected != "默认" )
+                applyLayoutPreset(m_layoutPresets.current(),
+                                  m_editorConfig.visual);
+        }
+        // 旧版本仅有 visual：实际布局不同才创建用户项，未修改仍使用默认。
+        m_layoutPresets.captureCurrent(m_editorConfig.visual);
+        layoutMigrated = !j.contains("layoutPresets") ||
+                         j["layoutPresets"] != nlohmann::json(m_layoutPresets);
+        // 旧配置迁移时保留用户已有音量，新配置以所选预设为准。
+        m_audioPresets = AudioPresets();
+        if ( const auto presets = j.find("audioPresets"); presets != j.end() ) {
+            m_audioPresets = presets->get<AudioPresets>();
+            applyAudioPreset(m_audioPresets.current(), m_editorConfig.settings);
+        } else {
+            captureAudioPreset(m_audioPresets.current(),
+                               m_editorConfig.settings);
+            // 迁移后的实际分类音量也受新范围约束，避免显示与听感不一致。
+            applyAudioPreset(m_audioPresets.current(), m_editorConfig.settings);
+        }
         if ( !generatedCollaborationParticipantId ) {
             // 有效持久化身份优先，确保跨启动与协作重连保持一致。
             m_collaborationParticipantId = collaborationParticipantId;
@@ -128,6 +159,9 @@ bool AppConfig::load(const std::filesystem::path& path)
                             generatedCollaborationParticipantId) ) {
         // save 失败已自行记录日志，已成功加载的内存配置仍可供本次会话使用。
         save();
+    } else if ( layoutMigrated ) {
+        // 首次迁移立即持久化到原配置路径，下一次启动不重复建立用户项。
+        save(finalPath);
     }
     return true;
 }
@@ -138,80 +172,50 @@ bool AppConfig::load(const std::filesystem::path& path)
 /// @warning 低频文件系统路径：执行目录创建和文件替换，不得从热路径调用。
 bool AppConfig::save(const std::filesystem::path& path) const
 {
-    // 显式路径用于测试和导出，空值才解析真实用户配置目标。
-    std::filesystem::path finalPath =
-        path.empty() ? getDefaultConfigPath() : path;
+    return saveConfigSnapshot(path.empty() ? getDefaultConfigPath() : path,
+                              snapshotForSave());
+}
 
-    // 在打开文件前准备父目录；当前目录中的显式文件名没有父目录可创建。
-    if ( auto parent = finalPath.parent_path(); !parent.empty() ) {
-        std::error_code createDirectoryError;
-        std::filesystem::create_directories(parent, createDirectoryError);
-        if ( createDirectoryError ) {
-            // 不继续创建临时文件，避免把输出意外写到其他工作目录。
-            XERROR("Failed to create config directory: {}. Error: {}",
-                   pathToUtf8(parent),
-                   createDirectoryError.message());
-            return false;
-        }
+/// @brief 从 UI 明确修改边沿收存当前方案，并异步保存最新完整配置。
+/// @warning 仅在布局实际修改时调用；磁盘写入交给后台，空闲帧不调用。
+/// @note 创建用户项和选中在本线程立即完成，写盘期间可继续拖动。
+void AppConfig::saveLayoutChanges(const std::filesystem::path& path)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if ( !m_layoutPresets.captureCurrent(m_editorConfig.visual) ) return;
     }
+    // 队列覆盖尚未写出的旧快照，绝不让旧请求覆盖新布局。
+    queueConfigSnapshot(path.empty() ? getDefaultConfigPath() : path,
+                        snapshotForSave());
+}
 
+/// @brief 生成配置的不可变保存快照，工作线程不读取实时配置引用。
+/// @return 含客户端预设集合的完整持久化对象。
+/// @warning 仅由低频保存或明确布局修改调用，不在空闲帧构造 JSON。
+nlohmann::json AppConfig::snapshotForSave() const
+{
     // 先在锁内生成完整 JSON 值快照，磁盘写入期间不阻塞配置读取。
     nlohmann::json j;
     {
         // 编辑器配置与稳定身份同时复制，磁盘文件不会混合两个时刻的值。
         std::lock_guard<std::mutex> lock(m_mutex);
-        j                               = m_editorConfig;
+        j = m_editorConfig;
+        // 保存快照收取当前调整，只更新所选项，其他预设保持原样。
+        // 音频使用副本收取混音；布局同步更新派生选择，保护代码默认基准。
+        // 活动设置是音量的最新来源，保存前不能只序列化库内旧值。
+        // 效果器字段不在 EditorSettings 中，因此捕获函数必须保留它们。
+        // 布局集合留在客户端根节点，不写入谱面项目或导出数据。
+        // 保存也是旧调用入口的兜底，默认被改动时先建立当前自定义项。
+        m_layoutPresets.captureCurrent(m_editorConfig.visual);
+        j["layoutPresets"] = m_layoutPresets;
+        auto presets       = m_audioPresets;
+        captureAudioPreset(presets.current(), m_editorConfig.settings);
+        j["audioPresets"]               = presets;
         j["collaborationParticipantId"] = m_collaborationParticipantId;
     }
 
-    // 同目录临时文件使常见文件系统上的 rename 保持原子替换语义。
-    std::filesystem::path tempPath = finalPath;
-    tempPath += ".tmp";
-    {
-        // trunc 确保上次失败残留的更长临时内容不会污染本轮 JSON。
-        std::ofstream file(tempPath);
-        if ( !file.is_open() ) {
-            // 打开失败前没有修改正式目标文件，旧配置仍可恢复。
-            XERROR("Failed to open config temp file for writing: {}",
-                   pathToUtf8(tempPath));
-            return false;
-        }
-
-        // 四空格缩进便于用户检查配置，末尾换行保持文本工具兼容。
-        file << std::setw(4) << j << '\n';
-        if ( !file.good() ) {
-            // 流失败时临时文件可能不完整，绝不进入替换正式配置步骤。
-            XERROR("Failed to write config temp file: {}",
-                   pathToUtf8(tempPath));
-            return false;
-        }
-    }
-
-    // 首选同文件系统原子重命名，成功时旧配置不会出现部分写入。
-    std::error_code replaceError;
-    std::filesystem::rename(tempPath, finalPath, replaceError);
-    if ( replaceError ) {
-        // Windows 等平台可能拒绝覆盖现存目标，退化为显式覆盖复制。
-        std::error_code copyError;
-        std::filesystem::copy_file(
-            tempPath,
-            finalPath,
-            std::filesystem::copy_options::overwrite_existing,
-            copyError);
-        // 无论复制结果如何都尝试清理本轮临时文件，避免持续积累残留。
-        std::error_code removeTempError;
-        std::filesystem::remove(tempPath, removeTempError);
-        // 临时清理错误不覆盖 copyError；正式文件成功优先决定保存结果。
-        if ( copyError ) {
-            // 复制失败保留原目标文件状态，并向调用方报告保存失败。
-            XERROR("Failed to replace config file: {}. Error: {}",
-                   pathToUtf8(finalPath),
-                   copyError.message());
-            return false;
-        }
-    }
-
-    return true;
+    return j;
 }
 
 /// @brief 将 UTF-8 项目路径置于最近列表首位、去重并按上限裁剪。

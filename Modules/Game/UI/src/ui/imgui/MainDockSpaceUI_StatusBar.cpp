@@ -269,7 +269,7 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
             if ( snapshot && MMM::UI::Utils::shouldShowBeatmapDetails(
                                  snapshot->hasBeatmap) ) {
                 // 画布统计区的不变量：
-                // - 当前时间是唯一常驻字段；
+                // - 当前时间与总时长成对常驻显示；
                 // - 悬停时间仅在指针位于画布并通过边界校验后出现；
                 // - 谱面统计仅在 hasBeatmap 为真时出现；
                 // - 最后操作消息独立右对齐，不改变前述字段的计算；
@@ -286,8 +286,10 @@ void MainDockSpaceUI::renderStatusBar(UIManager* sourceManager,
                 const double displayedTime =
                     resolveStatusBarAnimateTime(*snapshot);
                 const auto currentTimeText =
-                    MMM::UI::Utils::formatCanvasTime(displayedTime, snapshot);
-                // 统一格式化入口同时处理谱面时长和当前显示格式。
+                    MMM::UI::Utils::formatCanvasTimePair(
+                        displayedTime, snapshot->totalTime, snapshot);
+                // 与时间线进度条提示共用时间格式及总时长来源，无需悬停即可查看进度。
+                // 当前时间保留播放外推，使播放、暂停和拖动时状态栏仍跟随活动画布。
                 ImGui::SetCursorPosY(offsetY);
                 ImGui::Text("%s: %s",
                             TR("ui.canvas.time").data(),

@@ -65,7 +65,7 @@ Invoke-Native git lfs pull "--include=$mainLfsIncludes" '--exclude='
 Remove-Item -Recurse -Force -LiteralPath build_msvc -ErrorAction SilentlyContinue
 # CI 构建不得写入 Runner 的用户配置目录。
 $vulkanValidationValue = if ($VulkanValidationLayers) { 'ON' } else { 'OFF' }
-Invoke-Native cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DSOURCES_BUILD=OFF -DBUILD_TESTING=ON "-DMMM_ENABLE_VULKAN_VALIDATION_LAYERS=$vulkanValidationValue" -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF "-DMMM_PGO_INSTRUMENT=$pgoInstrumentValue" -DMMM_PGO_USE=OFF -S . -B build_msvc
+Invoke-Native cmake -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DSOURCES_BUILD=OFF -DBUILD_TESTING=ON "-DMMM_ENABLE_VULKAN_VALIDATION_LAYERS=$vulkanValidationValue" -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF "-DMMM_PGO_INSTRUMENT=$pgoInstrumentValue" -DMMM_PGO_USE=OFF -DMMM_ENABLE_BUILD_TIMING=OFF -S . -B build_msvc
 # 构建与 CTest 都通过 helper 严格传播原生工具失败。
 Invoke-Native cmake --build build_msvc --parallel $ciBuildJobs
 Invoke-Native ctest --test-dir build_msvc --output-on-failure

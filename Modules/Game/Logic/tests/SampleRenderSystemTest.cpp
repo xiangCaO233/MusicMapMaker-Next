@@ -4,8 +4,11 @@
 #include "config/EditorConfig.h"
 #include "log/colorful-log.h"
 #include "logic/ecs/components/InteractionComponent.h"
+#include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/SampleComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
+#include "logic/ecs/components/TransformComponent.h"
+#include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
 
@@ -1050,6 +1053,175 @@ bool testMissingCjkGlyphRequestsAtlasRefresh()
     return true;
 }
 
+
+/// @brief 从生产快照入口验证远端两侧物件和背景不会被二维窗口提前剔除。
+/// @return 透视可见的负坐标草稿与窗口右侧采样都提交了实际几何时为真。
+/// @note 相机抬高到足以覆盖全部轨道；不创建 GPU、音频或文件资源。
+/// @note 同一场景另跑二维视角，确认普通窗口裁剪仍生效。
+/// @note 使用真实滚动缓存反解目标时间，避免假定默认 BPM 对应的像素速度。
+/// @note 负例和正例共享实体索引与时间线，仅由相机启用状态切换行为。
+/// @note 本例验证 CPU 候选、几何及命令裁剪，不替代真实皮肤的 GPU 像素验收。
+/// @note 帧内命中框仅用于确认候选确已到达物件绘制路径，不模拟鼠标事件。
+/// @note 图集矩形来自本文件公共夹具，几何检查不能以顶点总数替代本体身份。
+bool testPerspectiveAuxiliaryLanes()
+{
+    using namespace MMM;
+    using namespace MMM::Logic;
+    // 配置完全在栈上构造，不读取用户已保存的布局或专业模式状态。
+    // 两类辅助区域必须都启用，否则隐藏开关会掩盖错误裁剪。
+    Config::EditorConfig config;
+    config.settings.professionalMode = true;
+    config.visual.trackLayout.left   = 0.2F;
+    config.visual.trackLayout.right  = 0.8F;
+    // 草稿部分落在负 X，BGM 的后几轨超过八百像素；两侧都应可被摄像机看到。
+    // 区域宽度独立指定，避免默认相邻布局恰好全部落在二维窗口中。
+    config.visual.trackLayout.draftLanes.left  = -0.4F;
+    config.visual.trackLayout.draftLanes.width = 0.15F;
+    config.visual.trackLayout.bgmLanes.left    = 0.83F;
+    config.visual.trackLayout.bgmLanes.width   = 0.15F;
+    // 三倍长度只增加可绘制距离，不压缩原始物件间距。
+    // 高机位让负 X 与右侧远端点都落入真实透视视锥，不能靠裁剪回退通过。
+    config.visual.canvasCameraLength   = 3;
+    config.visual.canvasCameraPosition = { 0, -0.8F, 3 };
+    config.visual.canvasCameraRotation = { 45, 0, 0 };
+    // 隐藏网格使几何断言只需识别本体 UV；轨道底板仍由生产入口生成。
+    // 不装载真实皮肤，避免外部资源尺寸影响固定几何夹具。
+    config.visual.beatLineDisplayMode = Config::BeatLineDisplayMode::Hidden;
+    // 三个实体域分别持有数据，模拟真正的音符、采样与时间线职责。
+    // 后续两个对象虽可能得到同一实体句柄，也不能混淆其命中种类。
+    entt::registry notes, samples, timeline;
+    const auto     bpm = timeline.create();
+    timeline.emplace<TimelineComponent>(
+        bpm,
+        TimelineComponent{
+            .m_timestamp = 0, .m_effect = TimingEffect::BPM, .m_value = 120 });
+    // 时间映射由正式缓存建立，测试不依赖常量像素每秒的实现细节。
+    // 缓存作为时间线上下文存活至两个视角的全部生成调用结束。
+    auto& cache = timeline.ctx().emplace<System::ScrollCache>();
+    cache.rebuild(timeline, config, nullptr);
+    // 目标点位于旧二维画布顶部之外，三倍长度必须真实查询到该物件。
+    const double time = cache.getTime(cache.getAbsY(0) + 980);
+    // 第三条 BGM 轨的本体完整位于二维窗口右边，能捕获粗筛漏查。
+    // 样本索引与音符索引分开提供，不能只修复其中一个系统的水平门禁。
+    // 测试不改变音频资源音量或时间，当前案例只验证可见范围传播。
+    // 资源 ID 仅作显示字符串，不要求磁盘上存在同名音频。
+    const auto sample = samples.create();
+    samples.emplace<SampleComponent>(
+        sample,
+        SampleComponent{ .m_timestamp       = time,
+                         .m_track           = 6,
+                         .m_audioResourceId = "far.wav" });
+    // 选中状态迫使真实发光分支执行，不向结果快照直接塞入效果顶点。
+    // 基础层与发光层的裁剪各自验证，不能用其中一层替代另一层。
+    samples.emplace<InteractionComponent>(
+        sample, InteractionComponent{ .isSelected = true });
+    // 草稿对象走音符渲染系统，和 BGM 采样构成两条独立的候选查询路径。
+    // 二者使用相同目标时间，使漏绘不能归因于滚动位置差异。
+    const auto    draft = notes.create();
+    NoteComponent note;
+    note.m_timestamp = time;
+    note.m_type      = NoteType::NOTE;
+    // 负轨号与草稿标志须同时设置，不能构造实际加载流程不可能产生的状态。
+    note.m_trackIndex = -4;
+    note.m_isDraft    = true;
+    notes.emplace<NoteComponent>(draft, std::move(note));
+    // 变换组件由正式绘制入口消费；本例不绕开其尺寸计算或投影步骤。
+    notes.emplace<TransformComponent>(draft);
+    notes.emplace<InteractionComponent>(
+        draft, InteractionComponent{ .isSelected = true });
+    // 单对象索引天然有序，测试也必须提供它来保持生产的索引查询路径。
+    // 结束前缀与采样时间相同，表示合法零偏移采样而非未初始化区间。
+    const std::vector<entt::entity> sortedNotes{ draft },
+        sortedSamples{ sample };
+    const std::vector<double> sampleEnds{ time };
+    notes.ctx().emplace<const std::vector<entt::entity>*>(&sortedNotes);
+    // 两个注册表可能复用实体编号，断言必须同时检查对象种类。
+    for ( bool perspective : { false, true } ) {
+        config.visual.canvasCameraPoseEnabled = perspective;
+        // 每轮新建快照，二维不应借用透视轮次残留的命中框或顶点。
+        // 交互开关显式开启，命中框缺失才能被解释为候选或绘制漏失。
+        RenderSnapshot snapshot;
+        snapshot.hasBeatmap         = true;
+        snapshot.draftLanesEnabled  = true;
+        snapshot.acceptsInteraction = true;
+        // 使用已有的非方形测试 UV，让纹理本体与纯色底板可可靠区分。
+        // 不预装字体，因此标签不会增加相同 UV 区域的伪本体顶点。
+        snapshot.uvMap.emplace(static_cast<std::uint32_t>(TextureID::Note),
+                               NOTE_UV);
+        // 必须调用完整主画布入口，覆盖视锥范围初始化及分区裁剪的衔接。
+        // 四个玩家轨、四个持久 BGM 轨和四个草稿轨与组件地址一一对应。
+        System::NoteRenderSystem::generateSnapshot(notes,
+                                                   samples,
+                                                   sortedSamples,
+                                                   sampleEnds,
+                                                   timeline,
+                                                   {},
+                                                   &snapshot,
+                                                   "Basic2DCanvas",
+                                                   0,
+                                                   800,
+                                                   600,
+                                                   480,
+                                                   4,
+                                                   4,
+                                                   4,
+                                                   config,
+                                                   600);
+        // 从正式命中结果核对两个对象，防止仅生成底板却未查询真实物件。
+        // 同一实体编号必须按 kind 分开识别，不能让单个成功对象替另一个通过。
+        bool foundSample = false, foundDraft = false;
+        for ( const auto& box : snapshot.hitboxes ) {
+            foundSample |= box.kind == ChartObjectKind::AudioSample &&
+                           box.entity == sample;
+            foundDraft |=
+                box.kind == ChartObjectKind::DraftNote && box.entity == draft;
+        }
+        if ( perspective != foundSample || perspective != foundDraft ) {
+            XERROR(
+                "Perspective lane candidates missing: perspective={}, "
+                "sample={}, draft={}",
+                perspective,
+                foundSample,
+                foundDraft);
+            return false;
+        }
+        // 二维负例检查完成即退出本轮：窗口外本体本来就不应出现。
+        // 后续几何与效果断言只针对最终确实可见的透视场景。
+        if ( !perspective ) continue;
+        // 不仅检查候选：实际纹理顶点和对应裁剪必须保留两侧源坐标。
+        // 同时检查发光批次，防止主体修好后选中效果仍在零点被截断。
+        for ( const auto* commands : { &snapshot.cmds, &snapshot.glowCmds } ) {
+            bool leftBody = false, rightBody = false;
+            for ( const auto& cmd : *commands ) {
+                // 原点为负而宽度为无符号，先转浮点再求右端，避免整数回绕。
+                // 检查的是每条命令自身的裁剪，不能读取最后一条命令的状态。
+                const float clipRight =
+                    float(cmd.scissor.x) + cmd.scissor.width;
+                for ( std::size_t i = cmd.indexOffset;
+                      i < cmd.indexOffset + cmd.indexCount;
+                      ++i ) {
+                    // 通过索引访问真实提交的顶点，而非缓冲区内可能未引用的几何。
+                    // UV 过滤去掉轨道底色，避免宽背景矩形伪装成采样绘制成功。
+                    const auto& v = snapshot.vertices[snapshot.indices[i]];
+                    if ( v.uv.u < NOTE_UV.x || v.uv.u > NOTE_UV.x + NOTE_UV.z ||
+                         v.uv.v < NOTE_UV.y || v.uv.v > NOTE_UV.y + NOTE_UV.w )
+                        continue;
+                    leftBody |= v.pos.x < 0 && cmd.scissor.x <= v.pos.x;
+                    rightBody |= v.pos.x > 800 && clipRight >= v.pos.x;
+                }
+            }
+            if ( !leftBody || !rightBody ) {
+                XERROR(
+                    "Perspective lane geometry/scissor missing: left={}, "
+                    "right={}",
+                    leftBody,
+                    rightBody);
+                return false;
+            }
+        }
+    }
+    return true;
+}
 }  // namespace
 
 /// @brief 运行自动采样渲染系统回归测试。
@@ -1060,8 +1232,8 @@ int main()
 {
     // 先验证公共布局，再验证采样本体和标签，便于首条日志定位失败职责。
     // 每个用例自建状态，短路执行不会改变后续用例所需的全局初始化。
-    return testLaneLayoutVisuals() && testDraftLaneLabels() &&
-                   testNarrowLaneLabelMarquee() &&
+    return testPerspectiveAuxiliaryLanes() && testLaneLayoutVisuals() &&
+                   testDraftLaneLabels() && testNarrowLaneLabelMarquee() &&
                    testSampleBodyMatchesTapTextureAndSize() &&
                    testSampleUsesIndependentBgmLaneWidth() &&
                    testSampleBrushPreview() && testSampleErasePreview() &&

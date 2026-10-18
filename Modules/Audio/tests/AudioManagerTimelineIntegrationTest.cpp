@@ -903,6 +903,67 @@ bool testSharedMainStretcher(MMM::Audio::AudioManager& manager,
     return passed;
 }
 
+/// @brief 验证独立试听歌曲和音效分别服从 BGM 与 SFX，读回实际节点增益。
+/// @param manager 已初始化的音频管理器，使用真实资源创建试听源。
+/// @param samplePath 可解码的测试音频，只读不修改。
+/// @return 总控增益与静音相互隔离且卸载后节点清空时返回 true。
+bool testAuditionVolumeRouting(MMM::Audio::AudioManager& manager,
+                               const std::string&        samplePath)
+{
+    // 保存调用前总控状态，场景结束必须还原，不能改变后续播放测试环境。
+    const float global      = manager.getGlobalVolume();
+    const float bgm         = manager.getBGMGain();
+    const float sfx         = manager.getSFXGain();
+    const bool  globalMuted = manager.isGlobalMuted();
+    const bool  bgmMuted    = manager.isBGMGainMuted();
+    const bool  sfxMuted    = manager.isSFXGainMuted();
+    // 解除全局静音才能区分后续 BGM 与 SFX 的独立静音效果。
+    manager.setGlobalMute(false);
+    manager.setGlobalVolume(0.8F);
+    manager.setBGMGain(0.25F);
+    manager.setBGMGainMute(false);
+    manager.setSFXGain(0.0F, false);
+    // SFX 静音独立作用于节拍器和 Effect 资源，不能压低 Main 歌曲。
+    manager.setSFXGainMute(true);
+    MMM::AudioTrackConfig config;
+    // 资源音量与总控都使用非一值，防止只应用其中一层仍通过。
+    config.volume = 0.5F;
+    // 节拍器音轨完全静音时，歌曲仍应保留资源、全局及 BGM 三层音量的乘积。
+    bool passed = manager.loadAuditionTrack(
+        samplePath, config, MMM::AudioTrackType::Main);
+    passed =
+        passed && std::abs(manager.getAuditionEffectiveVolume() - 0.1F) < 1e-6F;
+    // 音乐应立即跟随 BGM 静音，无需重新加载资源或重建音频图。
+    manager.setBGMGainMute(true);
+    passed = passed && manager.getAuditionEffectiveVolume() == 0.0F;
+    // 改为 Effect 后则反向隔离：BGM 静音不能使音效源静音。
+    // Effect 使用独立增益，不继承歌曲之前设置的 BGM 值。
+    manager.setSFXGain(0.75F, false);
+    manager.setSFXGainMute(false);
+    passed = manager.loadAuditionTrack(
+                 samplePath, config, MMM::AudioTrackType::Effect) &&
+             passed;
+    passed =
+        passed && std::abs(manager.getAuditionEffectiveVolume() - 0.3F) < 1e-6F;
+    // SFX 静音独立作用于节拍器和 Effect 资源，不能压低 Main 歌曲。
+    manager.setSFXGainMute(true);
+    passed = passed && manager.getAuditionEffectiveVolume() == 0.0F;
+    // 卸载后真实节点不存在，读回增益必须为零。
+    manager.unloadAuditionTrack();
+    // getter 读真实 SourceNode，不靠复制测试计算公式来推断后端已经应用。
+    passed = passed && manager.getAuditionEffectiveVolume() == 0.0F;
+    // 失败也执行同一还原路径，后续测试不继承本场景总控设置。
+    manager.setGlobalVolume(global);
+    manager.setGlobalMute(globalMuted);
+    manager.setBGMGain(bgm);
+    manager.setBGMGainMute(bgmMuted);
+    manager.setSFXGain(sfx, false);
+    manager.setSFXGainMute(sfxMuted);
+    // 在恢复环境之后记录失败，错误诊断不得阻止清理。
+    if ( !passed ) XERROR("Audition BGM/SFX volume routing failed");
+    return passed;
+}
+
 }  // namespace
 
 /// @brief 运行 AudioManager 自动采样时间线集成测试。
@@ -954,7 +1015,8 @@ int main(int argc, char** argv)
         testCompositePlayback(manager, samplePath) &&
         testTimelineUnloadReleasesDecodedTrack(manager, samplePath) &&
         testStreamingSelection(manager, samplePath) &&
-        testSharedMainStretcher(manager, samplePath);
+        testSharedMainStretcher(manager, samplePath) &&
+        testAuditionVolumeRouting(manager, samplePath);
 
     // 先停止音频后端和释放图，再关闭资源线程池。
     manager.shutdown();

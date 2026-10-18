@@ -337,6 +337,8 @@ std::string_view timingEffectCode(::MMM::TimingEffect effect)
     case ::MMM::TimingEffect::SCROLL: return "s";
     case ::MMM::TimingEffect::JUMP: return "j";
     case ::MMM::TimingEffect::HS: return "h";
+    // 追加独立稳定编码，旧类型字符保持兼容。
+    case ::MMM::TimingEffect::STOP: return "p";
     }
     return "s";
 }
@@ -350,6 +352,7 @@ std::optional<::MMM::TimingEffect> timingEffectFromCode(std::string_view code)
     if ( code == "s" ) return ::MMM::TimingEffect::SCROLL;
     if ( code == "j" ) return ::MMM::TimingEffect::JUMP;
     if ( code == "h" ) return ::MMM::TimingEffect::HS;
+    if ( code == "p" ) return ::MMM::TimingEffect::STOP;
     return std::nullopt;
 }
 

@@ -17,6 +17,7 @@
 #include "mmm/project/Project.h"
 #include "network/collaboration/CollaborationBuildFingerprint.h"
 #include "network/collaboration/CollaborationRoom.h"
+#include "network/collaboration/CollaborationTypes.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/CollaborationEntryPolicy.h"
@@ -365,6 +366,74 @@ void drawMemberHistoryActions(Network::Collaboration::CollaborationRoom& room,
     }
 }
 
+/// @brief 绘制完整权限选择器，默认策略与单个成员共用同一组控件。
+/// @param updatedPermissions 调用方持有的完整权限副本。
+/// @return 本帧任意复选框或全选/全取消操作改变选择时返回 true。
+/// @warning UI 热路径：只绘制六个固定权限，不读取配置文件或发送网络消息。
+/// @note 全选包含主 Edit 开关；全取消清零，不能残留被禁用的细分权限。
+bool drawPermissionEditor(
+    Network::Collaboration::CollaborationPermissionMask& updatedPermissions)
+{
+    bool permissionsChanged = false;
+    // 快捷按钮放在主权限禁用范围之外，只读成员也能一键获得全部权限。
+    // 主权限与细分类别一并修改，下一帧不会留下看似全选却仍不可编辑的状态。
+    // 控件只修改副本，调用方在本帧所有勾选结束后统一提交。
+    if ( FeedbackSmallButton("全选") ) {
+        updatedPermissions =
+            Network::Collaboration::COLLABORATION_PERMISSION_ALL;
+        permissionsChanged = true;
+    }
+    ImGui::SameLine();
+    // 清除整个掩码，包含已因 Edit 关闭而不可交互的类别。
+    if ( FeedbackSmallButton("全取消") ) {
+        updatedPermissions = 0U;
+        permissionsChanged = true;
+    }
+    ImGui::Separator();
+    const auto drawPermission =
+        [&](const char*                                     label,
+            Network::Collaboration::CollaborationPermission target) {
+            bool enabled = Network::Collaboration::hasCollaborationPermission(
+                updatedPermissions, target);
+            if ( FeedbackCheckbox(label, &enabled) ) {
+                // 枚举值本身是权限位，可直接转换为 mask。
+                const auto bit = static_cast<
+                    Network::Collaboration::CollaborationPermissionMask>(
+                    target);
+                // 勾选置位，取消清位，不影响其他权限。
+                if ( enabled ) {
+                    updatedPermissions |= bit;
+                } else {
+                    updatedPermissions &= ~bit;
+                }
+                permissionsChanged = true;
+            }
+        };
+
+    drawPermission(TR("ui.collaboration.permissions.edit").data(),
+                   Network::Collaboration::CollaborationPermission::Edit);
+    // 细分权限只有在主 Edit 权限存在时才允许编辑。
+    const bool mayEdit = Network::Collaboration::hasCollaborationPermission(
+        updatedPermissions,
+        Network::Collaboration::CollaborationPermission::Edit);
+    ImGui::BeginDisabled(!mayEdit);
+    drawPermission(TR("ui.collaboration.permissions.objects").data(),
+                   Network::Collaboration::CollaborationPermission::Objects);
+    drawPermission(TR("ui.collaboration.permissions.timelines").data(),
+                   Network::Collaboration::CollaborationPermission::Timelines);
+    drawPermission(TR("ui.collaboration.permissions.metadata").data(),
+                   Network::Collaboration::CollaborationPermission::Metadata);
+    drawPermission(
+        TR("ui.collaboration.permissions.audio_samples").data(),
+        Network::Collaboration::CollaborationPermission::AudioSamples);
+    drawPermission(
+        TR("ui.collaboration.permissions.annotations").data(),
+        Network::Collaboration::CollaborationPermission::Annotations);
+    ImGui::EndDisabled();
+
+    return permissionsChanged;
+}
+
 /// @brief 绘制一名协作成员的表格行和可选跟随按钮。
 /// @param room 当前协作房间。
 /// @param peerId 成员 PeerId。
@@ -441,59 +510,10 @@ void drawParticipantRow(
                 ImGui::TextUnformatted(identity.creator.c_str());
                 ImGui::Separator();
 
-                // 在本地副本上累积本帧 checkbox 变更，最后统一发送。
+                // 本地副本统一提交；共享控件同时支持全选和清零全部权限。
                 auto       updatedPermissions = permissionMask;
-                bool       permissionsChanged = false;
-                const auto drawPermission =
-                    [&](const char* label,
-                        Network::Collaboration::CollaborationPermission
-                            target) {
-                        bool enabled =
-                            Network::Collaboration::hasCollaborationPermission(
-                                updatedPermissions, target);
-                        if ( FeedbackCheckbox(label, &enabled) ) {
-                            // 枚举值本身是权限位，可直接转换为 mask。
-                            const auto bit =
-                                static_cast<Network::Collaboration::
-                                                CollaborationPermissionMask>(
-                                    target);
-                            // 勾选置位，取消清位，不影响其他权限。
-                            if ( enabled ) {
-                                updatedPermissions |= bit;
-                            } else {
-                                updatedPermissions &= ~bit;
-                            }
-                            permissionsChanged = true;
-                        }
-                    };
-
-                drawPermission(
-                    TR("ui.collaboration.permissions.edit").data(),
-                    Network::Collaboration::CollaborationPermission::Edit);
-                // 细分权限只有在主 Edit 权限存在时才允许编辑。
-                const bool mayEdit =
-                    Network::Collaboration::hasCollaborationPermission(
-                        updatedPermissions,
-                        Network::Collaboration::CollaborationPermission::Edit);
-                ImGui::BeginDisabled(!mayEdit);
-                drawPermission(
-                    TR("ui.collaboration.permissions.objects").data(),
-                    Network::Collaboration::CollaborationPermission::Objects);
-                drawPermission(
-                    TR("ui.collaboration.permissions.timelines").data(),
-                    Network::Collaboration::CollaborationPermission::Timelines);
-                drawPermission(
-                    TR("ui.collaboration.permissions.metadata").data(),
-                    Network::Collaboration::CollaborationPermission::Metadata);
-                drawPermission(
-                    TR("ui.collaboration.permissions.audio_samples").data(),
-                    Network::Collaboration::CollaborationPermission::
-                        AudioSamples);
-                drawPermission(
-                    TR("ui.collaboration.permissions.annotations").data(),
-                    Network::Collaboration::CollaborationPermission::
-                        Annotations);
-                ImGui::EndDisabled();
+                const bool permissionsChanged =
+                    drawPermissionEditor(updatedPermissions);
 
                 if ( permissionsChanged ) {
                     // 一个 UI 帧只提交一次合并后的权限掩码。
@@ -1856,8 +1876,49 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
     }
 
     ImGui::Spacing();
+    if ( m_room->isHost() ) {
+        // 策略属于当前房间，默认关闭；开关变更不广播既有成员权限。
+        // 访客没有管理入口，真正的角色限制仍由 Peer 层独立检查。
+        // 掩码保存于 Peer，不使用静态 UI 状态，以免新房间继承旧授权。
+        // 打开弹窗的那次启用提交保留当前选择，具体类别由下方共享控件修改。
+        bool enabled     = m_room->defaultParticipantPermissionsEnabled();
+        auto permissions = m_room->defaultParticipantPermissions();
+        if ( FeedbackCheckbox("自动授予新协助者权限", &enabled) ) {
+            static_cast<void>(
+                m_room->setDefaultParticipantPermissions(enabled, permissions));
+            if ( enabled )
+                FeedbackOpenPopup("CollaborationDefaultPermissionsPopup");
+        }
+        // 配置入口只对已启用的策略开放，关闭时仍保留本房间的选择。
+        if ( enabled ) {
+            ImGui::SameLine();
+            if ( FeedbackSmallButton("设置默认权限") )
+                FeedbackOpenPopup("CollaborationDefaultPermissionsPopup");
+        }
+        if ( ImGui::BeginPopup("CollaborationDefaultPermissionsPopup") ) {
+            ImGui::TextUnformatted("新进入协助者的默认权限");
+            ImGui::TextWrapped(
+                "仅影响之后新加入的成员，不改变已有成员权限；关闭房间后恢复为不"
+                "自动授权。");
+            ImGui::Separator();
+            // 与单人授权共享控件，避免两处权限类别或全选行为逐渐不一致。
+            // popup 与每位成员的权限窗口使用不同 ID，不共享折叠或激活状态。
+            // 没有用户操作时不调用 setter，不让常态绘制重复触发管理变更。
+            if ( drawPermissionEditor(permissions) )
+                static_cast<void>(m_room->setDefaultParticipantPermissions(
+                    enabled, permissions));
+            ImGui::EndPopup();
+        }
+        ImGui::Spacing();
+    }
     if ( FeedbackCollapsingHeader(TR("ui.collaboration.participants").data(),
                                   headerFlags) ) {
+        // 音频跟随由各客户端自行选择，不改变房主权限或远端播放状态。
+        bool followPlayback = m_room->followPlaybackEnabled();
+        if ( FeedbackCheckbox("跟随播放音乐", &followPlayback) )
+            m_room->setFollowPlaybackEnabled(followPlayback);
+        ImGui::TextWrapped(
+            "跟随视角时同步对方的播放、暂停和播放速度；延迟补偿为近似值。");
         // 参与者 map 由房间快照维护，绘制期间不持久化元素指针。
         const auto&           participants = m_room->participants();
         const ImGuiTableFlags tableFlags =

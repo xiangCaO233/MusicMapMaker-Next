@@ -7,6 +7,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -38,11 +39,28 @@ public:
     /// @brief 请求下一帧把工具窗口聚焦到前台。
     void requestFocus();
 
+    /// @brief 切换表格与方块展示，共享资源选择并保留原有方块布局。
+    /// @param enabled true 显示表格，false 显示可排布方块。
+    /// @warning 低频用户操作：结束布局手势，不能在每帧重复调用。
+    void setTableView(bool enabled);
+    /// @brief 查询当前是否显示表格视图。
+    bool isTableView() const { return m_tableView; }
+
     /// @brief 专业模式关闭时取消工具选择和手势，不删除资源或谱面音频。
     /// @warning 低频模式切换路径，空画笔命令只提交一次。
     void disableProfessionalEditing();
 
 private:
+    /// @brief 绘制可滚动资源表格，复用选择、试听、音量与重命名流程。
+    /// @param dpiScale 当前窗口内容缩放。
+    /// @warning UI 热路径：只提交可见缓存行；资源筛选仅在脏标记变化时重建。
+    void renderTableView(float dpiScale);
+    /// @brief 当前窗口的展示模式，不改变项目资源或布局的存储格式。
+    bool m_tableView{ false };
+    /// @brief 搜索词或资源缓存变化后需重新生成表格行索引。
+    bool m_tableRowsDirty{ true };
+    /// @brief 按原资源顺序保存的筛选行下标，常态绘制不扫描全部资源。
+    std::vector<std::size_t> m_tableRows;
     /// @brief 方块缩放时被拖动的边或角。
     enum class ResizeHandle {
         None,
@@ -69,6 +87,9 @@ private:
 
         /// @brief Main 或 Effect 资源类型。
         AudioTrackType type{ AudioTrackType::Effect };
+
+        /// @brief 当前采样独立的试听及新建物件音量倍率，范围为 0～2。
+        float audioVolume{ 1.0F };
 
         /// @brief 方块在逻辑画布中的布局矩形。
         ProjectAudioToolLayout::Rect rect;
@@ -142,6 +163,9 @@ private:
         /// @brief 选中音效后自动试听的选项文本。
         const char* previewEffectOnSelection{ "" };
 
+        /// @brief 方块布局吸附开关的文本，复用画布通用翻译。
+        const char* snap{ "" };
+
         /// @brief 搜索输入提示文本。
         const char* searchHint{ "" };
 
@@ -182,15 +206,20 @@ private:
     /// @brief 把当前方块位置、叠层和选择写回项目工作区。
     void persistWorkspace();
 
+    /// @brief 将全部采样的工具倍率恢复为 100，并同步当前画笔及项目保存。
+    /// @warning 仅由重置按钮触发，允许重建脏缓存并保存一次，不得每帧调用。
+    void resetSampleVolumes();
+
     /// @brief 选择方块并将其提升到最上层。
     /// @param itemIndex 方块缓存下标。
     /// @param mousePosition 鼠标在逻辑画布中的坐标。
     void beginItemDrag(std::size_t itemIndex, ImVec2 mousePosition);
 
     /// @brief 选择方块、提升叠层并同步当前画笔音频。
-    /// @return 提升后的方块下标；输入无效时返回空。
+    /// @param raiseToFront 方块视图提升层级，表格视图保持行序及布局不变。
+    /// @return 激活后的方块下标；输入无效时返回空。
     [[nodiscard]] std::optional<std::size_t> activateItem(
-        std::size_t itemIndex);
+        std::size_t itemIndex, bool raiseToFront = true);
 
     /// @brief 按项目选项试听一次新选中的 Effect 音频资源。
     /// @param item 本次完成选择的资源方块。
@@ -254,9 +283,10 @@ private:
     /// @param canvasOrigin 逻辑画布原点对应的屏幕坐标。
     /// @param canvasScale 逻辑画布坐标到屏幕像素的相机缩放。
     /// @param dpiScale 当前内容缩放。
+    /// @param showVolume 是否显示该方块独立音量的整数百分数。
     /// @param drawList 当前 ImGui 绘制列表。
     void drawItem(const Item& item, ImVec2 canvasOrigin, float canvasScale,
-                  float dpiScale, bool hovered, bool pressed,
+                  float dpiScale, bool hovered, bool pressed, bool showVolume,
                   ImDrawList& drawList) const;
 
     /// @brief 计算可容纳全部方块的画布尺寸。
@@ -375,7 +405,7 @@ private:
     /// @brief 当前选中资源的 Main/Effect 类型。
     AudioTrackType m_selectedAudioTrackType{ AudioTrackType::Effect };
 
-    /// @brief 当前选中资源创建新物件时写入的物件音量倍率。
+    /// @brief 当前选中采样音量的兼容快照；各行编辑以 Item 独立倍率为准。
     float m_brushAudioVolume{ 1.0F };
 
     /// @brief 当前保持音量编辑弹窗的资源 ID。

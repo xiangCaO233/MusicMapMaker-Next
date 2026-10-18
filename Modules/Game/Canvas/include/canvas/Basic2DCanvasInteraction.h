@@ -1,5 +1,6 @@
 #pragma once
 
+#include "canvas/PlanarObservationInput.h"
 #include "canvas/TrackLayoutEditing.h"
 #include "common/CanvasComponentLayout.h"
 #include "common/ChartObjectKind.h"
@@ -40,6 +41,20 @@ public:
                 const Common::Render::RenderSnapshot* currentSnapshot,
                 float targetWidth, float targetHeight);
 
+    /// @brief 发布与当前画面同一组观察矩阵和动态顶点插值偏移。
+    /// @param projection 屏幕与谱面平面的双向映射，二维模式为恒等映射。
+    /// @param snapshotYOffset 当前帧动态顶点相对原命中框的播放插值。
+    /// @warning 每帧固定大小值复制，不读会话状态、不加锁，也不执行文件操作。
+    void setInputProjection(const PlanarObservationInputProjection& projection,
+                            float snapshotYOffset = 0.0F);
+    /// @brief 判断画布是否持有未结束的编辑手势，防止摄像机抢走释放事件。
+    /// @warning 每帧常量时间读取 UI 本地门闩，不读取逻辑线程状态。
+    bool hasActivePointerGesture() const
+    {
+        return m_leftPressStartedOnCanvas || m_leftPressStartedObjectDrag ||
+               m_rightEraseActive || m_isMiddleCanvasPanning;
+    }
+
     /// @brief 请求本帧左键释放时丢弃画笔而不是提交物件。
     /// @details 供上层事务式教学在发现拖拽落点错误后撤销本次临时放置；
     /// 标记在下一次左键释放后无条件清除，不影响后续普通绘制。
@@ -69,6 +84,15 @@ public:
     /// 鼠标位置命令，禁止扩展为绘制、拾取或拖拽处理。
     void updateHoverState(float targetWidth, float targetHeight);
 
+    /// @brief 只读检视未聚焦画布的分拍位置和物件详情，不切换活动会话。
+    /// @param currentSnapshot 该画布所属谱面的不可变快照。
+    /// @param targetWidth 画布逻辑宽度。
+    /// @param targetHeight 画布逻辑高度。
+    /// @warning 可见后台画布每帧调用，仅扫描可见命中框并按变化发布视觉命令。
+    void updateReadOnlyHover(
+        const Common::Render::RenderSnapshot* currentSnapshot,
+        float targetWidth, float targetHeight);
+
     /// @brief 推进并绘制交互层的临时 UI。
     /// @warning UI 热路径：每帧最多绘制一个播放速度提示窗口。
     void updateTransientUi();
@@ -88,6 +112,22 @@ public:
         bool                                  allowSelectionScroll = true);
 
 private:
+    /// @brief 当前可见画布的坐标桥，仅由 UI 线程读写，不访问可变会话数据。
+    PlanarObservationInputProjection m_inputProjection;
+    /// @brief 动态物件命中框需要移除的播放插值，逻辑命令仍接收显示平面坐标。
+    float m_snapshotInputYOffset{ 0.0F };
+    /// @brief 统一绘制活动和后台画布的只读悬浮详情，不消费编辑手势。
+    /// @param currentSnapshot 所属谱面的悬浮、分拍与物件详情快照。
+    /// @param mouseX 鼠标屏幕横坐标。
+    /// @param mouseY 鼠标屏幕纵坐标。
+    /// @param isHovered 当前画布内容区是否悬停。
+    /// @param isMouseInTrackLayout 指针是否位于真实轨道区域。
+    /// @param overlayBlocksCanvas 是否被音频控制等覆盖层占用。
+    /// @warning UI 每帧路径仅读取快照，不访问 ECS 或改变活动谱面。
+    void renderHoverInspection(
+        const Common::Render::RenderSnapshot* currentSnapshot, float mouseX,
+        float mouseY, bool isHovered, bool isMouseInTrackLayout,
+        bool overlayBlocksCanvas);
     /// @brief 批注交互层对当前画布输入的处理结果。
     struct AnnotationGutterInteractionResult {
         /// @brief 是否阻断画布的点击、拖拽等指针交互。
@@ -388,6 +428,10 @@ private:
     HorizontalRegionDragHandle m_horizontalRegionDragHandle{
         HorizontalRegionDragHandle::None
     };
+    /// @brief 宽度手势开始时冻结四区边界，联动不依赖逐帧回流快照。
+    HorizontalLayoutBounds m_joinedLayoutDragBounds{};
+    /// @brief 联动手势起始配置，移回起点时完整恢复未物化的可选锚点。
+    Config::TrackLayout m_joinedLayoutDragStart;
     /// @brief 辅助区域拖动开始时的已解析归一化边界。
     HorizontalRegionBounds m_horizontalRegionDragStart;
     /// @brief 辅助区域拖动开始时的归一化横坐标。

@@ -23,6 +23,7 @@
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/ToolbarDockLayout.h"
 #include "ui/imgui/ToolbarPopupLayout.h"
+#include "ui/imgui/manager/LayoutPresetControls.h"
 #include "ui/imgui/manager/SoundEffectToolTrackLayout.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/utils/NativeFileDialog.h"
@@ -701,6 +702,8 @@ void ToolbarView::updateEditorConfig(const Config::EditorConfig& config) const
     if ( m_editorApplicationService ) {
         // 服务负责应用、保存并广播配置变化。
         m_editorApplicationService->updateEditorConfig(config);
+        // 布局字段实际变化时立即建立用户项；文件写入走后台单槽队列。
+        Config::AppConfig::instance().saveLayoutChanges();
     }
 }
 
@@ -1654,6 +1657,12 @@ void ToolbarView::update(UIManager* sourceManager)
                             const double newSpeed = presets[bestIndex];
                             if ( std::abs(newSpeed - currentSpeed) > 0.0001 ) {
                                 // 命令队列负责跨线程应用；反馈只在值确实变化时播放。
+                                auto& app = Config::AppConfig::instance();
+                                app.getAudioPresets().current().m_speed =
+                                    newSpeed;
+                                // 弹层只修改个人方案，不改变项目资源的离线处理速度。
+                                // 继续投递命令以保持播放中的视觉时钟连续。
+                                app.save();
                                 engine.pushCommand(
                                     Logic::CmdSetPlaybackSpeed{ newSpeed });
                                 ::MMM::UI::PlayInteractionMouseUpFeedback();
@@ -1857,6 +1866,8 @@ void ToolbarView::update(UIManager* sourceManager)
     renderColorPalettePopup(dpiScale);
     renderPaletteExportFileDialog(dpiScale);
     renderPaletteImportFileDialog(dpiScale);
+    // 文件选择器独立推进，避免布局弹层关闭后留下未完成模态窗口。
+    drawLayoutPresetFileDialogs();
     renderLayoutPopup(dpiScale, sourceManager);
     renderMagnetPopup(dpiScale);
     renderBeatLinePopup(dpiScale);
@@ -2041,6 +2052,10 @@ void ToolbarView::update(UIManager* sourceManager)
                 // 所有入口统一夹取合法倍速，防止预设与滑条范围漂移。
                 /// @brief 夹取弹层输入并投递统一倍速命令。
                 auto applyPopupSpeed = [&engine](double speed) {
+                    auto& app = Config::AppConfig::instance();
+                    app.getAudioPresets().current().m_speed =
+                        std::clamp(speed, 0.25, 2.0);
+                    app.save();
                     engine.pushCommand(Logic::CmdSetPlaybackSpeed{
                         std::clamp(speed, 0.25, 2.0) });
                 };
@@ -2534,8 +2549,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     /// @brief 绘制带静音按钮和百分比增益滑条的完整混音行。
     ///
     /// applyGain 用于拖动期间即时试听，persistGain 只在编辑结束边沿调用。
-    /// maximumGain 按音效类别限制范围，全局总增益为 100%，分类和逐轨可到
-    /// 200%，为较弱采样保留补偿空间。
+    /// 各分类统一显示零到一百，音频接口仍使用线性倍率。
     const auto drawMixRow = [&](const char* label,
                                 const char* id,
                                 bool        muted,
@@ -2559,17 +2573,19 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
         drawMuteStateButton(muted, gain, applyMute);
         ImGui::SameLine();
         ImGui::SetNextItemWidth(gainSliderWidth);
-        // UI 使用百分比显示，音频接口继续接收线性 0..maximumGain 值。
-        const float maximumGainPercent = maximumGain * 100.0F;
-        float gainPercent = std::clamp(gain * 100.0F, 0.0F, maximumGainPercent);
-        if ( ::MMM::UI::FeedbackSliderFloat(
-                 "##Gain", &gainPercent, 0.0F, maximumGainPercent, "%.0f%%") ) {
-            // 拖动每帧只更新内存/命令队列，不触发配置文件写入。
-            applyGain(gainPercent * 0.01F);
+        // 统一整数显示及鼠标/键盘步进，音频接口仍接收线性倍率。
+        const bool gainChanged =
+            ::MMM::UI::FeedbackVolumeSlider("##Gain", &gain);
+        // 预览回调仅发布实际变化，五点格内的小幅鼠标移动不会重复提交。
+        // 键盘的一点步进由公共控件返回，不能在此再次量化为五点格。
+        if ( gainChanged ) {
+            applyGain(gain);
         }
-        if ( ImGui::IsItemDeactivatedAfterEdit() ) {
-            // 鼠标释放或键盘编辑结束时提交最终持久值。
-            persistGain(gainPercent * 0.01F);
+        if ( ImGui::IsItemDeactivatedAfterEdit() ||
+             (gainChanged && !ImGui::IsItemActive()) ) {
+            // 焦点方向键无需激活滑块，必须直接保存；拖动则等释放边沿。
+            // 编辑结束才写入当前方案，拖动期间只发布实时增益。
+            persistGain(gain);
         }
         if ( ImGui::IsItemHovered() ) {
             Utils::renderTooltip(TR("ui.key_sound_tool.gain").data());
@@ -5403,23 +5419,41 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         ImGui::TextUnformatted(TR("ui.toolbar.layout_settings").data());
         ImGui::Separator();
 
-        auto& appConfig = Config::AppConfig::instance();
-        // 默认无谱面时轨道数为零，相关控件可据此禁用或隐藏。
-        std::int32_t keyCount = 0;
-        {
-            // 会话互斥只覆盖指针获取和 track_count 读取，不包围 UI 绘制。
-            auto& engine = Logic::EditorEngine::instance();
-            std::lock_guard<std::recursive_mutex> sessionLock(
-                engine.getSessionMutex());
-            const auto session = engine.getActiveSession();
-            if ( session && session->getContext().currentBeatmap ) {
-                // 合法谱面轨道数至少按一处理，避免下游范围退化。
-                keyCount = std::max(
-                    1,
-                    session->getContext()
-                        .currentBeatmap->m_baseMapMetadata.track_count);
-            }
+        // 通过画布能力接口借用当前编辑器，UI 不依赖 Canvas 具体实现。
+        // 模式切换与精确数值入口固定附着于布局按钮，避免遮住操作空间。
+        // 当前画布由已有稳定 ID 定位，不复制会话所有权或获取会话长锁。
+        auto* canvas =
+            sourceManager
+                ? sourceManager->getCanvasView(
+                      Logic::EditorEngine::instance().getActiveCameraId())
+                : nullptr;
+        // 键数来自画布本地发布快照；显示提示不能等待逻辑更新长锁。
+        const std::int32_t keyCount = canvas ? canvas->layoutKeyCount() : 0;
+        // 明确编辑作用域，其他键数保留独立布局，不会随当前拖动改变。
+        if ( keyCount > 0 )
+            ImGui::Text("正在调整：%d Key 布局", keyCount);
+        else
+            ImGui::TextUnformatted("正在调整：通用布局（未打开谱面）");
+        ImGui::TextWrapped(
+            "轨道与组件按键数分别保存；摄像机参数由所有键数共用。");
+        // 预设入口位于相机模式提前返回之前，两种布局编辑模式均可切换。
+        drawLayoutPresetControls();
+        ImGui::Separator();
+
+        const bool cameraMode = canvas && canvas->drawCameraLayoutControls();
+        ImGui::Separator();
+        // 元素和相机控件互斥，切回元素后恢复原有配置分组。
+        if ( cameraMode ) {
+            // 相机模式同样缓存真实尺寸，保持弹层贴着布局按钮。
+            const ImVec2 size   = ImGui::GetWindowSize();
+            m_layoutPopupWidth  = size.x;
+            m_layoutPopupHeight = size.y;
+            // 提前返回仍须配对 Begin 和样式栈，不能影响后续工具窗口。
+            ImGui::End();
+            ImGui::PopStyleVar(3);
+            return;
         }
+        auto& appConfig = Config::AppConfig::instance();
         {
             // 禁止垂直拖动属于编辑器设置，不是视觉配置。
             auto& dragSettings = appConfig.getEditorSettings();
@@ -5433,9 +5467,9 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
             }
             if ( ImGui::IsItemHovered() ) {
                 // 详细行为通过悬浮提示说明，主标签保持简洁。
-                drawTooltip(
-                    TR("ui.toolbar.layout_disable_vertical_object_drag_hint")
-                        .data());
+                drawTooltip(TR("ui.toolbar.layout_disable_vertical_object_"
+                               "drag_hint")
+                                .data());
             }
         }
         ImGui::Separator();
@@ -5454,7 +5488,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         bool anyColorPickerOpen = false;
         /// @brief 把局部 VisualConfig 快照合并回完整编辑器配置并应用。
         const auto applyVisualConfig = [&](const Config::VisualConfig& visual) {
-            // 每次从最新 EditorConfig 复制后只替换 visual，保留音效、快捷键和
+            // 每次从最新 EditorConfig 复制后只替换
+            // visual，保留音效、快捷键和
             // 其他设置在同一帧可能产生的变化。应用服务负责广播新快照。
             auto updatedConfig   = appConfig.getEditorConfig();
             updatedConfig.visual = visual;
@@ -5476,7 +5511,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                                                   auto&&      resetConfig) {
             // id
             // 区分音符与背景分组，虽然两个按钮显示相同本地化文本。resetConfig
-            // 接收完整 EditorConfig，使配置类型自身的默认重置函数维护关联字段。
+            // 接收完整
+            // EditorConfig，使配置类型自身的默认重置函数维护关联字段。
             ImGui::PushID(id);
             // 按钮在可用空间足够时靠右，窄窗口保持当前起点避免负偏移。
             const float remainingWidth = ImGui::GetContentRegionAvail().x;
@@ -5512,7 +5548,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         //
         // 前三项连续值使用“即时应用、失活保存”，离散项立即保存。默认调色盘
         // 是软件设置引用，不会改变当前项目已经显式选择的方案，也不会把当前
-        // 画笔颜色应用到已有选择。恢复按钮只调用 note rendering 默认重置入口。
+        // 画笔颜色应用到已有选择。恢复按钮只调用 note rendering
+        // 默认重置入口。
         if ( ::MMM::UI::FeedbackCollapsingHeader(
                  TR("ui.settings.visual.note").data()) ) {
             // 恢复默认保留背景、画布组件和其他编辑器设置。
@@ -5565,7 +5602,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                 applyVisualConfig(visual);
                 m_layoutVisualConfigDirty = true;
             }
-            // 在调用保存 helper 前缓存悬浮态，因为后续 ImGui 项会改变查询对象。
+            // 在调用保存 helper 前缓存悬浮态，因为后续 ImGui
+            // 项会改变查询对象。
             const bool hitEffectDurationHovered = ImGui::IsItemHovered();
             saveVisualAfterEdit();
             if ( hitEffectDurationHovered ) {
@@ -5792,9 +5830,11 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
 
         // 下方组件列表编辑按轨道数分组保存的可见性、颜色和位置默认值。
         //
-        // 每个 CanvasComponentPlacement 至少包含可见性、颜色和布局位置。位置由
-        // Layout 工具在画布上直接拖动，此弹层提供可见性、颜色与恢复默认入口。
-        // 配置按 keyCount 隔离，因为不同轨道数的画布宽度和合理组件位置不同。
+        // 每个 CanvasComponentPlacement
+        // 至少包含可见性、颜色和布局位置。位置由 Layout
+        // 工具在画布上直接拖动，此弹层提供可见性、颜色与恢复默认入口。
+        // 配置按 keyCount
+        // 隔离，因为不同轨道数的画布宽度和合理组件位置不同。
         //
         // 通用控件不假设组件的渲染实现。BackgroundSpectrum 是唯一兼容特例：
         // 它既有组件 placement，又保留 background.spectrum.enabled 和专用
@@ -5931,7 +5971,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                     .editableCanvasComponentsForKeyCount(keyCount)
                     .resetPlacementToDefault(type);
                 if ( type == Config::CanvasComponentType::BackgroundSpectrum ) {
-                    // 频谱尺寸属于独立配置结构，组件 placement 重置不会覆盖它。
+                    // 频谱尺寸属于独立配置结构，组件 placement
+                    // 重置不会覆盖它。
                     // 因此额外恢复宽、高和基线，形成用户理解中的完整组件复位。
                     const Config::BackgroundSpectrumConfig defaults;
                     updatedConfig.visual.background.spectrum.widthRatio =
@@ -6005,8 +6046,9 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         // - leftBarColor 与 rightBarColor 区分双声道柱颜色；
         // - opacity 和 includeHitEffects 控制最终混合与分析输入。
         //
-        // 连续数值及颜色共用 m_layoutSpectrumConfigDirty。滑条失活、颜色取色器
-        // 关闭、Layout 弹层关闭三条路径都能保存最终值，且任一路径保存后清除
+        // 连续数值及颜色共用
+        // m_layoutSpectrumConfigDirty。滑条失活、颜色取色器 关闭、Layout
+        // 弹层关闭三条路径都能保存最终值，且任一路径保存后清除
         // 标志，避免重复磁盘写入。离散 includeHitEffects
         // 和匹配画布按钮立即保存。
         if ( ::MMM::UI::FeedbackCollapsingHeader(
@@ -6017,8 +6059,9 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
             /// @brief 合并频谱快照并维持组件可见性作为 enabled 权威值。
             const auto applySpectrumConfig =
                 [&](const Config::BackgroundSpectrumConfig& spectrum) {
-                    // 频谱局部副本不拥有 enabled 权威值；它始终跟随当前键数布局
-                    // 中 BackgroundSpectrum placement 的 visible 字段。
+                    // 频谱局部副本不拥有 enabled
+                    // 权威值；它始终跟随当前键数布局 中 BackgroundSpectrum
+                    // placement 的 visible 字段。
                     auto updatedConfig = appConfig.getEditorConfig();
                     updatedConfig.visual.background.spectrum = spectrum;
                     // enabled 不从可能过时的局部 spectrum 副本读取。
@@ -6030,7 +6073,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                 };
             /// @brief 在连续频谱控件结束编辑时一次性保存最终值。
             const auto saveSpectrumAfterEdit = [&]() {
-                // 与普通视觉 helper 相同，此函数必须在目标控件之后立即调用。
+                // 与普通视觉 helper
+                // 相同，此函数必须在目标控件之后立即调用。
                 if ( ImGui::IsItemDeactivatedAfterEdit() &&
                      m_layoutSpectrumConfigDirty ) {
                     appConfig.save();
@@ -6214,8 +6258,9 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         // - syncKpsTrackRelativePositions 同步轨道内的相对位置；
         // - syncAllKpsComponentPositions 把同步扩展到所有 KPS 组件。
         //
-        // 后两项通过配置对象 setter 修改，因为它们可能维护关联字段或默认值。
-        // UI 只提交 setter 产出的完整配置，不能直接推导同步传播规则。三个开关
+        // 后两项通过配置对象 setter
+        // 修改，因为它们可能维护关联字段或默认值。 UI 只提交 setter
+        // 产出的完整配置，不能直接推导同步传播规则。三个开关
         // 都是离散设置，改变后立即保存，不参与颜色或连续参数脏标记。
         if ( ::MMM::UI::FeedbackCollapsingHeader(
                  TR("ui.toolbar.layout_kps_sync_settings").data(),

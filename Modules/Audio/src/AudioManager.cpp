@@ -3,6 +3,7 @@
 #include "audio/AudioTimelineMixerNode.h"
 #include "audio/KeySoundControl.h"
 #include "audio/SoundEffectPool.h"
+#include "audio/TimelineStopGateNode.h"
 #include "config/AppConfig.h"
 #include "log/colorful-log.h"
 #include "runtime/AppThreadPool.h"
@@ -338,7 +339,8 @@ void AudioManager::init()
         std::make_shared<BackgroundSpectrumCaptureNode>(m_audioTimelineNode);
     m_stretcher = std::make_shared<ice::TimeStretcher>();
     // 变速器唯一上游是预拉伸混音器，资源级速度已在加载阶段离线处理。
-    m_stretcher->set_inputnode(m_preStretcherMixer);
+    m_stretcher->set_inputnode(std::make_shared<TimelineStopGateNode>(
+        m_preStretcherMixer, *m_audioTimelineNode));
     static_cast<void>(m_stretcher->prepare(ice::ICEConfig::internal_format,
                                            maximumBlockFrames));
     m_stretcher->set_playback_ratio(m_speed);
@@ -358,6 +360,7 @@ void AudioManager::init()
             // 仍处理谱面控制邮箱和 discontinuity；只延长停止或尾部区间。
             // 标量邮箱不发布资源，MixBus 独立负责图边的安全更新。
             if ( manager.m_auditionPlaying.load(std::memory_order_relaxed) &&
+                 span.frameCount == 0 &&
                  span.boundary !=
                      ice::TimeStretcher::InputBoundary::Discontinuity ) {
                 span.frameCount = maximumFrames;
@@ -391,6 +394,8 @@ void AudioManager::init()
         m_mainMixer->add_source(m_hitEffectSpectrumCapture);
     }
 
+    // 音频图完整后、后端开始拉取前恢复客户端效果器和混音方案。
+    applyAudioPreset();
     if ( createPlaybackBackend(m_playbackBackend) ) {
         XINFO("Audio playback backend opened with configured backend: {}.",
               getPlaybackBackendName(m_playbackBackend));

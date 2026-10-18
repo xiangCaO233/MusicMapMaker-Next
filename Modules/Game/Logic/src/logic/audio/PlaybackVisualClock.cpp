@@ -67,9 +67,13 @@ constexpr double LARGE_ERROR_SECONDS = 0.5;
 /// @warning 每个播放会话的 update
 /// 热路径；保持常量计算，不加锁、分配或等待音频。
 double PlaybackVisualClock::update(
-    const Audio::AudioTimelineClockSnapshot& snapshot, double nowSteadySeconds,
-    const Config::SyncConfig& config) noexcept
+    const Audio::AudioTimelineClockSnapshot& inputSnapshot,
+    double nowSteadySeconds, const Config::SyncConfig& config) noexcept
 {
+    // 播放意图保持 Playing；只有视觉外推按暂停状态处理 STOP 等待。
+    auto snapshot = inputSnapshot;
+    if ( snapshot.stopFrozen )
+        snapshot.state = Audio::AudioTimelinePlaybackState::Paused;
     nowSteadySeconds = sanitizeNow(nowSteadySeconds, m_anchorSteadySeconds);
     if ( !snapshot.valid || snapshot.sampleRate == 0U ) {
         // 暂无可用采样时继续沿已有锚点推演，不能把短暂缺失当成停止或回到零点。
@@ -77,6 +81,13 @@ double PlaybackVisualClock::update(
         m_lastResolvedTime          = resolved;
         m_lastResolvedSteadySeconds = nowSteadySeconds;
         return resolved;
+    }
+
+    // STOP 的位置由音频块精确封存，不能保留普通暂停前的视觉外推误差。
+    // 每轮等待都直接使用该位置，恢复播放时再由新观测建立斜率。
+    if ( snapshot.stopFrozen ) {
+        reanchor(snapshot, nowSteadySeconds);
+        return m_lastResolvedTime;
     }
 
     const double rate        = sanitizeRate(snapshot.playbackRate);
@@ -325,9 +336,13 @@ void PlaybackVisualClock::reset() noexcept
 /// @param nowSteadySeconds 当前逻辑时刻。
 /// @note 与 rebase 不同，此入口同步消费快照版本并重启低通校准。
 void PlaybackVisualClock::reanchor(
-    const Audio::AudioTimelineClockSnapshot& snapshot,
+    const Audio::AudioTimelineClockSnapshot& inputSnapshot,
     double                                   nowSteadySeconds) noexcept
 {
+    // 播放意图保持 Playing；只有视觉外推按暂停状态处理 STOP 等待。
+    auto snapshot = inputSnapshot;
+    if ( snapshot.stopFrozen )
+        snapshot.state = Audio::AudioTimelinePlaybackState::Paused;
     const double rate = sanitizeRate(snapshot.playbackRate);
     const double observationTime =
         sanitizeNow(snapshot.steadyTimeSeconds(), nowSteadySeconds);

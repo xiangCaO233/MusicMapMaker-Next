@@ -76,6 +76,7 @@ rm -rf build_gcc
 # 源码与构建目录显式固定，避免调用位置影响生成路径。
 # CI 构建不得写入 Runner 的用户配置目录。
 # 即使复用 CI 构建目录，也让本次参数决定缓存值。
+# CI 显式关闭耗时诊断，避免旧构建缓存重新启用逐单元采集和排序。
 cmake -G Ninja \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo \
     -DSOURCES_BUILD=OFF \
@@ -84,6 +85,7 @@ cmake -G Ninja \
     -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF \
     -DMMM_PGO_INSTRUMENT="${pgoInstrument}" \
     -DMMM_PGO_USE=OFF \
+    -DMMM_ENABLE_BUILD_TIMING=OFF \
     -S . \
     -B build_gcc
 # 完整构建成功后执行全部已注册回归测试。

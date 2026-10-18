@@ -89,6 +89,8 @@ struct CmdSetHoveredEntity {
     int          subIndex;  // 悬停的具体子索引
     /// @brief 实体所在的独立 ECS 注册表。
     ChartObjectKind kind{ ChartObjectKind::PlayerNote };
+    /// @brief 悬浮所属主画布；为空时兼容旧入口并路由到活动会话。
+    std::string cameraId;
 };
 
 /**
@@ -214,6 +216,10 @@ struct CmdSetMousePosition {
     bool        isHovering;
     bool        isDragging{ false };
     double      hoverTime{ -1.0 };  ///< 可选：直接指定悬停时间 (如果 >= 0)
+    /// @brief 鼠标已由 UI 从真实视口逆投影到平面逻辑坐标。
+    /// @note 平面坐标可能超出原二维视口；isHovering 已表示真实窗口边界。
+    /// @note 启用时要求视口尺寸有限且为正，屏幕边缘滚动由 UI 按真实位置处理。
+    bool isUnprojected{ false };
 };
 
 /**
@@ -725,6 +731,12 @@ struct CmdDeleteTimelineEvent {
     entt::entity entity;
 };
 
+/// @brief 将一次选择或擦除操作涉及的时间线删除合并为单条撤销记录。
+struct CmdDeleteTimelineEvents {
+    /// @brief 待删除实体；执行时忽略重复、失效和非 Timeline 句柄。
+    std::vector<entt::entity> entities;
+};
+
 /**
  * @brief 创建时间线事件指令
  */
@@ -1077,17 +1089,18 @@ using LogicCommand = std::variant<
     CmdApplyBrushPaletteToEntity, CmdClearNoteColorOverrides,
     CmdClearAllNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
     CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
-    CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdCreateTimelineEvent,
-    CmdUpdateBpmWithKeepSpeedSv, CmdKeepSpeedForBpmEvents,
-    CmdCreateTimelineEvents, CmdReplaceBeatmapTimings, CmdSetNoteAnnotation,
-    CmdUpsertBeatmapAnnotation, CmdRemoveBeatmapAnnotation,
-    CmdReplaceBeatmapData, CmdAcknowledgeCollaborationMutation,
-    CmdReconcileCollaborationHistory, CmdSetCollaborationResources,
-    CmdSetCollaborationOfflineReadOnly, CmdSetCollaborationClipboardIsolation,
-    CmdStartMarquee, CmdUpdateMarquee, CmdEndMarquee, CmdRemoveMarqueeAt,
-    CmdStartBrush, CmdUpdateBrush, CmdEndBrush, CmdStartErase, CmdUpdateErase,
-    CmdEndErase, CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty,
-    CmdImportAudio, CmdUpdateAudioResource, CmdRenameAudioResource,
+    CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdDeleteTimelineEvents,
+    CmdCreateTimelineEvent, CmdUpdateBpmWithKeepSpeedSv,
+    CmdKeepSpeedForBpmEvents, CmdCreateTimelineEvents, CmdReplaceBeatmapTimings,
+    CmdSetNoteAnnotation, CmdUpsertBeatmapAnnotation,
+    CmdRemoveBeatmapAnnotation, CmdReplaceBeatmapData,
+    CmdAcknowledgeCollaborationMutation, CmdReconcileCollaborationHistory,
+    CmdSetCollaborationResources, CmdSetCollaborationOfflineReadOnly,
+    CmdSetCollaborationClipboardIsolation, CmdStartMarquee, CmdUpdateMarquee,
+    CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush,
+    CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
+    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
+    CmdUpdateAudioResource, CmdRenameAudioResource,
     CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
     CmdExportImdPackage, CmdSaveTemporaryProject>;
 

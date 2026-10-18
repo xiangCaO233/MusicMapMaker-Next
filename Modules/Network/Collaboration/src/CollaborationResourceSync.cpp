@@ -26,6 +26,7 @@
 #include <span>
 #include <sstream>
 #include <stop_token>
+#include <string>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
@@ -1234,6 +1235,87 @@ private:
         pushEvent(std::move(event));
     }
 
+    /// @brief 从内容寻址的持久加密对象恢复当前会话明文。
+    /// @param file 已通过清单校验的内容身份与期望长度。
+    /// @param destination 本次 session 中供解码器访问的明文路径。
+    /// @param stopToken 资源工作线程的取消令牌。
+    /// @return 认证解密及 SHA-256 均通过时为真，否则交由网络重新下载。
+    /// @details
+    /// 缓存身份来自内容摘要，不取决于房间重建、清单次序或原资源文件名。
+    /// 密钥副本严格按固定长度读取，截断或附加内容都视作损坏。
+    /// 物化目录仍由当前 Bundle 的租约清理，不把解码器路径指向持久对象。
+    /// 缓存未命中不发布错误终态，正常网络传输可以修复不完整的本地对象。
+    /// @warning 仅资源 worker 调用，包含文件读取和整文件哈希。
+    bool restoreCachedResource(const ManifestFile&          file,
+                               const std::filesystem::path& destination,
+                               std::stop_token              stopToken)
+    {
+        // 持久对象只按已验证摘要命名，不包含房间编号、清单代次或原始文件路径。
+        const auto object = m_cacheRoot / "objects-v1" / file.sha256;
+        Detail::CollaborationResourceKey key{};
+        std::ifstream input(object / "key", std::ios::binary);
+        input.read(reinterpret_cast<char*>(key.data()),
+                   static_cast<std::streamsize>(key.size()));
+        const bool validKey =
+            input.gcount() == static_cast<std::streamsize>(key.size()) &&
+            input.peek() == std::char_traits<char>::eof();
+        // 长度、GCM 标签及清单摘要全部匹配才允许计入缓存命中。
+        const bool restored =
+            validKey &&
+            Detail::materializeCollaborationResourceFile(
+                object / "resource.mmrsc", destination, key, file.size) &&
+            sha256File(destination, stopToken) == file.sha256;
+        input.close();
+        Detail::clearCollaborationResourceKey(key);
+        if ( restored ) return true;
+        // 损坏缓存不能使整个进房失败；删掉不可信输出并只补传这一项。
+        std::error_code error;
+        std::filesystem::remove(destination, error);
+        if ( !stopToken.stop_requested() )
+            std::filesystem::remove_all(object, error);
+        return false;
+    }
+
+    /// @brief 原子发布已经校验过的资源，以便后续房间会话复用。
+    /// @param file 通过 SHA-256 校验的资源清单项。
+    /// @param encryptedPath 当前会话中已提交的 GCM 容器。
+    /// @details 容器与对应密钥作为一个目录提交，读取者不会看到半写入组合。
+    /// 会话清理仅删除 session 前缀目录，持久对象留给之后的合法清单验证复用。
+    /// @warning 仅资源 worker 调用；缓存发布失败不影响当前已经可用的资源。
+    void cacheVerifiedResource(const ManifestFile&          file,
+                               const std::filesystem::path& encryptedPath)
+    {
+        const auto root = m_cacheRoot / "objects-v1";
+        const auto staging =
+            root / (".pending-" + m_transferSuffix + "-" + file.sha256);
+        const auto      object = root / file.sha256;
+        std::error_code error;
+        std::filesystem::create_directories(staging, error);
+        if ( error ) return;
+        // 缓存密钥仅对本机当前用户保存，不进入清单或网络；会话仍拥有独立新密钥。
+        restrictGuestSessionPermissions(root);
+        restrictGuestSessionPermissions(staging);
+        std::filesystem::copy_file(
+            encryptedPath, staging / "resource.mmrsc", error);
+        bool written = false;
+        if ( !error ) {
+            std::ofstream output(staging / "key", std::ios::binary);
+            output.write(
+                reinterpret_cast<const char*>(m_guestResourceKey.data()),
+                static_cast<std::streamsize>(m_guestResourceKey.size()));
+            output.close();
+            written = output.good();
+        }
+        if ( written ) {
+            restrictGuestSessionPermissions(staging / "key");
+            restrictGuestSessionPermissions(staging / "resource.mmrsc");
+            // 完整目录一次发布；并发下载同摘要时先发布者胜出，绝不覆盖其密钥。
+            std::filesystem::rename(staging, object, error);
+        }
+        // 失败或另一会话已提交时仅清理自己的临时目录，不删除正式缓存。
+        std::filesystem::remove_all(staging, error);
+    }
+
     /// @brief 接收并比对访客缓存。
     /// @par generation 隔离
     /// - 外层 generation 必须匹配清单 id 派生值。
@@ -1248,8 +1330,10 @@ private:
     /// - 全命中路径不得产生 ResourceRequest。
     /// @details
     /// 验证 CBOR 清单及 generation 后，为该清单创建新的 session、独立密钥、
-    /// encrypted 与 materialized 目录，并限制目录权限。逐个文件比较会话内明文
-    /// 大小和 SHA-256；命中项计入 cachedFiles，零字节缺失项本地建立认证容器，
+    /// encrypted 与 materialized
+    /// 目录，并限制目录权限。逐个文件先比较会话内明文，
+    /// 再尝试从持久加密对象认证恢复；命中项计入
+    /// cachedFiles，零字节缺失项本地建立认证容器，
     /// 其余项进入顺序下载列表。全命中直接发布 Bundle，否则请求第一块。
     /// @param manifestMessage 房主发布的版本化资源清单。
     /// @param stopToken 重启或析构发出的取消令牌。
@@ -1329,8 +1413,10 @@ private:
             // session 是新建目录，检查仍覆盖同一会话重复清单或预物化资源。
             std::error_code sizeError;
             const auto size = std::filesystem::file_size(finalPath, sizeError);
-            const bool cached = !sizeError && size == file.size &&
-                                sha256File(finalPath, stopToken) == file.sha256;
+            const bool cached =
+                (!sizeError && size == file.size &&
+                 sha256File(finalPath, stopToken) == file.sha256) ||
+                restoreCachedResource(file, finalPath, stopToken);
             // 大小先筛选，匹配后才承担后台文件哈希成本。
             if ( stopToken.stop_requested() ) return;
             if ( cached ) {
@@ -1547,6 +1633,8 @@ private:
             fail("resource_cache_commit_failed");
             return;
         }
+        // 只保存经过认证和内容摘要校验的正式容器，未完成分块不进入跨会话缓存。
+        cacheVerifiedResource(file, encryptedPath);
         ++m_guestCurrentFile;
         // 文件提交成功后重置 offset，下一文件从零开始。
         m_guestOffset = 0;

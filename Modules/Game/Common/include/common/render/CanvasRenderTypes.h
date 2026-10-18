@@ -69,6 +69,9 @@ struct CanvasDrawCmd {
     CanvasScissor scissor{};
     /// @brief 按源 Alpha 加权的加法混合；不同模式禁止合并批次。
     bool additiveBlend{ false };
+    /// @brief 固定屏幕坐标层，不参与轨道摄像机或播放位置补偿。
+    /// @note 与纹理 ID 无关；无图铺底和背景频谱同样属于固定底层。
+    bool screenSpace{ false };
 };
 
 }  // namespace MMM::Common::Render

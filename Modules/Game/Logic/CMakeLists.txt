@@ -95,6 +95,7 @@ target_link_libraries(
          3rd_glm
          # 压缩和图片辅助能力通过统一依赖目标接入，不写平台相关库文件路径。
          3rd_miniz
+         3rd_libarchive
          3rd_stb
          Audio
          Config
@@ -471,3 +472,13 @@ target_compile_definitions(
 )
 mmm_register_test_case(NAME TimingInterpolationTest COMMAND
                        TimingInterpolationTest)
+
+# * 归档回归通过生产准备入口，输出仅写构建目录，样本资源只读。
+# * 真实 RAR 样本保持 LFS 跟踪，其余容器由测试使用正式链接的库生成。
+# * 与 ZIP Unicode 回归分开登记，方便单独诊断容器解码和名称兼容。
+mmm_add_test_executable(Logic TemporaryArchivePackageTest
+                        tests/TemporaryArchivePackageTest.cpp)
+target_link_libraries(TemporaryArchivePackageTest PRIVATE Logic Log)
+mmm_register_test_case(
+  NAME TemporaryArchivePackageTest COMMAND TemporaryArchivePackageTest
+  "${MMM_TEST_RESOURCE_DIR}" "${CMAKE_BINARY_DIR}/test_output")

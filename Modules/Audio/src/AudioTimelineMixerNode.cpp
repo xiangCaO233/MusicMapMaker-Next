@@ -78,8 +78,8 @@ namespace
     AudioTimelineFrame position, AudioTimelineFrame boundary) noexcept
 {
     if ( position >= boundary ) return 0;
-    const auto distance = static_cast<std::uint64_t>(boundary) -
-                          static_cast<std::uint64_t>(position);
+    const auto     distance  = static_cast<std::uint64_t>(boundary) -
+                               static_cast<std::uint64_t>(position);
     constexpr auto MAX_FRAME = static_cast<std::uint64_t>(
         std::numeric_limits<AudioTimelineFrame>::max());
     return static_cast<AudioTimelineFrame>(std::min(distance, MAX_FRAME));
@@ -399,7 +399,7 @@ AudioTimelineMixerNode::ScheduleState::ScheduleState(
 std::uint64_t AudioTimelineMixerNode::replaceSchedule(
     std::vector<PreparedTimelineClip> clips,
     AudioTimelineFrame                requestedTimelineEndFrame,
-    std::size_t                       maximumProcessFrames)
+    std::size_t maximumProcessFrames, std::vector<TimelineStopEvent> stops)
 {
     // 控制线程顺手释放上一轮已退役状态，避免频繁替换时长期积压 PCM。
     static_cast<void>(reclaimRetiredSchedules());
@@ -410,6 +410,15 @@ std::uint64_t AudioTimelineMixerNode::replaceSchedule(
                                         requestedTimelineEndFrame,
                                         maximumProcessFrames,
                                         generation);
+    // 不可信输入在发布前过滤；同刻多个 STOP 顺序等待，避免累加溢出。
+    std::erase_if(stops, [](const auto& stop) {
+        return stop.position < 0 || stop.duration <= 0;
+    });
+    std::stable_sort(
+        stops.begin(), stops.end(), [](const auto& a, const auto& b) {
+            return a.position < b.position;
+        });
+    replacement->stops = std::move(stops);
     // 查询接口立即反映最近发布的元数据，不必等待音频设备产生下一个 block。
     m_publishedTimelineEndFrame.store(replacement->timelineEndFrame,
                                       std::memory_order_relaxed);
@@ -607,6 +616,8 @@ AudioTimelineMixerNode::clockSnapshot() const noexcept
         snapshot.steadyTimeNanoseconds =
             m_publishedSteadyTimeNanoseconds.load(std::memory_order_relaxed);
         snapshot.state = m_publishedState.load(std::memory_order_relaxed);
+        snapshot.stopFrozen =
+            m_publishedStopFrozen.load(std::memory_order_relaxed);
         snapshot.epoch = m_publishedEpoch.load(std::memory_order_relaxed);
         snapshot.controlEpoch =
             m_publishedControlEpoch.load(std::memory_order_relaxed);
@@ -750,11 +761,53 @@ AudioTimelineInputBoundary AudioTimelineMixerNode::prepareInputBoundary(
             };
         }
 
+        // STOP 在输入时域计数，输出时长由下游拉伸倍率统一决定。
+        // 暂停块只发布时钟，不调用任一上游音源的 process。
+        // 当前音乐位置因此始终是 STOP 起点，不包含已经等待的帧。
+        // 同刻多个事件逐个消费，避免将持续时间相加时发生整数溢出。
+        // nextStop 只能由音频线程推进，控制线程通过替换 Schedule 发布新表。
+        // 查找只发生在 epoch 变化时；常规块沿有序表增量前进。
+        // 用户暂停保持 epoch，Seek 和循环则建立新的边界状态。
+        // 定位和循环改变音乐位置，按新位置重新选择暂停事件；普通暂停不重置余量。
+        if ( schedule.stopEpoch != schedule.transport.epoch() ) {
+            schedule.stopEpoch = schedule.transport.epoch();
+            schedule.nextStop  = static_cast<std::size_t>(
+                std::lower_bound(schedule.stops.begin(),
+                                 schedule.stops.end(),
+                                 position,
+                                 [](const auto& stop, auto frame) {
+                                     return stop.position < frame;
+                                 }) -
+                schedule.stops.begin());
+            schedule.stopRemaining = 0;
+        }
+        // 上一次拉取可能是最后一块等待，新的正常块解除冻结标志。
+        // 同刻下一项仍会重新设置该标志，因此事件之间没有多余播放帧。
+        // 若当前已经越过事件，epoch 重建时 lower_bound 会跳过它。
+        // 按有序表推进而非每块遍历全部 Timing，保持回调成本有界。
+        // 音乐末尾的 STOP 由载入层预留尾部，确保不会先提交 Final。
+        schedule.stopInput = false;
+        if ( schedule.nextStop < schedule.stops.size() &&
+             schedule.stops[schedule.nextStop].position == position ) {
+            if ( schedule.stopRemaining == 0 )
+                schedule.stopRemaining =
+                    schedule.stops[schedule.nextStop].duration;
+            schedule.stopInput         = true;
+            m_hasPreparedInputBoundary = true;
+            m_preparedInputFrameCount  = static_cast<std::size_t>(std::min(
+                frameCountFromSize(maximumFrames), schedule.stopRemaining));
+            return { m_preparedInputFrameCount,
+                     AudioTimelineInputBoundaryKind::None };
+        }
         const auto boundary =
             loopRange ? loopRange->endFrame : schedule.timelineEndFrame;
         const auto distance = framesUntil(position, boundary);
-        const auto frameCount =
-            std::min(frameCountFromSize(maximumFrames), distance);
+        auto frameCount = std::min(frameCountFromSize(maximumFrames), distance);
+        if ( schedule.nextStop < schedule.stops.size() )
+            frameCount = std::min(
+                frameCount,
+                framesUntil(position,
+                            schedule.stops[schedule.nextStop].position));
         // frameCount 等于边界距离时，本次拉取末端需要执行跳转或结束提交。
         AudioTimelineInputBoundary result{
             .frameCount = static_cast<std::size_t>(frameCount),
@@ -768,6 +821,31 @@ AudioTimelineInputBoundary AudioTimelineMixerNode::prepareInputBoundary(
         m_preparedInputFrameCount  = result.frameCount;
         return result;
     }
+}
+
+/// @brief 用静音消费 STOP 等待，音乐传输和所有上游源保持当前位置。
+/// @warning 音频块热路径；只修改线程内计数并发布固定大小快照。
+bool AudioTimelineMixerNode::consumeStopFrames(std::size_t frameCount) noexcept
+{
+    if ( !m_scheduleState || !m_hasPreparedInputBoundary ||
+         !m_scheduleState->stopInput )
+        return false;
+    // prepareInputBoundary 已经把本次拉取截断到剩余等待帧。
+    // min 同时防御异常块长，避免剩余量变为负值。
+    // 同一等待可由多个短块完成，余量清零后才前进事件索引。
+    // 当前最后一块仍是静音，因此 frozen 要到正常拉取后才能解除。
+    // 时钟发布沿用原有序列锁，不获取控制线程的互斥锁。
+    // 封存标记仅属于当前输入块，消费后必须清除。
+    auto&      schedule = *m_scheduleState;
+    const auto consumed =
+        std::min(frameCountFromSize(frameCount), schedule.stopRemaining);
+    schedule.stopRemaining -= consumed;
+    if ( schedule.stopRemaining == 0 ) ++schedule.nextStop;
+    m_hasPreparedInputBoundary = false;
+    m_publishedBlockStartFrame.store(schedule.transport.positionFrame(),
+                                     std::memory_order_relaxed);
+    publishTransportSnapshot();
+    return true;
 }
 
 /// @brief 返回最近完整音频快照中的播放状态。
@@ -1307,6 +1385,8 @@ void AudioTimelineMixerNode::publishTransportSnapshot() noexcept
         m_publishedScheduleGeneration.store(m_scheduleState->generation,
                                             std::memory_order_relaxed);
     }
+    m_publishedStopFrozen.store(m_scheduleState && m_scheduleState->stopInput,
+                                std::memory_order_relaxed);
     // 时间戳与状态一起发布，UI 可从同一锚点平滑推演当前播放位置。
     m_publishedSteadyTimeNanoseconds.store(steadyTimeNanoseconds,
                                            std::memory_order_relaxed);

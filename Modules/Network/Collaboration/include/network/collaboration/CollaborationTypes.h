@@ -142,6 +142,30 @@ struct ParticipantViewport {
     double visibleTimeEnd = 0.0;
     /// @brief 主画布横向像素偏移除以发布端视口宽度后的比例。
     double horizontalOffsetRatio = 0.0;
+    /// @brief 音频实际播放状态，暂停时不能仅根据视口移动推断为播放。
+    bool playing = false;
+    /// @brief 发布端播放倍率，用于远端音频与时间外推。
+    double playbackRate = 1.0;
+    /// @brief 播放时间采样对应的发布端单调时钟秒数。
+    double sampledAt = 0.0;
+    /// @brief 接收端记录的本地单调时间，不进入线协议或转发负载。
+    double receivedAt = 0.0;
+};
+
+/// @brief 沿房主星型拓扑路由的单调时钟探测，不依赖系统日期一致。
+struct PlaybackClockProbe {
+    /// @brief 原始发送方，房主必须校验其与直接连接身份一致。
+    PeerId source = 0;
+    /// @brief 最终接收方；访客之间由房主转发。
+    PeerId target = 0;
+    /// @brief 请求为 false，应答为 true。
+    bool reply = false;
+    /// @brief 请求方发送时刻，兼作本轮请求的匹配标识。
+    double sentAt = 0.0;
+    /// @brief 被探测方收到请求时刻。
+    double receivedAt = 0.0;
+    /// @brief 被探测方发出应答时刻。
+    double repliedAt = 0.0;
 };
 
 /// @brief 协作房间内由房主验证并转发的一条文字消息。

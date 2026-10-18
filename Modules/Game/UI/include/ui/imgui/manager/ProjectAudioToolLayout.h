@@ -1235,6 +1235,47 @@ inline constexpr std::array<float, 3> STACK_VISIBLE_RATIOS{
     };
 }
 
+/// @brief 清除被可见性或画布边界修正后的移动吸附锁。
+/// @param finalRect 当前帧实际采用的矩形，而非吸附前或约束前候选。
+/// @param locks 仅用于平移的跨帧锁，position 表示矩形最小坐标。
+/// @note 每轴独立清除，仍然成立的另一轴锁继续保留迟滞。
+/// @warning 拖动热路径：只比较固定数量标量，不分配或重建候选。
+inline void releaseDisplacedMoveLocks(const Rect& finalRect, SnapLocks& locks)
+{
+    // 约束已拒绝的目标不应继续拖住下一帧，也不能作为虚假参考线绘制。
+    constexpr float EPSILON = 1e-4F;
+    if ( locks.x.position &&
+         std::abs(finalRect.x - *locks.x.position) > EPSILON )
+        locks.x = {};
+    if ( locks.y.position &&
+         std::abs(finalRect.y - *locks.y.position) > EPSILON )
+        locks.y = {};
+}
+
+/// @brief 沿单个方块的实际拖动方向截停，避免避让时跳到目标另一侧。
+/// @param previous 上一帧已采用的合法位置。
+/// @param candidate 已吸附的指针目标，宽高与 previous 相同。
+/// @param canvasBounds 当前画布允许的内容范围。
+/// @param constraints 起笔时缓存的下层可见性约束。
+/// @param minimumVisibleRatio 下层方块必须保留的可见比例。
+/// @param locks 可见性修正后同步清理的平移吸附锁。
+/// @return 指针目标合法时直接采用；否则返回本次移动线段上的可达位置。
+/// @note 与缩放共用连续几何求解，不从目标周围挑选另一处合法摆放点。
+/// @warning 拖动热路径：只在实际移动分支调用；固定轮数二分且不分配内存。
+[[nodiscard]] inline Rect constrainMoveVisibility(
+    const Rect& previous, Rect candidate, const Rect& canvasBounds,
+    std::span<const VisibilityConstraint> constraints,
+    float minimumVisibleRatio, SnapLocks& locks)
+{
+    // 先限制内容边界，再沿真实移动轨迹处理遮挡，不能横向推到指针之外。
+    candidate         = clampToBounds(candidate, canvasBounds);
+    const Rect result = constrainResizeVisibility(
+        previous, candidate, constraints, minimumVisibleRatio);
+    // 被边界或可见性拒绝的吸附不会在下一帧重新强制恢复。
+    releaseDisplacedMoveLocks(result, locks);
+    return result;
+}
+
 /// @brief 沿批量移动轨迹限制组合外框，避免选中方块遮住固定下层方块。
 /// @warning 批量拖动热路径：仅候选位置无效时执行固定轮数二分，不得分配。
 [[nodiscard]] inline Rect constrainTranslatedVisibility(

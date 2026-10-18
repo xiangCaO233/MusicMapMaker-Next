@@ -418,7 +418,7 @@ float calculateMarqueeRenderScaleY(const SessionContext& ctx,
     const float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                   ctx.lastConfig.visual.trackLayout.top) *
                                  mainViewportHeight;
-    const float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
+    const float ty = ctx.lastConfig.visual.previewConfig.margin.top;
     const float by = camera.viewportHeight -
                      ctx.lastConfig.visual.previewConfig.margin.bottom;
     const float previewDrawH = by - ty;
@@ -549,7 +549,7 @@ SelectionScreenContext makeSelectionScreenContext(
     screen.viewportHeight = cameraIt->second.viewportHeight;
     screen.currentAbsY    = cache->getVisualAnchorAbsY(ctx.animateTime);
     screen.valid          = screen.noteW > 0.0f && screen.noteH > 0.0f &&
-                            std::abs(screen.renderScaleY) > 1e-6f;
+                   std::abs(screen.renderScaleY) > 1e-6f;
     return screen;
 }
 
@@ -630,10 +630,10 @@ SelectionRect makeMarqueeScreenRect(const MarqueeBox&             box,
     const float  x2 = screen.leftX + box.endTrack * screen.singleTrackW;
     const double startAbsY = screen.cache->getAbsY(box.startTime);
     const double endAbsY   = screen.cache->getAbsY(box.endTime);
-    const float  y1 = screen.judgmentLineY -
-                      static_cast<float>(startAbsY - screen.currentAbsY) *
-                          screen.renderScaleY;
-    const float  y2 =
+    const float  y1        = screen.judgmentLineY -
+                     static_cast<float>(startAbsY - screen.currentAbsY) *
+                         screen.renderScaleY;
+    const float y2 =
         screen.judgmentLineY -
         static_cast<float>(endAbsY - screen.currentAbsY) * screen.renderScaleY;
     // 结束时间或轨道可以小于开始值，统一归一化后再参与命中。
@@ -1246,13 +1246,13 @@ bool collectMarqueeBoxCandidates(
     // 再逆映射时间，避免只看框选端点秒数漏掉滚动折返区域。
     const double paddedTopY    = box.rect.top - box.screen.noteH;
     const double paddedBottomY = box.rect.bottom + box.screen.noteH;
-    const double absA   = box.screen.currentAbsY +
-                          (box.screen.judgmentLineY - paddedTopY) /
-                              static_cast<double>(box.screen.renderScaleY);
-    const double absB   = box.screen.currentAbsY +
-                          (box.screen.judgmentLineY - paddedBottomY) /
-                              static_cast<double>(box.screen.renderScaleY);
-    auto         ranges = box.screen.cache->getTimeRangesForAbsYWindow(
+    const double absA          = box.screen.currentAbsY +
+                        (box.screen.judgmentLineY - paddedTopY) /
+                            static_cast<double>(box.screen.renderScaleY);
+    const double absB = box.screen.currentAbsY +
+                        (box.screen.judgmentLineY - paddedBottomY) /
+                            static_cast<double>(box.screen.renderScaleY);
+    auto ranges = box.screen.cache->getTimeRangesForAbsYWindow(
         std::min(absA, absB), std::max(absA, absB));
     // 缓存没有返回可用时间段时，回退框选记录的原始时间区间。
     // 仍按排序索引筛选，不在这一分支直接扫描全部 Registry。
@@ -1412,13 +1412,13 @@ bool collectMarqueeBoxSampleCandidates(
     // 再逆映射时间，避免只看框选端点秒数漏掉滚动折返区域。
     const double paddedTopY    = box.rect.top - box.screen.noteH;
     const double paddedBottomY = box.rect.bottom + box.screen.noteH;
-    const double absA   = box.screen.currentAbsY +
-                          (box.screen.judgmentLineY - paddedTopY) /
-                              static_cast<double>(box.screen.renderScaleY);
-    const double absB   = box.screen.currentAbsY +
-                          (box.screen.judgmentLineY - paddedBottomY) /
-                              static_cast<double>(box.screen.renderScaleY);
-    const auto   ranges = box.screen.cache->getTimeRangesForAbsYWindow(
+    const double absA          = box.screen.currentAbsY +
+                        (box.screen.judgmentLineY - paddedTopY) /
+                            static_cast<double>(box.screen.renderScaleY);
+    const double absB = box.screen.currentAbsY +
+                        (box.screen.judgmentLineY - paddedBottomY) /
+                            static_cast<double>(box.screen.renderScaleY);
+    const auto ranges = box.screen.cache->getTimeRangesForAbsYWindow(
         std::min(absA, absB), std::max(absA, absB));
     // 缓存没有返回可用时间段时，回退框选记录的原始时间区间。
     // 仍按排序索引筛选，不在这一分支直接扫描全部 Registry。
@@ -1719,9 +1719,9 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
 
     // 协作会话优先使用其项目资源表，离线会话使用当前项目。
     // 这里只查已载入资源引用，不通过资源名扫描文件系统。
-    const auto* project = m_ctx.collaborationProject
-                              ? m_ctx.collaborationProject.get()
-                              : EditorEngine::instance().getCurrentProject();
+    const auto* project     = m_ctx.collaborationProject
+                                  ? m_ctx.collaborationProject.get()
+                                  : EditorEngine::instance().getCurrentProject();
     const auto& beatmapPath = m_ctx.currentBeatmap->m_baseMapMetadata.map_path;
     const auto* resource =
         project ? ProjectResourceService::findAudioResourceForReference(
@@ -1826,9 +1826,9 @@ void InteractionController::handleCommand(
         return;
     }
 
-    const auto* project = m_ctx.collaborationProject
-                              ? m_ctx.collaborationProject.get()
-                              : EditorEngine::instance().getCurrentProject();
+    const auto*                 project = m_ctx.collaborationProject
+                                              ? m_ctx.collaborationProject.get()
+                                              : EditorEngine::instance().getCurrentProject();
     const std::filesystem::path beatmapPath =
         m_ctx.currentBeatmap ? m_ctx.currentBeatmap->m_baseMapMetadata.map_path
                              : std::filesystem::path{};
@@ -2206,11 +2206,15 @@ void InteractionController::handleCommand(const CmdSetMousePosition& cmd)
     const bool hasFiniteViewport =
         std::isfinite(cmd.viewportWidth) && std::isfinite(cmd.viewportHeight) &&
         cmd.viewportWidth > 0.0f && cmd.viewportHeight > 0.0f;
-    // 有可靠尺寸时检查局部边界；尺寸缺失时保留兼容悬浮判断。
-    // 鼠标自身必须有限，不能把 NaN 写入后续相机或滚动状态。
+    // 逆投影必须来自有效视口，不能用该标志绕过零尺寸或非有限输入校验。
+    // 普通二维命令在尺寸缺失时仍保留既有兼容行为。
+    const bool hasUsableMouse =
+        hasFiniteMouse && (!cmd.isUnprojected || hasFiniteViewport);
+    // 逆投影平面可超出原二维边界，真实窗口悬停已由 UI 检查。
+    // 普通二维输入仍按局部像素复核边界，防止窗口外坐标制造悬停。
     const bool isInsideViewport =
-        hasFiniteMouse &&
-        (!hasFiniteViewport ||
+        hasUsableMouse &&
+        (cmd.isUnprojected || !hasFiniteViewport ||
          (cmd.mouseX >= 0.0f && cmd.mouseX <= cmd.viewportWidth &&
           cmd.mouseY >= 0.0f && cmd.mouseY <= cmd.viewportHeight));
     const bool isHovering = cmd.isHovering && isInsideViewport;
@@ -2225,7 +2229,7 @@ void InteractionController::handleCommand(const CmdSetMousePosition& cmd)
             m_ctx.isMouseInCanvas = true;
             canUpdate             = true;
         }
-    } else if ( cmd.isDragging && hasFiniteMouse && m_ctx.isDragging &&
+    } else if ( cmd.isDragging && hasUsableMouse && m_ctx.isDragging &&
                 m_ctx.mouseCameraId == cmd.cameraId ) {
         // 如果正在往外拖拽，依然允许更新坐标以便主画布跟随
         canUpdate = true;
@@ -2260,7 +2264,9 @@ void InteractionController::handleCommand(const CmdSetMousePosition& cmd)
         // 不能沿用上一条命令的速度导致指针回到中央仍继续滚动。
         m_ctx.previewEdgeScrollVelocity = 0.0;
 
-        if ( cmd.isDragging && cmd.viewportWidth > 0 &&
+        // 平面坐标不表示屏幕边缘距离；逆投影输入由 UI 使用真实鼠标处理滚动。
+        // 这里仍先清零旧速度，避免启用观察后沿用二维输入留下的滚动状态。
+        if ( !cmd.isUnprojected && cmd.isDragging && cmd.viewportWidth > 0 &&
              cmd.viewportHeight > 0 ) {
             float margin = 20.0f;
             float dist   = 0.0f;

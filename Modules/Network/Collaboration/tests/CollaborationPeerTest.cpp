@@ -1,4 +1,5 @@
 #include "network/collaboration/CollaborationPeer.h"
+#include "network/collaboration/CollaborationTypes.h"
 #include "network/collaboration/LoopbackTransport.h"
 
 #include <algorithm>
@@ -1629,6 +1630,110 @@ void pumpPeers(CollaborationPeer&                               host,
            guest.appliedRevision() == host.appliedRevision() &&
            guestModel.size() == 1U && guestModel.front() == fullSnapshot;
 }
+/// @brief 验证默认授权进入房主权威表，并同步到新访客而不覆盖已有成员。
+/// @return 自定义、全选、清零、禁用及重复登记均保持正确权限时返回 true。
+/// @details 使用真实 Loopback 消息泵，不能仅查询房主本地设置就认为授权成功。
+/// 新成员在首次身份同步时就应取得选定权限，不依赖 UI 事后逐个批准。
+/// 策略改变仅作用于新登记，已单独收回权限的成员不得被重新授权。
+/// 访客不能写房主策略，未知位也不能污染后续入房时的广播。
+/// 禁用策略保留本房间选择，但之后新成员仍应是只读。
+/// 全取消与关闭开关不同：前者清零选择，后者保留选择。
+/// 新 Peer 模拟新房间，默认授权不得继承上个房间的好友局设置。
+/// @note 房主与访客的权限镜像都必须一致，不能只证明界面显示正常。
+/// @note 测试不注入延时、不访问网络服务，消息泵只消费本地有界队列。
+bool testDefaultParticipantPermissions()
+{
+    using namespace MMM::Network::Collaboration;
+    LoopbackTransportHub    hub;
+    CollaborationPeerConfig hostConfig;
+    setTestPeerIdentity(hostConfig, HOST_ID);
+    hostConfig.creator = "Host";
+    hostConfig.isHost  = true;
+    CollaborationPeer host(hostConfig,
+                           hub.createEndpoint(HOST_ID),
+                           [](const CommittedOperation&) {});
+    std::vector<std::unique_ptr<CollaborationPeer>> guests;
+    // 默认状态必须是关闭且零权限，不能因 UI 新增入口而默认开放房间。
+    if ( host.defaultParticipantPermissionsEnabled() ||
+         host.defaultParticipantPermissions() != 0U )
+        return false;
+    const auto partial = static_cast<CollaborationPermissionMask>(
+                             CollaborationPermission::Edit) |
+                         static_cast<CollaborationPermissionMask>(
+                             CollaborationPermission::Objects);
+    if ( !host.setDefaultParticipantPermissions(true, partial) ) return false;
+    // 每个访客使用独立身份与传输槽，并消费完整首次权限广播。
+    // 第一次先启用部分类别，使后续全选不是重复写入相同状态。
+    // 旧成员保留在 guests 中，新加入时也验证广播可覆盖完整拓扑。
+    const auto join = [&](PeerId id, CollaborationPermissionMask expected) {
+        CollaborationPeerConfig config;
+        setTestPeerIdentity(config, id);
+        config.creator = "Guest";
+        // 角色必须与路由槽位一致，防止无效 Peer 使权限断言失去意义。
+        config.isHost = false;
+        auto guest    = std::make_unique<CollaborationPeer>(
+            config, hub.createEndpoint(id), [](const CommittedOperation&) {});
+        if ( !host.addParticipant(
+                 id, config.participantId, config.sessionId, config.creator) )
+            return false;
+        guests.push_back(std::move(guest));
+        // 初次广播无需等待编辑提交；两侧都必须立即得到相同授权。
+        pumpPeers(host, guests, 3U);
+        return host.participantPermissions().at(id) == expected &&
+               guests.back()->participantPermissions().at(id) == expected;
+    };
+    if ( !join(2, partial) ) return false;
+    // 验证角色校验发生在更新前，访客修改不会仅在 UI 隐藏而被协议接受。
+    // 非法掩码与错误角色分别检查，防止两个失败条件相互掩盖。
+    if ( guests.front()->setDefaultParticipantPermissions(
+             true, COLLABORATION_PERMISSION_ALL) )
+        return false;
+    // 高位不属于当前协议，失败后必须保留此前合法选择。
+    const auto invalid = COLLABORATION_PERMISSION_ALL | (1U << 31U);
+    if ( host.setDefaultParticipantPermissions(true, invalid) ||
+         host.defaultParticipantPermissions() != partial )
+        return false;
+    // 收回旧成员权限后选择全选，重复登记旧成员也不能重新赋予权限。
+    // 房主自己的全权限不参与自动授权策略，设置仅面向新访客。
+    // 同一身份的重复登记属于幂等操作，不等于一个重新加入的会话。
+    // 手工撤权结果必须在房主表和旧访客镜像中同时保留。
+    if ( !host.setParticipantPermissions(2, 0U) ||
+         !host.setDefaultParticipantPermissions(true,
+                                                COLLABORATION_PERMISSION_ALL) )
+        return false;
+    const auto& identity = host.participantIdentities().at(2);
+    if ( !host.addParticipant(
+             2, identity.participantId, identity.sessionId, identity.creator) ||
+         !join(3, COLLABORATION_PERMISSION_ALL) )
+        return false;
+    if ( host.participantPermissions().at(2) != 0U ||
+         guests.front()->participantPermissions().at(2) != 0U )
+        return false;
+    // 清零策略仍可保持启用，但下一名成员必须同步得到零值。
+    // 这一步模拟全取消，不通过关闭开关代替清空类别的实际效果。
+    if ( !host.setDefaultParticipantPermissions(true, 0U) || !join(4, 0U) )
+        return false;
+    // 禁用自动授权保留此前的选择，新成员为只读，已加入者保持全权限。
+    // 保存的部分类别不可泄漏给新成员，关闭开关必须优先于保存的掩码。
+    // 第二名访客已经获得全权限，禁用策略不能反向撤销他的既有授权。
+    if ( !host.setDefaultParticipantPermissions(false, partial) ||
+         !join(5, 0U) )
+        return false;
+    if ( host.defaultParticipantPermissionsEnabled() ||
+         host.defaultParticipantPermissions() != partial ||
+         host.participantPermissions().at(3) != COLLABORATION_PERMISSION_ALL ||
+         guests[1]->participantPermissions().at(3) !=
+             COLLABORATION_PERMISSION_ALL )
+        return false;
+    // 新建房间只继承构造参数，不继承上一 Peer 的管理状态。
+    // 新槽位同时作为自己的房主，验证有效 Peer 而非无效构造的默认字段。
+    setTestPeerIdentity(hostConfig, 7, 7);
+    CollaborationPeer freshHost(
+        hostConfig, hub.createEndpoint(7), [](const CommittedOperation&) {});
+    return freshHost.isValid() &&
+           !freshHost.defaultParticipantPermissionsEnabled() &&
+           freshHost.defaultParticipantPermissions() == 0U;
+}
 }  // namespace
 
 /// @brief 运行协作增量同步回归测试。
@@ -1662,6 +1767,8 @@ int main()
     if ( !testStableIdentityConflictsAreRejected() ) return 8;
     // 权限场景最后运行，覆盖 revision 分配前授权顺序。
     if ( !testParticipantPermissionsAreAuthoritative() ) return 9;
-    // 全部九组场景通过。
+    // 新成员自动授权与人工覆盖使用独立场景，失败码十便于定位。
+    if ( !testDefaultParticipantPermissions() ) return 10;
+    // 全部十组场景通过。
     return 0;
 }

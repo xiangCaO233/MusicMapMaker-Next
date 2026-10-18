@@ -452,8 +452,8 @@ bool verifyInitialBundle(const CollaborationResourceBundle& bundle,
 /// CBOR 载荷稳定；随后修改源文件，证明当前房间仍发送首次哈希时冻结的快照。
 /// 第一名访客完成传输后，测试检查明文包、进度计数、加密容器无明文片段，
 /// 以及资源包 shared_ptr 对临时 session 目录的生命周期所有权。
-/// 第二名访客使用同一缓存根仍建立隔离会话并完整请求资源，防止跨会话复用
-/// 加密材料。最后修改主音频并重启房主，要求 generation 更新且新访客取得新内容。
+/// 第二名访客建立隔离会话，但从本机私有加密缓存恢复内容，不发送资源请求。
+/// 修改主音频后只补传变化文件，缓存损坏后同样只重下受影响的资源。
 /// @par 房主快照不变量
 /// - 清单 generation 同时标识元数据和已冻结的资源字节。
 /// - 清单发布后修改源文件不得改变该 generation 的响应内容。
@@ -461,7 +461,7 @@ bool verifyInitialBundle(const CollaborationResourceBundle& bundle,
 /// - 未被谱面引用的项目资源不得进入清单或传输统计。
 /// @par 访客会话不变量
 /// - 每次 startGuest 都创建独立 session 目录和资源密钥。
-/// - 加密容器只能在该会话内物化为重映射后的明文路径。
+/// - 持久缓存只保存认证容器及本机密钥，明文仅物化到当前会话的重映射路径。
 /// - 同步器释放不应提前删除仍由 Project 使用的会话目录。
 /// - 最后一个项目所有者释放后必须自动删除会话目录。
 /// @return 三轮同步及全部生命周期、摘要与进度断言通过时返回 true。
@@ -586,15 +586,16 @@ bool testRoundTripCacheAndIncrementalChanges()
     }
 
     CollaborationResourceSync cachedGuest;
-    // 同一 cacheRoot 不代表同一会话；密钥隔离要求重新传输全部资源。
+    // 新会话密钥和临时目录独立，但已验证内容应从持久加密缓存恢复。
     cachedGuest.startGuest(cacheRoot);
     const auto cached =
         transferResources(host, cachedGuest, *stableManifest, false);
     const auto cachedProgress = cachedGuest.progress();
-    if ( !cached.success || cached.requestedFiles.size() != 3U ||
-         cachedProgress.cachedFiles != 0U ||
-         cachedProgress.transferredBytes !=
-             mainBytes.size() + effectBytes.size() + coverBytes.size() ) {
+    if ( !cached.success || !cached.requestedFiles.empty() ||
+         cachedProgress.cachedFiles != 3U ||
+         cachedProgress.transferredBytes != 0U ||
+         !verifyInitialBundle(
+             cached.bundle, project, mainBytes, effectBytes, coverBytes) ) {
         return false;
     }
 
@@ -612,15 +613,39 @@ bool testRoundTripCacheAndIncrementalChanges()
     const auto changed =
         transferResources(host, changedGuest, *changedManifest, false);
     const auto changedProgress = changedGuest.progress();
-    // 新代次仍应完整传输三项，并物化修改后的主音频字节。
-    if ( !changed.success || changed.requestedFiles.size() != 3U ||
-         changedProgress.cachedFiles != 0U ||
-         changedProgress.transferredBytes !=
-             mainBytes.size() + effectBytes.size() + coverBytes.size() ||
+    // 同长度内容变更只补传主音频，其余资源跨清单代次继续命中。
+    if ( !changed.success || changed.requestedFiles.size() != 1U ||
+         changedProgress.cachedFiles != 2U ||
+         changedProgress.transferredBytes != mainBytes.size() ||
          !verifyInitialBundle(
              changed.bundle, project, mainBytes, effectBytes, coverBytes) ) {
         return false;
     }
+    // 持久对象与明文会话的所有权独立，首次 Bundle 已释放仍可用于此次恢复。
+    // 改变的主音频应已经更新为新的摘要对象，不会覆盖旧代次内容。
+    // 以下只破坏效果采样，确保故障范围不会扩散成全量下载。
+    // 翻转持久容器的认证字节，不能仅凭摘要文件名或大小就假装命中。
+    const auto object =
+        cacheRoot / "objects-v1" / effectRemap->second.substr(6, 64);
+    const auto encrypted = object / "resource.mmrsc";
+    auto       damaged   = readBytes(encrypted);
+    if ( !damaged || damaged->empty() ) return false;
+    damaged->back() ^= 0x80;
+    if ( !writeBytes(encrypted, *damaged) ) return false;
+    CollaborationResourceSync repairedGuest;
+    // 新同步器完全重新进入清单流程，不复用上一名访客的内存状态。
+    repairedGuest.startGuest(cacheRoot);
+    const auto repaired =
+        transferResources(host, repairedGuest, *changedManifest, false);
+    // 同时检查请求文件数和真实传输字节，避免只修正进度文字而仍传全部内容。
+    const auto repairedProgress = repairedGuest.progress();
+    // 认证失败只淘汰该对象，其余两个缓存仍命中，恢复后再次核对完整资源字节。
+    if ( !repaired.success || repaired.requestedFiles.size() != 1U ||
+         repairedProgress.cachedFiles != 2U ||
+         repairedProgress.transferredBytes != effectBytes.size() ||
+         !verifyInitialBundle(
+             repaired.bundle, project, mainBytes, effectBytes, coverBytes) )
+        return false;
     return true;
 }
 
