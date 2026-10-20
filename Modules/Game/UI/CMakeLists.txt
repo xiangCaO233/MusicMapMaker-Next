@@ -663,3 +663,6 @@ endif()
 # 工具插件直接读取 FFmpeg codec ID，必须显式继承其头文件和首次构建依赖。 不能依赖预编译 ICE
 # 恰好传播该目录，源码交叉构建也必须具有同一接口。
 target_link_libraries(UI PRIVATE 3rd_ffmpeg)
+
+# 异步选择器共用回调契约，Android 不阻塞 SDL 主循环，桌面沿用原 NFD。
+target_sources(UI PRIVATE src/ui/utils/NativeFileDialogAsync.cpp)

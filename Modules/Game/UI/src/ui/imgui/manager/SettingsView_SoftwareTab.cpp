@@ -1,5 +1,9 @@
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
+#ifdef __ANDROID__
+// Android 的资源目录由文档授权管理，不按桌面本地目录处理。
+#    include "common/platform/DocumentStorage.h"
+#endif
 #include "config/AppConfig.h"
 #include "config/AppPaths.h"
 #include "config/AudioPlaybackConfig.h"
@@ -837,10 +841,10 @@ void SettingsView::drawSoftwareSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 // UI 整数只映射 Cached 与 Streaming 两个稳定模式。
-                int         mode = settings.audioDecodingMode ==
-                                           Config::AudioDecodingMode::Streaming
-                                       ? 1
-                                       : 0;
+                int         mode    = settings.audioDecodingMode ==
+                                   Config::AudioDecodingMode::Streaming
+                                          ? 1
+                                          : 0;
                 const char* modes[] = {
                     TR_CACHE("ui.settings.software.audio_decoding.cached")
                         .data(),
@@ -874,10 +878,10 @@ void SettingsView::drawSoftwareSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 // 零映射 SDL，一映射 OpenAL；未知配置在此回退 SDL 预览。
-                int backend = settings.audioPlaybackBackend ==
+                int         backend    = settings.audioPlaybackBackend ==
                                       Config::AudioPlaybackBackend::OpenAL
-                                  ? 1
-                                  : 0;
+                                             ? 1
+                                             : 0;
                 const char* backends[] = {
                     TR_CACHE("ui.settings.software.audio_backend.sdl").data(),
                     TR_CACHE("ui.settings.software.audio_backend.openal").data()
@@ -1945,6 +1949,43 @@ void SettingsView::drawSoftwareSettings()
 
         // 采用统一标签宽度，让动态模式参数不会改变值列起点。
 
+#ifdef __ANDROID__
+        // 兼容模式使用普通路径，必须由用户显式进入设置授权，不能因切换单选自动申请。
+        // Android 的 Unified 对应本机目录，Native 对应系统文档选择器。
+        // 此映射复用现有选择器消费流程，不增加第二套文件浏览布局。
+        // 权限是否有效只在打开选择器时确认，设置绘制不会访问系统服务。
+        // 单选改变偏好不改变现有工程来源，SAF 工作副本仍保留原授权映射。
+        // 用户从旧工作副本切换到直接目录时，须重新打开原始共享工程目录。
+        // 授权按钮只修改本包访问方式，不修复或扩大其他文件提供器的权限。
+        // 取消授权后仍可使用系统选择，不把空目录结果误报为成功。
+        // 兼容目录直接修改原文件，工作副本不会在两种模式之间自动互相覆盖。
+        // 文件入口在打开时刷新授权，用户从系统设置返回后无需重启应用。
+        // 授权入口与选择器模式分开保存，权限撤销仍由系统设置最终控制。
+        addRadioSetting(
+            *sec,
+            rowIndex,
+            sectionIndex,
+            "文件访问方式",
+            maxLabelW,
+            { { "本机目录兼容", (int)Config::FilePickerStyle::Unified },
+              { "系统文件选择", (int)Config::FilePickerStyle::Native } },
+            (int&)settings.filePickerStyle,
+            changed);
+        addSettingItem(
+            *sec,
+            rowIndex,
+            "本机目录授权",
+            maxLabelW,
+            [&settings, &changed](Clay_BoundingBox, bool) {
+                // 固定文字入口始终可见，也可用于撤销权限；无逐帧 JNI 状态查询。
+                if ( FeedbackButton("打开所有文件访问设置") ) {
+                    settings.filePickerStyle = Config::FilePickerStyle::Unified;
+                    changed                  = true;
+                    if ( !Common::requestLocalFileAccess() )
+                        XERROR("Failed to open Android file access settings");
+                }
+            });
+#else
         // 文件选择器偏好决定后续打开操作使用 ImGui 统一界面还是系统原生对话框。
         addRadioSetting(
             *sec,
@@ -1958,6 +1999,8 @@ void SettingsView::drawSoftwareSettings()
                 (int)Config::FilePickerStyle::Native } },
             (int&)settings.filePickerStyle,
             changed);
+
+#endif
 
         // 保存格式偏好只作用于后续保存；不会立即转换当前已打开的谱面文件。
         addRadioSetting(

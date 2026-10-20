@@ -12,6 +12,7 @@
 #include "SaveOSUMap.hpp"
 #include "SaveRMMap.hpp"
 
+#include "common/platform/DocumentStorage.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include <algorithm>
@@ -102,7 +103,15 @@ BeatMap BeatMap::loadFromFile(std::filesystem::path mapFilePath)
 /// @return 对应写出器成功时返回 true，未知格式或写出失败时返回 false。
 bool BeatMap::saveToFile(std::filesystem::path mapFilePath) const
 {
-    return saveToFileInternal(std::move(mapFilePath), nullptr, nullptr);
+    // 本地 writer 完成后才发布 Android 授权文档，失败不能推进保存点。
+    // 文档预构建和内部格式递归不发布文件，只在真正保存入口发布一次。
+    if ( !saveToFileInternal(mapFilePath, nullptr, nullptr) ) return false;
+    std::string error;
+    if ( !Common::publishDocument(mapFilePath, error) ) {
+        XERROR("Document save failed: {}", error);
+        return false;
+    }
+    return true;
 }
 
 /// @brief 与保存器共用格式准备，构建待导出的 MC 文档及音频前导计划。

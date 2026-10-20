@@ -1708,7 +1708,7 @@ void UIManager::onUpdateUI()
     const auto& requestedProfile = Config::AppConfig::instance()
                                        .getEditorSettings()
                                        .m_interactionProfileId;
-    bool keyboardReleased = true;
+    bool        keyboardReleased = true;
     if ( requestedProfile != Interaction::activeProfile().id() ) {
         for ( int key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END;
               ++key ) {
@@ -1730,6 +1730,8 @@ void UIManager::onUpdateUI()
             !ImGui::GetDragDropPayload() &&
             !ShortcutUtils::isShortcutRecordingActive());
 
+    // 系统选择器返回只消费已完成的短结果，工程复制不在本 UI 帧执行。
+    NativeFileDialog::pollAsyncDialogs();
     // 控件矩形属于单帧即时布局，任何视图开始提交前先清除旧坐标。
     m_walkthroughSpotlight->beginFrame();
     // 引导服务先推进页面与动作状态。

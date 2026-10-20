@@ -10,6 +10,7 @@
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
+#include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
@@ -221,7 +222,8 @@ private:
     {
         // 引用编辑器设置以读取选择器类型和最近目录。
         auto& config = Config::AppConfig::instance().getEditorSettings();
-        if ( config.filePickerStyle == Config::FilePickerStyle::Native &&
+        if ( (NativeFileDialog::requiresSystemPicker() ||
+              config.filePickerStyle == Config::FilePickerStyle::Native) &&
              ext.empty() ) {
             // 原生多过滤器无法可靠获知用户最终过滤器，先要求显式选择格式。
             m_showExportFormatPicker = true;
@@ -252,10 +254,14 @@ private:
             }
         }
 
-        if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
+        // Android 的格式选择仍由项目处理，最后的目标文档由系统 provider 创建。
+        // 系统创建成功只是获得写入位置，现有 writer 和平台发布均成功才算保存。
+        // 回调依赖长期存在的 action 对象，不能借用当前 popup 的临时名称缓冲。
+        // 取消选择保留原谱面路径与编辑状态，不产生空路径保存。
+        if ( NativeFileDialog::requiresSystemPicker() ||
+             config.filePickerStyle == Config::FilePickerStyle::Native ) {
             // 原生选择器在当前调用内阻塞，显示前播放统一弹窗反馈。
             ::MMM::UI::PlayPopupOpenFeedback();
-            nfdu8char_t*      outPath = nullptr;
             nfdu8filteritem_t filters[5];
             int               filterCount = 0;
 
@@ -278,20 +284,19 @@ private:
                 filters[filterCount++] = { "BMS Beatmap", "bms,bme,bml,pms" };
             }
             // NFD 接收 UTF-8 默认目录和文件名，并返回其分配的 UTF-8 路径。
-            nfdresult_t result =
-                NativeFileDialog::saveFile(&outPath,
-                                           filters,
-                                           filterCount,
-                                           defaultPath.c_str(),
-                                           defaultName.c_str());
-
-            if ( result == NFD_OKAY ) {
-                // 选择成功后先复制路径进入覆盖与兼容性流程。
-                handleSelectedExportPath(outPath);
-                // NFD 路径必须在复制完成后用配套函数释放。
-                NFD_FreePathU8(outPath);
-            }
-            // 取消和错误当前均保持窗口关闭；错误报告由 NFD 层处理。
+            NativeFileDialog::saveFileAsync(
+                filters,
+                filterCount,
+                defaultPath.c_str(),
+                defaultName.c_str(),
+                [this](nfdresult_t result, const std::string& path) {
+                    // action 由主菜单拥有直到应用退出，结果回到 UI
+                    // 帧后才更新导出弹窗。
+                    if ( result == NFD_OKAY )
+                        handleSelectedExportPath(path);
+                    else if ( result == NFD_ERROR )
+                        XERROR("Export document selection failed");
+                });
             return;
         }
 
@@ -336,18 +341,30 @@ private:
     /// @note 用户确认路径后根据当前过滤器重新生成格式对应文件名。
     void renderSaveAsFileDialog(float dpiScale)
     {
+        // Android 密度较高，原始 600×400 像素会裁掉文件列表和确认区。
+        // 与主工程目录选择器保持同一尺寸换算，限制在当前主视口内。
+        // 桌面仍使用原有固定尺寸，避免改变已有多视口与窗口位置行为。
+#ifdef __ANDROID__
+        const auto*  viewport = ImGui::GetMainViewport();
+        const ImVec2 fileDialogSize{
+            std::min(600.0f * dpiScale, viewport->WorkSize.x * 0.92f),
+            std::min(400.0f * dpiScale, viewport->WorkSize.y * 0.88f)
+        };
+#else
+        const ImVec2 fileDialogSize{ 600, 400 };
+#endif
         // 居中样式作用域只影响当前内置文件对话框。
         Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
         if ( ImGuiFileDialog::Instance()->IsOpened("SaveAsFilePicker") ) {
             // 对话框打开期间固定逻辑尺寸并按公共 helper 居中。
-            Utils::prepareCenteredModalWindow({ 600, 400 });
+            Utils::prepareCenteredModalWindow(fileDialogSize);
         }
         // Display 返回 true 表示用户完成确认或取消，本帧应关闭对话框。
         if ( ImGuiFileDialog::Instance()->Display(
                  "SaveAsFilePicker",
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                      ImGuiWindowFlags_NoSavedSettings,
-                 { 600, 400 }) ) {
+                 fileDialogSize) ) {
             if ( ImGuiFileDialog::Instance()->IsOk() ) {
                 // 先取得完整 UTF-8 路径，再根据活动过滤器规范化文件名。
                 std::string filePath =
