@@ -1,0 +1,5 @@
+// 初期 Android 外壳复用已验证的工具组合，不改变桌面构建入口。
+plugins { id 'com.android.application' version '9.0.1' apply false }
+// 构建输出由脚本明确传入，禁止默认生成到主项目源码树。
+def work = providers.gradleProperty('mmmAndroidWorkDir').get()
+layout.buildDirectory = file("${work}/build/gradle/root")

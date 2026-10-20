@@ -1,6 +1,15 @@
 # Modules/Main/CMakeLists.txt 主程序目标按平台选择可执行文件外壳，业务源码与依赖集合保持一致。
 
-if(APPLE)
+# Android 复用 Main 启动与退出流程，只改变操作系统要求的原生入口类型。 SDLActivity 通过共享库符号寻找
+# SDL_main，不能打包桌面 ELF 可执行文件。 Java 外壳不参与业务逻辑和帧循环。
+if(ANDROID)
+  # SDLActivity 加载原生共享入口，桌面仍使用下面原有 executable 分支。
+  add_library(MusicMapMaker-Next SHARED src/main.cpp src/AndroidBootstrap.cpp)
+  target_link_libraries(MusicMapMaker-Next PRIVATE 3rd_sdl3)
+  set_target_properties(MusicMapMaker-Next PROPERTIES OUTPUT_NAME main)
+  # JNI 入口来自主目标对象，静态依赖无需导出符号供其他共享模块替换。 隐藏归档导出也保证 AArch64 汇编对内部表的直接寻址可在共享库内绑定。
+  target_link_options(MusicMapMaker-Next PRIVATE "-Wl,--exclude-libs,ALL")
+elseif(APPLE)
   # macOS 使用标准 .app 应用束，供 CPack DragNDrop 生成可直接拖入 Applications 的 DMG。 图标作为
   # Resources 内容加入 Bundle，不能仅作为普通源文件链接。
   set(MMM_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/src/logo.icns")
@@ -79,7 +88,10 @@ add_gcc_debug_extract(MusicMapMaker-Next)
 # MinGW 与 MSVC 风格调试信息布局由公共 helper 按实际工具链选择。
 add_mingw_clang_pdb(MusicMapMaker-Next)
 # 仅发布型配置剥离主二进制，外置符号仍由前述 helper 保存。
-add_strip_command_for_release(MusicMapMaker-Next)
+if(NOT ANDROID)
+  # Android 的原始符号保留在原生构建树，APK 裁剪交给 Android 打包工具。
+  add_strip_command_for_release(MusicMapMaker-Next)
+endif()
 
 # 仅显式开启编译耗时诊断时分析 trace，关闭时连旧 trace 的扫描排序也不执行。
 if(MMM_ENABLE_BUILD_TIMING)
@@ -127,4 +139,12 @@ endif()
 if(APPLE)
   # 普通构建的 .app 需要与发布包一致的 Vulkan 运行时布局和完整签名。 平台脚本放在目标全部定义之后，便于收集最终依赖和 Bundle 属性。
   include("${CMAKE_SOURCE_DIR}/cmake/macos-development-bundle.cmake")
+endif()
+
+if(ANDROID)
+  # 记录真实目标路径，打包脚本不根据目录或后缀猜测 SDL3 产物。
+  file(
+    GENERATE
+    OUTPUT "${CMAKE_BINARY_DIR}/android-runtime-libraries.txt"
+    CONTENT "$<TARGET_FILE:MusicMapMaker-Next>\n$<TARGET_FILE:SDL3::SDL3>\n")
 endif()

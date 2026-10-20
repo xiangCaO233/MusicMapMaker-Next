@@ -1,0 +1,39 @@
+// APK 外壳只处理 Java、资源和签名；原生编译由统一脚本显式执行。
+plugins { id 'com.android.application' }
+def work = providers.gradleProperty('mmmAndroidWorkDir').get()
+def sdlJava = providers.gradleProperty('mmmSdlJavaDir').get()
+layout.buildDirectory = file("${work}/build/gradle/app")
+// 原生构建和 APK 打包分离，Gradle 不在源码目录创建 .cxx 或隐式触发 CMake。
+// JNI 与资源路径必须来自同一集中工作目录，避免混入旧 ABI 或旧资源。
+android {
+    namespace = 'top.xiang233.musicmapmaker'
+    compileSdk { version = release(36) { minorApiLevel = 1 } }
+    buildToolsVersion = '36.1.0'
+    ndkVersion = '30.0.16248370'
+    // API 下限与 NDK 编译参数一致；只声明当前验证过的 arm64 手机 ABI。
+    // 平台 SDK 和 NDK 分别固定，Android Studio 不参与自动选择。
+    defaultConfig {
+        // 实验包使用独立身份，不覆盖未来正式版本或已有测试探针。
+        applicationId = 'top.xiang233.musicmapmaker.next.dev'
+        minSdk = 28
+        targetSdk = 36
+        versionCode = 1
+        versionName = '0.6.3-android-dev'
+        ndk { abiFilters 'arm64-v8a' }
+    }
+    // Java 必须来自本次原生构建使用的同一 SDL 版本，不复制第三方实现进仓库。
+    // 没有 Maven SDL AAR，避免与引擎内相同版本 SDL3 的 JNI 接口不匹配。
+    // sourceSets 只引用上游目录，不把第三方 Java 实现复制到业务仓库。
+    sourceSets {
+        main {
+            java.srcDirs += [sdlJava]
+            jniLibs.srcDirs = ["${work}/build/jni"]
+            assets.srcDirs = ["${work}/build/assets"]
+        }
+    }
+    // 原生调试信息在集中构建树保留，设备日志可用相同源码符号定位。
+    buildTypes { debug { debuggable = true; jniDebuggable = true } }
+    // 调试签名位于集中缓存中，同一工作树重复安装可保留应用私有数据。
+    // 正式发布签名不属于此实验构建，不在源码中记录任何用户密钥。
+    signingConfigs { debug { storeFile = file("${work}/cache/debug.keystore") } }
+}

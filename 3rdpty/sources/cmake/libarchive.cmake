@@ -47,6 +47,10 @@ foreach(
   CMAKE_TOOLCHAIN_FILE
   # * 系统名与处理器共同决定 Windows ABI 和平台条件。
   CMAKE_SYSTEM_NAME
+  # Android 工具链缺少 ABI 时默认 ARMv7；必须与主应用同时传递 API 和 STL。
+  ANDROID_ABI
+  ANDROID_PLATFORM
+  ANDROID_STL
   CMAKE_SYSTEM_PROCESSOR
   # * 编译器路径沿用父配置，不再次搜索 PATH 中其他 LLVM/GCC 版本。
   CMAKE_C_COMPILER
