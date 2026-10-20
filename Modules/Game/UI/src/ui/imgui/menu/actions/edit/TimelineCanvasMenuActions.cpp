@@ -6,6 +6,7 @@
 #include "ui/imgui/menu/actions/MainMenuToolsActions.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <string_view>
 
 #include <memory>
 #include <string>
@@ -52,6 +53,13 @@ IAuxiliaryWindowView* annotationTable(const MainMenuContext& context)
 class OpenTimingPointsTableAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "OpenTimingPointsTableAction";
+    }
+
     /// @brief Timeline 视图具有有效活动谱面时允许打开 Timing 表。
     /// @param context 提供 Timeline 视图查询入口。
     /// @return 视图存在且活动谱面有效时返回 true。
@@ -85,6 +93,13 @@ public:
 class OpenTimingTemplateAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "OpenTimingTemplateAction";
+    }
+
     /// @brief 有时间线视图及活动谱面时允许使用模板工具。
     /// @warning UI 热路径：仅查询能力和活动会话，不枚举时间点。
     bool isEnabled(const MainMenuContext& context) const override
@@ -111,6 +126,13 @@ public:
 class OpenAnnotationTableAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "OpenAnnotationTableAction";
+    }
+
     /// @brief 独立批注表视图和有效活动谱面同时存在时允许打开。
     /// @param context 提供辅助窗口查询入口。
     /// @return 批注表存在且活动谱面有效时返回 true。

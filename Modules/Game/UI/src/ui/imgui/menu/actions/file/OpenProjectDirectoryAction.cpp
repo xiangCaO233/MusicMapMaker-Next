@@ -1,6 +1,7 @@
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
+#include <string_view>
 
 #include "config/skin/translation/Translation.h"
 #include "logic/EditorEngine.h"
@@ -17,6 +18,13 @@ namespace
 class OpenProjectDirectoryAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "OpenProjectDirectoryAction";
+    }
+
     /// @brief 仅在当前项目存在且根目录有效时允许执行。
     /// @param context 统一菜单上下文。
     /// @return 项目存在且根路径非空时返回 true。

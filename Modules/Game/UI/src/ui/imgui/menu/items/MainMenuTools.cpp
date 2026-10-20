@@ -145,7 +145,7 @@ bool MainMenuTools::handleShortcut(MainMenuContext& context)
     const auto& binding = Config::AppConfig::instance()
                               .getEditorSettings()
                               .shortcutConfig.addBpmSegmentAtViewCenter;
-    if ( ShortcutUtils::isShortcutPressed(binding) &&
+    if ( ShortcutUtils::isActionShortcutPressed("addBpmSegmentAtViewCenter") &&
          isBpmMeasurementToolFocused(ImGui::GetCurrentContext()) ) {
         // 无实例时也消费工具专属组合键，不向背后的谱面发送编辑命令。
         // 文本输入和弹窗已由主菜单入口过滤，不会在输入框内添加段落。

@@ -1,3 +1,4 @@
+#include "ui/interaction/EditorInteraction.h"
 /// @file Basic2DCanvas_Interaction.cpp
 /// @brief 实现主画布输入路由、编辑手势、布局编辑和批注交互。
 ///
@@ -741,7 +742,7 @@ bool publishCanvasHoverSeek(const Common::Render::RenderSnapshot& snapshot)
                                     .getVisualConfig()
                                     .getEffectiveVisualOffset();
     // 视觉偏移只改变用户看到的时间位置，不改变谱面内部播放时间。
-    Event::EventBus::instance().publish(
+    UI::Interaction::dispatchCommand(
         Event::LogicCommandEvent(Logic::CmdSeek{ targetTime - visualOffset }));
     return true;
 }
@@ -1484,7 +1485,7 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
             }
             const auto wheelResult =
                 // 每格滚轮移动三行，helper 负责钳制并报告是否真正消费。
-                updateAnnotationDetailWheel(ImGui::GetIO().MouseWheel,
+                updateAnnotationDetailWheel(UI::Interaction::mouseWheel(),
                                             scrollY,
                                             maxScrollY,
                                             fontSize * 3.0F);
@@ -1570,6 +1571,7 @@ Basic2DCanvasInteraction::Basic2DCanvasInteraction(
     const std::string& canvasName, const std::string& cameraId)
     : m_canvasName(canvasName), m_cameraId(cameraId)
 {
+    UI::Interaction::registerInteractionGuard(*this);
     // 订阅 ID 由实例保存，析构时精确取消同一个回调。
     m_dropSubId = Event::EventBus::instance().subscribe<Event::GLFWDropEvent>(
         [this](const Event::GLFWDropEvent& e) {
@@ -1586,6 +1588,7 @@ Basic2DCanvasInteraction::Basic2DCanvasInteraction(
 /// 析构不等待逻辑命令完成，也不直接停止共享音频预览池。
 Basic2DCanvasInteraction::~Basic2DCanvasInteraction()
 {
+    UI::Interaction::unregisterInteractionGuard(*this);
     Event::EventBus::instance().unsubscribe<Event::GLFWDropEvent>(m_dropSubId);
 }
 
@@ -2051,18 +2054,63 @@ void Basic2DCanvasInteraction::setInputProjection(
 /// @warning UI 热路径：每帧调用，不得在此加入同步文件读取或 ECS 遍历。
 /// @brief 推进完整编辑交互，屏幕控件与谱面工具使用各自的坐标空间。
 /// @warning 每帧调用；投影缓存已由画布发布，禁止重复求逆或读取可变会话。
+/// @details 操作方案只借用本帧快照与坐标投影，不能保存它们用于下一帧拾取。
+/// 回调接管时跳过经典快捷键与工具处理，不能让一次点击产生两套命令。
+/// 未接管时继续原来的快捷键先、指针后的执行次序，工具切换仍在同帧生效。
+/// 画布名称与相机身份稳定区分多谱面，方案状态不能只按窗口显示标题索引。
+/// 投影与动态插值偏移沿用渲染同一份缓存，避免倾斜相机下拾取坐标错位。
+/// 主窗口管理器只是当前 UI 栈的观察指针，文件动作通过已有主菜单业务执行。
+/// 方案不得直接修改逻辑会话，选择、拖动、删除等操作仍发布既有命令。
+/// 命令经过方案入口后依旧接受原有逻辑权限与格式校验，不扩大业务能力。
+/// 经典控制器的临时成员保留在画布实例中，切换只能在全部事务结束后发生。
+/// 手势 guard 读取的是本地 UI 状态，不得等待逻辑线程给出确认。
+/// 平台按钮、键位和滚轮映射只改变解释，不能反写 ImGui 原始输入。
+/// 按下原点、拖拽位移与释放必须来自同一映射按钮，不能独立改写其中一项。
+/// 连续操作保持即时本地反馈，方案切换门禁不使用固定时长消抖或睡眠。
+/// 后台只读检视仍由其独立入口处理，不因当前方案获得后台编辑权限。
+/// 文件拖放继续由已有工程入口路由，不能把资源复制加入无输入的每帧路径。
+/// 速度提示属于经典状态机的瞬态显示，即使本帧被接管也要自然结束。
+/// 独立输入方案只拥有自己的手势状态，不能借用前一方案的未提交画笔。
+/// 取消放置的教学门禁仍在经典分支内锁存，不由键盘重映射更改提交条件。
+/// 窗口遮挡与文本焦点由既有入口先行判断，方案不能将无效位置钳制成有效落点。
+/// 这里不创建新控制器或复制所有权；方案注册和窗口生命周期仍在低频路径。
+/// 默认方案仅选择经典分支，已有编辑行为不需要复制一份实现用于兼容。
+/// 扩展者应优先复用高层动作和逻辑命令，不能在视图中重新实现撤销或文件事务。
+/// 单次接管结果仅属于这个表面与这一帧，不应作为其他画布的全局消费标记。
 void Basic2DCanvasInteraction::update(
     UI::UIManager*                        sourceManager,
     const Common::Render::RenderSnapshot* currentSnapshot, float targetWidth,
     float targetHeight)
 {
+    // 主画布的逻辑按钮映射不能泄漏到同帧的时间线或标准控件。
+    // 作用域退出后恢复调用者的输入域，包括提前返回路径。
+    const UI::Interaction::SurfaceScope interactionScope(
+        UI::Interaction::Surface::MainCanvas);
     // pending drop 已在平台回调中收集，本阶段按当前窗口 hover 决定归属。
     handleDrops(sourceManager);
 
     if ( currentSnapshot ) {
         // 快捷键先于鼠标交互，工具切换可在同帧被后续手势观察到。
-        handleHotkeys(currentSnapshot);
-        handleInteractions(currentSnapshot, targetWidth, targetHeight);
+        const auto origin = ImGui::GetCursorScreenPos();
+        const UI::Interaction::SurfaceFrame frame{
+            UI::Interaction::Surface::MainCanvas,
+            m_cameraId,
+            currentSnapshot,
+            origin.x,
+            origin.y,
+            targetWidth,
+            targetHeight,
+            ImGui::IsWindowHovered() && !isCanvasInputBlockedByModal(),
+            ImGui::IsWindowFocused(),
+            sourceManager,
+            &m_inputProjection,
+            m_snapshotInputYOffset
+        };
+        // 接管表面意味着新方案独占编辑，不再执行默认热键或指针状态机。
+        if ( !UI::Interaction::dispatchSurface(frame) ) {
+            handleHotkeys(currentSnapshot);
+            handleInteractions(currentSnapshot, targetWidth, targetHeight);
+        }
     }
 
     // 瞬态 UI 与谱面快照无关，即使项目刚关闭也要自然结束计时。
@@ -2136,22 +2184,30 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
     const Common::Render::RenderSnapshot* currentSnapshot,
     bool                                  allowSelectionScroll)
 {
+    const UI::Interaction::SurfaceScope interactionScope(
+        UI::Interaction::Surface::MainCanvas);
     if ( !currentSnapshot ) {
         // 所有滚轮语义依赖当前工具和选择状态，无快照不能安全解释。
         return false;
     }
 
-    const auto& io               = ImGui::GetIO();
-    const float wheel            = io.MouseWheel;
-    const bool  isCommandPressed = io.KeyCtrl || io.KeySuper;
+    const auto& io    = ImGui::GetIO();
+    const float wheel = UI::Interaction::mouseWheel();
+    const bool  isCommandPressed =
+        UI::Interaction::modifier(UI::Interaction::Modifier::Control) ||
+        UI::Interaction::modifier(UI::Interaction::Modifier::Super);
     // 小幅触控板残差或没有 Command/Alt 的普通滚轮留给后续滚动路径。
-    if ( std::abs(wheel) <= 0.01f || (!isCommandPressed && !io.KeyAlt) ) {
+    if ( std::abs(wheel) <= 0.01f ||
+         (!isCommandPressed &&
+          !UI::Interaction::modifier(UI::Interaction::Modifier::Alt)) ) {
         return false;
     }
 
-    const bool isAltPressed   = io.KeyAlt;
-    const bool isShiftPressed = io.KeyShift;
-    auto&      engine         = Logic::EditorEngine::instance();
+    const bool isAltPressed =
+        UI::Interaction::modifier(UI::Interaction::Modifier::Alt);
+    const bool isShiftPressed =
+        UI::Interaction::modifier(UI::Interaction::Modifier::Shift);
+    auto&      engine = Logic::EditorEngine::instance();
     const bool shouldPlayAdjustmentFeedback =
         engine.getEditorConfig().settings.stopPlaybackOnScroll;
     // 框选活动时 Command 滚轮扩展选择时间范围，不应先发零位移
@@ -2162,7 +2218,7 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
         currentSnapshot->isSelecting;
     if ( !scrollsActiveSelection ) {
         // 零位移命令只表达修饰调整意图，由逻辑设置决定是否停止播放。
-        Event::EventBus::instance().publish(
+        UI::Interaction::dispatchCommand(
             Event::LogicCommandEvent(Logic::CmdScroll{
                 m_cameraId,
                 0.0f,
@@ -2197,7 +2253,7 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
         double newSpeed = presets[bestIdx];
         // 浮点容差避免当前值已等于目标档时重复刷新提示和反馈。
         if ( std::abs(newSpeed - currentSpeed) > 1e-4 ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
                 Logic::CmdSetPlaybackSpeed{ newSpeed }));
             m_speedTooltipValue = static_cast<float>(newSpeed);
             // 提示保持两秒，由 updateTransientUi 使用 DeltaTime 非阻塞递减。
@@ -2212,7 +2268,7 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
     if ( isCommandPressed ) {
         if ( scrollsActiveSelection ) {
             // 符号取反与普通画布滚动方向约定一致，Shift 交给逻辑层加速。
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
                 Logic::CmdScroll{ m_cameraId, -wheel, isShiftPressed }));
         } else {
             auto  editorCfg = engine.getEditorConfig();
@@ -2533,7 +2589,7 @@ void Basic2DCanvasInteraction::handleHotkeys(
     for ( Logic::EditTool tool : editableTools ) {
         if ( UI::ShortcutUtils::isShortcutPressed(
                  UI::ShortcutUtils::getToolShortcut(settings, tool)) ) {
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdChangeTool{ tool }));
             handledShortcut = true;
             // 一帧只切换一次工具，不继续匹配其它配置。
@@ -2541,9 +2597,9 @@ void Basic2DCanvasInteraction::handleHotkeys(
         }
     }
 
-    if ( !handledShortcut && UI::ShortcutUtils::isShortcutPressed(
-                                 settings.shortcutConfig.deleteSelected) ) {
-        Event::EventBus::instance().publish(
+    if ( !handledShortcut &&
+         UI::ShortcutUtils::isActionShortcutPressed("deleteSelected") ) {
+        UI::Interaction::dispatchCommand(
             Event::LogicCommandEvent(Logic::CmdDeleteSelected{}));
     }
 
@@ -2801,7 +2857,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                   HorizontalRegionDragHandle::None ||
               m_noteScaleDragTarget.has_value() ||
               m_canvasComponentDragTarget.has_value()) &&
-             !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+             !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             finishLayoutEditing();
         }
         return;
@@ -3018,7 +3074,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     if ( (!movingCanvasComponent && !movingTrackLayout &&
           !movingHorizontalRegion && !resizingHorizontalRegion &&
           !resizingTrackWidth) ||
-         !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+         !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
         m_canvasComponentSnapGuideX.reset();
         m_canvasComponentSnapGuideY.reset();
     }
@@ -3179,7 +3235,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
     }
 
-    if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left, false) ) {
+    if ( isHovered &&
+         UI::Interaction::mouseClicked(ImGuiMouseButton_Left, false) ) {
         // 鼠标按下首帧按同一优先级冻结目标和起始几何；后续分支只读取
         // 成员状态，不再重新解释当前 hover。
         if ( hoveredNote.has_value() && hoveredNoteBounds.has_value() ) {
@@ -3309,7 +3366,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     }
 
     if ( m_noteScaleDragTarget.has_value() &&
-         ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+         UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
         // 角点拖动使用冻结 hitbox 和起始全局缩放计算候选，避免当前
         // 缩放反馈到新快照后再次叠加造成指数变化。
         constexpr float scaleEpsilon = 1e-6f;
@@ -3325,7 +3382,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
              std::abs(visual.noteScaleY - candidate.y) > scaleEpsilon ) {
             appConfig.getVisualConfig().noteScaleX = candidate.x;
             appConfig.getVisualConfig().noteScaleY = candidate.y;
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
                 Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
             // 标记仅用于释放时合并持久化和反馈，不在连续拖动中写磁盘。
             m_layoutConfigurationChanged = true;
@@ -3335,7 +3392,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     }
 
     if ( m_canvasComponentDragTarget.has_value() &&
-         ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+         UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
         // 文字组件移动/缩放写入当前 keyCount 和 instanceIndex 对应的
         // 可编辑 placement，不覆盖其它轨道数配置。
         constexpr float componentPositionEpsilon = 1e-6f;
@@ -3697,7 +3754,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                     candidate.fontSizeRatio);
             }
             // 连续预览通过逻辑线程快照回流；持久化留到鼠标释放统一完成。
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
                 Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
             m_layoutConfigurationChanged = true;
             // 修改边沿立即收存并排队写盘，默认项自动转为自定义方案。
@@ -3708,7 +3765,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     if ( !m_noteScaleDragTarget.has_value() &&
          !m_canvasComponentDragTarget.has_value() &&
          m_horizontalRegionDragHandle != HorizontalRegionDragHandle::None &&
-         ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+         UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
         // 辅助区拖动与文本组件拖动互斥；前面的条件确保同一帧只有一个
         // 布局对象能消费左键手势。
         // 缩放吸附指针边缘；整体移动随后比较候选区域的左右两侧。
@@ -3787,7 +3844,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             // 当前区与所有跟随区在同一个命令中预览，释放时仍只保存一次。
             appConfig.getVisualConfig().editableTrackLayoutForKeyCount(
                 keyCount) = candidate;
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
                 Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
             m_layoutConfigurationChanged = true;
             // 修改边沿立即收存并排队写盘，默认项自动转为自定义方案。
@@ -3799,7 +3856,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     if ( !m_noteScaleDragTarget.has_value() &&
          !m_canvasComponentDragTarget.has_value() &&
          m_trackLayoutDragHandle != TrackLayoutDragHandle::None &&
-         ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+         UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
         // 主轨道布局最后处理，优先级低于音符比例、文字组件和辅助区。
         // 非左右句柄保持未吸附的原始世界坐标。
         HorizontalResizeSnapResult widthSnap{ .position = worldPointerX };
@@ -3828,7 +3885,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 appConfig.getVisualConfig()
                     .editableJudgmentLinePositionForKeyCount(keyCount) =
                     candidatePosition;
-                Event::EventBus::instance().publish(
+                UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdUpdateEditorConfig{
                         appConfig.getEditorConfig() }));
                 m_layoutConfigurationChanged = true;
@@ -3961,7 +4018,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 // 拖动中发布配置用于即时预览，但只在释放时保存到磁盘。
                 appConfig.getVisualConfig().editableTrackLayoutForKeyCount(
                     keyCount) = candidate;
-                Event::EventBus::instance().publish(
+                UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdUpdateEditorConfig{
                         appConfig.getEditorConfig() }));
                 m_layoutConfigurationChanged = true;
@@ -3976,7 +4033,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
           m_horizontalRegionDragHandle != HorizontalRegionDragHandle::None ||
           m_noteScaleDragTarget.has_value() ||
           m_canvasComponentDragTarget.has_value()) &&
-         !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+         !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
         // 释放发生在画布外也必须结束手势并落盘，不能依赖 hovered 状态。
         finishLayoutEditing();
     }
@@ -4650,7 +4707,7 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
             // 切换条目后从顶部展示，不能继承上一条长文本的滚动位置。
             if ( detailSelectionChanged ) ImGui::SetScrollY(0.0F);
             const float tooltipMaxScrollY = ImGui::GetScrollMaxY();
-            const float wheel             = ImGui::GetIO().MouseWheel;
+            const float wheel             = UI::Interaction::mouseWheel();
             if ( !detailWheelConsumed && std::abs(wheel) > 0.01F ) {
                 // 详情卡未消费滚轮时，tooltip 先尝试内部滚动；只有到达
                 // 边界且未消费时，外层才可能把滚轮传给画布。
@@ -4669,11 +4726,15 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
                 // 方向键只在无文本输入焦点时切换同时间戳条目，避免干扰
                 // 输入法和批注编辑弹窗。
                 int direction = 0;
-                if ( ImGui::IsKeyPressed(ImGuiKey_UpArrow, false) ||
-                     ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false) ) {
+                if ( UI::ShortcutUtils::isActionShortcutPressed(
+                         "previousLayerUp", false) ||
+                     UI::ShortcutUtils::isActionShortcutPressed(
+                         "previousLayerLeft", false) ) {
                     direction = -1;
-                } else if ( ImGui::IsKeyPressed(ImGuiKey_DownArrow, false) ||
-                            ImGui::IsKeyPressed(ImGuiKey_RightArrow, false) ) {
+                } else if ( UI::ShortcutUtils::isActionShortcutPressed(
+                                "nextLayerDown", false) ||
+                            UI::ShortcutUtils::isActionShortcutPressed(
+                                "nextLayerRight", false) ) {
                     direction = 1;
                 }
                 if ( direction != 0 ) {
@@ -4766,10 +4827,12 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
              currentSnapshot.acceptsInteraction ) {
             // 播放中或只读会话禁止修改批注，但悬停和阅读仍然可用。
             if ( !detailLinkHovered &&
-                 (detailCardHovered
-                      ? ImGui::GetIO().KeyShift &&
-                            ImGui::IsMouseClicked(ImGuiMouseButton_Right, false)
-                      : ImGui::IsMouseClicked(ImGuiMouseButton_Left, false)) ) {
+                 (detailCardHovered ? UI::Interaction::modifier(
+                                          UI::Interaction::Modifier::Shift) &&
+                                          UI::Interaction::mouseClicked(
+                                              ImGuiMouseButton_Right, false)
+                                    : UI::Interaction::mouseClicked(
+                                          ImGuiMouseButton_Left, false)) ) {
                 // 详情卡用 Shift+右键编辑，气泡用左键编辑；两者区分是为了
                 // 给卡片内部链接和普通右键新建手势留出空间。
                 const auto& selected =
@@ -4786,7 +4849,8 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
                             m_annotationEditor.content.data());
                 m_annotationEditor.requestOpen = true;
             } else if ( !detailCardHovered && !detailLinkHovered &&
-                        ImGui::IsMouseClicked(ImGuiMouseButton_Right, false) ) {
+                        UI::Interaction::mouseClicked(ImGuiMouseButton_Right,
+                                                      false) ) {
                 // 在已有时间戳气泡上右键表示新增同时间批注，不携带旧 ID。
                 m_annotationEditor.annotationId.clear();
                 m_annotationEditor.author.clear();
@@ -4797,7 +4861,7 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
         }
     } else if ( gutterHovered && !currentSnapshot.isPlaying &&
                 currentSnapshot.acceptsInteraction &&
-                ImGui::IsMouseClicked(ImGuiMouseButton_Right, false) ) {
+                UI::Interaction::mouseClicked(ImGuiMouseButton_Right, false) ) {
         // 空白批注栏右键以当前指针时间新建；启用吸附时使用吸附时间，
         // 从而与画布画笔的节奏定位一致。
         m_annotationEditor.annotationId.clear();
@@ -4873,7 +4937,7 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
         ImGui::EndDisabled();
         if ( canSave && (submitWithEnter || saveClicked) ) {
             // 新增和编辑统一走 upsert 命令；空 ID 由逻辑层生成新标识。
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdUpsertBeatmapAnnotation{
                     .annotationId = m_annotationEditor.annotationId,
                     .targetKind = ::MMM::BeatmapAnnotationTargetKind::TIMESTAMP,
@@ -4889,7 +4953,7 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
             ImGui::SameLine();
             if ( ::MMM::UI::FeedbackButton(
                      TR("ui.annotation.delete").data()) ) {
-                Event::EventBus::instance().publish(
+                UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdRemoveBeatmapAnnotation{
                         m_annotationEditor.annotationId }));
                 ImGui::CloseCurrentPopup();
@@ -4924,6 +4988,8 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
 void Basic2DCanvasInteraction::updateHoverState(float targetWidth,
                                                 float targetHeight)
 {
+    const UI::Interaction::SurfaceScope interactionScope(
+        UI::Interaction::Surface::MainCanvas);
     // ImGui 在窗口失焦或平台后端尚未提供坐标时会返回无效鼠标位置。
     // 这种情况下沿用最近一次局部坐标，只把悬停状态切为 false，避免把
     // FLT_MAX 一类哨兵值发送给逻辑线程。
@@ -4979,7 +5045,7 @@ void Basic2DCanvasInteraction::updateHoverState(float targetWidth,
 
     // 后台同步永远不报告拖拽；活动画布的完整手势由 handleInteractions
     // 负责，两个入口不会争用逻辑层拖拽状态。
-    Event::EventBus::instance().publish(
+    UI::Interaction::dispatchCommand(
         Event::LogicCommandEvent(Logic::CmdSetMousePosition{
             .cameraId       = m_cameraId,
             .mouseX         = localMousePos.x,
@@ -5201,15 +5267,15 @@ void Basic2DCanvasInteraction::handleInteractions(
         ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     const bool middleClicked =
         middlePanStartHovered &&
-        ImGui::IsMouseClicked(ImGuiMouseButton_Middle, false);
+        UI::Interaction::mouseClicked(ImGuiMouseButton_Middle, false);
     if ( middleClicked ) {
         // 记录局部起点，后续每帧发布增量而不是累计总位移。
         m_isMiddleCanvasPanning      = true;
         m_lastMiddlePanMousePosition = { localMousePos.x, localMousePos.y };
     }
-    const bool isDragging = !modalBlocked && !m_isMiddleCanvasPanning &&
-                            hasValidMousePos &&
-                            ImGui::IsMouseDragging(ImGuiMouseButton_Left);
+    const bool isDragging =
+        !modalBlocked && !m_isMiddleCanvasPanning && hasValidMousePos &&
+        UI::Interaction::mouseDragging(ImGuiMouseButton_Left);
     // 中键占用期间不得把左键拖拽状态继续报告给逻辑层。
 
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
@@ -5275,7 +5341,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                     if ( !audioResourceId.empty() ) {
                         // 资源 ID 复制出 payload 生命周期后再进入异步事件队列。
                         // Ctrl 状态随命令快照发送，由逻辑层决定创建变体语义。
-                        Event::EventBus::instance().publish(
+                        UI::Interaction::dispatchCommand(
                             Event::LogicCommandEvent(
                                 Logic::CmdCreateAudioSample{
                                     .audioResourceId =
@@ -5283,7 +5349,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                                     .cameraId   = m_cameraId,
                                     .mouseX     = localMousePos.x,
                                     .mouseY     = localMousePos.y,
-                                    .isCtrlDown = ImGui::GetIO().KeyCtrl,
+                                    .isCtrlDown = UI::Interaction::modifier(
+                                        UI::Interaction::Modifier::Control),
                                 }));
                     }
                 }
@@ -5349,7 +5416,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         // 告知逻辑层窗口边界已经检查，平面越界不等于鼠标离开窗口。
         // 视口宽高仍保留真实正尺寸，让逻辑拒绝来自退化视口的逆投影输入。
         // 此命令不传快照命中坐标，否则播放插值会被当作时间位移重复应用。
-        Event::EventBus::instance().publish(
+        UI::Interaction::dispatchCommand(
             Event::LogicCommandEvent(Logic::CmdSetMousePosition{
                 .cameraId       = m_cameraId,
                 .mouseX         = localMousePos.x,
@@ -5377,21 +5444,21 @@ void Basic2DCanvasInteraction::handleInteractions(
         // 手势，不能继续消费弹窗中的拖动，也不能把它锁存为下一次编辑。
         // 对象拖动按自身锁存优先收尾，不能按当前工具误当作框选。
         if ( m_leftPressStartedObjectDrag ) {
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
         } else if ( m_leftPressStartedOnCanvas &&
                     currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
         } else if ( m_leftPressStartedOnCanvas &&
                     currentSnapshot->currentTool == Logic::EditTool::Draw ) {
             // 尚未提交的画笔取消，模态内部点击不能成为放置确认。
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
                 Logic::CmdEndBrush{ .cameraId = m_cameraId, .cancel = true }));
         }
         // 擦除与左键事务可以独立存在，结束左键不能代替结束擦除。
         if ( m_rightEraseActive ) {
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdEndErase{ m_cameraId }));
         }
         if ( m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
@@ -5420,7 +5487,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         // 无物件悬停时不发布空命令；持续显示模态不会反复发送结束事件。
         if ( m_hasLastHovered && m_lastHoveredEntity != entt::null ) {
             // 逻辑层只接收一次悬停退出，不能保留被遮住物件的高亮。
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
                 Logic::CmdSetHoveredEntity{ entt::null, 0, -1 }));
             m_lastHoveredEntity   = entt::null;
             m_lastHoveredPart     = 0;
@@ -5449,12 +5516,12 @@ void Basic2DCanvasInteraction::handleInteractions(
             if ( m_leftPressStartedOnCanvas && !m_leftPressStartedObjectDrag &&
                  currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
                 // 框选、画笔和对象拖拽分别有独立的结束命令。
-                Event::EventBus::instance().publish(
+                UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
             } else if ( m_leftPressStartedOnCanvas &&
                         currentSnapshot->currentTool ==
                             Logic::EditTool::Draw ) {
-                Event::EventBus::instance().publish(
+                UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdEndBrush{
                         .cameraId = m_cameraId,
                         // 中键中断尚未验收的教学拖动，必须丢弃而不是提前提交。
@@ -5465,12 +5532,12 @@ void Basic2DCanvasInteraction::handleInteractions(
                         .walkthroughMinimumSubNotes = m_brushMinimumSubNotes,
                     }));
             } else if ( m_leftPressStartedObjectDrag ) {
-                Event::EventBus::instance().publish(
+                UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
             }
             if ( m_rightEraseActive ) {
                 // 擦除状态可能与左键工具并存，也需要单独终止。
-                Event::EventBus::instance().publish(
+                UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdEndErase{ m_cameraId }));
             }
             if ( m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
@@ -5496,7 +5563,8 @@ void Basic2DCanvasInteraction::handleInteractions(
 
         // ResizeAll 光标明确表示二维平移，不依赖当前编辑工具图标。
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
-        if ( ImGui::IsMouseDown(ImGuiMouseButton_Middle) && hasValidMousePos ) {
+        if ( UI::Interaction::mouseDown(ImGuiMouseButton_Middle) &&
+             hasValidMousePos ) {
             const glm::vec2 currentMousePosition{
                 localMousePos.x,
                 localMousePos.y,
@@ -5507,7 +5575,7 @@ void Basic2DCanvasInteraction::handleInteractions(
             m_lastMiddlePanMousePosition = currentMousePosition;
             if ( std::abs(delta.x) > 0.001F || std::abs(delta.y) > 0.001F ) {
                 // 微小阈值过滤触摸板或高 DPI 鼠标静止噪声。
-                Event::EventBus::instance().publish(
+                UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdPanCanvas{
                         .cameraId       = m_cameraId,
                         .deltaX         = delta.x,
@@ -5519,7 +5587,7 @@ void Basic2DCanvasInteraction::handleInteractions(
             }
         }
 
-        if ( !ImGui::IsMouseDown(ImGuiMouseButton_Middle) ) {
+        if ( !UI::Interaction::mouseDown(ImGuiMouseButton_Middle) ) {
             // 即使在画布外释放也结束平移；状态不依赖窗口 hover。
             m_isMiddleCanvasPanning = false;
         }
@@ -5531,7 +5599,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         // 布局工具编辑视觉配置而非谱面实体，先清除逻辑层实体悬停状态。
         if ( !m_hasLastHovered || m_lastHoveredEntity != entt::null ||
              m_lastHoveredPart != 0 || m_lastHoveredSubIndex != -1 ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
                 Logic::CmdSetHoveredEntity{ entt::null, 0, -1 }));
             m_hasLastHovered        = true;
             m_lastHoveredEntity     = entt::null;
@@ -5543,19 +5611,19 @@ void Basic2DCanvasInteraction::handleInteractions(
         // 工具栏切换可能发生在鼠标仍按下时，先结束旧事务再交出输入。
         // 判断依据是按下门闩和已发布事务，不能使用已经切换的工具类型。
         if ( m_leftPressStartedObjectDrag ) {
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
         } else if ( m_leftPressStartedOnCanvas &&
                     currentSnapshot->isSelecting ) {
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
         } else if ( m_leftPressStartedOnCanvas &&
                     currentSnapshot->brush.isActive ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
                 Logic::CmdEndBrush{ .cameraId = m_cameraId, .cancel = true }));
         }
         if ( m_rightEraseActive ) {
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdEndErase{ m_cameraId }));
             m_rightEraseActive = false;
         }
@@ -5604,7 +5672,7 @@ void Basic2DCanvasInteraction::handleInteractions(
     const bool continueMarqueeAcrossAnnotation =
         shouldContinueMarqueeAcrossBlockedArea(
             currentSnapshot->currentTool,
-            ImGui::IsMouseDragging(ImGuiMouseButton_Left),
+            UI::Interaction::mouseDragging(ImGuiMouseButton_Left),
             m_leftPressStartedOnCanvas,
             m_leftPressStartedOnEntity,
             m_leftPressStartedObjectDrag);
@@ -5613,7 +5681,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         // 批注层接管输入时清除谱面实体 hover，避免底层对象残留高亮。
         if ( !m_hasLastHovered || m_lastHoveredEntity != entt::null ||
              m_lastHoveredPart != 0 || m_lastHoveredSubIndex != -1 ) {
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
                 Logic::CmdSetHoveredEntity{ entt::null, 0, -1 }));
             m_hasLastHovered        = true;
             m_lastHoveredEntity     = entt::null;
@@ -5626,15 +5694,15 @@ void Basic2DCanvasInteraction::handleInteractions(
         // 也必须把已有事务的结束命令送到逻辑线程。
         const auto completion = resolveBlockedCanvasGestureCompletion(
             currentSnapshot->currentTool,
-            ImGui::IsMouseReleased(ImGuiMouseButton_Left),
-            ImGui::IsMouseReleased(ImGuiMouseButton_Right),
+            UI::Interaction::mouseReleased(ImGuiMouseButton_Left),
+            UI::Interaction::mouseReleased(ImGuiMouseButton_Right),
             m_leftPressStartedOnCanvas,
             m_leftPressStartedObjectDrag,
             m_rightEraseActive);
         switch ( completion.leftEnd ) {
         case BlockedCanvasLeftGestureEnd::Marquee:
             // 完成框选会提交当前矩形选择结果。
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
             break;
         case BlockedCanvasLeftGestureEnd::Brush:
@@ -5643,7 +5711,7 @@ void Basic2DCanvasInteraction::handleInteractions(
             // 独立策略在起笔锁存，而不是从可能已结束的教程状态重新推导。
             // 取消标志与普通释放共用，保留这一帧教程验收的结果。
             // 因而失去画布输入归属时，也不会提交本应丢弃的教学失败手势。
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdEndBrush{
                     .cameraId                   = m_cameraId,
                     .cancel                     = m_cancelBrushOnNextRelease,
@@ -5654,14 +5722,14 @@ void Basic2DCanvasInteraction::handleInteractions(
             break;
         case BlockedCanvasLeftGestureEnd::ObjectDrag:
             // 完成对象拖拽会提交最终位置并形成撤销记录。
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
             break;
         case BlockedCanvasLeftGestureEnd::None: break;
         }
         if ( completion.endErase ) {
             // 右键也可能在批注区释放，必须清理逻辑和本地擦除状态。
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdEndErase{ m_cameraId }));
             m_lastEraseUpdateCommand.valid = false;
             m_rightEraseActive             = false;
@@ -5683,12 +5751,14 @@ void Basic2DCanvasInteraction::handleInteractions(
         if ( annotationGutterInteraction.passesWheelToCanvas ) {
             // 批注详情没有消费滚轮且弹窗未打开时，才允许画布滚动。
             const auto& io = ImGui::GetIO();
-            if ( std::abs(io.MouseWheel) > 0.01F &&
+            if ( std::abs(UI::Interaction::mouseWheel()) > 0.01F &&
                  !handleModifierWheel(currentSnapshot) ) {
                 // 修饰键滚轮优先用于属性调整，普通滚轮再映射时间滚动。
-                Event::EventBus::instance().publish(
-                    Event::LogicCommandEvent(Logic::CmdScroll{
-                        m_cameraId, -io.MouseWheel, io.KeyShift }));
+                UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
+                    Logic::CmdScroll{ m_cameraId,
+                                      -UI::Interaction::mouseWheel(),
+                                      UI::Interaction::modifier(
+                                          UI::Interaction::Modifier::Shift) }));
             }
         }
         // 批注层阻挡时不执行音频覆盖层、拾取或常规工具处理。
@@ -5783,11 +5853,15 @@ void Basic2DCanvasInteraction::handleInteractions(
         if ( m_hoverLayerCount > 1 && isHovered &&
              !ImGui::GetIO().WantTextInput ) {
             // 方向键循环选择重叠层；文本输入期间不抢占光标移动按键。
-            if ( ImGui::IsKeyPressed(ImGuiKey_DownArrow, false) ||
-                 ImGui::IsKeyPressed(ImGuiKey_RightArrow, false) ) {
+            if ( UI::ShortcutUtils::isActionShortcutPressed("nextLayerDown",
+                                                            false) ||
+                 UI::ShortcutUtils::isActionShortcutPressed("nextLayerRight",
+                                                            false) ) {
                 m_hoverLayerIndex = (m_hoverLayerIndex + 1) % m_hoverLayerCount;
-            } else if ( ImGui::IsKeyPressed(ImGuiKey_UpArrow, false) ||
-                        ImGui::IsKeyPressed(ImGuiKey_LeftArrow, false) ) {
+            } else if ( UI::ShortcutUtils::isActionShortcutPressed(
+                            "previousLayerUp", false) ||
+                        UI::ShortcutUtils::isActionShortcutPressed(
+                            "previousLayerLeft", false) ) {
                 m_hoverLayerIndex =
                     (m_hoverLayerIndex + m_hoverLayerCount - 1) %
                     m_hoverLayerCount;
@@ -5809,7 +5883,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                            m_lastHoveredSubIndex != hoveredSubIndex;
     if ( shouldSendHover ) {
         // 完整复合键去重，子节点切换也会产生 hover 更新。
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+        UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
             Logic::CmdSetHoveredEntity{ hoveredEntity,
                                         hoveredPart,
                                         hoveredSubIndex,
@@ -5835,19 +5909,19 @@ void Basic2DCanvasInteraction::handleInteractions(
 
         if ( tool == Logic::EditTool::ColorBrush ) {
             // 颜色画笔把当前调色板覆盖应用到整个实体。
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
                 Logic::CmdApplyBrushPaletteToEntity{ hoveredEntity }));
         } else if ( tool == Logic::EditTool::ColorEraser ) {
             // 颜色橡皮只清除颜色覆盖，不删除谱面对象。
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
                 Logic::CmdClearNoteColorOverrides{ hoveredEntity }));
         }
     };
 
     const bool leftClicked =
-        ImGui::IsMouseClicked(ImGuiMouseButton_Left, false);
+        UI::Interaction::mouseClicked(ImGuiMouseButton_Left, false);
     const bool leftDoubleClicked =
-        ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+        UI::Interaction::mouseDoubleClicked(ImGuiMouseButton_Left);
     const bool leftSeekClicked =
         isMouseInTrackLayout && currentSnapshot->isHoveringCanvas &&
         currentSnapshot->hasBeatmap && !currentSnapshot->isPlaying &&
@@ -5883,33 +5957,36 @@ void Basic2DCanvasInteraction::handleInteractions(
                 // 新框选矩形。
                 if ( hoveredEntity != entt::null ) {
                     // 未按 Ctrl 时替换选择，按 Ctrl 时保留既有选择集合。
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(
-                            Logic::CmdSelectEntity{ hoveredEntity,
-                                                    !ImGui::GetIO().KeyCtrl,
-                                                    hoveredObjectKind }));
+                    UI::Interaction::dispatchCommand(
+                        Event::LogicCommandEvent(Logic::CmdSelectEntity{
+                            hoveredEntity,
+                            !UI::Interaction::modifier(
+                                UI::Interaction::Modifier::Control),
+                            hoveredObjectKind }));
                     if ( !currentSnapshot->isPlaying ) {
                         // 播放时仍允许选择查看，但不允许改变对象位置。
                         // 按下处的命中部位与子索引随命令一起入队，避免拖拽工具
                         // 在稍后的逻辑帧误读到另一处悬停状态。
-                        Event::EventBus::instance().publish(
-                            Event::LogicCommandEvent(
-                                Logic::CmdStartDrag{ hoveredEntity,
-                                                     m_cameraId,
-                                                     ImGui::GetIO().KeyCtrl,
-                                                     hoveredObjectKind,
-                                                     hoveredPart,
-                                                     hoveredSubIndex }));
+                        UI::Interaction::dispatchCommand(
+                            Event::LogicCommandEvent(Logic::CmdStartDrag{
+                                hoveredEntity,
+                                m_cameraId,
+                                UI::Interaction::modifier(
+                                    UI::Interaction::Modifier::Control),
+                                hoveredObjectKind,
+                                hoveredPart,
+                                hoveredSubIndex }));
                         m_leftPressStartedObjectDrag = true;
                     }
                 } else {
                     // 框选起点使用当前画布局部坐标，逻辑层维护矩形终点。
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(
-                            Logic::CmdStartMarquee{ m_cameraId,
-                                                    localMousePos.x,
-                                                    localMousePos.y,
-                                                    ImGui::GetIO().KeyCtrl }));
+                    UI::Interaction::dispatchCommand(
+                        Event::LogicCommandEvent(Logic::CmdStartMarquee{
+                            m_cameraId,
+                            localMousePos.x,
+                            localMousePos.y,
+                            UI::Interaction::modifier(
+                                UI::Interaction::Modifier::Control) }));
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Move ) {
@@ -5918,14 +5995,15 @@ void Basic2DCanvasInteraction::handleInteractions(
                      hoveredEntity != entt::null ) {
                     // 抓取工具不负责选中，保留用户已有的多选集合。
                     // 头部与首段身体共用根实体，仅传实体无法区分两种手势。
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(
-                            Logic::CmdStartDrag{ hoveredEntity,
-                                                 m_cameraId,
-                                                 ImGui::GetIO().KeyCtrl,
-                                                 hoveredObjectKind,
-                                                 hoveredPart,
-                                                 hoveredSubIndex }));
+                    UI::Interaction::dispatchCommand(
+                        Event::LogicCommandEvent(Logic::CmdStartDrag{
+                            hoveredEntity,
+                            m_cameraId,
+                            UI::Interaction::modifier(
+                                UI::Interaction::Modifier::Control),
+                            hoveredObjectKind,
+                            hoveredPart,
+                            hoveredSubIndex }));
                     m_leftPressStartedObjectDrag = true;
                 }
             } else if ( currentSnapshot->currentTool ==
@@ -5941,14 +6019,16 @@ void Basic2DCanvasInteraction::handleInteractions(
                     // 子段门槛同样随本次手势冻结，最终清洗后由逻辑层核验。
                     m_brushMinimumSubNotes =
                         m_standaloneBrush ? m_walkthroughMinimumSubNotes : 0;
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(
-                            Logic::CmdStartBrush{ m_cameraId,
-                                                  localMousePos.x,
-                                                  localMousePos.y,
-                                                  ImGui::GetIO().KeyShift,
-                                                  ImGui::GetIO().KeyCtrl,
-                                                  m_standaloneBrush }));
+                    UI::Interaction::dispatchCommand(
+                        Event::LogicCommandEvent(Logic::CmdStartBrush{
+                            m_cameraId,
+                            localMousePos.x,
+                            localMousePos.y,
+                            UI::Interaction::modifier(
+                                UI::Interaction::Modifier::Shift),
+                            UI::Interaction::modifier(
+                                UI::Interaction::Modifier::Control),
+                            m_standaloneBrush }));
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::ColorBrush ) {
@@ -5964,13 +6044,13 @@ void Basic2DCanvasInteraction::handleInteractions(
     // ImGui 在释放帧不再报告 IsMouseDragging，但鼠标仍可能有最后一次位移。
     // 已经形成的手势需要在 End 前提交该终点；无效射线只结束旧事务。
     const bool finishingLeftDrag =
-        ImGui::IsMouseReleased(0) && m_leftPressDragged;
+        UI::Interaction::mouseReleased(0) && m_leftPressDragged;
     // 释放帧先复用更新路径提交最终落点，再由下方统一结束事务。
     // 该次更新绕过去重阈值，微小位移也不能在提交动作时被丢弃。
     // 已形成拖动的门闩与本帧按键状态分开，普通单击不会因此生成连续编辑。
     // 射线失效时不覆盖最后有效终点，但下方 End 仍可执行并清空本地门闩。
     if ( hasValidMousePos &&
-         (ImGui::IsMouseDragging(0) || finishingLeftDrag) ) {
+         (UI::Interaction::mouseDragging(0) || finishingLeftDrag) ) {
         // 保留单击与拖动的区别，释放帧不会凭空把普通单击升级为拖拽。
         m_leftPressDragged = true;
 
@@ -6000,7 +6080,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                 pan.x = clampObjectDragHorizontalAutoPanDelta(
                     pan.x, targetWidth, laneProjection);
                 if ( std::abs(pan.x) > 0.001F || std::abs(pan.y) > 0.001F ) {
-                    Event::EventBus::instance().publish(
+                    UI::Interaction::dispatchCommand(
                         Event::LogicCommandEvent(Logic::CmdPanCanvas{
                             .cameraId       = m_cameraId,
                             .deltaX         = pan.x,
@@ -6013,21 +6093,20 @@ void Basic2DCanvasInteraction::handleInteractions(
             }
             if ( currentSnapshot->hasBeatmap && !currentSnapshot->isPlaying &&
                  !m_inputProjection.m_enabled && !finishingLeftDrag ) {
-                const double autoScrollTargetTime =
-                    marqueeAutoScrollTargetTime(*currentSnapshot,
-                                                targetHeight,
-                                                localMousePos.y,
-                                                ImGui::GetIO().DeltaTime,
-                                                ImGui::GetIO().KeyShift,
-                                                autoScrolled);
+                const double autoScrollTargetTime = marqueeAutoScrollTargetTime(
+                    *currentSnapshot,
+                    targetHeight,
+                    localMousePos.y,
+                    ImGui::GetIO().DeltaTime,
+                    UI::Interaction::modifier(UI::Interaction::Modifier::Shift),
+                    autoScrolled);
                 if ( autoScrolled ) {
                     // CmdSeek 接收音频时间，需移除仅用于视觉显示的偏移量。
                     const double visualOffset = Config::AppConfig::instance()
                                                     .getVisualConfig()
                                                     .getEffectiveVisualOffset();
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(Logic::CmdSeek{
-                            autoScrollTargetTime - visualOffset }));
+                    UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
+                        Logic::CmdSeek{ autoScrollTargetTime - visualOffset }));
                 }
             }
 
@@ -6041,12 +6120,13 @@ void Basic2DCanvasInteraction::handleInteractions(
                     m_lastMarqueeUpdateCommand,
                     { localMousePos.x, localMousePos.y },
                     *currentSnapshot,
-                    ImGui::GetIO().KeyCtrl,
+                    UI::Interaction::modifier(
+                        UI::Interaction::Modifier::Control),
                     false) ||
                 finishingLeftDrag || autoScrolled || playbackScrolled;
             if ( shouldUpdateMarquee ) {
                 // UpdateMarquee 只更新当前事务，不在每帧创建撤销节点。
-                Event::EventBus::instance().publish(
+                UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdUpdateMarquee{
                         localMousePos.x, localMousePos.y }));
             }
@@ -6062,16 +6142,21 @@ void Basic2DCanvasInteraction::handleInteractions(
                      m_lastBrushUpdateCommand,
                      { localMousePos.x, localMousePos.y },
                      *currentSnapshot,
-                     ImGui::GetIO().KeyShift,
-                     ImGui::GetIO().KeyCtrl) ||
+                     UI::Interaction::modifier(
+                         UI::Interaction::Modifier::Shift),
+                     UI::Interaction::modifier(
+                         UI::Interaction::Modifier::Control)) ||
                  playbackScrolled || finishingLeftDrag ) {
                 // Shift/Ctrl 属于连续命令去重键，拖动中切换修饰键会立即更新。
-                Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                    Logic::CmdUpdateBrush{ m_cameraId,
-                                           localMousePos.x,
-                                           localMousePos.y,
-                                           ImGui::GetIO().KeyShift,
-                                           ImGui::GetIO().KeyCtrl }));
+                UI::Interaction::dispatchCommand(
+                    Event::LogicCommandEvent(Logic::CmdUpdateBrush{
+                        m_cameraId,
+                        localMousePos.x,
+                        localMousePos.y,
+                        UI::Interaction::modifier(
+                            UI::Interaction::Modifier::Shift),
+                        UI::Interaction::modifier(
+                            UI::Interaction::Modifier::Control) }));
             }
         } else if ( m_leftPressStartedObjectDrag &&
                     (currentSnapshot->currentTool == Logic::EditTool::Move ||
@@ -6110,7 +6195,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                 // 队列顺序构成同一交互帧的契约，不能交换 Pan 与 UpdateDrag。
                 // 输入落点不等待平移完成；逻辑线程消费最新相机状态后立即换算。
                 // 只有内容范围限制后的非零平移才需要绕过拖动命令的静止去重。
-                Event::EventBus::instance().publish(
+                UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdPanCanvas{
                         .cameraId       = m_cameraId,
                         .deltaX         = autoPanDelta.x,
@@ -6128,16 +6213,19 @@ void Basic2DCanvasInteraction::handleInteractions(
                     m_lastMoveUpdateCommand,
                     { localMousePos.x, localMousePos.y },
                     *currentSnapshot,
-                    ImGui::GetIO().KeyCtrl,
+                    UI::Interaction::modifier(
+                        UI::Interaction::Modifier::Control),
                     false) ||
                 finishingLeftDrag || autoPanned || playbackScrolled;
             if ( shouldUpdateMove ) {
                 // Ctrl 状态允许逻辑层在拖动期间切换复制/约束语义。
-                Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                    Logic::CmdUpdateDrag{ m_cameraId,
-                                          localMousePos.x,
-                                          localMousePos.y,
-                                          ImGui::GetIO().KeyCtrl }));
+                UI::Interaction::dispatchCommand(
+                    Event::LogicCommandEvent(Logic::CmdUpdateDrag{
+                        m_cameraId,
+                        localMousePos.x,
+                        localMousePos.y,
+                        UI::Interaction::modifier(
+                            UI::Interaction::Modifier::Control) }));
             }
         } else if ( m_leftPressStartedOnCanvas &&
                     currentSnapshot->currentTool ==
@@ -6151,7 +6239,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         }
     }
 
-    if ( ImGui::IsMouseReleased(0) ) {
+    if ( UI::Interaction::mouseReleased(0) ) {
         // 此分支不依赖窗口 hover，拖出窗口或失效射线都必须结束已拥有的事务。
         // 有效最终位置已经在上方提交，End 只负责固化状态与撤销记录。
         // 清理门闩晚于事件发布，避免结束命令失去按下时记录的对象拖动身份。
@@ -6160,18 +6248,19 @@ void Basic2DCanvasInteraction::handleInteractions(
         const bool shiftReleaseSeek =
             m_leftPressStartedOnCanvas && m_leftPressStartedInTrackLayout &&
             isMouseInTrackLayout && !m_leftPressDragged &&
-            ImGui::GetIO().KeyShift && currentSnapshot->isHoveringCanvas &&
-            currentSnapshot->hasBeatmap && !currentSnapshot->isPlaying &&
+            UI::Interaction::modifier(UI::Interaction::Modifier::Shift) &&
+            currentSnapshot->isHoveringCanvas && currentSnapshot->hasBeatmap &&
+            !currentSnapshot->isPlaying &&
             currentSnapshot->currentTool == Logic::EditTool::Move;
 
         if ( m_leftPressStartedOnCanvas && !m_leftPressStartedObjectDrag &&
              currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             // 释放命令依据按下时锁存的手势种类，而非释放位置的 hover。
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
         } else if ( m_leftPressStartedOnCanvas &&
                     currentSnapshot->currentTool == Logic::EditTool::Draw ) {
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdEndBrush{
                     .cameraId                   = m_cameraId,
                     .cancel                     = m_cancelBrushOnNextRelease,
@@ -6181,7 +6270,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                 }));
         } else if ( m_leftPressStartedObjectDrag ) {
             // 对象拖拽结束会固化本次连续位移。
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
         }
 
@@ -6189,9 +6278,11 @@ void Basic2DCanvasInteraction::handleInteractions(
             // Move 工具空白单击清空选择；Ctrl 保留/切换选择语义由命令处理。
             if ( m_leftPressStartedOnCanvas && !m_leftPressStartedOnEntity &&
                  !m_leftPressDragged && !shiftReleaseSeek ) {
-                Event::EventBus::instance().publish(
+                UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdSelectEntity{
-                        entt::null, !ImGui::GetIO().KeyCtrl }));
+                        entt::null,
+                        !UI::Interaction::modifier(
+                            UI::Interaction::Modifier::Control) }));
             }
         }
 
@@ -6213,38 +6304,44 @@ void Basic2DCanvasInteraction::handleInteractions(
     }
 
     const bool ctrlRightRemoveMarquee =
-        isHovered && ImGui::IsMouseClicked(1) && ImGui::GetIO().KeyCtrl;
+        isHovered && UI::Interaction::mouseClicked(1) &&
+        UI::Interaction::modifier(UI::Interaction::Modifier::Control);
     // Ctrl+右键移除框选具有全局优先级，不与 Draw 工具擦除同时触发。
 
     // Draw 工具下的普通右键是一段独立擦除事务。
     if ( currentSnapshot->currentTool == Logic::EditTool::Draw ) {
-        if ( !currentSnapshot->isPlaying && ImGui::IsMouseClicked(1) &&
+        if ( !currentSnapshot->isPlaying && UI::Interaction::mouseClicked(1) &&
              isHovered && !ctrlRightRemoveMarquee ) {
             // 新事务先清除去重基线，保证第一次拖动更新一定发送。
             m_lastEraseUpdateCommand.valid = false;
             m_rightEraseActive             = true;
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdStartErase{ m_cameraId, ImGui::GetIO().KeyShift }));
+            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
+                Logic::CmdStartErase{ m_cameraId,
+                                      UI::Interaction::modifier(
+                                          UI::Interaction::Modifier::Shift) }));
         }
         if ( m_rightEraseActive && !currentSnapshot->isPlaying &&
-             ImGui::IsMouseDragging(1) ) {
+             UI::Interaction::mouseDragging(1) ) {
             // 擦除拖动按坐标、快照和 Shift 状态去重，降低事件队列压力。
             if ( shouldSendContinuousEditCommand(
                      m_lastEraseUpdateCommand,
                      { localMousePos.x, localMousePos.y },
                      *currentSnapshot,
-                     ImGui::GetIO().KeyShift,
+                     UI::Interaction::modifier(
+                         UI::Interaction::Modifier::Shift),
                      false) ) {
-                Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                    Logic::CmdUpdateErase{ m_cameraId,
-                                           localMousePos.x,
-                                           localMousePos.y,
-                                           ImGui::GetIO().KeyShift }));
+                UI::Interaction::dispatchCommand(
+                    Event::LogicCommandEvent(Logic::CmdUpdateErase{
+                        m_cameraId,
+                        localMousePos.x,
+                        localMousePos.y,
+                        UI::Interaction::modifier(
+                            UI::Interaction::Modifier::Shift) }));
             }
         }
-        if ( m_rightEraseActive && ImGui::IsMouseReleased(1) ) {
+        if ( m_rightEraseActive && UI::Interaction::mouseReleased(1) ) {
             // 即使释放发生在画布外也结束事务并清理本地状态。
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdEndErase{ m_cameraId }));
             m_lastEraseUpdateCommand.valid = false;
             m_rightEraseActive             = false;
@@ -6254,17 +6351,21 @@ void Basic2DCanvasInteraction::handleInteractions(
     // --- Ctrl+右键：移除框选框（全局可用） ---
     if ( ctrlRightRemoveMarquee ) {
         // 命令携带当前局部坐标，由逻辑层查找命中的框选区域。
-        Event::EventBus::instance().publish(
+        UI::Interaction::dispatchCommand(
             Event::LogicCommandEvent(Logic::CmdRemoveMarqueeAt{
                 m_cameraId, localMousePos.x, localMousePos.y }));
     }
 
     // 滚轮最后处理：批注、修饰键属性工具和普通时间滚动按优先级消费。
-    const auto& io = ImGui::GetIO();
-    float       wheel =
-        annotationGutterInteraction.wheelConsumed ? 0.0F : io.MouseWheel;
-    const bool isModifierWheelHovered =
-        isInsideCanvas && (io.KeyCtrl || io.KeySuper || io.KeyAlt) &&
+    const auto& io    = ImGui::GetIO();
+    float       wheel = annotationGutterInteraction.wheelConsumed
+                            ? 0.0F
+                            : UI::Interaction::mouseWheel();
+    const bool  isModifierWheelHovered =
+        isInsideCanvas &&
+        (UI::Interaction::modifier(UI::Interaction::Modifier::Control) ||
+         UI::Interaction::modifier(UI::Interaction::Modifier::Super) ||
+         UI::Interaction::modifier(UI::Interaction::Modifier::Alt)) &&
         !ImGui::IsAnyMouseDown() &&
         ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     // 修饰键滚轮允许在被活动控件遮挡的画布上生效，但鼠标按键按下时
@@ -6272,22 +6373,28 @@ void Basic2DCanvasInteraction::handleInteractions(
     if ( (isHovered || isModifierWheelHovered) && std::abs(wheel) > 0.01f ) {
         if ( !handleModifierWheel(currentSnapshot) ) {
             // 未被属性调整消费的滚轮映射为时间滚动；Shift 改变滚动模式。
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                Logic::CmdScroll{ m_cameraId, -wheel, io.KeyShift }));
+            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
+                Logic::CmdScroll{ m_cameraId,
+                                  -wheel,
+                                  UI::Interaction::modifier(
+                                      UI::Interaction::Modifier::Shift) }));
 
             const bool canUpdateActiveBrush =
                 currentSnapshot->currentTool == Logic::EditTool::Draw &&
-                ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+                UI::Interaction::mouseDown(ImGuiMouseButton_Left) &&
                 (!currentSnapshot->isPlaying ||
                  currentSnapshot->brush.isActive);
             if ( canUpdateActiveBrush ) {
                 // 滚动改变指针对应时间，活动画笔即使鼠标未移动也需重算落点。
-                Event::EventBus::instance().publish(Event::LogicCommandEvent(
-                    Logic::CmdUpdateBrush{ m_cameraId,
-                                           localMousePos.x,
-                                           localMousePos.y,
-                                           io.KeyShift,
-                                           io.KeyCtrl }));
+                UI::Interaction::dispatchCommand(
+                    Event::LogicCommandEvent(Logic::CmdUpdateBrush{
+                        m_cameraId,
+                        localMousePos.x,
+                        localMousePos.y,
+                        UI::Interaction::modifier(
+                            UI::Interaction::Modifier::Shift),
+                        UI::Interaction::modifier(
+                            UI::Interaction::Modifier::Control) }));
             }
         }
     }
@@ -6636,6 +6743,8 @@ void Basic2DCanvasInteraction::updateReadOnlyHover(
     const Common::Render::RenderSnapshot* currentSnapshot, float targetWidth,
     float targetHeight)
 {
+    const UI::Interaction::SurfaceScope interactionScope(
+        UI::Interaction::Surface::MainCanvas);
     // 位置仍通过原有相机路由更新，逻辑线程据此计算精确分拍与吸附。
     // 沿用鼠标命令去重，静止指针不会重复刷新后台会话队列。
     updateHoverState(targetWidth, targetHeight);
@@ -6682,7 +6791,7 @@ void Basic2DCanvasInteraction::updateReadOnlyHover(
          m_lastHoveredObjectKind != candidate.kind ||
          m_lastHoveredPart != candidate.part ||
          m_lastHoveredSubIndex != candidate.subIndex ) {
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+        UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
             Logic::CmdSetHoveredEntity{ candidate.entity,
                                         candidate.part,
                                         candidate.subIndex,

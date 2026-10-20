@@ -4,6 +4,7 @@
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <filesystem>
 #include <imgui.h>
@@ -197,6 +198,12 @@ MainMenuRecentProjectsItem::MainMenuRecentProjectsItem(
     std::unique_ptr<IMainMenuItemActionHandler> actionHandler)
     : m_actionHandler(std::move(actionHandler))
 {
+    if ( m_actionHandler ) Interaction::registerAction(*m_actionHandler);
+}
+/// @brief 撤销最近项目动作借用，避免界面重建后保留悬空入口。
+MainMenuRecentProjectsItem::~MainMenuRecentProjectsItem()
+{
+    if ( m_actionHandler ) Interaction::unregisterAction(*m_actionHandler);
 }
 
 /// @brief 更新最近项目动作处理器跨帧状态。
@@ -245,10 +252,11 @@ void MainMenuRecentProjectsItem::render(MainMenuContext& context)
                                              displayPath.c_str()) &&
                  m_actionHandler ) {
                 // 激活载荷传递原始完整路径，绝不使用截断显示字符串。
-                m_actionHandler->execute(context,
-                                         MainMenuItemActivation{
-                                             .textPayload = path,
-                                         });
+                Interaction::dispatchAction(*m_actionHandler,
+                                            context,
+                                            MainMenuItemActivation{
+                                                .textPayload = path,
+                                            });
             }
             if ( ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal) ) {
                 // 延迟提示恢复未经截断的项目名和路径，便于精确确认目标。

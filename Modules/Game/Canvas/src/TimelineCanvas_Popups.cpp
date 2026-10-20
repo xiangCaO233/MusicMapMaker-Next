@@ -13,8 +13,11 @@
 #endif
 
 // 时间线弹窗修改设置字段，类型定义留在实际编辑设置的实现中。
-#include "canvas/AuxiliaryWindowUi.h"
 #include "canvas/TimelineCanvas.h"
+#include "ui/imgui/ShortcutUtils.h"
+#include "ui/interaction/EditorInteraction.h"
+
+#include "canvas/AuxiliaryWindowUi.h"
 #include "canvas/TimelineStopDuration.h"
 #include "canvas/TimelineTableSnapshotState.h"
 #include "canvas/TimelineTableWindowState.h"
@@ -2632,8 +2635,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 trimTimingTableAsciiWhitespace(m_tableSearchValueBuffer.data());
             hasSearchValueText = !searchValueText.empty();
             parsedSearchValue  = hasSearchValueText
-                                     ? parseTimingTableDouble(searchValueText)
-                                     : std::nullopt;
+                                                ? parseTimingTableDouble(searchValueText)
+                                                : std::nullopt;
             hasValidSearchValue =
                 parsedSearchValue && std::isfinite(*parsedSearchValue);
             const bool hasEffectSearchFilter =
@@ -3105,9 +3108,11 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                                elements[elementIndex]) ==
                                            m_tableSelectionAnchorEntity;
                                 });
-                            if ( io.KeyShift &&
+                            if ( UI::Interaction::modifier(
+                                     UI::Interaction::Modifier::Shift) &&
                                  anchor != visibleElementIndices.end() ) {
-                                if ( !io.KeyCtrl ) {
+                                if ( !UI::Interaction::modifier(
+                                         UI::Interaction::Modifier::Control) ) {
                                     m_selectedTimingEntities.clear();
                                 }
                                 const int anchorIndex =
@@ -3135,7 +3140,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                                      [static_cast<std::size_t>(
                                                          selectedIndex)]]));
                                 }
-                            } else if ( io.KeyCtrl ) {
+                            } else if ( UI::Interaction::modifier(
+                                            UI::Interaction::Modifier::
+                                                Control) ) {
                                 if ( rowSelected ) {
                                     m_selectedTimingEntities.erase(ent);
                                 } else {
@@ -3165,23 +3172,27 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         ImVec2(rowNumberCellMin.x + rowNumberCellWidth,
                                rowNumberItemMax.y));
                     if ( !editingDisabled && rowNumberHovered &&
-                         ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+                         UI::Interaction::mouseClicked(
+                             ImGuiMouseButton_Left) ) {
                         const ImGuiIO& io               = ImGui::GetIO();
                         m_isTableRowDragSelecting       = true;
                         m_tableRowDragAnchorEntity      = ent;
                         m_tableSelectionAnchorEntity    = ent;
                         m_hasTableRowDragSelectionMoved = false;
                         m_tableRowDragBaseSelection =
-                            io.KeyCtrl ? m_selectedTimingEntities
-                                       : std::unordered_set<entt::entity>{};
+                            UI::Interaction::modifier(
+                                UI::Interaction::Modifier::Control)
+                                ? m_selectedTimingEntities
+                                : std::unordered_set<entt::entity>{};
                     }
                     const float mouseY = ImGui::GetIO().MousePos.y;
                     const bool  rowDragTargetHovered =
                         mouseY >= rowNumberItemMin.y &&
                         mouseY < rowNumberItemMax.y;
                     if ( m_isTableRowDragSelecting && rowDragTargetHovered &&
-                         ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
-                         ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f) ) {
+                         UI::Interaction::mouseDown(ImGuiMouseButton_Left) &&
+                         UI::Interaction::mouseDragging(ImGuiMouseButton_Left,
+                                                        0.0f) ) {
                         const auto dragAnchor = std::find_if(
                             visibleElementIndices.begin(),
                             visibleElementIndices.end(),
@@ -3412,7 +3423,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 }
             }
             if ( m_isTableRowDragSelecting &&
-                 !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+                 !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
                 m_isTableRowDragSelecting       = false;
                 m_tableRowDragAnchorEntity      = entt::null;
                 m_hasTableRowDragSelectionMoved = false;
@@ -3449,7 +3460,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             ImGui::IsWindowHovered(
                 ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
             !ImGui::IsAnyItemHovered();
-        if ( ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        if ( UI::Interaction::mouseClicked(ImGuiMouseButton_Left) &&
              (mouseInsideTimingTableBlank || mouseInsideOutsideTableBlank) ) {
             m_selectedTimingEntities.clear();
             m_tableSelectionAnchorEntity = entt::null;
@@ -3460,11 +3471,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         const ImGuiIO& io = ImGui::GetIO();
         if ( !editingDisabled && tableShortcutFocused &&
              !ImGui::IsAnyItemActive() && !io.WantTextInput ) {
-            const bool ctrlOnly =
-                io.KeyCtrl && !io.KeyAlt && !io.KeyShift && !io.KeySuper;
-            const bool noModifier =
-                !io.KeyCtrl && !io.KeyAlt && !io.KeyShift && !io.KeySuper;
-            if ( ctrlOnly && ImGui::IsKeyPressed(ImGuiKey_A, false) ) {
+            if ( UI::ShortcutUtils::isActionShortcutPressed(
+                     "selectAll", false, 0) ) {
                 m_selectedTimingEntities.clear();
                 for ( std::size_t elementIndex : visibleElementIndices ) {
                     m_selectedTimingEntities.insert(
@@ -3475,18 +3483,23 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         ? entt::null
                         : getElementEntity(
                               elements[visibleElementIndices.front()]);
-            } else if ( ctrlOnly && ImGui::IsKeyPressed(ImGuiKey_C, false) ) {
+            } else if ( UI::ShortcutUtils::isActionShortcutPressed(
+                            "copy", false, 0) ) {
                 copyTableSelection(false);
-            } else if ( ctrlOnly && ImGui::IsKeyPressed(ImGuiKey_X, false) ) {
+            } else if ( UI::ShortcutUtils::isActionShortcutPressed(
+                            "cut", false, 0) ) {
                 copyTableSelection(true);
-            } else if ( ctrlOnly && ImGui::IsKeyPressed(ImGuiKey_V, false) ) {
+            } else if ( UI::ShortcutUtils::isActionShortcutPressed(
+                            "paste", false, 0) ) {
                 pasteTableSelection();
-            } else if ( noModifier &&
-                        (ImGui::IsKeyPressed(ImGuiKey_Delete, false) ||
-                         ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) ) {
+            } else if ( (UI::ShortcutUtils::isActionShortcutPressed(
+                             "deleteSelected", false, 0) ||
+                         UI::ShortcutUtils::isActionShortcutPressed(
+                             "deleteAlternative", false, 0)) ) {
                 deleteSelectedTimingEvents();
                 m_tableSelectionAnchorEntity = entt::null;
-            } else if ( ImGui::IsKeyPressed(ImGuiKey_Escape, false) ) {
+            } else if ( UI::ShortcutUtils::isActionShortcutPressed(
+                            "cancelInteraction", false) ) {
                 m_selectedTimingEntities.clear();
                 m_tableSelectionAnchorEntity = entt::null;
             }
@@ -3519,6 +3532,15 @@ void TimelineCanvas::renderTimingPointsTableWindow()
 /// - 实体身份只在快照中解析，失效实体沿用逻辑线程原有检查。
 /// - 本地提示不发送到其他联机用户，避免远端命令重复弹窗。
 /// - 命令中的元数据与插值内容原样传递，不能因能力检查被裁剪。
+/// @details 操作方案接管只位于本机 UI 出口，不拦截远端协作或逻辑线程维护命令。
+/// 原格式风险提示在本表面保留，不能把不支持格式的私有状态误说成已安全导出。
+/// 业务权限和撤销事务继续交给命令层，不由输入绑定判断可写性。
+/// 重映射若需要发布替代命令，应选择自己的语义目标，不能重新进入同一拦截递归。
+/// 命令负载与事件时间戳在同步发布期间有效，方案不能保留其内部引用。
+/// 新方案消费命令后不会再走默认总线出口，避免一次手势修改两遍。
+/// 默认方案不消费，沿用原有命令、联机传播与历史记录顺序。
+/// 连续拖动仍只提交现有控制器产生的必要状态，不为方案切换增加等待。
+/// 输入解释改变不等于外部保存完成，导出和持久化仍由既有服务确认。
 void TimelineCanvas::publishTimelineCommand(
     const Event::LogicCommandEvent& event)
 {
@@ -3622,7 +3644,7 @@ void TimelineCanvas::publishTimelineCommand(
         }
     }
     // 能力不足只产生提醒，始终保留命令、撤销和联机同步原有路径。
-    Event::EventBus::instance().publish(event);
+    UI::Interaction::dispatchCommand(event);
 }
 
 /// @brief 展示原格式保存风险，用户确认只关闭提示、不撤销编辑。
@@ -3652,8 +3674,8 @@ void TimelineCanvas::renderTimingFormatWarning()
         "时间线格式支持度提示###TimelineFormatWarning";
     // 输入仍激活或编辑弹窗未关时延后显示，避免打断连续输入和拖动。
     if ( m_timingFormatWarningPending && !ImGui::IsAnyItemActive() &&
-         !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
-         !ImGui::IsMouseDown(ImGuiMouseButton_Right) &&
+         !UI::Interaction::mouseDown(ImGuiMouseButton_Left) &&
+         !UI::Interaction::mouseDown(ImGuiMouseButton_Right) &&
          !ImGui::IsPopupOpen(
              nullptr,
              ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) ) {

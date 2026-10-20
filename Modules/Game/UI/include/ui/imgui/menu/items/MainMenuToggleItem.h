@@ -14,6 +14,9 @@ namespace MMM::UI
 class MainMenuToggleItem final : public IMainMenuItem
 {
 public:
+    /// @brief 撤销勾选动作的稳定身份登记。
+    ~MainMenuToggleItem() override;
+
     /// @brief 构造勾选主菜单项。
     /// @param label 菜单项文本或翻译键。
     /// @param textKind 菜单项文本来源。

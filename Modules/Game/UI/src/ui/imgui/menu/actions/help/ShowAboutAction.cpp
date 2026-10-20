@@ -1,4 +1,5 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
+
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "mmmversion.h"
@@ -6,6 +7,7 @@
 #include "ui/Icons.h"
 #include "ui/imgui/menu/actions/MainMenuHelpActions.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <string_view>
 
 #include <algorithm>
 #include <imgui.h>
@@ -47,6 +49,10 @@ std::string buildCompilerText()
 class ShowAboutAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override { return "ShowAboutAction"; }
+
     /// @brief 请求显示关于窗口。
     /// @param context 单帧主菜单上下文，本动作无需读取。
     /// @param activation 激活来源，不改变弹窗打开语义。

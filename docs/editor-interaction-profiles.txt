@@ -1,0 +1,100 @@
+编辑操作方案扩展
+
+本批基线
+  feat/editor-interaction-profiles 从 origin/main 的 4586d813 签出。
+  安卓接入仍保留在原 feat/android-sdl3 分支，本分支不夹带该分支的构建环境与 APK 修改。
+  操作方案属于整个应用，所有打开的谱面统一使用当前选择；不随工程工作区切换。
+  生产内置方案目前只有 classic-desktop，保留原有 PC 操作。
+  本批提供替换接口，不预先定义另一套 PC 操作或移动端手势。
+
+入口
+  Modules/Game/UI/include/ui/interaction/EditorInteraction.h
+  Modules/Game/UI/src/ui/interaction/EditorInteraction.cpp
+  Modules/Game/UI/src/ui/interaction/EditorInteractionActions.cpp
+  Modules/Config/include/config/EditorShortcutActions.h
+
+职责
+  平台与 ImGui 继续提供原始输入；操作方案解释逻辑按钮、修饰键、滚轮与主键。
+  标准文本框、数值控件和平台窗口仍由 ImGui 管理，不能反写原始 IO 来切换编辑方案。
+  方案可以修改单项映射，也可以接管主画布、Timeline、Preview 或相机操作空间。
+  音频工具和 BPM 工具使用各自输入域，避免把谱面擦除等语义带入独立工具。
+  菜单业务使用稳定动作身份，菜单、快捷键和新手势可以请求同一实现。
+  UI/Canvas 的逻辑命令统一经过 dispatchCommand，逻辑层继续维护事务、权限和撤销。
+  原有格式校验、文件覆盖确认、工程打开服务和音频管理不复制到操作方案中。
+  图形模块不依赖操作方案，方案也不拥有 Vulkan 资源或逻辑会话。
+
+方案接口
+  IEditorInteractionProfile::id/name
+    稳定选择身份和显示名称；注册对象的寿命覆盖整个应用。
+  shortcut(action, configured)
+    action 是快捷键目录中的稳定字段名，返回用户绑定或方案自己的稳定绑定引用。
+    不能返回临时对象的引用；未修改的动作应继续使用 configured。
+  pointerButton / modifier / wheel / key
+    按当前 Surface 解释输入；按钮按下原点、拖动和释放必须使用相同映射。
+    修改完整组合键应覆盖 shortcut，不能只把一个物理字母重映射给全部动作。
+  handleSurface(frame)
+    true 表示独占这次表面操作，不再执行经典状态机；false 明确沿用经典分支。
+    视图继续负责谱面纹理和标准窗口，新方案负责自己的交互预览或覆盖层。
+    frame 提供稳定相机身份、不可变快照、逻辑像素区域和当前 UIManager 观察指针。
+    主画布另提供同帧投影和动态顶点偏移，新拾取算法不能把屏幕点直接当谱面坐标。
+    frame、快照、投影和 UIManager 只能在当前调用内借用，不能跨帧保留地址。
+  handleAction(operationId, context, activation)
+    true 表示方案已接管请求，即使替代目标不可用也不能回退执行原动作。
+    false 表示执行原动作；业务能力在拦截前检查，不能绕过禁用状态。
+    activation 区分菜单、快捷键和方案入口，保留 BPM 焦点等原有路由语义。
+  handleCommand(event)
+    true 消费本机 UI 命令，false 继续原事件总线；事件引用不允许跨调用保留。
+    网络、逻辑更新和后台任务不经过 UI 方案，不能在这里等待会话锁。
+  activate / deactivate / hasActiveGesture
+    切入切出维护方案自己的本地状态；触控等非鼠标事务必须报告活跃状态。
+
+注册与选择
+  在初始化阶段调用 Interaction::registerProfile(std::make_unique<MyProfile>())。
+  新实现源文件必须在 UI/CMakeLists.txt 中显式登记，不使用递归 glob。
+  重复或空身份会被拒绝，注册不会替换活动对象；当前不提供运行期卸载入口。
+  设置 > 快捷键 > 编辑操作方案列出所有已注册方案。
+  设置保存字段为 interactionProfileId，缺失时选择 classic-desktop。
+  不认识的身份运行时回退经典方案，但不删除保存值，方便以后恢复该方案。
+  用户修改快捷键继续保存在 shortcutConfig；方案可在其基础上提供自己的解释。
+
+安全切换
+  UIManager 在帧起点读取应用选择，连续安全帧才执行真正切换。
+  物理按钮和命名键、文本输入、活动控件、弹窗、拖放和快捷键录制均参与门禁。
+  主画布、时间线、预览和相机控制器通过 IInteractionGuard 报告未结束事务。
+  新方案的独立手势由 hasActiveGesture 报告，不能只依靠物理鼠标已经松开。
+  等待切换期间旧方案继续正常更新，不 sleep、不加计时窗口，也不等待逻辑线程。
+  观察登记在控制器析构前精确移除，不借用已经关闭视图的对象。
+
+请求已有业务
+  Interaction::executeAction("CopyAction", frame.m_sourceManager)
+    从表面帧直接执行已有复制业务，使用主界面的真实反馈与权限上下文。
+    无主界面、动作未注册或动作不可用时返回 false，不模拟菜单点击或键盘事件。
+  Interaction::executeAction(id, context, activation)
+    用于 handleAction 内重映射到另一个业务动作，直接执行目标，不再进入自身拦截器。
+    目标不可用后，源请求是否已消费仍由 handleAction 的返回值明确决定。
+  Interaction::executeAction(id, frame.m_sourceManager, activation)
+    新方案可显式设置 activation.m_target 为 BpmMeasurementTool，播放与历史留在工具。
+    默认目标是谱面编辑器；来源字段为 activation.m_source。
+  Interaction::dispatchCommand(Event::LogicCommandEvent(Logic::CmdChangeTool{tool}))
+    复用现有命令协议；新方案不直接操作可变 SessionContext 或 ECS。
+  动作身份和快捷键身份不同：CopyAction 是业务入口，copy 是键位目录字段。
+  工具切换等没有独立菜单对象的操作继续通过原 LogicCommand 表达。
+
+快捷键目录
+  editorShortcutActions 是设置页、配置序列化和方案解析共用的唯一名单。
+  覆盖原有工具、编辑与状态切换，以及之前硬编码的文件操作、历史、选择、
+  菜单导航、重叠层导航、相机约束、取消、时间线备用删除与音频结果导航。
+  缺失字段保留原默认；原有绑定与批注旧键迁移继续生效。
+  默认硬编码入口曾允许的额外修饰键由目录显式记录；用户重绑后严格匹配。
+  时间点表格可收紧默认修饰键，避免全局宽松匹配抢占表格中的其他组合。
+  按住是否重复仍由调用方决定，配置绑定不把一次按下变成每帧新操作。
+  设置页录制读取物理按键，避免把方案已经转换的键再次写回配置。
+
+验证
+  EditorInteractionProfileTest 检查配置往返、旧配置回退、重复身份、生命周期、
+  真实 ImGui 按下/拖动/释放、按下原点、滚轮、嵌套表面、语义动作和命令出口。
+  EditorInteractionSurfaceTest 通过实际 Basic2DCanvasInteraction 验证独占输入、
+  投影上下文、未释放时的切换门禁及恢复经典控制器。
+  其他既有画布、Timeline、BPM、快捷键、配置与工具测试继续验证经典方案回归。
+  测试通过 mmm_add_test_executable/mmm_register_test_case 登记，配置和输出位于 build。
+  本批尚未提供或验证原生多指输入源，也没有移动端交互方案或设备验收结论。

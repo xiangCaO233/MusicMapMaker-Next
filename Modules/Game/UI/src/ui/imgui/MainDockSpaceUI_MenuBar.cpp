@@ -9,6 +9,7 @@
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <fmt/format.h>
@@ -204,9 +205,9 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
         ImGuiIO&    io       = ImGui::GetIO();
         float       logicUps = Logic::EditorEngine::instance().getLogicUps();
         std::string fpsStr   = TR_FMT("ui.menu.frame_stats_fmt",
-                                    1000.0f / io.Framerate,
-                                    io.Framerate,
-                                    logicUps);
+                                      1000.0f / io.Framerate,
+                                      io.Framerate,
+                                      logicUps);
         float       fpsWidth = ImGui::CalcTextSize(fpsStr.c_str()).x;
 
         // 右侧区域固定容纳最小化、最大化和关闭三个等宽按钮。
@@ -256,7 +257,7 @@ void MainDockSpaceUI::renderMenuBar(UIManager* sourceManager,
                     fmt::format("DragArea##{}", area.x).c_str(),
                     ImVec2(area.w, area.h));
                 if ( ImGui::IsItemHovered() &&
-                     ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) ) {
+                     Interaction::mouseDoubleClicked(ImGuiMouseButton_Left) ) {
                     // 最大化由原生事件统一处理，保持各平台窗口行为一致。
                     Event::EventBus::instance().publish(Event::GLFWNativeEvent{
                         .type = Event::NativeEventType::

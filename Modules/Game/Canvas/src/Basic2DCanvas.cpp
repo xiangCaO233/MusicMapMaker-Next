@@ -1,3 +1,5 @@
+#include "canvas/Basic2DCanvas.h"
+#include "ui/interaction/EditorInteraction.h"
 /// @file Basic2DCanvas.cpp
 /// @brief 实现主谱面画布窗口、会话生命周期和协作视野覆盖层。
 ///
@@ -24,7 +26,6 @@
 /// 失败手势则在结束命令上携带取消标记，由逻辑线程原子丢弃临时画笔。
 /// 这种分工避免 UI 直接创建 Note，也避免用普通 Undo 误伤更早的编辑历史。
 // 画布直接编辑相机与显示选项，由实现显式依赖完整配置。
-#include "canvas/Basic2DCanvas.h"
 #include "canvas/AnnotationTargetHint.h"
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "canvas/CameraLayoutEditor.h"
@@ -125,10 +126,10 @@ void reportBeatmapTabWalkthroughTarget(UI::UIManager* manager,
         const bool inCloseButton = window->HasCloseButton &&
                                    mouse.x >= closeLeft &&
                                    mouse.y >= minimum.y && mouse.y < maximum.y;
-        const bool clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-                             mouse.x >= minimum.x && mouse.x < maximum.x &&
-                             mouse.y >= minimum.y && mouse.y < maximum.y &&
-                             !inCloseButton;
+        const bool clicked =
+            UI::Interaction::mouseClicked(ImGuiMouseButton_Left) &&
+            mouse.x >= minimum.x && mouse.x < maximum.x &&
+            mouse.y >= minimum.y && mouse.y < maximum.y && !inCloseButton;
         if ( clicked )
             manager->walkthroughSpotlight().completeTarget(
                 "editor.beatmap-tab");
@@ -475,8 +476,8 @@ bool isMouseHoveringCurrentWindowContent()
 bool isWheelOverCurrentWindowContent()
 {
     const auto& io = ImGui::GetIO();
-    return std::abs(io.MouseWheel) > 0.01f && !ImGui::IsAnyMouseDown() &&
-           isMouseHoveringCurrentWindowContent();
+    return std::abs(UI::Interaction::mouseWheel()) > 0.01f &&
+           !ImGui::IsAnyMouseDown() && isMouseHoveringCurrentWindowContent();
 }
 
 /// @brief 判断当前主画布 ImGui 窗口本帧是否真实可见。
@@ -778,8 +779,8 @@ bool Basic2DCanvas::updateComposeLessonHints(
                                          : ImTextureID{};
     const TextureID   headTexture =
         uvMap.contains(static_cast<std::uint32_t>(TextureID::HoldHead))
-            ? TextureID::HoldHead
-            : TextureID::Note;
+              ? TextureID::HoldHead
+              : TextureID::Note;
     // 头部可选是皮肤协议的一部分，普通 Note 是旧皮肤的兼容回退。
     // 必须在求尺寸之前确定最终纹理，否则头部与真实物件宽高不同。
     // Hold、Flick 和 Polyline 均共享这个选择；Tap 始终使用 Note。
@@ -1474,7 +1475,7 @@ bool Basic2DCanvas::updateComposeLessonHints(
         // 删除命令的安全性不能只依赖 UI 快照：逻辑队列执行时还会复核
         // 实例、实体存活、根物件结构以及段落范围。
         if ( clicked )
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdRemoveComposeLessonNote{
                     .entity              = note.entity,
                     .beatmapInstanceId   = snapshot.beatmapInstanceId,
@@ -1755,7 +1756,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
                     targetId,
                     [command = Logic::CmdUndo{ .walkthroughToken = token,
                                                .cameraId = m_cameraId }] {
-                        Event::EventBus::instance().publish(
+                        UI::Interaction::dispatchCommand(
                             Event::LogicCommandEvent(command));
                     });
                 spotlight.completeTarget(targetId, true);
@@ -1771,7 +1772,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
         /// @note 按住鼠标但仍未松开时保留尝试状态，等待释放边沿。
         const auto cancelInvalidRelease = [&]() {
             if ( m_walkthroughPolylineAttemptActive &&
-                 ImGui::IsMouseReleased(ImGuiMouseButton_Left) ) {
+                 UI::Interaction::mouseReleased(ImGuiMouseButton_Left) ) {
                 if ( m_interaction ) m_interaction->cancelBrushOnNextRelease();
                 m_walkthroughPolylineAttemptActive = false;
                 m_walkthroughPolylineAttemptValid  = false;
@@ -2025,7 +2026,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
         // 有序门禁不统计帧数：用户停在任意节点不会自己推进下一检查点。
         // 检查点采用真实 Note 尺寸，不要求鼠标精确经过一条像素细线。
         const ImVec2 mouse = ImGui::GetMousePos();
-        if ( ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        if ( UI::Interaction::mouseClicked(ImGuiMouseButton_Left) &&
              walkthroughPointInRect(
                  mouse, canvasScreenPosition, canvasMaximum) ) {
             // 画布内任何起笔都成为一次尝试，错点起笔会在释放时取消。
@@ -2036,7 +2037,9 @@ void Basic2DCanvas::updateComposeWalkthrough(
                 walkthroughPointInRect(
                     mouse, waypointRects[0][0], waypointRects[0][1]) &&
                 snapshot.currentTool == Logic::EditTool::Draw &&
-                ImGui::GetIO().KeyShift && !ImGui::GetIO().KeyCtrl &&
+                UI::Interaction::modifier(UI::Interaction::Modifier::Shift) &&
+                !UI::Interaction::modifier(
+                    UI::Interaction::Modifier::Control) &&
                 Config::AppConfig::instance()
                     .getEditorSettings()
                     .enablePolylineEditing;
@@ -2049,13 +2052,15 @@ void Basic2DCanvas::updateComposeWalkthrough(
             // 修饰键中途变化会锁存失败，不因之后重新按回而恢复资格。
             // 拖动与路径命中分别核对，直接依次点击节点不能形成一次折线。
             // 每帧最多推进一个检查点，防止相邻框重叠时跨越顺序要求。
-            m_walkthroughPolylineAttemptValid &= ImGui::GetIO().KeyShift &&
-                                                 !ImGui::GetIO().KeyCtrl &&
-                                                 Config::AppConfig::instance()
-                                                     .getEditorSettings()
-                                                     .enablePolylineEditing;
+            m_walkthroughPolylineAttemptValid &=
+                UI::Interaction::modifier(UI::Interaction::Modifier::Shift) &&
+                !UI::Interaction::modifier(
+                    UI::Interaction::Modifier::Control) &&
+                Config::AppConfig::instance()
+                    .getEditorSettings()
+                    .enablePolylineEditing;
             m_walkthroughPolylineDragged |=
-                ImGui::IsMouseDragging(ImGuiMouseButton_Left, 1.0F);
+                UI::Interaction::mouseDragging(ImGuiMouseButton_Left, 1.0F);
             if ( m_walkthroughPolylineAttemptValid &&
                  m_walkthroughPolylineNextWaypoint < waypointRects.size() &&
                  walkthroughPointInRect(
@@ -2064,7 +2069,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
                      waypointRects[m_walkthroughPolylineNextWaypoint][1]) )
                 ++m_walkthroughPolylineNextWaypoint;
         }
-        if ( ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
+        if ( UI::Interaction::mouseReleased(ImGuiMouseButton_Left) &&
              m_walkthroughPolylineAttemptActive ) {
             // 松手必须仍在第七框内，之前经过它后又折返不能冒充正确终点。
             // UI 只负责路线顺序与输入状态；规范化后的真实子段另行验收。
@@ -2112,7 +2117,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
     /// @brief 目标几何失效时仍消费失败释放，避免临时画笔漏提交。
     const auto cancelUnresolvedRelease = [&]() {
         if ( m_walkthroughNoteAttemptActive &&
-             ImGui::IsMouseReleased(ImGuiMouseButton_Left) ) {
+             UI::Interaction::mouseReleased(ImGuiMouseButton_Left) ) {
             if ( m_interaction ) m_interaction->cancelBrushOnNextRelease();
             m_walkthroughNoteAttemptActive = false;
         }
@@ -2137,7 +2142,8 @@ void Basic2DCanvas::updateComposeWalkthrough(
                               .getEditorSettings()
                               .enablePolylineEditing ) {
         // 中途关闭设置也不得提交退化成普通 Note/Hold 的本次手势。
-        if ( ImGui::IsMouseReleased(ImGuiMouseButton_Left) && m_interaction )
+        if ( UI::Interaction::mouseReleased(ImGuiMouseButton_Left) &&
+             m_interaction )
             m_interaction->cancelBrushOnNextRelease();
         m_walkthroughNoteDragTarget.reset();
         m_walkthroughNoteAttemptActive = false;
@@ -2510,7 +2516,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
     const ImVec2 mouse = ImGui::GetMousePos();
     const ImVec2 canvasMaximum{ canvasScreenPosition.x + canvasSize.x,
                                 canvasScreenPosition.y + canvasSize.y };
-    if ( ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+    if ( UI::Interaction::mouseClicked(ImGuiMouseButton_Left) &&
          walkthroughPointInRect(mouse, canvasScreenPosition, canvasMaximum) ) {
         // 画布内任何按下都属于一次教学尝试；只有起点框内按下才可能成功。
         // 这样直接点击目标框也会在释放时取消，不留下绕过路径创建的 Note。
@@ -2520,20 +2526,22 @@ void Basic2DCanvas::updateComposeWalkthrough(
         m_walkthroughNoteDragged       = false;
         m_walkthroughNoteBrushObserved = false;
         m_walkthroughNoteModifierUsed =
-            (ImGui::GetIO().KeyShift != requiresShift) ||
-            ImGui::GetIO().KeyCtrl;
+            (UI::Interaction::modifier(UI::Interaction::Modifier::Shift) !=
+             requiresShift) ||
+            UI::Interaction::modifier(UI::Interaction::Modifier::Control);
     }
     if ( m_walkthroughNoteAttemptActive ) {
         // ImGui 拖动阈值证明这不是起点内的普通点击。逻辑快照确认画笔真正
         // 通过权限、轨道领域和资源绑定门禁，防止无对象提交也推进教程。
         m_walkthroughNoteDragged |=
-            ImGui::IsMouseDragging(ImGuiMouseButton_Left, 1.0F);
+            UI::Interaction::mouseDragging(ImGuiMouseButton_Left, 1.0F);
         m_walkthroughNoteBrushObserved |=
             snapshot.brush.isActive && !snapshot.brush.createsAudioSample &&
             snapshot.currentTool == Logic::EditTool::Draw;
         m_walkthroughNoteModifierUsed |=
-            (ImGui::GetIO().KeyShift != requiresShift) ||
-            ImGui::GetIO().KeyCtrl;
+            (UI::Interaction::modifier(UI::Interaction::Modifier::Shift) !=
+             requiresShift) ||
+            UI::Interaction::modifier(UI::Interaction::Modifier::Control);
         // 长条练习全程限定在选定轨道内，横移后返回也不能误当纯 Hold 成功。
         // 使用轨道边界而非 Note 纹理宽度，允许轨道内部的自然指针抖动。
         if ( placingHold ) {
@@ -2544,7 +2552,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
                 mouse.x >= laneLeft && mouse.x < laneLeft + laneWidth;
         }
     }
-    if ( ImGui::IsMouseReleased(ImGuiMouseButton_Left) &&
+    if ( UI::Interaction::mouseReleased(ImGuiMouseButton_Left) &&
          m_walkthroughNoteAttemptActive ) {
         // 松开位置只证明鼠标到达目标，不能替代逻辑线程已经生成的物件类型。
         // Flick 必须零时长、非零且方向正确的轨差，Hold 必须正时长。
@@ -2600,7 +2608,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
                 [command =
                      Logic::CmdUndo{ .walkthroughToken = spotlight.stepToken(),
                                      .cameraId         = m_cameraId }] {
-                    Event::EventBus::instance().publish(
+                    UI::Interaction::dispatchCommand(
                         Event::LogicCommandEvent(command));
                 });
             // 回退后的重新绘制是新手势，可以完成步骤，不受回看防跳步限制。
@@ -2630,8 +2638,14 @@ void Basic2DCanvas::updateComposeWalkthrough(
 /// @warning 热路径：主渲染线程每帧执行；背景纹理同步必须保持在路径变化分支内，
 /// 后台画布只同步悬停指针；滚轮发生时切换一次 Session 焦点，再交由活动画布
 /// 处理完整滚轮语义。
+/// @details 主画布整个调用栈共享输入表面，嵌套相机布局作用域退出后自动恢复。
+/// 本作用域只决定操作解释，不改变平台事件投递、离屏纹理或逻辑命令目标。
+/// 多画布各自保留当前投影与控制器，应用级方案选择不合并它们的手势状态。
+/// 输入方案只在 UI 线程生效，快照准备和 Vulkan 命令录制仍不读取可变方案。
 void Basic2DCanvas::update(UI::UIManager* sourceManager)
 {
+    const UI::Interaction::SurfaceScope interactionScope(
+        UI::Interaction::Surface::MainCanvas);
     auto& engine = Logic::EditorEngine::instance();
     // 布局状态只在进入/退出边沿创建和释放；退出恢复保存的实际相机投影。
     // 全局工具退出时所有画布都会释放各自的辅助编辑状态。
@@ -2736,7 +2750,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
     // 不等待逻辑线程生成下一份画面，也不能让旧 dirty 标志留在标签上。
     const bool titleHasBeatmap = !isLogoPlaceholder && m_currentSnapshot &&
                                  m_currentSnapshot->hasBeatmap;
-    const std::string title    = makeCanvasTabTitle(
+    const std::string title = makeCanvasTabTitle(
         TR("canvas.editor").data(),
         titleHasBeatmap,
         m_currentSnapshot ? m_currentSnapshot->beatmapName : std::string_view{},
@@ -2984,7 +2998,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
             }
             // 发布保存后记录关闭已确认；具体磁盘写入由逻辑命令处理，
             // UI 不在模态框中同步等待文件系统完成。
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdSaveBeatmap{}));
             m_closeConfirmed  = true;
             m_isOpen          = false;
@@ -3051,7 +3065,7 @@ void Basic2DCanvas::updateCollaborationViewports(
                  0.0,
                  false,
                  Network::Collaboration::playbackSteadySeconds()) )
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdSetPlayState{ false }));
         // 房间结束后清空跟随去重状态，下一次进入房间即使 peerId
         // 恰好复用也会从 sequence 零开始重新同步。
@@ -3063,9 +3077,9 @@ void Basic2DCanvas::updateCollaborationViewports(
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
     // 渲染模式是本地显示偏好，不写入 ParticipantViewport；不同用户
     // 可独立选择填充、轮廓或轨道边缘而不影响网络协议。
-    const auto  viewportRenderMode = Config::AppConfig::instance()
-                                         .getEditorSettings()
-                                         .collaborationViewportRenderMode;
+    const auto viewportRenderMode = Config::AppConfig::instance()
+                                        .getEditorSettings()
+                                        .collaborationViewportRenderMode;
     const auto& layout =
         visual.trackLayoutForKeyCount(m_currentSnapshot->trackCount);
     // 使用当前轨道数对应布局，使动态扩轨后的协作范围立即跟随
@@ -3183,7 +3197,7 @@ void Basic2DCanvas::updateCollaborationViewports(
             const Network::Collaboration::ParticipantViewport& viewport,
             bool                                               seek = true) {
             if ( seek )
-                Event::EventBus::instance().publish(Event::LogicCommandEvent(
+                UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
                     Logic::CmdSeek{ viewport.playbackTime }));
             const float desiredHorizontalOffset =
                 static_cast<float>(viewport.horizontalOffsetRatio *
@@ -3195,7 +3209,7 @@ void Basic2DCanvas::updateCollaborationViewports(
             // 亚像素抖动；非有限远端输入也不得进入逻辑命令。
             if ( std::isfinite(horizontalDelta) &&
                  std::abs(horizontalDelta) > 0.05F ) {
-                Event::EventBus::instance().publish(
+                UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdPanCanvas{
                         .cameraId       = m_cameraId,
                         .deltaX         = horizontalDelta,
@@ -3263,20 +3277,19 @@ void Basic2DCanvas::updateCollaborationViewports(
             if ( !action ) return;
             // 暂停先冻结传输再定位；播放先对齐倍率和位置再启动，保持边界顺序。
             if ( !action->playing )
-                Event::EventBus::instance().publish(
+                UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdSetPlayState{ false }));
             if ( action->seek ) {
                 if ( queuedPlaybackRate != action->rate ) {
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(
-                            Logic::CmdSetPlaybackSpeed{ action->rate }));
+                    UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
+                        Logic::CmdSetPlaybackSpeed{ action->rate }));
                     queuedPlaybackRate = action->rate;
                 }
-                Event::EventBus::instance().publish(
+                UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdSeek{ action->time }));
             }
             if ( action->playing )
-                Event::EventBus::instance().publish(
+                UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdSetPlayState{ true }));
         };
     while ( const auto transition = room->popFollowPlaybackTransition() ) {

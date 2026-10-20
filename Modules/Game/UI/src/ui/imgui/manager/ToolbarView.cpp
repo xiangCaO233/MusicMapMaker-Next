@@ -1,6 +1,7 @@
 #include "ui/imgui/manager/ToolbarView.h"
 #include "config/EditorSettings.h"
 #include "config/VisualConfig.h"
+#include "ui/interaction/EditorInteraction.h"
 
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
@@ -859,7 +860,7 @@ void ToolbarView::update(UIManager* sourceManager)
             const auto*  viewport = ImGui::GetMainViewport();
             const ImVec2 size(horizontal ? previous->Size.x : totalFixedW,
                               horizontal ? rowHeight : previous->Size.y);
-            ImVec2       position = previous->Pos;
+            ImVec2 position = previous->Pos;
             // 整个浮窗需留在可操作区域，不能仅保证标题栏的一小部分可见。
             // 极小视口仍从起始边定位，避免上下限倒置传给 clamp。
             for ( int axis = 0; axis < 2; ++axis )
@@ -983,10 +984,9 @@ void ToolbarView::update(UIManager* sourceManager)
         };
 
         /// @brief 检测一个配置快捷键并提交调用方定义的配置翻转。
-        auto applyConfigToggleShortcut =
-            [&](const Config::ShortcutBinding& binding,
-                auto                           applyChange) -> bool {
-            if ( !ShortcutUtils::isShortcutPressed(binding) ) {
+        auto applyConfigToggleShortcut = [&](std::string_view action,
+                                             auto applyChange) -> bool {
+            if ( !ShortcutUtils::isActionShortcutPressed(action) ) {
                 // 未触发时不复制配置。
                 return false;
             }
@@ -1013,68 +1013,64 @@ void ToolbarView::update(UIManager* sourceManager)
             // 固定优先级链保证重叠绑定每帧只执行第一项。
             bool handledShortcut = false;
             /// @brief 尝试尚未处理的下一项快捷键。
-            auto tryToggleShortcut = [&](const Config::ShortcutBinding& binding,
-                                         auto applyChange) {
+            auto tryToggleShortcut = [&](std::string_view action,
+                                         auto             applyChange) {
                 if ( handledShortcut ) {
                     // 前一项已消费后立即跳过余下候选。
                     return;
                 }
                 handledShortcut =
-                    applyConfigToggleShortcut(binding, applyChange);
+                    applyConfigToggleShortcut(action, applyChange);
             };
             // 反向滚动优先级最高，保证导航方向切换不会与吸附选项同时发生。
-            tryToggleShortcut(shortcutConfig.toggleReverseScroll,
+            tryToggleShortcut("toggleReverseScroll",
                               [](Config::EditorConfig& config) {
                                   config.settings.reverseScroll =
                                       !config.settings.reverseScroll;
                               });
             // 滚动吸附控制时间游标是否落在分拍网格。
-            tryToggleShortcut(shortcutConfig.toggleScrollSnap,
-                              [](Config::EditorConfig& config) {
-                                  config.settings.scrollSnap =
-                                      !config.settings.scrollSnap;
-                              });
+            tryToggleShortcut(
+                "toggleScrollSnap", [](Config::EditorConfig& config) {
+                    config.settings.scrollSnap = !config.settings.scrollSnap;
+                });
             // 向下取整吸附只在吸附算法内部改变舍入方向。
-            tryToggleShortcut(shortcutConfig.toggleSnapFloor,
-                              [](Config::EditorConfig& config) {
-                                  config.settings.snapFloor =
-                                      !config.settings.snapFloor;
-                              });
+            tryToggleShortcut(
+                "toggleSnapFloor", [](Config::EditorConfig& config) {
+                    config.settings.snapFloor = !config.settings.snapFloor;
+                });
             // 时序映射开关在视觉配置中保存线性映射的反向语义。
-            tryToggleShortcut(shortcutConfig.toggleScrollTimingMapping,
+            tryToggleShortcut("toggleScrollTimingMapping",
                               [](Config::EditorConfig& config) {
                                   config.visual.enableLinearScrollMapping =
                                       !config.visual.enableLinearScrollMapping;
                               });
             // 分拍线快捷键在隐藏态和最近可见模式之间切换。
-            tryToggleShortcut(shortcutConfig.toggleBeatLines,
+            tryToggleShortcut("toggleBeatLines",
                               [this](Config::EditorConfig& config) {
                                   config.visual.beatLineDisplayMode =
                                       m_beatLineDisplayModeHistory.toggleTarget(
                                           config.visual.beatLineDisplayMode);
                               });
             // 滚动停止播放是编辑交互偏好，不直接发播放命令。
-            tryToggleShortcut(shortcutConfig.toggleStopPlaybackOnScroll,
+            tryToggleShortcut("toggleStopPlaybackOnScroll",
                               [](Config::EditorConfig& config) {
                                   config.settings.stopPlaybackOnScroll =
                                       !config.settings.stopPlaybackOnScroll;
                               });
             // 击打音开关写入音效配置，由应用层同步到运行时。
-            tryToggleShortcut(shortcutConfig.toggleHitSfx,
-                              [](Config::EditorConfig& config) {
-                                  config.settings.sfxConfig.enableHitSfx =
-                                      !config.settings.sfxConfig.enableHitSfx;
-                              });
+            tryToggleShortcut("toggleHitSfx", [](Config::EditorConfig& config) {
+                config.settings.sfxConfig.enableHitSfx =
+                    !config.settings.sfxConfig.enableHitSfx;
+            });
             // 击打视觉特效独立于声音总开关。
-            tryToggleShortcut(shortcutConfig.toggleHitEffects,
+            tryToggleShortcut("toggleHitEffects",
                               [](Config::EditorConfig& config) {
                                   config.visual.enableHitEffects =
                                       !config.visual.enableHitEffects;
                               });
             // 运行时同步主音频不是 EditorConfig 字段，单独调用引擎接口。
-            if ( !handledShortcut &&
-                 ShortcutUtils::isShortcutPressed(
-                     shortcutConfig.toggleSyncSameMainAudio) ) {
+            if ( !handledShortcut && ShortcutUtils::isActionShortcutPressed(
+                                         "toggleSyncSameMainAudio") ) {
                 engine.setSyncSameMainAudioCanvases(
                     !engine.isSyncSameMainAudioCanvasesEnabled());
             }
@@ -1297,8 +1293,8 @@ void ToolbarView::update(UIManager* sourceManager)
                 const ImVec2 swatchMin  = {
                     minPos.x + (btnSize - swatchSize) * 0.5f,
                     minPos.y + (showToolLabels
-                                    ? std::floor(5.0f * dpiScale)
-                                    : (btnHeight - swatchSize) * 0.5f),
+                                     ? std::floor(5.0f * dpiScale)
+                                     : (btnHeight - swatchSize) * 0.5f),
                 };
                 const ImVec2 swatchMax = { swatchMin.x + swatchSize,
                                            swatchMin.y + swatchSize };
@@ -1629,7 +1625,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     // 滚轮调节是可选交互；关闭设置后悬浮仅显示说明。
                     if ( editorCfg.settings
                              .enableToolbarValueWheelAdjustment ) {
-                        const float wheel = ImGui::GetIO().MouseWheel;
+                        const float wheel = Interaction::mouseWheel();
                         if ( std::abs(wheel) > 0.1F ) {
                             // 先吸附到最近预设再沿滚轮方向移动一档，避免
                             // 外部设置的非预设倍速导致首次滚动方向不直观。
@@ -1721,7 +1717,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     // 滚轮每格调整一轨，范围与元数据编辑页保持一致。
                     if ( editorCfg.settings
                              .enableToolbarValueWheelAdjustment ) {
-                        const float wheel = ImGui::GetIO().MouseWheel;
+                        const float wheel = Interaction::mouseWheel();
                         if ( std::abs(wheel) > 0.1F ) {
                             const int newTracks = std::clamp(
                                 currentTracks + (wheel > 0.0F ? 1 : -1), 1, 32);
@@ -1784,11 +1780,12 @@ void ToolbarView::update(UIManager* sourceManager)
             if ( ImGui::IsItemHovered() ) {
                 if ( editorCfg.settings.enableToolbarValueWheelAdjustment ) {
                     const auto& io    = ImGui::GetIO();
-                    const float wheel = io.MouseWheel;
+                    const float wheel = Interaction::mouseWheel();
                     if ( std::abs(wheel) > 0.1F ) {
                         // Shift 使用用户配置的滚动倍率，普通滚轮只移动一格。
                         int step = wheel > 0.0F ? 1 : -1;
-                        if ( io.KeyShift ) {
+                        if ( Interaction::modifier(
+                                 Interaction::Modifier::Shift) ) {
                             step *= static_cast<int>(
                                 editorCfg.settings.scrollSpeedMultiplier);
                         }

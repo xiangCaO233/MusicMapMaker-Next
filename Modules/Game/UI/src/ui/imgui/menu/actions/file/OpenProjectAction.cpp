@@ -1,13 +1,16 @@
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/project/ProjectEvents.h"
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <concurrentqueue.h>
 #include <imgui.h>
 #include <string>
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -64,6 +67,16 @@ void ensureProjectOpenFailedSubscription()
 class OpenProjectAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "OpenProjectAction";
+    }
+    /// @brief 菜单提示与触发共用方案解析后的快捷键身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view shortcutActionId() const override { return "openProject"; }
+
     /// @brief 构造动作并订阅项目打开失败事件。
     /// @warning 构造应发生在 UI 初始化阶段，避免热路径修改事件订阅表。
     OpenProjectAction() { ensureProjectOpenFailedSubscription(); }
@@ -95,7 +108,10 @@ public:
     {
         (void)activation;
         // 明确来源便于后续项目打开流程生成一致的统计或反馈上下文。
-        MenuUtil::openProjectFolderPicker(Event::ProjectOpenOrigin::FileMenu);
+        MenuUtil::openProjectFolderPicker(
+            activation.m_source == MainMenuActivationSource::Shortcut
+                ? Event::ProjectOpenOrigin::Shortcut
+                : Event::ProjectOpenOrigin::FileMenu);
     }
 
     /// @brief 消费 Ctrl+O 快捷键。
@@ -105,11 +121,13 @@ public:
     /// @note 排除 Shift，避免与其他项目打开变体的组合键冲突。
     bool handleShortcut(MainMenuContext& context) override
     {
-        ImGuiIO& io = ImGui::GetIO();
         // 使用快捷键来源区分菜单点击，项目打开行为本身保持一致。
-        if ( io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_O) ) {
-            MenuUtil::openProjectFolderPicker(
-                Event::ProjectOpenOrigin::Shortcut);
+        if ( ShortcutUtils::isActionShortcutPressed("openProject", true) ) {
+            Interaction::dispatchAction(
+                *this,
+                context,
+                MainMenuItemActivation{
+                    .m_source = MainMenuActivationSource::Shortcut });
             return true;
         }
         return false;

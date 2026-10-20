@@ -2,6 +2,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -13,6 +14,13 @@ namespace
 class OpenBeatmapSettingsAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "OpenBeatmapSettingsAction";
+    }
+
     /// @brief 打开设置窗口的谱面页。
     /// @param context 提供可选 UIManager 的单帧上下文。
     /// @param activation 激活来源，不改变目标设置页。

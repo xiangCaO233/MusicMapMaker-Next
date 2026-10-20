@@ -1,3 +1,5 @@
+#include "canvas/PreviewCanvas.h"
+#include "ui/interaction/EditorInteraction.h"
 /// @file PreviewCanvas.cpp
 /// @brief 实现谱面预览窗口、全谱密度导航及对应 Vulkan 命令录制。
 ///
@@ -14,7 +16,7 @@
 /// 协作者标记只读取房间的稳定视野缓存，跳过本地参与者，
 /// 其绘制不会改变预览快照或协作同步状态。
 // 预览绘制使用视觉字段，完整视觉配置由该实现直接包含。
-#include "canvas/PreviewCanvas.h"
+#include "canvas/CanvasModalInput.h"
 #include "canvas/CollaborationPeerColor.h"
 #include "canvas/PreviewDensityColor.h"
 #include "canvas/PreviewDensityInteraction.h"
@@ -149,6 +151,7 @@ PreviewCanvas::PreviewCanvas(
     , m_canvasName(name)
     , m_syncBuffer(std::move(syncBuffer))
 {
+    UI::Interaction::registerInteractionGuard(*this);
     // RenderContext 首帧以目标尺寸建立离屏附件；实际窗口尺寸变化
     // 会继续经 resizeCall 通知逻辑相机更新投影。
     m_targetWidth  = w;
@@ -241,9 +244,9 @@ void PreviewCanvas::drawDensityOverview(const ImVec2& canvasPos,
     }
     const auto  currentDensityColor = previewDensityColorAt(currentNormalized);
     ImVec4      activeBackground{ currentDensityColor.r,
-                                  currentDensityColor.g,
-                                  currentDensityColor.b,
-                                  0.20f };
+                             currentDensityColor.g,
+                             currentDensityColor.b,
+                             0.20f };
     const ImU32 activeBackgroundColor = ImGui::GetColorU32(activeBackground);
 
     // 每个屏幕像素行至多生成一个密度矩形，限制窄而高的预览窗口
@@ -274,7 +277,7 @@ void PreviewCanvas::drawDensityOverview(const ImVec2& canvasPos,
         const float rowY1 = layout.innerMin.y +
                             innerHeight * static_cast<float>(visualRow + 1) /
                                 static_cast<float>(displayRowCount);
-        const bool  isCurrent = currentBin >= binBegin && currentBin < binEnd;
+        const bool isCurrent = currentBin >= binBegin && currentBin < binEnd;
         // 当前行背景即使 rowCount 为零也要保留，保证播放游标在
         // 空白小节仍能通过整行底色快速定位。
         if ( isCurrent ) {
@@ -404,7 +407,7 @@ void PreviewCanvas::commitDensitySeekScrub()
     }
     // 使用最近一次已经发送给逻辑线程的命令时间，而不是重新读取
     // 鼠标或视觉偏移，确保一次拖动的预览和提交处于同一时间域。
-    Event::EventBus::instance().publish(Event::LogicCommandEvent(Logic::CmdSeek{
+    UI::Interaction::dispatchCommand(Event::LogicCommandEvent(Logic::CmdSeek{
         .time        = m_lastDensitySeekCommandTime,
         .isScrubbing = false,
     }));
@@ -490,11 +493,11 @@ std::optional<double> PreviewCanvas::handleDensitySeekInteraction(
     const double visualOffset = Config::AppConfig::instance()
                                     .getVisualConfig()
                                     .getEffectiveVisualOffset();
-    const double commandTime  = *targetTime - visualOffset;
+    const double commandTime = *targetTime - visualOffset;
     if ( dispatch == PreviewDensitySeekDispatch::Preview ) {
         // 预览命令允许音频和协作层采用轻量拖动策略；同时缓存视觉
         // 与命令时间，分别服务抖动判断、提示绘制和最终提交。
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+        UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
             Logic::CmdSeek{ .time = commandTime, .isScrubbing = true }));
         m_lastDensitySeekTime        = *targetTime;
         m_lastDensitySeekCommandTime = commandTime;
@@ -536,8 +539,19 @@ std::optional<double> PreviewCanvas::handleDensitySeekInteraction(
 /// 只有任一字段发生可感知变化时才跨线程发布。
 /// @warning
 /// 热路径：主渲染线程每帧执行；只发送变化后的鼠标命令，避免每帧重复事件。
+/// @details 预览拥有独立输入域，主谱面的擦除或平移映射不能无条件复用。
+/// 接管判断位于经典跳转与滚轮缩放之前，避免同帧发布两个 Seek。
+/// 新方案负责自己的交互覆盖层，原视图仍负责离屏谱面与资源绘制。
+/// 逻辑按钮的按下起点随映射查询，不能用原物理左键判断是否从预览外拖入。
+/// 屏幕坐标只用于窗口归属，时间跳转仍要使用快照和既有视觉偏移约定。
+/// 指针查询不改写 ImGuiIO，标准控件保持原来的物理输入语义。
+/// 未接管时继续密度栏与内容区的独立命中规则，不改变原有提交时序。
 void PreviewCanvas::update(UI::UIManager* sourceManager)
 {
+    // 预览域的输入映射不修改共享 ImGui IO，其他窗口仍读取物理状态。
+    // 完整表面接管与经典密度图拖拽互斥，防止同次按下产生两次跳转。
+    const UI::Interaction::SurfaceScope interactionScope(
+        UI::Interaction::Surface::Preview);
     auto& appConfig      = Config::AppConfig::instance();
     auto& editorSettings = appConfig.getEditorSettings();
     // 菜单隐藏窗口时本帧不会创建密度栏控件，必须显式结束可能仍被
@@ -553,6 +567,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
         fmt::format("{}###PreviewWindow", TR("canvas.preview"));
     bool windowOpen = editorSettings.showPreviewWindow;
 
+    // 布局从当前视图借用上下文，避免实现依赖已收窄的内部布局成员。
     UI::LayoutContext lctx(*this, windowName, true, 0, &windowOpen);
     if ( !windowOpen ) {
         // 标题栏关闭与菜单隐藏走同一持久化状态；先结束拖动，
@@ -575,6 +590,22 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
                        requestedDensityReserve,
                        PREVIEW_MIN_CANVAS_WIDTH * dpiScale);
 
+    const auto interactionOrigin = ImGui::GetCursorScreenPos();
+    const auto interactionSize   = rctx.getRenderSize();
+    const UI::Interaction::SurfaceFrame frame{
+        UI::Interaction::Surface::Preview,
+        m_cameraId,
+        m_currentSnapshot,
+        interactionOrigin.x,
+        interactionOrigin.y,
+        interactionSize.x,
+        interactionSize.y,
+        ImGui::IsWindowHovered() && !isCanvasInputBlockedByModal(),
+        ImGui::IsWindowFocused()
+    };
+    // RenderContext 已绘制谱面；新方案负责自己的预览导航与交互覆盖层。
+    if ( UI::Interaction::dispatchSurface(frame) ) return;
+
     // 平台后端可能在窗口切换期间报告无效鼠标坐标；这时沿用最后一次
     // 有效位置，只把 hover/drag 状态变化发送给逻辑线程。
     ImVec2     mousePos         = ImGui::GetMousePos();
@@ -583,7 +614,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     const bool hasValidMousePos = ImGui::IsMousePosValid(&mousePos) &&
                                   std::isfinite(mousePos.x) &&
                                   std::isfinite(mousePos.y);
-    ImVec2     localMousePos{ 0.0f, 0.0f };
+    ImVec2 localMousePos{ 0.0f, 0.0f };
     if ( hasValidMousePos ) {
         // 逻辑相机使用以预览内容区左上角为原点的局部坐标，
         // 不能包含窗口标题、边框或右侧密度栏偏移。
@@ -603,7 +634,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     // 内容矩形相交，才能向预览相机报告悬浮。
     bool isHovered = ImGui::IsWindowHovered() && isHoveringContent;
 
-    ImVec2 clickPos = ImGui::GetIO().MouseClickedPos[0];
+    ImVec2 clickPos = UI::Interaction::mouseClickedPosition(0);
     // 起点单独记录而不是只看当前鼠标位置，阻止从外部窗口拖入后
     // 在预览区释放时误触发跳转。
     bool clickStartedInContent =
@@ -613,7 +644,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
 
     // 拖动还要求当前窗口持有焦点，避免停靠区域中的其它控件抢占
     // 鼠标后仍向逻辑相机发送预览拖动状态。
-    bool isDragging = hasValidMousePos && ImGui::IsMouseDragging(0) &&
+    bool isDragging = hasValidMousePos && UI::Interaction::mouseDragging(0) &&
                       clickStartedInContent && ImGui::IsWindowFocused();
 
     const auto densitySeekPreview = handleDensitySeekInteraction(
@@ -647,7 +678,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     if ( shouldSendMouse ) {
         // CmdSetMousePosition 按 cameraId 路由到预览相机，逻辑线程
         // 可独立更新 hover 时间而不读取 ImGui 或窗口对象。
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+        UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
             Logic::CmdSetMousePosition{ .cameraId       = m_cameraId,
                                         .mouseX         = localMousePos.x,
                                         .mouseY         = localMousePos.y,
@@ -678,26 +709,28 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     if ( m_currentSnapshot && isHovered ) {
         // 仅在鼠标松开、按下起点位于内容区且窗口仍有焦点时提交。
         // 这同时覆盖普通点击与在预览内开始的拖动，并拒绝外部拖入。
-        if ( ImGui::IsMouseReleased(0) && clickStartedInContent &&
+        if ( UI::Interaction::mouseReleased(0) && clickStartedInContent &&
              ImGui::IsWindowFocused() ) {
             // hoveredTime 属于视觉时间；与密度栏一样，发布 CmdSeek 前
             // 扣除有效视觉偏移，维持两种导航入口的时间语义一致。
             float visualOffset = Config::AppConfig::instance()
                                      .getVisualConfig()
                                      .getEffectiveVisualOffset();
-            Event::EventBus::instance().publish(
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdSeek{
                     m_currentSnapshot->hoveredTime - visualOffset }));
         }
 
         // Ctrl/Super/Alt 保留给应用快捷键，只有无这些修饰键的滚轮
         // 才调整预览倍率；Shift 将每格步长加倍以便快速浏览全谱。
-        float wheel = ImGui::GetIO().MouseWheel;
-        if ( std::abs(wheel) > 0.01f && !ImGui::GetIO().KeyCtrl &&
-             !ImGui::GetIO().KeySuper && !ImGui::GetIO().KeyAlt ) {
+        float wheel = UI::Interaction::mouseWheel();
+        if ( std::abs(wheel) > 0.01f &&
+             !UI::Interaction::modifier(UI::Interaction::Modifier::Control) &&
+             !UI::Interaction::modifier(UI::Interaction::Modifier::Super) &&
+             !UI::Interaction::modifier(UI::Interaction::Modifier::Alt) ) {
             auto  editorCfg = Logic::EditorEngine::instance().getEditorConfig();
             float step      = 0.5f;
-            if ( ImGui::GetIO().KeyShift ) {
+            if ( UI::Interaction::modifier(UI::Interaction::Modifier::Shift) ) {
                 step *= 2.0f;
             }
 
@@ -1176,4 +1209,13 @@ bool PreviewCanvas::hasOverlayDrawCmds() const
     return m_currentSnapshot && !m_currentSnapshot->overlayCmds.empty();
 }
 
+}  // namespace MMM::Canvas
+
+namespace MMM::Canvas
+{
+/// @brief 先撤销输入事务观察登记，随后按原有顺序释放预览资源。
+PreviewCanvas::~PreviewCanvas()
+{
+    UI::Interaction::unregisterInteractionGuard(*this);
+}
 }  // namespace MMM::Canvas

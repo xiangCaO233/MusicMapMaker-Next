@@ -1,7 +1,10 @@
 #include "ui/imgui/manager/ProjectAudioToolView.h"
 #include "common/LogicCommands.h"
 #include "config/EditorSettings.h"
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/layout/LayoutContext.h"
+// 音频结果导航属于独立输入域，不改变文本输入框自身的编辑行为。
+#include "ui/interaction/EditorInteraction.h"
 
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
@@ -719,8 +722,8 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
                                          : 1.0F;
             }
             // 零值表示使用自动尺寸；非有限或负值也按未自定义处理。
-            const bool hasSavedWidth  = std::isfinite(saved->second.m_width) &&
-                                        saved->second.m_width > 0.0F;
+            const bool hasSavedWidth = std::isfinite(saved->second.m_width) &&
+                                       saved->second.m_width > 0.0F;
             const bool hasSavedHeight = std::isfinite(saved->second.m_height) &&
                                         saved->second.m_height > 0.0F;
             // 自定义标志决定后续保存时是否写回真实尺寸或零占位。
@@ -924,11 +927,11 @@ void ProjectAudioToolView::refreshInteractionLabelRects()
     const auto activeItem = m_draggingItem ? m_draggingItem : m_resizingItem;
     for ( std::size_t index = 0; index < m_items.size(); ++index ) {
         // 移动项自身标签使用完整当前矩形，固定项从缓存基础区开始。
-        const bool movingItem = m_batchDragging
-                                    ? m_items[index].batchSelected
-                                    : activeItem && *activeItem == index;
-        auto visibleRect      = movingItem ? m_items[index].rect
-                                           : m_interactionBaseLabelRects[index];
+        const bool movingItem  = m_batchDragging
+                                     ? m_items[index].batchSelected
+                                     : activeItem && *activeItem == index;
+        auto       visibleRect = movingItem ? m_items[index].rect
+                                            : m_interactionBaseLabelRects[index];
 
         if ( m_batchDragging ) {
             // 只有层级高于当前固定项的移动方块才会遮挡其标签。
@@ -1880,8 +1883,16 @@ ImVec2 ProjectAudioToolView::calculateContentSize(float visibleWidth,
 /// 原生滚动条继续由 ImGui 处理，与滚轮共享同一内容坐标和边界。
 /// @note 内容范围使用逻辑方块边界；滚动条和鼠标输入使用屏幕像素。
 /// @note Shift 轴交换遵循平台约定，macOS 保留系统提供的滚轮方向。
+/// @details 音频工具使用独立输入表面，不能继承主谱面中鼠标按钮的特殊语义。
+/// 平台快照保持原样，标准文本和数值控件仍使用 ImGui 的物理输入。
+/// 工具派生的编辑命令走统一出口，资源解码和事务管理继续由原服务负责。
+/// 作用域只在当前更新调用栈存在，提前关闭窗口也不会污染下一个视图。
 void ProjectAudioToolView::update(UIManager* sourceManager)
 {
+    // 该工具的表面映射仅在当前更新作用域内生效，退出后恢复外层输入路由。
+    const Interaction::SurfaceScope interactionScope(
+        Interaction::Surface::AudioTool);
+
     // 外部插件直接构造视图也不能绕过专业门禁，不提交 Begin 或焦点请求。
     if ( !Config::AppConfig::instance().getEditorSettings().professionalMode ) {
         disableProfessionalEditing();
@@ -1998,12 +2009,13 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     // 移动标记用于稍后把高亮行滚动到结果面板中央。
     bool searchHighlightMoved = false;
     if ( searchInputActive && !m_searchResults.empty() ) {
-        if ( ImGui::IsKeyPressed(ImGuiKey_DownArrow) ) {
+        if ( ShortcutUtils::isActionShortcutPressed("audioResultNext", true) ) {
             // 下移在末项后循环回首项，结果非空保证取模合法。
             m_searchHighlightedIndex =
                 (m_searchHighlightedIndex + 1) % m_searchResults.size();
             searchHighlightMoved = true;
-        } else if ( ImGui::IsKeyPressed(ImGuiKey_UpArrow) ) {
+        } else if ( ShortcutUtils::isActionShortcutPressed(
+                        "audioResultPrevious", true) ) {
             // 加上 size 后再减一，避免无符号索引向下溢出。
             m_searchHighlightedIndex =
                 (m_searchHighlightedIndex + m_searchResults.size() - 1) %
@@ -2216,15 +2228,16 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                                ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     const auto& io = ImGui::GetIO();
     // Ctrl+滚轮缩放只在没有其他画布手势时生效。
-    const bool cameraZoomAllowed = canvasHovered && io.KeyCtrl &&
-                                   std::abs(io.MouseWheel) > 0.01F &&
-                                   !m_draggingItem && !m_resizingItem &&
-                                   !m_batchDragging && !m_marqueeSelecting;
+    const bool cameraZoomAllowed =
+        canvasHovered &&
+        Interaction::modifier(Interaction::Modifier::Control) &&
+        std::abs(Interaction::mouseWheel()) > 0.01F && !m_draggingItem &&
+        !m_resizingItem && !m_batchDragging && !m_marqueeSelecting;
     if ( cameraZoomAllowed ) {
         // 缩放 helper 同时修正滚动，使指针下逻辑位置保持在原屏幕位置。
         const auto zoomResult = ProjectAudioToolLayout::zoomCameraAtPointer(
             m_canvasZoom,
-            io.MouseWheel,
+            Interaction::mouseWheel(),
             dpiScale,
             scroll.x,
             scroll.y,
@@ -2266,13 +2279,18 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     };
     // 普通滚轮直接移动本画布，不能依赖停靠宿主是否具有可滚动内容。
     // Ctrl 保留指针锚定缩放，Shift 将纵向滚轮转为横向平移。
-    if ( canvasHovered && !io.KeyCtrl &&
-         (io.MouseWheel != 0.0F || io.MouseWheelH != 0.0F) ) {
+    if ( canvasHovered &&
+         !Interaction::modifier(Interaction::Modifier::Control) &&
+         (Interaction::mouseWheel() != 0.0F ||
+          Interaction::mouseWheel(true) != 0.0F) ) {
         // 纵向到达边界也不自动换轴，用户只有按 Shift 才请求横向滚动。
-        const bool  horizontalWheel = io.KeyShift && !io.ConfigMacOSXBehaviors;
+        const bool horizontalWheel =
+            Interaction::modifier(Interaction::Modifier::Shift) &&
+            !io.ConfigMacOSXBehaviors;
         const float wheelX =
-            io.MouseWheelH + (horizontalWheel ? io.MouseWheel : 0.0F);
-        const float wheelY = horizontalWheel ? 0.0F : io.MouseWheel;
+            Interaction::mouseWheel(true) +
+            (horizontalWheel ? Interaction::mouseWheel() : 0.0F);
+        const float wheelY = horizontalWheel ? 0.0F : Interaction::mouseWheel();
         // 步长随字体和视口变化，小停靠面板每次最多移动约三分之二视口。
         const float fontStep = ImGui::GetFontSize() * 5.0F;
         scroll.x             = std::clamp(
@@ -2421,7 +2439,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                  hoveredItem == index,
                  (m_draggingItem == index || m_resizingItem == index ||
                   (m_batchDragging && item.batchSelected)) &&
-                     ImGui::IsMouseDown(ImGuiMouseButton_Left),
+                     Interaction::mouseDown(ImGuiMouseButton_Left),
                  showVolume,
                  *drawList);
     }
@@ -2501,7 +2519,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     // 空闲状态下右键最高层方块请求重命名，试听控件区域不响应。
     if ( hoveredItem && !audioControlsHovered && !m_draggingItem &&
          !m_resizingItem && !m_batchDragging && !m_marqueeSelecting &&
-         ImGui::IsMouseClicked(ImGuiMouseButton_Right) ) {
+         Interaction::mouseClicked(ImGuiMouseButton_Right) ) {
         requestItemRename(*hoveredItem);
     }
     // 当前缩放中保持原控制柄；空闲时才重新执行边缘命中。
@@ -2570,7 +2588,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     // 空闲画布左键根据命中对象依次进入批量拖动、缩放、单项拖动或框选。
     if ( canvasHovered && !audioControlsHovered && !m_draggingItem &&
          !m_resizingItem && !m_batchDragging && !m_marqueeSelecting &&
-         ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+         Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
         if ( hoveredItem ) {
             // 已批量选择方块优先启动整体拖动，不再显示单项缩放语义。
             if ( m_items[*hoveredItem].batchSelected ) {
@@ -2593,7 +2611,8 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             }
             // Ctrl 或 Shift 保留交互开始前的批量选择，其余情况从空集合开始。
             const bool additiveSelection =
-                ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeyShift;
+                Interaction::modifier(Interaction::Modifier::Control) ||
+                Interaction::modifier(Interaction::Modifier::Shift);
             // 框选起止点初始化为同一逻辑坐标，首帧尚未形成有效矩形。
             m_marqueeSelecting = true;
             m_marqueeStart     = mouseLogical;
@@ -2617,7 +2636,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         // 按下期间每帧更新终点并以基础快照重新计算结果。
         m_marqueeEnd = mouseLogical;
         refreshMarqueeSelection();
-        if ( !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        if ( !Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             // 松开结束框选并释放仅供该手势使用的基础选择缓存。
             m_marqueeSelecting = false;
             m_marqueeBaseSelection.clear();
@@ -2636,7 +2655,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         // 一旦超过阈值，本手势余下阶段始终视为拖动而非单击。
         m_itemDragMoved = m_itemDragMoved || deltaX * deltaX + deltaY * deltaY >
                                                  dragThreshold * dragThreshold;
-        if ( ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        if ( Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             if ( m_itemDragMoved ) {
                 // 原始候选位置保持指针在方块内的初始相对偏移。
                 ProjectAudioToolLayout::Rect rawRect{
@@ -2694,7 +2713,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
 
     // 批量拖动使用总体包围盒求位移，再把同一位移应用到每个初始矩形。
     if ( m_batchDragging && !m_batchDragEntries.empty() ) {
-        if ( ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        if ( Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             // 指针偏移固定到初始总体包围盒，保持批次整体不跳动。
             ProjectAudioToolLayout::Rect rawBounds{
                 mouseLogical.x - m_batchDragOffset.x,
@@ -2766,7 +2785,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     // 单项缩放根据固定初始矩形和当前指针计算候选矩形。
     if ( m_resizingItem && *m_resizingItem < m_items.size() ) {
         auto& item = m_items[*m_resizingItem];
-        if ( ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        if ( Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             // 控制柄先分解为水平和垂直活动边，角柄会同时设置两轴。
             using ProjectAudioToolLayout::ResizeEdge;
             ResizeEdge horizontalEdge = ResizeEdge::None;

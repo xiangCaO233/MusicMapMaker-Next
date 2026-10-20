@@ -1,4 +1,5 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
+
 #include "MetadataEditorWindowRenderers.h"
 #include "common/LogicCommands.h"
 #include "common/render/RenderSnapshot.h"
@@ -16,6 +17,7 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/note/Note.h"
 #include "mmm/project/Project.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <fmt/core.h>
@@ -252,7 +254,7 @@ void renderCollaborationOfflineReadOnlyNotice(Logic::BeatmapSession& session)
     ImGui::TextWrapped("%s",
                        TR("ui.collaboration.offline_edit.message").data());
     if ( ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup) &&
-         ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+         Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
         // 复用逻辑层权限检查，不在 UI 中复制协作提示策略。
         session.pushCommand(
             Logic::LogicCommand(Logic::CmdMarkBeatmapMetadataDirty{}));
@@ -1813,7 +1815,7 @@ void renderMetadataEditorWindow(bool& showWindow)
                                     // 双击键名复制，方便用户在外部资料中查找。
                                     ImGui::SetTooltip(
                                         "双击可以复制该内置键名到剪贴板。");
-                                    if ( ImGui::IsMouseDoubleClicked(0) ) {
+                                    if ( Interaction::mouseDoubleClicked(0) ) {
                                         // 剪贴板写入只发生在明确双击交互。
                                         ImGui::SetClipboardText(key.c_str());
                                     }
@@ -2151,7 +2153,7 @@ void renderMetadataEditorWindow(bool& showWindow)
                                     // 双击复制内置键名，方便查阅格式资料。
                                     ImGui::SetTooltip(
                                         "双击可以复制该内置键名到剪贴板。");
-                                    if ( ImGui::IsMouseDoubleClicked(0) ) {
+                                    if ( Interaction::mouseDoubleClicked(0) ) {
                                         // 剪贴板写入只发生于明确双击。
                                         ImGui::SetClipboardText(key.c_str());
                                     }
@@ -2458,7 +2460,7 @@ void renderMetadataEditorWindow(bool& showWindow)
                                     // 双击复制格式字段名，方便外部核对。
                                     ImGui::SetTooltip(
                                         "双击可以复制该内置键名到剪贴板。");
-                                    if ( ImGui::IsMouseDoubleClicked(0) ) {
+                                    if ( Interaction::mouseDoubleClicked(0) ) {
                                         ImGui::SetClipboardText(key.c_str());
                                     }
                                 }

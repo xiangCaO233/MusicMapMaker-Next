@@ -1,5 +1,8 @@
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
+#include "ui/interaction/EditorInteraction.h"
+#include <string_view>
 
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/NewProjectWizard.h"
@@ -15,6 +18,16 @@ namespace
 class OpenNewProjectWizardAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "OpenNewProjectWizardAction";
+    }
+    /// @brief 菜单提示与触发共用方案解析后的快捷键身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view shortcutActionId() const override { return "newProject"; }
+
     /// @brief 标记下一次延迟渲染打开新建项目向导。
     /// @param context 统一菜单上下文。
     /// @param activation 激活来源，不改变延迟语义。
@@ -34,8 +47,7 @@ public:
     {
         // Ctrl+Shift+N 与新建谱面的 Ctrl+N 明确区分。
         (void)context;
-        ImGuiIO& io = ImGui::GetIO();
-        if ( io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_N) ) {
+        if ( ShortcutUtils::isActionShortcutPressed("newProject", true) ) {
             m_pendingOrigin = Event::ProjectOpenOrigin::CreateShortcut;
             return true;
         }

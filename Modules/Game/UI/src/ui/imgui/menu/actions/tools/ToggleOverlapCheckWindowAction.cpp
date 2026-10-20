@@ -14,6 +14,7 @@
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <string_view>
 
 #include <algorithm>
 #include <cmath>
@@ -33,6 +34,14 @@ namespace
 class ToggleOverlapCheckWindowAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        // 操作方案以固定身份拦截动作，不能使用会随语言切换的窗口标题。
+        return "ToggleOverlapCheckWindowAction";
+    }
+
     /// @brief 切换重叠检测窗口打开状态。
     /// @param context 单帧主菜单上下文，本动作无需读取。
     /// @param activation 激活来源，不改变窗口切换语义。

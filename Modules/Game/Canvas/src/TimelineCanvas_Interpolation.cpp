@@ -1,6 +1,9 @@
 #include "canvas/TimelineCanvas.h"
 #include "config/EditorSettings.h"
 #include "mmm/timing/TimingInterpolationAlgorithms.h"
+#include "ui/imgui/ShortcutUtils.h"
+// 插值弹窗沿用当前表面的取消动作，标准数值输入仍由 ImGui 处理。
+#include "ui/interaction/EditorInteraction.h"
 
 #include "canvas/TimingInterpolationControls.h"
 #include "canvas/TimingInterpolationPreview.h"
@@ -227,9 +230,11 @@ bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
                                                  std::max(1.0f, laneWidth)),
                                 0,
                                 4);
-    if ( !m_isInterpolationDragging && hovered && io.KeyShift && !io.KeyCtrl &&
+    if ( !m_isInterpolationDragging && hovered &&
+         UI::Interaction::modifier(UI::Interaction::Modifier::Shift) &&
+         !UI::Interaction::modifier(UI::Interaction::Modifier::Control) &&
          m_currentSnapshot->currentTool == Logic::EditTool::Draw &&
-         ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+         UI::Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
         // 第五泳道只允许普通 STOP 点，不能回退为 HS 曲线。
         if ( (professional ? lane : m_createType) == 4 ) return false;
         // 新手势不继承旧的编辑实体，否则确认可能覆盖上一个段落。
@@ -283,7 +288,10 @@ bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
         // 全程 Shift 要求与主画布的长条手势一致，避免修饰键松开后误创建。
         // 文件路径相同但重新加载也需要取消，不能仅以文件名判断来源。
         // 取消只清除 UI 手势，无需提交或等待逻辑线程撤销。
-        if ( !io.KeyShift || ImGui::IsKeyPressed(ImGuiKey_Escape) ||
+        // 取消读取语义动作，使自定义键位与插值弹窗关闭使用同一入口。
+        if ( !UI::Interaction::modifier(UI::Interaction::Modifier::Shift) ||
+             UI::ShortcutUtils::isActionShortcutPressed("cancelInteraction",
+                                                        true) ||
              m_currentSnapshot->beatmapPathKey != m_interpolationBeatmapKey ||
              m_currentSnapshot->beatmapInstanceId !=
                  m_interpolationInstanceId ) {
@@ -303,7 +311,7 @@ bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
         // 单击零范围不打开段落窗口，避免与普通单点放置手势混淆。
         // 反向拖动在此处统一起终点顺序，窗口中的二次调整仍需严格校验。
         // 手势结束后立即消除预览，提交之前不会产生可撤销实体。
-        if ( ImGui::IsMouseReleased(ImGuiMouseButton_Left) ) {
+        if ( UI::Interaction::mouseReleased(ImGuiMouseButton_Left) ) {
             m_isInterpolationDragging = false;
             // 反向拖动在松手时统一时间顺序，曲线本身仍按早到晚定义。
             // 不足一毫秒的退化范围丢弃，不制造空段落或重复起点。
@@ -345,7 +353,7 @@ bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
             segment.time,
             segment.time + segment.interpolation.m_duration,
             segment.interpolation.m_samplesPerSecond);
-        if ( ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) ) {
+        if ( UI::Interaction::mouseDoubleClicked(ImGuiMouseButton_Left) ) {
             // 段首不必在可见区；双击正文仍能编辑整个原始段落。
             m_isTimingDragging       = false;
             m_isTimingDrawPreviewing = false;
@@ -354,7 +362,7 @@ bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
         }
         // 段落不是一组采样点，右键只发送一次删除指令。
         // 复用常规时间线权限与联机路由，不直接调用注册表销毁。
-        if ( ImGui::IsMouseClicked(ImGuiMouseButton_Right) ) {
+        if ( UI::Interaction::mouseClicked(ImGuiMouseButton_Right) ) {
             publishTimelineCommand(Event::LogicCommandEvent(
                 Logic::CmdDeleteTimelineEvent{ segment.entity }));
             return true;
@@ -405,7 +413,7 @@ void TimelineCanvas::renderInterpolationOverlay(const ImVec2& position,
                 4.0f;
             const float right = left + laneWidth - 8.0f;
             const float y1    = position.y + static_cast<float>(canvasYAtTime(
-                                                 size, segment.time));
+                                              size, segment.time));
             const float y2 =
                 position.y + static_cast<float>(canvasYAtTime(size, end));
             const float top = std::min(y1, y2), bottom = std::max(y1, y2);
@@ -706,15 +714,17 @@ void TimelineCanvas::renderInterpolationEditor()
                 ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
                 const auto& io = ImGui::GetIO();
                 // 锚点按图表内光标计算，放大连续多个周期时保持检查目标稳定。
-                if ( io.MouseWheel != 0.0f )
-                    preview.zoomAt((io.MousePos.x - origin.x) / graphSize.x,
-                                   std::pow(0.75, io.MouseWheel));
-                if ( ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) )
+                if ( UI::Interaction::mouseWheel() != 0.0f )
+                    preview.zoomAt(
+                        (io.MousePos.x - origin.x) / graphSize.x,
+                        std::pow(0.75, UI::Interaction::mouseWheel()));
+                if ( UI::Interaction::mouseDoubleClicked(
+                         ImGuiMouseButton_Left) )
                     preview.resetView();
             }
             // 活动拖动离开图表仍继续平移，边界约束由视图状态统一维护。
             if ( ImGui::IsItemActive() &&
-                 ImGui::IsMouseDragging(ImGuiMouseButton_Left) )
+                 UI::Interaction::mouseDragging(ImGuiMouseButton_Left) )
                 preview.pan(-ImGui::GetIO().MouseDelta.x / graphSize.x);
             // 每个真实输出样本先参与缓存，再按像素保留首尾和峰谷。
             // 稳定帧只读缓存；放大后重新展现局部样本，不跳过高频波峰。
@@ -787,7 +797,8 @@ void TimelineCanvas::renderInterpolationEditor()
         ImGui::EndDisabled();
         ImGui::SameLine();
         if ( UI::FeedbackButton("取消") ||
-             ImGui::IsKeyPressed(ImGuiKey_Escape) ) {
+             UI::ShortcutUtils::isActionShortcutPressed("cancelInteraction",
+                                                        true) ) {
             m_isInterpolationEditorOpen = false;
             ImGui::CloseCurrentPopup();
         }
