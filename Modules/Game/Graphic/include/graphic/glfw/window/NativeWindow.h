@@ -1,12 +1,16 @@
 #pragma once
 
-#include "event/core/EventBus.h"
-#include "graphic/glfw/GLFWHeader.h"
-#include "graphic/glfw/window/adapters/IWindowFrameHost.h"
-#include <atomic>
-#include <chrono>
-#include <cstdint>
-#include <memory>
+#ifdef __ANDROID__
+#    include "graphic/sdl/AndroidNativeWindow.h"
+#else
+
+#    include "event/core/EventBus.h"
+#    include "graphic/glfw/GLFWHeader.h"
+#    include "graphic/glfw/window/adapters/IWindowFrameHost.h"
+#    include <atomic>
+#    include <chrono>
+#    include <cstdint>
+#    include <memory>
 
 namespace MMM::Graphic
 {
@@ -256,3 +260,5 @@ private:
 };
 
 }  // namespace MMM::Graphic
+
+#endif

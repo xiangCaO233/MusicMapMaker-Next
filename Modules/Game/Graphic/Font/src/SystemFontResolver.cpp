@@ -23,7 +23,7 @@
 #    include <CoreText/CoreText.h>
 #    include <ft2build.h>
 #    include FT_FREETYPE_H
-#else
+#elif !defined(__ANDROID__)
 #    include <fontconfig/fontconfig.h>
 #endif
 
@@ -647,7 +647,7 @@ std::optional<SystemFontFace> resolveMacOSChineseFallback(
     return resolveCoreTextFont(readableFallback.get());
 }
 
-#else
+#elif !defined(__ANDROID__)
 
 /// @brief 释放 Fontconfig 配置。
 struct FontConfigReleaser {
@@ -806,7 +806,7 @@ std::vector<SystemFontFace> resolvePreferredSystemFonts()
         CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, 0.0, nullptr));
     appendUniqueFont(fonts, resolveCoreTextFont(preferredFont.get()));
     appendUniqueFont(fonts, resolveMacOSChineseFallback(preferredFont.get()));
-#else
+#elif !defined(__ANDROID__)
     // Fontconfig 配置加载失败时返回空列表，让上层继续使用内置字体。
     UniqueFontConfig config(FcInitLoadConfigAndFonts());
     if ( config ) {

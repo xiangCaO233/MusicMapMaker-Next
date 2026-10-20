@@ -1,3 +1,8 @@
+# Android 主体打包为共享库，所有本次交叉构建的静态模块必须支持 PIC。
+if(ANDROID)
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+
 # 全局关闭 C++20 模块依赖扫描，以加快构建速度 项目当前不使用标准模块，关闭扫描可避免 Ninja 为每个翻译单元生成额外规则。
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
@@ -227,7 +232,8 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 # 把静态库 (.a/.lib) 放到 build/lib 下
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
-if(APPLE
+if(ANDROID
+   OR APPLE
    OR MSVC
    OR (WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"))
   # MinGW GCC 16 的 gnu++26 与静态 libstdc++ 链接会重复定义 stdexcept 符号。 项目当前规范为

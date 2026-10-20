@@ -16,7 +16,13 @@
 #include "graphic/theme/ImGuiThemeRegistry.h"
 #include "imgui.h"
 
-#include "imgui_impl_glfw.h"
+#ifdef __ANDROID__
+#    include "imgui_impl_sdl3.h"
+#    include <SDL3/SDL.h>
+#    include <SDL3/SDL_vulkan.h>
+#else
+#    include "imgui_impl_glfw.h"
+#endif
 #include "imgui_impl_vulkan.h"
 #include "log/colorful-log.h"
 
@@ -198,6 +204,7 @@ VKContext::VKContext() : m_themeRegistry(std::make_unique<ImGuiThemeRegistry>())
 
     // 键盘订阅与上下文同生命周期。回调只在完整 Application 模式处理快捷键，
     // 启动同步窗口使用 Bootstrap 模式时不会读取尚未就绪的编辑器资源。
+#ifndef __ANDROID__
     m_glfwKeySubscription =
         MMM::Event::EventBus::instance().subscribe<MMM::Event::GLFWKeyEvent>(
             [this](const MMM::Event::GLFWKeyEvent& e) {
@@ -266,6 +273,7 @@ VKContext::VKContext() : m_themeRegistry(std::make_unique<ImGuiThemeRegistry>())
                 }
             });
 
+#endif
     // 配置命令订阅把所有入口汇合到同一呈现模式与主题应用流程。事件中携带的是
     // 已更新快照，避免回调重新读取可能处于保存过程中的配置对象。
     m_logicCommandSubscription =
@@ -346,7 +354,11 @@ void VKContext::release()
     // 后端借用窗口， 因此两者都要在渲染器、device 与 GLFW 之前关闭。
     if ( ImGui::GetCurrentContext() ) {
         ImGui_ImplVulkan_Shutdown();
+#ifdef __ANDROID__
+        ImGui_ImplSDL3_Shutdown();
+#else
         ImGui_ImplGlfw_Shutdown();
+#endif
         ImGui::DestroyContext();
         XDEBUG("ImGui Destroyed.");
     }
@@ -567,12 +579,23 @@ bool VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h,
 
     // GLFW 的 C API 根据当前平台创建对应 VkSurfaceKHR；成功后立即包装为
     // Vulkan-Hpp 句柄并纳入上下文释放顺序。
-    VkSurfaceKHR   surface;
+    VkSurfaceKHR surface;
+#ifdef __ANDROID__
+    // Android Surface 对应 SDL 当前持有的 ANativeWindow，不能复用桌面 WSI。
+    const VkResult surfaceResult =
+        SDL_Vulkan_CreateSurface(native_window_ptr->getWindowHandle(),
+                                 m_vkInstance,
+                                 nullptr,
+                                 &surface)
+            ? VK_SUCCESS
+            : VK_ERROR_INITIALIZATION_FAILED;
+#else
     const VkResult surfaceResult = glfwCreateWindowSurface(
         m_vkInstance, native_window_ptr->getWindowHandle(), nullptr, &surface);
+#endif
     if ( surfaceResult != VK_SUCCESS ) {
         addStartupDiagnostic(
-            fmt::format("glfwCreateWindowSurface failed: {}",
+            fmt::format("Platform Vulkan surface creation failed: {}",
                         vk::to_string(static_cast<vk::Result>(surfaceResult))));
         collectLastGLFWErrorDiagnostic("glfwCreateWindowSurface failed.");
         logStartupDiagnostics("glfwCreateWindowSurface failed.");
@@ -615,6 +638,13 @@ bool VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h,
                                                 m_queueFamilyIndices,
                                                 w,
                                                 h);
+    // 首次创建也可能因 Activity 尚未提供稳定 Surface 而失败，不能初始化空
+    // framebuffer。
+    // 错误由既有启动诊断向外传播，避免把失败掩盖为一个可渲染上下文。
+    if ( !m_swapchain->m_swapchain || m_swapchain->m_vkImageBuffers.empty() ) {
+        failInitialization("Failed to initialize swapchain images.");
+        return false;
+    }
     // 最终 render pass 的颜色附件在结束时转换为 present
     // 布局，与交换链格式绑定。
     m_vkRenderPass = std::make_unique<VKRenderPass>(
@@ -659,13 +689,18 @@ bool VKContext::initVKWindowRess(NativeWindow* native_window_ptr, int w, int h,
 /// @param height 已知 framebuffer 高度；为零时进入最小化等待。
 /// @warning 不可中断的低频路径：可能等待窗口恢复并执行 device waitIdle，只能在
 /// 交换链失效或窗口尺寸变化后调用。
-void VKContext::recreateSwapchain(GLFWwindow* window_context, int width,
-                                  int height)
+bool VKContext::recreateSwapchain(PlatformWindowHandle* window_context,
+                                  int width, int height)
 {
     // Vulkan 不允许创建零 extent 交换链；等待事件可休眠线程而不是忙等轮询。
     while ( width == 0 || height == 0 ) {
+#ifdef __ANDROID__
+        // 零尺寸等待下一轮平台事件，禁止在此阻塞本地渲染线程。
+        return false;
+#else
         glfwGetFramebufferSize(window_context, &width, &height);
         glfwWaitEvents();
+#endif
     }
 
     // 旧 framebuffer、image view 和同步对象仍可能被在途提交引用。
@@ -673,8 +708,14 @@ void VKContext::recreateSwapchain(GLFWwindow* window_context, int width,
 
     // VKSwapchain 内部保留旧句柄供驱动迁移资源，并只替换图像相关对象；逻辑设备
     // 与 render pass 的附件契约没有变化。
-    m_swapchain->recreate(
-        m_vkPhysicalDevice, m_vkSurface, m_queueFamilyIndices, width, height);
+    if ( !m_swapchain->recreate(m_vkPhysicalDevice,
+                                m_vkSurface,
+                                m_queueFamilyIndices,
+                                width,
+                                height) ) {
+        // 失败不调用 ImGui 或 renderer 的资源更新，避免消费半初始化图像集合。
+        return false;
+    }
 
     // 新 image view 需要重新与既有 render pass 组合成一一对应的 framebuffer。
     m_swapchain->createFramebuffers(*m_vkRenderPass);
@@ -684,7 +725,55 @@ void VKContext::recreateSwapchain(GLFWwindow* window_context, int width,
     m_vkRenderer->onSwapchainChanged();
 
     XDEBUG("Swapchain recreation finished.");
+    return true;
 }
+
+#ifdef __ANDROID__
+/// @brief Android 系统重建 ANativeWindow 后更换 Surface，不重新创建业务视图。
+/// @warning 仅恢复或 Surface 丢失时执行设备等待，正常帧不进入此路径。
+bool VKContext::restoreAndroidSurface(NativeWindow& window, int width,
+                                      int height)
+{
+    // 恢复路径是低频的系统生命周期边界，先等待所有旧 Surface 的使用结束。
+    // 不允许在普通每帧路径反复销毁重建呈现资源。
+    // 旧资源失效后即使创建失败也保持空句柄，析构不能再次销毁同一 Vulkan 对象。
+    (void)m_vkLogicalDevice.waitIdle();
+    // Android 不提供桌面多视口，恢复时只有主窗口的呈现资源需要替换。
+    // 既有离屏纹理属于 device 而非 Surface，不应在恢复时销毁。
+    // waitIdle 已覆盖渲染提交，下面按 Vulkan 对象依赖顺序回收资源。
+    // 重建保持包装对象地址稳定，renderer 持有的引用无需重新绑定。
+    // 失败后仍可析构上下文，因为旧句柄会立刻归零。
+    // 下一轮恢复请求由窗口脏位发起，不在失败函数中递归重试。
+    // 此路径不重置任何工程状态、音频状态或编辑撤销栈。
+    // 正常渲染的 acquire 和 present 都不会执行这些设备级清理。
+    // framebuffer 和 view 必须先于交换链，旧交换链必须先于旧 Surface 销毁。
+    m_swapchain->destroyFramebuffers();
+    m_swapchain->cleanupImageViews();
+    if ( m_swapchain->m_swapchain )
+        m_vkLogicalDevice.destroySwapchainKHR(m_swapchain->m_swapchain);
+    m_swapchain->m_swapchain = nullptr;
+    if ( m_vkSurface ) m_vkInstance.destroySurfaceKHR(m_vkSurface);
+    m_vkSurface = nullptr;
+    // SDL 负责把当前 ANativeWindow 转换为 VkSurface，不直接缓存 Java Surface。
+    // 新句柄只在创建成功后发布给既有交换链构建流程。
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    if ( !SDL_Vulkan_CreateSurface(
+             window.getWindowHandle(), m_vkInstance, nullptr, &surface) ) {
+        XERROR("Failed to restore Android Surface: {}", SDL_GetError());
+        return false;
+    }
+    m_vkSurface = surface;
+    // 应用固定使用同一显示设备与颜色格式，现有 RenderPass 和业务纹理继续有效。
+    // 不创建新的 renderer，保持离屏视图、事件订阅和渲染用户回调的生命周期。
+    // 同一设备和颜色附件契约继续有效，保持 renderer 对交换链对象的引用稳定。
+    if ( !recreateSwapchain(window.getWindowHandle(), width, height) )
+        return false;
+    // recreateSwapchain 同步刷新 framebuffer、命令缓存与按图像索引的
+    // semaphore。 只有恢复完成才允许下一帧进入 acquire/present。
+    XINFO("Android Vulkan Surface restored");
+    return true;
+}
+#endif
 
 /// @brief 根据帧率限制策略更新呈现模式并请求下一帧重建交换链。
 /// @param frameLimit 新的帧率限制偏好。
@@ -778,7 +867,10 @@ void VKContext::showCenterNotification(const std::string& message,
 {
     m_notificationMessage = message;
     m_notificationExpireTime =
-        glfwGetTime() + static_cast<double>(durationSeconds);
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count() +
+        static_cast<double>(durationSeconds);
 }
 
 /// @brief 在主视口中央绘制当前未过期通知，并在最后 0.3 秒淡出。
@@ -791,7 +883,10 @@ void VKContext::showCenterNotification(const std::string& message,
 void VKContext::drawCenterNotification()
 {
     // 过期或空文本直接退出，常态下不建立 ImGui 窗口也不分配绘制命令。
-    double currentTime = glfwGetTime();
+    double currentTime =
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
     if ( currentTime >= m_notificationExpireTime ||
          m_notificationMessage.empty() ) {
         return;

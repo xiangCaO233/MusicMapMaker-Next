@@ -17,14 +17,9 @@ add_subdirectory("Font")
 add_library(
   Graphic STATIC
   # GLFW 生命周期、原生窗口及 Linux/Windows 窗框适配。
-  src/glfw/GLFWCallback.cpp
-  src/glfw/NativeWindow.cpp
-  src/glfw/adapters/Win32WindowAdapter.cpp
-  src/glfw/adapters/X11WindowAdapter.cpp
   # Vulkan instance、device、诊断和 ImGui 后端初始化。
   src/imguivk/context/VKContext.cpp
   src/imguivk/context/VKContextDiagnostics.cpp
-  src/imguivk/context/VKContextGLFW.cpp
   src/imguivk/context/VKContextDevice.cpp
   src/imguivk/context/VKContextDebugFeats.cpp
   src/imguivk/context/VKContextInfos.cpp
@@ -71,7 +66,6 @@ target_link_libraries(
          Config
          Common
          Runtime
-         3rd_glfw
          3rd_glm
          3rd_imgui
          3rd_implot
@@ -117,7 +111,9 @@ if(APPLE)
   target_link_libraries(Graphic PRIVATE "-framework AppKit")
 endif()
 
-if(UNIX AND NOT APPLE)
+if(UNIX
+   AND NOT APPLE
+   AND NOT ANDROID)
   # XDG Settings Portal 通过 GIO 提供跨 GNOME、KDE 与 Wayland/X11 的统一亮暗主题通知。 GIO 是
   # Linux 系统主题能力的必需后端，使用导入目标保留 pkg-config 给出的编译 与链接参数，避免手工拆分后遗漏线程或传递依赖。
   # MMM_ENABLE_XDG_PORTAL_THEME 只选择 Graphic 内部实现，不应作为使用者可见的 功能宏传播到上层业务目标。
@@ -142,4 +138,22 @@ if(UNIX AND NOT APPLE)
       target_link_libraries(Graphic PRIVATE ${X11_Xext_LIB})
     endif()
   endif()
+endif()
+
+# 窗口系统只在这一边界选择，业务模块继续消费 NativeWindow 与 Graphic。 窗口与平台 ImGui
+# 后端必须成对选择，不能让一个进程同时处理两套输入回调。 业务渲染和 Vulkan 资源封装共用原有实现，平台分支只替换窗口边界。 桌面的 frame
+# adapter、光标和窗口扩展不进入 APK。
+if(ANDROID)
+  target_sources(Graphic PRIVATE src/sdl/AndroidNativeWindow.cpp
+                                 src/sdl/VKContextSDL.cpp)
+  target_link_libraries(Graphic PUBLIC 3rd_sdl3)
+else()
+  target_sources(
+    Graphic
+    PRIVATE src/glfw/GLFWCallback.cpp
+            src/glfw/NativeWindow.cpp
+            src/glfw/adapters/Win32WindowAdapter.cpp
+            src/glfw/adapters/X11WindowAdapter.cpp
+            src/imguivk/context/VKContextGLFW.cpp)
+  target_link_libraries(Graphic PUBLIC 3rd_glfw)
 endif()

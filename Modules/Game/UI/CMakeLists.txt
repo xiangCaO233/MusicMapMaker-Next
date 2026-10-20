@@ -99,7 +99,7 @@ add_library(
   # 通用绘制画刷及桌面、文件对话框、控件工具。
   src/ui/brush/Brush.cpp
   src/ui/utils/DesktopPathUtils.cpp
-  src/ui/utils/NativeFileDialog.cpp
+  $<$<NOT:$<BOOL:${ANDROID}>>:${CMAKE_CURRENT_SOURCE_DIR}/src/ui/utils/NativeFileDialog.cpp>
   src/ui/utils/UIWidgetUtils.cpp
   src/ui/utils/VolumeSlider.cpp
   src/ui/imgui/audio/AudioPresetControls.cpp
@@ -640,3 +640,12 @@ mmm_add_test_executable(UI ProjectDropRouterTest
 # 链接正式 UI 库，避免复制生产扩展名白名单而漏测真实入口。
 target_link_libraries(ProjectDropRouterTest PRIVATE UI)
 mmm_register_test_case(NAME ProjectDropRouterTest COMMAND ProjectDropRouterTest)
+
+# Android 暂不提供桌面文件选择器，兼容层明确报告不支持，不能静默丢失用户文件。
+if(ANDROID)
+  target_sources(UI PRIVATE src/ui/utils/AndroidFileDialog.cpp)
+endif()
+
+# 工具插件直接读取 FFmpeg codec ID，必须显式继承其头文件和首次构建依赖。 不能依赖预编译 ICE
+# 恰好传播该目录，源码交叉构建也必须具有同一接口。
+target_link_libraries(UI PRIVATE 3rd_ffmpeg)
