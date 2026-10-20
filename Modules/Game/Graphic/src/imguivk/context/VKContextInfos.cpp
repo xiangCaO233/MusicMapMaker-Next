@@ -11,7 +11,14 @@ void VKContext::initVkAppInfo()
 {
     m_vkAppInfo.setPApplicationName("MMM")
         .setApplicationVersion(VK_MAKE_VERSION(1, 0, 0))
+#ifdef __ANDROID__
+        // Android 与官方模拟器使用 Vulkan 1.3
+        // 公共能力，不虚报设备尚未提供的 1.4。 现有 RenderPass 路径不需要 1.4
+        // 特性；桌面保留原有 API 声明。
+        .setApiVersion(VK_API_VERSION_1_3)
+#else
         .setApiVersion(VK_API_VERSION_1_4)
+#endif
         .setEngineVersion(VK_MAKE_VERSION(1, 0, 0))
         .setPEngineName("No Engine");
 }

@@ -3,9 +3,14 @@
 #include "event/ui/GLFWNativeEvent.h"
 #include "log/colorful-log.h"
 #include <SDL3/SDL.h>
+#include <cmath>
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 
+// Android 显示模式可能在系统授权页返回后变化，刷新率不能永久沿用启动值。
+// 逻辑更新频率和渲染上限继续由公共配置计算，此后端只提供当前显示能力。
+// 刷新率更新仅由 SDL 低频窗口事件触发，禁止逐帧查询系统显示模式。
+// 系统实际模式可能低于请求上限，不能用 Surface 偏好伪造显示测量值。
 namespace MMM::Graphic
 {
 namespace
@@ -34,6 +39,13 @@ NativeWindow::NativeWindow(int width, int height, const char* title,
     // 只有创建成功的窗口能成为活动观察对象，失败对象不能接收 UI 关闭请求。
     // SDLActivity 当前只承载一个原生窗口，桌面多窗口功能仍由 GLFW 实现。
     activeWindow = this;
+    // 帧率倍数基于当前显示模式，不能保留 AppConfig 的桌面默认 60Hz。
+    // 当前速率可能随后因 Activity 的高刷请求变化，显示事件会再次同步。
+    if ( const auto* mode =
+             SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(m_window)) ) {
+        Config::AppConfig::instance().setDeviceRefreshRate(
+            static_cast<int>(std::lround(mode->refresh_rate)));
+    }
     // Android Surface 的实际尺寸来自系统，不恢复桌面窗口坐标。
     Config::AppConfig::instance().setWindowContentScale(
         SDL_GetWindowDisplayScale(m_window));
@@ -83,6 +95,15 @@ void NativeWindow::pollEvents() const
         // 多个事件只覆盖最新状态，Vulkan 资源在下一安全帧边界统一更新。
         if ( event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED )
             m_resized = true;
+        // 显示模式变化在 SDL 主线程同步，倍数限帧下一帧立即使用真实刷新率。
+        if ( event.type == SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED ||
+             event.type == SDL_EVENT_DID_ENTER_FOREGROUND ) {
+            if ( const auto* mode = SDL_GetCurrentDisplayMode(
+                     SDL_GetDisplayForWindow(m_window)) ) {
+                Config::AppConfig::instance().setDeviceRefreshRate(
+                    static_cast<int>(std::lround(mode->refresh_rate)));
+            }
+        }
         if ( event.type == SDL_EVENT_WILL_ENTER_BACKGROUND )
             m_background = true;
         // 返回前台时系统可能已创建新的 ANativeWindow，即使尺寸相同也不能复用旧

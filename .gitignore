@@ -13,3 +13,7 @@ release/
 *__pycache__*/
 
 .DS_Store
+
+# Android Studio 的本机 SDK 配置与项目缓存不进入版本控制。
+/packaging/android/local.properties
+/packaging/android/.gradle/
