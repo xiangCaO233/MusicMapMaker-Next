@@ -2391,28 +2391,31 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                          ImVec2(r.width, r.height)) ) {
                     // 文件选择器类型和上次路径从当前编辑器配置快照读取。
                     const auto settings = engine.getEditorConfig().settings;
-                    if ( settings.filePickerStyle ==
-                         Config::FilePickerStyle::Native ) {
-                        // 原生对话框打开前播放统一弹窗反馈。
+                    // Android
+                    // 无法访问桌面文件浏览根，统一由系统选择授予单文件读取权。
+                    // 回调取得的是已完成复制的路径，原有音频导入仍校验真实内容。
+                    // 视图对象随管理器长期存在，选择期间不能借用当前帧局部变量。
+                    // 桌面用户的内置文件浏览偏好仍由原分支处理。
+                    if ( NativeFileDialog::requiresSystemPicker() ||
+                         settings.filePickerStyle ==
+                             Config::FilePickerStyle::Native ) {
                         ::MMM::UI::PlayPopupOpenFeedback();
-                        nfdu8char_t* outPath = nullptr;
-                        // 原生过滤器限制为音频导入流程支持的格式。
-                        nfdu8filteritem_t filters[1] = {
+                        const nfdu8filteritem_t filters[] = {
                             { "Audio Files", "mp3,ogg,wav,flac,opus,aac,m4a" }
                         };
-                        nfdresult_t result = NativeFileDialog::openFile(
-                            &outPath, filters, 1, nullptr);
-
-                        if ( result == NFD_OKAY ) {
-                            // 发布事件转交导入流程处理；本视图不直接复制文件。
-                            Event::EventBus::instance().publish(
-                                Event::AudioImportTriggerEvent{ outPath });
-                            // NFD 返回的 UTF-8 路径由库分配，成功分支负责释放。
-                            NFD_FreePathU8(outPath);
-                        } else if ( result == NFD_ERROR ) {
-                            // 取消选择是正常交互，只有库错误需要记录日志。
-                            XERROR("NFD Error: {}", NFD_GetError());
-                        }
+                        NativeFileDialog::openFileAsync(
+                            filters,
+                            1,
+                            nullptr,
+                            [](nfdresult_t result, const std::string& path) {
+                                // provider I/O 已由平台工作线程完成，UI
+                                // 只发布既有音频导入事件。
+                                if ( result == NFD_OKAY )
+                                    Event::EventBus::instance().publish(
+                                        Event::AudioImportTriggerEvent{ path });
+                                else if ( result == NFD_ERROR )
+                                    XERROR("Audio document selection failed");
+                            });
                     } else {
                         // 内置选择器使用只读文件名字段，并恢复上次浏览目录。
                         IGFD::FileDialogConfig fdConfig;

@@ -1,5 +1,6 @@
 #include "logic/ProjectStorage.h"
 
+#include "common/platform/DocumentStorage.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 
@@ -122,7 +123,11 @@ bool writeJsonAtomically(const std::filesystem::path& path,
     std::error_code replaceError;
     // 流已离开作用域，替换操作不再与仍打开的输出流共用临时文件。
     std::filesystem::rename(tempPath, path, replaceError);
-    if ( !replaceError ) return true;
+    if ( !replaceError ) {
+        // 本地原子替换不代表 SAF
+        // 文档已保存，授权目标也完成发布后才向上返回成功。
+        return Common::publishDocument(path, errorMessage);
+    }
 
     // 某些平台无法 rename 覆盖已有文件，沿用复制覆盖的兼容路径。
     // 此回退不是多文件事务，也不尝试恢复已经被部分覆盖的目标。
@@ -142,7 +147,7 @@ bool writeJsonAtomically(const std::filesystem::path& path,
                        "，错误：" + copyError.message();
         return false;
     }
-    return true;
+    return Common::publishDocument(path, errorMessage);
 }
 
 /// @brief 从分片内容组装与旧版 Project JSON 相同的结构。
@@ -259,8 +264,8 @@ ProjectStorage::LoadResult ProjectStorage::load(
 {
     std::error_code filesystemError;
     const bool      splitExists = std::filesystem::is_regular_file(
-                                 manifestPath(projectRoot), filesystemError) &&
-                             !filesystemError;
+                                      manifestPath(projectRoot), filesystemError) &&
+                                  !filesystemError;
     filesystemError.clear();
     const bool legacyExists =
         std::filesystem::is_regular_file(legacyProjectFilePath(projectRoot),

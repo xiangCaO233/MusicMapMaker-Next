@@ -363,7 +363,7 @@ void VKContext::imguiVulkanInit(PlatformWindowHandle* windowHandle,
     // Vulkan backend 只借用 VKContext/VKRenderer 拥有的句柄，不接管其生命周期。
     ImGui_ImplVulkan_InitInfo init_info = {};
     // API 版本必须与实例创建版本兼容，backend 据此选择 Vulkan 能力路径。
-    init_info.ApiVersion     = VK_API_VERSION_1_4;
+    init_info.ApiVersion     = m_vkAppInfo.apiVersion;
     init_info.Instance       = m_vkInstance;
     init_info.PhysicalDevice = m_vkPhysicalDevice;
     // ImGui draw 上传与渲染使用 graphics queue family 和对应 queue。

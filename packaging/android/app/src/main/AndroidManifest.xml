@@ -4,7 +4,9 @@
     <!-- 网络权限供现有 C++ 更新检查与协作客户端使用，不引入 Java 网络桥。 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="true" />
-    <!-- 文件和配置位于应用私有目录，不申请共享存储权限。 -->
+    <!-- 兼容本机目录模式由用户在系统设置手动授权，默认仍使用 SAF。 -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!-- 默认资源与配置仍在私有目录，授权不改变缓存和产物位置。 -->
     <!-- Activity 只承载 SDL 原生窗口，界面与资源生命周期继续由 C++ 主程序维护。 -->
     <application android:label="MusicMapMaker Next Android" android:allowBackup="false"
         android:theme="@android:style/Theme.Material.NoActionBar">

@@ -1,7 +1,7 @@
 // APK 外壳只处理 Java、资源和签名；原生编译由统一脚本显式执行。
 plugins { id 'com.android.application' }
-def work = providers.gradleProperty('mmmAndroidWorkDir').get()
-def sdlJava = providers.gradleProperty('mmmSdlJavaDir').get()
+def work = mmmResolvedWorkDir
+def sdlJava = providers.gradleProperty('mmmSdlJavaDir').getOrElse(new File(rootProject.projectDir, '../../3rdpty/sources/IonCachyEngine/3rdpty/sources/sdl/android-project/app/src/main/java').canonicalPath)
 layout.buildDirectory = file("${work}/build/gradle/app")
 // 原生构建和 APK 打包分离，Gradle 不在源码目录创建 .cxx 或隐式触发 CMake。
 // JNI 与资源路径必须来自同一集中工作目录，避免混入旧 ABI 或旧资源。
@@ -10,7 +10,7 @@ android {
     compileSdk { version = release(36) { minorApiLevel = 1 } }
     buildToolsVersion = '36.1.0'
     ndkVersion = '30.0.16248370'
-    // API 下限与 NDK 编译参数一致；只声明当前验证过的 arm64 手机 ABI。
+    // API 下限与 NDK 编译参数一致；手机与模拟器各带独立编译的原生库。
     // 平台 SDK 和 NDK 分别固定，Android Studio 不参与自动选择。
     defaultConfig {
         // 实验包使用独立身份，不覆盖未来正式版本或已有测试探针。
@@ -19,7 +19,8 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = '0.6.3-android-dev'
-        ndk { abiFilters 'arm64-v8a' }
+        // 默认同时提供手机与模拟器 ABI；脚本可显式选择单架构以缩短调试构建。
+        ndk { abiFilters.addAll(providers.gradleProperty('mmmAndroidAbis').getOrElse('arm64-v8a,x86_64').split(',')) }
     }
     // Java 必须来自本次原生构建使用的同一 SDL 版本，不复制第三方实现进仓库。
     // 没有 Maven SDL AAR，避免与引擎内相同版本 SDL3 的 JNI 接口不匹配。
