@@ -711,10 +711,28 @@ void VKRenderer::releaseGlfwCursorResources()
 void VKRenderer::render(NativeWindow&                window,
                         std::span<IGraphicUserHook*> graphicUserHooks)
 {
+    // 统计器跨帧保存固定标量；配置关闭时 profileTimePoint 不读取时钟，所有 add
+    // 分支也在帧尾跳过。
+    static RenderProfileAccumulator profile;
+    static bool                     lastRenderProfileLoggingEnabled = false;
+    const bool                      renderProfileLoggingEnabled =
+        Config::AppConfig::instance().getEditorSettings().renderProfileLogging;
+    // 从关闭切到开启时丢弃旧窗口，避免停用期间的墙钟时间拉低平均 FPS。
+    if ( renderProfileLoggingEnabled && !lastRenderProfileLoggingEnabled ) {
+        profile.reset(RenderProfileClock::now());
+    }
+    lastRenderProfileLoggingEnabled = renderProfileLoggingEnabled;
+    // 配置关闭时保留旧标量不会产生输出；再次开启会在上方立刻整体 reset。
+    const auto frameProfileStart =
+        profileTimePoint(renderProfileLoggingEnabled);
+
+
 #ifdef __ANDROID__
     // Android 先推进生命周期，后台期间不等待 GPU 或取得已经失效的 Surface
     // 图像。
+    const auto pollStart = profileTimePoint(renderProfileLoggingEnabled);
     window.pollEvents();
+    const auto pollEnd = profileTimePoint(renderProfileLoggingEnabled);
     if ( window.isMinimized() ) return;
     // 恢复事件只保证原生窗口可再次使用，不保证旧 Vulkan Surface 仍有效。
     // 同一交换链包装对象保留地址，业务视图无需重建或更换引用。
@@ -735,21 +753,6 @@ void VKRenderer::render(NativeWindow&                window,
         return;
     }
 #endif
-
-    // 统计器跨帧保存固定标量；配置关闭时 profileTimePoint 不读取时钟，所有 add
-    // 分支也在帧尾跳过。
-    static RenderProfileAccumulator profile;
-    static bool                     lastRenderProfileLoggingEnabled = false;
-    const bool                      renderProfileLoggingEnabled =
-        Config::AppConfig::instance().getEditorSettings().renderProfileLogging;
-    // 从关闭切到开启时丢弃旧窗口，避免停用期间的墙钟时间拉低平均 FPS。
-    if ( renderProfileLoggingEnabled && !lastRenderProfileLoggingEnabled ) {
-        profile.reset(RenderProfileClock::now());
-    }
-    lastRenderProfileLoggingEnabled = renderProfileLoggingEnabled;
-    // 配置关闭时保留旧标量不会产生输出；再次开启会在上方立刻整体 reset。
-    const auto frameProfileStart =
-        profileTimePoint(renderProfileLoggingEnabled);
 
     // NativeWindow 在尺寸回调中只设置消抖状态；到达安全帧边界后转为交换链脏位。
     if ( window.shouldRecreate() ) {
@@ -819,7 +822,8 @@ void VKRenderer::render(NativeWindow&                window,
         return;
     }
 
-    // eSuboptimalKHR 仍提供合法图像，本帧继续绘制，present 结果会标记后续重建。
+    // eSuboptimalKHR 仍提供合法图像；Android 由真实尺寸与失效事件决定重建，
+    // 桌面继续通过 present 结果标记下一轮重建。
     uint32_t imageIndex = imageResult.value;
 
     // 驱动索引必须落在当前交换链缓存中；越界时不能访问 framebuffer 或
@@ -830,13 +834,13 @@ void VKRenderer::render(NativeWindow&                window,
     }
 
     // acquire 阻塞解除后再轮询事件，使 UI 使用尽可能接近呈现时刻的输入状态。
-    const auto pollStart = profileTimePoint(renderProfileLoggingEnabled);
 #ifndef __ANDROID__
+    const auto pollStart = profileTimePoint(renderProfileLoggingEnabled);
     // 桌面继续保留 acquire 后采样输入的时序，避免本次 Android 改动影响延迟。
     // Android 已在本帧开头轮询，不能重复把同一平台事件提交给 ImGui。
     window.pollEvents();
-#endif
     const auto pollEnd = profileTimePoint(renderProfileLoggingEnabled);
+#endif
 
     // 后端顺序先更新 Vulkan/GLFW 状态，再由 ImGui::NewFrame 建立当前 UI 帧。
     const auto newFrameStart = profileTimePoint(renderProfileLoggingEnabled);
@@ -1101,11 +1105,21 @@ void VKRenderer::render(NativeWindow&                window,
     if ( presentResult == vk::Result::eErrorSurfaceLostKHR )
         window.markSurfaceChanged();
 #endif
-    if ( presentResult == vk::Result::eErrorOutOfDateKHR ||
-         presentResult == vk::Result::eSuboptimalKHR ) {
+    // Android 当前由系统合成旋转，Identity 与 currentTransform
+    // 不同时可以持续返回
+    // eSuboptimalKHR。该状态仍允许呈现；每帧重建不能消除旋转差异，反而反复等待
+    // device idle 和重新分配图像。真实尺寸、Surface 失效与 OutOfDate
+    // 仍会触发重建。 桌面保留既有 Suboptimal
+    // 重建策略，不改变窗口缩放和多视口路径。
+    if ( presentResult == vk::Result::eErrorOutOfDateKHR
+#ifndef __ANDROID__
+         || presentResult == vk::Result::eSuboptimalKHR
+#endif
+    ) {
         // 当前提交已经完成，延迟到下一帧入口按统一安全路径重建交换链。
         m_vkSwapChain.markDirty();
-    } else if ( presentResult != vk::Result::eSuccess ) {
+    } else if ( presentResult != vk::Result::eSuccess &&
+                presentResult != vk::Result::eSuboptimalKHR ) {
         XWARN("Present failed: {}", static_cast<int>(presentResult));
     }
 

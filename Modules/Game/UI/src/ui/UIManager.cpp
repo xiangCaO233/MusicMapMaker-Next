@@ -1627,6 +1627,8 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 /// 遍历或完整排序。
 void UIManager::onUpdateUI()
 {
+    // 系统选择器返回只消费已完成的短结果，工程复制不在本 UI 帧执行。
+    NativeFileDialog::pollAsyncDialogs();
     // 控件矩形属于单帧即时布局，任何视图开始提交前先清除旧坐标。
     m_walkthroughSpotlight->beginFrame();
     // 引导服务先推进页面与动作状态。

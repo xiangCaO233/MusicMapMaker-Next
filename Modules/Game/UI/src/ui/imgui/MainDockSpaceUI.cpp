@@ -27,6 +27,7 @@
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <ImGuiFileDialog.h>
+#include <algorithm>
 #include <concurrentqueue.h>
 #include <filesystem>
 #include <fmt/format.h>
@@ -657,6 +658,18 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     // 前景边框在所有主工作区窗口后绘制，确保无边框轮廓不被遮盖。
     renderNativeWindowFrameOverlay(sourceManager, dpiScale);
 
+    // Android 字体已经按密度缩放，文件对话框的固定像素尺寸也要匹配。
+    // 视口比例上限保证底部文件名和确认按钮仍在屏幕内，不改变桌面尺寸约定。
+    // 这里只计算两个标量，不枚举文件、不查询 JNI，也不进行布局树复制。
+#ifdef __ANDROID__
+    const ImVec2 fileDialogSize{
+        std::min(600.0f * dpiScale, viewport->WorkSize.x * 0.92f),
+        std::min(400.0f * dpiScale, viewport->WorkSize.y * 0.88f)
+    };
+#else
+    const ImVec2 fileDialogSize{ 600, 400 };
+#endif
+
     // Unified 模式的所有文件选择器都由同一 ImGuiFileDialog 实例逐帧驱动。
     if ( editorSettings.filePickerStyle == Config::FilePickerStyle::Unified ) {
         // 选择器共同约定：
@@ -676,13 +689,13 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened(
                      "ProjectFolderPicker") ) {
-                Utils::prepareCenteredModalWindow({ 600, 400 });
+                Utils::prepareCenteredModalWindow(fileDialogSize);
             }
             if ( ImGuiFileDialog::Instance()->Display(
                      "ProjectFolderPicker",
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoSavedSettings,
-                     { 600, 400 }) ) {
+                     fileDialogSize) ) {
                 if ( ImGuiFileDialog::Instance()->IsOk() ) {
                     // 某些平台目录模式只返回 CurrentPath，空结果时显式回退。
                     std::string folderPath =
@@ -713,13 +726,13 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened(
                      "TemporaryProjectSaveFolderPicker") ) {
-                Utils::prepareCenteredModalWindow({ 600, 400 });
+                Utils::prepareCenteredModalWindow(fileDialogSize);
             }
             if ( ImGuiFileDialog::Instance()->Display(
                      "TemporaryProjectSaveFolderPicker",
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoSavedSettings,
-                     { 600, 400 }) ) {
+                     fileDialogSize) ) {
                 if ( ImGuiFileDialog::Instance()->IsOk() ) {
                     // 目录选择的空路径回退规则与普通工程选择保持一致。
                     std::string folderPath =
@@ -751,13 +764,13 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             // 类型选择与文件选择分离，使同一音频路径可明确导入主轨或音效轨。
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened("AudioImportPicker") ) {
-                Utils::prepareCenteredModalWindow({ 600, 400 });
+                Utils::prepareCenteredModalWindow(fileDialogSize);
             }
             if ( ImGuiFileDialog::Instance()->Display(
                      "AudioImportPicker",
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoSavedSettings,
-                     { 600, 400 }) ) {
+                     fileDialogSize) ) {
                 if ( ImGuiFileDialog::Instance()->IsOk() ) {
                     // 文件模式直接使用 GetFilePathName，不接受空目录回退。
                     std::string filePath =
@@ -784,13 +797,13 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             // ASCII 与 CJK 分开配置，允许皮肤覆盖时保留用户字体回退策略。
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened("AsciiFontPicker") ) {
-                Utils::prepareCenteredModalWindow({ 600, 400 });
+                Utils::prepareCenteredModalWindow(fileDialogSize);
             }
             if ( ImGuiFileDialog::Instance()->Display(
                      "AsciiFontPicker",
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoSavedSettings,
-                     { 600, 400 }) ) {
+                     fileDialogSize) ) {
                 if ( ImGuiFileDialog::Instance()->IsOk() ) {
                     // 配置保存原始 UTF-8 路径，加载器负责后续有效性检查。
                     std::string filePath =
@@ -812,13 +825,13 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             // CJK 字体通常体积更大，仍只置重建请求而不阻塞当前模态帧。
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened("CjkFontPicker") ) {
-                Utils::prepareCenteredModalWindow({ 600, 400 });
+                Utils::prepareCenteredModalWindow(fileDialogSize);
             }
             if ( ImGuiFileDialog::Instance()->Display(
                      "CjkFontPicker",
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoSavedSettings,
-                     { 600, 400 }) ) {
+                     fileDialogSize) ) {
                 if ( ImGuiFileDialog::Instance()->IsOk() ) {
                     // 不在文件选择回调中直接创建 GPU 字体资源。
                     std::string filePath =

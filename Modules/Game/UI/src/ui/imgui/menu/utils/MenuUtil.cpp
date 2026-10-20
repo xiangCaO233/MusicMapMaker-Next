@@ -320,23 +320,26 @@ void MenuUtil::openProjectFolderPicker(Event::ProjectOpenOrigin origin)
             ? Config::pathToUtf8(
                   Walkthrough::canonRockDirectory().parent_path())
             : std::string{};
-    if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
+    // Android 系统目录授权与桌面偏好独立：内置浏览器不能申请 URI 持久权限。
+    // 回调只捕获稳定的请求来源枚举，不借用本次菜单绘制栈。
+    // 系统返回后由统一事件提交打开，沿用现有工程验证和界面切换流程。
+    // 取消选择不提交空路径，也不会关闭或覆盖当前工程。
+    // 文件工作线程完成整棵目录复制后才触发回调，音频相对路径已经可用。
+    // 目录授权覆盖工程资源；单文件选择无法据此推导兄弟文件权限。
+    // 桌面仍沿用 NFD 同步顺序，减少此次平台适配对原交互的影响。
+    if ( NativeFileDialog::requiresSystemPicker() ||
+         config.filePickerStyle == Config::FilePickerStyle::Native ) {
         // 原生对话框在当前调用中完成，打开前播放统一反馈。
         ::MMM::UI::PlayPopupOpenFeedback();
-        nfdu8char_t*      outPath = nullptr;
-        const nfdresult_t result  = NativeFileDialog::pickFolder(
-            &outPath,
-            guidePickerPath.empty() ? nullptr : guidePickerPath.c_str());
-
-        if ( result == NFD_OKAY ) {
-            // NFD 返回 UTF-8 路径，转换后立即发布选择结果。
-            submitProjectFolderSelection(Config::utf8ToPath(outPath));
-            // NFD 分配的路径必须使用配套释放函数。
-            NFD_FreePathU8(outPath);
-        } else if ( result == NFD_ERROR ) {
-            // 取消不是错误，只有 NFD_ERROR 写入应用日志。
-            XERROR("NFD Error: {}", NFD_GetError());
-        }
+        NativeFileDialog::pickFolderAsync(
+            guidePickerPath.empty() ? nullptr : guidePickerPath.c_str(),
+            [](nfdresult_t result, const std::string& path) {
+                // 只在授权和完整工作副本就绪后发布项目打开事件。
+                if ( result == NFD_OKAY )
+                    submitProjectFolderSelection(Config::utf8ToPath(path));
+                else if ( result == NFD_ERROR )
+                    XERROR("Project directory selection failed");
+            });
         return;
     }
 
@@ -372,26 +375,25 @@ void MenuUtil::openAudioImportPicker()
 
     // 选择器实现和最近路径来自编辑器设置。
     auto& config = Config::AppConfig::instance().getEditorSettings();
-    if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
+    if ( NativeFileDialog::requiresSystemPicker() ||
+         config.filePickerStyle == Config::FilePickerStyle::Native ) {
         // 原生对话框同步显示，打开前播放反馈。
         ::MMM::UI::PlayPopupOpenFeedback();
-        nfdu8char_t*      outPath    = nullptr;
-        nfdu8filteritem_t filters[1] = { { "Audio Files",
-                                           "mp3,ogg,wav,flac,opus,aac,m4a" } };
-        // 过滤器覆盖应用支持导入的全部音频扩展名。
-        nfdresult_t result =
-            NativeFileDialog::openFile(&outPath, filters, 1, nullptr);
-
-        if ( result == NFD_OKAY ) {
-            // 事件复制 UTF-8 路径，资源导入由订阅者执行。
-            Event::EventBus::instance().publish(
-                Event::AudioImportTriggerEvent{ outPath });
-            // 发布完成后释放 NFD 所有的路径缓冲。
-            NFD_FreePathU8(outPath);
-        } else if ( result == NFD_ERROR ) {
-            // 用户取消静默返回，库错误才写日志。
-            XERROR("NFD Error: {}", NFD_GetError());
-        }
+        const nfdu8filteritem_t filters[] = {
+            { "Audio Files", "mp3,ogg,wav,flac,opus,aac,m4a" }
+        };
+        NativeFileDialog::openFileAsync(
+            filters,
+            1,
+            nullptr,
+            [](nfdresult_t result, const std::string& path) {
+                // 单文件授权先生成可解码工作副本，资源导入仍通过现有逻辑命令处理。
+                if ( result == NFD_OKAY )
+                    Event::EventBus::instance().publish(
+                        Event::AudioImportTriggerEvent{ path });
+                else if ( result == NFD_ERROR )
+                    XERROR("Audio document selection failed");
+            });
         return;
     }
 
