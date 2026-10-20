@@ -13,7 +13,11 @@
 #include "graphic/imguivk/VKSwapchain.h"
 #include "graphic/system/SystemTheme.h"
 #include "graphic/theme/ImGuiThemeRegistry.h"
-#include "imgui_impl_glfw.h"
+#ifdef __ANDROID__
+#    include "imgui_impl_sdl3.h"
+#else
+#    include "imgui_impl_glfw.h"
+#endif
 #include "imgui_impl_vulkan.h"
 #include "implot.h"
 #include "log/colorful-log.h"
@@ -49,10 +53,16 @@ static constexpr float WAYLAND_PURE_ICON_VISUAL_SCALE = 0.86f;
 /// @warning 字体缩放更新路径：仅查询 GLFW backend，不访问文件系统或字体 atlas。
 static float getPureIconVisualScale()
 {
+#ifdef __ANDROID__
+    return 1.0f;
+#else
+
     // GLFW 可在 Linux 运行时选择 X11 或 Wayland，不能只依赖编译期宏。
     return glfwGetPlatform() == GLFW_PLATFORM_WAYLAND
                ? WAYLAND_PURE_ICON_VISUAL_SCALE
                : 1.0f;
+
+#endif
 }
 
 /// @brief 无异常解析字体布局浮点配置。
@@ -289,8 +299,8 @@ static void check_vk_result(VkResult err)
 /// 加载完整运行资源。
 /// @warning 应用启动低频路径：创建全局 GUI context、访问配置目录、初始化
 /// backend 并加载字体/Lua 插件，必须在渲染线程首次 NewFrame 之前调用一次。
-void VKContext::imguiVulkanInit(GLFWwindow*          windowHandle,
-                                VKWindowResourceMode mode)
+void VKContext::imguiVulkanInit(PlatformWindowHandle* windowHandle,
+                                VKWindowResourceMode  mode)
 {
     // 版本检查必须先于 context 创建，捕获头文件与链接库 ABI 不匹配。
     IMGUI_CHECKVERSION();
@@ -321,9 +331,11 @@ void VKContext::imguiVulkanInit(GLFWwindow*          windowHandle,
     // Wayland 不提供顶层窗口定位能力；禁用平台视口后，插件和其他 ImGui
     // 浮动面板仍可停靠或在 MMM 主窗口内移动，而不会创建额外 GLFW 窗口。
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+#ifndef __ANDROID__
     if ( glfwGetPlatform() != GLFW_PLATFORM_WAYLAND ) {
         io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
     }
+#endif
     // 允许平台窗口自动并回主视口，但不为每个 viewport 创建独立任务栏图标。
     io.ConfigViewportsNoAutoMerge   = false;
     io.ConfigViewportsNoTaskBarIcon = true;
@@ -341,7 +353,12 @@ void VKContext::imguiVulkanInit(GLFWwindow*          windowHandle,
 
     // GLFW backend 安装输入 callback；下方会恢复本项目必须保留的 iconify/drop
     // 入口。
+#ifdef __ANDROID__
+    // Android 保留窗口内 Docking，平台只拥有一个原生窗口。
+    ImGui_ImplSDL3_InitForVulkan(windowHandle);
+#else
     ImGui_ImplGlfw_InitForVulkan(windowHandle, true);
+#endif
 
     // Vulkan backend 只借用 VKContext/VKRenderer 拥有的句柄，不接管其生命周期。
     ImGui_ImplVulkan_InitInfo init_info = {};
@@ -375,9 +392,12 @@ void VKContext::imguiVulkanInit(GLFWwindow*          windowHandle,
     // ImGui GLFW backend 会安装自身
     // callback；重新设置本项目入口以保留窗口状态和 文件拖放桥接，其他输入
     // callback 由 backend chaining 处理。
+
+#ifndef __ANDROID__
     glfwSetWindowIconifyCallback(windowHandle,
                                  NativeWindow::GLFW_IconifyCallback);
     glfwSetDropCallback(windowHandle, NativeWindow::GLFW_DropCallback);
+#endif
 
     if ( mode == VKWindowResourceMode::Bootstrap ) {
         // 启动窗口不能依赖尚未同步的皮肤资源或 Lua 插件。

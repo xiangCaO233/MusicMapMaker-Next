@@ -17,6 +17,8 @@ add_subdirectory("Network")
 # Game 组合编辑器运行逻辑与 UI，Audio 在其后注册独立媒体服务。
 add_subdirectory("Game")
 add_subdirectory("Audio")
-add_subdirectory("Updater")
+if(NOT ANDROID)
+  add_subdirectory("Updater")
+endif()
 # Updater 保持独立可执行边界，Main 负责最终应用入口。
 add_subdirectory("Main")

@@ -50,7 +50,7 @@ VKSwapchain::~VKSwapchain()
 /// @param oldSwapchain 重建时仍然有效的旧交换链；首次创建传空句柄。
 /// @warning 启动或交换链重建路径：调用方必须先停止使用旧 framebuffer 和 view，
 /// 并保证逻辑设备在整个创建过程中保持有效。
-void VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
+bool VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
                                  vk::SurfaceKHR&     vkSurface,
                                  QueueFamilyIndices& queueFamilyIndices, int w,
                                  int h, vk::SwapchainKHR oldSwapchain)
@@ -67,6 +67,14 @@ void VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
     // surface 格式属于物理设备与窗口系统的组合能力，每次重建都重新取得当前
     // 列表。优先 UNORM 以匹配现有着色器和 ImGui 输出的颜色约定。
     auto formatsResult = vkPhysicalDevice.getSurfaceFormatsKHR(vkSurface);
+    // Android 可在任意平台调用之间撤销
+    // Surface；失败不能继续访问格式列表首元素。
+    if ( formatsResult.result != vk::Result::eSuccess ||
+         formatsResult.value.empty() ) {
+        XWARN("Surface format query failed: {}",
+              static_cast<int>(formatsResult.result));
+        return false;
+    }
     std::vector<vk::SurfaceFormatKHR> supported_surfaceFormats =
         formatsResult.value;
     vk::SurfaceFormatKHR chosenFormat = supported_surfaceFormats[0];
@@ -81,6 +89,11 @@ void VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
 
     // 能力同时约束图像数量和 extent，窗口请求尺寸不能直接写入创建信息。
     auto capsResult = vkPhysicalDevice.getSurfaceCapabilitiesKHR(vkSurface);
+    if ( capsResult.result != vk::Result::eSuccess ) {
+        XWARN("Surface capability query failed: {}",
+              static_cast<int>(capsResult.result));
+        return false;
+    }
     vk::SurfaceCapabilitiesKHR caps = capsResult.value;
 
     // 确定图像数量
@@ -117,25 +130,51 @@ void VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
     std::vector<uint32_t> queueIndicesVec(queueIndices.begin(),
                                           queueIndices.end());
 
+    // Android 的 UI 按 SDL 当前窗口方向绘制，没有对所有 ImGui 顶点实施预旋转。
+    // identity 请求系统合成器补偿显示方向，避免横屏内容再次侧转和比例拉伸。
+    // 桌面继续使用原有 currentTransform；后续移动端性能优化可另行接预旋转。
+    auto surfaceTransform = caps.currentTransform;
+#ifdef __ANDROID__
+    if ( caps.supportedTransforms &
+         vk::SurfaceTransformFlagBitsKHR::eIdentity ) {
+        surfaceTransform = vk::SurfaceTransformFlagBitsKHR::eIdentity;
+    }
+#endif
+
     // 4. 填充并创建交换链
     m_swapchainCreateInfo.setImageColorSpace(chosenFormat.colorSpace)
         .setImageFormat(chosenFormat.format)
         .setImageExtent(extent)
         .setMinImageCount(imageCount)
         .setPresentMode(s_globalPresentMode)
-        .setPreTransform(caps.currentTransform)
+        .setPreTransform(surfaceTransform)
         .setQueueFamilyIndices(queueIndicesVec)
         .setImageSharingMode(queueIndicesVec.size() > 1
                                  ? vk::SharingMode::eConcurrent
                                  : vk::SharingMode::eExclusive);
 
-    m_swapchain =
-        m_vkLogicalDevice.createSwapchainKHR(m_swapchainCreateInfo).value;
+    const auto created =
+        m_vkLogicalDevice.createSwapchainKHR(m_swapchainCreateInfo);
+    // Home 切后台可能让刚查询成功的 Surface 立即失效，Vulkan 错误必须显式传播。
+    // 失败后的空交换链不能交给
+    // vkGetSwapchainImagesKHR，否则部分驱动会直接崩溃。
+    if ( created.result != vk::Result::eSuccess ) {
+        XWARN("Swapchain creation failed: {}",
+              static_cast<int>(created.result));
+        return false;
+    }
+    m_swapchain = created.value;
     XDEBUG("SwapChain Created (Extent: {}x{})", extent.width, extent.height);
 
     // 交换链拥有 Image，封装只拥有与其配套的 ImageView 和后建的 Framebuffer。
     // 新创建前 cleanupImageViews 已清空容器，因此 reserve 不会保留旧条目。
     auto imagesResult = m_vkLogicalDevice.getSwapchainImagesKHR(m_swapchain);
+    if ( imagesResult.result != vk::Result::eSuccess ||
+         imagesResult.value.empty() ) {
+        m_vkLogicalDevice.destroySwapchainKHR(m_swapchain);
+        m_swapchain = nullptr;
+        return false;
+    }
     std::vector<vk::Image> swapchain_images = imagesResult.value;
     m_vkImageBuffers.reserve(swapchain_images.size());
 
@@ -147,12 +186,20 @@ void VKSwapchain::createInternal(vk::PhysicalDevice& vkPhysicalDevice,
             .setSubresourceRange(
                 { vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1 });
 
-        m_vkImageBuffers.push_back(
-            { .vk_image     = img,
-              .vk_imageView = m_vkLogicalDevice.createImageView(viewInfo).value,
-              .vk_frameBuffer = nullptr });
+        const auto view = m_vkLogicalDevice.createImageView(viewInfo);
+        if ( view.result != vk::Result::eSuccess ) {
+            // 部分成功的视图也属于本次尝试，失败必须整体回收后再让下一帧重试。
+            cleanupImageViews();
+            m_vkLogicalDevice.destroySwapchainKHR(m_swapchain);
+            m_swapchain = nullptr;
+            return false;
+        }
+        m_vkImageBuffers.push_back({ .vk_image       = img,
+                                     .vk_imageView   = view.value,
+                                     .vk_frameBuffer = nullptr });
     }
     XDEBUG("Successfully Created [{}] ImageBuffers", m_vkImageBuffers.size());
+    return true;
 }
 
 /// @brief 销毁当前交换链图像对应的全部 ImageView 并清空缓存。
@@ -173,7 +220,8 @@ void VKSwapchain::cleanupImageViews()
 /**
  * @brief 高效重建交换链
  */
-void VKSwapchain::recreate(vk::PhysicalDevice& vkPhysicalDevice,
+/// @return 创建失败时保留重建脏位，调用者不得初始化或提交半成品 framebuffer。
+bool VKSwapchain::recreate(vk::PhysicalDevice& vkPhysicalDevice,
                            vk::SurfaceKHR&     vkSurface,
                            QueueFamilyIndices& queueFamilyIndices, int w, int h)
 {
@@ -184,8 +232,9 @@ void VKSwapchain::recreate(vk::PhysicalDevice& vkPhysicalDevice,
     destroyFramebuffers();
     cleanupImageViews();
 
-    // 3. 重新创建内部资源
-    createInternal(
+    // 旧句柄保留在局部变量，创建失败也不能将它当作新资源继续使用。
+    m_swapchain      = nullptr;
+    const bool ready = createInternal(
         vkPhysicalDevice, vkSurface, queueFamilyIndices, w, h, oldSwapchain);
 
     // createInternal 成功后成员已指向新句柄，局部变量成为唯一待销毁的旧句柄。
@@ -193,8 +242,10 @@ void VKSwapchain::recreate(vk::PhysicalDevice& vkPhysicalDevice,
         m_vkLogicalDevice.destroySwapchainKHR(oldSwapchain);
     }
 
-    m_needsRecreate.store(false, std::memory_order_relaxed);
-    XDEBUG("Swapchain creation completed.");
+    // 创建失败保留脏位，不发布 framebuffer 就绪或清除恢复请求。
+    m_needsRecreate.store(!ready, std::memory_order_relaxed);
+    if ( ready ) XDEBUG("Swapchain creation completed.");
+    return ready;
 }
 
 /**

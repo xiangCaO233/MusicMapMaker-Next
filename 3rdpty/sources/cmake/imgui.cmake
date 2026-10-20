@@ -14,12 +14,17 @@ set(IMGUI_SOURCES
     # Docking and Viewports support (essential for editors)
     ${IMGUI_SOURCE_DIR}/imgui_demo.cpp # Optional, but highly recommended for
                                        # examples and debugging
-    # Backend files for Vulkan and GLFW
-    ${IMGUI_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+    # Vulkan 渲染后端由所有平台共用，平台输入后端在下方单独选择。
     ${IMGUI_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
 
-# 创建静态库 `imgui-static`
-# shared 依赖偏好下保留既有 target 名称，但产物改为 DLL。
+# Android 与桌面分别只编译一个平台后端，公共渲染器继续使用 Vulkan。
+if(ANDROID)
+  list(APPEND IMGUI_SOURCES ${IMGUI_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp)
+else()
+  list(APPEND IMGUI_SOURCES ${IMGUI_SOURCE_DIR}/backends/imgui_impl_glfw.cpp)
+endif()
+
+# 创建静态库 `imgui-static` shared 依赖偏好下保留既有 target 名称，但产物改为 DLL。
 set(IMGUI_LIBRARY_TYPE STATIC)
 if(PROJECT_LINKAGE STREQUAL "shared")
   set(IMGUI_LIBRARY_TYPE SHARED)
@@ -43,14 +48,16 @@ target_include_directories(imgui-static PUBLIC ${IMGUI_SOURCE_DIR}
 
 target_compile_features(imgui-static PRIVATE cxx_std_11)
 
-# ImGui's Vulkan backend needs to know where to find the Vulkan headers. By
-# linking against the `Vulkan::Vulkan` target (which `3rd_glfw` should already
-# do), the include paths are handled automatically.
-
-# Link the necessary dependencies. We link against `3rd_glfw`, which is our
-# interface library for GLFW + Vulkan. This will transitively link glfw and
-# Vulkan::Vulkan.
-target_link_libraries(imgui-static PUBLIC 3rd_glfw Vulkan::Vulkan)
+# Vulkan 公共头和链接接口由显式 target 传播，Android 不再借由 GLFW 间接获得。 平台窗口库与 ImGui
+# 输入后端保持一致，防止两个后端同时接管回调。
+# 平台后端和公共渲染后端必须针对同一 Vulkan 头文件集合编译。
+find_package(Vulkan REQUIRED)
+if(ANDROID)
+  # 同一 SDL3 目标同时服务图形窗口与音频，禁止各自链接一份 SDL。
+  target_link_libraries(imgui-static PUBLIC 3rd_sdl3 Vulkan::Vulkan)
+else()
+  target_link_libraries(imgui-static PUBLIC 3rd_glfw Vulkan::Vulkan)
+endif()
 
 # --- 5. 创建统一的接口库 `3rd_imgui` ---
 # This is the final target that the main application (`MusicMapMaker-Next`)

@@ -4,8 +4,11 @@ add_library(Network STATIC src/AssetSyncService.cpp src/UpdateChecker.cpp)
 # 联机写谱作为 Network 的内部子模块，统一承载信令、P2P 传输和房间协议。
 add_subdirectory("Collaboration")
 
-# 公网协作目录与信令中继使用独立可执行文件，部署时不依赖游戏 UI。
-add_subdirectory("CollaborationServer")
+# 公网协作目录与信令中继使用独立可执行文件，部署时不依赖游戏 UI。 APK 只携带客户端，手机启动时不创建服务端命令行进程。
+# 此分支不裁掉编辑器已有的网络与房间客户端接口。
+if(NOT ANDROID)
+  add_subdirectory("CollaborationServer")
+endif()
 
 # 对消费模块公开网络服务接口，不暴露 src 内部帮助器。
 target_include_directories(Network PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")

@@ -2,7 +2,7 @@
 
 #include <nfd.h>
 
-struct GLFWwindow;
+#include "graphic/window/WindowPlatform.h"
 
 namespace MMM::UI::NativeFileDialog
 {
@@ -10,7 +10,7 @@ namespace MMM::UI::NativeFileDialog
 /// @brief 绑定全部原生文件选择器使用的 GLFW 主窗口。
 /// @param window 主窗口观察指针；窗口销毁前应传入 nullptr 解除绑定。
 /// @warning 仅在 UI 组合根初始化或销毁时调用；指针生命周期由 GameLoop 管理。
-void bindMainWindow(GLFWwindow* window);
+void bindMainWindow(Graphic::PlatformWindowHandle* window);
 
 /// @brief 打开带统一父窗口和前台激活处理的原生文件选择器。
 /// @param outPath 输出 UTF-8 文件路径。

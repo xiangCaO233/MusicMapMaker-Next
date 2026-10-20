@@ -14,7 +14,11 @@
 #include "graphic/imguivk/VKRenderPass.h"
 #include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKSwapchain.h"
-#include "imgui_impl_glfw.h"
+#ifdef __ANDROID__
+#    include "imgui_impl_sdl3.h"
+#else
+#    include "imgui_impl_glfw.h"
+#endif
 #include "imgui_impl_vulkan.h"
 #include "log/colorful-log.h"
 #include "runtime/AppThreadPool.h"
@@ -275,6 +279,7 @@ bool isNativeResizeCursor(ImGuiMouseCursor cursor)
            cursor == ImGuiMouseCursor_ResizeNWSE;
 }
 
+#ifndef __ANDROID__
 constexpr size_t IMGUI_MOUSE_CURSOR_COUNT =
     static_cast<size_t>(ImGuiMouseCursor_COUNT);
 /// @brief 按 ImGuiMouseCursor 枚举索引保存惰性创建的 GLFW 光标。
@@ -319,41 +324,41 @@ GLFWcursor* getGlfwStandardCursor(ImGuiMouseCursor cursor)
     switch ( cursor ) {
     case ImGuiMouseCursor_TextInput: glfwCursor = GLFW_IBEAM_CURSOR; break;
     case ImGuiMouseCursor_Hand:
-#if defined(GLFW_POINTING_HAND_CURSOR)
+#    if defined(GLFW_POINTING_HAND_CURSOR)
         glfwCursor = GLFW_POINTING_HAND_CURSOR;
-#elif defined(GLFW_HAND_CURSOR)
+#    elif defined(GLFW_HAND_CURSOR)
         glfwCursor = GLFW_HAND_CURSOR;
-#endif
+#    endif
         break;
     case ImGuiMouseCursor_ResizeNS:
-#if defined(GLFW_RESIZE_NS_CURSOR)
+#    if defined(GLFW_RESIZE_NS_CURSOR)
         glfwCursor = GLFW_RESIZE_NS_CURSOR;
-#endif
+#    endif
         break;
     case ImGuiMouseCursor_ResizeEW:
-#if defined(GLFW_RESIZE_EW_CURSOR)
+#    if defined(GLFW_RESIZE_EW_CURSOR)
         glfwCursor = GLFW_RESIZE_EW_CURSOR;
-#endif
+#    endif
         break;
     case ImGuiMouseCursor_ResizeNESW:
-#if defined(GLFW_RESIZE_NESW_CURSOR)
+#    if defined(GLFW_RESIZE_NESW_CURSOR)
         glfwCursor = GLFW_RESIZE_NESW_CURSOR;
-#endif
+#    endif
         break;
     case ImGuiMouseCursor_ResizeNWSE:
-#if defined(GLFW_RESIZE_NWSE_CURSOR)
+#    if defined(GLFW_RESIZE_NWSE_CURSOR)
         glfwCursor = GLFW_RESIZE_NWSE_CURSOR;
-#endif
+#    endif
         break;
     case ImGuiMouseCursor_ResizeAll:
-#if defined(GLFW_RESIZE_ALL_CURSOR)
+#    if defined(GLFW_RESIZE_ALL_CURSOR)
         glfwCursor = GLFW_RESIZE_ALL_CURSOR;
-#endif
+#    endif
         break;
     case ImGuiMouseCursor_NotAllowed:
-#if defined(GLFW_NOT_ALLOWED_CURSOR)
+#    if defined(GLFW_NOT_ALLOWED_CURSOR)
         glfwCursor = GLFW_NOT_ALLOWED_CURSOR;
-#endif
+#    endif
         break;
     default: break;
     }
@@ -500,10 +505,10 @@ bool consumeMainWindowActivation(GLFWwindow* window)
 
     const bool focused = glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
     bool       active  = focused;
-#ifdef _WIN32
+#    ifdef _WIN32
     // Windows 10 在任务栏最小化期间可能短暂保留焦点，不能把该状态当作恢复边沿。
     active = active && glfwGetWindowAttrib(window, GLFW_ICONIFIED) != GLFW_TRUE;
-#endif
+#    endif
     // 窗口身份改变时没有可比较的上一帧，直接把当前激活态作为初始边沿结果。
     if ( state.window != window ) {
         state.window = window;
@@ -517,7 +522,7 @@ bool consumeMainWindowActivation(GLFWwindow* window)
     return activated;
 }
 
-#ifdef _WIN32
+#    ifdef _WIN32
 /// @brief HWND 属性名，与 Win32WindowAdapter 协同保留最小化前最大化状态。
 constexpr const wchar_t* RESTORE_MAXIMIZED_PROP =
     L"MMMRestoreMaximizedAfterMinimize";
@@ -555,7 +560,7 @@ bool shouldRestoreWin32WindowToMaximized(HWND hwnd)
     return placement.showCmd == SW_SHOWMAXIMIZED ||
            (placement.flags & restoreToMaximizedFlag) != 0;
 }
-#endif
+#    endif
 
 /// @brief 将 GLFW 窗口恢复并提升到当前窗口组顶层。
 ///
@@ -571,7 +576,7 @@ void raiseGlfwWindowToTop(GLFWwindow* window, bool activate)
         return;
     }
 
-#ifdef _WIN32
+#    ifdef _WIN32
     // 平台句柄缺失时不能安全调用 User32；GLFW 窗口本身有效也不保证桥接成功。
     HWND hwnd = glfwGetWin32Window(window);
     if ( !hwnd ) {
@@ -583,14 +588,14 @@ void raiseGlfwWindowToTop(GLFWwindow* window, bool activate)
         const bool restoreMaximized = shouldRestoreWin32WindowToMaximized(hwnd);
         ShowWindow(hwnd, restoreMaximized ? SW_SHOWMAXIMIZED : SW_RESTORE);
     }
-#else
+#    else
     if ( glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_TRUE ) {
         glfwRestoreWindow(window);
     }
 
-#endif
+#    endif
 
-#ifdef _WIN32
+#    ifdef _WIN32
     // 提窗不应改变 ImGui 平台窗口已经计算好的位置和尺寸。
     UINT flags = SWP_NOMOVE | SWP_NOSIZE;
     if ( !activate ) {
@@ -600,10 +605,10 @@ void raiseGlfwWindowToTop(GLFWwindow* window, bool activate)
     if ( activate ) {
         SetForegroundWindow(hwnd);
     }
-#else
+#    else
     (void)activate;
     glfwFocusWindow(window);
-#endif
+#    endif
 }
 
 /// @brief 主窗口被系统激活时同步提升所有 ImGui 多视口窗口。
@@ -620,7 +625,7 @@ void raiseImGuiViewportGroup(GLFWwindow* mainWindow)
         return;
     }
 
-#ifdef _WIN32
+#    ifdef _WIN32
     // 主窗口仍最小化时不提升任何从属视口，避免工具窗单独出现在其他应用之上。
     HWND mainHwnd = glfwGetWin32Window(mainWindow);
     if ( !mainHwnd || IsIconic(mainHwnd) ) {
@@ -630,7 +635,7 @@ void raiseImGuiViewportGroup(GLFWwindow* mainWindow)
     // 在 Windows 下提窗顺序很关键：主窗口先拿回前台焦点，随后独立
     // 独立 ImGui 视口只提升 Z 序而不抢焦点，避免浮动工具窗落在其他程序后面。
     raiseGlfwWindowToTop(mainWindow, true);
-#endif
+#    endif
 
     // PlatformHandle 在 GLFW 后端中指向 GLFWwindow；空视口和主视口都跳过。
     ImGuiPlatformIO& platformIo = ImGui::GetPlatformIO();
@@ -646,18 +651,19 @@ void raiseImGuiViewportGroup(GLFWwindow* mainWindow)
             continue;
         }
 
-#ifdef _WIN32
+#    ifdef _WIN32
         raiseGlfwWindowToTop(viewportWindow, false);
-#else
+#    else
         raiseGlfwWindowToTop(viewportWindow, true);
-#endif
+#    endif
     }
 
-#ifndef _WIN32
+#    ifndef _WIN32
     // 非 Windows 分支逐个 focus 会改变键盘焦点，最后恢复到主编辑窗口。
     raiseGlfwWindowToTop(mainWindow, true);
-#endif
+#    endif
 }
+#endif
 }  // namespace
 
 /// @brief 在 GLFW 终止前销毁并清空进程级原生光标缓存。
@@ -670,6 +676,10 @@ void raiseImGuiViewportGroup(GLFWwindow* mainWindow)
 /// @warning 低频 GLFW 生命周期路径：只能在主线程且 GLFW 仍已初始化时调用。
 void VKRenderer::releaseGlfwCursorResources()
 {
+#ifdef __ANDROID__
+    // SDL3 管理 Android 输入，本平台不拥有 GLFW 光标资源。
+#else
+
     auto& cursors = glfwStandardCursorCache();
     // 逐槽复位让重复调用保持幂等，也允许部分光标从未成功创建。
     for ( GLFWcursor*& cursor : cursors ) {
@@ -681,6 +691,8 @@ void VKRenderer::releaseGlfwCursorResources()
 
     glfwCursorState()      = {};
     mainWindowFocusState() = {};
+
+#endif
 }
 
 // clang-format off
@@ -701,6 +713,31 @@ void VKRenderer::releaseGlfwCursorResources()
 void VKRenderer::render(NativeWindow&                window,
                         std::span<IGraphicUserHook*> graphicUserHooks)
 {
+#ifdef __ANDROID__
+    // Android 先推进生命周期，后台期间不等待 GPU 或取得已经失效的 Surface
+    // 图像。
+    window.pollEvents();
+    if ( window.isMinimized() ) return;
+    // 恢复事件只保证原生窗口可再次使用，不保证旧 Vulkan Surface 仍有效。
+    // 同一交换链包装对象保留地址，业务视图无需重建或更换引用。
+    // 失败只保留重建请求；本轮不取得图像，也不重置仍已触发的提交 Fence。
+    if ( window.consumeSurfaceChange() ) {
+        int width = 0, height = 0;
+        window.getFramebufferSize(width, height);
+        // 系统短暂返回零区域时不销毁已有资源，等待下一轮有效窗口尺寸。
+        // 无固定时间等待，SDL 生命周期继续被主循环推进。
+        if ( width <= 0 || height <= 0 ) {
+            window.markSurfaceChanged();
+            return;
+        }
+        if ( !m_vkContext.restoreAndroidSurface(window, width, height) ) {
+            window.markSurfaceChanged();
+            return;
+        }
+        return;
+    }
+#endif
+
     // 统计器跨帧保存固定标量；配置关闭时 profileTimePoint 不读取时钟，所有 add
     // 分支也在帧尾跳过。
     static RenderProfileAccumulator profile;
@@ -749,9 +786,10 @@ void VKRenderer::render(NativeWindow&                window,
         XWARN("VK Device WaitForFences failed");
     }
 
+    // acquire 可能因窗口生命周期提前结束本帧，Fence 必须保持可再次等待。
+    // 重置操作移到实际 queue submit 前，覆盖桌面 out-of-date 的同类早退。
     // 提交前把 fence 恢复未触发状态，本帧 queue submit 将再次绑定并最终触发它。
-    (void)m_vkLogicalDevice.resetFences(
-        m_cmdAvailableFences[m_currentFrameIndex]);
+    // Fence 保持已触发直到确认本帧能提交，acquire 失败时不能留下永久等待。
     const auto fenceEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     // 在 UI 更新前 acquire 可把 FIFO 垂直同步等待放在帧首；返回时
@@ -764,6 +802,14 @@ void VKRenderer::render(NativeWindow&                window,
             m_imageAvailableSems[m_currentFrameIndex]);
     const auto acquireEnd = profileTimePoint(renderProfileLoggingEnabled);
 
+#ifdef __ANDROID__
+    // Surface 丢失时 acquire 没有提供有效图像，不能提交或访问 imageIndex。
+    // 重建延迟到下一帧先消费平台事件后进行，避免在旧原生窗口上立即重试。
+    if ( imageResult.result == vk::Result::eErrorSurfaceLostKHR ) {
+        window.markSurfaceChanged();
+        return;
+    }
+#endif
     if ( imageResult.result == vk::Result::eErrorOutOfDateKHR ) {
         // surface 已失配时立即同步重建，当前 acquire 没有可提交图像。
         triggerRecreate(window);
@@ -787,13 +833,23 @@ void VKRenderer::render(NativeWindow&                window,
 
     // acquire 阻塞解除后再轮询事件，使 UI 使用尽可能接近呈现时刻的输入状态。
     const auto pollStart = profileTimePoint(renderProfileLoggingEnabled);
+#ifndef __ANDROID__
+    // 桌面继续保留 acquire 后采样输入的时序，避免本次 Android 改动影响延迟。
+    // Android 已在本帧开头轮询，不能重复把同一平台事件提交给 ImGui。
     window.pollEvents();
+#endif
     const auto pollEnd = profileTimePoint(renderProfileLoggingEnabled);
 
     // 后端顺序先更新 Vulkan/GLFW 状态，再由 ImGui::NewFrame 建立当前 UI 帧。
     const auto newFrameStart = profileTimePoint(renderProfileLoggingEnabled);
     ImGui_ImplVulkan_NewFrame();
+#ifdef __ANDROID__
+    // SDL 后端负责坐标、DPI、鼠标合成和标准输入，不增加编辑手势映射。
+    // Vulkan 后端仍使用原有字体图集、纹理与渲染回调。
+    ImGui_ImplSDL3_NewFrame();
+#else
     ImGui_ImplGlfw_NewFrame();
+#endif
     ImGui::NewFrame();
 
     // 每帧借用当前编辑器配置，不复制完整 DTO；软件光标还要求管理器已经初始化。
@@ -834,6 +890,7 @@ void VKRenderer::render(NativeWindow&                window,
     const bool             useNativeResizeCursor =
         softwareCursorAvailable && isNativeResizeCursor(currentMouseCursor);
 
+#ifndef __ANDROID__
     if ( useNativeResizeCursor ) {
         // 原生缩放光标与平台非客户区 hit-test 对齐，避免皮肤光标方向滞后。
         applyNativeCursor(window.getWindowHandle(), currentMouseCursor);
@@ -845,6 +902,7 @@ void VKRenderer::render(NativeWindow&                window,
         applyNativeCursor(window.getWindowHandle(), currentMouseCursor);
     }
 
+#endif
     // Resize 状态不绘制软件光标；其他状态把粒子寿命覆盖和鼠标位置写入 draw
     // list。
     if ( softwareCursorAvailable && !useNativeResizeCursor ) {
@@ -1020,6 +1078,9 @@ void VKRenderer::render(NativeWindow&                window,
         .setWaitDstStageMask(waitStages)
         .setSignalSemaphores(m_renderFinishedSems[imageIndex]);
     const auto submitStart = profileTimePoint(renderProfileLoggingEnabled);
+    // 仅在即将绑定实际提交时重置 Fence，Surface 失效早退不会造成下一帧死锁。
+    (void)m_vkLogicalDevice.resetFences(
+        m_cmdAvailableFences[m_currentFrameIndex]);
     (void)m_LogicDeviceGraphicsQueue.submit(
         submitInfo, m_cmdAvailableFences[m_currentFrameIndex]);
     const auto submitEnd = profileTimePoint(renderProfileLoggingEnabled);
@@ -1036,6 +1097,12 @@ void VKRenderer::render(NativeWindow&                window,
         m_LogicDevicePresentQueue.presentKHR(presentInfo);
     const auto presentEnd = profileTimePoint(renderProfileLoggingEnabled);
 
+#ifdef __ANDROID__
+    // present 前已经提交的 GPU 工作仍受原 Fence 保护，恢复路径先等待设备。
+    // 不重置帧索引或业务视图，下一轮只替换平台呈现资源。
+    if ( presentResult == vk::Result::eErrorSurfaceLostKHR )
+        window.markSurfaceChanged();
+#endif
     if ( presentResult == vk::Result::eErrorOutOfDateKHR ||
          presentResult == vk::Result::eSuboptimalKHR ) {
         // 当前提交已经完成，延迟到下一帧入口按统一安全路径重建交换链。
@@ -1049,11 +1116,12 @@ void VKRenderer::render(NativeWindow&                window,
 
     // 平台窗口由 ImGui 后端拥有独立交换链；在主窗口提交后更新，激活边沿还会
     // 恢复整组原生窗口 Z 序。
+    const auto platformStart = profileTimePoint(renderProfileLoggingEnabled);
+#ifndef __ANDROID__
     ImGuiIO&    io               = ImGui::GetIO();
     GLFWwindow* mainWindowHandle = window.getWindowHandle();
     const bool  mainWindowActivated =
         consumeMainWindowActivation(mainWindowHandle);
-    const auto platformStart = profileTimePoint(renderProfileLoggingEnabled);
     if ( io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable ) {
         // UpdatePlatformWindows
         // 先创建、移动或销毁原生视口，随后才能遍历有效句柄。
@@ -1061,7 +1129,7 @@ void VKRenderer::render(NativeWindow&                window,
         if ( mainWindowActivated ) {
             raiseImGuiViewportGroup(mainWindowHandle);
         }
-#ifdef _WIN32
+#    ifdef _WIN32
         // ImGui 可能动态新建平台窗口，每帧对现存 HWND 幂等应用任务栏分组、DWM
         // 阴影和圆角，保持浮动视口与主窗口一致。
         ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
@@ -1092,10 +1160,11 @@ void VKRenderer::render(NativeWindow&                window,
                 }
             }
         }
-#endif
+#    endif
         // 由 ImGui GLFW/Vulkan 后端分别录制并呈现所有非主视口。
         ImGui::RenderPlatformWindowsDefault();
     }
+#endif
     const auto platformEnd = profileTimePoint(renderProfileLoggingEnabled);
     // 帧总耗时包含多视口平台更新；主交换链 present 与平台窗口 present 分列在
     // present、platformWindows 两个阶段，避免把二者混作同一阻塞点。

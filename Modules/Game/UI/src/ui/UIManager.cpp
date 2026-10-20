@@ -163,9 +163,14 @@ bool isInteractionFeedbackAllowed(Graphic::NativeWindow* window)
         return true;
     }
 
+#ifdef __ANDROID__
+    // Android 的后台状态由 SDL 生命周期缓存维护，不访问桌面窗口属性。
+    return !window->isMinimized();
+#else
     // GLFW_ICONIFIED 为真时窗口不可见，不播放交互反馈。
     return glfwGetWindowAttrib(window->getWindowHandle(), GLFW_ICONIFIED) !=
            GLFW_TRUE;
+#endif
 }
 
 /// @brief 判断两个拖拽矩形是否相交。

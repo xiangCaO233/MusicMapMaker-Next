@@ -18,6 +18,7 @@
 #include "graphic/imguivk/VKContext.h"
 #include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKTexture.h"
+#include "graphic/window/WindowPlatform.h"
 #include "imgui.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
@@ -31,7 +32,6 @@
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
-#include <GLFW/glfw3.h>
 #include <ImGuiFileDialog.h>
 #include <concurrentqueue.h>
 #include <filesystem>
@@ -926,10 +926,9 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     renderCollaborationSafetyPopups(dpiScale);
     renderTemporaryProjectPopups(dpiScale, viewport);
     if ( m_exitAfterTemporaryProjectSave && viewport->PlatformHandle ) {
-        // 保存成功事件先落到 UI 队列，本帧再向 GLFW 提交最终退出标志。
+        // 保存成功事件先落到 UI 队列，本帧再向窗口平台提交最终退出标志。
         m_temporaryProjectExitConfirmed = true;
-        glfwSetWindowShouldClose(
-            static_cast<GLFWwindow*>(viewport->PlatformHandle), GLFW_TRUE);
+        Graphic::setPlatformWindowShouldClose(viewport->PlatformHandle, true);
         m_exitAfterTemporaryProjectSave = false;
         // 请求提交后立即清除一次性标志，避免后续帧重复设置关闭状态。
     }
@@ -941,13 +940,14 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         // - 未确认且临时项目打开时必须询问正式保存；
         // - 普通工程有未保存内容时显示保存确认；
         // - 其他情况保留平台关闭标志并退出主循环。
-        // PlatformHandle 由 ImGui 主视口提供，只在本帧内转换为 GLFWwindow。
-        GLFWwindow* nativeWin = (GLFWwindow*)viewport->PlatformHandle;
-        if ( glfwWindowShouldClose(nativeWin) ) {
+        // PlatformHandle 由 ImGui
+        // 主视口提供，仅由平台辅助函数解释，不能跨后端强制转换。
+        void* nativeWin = viewport->PlatformHandle;
+        if ( Graphic::platformWindowShouldClose(nativeWin) ) {
             if ( !m_temporaryProjectExitConfirmed &&
                  engine.isTemporaryProjectOpen() ) {
                 // 临时项目优先于普通未保存判断，因为它还涉及正式目录选择。
-                glfwSetWindowShouldClose(nativeWin, GLFW_FALSE);
+                Graphic::setPlatformWindowShouldClose(nativeWin, false);
                 const auto info = engine.currentTemporaryProjectInfo();
                 // 冻结源包和缓存路径，关闭确认期间不再依赖引擎内部对象。
                 m_temporaryProjectSourcePath =
@@ -962,7 +962,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             } else if ( !m_temporaryProjectExitConfirmed &&
                         engine.hasUnsavedChanges() ) {
                 // 普通工程拦截关闭请求，并使用稳定 ### ID 打开确认框。
-                glfwSetWindowShouldClose(nativeWin, GLFW_FALSE);
+                Graphic::setPlatformWindowShouldClose(nativeWin, false);
                 const std::string exitPopupName = fmt::format(
                     "{}###ExitConfirmation", TR("ui.exit.confirm_title"));
                 ::MMM::UI::FeedbackOpenPopup(exitPopupName.c_str());
@@ -1002,8 +1002,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                 engine.pushCommand(Logic::CmdSaveBeatmap{});
                 // 当前逻辑命令模型按顺序处理保存和退出；此处不阻塞等待完成。
                 if ( viewport->PlatformHandle ) {
-                    glfwSetWindowShouldClose(
-                        (GLFWwindow*)viewport->PlatformHandle, GLFW_TRUE);
+                    Graphic::setPlatformWindowShouldClose(
+                        viewport->PlatformHandle, true);
                 }
                 ImGui::CloseCurrentPopup();
             }
@@ -1012,8 +1012,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                                            ImVec2(120 * dpiScale, 0)) ) {
                 // 放弃保存直接恢复平台关闭请求，不向逻辑队列追加保存命令。
                 if ( viewport->PlatformHandle ) {
-                    glfwSetWindowShouldClose(
-                        (GLFWwindow*)viewport->PlatformHandle, GLFW_TRUE);
+                    Graphic::setPlatformWindowShouldClose(
+                        viewport->PlatformHandle, true);
                 }
                 ImGui::CloseCurrentPopup();
             }
@@ -1331,12 +1331,11 @@ void MainDockSpaceUI::renderTemporaryProjectPopups(float          dpiScale,
                                            ImVec2(120.0f * dpiScale, 0.0f)) ) {
                 if ( m_temporaryProjectAfterSaveAction ==
                      TemporaryProjectAfterSaveAction::ExitApp ) {
-                    // 退出分支恢复 GLFW 标志，并标记已通过临时项目确认。
+                    // 退出分支恢复平台关闭标志，并标记已通过临时项目确认。
                     if ( viewport && viewport->PlatformHandle ) {
                         m_temporaryProjectExitConfirmed = true;
-                        glfwSetWindowShouldClose(
-                            static_cast<GLFWwindow*>(viewport->PlatformHandle),
-                            GLFW_TRUE);
+                        Graphic::setPlatformWindowShouldClose(
+                            viewport->PlatformHandle, true);
                     }
                 } else {
                     // 非退出分支统一请求关闭当前工程，由上层执行资源清理。

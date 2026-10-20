@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 仍使用现有 Vulkan 界面，设备必须提供 Vulkan 能力。 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 网络权限供现有 C++ 更新检查与协作客户端使用，不引入 Java 网络桥。 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="true" />
+    <!-- 文件和配置位于应用私有目录，不申请共享存储权限。 -->
+    <!-- Activity 只承载 SDL 原生窗口，界面与资源生命周期继续由 C++ 主程序维护。 -->
+    <application android:label="MusicMapMaker Next Android" android:allowBackup="false"
+        android:theme="@android:style/Theme.Material.NoActionBar">
+        <!-- 初期沿用桌面编辑器排版，横屏显示，不增加触控交互逻辑。 -->
+        <!-- configChanges 交给 SDL 处理，避免普通旋转重新初始化整套编辑器。 -->
+        <!-- 原生入口也设置 SDL 方向提示，使运行时请求与此处的横屏声明一致。 -->
+        <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="sensorLandscape"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|uiMode|density">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

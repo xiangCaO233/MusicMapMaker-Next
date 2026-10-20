@@ -182,6 +182,13 @@ void VKContext::addStartupDiagnostic(std::string line)
 /// 终止时执行。
 void VKContext::collectGLFWDiagnostics()
 {
+    // Android 的启动错误必须来自本机 SDL 后端，不能把未链接的 GLFW
+    // 错误当作证据。 此分支只在初始化诊断阶段运行，常态帧不查询平台错误文本。
+    // 原有诊断接口保留，避免其他平台改变日志字段和错误收敛顺序。
+#ifdef __ANDROID__
+    addStartupDiagnostic("Window backend: SDL3 Android");
+#else
+
     // 同时记录数值版本与 GLFW
     // 自带完整版本串，后者通常包含构建平台和编译器信息。
     int major    = 0;
@@ -203,6 +210,8 @@ void VKContext::collectGLFWDiagnostics()
     const bool vulkanSupported = glfwVulkanSupported() == GLFW_TRUE;
     addStartupDiagnostic(fmt::format("GLFW Vulkan minimally supported: {}",
                                      yesNo(vulkanSupported)));
+
+#endif
 }
 
 /// @brief 读取并记录 GLFW 线程局部的最近一次错误。
@@ -213,6 +222,11 @@ void VKContext::collectGLFWDiagnostics()
 /// @param context 说明哪个 GLFW 操作触发本次查询的静态上下文文本。
 void VKContext::collectLastGLFWErrorDiagnostic(const char* context)
 {
+#ifdef __ANDROID__
+    addStartupDiagnostic(
+        fmt::format("{} SDL error: {}", context, SDL_GetError()));
+#else
+
     // description 由 GLFW 管理，只在本次格式化调用内读取，不跨函数保存指针。
     const char* description = nullptr;
     const int   code        = glfwGetError(&description);
@@ -227,6 +241,8 @@ void VKContext::collectLastGLFWErrorDiagnostic(const char* context)
         "{} GLFW did not report a concrete error. Last error code: {}",
         context,
         code));
+
+#endif
 }
 
 /// @brief 采集 Vulkan header、loader、instance 扩展与 layer 的完整启动快照。

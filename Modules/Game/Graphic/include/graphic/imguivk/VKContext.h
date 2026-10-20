@@ -1,6 +1,7 @@
 #pragma once
 
 #include "graphic/imguivk/VKQueueFamilyDef.h"
+#include "graphic/window/WindowPlatform.h"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -440,7 +441,16 @@ private:
     /**
      * @brief 重建交换链
      */
-    void recreateSwapchain(GLFWwindow* window_context, int width, int height);
+    /// @return 只有完整呈现资源恢复后返回 true，Surface
+    /// 失效时允许后续事件重试。
+    bool recreateSwapchain(PlatformWindowHandle* window_context, int width,
+                           int height);
+#ifdef __ANDROID__
+    /// @brief Android 恢复后更换原生 Surface，保留 device 和已有 UI/GPU 资源。
+    /// @warning 仅 Surface 失效低频调用，会等待设备空闲并重建交换链。
+    bool restoreAndroidSurface(NativeWindow& window, int width, int height);
+#endif
+
 
     /// @brief Vulkan 渲染流程封装对象 (Render Pass)
     std::unique_ptr<VKRenderPass> m_vkRenderPass{ nullptr };
@@ -460,7 +470,8 @@ private:
     /// @param windowHandle GLFW 窗口句柄。
     /// @param mode 字体、主题和功能开关的初始化模式。
     /// @warning 启动低频路径：创建 ImGui 上下文并初始化后端，禁止重复调用。
-    void imguiVulkanInit(GLFWwindow* windowHandle, VKWindowResourceMode mode);
+    void imguiVulkanInit(PlatformWindowHandle* windowHandle,
+                         VKWindowResourceMode  mode);
 
     /// @brief 加载启动期系统首选字体。
     /// @warning 启动低频路径：会查询系统字体并读取字体文件，禁止放入每帧
