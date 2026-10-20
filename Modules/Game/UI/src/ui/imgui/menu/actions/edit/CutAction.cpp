@@ -1,7 +1,10 @@
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/interaction/EditorInteraction.h"
 #include <imgui.h>
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -13,6 +16,13 @@ namespace
 class CutAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override { return "CutAction"; }
+    /// @brief 菜单提示与触发共用方案解析后的快捷键身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view shortcutActionId() const override { return "cut"; }
+
     /// @brief 发布剪切命令。
     /// @param context 统一菜单上下文。
     /// @param activation 激活来源，不改变剪切命令。
@@ -33,9 +43,12 @@ public:
     {
         // 仅在画布编辑快捷键可用时消费 Ctrl+X，保护文本框剪切行为。
         if ( !MenuUtil::canTriggerCanvasEditingShortcut() ) return false;
-        ImGuiIO& io = ImGui::GetIO();
-        if ( io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_X, false) ) {
-            execute(context, MainMenuItemActivation{});
+        if ( ShortcutUtils::isActionShortcutPressed("cut", false) ) {
+            Interaction::dispatchAction(
+                *this,
+                context,
+                MainMenuItemActivation{
+                    .m_source = MainMenuActivationSource::Shortcut });
             return true;
         }
         return false;

@@ -3,6 +3,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -15,6 +16,13 @@ class PolylineEditingToggleAction final
     : public IMainMenuToggleItemActionHandler
 {
 public:
+    /// @brief 独立于翻译和键位的勾选动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "PolylineEditingToggleAction";
+    }
+
     /// @brief 获取折线编辑设置。
     /// @param context 统一菜单上下文，本动作无需读取。
     /// @return EditorSettings::enablePolylineEditing 的稳定地址。

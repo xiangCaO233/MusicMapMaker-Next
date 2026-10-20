@@ -22,7 +22,9 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/ToolbarDockLayout.h"
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <GLFW/glfw3.h>
@@ -737,9 +739,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
 
                     // 先置进行中标志禁用重复按钮，再向逻辑线程发布保存命令。
                     m_temporaryProjectSaveInProgress = true;
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(
-                            Logic::CmdSaveTemporaryProject{ folderPath }));
+                    Interaction::dispatchCommand(Event::LogicCommandEvent(
+                        Logic::CmdSaveTemporaryProject{ folderPath }));
                 }
                 // 取消选择不会改变保存中标志，也不会清除原后续动作。
                 ImGuiFileDialog::Instance()->Close();
@@ -852,7 +853,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             if ( ::MMM::UI::FeedbackButton(TR("ui.audio_track.main").data(),
                                            { 120, 0 }) ) {
                 // 主轨和音效轨只改变命令枚举，使用同一暂存文件路径。
-                Event::EventBus::instance().publish(
+                Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdImportAudio{
                         m_pendingImportPath, AudioTrackType::Main }));
                 // 命令已按值复制路径，关闭弹窗后无需延长 UI 字符串生命周期。
@@ -861,7 +862,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             ImGui::SameLine();
             if ( ::MMM::UI::FeedbackButton(TR("ui.audio_track.effect").data(),
                                            { 120, 0 }) ) {
-                Event::EventBus::instance().publish(
+                Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdImportAudio{
                         m_pendingImportPath, AudioTrackType::Effect }));
                 // 音效轨导入遵循同一逻辑队列，不在 UI 线程读取音频文件。
@@ -1186,7 +1187,7 @@ void MainDockSpaceUI::requestTemporaryProjectSaveFolder()
         if ( result == NFD_OKAY ) {
             // 只有确认路径后才进入保存中状态；取消不发布逻辑命令。
             m_temporaryProjectSaveInProgress = true;
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            Interaction::dispatchCommand(Event::LogicCommandEvent(
                 Logic::CmdSaveTemporaryProject{ outPath }));
             NFD_FreePathU8(outPath);
         }
@@ -1609,3 +1610,25 @@ void MainDockSpaceUI::reloadTextures(vk::PhysicalDevice& physicalDevice,
 }
 
 };  // namespace MMM::UI
+
+namespace MMM::UI
+{
+/// @brief 新手势与菜单、快捷键共用业务动作，文件确认和脏状态检查继续生效。
+/// @param id 已登记的稳定动作身份，不从翻译文本推导。
+/// @param manager 当前 UI 帧的管理器，只在本次调用中借用。
+/// @return 动作存在并通过业务门禁时返回 true，缺少入口不模拟键盘事件。
+/// @details 文件保存、向导与覆盖确认继续使用菜单对象持有的跨帧状态。
+/// 方案来源保留于激活载荷，不能伪装为用户已经确认的文件覆盖。
+/// 此桥不重新进入方案重映射器，避免新方案请求动作时无限递归。
+bool MainDockSpaceUI::executeInteractionAction(
+    std::string_view id, UIManager* manager,
+    const MainMenuItemActivation& activation)
+{
+    MainMenuContext context{
+        m_statusMessageService,
+        manager,
+        Config::AppConfig::instance().getWindowContentScale()
+    };
+    return Interaction::executeAction(id, context, activation);
+}
+}  // namespace MMM::UI

@@ -4,7 +4,9 @@
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/interaction/EditorInteraction.h"
 #include <imgui.h>
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -15,6 +17,13 @@ namespace
 class PasteAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override { return "PasteAction"; }
+    /// @brief 菜单提示与触发共用方案解析后的快捷键身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view shortcutActionId() const override { return "paste"; }
+
     /// @brief 从系统剪贴板同步并发布粘贴命令。
     /// @param context 单帧主菜单上下文，本动作无需读取。
     /// @param activation 激活来源；菜单与快捷键执行相同粘贴流程。
@@ -44,17 +53,18 @@ public:
         // 每帧读取配置引用，不复制快捷键集合。
         const auto& settings =
             Config::AppConfig::instance().getEditorSettings();
-        if ( ShortcutUtils::isShortcutPressed(
-                 settings.shortcutConfig.mirrorPaste) ) {
+        if ( ShortcutUtils::isActionShortcutPressed("mirrorPaste") ) {
             // 已命中更具体的镜像粘贴组合时，普通粘贴主动让出处理权。
             return false;
         }
 
-        ImGuiIO& io = ImGui::GetIO();
         // 排除 Shift，防止与常见的扩展粘贴组合发生重叠。
-        if ( io.KeyCtrl && !io.KeyShift &&
-             ImGui::IsKeyPressed(ImGuiKey_V, false) ) {
-            execute(context, MainMenuItemActivation{});
+        if ( ShortcutUtils::isActionShortcutPressed("paste", false) ) {
+            Interaction::dispatchAction(
+                *this,
+                context,
+                MainMenuItemActivation{
+                    .m_source = MainMenuActivationSource::Shortcut });
             return true;
         }
         return false;

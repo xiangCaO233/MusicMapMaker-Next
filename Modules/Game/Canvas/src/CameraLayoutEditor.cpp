@@ -1,6 +1,8 @@
 #include "canvas/CameraLayoutEditor.h"
 #include "canvas/CameraLayoutMath.h"
 #include "config/VisualConfig.h"
+#include "ui/imgui/ShortcutUtils.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
@@ -40,6 +42,7 @@ void CameraLayoutEditor::drawControls(Config::VisualConfig&)
 /// @brief 参数窗口不持有 GPU 资源，销毁仅释放自己的 Clay 内存。
 CameraLayoutEditor::~CameraLayoutEditor()
 {
+    UI::Interaction::unregisterInteractionGuard(*this);
     if ( m_parameterLayout.context )
         UI::CLayWrapperCore::instance().destroyWindowContext(m_parameterLayout);
 }
@@ -304,6 +307,13 @@ bool CameraLayoutEditor::update(const std::string& id, ImVec2 origin,
                                 ImVec2 size, ImTextureID texture,
                                 Config::VisualConfig& visual)
 {
+    // 相机布局使用独立输入域，不能继承谱面画笔的按钮解释。
+    // 同一方案可分别实现相机轨道旋转与物件拖动。
+    // 此作用域只借用注册表，不创建跨帧所有权。
+    // 离开更新函数后恢复外层域，避免影响随后绘制的标准面板。
+    // 连续轴约束仍由原控制器维护，切换保护会查询其事务状态。
+    const UI::Interaction::SurfaceScope interactionScope(
+        UI::Interaction::Surface::CameraLayout);
     if ( !m_cameraMode ) {
         // 与预览一样停止提交参数窗口，同时释放其专用布局内存。
         // 返回相机模式时重新创建，不保留失效的 Clay 元素状态。
@@ -315,7 +325,7 @@ bool CameraLayoutEditor::update(const std::string& id, ImVec2 origin,
     // 工具栏可能晚于画布更新；首次进入也须先迁移旧相机参数。
     enableCanvasCameraPose(visual);
     // 三维辅助几何写入父窗口，子窗口始终在上方，不被辅助背景覆盖。
-    drawScene(origin, size, visual);
+    drawScene(id, origin, size, visual);
     drawParameterWindow(id, visual);
     const auto title = std::string("实际视角预览###CameraLayoutPreview_") + id;
     // 预览首次显示采用小窗口，后续允许自由调整尺寸。
@@ -346,9 +356,31 @@ bool CameraLayoutEditor::update(const std::string& id, ImVec2 origin,
 
 /// @brief 绘制世界坐标轴和相机对象，平移沿投影轴，旋转沿世界轴累积。
 /// @warning 固定网格和三组圆环；不分配场景对象，不写盘，不建立逻辑命令。
-void CameraLayoutEditor::drawScene(ImVec2 origin, ImVec2 size,
-                                   Config::VisualConfig& visual)
+/// @details 相机操作有自己的输入表面，不与谱面物件拖动共享按钮语义。
+/// 新方案可接管整个操作空间，并通过原配置更新入口提交相机参数。
+/// 返回未接管时继续原有轴锁定、平移、旋转和观察轨道状态机。
+/// 平台鼠标增量保持原样，当前操作只解释所映射按钮的持续状态。
+/// 退出本作用域会恢复主画布输入域，不能让相机模式影响后续预览窗口。
+/// 具体数值控件仍由 ImGui 维护文本焦点，不对用户输入字符做键位重映射。
+/// 模式切换不创建新的 Vulkan 相机资源，也不改变主画布纹理生命周期。
+/// 动作方案只能借用本帧屏幕区域，不得保存窗口坐标作为未来帧的对象身份。
+/// 多画布的具体相机参数仍由调用者提供，不能通过全局方案合并不同画布的编辑事务。
+void CameraLayoutEditor::drawScene(const std::string& id, ImVec2 origin,
+                                   ImVec2 size, Config::VisualConfig& visual)
 {
+    // 新方案可以接管相机操作空间；经典方案继续使用现有轴、旋转与平移状态机。
+    const UI::Interaction::SurfaceFrame frame{
+        UI::Interaction::Surface::CameraLayout,
+        id,
+        nullptr,
+        origin.x,
+        origin.y,
+        size.x,
+        size.y,
+        ImGui::IsWindowHovered(),
+        ImGui::IsWindowFocused()
+    };
+    if ( UI::Interaction::dispatchSurface(frame) ) return;
     // 所有鼠标位置与辅助图元使用逻辑像素。
     // 不混用原生窗口的物理坐标。
     // 因此 DPI 改变不会使绘制位置与命中区域分离。
@@ -364,15 +396,16 @@ void CameraLayoutEditor::drawScene(ImVec2 origin, ImVec2 size,
                                    { origin.x + size.x, origin.y + size.y }) &&
         !ImGui::IsAnyItemActive();
     // 中键只能在画布按下时获得所有权；悬停其它面板不能开始导航。
-    if ( !ImGui::IsMouseDown(ImGuiMouseButton_Middle) ) m_orbiting = false;
+    if ( !UI::Interaction::mouseDown(ImGuiMouseButton_Middle) )
+        m_orbiting = false;
     if ( hovered && m_axis < 0 &&
-         ImGui::IsMouseClicked(ImGuiMouseButton_Middle) )
+         UI::Interaction::mouseClicked(ImGuiMouseButton_Middle) )
         m_orbiting = true;
     // 导航只能由画布内的中键按下建立。
     // 取得所有权后允许拖出画布，松开立即结束。
     // 输入逐帧推进，不使用同步等待或固定延迟。
     if ( m_orbiting ) {
-        if ( io.KeyShift ) {
+        if ( UI::Interaction::modifier(UI::Interaction::Modifier::Shift) ) {
             // 平移沿观察平面进行，距离越远单位像素覆盖的世界范围越大。
             const auto rotation = cameraEulerRotation(
                 glm::radians(m_orbit.y), glm::radians(m_orbit.x), 0.0F);
@@ -394,7 +427,9 @@ void CameraLayoutEditor::drawScene(ImVec2 origin, ImVec2 size,
     // 距离下限避免近距离数值放大，上限控制精度损失。
     if ( hovered && m_axis < 0 )
         m_distance = std::clamp(
-            m_distance * std::exp2(-io.MouseWheel / 8), 0.5F, 200.0F);
+            m_distance * std::exp2(-UI::Interaction::mouseWheel() / 8),
+            0.5F,
+            200.0F);
     const auto orbit = cameraEulerRotation(
         glm::radians(m_orbit.y), glm::radians(m_orbit.x), 0.0F);
     const glm::vec3 eye =
@@ -539,13 +574,15 @@ void CameraLayoutEditor::drawScene(ImVec2 origin, ImVec2 size,
     // 输入框内的 G/R 属于文本，不能改变当前工具。
     // 拖动中不接受模式切换，避免同一累计偏移被重新解释。
     if ( hovered && !io.WantTextInput && m_axis < 0 ) {
-        if ( ImGui::IsKeyPressed(ImGuiKey_G, false) ) m_rotate = false;
-        if ( ImGui::IsKeyPressed(ImGuiKey_R, false) ) m_rotate = true;
+        if ( UI::ShortcutUtils::isActionShortcutPressed("cameraMove", false) )
+            m_rotate = false;
+        if ( UI::ShortcutUtils::isActionShortcutPressed("cameraRotate", false) )
+            m_rotate = true;
     }
     // 唯一的变换入口是按下已命中的轴或旋转环。
     // 空白处点击及快捷键之后的鼠标空移都不能改变姿态。
     if ( hovered && !m_orbiting && m_axis < 0 && hit >= 0 &&
-         ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+         UI::Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
         m_axis = hit;
         // 事务起点必须按值保存，不能借用随后被修改的配置引用。
         // 取消时同时恢复位置和姿态。
@@ -566,8 +603,9 @@ void CameraLayoutEditor::drawScene(ImVec2 origin, ImVec2 size,
     // 右键只在已开始变换时表示取消，不进入谱面擦除。
     // 取消立即恢复内存配置，下一次正常渲染读取恢复后的姿态。
     // 无需等待会话线程或提交特殊刷新命令。
-    if ( ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
-         ImGui::IsMouseClicked(ImGuiMouseButton_Right) ) {
+    if ( UI::ShortcutUtils::isActionShortcutPressed("cancelInteraction",
+                                                    false) ||
+         UI::Interaction::mouseClicked(ImGuiMouseButton_Right) ) {
         visual.canvasCameraPosition = m_startPosition;
         visual.canvasCameraRotation = m_startRotation;
         m_axis                      = -1;
@@ -576,14 +614,19 @@ void CameraLayoutEditor::drawScene(ImVec2 origin, ImVec2 size,
     // 约束按世界轴解释，与彩色句柄保持一致。
     // 轴切换不改变当前移动或旋转工具。
     // 姿态计算仍从起点出发，不叠加上一个轴的历史偏移。
-    if ( ImGui::IsKeyPressed(ImGuiKey_X, false) ) m_axis = 0;
-    if ( ImGui::IsKeyPressed(ImGuiKey_Y, false) ) m_axis = 1;
-    if ( ImGui::IsKeyPressed(ImGuiKey_Z, false) ) m_axis = 2;
+    if ( UI::ShortcutUtils::isActionShortcutPressed("cameraAxisX", false) )
+        m_axis = 0;
+    if ( UI::ShortcutUtils::isActionShortcutPressed("cameraAxisY", false) )
+        m_axis = 1;
+    if ( UI::ShortcutUtils::isActionShortcutPressed("cameraAxisZ", false) )
+        m_axis = 2;
     // Shift 只缩小本帧增量，实现连续精细调整。
     // 累计值与帧率无关，也不按固定时间抽样。
     // 局部反馈在输入发生的当前帧完成。
-    m_dragDelta += glm::vec2(io.MouseDelta.x, io.MouseDelta.y) *
-                   (io.KeyShift ? 0.1F : 1.0F);
+    m_dragDelta +=
+        glm::vec2(io.MouseDelta.x, io.MouseDelta.y) *
+        (UI::Interaction::modifier(UI::Interaction::Modifier::Shift) ? 0.1F
+                                                                     : 1.0F);
     visual.canvasCameraPosition = m_startPosition;
     visual.canvasCameraRotation = m_startRotation;
     if ( m_rotate ) {
@@ -601,7 +644,10 @@ void CameraLayoutEditor::drawScene(ImVec2 origin, ImVec2 size,
                     mouse - glm::vec2(io.MouseDelta.x, io.MouseDelta.y) -
                         center,
                     mouse - center) *
-                direction * (io.KeyShift ? 0.1F : 1.0F);
+                direction *
+                (UI::Interaction::modifier(UI::Interaction::Modifier::Shift)
+                     ? 0.1F
+                     : 1.0F);
         }
         // 世界轴旋转左乘初始姿态，然后分解回 XYZ 显示值。
         // 这里只读取旋转分量，位置不会绕世界原点公转。
@@ -637,6 +683,15 @@ void CameraLayoutEditor::drawScene(ImVec2 origin, ImVec2 size,
     // 所有变换均由句柄按下开始，鼠标松开确认。
     // 结束后保留最后一帧的位置与姿态。
     // 下一次变换重新冻结起点，不继承旧累计增量。
-    if ( !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) m_axis = -1;
+    if ( !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) m_axis = -1;
+}
+}  // namespace MMM::Canvas
+
+namespace MMM::Canvas
+{
+/// @brief 构造只登记已有状态的观察接口，不创建布局或图形资源。
+CameraLayoutEditor::CameraLayoutEditor()
+{
+    UI::Interaction::registerInteractionGuard(*this);
 }
 }  // namespace MMM::Canvas

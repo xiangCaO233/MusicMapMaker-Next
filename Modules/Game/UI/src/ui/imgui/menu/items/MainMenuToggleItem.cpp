@@ -1,6 +1,7 @@
 #include "ui/imgui/menu/items/MainMenuToggleItem.h"
 #include "config/skin/SkinConfig.h"
 #include "ui/imgui/menu/items/MainMenuItemUtils.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <utility>
 
@@ -22,6 +23,14 @@ MainMenuToggleItem::MainMenuToggleItem(
     , m_actionHandler(std::move(actionHandler))
     , m_icon(icon)
 {
+    // 勾选与普通菜单共用动作注册表，生命周期仍由菜单对象拥有。
+    if ( m_actionHandler ) Interaction::registerAction(*m_actionHandler);
+}
+
+/// @brief 先撤销借用登记再销毁勾选动作。
+MainMenuToggleItem::~MainMenuToggleItem()
+{
+    if ( m_actionHandler ) Interaction::unregisterAction(*m_actionHandler);
 }
 
 /// @brief 更新勾选菜单项业务处理器跨帧状态。
@@ -47,7 +56,7 @@ void MainMenuToggleItem::render(MainMenuContext& context)
         m_icon ? renderMainMenuIconItem(
                      m_icon, resolveLabel(), nullptr, enabled, value && *value)
                : ::MMM::UI::FeedbackMenuItem(
-                     resolveLabel(), nullptr, value, enabled);
+                     resolveLabel(), nullptr, value && *value, enabled);
     // 禁用原因由动作提供，避免把无谱面或协作只读误说成专业模式限制。
     // 提示紧跟原菜单项，仍使用其 LastItem 几何与禁用状态。
     // 原因为空时沿用旧行为，普通不可用项不会收到专业模式提示。
@@ -58,12 +67,10 @@ void MainMenuToggleItem::render(MainMenuContext& context)
         }
     }
     if ( clicked && value ) {
-        if ( m_icon ) {
-            // 自绘图标菜单项不会由 ImGui 自动翻转状态，需要在此显式切换。
-            *value = !*value;
-        }
+        // 渲染只报告点击，真正翻转在 perform 内，所有方案共用一次激活语义。
         // 状态更新后通知处理器执行持久化或附加副作用。
-        m_actionHandler->execute(context, MainMenuItemActivation{});
+        Interaction::dispatchAction(
+            *m_actionHandler, context, MainMenuItemActivation{});
     }
 }
 

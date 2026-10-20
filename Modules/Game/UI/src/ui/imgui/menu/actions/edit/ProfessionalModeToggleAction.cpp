@@ -3,6 +3,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
+#include <string_view>
 
 #include <memory>
 
@@ -17,6 +18,14 @@ class ProfessionalModeToggleAction final
     : public IMainMenuToggleItemActionHandler
 {
 public:
+    /// @brief 独立于翻译和键位的勾选动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    /// @details 稳定身份与菜单翻译分离，方案重映射后仍经过原有模式切换。
+    std::string_view operationId() const override
+    {
+        return "ProfessionalModeToggleAction";
+    }
+
     /// @brief 获取全局专业模式设置。
     /// @param context 单帧主菜单上下文。
     /// @return AppConfig 中持久化的全局专业模式开关地址。

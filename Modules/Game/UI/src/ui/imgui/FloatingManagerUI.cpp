@@ -9,6 +9,7 @@
 #include "ui/ICanvasView.h"
 #include "ui/ISubView.h"
 #include "ui/UIManager.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cfloat>
@@ -967,7 +968,7 @@ void FloatingManagerUI::restoreSubViewState(const std::string& subViewId,
 void FloatingManagerUI::updateDockResizeGesture(ImGuiDockNode* dockNode)
 {
     // mouseDown 用于同时处理释放清理和按下边沿捕获。
-    const bool mouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    const bool mouseDown = Interaction::mouseDown(ImGuiMouseButton_Left);
     if ( !dockNode || !dockNode->ParentNode || !mouseDown ) {
         // 当前不存在可持续的分隔线拖拽目标。
         m_dockResizeGestureActive  = false;
@@ -988,7 +989,7 @@ void FloatingManagerUI::updateDockResizeGesture(ImGuiDockNode* dockNode)
         return;
     }
 
-    if ( !ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+    if ( !Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
         // 按住期间沿用开始帧保存的 ID，不重复命中测试。
         return;
     }
@@ -1294,7 +1295,7 @@ void FloatingManagerUI::applyDockResizeConstraintsBeforeDockSpace(
     // 隐藏侧栏没有现存窗口可在 DockSpace 前约束。
     if ( !m_isVisible ) return;
     if ( m_collapsedResizeDragActive &&
-         ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+         Interaction::mouseDown(ImGuiMouseButton_Left) ) {
         // 透明热区恢复手势由 update 内创建窗口后接管。
         return;
     }
@@ -1353,11 +1354,11 @@ void FloatingManagerUI::applyDockResizeConstraintsBeforeDockSpace(
 
     if ( !dockResizeOverrun.valid || !m_dockResizeGestureActive ||
          m_dockResizeGestureAxis != static_cast<int>(dockResizeOverrun.axis) ||
-         !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+         !Interaction::mouseDown(ImGuiMouseButton_Left) ) {
         // 非有效按住手势不保持最小边界锁。
         m_minResizeLockActive = false;
         m_minResizeLockAxis   = -1;
-        if ( !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        if ( !Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             // 鼠标释放结束本轮画布尺寸保护周期。
             clearCanvasDockSizeProtection();
         }
@@ -1620,7 +1621,7 @@ bool FloatingManagerUI::renderCollapsedResizeOverlay(UIManager* sourceManager)
     ImGui::InvisibleButton("##CollapsedResizeHotZone", hitRect.GetSize());
 
     const bool overlayActive =
-        ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+        ImGui::IsItemActive() && Interaction::mouseDown(ImGuiMouseButton_Left);
     const bool overlayHovered = ImGui::IsItemHovered();
     if ( overlayHovered || overlayActive ) {
         ImGui::SetMouseCursor(axis == ImGuiAxis_Y ? ImGuiMouseCursor_ResizeNS
@@ -1737,7 +1738,7 @@ void FloatingManagerUI::update(UIManager* sourceManager)
         dpiScale);
     const bool resumeCollapsedResize =
         m_collapsedResizeDragActive &&
-        ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+        Interaction::mouseDown(ImGuiMouseButton_Left) &&
         (m_collapsedResizeDragAxis == ImGuiAxis_X ||
          m_collapsedResizeDragAxis == ImGuiAxis_Y);
     const ImGuiAxis resumeAxis =
@@ -1895,10 +1896,10 @@ void FloatingManagerUI::update(UIManager* sourceManager)
              !m_dockResizeGestureActive ||
              m_dockResizeGestureAxis !=
                  static_cast<int>(dockResizeOverrun.axis) ||
-             !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+             !Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             m_minResizeLockActive = false;
             m_minResizeLockAxis   = -1;
-            if ( !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+            if ( !Interaction::mouseDown(ImGuiMouseButton_Left) ) {
                 clearCanvasDockSizeProtection();
             }
         } else {

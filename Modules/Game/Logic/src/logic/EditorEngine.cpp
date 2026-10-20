@@ -1083,6 +1083,9 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
     target.settings.collaborationViewportRenderMode =
         source.settings.collaborationViewportRenderMode;
     target.settings.shortcutConfig = source.settings.shortcutConfig;
+    // 操作方案统一属于应用，切换项目不能切回旧操作语义。
+    target.settings.m_interactionProfileId =
+        source.settings.m_interactionProfileId;
     // BPM 测量工具偏好跨项目共享，避免打开项目时重置用户输入习惯。
     target.settings.bpmMeasurementToolPreferences =
         source.settings.bpmMeasurementToolPreferences;

@@ -9,6 +9,7 @@
 #include "imgui_internal.h"
 #include "logic/EditorEngine.h"
 #include "ui/imgui/manager/SettingsView.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 
@@ -665,7 +666,7 @@ void SettingsView::drawEditorSettings()
     if ( changed ) {
         // 先把完整 EditorConfig 发送给逻辑线程，再持久化同一内存对象。
         // 单帧多个控件变化只产生一次命令和一次保存操作。
-        Event::EventBus::instance().publish(
+        Interaction::dispatchCommand(
             Event::LogicCommandEvent(Logic::CmdUpdateEditorConfig{
                 Config::AppConfig::instance().getEditorConfig() }));
         // AppConfig 负责序列化路径和失败记录，本页不直接访问文件系统。

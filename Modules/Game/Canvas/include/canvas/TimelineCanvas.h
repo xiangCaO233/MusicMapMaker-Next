@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui/interaction/EditorInteraction.h"
+
 #include "canvas/CanvasSnapshotPrepare.h"
 #include "canvas/TimelineAuxiliaryWindowState.h"
 #include "canvas/TimelineFormatSupport.h"
@@ -40,11 +42,22 @@ namespace MMM::Canvas
  * @brief 时间线标尺画布类
  * 停靠在侧边栏与主画布之间，显示小节线、拍线以及 BPM/流速变更标记。
  */
-class TimelineCanvas : public UI::IRenderableView,
+class TimelineCanvas : public UI::Interaction::IInteractionGuard,
+                       public UI::IRenderableView,
                        public UI::IParallelUiPreparable,
                        public UI::ICanvasView
 {
 public:
+    /// @brief 方案切换只能发生在 Timing、插值和表格手势全部结束之后。
+    /// @warning 每帧只读取 UI 本地标志，不等待逻辑线程或遍历物件。
+    bool hasActivePointerGesture() const override
+    {
+        return m_isTimingDragging || m_isTimingErasing ||
+               m_isTimingMarqueeSelecting || m_isTimingDrawPreviewing ||
+               m_isInterpolationDragging || m_isTableRowDragSelecting ||
+               m_isAudioTimeSliderScrubbing;
+    }
+
     /// @brief 创建 Timeline 画布并立即发布初始逻辑视口尺寸。
     /// @param name 画布稳定名称。
     /// @param w 初始逻辑宽度。
@@ -54,7 +67,7 @@ public:
     TimelineCanvas(
         const std::string& name, uint32_t w, uint32_t h,
         std::shared_ptr<Common::Render::RenderSnapshotBuffer> syncBuffer);
-    ~TimelineCanvas() override = default;
+    ~TimelineCanvas() override;
 
     // IUIView 接口
     void update(UI::UIManager* sourceManager) override;
@@ -282,7 +295,8 @@ private:
     /// 交互；禁止引入文件系统访问或阻塞操作。
     void handleTimingCanvasInteraction(const ImVec2& canvasPos,
                                        const ImVec2& size, bool isHovered,
-                                       bool isFocused);
+                                       bool isFocused,
+                                       bool profileAlreadyChecked = false);
 
     /// @brief 绘制 Timeline Timing 的 hover、选中、拖动和框选反馈。
     /// @param canvasPos 画布左上角屏幕坐标。

@@ -1,6 +1,7 @@
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuHelpActions.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
+#include <string_view>
 
 #include "config/AppPaths.h"
 #include "config/skin/SkinConfig.h"
@@ -77,6 +78,20 @@ bool revealFileOrOpenParent(const std::filesystem::path& filePath,
 class OpenHelpPathAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        switch ( m_pathKind ) {
+        case HelpPathKind::SoftwareConfiguration:
+            return "OpenConfigurationAction";
+        case HelpPathKind::SkinsDirectory: return "OpenSkinsDirectoryAction";
+        case HelpPathKind::PluginsDirectory:
+            return "OpenPluginsDirectoryAction";
+        }
+        return "OpenHelpPathAction";
+    }
+
     /// @brief 构造路径打开动作。
     /// @param pathKind 待打开的支持路径类型。
     /// @param failureTranslationKey 操作失败时使用的翻译键。

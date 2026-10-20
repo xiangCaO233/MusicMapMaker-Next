@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui/interaction/EditorInteraction.h"
+
 #include "canvas/PlanarObservationInput.h"
 #include "canvas/TrackLayoutEditing.h"
 #include "common/CanvasComponentLayout.h"
@@ -30,7 +32,7 @@ class UIManager;
 namespace MMM::Canvas
 {
 
-class Basic2DCanvasInteraction
+class Basic2DCanvasInteraction : public UI::Interaction::IInteractionGuard
 {
 public:
     Basic2DCanvasInteraction(const std::string& canvasName,
@@ -49,7 +51,7 @@ public:
                             float snapshotYOffset = 0.0F);
     /// @brief 判断画布是否持有未结束的编辑手势，防止摄像机抢走释放事件。
     /// @warning 每帧常量时间读取 UI 本地门闩，不读取逻辑线程状态。
-    bool hasActivePointerGesture() const
+    bool hasActivePointerGesture() const override
     {
         return m_leftPressStartedOnCanvas || m_leftPressStartedObjectDrag ||
                m_rightEraseActive || m_isMiddleCanvasPanning;

@@ -3,6 +3,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -14,6 +15,13 @@ namespace
 class BmsEditingToggleAction final : public IMainMenuToggleItemActionHandler
 {
 public:
+    /// @brief 独立于翻译和键位的勾选动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "BmsEditingToggleAction";
+    }
+
     /// @brief BMS 子开关只有专业模式开启时可以操作。
     /// @param context 当前菜单上下文，不读取会话锁。
     /// @return 软件级专业模式开启时返回 true。

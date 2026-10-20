@@ -1,5 +1,6 @@
 #include "config/AppConfig.h"
 #include "ui/imgui/menu/actions/MainMenuViewActions.h"
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -11,6 +12,13 @@ namespace
 class ManagerLabelsToggleAction final : public IMainMenuToggleItemActionHandler
 {
 public:
+    /// @brief 独立于翻译和键位的勾选动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "ManagerLabelsToggleAction";
+    }
+
     /// @brief 获取管理器标签显示设置。
     /// @param context 统一菜单上下文，本设置无需读取。
     /// @return AppConfig 中稳定布尔成员的地址。

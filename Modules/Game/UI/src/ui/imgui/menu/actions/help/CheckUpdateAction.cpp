@@ -29,6 +29,13 @@ namespace
 class CheckUpdateAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "CheckUpdateAction";
+    }
+
     /// @brief 构造检查更新动作并创建更新检查器。
     /// @note 检查器独占于动作实例，避免多个菜单入口竞争同一异步状态。
     CheckUpdateAction()

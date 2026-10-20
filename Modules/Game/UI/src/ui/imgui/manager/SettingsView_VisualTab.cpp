@@ -7,6 +7,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "ui/imgui/manager/SettingsView.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <array>
 #include <cstdint>
@@ -733,7 +734,7 @@ void SettingsView::drawVisualSettings()
     if ( changed ) {
         // 先通知逻辑线程采用新 EditorConfig，再持久化同一份 AppConfig。
         // 单帧多个控件变化仍只产生一次事件和一次磁盘保存。
-        Event::EventBus::instance().publish(
+        Interaction::dispatchCommand(
             Event::LogicCommandEvent(Logic::CmdUpdateEditorConfig{
                 Config::AppConfig::instance().getEditorConfig() }));
         // 保存发生在事件发布之后；运行态已经收到新值，即使磁盘写入稍后完成。

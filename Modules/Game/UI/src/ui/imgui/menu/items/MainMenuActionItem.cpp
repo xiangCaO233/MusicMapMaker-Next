@@ -1,7 +1,9 @@
 #include "ui/imgui/menu/items/MainMenuActionItem.h"
 #include "config/skin/SkinConfig.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/menu/items/MainMenuItemUtils.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
 #include <utility>
 
@@ -30,6 +32,14 @@ MainMenuActionItem::MainMenuActionItem(
     , m_actionHandler(std::move(actionHandler))
     , m_walkthroughTarget(std::move(walkthroughTarget))
 {
+    // 动作借用只存在于菜单生命周期，视图关闭后不能再按 ID 调用。
+    if ( m_actionHandler ) Interaction::registerAction(*m_actionHandler);
+}
+
+/// @brief 析构前撤销动作借用，防止方案访问已经关闭的菜单。
+MainMenuActionItem::~MainMenuActionItem()
+{
+    if ( m_actionHandler ) Interaction::unregisterAction(*m_actionHandler);
 }
 
 /// @brief 更新菜单项业务处理器跨帧状态。
@@ -46,6 +56,11 @@ void MainMenuActionItem::update(MainMenuContext& context)
 /// @param context 单帧主菜单上下文。
 /// @warning UI 热路径：仅在所属菜单展开时执行。
 /// @note 业务处理器可按当前上下文覆盖默认图标与快捷键提示。
+/// @details 绘制只报告激活，业务动作统一经过操作方案而不是直接执行。
+/// 快捷键提示也使用相同方案解释，用户重绑后不能继续显示旧构造字符串。
+/// 未绑定的动作显示空提示，但菜单动作本身仍可按原权限执行。
+/// 动作登记只覆盖菜单对象的寿命，销毁后不能再从新手势请求同一个观察指针。
+/// 教程目标只在动作路径确实执行后完成，禁用入口不能伪造完成状态。
 void MainMenuActionItem::render(MainMenuContext& context)
 {
     // 隐藏高级入口时不生成菜单控件；延迟窗口仍由动作处理器负责收起。
@@ -58,6 +73,21 @@ void MainMenuActionItem::render(MainMenuContext& context)
     const char* shortcut = m_actionHandler
                                ? m_actionHandler->shortcut(context, m_shortcut)
                                : m_shortcut;
+    // 统一提示也经过方案映射，重绑定后不能继续显示构造时的硬编码文本。
+    std::string resolvedShortcut;
+    if ( m_actionHandler && !m_actionHandler->shortcutActionId().empty() ) {
+        const auto id = m_actionHandler->shortcutActionId();
+        if ( const auto* descriptor = Config::findEditorShortcut(id) ) {
+            const auto& configured = Config::AppConfig::instance()
+                                         .getEditorSettings()
+                                         .shortcutConfig.*
+                                     (descriptor->m_binding);
+            resolvedShortcut       = ShortcutUtils::formatShortcut(
+                Interaction::activeProfile().shortcut(id, configured));
+            shortcut =
+                resolvedShortcut.empty() ? nullptr : resolvedShortcut.c_str();
+        }
+    }
     // 先保存激活结果，再紧邻控件读取 LastItem 矩形供任意演练配置定位。
     const bool activated =
         renderMainMenuIconItem(icon, resolveLabel(), shortcut, enabled);
@@ -66,8 +96,9 @@ void MainMenuActionItem::render(MainMenuContext& context)
             m_walkthroughTarget);
     // 无处理器的条目仍可绘制为静态项，但不会响应激活。
     if ( activated && m_actionHandler ) {
-        m_actionHandler->execute(context, MainMenuItemActivation{});
-        if ( context.sourceManager && !m_walkthroughTarget.empty() )
+        const bool executed = Interaction::dispatchAction(
+            *m_actionHandler, context, MainMenuItemActivation{});
+        if ( executed && context.sourceManager && !m_walkthroughTarget.empty() )
             // 只有启用条目的处理器已执行，才确认对应菜单目标完成。
             context.sourceManager->walkthroughSpotlight().completeTarget(
                 m_walkthroughTarget, true);

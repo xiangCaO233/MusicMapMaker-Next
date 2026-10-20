@@ -1,4 +1,6 @@
 #include "canvas/TimelineCanvas.h"
+#include "ui/imgui/ShortcutUtils.h"
+#include "ui/interaction/EditorInteraction.h"
 
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
@@ -1243,7 +1245,8 @@ void TimelineCanvas::renderTimingTemplateEditor()
                 ImGuiFileDialog::Instance()->Close();
             }
         }
-        if ( !importing && ImGui::IsKeyPressed(ImGuiKey_Escape) ) {
+        if ( !importing && UI::ShortcutUtils::isActionShortcutPressed(
+                               "cancelInteraction", true) ) {
             // Esc 在操作页取消当前步骤，只有查看页才关闭整个工具。
             if ( phase == TimingTemplateEditorPhase::View ) {
                 state.m_open = false;

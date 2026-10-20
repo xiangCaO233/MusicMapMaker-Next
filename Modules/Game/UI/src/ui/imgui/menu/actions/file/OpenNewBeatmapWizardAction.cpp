@@ -1,8 +1,11 @@
 #include "ui/UIManager.h"
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
+#include "ui/interaction/EditorInteraction.h"
 #include <imgui.h>
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -14,6 +17,16 @@ namespace
 class OpenNewBeatmapWizardAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "OpenNewBeatmapWizardAction";
+    }
+    /// @brief 菜单提示与触发共用方案解析后的快捷键身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view shortcutActionId() const override { return "newBeatmap"; }
+
     /// @brief 仅在已有项目时允许创建谱面。
     /// @param context 统一菜单上下文。
     /// @return UI 已确认活动项目且不处于切换阶段时返回 true。
@@ -33,7 +46,10 @@ public:
                  const MainMenuItemActivation& activation) override
     {
         (void)activation;
-        open(context, Logic::BeatmapCreateOrigin::FileMenu);
+        open(context,
+             activation.m_source == MainMenuActivationSource::Shortcut
+                 ? Logic::BeatmapCreateOrigin::Shortcut
+                 : Logic::BeatmapCreateOrigin::FileMenu);
     }
 
     /// @brief 消费 Ctrl+N 快捷键。
@@ -43,9 +59,12 @@ public:
     bool handleShortcut(MainMenuContext& context) override
     {
         // Ctrl+Shift+N 留给新建项目，当前动作只消费不带 Shift 的 Ctrl+N。
-        ImGuiIO& io = ImGui::GetIO();
-        if ( io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_N) ) {
-            open(context, Logic::BeatmapCreateOrigin::Shortcut);
+        if ( ShortcutUtils::isActionShortcutPressed("newBeatmap", true) ) {
+            Interaction::dispatchAction(
+                *this,
+                context,
+                MainMenuItemActivation{
+                    .m_source = MainMenuActivationSource::Shortcut });
             return true;
         }
         return false;

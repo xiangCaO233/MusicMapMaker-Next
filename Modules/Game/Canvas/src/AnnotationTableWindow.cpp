@@ -1,5 +1,7 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
+
 #include "canvas/AnnotationTableWindow.h"
+#include "ui/interaction/EditorInteraction.h"
 
 #include "canvas/AuxiliaryWindowState.h"
 #include "canvas/AuxiliaryWindowUi.h"
@@ -638,7 +640,8 @@ void AnnotationTableWindow::update(UI::UIManager* sourceManager)
                         // 非按钮区域时 Selectable 才承担整行选择。
                         const bool rowDoubleClicked =
                             ImGui::IsItemHovered() &&
-                            ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+                            UI::Interaction::mouseDoubleClicked(
+                                ImGuiMouseButton_Left);
                         if ( rowClicked ) {
                             // 详情区引用索引只在当前 rows 生命周期内使用。
                             m_selectedRow = index;

@@ -1,32 +1,34 @@
 #pragma once
 
+#include "ui/imgui/menu/interfaces/IMainMenuItemActionHandler.h"
+
 namespace MMM::UI
 {
 struct MainMenuContext;
 struct MainMenuItemActivation;
 
 /// @brief 主菜单勾选菜单项的业务处理接口。
-class IMainMenuToggleItemActionHandler
+class IMainMenuToggleItemActionHandler : public IMainMenuItemActionHandler
 {
 public:
     /// @brief 默认析构勾选菜单项业务处理接口。
-    virtual ~IMainMenuToggleItemActionHandler() = default;
+    ~IMainMenuToggleItemActionHandler() override = default;
 
     /// @brief 更新 action 持有的跨帧状态。
     /// @param context 单帧主菜单上下文。
     /// @warning UI 热路径：每帧执行；默认实现为空。
-    virtual void update(MainMenuContext& context);
+    void update(MainMenuContext& context) override;
 
     /// @brief 尝试消费当前帧快捷键。
     /// @param context 单帧主菜单上下文。
     /// @return 当前 action 消费快捷键时返回 true。
     /// @warning UI 热路径：每帧执行；默认实现不消费。
-    virtual bool handleShortcut(MainMenuContext& context);
+    bool handleShortcut(MainMenuContext& context) override;
 
     /// @brief 获取当前勾选项是否可用。
     /// @param context 单帧主菜单上下文。
     /// @return 可交互时返回 true。
-    virtual bool isEnabled(const MainMenuContext& context) const;
+    bool isEnabled(const MainMenuContext& context) const override;
 
     /// @brief 返回禁用原因的翻译键，默认不为普通不可用状态添加解释。
     /// @param context 单帧主菜单上下文。
@@ -47,13 +49,24 @@ public:
     /// @brief 执行勾选项状态变化后的业务动作。
     /// @param context 单帧主菜单上下文。
     /// @param activation 菜单项激活载荷。
-    virtual void execute(MainMenuContext&              context,
-                         const MainMenuItemActivation& activation) = 0;
+    void execute(MainMenuContext&              context,
+                 const MainMenuItemActivation& activation) override = 0;
+
+    /// @brief 所有激活源在同一入口翻转，方案拦截前不写配置。
+    /// @details 无状态指针时不执行副作用，保持原有禁用语义。
+    void perform(MainMenuContext&              context,
+                 const MainMenuItemActivation& activation) override
+    {
+        if ( auto* state = value(context) ) {
+            *state = !*state;
+            execute(context, activation);
+        }
+    }
 
     /// @brief 渲染 action 触发的延迟窗口或弹窗。
     /// @param context 单帧主菜单上下文。
     /// @warning UI 热路径：每帧执行；默认实现为空。
-    virtual void renderDeferred(MainMenuContext& context);
+    void renderDeferred(MainMenuContext& context) override;
 };
 
 }  // namespace MMM::UI

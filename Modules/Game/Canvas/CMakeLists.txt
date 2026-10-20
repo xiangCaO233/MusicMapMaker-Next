@@ -314,7 +314,7 @@ mmm_add_test_executable(
   tests/TimingInterpolationControlsTest.cpp src/TimingInterpolationControls.cpp)
 target_include_directories(TimingInterpolationControlsTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(TimingInterpolationControlsTest PRIVATE Config MMM Log
+target_link_libraries(TimingInterpolationControlsTest PRIVATE UI Config MMM Log
                                                               3rd_imgui)
 # 独立登记用例，鼠标输入夹具不写用户配置和 imgui.ini。
 mmm_register_test_case(NAME TimingInterpolationControlsTest COMMAND
@@ -335,3 +335,10 @@ mmm_add_test_executable(Canvas TimelineStopCreationTest
 target_link_libraries(TimelineStopCreationTest PRIVATE Canvas)
 mmm_register_test_case(NAME TimelineStopCreationTest COMMAND
                        TimelineStopCreationTest)
+
+# 新方案通过真实主画布控制器接管输入，不能只验证接口替身的返回值。 用例同时验证独占命令出口、坐标投影和释放后切回经典方案。
+mmm_add_test_executable(Canvas EditorInteractionSurfaceTest
+                        tests/EditorInteractionSurfaceTest.cpp)
+target_link_libraries(EditorInteractionSurfaceTest PRIVATE Canvas)
+mmm_register_test_case(NAME EditorInteractionSurfaceTest COMMAND
+                       EditorInteractionSurfaceTest)

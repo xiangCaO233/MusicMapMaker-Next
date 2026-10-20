@@ -78,6 +78,10 @@ configure_file(
 # cmake-format: on
 add_library(
   UI STATIC
+  # 操作方案拥有输入解释与动作路由，不进入底层渲染模块。
+  src/ui/interaction/EditorInteraction.cpp
+  # 主界面动作桥独立编译，纯输入映射不拉入主窗口生命周期。
+  src/ui/interaction/EditorInteractionActions.cpp
   # 视图基础接口与演练流程。
   src/ui/IUIView.cpp
   # 教学段落目录仅在服务构造时读取资源，运行时按已生成模型推进。
@@ -640,3 +644,11 @@ mmm_add_test_executable(UI ProjectDropRouterTest
 # 链接正式 UI 库，避免复制生产扩展名白名单而漏测真实入口。
 target_link_libraries(ProjectDropRouterTest PRIVATE UI)
 mmm_register_test_case(NAME ProjectDropRouterTest COMMAND ProjectDropRouterTest)
+
+# 操作方案测试使用真实 ImGui 输入和事件总线，不创建 Vulkan 或平台窗口。 覆盖旧配置兼容、指针重映射、快捷键语义身份及跨方案动作权限。
+mmm_add_test_executable(UI EditorInteractionProfileTest
+                        tests/EditorInteractionProfileTest.cpp)
+target_link_libraries(EditorInteractionProfileTest PRIVATE UI Config 3rd_imgui)
+# 每个用例独立进程，测试方案不会进入生产方案列表或污染其他用例。
+mmm_register_test_case(NAME EditorInteractionProfileTest COMMAND
+                       EditorInteractionProfileTest)

@@ -7,6 +7,7 @@
 #include "ui/utils/UIWidgetUtils.h"
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -17,6 +18,13 @@ namespace
 class OpenBpmMeasurementAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "OpenBpmMeasurementAction";
+    }
+
     /// @brief 仅在已有项目时允许打开 BPM 测量工具。
     /// @param context 单帧主菜单上下文，本判断无需读取。
     /// @return 当前存在项目时返回 true。

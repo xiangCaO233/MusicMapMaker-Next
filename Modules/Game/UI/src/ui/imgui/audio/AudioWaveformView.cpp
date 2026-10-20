@@ -9,6 +9,7 @@
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -524,16 +525,15 @@ void AudioWaveformView::update(UIManager* sourceManager)
                     // 拖拽期间持续发布相对 Plot 鼠标位置和预览视觉时间。
                     // 宽高随命令一起发送，逻辑层可独立把局部坐标归一化到画布视野。
                     ImVec2 mousePos = ImGui::GetMousePos();
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(
-                            Logic::CmdSetMousePosition{ "AudioWaveform",
-                                                        mousePos.x - plotMin.x,
-                                                        mousePos.y - plotMin.y,
-                                                        plotMax.x - plotMin.x,
-                                                        plotMax.y - plotMin.y,
-                                                        true,
-                                                        true,
-                                                        hoverVisualTime }));
+                    Interaction::dispatchCommand(Event::LogicCommandEvent(
+                        Logic::CmdSetMousePosition{ "AudioWaveform",
+                                                    mousePos.x - plotMin.x,
+                                                    mousePos.y - plotMin.y,
+                                                    plotMax.x - plotMin.x,
+                                                    plotMax.y - plotMin.y,
+                                                    true,
+                                                    true,
+                                                    hoverVisualTime }));
                 }
 
                 if ( ImGui::IsItemDeactivated() &&
@@ -541,21 +541,19 @@ void AudioWaveformView::update(UIManager* sourceManager)
                     // 左键释放立即提交最终音频 Seek，不使用固定时长等待。
                     // Seek 与 inactive
                     // 鼠标命令保持同帧顺序，先确定播放位置再结束预览。
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(
-                            Logic::CmdSeek{ hoverAudioTime }));
+                    Interaction::dispatchCommand(Event::LogicCommandEvent(
+                        Logic::CmdSeek{ hoverAudioTime }));
                     // 同帧发布 inactive 鼠标状态，结束主画布预览拖拽。
                     ImVec2 mousePos = ImGui::GetMousePos();
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(
-                            Logic::CmdSetMousePosition{ "AudioWaveform",
-                                                        mousePos.x - plotMin.x,
-                                                        mousePos.y - plotMin.y,
-                                                        plotMax.x - plotMin.x,
-                                                        plotMax.y - plotMin.y,
-                                                        false,
-                                                        false,
-                                                        -1.0 }));
+                    Interaction::dispatchCommand(Event::LogicCommandEvent(
+                        Logic::CmdSetMousePosition{ "AudioWaveform",
+                                                    mousePos.x - plotMin.x,
+                                                    mousePos.y - plotMin.y,
+                                                    plotMax.x - plotMin.x,
+                                                    plotMax.y - plotMin.y,
+                                                    false,
+                                                    false,
+                                                    -1.0 }));
                 }
             }
         }

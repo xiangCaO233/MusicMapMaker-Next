@@ -16,6 +16,7 @@
 #include "runtime/AppThreadPool.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/SpectrumTimeMapping.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -723,7 +724,7 @@ void AudioSpectrumView::renderChannelInteractionOverlay(
     // 本帧输入状态在 InvisibleButton 后立即读取。
     const bool isInteractionActive  = ImGui::IsItemActive();
     const bool isInteractionHovered = ImGui::IsItemHovered();
-    const bool isLeftMouseDown      = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    const bool isLeftMouseDown = Interaction::mouseDown(ImGuiMouseButton_Left);
     if ( isInteractionActive && m_seekDragOwnerChannel != channelIndex ) {
         // 首个获得 Active 的声道成为本次拖拽唯一所有者。
         m_seekDragOwnerChannel = channelIndex;
@@ -804,7 +805,7 @@ void AudioSpectrumView::renderChannelInteractionOverlay(
 
         if ( isInteractionActive ) {
             // 拖拽期间每帧发布相对坐标、区域尺寸和预览视觉时间。
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            Interaction::dispatchCommand(Event::LogicCommandEvent(
                 Logic::CmdSetMousePosition{ "AudioSpectrum",
                                             mousePos.x - groupMin.x,
                                             mousePos.y - groupMin.y,
@@ -857,10 +858,10 @@ void AudioSpectrumView::renderChannelInteractionOverlay(
 
     if ( ownsSeekDrag && !isLeftMouseDown ) {
         // 鼠标释放由所有者声道提交一次最终音频 Seek。
-        Event::EventBus::instance().publish(
+        Interaction::dispatchCommand(
             Event::LogicCommandEvent(Logic::CmdSeek{ hoverAudioTime }));
         // 同帧发布 inactive 鼠标状态，结束逻辑层预览拖拽。
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+        Interaction::dispatchCommand(Event::LogicCommandEvent(
             Logic::CmdSetMousePosition{ "AudioSpectrum",
                                         mousePos.x - groupMin.x,
                                         mousePos.y - groupMin.y,

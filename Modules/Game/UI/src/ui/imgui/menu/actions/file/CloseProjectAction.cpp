@@ -2,6 +2,7 @@
 #include "event/project/ProjectEvents.h"
 #include "logic/EditorEngine.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -13,6 +14,13 @@ namespace
 class CloseProjectAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "CloseProjectAction";
+    }
+
     /// @brief 仅在已有项目时允许关闭项目。
     /// @param context 统一菜单上下文，本检查无需读取。
     /// @return EditorEngine 当前持有项目时返回 true。

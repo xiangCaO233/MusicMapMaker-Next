@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui/interaction/EditorInteraction.h"
+
 #include "ui/layout/CLayWrapperCore.h"
 #include <array>
 #include <glm/mat4x4.hpp>
@@ -16,17 +18,23 @@ namespace MMM::Canvas
 {
 /// @brief 布局期间的相机操作视图；不拥有 GPU 资源，也不修改谱面物件。
 /// @details 随布局模式进入创建、退出销毁；预览只借用当前画布描述符。
-class CameraLayoutEditor
+class CameraLayoutEditor : public UI::Interaction::IInteractionGuard
 {
 public:
     /// @brief 默认构造不分配 Clay 内存，首次显示参数窗口时才创建。
-    CameraLayoutEditor() = default;
+    CameraLayoutEditor();
     /// @brief 布局退出时释放参数窗口专用的 Clay 内存。
     ~CameraLayoutEditor();
     /// @brief 禁止复制窗口上下文所有权，避免重复释放。
     CameraLayoutEditor(const CameraLayoutEditor&) = delete;
     /// @brief 禁止覆盖现有窗口上下文所有权。
     CameraLayoutEditor& operator=(const CameraLayoutEditor&) = delete;
+    /// @brief 相机轴拖动或观察导航尚未结束时阻止切换操作方案。
+    /// @warning 每帧只读本地事务标志，不查询 GPU 或逻辑会话。
+    bool hasActivePointerGesture() const override
+    {
+        return m_axis >= 0 || m_orbiting;
+    }
     /// @brief 查询本帧是否绘制摄像机操作空间。
     bool cameraMode() const { return m_cameraMode; }
     /// @brief 在调用方工具窗口中仅绘制元素与相机模式切换。
@@ -71,6 +79,7 @@ private:
     glm::vec3 m_center{ 0.0F, 0.0F, 0.4F };
     /// @brief 绘制固定网格、相机视锥及变换轴并处理手势。
     /// @warning 每帧固定辅助几何数量，不遍历谱面或等待逻辑线程。
-    void drawScene(ImVec2 origin, ImVec2 size, Config::VisualConfig& visual);
+    void drawScene(const std::string& id, ImVec2 origin, ImVec2 size,
+                   Config::VisualConfig& visual);
 };
 }  // namespace MMM::Canvas

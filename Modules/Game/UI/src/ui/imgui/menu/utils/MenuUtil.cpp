@@ -13,6 +13,7 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
 #include "ui/imgui/ShortcutUtils.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughService.h"
@@ -270,10 +271,11 @@ bool hasUnsupportedImdNoteMetadata(const BeatMap& beatMap)
 /// @param cmd 需要分发给逻辑层的命令。
 /// @note 命令按值封装进事件，由逻辑层统一维护事务和撤销语义。
 /// @warning UI 热路径调用应只构造轻量命令，不得等待事件处理完成。
+/// @details 统一方案出口只解释意图，命令事件仍由原逻辑订阅者同步接收。
 void MenuUtil::dispatchCommand(const Logic::LogicCommand& cmd)
 {
     // 菜单层只发布事件，不直接访问具体命令处理器。
-    Event::EventBus::instance().publish(Event::LogicCommandEvent(cmd));
+    Interaction::dispatchCommand(Event::LogicCommandEvent(cmd));
 }
 
 /// @brief 唯一项目目录选择器的入口状态；仅由 UI 线程低频访问。

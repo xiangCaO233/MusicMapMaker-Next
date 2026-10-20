@@ -31,6 +31,7 @@
 #include "ui/imgui/ClipboardBridge.h"
 #include "ui/imgui/FloatingManagerUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/audio/AudioSpectrumView.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
@@ -40,6 +41,7 @@
 #include "ui/imgui/markdown/MarkdownImageCache.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/plugin/ToolPluginView.h"
 #include "ui/project/ProjectDropRouter.h"
 #include "ui/utils/NativeFileDialog.h"
@@ -411,6 +413,8 @@ Walkthrough::Spotlight& UIManager::walkthroughSpotlight()
 /// 仅在原生窗口失焦或最小化事件发生时请求，不在事件回调中直接落盘。
 UIManager::UIManager()
 {
+    (void)Interaction::profiles();
+
     // 引导进度与页面定义均位于当前配置根，测试可通过隔离配置根保护个人设置。
     m_walkthrough = std::make_unique<Walkthrough::Service>(
         Config::AppPaths::configRootPath() / "walkthrough-progress.json",
@@ -1622,6 +1626,38 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 /// 遍历或完整排序。
 void UIManager::onUpdateUI()
 {
+    // 帧作用域为新方案提供真实 UI 服务，不延长窗口或会话生命周期。
+    // 释放帧先交给旧控制器完成收尾，下一安全帧才允许替换方案。
+    const Interaction::UiFrameScope interactionFrame(this);
+    // 上一帧释放已处理且本帧没有控件占用时，才在全应用切换操作解释。
+    // 弹窗、录制和拖放仍持有输入所有权，不能把半次操作交给另一方案。
+    // 仅在实际请求切换时扫描固定键表，按住快捷键时也必须保留旧方案。
+    // 常态帧没有这次扫描，移动端的独立手势另由方案自身 guard 报告。
+    const auto& requestedProfile = Config::AppConfig::instance()
+                                       .getEditorSettings()
+                                       .m_interactionProfileId;
+    bool        keyboardReleased = true;
+    if ( requestedProfile != Interaction::activeProfile().id() ) {
+        for ( int key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END;
+              ++key ) {
+            if ( ImGui::IsKeyDown(static_cast<ImGuiKey>(key)) ) {
+                keyboardReleased = false;
+                break;
+            }
+        }
+    }
+    Interaction::synchronizeProfile(
+        Config::AppConfig::instance()
+            .getEditorSettings()
+            .m_interactionProfileId,
+        keyboardReleased && !ImGui::GetIO().WantTextInput &&
+            !ImGui::IsAnyMouseDown() && !ImGui::IsAnyItemActive() &&
+            !ImGui::IsPopupOpen(
+                nullptr,
+                ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) &&
+            !ImGui::GetDragDropPayload() &&
+            !ShortcutUtils::isShortcutRecordingActive());
+
     // 控件矩形属于单帧即时布局，任何视图开始提交前先清除旧坐标。
     m_walkthroughSpotlight->beginFrame();
     // 引导服务先推进页面与动作状态。

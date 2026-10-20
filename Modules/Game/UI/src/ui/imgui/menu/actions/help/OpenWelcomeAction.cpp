@@ -2,6 +2,7 @@
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuHelpActions.h"
 #include <memory>
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -13,6 +14,13 @@ namespace
 class OpenWelcomeAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "OpenWelcomeAction";
+    }
+
     /// @brief 下一帧安全打开欢迎页的主题目录。
     /// @param context 提供可选 UIManager 的单帧上下文。
     /// @param activation 激活载荷，欢迎页入口无需读取。

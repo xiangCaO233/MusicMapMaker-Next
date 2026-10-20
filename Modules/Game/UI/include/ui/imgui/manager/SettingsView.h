@@ -1,4 +1,5 @@
 #pragma once
+#include "config/EditorShortcutActions.h"
 
 #include "config/CreatorIdentity.h"
 #include "event/ui/UISettingsTabEvent.h"
@@ -100,30 +101,8 @@ private:
     /// @details 仅测试定义此访问器，生产搜索仍由界面输入与结果点击驱动。
     friend struct SettingsSearchTestAccess;
     /// @brief 设置页快捷键录制目标。
-    enum class ShortcutRecordTarget {
-        None,
-        ToolMove,
-        ToolMarquee,
-        ToolDraw,
-        ToolColorBrush,
-        ToolColorEraser,
-        Mirror,
-        MirrorPaste,
-        EditSelectedVolume,
-        AddSelectedAnnotation,
-        DeleteSelected,
-        TogglePlayback,
-        AddBpmSegmentAtViewCenter,
-        ToggleReverseScroll,
-        ToggleScrollSnap,
-        ToggleSnapFloor,
-        ToggleScrollTimingMapping,
-        ToggleBeatLines,
-        ToggleStopPlaybackOnScroll,
-        ToggleHitSfx,
-        ToggleHitEffects,
-        ToggleSyncSameMainAudio,
-    };
+    /// @brief 录制身份直接复用统一动作目录，新增动作不再修改第二份枚举。
+    using ShortcutRecordTarget = Config::EditorShortcutAction;
 
     /// @brief 协作服务器设置最近一次应用结果。
     enum class CollaborationServerApplyState {

@@ -1,3 +1,5 @@
+#include "canvas/TimelineCanvas.h"
+#include "ui/interaction/EditorInteraction.h"
 /// @file TimelineCanvas_Interaction.cpp
 /// @brief 实现总时间线 Timing 的投影、吸附、选择、拖拽、擦除和剪贴板交互。
 ///
@@ -7,7 +9,6 @@
 ///
 /// 复制粘贴支持按秒保持间隔和按连续 beat 保持节奏两种语义，BPM 时间线
 /// 仅从快照构建。框选、拖动和擦除以按下/更新/释放事务推进，不使用阻塞等待。
-#include "canvas/TimelineCanvas.h"
 
 #include "canvas/MarqueeAutoScroll.h"
 #include "canvas/TimelineTimingTooltip.h"
@@ -1562,10 +1563,20 @@ void TimelineCanvas::pasteTimingClipboard(double anchorTime)
 /// @param isFocused Timeline 窗口是否聚焦。
 /// @warning UI 热路径：每帧处理 Timeline Timing
 /// 交互；禁止引入文件系统访问或阻塞操作。
+/// @param profileAlreadyChecked 上层已经在滚轮前解释本表面，避免再次调用方案。
+/// @details 测试与独立调用仍可使用默认参数进入同一接管门禁。
+/// 整段接管的判断先于经典删除、复制、拖动和画笔状态转换。
+/// 未接管分支继续使用同一批不可变时间点，不能从逻辑线程借用可变实体容器。
+/// 键位身份来自统一目录，用户修改复制或撤销绑定也会影响本时间线。
+/// 焦点和播放门禁仍由此分支判断，不因绑定变更而允许播放中修改。
+/// 逻辑按钮的按下与释放通过同一方案映射，不能在一次事务中切换解释。
+/// 只有完整松开并结束本地预览的帧才释放 guard，避免换方案时遗留临时操作。
+/// 新方案若需要旧业务动作应请求语义命令，不模拟时间线控件的鼠标点击。
 void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                                                    const ImVec2& size,
                                                    bool          isHovered,
-                                                   bool          isFocused)
+                                                   bool          isFocused,
+                                                   bool profileAlreadyChecked)
 {
     if ( !m_currentSnapshot || !m_currentSnapshot->hasBeatmap ) {
         m_hoveredTimingEntity = entt::null;
@@ -1574,6 +1585,25 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         return;
     }
 
+    // 测试或独立调用不依赖上层传递输入域，提前退出同样恢复旧域。
+    const UI::Interaction::SurfaceScope inputScope(
+        UI::Interaction::Surface::Timeline);
+    // 表面接管发生在经典状态机开始前，避免同一输入被两套操作解释。
+    const UI::Interaction::SurfaceFrame frame{
+        UI::Interaction::Surface::Timeline,
+        m_name,
+        m_currentSnapshot,
+        canvasPos.x,
+        canvasPos.y,
+        size.x,
+        size.y,
+        isHovered,
+        isFocused
+    };
+    if ( !profileAlreadyChecked && UI::Interaction::dispatchSurface(frame) )
+        return;
+
+    // 已失效的时间点只在经典分支清理，新方案拥有自己的临时命中状态。
     pruneInvalidTimingSelection();
 
     ImGuiIO&    io          = ImGui::GetIO();
@@ -1644,7 +1674,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
 
     if ( !isFocused ) {
         if ( m_isTimingErasing &&
-             !ImGui::IsMouseDown(ImGuiMouseButton_Right) ) {
+             !UI::Interaction::mouseDown(ImGuiMouseButton_Right) ) {
             m_isTimingErasing = false;
             m_timingEraseTargetEntities.clear();
         }
@@ -1657,7 +1687,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
          overMenuButton || io.WantTextInput ||
          UI::ShortcutUtils::isShortcutRecordingActive() ) {
         if ( m_isTimingErasing &&
-             !ImGui::IsMouseDown(ImGuiMouseButton_Right) ) {
+             !UI::Interaction::mouseDown(ImGuiMouseButton_Right) ) {
             m_isTimingErasing = false;
             m_timingEraseTargetEntities.clear();
         }
@@ -1668,18 +1698,25 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
              canvasPos, size, isHovered && !overMenuButton) )
         return;
 
-    const bool  ctrl              = io.KeyCtrl;
-    const bool  shift             = io.KeyShift;
+    const bool ctrl =
+        UI::Interaction::modifier(UI::Interaction::Modifier::Control);
+    const bool shift =
+        UI::Interaction::modifier(UI::Interaction::Modifier::Shift);
     const bool  additiveSelection = ctrl || shift;
     const auto& settings = Config::AppConfig::instance().getEditorSettings();
     bool        handledKeyboardCommand = m_currentSnapshot->isPlaying;
-    if ( !handledKeyboardCommand && ctrl && ImGui::IsKeyPressed(ImGuiKey_Z) ) {
+    if ( !handledKeyboardCommand &&
+         (UI::ShortcutUtils::isActionShortcutPressed("undo", true) ||
+          UI::ShortcutUtils::isActionShortcutPressed("redoAlternative",
+                                                     true)) ) {
         publishTimelineCommand(Event::LogicCommandEvent(
-            shift ? Logic::LogicCommand{ Logic::CmdRedo{} }
-                  : Logic::LogicCommand{ Logic::CmdUndo{} }));
+            UI::ShortcutUtils::isActionShortcutPressed("redoAlternative", true)
+                ? Logic::LogicCommand{ Logic::CmdRedo{} }
+                : Logic::LogicCommand{ Logic::CmdUndo{} }));
         handledKeyboardCommand = true;
     }
-    if ( !handledKeyboardCommand && ctrl && ImGui::IsKeyPressed(ImGuiKey_Y) ) {
+    if ( !handledKeyboardCommand &&
+         UI::ShortcutUtils::isActionShortcutPressed("redo", true) ) {
         publishTimelineCommand(Event::LogicCommandEvent(Logic::CmdRedo{}));
         handledKeyboardCommand = true;
     }
@@ -1719,7 +1756,10 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         }
         return true;
     };
-    if ( !handledKeyboardCommand && ImGui::IsKeyPressed(ImGuiKey_A) && ctrl ) {
+    if ( !handledKeyboardCommand &&
+         (UI::ShortcutUtils::isActionShortcutPressed("selectAll", true) ||
+          UI::ShortcutUtils::isActionShortcutPressed("selectAllObjects",
+                                                     true)) ) {
         if ( m_currentSnapshot->currentTool == Logic::EditTool::Move ||
              m_currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             m_selectedTimingEntities.clear();
@@ -1731,22 +1771,26 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         }
         handledKeyboardCommand = true;
     }
-    if ( !handledKeyboardCommand && ImGui::IsKeyPressed(ImGuiKey_C) && ctrl ) {
+    if ( !handledKeyboardCommand &&
+         UI::ShortcutUtils::isActionShortcutPressed("copy", true) ) {
         copySelectedTimingEvents(false);
         handledKeyboardCommand = true;
     }
-    if ( !handledKeyboardCommand && ImGui::IsKeyPressed(ImGuiKey_X) && ctrl ) {
+    if ( !handledKeyboardCommand &&
+         UI::ShortcutUtils::isActionShortcutPressed("cut", true) ) {
         copySelectedTimingEvents(true);
         handledKeyboardCommand = true;
     }
-    if ( !handledKeyboardCommand && ImGui::IsKeyPressed(ImGuiKey_V) && ctrl ) {
+    if ( !handledKeyboardCommand &&
+         UI::ShortcutUtils::isActionShortcutPressed("paste", true) ) {
         ::MMM::UI::ClipboardBridge::importEditorClipboardFromSystem();
         pasteTimingClipboard(std::max(0.0, m_currentSnapshot->currentTime));
         handledKeyboardCommand = true;
     }
-    if ( !handledKeyboardCommand &&
-         (ImGui::IsKeyPressed(ImGuiKey_Delete) ||
-          ImGui::IsKeyPressed(ImGuiKey_Backspace)) ) {
+    if ( !handledKeyboardCommand && (UI::ShortcutUtils::isActionShortcutPressed(
+                                         "deleteSelected", true, 15) ||
+                                     UI::ShortcutUtils::isActionShortcutPressed(
+                                         "deleteAlternative", true)) ) {
         deleteSelectedTimingEvents();
         handledKeyboardCommand = true;
     }
@@ -1756,15 +1800,17 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         m_isTimingErasing = false;
         m_timingEraseTargetEntities.clear();
     } else {
-        if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) ) {
+        if ( isHovered &&
+             UI::Interaction::mouseClicked(ImGuiMouseButton_Right) ) {
             m_isTimingErasing = true;
             updateTimingEraseTarget(hoveredTarget);
         }
-        if ( m_isTimingErasing && ImGui::IsMouseDown(ImGuiMouseButton_Right) ) {
+        if ( m_isTimingErasing &&
+             UI::Interaction::mouseDown(ImGuiMouseButton_Right) ) {
             updateTimingEraseTarget(isHovered ? hoveredTarget : std::nullopt);
         }
         if ( m_isTimingErasing &&
-             ImGui::IsMouseReleased(ImGuiMouseButton_Right) ) {
+             UI::Interaction::mouseReleased(ImGuiMouseButton_Right) ) {
             updateTimingEraseTarget(isHovered ? hoveredTarget : std::nullopt);
             commitTimingEraseTargets();
             m_isTimingErasing = false;
@@ -1775,7 +1821,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     switch ( m_currentSnapshot->currentTool ) {
     case Logic::EditTool::Draw:
         if ( !m_isTimingErasing && isHovered && !hoveredTarget &&
-             ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+             UI::Interaction::mouseClicked(ImGuiMouseButton_Left) &&
              applyProfessionalCreateType() ) {
             m_isTimingDrawPreviewing = true;
             bool snapped             = false;
@@ -1787,11 +1833,12 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
             m_timingDrawPreviewY = static_cast<float>(
                 canvasYAtTime(size, m_timingDrawPreviewTime));
         }
-        if ( hoveredTarget && ImGui::IsMouseReleased(ImGuiMouseButton_Left) ) {
+        if ( hoveredTarget &&
+             UI::Interaction::mouseReleased(ImGuiMouseButton_Left) ) {
             m_isTimingDrawPreviewing = false;
         }
         if ( !m_isTimingErasing && m_isTimingDrawPreviewing &&
-             ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+             UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             if ( !applyProfessionalCreateType() ) {
                 m_isTimingDrawPreviewing = false;
                 break;
@@ -1806,13 +1853,14 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                 canvasYAtTime(size, m_timingDrawPreviewTime));
         }
         if ( !m_isTimingErasing && m_isTimingDrawPreviewing &&
-             ImGui::IsMouseReleased(ImGuiMouseButton_Left) ) {
+             UI::Interaction::mouseReleased(ImGuiMouseButton_Left) ) {
             openTimingCreatePopupAtY(size, localMouseY, localMouseX, false);
             m_isTimingDrawPreviewing = false;
         }
         break;
     case Logic::EditTool::Move:
-        if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+        if ( isHovered &&
+             UI::Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
             if ( hoveredTarget ) {
                 const bool wasSelected =
                     m_selectedTimingEntities.find(hoveredTarget->entity) !=
@@ -1860,11 +1908,12 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
             }
         }
 
-        if ( m_isTimingDragging && ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        if ( m_isTimingDragging &&
+             UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             updateTimingDragPreview();
         }
         if ( m_isTimingDragging &&
-             !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+             !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             finishTimingDrag();
         }
         break;
@@ -1936,7 +1985,8 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
             }
         };
 
-        if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+        if ( isHovered &&
+             UI::Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
             if ( hoveredTarget && isTimingTargetSelectable(*hoveredTarget) ) {
                 const bool wasSelected =
                     m_selectedTimingEntities.find(hoveredTarget->entity) !=
@@ -1972,16 +2022,16 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
             }
         }
         if ( m_isTimingMarqueeSelecting &&
-             ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+             UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             bool autoScrolled = false;
             if ( !m_currentSnapshot->isPlaying ) {
-                const double autoScrollTargetTime =
-                    marqueeAutoScrollTargetTime(*m_currentSnapshot,
-                                                size.y,
-                                                localMouseY,
-                                                io.DeltaTime,
-                                                io.KeyShift,
-                                                autoScrolled);
+                const double autoScrollTargetTime = marqueeAutoScrollTargetTime(
+                    *m_currentSnapshot,
+                    size.y,
+                    localMouseY,
+                    io.DeltaTime,
+                    UI::Interaction::modifier(UI::Interaction::Modifier::Shift),
+                    autoScrolled);
                 if ( autoScrolled ) {
                     const double visualOffset = Config::AppConfig::instance()
                                                     .getVisualConfig()
@@ -1995,7 +2045,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
             refreshMarqueeTargets();
         }
         if ( m_isTimingMarqueeSelecting &&
-             !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+             !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             refreshMarqueeTargets();
             m_isTimingMarqueeSelecting = false;
             m_timingMarqueeBaseSelection.clear();

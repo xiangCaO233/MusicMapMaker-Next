@@ -15,6 +15,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <vector>
 
@@ -28,6 +29,14 @@ class OpenDataSourceReplaceWindowAction final
     : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    /// @details 方案请求只打开既有替换窗口，不跳过资源校验或直接执行替换。
+    std::string_view operationId() const override
+    {
+        return "OpenDataSourceReplaceWindowAction";
+    }
+
     /// @brief 仅在存在活跃谱面时允许替换数据来源。
     /// @param context 单帧主菜单上下文，本判断无需读取。
     /// @return 当前项目具有活动谱面时返回 true。

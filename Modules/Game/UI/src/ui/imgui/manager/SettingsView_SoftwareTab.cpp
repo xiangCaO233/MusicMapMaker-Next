@@ -19,6 +19,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/manager/SettingsView.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
@@ -2413,7 +2414,7 @@ void SettingsView::drawSoftwareSettings()
     if ( changed ) {
         // 一帧内全部普通设置变化合并为一次逻辑命令和一次磁盘保存。
         // 即时副作用已经执行，完整配置命令保证其他消费者最终一致。
-        Event::EventBus::instance().publish(
+        Interaction::dispatchCommand(
             Event::LogicCommandEvent(Logic::CmdUpdateEditorConfig{
                 Config::AppConfig::instance().getEditorConfig() }));
         // AppConfig 负责序列化路径和失败日志，本页不直接写文件。

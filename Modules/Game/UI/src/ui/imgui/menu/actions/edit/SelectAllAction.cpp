@@ -1,7 +1,10 @@
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/interaction/EditorInteraction.h"
 #include <imgui.h>
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -12,6 +15,13 @@ namespace
 class SelectAllAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override { return "SelectAllAction"; }
+    /// @brief 菜单提示与触发共用方案解析后的快捷键身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view shortcutActionId() const override { return "selectAll"; }
+
     /// @brief 发布当前轨道区全选命令。
     /// @param context 单帧主菜单上下文，本动作无需读取。
     /// @param activation 激活来源，不改变选择范围。
@@ -35,11 +45,13 @@ public:
     bool handleShortcut(MainMenuContext& context) override
     {
         if ( !MenuUtil::canTriggerCanvasEditingShortcut() ) return false;
-        ImGuiIO& io = ImGui::GetIO();
         // 排除 Shift，保证 Ctrl+A 与 Ctrl+Shift+A 的职责互斥。
-        if ( io.KeyCtrl && !io.KeyShift &&
-             ImGui::IsKeyPressed(ImGuiKey_A, false) ) {
-            execute(context, MainMenuItemActivation{});
+        if ( ShortcutUtils::isActionShortcutPressed("selectAll") ) {
+            Interaction::dispatchAction(
+                *this,
+                context,
+                MainMenuItemActivation{
+                    .m_source = MainMenuActivationSource::Shortcut });
             return true;
         }
         return false;
@@ -51,6 +63,19 @@ public:
 class SelectAllObjectsAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "SelectAllObjectsAction";
+    }
+    /// @brief 菜单提示与触发共用方案解析后的快捷键身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view shortcutActionId() const override
+    {
+        return "selectAllObjects";
+    }
+
     /// @brief 发布所有轨道区全选命令。
     /// @param context 单帧主菜单上下文，本动作无需读取。
     /// @param activation 激活来源，不改变选择范围。
@@ -74,11 +99,13 @@ public:
     bool handleShortcut(MainMenuContext& context) override
     {
         if ( !MenuUtil::canTriggerCanvasEditingShortcut() ) return false;
-        ImGuiIO& io = ImGui::GetIO();
         // 组合判断与当前轨道区动作互斥，避免同帧发出两条选择命令。
-        if ( io.KeyCtrl && io.KeyShift &&
-             ImGui::IsKeyPressed(ImGuiKey_A, false) ) {
-            execute(context, MainMenuItemActivation{});
+        if ( ShortcutUtils::isActionShortcutPressed("selectAllObjects") ) {
+            Interaction::dispatchAction(
+                *this,
+                context,
+                MainMenuItemActivation{
+                    .m_source = MainMenuActivationSource::Shortcut });
             return true;
         }
         return false;

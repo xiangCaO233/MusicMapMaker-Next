@@ -9,6 +9,7 @@
 #include "ui/imgui/windows/PgoUploadConsentWindow.h"
 #include <functional>
 #include <memory>
+#include <string_view>
 
 namespace MMM::Graphic
 {
@@ -17,9 +18,16 @@ class VKTexture;
 
 namespace MMM::UI
 {
+struct MainMenuItemActivation;
+class UIManager;
 class MainDockSpaceUI : public ITextureLoader, virtual public IUIView
 {
 public:
+    /// @brief 为可替换交互方案执行已注册动作，不需要伪造菜单点击。
+    /// @details 保留主界面的反馈接收端、当前缩放与业务权限校验。
+    bool executeInteractionAction(std::string_view id, UIManager* manager,
+                                  const MainMenuItemActivation& activation);
+
     /// @brief 更新并绘制不抢占焦点的文件操作进度或结果气泡。
     /// @warning UI 每帧执行，只消费通知并绘制固定规模的反馈。
     void           updateSaveFeedback();

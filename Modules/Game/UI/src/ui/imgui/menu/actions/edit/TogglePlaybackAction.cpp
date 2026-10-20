@@ -9,8 +9,10 @@
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include "ui/imgui/menu/actions/tools/BpmShortcutFocus.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/interaction/EditorInteraction.h"
 #include <imgui.h>
 #include <string>
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -24,6 +26,19 @@ namespace
 class TogglePlaybackAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "TogglePlaybackAction";
+    }
+    /// @brief 菜单提示与触发共用方案解析后的快捷键身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view shortcutActionId() const override
+    {
+        return "togglePlayback";
+    }
+
     /// @brief 根据当前播放状态返回播放或暂停图标。
     /// @param context 提供编辑器应用服务查询入口。
     /// @param fallbackIcon 默认图标，本动作始终使用播放状态图标。
@@ -56,9 +71,11 @@ public:
         // 引用配置避免复制完整快捷键集合。
         const auto& shortcutConfig =
             Config::AppConfig::instance().getEditorSettings().shortcutConfig;
+        // 菜单提示直接显示活动方案解释后的绑定，与实际匹配使用相同身份。
+        const auto& playbackBinding = Interaction::activeProfile().shortcut(
+            "togglePlayback", shortcutConfig.togglePlayback);
         // 成员缓存确保返回的 C 字符串在本帧菜单绘制期间有效。
-        m_shortcutBuffer =
-            ShortcutUtils::formatShortcut(shortcutConfig.togglePlayback);
+        m_shortcutBuffer = ShortcutUtils::formatShortcut(playbackBinding);
         return m_shortcutBuffer.empty() ? nullptr : m_shortcutBuffer.c_str();
     }
 
@@ -70,7 +87,20 @@ public:
     void execute(MainMenuContext&              context,
                  const MainMenuItemActivation& activation) override
     {
-        (void)activation;
+        // 激活目标由动作协议携带，不能在真正执行时猜测当前鼠标所在窗口。
+        // 显式目标在方案重映射后仍随激活保留，不能丢失工具播放的归属。
+        // 独立工具必须显式选择自己的播放目标，不得落到后台谱面。
+        // 工具缺失时也直接结束；回退编辑器会意外改变另一条音轨的播放。
+        if ( activation.m_target ==
+             MainMenuActivationTarget::BpmMeasurementTool ) {
+            if ( auto* tool = context.sourceManager
+                                  ? context.sourceManager
+                                        ->getView<BpmMeasurementToolView>(
+                                            "BpmMeasurementTool")
+                                  : nullptr )
+                tool->togglePlaybackFromShortcut();
+            return;
+        }
         // 服务不可用时没有权威播放状态，动作保持无副作用退出。
         const auto* service =
             context.sourceManager
@@ -87,12 +117,15 @@ public:
     /// @return 快捷键触发时返回 true。
     /// @warning UI 热路径：每帧只读取输入状态和当前交互状态。
     /// @note BPM 工具对空格的所有权先于用户配置的全局播放绑定判定。
+    /// @details 操作方案可替换播放绑定，但既有活动控件与 BPM 焦点门禁继续保留。
+    /// 按键被播放动作消费后仍清理同键导航激活，避免一次空格同时点击控件。
+    /// 画笔期间的 Shift 兼容只改变临时解释，不写回用户持久化键位。
     bool handleShortcut(MainMenuContext& context) override
     {
         // 输入与上下文只在当前 ImGui 帧内有效，不跨帧缓存。
         ImGuiIO&      io           = ImGui::GetIO();
         ImGuiContext* imguiContext = ImGui::GetCurrentContext();
-        if ( ImGui::IsKeyPressed(ImGuiKey_Space, false) ) {
+        if ( ShortcutUtils::isActionShortcutPressed("bpmTogglePlayback") ) {
             // 仅在空格首次按下时执行 BPM 焦点父链查询。
             const bool bpmToolFocused =
                 isBpmMeasurementToolFocused(imguiContext);
@@ -102,8 +135,22 @@ public:
                           "BpmMeasurementTool")
                     : nullptr;
             // 任一修饰键都会改变空格路由策略，避免抢占组合快捷键。
+            // 绑定本身要求的修饰键不是额外输入，否则自定义组合永远无法触发。
+            // 未要求的修饰键仍走既有 ConsumeOnly 策略，防止穿透谱面。
+            const auto& bpmBinding = Interaction::activeProfile().shortcut(
+                "bpmTogglePlayback",
+                Config::AppConfig::instance()
+                    .getEditorSettings()
+                    .shortcutConfig.m_bpmTogglePlayback);
             const bool hasModifier =
-                io.KeyCtrl || io.KeyAlt || io.KeySuper || io.KeyShift;
+                (Interaction::modifier(Interaction::Modifier::Control) &&
+                 !bpmBinding.ctrl) ||
+                (Interaction::modifier(Interaction::Modifier::Alt) &&
+                 !bpmBinding.alt) ||
+                (Interaction::modifier(Interaction::Modifier::Super) &&
+                 !bpmBinding.super) ||
+                (Interaction::modifier(Interaction::Modifier::Shift) &&
+                 !bpmBinding.shift);
             const BpmSpaceShortcutDisposition bpmDisposition =
                 // 纯策略函数集中处理焦点、文本输入和工具可用性组合。
                 resolveBpmSpaceShortcutDisposition(bpmToolFocused,
@@ -117,7 +164,13 @@ public:
                 if ( bpmDisposition ==
                      BpmSpaceShortcutDisposition::ToggleTool ) {
                     // 只有明确 ToggleTool 结果才调用工具自身播放控制入口。
-                    bpmTool->togglePlaybackFromShortcut();
+                    Interaction::dispatchAction(
+                        *this,
+                        context,
+                        MainMenuItemActivation{
+                            .m_source = MainMenuActivationSource::Shortcut,
+                            .m_target =
+                                MainMenuActivationTarget::BpmMeasurementTool });
                 }
                 // ConsumeOnly 同样返回 true，阻止空格穿透到底层画布。
                 return true;
@@ -127,6 +180,8 @@ public:
         // BPM 路由未接管后，再解析用户配置的全局播放快捷键。
         const auto& shortcutConfig =
             Config::AppConfig::instance().getEditorSettings().shortcutConfig;
+        const auto& playbackBinding = Interaction::activeProfile().shortcut(
+            "togglePlayback", shortcutConfig.togglePlayback);
         const auto* service =
             context.sourceManager
                 ? context.sourceManager->getEditorApplicationService()
@@ -134,14 +189,16 @@ public:
         // 无编辑器服务时不能判断交互状态或切换播放。
         if ( !service ) return false;
         // 首先按用户绑定原样检测，不隐式添加修饰键。
+        // 常规快捷键已通过命名目录解析；此处只保留画笔所需的兼容分支。
         bool playbackShortcutPressed =
-            ShortcutUtils::isShortcutPressed(shortcutConfig.togglePlayback);
+            ShortcutUtils::isActionShortcutPressed("togglePlayback");
         // 画笔绘制期间 Shift 是交互修饰键，继续允许它叠加在用户绑定上。
-        if ( !playbackShortcutPressed && io.KeyShift &&
-             !shortcutConfig.togglePlayback.shift &&
-             service->isDrawingBrush() ) {
+        if ( !playbackShortcutPressed &&
+             Interaction::modifier(Interaction::Modifier::Shift) &&
+             !playbackBinding.shift && service->isDrawingBrush() ) {
             // 复制单个轻量绑定并仅修改临时 Shift 位，不污染持久化配置。
-            auto shiftedBinding  = shortcutConfig.togglePlayback;
+            // 只为当前帧画笔创建临时值，不把 Shift 叠加保存到应用设置。
+            auto shiftedBinding  = playbackBinding;
             shiftedBinding.shift = true;
             playbackShortcutPressed =
                 ShortcutUtils::isShortcutPressed(shiftedBinding);
@@ -163,7 +220,7 @@ public:
             const bool allowPlaybackToggle =
                 // 策略函数明确列出允许播放切换的连续编辑手势。
                 shouldAllowPlaybackToggleWhileItemActive(
-                    io.KeyShift,
+                    Interaction::modifier(Interaction::Modifier::Shift),
                     service->isSelectingMarquee(),
                     service->isDraggingNote(),
                     service->isDrawingBrush(),
@@ -175,15 +232,22 @@ public:
 
         // 全局播放快捷键已消费按键后，禁止同一按键再激活当前获得导航焦点的
         // 协作跟随按钮或远端位置跳转热区。
+        // 清理导航激活先于业务派发，方案消费播放时也不会残留一次控件点击。
         consumePlaybackShortcutNavigationActivation(imguiContext);
         // 复用菜单执行入口，确保快捷键和点击使用相同目标状态命令。
-        execute(context, MainMenuItemActivation{});
+        // 原动作和替换方案共用这一激活，不能在派发后再直接执行一次播放。
+        Interaction::dispatchAction(
+            *this,
+            context,
+            MainMenuItemActivation{ .m_source =
+                                        MainMenuActivationSource::Shortcut });
         return true;
     }
 
 private:
     /// @brief 当前帧快捷键显示缓存。
     /// @note 仅为 shortcut 返回值提供稳定存储，不参与快捷键匹配。
+    /// 字符串只用于提示缓存，不作为动作身份或下一帧输入来源。
     mutable std::string m_shortcutBuffer;
 };
 }  // namespace

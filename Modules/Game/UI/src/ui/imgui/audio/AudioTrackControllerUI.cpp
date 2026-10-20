@@ -5,6 +5,7 @@
 #include "imgui.h"
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <cfloat>
 #include <cmath>
@@ -405,7 +406,7 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
     // 只在手势结束后保存一次；光标停留但仍按住滑块时不能写盘。
     // 这里不延迟本地声音反馈，也不以固定等待窗口阻塞 UI。
     if ( m_audioSettingsSavePending && !ImGui::IsAnyItemActive() &&
-         !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+         !Interaction::mouseDown(ImGuiMouseButton_Left) ) {
         Config::AppConfig::instance().save();
         m_audioSettingsSavePending = false;
     }

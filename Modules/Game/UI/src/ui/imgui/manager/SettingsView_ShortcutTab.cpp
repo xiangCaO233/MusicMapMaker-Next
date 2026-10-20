@@ -1,4 +1,5 @@
 #include "ui/imgui/manager/SettingsView.h"
+#include "ui/interaction/EditorInteraction.h"
 
 #include "config/AppConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -87,9 +88,9 @@ void SettingsView::drawShortcutBindingControl(Config::ShortcutBinding& binding,
     const char* clearLabel  = TR_CACHE("ui.settings.shortcut.clear").data();
     const float spacing     = ImGui::GetStyle().ItemSpacing.x;
     const float recordW     = ImGui::CalcTextSize(recordLabel).x +
-                          ImGui::GetStyle().FramePadding.x * 2.0f;
-    const float clearW = ImGui::CalcTextSize(clearLabel).x +
-                         ImGui::GetStyle().FramePadding.x * 2.0f;
+                              ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float clearW      = ImGui::CalcTextSize(clearLabel).x +
+                              ImGui::GetStyle().FramePadding.x * 2.0f;
     const float displayW =
         // 展示区至少保留 80 像素，窄窗口也能看见当前绑定。
         std::max(80.0f, width - recordW - clearW - spacing * 2.0f);
@@ -155,7 +156,8 @@ void SettingsView::drawShortcutBindingControl(Config::ShortcutBinding& binding,
 
 /// @brief 绘制快捷键设置页。
 ///
-/// 页面枚举二十个可配置动作，在同一 Clay section 中按工具、编辑和切换动作
+/// 页面枚举统一目录中的全部可配置动作，在同一 Clay section
+/// 中按工具、编辑和切换动作
 /// 排列。冲突检测基于当前帧完整绑定数组，因此任一修改在下一帧即可更新两端
 /// 冲突提示。发生修改后发布编辑器配置命令并持久化 AppConfig。
 ///
@@ -204,6 +206,27 @@ void SettingsView::drawShortcutSettings()
     auto& settings  = appConfig.getEditorSettings();
     bool  changed   = false;
 
+    // 方案身份属于应用设置；只请求切换，运行时等待旧手势自然结束。
+    const auto& active = Interaction::activeProfile();
+    if ( ImGui::BeginCombo(
+             TR("ui.settings.shortcut.interaction_profile").data(),
+             active.name().data()) ) {
+        for ( const auto& profile : Interaction::profiles() ) {
+            // 显示名称允许相同；控件身份始终使用唯一方案 ID。
+            const auto profileId = profile->id();
+            ImGui::PushID(profileId.data(),
+                          profileId.data() + profileId.size());
+            const bool selected =
+                settings.m_interactionProfileId == profile->id();
+            if ( ImGui::Selectable(profile->name().data(), selected) ) {
+                settings.m_interactionProfileId = profile->id();
+                changed                         = true;
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+
     if ( m_recordingShortcutTarget == ShortcutRecordTarget::None ) {
         // 页面重新打开或录制已结束时，确保全局路由不残留录制态。
         ShortcutUtils::setShortcutRecordingActive(false);
@@ -216,7 +239,7 @@ void SettingsView::drawShortcutSettings()
     size_t sectionIndex = 0;
 
     const float maxLabelW =
-        // 使用当前标签页预计算最大标签宽度，使二十行控件起点对齐。
+        // 使用当前标签页预计算最大标签宽度，使全部行控件起点对齐。
         getCurrentTabLabelWidth(appConfig.getWindowContentScale());
 
     // 快捷键页没有折叠标题，仍登记所属组以区分导航身份。
@@ -229,44 +252,18 @@ void SettingsView::drawShortcutSettings()
         "ShortcutSection", shortcutSection, Sizing::Grow(), Sizing::Fit());
 
     // 指针数组既定义冲突比较全集，也避免复制每个 ShortcutBinding。
-    auto& shortcutConfig = settings.shortcutConfig;
-    const std::array<const Config::ShortcutBinding*, 21> shortcutBindings{
-        // 工具选择组。
-        &shortcutConfig.toolMove,
-        &shortcutConfig.toolMarquee,
-        &shortcutConfig.toolDraw,
-        &shortcutConfig.toolColorBrush,
-        &shortcutConfig.toolColorEraser,
-        // 编辑与播放操作组。
-        &shortcutConfig.mirror,
-        &shortcutConfig.mirrorPaste,
-        &shortcutConfig.editSelectedVolume,
-        &shortcutConfig.addSelectedAnnotation,
-        &shortcutConfig.deleteSelected,
-        &shortcutConfig.togglePlayback,
-        &shortcutConfig.addBpmSegmentAtViewCenter,
-        // 编辑器状态切换组。
-        &shortcutConfig.toggleReverseScroll,
-        &shortcutConfig.toggleScrollSnap,
-        &shortcutConfig.toggleSnapFloor,
-        &shortcutConfig.toggleScrollTimingMapping,
-        &shortcutConfig.toggleBeatLines,
-        &shortcutConfig.toggleStopPlaybackOnScroll,
-        &shortcutConfig.toggleHitSfx,
-        &shortcutConfig.toggleHitEffects,
-        &shortcutConfig.toggleSyncSameMainAudio,
+    auto&      shortcutConfig  = settings.shortcutConfig;
+    const auto shortcutEntries = Config::editorShortcutActions();
+    auto       hasConflict     = [&](const Config::ShortcutBinding& binding) {
+        return std::any_of(
+            shortcutEntries.begin(),
+            shortcutEntries.end(),
+            [&](const auto& entry) {
+                const auto& candidate = shortcutConfig.*(entry.m_binding);
+                return &candidate != &binding &&
+                       Config::shortcutBindingsConflict(candidate, binding);
+            });
     };
-    auto hasConflict =
-        [&shortcutBindings](const Config::ShortcutBinding& binding) {
-            // 与自身指针比较时跳过；任意其他绑定冲突即返回 true。
-            return std::any_of(shortcutBindings.begin(),
-                               shortcutBindings.end(),
-                               [&binding](const auto* candidate) {
-                                   return candidate != &binding &&
-                                          Config::shortcutBindingsConflict(
-                                              binding, *candidate);
-                               });
-        };
 
     /// 将一个绑定包装为标准设置行并捕获本帧冲突状态。
     /// bindingPtr 指向 AppConfig 稳定成员，Lambda 在本帧 Clay 渲染时调用。
@@ -303,138 +300,17 @@ void SettingsView::drawShortcutSettings()
             guideTarget);
     };
 
-    // 工具选择快捷键组：移动、框选、绘制、颜色刷与颜色擦除。
-    // 五个工具动作按工具栏视觉顺序排列，便于用户逐项对照修改。
-    // 每个英文 ID 与 ShortcutRecordTarget 和 ShortcutConfig 成员一一对应。
-    addShortcutRow(shortcutSection,
-                   TR_CACHE("ui.settings.shortcut.tool_move").data(),
-                   shortcutConfig.toolMove,
-                   ShortcutRecordTarget::ToolMove,
-                   "ToolMove",
-                   "personalization.settings.shortcut-move");
-    // 框选和移动虽然都用于选择交互，仍保留独立绑定。
-    addShortcutRow(shortcutSection,
-                   TR_CACHE("ui.settings.shortcut.tool_marquee").data(),
-                   shortcutConfig.toolMarquee,
-                   ShortcutRecordTarget::ToolMarquee,
-                   "ToolMarquee");
-    // 绘制工具负责放置物件，不与颜色刷的属性修改语义合并。
-    addShortcutRow(shortcutSection,
-                   TR_CACHE("ui.settings.shortcut.tool_draw").data(),
-                   shortcutConfig.toolDraw,
-                   ShortcutRecordTarget::ToolDraw,
-                   "ToolDraw");
-    // 颜色刷与颜色擦除分别占用稳定目标，支持不同快捷键组合。
-    addShortcutRow(shortcutSection,
-                   TR_CACHE("ui.settings.shortcut.tool_color_brush").data(),
-                   shortcutConfig.toolColorBrush,
-                   ShortcutRecordTarget::ToolColorBrush,
-                   "ToolColorBrush");
-    addShortcutRow(shortcutSection,
-                   TR_CACHE("ui.settings.shortcut.tool_color_eraser").data(),
-                   shortcutConfig.toolColorEraser,
-                   ShortcutRecordTarget::ToolColorEraser,
-                   "ToolColorEraser");
-
-    // 编辑操作组：镜像、镜像粘贴、批量音量、批注、删除与播放。
-    // 此分组只用于页面阅读顺序，冲突检测仍覆盖全部二十个绑定。
-    addShortcutRow(shortcutSection,
-                   TR_CACHE("ui.settings.shortcut.mirror").data(),
-                   shortcutConfig.mirror,
-                   ShortcutRecordTarget::Mirror,
-                   "Mirror");
-    // 镜像粘贴与普通镜像是不同命令，不能共享录制目标。
-    addShortcutRow(shortcutSection,
-                   TR_CACHE("ui.settings.shortcut.mirror_paste").data(),
-                   shortcutConfig.mirrorPaste,
-                   ShortcutRecordTarget::MirrorPaste,
-                   "MirrorPaste");
-    addShortcutRow(shortcutSection,
-                   TR_CACHE("ui.settings.shortcut.edit_selected_volume").data(),
-                   shortcutConfig.editSelectedVolume,
-                   ShortcutRecordTarget::EditSelectedVolume,
-                   "EditSelectedVolume");
-    // 批注动作名称较长，统一标签列宽保证其录制控件仍与其他行对齐。
-    addShortcutRow(
-        shortcutSection,
-        TR_CACHE("ui.settings.shortcut.add_selected_annotation").data(),
-        shortcutConfig.addSelectedAnnotation,
-        ShortcutRecordTarget::AddSelectedAnnotation,
-        "AddSelectedAnnotation");
-    addShortcutRow(shortcutSection,
-                   TR_CACHE("ui.settings.shortcut.delete_selected").data(),
-                   shortcutConfig.deleteSelected,
-                   ShortcutRecordTarget::DeleteSelected,
-                   "DeleteSelected");
-    addShortcutRow(shortcutSection,
-                   TR_CACHE("ui.settings.shortcut.toggle_playback").data(),
-                   shortcutConfig.togglePlayback,
-                   ShortcutRecordTarget::TogglePlayback,
-                   "TogglePlayback");
-    // BPM 工具动作只在工具窗口聚焦时执行，仍参与全局绑定冲突检测。
-    // 设置页可录制该组合，不需要先打开测量工具窗口。
-    addShortcutRow(
-        shortcutSection,
-        TR_CACHE("ui.settings.shortcut.add_bpm_segment_at_view_center").data(),
-        shortcutConfig.addBpmSegmentAtViewCenter,
-        ShortcutRecordTarget::AddBpmSegmentAtViewCenter,
-        "AddBpmSegmentAtViewCenter");
-
-    // 编辑器状态切换组：滚动方向、吸附、节拍线、音效和同步策略。
-    // 这些动作改变持续设置而非选择工具，但使用相同录制与冲突规则。
-    addShortcutRow(
-        shortcutSection,
-        TR_CACHE("ui.settings.shortcut.toggle_reverse_scroll").data(),
-        shortcutConfig.toggleReverseScroll,
-        ShortcutRecordTarget::ToggleReverseScroll,
-        "ToggleReverseScroll");
-    // 滚动吸附和吸附下取整是两个可独立启用的状态。
-    addShortcutRow(shortcutSection,
-                   TR_CACHE("ui.settings.shortcut.toggle_scroll_snap").data(),
-                   shortcutConfig.toggleScrollSnap,
-                   ShortcutRecordTarget::ToggleScrollSnap,
-                   "ToggleScrollSnap");
-    addShortcutRow(shortcutSection,
-                   TR_CACHE("ui.settings.shortcut.toggle_snap_floor").data(),
-                   shortcutConfig.toggleSnapFloor,
-                   ShortcutRecordTarget::ToggleSnapFloor,
-                   "ToggleSnapFloor");
-    addShortcutRow(
-        shortcutSection,
-        TR_CACHE("ui.settings.shortcut.toggle_scroll_timing_mapping").data(),
-        shortcutConfig.toggleScrollTimingMapping,
-        ShortcutRecordTarget::ToggleScrollTimingMapping,
-        "ToggleScrollTimingMapping");
-    // 节拍线切换只触发显示模式入口，模式历史由专用状态对象维护。
-    addShortcutRow(shortcutSection,
-                   TR_CACHE("ui.settings.shortcut.toggle_beat_lines").data(),
-                   shortcutConfig.toggleBeatLines,
-                   ShortcutRecordTarget::ToggleBeatLines,
-                   "ToggleBeatLines");
-    addShortcutRow(
-        shortcutSection,
-        TR_CACHE("ui.settings.shortcut.toggle_stop_playback_on_scroll").data(),
-        shortcutConfig.toggleStopPlaybackOnScroll,
-        ShortcutRecordTarget::ToggleStopPlaybackOnScroll,
-        "ToggleStopPlaybackOnScroll");
-    // 打击音效和视觉效果分别配置，避免强制绑定成同一个组合。
-    addShortcutRow(shortcutSection,
-                   TR_CACHE("ui.settings.shortcut.toggle_hit_sfx").data(),
-                   shortcutConfig.toggleHitSfx,
-                   ShortcutRecordTarget::ToggleHitSfx,
-                   "ToggleHitSfx");
-    addShortcutRow(shortcutSection,
-                   TR_CACHE("ui.settings.shortcut.toggle_hit_effects").data(),
-                   shortcutConfig.toggleHitEffects,
-                   ShortcutRecordTarget::ToggleHitEffects,
-                   "ToggleHitEffects");
-    // 同主音频同步策略位于末行，但仍包含在冲突全集中。
-    addShortcutRow(
-        shortcutSection,
-        TR_CACHE("ui.settings.shortcut.toggle_sync_same_main_audio").data(),
-        shortcutConfig.toggleSyncSameMainAudio,
-        ShortcutRecordTarget::ToggleSyncSameMainAudio,
-        "ToggleSyncSameMainAudio");
+    // 目录驱动显示、冲突和录制，新增动作无需修改此页面的控制流。
+    for ( const auto& entry : shortcutEntries ) {
+        addShortcutRow(shortcutSection,
+                       TR(entry.m_labelKey).data(),
+                       shortcutConfig.*(entry.m_binding),
+                       entry.m_action,
+                       entry.m_id.data(),
+                       entry.m_action == ShortcutRecordTarget::ToolMove
+                           ? "personalization.settings.shortcut-move"
+                           : nullptr);
+    }
 
     // 渲染完整 Clay 树后推进 ImGui 游标，保持父设置窗口滚动范围正确。
     ImVec2 startPos = ImGui::GetCursorScreenPos();
@@ -444,7 +320,7 @@ void SettingsView::drawShortcutSettings()
 
     if ( changed ) {
         // 逻辑线程先接收完整编辑器配置，磁盘保存复用同一 AppConfig 快照。
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+        Interaction::dispatchCommand(Event::LogicCommandEvent(
             Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
         // 保存失败由配置层记录；本函数不回滚已经呈现的快捷键草稿。
         appConfig.save();

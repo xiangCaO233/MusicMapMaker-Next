@@ -1,5 +1,9 @@
 #pragma once
 
+#include "config/AppConfig.h"
+#include "config/EditorShortcutActions.h"
+#include "ui/interaction/EditorInteraction.h"
+
 #include "common/EditTool.h"
 #include "config/EditorSettings.h"
 #include "imgui.h"
@@ -148,10 +152,13 @@ inline const ShortcutKeyEntry* findKeyEntry(std::string_view stableName)
 inline bool modifiersMatch(const Config::ShortcutBinding& binding)
 {
     // ImGuiIO 聚合左右修饰键，本配置同样不区分左右侧。
-    const ImGuiIO& io = ImGui::GetIO();
     // 使用完全匹配，额外按住的修饰键也会阻止快捷键触发。
-    return io.KeyCtrl == binding.ctrl && io.KeyShift == binding.shift &&
-           io.KeyAlt == binding.alt && io.KeySuper == binding.super;
+    return Interaction::modifier(Interaction::Modifier::Control) ==
+               binding.ctrl &&
+           Interaction::modifier(Interaction::Modifier::Shift) ==
+               binding.shift &&
+           Interaction::modifier(Interaction::Modifier::Alt) == binding.alt &&
+           Interaction::modifier(Interaction::Modifier::Super) == binding.super;
 }
 
 /// @brief 将快捷键绑定格式化为菜单和设置页显示文本。
@@ -219,7 +226,59 @@ inline bool isShortcutPressed(const Config::ShortcutBinding& binding,
         return false;
     }
     // repeat 由调用方决定按住时是否按 ImGui 重复率持续触发。
-    return ImGui::IsKeyPressed(entry->key, repeat);
+    return Interaction::keyPressed(entry->key, repeat);
+}
+
+/// @brief 通过稳定动作身份查询绑定，菜单、画布和新方案共用同一个入口。
+/// @details
+/// 仅在默认硬编码组合未改动时保留其宽松修饰键语义，用户重绑定严格匹配。
+/// @warning 每帧只读配置和固定目录，不分配或保存配置。
+/// @param action 固定动作字段名，目录查找失败即不触发任何编辑操作。
+/// @param repeat 调用者决定是否重复，工具切换和菜单通常只消费首帧。
+/// @param legacyModifiers
+/// 当前表面对旧默认组合的额外修饰键要求；表格用零保持严格匹配。
+/// @return 当前方案解析后的绑定在这一帧命中时返回 true。
+/// @details 动作身份与主键不同，重映射复制不能顺带改掉所有字母 C 的操作。
+/// 配置引用由 AppConfig 持有，方案返回的引用同样必须稳定。
+/// 禁用或空键立即拒绝，不以其他动作的默认键补齐。
+/// 只有完整等于旧默认组合时才启用历史修饰键通配规则。
+/// 新绑定采用严格匹配，避免额外 Ctrl 或 Shift 同时触发多个编辑动作。
+/// 主键查询也经过表面输入映射，按下、保持与释放使用同一键身份。
+/// 设置页录制仍读取物理键，不把已经解释后的键再次保存为配置。
+/// 调用者必须先检查弹窗、文本焦点和录制隔离，本 helper 不取得输入所有权。
+/// BPM 和主画布继续各自决定动作归属，不能单凭绑定命中转交到后台谱面。
+/// 目录是固定小表，不在热路径生成哈希字典或扫描文件系统。
+/// 逻辑命令与保存流程在命中后单独执行，此函数本身没有编辑副作用。
+inline bool isActionShortcutPressed(
+    std::string_view action, bool repeat = false,
+    std::optional<unsigned> legacyModifiers = std::nullopt)
+{
+    const auto* descriptor = Config::findEditorShortcut(action);
+    if ( !descriptor ) return false;
+    const auto& configured =
+        Config::AppConfig::instance().getEditorSettings().shortcutConfig.*
+        (descriptor->m_binding);
+    const auto& binding =
+        Interaction::activeProfile().shortcut(action, configured);
+    const auto* key = findKeyEntry(binding.key);
+    if ( !binding.enabled || !key ) return false;
+    // 只有尚未改变的旧默认绑定保留历史通配修饰键；新配置不继承隐式歧义。
+    static const Config::ShortcutConfig defaults;
+    const bool legacy = Config::shortcutBindingsConflict(
+        binding, defaults.*(descriptor->m_binding));
+    const unsigned extras =
+        legacy ? legacyModifiers.value_or(descriptor->m_legacyExtraModifiers)
+               : 0;
+    const auto matches =
+        [&](Interaction::Modifier modifier, bool required, unsigned bit) {
+            const bool pressed = Interaction::modifier(modifier);
+            return required ? pressed : (!pressed || (extras & bit) != 0);
+        };
+    return matches(Interaction::Modifier::Control, binding.ctrl, 1) &&
+           matches(Interaction::Modifier::Shift, binding.shift, 2) &&
+           matches(Interaction::Modifier::Alt, binding.alt, 4) &&
+           matches(Interaction::Modifier::Super, binding.super, 8) &&
+           Interaction::keyPressed(key->key, repeat);
 }
 
 /// @brief 获取快捷键录制全局状态。
@@ -336,17 +395,26 @@ inline const Config::ShortcutBinding& getToolShortcut(
 {
     // 只读重载直接返回 EditorSettings 内部绑定，调用方不得延长其生命周期。
     switch ( tool ) {
-    case Logic::EditTool::Move: return settings.shortcutConfig.toolMove;
-    case Logic::EditTool::Marquee: return settings.shortcutConfig.toolMarquee;
-    case Logic::EditTool::Draw: return settings.shortcutConfig.toolDraw;
+    case Logic::EditTool::Move:
+        return Interaction::activeProfile().shortcut(
+            "toolMove", settings.shortcutConfig.toolMove);
+    case Logic::EditTool::Marquee:
+        return Interaction::activeProfile().shortcut(
+            "toolMarquee", settings.shortcutConfig.toolMarquee);
+    case Logic::EditTool::Draw:
+        return Interaction::activeProfile().shortcut(
+            "toolDraw", settings.shortcutConfig.toolDraw);
     case Logic::EditTool::ColorBrush:
-        return settings.shortcutConfig.toolColorBrush;
+        return Interaction::activeProfile().shortcut(
+            "toolColorBrush", settings.shortcutConfig.toolColorBrush);
     case Logic::EditTool::ColorEraser:
-        return settings.shortcutConfig.toolColorEraser;
+        return Interaction::activeProfile().shortcut(
+            "toolColorEraser", settings.shortcutConfig.toolColorEraser);
     case Logic::EditTool::Layout: break;
     }
     // Layout 当前没有独立绑定，回退 Move 保持返回引用始终有效。
-    return settings.shortcutConfig.toolMove;
+    return Interaction::activeProfile().shortcut(
+        "toolMove", settings.shortcutConfig.toolMove);
 }
 
 /// @brief 获取指定编辑工具对应的可写快捷键绑定。

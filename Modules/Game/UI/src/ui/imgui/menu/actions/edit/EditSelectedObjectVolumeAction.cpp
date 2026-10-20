@@ -11,7 +11,9 @@
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <string_view>
 
 #include <imgui.h>
 
@@ -134,6 +136,19 @@ SelectedVolumeState inspectSelectedVolumeState()
 class EditSelectedObjectVolumeAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "EditSelectedObjectVolumeAction";
+    }
+    /// @brief 菜单提示与触发共用方案解析后的快捷键身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view shortcutActionId() const override
+    {
+        return "editSelectedVolume";
+    }
+
     /// @brief 普通模式隐藏采样音量菜单，避免展示无法使用的高级功能。
     /// @param context 单帧主菜单上下文。
     /// @return 与专业编辑能力一致的入口可见性。
@@ -210,10 +225,13 @@ public:
         // 每帧引用最新配置，使运行时重绑无需重建菜单动作。
         const auto& shortcutConfig =
             Config::AppConfig::instance().getEditorSettings().shortcutConfig;
-        if ( ShortcutUtils::isShortcutPressed(
-                 shortcutConfig.editSelectedVolume) ) {
+        if ( ShortcutUtils::isActionShortcutPressed("editSelectedVolume") ) {
             // 复用菜单执行入口，保证快捷键同样刷新选择摘要。
-            execute(context, MainMenuItemActivation{});
+            Interaction::dispatchAction(
+                *this,
+                context,
+                MainMenuItemActivation{
+                    .m_source = MainMenuActivationSource::Shortcut });
             return true;
         }
         return false;

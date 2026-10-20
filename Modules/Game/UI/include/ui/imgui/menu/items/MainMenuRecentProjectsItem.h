@@ -12,6 +12,9 @@ namespace MMM::UI
 class MainMenuRecentProjectsItem final : public IMainMenuItem
 {
 public:
+    /// @brief 销毁前移除跨方案动作登记。
+    ~MainMenuRecentProjectsItem() override;
+
     /// @brief 构造最近项目子菜单项。
     /// @param actionHandler 最近项目点击业务处理器。
     explicit MainMenuRecentProjectsItem(
