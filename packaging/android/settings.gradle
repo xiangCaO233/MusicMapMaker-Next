@@ -1,0 +1,6 @@
+// Android 只增加打包外壳，插件和依赖全部使用官方仓库。
+pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+// 固定插件版本由根 build.gradle 声明，不跟随 Studio 自动升级。
+dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+rootProject.name = 'MusicMapMakerAndroid'
+include ':app'

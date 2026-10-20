@@ -100,7 +100,8 @@ public:
     /**
      * @brief 高效重建交换链
      */
-    void recreate(vk::PhysicalDevice& vkPhysicalDevice,
+    /// @return 只有新交换链及其图像视图全部可用时返回 true，失败保留重建脏位。
+    bool recreate(vk::PhysicalDevice& vkPhysicalDevice,
                   vk::SurfaceKHR&     vkSurface,
                   QueueFamilyIndices& queueFamilyIndices, int w, int h);
 
@@ -140,8 +141,9 @@ private:
     /// 回调写入；只表示脏位，禁止承载资源生命周期同步。
     std::atomic<bool> m_needsRecreate{ false };
 
-    // 提取出的公共初始化逻辑
-    void createInternal(vk::PhysicalDevice& vkPhysicalDevice,
+    /// @brief 校验 surface 能力并创建图像资源，失败不发布无效句柄。
+    /// @return 返回值用于阻止失败后继续创建 framebuffer 或查询空交换链。
+    bool createInternal(vk::PhysicalDevice& vkPhysicalDevice,
                         vk::SurfaceKHR&     vkSurface,
                         QueueFamilyIndices& queueFamilyIndices, int w, int h,
                         vk::SwapchainKHR oldSwapchain = nullptr);

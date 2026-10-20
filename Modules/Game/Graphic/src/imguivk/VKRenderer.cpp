@@ -118,7 +118,15 @@ void VKRenderer::triggerRecreate(NativeWindow& window)
 {
     int w, h;
     window.getFramebufferSize(w, h);
-    m_vkContext.recreateSwapchain(window.getWindowHandle(), w, h);
+    const bool ready =
+        m_vkContext.recreateSwapchain(window.getWindowHandle(), w, h);
+#ifdef __ANDROID__
+    // acquire 后切后台可让重建失败；下一帧先推进 SDL，再恢复原生 Surface。
+    // 不假设此前一次尺寸查询成功就意味着整个 Vulkan 重建期间窗口持续可用。
+    if ( !ready ) window.markSurfaceChanged();
+#else
+    (void)ready;
+#endif
 }
 
 /// @brief 在交换链重建后同步图像数量及按图像索引使用的完成信号量。
