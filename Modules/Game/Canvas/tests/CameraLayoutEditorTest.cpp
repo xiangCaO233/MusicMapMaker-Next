@@ -420,10 +420,23 @@ bool checkDynamicThickness()
                                     glm::dot(project({ bottom.x, bottom.y }) -
                                                  project({ top.x, top.y }),
                                              normal));
-                                // 部分补偿在线性屏幕厚度间混合，满补偿的目标始终为
+                                // 半强度分别测量上下两侧位移的几何中点，满强度仍为
                                 // 24 像素。
+                                // 透视令两侧自然位移不对称，不能先合并总高度再取中点。
+                                const auto anchor =
+                                    project({ x + edge * 80, y });
+                                const float lower = std::abs(glm::dot(
+                                    project({ x + edge * 80, y + 12 }) - anchor,
+                                    normal));
+                                const float upper = std::abs(glm::dot(
+                                    project({ x + edge * 80, y - 12 }) - anchor,
+                                    normal));
+                                // 期望只使用独立屏幕投影，不读取算法的倍率或齐次反解中间值。
                                 const float expected =
-                                    natural + (24 - natural) * amount;
+                                    amount == 0   ? natural
+                                    : amount == 1 ? 24
+                                                  : std::sqrt(lower * 12) +
+                                                        std::sqrt(upper * 12);
                                 if ( std::abs(actual - expected) > 0.015F ||
                                      bottom.x != x + edge * 80 ||
                                      top.x != bottom.x )
@@ -487,6 +500,59 @@ bool checkDynamicThickness()
     // 同一退化输入先开启后关闭，还可发现错误保留上次失败状态的实现。
     invalid.m_amount = 0;
     if ( !invalid.compensate(points) || points != original ) return false;
+    return true;
+}
+
+/// @brief 验证部分厚度补偿不会让远端贴图提前进入等高平台或相对增厚。
+/// @return 随距离增加，像素高度与相对宽度的厚度均持续减小时为真。
+/// @note 使用用户反馈对应的内置斜轨相机，宽度保留真实透视。
+/// @note 此处检查视觉趋势，不复制待测补偿公式作为期望结果。
+/// @note 高宽比约束覆盖相对变厚的观感，不能仅比较远近绝对像素高度。
+/// @note 远端样本仍在有效裁剪范围内，不能依赖失败回退获得预期趋势。
+bool checkPartialThickness()
+{
+    using namespace MMM;
+    Config::VisualConfig visual;
+    visual.canvasCameraPoseEnabled = true;
+    visual.canvasCameraPosition    = { 0, -0.8F, 0.9F };
+    visual.canvasCameraRotation    = { 45, 0, 0 };
+    const auto matrix =
+        Canvas::canvasCameraPoseProjection(800, 600, 0, visual, 4);
+    /// @brief 独立投影实际提交的顶点，输出逻辑屏幕像素。
+    const auto project = [&](glm::vec2 point) {
+        const auto clip = matrix * glm::vec4(point, 0, 1);
+        return glm::vec2(clip) / clip.w * glm::vec2(400, 300);
+    };
+    // 第一处样本建立近端基准，后续只比较相邻位置，不预设某个固定高度常数。
+    float previousHeight = 1.0e6F, previousRatio = 1.0e6F;
+    // 前两处覆盖近端与红线附近，后续位置继续推进到远端延长区。
+    // 原先线性混合的固定高度下限会令后几个音符的高宽比反向增大。
+    // 全部样本使用同一轨道与源尺寸，排除分区轨宽差异造成的高度变化。
+    // 延长区继续采样可识别渐近下限，不能只检查一对恰好相似的近远位置。
+    for ( float y : { 450.0F, 0.0F, -600.0F, -1800.0F, -4800.0F } ) {
+        Logic::RenderSnapshot snapshot;
+        // 每个位置独立生成几何，避免在上一轮已补偿顶点上重复叠乘。
+        snapshot.thicknessCompensation = { matrix, { 800, 600 }, 0.35F };
+        Logic::System::Batcher batcher(&snapshot);
+        batcher.setTexture(Logic::TextureID::Note);
+        batcher.pushQuad(400, y + 12, 80, 24, glm::vec4(1));
+        // 宽度沿未改动的中心线测量，避免把倾斜厚度边的横移计入轨宽。
+        // 使用实际四角高度，防止只修改配置或候选范围便通过测试。
+        const auto& bottom = snapshot.vertices[0].pos;
+        const auto& top    = snapshot.vertices[3].pos;
+        const float height = std::abs(project({ bottom.x, bottom.y }).y -
+                                      project({ top.x, top.y }).y);
+        const float width =
+            glm::length(project({ 480, y }) - project({ 400, y }));
+        // 统一源宽高后，归一化高度只反映补偿与相机变化，不混入不同皮肤资产。
+        const float ratio = height / width;
+        // 未达满补偿时保留纵向透视；越远不能比前一个位置更高或相对更厚。
+        // 很小的容差只覆盖投影舍入，不能掩盖固定下限造成的明显反转。
+        if ( height >= previousHeight || ratio > previousRatio + 0.0001F )
+            return false;
+        previousHeight = height;
+        previousRatio  = ratio;
+    }
     return true;
 }
 
@@ -789,7 +855,8 @@ bool checkWindows()
 int main()
 {
     if ( !checkMath() || !checkCanvasLength() || !checkCompensation() ||
-         !checkDynamicThickness() || !checkWindows() ) {
+         !checkDynamicThickness() || !checkPartialThickness() ||
+         !checkWindows() ) {
         XERROR("CameraLayoutEditorTest failed");
         return 1;
     }

@@ -75,9 +75,27 @@ struct CanvasThicknessCompensation {
             const float natural = k / (clip.w * original.w);
             const float uniform =
                 std::copysign(std::abs(glm::dot(delta, sourceNormal)), natural);
-            const float target = natural + (uniform - natural) *
-                                               std::clamp(m_amount, 0.0F, 1.0F);
-            // 混合发生在最终屏幕厚度上，百分之五十是自然厚度与目标厚度的中点。
+            const float naturalSize = std::abs(natural);
+            const float uniformSize = std::abs(uniform);
+            // 零厚度表示投影退化，无有限倍率能恢复；非有限值也不能进入幂函数。
+            if ( !(naturalSize > 0) || !(uniformSize > 0) ||
+                 !std::isfinite(naturalSize) || !std::isfinite(uniformSize) )
+                return false;
+            const float amount = std::clamp(m_amount, 0.0F, 1.0F);
+            // 部分补偿插值放大倍率，不能线性混入固定像素高度，否则远端提前等高。
+            // 半强度取两种投影位移的几何中点；满强度直接使用精确等高目标。
+            // 比值使用 double，防止极小自然厚度在相除时先溢出 float。
+            const float target =
+                amount == 1.0F
+                    ? uniform
+                    : std::copysign(
+                          static_cast<float>(
+                              naturalSize *
+                              std::pow(static_cast<double>(uniformSize) /
+                                           naturalSize,
+                                       amount)),
+                          natural);
+            // 幂插值没有固定高度下限，未达满补偿时远端仍随透视逐渐变矮。
             // 即使运动补偿已经消除了部分透视，也只补偿最终矩阵剩余的缩放。
             const float denominator = k - target * clip.w * d.w;
             // 精确解 target = k*t /
