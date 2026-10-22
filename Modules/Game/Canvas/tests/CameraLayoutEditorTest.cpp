@@ -354,13 +354,23 @@ bool checkDynamicThickness()
     using namespace MMM;
     Config::VisualConfig visual;
     visual.canvasCameraPoseEnabled = true;
-    visual.canvasCameraRotation    = { 45, 0, 18 };
     // 厚度以逻辑像素定义，窗口宽高不同可暴露遗漏视口比例的计算。
     // 近远端和左右轨道分别测量，避免只在画布中央侥幸等厚。
     // 相机朝向包含俯仰和画面旋转，单纯除以俯仰余弦不能通过本组测试。
-    // 改变距离时保持观察方向不变，使近远差异来自真实齐次投影而非构造误差。
-    for ( float distance : { 0.65F, 1.0F, 2.0F } ) {
-        visual.canvasCameraPosition = { 0, -0.8F * distance, 0.9F * distance };
+    // 连续切换正视、小倾角、大倾角与旋转方向，再返回初始视角，防止缓存固定补偿。
+    // 正负偏航改变透视压缩的方向，不能只覆盖绕水平轴的一种预览姿态。
+    for ( const auto camera : { glm::vec4(0, 0, 0, .65F),
+                                glm::vec4(15, 0, -18, 1),
+                                glm::vec4(15, -35, 18, 1.3F),
+                                glm::vec4(45, 0, 18, 2),
+                                glm::vec4(45, 35, -25, 1.2F),
+                                glm::vec4(65, 8, -25, 1.2F),
+                                glm::vec4(0, 0, 0, .65F) } ) {
+        const float distance        = camera.w;
+        visual.canvasCameraRotation = { camera.x, camera.y, camera.z };
+        visual.canvasCameraPosition = { .01F * camera.y,
+                                        -0.8F * distance,
+                                        0.9F * distance };
         // 自然透视、部分匀速与完全匀速均使用各自最终矩阵。
         // 这样可捕获厚度补偿错误读取未经运动补偿的原始相机参数。
         for ( float motion : { 0.0F, 50.0F, 100.0F } ) {
@@ -386,6 +396,11 @@ bool checkDynamicThickness()
                         const auto      end   = project({ x + 80, y });
                         const auto      row   = glm::normalize(end - start);
                         const glm::vec2 normal(-row.y, row.x);
+                        // 满补偿保持源高宽比
+                        // 24/80，实际像素高度随该位置投影宽度变化。
+                        // 宽度不参与补偿，可在绘制前独立计算参考尺度，避免循环验证。
+                        const float fullHeight =
+                            24 * glm::length(end - start) / 80;
                         // 原始四角来自固定宽高的正式
                         // pushQuad，不手写待测函数的中间结果。
                         // 三个强度都验证实际最终顶点，关闭分支也不能偷偷改变几何。
@@ -420,8 +435,8 @@ bool checkDynamicThickness()
                                     glm::dot(project({ bottom.x, bottom.y }) -
                                                  project({ top.x, top.y }),
                                              normal));
-                                // 半强度分别测量上下两侧位移的几何中点，满强度仍为
-                                // 24 像素。
+                                // 半强度分别测量上下两侧位移的几何中点；
+                                // 满强度使用当前位置宽度对应的目标厚度。
                                 // 透视令两侧自然位移不对称，不能先合并总高度再取中点。
                                 const auto anchor =
                                     project({ x + edge * 80, y });
@@ -433,10 +448,12 @@ bool checkDynamicThickness()
                                     normal));
                                 // 期望只使用独立屏幕投影，不读取算法的倍率或齐次反解中间值。
                                 const float expected =
-                                    amount == 0   ? natural
-                                    : amount == 1 ? 24
-                                                  : std::sqrt(lower * 12) +
-                                                        std::sqrt(upper * 12);
+                                    amount == 0 ? natural
+                                    : amount == 1
+                                        ? fullHeight
+                                        : std::sqrt(lower * fullHeight * .5F) +
+                                              std::sqrt(upper * fullHeight *
+                                                        .5F);
                                 if ( std::abs(actual - expected) > 0.015F ||
                                      bottom.x != x + edge * 80 ||
                                      top.x != bottom.x )
@@ -463,13 +480,16 @@ bool checkDynamicThickness()
         }
     }
     // 底边模式必须固定原来的底边，不能因增加厚度而穿过判定线。
-    // 正面两倍距离需要将局部高度翻倍，但底边仍停在 Y=300。
+    // 正面等比退距不应额外增厚；此处再压缩纵向一半以检验底边锚点。
     Logic::RenderSnapshot aligned;
     aligned.thicknessCompensation = {
         Common::Render::planarObservationProjection(800, 600, 0, 0, 0, 2),
         { 800, 600 },
         1
     };
+    // 当前横向缩放为二分之一、纵向为四分之一，补偿需要将局部高度翻倍。
+    // 源底边仍停在 Y=300，不能随恢复高宽比而穿过判定线。
+    aligned.thicknessCompensation.m_projection[1][1] *= .5F;
     Logic::System::Batcher alignedBatcher(&aligned);
     // 先开启底边作用域再切换纹理，验证对齐缓存的刷新顺序。
     // 输入半高与定位偏移应抵消为原来的时间锚点。

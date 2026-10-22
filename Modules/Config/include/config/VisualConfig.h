@@ -262,7 +262,8 @@ struct VisualConfig {
     float canvasCameraLength{ 1.0F };
     /// @brief 三维纵向透视运动补偿，零为原效果，一百为消除纵向远慢近快。
     float canvasMotionCompensation{ 0.0F };
-    /// @brief 三维动态厚度补偿百分数，零保留透视，一百恢复二维屏幕厚度。
+    /// @brief
+    /// 三维动态厚度补偿百分数，零保留透视，一百按当前投影宽度保持贴图比例。
     float canvasThicknessCompensation{ 0.0F };
     /// @brief 返回皮肤的二维基准纵向比例；最终厚度由逐图元投影补偿。
     /// @warning 逐物件固定数值运算，不读取全局配置、不分配或访问文件。

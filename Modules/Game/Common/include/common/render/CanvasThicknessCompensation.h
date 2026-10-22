@@ -17,7 +17,7 @@ namespace MMM::Common::Render
 struct CanvasThicknessCompensation {
     glm::mat4 m_projection{ 1.0F };  ///< 与当前主画布相同的最终投影。
     glm::vec2 m_viewport{ 1.0F };    ///< 投影使用的逻辑像素视口。
-    float     m_amount{ 0.0F };  ///< 零保留透视，一表示屏幕厚度等于二维厚度。
+    float     m_amount{ 0.0F };  ///< 零保留透视，一表示保持源贴图的高宽比例。
 
     /// @brief 按两条厚度边的中心反解透视，保持中心线与端点跨度不变。
     /// @param points 按左下、右下、右上、左上排列的源平面四角。
@@ -37,7 +37,7 @@ struct CanvasThicknessCompensation {
         const auto a     = m_projection * glm::vec4(left, 0, 1);
         const auto b     = m_projection * glm::vec4(right, 0, 1);
         if ( !visible(a) || !visible(b) ) return false;
-        // 源法线给出未透视时的目标像素厚度，屏幕法线给出实际的可见厚度。
+        // 源法线给出未透视的厚度比例基准，屏幕法线给出实际的可见厚度。
         // 两者分别归一化，才能正确处理非正方形视口以及绕 Z 轴旋转的画布。
         // 端点投影连线就是整个中心线的投影，无需对每个像素求导。
         const auto sourceRow = right - left;
@@ -52,7 +52,11 @@ struct CanvasThicknessCompensation {
                                      sourceRow.x / sourceLength);
         const glm::vec2 screenNormal(-screenRow.y / screenLength,
                                      screenRow.x / screenLength);
-        auto            corrected = points;
+        // 目标厚度跟随当前投影下的宽度，不能固定为与距离无关的二维像素值。
+        // 当前矩阵包含相机位置、旋转及运动补偿，换视角后比例会随之重新计算。
+        // 正视且横纵等比时无需额外加高；倾斜导致的纵向压缩才产生补偿。
+        const float widthScale = screenLength / sourceLength;
+        auto        corrected  = points;
         for ( std::size_t i = 0; i < points.size(); ++i ) {
             const bool onLeft = i == 0 || i == 3;
             const auto anchor = onLeft ? left : right;
@@ -73,8 +77,8 @@ struct CanvasThicknessCompensation {
             // 有符号投影距离保留上下边方向，翻转视角也不能将两边移到同一侧。
             // 用法线分量而非屏幕边长衡量，避免斜向剪切看似加高但实际仍薄。
             const float natural = k / (clip.w * original.w);
-            const float uniform =
-                std::copysign(std::abs(glm::dot(delta, sourceNormal)), natural);
+            const float uniform = std::copysign(
+                std::abs(glm::dot(delta, sourceNormal)) * widthScale, natural);
             const float naturalSize = std::abs(natural);
             const float uniformSize = std::abs(uniform);
             // 零厚度表示投影退化，无有限倍率能恢复；非有限值也不能进入幂函数。
@@ -83,7 +87,7 @@ struct CanvasThicknessCompensation {
                 return false;
             const float amount = std::clamp(m_amount, 0.0F, 1.0F);
             // 部分补偿插值放大倍率，不能线性混入固定像素高度，否则远端提前等高。
-            // 半强度取两种投影位移的几何中点；满强度直接使用精确等高目标。
+            // 半强度取两种投影位移的几何中点；满强度保持与当前宽度协调的比例。
             // 比值使用 double，防止极小自然厚度在相除时先溢出 float。
             const float target =
                 amount == 1.0F

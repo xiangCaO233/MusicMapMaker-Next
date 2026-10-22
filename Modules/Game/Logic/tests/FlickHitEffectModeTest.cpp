@@ -204,15 +204,18 @@ bool testLaneModes()
                 MMM::Logic::RenderSnapshot compensated;
                 fillUvs(compensated);
                 // 主画布在生成前发布投影；独立特效测试也必须提供真实的观察条件。
-                // 正面两倍距离使屏幕缩放减半，满补偿应精确恢复定高帧厚度。
+                // 退距后再压缩纵向一半，满补偿应恢复固定帧相对于当前宽度的比例。
                 // 状态来自当前快照，不能仅修改全局相机开关便期待局部绘制知道距离。
-                if ( spatial )
+                if ( spatial ) {
                     compensated.thicknessCompensation = {
                         MMM::Common::Render::planarObservationProjection(
                             800, 600, 0, 0, 0, 2),
                         { 800, 600 },
                         1.0F
                     };
+                    // 单独压缩纵向可区分定高帧的比例补偿与整轨动画的覆盖范围。
+                    compensated.thicknessCompensation.m_projection[1][1] *= .5F;
+                }
                 MMM::Logic::System::Batcher compensatedBatcher(&compensated);
                 system.generateSnapshot(compensatedBatcher,
                                         0,

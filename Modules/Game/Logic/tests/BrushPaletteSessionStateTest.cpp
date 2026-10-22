@@ -17,6 +17,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -529,6 +530,71 @@ bool testObservationCameraSurvivesStaleConfig()
     return ok;
 }
 
+/// @brief 验证相机交互发布后逻辑快照立即取得完整姿态，稳定值不重复发布。
+/// @return 连续换角度、切回二维与无关配置保留均符合约束时返回 true。
+/// @note 使用正式修订读取入口，不通过完整配置广播掩盖缺失的相机发布。
+/// @note 测试只检查跨线程快照发布契约，不依赖渲染线程恰好完成一帧。
+/// @note 投影后的几何比例由 CameraLayoutEditorTest 另行覆盖。
+bool testCameraConfigSnapshot()
+{
+    // 单例状态必须先按值保存，后续读取不持有引擎内部引用。
+    auto&         engine   = MMM::Logic::EditorEngine::instance();
+    const auto    original = engine.getEditorConfig();
+    auto          snapshot = original;
+    std::uint64_t revision = 0;
+    // 先吸收前面用例的配置修订，后续才可判断本次相机变化是否被发布。
+    (void)engine.refreshEditorConfigSnapshot(snapshot, revision);
+    bool ok = true;
+    // 角度先增大再反向，最后返回正视，防止实现只处理单调增厚。
+    // 每一轮都使用相同强度，发布差异不能依赖补偿滑块再次变化。
+    for ( const float angle : { 0.0F, 15.0F, 65.0F, -20.0F, 0.0F } ) {
+        auto camera = original.visual;
+        // 保持强度为满补偿，只改变视角；回到零角度同时切回非姿态模式。
+        camera.canvasCameraPoseEnabled = angle != 0;
+        camera.canvasCameraRotation = { angle, angle * 0.5F, -angle * 0.25F };
+        camera.canvasCameraPosition = { angle * 0.01F, -0.8F, 1.2F };
+        camera.canvasCameraLength   = 2.0F;
+        camera.canvasMotionCompensation    = 35.0F;
+        camera.canvasThicknessCompensation = 100.0F;
+        // 旧观察模式参数也成组更新，防止切换模式后沿用旧方向或距离。
+        camera.debugCanvasCameraAngleDegrees = angle;
+        camera.debugCanvasCameraYawDegrees   = -angle;
+        camera.debugCanvasCameraDistance     = 1.5F;
+        // 候选值故意携带不同的无关设置，发布入口必须只复制相机字段。
+        camera.overrideBeatLineColors = !original.visual.overrideBeatLineColors;
+        engine.updateCanvasCameraConfig(camera);
+        const bool changed =
+            engine.refreshEditorConfigSnapshot(snapshot, revision);
+        // 刷新成功与字段正确必须同时成立，不能读取残留的上轮姿态。
+        const auto& actual = snapshot.visual;
+        // 位置、旋转、长度及模式组成完整姿态；漏掉任一项均判为失败。
+        // 旧模式三字段和新模式两数组一同检查，覆盖模式切换的边界。
+        ok = changed && ok &&
+             actual.canvasCameraPoseEnabled == camera.canvasCameraPoseEnabled &&
+             actual.canvasCameraRotation == camera.canvasCameraRotation &&
+             actual.canvasCameraPosition == camera.canvasCameraPosition &&
+             near(actual.canvasCameraLength, camera.canvasCameraLength) &&
+             near(actual.canvasMotionCompensation,
+                  camera.canvasMotionCompensation) &&
+             near(actual.canvasThicknessCompensation,
+                  camera.canvasThicknessCompensation) &&
+             near(actual.debugCanvasCameraAngleDegrees, angle) &&
+             near(actual.debugCanvasCameraYawDegrees, -angle) &&
+             near(actual.debugCanvasCameraDistance, 1.5F) &&
+             actual.overrideBeatLineColors ==
+                 original.visual.overrideBeatLineColors;
+        // 相同姿态重复输入不应增加修订，也不能制造一次完整配置刷新。
+        // 此检查直接覆盖稳定帧，避免靠 UI 恰好未调用才躲过重复发布。
+        engine.updateCanvasCameraConfig(camera);
+        ok = !engine.refreshEditorConfigSnapshot(snapshot, revision) && ok;
+    }
+    // 失败也恢复原始相机；不用完整配置入口写回或持久化无关全局设置。
+    engine.updateCanvasCameraConfig(original.visual);
+    // 错误只在恢复完成后报告，保证同进程其它用例不会继承失败夹具。
+    if ( !ok ) XERROR("Canvas camera snapshot did not follow the current pose");
+    return ok;
+}
+
 /// @brief 验证全谱清理会清除新旧颜色字段、折线子段，并可撤销。
 /// @return 正式模型和运行时视图一致且无关数据保留时返回 true。
 /// @details
@@ -675,6 +741,7 @@ int main()
                    testPaletteRestoredAfterSessionClose() &&
                    testAudioResourceRestoredAfterSessionClose() &&
                    testBackgroundCanvasMousePositionRouting() &&
+                   testCameraConfigSnapshot() &&
                    testConcurrentEditorConfigSnapshots()
                ? 0
                : 1;

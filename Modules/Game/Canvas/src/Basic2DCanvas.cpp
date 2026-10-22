@@ -2833,9 +2833,9 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         // 输入映射与待录制的轨道投影共用矩阵；背景仍使用自己的屏幕投影。
         // 每帧只构造一次平面逆矩阵，后续拾取和拖动都复用固定大小缓存。
         auto& cameraVisual = Config::AppConfig::instance().getVisualConfig();
-        // 长度拖动与精确输入即时生效，只有数值发生变化才发布配置。
-        // 普通相机拖动仅影响 UI 投影，不进入逻辑配置发布路径。
-        const float previousExtension = cameraVisual.canvasCameraExtension();
+        // 相机拖动和精确输入共用变更检测，逻辑厚度补偿必须与 UI 投影同源。
+        // 只发布固定大小观察参数，不能在交互中等待会话更新或广播完整配置。
+        const bool previousPoseEnabled = cameraVisual.canvasCameraPoseEnabled;
         // 固定大小参数用于识别实际编辑，无变化帧不构造预设 JSON 或排队写盘。
         const auto previousPosition  = cameraVisual.canvasCameraPosition;
         const auto previousRotation  = cameraVisual.canvasCameraRotation;
@@ -2854,21 +2854,18 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
                 canvasSize,
                 (ImTextureID)(VkDescriptorSet)getDescriptorSet(),
                 cameraVisual);
-        if ( previousPosition != cameraVisual.canvasCameraPosition ||
+        if ( previousPoseEnabled != cameraVisual.canvasCameraPoseEnabled ||
+             previousPosition != cameraVisual.canvasCameraPosition ||
              previousRotation != cameraVisual.canvasCameraRotation ||
              previousLength != cameraVisual.canvasCameraLength ||
              previousMotion != cameraVisual.canvasMotionCompensation ||
              previousThickness != cameraVisual.canvasThicknessCompensation ) {
             // 摄像机手势与数值输入共用即时方案捕获，磁盘写入不会等待在 UI。
             Config::AppConfig::instance().saveLayoutChanges();
+            // 姿态也影响每个音符的补偿倍率，不能仅在长度或强度变化时同步。
+            // 通过配置修订让下一逻辑轮次采用当前视角，不取得会话长锁。
+            engine.updateCanvasCameraConfig(cameraVisual);
         }
-        // 扩展范围由逻辑线程生成真实物件，通过既有配置命令异步生效。
-        // 不等手势结束；远端物件范围必须跟随当前长度，稳定帧不广播。
-        if ( previousExtension != cameraVisual.canvasCameraExtension() ||
-             previousMotion != cameraVisual.canvasMotionCompensation ||
-             previousThickness != cameraVisual.canvasThicknessCompensation )
-            engine.setEditorConfig(
-                Config::AppConfig::instance().getEditorConfig());
         const bool cameraViewEnabled =
             hasCameraScene && !layoutEditing &&
             (cameraVisual.canvasCameraPoseEnabled ||

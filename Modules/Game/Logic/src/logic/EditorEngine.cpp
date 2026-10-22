@@ -4,6 +4,7 @@
 #include "config/AppConfig.h"
 #include "config/FrameLimitUtils.h"
 #include "config/Utf8Path.h"
+#include "config/VisualConfig.h"
 #include "event/canvas/interactive/ResizeEvent.h"
 #include "event/core/EventBus.h"
 #include "event/logic/BeatmapCreateInteractionEvent.h"
@@ -3995,6 +3996,49 @@ bool EditorEngine::refreshEditorConfigSnapshot(
     }
     targetRevision = m_editorConfigRevision.load(std::memory_order_relaxed);
     return true;
+}
+
+/// @brief 发布相机观察参数，使逻辑投影跟随 UI 当前视角。
+/// @param visual 已由 UI 写入全局配置的当前相机值。
+/// @note 只替换相机字段，避免交互携带的其它旧配置回滚编辑器状态。
+/// @warning 相机手势每次变化时调用；配置锁不跨会话 update，
+/// 不取得会话注册表锁、不发送完整配置命令，也不执行磁盘操作。
+void EditorEngine::updateCanvasCameraConfig(const Config::VisualConfig& visual)
+{
+    // 读写共用配置值锁，禁止为了绕开等待而无同步修改逻辑线程所读的数据。
+    // 此锁的持有者仅做配置值复制，不跨谱面更新、渲染或设备同步。
+    std::lock_guard<std::mutex> lock(m_editorConfigMutex);
+    auto&                       current = m_editorConfig.visual;
+    // 相机姿态、长度和两种补偿必须作为同一代发布，避免中间姿态混用。
+    // 稳定帧不增加修订，逻辑循环可继续复用已经取得的快照。
+    if ( current.canvasCameraPoseEnabled == visual.canvasCameraPoseEnabled &&
+         current.canvasCameraPosition == visual.canvasCameraPosition &&
+         current.canvasCameraRotation == visual.canvasCameraRotation &&
+         current.canvasCameraLength == visual.canvasCameraLength &&
+         current.canvasMotionCompensation == visual.canvasMotionCompensation &&
+         current.canvasThicknessCompensation ==
+             visual.canvasThicknessCompensation &&
+         current.debugCanvasCameraAngleDegrees ==
+             visual.debugCanvasCameraAngleDegrees &&
+         current.debugCanvasCameraYawDegrees ==
+             visual.debugCanvasCameraYawDegrees &&
+         current.debugCanvasCameraDistance == visual.debugCanvasCameraDistance )
+        return;
+    // 固定大小的值赋值不会触碰音频容器、工具栏或项目工作区。
+    // 新旧相机模式一起同步，切回二维或旧观察模式时也不能沿用上次姿态。
+    current.canvasCameraPoseEnabled     = visual.canvasCameraPoseEnabled;
+    current.canvasCameraPosition        = visual.canvasCameraPosition;
+    current.canvasCameraRotation        = visual.canvasCameraRotation;
+    current.canvasCameraLength          = visual.canvasCameraLength;
+    current.canvasMotionCompensation    = visual.canvasMotionCompensation;
+    current.canvasThicknessCompensation = visual.canvasThicknessCompensation;
+    current.debugCanvasCameraAngleDegrees =
+        visual.debugCanvasCameraAngleDegrees;
+    current.debugCanvasCameraYawDegrees = visual.debugCanvasCameraYawDegrees;
+    current.debugCanvasCameraDistance   = visual.debugCanvasCameraDistance;
+    // 与 refreshEditorConfigSnapshot 的 acquire 配对；逻辑下一轮即可消费。
+    // 发布不等待任何会话确认，也不靠固定延迟掩盖相机参数不同步。
+    m_editorConfigRevision.fetch_add(1, std::memory_order_release);
 }
 
 /// @brief 合并软件级配置、项目工具栏状态并广播给全部会话。
