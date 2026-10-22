@@ -99,13 +99,13 @@ bool switching()
     if ( !library.select(firstName, visual) || !sameLayout(original, visual) )
         return false;
     // 默认保护不能破坏另一内置斜轨预设的精确相机参数。
-    // 选择内置方案须恢复适度厚度补偿，而不是沿用此前自定义布局的强度。
+    // 选择内置方案须恢复满厚度补偿，而不是沿用此前自定义布局的强度。
     if ( !library.select("斜轨预览", visual) ) return false;
     if ( visual.canvasCameraPosition !=
              std::array<float, 3>{ 0, -0.8F, 0.9F } ||
          visual.canvasCameraRotation != std::array<float, 3>{ 45, 0, 0 } ||
          visual.canvasCameraLength != 3 || !visual.canvasCameraPoseEnabled ||
-         visual.canvasThicknessCompensation != 35 )
+         visual.canvasThicknessCompensation != 100 )
         return false;
     // 未定制键数也继承九成宽度，不残留上一个方案的 4K 或 7K。
     const auto& layout = visual.trackLayoutForKeyCount(10);
