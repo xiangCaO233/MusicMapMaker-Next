@@ -271,7 +271,7 @@ void CameraLayoutEditor::drawParameterWindow(const std::string&    id,
                                         0,
                                         100,
                                         "%.0f");
-                ImGui::TextUnformatted("动态厚度：0 原始透视 · 100 屏幕等厚");
+                ImGui::TextUnformatted("动态厚度：0 原始透视 · 100 等像素高度");
             });
         // 提示参与同一纵向布局，窄窗口使用滚动而不挤压精确数值行。
         root.addElement(
