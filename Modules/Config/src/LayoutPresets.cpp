@@ -304,6 +304,8 @@ LayoutPresets::LayoutPresets()
     slanted.m_visual.canvasCameraPosition    = { 0.0F, -0.8F, 0.9F };
     slanted.m_visual.canvasCameraRotation    = { 45.0F, 0.0F, 0.0F };
     slanted.m_visual.canvasCameraLength      = 3.0F;
+    // 满补偿按当前投影宽度恢复贴图比例，换视角时自动修正纵向压缩。
+    slanted.m_visual.canvasThicknessCompensation = 100.0F;
     // 不建立特定键数覆盖；所有未定制键数都使用居中九成宽模板。
     slanted.m_visual.trackLayout.left  = 0.05F;
     slanted.m_visual.trackLayout.right = 0.95F;

@@ -243,7 +243,7 @@ void CameraLayoutEditor::drawParameterWindow(const std::string&    id,
         // 从内置布局开始调节时仍走自动复制流程，不修改代码定义的方案。
         // 每项说明使用独立行，避免窄窗口把标签挤到画布预览上。
         // 控件内部 ID 与显示说明分开，文字更新不会打断当前手势。
-        // 高度仅增加平面可见厚度，不改变 Key 音效或物件的播放时间。
+        // 高度仅调整平面可见厚度，不改变 Key 音效或物件的播放时间。
         // 两个补偿都不需要重新解码皮肤纹理或重建 Vulkan 离屏资源。
         // 运动改变共同投影；厚度只改变物件局部高度，不改变谱面时间。
         // 两个滑块、四行文本之间还有五处 ImGui 间距，不能按六个框高估算。
@@ -269,10 +269,9 @@ void CameraLayoutEditor::drawParameterWindow(const std::string&    id,
                 UI::FeedbackSliderFloat("##ThicknessCompensation",
                                         &visual.canvasThicknessCompensation,
                                         0,
-                                        300,
+                                        100,
                                         "%.0f");
-                ImGui::TextUnformatted(
-                    "额外高度：0 原始 · 100 双倍 · 300 四倍");
+                ImGui::TextUnformatted("动态厚度：0 原始透视 · 100 保持宽高比");
             });
         // 提示参与同一纵向布局，窄窗口使用滚动而不挤压精确数值行。
         root.addElement(

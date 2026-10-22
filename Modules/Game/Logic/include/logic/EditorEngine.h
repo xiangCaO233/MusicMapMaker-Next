@@ -26,6 +26,11 @@ namespace MMM
 class Project;
 }
 
+namespace MMM::Config
+{
+struct VisualConfig;
+}
+
 namespace MMM::Logic
 {
 
@@ -531,6 +536,12 @@ public:
      */
     void setEditorConfig(const Config::EditorConfig& config);
 
+    /// @brief 将画布当前相机参数发布给逻辑侧投影与厚度补偿。
+    /// @param visual UI 已更新的观察配置；其它视觉字段不参与发布。
+    /// @note 由 UI 线程在实际变化时调用，不更新 AppConfig 或广播会话命令。
+    /// @warning 相机交互路径：只短持配置值锁，不等待会话更新或访问文件系统。
+    void updateCanvasCameraConfig(const Config::VisualConfig& visual);
+
     /// @brief 更新当前项目对软件级谱面自动备份配置的可选覆盖。
     /// @param config 项目级配置；空值表示继承软件配置。
     /// @warning
@@ -676,7 +687,7 @@ private:
     std::optional<Config::AutoBackupConfig> m_projectAutoBackupOverride;
 
     /// @brief 当前编辑器配置修订号。
-    /// @warning 逻辑/UI 热路径原子：UI 配置提交时 release
+    /// @warning 逻辑/UI 热路径原子：UI 配置提交或相机交互时 release
     /// 递增，逻辑 loop 每轮 acquire
     /// 读取；用于避免未变化时复制含容器的完整配置。
     std::atomic<std::uint64_t> m_editorConfigRevision{ 0 };

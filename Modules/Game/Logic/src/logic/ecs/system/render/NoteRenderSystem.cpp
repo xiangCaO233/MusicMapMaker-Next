@@ -14,6 +14,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/timing/BpmNormalization.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <numeric>
@@ -360,6 +361,7 @@ void NoteRenderSystem::generateSnapshot(
 
     // 批处理器借用快照中的几何容器。
     // 布局输出统一在栈上初始化，空谱面分支可保留零范围。
+    snapshot->thicknessCompensation = {};
     Batcher batcher(snapshot);
     // 三维画布只扩大远端可见范围，原像素坐标与时间映射保持不变。
     // Timeline 和缩略预览继续使用自己的二维范围，不能继承该扩展。
@@ -407,6 +409,20 @@ void NoteRenderSystem::generateSnapshot(
                           visual.debugCanvasCameraAngleDegrees,
                           visual.debugCanvasCameraYawDegrees,
                           visual.debugCanvasCameraDistance);
+            // 最终图元才知道自身位置和皮肤高度；所有批处理器借用同一份参数。
+            // 运动补偿已经包含在矩阵内，不能再次按原始相机距离重复放大。
+            // 参数按快照值存储，不引用 UI 正在编辑的全局配置或跨线程相机对象。
+            // 辅助视图在函数入口已重置该状态，所以不会受主相机距离影响。
+            // 强度上限与配置加载和编辑器一致，旧的额外高度值会收敛到满补偿。
+            snapshot->thicknessCompensation = {
+                matrix,
+                { viewportWidth, viewportHeight },
+                std::isfinite(visual.canvasThicknessCompensation)
+                    ? std::clamp(
+                          visual.canvasThicknessCompensation, 0.0F, 100.0F) /
+                          100.0F
+                    : 0.0F
+            };
             // 包含贴图边缘与效果的余量，避免中心在视锥外但图元仍有可见像素。
             // 余量仅影响候选，实际区域边框、轨宽和本体坐标始终保留原始数值。
             // 不能把整个二维画布按相机距离缩小来换取更多显示内容。
@@ -948,6 +964,56 @@ void NoteRenderSystem::generateSnapshot(
                                -viewportHeight * 0.5F,
                                trackAreaW,
                                viewportHeight * 2.0F);
+        }
+        // 拾取仍使用源平面坐标，补偿后取四角外包框以覆盖实际可见贴图。
+        // 长条主体的高度代表持续时间，不能作为定高部件再次补偿。
+        if ( snapshot->thicknessCompensation.m_amount > 0 ) {
+            // 这里只处理本帧已经生成的可见拾取结果，不扫描 ECS 或重新查询谱面。
+            // 原字段仍使用源像素坐标，输入端继续复用同一相机的平面逆投影。
+            // 用户配置的交互倍率在拾取时应用，这里只修正可见贴图自身的范围。
+            for ( auto& box : snapshot->hitboxes ) {
+                if ( box.part == HoverPart::HoldBody ||
+                     box.part == HoverPart::None ||
+                     box.part == HoverPart::SampleOffset )
+                    continue;
+                // 保留实体、部件和子节点身份，仅重新计算其可见四角的外包矩形。
+                // 左右边可能因不同深度产生不同高度，不能只按包围框中心计算一次。
+                // 外包框允许少量额外命中，但不能排除图像实际占据的两侧角落。
+                std::array<glm::vec2, 4> corners{
+                    glm::vec2(box.x, box.y + box.h),
+                    glm::vec2(box.x + box.w, box.y + box.h),
+                    glm::vec2(box.x + box.w, box.y),
+                    glm::vec2(box.x, box.y)
+                };
+                // 与绘制保持相同的整图元失败策略，退化时不能单独扩大交互范围。
+                // 有效结果不再写回布局配置、物件时间或轨道索引。
+                // 底边模式还原固定时间锚点，不能围绕视觉中心缩放后再移动拾取框。
+                // 中心模式仍以原中心为锚，两种方式保留同一拖动身份。
+                // 自动采样在 Note
+                // 定位作用域之外绘制，其锚点图像始终使用中心模式。
+                if ( !snapshot->thicknessCompensation.compensate(
+                         corners,
+                         box.part != HoverPart::SampleAnchor &&
+                                 config.visual.noteTexturePosition ==
+                                     Config::NoteTexturePosition::Bottom
+                             ? -0.5F
+                             : 0.0F) )
+                    continue;
+                float left = corners[0].x, right = left;
+                float top = corners[0].y, bottom = top;
+                // 固定四角归约无需排序或动态容器，热路径成本与候选物件数量成正比。
+                // 最终调试线框直接读取这些结果，避免另外一套补偿公式产生误导。
+                for ( const auto point : corners ) {
+                    left   = std::min(left, point.x);
+                    right  = std::max(right, point.x);
+                    top    = std::min(top, point.y);
+                    bottom = std::max(bottom, point.y);
+                }
+                box.x = left;
+                box.y = top;
+                box.w = right - left;
+                box.h = bottom - top;
+            }
         }
         // 调试框在音符和采样的交互数据生成后绘制。
         // 只读快照命中框，不能为调试再次计算另一套拾取结果。

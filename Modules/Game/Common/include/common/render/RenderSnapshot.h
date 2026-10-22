@@ -7,6 +7,7 @@
 #include "common/UnicodeFontData.h"
 #include "common/render/AnnotationRenderData.h"
 #include "common/render/CanvasRenderTypes.h"
+#include "common/render/CanvasThicknessCompensation.h"
 #include "common/render/NoteRenderData.h"
 #include "common/render/ScrollRenderData.h"
 #include "common/render/TimingInterpolationRenderData.h"
@@ -401,6 +402,8 @@ struct RenderSnapshot {
     std::vector<Common::Render::CanvasDrawCmd> overlayCmds;
     /// @brief 与本帧可见物件对应的拾取包围盒。
     std::vector<Hitbox> hitboxes;
+    /// @brief 主画布定高图元与拾取共用的距离动态补偿；辅助视图保持关闭。
+    Common::Render::CanvasThicknessCompensation thicknessCompensation{};
     /// @brief 按 Note、Hold、Flick、Polyline
     /// 顺序传递练习物件状态，实体句柄仅在本会话有效。
     struct WalkthroughPracticeNoteState {
@@ -809,6 +812,8 @@ struct RenderSnapshot {
         glowCmds.clear();
         overlayCmds.clear();
         hitboxes.clear();
+        // 缓冲跨画布复用时不得将主画布的三维补偿带入时间线或缩略预览。
+        thicknessCompensation    = {};
         walkthroughPracticeNotes = {};
         // 复用快照缓冲时不能让上张谱面的释放事务流入下一张谱面。
         walkthroughEditEvent    = {};
