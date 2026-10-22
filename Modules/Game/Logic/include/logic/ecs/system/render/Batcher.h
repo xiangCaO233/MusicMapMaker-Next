@@ -4,6 +4,8 @@
 #include "config/visual/NoteTexturePosition.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/system/render/SkinTextureScale.h"
+#include <array>
+#include <cstdint>
 #include <glm/glm.hpp>
 
 namespace MMM::Logic::System
@@ -39,6 +41,8 @@ struct Batcher {
     bool m_thicknessCompensationEnabled{ true };
 
     /// @brief 在皮肤尺寸、填充和对齐确定后补偿定高图元，不触碰持续连接体。
+    /// @note 所有纹理共用快照中的相机值，不能逐顶点读取全局配置。
+    /// @note 只更新位置，UV、颜色和追加索引数量保持不变。
     /// @warning 逐图元固定四点计算，无分配、锁、资源加载或额外绘制命令。
     void compensateThickness(Common::Render::CanvasVertex& v1,
                              Common::Render::CanvasVertex& v2,
