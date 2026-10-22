@@ -53,19 +53,13 @@ std::array<float, 4> sanitizeBackgroundLevelColor(
 }
 }  // namespace
 
-/// @brief 计算三维局部物件高度，兼容普通二维皮肤比例。
+/// @brief 提供不含透视补偿的物件高度，供最终几何计算屏幕目标厚度。
 /// @warning 逐物件固定数值计算，不查询外部资源或共享状态。
 float VisualConfig::canvasNoteScaleY() const
 {
-    // 普通二维配置沿用皮肤高度，补偿不能写回原始缩放配置。
-    const bool spatial =
-        canvasCameraPoseEnabled || debugCanvasCameraAngleDegrees != 0 ||
-        debugCanvasCameraYawDegrees != 0 || debugCanvasCameraDistance != 1;
-    if ( !spatial || !std::isfinite(canvasThicknessCompensation) )
-        return noteScaleY;
-    // 仅放大局部物件高度，不缩放持续时长或连接节点的时间坐标。
-    return noteScaleY *
-           (1 + std::clamp(canvasThicknessCompensation, 0.0F, 300.0F) / 100);
+    // 配置层只提供二维基准，距离与倾角必须在已知位置的最终几何阶段处理。
+    // 不能提前统一放大，否则近端过厚且缩略预览会继承主画布的三维设置。
+    return noteScaleY;
 }
 
 /// @brief 返回三维画布向远端额外扩展的高度。
@@ -1242,7 +1236,7 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
     config.canvasMotionCompensation =
         readObservationValue(j, "canvasMotionCompensation", 0.0F, 0.0F, 100.0F);
     config.canvasThicknessCompensation = readObservationValue(
-        j, "canvasThicknessCompensation", 0.0F, 0.0F, 300.0F);
+        j, "canvasThicknessCompensation", 0.0F, 0.0F, 100.0F);
     config.canvasCameraLength =
         readObservationValue(j, "canvasCameraLength", 1.0F, 1.0F, 32.0F);
     // 自由相机与旧观察参数独立保存，缺失字段不改变旧配置的显示。

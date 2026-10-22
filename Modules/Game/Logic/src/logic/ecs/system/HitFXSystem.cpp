@@ -549,6 +549,11 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
     auto&           skinManager = Config::SkinManager::instance();
     float           baseFps     = skinManager.getEffectBaseFps();
     const auto      layoutMode  = skinManager.getHitEffectLayoutMode();
+    // 整轨帧的高度是轨道覆盖范围，不属于局部厚度，退出时恢复调用方状态。
+    const bool previousThickness = batcher.m_thicknessCompensationEnabled;
+    batcher.m_thicknessCompensationEnabled =
+        previousThickness &&
+        layoutMode != Config::HitEffectLayoutMode::TrackFill;
     // 固定尺寸打击帧跟随 Note 对齐方式；整轨动画仍覆盖完整轨道区。
     // 独立作用域确保后续音频采样、辅助图像不继承特效的位置状态。
     const NoteTexturePositionScope position(
@@ -598,7 +603,7 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
 
         // 固定模式继续复用物件横纵缩放；整轨模式只使用其纵横比采样纹理。
         const float fixedWidth = singleTrackW * config.visual.noteScaleX;
-        // 固定尺寸特效与音符共用三维厚度补偿，保持判定线上的视觉高度一致。
+        // 固定尺寸特效与音符共用二维基准，批处理器再按实际位置动态补偿厚度。
         // 整轨模式的上下边界仍由轨道范围决定，不能把整条覆盖层额外拉长。
         const float fixedHeight =
             (singleTrackW / texAspect) * config.visual.canvasNoteScaleY();
@@ -662,6 +667,7 @@ void HitFXSystem::generateSnapshot(Batcher& batcher, double animateTime,
     batcher.flush();
     // 防止后续普通物件继承最后一个打击特效的加法状态。
     batcher.setAdditiveBlend(false);
+    batcher.m_thicknessCompensationEnabled = previousThickness;
 }
 
 }  // namespace MMM::Logic::System

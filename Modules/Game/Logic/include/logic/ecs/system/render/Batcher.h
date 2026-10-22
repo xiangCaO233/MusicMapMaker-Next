@@ -35,6 +35,55 @@ struct Batcher {
     };
     /// @brief 当前逻辑纹理的对齐比例，切换纹理或绘制范围时刷新。
     float m_noteTextureOffsetY{ 0.0F };
+    /// @brief 定高特效可启用补偿，整轨拉伸动画临时关闭以保留覆盖范围。
+    bool m_thicknessCompensationEnabled{ true };
+
+    /// @brief 在皮肤尺寸、填充和对齐确定后补偿定高图元，不触碰持续连接体。
+    /// @warning 逐图元固定四点计算，无分配、锁、资源加载或额外绘制命令。
+    void compensateThickness(Common::Render::CanvasVertex& v1,
+                             Common::Render::CanvasVertex& v2,
+                             Common::Render::CanvasVertex& v3,
+                             Common::Render::CanvasVertex& v4) const
+    {
+        if ( !m_thicknessCompensationEnabled || currentCmd.screenSpace ||
+             !(snapshot->thicknessCompensation.m_amount > 0) )
+            return;
+        // 纹理身份明确区分局部厚度与轨道/时间跨度，纯色辅助线不继承音符补偿。
+        const auto id = static_cast<std::uint32_t>(currentTex);
+        const bool fixedEffect =
+            id >= static_cast<std::uint32_t>(TextureID::EffectStart) &&
+            id < static_cast<std::uint32_t>(TextureID::AsciiGlyphStart);
+        // 普通头尾、节点和箭头具有独立皮肤高度，必须在填充缩放完成后再处理。
+        // 横向连接体的两端中心分别固定，竖向连接体则完全保留时长决定的形状。
+        // 字形、底板与未登记资源继续遵循自己的布局尺寸。
+        switch ( currentTex ) {
+        case TextureID::Note:
+        case TextureID::HoldHead:
+        case TextureID::HoldEnd:
+        case TextureID::Node:
+        case TextureID::FlickArrowLeft:
+        case TextureID::FlickArrowRight:
+        case TextureID::HoldBodyHorizontal:
+        case TextureID::JudgeArea:
+        case TextureID::NoteSelectionBorder: break;
+        default:
+            if ( !fixedEffect ) return;
+        }
+        // 使用与 UV 相同的有序四角，不推断轴对齐包围框，斜向连接也保留方向。
+        // 算法与命中范围共享，两个独立批处理入口不能各自使用不同放大公式。
+        std::array<glm::vec2, 4> corners{ glm::vec2(v1.pos.x, v1.pos.y),
+                                          glm::vec2(v2.pos.x, v2.pos.y),
+                                          glm::vec2(v3.pos.x, v3.pos.y),
+                                          glm::vec2(v4.pos.x, v4.pos.y) };
+        // 失败时保持整枚图元，不能在地平线附近只移动其中一条边。
+        if ( !snapshot->thicknessCompensation.compensate(corners,
+                                                         m_noteTextureOffsetY) )
+            return;
+        v1.pos = { corners[0].x, corners[0].y, 0 };
+        v2.pos = { corners[1].x, corners[1].y, 0 };
+        v3.pos = { corners[2].x, corners[2].y, 0 };
+        v4.pos = { corners[3].x, corners[3].y, 0 };
+    }
     /// @brief 尚未提交的连续索引范围及其绘制状态。
     Common::Render::CanvasDrawCmd currentCmd;
     /// @brief 可投影内容允许的最小逻辑 Y；二维批次默认在零处截断。
@@ -275,6 +324,7 @@ struct Batcher {
         v1.color = v2.color = v3.color =
             v4.color        = { color.r, color.g, color.b, color.a };
 
+        compensateThickness(v1, v2, v3, v4);
         snapshot->vertices.push_back(v1);
         snapshot->vertices.push_back(v2);
         snapshot->vertices.push_back(v3);
@@ -474,6 +524,7 @@ struct Batcher {
         v1.color = v2.color = v3.color =
             v4.color        = { color.r, color.g, color.b, color.a };
 
+        compensateThickness(v1, v2, v3, v4);
         snapshot->vertices.push_back(v1);
         snapshot->vertices.push_back(v2);
         snapshot->vertices.push_back(v3);

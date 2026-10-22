@@ -1,3 +1,4 @@
+#include "common/render/PlanarObservationCamera.h"
 #include "logic/ecs/system/HitFXSystem.h"
 
 #include "config/EditorConfig.h"
@@ -202,6 +203,16 @@ bool testLaneModes()
                 config.visual.canvasCameraPoseEnabled = spatial;
                 MMM::Logic::RenderSnapshot compensated;
                 fillUvs(compensated);
+                // 主画布在生成前发布投影；独立特效测试也必须提供真实的观察条件。
+                // 正面两倍距离使屏幕缩放减半，满补偿应精确恢复定高帧厚度。
+                // 状态来自当前快照，不能仅修改全局相机开关便期待局部绘制知道距离。
+                if ( spatial )
+                    compensated.thicknessCompensation = {
+                        MMM::Common::Render::planarObservationProjection(
+                            800, 600, 0, 0, 0, 2),
+                        { 800, 600 },
+                        1.0F
+                    };
                 MMM::Logic::System::Batcher compensatedBatcher(&compensated);
                 system.generateSnapshot(compensatedBatcher,
                                         0,

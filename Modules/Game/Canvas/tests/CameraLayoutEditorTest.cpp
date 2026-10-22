@@ -1,6 +1,7 @@
 #include "canvas/CameraLayoutEditor.h"
 #include "canvas/CameraLayoutMath.h"
 #include "canvas/PlanarObservationInput.h"
+#include "common/render/CanvasThicknessCompensation.h"
 #include "config/EditorConfig.h"
 #include "config/VisualConfig.h"
 #include "log/colorful-log.h"
@@ -9,6 +10,7 @@
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/ecs/system/render/Batcher.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -108,7 +110,7 @@ bool checkCanvasLength()
                                                           600);
     };
     std::vector<glm::vec2> nearVertices;
-    // 第三轮只改变厚度，复用同一完整快照生成入口验证真实物件几何。
+    // 第三轮启用动态厚度，正面单位距离不应出现旧实现的统一翻倍。
     for ( const auto settings :
           { glm::vec2(1, 0), glm::vec2(3, 0), glm::vec2(3, 100) } ) {
         const float length                        = settings.x;
@@ -152,12 +154,12 @@ bool checkCanvasLength()
                 if ( currentNear[i].x != nearVertices[i].x ) return false;
             }
             // 纹理四角按批处理器固定顺序提交，零与二分别位于两条高度边。
-            // 尺寸比较允许浮点舍入误差，不允许相机长度改变实际音符厚度。
+            // 正面单位距离的投影已经等厚，满补偿不得再重复加高。
             const float oldHeight =
                 std::abs(nearVertices[0].y - nearVertices[2].y);
             const float newHeight =
                 std::abs(currentNear[0].y - currentNear[2].y);
-            if ( std::abs(newHeight - oldHeight * 2) > 0.01F ) return false;
+            if ( std::abs(newHeight - oldHeight) > 0.01F ) return false;
         }
         if ( length > 1 ) {
             // 只有几何没有有效裁剪仍会不可见，必须检查提交命令。
@@ -172,6 +174,46 @@ bool checkCanvasLength()
                 return false;
         }
     }
+    // 在真实斜视相机下生成交互快照，检查实际贴图与拾取使用同一补偿。
+    // 复用已有普通音符，可发现完整生产入口漏传投影参数的情况。
+    config.visual.canvasCameraPosition = { 0, -0.8F, 0.9F };
+    config.visual.canvasCameraRotation = { 45, 0, 0 };
+    Logic::RenderSnapshot spatial;
+    spatial.hasBeatmap         = true;
+    spatial.acceptsInteraction = true;
+    // 独立图块使用非正方形比例，高度与轨宽不能被误当作同一个量。
+    // 所有音符都使用这块纹理，未配置的高亮图元不会干扰四角匹配。
+    spatial.uvMap.emplace(static_cast<std::uint32_t>(Logic::TextureID::Note),
+                          glm::vec4(.2F, .3F, .1F, .05F));
+    generate(spatial);
+    // 两个物件均位于三倍场景内，不能通过丢弃远端物件满足尺寸断言。
+    // 拾取开启后主画布必须发布有效的强度与矩阵。
+    if ( spatial.hitboxes.size() != 2 ||
+         spatial.thicknessCompensation.m_amount != 1 )
+        return false;
+    for ( const auto& box : spatial.hitboxes ) {
+        // 源平面外包框用于现有逆投影拾取，不应拿屏幕坐标直接比较。
+        // 逐框计数可发现近端框错误包住远端音符，也能发现只补偿绘制未补偿命中的回归。
+        int contained = 0;
+        for ( const auto& vertex : spatial.vertices ) {
+            // UV 区域只属于 Note，辅助线和底板不能代替真实音符匹配拾取框。
+            if ( vertex.uv.u < .19F || vertex.uv.u > .31F ||
+                 vertex.uv.v < .29F || vertex.uv.v > .36F )
+                continue;
+            // 远近音符沿 Y 分离，每个拾取框应恰好覆盖对应贴图的四角。
+            // 容差只覆盖浮点误差，不借助用户额外配置的交互倍率扩大命中范围。
+            if ( vertex.pos.x >= box.x - .01F &&
+                 vertex.pos.x <= box.x + box.w + .01F &&
+                 vertex.pos.y >= box.y - .01F &&
+                 vertex.pos.y <= box.y + box.h + .01F )
+                ++contained;
+        }
+        if ( contained != 4 ) return false;
+    }
+    // 后续预览范围检查沿用原来的正面相机，避免厚度设置掩盖可见性问题。
+    // 这些配置只属于局部夹具，不写入实际用户设置。
+    config.visual.canvasCameraPosition = { 0, 0, 1 };
+    config.visual.canvasCameraRotation = { 0, 0, 0 };
     // 操作预览的终点落在二维视口之外，仍应保留扩展范围内的真实半透明几何。
     // 不直接调用内部画笔函数，防止测试绕过范围向预览入口的传递。
     config.visual.canvasThicknessCompensation = 0;
@@ -302,6 +344,149 @@ bool checkCanvasLength()
     saved["canvasCameraLength"] = "invalid";
     if ( saved.get<Config::VisualConfig>().canvasCameraLength != 1 )
         return false;
+    return true;
+}
+
+/// @brief 实测透视后两条厚度边的垂直像素距离，覆盖距离、旋转及运动补偿组合。
+/// @note 使用真实批处理入口与最终相机矩阵，不以局部放大倍数代替视觉厚度。
+bool checkDynamicThickness()
+{
+    using namespace MMM;
+    Config::VisualConfig visual;
+    visual.canvasCameraPoseEnabled = true;
+    visual.canvasCameraRotation    = { 45, 0, 18 };
+    // 厚度以逻辑像素定义，窗口宽高不同可暴露遗漏视口比例的计算。
+    // 近远端和左右轨道分别测量，避免只在画布中央侥幸等厚。
+    // 相机朝向包含俯仰和画面旋转，单纯除以俯仰余弦不能通过本组测试。
+    // 改变距离时保持观察方向不变，使近远差异来自真实齐次投影而非构造误差。
+    for ( float distance : { 0.65F, 1.0F, 2.0F } ) {
+        visual.canvasCameraPosition = { 0, -0.8F * distance, 0.9F * distance };
+        // 自然透视、部分匀速与完全匀速均使用各自最终矩阵。
+        // 这样可捕获厚度补偿错误读取未经运动补偿的原始相机参数。
+        for ( float motion : { 0.0F, 50.0F, 100.0F } ) {
+            visual.canvasMotionCompensation = motion;
+            // 播放偏移改变同一源点的深度，测试不能永远只测暂停时的投影。
+            // 此处显式传入偏移，验证算法不额外将偏移重复加到音符坐标。
+            for ( float offset : { 0.0F, 35.0F } ) {
+                const auto matrix = Canvas::canvasCameraPoseProjection(
+                    800, 600, offset, visual, 4);
+                /// @brief 投影源几何到逻辑像素，不经过待测的补偿函数。
+                const auto project = [&](glm::vec2 p) {
+                    const auto clip = matrix * glm::vec4(p, 0, 1);
+                    return (glm::vec2(clip) / clip.w + 1.0F) *
+                           glm::vec2(400, 300);
+                };
+                // 远端超出原二维画布，仍须以实际深度获得同一屏幕目标。
+                // 每个纵向位置分别测左右轨，覆盖旋转后横向深度不一致的情况。
+                for ( float y : { -1200.0F, -200.0F, 200.0F, 480.0F } ) {
+                    for ( float x : { 180.0F, 520.0F } ) {
+                        // 投影后的同一条轨道横线仍是一条直线，沿此线的位移不计入厚度。
+                        // 使用独立法线测量可区分真正变厚与斜视引起的横向剪切。
+                        const auto      start = project({ x, y });
+                        const auto      end   = project({ x + 80, y });
+                        const auto      row   = glm::normalize(end - start);
+                        const glm::vec2 normal(-row.y, row.x);
+                        // 原始四角来自固定宽高的正式
+                        // pushQuad，不手写待测函数的中间结果。
+                        // 三个强度都验证实际最终顶点，关闭分支也不能偷偷改变几何。
+                        for ( float amount : { 0.0F, 0.5F, 1.0F } ) {
+                            Logic::RenderSnapshot snapshot;
+                            // 新快照不继承上一次的顶点，避免某个强度读到其他强度的测试结果。
+                            // 矩阵和视口必须成套提供，不能混用窗口物理尺寸与画布逻辑尺寸。
+                            snapshot.thicknessCompensation = { matrix,
+                                                               { 800, 600 },
+                                                               amount };
+                            Logic::System::Batcher batcher(&snapshot);
+                            batcher.setTexture(Logic::TextureID::Note);
+                            batcher.pushQuad(x, y + 12, 80, 24, glm::vec4(1));
+                            if ( snapshot.vertices.size() != 4 ) return false;
+                            // 两条边独立比较，不能用平均高度掩盖一边厚一边薄。
+                            // 断言还检查源横坐标，禁止通过整体放大音符宽度凑厚度。
+                            for ( int edge : { 0, 1 } ) {
+                                const auto& bottom =
+                                    snapshot.vertices[edge].pos;
+                                const auto& top =
+                                    snapshot.vertices[3 - edge].pos;
+                                // 基准距离直接投影原始上下边，不从算法内部导数或放大比例推导期望值。
+                                // 这样即使补偿公式与局部比例一起算错，测试仍能识别实际像素误差。
+                                const float natural = std::abs(glm::dot(
+                                    project({ x + edge * 80, y + 12 }) -
+                                        project({ x + edge * 80, y - 12 }),
+                                    normal));
+                                // 测量最终提交的四角，因此同时覆盖 pushQuad
+                                // 到自由四边形的调用链。
+                                // 纹理倍率为默认一，当前断言专门检验透视缩放，不混入皮肤资产变化。
+                                const float actual = std::abs(
+                                    glm::dot(project({ bottom.x, bottom.y }) -
+                                                 project({ top.x, top.y }),
+                                             normal));
+                                // 部分补偿在线性屏幕厚度间混合，满补偿的目标始终为
+                                // 24 像素。
+                                const float expected =
+                                    natural + (24 - natural) * amount;
+                                if ( std::abs(actual - expected) > 0.015F ||
+                                     bottom.x != x + edge * 80 ||
+                                     top.x != bottom.x )
+                                    return false;
+                            }
+                            // 持续连接体、纯色和屏幕层不继承定高贴图的补偿。
+                            // 每次清空顶点但保留同一快照参数，以覆盖批处理器纹理筛选。
+                            for ( auto texture :
+                                  { Logic::TextureID::HoldBodyVertical,
+                                    Logic::TextureID::Background,
+                                    Logic::TextureID::None } ) {
+                                snapshot.vertices.clear();
+                                batcher.setTexture(texture);
+                                batcher.pushQuad(
+                                    x, y + 12, 80, 24, glm::vec4(1));
+                                if ( snapshot.vertices[0].pos.y != y + 12 ||
+                                     snapshot.vertices[2].pos.y != y - 12 )
+                                    return false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // 底边模式必须固定原来的底边，不能因增加厚度而穿过判定线。
+    // 正面两倍距离需要将局部高度翻倍，但底边仍停在 Y=300。
+    Logic::RenderSnapshot aligned;
+    aligned.thicknessCompensation = {
+        Common::Render::planarObservationProjection(800, 600, 0, 0, 0, 2),
+        { 800, 600 },
+        1
+    };
+    Logic::System::Batcher alignedBatcher(&aligned);
+    // 先开启底边作用域再切换纹理，验证对齐缓存的刷新顺序。
+    // 输入半高与定位偏移应抵消为原来的时间锚点。
+    alignedBatcher.setNoteTexturePosition(Config::NoteTexturePosition::Bottom);
+    alignedBatcher.setTexture(Logic::TextureID::Note);
+    alignedBatcher.pushQuad(200, 312, 80, 24, glm::vec4(1));
+    if ( aligned.vertices[0].pos.y != 300 ||
+         std::abs(aligned.vertices[2].pos.y - 252) > .01F )
+        return false;
+    // 同一纹理切到固定屏幕层后不应重复补偿，纹理筛选不能代替空间判断。
+    // 新四角追加在原四角之后，分别测量两次提交避免空结果侥幸通过。
+    alignedBatcher.setScreenSpace(true);
+    alignedBatcher.pushQuad(200, 312, 80, 24, glm::vec4(1));
+    if ( aligned.vertices[4].pos.y != 300 || aligned.vertices[6].pos.y != 276 )
+        return false;
+    // 奇异投影没有有限解时必须完整保留四角，防止半枚贴图被翻到相机后方。
+    // 上面只比较有效视角，以下单独验证退化投影的错误契约。
+    // 零矩阵使全部点的 W 为零，不能依赖某个偶然可见端点触发回退。
+    Common::Render::CanvasThicknessCompensation invalid{ glm::mat4(0),
+                                                         { 800, 600 },
+                                                         1 };
+    std::array<glm::vec2, 4>                    points{
+        glm::vec2(0, 20), glm::vec2(80, 20), glm::vec2(80, 0), glm::vec2(0, 0)
+    };
+    const auto original = points;
+    if ( invalid.compensate(points) || points != original ) return false;
+    // 关闭时不要求矩阵有效，二维兼容路径必须逐点恒等。
+    // 同一退化输入先开启后关闭，还可发现错误保留上次失败状态的实现。
+    invalid.m_amount = 0;
+    if ( !invalid.compensate(points) || points != original ) return false;
     return true;
 }
 
@@ -604,7 +789,7 @@ bool checkWindows()
 int main()
 {
     if ( !checkMath() || !checkCanvasLength() || !checkCompensation() ||
-         !checkWindows() ) {
+         !checkDynamicThickness() || !checkWindows() ) {
         XERROR("CameraLayoutEditorTest failed");
         return 1;
     }
