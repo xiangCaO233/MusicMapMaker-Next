@@ -479,6 +479,60 @@ void refreshCurrentProjectSongFileHint(MMM::BeatMap& beatMap)
         *project, beatMap, beatMap.m_baseMapMetadata.map_path);
 }
 
+/// @brief 在逻辑线程为独立 MC 快照解析主音轨，并改为目标目录相对引用。
+/// @param snapshot 仅供文件任务使用的独立模型，不得传入活动谱面。
+/// @param outputPath 最终 MC 路径，决定可移植音频引用的基准目录。
+/// @return 源音频绝对路径；没有项目时仍按来源谱面解析歌曲提示。
+/// @details 原始路径与输出引用分别保存：前者交给编码器，后者交给序列化器。
+/// 修改只限 Main 自动采样及歌曲提示，不改变其触发时间、音量和独立 offset。
+/// @note 资源身份比较使用项目服务，不能把同名普通效果音当作整曲背景音乐。
+/// @note 返回路径按值捕获，后台任务不保留 Project 或资源表元素的观察指针。
+/// @note 本函数不启动编码，主音轨缺失仍由完整导出事务报告具体错误。
+/// @warning 低频保存准备：访问项目与文件系统，必须在提交后台任务之前调用。
+std::filesystem::path prepareMalodySaveAudio(
+    MMM::BeatMap& snapshot, const std::filesystem::path& outputPath)
+{
+    const auto sourcePath =
+        resolveCurrentProjectPath(snapshot.m_baseMapMetadata.map_path);
+    auto* project = MMM::Logic::EditorEngine::instance().getCurrentProject();
+    const auto* resource  = project ? MMM::Logic::ProjectResourceService::
+                                          findDefaultBeatmapAudioResource(
+                                              *project, snapshot, sourcePath)
+                                    : nullptr;
+    auto        audioPath = snapshot.m_baseMapMetadata.song_file_hint;
+    if ( resource ) {
+        audioPath = resolveProjectResourcePath(
+            *project, sourcePath, MMM::Config::utf8ToPath(resource->m_path));
+    } else if ( audioPath.is_relative() && !audioPath.empty() ) {
+        audioPath = sourcePath.parent_path() / audioPath;
+    }
+    if ( audioPath.empty() ) return {};
+    // 资源可能与谱面不在同一目录，目标引用与编码输入不能共用相对基准。
+    // 相对引用以最终文件所在目录为基准；编码输入保持绝对路径，后台线程不再
+    // 依赖当前项目是否仍打开。跨盘无法相对化时由后续资源校验报告失败。
+    std::error_code error;
+    const auto      relative =
+        std::filesystem::relative(audioPath, outputPath.parent_path(), error);
+    if ( error || relative.empty() ) return audioPath;
+    // 无法生成相对路径时不改写快照，让正式保存阶段统一处理路径错误。
+    const auto oldHint   = snapshot.m_baseMapMetadata.song_file_hint;
+    const auto reference = MMM::Config::pathToUtf8(relative);
+    for ( auto& sample : snapshot.m_audioSamples ) {
+        // 项目中的稳定 ID 与 song.file 路径必须收敛到同一引用，序列化器才能
+        // 识别零点 Main。普通音效不能仅因扩展名相同而被改写为主音轨。
+        const bool sameResource =
+            resource &&
+            MMM::Logic::ProjectResourceService::findAudioResourceForReference(
+                *project, sourcePath, sample.m_audioResourceId) == resource;
+        if ( sameResource ||
+             MMM::Config::utf8ToPath(sample.m_audioResourceId) == oldHint )
+            sample.m_audioResourceId = reference;
+    }
+    snapshot.m_baseMapMetadata.song_file_hint = relative;
+    // 快照的 map_path 无需接管输出位置，调用方保存成功后才提交会话元数据。
+    return audioPath;
+}
+
 /// @brief 将长期保存的谱面元数据路径规范化为项目存储路径。
 /// @param meta 需要原地规范化的谱面基础元数据。
 /// @details
@@ -1106,7 +1160,9 @@ std::unordered_set<std::string> collectMalodyMainAudioSampleReferences(
     return mainReferences;
 }
 
-/// @brief 单张谱面启用原点对齐后使用的非 OGG Main 音频计划。
+/// @brief 单张 MC 谱面的主音轨时序计划，合并可选原点对齐与强制首拍补头。
+/// @details 原点相位为裁掉的头部长度，前导静音为追加的头部长度，编码只消费
+/// 二者之差。谱面变换仍分别执行，不能把净音频相位直接用于红绿线坐标。
 struct MczBeatmapAudioAlignmentPlan {
     /// @brief 目标项目音频资源。
     const MMM::AudioResource* resource{ nullptr };
@@ -1114,69 +1170,125 @@ struct MczBeatmapAudioAlignmentPlan {
     /// @brief 首红线折回一拍内后的有符号相位，单位毫秒。
     double phaseMilliseconds{ 0.0 };
 
+    /// @brief 首拍红绿线需留出的音频前导静音，编码时与原点相位合并。
+    double initialAudioPaddingMilliseconds{ 0.0 };
+
+    /// @brief 是否执行用户选择的非 OGG 原点对齐；仅补头时不移动原首红线。
+    bool applyOriginAlignment{ false };
+
     /// @brief 谱面中解析到目标资源的 Main 自动采样引用。
     std::unordered_set<std::string> mainAudioReferences;
 };
 
 /// @brief 单张谱面的 MCZ 音频原点对齐计划构建结果。
 struct MczAudioAlignmentPlanResult {
-    /// @brief 非 OGG Main 音频需要执行的对齐计划；OGG 时为空。
+    /// @brief 有主音轨的谱面计划，包括净位移为零的资源使用者。
+    /// @note 零位移计划仍参与共享音频冲突检查，避免别的谱面静默改写其音乐。
     std::optional<MczBeatmapAudioAlignmentPlan> plan;
 
-    /// @brief 无法安全建立计划时的原因；OGG 或成功时为空。
+    /// @brief 无法安全建立计划时的原因；成功或无音轨纯谱面时为空。
     std::string errorMessage;
 };
 
-/// @brief 为一张待转换为 MC 的谱面建立非 OGG Main 音频原点对齐计划。
+/// @brief 为待转换为 MC 的副本预检完整的主音轨时序。
 /// @param project 谱面所属项目。
 /// @param beatMap 已加载的谱面副本。
 /// @param sourcePath 来源谱面路径。
-/// @return OGG 时返回空计划；非 OGG 时返回计划或具体失败原因。
+/// @param alignNonOggMainAudio 是否额外启用旧的非 OGG 原点对齐选项。
+/// @return 有音轨时返回计划，无可处理音轨时返回空计划或具体失败原因。
 /// @details
-/// 默认主音频必须来自项目 Main 类型。OGG 已满足 MCZ 直接使用条件，返回成功但
-/// 无计划；非 OGG 才计算一拍内相位，并收集谱面中实际引用该资源的字段文本。
+/// 默认主音频必须来自项目 Main 类型。所有格式都接受首拍补头，OGG 只跳过
+/// 可选原点对齐。先对副本应用可选变换，再调用正式 MC 构建器得到补头长度。
 /// 计划不持有 BeatMap，只在打包事务期间借用项目资源指针。
+/// @note 预检与写出使用相同元数据覆盖，参考 BPM 不能在两个阶段发生变化。
+/// @warning 低频打包事务：允许完整遍历、构造 JSON，不得从播放循环调用。
 MczAudioAlignmentPlanResult makeMczAudioAlignmentPlan(
-    const MMM::Project& project, const MMM::BeatMap& beatMap,
-    const std::filesystem::path& sourcePath)
+    const MMM::Project& project, MMM::BeatMap& beatMap,
+    const std::filesystem::path& sourcePath, bool alignNonOggMainAudio)
 {
-    // 计划只保存对齐所需的资源身份、相位和引用集合，不在构建阶段修改谱面。
+    // 仅修改加载所得的预检副本，活动会话、磁盘源谱面和源音频均不参与写入。
     MczAudioAlignmentPlanResult result;
     const auto*                 resource =
         MMM::Logic::ProjectResourceService::findDefaultBeatmapAudioResource(
             project, beatMap, sourcePath);
-    if ( !resource || resource->m_type != MMM::AudioTrackType::Main ) {
+    if ( (!resource || resource->m_type != MMM::AudioTrackType::Main) &&
+         alignNonOggMainAudio ) {
         // 默认资源缺失或类型不符时无法确定需要转码对齐的主音频。
         result.errorMessage = "没有可识别的 Main 音频资源";
         return result;
     }
-    if ( MMM::packageExtensionEquals(
-             MMM::Config::pathToUtf8(
-                 MMM::Config::utf8ToPath(resource->m_path).extension()),
-             ".ogg") ) {
-        // OGG 可直接进入 MCZ，不需要生成新的原点对齐音频或修改谱面相位。
-        return result;
-    }
-
-    const auto timing =
-        MMM::Logic::calculateMczAudioOriginAlignmentTiming(beatMap);
-    if ( !timing.success ) {
-        // 无有效首红线或 BPM 时不能安全计算一拍内相位，保留服务具体原因。
-        result.errorMessage = timing.errorMessage;
-        return result;
-    }
+    const bool needsOriginAlignment =
+        resource && alignNonOggMainAudio &&
+        !MMM::packageExtensionEquals(
+            MMM::Config::pathToUtf8(
+                MMM::Config::utf8ToPath(resource->m_path).extension()),
+            ".ogg");
     auto references = collectMalodyMainAudioSampleReferences(
         project, beatMap, sourcePath, resource);
-    if ( references.empty() ) {
-        // 没有引用目标资源的自动采样时，对齐音频后也无法同步调整谱面事件。
-        result.errorMessage = "没有引用目标非 OGG Main 音频的自动采样";
+    double phaseMilliseconds = 0;
+    // 默认保持用户现有 timing 的毫秒位置，显式原点对齐才会预先移动。
+    // 额外前导段由正式构建器决定，这里不复制首拍条件矩阵。
+    if ( needsOriginAlignment ) {
+        // 先在预检副本上执行可选原点对齐，再由正式 MC 构建器决定首拍补头。
+        // 两种时间变换组合后只编码一次，避免裁头和补头分别造成重复有损编码。
+        const auto timing =
+            MMM::Logic::calculateMczAudioOriginAlignmentTiming(beatMap);
+        if ( !timing.success ) {
+            result.errorMessage = timing.errorMessage;
+            return result;
+        }
+        phaseMilliseconds = timing.phaseMilliseconds;
+        // 原点对齐仍沿用已有校验：无法统一移动的 Main 不能靠首拍补头掩盖。
+        // 错误发生在压缩包提交前，调用者负责关闭尚未完成的 ZIP 写入上下文。
+        if ( !MMM::Logic::applyMczAudioOriginAlignment(
+                 beatMap, references, phaseMilliseconds, result.errorMessage) )
+            return result;
+    }
+    // 资源 ID 在构建前改为歌曲提示，原引用集合保留给随后重新加载的导出副本。
+    (void)MMM::Logic::ProjectResourceService::refreshSongFileHintForSave(
+        project, beatMap, sourcePath);
+    const auto songFile =
+        MMM::Config::pathToUtf8(beatMap.m_baseMapMetadata.song_file_hint);
+    if ( !songFile.empty() )
+        for ( const auto& reference : references )
+            MMM::Logic::ProjectResourceService::remapBeatmapAudioResourceId(
+                beatMap, reference, songFile);
+    nlohmann::json document;
+    double         paddingMilliseconds = 0;
+    // 文档只用于验证格式能力和读取静音计划，最终写出仍会重新加载源谱面。
+    // 原始引用集合保持有效，供真正的转换副本执行同样的资源重映射。
+    if ( !beatMap.buildMalodyExportDocument(document, paddingMilliseconds) ) {
+        result.errorMessage = "MC 初始红绿线兼容准备失败";
         return result;
+    }
+    if ( !resource || resource->m_type != MMM::AudioTrackType::Main ||
+         references.empty() ) {
+        // 没有实际主音轨的纯谱面不需要编码；有歌曲提示却无法解析时不能漏掉补头。
+        if ( paddingMilliseconds > 0 && !songFile.empty() )
+            result.errorMessage = "MC 前导补偿无法解析 Main 音频资源";
+        return result;
+    }
+    if ( paddingMilliseconds > 0 ) {
+        // 一份编码资源对应一个 Main 触发，避免把用户重复触发同名片段的用法
+        // 误解释为整曲背景音乐。非 Main 采样不受此约束，也不会被补静音。
+        std::size_t mainCount = 0;
+        for ( const auto& sample : beatMap.m_audioSamples ) {
+            if ( sample.m_audioResourceId != songFile ) continue;
+            ++mainCount;
+        }
+        if ( mainCount != 1 ) {
+            // 多次 Main 触发不能未经确认共用一份补头文件，预检明确拒绝。
+            result.errorMessage = "MC 前导补偿需要唯一的主音轨自动采样";
+            return result;
+        }
     }
     result.plan = MczBeatmapAudioAlignmentPlan{
         // resource 指针借用 project 资源表，计划只能在该项目稳定期间使用。
-        .resource            = resource,
-        .phaseMilliseconds   = timing.phaseMilliseconds,
-        .mainAudioReferences = std::move(references),
+        .resource                        = resource,
+        .phaseMilliseconds               = phaseMilliseconds,
+        .initialAudioPaddingMilliseconds = paddingMilliseconds,
+        .applyOriginAlignment            = needsOriginAlignment,
+        .mainAudioReferences             = std::move(references),
     };
     return result;
 }
@@ -1217,16 +1329,19 @@ bool patchMalodyMainAudioVolumeFile(
 /// @param addStoreModeExtForMalodyExport 是否写入上架 mode_ext。
 /// @param mainAudioReferencesWithoutVolume 需要省略 vol 的 Main
 /// 音轨引用；为空时不处理。
+/// @param deferAudioEncoding MCZ 统一编码音频时仅写出对应谱面，避免重复补静音。
 /// @return 是否保存成功。
 /// @details
-/// 非 MC 或无兼容选项时直接使用标准保存器。MC 导出按值备份 MALODY 属性域，
+/// 非 MC 使用标准保存器。所有 MC 均处理初始化红绿线和必要的音频补头。
+/// MC 导出按值备份 MALODY 属性域，
 /// 临时设置 mode 与 mode_ext，完成文件级修补后无条件恢复。Main vol 也只从
 /// 最终文件移除，不改变活动谱面的采样音量。
 bool saveBeatmapWithMalodyExportOptions(
     MMM::BeatMap& beatMap, const std::filesystem::path& outputPath,
     std::optional<MMM::MalodyMode>         malodyExportMode,
     bool                                   addStoreModeExtForMalodyExport,
-    const std::unordered_set<std::string>* mainAudioReferencesWithoutVolume)
+    const std::unordered_set<std::string>* mainAudioReferencesWithoutVolume,
+    bool                                   deferAudioEncoding = false)
 {
     // 所有保存先刷新当前项目的 song.file 提示，普通格式也得到一致资源引用。
     refreshCurrentProjectSongFileHint(beatMap);
@@ -1237,10 +1352,8 @@ bool saveBeatmapWithMalodyExportOptions(
     const bool shouldStripMainAudioVolume =
         mainAudioReferencesWithoutVolume &&
         !mainAudioReferencesWithoutVolume->empty();
-    if ( !isMalodyChartPath(outputPath) ||
-         (!malodyExportMode && !shouldAddStoreModeExt &&
-          !shouldStripMainAudioVolume) ) {
-        // 非 MC 或没有兼容选项时走原始保存路径，不触碰 Malody 私有元数据。
+    if ( !isMalodyChartPath(outputPath) ) {
+        // 非 MC 走原始保存路径，不触碰 Malody 私有元数据。
         return beatMap.saveToFile(outputPath);
     }
 
@@ -1268,7 +1381,27 @@ bool saveBeatmapWithMalodyExportOptions(
         }
     }
 
-    bool ok = beatMap.saveToFile(outputPath);
+    std::filesystem::path mainAudioSource;
+    if ( !deferAudioEncoding ) {
+        if ( const auto* project =
+                 MMM::Logic::EditorEngine::instance().getCurrentProject() ) {
+            if ( const auto* resource = MMM::Logic::ProjectResourceService::
+                     findDefaultBeatmapAudioResource(
+                         *project,
+                         beatMap,
+                         beatMap.m_baseMapMetadata.map_path) )
+                mainAudioSource = resolveProjectResourcePath(
+                    *project,
+                    beatMap.m_baseMapMetadata.map_path,
+                    MMM::Config::utf8ToPath(resource->m_path));
+        }
+    }
+    std::string exportError;
+    bool        ok = MMM::Logic::writeMalodyExportWithAudio(
+        beatMap, outputPath, mainAudioSource, deferAudioEncoding, exportError);
+    // 完整音频事务成功后才做纯 JSON 修补，避免编码失败却继续输出成功文件。
+    // 包路径延后编码，由外层预检和资源写入事务承担同样的同步约束。
+    if ( !ok ) XERROR("MC export failed: {}", exportError);
     if ( ok && shouldAddStoreModeExt ) {
         // 标准写出成功后再确保 mode_ext 为 JSON 对象而不是错误字符串形式。
         ok = patchMalodyStoreModeExtFile(outputPath);
@@ -1426,16 +1559,15 @@ bool convertPackageBeatmapFile(
     // 加载器以空 map_path 表示无法识别或读取来源，不能继续生成空谱面产物。
     if ( beatMap.m_baseMapMetadata.map_path.empty() ) return false;
     // Main 引用必须在覆盖元数据和对齐之前按来源路径解析，保留原字段文本。
-    const auto mainAudioReferences =
-        stripMainAudioVolumeFromMalodyExport
-            ? collectMalodyMainAudioSampleReferences(
-                  project, beatMap, sourcePath)
-            : std::unordered_set<std::string>{};
+    auto mainAudioReferences = stripMainAudioVolumeFromMalodyExport
+                                   ? collectMalodyMainAudioSampleReferences(
+                                         project, beatMap, sourcePath)
+                                   : std::unordered_set<std::string>{};
     if ( metadataOverride ) {
         // 包级元数据覆盖只替换基础信息，物件、Timing 和格式私有属性保持来源值。
         beatMap.m_baseMapMetadata = *metadataOverride;
     }
-    if ( audioAlignmentPlan ) {
+    if ( audioAlignmentPlan && audioAlignmentPlan->applyOriginAlignment ) {
         // 对齐仅作用于本次导出副本，并使用计划中预先验证的一致相位和引用集合。
         std::string alignmentError;
         if ( !MMM::Logic::applyMczAudioOriginAlignment(
@@ -1451,12 +1583,32 @@ bool convertPackageBeatmapFile(
     }
     // 输出路径写入副本元数据，保存器可据此选择格式并建立相对资源上下文。
     beatMap.m_baseMapMetadata.map_path = outputPath;
+    // 新写出的 MC 必须用路径而非项目资源 ID 识别配对 Main；变换只作用于副本。
+    if ( isMalodyChartPath(outputPath) ) {
+        const auto references = collectMalodyMainAudioSampleReferences(
+            project, beatMap, sourcePath);
+        (void)MMM::Logic::ProjectResourceService::refreshSongFileHintForSave(
+            project, beatMap, sourcePath);
+        const auto songFile =
+            MMM::Config::pathToUtf8(beatMap.m_baseMapMetadata.song_file_hint);
+        if ( !songFile.empty() )
+            for ( const auto& reference : references )
+                MMM::Logic::ProjectResourceService::remapBeatmapAudioResourceId(
+                    beatMap, reference, songFile);
+        if ( stripMainAudioVolumeFromMalodyExport &&
+             !mainAudioReferences.empty() && !songFile.empty() ) {
+            // JSON 已改用歌曲路径，去音量名单也要使用同一身份而非旧项目 ID。
+            mainAudioReferences.clear();
+            mainAudioReferences.emplace(songFile);
+        }
+    }
     return saveBeatmapWithMalodyExportOptions(
         beatMap,
         outputPath,
         malodyExportMode,
         addStoreModeExtForMalodyExport,
-        stripMainAudioVolumeFromMalodyExport ? &mainAudioReferences : nullptr);
+        stripMainAudioVolumeFromMalodyExport ? &mainAudioReferences : nullptr,
+        true);
 }
 
 /// @brief 读取转换后的目标谱面字节。
@@ -1697,7 +1849,7 @@ std::unordered_set<std::string> makeSelectedImdArchiveNameSet(
 ///
 /// 包格式规则由 PackageSupportedFileTypes 提供。首个谱面扩展名是转换目标，
 /// 其他已知谱面扩展名需要先加载为 BeatMap 再写成目标格式。音频和图片保持原始
-/// 字节，除非 MCZ 的非 OGG Main 原点对齐选项明确要求生成临时音频。
+/// 字节；MCZ 首拍补头或可选原点对齐需要净位移时生成独立临时音频。
 ///
 /// metadataOverrides 以来源项目相对路径为键。覆盖只用于本次转换副本，不写回
 /// 项目中的源谱面；来源已经是目标格式但存在结构化覆盖时，同样必须走重新编码，
@@ -1775,8 +1927,10 @@ bool writeBeatmapPackage(
                                             alignmentPlansByBeatmapPath;
     std::unordered_map<std::string, double> alignmentPhaseByAudioPath;
     std::unordered_map<std::string, const MMM::AudioResource*>
-        alignmentResourcesByAudioPath;
-    if ( alignNonOggMainAudio ) {
+               alignmentResourcesByAudioPath;
+    const bool isMczPackage =
+        MMM::packageExtensionEquals(packageTypes.m_packageExtension, ".mcz");
+    if ( isMczPackage ) {
         // 第一阶段建立全局选择身份集合。
         //
         // 对齐依赖不能通过“项目里存在”隐式满足，因为资源选择是用户对包内容
@@ -1827,17 +1981,23 @@ bool writeBeatmapPackage(
                 mz_zip_writer_end(&zipArchive);
                 return false;
             }
-            auto planResult =
-                makeMczAudioAlignmentPlan(project, beatMap, sourcePath);
+            // 元数据覆盖可能改变参考 BPM，预检与最终写出必须消费同一参考值。
+            const auto sourceKey =
+                normalizePackageResourceIdentityKey(relativePath);
+            if ( const auto overrideIt = metadataOverrideMap.find(sourceKey);
+                 overrideIt != metadataOverrideMap.end() )
+                beatMap.m_baseMapMetadata = overrideIt->second;
+            auto planResult = makeMczAudioAlignmentPlan(
+                project, beatMap, sourcePath, alignNonOggMainAudio);
             if ( !planResult.errorMessage.empty() ) {
-                // 非 OGG Main 无法建立安全计划时不降级为未对齐输出。
+                // 首拍补头是强制规则；无法建立计划时不能降级为仅移动谱面。
                 XERROR("PackBeatmap: cannot align '{}': {}",
                        relativeUtf8,
                        planResult.errorMessage);
                 mz_zip_writer_end(&zipArchive);
                 return false;
             }
-            // OGG 或无需对齐的谱面返回空计划，仍可在主循环正常写入。
+            // 无实际主音轨的纯谱面没有编码计划，仍可在主循环正常写入。
             if ( !planResult.plan ) continue;
 
             const auto audioRelativePath =
@@ -1845,8 +2005,15 @@ bool writeBeatmapPackage(
                     .lexically_normal();
             const auto audioPathKey =
                 normalizePackageResourceIdentityKey(audioRelativePath);
+            const double encodingPhase =
+                planResult.plan->phaseMilliseconds -
+                planResult.plan->initialAudioPaddingMilliseconds;
+            // 两个输入量均来自同一预检副本，不混用当前活动会话的可变元数据。
+            // 裁头和补头可相互抵消；净位移为零时保留原文件字节，避免不必要
+            // 的有损重编码。谱面仍必须写出初始化配对，不能因此跳过转换。
             if ( packageRelativePathEscapesRoot(audioRelativePath) ||
-                 !selectedRelativePathKeys.contains(audioPathKey) ) {
+                 (std::abs(encodingPhase) > 1.0e-6 &&
+                  !selectedRelativePathKeys.contains(audioPathKey)) ) {
                 // 对齐后的谱面必须引用同包中明确选择的 Main
                 // 音频，禁止隐式漏包。
                 XERROR(
@@ -1859,9 +2026,10 @@ bool writeBeatmapPackage(
             if ( const auto phase =
                      alignmentPhaseByAudioPath.find(audioPathKey);
                  phase != alignmentPhaseByAudioPath.end() &&
-                 std::abs(phase->second - planResult.plan->phaseMilliseconds) >
-                     1.0e-6 ) {
+                 std::abs(phase->second - encodingPhase) > 1.0e-6 ) {
                 // 同一物理音频只能生成一份对齐产物，不同谱面要求不同相位时拒绝。
+                // 比较对象是合并后的净相位；分别比较裁头和补头会误拒绝相同结果。
+                // 零相位也登记，保证未移动的谱面不会引用另一张谱面的补头产物。
                 XERROR(
                     "PackBeatmap: Main audio '{}' is shared by charts with "
                     "different first-BPM phases",
@@ -1869,14 +2037,14 @@ bool writeBeatmapPackage(
                 mz_zip_writer_end(&zipArchive);
                 return false;
             }
-            alignmentPhaseByAudioPath[audioPathKey] =
-                planResult.plan->phaseMilliseconds;
+            alignmentPhaseByAudioPath[audioPathKey] = encodingPhase;
+            // 同资源后续使用者必须得到相同净相位，归档阶段只编码一次。
             // 音频路径表表达“每个物理资源最多一份相位”的包级不变量。
             // 浮点比较使用很小容差，仅吸收等价计算的舍入误差；真正不同的首红线
             // 相位不能合并，否则至少一张谱面的节奏原点会产生可听偏移。
             // 相位已为零时原音频本身已经从歌曲原点播放，只规范谱面首红线，
             // 避免没有必要的有损重编码。
-            if ( std::abs(planResult.plan->phaseMilliseconds) > 1.0e-6 ) {
+            if ( std::abs(encodingPhase) > 1.0e-6 ) {
                 // 非零相位才需要转码音频；零相位仍保存谱面计划以规范首红线。
                 alignmentResourcesByAudioPath[audioPathKey] =
                     planResult.plan->resource;
@@ -1951,9 +2119,10 @@ bool writeBeatmapPackage(
                     ? nullptr
                     : &alignmentPlanIt->second;
             // 任一结构化改写都要求重新载入并保存谱面，不能原样复制源字节。
-            const bool shouldReencode =
-                shouldConvertSource || packageMalodyExportMode.has_value() ||
-                stripMainAudioVolumeFromMc || alignmentPlan != nullptr;
+            const bool shouldReencode = isMczPackage || shouldConvertSource ||
+                                        packageMalodyExportMode.has_value() ||
+                                        stripMainAudioVolumeFromMc ||
+                                        alignmentPlan != nullptr;
 
             const auto metadataIt = metadataOverrideMap.find(relativePathKey);
             const MMM::BaseMapMeta* metadataOverride =
@@ -2081,10 +2250,10 @@ bool writeBeatmapPackage(
         const auto alignmentResource =
             alignmentResourcesByAudioPath.find(resourceIdentityKey);
         if ( alignmentResource != alignmentResourcesByAudioPath.end() ) {
-            // 非 OGG Main 的归档名称保持项目原路径，只有内容替换成对齐产物。
+            // Main 的归档名称保持项目原路径，只有内容替换成时序修正产物。
             // 谱面中的资源引用因此无需改名，媒体容器扩展名也与编码服务输出一致。
             // 临时文件只跨越转码与完整读取两个步骤，随后无论成功失败都尽力删除。
-            // 预检标记的非 OGG Main 需要先生成原点对齐临时音频再写入原包路径。
+            // 预检标记的 Main 先生成临时音频，再将完整编码结果写入原包路径。
             const auto alignedAudioPath =
                 makeTemporaryAlignedAudioPath(sourcePath);
             if ( alignedAudioPath.empty() ) {
@@ -3559,6 +3728,8 @@ bool BeatmapSession::beginAsyncBeatmapSave(const CmdSaveBeatmap& cmd)
     auto snapshot = cloneBeatMapForSave(*m_ctx->currentBeatmap);
     if ( !snapshot ) {
         // 快照不完整时保持原谱面与保存点不变，并向 UI 返回明确失败原因。
+        // 尚未解析资源或提交编码任务，不产生任何 MC 前导音频副本。
+        // 失败保留当前模型的资源身份，后续重试仍从同一份来源重新准备。
         XERROR("SaveBeatmap: polyline references do not belong to beatmap");
         Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
             .path         = Config::pathToUtf8(savePath),
@@ -3570,6 +3741,13 @@ bool BeatmapSession::beginAsyncBeatmapSave(const CmdSaveBeatmap& cmd)
         return true;
     }
 
+    // 项目访问限定在逻辑线程；后台编码仅捕获已解析路径和独立快照。
+    const bool isMalody = isMalodyChartPath(savePath);
+    // 资源解析完成之后不把 Project 指针交给任务，避免项目关闭与后台读表竞争。
+    // 即使编码较慢，当前模型和操作栈仍由逻辑线程独立推进。
+    const auto mainAudioSource =
+        isMalody ? prepareMalodySaveAudio(*snapshot, savePath)
+                 : std::filesystem::path{};
     auto operation            = std::make_shared<AsyncSaveOperation>();
     operation->sourceBeatmap  = m_ctx->currentBeatmap;
     operation->oldPath        = oldPath;
@@ -3583,7 +3761,7 @@ bool BeatmapSession::beginAsyncBeatmapSave(const CmdSaveBeatmap& cmd)
     const auto savePathText               = Config::pathToUtf8(savePath);
 
     operation->future = threadPool->enqueue(
-        [savePath, savePathText, presentation](
+        [savePath, savePathText, presentation, isMalody, mainAudioSource](
             std::shared_ptr<BeatMap> saveSnapshot) mutable {
             // 全局门闩由后台线程自行持有，绝不把 mutex 所有权跨线程转移。
             std::lock_guard fileOperationLock(
@@ -3594,9 +3772,20 @@ bool BeatmapSession::beginAsyncBeatmapSave(const CmdSaveBeatmap& cmd)
             AsyncSaveOperation::WriteResult result;
             // 曲长派生只修改私有快照，避免逻辑线程为保存重建运行时打击事件。
             extendBeatMapLengthFromNotes(*saveSnapshot);
-            result.success = saveSnapshot->saveToFile(savePath);
+            std::string exportError;
+            result.success = isMalody
+                                 ? writeMalodyExportWithAudio(*saveSnapshot,
+                                                              savePath,
+                                                              mainAudioSource,
+                                                              false,
+                                                              exportError)
+                                 : saveSnapshot->saveToFile(savePath);
+            // 写出成功包括前导音频；只有整套产物完成后才记录谱面哈希。
+            // 音频失败不能更新会话保存点，也不能把未对齐的 MC 作为成功文件。
             if ( result.success ) {
                 // 哈希与文件写入在同一串行区间完成，外部比较基线对应刚写出的字节。
+                // 新音乐引用已经写入 MC，不能先计算旧文档哈希再替换引用。
+                // 音频编码和文档提交共同决定成功状态，再推进会话保存点。
                 result.fileHash = calculateBeatmapFileHash(savePath);
             } else {
                 XERROR("SaveBeatmap: failed to save to {}", savePathText);
@@ -3736,7 +3925,23 @@ bool BeatmapSession::saveBeatmapBlocking(const CmdSaveBeatmap& cmd)
     SessionUtils::syncBeatmap(*m_ctx);
     SessionUtils::ensureHitEvents(*m_ctx);
     refreshCurrentProjectSongFileHint(*m_ctx->currentBeatmap);
-    const bool success = m_ctx->currentBeatmap->saveToFile(savePath);
+    bool success = false;
+    if ( isMalodyChartPath(savePath) ) {
+        // 同步生命周期事务也只改写独立快照，补静音不能污染当前撤销模型。
+        auto snapshot = cloneBeatMapForSave(*m_ctx->currentBeatmap);
+        // 即使生命周期事务必须等待磁盘，也不能在原对象上改写项目资源 ID。
+        // 快照创建失败与编码失败均进入已有失败恢复路径，不清除编辑脏状态。
+        if ( snapshot ) {
+            const auto mainAudioSource =
+                prepareMalodySaveAudio(*snapshot, savePath);
+            std::string exportError;
+            success = writeMalodyExportWithAudio(
+                *snapshot, savePath, mainAudioSource, false, exportError);
+            if ( !success ) XERROR("MC save failed: {}", exportError);
+        }
+    } else {
+        success = m_ctx->currentBeatmap->saveToFile(savePath);
+    }
     Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
         .path         = Config::pathToUtf8(savePath),
         .success      = success,
@@ -3789,12 +3994,12 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
         SessionUtils::syncBeatmap(*m_ctx);
         SessionUtils::ensureHitEvents(*m_ctx);
         auto savePath = resolveCurrentProjectPath(Config::utf8ToPath(cmd.path));
-        // BMS 的 WAV 字段只能是文件路径，不能泄漏 MMM 项目资源 ID。
+        // BMS WAV 与 MC SOUND 字段使用资源路径，不能泄漏 MMM 项目资源 ID。
         // 仅改写导出快照，当前编辑会话仍保留稳定 ID 和原保存位置。
         // 单文件导出必须保留资源定位语义，项目表 ID 不能直接写进 WAV。
         // 使用原谱面路径解析引用，使用输出谱面目录计算新的相对路径。
         // 跨目录导出不会移动原音频，也不会更改项目资源表。
-        // BMS/PMS 的键位差异交给模型保存器处理，此层只负责资源定位。
+        // BMS/PMS 键位与 MC 首拍处理交给保存器，此层只负责资源定位。
         // 独立谱面没有项目表时仍可按原文件旁的相对路径解析。
         // 资源找不到时终止导出，不能回退成恰好同名的无效 ID。
         const auto extension = Config::pathToUtf8(savePath.extension());
@@ -3802,9 +4007,13 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
                                packageExtensionEquals(extension, ".bme") ||
                                packageExtensionEquals(extension, ".bml") ||
                                packageExtensionEquals(extension, ".pms");
-        auto       exportMap =
-            isBms ? cloneBeatMapForSave(*m_ctx->currentBeatmap) : nullptr;
-        bool referencesValid = !isBms || static_cast<bool>(exportMap);
+        const bool needsResourceSnapshot =
+            isBms || packageExtensionEquals(extension, ".mc");
+        auto exportMap = needsResourceSnapshot
+                             ? cloneBeatMapForSave(*m_ctx->currentBeatmap)
+                             : nullptr;
+        bool referencesValid =
+            !needsResourceSnapshot || static_cast<bool>(exportMap);
         if ( exportMap ) {
             const auto& sourcePath =
                 m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
@@ -3856,11 +4065,15 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
                     *exportMap,
                     reference.m_audioReference,
                     Config::pathToUtf8(relative));
+                if ( exportMap->m_baseMapMetadata.song_file_hint ==
+                     Config::utf8ToPath(reference.m_audioReference) )
+                    exportMap->m_baseMapMetadata.song_file_hint = relative;
             }
         }
         // 资源准备失败时短路，不打开目标文件。
         // 保存器自身还会拒绝不可表示的物件、增益和时间线效果。
         // 结果事件沿用现有失败路径，成功也不会接管当前谱面保存位置。
+        if ( exportMap ) exportMap->m_baseMapMetadata.map_path = savePath;
         bool ok = referencesValid &&
                   saveBeatmapWithMalodyExportOptions(
                       exportMap ? *exportMap : *m_ctx->currentBeatmap,

@@ -218,6 +218,19 @@ mmm_add_test_executable(Logic MalodyExportModeTest
 target_link_libraries(MalodyExportModeTest PRIVATE Logic Log)
 mmm_register_test_case(NAME MalodyExportModeTest COMMAND MalodyExportModeTest)
 
+# 程序化 WAV 的开头为非零 PCM，可精确测量真实另存为生成的前导静音。
+
+# MCZ 用例解包后同时检查谱面和音乐，覆盖可选裁头与强制补头的合并编码。
+
+# CTest 显式传入构建树输出目录，所有生成资源与源谱面、源音频隔离。
+
+mmm_add_test_executable(Logic MalodyInitialAudioExportTest
+                        tests/MalodyInitialAudioExportTest.cpp)
+target_link_libraries(MalodyInitialAudioExportTest PRIVATE Logic Log)
+mmm_register_test_case(
+  NAME MalodyInitialAudioExportTest COMMAND MalodyInitialAudioExportTest
+  "${CMAKE_BINARY_DIR}/test_output/malody_initial_audio_export")
+
 # MCZ 音频原点对齐测试覆盖正负相位、整数拍前导和安全失败。 相位模型测试不需要在 CTest 命令行传入音频文件。
 # 此处验证时间转换，不将模型测试通过解释为音频编解码链路通过。
 mmm_add_test_executable(Logic MczAudioOriginAlignmentTest

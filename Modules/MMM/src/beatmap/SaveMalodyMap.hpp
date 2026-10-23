@@ -1,5 +1,6 @@
 #pragma once
 
+#include "MalodyInitialTiming.h"
 #include "MalodyVolume.h"
 
 #include "mmm/beatmap/MalodyMode.h"
@@ -163,7 +164,7 @@ using json = nlohmann::json;
 ///
 /// effect 数组写出规则：
 /// - 全部 Timing 按时间稳定排序；
-/// - 只写内部模型中显式存在的效果，不根据 BPM 合成 scroll；
+/// - 用户效果逐项保留，仅为最终首个参考 BPM 补充单位 scroll；
 /// - 同时间效果保持内部模型中的稳定顺序；
 /// - SCROLL 写 scroll；
 /// - JUMP 写 jump；
@@ -250,7 +251,7 @@ using json = nlohmann::json;
 /// - 首 BPM 负时间的合成锚点；
 /// - 位于生成拍轴以前的自动采样；
 /// - 同时间 BPM 与效果独立写出；
-/// - osu! 来源红线不额外合成 scroll；
+/// - osu! 来源的后续红线不额外合成 scroll；
 /// - scroll、jump、hs 私有字段恢复；
 /// - mode_ext.column 的 Key 模式补全；
 /// - meta.free 与 mode 的最终一致性；
@@ -362,12 +363,18 @@ inline bool isSupportedMalodyExportMode(int mode)
            mode == malodyModeValue(MalodyMode::Slide);
 }
 
-/// @brief 保存谱面为 Malody .mc JSON 文件。
+/// @brief 构建谱面 MC 文档及初始 timing 所需的音频前导计划。
+/// @param beatMap 只读源模型。
+/// @param fileData 接收完整 MC 文档。
+/// @param audioLeadInMilliseconds 接收主音轨需要增加的前导静音。
+/// @return 全部兼容检查与首拍准备成功时为真。
 /// @warning 低频导出路径：允许完整遍历谱面数据；位置换算必须以当前时间戳为准。
-inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
+inline bool buildMalodyMapDocument(const BeatMap& beatMap, json& fileData,
+                                   double& audioLeadInMilliseconds)
 {
     // 先在内存完成兼容性验证和 JSON 构造，最后才创建目标文件。
-    json fileData;
+    fileData                = json::object();
+    audioLeadInMilliseconds = 0;
 
     // 轨道数决定 Slide 坐标、长条宽度和 Flick 距离基数。
     int trackCount = static_cast<int>(beatMap.m_baseMapMetadata.track_count);
@@ -1303,7 +1310,21 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
             }
             return lhs->m_offsetMs < rhs->m_offsetMs;
         });
+    /// @brief 主音轨节点索引，后续 JSON 扩容不会使其失效。
+    std::optional<std::size_t> pairedMainNode;
+    /// @brief 主音轨原始锚点，独立 offset 不应因文件补头再平移一次。
+    std::optional<std::size_t> primaryMainNode;
+    double                     primaryMainTimestamp = 0;
     for ( const AudioSampleEvent* sample : sortedSamples ) {
+        if ( sample == wrappedMainSample ) pairedMainNode = noteArr.size();
+        const auto soundPath = Config::utf8ToPath(sample->m_audioResourceId);
+        const auto songPath  = beatMap.m_baseMapMetadata.song_file_hint;
+        if ( !songPath.empty() &&
+             (soundPath == songPath ||
+              soundPath.filename() == songPath.filename()) ) {
+            primaryMainNode      = noteArr.size();
+            primaryMainTimestamp = sample->m_timestamp;
+        }
         noteArr.push_back(serializeAudioSample(*sample));
     }
 
@@ -1343,6 +1364,41 @@ inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
         noteArr.push_back(serializeToMalody(*note));
     }
 
+    // 用户首红线的同刻 Scroll 决定零点是否必须腾出一拍；不能把新增回卷
+    // 锚点误认成用户已有红线，从而把它后面的自定义滚速覆盖为一倍。
+    const double firstSourceTime =
+        bpmTimings.empty() ? 0.0 : bpmTimings.front()->m_timestamp;
+    const bool userScrollAtFirst = std::any_of(
+        beatMap.m_timings.begin(),
+        beatMap.m_timings.end(),
+        [&](const Timing& timing) {
+            return timing.m_timingEffect == TimingEffect::SCROLL &&
+                   std::abs(timing.m_timestamp - firstSourceTime) <= 1.0e-6;
+        });
+    return Internal::normalizeMalodyInitialTiming(
+        fileData,
+        beatMap.m_baseMapMetadata.preference_bpm,
+        firstSourceTime,
+        prependSyntheticFirstBpm,
+        userScrollAtFirst,
+        pairedMainNode,
+        primaryMainNode,
+        primaryMainTimestamp,
+        audioLeadInMilliseconds);
+}
+
+/// @brief 保存 MC 文档；需要同步音频的应用导出入口应先取得前导计划。
+/// @param beatMap 待序列化模型。
+/// @param path 目标 MC 路径。
+/// @return 文档构建和磁盘写出均成功时为真。
+/// @note 模型层只负责谱面文件，主音轨编码由 Audio 层的导出事务完成。
+/// @warning 低频文件写入，不修改源谱面与资源。
+inline bool saveMalodyMap(const BeatMap& beatMap, std::filesystem::path path)
+{
+    json   fileData;
+    double audioLeadInMilliseconds = 0;
+    if ( !buildMalodyMapDocument(beatMap, fileData, audioLeadInMilliseconds) )
+        return false;
     // 所有兼容检查和 JSON 构造成功后才打开目标路径。
     std::ofstream ofs(path);
     if ( !ofs.is_open() ) {
