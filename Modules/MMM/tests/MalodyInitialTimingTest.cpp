@@ -30,9 +30,10 @@ struct Scenario {
     double m_referenceBpm;    ///< 参考 BPM，用户首红线固定为 120 BPM。
     bool   m_userScroll;      ///< 用户是否在首红线同刻放置自定义绿线。
     double m_expectedLeadIn;  ///< 必须与实际音频补静音一致的期望。
-    double m_userScrollValue{
-        2.5
-    };  ///< 一倍用户绿线也必须保留原始时间，不能冒充初始化。
+    /// @brief 一倍用户绿线也必须保留原始时间，不能冒充初始化。
+    double m_userScrollValue{ 2.5 };
+    /// @brief 不补头时保留同一 Main 文件的额外触发。
+    bool m_repeatMain{ false };
 };
 
 /// @brief 用来源标签创建红线或绿线，导出与回读后仍能识别用户原始事件。
@@ -68,6 +69,8 @@ MMM::Timing makeTiming(double time, MMM::TimingEffect effect, double value,
 /// 验证目标包括原红线、自定义 Scroll、后续 BPM、Note 和 Hold 两端。
 /// 自动采样另行验证有效播放时间，确保 offset 没被当成整谱偏移。
 /// @note 来源模型保持原首红线和主音轨位置，可重复导出。
+/// @note 重复 Main 的场景不补音频头，只验证额外触发仍保持普通采样语义。
+/// @note 主采样的资源身份与触发事件身份分别检查，不能按文件名对事件去重。
 bool checkScenario(const Scenario&              scenario,
                    const std::filesystem::path& output, int mode)
 {
@@ -100,6 +103,14 @@ bool checkScenario(const Scenario&              scenario,
     // 效果音特意与 Main 同名但目录不同，完整路径必须比文件名回退优先。
     source.m_audioSamples.push_back(MMM::AudioSampleEvent{
         .m_timestamp = 0, .m_track = 4, .m_audioResourceId = "music.wav" });
+    if ( scenario.m_repeatMain ) {
+        // 额外触发同一文件是合法普通采样，不能覆盖负责首拍配对的零点 Main。
+        // 本场景不需要编码补头，应完整保留两个触发点而非拒绝整个导出。
+        source.m_audioSamples.push_back(
+            MMM::AudioSampleEvent{ .m_timestamp       = 1500,
+                                   .m_track           = 4,
+                                   .m_audioResourceId = "music.wav" });
+    }
     source.m_audioSamples.push_back(
         MMM::AudioSampleEvent{ .m_timestamp       = scenario.m_firstTime + 750,
                                .m_offsetMs        = -13,
@@ -190,11 +201,20 @@ bool checkScenario(const Scenario&              scenario,
                   (scenario.m_firstTime + 500 + leadIn)) > .1 ||
          std::abs(loaded.m_noteData.holds[0].m_duration - 500) > .1 )
         return false;
+    std::size_t mainCount = 0;
     for ( const auto& sample : loaded.m_audioSamples ) {
         // 前导段内的早期效果音能暴露“所有拍位只加同一个常数”的错误。
         // 后半段音效则与 BPM 切换后的普通物件共用原有时间映射。
         // 同一自动采样轨可以同时有 Main 和效果音，不能按轨道整体覆盖时间。
         // offset 在局部播放时刻才生效，不得被拍轴变换丢弃或重复累加。
+        if ( sample.m_audioResourceId == "music.wav" ) {
+            // 同资源身份不等于同一个事件：只把零点那个作为包装锚点。
+            ++mainCount;
+            if ( std::abs(sample.effectiveTimestamp()) > .2 &&
+                 (!scenario.m_repeatMain ||
+                  std::abs(sample.effectiveTimestamp() - 1500) > .2) )
+                return false;
+        }
         if ( sample.m_audioResourceId == "early.wav" &&
              std::abs(sample.effectiveTimestamp() - (57 + leadIn)) > .2 )
             return false;
@@ -203,6 +223,8 @@ bool checkScenario(const Scenario&              scenario,
                       (scenario.m_firstTime + 737 + leadIn)) > .2 )
             return false;
     }
+    // 数量与时间同时约束，防止通过丢弃重复触发来掩盖拍位错误。
+    if ( mainCount != (scenario.m_repeatMain ? 2U : 1U) ) return false;
     // 源模型保持原样，重复导出同一编辑谱面不能叠加前导时间。
     // 序列化只能改写输出 JSON，不能在来源容器内永久加入合成红绿线。
     // 重复导出同一来源时仍应得到相同前导长度，而不是逐次累加。
@@ -229,13 +251,17 @@ int main(int argc, char** argv)
     // 120 BPM 一拍 500ms，参考 100 BPM 一拍 600ms，能区分错误采用首拍 BPM。
     // 相同 BPM 的零点按是否已有用户绿线拆分，再补负时间单位绿线的边界。
     // 其余场景保留用户绿线，直接检查新增配对不会覆盖 2.5 倍滚速。
-    const std::array scenarios{
-        Scenario{ 1100, 120, true, 0 },   Scenario{ 1000, 120, true, 0 },
-        Scenario{ 100, 120, true, 0 },    Scenario{ 0, 120, false, 0 },
-        Scenario{ 0, 120, true, 500 },    Scenario{ 1100, 100, true, 0 },
-        Scenario{ 1000, 100, true, 600 }, Scenario{ 100, 100, true, 0 },
-        Scenario{ 0, 100, true, 600 },    Scenario{ -100, 120, true, 0, 1.0 }
-    };
+    const std::array scenarios{ Scenario{ 1100, 120, true, 0 },
+                                Scenario{ 1000, 120, true, 0 },
+                                Scenario{ 100, 120, true, 0 },
+                                Scenario{ 0, 120, false, 0 },
+                                Scenario{ 0, 120, true, 500 },
+                                Scenario{ 1100, 100, true, 0 },
+                                Scenario{ 1000, 100, true, 600 },
+                                Scenario{ 100, 100, true, 0 },
+                                Scenario{ 0, 100, true, 600 },
+                                Scenario{ -100, 120, true, 0, 1.0 },
+                                Scenario{ 100, 120, true, 0, 2.5, true } };
     for ( std::size_t index = 0; index < scenarios.size(); ++index ) {
         // 失败日志保留矩阵索引，便于对应到明确的输入条件而非 JSON 排序。
         for ( const int mode : { 0, 7 } ) {

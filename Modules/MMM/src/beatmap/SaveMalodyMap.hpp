@@ -1332,6 +1332,9 @@ inline bool buildMalodyMapDocument(const BeatMap& beatMap, json& fileData,
         }
         noteArr.push_back(serializeAudioSample(*sample));
     }
+    // 已识别的首拍配对 Main 具有事件级身份，同文件的后续触发不能覆盖它。
+    // 后续触发继续按普通内容变换，不能因为资源相同而跳过拍位平移。
+    if ( pairedMainNode ) primaryMainNode = pairedMainNode;
 
     // 玩家物件同样使用观察指针视图，不复制或修改模型。
     std::vector<const Note*> sortedNotes;
