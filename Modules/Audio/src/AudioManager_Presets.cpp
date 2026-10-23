@@ -1,4 +1,6 @@
 #include "audio/AudioManager.h"
+
+#include "AudioManagerSoundEffectLoadingState.h"
 #include "audio/KeySoundControl.h"
 #include "audio/SoundEffectPool.h"
 #include "config/AppConfig.h"
@@ -44,7 +46,8 @@ void AudioManager::applyAudioPreset(bool applyPlayback)
     // 没有覆盖项时恢复默认，不能继承刚离开的预设的静音状态。
     // 尚未加载的池后续从 SFX 配置读取覆盖值，无需为切换预设强制加载。
     // 只扫描登记表，不触碰实体系统或执行文件探测。
-    for ( auto& [key, registration] : m_registeredSoundEffects ) {
+    // 只借用稳定私有状态中的登记，不复制容器或延长资源所有权。
+    for ( auto& [key, registration] : m_sfxLoading->m_registeredSoundEffects ) {
         if ( registration.m_usesProjectResourceConfig ) continue;
         const auto gain = sfx.permanentSfxVolumes.find(key);
         const auto mute = sfx.permanentSfxMutes.find(key);
