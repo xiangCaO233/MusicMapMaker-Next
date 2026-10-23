@@ -637,11 +637,22 @@ inline BeatMap loadMalodyMap(std::filesystem::path path)
             bpmEvents[index].beat -= malodyContentBeatShift;
         }
         // RawEvent 中的首 BPM 用来源序号识别，避免浮点拍位比较误判。
+        /// @brief 初始化绿线仅消费首个匹配，后续用户同拍一倍速仍属于普通内容。
+        bool initialScrollConsumed = false;
         for ( auto& event : rawEvents ) {
             const bool isWrappedFirstBpm =
                 event.isBpm &&
                 event.bpmSourceOrder == wrappedFirstBpmSourceOrder;
-            if ( !isWrappedFirstBpm ) {
+            // 初始单位 Scroll 与首红线成对，不属于被整拍包装的普通内容。
+            // 仅豁免这一拍的 1.0 初始化绿线，用户后续同值绿线仍正常解包装。
+            const bool isWrappedInitialScroll =
+                !initialScrollConsumed && !event.isBpm &&
+                event.effect == TimingEffect::SCROLL &&
+                std::abs(event.value - 1.0) <= 1.0e-6 &&
+                std::abs(event.beat - bpmEvents.front().beat) <= 1.0e-6;
+            // 导出器把初始化绿线插在用户事件之前；同拍同值不代表同一个事件。
+            if ( isWrappedInitialScroll ) initialScrollConsumed = true;
+            if ( !isWrappedFirstBpm && !isWrappedInitialScroll ) {
                 event.beat -= malodyContentBeatShift;
             }
         }

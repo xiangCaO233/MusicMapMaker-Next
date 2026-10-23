@@ -17,6 +17,8 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <nlohmann/json.hpp>
+#include <utility>
 
 namespace MMM
 {
@@ -99,6 +101,31 @@ BeatMap BeatMap::loadFromFile(std::filesystem::path mapFilePath)
 /// @return 对应写出器成功时返回 true，未知格式或写出失败时返回 false。
 bool BeatMap::saveToFile(std::filesystem::path mapFilePath) const
 {
+    return saveToFileInternal(std::move(mapFilePath), nullptr, nullptr);
+}
+
+/// @brief 与保存器共用格式准备，构建待导出的 MC 文档及音频前导计划。
+/// @param document 成功时接收序列化结果。
+/// @param audioLeadInMilliseconds 必须加入主音频开头的毫秒静音。
+/// @return 全部兼容性与初始 timing 准备成功时为真。
+/// @warning 用户导出路径：不写文件，但可能复制并展开时间线曲线。
+bool BeatMap::buildMalodyExportDocument(nlohmann::json& document,
+                                        double& audioLeadInMilliseconds) const
+{
+    audioLeadInMilliseconds = 0;
+    return saveToFileInternal("export.mc", &document, &audioLeadInMilliseconds);
+}
+
+/// @brief 统一执行曲线准备、格式验证以及文件或 MC 文档输出。
+/// @param mapFilePath 目标路径，文档模式只使用其扩展名。
+/// @param malodyDocument 可选 MC 文档输出，与文件保存互斥。
+/// @param audioLeadInMilliseconds 文档模式接收音频前导静音计划。
+/// @return 格式准备和输出成功时返回真。
+/// @warning 低频保存路径：不得从逐帧更新调用。
+bool BeatMap::saveToFileInternal(std::filesystem::path mapFilePath,
+                                 nlohmann::json*       malodyDocument,
+                                 double* audioLeadInMilliseconds) const
+{
     // 保存不从当前来源格式推断目标，允许另存为完成格式转换。
     std::string mapFileExtention = Config::pathToUtf8(mapFilePath.extension());
     // 节拍定义的派生域可能因后续 BPM 编辑而失效，保存消费最新红线副本。
@@ -149,7 +176,8 @@ bool BeatMap::saveToFile(std::filesystem::path mapFilePath) const
             sampleTimingInterpolations(prepared.m_timings, fallback);
         if ( prepared.m_timings.empty() ) return false;
         prepared.sync();
-        return prepared.saveToFile(std::move(mapFilePath));
+        return prepared.saveToFileInternal(
+            std::move(mapFilePath), malodyDocument, audioLeadInMilliseconds);
     }
     // 无效段落禁止静默降级丢弃，保存失败保留编辑数据供用户修正。
     // 时间戳在文件领域为毫秒，曲线时长为秒，求终点必须先统一单位。
@@ -183,7 +211,8 @@ bool BeatMap::saveToFile(std::filesystem::path mapFilePath) const
         sampled.m_timings         = sampleTimingInterpolations(m_timings);
         // 重建借用视图以指向临时副本的容器，不能沿用来源视图地址。
         sampled.sync();
-        return sampled.saveToFile(std::move(mapFilePath));
+        return sampled.saveToFileInternal(
+            std::move(mapFilePath), malodyDocument, audioLeadInMilliseconds);
     }
     if ( Bms::upper(mapFileExtention) == ".BMS" ||
          Bms::upper(mapFileExtention) == ".BME" ||
@@ -206,6 +235,9 @@ bool BeatMap::saveToFile(std::filesystem::path mapFilePath) const
         return saveOSUMap(*this, mapFilePath);
     }
     if ( mapFileExtention == ".mc" ) {
+        if ( malodyDocument && audioLeadInMilliseconds )
+            return buildMalodyMapDocument(
+                *this, *malodyDocument, *audioLeadInMilliseconds);
         // Malody 写出器生成 JSON `.mc` 文件。
         return saveMalodyMap(*this, mapFilePath);
     }

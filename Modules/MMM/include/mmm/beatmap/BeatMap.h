@@ -11,6 +11,7 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <nlohmann/json_fwd.hpp>
 #include <string>
 #include <vector>
 
@@ -91,6 +92,15 @@ public:
      */
     bool saveToFile(std::filesystem::path mapFilePath) const;
 
+    /// @brief 构建 MC 文档，并报告必须同步添加到主音频开头的静音长度。
+    /// @param document 成功时接收含初始参考红绿线的完整 MC 文档。
+    /// @param audioLeadInMilliseconds 主音频需要增加的前导静音，单位毫秒。
+    /// @return 谱面和 timing 可由 MC 表达时返回 true。
+    /// @note 与文件保存共用曲线展开和回卷入口，不修改来源谱面或音频。
+    /// @warning 低频导出路径：完整构建 JSON，不用于逻辑或渲染循环。
+    [[nodiscard]] bool buildMalodyExportDocument(
+        nlohmann::json& document, double& audioLeadInMilliseconds) const;
+
     /// @brief 同步物件引用表 (m_allNotes)
     void sync();
 
@@ -117,6 +127,17 @@ public:
 
     /// @brief 所有谱面元数据
     MapMetadata m_metadata;
+
+private:
+    /// @brief 共享格式准备入口；MC 文档模式只构建 JSON，不执行文件写入。
+    /// @param mapFilePath 目标格式与普通保存路径。
+    /// @param malodyDocument 非空时接收 MC 文档，为空时执行标准文件保存。
+    /// @param audioLeadInMilliseconds MC 文档模式的前导静音输出。
+    /// @return 格式准备及目标写出或文档构建成功时返回 true。
+    /// @warning 低频路径：曲线展开可以创建导出副本，不在热路径调用。
+    bool saveToFileInternal(std::filesystem::path mapFilePath,
+                            nlohmann::json*       malodyDocument,
+                            double* audioLeadInMilliseconds) const;
 };
 
 }  // namespace MMM

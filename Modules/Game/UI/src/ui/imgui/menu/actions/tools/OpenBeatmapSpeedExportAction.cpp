@@ -6,7 +6,9 @@
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
+#include "logic/MalodyPackageCompatibility.h"
 #include "logic/session/SessionUtils.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "mmm/beatmap/BeatmapSpeedTransform.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
@@ -723,12 +725,50 @@ private:
             // 音频完成后预留末段进度给谱面序列化。
             speedExportProgressQueue().enqueue(
                 SpeedExportProgressPayload{ 0.98f, "正在保存倍速谱面..." });
-            if ( !outputBeatmap || !outputBeatmap->saveToFile(outputMapPath) ) {
+            std::string mapError;
+            // 倍速音频已生成，但 MC 的零点可能还要为初始化红绿线腾出一拍。
+            // 使用与另存为一致的事务，以倍速产物为输入增加静音。
+            // 最终结果路径必须指向实际引用的音频，不能仍报告补头前的文件。
+            // 这里只处理离线后台导出，不改变当前播放时间线或活动谱面。
+            // 非 MC 继续使用已有保存器，其音频时间约定不接受 Malody 前导规则。
+            // 首拍准备失败时保留详细原因，由统一结果队列反馈给界面。
+            // 编码服务不会覆盖源音频，重复导出选择新的未占用资源文件名。
+            // 错误分支不继续发布成功路径，避免用户拿到不同步的谱面和音乐。
+            const bool mapSaved =
+                outputBeatmap &&
+                (outputMapPath.extension() == ".mc"
+                     ? Logic::writeMalodyExportWithAudio(*outputBeatmap,
+                                                         outputMapPath,
+                                                         outputAudioPath,
+                                                         false,
+                                                         mapError,
+                                                         &payload.audioPath)
+                     : outputBeatmap->saveToFile(outputMapPath));
+            if ( !mapSaved ) {
                 // 谱面保存失败时音频可能已生成，消息明确任务整体未完成。
                 payload.success = false;
-                payload.message = "倍速谱面保存失败";
+                payload.message =
+                    mapError.empty() ? "倍速谱面保存失败" : mapError;
                 speedExportResultQueue().enqueue(std::move(payload));
                 return;
+            }
+            if ( outputMapPath.extension() == ".mc" ) {
+                // MC 可能新增参考段并整体后移，不能把补头前的模型接入新会话。
+                // 在后台回读实际产物，让新会话、磁盘谱面和最终音频共享同一时序。
+                // 回读发生在文件写入成功之后，不读取仍在生成中的中间 JSON。
+                auto reloaded = BeatMap::loadFromFile(outputMapPath);
+                if ( reloaded.m_baseMapMetadata.map_path.empty() ) {
+                    payload.success = false;
+                    payload.message = "倍速 MC 已写出，但重新加载失败";
+                    speedExportResultQueue().enqueue(std::move(payload));
+                    return;
+                }
+                // 移动完整模型后重建借用索引，子物件引用不能继续指向栈上旧容器。
+                // 原倍速模型只属于导出任务，当前编辑谱面仍不受影响。
+                payload.beatmap =
+                    std::make_shared<BeatMap>(std::move(reloaded));
+                payload.beatmap->sync();
+                // 交付后 UI 线程按最终音频路径登记资源，不再使用旧歌曲提示。
             }
 
             // 只有音频与谱面都落盘后才报告成功。

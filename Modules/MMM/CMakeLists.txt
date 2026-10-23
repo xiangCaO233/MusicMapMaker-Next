@@ -123,6 +123,19 @@ target_include_directories(MalodyEdgeCaseTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 mmm_register_test_case(NAME Test_Malody_Edge_Case COMMAND MalodyEdgeCaseTest)
 
+# 首拍矩阵独立列出八类条件及零点有无绿线的预期，不复用生产判断公式。
+
+# 正式 MC 写出与回读检查绝对时序，包含不同 BPM、长条两端和局部采样 offset。
+
+# 纯协议测试仅依赖模型模块，真实音频编解码由 Logic 对应集成测试覆盖。
+
+mmm_add_test_executable(MMM MalodyInitialTimingTest
+                        tests/MalodyInitialTimingTest.cpp)
+target_link_libraries(MalodyInitialTimingTest PRIVATE MMM Log)
+mmm_register_test_case(
+  NAME MalodyInitialTimingTest COMMAND MalodyInitialTimingTest
+  "${TEST_OUTPUT_DIR}/malody_initial_timing")
+
 # 跨格式绑定音效测试区分玩家命中采样和时间线自动采样，并写入独立输出目录。
 mmm_add_test_executable(MMM BoundNoteSoundTest tests/BoundNoteSoundTest.cpp)
 target_link_libraries(BoundNoteSoundTest PRIVATE MMM Log)
