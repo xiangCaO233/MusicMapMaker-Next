@@ -1,11 +1,13 @@
 #include "logic/ProjectCommandService.h"
 #include "audio/AudioMarkerService.h"
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/CreatorIdentity.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "logic/ProjectResourceService.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/project/Project.h"
 
 #include <algorithm>
 #include <cctype>

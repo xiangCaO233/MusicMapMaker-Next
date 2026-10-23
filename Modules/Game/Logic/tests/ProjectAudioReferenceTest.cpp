@@ -1,5 +1,7 @@
+#include "common/LogicCommands.h"
 #include "logic/ProjectCommandService.h"
 #include "logic/ProjectResourceService.h"
+#include "mmm/project/Project.h"
 
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"

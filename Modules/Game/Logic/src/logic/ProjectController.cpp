@@ -1,8 +1,11 @@
 #include "logic/ProjectController.h"
 #include "ArchiveReadLocale.h"
+#include "ProjectControllerState.h"
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/CreatorIdentity.h"
 #include "config/Utf8Path.h"
+#include "event/core/EventBus.h"
 #include "event/project/ProjectEvents.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "log/colorful-log.h"
@@ -1131,28 +1134,33 @@ ProjectController& ProjectController::instance()
 /// @note 订阅句柄由析构函数逐项解除，事件回调不拥有控制器实例。
 /// 构造不打开默认项目，启动时是否发起打开请求由调用方决定。
 ProjectController::ProjectController()
+    : m_state(std::make_unique<PrivateState>())
 {
+    // 私有状态在订阅之前构造完成，回调从首次调用起即可使用同一请求锁。
+    // 后续打开、关闭和取消操作只清理字段，不替换状态或改变回调捕获的 this。
+    // 状态分配只发生在单例初始化，不进入逻辑循环或目录变更消费路径。
     // 事件入口只排入请求，不在回调里直接切换项目或销毁旧画布。
     // 保存确认和画布关闭完成后，再由逻辑线程消费可执行动作。
     /// @brief 项目控制器订阅项目事件使用的全局事件总线。
     auto& eventBus = Event::EventBus::instance();
     // 每种事件单独保存订阅句柄，析构时可以精确解除本控制器注册的回调。
-    m_openProjectSubscription = eventBus.subscribe<Event::OpenProjectEvent>(
-        [this](const Event::OpenProjectEvent& event) {
-            requestOpenProject(event.m_projectPath, event.m_origin);
-        });
-    m_openTemporaryProjectSubscription =
+    m_state->m_openProjectSubscription =
+        eventBus.subscribe<Event::OpenProjectEvent>(
+            [this](const Event::OpenProjectEvent& event) {
+                requestOpenProject(event.m_projectPath, event.m_origin);
+            });
+    m_state->m_openTemporaryProjectSubscription =
         eventBus.subscribe<Event::OpenTemporaryProjectPackageEvent>(
             [this](const Event::OpenTemporaryProjectPackageEvent& event) {
                 requestOpenTemporaryProjectPackage(event.m_packagePath,
                                                    event.m_origin);
             });
-    m_closeProjectSubscription =
+    m_state->m_closeProjectSubscription =
         eventBus.subscribe<Event::ProjectCloseRequestedEvent>(
             [this](const Event::ProjectCloseRequestedEvent&) {
                 requestCloseProject();
             });
-    m_createProjectSubscription =
+    m_state->m_createProjectSubscription =
         eventBus.subscribe<Event::ProjectCreateRequestedEvent>(
             [this](const Event::ProjectCreateRequestedEvent& event) {
                 // 复制必要创建参数再排队，不保留可能在发布结束后失效的事件引用。
@@ -1167,12 +1175,12 @@ ProjectController::ProjectController()
                     event.m_projectPath, options, event.m_origin);
             });
     // 完成与取消只推进请求状态，不在回调中重复执行目录复制或项目存储。
-    m_projectSwitchCompletedSubscription =
+    m_state->m_projectSwitchCompletedSubscription =
         eventBus.subscribe<Event::ProjectSwitchCompletedEvent>(
             [this](const Event::ProjectSwitchCompletedEvent&) {
                 completePendingProjectSwitch();
             });
-    m_projectSwitchCancelledSubscription =
+    m_state->m_projectSwitchCancelledSubscription =
         eventBus.subscribe<Event::ProjectSwitchCancelledEvent>(
             [this](const Event::ProjectSwitchCancelledEvent&) {
                 cancelPendingProjectSwitch();
@@ -1183,32 +1191,35 @@ ProjectController::ProjectController()
 /// @pre 应在外部停止发起新的项目操作后销毁，退订不能替代调用方的退出协调。
 ProjectController::~ProjectController()
 {
+    // 析构体执行期间私有状态仍完整存活，退订需要其中保存的原订阅 ID。
+    // 停止监听后才进行成员析构，请求锁不会在后台监听任务退出前销毁。
+    // 监听器只访问自身状态；直接持有的当前项目在监听器销毁之后释放。
     // 回调捕获 this，先解除所有订阅再停止监听，避免控制器析构后被事件访问。
     /// @brief 项目控制器取消项目事件订阅使用的全局事件总线。
     auto& eventBus = Event::EventBus::instance();
-    if ( m_openProjectSubscription != 0 ) {
+    if ( m_state->m_openProjectSubscription != 0 ) {
         eventBus.unsubscribe<Event::OpenProjectEvent>(
-            m_openProjectSubscription);
+            m_state->m_openProjectSubscription);
     }
-    if ( m_openTemporaryProjectSubscription != 0 ) {
+    if ( m_state->m_openTemporaryProjectSubscription != 0 ) {
         eventBus.unsubscribe<Event::OpenTemporaryProjectPackageEvent>(
-            m_openTemporaryProjectSubscription);
+            m_state->m_openTemporaryProjectSubscription);
     }
-    if ( m_closeProjectSubscription != 0 ) {
+    if ( m_state->m_closeProjectSubscription != 0 ) {
         eventBus.unsubscribe<Event::ProjectCloseRequestedEvent>(
-            m_closeProjectSubscription);
+            m_state->m_closeProjectSubscription);
     }
-    if ( m_createProjectSubscription != 0 ) {
+    if ( m_state->m_createProjectSubscription != 0 ) {
         eventBus.unsubscribe<Event::ProjectCreateRequestedEvent>(
-            m_createProjectSubscription);
+            m_state->m_createProjectSubscription);
     }
-    if ( m_projectSwitchCompletedSubscription != 0 ) {
+    if ( m_state->m_projectSwitchCompletedSubscription != 0 ) {
         eventBus.unsubscribe<Event::ProjectSwitchCompletedEvent>(
-            m_projectSwitchCompletedSubscription);
+            m_state->m_projectSwitchCompletedSubscription);
     }
-    if ( m_projectSwitchCancelledSubscription != 0 ) {
+    if ( m_state->m_projectSwitchCancelledSubscription != 0 ) {
         eventBus.unsubscribe<Event::ProjectSwitchCancelledEvent>(
-            m_projectSwitchCancelledSubscription);
+            m_state->m_projectSwitchCancelledSubscription);
     }
     stopDirectoryWatcher();
 }
@@ -1267,26 +1278,26 @@ void ProjectController::requestOpenProject(
     // 请求槽只保留最新意图；普通打开要同时撤销前一次创建选项和关闭状态。
     /// @brief 保护本次打开请求状态写入的锁。
     std::lock_guard<std::mutex> lock(m_pendingMutex);
-    m_pendingProjectPath.clear();
-    m_pendingProjectOpenMode = ProjectOpenMode::Normal;
-    m_pendingProjectCreationOptions.reset();
-    m_requestedProjectCreationOptions.reset();
-    m_requestedProjectOpenMode = ProjectOpenMode::Normal;
-    m_requestedProjectClose    = false;
-    m_pendingProjectClose      = false;
-    m_projectCloseReady        = false;
+    m_state->m_pendingProjectPath.clear();
+    m_state->m_pendingProjectOpenMode = ProjectOpenMode::Normal;
+    m_state->m_pendingProjectCreationOptions.reset();
+    m_state->m_requestedProjectCreationOptions.reset();
+    m_state->m_requestedProjectOpenMode = ProjectOpenMode::Normal;
+    m_state->m_requestedProjectClose    = false;
+    m_pendingProjectClose               = false;
+    m_state->m_projectCloseReady        = false;
     if ( !m_pendingProjectSwitchPath.empty() ) {
-        m_requestedProjectPath.clear();
+        m_state->m_requestedProjectPath.clear();
         // UI 正在关闭的是旧画布，替换目标不改变那批画布的关闭对象。
         // 已进入关闭旧画布阶段时只替换目标，不另起一次画布关闭流程。
-        m_switchOrigin                 = origin;
-        m_pendingProjectSwitchPath     = projectPath;
-        m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
-        m_pendingProjectSwitchCreationOptions.reset();
+        m_state->m_switchOrigin                 = origin;
+        m_pendingProjectSwitchPath              = projectPath;
+        m_state->m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
+        m_state->m_pendingProjectSwitchCreationOptions.reset();
     } else {
-        m_requestedOrigin          = origin;
-        m_requestedProjectPath     = projectPath;
-        m_requestedProjectOpenMode = ProjectOpenMode::Normal;
+        m_state->m_requestedOrigin          = origin;
+        m_state->m_requestedProjectPath     = projectPath;
+        m_state->m_requestedProjectOpenMode = ProjectOpenMode::Normal;
     }
     m_hasPendingProjectAction.store(true, std::memory_order_release);
 }
@@ -1311,23 +1322,24 @@ void ProjectController::requestOpenTemporaryProjectPackage(
     // 路径与模式必须在同一锁内替换；谱包路径不能被消费为普通项目目录。
     /// @brief 保护本次临时谱面包打开请求状态写入的锁。
     std::lock_guard<std::mutex> lock(m_pendingMutex);
-    m_pendingProjectPath.clear();
-    m_pendingProjectOpenMode = ProjectOpenMode::Normal;
-    m_pendingProjectCreationOptions.reset();
-    m_requestedProjectCreationOptions.reset();
-    m_requestedProjectClose = false;
-    m_pendingProjectClose   = false;
-    m_projectCloseReady     = false;
+    m_state->m_pendingProjectPath.clear();
+    m_state->m_pendingProjectOpenMode = ProjectOpenMode::Normal;
+    m_state->m_pendingProjectCreationOptions.reset();
+    m_state->m_requestedProjectCreationOptions.reset();
+    m_state->m_requestedProjectClose = false;
+    m_pendingProjectClose            = false;
+    m_state->m_projectCloseReady     = false;
     if ( !m_pendingProjectSwitchPath.empty() ) {
-        m_requestedProjectPath.clear();
-        m_switchOrigin                 = origin;
-        m_pendingProjectSwitchPath     = packagePath;
-        m_pendingProjectSwitchOpenMode = ProjectOpenMode::TemporaryPackage;
-        m_pendingProjectSwitchCreationOptions.reset();
+        m_state->m_requestedProjectPath.clear();
+        m_state->m_switchOrigin    = origin;
+        m_pendingProjectSwitchPath = packagePath;
+        m_state->m_pendingProjectSwitchOpenMode =
+            ProjectOpenMode::TemporaryPackage;
+        m_state->m_pendingProjectSwitchCreationOptions.reset();
     } else {
-        m_requestedOrigin          = origin;
-        m_requestedProjectPath     = packagePath;
-        m_requestedProjectOpenMode = ProjectOpenMode::TemporaryPackage;
+        m_state->m_requestedOrigin          = origin;
+        m_state->m_requestedProjectPath     = packagePath;
+        m_state->m_requestedProjectOpenMode = ProjectOpenMode::TemporaryPackage;
     }
     m_hasPendingProjectAction.store(true, std::memory_order_release);
 }
@@ -1352,25 +1364,25 @@ void ProjectController::requestCreateProject(
     // 创建选项与目标路径一起排队，避免等待保存确认时被后续界面编辑影响。
     /// @brief 保护本次新建项目请求状态写入的锁。
     std::lock_guard<std::mutex> lock(m_pendingMutex);
-    m_pendingProjectPath.clear();
-    m_pendingProjectOpenMode = ProjectOpenMode::Normal;
-    m_pendingProjectCreationOptions.reset();
-    m_requestedProjectClose = false;
-    m_pendingProjectClose   = false;
-    m_projectCloseReady     = false;
+    m_state->m_pendingProjectPath.clear();
+    m_state->m_pendingProjectOpenMode = ProjectOpenMode::Normal;
+    m_state->m_pendingProjectCreationOptions.reset();
+    m_state->m_requestedProjectClose = false;
+    m_pendingProjectClose            = false;
+    m_state->m_projectCloseReady     = false;
     if ( !m_pendingProjectSwitchPath.empty() ) {
-        m_requestedProjectPath.clear();
-        m_requestedProjectOpenMode = ProjectOpenMode::Normal;
-        m_requestedProjectCreationOptions.reset();
-        m_switchOrigin                        = origin;
-        m_pendingProjectSwitchPath            = projectPath;
-        m_pendingProjectSwitchOpenMode        = ProjectOpenMode::Normal;
-        m_pendingProjectSwitchCreationOptions = options;
+        m_state->m_requestedProjectPath.clear();
+        m_state->m_requestedProjectOpenMode = ProjectOpenMode::Normal;
+        m_state->m_requestedProjectCreationOptions.reset();
+        m_state->m_switchOrigin                 = origin;
+        m_pendingProjectSwitchPath              = projectPath;
+        m_state->m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
+        m_state->m_pendingProjectSwitchCreationOptions = options;
     } else {
-        m_requestedOrigin                 = origin;
-        m_requestedProjectPath            = projectPath;
-        m_requestedProjectOpenMode        = ProjectOpenMode::Normal;
-        m_requestedProjectCreationOptions = options;
+        m_state->m_requestedOrigin                 = origin;
+        m_state->m_requestedProjectPath            = projectPath;
+        m_state->m_requestedProjectOpenMode        = ProjectOpenMode::Normal;
+        m_state->m_requestedProjectCreationOptions = options;
     }
     m_hasPendingProjectAction.store(true, std::memory_order_release);
 }
@@ -1384,19 +1396,19 @@ void ProjectController::requestCloseProject()
     // 显式关闭取代所有尚未执行的打开请求，包括等待旧画布关闭的目标。
     /// @brief 保护本次关闭请求状态写入的锁。
     std::lock_guard<std::mutex> lock(m_pendingMutex);
-    m_pendingProjectPath.clear();
-    m_pendingProjectOpenMode = ProjectOpenMode::Normal;
-    m_pendingProjectCreationOptions.reset();
-    m_requestedProjectPath.clear();
-    m_requestedProjectOpenMode = ProjectOpenMode::Normal;
-    m_requestedProjectCreationOptions.reset();
+    m_state->m_pendingProjectPath.clear();
+    m_state->m_pendingProjectOpenMode = ProjectOpenMode::Normal;
+    m_state->m_pendingProjectCreationOptions.reset();
+    m_state->m_requestedProjectPath.clear();
+    m_state->m_requestedProjectOpenMode = ProjectOpenMode::Normal;
+    m_state->m_requestedProjectCreationOptions.reset();
     m_pendingProjectSwitchPath.clear();
-    m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
-    m_pendingProjectSwitchCreationOptions.reset();
+    m_state->m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
+    m_state->m_pendingProjectSwitchCreationOptions.reset();
     // 路径已清空时残留来源枚举不构成有效动作，关闭动作无需伪造打开来源。
-    m_requestedProjectClose = true;
-    m_pendingProjectClose   = false;
-    m_projectCloseReady     = false;
+    m_state->m_requestedProjectClose = true;
+    m_pendingProjectClose            = false;
+    m_state->m_projectCloseReady     = false;
     m_hasPendingProjectAction.store(true, std::memory_order_release);
 }
 
@@ -1445,8 +1457,8 @@ void ProjectController::completePendingProjectSwitch()
     std::lock_guard<std::mutex> lock(m_pendingMutex);
     if ( m_pendingProjectClose ) {
         // 仅关闭没有后继路径，用独立 ready 标记而非空路径表示其可执行状态。
-        m_pendingProjectClose = false;
-        m_projectCloseReady   = true;
+        m_pendingProjectClose        = false;
+        m_state->m_projectCloseReady = true;
         m_hasPendingProjectAction.store(true, std::memory_order_release);
         return;
     }
@@ -1455,14 +1467,15 @@ void ProjectController::completePendingProjectSwitch()
     // 重复完成通知没有对应挂起路径时无效，防止已交付目标再次进入就绪槽。
 
     // 将等待 UI 的槽转交给逻辑线程就绪槽，并清空前者，防止重复完成通知重放。
-    m_pendingProjectPath            = m_pendingProjectSwitchPath;
-    m_pendingOrigin                 = m_switchOrigin;
-    m_pendingProjectOpenMode        = m_pendingProjectSwitchOpenMode;
-    m_pendingProjectCreationOptions = m_pendingProjectSwitchCreationOptions;
+    m_state->m_pendingProjectPath     = m_pendingProjectSwitchPath;
+    m_state->m_pendingOrigin          = m_state->m_switchOrigin;
+    m_state->m_pendingProjectOpenMode = m_state->m_pendingProjectSwitchOpenMode;
+    m_state->m_pendingProjectCreationOptions =
+        m_state->m_pendingProjectSwitchCreationOptions;
     // 路径、模式、创建参数和来源属于同一请求，不能只转移路径留下旧选项。
     m_pendingProjectSwitchPath.clear();
-    m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
-    m_pendingProjectSwitchCreationOptions.reset();
+    m_state->m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
+    m_state->m_pendingProjectSwitchCreationOptions.reset();
     m_hasPendingProjectAction.store(true, std::memory_order_release);
 }
 
@@ -1475,18 +1488,18 @@ void ProjectController::cancelPendingProjectSwitch()
     // 取消涵盖请求、等待 UI 和已就绪三个阶段，不能只清掉当前对话框对应的路径。
     /// @brief 保护挂起项目切换状态清理的锁。
     std::lock_guard<std::mutex> lock(m_pendingMutex);
-    m_pendingProjectPath.clear();
-    m_pendingProjectOpenMode = ProjectOpenMode::Normal;
-    m_pendingProjectCreationOptions.reset();
-    m_requestedProjectPath.clear();
-    m_requestedProjectOpenMode = ProjectOpenMode::Normal;
-    m_requestedProjectCreationOptions.reset();
+    m_state->m_pendingProjectPath.clear();
+    m_state->m_pendingProjectOpenMode = ProjectOpenMode::Normal;
+    m_state->m_pendingProjectCreationOptions.reset();
+    m_state->m_requestedProjectPath.clear();
+    m_state->m_requestedProjectOpenMode = ProjectOpenMode::Normal;
+    m_state->m_requestedProjectCreationOptions.reset();
     m_pendingProjectSwitchPath.clear();
-    m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
-    m_pendingProjectSwitchCreationOptions.reset();
-    m_requestedProjectClose = false;
-    m_pendingProjectClose   = false;
-    m_projectCloseReady     = false;
+    m_state->m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
+    m_state->m_pendingProjectSwitchCreationOptions.reset();
+    m_state->m_requestedProjectClose = false;
+    m_pendingProjectClose            = false;
+    m_state->m_projectCloseReady     = false;
     m_hasPendingProjectAction.store(false, std::memory_order_release);
     // 清门闩与清槽都在同一锁内，后续新请求可重新置位，不永久禁用消费入口。
 }
@@ -1538,20 +1551,21 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
     {
         /// @brief 保护从待处理请求队列取出请求的锁。
         std::lock_guard<std::mutex> lock(m_pendingMutex);
-        if ( m_requestedProjectClose ) {
+        if ( m_state->m_requestedProjectClose ) {
             // 取出后立即清请求位，等待关闭由另外的 pending 状态接续。
-            requestedClose          = true;
-            m_requestedProjectClose = false;
+            requestedClose                   = true;
+            m_state->m_requestedProjectClose = false;
         }
-        if ( !m_requestedProjectPath.empty() ) {
-            requestedPath            = m_requestedProjectPath;
-            requestedOrigin          = m_requestedOrigin;
-            requestedOpenMode        = m_requestedProjectOpenMode;
-            requestedCreationOptions = m_requestedProjectCreationOptions;
+        if ( !m_state->m_requestedProjectPath.empty() ) {
+            requestedPath     = m_state->m_requestedProjectPath;
+            requestedOrigin   = m_state->m_requestedOrigin;
+            requestedOpenMode = m_state->m_requestedProjectOpenMode;
+            requestedCreationOptions =
+                m_state->m_requestedProjectCreationOptions;
             // 局部值副本在解锁后继续使用，不借用可能被新请求替换的字符串与选项。
-            m_requestedProjectPath.clear();
-            m_requestedProjectOpenMode = ProjectOpenMode::Normal;
-            m_requestedProjectCreationOptions.reset();
+            m_state->m_requestedProjectPath.clear();
+            m_state->m_requestedProjectOpenMode = ProjectOpenMode::Normal;
+            m_state->m_requestedProjectCreationOptions.reset();
         }
     }
 
@@ -1561,12 +1575,12 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
             // 延迟阶段不返回实际关闭动作，UI 仍有机会保存或取消旧会话。
             /// @brief 保护关闭请求转入 UI 等待状态的锁。
             std::lock_guard<std::mutex> lock(m_pendingMutex);
-            m_pendingProjectPath.clear();
-            m_pendingProjectOpenMode = ProjectOpenMode::Normal;
-            m_pendingProjectCreationOptions.reset();
+            m_state->m_pendingProjectPath.clear();
+            m_state->m_pendingProjectOpenMode = ProjectOpenMode::Normal;
+            m_state->m_pendingProjectCreationOptions.reset();
             m_pendingProjectSwitchPath.clear();
-            m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
-            m_pendingProjectSwitchCreationOptions.reset();
+            m_state->m_pendingProjectSwitchOpenMode = ProjectOpenMode::Normal;
+            m_state->m_pendingProjectSwitchCreationOptions.reset();
             m_pendingProjectClose    = true;
             shouldPublishCanvasClose = true;
             canvasCloseOnly          = true;
@@ -1582,14 +1596,15 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
         if ( needsCanvasClose ) {
             /// @brief 保护打开请求转入 UI 等待状态的锁。
             std::lock_guard<std::mutex> lock(m_pendingMutex);
-            m_pendingProjectPath.clear();
-            m_pendingProjectOpenMode = ProjectOpenMode::Normal;
-            m_pendingProjectCreationOptions.reset();
-            m_pendingProjectClose                 = false;
-            m_pendingProjectSwitchPath            = requestedPath;
-            m_switchOrigin                        = requestedOrigin;
-            m_pendingProjectSwitchOpenMode        = requestedOpenMode;
-            m_pendingProjectSwitchCreationOptions = requestedCreationOptions;
+            m_state->m_pendingProjectPath.clear();
+            m_state->m_pendingProjectOpenMode = ProjectOpenMode::Normal;
+            m_state->m_pendingProjectCreationOptions.reset();
+            m_pendingProjectClose                   = false;
+            m_pendingProjectSwitchPath              = requestedPath;
+            m_state->m_switchOrigin                 = requestedOrigin;
+            m_state->m_pendingProjectSwitchOpenMode = requestedOpenMode;
+            m_state->m_pendingProjectSwitchCreationOptions =
+                requestedCreationOptions;
             // 挂起请求等待完成事件；不在此重新置门闩形成逐帧重复关闭通知。
             shouldPublishCanvasClose = true;
             canvasCloseProjectPath   = requestedPath;
@@ -1618,21 +1633,22 @@ ProjectController::consumePendingProjectAction(bool needsCanvasClose)
         // 事件消费者可能已同步完成关闭；同轮检查就绪槽，避免额外等待一轮。
         /// @brief 保护 UI 完成后的延迟动作消费锁。
         std::lock_guard<std::mutex> lock(m_pendingMutex);
-        if ( m_projectCloseReady ) {
+        if ( m_state->m_projectCloseReady ) {
             // 消费完成标志后清空，避免后一轮重复关闭已经释放的项目。
-            action.m_closeProject = true;
-            m_projectCloseReady   = false;
+            action.m_closeProject        = true;
+            m_state->m_projectCloseReady = false;
         }
         // 已选定的立即打开动作优先，不让旧的就绪路径覆盖本轮目标。
         if ( action.m_projectPathToOpen.empty() &&
-             !m_pendingProjectPath.empty() ) {
-            action.m_projectPathToOpen      = m_pendingProjectPath;
-            action.m_origin                 = m_pendingOrigin;
-            action.m_projectOpenMode        = m_pendingProjectOpenMode;
-            action.m_projectCreationOptions = m_pendingProjectCreationOptions;
-            m_pendingProjectPath.clear();
-            m_pendingProjectOpenMode = ProjectOpenMode::Normal;
-            m_pendingProjectCreationOptions.reset();
+             !m_state->m_pendingProjectPath.empty() ) {
+            action.m_projectPathToOpen = m_state->m_pendingProjectPath;
+            action.m_origin            = m_state->m_pendingOrigin;
+            action.m_projectOpenMode   = m_state->m_pendingProjectOpenMode;
+            action.m_projectCreationOptions =
+                m_state->m_pendingProjectCreationOptions;
+            m_state->m_pendingProjectPath.clear();
+            m_state->m_pendingProjectOpenMode = ProjectOpenMode::Normal;
+            m_state->m_pendingProjectCreationOptions.reset();
             // 就绪动作被取走后清空参数，下一次普通打开不会继承旧创建设置。
         }
     }
@@ -1780,7 +1796,8 @@ ProjectController::OpenProjectResult ProjectController::openProject(
         0.18F,
         projectOpenProgressPathDetail(actualProjectPath));
     /// @brief 当前项目目录扫描结果。
-    auto directoryScan = m_projectDirectoryScanner.scan(actualProjectPath);
+    auto directoryScan =
+        m_state->m_projectDirectoryScanner.scan(actualProjectPath);
     if ( !directoryScan.m_success ) {
         // 当前实现记录扫描失败后仍继续恢复配置，不将其视为整个打开操作立即失败。
         XERROR("Error while scanning project directory: {}",
@@ -1792,7 +1809,8 @@ ProjectController::OpenProjectResult ProjectController::openProject(
         0.34F,
         projectOpenProgressPathDetail(actualProjectPath));
     // 文件系统扫描提供当前资源基线，持久化配置随后只恢复其设置与引用信息。
-    m_projectResourceService.buildInitialResources(*newProject, directoryScan);
+    m_state->m_projectResourceService.buildInitialResources(*newProject,
+                                                            directoryScan);
     // 资源基线来自扫描，不直接信任描述文件中可能已失效的文件清单。
 
     publishProjectOpenProgress(
@@ -1802,7 +1820,7 @@ ProjectController::OpenProjectResult ProjectController::openProject(
         ProjectStorage::hasProjectConfiguration(actualProjectPath);
     // 保留打开时的存在性快照，后面首次保存创建配置不能改变默认值应用判断。
     /// @brief 从分片或旧单文件读取出的持久化项目配置。
-    auto persistedProject = m_projectStorage.load(actualProjectPath);
+    auto persistedProject = m_state->m_projectStorage.load(actualProjectPath);
     // 配置是否存在与读取是否成功分别保留，创建默认值不能掩盖已存在但损坏的配置。
     // 先恢复排除列表及工作区等用户状态，再合并音频配置；不直接用旧列表替代扫描。
     if ( persistedProject.m_success ) {
@@ -1819,7 +1837,7 @@ ProjectController::OpenProjectResult ProjectController::openProject(
             loadedProject.m_excludedBeatmapPaths;
         newProject->m_excludedAudioPaths = loadedProject.m_excludedAudioPaths;
 
-        m_projectResourceService.mergePersistedAudioResources(
+        m_state->m_projectResourceService.mergePersistedAudioResources(
             *newProject, loadedProject, legacyAudioResourceKeys);
         if ( !legacyAudioResourceKeys.empty() ) {
             XINFO("Migrated {} legacy audio resource configurations.",
@@ -1829,7 +1847,7 @@ ProjectController::OpenProjectResult ProjectController::openProject(
         // 旧音频引用迁移按谱面记录结果，单个失败仅记录，不阻止其余资源恢复。
         // 迁移可能写回谱面文件，不是单纯恢复项目描述的内存操作。
         const auto legacyBeatmapAudioMigration =
-            m_projectResourceService.migrateLegacyBeatmapAudioTracks(
+            m_state->m_projectResourceService.migrateLegacyBeatmapAudioTracks(
                 *newProject, loadedProject);
         if ( legacyBeatmapAudioMigration.m_migratedBeatmapCount > 0 ) {
             XINFO(
@@ -1874,7 +1892,7 @@ ProjectController::OpenProjectResult ProjectController::openProject(
     }
 
     // 恢复后的排除项作用于合并结果，防止扫描把用户移除但仍在磁盘上的资源重新加入。
-    m_projectResourceService.applyExcludedResources(*newProject);
+    m_state->m_projectResourceService.applyExcludedResources(*newProject);
     // 排除过滤发生在配置合并和旧音轨迁移之后，不能假定前面的探测已跳过排除项。
 
     // 普通项目允许为空；临时谱包必须含可阅览谱面，否则不交付一个空的只读项目。
@@ -1902,11 +1920,12 @@ ProjectController::OpenProjectResult ProjectController::openProject(
     std::string storageError;
     // 存储错误独立于扫描结果，写回失败不会撤销已恢复的候选内存内容。
     // 新分片成功写入后才清理旧配置；写入失败仍允许阅览已恢复到内存的项目。
-    if ( m_projectStorage.save(*newProject, actualProjectPath, storageError) ) {
+    if ( m_state->m_projectStorage.save(
+             *newProject, actualProjectPath, storageError) ) {
         // 打开临时谱包时同样保存描述文件，但写入目录是缓存，不是原始谱包。
         if ( persistedProject.m_success &&
-             !m_projectStorage.removeLegacyProjectFile(actualProjectPath,
-                                                       storageError) ) {
+             !m_state->m_projectStorage.removeLegacyProjectFile(
+                 actualProjectPath, storageError) ) {
             XWARN(
                 "Project split storage saved but legacy file could not be "
                 "removed: {}",
@@ -1955,7 +1974,7 @@ ProjectController::OpenProjectResult ProjectController::openProject(
         }
 
         /// @brief 需要调用方登记的按需加载音效请求。
-        ProjectCommandService::AudioRegistrationRequest registrationRequest;
+        AudioRegistrationRequest registrationRequest;
         registrationRequest.m_resource     = resource;
         registrationRequest.m_absolutePath = absolutePath;
         result.m_effectRegistrations.push_back(registrationRequest);
@@ -2138,8 +2157,10 @@ ProjectController::saveTemporaryProjectTo(
     // 正式项目不再依赖原谱包位置，之后源谱包移动不应改变已保存项目身份。
     savedProject.m_projectRoot = saveRoot;
     // 配置必须按新根保存，不能复制完成后仍把清单写回临时缓存目录。
-    if ( !m_projectStorage.save(savedProject, saveRoot, errorMessage) ||
-         !m_projectStorage.removeLegacyProjectFile(saveRoot, errorMessage) ) {
+    if ( !m_state->m_projectStorage.save(
+             savedProject, saveRoot, errorMessage) ||
+         !m_state->m_projectStorage.removeLegacyProjectFile(saveRoot,
+                                                            errorMessage) ) {
         // 新配置成功但旧格式清理失败也返回失败；目标副本并不因此自动删除。
         result.m_errorMessage = errorMessage;
         return result;
@@ -2219,11 +2240,10 @@ bool ProjectController::consumeDirectoryChangePending()
 /// @details 无项目或扫描失败返回默认结果，不以空扫描覆盖现有资源。
 /// @note 成功扫描为空可以移除全部资源，这与无法扫描有意采用不同结果。
 /// @warning 涉及文件系统枚举；应由目录变更等低频事件触发，不逐帧执行。
-ProjectResourceService::DirectorySyncResult
-ProjectController::scanProjectDirectory()
+DirectorySyncResult ProjectController::scanProjectDirectory()
 {
     /// @brief 本次目录扫描同步结果。
-    ProjectResourceService::DirectorySyncResult result;
+    DirectorySyncResult result;
     // 默认结果不宣称扫描成功，未扫描不能等同于成功的空目录。
     if ( !m_currentProject ) {
         return result;
@@ -2234,15 +2254,15 @@ ProjectController::scanProjectDirectory()
     /// @brief 当前项目目录扫描结果。
     ProjectDirectoryScanner::ScanResult directoryScan;
 
-    directoryScan = m_projectDirectoryScanner.scan(actualProjectPath);
+    directoryScan = m_state->m_projectDirectoryScanner.scan(actualProjectPath);
     // 根目录在扫描前按值保存，不依赖扫描期间复用当前项目的路径引用。
     if ( !directoryScan.m_success ) {
         return result;
     }
 
     // 只有完整扫描成功才做差量同步，枚举失败不能把暂时不可见的文件当成已删除。
-    return m_projectResourceService.syncDirectoryResources(*m_currentProject,
-                                                           directoryScan);
+    return m_state->m_projectResourceService.syncDirectoryResources(
+        *m_currentProject, directoryScan);
 }
 
 /// @brief 保存当前项目配置。
@@ -2262,14 +2282,14 @@ bool ProjectController::saveProject()
     XINFO("Saving split project storage to {}", Config::pathToUtf8(manifest));
 
     std::string errorMessage;
-    if ( !m_projectStorage.save(*m_currentProject,
-                                m_currentProject->m_projectRoot,
-                                errorMessage) ) {
+    if ( !m_state->m_projectStorage.save(*m_currentProject,
+                                         m_currentProject->m_projectRoot,
+                                         errorMessage) ) {
         XERROR("Failed to save split project storage: {}", errorMessage);
         return false;
     }
     // 分片保存完成后再删除旧格式；任一步失败都不发布保存成功事件。
-    if ( !m_projectStorage.removeLegacyProjectFile(
+    if ( !m_state->m_projectStorage.removeLegacyProjectFile(
              m_currentProject->m_projectRoot, errorMessage) ) {
         // 分片已经写入，返回 false 不表示磁盘完全未变化，也不尝试撤销分片保存。
         XERROR("Failed to remove legacy project configuration: {}",
@@ -2289,14 +2309,15 @@ bool ProjectController::saveProject()
 /// @return 新建谱面的处理结果。
 /// @note 控制器仅选择当前项目上下文；创建文件和资源登记由命令服务负责。
 /// @pre 上层已检查临时只读及编辑权限；本转发入口只检查当前项目存在性。
-ProjectCommandService::CreateBeatmapResult ProjectController::createBeatmap(
+CreateBeatmapResult ProjectController::createBeatmap(
     const CmdCreateBeatmap& cmd)
 {
     if ( !m_currentProject ) {
         XERROR("Cannot create beatmap: No project opened.");
         return {};
     }
-    return m_projectCommandService.createBeatmap(*m_currentProject, cmd);
+    return m_state->m_projectCommandService.createBeatmap(*m_currentProject,
+                                                          cmd);
 }
 
 /// @brief 导入音频文件并登记到当前项目。
@@ -2305,14 +2326,13 @@ ProjectCommandService::CreateBeatmapResult ProjectController::createBeatmap(
 /// @note 返回命令服务的副作用请求供调用方接入音频系统，此处不直接操作播放器。
 /// @note 导入返回不自动保存项目配置，列表变更后的持久化由上层协调。
 /// @pre 音轨类型与源路径来自已确认命令，导入权限和临时只读限制由上层检查。
-ProjectCommandService::ImportAudioResult ProjectController::importAudio(
-    const CmdImportAudio& cmd)
+ImportAudioResult ProjectController::importAudio(const CmdImportAudio& cmd)
 {
     if ( !m_currentProject ) {
         XERROR("Cannot import audio: No project opened.");
         return {};
     }
-    return m_projectCommandService.importAudio(*m_currentProject, cmd);
+    return m_state->m_projectCommandService.importAudio(*m_currentProject, cmd);
 }
 
 /// @brief 将单个谱面文件同步到当前项目谱面列表。
@@ -2320,12 +2340,12 @@ ProjectCommandService::ImportAudioResult ProjectController::importAudio(
 /// @return 当前项目是否发生变化。
 /// @note 不切换项目；没有当前项目时返回默认未变化结果，不按文件路径自动开项目。
 /// 变化可能只来自排除项撤销，不必然表示新增了谱面入口。
-ProjectCommandService::ProjectMutationResult
-ProjectController::syncProjectWithFile(const std::filesystem::path& mapPath)
+ProjectMutationResult ProjectController::syncProjectWithFile(
+    const std::filesystem::path& mapPath)
 {
     if ( !m_currentProject ) return {};
-    return m_projectCommandService.syncProjectWithFile(*m_currentProject,
-                                                       mapPath);
+    return m_state->m_projectCommandService.syncProjectWithFile(
+        *m_currentProject, mapPath);
 }
 
 /// @brief 更新当前项目内谱面条目的文件路径关联。
@@ -2334,12 +2354,11 @@ ProjectController::syncProjectWithFile(const std::filesystem::path& mapPath)
 /// @return 当前项目是否发生变化。
 /// @pre 实际文件移动由上层完成，此入口只更新已有项目的路径关联。
 /// 结果不代表打开会话的文件路径也已同步，需由会话层继续协调。
-ProjectCommandService::ProjectMutationResult
-ProjectController::updateBeatmapFilePath(const std::filesystem::path& oldPath,
-                                         const std::filesystem::path& newPath)
+ProjectMutationResult ProjectController::updateBeatmapFilePath(
+    const std::filesystem::path& oldPath, const std::filesystem::path& newPath)
 {
     if ( !m_currentProject ) return {};
-    return m_projectCommandService.updateBeatmapFilePath(
+    return m_state->m_projectCommandService.updateBeatmapFilePath(
         *m_currentProject, oldPath, newPath);
 }
 
@@ -2351,13 +2370,12 @@ ProjectController::updateBeatmapFilePath(const std::filesystem::path& oldPath,
 /// @note 返回的加载或卸载请求仍需调用方执行，类型更新不代表引擎状态已同步。
 /// @pre 引用快照应覆盖未保存会话，空快照并不表示磁盘之外没有任何资源依赖。
 /// 同类型请求可能仍返回音效登记信息，不能仅凭类型相同忽略处理结果。
-ProjectCommandService::UpdateAudioResourceResult
-ProjectController::updateAudioResource(
+UpdateAudioResourceResult ProjectController::updateAudioResource(
     const CmdUpdateAudioResource&             cmd,
     const std::vector<BeatmapAudioReference>& openBeatmapReferences)
 {
     if ( !m_currentProject ) return {};
-    return m_projectCommandService.updateAudioResource(
+    return m_state->m_projectCommandService.updateAudioResource(
         *m_currentProject, cmd, openBeatmapReferences);
 }
 
@@ -2369,13 +2387,12 @@ ProjectController::updateAudioResource(
 /// @pre 上层负责源文件删除确认，调用方不能将此转发视为只读引用检查。
 /// 返回未移除时应继续查看阻止谱面列表及错误信息，不能仅靠一个布尔值选择提示。
 /// 成功移除也不代表项目配置已保存，持久化与音频卸载仍是后续步骤。
-ProjectCommandService::RemoveAudioResourceResult
-ProjectController::removeAudioResource(
+RemoveAudioResourceResult ProjectController::removeAudioResource(
     const CmdRemoveAudioResource&             cmd,
     const std::vector<BeatmapAudioReference>& openBeatmapReferences)
 {
     if ( !m_currentProject ) return {};
-    return m_projectCommandService.removeAudioResource(
+    return m_state->m_projectCommandService.removeAudioResource(
         *m_currentProject, cmd, openBeatmapReferences);
 }
 
@@ -2384,11 +2401,12 @@ ProjectController::removeAudioResource(
 /// 排除列表也属于项目状态，入口已不存在时仍可能报告配置变化。
 /// @param cmd 删除谱面命令。
 /// @return 当前项目是否发生变化。
-ProjectCommandService::ProjectMutationResult ProjectController::removeBeatmap(
+ProjectMutationResult ProjectController::removeBeatmap(
     const CmdRemoveBeatmap& cmd)
 {
     if ( !m_currentProject ) return {};
-    return m_projectCommandService.removeBeatmap(*m_currentProject, cmd);
+    return m_state->m_projectCommandService.removeBeatmap(*m_currentProject,
+                                                          cmd);
 }
 
 }  // namespace MMM::Logic

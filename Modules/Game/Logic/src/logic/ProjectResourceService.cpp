@@ -2,6 +2,7 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/project/Project.h"
 
 #include <algorithm>
 #include <array>
