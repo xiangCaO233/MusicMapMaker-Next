@@ -1,7 +1,7 @@
 #pragma once
 
 #include "mmm/Metadata.h"
-#include "mmm/note/Note.h"
+#include "mmm/note/NoteType.h"
 #include "mmm/sample/AudioSample.h"
 #include <glm/vec4.hpp>
 #include <optional>

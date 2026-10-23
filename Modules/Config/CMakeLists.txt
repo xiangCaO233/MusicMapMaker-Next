@@ -1,7 +1,12 @@
 # Modules/Config/CMakeLists.txt Config 集中维护无需图形上下文即可加载的持久化配置、皮肤和翻译服务。
 # 源文件显式列出，新增配置实现时必须同时确认其序列化与测试覆盖归属。 本文件同时集中注册模块测试，便于审查每类配置的兼容性覆盖。
 
-# 模块保持静态库边界，供主程序和轻量测试复用同一套配置实现。
+# 模块保持静态库边界，供主程序和轻量测试复用同一套配置实现。 路径转换同时被 Log 与 Config 使用，独立目标禁止反向依赖日志或配置单例。
+# 头文件路径保持兼容；平台 SDK 仅在实现中出现，避免向所有使用者传播宏。
+add_library(Utf8Path STATIC src/Utf8Path.cpp)
+target_include_directories(Utf8Path
+                           PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
 add_library(
   Config STATIC
   src/skin/SkinLoader.cpp
@@ -28,8 +33,8 @@ add_library(
 target_include_directories(Config PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 # LuaJIT、sol2 和 JSON 属于公开头契约，消费方需继承其包含与链接要求。
-target_link_libraries(Config PUBLIC luajit::luajit 3rd_nlohmann_json 3rd_sol2
-                                    fmt::fmt Log)
+target_link_libraries(Config PUBLIC Utf8Path luajit::luajit 3rd_nlohmann_json
+                                    3rd_sol2 fmt::fmt Log)
 # 配置后台写入器使用标准线程，显式声明线程运行库，避免依赖图形库传递链接。
 find_package(Threads REQUIRED)
 target_link_libraries(Config PRIVATE Threads::Threads)

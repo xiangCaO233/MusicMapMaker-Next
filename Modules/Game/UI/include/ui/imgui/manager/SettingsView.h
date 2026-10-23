@@ -2,7 +2,6 @@
 
 #include "config/CreatorIdentity.h"
 #include "event/ui/UISettingsTabEvent.h"
-#include "graphic/imguivk/VKTexture.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/IParallelUiPreparable.h"
 #include "ui/ITextureLoader.h"

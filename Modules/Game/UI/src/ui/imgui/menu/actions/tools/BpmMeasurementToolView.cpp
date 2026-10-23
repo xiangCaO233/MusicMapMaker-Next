@@ -5,6 +5,7 @@
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKTexture.h"
 #include "imgui.h"
 #include "implot.h"
 #include "log/colorful-log.h"

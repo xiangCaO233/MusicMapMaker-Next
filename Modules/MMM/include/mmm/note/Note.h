@@ -1,6 +1,7 @@
 #pragma once
 
 #include "mmm/Metadata.h"
+#include "mmm/note/NoteType.h"
 #include "mmm/sample/AudioSample.h"
 #include <cstddef>
 #include <cstdint>
@@ -14,17 +15,6 @@ namespace MMM
 
 /// @brief 单个玩家物件注释允许保存和同步的最大 UTF-8 字节数。
 inline constexpr std::size_t MAX_NOTE_ANNOTATION_BYTES = 8192U;
-
-enum class NoteType {
-    /// @brief 普通瞬时物件。
-    NOTE,
-    /// @brief 具有持续时间的长条物件。
-    HOLD,
-    /// @brief 带横向滑动方向的瞬时物件。
-    FLICK,
-    /// @brief 由多个节点组成的折线物件。
-    POLYLINE,
-};
 
 /// @brief 所有玩家物件共享的值语义基类。
 /// @details

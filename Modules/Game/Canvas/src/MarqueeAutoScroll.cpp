@@ -1,5 +1,7 @@
 #include "canvas/MarqueeAutoScroll.h"
+#include "common/render/RenderSnapshot.h"
 #include "common/render/RenderSnapshotBuffer.h"
+#include "common/render/ScrollRenderData.h"
 #include "config/AppConfig.h"
 #include <algorithm>
 #include <cmath>

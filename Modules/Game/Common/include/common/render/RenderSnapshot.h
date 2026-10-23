@@ -15,7 +15,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <entt/entt.hpp>
+#include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
 #include <optional>
 #include <string>

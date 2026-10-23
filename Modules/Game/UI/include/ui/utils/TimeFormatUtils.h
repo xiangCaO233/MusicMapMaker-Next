@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/render/RenderSnapshot.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
