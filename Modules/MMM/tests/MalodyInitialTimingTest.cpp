@@ -94,13 +94,14 @@ bool checkScenario(const Scenario&              scenario,
                                           3.5,
                                           "later-scroll"));
     // 主音轨配对零点；普通效果采样具有局部 offset，必须仍随内容一起移动。
+    // 效果音特意与 Main 同名但目录不同，完整路径必须比文件名回退优先。
     source.m_audioSamples.push_back(MMM::AudioSampleEvent{
         .m_timestamp = 0, .m_track = 4, .m_audioResourceId = "music.wav" });
     source.m_audioSamples.push_back(
         MMM::AudioSampleEvent{ .m_timestamp       = scenario.m_firstTime + 750,
                                .m_offsetMs        = -13,
                                .m_track           = 4,
-                               .m_audioResourceId = "effect.wav" });
+                               .m_audioResourceId = "effects/music.wav" });
     // 普通效果音早于首红线时会落在新参考段，验证分段拍间距而非只测后半段。
     source.m_audioSamples.push_back(
         MMM::AudioSampleEvent{ .m_timestamp       = 50,
@@ -193,7 +194,7 @@ bool checkScenario(const Scenario&              scenario,
         if ( sample.m_audioResourceId == "early.wav" &&
              std::abs(sample.effectiveTimestamp() - (57 + leadIn)) > .2 )
             return false;
-        if ( sample.m_audioResourceId == "effect.wav" &&
+        if ( sample.m_audioResourceId == "effects/music.wav" &&
              std::abs(sample.effectiveTimestamp() -
                       (scenario.m_firstTime + 737 + leadIn)) > .2 )
             return false;

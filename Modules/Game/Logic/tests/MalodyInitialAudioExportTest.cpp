@@ -155,15 +155,17 @@ bool checkPaddedAudio(const std::filesystem::path& path, unsigned milliseconds)
 /// @param userScroll 是否在零点放置用户自定义 2.5 倍绿线。
 /// @param expectedPadding 独立给定的音频前导毫秒数。
 /// @param mainOffset 主音轨独立 offset，补静音时不能再叠加到 SOUND 锚点。
+/// @param sameNamedEffect 是否放置其他目录内与 Main 同名的效果音。
 /// @return 音频、MC、源模型及源文件共同满足同步契约时返回真。
 /// @note 使用不同 BPM 检查补的一拍来自参考 BPM，而不是用户首红线。
 /// @details 同 BPM 无绿线时无需编码；有绿线时留出一拍保护原绿线。
 /// 不同 BPM 的零点场景腾出参考一拍，音乐和物件使用同样毫秒位移。
 /// Main offset 场景只移动文件内容，触发 offset 自身仍按原值保留。
+/// 同名效果音场景保留完整路径身份，不允许以文件名碰撞触发多 Main 拒绝。
 /// @note 不清理已有导出资源，文件名冲突由正式事务负责安全处理。
 bool checkExport(const std::filesystem::path& root, double referenceBpm,
                  bool userScroll, unsigned expectedPadding,
-                 std::int64_t mainOffset = 0)
+                 std::int64_t mainOffset = 0, bool sameNamedEffect = false)
 {
     std::error_code error;
     const auto      exportDirectory = root / "export";
@@ -172,7 +174,14 @@ bool checkExport(const std::filesystem::path& root, double referenceBpm,
     const auto input = root / "input.wav";
     if ( error || !writeAudio(input) ) return false;
     // 写源音频失败后不尝试导出，避免把缺失音乐误判成前导逻辑错误。
-    const auto original = readBytes(input);
+    const auto original   = readBytes(input);
+    const auto effectPath = root / "effects" / "input.wav";
+    if ( sameNamedEffect ) {
+        // 使用真实同名文件，覆盖完整路径优先选择，而不只是 JSON 层标签匹配。
+        // 文件放在源谱面的子目录，跨目录另存为后仍应能正确解析同一份资源。
+        std::filesystem::create_directories(effectPath.parent_path(), error);
+        if ( error || !writeAudio(effectPath) ) return false;
+    }
     // 会话载入真实 MMM，再通过命令处理器导出，避免绕过项目资源和快照逻辑。
     auto source                           = std::make_shared<MMM::BeatMap>();
     source->m_baseMapMetadata.track_count = 4;
@@ -200,6 +209,15 @@ bool checkExport(const std::filesystem::path& root, double referenceBpm,
                                .m_offsetMs        = mainOffset,
                                .m_track           = 4,
                                .m_audioResourceId = "input.wav" });
+    if ( sameNamedEffect ) {
+        // 这个采样的文件名与 Main 相同，但它应跟随谱面移动且不能接受补静音。
+        // 时间晚于首拍会让它在自动采样数组中后出现，覆盖旧循环覆盖 Main
+        // 的缺陷。
+        source->m_audioSamples.push_back(
+            MMM::AudioSampleEvent{ .m_timestamp       = 750,
+                                   .m_track           = 4,
+                                   .m_audioResourceId = "effects/input.wav" });
+    }
     auto& note       = source->m_noteData.notes.emplace_back();
     note.m_timestamp = 1000;
     note.m_track     = 1;
@@ -240,10 +258,22 @@ bool checkExport(const std::filesystem::path& root, double referenceBpm,
          std::abs(loaded.m_noteData.notes[0].m_timestamp - 1000 -
                   expectedPadding) > .1 )
         return false;
-    if ( loaded.m_audioSamples.size() != 1 ||
+    if ( loaded.m_audioSamples.size() != (sameNamedEffect ? 2U : 1U) ||
          std::abs(loaded.m_audioSamples.front().effectiveTimestamp() -
                   mainOffset) > .1 )
         return false;
+    if ( sameNamedEffect ) {
+        // Main 仍位于零点排在前面；第二个采样保留局部身份和相同的时间位移。
+        // 源效果音字节必须不变，不能因文件名相同而被编码为前导音乐副本。
+        const auto& effect = loaded.m_audioSamples.back();
+        // 音效仍引用原始 input.wav，生成的主音轨文件另有 lead-in 文件名。
+        if ( std::abs(effect.effectiveTimestamp() - 750 - expectedPadding) >
+                 .1 ||
+             MMM::Config::utf8ToPath(effect.m_audioResourceId).filename() !=
+                 "input.wav" ||
+             readBytes(effectPath) != original )
+            return false;
+    }
     // Main 触发时间保持原值，因为音乐内容的后移已经写入文件前导静音。
     // 活动模型和原始音频都必须保持未修改，导出不接管原来的保存路径。
     return readBytes(input) == original &&
@@ -356,13 +386,15 @@ int main(int argc, char** argv)
     const std::filesystem::path root(argv[1]);
     // 无绿线不改音频；有绿线补 120 BPM 的一拍，不同参考 BPM 则补 100 BPM
     // 的一拍。
-    const bool ok = checkExport(root / "unchanged", 120, false, 0) &&
-                    checkExport(root / "same", 120, true, 500) &&
-                    checkExport(root / "different", 100, false, 600) &&
-                    checkExport(root / "main_offset", 120, true, 500, 223) &&
-                    checkPackage(root / "package_same", 120, false) &&
-                    checkPackage(root / "package_different", 100, false) &&
-                    checkPackage(root / "package_combined", 120, true);
+    const bool ok =
+        checkExport(root / "unchanged", 120, false, 0) &&
+        checkExport(root / "same", 120, true, 500) &&
+        checkExport(root / "different", 100, false, 600) &&
+        checkExport(root / "main_offset", 120, true, 500, 223) &&
+        checkExport(root / "same_named_effect", 120, true, 500, 0, true) &&
+        checkPackage(root / "package_same", 120, false) &&
+        checkPackage(root / "package_different", 100, false) &&
+        checkPackage(root / "package_combined", 120, true);
     // 任一场景失败都使端到端测试失败，成功数量不能抵扣时序或资源差异。
     if ( !ok )
         XERROR("MC initial timing and encoded audio are not synchronized");

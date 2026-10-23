@@ -1315,15 +1315,20 @@ inline bool buildMalodyMapDocument(const BeatMap& beatMap, json& fileData,
     /// @brief 主音轨原始锚点，独立 offset 不应因文件补头再平移一次。
     std::optional<std::size_t> primaryMainNode;
     double                     primaryMainTimestamp = 0;
+    /// @brief 完整路径命中后，禁止其他目录中的同名效果音覆盖 Main 身份。
+    bool primaryMainHasExactPath = false;
     for ( const AudioSampleEvent* sample : sortedSamples ) {
         if ( sample == wrappedMainSample ) pairedMainNode = noteArr.size();
         const auto soundPath = Config::utf8ToPath(sample->m_audioResourceId);
         const auto songPath  = beatMap.m_baseMapMetadata.song_file_hint;
+        const bool exactPath = soundPath == songPath;
+        // 文件名回退只用于没有完整匹配的旧引用，不得覆盖已经识别出的资源。
         if ( !songPath.empty() &&
-             (soundPath == songPath ||
-              soundPath.filename() == songPath.filename()) ) {
-            primaryMainNode      = noteArr.size();
-            primaryMainTimestamp = sample->m_timestamp;
+             (exactPath || (!primaryMainHasExactPath &&
+                            soundPath.filename() == songPath.filename())) ) {
+            primaryMainNode         = noteArr.size();
+            primaryMainTimestamp    = sample->m_timestamp;
+            primaryMainHasExactPath = exactPath;
         }
         noteArr.push_back(serializeAudioSample(*sample));
     }

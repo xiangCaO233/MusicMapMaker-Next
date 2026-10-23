@@ -4,6 +4,7 @@
 #include "config/Utf8Path.h"
 #include "mmm/beatmap/BeatMap.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -88,6 +89,17 @@ bool writeMalodyExportWithAudio(const BeatMap&               beatMap,
         // 只对明确的主音轨补静音；普通效果音的触发点已随谱面一起平移。
         // 多次触发的同一主资源不能共用一份补头音频，必须在写出前明确拒绝。
         nlohmann::json* pairedMain = nullptr;
+        // 完整引用优先，避免不同目录的同名效果音也被算作 Main。
+        // 文件名回退仅兼容没有精确引用的旧谱面，不能扩大已确认资源的身份。
+        const bool hasExactMainReference = std::any_of(
+            document["note"].begin(),
+            document["note"].end(),
+            [&](const auto& node) {
+                return isMalodyAutomaticAudioNode(node) &&
+                       node.value("sound", std::string{}) == songFile;
+            });
+        // 身份优先级先独立确定，不能因 note[] 的时间排序不同而改变 Main 选择。
+        // 精确命中后仍检查真正 Main 是否重复，不能用优先级掩盖多次触发歧义。
         // 节点指针只在当前数组内借用，之后不扩容 note[]，保证重写资源名安全。
         // 字符串 SOUND 与数值类型 1 共用同一识别器，兼容 Key 和 Slide。
         for ( auto& node : document["note"] ) {
@@ -96,8 +108,9 @@ bool writeMalodyExportWithAudio(const BeatMap&               beatMap,
                 continue;
             const auto& sound = node["sound"].get_ref<const std::string&>();
             if ( sound != songFile &&
-                 Config::utf8ToPath(sound).filename() !=
-                     Config::utf8ToPath(songFile).filename() )
+                 (hasExactMainReference ||
+                  Config::utf8ToPath(sound).filename() !=
+                      Config::utf8ToPath(songFile).filename()) )
                 continue;
             if ( pairedMain ) {
                 errorMessage = "MC 前导补偿需要唯一的主音轨自动采样";
