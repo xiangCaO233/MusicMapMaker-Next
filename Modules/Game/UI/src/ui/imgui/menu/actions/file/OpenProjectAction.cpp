@@ -1,4 +1,4 @@
-#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/project/ProjectEvents.h"
 #include "ui/imgui/menu/MainMenuTypes.h"

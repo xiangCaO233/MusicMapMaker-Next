@@ -1,6 +1,6 @@
 #include "ui/imgui/menu/MainMenuNavigationController.h"
 
-#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 
 #include <imgui.h>
 

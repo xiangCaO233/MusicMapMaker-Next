@@ -1,4 +1,4 @@
-#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/menu/MainMenuTypes.h"

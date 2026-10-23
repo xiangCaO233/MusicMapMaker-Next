@@ -2,7 +2,6 @@
 
 #include "audio/AudioManager.h"
 #include "config/Utf8Path.h"
-#include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "mmm/project/Project.h"
 #include "ui/Icons.h"

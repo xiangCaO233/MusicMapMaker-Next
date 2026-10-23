@@ -1,7 +1,6 @@
 #include "logic/session/InteractionController.h"
 #include "common/EditTool.h"
 #include "common/LogicCommands.h"
-#include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectResourceService.h"
@@ -418,7 +417,7 @@ float calculateMarqueeRenderScaleY(const SessionContext& ctx,
     const float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                   ctx.lastConfig.visual.trackLayout.top) *
                                  mainViewportHeight;
-    const float ty = ctx.lastConfig.visual.previewConfig.margin.top;
+    const float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
     const float by = camera.viewportHeight -
                      ctx.lastConfig.visual.previewConfig.margin.bottom;
     const float previewDrawH = by - ty;
@@ -549,7 +548,7 @@ SelectionScreenContext makeSelectionScreenContext(
     screen.viewportHeight = cameraIt->second.viewportHeight;
     screen.currentAbsY    = cache->getVisualAnchorAbsY(ctx.animateTime);
     screen.valid          = screen.noteW > 0.0f && screen.noteH > 0.0f &&
-                   std::abs(screen.renderScaleY) > 1e-6f;
+                            std::abs(screen.renderScaleY) > 1e-6f;
     return screen;
 }
 
@@ -630,10 +629,10 @@ SelectionRect makeMarqueeScreenRect(const MarqueeBox&             box,
     const float  x2 = screen.leftX + box.endTrack * screen.singleTrackW;
     const double startAbsY = screen.cache->getAbsY(box.startTime);
     const double endAbsY   = screen.cache->getAbsY(box.endTime);
-    const float  y1        = screen.judgmentLineY -
-                     static_cast<float>(startAbsY - screen.currentAbsY) *
-                         screen.renderScaleY;
-    const float y2 =
+    const float  y1 = screen.judgmentLineY -
+                      static_cast<float>(startAbsY - screen.currentAbsY) *
+                          screen.renderScaleY;
+    const float  y2 =
         screen.judgmentLineY -
         static_cast<float>(endAbsY - screen.currentAbsY) * screen.renderScaleY;
     // 结束时间或轨道可以小于开始值，统一归一化后再参与命中。
@@ -1246,13 +1245,13 @@ bool collectMarqueeBoxCandidates(
     // 再逆映射时间，避免只看框选端点秒数漏掉滚动折返区域。
     const double paddedTopY    = box.rect.top - box.screen.noteH;
     const double paddedBottomY = box.rect.bottom + box.screen.noteH;
-    const double absA          = box.screen.currentAbsY +
-                        (box.screen.judgmentLineY - paddedTopY) /
-                            static_cast<double>(box.screen.renderScaleY);
-    const double absB = box.screen.currentAbsY +
-                        (box.screen.judgmentLineY - paddedBottomY) /
-                            static_cast<double>(box.screen.renderScaleY);
-    auto ranges = box.screen.cache->getTimeRangesForAbsYWindow(
+    const double absA   = box.screen.currentAbsY +
+                          (box.screen.judgmentLineY - paddedTopY) /
+                              static_cast<double>(box.screen.renderScaleY);
+    const double absB   = box.screen.currentAbsY +
+                          (box.screen.judgmentLineY - paddedBottomY) /
+                              static_cast<double>(box.screen.renderScaleY);
+    auto         ranges = box.screen.cache->getTimeRangesForAbsYWindow(
         std::min(absA, absB), std::max(absA, absB));
     // 缓存没有返回可用时间段时，回退框选记录的原始时间区间。
     // 仍按排序索引筛选，不在这一分支直接扫描全部 Registry。
@@ -1412,13 +1411,13 @@ bool collectMarqueeBoxSampleCandidates(
     // 再逆映射时间，避免只看框选端点秒数漏掉滚动折返区域。
     const double paddedTopY    = box.rect.top - box.screen.noteH;
     const double paddedBottomY = box.rect.bottom + box.screen.noteH;
-    const double absA          = box.screen.currentAbsY +
-                        (box.screen.judgmentLineY - paddedTopY) /
-                            static_cast<double>(box.screen.renderScaleY);
-    const double absB = box.screen.currentAbsY +
-                        (box.screen.judgmentLineY - paddedBottomY) /
-                            static_cast<double>(box.screen.renderScaleY);
-    const auto ranges = box.screen.cache->getTimeRangesForAbsYWindow(
+    const double absA   = box.screen.currentAbsY +
+                          (box.screen.judgmentLineY - paddedTopY) /
+                              static_cast<double>(box.screen.renderScaleY);
+    const double absB   = box.screen.currentAbsY +
+                          (box.screen.judgmentLineY - paddedBottomY) /
+                              static_cast<double>(box.screen.renderScaleY);
+    const auto   ranges = box.screen.cache->getTimeRangesForAbsYWindow(
         std::min(absA, absB), std::max(absA, absB));
     // 缓存没有返回可用时间段时，回退框选记录的原始时间区间。
     // 仍按排序索引筛选，不在这一分支直接扫描全部 Registry。
@@ -1719,9 +1718,9 @@ void InteractionController::handleCommand(const CmdCreateAudioSample& cmd)
 
     // 协作会话优先使用其项目资源表，离线会话使用当前项目。
     // 这里只查已载入资源引用，不通过资源名扫描文件系统。
-    const auto* project     = m_ctx.collaborationProject
-                                  ? m_ctx.collaborationProject.get()
-                                  : EditorEngine::instance().getCurrentProject();
+    const auto* project = m_ctx.collaborationProject
+                              ? m_ctx.collaborationProject.get()
+                              : EditorEngine::instance().getCurrentProject();
     const auto& beatmapPath = m_ctx.currentBeatmap->m_baseMapMetadata.map_path;
     const auto* resource =
         project ? ProjectResourceService::findAudioResourceForReference(
@@ -1826,9 +1825,9 @@ void InteractionController::handleCommand(
         return;
     }
 
-    const auto*                 project = m_ctx.collaborationProject
-                                              ? m_ctx.collaborationProject.get()
-                                              : EditorEngine::instance().getCurrentProject();
+    const auto* project = m_ctx.collaborationProject
+                              ? m_ctx.collaborationProject.get()
+                              : EditorEngine::instance().getCurrentProject();
     const std::filesystem::path beatmapPath =
         m_ctx.currentBeatmap ? m_ctx.currentBeatmap->m_baseMapMetadata.map_path
                              : std::filesystem::path{};

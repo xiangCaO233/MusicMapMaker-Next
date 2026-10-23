@@ -3,7 +3,7 @@
 #include "ui/imgui/status/IStatusMessageSink.h"
 
 #include "config/AppPaths.h"
-#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "ui/utils/DesktopPathUtils.h"
 
 #include <filesystem>

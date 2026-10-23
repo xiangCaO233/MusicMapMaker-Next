@@ -1,7 +1,7 @@
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
-#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "event/project/ProjectOpenInteractionEvent.h"

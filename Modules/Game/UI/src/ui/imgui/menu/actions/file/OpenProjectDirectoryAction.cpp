@@ -2,7 +2,7 @@
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
 
-#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "logic/EditorEngine.h"
 #include "mmm/project/Project.h"
 #include "ui/utils/DesktopPathUtils.h"

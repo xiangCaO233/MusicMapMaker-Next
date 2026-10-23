@@ -5,7 +5,6 @@
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
-#include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"

@@ -1,6 +1,5 @@
 #include "logic/session/SampleAction.h"
 
-#include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "log/colorful-log.h"
 #include "logic/ecs/components/InteractionComponent.h"

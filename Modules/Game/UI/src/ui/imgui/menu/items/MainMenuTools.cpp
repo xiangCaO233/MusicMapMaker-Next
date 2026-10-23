@@ -1,6 +1,6 @@
 #include "ui/imgui/menu/items/MainMenuTools.h"
 #include "config/AppConfig.h"
-#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/ShortcutUtils.h"
