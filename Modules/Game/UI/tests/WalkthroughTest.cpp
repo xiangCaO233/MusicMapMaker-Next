@@ -1,8 +1,10 @@
 #include "BuiltinWalkthrough.h"
 #include "ComposeLessonFixture.h"
+#include "config/Utf8Path.h"
 #include "event/core/EventBus.h"
 #include "event/logic/BeatmapCreateInteractionEvent.h"
 #include "event/project/ProjectOpenInteractionEvent.h"
+#include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/note/Polyline.h"
 #include "ui/walkthrough/ComposeLessonCatalog.h"
@@ -161,8 +163,11 @@ int main(int argc, char** argv)
     // 只需制造真实文件系统身份，无需复制大型谱面或音频资源。
     std::filesystem::create_directories(canonRock, pathError);
     if ( pathError ) return 102;
-    const auto beatmap = canonRock / "卡农-示例谱面.mmm";
-    const auto package = canonRock / "canonrock.zip";
+    // 夹具与只读源码资源都使用真实 Unicode 路径，覆盖非 UTF-8 系统代码页。
+    const auto beatmap =
+        canonRock / MMM::Config::utf8ToPath("卡农-示例谱面.mmm");
+    const auto sourceBeatmap = MMM::Config::utf8ToPath(MMM_COMPOSE_SAMPLE_FILE);
+    const auto package       = canonRock / "canonrock.zip";
     if ( !MMM::UI::Test::writeComposeLessonFixture(canonRock) ) return 102;
     std::ofstream(package).put('x');
     if ( !std::filesystem::exists(beatmap) ||
@@ -186,14 +191,19 @@ int main(int argc, char** argv)
     const auto unrelatedDirectory = std::filesystem::path(argv[1]) / "other";
     std::filesystem::create_directories(unrelatedDirectory, pathError);
     if ( pathError ) return 108;
-    const auto unrelatedBeatmap = unrelatedDirectory / "卡农-示例谱面.mmm";
+    const auto unrelatedBeatmap =
+        unrelatedDirectory / MMM::Config::utf8ToPath("卡农-示例谱面.mmm");
     std::ofstream(unrelatedBeatmap).put('x');
     if ( !canonRockComposeBeatmapAllows(beatmap) ||
-         !canonRockComposeBeatmapAllows(
-             std::filesystem::path(MMM_COMPOSE_SAMPLE_FILE)) ||
+         !canonRockComposeBeatmapAllows(sourceBeatmap) ||
          canonRockComposeBeatmapAllows(unrelatedBeatmap) ||
-         canonRockComposeBeatmapAllows({}) )
+         canonRockComposeBeatmapAllows({}) ) {
+        // 同时报告两处资源路径，区分安装资源缺失与源码身份校验失败。
+        XERROR("CanonRock 示例身份校验失败：配置谱面={}，源码谱面={}",
+               MMM::Config::pathToUtf8(beatmap),
+               MMM::Config::pathToUtf8(sourceBeatmap));
         return 109;
+    }
     // 首先验证编译期章节目录的稳定公共结构。
     const auto chapters = parseChapters(BUILTIN_CHAPTERS);
     if ( !chapters || chapters->size() != 2 ||
@@ -374,8 +384,7 @@ int main(int argc, char** argv)
     // 夹具通过不能代替打包资源有效，尤其是隐藏的 .mmm 工作目录。
     // 这里只读取源码资产；隔离配置根仍用于服务进度和练习夹具写入。
     // 最后一段必须标记进阶，防止只分发基础教学也误报通过。
-    const auto packagedLessons =
-        loadComposeLessons(std::filesystem::path(MMM_COMPOSE_SAMPLE_FILE));
+    const auto packagedLessons = loadComposeLessons(sourceBeatmap);
     if ( !packagedLessons || packagedLessons->empty() ||
          packagedLessons->front().m_reference.empty() ||
          !packagedLessons->back().m_advanced )
@@ -437,9 +446,8 @@ int main(int argc, char** argv)
     // 动画绑定仍需继续使用同一份打包教材验证。
     // 用源码中的真实 CanonRock 批注生成路线，防止只对隔离夹具的
     // 五段教学生效，却漏掉后面的进阶 GIF 映射。
-    std::size_t gifSteps = 0;
-    const auto  gifDirectory =
-        std::filesystem::path(MMM_COMPOSE_SAMPLE_FILE).parent_path() / "gifs";
+    std::size_t gifSteps     = 0;
+    const auto  gifDirectory = sourceBeatmap.parent_path() / "gifs";
     for ( const auto& branch : packagedTopic->m_branches )
         for ( const auto& step : branch.m_steps ) {
             // 不要求 GPU 就能验证每一步所引用的文件已纳入可同步资产。
@@ -486,8 +494,7 @@ int main(int argc, char** argv)
     // 入口只替换正式对象域，本测试聚焦替换命令的真实来源内容。
     // 首段空白是每次重新练习单键放置的起点，不受其它段落预置项影响。
     const auto baseline = MMM::BeatMap::loadFromFile(
-        std::filesystem::path(MMM_COMPOSE_SAMPLE_FILE).parent_path() / ".mmm" /
-        "compose_baseline.mmm");
+        sourceBeatmap.parent_path() / ".mmm" / "compose_baseline.mmm");
     if ( baseline.m_baseMapMetadata.track_count != 4 ||
          baseline.m_allNotes.empty() ||
          std::any_of(baseline.m_allNotes.begin(),
@@ -522,8 +529,7 @@ int main(int argc, char** argv)
     };
     // 磁盘资产由正式读取器加载，避免只按 JSON 文本筛选而漏掉序列化差异。
     // 保留用户可打开的那份资源校验，不能仅修复隐藏的基线副本。
-    const auto sample = MMM::BeatMap::loadFromFile(
-        std::filesystem::path(MMM_COMPOSE_SAMPLE_FILE));
+    const auto sample = MMM::BeatMap::loadFromFile(sourceBeatmap);
     if ( !mergeInputIsClean(baseline) || !mergeInputIsClean(sample) )
         return 190;
     // 末段必须从一条完整折线开始；右键逐个断开横向节点后，

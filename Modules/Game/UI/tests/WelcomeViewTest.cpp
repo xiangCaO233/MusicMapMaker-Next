@@ -537,10 +537,17 @@ bool testPages()
     // 创作主题必须保持独立主题身份，不能靠阶段三分支卡片残留形成假阳性。
     // requiresProject 与 requiresBeatmap 同时存在，保证目录入口只在编辑上下文
     // 就绪后开放；这里直接 showTopic 只用于验证正文模型仍然完整可渲染。
+    // 侧车按 UTF-8 文件名查找草稿组，文件存在也不能代表教程已成功加载。
     if ( composeBeatmap.m_id != "mmm.compose-beatmap" ||
          composeBeatmap.m_placeholder || !composeBeatmap.m_requiresProject ||
-         !composeBeatmap.m_requiresBeatmap )
+         !composeBeatmap.m_requiresBeatmap ) {
+        // 资源装载错误会把真实教程降为占位，保留服务原因以便定位路径问题。
+        XERROR("创作教程未就绪：id={}，placeholder={}，error={}",
+               composeBeatmap.m_id,
+               composeBeatmap.m_placeholder,
+               service.error());
         return false;
+    }
     welcome.showTopic(5);
     if ( welcome.showingHome() ) return false;
     for ( int i = 0; i < 4; ++i )
