@@ -1,4 +1,5 @@
 #include "logic/ecs/system/CanvasComponentRenderSystem.h"
+#include "common/AsciiFontAlgorithms.h"
 
 #include "common/CanvasComponentLayout.h"
 #include "config/EditorConfig.h"

@@ -4,6 +4,7 @@
 #include "common/ChartObjectKind.h"
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
+#include "common/UnicodeCodepoint.h"
 #include "common/UnicodeFontData.h"
 #include "common/render/AnnotationRenderData.h"
 #include "common/render/CanvasRenderTypes.h"

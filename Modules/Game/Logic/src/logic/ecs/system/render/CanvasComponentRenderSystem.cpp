@@ -1,4 +1,6 @@
 #include "logic/ecs/system/CanvasComponentRenderSystem.h"
+// 绘制和命中使用同一内联字号选择与测量实现，不通过 DTO 头传递引入。
+#include "common/AsciiFontAlgorithms.h"
 
 #include "common/AsciiFontData.h"
 #include "common/CanvasComponentLayout.h"
@@ -285,8 +287,8 @@ void renderBeatGridTexts(Batcher&                                batcher,
         if ( !bpmEvent ) continue;
 
         // 每个 BPM 事件重新建立网格原点，而不是延续上一段剩余的拍内相位。
-        const double bpmTime      = bpmEvent->m_timestamp;
-        const double bpm          = normalizedGridTextBpm(bpmEvent->m_value,
+        const double bpmTime = bpmEvent->m_timestamp;
+        const double bpm = normalizedGridTextBpm(bpmEvent->m_value,
                                                  batcher.snapshot->fallbackBpm);
         const double gridDuration = 60.0 / bpm / static_cast<double>(divisor);
         // 网格使用秒，与 BPM 事件时间戳和滚动缓存保持同一单位。
@@ -336,10 +338,10 @@ void renderBeatGridTexts(Batcher&                                batcher,
                                      static_cast<float>(cache->getDisplayDelta(
                                          gridStart, currentAbsY, gridStart)) *
                                          context.renderScaleY;
-                const float endY = context.judgmentLineY -
-                                   static_cast<float>(cache->getDisplayDelta(
-                                       gridEnd, currentAbsY, gridEnd)) *
-                                       context.renderScaleY;
+                const float endY   = context.judgmentLineY -
+                                     static_cast<float>(cache->getDisplayDelta(
+                                         gridEnd, currentAbsY, gridEnd)) *
+                                         context.renderScaleY;
                 // 布局使用有序像素边界，即使时间方向与屏幕方向相反也保持正高度。
                 const CanvasComponentBounds layoutRegion{
                     0.0f,
@@ -572,10 +574,10 @@ void renderKps(Batcher& batcher, const CanvasComponentRenderContext& context,
             context.viewportHeight;
         // 测宽与绘制使用同一规范后的字号，避免按旧字号选择无法容纳的文本。
         const auto            text = selectTrackKpsText(*batcher.snapshot,
-                                             trackIndex,
-                                             trackKps,
-                                             fontPixelHeight,
-                                             trackPixelWidth);
+                                                        trackIndex,
+                                                        trackKps,
+                                                        fontPixelHeight,
+                                                        trackPixelWidth);
         CanvasComponentBounds bounds;
         if ( renderAsciiText(batcher,
                              text.data(),

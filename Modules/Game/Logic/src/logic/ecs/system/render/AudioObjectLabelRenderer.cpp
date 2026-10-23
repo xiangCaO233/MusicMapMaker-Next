@@ -1,4 +1,6 @@
 #include "logic/ecs/system/render/AudioObjectLabelRenderer.h"
+#include "common/AsciiFontAlgorithms.h"
+#include "common/Utf8Codepoints.h"
 
 #include "common/AsciiFontData.h"
 #include "common/UnicodeFontData.h"
