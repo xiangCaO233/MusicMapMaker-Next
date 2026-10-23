@@ -1,6 +1,6 @@
 #pragma once
 
-#include "mmm/Metadata.h"
+#include "mmm/metadata/NoteMetadata.h"
 #include <string_view>
 
 namespace MMM

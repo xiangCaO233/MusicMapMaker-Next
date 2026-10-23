@@ -1,5 +1,6 @@
 #include "logic/BeatmapSession.h"
-#include "mmm/Metadata.h"
+#include "mmm/metadata/BaseMapMeta.h"
+#include "mmm/metadata/MapMetadata.h"
 
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"

@@ -2,8 +2,13 @@
 
 #include "config/CreatorIdentity.h"
 #include "config/Utf8Path.h"
-#include "mmm/Metadata.h"
 #include "mmm/beatmap/BeatMap.h"
+// 编解码同时访问各来源属性表，显式列出定义以避免依赖领域对象的传递包含。
+#include "mmm/metadata/BaseMapMeta.h"
+#include "mmm/metadata/MapMetadata.h"
+#include "mmm/metadata/NoteMetadata.h"
+#include "mmm/metadata/StringHash.h"
+#include "mmm/metadata/TimingMetadata.h"
 #include "mmm/note/Note.h"
 
 #include <miniz.h>

@@ -11,7 +11,9 @@
 #include "config/EditorConfig.h"
 #include "config/VisualConfig.h"
 #include "log/colorful-log.h"
-#include "mmm/Metadata.h"
+#include "mmm/metadata/BaseMapMeta.h"
+#include "mmm/metadata/MapMetadata.h"
+#include "mmm/metadata/NoteMetadata.h"
 #include "mmm/note/Note.h"
 
 #include <array>

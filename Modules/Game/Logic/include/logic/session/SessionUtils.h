@@ -11,7 +11,9 @@
 namespace MMM
 {
 class Project;
-}
+/// @brief 背景探测接口仅借用谱面基本信息，无需传播完整定义。
+struct BaseMapMeta;
+}  // namespace MMM
 
 namespace MMM::Logic::SessionUtils
 {

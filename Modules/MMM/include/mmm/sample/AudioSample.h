@@ -1,6 +1,6 @@
 #pragma once
 
-#include "mmm/Metadata.h"
+#include "mmm/metadata/StringHash.h"
 
 #include <cstdint>
 #include <sstream>

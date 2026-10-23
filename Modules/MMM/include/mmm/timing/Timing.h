@@ -1,6 +1,6 @@
 #pragma once
 
-#include "mmm/Metadata.h"
+#include "mmm/metadata/TimingMetadata.h"
 #include "mmm/timing/TimingEffect.h"
 #include "mmm/timing/TimingInterpolation.h"
 #include <optional>

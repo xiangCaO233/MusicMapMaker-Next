@@ -9,7 +9,7 @@
 #include "logic/EditorEngine.h"
 #include "logic/ProjectController.h"
 #include "logic/session/context/SessionContext.h"
-#include "mmm/Metadata.h"
+#include "mmm/metadata/BaseMapMeta.h"
 #include "mmm/project/AudioResource.h"
 #include "mmm/project/Project.h"
 #include "ui/utils/NativeFileDialog.h"
@@ -109,8 +109,8 @@ void SettingsView::renderBeatmapResourcePicker(float dpiScale)
         config.path              = settings.lastFilePickerPath;
         config.countSelectionMax = 1;
         config.flags             = ImGuiFileDialogFlags_Modal |
-                       ImGuiFileDialogFlags_HideColumnType |
-                       ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                                   ImGuiFileDialogFlags_HideColumnType |
+                                   ImGuiFileDialogFlags_ReadOnlyFileNameField;
         dialog->OpenDialog(PICKER_ID,
                            title,
                            audio   ? ".mp3,.ogg,.wav,.flac,.opus,.aac,.m4a"
