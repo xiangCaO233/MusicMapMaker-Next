@@ -1,4 +1,5 @@
 #include "canvas/TimelineCanvas.h"
+#include "mmm/timing/TimingInterpolationAlgorithms.h"
 
 #include "canvas/TimingFormula.h"
 #include "canvas/TimingInterpolationPreview.h"

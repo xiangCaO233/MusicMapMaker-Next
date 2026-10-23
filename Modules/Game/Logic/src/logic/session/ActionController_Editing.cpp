@@ -20,6 +20,8 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/timing/BpmNormalization.h"
+// 编辑操作需要校验与绑定插值曲线，直接声明算法依赖，避免借用 ECS 组件的包含。
+#include "mmm/timing/TimingInterpolationAlgorithms.h"
 #include "mmm/timing/TimingTemplate.h"
 #include "runtime/AppThreadPool.h"
 #include <algorithm>
@@ -1081,13 +1083,13 @@ bool appendSpeedPreservingScrolls(
     // 只有旧时间点可能携带 Scroll，来源命令的非 BPM 效果会被忽略。
     // 首红线之前两边各以自身参考值作为当前 BPM，初始视觉速度相同。
     while ( oldIndex < before.size() || newIndex < replacementBpm.size() ) {
-        const double             oldTime = oldIndex < before.size()
-                                               ? before[oldIndex].m_timestamp
-                                               : std::numeric_limits<double>::infinity();
-        const double             newTime = newIndex < replacementBpm.size()
-                                               ? replacementBpm[newIndex].m_timestamp
-                                               : std::numeric_limits<double>::infinity();
-        const double             time    = std::min(oldTime, newTime);
+        const double oldTime = oldIndex < before.size()
+                                   ? before[oldIndex].m_timestamp
+                                   : std::numeric_limits<double>::infinity();
+        const double newTime = newIndex < replacementBpm.size()
+                                   ? replacementBpm[newIndex].m_timestamp
+                                   : std::numeric_limits<double>::infinity();
+        const double time    = std::min(oldTime, newTime);
         const TimelineComponent* originalScroll = nullptr;
         // 旧红线先重置旧 SV，随后旧绿线在同刻取得最终控制权。
         // Malody BPM 不重置旧 SV；此来源差异由元数据分组判定。

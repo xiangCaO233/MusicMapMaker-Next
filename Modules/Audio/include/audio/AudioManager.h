@@ -5,7 +5,8 @@
 #include "audio/KeySoundTypes.h"
 #include "audio/StereoGainEnvelope.h"
 #include "config/AudioPlaybackConfig.h"
-#include "mmm/project/AudioResource.h"
+#include "mmm/project/AudioTrackConfig.h"
+#include "mmm/project/AudioTrackType.h"
 #include <atomic>
 #include <cstddef>
 #include <cstdint>

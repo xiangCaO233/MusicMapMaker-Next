@@ -9,8 +9,10 @@
 #include "logic/EditorEngine.h"
 #include "logic/ProjectController.h"
 #include "logic/session/context/SessionContext.h"
+// 导入流程访问活动谱面的资源字段，完整模型依赖仅放在实现端。
+#include "mmm/beatmap/BeatMap.h"
 #include "mmm/metadata/BaseMapMeta.h"
-#include "mmm/project/AudioResource.h"
+#include "mmm/project/AudioTrackType.h"
 #include "mmm/project/Project.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/ProjectResourceImport.h"

@@ -1,4 +1,5 @@
 #include "mmm/timing/TimingTemplate.h"
+#include "mmm/timing/TimingInterpolationAlgorithms.h"
 
 #include "mmm/timing/BpmNormalization.h"
 #include "mmm/timing/TimingFunction.h"

@@ -8,7 +8,7 @@
 #include "logic/EditorEngine.h"
 #include "logic/RenderSyncRegistry.h"
 #include "logic/SessionRegistry.h"
-#include "mmm/project/AudioResource.h"
+#include "mmm/project/AudioTrackType.h"
 
 #include <array>
 #include <atomic>

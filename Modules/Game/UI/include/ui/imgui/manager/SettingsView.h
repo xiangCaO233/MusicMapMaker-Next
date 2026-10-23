@@ -2,7 +2,7 @@
 
 #include "config/CreatorIdentity.h"
 #include "event/ui/UISettingsTabEvent.h"
-#include "mmm/beatmap/BeatMap.h"
+#include "mmm/metadata/BaseMapMeta.h"
 #include "ui/IParallelUiPreparable.h"
 #include "ui/ITextureLoader.h"
 #include "ui/IUIView.h"

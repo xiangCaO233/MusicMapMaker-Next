@@ -33,6 +33,7 @@
 #include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/timing/BpmNormalization.h"
+#include "mmm/timing/TimingInterpolationAlgorithms.h"
 #include "mmm/timing/TimingTemplate.h"
 #include "ui/imgui/ClipboardBridge.h"
 #include "ui/utils/TimeFormatUtils.h"

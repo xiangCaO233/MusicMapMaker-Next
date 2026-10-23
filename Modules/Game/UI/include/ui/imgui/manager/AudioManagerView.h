@@ -3,7 +3,7 @@
 #include "audio/AudioTypes.h"
 #include "config/AudioPlaybackConfig.h"
 #include "event/core/EventBus.h"
-#include "mmm/project/AudioResource.h"
+#include "mmm/project/AudioTrackType.h"
 #include "ui/ISubView.h"
 #include "ui/layout/box/CLayBox.h"
 #include <array>

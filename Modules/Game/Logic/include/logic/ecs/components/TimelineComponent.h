@@ -2,6 +2,8 @@
 
 #include "mmm/timing/BpmNormalization.h"
 #include "mmm/timing/Timing.h"
+// 拍位换算保留头内内联，因此必须显式提供积分算法声明。
+#include "mmm/timing/TimingInterpolationAlgorithms.h"
 #include <optional>
 
 namespace MMM::Logic

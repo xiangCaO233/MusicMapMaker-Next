@@ -1,6 +1,6 @@
 #pragma once
 
-#include "mmm/project/AudioResource.h"
+#include "mmm/project/AudioTrackConfig.h"
 
 #include <cstddef>
 #include <cstdint>

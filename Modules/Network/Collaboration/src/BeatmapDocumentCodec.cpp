@@ -1,4 +1,6 @@
 #include "network/collaboration/BeatmapDocumentCodec.h"
+// 文档还原需要重新绑定插值拍轴；数据定义头不承担运行期算法接口。
+#include "mmm/timing/TimingInterpolationAlgorithms.h"
 
 #include "config/CreatorIdentity.h"
 #include "config/Utf8Path.h"

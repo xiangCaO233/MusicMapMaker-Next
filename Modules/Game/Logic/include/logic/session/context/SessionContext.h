@@ -13,6 +13,7 @@
 #include "logic/session/AnnotationRenderData.h"
 #include "logic/session/ClipboardTypes.h"
 #include "logic/session/EditorAction.h"
+#include "mmm/project/AudioTrackType.h"
 #include <array>
 #include <cstdint>
 #include <entt/entt.hpp>
