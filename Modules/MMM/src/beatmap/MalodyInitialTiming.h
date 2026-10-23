@@ -154,8 +154,11 @@ inline bool normalizeMalodyInitialTiming(
     };
     // 有限分母无法精确表达任意毫秒相位；残差留在原红线 delay，后续拍间距
     // 使用同一个拟合锚点，避免把首段量化误差传播到整条时间线。
-    first["delay"] = firstTime + audioLeadInMilliseconds -
-                     fittedFirstBeat * referenceBeatLength;
+    const double delayResidual = firstTime + audioLeadInMilliseconds -
+                                 fittedFirstBeat * referenceBeatLength;
+    // AppleClang 可将乘减融合，数学上为零的残差可能留下极小负值。
+    // 只归零纳秒以下误差，真实首段相位仍由原红线 delay 精确保留。
+    first["delay"] = std::abs(delayResidual) <= 1e-9 ? 0.0 : delayResidual;
     // 首红线原本不包含普通内容的包装进位，必须单独落到新参考段末端。
     shiftInitialTimingBeat(first["beat"], firstTargetBeat - firstBeat);
     for ( std::size_t index = 1; index < times.size(); ++index )

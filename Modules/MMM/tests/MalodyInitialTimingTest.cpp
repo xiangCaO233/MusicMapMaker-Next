@@ -21,7 +21,7 @@ namespace
 /// 120 BPM 首红线配合 100 BPM 参考值，可暴露误用首红线拍长的错误。
 /// 1000ms 的原红线恰好回卷到零，1100ms 则保留非零相位。
 /// 100ms 的首红线位于首拍前半段，不触发旧的向前回卷。
-/// 用户绿线采用 2.5 倍，以便与合成的一倍 Scroll 明确区分。
+/// 常规用户绿线采用 2.5 倍，另加一倍用户绿线检查初始化身份不会吞掉原事件。
 /// 后续再切换到 150 BPM，确保新参考段没有改变后续 BPM 积分。
 /// 所有输出均位于构建树，源树媒体不参与文件写入。
 /// @brief 八种首红线条件的独立期望，时间均为毫秒。
@@ -30,6 +30,9 @@ struct Scenario {
     double m_referenceBpm;    ///< 参考 BPM，用户首红线固定为 120 BPM。
     bool   m_userScroll;      ///< 用户是否在首红线同刻放置自定义绿线。
     double m_expectedLeadIn;  ///< 必须与实际音频补静音一致的期望。
+    double m_userScrollValue{
+        2.5
+    };  ///< 一倍用户绿线也必须保留原始时间，不能冒充初始化。
 };
 
 /// @brief 用来源标签创建红线或绿线，导出与回读后仍能识别用户原始事件。
@@ -87,7 +90,7 @@ bool checkScenario(const Scenario&              scenario,
         // 保留用户值和 origin 标签；初始化绿线不能覆盖或吞掉这个节点。
         source.m_timings.push_back(makeTiming(scenario.m_firstTime,
                                               MMM::TimingEffect::SCROLL,
-                                              2.5,
+                                              scenario.m_userScrollValue,
                                               "user-scroll"));
     source.m_timings.push_back(makeTiming(scenario.m_firstTime + 500,
                                           MMM::TimingEffect::SCROLL,
@@ -170,7 +173,8 @@ bool checkScenario(const Scenario&              scenario,
                    expectedTime(name));
             return false;
         }
-        if ( name == "user-scroll" && timing.m_timingEffectParameter != 2.5 )
+        if ( name == "user-scroll" &&
+             timing.m_timingEffectParameter != scenario.m_userScrollValue )
             return false;
         ++originalCount;
         // 每个原始事件都贡献计数，新增初始化不能抵扣遗漏的用户事件。
@@ -223,14 +227,14 @@ int main(int argc, char** argv)
     if ( error ) return 1;
     // 目录创建失败不会继续写谱面，防止读取上一次测试残留结果。
     // 120 BPM 一拍 500ms，参考 100 BPM 一拍 600ms，能区分错误采用首拍 BPM。
-    // 相同 BPM 的零点按是否已有用户绿线拆成两个场景，矩阵共九项断言。
+    // 相同 BPM 的零点按是否已有用户绿线拆分，再补负时间单位绿线的边界。
     // 其余场景保留用户绿线，直接检查新增配对不会覆盖 2.5 倍滚速。
     const std::array scenarios{
         Scenario{ 1100, 120, true, 0 },   Scenario{ 1000, 120, true, 0 },
         Scenario{ 100, 120, true, 0 },    Scenario{ 0, 120, false, 0 },
         Scenario{ 0, 120, true, 500 },    Scenario{ 1100, 100, true, 0 },
         Scenario{ 1000, 100, true, 600 }, Scenario{ 100, 100, true, 0 },
-        Scenario{ 0, 100, true, 600 }
+        Scenario{ 0, 100, true, 600 },    Scenario{ -100, 120, true, 0, 1.0 }
     };
     for ( std::size_t index = 0; index < scenarios.size(); ++index ) {
         // 失败日志保留矩阵索引，便于对应到明确的输入条件而非 JSON 排序。
