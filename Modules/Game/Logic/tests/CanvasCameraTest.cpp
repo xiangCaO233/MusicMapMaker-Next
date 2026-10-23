@@ -1,5 +1,6 @@
 #include "logic/session/CanvasCamera.h"
 #include "common/LogicCommands.h"
+#include "common/render/RenderSnapshot.h"
 #include "config/EditorConfig.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
@@ -1474,8 +1475,8 @@ bool testBrushAudioResourcePlacementRules()
     for ( const auto entity : samples ) {
         const auto& sample = samples.get<MMM::Logic::SampleComponent>(entity);
         foundMain          = foundMain || (sample.m_track == 5 &&
-                                  sample.m_audioResourceId == "main" &&
-                                  near(sample.m_volume, 0.7));
+                                           sample.m_audioResourceId == "main" &&
+                                           near(sample.m_volume, 0.7));
     }
     if ( !foundMain ) return false;
 
@@ -2897,7 +2898,7 @@ bool testPerBeatmapDraftLaneSharingAndIsolation()
     entt::entity concurrentOuter = entt::null;
     entt::entity concurrentStale = entt::null;
     const auto   concurrentView  = afterConcurrentGrowth.noteRegistry
-                                    .view<const MMM::Logic::NoteComponent>();
+                                       .view<const MMM::Logic::NoteComponent>();
     for ( const auto entity : concurrentView ) {
         const auto& note =
             concurrentView.get<const MMM::Logic::NoteComponent>(entity);
@@ -3058,25 +3059,25 @@ bool testAlignCommonBeatsPreservesEmbeddedPolylineNodes()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-              .type       = MMM::NoteType::HOLD,
-              .timestamp  = 1.013,
-              .duration   = 0.241,
-              .trackIndex = 0,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::HOLD,
+            .timestamp  = 1.013,
+            .duration   = 0.241,
+            .trackIndex = 0,
+            .dtrack     = 0,
         },
         {
-              .type       = MMM::NoteType::FLICK,
-              .timestamp  = 1.254,
-              .duration   = 0.0,
-              .trackIndex = 0,
-              .dtrack     = 1,
+            .type       = MMM::NoteType::FLICK,
+            .timestamp  = 1.254,
+            .duration   = 0.0,
+            .trackIndex = 0,
+            .dtrack     = 1,
         },
         {
-              .type       = MMM::NoteType::HOLD,
-              .timestamp  = 1.254,
-              .duration   = 0.246,
-              .trackIndex = 1,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::HOLD,
+            .timestamp  = 1.254,
+            .duration   = 0.246,
+            .trackIndex = 1,
+            .dtrack     = 0,
         },
     };
 
@@ -4361,8 +4362,8 @@ bool testComposeLessonSegmentReplacement()
         context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
             entity,
             MMM::Logic::NoteComponent{ .m_type       = MMM::NoteType::NOTE,
-                                         .m_timestamp  = time,
-                                         .m_trackIndex = track });
+                                       .m_timestamp  = time,
+                                       .m_trackIndex = track });
     };
     addActual(0.5, 0);   // 前一段的用户成果。
     addActual(1.5, 1);   // 返回目标段内的错误物件。
@@ -6222,25 +6223,25 @@ bool testSelectedPolylineTailEraseWithOtherSelection()
     polyline.m_trackIndex = 0;
     polyline.m_subNotes   = {
         {
-              .type       = MMM::NoteType::NOTE,
-              .timestamp  = 1.0,
-              .duration   = 0.0,
-              .trackIndex = 0,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::NOTE,
+            .timestamp  = 1.0,
+            .duration   = 0.0,
+            .trackIndex = 0,
+            .dtrack     = 0,
         },
         {
-              .type       = MMM::NoteType::HOLD,
-              .timestamp  = 2.0,
-              .duration   = 0.5,
-              .trackIndex = 1,
-              .dtrack     = 0,
+            .type       = MMM::NoteType::HOLD,
+            .timestamp  = 2.0,
+            .duration   = 0.5,
+            .trackIndex = 1,
+            .dtrack     = 0,
         },
         {
-              .type       = MMM::NoteType::FLICK,
-              .timestamp  = 3.0,
-              .duration   = 0.0,
-              .trackIndex = 1,
-              .dtrack     = 1,
+            .type       = MMM::NoteType::FLICK,
+            .timestamp  = 3.0,
+            .duration   = 0.0,
+            .trackIndex = 1,
+            .dtrack     = 1,
         },
     };
 
@@ -8368,7 +8369,7 @@ bool testCompositeConversionUsesTypedIdentity()
                 .entity = sampleEntity,
                 .before = context.sampleRegistry
                               .get<MMM::Logic::SampleComponent>(sampleEntity),
-                .after          = std::nullopt,
+                .after  = std::nullopt,
                 .beforeSelected = true,
             },
         }));
@@ -8463,11 +8464,11 @@ bool testMarqueeSelectsTypedSamplesOnlyOnMainCanvas()
     context.sortedSampleMaxEndPrefix = { 1.0 };
     context.marqueeBoxes             = {
         MMM::Logic::MarqueeBox{
-                        .startTime  = 0.9,
-                        .endTime    = 1.1,
-                        .startTrack = 4.05F,
-                        .endTrack   = 4.95F,
-                        .cameraId   = "Basic2DCanvas",
+            .startTime  = 0.9,
+            .endTime    = 1.1,
+            .startTrack = 4.05F,
+            .endTrack   = 4.95F,
+            .cameraId   = "Basic2DCanvas",
         },
     };
     context.isMarqueeSelectionDirty = true;
@@ -8546,10 +8547,10 @@ bool testMarqueeKeepsOffscreenHoldsOnRelease()
     auto&      shared = context.noteRegistry.emplace<MMM::Logic::NoteComponent>(
         sharedEntity,
         MMM::Logic::NoteComponent{
-                 .m_type       = MMM::NoteType::HOLD,
-                 .m_timestamp  = 1.0,
-                 .m_duration   = 0.4,
-                 .m_trackIndex = 2,
+            .m_type       = MMM::NoteType::HOLD,
+            .m_timestamp  = 1.0,
+            .m_duration   = 0.4,
+            .m_trackIndex = 2,
         });
     shared.m_metadata.note_properties[MMM::NoteMetadataType::MMM]
                                      ["hold_independent_end_hs"] = "false";
@@ -8560,11 +8561,11 @@ bool testMarqueeKeepsOffscreenHoldsOnRelease()
     context.sortedNoteMaxEndPrefix = { 1.4, 1.4 };
     context.marqueeBoxes           = {
         MMM::Logic::MarqueeBox{
-                      .startTime  = 0.8,
-                      .endTime    = 1.6,
-                      .startTrack = 0.8F,
-                      .endTrack   = 3.2F,
-                      .cameraId   = "Basic2DCanvas",
+            .startTime  = 0.8,
+            .endTime    = 1.6,
+            .startTrack = 0.8F,
+            .endTrack   = 3.2F,
+            .cameraId   = "Basic2DCanvas",
         },
     };
 

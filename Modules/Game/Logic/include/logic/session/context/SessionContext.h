@@ -1,5 +1,7 @@
 #pragma once
 
+#include "common/render/RenderSnapshot.h"
+
 #include "common/ChartObjectKind.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/EditorConfig.h"

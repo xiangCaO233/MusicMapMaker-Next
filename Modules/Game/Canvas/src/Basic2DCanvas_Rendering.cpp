@@ -13,6 +13,7 @@
 /// uploadRevision 隔离 CPU 已接收与 GPU 已录制的帧状态。
 #include "canvas/Basic2DCanvas.h"
 #include "common/Utf8Codepoints.h"
+#include "common/render/GlyphTextureId.h"
 
 #include "canvas/BackgroundVideoTiming.h"
 #include "canvas/CameraLayoutEditor.h"

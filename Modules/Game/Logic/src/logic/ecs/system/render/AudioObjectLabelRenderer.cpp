@@ -1,9 +1,12 @@
 #include "logic/ecs/system/render/AudioObjectLabelRenderer.h"
 #include "common/AsciiFontAlgorithms.h"
 #include "common/Utf8Codepoints.h"
+// 音频标签将字符转换为图集语义编号，字形算法独立于整帧数据定义。
+#include "common/render/GlyphTextureId.h"
 
 #include "common/AsciiFontData.h"
 #include "common/UnicodeFontData.h"
+#include "common/render/RenderSnapshot.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/system/render/Batcher.h"

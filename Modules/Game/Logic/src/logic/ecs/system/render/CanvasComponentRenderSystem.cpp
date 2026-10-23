@@ -1,9 +1,11 @@
 #include "logic/ecs/system/CanvasComponentRenderSystem.h"
+#include "common/render/GlyphTextureId.h"
 // 绘制和命中使用同一内联字号选择与测量实现，不通过 DTO 头传递引入。
 #include "common/AsciiFontAlgorithms.h"
 
 #include "common/AsciiFontData.h"
 #include "common/CanvasComponentLayout.h"
+#include "common/render/RenderSnapshot.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"

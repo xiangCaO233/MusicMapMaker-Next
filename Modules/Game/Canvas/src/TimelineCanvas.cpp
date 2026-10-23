@@ -19,6 +19,7 @@
 #include "canvas/TimelineTableWindowState.h"
 #include "canvas/TimelineTimingTooltip.h"
 #include "common/render/RenderSnapshotBuffer.h"
+#include "common/render/TextureID.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"

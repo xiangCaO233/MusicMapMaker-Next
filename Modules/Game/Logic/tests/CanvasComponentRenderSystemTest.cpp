@@ -1,7 +1,9 @@
 #include "logic/ecs/system/CanvasComponentRenderSystem.h"
 #include "common/AsciiFontAlgorithms.h"
+#include "common/render/GlyphTextureId.h"
 
 #include "common/CanvasComponentLayout.h"
+#include "common/render/RenderSnapshot.h"
 #include "config/EditorConfig.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"

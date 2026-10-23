@@ -1,3 +1,5 @@
+#include "common/render/RenderSnapshot.h"
+#include "common/render/TextureID.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"

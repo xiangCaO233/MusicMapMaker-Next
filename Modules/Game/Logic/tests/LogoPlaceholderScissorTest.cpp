@@ -1,3 +1,6 @@
+// 裁剪测试直接检查快照批次和顶点，完整快照依赖属于本用例。
+#include "common/render/RenderSnapshot.h"
+#include "common/render/TextureID.h"
 #include "config/EditorConfig.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSyncBuffer.h"

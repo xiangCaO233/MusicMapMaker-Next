@@ -3,6 +3,7 @@
 #include "audio/AudioManager.h"
 #include "common/EditTool.h"
 #include "common/LogicCommands.h"
+#include "common/render/RenderSnapshot.h"
 #include "config/AppConfig.h"
 #include "config/AudioPresets.h"
 #include "config/EditorConfig.h"

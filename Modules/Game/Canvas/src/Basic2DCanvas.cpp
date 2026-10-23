@@ -36,6 +36,7 @@
 #include "canvas/PlanarObservationCamera.h"
 #include "common/render/CanvasCameraMath.h"
 #include "common/render/RenderSnapshotBuffer.h"
+#include "common/render/TextureID.h"
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
