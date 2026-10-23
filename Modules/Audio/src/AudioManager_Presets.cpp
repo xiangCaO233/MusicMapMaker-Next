@@ -2,6 +2,7 @@
 #include "audio/KeySoundControl.h"
 #include "audio/SoundEffectPool.h"
 #include "config/AppConfig.h"
+#include "config/AudioPresets.h"
 
 namespace MMM::Audio
 {

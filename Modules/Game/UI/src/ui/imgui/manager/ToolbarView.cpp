@@ -3,6 +3,7 @@
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/AudioPresets.h"
 #include "config/ColorPaletteFile.h"
 #include "config/EditorConfig.h"
 #include "config/Utf8Path.h"

@@ -1,15 +1,16 @@
 #pragma once
 
 #include "EditorConfig.h"
-#include "config/AudioPresets.h"
-#include "config/LayoutPresets.h"
 
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <string>
 
 namespace MMM::Config
 {
+struct AudioPresets;
+struct LayoutPresets;
 
 /// @brief 全局应用配置管理器
 class AppConfig
@@ -22,14 +23,14 @@ public:
     const EditorConfig& getEditorConfig() const { return m_editorConfig; }
 
     /// @brief 获取仅属于客户端的音频预设库。
-    AudioPresets& getAudioPresets() { return m_audioPresets; }
+    AudioPresets& getAudioPresets();
     /// @brief 获取预设库的只读视图。
-    const AudioPresets& getAudioPresets() const { return m_audioPresets; }
+    const AudioPresets& getAudioPresets() const;
 
     /// @brief 获取客户端布局预设库，不参与项目工作区快照。
-    LayoutPresets& getLayoutPresets() { return m_layoutPresets; }
+    LayoutPresets& getLayoutPresets();
     /// @brief 只读访问布局预设集合。
-    const LayoutPresets& getLayoutPresets() const { return m_layoutPresets; }
+    const LayoutPresets& getLayoutPresets() const;
 
     /// @brief 获取视觉配置
     VisualConfig&       getVisualConfig() { return m_editorConfig.visual; }
@@ -105,7 +106,8 @@ public:
 private:
     /// @brief 创建持有默认 EditorConfig 的进程级配置单例。
     AppConfig();
-    ~AppConfig() = default;
+    /// @brief 在完整预设类型可见处销毁私有状态。
+    ~AppConfig();
 
     AppConfig(const AppConfig&)            = delete;
     AppConfig& operator=(const AppConfig&) = delete;
@@ -120,11 +122,10 @@ private:
 
     /// @brief 当前进程读取和修改的完整编辑器配置。
     EditorConfig m_editorConfig;
-    /// @brief 独立于项目快照，防止切换项目覆盖个人听音方案。
-    AudioPresets m_audioPresets;
-    /// @brief 客户端布局集合，保存时捕获当前实时布局。
-    // const 保存入口可更新派生的预设身份，但不会改变实时视觉布局。
-    mutable LayoutPresets m_layoutPresets;
+    /// @brief 只隔离预设库，实时编辑器配置继续直接按值保存。
+    struct PresetState;
+    /// @brief 构造时一次分配；重置和加载只替换内容，保持返回引用的地址稳定。
+    std::unique_ptr<PresetState> m_presets;
     /// @brief 当前应用配置持久化的协作者稳定标识。
     std::string        m_collaborationParticipantId;
     mutable std::mutex m_mutex;

@@ -1,5 +1,7 @@
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
+#include "config/AudioPresets.h"
+// 预设字段由控件直接读取，完整类型依赖只保留在实现侧。
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"

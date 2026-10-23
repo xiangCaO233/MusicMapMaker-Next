@@ -4,6 +4,7 @@
 #include "common/EditTool.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/AudioPresets.h"
 #include "config/EditorConfig.h"
 #include "config/FrameLimitUtils.h"
 #include "config/Utf8Path.h"

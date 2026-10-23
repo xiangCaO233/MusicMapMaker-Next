@@ -1,6 +1,6 @@
 #pragma once
 
-#include "event/core/EventBus.h"
+#include "event/core/SubscriptionID.h"
 #include "graphic/glfw/GLFWHeader.h"
 #include "graphic/glfw/window/adapters/IWindowFrameHost.h"
 #include <atomic>

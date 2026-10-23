@@ -1,7 +1,9 @@
 #include "config/AppConfig.h"
 #include "ConfigSnapshotWriter.h"
 #include "config/AppPaths.h"
+#include "config/AudioPresets.h"
 #include "config/CreatorIdentity.h"
+#include "config/LayoutPresets.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 
@@ -13,6 +15,15 @@
 
 namespace MMM::Config
 {
+/// @brief 两类客户端预设的长期存储，不参与实时配置字段访问。
+struct AppConfig::PresetState {
+    /// @brief 独立于项目快照，防止切换项目覆盖个人听音方案。
+    AudioPresets m_audioPresets;
+    /// @brief 客户端布局集合，保存时捕获当前实时布局。
+    // const 保存入口可更新派生的预设身份，但不会改变实时视觉布局。
+    mutable LayoutPresets m_layoutPresets;
+};
+
 
 /// @brief 获取进程级应用配置管理器。
 /// @return 生命周期覆盖应用主流程的唯一配置实例。
@@ -25,10 +36,47 @@ AppConfig& AppConfig::instance()
 
 /// @brief 创建默认编辑器配置并生成本机协作者稳定标识。
 AppConfig::AppConfig()
-    : m_collaborationParticipantId(makeCollaborationStableId())
+    : m_presets(std::make_unique<PresetState>())
+    , m_collaborationParticipantId(makeCollaborationStableId())
 {
     // reset 只覆盖 EditorConfig，不会清除构造列表刚生成的稳定标识。
     reset();
+}
+
+
+/// @brief 在完整类型可见处释放预设库。
+AppConfig::~AppConfig() = default;
+
+/// @brief 借用随单例存活的预设集合，不复制库或转移所有权。
+/// @return 原预设对象引用，生命周期由配置单例保证。
+/// @warning 界面可逐帧访问；只解引用稳定私有状态，不分配或加锁。
+AudioPresets& AppConfig::getAudioPresets()
+{
+    return m_presets->m_audioPresets;
+}
+
+/// @brief 借用随单例存活的预设集合，不复制库或转移所有权。
+/// @return 原预设对象引用，生命周期由配置单例保证。
+/// @warning 界面可逐帧访问；只解引用稳定私有状态，不分配或加锁。
+const AudioPresets& AppConfig::getAudioPresets() const
+{
+    return m_presets->m_audioPresets;
+}
+
+/// @brief 借用随单例存活的预设集合，不复制库或转移所有权。
+/// @return 原预设对象引用，生命周期由配置单例保证。
+/// @warning 界面可逐帧访问；只解引用稳定私有状态，不分配或加锁。
+LayoutPresets& AppConfig::getLayoutPresets()
+{
+    return m_presets->m_layoutPresets;
+}
+
+/// @brief 借用随单例存活的预设集合，不复制库或转移所有权。
+/// @return 原预设对象引用，生命周期由配置单例保证。
+/// @warning 界面可逐帧访问；只解引用稳定私有状态，不分配或加锁。
+const LayoutPresets& AppConfig::getLayoutPresets() const
+{
+    return m_presets->m_layoutPresets;
 }
 
 /// @brief 将编辑器设置恢复到类型定义的默认值。
@@ -37,9 +85,9 @@ void AppConfig::reset()
 {
     // 整体替换保证新增字段自动采用 EditorConfig 的成员默认值。
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_editorConfig  = EditorConfig();
-    m_audioPresets  = AudioPresets();
-    m_layoutPresets = LayoutPresets();
+    m_editorConfig             = EditorConfig();
+    m_presets->m_audioPresets  = AudioPresets();
+    m_presets->m_layoutPresets = LayoutPresets();
 }
 
 /// @brief 从指定或默认 JSON 文件加载编辑器配置与协作者稳定标识。
@@ -118,31 +166,34 @@ bool AppConfig::load(const std::filesystem::path& path)
         // EditorConfig 的 from_json 自行处理缺失字段与范围约束。
         m_editorConfig = j.get<EditorConfig>();
         // 升级时把现有全部键数布局收为默认项，不覆盖用户已有编辑结果。
-        m_layoutPresets = LayoutPresets();
+        m_presets->m_layoutPresets = LayoutPresets();
 
         if ( const auto presets = j.find("layoutPresets");
              presets != j.end() ) {
             // 损坏的预设集合保留刚捕获的旧布局，避免启动时重置现场。
-            from_json(*presets, m_layoutPresets);
+            from_json(*presets, m_presets->m_layoutPresets);
             // 已存在的用户方案以自身完整内容恢复；默认现场仍须检测旧版改动。
-            if ( m_layoutPresets.m_selected != "默认" )
-                applyLayoutPreset(m_layoutPresets.current(),
+            if ( m_presets->m_layoutPresets.m_selected != "默认" )
+                applyLayoutPreset(m_presets->m_layoutPresets.current(),
                                   m_editorConfig.visual);
         }
         // 旧版本仅有 visual：实际布局不同才创建用户项，未修改仍使用默认。
-        m_layoutPresets.captureCurrent(m_editorConfig.visual);
-        layoutMigrated = !j.contains("layoutPresets") ||
-                         j["layoutPresets"] != nlohmann::json(m_layoutPresets);
+        m_presets->m_layoutPresets.captureCurrent(m_editorConfig.visual);
+        layoutMigrated =
+            !j.contains("layoutPresets") ||
+            j["layoutPresets"] != nlohmann::json(m_presets->m_layoutPresets);
         // 旧配置迁移时保留用户已有音量，新配置以所选预设为准。
-        m_audioPresets = AudioPresets();
+        m_presets->m_audioPresets = AudioPresets();
         if ( const auto presets = j.find("audioPresets"); presets != j.end() ) {
-            m_audioPresets = presets->get<AudioPresets>();
-            applyAudioPreset(m_audioPresets.current(), m_editorConfig.settings);
+            m_presets->m_audioPresets = presets->get<AudioPresets>();
+            applyAudioPreset(m_presets->m_audioPresets.current(),
+                             m_editorConfig.settings);
         } else {
-            captureAudioPreset(m_audioPresets.current(),
+            captureAudioPreset(m_presets->m_audioPresets.current(),
                                m_editorConfig.settings);
             // 迁移后的实际分类音量也受新范围约束，避免显示与听感不一致。
-            applyAudioPreset(m_audioPresets.current(), m_editorConfig.settings);
+            applyAudioPreset(m_presets->m_audioPresets.current(),
+                             m_editorConfig.settings);
         }
         if ( !generatedCollaborationParticipantId ) {
             // 有效持久化身份优先，确保跨启动与协作重连保持一致。
@@ -183,7 +234,8 @@ void AppConfig::saveLayoutChanges(const std::filesystem::path& path)
 {
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        if ( !m_layoutPresets.captureCurrent(m_editorConfig.visual) ) return;
+        if ( !m_presets->m_layoutPresets.captureCurrent(m_editorConfig.visual) )
+            return;
     }
     // 队列覆盖尚未写出的旧快照，绝不让旧请求覆盖新布局。
     queueConfigSnapshot(path.empty() ? getDefaultConfigPath() : path,
@@ -207,9 +259,9 @@ nlohmann::json AppConfig::snapshotForSave() const
         // 效果器字段不在 EditorSettings 中，因此捕获函数必须保留它们。
         // 布局集合留在客户端根节点，不写入谱面项目或导出数据。
         // 保存也是旧调用入口的兜底，默认被改动时先建立当前自定义项。
-        m_layoutPresets.captureCurrent(m_editorConfig.visual);
-        j["layoutPresets"] = m_layoutPresets;
-        auto presets       = m_audioPresets;
+        m_presets->m_layoutPresets.captureCurrent(m_editorConfig.visual);
+        j["layoutPresets"] = m_presets->m_layoutPresets;
+        auto presets       = m_presets->m_audioPresets;
         captureAudioPreset(presets.current(), m_editorConfig.settings);
         j["audioPresets"]               = presets;
         j["collaborationParticipantId"] = m_collaborationParticipantId;

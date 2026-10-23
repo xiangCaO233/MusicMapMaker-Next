@@ -15,7 +15,7 @@
 #include "mmm/timing/TimingTemplate.h"
 #include <array>
 #include <cstdint>
-#include <entt/entt.hpp>
+#include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>

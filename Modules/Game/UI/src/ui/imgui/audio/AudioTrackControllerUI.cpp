@@ -1,6 +1,7 @@
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"
+#include "config/AudioPresets.h"
 #include "config/skin/SkinConfig.h"
 #include "imgui.h"
 #include "logic/EditorEngine.h"
