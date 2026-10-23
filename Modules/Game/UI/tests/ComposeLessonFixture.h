@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/Utf8Path.h"
 #include "logic/EditorClipboardProtocol.h"
 
 #include <filesystem>
@@ -75,8 +76,11 @@ inline bool writeComposeLessonFixture(const std::filesystem::path& directory)
     };
     // 两份文件都完整关闭后才能启动服务读取并生成教学步骤。
     // close 后检查流状态，避免半写入 JSON 被误认为有效资产。
-    std::ofstream beatmapStream(directory / "卡农-示例谱面.mmm",
-                                std::ios::binary | std::ios::trunc);
+    // 文件系统名称必须与 JSON 的 UTF-8 名称一致，不能依赖机器的本地代码页。
+    // 否则夹具会成功写出乱码文件，却无法和侧车中的草稿组匹配。
+    std::ofstream beatmapStream(
+        directory / Config::utf8ToPath("卡农-示例谱面.mmm"),
+        std::ios::binary | std::ios::trunc);
     beatmapStream << beatmap.dump();
     beatmapStream.close();
     std::ofstream draftStream(directory / ".mmm" / "draft_lanes.json",

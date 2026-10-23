@@ -96,10 +96,12 @@ bool canonRockComposeBeatmapAllows(const std::filesystem::path& path)
     if ( path.empty() ) return false;
     // 发布安装使用配置资源；源码目录只在本地开发构建仍存在时匹配。
     // equivalent 同时处理符号链接，且不会把同名的用户谱面误认成示例。
-    return sameFile(path, canonRockDirectory() / "卡农-示例谱面.mmm") ||
-           sameFile(path,
-                    Config::utf8ToPath(MMM_CANONROCK_SOURCE_DIRECTORY) /
-                        "卡农-示例谱面.mmm");
+    // 源码字面量为 UTF-8，不能让 Windows 按本地代码页猜测中文文件名。
+    const auto sampleName = Config::utf8ToPath("卡农-示例谱面.mmm");
+    return sameFile(path, canonRockDirectory() / sampleName) ||
+           sameFile(
+               path,
+               Config::utf8ToPath(MMM_CANONROCK_SOURCE_DIRECTORY) / sampleName);
 }
 
 /// @brief 仅在打开项目引导运行期间启用路径限制。
@@ -115,8 +117,10 @@ bool openProjectGuideAllows(const std::filesystem::path& path)
     const auto directory = canonRockDirectory();
     // 不接受同名的其他项目，也不接受目录中的任意非教学文件。
     // 单独列出允许的类型，避免把音频、图片误交给项目打开入口。
+    // 路径门禁必须比较真实的 Unicode 文件，不能与乱码占位文件相互抵消。
     return sameFile(path, directory) ||
-           sameFile(path, directory / "卡农-示例谱面.mmm") ||
+           sameFile(path,
+                    directory / Config::utf8ToPath("卡农-示例谱面.mmm")) ||
            sameFile(path, directory / "canonrock.zip");
 }
 
@@ -283,8 +287,9 @@ Service::Service(const std::filesystem::path& progressPath,
     // 静态主题只提供稳定 ID、顺序和说明，真实分支必须由资源构造。
     // 参考载荷缺失时保持占位，不能让旧演练配置在新版本继续显示。
     m_impl->add(BUILTIN_COMPOSE_BEATMAP_WALKTHROUGH);
-    const auto composeLessons =
-        loadComposeLessons(canonRockDirectory() / "卡农-示例谱面.mmm");
+    // 谱面与侧车中的 UTF-8 文件名保持一致，避免有效教程被误判为缺少草稿。
+    const auto composeLessons = loadComposeLessons(
+        canonRockDirectory() / Config::utf8ToPath("卡农-示例谱面.mmm"));
     if ( composeLessons ) {
         // 构造完成后把参考与步骤同时交给服务，页面只使用只读索引。
         // 避免每帧重新读取项目侧车或把答案复制到每个 Step。
