@@ -1,21 +1,25 @@
 #pragma once
 
 #include "IUIView.h"
-#include "event/core/EventBus.h"
 #include "event/ui/UpdateDragAreaEvent.h"
 #include "graphic/imguivk/IGraphicUserHook.h"
-#include "mmm/project/Project.h"
-#include "ui/imgui/audio/AudioTrackControllerUI.h"
-#include "ui/layout/CLayWrapperCore.h"
+#include "ui/imgui/audio/AudioTrackControllerTypes.h"
 #include "ui/project/ProjectOpenProgressState.h"
 #include "ui/project/ProjectUiLifecycleState.h"
 #include <atomic>
-#include <concurrentqueue.h>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
+
+namespace MMM
+{
+class Project;
+struct ProjectWorkspaceState;
+struct AudioResource;
+}  // namespace MMM
 
 namespace MMM::Graphic
 {
@@ -206,9 +210,9 @@ public:
     /// @param trackId 音轨标识符。
     /// @param trackName 音轨显示名称。
     /// @param type 音轨类型。
-    void openAudioTrackController(const std::string&                trackId,
-                                  const std::string&                trackName,
-                                  AudioTrackControllerUI::TrackType type);
+    void openAudioTrackController(const std::string&       trackId,
+                                  const std::string&       trackName,
+                                  AudioTrackControllerType type);
 
     /// @brief 打开项目音频工具并聚焦到前台。
     void openProjectAudioTool();
@@ -279,6 +283,10 @@ public:
                                uint32_t taskIndex) override;
 
 private:
+    /// @brief 隔离工作区快照、跨线程队列与事件订阅，只在管理器构造时分配。
+    struct Impl;
+    /// @brief 在所有视图销毁后释放；析构函数先解除事件订阅。
+    std::unique_ptr<Impl> m_impl;
     /// @brief 学习状态和事件订阅先于视图构造、后于视图销毁。
     std::unique_ptr<Walkthrough::Service> m_walkthrough;
     /// @brief 当前演练的纯绘制突出层，不创建输入窗口或持有控件对象。
@@ -287,24 +295,6 @@ private:
     std::unique_ptr<ProjectDropRouter> m_projectDropRouter;
     /// @brief 延迟创建窗口，避免遍历视图时修改视图注册表。
     bool m_openWelcome{ false };
-    /// @brief 跨线程投递到 UI 的项目生命周期快照。
-    struct ProjectUiLifecycleUpdate {
-        /// @brief 本次更新类型。
-        ProjectUiLifecycleKind kind{ ProjectUiLifecycleKind::Closed };
-
-        /// @brief 事件对应的项目路径。
-        std::filesystem::path projectRoot;
-
-        /// @brief 加载完成时复制的项目工作区。
-        ProjectWorkspaceState workspace;
-
-        /// @brief 加载完成时复制的项目音频资源，用于恢复音轨控制器。
-        std::vector<AudioResource> audioResources;
-
-        /// @brief 是否包含可用于恢复的项目快照。
-        bool hasProjectSnapshot{ false };
-    };
-
     /// @brief 无项目时应用一次默认侧边栏工作区。
     void applyNoProjectDefaultWorkspace();
 
@@ -400,11 +390,7 @@ private:
     /// @brief 当前 UI 已确认加载完成的项目根目录。
     std::filesystem::path m_activeProjectRoot;
 
-    /// @brief 等待 UI 线程应用的新项目工作区快照。
-    ProjectWorkspaceState m_pendingProjectWorkspace;
 
-    /// @brief 与待应用工作区一起捕获的项目音频资源快照。
-    std::vector<AudioResource> m_pendingProjectAudioResources;
 
     /// @brief UI 线程归约后的项目生命周期状态。
     ProjectUiLifecycleState m_projectLifecycleState;
@@ -412,13 +398,7 @@ private:
     /// @brief 是否有加载完成后的项目工作区等待应用。
     bool m_projectWorkspaceRestorePending{ false };
 
-    /// @brief 项目生命周期跨线程更新队列。
-    moodycamel::ConcurrentQueue<ProjectUiLifecycleUpdate>
-        m_pendingProjectLifecycleUpdates;
 
-    /// @brief 项目加载进度跨线程更新队列。
-    moodycamel::ConcurrentQueue<ProjectOpenProgressState>
-        m_pendingProjectOpenProgressUpdates;
 
     /// @brief UI 线程当前展示的项目加载进度。
     ProjectOpenProgressState m_projectOpenProgress;
@@ -428,26 +408,8 @@ private:
     /// 同一 UI 帧后半段继续读取已关闭项目，必须使用跨线程原子同步。
     std::atomic_bool m_projectTransitionSignal{ false };
 
-    /// @brief 项目开始打开事件订阅 ID。
-    Event::SubscriptionID m_projectOpenStartedSubId{ 0 };
 
-    /// @brief 项目加载进度事件订阅 ID。
-    Event::SubscriptionID m_projectOpenProgressSubId{ 0 };
 
-    /// @brief 项目加载完成事件订阅 ID。
-    Event::SubscriptionID m_projectLoadedSubId{ 0 };
-
-    /// @brief 项目关闭完成事件订阅 ID。
-    Event::SubscriptionID m_projectClosedSubId{ 0 };
-
-    /// @brief 项目打开失败事件订阅 ID。
-    Event::SubscriptionID m_projectOpenFailedSubId{ 0 };
-
-    /// @brief 临时项目保存到正式目录事件订阅 ID。
-    Event::SubscriptionID m_temporaryProjectSaveResultSubId{ 0 };
-
-    /// @brief 原生窗口焦点状态事件订阅 ID。
-    Event::SubscriptionID m_nativeWindowFocusSubId{ 0 };
 
     /// @brief 上一帧拥有导航焦点的 ImGui 根窗口 ID。
     ImGuiID m_lastFocusedImGuiRootId{ 0 };

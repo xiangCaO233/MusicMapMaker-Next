@@ -15,6 +15,7 @@
 #include "logic/session/PlaybackController.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/project/Project.h"
 #include "ui/ICanvasView.h"
 #include "ui/IEditorApplicationService.h"
 #include "ui/Icons.h"

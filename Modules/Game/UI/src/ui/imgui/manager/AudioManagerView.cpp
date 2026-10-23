@@ -16,6 +16,7 @@
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "mmm/project/AudioResource.h"
+#include "mmm/project/Project.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/AudioPresetControls.h"

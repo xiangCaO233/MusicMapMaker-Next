@@ -3,6 +3,7 @@
 #include "audio/AudioTypes.h"
 #include "ui/IParallelUiPreparable.h"
 #include "ui/IUIView.h"
+#include "ui/imgui/audio/AudioTrackControllerTypes.h"
 #include "ui/layout/box/CLayBox.h"
 #include <cstdint>
 #include <deque>
@@ -18,7 +19,8 @@ class AudioTrackControllerUI : virtual public IUIView,
                                public IParallelUiPreparable
 {
 public:
-    enum class TrackType { Main, Effect };
+    /// @brief 保留控制器原有类型访问入口，工作区接口共用轻量枚举。
+    using TrackType = AudioTrackControllerType;
 
     /// @brief 构造项目工作区使用的稳定视图名称。
     /// @param trackId 音轨标识符。

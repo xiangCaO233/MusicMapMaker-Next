@@ -5,6 +5,7 @@
 #include "config/skin/translation/Translation.h"
 #include "event/project/ProjectEvents.h"
 #include "logic/EditorEngine.h"
+#include "mmm/project/Project.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/ProjectAudioPreviewControls.h"
 #include "ui/imgui/manager/ProjectAudioToolSearch.h"

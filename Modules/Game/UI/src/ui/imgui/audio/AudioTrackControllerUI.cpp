@@ -4,6 +4,7 @@
 #include "config/skin/SkinConfig.h"
 #include "imgui.h"
 #include "logic/EditorEngine.h"
+#include "mmm/project/Project.h"
 #include "ui/UIManager.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <cfloat>
