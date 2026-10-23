@@ -1,10 +1,8 @@
 #pragma once
 #include "config/EditorSettings.h"
 #include "config/VisualConfig.h"
-#include <algorithm>
-#include <cmath>
 #include <cstdint>
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 #include <optional>
 #include <string>
 #include <vector>
@@ -44,37 +42,13 @@ struct ProjectWorkspaceBeatmapState {
     /// @param j 接收对象的 JSON 节点。
     /// @param state 待保存的谱面会话快照。
     friend void to_json(nlohmann::json&                     j,
-                        const ProjectWorkspaceBeatmapState& state)
-    {
-        // 所有坐标均保存逻辑量或比例，不持久化当前窗口的物理像素地址。
-        j = nlohmann::json{
-            { "m_filePath", state.m_filePath },
-            { "m_cameraId", state.m_cameraId },
-            { "m_displayName", state.m_displayName },
-            { "m_playbackTime", state.m_playbackTime },
-            { "m_canvasHorizontalOffsetRatio",
-              state.m_canvasHorizontalOffsetRatio },
-        };
-    }
+                        const ProjectWorkspaceBeatmapState& state);
 
     /// @brief 反序列化项目工作区谱面状态，并兼容旧项目文件。
     /// @param j 来源 JSON 对象。
     /// @param state 接收结果；缺失字段恢复为安全默认值。
     friend void from_json(const nlohmann::json&         j,
-                          ProjectWorkspaceBeatmapState& state)
-    {
-        // value 读取使旧项目可以缺少后来加入的画布身份和播放状态字段。
-        state.m_filePath     = j.value("m_filePath", std::string{});
-        state.m_cameraId     = j.value("m_cameraId", std::string{});
-        state.m_displayName  = j.value("m_displayName", std::string{});
-        state.m_playbackTime = j.value("m_playbackTime", 0.0);
-        state.m_canvasHorizontalOffsetRatio =
-            j.value("m_canvasHorizontalOffsetRatio", 0.0F);
-        if ( !std::isfinite(state.m_canvasHorizontalOffsetRatio) ) {
-            // 非有限比例不能参与视口乘法，统一回到无横向平移。
-            state.m_canvasHorizontalOffsetRatio = 0.0F;
-        }
-    }
+                          ProjectWorkspaceBeatmapState& state);
 };
 
 /// @brief 项目工作区中的主窗口位置和尺寸。
@@ -98,9 +72,13 @@ struct ProjectWorkspaceWindowState {
     /// @brief 保存时窗口是否最大化。
     bool m_maximized{ false };
 
-    /// @brief 使用稳定字段名序列化和反序列化原生窗口状态。
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(ProjectWorkspaceWindowState, m_valid, m_x,
-                                   m_y, m_width, m_height, m_maximized)
+    /// @brief 写出稳定字段，保留输出对象中其他已有的键。
+    friend void to_json(nlohmann::json&                    j,
+                        const ProjectWorkspaceWindowState& state);
+
+    /// @brief 读取全部必需字段，缺失字段保持原有失败语义。
+    friend void from_json(const nlohmann::json&        j,
+                          ProjectWorkspaceWindowState& state);
 };
 
 /// @brief 项目工作区中已打开的音轨控制器窗口状态。
@@ -115,9 +93,13 @@ struct ProjectWorkspaceAudioControllerState {
     /// @brief 音轨类型，使用 Main 或 Effect 的稳定文本。
     std::string m_trackType{ "Main" };
 
-    /// @brief 使用稳定字段名序列化和反序列化控制器窗口身份。
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(ProjectWorkspaceAudioControllerState,
-                                   m_trackId, m_trackName, m_trackType)
+    /// @brief 写出稳定字段，保留输出对象中其他已有的键。
+    friend void to_json(nlohmann::json&                             j,
+                        const ProjectWorkspaceAudioControllerState& state);
+
+    /// @brief 读取全部必需字段，缺失字段保持原有失败语义。
+    friend void from_json(const nlohmann::json&                 j,
+                          ProjectWorkspaceAudioControllerState& state);
 };
 
 /// @brief 项目音频工具中一个资源方块的持久化布局与采样音量。
@@ -150,47 +132,13 @@ struct ProjectAudioToolItemPlacement {
     /// @param json 接收对象的 JSON 节点。
     /// @param placement 待保存的逻辑布局。
     friend void to_json(nlohmann::json&                      json,
-                        const ProjectAudioToolItemPlacement& placement)
-    {
-        // 稳定资源 ID 同时关联几何和采样倍率，不保存瞬态选择与拖动状态。
-        json = nlohmann::json{
-            { "m_audioResourceId", placement.m_audioResourceId },
-            { "m_x", placement.m_x },
-            { "m_y", placement.m_y },
-            { "m_width", placement.m_width },
-            { "m_height", placement.m_height },
-            { "m_zOrder", placement.m_zOrder },
-        };
-        // 缺失独立音量的旧记录保持缺失，供工具只迁移原选中采样的画笔倍率。
-        if ( placement.m_audioVolume ) {
-            json["m_audioVolume"] = *placement.m_audioVolume;
-        }
-    }
+                        const ProjectAudioToolItemPlacement& placement);
 
     /// @brief 反序列化项目音频工具方块布局并兼容缺失字段。
     /// @param json 来源 JSON 对象。
     /// @param placement 接收结果；缺失几何字段按自动布局处理。
     friend void from_json(const nlohmann::json&          json,
-                          ProjectAudioToolItemPlacement& placement)
-    {
-        // 逐字段 value 读取允许旧项目仅保存资源身份。
-        placement.m_audioResourceId =
-            json.value("m_audioResourceId", std::string{});
-        placement.m_x      = json.value("m_x", 0.0F);
-        placement.m_y      = json.value("m_y", 0.0F);
-        placement.m_width  = json.value("m_width", 0.0F);
-        placement.m_height = json.value("m_height", 0.0F);
-        placement.m_zOrder = json.value("m_zOrder", 0);
-        // 复用对象先清空旧值；不把别的采样音量带入缺失字段的历史记录。
-        placement.m_audioVolume.reset();
-        const auto volume = json.find("m_audioVolume");
-        if ( volume != json.end() && volume->is_number() ) {
-            // 只接收有限倍率；损坏值按原音量恢复，显示和播放统一限于 0～200。
-            const float value = volume->get<float>();
-            placement.m_audioVolume =
-                std::isfinite(value) ? std::clamp(value, 0.0F, 2.0F) : 1.0F;
-        }
-    }
+                          ProjectAudioToolItemPlacement& placement);
 };
 
 /// @brief 项目工作区中的工具栏运行时开关状态。
@@ -249,83 +197,13 @@ struct ProjectWorkspaceToolbarState {
     /// @param j 接收对象的 JSON 节点。
     /// @param state 待保存的工具栏状态。
     friend void to_json(nlohmann::json&                     j,
-                        const ProjectWorkspaceToolbarState& state)
-    {
-        // 同时写出旧布尔字段和新文本模式，兼容尚未升级的读取端。
-        j = nlohmann::json{
-            { "m_valid", state.m_valid },
-            { "m_reverseScroll", state.m_reverseScroll },
-            { "m_scrollSnap", state.m_scrollSnap },
-            { "m_objectPlacementSnap", state.m_objectPlacementSnap },
-            { "m_objectPlacementSnapMode", state.m_objectPlacementSnapMode },
-            { "m_commonBeatDivisorMask", state.m_commonBeatDivisorMask },
-            { "m_snapFloor", state.m_snapFloor },
-            { "m_enableLinearScrollMapping",
-              state.m_enableLinearScrollMapping },
-            { "m_drawBeatLines", state.m_beatLineDisplayMode != "Hidden" },
-            { "m_beatLineDisplayMode", state.m_beatLineDisplayMode },
-            { "m_stopPlaybackOnScroll", state.m_stopPlaybackOnScroll },
-            { "m_enableHitEffects", state.m_enableHitEffects },
-            { "m_beatDivisor", state.m_beatDivisor },
-            { "m_timelineZoom", state.m_timelineZoom },
-            { "m_syncSameMainAudioCanvases", state.m_syncSameMainAudioCanvases }
-        };
-    }
+                        const ProjectWorkspaceToolbarState& state);
 
     /// @brief 反序列化工具栏工作区状态，并兼容旧项目文件。
     /// @param j 来源 JSON 对象。
     /// @param state 接收并规整后的工具栏状态。
     friend void from_json(const nlohmann::json&         j,
-                          ProjectWorkspaceToolbarState& state)
-    {
-        // 基础开关逐项读取默认值，避免缺失字段继承复用对象的旧状态。
-        state.m_valid         = j.value("m_valid", false);
-        state.m_reverseScroll = j.value("m_reverseScroll", false);
-        state.m_scrollSnap    = j.value("m_scrollSnap", false);
-        state.m_objectPlacementSnap =
-            j.value("m_objectPlacementSnap", state.m_scrollSnap);
-        // 旧项目没有独立物件磁吸开关时沿用原滚动吸附值。
-        state.m_objectPlacementSnapMode = j.value(
-            "m_objectPlacementSnapMode", std::string{ "CurrentBeatDivisor" });
-        if ( state.m_objectPlacementSnapMode != "CurrentBeatDivisor" &&
-             state.m_objectPlacementSnapMode != "CommonBeatDivisors" ) {
-            // 未知模式回退到当前分拍，不能把任意文本带入命令分派。
-            state.m_objectPlacementSnapMode = "CurrentBeatDivisor";
-        }
-        // 与已知位集合相交，清除未来或损坏项目中的未定义选择位。
-        state.m_commonBeatDivisorMask =
-            j.value("m_commonBeatDivisorMask",
-                    Config::COMMON_BEAT_DIVISOR_MASK_DEFAULT) &
-            Config::COMMON_BEAT_DIVISOR_MASK_ALL;
-        state.m_snapFloor = j.value("m_snapFloor", false);
-        state.m_enableLinearScrollMapping =
-            j.value("m_enableLinearScrollMapping", false);
-        state.m_drawBeatLines = j.value("m_drawBeatLines", true);
-        if ( j.contains("m_beatLineDisplayMode") ) {
-            // 新项目以稳定文本为权威来源，旧布尔值只用于异常回退。
-            state.m_beatLineDisplayMode =
-                j.value("m_beatLineDisplayMode", std::string{ "Always" });
-            if ( state.m_beatLineDisplayMode != "Always" &&
-                 state.m_beatLineDisplayMode != "NearCursor" &&
-                 state.m_beatLineDisplayMode != "Hidden" ) {
-                // 未知文本按旧字段恢复可见或隐藏，不默认为半自动模式。
-                state.m_beatLineDisplayMode =
-                    state.m_drawBeatLines ? "Always" : "Hidden";
-            }
-        } else {
-            // 旧项目没有文本模式，直接从 drawBeatLines 迁移二态语义。
-            state.m_beatLineDisplayMode =
-                state.m_drawBeatLines ? "Always" : "Hidden";
-        }
-        // 重新派生兼容布尔值，保证它与最终规整后的文本模式一致。
-        state.m_drawBeatLines        = state.m_beatLineDisplayMode != "Hidden";
-        state.m_stopPlaybackOnScroll = j.value("m_stopPlaybackOnScroll", false);
-        state.m_enableHitEffects     = j.value("m_enableHitEffects", true);
-        state.m_beatDivisor          = j.value("m_beatDivisor", 4);
-        state.m_timelineZoom         = j.value("m_timelineZoom", 1.0f);
-        state.m_syncSameMainAudioCanvases =
-            j.value("m_syncSameMainAudioCanvases", true);
-    }
+                          ProjectWorkspaceToolbarState& state);
 };
 
 /// @brief 项目级工作区状态，用于再次打开项目时恢复编辑现场。
@@ -412,111 +290,13 @@ struct ProjectWorkspaceState {
     /// @param j 接收对象的 JSON 节点。
     /// @param workspace 待保存的完整工作区快照。
     friend void to_json(nlohmann::json&              j,
-                        const ProjectWorkspaceState& workspace)
-    {
-        // 按职责分组写出会话、原生窗口、音频工具和编辑工具状态。
-        j = nlohmann::json{
-            { "m_openBeatmaps", workspace.m_openBeatmaps },
-            { "m_activeBeatmapPath", workspace.m_activeBeatmapPath },
-            { "m_activePlaybackTime", workspace.m_activePlaybackTime },
-            { "m_imguiIniData", workspace.m_imguiIniData },
-            { "m_mainWindow", workspace.m_mainWindow },
-            { "m_audioControllers", workspace.m_audioControllers },
-            { "m_audioWaveformOpen", workspace.m_audioWaveformOpen },
-            { "m_audioSpectrumOpen", workspace.m_audioSpectrumOpen },
-            { "m_sidebarActiveTab", workspace.m_sidebarActiveTab },
-            { "m_activeEditTool", workspace.m_activeEditTool },
-            { "m_projectAudioToolSelectedResourceId",
-              workspace.m_projectAudioToolSelectedResourceId },
-            { "m_projectAudioToolBrushVolume",
-              workspace.m_projectAudioToolBrushVolume },
-            { "m_projectAudioToolPreviewEffectOnSelection",
-              workspace.m_projectAudioToolPreviewEffectOnSelection },
-            { "m_projectAudioToolSnapEnabled",
-              workspace.m_projectAudioToolSnapEnabled },
-            { "m_projectAudioToolShowVolume",
-              workspace.m_projectAudioToolShowVolume },
-            { "m_projectAudioToolOpen", workspace.m_projectAudioToolOpen },
-            { "m_projectAudioToolPlacements",
-              workspace.m_projectAudioToolPlacements },
-            { "m_toolbarState", workspace.m_toolbarState },
-            { "m_bpmMeasurementToolOpen", workspace.m_bpmMeasurementToolOpen },
-            { "m_bpmMeasurementAudioTrackId",
-              workspace.m_bpmMeasurementAudioTrackId },
-            { "m_timingPointsTableOpen", workspace.m_timingPointsTableOpen },
-            { "m_annotationTableOpen", workspace.m_annotationTableOpen },
-            { "m_overlapCheckOpen", workspace.m_overlapCheckOpen },
-            { "m_metadataEditorOpen", workspace.m_metadataEditorOpen },
-            { "m_noteMetadataEditorOpen", workspace.m_noteMetadataEditorOpen }
-        };
-    }
+                        const ProjectWorkspaceState& workspace);
 
     /// @brief 反序列化项目工作区状态，并兼容旧项目文件。
     /// @param j 来源 JSON 对象。
     /// @param workspace 接收结果；缺失字段使用首次打开时的默认值。
     friend void from_json(const nlohmann::json&  j,
-                          ProjectWorkspaceState& workspace)
-    {
-        // 会话列表保持保存顺序，用于重建同样的画布标签顺序。
-        workspace.m_openBeatmaps = j.value(
-            "m_openBeatmaps", std::vector<ProjectWorkspaceBeatmapState>{});
-        workspace.m_activeBeatmapPath =
-            j.value("m_activeBeatmapPath", std::string{});
-        workspace.m_activePlaybackTime = j.value("m_activePlaybackTime", 0.0);
-        workspace.m_imguiIniData = j.value("m_imguiIniData", std::string{});
-        // 复合状态由各自 from_json 继续执行字段级兼容迁移。
-        workspace.m_mainWindow =
-            j.value("m_mainWindow", ProjectWorkspaceWindowState{});
-        workspace.m_audioControllers =
-            j.value("m_audioControllers",
-                    std::vector<ProjectWorkspaceAudioControllerState>{});
-        workspace.m_audioWaveformOpen = j.value("m_audioWaveformOpen", false);
-        workspace.m_audioSpectrumOpen = j.value("m_audioSpectrumOpen", false);
-        workspace.m_sidebarActiveTab =
-            j.value("m_sidebarActiveTab", std::string{ "FileExplorer" });
-        workspace.m_activeEditTool =
-            j.value("m_activeEditTool", std::string{ "Move" });
-        workspace.m_projectAudioToolSelectedResourceId =
-            j.value("m_projectAudioToolSelectedResourceId", std::string{});
-        // 画笔音量来自持久化输入，先读取再执行有限性和下边界规整。
-        workspace.m_projectAudioToolBrushVolume =
-            j.value("m_projectAudioToolBrushVolume", 1.0F);
-        if ( !std::isfinite(workspace.m_projectAudioToolBrushVolume) ) {
-            // NaN 或无穷无法作为音量倍率，回退到原音量。
-            workspace.m_projectAudioToolBrushVolume = 1.0F;
-        }
-        // 负倍率没有播放语义，最接近的有效边界是静音零值。
-        workspace.m_projectAudioToolBrushVolume =
-            std::max(0.0F, workspace.m_projectAudioToolBrushVolume);
-        workspace.m_projectAudioToolPreviewEffectOnSelection =
-            j.value("m_projectAudioToolPreviewEffectOnSelection", false);
-        // 历史工作区没有此字段，默认开启以保持升级前的方块对齐行为。
-        workspace.m_projectAudioToolSnapEnabled =
-            j.value("m_projectAudioToolSnapEnabled", true);
-        // 只恢复显示偏好，不从画笔快照推导各采样的实际音量。
-        workspace.m_projectAudioToolShowVolume =
-            j.value("m_projectAudioToolShowVolume", false);
-        workspace.m_projectAudioToolOpen =
-            j.value("m_projectAudioToolOpen", false);
-        workspace.m_projectAudioToolPlacements =
-            j.value("m_projectAudioToolPlacements",
-                    std::vector<ProjectAudioToolItemPlacement>{});
-        // 工具栏子对象负责显示模式和位掩码等内部规整。
-        workspace.m_toolbarState =
-            j.value("m_toolbarState", ProjectWorkspaceToolbarState{});
-        workspace.m_bpmMeasurementToolOpen =
-            j.value("m_bpmMeasurementToolOpen", false);
-        workspace.m_bpmMeasurementAudioTrackId =
-            j.value("m_bpmMeasurementAudioTrackId", std::string{});
-        workspace.m_timingPointsTableOpen =
-            j.value("m_timingPointsTableOpen", false);
-        workspace.m_annotationTableOpen =
-            j.value("m_annotationTableOpen", false);
-        workspace.m_overlapCheckOpen   = j.value("m_overlapCheckOpen", false);
-        workspace.m_metadataEditorOpen = j.value("m_metadataEditorOpen", false);
-        workspace.m_noteMetadataEditorOpen =
-            j.value("m_noteMetadataEditorOpen", false);
-    }
+                          ProjectWorkspaceState& workspace);
 };
 
 /// @brief 项目级的特定偏好设置
@@ -545,85 +325,12 @@ struct ProjectSettings {
     /// @brief 序列化项目设置。
     /// @param j 接收对象的 JSON 节点。
     /// @param settings 待保存的项目覆盖配置和工作区。
-    friend void to_json(nlohmann::json& j, const ProjectSettings& settings)
-    {
-        // 空覆盖保持 JSON null，表示打开项目后继续继承全局设置。
-        nlohmann::json editorOverrideJson = nullptr;
-        if ( settings.m_editorOverride ) {
-            // 使用副本剔除软件级字段，不能修改会话正在使用的覆盖对象。
-            auto editorOverride = *settings.m_editorOverride;
-            // 调色板内容由皮肤和项目方案名管理，不复制完整全局色表。
-            editorOverride.colorPalettes = Config::ColorPaletteConfig();
-            editorOverride.defaultColorPaletteSchemeName =
-                Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
-            // 先复用 EditorSettings 序列化，再删除不允许项目拥有的字段。
-            editorOverrideJson = editorOverride;
-            // 工具栏展示属于用户界面偏好，同一项目在不同用户间不应强制同步。
-            editorOverrideJson.erase("showToolLabels");
-            editorOverrideJson.erase("fixedToolWindow");
-            editorOverrideJson.erase("showManagerLabels");
-            editorOverrideJson.erase("toolbarVisibility");
-            // 上传同意、诊断和欢迎页均是软件级隐私或启动行为。
-            editorOverrideJson.erase("autoUploadPgoProfiles");
-            editorOverrideJson.erase("pgoProfileUploadConsentAsked");
-            editorOverrideJson.erase("showWelcomeOnStartup");
-            editorOverrideJson.erase("rtcDiagnosticLogging");
-        }
-        // 最终对象只包含允许项目迁移的覆盖项和可恢复工作区。
-        j = nlohmann::json{
-            { "m_visualOverride", settings.m_visualOverride },
-            { "m_editorOverride", editorOverrideJson },
-            { "m_autoBackupOverride", settings.m_autoBackupOverride },
-            { "m_lastOpenedBeatmap", settings.m_lastOpenedBeatmap },
-            { "m_colorPaletteSchemeName", settings.m_colorPaletteSchemeName },
-            { "m_workspace", settings.m_workspace }
-        };
-    }
+    friend void to_json(nlohmann::json& j, const ProjectSettings& settings);
 
     /// @brief 反序列化项目设置，并兼容缺少工作区字段的旧项目。
     /// @param j 来源 JSON 对象。
     /// @param settings 接收并完成软件级字段隔离后的项目设置。
-    friend void from_json(const nlohmann::json& j, ProjectSettings& settings)
-    {
-        // 可选覆盖以 null 或缺失表示继承，不保留复用对象中的旧值。
-        if ( auto it = j.find("m_visualOverride");
-             it != j.end() && !it->is_null() ) {
-            settings.m_visualOverride = it->get<Config::VisualConfig>();
-        } else {
-            settings.m_visualOverride = std::nullopt;
-        }
-
-        if ( auto it = j.find("m_editorOverride");
-             it != j.end() && !it->is_null() ) {
-            settings.m_editorOverride = it->get<Config::EditorSettings>();
-            // 即使旧项目曾保存工具栏外观，也恢复为当前软件全局默认语义。
-            Config::preserveGlobalToolbarDisplaySettings(
-                *settings.m_editorOverride, Config::EditorSettings{});
-            // 项目文件不得启用上传、伪造同意状态或修改启动欢迎页策略。
-            settings.m_editorOverride->autoUploadPgoProfiles        = false;
-            settings.m_editorOverride->pgoProfileUploadConsentAsked = false;
-            settings.m_editorOverride->m_showWelcomeOnStartup       = true;
-            settings.m_editorOverride->rtcDiagnosticLogging         = false;
-        } else {
-            settings.m_editorOverride = std::nullopt;
-        }
-
-        if ( auto it = j.find("m_autoBackupOverride");
-             it != j.end() && !it->is_null() ) {
-            settings.m_autoBackupOverride = it->get<Config::AutoBackupConfig>();
-        } else {
-            settings.m_autoBackupOverride = std::nullopt;
-        }
-
-        // 标量后增字段使用 value，旧项目可无损获得当前默认值。
-        settings.m_lastOpenedBeatmap =
-            j.value("m_lastOpenedBeatmap", std::string{});
-        settings.m_colorPaletteSchemeName =
-            j.value("m_colorPaletteSchemeName",
-                    std::string(Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID));
-        // 缺少工作区的旧项目按首次打开处理，不复用其他项目现场。
-        settings.m_workspace = j.value("m_workspace", ProjectWorkspaceState{});
-    }
+    friend void from_json(const nlohmann::json& j, ProjectSettings& settings);
 };
 
 }  // namespace MMM

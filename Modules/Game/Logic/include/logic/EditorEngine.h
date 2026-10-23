@@ -3,7 +3,7 @@
 #include "common/AsciiFontData.h"
 #include "common/LogicCommands.h"
 #include "common/UnicodeFontData.h"
-#include "event/project/ProjectOpenInteractionEvent.h"
+#include "event/project/ProjectOpenOrigin.h"
 #include "logic/ProjectTypes.h"
 #include "logic/SessionTypes.h"
 #include <atomic>

@@ -1,5 +1,5 @@
 #pragma once
-#include "event/project/ProjectOpenInteractionEvent.h"
+#include "event/project/ProjectOpenOrigin.h"
 
 #include "common/LogicCommands.h"
 #include "event/core/EventBus.h"

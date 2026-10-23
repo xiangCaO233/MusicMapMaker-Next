@@ -1,6 +1,6 @@
 #pragma once
 #include "event/project/ProjectEvents.h"
-#include "event/project/ProjectOpenInteractionEvent.h"
+#include "event/project/ProjectOpenOrigin.h"
 #include <filesystem>
 
 namespace MMM::Event
