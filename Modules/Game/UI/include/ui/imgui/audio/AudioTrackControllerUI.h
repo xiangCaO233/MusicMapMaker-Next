@@ -1,6 +1,6 @@
 #pragma once
 
-#include "audio/AudioManager.h"
+#include "audio/AudioTypes.h"
 #include "ui/IParallelUiPreparable.h"
 #include "ui/IUIView.h"
 #include "ui/layout/box/CLayBox.h"

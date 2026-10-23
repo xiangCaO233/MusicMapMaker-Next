@@ -2,20 +2,17 @@
 
 #include "common/AsciiFontData.h"
 #include "common/LogicCommands.h"
+#include "common/UnicodeFontData.h"
 #include "event/project/ProjectOpenInteractionEvent.h"
-#include "logic/EditorClipboard.h"
 #include "logic/ProjectTypes.h"
-#include "logic/RenderSyncRegistry.h"
-#include "logic/SessionRegistry.h"
-#include <array>
+#include "logic/SessionTypes.h"
 #include <atomic>
-#include <chrono>
 #include <filesystem>
-#include <future>
+#include <glm/vec2.hpp>
+#include <glm/vec4.hpp>
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <shared_mutex>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -31,10 +28,18 @@ namespace MMM::Config
 struct VisualConfig;
 }
 
+namespace MMM::Common::Render
+{
+class RenderSnapshotBuffer;
+}
+
 namespace MMM::Logic
 {
 
 class BeatmapSession;
+struct ClipboardItem;
+struct SampleClipboardItem;
+struct TimelineClipboardItem;
 using BeatmapSyncBuffer = Common::Render::RenderSnapshotBuffer;
 class ProjectController;
 struct SessionContext;
@@ -287,65 +292,44 @@ public:
     /**
      * @brief 获取当前活跃 Session 索引
      */
-    int32_t getActiveSessionIndex() const
-    {
-        return m_sessionRegistry.activeIndex();
-    }
+    int32_t getActiveSessionIndex() const;
 
     /**
      * @brief 获取 Session 总数
      */
-    int32_t getSessionCount() const { return m_sessionRegistry.count(); }
+    int32_t getSessionCount() const;
 
     /// @brief 获取结构变更时发布的画布标签元数据。
     /// @return 持有本轮 UI 访问期间稳定的索引和相机 ID。
     /// @warning UI 热路径每帧复制一次 shared_ptr；并发删除标签时必须保持
     /// 快照拥有权，避免持有贯穿逻辑 update 的注册表锁。
     std::shared_ptr<const PublishedSessionUiSnapshot>
-    getSessionUiSnapshot() const
-    {
-        return m_sessionRegistry.publishedUiSnapshot();
-    }
+    getSessionUiSnapshot() const;
 
     /**
      * @brief 获取指定索引的 SessionEntry (只读)
      */
-    const SessionEntry* getSessionEntry(int32_t index) const
-    {
-        return m_sessionRegistry.entry(index);
-    }
+    const SessionEntry* getSessionEntry(int32_t index) const;
 
     /**
      * @brief 获取所有 Session 条目的只读快照
      */
-    std::vector<SessionEntry> getSessionEntries() const
-    {
-        return m_sessionRegistry.entries();
-    }
+    std::vector<SessionEntry> getSessionEntries() const;
 
     /**
      * @brief 获取当前激活的谱面会话 (兼容旧接口)
      */
-    std::shared_ptr<BeatmapSession> getActiveSession()
-    {
-        return m_sessionRegistry.activeSession();
-    }
+    std::shared_ptr<BeatmapSession> getActiveSession();
 
     /// @brief 获取当前激活且已经载入谱面的会话。
     /// @return 当前激活项不是 Logo 占位画布时返回会话，否则返回 nullptr。
     /// @warning UI 低频绑定路径：仅用于项目或协作会话切换时绑定观察者。
-    std::shared_ptr<BeatmapSession> getActiveNonLogoSession()
-    {
-        return m_sessionRegistry.activeNonLogoSession();
-    }
+    std::shared_ptr<BeatmapSession> getActiveNonLogoSession();
 
     /**
      * @brief 获取当前激活画布的 cameraId
      */
-    std::string getActiveCameraId() const
-    {
-        return m_sessionRegistry.activeCameraId();
-    }
+    std::string getActiveCameraId() const;
 
     /// @brief 为外部谱面路径生成与 Session 条目一致的稳定路径键。
     /// @param beatmapPath 待规范化的谱面路径。
@@ -366,10 +350,7 @@ public:
     /// @return 逻辑线程 Session update 与 UI 低频直接读取共用的递归锁。
     /// @warning UI 直接访问 SessionContext 或 ECS 的整个期间必须持锁；逻辑线程
     /// 会在每次 Session update 期间持有同一把锁，UI 持锁范围禁止等待和 I/O。
-    std::recursive_mutex& getSessionMutex() const
-    {
-        return m_sessionRegistry.mutex();
-    }
+    std::recursive_mutex& getSessionMutex() const;
 
 
     /**
@@ -389,11 +370,7 @@ public:
         const std::string&                             cameraId,
         const std::unordered_map<uint32_t, glm::vec4>& uvMap,
         const Common::AsciiFontAtlasMetrics& asciiFontAtlasMetrics = {},
-        const Common::UnicodeFontMetrics&    unicodeFontMetrics    = {})
-    {
-        m_renderSyncRegistry.setAtlasUVMap(
-            cameraId, uvMap, asciiFontAtlasMetrics, unicodeFontMetrics);
-    }
+        const Common::UnicodeFontMetrics&    unicodeFontMetrics    = {});
 
     /// @brief 获取当前全局图集 UV 映射共享读取句柄。
     /// @param cameraId 目标画布 cameraId。
@@ -657,103 +634,23 @@ private:
     /// @brief 判断打开新项目前是否需要先关闭当前谱面画布。
     bool needsCanvasCloseBeforeProjectOpen() const;
 
-    /// @brief 逻辑循环在线程池中的任务句柄。
-    /// @warning 生命周期路径：仅在 start/stop
-    /// 低频路径写入；逻辑循环本身长期占用一个共享线程池工作线程。
-    std::future<void> m_loopFuture;
+    /// @brief 隔离注册表、配置缓存和线程生命周期的稳定私有状态。
+    struct Impl;
+    /// @brief 只在构造时分配，stop 完成后随引擎销毁，不在 update 中替换。
+    const std::unique_ptr<Impl> m_impl;
 
-    /// @brief 线程运行标志
-    /// @warning 逻辑热路径/原子：loop 每次迭代读取、stop
-    /// 写入；需要跨线程停止信号，使用 acquire/release。
-    std::atomic<bool> m_running{ false };
+    /// @brief 借用私有状态；常量外壳继续约束内部注册表的重载选择。
+    /// @warning 热路径内联访问：仅解引用稳定指针，不复制所有权或申请内存。
+    Impl& impl() noexcept { return *m_impl; }
 
-    /// @brief 多画布会话注册表，封装 Session 列表、活跃索引和 cameraId 分配。
-    SessionRegistry m_sessionRegistry;
-
-    /// @brief 保护编辑器配置完整对象的读写，防止 UI
-    /// 拖拽更新与逻辑线程复制并发。
-    mutable std::mutex m_editorConfigMutex;
-
-    /// @brief 串行化完整的配置提交流程，避免不同事件线程并发改写
-    /// AppConfig 中含动态容器的配置对象。
-    std::recursive_mutex m_editorConfigUpdateMutex;
-
-    /// @brief 编辑器配置，由 m_editorConfigMutex 保护。
-    Config::EditorConfig m_editorConfig;
-
-    /// @brief 当前项目对软件级谱面自动备份配置的可选覆盖。
-    /// @warning UI/逻辑线程低频读写，由 m_editorConfigMutex
-    /// 与配置修订共同保护。
-    std::optional<Config::AutoBackupConfig> m_projectAutoBackupOverride;
-
-    /// @brief 当前编辑器配置修订号。
-    /// @warning 逻辑/UI 热路径原子：UI 配置提交或相机交互时 release
-    /// 递增，逻辑 loop 每轮 acquire
-    /// 读取；用于避免未变化时复制含容器的完整配置。
-    std::atomic<std::uint64_t> m_editorConfigRevision{ 0 };
-
-    /// @brief 当前全局编辑工具。
-    /// @warning 逻辑/UI 热路径/原子：UI 命令写入、会话 update
-    /// 读取；只传递枚举状态，使用 relaxed。
-    std::atomic<EditTool> m_currentTool{ EditTool::Move };
-
-    /// @brief 编辑器级画笔配色，各会话创建或重新激活时从此状态恢复。
-    std::array<std::optional<glm::vec4>, NOTE_COLOR_SLOT_COUNT>
-        m_brushNoteColors{};
-    /// @brief 各槽是否由单槽显式染色命令设置，不能从 RGBA 数值反推。
-    std::array<bool, NOTE_COLOR_SLOT_COUNT> m_brushNoteColorsExplicit{};
-
-    /// @brief 编辑器是否已经收到过画笔配色命令。
-    bool m_brushNoteColorsInitialized{ false };
-
-    /// @brief 当前项目音频工具选中的稳定资源 ID。
-    std::string m_brushAudioResourceId;
-
-    /// @brief 当前项目音频工具选中的资源类型。
-    AudioTrackType m_brushAudioTrackType{ AudioTrackType::Effect };
-
-    /// @brief 当前项目音频工具为新建物件设置的音量倍率。
-    float m_brushAudioVolume{ 1.0F };
-
-    /// @brief 逻辑线程用于节流判断的帧率限制模式缓存。
-    /// @warning 逻辑热路径/原子：loop 每次迭代读取；只缓存配置枚举，使用
-    /// relaxed 降低栅栏成本。
-    std::atomic<Config::FrameLimitPreference> m_frameLimitPreference{
-        Config::FrameLimitPreference::Refresh2x
-    };
-
-    /// @brief 渲染同步注册表，封装同步缓冲区、图集 UV 映射和视口尺寸缓存。
-    RenderSyncRegistry m_renderSyncRegistry;
-
-    /// @brief 非活跃 Session 最近一次生成渲染快照的时间点，按 Session
-    /// 索引存储。
-    /// @warning 逻辑热路径：每 update
-    /// 读取和低频写入；用于限制后台画布快照频率。
-    std::vector<std::chrono::steady_clock::time_point>
-        m_backgroundSessionUpdateTimes;
-
-    /// @brief 编辑器级剪贴板组件，封装剪贴板内容、来源 Session 和剪切状态。
-    EditorClipboard m_clipboard;
+    /// @brief 借用只读私有状态，保持隔离前成员访问的 const 语义。
+    /// @warning 热路径内联访问：不加锁，具体字段继续遵循原有同步协议。
+    const Impl& impl() const noexcept { return *m_impl; }
 
     /// @brief 逻辑线程实时刷新率 (UPS)
     /// @warning 逻辑/UI 热路径/原子：逻辑线程低频写入、UI
     /// 可每帧读取；仅用于展示，使用 relaxed。
     std::atomic<float> m_logicUps{ 0.0f };
-
-    /// @brief 活动会话实际播放状态的轻量发布值，后台 follower 不计入。
-    /// @warning 逻辑线程每 update 写入、UI 每帧读取 relaxed；仅供工具栏
-    /// 与播放切换命令判断，使用原子是为了避开会话更新期间的长锁等待。
-    std::atomic<bool> m_activePlaybackPlaying{ false };
-
-    /// @brief 活动会话的谱面存在状态，供逐帧菜单可用性判定。
-    /// @warning 逻辑线程每 update 写入、UI 每帧读取 relaxed；避免菜单读取
-    /// currentBeatmap 时等待逻辑线程整个 update 周期持有的注册表锁。
-    std::atomic<bool> m_activeHasBeatmap{ false };
-
-    /// @brief 活动会话是否选中了 Note 或 Sample，供菜单显示可用状态。
-    /// @warning 逻辑线程每 update 写入、UI 每帧读取 relaxed；选择只在
-    /// 会话命令消费后生效，原子值避免菜单检查等待逻辑更新的长锁。
-    std::atomic<bool> m_activeHasChartObjectSelection{ false };
 
     /// @brief 主渲染线程实时刷新率 (FPS)。
     /// @warning UI/逻辑热路径/原子：UI 线程每帧写入、逻辑线程每 update
@@ -770,31 +667,6 @@ private:
     /// @warning 逻辑热路径/原子：多会话同步分支读取；只传递开关状态，使用
     /// relaxed。
     std::atomic<bool> m_syncSameMainAudioCanvases{ true };
-
-    /// @brief 当前是否存在至少两个使用同一主音轨的非 Logo Session。
-    /// @warning 逻辑热路径/原子：同步入口每次读取；低频路径写入，只承载
-    /// 同步候选脏状态，使用 relaxed。
-    std::atomic<bool> m_hasMainAudioSyncPeers{ false };
-
-    /// @brief 等待 UI 线程聚焦的 Session 索引。
-    /// @warning 逻辑/UI 热路径原子：createSession 低频写入，CanvasTabManager
-    /// 每帧消费。
-    std::atomic<int32_t> m_pendingFocusSessionIndex{ -1 };
-
-    /// @brief 项目工作区恢复后待激活的 Session 索引，仅由逻辑线程读写。
-    int32_t m_pendingWorkspaceActiveIndex{ -1 };
-
-    /// @brief 上次执行同主音轨同步时的活跃 Session 索引。
-    int32_t m_lastMainAudioSyncActiveIndex{ -1 };
-
-    /// @brief 上次执行同主音轨同步时的活跃 Session 逻辑时间。
-    double m_lastMainAudioSyncTime{ 0.0 };
-
-    /// @brief 逻辑线程更新计数器，用于 UPS 计算
-    uint32_t m_logicUpdateCount{ 0 };
-
-    /// @brief 上次统计 UPS 的单调时钟时间点。
-    std::chrono::steady_clock::time_point m_lastUpsTime;
 };
 
 }  // namespace MMM::Logic

@@ -19,6 +19,8 @@
 #include "imgui.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
+#include "logic/ecs/components/TimelineComponent.h"
+#include "logic/session/ClipboardTypes.h"
 #include "mmm/timing/BpmNormalization.h"
 #include "ui/imgui/ClipboardBridge.h"
 #include "ui/imgui/ShortcutUtils.h"

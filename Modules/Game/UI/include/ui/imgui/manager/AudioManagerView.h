@@ -1,6 +1,7 @@
 #pragma once
 
-#include "audio/AudioManager.h"
+#include "audio/AudioTypes.h"
+#include "config/AudioPlaybackConfig.h"
 #include "event/core/EventBus.h"
 #include "mmm/project/AudioResource.h"
 #include "ui/ISubView.h"

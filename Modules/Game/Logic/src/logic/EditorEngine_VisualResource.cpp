@@ -1,3 +1,4 @@
+#include "EditorEngine_Impl.h"
 #include "logic/EditorEngine.h"
 
 #include "logic/BeatmapSession.h"
@@ -34,14 +35,15 @@ namespace MMM::Logic
 std::string EditorEngine::renameBeatmapVisualResource(
     const std::filesystem::path& oldPath, const std::string& newFileName)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
     // 注册表锁覆盖预检、物理改名和会话发布，逻辑线程不观察半提交状态。
     auto* project = ProjectController::instance().currentProject();
     if ( !project ) return "当前没有可重命名视觉资源的项目";
     if ( project->m_isTemporaryProject )
         return "临时只读项目不能重命名视觉资源";
 
-    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
     for ( const auto& entry : sessions ) {
         // 后台保存的独立快照可能携带旧文件名；future 完成后仍需等待
         // 会话处理保存结果，才能提交资源改名。
