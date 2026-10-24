@@ -112,6 +112,7 @@ add_library(
   src/ui/imgui/MainDockSpaceUI_Docking.cpp
   src/ui/imgui/MainDockSpaceUI_StatusBar.cpp
   src/ui/imgui/FloatingManagerUI.cpp
+  src/ui/imgui/ShortcutUtils.cpp
   src/ui/imgui/SideBarUI.cpp
   # 跨操作复用的诊断和保存结果反馈。
   src/ui/imgui/feedback/BeatmapLoadDiagnosticFeedback.cpp
@@ -334,7 +335,8 @@ mmm_add_test_executable(UI PlaybackShortcutRoutingTest
                         tests/PlaybackShortcutRoutingTest.cpp)
 target_include_directories(PlaybackShortcutRoutingTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(PlaybackShortcutRoutingTest PRIVATE 3rd_imgui)
+# 同一回归复用正式快捷键实现，覆盖跨实现单元的绑定引用与录制状态。
+target_link_libraries(PlaybackShortcutRoutingTest PRIVATE UI 3rd_imgui)
 mmm_register_test_case(NAME PlaybackShortcutRoutingTest COMMAND
                        PlaybackShortcutRoutingTest)
 

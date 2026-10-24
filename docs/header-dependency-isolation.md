@@ -413,3 +413,77 @@ python3 scripts/dev/header_fanout.py --build-dir build --output build/header-fan
 1. 按剩余消费者审视 `EditorSettings` 的领域偏好边界：优先抽出确有跨模块消费者的枚举/轻量值类型，不机械拆出无人独立使用的头。
 2. 检查纯算法工具与数据容器依赖，保持热路径已缓存数据的访问方式；以依赖图判断收益。
 3. `RenderSyncRegistry` 当前仅影响四个实现/测试单元，继续保持低优先级；除非与下一轮边界直接相关，不为 PImpl 本身扩大改动。
+
+
+## 第五轮：音效、快捷键配置边界与快捷键实现隔离
+
+先提交第四轮为 `beca0953`，随后按领域偏好和纯算法边界继续处理。
+
+### 改动与约束
+
+- 新增 `config/SfxConfig.h`：音效模式、音效配置、增益规范化与 JSON ADL 声明原样迁入。
+  `AudioPresets.h` 仅包含该头并前向声明 `EditorSettings`；完整设置读取留在 `AudioPresets.cpp`。
+  `SfxConfigTest` 改为仅包含独立音效头，实际调用原有序列化实现，检验声明完整性。
+- 新增 `config/ShortcutConfig.h`：绑定、冲突判定与整套快捷键配置原样迁入。
+  `EditorSettings` 继续按值包含这两类数据，不引入配置字段堆分配、虚调用或共享所有权。
+  成员类型、顺序、默认值、命名空间以及 JSON 键和 ADL 类型身份保持不变；旧聚合头继续包含新类型头，兼容原调用入口。
+- `ShortcutUtils` 的运行时按键查找、展示、修饰键查询、录制状态和工具字段映射移到独立源文件。
+  公开头保留 constexpr 按键表和函数声明，完整设置仅前向声明，ImGui 内部结构只在源文件读取。
+  未新增第三方 API 调用，已有输入查询与门禁次序不变；录制布尔状态仍是 UI 线程共享的一个静态对象。
+  按键查找继续返回生命周期覆盖进程的固定表元素；工具映射仍借用配置成员，Layout 继续回退 Move。
+
+### 实际收益与限制
+
+Ninja 当前活动编译单元从 515/515 增至 516/516（新增快捷键实现）。
+
+| 头文件 | 修改前 | 修改后 |
+| --- | ---: | ---: |
+| `EditorSettings.h` | 226 | 225 |
+| `BeatLinePalette.h` | 232 | 231 |
+| `NotePalette.h` | 232 | 231 |
+| `TimingInterpolationPreferences.h` | 229 | 228 |
+| `SyncConfig.h` | 228 | 227 |
+| `AudioPresets.h` | 10 | 10 |
+| `ShortcutUtils.h` | 15 | 17 |
+
+三个原有对象移除了完整设置依赖：`SfxConfigTest`、`SettingsView_Search`、`MainMenuView`。
+新实现和扩展后的快捷键回归各增加一个设置消费者，因此净减少一。
+快捷键工具的公开头新增自身实现和回归测试两个消费者；修改函数签名或 constexpr 按键表仍会触及这些消费者，
+运行时算法实现的修改则由原来的 15 个消费者收敛为一个实现单元。
+
+新类型头仍经 `EditorSettings` 按值包含，不能声称修改 SfxConfig 或 ShortcutConfig 的数据布局只影响少数对象。
+本轮主要建立真实独立消费者的类型边界，并缩小运行时实现变更的重编译范围，不把拆文件数量当作耗时收益。
+
+### 验证
+
+- Linux Debug / Clang 23 完整构建成功；CTest 172/172 通过。
+- 四个公开头独立、重复包含检查通过：SfxConfig、ShortcutConfig、AudioPresets、ShortcutUtils。
+  依赖文件确认均不传播完整 EditorSettings；ShortcutUtils 不再传播 imgui_internal。
+- 既有音效配置、完整配置和音频预设序列化回归通过；新增快捷键回归检验五种工具的可写/只读引用身份、
+  Layout 回退、未知键显示、禁用显示、静态按键表地址以及录制状态的 setter/getter/引用入口一致性。
+- 格式化和差异空白检查通过；本轮未执行 Windows/macOS 构建，未测量冷构建耗时。
+
+### 本轮逐文件注释率
+
+使用 `cloc --by-file`，按 comment / (comment + code) 统计。
+
+| 文件 | 注释行 | 代码行 | 注释率 |
+| --- | ---: | ---: | ---: |
+| `Modules/Config/include/config/AudioPresets.h` | 29 | 43 | 40.28% |
+| `Modules/Config/include/config/EditorSettings.h` | 252 | 375 | 40.19% |
+| `Modules/Config/include/config/SfxConfig.h` | 24 | 33 | 42.11% |
+| `Modules/Config/include/config/ShortcutConfig.h` | 38 | 59 | 39.18% |
+| `Modules/Config/src/AudioPresets.cpp` | 92 | 213 | 30.16% |
+| `Modules/Config/tests/SfxConfigTest.cpp` | 72 | 164 | 30.51% |
+| `Modules/Game/UI/CMakeLists.txt` | 183 | 424 | 30.15% |
+| `Modules/Game/UI/include/ui/imgui/ShortcutUtils.h` | 75 | 117 | 39.06% |
+| `Modules/Game/UI/src/ui/imgui/ShortcutUtils.cpp` | 87 | 150 | 36.71% |
+| `Modules/Game/UI/tests/PlaybackShortcutRoutingTest.cpp` | 40 | 91 | 30.53% |
+
+### 下一轮优先级
+
+1. `SessionUtils.h` 当前影响 26 个编译单元，却通过纯声明传播完整 `SessionContext`（57 个消费者）和 ECS 聚合头。
+   检查能否仅前向声明上下文、组件和配置，使用轻量 ECS 声明头；真实字段访问在实现端显式包含，保持现有缓存算法不变。
+2. `ProjectSettings.h` 74、`Project.h` 62：研究工作区 DTO 与项目配置覆盖的实际使用分布。
+   先找仅需工作区字段或项目元数据的消费者，避免给所有按值项目配置引入不必要的 PImpl 和深拷贝。
+3. 单独的调色文件入口目前只影响三个单元，`RenderSyncRegistry` 四个单元；维持低优先级，不机械扩大拆分。

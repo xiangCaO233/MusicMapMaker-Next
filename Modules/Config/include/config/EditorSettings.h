@@ -3,13 +3,14 @@
 #include "config/BeatLinePalette.h"
 #include "config/FrameLimitPreference.h"
 #include "config/NotePalette.h"
+#include "config/SfxConfig.h"
+#include "config/ShortcutConfig.h"
 #include "config/SyncConfig.h"
 #include "config/TimingInterpolationPreferences.h"
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <nlohmann/json_fwd.hpp>
 #include <string>
 #include <string_view>
@@ -17,75 +18,6 @@
 
 namespace MMM::Config
 {
-
-/// @brief 折线节点键音的两种听感策略，不改变物件与视觉特效。
-enum class PolylineSfxMode {
-    Strict,   ///< 严格逻辑：按各节点实际类型播放，保持历史行为。
-    Gameplay  ///< 游玩体感：首节点按实际类型，后续仅播放滑键节点。
-};
-
-/// @brief 以稳定文本保存折线音效模式。
-void to_json(nlohmann::json& json, const PolylineSfxMode& mode);
-/// @brief 读取折线音效模式，未知值回退严格逻辑。
-void from_json(const nlohmann::json& json, PolylineSfxMode& mode);
-
-/// @brief 打击音效的独立开关、声像、增益与资源混音设置。
-struct SfxConfig {
-    /// @brief 折线播放策略，默认保留现有听感而不在升级时自动切换。
-    PolylineSfxMode polylineSfxMode{ PolylineSfxMode::Strict };
-
-    /// @brief 是否播放严格位于折线内部的滑键键音，不影响首尾或独立滑键。
-    bool enablePolylineInternalFlickSfx{ true };
-
-    /// @brief Flick类型音效的播放是否跟随滑动轨道数量进行增益
-    bool enableFlickWidthVolumeScaling{ false };
-
-    /// @brief 每增加一个轨道的增益倍率
-    float flickWidthVolumeMultiplier{ 0.1f };
-
-    /// @brief 是否按物件轨道位置分配 HitEffect 左右声道音量。
-    bool enableStereoHitEffects{ true };
-
-    /// @brief 皮肤常驻音效的独立音量映射 (Key: 音效ID, Value: 0.0~1.0)
-    std::map<std::string, float> permanentSfxVolumes;
-
-    /// @brief 皮肤常驻音效的静音状态 (Key: 音效ID)
-    std::map<std::string, bool> permanentSfxMutes;
-
-    /// @brief 皮肤全局打击音效的播放速率是否跟随主音轨
-    bool hitSfxSyncSpeed{ true };
-
-    /// @brief 是否启用打击音效
-    bool enableHitSfx{ true };
-
-    /// @brief 是否播放未绑定音效文件的物件所使用的默认打击音效。
-    bool enableUnboundHitSfx{ true };
-
-    /// @brief 未绑定音效文件的默认打击音效线性增益，范围为 0.0~2.0。
-    float unboundHitSfxGain{ 1.0F };
-
-    /// @brief 是否播放已经绑定音效文件的物件打击音效。
-    bool enableBoundHitSfx{ true };
-
-    /// @brief 已绑定音效文件的物件打击音效线性增益，范围为 0.0~2.0。
-    float boundHitSfxGain{ 1.0F };
-
-    /// @brief 普通谱面编辑器播放时是否启用节拍器；旧配置默认关闭。
-    bool enableEditorMetronome{ false };
-
-    /// @brief 编辑器节拍器的线性增益，范围为 0.0~2.0。
-    float editorMetronomeGain{ 1.0F };
-};
-
-/// @brief 将打击音效线性增益规范到持久化与实时混音的共同范围。
-/// @param gain 待规范的线性增益。
-/// @return 0.0~2.0 的有限值；非有限输入按静音增益处理。
-[[nodiscard]] float sanitizeHitSfxGain(float gain) noexcept;
-
-/// @brief 将音效配置序列化为 JSON。
-void to_json(nlohmann::json& json, const SfxConfig& config);
-/// @brief 从 JSON 读取音效配置。
-void from_json(const nlohmann::json& json, SfxConfig& config);
 
 enum class FilePickerStyle {
     Native,  ///< 系统原生对话框 (nfd-extended)
@@ -192,127 +124,6 @@ struct ColorPaletteConfig {
 void to_json(nlohmann::json& json, const ColorPaletteConfig& config);
 /// @brief 从 JSON 读取调色盘配置。
 void from_json(const nlohmann::json& json, ColorPaletteConfig& config);
-
-/// @brief 单个自定义快捷键绑定。
-struct ShortcutBinding {
-    /// @brief 是否启用该快捷键；关闭时该动作没有键盘入口。
-    bool enabled{ true };
-
-    /// @brief 稳定按键名称，由 UI 层映射到 ImGuiKey。
-    std::string key;
-
-    /// @brief 是否要求 Ctrl 修饰键。
-    bool ctrl{ false };
-
-    /// @brief 是否要求 Shift 修饰键。
-    bool shift{ false };
-
-    /// @brief 是否要求 Alt 修饰键。
-    bool alt{ false };
-
-    /// @brief 是否要求 Super/Command 修饰键。
-    bool super{ false };
-};
-
-/// @brief 判断两个已启用快捷键绑定是否使用同一按键组合。
-/// @param lhs 第一个快捷键绑定。
-/// @param rhs 第二个快捷键绑定。
-/// @return 两者均有效且按键及全部修饰键相同时返回 true。
-/// @warning 设置页热路径：仅比较两个短字符串和四个修饰键标志。
-[[nodiscard]] constexpr bool shortcutBindingsConflict(
-    const ShortcutBinding& lhs, const ShortcutBinding& rhs)
-{
-    return lhs.enabled && rhs.enabled && !lhs.key.empty() && !rhs.key.empty() &&
-           lhs.key == rhs.key && lhs.ctrl == rhs.ctrl &&
-           lhs.shift == rhs.shift && lhs.alt == rhs.alt &&
-           lhs.super == rhs.super;
-}
-
-/// @brief 将快捷键绑定序列化为 JSON。
-void to_json(nlohmann::json& json, const ShortcutBinding& binding);
-/// @brief 从 JSON 读取快捷键绑定。
-void from_json(const nlohmann::json& json, ShortcutBinding& binding);
-
-/// @brief 编辑器可自定义快捷键配置。
-struct ShortcutConfig {
-    /// @brief 切换到移动工具。
-    ShortcutBinding toolMove{ true, "1", false, false, false, false };
-
-    /// @brief 切换到框选工具。
-    ShortcutBinding toolMarquee{ true, "2", false, false, false, false };
-
-    /// @brief 切换到绘制工具。
-    ShortcutBinding toolDraw{ true, "3", false, false, false, false };
-
-    /// @brief 切换到配色笔刷工具。
-    ShortcutBinding toolColorBrush{ true, "4", false, false, false, false };
-
-    /// @brief 切换到配色橡皮工具。
-    ShortcutBinding toolColorEraser{ true, "5", false, false, false, false };
-
-    /// @brief 镜像当前选中物件。
-    ShortcutBinding mirror{ true, "M", true, false, false, false };
-
-    /// @brief 镜像粘贴剪贴板物件。
-    ShortcutBinding mirrorPaste{ true, "V", true, true, false, false };
-
-    /// @brief 打开选中物件批量音量编辑器。
-    ShortcutBinding editSelectedVolume{ false, "", false, false, false, false };
-
-    /// @brief 为当前选中的单个物件添加批注。
-    ShortcutBinding addSelectedAnnotation{
-        true, "R", true, false, false, false
-    };
-
-    /// @brief 删除当前选中物件。
-    ShortcutBinding deleteSelected{
-        true, "Delete", false, false, false, false
-    };
-
-    /// @brief 切换谱面播放与暂停状态。
-    ShortcutBinding togglePlayback{ true, "Space", false, false, false, false };
-
-    /// @brief BPM 测量工具聚焦时在视图中心添加段落。
-    ShortcutBinding addBpmSegmentAtViewCenter{ true,  "B",  true,
-                                               false, true, false };
-
-    /// @brief 切换反转滚动方向。
-    ShortcutBinding toggleReverseScroll{
-        false, "", false, false, false, false
-    };
-
-    /// @brief 切换滚动磁吸。
-    ShortcutBinding toggleScrollSnap{ false, "", false, false, false, false };
-
-    /// @brief 切换吸附向下取整。
-    ShortcutBinding toggleSnapFloor{ false, "", false, false, false, false };
-
-    /// @brief 切换 SCROLLTIMING 视觉映射。
-    ShortcutBinding toggleScrollTimingMapping{ false, "",    false,
-                                               false, false, false };
-
-    /// @brief 切换分拍线显示。
-    ShortcutBinding toggleBeatLines{ false, "", false, false, false, false };
-
-    /// @brief 切换播放时滚动停止播放。
-    ShortcutBinding toggleStopPlaybackOnScroll{ false, "",    false,
-                                                false, false, false };
-
-    /// @brief 切换打击音效。
-    ShortcutBinding toggleHitSfx{ false, "", false, false, false, false };
-
-    /// @brief 切换打击特效。
-    ShortcutBinding toggleHitEffects{ false, "", false, false, false, false };
-
-    /// @brief 切换同主音轨画布同步。
-    ShortcutBinding toggleSyncSameMainAudio{ false, "",    false,
-                                             false, false, false };
-};
-
-/// @brief 将快捷键配置序列化为 JSON。
-void to_json(nlohmann::json& json, const ShortcutConfig& config);
-/// @brief 从 JSON 读取快捷键配置。
-void from_json(const nlohmann::json& json, ShortcutConfig& config);
 
 /// @brief 自动主题选择使用的稳定 ID。
 inline constexpr std::string_view UI_THEME_AUTO_ID = "Auto";
