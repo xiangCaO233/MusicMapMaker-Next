@@ -4,6 +4,7 @@
 #include "mmm/timing/TimingFunction.h"
 #include "mmm/timing/TimingFunctionFit.h"
 #include "mmm/timing/TimingInterpolation.h"
+#include "mmm/timing/TimingInterpolationAlgorithms.h"
 #include <algorithm>
 #include <array>
 #include <memory>

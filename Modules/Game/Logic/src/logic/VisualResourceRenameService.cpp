@@ -2,8 +2,8 @@
 
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
-#include "mmm/Metadata.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/metadata/BaseMapMeta.h"
 #include "mmm/project/Project.h"
 
 #include <algorithm>

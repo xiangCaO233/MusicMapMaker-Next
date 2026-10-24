@@ -1,7 +1,16 @@
+// 引擎在此按值取得完整配置快照，公开接口仅声明返回类型。
 #include "logic/EditorEngine.h"
+#include "EditorEngine_Impl.h"
 #include "audio/AudioManager.h"
+#include "common/AsciiFontData.h"
 #include "common/EditTool.h"
+#include "common/LogicCommands.h"
+#include "common/UnicodeFontData.h"
+#include "common/render/RenderSnapshot.h"
 #include "config/AppConfig.h"
+#include "config/AudioPresets.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "config/FrameLimitUtils.h"
 #include "config/Utf8Path.h"
 #include "config/VisualConfig.h"
@@ -11,6 +20,7 @@
 #include "event/logic/EditorConfigChangedEvent.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "event/project/ProjectEvents.h"
+#include "event/project/ProjectOpenInteractionEvent.h"
 #include "event/ui/menu/ProjectLoadedEvent.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
@@ -28,17 +38,29 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "runtime/AppThreadPool.h"
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <future>
+#include <glm/vec4.hpp>
 #include <ice/thread/ThreadPool.hpp>
 #include <iterator>
 #include <limits>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #if defined(__GLIBC__)
@@ -1187,18 +1209,20 @@ EditorEngine& EditorEngine::instance()
 /// 构造只准备线程安全配置快照、限频原子和 EventBus 订阅，不启动逻辑任务，
 /// 也不创建任何会话。这样应用可以先建立停靠布局和共享视口，再显式 start
 /// 并按确定顺序创建编辑器、欢迎页及 Logo 画布。
-EditorEngine::EditorEngine()
+EditorEngine::EditorEngine() : m_impl(std::make_unique<Impl>())
 {
+    // 私有状态先于任何订阅或逻辑任务完成初始化，回调不会观察半构造的 Impl。
+    // 唯一拥有指针固定到 stop 和析构结束，运行中的 update 从不重建这份状态。
     // 构造时复制 AppConfig 的稳定快照，逻辑线程尚未启动，不需要依赖事件回放。
     // 修订号仍按正常发布协议递增，首次 loop 可使用同一刷新机制取得配置。
     const auto initialConfig = Config::AppConfig::instance().getEditorConfig();
     {
-        std::lock_guard<std::mutex> lock(m_editorConfigMutex);
-        m_editorConfig = initialConfig;
-        m_editorConfigRevision.fetch_add(1, std::memory_order_release);
+        std::lock_guard<std::mutex> lock(impl().m_editorConfigMutex);
+        impl().m_editorConfig = initialConfig;
+        impl().m_editorConfigRevision.fetch_add(1, std::memory_order_release);
     }
-    m_frameLimitPreference.store(initialConfig.settings.frameLimit,
-                                 std::memory_order_relaxed);
+    impl().m_frameLimitPreference.store(initialConfig.settings.frameLimit,
+                                        std::memory_order_relaxed);
 
     // 提前实例化项目控制器，确保其事件订阅先于后续 UI 产生打开请求建立。
     (void)ProjectController::instance();
@@ -1215,12 +1239,12 @@ EditorEngine::EditorEngine()
                                    static_cast<float>(e.newSize.y) };
             // 先保留最新尺寸，使尚未创建或随后切换的会话也能使用该视口。
             // 事件回调只投递命令，实际相机更新在会话处理命令时完成。
-            m_renderSyncRegistry.cacheViewportSize(cmd.cameraId,
-                                                   { cmd.width, cmd.height });
+            impl().m_renderSyncRegistry.cacheViewportSize(
+                cmd.cameraId, { cmd.width, cmd.height });
             // 主画布只投递给 cameraId 所属会话，避免所有谱面重复重建投影。
             std::lock_guard<std::recursive_mutex> lock(
-                m_sessionRegistry.mutex());
-            auto& sessions = m_sessionRegistry.entriesUnsafe();
+                impl().m_sessionRegistry.mutex());
+            auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
             for ( auto& entry : sessions ) {
                 if ( entry.cameraId == e.canvasName ) {
                     entry.session->pushCommand(LogicCommand(cmd));
@@ -1231,7 +1255,7 @@ EditorEngine::EditorEngine()
             // 共享当前活动谱面，因此尺寸变化另投递给活动项。
             // 若该名称也恰好命中一个条目，前一段只更新其专属相机，不代替此路由。
             if ( e.canvasName == "Preview" || e.canvasName == "Timeline" ) {
-                int32_t idx = m_sessionRegistry.activeIndex();
+                int32_t idx = impl().m_sessionRegistry.activeIndex();
                 if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) ) {
                     sessions[idx].session->pushCommand(LogicCommand(cmd));
                 }
@@ -1258,7 +1282,138 @@ EditorEngine::EditorEngine()
 /// @warning 进程退出低频路径：stop 可能等待逻辑线程结束。
 EditorEngine::~EditorEngine()
 {
+    // 注册表和配置必须一直存活到逻辑 future 完成，不能先释放 Impl 再等待线程。
     stop();
+}
+
+/// @brief 读取注册表发布的活跃会话索引。
+/// @return 没有活跃画布时返回 -1，索引本身不保证会话仍然存在。
+/// @warning UI/逻辑热路径：沿用注册表的 relaxed 原子读取，不获取会话锁。
+int32_t EditorEngine::getActiveSessionIndex() const
+{
+    return impl().m_sessionRegistry.activeIndex();
+}
+
+/// @brief 查询当前注册表的会话数量，保留原兼容接口的锁语义。
+/// @return 当前列表的条目数，包含 Logo 占位会话。
+/// @warning 此兼容入口沿用注册表递归锁，可能等待会话更新；
+/// 每帧标签布局应复用已发布的 UI 快照，不能扩大此入口的调用频率。
+int32_t EditorEngine::getSessionCount() const
+{
+    return impl().m_sessionRegistry.count();
+}
+
+/// @brief 获取结构变化时发布的会话标签快照。
+/// @return 保持本轮 UI 读取期间有效的共享只读快照。
+/// @warning UI 每帧读取：保留原 acquire 发布协议和一次共享所有权获取，
+/// 以避免并发关闭画布时借用失效元数据，不进入会话更新长锁。
+std::shared_ptr<const PublishedSessionUiSnapshot>
+EditorEngine::getSessionUiSnapshot() const
+{
+    // 直接返回原发布句柄，保持一次所有权获取，不另建快照或增加查询锁。
+    return impl().m_sessionRegistry.publishedUiSnapshot();
+}
+
+/// @brief 按索引借用注册表条目，不延长会话或列表的生命周期。
+/// @param index 调用方当前持有的注册表索引。
+/// @return 无效索引返回 nullptr，结构变化后旧指针不可继续使用。
+/// @warning 低频直接访问入口：调用方必须在整个借用期间持有会话锁，
+/// 函数内部的查询锁只保护本次查找，不能替代调用方的生命周期约束。
+const SessionEntry* EditorEngine::getSessionEntry(int32_t index) const
+{
+    // const 状态访问保留原只读 entry 重载，不因 unique_ptr 解引用放宽可变性。
+    return impl().m_sessionRegistry.entry(index);
+}
+
+/// @brief 获取允许离开注册表锁范围使用的完整会话条目副本。
+/// @return 每个条目仍保持其原有共享会话所有权。
+/// @warning 低频兼容入口：原实现会在锁内复制字符串、容器和共享指针，
+/// PImpl 不改变这些成本；逐帧展示应改用已有轻量 UI 快照入口。
+std::vector<SessionEntry> EditorEngine::getSessionEntries() const
+{
+    // 按值返回是此旧接口的生命周期保证，不能用对 Impl 内部容器的借用替代。
+    return impl().m_sessionRegistry.entries();
+}
+
+/// @brief 获取当前活跃会话的拥有型句柄。
+/// @return 活跃索引无效时返回 nullptr，Logo 会话仍可正常返回。
+/// @warning 低频绑定入口：沿用锁内取得共享引用的协议，确保退出锁后
+/// 会话仍然存活，不得改成每帧反复复制所有权的查询方式。
+std::shared_ptr<BeatmapSession> EditorEngine::getActiveSession()
+{
+    return impl().m_sessionRegistry.activeSession();
+}
+
+/// @brief 获取可用于业务绑定的活跃谱面会话。
+/// @return 未打开谱面或当前为 Logo 占位时返回 nullptr。
+/// @warning UI 低频绑定入口：保留注册表在锁内筛选并取得共享引用的顺序，
+/// 观察者不得借由此接口越过占位会话检查。
+std::shared_ptr<BeatmapSession> EditorEngine::getActiveNonLogoSession()
+{
+    return impl().m_sessionRegistry.activeNonLogoSession();
+}
+
+/// @brief 从已发布标签快照读取活跃画布身份。
+/// @return 活跃索引与快照不匹配时返回空字符串。
+/// @warning UI/逻辑查询路径：沿用快照所有权和按值返回字符串的契约，
+/// 不借用另一线程可能在关闭画布时释放的 cameraId 存储。
+std::string EditorEngine::getActiveCameraId() const
+{
+    return impl().m_sessionRegistry.activeCameraId();
+}
+
+/// @brief 暴露同一注册表递归锁供已有复合事务使用。
+/// @return Impl 持有的原锁对象引用，不创建替代锁或嵌套锁。
+/// @warning 低频事务入口：只返回锁引用，调用方的持锁范围保持原约束；
+/// 引擎 stop 和销毁后不得继续缓存或访问该引用。
+std::recursive_mutex& EditorEngine::getSessionMutex() const
+{
+    // 外壳不另设一把锁，所有旧调用方继续共享同一会话串行化边界。
+    return impl().m_sessionRegistry.mutex();
+}
+
+/// @brief 不携带字体度量的图集更新，缺省对象只在低频调用处构造。
+/// @warning 资源重载路径：保留原有空字体语义，不在逐帧快照同步中调用。
+void EditorEngine::setAtlasUVMap(
+    const std::string&                             cameraId,
+    const std::unordered_map<uint32_t, glm::vec4>& uvMap)
+{
+    // 将默认参数移到实现中；调用方只需理解 UV 表，不必解析字体数据布局。
+    // 临时字体对象由同步的注册表调用复制入发布快照。
+    // 缺省参数移位不会把栈地址交给后台线程继续使用。
+    // 统一委托四参数入口，不额外产生第二个图集发布修订。
+    setAtlasUVMap(cameraId,
+                  uvMap,
+                  Common::AsciiFontAtlasMetrics{},
+                  Common::UnicodeFontMetrics{});
+}
+
+/// @brief 仅提供 ASCII 度量时沿用缺省 Unicode 集合的兼容入口。
+/// @warning 资源重载路径：不改变图集锁、修订或共享快照发布顺序。
+void EditorEngine::setAtlasUVMap(
+    const std::string&                             cameraId,
+    const std::unordered_map<uint32_t, glm::vec4>& uvMap,
+    const Common::AsciiFontAtlasMetrics&           asciiFontAtlasMetrics)
+{
+    setAtlasUVMap(
+        cameraId, uvMap, asciiFontAtlasMetrics, Common::UnicodeFontMetrics{});
+}
+
+/// @brief 转发图集更新，保持既有注册表锁和发布协议。
+/// @param cameraId 此次图集所属的稳定画布身份。
+/// @param uvMap 待发布的纹理 UV 映射。
+/// @param asciiFontAtlasMetrics 与该图集配套的 ASCII 字体度量。
+/// @param unicodeFontMetrics 与该图集配套的 Unicode 字形度量。
+/// @warning 低频资源路径：只在图集生成或替换后调用。
+void EditorEngine::setAtlasUVMap(
+    const std::string&                             cameraId,
+    const std::unordered_map<uint32_t, glm::vec4>& uvMap,
+    const Common::AsciiFontAtlasMetrics&           asciiFontAtlasMetrics,
+    const Common::UnicodeFontMetrics&              unicodeFontMetrics)
+{
+    // UV 和字体度量仍在一次注册表更新中提交，避免打散配套资源的发布修订。
+    impl().m_renderSyncRegistry.setAtlasUVMap(
+        cameraId, uvMap, asciiFontAtlasMetrics, unicodeFontMetrics);
 }
 
 /// @brief 获取当前项目。
@@ -1358,7 +1513,7 @@ double EditorEngine::adaptiveRenderSnapshotMinInterval(
 /// @warning 项目打开低频查询，只读取 SessionRegistry 的非 Logo 会话状态。
 bool EditorEngine::needsCanvasCloseBeforeProjectOpen() const
 {
-    return m_sessionRegistry.hasNonLogoSession();
+    return impl().m_sessionRegistry.hasNonLogoSession();
 }
 
 /// @brief 将已打开谱面的视图位置和工具栏偏好写入当前项目的内存设置。
@@ -1384,8 +1539,8 @@ void EditorEngine::captureProjectWorkspaceState()
     workspace.m_openBeatmaps.clear();
     workspace.m_activeBeatmapPath.clear();
     workspace.m_activePlaybackTime = 0.0;
-    workspace.m_activeEditTool =
-        editToolToWorkspaceName(m_currentTool.load(std::memory_order_relaxed));
+    workspace.m_activeEditTool     = editToolToWorkspaceName(
+        impl().m_currentTool.load(std::memory_order_relaxed));
     const auto editorConfig = getEditorConfig();
     // 工具栏与打开标签使用同一捕获时刻写入项目设置，避免保存出跨版本组合。
     captureToolbarWorkspaceState(
@@ -1394,9 +1549,10 @@ void EditorEngine::captureProjectWorkspaceState()
         m_syncSameMainAudioCanvases.load(std::memory_order_relaxed));
 
     /// @brief 保护工作区状态捕获期间的会话列表访问。
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-    const auto& sessions    = m_sessionRegistry.entriesUnsafe();
-    const auto  activeIndex = m_sessionRegistry.activeIndex();
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
+    const auto& sessions    = impl().m_sessionRegistry.entriesUnsafe();
+    const auto  activeIndex = impl().m_sessionRegistry.activeIndex();
     // 所有播放时间外推共享同一次单调时钟采样，避免遍历耗时产生偏差。
     const double workspaceCaptureTime =
         std::chrono::duration<double>(FrameLimitClock::now().time_since_epoch())
@@ -1504,7 +1660,7 @@ void EditorEngine::restoreProjectWorkspace(
     }
 
     // 旧工作区保存的高级工具不能在普通模式恢复为活动输入策略。
-    m_currentTool.store(
+    impl().m_currentTool.store(
         resolveEditToolForMode(
             workspaceNameToEditTool(
                 project->m_settings.m_workspace.m_activeEditTool),
@@ -1520,8 +1676,9 @@ void EditorEngine::restoreProjectWorkspace(
         });
     const std::string firstWorkspaceCameraId = beatmaps.front().m_cameraId;
     if ( hasSavedCameraId && !firstWorkspaceCameraId.empty() ) {
-        std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-        auto& sessions = m_sessionRegistry.entriesUnsafe();
+        std::lock_guard<std::recursive_mutex> lock(
+            impl().m_sessionRegistry.mutex());
+        auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
         // 逆序删除保持尚未检查的索引有效，并同步移除相机渲染缓存。
         for ( int32_t i = static_cast<int32_t>(sessions.size()) - 1; i >= 0;
               --i ) {
@@ -1537,9 +1694,9 @@ void EditorEngine::restoreProjectWorkspace(
                 continue;
             }
 
-            m_sessionRegistry.erase(i);
+            impl().m_sessionRegistry.erase(i);
             // 注册表和渲染缓存必须同步清理；仅删条目会留下同名旧快照。
-            m_renderSyncRegistry.eraseCamera(logoCameraId);
+            impl().m_renderSyncRegistry.eraseCamera(logoCameraId);
         }
     }
 
@@ -1597,8 +1754,8 @@ void EditorEngine::restoreProjectWorkspace(
             // createSession 返回后重新在锁内读取实际条目，因为重复打开可能返回
             // 已有会话，preferredCameraId 也可能因冲突改由注册表分配新值。
             std::lock_guard<std::recursive_mutex> lock(
-                m_sessionRegistry.mutex());
-            auto& sessions = m_sessionRegistry.entriesUnsafe();
+                impl().m_sessionRegistry.mutex());
+            auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
             if ( index >= 0 && index < static_cast<int32_t>(sessions.size()) ) {
                 restoredSession  = sessions[index].session;
                 restoredCameraId = sessions[index].cameraId;
@@ -1642,7 +1799,7 @@ void EditorEngine::restoreProjectWorkspace(
     }
     // 逻辑循环先处理各会话的恢复跳转，再应用活动索引，避免切换时读到旧时间。
     // 没有任何可用项时保留 -1，不制造无效的活动会话请求。
-    m_pendingWorkspaceActiveIndex = restoredActiveIndex;
+    impl().m_pendingWorkspaceActiveIndex = restoredActiveIndex;
 }
 
 /// @brief 校验项目路径并切换到指定普通项目。
@@ -1837,7 +1994,7 @@ bool EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
 {
     // 旧工作区的延后切换请求不能应用到新项目的会话索引；先清除再创建任何
     // 新会话，防止逻辑循环稍后把同一个整数解释成新注册表条目。
-    m_pendingWorkspaceActiveIndex = -1;
+    impl().m_pendingWorkspaceActiveIndex = -1;
     if ( auto* project = ProjectController::instance().currentProject() ) {
         setProjectAutoBackupOverride(project->m_settings.m_autoBackupOverride);
         // 新项目可能没有工具栏快照，也必须先作废旧专业工具选择再恢复画布。
@@ -1851,10 +2008,10 @@ bool EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
         }
         const auto& workspace = project->m_settings.m_workspace;
         // 资源 ID 只在项目内有效，先清空旧选择，再匹配新资源表中的记录。
-        m_brushAudioResourceId.clear();
-        m_brushAudioTrackType = AudioTrackType::Effect;
+        impl().m_brushAudioResourceId.clear();
+        impl().m_brushAudioTrackType = AudioTrackType::Effect;
         // 音量允许超过 1 的增益，只排除负数和非有限持久化数据。
-        m_brushAudioVolume =
+        impl().m_brushAudioVolume =
             std::isfinite(workspace.m_projectAudioToolBrushVolume)
                 ? std::max(0.0F, workspace.m_projectAudioToolBrushVolume)
                 : 1.0F;
@@ -1872,12 +2029,12 @@ bool EditorEngine::finishOpenProject(const OpenProjectResult& openResult)
                 });
             if ( resourceIterator != project->m_audioResources.end() ) {
                 // 类型从资源表权威值取得，避免持久化冗余字段在重命名后过期。
-                m_brushAudioResourceId = resourceIterator->m_id;
-                m_brushAudioTrackType  = resourceIterator->m_type;
+                impl().m_brushAudioResourceId = resourceIterator->m_id;
+                impl().m_brushAudioTrackType  = resourceIterator->m_type;
             }
         }
         // 恢复工具早于画布创建，模式门禁须在引擎缓存层先应用。
-        m_currentTool.store(
+        impl().m_currentTool.store(
             resolveEditToolForMode(
                 workspaceNameToEditTool(workspace.m_activeEditTool),
                 Config::AppConfig::instance()
@@ -2037,33 +2194,33 @@ bool EditorEngine::closeProject()
 void EditorEngine::start()
 {
     // 重复 start 不提交第二个长驻任务，running 是生命周期状态而非引用计数。
-    if ( m_running.load(std::memory_order_acquire) ) {
+    if ( impl().m_running.load(std::memory_order_acquire) ) {
         return;
     }
 
     // 启动时重新读取 AppConfig，覆盖构造后设置页或启动流程可能产生的更新。
     const auto initialConfig = Config::AppConfig::instance().getEditorConfig();
     {
-        std::lock_guard<std::mutex> lock(m_editorConfigMutex);
-        m_editorConfig = initialConfig;
-        m_editorConfigRevision.fetch_add(1, std::memory_order_release);
+        std::lock_guard<std::mutex> lock(impl().m_editorConfigMutex);
+        impl().m_editorConfig = initialConfig;
+        impl().m_editorConfigRevision.fetch_add(1, std::memory_order_release);
     }
-    m_frameLimitPreference.store(initialConfig.settings.frameLimit,
-                                 std::memory_order_relaxed);
+    impl().m_frameLimitPreference.store(initialConfig.settings.frameLimit,
+                                        std::memory_order_relaxed);
 
-    m_running.store(true, std::memory_order_release);
+    impl().m_running.store(true, std::memory_order_release);
 
     // 线程池由应用初始化；缺失时撤回运行标记，不能留下没有执行者的运行状态。
     auto* appThreadPool = MMM::Runtime::AppThreadPool::instance().get();
     if ( !appThreadPool ) {
-        m_running.store(false, std::memory_order_release);
+        impl().m_running.store(false, std::memory_order_release);
         XERROR("AppThreadPool is not initialized before EditorEngine::start.");
         return;
     }
 
     // 任务借用 this，future 交给 stop 等待，保证销毁成员前循环已经退出。
     // 不在此创建独立 std::thread，统一沿用应用线程池的异常和退出管理策略。
-    m_loopFuture = appThreadPool->enqueue([this]() { loop(); });
+    impl().m_loopFuture = appThreadPool->enqueue([this]() { loop(); });
     XINFO("EditorEngine logic thread started.");
 }
 
@@ -2080,12 +2237,12 @@ void EditorEngine::stop()
     // 先切断外部目录事件来源，再退出逻辑消费端，避免关闭期间继续引入变化。
     ProjectController::instance().stopDirectoryWatcher();
 
-    if ( m_running.exchange(false, std::memory_order_acq_rel) ) {
+    if ( impl().m_running.exchange(false, std::memory_order_acq_rel) ) {
         // 只有成功把 true 改为 false 的调用者承担等待责任，重复 stop 保持幂等。
-        if ( m_loopFuture.valid() ) {
-            m_loopFuture.wait();
+        if ( impl().m_loopFuture.valid() ) {
+            impl().m_loopFuture.wait();
             // 已完成任务句柄不跨下一次启动复用；wait 只等待，不提取任务结果。
-            m_loopFuture = std::future<void>{};
+            impl().m_loopFuture = std::future<void>{};
         }
         XINFO("EditorEngine logic thread stopped.");
     }
@@ -2100,7 +2257,8 @@ void EditorEngine::stop()
 /// @warning 新建命令低频路径：持有会话递归锁调用项目保存与会话创建。
 void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
 
     /// @brief 项目命令服务的新建谱面处理结果。
     auto result = ProjectController::instance().createBeatmap(cmd);
@@ -2141,7 +2299,8 @@ void EditorEngine::handleCreateBeatmap(const CmdCreateBeatmap& cmd)
 /// @warning 用户导入低频路径：可能复制文件、修改资源表并保存项目。
 void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
 
     /// @brief 项目命令服务的导入音频处理结果。
     auto result = ProjectController::instance().importAudio(cmd);
@@ -2172,7 +2331,8 @@ void EditorEngine::handleImportAudio(const CmdImportAudio& cmd)
 /// 资源表并更新内存描述，不执行音频解码。
 void EditorEngine::registerCurrentProjectEffectSoundEffects()
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
 
     const auto* currentProject = ProjectController::instance().currentProject();
     if ( !currentProject ) {
@@ -2204,7 +2364,7 @@ void EditorEngine::setClipboard(std::vector<ClipboardItem> items,
                                 const SessionContext* sourceContext, bool isCut)
 {
     // ClipboardManager 负责生成系统文本载荷和维护跨会话来源身份。
-    m_clipboard.set(std::move(items), sourceContext, isCut);
+    impl().m_clipboard.set(std::move(items), sourceContext, isCut);
 }
 
 /// @brief 更新编辑器级混合谱面物件剪贴板。
@@ -2219,7 +2379,7 @@ void EditorEngine::setChartObjectClipboard(
     const SessionContext* sourceContext, bool isCut)
 {
     // 混合载荷一次提交，避免 Note 和 Sample 分别更新时暴露半份剪贴板。
-    m_clipboard.setChartObjects(
+    impl().m_clipboard.setChartObjects(
         std::move(notes), std::move(samples), sourceContext, isCut);
 }
 
@@ -2234,7 +2394,7 @@ void EditorEngine::setTimelineClipboard(
     const SessionContext* sourceContext, bool isCut)
 {
     // 时间线载荷覆盖此前剪贴板种类，来源身份随同一次调用更新。
-    m_clipboard.setTimelines(std::move(items), sourceContext, isCut);
+    impl().m_clipboard.setTimelines(std::move(items), sourceContext, isCut);
 }
 
 /// @brief 获取编辑器级剪贴板副本。
@@ -2244,7 +2404,7 @@ void EditorEngine::setTimelineClipboard(
 std::vector<ClipboardItem> EditorEngine::getClipboard(
     const SessionContext* targetContext) const
 {
-    return m_clipboard.get(targetContext);
+    return impl().m_clipboard.get(targetContext);
 }
 
 /// @brief 获取编辑器级自动采样剪贴板副本。
@@ -2254,7 +2414,7 @@ std::vector<ClipboardItem> EditorEngine::getClipboard(
 std::vector<SampleClipboardItem> EditorEngine::getSampleClipboard(
     const SessionContext* targetContext) const
 {
-    return m_clipboard.getSamples(targetContext);
+    return impl().m_clipboard.getSamples(targetContext);
 }
 
 /// @brief 获取编辑器级 Timeline 剪贴板副本。
@@ -2264,7 +2424,7 @@ std::vector<SampleClipboardItem> EditorEngine::getSampleClipboard(
 std::vector<TimelineClipboardItem> EditorEngine::getTimelineClipboard(
     const SessionContext* targetContext) const
 {
-    return m_clipboard.getTimelines(targetContext);
+    return impl().m_clipboard.getTimelines(targetContext);
 }
 
 /// @brief 判断当前剪贴板是否为指定会话的剪切内容。
@@ -2273,7 +2433,7 @@ std::vector<TimelineClipboardItem> EditorEngine::getTimelineClipboard(
 /// @note 仅比较来源身份和消费状态，不验证源实体当前是否仍存在。
 bool EditorEngine::isClipboardCutFrom(const SessionContext* context) const
 {
-    return m_clipboard.isCutFrom(context);
+    return impl().m_clipboard.isCutFrom(context);
 }
 
 /// @brief 若剪贴板为其他会话剪切内容，则删除源会话原物件。
@@ -2293,14 +2453,14 @@ void EditorEngine::consumeCrossSessionCutClipboard(
 {
     /// @brief 跨 Session 剪切的来源上下文，仅用于在 Session 列表中定位源会话。
     const SessionContext* sourceContext =
-        m_clipboard.getCrossSessionCutSource(pasteContext);
+        impl().m_clipboard.getCrossSessionCutSource(pasteContext);
     if ( !sourceContext ) return;
 
     /// @brief 保护跨 Session 剪切消费期间的会话列表访问。
     std::lock_guard<std::recursive_mutex> sessionLock(
-        m_sessionRegistry.mutex());
+        impl().m_sessionRegistry.mutex());
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-    const auto& sessions = m_sessionRegistry.entriesUnsafe();
+    const auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
     for ( const auto& entry : sessions ) {
         if ( !entry.session ) {
             // 空注册表槽没有可比较上下文，继续寻找仍存活的来源会话。
@@ -2437,7 +2597,7 @@ void EditorEngine::consumeCrossSessionCutClipboard(
 void EditorEngine::markCutClipboardConsumed()
 {
     // 具体载荷继续保留，使首次移动后仍可再次执行普通复制式粘贴。
-    m_clipboard.markCutConsumed();
+    impl().m_clipboard.markCutConsumed();
 }
 
 /// @brief 消费需要由 UI 线程发布到系统剪贴板的文本载荷。
@@ -2445,7 +2605,7 @@ void EditorEngine::markCutClipboardConsumed()
 std::optional<std::string> EditorEngine::consumePendingSystemClipboardText()
 {
     // 管理器以移动方式返回一次性文本，重复消费不会再次写入系统剪贴板。
-    return m_clipboard.consumePendingSystemText();
+    return impl().m_clipboard.consumePendingSystemText();
 }
 
 /// @brief 从系统剪贴板文本导入 MMM 剪贴板载荷。
@@ -2465,7 +2625,7 @@ bool EditorEngine::importSystemClipboardText(std::string_view text)
         // 外部文本不会短暂写入共享管理器后再清理，隔离边界保持不可观察。
         return false;
     }
-    return m_clipboard.importSystemText(text);
+    return impl().m_clipboard.importSystemText(text);
 }
 
 /// @brief 清除指定来源会话持有的编辑器剪贴板内容。
@@ -2476,7 +2636,7 @@ bool EditorEngine::importSystemClipboardText(std::string_view text)
 void EditorEngine::clearClipboardForContext(const SessionContext* context)
 {
     // 管理器按来源身份条件清除，不影响其他会话最近复制的有效载荷。
-    m_clipboard.clearForContext(context);
+    impl().m_clipboard.clearForContext(context);
 }
 
 /// @brief 同步单个谱面文件到项目配置并在发生变化时保存。
@@ -2489,7 +2649,8 @@ void EditorEngine::clearClipboardForContext(const SessionContext* context)
 /// 不得作为每 update 检查谱面是否变化的手段。
 void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
 
     /// @brief 项目命令服务的单文件同步结果。
     auto result = ProjectController::instance().syncProjectWithFile(mapPath);
@@ -2502,7 +2663,7 @@ void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
     /// @brief 当前项目指针，仅用于刷新已打开 Session 的谱面路径键。
     const auto* currentProject = ProjectController::instance().currentProject();
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
     for ( auto& entry : sessions ) {
         if ( !entry.session ) {
             continue;
@@ -2598,16 +2759,17 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
             Config::AppConfig::instance().getEditorSettings().professionalMode);
         // 枚举立即供 UI 查询，命令再让每个会话清理旧工具状态并接收新工具。
         // relaxed 只发布工具选择，不表示会话已经处理完命令。
-        m_currentTool.store(tool, std::memory_order_relaxed);
+        impl().m_currentTool.store(tool, std::memory_order_relaxed);
         if ( auto* project = ProjectController::instance().currentProject() ) {
             // 活动工具随项目工作区持久化，项目切回时恢复用户上次创作上下文。
             project->m_settings.m_workspace.m_activeEditTool =
                 editToolToWorkspaceName(tool);
         }
 
-        std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+        std::lock_guard<std::recursive_mutex> lock(
+            impl().m_sessionRegistry.mutex());
         /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-        auto& sessions = m_sessionRegistry.entriesUnsafe();
+        auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
         for ( auto& entry : sessions ) {
             if ( entry.session ) {
                 // 每个会话自行在 update 边界结束旧工具手势并采用新工具。
@@ -2625,33 +2787,35 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
         // 广播采用清洗后的缓存值，所有会话接收相同的空选择。
         const bool professional =
             Config::AppConfig::instance().getEditorSettings().professionalMode;
-        m_brushAudioResourceId =
+        impl().m_brushAudioResourceId =
             professional ? audioResource->audioResourceId : std::string{};
-        m_brushAudioTrackType = professional ? audioResource->audioTrackType
-                                             : AudioTrackType::Effect;
+        impl().m_brushAudioTrackType = professional
+                                           ? audioResource->audioTrackType
+                                           : AudioTrackType::Effect;
         // 与工作区恢复采用相同音量边界，非有限输入回退默认增益。
-        m_brushAudioVolume = std::isfinite(audioResource->volume)
-                                 ? std::max(0.0F, audioResource->volume)
-                                 : 1.0F;
+        impl().m_brushAudioVolume = std::isfinite(audioResource->volume)
+                                        ? std::max(0.0F, audioResource->volume)
+                                        : 1.0F;
         if ( auto* project = ProjectController::instance().currentProject() ) {
             // 工作区仅保存可跨启动恢复的资源 ID 和增益，轨道类型从资源表重建。
             auto& workspace = project->m_settings.m_workspace;
             workspace.m_projectAudioToolSelectedResourceId =
-                m_brushAudioResourceId;
-            workspace.m_projectAudioToolBrushVolume = m_brushAudioVolume;
+                impl().m_brushAudioResourceId;
+            workspace.m_projectAudioToolBrushVolume = impl().m_brushAudioVolume;
         }
 
-        std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-        auto& sessions = m_sessionRegistry.entriesUnsafe();
+        std::lock_guard<std::recursive_mutex> lock(
+            impl().m_sessionRegistry.mutex());
+        auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
         for ( auto& entry : sessions ) {
             if ( entry.session ) {
                 // Logo
                 // 会话也接收画笔状态，后续原地复用时无需等待下一次选择事件。
                 entry.session->pushCommand(
                     LogicCommand(CmdSetBrushAudioResource{
-                        m_brushAudioResourceId,
-                        m_brushAudioTrackType,
-                        m_brushAudioVolume,
+                        impl().m_brushAudioResourceId,
+                        impl().m_brushAudioTrackType,
+                        impl().m_brushAudioVolume,
                     }));
             }
         }
@@ -2662,8 +2826,8 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     // 当前目标仍需继续接收命令，所以这里不提前返回。
     if ( std::holds_alternative<CmdUpdateViewport>(cmd) ) {
         const auto& v = std::get<CmdUpdateViewport>(cmd);
-        m_renderSyncRegistry.cacheViewportSize(v.cameraId,
-                                               { v.width, v.height });
+        impl().m_renderSyncRegistry.cacheViewportSize(v.cameraId,
+                                                      { v.width, v.height });
     }
 
     // 主画布悬停坐标按 cameraId 精确路由，使后台 Session 能独立生成
@@ -2675,9 +2839,9 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
         const auto& cameraId = mouse ? mouse->cameraId : hover->cameraId;
         // 鼠标位置是纯视觉状态；拥有型发布快照在标签关闭后仍保证队列存活。
         // 关闭瞬间投给旧会话的悬停更新会随旧会话丢弃，不会误投新标签。
-        const auto snapshot     = m_sessionRegistry.publishedSnapshot();
+        const auto snapshot     = impl().m_sessionRegistry.publishedSnapshot();
         const bool isMainCanvas = SessionUtils::isMainCanvasCameraId(cameraId);
-        const int32_t activeIndex = m_sessionRegistry.activeIndex();
+        const int32_t activeIndex = impl().m_sessionRegistry.activeIndex();
         for ( const auto& entry : snapshot->sessions ) {
             if ( (isMainCanvas && entry.cameraId == cameraId) ||
                  (!isMainCanvas && entry.index == activeIndex) ) {
@@ -2695,11 +2859,11 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
         const auto& scroll = std::get<CmdScroll>(cmd);
         if ( SessionUtils::isMainCanvasCameraId(scroll.cameraId) ) {
             std::lock_guard<std::recursive_mutex> lock(
-                m_sessionRegistry.mutex());
+                impl().m_sessionRegistry.mutex());
             /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-            auto& sessions = m_sessionRegistry.entriesUnsafe();
+            auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
             /// @brief 当前活动 Session 索引快照。
-            const int32_t activeIndex = m_sessionRegistry.activeIndex();
+            const int32_t activeIndex = impl().m_sessionRegistry.activeIndex();
             /// @brief 滚轮目标主画布对应的 Session 索引。
             const int32_t targetIndex =
                 findSessionIndexByCameraIdUnsafe(sessions, scroll.cameraId);
@@ -2723,9 +2887,9 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
         // 每次增量立即进入目标队列，不做固定窗口合并，连续拖动保持本地响应。
         if ( SessionUtils::isMainCanvasCameraId(pan.cameraId) ) {
             std::lock_guard<std::recursive_mutex> lock(
-                m_sessionRegistry.mutex());
+                impl().m_sessionRegistry.mutex());
             /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-            auto&         sessions = m_sessionRegistry.entriesUnsafe();
+            auto&         sessions = impl().m_sessionRegistry.entriesUnsafe();
             const int32_t targetIndex =
                 findSessionIndexByCameraIdUnsafe(sessions, pan.cameraId);
             if ( targetIndex < 0 ||
@@ -2742,8 +2906,9 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     // 教学回退绑定创建时的画布；切换标签后不得误用当前活动谱面的历史。
     if ( const auto* undo = std::get_if<CmdUndo>(&cmd);
          undo && undo->walkthroughToken != 0 ) {
-        std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-        auto&      sessions = m_sessionRegistry.entriesUnsafe();
+        std::lock_guard<std::recursive_mutex> lock(
+            impl().m_sessionRegistry.mutex());
+        auto&      sessions = impl().m_sessionRegistry.entriesUnsafe();
         const auto index =
             findSessionIndexByCameraIdUnsafe(sessions, undo->cameraId);
         // 目标关闭或替换时直接放弃；唯一教学身份也阻止新会话命中旧练习。
@@ -2756,30 +2921,31 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     }
 
     // 剩余命令属于活动编辑上下文；取得锁后再读取活动索引，避免路由中途切换。
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
     // 颜色选择虽然仅由活动会话执行，但引擎保留全局副本供新建与切换会话恢复。
     if ( const auto* palette = std::get_if<CmdSetBrushNotePalette>(&cmd) ) {
         for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
             // 调色板命令是全量快照，逐槽覆盖后再标记缓存已经初始化。
-            m_brushNoteColors[i] = palette->colors[i];
+            impl().m_brushNoteColors[i] = palette->colors[i];
             if ( palette->resetDrawColors )
-                m_brushNoteColorsExplicit[i] = false;
+                impl().m_brushNoteColorsExplicit[i] = false;
         }
-        m_brushNoteColorsInitialized = true;
+        impl().m_brushNoteColorsInitialized = true;
     } else if ( const auto* color = std::get_if<CmdSetBrushNoteColor>(&cmd) ) {
         const auto colorIndex = static_cast<std::size_t>(color->slot);
-        if ( colorIndex < m_brushNoteColors.size() ) {
+        if ( colorIndex < impl().m_brushNoteColors.size() ) {
             // 单槽命令只更新命中位置，越界枚举不污染缓存也不阻止会话自行校验。
-            m_brushNoteColors[colorIndex] = color->color;
-            m_brushNoteColorsExplicit[colorIndex] =
+            impl().m_brushNoteColors[colorIndex] = color->color;
+            impl().m_brushNoteColorsExplicit[colorIndex] =
                 color->applyToNewNotes && color->color.has_value();
-            m_brushNoteColorsInitialized = true;
+            impl().m_brushNoteColorsInitialized = true;
         }
     }
 
-    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
     // 无活动索引时不构造替代会话；已缓存的全局画笔选择仍供下次创建恢复。
-    int32_t idx = m_sessionRegistry.activeIndex();
+    int32_t idx = impl().m_sessionRegistry.activeIndex();
     if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) ) {
         // 只有最终通用分支转移 variant，前面的检查在未返回时均保持载荷有效。
         sessions[idx].session->pushCommand(std::move(cmd));
@@ -2796,14 +2962,14 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
 void EditorEngine::restoreBrushNoteColorsUnsafe(BeatmapSession& session) const
 {
     // 未收到过用户或皮肤调色板时保留 BeatmapSession 自身初始化值。
-    if ( !m_brushNoteColorsInitialized ) return;
+    if ( !impl().m_brushNoteColorsInitialized ) return;
 
     for ( std::size_t i = 0; i < NOTE_COLOR_SLOT_COUNT; ++i ) {
         // 使用单槽命令复用会话既有校验和派生状态更新，不直接访问其上下文。
         session.pushCommand(
             CmdSetBrushNoteColor{ static_cast<NoteColorSlot>(i),
-                                  m_brushNoteColors[i],
-                                  m_brushNoteColorsExplicit[i] });
+                                  impl().m_brushNoteColors[i],
+                                  impl().m_brushNoteColorsExplicit[i] });
     }
 }
 
@@ -2818,9 +2984,9 @@ void EditorEngine::restoreBrushAudioResourceUnsafe(
 {
     // 空 ID 也是完整状态，用来清除复用会话可能保留的旧项目资源选择。
     session.pushCommand(LogicCommand(CmdSetBrushAudioResource{
-        m_brushAudioResourceId,
-        m_brushAudioTrackType,
-        m_brushAudioVolume,
+        impl().m_brushAudioResourceId,
+        impl().m_brushAudioTrackType,
+        impl().m_brushAudioVolume,
     }));
 }
 
@@ -2834,10 +3000,11 @@ void EditorEngine::restoreBrushAudioResourceUnsafe(
 /// 禁止在查询中序列化谱面或扫描完整 ECS。
 bool EditorEngine::hasUnsavedChanges() const
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
     // 检查所有 Session 是否有未保存的修改
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-    const auto& sessions = m_sessionRegistry.entriesUnsafe();
+    const auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
     for ( const auto& entry : sessions ) {
         if ( entry.session &&
              entry.session->getContext().actionStack.isDirty() ) {
@@ -2857,7 +3024,7 @@ std::shared_ptr<BeatmapSyncBuffer> EditorEngine::getSyncBuffer(
     const std::string& cameraId)
 {
     // 注册表按 cameraId 返回或惰性创建缓冲，调用方共享所有权覆盖本次使用。
-    return m_renderSyncRegistry.getSyncBuffer(cameraId);
+    return impl().m_renderSyncRegistry.getSyncBuffer(cameraId);
 }
 
 /// @brief 获取指定画布当前发布的纹理图集 UV 映射。
@@ -2868,7 +3035,7 @@ std::shared_ptr<BeatmapSyncBuffer> EditorEngine::getSyncBuffer(
 std::shared_ptr<const std::unordered_map<uint32_t, glm::vec4>>
 EditorEngine::getAtlasUVMap(const std::string& cameraId) const
 {
-    return m_renderSyncRegistry.getAtlasUVMap(cameraId);
+    return impl().m_renderSyncRegistry.getAtlasUVMap(cameraId);
 }
 
 /// @brief 按修订号将指定画布的图集 UV 映射同步到快照缓存。
@@ -2888,11 +3055,12 @@ void EditorEngine::updateSnapshotAtlasUVMap(
     Common::AsciiFontAtlasMetrics&           targetAsciiFontAtlasMetrics,
     Common::UnicodeFontMetrics&              targetUnicodeFontMetrics) const
 {
-    m_renderSyncRegistry.updateSnapshotAtlasUVMap(cameraId,
-                                                  target,
-                                                  targetRevision,
-                                                  targetAsciiFontAtlasMetrics,
-                                                  targetUnicodeFontMetrics);
+    impl().m_renderSyncRegistry.updateSnapshotAtlasUVMap(
+        cameraId,
+        target,
+        targetRevision,
+        targetAsciiFontAtlasMetrics,
+        targetUnicodeFontMetrics);
 }
 
 /// @brief 为外部谱面路径生成与 Session 条目一致的稳定路径键。
@@ -2924,7 +3092,7 @@ void EditorEngine::setSessionCanvasVisible(const std::string& cameraId,
 
     // 大多数帧可见性不变：先查已有逻辑快照，避免 UI 等待整轮会话 update。
     // 真正变化时仍在锁内复核，保证并发标签删除不会写入过期条目。
-    const auto snapshot = m_sessionRegistry.publishedSnapshot();
+    const auto snapshot = impl().m_sessionRegistry.publishedSnapshot();
     for ( const auto& entry : snapshot->sessions ) {
         if ( entry.cameraId == cameraId &&
              entry.isCanvasVisible == isVisible ) {
@@ -2932,8 +3100,9 @@ void EditorEngine::setSessionCanvasVisible(const std::string& cameraId,
         }
     }
 
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
+    auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
     for ( auto& entry : sessions ) {
         if ( entry.cameraId == cameraId ) {
             if ( entry.isCanvasVisible == isVisible ) {
@@ -2942,7 +3111,7 @@ void EditorEngine::setSessionCanvasVisible(const std::string& cameraId,
             }
             entry.isCanvasVisible = isVisible;
             // 逻辑循环从已发布快照读取可见性，写入后必须显式发布新版本。
-            m_sessionRegistry.publishSnapshotUnsafe();
+            impl().m_sessionRegistry.publishSnapshotUnsafe();
             return;
         }
     }
@@ -2954,7 +3123,7 @@ void EditorEngine::setSessionCanvasVisible(const std::string& cameraId,
 /// @warning 逻辑/UI 热路径原子：只读取工具枚举状态，使用 relaxed。
 EditTool EditorEngine::getCurrentTool() const
 {
-    return m_currentTool.load(std::memory_order_relaxed);
+    return impl().m_currentTool.load(std::memory_order_relaxed);
 }
 
 /// @brief 查询最近一次发布的活动会话实际播放状态。
@@ -2964,14 +3133,14 @@ EditTool EditorEngine::getCurrentTool() const
 /// 不能在此获取贯穿整个 BeatmapSession::update 的 SessionRegistry 锁。
 bool EditorEngine::isPlaybackPlaying() const
 {
-    return m_activePlaybackPlaying.load(std::memory_order_relaxed);
+    return impl().m_activePlaybackPlaying.load(std::memory_order_relaxed);
 }
 
 /// @brief 查询逻辑线程发布的活动谱面存在状态。
 /// @warning UI 菜单每帧 relaxed 读取；只控制可用性显示，编辑命令自行校验。
 bool EditorEngine::hasActiveBeatmap() const
 {
-    return m_activeHasBeatmap.load(std::memory_order_relaxed);
+    return impl().m_activeHasBeatmap.load(std::memory_order_relaxed);
 }
 
 /// @brief 判断当前活跃 Session 是否存在已选谱面物件。
@@ -2980,7 +3149,8 @@ bool EditorEngine::hasActiveBeatmap() const
 /// 不等待整轮会话更新持有的 SessionRegistry 锁。
 bool EditorEngine::hasActiveChartObjectSelection() const
 {
-    return m_activeHasChartObjectSelection.load(std::memory_order_relaxed);
+    return impl().m_activeHasChartObjectSelection.load(
+        std::memory_order_relaxed);
 }
 
 /// @brief 判断当前活跃 Session 是否正在拖拽框选区域。
@@ -2989,9 +3159,10 @@ bool EditorEngine::hasActiveChartObjectSelection() const
 /// 的常量状态， 且不复制 shared_ptr 所有权。
 bool EditorEngine::isActiveSessionSelectingMarquee() const
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-    const auto& sessions = m_sessionRegistry.entriesUnsafe();
-    const auto  idx      = m_sessionRegistry.activeIndex();
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
+    const auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
+    const auto  idx      = impl().m_sessionRegistry.activeIndex();
     if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) &&
          sessions[idx].session ) {
         const auto& ctx = sessions[idx].session->getContext();
@@ -3007,9 +3178,10 @@ bool EditorEngine::isActiveSessionSelectingMarquee() const
 /// 的常量状态，且不复制 shared_ptr 所有权。
 bool EditorEngine::isActiveSessionDraggingNote() const
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-    const auto& sessions = m_sessionRegistry.entriesUnsafe();
-    const auto  idx      = m_sessionRegistry.activeIndex();
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
+    const auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
+    const auto  idx      = impl().m_sessionRegistry.activeIndex();
     if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) &&
          sessions[idx].session ) {
         const auto& ctx = sessions[idx].session->getContext();
@@ -3026,9 +3198,10 @@ bool EditorEngine::isActiveSessionDraggingNote() const
 /// 的常量状态，且不复制 shared_ptr 所有权。
 bool EditorEngine::isActiveSessionDrawingBrush() const
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-    const auto& sessions = m_sessionRegistry.entriesUnsafe();
-    const auto  idx      = m_sessionRegistry.activeIndex();
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
+    const auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
+    const auto  idx      = impl().m_sessionRegistry.activeIndex();
     if ( idx >= 0 && idx < static_cast<int32_t>(sessions.size()) &&
          sessions[idx].session ) {
         const auto& ctx = sessions[idx].session->getContext();
@@ -3046,8 +3219,9 @@ void EditorEngine::setSyncSameMainAudioCanvases(bool enabled)
     m_syncSameMainAudioCanvases.store(enabled, std::memory_order_relaxed);
     if ( !enabled ) {
         // 关闭时立即清除所有 follower 身份，后续 update 恢复各会话独立时间轴。
-        std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-        auto& sessions = m_sessionRegistry.entriesUnsafe();
+        std::lock_guard<std::recursive_mutex> lock(
+            impl().m_sessionRegistry.mutex());
+        auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
         for ( auto& entry : sessions ) {
             if ( entry.session ) {
                 auto& ctx = entry.session->getContextMutable();
@@ -3076,7 +3250,8 @@ void EditorEngine::setSyncSameMainAudioCanvases(bool enabled)
 /// @warning 低频资源或会话变化入口：持有注册表锁并发布新的会话快照。
 void EditorEngine::refreshAudioTimelineFingerprints()
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
     refreshAudioTimelineFingerprintsUnsafe();
 }
 
@@ -3085,7 +3260,7 @@ void EditorEngine::refreshAudioTimelineFingerprints()
 /// @warning 低频描述符变化路径：遍历全部会话并发布快照，不得每帧无条件调用。
 void EditorEngine::refreshAudioTimelineFingerprintsUnsafe()
 {
-    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
     for ( auto& entry : sessions ) {
         if ( entry.isLogoPlaceholder || !entry.session ) {
             // 占位和空会话明确清空两类身份，不能沿用此前复用谱面的指纹。
@@ -3103,9 +3278,9 @@ void EditorEngine::refreshAudioTimelineFingerprintsUnsafe()
     }
     refreshMainAudioSyncPeerStateUnsafe();
     // 条目字段改变后一次性发布，UI 和逻辑下轮均观察到同一组配对状态。
-    m_sessionRegistry.publishSnapshotUnsafe();
+    impl().m_sessionRegistry.publishSnapshotUnsafe();
     // 活动源身份可能改变，强制下一轮重新传播当前时间到所有匹配 follower。
-    m_lastMainAudioSyncActiveIndex = -1;
+    impl().m_lastMainAudioSyncActiveIndex = -1;
 }
 
 /// @brief 标记全部或引用指定资源的已打开谱面描述符需要低频重建。
@@ -3119,7 +3294,7 @@ void EditorEngine::markAudioTimelineDescriptorsDirtyUnsafe(
 {
     // 空 ID 表示项目级资源布局整体变化，所有非占位会话都必须重建描述符。
     // 非空 ID 则把工作限制到已经引用该资源或此前已经标脏的会话。
-    for ( auto& entry : m_sessionRegistry.entriesUnsafe() ) {
+    for ( auto& entry : impl().m_sessionRegistry.entriesUnsafe() ) {
         if ( entry.isLogoPlaceholder || !entry.session ) continue;
         auto& ctx = entry.session->getContextMutable();
         // 已经标脏的会话不能因旧描述符暂时查不到引用而被跳过；其内容可能
@@ -3145,8 +3320,8 @@ void EditorEngine::markAudioTimelineDescriptorsDirtyUnsafe(
 /// 仅在会话列表或音频指纹发生变化后调用，不得提升为每帧无条件扫描。
 void EditorEngine::refreshMainAudioSyncPeerStateUnsafe()
 {
-    auto&         sessions    = m_sessionRegistry.entriesUnsafe();
-    const int32_t activeIndex = m_sessionRegistry.activeIndex();
+    auto&         sessions    = impl().m_sessionRegistry.entriesUnsafe();
+    const int32_t activeIndex = impl().m_sessionRegistry.activeIndex();
     const bool    hasActiveSyncSource =
         activeIndex >= 0 &&
         activeIndex < static_cast<int32_t>(sessions.size()) &&
@@ -3191,13 +3366,14 @@ void EditorEngine::refreshMainAudioSyncPeerStateUnsafe()
             if ( sessions[j].mainAudioSyncFingerprint == key ) {
                 // relaxed 发布的是性能提示而非会话数据；真正同步仍在锁内
                 // 重新校验来源和目标指纹，因此不承担对象生命周期同步职责。
-                m_hasMainAudioSyncPeers.store(true, std::memory_order_relaxed);
+                impl().m_hasMainAudioSyncPeers.store(true,
+                                                     std::memory_order_relaxed);
                 return;
             }
         }
     }
 
-    m_hasMainAudioSyncPeers.store(false, std::memory_order_relaxed);
+    impl().m_hasMainAudioSyncPeers.store(false, std::memory_order_relaxed);
 }
 
 /// @brief 将使用同一主音轨的非活跃会话同步到当前活跃会话时间。
@@ -3209,7 +3385,7 @@ void EditorEngine::refreshMainAudioSyncPeerStateUnsafe()
 /// relaxed，后续短暂持有 SessionRegistry 递归锁并遍历已打开 Session 列表。
 void EditorEngine::syncSameMainAudioCanvases()
 {
-    syncSameMainAudioCanvasesFromIndex(m_sessionRegistry.activeIndex());
+    syncSameMainAudioCanvasesFromIndex(impl().m_sessionRegistry.activeIndex());
 }
 
 /// @brief 从指定源 Session 同步同主音轨的其他画布时间。
@@ -3224,7 +3400,7 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
         // 用户关闭同步后不进入注册表扫描，follower 身份已由设置入口主动清理。
         return;
     }
-    if ( !m_hasMainAudioSyncPeers.load(std::memory_order_relaxed) ) {
+    if ( !impl().m_hasMainAudioSyncPeers.load(std::memory_order_relaxed) ) {
         // 候选提示由会话或指纹变化时更新；假阴性只会推迟到下次刷新，
         // 真正同步仍会在锁内逐项验证，不依赖该原子保证正确性。
         return;
@@ -3234,9 +3410,10 @@ void EditorEngine::syncSameMainAudioCanvasesFromIndex(int32_t sourceIndex)
         // 快照用于稳定枚举会话及其 shared_ptr 生命周期，注册表锁则串行化
         // 各 SessionContext 的读取和原地更新；两者承担不同的一致性职责。
         std::lock_guard<std::recursive_mutex> sessionLock(
-            m_sessionRegistry.mutex());
-        const auto  publishedSnapshot = m_sessionRegistry.publishedSnapshot();
-        const auto& sessions          = publishedSnapshot->sessions;
+            impl().m_sessionRegistry.mutex());
+        const auto publishedSnapshot =
+            impl().m_sessionRegistry.publishedSnapshot();
+        const auto& sessions = publishedSnapshot->sessions;
         const auto  sourceEntry =
             std::find_if(sessions.begin(),
                          sessions.end(),
@@ -3391,10 +3568,11 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                                     const std::string& preferredCameraId,
                                     bool               restoreDockFromWorkspace)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-    const auto                            editorConfig = getEditorConfig();
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
+    const auto editorConfig = getEditorConfig();
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
     // 工作区保存的 cameraId 只有在当前列表未占用时才能复用；注册表最终仍
     // 负责预留 ID，lambda 只用于本次创建前的冲突判断。
     auto cameraIdInUse = [&](const std::string& cameraId) {
@@ -3484,14 +3662,14 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 if ( !preferredCameraId.empty() ) {
                     // 显式恢复的 ID 即使来自现有占位，也要同步注册表分配器，
                     // 防止后续自动编号重新生成同名相机。
-                    m_sessionRegistry.reserveCameraId(preferredCameraId);
+                    impl().m_sessionRegistry.reserveCameraId(preferredCameraId);
                 }
                 sessions[i].session->pushCommand(
                     LogicCommand(CmdUpdateEditorConfig{ editorConfig }));
                 // 初始化命令全部进入原 Session 队列，复用保留了其 cameraId 和
                 // RenderSyncBuffer，但载图处理会重置原占位上下文的谱面派生状态。
                 sessions[i].session->pushCommand(LogicCommand(CmdChangeTool{
-                    m_currentTool.load(std::memory_order_relaxed) }));
+                    impl().m_currentTool.load(std::memory_order_relaxed) }));
                 restoreBrushNoteColorsUnsafe(*sessions[i].session);
                 restoreBrushAudioResourceUnsafe(*sessions[i].session);
                 sessions[i].session->pushCommand(
@@ -3499,13 +3677,15 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                 // 后台占位可能从未显示，不能依赖首次 Resize 才建立主相机。
                 // 缓存尺寸不存在时使用单位视口，真实窗口尺寸到达后正常覆盖。
                 const auto viewport =
-                    m_renderSyncRegistry.getViewportSize(sessions[i].cameraId);
+                    impl().m_renderSyncRegistry.getViewportSize(
+                        sessions[i].cameraId);
                 sessions[i].session->pushCommand(
                     CmdUpdateViewport{ sessions[i].cameraId,
                                        viewport ? viewport->x : 1.0F,
                                        viewport ? viewport->y : 1.0F });
                 /// @brief 复用占位画布前的活动 Session，用于补交谱面切换事件。
-                const int32_t previousIndex = m_sessionRegistry.activeIndex();
+                const int32_t previousIndex =
+                    impl().m_sessionRegistry.activeIndex();
                 // 离开旧活动谱面前请求切换触发的自动保存；复用同一活动槽时
                 // 没有谱面切换边界，不产生多余保存任务。
                 if ( previousIndex >= 0 && previousIndex != i &&
@@ -3515,17 +3695,19 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
                         .session->requestAutoSave(
                             AutoSaveTrigger::BeatmapSwitch);
                 }
-                m_sessionRegistry.setActiveIndex(i);
+                impl().m_sessionRegistry.setActiveIndex(i);
                 // 新谱面尚未处理载入与播放命令，旧活动项状态不能继续显示。
-                m_activePlaybackPlaying.store(false, std::memory_order_relaxed);
-                m_activeHasBeatmap.store(false, std::memory_order_relaxed);
-                m_activeHasChartObjectSelection.store(
+                impl().m_activePlaybackPlaying.store(false,
+                                                     std::memory_order_relaxed);
+                impl().m_activeHasBeatmap.store(false,
+                                                std::memory_order_relaxed);
+                impl().m_activeHasChartObjectSelection.store(
                     false, std::memory_order_relaxed);
                 // 会话条目身份变化后立即刷新候选并发布快照，UI 不能继续看到
                 // 已经装载谱面的画布仍标记为 Logo。
                 refreshMainAudioSyncPeerStateUnsafe();
-                m_sessionRegistry.publishSnapshotUnsafe();
-                m_lastMainAudioSyncActiveIndex = -1;
+                impl().m_sessionRegistry.publishSnapshotUnsafe();
+                impl().m_lastMainAudioSyncActiveIndex = -1;
 
                 XINFO("Reused Logo canvas {} for beatmap: {}",
                       sessions[i].cameraId,
@@ -3542,10 +3724,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
     if ( !preferredCameraId.empty() && !cameraIdInUse(preferredCameraId) ) {
         // 工作区恢复的稳定 ID 未冲突时直接保留，停靠 ini 可重新关联原窗口。
         cameraId = preferredCameraId;
-        m_sessionRegistry.reserveCameraId(cameraId);
+        impl().m_sessionRegistry.reserveCameraId(cameraId);
     } else {
         // 冲突或普通新建统一使用注册表分配器，保证跨关闭空洞仍不重复 ID。
-        cameraId = m_sessionRegistry.createNextCameraId();
+        cameraId = impl().m_sessionRegistry.createNextCameraId();
     }
 
     // 新会话的 shared_ptr 同时由注册表快照和 UI 查询短暂持有，保证关闭与
@@ -3556,7 +3738,8 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
     // Preview、Timeline 等共享视口可能早于谱面会话创建，先补发缓存尺寸，
     // 使第一次 update 就能生成正确投影而不必等待下一次窗口 Resize。
     /// @brief 当前共享视口尺寸快照，用于初始化新 Session 的共享视口。
-    auto sharedViewportSizes = m_renderSyncRegistry.getSharedViewportSizes();
+    auto sharedViewportSizes =
+        impl().m_renderSyncRegistry.getSharedViewportSizes();
     for ( const auto& [cid, size] : sharedViewportSizes ) {
         {
             // 保留原有局部作用域；当前没有临时资源需要提前析构。
@@ -3571,7 +3754,8 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
     // 工作区恢复时编辑器可能一直藏在欢迎页后，主相机仍须发布谱名快照。
     // 这只是会话初始视口，不创建 GPU 资源，也不要求 UI 切换焦点。
     // 有历史尺寸就复用；否则单位视口由后续正常 Resize 命令替换。
-    const auto mainViewport = m_renderSyncRegistry.getViewportSize(cameraId);
+    const auto mainViewport =
+        impl().m_renderSyncRegistry.getViewportSize(cameraId);
     newSession->pushCommand(
         CmdUpdateViewport{ cameraId,
                            mainViewport ? mainViewport->x : 1.0F,
@@ -3582,7 +3766,7 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
     newSession->pushCommand(
         LogicCommand(CmdUpdateEditorConfig{ editorConfig }));
     newSession->pushCommand(LogicCommand(
-        CmdChangeTool{ m_currentTool.load(std::memory_order_relaxed) }));
+        CmdChangeTool{ impl().m_currentTool.load(std::memory_order_relaxed) }));
     restoreBrushNoteColorsUnsafe(*newSession);
     restoreBrushAudioResourceUnsafe(*newSession);
 
@@ -3608,10 +3792,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
     entry.isLogoPlaceholder        = isLogoPlaceholder;
     entry.restoreDockFromWorkspace = restoreDockFromWorkspace;
     /// @brief 新 Session 在注册表中的索引。
-    int32_t newIndex = m_sessionRegistry.append(std::move(entry));
+    int32_t newIndex = impl().m_sessionRegistry.append(std::move(entry));
     // append 已负责发布会话列表；同步候选另依赖新条目的音频身份，需随后刷新。
     refreshMainAudioSyncPeerStateUnsafe();
-    m_lastMainAudioSyncActiveIndex = -1;
+    impl().m_lastMainAudioSyncActiveIndex = -1;
 
     XINFO("Created Session #{} cameraId={} name={} (logo={})",
           newIndex,
@@ -3630,9 +3814,10 @@ int32_t EditorEngine::createSession(std::shared_ptr<MMM::BeatMap> beatmap,
 /// 路径规范化；调用返回后旧索引位置可能已被后续条目占用。
 void EditorEngine::closeSession(int32_t index, bool updateWorkspace)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-    const auto& sessions = m_sessionRegistry.entriesUnsafe();
+    const auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
 
     if ( index < 0 || index >= static_cast<int32_t>(sessions.size()) ) {
         XWARN("closeSession: invalid index {}", index);
@@ -3645,22 +3830,24 @@ void EditorEngine::closeSession(int32_t index, bool updateWorkspace)
 
     // 先从注册表移除会话并发布新列表，后续同步计算不能再把它作为候选。
     // cameraId 已按值保存，因此对象析构后仍可精确清理对应渲染缓存。
-    m_sessionRegistry.erase(index);
+    impl().m_sessionRegistry.erase(index);
     // 关闭可能移动活动索引；在同一锁内重算轻量播放状态再供 UI 读取。
-    const auto&   remainingSessions = m_sessionRegistry.entriesUnsafe();
-    const int32_t activeIndex       = m_sessionRegistry.activeIndex();
+    const auto&   remainingSessions = impl().m_sessionRegistry.entriesUnsafe();
+    const int32_t activeIndex       = impl().m_sessionRegistry.activeIndex();
     const bool    activePlaying =
         activeIndex >= 0 &&
         activeIndex < static_cast<int32_t>(remainingSessions.size()) &&
         remainingSessions[activeIndex].session &&
         remainingSessions[activeIndex].session->getContext().isPlaying;
-    m_activePlaybackPlaying.store(activePlaying, std::memory_order_relaxed);
+    impl().m_activePlaybackPlaying.store(activePlaying,
+                                         std::memory_order_relaxed);
     const bool activeHasBeatmap =
         activeIndex >= 0 &&
         activeIndex < static_cast<int32_t>(remainingSessions.size()) &&
         remainingSessions[activeIndex].session &&
         remainingSessions[activeIndex].session->getContext().currentBeatmap;
-    m_activeHasBeatmap.store(activeHasBeatmap, std::memory_order_relaxed);
+    impl().m_activeHasBeatmap.store(activeHasBeatmap,
+                                    std::memory_order_relaxed);
     bool activeHasSelection = false;
     if ( activeIndex >= 0 &&
          activeIndex < static_cast<int32_t>(remainingSessions.size()) &&
@@ -3670,13 +3857,13 @@ void EditorEngine::closeSession(int32_t index, bool updateWorkspace)
         activeHasSelection = !context.selectedNoteEntities.empty() ||
                              !context.selectedSampleEntities.empty();
     }
-    m_activeHasChartObjectSelection.store(activeHasSelection,
-                                          std::memory_order_relaxed);
+    impl().m_activeHasChartObjectSelection.store(activeHasSelection,
+                                                 std::memory_order_relaxed);
     refreshMainAudioSyncPeerStateUnsafe();
-    m_lastMainAudioSyncActiveIndex = -1;
+    impl().m_lastMainAudioSyncActiveIndex = -1;
 
     // 主画布缓冲区不能跨同名会话复用，其中可能仍保留旧谱面的快照与图集。
-    m_renderSyncRegistry.eraseCamera(cameraId);
+    impl().m_renderSyncRegistry.eraseCamera(cameraId);
 
     if ( updateWorkspace ) {
         // 批量关闭或项目切换可关闭逐项更新，由上层在最终状态统一捕获。
@@ -3695,10 +3882,11 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
                                                  const std::string& displayName,
                                                  bool updateWorkspace)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-    const auto                            editorConfig = getEditorConfig();
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
+    const auto editorConfig = getEditorConfig();
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
 
     if ( index < 0 || index >= static_cast<int32_t>(sessions.size()) ) {
         XWARN("resetSessionToLogoPlaceholder: invalid index {}", index);
@@ -3716,18 +3904,18 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
     // 共享视口尺寸和本画布主视口分别来自不同缓存，必须都恢复到替换会话。
     // 缺少主视口缓存时等待下一次 Resize，不用虚构像素尺寸。
     for ( const auto& [cid, size] :
-          m_renderSyncRegistry.getSharedViewportSizes() ) {
+          impl().m_renderSyncRegistry.getSharedViewportSizes() ) {
         newSession->pushCommand(CmdUpdateViewport{ cid, size.x, size.y });
     }
     if ( auto mainViewportSize =
-             m_renderSyncRegistry.getViewportSize(entry.cameraId) ) {
+             impl().m_renderSyncRegistry.getViewportSize(entry.cameraId) ) {
         newSession->pushCommand(CmdUpdateViewport{
             entry.cameraId, mainViewportSize->x, mainViewportSize->y });
     }
     newSession->pushCommand(
         LogicCommand(CmdUpdateEditorConfig{ editorConfig }));
     newSession->pushCommand(LogicCommand(
-        CmdChangeTool{ m_currentTool.load(std::memory_order_relaxed) }));
+        CmdChangeTool{ impl().m_currentTool.load(std::memory_order_relaxed) }));
     // 占位会话仍可能被随后直接复用，提前恢复画笔状态可保持初始化顺序一致。
     restoreBrushNoteColorsUnsafe(*newSession);
     restoreBrushAudioResourceUnsafe(*newSession);
@@ -3741,14 +3929,15 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
     entry.isLogoPlaceholder        = true;
     entry.restoreDockFromWorkspace = false;
 
-    m_sessionRegistry.setActiveIndex(index);
+    impl().m_sessionRegistry.setActiveIndex(index);
     // Logo 不控制 transport；原槽重置后旧播放状态立即失效。
-    m_activePlaybackPlaying.store(false, std::memory_order_relaxed);
-    m_activeHasBeatmap.store(false, std::memory_order_relaxed);
-    m_activeHasChartObjectSelection.store(false, std::memory_order_relaxed);
+    impl().m_activePlaybackPlaying.store(false, std::memory_order_relaxed);
+    impl().m_activeHasBeatmap.store(false, std::memory_order_relaxed);
+    impl().m_activeHasChartObjectSelection.store(false,
+                                                 std::memory_order_relaxed);
     refreshMainAudioSyncPeerStateUnsafe();
-    m_sessionRegistry.publishSnapshotUnsafe();
-    m_lastMainAudioSyncActiveIndex = -1;
+    impl().m_sessionRegistry.publishSnapshotUnsafe();
+    impl().m_lastMainAudioSyncActiveIndex = -1;
 
     if ( updateWorkspace ) {
         // 项目切换批量重置时由调用方统一保存，普通关图则立即同步打开列表。
@@ -3768,9 +3957,10 @@ void EditorEngine::resetSessionToLogoPlaceholder(int32_t            index,
 /// @post 有效目标成为唯一活动上下文，并取得最新共享视口尺寸命令。
 void EditorEngine::setActiveSessionIndex(int32_t index)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-    const auto                            editorConfig = getEditorConfig();
-    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
+    const auto editorConfig = getEditorConfig();
+    auto&      sessions     = impl().m_sessionRegistry.entriesUnsafe();
     if ( index < 0 || index >= static_cast<int32_t>(sessions.size()) ) {
         return;
     }
@@ -3778,7 +3968,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
     // 切换只采样一次 steady_clock，使旧会话的连续播放位置与新会话的
     // transport 定位建立在同一时刻，不受中间资源激活耗时影响。
     auto&         audio         = Audio::AudioManager::instance();
-    const int32_t previousIndex = m_sessionRegistry.activeIndex();
+    const int32_t previousIndex = impl().m_sessionRegistry.activeIndex();
     const double  sessionSwitchTime =
         std::chrono::duration<double>(FrameLimitClock::now().time_since_epoch())
             .count();
@@ -3817,11 +4007,12 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
         previousCtx.isActiveSession = false;
     }
 
-    m_sessionRegistry.setActiveIndex(index);
+    impl().m_sessionRegistry.setActiveIndex(index);
     // 切换期间先撤销旧会话的播放标记，防止 UI 把旧状态用于新目标。
-    m_activePlaybackPlaying.store(false, std::memory_order_relaxed);
-    m_activeHasBeatmap.store(false, std::memory_order_relaxed);
-    m_activeHasChartObjectSelection.store(false, std::memory_order_relaxed);
+    impl().m_activePlaybackPlaying.store(false, std::memory_order_relaxed);
+    impl().m_activeHasBeatmap.store(false, std::memory_order_relaxed);
+    impl().m_activeHasChartObjectSelection.store(false,
+                                                 std::memory_order_relaxed);
     auto& activeSession = sessions[index].session;
     if ( !activeSession ) {
         // 空槽无法接管 transport，卸载旧时间线防止 UI 状态与实际播放来源分离。
@@ -3881,10 +4072,11 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
     }
 
     // transport 最终状态已确定，再发布给逐帧工具栏读取。
-    m_activePlaybackPlaying.store(ctx.isPlaying, std::memory_order_relaxed);
-    m_activeHasBeatmap.store(ctx.currentBeatmap != nullptr,
-                             std::memory_order_relaxed);
-    m_activeHasChartObjectSelection.store(
+    impl().m_activePlaybackPlaying.store(ctx.isPlaying,
+                                         std::memory_order_relaxed);
+    impl().m_activeHasBeatmap.store(ctx.currentBeatmap != nullptr,
+                                    std::memory_order_relaxed);
+    impl().m_activeHasChartObjectSelection.store(
         !ctx.selectedNoteEntities.empty() ||
             !ctx.selectedSampleEntities.empty(),
         std::memory_order_relaxed);
@@ -3897,14 +4089,14 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
     ctx.animatedTimelineZoom                = editorConfig.visual.timelineZoom;
     ctx.animatedTimelineZoomTarget          = ctx.animatedTimelineZoom;
     ctx.animatedTimelineZoomAnimationActive = false;
-    ctx.currentTool = m_currentTool.load(std::memory_order_relaxed);
+    ctx.currentTool = impl().m_currentTool.load(std::memory_order_relaxed);
     // 打击特效属于会话时间位置的派生视觉状态，切换后由后续播放重新触发。
     ctx.hitFXSystem.clearActiveEffects();
 
     // 会话身份和音频指纹均已稳定后再发布；同步候选需基于新活动源重算。
-    m_sessionRegistry.publishSnapshotUnsafe();
+    impl().m_sessionRegistry.publishSnapshotUnsafe();
     refreshMainAudioSyncPeerStateUnsafe();
-    m_lastMainAudioSyncActiveIndex = -1;
+    impl().m_lastMainAudioSyncActiveIndex = -1;
     XINFO(
         "Switched active session to #{} cameraId={} fingerprint={} "
         "mainSyncFingerprint={}",
@@ -3914,7 +4106,7 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
         sessions[index].mainAudioSyncFingerprint);
 
     const auto sharedViewportSizes =
-        m_renderSyncRegistry.getSharedViewportSizes();
+        impl().m_renderSyncRegistry.getSharedViewportSizes();
     // 辅助视口可能在后台会话期间发生尺寸变化，切为活动项时补发最新快照。
     for ( const auto& [cameraId, size] : sharedViewportSizes ) {
         activeSession->pushCommand(
@@ -3928,9 +4120,10 @@ void EditorEngine::setActiveSessionIndex(int32_t index)
 /// @warning UI 到逻辑的低频入口：短暂持有注册表锁，只向活动会话发布请求。
 void EditorEngine::requestAutoSaveForActiveSession(AutoSaveTrigger trigger)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-    auto&         sessions    = m_sessionRegistry.entriesUnsafe();
-    const int32_t activeIndex = m_sessionRegistry.activeIndex();
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
+    auto&         sessions    = impl().m_sessionRegistry.entriesUnsafe();
+    const int32_t activeIndex = impl().m_sessionRegistry.activeIndex();
     if ( activeIndex < 0 ||
          activeIndex >= static_cast<int32_t>(sessions.size()) ||
          !sessions[static_cast<size_t>(activeIndex)].session ) {
@@ -3947,7 +4140,7 @@ void EditorEngine::requestAutoSaveForActiveSession(AutoSaveTrigger trigger)
 /// @warning 可由逻辑打开路径写入、UI 每帧消费；relaxed 原子只传递一次性索引。
 void EditorEngine::requestSessionFocus(int32_t index)
 {
-    m_pendingFocusSessionIndex.store(index, std::memory_order_relaxed);
+    impl().m_pendingFocusSessionIndex.store(index, std::memory_order_relaxed);
 }
 
 /// @brief 消费一次待聚焦 Session 请求。
@@ -3955,7 +4148,8 @@ void EditorEngine::requestSessionFocus(int32_t index)
 /// @warning UI 每帧可调用；exchange 不等待逻辑线程，也不验证索引仍然存在。
 int32_t EditorEngine::consumePendingFocusSessionIndex()
 {
-    return m_pendingFocusSessionIndex.exchange(-1, std::memory_order_relaxed);
+    return impl().m_pendingFocusSessionIndex.exchange(
+        -1, std::memory_order_relaxed);
 }
 
 /// @brief 获取当前编辑器配置的线程安全值快照。
@@ -3964,8 +4158,8 @@ int32_t EditorEngine::consumePendingFocusSessionIndex()
 /// @warning UI 热路径：只在调用期间持有配置互斥锁；调用者应在本帧复用副本。
 Config::EditorConfig EditorEngine::getEditorConfig() const
 {
-    std::lock_guard<std::mutex> lock(m_editorConfigMutex);
-    return m_editorConfig;
+    std::lock_guard<std::mutex> lock(impl().m_editorConfigMutex);
+    return impl().m_editorConfig;
 }
 
 /// @brief 按修订号刷新逻辑线程或 UI 持有的编辑器配置快照。
@@ -3982,19 +4176,20 @@ bool EditorEngine::refreshEditorConfigSnapshot(
     // 修订号先行读取让未变化的绝大多数逻辑轮次完全避开配置互斥锁。
     // acquire 与发布方的 release 配对，确认变化后才进入受锁保护的值复制。
     const std::uint64_t publishedRevision =
-        m_editorConfigRevision.load(std::memory_order_acquire);
+        impl().m_editorConfigRevision.load(std::memory_order_acquire);
     if ( publishedRevision == targetRevision ) {
         return false;
     }
 
-    std::lock_guard<std::mutex> lock(m_editorConfigMutex);
+    std::lock_guard<std::mutex> lock(impl().m_editorConfigMutex);
     // 加锁后复制最新值，并在逻辑线程局部应用项目覆盖；持久化的全局配置
     // 仍保持用户的软件级默认值，不被当前项目的覆盖反向改写。
-    target = m_editorConfig;
-    if ( m_projectAutoBackupOverride ) {
-        target.settings.autoBackup = *m_projectAutoBackupOverride;
+    target = impl().m_editorConfig;
+    if ( impl().m_projectAutoBackupOverride ) {
+        target.settings.autoBackup = *impl().m_projectAutoBackupOverride;
     }
-    targetRevision = m_editorConfigRevision.load(std::memory_order_relaxed);
+    targetRevision =
+        impl().m_editorConfigRevision.load(std::memory_order_relaxed);
     return true;
 }
 
@@ -4007,8 +4202,8 @@ void EditorEngine::updateCanvasCameraConfig(const Config::VisualConfig& visual)
 {
     // 读写共用配置值锁，禁止为了绕开等待而无同步修改逻辑线程所读的数据。
     // 此锁的持有者仅做配置值复制，不跨谱面更新、渲染或设备同步。
-    std::lock_guard<std::mutex> lock(m_editorConfigMutex);
-    auto&                       current = m_editorConfig.visual;
+    std::lock_guard<std::mutex> lock(impl().m_editorConfigMutex);
+    auto&                       current = impl().m_editorConfig.visual;
     // 相机姿态、长度和两种补偿必须作为同一代发布，避免中间姿态混用。
     // 稳定帧不增加修订，逻辑循环可继续复用已经取得的快照。
     if ( current.canvasCameraPoseEnabled == visual.canvasCameraPoseEnabled &&
@@ -4038,7 +4233,7 @@ void EditorEngine::updateCanvasCameraConfig(const Config::VisualConfig& visual)
     current.debugCanvasCameraDistance   = visual.debugCanvasCameraDistance;
     // 与 refreshEditorConfigSnapshot 的 acquire 配对；逻辑下一轮即可消费。
     // 发布不等待任何会话确认，也不靠固定延迟掩盖相机参数不同步。
-    m_editorConfigRevision.fetch_add(1, std::memory_order_release);
+    impl().m_editorConfigRevision.fetch_add(1, std::memory_order_release);
 }
 
 /// @brief 合并软件级配置、项目工具栏状态并广播给全部会话。
@@ -4049,7 +4244,8 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
 {
     // 外层递归锁串行化完整发布事务，防止两个设置来源交错覆盖 AppConfig、
     // 引擎缓存和会话命令队列中的不同版本。
-    std::lock_guard<std::recursive_mutex> updateLock(m_editorConfigUpdateMutex);
+    std::lock_guard<std::recursive_mutex> updateLock(
+        impl().m_editorConfigUpdateMutex);
 
     // 输入可能源于项目工作区恢复，只包含项目级工具栏偏好；近期项目、调色板
     // 等软件级状态必须从权威 AppConfig 回填，不能被旧工作区快照覆盖。
@@ -4075,20 +4271,20 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
     // 会话只清理自己的画笔；引擎级缓存也必须清空，防止新画布恢复旧选择。
     // 已有采样的数据、音量和播放计划保持在谱面域中，不受放置偏好清理影响。
     if ( !updatedConfig.settings.professionalMode ) {
-        m_brushAudioResourceId.clear();
-        m_brushAudioTrackType = AudioTrackType::Effect;
+        impl().m_brushAudioResourceId.clear();
+        impl().m_brushAudioTrackType = AudioTrackType::Effect;
         // UI 立即读取基础工具，旧手势由各会话的配置命令在更新边界清理。
         // relaxed 只公布活动工具枚举，不承诺会话已消费配置命令。
         // 清洗使用本次待提交配置，不能读取 AppConfig 尚未发布的新模式。
         // 标准工具原样保留，只有不再可用的配色工具回退 Move。
-        m_currentTool.store(
+        impl().m_currentTool.store(
             resolveEditToolForMode(
-                m_currentTool.load(std::memory_order_relaxed), false),
+                impl().m_currentTool.load(std::memory_order_relaxed), false),
             std::memory_order_relaxed);
     }
     // 限频偏好单独发布给逻辑循环的快速路径；完整配置仍通过修订快照传播。
-    m_frameLimitPreference.store(updatedConfig.settings.frameLimit,
-                                 std::memory_order_relaxed);
+    impl().m_frameLimitPreference.store(updatedConfig.settings.frameLimit,
+                                        std::memory_order_relaxed);
     if ( auto* project = ProjectController::instance().currentProject() ) {
         // 当前项目立即记录本次工具栏状态，后续项目切换可恢复独立偏好。
         // 这里只修改内存设置，实际项目文件保存仍由保存或关闭入口负责。
@@ -4100,7 +4296,7 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
             // 新保存的工作区记录实际活动工具，不能带回已经隐藏的配色策略。
             project->m_settings.m_workspace.m_activeEditTool =
                 editToolToWorkspaceName(
-                    m_currentTool.load(std::memory_order_relaxed));
+                    impl().m_currentTool.load(std::memory_order_relaxed));
         }
         captureToolbarWorkspaceState(
             project->m_settings.m_workspace,
@@ -4110,15 +4306,16 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
 
     Config::EditorConfig sessionConfig = updatedConfig;
     {
-        std::lock_guard<std::mutex> lock(m_editorConfigMutex);
+        std::lock_guard<std::mutex> lock(impl().m_editorConfigMutex);
         // 引擎缓存保存未应用项目覆盖的全局配置，供设置 UI 回读一致值。
-        m_editorConfig = updatedConfig;
-        if ( m_projectAutoBackupOverride ) {
+        impl().m_editorConfig = updatedConfig;
+        if ( impl().m_projectAutoBackupOverride ) {
             // 会话实际执行配置可接受项目级备份覆盖，但不能污染全局默认值。
-            sessionConfig.settings.autoBackup = *m_projectAutoBackupOverride;
+            sessionConfig.settings.autoBackup =
+                *impl().m_projectAutoBackupOverride;
         }
         // 先完成值写入再 release 增加修订，使逻辑线程的 acquire 可见完整副本。
-        m_editorConfigRevision.fetch_add(1, std::memory_order_release);
+        impl().m_editorConfigRevision.fetch_add(1, std::memory_order_release);
     }
 
     // AppConfig 接收合并后的软件级值；音效控制紧随其后更新实时播放行为。
@@ -4128,9 +4325,10 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
     // 每个会话通过自己的命令队列在 update 边界采用新配置，避免此线程直接
     // 改写其派生系统；广播使用已应用项目备份覆盖的 sessionConfig。
     {
-        std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+        std::lock_guard<std::recursive_mutex> lock(
+            impl().m_sessionRegistry.mutex());
         /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-        auto& sessions = m_sessionRegistry.entriesUnsafe();
+        auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
         for ( auto& entry : sessions ) {
             if ( entry.session ) {
                 entry.session->pushCommand(
@@ -4159,10 +4357,10 @@ void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
 void EditorEngine::setProjectAutoBackupOverride(
     std::optional<Config::AutoBackupConfig> config)
 {
-    std::lock_guard<std::mutex> lock(m_editorConfigMutex);
+    std::lock_guard<std::mutex> lock(impl().m_editorConfigMutex);
     // 覆盖不直接改写 m_editorConfig，refresh 快照时才组合到逻辑线程视图。
-    m_projectAutoBackupOverride = std::move(config);
-    m_editorConfigRevision.fetch_add(1, std::memory_order_release);
+    impl().m_projectAutoBackupOverride = std::move(config);
+    impl().m_editorConfigRevision.fetch_add(1, std::memory_order_release);
 }
 
 /// @brief 捕获当前画布工作区并保存项目配置。
@@ -4173,7 +4371,8 @@ void EditorEngine::setProjectAutoBackupOverride(
 /// 返回值当前不向上传递，要求需要失败处理的关闭流程直接调用控制器入口。
 void EditorEngine::saveProject()
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
     // 工作区必须先于项目序列化捕获，确保打开标签、活动时间和工具栏同批落盘。
     captureProjectWorkspaceState();
     ProjectController::instance().saveProject();
@@ -4186,9 +4385,10 @@ void EditorEngine::saveProject()
 /// Session 注册表锁并可能同步写入多个谱面。
 bool EditorEngine::flushPendingMetadataAutoSaves()
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
     /// @brief 需要检查尾随元数据保存的当前会话列表。
-    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
     bool  success  = true;
     for ( auto& entry : sessions ) {
         // 逐会话继续尝试，单项失败不会阻止其他谱面的待保存元数据落盘。
@@ -4208,8 +4408,9 @@ bool EditorEngine::flushPendingMetadataAutoSaves()
 /// 注册表锁并同步写入多个谱面。
 bool EditorEngine::saveDirtyBeatmapsForPackaging()
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
-    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
+    auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
     bool  success  = true;
     for ( auto& entry : sessions ) {
         // 打包必须看到所有内存编辑，而不只是元数据尾随保存；仍采用尽力保存，
@@ -4242,8 +4443,8 @@ void EditorEngine::loop()
     auto                    nextDeadline = lastTime;
     double                  lastTargetDt = 0.0;
     UnlimitedIdleUpdateGate unlimitedIdleUpdateGate;
-    m_lastUpsTime      = lastTime;
-    m_logicUpdateCount = 0;
+    impl().m_lastUpsTime      = lastTime;
+    impl().m_logicUpdateCount = 0;
     m_logicUps.store(0.0f, std::memory_order_relaxed);
     /// @brief 项目控制器单例引用，用于低频消费项目切换和目录监听状态。
     auto& projectController = ProjectController::instance();
@@ -4254,11 +4455,11 @@ void EditorEngine::loop()
     (void)refreshEditorConfigSnapshot(editorConfigSnapshot,
                                       editorConfigSnapshotRevision);
 
-    while ( m_running.load(std::memory_order_acquire) ) {
+    while ( impl().m_running.load(std::memory_order_acquire) ) {
         // 限频偏好允许 UI 即时修改；设备刷新率参与 VSync 倍率到 UPS 的换算。
         // 本轮读取值固定使用到下个循环，避免同轮截止时间采用两套目标。
         Config::FrameLimitPreference frameLimit =
-            m_frameLimitPreference.load(std::memory_order_relaxed);
+            impl().m_frameLimitPreference.load(std::memory_order_relaxed);
         const int refreshRate =
             Config::AppConfig::instance().getDeviceRefreshRate();
         const double targetDt =
@@ -4306,15 +4507,16 @@ void EditorEngine::loop()
         unlimitedIdleUpdateGate.accumulateElapsedSeconds(dt);
 
         // 半秒窗口平衡统计响应速度与抖动，结果仅供快照预算回压和性能展示。
-        m_logicUpdateCount++;
-        std::chrono::duration<double> upsElapsed = currentTime - m_lastUpsTime;
+        impl().m_logicUpdateCount++;
+        std::chrono::duration<double> upsElapsed =
+            currentTime - impl().m_lastUpsTime;
         if ( upsElapsed.count() >= 0.5 ) {
             // relaxed 原子只传播近似统计值，不作为任何会话状态的发布屏障。
-            m_logicUps.store(
-                static_cast<float>(m_logicUpdateCount / upsElapsed.count()),
-                std::memory_order_relaxed);
-            m_logicUpdateCount = 0;
-            m_lastUpsTime      = currentTime;
+            m_logicUps.store(static_cast<float>(impl().m_logicUpdateCount /
+                                                upsElapsed.count()),
+                             std::memory_order_relaxed);
+            impl().m_logicUpdateCount = 0;
+            impl().m_lastUpsTime      = currentTime;
         }
 
         // 项目切换在会话轮询锁外执行，避免文件 IO 与 EventBus
@@ -4358,7 +4560,7 @@ void EditorEngine::loop()
         /// 读取，以保证 UI 替换快照后本轮会话生命周期仍然有效；具体
         /// SessionContext 更新仍须使用注册表锁串行化。
         const auto publishedSessionUpdateSnapshot =
-            m_sessionRegistry.publishedSnapshot();
+            impl().m_sessionRegistry.publishedSnapshot();
         const auto& sessionUpdateSnapshot =
             publishedSessionUpdateSnapshot->sessions;
 
@@ -4382,7 +4584,7 @@ void EditorEngine::loop()
                 // dt。
                 const double sessionDt =
                     unlimitedIdleUpdateGate.consumeElapsedSeconds();
-                int32_t activeIndex     = m_sessionRegistry.activeIndex();
+                int32_t activeIndex = impl().m_sessionRegistry.activeIndex();
                 int32_t maxSessionIndex = -1;
                 // 快照索引可能因关闭留下空洞，后台时间表按最大稳定索引扩展，
                 // 不能假设向量位置与注册表索引连续相等。
@@ -4390,11 +4592,11 @@ void EditorEngine::loop()
                     maxSessionIndex = std::max(maxSessionIndex, entry.index);
                 }
                 if ( maxSessionIndex >= 0 &&
-                     m_backgroundSessionUpdateTimes.size() <=
+                     impl().m_backgroundSessionUpdateTimes.size() <=
                          static_cast<size_t>(maxSessionIndex) ) {
                     // 新槽默认 time_point
                     // 表示从未更新，首次后台轮询会立即执行。
-                    m_backgroundSessionUpdateTimes.resize(
+                    impl().m_backgroundSessionUpdateTimes.resize(
                         static_cast<size_t>(maxSessionIndex) + 1);
                 }
 
@@ -4410,7 +4612,7 @@ void EditorEngine::loop()
                     // shared_ptr 由发布快照保活，注册表锁只保护 SessionContext
                     // 与 UI 低频读取的串行访问，不用于对象生命周期管理。
                     std::lock_guard<std::recursive_mutex> sessionLock(
-                        m_sessionRegistry.mutex());
+                        impl().m_sessionRegistry.mutex());
                     const bool isActiveSession = entry.index == activeIndex;
                     // 活动会话即使窗口暂时隐藏也必须推进 transport 和命令队列。
                     const bool isVisibleSession =
@@ -4444,7 +4646,7 @@ void EditorEngine::loop()
                             // 元数据尾随保存或自动备份需要低频轮询，按设备刷新率
                             // 限制维护频率，既保证到期又避免隐藏会话持续满速运行。
                             const auto& lastBackgroundUpdate =
-                                m_backgroundSessionUpdateTimes
+                                impl().m_backgroundSessionUpdateTimes
                                     [static_cast<size_t>(entry.index)];
                             shouldUpdateSession =
                                 lastBackgroundUpdate ==
@@ -4463,16 +4665,16 @@ void EditorEngine::loop()
                             sessionDt, editorConfigSnapshot, isActiveSession);
                         if ( isActiveSession ) {
                             // 命令可能在本轮改变播放状态；发布只含活动源的最终值。
-                            m_activePlaybackPlaying.store(
+                            impl().m_activePlaybackPlaying.store(
                                 entry.session->getContext().isPlaying,
                                 std::memory_order_relaxed);
-                            m_activeHasBeatmap.store(
+                            impl().m_activeHasBeatmap.store(
                                 entry.session->getContext().currentBeatmap !=
                                     nullptr,
                                 std::memory_order_relaxed);
                             const auto& activeContext =
                                 entry.session->getContext();
-                            m_activeHasChartObjectSelection.store(
+                            impl().m_activeHasChartObjectSelection.store(
                                 !activeContext.selectedNoteEntities.empty() ||
                                     !activeContext.selectedSampleEntities
                                          .empty(),
@@ -4489,20 +4691,21 @@ void EditorEngine::loop()
                         if ( entry.index != activeIndex ) {
                             // 只有实际执行 update
                             // 才刷新节流时间，跳过不会推迟下次机会。
-                            m_backgroundSessionUpdateTimes[static_cast<size_t>(
-                                entry.index)] = currentTime;
+                            impl().m_backgroundSessionUpdateTimes
+                                [static_cast<size_t>(entry.index)] =
+                                currentTime;
                         }
                     }
                 }
-                if ( m_pendingWorkspaceActiveIndex >= 0 ) {
+                if ( impl().m_pendingWorkspaceActiveIndex >= 0 ) {
                     // 工作区恢复先让各新会话消费
                     // Load/Seek，再切活动项并装载音频，
                     // 防止目标会话仍处于默认时间时接管全局 transport。
                     int32_t requestedActiveIndex =
-                        m_pendingWorkspaceActiveIndex;
-                    m_pendingWorkspaceActiveIndex = -1;
+                        impl().m_pendingWorkspaceActiveIndex;
+                    impl().m_pendingWorkspaceActiveIndex = -1;
                     setActiveSessionIndex(requestedActiveIndex);
-                    activeIndex = m_sessionRegistry.activeIndex();
+                    activeIndex = impl().m_sessionRegistry.activeIndex();
                 }
 
                 if ( commandSyncSourceIndex >= 0 ) {
@@ -4518,7 +4721,7 @@ void EditorEngine::loop()
                     // 之后，得到本轮最终状态； 不在第一段循环内同步，避免
                     // follower 先后顺序影响结果。
                     std::lock_guard<std::recursive_mutex> sessionLock(
-                        m_sessionRegistry.mutex());
+                        impl().m_sessionRegistry.mutex());
                     for ( const auto& entry : sessionUpdateSnapshot ) {
                         if ( !entry.session ) {
                             continue;
@@ -4534,20 +4737,22 @@ void EditorEngine::loop()
                         const auto& activeCtx = entry.session->getContext();
                         shouldSyncMainAudioCanvases =
                             activeCtx.isPlaying ||
-                            activeIndex != m_lastMainAudioSyncActiveIndex ||
+                            activeIndex !=
+                                impl().m_lastMainAudioSyncActiveIndex ||
                             std::abs(activeCtx.currentTime -
-                                     m_lastMainAudioSyncTime) >
+                                     impl().m_lastMainAudioSyncTime) >
                                 MAIN_AUDIO_SYNC_TIME_EPSILON;
                         if ( shouldSyncMainAudioCanvases ) {
                             // 记录最近已传播的活动身份和时间，暂停且未移动时跳过扫描。
-                            m_lastMainAudioSyncActiveIndex = activeIndex;
-                            m_lastMainAudioSyncTime = activeCtx.currentTime;
+                            impl().m_lastMainAudioSyncActiveIndex = activeIndex;
+                            impl().m_lastMainAudioSyncTime =
+                                activeCtx.currentTime;
                         }
                     }
                     cursorSmokeLifeOverride =
                         resolveActiveCursorSmokeLifeOverride(
                             sessionUpdateSnapshot,
-                            m_sessionRegistry.activeIndex());
+                            impl().m_sessionRegistry.activeIndex());
                 }
                 if ( shouldSyncMainAudioCanvases ) {
                     // 在读取锁作用域结束后调用同步入口，由其自行取得所需锁。
@@ -4612,7 +4817,8 @@ void EditorEngine::loop()
 /// @post 成功时项目资源表、音频画笔类型和会话描述符脏状态保持一致。
 void EditorEngine::handleUpdateAudioResource(const CmdUpdateAudioResource& cmd)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
 
     auto* project = ProjectController::instance().currentProject();
     if ( !project ) {
@@ -4626,7 +4832,7 @@ void EditorEngine::handleUpdateAudioResource(const CmdUpdateAudioResource& cmd)
         return;
     }
 
-    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
     // 控制器的引用门禁同时使用磁盘谱面扫描和这里提供的未保存内存引用。
     const auto openBeatmapReferences =
         collectOpenSessionAudioReferencesUnsafe(*project, sessions);
@@ -4661,7 +4867,7 @@ void EditorEngine::handleUpdateAudioResource(const CmdUpdateAudioResource& cmd)
             Config::pathToUtf8(result.m_effectRegistration->m_absolutePath),
             result.m_effectRegistration->m_resource.m_config);
     }
-    if ( m_brushAudioResourceId == cmd.id ) {
+    if ( impl().m_brushAudioResourceId == cmd.id ) {
         // 当前画笔只缓存 ID、类型和音量；资源类型变化后必须刷新类型语义。
         const auto resourceIterator =
             std::find_if(project->m_audioResources.begin(),
@@ -4670,15 +4876,15 @@ void EditorEngine::handleUpdateAudioResource(const CmdUpdateAudioResource& cmd)
                              return resource.m_id == cmd.id;
                          });
         if ( resourceIterator != project->m_audioResources.end() ) {
-            m_brushAudioTrackType = resourceIterator->m_type;
+            impl().m_brushAudioTrackType = resourceIterator->m_type;
             // 所有现有会话立即接收相同画笔状态；未来会话从引擎缓存恢复。
             for ( auto& entry : sessions ) {
                 if ( entry.session ) {
                     entry.session->pushCommand(
                         LogicCommand(CmdSetBrushAudioResource{
-                            m_brushAudioResourceId,
-                            m_brushAudioTrackType,
-                            m_brushAudioVolume,
+                            impl().m_brushAudioResourceId,
+                            impl().m_brushAudioTrackType,
+                            impl().m_brushAudioVolume,
                         }));
                 }
             }
@@ -4731,7 +4937,8 @@ void EditorEngine::handleRenameAudioResource(const CmdRenameAudioResource& cmd,
         };
     // 文件、项目模型、打开会话和 AudioManager 必须作为一个串行事务更新；
     // 注册表递归锁也允许内部 saveProject 复用工作区捕获入口。
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
     if ( ProjectController::instance().isCurrentProjectTemporary() ) {
         // 同步设置入口也必须遵循临时谱包只读规则，不能绕过命令路由门禁。
         publishAudioResourceMutationResult(
@@ -4742,7 +4949,7 @@ void EditorEngine::handleRenameAudioResource(const CmdRenameAudioResource& cmd,
             "临时项目为只读，请先保存到正式目录");
         return;
     }
-    for ( const auto& entry : m_sessionRegistry.entriesUnsafe() ) {
+    for ( const auto& entry : impl().m_sessionRegistry.entriesUnsafe() ) {
         // 保存任务写的是独立谱面副本，注册表锁无法改变已经交给它的旧引用。
         if ( entry.session && entry.session->hasInFlightBeatmapSave() ) {
             // 后台快照仍含旧文件名，等待用户下一次确认，而不是阻塞渲染线程。
@@ -4987,7 +5194,7 @@ void EditorEngine::handleRenameAudioResource(const CmdRenameAudioResource& cmd,
         }
     }
 
-    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
     for ( auto& entry : sessions ) {
         // 磁盘谱面已由服务事务更新，打开会话还持有独立内存域和 ECS 副本，
         // 必须原地迁移以免下一次保存把旧 ID 写回文件。
@@ -5054,15 +5261,15 @@ void EditorEngine::handleRenameAudioResource(const CmdRenameAudioResource& cmd,
         audio.registerSoundEffect(
             newResourceId, Config::pathToUtf8(newPath), renamedConfig);
     }
-    if ( m_brushAudioResourceId == cmd.id ) {
+    if ( impl().m_brushAudioResourceId == cmd.id ) {
         // 全局画笔选择和每会话缓存都要切换到新 ID，保持下一笔放置可解析。
-        m_brushAudioResourceId = newResourceId;
+        impl().m_brushAudioResourceId = newResourceId;
         for ( auto& entry : sessions ) {
             if ( !entry.session ) continue;
             entry.session->pushCommand(LogicCommand(CmdSetBrushAudioResource{
                 newResourceId,
                 renamedType,
-                m_brushAudioVolume,
+                impl().m_brushAudioVolume,
             }));
         }
     }
@@ -5086,7 +5293,8 @@ void EditorEngine::handleRenameAudioResource(const CmdRenameAudioResource& cmd,
 void EditorEngine::handleUpdateAudioResourceConfig(
     const CmdUpdateAudioResourceConfig& cmd)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
 
     auto* project = ProjectController::instance().currentProject();
     if ( !project ) {
@@ -5131,7 +5339,8 @@ void EditorEngine::handleUpdateAudioResourceConfig(
 /// 扫描磁盘谱面引用、删除文件并保存项目。
 void EditorEngine::handleRemoveAudioResource(const CmdRemoveAudioResource& cmd)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
 
     auto* project = ProjectController::instance().currentProject();
     if ( !project ) {
@@ -5144,7 +5353,7 @@ void EditorEngine::handleRemoveAudioResource(const CmdRemoveAudioResource& cmd)
         return;
     }
 
-    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
     // 磁盘扫描前先同步打开会话的 ECS，删除门禁必须覆盖尚未保存的新引用。
     const auto openBeatmapReferences =
         collectOpenSessionAudioReferencesUnsafe(*project, sessions);
@@ -5173,11 +5382,11 @@ void EditorEngine::handleRemoveAudioResource(const CmdRemoveAudioResource& cmd)
         Audio::AudioManager::instance().unloadSoundEffect(
             *result.m_effectResourceIdToUnload);
     }
-    if ( m_brushAudioResourceId == cmd.id ) {
+    if ( impl().m_brushAudioResourceId == cmd.id ) {
         // 删除当前画笔资源后恢复无选择默认状态，并同步清理工作区持久化选择。
-        m_brushAudioResourceId.clear();
-        m_brushAudioTrackType = AudioTrackType::Effect;
-        m_brushAudioVolume    = 1.0F;
+        impl().m_brushAudioResourceId.clear();
+        impl().m_brushAudioTrackType = AudioTrackType::Effect;
+        impl().m_brushAudioVolume    = 1.0F;
         project->m_settings.m_workspace.m_projectAudioToolSelectedResourceId
             .clear();
         for ( auto& entry : sessions ) {
@@ -5210,7 +5419,8 @@ void EditorEngine::handleRemoveAudioResource(const CmdRemoveAudioResource& cmd)
 /// @post 成功变化后所有命中删除路径的打开会话均已关闭。
 void EditorEngine::handleRemoveBeatmap(const CmdRemoveBeatmap& cmd)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
 
     /// @brief 当前项目指针，用于把待删除谱面路径规范成 Session 路径键。
     const auto* currentProject = ProjectController::instance().currentProject();
@@ -5230,7 +5440,7 @@ void EditorEngine::handleRemoveBeatmap(const CmdRemoveBeatmap& cmd)
     if ( !removedBeatmapKey.empty() ) {
         // 路径键优先使用条目缓存；旧会话缺少缓存时才从内存谱面补算兼容值。
         /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-        const auto& sessions = m_sessionRegistry.entriesUnsafe();
+        const auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
         for ( int32_t i = 0; i < static_cast<int32_t>(sessions.size()); ++i ) {
             const auto& entry = sessions[static_cast<size_t>(i)];
             if ( entry.isLogoPlaceholder || !entry.session ) {
@@ -5283,11 +5493,12 @@ void EditorEngine::handleSaveTemporaryProject(
     {
         // 事务内保持会话和当前项目身份稳定，控制器完成切换前 UI 不会看到
         // 一半仍指向临时缓存、一半已经指向目标目录的路径。
-        std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+        std::lock_guard<std::recursive_mutex> lock(
+            impl().m_sessionRegistry.mutex());
 
         if ( const auto* currentProject =
                  ProjectController::instance().currentProject() ) {
-            auto& sessions = m_sessionRegistry.entriesUnsafe();
+            auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
             for ( auto& entry : sessions ) {
                 if ( entry.isLogoPlaceholder || !entry.session ) {
                     continue;
@@ -5312,7 +5523,7 @@ void EditorEngine::handleSaveTemporaryProject(
             // 已切到正式目录，需要按新根重建会话键。
             if ( const auto* currentProject =
                      ProjectController::instance().currentProject() ) {
-                auto& sessions = m_sessionRegistry.entriesUnsafe();
+                auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
                 for ( auto& entry : sessions ) {
                     if ( entry.isLogoPlaceholder || !entry.session ) {
                         // Logo 不关联任何谱面文件，确保不会遗留临时缓存路径键。
@@ -5362,7 +5573,8 @@ void EditorEngine::handleSaveTemporaryProject(
 void EditorEngine::updateBeatmapFilePathInProject(
     const std::filesystem::path& oldPath, const std::filesystem::path& newPath)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
 
     /// @brief 当前项目指针，仅用于更新已打开 Session 的谱面路径键。
     const auto* currentProject = ProjectController::instance().currentProject();
@@ -5382,7 +5594,7 @@ void EditorEngine::updateBeatmapFilePathInProject(
     }
 
     /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
     if ( !oldBeatmapKey.empty() && !newBeatmapKey.empty() ) {
         // 仅精确命中旧键的打开会话随文件移动，其他同名谱面不受影响。
         for ( auto& entry : sessions ) {
@@ -5408,7 +5620,8 @@ void EditorEngine::updateBeatmapFilePathInProject(
 std::string EditorEngine::validateAudioResourceMove(
     const std::filesystem::path& oldPath, const std::filesystem::path& newPath)
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
     const auto* project = ProjectController::instance().currentProject();
     // 未打开项目时文件移动不涉及项目音频引用，由普通文件浏览操作自行处理。
     if ( !project ) return {};
@@ -5435,12 +5648,13 @@ std::size_t EditorEngine::remapAudioResourcePathsAfterMove(
 {
     // 输出参数始终先清空，成功返回不能携带调用方上一次操作的陈旧错误。
     if ( errorMessage ) errorMessage->clear();
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
     auto* project = ProjectController::instance().currentProject();
     // 无项目意味着没有受管资源路径；外部文件移动不产生同步数量。
     if ( !project ) return 0U;
 
-    auto& sessions = m_sessionRegistry.entriesUnsafe();
+    auto& sessions = impl().m_sessionRegistry.entriesUnsafe();
     // 资源服务扫描磁盘前把所有打开会话同步进 BeatMap，纳入未保存引用。
     (void)collectOpenSessionAudioReferencesUnsafe(*project, sessions);
 
@@ -5571,7 +5785,8 @@ std::size_t EditorEngine::remapAudioResourcePathsAfterMove(
 /// @post 扫描成功时发布 ProjectDirectoryRefreshedEvent 表明资源是否实际变化。
 void EditorEngine::scanProjectDirectory()
 {
-    std::lock_guard<std::recursive_mutex> lock(m_sessionRegistry.mutex());
+    std::lock_guard<std::recursive_mutex> lock(
+        impl().m_sessionRegistry.mutex());
     /// @brief 当前项目指针，仅用于解析音效资源绝对路径。
     const auto* currentProject = ProjectController::instance().currentProject();
     // 项目关闭后的迟到监视通知无须处理，下一项目会建立独立监视状态。

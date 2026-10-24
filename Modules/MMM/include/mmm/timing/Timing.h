@@ -1,6 +1,7 @@
 #pragma once
 
-#include "mmm/Metadata.h"
+#include "mmm/metadata/TimingMetadata.h"
+#include "mmm/timing/TimingEffect.h"
 #include "mmm/timing/TimingInterpolation.h"
 #include <optional>
 #include <string>
@@ -8,19 +9,6 @@
 
 namespace MMM
 {
-enum class TimingEffect {
-    /// @brief bpm效果
-    BPM,
-    /// @brief scroll效果
-    SCROLL,
-    /// @brief Malody jump瞬移效果
-    JUMP,
-    /// @brief Malody hs音符速度效果
-    HS,
-    /// @brief 冻结谱面与全部播放采样；参数为持续秒数。
-    STOP,
-};
-
 /// @brief 将时间线效果类型转换为持久化字符串
 std::string timingEffectToString(TimingEffect effect);
 
@@ -33,6 +21,8 @@ double osuInheritedBeatLengthToScrollMultiplier(double beatLength);
 /// @brief 将内部 SV 倍率转换为 osu! 继承时间点的负 beatLength。
 double scrollMultiplierToOsuInheritedBeatLength(double scrollMultiplier);
 
+/// @brief 保存单个时间线事件及其来源格式信息。
+/// @details 插值描述按值随事件复制，编辑历史与导出过程保持独立副本。
 class Timing
 {
 public:

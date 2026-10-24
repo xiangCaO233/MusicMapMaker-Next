@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common/render/AnnotationRenderData.h"
+#include "common/render/RenderSnapshot.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "logic/session/CanvasCamera.h"
 

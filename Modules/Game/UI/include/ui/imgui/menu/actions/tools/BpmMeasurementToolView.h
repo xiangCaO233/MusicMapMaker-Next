@@ -1,8 +1,9 @@
 #pragma once
 
+#include <imgui.h>
+
 #include "audio/AudioMarkerService.h"
 #include "config/visual/SpectrumConfig.h"
-#include "graphic/imguivk/VKTexture.h"
 #include "mmm/project/AudioResource.h"
 #include "mmm/timing/Timing.h"
 #include "ui/ITextureLoader.h"
@@ -27,6 +28,11 @@ namespace ice
 {
 class AudioTrack;
 }  // namespace ice
+
+namespace MMM::Graphic
+{
+class VKTexture;
+}  // namespace MMM::Graphic
 
 namespace MMM::UI
 {

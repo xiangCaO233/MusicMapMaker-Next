@@ -8,6 +8,9 @@
 /// 复制粘贴支持按秒保持间隔和按连续 beat 保持节奏两种语义，BPM 时间线
 /// 仅从快照构建。框选、拖动和擦除以按下/更新/释放事务推进，不使用阻塞等待。
 #include "canvas/TimelineCanvas.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
+#include "config/VisualConfig.h"
 
 #include "canvas/MarqueeAutoScroll.h"
 #include "canvas/TimelineTimingTooltip.h"
@@ -19,6 +22,8 @@
 #include "imgui.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
+#include "logic/ecs/components/TimelineComponent.h"
+#include "logic/session/ClipboardTypes.h"
 #include "mmm/timing/BpmNormalization.h"
 #include "ui/imgui/ClipboardBridge.h"
 #include "ui/imgui/ShortcutUtils.h"

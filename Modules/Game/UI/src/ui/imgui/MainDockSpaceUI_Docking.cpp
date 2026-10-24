@@ -1,4 +1,5 @@
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/skin/SkinConfig.h"
 #include "imgui.h"
 #include "imgui_internal.h"

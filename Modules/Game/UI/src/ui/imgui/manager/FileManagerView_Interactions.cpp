@@ -1,4 +1,7 @@
+// 文件交互读取完整项目历史，数据定义归属文件面板实现。
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
@@ -10,6 +13,8 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/manager/FileManagerView.h"
+// 子视图在此读取单帧布局区域，不拥有父窗口持久上下文。
+#include "ui/layout/LayoutContext.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"

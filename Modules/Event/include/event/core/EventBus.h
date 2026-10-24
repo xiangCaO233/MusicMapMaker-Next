@@ -1,6 +1,7 @@
 #pragma once
 
 #include "event/EventDef.h"
+#include "event/core/SubscriptionID.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -28,9 +29,6 @@ template<typename T> inline uint64_t getStaticTypeId()
 }
 }  // namespace detail
 
-/// @brief 订阅令牌，用于精确取消一条订阅记录。
-/// @note 零值保留为无效令牌，便于 RAII 包装器表达空状态。
-using SubscriptionID = uint64_t;
 
 /// @brief 提供线程安全的类型事件订阅、取消和同步发布。
 /// @note 回调在 publish 调用线程执行，事件对象仅在发布期间有效。

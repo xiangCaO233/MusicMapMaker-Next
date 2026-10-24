@@ -1,5 +1,6 @@
 #include "ui/imgui/manager/FileManagerView.h"
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -9,6 +10,7 @@
 #include "event/project/ProjectEvents.h"
 #include "imgui.h"
 #include "ui/UIManager.h"
+#include "ui/layout/LayoutContext.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>

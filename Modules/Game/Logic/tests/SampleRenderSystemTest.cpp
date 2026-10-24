@@ -1,4 +1,6 @@
 #include "logic/ecs/system/SampleRenderSystem.h"
+// 测试按稳定纹理编号检查采样图元，不依赖快照头传出枚举。
+#include "common/render/GlyphTextureId.h"
 
 #include "common/AsciiFontData.h"
 #include "config/EditorConfig.h"

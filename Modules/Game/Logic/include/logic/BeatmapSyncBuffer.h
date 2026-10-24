@@ -1,7 +1,16 @@
 #pragma once
 
-#include "common/render/RenderSnapshot.h"
+#include "common/render/AnnotationRenderData.h"
+#include "common/render/GlyphTextureId.h"
+#include "common/render/HoverRenderData.h"
 #include "common/render/RenderSnapshotBuffer.h"
+#include "common/render/TimelineInteractiveElement.h"
+
+namespace MMM::Common::Render
+{
+/// @brief 组件边界定义由完整快照头提供，兼容入口仅保留类型名。
+struct CanvasComponentInstanceSnapshot;
+}  // namespace MMM::Common::Render
 
 namespace MMM::Logic
 {
@@ -21,6 +30,7 @@ using Common::Render::HoverInspectInfo;
 using Common::Render::HoverInspectKind;
 using Common::Render::HoverPart;
 using Common::Render::HoverSubdivisionPreview;
+/// @note 访问快照字段的实现必须显式包含 RenderSnapshot.h。
 /// @brief 单次发布的画布渲染数据，具体存储契约见公共快照定义。
 using Common::Render::RenderSnapshot;
 /// @brief 纹理索引及时间线拾取元素，避免逻辑层依赖图形后端句柄。
@@ -30,6 +40,7 @@ using Common::Render::TimelineInteractiveElement;
 using Common::Render::asciiGlyphTextureId;
 using Common::Render::scaleInteractionHitbox;
 using Common::Render::unicodeGlyphTextureId;
+/// @note 别名不创建新缓冲对象，继续复用同一快照池和发布协议。
 /// @brief 兼容旧缓冲类型名，所有读写与发布操作由公共实现承担。
 using BeatmapSyncBuffer = Common::Render::RenderSnapshotBuffer;
 

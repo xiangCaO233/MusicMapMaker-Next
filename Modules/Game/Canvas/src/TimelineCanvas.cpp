@@ -13,14 +13,20 @@
 ///
 /// Vulkan 录制仅消费预生成顶点、索引和命令列表，按纹理与裁剪状态
 /// 避免重复绑定；皮肤资源和 shader 文件只在低频重载路径访问。
+// 时间线读取和修改客户端显示配置，完整定义只向此消费端提供。
 #include "canvas/TimelineCanvas.h"
 #include "audio/AudioManager.h"
 #include "canvas/CanvasModalInput.h"
 #include "canvas/TimelineTableWindowState.h"
 #include "canvas/TimelineTimingTooltip.h"
+#include "common/LogicCommands.h"
 #include "common/render/RenderSnapshotBuffer.h"
+#include "common/render/TextureID.h"
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
+#include "config/VisualConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
@@ -34,6 +40,7 @@
 #include "logic/ecs/system/render/Batcher.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
+#include "ui/layout/LayoutContext.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
@@ -525,11 +532,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         if ( !isCanvasInputBlockedByModal() ) ImGui::SetNextWindowFocus();
         m_shouldFocusNextFrame = false;
     }
-    UI::LayoutContext lctx(m_layoutCtx,
-                           windowName,
-                           true,
-                           ImGuiWindowFlags_NoScrollbar,
-                           &windowOpen);
+    UI::LayoutContext lctx(
+        *this, windowName, true, ImGuiWindowFlags_NoScrollbar, &windowOpen);
     if ( auto* window = ImGui::GetCurrentWindow();
          window && (!window->DockIsActive || window->DockTabIsVisible) ) {
         // 时间线介绍覆盖完整窗格，包含时间滑块、画布和 Timing 入口。

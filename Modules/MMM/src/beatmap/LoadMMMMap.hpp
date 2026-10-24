@@ -4,6 +4,7 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/timing/Timing.h"
+#include "mmm/timing/TimingInterpolationAlgorithms.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>

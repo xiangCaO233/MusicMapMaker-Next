@@ -1,6 +1,8 @@
 #include "config/LayoutPresets.h"
 #include "ConfigSnapshotWriter.h"
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
+#include "config/VisualConfig.h"
 #include "log/colorful-log.h"
 #include <algorithm>
 #include <array>

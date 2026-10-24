@@ -13,14 +13,19 @@
 /// 从而保持本地反馈即时且不以固定延迟阻塞逻辑线程。
 /// 协作者标记只读取房间的稳定视野缓存，跳过本地参与者，
 /// 其绘制不会改变预览快照或协作同步状态。
+// 预览绘制使用视觉字段，完整视觉配置由该实现直接包含。
 #include "canvas/PreviewCanvas.h"
 #include "canvas/CollaborationPeerColor.h"
 #include "canvas/PreviewDensityColor.h"
 #include "canvas/PreviewDensityInteraction.h"
 #include "common/LogicCommands.h"
 #include "common/render/RenderSnapshotBuffer.h"
+#include "common/render/TextureID.h"
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
+#include "config/VisualConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "event/canvas/interactive/ResizeEvent.h"
@@ -35,6 +40,7 @@
 #include "network/collaboration/CollaborationRoom.h"
 #include "ui/IUIView.h"
 #include "ui/UIManager.h"
+#include "ui/layout/LayoutContext.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include <algorithm>
 #include <cmath>
@@ -547,7 +553,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
         fmt::format("{}###PreviewWindow", TR("canvas.preview"));
     bool windowOpen = editorSettings.showPreviewWindow;
 
-    UI::LayoutContext lctx(m_layoutCtx, windowName, true, 0, &windowOpen);
+    UI::LayoutContext lctx(*this, windowName, true, 0, &windowOpen);
     if ( !windowOpen ) {
         // 标题栏关闭与菜单隐藏走同一持久化状态；先结束拖动，
         // 再保存设置，下一帧便不会重新创建已关闭窗口。

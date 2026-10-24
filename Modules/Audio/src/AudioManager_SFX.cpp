@@ -1,5 +1,8 @@
-#include "BackgroundSpectrumAnalyzer.h"
 #include "audio/AudioManager.h"
+#include "config/EditorSettings.h"
+
+#include "AudioManagerSoundEffectLoadingState.h"
+#include "BackgroundSpectrumAnalyzer.h"
 #include "audio/AudioTimelineMixerNode.h"
 #include "audio/AudioTimelineResourceProcessor.h"
 #include "audio/SoundEffectPool.h"
@@ -10,7 +13,10 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <deque>
+#include <future>
 #include <memory>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -56,8 +62,9 @@ namespace
 // - 逻辑线程用 try_lock 取结果，争用时立即跳过本帧；
 // - shutdown 等待全部 future 后才释放 AudioPool。
 //
-// m_activeSoundEffectLoadCount 统计已经提交但尚未由逻辑线程取出的任务。结果一旦
-// 从 prepared 队列取出就递减，无论 revision 是否仍有效。clearSoundEffects 丢弃
+// m_activeSoundEffectLoadCount
+// 统计已经提交但尚未由逻辑线程取出的任务。结果一旦 从 prepared
+// 队列取出就递减，无论 revision 是否仍有效。clearSoundEffects 丢弃
 // 已完成结果时也按数量扣减，避免并发槽位永久占用。
 //
 // 音量组合顺序为资源基础音量、单次 volumeFactor、全局音量与所属 SFX 分组。
@@ -136,8 +143,8 @@ bool AudioManager::usesHitEffectRouting(const std::string& key) const
 {
     // 内置前缀无需登记即可识别；项目资源由绑定标志补充分类。
     if ( isHitSoundEffectKey(key) ) return true;
-    const auto registration = m_registeredSoundEffects.find(key);
-    return registration != m_registeredSoundEffects.end() &&
+    const auto registration = m_sfxLoading->m_registeredSoundEffects.find(key);
+    return registration != m_sfxLoading->m_registeredSoundEffects.end() &&
            registration->second.m_isBoundNoteSound;
 }
 
@@ -172,9 +179,10 @@ void AudioManager::setSFXPoolVolume(const std::string& key, float volume,
 {
     volume = sanitizedPoolVolume(key, volume);
     // 登记值供未来重新加载使用，项目资源配置保持与默认音量一致。
-    auto registration = m_registeredSoundEffects.find(key);
+    auto registration = m_sfxLoading->m_registeredSoundEffects.find(key);
     // 永久覆盖属于当前预设，必须保留皮肤原始默认值供其他方案回退。
-    if ( registration != m_registeredSoundEffects.end() && !isPermanent ) {
+    if ( registration != m_sfxLoading->m_registeredSoundEffects.end() &&
+         !isPermanent ) {
         registration->second.m_defaultVolume         = volume;
         registration->second.m_resourceConfig.volume = volume;
     }
@@ -208,8 +216,9 @@ void AudioManager::setSFXPoolMute(const std::string& key, bool muted,
 {
     // 先更新运行时映射，后续 getter 和异步 attach 都能看到新值。
     m_sfxMutes[key] = muted;
-    if ( auto registration = m_registeredSoundEffects.find(key);
-         registration != m_registeredSoundEffects.end() && !isPermanent ) {
+    if ( auto registration = m_sfxLoading->m_registeredSoundEffects.find(key);
+         registration != m_sfxLoading->m_registeredSoundEffects.end() &&
+         !isPermanent ) {
         // 项目资源修改更新登记，客户端永久静音则只保存在预设映射。
         registration->second.m_resourceConfig.muted = muted;
     }
@@ -283,8 +292,8 @@ float AudioManager::getSFXPoolVolume(const std::string& key) const
         return it->second->getVolume();
     }
 
-    auto registration = m_registeredSoundEffects.find(key);
-    if ( registration != m_registeredSoundEffects.end() &&
+    auto registration = m_sfxLoading->m_registeredSoundEffects.find(key);
+    if ( registration != m_sfxLoading->m_registeredSoundEffects.end() &&
          registration->second.m_usesProjectResourceConfig ) {
         // 项目资源定义不能被同 key 的历史皮肤永久配置覆盖。
         return registration->second.m_defaultVolume;
@@ -298,7 +307,7 @@ float AudioManager::getSFXPoolVolume(const std::string& key) const
         return volume->second;
     }
 
-    if ( registration != m_registeredSoundEffects.end() ) {
+    if ( registration != m_sfxLoading->m_registeredSoundEffects.end() ) {
         // 没有覆盖时使用登记默认值，未知 key 最终回退单位音量。
         return registration->second.m_defaultVolume;
     }
@@ -339,9 +348,9 @@ double AudioManager::getSFXDuration(const std::string& key) const
 bool AudioManager::isSFXUsingSharedTimelineAudio(const std::string& key) const
 {
     const auto pool         = m_sfxPools.find(key);
-    const auto registration = m_registeredSoundEffects.find(key);
+    const auto registration = m_sfxLoading->m_registeredSoundEffects.find(key);
     if ( pool == m_sfxPools.end() ||
-         registration == m_registeredSoundEffects.end() ) {
+         registration == m_sfxLoading->m_registeredSoundEffects.end() ) {
         return false;
     }
 
@@ -416,22 +425,24 @@ void AudioManager::registerSoundEffectImpl(
 {
     const float normalizedVolume =
         sanitizedPoolVolume(key, resourceConfig.volume);
-    auto       existingRegistration = m_registeredSoundEffects.find(key);
+    auto existingRegistration =
+        m_sfxLoading->m_registeredSoundEffects.find(key);
     const bool wasBoundNoteSound =
-        existingRegistration != m_registeredSoundEffects.end() &&
+        existingRegistration != m_sfxLoading->m_registeredSoundEffects.end() &&
         existingRegistration->second.m_isBoundNoteSound;
-    const bool wasLoaded  = m_sfxPools.contains(key);
-    const bool wasPending = m_pendingSoundEffectLoads.contains(key);
+    const bool wasLoaded = m_sfxPools.contains(key);
+    const bool wasPending =
+        m_sfxLoading->m_pendingSoundEffectLoads.contains(key);
     // processingCacheKey 排除纯运行时控制，只描述会改变准备 PCM 的字段。
     const auto processingCacheKey =
         makeAudioResourceProcessingCacheKey(filePath, resourceConfig);
     const bool processingChanged =
-        existingRegistration != m_registeredSoundEffects.end() &&
+        existingRegistration != m_sfxLoading->m_registeredSoundEffects.end() &&
         existingRegistration->second.m_processingCacheKey != processingCacheKey;
     const std::uint64_t revision =
-        existingRegistration == m_registeredSoundEffects.end() ||
+        existingRegistration == m_sfxLoading->m_registeredSoundEffects.end() ||
                 processingChanged
-            ? m_nextSoundEffectRevision++
+            ? m_sfxLoading->m_nextSoundEffectRevision++
             : existingRegistration->second.m_revision;
     // 未改变处理身份时保留 revision，使正在完成的后台结果仍可接纳。
 
@@ -440,7 +451,7 @@ void AudioManager::registerSoundEffectImpl(
         detachSoundEffectPool(key);
     }
 
-    m_registeredSoundEffects[key] = RegisteredSoundEffect{
+    m_sfxLoading->m_registeredSoundEffects[key] = RegisteredSoundEffect{
         .m_filePath                  = filePath,
         .m_resourceConfig            = resourceConfig,
         .m_defaultVolume             = normalizedVolume,
@@ -453,7 +464,7 @@ void AudioManager::registerSoundEffectImpl(
     // 保留此前绑定标志，皮肤重载不能把已经见过的谱面采样降回普通 SFX。
     if ( processingChanged ) {
         // 旧 pending revision 失效；其 future 可完成但会在接纳阶段被丢弃。
-        m_pendingSoundEffectLoads.erase(key);
+        m_sfxLoading->m_pendingSoundEffectLoads.erase(key);
     }
 
     if ( usesProjectResourceConfig ) {
@@ -517,8 +528,8 @@ bool AudioManager::attachSoundEffectPool(
         return false;
     }
 
-    const auto registration = m_registeredSoundEffects.find(key);
-    if ( registration == m_registeredSoundEffects.end() ) {
+    const auto registration = m_sfxLoading->m_registeredSoundEffects.find(key);
+    if ( registration == m_sfxLoading->m_registeredSoundEffects.end() ) {
         return false;
     }
 
@@ -596,8 +607,8 @@ bool AudioManager::ensureSoundEffectLoaded(const std::string& key)
         return false;
     }
 
-    auto registration = m_registeredSoundEffects.find(key);
-    if ( registration == m_registeredSoundEffects.end() ) {
+    auto registration = m_sfxLoading->m_registeredSoundEffects.find(key);
+    if ( registration == m_sfxLoading->m_registeredSoundEffects.end() ) {
         return false;
     }
 
@@ -606,7 +617,7 @@ bool AudioManager::ensureSoundEffectLoaded(const std::string& key)
           registration->second.m_filePath,
           registration->second.m_defaultVolume);
     // 显式同步加载接管该 key，先取消 pending 标记避免重复接纳异步结果。
-    m_pendingSoundEffectLoads.erase(key);
+    m_sfxLoading->m_pendingSoundEffectLoads.erase(key);
     auto trackWeak = m_audioPool->get_or_load(*m_threadPool,
                                               registration->second.m_filePath,
                                               ice::CachingStrategy::CACHY);
@@ -634,8 +645,8 @@ bool AudioManager::queueBoundNoteSoundEffectLoad(const std::string& key)
 {
     if ( key.empty() ) return false;
 
-    auto registration = m_registeredSoundEffects.find(key);
-    if ( registration == m_registeredSoundEffects.end() ) {
+    auto registration = m_sfxLoading->m_registeredSoundEffects.find(key);
+    if ( registration == m_sfxLoading->m_registeredSoundEffects.end() ) {
         return false;
     }
 
@@ -658,14 +669,15 @@ bool AudioManager::queueBoundNoteSoundEffectLoad(const std::string& key)
         return true;
     }
 
-    if ( m_pendingSoundEffectLoads.contains(key) ) {
+    if ( m_sfxLoading->m_pendingSoundEffectLoads.contains(key) ) {
         // 同 revision 已在排队或执行，重复预读请求视为成功。
         return true;
     }
 
-    m_pendingSoundEffectLoads[key] = registration->second.m_revision;
+    m_sfxLoading->m_pendingSoundEffectLoads[key] =
+        registration->second.m_revision;
     // pending 映射是接纳令牌，队列项携带同一 revision 快照。
-    m_queuedSoundEffectLoads.push_back({
+    m_sfxLoading->m_queuedSoundEffectLoads.push_back({
         .key            = key,
         .filePath       = registration->second.m_filePath,
         .resourceConfig = registration->second.m_resourceConfig,
@@ -687,29 +699,30 @@ void AudioManager::updateQueuedSoundEffectLoads(
         static_cast<void>(m_audioTimelineNode->reclaimRetiredSchedules());
     }
 
-    m_soundEffectLoadTasks.erase(
-        std::remove_if(m_soundEffectLoadTasks.begin(),
-                       m_soundEffectLoadTasks.end(),
+    // 私有状态地址稳定；轮询不分配或替换状态对象，只复用既有任务集合。
+    m_sfxLoading->m_soundEffectLoadTasks.erase(
+        std::remove_if(m_sfxLoading->m_soundEffectLoadTasks.begin(),
+                       m_sfxLoading->m_soundEffectLoadTasks.end(),
                        [](std::future<void>& task) {
                            // wait_for(0) 只探测完成状态，不阻塞逻辑线程。
                            return task.valid() &&
                                   task.wait_for(std::chrono::seconds(0)) ==
                                       std::future_status::ready;
                        }),
-        m_soundEffectLoadTasks.end());
+        m_sfxLoading->m_soundEffectLoadTasks.end());
 
     std::deque<PreparedSoundEffectLoad> prepared;
     {
-        std::unique_lock<std::mutex> lock(m_preparedSoundEffectLoadsMutex,
-                                          std::try_to_lock);
+        std::unique_lock<std::mutex> lock(
+            m_sfxLoading->m_preparedSoundEffectLoadsMutex, std::try_to_lock);
         // worker 正在提交结果时本帧直接跳过，绝不等待互斥量。
         if ( lock.owns_lock() ) {
             while ( prepared.size() < maxPreparedPerUpdate &&
-                    !m_preparedSoundEffectLoads.empty() ) {
+                    !m_sfxLoading->m_preparedSoundEffectLoads.empty() ) {
                 // 单次最多接入调用方给定数量，限制图修改和析构尖峰。
-                prepared.push_back(
-                    std::move(m_preparedSoundEffectLoads.front()));
-                m_preparedSoundEffectLoads.pop_front();
+                prepared.push_back(std::move(
+                    m_sfxLoading->m_preparedSoundEffectLoads.front()));
+                m_sfxLoading->m_preparedSoundEffectLoads.pop_front();
             }
         }
     }
@@ -717,21 +730,23 @@ void AudioManager::updateQueuedSoundEffectLoads(
     for ( auto& result : prepared ) {
         // 每个取出的结果对应一个曾递增的 active
         // 任务，不论是否过期都要归还计数。
-        if ( m_activeSoundEffectLoadCount > 0U ) {
-            --m_activeSoundEffectLoadCount;
+        if ( m_sfxLoading->m_activeSoundEffectLoadCount > 0U ) {
+            --m_sfxLoading->m_activeSoundEffectLoadCount;
         }
 
-        const auto pending = m_pendingSoundEffectLoads.find(result.key);
-        if ( pending == m_pendingSoundEffectLoads.end() ||
+        const auto pending =
+            m_sfxLoading->m_pendingSoundEffectLoads.find(result.key);
+        if ( pending == m_sfxLoading->m_pendingSoundEffectLoads.end() ||
              pending->second != result.revision ) {
             // pending 已取消或 revision 改变时，后台结果不得进入当前登记。
             continue;
         }
-        m_pendingSoundEffectLoads.erase(pending);
+        m_sfxLoading->m_pendingSoundEffectLoads.erase(pending);
         // 先消费接纳令牌，失败结果不会在后续 update 中重复处理。
 
-        const auto registration = m_registeredSoundEffects.find(result.key);
-        if ( registration == m_registeredSoundEffects.end() ||
+        const auto registration =
+            m_sfxLoading->m_registeredSoundEffects.find(result.key);
+        if ( registration == m_sfxLoading->m_registeredSoundEffects.end() ||
              registration->second.m_revision != result.revision ) {
             // 登记可能在 worker 执行期间被卸载或替换，再次验证最终身份。
             continue;
@@ -753,23 +768,27 @@ void AudioManager::updateQueuedSoundEffectLoads(
 
     constexpr std::size_t MAX_CONCURRENT_SOUND_EFFECT_LOADS = 4U;
     // 固定并发上限控制大项目同时解码和 DSP 的内存峰值。
-    while ( m_activeSoundEffectLoadCount < MAX_CONCURRENT_SOUND_EFFECT_LOADS &&
-            !m_queuedSoundEffectLoads.empty() && m_audioPool && m_threadPool ) {
+    while ( m_sfxLoading->m_activeSoundEffectLoadCount <
+                MAX_CONCURRENT_SOUND_EFFECT_LOADS &&
+            !m_sfxLoading->m_queuedSoundEffectLoads.empty() && m_audioPool &&
+            m_threadPool ) {
         QueuedSoundEffectLoad request =
-            std::move(m_queuedSoundEffectLoads.front());
+            std::move(m_sfxLoading->m_queuedSoundEffectLoads.front());
         // 出队后若令牌已失效直接丢弃，不启动无意义后台任务。
-        m_queuedSoundEffectLoads.pop_front();
+        m_sfxLoading->m_queuedSoundEffectLoads.pop_front();
 
-        const auto pending      = m_pendingSoundEffectLoads.find(request.key);
-        const auto registration = m_registeredSoundEffects.find(request.key);
-        if ( pending == m_pendingSoundEffectLoads.end() ||
+        const auto pending =
+            m_sfxLoading->m_pendingSoundEffectLoads.find(request.key);
+        const auto registration =
+            m_sfxLoading->m_registeredSoundEffects.find(request.key);
+        if ( pending == m_sfxLoading->m_pendingSoundEffectLoads.end() ||
              pending->second != request.revision ||
-             registration == m_registeredSoundEffects.end() ||
+             registration == m_sfxLoading->m_registeredSoundEffects.end() ||
              registration->second.m_revision != request.revision ) {
             continue;
         }
 
-        m_soundEffectLoadTasks.push_back(m_threadPool->enqueue(
+        m_sfxLoading->m_soundEffectLoadTasks.push_back(m_threadPool->enqueue(
             [this, request = std::move(request)]() mutable {
                 // worker 只做解码和离线 DSP，不读取或修改音频图容器。
                 auto trackWeak =
@@ -784,12 +803,15 @@ void AudioManager::updateQueuedSoundEffectLoads(
                     .preparedAudio = prepareAudioTimelineResource(
                         track, request.resourceConfig),
                 };
+                // 私有状态从构造到析构地址不变；shutdown
+                // 在销毁资源前等待本任务。
                 // 完整结果在一次短锁内移交，逻辑线程随后验证 revision。
                 std::lock_guard<std::mutex> lock(
-                    m_preparedSoundEffectLoadsMutex);
-                m_preparedSoundEffectLoads.push_back(std::move(preparedResult));
+                    m_sfxLoading->m_preparedSoundEffectLoadsMutex);
+                m_sfxLoading->m_preparedSoundEffectLoads.push_back(
+                    std::move(preparedResult));
             }));
-        ++m_activeSoundEffectLoadCount;
+        ++m_sfxLoading->m_activeSoundEffectLoadCount;
         // 仅成功提交 future 后增加活动数，和结果出队时的递减配对。
     }
 }
@@ -827,9 +849,9 @@ void AudioManager::unloadSoundEffect(const std::string& key)
         detachSoundEffectPool(key);
         XINFO("Unloaded SFX: {}", key);
     }
-    m_registeredSoundEffects.erase(key);
+    m_sfxLoading->m_registeredSoundEffects.erase(key);
     // 清登记和 pending 使尚在运行的旧 revision 结果自动失效。
-    m_pendingSoundEffectLoads.erase(key);
+    m_sfxLoading->m_pendingSoundEffectLoads.erase(key);
     m_sfxLeadInSeconds.erase(key);
     m_sfxMutes.erase(key);
     static_cast<void>(releaseUnusedTrackCache());
@@ -856,20 +878,23 @@ void AudioManager::clearSoundEffects()
         unloadSoundEffect(key);
     }
 
-    m_registeredSoundEffects.clear();
+    // 资源重载只清内容，正在运行的 worker 仍通过同一结果锁发布旧修订。
+    m_sfxLoading->m_registeredSoundEffects.clear();
     // 清除尚未开始的队列和接纳令牌，运行中 future 会按旧 revision 被丢弃。
-    m_queuedSoundEffectLoads.clear();
-    m_pendingSoundEffectLoads.clear();
+    m_sfxLoading->m_queuedSoundEffectLoads.clear();
+    m_sfxLoading->m_pendingSoundEffectLoads.clear();
     m_sfxLeadInSeconds.clear();
     m_sfxMutes.clear();
 
-    std::lock_guard<std::mutex> lock(m_preparedSoundEffectLoadsMutex);
-    const std::size_t discardedCount = m_preparedSoundEffectLoads.size();
+    std::lock_guard<std::mutex> lock(
+        m_sfxLoading->m_preparedSoundEffectLoadsMutex);
+    const std::size_t discardedCount =
+        m_sfxLoading->m_preparedSoundEffectLoads.size();
     // 已完成但未接入的结果也占 active 计数，丢弃时需要同步扣除。
-    m_preparedSoundEffectLoads.clear();
-    m_activeSoundEffectLoadCount =
-        discardedCount < m_activeSoundEffectLoadCount
-            ? m_activeSoundEffectLoadCount - discardedCount
+    m_sfxLoading->m_preparedSoundEffectLoads.clear();
+    m_sfxLoading->m_activeSoundEffectLoadCount =
+        discardedCount < m_sfxLoading->m_activeSoundEffectLoadCount
+            ? m_sfxLoading->m_activeSoundEffectLoadCount - discardedCount
             : 0U;
 }
 
@@ -879,19 +904,21 @@ void AudioManager::waitForQueuedSoundEffectLoads()
 {
     // shutdown 才允许逐个等待，确保 worker 不再访问 AudioPool
     // 和线程池观察指针。
-    for ( auto& task : m_soundEffectLoadTasks ) {
+    // 等待期间不持有结果锁，否则 worker 的最终发布会与关闭互相等待。
+    for ( auto& task : m_sfxLoading->m_soundEffectLoadTasks ) {
         if ( task.valid() ) {
             task.wait();
         }
     }
-    m_soundEffectLoadTasks.clear();
+    m_sfxLoading->m_soundEffectLoadTasks.clear();
 
     // future 全部结束后可安全清空结果、队列和活动计数。
-    std::lock_guard<std::mutex> lock(m_preparedSoundEffectLoadsMutex);
-    m_preparedSoundEffectLoads.clear();
-    m_queuedSoundEffectLoads.clear();
-    m_pendingSoundEffectLoads.clear();
-    m_activeSoundEffectLoadCount = 0U;
+    std::lock_guard<std::mutex> lock(
+        m_sfxLoading->m_preparedSoundEffectLoadsMutex);
+    m_sfxLoading->m_preparedSoundEffectLoads.clear();
+    m_sfxLoading->m_queuedSoundEffectLoads.clear();
+    m_sfxLoading->m_pendingSoundEffectLoads.clear();
+    m_sfxLoading->m_activeSoundEffectLoadCount = 0U;
 }
 
 /// @brief 立即播放指定音效。

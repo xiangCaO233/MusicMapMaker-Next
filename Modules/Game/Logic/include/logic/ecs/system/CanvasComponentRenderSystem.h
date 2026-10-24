@@ -1,10 +1,14 @@
 #pragma once
 
-#include "common/render/RenderSnapshot.h"
 #include "config/visual/CanvasComponentConfig.h"
 #include <array>
 #include <cstdint>
 #include <span>
+
+namespace MMM::Common::Render
+{
+struct RenderSnapshot;
+}
 
 namespace MMM::Logic
 {

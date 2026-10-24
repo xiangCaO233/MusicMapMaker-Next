@@ -2,7 +2,7 @@
 
 #include "common/NoteColor.h"
 #include "logic/ecs/components/NoteComponent.h"
-#include "mmm/Metadata.h"
+#include "mmm/metadata/NoteMetadata.h"
 #include <algorithm>
 #include <array>
 #include <glm/glm.hpp>

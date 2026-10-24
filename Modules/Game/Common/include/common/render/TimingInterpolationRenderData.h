@@ -1,7 +1,8 @@
 #pragma once
 
-#include "mmm/timing/Timing.h"
-#include <entt/entt.hpp>
+#include "mmm/timing/TimingEffect.h"
+#include "mmm/timing/TimingInterpolation.h"
+#include <entt/entity/entity.hpp>
 
 namespace MMM::Common::Render
 {

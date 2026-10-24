@@ -1,7 +1,6 @@
 #pragma once
 
 #include "config/skin/translation/Translation.h"
-#include "graphic/imguivk/VKTexture.h"
 #include "imgui.h"
 #include "ui/IUIView.h"
 #include <memory>

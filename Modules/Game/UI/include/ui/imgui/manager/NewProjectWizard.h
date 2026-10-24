@@ -1,6 +1,6 @@
 #pragma once
 
-#include "event/project/ProjectOpenInteractionEvent.h"
+#include "event/project/ProjectOpenOrigin.h"
 #include "ui/IUIView.h"
 #include "ui/imgui/SideBarUI.h"
 #include <cstddef>

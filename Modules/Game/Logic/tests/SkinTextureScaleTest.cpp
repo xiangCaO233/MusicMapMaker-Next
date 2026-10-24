@@ -1,4 +1,7 @@
 #include "logic/ecs/system/render/SkinTextureScale.h"
+// 皮肤缩放测试直接读取快照几何，完整类型依赖保留在测试实现中。
+#include "common/render/RenderSnapshot.h"
+#include "common/render/TextureID.h"
 #include "config/EditorConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"

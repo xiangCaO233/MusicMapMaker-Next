@@ -1,5 +1,7 @@
 #pragma once
 
+#include "common/render/RenderSnapshot.h"
+
 #include "config/EditorConfig.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/ecs/components/NoteComponent.h"

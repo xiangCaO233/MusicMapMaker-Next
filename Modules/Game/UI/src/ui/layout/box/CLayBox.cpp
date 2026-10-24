@@ -1,6 +1,7 @@
 #include "ui/layout/box/CLayBox.h"
 #include "config/skin/SkinConfig.h"
 #include "ui/IUIView.h"
+#include "ui/layout/LayoutContext.h"
 
 /// @file CLayBox.cpp
 /// @brief CLayBox 的布局树生成、ImGui 空间占位和绘制回调执行实现。

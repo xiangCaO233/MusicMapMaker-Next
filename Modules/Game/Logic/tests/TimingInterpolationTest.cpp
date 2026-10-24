@@ -9,6 +9,7 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/beatmap/BeatmapSpeedTransform.h"
 #include "mmm/timing/Timing.h"
+#include "mmm/timing/TimingInterpolationAlgorithms.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>

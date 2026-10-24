@@ -1,4 +1,7 @@
+// 专业模式动作直接切换持久化布尔字段，设置定义属于该动作实现。
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "ui/IEditorApplicationService.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/menu/MainMenuTypes.h"

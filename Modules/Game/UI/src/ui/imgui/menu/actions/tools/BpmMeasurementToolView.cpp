@@ -1,10 +1,15 @@
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include "audio/AudioManager.h"
+#include "common/LogicCommands.h"
+#include "common/render/RenderSnapshot.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
+#include "config/VisualConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "graphic/imguivk/VKContext.h"
+#include "graphic/imguivk/VKTexture.h"
 #include "imgui.h"
 #include "implot.h"
 #include "log/colorful-log.h"
@@ -21,6 +26,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/SpectrumTimeMapping.h"
 #include "ui/imgui/menu/actions/tools/BpmAutomaticMeasurementPolicy.h"
+#include "ui/layout/LayoutContext.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -1104,7 +1110,7 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
         TR("ui.tools.bpm_measure.title").toString() + "###BpmMeasurementTool";
     // 固定 ### ID 使本地化标题变化不会破坏窗口停靠状态。
     LayoutContext layoutContext(
-        m_layoutCtx,
+        *this,
         windowTitle,
         true,
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse,

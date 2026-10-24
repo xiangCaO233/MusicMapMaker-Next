@@ -1,4 +1,5 @@
 #include "logic/session/SessionUtils.h"
+#include "logic/session/context/SessionContext.h"
 
 #include "common/VideoFrameDecoder.h"
 #include "config/Utf8Path.h"

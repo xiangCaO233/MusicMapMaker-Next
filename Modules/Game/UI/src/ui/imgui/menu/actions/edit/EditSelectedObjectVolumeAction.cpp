@@ -1,5 +1,7 @@
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
-#include "config/skin/SkinConfig.h"
+#include "config/EditorSettings.h"
+#include "config/skin/translation/Translation.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"

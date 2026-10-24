@@ -1,5 +1,5 @@
 #pragma once
-#include "config/EditorConfig.h"
+#include "config/SyncConfig.h"
 #include <cmath>
 
 namespace MMM::Logic

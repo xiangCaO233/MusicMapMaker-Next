@@ -1,8 +1,7 @@
 #pragma once
 
-#include "ui/layout/CLayWrapperCore.h"
 #include <cstdint>
-#include <imgui.h>
+#include <memory>
 #include <string>
 
 namespace MMM::UI
@@ -11,6 +10,7 @@ class UIManager;
 class ICanvasView;
 class IAuxiliaryWindowView;
 class IParallelUiPreparable;
+class LayoutContext;
 
 /// @brief 给当前 ImGui 窗口原生关闭按钮补充统一交互与 Dock
 /// 悬浮视觉反馈。
@@ -76,29 +76,16 @@ public:
     virtual bool renderable() { return false; }
 
 protected:
-    /// 布局上下文
-    CLayWrapperCore::WindowContext m_layoutCtx;
-};
+    /// @brief 激活当前视图独占的布局上下文。
+    /// @warning UI 热路径：仅切换已创建的上下文，禁止分配和重建 Arena。
+    void makeLayoutCurrent();
 
-class LayoutContext final
-{
-
-public:
-    /// @brief 创建布局上下文并开始 ImGui 窗口
-    LayoutContext(CLayWrapperCore::WindowContext& layoutContext,
-                  const std::string& windowName, bool customWindowFlags = false,
-                  ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoTitleBar,
-                  bool* open = nullptr, ImGuiID dockId = 0,
-                  ImGuiCond dockCond = ImGuiCond_Always);
-
-    /// @brief 结束 ImGui 窗口并恢复构造阶段压入的样式。
-    ~LayoutContext();
-
-    ImVec2 m_startPos;
-    ImVec2 m_avail;
-    ImVec2 m_mousePos;
-    float  m_dpiScale;
-    bool   m_isMouseDown;
+private:
+    friend class LayoutContext;
+    /// @brief 隐藏 Clay 类型和 Arena 生命周期，避免基础视图传播布局实现。
+    struct LayoutState;
+    /// @brief 视图构造时一次分配，整个视图存活期间地址稳定。
+    std::unique_ptr<LayoutState> m_layoutState;
 };
 
 }  // namespace MMM::UI

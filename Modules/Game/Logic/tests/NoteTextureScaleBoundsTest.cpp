@@ -1,5 +1,8 @@
+// 缩放边界用例需要构造完整快照，不能只依赖缓冲接口的前置声明。
+#include "common/render/TextureID.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 
+#include "common/render/RenderSnapshot.h"
 #include "config/EditorConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"

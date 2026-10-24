@@ -1,4 +1,5 @@
 #include "config/AudioPresets.h"
+#include "config/EditorSettings.h"
 #include <algorithm>
 #include <cmath>
 #include <nlohmann/json.hpp>

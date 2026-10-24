@@ -1,4 +1,5 @@
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "ui/IEditorApplicationService.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"

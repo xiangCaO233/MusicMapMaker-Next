@@ -1,4 +1,4 @@
-#include "config/EditorSettings.h"
+#include "config/SfxConfig.h"
 
 #include "log/colorful-log.h"
 

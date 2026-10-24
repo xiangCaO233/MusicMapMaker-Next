@@ -2,7 +2,6 @@
 #include <glm/mat4x4.hpp>
 
 #include "event/canvas/interactive/ResizeEvent.h"
-#include "event/core/EventBus.h"
 #include "graphic/imguivk/VKRenderPipeline.h"
 #include "graphic/imguivk/VKSwapchain.h"
 #include "graphic/imguivk/mem/VKMemBuffer.h"

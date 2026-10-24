@@ -1,10 +1,13 @@
+// 打包动作读取用户配置选择文件目标，基础菜单接口不拥有配置对象。
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
 
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
-#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectResourceService.h"
 #include "mmm/beatmap/BeatMap.h"

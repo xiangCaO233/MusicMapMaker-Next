@@ -1,9 +1,13 @@
+// 菜单工具在实际创建播放与编辑命令时才依赖完整载荷。
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
-#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "event/project/ProjectOpenInteractionEvent.h"
 #include "event/ui/menu/AudioImportTriggerEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "log/colorful-log.h"
@@ -309,6 +313,7 @@ void MenuUtil::openProjectFolderPicker(Event::ProjectOpenOrigin origin)
     // 来源跨越 ImGui 文件选择器的异步帧，保存在唯一 UI 状态中。
     projectFolderPickerOrigin = origin;
     // 先通知项目打开交互开始，供外层关闭冲突弹窗或跟踪来源。
+    // 此时仅唤起选择器；完成标志仍由真正打开项目后的流程发布。
     Event::ProjectOpenInteractionEvent interaction;
     interaction.m_origin = origin;
     Event::EventBus::instance().publish(interaction);

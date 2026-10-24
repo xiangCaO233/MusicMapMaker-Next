@@ -2,6 +2,7 @@
 #include "canvas/Basic2DCanvas.h"
 #include "common/render/RenderSnapshot.h"
 #include "common/render/RenderSnapshotBuffer.h"
+#include "config/EditorConfig.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "mmm/beatmap/BeatMap.h"

@@ -12,8 +12,12 @@
 #    ifndef NOMINMAX
 #        define NOMINMAX
 #    endif
-#    include <shellapi.h>
+// Shell API 声明依赖基础 Win32 类型，必须先包含 Windows SDK 入口。
+// 保持显式顺序，不借助公共路径工具间接提供平台声明。
+// clang-format off
 #    include <windows.h>
+#    include <shellapi.h>
+// clang-format on
 #else
 #    include <cerrno>
 #    include <fcntl.h>

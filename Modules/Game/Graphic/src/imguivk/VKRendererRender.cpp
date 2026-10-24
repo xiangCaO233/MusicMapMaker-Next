@@ -5,6 +5,8 @@
 #endif
 
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "graphic/CursorManager.h"
 #include "graphic/glfw/window/NativeWindow.h"
 #include "graphic/imguivk/IGraphicUserHook.h"

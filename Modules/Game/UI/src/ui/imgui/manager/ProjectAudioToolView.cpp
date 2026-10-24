@@ -1,10 +1,14 @@
 #include "ui/imgui/manager/ProjectAudioToolView.h"
+#include "common/LogicCommands.h"
+#include "config/EditorSettings.h"
+#include "ui/layout/LayoutContext.h"
 
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
 #include "event/project/ProjectEvents.h"
 #include "logic/EditorEngine.h"
+#include "mmm/project/Project.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/ProjectAudioPreviewControls.h"
 #include "ui/imgui/manager/ProjectAudioToolSearch.h"
@@ -1897,7 +1901,8 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     ImGui::SetNextWindowSize({ 720.0F * dpiScale, 520.0F * dpiScale },
                              ImGuiCond_FirstUseEver);
     // LayoutContext 管理窗口 Begin/End 生命周期和 m_isOpen 打开状态。
-    LayoutContext layoutContext(m_layoutCtx,
+    // 单帧作用域只借用视图，持久布局 Arena 直到视图析构才释放。
+    LayoutContext layoutContext(*this,
                                 m_translationCache.windowTitle,
                                 true,
                                 ImGuiWindowFlags_NoScrollWithMouse,

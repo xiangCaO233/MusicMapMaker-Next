@@ -1,5 +1,9 @@
+// 资源引用用例会切换编辑选项，需要完整设置而非单例声明。
+#include "common/LogicCommands.h"
+#include "config/EditorSettings.h"
 #include "logic/ProjectCommandService.h"
 #include "logic/ProjectResourceService.h"
+#include "mmm/project/Project.h"
 
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"

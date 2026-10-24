@@ -1,32 +1,56 @@
 #include "ui/IUIView.h"
+#include "config/EditorSettings.h"
+#include "ui/layout/CLayWrapperCore.h"
+#include "ui/layout/LayoutContext.h"
 
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 
 #include <cmath>
+#include <memory>
 
 namespace MMM::UI
 {
 
+/// @brief 视图独占的持久布局状态，仅本实现需要完整 Clay 定义。
+/// @details Arena 的创建和销毁严格配对；状态从不在逐帧窗口 Begin/End 时更换。
+struct IUIView::LayoutState {
+    /// @brief Clay 上下文和实际拥有的后备 Arena。
+    CLayWrapperCore::WindowContext context;
+
+    /// @brief 视图创建时分配并初始化独立布局 Arena。
+    LayoutState() : context(CLayWrapperCore::instance().createWindowContext())
+    {
+    }
+
+    /// @brief 在单例仍然有效时释放该视图独占的 Arena。
+    ~LayoutState()
+    {
+        CLayWrapperCore::instance().destroyWindowContext(context);
+    }
+};
+
 /// @brief 创建基础 UI 视图并申请独立 Clay 窗口上下文。
 /// @param name 用于视图注册和窗口身份的稳定名称。
 IUIView::IUIView(const std::string& name)
-    : m_name(name)
-    , m_layoutCtx(CLayWrapperCore::instance().createWindowContext())
+    : m_name(name), m_layoutState(std::make_unique<LayoutState>())
 {
     // Clay 上下文由单例统一创建，视图只保存对应句柄。
 }
 
 /// @brief 销毁基础 UI 视图持有的 Clay 窗口上下文。
 /// @warning 视图必须在 CLayWrapperCore 单例销毁前释放。
-IUIView::~IUIView()
+IUIView::~IUIView() = default;
+
+/// @brief 在帧内借用视图自己的布局上下文，不复制 Arena 或改变其生命周期。
+/// @warning UI 热路径：只读取稳定私有状态并切换 Clay 当前上下文。
+void IUIView::makeLayoutCurrent()
 {
-    // 与构造时的 createWindowContext 严格配对，避免布局状态泄漏。
-    CLayWrapperCore::instance().destroyWindowContext(m_layoutCtx);
+    CLayWrapperCore::instance().makeCurrent(m_layoutState->context.context);
 }
 
 /// @brief 建立单帧 ImGui 窗口和对应 Clay 指针输入上下文。
-/// @param layoutContext 当前视图独占的 Clay 窗口上下文。
+/// @param view 拥有持久布局上下文的视图，生命周期必须覆盖本帧作用域。
 /// @param windowName 传给 ImGui 的可见标题与稳定内部 ID。
 /// @param customWindowFlags 是否采用调用方提供的窗口标志。
 /// @param windowFlags 自定义 ImGui 窗口标志。
@@ -35,14 +59,13 @@ IUIView::~IUIView()
 /// @param dockCond 应用目标 Dock ID 的 ImGui 条件。
 /// @warning UI 热路径：每帧构造；只压入样式、开始窗口并同步当前指针状态。
 /// @note 析构函数负责 End 窗口并恢复六项样式变量。
-LayoutContext::LayoutContext(CLayWrapperCore::WindowContext& layoutContext,
-                             const std::string&              windowName,
-                             bool                            customWindowFlags,
+LayoutContext::LayoutContext(IUIView& view, const std::string& windowName,
+                             bool             customWindowFlags,
                              ImGuiWindowFlags windowFlags, bool* open,
                              ImGuiID dockId, ImGuiCond dockCond)
 {
     // 每个视图先切换自己的 Clay context，隔离布局树和输入状态。
-    CLayWrapperCore::instance().makeCurrent(layoutContext.context);
+    view.makeLayoutCurrent();
 
     // 标题字体允许皮肤覆盖；缺失时沿用当前 ImGui 默认字体。
     auto&   skinManager = Config::SkinManager::instance();

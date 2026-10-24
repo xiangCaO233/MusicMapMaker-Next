@@ -1,3 +1,5 @@
+#include "common/render/RenderSnapshot.h"
+#include "common/render/TextureID.h"
 #include "config/EditorConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"

@@ -1,9 +1,14 @@
+// 音轨控制实际构造播放参数命令，载荷在此保持按值提交。
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "audio/AudioManager.h"
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/AudioPresets.h"
+#include "config/EditorSettings.h"
 #include "config/skin/SkinConfig.h"
 #include "imgui.h"
 #include "logic/EditorEngine.h"
+#include "mmm/project/Project.h"
 #include "ui/UIManager.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <cfloat>
@@ -181,7 +186,7 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
             m_pendingDockId = 0;
         }
         // Clay 当前上下文切换到本控制器持有的布局上下文。
-        CLayWrapperCore::instance().makeCurrent(m_layoutCtx.context);
+        makeLayoutCurrent();
         // 默认值保证资源暂不可用时控件仍能以中性状态呈现。
         float volume = 0.5f;
         float speed  = 1.0f;

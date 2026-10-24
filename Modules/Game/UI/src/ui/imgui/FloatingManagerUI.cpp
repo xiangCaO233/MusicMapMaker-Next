@@ -1,5 +1,6 @@
 #include "ui/imgui/FloatingManagerUI.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/skin/translation/Translation.h"
 #include "event/ui/UISubViewToggleEvent.h"
 #include "imgui.h"
@@ -9,6 +10,7 @@
 #include "ui/ICanvasView.h"
 #include "ui/ISubView.h"
 #include "ui/UIManager.h"
+#include "ui/layout/LayoutContext.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cfloat>
@@ -1770,7 +1772,7 @@ void FloatingManagerUI::update(UIManager* sourceManager)
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
                         ImGui::GetStyle().Alpha * visibilityAlpha);
     {
-        LayoutContext  lctx{ m_layoutCtx,     windowName,
+        LayoutContext  lctx{ *this,           windowName,
                              false,           ImGuiWindowFlags_NoTitleBar,
                              nullptr,         resumeDockId,
                              ImGuiCond_Always };

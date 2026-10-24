@@ -34,6 +34,30 @@ mmm_register_test_case(
 if(WIN32)
   # 平台库保持 PRIVATE，调用 Font 的业务模块无需感知 DirectWrite。
   target_link_libraries(Font PRIVATE dwrite user32)
+  if(MINGW
+     AND CMAKE_CXX_COMPILER_ID MATCHES "Clang"
+     AND NOT MMM_DISABLE_CLANG_LTO)
+    # MinGW 的 COM 声明没有公开 LTO 可见性，系统 DLL 实现不属于本程序。 全程序虚表优化会把 QueryInterface
+    # 错误收窄到本地分析源的实现，导致 字体 loader 和 Factory2 均返回 E_NOINTERFACE，中文退化为问号。
+    # 只限制启动期原生字体桥接文件；保留 ThinLTO、PGO 及其他文件的优化。 显式保留 LTO
+    # 单元拆分，使对象格式与其他启用虚表优化的发布单元一致。 Debug 与关闭 ThinLTO 的构建不需要这组例外参数。
+    set_property(
+      SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/SystemFontResolver.cpp"
+      APPEND
+      PROPERTY
+        COMPILE_OPTIONS
+        "$<$<CONFIG:Release,RelWithDebInfo,MinSizeRel>:-fno-whole-program-vtables;-fsplit-lto-unit>"
+    )
+  endif()
+  # 使用真实系统字体和集合索引，捕获仅在发布构建优化后出现的 COM 查询回归。 该测试不创建窗口、不联网，也不依赖尚未下载的皮肤字体或个人项目。
+  mmm_add_test_executable(Graphic SystemFontResolverTest
+                          tests/SystemFontResolverTest.cpp)
+  # FreeType 验证实际文件和集合索引，不使用测试替身或 ImGui 的默认字体兜底。
+  target_link_libraries(SystemFontResolverTest PRIVATE Font Log
+                                                       freetype::freetype)
+  # 仅 Windows 注册系统字体回归，不要求无桌面的 Unix Runner 安装语言字体包。
+  mmm_register_test_case(NAME SystemFontResolverTest COMMAND
+                         SystemFontResolverTest)
 elseif(APPLE)
   # CoreText 负责系统字体匹配，CoreFoundation 管理其字符串与 URL 元数据。
   find_library(MMM_CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)

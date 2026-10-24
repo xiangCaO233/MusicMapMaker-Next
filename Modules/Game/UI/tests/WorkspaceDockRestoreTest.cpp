@@ -1,10 +1,11 @@
 #include "ui/imgui/WorkspaceDockRestore.h"
+#include "config/EditorSettings.h"
 
 #include "config/AppConfig.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
-#include "mmm/project/ProjectSettings.h"
+#include "mmm/project/ProjectWorkspaceState.h"
 #include "ui/imgui/CanvasTabManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/ToolbarDockLayout.h"

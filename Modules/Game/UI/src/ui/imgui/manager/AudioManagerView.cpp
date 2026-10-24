@@ -2,10 +2,14 @@
 #    define IMGUI_DEFINE_MATH_OPERATORS
 #endif
 
+// 混音面板实际读写音频设置，不依赖配置单例头间接提供数据定义。
 #include "ui/imgui/manager/AudioManagerView.h"
 #include "audio/AudioManager.h"
 #include "common/AudioResourceDragPayload.h"
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
@@ -15,11 +19,13 @@
 #include "imgui.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
-#include "mmm/project/AudioResource.h"
+#include "mmm/project/AudioTrackType.h"
+#include "mmm/project/Project.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/AudioPresetControls.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
+#include "ui/layout/LayoutContext.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIThemeUtils.h"
@@ -927,6 +933,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     auto&       audioManager = Audio::AudioManager::instance();
 
     // 文件管理字体与资源表格的视觉语义一致；缺失时沿用当前字体。
+    // 子视图只借用当前帧尺寸，持久 Clay Arena 仍由外层视图拥有。
     float   dpiScale        = layoutContext.m_dpiScale;
     ImFont* fileManagerFont = skinCfg.getFont("filemanager");
     if ( fileManagerFont ) {
