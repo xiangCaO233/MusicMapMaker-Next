@@ -497,6 +497,17 @@ void to_json(nlohmann::json& json, const CopyPasteTimeBasis& basis);
 /// @brief 从稳定文本读取复制粘贴时间基准。
 void from_json(const nlohmann::json& json, CopyPasteTimeBasis& basis);
 
+/// @brief 粘贴整批物件的目标时间位置，与批内相对时间基准独立。
+enum class PastePosition {
+    JudgmentLine,  ///< 当前播放判定线。
+    MouseCursor    ///< 最后悬停的编辑画布光标位置。
+};
+
+/// @brief 将粘贴位置偏好写为稳定文本。
+void to_json(nlohmann::json& json, const PastePosition& position);
+/// @brief 恢复粘贴位置；未知值保持传统判定线行为。
+void from_json(const nlohmann::json& json, PastePosition& position);
+
 /// @brief 物件放置磁吸使用的分拍线来源。
 enum class ObjectPlacementSnapMode {
     CurrentBeatDivisor,  ///< 仅使用当前分拍策略生成的分拍线。
@@ -934,6 +945,9 @@ struct EditorSettings {
 
     /// @brief 复制粘贴时按时间戳或分拍位置计算相对偏移。
     CopyPasteTimeBasis copyPasteTimeBasis{ CopyPasteTimeBasis::Timestamp };
+
+    /// @brief 粘贴到判定线或光标位置；普通与镜像粘贴共用。
+    PastePosition pastePosition{ PastePosition::JudgmentLine };
 
     /// @brief 时间线窗口多选是否允许选中 BPM 红线
     bool timelineSelectionIncludesBpm{ false };

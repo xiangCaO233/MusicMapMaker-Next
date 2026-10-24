@@ -8591,6 +8591,116 @@ bool testMarqueeKeepsOffscreenHoldsOnRelease()
     return true;
 }
 
+/// @brief 验证光标粘贴使用最后有效编辑位置，吸附、镜像和撤销保持一致。
+bool testPastePositionPreference()
+{
+    using namespace MMM;
+    using namespace MMM::Logic;
+    SessionContext source;
+    configureObjectEditingCanvas(source);
+    const auto note = source.noteRegistry.create();
+    source.noteRegistry.emplace<NoteComponent>(
+        note, NoteComponent{ .m_timestamp = 2.0, .m_trackIndex = 1 });
+    source.noteRegistry.emplace<InteractionComponent>(
+        note, InteractionComponent{ .isSelected = true });
+    const auto sample = source.sampleRegistry.create();
+    source.sampleRegistry.emplace<SampleComponent>(
+        sample,
+        SampleComponent{ .m_timestamp       = 3.0,
+                         .m_track           = 4,
+                         .m_audioResourceId = "sample.wav" });
+    source.sampleRegistry.emplace<InteractionComponent>(
+        sample, InteractionComponent{ .isSelected = true });
+    ActionController(source).handleCommand(CmdCopy{});
+
+    for ( auto position : { Config::PastePosition::JudgmentLine,
+                            Config::PastePosition::MouseCursor } ) {
+        for ( bool snap : { false, true } ) {
+            for ( bool mirror : { false, true } ) {
+                for ( bool hasCursor : { false, true } ) {
+                    SessionContext target;
+                    configureObjectEditingCanvas(target);
+                    target.animateTime                             = 10.0;
+                    target.lastConfig.settings.pastePosition       = position;
+                    target.lastConfig.settings.objectPlacementSnap = snap;
+                    target.lastConfig.settings.snapFloor           = false;
+                    target.lastConfig.settings.beatDivisor         = 1;
+                    const auto bpm = target.timelineRegistry.create();
+                    target.timelineRegistry.emplace<TimelineComponent>(
+                        bpm,
+                        TimelineComponent{ .m_timestamp = 0,
+                                           .m_effect    = TimingEffect::BPM,
+                                           .m_value     = 120 });
+                    auto& cache = target.timelineRegistry.ctx()
+                                      .get<System::ScrollCache>();
+                    cache.rebuild(target.timelineRegistry,
+                                  target.lastConfig,
+                                  target.currentBeatmap.get());
+                    if ( hasCursor ) {
+                        // 模拟三维视角已逆投影的坐标，再离开画布打开菜单。
+                        // 不能依赖 draw 工具或当前悬停状态才能使用该位置。
+                        target.lastConfig.visual.canvasCameraPoseEnabled = true;
+                        target.lastConfig.visual.canvasCameraLength      = 3.0F;
+                        CmdSetMousePosition mouse{
+                            .cameraId = "Basic2DCanvas",
+                            .mouseX   = 150.0F,
+                            .mouseY = 300.0F -
+                                      static_cast<float>(cache.getAbsY(10.37) -
+                                                         cache.getAbsY(10.0)),
+                            .viewportWidth  = 1000.0F,
+                            .viewportHeight = 600.0F,
+                            .isHovering     = true,
+                            .isUnprojected  = true
+                        };
+                        InteractionController interaction(target);
+                        interaction.handleCommand(mouse);
+                        mouse.isHovering = false;
+                        interaction.handleCommand(mouse);
+                    }
+                    ActionController controller(target);
+                    controller.handleCommand(CmdPaste{ .m_mirrored = mirror });
+                    const double expected =
+                        position == Config::PastePosition::MouseCursor &&
+                                hasCursor
+                            ? (snap ? 10.5 : 10.37)
+                            : 10.0;
+                    const auto notes =
+                        target.noteRegistry.view<NoteComponent>();
+                    const auto samples =
+                        target.sampleRegistry.view<SampleComponent>();
+                    if ( notes.size() != 1 || samples.size() != 1 ||
+                         std::abs(notes.get<NoteComponent>(*notes.begin())
+                                      .m_timestamp -
+                                  expected) > 1e-5 ||
+                         std::abs(samples.get<SampleComponent>(*samples.begin())
+                                      .m_timestamp -
+                                  expected - 1.0) > 1e-5 ||
+                         notes.get<NoteComponent>(*notes.begin())
+                                 .m_trackIndex != (mirror ? 2 : 1) ||
+                         target.actionStack.getUndoStackSize() != 1 ) {
+                        XERROR(
+                            "Paste position mismatch: mode={}, snap={}, "
+                            "mirror={}, cursor={}",
+                            static_cast<int>(position),
+                            snap,
+                            mirror,
+                            hasCursor);
+                        return false;
+                    }
+                    // 整批对象仍为一条撤销记录，位置策略不改变事务边界。
+                    controller.handleCommand(CmdUndo{});
+                    if ( target.noteRegistry.view<NoteComponent>().size() !=
+                             0 ||
+                         target.sampleRegistry.view<SampleComponent>().size() !=
+                             0 )
+                        return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
 /// @brief 验证混合 Note/Sample 跨会话粘贴共用时间锚点和相对 BGM 轨道。
 /// @details
 /// 来源选择同时包含玩家 Note 和自动 Sample，两者最早时间相差一秒。复制到六键
@@ -9022,6 +9132,7 @@ int main()
                    testCompositeConversionUsesTypedIdentity() &&
                    testMarqueeSelectsTypedSamplesOnlyOnMainCanvas() &&
                    testMarqueeKeepsOffscreenHoldsOnRelease() &&
+                   testPastePositionPreference() &&
                    testMixedChartObjectClipboardAcrossSessions() &&
                    testMixedChartObjectLocalCut() &&
                    testAnnotationMarkerProjectionAndGutterSnap()

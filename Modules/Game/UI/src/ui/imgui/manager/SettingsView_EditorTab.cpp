@@ -404,6 +404,21 @@ void SettingsView::drawEditorSettings()
                 changed |= ::MMM::UI::FeedbackCheckbox(
                     "##SelectPastedObjects", &settings.selectPastedObjects);
             });
+        // 目标位置与批内相对间距独立，镜像粘贴也由相同设置决定锚点。
+        addRadioSetting(
+            *sec,
+            rowIndex,
+            sectionIndex,
+            TR_CACHE("ui.settings.editor.paste_position").data(),
+            maxLabelW,
+            { { TR_CACHE("ui.settings.editor.paste_position.judgment_line")
+                    .data(),
+                (int)Config::PastePosition::JudgmentLine },
+              { TR_CACHE("ui.settings.editor.paste_position.mouse_cursor")
+                    .data(),
+                (int)Config::PastePosition::MouseCursor } },
+            (int&)settings.pastePosition,
+            changed);
         // 复制粘贴时间基准决定跨变速段时保持绝对时间还是音乐拍位置。
         // 枚举以整数引用传给通用单选 helper，选项值必须与枚举保持一致。
         addRadioSetting(

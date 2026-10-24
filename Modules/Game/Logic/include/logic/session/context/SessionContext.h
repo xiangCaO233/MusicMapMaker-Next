@@ -238,7 +238,11 @@ struct SessionContext {
     /// @brief 鼠标最后一次悬停的主画布 ID，用于菜单触发的分区全选。
     std::string lastMainCanvasCameraId;
     /// @brief 鼠标最后一次悬停主画布时的局部坐标。
-    glm::vec2    lastMainCanvasMousePos{ 0.0f, 0.0f };
+    glm::vec2 lastMainCanvasMousePos{ 0.0f, 0.0f };
+    /// @brief 最后有效的主画布或时间线落点，离开画布打开菜单时仍可粘贴。
+    std::string lastPasteCameraId;
+    /// @brief 对应画布平面中的光标坐标，三维输入已由 UI 逆投影。
+    glm::vec2    lastPasteMousePos{ 0.0f, 0.0f };
     entt::entity hoveredEntity{ entt::null };  ///< 当前悬停的实体 ID
     /// @brief 当前悬停实体所在的独立 ECS 注册表。
     ChartObjectKind hoveredObjectKind{ ChartObjectKind::PlayerNote };

@@ -2244,6 +2244,14 @@ void InteractionController::handleCommand(const CmdSetMousePosition& cmd)
             m_ctx.lastMainCanvasMousePos = m_ctx.lastMousePos;
         }
 
+        // 保存可编辑视图的最后落点，菜单抢走悬停后仍能定位；预览和音频视图
+        // 不覆盖它，避免用另一种缩放或时间坐标误解释主画布位置。
+        if ( isHovering && (SessionUtils::isMainCanvasCameraId(cmd.cameraId) ||
+                            cmd.cameraId == "Timeline") ) {
+            m_ctx.lastPasteCameraId = cmd.cameraId;
+            m_ctx.lastPasteMousePos = m_ctx.lastMousePos;
+        }
+
         // 如果命令携带了直接的时间戳，优先使用它（用于音频视图等非空间映射视口）
         if ( cmd.hoverTime >= 0.0 && std::isfinite(cmd.hoverTime) ) {
             m_ctx.previewHoverTime = cmd.hoverTime;

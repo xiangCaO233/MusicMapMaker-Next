@@ -1116,6 +1116,14 @@
     {
       "tab": "Editor",
       "section": "ui.settings.editor.behavior",
+      "label": "ui.settings.editor.paste_position",
+      "fields": ["ui.settings.editor.paste_position.judgment_line", "ui.settings.editor.paste_position.mouse_cursor"],
+      "keywords": "pastePosition paste cursor judgment line 粘贴 光标 判定线",
+      "aliases": "粘贴位置 Paste position"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.behavior",
       "label": "ui.settings.editor.copy_paste_time_basis",
       "fields": [
         "ui.settings.editor.copy_paste_time_basis.timestamp",
