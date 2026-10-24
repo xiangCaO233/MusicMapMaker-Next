@@ -15,6 +15,7 @@
 #include "event/logic/BeatmapSaveResultEvent.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapLoadDiagnosticPublisher.h"
+#include "logic/BmsPackageExportService.h"
 #include "logic/EditorEngine.h"
 #include "logic/ImdPackageExportService.h"
 #include "logic/MalodyPackageCompatibility.h"
@@ -1882,8 +1883,27 @@ bool writeBeatmapPackage(
     std::optional<MMM::MalodyMode> malodyExportMode,
     bool                           addStoreModeExtForMalodyExport,
     bool                           stripMainAudioVolumeFromMalodyExport,
-    bool                           alignNonOggMainAudioToOrigin)
+    bool                           alignNonOggMainAudioToOrigin,
+    MMM::BmsPackageAlignmentMode   bmsAlignmentMode)
 {
+    // BMS ZIP 使用独立资源事务，避免把 MCZ 私有首拍规则套入标准 BMS。
+    // 对齐计划和生成音频按谱面隔离，同一音乐可供不同首拍偏移的难度共享。
+    // 调用仍位于原有用户导出命令事务中，不从常态更新循环额外执行编码。
+    // 结果与其他包统一由外层发布保存反馈，服务错误在此保留具体原因。
+    // BMS 只接收一个枚举策略，不能把两种首拍补偿叠加执行。
+    // 非 BMS 分支继续使用各格式原有的独立音频参数。
+    if ( MMM::packageExtensionEquals(packageTypes.m_packageExtension,
+                                     ".zip") ) {
+        const auto result = MMM::Logic::BmsPackageExportService::exportPackage(
+            project,
+            selectedRelativePaths,
+            outputPath,
+            metadataOverrides,
+            bmsAlignmentMode);
+        if ( !result.success )
+            XERROR("BMS package export failed: {}", result.errorMessage);
+        return result.success;
+    }
     // 空选择无法形成有意义谱面包，也避免创建只有 zip 尾记录的空文件。
     if ( selectedRelativePaths.empty() ) return false;
     const auto& projectRoot = project.m_projectRoot;
@@ -4083,6 +4103,17 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
                     exportMap->m_baseMapMetadata.song_file_hint = relative;
             }
         }
+        // BMS 单文件只允许事件后移，不能进入打包服务的音频编码入口。
+        // 对齐必须作用于已重映射引用的独立快照，不能移动活动会话的 ECS。
+        // 所有后续红线与 BGM/Note 共用同一位移，初始 BPM 独立延长到零点。
+        // 选项关闭时保持既有另存为语义；其他格式不接受 BMS 对齐参数。
+        // 对齐失败与资源缺失一样阻止序列化，已有目标不能被提前截断。
+        std::string bmsAlignmentError;
+        if ( referencesValid && exportMap && isBms &&
+             cmd.bmsShiftEventsToGrid ) {
+            referencesValid = BmsPackageExportService::shiftEventsToGrid(
+                *exportMap, bmsAlignmentError);
+        }
         // 资源准备失败时短路，不打开目标文件。
         // 保存器自身还会拒绝不可表示的物件、增益和时间线效果。
         // 结果事件沿用现有失败路径，成功也不会接管当前谱面保存位置。
@@ -4106,7 +4137,7 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
                 .errorMessage =
                     isImd ? "RM/IMD 导出失败：请检查目标路径，或改用“RM/IMD "
                             "资源包”自动拼装音频与资源"
-                          : std::string{},
+                          : bmsAlignmentError,
             });
             return;
         }
@@ -4294,7 +4325,8 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
                             cmd.malodyExportMode,
                             cmd.addStoreModeExtForMalodyExport,
                             cmd.stripMainAudioVolumeFromMalodyExport,
-                            cmd.alignNonOggMainAudioToOrigin);
+                            cmd.alignNonOggMainAudioToOrigin,
+                            cmd.bmsAlignmentMode);
     if ( success ) {
         // writeBeatmapPackage 只有最终目标文件完整写出才返回成功。
         XINFO("PackBeatmap: package written to {}", cmd.exportPath);

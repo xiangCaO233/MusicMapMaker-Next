@@ -34,6 +34,8 @@ add_library(
   # 自动备份属于项目数据持久化，不在 UI 目标内直接实现文件写入。
   src/logic/BeatmapBackupService.cpp
   src/logic/ImdPackageExportService.cpp
+  # BMS 谱包独立管理首拍平移、音频副本和 ZIP 事务。
+  src/logic/BmsPackageExportService.cpp
   # 音频原点对齐是导出模型转换，不要求渲染器介入时间调整。
   src/logic/MczAudioOriginAlignment.cpp
   # 注册表管理会话与渲染同步身份，项目服务管理目录、资源和保存命令。
@@ -495,3 +497,13 @@ target_link_libraries(TemporaryArchivePackageTest PRIVATE Logic Log)
 mmm_register_test_case(
   NAME TemporaryArchivePackageTest COMMAND TemporaryArchivePackageTest
   "${MMM_TEST_RESOURCE_DIR}" "${CMAKE_BINARY_DIR}/test_output")
+
+# 端到端验证 BMS ZIP 的真实音频裁头/补头、轨道拍位及源文件保护。 夹具完全由程序生成，普通 CTest 不依赖用户项目或外部音频设备。
+# 手动真实谱面探针复用本测试入口，输出仍限定在构建目录。
+
+mmm_add_test_executable(Logic BmsPackageExportServiceTest
+                        tests/BmsPackageExportServiceTest.cpp)
+target_link_libraries(BmsPackageExportServiceTest PRIVATE Logic Log)
+mmm_register_test_case(
+  NAME BmsPackageExportServiceTest COMMAND BmsPackageExportServiceTest
+  "${CMAKE_BINARY_DIR}/test_output/bms_package")

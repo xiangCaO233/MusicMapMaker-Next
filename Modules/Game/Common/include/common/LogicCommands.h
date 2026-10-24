@@ -9,6 +9,7 @@
 #include "common/walkthrough/ComposeLessonNotes.h"
 #include "config/EditorConfig.h"
 #include "mmm/annotation/BeatmapAnnotation.h"
+#include "mmm/beatmap/BmsPackageAlignmentMode.h"
 #include "mmm/beatmap/MalodyMode.h"
 #include "mmm/metadata/BaseMapMeta.h"
 #include "mmm/metadata/TimingMetadata.h"
@@ -605,6 +606,10 @@ struct CmdSaveBeatmapAs {
     /// @brief 导出 MC 时是否写入上架皮肤 mode_ext。
     bool addStoreModeExtForMalodyExport{ false };
 
+    /// @brief BMS 单文件导出时整体后移事件对齐首拍，不允许改写音频文件。
+    /// @note false 保持原时间位置；非 BMS 家族格式忽略本字段。
+    bool bmsShiftEventsToGrid{ false };
+
     /// @brief 导出目标路径，使用 UTF-8 编码。
     std::string path;
 };
@@ -651,6 +656,12 @@ struct CmdPackBeatmap {
 
     /// @brief MCZ 包内 MC 谱面统一使用的 Malody 模式；其它包格式忽略。
     std::optional<MMM::MalodyMode> malodyExportMode;
+
+    /// @brief BMS 两种对齐策略始终互斥，默认通过音乐副本承担位移。
+    /// @note 非 BMS 资源包忽略本字段，不能叠加两种补偿。
+    MMM::BmsPackageAlignmentMode bmsAlignmentMode{
+        MMM::BmsPackageAlignmentMode::RewriteAudio
+    };
 
     /// @brief 转换指定谱面时临时覆盖的元数据列表。
     std::vector<PackageBeatmapMetadataOverride> metadataOverrides;
