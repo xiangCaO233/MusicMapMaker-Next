@@ -3,6 +3,7 @@
 #include "config/BeatLinePalette.h"
 #include "config/FrameLimitPreference.h"
 #include "config/NotePalette.h"
+#include "config/ObjectPlacementSnap.h"
 #include "config/SfxConfig.h"
 #include "config/ShortcutConfig.h"
 #include "config/SyncConfig.h"
@@ -296,77 +297,6 @@ enum class PastePosition {
 void to_json(nlohmann::json& json, const PastePosition& position);
 /// @brief 恢复粘贴位置；未知值保持传统判定线行为。
 void from_json(const nlohmann::json& json, PastePosition& position);
-
-/// @brief 物件放置磁吸使用的分拍线来源。
-enum class ObjectPlacementSnapMode {
-    CurrentBeatDivisor,  ///< 仅使用当前分拍策略生成的分拍线。
-    CommonBeatDivisors   ///< 使用用户选中的常用分拍线集合。
-};
-
-/// @brief 将物件放置磁吸模式序列化为稳定文本。
-void to_json(nlohmann::json& json, const ObjectPlacementSnapMode& mode);
-/// @brief 从稳定文本读取物件放置磁吸模式。
-void from_json(const nlohmann::json& json, ObjectPlacementSnapMode& mode);
-
-/// @brief 常用分拍选择允许的最小分母。
-inline constexpr int COMMON_BEAT_DIVISOR_MIN = 2;
-
-/// @brief 常用分拍选择允许的最大分母。
-inline constexpr int COMMON_BEAT_DIVISOR_MAX = 24;
-
-/// @brief 常用分拍选择的有效位数量。
-inline constexpr int COMMON_BEAT_DIVISOR_COUNT =
-    COMMON_BEAT_DIVISOR_MAX - COMMON_BEAT_DIVISOR_MIN + 1;
-
-/// @brief 1/2 至 1/24 常用分拍线的全部有效位。
-inline constexpr std::uint32_t COMMON_BEAT_DIVISOR_MASK_ALL =
-    (std::uint32_t{ 1 } << COMMON_BEAT_DIVISOR_COUNT) - 1U;
-
-/// @brief 默认启用的常用分拍集合。
-inline constexpr std::uint32_t COMMON_BEAT_DIVISOR_MASK_DEFAULT =
-    (std::uint32_t{ 1 } << (2 - COMMON_BEAT_DIVISOR_MIN)) |
-    (std::uint32_t{ 1 } << (3 - COMMON_BEAT_DIVISOR_MIN)) |
-    (std::uint32_t{ 1 } << (4 - COMMON_BEAT_DIVISOR_MIN)) |
-    (std::uint32_t{ 1 } << (6 - COMMON_BEAT_DIVISOR_MIN)) |
-    (std::uint32_t{ 1 } << (8 - COMMON_BEAT_DIVISOR_MIN)) |
-    (std::uint32_t{ 1 } << (12 - COMMON_BEAT_DIVISOR_MIN)) |
-    (std::uint32_t{ 1 } << (16 - COMMON_BEAT_DIVISOR_MIN)) |
-    (std::uint32_t{ 1 } << (24 - COMMON_BEAT_DIVISOR_MIN));
-
-/// @brief 判断常用分拍选择中是否启用了指定分母。
-/// @param mask 常用分拍选择位掩码。
-/// @param divisor 待查询的分母。
-/// @return 分母处于 2 至 24 且对应选择位开启时返回 true。
-inline constexpr bool isCommonBeatDivisorEnabled(std::uint32_t mask,
-                                                 int           divisor)
-{
-    if ( divisor < COMMON_BEAT_DIVISOR_MIN ||
-         divisor > COMMON_BEAT_DIVISOR_MAX ) {
-        return false;
-    }
-    const auto bit = static_cast<unsigned>(divisor - COMMON_BEAT_DIVISOR_MIN);
-    return (mask & (std::uint32_t{ 1 } << bit)) != 0U;
-}
-
-/// @brief 修改常用分拍选择中的指定分母状态。
-/// @param mask 待修改的常用分拍选择位掩码。
-/// @param divisor 待修改的分母。
-/// @param enabled 是否启用该分母。
-inline constexpr void setCommonBeatDivisorEnabled(std::uint32_t& mask,
-                                                  int divisor, bool enabled)
-{
-    if ( divisor < COMMON_BEAT_DIVISOR_MIN ||
-         divisor > COMMON_BEAT_DIVISOR_MAX ) {
-        return;
-    }
-    const auto bit  = static_cast<unsigned>(divisor - COMMON_BEAT_DIVISOR_MIN);
-    const auto flag = std::uint32_t{ 1 } << bit;
-    if ( enabled ) {
-        mask |= flag;
-    } else {
-        mask &= ~flag;
-    }
-}
 
 /// @brief BPM 测量工具中不依赖具体项目或音轨的用户偏好。
 struct BpmMeasurementToolPreferences {

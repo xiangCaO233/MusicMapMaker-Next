@@ -14,6 +14,7 @@
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/SessionUtils.h"
+#include "logic/session/context/SessionContext.h"
 #include "mmm/project/Project.h"
 #include "mmm/timing/BpmNormalization.h"
 #include "ui/UIManager.h"

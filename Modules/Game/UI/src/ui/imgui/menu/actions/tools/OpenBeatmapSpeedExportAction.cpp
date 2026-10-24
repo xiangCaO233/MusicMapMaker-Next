@@ -9,6 +9,7 @@
 #include "logic/EditorEngine.h"
 #include "logic/MalodyPackageCompatibility.h"
 #include "logic/session/SessionUtils.h"
+#include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/beatmap/BeatmapSpeedTransform.h"
 #include "runtime/AppThreadPool.h"

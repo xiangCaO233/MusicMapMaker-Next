@@ -1,13 +1,18 @@
 #pragma once
 
 #include "common/EditTool.h"
-#include "config/EditorConfig.h"
 #include "mmm/project/AudioResource.h"
-#include "mmm/project/ProjectSettings.h"
+#include "mmm/project/ProjectWorkspaceState.h"
 #include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
+
+namespace MMM::Config
+{
+/// @brief 应用端口只声明配置按值返回与借用参数，成员读取留在调用实现端。
+struct EditorConfig;
+}  // namespace MMM::Config
 
 namespace MMM::UI
 {
