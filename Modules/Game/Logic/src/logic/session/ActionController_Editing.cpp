@@ -254,6 +254,43 @@ void clearMalodyTimingBeatMetadata(::MMM::TimingMetadata& metadata)
     }
 }
 
+/// @brief 解析整批粘贴的目标时间，使用与绘制工具相同的滚动逆映射和吸附。
+/// @note 菜单触发会使鼠标离开画布，所以消费最后一次有效的编辑视图落点。
+/// @warning 仅在粘贴命令执行时调用，不在渲染热路径中重建缓存。
+double resolveClipboardPasteTime(SessionContext& ctx)
+{
+    if ( ctx.lastConfig.settings.pastePosition !=
+             Config::PastePosition::MouseCursor ||
+         ctx.lastPasteCameraId.empty() )
+        return ctx.animateTime;
+    const auto camera = ctx.cameras.find(ctx.lastPasteCameraId);
+    if ( camera == ctx.cameras.end() || camera->second.viewportHeight <= 0.0F ||
+         !std::isfinite(ctx.lastPasteMousePos.y) )
+        return ctx.animateTime;
+    SessionUtils::ensureBpmEvents(ctx);
+    const auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    if ( !cache ) return ctx.animateTime;
+    // 三维输入已经逆投影到轨道平面，轨道长度和运动补偿无需再乘除一次。
+    const float judgmentY =
+        camera->second.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
+    const double rawTime = cache->getTime(cache->getAbsY(ctx.animateTime) +
+                                          judgmentY - ctx.lastPasteMousePos.y);
+    if ( !std::isfinite(rawTime) ) return ctx.animateTime;
+    const auto snap = SessionUtils::getSnapResult(
+        rawTime,
+        ctx.lastPasteMousePos.y,
+        camera->second,
+        ctx.lastConfig,
+        ctx.bpmEvents,
+        ctx.timelineRegistry,
+        ctx.animateTime,
+        ctx.cameras,
+        ctx.currentBeatmap
+            ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+            : 120.0);
+    return std::max(0.0, snap.isSnapped ? snap.snappedTime : rawTime);
+}
+
 /// @brief 复制粘贴分拍换算使用的 BPM 时间点。
 struct ClipboardBeatTimelinePoint {
     double timestamp{ 0.0 };  ///< BPM 时间点，单位秒
@@ -3042,7 +3079,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
     }
 
     // 先预计算粘贴目标，确保不会在负时间创建新物件。
-    double pasteTime = m_ctx.animateTime;
+    const double pasteTime = resolveClipboardPasteTime(m_ctx);
 
     if ( !noteClipboard.empty() || !sampleClipboard.empty() ) {
         // Note 与 Sample 共用同一个最早锚点，保持混合编排的相对时间。
@@ -3310,7 +3347,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
     }
 
     if ( !timelineClipboard.empty() ) {
-        // Timeline 与对象域分别成动作，沿用同一播放头 pasteTime。
+        // Timeline 与对象域分别成动作，沿用同一个已解析的粘贴锚点。
         const bool pasteByBeat =
             m_ctx.lastConfig.settings.copyPasteTimeBasis ==
                 Config::CopyPasteTimeBasis::Beat &&

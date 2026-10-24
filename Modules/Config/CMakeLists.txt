@@ -296,3 +296,10 @@ target_include_directories(LayoutPresetsTest
 # 文件往返输出只写构建目录，不访问用户的配置或源码测试资源。
 mmm_register_test_case(NAME LayoutPresetsTest COMMAND LayoutPresetsTest
                        "${CMAKE_BINARY_DIR}/test_output/layout_presets")
+
+# 粘贴锚点与相对时间基准分别持久化，并为旧配置提供兼容默认值。
+mmm_add_test_executable(Config PastePositionConfigTest
+                        tests/PastePositionConfigTest.cpp)
+target_link_libraries(PastePositionConfigTest PRIVATE Config)
+mmm_register_test_case(NAME PastePositionConfigTest COMMAND
+                       PastePositionConfigTest)

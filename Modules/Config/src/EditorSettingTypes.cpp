@@ -800,6 +800,21 @@ void from_json(const nlohmann::json& json, CopyPasteTimeBasis& basis)
     }
 }
 
+/// @brief 序列化粘贴锚点，避免枚举顺序变化破坏用户设置。
+void to_json(nlohmann::json& json, const PastePosition& position)
+{
+    json =
+        position == PastePosition::MouseCursor ? "MouseCursor" : "JudgmentLine";
+}
+
+/// @brief 读取粘贴锚点，缺失、错误类型和未知值均沿用旧行为。
+void from_json(const nlohmann::json& json, PastePosition& position)
+{
+    position = PastePosition::JudgmentLine;
+    if ( json.is_string() && json.get<std::string>() == "MouseCursor" )
+        position = PastePosition::MouseCursor;
+}
+
 /// @brief 序列化物件放置吸附模式。
 /// @param json 接收 CurrentBeatDivisor 或 CommonBeatDivisors 标识。
 /// @param mode 当前吸附候选模式。
@@ -1146,6 +1161,7 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "enableBmsEditing", settings.enableBmsEditing },
         { "selectPastedObjects", settings.selectPastedObjects },
         { "copyPasteTimeBasis", settings.copyPasteTimeBasis },
+        { "pastePosition", settings.pastePosition },
         { "timelineSelectionIncludesBpm",
           settings.timelineSelectionIncludesBpm },
         // BPM 工具、光标和字体字段描述本机交互呈现，不写入谱面数据。
@@ -1336,6 +1352,8 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     // 粘贴时间基准与时间线 BPM 选择范围分别控制两种编辑语义。
     settings.copyPasteTimeBasis =
         json.value("copyPasteTimeBasis", CopyPasteTimeBasis::Timestamp);
+    settings.pastePosition =
+        json.value("pastePosition", PastePosition::JudgmentLine);
     settings.timelineSelectionIncludesBpm =
         json.value("timelineSelectionIncludesBpm", false);
     // 旧配置没有测量工具分拍值时继承根级 beatDivisor 保持操作习惯。
