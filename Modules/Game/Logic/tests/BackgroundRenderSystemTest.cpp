@@ -1,4 +1,6 @@
 #include "logic/ecs/system/BackgroundRenderSystem.h"
+// 背景批次按固定纹理语义校验，不借用其他渲染头传入枚举。
+#include "common/render/TextureID.h"
 
 #include "audio/BackgroundSpectrum.h"
 #include "log/colorful-log.h"

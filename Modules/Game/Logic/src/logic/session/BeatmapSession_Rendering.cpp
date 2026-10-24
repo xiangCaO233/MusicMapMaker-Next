@@ -1,8 +1,11 @@
 #include "logic/BeatmapSession.h"
-#include "mmm/Metadata.h"
+#include "mmm/metadata/BaseMapMeta.h"
+#include "mmm/metadata/MapMetadata.h"
 
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
+// 快照生产端直接访问字段；缓冲兼容头只提供声明和公共小类型。
+#include "common/render/RenderSnapshot.h"
 #include "config/Utf8Path.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"

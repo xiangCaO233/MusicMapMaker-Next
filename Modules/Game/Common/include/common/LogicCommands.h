@@ -1,21 +1,24 @@
 #pragma once
 
 #include "common/AutoSaveTypes.h"
+#include "common/LogicCommandFwd.h"
 
 #include "common/ChartObjectKind.h"
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
 #include "common/walkthrough/ComposeLessonNotes.h"
 #include "config/EditorConfig.h"
-#include "mmm/Metadata.h"
 #include "mmm/annotation/BeatmapAnnotation.h"
 #include "mmm/beatmap/MalodyMode.h"
-#include "mmm/project/AudioResource.h"
+#include "mmm/metadata/BaseMapMeta.h"
+#include "mmm/metadata/TimingMetadata.h"
+#include "mmm/project/AudioTrackConfig.h"
+#include "mmm/project/AudioTrackType.h"
 #include "mmm/timing/Timing.h"
 #include "mmm/timing/TimingTemplate.h"
 #include <array>
 #include <cstdint>
-#include <entt/entt.hpp>
+#include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
@@ -243,8 +246,7 @@ struct CmdUpdateMarquee {
 /**
  * @brief 结束框选指令
  */
-struct CmdEndMarquee {
-};
+struct CmdEndMarquee {};
 
 /**
  * @brief 移除指定位置的框选区域
@@ -491,8 +493,7 @@ struct CmdClearNoteColorOverrides {
 };
 
 /// @brief 清除当前谱面全部正式音符及折线子段的自定义颜色。
-struct CmdClearAllNoteColorOverrides {
-};
+struct CmdClearAllNoteColorOverrides {};
 
 /**
  * @brief 撤销指令
@@ -507,14 +508,12 @@ struct CmdUndo {
 /**
  * @brief 重做指令
  */
-struct CmdRedo {
-};
+struct CmdRedo {};
 
 /**
  * @brief 复制指令
  */
-struct CmdCopy {
-};
+struct CmdCopy {};
 
 /**
  * @brief 粘贴指令
@@ -530,14 +529,12 @@ struct CmdPaste {
 /**
  * @brief 剪切指令
  */
-struct CmdCut {
-};
+struct CmdCut {};
 
 /**
  * @brief 删除选中物件指令
  */
-struct CmdDeleteSelected {
-};
+struct CmdDeleteSelected {};
 
 /// @brief 删除创作教学红框指定的错误根物件，避免普通撤销误伤其它编辑。
 struct CmdRemoveComposeLessonNote {
@@ -552,14 +549,12 @@ struct CmdRemoveComposeLessonNote {
 /**
  * @brief 镜像选中物件指令
  */
-struct CmdMirrorSelected {
-};
+struct CmdMirrorSelected {};
 
 /**
  * @brief 对齐选中物件至常用分拍指令
  */
-struct CmdAlignSelectedToCommonBeats {
-};
+struct CmdAlignSelectedToCommonBeats {};
 
 /// @brief 全选命令的轨道区范围。
 enum class SelectAllScope : std::uint8_t {
@@ -1006,8 +1001,7 @@ struct CmdUpdateBeatmapMetadata {
 };
 
 /// @brief 标记直接修改的扩展谱面元数据，并请求尾随自动保存。
-struct CmdMarkBeatmapMetadataDirty {
-};
+struct CmdMarkBeatmapMetadataDirty {};
 
 /**
  * @brief 导入音频指令
@@ -1067,42 +1061,6 @@ struct CmdSaveTemporaryProject {
     std::string destinationPath;
 };
 
-/**
- * @brief 所有可能的逻辑指令变体
- */
-using LogicCommand = std::variant<
-    CmdUpdateEditorConfig, CmdUpdateViewport, CmdSetPlayState, CmdLoadBeatmap,
-    CmdCreateBeatmap, CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag,
-    CmdUpdateDrag, CmdEndDrag, CmdCreateAudioSample,
-    CmdUpdateAudioSampleProperties, CmdUpdateObjectTimestamp,
-    CmdUpdateObjectSampleVolume, CmdUpdateSelectedObjectSampleVolume,
-    CmdUpdateTrackCount, CmdUpdateBgmTrackCount, CmdUpdateDraftTrackCount,
-    CmdSeek, CmdCaptureComposeLessonNotes, CmdSetComposeLessonInputLimit,
-    CmdSetPlaybackSpeed, CmdSetPlaybackPitch, CmdSetKeySoundTrackMute,
-    CmdSetKeySoundTrackGain, CmdSetKeySoundEffectGroupGain,
-    CmdSetDraftKeySoundAreaMute, CmdSetBgmKeySoundAreaMute, CmdChangeTool,
-    CmdSetMousePosition, CmdUndo, CmdRedo, CmdCopy, CmdPaste, CmdCut,
-    CmdDeleteSelected, CmdRemoveComposeLessonNote, CmdMirrorSelected,
-    CmdAlignSelectedToCommonBeats, CmdSelectAll, CmdSetBrushNoteColor,
-    CmdApplyNoteColorToSelection, CmdSetBrushNotePalette,
-    CmdSetBrushAudioResource, CmdApplyNotePaletteToSelection,
-    CmdApplyBrushPaletteToEntity, CmdClearNoteColorOverrides,
-    CmdClearAllNoteColorOverrides, CmdSaveBeatmap, CmdSaveBeatmapAs,
-    CmdPackBeatmap, CmdScroll, CmdPanCanvas, CmdUpdateTimelineEvent,
-    CmdUpdateTimelineEvents, CmdDeleteTimelineEvent, CmdDeleteTimelineEvents,
-    CmdCreateTimelineEvent, CmdUpdateBpmWithKeepSpeedSv,
-    CmdKeepSpeedForBpmEvents, CmdCreateTimelineEvents, CmdReplaceBeatmapTimings,
-    CmdSetNoteAnnotation, CmdUpsertBeatmapAnnotation,
-    CmdRemoveBeatmapAnnotation, CmdReplaceBeatmapData,
-    CmdAcknowledgeCollaborationMutation, CmdReconcileCollaborationHistory,
-    CmdSetCollaborationResources, CmdSetCollaborationOfflineReadOnly,
-    CmdSetCollaborationClipboardIsolation, CmdStartMarquee, CmdUpdateMarquee,
-    CmdEndMarquee, CmdRemoveMarqueeAt, CmdStartBrush, CmdUpdateBrush,
-    CmdEndBrush, CmdStartErase, CmdUpdateErase, CmdEndErase,
-    CmdUpdateBeatmapMetadata, CmdMarkBeatmapMetadataDirty, CmdImportAudio,
-    CmdUpdateAudioResource, CmdRenameAudioResource,
-    CmdUpdateAudioResourceConfig, CmdRemoveAudioResource, CmdRemoveBeatmap,
-    CmdExportImdPackage, CmdSaveTemporaryProject>;
 
 /// @brief 判断命令是否会修改谱面、项目资源或把当前谱面写入文件。
 /// @param command 待检查的逻辑命令。

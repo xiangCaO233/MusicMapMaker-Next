@@ -1,5 +1,7 @@
 #pragma once
 
+#include <imgui.h>
+
 #include "ui/ITextureLoader.h"
 #include "ui/imgui/feedback/BeatmapLoadDiagnosticFeedback.h"
 #include "ui/imgui/feedback/SaveResultFeedback.h"

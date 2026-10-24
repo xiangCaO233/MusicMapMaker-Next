@@ -3,6 +3,7 @@
 #include "logic/ecs/components/TimelineComponent.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/timing/BpmNormalization.h"
+#include "mmm/timing/TimingInterpolationAlgorithms.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>

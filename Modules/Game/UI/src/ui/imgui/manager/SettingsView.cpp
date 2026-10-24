@@ -1,5 +1,6 @@
 #include "ui/imgui/manager/SettingsView.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
@@ -10,6 +11,7 @@
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/manager/SettingsSearchIndex.h"
+#include "ui/layout/LayoutContext.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -948,7 +950,7 @@ void SettingsView::update(UIManager* sourceManager)
                                         ImVec2(FLT_MAX, FLT_MAX));
 
     // LayoutContext 管理 ImGui Begin/End，并把 m_isOpen 连接到关闭按钮。
-    LayoutContext layoutContext(m_layoutCtx,
+    LayoutContext layoutContext(*this,
                                 windowName,
                                 false,
                                 ImGuiWindowFlags_None,

@@ -1,3 +1,14 @@
+// 命令消费端的编译依赖边界。
+// 可撤销编辑动作的完整命令消费端。
+// 本实现检查命令字段并构造对应的动作，因此需要载荷定义。
+// 控制器接口只接收命令引用，声明本身不要求这些类型完整。
+// 命令类型声明和载荷定义拆开后，二者的依赖边界必须保持明确。
+// 此处显式引入完整命令，不能依赖引擎或会话接口转入定义。
+// 物件、采样和时间线继续按各自领域生成既有的动作快照。
+// 跨注册表选择仍携带类型身份，不把实体数值当成全局唯一键。
+// 粘贴载荷仍由编辑器剪贴板提供，不把命令对象保存到撤销栈。
+// 头文件隔离只调整编译边界，动作提交和数据所有权保持原协议。
+#include "common/LogicCommands.h"
 #include "config/CreatorIdentity.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
@@ -20,6 +31,8 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/timing/BpmNormalization.h"
+// 编辑操作需要校验与绑定插值曲线，直接声明算法依赖，避免借用 ECS 组件的包含。
+#include "mmm/timing/TimingInterpolationAlgorithms.h"
 #include "mmm/timing/TimingTemplate.h"
 #include "runtime/AppThreadPool.h"
 #include <algorithm>
@@ -1081,13 +1094,13 @@ bool appendSpeedPreservingScrolls(
     // 只有旧时间点可能携带 Scroll，来源命令的非 BPM 效果会被忽略。
     // 首红线之前两边各以自身参考值作为当前 BPM，初始视觉速度相同。
     while ( oldIndex < before.size() || newIndex < replacementBpm.size() ) {
-        const double             oldTime = oldIndex < before.size()
-                                               ? before[oldIndex].m_timestamp
-                                               : std::numeric_limits<double>::infinity();
-        const double             newTime = newIndex < replacementBpm.size()
-                                               ? replacementBpm[newIndex].m_timestamp
-                                               : std::numeric_limits<double>::infinity();
-        const double             time    = std::min(oldTime, newTime);
+        const double oldTime = oldIndex < before.size()
+                                   ? before[oldIndex].m_timestamp
+                                   : std::numeric_limits<double>::infinity();
+        const double newTime = newIndex < replacementBpm.size()
+                                   ? replacementBpm[newIndex].m_timestamp
+                                   : std::numeric_limits<double>::infinity();
+        const double time    = std::min(oldTime, newTime);
         const TimelineComponent* originalScroll = nullptr;
         // 旧红线先重置旧 SV，随后旧绿线在同刻取得最终控制权。
         // Malody BPM 不重置旧 SV；此来源差异由元数据分组判定。

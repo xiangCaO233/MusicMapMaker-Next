@@ -1,7 +1,8 @@
 #include "ui/imgui/menu/items/MainMenuToolbarVisibilityItem.h"
+#include "config/EditorSettings.h"
 
 #include "config/AppConfig.h"
-#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "ui/utils/UIWidgetUtils.h"
 
 namespace MMM::UI

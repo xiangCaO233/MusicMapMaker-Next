@@ -1,4 +1,7 @@
+// 折线编辑开关读写具体设置，不能仅凭前向声明访问字段。
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "ui/IEditorApplicationService.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/menu/MainMenuTypes.h"

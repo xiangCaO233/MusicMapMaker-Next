@@ -1,3 +1,4 @@
+#include "common/render/TextureID.h"
 #include "log/colorful-log.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
@@ -912,13 +913,13 @@ bool runDraftInternalHoldBoundaryCase()
     parent.m_isDraft    = true;
     parent.m_subNotes   = {
         Note::SubNote{
-              .type = MMM::NoteType::NOTE, .timestamp = 1.0, .trackIndex = -2 },
+            .type = MMM::NoteType::NOTE, .timestamp = 1.0, .trackIndex = -2 },
         Note::SubNote{ .type       = MMM::NoteType::HOLD,
-                         .timestamp  = 1.5,
-                         .duration   = 0.5,
-                         .trackIndex = -3 },
+                       .timestamp  = 1.5,
+                       .duration   = 0.5,
+                       .trackIndex = -3 },
         Note::SubNote{
-              .type = MMM::NoteType::NOTE, .timestamp = 2.0, .trackIndex = -3 },
+            .type = MMM::NoteType::NOTE, .timestamp = 2.0, .trackIndex = -3 },
     };
     MMM::Logic::ensureNoteCollaborationIdentity(parent);
     // 父根保持未选中，命令明确命中内部节点而不是进入整组拖动。

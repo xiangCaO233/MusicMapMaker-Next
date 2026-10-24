@@ -1,4 +1,5 @@
 #include "logic/BeatmapSession.h"
+#include "BeatmapSession_CommandState.h"
 #include "audio/AudioManager.h"
 #include "common/LogicCommandMutationClassification.h"
 #include "common/LogicCommands.h"
@@ -241,7 +242,7 @@ double sanitizeTimelineZoom(double zoom)
 /// @brief 建立会话上下文、领域控制器和时间线缓存失效连接。
 /// @note 控制器借用同一上下文，必须先构造上下文再创建控制器。
 /// @note 初始化只建立运行期状态，谱面内容通过后续加载命令进入会话。
-BeatmapSession::BeatmapSession()
+BeatmapSession::BeatmapSession() : m_commands(std::make_unique<CommandState>())
 {
     // 会话持有所有权，各领域控制器共享数据但不各自复制会话状态。
     m_ctx         = std::make_unique<SessionContext>();
@@ -279,7 +280,7 @@ void BeatmapSession::pushCommand(LogicCommand&& cmd)
             m_resourceRenameGeneration.load(std::memory_order_relaxed);
     }
     // 不在提交线程直接执行命令，维持会话状态更新的统一入口。
-    m_commandQueue.enqueue(std::move(cmd));
+    m_commands->queue.enqueue(std::move(cmd));
 }
 
 /// @brief 根据命令实际影响的数据领域拦截无权限编辑。
@@ -433,7 +434,7 @@ void BeatmapSession::setCollaborationOfflineReadOnly(bool readOnly)
     }
     if ( previous == readOnly ) return;
     // 状态未变化不重复排队，避免连续状态广播反复取消交互。
-    m_commandQueue.enqueue(
+    m_commands->queue.enqueue(
         LogicCommand(CmdSetCollaborationOfflineReadOnly{ readOnly }));
     // 内部状态命令直接入队，不经过用户编辑的提交前拦截。
 }
@@ -462,7 +463,7 @@ void BeatmapSession::setCollaborationClipboardIsolated(bool isolated)
     // 编号只承担身份区分，不用作不同会话之间编辑动作的时序证明。
     // 零表示非隔离作用域，每次重新进入隔离使用新身份，旧内容不能自动复用。
     m_collaborationClipboardScopeId.store(scopeId, std::memory_order_release);
-    m_commandQueue.enqueue(LogicCommand(
+    m_commands->queue.enqueue(LogicCommand(
         CmdSetCollaborationClipboardIsolation{ isolated, scopeId }));
 }
 
@@ -492,7 +493,7 @@ void BeatmapSession::setCollaborationAllowedMutationFlags(
          static_cast<std::uint8_t>(::MMM::BeatmapMutationFlags::All) ) {
         // 权限收紧时复用逻辑线程的交互取消流程，避免正在拖拽或绘制的草稿
         // 在旧权限下继续提交。
-        m_commandQueue.enqueue(
+        m_commands->queue.enqueue(
             LogicCommand(CmdSetCollaborationOfflineReadOnly{ true }));
     }
 }
@@ -557,7 +558,8 @@ void BeatmapSession::publishRequestedMutationSnapshot()
 bool BeatmapSession::hasPendingCommands() const
 {
     // 延迟文件命令已离开队列但仍待执行，不能仅凭无锁队列长度判断空闲。
-    return !m_deferredFileCommands.empty() || m_commandQueue.size_approx() > 0;
+    return !m_commands->deferredFileCommands.empty() ||
+           m_commands->queue.size_approx() > 0;
 }
 
 /// @brief 判断会话是否需要跳过后台限频并立即更新。

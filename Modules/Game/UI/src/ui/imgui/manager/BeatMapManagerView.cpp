@@ -3,6 +3,7 @@
 #endif
 
 #include "ui/imgui/manager/BeatMapManagerView.h"
+#include "common/LogicCommands.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
@@ -16,6 +17,7 @@
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
+#include "ui/layout/LayoutContext.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>

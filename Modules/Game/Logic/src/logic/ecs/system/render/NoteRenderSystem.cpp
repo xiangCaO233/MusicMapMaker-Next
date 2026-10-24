@@ -1,6 +1,8 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "common/render/CanvasCameraMath.h"
+#include "common/render/TextureID.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/skin/SkinConfig.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/BackgroundRenderSystem.h"

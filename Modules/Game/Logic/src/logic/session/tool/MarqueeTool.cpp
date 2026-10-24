@@ -1,4 +1,5 @@
 #include "logic/session/tool/MarqueeTool.h"
+#include "common/LogicCommands.h"
 #include "logic/BeatmapSession.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -249,9 +250,9 @@ void MarqueeTool::handleRemoveMarqueeAt(SessionContext&           ctx,
                                 ctx.lastConfig.visual.trackLayout.top) *
                                mainViewportHeight;
         // 高度只用于确定尺度，后续位置仍以当前视口自己的判定线为锚点。
-        float ty = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by = it->second.viewportHeight -
-                   ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float ty           = ctx.lastConfig.visual.previewConfig.margin.top;
+        float by           = it->second.viewportHeight -
+                             ctx.lastConfig.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         // 可绘制高度排除预览边距，与绘制时压缩的有效范围保持一致。
         renderScaleY =

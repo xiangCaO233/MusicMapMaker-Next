@@ -1,4 +1,6 @@
 #include "ui/imgui/menu/actions/edit/PlaybackShortcutRouting.h"
+#include "config/EditorSettings.h"
+#include "ui/imgui/ShortcutUtils.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -37,6 +39,63 @@ bool testPlaybackShortcutConsumesNavigationActivation()
     ImGui::DestroyContext();
     return cleared;
 }
+/// @brief 验证独立实现仍返回原设置成员，并保持录制共享状态和格式化回退。
+/// @return 引用身份、文字和跨函数状态全部一致时为 true。
+/// @details 不注入真实键盘事件；已有导航回归继续验证 ImGui 路由上下文。
+bool testShortcutUtilityBoundary()
+{
+    using namespace MMM::UI::ShortcutUtils;
+    using MMM::Logic::EditTool;
+    MMM::Config::EditorSettings settings;
+    // 只读入口使用原对象的 const 视图，避免值拷贝掩盖引用身份错误。
+    const auto& readOnly = settings;
+    // 成员指针表固定五种有独立绑定的工具，避免只验证默认 Move 而遗漏字段映射。
+    const std::array tools{ EditTool::Move,
+                            EditTool::Marquee,
+                            EditTool::Draw,
+                            EditTool::ColorBrush,
+                            EditTool::ColorEraser };
+    // 期望地址直接取自配置字段，不以被测函数生成期望结果。
+    const std::array bindings{ &settings.shortcutConfig.toolMove,
+                               &settings.shortcutConfig.toolMarquee,
+                               &settings.shortcutConfig.toolDraw,
+                               &settings.shortcutConfig.toolColorBrush,
+                               &settings.shortcutConfig.toolColorEraser };
+    for ( std::size_t i = 0; i < tools.size(); ++i ) {
+        // 可写和只读入口都必须借用同一成员，不能在源文件内返回临时或缓存副本。
+        if ( &getToolShortcut(settings, tools[i]) != bindings[i] ||
+             &getToolShortcut(readOnly, tools[i]) != bindings[i] )
+            return false;
+    }
+    // Layout 沿用 Move 回退；通过返回引用写入后立即观察原设置。
+    getToolShortcut(settings, EditTool::Layout).key = "FutureKey";
+    if ( settings.shortcutConfig.toolMove.key != "FutureKey" ||
+         &getToolShortcut(readOnly, EditTool::Layout) != bindings.front() )
+        return false;
+    // 未知未来按键仍显示原文字，禁用绑定不显示；不依赖当前 ImGui 上下文。
+    // 展示测试复制绑定，避免覆盖工具映射测试刚写入的设置。
+    auto binding = settings.shortcutConfig.mirror;
+    // 保留默认镜像快捷键的 Ctrl 修饰，检查未知键仍能保留显示前缀。
+    binding.key = "FutureKey";
+    if ( formatShortcut(binding) != "Ctrl+FutureKey" ) return false;
+    // 禁用优先于名称回退，旧配置中的未知键也不能显示已失效操作。
+    binding.enabled = false;
+    if ( !formatShortcut(binding).empty() ) return false;
+    // 查找返回进程内稳定表元素，不能借用源文件函数的局部自动数组。
+    // 稳定名称与界面显示文字 Left 不同，查找必须使用持久化名称。
+    const auto* entry = findKeyEntry("LeftArrow");
+    if ( !entry || entry != findKeyEntry("LeftArrow") ||
+         entry->key != ImGuiKey_LeftArrow || findKeyEntry("FutureKey") )
+        return false;
+    // 录制标记必须在 setter、getter 与原引用入口之间共享同一个状态。
+    setShortcutRecordingActive(true);
+    // 先记录 setter 的可见结果，再通过引用入口清除以检验共享存储。
+    const bool active              = isShortcutRecordingActive();
+    shortcutRecordingActiveState() = false;
+    // 无论检测结果如何都先恢复状态，避免影响同一测试进程的后续用例。
+    return active && !isShortcutRecordingActive();
+}
+
 }  // namespace
 
 /// @brief 覆盖活动控件期间允许播放切换的编辑交互组合。
@@ -71,5 +130,8 @@ int main()
         true, true, false, false, false, false);
     // 最后验证获准播放时同步消费 ImGui 导航状态。
     ok &= testPlaybackShortcutConsumesNavigationActivation();
+    // 工具函数移出头文件后，仍需通过实际链接验证引用与状态的单一定义。
+    // 该检查不依赖上一组已经销毁的 ImGui 上下文，区分纯配置与输入查询职责。
+    ok &= testShortcutUtilityBoundary();
     return ok ? 0 : 1;
 }

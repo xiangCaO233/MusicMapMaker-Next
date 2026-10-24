@@ -1,6 +1,8 @@
 #include "canvas/TimingFormula.h"
 #include "canvas/TimingFunctionEditorState.h"
 #include "canvas/TimingInterpolationPreview.h"
+// 测试直接调用领域求值接口，避免由预览或编辑状态头间接提供声明。
+#include "mmm/timing/TimingInterpolationAlgorithms.h"
 
 #include "log/colorful-log.h"
 #include "mmm/timing/Timing.h"

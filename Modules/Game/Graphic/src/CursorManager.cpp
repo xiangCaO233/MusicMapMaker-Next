@@ -1,5 +1,6 @@
 #include "graphic/CursorManager.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/skin/SkinConfig.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "imgui_internal.h"
@@ -152,13 +153,13 @@ void CursorManager::UpdateAndDraw(float smokeLifeOverride)
     // 纹理倍率叠加用户尺寸、DPI 与按压动画，保持鼠标热点和发射间距不变。
     // 三层各自缩放，烟雾和拖尾不会被主光标纹理的配置连带改变。
     // 未配置的资源由皮肤管理器返回单位倍率，兼容既有皮肤的视觉尺寸。
-    float cursorSize = cursorCfg.cursorSize * dpiScale * pressScale *
-                       skin.getTextureScale(CURSOR_KEY);
-    float trailSize = cursorCfg.trailSize * dpiScale * pressScale *
-                      skin.getTextureScale(TRAIL_KEY);
+    float cursorSize    = cursorCfg.cursorSize * dpiScale * pressScale *
+                          skin.getTextureScale(CURSOR_KEY);
+    float trailSize     = cursorCfg.trailSize * dpiScale * pressScale *
+                          skin.getTextureScale(TRAIL_KEY);
     float trailLifeTime = cursorCfg.trailLifeTime;
     float smokeSize     = cursorCfg.smokeSize * dpiScale * pressScale *
-                      skin.getTextureScale(SMOKE_KEY);
+                          skin.getTextureScale(SMOKE_KEY);
     float smokeLifeTime = (smokeLifeOverride > 0.0f) ? smokeLifeOverride
                                                      : cursorCfg.smokeLifeTime;
 

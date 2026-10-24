@@ -1,6 +1,6 @@
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
 #include "config/VisualConfig.h"
-#include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"

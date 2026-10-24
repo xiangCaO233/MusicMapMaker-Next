@@ -1,4 +1,6 @@
 #include "logic/ecs/system/render/PolylineCarrierAnchor.h"
+// 载体锚点测试通过纹理类别识别绘制批次，编号来源与生产端一致。
+#include "common/render/TextureID.h"
 
 #include "config/EditorConfig.h"
 #include "log/colorful-log.h"

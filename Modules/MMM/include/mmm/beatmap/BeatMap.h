@@ -1,7 +1,8 @@
 #pragma once
 
-#include "mmm/Metadata.h"
 #include "mmm/annotation/BeatmapAnnotation.h"
+#include "mmm/metadata/BaseMapMeta.h"
+#include "mmm/metadata/MapMetadata.h"
 #include "mmm/note/Flick.h"
 #include "mmm/note/Hold.h"
 #include "mmm/note/Note.h"

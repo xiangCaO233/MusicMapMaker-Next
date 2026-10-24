@@ -1,9 +1,9 @@
 #pragma once
 
-#include "mmm/note/Note.h"
+#include "mmm/note/NoteType.h"
 
 #include <atomic>
-#include <entt/entt.hpp>
+#include <entt/entity/entity.hpp>
 #include <vector>
 
 namespace MMM::Logic

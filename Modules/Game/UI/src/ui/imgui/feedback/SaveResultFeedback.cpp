@@ -2,7 +2,7 @@
 #include "ui/imgui/feedback/SaveResultFeedback.h"
 
 #include "config/Utf8Path.h"
-#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/BeatmapSaveProgressEvent.h"
 #include "event/logic/BeatmapSaveResultEvent.h"

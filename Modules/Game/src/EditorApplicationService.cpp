@@ -1,4 +1,5 @@
 #include "game/EditorApplicationService.h"
+#include "config/EditorConfig.h"
 
 #include "audio/AudioManager.h"
 #include "config/Utf8Path.h"

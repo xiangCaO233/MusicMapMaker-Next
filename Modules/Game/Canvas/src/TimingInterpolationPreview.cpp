@@ -1,4 +1,5 @@
 #include "canvas/TimingInterpolationPreview.h"
+#include "mmm/timing/TimingInterpolationAlgorithms.h"
 
 #include <imgui.h>
 

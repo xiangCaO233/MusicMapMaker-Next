@@ -1,4 +1,5 @@
 #include "logic/ecs/system/BackgroundSpectrumRenderSystem.h"
+#include "common/render/TextureID.h"
 
 #include "common/CanvasComponentLayout.h"
 #include "logic/BeatmapSyncBuffer.h"

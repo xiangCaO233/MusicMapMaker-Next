@@ -1,7 +1,9 @@
 #include "ui/walkthrough/WalkthroughPage.h"
+#include "config/EditorConfig.h"
 
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
+#include "common/render/RenderSnapshot.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "common/walkthrough/ComposeLessonNotes.h"
 #include "config/AppConfig.h"

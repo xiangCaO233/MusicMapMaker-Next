@@ -4,7 +4,10 @@
 #include "runtime/AppThreadPool.h"
 
 #include <chrono>
+#include <future>
 #include <ice/thread/ThreadPool.hpp>
+#include <mutex>
+#include <stop_token>
 #include <thread>
 #include <unordered_map>
 
@@ -15,6 +18,43 @@
 
 namespace MMM::Logic
 {
+
+/// @brief 控制侧和后台任务共享的私有状态；不向包含监听器的控制器传播线程实现。
+/// 任务仍由应用线程池调度，状态只在监听器构造时分配一次。
+struct ProjectDirectoryWatcher::State {
+    /// @brief 文件夹监听线程的主循环。
+    /// @param watchPath 需要递归监听的项目目录路径。
+    /// @param stopToken 共享线程池任务的停止令牌。
+    /// @param changePending 借用外层对象的原子门闩，stop
+    /// 等待任务退出后才可销毁。
+    /// @warning 后台阻塞监听路径；Win32 等待退出/变更事件，其他平台每 500ms
+    /// 采样。
+    void watcherThreadLoop(std::filesystem::path watchPath,
+                           std::stop_token       stopToken,
+                           std::atomic<bool>&    changePending);
+
+    /// @brief 发布到 Runtime 共享线程池的监听任务。
+    std::future<void> m_workerFuture;
+
+    /// @brief 监听任务的协作式停止源。
+    std::stop_source m_stopSource;
+
+    /// @brief 监听线程运行标志。
+    /// @warning 文件监听线程原子：启动/停止线程时写入，监听循环轮询读取；
+    /// 不属于渲染热路径，但用于跨线程退出信号。
+    std::atomic<bool> m_running{ false };
+
+#ifdef _WIN32
+    /// @brief Win32 目录句柄，用于取消阻塞的 ReadDirectoryChangesW。
+    void* m_directoryHandle{ nullptr };
+
+    /// @brief Win32 退出事件句柄，用于安全退出监听线程。
+    void* m_exitEvent{ nullptr };
+#endif
+
+    /// @brief 保护平台目录句柄和退出事件句柄的独立锁。
+    mutable std::mutex m_mutex;
+};
 
 #ifndef _WIN32
 namespace
@@ -101,6 +141,12 @@ bool directoryPollingSnapshotChanged(const DirectoryPollingSnapshot& previous,
 }  // namespace
 #endif
 
+/// @brief 创建生命周期内稳定的后台状态，不启动线程或访问文件系统。
+ProjectDirectoryWatcher::ProjectDirectoryWatcher()
+    : m_state(std::make_unique<State>())
+{
+}
+
 /// @brief 停止监听线程并释放平台相关监听句柄。
 /// @warning 析构等待捕获 this 的工作任务结束，不能在该工作任务自身执行析构。
 ProjectDirectoryWatcher::~ProjectDirectoryWatcher()
@@ -127,28 +173,30 @@ void ProjectDirectoryWatcher::start(const std::filesystem::path& path)
 
     {
         /// @brief 保护监听状态切换和平台退出事件创建的互斥锁。
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_running.store(true, std::memory_order_release);
+        std::lock_guard<std::mutex> lock(m_state->m_mutex);
+        m_state->m_running.store(true, std::memory_order_release);
         m_changePending.store(false, std::memory_order_release);
         // 新项目不继承旧项目的待扫描信号。
 #ifdef _WIN32
-        m_exitEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+        m_state->m_exitEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
         // 手动复位退出事件由本轮 start 创建，stop
         // 唤醒后直到任务退出都保持触发。
-        if ( !m_exitEvent ) {
-            m_running.store(false, std::memory_order_release);
+        if ( !m_state->m_exitEvent ) {
+            m_state->m_running.store(false, std::memory_order_release);
             XERROR("Directory Watcher: Failed to create exit event.");
             return;
         }
 #endif
     }
 
-    m_stopSource = std::stop_source{};
+    m_state->m_stopSource = std::stop_source{};
     // stop_source 不能沿用已请求停止的旧状态，每次监听使用新令牌。
-    const auto token = m_stopSource.get_token();
-    m_workerFuture   = appThreadPool->enqueue(
+    const auto token        = m_state->m_stopSource.get_token();
+    m_state->m_workerFuture = appThreadPool->enqueue(
         // 路径按值捕获，调用者离开启动函数后不依赖其参数对象继续存活。
-        [this, path, token]() { watcherThreadLoop(path, token); });
+        [this, path, token]() {
+            m_state->watcherThreadLoop(path, token, m_changePending);
+        });
     // 日志表示任务已提交，平台目录打开可能稍后在工作线程内失败。
     XINFO("Directory Watcher: Started monitoring directory: {}",
           Config::pathToUtf8(path));
@@ -166,25 +214,26 @@ void ProjectDirectoryWatcher::stop()
 
     {
         /// @brief 保护监听状态切换和平台退出事件触发的互斥锁。
-        std::lock_guard<std::mutex> lock(m_mutex);
-        wasRunning = m_running.exchange(false, std::memory_order_acq_rel);
+        std::lock_guard<std::mutex> lock(m_state->m_mutex);
+        wasRunning =
+            m_state->m_running.exchange(false, std::memory_order_acq_rel);
         // 运行位负责循环退出，future 是否有效决定是否仍需等待任务收尾。
-        hadWorker = m_workerFuture.valid();
+        hadWorker = m_state->m_workerFuture.valid();
 #ifdef _WIN32
-        if ( wasRunning && m_exitEvent &&
-             m_exitEvent != INVALID_HANDLE_VALUE ) {
+        if ( wasRunning && m_state->m_exitEvent &&
+             m_state->m_exitEvent != INVALID_HANDLE_VALUE ) {
             // 触发退出事件，使 ReadDirectoryChangesW 阻塞立刻解除并退出
-            SetEvent(static_cast<HANDLE>(m_exitEvent));
+            SetEvent(static_cast<HANDLE>(m_state->m_exitEvent));
         }
 #endif
     }
 
-    m_stopSource.request_stop();
+    m_state->m_stopSource.request_stop();
     // 令牌与运行标志同时用于循环退出；Win32 还依靠退出事件唤醒系统等待。
     // 等待放在互斥锁之外，后台任务仍可能需要该锁发布平台句柄。
-    if ( m_workerFuture.valid() ) {
-        m_workerFuture.wait();
-        m_workerFuture = std::future<void>{};
+    if ( m_state->m_workerFuture.valid() ) {
+        m_state->m_workerFuture.wait();
+        m_state->m_workerFuture = std::future<void>{};
         // 消费掉本轮任务句柄，使重复 stop 不再次等待已结束的任务。
     }
 
@@ -192,15 +241,17 @@ void ProjectDirectoryWatcher::stop()
     // 并发冲突
     {
         /// @brief 保护平台句柄释放的互斥锁。
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::lock_guard<std::mutex> lock(m_state->m_mutex);
 #ifdef _WIN32
-        if ( m_directoryHandle && m_directoryHandle != INVALID_HANDLE_VALUE ) {
-            CloseHandle(static_cast<HANDLE>(m_directoryHandle));
-            m_directoryHandle = INVALID_HANDLE_VALUE;
+        if ( m_state->m_directoryHandle &&
+             m_state->m_directoryHandle != INVALID_HANDLE_VALUE ) {
+            CloseHandle(static_cast<HANDLE>(m_state->m_directoryHandle));
+            m_state->m_directoryHandle = INVALID_HANDLE_VALUE;
         }
-        if ( m_exitEvent && m_exitEvent != INVALID_HANDLE_VALUE ) {
-            CloseHandle(static_cast<HANDLE>(m_exitEvent));
-            m_exitEvent = nullptr;
+        if ( m_state->m_exitEvent &&
+             m_state->m_exitEvent != INVALID_HANDLE_VALUE ) {
+            CloseHandle(static_cast<HANDLE>(m_state->m_exitEvent));
+            m_state->m_exitEvent = nullptr;
         }
 #endif
     }
@@ -244,8 +295,9 @@ bool ProjectDirectoryWatcher::isRelevantProjectPathChange(
 /// @param watchPath 需要递归监听的项目目录路径。
 /// @param stopToken 共享线程池任务的停止令牌。
 /// @warning 仅在线程池后台任务运行；系统事件等待及轮询休眠不阻塞逻辑更新。
-void ProjectDirectoryWatcher::watcherThreadLoop(std::filesystem::path watchPath,
-                                                std::stop_token       stopToken)
+void ProjectDirectoryWatcher::State::watcherThreadLoop(
+    std::filesystem::path watchPath, std::stop_token stopToken,
+    std::atomic<bool>& changePending)
 {
 #ifdef _WIN32
     // 平台句柄只属于本轮任务，控制侧 stop 在任务结束后统一释放目录句柄。
@@ -374,7 +426,7 @@ void ProjectDirectoryWatcher::watcherThreadLoop(std::filesystem::path watchPath,
             if ( hasRelevantChange ) {
                 // release 与逻辑侧 exchange
                 // 配对，通知只承载脏状态而非资源快照。
-                m_changePending.store(true, std::memory_order_release);
+                changePending.store(true, std::memory_order_release);
             }
         } else {
             // 非预期等待结果结束任务，避免以失效事件继续占用后台线程。
@@ -407,7 +459,7 @@ void ProjectDirectoryWatcher::watcherThreadLoop(std::filesystem::path watchPath,
                                              currentSnapshot) ) {
             previousSnapshot = std::move(currentSnapshot);
             // 仅变化时替换基准，随后通知逻辑层做真正的资源同步。
-            m_changePending.store(true, std::memory_order_release);
+            changePending.store(true, std::memory_order_release);
         }
     }
 #endif

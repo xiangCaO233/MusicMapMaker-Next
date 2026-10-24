@@ -1,7 +1,7 @@
 #pragma once
 
 #include "event/core/EventBus.h"
-#include "mmm/project/AudioResource.h"
+#include "mmm/project/AudioTrackType.h"
 #include "ui/IUIView.h"
 #include "ui/imgui/manager/ProjectAudioToolLayout.h"
 
@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <imgui.h>
 #include <optional>
 #include <string>
 #include <vector>

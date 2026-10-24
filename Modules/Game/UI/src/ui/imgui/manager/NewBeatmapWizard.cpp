@@ -1,6 +1,9 @@
+// 向导提交完整谱面命令，必须显式提供命令载荷和编辑器配置定义。
 #include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "common/AudioInfoUtils.h"
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "event/core/EventBus.h"
@@ -11,6 +14,7 @@
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/SessionUtils.h"
+#include "logic/session/context/SessionContext.h"
 #include "mmm/project/Project.h"
 #include "mmm/timing/BpmNormalization.h"
 #include "ui/UIManager.h"

@@ -1,11 +1,9 @@
 #pragma once
 #include "AudioResource.h"
 #include "ProjectSettings.h"
-#include <algorithm>
 #include <cstdint>
 #include <filesystem>
-#include <memory>
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 #include <string>
 #include <vector>
 
@@ -23,9 +21,11 @@ struct ProjectMetadata {
     /// @brief 项目版本 (用于兼容性检查)
     std::string m_version{ "1.0.0" };
 
-    /// @brief 按稳定字段名序列化项目展示元数据。
-    NLOHMANN_DEFINE_TYPE_INTRUSIVE(ProjectMetadata, m_title, m_artist, m_mapper,
-                                   m_version)
+    /// @brief 写出稳定字段，保留输出对象中其他已有的键。
+    friend void to_json(nlohmann::json& j, const ProjectMetadata& metadata);
+
+    /// @brief 读取全部必需字段，缺失字段保持原有失败语义。
+    friend void from_json(const nlohmann::json& j, ProjectMetadata& metadata);
 };
 
 /// @brief 单张谱面独占的一组项目草稿轨物件。
@@ -47,33 +47,11 @@ struct ProjectDraftLaneGroup {
 
     /// @brief 序列化草稿轨组，不写出进程内版本。
     friend void to_json(nlohmann::json&              json,
-                        const ProjectDraftLaneGroup& group)
-    {
-        json = nlohmann::json{ { "m_notePayload", group.m_notePayload },
-                               { "m_trackCount", group.m_trackCount } };
-        if ( !group.m_beatmapFilePath.empty() ) {
-            // 新数据只写谱面路径，确保同主音频的不同谱面拥有独立草稿。
-            json["m_beatmapFilePath"] = group.m_beatmapFilePath;
-        } else if ( !group.m_legacyMainAudioResourceId.empty() ) {
-            // 尚未被任一谱面认领的旧组保持原键，避免打开项目时自动保存丢失。
-            json["m_mainAudioResourceId"] = group.m_legacyMainAudioResourceId;
-        }
-    }
+                        const ProjectDraftLaneGroup& group);
 
     /// @brief 反序列化草稿轨组并重置进程内版本。
     friend void from_json(const nlohmann::json&  json,
-                          ProjectDraftLaneGroup& group)
-    {
-        group.m_beatmapFilePath =
-            json.value("m_beatmapFilePath", std::string{});
-        group.m_legacyMainAudioResourceId =
-            group.m_beatmapFilePath.empty()
-                ? json.value("m_mainAudioResourceId", std::string{})
-                : std::string{};
-        group.m_notePayload     = json.value("m_notePayload", std::string{});
-        group.m_trackCount      = std::max(0, json.value("m_trackCount", 0));
-        group.m_runtimeRevision = 0U;
-    }
+                          ProjectDraftLaneGroup& group);
 };
 
 /// @brief 核心项目容器：管理多个谱面实例、多个音频资源、以及特定偏好设置
@@ -97,27 +75,12 @@ public:
         /// @brief 序列化当前谱面入口，不再写出旧版单主音轨字段。
         /// @param json 输出 JSON 对象。
         /// @param entry 待序列化的谱面入口。
-        friend void to_json(nlohmann::json& json, const BeatmapEntry& entry)
-        {
-            // 旧版单音轨字段只读不写，保存后自然迁移到资源引用模型。
-            json = nlohmann::json{ { "m_name", entry.m_name },
-                                   { "m_filePath", entry.m_filePath } };
-        }
+        friend void to_json(nlohmann::json& json, const BeatmapEntry& entry);
 
         /// @brief 反序列化谱面入口，并读取旧版单主音轨迁移字段。
         /// @param json 输入 JSON 对象。
         /// @param entry 接收反序列化结果的谱面入口。
-        friend void from_json(const nlohmann::json& json, BeatmapEntry& entry)
-        {
-            // 先重置对象，防止复用实例残留新文件未提供的字段。
-            entry = BeatmapEntry{};
-            // 非对象节点不是有效入口，保持刚建立的空值。
-            if ( !json.is_object() ) return;
-
-            entry.m_name         = json.value("m_name", std::string{});
-            entry.m_filePath     = json.value("m_filePath", std::string{});
-            entry.m_audioTrackId = json.value("m_audioTrackId", std::string{});
-        }
+        friend void from_json(const nlohmann::json& json, BeatmapEntry& entry);
     };
 
     // --- 数据成员 (参与 JSON 序列化) ---
@@ -155,36 +118,10 @@ public:
     std::filesystem::path m_temporarySourcePackagePath;
 
     /// @brief 序列化项目配置。
-    friend void to_json(nlohmann::json& j, const Project& p)
-    {
-        // 运行时根目录和临时包身份不写入可迁移的项目描述文件。
-        j = nlohmann::json{
-            { "m_metadata", p.m_metadata },
-            { "m_settings", p.m_settings },
-            { "m_audioResources", p.m_audioResources },
-            { "m_beatmaps", p.m_beatmaps },
-            { "m_draftLaneGroups", p.m_draftLaneGroups },
-            { "m_excludedBeatmapPaths", p.m_excludedBeatmapPaths },
-            { "m_excludedAudioPaths", p.m_excludedAudioPaths }
-        };
-    }
+    friend void to_json(nlohmann::json& j, const Project& p);
 
     /// @brief 反序列化项目配置，并兼容旧项目文件中缺失的排除列表。
-    friend void from_json(const nlohmann::json& j, Project& p)
-    {
-        // 核心旧字段保持必需，缺失时由 nlohmann 明确报告损坏项目。
-        j.at("m_metadata").get_to(p.m_metadata);
-        j.at("m_settings").get_to(p.m_settings);
-        j.at("m_audioResources").get_to(p.m_audioResources);
-        j.at("m_beatmaps").get_to(p.m_beatmaps);
-        // 后增字段使用 value 提供空集合，保证旧项目可直接升级读取。
-        p.m_draftLaneGroups =
-            j.value("m_draftLaneGroups", std::vector<ProjectDraftLaneGroup>{});
-        p.m_excludedBeatmapPaths =
-            j.value("m_excludedBeatmapPaths", std::vector<std::string>{});
-        p.m_excludedAudioPaths =
-            j.value("m_excludedAudioPaths", std::vector<std::string>{});
-    }
+    friend void from_json(const nlohmann::json& j, Project& p);
 };
 
 }  // namespace MMM

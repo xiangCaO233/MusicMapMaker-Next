@@ -1,5 +1,6 @@
 #include "config/AppConfig.h"
 #include "config/AppPaths.h"
+#include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"

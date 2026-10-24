@@ -1,6 +1,11 @@
+/// @file EditorSettingTypes.cpp
+/// @brief 编辑器配置值及独立偏好类型的 JSON 转换实现。
+/// @details 同步参数的 ADL 声明由轻量 SyncConfig.h 与类型一同提供。
+/// 完整 JSON 操作仍留在此实现，移动类型不改变字段名和旧值回退规则。
 #include "config/AudioPlaybackConfig.h"
 #include "config/CreatorIdentity.h"
 #include "config/EditorConfig.h"
+#include "config/SyncConfig.h"
 #include "config/TimingInterpolationPreferences.h"
 
 #include <nlohmann/json.hpp>

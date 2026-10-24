@@ -1,3 +1,4 @@
+#include "common/render/TextureID.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 
 #include "common/render/CanvasCameraMath.h"

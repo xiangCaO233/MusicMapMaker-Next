@@ -1,5 +1,5 @@
 #include "config/AppConfig.h"
-#include "config/skin/SkinConfig.h"
+#include "config/EditorSettings.h"
 #include "config/skin/translation/Translation.h"
 #include "log/colorful-log.h"
 #include "ui/UIManager.h"
@@ -350,7 +350,7 @@ bool checkProfessionalDisabledTooltip()
         if ( initialFrame ) {
             const auto low  = ImGui::GetItemRectMin();
             const auto high = ImGui::GetItemRectMax();
-            itemCenter = { (low.x + high.x) * .5f, (low.y + high.y) * .5f };
+            itemCenter   = { (low.x + high.x) * .5f, (low.y + high.y) * .5f };
             initialFrame = false;
         }
         ImGui::End();

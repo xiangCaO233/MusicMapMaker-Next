@@ -1,10 +1,12 @@
 #include "audio/AudioManager.h"
+#include "config/EditorSettings.h"
 
 #include "config/AppConfig.h"
 #include "log/colorful-log.h"
 #include "runtime/AppThreadPool.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -964,6 +966,60 @@ bool testAuditionVolumeRouting(MMM::Audio::AudioManager& manager,
     return passed;
 }
 
+/// @brief 验证已提交和未提交的音效请求可以跨关闭、重初始化安全清理。
+/// @param manager 已初始化且使用测试输出后端的音频管理器。
+/// @param samplePath 可解码的测试资源路径。
+/// @return 旧请求不会进入新音频图，且同名资源可重新准备时返回 true。
+/// @details 提交五项请求超过四项并发上限，覆盖 worker 与等待队列两种状态。
+/// 零结果预算阻止泵把完成结果接入图，随后直接关闭，不依赖 worker 执行快慢。
+/// 不人为阻塞线程池；关闭流程必须自行等待已提交任务并清空尚未提交的请求。
+/// @warning 仅用于测试生命周期；shutdown 会等待后台任务，不可用于播放热路径。
+bool testQueuedSoundEffectShutdown(MMM::Audio::AudioManager& manager,
+                                   const std::string&        samplePath)
+{
+    // 使用同一音频、不同登记身份，避免引入额外测试资源和解码时长依赖。
+    const std::array<std::string, 5> keys{ "shutdown-load-0",
+                                           "shutdown-load-1",
+                                           "shutdown-load-2",
+                                           "shutdown-load-3",
+                                           "shutdown-load-4" };
+    for ( const auto& key : keys ) {
+        manager.registerSoundEffect(key, samplePath, 1.0F, 0.0);
+        if ( !manager.queueBoundNoteSoundEffectLoad(key) ) {
+            // main 的统一关闭入口负责清理前面已登记的请求。
+            XERROR("Could not queue shutdown lifecycle SFX: {}", key);
+            return false;
+        }
+    }
+    // 允许派发任务，但明确禁止接入任何结果；关闭时必须处理这些后台句柄。
+    // 即使工作线程已完成，零预算仍保证结果等待关闭路径统一回收。
+    manager.updateQueuedSoundEffectLoads(0U);
+    manager.shutdown();
+    // 线程池仍然存活；重新创建后端与 AudioPool，复用原管理器的私有状态。
+    manager.init();
+    for ( const auto& key : keys ) {
+        // shutdown 必须清除登记和接纳令牌，旧请求不可在新生命周期继续加载。
+        if ( manager.isSoundEffectLoaded(key) ||
+             manager.queueBoundNoteSoundEffectLoad(key) ) {
+            XERROR("Stale SFX survived shutdown: {}", key);
+            return false;
+        }
+    }
+    // 同名登记必须能够重新排队，验证 pending、活动计数与修订处理未卡住。
+    manager.registerSoundEffect(keys.front(), samplePath, 1.0F, 0.0);
+    const bool loaded =
+        manager.queueBoundNoteSoundEffectLoad(keys.front()) && waitUntil([&]() {
+            manager.updateQueuedSoundEffectLoads();
+            return manager.isSoundEffectLoaded(keys.front());
+        });
+    // 成功和失败都撤销本测试的登记；主入口继续承担最终任务等待。
+    manager.unloadSoundEffect(keys.front());
+    if ( !loaded ) {
+        XERROR("SFX could not reload after shutdown and reinitialization");
+    }
+    return loaded;
+}
+
 }  // namespace
 
 /// @brief 运行 AudioManager 自动采样时间线集成测试。
@@ -1016,7 +1072,8 @@ int main(int argc, char** argv)
         testTimelineUnloadReleasesDecodedTrack(manager, samplePath) &&
         testStreamingSelection(manager, samplePath) &&
         testSharedMainStretcher(manager, samplePath) &&
-        testAuditionVolumeRouting(manager, samplePath);
+        testAuditionVolumeRouting(manager, samplePath) &&
+        testQueuedSoundEffectShutdown(manager, samplePath);
 
     // 先停止音频后端和释放图，再关闭资源线程池。
     manager.shutdown();

@@ -1,10 +1,12 @@
 #include "audio/AudioManager.h"
+#include "AudioManagerSoundEffectLoadingState.h"
 #include "BackgroundSpectrumAnalyzer.h"
 #include "audio/AudioTimelineMixerNode.h"
 #include "audio/KeySoundControl.h"
 #include "audio/SoundEffectPool.h"
 #include "audio/TimelineStopGateNode.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "log/colorful-log.h"
 #include "runtime/AppThreadPool.h"
 
@@ -251,6 +253,7 @@ AudioManager& AudioManager::instance()
 /// 只恢复配置中明确保存的 key，尚未注册的池会在创建时读取这份映射。
 AudioManager::AudioManager()
     : m_keySoundControls(std::make_unique<KeySoundControlBank>())
+    , m_sfxLoading(std::make_unique<SoundEffectLoadingState>())
 {
     // 只持有配置单例的短期引用，AudioManager 内部保存独立运行时副本。
     auto& settings       = Config::AppConfig::instance().getEditorSettings();
@@ -286,7 +289,8 @@ AudioManager::AudioManager()
     }
 }
 
-/// @brief 销毁音频管理器。
+/// @brief 在完整私有状态可见处销毁音频管理器。
+/// @pre 调用方已在关闭线程池前执行 shutdown，后台任务已全部退出。
 AudioManager::~AudioManager() = default;
 
 /// @brief 初始化音频后端、线程池、音频池、播放器和主混音图。

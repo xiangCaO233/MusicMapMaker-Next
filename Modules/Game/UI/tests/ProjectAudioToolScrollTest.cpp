@@ -1,3 +1,4 @@
+#include "config/EditorSettings.h"
 #include "ui/imgui/manager/ProjectAudioToolView.h"
 
 #include "audio/AudioManager.h"

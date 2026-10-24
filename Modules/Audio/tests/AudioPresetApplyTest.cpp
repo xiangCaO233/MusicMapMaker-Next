@@ -1,6 +1,9 @@
+// 预设应用测试实际修改混音字段，显式提供完整配置定义。
 #include "audio/AudioManager.h"
 #include "audio/KeySoundTypes.h"
 #include "config/AppConfig.h"
+#include "config/AudioPresets.h"
+#include "config/EditorSettings.h"
 #include "log/colorful-log.h"
 #include <cmath>
 

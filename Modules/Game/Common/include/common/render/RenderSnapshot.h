@@ -4,18 +4,22 @@
 #include "common/ChartObjectKind.h"
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
+#include "common/UnicodeCodepoint.h"
 #include "common/UnicodeFontData.h"
 #include "common/render/AnnotationRenderData.h"
 #include "common/render/CanvasRenderTypes.h"
 #include "common/render/CanvasThicknessCompensation.h"
+#include "common/render/HoverRenderData.h"
 #include "common/render/NoteRenderData.h"
 #include "common/render/ScrollRenderData.h"
+#include "common/render/TimelineInteractiveElement.h"
 #include "common/render/TimingInterpolationRenderData.h"
+#include "common/walkthrough/WalkthroughEditEvent.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <entt/entt.hpp>
+#include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
 #include <optional>
 #include <string>
@@ -34,315 +38,6 @@ using Logic::ChartObjectKind;
 using Logic::EditTool;
 using Logic::NoteColorSlot;
 
-
-/// @brief 跨逻辑与渲染线程共享的稳定纹理语义 ID。
-/// @note 数值分区避免内置纹理、动态特效和字体图集互相冲突。
-enum class TextureID : uint32_t {
-    None       = 0,
-    Background = 1,
-    Note       = 2,
-    Node       = 3,
-    HoldBodyVertical,
-    HoldBodyHorizontal,
-    HoldEnd,
-    FlickArrowLeft,
-    FlickArrowRight,
-    Track,
-    JudgeArea,
-    Logo,
-
-    /// @brief 独立长条头纹理；未提供的皮肤继续使用 Note。
-    HoldHead,
-
-    NoteSelectionBorder = 100,
-
-    EffectStart = 1000,
-
-    /// @brief ASCII 字形使用独立高位保留区，避免与皮肤动态特效 ID 冲突。
-    AsciiGlyphStart = 0x00100000U,
-
-    /// @brief 按需 Unicode 字形使用独立高位保留区。
-    UnicodeGlyphStart = 0x00200000U
-};
-
-/// @brief 将 ASCII 字号档位与字符转换为字体图集纹理 ID。
-/// @param tierIndex 字号档位索引。
-/// @param character ASCII 字符。
-/// @return 字符对应纹理 ID；范围外返回 `TextureID::None`。
-[[nodiscard]] inline constexpr TextureID asciiGlyphTextureId(
-    std::size_t tierIndex, char character)
-{
-    // 先转换为无符号字节，避免实现相关的负 char 破坏范围判断。
-    const auto code = static_cast<unsigned char>(character);
-    // 字号档位或字符超出固定 ASCII 图集时显式返回无纹理。
-    if ( tierIndex >= Common::ASCII_FONT_RASTER_TIER_COUNT ||
-         code < Common::ASCII_GLYPH_FIRST || code > Common::ASCII_GLYPH_LAST ) {
-        return TextureID::None;
-    }
-    // 每个字号档位占用连续区间，字符码点提供区间内偏移。
-    return static_cast<TextureID>(
-        static_cast<std::uint32_t>(TextureID::AsciiGlyphStart) +
-        tierIndex * Common::ASCII_GLYPH_COUNT + code -
-        Common::ASCII_GLYPH_FIRST);
-}
-
-/// @brief 将 Unicode 码点转换为字体图集纹理 ID。
-/// @param codepoint 合法且非 ASCII 的 Unicode 码点。
-/// @return 字符对应纹理 ID；范围外返回 `TextureID::None`。
-[[nodiscard]] inline constexpr TextureID unicodeGlyphTextureId(
-    std::uint32_t codepoint)
-{
-    // ASCII 使用独立多档图集，非法 Unicode 标量也不得占用纹理编号。
-    if ( codepoint <= Common::ASCII_GLYPH_LAST ||
-         !Common::isValidUnicodeCodepoint(codepoint) ) {
-        return TextureID::None;
-    }
-    // Unicode 高位保留区直接叠加码点，保证同一码点得到稳定 ID。
-    return static_cast<TextureID>(
-        static_cast<std::uint32_t>(TextureID::UnicodeGlyphStart) + codepoint);
-}
-
-/// @brief 拾取包围盒对应的可交互物件部位。
-/// @note 部位用于选择拖动语义，具体物件领域另由 ChartObjectKind 表示。
-enum class HoverPart : uint8_t {
-    None = 0,
-    Head,
-    HoldBody,
-    HoldEnd,
-    FlickArrow,
-    PolylineNode,
-    SampleAnchor,
-    SampleOffset
-};
-
-/// @brief UI 悬浮检视面板展示的细分物件结构类型。
-/// @note 该枚举比 HoverPart 更细，用于选择不同字段和提示文案。
-enum class HoverInspectKind : uint8_t {
-    None = 0,
-    Note,
-    HoldHead,
-    HoldBody,
-    HoldEnd,
-    FlickHead,
-    FlickBody,
-    FlickEnd,
-    PolylineHead,
-    PolylineNode,
-    PolylineHoldBody,
-    PolylineHoldEnd,
-    PolylineFlickBody,
-    PolylineFlickEnd,
-    AudioSampleAnchor,
-    AudioSampleTrigger
-};
-
-/// @brief 悬浮部位对应的拍位、时间和轨道信息。
-struct HoverBeatPoint {
-    /// @brief 是否显示该部位的拍位与时间信息
-    bool show{ false };
-    /// @brief 部位所在拍号
-    int beatIndex{ 0 };
-    /// @brief 部位所在分拍分子
-    int numerator{ 0 };
-    /// @brief 部位所在分拍分母
-    int denominator{ 1 };
-    /// @brief 部位精确时间戳，单位秒
-    double time{ 0.0 };
-    /// @brief 部位所在拍的起点时间，单位秒。
-    double beatStartTime{ 0.0 };
-    /// @brief 部位所在拍的终点时间，单位秒。
-    double beatEndTime{ 0.0 };
-    /// @brief 当前 BPM 下完整一拍的名义时长，单位秒。
-    double beatDuration{ 0.0 };
-    /// @brief 部位所在轨道
-    int32_t track{ 0 };
-};
-
-/// @brief 当前悬浮对象交给 UI 展示的结构化只读快照。
-struct HoverInspectInfo {
-    /// @brief 是否显示结构化悬浮检视信息
-    bool show{ false };
-    /// @brief 当前检视物件实体。
-    entt::entity entity{ entt::null };
-    /// @brief 当前检视物件所在的独立 ECS 注册表。
-    ChartObjectKind objectKind{ ChartObjectKind::PlayerNote };
-    /// @brief 当前悬浮部位类型
-    HoverInspectKind kind{ HoverInspectKind::None };
-    /// @brief Head 部位信息
-    HoverBeatPoint head;
-    /// @brief Body 部位信息
-    HoverBeatPoint body;
-    /// @brief End 部位信息
-    HoverBeatPoint end;
-    /// @brief 是否显示持续时间
-    bool showDuration{ false };
-    /// @brief 持续时间，单位秒
-    double duration{ 0.0 };
-    /// @brief 是否显示滑动轨道数
-    bool showDtrack{ false };
-    /// @brief Flick 滑动轨道数
-    int32_t dtrack{ 0 };
-    /// @brief 是否显示轨道位置
-    bool showTrack{ false };
-    /// @brief 当前部位轨道位置
-    int32_t track{ 0 };
-
-    /// @brief 是否显示自动采样资源信息。
-    bool showAudioSample{ false };
-    /// @brief 当前物件是否存在可独立试听的项目音频引用。
-    bool showAudioPreview{ false };
-    /// @brief 自动采样引用的项目音频资源 ID。
-    std::string audioResourceId;
-    /// @brief 自动采样物件音量。
-    float volume{ 1.0F };
-    /// @brief 当前试听绑定所属的 Polyline 子物件索引；负值表示物件本体。
-    std::int32_t sampleBindingSubIndex{ -1 };
-    /// @brief 自动采样相对锚点的有符号播放偏移，单位毫秒。
-    std::int64_t offsetMs{ 0 };
-
-    /// @brief 当前悬浮位置按重叠检测规则命中的物件数量。
-    int overlapCount{ 1 };
-};
-
-/// @brief 悬浮检视或编辑手势触发的单轨单拍临时分拍预览。
-struct HoverSubdivisionPreview {
-    /// @brief 是否需要替换目标轨道当前拍内的分拍线。
-    bool show{ false };
-    /// @brief 临时预览所属的玩家轨道。
-    int32_t track{ 0 };
-    /// @brief 悬浮部件在目标拍内的最简分拍分子。
-    int numerator{ 0 };
-    /// @brief 临时预览使用的分拍分母。
-    int denominator{ 1 };
-    /// @brief 常用分拍线并集位掩码；为零时仅绘制 denominator 对应分拍线。
-    std::uint32_t commonBeatDivisorMask{ 0U };
-    /// @brief 触发临时预览的物件部件时间，单位秒。
-    double focusTime{ 0.0 };
-    /// @brief 目标拍起点时间，单位秒。
-    double beatStartTime{ 0.0 };
-    /// @brief 目标拍终点时间，单位秒。
-    double beatEndTime{ 0.0 };
-    /// @brief 生成临时分拍线所用的完整拍时长，单位秒。
-    double beatDuration{ 0.0 };
-};
-
-/// @brief 用于 UI 碰撞拾取的轴对齐包围盒。
-struct Hitbox {
-    /// @brief 包围盒所属 ECS 实体。
-    entt::entity entity;
-    /// @brief 包围盒代表的物件部位。
-    HoverPart part{ HoverPart::None };
-    /// @brief Polyline 子物件或其他细分部位索引；负值表示物件本体。
-    int subIndex{ -1 };
-    /// @brief 包围盒左上角横坐标。
-    float x;
-    /// @brief 包围盒左上角纵坐标。
-    float y;
-    /// @brief 包围盒宽度。
-    float w;
-    /// @brief 包围盒高度。
-    float h;
-    /// @brief 实体所在的独立 ECS 注册表。
-    ChartObjectKind kind{ ChartObjectKind::PlayerNote };
-};
-
-/// @brief 以包围盒中心为基准缩放交互拾取区域。
-/// @param hitbox 原始渲染几何对应的包围盒。
-/// @param scaleX 横向缩放；非正数或非有限值回退为 1。
-/// @param scaleY 纵向缩放；非正数或非有限值回退为 1。
-/// @return 保留实体与部件信息的缩放后包围盒。
-/// @warning UI 与调试渲染热路径：每个候选框调用，只做常量级算术且不分配。
-[[nodiscard]] inline Hitbox scaleInteractionHitbox(const Hitbox& hitbox,
-                                                   float         scaleX,
-                                                   float scaleY) noexcept
-{
-    // 非正或非有限缩放不具备有效几何意义，按单位缩放处理。
-    const float safeScaleX =
-        std::isfinite(scaleX) && scaleX > 0.0F ? scaleX : 1.0F;
-    const float safeScaleY =
-        std::isfinite(scaleY) && scaleY > 0.0F ? scaleY : 1.0F;
-    if ( safeScaleX == 1.0F && safeScaleY == 1.0F ) {
-        // 单位缩放直接返回原对象，避免执行无意义的中心重算。
-        return hitbox;
-    }
-    // 先保存原包围盒中心，缩放后再围绕相同中心恢复左上角。
-    const float centerX = hitbox.x + hitbox.w * 0.5F;
-    const float centerY = hitbox.y + hitbox.h * 0.5F;
-
-    Hitbox scaled = hitbox;
-    scaled.w      = hitbox.w * safeScaleX;
-    scaled.h      = hitbox.h * safeScaleY;
-    scaled.x      = centerX - scaled.w * 0.5F;
-    scaled.y      = centerY - scaled.h * 0.5F;
-    // 极端输入若导致任一结果溢出，回退完整原包围盒而非返回部分坏值。
-    if ( !std::isfinite(scaled.x) || !std::isfinite(scaled.y) ||
-         !std::isfinite(scaled.w) || !std::isfinite(scaled.h) ) {
-        return hitbox;
-    }
-    return scaled;
-}
-
-/// @brief 时间线上的 BPM、Scroll、Jump 与 HS 交互元素快照。
-struct TimelineInteractiveElement {
-    /// @brief 表格中的段落定义；普通独立时间点为空。
-    std::optional<TimingInterpolation> interpolation;
-    /// @brief 单个 Timing marker 的快照几何范围。
-    struct MarkerGeometry {
-        /// @brief 该 Timing 标记是否拥有可直接修饰的几何体。
-        bool hasMarkerGeometry{ false };
-        /// @brief 该 Timing 标记在快照顶点数组中的起点。
-        uint32_t markerVertexOffset{ 0 };
-        /// @brief 该 Timing 标记占用的顶点数量。
-        uint32_t markerVertexCount{ 0 };
-        /// @brief 该 Timing 标记在快照索引数组中的起点。
-        uint32_t markerIndexOffset{ 0 };
-        /// @brief 该 Timing 标记占用的索引数量。
-        uint32_t markerIndexCount{ 0 };
-    };
-
-    /// @brief Timing 元素在谱面时间轴上的时间。
-    double time;
-    /// @brief 标记在当前画布快照中的纵坐标。
-    float y;
-    /// @brief 当前时间点实际包含的 Timing 效果位掩码。
-    uint32_t effects;
-    /// @brief BPM 效果对应实体；不存在时为 entt::null。
-    entt::entity bpmEntity{ entt::null };
-    /// @brief Scroll 效果对应实体；不存在时为 entt::null。
-    entt::entity scrollEntity{ entt::null };
-    entt::entity jumpEntity{ entt::null };  /// @brief Jump 效果实体
-    entt::entity hsEntity{ entt::null };    /// @brief HS 效果实体
-    /// @brief 当前暂停事件实体。
-    entt::entity stopEntity{ entt::null };
-    /// @brief BPM 效果的原始数值。
-    double bpmValue{ 0.0 };
-    /// @brief Scroll 效果的原始数值。
-    double scrollValue{ 0.0 };
-    double jumpValue{ 0.0 };  /// @brief Jump 原始参数，单位毫秒
-    double hsValue{ 1.0 };    /// @brief HS 原始参数
-    /// @brief STOP 持续秒数，不参与滚动速度积分。
-    double stopValue{ 0.0 };
-    /// @brief BPM 标记的快照几何范围。
-    MarkerGeometry bpmMarker;
-    /// @brief Scroll 标记的快照几何范围。
-    MarkerGeometry scrollMarker;
-    /// @brief Jump 标记的快照几何范围。
-    MarkerGeometry jumpMarker;
-    /// @brief HS 标记的快照几何范围。
-    MarkerGeometry hsMarker;
-    /// @brief 暂停标记对应的交互几何。
-    MarkerGeometry stopMarker;
-    /// @brief 该 Timing 标记是否拥有可直接修饰的几何体。
-    bool hasMarkerGeometry{ false };
-    /// @brief 该 Timing 标记在快照顶点数组中的起点。
-    uint32_t markerVertexOffset{ 0 };
-    /// @brief 该 Timing 标记占用的顶点数量。
-    uint32_t markerVertexCount{ 0 };
-    /// @brief 该 Timing 标记在快照索引数组中的起点。
-    uint32_t markerIndexOffset{ 0 };
-    /// @brief 该 Timing 标记占用的索引数量。
-    uint32_t markerIndexCount{ 0 };
-};
 
 /// @brief 单个可选画布组件实例的渲染与布局编辑边界。
 struct CanvasComponentInstanceSnapshot {
@@ -432,14 +127,9 @@ struct RenderSnapshot {
     /// @brief 固定四个物件的删除状态，不依赖其是否处于可见时间范围。
     std::array<WalkthroughPracticeNoteState, 4> walkthroughPracticeNotes{};
     /// @brief 一次已经结束的编辑手势，配合正式几何防止拖动预览提前完成引导。
-    struct WalkthroughEditEvent {
-        enum class Kind : std::uint8_t { None, Drag, Brush };
-        std::uint64_t revision{ 0 };
-        entt::entity  sourceEntity{ entt::null };
-        HoverPart     part{ HoverPart::None };
-        int           subIndex{ -1 };
-        Kind          kind{ Kind::None };
-    } walkthroughEditEvent{};
+    using WalkthroughEditEvent = Common::Walkthrough::EditEvent;
+    /// @brief 本快照对应的最近一次已完成手势，保持原有按值布局。
+    WalkthroughEditEvent walkthroughEditEvent{};
     /// @brief 仅在物件变更批次递增，创作教程据此低频请求完整段落快照。
     std::uint64_t composeNoteRevision{ 0 };
     /// @brief 普通悬浮拾取与调试显示使用的横向包围盒缩放。

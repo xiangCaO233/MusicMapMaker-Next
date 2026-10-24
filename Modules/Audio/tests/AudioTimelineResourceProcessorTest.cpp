@@ -2,7 +2,7 @@
 
 #include "audio/AudioTimelineMixerNode.h"
 #include "log/colorful-log.h"
-#include "mmm/project/AudioResource.h"
+#include "mmm/project/AudioTrackConfig.h"
 
 #include <algorithm>
 #include <cmath>

@@ -1,4 +1,5 @@
 #include "logic/ecs/system/SampleRenderSystem.h"
+#include "common/render/TextureID.h"
 
 #include "config/EditorConfig.h"
 #include "config/skin/SkinConfig.h"

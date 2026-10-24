@@ -1,5 +1,8 @@
 #pragma once
 
+#include "common/render/RenderSnapshot.h"
+#include "common/render/TextureID.h"
+
 #include "config/visual/BackgroundConfig.h"
 #include "config/visual/NoteTexturePosition.h"
 #include "logic/BeatmapSyncBuffer.h"

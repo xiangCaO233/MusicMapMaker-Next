@@ -1,4 +1,5 @@
 #include "font/AsciiFontRasterizer.h"
+#include "common/UnicodeCodepoint.h"
 
 #include "log/colorful-log.h"
 #include <ft2build.h>

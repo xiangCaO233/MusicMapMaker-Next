@@ -1,5 +1,4 @@
 #include "ui/imgui/manager/SearchView.h"
-#include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include <algorithm>
 #include <cmath>

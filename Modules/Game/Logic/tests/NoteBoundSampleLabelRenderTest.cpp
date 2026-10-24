@@ -1,3 +1,4 @@
+#include "common/render/GlyphTextureId.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
 
 #include "common/AsciiFontData.h"
