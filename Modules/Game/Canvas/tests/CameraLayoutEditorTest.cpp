@@ -2,6 +2,7 @@
 #include "canvas/CameraLayoutMath.h"
 #include "canvas/PlanarObservationInput.h"
 #include "common/render/CanvasThicknessCompensation.h"
+#include "common/render/TextureID.h"
 #include "config/EditorConfig.h"
 #include "config/VisualConfig.h"
 #include "log/colorful-log.h"

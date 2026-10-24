@@ -1,7 +1,11 @@
+// 布局方案操作同时消费视觉值和编辑偏好，不依赖单例头展开它们。
 #include "ui/imgui/manager/LayoutPresetControls.h"
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "config/LayoutPresets.h"
 #include "config/Utf8Path.h"
+#include "config/VisualConfig.h"
 #include "logic/EditorEngine.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"

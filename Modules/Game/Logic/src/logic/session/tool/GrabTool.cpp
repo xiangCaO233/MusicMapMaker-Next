@@ -1,5 +1,6 @@
 #include "logic/session/tool/GrabTool.h"
 #include "common/LogicCommands.h"
+#include "common/walkthrough/WalkthroughEditEvent.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectResourceService.h"
@@ -1416,9 +1417,9 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
                                 ctx.lastConfig.visual.trackLayout.top) *
                                mainViewportHeight;
-        float ty = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by = it->second.viewportHeight -
-                   ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
+        float by           = it->second.viewportHeight -
+                             ctx.lastConfig.visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         renderScaleY =
             previewDrawH /
@@ -2380,8 +2381,7 @@ void GrabTool::handleEndDrag(SessionContext& ctx, const CmdEndDrag& cmd)
     editEvent.sourceEntity = ctx.draggedEntity;
     editEvent.part         = ctx.draggedPart;
     editEvent.subIndex     = ctx.draggedSubIndex;
-    editEvent.kind =
-        Common::Render::RenderSnapshot::WalkthroughEditEvent::Kind::Drag;
+    editEvent.kind         = Common::Walkthrough::EditEvent::Kind::Drag;
 
     if ( m_isFirstPolylineBodyDrag ) {
         finishFirstPolylineBodyDrag(ctx);

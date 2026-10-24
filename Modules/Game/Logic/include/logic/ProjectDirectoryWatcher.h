@@ -2,9 +2,7 @@
 
 #include <atomic>
 #include <filesystem>
-#include <future>
-#include <mutex>
-#include <stop_token>
+#include <memory>
 
 namespace MMM::Logic
 {
@@ -16,7 +14,7 @@ class ProjectDirectoryWatcher
 {
 public:
     /// @brief 创建未启动的项目目录监听器。
-    ProjectDirectoryWatcher() = default;
+    ProjectDirectoryWatcher();
 
     /// @brief 停止监听线程并释放平台相关监听句柄。
     ~ProjectDirectoryWatcher();
@@ -55,40 +53,15 @@ public:
         const std::filesystem::path& relativePath);
 
 private:
-    /// @brief 文件夹监听线程的主循环。
-    /// @param watchPath 需要递归监听的项目目录路径。
-    /// @param stopToken 共享线程池任务的停止令牌。
-    /// @warning 后台阻塞监听路径；Win32 等待退出/变更事件，其他平台每 500ms
-    /// 采样。
-    void watcherThreadLoop(std::filesystem::path watchPath,
-                           std::stop_token       stopToken);
-
-    /// @brief 发布到 Runtime 共享线程池的监听任务。
-    std::future<void> m_workerFuture;
-
-    /// @brief 监听任务的协作式停止源。
-    std::stop_source m_stopSource;
-
-    /// @brief 监听线程运行标志。
-    /// @warning 文件监听线程原子：启动/停止线程时写入，监听循环轮询读取；
-    /// 不属于渲染热路径，但用于跨线程退出信号。
-    std::atomic<bool> m_running{ false };
+    /// @brief 仅由实现文件定义的线程、取消令牌与平台句柄状态。
+    struct State;
+    /// @brief 生命周期内地址稳定；析构先等待任务退出，再释放状态。
+    std::unique_ptr<State> m_state;
 
     /// @brief 是否有未处理的文件系统变更挂起。
     /// @warning 逻辑热路径原子：监听线程写入，逻辑 loop 每次迭代 exchange；
     /// 不可避免，用于把文件系统事件去抖后转入低频扫描。
     std::atomic<bool> m_changePending{ false };
-
-#ifdef _WIN32
-    /// @brief Win32 目录句柄，用于取消阻塞的 ReadDirectoryChangesW。
-    void* m_directoryHandle{ nullptr };
-
-    /// @brief Win32 退出事件句柄，用于安全退出监听线程。
-    void* m_exitEvent{ nullptr };
-#endif
-
-    /// @brief 保护平台目录句柄和退出事件句柄的独立锁。
-    mutable std::mutex m_mutex;
 };
 
 }  // namespace MMM::Logic

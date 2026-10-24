@@ -2,6 +2,7 @@
 #include "audio/AudioTimelineMixerNode.h"
 #include "audio/SoundEffectPool.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 
 #include <algorithm>
 

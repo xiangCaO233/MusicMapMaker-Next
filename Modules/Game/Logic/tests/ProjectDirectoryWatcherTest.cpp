@@ -2,6 +2,7 @@
 /// @brief 目录监听的相对路径过滤回归，防止保存配置触发资源重扫循环。
 /// 仅调用纯路径判定，不创建真实目录、后台任务或平台监听句柄。
 #include "logic/ProjectDirectoryWatcher.h"
+#include "runtime/AppThreadPool.h"
 
 #include <filesystem>
 #include <iostream>
@@ -49,6 +50,26 @@ int main()
             << "only the root split storage directory should be ignored\n";
         return 1;
     }
+    // 私有状态必须跨重复启动保持有效，析构必须等待借用变更标记的任务退出。
+    // 使用测试源目录作为只读监听目标，不创建或修改用户项目内容。
+    MMM::Runtime::AppThreadPool::instance().init();
+    // 结果跨析构作用域保留，确保失败路径也先完成线程池清理。
+    bool initialFlagClear = false;
+    {
+        ProjectDirectoryWatcher watcher;
+        // 新实例未发布任何事件，读取门闩不能误报待扫描。
+        initialFlagClear = !watcher.consumeChangePending();
+        watcher.stop();
+        watcher.start(std::filesystem::path(__FILE__).parent_path());
+        watcher.stop();
+        // 已收回的 future 与平台句柄必须允许幂等清理。
+        watcher.stop();
+        // 第二轮直接由析构收尾，覆盖任务尚未运行就请求取消的生命周期。
+        watcher.start(std::filesystem::path(__FILE__).parent_path());
+    }
+    // 先销毁监听器再关闭线程池，不能反转任务借用状态的所有权顺序。
+    MMM::Runtime::AppThreadPool::instance().shutdown();
+    if ( !initialFlagClear ) return 1;
     // 显式返回码不依赖 assert，发布构建也能报告过滤规则退化。
     // 后台采样周期和操作系统通知投递不属于这组纯路径断言。
     return 0;

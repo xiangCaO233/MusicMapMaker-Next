@@ -1,3 +1,6 @@
+// 资源导入设置在此修改持久化字段，不借用基础视图的传递包含。
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "ui/imgui/manager/SettingsView.h"
 
 #include "common/AudioInfoUtils.h"
@@ -9,8 +12,10 @@
 #include "logic/EditorEngine.h"
 #include "logic/ProjectController.h"
 #include "logic/session/context/SessionContext.h"
-#include "mmm/Metadata.h"
-#include "mmm/project/AudioResource.h"
+// 导入流程访问活动谱面的资源字段，完整模型依赖仅放在实现端。
+#include "mmm/beatmap/BeatMap.h"
+#include "mmm/metadata/BaseMapMeta.h"
+#include "mmm/project/AudioTrackType.h"
 #include "mmm/project/Project.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/ProjectResourceImport.h"
@@ -109,8 +114,8 @@ void SettingsView::renderBeatmapResourcePicker(float dpiScale)
         config.path              = settings.lastFilePickerPath;
         config.countSelectionMax = 1;
         config.flags             = ImGuiFileDialogFlags_Modal |
-                       ImGuiFileDialogFlags_HideColumnType |
-                       ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                                   ImGuiFileDialogFlags_HideColumnType |
+                                   ImGuiFileDialogFlags_ReadOnlyFileNameField;
         dialog->OpenDialog(PICKER_ID,
                            title,
                            audio   ? ".mp3,.ogg,.wav,.flac,.opus,.aac,.m4a"

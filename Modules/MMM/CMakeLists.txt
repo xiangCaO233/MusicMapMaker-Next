@@ -41,6 +41,9 @@ add_library(
   src/note/Note.cpp
   src/note/Hold.cpp
   src/project/AudioResource.cpp
+  # 项目持久化集中实例化 JSON，公开模型头只保留字段与 ADL 声明。
+  src/project/Project.cpp
+  src/project/ProjectSettings.cpp
   src/timing/Timing.cpp
   # 曲线领域算法共用于原生模型、编辑器和外部格式采样。
   src/timing/TimingInterpolation.cpp
@@ -52,9 +55,9 @@ add_library(
   # 可复用时间点组依据目标红线换算偏移，定义与 UI、ECS 身份分离。
   src/timing/TimingTemplate.cpp)
 
-# 公共 include 目录只发布稳定模型接口，日志、事件和 JSON 则作为传递依赖供 这些接口中的元数据与序列化声明使用。
+# 公共模型按值包含 Config 覆盖配置，持久化实现也调用其转换函数，必须显式 传播该依赖，不能借助上层 Logic 或 UI 的链接关系取得头文件与符号。
 target_include_directories(MMM PUBLIC ${CMAKE_CURRENT_LIST_DIR}/include)
-target_link_libraries(MMM PUBLIC Log Event 3rd_nlohmann_json)
+target_link_libraries(MMM PUBLIC Config Log Event 3rd_nlohmann_json)
 
 # 传统 BMS 使用 CP932；Windows 使用系统 Win32 转换，POSIX 使用系统 Iconv。
 # 这是平台文字编码接口，不从第三方源码自动构建缺失依赖。

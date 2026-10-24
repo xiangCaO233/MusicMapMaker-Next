@@ -2,7 +2,7 @@
 #include "ui/imgui/menu/actions/MainMenuToolsActions.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
 
-#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "graphic/imguivk/VKContext.h"
 #include "graphic/theme/ImGuiThemeRegistry.h"

@@ -1,4 +1,5 @@
 #include "ui/utils/UIWidgetUtils.h"
+#include "config/EditorSettings.h"
 
 #include "audio/AudioManager.h"
 #include "config/AppConfig.h"

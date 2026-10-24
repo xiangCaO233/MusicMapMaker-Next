@@ -1,5 +1,7 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "canvas/AnnotationTableWindow.h"
+#include "config/EditorSettings.h"
+#include "config/VisualConfig.h"
 
 #include "canvas/AuxiliaryWindowState.h"
 #include "canvas/AuxiliaryWindowUi.h"

@@ -1,12 +1,14 @@
 #pragma once
 
-#include "config/EditorSettings.h"
+#include "config/SfxConfig.h"
 #include <nlohmann/json_fwd.hpp>
 #include <string>
 #include <vector>
 
 namespace MMM::Config
 {
+/// @brief 预设只借用完整编辑器设置，公开数据仅拥有音效字段。
+struct EditorSettings;
 /// @brief 客户端听音配置，与谱面资源和导出数据相互独立。
 /// @note 音量采用线性倍率；界面统一按整数百分数显示。
 struct AudioPreset {

@@ -1,7 +1,7 @@
 #pragma once
 
+#include "event/EventDef.h"
 #include "event/core/BaseEvent.h"
-#include "event/core/EventBus.h"
 
 #include <mutex>
 #include <string>

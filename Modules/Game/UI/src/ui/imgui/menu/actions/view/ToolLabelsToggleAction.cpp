@@ -1,4 +1,6 @@
+// 标签动作直接读写显示选项，完整设置只由实际操作端包含。
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "ui/imgui/menu/actions/MainMenuViewActions.h"
 
 namespace MMM::UI

@@ -1,8 +1,8 @@
 #pragma once
 
 #include "common/LogicCommands.h"
-#include "mmm/Metadata.h"
 #include "mmm/beatmap/MalodyMode.h"
+#include "mmm/metadata/BaseMapMeta.h"
 #include "mmm/project/PackageFileTypes.h"
 #include <array>
 #include <cstdint>

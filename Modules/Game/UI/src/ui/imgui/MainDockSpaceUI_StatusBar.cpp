@@ -1,3 +1,4 @@
+#include "common/render/RenderSnapshot.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/skin/translation/Translation.h"
 #include "imgui.h"

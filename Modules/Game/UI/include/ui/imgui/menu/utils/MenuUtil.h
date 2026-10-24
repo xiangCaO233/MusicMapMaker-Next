@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common/LogicCommands.h"
-#include "event/project/ProjectOpenInteractionEvent.h"
+#include "event/project/ProjectOpenOrigin.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 
 #include <filesystem>

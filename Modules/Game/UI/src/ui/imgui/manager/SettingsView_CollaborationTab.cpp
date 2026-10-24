@@ -1,3 +1,4 @@
+#include "config/EditorSettings.h"
 #include "ui/imgui/manager/SettingsView.h"
 
 #include "config/AppConfig.h"

@@ -1,13 +1,9 @@
 #pragma once
-#include "event/project/ProjectOpenInteractionEvent.h"
+#include "event/project/ProjectOpenOrigin.h"
 
-#include "common/LogicCommands.h"
-#include "event/core/EventBus.h"
-#include "logic/ProjectCommandService.h"
-#include "logic/ProjectDirectoryScanner.h"
+#include "logic/ProjectCommandResults.h"
 #include "logic/ProjectDirectoryWatcher.h"
-#include "logic/ProjectResourceService.h"
-#include "logic/ProjectStorage.h"
+#include "logic/ProjectResourceTypes.h"
 #include "logic/ProjectTypes.h"
 #include "mmm/project/Project.h"
 
@@ -21,6 +17,12 @@
 
 namespace MMM::Logic
 {
+struct CmdCreateBeatmap;
+struct CmdImportAudio;
+struct CmdRemoveAudioResource;
+struct CmdRemoveBeatmap;
+struct CmdUpdateAudioResource;
+
 
 /// @brief 统一管理项目实例、项目切换状态、目录监听和项目资源命令。
 class ProjectController
@@ -226,7 +228,7 @@ public:
 
     /// @brief 扫描当前项目目录并同步项目资源列表。
     /// @return 目录同步结果，包含是否改变项目和需要预加载的音效。
-    ProjectResourceService::DirectorySyncResult scanProjectDirectory();
+    DirectorySyncResult scanProjectDirectory();
 
     /// @brief 保存当前项目配置。
     /// @return 保存成功时返回 true。
@@ -235,26 +237,24 @@ public:
     /// @brief 创建谱面文件并登记到当前项目。
     /// @param cmd 新建谱面命令。
     /// @return 新建谱面的处理结果。
-    ProjectCommandService::CreateBeatmapResult createBeatmap(
-        const CmdCreateBeatmap& cmd);
+    CreateBeatmapResult createBeatmap(const CmdCreateBeatmap& cmd);
 
     /// @brief 导入音频文件并登记到当前项目。
     /// @param cmd 导入音频命令。
     /// @return 导入音频的处理结果。
-    ProjectCommandService::ImportAudioResult importAudio(
-        const CmdImportAudio& cmd);
+    ImportAudioResult importAudio(const CmdImportAudio& cmd);
 
     /// @brief 将单个谱面文件同步到当前项目谱面列表。
     /// @param mapPath 需要同步的谱面文件路径。
     /// @return 当前项目是否发生变化。
-    ProjectCommandService::ProjectMutationResult syncProjectWithFile(
+    ProjectMutationResult syncProjectWithFile(
         const std::filesystem::path& mapPath);
 
     /// @brief 更新当前项目内谱面条目的文件路径关联。
     /// @param oldPath 旧谱面路径。
     /// @param newPath 新谱面路径。
     /// @return 当前项目是否发生变化。
-    ProjectCommandService::ProjectMutationResult updateBeatmapFilePath(
+    ProjectMutationResult updateBeatmapFilePath(
         const std::filesystem::path& oldPath,
         const std::filesystem::path& newPath);
 
@@ -262,7 +262,7 @@ public:
     /// @param cmd 更新音频资源命令。
     /// @param openBeatmapReferences 已同步的打开会话内存谱面引用。
     /// @return 更新音频资源的处理结果。
-    ProjectCommandService::UpdateAudioResourceResult updateAudioResource(
+    UpdateAudioResourceResult updateAudioResource(
         const CmdUpdateAudioResource&             cmd,
         const std::vector<BeatmapAudioReference>& openBeatmapReferences = {});
 
@@ -270,15 +270,14 @@ public:
     /// @param cmd 删除音频资源命令。
     /// @param openBeatmapReferences 已同步的打开会话内存谱面引用。
     /// @return 删除音频资源的处理结果。
-    ProjectCommandService::RemoveAudioResourceResult removeAudioResource(
+    RemoveAudioResourceResult removeAudioResource(
         const CmdRemoveAudioResource&             cmd,
         const std::vector<BeatmapAudioReference>& openBeatmapReferences = {});
 
     /// @brief 从当前项目谱面列表中删除谱面。
     /// @param cmd 删除谱面命令。
     /// @return 当前项目是否发生变化。
-    ProjectCommandService::ProjectMutationResult removeBeatmap(
-        const CmdRemoveBeatmap& cmd);
+    ProjectMutationResult removeBeatmap(const CmdRemoveBeatmap& cmd);
 
 private:
     /// @brief 构造项目控制器并订阅项目请求事件。
@@ -290,93 +289,23 @@ private:
     void publishProjectSwitchNeedsCanvasClose(
         const std::filesystem::path& projectPathToOpen, bool closeOnly) const;
 
-    /// @brief 打开项目请求事件订阅 ID。
-    Event::SubscriptionID m_openProjectSubscription{ 0 };
-
-    /// @brief 关闭项目请求事件订阅 ID。
-    Event::SubscriptionID m_closeProjectSubscription{ 0 };
-
-    /// @brief 新建项目请求事件订阅 ID。
-    Event::SubscriptionID m_createProjectSubscription{ 0 };
-
-    /// @brief 打开临时谱面包请求事件订阅 ID。
-    Event::SubscriptionID m_openTemporaryProjectSubscription{ 0 };
-
-    /// @brief 项目切换完成事件订阅 ID。
-    Event::SubscriptionID m_projectSwitchCompletedSubscription{ 0 };
-
-    /// @brief 项目切换取消事件订阅 ID。
-    Event::SubscriptionID m_projectSwitchCancelledSubscription{ 0 };
-
-    /// @brief 当前打开的项目。
+    /// @brief 当前项目直接持有，热路径查询不经过私有状态间接访问。
     std::unique_ptr<Project> m_currentProject;
-
-    /// @brief 扫描当前项目目录中的谱面和音频文件。
-    ProjectDirectoryScanner m_projectDirectoryScanner;
-
-    /// @brief 监听当前项目目录中的文件系统变更。
+    /// @brief 监听器直接持有，逐次消费变更标记保持原访问路径。
     ProjectDirectoryWatcher m_projectDirectoryWatcher;
-
-    /// @brief 读写隐藏目录中的项目配置分片并迁移旧单文件。
-    ProjectStorage m_projectStorage;
-
-    /// @brief 根据项目目录扫描结果构建和同步项目资源。
-    ProjectResourceService m_projectResourceService;
-
-    /// @brief 处理项目资源命令并返回调用方需要执行的副作用请求。
-    ProjectCommandService m_projectCommandService;
-
-    /// @brief 已确认可由逻辑线程直接打开的项目路径。
-    std::filesystem::path m_pendingProjectPath;
-    /// @brief 已确认请求的用户入口。
-    Event::ProjectOpenOrigin m_pendingOrigin{
-        Event::ProjectOpenOrigin::Unknown
-    };
-    /// @brief 待消费请求的用户入口。
-    Event::ProjectOpenOrigin m_requestedOrigin{
-        Event::ProjectOpenOrigin::Unknown
-    };
-    /// @brief 等待旧画布关闭的请求入口。
-    Event::ProjectOpenOrigin m_switchOrigin{
-        Event::ProjectOpenOrigin::Unknown
-    };
-
-    /// @brief 已确认可由逻辑线程直接打开的项目模式。
-    ProjectOpenMode m_pendingProjectOpenMode{ ProjectOpenMode::Normal };
-
-    /// @brief 已确认可由逻辑线程直接创建并打开的项目初始设置。
-    std::optional<ProjectCreationOptions> m_pendingProjectCreationOptions;
-
-    /// @brief 等待逻辑线程判定是否需要先关闭旧画布的项目路径。
-    std::filesystem::path m_requestedProjectPath;
-
-    /// @brief 等待逻辑线程判定的项目打开模式。
-    ProjectOpenMode m_requestedProjectOpenMode{ ProjectOpenMode::Normal };
-
-    /// @brief 等待逻辑线程判定的项目创建初始设置。
-    std::optional<ProjectCreationOptions> m_requestedProjectCreationOptions;
+    /// @brief 隔离低频服务和受锁保护的请求字段。
+    struct PrivateState;
+    /// @brief 构造时分配一次；退出时在停止监听后释放，不按请求重建。
+    std::unique_ptr<PrivateState> m_state;
 
     /// @brief 等待 UI 逐个关闭旧谱面画布后再处理的项目路径。
     std::filesystem::path m_pendingProjectSwitchPath;
 
-    /// @brief 等待 UI 关闭旧谱面画布后的项目打开模式。
-    ProjectOpenMode m_pendingProjectSwitchOpenMode{ ProjectOpenMode::Normal };
-
-    /// @brief 等待 UI 关闭旧谱面画布后的项目创建初始设置。
-    std::optional<ProjectCreationOptions> m_pendingProjectSwitchCreationOptions;
-
-    /// @brief 是否已有项目关闭请求正在等待逻辑线程分发。
-    bool m_requestedProjectClose{ false };
-
     /// @brief UI 是否正在项目关闭前逐个关闭旧谱面画布。
     bool m_pendingProjectClose{ false };
 
-    /// @brief 所有脏谱面关闭提示是否已完成，项目清理是否可以执行。
-    bool m_projectCloseReady{ false };
-
     /// @brief 保护项目打开和关闭请求状态的轻量级锁。
     mutable std::mutex m_pendingMutex;
-
     /// @brief 是否存在需要逻辑线程消费的项目切换动作。
     /// @warning 逻辑热路径原子：loop 每 update 读取；UI/事件线程在请求项目
     /// 打开、创建、关闭或完成旧画布关闭后写入。仅作为进入 m_pendingMutex

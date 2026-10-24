@@ -1,4 +1,6 @@
+// 协作日志窗口读取本机展示偏好，设置定义不进入网络接口。
 #include "ui/imgui/manager/CollaborationLogWindow.h"
+#include "common/LogicCommands.h"
 
 #include "config/skin/translation/Translation.h"
 #include "fmt/format.h"

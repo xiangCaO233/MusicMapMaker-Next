@@ -1,4 +1,5 @@
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "ui/imgui/menu/actions/MainMenuViewActions.h"
 
 namespace MMM::UI

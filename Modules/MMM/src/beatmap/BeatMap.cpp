@@ -1,4 +1,5 @@
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/timing/TimingInterpolationAlgorithms.h"
 
 #include "BmsFormat.hpp"
 #include "LoadMMMMap.hpp"

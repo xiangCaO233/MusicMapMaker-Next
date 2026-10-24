@@ -1,4 +1,5 @@
 #include "common/render/RenderSnapshotBuffer.h"
+#include "common/render/RenderSnapshot.h"
 #include <concurrentqueue.h>
 
 namespace MMM::Common::Render

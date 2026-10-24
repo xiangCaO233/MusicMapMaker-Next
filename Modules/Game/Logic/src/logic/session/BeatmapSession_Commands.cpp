@@ -1,3 +1,6 @@
+#include "BeatmapSession_CommandState.h"
+#include "common/LogicCommands.h"
+#include "config/EditorSettings.h"
 #include "logic/BeatmapSession.h"
 
 #include "audio/AudioManager.h"
@@ -5,7 +8,6 @@
 #include "common/EditTool.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
-#include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/BeatmapSaveConflictEvent.h"
@@ -2515,6 +2517,10 @@ bool BeatmapSession::processCommands()
         // 发布完成后清空累计位，后续命令形成新的同步批次。
         mutationFlags = ::MMM::BeatmapMutationFlags::None;
     };
+    // 命令存储只在会话构造时创建，本轮消费直接复用其中的容器。
+    // 延迟文件命令与权威替换状态仍由逻辑线程独占，不向入队生产者暴露。
+    // 移动私有字段不改变队列发布机制，也不在每次出队时分配状态。
+    // 权威替换继续按手势屏障合并，不能通过重新排队制造忙等。
     const auto localGestureActive = [this]() {
         // 拖动、框选、画笔和橡皮均持有临时交互状态，不适合被权威全量替换中断。
         return m_ctx->isDragging || m_ctx->isSelecting ||
@@ -2532,11 +2538,12 @@ bool BeatmapSession::processCommands()
         // 循环每次只拥有一条 LogicCommand。variant 在处理完成前保持有效，
         // 处理器可以读取其中的字符串和共享对象，但不得保存对 variant 成员的
         // 裸引用供后续 update 使用。
-        if ( !deferredBlockedAgain && !m_deferredFileCommands.empty() ) {
-            cmd = std::move(m_deferredFileCommands.front());
-            m_deferredFileCommands.pop_front();
+        if ( !deferredBlockedAgain &&
+             !m_commands->deferredFileCommands.empty() ) {
+            cmd = std::move(m_commands->deferredFileCommands.front());
+            m_commands->deferredFileCommands.pop_front();
             fromDeferred = true;
-        } else if ( !m_commandQueue.try_dequeue(cmd) ) {
+        } else if ( !m_commands->queue.try_dequeue(cmd) ) {
             break;
         }
         const bool isAsyncSave = std::holds_alternative<CmdSaveBeatmap>(cmd);
@@ -2553,9 +2560,11 @@ bool BeatmapSession::processCommands()
             if ( !beginAsyncBeatmapSave(saveCommand) ) {
                 // 同一会话任务未完成时保持文件 FIFO 头部，但不拦住普通命令。
                 if ( fromDeferred )
-                    m_deferredFileCommands.emplace_front(std::move(cmd));
+                    m_commands->deferredFileCommands.emplace_front(
+                        std::move(cmd));
                 else
-                    m_deferredFileCommands.emplace_back(std::move(cmd));
+                    m_commands->deferredFileCommands.emplace_back(
+                        std::move(cmd));
                 deferredBlockedAgain = true;
             } else {
                 processed = true;
@@ -2569,9 +2578,9 @@ bool BeatmapSession::processCommands()
              (m_asyncSaveOperation || !fileOperationLock.try_lock()) ) {
             // 后台保存或其它会话占用门闩时仅延后文件命令，不使用 sleep 或忙等。
             if ( fromDeferred )
-                m_deferredFileCommands.emplace_front(std::move(cmd));
+                m_commands->deferredFileCommands.emplace_front(std::move(cmd));
             else
-                m_deferredFileCommands.emplace_back(std::move(cmd));
+                m_commands->deferredFileCommands.emplace_back(std::move(cmd));
             deferredBlockedAgain = true;
             continue;
         }
@@ -2617,18 +2626,19 @@ bool BeatmapSession::processCommands()
                 m_latestAcceptedLocalObjectMutationSequence.store(
                     acknowledgement->sequence, std::memory_order_release);
             }
-            if ( m_deferredAuthoritativeReplacement &&
-                 m_deferredAuthoritativeReplacement->replaceObjects &&
-                 m_deferredAuthoritativeReplacement
+            if ( m_commands->deferredAuthoritativeReplacement &&
+                 m_commands->deferredAuthoritativeReplacement->replaceObjects &&
+                 m_commands->deferredAuthoritativeReplacement
                          ->includedLocalMutationSequence <
                      acknowledgement->sequence ) {
                 // 本地提交回执不能让早于该提交的权威快照重新覆盖物件；其他
                 // 数据类别仍可继续应用，物件会由随后已重放本地增量的结果更新。
-                m_deferredAuthoritativeReplacement->replaceObjects = false;
+                m_commands->deferredAuthoritativeReplacement->replaceObjects =
+                    false;
                 if ( !replacementHasCategories(
-                         *m_deferredAuthoritativeReplacement) ) {
+                         *m_commands->deferredAuthoritativeReplacement) ) {
                     // 物件类别被清除后若没有其他类别，整条延后替换即可丢弃。
-                    m_deferredAuthoritativeReplacement.reset();
+                    m_commands->deferredAuthoritativeReplacement.reset();
                 }
             }
             processed = true;
@@ -2651,11 +2661,12 @@ bool BeatmapSession::processCommands()
             authoritativeReplacement &&
             authoritativeReplacement->authoritativeRemote;
         if ( authoritativeSynchronization &&
-             m_deferredAuthoritativeReplacement ) {
+             m_commands->deferredAuthoritativeReplacement ) {
             // 合并只发生在权威远端命令之间。普通本地 CmdReplaceBeatmapData
             // 仍按队列原顺序执行，不能吸收或覆盖等待中的服务端状态。
             // 新权威状态与旧延后类别合并，确保等待期间没有数据域更新被覆盖丢失。
-            const auto& deferred = *m_deferredAuthoritativeReplacement;
+            const auto& deferred =
+                *m_commands->deferredAuthoritativeReplacement;
             if ( deferred.replaceObjects ) {
                 if ( !authoritativeReplacement->replaceObjects ) {
                     // 新状态不含对象时继承旧对象差量身份，随后仍需应用该类别。
@@ -2728,8 +2739,9 @@ bool BeatmapSession::processCommands()
             // 活跃手势期间把最新权威状态留在命令队列外；旧实现重新入队后会让
             // Unlimited 逻辑线程持续执行完整 Session 更新。若本地变化尚未包含
             // 在该状态中，也必须等待带确认序号的新结果，避免画布先回退再恢复。
-            m_deferredAuthoritativeReplacement = *authoritativeReplacement;
-            processed                          = true;
+            m_commands->deferredAuthoritativeReplacement =
+                *authoritativeReplacement;
+            processed = true;
             continue;
         }
         if ( authoritativeSynchronization ) {
@@ -2740,7 +2752,7 @@ bool BeatmapSession::processCommands()
                     authoritativeReplacement->includedLocalMutationSequence,
                     std::memory_order_release);
             }
-            m_deferredAuthoritativeReplacement.reset();
+            m_commands->deferredAuthoritativeReplacement.reset();
         }
 
         std::optional<SessionContext::BrushState> preservedBrushState;
@@ -2779,7 +2791,7 @@ bool BeatmapSession::processCommands()
                 }
                 if constexpr ( std::is_same_v<T, CmdLoadBeatmap> ) {
                     // 载入新谱面建立全新协作基线，旧权威替换与本地序号全部失效。
-                    m_deferredAuthoritativeReplacement.reset();
+                    m_commands->deferredAuthoritativeReplacement.reset();
                     m_latestAcceptedLocalObjectMutationSequence.store(
                         0, std::memory_order_release);
                 }
@@ -3228,17 +3240,18 @@ bool BeatmapSession::processCommands()
     // 时不会产生 mutationFlags，但它之前已经处理的编辑仍必须在本轮立即发布。
     // 队列耗尽后发布尾批变更，保证最后一条编辑命令不会等待下一次 update。
     const auto deferredCoversLocalObjects =
-        m_deferredAuthoritativeReplacement &&
-        (!m_deferredAuthoritativeReplacement->replaceObjects ||
-         m_deferredAuthoritativeReplacement->includedLocalMutationSequence >=
+        m_commands->deferredAuthoritativeReplacement &&
+        (!m_commands->deferredAuthoritativeReplacement->replaceObjects ||
+         m_commands->deferredAuthoritativeReplacement
+                 ->includedLocalMutationSequence >=
              m_latestAcceptedLocalObjectMutationSequence.load(
                  std::memory_order_acquire));
-    if ( m_deferredAuthoritativeReplacement && !localGestureActive() &&
-         deferredCoversLocalObjects ) {
+    if ( m_commands->deferredAuthoritativeReplacement &&
+         !localGestureActive() && deferredCoversLocalObjects ) {
         // 手势结束且权威状态覆盖最新本地序号时重新入队，下一轮按正常顺序应用。
-        m_commandQueue.enqueue(
-            LogicCommand(std::move(*m_deferredAuthoritativeReplacement)));
-        m_deferredAuthoritativeReplacement.reset();
+        m_commands->queue.enqueue(LogicCommand(
+            std::move(*m_commands->deferredAuthoritativeReplacement)));
+        m_commands->deferredAuthoritativeReplacement.reset();
     }
     // processed 供 Unlimited 门控判断是否还有业务工作，悬停命令不影响该结果。
     return processed;
@@ -3699,7 +3712,7 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmap& cmd)
 {
     if ( beginAsyncBeatmapSave(cmd) ) return;
     // 同一会话已有后台保存时只延后文件请求；普通编辑命令仍由队列继续消费。
-    m_deferredFileCommands.emplace_back(cmd);
+    m_commands->deferredFileCommands.emplace_back(cmd);
 }
 
 /// @brief 创建一致谱面快照并提交后台写入。

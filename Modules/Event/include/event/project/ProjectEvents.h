@@ -2,7 +2,7 @@
 
 #include "event/EventDef.h"
 #include "event/core/BaseEvent.h"
-#include "event/project/ProjectOpenInteractionEvent.h"
+#include "event/project/ProjectOpenOrigin.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -14,22 +14,27 @@ namespace MMM::Event
 
 /// @brief 所有项目相关事件的基础事件。
 /// @note 该类型只建立分发层级，不携带具体项目状态。
-struct ProjectEvent : public BaseEvent {};
+struct ProjectEvent : public BaseEvent {
+};
 
 /// @brief 项目请求类事件，表示 UI 或外部系统提交的项目操作意图。
 /// @note 请求事件表达意图，执行结果通过生命周期事件另行发布。
-struct ProjectRequestEvent : public ProjectEvent {};
+struct ProjectRequestEvent : public ProjectEvent {
+};
 
 /// @brief 项目生命周期事件，表示项目打开、关闭或迁移过程中的状态变更。
 /// @note 订阅者应根据具体派生类型读取载荷，不修改项目状态。
-struct ProjectLifecycleEvent : public ProjectEvent {};
+struct ProjectLifecycleEvent : public ProjectEvent {
+};
 
 /// @brief 项目切换流程事件，表示旧画布关闭确认的流程状态。
 /// @note 该分支协调 UI 确认，不直接执行项目文件操作。
-struct ProjectSwitchEvent : public ProjectEvent {};
+struct ProjectSwitchEvent : public ProjectEvent {
+};
 
 /// @brief 关闭当前项目请求事件，由项目控制器排队到逻辑线程处理。
-struct ProjectCloseRequestedEvent : public ProjectRequestEvent {};
+struct ProjectCloseRequestedEvent : public ProjectRequestEvent {
+};
 
 /// @brief 请求显示临时项目关闭确认弹窗。
 struct TemporaryProjectClosePromptRequestedEvent : public ProjectRequestEvent {
@@ -69,10 +74,12 @@ struct ProjectSwitchNeedsCanvasCloseEvent : public ProjectSwitchEvent {
 };
 
 /// @brief UI 已完成旧谱面画布关闭确认的项目切换事件。
-struct ProjectSwitchCompletedEvent : public ProjectSwitchEvent {};
+struct ProjectSwitchCompletedEvent : public ProjectSwitchEvent {
+};
 
 /// @brief UI 取消旧谱面画布关闭确认的项目切换事件。
-struct ProjectSwitchCancelledEvent : public ProjectSwitchEvent {};
+struct ProjectSwitchCancelledEvent : public ProjectSwitchEvent {
+};
 
 /// @brief 项目打开流程中可展示给 UI 的加载阶段。
 /// @note 阶段按处理顺序声明，但部分项目可跳过不适用的阶段。
@@ -135,10 +142,12 @@ struct ProjectOpenFailedEvent : public ProjectLifecycleEvent {
 };
 
 /// @brief 协作访客在线期间打开本机项目的请求被拦截事件。
-struct CollaborationProjectOpenBlockedEvent : public ProjectLifecycleEvent {};
+struct CollaborationProjectOpenBlockedEvent : public ProjectLifecycleEvent {
+};
 
 /// @brief 已离线的协作房间谱面收到编辑命令时的拦截事件。
-struct CollaborationOfflineEditBlockedEvent : public ProjectLifecycleEvent {};
+struct CollaborationOfflineEditBlockedEvent : public ProjectLifecycleEvent {
+};
 
 /// @brief 协作访客尝试修改房主未授权的数据类别时的拦截事件。
 struct CollaborationPermissionEditBlockedEvent : public ProjectLifecycleEvent {

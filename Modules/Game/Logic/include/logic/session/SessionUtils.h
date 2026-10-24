@@ -1,17 +1,48 @@
 #pragma once
 
-#include "config/EditorSettings.h"
-#include "logic/ecs/components/TimelineComponent.h"
-#include "logic/session/context/SessionContext.h"
-#include <entt/entt.hpp>
-#include <filesystem>
+#include <entt/entity/entity.hpp>
+#include <entt/entity/fwd.hpp>
+#include <memory>
 #include <span>
+#include <string>
 #include <string_view>
+#include <unordered_map>
+#include <vector>
+
+namespace MMM::Audio
+{
+/// @brief 时间线同步仅借用已经发布的音频时钟值。
+struct AudioTimelineClockSnapshot;
+}  // namespace MMM::Audio
+namespace MMM::Config
+{
+/// @brief 工具声明不读取设置布局，完整定义由实现文件包含。
+struct EditorSettings;
+/// @brief 相机吸附查询只借用完整配置。
+struct EditorConfig;
+/// @brief 音画校准仅通过引用传入同步参数。
+struct SyncConfig;
+}  // namespace MMM::Config
+namespace MMM::Logic
+{
+/// @brief 会话及缓存数据均为非拥有参数，不向工具调用方传播完整状态。
+struct SessionContext;
+/// @brief 相机表与视口参数只在实现中读取。
+struct CameraInfo;
+/// @brief 增量缓存视图只保存调用期有效的组件观察指针。
+struct NoteComponent;
+/// @brief 已排序 BPM 缓存只传递时间点组件指针。
+struct TimelineComponent;
+}  // namespace MMM::Logic
 
 namespace MMM
 {
 class Project;
-}
+/// @brief 谱面只通过引用或共享所有权参数传递，此处不构造领域数据。
+class BeatMap;
+/// @brief 背景探测接口仅借用谱面基本信息，无需传播完整定义。
+struct BaseMapMeta;
+}  // namespace MMM
 
 namespace MMM::Logic::SessionUtils
 {

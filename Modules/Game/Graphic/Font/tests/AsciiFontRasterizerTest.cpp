@@ -1,4 +1,5 @@
 #include "font/AsciiFontRasterizer.h"
+#include "common/AsciiFontAlgorithms.h"
 
 #include "config/Utf8Path.h"
 

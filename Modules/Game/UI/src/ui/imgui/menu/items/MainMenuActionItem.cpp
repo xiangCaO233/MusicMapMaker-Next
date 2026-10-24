@@ -1,5 +1,5 @@
 #include "ui/imgui/menu/items/MainMenuActionItem.h"
-#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/menu/items/MainMenuItemUtils.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"

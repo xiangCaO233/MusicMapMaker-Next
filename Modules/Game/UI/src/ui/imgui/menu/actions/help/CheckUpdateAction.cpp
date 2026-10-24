@@ -1,6 +1,6 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "config/AppConfig.h"
-#include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "mmmversion.h"
 #include "network/UpdateChecker.h"
 #include "ui/UIManager.h"

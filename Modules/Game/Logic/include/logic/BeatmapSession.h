@@ -1,11 +1,10 @@
 #pragma once
 
-#include "common/LogicCommands.h"
+#include "common/AutoSaveTypes.h"
+#include "common/LogicCommandFwd.h"
 #include "mmm/beatmap/BeatmapMutationObserver.h"
 #include <atomic>
-#include <concurrentqueue.h>
 #include <cstdint>
-#include <deque>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -317,13 +316,10 @@ private:
     std::unique_ptr<InteractionController> m_interaction;  ///< 交互控制器
     std::unique_ptr<ActionController>      m_actions;  ///< 动作/历史记录控制器
 
-    moodycamel::ConcurrentQueue<LogicCommand>
-        m_commandQueue;  ///< 跨线程无锁指令队列
-
-    /// @brief 仅由逻辑线程访问的待重试文件指令队列。
-    /// @note 文件操作等待期间普通编辑命令仍可继续消费，队列只保留文件命令间
-    /// 的原始顺序。
-    std::deque<LogicCommand> m_deferredFileCommands;
+    /// @brief 隔离完整命令变体及队列实现，接口仅需要命令类型声明。
+    struct CommandState;
+    /// @brief 会话构造时分配一次，入队和 update 期间不替换其地址。
+    std::unique_ptr<CommandState> m_commands;
 
     /// @brief 后台保存任务及其逻辑线程提交信息的私有实现。
     struct AsyncSaveOperation;
@@ -367,10 +363,6 @@ private:
     /// 写入；权威命令消费路径读取，用于阻止旧快照覆盖未确认编辑。
     std::atomic_uint64_t m_latestAcceptedLocalObjectMutationSequence{ 0 };
 
-    /// @brief 活跃手势或本地确认屏障外等待的最新远端权威替换。
-    /// 仅由逻辑线程访问，并在新权威状态到达时直接覆盖旧状态，避免命令队列
-    /// 自旋重试和中间快照造成视觉回退。
-    std::optional<CmdReplaceBeatmapData> m_deferredAuthoritativeReplacement;
 
     /// @brief 协作访客谱面断线后的入队级只读门闩。
     /// @warning UI 线程写、所有命令生产线程读；只在协作连接状态变化时写入，

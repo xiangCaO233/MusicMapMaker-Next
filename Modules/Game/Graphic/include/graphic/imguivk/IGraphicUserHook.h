@@ -1,7 +1,7 @@
 #pragma once
 
+#include "graphic/imguivk/VulkanHandleFwd.h"
 #include <cstdint>
-#include <vulkan/vulkan.hpp>
 
 namespace MMM::Graphic
 {

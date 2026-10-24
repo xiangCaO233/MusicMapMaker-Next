@@ -1,11 +1,13 @@
 #pragma once
 
+#include "config/skin/SkinData.h"
+#include "config/skin/SkinTypes.h"
 #include "translation/Translation.h"
 #include <cstdint>
 #include <filesystem>
 #include <sol/forward.hpp>
 #include <string>
-#include <unordered_map>
+#include <utility>
 #include <vector>
 
 struct ImFont;
@@ -14,133 +16,7 @@ namespace MMM
 {
 namespace Config
 {
-/// @brief 皮肤推荐 UI 主题对应的系统外观分支。
-enum class SkinThemeAppearance : std::uint8_t {
-    Light,  ///< 系统偏好亮色外观。
-    Dark    ///< 系统偏好暗色外观。
-};
-
-/// @brief 打击特效纹理在轨道中的布局方式。
-enum class HitEffectLayoutMode : std::uint8_t {
-    Fixed,     ///< 在判定线打击点按物件缩放绘制固定尺寸纹理。
-    TrackFill  ///< 将纹理拉伸至对应单轨的完整可见区域。
-};
-
-/// @brief 皮肤未声明序列帧速率时使用的默认播放帧率。
-inline constexpr float DEFAULT_EFFECT_BASE_FPS = 120.0F;
-
-// 简单的颜色结构
-struct Color {
-    float r, g, b, a;
-};
-
-// 皮肤数据结构
-struct SkinData {
-    // 皮肤路径
-    std::filesystem::path skinPath;
-
-    // 皮肤名称
-    std::string themeName;
-    std::string themeAuthor;
-    std::string themeVersion;
-
-    // 颜色表
-    std::unordered_map<std::string, Color> colors;
-
-    /// @brief 皮肤按语言 ID 声明的可选翻译覆写文件。
-    std::unordered_map<std::string, std::filesystem::path> langOverrideLuaPaths;
-
-    /// @brief 皮肤覆写中默认语言字典不存在、启动时需要提示的字段。
-    std::vector<std::string> missingTranslationOverrideFields;
-
-    /// @brief 默认语言不可用时切换的语言 ID。
-    std::string fallBackLang{ "zh_cn" };
-
-    /// @brief 皮肤为系统亮暗外观分别推荐的 UI 主题。
-    struct ThemeBinding {
-        /// @brief 系统为亮色或无法识别系统偏好时使用的主题。
-        std::string light{ "DeepDark" };
-
-        /// @brief 系统为暗色时使用的主题。
-        std::string dark{ "DeepDark" };
-    } defaultThemes;
-
-    // 字体表
-    std::unordered_map<std::string, std::filesystem::path> fontPaths;
-
-    // 字体套装 (用于在 AppConfig 中切换)
-    std::vector<std::pair<std::string, std::filesystem::path>> asciiFonts;
-    std::vector<std::pair<std::string, std::filesystem::path>> cjkFonts;
-
-    // 运行时字体对象表 (Key: 字体配置ID, Value: ImFont*)
-    std::unordered_map<std::string, ImFont*> runtimeFonts;
-
-    // 资产路径表 (Key: 资产ID, Value: 文件路径)
-    std::unordered_map<std::string, std::filesystem::path> assetPaths;
-
-    /// @brief 按完整资产键保存独立视觉倍率，未声明的纹理保持原始尺寸。
-    /// @note 序列键作用于整个动画，不改变源图片、图集 UV 或播放时序。
-    std::unordered_map<std::string, float> textureScales;
-
-    // 音频路径表 (Key: 音频ID, Value: 文件路径)
-    std::unordered_map<std::string, std::filesystem::path> audioPaths;
-
-    /// @brief 音效文件开头到有效出声点的延迟，单位为秒。
-    std::unordered_map<std::string, double> audioLeadInSeconds;
-
-    // 特效序列帧表
-    struct EffectSequence {
-        std::vector<std::filesystem::path> frames;
-        uint32_t startId{ 0 };  // 对应的起始 TextureID
-        /// @brief 非预乘贴图按 Alpha 加权后加亮背景，默认保持普通覆盖。
-        bool additiveBlend{ false };
-    };
-    std::unordered_map<std::string, EffectSequence> effectSequences;
-
-    /// @brief 加载时展开的序列帧倍率，供渲染按帧 ID 常量时间查询。
-    /// @note 仅缓存非默认倍率；随 SkinData 重建，禁止跨皮肤复用旧 ID。
-    std::unordered_map<std::uint32_t, float> effectTextureScales;
-
-    /// @brief 特效序列帧的基础播放帧率。
-    float effectBaseFps{ DEFAULT_EFFECT_BASE_FPS };
-
-
-    struct EffectsConfig {
-        /// @brief 打击特效纹理布局配置。
-        struct HitEffect {
-            /// @brief 旧皮肤默认保持固定位置、固定尺寸绘制。
-            HitEffectLayoutMode layout{ HitEffectLayoutMode::Fixed };
-        } hitEffect;
-
-        struct Glow {
-            int   passes    = 8;
-            float intensity = 1.0f;
-        } glow;
-    } effects;
-
-    // 画布配置结构
-    struct CanvasConfig {
-        // 画布名称
-        std::string canvas_name{};
-        // 画布着色器模块表 (Key: 资产ID, Value: 文件路径)
-        std::unordered_map<std::string, std::filesystem::path>
-            canvas_shader_modules{};
-    };
-    // 画布表 (Key: 画布名称, Value: 画布配置)
-    std::unordered_map<std::string, CanvasConfig> canvas_configs;
-    // 空画布配置
-    CanvasConfig null_canvas_config{};
-
-    // 布局配置表 (Key: 布局配置ID, Value: 值)
-    std::unordered_map<std::string, std::string> layoutConfigs;
-
-    // 数值配置表
-    std::unordered_map<std::string, float> values;
-
-    // 常用分拍列表
-    std::vector<int> commonDivisors;
-};
-
+/// @brief 按值持有当前皮肤数据与翻译器，保留热路径内联访问。
 class SkinManager
 {
 public:

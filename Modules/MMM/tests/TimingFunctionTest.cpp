@@ -1,4 +1,5 @@
 #include "mmm/timing/TimingFunction.h"
+#include "mmm/timing/TimingInterpolationAlgorithms.h"
 
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"

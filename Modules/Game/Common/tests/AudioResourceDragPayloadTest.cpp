@@ -1,5 +1,5 @@
 #include "common/AudioResourceDragPayload.h"
-#include "mmm/project/AudioResource.h"
+#include "mmm/project/AudioTrackType.h"
 
 #include <string>
 

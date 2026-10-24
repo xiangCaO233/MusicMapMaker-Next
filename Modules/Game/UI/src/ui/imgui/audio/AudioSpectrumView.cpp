@@ -1,7 +1,12 @@
 #include "ui/imgui/audio/AudioSpectrumView.h"
 #include "audio/AudioManager.h"
+#include "common/LogicCommands.h"
+// 频谱视野映射读取快照字段，显式依赖渲染定义而非时间格式化工具的传递包含。
+#include "common/render/RenderSnapshot.h"
+#include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
+#include "config/VisualConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
@@ -16,6 +21,7 @@
 #include "runtime/AppThreadPool.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/SpectrumTimeMapping.h"
+#include "ui/layout/LayoutContext.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -151,7 +157,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     std::string windowTitle = m_name + "###AudioSpectrumViewGlobal";
     // LayoutContext 负责窗口 Begin/End 与关闭状态。
     LayoutContext layoutContext(
-        m_layoutCtx, windowTitle, true, ImGuiWindowFlags_None, &m_isOpen);
+        *this, windowTitle, true, ImGuiWindowFlags_None, &m_isOpen);
 
     if ( sourceManager && sourceManager->isProjectTransitionInProgress() ) {
         // 工程切换时不读取可能失效的主音轨或 Session。

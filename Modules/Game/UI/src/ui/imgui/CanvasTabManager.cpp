@@ -5,7 +5,7 @@
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
-#include "mmm/project/ProjectSettings.h"
+#include "mmm/project/ProjectWorkspaceState.h"
 #include "ui/ICanvasView.h"
 #include "ui/ICanvasWorkspaceService.h"
 #include "ui/UIManager.h"

@@ -3,27 +3,6 @@
 #include <filesystem>
 #include <string>
 
-#ifdef _WIN32
-#    ifndef WIN32_LEAN_AND_MEAN
-#        define WIN32_LEAN_AND_MEAN
-#    endif
-#    ifndef NOMINMAX
-#        define NOMINMAX
-#    endif
-#    include <windows.h>
-// Win32 的 near 是空兼容宏，但 NEAR 仍通过它展开；两者必须一起处理。
-// 仅删除 near 会让之后包含的 commctrl.h 把 NEAR 展开为普通标识符，
-// 导致 TBBUTTON 等声明解析失败。先将大写别名固定为空，再清除小写宏。
-// 保留 NEAR 的空展开语义，允许调用方继续包含其他 Windows SDK 头。
-#    ifdef near
-#        ifdef NEAR
-#            undef NEAR
-#            define NEAR
-#        endif
-#        undef near
-#    endif
-#endif
-
 namespace MMM::Config
 {
 
@@ -58,23 +37,7 @@ inline std::string pathToUtf8Generic(const std::filesystem::path& p)
 ///          实现统一了此行为。
 /// @param s UTF-8 编码的路径字符串
 /// @return std::filesystem::path 对象
-inline std::filesystem::path utf8ToPath(const std::string& s)
-{
-#ifdef _WIN32
-    // 将 UTF-8 转换为宽字符串，再用 wchar_t* 构造 path。
-    // 这对 MSVC STL 和 libc++ on Windows 均有效：
-    //   - MSVC STL: 原生使用 wchar_t 存储路径
-    //   - libc++: 内部调用 __char_to_wide，wchar_t* 构造不会触发窄字符编码猜测
-    int len = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
-    if ( len <= 0 ) {
-        return {};
-    }
-    std::wstring wstr(static_cast<size_t>(len - 1), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, wstr.data(), len);
-    return std::filesystem::path(wstr);
-#else
-    return std::filesystem::path(s);
-#endif
-}
+/// @note 平台转换实现在独立路径库中，公共头不引入 Windows SDK 或其宏。
+std::filesystem::path utf8ToPath(const std::string& s);
 
 }  // namespace MMM::Config

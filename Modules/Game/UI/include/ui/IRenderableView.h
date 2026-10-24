@@ -1,5 +1,7 @@
 #pragma once
 
+#include <imgui.h>
+
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"

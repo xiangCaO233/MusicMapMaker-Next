@@ -1,15 +1,19 @@
 #pragma once
 
-#include "EditorConfig.h"
-#include "config/AudioPresets.h"
-#include "config/LayoutPresets.h"
 
 #include <filesystem>
+#include <memory>
 #include <mutex>
+#include <nlohmann/json_fwd.hpp>
 #include <string>
 
 namespace MMM::Config
 {
+struct EditorConfig;
+struct EditorSettings;
+struct VisualConfig;
+struct AudioPresets;
+struct LayoutPresets;
 
 /// @brief 全局应用配置管理器
 class AppConfig
@@ -18,32 +22,26 @@ public:
     static AppConfig& instance();
 
     /// @brief 获取编辑器配置
-    EditorConfig&       getEditorConfig() { return m_editorConfig; }
-    const EditorConfig& getEditorConfig() const { return m_editorConfig; }
+    EditorConfig&       getEditorConfig();
+    const EditorConfig& getEditorConfig() const;
 
     /// @brief 获取仅属于客户端的音频预设库。
-    AudioPresets& getAudioPresets() { return m_audioPresets; }
+    AudioPresets& getAudioPresets();
     /// @brief 获取预设库的只读视图。
-    const AudioPresets& getAudioPresets() const { return m_audioPresets; }
+    const AudioPresets& getAudioPresets() const;
 
     /// @brief 获取客户端布局预设库，不参与项目工作区快照。
-    LayoutPresets& getLayoutPresets() { return m_layoutPresets; }
+    LayoutPresets& getLayoutPresets();
     /// @brief 只读访问布局预设集合。
-    const LayoutPresets& getLayoutPresets() const { return m_layoutPresets; }
+    const LayoutPresets& getLayoutPresets() const;
 
     /// @brief 获取视觉配置
-    VisualConfig&       getVisualConfig() { return m_editorConfig.visual; }
-    const VisualConfig& getVisualConfig() const
-    {
-        return m_editorConfig.visual;
-    }
+    VisualConfig&       getVisualConfig();
+    const VisualConfig& getVisualConfig() const;
 
     /// @brief 获取编辑器设置
-    EditorSettings& getEditorSettings() { return m_editorConfig.settings; }
-    const EditorSettings& getEditorSettings() const
-    {
-        return m_editorConfig.settings;
-    }
+    EditorSettings&       getEditorSettings();
+    const EditorSettings& getEditorSettings() const;
 
     /// @brief 获取当前应用配置持久化的协作者稳定标识。
     /// @return 不随房间 PeerId 或重连变化的 128 位十六进制标识。
@@ -85,19 +83,13 @@ public:
 
     /// @brief 获取 UI 布局缩放比例
     /// (已减去系统自动缩放部分，并包含用户自定义倍率)
-    float getUIScale() const
-    {
-        return m_uiScale * m_editorConfig.settings.uiScaleMultiplier;
-    }
+    float getUIScale() const;
 
     /// @brief 设置 UI 布局缩放比例 (仅设置系统部分)
     void setUIScale(float scale) { m_uiScale = scale; }
 
     /// @brief 获取窗口缩放比例 (包含用户自定义倍率)
-    float getWindowContentScale() const
-    {
-        return m_uiScale * m_editorConfig.settings.uiScaleMultiplier;
-    }
+    float getWindowContentScale() const;
 
     /// @brief 设置窗口缩放比例 (仅设置系统部分)
     void setWindowContentScale(float scale) { m_uiScale = scale; }
@@ -105,7 +97,8 @@ public:
 private:
     /// @brief 创建持有默认 EditorConfig 的进程级配置单例。
     AppConfig();
-    ~AppConfig() = default;
+    /// @brief 在完整预设类型可见处销毁私有状态。
+    ~AppConfig();
 
     AppConfig(const AppConfig&)            = delete;
     AppConfig& operator=(const AppConfig&) = delete;
@@ -118,13 +111,10 @@ private:
     /// @warning 低频保存或明确布局修改路径调用，禁止空闲帧轮询。
     nlohmann::json snapshotForSave() const;
 
-    /// @brief 当前进程读取和修改的完整编辑器配置。
-    EditorConfig m_editorConfig;
-    /// @brief 独立于项目快照，防止切换项目覆盖个人听音方案。
-    AudioPresets m_audioPresets;
-    /// @brief 客户端布局集合，保存时捕获当前实时布局。
-    // const 保存入口可更新派生的预设身份，但不会改变实时视觉布局。
-    mutable LayoutPresets m_layoutPresets;
+    /// @brief 完整配置与预设共享的长期私有存储，不向标量消费者传播定义。
+    struct State;
+    /// @brief 复用原有一次私有状态分配；加载和重置仅替换内容，引用地址稳定。
+    std::unique_ptr<State> m_state;
     /// @brief 当前应用配置持久化的协作者稳定标识。
     std::string        m_collaborationParticipantId;
     mutable std::mutex m_mutex;

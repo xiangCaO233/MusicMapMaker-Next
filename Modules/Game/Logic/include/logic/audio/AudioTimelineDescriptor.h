@@ -1,6 +1,6 @@
 #pragma once
 
-#include "audio/AudioManager.h"
+#include "audio/AudioTypes.h"
 
 #include <cstdint>
 #include <filesystem>

@@ -5,9 +5,12 @@
 #include "audio/AuditionSourceMixerNode.h"
 #include "audio/KeySoundControl.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
-#include "mmm/project/AudioResource.h"
+// 播放只消费音轨参数与类型，不依赖项目资源的路径和身份存储结构。
+#include "mmm/project/AudioTrackConfig.h"
+#include "mmm/project/AudioTrackType.h"
 
 #include <algorithm>
 #include <chrono>

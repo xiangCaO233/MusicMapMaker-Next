@@ -1,6 +1,9 @@
 #pragma once
 
+#include "common/walkthrough/WalkthroughEditEvent.h"
+
 #include "common/ChartObjectKind.h"
+#include "common/EditTool.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/EditorConfig.h"
 #include "logic/PreviewDensity.h"
@@ -13,6 +16,7 @@
 #include "logic/session/AnnotationRenderData.h"
 #include "logic/session/ClipboardTypes.h"
 #include "logic/session/EditorAction.h"
+#include "mmm/project/AudioTrackType.h"
 #include <array>
 #include <cstdint>
 #include <entt/entt.hpp>
@@ -77,7 +81,7 @@ struct SessionContext {
     /// @brief 按 Note、Hold、Flick、Polyline 顺序记录练习产物。
     std::array<WalkthroughPracticeNote, 4> walkthroughPracticeNotes{};
     /// @brief 最近一次结束的编辑手势；仅发布标记，不在热路径复制音符列表。
-    Common::Render::RenderSnapshot::WalkthroughEditEvent walkthroughEditEvent{};
+    Common::Walkthrough::EditEvent walkthroughEditEvent{};
     /// @brief 教学只读验收用的正式物件变更序号；仅逻辑线程写入。
     std::uint64_t composeNoteRevision{ 0 };
     /// @brief 当前会话的创作教学阶段；零值为 Off，不写入谱面或用户配置。

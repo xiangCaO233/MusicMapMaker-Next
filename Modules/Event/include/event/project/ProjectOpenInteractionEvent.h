@@ -2,23 +2,11 @@
 
 #include "event/EventDef.h"
 #include "event/core/BaseEvent.h"
-#include <cstdint>
+#include "event/project/ProjectOpenOrigin.h"
 #include <string>
 
 namespace MMM::Event
 {
-/// @brief 项目打开请求的用户入口，与教程内容无关。
-/// @note 入口值随异步流程传递，用于完成后恢复对应的交互反馈。
-enum class ProjectOpenOrigin : std::uint8_t {
-    Unknown,         ///< 程序内部或未指定入口。
-    FileMenu,        ///< 文件菜单打开现有目录。
-    Shortcut,        ///< 快捷键打开现有目录。
-    FolderDrop,      ///< 系统文件夹拖放。
-    BeatmapDrop,     ///< 谱面文件拖放到画布。
-    PackageDrop,     ///< 谱包拖放并临时阅览。
-    CreateFileMenu,  ///< 文件菜单新建并打开项目。
-    CreateShortcut   ///< 快捷键新建并打开项目。
-};
 /// @brief 项目打开或新建交互结果；仅实际进入项目后发布 m_completed。
 /// @note m_completed 为 false 时表示已唤出选择器或新建向导，其余结果字段尚未
 /// 生效。

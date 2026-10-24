@@ -1,6 +1,7 @@
 #include "mmm/beatmap/BeatmapSpeedTransform.h"
 #include "mmm/SafeParse.h"
 #include "mmm/timing/TimingFunction.h"
+#include "mmm/timing/TimingInterpolationAlgorithms.h"
 
 #include <nlohmann/json.hpp>
 

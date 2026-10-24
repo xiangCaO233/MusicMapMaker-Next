@@ -1,4 +1,6 @@
 #include "logic/ecs/system/render/SkinTextureScale.h"
+// 缩放规则按内置纹理语义分流，枚举定义由轻量公共头提供。
+#include "common/render/TextureID.h"
 
 #include "common/render/RenderSnapshot.h"
 #include "config/skin/SkinConfig.h"

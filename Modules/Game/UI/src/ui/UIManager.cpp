@@ -1,6 +1,7 @@
 #include "ui/UIManager.h"
 #include "audio/AudioManager.h"
 #include "config/AppPaths.h"
+#include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -18,6 +19,7 @@
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "mmm/project/Project.h"
 #include "network/collaboration/CollaborationRoom.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/IAuxiliaryWindowView.h"
@@ -40,6 +42,7 @@
 #include "ui/imgui/markdown/MarkdownImageCache.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/layout/CLayWrapperCore.h"
 #include "ui/plugin/ToolPluginView.h"
 #include "ui/project/ProjectDropRouter.h"
 #include "ui/utils/NativeFileDialog.h"
@@ -48,6 +51,7 @@
 #include "ui/walkthrough/WalkthroughSpotlight.h"
 #include "ui/walkthrough/WelcomeView.h"
 #include <algorithm>
+#include <concurrentqueue.h>
 #include <ice/thread/ThreadPool.hpp>
 #include <latch>
 #include <string_view>
@@ -56,6 +60,55 @@
 
 namespace MMM::UI
 {
+/// @brief 项目生命周期传递的私有重状态，避免向视图传播完整项目与队列实现。
+/// @details
+/// 队列仍使用原有同步方式；每帧注册表、观察指针与原子标志保留在管理器中。
+struct UIManager::Impl {
+    /// @brief 跨线程投递到 UI 的项目生命周期快照。
+    struct ProjectUiLifecycleUpdate {
+        /// @brief 本次更新类型。
+        ProjectUiLifecycleKind kind{ ProjectUiLifecycleKind::Closed };
+
+        /// @brief 事件对应的项目路径。
+        std::filesystem::path projectRoot;
+
+        /// @brief 加载完成时复制的项目工作区。
+        ProjectWorkspaceState workspace;
+
+        /// @brief 加载完成时复制的项目音频资源，用于恢复音轨控制器。
+        std::vector<AudioResource> audioResources;
+
+        /// @brief 是否包含可用于恢复的项目快照。
+        bool hasProjectSnapshot{ false };
+    };
+
+    /// @brief 等待 UI 线程应用的新项目工作区快照。
+    ProjectWorkspaceState m_pendingProjectWorkspace;
+    /// @brief 与待应用工作区一起捕获的项目音频资源快照。
+    std::vector<AudioResource> m_pendingProjectAudioResources;
+    /// @brief 项目生命周期跨线程更新队列。
+    moodycamel::ConcurrentQueue<ProjectUiLifecycleUpdate>
+        m_pendingProjectLifecycleUpdates;
+    /// @brief 项目加载进度跨线程更新队列。
+    moodycamel::ConcurrentQueue<ProjectOpenProgressState>
+        m_pendingProjectOpenProgressUpdates;
+    /// @brief 项目开始打开事件订阅 ID。
+    Event::SubscriptionID m_projectOpenStartedSubId{ 0 };
+    /// @brief 项目加载进度事件订阅 ID。
+    Event::SubscriptionID m_projectOpenProgressSubId{ 0 };
+    /// @brief 项目加载完成事件订阅 ID。
+    Event::SubscriptionID m_projectLoadedSubId{ 0 };
+    /// @brief 项目关闭完成事件订阅 ID。
+    Event::SubscriptionID m_projectClosedSubId{ 0 };
+    /// @brief 项目打开失败事件订阅 ID。
+    Event::SubscriptionID m_projectOpenFailedSubId{ 0 };
+    /// @brief 临时项目保存到正式目录事件订阅 ID。
+    Event::SubscriptionID m_temporaryProjectSaveResultSubId{ 0 };
+    /// @brief 原生窗口焦点状态事件订阅 ID。
+    Event::SubscriptionID m_nativeWindowFocusSubId{ 0 };
+};
+
+
 
 namespace
 {
@@ -409,7 +462,7 @@ Walkthrough::Spotlight& UIManager::walkthroughSpotlight()
 /// 欢迎页初始开关来自软件设置；Clay
 /// 文本测量桥接在任何布局构建前初始化。自动保存
 /// 仅在原生窗口失焦或最小化事件发生时请求，不在事件回调中直接落盘。
-UIManager::UIManager()
+UIManager::UIManager() : m_impl(std::make_unique<Impl>())
 {
     // 引导进度与页面定义均位于当前配置根，测试可通过隔离配置根保护个人设置。
     m_walkthrough = std::make_unique<Walkthrough::Service>(
@@ -433,19 +486,20 @@ UIManager::UIManager()
 
     // 保存所有订阅 ID，析构时逐项精确注销。
     auto& eventBus = Event::EventBus::instance();
-    m_projectOpenStartedSubId =
+    m_impl->m_projectOpenStartedSubId =
         eventBus.subscribe<Event::ProjectOpenStartedEvent>(
             [this](const Event::ProjectOpenStartedEvent& event) {
                 // 发布 transition 信号让同帧其他视图立即停止读取旧项目。
                 m_projectTransitionSignal.store(true,
                                                 std::memory_order_release);
                 // 具体生命周期转换排队到 UI 线程消费。
-                ProjectUiLifecycleUpdate update;
+                Impl::ProjectUiLifecycleUpdate update;
                 update.kind        = ProjectUiLifecycleKind::OpenStarted;
                 update.projectRoot = Config::utf8ToPath(event.m_projectPath);
-                m_pendingProjectLifecycleUpdates.enqueue(std::move(update));
+                m_impl->m_pendingProjectLifecycleUpdates.enqueue(
+                    std::move(update));
             });
-    m_projectOpenProgressSubId =
+    m_impl->m_projectOpenProgressSubId =
         eventBus.subscribe<Event::ProjectOpenProgressEvent>(
             [this](const Event::ProjectOpenProgressEvent& event) {
                 // 进度事件复制所有文本和值，队列不保留事件引用。
@@ -454,76 +508,84 @@ UIManager::UIManager()
                 update.stage    = event.m_stage;
                 update.fraction = event.m_fraction;
                 update.detail   = event.m_detail;
-                m_pendingProjectOpenProgressUpdates.enqueue(std::move(update));
+                m_impl->m_pendingProjectOpenProgressUpdates.enqueue(
+                    std::move(update));
             });
-    m_projectLoadedSubId = eventBus.subscribe<Event::ProjectLoadedEvent>(
-        [this](const Event::ProjectLoadedEvent& event) {
-            // 加载完成更新携带规范化项目根和可选完整 UI 快照。
-            ProjectUiLifecycleUpdate update;
-            update.kind        = ProjectUiLifecycleKind::Opened;
-            update.projectRoot = Config::utf8ToPath(event.m_projectPath);
+    m_impl->m_projectLoadedSubId =
+        eventBus.subscribe<Event::ProjectLoadedEvent>(
+            [this](const Event::ProjectLoadedEvent& event) {
+                // 加载完成更新携带规范化项目根和可选完整 UI 快照。
+                Impl::ProjectUiLifecycleUpdate update;
+                update.kind        = ProjectUiLifecycleKind::Opened;
+                update.projectRoot = Config::utf8ToPath(event.m_projectPath);
 
-            EditorProjectUiSnapshot snapshot;
-            if ( m_editorApplicationService &&
-                 m_editorApplicationService->currentProjectUiSnapshot(
-                     snapshot) &&
-                 snapshot.projectRoot.lexically_normal() ==
-                     update.projectRoot.lexically_normal() ) {
-                // 只有服务快照与事件根一致时才作为恢复真值。
-                update.workspace          = std::move(snapshot.workspace);
-                update.audioResources     = std::move(snapshot.audioResources);
-                update.hasProjectSnapshot = true;
-            }
-            m_pendingProjectLifecycleUpdates.enqueue(std::move(update));
-        });
-    m_projectClosedSubId = eventBus.subscribe<Event::ProjectClosedEvent>(
-        [this](const Event::ProjectClosedEvent& event) {
-            // 关闭事件只排队根路径，当前工作区捕获由 UI 线程按状态处理。
-            ProjectUiLifecycleUpdate update;
-            update.kind        = ProjectUiLifecycleKind::Closed;
-            update.projectRoot = event.m_projectPath;
-            m_pendingProjectLifecycleUpdates.enqueue(std::move(update));
-        });
-    m_projectOpenFailedSubId =
+                EditorProjectUiSnapshot snapshot;
+                if ( m_editorApplicationService &&
+                     m_editorApplicationService->currentProjectUiSnapshot(
+                         snapshot) &&
+                     snapshot.projectRoot.lexically_normal() ==
+                         update.projectRoot.lexically_normal() ) {
+                    // 只有服务快照与事件根一致时才作为恢复真值。
+                    update.workspace      = std::move(snapshot.workspace);
+                    update.audioResources = std::move(snapshot.audioResources);
+                    update.hasProjectSnapshot = true;
+                }
+                m_impl->m_pendingProjectLifecycleUpdates.enqueue(
+                    std::move(update));
+            });
+    m_impl->m_projectClosedSubId =
+        eventBus.subscribe<Event::ProjectClosedEvent>(
+            [this](const Event::ProjectClosedEvent& event) {
+                // 关闭事件只排队根路径，当前工作区捕获由 UI 线程按状态处理。
+                Impl::ProjectUiLifecycleUpdate update;
+                update.kind        = ProjectUiLifecycleKind::Closed;
+                update.projectRoot = event.m_projectPath;
+                m_impl->m_pendingProjectLifecycleUpdates.enqueue(
+                    std::move(update));
+            });
+    m_impl->m_projectOpenFailedSubId =
         eventBus.subscribe<Event::ProjectOpenFailedEvent>(
             [this](const Event::ProjectOpenFailedEvent& event) {
                 // 打开失败会结束 transition
                 // 并恢复无项目或旧状态，延迟统一处理。
-                ProjectUiLifecycleUpdate update;
+                Impl::ProjectUiLifecycleUpdate update;
                 update.kind        = ProjectUiLifecycleKind::OpenFailed;
                 update.projectRoot = Config::utf8ToPath(event.m_projectPath);
-                m_pendingProjectLifecycleUpdates.enqueue(std::move(update));
+                m_impl->m_pendingProjectLifecycleUpdates.enqueue(
+                    std::move(update));
             });
-    m_temporaryProjectSaveResultSubId =
+    m_impl->m_temporaryProjectSaveResultSubId =
         eventBus.subscribe<Event::TemporaryProjectSaveResultEvent>(
             [this](const Event::TemporaryProjectSaveResultEvent& event) {
                 // 只有保存成功且返回新路径时才切换活动工作区根。
                 if ( !event.m_success || event.m_savedProjectPath.empty() ) {
                     return;
                 }
-                ProjectUiLifecycleUpdate update;
+                Impl::ProjectUiLifecycleUpdate update;
                 // 临时项目另存后视图状态不变，只更新持久化归属根。
                 update.kind = ProjectUiLifecycleKind::RootChanged;
                 update.projectRoot =
                     Config::utf8ToPath(event.m_savedProjectPath);
-                m_pendingProjectLifecycleUpdates.enqueue(std::move(update));
+                m_impl->m_pendingProjectLifecycleUpdates.enqueue(
+                    std::move(update));
             });
-    m_nativeWindowFocusSubId = eventBus.subscribe<Event::GLFWNativeEvent>(
-        [this](const Event::GLFWNativeEvent& event) {
-            // 只有明确失焦或最小化事件触发自动保存。
-            const bool focusLost =
-                event.type ==
-                    Event::NativeEventType::GLFW_WINDOW_FOCUS_CHANGED &&
-                event.hasStateChange && !event.isFocused;
-            const bool minimized =
-                event.type == Event::NativeEventType::GLFW_ICONFY_WINDOW;
-            if ( !focusLost && !minimized ) return;
-            if ( m_editorApplicationService ) {
-                // 服务异步处理保存请求，原生事件回调不做文件 IO。
-                m_editorApplicationService->requestAutoSave(
-                    EditorAutoSaveReason::NativeWindowFocusLost);
-            }
-        });
+    m_impl->m_nativeWindowFocusSubId =
+        eventBus.subscribe<Event::GLFWNativeEvent>(
+            [this](const Event::GLFWNativeEvent& event) {
+                // 只有明确失焦或最小化事件触发自动保存。
+                const bool focusLost =
+                    event.type ==
+                        Event::NativeEventType::GLFW_WINDOW_FOCUS_CHANGED &&
+                    event.hasStateChange && !event.isFocused;
+                const bool minimized =
+                    event.type == Event::NativeEventType::GLFW_ICONFY_WINDOW;
+                if ( !focusLost && !minimized ) return;
+                if ( m_editorApplicationService ) {
+                    // 服务异步处理保存请求，原生事件回调不做文件 IO。
+                    m_editorApplicationService->requestAutoSave(
+                        EditorAutoSaveReason::NativeWindowFocusLost);
+                }
+            });
 }
 
 /// @brief 注销全部事件订阅并解除原生文件选择器主窗口绑定。
@@ -535,30 +597,33 @@ UIManager::~UIManager()
     // 先解除外部静态文件选择器对 NativeWindow handle 的观察。
     NativeFileDialog::bindMainWindow(nullptr);
     auto& eventBus = Event::EventBus::instance();
-    if ( m_projectOpenStartedSubId != 0 ) {
+    if ( m_impl->m_projectOpenStartedSubId != 0 ) {
         eventBus.unsubscribe<Event::ProjectOpenStartedEvent>(
-            m_projectOpenStartedSubId);
+            m_impl->m_projectOpenStartedSubId);
     }
-    if ( m_projectOpenProgressSubId != 0 ) {
+    if ( m_impl->m_projectOpenProgressSubId != 0 ) {
         eventBus.unsubscribe<Event::ProjectOpenProgressEvent>(
-            m_projectOpenProgressSubId);
+            m_impl->m_projectOpenProgressSubId);
     }
-    if ( m_projectLoadedSubId != 0 ) {
-        eventBus.unsubscribe<Event::ProjectLoadedEvent>(m_projectLoadedSubId);
+    if ( m_impl->m_projectLoadedSubId != 0 ) {
+        eventBus.unsubscribe<Event::ProjectLoadedEvent>(
+            m_impl->m_projectLoadedSubId);
     }
-    if ( m_projectClosedSubId != 0 ) {
-        eventBus.unsubscribe<Event::ProjectClosedEvent>(m_projectClosedSubId);
+    if ( m_impl->m_projectClosedSubId != 0 ) {
+        eventBus.unsubscribe<Event::ProjectClosedEvent>(
+            m_impl->m_projectClosedSubId);
     }
-    if ( m_projectOpenFailedSubId != 0 ) {
+    if ( m_impl->m_projectOpenFailedSubId != 0 ) {
         eventBus.unsubscribe<Event::ProjectOpenFailedEvent>(
-            m_projectOpenFailedSubId);
+            m_impl->m_projectOpenFailedSubId);
     }
-    if ( m_temporaryProjectSaveResultSubId != 0 ) {
+    if ( m_impl->m_temporaryProjectSaveResultSubId != 0 ) {
         eventBus.unsubscribe<Event::TemporaryProjectSaveResultEvent>(
-            m_temporaryProjectSaveResultSubId);
+            m_impl->m_temporaryProjectSaveResultSubId);
     }
-    if ( m_nativeWindowFocusSubId != 0 ) {
-        eventBus.unsubscribe<Event::GLFWNativeEvent>(m_nativeWindowFocusSubId);
+    if ( m_impl->m_nativeWindowFocusSubId != 0 ) {
+        eventBus.unsubscribe<Event::GLFWNativeEvent>(
+            m_impl->m_nativeWindowFocusSubId);
     }
 }
 
@@ -1020,7 +1085,8 @@ void UIManager::consumePendingProjectLifecycleUpdates()
 {
     // 进度事件可能高频到达，循环消费到当前队列为空。
     ProjectOpenProgressState progressUpdate;
-    while ( m_pendingProjectOpenProgressUpdates.try_dequeue(progressUpdate) ) {
+    while ( m_impl->m_pendingProjectOpenProgressUpdates.try_dequeue(
+        progressUpdate) ) {
         applyProjectOpenProgress(m_projectOpenProgress,
                                  progressUpdate.stage,
                                  progressUpdate.fraction,
@@ -1028,8 +1094,8 @@ void UIManager::consumePendingProjectLifecycleUpdates()
     }
 
     // 生命周期事件必须保持队列顺序以正确归约状态机。
-    ProjectUiLifecycleUpdate update;
-    while ( m_pendingProjectLifecycleUpdates.try_dequeue(update) ) {
+    Impl::ProjectUiLifecycleUpdate update;
+    while ( m_impl->m_pendingProjectLifecycleUpdates.try_dequeue(update) ) {
         // 纯状态转换由 reduce helper 集中定义。
         m_projectLifecycleState =
             reduceProjectUiLifecycleState(m_projectLifecycleState, update.kind);
@@ -1049,12 +1115,12 @@ void UIManager::consumePendingProjectLifecycleUpdates()
             // 活动根与可选工作区快照在同一事件中切换。
             m_activeProjectRoot                = std::move(update.projectRoot);
             m_noProjectWorkspaceDefaultApplied = false;
-            m_pendingProjectWorkspace          = ProjectWorkspaceState{};
-            m_pendingProjectAudioResources.clear();
+            m_impl->m_pendingProjectWorkspace  = ProjectWorkspaceState{};
+            m_impl->m_pendingProjectAudioResources.clear();
             if ( update.hasProjectSnapshot ) {
                 // 快照值移动到 UI 待恢复槽，下一阶段再操作视图。
-                m_pendingProjectWorkspace = std::move(update.workspace);
-                m_pendingProjectAudioResources =
+                m_impl->m_pendingProjectWorkspace = std::move(update.workspace);
+                m_impl->m_pendingProjectAudioResources =
                     std::move(update.audioResources);
             }
             // 完成进度并 release 发布过渡结束。
@@ -1068,7 +1134,7 @@ void UIManager::consumePendingProjectLifecycleUpdates()
                 // 状态机确认无活动项目后才清理根和待恢复数据。
                 m_activeProjectRoot.clear();
                 m_projectWorkspaceRestorePending = false;
-                m_pendingProjectAudioResources.clear();
+                m_impl->m_pendingProjectAudioResources.clear();
             }
             if ( update.kind == ProjectUiLifecycleKind::OpenFailed ) {
                 // 失败明确结束进度和过渡；普通 Closed 可能属于切换中间态。
@@ -1125,7 +1191,7 @@ void UIManager::syncProjectWorkspaceState()
         m_workspaceProjectPath = Config::pathToUtf8(m_activeProjectRoot);
         clearProjectWorkspaceViews();
 
-        const auto& workspace = m_pendingProjectWorkspace;
+        const auto& workspace = m_impl->m_pendingProjectWorkspace;
         if ( !workspace.m_imguiIniData.empty() ) {
             // 过滤平台多视口和欢迎页后才交给 ImGui 加载。
             std::string sanitizedIni =
@@ -1162,12 +1228,13 @@ void UIManager::syncProjectWorkspaceState()
         }
 
         // 视图恢复在布局和窗口位置之后执行，使新窗口能找到目标 Dock。
-        restoreProjectWorkspaceViews(workspace, m_pendingProjectAudioResources);
+        restoreProjectWorkspaceViews(workspace,
+                                     m_impl->m_pendingProjectAudioResources);
 
         // 延迟首次捕获，给新注册视图至少一个完整布局帧。
         m_nextWorkspaceCaptureTime       = ImGui::GetTime() + 0.5;
         m_projectWorkspaceRestorePending = false;
-        m_pendingProjectAudioResources.clear();
+        m_impl->m_pendingProjectAudioResources.clear();
     }
 
     // 活动项目按非阻塞时间门槛周期捕获工作区。

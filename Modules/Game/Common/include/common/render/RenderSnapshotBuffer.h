@@ -1,11 +1,11 @@
 #pragma once
 
-#include "common/render/RenderSnapshot.h"
 #include <memory>
 #include <vector>
 
 namespace MMM::Common::Render
 {
+struct RenderSnapshot;
 
 /// @brief 逻辑生产线程与画布消费线程之间的快照池。
 class RenderSnapshotBuffer

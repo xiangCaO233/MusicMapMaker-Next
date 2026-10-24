@@ -17,6 +17,9 @@
 /// 批注详情卡片完全基于快照数据绘制，不查询 ECS 或项目文件。
 /// 文件拖放只收集系统事件，在对应画布获得处理机会时再分类发布。
 #include "canvas/Basic2DCanvasInteraction.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
+#include "config/VisualConfig.h"
 #include "mmm/project/PackageFileTypes.h"
 
 #include "audio/AudioManager.h"

@@ -1,5 +1,9 @@
+// 停靠界面会读写工作区选项，不让配置字段从管理器接口继续传播。
 #include "ui/imgui/MainDockSpaceUI.h"
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/TranslationFormat.h"

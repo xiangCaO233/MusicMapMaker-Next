@@ -1,5 +1,6 @@
 #include "canvas/TimingInterpolationControls.h"
 #include "canvas/CanvasModalInput.h"
+#include "mmm/timing/TimingInterpolationAlgorithms.h"
 
 #include "config/EditorSettings.h"
 #include "config/TimingInterpolationPreferences.h"

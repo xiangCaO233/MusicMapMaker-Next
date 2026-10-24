@@ -1,4 +1,5 @@
 #include "logic/ecs/system/BackgroundRenderSystem.h"
+#include "common/render/TextureID.h"
 
 #include "audio/AudioManager.h"
 #include "logic/ecs/system/BackgroundSpectrumRenderSystem.h"
@@ -31,9 +32,9 @@ void BackgroundRenderSystem::render(Batcher& batcher, float viewportWidth,
     // 此处使用配置值本身，不额外改变配置层约定的取值范围。
     const float darkenRatio = config.visual.background.darken_ratio;
     glm::vec4   color(1.0f - darkenRatio,
-                    1.0f - darkenRatio,
-                    1.0f - darkenRatio,
-                    config.visual.background.opaque_ratio);
+                      1.0f - darkenRatio,
+                      1.0f - darkenRatio,
+                      config.visual.background.opaque_ratio);
 
     if ( snapshot->backgroundPath.empty() ) {
         // 无背景资源时使用白色图集纹理生成固定覆盖层，确保暗化与透明度仍参与混合。
