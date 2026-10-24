@@ -6,6 +6,16 @@
 # Vulkan loader 和头文件属于图形模块的硬依赖，配置阶段缺失时立即失败，避免把 不完整目标传播给后续业务模块。
 find_package(Vulkan REQUIRED)
 
+# 同时验证独立前向声明和完整 SDK 优先的包含顺序，禁止依赖新 SDK 的模块导出宏。 测试仅检查类型，不需要窗口、Vulkan
+# 设备或图形模块的运行时初始化。
+mmm_add_test_executable(
+  Graphic VulkanHandleFwdTest tests/VulkanHandleFwdTest.cpp
+  tests/VulkanHandleFwdCompleteFirst.cpp)
+target_include_directories(VulkanHandleFwdTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(VulkanHandleFwdTest PRIVATE Vulkan::Vulkan)
+mmm_register_test_case(NAME VulkanHandleFwdTest COMMAND VulkanHandleFwdTest)
+
 # Font 独立维护系统字体解析与 ASCII 栅格化，并以 Font 目标提供给 Graphic。
 add_subdirectory("Font")
 
