@@ -8,7 +8,7 @@ namespace MMM::Bms
 {
 /// @brief 写出标准通道文本，先在内存验证，再打开目标文件。
 /// @details BMS 的 STOP 单位为四分音符的 1/48，MMM 的参数为秒。
-/// 普通键布局补齐标准空轨；忽略的滚速和增益由导出界面事先提示。
+/// 四至八轨按 MyO2 顺序从 16 开始排列；忽略的滚速和增益由界面提示。
 /// @param map 已同步完成的导出快照，音频引用必须为实际路径。
 /// @param path 目标 BMS/BME/BML/PMS 文件名。
 /// @return 所有类型可表达且文件写入成功时返回 true。
@@ -20,29 +20,28 @@ namespace MMM::Bms
 inline bool save(const BeatMap& map, const std::filesystem::path& path)
 {
     // 目标后缀决定 PMS 键位协议，不能单凭九轨猜测其他格式。
-    // 转盘计入标准键数；普通键谱面在左侧补空转盘，不移动原有键序。
+    // 四至八轨沿用 MyO2 的顺序，第一轨占用 16，不额外插入空转盘。
     const auto& meta   = map.m_baseMapMetadata;
     const bool  pms    = upper(Config::pathToUtf8(path.extension())) == ".PMS";
     const int   tracks = meta.track_count;
-    const bool  keyboardOnly =
-        !pms && ((tracks >= 1 && tracks <= 5) || tracks == 7);
+    const bool  keyboardOnly = !pms && tracks >= 1 && tracks <= 3;
     // Flick 和折线没有这里实现的 BMS 通道表示。
     // 提前拒绝可避免只保存可转换子集、丢失其余物件。
     if ( (pms && tracks != 9) ||
-         (!pms && !keyboardOnly && tracks != 6 && tracks != 8 && tracks != 12 &&
+         (!pms && !keyboardOnly && (tracks < 4 || tracks > 8) && tracks != 12 &&
           tracks != 16) ||
          !map.m_noteData.flicks.empty() || !map.m_noteData.polylines.empty() )
         return false;
     const bool seven    = tracks == 7 || tracks == 8 || tracks == 16;
     const int  sideSize = seven ? 8 : 6;
-    // 内部轨道保留转盘位置，PMS 使用自己的九键通道映射。
+    // 四至八轨使用 16、11、12、13、14、15、18、19 的前缀。
     // 轨道数已经在入口限制，下面只处理标准布局。
     // 七键的后两键跳过通道 17，不能简单把轨道号加到 11。
     // 第二玩家的通道十位与第一玩家不同，键序保持一致。
     // PMS 使用独立九键映射，不包含转盘。
     const auto channel = [&](int track) {
         if ( pms ) return track < 5 ? 0x11 + track : 0x22 + track - 5;
-        // 无转盘来源的第一颗普通键写入 11，而不是转盘通道 16。
+        // 一至三轨保留既有普通键补位行为，不扩大本次四至八轨调整范围。
         if ( keyboardOnly ) ++track;
         const int key = track % sideSize;
         return 0x10 * (track / sideSize + 1) + (key == 0   ? 6
@@ -146,7 +145,10 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     // 限制总输出规模，防止高分辨率事件组合产生巨型文本。
     // 此计数在写磁盘之前执行，失败不会留下半份谱面。
     std::size_t outputBytes = 0;
-    const auto  emit        = [&](double ms, int ch, int value) {
+    // MyO2 的转换器对同小节同通道只保留最后一行。
+    // 因此普通键、长条端点与 BPM 先聚合；01、09 独立行保留复音和停顿叠加。
+    std::map<std::pair<int, int>, std::vector<std::pair<double, int>>> rows;
+    const auto emit = [&](double ms, int ch, int value) {
         if ( !std::isfinite(ms) || ms < 0 || value <= 0 ) return false;
         // 所有协议位置来自统一 BPM 积分，不能把毫秒直接当拍号。
         // 三位小节号只允许 000–999，越界时拒绝而非截断。
@@ -155,8 +157,21 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         int measure = static_cast<int>(beat / 4);
         // 每小节默认四拍；原变长小节已经展平到相同绝对拍位。
         // 分数用于生成本行自己的格点，不强制全谱使用同一分辨率。
-        const double fraction = beat / 4 - measure;
-        // 优先最小分母，避免 1/4 拍物件被写成庞大且无意义的零串。
+        double fraction = beat / 4 - measure;
+        // 允许精度范围内的整小节尾差进入下一小节，不生成越界槽位。
+        // 两种行写出路径共用规范化，避免聚合与独立事件行边界不同。
+        if ( 1.0 - fraction <= fractionTolerance ) {
+            ++measure;
+            fraction = 0;
+        }
+        if ( measure >= 1000 ) return false;
+        // 键位和 BPM 通道一次写出整小节；保留原拍位供公共分辨率搜索。
+        // 不先逐事件量化，防止各自的近似误差在合并时再次累积。
+        if ( ch != 1 && ch != 9 ) {
+            rows[{ measure, ch }].emplace_back(fraction, value);
+            return true;
+        }
+        // BGM 与 STOP 均支持多行叠加，继续使用每条事件最短的有效格点。
         int numerator = 0, denominator = 1;
         // 有界有理数逼近保证常见节拍短文本且任意编辑不无限搜索。
         // 超过精度预算的时间返回失败，不能悄悄吸附到错误拍位。
@@ -249,13 +264,59 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
                    resource(sample.m_audioResourceId)) )
             return false;
     }
+    // 同小节同通道寻找能够同时表达所有事件的最短格点。
+    // 长条头尾共享一行，避免只保留末端导致无法配对。
+    // 搜索仍受原有分辨率和总文本大小限制，不能无限扩张文件。
+    // 公共格点不能取各事件最简分母的最大值，互质分母会落在不同位置。
+    // 也不能直接取它们的最小公倍数，逐事件近似会制造过大的分母。
+    // 这里直接针对原始拍位检查候选，所有事件共同满足既有时间误差。
+    // 常见二分、三连音小节会在很小的分母结束，不固定输出长零串。
+    // 密集外部毫秒谱面超过精度预算时返回失败，保持原有禁止静默吸附的约束。
+    // 预算按编码后的每行计算，防止少量高精度位置撑爆最终文本。
+    // 容量检查发生在分配零串之前，且目标文件此时尚未打开。
+    // 空行不会进入 rows，分母至少为一，避免空格点和除零分支。
+    for ( const auto& [position, events] : rows ) {
+        int denominator = 1;
+        for ( ; denominator <= 65536; ++denominator ) {
+            const bool fits = std::all_of(
+                events.begin(), events.end(), [&](const auto& event) {
+                    return std::abs(event.first -
+                                    std::round(event.first * denominator) /
+                                        denominator) <= fractionTolerance;
+                });
+            if ( fits ) break;
+        }
+        if ( denominator > 65536 ) return false;
+        outputBytes += denominator * 2U + 9U;
+        if ( outputBytes > 64U * 1024U * 1024U ) return false;
+        std::string data(denominator * 2U, '0');
+        for ( const auto& [fraction, value] : events ) {
+            const int slot =
+                static_cast<int>(std::round(fraction * denominator));
+            // 边界量化不能生成越过本行的写入；冲突音符也不能被静默覆盖。
+            // 同拍 BPM 沿用声明顺序，最后一条定义决定后续积分速度。
+            if ( slot < 0 || slot >= denominator ) return false;
+            const auto code = encode(value);
+            const auto old  = data.substr(slot * 2U, 2);
+            // 相同资源的重复声明可以合并；不同资源争用同一键位无法无损表示。
+            // BGM 复音已由独立 01 行表达，不适用玩家键位的冲突处理。
+            if ( old != "00" && old != code && position.second != 8 )
+                return false;
+            data.replace(slot * 2U, 2, code);
+        }
+        body << '#' << std::setfill('0') << std::setw(3) << std::dec
+             << position.first << std::setw(2) << std::hex << std::uppercase
+             << position.second << ':' << data << '\n';
+    }
     // 最后一次提交只进行文本写入；good 同时检查打开和写入状态。
     // 不声称资源已打包，此入口只写 BMS 及其相对音频引用。
     // 输出流失败通过返回值传播，禁止在无异常构建中引入异常处理。
     // 二进制打开避免平台自动插入换行，结果在各平台一致。
     // 数值流使用经典 locale，系统小数逗号不会污染协议。
     std::ofstream output(path, std::ios::binary);
-    output << header.str() << '\n' << body.str();
+    // 分隔行也是部分旧播放器定位主数据区的入口，不能只输出空行。
+    output << header.str() << "\n*---------------------- MAIN DATA FIELD\n"
+           << body.str();
     return output.good();
 }
 }  // namespace MMM::Bms

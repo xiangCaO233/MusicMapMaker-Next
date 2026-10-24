@@ -1,14 +1,21 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <string>
+#include <string_view>
 
 namespace
 {
 /// @brief 明确验证导入后的音乐时间，不用 writer 的计算作为期望。
+/// @param map 通过公共格式入口重新载入的独立结果。
+/// @return 物件、资源和 STOP 的数量与绝对时间全部匹配时返回 true。
+/// @note 六轨夹具故意保留空转盘，区别于后面的 MyO2 四轨来源。
+/// @note BGM 同刻复音和跨变速长条必须独立于普通键映射保持正确。
 bool verify(const MMM::BeatMap& map)
 {
     // 两条同通道 BGM 必须共存，不能被后出现的行覆盖。
@@ -43,6 +50,123 @@ bool verify(const MMM::BeatMap& map)
             return false;
     }
     return stops == 1;
+}
+/// @brief 检查四至八键在三个后缀下的实际通道、长条端点和重复行。
+/// @param root 调用方提供的构建输出目录。
+/// @param seed 含有效资源绑定的基准谱面，只读取元数据及物件模板。
+/// @return 所有通道文本及公共读取入口均符合映射时返回 true。
+bool verifyKeyboardChannels(const std::filesystem::path& root,
+                            const MMM::BeatMap&          seed)
+{
+    // 期望表直接声明协议通道，不从生产 writer 生成，防止共享同一偏移错误。
+    // 第七、第八键必须跨过保留的 17，继续写 18、19。
+    constexpr std::array<std::string_view, 8> channels{
+        "16", "11", "12", "13", "14", "15", "18", "19"
+    };
+    // 五种键数都必须覆盖，六、八轨本来正确，不能因修复四、七轨发生回归。
+    // 五轨仍使用表的前五项，不能误触发旧的普通键补位分支。
+    // 三种后缀直接交给公共保存入口，验证它们没有额外键数限制。
+    // 特别是 BML 的长条仍用成对端点，不能因后缀不同额外移动轨道。
+    for ( int tracks = 4; tracks <= 8; ++tracks ) {
+        for ( const auto* extension : { ".bms", ".bme", ".bml" } ) {
+            // 使用独立空模型，只复制来源元数据，避免依赖禁止的 BeatMap 拷贝。
+            // 各物件分别从有效模板构造，测试过程不改变 seed 的容器或绑定。
+            MMM::BeatMap map;
+            map.m_baseMapMetadata             = seed.m_baseMapMetadata;
+            map.m_baseMapMetadata.track_count = tracks;
+            // 使用整拍时轴，使失败只来自通道或文本结构，不混入速度误差。
+            // 各轨均有四个点按以及一个同小节内起止的长条。
+            MMM::Timing bpm;
+            bpm.m_timingEffect          = MMM::TimingEffect::BPM;
+            bpm.m_timingEffectParameter = 120;
+            map.m_timings.push_back(bpm);
+            // 同一轨四个时间点要求 writer 合并一行而非仅保存最后一个。
+            // Hold 使用独立 5x 通道，因此不会与前面的点按争用同一格点。
+            for ( int track = 0; track < tracks; ++track ) {
+                auto note                      = seed.m_noteData.notes.front();
+                note.m_track                   = track;
+                note.m_sampleBinding->m_volume = 1.0F;
+                for ( const double time : { 0., 250., 375., 1234. } ) {
+                    note.m_timestamp = time;
+                    map.m_noteData.notes.push_back(note);
+                }
+                auto hold                      = seed.m_noteData.holds.front();
+                hold.m_track                   = track;
+                hold.m_timestamp               = 500;
+                hold.m_duration                = 250;
+                hold.m_sampleBinding->m_volume = 1.0F;
+                map.m_noteData.holds.push_back(hold);
+            }
+            const auto path =
+                root / (std::to_string(tracks) + "key" + extension);
+            if ( !map.saveToFile(path) ) return false;
+            // 不只做 MMM 往返：其读取器接受多行，无法发现 MyO2 的覆盖问题。
+            // 独立扫描磁盘文本，要求非 BGM 的每小节每通道仅出现一行。
+            // 主数据分隔符必须存在且位于通道之前，旧站转换器依赖这个入口。
+            std::ifstream                      file(path);
+            std::map<std::string, std::string> rows;
+            bool                               mainData = false;
+            std::string                        line;
+            while ( std::getline(file, line) ) {
+                if ( line == "*---------------------- MAIN DATA FIELD" ) {
+                    mainData = true;
+                    continue;
+                }
+                if ( line.size() < 7 || line[0] != '#' || line[6] != ':' )
+                    continue;
+                if ( !mainData ||
+                     !rows.emplace(line.substr(0, 6), line.substr(7)).second )
+                    return false;
+            }
+            // 即使没有出现任何数据行，也不能让只有头部的空导出通过。
+            // 扩展名只影响文件名，头部与主数据区的结构应保持一致。
+            if ( !mainData ) return false;
+            // 统计实际非零对象，避免一行虽然存在却只剩最后一个音符。
+            // 长条同一行必须含首尾两个端点，而不是仅有一个结束标记。
+            const auto count = [&](const std::string& ch) {
+                const auto found = rows.find("#000" + ch);
+                if ( found == rows.end() ) return 0;
+                int result = 0;
+                for ( std::size_t i = 0; i < found->second.size(); i += 2 )
+                    result += found->second.substr(i, 2) != "00";
+                return result;
+            };
+            // 使用协议上的字符串 5x 查找长条，不调用 BMS 模块的 lane helper。
+            // 这样读写两端即使共享偏移错误，文本期望仍然能够发现它。
+            for ( int track = 0; track < tracks; ++track ) {
+                const std::string tap(channels[track]);
+                const std::string hold = "5" + tap.substr(1);
+                if ( count(tap) != 4 || count(hold) != 2 ) return false;
+            }
+            // 传统读取器仍保留标准六轨或八轨宽度，但实际音符键序不得漂移。
+            // BML 与其他后缀共享通道协议，不能单独引入补转盘或端点差异。
+            const auto restored = MMM::BeatMap::loadFromFile(path);
+            if ( restored.m_noteData.notes.size() != 4U * tracks ||
+                 restored.m_noteData.holds.size() !=
+                     static_cast<unsigned>(tracks) )
+                return false;
+            // 每轨长条同样检查轨号与尾部时间，不能只验证端点数量。
+            // 一个轨道错误地接收全部长条时，按总数比较仍会通过。
+            // 原始持续时长为 250 毫秒，往返不能把尾端当作新点按。
+            // 固定 BPM 夹具的格点可精确表达，因此无需放宽误差容限。
+            // 这些检查与文本 5x 计数互补，覆盖读取器端点配对结果。
+            for ( const auto& hold : restored.m_noteData.holds )
+                if ( hold.m_track >= static_cast<unsigned>(tracks) ||
+                     hold.m_duration != 250 )
+                    return false;
+            // 每轨点按数也要分别匹配，只有总数相同不能排除跨轨写错。
+            // 比较当前轨号，明确不允许重新读取后在左侧多出一颗空键。
+            for ( int track = 0; track < tracks; ++track ) {
+                if ( std::count_if(restored.m_noteData.notes.begin(),
+                                   restored.m_noteData.notes.end(),
+                                   [&](const auto& note) {
+                                       return note.m_track == track;
+                                   }) != 4 )
+                    return false;
+            }
+        }
+    }
+    return true;
 }
 }  // namespace
 
@@ -163,11 +287,11 @@ int main(int argc, char** argv)
          encoded.m_noteData.notes.front().m_sampleBinding->m_audioResourceId !=
              "テスト.wav" )
         return 11;
-    // 四颗普通键转标准五键加转盘：空转盘位于零，原物件顺移一轨。
+    // 四轨按 MyO2 的前四个通道写出，首轨不再补空转盘而发生顺移。
     // 毫秒量化位置、非默认增益和视觉滚速共同覆盖外部谱面的常见导出路径。
     auto keyboard = MMM::BeatMap::loadFromFile(root / "source.bms");
     keyboard.m_baseMapMetadata.track_count = 4;
-    // 普通键补位夹具不沿用原六轨长条，避免来源键数与物件轨号互相矛盾。
+    // 四轨夹具不沿用原六轨长条，避免来源键数与物件轨号互相矛盾。
     // 原来的长条往返已由 verify 覆盖，这里专门检查四轨转换边界。
     keyboard.m_noteData.holds.clear();
     keyboard.m_noteData.notes.front().m_track     = 0;
@@ -188,14 +312,14 @@ int main(int argc, char** argv)
     // saveToFile 的成功和后续重新导入必须同时满足，不能只检查磁盘存在。
     if ( !keyboard.saveToFile(root / "keyboard.bms") ) return 12;
     // 读取器仍按标准通道判断布局，验证结果不依赖私有键数元数据。
-    // 首、末轨分别覆盖补转盘和右侧保留空键两个边界。
+    // 首、末轨分别覆盖 16 转盘通道和 13 普通键通道两个边界。
     const auto converted = MMM::BeatMap::loadFromFile(root / "keyboard.bms");
-    // 重载标准布局而不是私有扩展，且两个音符均保留在普通键上。
+    // 重载仍是标准六轨宽度，但两个音符的轨号必须与来源一致。
     // 导出不能把修改写回来源模型的键数、轨号或增益。
     if ( converted.m_baseMapMetadata.track_count != 6 ||
          converted.m_noteData.notes.size() != 2 ||
-         converted.m_noteData.notes.front().m_track != 1 ||
-         converted.m_noteData.notes.back().m_track != 4 ||
+         converted.m_noteData.notes.front().m_track != 0 ||
+         converted.m_noteData.notes.back().m_track != 3 ||
          std::abs(converted.m_noteData.notes.front().m_timestamp - 628) >
              0.01 ||
          std::abs(converted.m_noteData.notes.back().m_timestamp - 1234) >
@@ -208,7 +332,7 @@ int main(int argc, char** argv)
     if ( argc == 3 ) {
         // 现场输入使用公共格式分派，覆盖 OSU 载入而非手工重建近似模型。
         // 源文件只读，输出固定为 external.bms，避免覆盖用户已保存的谱面。
-        // 预期轨号来自原布局加一个空转盘，与生产通道计算独立比较。
+        // 四至八轨的预期轨号与来源一致，与生产通道计算独立比较。
         const auto external = MMM::BeatMap::loadFromFile(argv[2]);
         if ( !external.saveToFile(root / "external.bms") ) return 14;
         const auto result = MMM::BeatMap::loadFromFile(root / "external.bms");
@@ -232,7 +356,7 @@ int main(int argc, char** argv)
                     targetNotes.begin(),
                     targetNotes.end(),
                     [&](const auto& note) {
-                        return note.m_track == sourceNote.m_track + 1 &&
+                        return note.m_track == sourceNote.m_track &&
                                std::abs(note.m_timestamp -
                                         sourceNote.m_timestamp) <= 0.25;
                     });
@@ -250,6 +374,9 @@ int main(int argc, char** argv)
              !matches(external.m_noteData.holds, result.m_noteData.holds) )
             return 16;
     }
+    // 逐个后缀验证所有五种键数，而非只覆盖恰好包含转盘的六轨来源。
+    // 每种夹具检查真实文本和重读结果，能发现后缀分支及多行丢物件回归。
+    if ( !verifyKeyboardChannels(root, map) ) return 20;
     XINFO("BMS import/export and native STOP persistence passed");
     return 0;
 }

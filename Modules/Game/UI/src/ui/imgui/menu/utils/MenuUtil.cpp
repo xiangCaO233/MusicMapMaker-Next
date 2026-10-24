@@ -19,6 +19,7 @@
 
 #include <ImGuiFileDialog.h>
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <fmt/format.h>
@@ -619,32 +620,43 @@ std::vector<std::string> MenuUtil::collectExportCompatibilityWarnings(
         // 此说明与具体映射同时显示，不要求用户另外查阅 BMS 文件通道表。
         warnings.push_back(
             "轨道标记：SCR 表示转盘，KEY 表示普通键，1P/2P 表示两侧玩家。");
-        // .bms/.bme/.bml 共用含转盘的键位协议，.pms 保持独立九键协议。
-        // 六键和八键来源已经包含转盘，不应再补一轨导致原键位偏移。
-        // 这里只给非标准普通键布局提供补位提示，与 writer 的判断保持一致。
-        // 导出后再次导入会显示标准总轨数，不承诺保留原界面的 4K 标签。
-        // 音乐时间和 STOP 不属于视觉降级，不允许在这里移除。
-        // 标准 BMS 将普通键布局补齐成含转盘的布局，保留实际物件键序。
-        // 在确认框列出所有降级，不要求用户猜测泛化的保存失败原因。
+        // BMS/BME/BML 的四至八轨共用 MyO2 通道顺序，不按扩展名补空轨。
+        // 标准 BMS 播放器仍把 16 当转盘，因此必须在写盘前说明语义差异。
+        // MyO2 本身仅提供四键和七键，不能把通道兼容误写成支持任意键数。
+        // 此处描述实际写出的协议通道，不能继续使用普通键加空转盘的旧文案。
+        // 六、八轨也使用同一表的前缀，用户无需按键数猜测导出规则。
+        // 扩展名不会改变这个映射，BML 长条仍绑定到同一物理轨道。
+        // 不将 BML 解释成六键，也不将 BME 强制解释成七颗普通键。
+        // 01 属于自动采样，不能混入从左到右的可操作轨道列表。
+        // 18、19 是扩展普通键通道，不能把保留的 17 当作下一颗键。
+        // 通道表用于显示，不复用 writer 内部逻辑，避免 UI 依赖私有格式头。
+        // 原生来源保留自己的键数；只有输出文件按目标协议解释首轨。
+        // 用户再次导入时仍可能看到六轨或八轨的标准布局，不隐式承诺私有模式。
+        // 警告只读模型，不能因为用户取消导出而改变原谱面的布局。
         const int tracks = beatMap.m_baseMapMetadata.track_count;
-        if ( ext != ".pms" && ((tracks >= 1 && tracks <= 5) || tracks == 7) )
-            warnings.push_back(
-                fmt::format("{}K 将转换为标准 {} 键加转盘布局：当前第 1～{} "
-                            "轨对应 1P 键 1～{}；"
-                            "目标转盘及其余普通键留空。原项目布局不变。",
-                            tracks,
-                            tracks == 7 ? 7 : 5,
-                            tracks,
-                            tracks));
-        // 总轨数含转盘与纯普通键同名，不能仅凭界面显示的 6K/8K 隐含转换。
-        // 这两种布局不增加轨数，但首轨在目标格式中的用途必须明确告知。
-        else if ( ext != ".pms" && (tracks == 6 || tracks == 8) )
-            // 原生普通 6K/8K 也可能导出 BMS，必须明确首轨会被解释为转盘。
-            warnings.push_back(
-                fmt::format("按标准 BMS 布局导出：当前第 1 轨对应 1P 转盘，第 "
-                            "2～{} 轨对应 1P 键 1～{}。",
-                            tracks,
-                            tracks - 1));
+        if ( ext != ".pms" && tracks >= 4 && tracks <= 8 ) {
+            constexpr std::array<std::string_view, 8> channels{
+                "16", "11", "12", "13", "14", "15", "18", "19"
+            };
+            std::string mapping;
+            for ( int track = 0; track < tracks; ++track ) {
+                if ( track != 0 ) mapping += "、";
+                mapping += channels[track];
+            }
+            warnings.push_back(fmt::format(
+                "{}K 按从左到右顺序写入通道 {}，不补空转盘。标准 BMS "
+                "播放器将第一轨的 16 通道解释为转盘；MyO2 将其作为普通键。"
+                "该 MyO2 网站只提供 4K/7K 模式，其他键数不保证兼容。",
+                tracks,
+                mapping));
+        } else if ( ext != ".pms" && tracks >= 1 && tracks <= 3 )
+            // 小于四轨的既有补位行为不随本次 MyO2 键位调整改变。
+            warnings.push_back(fmt::format(
+                "{}K 将转换为标准 5 键加转盘布局：当前第 1～{} 轨对应 "
+                "1P 键 1～{}；目标转盘及其余普通键留空。原项目布局不变。",
+                tracks,
+                tracks,
+                tracks));
         else if ( ext != ".pms" && (tracks == 12 || tracks == 16) ) {
             // 双人两侧分别包含一个转盘，不把第二侧首轨继续编号成普通键。
             // 原轨道顺序不变；每侧首轨的语义转换独立说明。
