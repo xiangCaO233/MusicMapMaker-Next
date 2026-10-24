@@ -16,6 +16,7 @@
 #include "runtime/AppThreadPool.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/SpectrumTimeMapping.h"
+#include "ui/layout/LayoutContext.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -151,7 +152,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     std::string windowTitle = m_name + "###AudioSpectrumViewGlobal";
     // LayoutContext 负责窗口 Begin/End 与关闭状态。
     LayoutContext layoutContext(
-        m_layoutCtx, windowTitle, true, ImGuiWindowFlags_None, &m_isOpen);
+        *this, windowTitle, true, ImGuiWindowFlags_None, &m_isOpen);
 
     if ( sourceManager && sourceManager->isProjectTransitionInProgress() ) {
         // 工程切换时不读取可能失效的主音轨或 Session。

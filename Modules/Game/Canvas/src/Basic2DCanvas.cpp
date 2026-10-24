@@ -53,6 +53,7 @@
 #include "network/collaboration/CollaborationRoom.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/layout/LayoutContext.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/ComposeLessonCatalog.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
@@ -2758,7 +2759,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
         }
         m_shouldFocusNextFrame = false;
     }
-    UI::LayoutContext lctx(m_layoutCtx,
+    UI::LayoutContext lctx(*this,
                            windowName,
                            true,
                            keepWelcomeFocus

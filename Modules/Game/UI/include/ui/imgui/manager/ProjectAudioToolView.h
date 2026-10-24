@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <imgui.h>
 #include <optional>
 #include <string>
 #include <vector>

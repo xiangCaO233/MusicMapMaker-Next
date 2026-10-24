@@ -9,6 +9,7 @@
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
+#include "ui/layout/LayoutContext.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -126,7 +127,7 @@ void AudioWaveformView::update(UIManager* sourceManager)
     std::string windowTitle = m_name + "###AudioWaveformViewGlobal";
     // LayoutContext 管理窗口 Begin/End 与关闭状态。
     LayoutContext layoutContext(
-        m_layoutCtx, windowTitle, true, ImGuiWindowFlags_None, &m_isOpen);
+        *this, windowTitle, true, ImGuiWindowFlags_None, &m_isOpen);
 
     if ( sourceManager && sourceManager->isProjectTransitionInProgress() ) {
         // 工程切换时不读取可能失效的音轨或 Session，只显示占位提示。

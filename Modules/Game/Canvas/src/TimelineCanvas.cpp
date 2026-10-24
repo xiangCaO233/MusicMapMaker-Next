@@ -35,6 +35,7 @@
 #include "logic/ecs/system/render/Batcher.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
+#include "ui/layout/LayoutContext.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
@@ -526,11 +527,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         if ( !isCanvasInputBlockedByModal() ) ImGui::SetNextWindowFocus();
         m_shouldFocusNextFrame = false;
     }
-    UI::LayoutContext lctx(m_layoutCtx,
-                           windowName,
-                           true,
-                           ImGuiWindowFlags_NoScrollbar,
-                           &windowOpen);
+    UI::LayoutContext lctx(
+        *this, windowName, true, ImGuiWindowFlags_NoScrollbar, &windowOpen);
     if ( auto* window = ImGui::GetCurrentWindow();
          window && (!window->DockIsActive || window->DockTabIsVisible) ) {
         // 时间线介绍覆盖完整窗格，包含时间滑块、画布和 Timing 入口。

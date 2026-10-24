@@ -183,7 +183,7 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
             m_pendingDockId = 0;
         }
         // Clay 当前上下文切换到本控制器持有的布局上下文。
-        CLayWrapperCore::instance().makeCurrent(m_layoutCtx.context);
+        makeLayoutCurrent();
         // 默认值保证资源暂不可用时控件仍能以中性状态呈现。
         float volume = 0.5f;
         float speed  = 1.0f;

@@ -12,6 +12,7 @@
 #include "logic/EditorEngine.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
+#include "ui/layout/LayoutContext.h"
 // 层级视图直接读取项目资源与工作区，完整模型依赖归属于此实现文件。
 #include "ui/Icons.h"
 #include "ui/UIManager.h"

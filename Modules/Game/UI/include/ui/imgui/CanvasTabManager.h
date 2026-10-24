@@ -1,5 +1,7 @@
 #pragma once
 
+#include <imgui.h>
+
 #include "ui/ICanvasWorkspaceService.h"
 #include "ui/IUIView.h"
 #include <string>

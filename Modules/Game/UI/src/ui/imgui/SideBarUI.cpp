@@ -313,7 +313,7 @@ void SideBarUI::update(UIManager* sourceManager)
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, windowRound);
     if ( ImGui::Begin("SideBarUI", nullptr, sidebar_flags) ) {
         // 每个 IUIView 拥有独立 Clay 上下文，生成布局前必须切换。
-        CLayWrapperCore::instance().makeCurrent(m_layoutCtx.context);
+        makeLayoutCurrent();
         // 按皮肤固定按钮圆角、边框与项间距，避免继承外部窗口样式。
         float rounding = std::floor(aesthetics.frameRounding * dpiScale);
         ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rounding);

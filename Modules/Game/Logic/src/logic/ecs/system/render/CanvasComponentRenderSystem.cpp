@@ -1,5 +1,7 @@
 #include "logic/ecs/system/CanvasComponentRenderSystem.h"
 #include "common/render/GlyphTextureId.h"
+// 本实现写入完整快照，公共接口仅借用类型，不传播字形与顶点定义。
+#include "common/render/RenderSnapshot.h"
 // 绘制和命中使用同一内联字号选择与测量实现，不通过 DTO 头传递引入。
 #include "common/AsciiFontAlgorithms.h"
 

@@ -1,8 +1,6 @@
 #pragma once
 
-#include "common/AsciiFontData.h"
 #include "common/LogicCommands.h"
-#include "common/UnicodeFontData.h"
 #include "event/project/ProjectOpenOrigin.h"
 #include "logic/ProjectTypes.h"
 #include "logic/SessionTypes.h"
@@ -27,6 +25,12 @@ namespace MMM::Config
 {
 struct VisualConfig;
 }
+
+namespace MMM::Common
+{
+struct AsciiFontAtlasMetrics;
+struct UnicodeFontMetrics;
+}  // namespace MMM::Common
 
 namespace MMM::Common::Render
 {
@@ -366,11 +370,22 @@ public:
     /**
      * @brief 设置全局图集 UV 映射 (由 UI 线程在构建图集后调用)
      */
+    void setAtlasUVMap(const std::string&                             cameraId,
+                       const std::unordered_map<uint32_t, glm::vec4>& uvMap);
+
+    /// @brief 发布带 ASCII 度量的图集，Unicode 度量沿用空值语义。
+    /// @note 缺省度量在实现文件构造，不迫使只转发 UV 的调用方包含字体定义。
     void setAtlasUVMap(
         const std::string&                             cameraId,
         const std::unordered_map<uint32_t, glm::vec4>& uvMap,
-        const Common::AsciiFontAtlasMetrics& asciiFontAtlasMetrics = {},
-        const Common::UnicodeFontMetrics&    unicodeFontMetrics    = {});
+        const Common::AsciiFontAtlasMetrics&           asciiFontAtlasMetrics);
+
+    /// @brief 一次发布 UV 与配套字体度量，保持同一注册表修订。
+    void setAtlasUVMap(
+        const std::string&                             cameraId,
+        const std::unordered_map<uint32_t, glm::vec4>& uvMap,
+        const Common::AsciiFontAtlasMetrics&           asciiFontAtlasMetrics,
+        const Common::UnicodeFontMetrics&              unicodeFontMetrics);
 
     /// @brief 获取当前全局图集 UV 映射共享读取句柄。
     /// @param cameraId 目标画布 cameraId。

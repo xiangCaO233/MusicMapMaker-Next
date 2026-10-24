@@ -22,6 +22,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/SpectrumTimeMapping.h"
 #include "ui/imgui/menu/actions/tools/BpmAutomaticMeasurementPolicy.h"
+#include "ui/layout/LayoutContext.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -1105,7 +1106,7 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
         TR("ui.tools.bpm_measure.title").toString() + "###BpmMeasurementTool";
     // 固定 ### ID 使本地化标题变化不会破坏窗口停靠状态。
     LayoutContext layoutContext(
-        m_layoutCtx,
+        *this,
         windowTitle,
         true,
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse,

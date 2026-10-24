@@ -1,5 +1,7 @@
 #pragma once
 
+#include <imgui.h>
+
 #include "IUIView.h"
 #include "event/ui/UpdateDragAreaEvent.h"
 #include "graphic/imguivk/IGraphicUserHook.h"

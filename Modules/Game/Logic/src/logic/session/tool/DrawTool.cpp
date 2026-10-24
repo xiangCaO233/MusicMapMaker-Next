@@ -1,5 +1,6 @@
 #include "logic/session/tool/DrawTool.h"
 #include "common/LogicCommands.h"
+#include "common/walkthrough/WalkthroughEditEvent.h"
 #include "log/colorful-log.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
@@ -1722,8 +1723,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
         editEvent.sourceEntity = ctx.brushState.resumedEntity;
         editEvent.part         = HoverPart::None;
         editEvent.subIndex     = -1;
-        editEvent.kind =
-            Common::Render::RenderSnapshot::WalkthroughEditEvent::Kind::Brush;
+        editEvent.kind         = Common::Walkthrough::EditEvent::Kind::Brush;
     }
     // 重置状态
     resetBrushState(ctx);

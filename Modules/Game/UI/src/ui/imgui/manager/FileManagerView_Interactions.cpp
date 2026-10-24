@@ -10,6 +10,8 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/manager/FileManagerView.h"
+// 子视图在此读取单帧布局区域，不拥有父窗口持久上下文。
+#include "ui/layout/LayoutContext.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"

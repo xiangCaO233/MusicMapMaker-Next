@@ -21,6 +21,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/AudioPresetControls.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
+#include "ui/layout/LayoutContext.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIThemeUtils.h"
@@ -928,6 +929,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     auto&       audioManager = Audio::AudioManager::instance();
 
     // 文件管理字体与资源表格的视觉语义一致；缺失时沿用当前字体。
+    // 子视图只借用当前帧尺寸，持久 Clay Arena 仍由外层视图拥有。
     float   dpiScale        = layoutContext.m_dpiScale;
     ImFont* fileManagerFont = skinCfg.getFont("filemanager");
     if ( fileManagerFont ) {

@@ -36,6 +36,7 @@
 #include "network/collaboration/CollaborationRoom.h"
 #include "ui/IUIView.h"
 #include "ui/UIManager.h"
+#include "ui/layout/LayoutContext.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include <algorithm>
 #include <cmath>
@@ -548,7 +549,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
         fmt::format("{}###PreviewWindow", TR("canvas.preview"));
     bool windowOpen = editorSettings.showPreviewWindow;
 
-    UI::LayoutContext lctx(m_layoutCtx, windowName, true, 0, &windowOpen);
+    UI::LayoutContext lctx(*this, windowName, true, 0, &windowOpen);
     if ( !windowOpen ) {
         // 标题栏关闭与菜单隐藏走同一持久化状态；先结束拖动，
         // 再保存设置，下一帧便不会重新创建已关闭窗口。

@@ -1,8 +1,10 @@
 #include "logic/EditorEngine.h"
 #include "EditorEngine_Impl.h"
 #include "audio/AudioManager.h"
+#include "common/AsciiFontData.h"
 #include "common/EditTool.h"
 #include "common/LogicCommands.h"
+#include "common/UnicodeFontData.h"
 #include "common/render/RenderSnapshot.h"
 #include "config/AppConfig.h"
 #include "config/AudioPresets.h"
@@ -1366,6 +1368,33 @@ std::recursive_mutex& EditorEngine::getSessionMutex() const
 {
     // 外壳不另设一把锁，所有旧调用方继续共享同一会话串行化边界。
     return impl().m_sessionRegistry.mutex();
+}
+
+/// @brief 不携带字体度量的图集更新，缺省对象只在低频调用处构造。
+/// @warning 资源重载路径：保留原有空字体语义，不在逐帧快照同步中调用。
+void EditorEngine::setAtlasUVMap(
+    const std::string&                             cameraId,
+    const std::unordered_map<uint32_t, glm::vec4>& uvMap)
+{
+    // 将默认参数移到实现中；调用方只需理解 UV 表，不必解析字体数据布局。
+    // 临时字体对象由同步的注册表调用复制入发布快照。
+    // 缺省参数移位不会把栈地址交给后台线程继续使用。
+    // 统一委托四参数入口，不额外产生第二个图集发布修订。
+    setAtlasUVMap(cameraId,
+                  uvMap,
+                  Common::AsciiFontAtlasMetrics{},
+                  Common::UnicodeFontMetrics{});
+}
+
+/// @brief 仅提供 ASCII 度量时沿用缺省 Unicode 集合的兼容入口。
+/// @warning 资源重载路径：不改变图集锁、修订或共享快照发布顺序。
+void EditorEngine::setAtlasUVMap(
+    const std::string&                             cameraId,
+    const std::unordered_map<uint32_t, glm::vec4>& uvMap,
+    const Common::AsciiFontAtlasMetrics&           asciiFontAtlasMetrics)
+{
+    setAtlasUVMap(
+        cameraId, uvMap, asciiFontAtlasMetrics, Common::UnicodeFontMetrics{});
 }
 
 /// @brief 转发图集更新，保持既有注册表锁和发布协议。

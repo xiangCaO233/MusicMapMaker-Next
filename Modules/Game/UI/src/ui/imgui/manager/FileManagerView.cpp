@@ -9,6 +9,7 @@
 #include "event/project/ProjectEvents.h"
 #include "imgui.h"
 #include "ui/UIManager.h"
+#include "ui/layout/LayoutContext.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>

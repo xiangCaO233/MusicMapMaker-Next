@@ -1,5 +1,7 @@
 #pragma once
 
+#include <imgui.h>
+
 #include "audio/AudioMarkerService.h"
 #include "config/visual/SpectrumConfig.h"
 #include "mmm/project/AudioResource.h"

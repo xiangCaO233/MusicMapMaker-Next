@@ -14,6 +14,7 @@
 #include "common/render/ScrollRenderData.h"
 #include "common/render/TimelineInteractiveElement.h"
 #include "common/render/TimingInterpolationRenderData.h"
+#include "common/walkthrough/WalkthroughEditEvent.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -126,14 +127,9 @@ struct RenderSnapshot {
     /// @brief 固定四个物件的删除状态，不依赖其是否处于可见时间范围。
     std::array<WalkthroughPracticeNoteState, 4> walkthroughPracticeNotes{};
     /// @brief 一次已经结束的编辑手势，配合正式几何防止拖动预览提前完成引导。
-    struct WalkthroughEditEvent {
-        enum class Kind : std::uint8_t { None, Drag, Brush };
-        std::uint64_t revision{ 0 };
-        entt::entity  sourceEntity{ entt::null };
-        HoverPart     part{ HoverPart::None };
-        int           subIndex{ -1 };
-        Kind          kind{ Kind::None };
-    } walkthroughEditEvent{};
+    using WalkthroughEditEvent = Common::Walkthrough::EditEvent;
+    /// @brief 本快照对应的最近一次已完成手势，保持原有按值布局。
+    WalkthroughEditEvent walkthroughEditEvent{};
     /// @brief 仅在物件变更批次递增，创作教程据此低频请求完整段落快照。
     std::uint64_t composeNoteRevision{ 0 };
     /// @brief 普通悬浮拾取与调试显示使用的横向包围盒缩放。
