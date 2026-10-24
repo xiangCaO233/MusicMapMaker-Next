@@ -1,5 +1,6 @@
 #pragma once
 #include "BmsFormat.hpp"
+#include <array>
 #include <iomanip>
 #include <locale>
 #include <numeric>
@@ -116,7 +117,9 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     std::ostringstream header, body;
     header.imbue(std::locale::classic());
     body.imbue(std::locale::classic());
-    header << std::setprecision(17);
+    // 十二位有效数字覆盖毫秒级谱面时长的既有误差预算，同时消除
+    // 139.99999999999986 一类来源倒数运算残差，不把它当作真实小数 BPM。
+    header << std::setprecision(12);
     // 防止元数据中的换行成为额外的 BMS 指令。
     const auto field = [](std::string text) {
         std::replace(text.begin(), text.end(), '\n', ' ');
@@ -202,7 +205,7 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         return true;
     };
     // 扩展 BPM 与 STOP 分属独立编号空间，不与 WAV 资源编号混用。
-    // 数值使用十七位精度，避免 MMM 往返时积累拍位误差。
+    // 数值精度与头部一致，避免倒数运算产生的伪小数进入协议声明。
     int    bpmId = 0, stopId = 0;
     double bpm = initial;
     for ( const auto* t : timings ) {
@@ -264,6 +267,15 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
                    resource(sample.m_audioResourceId)) )
             return false;
     }
+    // 标准 BMS 允许同小节同通道多行叠加。资源包可以选择更短的稀疏行，
+    // 避免保留离拍物件时强迫整小节共享巨大的分母。普通另存为仍保留单行
+    // 兼容路径，供只识别同通道最后一行的网页转换器使用。
+    const auto exportProperties =
+        map.m_metadata.map_properties.find(MapMetadataType::BMS);
+    const bool compactRows =
+        exportProperties != map.m_metadata.map_properties.end() &&
+        exportProperties->second.contains("compact_rows") &&
+        exportProperties->second.at("compact_rows") == "1";
     // 同小节同通道寻找能够同时表达所有事件的最短格点。
     // 长条头尾共享一行，避免只保留末端导致无法配对。
     // 搜索仍受原有分辨率和总文本大小限制，不能无限扩张文件。
@@ -285,6 +297,43 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
                                         denominator) <= fractionTolerance;
                 });
             if ( fits ) break;
+        }
+        // 独立事件选择最短的有效分母，不把它吸附到用户未选择的拍线。
+        // 比较真实输出字节数，只有严格更短或公共格点不存在时才拆行。
+        // 数值误差预算仍是原有 0.01ms，不通过放宽精度换取更小文件。
+        if ( compactRows ) {
+            // 比较成本前仅存整数位置，不提前为每个候选分配大段零串。
+            // 选择公共行或独立行只改变文本表示，不改变通道和采样身份。
+            // 同一行内真实离拍事件仍按既有误差预算表达，不强制取整拍。
+            std::vector<std::array<int, 3>> sparse;
+            std::size_t                     sparseBytes = 0;
+            for ( const auto& [fraction, value] : events ) {
+                int resolution = 1, slot = 0;
+                for ( ; resolution <= 65536; ++resolution ) {
+                    slot = static_cast<int>(std::round(fraction * resolution));
+                    if ( std::abs(fraction -
+                                  static_cast<double>(slot) / resolution) <=
+                         fractionTolerance )
+                        break;
+                }
+                if ( resolution > 65536 || slot < 0 || slot >= resolution )
+                    return false;
+                sparse.push_back({ slot, resolution, value });
+                sparseBytes += resolution * 2U + 9U;
+            }
+            if ( denominator > 65536 || sparseBytes < denominator * 2U + 9U ) {
+                outputBytes += sparseBytes;
+                if ( outputBytes > 64U * 1024U * 1024U ) return false;
+                for ( const auto& event : sparse ) {
+                    std::string data(event[1] * 2U, '0');
+                    data.replace(event[0] * 2U, 2, encode(event[2]));
+                    body << '#' << std::setfill('0') << std::setw(3) << std::dec
+                         << position.first << std::setw(2) << std::hex
+                         << std::uppercase << position.second << ':' << data
+                         << '\n';
+                }
+                continue;
+            }
         }
         if ( denominator > 65536 ) return false;
         outputBytes += denominator * 2U + 9U;

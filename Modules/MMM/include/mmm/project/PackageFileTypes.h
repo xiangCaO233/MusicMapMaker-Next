@@ -16,6 +16,8 @@ enum class PackageFileType {
     Osz,
     /// @brief MusicMapMaker 原生 MPK 谱面包。
     Mpk,
+    /// @brief BMS 与引用资源组成的通用 ZIP 谱包，统一校正首拍偏移。
+    BmsZip,
 };
 
 /// @brief 打包资源分类。
@@ -166,11 +168,31 @@ inline constexpr PackageSupportedFileTypes MPK_PACKAGE_SUPPORTED_FILE_TYPES{
     true,
 };
 
+/// @brief BMS 谱包输出的标准谱面扩展名，不按键数限制后缀。
+inline constexpr std::array<std::string_view, 1> BMS_PACKAGE_BEATMAP_EXTENSIONS{
+    ".bms"
+};
+
+/// @brief BMS ZIP 复用常见媒体集合，首拍对齐的主音频以 WAV 保存。
+/// @note 原始 Key 采样不重编码；不承诺 BGA 视频通道的格式转换。
+inline constexpr PackageSupportedFileTypes BMS_PACKAGE_SUPPORTED_FILE_TYPES{
+    // 普通 ZIP 后缀只在打包命令中选择此策略，不改变归档导入内容检测。
+    ".zip",
+    std::span<const std::string_view>{ MCZ_PACKAGE_AUDIO_EXTENSIONS },
+    std::span<const std::string_view>{ OSZ_PACKAGE_VIDEO_EXTENSIONS },
+    std::span<const std::string_view>{ PACKAGE_COMMON_IMAGE_EXTENSIONS },
+    std::span<const std::string_view>{ BMS_PACKAGE_BEATMAP_EXTENSIONS },
+    false,
+    false,
+    false,
+};
+
 /// @brief 当前支持的所有谱面打包格式规则。
-inline constexpr std::array<PackageSupportedFileTypes, 3>
+inline constexpr std::array<PackageSupportedFileTypes, 4>
     PACKAGE_SUPPORTED_FILE_TYPES{ MCZ_PACKAGE_SUPPORTED_FILE_TYPES,
                                   OSZ_PACKAGE_SUPPORTED_FILE_TYPES,
-                                  MPK_PACKAGE_SUPPORTED_FILE_TYPES };
+                                  MPK_PACKAGE_SUPPORTED_FILE_TYPES,
+                                  BMS_PACKAGE_SUPPORTED_FILE_TYPES };
 
 /// @brief 将 ASCII 字符转为小写。
 /// @param ch 输入字符。
@@ -286,6 +308,7 @@ getPackageSupportedFileTypes(PackageFileType type)
     case PackageFileType::Mcz: return MCZ_PACKAGE_SUPPORTED_FILE_TYPES;
     case PackageFileType::Osz: return OSZ_PACKAGE_SUPPORTED_FILE_TYPES;
     case PackageFileType::Mpk: return MPK_PACKAGE_SUPPORTED_FILE_TYPES;
+    case PackageFileType::BmsZip: return BMS_PACKAGE_SUPPORTED_FILE_TYPES;
     }
     // 未知枚举使用能力最宽但仍受候选资源识别限制的 MPK 规则。
     return MPK_PACKAGE_SUPPORTED_FILE_TYPES;

@@ -159,6 +159,8 @@ std::string getPackageTypeDisplayName(PackageFileType type)
     case PackageFileType::Osz:
         return "osu! Beatmap Package (" +
                std::string(types.m_packageExtension) + ")";
+    // ZIP 是容器后缀，必须在按钮中显示 BMS 身份，避免与独立 IMD ZIP 混淆。
+    case PackageFileType::BmsZip: return "BMS 谱面资源包 (.zip)";
     case PackageFileType::Mpk:
         return "MusicMapMaker Package (" +
                std::string(types.m_packageExtension) + ")";
@@ -262,6 +264,7 @@ bool shouldPreparePackageBeatmapMetadataEdit(PackageFileType    type,
                                       extension) &&
                !packageExtensionEquals(extension, ".osu") &&
                !packageExtensionEquals(extension, ".mmm");
+    case PackageFileType::BmsZip:
     case PackageFileType::Mpk: return false;
     }
     // 防御未来枚举扩展时默认不阻塞打包流程。
@@ -283,6 +286,7 @@ std::string makePackageMetadataEditPrompt(PackageFileType type)
     case PackageFileType::Osz:
         return "这些谱面将转换为 " + targetExtension +
                "。请补充 osu! 包需要的元数据：";
+    case PackageFileType::BmsZip:
     case PackageFileType::Mpk:
         return "这些谱面将转换为 " + targetExtension +
                "。请补充目标格式需要的元数据：";
@@ -301,6 +305,8 @@ const char* getNativePackageOutputFilterText(PackageFileType type)
     switch ( type ) {
     case PackageFileType::Mcz: return "mcz";
     case PackageFileType::Osz: return "osz";
+    // BMS 使用标准 ZIP 容器，包内谱面扩展名另由格式规则决定。
+    case PackageFileType::BmsZip: return "zip";
     case PackageFileType::Mpk: return "mpk";
     }
     // 未知类型按原生包处理，和显示名回退保持一致。
@@ -316,6 +322,8 @@ const char* getUnifiedPackageOutputFilterText(PackageFileType type)
     switch ( type ) {
     case PackageFileType::Mcz: return ".mcz";
     case PackageFileType::Osz: return ".osz";
+    // 与原生选择器保持一致，不能把 BMS 文本后缀当作归档后缀。
+    case PackageFileType::BmsZip: return ".zip";
     case PackageFileType::Mpk: return ".mpk";
     }
     // 未知类型按原生包处理，避免构造无过滤器对话框。
@@ -1131,6 +1139,8 @@ void PackBeatmapAction::requestPackBeatmapTo(std::string path)
         m_package.selectedFileType == PackageFileType::Mcz
             ? std::optional<MalodyMode>(m_package.selectedMalodyMode)
             : std::nullopt,
+        // BMS 模式是单个枚举值，界面无法构造同时选择或全部取消的命令。
+        .bmsAlignmentMode = m_package.bmsAlignmentMode,
         // 覆盖项只作用于本次转换，不回写源谱面元数据。
         .metadataOverrides = m_package.pendingMetadataOverrides,
     });
@@ -1213,6 +1223,14 @@ void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
                      getPackageTypeDisplayName(PackageFileType::Mpk).c_str(),
                      buttonSize) ) {
                 selectedType = PackageFileType::Mpk;
+                hasSelection = true;
+            }
+            if ( drawCenteredButton(
+                     getPackageTypeDisplayName(PackageFileType::BmsZip).c_str(),
+                     buttonSize) ) {
+                // BMS 复用候选选择流程，谱面和引用音频都由用户明确选择。
+                // 不走下方 IMD 的单谱面独立混音入口。
+                selectedType = PackageFileType::BmsZip;
                 hasSelection = true;
             }
             if ( drawCenteredButton("RM/IMD 资源包 (.zip)", buttonSize) ) {
@@ -1309,6 +1327,34 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
                 getPackageTypeDisplayName(m_package.selectedFileType).c_str(),
                 selectedCount,
                 static_cast<int>(m_package.candidateFiles.size()));
+
+            // BMS 时间变换始终发生在导出副本；此说明不需要每帧重新读取谱面。
+            // 候选缓存和真正转换分离，打开窗口本身不会触发音频编码。
+            if ( m_package.selectedFileType == PackageFileType::BmsZip ) {
+                // 单个枚举作为唯一状态，重复点击已选项不会取消选择。
+                // 默认值由 PackageDialogState 初始化，第一次打开也有确定选择。
+                // 用户切换后保留该值，输出路径确认期间不会重新应用默认策略。
+                // 两种策略不能相加，否则音乐和物件会承受两次相位补偿。
+                ImGui::TextUnformatted("首拍对齐方式（必选其一）：");
+                if ( ::MMM::UI::FeedbackRadioButton(
+                         "裁剪／补静音音乐副本",
+                         m_package.bmsAlignmentMode ==
+                             BmsPackageAlignmentMode::RewriteAudio) )
+                    m_package.bmsAlignmentMode =
+                        BmsPackageAlignmentMode::RewriteAudio;
+                if ( ::MMM::UI::FeedbackRadioButton(
+                         "后移 BGM 触发和物件（保留音乐原文件）",
+                         m_package.bmsAlignmentMode ==
+                             BmsPackageAlignmentMode::ShiftEvents) )
+                    m_package.bmsAlignmentMode =
+                        BmsPackageAlignmentMode::ShiftEvents;
+                // 保留离拍节奏和后续变速关系，不让用户误以为逐物件量化。
+                // 唯一例外是 BMS 头部 BPM，标准格式要求其从零点生效。
+                ImGui::TextWrapped(
+                    "物件与除开头初始 BPM "
+                    "外的所有红线统一移动，保留原本离拍的位置。"
+                    "Key 采样不重编码，项目源文件不变。");
+            }
 
             if ( m_package.selectedFileType == PackageFileType::Mcz ) {
                 // Malody 模式影响物件转换和 mode_ext 选项，仅 MCZ 展示。

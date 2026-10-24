@@ -13,6 +13,7 @@
 #include "event/logic/BeatmapSaveResultEvent.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapLoadDiagnosticPublisher.h"
+#include "logic/BmsPackageExportService.h"
 #include "logic/EditorEngine.h"
 #include "logic/ImdPackageExportService.h"
 #include "logic/MalodyPackageCompatibility.h"
@@ -1880,8 +1881,27 @@ bool writeBeatmapPackage(
     std::optional<MMM::MalodyMode> malodyExportMode,
     bool                           addStoreModeExtForMalodyExport,
     bool                           stripMainAudioVolumeFromMalodyExport,
-    bool                           alignNonOggMainAudioToOrigin)
+    bool                           alignNonOggMainAudioToOrigin,
+    MMM::BmsPackageAlignmentMode   bmsAlignmentMode)
 {
+    // BMS ZIP 使用独立资源事务，避免把 MCZ 私有首拍规则套入标准 BMS。
+    // 对齐计划和生成音频按谱面隔离，同一音乐可供不同首拍偏移的难度共享。
+    // 调用仍位于原有用户导出命令事务中，不从常态更新循环额外执行编码。
+    // 结果与其他包统一由外层发布保存反馈，服务错误在此保留具体原因。
+    // BMS 只接收一个枚举策略，不能把两种首拍补偿叠加执行。
+    // 非 BMS 分支继续使用各格式原有的独立音频参数。
+    if ( MMM::packageExtensionEquals(packageTypes.m_packageExtension,
+                                     ".zip") ) {
+        const auto result = MMM::Logic::BmsPackageExportService::exportPackage(
+            project,
+            selectedRelativePaths,
+            outputPath,
+            metadataOverrides,
+            bmsAlignmentMode);
+        if ( !result.success )
+            XERROR("BMS package export failed: {}", result.errorMessage);
+        return result.success;
+    }
     // 空选择无法形成有意义谱面包，也避免创建只有 zip 尾记录的空文件。
     if ( selectedRelativePaths.empty() ) return false;
     const auto& projectRoot = project.m_projectRoot;
@@ -4281,7 +4301,8 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
                             cmd.malodyExportMode,
                             cmd.addStoreModeExtForMalodyExport,
                             cmd.stripMainAudioVolumeFromMalodyExport,
-                            cmd.alignNonOggMainAudioToOrigin);
+                            cmd.alignNonOggMainAudioToOrigin,
+                            cmd.bmsAlignmentMode);
     if ( success ) {
         // writeBeatmapPackage 只有最终目标文件完整写出才返回成功。
         XINFO("PackBeatmap: package written to {}", cmd.exportPath);
