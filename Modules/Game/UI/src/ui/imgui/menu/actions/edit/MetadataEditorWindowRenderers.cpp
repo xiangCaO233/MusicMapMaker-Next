@@ -1,6 +1,7 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "MetadataEditorWindowRenderers.h"
 #include "common/LogicCommands.h"
+#include "common/render/RenderSnapshot.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
 #include "config/Utf8Path.h"

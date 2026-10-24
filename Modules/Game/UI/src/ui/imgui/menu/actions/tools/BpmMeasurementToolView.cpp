@@ -1,6 +1,7 @@
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
+#include "common/render/RenderSnapshot.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
 #include "config/Utf8Path.h"

@@ -1,6 +1,9 @@
 #include "ui/imgui/audio/AudioSpectrumView.h"
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
+// 频谱视野映射读取快照字段，显式依赖渲染定义而非时间格式化工具的传递包含。
+#include "common/render/RenderSnapshot.h"
+#include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/VisualConfig.h"

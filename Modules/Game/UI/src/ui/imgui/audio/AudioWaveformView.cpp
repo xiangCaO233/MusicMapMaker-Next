@@ -1,6 +1,8 @@
 #include "ui/imgui/audio/AudioWaveformView.h"
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
+#include "common/render/RenderSnapshot.h"
+#include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
 #include "config/VisualConfig.h"
 #include "config/skin/translation/Translation.h"

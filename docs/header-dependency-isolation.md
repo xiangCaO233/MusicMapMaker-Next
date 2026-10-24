@@ -345,3 +345,71 @@ python3 scripts/dev/header_fanout.py --build-dir build --output build/header-fan
 | `Modules/Game/src/EditorApplicationService.cpp` | 64 | 113 | 36.16% |
 | `Modules/Game/src/GameLoop.cpp` | 115 | 265 | 30.26% |
 | `Modules/Main/src/main.cpp` | 203 | 473 | 30.03% |
+
+
+## 第四轮：时间工具实现与目录监听器状态隔离
+
+基于第三轮提交 `810667c2` 继续处理优先级表中的时间工具和目录监听器。
+
+### 边界与行为
+
+- `TimeFormatUtils.h` 保留轻量时间上下文、拍位结果和函数声明；快照与时间偏好仅做前向声明。
+  BPM 提取、拍位计算和字符串格式化原样移入 `TimeFormatUtils.cpp`，不再向调用方传播完整快照、配置、fmt 和算法实现。
+  快照为空、负时间、毫秒进位、跨 BPM 拍号、时长格式回退和默认参数不变。
+  原有 `TimeFormatDetail` 调用入口继续可用，批注表仍复用其已缓存的 BPM 节点，不新增收集或排序。
+- 四个真实读取快照或快照缓冲的实现文件补齐直接包含；不把重依赖加回工具公开头。
+- `ProjectDirectoryWatcher::State` 只在实现文件定义，持有 future、停止源、运行位、互斥锁与 Win32 句柄。
+  状态在构造时分配一次，监听器仍不可复制或移动；停止顺序仍为请求退出、锁外等待任务完成、最后释放平台句柄。
+  `m_changePending` 仍直接位于监听器，消费路径的原子 exchange 和内存序不变，不新增锁、堆分配或共享所有权。
+  工作任务只借用该门闩，析构先调用 stop，等待任务退出后才销毁对象与私有状态。
+- 监听器测试新增未启动停止、重复停止、重新启动和由析构收尾的生命周期回归；只监听测试源目录，不写用户项目。
+
+### 实际依赖范围
+
+继续使用 Ninja 已记录依赖和当前 compile_commands；基线 514/514，新增时间工具实现后为 515/515 个编译单元。
+这是依赖范围计数，不是编译耗时或运行时加速比例。
+
+| 头文件 | 修改前 | 修改后 |
+| --- | ---: | ---: |
+| `RenderSnapshot.h` | 64 | 59 |
+| `CanvasRenderTypes.h` | 74 | 69 |
+| `RenderSnapshotBuffer.h` | 106 | 102 |
+| `AppConfig.h` | 123 | 120 |
+| `EditorSettings.h` | 228 | 226 |
+| `TimeFormatUtils.h` | 15 | 16 |
+| `ProjectDirectoryWatcher.h` | 19 | 19 |
+
+时间工具公开 API 仍影响原有调用方，新增实现也包含自己的公开头，因此该头数量增加一；
+算法或格式化实现的修改现在只重编译一个实现单元。监听器公开 API 的影响范围不变，
+线程/平台状态布局和后台实现的修改不再触及这 19 个公开头消费者。
+
+### 验证与限制
+
+- Linux Debug / Clang 23 完整构建成功，CTest 172/172 通过。
+- 两个公开头分别独立、重复包含的语法检查成功；依赖文件确认时间工具不再包含完整快照、配置或 fmt，监听器不再包含 future、mutex 或 stop_token。
+- 既有批注拍位测试覆盖独立上下文、变速分段及无 BPM 回退；监听器生命周期用例通过。
+- Windows 后台等待与句柄释放代码仅移动归属并按原次序访问，本轮未执行 Windows/macOS 平台构建。
+- 不声称冷构建时间提升；源文件实现收敛和头文件传播减少是本轮可复核的结果。
+
+### 本轮逐文件注释率
+
+使用 `cloc --by-file`，按 comment / (comment + code) 统计。
+
+| 文件 | 注释行 | 代码行 | 注释率 |
+| --- | ---: | ---: | ---: |
+| `Modules/Game/Logic/include/logic/ProjectDirectoryWatcher.h` | 26 | 26 | 50.00% |
+| `Modules/Game/Logic/src/logic/ProjectDirectoryWatcher.cpp` | 131 | 289 | 31.19% |
+| `Modules/Game/Logic/tests/ProjectDirectoryWatcherTest.cpp` | 23 | 50 | 31.51% |
+| `Modules/Game/UI/CMakeLists.txt` | 182 | 423 | 30.08% |
+| `Modules/Game/UI/include/ui/utils/TimeFormatUtils.h` | 63 | 52 | 54.78% |
+| `Modules/Game/UI/src/ui/imgui/audio/AudioSpectrumView.cpp` | 475 | 1107 | 30.03% |
+| `Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp` | 221 | 512 | 30.15% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/edit/MetadataEditorWindowRenderers.cpp` | 1096 | 2545 | 30.10% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/tools/BpmMeasurementToolView.cpp` | 1560 | 3637 | 30.02% |
+| `Modules/Game/UI/src/ui/utils/TimeFormatUtils.cpp` | 95 | 201 | 32.09% |
+
+### 后续优先级
+
+1. 按剩余消费者审视 `EditorSettings` 的领域偏好边界：优先抽出确有跨模块消费者的枚举/轻量值类型，不机械拆出无人独立使用的头。
+2. 检查纯算法工具与数据容器依赖，保持热路径已缓存数据的访问方式；以依赖图判断收益。
+3. `RenderSyncRegistry` 当前仅影响四个实现/测试单元，继续保持低优先级；除非与下一轮边界直接相关，不为 PImpl 本身扩大改动。

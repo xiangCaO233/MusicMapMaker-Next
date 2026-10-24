@@ -100,6 +100,7 @@ add_library(
   src/ui/brush/Brush.cpp
   src/ui/utils/DesktopPathUtils.cpp
   src/ui/utils/NativeFileDialog.cpp
+  src/ui/utils/TimeFormatUtils.cpp
   src/ui/utils/UIWidgetUtils.cpp
   src/ui/utils/VolumeSlider.cpp
   src/ui/imgui/audio/AudioPresetControls.cpp
