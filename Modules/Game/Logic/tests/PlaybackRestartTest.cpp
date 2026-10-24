@@ -1,6 +1,9 @@
+// 重启用例直接设置音频播放策略，不能只依赖配置单例的声明。
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/PlaybackController.h"

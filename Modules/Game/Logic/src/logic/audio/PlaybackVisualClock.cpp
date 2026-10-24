@@ -1,4 +1,6 @@
+// 视觉时钟只消费同步校准参数，不包含调色盘和完整编辑器设置。
 #include "logic/audio/PlaybackVisualClock.h"
+#include "config/SyncConfig.h"
 
 #include <algorithm>
 #include <cmath>

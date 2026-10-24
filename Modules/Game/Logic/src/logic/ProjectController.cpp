@@ -4,6 +4,7 @@
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/CreatorIdentity.h"
+#include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
 #include "event/core/EventBus.h"
 #include "event/project/ProjectEvents.h"

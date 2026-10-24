@@ -1,4 +1,5 @@
 #include "ui/imgui/WorkspaceDockRestore.h"
+#include "config/EditorSettings.h"
 
 #include "config/AppConfig.h"
 #include "imgui.h"

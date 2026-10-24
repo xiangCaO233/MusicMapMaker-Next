@@ -1,3 +1,4 @@
+#include "config/EditorSettings.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
 

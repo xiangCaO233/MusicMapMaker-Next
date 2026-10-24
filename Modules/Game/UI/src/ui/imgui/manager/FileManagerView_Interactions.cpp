@@ -1,4 +1,7 @@
+// 文件交互读取完整项目历史，数据定义归属文件面板实现。
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"

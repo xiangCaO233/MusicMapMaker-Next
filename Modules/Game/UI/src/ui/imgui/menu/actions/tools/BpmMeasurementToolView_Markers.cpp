@@ -1,3 +1,4 @@
+#include "config/EditorSettings.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 
 #include "config/AppConfig.h"

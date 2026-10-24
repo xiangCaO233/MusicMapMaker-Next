@@ -1,3 +1,6 @@
+// 资源导入设置在此修改持久化字段，不借用基础视图的传递包含。
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "ui/imgui/manager/SettingsView.h"
 
 #include "common/AudioInfoUtils.h"

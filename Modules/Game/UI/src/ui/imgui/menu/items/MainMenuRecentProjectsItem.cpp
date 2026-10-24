@@ -1,5 +1,6 @@
 #include "ui/imgui/menu/items/MainMenuRecentProjectsItem.h"
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
 #include "ui/imgui/menu/MainMenuTypes.h"

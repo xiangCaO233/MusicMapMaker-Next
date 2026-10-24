@@ -1,5 +1,8 @@
+// 菜单工具在实际创建播放与编辑命令时才依赖完整载荷。
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"

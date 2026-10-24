@@ -3,6 +3,7 @@
 #include "config/BeatLinePalette.h"
 #include "config/FrameLimitPreference.h"
 #include "config/NotePalette.h"
+#include "config/SyncConfig.h"
 #include "config/TimingInterpolationPreferences.h"
 #include <algorithm>
 #include <array>
@@ -16,29 +17,6 @@
 
 namespace MMM::Config
 {
-
-enum class SyncMode {
-    None,      ///< 直接同步音频时间 (可能抖动)
-    Integral,  ///< 积分制同步 (平滑追踪)
-    WaterTank  ///< 水箱制同步 (固定延迟)
-};
-
-/// @brief 将同步模式序列化为稳定文本。
-void to_json(nlohmann::json& json, const SyncMode& mode);
-/// @brief 从稳定文本读取同步模式。
-void from_json(const nlohmann::json& json, SyncMode& mode);
-
-struct SyncConfig {
-    SyncMode mode{ SyncMode::Integral };
-    float    integralFactor{ 0.1f };    ///< 积分追踪系数 (0.0~1.0)
-    float    waterTankBuffer{ 0.05f };  ///< 水箱缓冲时间 (秒)
-    double   syncInterval{ 10.0 };      ///< 强制同步周期 (秒)
-};
-
-/// @brief 将同步配置序列化为 JSON。
-void to_json(nlohmann::json& json, const SyncConfig& config);
-/// @brief 从 JSON 读取同步配置。
-void from_json(const nlohmann::json& json, SyncConfig& config);
 
 /// @brief 折线节点键音的两种听感策略，不改变物件与视觉特效。
 enum class PolylineSfxMode {

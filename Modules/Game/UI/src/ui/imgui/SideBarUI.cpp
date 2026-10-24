@@ -1,5 +1,6 @@
 #include "ui/imgui/SideBarUI.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/ui/UISettingsTabEvent.h"

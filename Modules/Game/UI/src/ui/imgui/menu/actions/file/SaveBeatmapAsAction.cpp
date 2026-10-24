@@ -1,4 +1,5 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
+#include "config/EditorSettings.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
 

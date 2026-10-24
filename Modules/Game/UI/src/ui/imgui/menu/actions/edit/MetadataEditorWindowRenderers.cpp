@@ -2,6 +2,7 @@
 #include "MetadataEditorWindowRenderers.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/TranslationFormat.h"

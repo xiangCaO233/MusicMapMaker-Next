@@ -2,6 +2,8 @@
 #    define IMGUI_DEFINE_MATH_OPERATORS
 #endif
 
+// 项目树在此消费最近项目和显示设置，依赖归属具体树形视图实现。
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"

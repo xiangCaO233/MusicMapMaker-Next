@@ -1,4 +1,5 @@
 #include "ui/walkthrough/WalkthroughPage.h"
+#include "config/EditorConfig.h"
 
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"

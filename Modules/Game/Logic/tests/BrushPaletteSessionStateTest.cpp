@@ -1,3 +1,5 @@
+// 配色回归用例按值构造编辑配置，显式包含对应定义以固定测试输入。
+#include "config/EditorSettings.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/NoteColorUtils.h"

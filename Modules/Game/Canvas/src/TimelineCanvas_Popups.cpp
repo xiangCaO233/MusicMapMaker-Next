@@ -12,6 +12,7 @@
 #    define IMGUI_DEFINE_MATH_OPERATORS
 #endif
 
+// 时间线弹窗修改设置字段，类型定义留在实际编辑设置的实现中。
 #include "canvas/AuxiliaryWindowUi.h"
 #include "canvas/TimelineCanvas.h"
 #include "canvas/TimelineStopDuration.h"
@@ -21,6 +22,8 @@
 #include "common/LogicCommands.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
+#include "config/VisualConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"

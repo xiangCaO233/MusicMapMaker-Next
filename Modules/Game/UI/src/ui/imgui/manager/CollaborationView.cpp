@@ -1,4 +1,5 @@
 #include "ui/imgui/manager/CollaborationView.h"
+#include "config/EditorSettings.h"
 
 #include "config/AppConfig.h"
 #include "config/AppPaths.h"

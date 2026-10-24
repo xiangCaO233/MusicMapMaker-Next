@@ -1,4 +1,6 @@
 #include "ui/imgui/manager/ToolbarView.h"
+#include "config/EditorSettings.h"
+#include "config/VisualConfig.h"
 
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"

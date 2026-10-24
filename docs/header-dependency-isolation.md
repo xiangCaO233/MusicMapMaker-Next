@@ -73,7 +73,7 @@ SessionContext.h
 
 ## 下一批候选及优先级
 
-下面是本轮结束时仍存在的传播面；这里只登记后续切入点，不声称已经消除。
+下面记录第二轮（`899b72e7`）结束时的候选。第三轮已处理其中的命令、配置入口和同步参数，最新数据见文末。
 
 | 优先级 | 入口及当前影响范围 | 原因与建议 |
 | --- | --- | --- |
@@ -152,3 +152,196 @@ python3 scripts/dev/header_fanout.py --build-dir build --output build/header-fan
 | `Modules/Game/UI/src/ui/imgui/menu/actions/tools/BpmMeasurementToolView.cpp` | 1560 | 3633 | 30.04% |
 | `Modules/Game/UI/src/ui/layout/box/CLayBox.cpp` | 73 | 167 | 30.42% |
 | `scripts/dev/header_fanout.py` | 27 | 61 | 30.68% |
+
+## 第三轮：配置与命令聚合边界
+
+本轮基线：`899b72e7`。继续使用同一构建树及 514 个编译单元，原始报告为
+`build/header-fanout-round3-before.json` 和 `build/header-fanout-round3-after.json`。
+
+### 结果
+
+| 头文件 | 第三轮前 | 第三轮后 |
+| --- | ---: | ---: |
+| `LogicCommands.h` | 117 | 89 |
+| `EditorConfig.h` | 208 | 153 |
+| `VisualConfig.h` | 232 | 186 |
+| `EditorSettings.h` | 243 | 228 |
+| `TimingTemplate.h` | 120 | 93 |
+| `ComposeLessonNotes.h` | 122 | 95 |
+| `BaseMapMeta.h` | 160 | 140 |
+| 第三方队列入口 `concurrentqueue.h` | 53 | 17 |
+
+`AppConfig.h` 仍由 123 个编译单元使用，其接口本身没有消失；变化是它不再把
+完整配置定义传播给这些消费者。`EditorSettings.h` 仍有大量真正的字段访问者，
+不能把完整配置边界的改善描述成所有配置修改都已局部化。
+
+### 命令声明与载荷分离
+
+- 新增 `common/LogicCommandFwd.h`：前向声明命令类型并保留原有 91 项 `std::variant` 类型及顺序。
+- `LogicCommands.h` 仍定义全部按值载荷。构造、分派、销毁命令的实现必须显式包含它；只接收引用的引擎和会话接口使用声明头。
+- `BeatmapSession::CommandState` 隔离无锁队列、延后文件命令和延后权威替换，避免公开会话头实例化完整命令变体。
+- 私有状态只在会话构造时分配一次，命令继续保存在既有队列中；没有把逐个命令改为共享指针，没有增加逐命令的包装分配。
+- 入队门闩、队列发布、文件重试顺序和权威替换合并算法保持原样。延后文件与权威替换字段仍由逻辑线程独占。
+
+### 完整配置并入既有私有存储
+
+- `AppConfig` 原有预设私有状态扩展为 `State`，其中按值拥有 `EditorConfig` 和两类预设。
+- 复用原来的一次私有状态分配，不为视觉配置、编辑设置分别新建堆对象，也不更换 `load/reset` 的存储地址。
+- 配置 getter 与两个读取用户倍率的缩放 getter 移到实现文件；公开头只前向声明配置类型。
+- UI 热路径仍只借用稳定引用，新增成本为稳定状态指针的解引用；没有新增锁、原子操作或每帧分配。
+- 各实际访问配置字段的实现显式包含所需的数据定义，避免把丢掉的依赖偷偷转交给其他聚合头。
+
+### 同步参数独立
+
+`SyncMode`、`SyncConfig` 及 ADL JSON 声明移到 `config/SyncConfig.h`。
+`PlaybackVisualClock.h` 只前向声明参数类型，时钟实现和测试显式包含独立定义；
+内联旧时钟只包含这一小组参数。枚举数值、字段、默认值和 JSON 键保持不变。
+
+### 验证
+
+- 满线程完整构建成功，全部 172 项 CTest 通过。
+- 扩展已有音频预设磁盘往返用例：核对五个配置/预设对象在 reset、save、load 后的地址稳定性，验证 const getter 及实时 UI 缩放倍率。
+- 8 个相关公开头重复包含并独立编译通过。
+- 依赖探针确认引擎、会话和单例接口不包含完整命令载荷或完整配置；公开会话头不再包含第三方命令队列。
+- Clang 23 和本机 GCC 均通过命令兼容探针：声明头可先独立包含，完整命令随后包含；变体类型与基线完全相同、备选仍为 91 项。
+- Linux 主机构建不替代 macOS/Windows CI，不据此声称已经证明跨平台编译或冷构建耗时百分比。
+
+### 后续顺序
+
+高优先级入口已完成首轮边界拆分。下一步可依次处理：
+
+1. `TimeFormatUtils.h` 的快照提取和字符串格式化实现外移，保留调用方已有的时间上下文缓存。
+2. `ProjectDirectoryWatcher` 隔离线程与平台句柄；高频变更门闩继续直接读取。
+3. 按实际消费者继续拆分设置值组及纯算法。仅移动文件后仍经聚合头全量包含的方案不计为完成。
+
+### 第三轮逐文件注释统计
+
+统计范围为本轮新增和修改的 124 个代码文件，全部达到 30%。
+大量消费者仅调整直接包含；下面保留逐文件结果，供之后的批次复核。
+
+| 文件 | 注释行 | 代码行 | 比例 |
+| --- | ---: | ---: | ---: |
+| `Modules/Audio/src/AudioManager.cpp` | 257 | 597 | 30.09% |
+| `Modules/Audio/src/AudioManager_BGM.cpp` | 274 | 639 | 30.01% |
+| `Modules/Audio/src/AudioManager_Mix.cpp` | 123 | 277 | 30.75% |
+| `Modules/Audio/src/AudioManager_Presets.cpp` | 32 | 74 | 30.19% |
+| `Modules/Audio/src/AudioManager_SFX.cpp` | 308 | 718 | 30.02% |
+| `Modules/Audio/tests/AudioManagerTimelineIntegrationTest.cpp` | 310 | 723 | 30.01% |
+| `Modules/Audio/tests/AudioPresetApplyTest.cpp` | 38 | 87 | 30.40% |
+| `Modules/Config/include/config/AppConfig.h` | 37 | 60 | 38.14% |
+| `Modules/Config/include/config/EditorSettings.h` | 314 | 453 | 40.94% |
+| `Modules/Config/include/config/SyncConfig.h` | 9 | 20 | 31.03% |
+| `Modules/Config/src/AppConfig.cpp` | 116 | 222 | 34.32% |
+| `Modules/Config/src/EditorSettingTypes.cpp` | 411 | 957 | 30.04% |
+| `Modules/Config/src/skin/SkinLoader.cpp` | 293 | 678 | 30.18% |
+| `Modules/Config/tests/AudioPresetsTest.cpp` | 56 | 129 | 30.27% |
+| `Modules/Config/tests/LayoutPresetsTest.cpp` | 147 | 343 | 30.00% |
+| `Modules/Game/Canvas/src/AnnotationTableWindow.cpp` | 248 | 577 | 30.06% |
+| `Modules/Game/Canvas/src/Basic2DCanvas.cpp` | 1132 | 2641 | 30.00% |
+| `Modules/Game/Canvas/src/Basic2DCanvas_Interaction.cpp` | 1944 | 4516 | 30.09% |
+| `Modules/Game/Canvas/src/Basic2DCanvas_Rendering.cpp` | 386 | 894 | 30.16% |
+| `Modules/Game/Canvas/src/MarqueeAutoScroll.cpp` | 73 | 162 | 31.06% |
+| `Modules/Game/Canvas/src/PreviewCanvas.cpp` | 324 | 755 | 30.03% |
+| `Modules/Game/Canvas/src/TimelineCanvas.cpp` | 551 | 1285 | 30.01% |
+| `Modules/Game/Canvas/src/TimelineCanvas_Interaction.cpp` | 588 | 1368 | 30.06% |
+| `Modules/Game/Canvas/src/TimelineCanvas_Interpolation.cpp` | 239 | 552 | 30.21% |
+| `Modules/Game/Canvas/src/TimelineCanvas_Popups.cpp` | 1051 | 2452 | 30.00% |
+| `Modules/Game/Canvas/src/TimelineCanvas_Templates.cpp` | 377 | 873 | 30.16% |
+| `Modules/Game/Canvas/tests/CanvasTabTitleTest.cpp` | 78 | 181 | 30.12% |
+| `Modules/Game/Canvas/tests/TimelineStopCreationTest.cpp` | 78 | 182 | 30.00% |
+| `Modules/Game/Common/include/common/LogicCommandFwd.h` | 134 | 129 | 50.95% |
+| `Modules/Game/Common/include/common/LogicCommands.h` | 383 | 542 | 41.41% |
+| `Modules/Game/Graphic/src/CursorManager.cpp` | 69 | 160 | 30.13% |
+| `Modules/Game/Graphic/src/imguivk/VKRendererRender.cpp` | 305 | 709 | 30.08% |
+| `Modules/Game/Graphic/src/imguivk/context/VKContext.cpp` | 229 | 528 | 30.25% |
+| `Modules/Game/Graphic/src/imguivk/context/VKContextImguiImpl.cpp` | 2239 | 4262 | 34.44% |
+| `Modules/Game/Logic/include/logic/BeatmapSession.h` | 218 | 153 | 58.76% |
+| `Modules/Game/Logic/include/logic/EditorEngine.h` | 345 | 227 | 60.31% |
+| `Modules/Game/Logic/include/logic/SyncClock.h` | 29 | 39 | 42.65% |
+| `Modules/Game/Logic/include/logic/audio/PlaybackVisualClock.h` | 44 | 47 | 48.35% |
+| `Modules/Game/Logic/src/logic/EditorEngine.cpp` | 1627 | 3795 | 30.01% |
+| `Modules/Game/Logic/src/logic/ProjectCommandService.cpp` | 453 | 1050 | 30.14% |
+| `Modules/Game/Logic/src/logic/ProjectController.cpp` | 674 | 1570 | 30.04% |
+| `Modules/Game/Logic/src/logic/audio/PlaybackVisualClock.cpp` | 105 | 243 | 30.17% |
+| `Modules/Game/Logic/src/logic/ecs/system/render/NoteRenderSystem.cpp` | 606 | 1411 | 30.04% |
+| `Modules/Game/Logic/src/logic/session/ActionController_Editing.cpp` | 1400 | 3265 | 30.01% |
+| `Modules/Game/Logic/src/logic/session/BeatmapSession.cpp` | 382 | 889 | 30.06% |
+| `Modules/Game/Logic/src/logic/session/BeatmapSession_CommandState.h` | 8 | 14 | 36.36% |
+| `Modules/Game/Logic/src/logic/session/BeatmapSession_Commands.cpp` | 1294 | 3018 | 30.01% |
+| `Modules/Game/Logic/src/logic/session/tool/MarqueeTool.cpp` | 90 | 209 | 30.10% |
+| `Modules/Game/Logic/tests/BrushPaletteSessionStateTest.cpp` | 215 | 500 | 30.07% |
+| `Modules/Game/Logic/tests/PlaybackRestartTest.cpp` | 226 | 527 | 30.01% |
+| `Modules/Game/Logic/tests/PlaybackVisualClockTest.cpp` | 250 | 583 | 30.01% |
+| `Modules/Game/Logic/tests/ProjectAudioReferenceTest.cpp` | 712 | 1660 | 30.02% |
+| `Modules/Game/UI/src/ui/IUIView.cpp` | 41 | 86 | 32.28% |
+| `Modules/Game/UI/src/ui/UIManager.cpp` | 597 | 1369 | 30.37% |
+| `Modules/Game/UI/src/ui/imgui/FloatingManagerUI.cpp` | 556 | 1289 | 30.14% |
+| `Modules/Game/UI/src/ui/imgui/MainDockSpaceUI.cpp` | 449 | 1046 | 30.03% |
+| `Modules/Game/UI/src/ui/imgui/MainDockSpaceUI_Docking.cpp` | 111 | 220 | 33.53% |
+| `Modules/Game/UI/src/ui/imgui/SideBarUI.cpp` | 160 | 373 | 30.02% |
+| `Modules/Game/UI/src/ui/imgui/audio/AudioPresetControls.cpp` | 61 | 142 | 30.05% |
+| `Modules/Game/UI/src/ui/imgui/audio/AudioSpectrumView.cpp` | 474 | 1105 | 30.02% |
+| `Modules/Game/UI/src/ui/imgui/audio/AudioTrackControllerUI.cpp` | 117 | 272 | 30.08% |
+| `Modules/Game/UI/src/ui/imgui/audio/AudioTrackControllerUI_Widgets.cpp` | 390 | 909 | 30.02% |
+| `Modules/Game/UI/src/ui/imgui/audio/AudioWaveformView.cpp` | 221 | 510 | 30.23% |
+| `Modules/Game/UI/src/ui/imgui/manager/AudioManagerView.cpp` | 728 | 1698 | 30.01% |
+| `Modules/Game/UI/src/ui/imgui/manager/BeatMapManagerView.cpp` | 396 | 919 | 30.11% |
+| `Modules/Game/UI/src/ui/imgui/manager/CollaborationLogWindow.cpp` | 153 | 355 | 30.12% |
+| `Modules/Game/UI/src/ui/imgui/manager/CollaborationView.cpp` | 627 | 1462 | 30.01% |
+| `Modules/Game/UI/src/ui/imgui/manager/FileManagerView.cpp` | 69 | 154 | 30.94% |
+| `Modules/Game/UI/src/ui/imgui/manager/FileManagerView_Hierarchy.cpp` | 605 | 1410 | 30.02% |
+| `Modules/Game/UI/src/ui/imgui/manager/FileManagerView_Interactions.cpp` | 105 | 243 | 30.17% |
+| `Modules/Game/UI/src/ui/imgui/manager/LayoutPresetControls.cpp` | 67 | 156 | 30.04% |
+| `Modules/Game/UI/src/ui/imgui/manager/NewBeatmapWizard.cpp` | 594 | 1384 | 30.03% |
+| `Modules/Game/UI/src/ui/imgui/manager/NewProjectWizard.cpp` | 294 | 683 | 30.09% |
+| `Modules/Game/UI/src/ui/imgui/manager/ProjectAudioToolView.cpp` | 879 | 2051 | 30.00% |
+| `Modules/Game/UI/src/ui/imgui/manager/SettingsView.cpp` | 387 | 897 | 30.14% |
+| `Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapResourceImport.cpp` | 129 | 299 | 30.14% |
+| `Modules/Game/UI/src/ui/imgui/manager/SettingsView_BeatmapTab.cpp` | 358 | 816 | 30.49% |
+| `Modules/Game/UI/src/ui/imgui/manager/SettingsView_CollaborationTab.cpp` | 116 | 269 | 30.13% |
+| `Modules/Game/UI/src/ui/imgui/manager/SettingsView_DebugTab.cpp` | 75 | 174 | 30.12% |
+| `Modules/Game/UI/src/ui/imgui/manager/SettingsView_EditorTab.cpp` | 197 | 458 | 30.08% |
+| `Modules/Game/UI/src/ui/imgui/manager/SettingsView_ProjectTab.cpp` | 167 | 380 | 30.53% |
+| `Modules/Game/UI/src/ui/imgui/manager/SettingsView_ShortcutTab.cpp` | 130 | 302 | 30.09% |
+| `Modules/Game/UI/src/ui/imgui/manager/SettingsView_SkinPackage.cpp` | 127 | 286 | 30.75% |
+| `Modules/Game/UI/src/ui/imgui/manager/SettingsView_SoftwareTab.cpp` | 702 | 1638 | 30.00% |
+| `Modules/Game/UI/src/ui/imgui/manager/SettingsView_VisualTab.cpp` | 217 | 502 | 30.18% |
+| `Modules/Game/UI/src/ui/imgui/manager/ToolbarView.cpp` | 1838 | 4260 | 30.14% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/edit/AddSelectedObjectAnnotationAction.cpp` | 123 | 281 | 30.45% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/edit/BmsEditingToggleAction.cpp` | 28 | 58 | 32.56% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/edit/EditSelectedObjectVolumeAction.cpp` | 94 | 205 | 31.44% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/edit/MetadataEditorWindowRenderers.cpp` | 1096 | 2544 | 30.11% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/edit/MirrorAction.cpp` | 22 | 50 | 30.56% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/edit/MirrorPasteAction.cpp` | 25 | 56 | 30.86% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/edit/PasteAction.cpp` | 21 | 49 | 30.00% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/edit/PolylineEditingToggleAction.cpp` | 19 | 43 | 30.65% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/edit/ProfessionalModeToggleAction.cpp` | 19 | 44 | 30.16% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/edit/TogglePlaybackAction.cpp` | 57 | 133 | 30.00% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/file/PackBeatmapAction.cpp` | 764 | 1782 | 30.01% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/file/SaveBeatmapAction.cpp` | 177 | 387 | 31.38% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/file/SaveBeatmapAsAction.cpp` | 206 | 480 | 30.03% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/tools/BpmMeasurementToolView.cpp` | 1560 | 3636 | 30.02% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/tools/BpmMeasurementToolView_Markers.cpp` | 101 | 223 | 31.17% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/tools/OpenBeatmapSpeedExportAction.cpp` | 303 | 701 | 30.18% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/tools/OpenDataSourceReplaceWindowAction.cpp` | 106 | 246 | 30.11% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/tools/ToggleOverlapCheckWindowAction.cpp` | 210 | 490 | 30.00% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/view/AnnotationDetailsToggleAction.cpp` | 15 | 34 | 30.61% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/view/FixedToolWindowToggleAction.cpp` | 15 | 33 | 31.25% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/view/ManagerLabelsToggleAction.cpp` | 14 | 32 | 30.43% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/view/PreviewWindowToggleAction.cpp` | 14 | 32 | 30.43% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/view/TimelineWindowToggleAction.cpp` | 14 | 32 | 30.43% |
+| `Modules/Game/UI/src/ui/imgui/menu/actions/view/ToolLabelsToggleAction.cpp` | 14 | 31 | 31.11% |
+| `Modules/Game/UI/src/ui/imgui/menu/items/MainMenuRecentProjectsItem.cpp` | 81 | 173 | 31.89% |
+| `Modules/Game/UI/src/ui/imgui/menu/items/MainMenuToolbarVisibilityItem.cpp` | 33 | 77 | 30.00% |
+| `Modules/Game/UI/src/ui/imgui/menu/items/MainMenuTools.cpp` | 55 | 127 | 30.22% |
+| `Modules/Game/UI/src/ui/imgui/menu/utils/MenuUtil.cpp` | 266 | 619 | 30.06% |
+| `Modules/Game/UI/src/ui/imgui/windows/PgoUploadConsentWindow.cpp` | 26 | 60 | 30.23% |
+| `Modules/Game/UI/src/ui/utils/UIWidgetUtils.cpp` | 639 | 1478 | 30.18% |
+| `Modules/Game/UI/src/ui/walkthrough/WalkthroughPage.cpp` | 351 | 818 | 30.03% |
+| `Modules/Game/UI/tests/BpmMeasurementHistoryTest.cpp` | 124 | 289 | 30.02% |
+| `Modules/Game/UI/tests/ProjectAudioToolScrollTest.cpp` | 360 | 838 | 30.05% |
+| `Modules/Game/UI/tests/SettingsSearchTest.cpp` | 186 | 434 | 30.00% |
+| `Modules/Game/UI/tests/WorkspaceDockRestoreTest.cpp` | 398 | 928 | 30.02% |
+| `Modules/Game/src/EditorApplicationService.cpp` | 64 | 113 | 36.16% |
+| `Modules/Game/src/GameLoop.cpp` | 115 | 265 | 30.26% |
+| `Modules/Main/src/main.cpp` | 203 | 473 | 30.03% |

@@ -1,6 +1,7 @@
 #include "ui/UIManager.h"
 #include "audio/AudioManager.h"
 #include "config/AppPaths.h"
+#include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"

@@ -1,3 +1,5 @@
+// 数据源替换窗口直接读取本地设置，依赖只落在窗口实现。
+#include "common/LogicCommands.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
 #include "logic/BeatmapSession.h"

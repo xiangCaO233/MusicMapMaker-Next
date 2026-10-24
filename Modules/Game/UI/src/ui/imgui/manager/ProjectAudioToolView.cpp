@@ -1,4 +1,6 @@
 #include "ui/imgui/manager/ProjectAudioToolView.h"
+#include "common/LogicCommands.h"
+#include "config/EditorSettings.h"
 #include "ui/layout/LayoutContext.h"
 
 #include "config/AppConfig.h"

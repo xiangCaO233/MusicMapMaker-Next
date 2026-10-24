@@ -1,4 +1,5 @@
 #include "ui/imgui/windows/PgoUploadConsentWindow.h"
+#include "config/EditorSettings.h"
 
 #include "config/AppConfig.h"
 #include "config/skin/translation/Translation.h"

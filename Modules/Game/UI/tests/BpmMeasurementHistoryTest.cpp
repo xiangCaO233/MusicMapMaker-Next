@@ -1,4 +1,5 @@
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/skin/translation/Translation.h"
 #include "log/colorful-log.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"

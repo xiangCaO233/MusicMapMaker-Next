@@ -1,4 +1,5 @@
 #include "audio/AudioManager.h"
+#include "config/EditorSettings.h"
 
 #include "config/AppConfig.h"
 #include "log/colorful-log.h"

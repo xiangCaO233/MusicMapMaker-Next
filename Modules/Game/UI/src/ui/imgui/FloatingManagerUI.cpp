@@ -1,5 +1,6 @@
 #include "ui/imgui/FloatingManagerUI.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/skin/translation/Translation.h"
 #include "event/ui/UISubViewToggleEvent.h"
 #include "imgui.h"

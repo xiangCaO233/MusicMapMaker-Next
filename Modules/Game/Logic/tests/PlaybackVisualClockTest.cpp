@@ -1,4 +1,5 @@
 #include "logic/audio/PlaybackVisualClock.h"
+#include "config/SyncConfig.h"
 // 时钟用例按值构造快照以检查插值结果，需要显式提供完整定义。
 #include "common/render/RenderSnapshot.h"
 #include "log/colorful-log.h"

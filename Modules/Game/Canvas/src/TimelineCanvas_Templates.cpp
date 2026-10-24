@@ -1,4 +1,5 @@
 #include "canvas/TimelineCanvas.h"
+#include "config/EditorSettings.h"
 
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"

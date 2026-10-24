@@ -1,6 +1,8 @@
 #include "ui/imgui/audio/AudioWaveformView.h"
 #include "audio/AudioManager.h"
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/VisualConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"

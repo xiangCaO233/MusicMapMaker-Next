@@ -6,6 +6,7 @@
 #include "audio/SoundEffectPool.h"
 #include "audio/TimelineStopGateNode.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "log/colorful-log.h"
 #include "runtime/AppThreadPool.h"
 

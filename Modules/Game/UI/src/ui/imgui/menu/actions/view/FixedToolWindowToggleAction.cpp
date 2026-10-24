@@ -1,4 +1,6 @@
+// 固定工具窗动作在此更新可见性选项，基础动作接口保持独立。
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "ui/imgui/menu/actions/MainMenuViewActions.h"
 
 namespace MMM::UI

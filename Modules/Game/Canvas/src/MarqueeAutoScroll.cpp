@@ -3,6 +3,7 @@
 #include "common/render/RenderSnapshotBuffer.h"
 #include "common/render/ScrollRenderData.h"
 #include "config/AppConfig.h"
+#include "config/VisualConfig.h"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>

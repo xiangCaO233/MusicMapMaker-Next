@@ -1,7 +1,11 @@
+// 预设切换构造播放速度等具体命令，完整变体只在此调用端实例化。
 #include "ui/imgui/audio/AudioPresetControls.h"
 #include "audio/AudioManager.h"
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/AudioPresets.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "logic/EditorEngine.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <array>

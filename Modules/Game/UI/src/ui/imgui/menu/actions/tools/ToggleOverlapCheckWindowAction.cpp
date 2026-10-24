@@ -1,5 +1,9 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
+// 重叠窗口开关直接更新编辑器选项，此处需要真实设置字段。
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
+#include "config/VisualConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "logic/BeatmapSession.h"

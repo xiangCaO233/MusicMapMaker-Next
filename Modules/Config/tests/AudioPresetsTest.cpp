@@ -1,5 +1,7 @@
 #include "config/AudioPresets.h"
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "log/colorful-log.h"
 #include <filesystem>
 #include <fstream>
@@ -61,6 +63,15 @@ bool persistence(const std::filesystem::path& root)
     if ( ec ) return false;
     const auto file = root / "audio_presets.json";
     auto&      app  = MMM::Config::AppConfig::instance();
+    // 记录外层与嵌套字段，防止仅外层指针稳定而子对象被重新分配。
+    // 两类预设库也由同一私有状态拥有，必须共享这份生命周期保证。
+    // 指针只用于相等比较，失效时不解引用，失败本身不会访问释放内存。
+    // 保存各层对象地址，捕获整体替换私有存储导致的引用失效。
+    const auto* configAddress   = &app.getEditorConfig();
+    const auto* settingsAddress = &app.getEditorSettings();
+    const auto* visualAddress   = &app.getVisualConfig();
+    const auto* audioAddress    = &app.getAudioPresets();
+    const auto* layoutAddress   = &app.getLayoutPresets();
     // 清空单例的旧状态，保证迁移用例从确定的默认起点开始。
     app.reset();
     auto legacy                               = app.getEditorConfig();
@@ -92,6 +103,27 @@ bool persistence(const std::filesystem::path& root)
     if ( !app.save(file) ) return false;
     app.reset();
     if ( !app.load(file) ) return false;
+    // 加载和重置只能更新既有对象内容；UI 缓存的引用必须继续指向这些对象。
+    if ( configAddress != &app.getEditorConfig() ||
+         settingsAddress != &app.getEditorSettings() ||
+         visualAddress != &app.getVisualConfig() ||
+         audioAddress != &app.getAudioPresets() ||
+         layoutAddress != &app.getLayoutPresets() )
+        return false;
+    // 重置和读取均在显式临时文件上验证，不把真实用户配置当作夹具。
+    // 常量 1.5 与 1.25 可被二进制浮点精确表示，避免容差掩盖读取旧值。
+    // const 入口必须返回同一个对象，不能在查询时复制出临时配置。
+    // 两个缩放 getter 都要读取实时倍率，不能一个委托新状态而另一个留旧缓存。
+    // 缩放 getter 从私有配置读取最新倍率，不能在搬移时缓存旧值。
+    app.setUIScale(1.5F);
+    app.getEditorSettings().uiScaleMultiplier = 1.25F;
+    const auto& constApp                      = app;
+    if ( constApp.getUIScale() != 1.875F ||
+         constApp.getWindowContentScale() != 1.875F ||
+         &constApp.getEditorConfig() != configAddress ||
+         &constApp.getEditorSettings() != settingsAddress ||
+         &constApp.getVisualConfig() != visualAddress )
+        return false;
     // 同时检查名称、音量、EQ、音高和质量，覆盖标量与数组字段。
     const auto& restored = app.getAudioPresets().current();
     if ( restored.m_name != "耳机" ||

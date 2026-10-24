@@ -1,4 +1,5 @@
 #include "audio/AudioManager.h"
+#include "config/EditorSettings.h"
 
 #include "AudioManagerSoundEffectLoadingState.h"
 #include "audio/KeySoundControl.h"

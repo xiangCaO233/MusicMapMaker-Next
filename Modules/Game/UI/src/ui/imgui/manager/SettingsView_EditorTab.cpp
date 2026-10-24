@@ -1,5 +1,9 @@
+// 编辑器页既编辑完整配置，也构造更新命令，两者定义由此消费端负责。
+// 公共引擎接口不再替设置页传播这些完整值类型。
 #include "audio/AudioManager.h"
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
 #include "config/EditorSettings.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"

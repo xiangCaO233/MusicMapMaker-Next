@@ -2,6 +2,7 @@
 #include "audio/AudioManager.h"
 #include "audio/AudioSpeedExportService.h"
 #include "common/BeatmapAudioTimelineCompatibility.h"
+#include "common/LogicCommands.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"

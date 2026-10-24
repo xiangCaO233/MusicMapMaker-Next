@@ -1,5 +1,7 @@
+// 工具菜单读取实际选项状态，所需字段定义在本实现显式引入。
 #include "ui/imgui/menu/items/MainMenuTools.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/skin/translation/Translation.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"

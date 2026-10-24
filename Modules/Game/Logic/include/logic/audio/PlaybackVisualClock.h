@@ -1,9 +1,13 @@
 #pragma once
 
 #include "audio/AudioTimelineClock.h"
-#include "config/EditorSettings.h"
 
 #include <cstdint>
+
+namespace MMM::Config
+{
+struct SyncConfig;
+}
 
 namespace MMM::Logic
 {

@@ -23,6 +23,7 @@
 /// 合法手势仍沿用正常 CmdStartBrush/UpdateBrush/EndBrush 命令链，
 /// 失败手势则在结束命令上携带取消标记，由逻辑线程原子丢弃临时画笔。
 /// 这种分工避免 UI 直接创建 Note，也避免用普通 Undo 误伤更早的编辑历史。
+// 画布直接编辑相机与显示选项，由实现显式依赖完整配置。
 #include "canvas/Basic2DCanvas.h"
 #include "canvas/AnnotationTargetHint.h"
 #include "canvas/Basic2DCanvasInteraction.h"
@@ -34,10 +35,13 @@
 #include "canvas/ComposeLessonHintGeometry.h"
 #include "canvas/ComposeTargetEligibility.h"
 #include "canvas/PlanarObservationCamera.h"
+#include "common/LogicCommands.h"
 #include "common/render/CanvasCameraMath.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "common/render/TextureID.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
+#include "config/VisualConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "event/canvas/interactive/ResizeEvent.h"

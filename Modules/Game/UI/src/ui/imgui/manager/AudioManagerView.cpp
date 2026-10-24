@@ -2,10 +2,14 @@
 #    define IMGUI_DEFINE_MATH_OPERATORS
 #endif
 
+// 混音面板实际读写音频设置，不依赖配置单例头间接提供数据定义。
 #include "ui/imgui/manager/AudioManagerView.h"
 #include "audio/AudioManager.h"
 #include "common/AudioResourceDragPayload.h"
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/TranslationFormat.h"

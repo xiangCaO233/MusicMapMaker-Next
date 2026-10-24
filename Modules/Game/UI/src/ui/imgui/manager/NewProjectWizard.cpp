@@ -1,5 +1,7 @@
 #include "ui/imgui/manager/NewProjectWizard.h"
 #include "config/AppConfig.h"
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"

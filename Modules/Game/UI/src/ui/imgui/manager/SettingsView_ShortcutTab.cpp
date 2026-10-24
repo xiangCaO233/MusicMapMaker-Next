@@ -1,3 +1,6 @@
+// 快捷键页直接修改设置中的绑定表，需要完整表定义。
+#include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "ui/imgui/manager/SettingsView.h"
 
 #include "config/AppConfig.h"
@@ -87,9 +90,9 @@ void SettingsView::drawShortcutBindingControl(Config::ShortcutBinding& binding,
     const char* clearLabel  = TR_CACHE("ui.settings.shortcut.clear").data();
     const float spacing     = ImGui::GetStyle().ItemSpacing.x;
     const float recordW     = ImGui::CalcTextSize(recordLabel).x +
-                          ImGui::GetStyle().FramePadding.x * 2.0f;
-    const float clearW = ImGui::CalcTextSize(clearLabel).x +
-                         ImGui::GetStyle().FramePadding.x * 2.0f;
+                              ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float clearW      = ImGui::CalcTextSize(clearLabel).x +
+                              ImGui::GetStyle().FramePadding.x * 2.0f;
     const float displayW =
         // 展示区至少保留 80 像素，窄窗口也能看见当前绑定。
         std::max(80.0f, width - recordW - clearW - spacing * 2.0f);

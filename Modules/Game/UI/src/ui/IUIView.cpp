@@ -1,4 +1,5 @@
 #include "ui/IUIView.h"
+#include "config/EditorSettings.h"
 #include "ui/layout/CLayWrapperCore.h"
 #include "ui/layout/LayoutContext.h"
 

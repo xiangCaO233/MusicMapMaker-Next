@@ -1,5 +1,6 @@
 #include "ui/imgui/manager/SettingsView.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"

@@ -1,6 +1,8 @@
 #pragma once
 
-#include "common/LogicCommands.h"
+#include "common/AutoSaveTypes.h"
+#include "common/EditTool.h"
+#include "common/LogicCommandFwd.h"
 #include "event/project/ProjectOpenOrigin.h"
 #include "logic/ProjectTypes.h"
 #include "logic/SessionTypes.h"
@@ -19,12 +21,15 @@
 namespace MMM
 {
 class Project;
-}
+class BeatMap;
+}  // namespace MMM
 
 namespace MMM::Config
 {
+struct EditorConfig;
+struct AutoBackupConfig;
 struct VisualConfig;
-}
+}  // namespace MMM::Config
 
 namespace MMM::Common
 {

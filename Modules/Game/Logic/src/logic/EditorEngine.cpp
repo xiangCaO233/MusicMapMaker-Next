@@ -1,3 +1,4 @@
+// 引擎在此按值取得完整配置快照，公开接口仅声明返回类型。
 #include "logic/EditorEngine.h"
 #include "EditorEngine_Impl.h"
 #include "audio/AudioManager.h"
@@ -9,6 +10,7 @@
 #include "config/AppConfig.h"
 #include "config/AudioPresets.h"
 #include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
 #include "config/FrameLimitUtils.h"
 #include "config/Utf8Path.h"
 #include "config/VisualConfig.h"

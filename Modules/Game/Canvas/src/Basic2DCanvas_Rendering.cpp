@@ -14,6 +14,8 @@
 #include "canvas/Basic2DCanvas.h"
 #include "common/Utf8Codepoints.h"
 #include "common/render/GlyphTextureId.h"
+#include "config/EditorSettings.h"
+#include "config/VisualConfig.h"
 
 #include "canvas/BackgroundVideoTiming.h"
 #include "canvas/CameraLayoutEditor.h"

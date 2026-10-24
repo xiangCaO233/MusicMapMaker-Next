@@ -1,7 +1,10 @@
+// 音轨控制实际构造播放参数命令，载荷在此保持按值提交。
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "audio/AudioManager.h"
+#include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/AudioPresets.h"
+#include "config/EditorSettings.h"
 #include "config/skin/SkinConfig.h"
 #include "imgui.h"
 #include "logic/EditorEngine.h"
