@@ -99,17 +99,20 @@ private:
     /// @param malodyExportMode MC 导出时临时使用的 Malody 模式。
     /// @param addStoreModeExtForMalodyExport 是否为 MC 导出写入上架皮肤
     /// mode_ext。
+    /// @param bmsShiftEventsToGrid BMS 是否整体后移事件；从不允许重写音频。
     /// @note 命令按值携带路径和临时选项，菜单不直接执行序列化。
     /// @warning 只能在覆盖与兼容性确认全部完成后调用。
     /// @pre path 必须是经过选择器格式规范化并由用户确认的 UTF-8 路径。
     void dispatchSaveBeatmapAs(const std::string&        path,
                                std::optional<MalodyMode> malodyExportMode,
-                               bool addStoreModeExtForMalodyExport = false)
+                               bool addStoreModeExtForMalodyExport = false,
+                               bool bmsShiftEventsToGrid           = false)
     {
         // 逻辑命令统一承担导出、错误反馈和会话状态处理。
         MenuUtil::dispatchCommand(Logic::CmdSaveBeatmapAs{
             .malodyExportMode               = malodyExportMode,
             .addStoreModeExtForMalodyExport = addStoreModeExtForMalodyExport,
+            .bmsShiftEventsToGrid           = bmsShiftEventsToGrid,
             .path                           = path,
         });
     }
@@ -125,6 +128,10 @@ private:
         const std::string ext = MenuUtil::lowerExtension(path);
         // 只有 MC 格式允许用户临时选择 Malody Key 或 Slide 模式。
         const bool showMalodyModeOption = ext == ".mc";
+        // BMS 家族的单文件导出共享事件对齐选项，PMS 只改变键位协议。
+        // 不复用资源包的两种音频策略，单文件流程没有生成音频的权限。
+        const bool showBmsAlignmentOption =
+            ext == ".bms" || ext == ".bme" || ext == ".bml" || ext == ".pms";
         // 非 MC 使用占位 Slide 值，但不会把该值传入最终命令。
         const auto malodyMode = showMalodyModeOption
                                     ? MenuUtil::currentMalodyExportMode()
@@ -142,7 +149,7 @@ private:
                                             hasStoreModeExtEligibleElements;
         // 原生格式或无需交互的普通导出可直接进入逻辑命令。
         if ( warnings.empty() && !showStoreModeExtOption &&
-             !showMalodyModeOption ) {
+             !showMalodyModeOption && !showBmsAlignmentOption ) {
             dispatchSaveBeatmapAs(path, std::nullopt);
             return;
         }
@@ -152,8 +159,12 @@ private:
         m_pendingExportWarnings = std::move(warnings);
         m_pendingExportFormatName =
             // 可见格式名只用于确认文案，不参与格式判断。
-            (ext == ".osu") ? "osu!"
-                            : ((ext == ".imd") ? "RM" : "Malody Chart");
+            showBmsAlignmentOption ? "BMS"
+            : (ext == ".osu")      ? "osu!"
+                                   : ((ext == ".imd") ? "RM" : "Malody Chart");
+        // 每次另存为重新从原位置开始，用户可明确选择后移；源音频始终不变。
+        m_pendingExportShowBmsAlignmentOption = showBmsAlignmentOption;
+        m_pendingExportBmsShiftEventsToGrid   = false;
         m_pendingExportShowStoreModeExtOption = showStoreModeExtOption;
         // 保留元素能力标志，以便用户切换 Malody 模式时重新计算选项可见性。
         m_pendingExportHasStoreModeExtEligibleElements =
@@ -525,6 +536,9 @@ private:
         m_pendingExportShowStoreModeExtOption          = false;
         m_pendingExportHasStoreModeExtEligibleElements = false;
         m_pendingExportShowMalodyModeOption            = false;
+        // BMS 临时选项不能泄漏到下一次普通格式或另一个文件的导出。
+        m_pendingExportShowBmsAlignmentOption = false;
+        m_pendingExportBmsShiftEventsToGrid   = false;
         // Malody 模式回到最能保留扩展物件的 Slide 默认值。
         m_pendingExportMalodyMode = MalodyMode::Slide;
         // 本次临时写入选择清除，持久化设置仍由 AppConfig 保留。
@@ -557,7 +571,8 @@ private:
                               ImVec2(520.0f * dpiScale, 0.0f)) ) {
             if ( m_pendingExportWarnings.empty() &&
                  (m_pendingExportShowStoreModeExtOption ||
-                  m_pendingExportShowMalodyModeOption) ) {
+                  m_pendingExportShowMalodyModeOption ||
+                  m_pendingExportShowBmsAlignmentOption) ) {
                 // 无损但仍需选择 Malody 选项时使用中性提示文案。
                 ImGui::Text("%s %s 前请选择导出选项：",
                             "导出",
@@ -613,6 +628,24 @@ private:
                         m_pendingExportHasStoreModeExtEligibleElements;
                 }
             }
+            if ( m_pendingExportShowBmsAlignmentOption ) {
+                // 两个状态始终互斥；单文件导出不显示音乐裁剪或补静音选项。
+                // RadioButton 重复激活已选项也不会使所有选项都取消。
+                ImGui::Spacing();
+                ImGui::TextUnformatted("首拍对齐方式：");
+                if ( ::MMM::UI::FeedbackRadioButton(
+                         "保持原时间位置",
+                         !m_pendingExportBmsShiftEventsToGrid) )
+                    m_pendingExportBmsShiftEventsToGrid = false;
+                if ( ::MMM::UI::FeedbackRadioButton(
+                         "后移 BGM 触发和物件以对齐首拍",
+                         m_pendingExportBmsShiftEventsToGrid) )
+                    m_pendingExportBmsShiftEventsToGrid = true;
+                // 明确初始红线的例外和源文件边界，避免误以为会编辑项目时间轴。
+                MenuUtil::drawWrappedBulletText(
+                    "仅写出谱面文件，不修改或生成音频。后移时除初始 BPM "
+                    "外的所有红线一起移动，保留离拍位置和长条时长。");
+            }
             if ( m_pendingExportShowStoreModeExtOption ) {
                 // 选项与警告列表之间保持标准间距。
                 if ( !m_pendingExportWarnings.empty() ) {
@@ -661,7 +694,10 @@ private:
                         : std::nullopt,
                     // mode_ext 写入同时要求选项可见且用户已勾选。
                     m_pendingExportShowStoreModeExtOption &&
-                        m_pendingExportAddStoreModeExt);
+                        m_pendingExportAddStoreModeExt,
+                    // 仅 BMS 选项可见时传递后移请求，MC 等格式保持原行为。
+                    m_pendingExportShowBmsAlignmentOption &&
+                        m_pendingExportBmsShiftEventsToGrid);
                 // 命令已复制所需字段，随后清空全部临时状态。
                 clearCompatibilityWarningState();
                 ImGui::CloseCurrentPopup();
@@ -703,6 +739,12 @@ private:
     /// @brief 待确认导出的兼容性警告消息。
     /// @note Malody 模式变化时按当前模式整体重建。
     std::vector<std::string> m_pendingExportWarnings;
+    /// @brief BMS 家族单文件导出是否显示事件对齐选项。
+    /// @note 与 Malody 选项独立，每次流程按目标扩展名重算。
+    bool m_pendingExportShowBmsAlignmentOption = false;
+    /// @brief 仅本次 BMS 导出是否后移事件，默认保持原时间位置。
+    /// @note 不携带音频重写枚举，避免误用资源包的裁剪策略。
+    bool m_pendingExportBmsShiftEventsToGrid = false;
     /// @brief 待确认导出是否显示上架 mode_ext 选项。
     /// @note 仅在 MC Slide 模式且存在 Flick 或折线时为 true。
     bool m_pendingExportShowStoreModeExtOption = false;

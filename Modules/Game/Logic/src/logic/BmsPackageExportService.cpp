@@ -201,6 +201,24 @@ bool alignTimeline(BeatMap& map, AudioSampleEvent* mainSample,
 }
 }  // namespace
 
+/// @brief 为单文件导出复用纯事件对齐，接口不暴露音频重写策略。
+/// @param map 仅用于本次另存为的独立快照。
+/// @param error 非法时间或缺失首红线的具体诊断。
+/// @return 共同时间变换完成时为真。
+/// @note Main 观察指针为空仍会遍历所有 BGM，事件模式不需特殊归零对象。
+/// @note 不执行文件系统操作，音频文件保持字节不变由此接口边界保证。
+bool BmsPackageExportService::shiftEventsToGrid(BeatMap&     map,
+                                                std::string& error)
+{
+    // 单文件接口固定为事件模式，禁止调用者通过选项误入裁头或补头路径。
+    double unusedAudioPhase = 0;
+    return alignTimeline(map,
+                         nullptr,
+                         unusedAudioPhase,
+                         BmsPackageAlignmentMode::ShiftEvents,
+                         error);
+}
+
 /// @brief 将选中谱面、音频与媒体准备到独立事务，再提交完整 ZIP。
 /// @param project 仅用于资源定位，整个调用不修改项目数组。
 /// @param selectedPaths 用户明确选择的项目相对文件列表。

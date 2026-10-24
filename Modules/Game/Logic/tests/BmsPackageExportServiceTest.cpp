@@ -1,4 +1,7 @@
 #include "logic/BmsPackageExportService.h"
+#include "config/EditorConfig.h"
+#include "logic/BeatmapSession.h"
+#include "logic/session/context/SessionContext.h"
 
 #include "common/LogicCommands.h"
 #include "config/Utf8Path.h"
@@ -13,6 +16,7 @@
 #include <cstdint>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <miniz.h>
 #include <string>
 #include <utility>
@@ -491,6 +495,209 @@ bool checkAlignmentModes(const std::filesystem::path& root)
     return true;
 }
 
+/// @brief 真实另存为命令仅可选择事件后移，不能写出音乐副本。
+/// @param root 已包含多红线夹具和原始音频的测试输出根目录。
+/// @return 四种后缀在开关两侧均保持引用、时序和来源只读时为真。
+/// @note 复用相同来源是为了直接比较资源包与单文件的时序规则。
+/// @note 通过命令入队、会话更新和最终磁盘文件验证，不能只测内部助手。
+/// @note 每个后缀分别载入，PMS 使用九轨但保留物件的原始轨序。
+/// @note 无项目资源表时使用真实的来源相对路径，覆盖独立谱面的另存为。
+/// @note 输出位于另一个目录，错误保留来源目录引用将无法定位原素材。
+/// @note 两种选择连续作用于同一会话，确保首次导出不污染第二次导出的来源。
+/// @note 检查文件内容而非存在性，旧产物不能掩盖本轮未更新的问题。
+/// @note 单文件目录只允许出现八个谱面，不接受多余 WAV 或临时音频。
+/// @note 主音乐的 offset 为 223ms，事件后移后的实际起点应为 623ms。
+/// @note 后续红线必须跟随物件后移，初始 BPM 的来源值仍应保留在会话中。
+/// @warning 只在构建目录准备输入和输出，不创建用户项目或音频设备。
+bool checkSingleFileExports(const std::filesystem::path& root)
+{
+    const auto      outputRoot = root / "single" / "exports";
+    std::error_code error;
+    std::filesystem::create_directories(outputRoot, error);
+    if ( error ) return false;
+    // 源音乐和 Key 是不同资源，分别保留快照，不能靠同名文件通过引用校验。
+    // 输出多一层目录，原引用必须从 ../audio 改写为 ../../audio 才能正确播放。
+    const auto music = bytes(root / "audio/music.wav");
+    const auto key   = bytes(root / "audio/key.wav");
+    // BME/BML 不因后缀不同回退到无选项分支，PMS 只更改合法键数。
+    // 不把同一个转换后的对象再次当成来源，避免前一次位移混入后一次期望。
+    for ( const auto* extension : { ".bms", ".bme", ".bml", ".pms" } ) {
+        auto source = std::make_shared<MMM::BeatMap>(
+            MMM::BeatMap::loadFromFile(root / "charts/timings.mmm"));
+        if ( std::string_view(extension) == ".pms" )
+            source->m_baseMapMetadata.track_count = 9;
+        // 独立会话没有项目表，将夹具稳定 ID 解析为来源文件旁的真实资源。
+        // 这里只改准备阶段的输入，随后两个保存命令均不得改写这些字段。
+        for ( auto& note : source->m_noteData.notes )
+            if ( note.m_sampleBinding )
+                note.m_sampleBinding->m_audioResourceId = "../audio/key.wav";
+        for ( auto& sample : source->m_audioSamples )
+            sample.m_audioResourceId = sample.m_audioResourceId == "main-id"
+                                           ? "../audio/music.wav"
+                                           : "../audio/key.wav";
+        // 真实命令处理器还负责快照、资源引用和保存结果，助手测试不能替代它。
+        // 每个后缀拥有独立会话，避免元数据键数和 ECS 的旧布局互相污染。
+        MMM::Logic::BeatmapSession session;
+        session.pushCommand(MMM::Logic::LogicCommand{
+            MMM::Logic::CmdLoadBeatmap{ .beatmap = source } });
+        session.update(0, MMM::Config::EditorConfig{}, false);
+        // 先完成载入再保存，两个选项都必须实际进入有谱面的正式命令处理器。
+        // 不直接修改 ECS 时间，导出快照负责完成所有坐标变换。
+        for ( const bool align : { false, true } ) {
+            const auto path =
+                outputRoot /
+                (std::string(align ? "shifted" : "original") + extension);
+            session.pushCommand(
+                MMM::Logic::LogicCommand{ MMM::Logic::CmdSaveBeatmapAs{
+                    .bmsShiftEventsToGrid = align,
+                    .path                 = MMM::Config::pathToUtf8(path) } });
+            session.update(0, MMM::Config::EditorConfig{}, false);
+            // 重读最终文件同时覆盖通道合并与引用写出，命令入队不是成功证据。
+            // 共同位移固定为 400ms，可发现误用了资源包的前移裁剪策略。
+            // 输出谱面与输入音频位于不同深度，引用必须使用重映射后的路径。
+            const auto   result = MMM::BeatMap::loadFromFile(path);
+            const double delta  = align ? 400 : 0;
+            // 预期是原坐标加同一固定增量，不借用被测助手计算对齐量。
+            // 原位置模式必须原样保留首拍偏移，而不是隐式选择对齐。
+            if ( result.m_noteData.notes.size() != 2 ||
+                 result.m_noteData.holds.size() != 1 ||
+                 result.m_audioSamples.size() != 2 )
+                return false;
+            if ( std::abs(result.m_noteData.notes.front().m_timestamp - 1100 -
+                          delta) > .03 ||
+                 std::abs(result.m_noteData.notes.back().m_timestamp - 1334 -
+                          delta) > .03 ||
+                 std::abs(result.m_noteData.holds.front().m_timestamp - 1600 -
+                          delta) > .03 ||
+                 std::abs(result.m_noteData.holds.front().m_duration - 250) >
+                     .03 )
+                return false;
+            // 检查第二段红线，避免只移动 Note 而继续沿用旧速度切换位置。
+            // 初始 BPM 的特殊归零已由共享的资源包回归独立覆盖。
+            if ( std::none_of(result.m_timings.begin(),
+                              result.m_timings.end(),
+                              [&](const auto& timing) {
+                                  return timing.m_timingEffect ==
+                                             MMM::TimingEffect::BPM &&
+                                         timing.m_timingEffectParameter ==
+                                             150 &&
+                                         std::abs(timing.m_timestamp - 1100 -
+                                                  delta) < .03;
+                              }) )
+                return false;
+            // 同时检查两个自动采样，避免只移动整曲 Main 而遗留自动效果音。
+            // 按资源文件身份决定期望起点，不依赖导出后数组的排序实现。
+            for ( const auto& sample : result.m_audioSamples ) {
+                // BMS 合并局部 offset 到实际触发位置，不能再次叠加或丢失它。
+                // 资源引用必须仍指向原始文件，而非某个不存在的对齐副本。
+                const auto audio =
+                    MMM::Config::utf8ToPath(sample.m_audioResourceId);
+                const bool main = audio.filename() == "music.wav";
+                if ( std::abs(sample.effectiveTimestamp() - (main ? 223 : 717) -
+                              delta) > .03 ||
+                     bytes(outputRoot / audio) != (main ? music : key) )
+                    return false;
+            }
+            // 来源仍是被载入的原模型，不能因为保存成功而将其时间线移到新原点。
+            // 特别要检查先导出原位置、再导出后移模式时没有累计两次位移。
+            const auto& active = *session.getContext().currentBeatmap;
+            // ECS 同步可能改变容器遍历顺序，应按时间和资源身份查找原对象。
+            // 不能把同一组物件的顺序变化误判为导出移动了编辑中的时间轴。
+            if ( std::none_of(active.m_timings.begin(),
+                              active.m_timings.end(),
+                              [](const auto& timing) {
+                                  return timing.m_timingEffect ==
+                                             MMM::TimingEffect::BPM &&
+                                         timing.m_timestamp == 100;
+                              }) ||
+                 std::none_of(active.m_noteData.notes.begin(),
+                              active.m_noteData.notes.end(),
+                              [](const auto& note) {
+                                  return note.m_timestamp == 1100;
+                              }) ||
+                 active.m_audioSamples.front().effectiveTimestamp() != 223 ||
+                 active.m_baseMapMetadata.map_path !=
+                     root / "charts/timings.mmm" )
+                return false;
+        }
+    }
+    // 这一检查在四个后缀与两个选项之后执行，任何分支重写音频都会暴露。
+    // 输出目录里不能出现额外音频，即便源文件字节仍未改变也不接受生成副本。
+    // 最终再次比较完整来源字节，长度或修改时间相同不能证明未编码。
+    // 目录检查限定本测试的输出目录，不扫描或删除用户项目内的媒体文件。
+    if ( music != bytes(root / "audio/music.wav") ||
+         key != bytes(root / "audio/key.wav") )
+        return false;
+    for ( std::filesystem::directory_iterator it(outputRoot, error), end;
+          !error && it != end;
+          it.increment(error) ) {
+        const auto extension = MMM::Config::pathToUtf8(it->path().extension());
+        if ( extension != ".bms" && extension != ".bme" &&
+             extension != ".bml" && extension != ".pms" )
+            return false;
+    }
+    // 文件系统遍历失败也必须失败，不能用未遍历到音频来证明没有输出音频。
+    // 所有检查结束后保留谱面产物，供人工复核实际 WAV 引用和 BGM 触发点。
+    return !error;
+}
+
+/// @brief 密集离拍物件在整体后移后仍须写入同一条 MyO2 兼容数据行。
+/// @param root 所有新文件限定于构建测试输出。
+/// @return 原精度、音符数量和同通道单行约束均成立时为真。
+/// @note 这组固定伪随机偏移没有小于等于 65536 的公共格点。
+/// @note 正常量化误差保持 0.01ms，不能为了通过导出而增加吸附误差。
+/// @note 不能使用标准多行叠加作为回退，MyO2 只保留同通道的最后一行。
+/// @note 输入只包含静音 Note，测试与音频资源定位和外部设备无关。
+/// @note 32 颗音符始终位于同一小节、同一轨，真实输出行数可以直接检查。
+/// @note 固定宽度整数运算保证所有平台得到同样的分数偏移序列。
+bool checkDenseSingleRow(const std::filesystem::path& root)
+{
+    MMM::BeatMap map;
+    map.m_baseMapMetadata.track_count = 4;
+    MMM::Timing bpm;
+    bpm.m_timestamp             = 100;
+    bpm.m_timingEffect          = MMM::TimingEffect::BPM;
+    bpm.m_timingEffectParameter = bpm.m_bpm = 120;
+    bpm.m_beat_length                       = 500;
+    map.m_timings.push_back(bpm);
+    std::uint32_t seed = 17;
+    // 各音符相隔约 40ms，新增的微小偏移只验证存储精度，不产生同键冲突。
+    // 故意保留离拍位置，不把输入预先吸附成容易写出的固定拍线。
+    for ( int i = 0; i < 32; ++i ) {
+        // 无符号乘加按 32 位回绕，固定种子不依赖宿主的有符号溢出行为。
+        seed             = seed * 1664525U + 1013904223U;
+        auto& note       = map.m_noteData.notes.emplace_back();
+        note.m_track     = 0;
+        note.m_timestamp = 100 + i * 40 + (seed % 1000000U) / 1000000.0;
+    }
+    std::string error;
+    const auto  path = root / "dense_single.bms";
+    // 只允许共同后移；公共保存器继续使用普通单行策略而非 compact_rows。
+    if ( !MMM::Logic::BmsPackageExportService::shiftEventsToGrid(map, error) ||
+         !map.saveToFile(path) )
+        return false;
+    const auto restored = MMM::BeatMap::loadFromFile(path);
+    if ( restored.m_noteData.notes.size() != map.m_noteData.notes.size() )
+        return false;
+    // 格点应保证每颗物件的绝对时间误差，而非只检查整体长度和数量。
+    // 点按没有资源身份差异，时间联合匹配可发现不正确的合并或丢失。
+    for ( const auto& note : map.m_noteData.notes )
+        if ( std::none_of(restored.m_noteData.notes.begin(),
+                          restored.m_noteData.notes.end(),
+                          [&](const auto& output) {
+                              return std::abs(output.m_timestamp -
+                                              note.m_timestamp) <= .01;
+                          }) )
+            return false;
+    std::ifstream input(path);
+    std::string   line;
+    int           rows = 0;
+    // 核查真实文本的同小节同通道行数，不以支持多行的 MMM 读取器代替 MyO2。
+    // 源音符均已后移到 500～1741ms，仍全部属于首小节的 16 通道。
+    while ( std::getline(input, line) ) rows += line.starts_with("#00016:");
+    return rows == 1;
+}
+
 /// @brief 对用户指定的真实谱面执行只读来源探针。
 /// @param source 外部来源文件，永不覆盖。
 /// @param root 统一的构建输出目录。
@@ -595,6 +802,33 @@ bool externalProbe(const std::filesystem::path& source,
     if ( !matches(map.m_noteData.notes, restored.m_noteData.notes) ||
          !matches(map.m_noteData.holds, restored.m_noteData.holds) )
         return false;
+    // 单文件另存为仍使用 MyO2 单行策略，不能只用允许稀疏行的资源包证明兼容。
+    // 同一真实谱面还必须通过正式命令生成独立 BMS，验证公共格点的实际容量。
+    // 来源再次从磁盘加载，绝不能把已经对齐的包内结果当作另存为的输入。
+    auto singleSource =
+        std::make_shared<MMM::BeatMap>(MMM::BeatMap::loadFromFile(source));
+    MMM::Logic::BeatmapSession session;
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdLoadBeatmap{ .beatmap = singleSource } });
+    session.update(0, MMM::Config::EditorConfig{}, false);
+    const auto singlePath = root / "external_single.bms";
+    // 只移除探针自身的旧输出，防止保存失败后误读前一次成功产物。
+    // 用户源文件从不作为删除或保存目标，诊断失败仍保留所有来源素材。
+    std::filesystem::remove(singlePath, error);
+    if ( error ) return false;
+    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdSaveBeatmapAs{
+        .bmsShiftEventsToGrid = true,
+        .path                 = MMM::Config::pathToUtf8(singlePath) } });
+    session.update(0, MMM::Config::EditorConfig{}, false);
+    const auto single = MMM::BeatMap::loadFromFile(singlePath);
+    // 资源包和单文件应具有相同的整体位移，不因行表示不同再次量化物件。
+    // matches 继续比较每轨物件时间和长条时长，不能仅凭文件存在判成功。
+    if ( single.m_noteData.notes.size() != map.m_noteData.notes.size() ||
+         single.m_noteData.holds.size() != map.m_noteData.holds.size() ||
+         !matches(map.m_noteData.notes, single.m_noteData.notes) ||
+         !matches(map.m_noteData.holds, single.m_noteData.holds) )
+        return false;
+    // 确认命令并未为了移动 BGM 而改写当前用户谱面文件。
     return snapshot == bytes(source);
 }
 }  // namespace
@@ -621,7 +855,9 @@ int main(int argc, char** argv)
     // 根目录由调用方明确指定，不以当前工作目录作为隐式输出位置。
     // 所有场景在这个目录下分开保存，调试时可以检查实际 ZIP 与波形。
     const auto root = MMM::Config::utf8ToPath(argv[1]);
-    if ( !run(root) || !checkAlignmentModes(root) ) return 3;
+    if ( !run(root) || !checkAlignmentModes(root) ||
+         !checkSingleFileExports(root) || !checkDenseSingleRow(root) )
+        return 3;
     return argc == 2 || externalProbe(MMM::Config::utf8ToPath(argv[2]), root)
                ? 0
                : 4;

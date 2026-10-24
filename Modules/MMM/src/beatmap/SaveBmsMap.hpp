@@ -278,7 +278,7 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         exportProperties->second.at("compact_rows") == "1";
     // 同小节同通道寻找能够同时表达所有事件的最短格点。
     // 长条头尾共享一行，避免只保留末端导致无法配对。
-    // 搜索仍受原有分辨率和总文本大小限制，不能无限扩张文件。
+    // 短格点搜索有固定上限，高精度回退仍受总文本预算约束。
     // 公共格点不能取各事件最简分母的最大值，互质分母会落在不同位置。
     // 也不能直接取它们的最小公倍数，逐事件近似会制造过大的分母。
     // 这里直接针对原始拍位检查候选，所有事件共同满足既有时间误差。
@@ -335,7 +335,21 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
                 continue;
             }
         }
-        if ( denominator > 65536 ) return false;
+        if ( denominator > 65536 ) {
+            // 首拍平移可能使一组离拍音符无法共用短分母，但仍能按原精度表达。
+            // 四舍五入到 D 格时误差至多为 0.5/D，直接求保证精度的公共格点。
+            // 不放宽 0.01ms 预算，也不改用多行，保持 MyO2 的单行读取兼容性。
+            // 额外加一格避开浮点边界；计算量固定，不扩大逐个分母搜索范围。
+            const double resolution = std::ceil(0.5 / fractionTolerance) + 1;
+            // 仅分配剩余文本预算能容纳的格点，极低 BPM 不能制造无界零串。
+            // 容量检查先于整数转换，防止无限值或超大分母越界。
+            constexpr std::size_t limit = 64U * 1024U * 1024U;
+            if ( outputBytes > limit - 11U || !std::isfinite(resolution) ||
+                 resolution >
+                     static_cast<double>((limit - outputBytes - 9U) / 2U) )
+                return false;
+            denominator = static_cast<int>(resolution);
+        }
         outputBytes += denominator * 2U + 9U;
         if ( outputBytes > 64U * 1024U * 1024U ) return false;
         std::string data(denominator * 2U, '0');

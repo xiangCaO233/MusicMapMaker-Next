@@ -9,7 +9,8 @@
 namespace MMM
 {
 class Project;
-}
+class BeatMap;
+}  // namespace MMM
 
 namespace MMM::Logic
 {
@@ -29,6 +30,16 @@ struct BmsPackageExportResult {
 class BmsPackageExportService final
 {
 public:
+    /// @brief 将独立导出模型的全部事件后移到零点拍网格。
+    /// @param map 已准备资源引用的导出副本，禁止传入活动编辑模型。
+    /// @param error 无有效首红线或时间非法时接收具体原因。
+    /// @return 所有事件已按共同位移更新时为真。
+    /// @note 首 BPM 保留在零点，后续 BPM、STOP、物件和 BGM 触发一起移动。
+    /// @note 此入口只修改内存事件，不读取、裁剪、编码或保存任何音频。
+    /// @warning 低频导出准备路径；调用方负责在成功后写出谱面文件。
+    [[nodiscard]] static bool shiftEventsToGrid(BeatMap&     map,
+                                                std::string& error);
+
     /// @brief 导出所有已选谱面，按互斥策略调整主音乐内容或触发位置。
     /// @param project 提供稳定音频资源 ID 与项目根目录。
     /// @param selectedPaths 已选项目相对路径，音频依赖也必须明确选择。

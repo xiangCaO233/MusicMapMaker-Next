@@ -606,6 +606,10 @@ struct CmdSaveBeatmapAs {
     /// @brief 导出 MC 时是否写入上架皮肤 mode_ext。
     bool addStoreModeExtForMalodyExport{ false };
 
+    /// @brief BMS 单文件导出时整体后移事件对齐首拍，不允许改写音频文件。
+    /// @note false 保持原时间位置；非 BMS 家族格式忽略本字段。
+    bool bmsShiftEventsToGrid{ false };
+
     /// @brief 导出目标路径，使用 UTF-8 编码。
     std::string path;
 };
