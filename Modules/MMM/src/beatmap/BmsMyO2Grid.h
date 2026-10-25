@@ -28,7 +28,7 @@ inline double myO2Round(double value)
 /// @return 小节未越界且玩家键位无量化冲突时为 true。
 /// @note 参考 iBMSC 2d43b6f Form1.vb 的 GCD、MyO2GridCheck 和 GridAdjust。
 /// @note 默认 BMSGridLimit 为 1，D48/D64 每次累加都进行 CInt 舍入。
-/// @note 只在用户明确启用兼容模式时使用；普通保存保持原始时间。
+/// @note BMS 默认执行此有损转换；原精度路径仅用于内部数值诊断。
 /// @warning 低频导出路径，排序并重建输出行；不得用于播放或渲染循环。
 inline bool quantizeMyO2Rows(ExportRows& rows)
 {
