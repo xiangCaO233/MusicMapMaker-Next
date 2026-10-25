@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import sys
 import threading
 import time
 from urllib.parse import quote
@@ -172,6 +173,68 @@ def publish_record(client, bucket, domain, stage, root, record, publisher, trans
     print(f'[hotfix] 对象完成 {key}', flush=True)
 
 
+# /// @brief 服务器加载固定 R2 身份，调用者永远不接触原始密钥。
+def load_backend():
+    """程序与资源发布共享同一受保护配置，不接受外部桶或端点参数。
+
+    此函数仅在服务器执行；CI 只接收限时、限定对象的上传许可。
+    返回客户端与公开域名，不返回可被调用方意外序列化的凭据字典。
+    """
+    # 只加载受维护的固定 helper，凭据读取保持现有权限校验。
+    helper = Path("/home/podman/.local/share/mmm-cdn/publish-r2.py")
+    spec = importlib.util.spec_from_file_location("mmm_cdn", helper)
+    publisher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(publisher)
+    values = publisher.read_credentials("/home/podman/.config/mmm-cdn/credentials.env")
+    import boto3
+    from botocore.config import Config
+    # 显式连接和读取超时使断链能够失败返回，而非无限等待。
+    # 标准重试次数有上界，候选原件保持不变，便于之后恢复。
+    client = boto3.client("s3", endpoint_url=values["R2_ENDPOINT"],
+                          aws_access_key_id=values["R2_ACCESS_KEY_ID"],
+                          aws_secret_access_key=values["R2_SECRET_ACCESS_KEY"],
+                          region_name="auto", config=Config(signature_version="s3v4", connect_timeout=15, read_timeout=120,
+                          retries={"mode": "standard", "total_max_attempts": 4},
+                          request_checksum_calculation="when_required",
+                          response_checksum_validation="when_required"))
+    # 桶与公开域名来自受保护配置，workflow 输入不得覆盖。
+    bucket = values["R2_BUCKET"]
+    domain = values["CDN_DOMAIN"]
+    return client, bucket, domain, publisher
+
+
+# /// @brief 服务器验证候选后签发单对象上传许可，不切换任何清单。
+def sign_uploads(stage, root):
+    """许可仅有效三十分钟，固定对象、长度、摘要元数据及缓存头。
+
+    CI 用已有候选直接上传 R2，避开网站服务器的慢速上传出口。
+    后续 publish 仍完整回读 R2/CDN 正文，签名成功不代表发布完成。
+    本函数的 JSON 输出含限时许可，工作流必须只写私有临时文件。
+    """
+    documents = validate_bundle(stage, root)
+    client, bucket, _, _ = load_backend()
+    items = []
+    for record in [r for _, plan, _ in documents for r in plan['uploads']]:
+        key = record['key']
+        # 已有对象只在摘要与长度匹配时复用，不重新签发覆盖许可。
+        objects = client.list_objects_v2(Bucket=bucket, Prefix=key)
+        if any(e['Key'] == key for e in objects.get('Contents', [])):
+            head = client.head_object(Bucket=bucket, Key=key)
+            if (head.get('Metadata', {}).get('sha256') != record['sha256']
+                    or head['ContentLength'] != record['size']):
+                raise ValueError('immutable object conflict')
+            continue
+        params = dict(Bucket=bucket, Key=key, ContentLength=record['size'],
+                      Metadata={'sha256': record['sha256']},
+                      ContentType='application/octet-stream',
+                      CacheControl='public, max-age=31536000, immutable')
+        url = client.generate_presigned_url('put_object', Params=params,
+                                           ExpiresIn=1800, HttpMethod='PUT')
+        items.append(dict(**record, url=url))
+    # 不记录 URL 到日志；SDK 长期访问密钥始终保留在服务器。
+    return {'uploads': items}
+
+
 # /// @brief 在持有网站发布锁时执行上传和清单切换。
 def publish(stage, root):
     """使用服务器现有身份发布不可变资源，再更新固定清单入口。
@@ -194,27 +257,8 @@ def publish(stage, root):
         print('[hotfix] 已取得发布锁，校验候选', flush=True)
         # 全部候选先预检，程序不合法时不能先上传部分资产。
         documents = validate_bundle(stage, root)
-        # 只加载受维护的固定 helper，凭据读取保持现有权限校验。
-        helper = Path("/home/podman/.local/share/mmm-cdn/publish-r2.py")
-        spec = importlib.util.spec_from_file_location("mmm_cdn", helper)
-        publisher = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(publisher)
-        values = publisher.read_credentials("/home/podman/.config/mmm-cdn/credentials.env")
-        import boto3
-        from botocore.config import Config
+        client, bucket, domain, publisher = load_backend()
         from boto3.s3.transfer import TransferConfig
-        # 显式连接和读取超时使断链能够失败返回，而非无限等待。
-        # 标准重试次数有上界，候选原件保持不变，便于之后恢复。
-        client = boto3.client("s3", endpoint_url=values["R2_ENDPOINT"],
-                              aws_access_key_id=values["R2_ACCESS_KEY_ID"],
-                              aws_secret_access_key=values["R2_SECRET_ACCESS_KEY"],
-                              region_name="auto", config=Config(connect_timeout=15, read_timeout=120,
-                              retries={"mode": "standard", "total_max_attempts": 4},
-                              request_checksum_calculation="when_required",
-                              response_checksum_validation="when_required"))
-        # 桶与公开域名来自受保护配置，workflow 输入不得覆盖。
-        bucket = values["R2_BUCKET"]
-        domain = values["CDN_DOMAIN"]
         # 采用公开 SDK 配置接口；与正文摘要校验相互独立。
         # 小程序单连接传输，大对象最多双路并发，减少弱链路拥塞。
         transfer = TransferConfig(multipart_threshold=64 * 1024**2,
@@ -258,9 +302,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage", required=True)
     parser.add_argument("--root", required=True)
-    parser.add_argument("--apply", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true")
+    mode.add_argument("--sign-uploads", action="store_true")
     args = parser.parse_args()
-    if args.apply:
+    if args.sign_uploads:
+        # 私有输出只能通过 SSH 写入 Runner 临时文件，不能上传为 Artifact。
+        json.dump(sign_uploads(args.stage, args.root), sys.stdout)
+    elif args.apply:
         publish(args.stage, args.root)
     else:
         # 离线校验模式不导入 boto3，也不读取服务器凭据。

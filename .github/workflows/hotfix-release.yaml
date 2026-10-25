@@ -231,6 +231,15 @@ jobs:
           ssh "${ssh_options[@]}" -p 22 podman@xiang233.top "mkdir -p '${stage}/tools'"
           scp "${ssh_options[@]}" -P 22 -r hotfix-output/. "podman@xiang233.top:${stage}/"
           scp "${ssh_options[@]}" -P 22 scripts/hotfix/prepare_assets.py scripts/hotfix/prepare_program.py scripts/hotfix/publish_assets.py "podman@xiang233.top:${stage}/tools/"
+          # R2 密钥留在服务器，只将限时单对象许可写入私有临时文件。
+          # 由 Runner 直传同一候选，避开网站服务器向 R2 的慢速出口。
+          # 许可位于 workspace 外，且创建时间晚于 Artifact 上传，不会被归档。
+          upload_grants="$(mktemp "${RUNNER_TEMP}/mmm-hotfix-upload.XXXXXX")"
+          chmod 600 "${upload_grants}"
+          trap 'rm -f -- "${upload_grants}"' EXIT
+          ssh "${ssh_options[@]}" -p 22 podman@xiang233.top "/home/podman/.local/share/mmm-cdn/venv/bin/python '${stage}/tools/publish_assets.py' --stage '${stage}' --root /home/podman/data/caddy/web/mmm --sign-uploads" > "${upload_grants}"
+          python3 scripts/hotfix/direct_upload.py --stage hotfix-output --grants "${upload_grants}"
+          # 服务器随后仍逐对象回读正文并校验公开 CDN，通过后才切清单。
           # 密钥只留在 podman 主机，CI 不下载或打印 credentials.env。
           # 上传器先核对原清单、全部制品和公开 CDN 字节，最后切换清单。
           # 同版本目录不可覆盖不同内容，重试只能复用相同对象。
