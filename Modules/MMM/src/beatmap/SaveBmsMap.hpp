@@ -246,17 +246,17 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         exportProperties != map.m_metadata.map_properties.end() &&
         exportProperties->second.contains("compact_rows") &&
         exportProperties->second.at("compact_rows") == "1";
-    // 兼容模式仅作用于本次序列化副本，默认关闭并保留真实毫秒位置。
+    // BMS 默认按有损网格导出；显式零值仅供内部精度诊断。
     // 明确拒绝吸附冲突，不能靠删除物件令检查器归零。
     const bool myO2Grid =
-        exportProperties != map.m_metadata.map_properties.end() &&
-        exportProperties->second.contains("myo2_grid") &&
-        exportProperties->second.at("myo2_grid") == "1";
+        exportProperties == map.m_metadata.map_properties.end() ||
+        !exportProperties->second.contains("myo2_grid") ||
+        exportProperties->second.at("myo2_grid") != "0";
     if ( myO2Grid && !quantizeMyO2Rows(rows) ) {
         XERROR(
             "MyO2 "
-            "兼容导出失败：吸附后物件或长条端点重叠，或超出小节范围；请关闭兼容"
-            "网格后重试");
+            "兼容导出失败：吸附后物件或长条端点重叠，或超出小节范围；请调整冲突"
+            "物件后重试");
         return false;
     }
     // 兼容位置已严格量化；序列化不能再用毫秒预算近似为别的分母。

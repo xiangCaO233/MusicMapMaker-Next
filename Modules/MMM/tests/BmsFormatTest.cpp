@@ -413,6 +413,9 @@ int main(int argc, char** argv)
     // 毫秒量化位置、非默认增益和视觉滚速共同覆盖外部谱面的常见导出路径。
     auto keyboard = MMM::BeatMap::loadFromFile(root / "source.bms");
     keyboard.m_baseMapMetadata.track_count = 4;
+    // 此夹具独立验证旧精度数值与通道降级，明确关闭默认有损吸附。
+    keyboard.m_metadata.map_properties[MMM::MapMetadataType::BMS]["myo2_grid"] =
+        "0";
     // 四轨夹具不沿用原六轨长条，避免来源键数与物件轨号互相矛盾。
     // 原来的长条往返已由 verify 覆盖，这里专门检查四轨转换边界。
     keyboard.m_noteData.holds.clear();
@@ -455,7 +458,10 @@ int main(int argc, char** argv)
         // 现场输入使用公共格式分派，覆盖 OSU 载入而非手工重建近似模型。
         // 源文件只读，输出固定为 external.bms，避免覆盖用户已保存的谱面。
         // 四至八轨的预期轨号与来源一致，与生产通道计算独立比较。
-        const auto external = MMM::BeatMap::loadFromFile(argv[2]);
+        auto external = MMM::BeatMap::loadFromFile(argv[2]);
+        // 可选诊断保留原精度，正式导出默认吸附由命令链路回归覆盖。
+        external.m_metadata
+            .map_properties[MMM::MapMetadataType::BMS]["myo2_grid"] = "0";
         if ( !external.saveToFile(root / "external.bms") ) return 14;
         const auto result = MMM::BeatMap::loadFromFile(root / "external.bms");
         if ( result.m_noteData.notes.size() !=
