@@ -156,16 +156,18 @@ bool checkPaddedAudio(const std::filesystem::path& path, unsigned milliseconds)
 /// @param expectedPadding 独立给定的音频前导毫秒数。
 /// @param mainOffset 主音轨独立 offset，补静音时不能再叠加到 SOUND 锚点。
 /// @param sameNamedEffect 是否放置其他目录内与 Main 同名的效果音。
+/// @param firstTime 原首红线时刻，非零值验证回卷后不足整拍的实际补偿。
 /// @return 音频、MC、源模型及源文件共同满足同步契约时返回真。
 /// @note 使用不同 BPM 检查补的一拍来自参考 BPM，而不是用户首红线。
-/// @details 同 BPM 无绿线时无需编码；有绿线时留出一拍保护原绿线。
+/// @details 同 BPM 无论是否有绿线均不新增前导段，不同 BPM 才补参考段。
 /// 不同 BPM 的零点场景腾出参考一拍，音乐和物件使用同样毫秒位移。
 /// Main offset 场景只移动文件内容，触发 offset 自身仍按原值保留。
 /// 同名效果音场景保留完整路径身份，不允许以文件名碰撞触发多 Main 拒绝。
 /// @note 不清理已有导出资源，文件名冲突由正式事务负责安全处理。
 bool checkExport(const std::filesystem::path& root, double referenceBpm,
                  bool userScroll, unsigned expectedPadding,
-                 std::int64_t mainOffset = 0, bool sameNamedEffect = false)
+                 std::int64_t mainOffset = 0, bool sameNamedEffect = false,
+                 double firstTime = 0)
 {
     std::error_code error;
     const auto      exportDirectory = root / "export";
@@ -190,7 +192,7 @@ bool checkExport(const std::filesystem::path& root, double referenceBpm,
     source->m_baseMapMetadata.song_file_hint  = "input.wav";
     source->m_baseMapMetadata.map_path        = root / "source.mmm";
     MMM::Timing bpm;
-    bpm.m_timestamp             = 0;
+    bpm.m_timestamp             = firstTime;
     bpm.m_bpm                   = 120;
     bpm.m_beat_length           = 500;
     bpm.m_timingEffect          = MMM::TimingEffect::BPM;
@@ -219,7 +221,7 @@ bool checkExport(const std::filesystem::path& root, double referenceBpm,
                                    .m_audioResourceId = "effects/input.wav" });
     }
     auto& note       = source->m_noteData.notes.emplace_back();
-    note.m_timestamp = 1000;
+    note.m_timestamp = firstTime + 1000;
     note.m_track     = 1;
     source->sync();
     if ( !source->saveToFile(source->m_baseMapMetadata.map_path) ) return false;
@@ -255,7 +257,7 @@ bool checkExport(const std::filesystem::path& root, double referenceBpm,
     auto loaded = MMM::BeatMap::loadFromFile(chartPath);
     // 物件后移完整拍长，Main 采样保持原触发点，两者职责分别检查。
     if ( loaded.m_noteData.notes.size() != 1 ||
-         std::abs(loaded.m_noteData.notes[0].m_timestamp - 1000 -
+         std::abs(loaded.m_noteData.notes[0].m_timestamp - firstTime - 1000 -
                   expectedPadding) > .1 )
         return false;
     if ( loaded.m_audioSamples.size() != (sameNamedEffect ? 2U : 1U) ||
@@ -277,23 +279,27 @@ bool checkExport(const std::filesystem::path& root, double referenceBpm,
     // Main 触发时间保持原值，因为音乐内容的后移已经写入文件前导静音。
     // 活动模型和原始音频都必须保持未修改，导出不接管原来的保存路径。
     return readBytes(input) == original &&
-           source->m_timings.front().m_timestamp == 0 &&
+           source->m_timings.front().m_timestamp == firstTime &&
            source->m_baseMapMetadata.map_path == root / "source.mmm";
 }
 /// @brief 通过真实项目打包命令验证 MCZ 内谱面和主音频使用相同补偿。
 /// @param root 场景独占目录，含已验证的源 MMM 与源 WAV。
 /// @param referenceBpm 本谱面参考 BPM。
 /// @param alignOrigin 是否额外启用旧的非 OGG 原点对齐选项。
+/// @param firstTime 原首红线时刻，与源 PCM 的零点独立。
+/// @param padding 独立给出的参考段规范化位移，不从输出推导。
 /// @return 包内 MC 与实际编码音频同步且源文件未改动时返回真。
-/// @note 原点对齐场景先把首红线和用户绿线放到 100ms，组合补偿应为 400ms。
+/// @note 100 BPM 参考段补 600ms，再结合 100ms 原点对齐后净补偿为 500ms。
 /// @details 同一源文件先做另存为验证，再进入真实项目打包路径。
 /// 解包检查条目选择、格式转换、音频替换和资源引用一致性。
 /// 净补偿长度由场景表给出，不从包内红线反推音频期望。
 bool checkPackage(const std::filesystem::path& root, double referenceBpm,
-                  bool alignOrigin)
+                  bool alignOrigin, double firstTime = 0,
+                  unsigned padding = 600)
 {
+    const unsigned expectedPadding = referenceBpm == 120 ? 0 : padding;
     if ( !checkExport(
-             root, referenceBpm, true, referenceBpm == 120 ? 500 : 600) )
+             root, referenceBpm, true, expectedPadding, 0, false, firstTime) )
         return false;
     const auto sourcePath = root / "source.mmm";
     if ( alignOrigin ) {
@@ -355,11 +361,10 @@ bool checkPackage(const std::filesystem::path& root, double referenceBpm,
     // 无论中途哪一步失败都关闭读取器，再执行后续 PCM 与谱面检查。
     if ( !extracted ) return false;
     // 本次解包失败就停止，不能把旧目录的残留文件当成本次归档成功。
-    const unsigned expectedAudioPadding =
-        alignOrigin ? 400 : (referenceBpm == 120 ? 500 : 600);
-    // 组合场景原点裁去 100ms、初始化补入 500ms，音频净增加 400ms；
-    // Note 原先也多出 100ms，因此最终仍落在 1500ms，与直接补头场景一致。
-    const double expectedNoteTime = referenceBpm == 120 ? 1500 : 1600;
+    const unsigned expectedAudioPadding = alignOrigin ? 500 : expectedPadding;
+    // 组合场景裁去 100ms、参考段补入 600ms，音频净增加 500ms。
+    // Note 事先多出的 100ms 抵消裁切，其最终位置仍与直接补头一致。
+    const double expectedNoteTime = firstTime + 1000 + expectedPadding;
     auto         chart = MMM::BeatMap::loadFromFile(unpacked / "source.mc");
     // 比较实际 PCM 的静音长度和回读 Note 时间，不能只检查压缩包非空。
     return checkPaddedAudio(unpacked / "input.wav", expectedAudioPadding) &&
@@ -384,17 +389,20 @@ int main(int argc, char** argv)
     MMM::Runtime::AppThreadPool::instance().init();
     // 与应用一致初始化离线工作资源，不启动窗口或播放回调。
     const std::filesystem::path root(argv[1]);
-    // 无绿线不改音频；有绿线补 120 BPM 的一拍，不同参考 BPM 则补 100 BPM
-    // 的一拍。
+    // 同 BPM 不改音频；不同参考 BPM 根据回卷后的锚点给出独立补偿。
     const bool ok =
         checkExport(root / "unchanged", 120, false, 0) &&
-        checkExport(root / "same", 120, true, 500) &&
+        checkExport(root / "same", 120, true, 0) &&
         checkExport(root / "different", 100, false, 600) &&
-        checkExport(root / "main_offset", 120, true, 500, 223) &&
-        checkExport(root / "same_named_effect", 120, true, 500, 0, true) &&
+        checkExport(root / "main_offset", 100, true, 600, 223) &&
+        checkExport(root / "same_named_effect", 100, true, 600, 0, true) &&
         checkPackage(root / "package_same", 120, false) &&
         checkPackage(root / "package_different", 100, false) &&
-        checkPackage(root / "package_combined", 120, true);
+        checkPackage(root / "package_combined", 100, true) &&
+        // 真实 MCZ 不能继续固定补整拍；非零回卷和正参考锚点分别验证。
+        checkPackage(root / "package_rolled", 100, false, 1100, 500) &&
+        checkPackage(root / "package_within", 100, false, 100, 500) &&
+        checkPackage(root / "package_positive", 240, false, 400, 0);
     // 任一场景失败都使端到端测试失败，成功数量不能抵扣时序或资源差异。
     if ( !ok )
         XERROR("MC initial timing and encoded audio are not synchronized");

@@ -22,16 +22,14 @@
 /// @brief Malody 分区比较器当前检查的顶层逻辑区块数量。
 static constexpr int TOTAL_MALODY_SECTIONS = 4;
 
-/// @brief 为零点首红线资源夹具建立独立的初始化期望。
-/// @param model 来源模型，转换为包含必要前导段的期望模型。
+/// @brief 为零点且同参考 BPM 的资源建立不增加初始化事件的独立期望。
+/// @param model 来源模型，只读取其参考 BPM，不移动内容。
 /// @param input 原始 MC 文件，只读。
 /// @param expectedPath 构建目录中写出的预期 JSON。
-/// @return 夹具符合约定且预期文件写入成功时为真。
-/// @note 此组真实资源均从零点红线开始；非零点和回卷由矩阵测试负责。
-/// @note 只允许规则明确规定的初始化配对和整拍平移，其余分区继续完整比较。
-/// @details 预期 JSON 从原始资源按独立规则生成，不调用生产首拍归一化 helper。
-/// 一份预期用于原始字段分区比较，另一份值模型用于物件和采样的绝对时间比较。
-/// 这两层不能互相替代：JSON 拍位正确不代表 delay、SOUND offset 一定同步。
+/// @return 夹具符合约定且原始分区完整写入期望文件时为真。
+/// @note 此组真实资源均从零点同 BPM 开始；不同 BPM 和负时间由矩阵负责。
+/// @details 相同 BPM 不应再为同刻用户绿线腾出一拍；JSON 与模型两层比较
+/// 同时约束这一点，不能靠改写期望模型来掩盖新增位移。
 static bool prepareInitialTimingExpectation(
     MMM::BeatMap& model, const std::filesystem::path& input,
     const std::filesystem::path& expectedPath)
@@ -50,82 +48,14 @@ static bool prepareInitialTimingExpectation(
     // 浮点 BPM 使用容差判断语义相等，资源中的 329.99999999999966 仍是 330。
     const bool sameBpm =
         std::abs(data["time"][0]["bpm"].get<double>() - reference) < 1e-6;
-    if ( !data.contains("effect") ) data["effect"] = nlohmann::json::array();
-    const bool userGreen = std::any_of(
-        data["effect"].begin(), data["effect"].end(), [](const auto& effect) {
-            return effect.contains("scroll") &&
-                   effect["beat"] == nlohmann::json::array({ 0, 0, 1 });
-        });
-    // 零点有任何用户绿线都腾出一拍，包括用户明确写入的一倍速绿线。
-    // 无绿线的另一份真实资源只新增初始化绿线，不改变谱面绝对时间。
-    const bool   prefix   = !sameBpm || userGreen;
-    const double shift    = prefix ? 60000.0 / reference : 0;
-    const auto   songFile = data["meta"]["song"].value("file", std::string{});
-    if ( prefix ) {
-        // 严格保留原来的全部 timing，不通过丢弃首条用户绿线达标。
-        // 本夹具参考 BPM 与首 BPM 相同，后移一拍可直接增加整数拍号；
-        // 长条尾拍也属绝对拍位，Slide seg 则必须保持相对间距。
-        if ( !sameBpm ) return false;
-        for ( auto& timing : data["time"] )
-            timing["beat"][0] = timing["beat"][0].get<int>() + 1;
-        for ( auto& effect : data["effect"] )
-            effect["beat"][0] = effect["beat"][0].get<int>() + 1;
-        for ( auto& node : data["note"] ) {
-            // Main 文件补静音承担音乐位移，SOUND 的原始 offset
-            // 不随谱面叠加一拍。
-            if ( node.value("sound", std::string{}) == songFile &&
-                 node.contains("type") )
-                continue;
-            node["beat"][0] = node["beat"][0].get<int>() + 1;
-            if ( node.contains("endbeat") )
-                node["endbeat"][0] = node["endbeat"][0].get<int>() + 1;
-        }
-        data["time"].insert(
-            data["time"].begin(),
-            nlohmann::json{ { "beat", nlohmann::json::array({ 0, 0, 1 }) },
-                            { "bpm", reference },
-                            { "delay", 0 } });
-        for ( auto& timing : model.m_timings ) timing.m_timestamp += shift;
-        // 模型层使用绝对毫秒，独立于 JSON 层的一拍整数变换。
-        // 遍历各值容器一次，避免折线引用使同一个子物件被重复平移。
-        for ( auto& note : model.m_noteData.notes ) note.m_timestamp += shift;
-        for ( auto& note : model.m_noteData.holds ) note.m_timestamp += shift;
-        for ( auto& note : model.m_noteData.flicks ) note.m_timestamp += shift;
-        for ( auto& note : model.m_noteData.polylines )
-            note.m_timestamp += shift;
-        for ( auto& sample : model.m_audioSamples )
-            if ( sample.m_audioResourceId != songFile )
-                sample.m_timestamp += shift;
-        MMM::Timing red;
-        // 只补初始化事件，不修改用户原红线的 BPM、delay 或来源元数据。
-        red.m_timingEffect = MMM::TimingEffect::BPM;
-        red.m_bpm = red.m_timingEffectParameter = reference;
-        red.m_beat_length                       = shift;
-        model.m_timings.push_back(red);
+    if ( sameBpm ) {
+        // 相同 BPM 不新增红绿线，不再为用户零点 Scroll 腾出一拍。
+        std::ofstream output(expectedPath);
+        output << data.dump();
+        return output.good();
     }
-    // 新绿线恰好增加一次，原来的 Scroll 仍由完整分区比较确认值和顺序。
-    data["effect"].insert(
-        data["effect"].begin(),
-        nlohmann::json{ { "beat", nlohmann::json::array({ 0, 0, 1 }) },
-                        { "scroll", 1.0 } });
-    MMM::Timing green;
-    // 绿线参数是一倍 Scroll，其附带 BPM 使用参考值，与输出零点红线一致。
-    green.m_timingEffect = MMM::TimingEffect::SCROLL;
-    green.m_bpm          = reference;
-    green.m_beat_length = green.m_timingEffectParameter = 1;
-    model.m_timings.push_back(green);
-    // 相同时间保持原顺序，额外初始化红线先于初始化绿线。
-    // sync 建立派生索引但不承诺重排来源容器；测试显式对齐加载器的时间顺序。
-    std::stable_sort(model.m_timings.begin(),
-                     model.m_timings.end(),
-                     [](const auto& lhs, const auto& rhs) {
-                         return lhs.m_timestamp < rhs.m_timestamp;
-                     });
-    model.sync();
-    std::ofstream output(expectedPath);
-    // 预期文档也写入构建目录，继续复用现有完整分区比较器和失败日志。
-    output << data.dump();
-    return output.good();
+    // 新策略下这两份同 BPM 夹具完全不变；未知夹具必须另给独立期望。
+    return false;
 }
 
 /// @brief 执行指定 Malody 谱面的格式与逻辑往返验证。

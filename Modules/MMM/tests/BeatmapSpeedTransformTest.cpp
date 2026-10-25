@@ -528,27 +528,24 @@ bool runMalodyDelayRoundTrip(const std::filesystem::path& outputRoot)
             savedJson = nlohmann::json::parse(outputFile, nullptr, false);
         }
     }
-    // 新规则补零点参考红绿线，原首红线的 150ms 已吸收到 3/5 拍的位置中。
-    // 仍检查所有 delay 为数值，后续独立负 delay 保持精确缩放后的 -40ms。
+    // 倍速后参考与首 BPM 仍相同，不能额外插入初始化红绿线或吸收原 delay。
+    // 两条 delay 保持数值形态，精确保存缩放后的 150ms 和 -40ms。
     ok &= check(
         !savedJson.is_discarded() && savedJson.contains("time") &&
-            savedJson["time"].size() == 3 &&
+            savedJson["time"].size() == 2 &&
             savedJson["time"][0]["delay"].is_number() &&
             savedJson["time"][1]["delay"].is_number() &&
-            savedJson["time"][2]["delay"].is_number() &&
-            savedJson["time"][1]["beat"] ==
-                nlohmann::json::array({ 0, 3, 5 }) &&
-            isNearlyEqual(savedJson["time"][1]["delay"].get<double>(), 0.0) &&
-            isNearlyEqual(savedJson["time"][2]["delay"].get<double>(), -40.0),
+            savedJson["time"][0]["beat"] ==
+                nlohmann::json::array({ 0, 0, 1 }) &&
+            isNearlyEqual(savedJson["time"][0]["delay"].get<double>(), 150.0) &&
+            isNearlyEqual(savedJson["time"][1]["delay"].get<double>(), -40.0),
         "Malody delay remains numeric in exported mc");
 
-    // 最后一层重新加载生成物，验证 delay 参与绝对 Timing 锚点的方式未漂移。
+    // 同 BPM 无初始化，仍按真实重载的绝对时间验证正、负延迟均未漂移。
     MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(outputPath);
-    // 额外初始化红绿线位于零点，原两个 BPM 的绝对时间仍是 150/1110ms。
-    // 数量包含初始化事件，不能为适配新协议而删掉原有的精确时间断言。
-    ok &= check(reloaded.m_timings.size() == 4 &&
-                    isNearlyEqual(reloaded.m_timings[2].m_timestamp, 150.0) &&
-                    isNearlyEqual(reloaded.m_timings[3].m_timestamp, 1110.0),
+    ok &= check(reloaded.m_timings.size() == 2 &&
+                    isNearlyEqual(reloaded.m_timings[0].m_timestamp, 150.0) &&
+                    isNearlyEqual(reloaded.m_timings[1].m_timestamp, 1110.0),
                 "scaled Malody timing anchors survive mc round trip");
     // 返回所有内存、写出与重载阶段的累计结果。
     return ok;

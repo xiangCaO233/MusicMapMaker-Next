@@ -1372,23 +1372,15 @@ inline bool buildMalodyMapDocument(const BeatMap& beatMap, json& fileData,
         noteArr.push_back(serializeToMalody(*note));
     }
 
-    // 用户首红线的同刻 Scroll 决定零点是否必须腾出一拍；不能把新增回卷
-    // 锚点误认成用户已有红线，从而把它后面的自定义滚速覆盖为一倍。
+    // 传入源时间与内容锚点；回卷和参考拍前置先于最终拍轴规范化决策。
     const double firstSourceTime =
         bpmTimings.empty() ? 0.0 : bpmTimings.front()->m_timestamp;
-    const bool userScrollAtFirst = std::any_of(
-        beatMap.m_timings.begin(),
-        beatMap.m_timings.end(),
-        [&](const Timing& timing) {
-            return timing.m_timingEffect == TimingEffect::SCROLL &&
-                   std::abs(timing.m_timestamp - firstSourceTime) <= 1.0e-6;
-        });
     return Internal::normalizeMalodyInitialTiming(
         fileData,
         beatMap.m_baseMapMetadata.preference_bpm,
         firstSourceTime,
         prependSyntheticFirstBpm,
-        userScrollAtFirst,
+        firstBpmOriginBeat + static_cast<double>(malodyContentBeatShift),
         pairedMainNode,
         primaryMainNode,
         primaryMainTimestamp,
