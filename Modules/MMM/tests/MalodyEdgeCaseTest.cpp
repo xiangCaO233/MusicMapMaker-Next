@@ -1880,23 +1880,28 @@ void test_timing_delay_and_sample_offset_round_trip_independently()
     json          exported;
     exportedFile >> exported;
 
-    // 初始化红线位于零点，原来的三个延迟红线保持来源顺序。
-    TEST_ASSERT(exported["time"].size() == 4 &&
-                    exported["time"][0]["beat"] == json::array({ 0, 0, 1 }) &&
-                    exported["time"][1]["beat"] == json::array({ 0, 1, 5 }) &&
-                    exported["time"][1].value("delay", 0.0) == 0.0 &&
-                    exported["time"][2]["beat"] == json::array({ 4, 1, 5 }) &&
-                    exported["time"][2].value("delay", 0.0) == 200.0 &&
-                    exported["time"][3]["beat"] == json::array({ 4, 1, 5 }) &&
-                    exported["time"][3].value("delay", 0.0) == 50.0,
-                "initial reference anchor must preserve later timing delays");
+    // 三个 timing 的 beat 与 delay 分开断言，保持同拍来源顺序。
+    TEST_ASSERT(exported["time"].size() == 3,
+                "export should keep three BPM timings");
+    TEST_ASSERT(exported["time"][0]["beat"] == json::array({ 0, 0, 1 }),
+                "first delayed timing should convert back to beat 0");
+    TEST_ASSERT(exported["time"][0].value("delay", 0.0) == 100.0,
+                "first timing delay should survive export");
+    TEST_ASSERT(exported["time"][1]["beat"] == json::array({ 4, 0, 1 }),
+                "delayed timing timestamp should convert back to beat 4");
+    TEST_ASSERT(exported["time"][1].value("delay", 0.0) == 200.0,
+                "timing delay should survive export");
+    TEST_ASSERT(exported["time"][2]["beat"] == json::array({ 4, 0, 1 }),
+                "same-beat timing should convert back to beat 4");
+    TEST_ASSERT(exported["time"][2].value("delay", 0.0) == 50.0,
+                "same-beat timing delay should survive export");
 
     // 自动采样的 beat 回到 5，而 -75 仍留在节点 offset。
     const auto exportedSample = std::find_if(
         exported["note"].begin(), exported["note"].end(), isSoundNode);
     TEST_ASSERT(exportedSample != exported["note"].end(),
                 "export should keep the automatic sample");
-    TEST_ASSERT((*exportedSample)["beat"] == json::array({ 5, 1, 5 }),
+    TEST_ASSERT((*exportedSample)["beat"] == json::array({ 5, 0, 1 }),
                 "sample anchor should convert back to beat 5");
     TEST_ASSERT(exportedSample->value("offset", 0) == -75,
                 "sample offset should survive export independently");
@@ -1904,13 +1909,13 @@ void test_timing_delay_and_sample_offset_round_trip_independently()
     // 规范输出再次加载后，绝对时间应与首次加载完全一致。
     MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(exportPath);
     reloaded.sync();
-    TEST_ASSERT(reloaded.m_timings.size() == 5,
+    TEST_ASSERT(reloaded.m_timings.size() == 3,
                 "round trip should keep three timings");
-    TEST_ASSERT(std::abs(reloaded.m_timings[2].m_timestamp - 100.0) < 1e-6,
+    TEST_ASSERT(std::abs(reloaded.m_timings[0].m_timestamp - 100.0) < 1e-6,
                 "round trip should keep the unpaired first timing");
-    TEST_ASSERT(std::abs(reloaded.m_timings[3].m_timestamp - 2300.0) < 1e-6,
+    TEST_ASSERT(std::abs(reloaded.m_timings[1].m_timestamp - 2300.0) < 1e-6,
                 "round trip should keep delayed timing timestamp");
-    TEST_ASSERT(std::abs(reloaded.m_timings[4].m_timestamp - 2350.0) < 1e-6,
+    TEST_ASSERT(std::abs(reloaded.m_timings[2].m_timestamp - 2350.0) < 1e-6,
                 "round trip should keep same-beat timing order");
     TEST_ASSERT(reloaded.m_noteData.notes.size() == 2,
                 "round trip should keep both playable notes");
@@ -1954,7 +1959,7 @@ void test_non_malody_lead_in_exports_timing_origin_and_audio_compensation()
 {
     XINFO("=== Test: Non-Malody lead-in exports paired note phase ===");
 
-    // 237ms 位于首拍前半段，不回卷；仅补参考零点，不移动原红线。
+    // 120 BPM 下 237ms 位于前半拍，回卷后的非负 delay 为 500-237=263ms。
     constexpr double LEAD_IN_MS = 237.0;
     for ( const int mode : { 0, 7 } ) {
         // 同一绝对模型分别经过 Key 与 Slide 保存分支。
@@ -1980,13 +1985,13 @@ void test_non_malody_lead_in_exports_timing_origin_and_audio_compensation()
         json          exported;
         outputFile >> exported;
 
-        // 新增参考红线位于零点，原红线保留 237ms。
-        TEST_ASSERT(exported["time"].size() == 2,
-                    "lead-in export must keep original red and reference zero");
+        // 首 timing 保持 beat 0，其 delay 使用一拍内的非负回卷值。
+        TEST_ASSERT(exported["time"].size() == 1,
+                    "lead-in export should keep one timing");
         TEST_ASSERT(exported["time"][0]["beat"] == json::array({ 0, 0, 1 }),
                     "paired first timing should remain at beat zero");
         TEST_ASSERT(
-            std::abs(exported["time"][0].value("delay", 0.0) - 0.0) < 1e-6,
+            std::abs(exported["time"][0].value("delay", 0.0) - 263.0) < 1e-6,
             "first timing should wrap the main-audio phase");
 
         // helper 的主音频应成为与首 timing 成对的 beat 0 SOUND。
@@ -1997,24 +2002,25 @@ void test_non_malody_lead_in_exports_timing_origin_and_audio_compensation()
         TEST_ASSERT((*sampleIt)["beat"] == json::array({ 0, 0, 1 }),
                     "main sample should move back one beat");
         TEST_ASSERT(
-            sampleIt->value("offset", -1) == 0,
+            sampleIt->value("offset", -1) == 263,
             "first-half-beat red line should pair main offset with delay");
 
-        // 玩家对象与原红线共用拍位，零点参考段不改变二者绝对时间。
+        // 普通玩家对象需要前移一个导出拍，才能与回卷后的时间原点对齐。
         const auto noteIt =
             std::find_if(exported["note"].begin(),
                          exported["note"].end(),
                          [](const json& node) { return !isSoundNode(node); });
         TEST_ASSERT(noteIt != exported["note"].end(),
                     "lead-in export should keep the playable note");
-        TEST_ASSERT((*noteIt)["beat"] == exported["time"][1]["beat"],
-                    "playable note must remain aligned with original red");
+        TEST_ASSERT((*noteIt)["beat"] == json::array({ 1, 0, 1 }),
+                    "positive paired phase should move playable note one "
+                    "Malody beat forward");
 
         // 重载同时验证 timing、玩家 Note 和主音频有效播放时刻。
         MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(outputPath);
         reloaded.sync();
-        TEST_ASSERT(reloaded.m_timings.size() == 3 &&
-                        std::abs(reloaded.m_timings.back().m_timestamp -
+        TEST_ASSERT(reloaded.m_timings.size() == 1 &&
+                        std::abs(reloaded.m_timings.front().m_timestamp -
                                  LEAD_IN_MS) < 1e-6,
                     "round trip should keep the first timing timestamp");
         TEST_ASSERT(reloaded.m_noteData.notes.size() == 1 &&
@@ -2072,9 +2078,9 @@ void test_late_first_timing_keeps_paired_main_offset()
     MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(outputPath);
     reloaded.sync();
     TEST_ASSERT(
-        reloaded.m_timings.size() == 3 &&
+        reloaded.m_timings.size() == 2 &&
             std::abs(reloaded.m_timings[0].m_timestamp - 149.5) < 1e-6 &&
-            std::abs(reloaded.m_timings[2].m_timestamp - 2649.5) < 1e-6 &&
+            std::abs(reloaded.m_timings[1].m_timestamp - 2649.5) < 1e-6 &&
             reloaded.m_audioSamples.size() == 1 &&
             reloaded.m_audioSamples.front().effectiveTimestamp() == 0.0,
         "paired offset should preserve the red lines and audio origin");
@@ -2175,9 +2181,9 @@ void test_late_first_timing_prepends_anchor_and_shifts_all_content()
                 static_cast<std::int64_t>(std::llround(EXPECTED_DELAY_MS)) &&
             withinPlayable != withinExported["note"].end() &&
             (*withinPlayable)["beat"] == json::array({ 2, 0, 1 }) &&
-            withinExported["effect"].size() == 3 &&
-            withinExported["effect"][1]["beat"] == json::array({ 1, 0, 1 }) &&
-            withinExported["effect"][2]["beat"] == json::array({ 2, 0, 1 }),
+            withinExported["effect"].size() == 2 &&
+            withinExported["effect"][0]["beat"] == json::array({ 1, 0, 1 }) &&
+            withinExported["effect"][1]["beat"] == json::array({ 2, 0, 1 }),
         "phase after half a beat should prepend an anchor without moving the "
         "original BPM away from its aligned scroll");
 
@@ -2188,7 +2194,7 @@ void test_late_first_timing_prepends_anchor_and_shifts_all_content()
         withinReloaded.m_noteData.notes.size() == 1 &&
             std::abs(withinReloaded.m_noteData.notes.front().m_timestamp -
                      (PHASE_MS + BEAT_LENGTH_MS)) < 1e-6 &&
-            withinReloaded.m_timings.size() == 5 &&
+            withinReloaded.m_timings.size() == 4 &&
             std::any_of(
                 withinReloaded.m_timings.begin(),
                 withinReloaded.m_timings.end(),
@@ -2245,7 +2251,7 @@ void test_late_first_timing_prepends_anchor_and_shifts_all_content()
     std::ifstream outputFile(outputPath);
     json          exported;
     outputFile >> exported;
-    // 三条输出红线依次为回卷锚点、原首红线和后续 BPM。
+    // 三条输出红线依次为合成锚点、原首红线和后续 BPM。
     TEST_ASSERT(
         exported["time"].size() == 3 &&
             exported["time"][0]["beat"] == json::array({ 0, 0, 1 }) &&
@@ -2276,8 +2282,8 @@ void test_late_first_timing_prepends_anchor_and_shifts_all_content()
     TEST_ASSERT(
         playable != exported["note"].end() &&
             (*playable)["beat"] == json::array({ 5, 0, 1 }) &&
-            exported["effect"].size() == 2 &&
-            exported["effect"][1]["beat"] == json::array({ 5, 0, 1 }),
+            exported["effect"].size() == 1 &&
+            exported["effect"][0]["beat"] == json::array({ 5, 0, 1 }),
         "phase after half a beat must shift notes and effects together");
 
     // 按效果种类和绝对时间查找，避免合成 timing 改变容器顺序后误判。
@@ -2383,243 +2389,698 @@ void test_osu_source_bpm_does_not_inject_scroll_reset()
  */
 void test_first_timing_delay_unwraps_with_its_bpm()
 {
+    // 旧 delay 与 SOUND offset 的配对逆变换仍须保持，不能由新参考段掩盖错误。
+    // 不同参考 BPM 的分段拍距和补静音另由 MalodyInitialTimingTest 独立验证。
+    XINFO("=== Test: First timing delay unwraps with first BPM ===");
+
+    // 首 BPM 决定回卷模数，不能错误使用 meta.song.bpm 的旧缓存。
     constexpr double BPM              = 210.0;
     constexpr double WRAPPED_DELAY_MS = 237.032272;
     constexpr double BEAT_LENGTH_MS   = 60000.0 / BPM;
     constexpr double EXPECTED_TIME_MS = BEAT_LENGTH_MS - WRAPPED_DELAY_MS;
-    const auto       root             = std::filesystem::temp_directory_path();
-    const auto       sourcePath = root / "edge_wrapped_first_timing_source.mc";
-    json             source{
-        { "meta",
-          { { "mode", 7 },
-            { "mode_ext", { { "bar_begin", 0 } } },
-            { "song", { { "file", "music.ogg" }, { "bpm", BPM } } } } },
-        { "time",
-          json::array({ { { "beat", json::array({ 0, 0, 1 }) },
-                          { "bpm", BPM },
-                          { "delay", WRAPPED_DELAY_MS } } }) },
-        { "note",
-          json::array({ { { "beat", json::array({ 1, 0, 1 }) },
-                          { "x", 31 },
-                          { "w", 60 } },
-                        { { "beat", json::array({ 0, 0, 1 }) },
-                          { "type", 1 },
-                          { "sound", "music.ogg" },
-                          { "offset", 237 } } }) }
-    };
-    /// @brief 写入历史夹具；每个来源单独落盘以覆盖真实加载入口。
-    const auto writeSource = [&](const json& data) {
-        std::ofstream stream(sourcePath);
-        stream << data.dump();
-        return stream.good();
-    };
-    TEST_ASSERT(writeSource(source), "historical paired source should write");
-    auto loaded = MMM::BeatMap::loadFromFile(sourcePath);
-    loaded.sync();
-    TEST_ASSERT(loaded.m_timings.size() == 1 &&
-                    std::abs(loaded.m_timings.front().m_timestamp -
-                             EXPECTED_TIME_MS) < 1e-6 &&
-                    loaded.m_noteData.notes.size() == 1 &&
-                    std::abs(loaded.m_noteData.notes.front().m_timestamp -
-                             EXPECTED_TIME_MS) < 1e-6 &&
-                    loaded.m_audioSamples.size() == 1 &&
-                    loaded.m_audioSamples.front().m_timestamp == 0 &&
-                    loaded.m_audioSamples.front().m_offsetMs == 0,
-                "historical delay must unwrap with first BPM and normalize "
-                "only paired Main");
 
-    /// @brief 按绝对模型检查新输出，不依赖新增初始化事件改变后的数组索引。
-    /// @param map 来源模型，只读比较；保存不得修改来源时序。
-    /// @param tag 隔离输出文件名。
-    /// @return 原有事件和自动采样在导出重载后仍保持各自时间时为真。
-    const auto roundTrip = [&](MMM::BeatMap&      map,
-                               const std::string& tag,
-                               bool               canonicalMain = false) {
-        map.sync();
-        const auto path = root / ("edge_phase_" + tag + ".mc");
-        if ( !map.saveToFile(path) ) return false;
-        auto reloaded = MMM::BeatMap::loadFromFile(path);
-        reloaded.sync();
-        // 初始化允许增加红绿线，但原 timing 的类型、参数和时间均不得消失。
-        for ( const auto& timing : map.m_timings ) {
-            if ( !std::any_of(reloaded.m_timings.begin(),
-                              reloaded.m_timings.end(),
-                              [&](const MMM::Timing& candidate) {
-                                  return candidate.m_timingEffect ==
-                                             timing.m_timingEffect &&
-                                         std::abs(
-                                             candidate.m_timingEffectParameter -
-                                             timing.m_timingEffectParameter) <
-                                             1e-6 &&
-                                         std::abs(candidate.m_timestamp -
-                                                  timing.m_timestamp) < 1e-6;
-                              }) )
-                return false;
-        }
-        if ( map.m_noteData.notes.size() != reloaded.m_noteData.notes.size() ||
-             map.m_noteData.holds.size() != reloaded.m_noteData.holds.size() ||
-             map.m_audioSamples.size() != reloaded.m_audioSamples.size() )
-            return false;
-        // 按轨道找物件，排序变化不应掩盖 Note 或 Hold 时间漂移。
-        for ( const auto& note : map.m_noteData.notes ) {
-            if ( !std::any_of(reloaded.m_noteData.notes.begin(),
-                              reloaded.m_noteData.notes.end(),
-                              [&](const MMM::Note& candidate) {
-                                  return candidate.m_track == note.m_track &&
-                                         std::abs(candidate.m_timestamp -
-                                                  note.m_timestamp) < .2;
-                              }) )
-                return false;
-        }
-        for ( const auto& hold : map.m_noteData.holds ) {
-            if ( !std::any_of(reloaded.m_noteData.holds.begin(),
-                              reloaded.m_noteData.holds.end(),
-                              [&](const MMM::Hold& candidate) {
-                                  return candidate.m_track == hold.m_track &&
-                                         std::abs(candidate.m_timestamp -
-                                                  hold.m_timestamp) < .2 &&
-                                         std::abs(candidate.m_duration -
-                                                  hold.m_duration) < .2;
-                              }) )
-                return false;
-        }
-        // 主音频与普通音效各自比较有效播放时刻，不把独立 offset 当成全局偏移。
-        for ( const auto& sample : map.m_audioSamples ) {
-            if ( !std::any_of(
-                     reloaded.m_audioSamples.begin(),
-                     reloaded.m_audioSamples.end(),
-                     [&](const MMM::AudioSampleEvent& candidate) {
-                         return candidate.m_audioResourceId ==
-                                    sample.m_audioResourceId &&
-                                std::abs(candidate.effectiveTimestamp() -
-                                         (canonicalMain &&
-                                                  sample.m_audioResourceId ==
-                                                      "music.ogg"
-                                              ? 0
-                                              : sample.effectiveTimestamp())) <
-                                    .51;
-                     }) )
-                return false;
-        }
-        return true;
-    };
+    const fs::path sourcePath = std::filesystem::temp_directory_path() /
+                                "edge_wrapped_first_timing_source.mc";
+    const fs::path exportPath = std::filesystem::temp_directory_path() /
+                                "edge_wrapped_first_timing_export.mc";
+
+    // 基础历史输入采用 Slide 模式，并显式保存配对 timing 与同名主 SOUND。
+    json fileData;
+    fileData["meta"] = { { "id", 0 },
+                         { "creator", "Test" },
+                         { "version", "Wrapped" },
+                         { "mode", 7 },
+                         { "mode_ext", { { "bar_begin", 0 } } },
+                         { "song",
+                           { { "title", "Wrapped" },
+                             { "artist", "Test" },
+                             { "file", "music.ogg" },
+                             { "bpm", BPM } } } };
+    // delay 位于后半拍，加载后“一拍减 delay”得到前半拍红线正相位。
+    fileData["time"] = json::array({ { { "beat", json::array({ 0, 0, 1 }) },
+                                       { "bpm", BPM },
+                                       { "delay", WRAPPED_DELAY_MS } } });
+    // 玩家 Note 已前移到 beat 1；主 SOUND 在 beat 0 保存近似整数 offset。
+    fileData["note"] = json::array(
+        { { { "beat", json::array({ 1, 0, 1 }) }, { "x", 31 }, { "w", 60 } },
+          { { "beat", json::array({ 0, 0, 1 }) },
+            { "type", 1 },
+            { "sound", "music.ogg" },
+            { "offset", 237 } } });
+
+    std::ofstream source(sourcePath);
+    TEST_ASSERT(source.good(), "should open wrapped timing input");
+    source << fileData.dump();
+    source.close();
+
+    // 基础加载验证配对识别：timing 解相位，主 SOUND 归一到时间零。
+    MMM::BeatMap loaded = MMM::BeatMap::loadFromFile(sourcePath);
+    loaded.sync();
+    TEST_ASSERT(loaded.m_timings.size() == 1,
+                "wrapped timing map should keep its first timing");
+    TEST_ASSERT(std::abs(loaded.m_timings.front().m_timestamp -
+                         EXPECTED_TIME_MS) < 1e-6,
+                "237.032ms at 210 BPM should unwrap to about 48.682ms");
+    // 玩家 Note 的导出拍位移应在加载时抵消，回到 timing 的绝对时间。
+    TEST_ASSERT(loaded.m_noteData.notes.size() == 1 &&
+                    std::abs(loaded.m_noteData.notes.front().m_timestamp -
+                             EXPECTED_TIME_MS) < 1e-6,
+                "shifted playable beat should use the unwrapped timing anchor");
+    // 主音频内部锚点和 offset 都归零，effectiveTimestamp 仍接近零。
     TEST_ASSERT(
-        roundTrip(loaded, "base"),
-        "paired input must retain absolute time after reference prefix");
-    // 较小 delay 在后半拍触发旧回卷，较大 delay 则要先取非负模数。
-    for ( const double delay : { 100.0, 1083.54 } ) {
-        auto data                = source;
-        data["time"][0]["delay"] = delay;
-        data["note"][1]["offset"] =
-            static_cast<std::int64_t>(std::llround(delay));
-        TEST_ASSERT(writeSource(data), "modulo source should write");
-        auto         map      = MMM::BeatMap::loadFromFile(sourcePath);
-        const double expected = std::fmod(
-            BEAT_LENGTH_MS - std::fmod(delay, BEAT_LENGTH_MS), BEAT_LENGTH_MS);
+        loaded.m_audioSamples.size() == 1 &&
+            std::abs(loaded.m_audioSamples.front().m_timestamp - 0.0) < 1e-6,
+        "paired main sample should normalize its anchor to time zero");
+    TEST_ASSERT(loaded.m_audioSamples.front().m_offsetMs == 0,
+                "paired main sample should normalize its offset to zero");
+    TEST_ASSERT(
+        std::abs(loaded.m_audioSamples.front().effectiveTimestamp()) < 0.51,
+        "paired main sample should still play at time zero");
+
+    // 规范模型回写时重新构造等价配对字段，不直接复制输入 JSON。
+    TEST_ASSERT(loaded.saveToFile(exportPath),
+                "wrapped timing map should export");
+    std::ifstream exportedFile(exportPath);
+    json          exported;
+    exportedFile >> exported;
+    TEST_ASSERT(exported["time"][0]["beat"] == json::array({ 0, 0, 1 }),
+                "wrapped first timing should keep beat zero");
+    TEST_ASSERT(std::abs(exported["time"][0].value("delay", 0.0) -
+                         WRAPPED_DELAY_MS) < 1e-6,
+                "wrapped first timing should keep its non-negative delay");
+    // 红线相位位于前半拍，主 SOUND 仍须以整数 offset 抵消 delay。
+    const auto exportedSample = std::find_if(
+        exported["note"].begin(), exported["note"].end(), isSoundNode);
+    TEST_ASSERT(exportedSample != exported["note"].end(),
+                "wrapped map should keep its main sample");
+    TEST_ASSERT((*exportedSample)["beat"] == json::array({ 0, 0, 1 }) &&
+                    exportedSample->value("offset", -1) == 237,
+                "first-half-beat wrapped main sample should pair offset");
+    // 玩家 Note 再次前移到 beat 1，与正相位 timing 保持绝对时间一致。
+    const auto exportedPlayable = std::find_if(
+        exported["note"].begin(), exported["note"].end(), [](const json& node) {
+            return !isSoundNode(node);
+        });
+    TEST_ASSERT(exportedPlayable != exported["note"].end() &&
+                    (*exportedPlayable)["beat"] == json::array({ 1, 0, 1 }),
+                "wrapped playable note should retain its one-beat phase shift");
+
+    // 子场景一：较小 100ms 配对 delay，验证规则不只针对 237ms 特例。
+    json positiveOffsetData                = fileData;
+    positiveOffsetData["time"][0]["delay"] = 100.0;
+    auto& positiveSample                   = positiveOffsetData["note"][1];
+    positiveSample["offset"]               = 100;
+    const fs::path positivePath =
+        std::filesystem::temp_directory_path() / "edge_positive_main_offset.mc";
+    const fs::path positiveExportPath = std::filesystem::temp_directory_path() /
+                                        "edge_positive_main_offset_export.mc";
+    std::ofstream  positiveFile(positivePath);
+    TEST_ASSERT(positiveFile.good(), "should open positive offset input");
+    positiveFile << positiveOffsetData.dump();
+    positiveFile.close();
+
+    // 小 delay 同样按一拍取模，但规范主音频不重复保存内部 offset。
+    MMM::BeatMap positiveLoaded = MMM::BeatMap::loadFromFile(positivePath);
+    positiveLoaded.sync();
+    constexpr double EXPECTED_SMALL_DELAY_TIME_MS = BEAT_LENGTH_MS - 100.0;
+    TEST_ASSERT(positiveLoaded.m_timings.size() == 1 &&
+                    std::abs(positiveLoaded.m_timings.front().m_timestamp -
+                             EXPECTED_SMALL_DELAY_TIME_MS) < 1e-6,
+                "small paired delay should use the same modulo phase rule");
+    TEST_ASSERT(
+        positiveLoaded.m_audioSamples.size() == 1 &&
+            std::abs(positiveLoaded.m_audioSamples.front().m_timestamp) <
+                1e-6 &&
+            positiveLoaded.m_audioSamples.front().m_offsetMs == 0,
+        "paired small delay should normalize the main sample to time zero");
+    TEST_ASSERT(positiveLoaded.saveToFile(positiveExportPath),
+                "paired small delay map should export");
+    std::ifstream positiveExportFile(positiveExportPath);
+    json          positiveExported;
+    positiveExportFile >> positiveExported;
+    // 100ms delay 对应后半拍红线，回写时主 SOUND 复用负相位补偿。
+    const auto positiveExportedSample =
+        std::find_if(positiveExported["note"].begin(),
+                     positiveExported["note"].end(),
+                     isSoundNode);
+    TEST_ASSERT(std::abs(positiveExported["time"][0].value("delay", 0.0) -
+                         100.0) < 1e-6 &&
+                    positiveExportedSample != positiveExported["note"].end() &&
+                    positiveExportedSample->value("offset", -1) == 100,
+                "small delay should pair with the normalized negative phase");
+
+    // 子场景二：delay 超过三拍，必须使用非负 Euclidean modulo 而非直接截断。
+    constexpr double LARGE_DELAY_BPM     = 212.0;
+    constexpr double LARGE_DELAY_BEAT_MS = 60000.0 / LARGE_DELAY_BPM;
+    constexpr double LARGE_DELAY_MS      = 1083.54;
+    constexpr double LARGE_DELAY_PHASE_MS =
+        4.0 * LARGE_DELAY_BEAT_MS - LARGE_DELAY_MS;
+    json largeDelayData                   = fileData;
+    largeDelayData["meta"]["song"]["bpm"] = LARGE_DELAY_BPM;
+    largeDelayData["time"][0]["bpm"]      = LARGE_DELAY_BPM;
+    largeDelayData["time"][0]["delay"]    = LARGE_DELAY_MS;
+    largeDelayData["note"][1]["offset"]   = 1084;
+    const fs::path largeDelayPath = std::filesystem::temp_directory_path() /
+                                    "edge_large_paired_main_offset.mc";
+    const fs::path largeDelayExportPath =
+        std::filesystem::temp_directory_path() /
+        "edge_large_paired_main_offset_export.mc";
+    std::ofstream largeDelayFile(largeDelayPath);
+    TEST_ASSERT(largeDelayFile.good(), "should open large paired delay input");
+    largeDelayFile << largeDelayData.dump();
+    largeDelayFile.close();
+
+    // 加载后的 timing 只保留余数对应相位，主 SOUND 仍归一到时间零。
+    MMM::BeatMap largeDelayLoaded = MMM::BeatMap::loadFromFile(largeDelayPath);
+    largeDelayLoaded.sync();
+    TEST_ASSERT(
+        largeDelayLoaded.m_timings.size() == 1 &&
+            std::abs(largeDelayLoaded.m_timings.front().m_timestamp -
+                     LARGE_DELAY_PHASE_MS) < 1e-6,
+        "paired delay larger than one beat should use Euclidean modulo");
+    TEST_ASSERT(
+        largeDelayLoaded.m_audioSamples.size() == 1 &&
+            std::abs(largeDelayLoaded.m_audioSamples.front().m_timestamp) <
+                1e-6 &&
+            largeDelayLoaded.m_audioSamples.front().m_offsetMs == 0,
+        "large paired delay should normalize the main sample to time zero");
+    TEST_ASSERT(largeDelayLoaded.saveToFile(largeDelayExportPath),
+                "large paired delay map should export");
+    std::ifstream largeDelayExportFile(largeDelayExportPath);
+    json          largeDelayExported;
+    largeDelayExportFile >> largeDelayExported;
+    // 规范回写只输出一拍内余数，防止历史多拍 delay 持续累积。
+    const auto largeDelayExportedSample =
+        std::find_if(largeDelayExported["note"].begin(),
+                     largeDelayExported["note"].end(),
+                     isSoundNode);
+    TEST_ASSERT(
+        std::abs(largeDelayExported["time"][0].value("delay", 0.0) -
+                 std::fmod(LARGE_DELAY_MS, LARGE_DELAY_BEAT_MS)) < 1e-6 &&
+            largeDelayExportedSample != largeDelayExported["note"].end() &&
+            largeDelayExportedSample->value("offset", -1) ==
+                static_cast<std::int64_t>(std::llround(
+                    std::fmod(LARGE_DELAY_MS, LARGE_DELAY_BEAT_MS))),
+        "large wrapped delay should pair main offset with its first-beat "
+        "delay");
+
+    // 子场景三：主 SOUND offset 与 timing delay 不同，不满足配对条件。
+    json  unmatchedOffsetData    = fileData;
+    auto& unmatchedSample        = unmatchedOffsetData["note"][1];
+    unmatchedSample["offset"]    = 200;
+    const fs::path unmatchedPath = std::filesystem::temp_directory_path() /
+                                   "edge_unmatched_main_offset.mc";
+    std::ofstream  unmatchedFile(unmatchedPath);
+    TEST_ASSERT(unmatchedFile.good(), "should open unmatched offset input");
+    unmatchedFile << unmatchedOffsetData.dump();
+    unmatchedFile.close();
+
+    // 未配对 offset 必须原样保留，不能因为资源名相同就被清零。
+    MMM::BeatMap unmatchedLoaded = MMM::BeatMap::loadFromFile(unmatchedPath);
+    unmatchedLoaded.sync();
+    TEST_ASSERT(unmatchedLoaded.m_audioSamples.size() == 1 &&
+                    unmatchedLoaded.m_audioSamples.front().m_offsetMs == 200,
+                "offset not paired with first delay must remain positive");
+
+    // 子场景四：offset 数值相同但资源不是 song.file，仍属于普通效果音。
+    json effectOffsetData                = fileData;
+    effectOffsetData["note"][1]["sound"] = "effect.ogg";
+    const fs::path effectOffsetPath = std::filesystem::temp_directory_path() /
+                                      "edge_effect_wrapped_offset.mc";
+    std::ofstream  effectOffsetFile(effectOffsetPath);
+    TEST_ASSERT(effectOffsetFile.good(), "should open effect offset input");
+    effectOffsetFile << effectOffsetData.dump();
+    effectOffsetFile.close();
+
+    // 非主音频永远不参与首拍配对，237ms 继续作为逐采样偏移。
+    MMM::BeatMap effectOffsetLoaded =
+        MMM::BeatMap::loadFromFile(effectOffsetPath);
+    effectOffsetLoaded.sync();
+    TEST_ASSERT(effectOffsetLoaded.m_audioSamples.size() == 1 &&
+                    effectOffsetLoaded.m_audioSamples.front().m_offsetMs == 237,
+                "non-main sample offset must never trigger paired wrapping");
+
+    // 基础规范输出再重载，确认配对相位不会在多次保存后漂移。
+    MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(exportPath);
+    reloaded.sync();
+    TEST_ASSERT(reloaded.m_timings.size() == 1 &&
+                    std::abs(reloaded.m_timings.front().m_timestamp -
+                             EXPECTED_TIME_MS) < 1e-6,
+                "wrapped delay should remain stable after round trip");
+    TEST_ASSERT(
+        reloaded.m_audioSamples.size() == 1 &&
+            std::abs(reloaded.m_audioSamples.front().m_timestamp) < 1e-6 &&
+            reloaded.m_audioSamples.front().m_offsetMs == 0 &&
+            std::abs(reloaded.m_audioSamples.front().effectiveTimestamp()) <
+                0.51,
+        "wrapped main sample should remain normalized at time zero");
+
+    // 子场景五：只移动 timing 0.4ms，当前模型时间必须覆盖导入时的 phase 缓存。
+    constexpr double SUB_MILLISECOND_EDIT_MS = 0.4;
+    MMM::BeatMap     timingMoved = MMM::BeatMap::loadFromFile(sourcePath);
+    timingMoved.m_timings.front().m_timestamp += SUB_MILLISECOND_EDIT_MS;
+    timingMoved.sync();
+    const fs::path timingMovedPath =
+        std::filesystem::temp_directory_path() / "edge_wrapped_timing_moved.mc";
+    TEST_ASSERT(timingMoved.saveToFile(timingMovedPath),
+                "sub-millisecond timing edit should export");
+    std::ifstream timingMovedFile(timingMovedPath);
+    json          timingMovedJson;
+    timingMovedFile >> timingMovedJson;
+    // timing 后移会令等价 delay 减少相同数值，证明保存器重新计算相位。
+    TEST_ASSERT(std::abs(timingMovedJson["time"][0].value("delay", 0.0) -
+                         (WRAPPED_DELAY_MS - SUB_MILLISECOND_EDIT_MS)) < 1e-6,
+                "sub-millisecond timing edit must replace the imported phase");
+    MMM::BeatMap timingMovedReloaded =
+        MMM::BeatMap::loadFromFile(timingMovedPath);
+    timingMovedReloaded.sync();
+    TEST_ASSERT(std::abs(timingMovedReloaded.m_timings.front().m_timestamp -
+                         (EXPECTED_TIME_MS + SUB_MILLISECOND_EDIT_MS)) < 1e-6,
+                "sub-millisecond timing edit should survive round trip");
+
+    // 子场景六：原红线前后移动整拍后，合成锚点与原红线都应保留。
+    for ( const int wholeBeatDelta : { -1, 1 } ) {
+        MMM::BeatMap wholeBeatMoved = MMM::BeatMap::loadFromFile(sourcePath);
+        wholeBeatMoved.m_timings.front().m_timestamp +=
+            static_cast<double>(wholeBeatDelta) * BEAT_LENGTH_MS;
+        wholeBeatMoved.sync();
+        const fs::path wholeBeatMovedPath =
+            std::filesystem::temp_directory_path() /
+            (std::string("edge_wrapped_timing_whole_beat_") +
+             (wholeBeatDelta < 0 ? "back.mc" : "forward.mc"));
+        TEST_ASSERT(wholeBeatMoved.saveToFile(wholeBeatMovedPath),
+                    "whole-beat timing edit should export");
+        std::ifstream wholeBeatMovedFile(wholeBeatMovedPath);
+        json          wholeBeatMovedJson;
+        wholeBeatMovedFile >> wholeBeatMovedJson;
+        // 主 SOUND 继续绑定首拍合成锚点，原 timing 独立写在移动后的拍号。
+        const auto wholeBeatMovedSample =
+            std::find_if(wholeBeatMovedJson["note"].begin(),
+                         wholeBeatMovedJson["note"].end(),
+                         isSoundNode);
+        const json expectedOriginalBeat =
+            json::array({ wholeBeatDelta < 0 ? 0 : 2, 0, 1 });
         TEST_ASSERT(
-            map.m_timings.size() == 1 &&
-                std::abs(map.m_timings.front().m_timestamp - expected) < 1e-6 &&
-                map.m_audioSamples.front().m_offsetMs == 0 &&
-                roundTrip(map, "modulo_" + std::to_string(delay)),
-            "paired delay must use Euclidean modulo and preserve round-trip "
-            "timing");
+            wholeBeatMovedJson["time"].size() == 2 &&
+                wholeBeatMovedJson["time"][0]["beat"] ==
+                    json::array({ 0, 0, 1 }) &&
+                std::abs(wholeBeatMovedJson["time"][0].value("delay", 0.0) -
+                         WRAPPED_DELAY_MS) < 1e-6 &&
+                wholeBeatMovedJson["time"][1]["beat"] == expectedOriginalBeat &&
+                !wholeBeatMovedJson["time"][1].contains("delay") &&
+                wholeBeatMovedSample != wholeBeatMovedJson["note"].end() &&
+                (*wholeBeatMovedSample)["beat"] == json::array({ 0, 0, 1 }),
+            "out-of-range first timing should keep a first-beat anchor and its "
+            "original red line");
+        MMM::BeatMap wholeBeatMovedReloaded =
+            MMM::BeatMap::loadFromFile(wholeBeatMovedPath);
+        wholeBeatMovedReloaded.sync();
+        // 重载按绝对时间查找移动后的原红线，不依赖合成锚点排序。
+        const double expectedOriginalTime =
+            EXPECTED_TIME_MS +
+            static_cast<double>(wholeBeatDelta) * BEAT_LENGTH_MS;
+        TEST_ASSERT(
+            wholeBeatMovedReloaded.m_timings.size() == 2 &&
+                std::any_of(wholeBeatMovedReloaded.m_timings.begin(),
+                            wholeBeatMovedReloaded.m_timings.end(),
+                            [&](const MMM::Timing& timing) {
+                                return std::abs(timing.m_timestamp -
+                                                expectedOriginalTime) < 1e-6;
+                            }),
+            "whole-beat timing edit and synthetic anchor should round trip");
     }
-    // 相同文件名但 offset 不匹配，或 offset 相同但文件非 Main，均不得配对。
-    for ( const bool wrongResource : { false, true } ) {
-        auto data                 = source;
-        data["note"][1]["offset"] = wrongResource ? 237 : 200;
-        if ( wrongResource ) data["note"][1]["sound"] = "effect.ogg";
-        TEST_ASSERT(writeSource(data), "unpaired source should write");
-        auto map = MMM::BeatMap::loadFromFile(sourcePath);
-        TEST_ASSERT(map.m_audioSamples.size() == 1 &&
-                        map.m_audioSamples.front().m_offsetMs ==
-                            (wrongResource ? 237 : 200),
-                    "unpaired offset must remain independent of first timing");
-    }
-    TEST_ASSERT(writeSource(source), "base source should restore");
-    // 首 timing 的小数编辑和整拍编辑都必须覆盖导入时缓存的 beat/delay。
-    for ( const double delta : { .4, -BEAT_LENGTH_MS, BEAT_LENGTH_MS } ) {
-        auto map = MMM::BeatMap::loadFromFile(sourcePath);
-        map.m_timings.front().m_timestamp += delta;
-        TEST_ASSERT(roundTrip(map, "timing_edit_" + std::to_string(delta)),
-                    "timing edits must replace imported phase metadata");
-    }
-    // Main 离开零点之后按普通 SOUND 处理，不可继续复用配对 offset。
-    for ( const double timestamp : { .4, 20.0 } ) {
-        auto map = MMM::BeatMap::loadFromFile(sourcePath);
-        map.m_audioSamples.front().m_timestamp = timestamp;
-        TEST_ASSERT(roundTrip(map, "main_edit_" + std::to_string(timestamp)),
-                    "nonzero Main must preserve ordinary sample timing");
-    }
-    // 历史内部 anchor+负 offset 形态的误差来自整数毫秒 SOUND offset。
-    auto legacy = MMM::BeatMap::loadFromFile(sourcePath);
-    legacy.m_audioSamples.front().m_timestamp = EXPECTED_TIME_MS;
-    legacy.m_audioSamples.front().m_offsetMs =
+
+    // 子场景七：移动主音频锚点 0.4ms 后，它不再代表严格的时间零配对 SOUND。
+    MMM::BeatMap mainMoved = MMM::BeatMap::loadFromFile(sourcePath);
+    mainMoved.m_audioSamples.front().m_timestamp = SUB_MILLISECOND_EDIT_MS;
+    mainMoved.sync();
+    const fs::path mainMovedPath =
+        std::filesystem::temp_directory_path() / "edge_wrapped_main_moved.mc";
+    TEST_ASSERT(mainMoved.saveToFile(mainMovedPath),
+                "sub-millisecond main-audio edit should export");
+    std::ifstream mainMovedFile(mainMovedPath);
+    json          mainMovedJson;
+    mainMovedFile >> mainMovedJson;
+    // 普通采样时序应从新 timestamp 量化，不能继续输出旧 237ms 配对 offset。
+    const auto mainMovedSample = std::find_if(mainMovedJson["note"].begin(),
+                                              mainMovedJson["note"].end(),
+                                              isSoundNode);
+    TEST_ASSERT(
+        std::abs(mainMovedJson["time"][0].value("delay", 0.0) -
+                 EXPECTED_TIME_MS) < 1e-6 &&
+            mainMovedSample != mainMovedJson["note"].end() &&
+            mainMovedSample->value("offset", 0) == 0,
+        "moved main audio must use ordinary sample timing instead of pairing");
+    MMM::BeatMap mainMovedReloaded = MMM::BeatMap::loadFromFile(mainMovedPath);
+    mainMovedReloaded.sync();
+    TEST_ASSERT(
+        std::abs(mainMovedReloaded.m_audioSamples.front().effectiveTimestamp() -
+                 SUB_MILLISECOND_EDIT_MS) < 0.2,
+        "sub-millisecond main-audio edit should survive beat quantization");
+
+    // 子场景八：构造历史 anchor+负 offset 的内部形态，验证规范化输出兼容。
+    MMM::BeatMap legacyShape = MMM::BeatMap::loadFromFile(sourcePath);
+    legacyShape.m_audioSamples.front().m_timestamp = EXPECTED_TIME_MS;
+    legacyShape.m_audioSamples.front().m_offsetMs =
         static_cast<std::int64_t>(std::llround(237.0 - BEAT_LENGTH_MS));
-    TEST_ASSERT(roundTrip(legacy, "legacy"),
-                "legacy Main shape must preserve effective playback");
-    // 历史 anchor+负 offset 在整拍移动后仍表示配对 Main，重载规范化到零点。
-    // 原红线则必须保留移动后的绝对时间，不能被初始化锚点替代。
-    for ( const double delta : { -BEAT_LENGTH_MS, BEAT_LENGTH_MS } ) {
-        auto map = MMM::BeatMap::loadFromFile(sourcePath);
-        map.m_timings.front().m_timestamp += delta;
-        map.m_audioSamples.front().m_timestamp =
-            map.m_timings.front().m_timestamp;
-        map.m_audioSamples.front().m_offsetMs =
-            static_cast<std::int64_t>(std::llround(237.0 - BEAT_LENGTH_MS));
-        TEST_ASSERT(
-            roundTrip(map, "legacy_whole_" + std::to_string(delta), true),
-            "legacy whole-beat shapes must retain red line and canonical Main");
-    }
-    // 历史近零点形态会按旧协议规范化到正相位，继续检查其红线与 Note 对齐。
-    // 这与普通模型负时间的保留规则不同，不能用整谱统一平移掩盖加载兼容性。
-    auto nearZero = MMM::BeatMap::loadFromFile(sourcePath);
-    nearZero.m_timings.front().m_timestamp = -.1;
-    nearZero.m_timings.front()
+    legacyShape.sync();
+    const fs::path legacyShapePath = std::filesystem::temp_directory_path() /
+                                     "edge_legacy_wrapped_main_shape.mc";
+    TEST_ASSERT(legacyShape.saveToFile(legacyShapePath),
+                "legacy wrapped main-audio shape should export");
+    std::ifstream legacyShapeFile(legacyShapePath);
+    json          legacyShapeJson;
+    legacyShapeFile >> legacyShapeJson;
+    // 历史形态仍应按当前首红线半拍位置收敛为 beat 0 规范表示。
+    const auto legacyShapeSample = std::find_if(legacyShapeJson["note"].begin(),
+                                                legacyShapeJson["note"].end(),
+                                                isSoundNode);
+    TEST_ASSERT(std::abs(legacyShapeJson["time"][0].value("delay", 0.0) -
+                         WRAPPED_DELAY_MS) < 1e-6 &&
+                    legacyShapeSample != legacyShapeJson["note"].end() &&
+                    legacyShapeSample->value("offset", -1) == 237,
+                "legacy anchor-plus-offset shape should export canonically");
+
+    // 子场景九：原 timing 略早于零，覆盖回卷相位的数值边界。
+    constexpr double LEGACY_ZERO_BOUNDARY_MS = -0.1;
+    const double     legacyNearBeatDelayMs =
+        BEAT_LENGTH_MS + LEGACY_ZERO_BOUNDARY_MS;
+    MMM::BeatMap legacyZeroBoundary = MMM::BeatMap::loadFromFile(sourcePath);
+    legacyZeroBoundary.m_timings.front().m_timestamp = LEGACY_ZERO_BOUNDARY_MS;
+    legacyZeroBoundary.m_timings.front()
         .m_metadata
         .timing_properties[MMM::TimingMetadataType::MALODY]["delay"] =
-        json(BEAT_LENGTH_MS - .1).dump();
-    nearZero.m_audioSamples.front().m_timestamp   = -.1;
-    nearZero.m_noteData.notes.front().m_timestamp = -.1;
-    nearZero.sync();
-    const auto nearZeroPath = root / "edge_legacy_wrapped_zero_boundary.mc";
-    TEST_ASSERT(nearZero.saveToFile(nearZeroPath),
-                "legacy near-zero shape must export");
-    auto canonical = MMM::BeatMap::loadFromFile(nearZeroPath);
-    TEST_ASSERT(canonical.m_timings.size() == 3 &&
-                    canonical.m_noteData.notes.size() == 1 &&
-                    canonical.m_timings.front().m_timestamp > 0 &&
-                    std::abs(canonical.m_noteData.notes.front().m_timestamp -
-                             canonical.m_timings.front().m_timestamp) < 1e-6,
-                "legacy near-zero shape must align Note, original red and "
-                "synthetic anchor");
-    // 两种模式都覆盖不同参考 BPM、显式 Scroll、普通音效和长条两端。
-    for ( const int mode : { 0, 7 } ) {
-        auto map                             = makeMinimalBeatMap(mode, 4);
-        map.m_baseMapMetadata.preference_bpm = 123.0;
-        auto& timing                         = map.m_timings.front();
-        timing.m_timestamp                   = EXPECTED_TIME_MS;
-        timing.m_bpm = timing.m_timingEffectParameter = BPM;
-        timing.m_beat_length                          = BEAT_LENGTH_MS;
-        auto scroll                                   = timing;
-        scroll.m_timingEffect          = MMM::TimingEffect::SCROLL;
-        scroll.m_timingEffectParameter = scroll.m_beat_length = 1.25;
-        map.m_timings.push_back(scroll);
-        auto& note               = map.m_noteData.notes.emplace_back();
-        note.m_type              = MMM::NoteType::NOTE;
-        note.m_timestamp         = EXPECTED_TIME_MS;
-        auto& hold               = map.m_noteData.holds.emplace_back();
-        hold.m_type              = MMM::NoteType::HOLD;
-        hold.m_track             = 1;
-        hold.m_timestamp         = EXPECTED_TIME_MS + BEAT_LENGTH_MS;
-        hold.m_duration          = BEAT_LENGTH_MS;
-        auto& sample             = map.m_audioSamples.emplace_back();
-        sample.m_timestamp       = EXPECTED_TIME_MS;
-        sample.m_audioResourceId = "effect.ogg";
-        sample.m_track           = 5;
-        TEST_ASSERT(roundTrip(map, "generated_" + std::to_string(mode)),
-                    "generated Key and Slide must preserve complete timeline");
+        json(legacyNearBeatDelayMs).dump();
+    legacyZeroBoundary.m_audioSamples.front().m_timestamp =
+        LEGACY_ZERO_BOUNDARY_MS;
+    legacyZeroBoundary.m_audioSamples.front().m_offsetMs = 0;
+    legacyZeroBoundary.m_noteData.notes.front().m_timestamp =
+        LEGACY_ZERO_BOUNDARY_MS;
+    legacyZeroBoundary.sync();
+    const fs::path legacyZeroBoundaryPath =
+        std::filesystem::temp_directory_path() /
+        "edge_legacy_wrapped_zero_boundary.mc";
+    TEST_ASSERT(legacyZeroBoundary.saveToFile(legacyZeroBoundaryPath),
+                "legacy near-zero wrapped shape should export");
+    std::ifstream legacyZeroBoundaryFile(legacyZeroBoundaryPath);
+    json          legacyZeroBoundaryJson;
+    legacyZeroBoundaryFile >> legacyZeroBoundaryJson;
+    // 玩家 Note 的导出 beat 必须使用规范化后的 timing 位置进行相位偏移。
+    const auto legacyZeroBoundaryPlayable =
+        std::find_if(legacyZeroBoundaryJson["note"].begin(),
+                     legacyZeroBoundaryJson["note"].end(),
+                     [](const json& node) { return !isSoundNode(node); });
+    TEST_ASSERT(
+        legacyZeroBoundaryPlayable != legacyZeroBoundaryJson["note"].end() &&
+            (*legacyZeroBoundaryPlayable)["beat"] == json::array({ 1, 0, 1 }),
+        "legacy near-zero phase should use the exported timing position when "
+        "shifting note-array beats");
+    // 重载后合成锚点、原 timing 与 Note 保持对齐，不能出现负零附近漂移。
+    MMM::BeatMap legacyZeroBoundaryReloaded =
+        MMM::BeatMap::loadFromFile(legacyZeroBoundaryPath);
+    legacyZeroBoundaryReloaded.sync();
+    TEST_ASSERT(
+        legacyZeroBoundaryReloaded.m_timings.size() == 2 &&
+            legacyZeroBoundaryReloaded.m_noteData.notes.size() == 1 &&
+            legacyZeroBoundaryReloaded.m_timings.front().m_timestamp > 0.0 &&
+            std::abs(legacyZeroBoundaryReloaded.m_noteData.notes.front()
+                         .m_timestamp -
+                     legacyZeroBoundaryReloaded.m_timings.front().m_timestamp) <
+                1e-6,
+        "legacy near-zero phase must keep note, original timing, and synthetic "
+        "anchor aligned after canonicalization");
+
+    // 子场景十：历史内部形态整体前后移动一拍，仍需保留原红线。
+    for ( const int wholeBeatDelta : { -1, 1 } ) {
+        MMM::BeatMap legacyWholeBeat = MMM::BeatMap::loadFromFile(sourcePath);
+        legacyWholeBeat.m_timings.front().m_timestamp =
+            EXPECTED_TIME_MS +
+            static_cast<double>(wholeBeatDelta) * BEAT_LENGTH_MS;
+        legacyWholeBeat.m_audioSamples.front().m_timestamp =
+            legacyWholeBeat.m_timings.front().m_timestamp;
+        legacyWholeBeat.m_audioSamples.front().m_offsetMs =
+            static_cast<std::int64_t>(std::llround(237.0 - BEAT_LENGTH_MS));
+        legacyWholeBeat.sync();
+        const fs::path legacyWholeBeatPath =
+            std::filesystem::temp_directory_path() /
+            (std::string("edge_legacy_wrapped_main_whole_beat_") +
+             (wholeBeatDelta < 0 ? "back.mc" : "forward.mc"));
+        TEST_ASSERT(legacyWholeBeat.saveToFile(legacyWholeBeatPath),
+                    "legacy whole-beat wrapped shape should export");
+        std::ifstream legacyWholeBeatFile(legacyWholeBeatPath);
+        json          legacyWholeBeatJson;
+        legacyWholeBeatFile >> legacyWholeBeatJson;
+        const auto legacyWholeBeatSample =
+            std::find_if(legacyWholeBeatJson["note"].begin(),
+                         legacyWholeBeatJson["note"].end(),
+                         isSoundNode);
+        // 原红线根据移动方向落在 beat 0 或 2，合成锚点始终位于 beat 0。
+        const json expectedOriginalBeat =
+            json::array({ wholeBeatDelta < 0 ? 0 : 2, 0, 1 });
+        TEST_ASSERT(
+            legacyWholeBeatJson["time"].size() == 2 &&
+                legacyWholeBeatJson["time"][0]["beat"] ==
+                    json::array({ 0, 0, 1 }) &&
+                std::abs(legacyWholeBeatJson["time"][0].value("delay", 0.0) -
+                         WRAPPED_DELAY_MS) < 1e-6 &&
+                legacyWholeBeatJson["time"][1]["beat"] ==
+                    expectedOriginalBeat &&
+                legacyWholeBeatSample != legacyWholeBeatJson["note"].end() &&
+                (*legacyWholeBeatSample)["beat"] == json::array({ 0, 0, 1 }) &&
+                legacyWholeBeatSample->value("offset", -1) == 237,
+            "legacy wrapped shape should retain the original red line after "
+            "the synthetic anchor");
+        MMM::BeatMap legacyWholeBeatReloaded =
+            MMM::BeatMap::loadFromFile(legacyWholeBeatPath);
+        legacyWholeBeatReloaded.sync();
+        // 绝对时间检查保证两个 beat 0 节点也不会在加载时错误去重。
+        const double expectedLegacyOriginalTime =
+            legacyWholeBeat.m_timings.front().m_timestamp;
+        TEST_ASSERT(
+            legacyWholeBeatReloaded.m_timings.size() == 2 &&
+                std::any_of(legacyWholeBeatReloaded.m_timings.begin(),
+                            legacyWholeBeatReloaded.m_timings.end(),
+                            [&](const MMM::Timing& timing) {
+                                return std::abs(timing.m_timestamp -
+                                                expectedLegacyOriginalTime) <
+                                       1e-6;
+                            }) &&
+                legacyWholeBeatReloaded.m_audioSamples.size() == 1 &&
+                std::abs(legacyWholeBeatReloaded.m_audioSamples.front()
+                             .m_timestamp) < 1e-6 &&
+                legacyWholeBeatReloaded.m_audioSamples.front().m_offsetMs == 0,
+            "legacy whole-beat shape and synthetic anchor should reload");
     }
+
+    // 子场景十一：从统一模型生成 Key/Slide，覆盖无来源 metadata 的完整内容。
+    for ( const int mode : { 0, 7 } ) {
+        auto generated = makeMinimalBeatMap(mode, 4);
+        // 此组只检查配对包装；不同参考 BPM 的前导规则由独立矩阵覆盖。
+        generated.m_baseMapMetadata.preference_bpm = BPM;
+        auto& firstTiming                   = generated.m_timings.front();
+        firstTiming.m_timestamp             = EXPECTED_TIME_MS;
+        firstTiming.m_bpm                   = BPM;
+        firstTiming.m_beat_length           = BEAT_LENGTH_MS;
+        firstTiming.m_timingEffectParameter = BPM;
+        generated.m_baseMapMetadata.song_file_hint         = "music.ogg";
+        generated.m_audioSamples.front().m_audioResourceId = "music.ogg";
+        generated.m_audioSamples.front().m_timestamp       = 0.0;
+        generated.m_audioSamples.front().m_offsetMs        = 0;
+
+        // 同时刻 SCROLL 用于验证 effect[] 接受与 note[] 相同的正相位补偿。
+        MMM::Timing& scroll            = generated.m_timings.emplace_back();
+        scroll.m_timestamp             = EXPECTED_TIME_MS;
+        scroll.m_bpm                   = BPM;
+        scroll.m_timingEffect          = MMM::TimingEffect::SCROLL;
+        scroll.m_timingEffectParameter = 1.25;
+        scroll.m_beat_length           = 1.25;
+
+        // 普通 Note 位于首 timing，导出后应前移一拍、重载后恢复原时间。
+        MMM::Note& note  = generated.m_noteData.notes.emplace_back();
+        note.m_type      = MMM::NoteType::NOTE;
+        note.m_timestamp = EXPECTED_TIME_MS;
+        note.m_track     = 0;
+
+        // Hold 跨一拍，分别覆盖 Key endbeat 与 Slide 相对 seg。
+        MMM::Hold& hold  = generated.m_noteData.holds.emplace_back();
+        hold.m_type      = MMM::NoteType::HOLD;
+        hold.m_timestamp = EXPECTED_TIME_MS + BEAT_LENGTH_MS;
+        hold.m_duration  = BEAT_LENGTH_MS;
+        hold.m_track     = 1;
+
+        // 第二条普通采样不与主音频配对，但也要接受 note[] 的拍号相位位移。
+        MMM::AudioSampleEvent& ordinarySample =
+            generated.m_audioSamples.emplace_back();
+        ordinarySample.m_timestamp       = EXPECTED_TIME_MS;
+        ordinarySample.m_track           = 5;
+        ordinarySample.m_audioResourceId = "effect.ogg";
+        generated.sync();
+
+        const fs::path generatedPath =
+            std::filesystem::temp_directory_path() /
+            (std::string("edge_generated_wrapped_first_timing_") +
+             (mode == 0 ? "key.mc" : "slide.mc"));
+        TEST_ASSERT(generated.saveToFile(generatedPath),
+                    "generated wrapped timing map should export");
+
+        std::ifstream generatedFile(generatedPath);
+        json          generatedJson;
+        generatedFile >> generatedJson;
+        TEST_ASSERT(
+            generatedJson["time"][0]["beat"] == json::array({ 0, 0, 1 }),
+            "paired first timing should export at beat zero");
+        TEST_ASSERT(
+            std::abs(generatedJson["time"][0].value("delay", 0.0) -
+                     WRAPPED_DELAY_MS) < 1e-6,
+            "paired first timing should export its wrapped phase delay");
+        // 先定位主 SOUND，确认前半拍红线也会补偿 timing delay。
+        const auto generatedSample = std::find_if(generatedJson["note"].begin(),
+                                                  generatedJson["note"].end(),
+                                                  isSoundNode);
+        TEST_ASSERT(
+            generatedSample != generatedJson["note"].end() &&
+                (*generatedSample)["beat"] == json::array({ 0, 0, 1 }) &&
+                generatedSample->value("offset", -1) == 237,
+            "first-half-beat main SOUND should pair its offset");
+        // 普通 Note 的绝对时间依靠正相位拍号补偿保持。
+        const auto generatedPlayable =
+            std::find_if(generatedJson["note"].begin(),
+                         generatedJson["note"].end(),
+                         [](const json& node) { return !isSoundNode(node); });
+        TEST_ASSERT(
+            generatedPlayable != generatedJson["note"].end() &&
+                (*generatedPlayable)["beat"] == json::array({ 1, 0, 1 }),
+            "positive paired phase should shift generated playable note");
+        // 按模式字段定位 Hold，避免 Key 与 Slide 共用错误的持续时间表示。
+        const auto generatedHold =
+            std::find_if(generatedJson["note"].begin(),
+                         generatedJson["note"].end(),
+                         [&](const json& node) {
+                             return !isSoundNode(node) &&
+                                    (mode == 0 ? node.contains("endbeat")
+                                               : node.contains("seg"));
+                         });
+        TEST_ASSERT(generatedHold != generatedJson["note"].end() &&
+                        (*generatedHold)["beat"] == json::array({ 2, 0, 1 }),
+                    "positive paired phase should shift Hold root beat");
+        // Key 结束拍是绝对值；Slide seg 拍号则相对折线根，不接受全局偏移。
+        if ( mode == 0 ) {
+            TEST_ASSERT(
+                (*generatedHold)["endbeat"] == json::array({ 3, 0, 1 }),
+                "Key Hold endbeat should receive the same absolute shift");
+        } else {
+            TEST_ASSERT(
+                (*generatedHold)["seg"].size() == 1 &&
+                    (*generatedHold)["seg"][0]["beat"] ==
+                        json::array({ 1, 0, 1 }),
+                "Slide Hold relative segment beat should remain unchanged");
+        }
+        // 普通自动采样与 effect 一样前移导出拍，但不共享主 SOUND offset。
+        const auto generatedOrdinarySample = std::find_if(
+            generatedJson["note"].begin(),
+            generatedJson["note"].end(),
+            [](const json& node) {
+                return isSoundNode(node) &&
+                       node.value("sound", std::string{}) == "effect.ogg";
+            });
+        TEST_ASSERT(
+            generatedOrdinarySample != generatedJson["note"].end() &&
+                (*generatedOrdinarySample)["beat"] == json::array({ 1, 0, 1 }),
+            "ordinary automatic sample should receive the note-array phase "
+            "shift");
+        TEST_ASSERT(
+            !generatedJson["effect"].empty() &&
+                generatedJson["effect"][0]["beat"] == json::array({ 1, 0, 1 }),
+            "effect at the paired first timing should share the phase shift");
+
+        // 重载后所有导出相位补偿都应抵消，恢复统一模型的绝对时间。
+        MMM::BeatMap generatedReloaded =
+            MMM::BeatMap::loadFromFile(generatedPath);
+        generatedReloaded.sync();
+        TEST_ASSERT(generatedReloaded.m_timings.size() == 2,
+                    "generated wrapped map should keep BPM and effect");
+        TEST_ASSERT(
+            std::abs(generatedReloaded.m_timings[0].m_timestamp -
+                     EXPECTED_TIME_MS) < 1e-6 &&
+                std::abs(generatedReloaded.m_timings[1].m_timestamp -
+                         EXPECTED_TIME_MS) < 1e-6,
+            "generated BPM and effect should round trip at the paired phase");
+        TEST_ASSERT(std::abs(generatedReloaded.m_timings[1].m_bpm - BPM) < 1e-6,
+                    "effect before a positive first beat should use first BPM");
+        TEST_ASSERT(
+            generatedReloaded.m_noteData.notes.size() == 1 &&
+                std::abs(
+                    generatedReloaded.m_noteData.notes.front().m_timestamp -
+                    EXPECTED_TIME_MS) < 1e-6,
+            "generated playable note should remove the phase shift on import");
+        TEST_ASSERT(
+            generatedReloaded.m_noteData.holds.size() == 1 &&
+                std::abs(
+                    generatedReloaded.m_noteData.holds.front().m_timestamp -
+                    (EXPECTED_TIME_MS + BEAT_LENGTH_MS)) < 1e-6 &&
+                std::abs(generatedReloaded.m_noteData.holds.front().m_duration -
+                         BEAT_LENGTH_MS) < 1e-6,
+            "generated Hold absolute beats should round trip");
+        TEST_ASSERT(
+            generatedReloaded.m_audioSamples.size() == 2,
+            "generated samples should keep main and ordinary automatic audio");
+        // 按资源 ID 区分主音频和普通采样，避免依赖自动采样数组顺序。
+        const auto generatedReloadedMain =
+            std::find_if(generatedReloaded.m_audioSamples.begin(),
+                         generatedReloaded.m_audioSamples.end(),
+                         [](const MMM::AudioSampleEvent& sample) {
+                             return sample.m_audioResourceId == "music.ogg";
+                         });
+        const auto generatedReloadedOrdinary =
+            std::find_if(generatedReloaded.m_audioSamples.begin(),
+                         generatedReloaded.m_audioSamples.end(),
+                         [](const MMM::AudioSampleEvent& sample) {
+                             return sample.m_audioResourceId == "effect.ogg";
+                         });
+        TEST_ASSERT(
+            generatedReloadedMain != generatedReloaded.m_audioSamples.end() &&
+                std::abs(generatedReloadedMain->m_timestamp) < 1e-6 &&
+                generatedReloadedMain->m_offsetMs == 0 &&
+                generatedReloadedOrdinary !=
+                    generatedReloaded.m_audioSamples.end() &&
+                std::abs(generatedReloadedOrdinary->m_timestamp -
+                         EXPECTED_TIME_MS) < 1e-6,
+            "automatic samples should remove the note-array phase shift on "
+            "import");
+    }
+
+    // 子场景十二：主资源名相同但采样锚点为 20ms，不满足时间零配对条件。
+    auto displacedMain = makeMinimalBeatMap(7, 4);
+    // 此子场景仅验证非零 Main 的配对门禁，参考值与首红线保持一致。
+    displacedMain.m_baseMapMetadata.preference_bpm = BPM;
+    auto& displacedTiming                   = displacedMain.m_timings.front();
+    displacedTiming.m_timestamp             = EXPECTED_TIME_MS;
+    displacedTiming.m_bpm                   = BPM;
+    displacedTiming.m_beat_length           = BEAT_LENGTH_MS;
+    displacedTiming.m_timingEffectParameter = BPM;
+    displacedMain.m_baseMapMetadata.song_file_hint         = "music.ogg";
+    displacedMain.m_audioSamples.front().m_audioResourceId = "music.ogg";
+    displacedMain.m_audioSamples.front().m_timestamp       = 20.0;
+    displacedMain.sync();
+
+    const fs::path displacedPath = std::filesystem::temp_directory_path() /
+                                   "edge_displaced_main_sample.mc";
+    TEST_ASSERT(displacedMain.saveToFile(displacedPath),
+                "non-zero main sample should export");
+    std::ifstream displacedFile(displacedPath);
+    json          displacedJson;
+    displacedFile >> displacedJson;
+    // timing 使用普通相位，采样不得错误恢复为 237ms 配对 offset。
+    const auto displacedSample = std::find_if(displacedJson["note"].begin(),
+                                              displacedJson["note"].end(),
+                                              isSoundNode);
+    TEST_ASSERT(std::abs(displacedJson["time"][0].value("delay", 0.0) -
+                         EXPECTED_TIME_MS) < 1e-6 &&
+                    displacedSample != displacedJson["note"].end() &&
+                    displacedSample->value("offset", 0) != 237,
+                "main sample away from time zero must not use paired wrapping");
+
+    XINFO("PASS: First timing delay unwraps with first BPM");
 }
 
 /**
@@ -2637,13 +3098,17 @@ void test_first_timing_delay_unwraps_with_its_bpm()
  */
 void test_malody_note_phase_shift_boundaries()
 {
+    // 该组锁定原有 MC 包装协议，四个边界均保留独立的数值期望。
+    // 只有首红线与参考 BPM 不同时才进入新前导规则，不能改变同 BPM 的协议。
+    // Key 的绝对尾拍和 Slide 的相对 seg 在下游分别验证。
+    // 主音频从零点播放，用户物件和原红线的绝对相位必须维持不变。
     XINFO("=== Test: Playable note phase shift boundaries ===");
 
     // 每项同时给出 BPM、导出拍号、首 delay 和主 SOUND offset 四个预期。
     struct TestCase {
         double       bpm;
         double       firstTimingMs;
-        double       expectedBeat;
+        int          expectedBeat;
         double       expectedDelayMs;
         std::int64_t expectedMainOffsetMs;
         const char*  tag;
@@ -2652,14 +3117,16 @@ void test_malody_note_phase_shift_boundaries()
     const std::array<TestCase, 4> cases{ {
         { 120.0, -100.0, 0, 100.0, 100, "negative_timing" },
         { 120.0, 500.0, 1, 0.0, 0, "zero_phase" },
-        { 60.0, 1400.0, 1.8, 0.0, 0, "low_bpm_before_half" },
-        { 60.0, 1600.0, 2.2, 0.0, 0, "low_bpm_after_half" },
+        { 60.0, 1400.0, 2, 600.0, 600, "low_bpm_before_half" },
+        { 60.0, 1600.0, 2, 400.0, 400, "low_bpm_after_half" },
     } };
 
     for ( const auto& testCase : cases ) {
         for ( const int mode : { 0, 7 } ) {
             // 两种模式复用完全相同的 timing、主音频和玩家绝对时间。
-            auto  beatMap                       = makeMinimalBeatMap(mode, 4);
+            auto beatMap = makeMinimalBeatMap(mode, 4);
+            // 该回归验证原包装相位；保持参考 BPM 相同以免触发新的前导段策略。
+            beatMap.m_baseMapMetadata.preference_bpm = testCase.bpm;
             auto& firstTiming                   = beatMap.m_timings.front();
             firstTiming.m_timestamp             = testCase.firstTimingMs;
             firstTiming.m_bpm                   = testCase.bpm;
@@ -2694,10 +3161,8 @@ void test_malody_note_phase_shift_boundaries()
             // 玩家 beat 与首 timing 的 delay/SOUND offset 必须作为一组匹配。
             TEST_ASSERT(
                 exportedPlayable != exported["note"].end() &&
-                    std::abs((*exportedPlayable)["beat"][0].get<double>() +
-                             (*exportedPlayable)["beat"][1].get<double>() /
-                                 (*exportedPlayable)["beat"][2].get<double>() -
-                             testCase.expectedBeat) < 1e-6,
+                    (*exportedPlayable)["beat"] ==
+                        json::array({ testCase.expectedBeat, 0, 1 }),
                 "phase boundary should preserve the playable absolute time");
             TEST_ASSERT(
                 !exported["time"].empty() &&
@@ -2745,6 +3210,9 @@ void test_malody_note_phase_shift_boundaries()
  */
 void test_paired_first_delay_round_trips_variable_bpm()
 {
+    // 后续 BPM 变换不能被首拍处理重新积分；原有分段 delay 继续独立保留。
+    // 这里保持参考与首 BPM 相同，完整保留第二次编辑往返的历史断言。
+    // 后移后的 Note 和 Scroll 必须与红线使用相同拍轴，不能只保住歌曲起点。
     XINFO("=== Test: Paired first delay round trips variable BPM ===");
 
     // 两种非整数拍长组合用于暴露错误使用单一 BPM 累计所有拍号的问题。
@@ -2815,28 +3283,56 @@ void test_paired_first_delay_round_trips_variable_bpm()
         std::ifstream outputFile(outputPath);
         json          exported;
         outputFile >> exported;
-        // 除原三条 BPM 外，还应保留新参考零点红线。
-        TEST_ASSERT(exported["time"].size() == 4,
+        // SCROLL 不在 time[] 中，因此这里应只有三条 BPM 红线。
+        TEST_ASSERT(exported["time"].size() == 3,
                     "variable BPM export should keep three timings");
-        // 新参考段在零点初始化，原红线以拟合拍位和残余 delay 保留精确相位。
-        TEST_ASSERT(exported["time"][0]["beat"] == json::array({ 0, 0, 1 }) &&
-                        exported["time"][0].value("bpm", 0.0) == FIRST_BPM &&
-                        exported["effect"].size() == 2 &&
-                        exported["effect"][0].value("scroll", 0.0) == 1.0,
-                    "reference zero must initialize BPM and unit scroll");
+        TEST_ASSERT(
+            exported["time"][0]["beat"] == json::array({ 0, 0, 1 }) &&
+                exported["time"][1]["beat"] == json::array({ 101, 0, 1 }) &&
+                exported["time"][2]["beat"] == json::array({ 111, 0, 1 }),
+            "variable BPM timings should share the positive phase shift");
+        // 配对 delay 只出现一次，后续红线不得重复改变拍轴相位。
+        TEST_ASSERT(std::abs(exported["time"][0].value("delay", 0.0) -
+                             WRAPPED_DELAY_MS) < 1e-6,
+                    "only the first timing should carry the paired delay");
+        TEST_ASSERT(
+            (!exported["time"][1].contains("delay") ||
+             std::abs(exported["time"][1].value("delay", 0.0)) < 1e-6) &&
+                (!exported["time"][2].contains("delay") ||
+                 std::abs(exported["time"][2].value("delay", 0.0)) < 1e-6),
+            "later BPM timings should not repeat the paired delay");
+
+        // 首红线位于前半拍时，主 SOUND 也需要抵消回卷 delay。
+        const auto exportedSample = std::find_if(
+            exported["note"].begin(), exported["note"].end(), isSoundNode);
+        TEST_ASSERT(exportedSample != exported["note"].end() &&
+                        (*exportedSample)["beat"] == json::array({ 0, 0, 1 }) &&
+                        exportedSample->value("offset", -1) == 237,
+                    "first-half-beat main SOUND should pair offset");
+        // Note 与 SCROLL 分属不同数组，但导出拍号分别对应 101 与 111。
+        const auto exportedPlayable =
+            std::find_if(exported["note"].begin(),
+                         exported["note"].end(),
+                         [](const json& node) { return !isSoundNode(node); });
+        TEST_ASSERT(
+            exportedPlayable != exported["note"].end() &&
+                (*exportedPlayable)["beat"] == json::array({ 101, 0, 1 }) &&
+                exported["effect"].size() == 1 &&
+                exported["effect"][0]["beat"] == json::array({ 111, 0, 1 }),
+            "all ordinary content should receive the positive phase shift");
 
         // 重载统一模型按绝对时间验证分段 BPM 换算，而不是只比较拍号文本。
         MMM::BeatMap reloaded = MMM::BeatMap::loadFromFile(outputPath);
         reloaded.sync();
         TEST_ASSERT(
-            reloaded.m_timings.size() == 6,
+            reloaded.m_timings.size() == 4,
             "variable BPM round trip should keep BPM and effect timings");
         TEST_ASSERT(
-            std::abs(reloaded.m_timings[2].m_timestamp - FIRST_TIMESTAMP_MS) <
+            std::abs(reloaded.m_timings[0].m_timestamp - FIRST_TIMESTAMP_MS) <
                     1e-6 &&
-                std::abs(reloaded.m_timings[3].m_timestamp -
+                std::abs(reloaded.m_timings[1].m_timestamp -
                          SECOND_TIMESTAMP_MS) < 1e-6 &&
-                std::abs(reloaded.m_timings[4].m_timestamp -
+                std::abs(reloaded.m_timings[2].m_timestamp -
                          THIRD_TIMESTAMP_MS) < 1e-6,
             "variable BPM round trip should preserve every timing timestamp");
         TEST_ASSERT(
@@ -2847,9 +3343,9 @@ void test_paired_first_delay_round_trips_variable_bpm()
 
         // 编辑阶段将除首 timing 外的内容整体后移一个首 BPM 拍长。
         // 这不是原始 beat 的简单复制，保存器必须检测 timestamp 已发生变化。
+        reloaded.m_timings[1].m_timestamp += FIRST_BEAT_MS;
+        reloaded.m_timings[2].m_timestamp += FIRST_BEAT_MS;
         reloaded.m_timings[3].m_timestamp += FIRST_BEAT_MS;
-        reloaded.m_timings[4].m_timestamp += FIRST_BEAT_MS;
-        reloaded.m_timings[5].m_timestamp += FIRST_BEAT_MS;
         reloaded.m_noteData.notes.front().m_timestamp += FIRST_BEAT_MS;
         reloaded.sync();
         const fs::path editedOutputPath =
@@ -2860,27 +3356,41 @@ void test_paired_first_delay_round_trips_variable_bpm()
         std::ifstream editedOutputFile(editedOutputPath);
         json          editedExported;
         editedOutputFile >> editedExported;
-        // 重新导出可能再次建立独立初始化配对，原 BPM 的时间以重载模型验证。
+        // 编辑后红线拍号从 101/111 前移到 102/112，首红线仍维持 beat 0。
         TEST_ASSERT(
-            !editedExported["time"].empty() &&
-                editedExported["time"][0].value("bpm", 0.0) == FIRST_BPM,
-            "edited output must retain reference BPM initialization");
+            editedExported["time"][0]["beat"] == json::array({ 0, 0, 1 }) &&
+                editedExported["time"][1]["beat"] ==
+                    json::array({ 102, 0, 1 }) &&
+                editedExported["time"][2]["beat"] == json::array({ 112, 0, 1 }),
+            "edited timings must replace imported beat metadata");
+        // 玩家 Note 和 SCROLL 也必须使用编辑后的时间，而非各自缓存的导入 beat。
+        const auto editedPlayable =
+            std::find_if(editedExported["note"].begin(),
+                         editedExported["note"].end(),
+                         [](const json& node) { return !isSoundNode(node); });
+        TEST_ASSERT(
+            editedPlayable != editedExported["note"].end() &&
+                (*editedPlayable)["beat"] == json::array({ 102, 0, 1 }) &&
+                editedExported["effect"].size() == 1 &&
+                editedExported["effect"][0]["beat"] ==
+                    json::array({ 112, 0, 1 }),
+            "edited objects must replace imported beat metadata");
 
         // 最终重载确认编辑值经历第二次往返后仍落在新的绝对时间。
         MMM::BeatMap editedReloaded =
             MMM::BeatMap::loadFromFile(editedOutputPath);
         editedReloaded.sync();
         TEST_ASSERT(
-            std::abs(editedReloaded.m_timings[5].m_timestamp -
-                     (SECOND_TIMESTAMP_MS + 2 * FIRST_BEAT_MS)) < 1e-6 &&
-                std::abs(editedReloaded.m_timings[6].m_timestamp -
-                         (THIRD_TIMESTAMP_MS + 2 * FIRST_BEAT_MS)) < 1e-6,
+            std::abs(editedReloaded.m_timings[1].m_timestamp -
+                     (SECOND_TIMESTAMP_MS + FIRST_BEAT_MS)) < 1e-6 &&
+                std::abs(editedReloaded.m_timings[2].m_timestamp -
+                         (THIRD_TIMESTAMP_MS + FIRST_BEAT_MS)) < 1e-6,
             "edited variable BPM timings should round trip at new positions");
         TEST_ASSERT(
-            std::abs(editedReloaded.m_timings[7].m_timestamp -
-                     (THIRD_TIMESTAMP_MS + 2 * FIRST_BEAT_MS)) < 1e-6 &&
+            std::abs(editedReloaded.m_timings[3].m_timestamp -
+                     (THIRD_TIMESTAMP_MS + FIRST_BEAT_MS)) < 1e-6 &&
                 std::abs(editedReloaded.m_noteData.notes.front().m_timestamp -
-                         (SECOND_TIMESTAMP_MS + 2 * FIRST_BEAT_MS)) < 1e-6,
+                         (SECOND_TIMESTAMP_MS + FIRST_BEAT_MS)) < 1e-6,
             "edited effect and playable note should round trip at new "
             "positions");
     }
@@ -3518,6 +4028,10 @@ void testPolylineSubnoteSampleBindingRejected()
  */
 void testMalodyTimelineUsesFixedHighPrecisionFractions()
 {
+    // 普通谱面的高精度输出不应因首拍兼容规则产生额外零点效果。
+    // 相同 BPM 不应插入初始化效果，因此这里直接验证原用户效果的精确分母。
+    // 绝对拍位和相对 seg 都保留独立的数组断言，避免加载器相互抵消精度误差。
+    // 新规则只在参考 BPM 不同时建立前导段，不能降低普通谱面的分拍精度。
     XINFO("=== Test: Malody timeline fixed high precision fractions ===");
     auto             beatMap        = makeMinimalBeatMap(7 /*Slide*/, 4);
     constexpr double BEAT_LENGTH_MS = 500.0;
@@ -3556,8 +4070,8 @@ void testMalodyTimelineUsesFixedHighPrecisionFractions()
 
     // effect[] 直接检查绝对 beat 三元组，不允许近似候选替代。
     TEST_ASSERT(
-        exported.contains("effect") && exported["effect"].size() == 2 &&
-            exported["effect"][1]["beat"] == json::array({ 1, 1919, 1920 }),
+        exported.contains("effect") && exported["effect"].size() == 1 &&
+            exported["effect"][0]["beat"] == json::array({ 1, 1919, 1920 }),
         "timeline effect should preserve 1919/1920");
     // 从 note[] 排除主 SOUND 后定位折线根，再检查首个相对 seg。
     const auto gameNote = std::find_if(
