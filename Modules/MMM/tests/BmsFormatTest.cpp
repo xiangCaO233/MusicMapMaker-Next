@@ -1,3 +1,4 @@
+#include "../src/beatmap/BmsMyO2Grid.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
@@ -8,9 +9,49 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <tuple>
 
 namespace
 {
+/// @brief 独立数值夹具验证 MyO2 中点舍入、跨小节及冲突拒绝。
+/// @return 兼容转换没有丢弃事件且使用确定的建议网格时为 true。
+/// @note 测试直接给定拍位，不借用 writer 反算期望时间。
+bool verifyMyO2Grid()
+{
+    using namespace MMM::Bms;
+    if ( myO2Round(.5) != 0 || myO2Round(1.5) != 2 || myO2Round(2.5) != 2 )
+        return false;
+    // 1 tick 到两种网格同距，原工具建议 48 分，结果归零。
+    ExportRows single{ { { 0, 0x11 }, { { 1.0 / 192, 1 } } } };
+    if ( !quantizeMyO2Rows(single) ||
+         single.begin()->second.front().first != 0 )
+        return false;
+    // 小节尾吸附至下一小节；同拍 BGM 复音必须保留。
+    ExportRows boundary{ { { 0, 1 },
+                           { { 191.0 / 192, 1 }, { 191.0 / 192, 2 } } } };
+    if ( !quantizeMyO2Rows(boundary) || boundary.count({ 1, 1 }) != 1 ||
+         boundary.begin()->second.size() != 2 )
+        return false;
+    // 玩家音符不能以覆盖同槽的方式通过零偏移检查。
+    ExportRows collision{
+        { { 0, 0x11 }, { { .1 / 192, 1 }, { .2 / 192, 2 }, { 1.0 / 192, 3 } } }
+    };
+    if ( quantizeMyO2Rows(collision) ) return false;
+    // 已位于 64 分网格上的位置不应发生移动。
+    ExportRows aligned{ { { 0, 0x11 },
+                          { { 3.0 / 192, 1 }, { 9.0 / 192, 2 } } } };
+    if ( !quantizeMyO2Rows(aligned) ||
+         aligned.begin()->second.front().first != 3.0 / 192 )
+        return false;
+    // 原工具把亚 tick 距离逐次舍入为零，但仍可能显示警告行。
+    // 兼容模式不能因为两列都为零就保留这些原始浮点残差。
+    ExportRows residual{ { { 0, 0x11 }, { { 4.1 / 192, 1 } } } };
+    if ( !quantizeMyO2Rows(residual) ||
+         residual.begin()->second.front().first != 4.0 / 192 )
+        return false;
+    return true;
+}
+
 /// @brief 明确验证导入后的音乐时间，不用 writer 的计算作为期望。
 /// @param map 通过公共格式入口重新载入的独立结果。
 /// @return 物件、资源和 STOP 的数量与绝对时间全部匹配时返回 true。
@@ -173,6 +214,86 @@ bool verifyKeyboardChannels(const std::filesystem::path& root,
 /// @brief 生成独立夹具并验证 BMS、MMM 两条往返路径及失败边界。
 int main(int argc, char** argv)
 {
+    // 批量探针只调用生产读写入口，输出由外部驱动逐份独立检查。
+    // 不生成普通单元测试夹具，避免数千份语料重复覆盖同一目录。
+    // 加载失败必须独立计数，不能把默认空谱保存成功当作覆盖通过。
+    if ( argc == 4 && (std::string_view(argv[1]) == "--export" ||
+                       std::string_view(argv[1]) == "--export-myo2") ) {
+        auto source = MMM::BeatMap::loadFromFile(argv[2]);
+        // 兼容路径与普通路径共享生产导出器，仅显式覆盖本次模式。
+        source.m_metadata
+            .map_properties[MMM::MapMetadataType::BMS]["myo2_grid"] =
+            std::string_view(argv[1]) == "--export-myo2" ? "1" : "0";
+        if ( source.m_baseMapMetadata.map_path.empty() ) return 30;
+        if ( !source.saveToFile(argv[3]) ) return 31;
+        const auto target = MMM::BeatMap::loadFromFile(argv[3]);
+        // 独立核对音符数量，避免兼容转换以丢弃音符换取零偏移。
+        // 原始谱面永远只读；所有检查只作用于派生的导出结果。
+        if ( source.m_noteData.notes.size() != target.m_noteData.notes.size() ||
+             source.m_noteData.holds.size() != target.m_noteData.holds.size() ||
+             source.m_audioSamples.size() != target.m_audioSamples.size() )
+            return 32;
+        // 按类型和轨道排序后比较头尾，排除同刻和弦容器换序。
+        // 兼容模式允许主动移动，普通模式仍坚持亚毫秒时间精度。
+        // 源文件没有被量化，所以它是普通模式时间精度的独立基准。
+        // 不通过重新积分导出 BPM 来制造与 writer 相同的预期结果。
+        // 头尾分别比较，不能只比较持续时长掩盖整体平移。
+        // 使用轨道作为第一排序键，保证跨轨交换不会误判为成功。
+        // 普通 Note 和 Hold 分开调用，防止两种类型数量互相抵消。
+        /// @brief 比较数量已相等的同类型物件集合，返回最大毫秒差。
+        // 一至三键导出会补空转盘；比较时应用已公开的键位映射。
+        // PMS 不补转盘，其余键数也不能套用此偏移。
+        const int laneOffset =
+            source.m_baseMapMetadata.track_count <= 3 &&
+                    std::filesystem::path(argv[3]).extension() != ".pms"
+                ? 1
+                : 0;
+        const auto timingError = [laneOffset](const auto& left,
+                                              const auto& right) {
+            using Entry = std::tuple<int, double, double>;
+            std::vector<Entry> a, b;
+            // 中间记录只保存数值，不复制绑定资源或修改源物件身份。
+            // 排序的是独立测试数组，不依赖加载器的容器排列顺序。
+            /// @brief 提取轨道、起点及终点，作为两侧匹配的规范顺序。
+            const auto collect =
+                [](const auto& objects, auto& entries, int offset) {
+                    for ( const auto& object : objects ) {
+                        double length = 0;
+                        if constexpr ( requires { object.m_duration; } )
+                            length = object.m_duration;
+                        entries.emplace_back(object.m_track + offset,
+                                             object.m_timestamp,
+                                             object.m_timestamp + length);
+                    }
+                    std::sort(entries.begin(), entries.end());
+                };
+            collect(left, a, laneOffset);
+            collect(right, b, 0);
+            // 轨道不一致使用明确的大值失败，不能按时间近似忽略轨道。
+            // 输入数量已经检查，遍历期间不会访问缺失的目标对象。
+            double error = 0;
+            for ( std::size_t i = 0; i < a.size(); ++i ) {
+                if ( std::get<0>(a[i]) != std::get<0>(b[i]) ) return 1e100;
+                error = std::max(
+                    { error,
+                      std::abs(std::get<1>(a[i]) - std::get<1>(b[i])),
+                      std::abs(std::get<2>(a[i]) - std::get<2>(b[i])) });
+            }
+            return error;
+        };
+        const double delta = std::max(
+            timingError(source.m_noteData.notes, target.m_noteData.notes),
+            timingError(source.m_noteData.holds, target.m_noteData.holds));
+        // 旁路报告使批量驱动记录主动吸附幅度，不把零网格偏移等同无损。
+        // 报告跟随导出路径，所有临时数据均落在显式输出目录。
+        // JSON 仅含有限的最大误差，失败行仍会保留进程日志。
+        std::ofstream stats(std::string(argv[3]) + ".json");
+        stats << "{\"max_note_delta_ms\":" << delta << "}";
+        // 阈值与已有单文件现场探针一致，远小于 osu 的整数毫秒量化。
+        // 兼容模式的移动是用户显式选择，记录但不套用普通模式阈值。
+        if ( std::string_view(argv[1]) == "--export" && delta > .25 ) return 33;
+        return 0;
+    }
     // 输出目录由 CTest 传入构建树，测试不会写入只读资源目录。
     // 独立命令运行同样必须明确提供输出位置。
     if ( argc != 2 && argc != 3 ) return 1;
@@ -180,6 +301,7 @@ int main(int argc, char** argv)
     std::error_code             error;
     std::filesystem::create_directories(root, error);
     if ( error ) return 2;
+    if ( !verifyMyO2Grid() ) return 40;
     // 每轮重写生成夹具，不能依赖上一次导出留下的内容。
     // WAV 名称只用于模型绑定验证，不需要音频解码或真实设备。
     const auto source = root / "source.bms";

@@ -95,6 +95,9 @@ struct PackageDialogState {
     /// @brief MCZ 包内谱面统一使用的 Malody 模式。
     MalodyMode selectedMalodyMode{ MalodyMode::Slide };
 
+    /// @brief 仅导出副本按 MyO2 网格吸附，源谱保持原时间。
+    bool bmsMyO2Grid{ false };
+
     /// @brief BMS 首拍对齐始终选中一种策略，点击另一项只切换策略。
     /// @note 不使用可空值或两个布尔值，避免出现全选或全不选。
     BmsPackageAlignmentMode bmsAlignmentMode{

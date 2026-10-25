@@ -1,5 +1,6 @@
 #pragma once
 #include "BmsFormat.hpp"
+#include "BmsMyO2Grid.h"
 #include <array>
 #include <iomanip>
 #include <locale>
@@ -150,7 +151,7 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     std::size_t outputBytes = 0;
     // MyO2 的转换器对同小节同通道只保留最后一行。
     // 因此普通键、长条端点与 BPM 先聚合；01、09 独立行保留复音和停顿叠加。
-    std::map<std::pair<int, int>, std::vector<std::pair<double, int>>> rows;
+    ExportRows rows;
     const auto emit = [&](double ms, int ch, int value) {
         if ( !std::isfinite(ms) || ms < 0 || value <= 0 ) return false;
         // 所有协议位置来自统一 BPM 积分，不能把毫秒直接当拍号。
@@ -170,38 +171,7 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         if ( measure >= 1000 ) return false;
         // 键位和 BPM 通道一次写出整小节；保留原拍位供公共分辨率搜索。
         // 不先逐事件量化，防止各自的近似误差在合并时再次累积。
-        if ( ch != 1 && ch != 9 ) {
-            rows[{ measure, ch }].emplace_back(fraction, value);
-            return true;
-        }
-        // BGM 与 STOP 均支持多行叠加，继续使用每条事件最短的有效格点。
-        int numerator = 0, denominator = 1;
-        // 有界有理数逼近保证常见节拍短文本且任意编辑不无限搜索。
-        // 超过精度预算的时间返回失败，不能悄悄吸附到错误拍位。
-        for ( ; denominator <= 65536; ++denominator ) {
-            numerator = static_cast<int>(std::round(fraction * denominator));
-            if ( std::abs(fraction - static_cast<double>(numerator) /
-                                         denominator) <= fractionTolerance )
-                break;
-        }
-        if ( denominator > 65536 ) return false;
-        // 浮点尾差接近整小节时规范到下一个小节的起点。
-        // 随后再次检查小节上界，避免生成四位小节号。
-        if ( numerator == denominator ) {
-            ++measure;
-            numerator   = 0;
-            denominator = 1;
-        }
-        if ( measure >= 1000 ) return false;
-        outputBytes += denominator * 2U + 9U;
-        if ( outputBytes > 64U * 1024U * 1024U ) return false;
-        // 每条事件使用独立行，00 表示该格没有事件而不是覆盖其他行。
-        // 尤其 BGM 的多行语义用于保留同拍复音。
-        std::string data(denominator * 2U, '0');
-        data.replace(numerator * 2U, 2, encode(value));
-        body << '#' << std::setfill('0') << std::setw(3) << std::dec << measure
-             << std::setw(2) << std::hex << std::uppercase << ch << ':' << data
-             << '\n';
+        rows[{ measure, ch }].emplace_back(fraction, value);
         return true;
     };
     // 扩展 BPM 与 STOP 分属独立编号空间，不与 WAV 资源编号混用。
@@ -276,6 +246,22 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
         exportProperties != map.m_metadata.map_properties.end() &&
         exportProperties->second.contains("compact_rows") &&
         exportProperties->second.at("compact_rows") == "1";
+    // 兼容模式仅作用于本次序列化副本，默认关闭并保留真实毫秒位置。
+    // 明确拒绝吸附冲突，不能靠删除物件令检查器归零。
+    const bool myO2Grid =
+        exportProperties != map.m_metadata.map_properties.end() &&
+        exportProperties->second.contains("myo2_grid") &&
+        exportProperties->second.at("myo2_grid") == "1";
+    if ( myO2Grid && !quantizeMyO2Rows(rows) ) {
+        XERROR(
+            "MyO2 "
+            "兼容导出失败：吸附后物件或长条端点重叠，或超出小节范围；请关闭兼容"
+            "网格后重试");
+        return false;
+    }
+    // 兼容位置已严格量化；序列化不能再用毫秒预算近似为别的分母。
+    // 否则网格上的点也可能被编码成带亚 tick 残差的离拍位置。
+    const double rowTolerance = myO2Grid ? 1e-12 : fractionTolerance;
     // 同小节同通道寻找能够同时表达所有事件的最短格点。
     // 长条头尾共享一行，避免只保留末端导致无法配对。
     // 短格点搜索有固定上限，高精度回退仍受总文本预算约束。
@@ -294,14 +280,14 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
                 events.begin(), events.end(), [&](const auto& event) {
                     return std::abs(event.first -
                                     std::round(event.first * denominator) /
-                                        denominator) <= fractionTolerance;
+                                        denominator) <= rowTolerance;
                 });
             if ( fits ) break;
         }
         // 独立事件选择最短的有效分母，不把它吸附到用户未选择的拍线。
         // 比较真实输出字节数，只有严格更短或公共格点不存在时才拆行。
         // 数值误差预算仍是原有 0.01ms，不通过放宽精度换取更小文件。
-        if ( compactRows ) {
+        if ( compactRows || position.second == 1 || position.second == 9 ) {
             // 比较成本前仅存整数位置，不提前为每个候选分配大段零串。
             // 选择公共行或独立行只改变文本表示，不改变通道和采样身份。
             // 同一行内真实离拍事件仍按既有误差预算表达，不强制取整拍。
@@ -311,9 +297,8 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
                 int resolution = 1, slot = 0;
                 for ( ; resolution <= 65536; ++resolution ) {
                     slot = static_cast<int>(std::round(fraction * resolution));
-                    if ( std::abs(fraction -
-                                  static_cast<double>(slot) / resolution) <=
-                         fractionTolerance )
+                    if ( std::abs(fraction - static_cast<double>(slot) /
+                                                 resolution) <= rowTolerance )
                         break;
                 }
                 if ( resolution > 65536 || slot < 0 || slot >= resolution )
@@ -321,7 +306,8 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
                 sparse.push_back({ slot, resolution, value });
                 sparseBytes += resolution * 2U + 9U;
             }
-            if ( denominator > 65536 || sparseBytes < denominator * 2U + 9U ) {
+            if ( position.second == 1 || position.second == 9 ||
+                 denominator > 65536 || sparseBytes < denominator * 2U + 9U ) {
                 outputBytes += sparseBytes;
                 if ( outputBytes > 64U * 1024U * 1024U ) return false;
                 for ( const auto& event : sparse ) {
@@ -340,7 +326,7 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
             // 四舍五入到 D 格时误差至多为 0.5/D，直接求保证精度的公共格点。
             // 不放宽 0.01ms 预算，也不改用多行，保持 MyO2 的单行读取兼容性。
             // 额外加一格避开浮点边界；计算量固定，不扩大逐个分母搜索范围。
-            const double resolution = std::ceil(0.5 / fractionTolerance) + 1;
+            const double resolution = std::ceil(0.5 / rowTolerance) + 1;
             // 仅分配剩余文本预算能容纳的格点，极低 BPM 不能制造无界零串。
             // 容量检查先于整数转换，防止无限值或超大分母越界。
             constexpr std::size_t limit = 64U * 1024U * 1024U;
