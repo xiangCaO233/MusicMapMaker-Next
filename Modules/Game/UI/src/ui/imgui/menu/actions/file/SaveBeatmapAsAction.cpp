@@ -106,13 +106,15 @@ private:
     void dispatchSaveBeatmapAs(const std::string&        path,
                                std::optional<MalodyMode> malodyExportMode,
                                bool addStoreModeExtForMalodyExport = false,
-                               bool bmsShiftEventsToGrid           = false)
+                               bool bmsShiftEventsToGrid           = false,
+                               bool bmsMyO2Grid                    = false)
     {
         // 逻辑命令统一承担导出、错误反馈和会话状态处理。
         MenuUtil::dispatchCommand(Logic::CmdSaveBeatmapAs{
             .malodyExportMode               = malodyExportMode,
             .addStoreModeExtForMalodyExport = addStoreModeExtForMalodyExport,
             .bmsShiftEventsToGrid           = bmsShiftEventsToGrid,
+            .bmsMyO2Grid                    = bmsMyO2Grid,
             .path                           = path,
         });
     }
@@ -165,6 +167,7 @@ private:
         // 每次另存为重新从原位置开始，用户可明确选择后移；源音频始终不变。
         m_pendingExportShowBmsAlignmentOption = showBmsAlignmentOption;
         m_pendingExportBmsShiftEventsToGrid   = false;
+        m_pendingExportBmsMyO2Grid            = false;
         m_pendingExportShowStoreModeExtOption = showStoreModeExtOption;
         // 保留元素能力标志，以便用户切换 Malody 模式时重新计算选项可见性。
         m_pendingExportHasStoreModeExtEligibleElements =
@@ -539,6 +542,7 @@ private:
         // BMS 临时选项不能泄漏到下一次普通格式或另一个文件的导出。
         m_pendingExportShowBmsAlignmentOption = false;
         m_pendingExportBmsShiftEventsToGrid   = false;
+        m_pendingExportBmsMyO2Grid            = false;
         // Malody 模式回到最能保留扩展物件的 Slide 默认值。
         m_pendingExportMalodyMode = MalodyMode::Slide;
         // 本次临时写入选择清除，持久化设置仍由 AppConfig 保留。
@@ -632,6 +636,16 @@ private:
                 // 两个状态始终互斥；单文件导出不显示音乐裁剪或补静音选项。
                 // RadioButton 重复激活已选项也不会使所有选项都取消。
                 ImGui::Spacing();
+                // 兼容网格与首拍整体移动是不同操作，不能合并成同一个选项。
+                // 选择范围仅限本次导出，打开下一份谱面时恢复默认关闭。
+                // 提示先说明会移动物件，再说明网格，避免误解为无损压缩。
+                // 命令层复制该值，弹窗关闭清理不会影响正在执行的导出。
+                ::MMM::UI::FeedbackCheckbox("MyO2 兼容网格（会移动物件）",
+                                            &m_pendingExportBmsMyO2Grid);
+                MenuUtil::drawWrappedBulletText(
+                    "按 iBMSC 建议将高分辨率行吸附到 64 或 48 "
+                    "分网格；会改变音符、长条端点及时间线位置，冲突时拒绝导出。"
+                    "关闭时保留真实时间。");
                 ImGui::TextUnformatted("首拍对齐方式：");
                 if ( ::MMM::UI::FeedbackRadioButton(
                          "保持原时间位置",
@@ -697,7 +711,9 @@ private:
                         m_pendingExportAddStoreModeExt,
                     // 仅 BMS 选项可见时传递后移请求，MC 等格式保持原行为。
                     m_pendingExportShowBmsAlignmentOption &&
-                        m_pendingExportBmsShiftEventsToGrid);
+                        m_pendingExportBmsShiftEventsToGrid,
+                    m_pendingExportShowBmsAlignmentOption &&
+                        m_pendingExportBmsMyO2Grid);
                 // 命令已复制所需字段，随后清空全部临时状态。
                 clearCompatibilityWarningState();
                 ImGui::CloseCurrentPopup();
@@ -745,6 +761,9 @@ private:
     /// @brief 仅本次 BMS 导出是否后移事件，默认保持原时间位置。
     /// @note 不携带音频重写枚举，避免误用资源包的裁剪策略。
     bool m_pendingExportBmsShiftEventsToGrid = false;
+
+    /// @brief 仅本次导出使用的有损兼容选项，每次打开默认关闭。
+    bool m_pendingExportBmsMyO2Grid = false;
     /// @brief 待确认导出是否显示上架 mode_ext 选项。
     /// @note 仅在 MC Slide 模式且存在 Flick 或折线时为 true。
     bool m_pendingExportShowStoreModeExtOption = false;
