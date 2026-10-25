@@ -132,5 +132,127 @@ class PublishRecordTest(unittest.TestCase):
             self.assertIn('10/100 bytes', output.getvalue())
 
 
+class DirectUploadTest(unittest.TestCase):
+    """本地真实候选配合受控 HTTP 响应验证 Runner 的直传边界。
+
+    复用原对象夹具而不重复执行其测试，签名与上传各有独立断言。
+    限时签名使用测试占位符，日志断言要求它始终不被输出。
+    """
+    def setUp(self):
+        """原计划独立于许可保存，避免两边被同一错误输入同时污染。"""
+        PublishRecordTest.setUp(self)
+        import json
+        # 许可文件独立命名，不混入候选资源或公开程序清单。
+        # 实际签名只存在私有临时文件，测试值始终是不可用占位符。
+        self.grants = self.stage / 'private-grants.json'
+        self.url = 'https://test.r2.cloudflarestorage.com/object?signature=private-test'
+        self.grant = dict(**self.record, url=self.url)
+        (self.stage / 'program-plan.json').write_text(json.dumps({'uploads': [self.record]}))
+        self.write_grants()
+
+    # 对象元数据准备与发布路径共用，测试方法本身保持相互独立。
+    existing = PublishRecordTest.existing
+
+    def write_grants(self, items=None):
+        """只更改许可输入，原计划与源文件继续保持独立。"""
+        import json
+        # 此 helper 只负责输入，不替生产上传器修正路径或摘要。
+        # 可以故意构造重复条目，验证其在任何网络写入之前被拒绝。
+        self.grants.write_text(json.dumps({'uploads': [self.grant] if items is None else items}))
+
+    def test_direct_streaming(self):
+        """HTTP 请求读取真实候选字节，签名地址不进入进度日志。"""
+        from direct_upload import upload
+        # side_effect 消费真实的文件读包装，验证请求体及签名元数据一致。
+        # 响应仅代表上传成功，固定清单不属于 Runner 的写入范围。
+        def send(request, timeout):
+            self.assertEqual(request.data.read(), self.data)
+            self.assertEqual(request.get_header('X-amz-meta-sha256'), self.record['sha256'])
+            self.assertEqual(request.get_header('Content-length'), str(len(self.data)))
+            response = MagicMock()
+            response.__enter__.return_value.status = 200
+            return response
+        with patch('direct_upload.urlopen', side_effect=send) as opener, contextlib.redirect_stdout(io.StringIO()) as output:
+            upload(self.stage, self.grants)
+        opener.assert_called_once()
+        self.assertNotIn('signature=', output.getvalue())
+        self.assertFalse((self.stage / 'program.json').exists())
+
+    def test_direct_corrupt_source(self):
+        """来源正文被修改时，任何 HTTP 请求都不能发生。"""
+        from direct_upload import upload
+        # 保持许可和原计划不变，只改变文件正文，避免同源错误抵消。
+        # 通过 mock 的零调用证明失败不只是事后检测。
+        (self.stage / self.key).write_bytes(b'changed')
+        with patch('direct_upload.urlopen') as opener, self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+            upload(self.stage, self.grants)
+        opener.assert_not_called()
+
+    def test_direct_bad_endpoint(self):
+        """许可不能把候选程序发送到第三方任意域名。"""
+        from direct_upload import upload
+        # 其他字段仍然合法，失败必须来自网络目标检查。
+        # 即使远端提供 URL，也不自动信任其主机或明文协议。
+        self.grant['url'] = 'https://untrusted.example/object'
+        self.write_grants()
+        with patch('direct_upload.urlopen') as opener, self.assertRaisesRegex(ValueError, 'untrusted upload endpoint'):
+            upload(self.stage, self.grants)
+        opener.assert_not_called()
+
+    def test_direct_bad_plan(self):
+        """许可的摘要与本地原计划不同，即使文件存在也必须拒绝。"""
+        from direct_upload import upload
+        # 限时许可不能重新定义来源文件身份，原计划才是本地依据。
+        # 若实现仅校验许可与文件，此处仍必须在上传前失败。
+        self.grant['sha256'] = '0' * 64
+        self.write_grants()
+        with patch('direct_upload.urlopen') as opener, self.assertRaisesRegex(ValueError, 'differs from original plan'):
+            upload(self.stage, self.grants)
+        opener.assert_not_called()
+
+    def test_direct_duplicate_grant(self):
+        """全部条目预检防止重复许可造成一部分上传之后才报错。"""
+        from direct_upload import upload
+        # 首条合法也不能先上传，完整预检应发现后续重复项。
+        # 否则弱网络重试可能让同一对象被不必要地反复覆盖。
+        self.write_grants([self.grant, self.grant])
+        with patch('direct_upload.urlopen') as opener, self.assertRaisesRegex(ValueError, 'differs from original plan'):
+            upload(self.stage, self.grants)
+        opener.assert_not_called()
+
+    def test_sign_only_missing(self):
+        """签名限定对象身份和三十分钟有效期，不写入程序清单。"""
+        from publish_assets import sign_uploads
+        # 服务器候选校验作为独立前置门槛，SDK 身份只由服务器加载。
+        # 测试分别断言参数闭包，避免给未知长度或其他桶签发许可。
+        self.client.generate_presigned_url.return_value = self.url
+        with patch('publish_assets.validate_bundle', return_value=[({}, {'uploads': [self.record]}, 'check')]), patch('publish_assets.load_backend', return_value=(self.client, 'bucket', 'domain', None)):
+            result = sign_uploads(self.stage, self.root)
+        self.assertEqual(result, {'uploads': [self.grant]})
+        call = self.client.generate_presigned_url.call_args
+        # 有效期固定，防止恢复文件意外变成长期访问凭据。
+        self.assertEqual(call.kwargs['ExpiresIn'], 1800)
+        self.assertEqual(call.kwargs['HttpMethod'], 'PUT')
+        self.assertEqual(call.kwargs['Params']['ContentLength'], len(self.data))
+        self.assertEqual(call.kwargs['Params']['Metadata']['sha256'], self.record['sha256'])
+
+    def test_sign_reuses_existing(self):
+        """已有同摘要对象无需签发覆盖许可，最终发布仍需正文验收。"""
+        from publish_assets import sign_uploads
+        self.existing()
+        with patch('publish_assets.validate_bundle', return_value=[({}, {'uploads': [self.record]}, 'check')]), patch('publish_assets.load_backend', return_value=(self.client, 'bucket', 'domain', None)):
+            self.assertEqual(sign_uploads(self.stage, self.root), {'uploads': []})
+        self.client.generate_presigned_url.assert_not_called()
+
+    def test_sign_rejects_existing_conflict(self):
+        """同名对象的内容不同，不能通过直传入口获得覆盖能力。"""
+        from publish_assets import sign_uploads
+        self.existing()
+        self.client.head_object.return_value['ContentLength'] += 1
+        with patch('publish_assets.validate_bundle', return_value=[({}, {'uploads': [self.record]}, 'check')]), patch('publish_assets.load_backend', return_value=(self.client, 'bucket', 'domain', None)), self.assertRaisesRegex(ValueError, 'immutable object conflict'):
+            sign_uploads(self.stage, self.root)
+        self.client.generate_presigned_url.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()
