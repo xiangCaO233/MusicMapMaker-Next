@@ -608,10 +608,10 @@ struct CmdSaveBeatmapAs {
 
     /// @brief BMS 单文件导出时整体后移事件对齐首拍，不允许改写音频文件。
     /// @note false 保持原时间位置；非 BMS 家族格式忽略本字段。
-    bool bmsShiftEventsToGrid{ false };
+    bool bmsShiftEventsToGrid{ true };
 
-    /// @brief 显式启用 MyO2 网格吸附，会移动导出物件；默认保留真实时间。
-    bool bmsMyO2Grid{ false };
+    /// @brief 默认吸附 MyO2 网格；false 仅供内部原精度诊断。
+    bool bmsMyO2Grid{ true };
 
     /// @brief 导出目标路径，使用 UTF-8 编码。
     std::string path;
@@ -660,14 +660,14 @@ struct CmdPackBeatmap {
     /// @brief MCZ 包内 MC 谱面统一使用的 Malody 模式；其它包格式忽略。
     std::optional<MMM::MalodyMode> malodyExportMode;
 
-    /// @brief BMS 两种对齐策略始终互斥，默认通过音乐副本承担位移。
+    /// @brief BMS 两种对齐策略始终互斥，默认后移 BGM 与物件承担位移。
     /// @note 非 BMS 资源包忽略本字段，不能叠加两种补偿。
     MMM::BmsPackageAlignmentMode bmsAlignmentMode{
-        MMM::BmsPackageAlignmentMode::RewriteAudio
+        MMM::BmsPackageAlignmentMode::ShiftEvents
     };
 
     /// @brief BMS 导出副本是否按 MyO2 建议吸附；不修改源项目。
-    bool bmsMyO2Grid{ false };
+    bool bmsMyO2Grid{ true };
 
     /// @brief 转换指定谱面时临时覆盖的元数据列表。
     std::vector<PackageBeatmapMetadataOverride> metadataOverrides;

@@ -286,7 +286,8 @@ bool run(const std::filesystem::path& root)
           "audio/key.wav" },
         root / "package.zip",
         {},
-        MMM::BmsPackageAlignmentMode::RewriteAudio);
+        MMM::BmsPackageAlignmentMode::RewriteAudio,
+        false);
     if ( !result.success ) {
         XERROR("BMS package: {}", result.errorMessage);
         return false;
@@ -341,7 +342,8 @@ bool run(const std::filesystem::path& root)
         { "charts/a.mmm" },
         root / "package.zip",
         {},
-        MMM::BmsPackageAlignmentMode::RewriteAudio);
+        MMM::BmsPackageAlignmentMode::RewriteAudio,
+        false);
     // 缺少明确选择的主音乐必须整体失败，而且旧包不能被提前截断。
     return !failed.success && saved == bytes(root / "package.zip");
 }
@@ -418,7 +420,8 @@ bool checkAlignmentModes(const std::filesystem::path& root)
             { "charts/timings.mmm", "audio/music.wav", "audio/key.wav" },
             archive,
             {},
-            mode);
+            mode,
+            false);
         if ( !result.success || !unpack(archive, extracted) ) return false;
         const auto restored =
             MMM::BeatMap::loadFromFile(extracted / "charts/timings.bms");
@@ -550,6 +553,7 @@ bool checkSingleFileExports(const std::filesystem::path& root)
             session.pushCommand(
                 MMM::Logic::LogicCommand{ MMM::Logic::CmdSaveBeatmapAs{
                     .bmsShiftEventsToGrid = align,
+                    .bmsMyO2Grid          = false,
                     .path                 = MMM::Config::pathToUtf8(path) } });
             session.update(0, MMM::Config::EditorConfig{}, false);
             // 重读最终文件同时覆盖通道合并与引用写出，命令入队不是成功证据。
@@ -641,6 +645,98 @@ bool checkSingleFileExports(const std::filesystem::path& root)
     return !error;
 }
 
+/// @brief 验证用户不设置任何兼容参数时的完整 BMS 默认导出行为。
+/// @param root 已准备好原生谱面和真实 WAV 的构建测试目录。
+/// @return 单文件与资源包都后移首拍并实际吸附 Note、BGM 时为真。
+/// @note 期望时间由 120 BPM 与固定的原始毫秒位置独立给定。
+/// @note 活动来源与磁盘来源均不得被导出快照的位移污染。
+/// @note 旧相位精度回归显式关闭内部吸附，本例专门覆盖默认开启路径。
+/// @pre run 已生成 charts/a.mmm 及 audio/music.wav、audio/key.wav。
+/// @note 来源首红线为 100ms，测试不通过生产相位助手计算期望值。
+/// @note 第二颗键音故意离拍，确保仅修改默认布尔值不足以通过。
+/// @note Main 起点也需要量化，避免只处理键音而遗漏 BGM 通道。
+/// @note 比较资源文件字节，能发现默认策略意外进入音频重写路径。
+/// @note 单文件的资源相对路径和资源包的稳定 ID 需分别验证。
+/// @note 长条数量独立比较，避免长条退化成点按但总事件数不变。
+/// @note 默认包对齐策略来自正式命令结构，不由测试手写选项替代。
+/// @note 使用与普通相位测试不同的输出名，旧产物不能相互掩盖。
+/// @note 导出后再次检查来源文件与活动内存，覆盖两个副作用边界。
+/// @note 本例不启动音频设备，真实素材只用于依赖和归档完整性检查。
+/// @warning 所有写入只发生在调用方给出的构建测试目录。
+bool checkDefaultLossyExport(const std::filesystem::path& root)
+{
+    const auto path       = root / "default_single.bms";
+    const auto sourcePath = root / "charts/a.mmm";
+    const auto snapshot   = bytes(sourcePath);
+    auto       source =
+        std::make_shared<MMM::BeatMap>(MMM::BeatMap::loadFromFile(sourcePath));
+    // 单文件会话按真实相对路径解析资源，不依赖测试项目表。
+    for ( auto& note : source->m_noteData.notes )
+        if ( note.m_sampleBinding )
+            note.m_sampleBinding->m_audioResourceId = "../audio/key.wav";
+    source->m_audioSamples.front().m_audioResourceId = "../audio/music.wav";
+    MMM::Logic::BeatmapSession session;
+    session.pushCommand(MMM::Logic::LogicCommand{
+        MMM::Logic::CmdLoadBeatmap{ .beatmap = source } });
+    session.update(0, MMM::Config::EditorConfig{}, false);
+    // 不写任何 BMS 开关，验证默认值确实经过正式命令处理器。
+    session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdSaveBeatmapAs{
+        .path = MMM::Config::pathToUtf8(path) } });
+    session.update(0, MMM::Config::EditorConfig{}, false);
+    /// @brief 按独立时间表验证后移与吸附，而非只检查文件存在。
+    const auto valid = [](const MMM::BeatMap& map) {
+        // 首 BPM 在 100ms，整体后移 400ms 后首拍落在 500ms。
+        // 两颗键音成为 1500ms 与 1734ms，后者应吸附到 1718.75ms。
+        // BGM 从 400ms 吸附至 406.25ms；Hold 的既有格点无需移动。
+        return map.m_noteData.notes.size() == 2 &&
+               map.m_noteData.holds.size() == 1 &&
+               map.m_audioSamples.size() == 1 &&
+               std::abs(map.m_noteData.notes[0].m_timestamp - 1500) < .01 &&
+               std::abs(map.m_noteData.notes[1].m_timestamp - 1718.75) < .01 &&
+               std::abs(map.m_audioSamples[0].effectiveTimestamp() - 406.25) <
+                   .01;
+    };
+    if ( !valid(MMM::BeatMap::loadFromFile(path)) ) return false;
+    // 包导出沿用相同默认网格策略，并从原生来源重新构建副本。
+    // 资源索引保留稳定 ID，覆盖与单文件不同的依赖解析入口。
+    MMM::Project project;
+    project.m_projectRoot = root;
+    project.m_audioResources.push_back(
+        MMM::AudioResource{ .m_id   = "main-id",
+                            .m_path = "audio/music.wav",
+                            .m_type = MMM::AudioTrackType::Main });
+    project.m_audioResources.push_back(
+        MMM::AudioResource{ .m_id   = "key-id",
+                            .m_path = "audio/key.wav",
+                            .m_type = MMM::AudioTrackType::Effect });
+    const MMM::Logic::CmdPackBeatmap defaults;
+    // 默认策略必须保留音乐文件的字节内容，不进入裁剪或编码路径。
+    if ( defaults.bmsAlignmentMode !=
+         MMM::BmsPackageAlignmentMode::ShiftEvents )
+        return false;
+    const auto result = MMM::Logic::BmsPackageExportService::exportPackage(
+        project,
+        { "charts/a.mmm", "audio/music.wav", "audio/key.wav" },
+        root / "default.zip",
+        {},
+        defaults.bmsAlignmentMode);
+    if ( !result.success ||
+         !unpack(root / "default.zip", root / "default_package") )
+        return false;
+    // 重新从归档读取，确保包内文件同样采用默认有损网格。
+    // 来源校验在全部导出完成后进行，能发现累计位移或磁盘重写。
+    return valid(MMM::BeatMap::loadFromFile(root /
+                                            "default_package/charts/a.bms")) &&
+           snapshot == bytes(sourcePath) &&
+           std::any_of(source->m_noteData.notes.begin(),
+                       source->m_noteData.notes.end(),
+                       [](const auto& note) {
+                           return std::abs(note.m_timestamp - 1100) < .01;
+                       }) &&
+           bytes(root / "default_package/audio/music.wav") ==
+               bytes(root / "audio/music.wav");
+}
+
 /// @brief 密集离拍物件在整体后移后仍须写入同一条 MyO2 兼容数据行。
 /// @param root 所有新文件限定于构建测试输出。
 /// @return 原精度、音符数量和同通道单行约束均成立时为真。
@@ -672,6 +768,8 @@ bool checkDenseSingleRow(const std::filesystem::path& root)
     }
     std::string error;
     const auto  path = root / "dense_single.bms";
+    // 原精度序列化仍供内部诊断；该测试不验证面向用户的默认有损策略。
+    map.m_metadata.map_properties[MMM::MapMetadataType::BMS]["myo2_grid"] = "0";
     // 只允许共同后移；公共保存器继续使用普通单行策略而非 compact_rows。
     if ( !MMM::Logic::BmsPackageExportService::shiftEventsToGrid(map, error) ||
          !map.saveToFile(path) )
@@ -743,13 +841,15 @@ bool externalProbe(const std::filesystem::path& source,
     // 手动探针使用保留原音乐的事件模式，直接验证实际 MP3 素材的引用。
     // 输出与先前重写音乐探针分目录，便于用户在其他编辑器比较。
     // 同一个 writer 在对齐前后写出，大小比较不混入不同版本的序列化策略。
+    map.m_metadata.map_properties[MMM::MapMetadataType::BMS]["myo2_grid"] = "0";
     if ( !map.saveToFile(root / "external_unaligned.bms") ) return false;
     const auto result = MMM::Logic::BmsPackageExportService::exportPackage(
         project,
         selected,
         root / "external_events.zip",
         {},
-        MMM::BmsPackageAlignmentMode::ShiftEvents);
+        MMM::BmsPackageAlignmentMode::ShiftEvents,
+        false);
     if ( !result.success ) {
         XERROR("Real BMS export: {}", result.errorMessage);
         return false;
@@ -818,6 +918,7 @@ bool externalProbe(const std::filesystem::path& source,
     if ( error ) return false;
     session.pushCommand(MMM::Logic::LogicCommand{ MMM::Logic::CmdSaveBeatmapAs{
         .bmsShiftEventsToGrid = true,
+        .bmsMyO2Grid          = false,
         .path                 = MMM::Config::pathToUtf8(singlePath) } });
     session.update(0, MMM::Config::EditorConfig{}, false);
     const auto single = MMM::BeatMap::loadFromFile(singlePath);
@@ -856,7 +957,8 @@ int main(int argc, char** argv)
     // 所有场景在这个目录下分开保存，调试时可以检查实际 ZIP 与波形。
     const auto root = MMM::Config::utf8ToPath(argv[1]);
     if ( !run(root) || !checkAlignmentModes(root) ||
-         !checkSingleFileExports(root) || !checkDenseSingleRow(root) )
+         !checkSingleFileExports(root) || !checkDenseSingleRow(root) ||
+         !checkDefaultLossyExport(root) )
         return 3;
     return argc == 2 || externalProbe(MMM::Config::utf8ToPath(argv[2]), root)
                ? 0
