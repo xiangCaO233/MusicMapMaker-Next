@@ -1,3 +1,4 @@
+#include "RealtimeAllocationProbe.h"
 #include "log/colorful-log.h"
 
 #include <array>
@@ -5,7 +6,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <filesystem>
 #include <ice/config/config.hpp>
 #include <ice/core/SourceNode.hpp>
@@ -35,11 +35,9 @@ namespace
 // 所有区间使用半开坐标，START_OFFSET 同时表示静音前缀长度与 PCM 写入起点。
 // 失败数可累计，单一场景中的多个独立实时契约会在同次执行中得到诊断。
 
-/// @brief 当前线程是否正在统计普通堆分配。
-thread_local bool g_trackAllocations{ false };
-
-/// @brief 当前统计区间内发生的普通堆分配次数。
-thread_local std::size_t g_allocationCount{ 0U };
+// 分配替换与测试窗口必须访问相同的线程局部状态，防止出现零计数假通过。
+using MMM::Test::AllocationProbe::g_allocationCount;
+using MMM::Test::AllocationProbe::g_trackAllocations;
 
 /// @brief 记录断言失败并返回可累计的失败数量。
 /// @param condition 需要成立的条件。
@@ -192,6 +190,7 @@ int testBlockLocalStartAndZeroAllocation(
     referenceSource.process(referenceBuffer);
 
     // 参考时钟初始为零，因此绝对目标 32 直接落在首块偏移 32。
+    // 原始 provider 不拥有参考时钟，栈上时钟必须比 SourceNode 更晚析构。
     ReferenceClock  clock;
     ice::SourceNode scheduledSource(track);
     scheduledSource.setvolume(1.0F);
@@ -214,12 +213,14 @@ int testBlockLocalStartAndZeroAllocation(
                            "allocation");
     failures += expectTrue(isSilent(scheduledBuffer, 0U, START_OFFSET),
                            "scheduled block keeps exact silent prefix");
+    // 与未调度来源比较实际 PCM，避免仅静音前缀正确而有效音频被丢弃。
     failures += expectTrue(
         matchesReference(scheduledBuffer, START_OFFSET, referenceBuffer),
         "scheduled block shifts decoded PCM to exact start frame");
     failures +=
         expectTrue(scheduledSource.get_playpos() == BLOCK_FRAMES - START_OFFSET,
                    "scheduled block advances only decoded source frames");
+    // 起点越过后须撤销一次性目标，后续 block 不能再次插入前置静音。
     failures += expectTrue(scheduledSource.scheduledStartFrame() == 0U,
                            "scheduled target clears after crossing");
 
@@ -249,6 +250,7 @@ int testBlockLocalStartAndZeroAllocation(
 
     // 相对延迟不依赖外部时钟，直接在每个 process 后扣除本块输出帧数。
     ice::SourceNode relativeSource(track);
+    // 参考与被测来源统一音量，比较结果只反映调度偏移而非增益差异。
     relativeSource.setvolume(1.0F);
     relativeSource.set_playpos(0U);
     relativeSource.set_scheduled_start_delay_frames(BLOCK_FRAMES +
@@ -419,58 +421,6 @@ int testConcurrentProviderReplacement(
     return failures;
 }
 }  // namespace
-
-/// @brief 为回调零分配测试代理普通单对象堆分配。
-/// @param size 请求字节数。
-/// @return 已分配内存。
-void* operator new(std::size_t size)
-{
-    if ( g_trackAllocations ) ++g_allocationCount;
-    if ( void* memory = std::malloc(size) ) return memory;
-    std::abort();
-}
-
-/// @brief 为回调零分配测试代理普通数组堆分配。
-/// @param size 请求字节数。
-/// @return 已分配内存。
-void* operator new[](std::size_t size)
-{
-    if ( g_trackAllocations ) ++g_allocationCount;
-    if ( void* memory = std::malloc(size) ) return memory;
-    std::abort();
-}
-
-/// @brief 释放普通单对象堆内存。
-/// @param memory 待释放内存。
-void operator delete(void* memory) noexcept
-{
-    std::free(memory);
-}
-
-/// @brief 释放普通数组堆内存。
-/// @param memory 待释放内存。
-void operator delete[](void* memory) noexcept
-{
-    std::free(memory);
-}
-
-/// @brief 释放带尺寸的普通单对象堆内存。
-/// @param memory 待释放内存。
-/// @param size 原始请求字节数。
-void operator delete(void* memory, std::size_t size) noexcept
-{
-    static_cast<void>(size);
-    std::free(memory);
-}
-
-/// @brief 释放带尺寸的普通数组堆内存。
-/// @param memory 待释放内存。
-/// @param size 原始请求字节数。
-void operator delete[](void* memory, std::size_t size) noexcept
-{
-    static_cast<void>(size);
-    std::free(memory);
-}
 
 /// @brief 运行 SourceNode 定时播放实时安全测试。
 /// @param argc 参数数量。

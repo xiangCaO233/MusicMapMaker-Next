@@ -1,3 +1,4 @@
+#include "RealtimeAllocationProbe.h"
 #include "log/colorful-log.h"
 
 #include <array>
@@ -5,14 +6,14 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <ice/core/IAudioNode.hpp>
 #include <ice/core/MixBus.hpp>
 #include <ice/manage/AudioBuffer.hpp>
 #include <memory>
-#include <new>
+#include <memory_resource>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace
 {
@@ -33,14 +34,10 @@ namespace
 // 样本节点只写常量，使来源顺序、累加次数和失败静音都能直接从输出识别。
 // 测试的 FORMAT 与容量在栈上固定，不依赖全局音频设备配置。
 
-/// @brief 当前线程是否正在统计普通堆分配。
-thread_local bool g_trackAllocations{ false };
-
-/// @brief 当前统计区间内发生的普通堆分配次数。
-thread_local std::size_t g_allocationCount{ 0U };
-
-/// @brief 当前统计区间内发生的普通堆释放次数。
-thread_local std::size_t g_deallocationCount{ 0U };
+// 分配替换与测试窗口必须访问相同的线程局部状态，防止出现零计数假通过。
+using MMM::Test::AllocationProbe::g_allocationCount;
+using MMM::Test::AllocationProbe::g_deallocationCount;
+using MMM::Test::AllocationProbe::g_trackAllocations;
 
 /// @brief 记录断言失败并返回可累计的失败数量。
 /// @param condition 需要成立的条件。
@@ -262,11 +259,13 @@ int testStableOrderAndRealtimeCapacity()
     };
     constexpr std::size_t PREPARED_FRAMES = 4U;
 
+    // 观察记录的栈生命周期覆盖所有来源及其回调，不需要在 process 内取得所有权。
     CallTrace trace;
     auto      first  = std::make_shared<ConstantNode>(1, 1.0F, trace);
     auto      second = std::make_shared<ConstantNode>(2, 2.0F, trace);
 
     ice::MixBus bus;
+    // 极小预备容量刻意放大分块边界，不能靠常见设备块长偶然避开该路径。
     bus.prepare(FORMAT, PREPARED_FRAMES);
     // 重复加入 first 不得形成双重混音，sourceCount 应保持二。
     bus.add_source(first);
@@ -290,6 +289,7 @@ int testStableOrderAndRealtimeCapacity()
     failures += expectTrue(g_allocationCount == 0U && g_deallocationCount == 0U,
                            "prepared callback performs no ordinary heap "
                            "allocation or deallocation");
+    // 数值总和检查混音完整性；后续调用序列另行检查，避免加法交换律掩盖乱序。
     failures += expectTrue(allSamplesEqual(shortBuffer, 3.0F),
                            "sources are mixed into prepared callback output");
     failures += expectTrue(trace.count.load(std::memory_order_relaxed) == 2U &&
@@ -318,6 +318,7 @@ int testStableOrderAndRealtimeCapacity()
                            "allocation or deallocation");
     failures += expectTrue(allSamplesEqual(oversizedBuffer, 3.0F),
                            "oversized callback mixes every chunk");
+    // 诊断按原始设备块而非内部分块计数，否则调用方会误判故障频率。
     failures += expectTrue(bus.oversizedProcessCount() == 1U,
                            "oversized callback increments diagnostic");
     failures += expectTrue(trace.count.load(std::memory_order_relaxed) == 6U &&
@@ -325,11 +326,13 @@ int testStableOrderAndRealtimeCapacity()
                                trace.ids[2] == 2 && trace.ids[3] == 1 &&
                                trace.ids[4] == 2 && trace.ids[5] == 1,
                            "chunk processing preserves source order");
+    // 最后一个分块必须缩短逻辑帧数，防止旧 scratch 尾部被当作有效输出。
     failures += expectTrue(
         trace.activeFrames[0] == 4U && trace.activeFrames[1] == 4U &&
             trace.activeFrames[2] == 4U && trace.activeFrames[3] == 4U &&
             trace.activeFrames[4] == 2U && trace.activeFrames[5] == 2U,
         "non-divisible oversized block exposes exact active frame counts");
+    // 同时核对地址和容量，单看零分配计数无法发现错误复用其他既有缓冲。
     failures += expectTrue(
         trace.frameCapacities[0] == PREPARED_FRAMES &&
             trace.frameCapacities[1] == PREPARED_FRAMES &&
@@ -368,6 +371,7 @@ int testStableOrderAndRealtimeCapacity()
     failures += expectTrue(bus.rejectedProcessCount() == 2U,
                            "invalid source frame count increments diagnostic");
 
+    // 清空后的数量查询属于已发布状态，不允许继续暴露上一份来源快照。
     bus.clear();
     failures += expectTrue(bus.sourceCount() == 0U,
                            "clear publishes an empty source snapshot");
@@ -390,10 +394,11 @@ int testIndexPreservingReplacement()
     };
 
     CallTrace trace;
-    auto      first       = std::make_shared<ConstantNode>(1, 1.0F, trace);
-    auto      second      = std::make_shared<ConstantNode>(2, 2.0F, trace);
-    auto      third       = std::make_shared<ConstantNode>(3, 3.0F, trace);
-    auto      replacement = std::make_shared<ConstantNode>(9, 9.0F, trace);
+    // 三个不同来源让替换位置可观察；首尾不变才能证明没有删除后尾插。
+    auto first       = std::make_shared<ConstantNode>(1, 1.0F, trace);
+    auto second      = std::make_shared<ConstantNode>(2, 2.0F, trace);
+    auto third       = std::make_shared<ConstantNode>(3, 3.0F, trace);
+    auto replacement = std::make_shared<ConstantNode>(9, 9.0F, trace);
 
     ice::MixBus bus;
     bus.prepare(FORMAT, 8U);
@@ -417,10 +422,55 @@ int testIndexPreservingReplacement()
     failures += expectTrue(allSamplesEqual(buffer, 13.0F),
                            "replacement source participates exactly once");
     // second 已不在新快照中，因此不能再次作为匹配键。
+    // 拒绝不存在来源时不能把 first 当成新的替换位置。
     failures += expectTrue(!bus.replace_source(second, first),
                            "replace_source rejects an absent source");
+    // 已存在的新来源不能被重复发布，避免后续 block 混入双份同源输出。
     failures += expectTrue(!bus.replace_source(replacement, first),
                            "replace_source rejects a duplicate replacement");
+    return failures;
+}
+
+/// @brief 正向验证共享分配探针，避免替换函数与计数状态脱节导致假通过。
+/// @return 分配或释放观察失效时的失败断言数量。
+int testAllocationProbeObservesHeapOperations()
+{
+    // reserve 必须向实际堆申请存储，断言放在窗口之外以排除日志开销。
+    // 默认构造没有存储，后续 reserve 因而不能复用已有容量而漏掉正向验证。
+    // 外部 memory_resource 的虚调用保证真实堆操作，避免临时 new/delete
+    // 被优化消除。
+    std::pmr::vector<int> storage(std::pmr::new_delete_resource());
+    g_allocationCount   = 0U;
+    g_deallocationCount = 0U;
+    g_trackAllocations  = true;
+    storage.reserve(32U);
+    g_trackAllocations = false;
+    // 只要求可观察，不把标准库恰好执行几次分配固定为实现契约。
+    int failures = expectTrue(g_allocationCount > 0U,
+                              "shared probe observes a real allocation");
+    // 与空 vector 交换后仅销毁旧存储，不依赖 shrink_to_fit 的非强制契约。
+    g_trackAllocations = true;
+    {
+        // swap 要求分配器相等，显式复用同一资源而不是依赖进程默认资源。
+        std::pmr::vector<int> retired(storage.get_allocator().resource());
+        retired.swap(storage);
+    }
+    g_trackAllocations = false;
+    failures += expectTrue(g_deallocationCount > 0U,
+                           "shared probe observes a real deallocation");
+    // 新线程不得继承当前线程的观察开关或计数。
+    // 主线程保持开启，避免两个线程恰好都关闭时错误地通过隔离检查。
+    bool isolated      = false;
+    g_trackAllocations = true;
+    std::thread observer([&isolated] {
+        isolated = !g_trackAllocations && g_allocationCount == 0U &&
+                   g_deallocationCount == 0U;
+    });
+    // 线程自身的创建与 join 不属于音频实时断言，只用于验证探针观察边界。
+    observer.join();
+    g_trackAllocations = false;
+    // join 建立结果可见性，不额外引入可能污染探针的同步对象。
+    failures += expectTrue(isolated, "allocation probe remains thread local");
     return failures;
 }
 
@@ -445,6 +495,7 @@ int testConcurrentSnapshotReplacement()
         .samplerate = 48000U,
     };
 
+    // 阻塞门独立于来源所有权，来源退役后仍能报告析构时机。
     auto                        state  = std::make_shared<BlockingState>();
     auto                        source = std::make_shared<BlockingNode>(state);
     std::weak_ptr<BlockingNode> oldSource = source;
@@ -465,6 +516,7 @@ int testConcurrentSnapshotReplacement()
         std::make_shared<ConstantNode>(7, 0.5F, replacementTrace);
     // 控制线程释放自己的强引用后，旧来源只应由活跃 hazard 快照保留。
     const bool replaced = bus.replace_source(source, replacement);
+    // 移除控制线程的拥有引用后，weak_ptr 存活才能归因于受保护的快照。
     source.reset();
     bus.reclaimRetiredSources();
 
@@ -482,6 +534,7 @@ int testConcurrentSnapshotReplacement()
     // 回调退出临界区后，控制线程才可回收快照并触发旧来源析构。
     state->release.store(true, std::memory_order_release);
     processor.join();
+    // join 后再回收，区分允许延迟销毁与永久泄漏旧快照两种情况。
     bus.reclaimRetiredSources();
 
     failures += expectTrue(oldSource.expired(),
@@ -503,127 +556,6 @@ int testConcurrentSnapshotReplacement()
 }
 }  // namespace
 
-/// @brief 为回调零分配测试代理普通单对象堆分配。
-/// @param size 请求字节数。
-/// @return 已分配内存。
-void* operator new(std::size_t size)
-{
-    if ( g_trackAllocations ) ++g_allocationCount;
-    if ( void* memory = std::malloc(size) ) return memory;
-    std::abort();
-}
-
-/// @brief 为回调零分配测试代理普通数组堆分配。
-/// @param size 请求字节数。
-/// @return 已分配内存。
-void* operator new[](std::size_t size)
-{
-    if ( g_trackAllocations ) ++g_allocationCount;
-    if ( void* memory = std::malloc(size) ) return memory;
-    std::abort();
-}
-
-/// @brief 释放普通单对象堆内存。
-/// @param memory 待释放内存。
-void operator delete(void* memory) noexcept
-{
-    if ( g_trackAllocations ) ++g_deallocationCount;
-    std::free(memory);
-}
-
-/// @brief 释放普通数组堆内存。
-/// @param memory 待释放内存。
-void operator delete[](void* memory) noexcept
-{
-    if ( g_trackAllocations ) ++g_deallocationCount;
-    std::free(memory);
-}
-
-/// @brief 释放带尺寸的普通单对象堆内存。
-/// @param memory 待释放内存。
-/// @param size 原始请求字节数。
-void operator delete(void* memory, std::size_t size) noexcept
-{
-    static_cast<void>(size);
-    if ( g_trackAllocations ) ++g_deallocationCount;
-    std::free(memory);
-}
-
-/// @brief 释放带尺寸的普通数组堆内存。
-/// @param memory 待释放内存。
-/// @param size 原始请求字节数。
-void operator delete[](void* memory, std::size_t size) noexcept
-{
-    static_cast<void>(size);
-    if ( g_trackAllocations ) ++g_deallocationCount;
-    std::free(memory);
-}
-
-/// @brief 为回调零分配测试代理对齐单对象堆分配。
-/// @param size 请求字节数。
-/// @param alignment 请求对齐。
-/// @return 已分配内存。
-void* operator new(std::size_t size, std::align_val_t alignment)
-{
-    if ( g_trackAllocations ) ++g_allocationCount;
-    const std::size_t alignmentBytes = static_cast<std::size_t>(alignment);
-    const std::size_t alignedSize =
-        ((size + alignmentBytes - 1U) / alignmentBytes) * alignmentBytes;
-    if ( void* memory = std::aligned_alloc(alignmentBytes, alignedSize) ) {
-        return memory;
-    }
-    std::abort();
-}
-
-/// @brief 为回调零分配测试代理对齐数组堆分配。
-/// @param size 请求字节数。
-/// @param alignment 请求对齐。
-/// @return 已分配内存。
-void* operator new[](std::size_t size, std::align_val_t alignment)
-{
-    return ::operator new(size, alignment);
-}
-
-/// @brief 释放对齐单对象堆内存。
-/// @param memory 待释放内存。
-/// @param alignment 原始请求对齐。
-void operator delete(void* memory, std::align_val_t alignment) noexcept
-{
-    static_cast<void>(alignment);
-    if ( g_trackAllocations ) ++g_deallocationCount;
-    std::free(memory);
-}
-
-/// @brief 释放对齐数组堆内存。
-/// @param memory 待释放内存。
-/// @param alignment 原始请求对齐。
-void operator delete[](void* memory, std::align_val_t alignment) noexcept
-{
-    ::operator delete(memory, alignment);
-}
-
-/// @brief 释放带尺寸的对齐单对象堆内存。
-/// @param memory 待释放内存。
-/// @param size 原始请求字节数。
-/// @param alignment 原始请求对齐。
-void operator delete(void* memory, std::size_t size,
-                     std::align_val_t alignment) noexcept
-{
-    static_cast<void>(size);
-    ::operator delete(memory, alignment);
-}
-
-/// @brief 释放带尺寸的对齐数组堆内存。
-/// @param memory 待释放内存。
-/// @param size 原始请求字节数。
-/// @param alignment 原始请求对齐。
-void operator delete[](void* memory, std::size_t size,
-                       std::align_val_t alignment) noexcept
-{
-    static_cast<void>(size);
-    ::operator delete(memory, alignment);
-}
-
 /// @brief 运行 MixBus 实时安全和并发快照测试。
 /// @return 测试通过时返回 0。
 ///
@@ -631,12 +563,13 @@ void operator delete[](void* memory, std::size_t size,
 /// 累加，便于一次执行报告所有独立契约，而不把某一类失败误判为其他问题。
 /// 测试不启动真实音频设备，所有 block 由当前线程或显式 processor 线程驱动，
 /// 因而每个控制发布点和回收点都可重复复现。
-/// 全局分配代理只存在于本测试二进制，测试结束后不会影响其他音频目标。
+/// 全局分配代理在音频套件中共享；各用例仍由独立 CTest 进程运行。
 /// operator new 失败时直接 abort，与标准不可恢复分配失败语义保持一致。
 /// 断言失败数非零时返回一，适合作为 CTest 的单一成功条件。
 int main()
 {
-    const int failures = testStableOrderAndRealtimeCapacity() +
+    const int failures = testAllocationProbeObservesHeapOperations() +
+                         testStableOrderAndRealtimeCapacity() +
                          testIndexPreservingReplacement() +
                          testConcurrentSnapshotReplacement();
     if ( failures != 0 ) {

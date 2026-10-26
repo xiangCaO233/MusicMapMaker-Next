@@ -1,3 +1,4 @@
+#include "RealtimeAllocationProbe.h"
 #include "log/colorful-log.h"
 
 #include <array>
@@ -5,12 +6,10 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <ice/core/IAudioNode.hpp>
 #include <ice/core/effect/GraphicEqualizer.hpp>
 #include <ice/manage/AudioBuffer.hpp>
 #include <memory>
-#include <new>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -31,14 +30,10 @@ namespace
 // 语义。测试不要求某个 block 对应某次参数值，只验证发布始终完整且有界。
 // processor 结束后才检查退役队列，确保控制线程承担状态析构而非音频线程。
 
-/// @brief 当前线程是否正在统计普通 C++ 堆操作。
-thread_local bool g_trackAllocations{ false };
-
-/// @brief 当前统计区间内发生的 C++ 堆分配次数。
-thread_local std::size_t g_allocationCount{ 0U };
-
-/// @brief 当前统计区间内发生的 C++ 堆释放次数。
-thread_local std::size_t g_deallocationCount{ 0U };
+// 分配替换与测试窗口必须访问相同的线程局部状态，防止出现零计数假通过。
+using MMM::Test::AllocationProbe::g_allocationCount;
+using MMM::Test::AllocationProbe::g_deallocationCount;
+using MMM::Test::AllocationProbe::g_trackAllocations;
 
 /// @brief 记录断言失败并返回可累计的失败数量。
 /// @param condition 需要成立的条件。
@@ -131,6 +126,7 @@ int testPreparedCallbackHasNoHeapOperations()
 
     auto                  input = std::make_shared<TestSignalNode>();
     ice::GraphicEqualizer equalizer({ 125.0, 1000.0, 8000.0 });
+    // 预备工作在观察窗口外完成，测试只约束准备后的回调契约。
     equalizer.prepare(FORMAT, BLOCK_FRAMES);
     equalizer.set_inputnode(input);
     // 非零增益确保回调真正使用已发布滤波状态，而不是旁路所有处理。
@@ -150,6 +146,7 @@ int testPreparedCallbackHasNoHeapOperations()
     failures +=
         expectTrue(g_deallocationCount == 0U,
                    "prepared callback performs no C++ heap deallocation");
+    // 零堆操作之外仍须检查输出有效，不能用直接跳过处理来满足实时断言。
     failures += expectTrue(allSamplesFinite(output),
                            "prepared callback produces finite samples");
 
@@ -162,6 +159,7 @@ int testPreparedCallbackHasNoHeapOperations()
     g_trackAllocations = false;
     failures += expectTrue(g_allocationCount == 0U && g_deallocationCount == 0U,
                            "oversized callback rejects without heap activity");
+    // 拒绝路径必须写静音；仅返回而保留上一块内容会产生重复播放。
     failures += expectTrue(allSamplesSilent(oversized),
                            "oversized callback returns deterministic silence");
     return failures;
@@ -196,6 +194,7 @@ int testConcurrentParameterPublication()
 
     // 原子结果只从 processor 写、主线程 join 后读，release/acquire
     // 明确发布边界。
+    // 共享的是最终观察结果，分配计数本身仍为 processor 的线程局部状态。
     std::atomic_bool   start{ false };
     std::atomic_bool   samplesFinite{ true };
     std::atomic_size_t callbackAllocations{ 0U };
@@ -208,6 +207,7 @@ int testConcurrentParameterPublication()
             std::this_thread::yield();
         }
 
+        // 在处理线程内清零，主线程的参数发布不能重置或污染这份计数。
         g_allocationCount   = 0U;
         g_deallocationCount = 0U;
         g_trackAllocations  = true;
@@ -226,10 +226,12 @@ int testConcurrentParameterPublication()
                                     std::memory_order_release);
     });
 
+    // 门闩只协调测试起点，不把控制侧更新顺序硬编码为音频观察顺序。
     start.store(true, std::memory_order_release);
     bool controlsRemainValid = true;
     // 控制值覆盖正负增益及多个合法 Q，持续触发不可变状态发布与替换。
     for ( std::size_t update = 0U; update < UPDATE_COUNT; ++update ) {
+        // 频段索引来自固定配置数量，观察回调期间不改变均衡器拓扑。
         const std::size_t bandIndex = update % equalizer.get_band_count();
         const float       gain =
             static_cast<float>(static_cast<int>(update % 25U) - 12);
@@ -237,6 +239,7 @@ int testConcurrentParameterPublication()
         equalizer.set_band_gain_db(bandIndex, gain);
         equalizer.set_band_q_factor(bandIndex, q);
 
+        // 查询发生在控制线程，不把诊断接口的合法开销算成音频回调开销。
         const double response = equalizer.get_total_magnitude_response(1000.0);
         controlsRemainValid =
             controlsRemainValid && std::isfinite(response) && response > 0.0 &&
@@ -244,6 +247,7 @@ int testConcurrentParameterPublication()
             equalizer.get_band_q_factor(bandIndex) > 0.0;
     }
     // 音频线程退出后再从控制线程回收，避免测试本身违反生命周期协议。
+    // 等待处理线程离开之后再检查和回收，避免把仍受保护状态误判为泄漏。
     processor.join();
     equalizer.reclaim_retired_filter_states();
 
@@ -263,127 +267,6 @@ int testConcurrentParameterPublication()
     return failures;
 }
 }  // namespace
-
-/// @brief 为回调零分配测试代理普通单对象堆分配。
-/// @param size 请求字节数。
-/// @return 已分配内存。
-void* operator new(std::size_t size)
-{
-    if ( g_trackAllocations ) ++g_allocationCount;
-    if ( void* memory = std::malloc(size) ) return memory;
-    std::abort();
-}
-
-/// @brief 为回调零分配测试代理普通数组堆分配。
-/// @param size 请求字节数。
-/// @return 已分配内存。
-void* operator new[](std::size_t size)
-{
-    if ( g_trackAllocations ) ++g_allocationCount;
-    if ( void* memory = std::malloc(size) ) return memory;
-    std::abort();
-}
-
-/// @brief 释放普通单对象堆内存。
-/// @param memory 待释放内存。
-void operator delete(void* memory) noexcept
-{
-    if ( g_trackAllocations ) ++g_deallocationCount;
-    std::free(memory);
-}
-
-/// @brief 释放普通数组堆内存。
-/// @param memory 待释放内存。
-void operator delete[](void* memory) noexcept
-{
-    if ( g_trackAllocations ) ++g_deallocationCount;
-    std::free(memory);
-}
-
-/// @brief 释放带尺寸的普通单对象堆内存。
-/// @param memory 待释放内存。
-/// @param size 原始请求字节数。
-void operator delete(void* memory, std::size_t size) noexcept
-{
-    static_cast<void>(size);
-    if ( g_trackAllocations ) ++g_deallocationCount;
-    std::free(memory);
-}
-
-/// @brief 释放带尺寸的普通数组堆内存。
-/// @param memory 待释放内存。
-/// @param size 原始请求字节数。
-void operator delete[](void* memory, std::size_t size) noexcept
-{
-    static_cast<void>(size);
-    if ( g_trackAllocations ) ++g_deallocationCount;
-    std::free(memory);
-}
-
-/// @brief 为回调零分配测试代理对齐单对象堆分配。
-/// @param size 请求字节数。
-/// @param alignment 请求对齐。
-/// @return 已分配内存。
-void* operator new(std::size_t size, std::align_val_t alignment)
-{
-    if ( g_trackAllocations ) ++g_allocationCount;
-    const std::size_t alignmentBytes = static_cast<std::size_t>(alignment);
-    const std::size_t alignedSize =
-        ((size + alignmentBytes - 1U) / alignmentBytes) * alignmentBytes;
-    if ( void* memory = std::aligned_alloc(alignmentBytes, alignedSize) ) {
-        return memory;
-    }
-    std::abort();
-}
-
-/// @brief 为回调零分配测试代理对齐数组堆分配。
-/// @param size 请求字节数。
-/// @param alignment 请求对齐。
-/// @return 已分配内存。
-void* operator new[](std::size_t size, std::align_val_t alignment)
-{
-    return ::operator new(size, alignment);
-}
-
-/// @brief 释放对齐单对象堆内存。
-/// @param memory 待释放内存。
-/// @param alignment 原始请求对齐。
-void operator delete(void* memory, std::align_val_t alignment) noexcept
-{
-    static_cast<void>(alignment);
-    if ( g_trackAllocations ) ++g_deallocationCount;
-    std::free(memory);
-}
-
-/// @brief 释放对齐数组堆内存。
-/// @param memory 待释放内存。
-/// @param alignment 原始请求对齐。
-void operator delete[](void* memory, std::align_val_t alignment) noexcept
-{
-    ::operator delete(memory, alignment);
-}
-
-/// @brief 释放带尺寸的对齐单对象堆内存。
-/// @param memory 待释放内存。
-/// @param size 原始请求字节数。
-/// @param alignment 原始请求对齐。
-void operator delete(void* memory, std::size_t size,
-                     std::align_val_t alignment) noexcept
-{
-    static_cast<void>(size);
-    ::operator delete(memory, alignment);
-}
-
-/// @brief 释放带尺寸的对齐数组堆内存。
-/// @param memory 待释放内存。
-/// @param size 原始请求字节数。
-/// @param alignment 原始请求对齐。
-void operator delete[](void* memory, std::size_t size,
-                       std::align_val_t alignment) noexcept
-{
-    static_cast<void>(size);
-    ::operator delete(memory, alignment);
-}
 
 /// @brief 运行 GraphicEqualizer 实时安全和并发发布测试。
 /// @return 测试通过时返回 0。
