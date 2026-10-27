@@ -2160,6 +2160,13 @@ void Basic2DCanvasInteraction::update(
                 if ( !selectionMenu ) ImGui::CloseCurrentPopup();
                 ImGui::BeginDisabled(!selectionMenu ||
                                      currentSnapshot->isPlaying);
+                // 历史操作指向当前编辑器，沿用原撤销栈；空历史由逻辑层忽略。
+                // 菜单激活不携带快捷键来源，避免转入独立 BPM 工具的历史。
+                if ( ImGui::MenuItem(TR("ui.edit.undo").data()) )
+                    UI::Interaction::executeAction("UndoAction", sourceManager);
+                if ( ImGui::MenuItem(TR("ui.edit.redo").data()) )
+                    UI::Interaction::executeAction("RedoAction", sourceManager);
+                ImGui::Separator();
                 if ( ImGui::MenuItem(TR("ui.edit.cut").data()) )
                     UI::Interaction::executeAction("CutAction", sourceManager);
                 if ( ImGui::MenuItem(TR("ui.edit.copy").data()) )
@@ -2172,6 +2179,18 @@ void Basic2DCanvasInteraction::update(
                             .m_source = UI::MainMenuActivationSource::
                                 InteractionProfile,
                             .m_pasteTime = m_selectionPasteTime });
+                ImGui::Separator();
+                // 删除与 Delete
+                // 快捷键发布同一命令，权限和撤销仍由会话统一管理。
+                // 只在菜单项激活时发布一次，不读取或直接修改可变选择集合。
+                if ( ImGui::MenuItem(TR("ui.common.delete").data()) )
+                    UI::Interaction::dispatchCommand(
+                        Event::LogicCommandEvent(Logic::CmdDeleteSelected{}));
+                // 全选沿用 Ctrl+A 的当前轨道区范围，使用右键前保存的画布落点。
+                // 菜单中的移动不会把玩家区、草稿区或 BGM 区的选择范围串用。
+                if ( ImGui::MenuItem(TR("ui.edit.select_all").data()) )
+                    UI::Interaction::executeAction("SelectAllAction",
+                                                   sourceManager);
                 ImGui::EndDisabled();
                 ImGui::EndPopup();
             }
