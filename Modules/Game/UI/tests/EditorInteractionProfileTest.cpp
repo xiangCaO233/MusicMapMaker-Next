@@ -1,3 +1,4 @@
+#include "common/LogicCommands.h"
 #include "common/SelectionOperation.h"
 #include "config/EditorSettings.h"
 #include "config/EditorShortcutActions.h"
@@ -6,6 +7,7 @@
 #include "log/colorful-log.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
+#include "ui/imgui/menu/actions/MainMenuEditActions.h"
 #include "ui/imgui/menu/interfaces/IMainMenuItemActionHandler.h"
 #include "ui/imgui/menu/interfaces/IMainMenuToggleItemActionHandler.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
@@ -13,6 +15,7 @@
 #include <imgui.h>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -278,6 +281,82 @@ bool testInput()
     ImGui::DestroyContext();
     return ok;
 }
+/// @brief 验证真实镜像动作处理器共享纯鼠标粘贴锚点，兼容无锚点菜单入口。
+/// @return 稳定动作身份、命令类型及逐次锚点都正确时返回真。
+/// @details 通过正式动作注册表请求处理器，不能只构造正确 CmdPaste 模拟成功。
+/// 系统剪贴板回调在测试上下文中返回空值，不读取用户桌面剪贴板。
+/// 使用两个不同锚点后再用无锚点请求，能够检出落点在处理器里被缓存的回归。
+/// @pre 当前活动方案为纯鼠标，测试独占 ImGui 上下文和动作登记生命周期。
+/// @note 不绑定正在编辑的真实谱面，事件仅作观察，不启动文件或音频操作。
+/// @note 空剪贴板不阻止观察命令，实际复制内容由独立粘贴控制器测试验证。
+/// @note 锚点比较不做舍入，菜单此前已决定最终吸附位置。
+/// @note 原地镜像与粘贴分开计数，不能用相同总次数掩盖动作路由错误。
+/// @post 订阅和动作登记均先于栈对象销毁清理，保持观察地址有效。
+bool testMirrorActions()
+{
+    using namespace MMM;
+    ImGui::CreateContext();
+    // 粘贴会调用平台读取回调，测试必须隔离外部剪贴板以保证可重复性。
+    ImGui::GetPlatformIO().Platform_GetClipboardTextFn = [](ImGuiContext*) {
+        return "";
+    };
+    Sink                sink;
+    UI::MainMenuContext context{ sink };
+    auto                paste  = UI::createMirrorPasteAction();
+    auto                mirror = UI::createMirrorAction();
+    // 使用工厂创建生产处理器，避免替身动作只验证到注册表协议。
+    // 登记对象由当前栈独占拥有，注销之前地址保持稳定。
+    Interaction::registerAction(*paste);
+    Interaction::registerAction(*mirror);
+    std::optional<Logic::CmdPaste> received;
+    // 可选值区分完全没有发命令与发出了缺省字段命令两种失败。
+    int        pasteCount = 0, mirrorCount = 0;
+    auto&      bus = Event::EventBus::instance();
+    const auto subscription =
+        bus.subscribe<Event::LogicCommandEvent>([&](const auto& event) {
+            // 观察真正发往逻辑层的命令，验证动作不是只被注册表找到。
+            if ( const auto* command =
+                     std::get_if<Logic::CmdPaste>(&event.command) ) {
+                received = *command;
+                ++pasteCount;
+            }
+            mirrorCount +=
+                std::holds_alternative<Logic::CmdMirrorSelected>(event.command);
+        });
+    bool ok = true;
+    // 两次落点均通过右键来源传入；命令必须保留镜像标志和精确秒锚点。
+    for ( const double anchor : { 3.25, 8.5 } ) {
+        // 每轮清空上一条命令，不能让第一次成功掩盖后续请求丢失。
+        received.reset();
+        ok &= Interaction::executeAction(
+            "MirrorPasteAction",
+            context,
+            UI::MainMenuItemActivation{
+                .m_source    = UI::MainMenuActivationSource::InteractionProfile,
+                .m_pasteTime = anchor });
+        ok &= require(received && received->m_mirrored &&
+                          received->m_targetTime == anchor,
+                      "mirrored paste explicit anchor");
+    }
+    // 顶栏和快捷键不携带锚点，保持原设置控制定位；上一落点不能泄漏。
+    received.reset();
+    ok &= Interaction::executeAction("MirrorPasteAction", context, {});
+    // 普通菜单未传时间时必须为空，而不是由处理器补一个零秒假锚点。
+    ok &= require(received && received->m_mirrored && !received->m_targetTime,
+                  "mirrored paste default anchor");
+    // 原地镜像复用既有动作，只允许一次语义请求对应一条命令。
+    ok &= Interaction::executeAction("MirrorAction", context, {});
+    ok &= require(pasteCount == 3 && mirrorCount == 1,
+                  "mirror actions dispatch once");
+    bus.unsubscribe<Event::LogicCommandEvent>(subscription);
+    // 解除监听后再注销处理器，销毁顺序不会留下引用测试局部状态的闭包。
+    Interaction::unregisterAction(*paste);
+    Interaction::unregisterAction(*mirror);
+    // 平台回调由新上下文独占，随上下文销毁，无需改全局桌面服务。
+    // 处理器只剩字符串缓存，析构不再访问已经注销的总线订阅。
+    ImGui::DestroyContext();
+    return ok;
+}
 }  // namespace
 
 /// @brief 验证应用级方案、真实输入映射、动作权限、生命周期和配置兼容。
@@ -462,5 +541,6 @@ int main()
                             Interaction::Modifier::Shift,
                             false),
         "mouse-only brush isolation");
+    ok &= testMirrorActions();
     return ok ? 0 : 1;
 }

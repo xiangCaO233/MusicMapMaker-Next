@@ -286,8 +286,22 @@ bool testExplicitPasteAnchor()
         const double expected = note.m_trackIndex == 0 ? 3.25 : 3.75;
         if ( std::abs(note.m_timestamp - expected) > 1e-9 ) return false;
     }
+    // 镜像只改变轨道，不改变右键锚点和批次内部的时间间隔。
+    // 先撤销普通粘贴，保证本轮对象完全由镜像命令创建。
+    context.actionStack.undo(context);
+    controller.handleCommand(
+        CmdPaste{ .m_mirrored = true, .m_targetTime = 3.25 });
+    if ( context.noteRegistry.view<NoteComponent>().size() != 2 ) return false;
+    for ( auto entity : context.noteRegistry.view<NoteComponent>() ) {
+        const auto& note = context.noteRegistry.get<NoteComponent>(entity);
+        // 四轨镜像将第零、一轨映射为第三、二轨，不能仅比较时间验证镜像成功。
+        if ( note.m_trackIndex != 3 && note.m_trackIndex != 2 ) return false;
+        const double expected = note.m_trackIndex == 3 ? 3.25 : 3.75;
+        if ( std::abs(note.m_timestamp - expected) > 1e-9 ) return false;
+    }
     // 显式位置只作用于本次命令，不能偷偷改用户的默认粘贴偏好。
     // 撤销清除上一批结果，再用无锚点命令验证兼容入口。
+    // 镜像批次也由同一动作栈整体撤销，默认粘贴不复用镜像标志。
     // 第二次应对齐十秒播放头，不能复用上一次的菜单时间。
     context.actionStack.undo(context);
     controller.handleCommand(CmdPaste{});

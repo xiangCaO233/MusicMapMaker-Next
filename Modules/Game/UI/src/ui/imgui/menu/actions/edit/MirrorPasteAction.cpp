@@ -48,20 +48,21 @@ public:
 
     /// @brief 从系统剪贴板同步并发布镜像粘贴命令。
     /// @param context 单帧主菜单上下文，本动作无需读取。
-    /// @param activation 激活来源，不改变镜像粘贴语义。
+    /// @param activation 激活来源；右键入口可显式指定打开时的吸附时间。
     /// @note 新对象选择策略沿用普通粘贴的编辑器设置。
     /// @warning 系统剪贴板访问仅应由用户显式激活触发。
     void execute(MainMenuContext&              context,
                  const MainMenuItemActivation& activation) override
     {
-        (void)activation;
         // 在构造命令前导入外部内容，保证编辑器剪贴板状态最新。
         ClipboardBridge::importEditorClipboardFromSystem();
         // true 明确选择镜像模式，实际坐标变换由逻辑层负责。
+        // 无显式锚点的顶栏和快捷键仍采用原粘贴位置设置，不留下跨次缓存。
         MenuUtil::dispatchCommand(Logic::CmdPaste{ true,
                                                    Config::AppConfig::instance()
                                                        .getEditorSettings()
-                                                       .selectPastedObjects });
+                                                       .selectPastedObjects,
+                                                   activation.m_pasteTime });
     }
 
     /// @brief 消费用户配置的镜像粘贴快捷键。

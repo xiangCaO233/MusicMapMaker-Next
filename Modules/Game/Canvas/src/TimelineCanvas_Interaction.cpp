@@ -1711,7 +1711,10 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         UI::Interaction::modifier(UI::Interaction::Modifier::Control);
     const bool shift =
         UI::Interaction::modifier(UI::Interaction::Modifier::Shift);
-    const bool  additiveSelection = ctrl || shift;
+    const bool additiveSelection = ctrl || shift;
+    // 纯鼠标使用显式集合模式；经典方案返回空，继续保留 Ctrl/Shift 切换语义。
+    const auto selectionOperation =
+        UI::Interaction::activeProfile().selectionOperation();
     const auto& settings = Config::AppConfig::instance().getEditorSettings();
     bool        handledKeyboardCommand = m_currentSnapshot->isPlaying;
     if ( !handledKeyboardCommand &&
@@ -1866,23 +1869,9 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         if ( isHovered &&
              UI::Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
             if ( hoveredTarget ) {
-                const bool wasSelected =
-                    m_selectedTimingEntities.find(hoveredTarget->entity) !=
-                    m_selectedTimingEntities.end();
-                bool shouldBeginTimingDrag = true;
-                if ( additiveSelection ) {
-                    if ( wasSelected ) {
-                        m_selectedTimingEntities.erase(hoveredTarget->entity);
-                        shouldBeginTimingDrag = false;
-                    } else {
-                        m_selectedTimingEntities.insert(hoveredTarget->entity);
-                    }
-                } else {
-                    if ( !wasSelected ) {
-                        m_selectedTimingEntities.clear();
-                    }
-                    m_selectedTimingEntities.insert(hoveredTarget->entity);
-                }
+                // 同一选择入口区分经典切换与纯鼠标集合模式；减选不启动拖动。
+                const bool shouldBeginTimingDrag = selectTimingTarget(
+                    hoveredTarget->entity, true, additiveSelection);
 
                 if ( !shouldBeginTimingDrag ) {
                     m_isTimingDragging       = false;
@@ -1907,7 +1896,10 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                             { target.entity, target.time, target.value });
                     }
                 }
-            } else if ( !additiveSelection ) {
+            } else if ( selectionOperation ==
+                            Logic::SelectionOperation::Replace ||
+                        (!selectionOperation && !additiveSelection) ) {
+                // 追加和减选点空白不丢弃原集合；经典方案沿用原修饰键判断。
                 m_selectedTimingEntities.clear();
             }
         }
@@ -1984,7 +1976,13 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
             for ( const auto& target : collectVisibleTimingTargets() ) {
                 if ( isTimingTargetSelectable(target) &&
                      selectionMatchesTarget(selectionRect, target) ) {
-                    m_selectedTimingEntities.insert(target.entity);
+                    // 每帧从起笔基线重算，缩回框选时必须恢复刚才暂时减去的目标。
+                    // 不能把减选写成持续 erase，否则同一手势回缩后无法恢复。
+                    if ( m_timingMarqueeOperation ==
+                         Logic::SelectionOperation::Subtract )
+                        m_selectedTimingEntities.erase(target.entity);
+                    else
+                        m_selectedTimingEntities.insert(target.entity);
                 }
             }
         };
@@ -1992,19 +1990,9 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         if ( isHovered &&
              UI::Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
             if ( hoveredTarget && isTimingTargetSelectable(*hoveredTarget) ) {
-                const bool wasSelected =
-                    m_selectedTimingEntities.find(hoveredTarget->entity) !=
-                    m_selectedTimingEntities.end();
-                if ( additiveSelection ) {
-                    if ( wasSelected ) {
-                        m_selectedTimingEntities.erase(hoveredTarget->entity);
-                    } else {
-                        m_selectedTimingEntities.insert(hoveredTarget->entity);
-                    }
-                } else {
-                    m_selectedTimingEntities.clear();
-                    m_selectedTimingEntities.insert(hoveredTarget->entity);
-                }
+                // 选中工具不保留抓取分组；显式追加、减选与主画布模式一致。
+                selectTimingTarget(
+                    hoveredTarget->entity, false, additiveSelection);
                 m_isTimingMarqueeSelecting = false;
                 m_timingMarqueeBaseSelection.clear();
             } else {
@@ -2016,10 +2004,16 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                 m_timingMarqueeEndTime = m_timingMarqueeStartTime;
                 refreshMarqueeScreenY();
                 m_timingMarqueeBaseSelection.clear();
-                if ( additiveSelection ) {
+                // 一笔框选只解释一次模式；经典修饰键仍在起笔决定是否保留基线。
+                m_timingMarqueeOperation = selectionOperation.value_or(
+                    additiveSelection ? Logic::SelectionOperation::Add
+                                      : Logic::SelectionOperation::Replace);
+                if ( m_timingMarqueeOperation !=
+                     Logic::SelectionOperation::Replace ) {
                     m_timingMarqueeBaseSelection = m_selectedTimingEntities;
                 }
-                if ( !additiveSelection ) {
+                if ( m_timingMarqueeOperation ==
+                     Logic::SelectionOperation::Replace ) {
                     m_selectedTimingEntities.clear();
                 }
                 refreshMarqueeTargets();

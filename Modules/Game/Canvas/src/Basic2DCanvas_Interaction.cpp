@@ -2214,6 +2214,21 @@ void Basic2DCanvasInteraction::update(
                             .m_source = UI::MainMenuActivationSource::
                                 InteractionProfile,
                             .m_pasteTime = m_selectionPasteTime });
+                // 镜像粘贴与普通粘贴共享右键打开时的吸附时间，不能回退播放头。
+                // 锚点作为本次激活载荷传递，不改变快捷键和顶栏菜单的定位偏好。
+                // 实际轨道镜像仍由既有动作处理器和命令层完成，菜单不转换数据。
+                if ( UI::FeedbackMenuItem(TR("ui.edit.mirror_paste").data()) )
+                    UI::Interaction::executeAction(
+                        "MirrorPasteAction",
+                        sourceManager,
+                        UI::MainMenuItemActivation{
+                            .m_source = UI::MainMenuActivationSource::
+                                InteractionProfile,
+                            .m_pasteTime = m_selectionPasteTime });
+                // 原地镜像只作用于当前选区，保持既有权限、撤销与混合领域规则。
+                if ( UI::FeedbackMenuItem(TR("ui.edit.mirror").data()) )
+                    UI::Interaction::executeAction("MirrorAction",
+                                                   sourceManager);
                 ImGui::Separator();
                 // 删除与 Delete
                 // 快捷键发布同一命令，权限和撤销仍由会话统一管理。

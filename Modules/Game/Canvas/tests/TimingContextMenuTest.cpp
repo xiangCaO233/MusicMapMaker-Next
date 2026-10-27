@@ -51,6 +51,15 @@ struct TimingContextMenuTestAccess {
     {
         return canvas.m_selectedTimingEntities.size();
     }
+    /// @brief 检查具体成员身份，避免数量相同但替换错对象的假通过。
+    /// @param canvas 由真实鼠标动作维护选择的时间线。
+    /// @param id 仅用于固定快照实体的句柄比较，不访问 Registry。
+    /// @return 同一选区中存在指定实体时返回真。
+    static bool contains(const TimelineCanvas& canvas, unsigned id)
+    {
+        return canvas.m_selectedTimingEntities.contains(
+            static_cast<entt::entity>(id));
+    }
     /// @brief 核对右键起点的吸附时间，后续移动到菜单不能改变该值。
     /// @param canvas 刚完成右键打开流程的时间线实例。
     /// @return 与画布时间轴一致的秒时间，不是播放头位置。
@@ -117,7 +126,7 @@ ImGuiWindow* open(Canvas::TimelineCanvas&         canvas,
 /// @param snapshot 所有点击共用的只读输入快照。
 /// @param point 新一轮菜单打开时的画布吸附坐标。
 /// @param row 菜单中不含分隔线的零起始行号。
-/// @note 两条分隔线分别位于第 2 和第 6 行之前。
+/// @note 三条分隔线分别位于第 2、第 6 和第 8 行之前。
 /// @return 真实菜单行被激活并关闭后返回真。
 /// @details 不按翻译文本搜索行，避免测试依赖桌面语言或字体配置。
 /// @warning 仅测试读取 ImGui 内部窗口几何，生产代码不依赖该结构。
@@ -127,9 +136,10 @@ bool click(Canvas::TimelineCanvas&         canvas,
     const auto* popup = open(canvas, snapshot, point);
     if ( !popup ) return false;
     // Selectable 行含 ItemSpacing；分隔线还增加一个像素高度。
-    const auto&  style      = ImGui::GetStyle();
-    const float  line       = ImGui::GetTextLineHeightWithSpacing();
-    const int    separators = (row >= 2 ? 1 : 0) + (row >= 6 ? 1 : 0);
+    const auto& style = ImGui::GetStyle();
+    const float line  = ImGui::GetTextLineHeightWithSpacing();
+    const int   separators =
+        (row >= 2 ? 1 : 0) + (row >= 6 ? 1 : 0) + (row >= 8 ? 1 : 0);
     const ImVec2 target{ popup->Pos.x + popup->Size.x * 0.5F,
                          popup->DC.CursorStartPos.y + row * line +
                              separators * (1.0F + style.ItemSpacing.y) +
@@ -245,6 +255,73 @@ bool checkMenu()
     passed &= click(canvas, snapshot, point, 6);
     passed &= click(canvas, snapshot, point, 3);
     passed &= deleted == 4 && Access::count(canvas) == 0;
+    // 三种模式都从真实菜单选择，随后只用鼠标点选和框选，不伪造 Ctrl。
+    // 模式是应用级状态，菜单退出后主画布也应读到同一个值。
+    using Operation = Logic::SelectionOperation;
+    const ImVec2 first{ origin.x + 50, origin.y + 150 };
+    const ImVec2 second{ origin.x + 150, origin.y + 200 };
+    auto         tap = [&](ImVec2 at) {
+        // 按下和释放都经过正式控制器，不直接调用选择辅助函数。
+        // 释放后才能再次打开菜单，避免把一笔手势拆成多次操作。
+        frame(canvas, snapshot, at, true);
+        frame(canvas, snapshot, at);
+    };
+    passed &= click(canvas, snapshot, point, 8);
+    passed &= UI::Interaction::activeProfile().selectionOperation() ==
+              Operation::Replace;
+    // 默认替换先建立单项集合，后续追加必须保留这一项。
+    tap(first);
+    passed &= Access::count(canvas) == 1 && Access::contains(canvas, 42);
+    passed &= click(canvas, snapshot, point, 9);
+    tap(second);
+    tap(second);
+    // 重复追加已选项不能切换移除；这是与经典 Ctrl 点击不同的关键契约。
+    passed &= Access::count(canvas) == 2;
+    passed &= click(canvas, snapshot, point, 10);
+    tap(first);
+    tap(first);
+    passed &= Access::count(canvas) == 1 && Access::contains(canvas, 43);
+    // 在非 marker 位置开始框选；几何覆盖两个泳道，但基线只有 Scroll。
+    // 减选同一目标两次仍是差集，不能恢复第二次命中的目标。
+    // 减选框扩大时移除命中项，缩回时必须从起笔基线恢复该项。
+    const ImVec2 corner{ origin.x + 5, origin.y + 120 };
+    const ImVec2 all{ origin.x + 180, origin.y + 230 };
+    const ImVec2 narrow{ origin.x + 80, origin.y + 175 };
+    // 起点与全部终点都远离自动滚动边缘，选区差异只由集合语义决定。
+    frame(canvas, snapshot, corner, true);
+    frame(canvas, snapshot, all, true);
+    passed &= Access::count(canvas) == 0;
+    // 直接改应用模式模拟外部设置，当前笔仍必须使用锁存的减选操作。
+    UI::Interaction::activeProfile().setSelectionOperation(Operation::Add);
+    // 当前活动手势不通过菜单切换；这次设置故意模拟外部应用状态变更。
+    frame(canvas, snapshot, narrow, true);
+    frame(canvas, snapshot, narrow);
+    passed &= Access::count(canvas) == 1 && Access::contains(canvas, 43);
+    // 下一笔才采用追加，先框选 BPM，随后多次框选同一区域仍是幂等并集。
+    for ( int i = 0; i < 2; ++i ) {
+        // 第一笔追加 BPM，第二笔命中相同目标；成员数量不应反向减少。
+        frame(canvas, snapshot, corner, true);
+        frame(canvas, snapshot, narrow, true);
+        frame(canvas, snapshot, narrow);
+        passed &= Access::count(canvas) == 2;
+    }
+    passed &= click(canvas, snapshot, point, 8);
+    frame(canvas, snapshot, corner, true);
+    frame(canvas, snapshot, narrow, true);
+    frame(canvas, snapshot, narrow);
+    passed &= Access::count(canvas) == 1 && Access::contains(canvas, 42);
+    // 抓取工具的追加保留组；减选不能启动拖动或发布移动命令。
+    // 上一笔替换框不保留多选基线，框外 Scroll 应已从集合中移除。
+    snapshot.currentTool = Logic::EditTool::Move;
+    // 使用固定 marker 时间零位移抓取，不依赖异步更新快照完成状态收尾。
+    passed &= click(canvas, snapshot, point, 9);
+    tap(second);
+    passed &= Access::count(canvas) == 2;
+    passed &= click(canvas, snapshot, point, 10);
+    tap(first);
+    passed &= Access::count(canvas) == 1 && Access::contains(canvas, 43);
+    snapshot.currentTool = Logic::EditTool::Marquee;
+    // 还原工具后再检查旧菜单失效，防止工具变化本身提前关闭菜单造成假通过。
     // 同路径重载后的新实例不能接收旧菜单，关闭时也不得穿透出编辑命令。
     // 在未产生任何菜单项点击时切换代数，生产校验应主动关闭旧菜单。
     passed &= open(canvas, snapshot, point) != nullptr;
@@ -261,6 +338,17 @@ bool checkMenu()
     UI::Interaction::synchronizeProfile("classic-desktop", true);
     UI::Interaction::synchronizeProfile("classic-desktop", true);
     passed &= open(canvas, snapshot, point) == nullptr;
+    // 经典无修饰点击仍然替换，Ctrl 点击已选项仍然切出，不读取纯鼠标模式。
+    tap(first);
+    ImGui::GetIO().AddKeyEvent(ImGuiMod_Ctrl, true);
+    // 经典分支读取真实物理修饰键，不能被上次的纯鼠标减选模式覆盖。
+    tap(second);
+    passed &= Access::count(canvas) == 2;
+    tap(first);
+    passed &= Access::count(canvas) == 1 && Access::contains(canvas, 43);
+    ImGui::GetIO().AddKeyEvent(ImGuiMod_Ctrl, false);
+    // 在切回纯鼠标方案前释放修饰键，确保最后的画笔用例独立于本断言。
+    frame(canvas, snapshot, point);
     UI::Interaction::synchronizeProfile("mouse-only", true);
     UI::Interaction::synchronizeProfile("mouse-only", true);
     snapshot.currentTool = Logic::EditTool::Draw;
@@ -290,11 +378,15 @@ int main()
     // 这些配置只影响当前测试进程，不能调用保存入口写入个人设置。
     settings.timelineSelectionIncludesBpm = true;
     ImGui::CreateContext();
-    auto& io              = ImGui::GetIO();
-    io.IniFilename        = nullptr;
-    io.DisplaySize        = { 800, 700 };
-    io.DeltaTime          = 1.0F / 60.0F;
-    unsigned char* pixels = nullptr;
+    auto& io       = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = { 800, 700 };
+    io.DeltaTime   = 1.0F / 60.0F;
+    // 本用例只测试单击集合操作，重复点击用于验证追加和减选的幂等性。
+    // 禁用双击识别，避免短帧间隔让单击用例意外转入编辑弹窗。
+    io.MouseDoubleClickTime         = 0.0F;
+    io.ConfigInputTrickleEventQueue = false;
+    unsigned char* pixels           = nullptr;
     int            width = 0, height = 0;
     // CPU 控件布局需要字体度量，像素数据不上传纹理，也不需要显示器。
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);

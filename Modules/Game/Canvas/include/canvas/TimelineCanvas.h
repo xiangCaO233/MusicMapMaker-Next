@@ -8,6 +8,7 @@
 #include "canvas/TimingFunctionEditorState.h"
 #include "canvas/TimingInterpolationPreview.h"
 #include "canvas/TimingTemplateEditorState.h"
+#include "common/SelectionOperation.h"
 #include "common/render/RenderSnapshot.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "common/render/TimingInterpolationRenderData.h"
@@ -206,6 +207,10 @@ private:
     bool handleTimingContextMenu(ImVec2 origin, ImVec2 size, bool hovered);
     /// @brief 将当前可见且允许选择的 Timing 加入选区，复用原 Ctrl+A 的范围。
     void selectAllTimingEvents();
+    /// @brief 按活动方案更新命中时间点的选择；经典模式保留修饰键切换。
+    /// @return 目标仍允许开始拖动时返回真，减选与经典切出均返回假。
+    bool selectTimingTarget(entt::entity entity, bool preserveGroup,
+                            bool additiveSelection);
 
     /// @brief 在编辑手势及其它弹窗结束后显示格式支持度警告。
     /// @warning UI 热路径：每帧只检查本地标志；配置仅在用户确认时保存。
@@ -679,6 +684,11 @@ private:
 
     /// @brief 是否正在 Timeline 中框选 Timing。
     bool m_isTimingMarqueeSelecting{ false };
+
+    /// @brief 框选起笔锁存集合操作，拖动期间切换方案或模式不重解释当前事务。
+    Logic::SelectionOperation m_timingMarqueeOperation{
+        Logic::SelectionOperation::Replace
+    };
 
     /// @brief Timeline 框选起点 Y 坐标。
     float m_timingMarqueeStartY{ 0.0f };

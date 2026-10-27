@@ -9,9 +9,43 @@
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <imgui.h>
+#include <utility>
 
 namespace MMM::Canvas
 {
+/// @brief 将命中目标并入或移出本地 Timing 选择，不直接修改谱面数据。
+/// @param entity 已由调用方按泳道、部位和可选设置验证过的目标。
+/// @param preserveGroup 抓取工具点击已选项时保留组，选中工具直接替换。
+/// @param additiveSelection 经典 Ctrl/Shift 的切换意图，显式方案模式优先。
+/// @details 本函数不验证目标是否可选，选中工具和抓取工具保留各自原有门禁。
+/// 返回值只控制后续拖动，单纯更新选择不会向逻辑层提交谱面修改。
+/// @return 可以从该目标开始拖动时返回真，减选操作返回假。
+/// @warning 只在点击边沿操作本地集合，不读 ECS 或等待逻辑线程。
+bool TimelineCanvas::selectTimingTarget(entt::entity entity, bool preserveGroup,
+                                        bool additiveSelection)
+{
+    const bool wasSelected = m_selectedTimingEntities.contains(entity);
+    const auto operation =
+        UI::Interaction::activeProfile().selectionOperation();
+    // 纯鼠标的减选是差集，重复点击不反向加入对象，也不能拖动被移出的对象。
+    if ( operation == Logic::SelectionOperation::Subtract ) {
+        m_selectedTimingEntities.erase(entity);
+        return false;
+    }
+    // 经典修饰键是切换，纯鼠标追加则是幂等并集；两种规则必须独立解释。
+    if ( !operation && additiveSelection && wasSelected ) {
+        m_selectedTimingEntities.erase(entity);
+        return false;
+    }
+    const bool replace = operation == Logic::SelectionOperation::Replace ||
+                         (!operation && !additiveSelection);
+    // 抓取已选项保留整组移动；选中工具的替换始终只留下直接点击的目标。
+    if ( replace && (!preserveGroup || !wasSelected) )
+        m_selectedTimingEntities.clear();
+    m_selectedTimingEntities.insert(entity);
+    return true;
+}
+
 /// @brief 全选 Timing 画布可见的可编辑目标，与键盘入口保持同一过滤规则。
 /// @details 使用快照目标而非 ECS 遍历，保留 BPM 参与选择的配置开关。
 /// @post 当前集合只含本快照中可编辑的实体；没有目标时为空。
@@ -139,6 +173,25 @@ bool TimelineCanvas::handleTimingContextMenu(ImVec2 origin, ImVec2 size,
             m_selectedTimingEntities.clear();
             // 旧框选基线不能在下一次框选中复活已清空的选择。
             m_timingMarqueeBaseSelection.clear();
+        }
+        ImGui::Separator();
+        // 与主画布共享同一应用级模式，跨表面操作不需要记住两套选择开关。
+        // 切换只作用于下一笔，已完成的选区和撤销历史不受模式设置影响。
+        // 活动手势不能打开菜单，框选也会在起笔锁存模式以保证拖动过程稳定。
+        auto& profile = UI::Interaction::activeProfile();
+        for ( const auto& [operation, key] :
+              { std::pair{ Logic::SelectionOperation::Replace,
+                           "ui.selection.replace" },
+                std::pair{ Logic::SelectionOperation::Add, "ui.selection.add" },
+                std::pair{ Logic::SelectionOperation::Subtract,
+                           "ui.selection.subtract" } } ) {
+            // 勾选表示后续点击或框选的集合语义，不表示当前选中了几个目标。
+            // 复用反馈菜单封装，按钮音效与其他时间线菜单保持一致。
+            if ( UI::FeedbackMenuItem(
+                     TR(key).data(),
+                     nullptr,
+                     profile.selectionOperation() == operation) )
+                profile.setSelectionOperation(operation);
         }
         ImGui::EndDisabled();
         ImGui::EndPopup();
