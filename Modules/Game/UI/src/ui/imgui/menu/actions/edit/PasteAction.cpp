@@ -33,14 +33,14 @@ public:
     void execute(MainMenuContext&              context,
                  const MainMenuItemActivation& activation) override
     {
-        (void)activation;
         // 命令执行前刷新编辑器剪贴板，确保读取的是系统中的最新内容。
         ClipboardBridge::importEditorClipboardFromSystem();
         // 通过命令层创建对象，以保留编辑事务和撤销语义。
         MenuUtil::dispatchCommand(Logic::CmdPaste{ false,
                                                    Config::AppConfig::instance()
                                                        .getEditorSettings()
-                                                       .selectPastedObjects });
+                                                       .selectPastedObjects,
+                                                   activation.m_pasteTime });
     }
 
     /// @brief 消费 Ctrl+V 快捷键。

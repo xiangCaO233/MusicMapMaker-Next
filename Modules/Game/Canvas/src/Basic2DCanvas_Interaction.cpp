@@ -54,6 +54,7 @@
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/audio/ProjectAudioPreviewControls.h"
 #include "ui/imgui/markdown/MarkdownRenderer.h"
+#include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/utils/CanvasContentVisibility.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -2108,8 +2109,74 @@ void Basic2DCanvasInteraction::update(
         };
         // 接管表面意味着新方案独占编辑，不再执行默认热键或指针状态机。
         if ( !UI::Interaction::dispatchSurface(frame) ) {
-            handleHotkeys(currentSnapshot);
-            handleInteractions(currentSnapshot, targetWidth, targetHeight);
+            // 按相机隔离菜单身份，两个画布不能共享一次右键打开状态。
+            ImGui::PushID(m_cameraId.c_str());
+            const bool menuOpen = ImGui::IsPopupOpen("SelectionEditMenu");
+            ImGui::PopID();
+            // 策略来自操作方案，画布不比较持久化方案字符串。
+            // 仅选中工具提供此菜单，绘制工具的右键擦除不受影响。
+            const bool selectionMenu =
+                UI::Interaction::activeProfile().selectionContextMenu() &&
+                currentSnapshot->currentTool == Logic::EditTool::Marquee &&
+                currentSnapshot->hasBeatmap;
+            // 菜单打开期间冻结画布指针目标，粘贴仍以右键落点为参照。
+            // 菜单文字上的移动不能重新计算谱面时间或改变活动轨道。
+            // 不遍历选择集合；复制和剪切由逻辑层执行时读取权威选择。
+            // 菜单点击不进入框选状态机，也不覆盖原选择或产生额外编辑事务。
+            if ( !menuOpen ) {
+                handleHotkeys(currentSnapshot);
+                handleInteractions(currentSnapshot, targetWidth, targetHeight);
+            }
+            // 先让正常鼠标路径发布本次落点，再打开菜单，保持命令队列顺序。
+            // 左键框选或中键平移尚未结束时不抢走它们的释放事件。
+            // 内容区与窗口悬浮必须同时成立，标题栏和留白不能触发编辑菜单。
+            // 播放中不新开菜单，打开后开始播放则禁用条目。
+            const auto pointer = ImGui::GetMousePos();
+            const bool inside  = pointer.x >= frame.m_x &&
+                                 pointer.y >= frame.m_y &&
+                                 pointer.x < frame.m_x + frame.m_width &&
+                                 pointer.y < frame.m_y + frame.m_height;
+            // 菜单 ID 作用域不包围原控制器，保持批注等既有控件身份不变。
+            ImGui::PushID(m_cameraId.c_str());
+            if ( selectionMenu && !menuOpen && frame.m_hovered && inside &&
+                 !currentSnapshot->isPlaying && !currentSnapshot->isSelecting &&
+                 !UI::Interaction::mouseDown(0) &&
+                 !UI::Interaction::mouseDown(2) &&
+                 UI::Interaction::mouseClicked(1) ) {
+                // 锁存本帧实际显示的吸附线；菜单中的鼠标移动和后续快照不能改写。
+                // 无吸附时使用可见鼠标时间，仍不回退到播放头。
+                // 使用同一快照的 snappedTime，与本帧高亮线的绘制时间一致。
+                // 不写入全局粘贴偏好，避免一次右键操作影响后续快捷键。
+                m_selectionPasteTime = currentSnapshot->isSnapped
+                                           ? currentSnapshot->snappedTime
+                                           : currentSnapshot->hoveredTime;
+                ImGui::OpenPopup("SelectionEditMenu");
+            }
+            // 标准菜单沿用 ImGui 的关闭和点击捕获，无需新增可见按钮样式。
+            // 动作身份复用顶栏编辑菜单，系统剪贴板仅在用户激活时访问。
+            // 不在每帧探测系统剪贴板，避免平台调用阻塞菜单绘制。
+            // 管理器只在同步激活时借用，不保存到后续帧。
+            if ( ImGui::BeginPopup("SelectionEditMenu") ) {
+                if ( !selectionMenu ) ImGui::CloseCurrentPopup();
+                ImGui::BeginDisabled(!selectionMenu ||
+                                     currentSnapshot->isPlaying);
+                if ( ImGui::MenuItem(TR("ui.edit.cut").data()) )
+                    UI::Interaction::executeAction("CutAction", sourceManager);
+                if ( ImGui::MenuItem(TR("ui.edit.copy").data()) )
+                    UI::Interaction::executeAction("CopyAction", sourceManager);
+                if ( ImGui::MenuItem(TR("ui.edit.paste").data()) )
+                    UI::Interaction::executeAction(
+                        "PasteAction",
+                        sourceManager,
+                        UI::MainMenuItemActivation{
+                            .m_source = UI::MainMenuActivationSource::
+                                InteractionProfile,
+                            .m_pasteTime = m_selectionPasteTime });
+                ImGui::EndDisabled();
+                ImGui::EndPopup();
+            }
+            // 即使菜单本帧关闭，也不补跑画布逻辑，防止释放点击穿透。
+            ImGui::PopID();
         }
     }
 
@@ -6009,7 +6076,7 @@ void Basic2DCanvasInteraction::handleInteractions(
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Draw ) {
                 if ( !currentSnapshot->isPlaying ) {
-                    // 画笔起点连同 Shift/Ctrl 状态一次性发送，逻辑层决定
+                    // 画笔起点连同方案延伸意图与 Ctrl 状态发送，逻辑层决定
                     // 物件种类、吸附与复合绘制模式。
                     // 教学策略只在起笔锁存，跳过提示也不能在结束时意外合并旧物件。
                     m_standaloneBrush = m_walkthroughPlacement;
@@ -6024,8 +6091,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                             m_cameraId,
                             localMousePos.x,
                             localMousePos.y,
-                            UI::Interaction::modifier(
-                                UI::Interaction::Modifier::Shift),
+                            UI::Interaction::extendBrush(),
                             UI::Interaction::modifier(
                                 UI::Interaction::Modifier::Control),
                             m_standaloneBrush }));
@@ -6142,19 +6208,17 @@ void Basic2DCanvasInteraction::handleInteractions(
                      m_lastBrushUpdateCommand,
                      { localMousePos.x, localMousePos.y },
                      *currentSnapshot,
-                     UI::Interaction::modifier(
-                         UI::Interaction::Modifier::Shift),
+                     UI::Interaction::extendBrush(),
                      UI::Interaction::modifier(
                          UI::Interaction::Modifier::Control)) ||
                  playbackScrolled || finishingLeftDrag ) {
-                // Shift/Ctrl 属于连续命令去重键，拖动中切换修饰键会立即更新。
+                // 延伸意图与 Ctrl 属于去重键，方案绘制语义与起笔保持一致。
                 UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdUpdateBrush{
                         m_cameraId,
                         localMousePos.x,
                         localMousePos.y,
-                        UI::Interaction::modifier(
-                            UI::Interaction::Modifier::Shift),
+                        UI::Interaction::extendBrush(),
                         UI::Interaction::modifier(
                             UI::Interaction::Modifier::Control) }));
             }
@@ -6305,6 +6369,8 @@ void Basic2DCanvasInteraction::handleInteractions(
 
     const bool ctrlRightRemoveMarquee =
         isHovered && UI::Interaction::mouseClicked(1) &&
+        !(currentSnapshot->currentTool == Logic::EditTool::Marquee &&
+          UI::Interaction::activeProfile().selectionContextMenu()) &&
         UI::Interaction::modifier(UI::Interaction::Modifier::Control);
     // Ctrl+右键移除框选具有全局优先级，不与 Draw 工具擦除同时触发。
 
@@ -6391,8 +6457,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                         m_cameraId,
                         localMousePos.x,
                         localMousePos.y,
-                        UI::Interaction::modifier(
-                            UI::Interaction::Modifier::Shift),
+                        UI::Interaction::extendBrush(),
                         UI::Interaction::modifier(
                             UI::Interaction::Modifier::Control) }));
             }

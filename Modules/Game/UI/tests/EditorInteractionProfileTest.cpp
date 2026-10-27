@@ -416,5 +416,31 @@ int main()
                       observer->m_deactivations == 1,
                   "deactivation once");
     // 任一契约失败均保留非零退出码，CTest 不以是否打印日志判断结果。
+    // 新方案只改变画笔意图，经典方案必须继续区分有无 Shift。
+    const auto& classic = Interaction::activeProfile();
+    // 新菜单随方案启用，经典右键移除框选的约定不应改变。
+    ok &= require(!classic.selectionContextMenu(),
+                  "classic right click unchanged");
+    ok &=
+        require(!classic.extendBrush(Interaction::Surface::MainCanvas, false) &&
+                    classic.extendBrush(Interaction::Surface::MainCanvas, true),
+                "classic brush modifiers");
+    Interaction::synchronizeProfile("mouse-only", true);
+    Interaction::synchronizeProfile("mouse-only", true);
+    const auto& mouse = Interaction::activeProfile();
+    ok &= require(mouse.selectionContextMenu(), "mouse-only selection menu");
+    // 方案注册必须能通过持久化身份查到，不能只在菜单中添加展示条目。
+    // 连续安全帧沿用切换门禁，避免把尚未结束的画笔移交给新方案。
+    // 此处不构造 ImGui 上下文，直接检验不依赖设备状态的策略契约。
+    // 不把虚拟 Shift 泄漏给选择、滚动和时间点表面。
+    // 主画布的绘制延伸与物理键盘完全独立，其他修饰查询仍返回真实状态。
+    ok &= require(
+        mouse.id() == "mouse-only" &&
+            mouse.extendBrush(Interaction::Surface::MainCanvas, false) &&
+            !mouse.extendBrush(Interaction::Surface::Timeline, false) &&
+            !mouse.modifier(Interaction::Surface::MainCanvas,
+                            Interaction::Modifier::Shift,
+                            false),
+        "mouse-only brush isolation");
     return ok ? 0 : 1;
 }

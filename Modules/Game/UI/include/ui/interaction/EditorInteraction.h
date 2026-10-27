@@ -92,6 +92,12 @@ public:
     /// @warning 只转换当前 UI 帧状态，不得反向改写 ImGuiIO。
     virtual bool modifier(Surface surface, Modifier modifier,
                           bool physical) const;
+    /// @brief 解释画笔延伸意图，独立于选择、滚动等操作的 Shift 语义。
+    /// @warning 每帧常量查询；起笔、拖动和滚动更新必须使用相同解释。
+    virtual bool extendBrush(Surface surface, bool shift) const;
+    /// @brief 是否在选中工具中启用无需键盘的右键编辑菜单。
+    /// @warning 每帧只返回方案策略，不查询选择集合或访问会话锁。
+    virtual bool selectionContextMenu() const;
     /// @brief 解释滚轮方向与倍率，横纵轴分开，不改变 ImGui 控件自身滚动。
     virtual float wheel(Surface surface, float physical, bool horizontal) const;
     /// @brief 解释键盘主键，支持整套键位语义替换；参数为 ImGui 命名键值。
@@ -175,6 +181,9 @@ void resetMouseDragDelta(int button = 0);
 float mouseWheel(bool horizontal = false);
 /// @brief 获取方案解释后的修饰键，不影响文本控件使用的物理键。
 bool modifier(Modifier modifier);
+/// @brief 当前方案是否将画笔移动解释为持续段或折线延伸。
+/// @warning UI 热路径只查询方案，不伪造物理按键或分配手势状态。
+bool extendBrush();
 /// @brief 查询主键边沿，保留旧调用者是否允许重复的语义。
 bool keyPressed(int key, bool repeat = true);
 /// @brief 查询主键保持状态，供连续编辑使用。

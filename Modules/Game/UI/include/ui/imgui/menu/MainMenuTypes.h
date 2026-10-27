@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace MMM::UI
@@ -72,6 +73,8 @@ struct MainMenuItemActivation {
 
     /// @brief 可选文本载荷，例如最近项目路径。
     std::string textPayload;
+    /// @brief 上下文粘贴的确定时间；普通菜单和快捷键不指定此值。
+    std::optional<double> m_pasteTime;
 };
 
 }  // namespace MMM::UI

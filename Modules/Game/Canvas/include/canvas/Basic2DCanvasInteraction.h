@@ -406,6 +406,8 @@ private:
     std::unordered_set<entt::entity> m_colorStrokeEntities;
     /// @brief 当前右键擦除手势是否已经向逻辑线程发送开始命令。
     bool m_rightEraseActive{ false };
+    /// @brief 右键菜单打开时的可见吸附时间，菜单内移动不会改变该锚点。
+    double m_selectionPasteTime{ 0.0 };
     /// @brief 上一次发送的框选拖动更新。
     LastContinuousEditCommand m_lastMarqueeUpdateCommand;
     /// @brief 上一次发送的绘制笔刷拖动更新。

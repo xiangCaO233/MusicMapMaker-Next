@@ -16,7 +16,7 @@ namespace MMM::UI::Interaction
 {
 namespace
 {
-/// @brief 当前内置实现只声明经典桌面行为，新手势由后续独立方案实现。
+/// @brief 经典方案保留修饰键控制的桌面行为。
 class ClassicDesktopProfile final : public IEditorInteractionProfile
 {
 public:
@@ -24,6 +24,27 @@ public:
     std::string_view id() const override { return "classic-desktop"; }
     /// @brief 初期名称不依赖皮肤或翻译初始化顺序。
     std::string_view name() const override { return "经典桌面"; }
+};
+/// @brief 纯鼠标方案的画笔直接延伸，其他操作暂时沿用现有入口。
+/// @details 仅声明绘制意图，不改写全局 Shift，避免影响框选和滚动。
+class MouseOnlyProfile final : public IEditorInteractionProfile
+{
+public:
+    /// @brief 稳定身份供设置页保存，经典方案仍为旧配置默认值。
+    std::string_view id() const override { return "mouse-only"; }
+    /// @brief 与经典方案并列显示，用户可在交互设置中切换。
+    std::string_view name() const override { return "纯鼠标"; }
+    /// @brief 选中工具提供右键菜单，绘制工具仍保留右键擦除。
+    /// @warning 每帧常量策略，不持有弹窗或画布状态。
+    bool selectionContextMenu() const override { return true; }
+    /// @brief 主画布无需修饰键即可延伸画笔，其他表面保留原语义。
+    /// @warning 连续绘制只做枚举判断，不持有会话或跨帧指针。
+    bool extendBrush(Surface surface, bool shift) const override
+    {
+        // 点按仍从 NOTE 起笔，只有移动才由原有工具升级形状。
+        // 保留逻辑层的折线能力门禁、取消和撤销事务，不在方案中重复实现。
+        return surface == Surface::MainCanvas || shift;
+    }
 };
 /// @brief 注册表只拥有方案；活动指针在 vector 扩容后仍指向独立对象。
 struct Registry {
@@ -43,6 +64,7 @@ struct Registry {
     Registry()
     {
         m_entries.push_back(std::make_unique<ClassicDesktopProfile>());
+        m_entries.push_back(std::make_unique<MouseOnlyProfile>());
         m_active = m_entries.front().get();
     }
 };
@@ -101,6 +123,26 @@ int IEditorInteractionProfile::pointerButton(Surface, int button) const
 bool IEditorInteractionProfile::modifier(Surface, Modifier, bool physical) const
 {
     return physical;
+}
+/// @brief 默认画笔延伸跟随原有 Shift 解释，保证旧方案行为不变。
+/// @warning UI 热路径只返回标量，不访问逻辑线程状态。
+bool IEditorInteractionProfile::extendBrush(Surface, bool shift) const
+{
+    return shift;
+}
+/// @brief 经典方案保留既有右键行为，新菜单由明确选择的新方案启用。
+/// @warning 每帧常量返回，不改变输入事件消费状态。
+bool IEditorInteractionProfile::selectionContextMenu() const
+{
+    return false;
+}
+
+/// @brief 将当前表面及修饰键解释传给方案，避免画布识别具体方案 ID。
+/// @warning 起笔和连续更新使用同一入口，无额外手势分配或等待。
+bool extendBrush()
+{
+    return activeProfile().extendBrush(currentSurface(),
+                                       modifier(Modifier::Shift));
 }
 /// @brief 默认保留系统滚轮的增量和方向，不额外累计小数。
 /// @param physical 保留触控板的小数增量，具体工具负责其步进累计。

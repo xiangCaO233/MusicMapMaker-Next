@@ -525,6 +525,9 @@ struct CmdPaste {
 
     /// @brief 是否在粘贴后清空旧选择并选中新粘贴出的物件。
     bool m_selectPastedObjects{ false };
+    /// @brief 显式粘贴锚点（秒）；为空时沿用用户的播放头或鼠标位置偏好。
+    /// @details 上下文菜单锁存可见吸附线，避免执行时重新读取移动后的鼠标。
+    std::optional<double> m_targetTime;
 };
 
 /**
