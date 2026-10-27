@@ -105,6 +105,11 @@ public:
     virtual std::optional<Logic::SelectionOperation> selectionOperation() const;
     /// @brief 在未进行选择手势时切换纯鼠标选择模式。
     virtual void setSelectionOperation(Logic::SelectionOperation operation);
+    /// @brief 显式折线擦除粒度；经典方案返回空以保留物理 Shift 的动态语义。
+    /// @warning 每帧仅查询 UI 线程标量，不持有会话或修改键盘状态。
+    virtual std::optional<bool> eraseWholePolyline() const;
+    /// @brief 更新纯鼠标后续擦除的粒度，活动事务由画布锁存起笔值。
+    virtual void setEraseWholePolyline(bool whole);
     /// @brief 解释滚轮方向与倍率，横纵轴分开，不改变 ImGui 控件自身滚动。
     virtual float wheel(Surface surface, float physical, bool horizontal) const;
     /// @brief 解释键盘主键，支持整套键位语义替换；参数为 ImGui 命名键值。

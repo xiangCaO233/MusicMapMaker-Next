@@ -300,6 +300,8 @@ struct CmdEndBrush {
     std::uint64_t walkthroughToken{ 0 };
     /// @brief 折线教学要求的最少最终子段数；普通绘制保持零。
     std::uint8_t walkthroughMinimumSubNotes{ 0 };
+    /// @brief 纯鼠标取消时精确恢复本笔续写前的临时删除，旧入口默认不启用。
+    bool restoreReplacedObjectOnCancel{ false };
 };
 
 /**

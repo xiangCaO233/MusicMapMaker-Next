@@ -422,10 +422,34 @@ bool testMouseBrushContinuation()
     const auto& restored = context.noteRegistry.get<NoteComponent>(original);
     // 撤销恢复旧根身份和完整原始段数，不能留下续写后的替代根。
     // 时间和起始轨道同样回到基线，防止末端落点覆盖折线根锚点。
-    return restored.m_type == before.m_type &&
-           restored.m_timestamp == before.m_timestamp &&
-           restored.m_trackIndex == before.m_trackIndex &&
-           restored.m_subNotes.size() == before.m_subNotes.size();
+    if ( restored.m_type != before.m_type ||
+         restored.m_timestamp != before.m_timestamp ||
+         restored.m_trackIndex != before.m_trackIndex ||
+         restored.m_subNotes.size() != before.m_subNotes.size() )
+        return false;
+    // 右键取消沿用原 EndBrush.cancel，续写时临时移除的旧折线也必须完整恢复。
+    // 原组件引用不能跨越下一次起笔保存，结束后重新按稳定实体查找。
+    const auto cancelHistory = context.actionStack.getUndoStackSize();
+    tool.handleStartBrush(context,
+                          { "Basic2DCanvas", 250, 200, extend, false });
+    tool.handleUpdateBrush(context,
+                           { "Basic2DCanvas", 350, 200, extend, false });
+    // 后续独立编辑留在历史中，取消不能以撤销最后一步代替精确恢复。
+    ActionController independentEdit(context);
+    independentEdit.handleCommand(
+        CmdCreateTimelineEvent{ 2.0, MMM::TimingEffect::SCROLL, 1.25 });
+    tool.handleEndBrush(context,
+                        { .cameraId                      = "Basic2DCanvas",
+                          .cancel                        = true,
+                          .restoreReplacedObjectOnCancel = true });
+    if ( !context.noteRegistry.valid(original) || context.brushState.isActive ||
+         context.actionStack.getUndoStackSize() != cancelHistory + 1 )
+        return false;
+    const auto& cancelled = context.noteRegistry.get<NoteComponent>(original);
+    return cancelled.m_type == before.m_type &&
+           cancelled.m_timestamp == before.m_timestamp &&
+           cancelled.m_trackIndex == before.m_trackIndex &&
+           cancelled.m_subNotes.size() == before.m_subNotes.size();
 }
 /// @brief 在真实主画布控制器中替换整段操作，而非仅调用接口替身。
 class SurfaceProfile final : public Interaction::IEditorInteractionProfile
@@ -629,6 +653,146 @@ bool testMenuNavigation()
     visual.visualOffset = originalOffset;
     return passed;
 }
+/// @brief 通过真实鼠标边沿验证擦除粒度锁存及绘制取消不会变成删除。
+/// @return 新旧方案的命令、释放顺序及下一笔恢复全部正确时返回真。
+/// @details 用例只观察命令，不伪造私有按下状态或逻辑快照回流。
+/// 纯鼠标整条/子段语义必须独立于 Shift，经典擦除仍允许中途松开 Shift。
+/// @note 取消后的下一笔必须正常提交，不能通过永久屏蔽指针让测试表面通过。
+/// @pre 上一场景已经关闭菜单，左右中键均已释放。
+/// @post 恢复纯鼠标局部擦除默认值，解除本用例的局部事件监听。
+bool testMouseEraseAndCancel()
+{
+    using namespace MMM;
+    Canvas::Basic2DCanvasInteraction controller("SurfaceTest", "Canvas_Probe");
+    Common::Render::RenderSnapshot   snapshot;
+    // 独立控制器只绑定快照，不加载用户谱面或建立音频设备。
+    // 空命中框排除拾取差异，本轮只检查输入语义与命令载荷。
+    // 固定四轨与窗口几何，使移动超过正式拖动阈值。
+    snapshot.hasBeatmap = snapshot.isHoveringCanvas = true;
+    snapshot.currentTool                            = Logic::EditTool::Draw;
+    snapshot.trackCount                             = 4;
+    // 起笔、连续更新和取消标志分别记录，不能只确认首帧正确。
+    // 普通结束与取消结束属于不同结果，数量相同也不能混淆。
+    // 捕获命令不在此执行，物件恢复由续写用例独立验证。
+    std::vector<bool> starts, updates, ends;
+    int               brushes = 0, eraseEnds = 0;
+    auto&             bus = Event::EventBus::instance();
+    const auto        subscription =
+        // 观察正式事件出口，不把私有布尔赋值视为业务成功。
+        // 悬浮与坐标更新不算擦除，只有编辑命令进入计数。
+        // 监听引用局部数组，返回之前必须先解除订阅。
+        bus.subscribe<Event::LogicCommandEvent>([&](const auto& event) {
+            if ( const auto* c =
+                     std::get_if<Logic::CmdStartErase>(&event.command) )
+                starts.push_back(c->isShiftDown);
+            if ( const auto* c =
+                     std::get_if<Logic::CmdUpdateErase>(&event.command) )
+                updates.push_back(c->isShiftDown);
+            if ( const auto* c =
+                     std::get_if<Logic::CmdEndBrush>(&event.command) )
+                ends.push_back(c->cancel);
+            brushes +=
+                std::holds_alternative<Logic::CmdStartBrush>(event.command);
+            eraseEnds +=
+                std::holds_alternative<Logic::CmdEndErase>(event.command);
+        });
+    auto& io      = ImGui::GetIO();
+    bool  passed  = true;
+    auto& profile = Interaction::activeProfile();
+    // 首笔没有 Shift，整条粒度只能来自纯鼠标设置。
+    // 方案对象由注册表持有，切换活动方案不会使该观察引用悬空。
+    // 设置只改变内存意图，不保存软件偏好。
+    profile.setEraseWholePolyline(true);
+    frame(controller, snapshot, false);
+    io.AddMouseButtonEvent(1, true);
+    frame(controller, snapshot, false);
+    // 即使应用模式在手势中变化，本笔仍按起笔的整条粒度更新。
+    // 右键仍保持按下，此时改变设置只应影响下一笔。
+    // 连续更新必须沿用起笔的粒度，不能重读全局值。
+    // 下一笔再以局部模式起笔，验证锁存也会正常更新。
+    profile.setEraseWholePolyline(false);
+    frame(controller, snapshot, false, { 200, 170 });
+    passed &= starts.size() == 1 && starts.back() && !updates.empty() &&
+              updates.back();
+    io.AddMouseButtonEvent(1, false);
+    frame(controller, snapshot, false);
+    // 真实 Shift 用于验证显式局部模式不会被物理键覆盖。
+    // 纯鼠标编辑不需要该键，这是与经典方案隔离的回归场景。
+    // 之后切回经典时保持按键，验证旧语义仍能读取它。
+    io.AddKeyEvent(ImGuiMod_Shift, true);
+    io.AddMouseButtonEvent(1, true);
+    frame(controller, snapshot, false);
+    frame(controller, snapshot, false, { 220, 180 });
+    // 下一笔才采用局部粒度，真实 Shift 不能覆盖纯鼠标明确的选择。
+    passed &= starts.size() == 2 && !starts.back() && !updates.back();
+    io.AddMouseButtonEvent(1, false);
+    frame(controller, snapshot, false);
+    // 仅在按钮全部释放后切换，遵守生产方案安全边界。
+    // 连续两个安全帧采用与设置页相同的交接协议。
+    // 经典配置为空，擦除更新必须重新读取真实 Shift。
+    Interaction::synchronizeProfile("classic-desktop", true);
+    Interaction::synchronizeProfile("classic-desktop", true);
+    io.AddMouseButtonEvent(1, true);
+    frame(controller, snapshot, false);
+    io.AddKeyEvent(ImGuiMod_Shift, false);
+    frame(controller, snapshot, false, { 240, 190 });
+    passed &= starts.size() == 3 && starts.back() && !updates.back();
+    io.AddMouseButtonEvent(1, false);
+    frame(controller, snapshot, false);
+    // 三笔擦除都应正常结束，不能因方案切换吞掉释放。
+    // 这个明确基线将与后面的取消阶段隔离。
+    // 取消阶段不应额外产生任何擦除起笔。
+    passed &= eraseEnds == 3;
+    Interaction::synchronizeProfile("mouse-only", true);
+    Interaction::synchronizeProfile("mouse-only", true);
+    // 两种释放顺序都不能将取消用的右键转成擦除，或让剩余左键重开画笔。
+    // 两种松开次序都复用同一个控制器，不靠重建清空状态。
+    // 只改变释放顺序，坐标与工具保持一致。
+    // 取消立即发布结束，后续释放只能清理输入归属。
+    for ( const bool rightFirst : { true, false } ) {
+        const int  beforeBrush = brushes;
+        const auto beforeEnd   = ends.size();
+        frame(controller, snapshot, true);
+        frame(controller, snapshot, true, { 200, 190 });
+        io.AddMouseButtonEvent(1, true);
+        frame(controller, snapshot, true);
+        passed &= ends.size() == beforeEnd + 1 && ends.back();
+        passed &= controller.hasActivePointerGesture();
+        // 中间帧只松开其中一键，另一键仍属于取消事务。
+        // 不能在这一帧放开方案切换或重开绘制。
+        // 最后一键松开后，下一笔才可以取得输入。
+        if ( rightFirst ) io.AddMouseButtonEvent(1, false);
+        frame(controller, snapshot, rightFirst);
+        passed &= controller.hasActivePointerGesture();
+        io.AddMouseButtonEvent(1, false);
+        frame(controller, snapshot, false);
+        // 完整释放必须清掉门闩，避免永久阻止编辑器交互。
+        // 结束数量不能增加，取消也不能再次变成普通提交。
+        // 擦除数量维持原基线，证明右键没有被下层重复消费。
+        passed &= !controller.hasActivePointerGesture();
+        passed &= brushes == beforeBrush + 1 && ends.size() == beforeEnd + 1 &&
+                  starts.size() == 3;
+    }
+    // 同时按下不应创建临时画笔；完全松开后普通单击仍可正常提交。
+    // 同时按下尚无临时对象，不应凭空创建或结束画笔。
+    // 接着单独点击，证明正常下一笔仍可恢复。
+    const auto before      = ends.size();
+    const int  beforeBrush = brushes;
+    io.AddMouseButtonEvent(1, true);
+    frame(controller, snapshot, true);
+    io.AddMouseButtonEvent(1, false);
+    frame(controller, snapshot, false);
+    passed &= brushes == beforeBrush && ends.size() == before;
+    frame(controller, snapshot, true);
+    frame(controller, snapshot, false);
+    passed &=
+        brushes == beforeBrush + 1 && ends.size() == before + 1 && !ends.back();
+    passed &= starts.size() == 3;
+    // 只移除本用例监听，不重置其他生产订阅者。
+    // 此时全部按钮已释放，不向后续场景遗留手势。
+    bus.unsubscribe<Event::LogicCommandEvent>(subscription);
+    return passed;
+}
 }  // namespace
 
 /// @brief 确认新方案独占生产画布、释放收尾和经典操作恢复的完整链路。
@@ -754,7 +918,10 @@ int main()
         // 仅移除本次观察者，后续经典模式检查继续使用相同主窗口。
         bus.unsubscribe<MMM::Event::LogicCommandEvent>(brushSubscription);
         // 画布命令正确后继续验证领域结果，避免只证明 Shift 字段被改写。
-        ok &= testMouseBrushContinuation();
+        const bool continuation = testMouseBrushContinuation();
+        if ( !continuation )
+            XERROR("Mouse brush continuation/cancel restore failed");
+        ok &= continuation;
         ok &= testExplicitPasteAnchor();
         if ( !testSelectionOperations() ) {
             XERROR("Selection operation geometry or baseline regression");
@@ -904,6 +1071,7 @@ int main()
     }
     // 控制器已先析构并解除 guard，此时才释放底层 ImGui 输入快照。
     ok &= testMenuNavigation();
+    ok &= testMouseEraseAndCancel();
     ImGui::DestroyContext();
     if ( !ok )
         XERROR(

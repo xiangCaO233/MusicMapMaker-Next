@@ -5,6 +5,7 @@
 #include "ui/UIManager.h"
 
 #include "config/AppConfig.h"
+#include "config/skin/SkinConfig.h"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include "log/colorful-log.h"
@@ -14,6 +15,7 @@
 #include "ui/imgui/ToolbarDockLayout.h"
 #include "ui/imgui/ToolbarPopupLayout.h"
 #include "ui/imgui/manager/ToolbarView.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/CLayWrapperCore.h"
 
 #include <algorithm>
@@ -1345,6 +1347,8 @@ public:
     MMM::Config::EditorConfig m_config;
     /// @brief 观察提交次数，稳定绘制不应重复提交配置。
     int m_updates{};
+    /// @brief 工具状态由测试服务发布，不直接操纵工具栏私有成员。
+    MMM::Logic::EditTool m_tool{ MMM::Logic::EditTool::Move };
     /// @brief 测试不加载项目。
     bool currentProjectUiSnapshot(
         MMM::UI::EditorProjectUiSnapshot&) const override
@@ -1360,10 +1364,7 @@ public:
     /// @brief 缩放不应打开项目音频面板。
     void markProjectAudioToolOpenAndSave() override {}
     /// @brief 保持默认抓取工具。
-    MMM::Logic::EditTool currentTool() const override
-    {
-        return MMM::Logic::EditTool::Move;
-    }
+    MMM::Logic::EditTool currentTool() const override { return m_tool; }
     /// @brief 每帧按值读取已提交配置。
     MMM::Config::EditorConfig editorConfig() const override { return m_config; }
     /// @brief 记录真实 UI 提交入口，不直接操控工具栏私有成员。
@@ -1616,6 +1617,151 @@ bool checkMouseOnlyTimelineZoom()
     // 单独的错误信息将鼠标缩放失败与前面的停靠回归区分。
     return passed;
 }
+/// @brief 用真实工具栏按钮和单选控件验证无需键盘的绘制选项入口。
+/// @return 选项能改变擦除粒度且经典重复点击仍无弹窗时返回真。
+/// @details 仅保留绘制按钮，按钮位置由窗口边界和 DPI 推导。
+/// 不直接访问工具栏的私有开关，也不在测试中调用生产绘制辅助函数。
+/// @post 工具栏、管理器、ImGui 和 Clay 按依赖顺序销毁，配置与方案恢复。
+bool checkMouseDrawingOptions()
+{
+    namespace Interaction = MMM::UI::Interaction;
+    auto& settings = MMM::Config::AppConfig::instance().getEditorSettings();
+    // 保存整份设置，失败也经过统一恢复。
+    // 测试只改进程内状态，不调用配置保存入口。
+    // 方案身份来自长期注册表，不借用临时字符串。
+    const auto saved           = settings;
+    const auto oldProfile      = Interaction::activeProfile().id();
+    settings.fixedToolWindow   = true;
+    settings.toolbarHorizontal = true;
+    settings.toolbarDockEdge   = "top";
+    settings.showToolLabels    = false;
+    // 仅保留绘制工具，定位不依赖相邻按钮或翻译宽度。
+    // 隐藏独立配置按钮，不能误把其它开关当作绘制入口。
+    settings.toolbarVisibility.stateTools         = { false, false, true,
+                                                      false, false, false };
+    settings.toolbarVisibility.independentButtons = {
+        false, false, false, false, false, false, false, false, false, false
+    };
+    Interaction::synchronizeProfile("mouse-only", true);
+    Interaction::synchronizeProfile("mouse-only", true);
+    Interaction::activeProfile().setEraseWholePolyline(false);
+    // 单独创建 CPU ImGui 上下文，不共用桌面输入。
+    // 本场景也独立拥有 Clay Arena，避免依赖前一测试残留。
+    // 窗口及管理器销毁后才能释放这些上下文。
+    createContext();
+    auto& clay        = MMM::UI::CLayWrapperCore::instance();
+    auto  clayContext = clay.createWindowContext();
+    clay.makeCurrent(clayContext.context);
+    bool passed = true;
+    {
+        // 服务转交管理器拥有，测试只借用生命周期稳定的观察引用。
+        // 工具状态按正式接口发布，不直接写工具栏私有成员。
+        // 已激活 Draw 才能区分普通切换与重复点击选项。
+        auto  owner      = std::make_unique<ZoomTestService>();
+        auto& service    = *owner;
+        service.m_config = MMM::Config::AppConfig::instance().getEditorConfig();
+        service.m_tool   = MMM::Logic::EditTool::Draw;
+        MMM::UI::UIManager manager;
+        // 单选只应改方案标量，不能提交完整编辑器配置。
+        // 管理器先于工具栏构造，退出时反序销毁。
+        // 没有真实会话，不应因绘制选项加载媒体或谱面。
+        manager.setEditorApplicationService(std::move(owner));
+        MMM::UI::ToolbarView toolbar("Toolbar");
+        const float          dpi =
+            MMM::Config::AppConfig::instance().getWindowContentScale();
+        const float padding =
+            std::floor(settings.aesthetics.windowPadding * dpi);
+        auto draw = [&] {
+            // 固定窗口只建立可重复的输入环境，弹窗尺寸仍由正式布局计算。
+            // 每帧完成 Render，输入边沿按生产方式发布。
+            // 控件动画依赖 DeltaTime，不插入阻塞等待。
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos({ 100, 20 });
+            ImGui::SetNextWindowSize({ 700, 32 * dpi + 2 * padding });
+            toolbar.update(&manager);
+            ImGui::Render();
+        };
+        auto click = [&](ImVec2 point) {
+            // 点击分为悬浮、按下和释放三个正式输入帧。
+            // 不直接设置点击标志，也不调用私有浮层绘制。
+            // 没有模拟键盘修饰键，粒度必须来自可见单选控件。
+            ImGui::GetIO().AddMousePosEvent(point.x, point.y);
+            draw();
+            ImGui::GetIO().AddMouseButtonEvent(0, true);
+            draw();
+            ImGui::GetIO().AddMouseButtonEvent(0, false);
+            draw();
+        };
+        draw();
+        draw();
+        // 初始帧只用于稳定窗口布局，不预设选项已经打开。
+        // 按钮中心根据真实窗口边界和主题 DPI 推导。
+        // 窗口缺失应失败，不能回退到猜测坐标。
+        const auto* tool = ImGui::FindWindowByName(" ###Toolbar");
+        passed &= tool != nullptr;
+        if ( tool ) {
+            const ImVec2 button{ tool->Pos.x + padding + 16 * dpi,
+                                 tool->Pos.y + padding + 16 * dpi };
+            // 比较稳定后的提交基线，隔离初始化同步与用户单选。
+            // 粒度变化不保存配置，点击前后提交次数不应增加。
+            const int initialUpdates = service.m_updates;
+            // 活动工具再次点击必须打开真正的 ImGui 弹窗，不新增工具变更命令。
+            click(button);
+            draw();
+            // 真实弹窗栈必须包含可见窗口，旧窗口对象存在并不足以证明打开。
+            // 先核验非空再读取几何，失败不能转为空指针访问。
+            // 窗口观察指针不跨上下文销毁保存。
+            auto& stack = ImGui::GetCurrentContext()->OpenPopupStack;
+            passed &= !stack.empty() && stack.back().Window;
+            if ( !stack.empty() && stack.back().Window ) {
+                const auto* popup = stack.back().Window;
+                const auto& style = ImGui::GetStyle();
+                // 正文可能与默认字体不同，点击坐标采用皮肤正文度量。
+                // 字体只在测量时借用，真实点击依然由生产控件处理。
+                ImFont* bodyFont =
+                    MMM::Config::SkinManager::instance().getFont("content");
+                if ( bodyFont ) ImGui::PushFont(bodyFont, bodyFont->LegacySize);
+                // 标题、分隔线之后的第二个 RadioButton 是整条擦除选项。
+                const float firstY = popup->DC.CursorStartPos.y +
+                                     ImGui::GetTextLineHeightWithSpacing() + 1 +
+                                     style.ItemSpacing.y +
+                                     ImGui::GetFrameHeight() * 0.5F;
+                // 点击圆点附近，不使用说明文字撑宽后可能无法命中的整窗中心。
+                // 弹窗宽度与单选项的可交互宽度不必相等。
+                const float x = popup->Pos.x + style.WindowPadding.x + 8 * dpi;
+                const float rowStep = ImGui::GetFrameHeightWithSpacing();
+                if ( bodyFont ) ImGui::PopFont();
+                click({ x, firstY + rowStep });
+                passed &=
+                    Interaction::activeProfile().eraseWholePolyline() == true;
+                click({ x, firstY });
+                passed &=
+                    Interaction::activeProfile().eraseWholePolyline() == false;
+            }
+            // 点击外部关闭，证明纯鼠标不依赖 Escape。
+            // 之后切回经典，重复点击绘制工具不得再弹出选项。
+            click({ 750, 500 });
+            Interaction::synchronizeProfile("classic-desktop", true);
+            Interaction::synchronizeProfile("classic-desktop", true);
+            click(button);
+            passed &= ImGui::GetCurrentContext()->OpenPopupStack.empty();
+            passed &= service.m_updates == initialUpdates;
+        }
+    }
+    // 工具栏和管理器已经析构，不会再读取窗口或字体。
+    // 弹窗和鼠标状态随独立上下文释放，不影响其它场景。
+    // 布局上下文最后销毁，测量回调不能观察失效 Arena。
+    ImGui::DestroyContext();
+    clay.makeCurrent(nullptr);
+    // 释放测试布局后再恢复共享配置，避免把测试位置当作个人偏好。
+    // 原活动方案也恢复，后续用例继续采用进入时的输入解释。
+    clay.destroyWindowContext(clayContext);
+    settings = saved;
+    Interaction::synchronizeProfile(oldProfile, true);
+    Interaction::synchronizeProfile(oldProfile, true);
+    if ( !passed ) XERROR("Mouse drawing toolbar options regression");
+    return passed;
+}
 }  // namespace
 
 /// @brief 独立运行默认工作区到项目工作区的停靠恢复回归场景。
@@ -1633,7 +1779,7 @@ int main()
                    checkToolbarTransition(true) && checkSharedToolbarNode() &&
                    checkToolbarResize() && checkToolbarEdgeDocking() &&
                    checkToolbarAfterManager() && checkToolbarPopupPlacement() &&
-                   checkMouseOnlyTimelineZoom()
+                   checkMouseOnlyTimelineZoom() && checkMouseDrawingOptions()
                ? 0
                : 1;
 }

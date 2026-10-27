@@ -1601,6 +1601,53 @@ void Basic2DCanvasInteraction::cancelBrushOnNextRelease()
     m_cancelBrushOnNextRelease = true;
 }
 
+/// @brief 处理纯鼠标左键绘制期间的右键取消及后续按钮收尾。
+/// @param snapshot 当前工具快照，仅用于验证绘制语境。
+/// @param hovered 同时按下只能在当前画布开始，已有画笔允许移出后取消。
+/// @return 本帧属于取消事务时返回真，后续擦除和绘制不得重复消费输入。
+/// @note 未松开的按钮仍由本视图持有，方案切换通过活动手势门禁继续阻挡。
+/// @warning 每帧常量检查；不等待快照回流，不在取消时补发撤销操作。
+bool Basic2DCanvasInteraction::handleMouseBrushCancellation(
+    const Common::Render::RenderSnapshot& snapshot, bool hovered)
+{
+    if ( m_mouseBrushCancelAwaitingRelease ) {
+        // 这里只维护输入归属，不阻塞线程；播放、渲染和其他窗口仍正常推进。
+        // 全部松开的这一帧也消费掉，下一次独立按下才允许开始新事务。
+        // 两个按钮无论先松开哪一个，都属于被取消的同一笔，不允许穿透重启。
+        if ( !UI::Interaction::mouseDown(0) && !UI::Interaction::mouseDown(1) &&
+             !UI::Interaction::mouseDown(2) )
+            m_mouseBrushCancelAwaitingRelease = false;
+        return true;
+    }
+    if ( !UI::Interaction::activeProfile().selectionContextMenu() ||
+         snapshot.currentTool != Logic::EditTool::Draw ||
+         !UI::Interaction::mouseClicked(1) ||
+         !(m_leftPressStartedOnCanvas ||
+           (hovered && UI::Interaction::mouseClicked(0))) )
+        return false;
+    // 只有已起笔事务需要通知逻辑层；同时按下左右键不创建临时物件。
+    // 续写前的临时删除由精确动作身份恢复，UI 不对用户历史做普通撤销。
+    if ( m_leftPressStartedOnCanvas )
+        UI::Interaction::dispatchCommand(
+            Event::LogicCommandEvent(Logic::CmdEndBrush{
+                .cameraId                      = m_cameraId,
+                .cancel                        = true,
+                .createStandalone              = m_standaloneBrush,
+                .walkthroughToken              = m_brushWalkthroughToken,
+                .walkthroughMinimumSubNotes    = m_brushMinimumSubNotes,
+                .restoreReplacedObjectOnCancel = true }));
+    m_mouseBrushCancelAwaitingRelease = true;
+    // 左键来源立即失效，释放分支不能再次把同一笔当成普通提交。
+    m_leftPressStartedOnCanvas     = m_leftPressStartedInTrackLayout =
+        m_leftPressStartedOnEntity = false;
+    m_leftPressStartedObjectDrag = m_leftPressDragged = false;
+    m_cancelBrushOnNextRelease                        = false;
+    m_colorStrokeEntities.clear();
+    // 下一次独立手势重新发送第一次连续位置更新，不复用被取消的输入基线。
+    resetContinuousEditCommands();
+    return true;
+}
+
 /// @brief 判断连续拖动编辑命令是否需要发送，并更新缓存。
 ///
 /// @details 去重键与边界：
@@ -5630,6 +5677,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_rightEraseActive              = false;
         // 一次性画笔取消请求只属于被中断的手势，不能带到下次操作。
         m_cancelBrushOnNextRelease = false;
+        // 一次性教学取消请求不能泄漏到下一笔，与本次鼠标取消同时清理。
         // 颜色工具的去重集合不跨手势复用，连续命令基线也同时失效。
         m_colorStrokeEntities.clear();
         resetContinuousEditCommands();
@@ -5656,6 +5704,9 @@ void Basic2DCanvasInteraction::handleInteractions(
                                false);
         return;
     }
+
+    // 取消优先于平移、覆盖层与右键擦除，释放帧也不重新进入下层事务。
+    if ( handleMouseBrushCancellation(*currentSnapshot, isHovered) ) return;
 
     if ( m_isMiddleCanvasPanning ) {
         // 中键平移拥有最高优先级。一旦开始，当前左键绘制、框选、拖拽和
@@ -6500,11 +6551,17 @@ void Basic2DCanvasInteraction::handleInteractions(
             // 新事务先清除去重基线，保证第一次拖动更新一定发送。
             m_lastEraseUpdateCommand.valid = false;
             m_rightEraseActive             = true;
-            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
-                Logic::CmdStartErase{ m_cameraId,
-                                      UI::Interaction::modifier(
-                                          UI::Interaction::Modifier::Shift) }));
+            // 纯鼠标起笔锁存；经典值为空，继续允许 Shift 在擦除中变化。
+            m_eraseWholePolylineMode =
+                UI::Interaction::activeProfile().eraseWholePolyline();
+            UI::Interaction::dispatchCommand(
+                Event::LogicCommandEvent(Logic::CmdStartErase{
+                    m_cameraId,
+                    m_eraseWholePolylineMode.value_or(UI::Interaction::modifier(
+                        UI::Interaction::Modifier::Shift)) }));
         }
+        const bool eraseWhole = m_eraseWholePolylineMode.value_or(
+            UI::Interaction::modifier(UI::Interaction::Modifier::Shift));
         if ( m_rightEraseActive && !currentSnapshot->isPlaying &&
              UI::Interaction::mouseDragging(1) ) {
             // 擦除拖动按坐标、快照和 Shift 状态去重，降低事件队列压力。
@@ -6512,16 +6569,13 @@ void Basic2DCanvasInteraction::handleInteractions(
                      m_lastEraseUpdateCommand,
                      { localMousePos.x, localMousePos.y },
                      *currentSnapshot,
-                     UI::Interaction::modifier(
-                         UI::Interaction::Modifier::Shift),
+                     eraseWhole,
                      false) ) {
-                UI::Interaction::dispatchCommand(
-                    Event::LogicCommandEvent(Logic::CmdUpdateErase{
-                        m_cameraId,
-                        localMousePos.x,
-                        localMousePos.y,
-                        UI::Interaction::modifier(
-                            UI::Interaction::Modifier::Shift) }));
+                UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
+                    Logic::CmdUpdateErase{ m_cameraId,
+                                           localMousePos.x,
+                                           localMousePos.y,
+                                           eraseWhole }));
             }
         }
         if ( m_rightEraseActive && UI::Interaction::mouseReleased(1) ) {
@@ -6530,6 +6584,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                 Event::LogicCommandEvent(Logic::CmdEndErase{ m_cameraId }));
             m_lastEraseUpdateCommand.valid = false;
             m_rightEraseActive             = false;
+            m_eraseWholePolylineMode.reset();
         }
     }
 

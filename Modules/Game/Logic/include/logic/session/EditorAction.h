@@ -49,6 +49,9 @@ public:
 
     /// @brief 教学创建所属步骤；普通动作保持零，不受引导回退影响。
     std::uint64_t m_walkthroughToken{ 0 };
+    /// @brief
+    /// 所属历史栈分配的单调身份，用于精确取消临时编辑，不复用实体号或地址。
+    std::uint64_t m_stackActionId{ 0 };
     /// @brief 替换式续接沿用原练习槽位；普通创建按音符类型选择槽位。
     int m_walkthroughSlot{ -1 };
     /// @brief 此动作每次提交协作编辑后的本地序号与应用方向。
@@ -75,6 +78,10 @@ public:
     /// @brief 执行撤销
     /// @param ctx 会话上下文引用
     void undo(SessionContext& ctx);
+    /// @brief 精确撤回并移除一项临时动作，不弹出其后的独立编辑或留下重做项。
+    /// @return 找到该栈分配的动作身份时返回真，已消失的动作无副作用。
+    /// @warning 仅用户取消输入时扫描历史，禁止在每帧或每 update 中调用。
+    bool cancelAction(std::uint64_t actionId, SessionContext& ctx);
 
     /// @brief 精确回滚指定教学步骤创建的物件，保留其余历史和内容。
     /// @warning 仅用户点击返回时扫描历史，不允许逐帧调用。
@@ -141,6 +148,8 @@ public:
     size_t getRedoStackSize() const { return m_redoStack.size(); }
 
 private:
+    /// @brief 动作身份在 clear 后也不复用，避免旧画笔取消指向后来的动作。
+    std::uint64_t                               m_nextActionId{ 0 };
     std::vector<std::unique_ptr<IEditorAction>> m_undoStack;  ///< 撤销栈
     std::vector<std::unique_ptr<IEditorAction>> m_redoStack;  ///< 重做栈
     /// @brief 尚待观察者分配协作序号的最近变更动作；仅由逻辑线程访问。

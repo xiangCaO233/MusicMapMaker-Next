@@ -328,6 +328,8 @@ struct SessionContext {
 
         /// @brief 当前画笔是否通过先删除已有物件进入恢复或转换编辑。
         bool replacesExistingObject{ false };
+        /// @brief 本笔续写删除动作的精确身份，供纯鼠标取消恢复；普通绘制为零。
+        std::uint64_t resumedDeleteActionId{ 0 };
         /// @brief 续接前的根实体；用于把教学身份转移给替换后的折线。
         entt::entity resumedEntity{ entt::null };
         /// @brief 源物件属于哪个练习槽位；无匹配时保持 -1。

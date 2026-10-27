@@ -5020,6 +5020,8 @@ bool ToolbarView::drawIconButton(const char* icon, const char* id,
 /// m_currentTool 是本帧显示快照，权威状态由 update 开头从应用服务同步。
 /// 点击非活动按钮先更新本地快照以立即反馈，再向逻辑层投递 CmdChangeTool。
 /// 重复点击普通工具不会退出工具；只有 Layout 工具有显式再次点击恢复语义。
+/// 纯鼠标的活动 Draw 按钮再次点击会打开擦除选项，仍然不退出绘制工具。
+/// 弹窗恢复正文的字体和默认配色，不继承仅用于图标按钮的展示状态。
 ///
 /// 焦点恢复只针对上一帧已经聚焦的 TimelineWindow，避免点击工具栏后编辑器
 /// 键盘输入永久离开画布，同时不抢占文件管理器、设置页等其他窗口焦点。
@@ -5031,6 +5033,10 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
 {
     // 活动态来自引擎同步后的当前工具成员。
     bool isActive = (m_currentTool == tool);
+    // 仅显式提供擦除粒度的方案开放绘制选项，经典按钮重复点击仍无副作用。
+    const bool mouseDrawOptions =
+        tool == Logic::EditTool::Draw &&
+        Interaction::activeProfile().eraseWholePolyline().has_value();
 
     if ( isActive ) {
         // 三种按钮状态固定同色，鼠标经过不会掩盖当前工具语义。
@@ -5102,6 +5108,11 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
             }
         }
     }
+    // 再次左键点击已激活的绘制按钮即可设置，触屏也无需发现右键工具栏菜单。
+    // 擦除或平移尚未松开时不打开，避免改变一笔仍进行中的交互解释。
+    if ( clicked && isActive && mouseDrawOptions &&
+         !Interaction::mouseDown(1) && !Interaction::mouseDown(2) )
+        ImGui::OpenPopup("MouseDrawOptions");
     ImGui::PopID();
 
     // 工具提示在基础说明后追加当前配置对应的快捷键文本。
@@ -5116,10 +5127,56 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
         tooltipText += shortcutText;
         tooltipText += ")";
     }
+    if ( mouseDrawOptions ) {
+        tooltipText += "\n";
+        tooltipText += TR("ui.mouse_drawing.open_options").data();
+    }
     drawTooltip(tooltipText.c_str());
 
     // 两种样式分支都保证压入三项颜色，统一恢复。
     ImGui::PopStyleColor(3);
+    if ( mouseDrawOptions ) {
+        // 弹窗沿用绘制按钮的稳定 ID，但不继承活动按钮的固定背景色。
+        ImGui::PushID(static_cast<int>(tool));
+        if ( ImGui::BeginPopup("MouseDrawOptions") ) {
+            // 工具栏自身把间距置零，正文弹窗恢复常规间距，避免单选项挤在一起。
+            const float optionScale =
+                Config::AppConfig::instance().getWindowContentScale();
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                                ImVec2(8 * optionScale, 4 * optionScale));
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                ImVec2(4 * optionScale, 3 * optionScale));
+            // 单选命中高度不能继承工具栏图标的零内边距，正文设置需要完整点击区。
+            // 仅本弹窗覆盖这两项样式，关闭后不改变经典工具栏和其他窗口。
+            // 工具栏可能正使用图标字体，正文必须显式切回皮肤内容字体。
+            ImFont* bodyFont =
+                Config::SkinManager::instance().getFont("content");
+            if ( bodyFont ) ImGui::PushFont(bodyFont, bodyFont->LegacySize);
+            ImGui::TextUnformatted(TR("ui.mouse_drawing.options").data());
+            ImGui::Separator();
+            auto& profile = Interaction::activeProfile();
+            bool  whole   = profile.eraseWholePolyline().value_or(false);
+            // 两个选项表达后续擦除意图，不伪造 Shift，也不立即编辑谱面。
+            // 该值仅存在当前方案内，不保存完整编辑器配置或触发资源更新。
+            // 当前擦除事务已经起笔锁存，因此单选变化不会重解释旧手势。
+            if ( FeedbackRadioButton(
+                     TR("ui.mouse_drawing.erase_segment").data(), !whole) ) {
+                whole = false;
+                profile.setEraseWholePolyline(false);
+            }
+            if ( FeedbackRadioButton(TR("ui.mouse_drawing.erase_whole").data(),
+                                     whole) )
+                profile.setEraseWholePolyline(true);
+            ImGui::Separator();
+            ImGui::TextUnformatted(TR("ui.mouse_drawing.cancel_hint").data());
+            // 提示只说明纯鼠标的取消组合，不向经典方案传播虚拟按键。
+            // 字体和弹窗栈均在同一条件分支配对，缺失正文时使用默认字体。
+            if ( bodyFont ) ImGui::PopFont();
+            ImGui::PopStyleVar(2);
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
+    }
 }
 
 /// @brief 绘制布局工具按钮并实现再次点击返回前一工具的切换语义。

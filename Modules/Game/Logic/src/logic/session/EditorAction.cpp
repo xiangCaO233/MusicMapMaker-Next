@@ -22,6 +22,8 @@ void EditorActionStack::pushAndExecute(std::unique_ptr<IEditorAction> action,
     // 名称在动作仍由局部指针持有时读取，状态栏记录此次操作的可读描述。
     ctx.lastActionMessage = fmt::format(
         "{} {}", TR("ui.status.category.action").data(), action->getName());
+    // 身份只在首次入栈分配，撤销、重做和 clear 都不将它复用于其他动作。
+    action->m_stackActionId = ++m_nextActionId;
     action->execute(ctx);
     // 修订先于保存完成回调推进，使后台保存不会覆盖本次新编辑的脏状态。
     ++m_changeRevision;
@@ -67,6 +69,52 @@ void EditorActionStack::undo(SessionContext& ctx)
         SessionUtils::syncBeatmap(ctx);
     }
     ProjectDraftLaneService::sync(ctx);
+}
+
+/// @brief 撤回指定临时动作并从历史移除，保留其后的独立编辑。
+/// @param actionId 首次执行该动作时分配的栈内唯一身份，零表示无临时动作。
+/// @param ctx 本历史栈所属会话，供动作自己的逆操作更新领域索引。
+/// @return 该身份仍位于撤销或重做历史中时返回真。
+/// @warning 只在显式取消时扫描历史，不在持续预览或每帧热路径执行。
+bool EditorActionStack::cancelAction(std::uint64_t   actionId,
+                                     SessionContext& ctx)
+{
+    if ( actionId == 0 ) return false;
+    const auto matches = [actionId](const auto& action) {
+        return action->m_stackActionId == actionId;
+    };
+    const auto found =
+        std::find_if(m_undoStack.begin(), m_undoStack.end(), matches);
+    if ( found != m_undoStack.end() ) {
+        // 单调身份不因实体复用或历史清空而重复，不能按动作名猜测当前目标。
+        // 先取出所有权再回滚，不能用普通 undo 弹出用户后来提交的其他动作。
+        const auto index =
+            static_cast<std::size_t>(found - m_undoStack.begin());
+        auto action = std::move(*found);
+        m_undoStack.erase(found);
+        // 取消没有可重做对象；清掉观察地址，避免协作序号绑定到已销毁动作。
+        m_lastActionAwaitingCollaborationSequence = nullptr;
+        m_lastActionAppliedAfterMutation          = false;
+        action->undo(ctx);
+        // 仍调用领域动作的逆操作，保持子实体、选择索引与持久模型同步约定。
+        ++m_changeRevision;
+        m_pendingMutationFlags |= action->mutationFlags();
+        // 若用户保存过临时删除后的内容，恢复旧物件必须继续标记为未保存。
+        if ( index < m_saveIndex ) m_hasNonUndoableChanges = true;
+        if ( ctx.m_needsTimingsSync || ctx.m_needsSamplesSync )
+            SessionUtils::syncBeatmap(ctx);
+        ProjectDraftLaneService::sync(ctx);
+        return true;
+    }
+    const auto undone =
+        std::find_if(m_redoStack.begin(), m_redoStack.end(), matches);
+    if ( undone == m_redoStack.end() ) return false;
+    // 用户已自行撤销过删除时，物件已经恢复，只移除失效的重做入口。
+    if ( m_lastActionAwaitingCollaborationSequence == undone->get() )
+        m_lastActionAwaitingCollaborationSequence = nullptr;
+    m_redoStack.erase(undone);
+    // 已撤销路径没有新的内容变化，不重复发布领域变更或推进保存修订。
+    return true;
 }
 
 /// @brief 用独立补偿事务删除教学产物，不弹出无关的栈顶编辑。

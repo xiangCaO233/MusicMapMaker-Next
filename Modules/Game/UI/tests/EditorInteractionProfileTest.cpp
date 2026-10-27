@@ -508,6 +508,11 @@ int main()
     // 新菜单随方案启用，经典右键移除框选的约定不应改变。
     ok &= require(!classic.selectionContextMenu(),
                   "classic right click unchanged");
+    // 经典方案不保留擦除粒度，必须继续由真实 Shift 控制整条擦除。
+    // 设置请求不能令经典查询变成显式 true，从而覆盖之后的物理按键。
+    Interaction::activeProfile().setEraseWholePolyline(true);
+    ok &=
+        require(!classic.eraseWholePolyline(), "classic erase mode unchanged");
     ok &=
         require(!classic.extendBrush(Interaction::Surface::MainCanvas, false) &&
                     classic.extendBrush(Interaction::Surface::MainCanvas, true),
@@ -528,6 +533,12 @@ int main()
     Interaction::activeProfile().setSelectionOperation(
         MMM::Logic::SelectionOperation::Replace);
     ok &= require(mouse.selectionContextMenu(), "mouse-only selection menu");
+    // 设置只改变擦除语义，不可泄漏到绘制延伸、框选或物理修饰键。
+    Interaction::activeProfile().setEraseWholePolyline(true);
+    ok &= require(mouse.eraseWholePolyline() == true,
+                  "whole polyline erase mode");
+    Interaction::activeProfile().setEraseWholePolyline(false);
+    ok &= require(mouse.eraseWholePolyline() == false, "segment erase mode");
     // 方案注册必须能通过持久化身份查到，不能只在菜单中添加展示条目。
     // 连续安全帧沿用切换门禁，避免把尚未结束的画笔移交给新方案。
     // 此处不构造 ImGui 上下文，直接检验不依赖设备状态的策略契约。

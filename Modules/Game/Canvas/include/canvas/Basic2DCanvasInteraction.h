@@ -56,7 +56,8 @@ public:
     bool hasActivePointerGesture() const override
     {
         return m_leftPressStartedOnCanvas || m_leftPressStartedObjectDrag ||
-               m_rightEraseActive || m_isMiddleCanvasPanning;
+               m_rightEraseActive || m_isMiddleCanvasPanning ||
+               m_mouseBrushCancelAwaitingRelease;
     }
 
     /// @brief 请求本帧左键释放时丢弃画笔而不是提交物件。
@@ -116,6 +117,10 @@ public:
         bool                                  allowSelectionScroll = true);
 
 private:
+    /// @brief 纯鼠标绘制中右键取消预览，并消费同一组按钮的剩余释放。
+    /// @warning 每帧只检查本地手势和输入边沿，取消时发布一次既有结束命令。
+    bool handleMouseBrushCancellation(
+        const Common::Render::RenderSnapshot& snapshot, bool hovered);
     /// @brief 无 GPU 测试从真实右键候选执行选择，不直接改写悬浮状态。
     friend struct EditorInteractionSurfaceTestAccess;
     /// @brief 验证右键候选仍存在后选择它，并保留后续重叠命中的优先身份。
@@ -224,6 +229,8 @@ private:
 
     /// @brief 下一次绘制工具释放是否只清理临时画笔。
     bool m_cancelBrushOnNextRelease{ false };
+    /// @brief 已取消的绘制仍持有按钮，全部松开前不允许变成擦除或新画笔。
+    bool m_mouseBrushCancelAwaitingRelease{ false };
     /// @brief 当前引导是否要求独立放置，下一次起笔时读取。
     bool m_walkthroughPlacement{ false };
     /// @brief 当前活动画笔锁存的独立放置策略，不随步骤确认或结束改变。
@@ -428,6 +435,8 @@ private:
     std::unordered_set<entt::entity> m_colorStrokeEntities;
     /// @brief 当前右键擦除手势是否已经向逻辑线程发送开始命令。
     bool m_rightEraseActive{ false };
+    /// @brief 纯鼠标起笔粒度；为空时经典擦除仍逐帧读取物理 Shift。
+    std::optional<bool> m_eraseWholePolylineMode;
     /// @brief 右键菜单打开时的可见吸附时间，菜单内移动不会改变该锚点。
     double m_selectionPasteTime{ 0.0 };
     /// @brief 右键起点的画布局部坐标，移除框选不得使用菜单项上的鼠标位置。

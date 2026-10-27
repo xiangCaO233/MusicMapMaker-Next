@@ -48,6 +48,17 @@ public:
     {
         m_selectionOperation = operation;
     }
+    /// @brief 纯鼠标默认局部擦除，不依赖 Shift 决定是否删除整条折线。
+    /// @warning 仅返回 UI 本地标量，画布起笔后不再重读该设置。
+    std::optional<bool> eraseWholePolyline() const override
+    {
+        return m_eraseWholePolyline;
+    }
+    /// @brief 只改变下一次擦除意图，不模拟 Shift 或持久化键盘配置。
+    void setEraseWholePolyline(bool whole) override
+    {
+        m_eraseWholePolyline = whole;
+    }
     /// @brief 主画布无需修饰键即可延伸画笔，其他表面保留原语义。
     /// @warning 连续绘制只做枚举判断，不持有会话或跨帧指针。
     bool extendBrush(Surface surface, bool shift) const override
@@ -58,6 +69,8 @@ public:
     }
 
 private:
+    /// @brief 纯鼠标擦除粒度，跨工具切换保留，但不影响经典方案。
+    bool m_eraseWholePolyline{ false };
     /// @brief 模式仅由 UI 线程读写，不参与每帧配置保存。
     Logic::SelectionOperation m_selectionOperation{
         Logic::SelectionOperation::Replace
@@ -164,6 +177,14 @@ IEditorInteractionProfile::selectionOperation() const
 void IEditorInteractionProfile::setSelectionOperation(Logic::SelectionOperation)
 {
 }
+/// @brief 经典方案无显式擦除粒度，仍由每帧真实 Shift 决定。
+/// @warning 查询不分配，不读取输入或配置容器。
+std::optional<bool> IEditorInteractionProfile::eraseWholePolyline() const
+{
+    return std::nullopt;
+}
+/// @brief 经典方案忽略纯鼠标设置，不留下影响物理修饰键的隐藏状态。
+void IEditorInteractionProfile::setEraseWholePolyline(bool) {}
 
 /// @brief 将当前表面及修饰键解释传给方案，避免画布识别具体方案 ID。
 /// @warning 起笔和连续更新使用同一入口，无额外手势分配或等待。

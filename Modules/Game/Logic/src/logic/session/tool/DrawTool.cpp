@@ -111,6 +111,7 @@ void resetBrushState(SessionContext& ctx)
     ctx.brushState.activeAudioResourceId.clear();
     ctx.brushState.activeSampleBinding.reset();
     ctx.brushState.replacesExistingObject = false;
+    ctx.brushState.resumedDeleteActionId  = 0;
     ctx.brushState.resumedEntity          = entt::null;
     ctx.brushState.resumedPracticeSlot    = -1;
     ctx.brushState.resumedPracticeToken   = 0;
@@ -305,6 +306,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                            : std::string{};
     ctx.brushState.activeSampleBinding.reset();
     ctx.brushState.replacesExistingObject = false;
+    ctx.brushState.resumedDeleteActionId  = 0;
     ctx.brushState.resumedEntity          = entt::null;
     ctx.brushState.resumedPracticeSlot    = -1;
     ctx.brushState.resumedPracticeToken   = 0;
@@ -509,8 +511,12 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                             std::move(deleteEntries), "Resume Polyline Edit");
                         // 所有原组件快照均已复制，执行后不能继续读取原父引用。
                         // 本次删除独立进入历史，画笔最终替代结果尚未提交。
+                        // 入栈后按栈分配的身份记录本笔删除，不持有跨帧动作指针。
+                        const auto* resumeDelete = deleteAction.get();
                         ctx.actionStack.pushAndExecute(std::move(deleteAction),
                                                        ctx);
+                        ctx.brushState.resumedDeleteActionId =
+                            resumeDelete->m_stackActionId;
 
                         // 设置拖拽状态
                         // 只有删除动作已入栈后才标记替换状态，取消恢复需要识别这一步历史。
@@ -575,7 +581,11 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
 
                 auto deleteAction = std::make_unique<BatchNoteAction>(
                     std::move(deleteEntries), "Convert Note to Polyline");
+                // 入栈后按栈分配的身份记录本笔删除，不持有跨帧动作指针。
+                const auto* resumeDelete = deleteAction.get();
                 ctx.actionStack.pushAndExecute(std::move(deleteAction), ctx);
+                ctx.brushState.resumedDeleteActionId =
+                    resumeDelete->m_stackActionId;
 
                 ctx.brushState.replacesExistingObject = true;
                 ctx.brushState.resumedEntity          = targetEntity;
@@ -1070,6 +1080,13 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
     // 教学手势未落入指定目标时直接丢弃临时画笔。取消发生在创建动作入栈前，
     // 对用户表现为本次失败放置已撤销，同时不会误撤销更早的有效编辑。
     if ( cmd.cancel ) {
+        // 只有新增纯鼠标取消要求恢复本笔临时删除，旧入口保留原有清理语义。
+        // 精确身份可跨过后续编辑定位自己的动作，不能直接撤销栈顶。
+        // 取消移除的是未完成笔画的删除历史，不留下可重做的中间缺失状态。
+        if ( cmd.restoreReplacedObjectOnCancel &&
+             ctx.brushState.replacesExistingObject )
+            ctx.actionStack.cancelAction(ctx.brushState.resumedDeleteActionId,
+                                         ctx);
         resetBrushState(ctx);
         return;
     }
