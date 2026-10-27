@@ -352,3 +352,11 @@ mmm_add_test_executable(Canvas EditorInteractionSurfaceTest
 target_link_libraries(EditorInteractionSurfaceTest PRIVATE Canvas)
 mmm_register_test_case(NAME EditorInteractionSurfaceTest COMMAND
                        EditorInteractionSurfaceTest)
+
+# Timing 表格通过真实 CPU ImGui 帧验证行选择、过滤全选和经典修饰键隔离。 用例链接 Canvas 本体，避免只测独立集合 helper
+# 而遗漏控件绑定与释放顺序。
+mmm_add_test_executable(Canvas TimingTableMouseSelectionTest
+                        tests/TimingTableMouseSelectionTest.cpp)
+target_link_libraries(TimingTableMouseSelectionTest PRIVATE Canvas)
+mmm_register_test_case(NAME TimingTableMouseSelectionTest COMMAND
+                       TimingTableMouseSelectionTest)

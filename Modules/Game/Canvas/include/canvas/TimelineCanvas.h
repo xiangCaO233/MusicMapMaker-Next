@@ -197,6 +197,8 @@ private:
     friend struct TimelineStopCreationTestAccess;
     /// @brief 允许无 GPU 回归驱动真实菜单并检查本地选择，不开放业务接口。
     friend struct TimingContextMenuTestAccess;
+    /// @brief 表格回归夹具只绑定输入和观察状态，业务操作必须经过真实控件。
+    friend struct TimingTableMouseSelectionTestAccess;
     /// @brief 提交时间线命令，记录原格式无法保存的修改但始终允许编辑。
     /// @param event 待发布的时间线操作；批量命令共用一次提示。
     /// @warning 低频提交路径：只读取快照，不访问可变 ECS 或文件系统。
@@ -601,6 +603,9 @@ private:
     entt::entity m_tableRowDragAnchorEntity{ entt::null };
     /// @brief 时间点表格序号列拖选开始前保留的追加选择。
     std::unordered_set<entt::entity> m_tableRowDragBaseSelection;
+    /// @brief 表格本次手势的集合模式；空值保持经典 Ctrl/Shift 规则。
+    /// @details 起笔锁存，后续外部模式变化不能重解释当前拖选。
+    std::optional<Logic::SelectionOperation> m_tableRowSelectionOperation;
     /// @brief 当前序号列拖选是否已经越过起始行。
     bool m_hasTableRowDragSelectionMoved{ false };
     /// @brief 时间点表格是否只显示 BPM 行。

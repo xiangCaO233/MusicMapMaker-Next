@@ -66,6 +66,7 @@ return {
 	["ui.canvas.hover.hold_body"] = "Hold body",
 	["ui.selection.add"] = "Add to selection",
 	["ui.selection.subtract"] = "Subtract from selection",
+	["ui.selection.all_results"] = "Select all results",
 	["ui.selection.clear"] = "Clear selection",
 	["ui.selection.seek_here"] = "Seek here",
 	["ui.selection.play_here"] = "Play from here",

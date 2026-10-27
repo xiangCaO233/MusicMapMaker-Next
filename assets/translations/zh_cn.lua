@@ -65,6 +65,7 @@ return {
 	["ui.canvas.hover.hold_body"] = "长条段",
 	["ui.selection.add"] = "追加选择",
 	["ui.selection.subtract"] = "减选",
+	["ui.selection.all_results"] = "全选当前结果",
 	["ui.selection.clear"] = "清空选择",
 	["ui.selection.seek_here"] = "定位到此处",
 	["ui.selection.play_here"] = "从此处播放",
