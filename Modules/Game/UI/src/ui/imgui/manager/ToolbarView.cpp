@@ -42,6 +42,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <filesystem>
+#include <fmt/format.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <iterator>
@@ -826,6 +827,7 @@ void ToolbarView::update(UIManager* sourceManager)
     if ( !independentButtonVisibility.playbackSpeed ) {
         m_showSpeedPopup = false;
     }
+    if ( !independentButtonVisibility.timelineZoom ) m_showZoomPopup = false;
     if ( !independentButtonVisibility.trackCount ) m_showKeyPopup = false;
     if ( !independentButtonVisibility.beatDivisor ) {
         m_showDivisorPopup = false;
@@ -860,7 +862,7 @@ void ToolbarView::update(UIManager* sourceManager)
             const auto*  viewport = ImGui::GetMainViewport();
             const ImVec2 size(horizontal ? previous->Size.x : totalFixedW,
                               horizontal ? rowHeight : previous->Size.y);
-            ImVec2 position = previous->Pos;
+            ImVec2       position = previous->Pos;
             // 整个浮窗需留在可操作区域，不能仅保证标题栏的一小部分可见。
             // 极小视口仍从起始边定位，避免上下限倒置传给 clamp。
             for ( int axis = 0; axis < 2; ++axis )
@@ -1276,6 +1278,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     m_showDivisorPopup    = false;
                     m_showKeyPopup        = false;
                     m_showSpeedPopup      = false;
+                    m_showZoomPopup       = false;
                     m_showBeatLinePopup   = false;
                     m_showMagnetPopup     = false;
                     m_showSoundEffectTool = false;
@@ -1293,8 +1296,8 @@ void ToolbarView::update(UIManager* sourceManager)
                 const ImVec2 swatchMin  = {
                     minPos.x + (btnSize - swatchSize) * 0.5f,
                     minPos.y + (showToolLabels
-                                     ? std::floor(5.0f * dpiScale)
-                                     : (btnHeight - swatchSize) * 0.5f),
+                                    ? std::floor(5.0f * dpiScale)
+                                    : (btnHeight - swatchSize) * 0.5f),
                 };
                 const ImVec2 swatchMax = { swatchMin.x + swatchSize,
                                            swatchMin.y + swatchSize };
@@ -1362,6 +1365,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     m_showDivisorPopup    = false;
                     m_showKeyPopup        = false;
                     m_showSpeedPopup      = false;
+                    m_showZoomPopup       = false;
                     m_showBeatLinePopup   = false;
                     m_showSoundEffectTool = false;
                 }
@@ -1411,6 +1415,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     m_showDivisorPopup    = false;
                     m_showKeyPopup        = false;
                     m_showSpeedPopup      = false;
+                    m_showZoomPopup       = false;
                     m_showMagnetPopup     = false;
                     m_showSoundEffectTool = false;
                 }
@@ -1454,6 +1459,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     m_showDivisorPopup  = false;
                     m_showKeyPopup      = false;
                     m_showSpeedPopup    = false;
+                    m_showZoomPopup     = false;
                     m_showBeatLinePopup = false;
                     m_showMagnetPopup   = false;
                 }
@@ -1494,7 +1500,8 @@ void ToolbarView::update(UIManager* sourceManager)
             static_cast<int>(independentButtonVisibility.playback) +
             static_cast<int>(independentButtonVisibility.playbackSpeed) +
             static_cast<int>(independentButtonVisibility.trackCount) +
-            static_cast<int>(independentButtonVisibility.beatDivisor);
+            static_cast<int>(independentButtonVisibility.beatDivisor) +
+            static_cast<int>(independentButtonVisibility.timelineZoom);
         // 播放按钮可能包含文字，因此使用 btnHeight；其余数值按钮保持方形。
         float bottomButtonsH = 0.0f;
         // 播放按钮图标随运行态在播放与暂停间切换，active 样式对应正在播放。
@@ -1507,7 +1514,8 @@ void ToolbarView::update(UIManager* sourceManager)
             static_cast<float>(
                 static_cast<int>(independentButtonVisibility.playbackSpeed) +
                 static_cast<int>(independentButtonVisibility.trackCount) +
-                static_cast<int>(independentButtonVisibility.beatDivisor));
+                static_cast<int>(independentButtonVisibility.beatDivisor) +
+                static_cast<int>(independentButtonVisibility.timelineZoom));
         // 间距只存在于相邻可见项之间，隐藏项不应留下空槽。
         if ( bottomButtonCount > 1 ) {
             bottomButtonsH +=
@@ -1610,6 +1618,7 @@ void ToolbarView::update(UIManager* sourceManager)
                                                 ImVec2(btnSize, btnSize)) ) {
                     m_showSpeedPopup = !m_showSpeedPopup;
                     if ( m_showSpeedPopup ) {
+                        m_showZoomPopup = false;
                         // 数值弹层共享工具栏内侧空间，任一时刻只保留一个。
                         m_showKeyPopup        = false;
                         m_showDivisorPopup    = false;
@@ -1705,6 +1714,7 @@ void ToolbarView::update(UIManager* sourceManager)
                         // 轨道数弹层与其他锚定弹层互斥。
                         m_showDivisorPopup    = false;
                         m_showSpeedPopup      = false;
+                        m_showZoomPopup       = false;
                         m_showBeatLinePopup   = false;
                         m_showMagnetPopup     = false;
                         m_showSoundEffectTool = false;
@@ -1770,6 +1780,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     // 打开分拍弹层时关闭其他数值和工具弹层。
                     m_showKeyPopup        = false;
                     m_showSpeedPopup      = false;
+                    m_showZoomPopup       = false;
                     m_showBeatLinePopup   = false;
                     m_showMagnetPopup     = false;
                     m_showSoundEffectTool = false;
@@ -1804,6 +1815,50 @@ void ToolbarView::update(UIManager* sourceManager)
                 drawTooltip(TR("ui.toolbar.beat_divisor").data());
             }
             if ( contentFont ) ImGui::PopFont();
+            ImGui::PopStyleColor(3);
+            advanceBottomButton();
+        }
+
+        // 缩放属于全局视觉配置，空项目也可预设；按钮不获取会话锁。
+        // 与播放倍率分开显示，避免视觉调整被误认为音频变速。
+        // 入口使用固定放大镜图标，具体倍率在展开面板中显示。
+        // 不保存第二份倍率状态，避免不同入口互相覆盖。
+        if ( independentButtonVisibility.timelineZoom ) {
+            pushBtnStyle(m_showZoomPopup);
+            if ( drawIconButton(ICON_MMM_SEARCH,
+                                "###ToolbarTimelineZoom",
+                                nullptr,
+                                btnSize,
+                                btnSize,
+                                false) ) {
+                m_showZoomPopup = !m_showZoomPopup;
+                if ( m_showZoomPopup ) {
+                    // 同一工具栏内只保留一个参数浮层，触屏无需悬浮才能发现控制项。
+                    m_showDivisorPopup = m_showKeyPopup = m_showSpeedPopup =
+                        false;
+                    m_showBeatLinePopup       = m_showMagnetPopup =
+                        m_showSoundEffectTool = false;
+                    m_showLayoutPopup = m_showColorPopup = false;
+                }
+            }
+            // 停靠方向改变后，浮层继续跟随当前按钮的屏幕坐标。
+            m_lastZoomBtnPos = toolbarButtonPosition();
+            if ( ImGui::IsItemHovered() ) {
+                // 滚轮是可选捷径；主要操作始终可由点击和拖动完成。
+                const float wheel = Interaction::mouseWheel();
+                if ( editorCfg.settings.enableToolbarValueWheelAdjustment &&
+                     std::abs(wheel) > 0.001f ) {
+                    auto        config = currentEditorConfig();
+                    const float zoom   = std::clamp(
+                        config.visual.timelineZoom + wheel * 0.1f, 0.1f, 10.0f);
+                    // 到达边界后的滚轮不再提交相同配置。
+                    if ( zoom != config.visual.timelineZoom ) {
+                        config.visual.timelineZoom = zoom;
+                        updateEditorConfig(config);
+                    }
+                }
+                drawTooltip(TR("ui.settings.visual.timeline_zoom").data());
+            }
             ImGui::PopStyleColor(3);
             advanceBottomButton();
         }
@@ -1873,6 +1928,161 @@ void ToolbarView::update(UIManager* sourceManager)
     renderMagnetPopup(dpiScale);
     renderBeatLinePopup(dpiScale);
     renderSoundEffectTool(dpiScale);
+
+    // 所有输入共用现有视觉配置入口，后续手势只需提交同一缩放值。
+    // 值逐次即时更新，不等待鼠标释放，也不访问音频播放参数。
+    // 百分比仅用于展示，配置仍然使用既有浮点倍率。
+    // 100% 对应 1.0，不改变谱面时间、分拍或音频速度。
+    // 浮层关闭后没有额外的连续输入处理。
+    if ( m_showZoomPopup ) {
+        const auto* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar");
+        // 复用四边停靠规则，让浮层向可用空间展开。
+        // 上一帧尺寸用于边界约束，布局后再记录真实尺寸。
+        // 窗口被边缘裁窄后不能把裁剪宽度当作所需宽度，否则会持续向右溢出。
+        // 滑条和按钮行提供内容最小宽度，确保靠右按钮始终选择向左对齐。
+        // 预设行包含四个按钮和三个间距，主题扩大间距时也需纳入估计。
+        // 这里只决定对齐方向，视口尺寸上限仍由公共定位函数控制。
+        const auto& popupStyle = ImGui::GetStyle();
+        // 百分比必须连同两侧内边距完整容纳，不能仅按 DPI 固定按钮宽度。
+        // 三列操作与四列预设分别取等宽，文字大小改变后仍保持整齐。
+        const float labelWidth = ImGui::CalcTextSize("400%").x;
+        const float presetWidth =
+            std::max(48.0f * dpiScale,
+                     std::ceil(labelWidth + popupStyle.FramePadding.x * 2));
+        const float actionWidth =
+            std::max(64.0f * dpiScale,
+                     std::ceil(labelWidth + popupStyle.FramePadding.x * 2));
+        const float buttonHeight =
+            std::max(32.0f * dpiScale, ImGui::GetFrameHeight());
+        const float contentWidth =
+            std::max({ 220.0f * dpiScale,
+                       presetWidth * 4 + popupStyle.ItemSpacing.x * 3,
+                       actionWidth * 3 + popupStyle.ItemSpacing.x * 2 });
+        const float requiredWidth =
+            contentWidth + popupStyle.WindowPadding.x * 2;
+        // 标题、分隔线、滑条、两排按钮与关闭按钮构成完整内容高度。
+        // 竖栏底部锚点必须用完整高度判断向上展开，不能复用已裁窄的缓存。
+        // 多留一行间距吸收像素舍入，实际窗口仍由内容自动确定大小。
+        const float requiredHeight =
+            popupStyle.WindowPadding.y * 2 + ImGui::GetTextLineHeight() + 1.0f +
+            ImGui::GetFrameHeight() * 2 + buttonHeight * 2 +
+            popupStyle.ItemSpacing.y * 6;
+        positionToolbarPopup(
+            *toolbarWindow,
+            m_lastZoomBtnPos,
+            ImVec2(std::max(m_zoomPopupSize.x, requiredWidth),
+                   std::max(m_zoomPopupSize.y, requiredHeight)),
+            dpiScale);
+        const auto flags = ImGuiWindowFlags_NoTitleBar |
+                           ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                           ImGuiWindowFlags_NoSavedSettings |
+                           ImGuiWindowFlags_AlwaysAutoResize;
+        if ( ImGui::Begin("##TimelineZoomPopup", nullptr, flags) ) {
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.timeline_zoom").data());
+            ImGui::Separator();
+            // 每次读取最新快照，只修改缩放字段。
+            // 不使用浮层打开时的旧配置覆盖其他入口的后续修改。
+            auto  config = currentEditorConfig();
+            float percent =
+                std::clamp(config.visual.timelineZoom * 100.0f, 10.0f, 1000.0f);
+            bool changed = false;
+            // 对数滑条让常用低倍率有足够的拖动空间；禁止切入键盘输入模式。
+            // 合法范围严格为正，因此可以直接使用对数映射。
+            // 拖动负责连续调整，加减按钮负责可重复的细调。
+            // 所有提交统一限制范围，防止按钮加减越界。
+            ImGui::SetNextItemWidth(contentWidth);
+            if ( FeedbackSliderFloat("##TimelineZoomSlider",
+                                     &percent,
+                                     10.0f,
+                                     1000.0f,
+                                     "",
+                                     ImGuiSliderFlags_Logarithmic |
+                                         ImGuiSliderFlags_AlwaysClamp |
+                                         ImGuiSliderFlags_NoInput) ) {
+                // 仅拖动时吸附十个百分点，保留按钮或预设选择的五个百分点值。
+                percent = std::round(percent / 10.0f) * 10.0f;
+                changed = true;
+            }
+            // 原生滑条在返回前已绘制数值，必须隐藏原始文本再绘制吸附结果。
+            // 不能只在返回后修改配置，否则本帧仍会短暂显示未对齐的百分比。
+            if ( ImGui::IsItemActive() ) {
+                const float snapped = std::round(percent / 10.0f) * 10.0f;
+                changed |= snapped != percent;
+                percent = snapped;
+            }
+            // 复用滑条实际矩形和当前字体，使显示与本帧提交的数值完全一致。
+            // 装饰文字不创建新控件，保留滑条的鼠标捕获与反馈状态。
+            const auto zoomText  = fmt::format("{:.0f}%", percent);
+            const auto textSize  = ImGui::CalcTextSize(zoomText.c_str());
+            const auto sliderMin = ImGui::GetItemRectMin();
+            const auto sliderMax = ImGui::GetItemRectMax();
+            // 文本居中绘制，窗口自身裁剪仍然生效，不越过浮层边界。
+            // 非拖动状态保留预设或加减选择的五个百分点精度。
+            ImGui::GetWindowDrawList()->AddText(
+                ImVec2((sliderMin.x + sliderMax.x - textSize.x) * 0.5f,
+                       (sliderMin.y + sliderMax.y - textSize.y) * 0.5f),
+                ImGui::GetColorU32(ImGuiCol_Text),
+                zoomText.c_str());
+            const ImVec2 buttonSize(actionWidth, buttonHeight);
+            // 命中区随 DPI 缩放，不单纯依赖符号文字的宽度。
+            // 到达边界时保留按钮位置，仅禁用不可执行的方向。
+            // 百分比加减沿五个百分点网格移动，旧配置的零散值也会对齐。
+            // 不使用当前倍率乘法，避免连续点击时步长越来越大。
+            // 最终钳位还覆盖距离边界不足一个步长的情况。
+            // 禁用状态由当前数值推导，不保留可能失效的额外标志。
+            ImGui::BeginDisabled(percent <= 10.0f);
+            if ( FeedbackButton("-###TimelineZoomOut", buttonSize) ) {
+                // 微小容差只抵消倍率转百分比的舍入，避免整点跨过一档。
+                percent = (std::ceil(percent / 5.0f - 0.0001f) - 1.0f) * 5.0f;
+                changed = true;
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if ( FeedbackButton("100%###TimelineZoomReset", buttonSize) ) {
+                // 恢复默认无需双击、右键或键盘输入。
+                percent = 100.0f;
+                changed = true;
+            }
+            ImGui::SameLine();
+            ImGui::BeginDisabled(percent >= 1000.0f);
+            if ( FeedbackButton("+###TimelineZoomIn", buttonSize) ) {
+                // 向上选择下一个五的倍数，与减号的向下对齐语义对称。
+                percent = (std::floor(percent / 5.0f + 0.0001f) + 1.0f) * 5.0f;
+                changed = true;
+            }
+            ImGui::EndDisabled();
+            // 预设与加减按钮提供离散操作，不要求精确拖动或任何修饰键。
+            // 预设仅覆盖常用值，完整范围仍由滑条和加减提供。
+            // 稳定 ID 独立于显示文字，避免显示变化重建交互身份。
+            for ( const float preset : { 25.0f, 50.0f, 200.0f, 400.0f } ) {
+                if ( preset != 25.0f ) ImGui::SameLine();
+                const auto text = fmt::format(
+                    "{:.0f}%###TimelineZoomPreset{:.0f}", preset, preset);
+                if ( FeedbackButton(text.c_str(),
+                                    ImVec2(presetWidth, buttonHeight)) ) {
+                    percent = preset;
+                    changed = true;
+                }
+            }
+            if ( changed ) {
+                // 和画布滚轮保持相同合法范围；更新只发生于用户真正操作时。
+                // 不修改播放配置，因此调整不会触发音频速度变换。
+                // 应用端口负责将更新发布给编辑器，工具栏不直接接触会话。
+                config.visual.timelineZoom =
+                    std::clamp(percent / 100.0f, 0.1f, 10.0f);
+                updateEditorConfig(config);
+            }
+            // 明确的关闭按钮保证触屏无悬浮、无右键时也能退出。
+            if ( FeedbackButton(TR("ui.window.close").data()) )
+                m_showZoomPopup = false;
+            // 实际尺寸随字体、翻译和 DPI 改变，不能固定为初始估计值。
+            // 下一帧使用此值约束浮层，避免右侧或底部越过视口。
+            const auto size = ImGui::GetWindowSize();
+            m_zoomPopupSize = { size.x, size.y };
+        }
+        ImGui::End();
+    }
 
     // --- 绘制分拍数量设置悬浮窗 ---
     //

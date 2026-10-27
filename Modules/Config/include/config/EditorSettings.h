@@ -409,6 +409,9 @@ struct ToolbarIndependentButtonVisibility {
 
     /// @brief 是否显示分拍数量按钮。
     bool beatDivisor{ false };
+
+    /// @brief 默认显示时间线缩放入口，鼠标和触屏均无需修饰键即可操作。
+    bool timelineZoom{ true };
 };
 
 /// @brief 将独立按钮可见性配置序列化为 JSON。

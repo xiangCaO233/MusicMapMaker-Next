@@ -911,7 +911,8 @@ void to_json(nlohmann::json&                           json,
                            { "playback", visibility.playback },
                            { "playbackSpeed", visibility.playbackSpeed },
                            { "trackCount", visibility.trackCount },
-                           { "beatDivisor", visibility.beatDivisor } };
+                           { "beatDivisor", visibility.beatDivisor },
+                           { "timelineZoom", visibility.timelineZoom } };
 }
 
 /// @brief 从 JSON 恢复非互斥工具栏按钮可见性。
@@ -936,6 +937,8 @@ void from_json(const nlohmann::json&               json,
         json.value("playbackSpeed", defaults.playbackSpeed);
     visibility.trackCount  = json.value("trackCount", defaults.trackCount);
     visibility.beatDivisor = json.value("beatDivisor", defaults.beatDivisor);
+    // 旧配置自动补充无修饰键缩放入口，显式隐藏则继续保留。
+    visibility.timelineZoom = json.value("timelineZoom", defaults.timelineZoom);
 }
 
 /// @brief 序列化工具栏可见性的两个职责分组。

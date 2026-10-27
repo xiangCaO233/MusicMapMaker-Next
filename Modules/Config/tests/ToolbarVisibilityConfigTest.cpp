@@ -23,7 +23,7 @@ bool matchesDefaultToolbarVisibility(
            buttons.magnet && buttons.scrollTimingMapping &&
            buttons.beatLineDisplay && buttons.soundEffectTool &&
            buttons.playback && !buttons.playbackSpeed && !buttons.trackCount &&
-           !buttons.beatDivisor;
+           !buttons.beatDivisor && buttons.timelineZoom;
 }
 
 /// @brief 验证两个工具栏按钮集合的全部隐藏状态可以完整往返。
@@ -39,14 +39,14 @@ bool testToolbarVisibilityRoundTrip()
         .move = false,       .marquee = false,     .draw = false,
         .colorBrush = false, .colorEraser = false, .layout = false,
     };
-    // 独立按钮不改变工具状态，使用另一嵌套对象持久化九个字段。
+    // 独立按钮不改变工具状态，使用另一嵌套对象持久化十个字段。
     source.toolbarVisibility.independentButtons = {
-        // 九个按钮全关，覆盖这一分组的完整序列化键集合。
+        // 十个按钮全关，覆盖这一分组的完整序列化键集合。
         .notePalette = false,         .magnet = false,
         .scrollTimingMapping = false, .beatLineDisplay = false,
         .soundEffectTool = false,     .playback = false,
         .playbackSpeed = false,       .trackCount = false,
-        .beatDivisor = false,
+        .beatDivisor = false,         .timelineZoom = false,
     };
 
     // 编码对象同时用于结构检查，恢复对象用于逐字段值检查。
@@ -62,7 +62,7 @@ bool testToolbarVisibilityRoundTrip()
          buttons.notePalette || buttons.magnet || buttons.scrollTimingMapping ||
          buttons.beatLineDisplay || buttons.soundEffectTool ||
          buttons.playback || buttons.playbackSpeed || buttons.trackCount ||
-         buttons.beatDivisor ||
+         buttons.beatDivisor || buttons.timelineZoom ||
          !encoded.at("toolbarVisibility").contains("stateTools") ||
          !encoded.at("toolbarVisibility").contains("independentButtons") ) {
         // 任一按钮意外恢复为默认显示都会使完整往返失败。

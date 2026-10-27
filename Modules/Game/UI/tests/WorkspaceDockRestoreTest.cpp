@@ -1,5 +1,8 @@
 #include "ui/imgui/WorkspaceDockRestore.h"
+#include "config/EditorConfig.h"
 #include "config/EditorSettings.h"
+#include "ui/IEditorApplicationService.h"
+#include "ui/UIManager.h"
 
 #include "config/AppConfig.h"
 #include "imgui.h"
@@ -11,12 +14,15 @@
 #include "ui/imgui/ToolbarDockLayout.h"
 #include "ui/imgui/ToolbarPopupLayout.h"
 #include "ui/imgui/manager/ToolbarView.h"
+#include "ui/layout/CLayWrapperCore.h"
 
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <memory>
 
 #include <string>
+#include <utility>
 #include <vector>
 
 /// @file WorkspaceDockRestoreTest.cpp
@@ -1325,6 +1331,293 @@ bool checkToolbarPopupPlacement()
     return passed;
 }
 
+namespace
+{
+/// @brief 记录工具栏提交的配置，避免测试启动音频、会话或后台逻辑线程。
+/// @details 仅配置接口参与此测试，其余应用操作均保持无项目空闲状态。
+/// 测试使用应用服务边界捕获提交，不替换 UI 控件实现。
+/// 返回配置保留真实接口的值语义，能发现只修改临时副本的错误。
+/// 不创建会话，同时验证无打开谱面时的全局缩放入口。
+class ZoomTestService final : public MMM::UI::IEditorApplicationService
+{
+public:
+    /// @brief 权威配置快照，供下一帧读回确认交互不是只改局部变量。
+    MMM::Config::EditorConfig m_config;
+    /// @brief 观察提交次数，稳定绘制不应重复提交配置。
+    int m_updates{};
+    /// @brief 测试不加载项目。
+    bool currentProjectUiSnapshot(
+        MMM::UI::EditorProjectUiSnapshot&) const override
+    {
+        return false;
+    }
+    /// @brief 无项目工作区可修改。
+    MMM::ProjectWorkspaceState* mutableCurrentWorkspace(
+        const std::filesystem::path&) override
+    {
+        return nullptr;
+    }
+    /// @brief 缩放不应打开项目音频面板。
+    void markProjectAudioToolOpenAndSave() override {}
+    /// @brief 保持默认抓取工具。
+    MMM::Logic::EditTool currentTool() const override
+    {
+        return MMM::Logic::EditTool::Move;
+    }
+    /// @brief 每帧按值读取已提交配置。
+    MMM::Config::EditorConfig editorConfig() const override { return m_config; }
+    /// @brief 记录真实 UI 提交入口，不直接操控工具栏私有成员。
+    void updateEditorConfig(const MMM::Config::EditorConfig& config) override
+    {
+        // 下一帧必须能读取本次调整，不能只让按钮显示发生变化。
+        // 次数用于区分真实交互与空闲帧重复提交。
+        m_config = config;
+        ++m_updates;
+    }
+    /// @brief 空闲测试不播放。
+    bool isPlaybackPlaying() const override { return false; }
+    /// @brief 没有会话框选。
+    bool isSelectingMarquee() const override { return false; }
+    /// @brief 没有物件拖动。
+    bool isDraggingNote() const override { return false; }
+    /// @brief 没有画笔手势。
+    bool isDrawingBrush() const override { return false; }
+    /// @brief 测试不保存谱面。
+    void requestAutoSave(MMM::UI::EditorAutoSaveReason) override {}
+    /// @brief 无渲染线程消费者。
+    void publishRenderFps(float) override {}
+    /// @brief 不为工具栏点击加载音效资源。
+    bool ensureEffectAudioTrackLoaded(const std::string&) override
+    {
+        return false;
+    }
+};
+
+/// @brief 用无修饰键鼠标点击验证缩放入口、增减与默认值恢复。
+/// @return 真实工具栏通过应用端口提交倍率且空闲帧不写配置时为真。
+/// @details 仅保留缩放按钮以稳定定位；无谱面时也必须能使用此全局视觉偏好。
+bool checkMouseOnlyTimelineZoom()
+{
+    auto& settings   = MMM::Config::AppConfig::instance().getEditorSettings();
+    const auto saved = settings;
+    // 隔离用户布局，退出时恢复原可见性和停靠方向。
+    // 单按钮定位不依赖其他工具的本地化标题宽度。
+    // 固定水平布局，使按钮位置可以由窗口边界确定。
+    // 其他停靠方向和弹层边界由前面的专门测试覆盖。
+    settings.fixedToolWindow                      = true;
+    settings.toolbarHorizontal                    = true;
+    settings.toolbarDockEdge                      = "top";
+    settings.showToolLabels                       = false;
+    settings.toolbarVisibility.stateTools         = { false, false, false,
+                                                      false, false, false };
+    settings.toolbarVisibility.independentButtons = {
+        false, false, false, false, false, false, false, false, false, true
+    };
+    createContext();
+    bool passed = true;
+    // 前面的窗口测试会释放当前 Clay 上下文，管理器构造需要有效上下文。
+    // 为本场景单独创建 Arena，不能依赖进程单例的首次初始化副作用。
+    auto& clay        = MMM::UI::CLayWrapperCore::instance();
+    auto  clayContext = clay.createWindowContext();
+    clay.makeCurrent(clayContext.context);
+    {
+        auto  serviceOwner = std::make_unique<ZoomTestService>();
+        auto& service      = *serviceOwner;
+        // 管理器持有服务所有权，观察引用只在管理器存活期间使用。
+        // 工具栏先释放，再释放管理器及服务，最后释放 ImGui 上下文。
+        service.m_config = MMM::Config::AppConfig::instance().getEditorConfig();
+        service.m_config.visual.timelineZoom = 1.0f;
+        // 固定默认倍率，避免用户偏好改变加减断言的起点。
+        MMM::UI::UIManager manager;
+        manager.setEditorApplicationService(std::move(serviceOwner));
+        MMM::UI::ToolbarView toolbar("Toolbar");
+        const float          dpi =
+            MMM::Config::AppConfig::instance().getWindowContentScale();
+        const float padding =
+            std::floor(settings.aesthetics.windowPadding * dpi);
+        /// @brief 推进真实工具栏一帧，不注入任何键盘修饰状态。
+        const auto draw = [&] {
+            ImGui::NewFrame();
+            // 同一浮层从横排迁移到右侧竖栏，覆盖缓存尺寸的跨方向复用。
+            const float thickness = 32 * dpi + padding * 2;
+            ImGui::SetNextWindowPos(
+                settings.toolbarHorizontal ? ImVec2(100, 20) : ImVec2(840, 20));
+            ImGui::SetNextWindowSize(settings.toolbarHorizontal
+                                         ? ImVec2(700, thickness)
+                                         : ImVec2(thickness, 560));
+            toolbar.update(&manager);
+            ImGui::Render();
+        };
+        /// @brief 分帧发送悬浮、按下、释放，覆盖 FeedbackButton 的真实入口。
+        const auto click = [&](ImVec2 position) {
+            // 悬浮先稳定一帧，随后才发送鼠标按下。
+            // 按下与释放分帧，避免输入队列合并掩盖点击时序。
+            // 不设置 Ctrl、Alt 或 Shift，验证完全独立的鼠标入口。
+            ImGui::GetIO().AddMousePosEvent(position.x, position.y);
+            draw();
+            ImGui::GetIO().AddMouseButtonEvent(0, true);
+            draw();
+            ImGui::GetIO().AddMouseButtonEvent(0, false);
+            draw();
+        };
+        draw();
+        draw();
+        const auto* tool = ImGui::FindWindowByName(" ###Toolbar");
+        // 自动布局稳定后才读取窗口边界，不依赖初始化时的估计尺寸。
+        if ( !tool ) passed = false;
+        if ( tool ) {
+            // 底部数值组在横排贴右端，单按钮中心来自实际窗口边界。
+            click(ImVec2(tool->Pos.x + tool->Size.x - padding - 16 * dpi,
+                         tool->Pos.y + padding + 16 * dpi));
+            draw();
+            draw();
+            const auto* popup = ImGui::FindWindowByName("##TimelineZoomPopup");
+            // 查找到窗口不等于已经打开，还需确认本帧实际绘制。
+            // 不访问私有开关，避免绕过按钮事件制造通过条件。
+            passed &= popup && popup->Active;
+            if ( !popup || !popup->Active )
+                XERROR(
+                    "Timeline zoom popup did not open at toolbar ({}, {}) size "
+                    "({}, {})",
+                    tool->Pos.x,
+                    tool->Pos.y,
+                    tool->Size.x,
+                    tool->Size.y);
+            if ( popup && popup->Active ) {
+                // 按钮位于右端，浮层必须能向左展开并保留完整操作行。
+                // 后续点击最右侧加号，同时覆盖边缘裁剪造成的不可点击回归。
+                // 使用弹层实际位置，允许布局策略调整安全留白。
+                // 使用当前样式计算位置，不假定测试机器的字体与间距。
+                // 点击按钮中心，允许边框和分隔线存在小幅像素舍入。
+                const auto& style = ImGui::GetStyle();
+                const float x     = popup->Pos.x + style.WindowPadding.x;
+                // 标题、分隔线和滑条之后为三列操作按钮；使用当前字体和间距。
+                const float y = popup->Pos.y + style.WindowPadding.y +
+                                ImGui::GetFontSize() + style.ItemSpacing.y + 1 +
+                                style.ItemSpacing.y + ImGui::GetFrameHeight() +
+                                style.ItemSpacing.y + 16 * dpi;
+                click(ImVec2(
+                    x + 2 * (64 * dpi + style.ItemSpacing.x) + 32 * dpi, y));
+                // 服务端返回值验证点击已跨过 UI 边界，而非仅更新标签。
+                // 失败信息保留实际倍率和提交次数，便于区分命中与传播问题。
+                if ( std::abs(service.m_config.visual.timelineZoom - 1.05f) >=
+                     0.001f )
+                    XERROR("Zoom plus: value {}, updates {}, click ({}, {})",
+                           service.m_config.visual.timelineZoom,
+                           service.m_updates,
+                           x + 2 * (64 * dpi + style.ItemSpacing.x) + 32 * dpi,
+                           y);
+                passed &= std::abs(service.m_config.visual.timelineZoom -
+                                   1.05f) < 0.001f;
+                click(ImVec2(x + 32 * dpi, y));
+                // 加减应互为逆操作，不改变基准倍率或引入累乘偏差。
+                passed &= std::abs(service.m_config.visual.timelineZoom -
+                                   1.0f) < 0.001f;
+                click(ImVec2(
+                    x + 2 * (64 * dpi + style.ItemSpacing.x) + 32 * dpi, y));
+                click(ImVec2(x + 64 * dpi + style.ItemSpacing.x + 32 * dpi, y));
+                // 重置从非默认值触发，避免在默认值上点击造成假阳性。
+                passed &= std::abs(service.m_config.visual.timelineZoom -
+                                   1.0f) < 0.001f;
+                // 配置只因交互改变，不能每帧保存同一倍率。
+                // 加、减、再加、重置共四次提交，证明各个入口确实触发。
+                // 再绘制两帧，检查浮层保持展开不会产生后台写入。
+                // 倍率使用容差比较，排除百分比换算产生的浮点舍入。
+                const int updates = service.m_updates;
+                // 最终校验以服务观测为准，不读取工具栏内部缓存。
+                // 因此按钮即使临时显示正确，漏提交仍会导致失败。
+                // 保持鼠标位置不变，也覆盖持续悬浮下的重复绘制。
+                // 固定帧时间使 FeedbackButton 的动画不影响语义断言。
+                // 本场景不推进播放时间，也不触发谱面更新。
+                // 真实播放下的视野变更仍由既有编辑器配置链路负责。
+                draw();
+                draw();
+                passed &= updates >= 4 && updates == service.m_updates;
+                // 滑条拖动必须即时提交十的倍数，不等到鼠标释放才对齐。
+                // 取非预设位置并连续移动，避免恰好命中整点造成假阳性。
+                const int   beforeDrag = service.m_updates;
+                const float sliderY    = popup->Pos.y + style.WindowPadding.y +
+                                         ImGui::GetTextLineHeight() +
+                                         style.ItemSpacing.y * 2 + 1 +
+                                         ImGui::GetFrameHeight() / 2;
+                ImGui::GetIO().AddMousePosEvent(x + 53 * dpi, sliderY);
+                draw();
+                ImGui::GetIO().AddMouseButtonEvent(0, true);
+                draw();
+                // 每次移动都读取应用服务，检验吸附作用于真实配置值。
+                // 对数滑条的映射位置不固定，因此只约束结果网格和合法范围。
+                // 将倍率乘十后应为整数，相当于百分比必须是十的倍数。
+                // 使用浮点容差容纳倍率存储误差，不接受可见的零散百分比。
+                // 按下期间保持同一控件激活，覆盖持续拖动而非独立点击。
+                for ( float offset : { 83.0f, 137.0f, 191.0f } ) {
+                    ImGui::GetIO().AddMousePosEvent(x + offset * dpi, sliderY);
+                    draw();
+                    const float steps =
+                        service.m_config.visual.timelineZoom * 10;
+                    passed &= std::abs(steps - std::round(steps)) < 0.001f;
+                }
+                // 释放仍走真实输入队列，不能把拖动状态泄漏到后续布局测试。
+                passed &= service.m_updates > beforeDrag;
+                ImGui::GetIO().AddMouseButtonEvent(0, false);
+                draw();
+                // 复现用户截图中的右侧竖栏底部入口，不能只验证顶部横栏。
+                // 刻意扩大文字内边距，令原先固定 48 像素的预设按钮不足。
+                // 尺寸改变后连续绘制，允许自动大小和锚点完成稳定。
+                settings.toolbarHorizontal       = false;
+                settings.toolbarDockEdge         = "right";
+                ImGui::GetStyle().FramePadding.x = 20;
+                draw();
+                draw();
+                draw();
+                // 足够高的视口应完整显示，不应因为按钮靠底而出现纵向滚动。
+                // 该断言同时捕获缓存记录裁剪高度后反复收缩的问题。
+                passed &= popup->ScrollMax.y <= 1.0f;
+                passed &=
+                    popup->Pos.y >= 0 && popup->Pos.y + popup->Size.y <= 600;
+                // 文字所需宽度必须落在窗口内容区域中，而非仅检查数值更新。
+                // 用当前字体和内边距推导点击位置，不依赖固定像素坐标。
+                // 扩大后的内边距持续覆盖预设与重置按钮，模拟主题尺寸变化。
+                // 测试上下文销毁时一并清除样式，不改用户持久化的主题参数。
+                // 不向浮层注入滚轮，排除通过滚动偶然露出目标按钮的假阳性。
+                const float presetWidth =
+                    std::max(48 * dpi,
+                             std::ceil(ImGui::CalcTextSize("400%").x +
+                                       style.FramePadding.x * 2));
+                const float rowHeight =
+                    std::max(32 * dpi, ImGui::GetFrameHeight());
+                const float presetX = popup->Pos.x + style.WindowPadding.x +
+                                      3 * (presetWidth + style.ItemSpacing.x) +
+                                      presetWidth / 2;
+                const float presetY =
+                    popup->Pos.y + style.WindowPadding.y +
+                    ImGui::GetTextLineHeight() + style.ItemSpacing.y + 1 +
+                    style.ItemSpacing.y + ImGui::GetFrameHeight() +
+                    style.ItemSpacing.y + rowHeight + style.ItemSpacing.y +
+                    rowHeight / 2;
+                // 最右侧的四字符预设最容易被截断；要求它完整落在内容区域。
+                // 中心点击还验证浮层上移后命中区域跟随，而非残留旧坐标。
+                passed &=
+                    presetX + presetWidth / 2 <=
+                    popup->Pos.x + popup->Size.x - style.WindowPadding.x + 1;
+                click(ImVec2(presetX, presetY));
+                passed &= std::abs(service.m_config.visual.timelineZoom -
+                                   4.0f) < 0.001f;
+            }
+        }
+    }
+    ImGui::DestroyContext();
+    settings = saved;
+    // 管理器已经销毁，才能释放其测量回调所属的布局上下文。
+    // 销毁后清空当前指针，避免下一场景观察已释放 Arena。
+    clay.makeCurrent(nullptr);
+    clay.destroyWindowContext(clayContext);
+    if ( !passed ) XERROR("Mouse-only timeline zoom toolbar regression");
+    // 所有失败路径均经过共享配置恢复，不污染后续场景。
+    // 单独的错误信息将鼠标缩放失败与前面的停靠回归区分。
+    return passed;
+}
+}  // namespace
+
 /// @brief 独立运行默认工作区到项目工作区的停靠恢复回归场景。
 /// @return 成功为 0，窗口未恢复为 1。
 /// @details 先排除生成无效节点或重复 ID，再运行恢复流程。
@@ -1339,7 +1632,8 @@ int main()
                    checkToolbarTransition(false) &&
                    checkToolbarTransition(true) && checkSharedToolbarNode() &&
                    checkToolbarResize() && checkToolbarEdgeDocking() &&
-                   checkToolbarAfterManager() && checkToolbarPopupPlacement()
+                   checkToolbarAfterManager() && checkToolbarPopupPlacement() &&
+                   checkMouseOnlyTimelineZoom()
                ? 0
                : 1;
 }
