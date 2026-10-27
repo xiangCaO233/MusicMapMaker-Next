@@ -588,6 +588,8 @@ double TimelineCanvas::snapTimingTime(const ImVec2& size, double rawTime,
     if ( !m_currentSnapshot || !std::isfinite(rawTime) ) {
         return rawTime;
     }
+    // 仅显式纯鼠标开关覆盖吸附，经典 Timing 对 Ctrl 的既有解释不变。
+    if ( UI::Interaction::activeProfile().bypassSnapping() ) return rawTime;
 
     const auto& appConfig    = Config::AppConfig::instance();
     const auto& editorConfig = appConfig.getEditorConfig();

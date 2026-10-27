@@ -379,9 +379,13 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
             ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
             : 120.0);
 
-    // 起笔沿用吸附结果；更新入口才根据 Ctrl 临时绕过吸附。
+    // 经典起笔沿用吸附结果；纯鼠标显式覆盖可以从首点就采用原始时间。
+    // 独立字段不改变经典 Ctrl 语义，后续连续更新仍复用原来的免吸附字段。
+    // 默认 false 保证已有起笔调用不变；该字段也用于下方续写起点的投影。
+    // 仅覆盖本次落点，不关闭永久磁吸设置或改变缓存的分拍结果。
     // 无效或负起始时间直接取消，不能创建一个等待后续移动修正的非法物件。
-    ctx.brushState.time = snap.isSnapped ? snap.snappedTime : rawTime;
+    ctx.brushState.time =
+        (snap.isSnapped && !cmd.bypassSnapAtStart) ? snap.snappedTime : rawTime;
     if ( !isPlaceableNoteTime(ctx.brushState.time) ) {
         resetBrushState(ctx);
         return;
@@ -463,7 +467,9 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                         if ( ctx.brushState.polylineSegments.back().type ==
                              ::MMM::NoteType::HOLD ) {
                             double snapTime =
-                                snap.isSnapped ? snap.snappedTime : rawTime;
+                                (snap.isSnapped && !cmd.bypassSnapAtStart)
+                                    ? snap.snappedTime
+                                    : rawTime;
                             auto& lastSeg =
                                 ctx.brushState.polylineSegments.back();
                             // 续接 Hold
@@ -558,8 +564,9 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                 // 独立 Hold 续接也按当前点击调整末端，与既有折线末段保持一致。
                 // 普通 Note 和 Flick 不在这里改动它们的原跨度。
                 if ( parentNote.m_type == ::MMM::NoteType::HOLD ) {
-                    double snapTime =
-                        snap.isSnapped ? snap.snappedTime : rawTime;
+                    double snapTime = (snap.isSnapped && !cmd.bypassSnapAtStart)
+                                          ? snap.snappedTime
+                                          : rawTime;
                     ctx.brushState.polylineSegments.back().duration =
                         std::max(0.0, snapTime - parentNote.m_timestamp);
                 }

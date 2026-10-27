@@ -274,6 +274,8 @@ struct CmdStartBrush {
     bool        isCtrlDown;   ///< 当前 Ctrl 键是否按下 (用于禁用磁吸)
     /// @brief 练习新建独立物件时禁用从已有物件续接，避免失败手势改动原谱面。
     bool createStandalone{ false };
+    /// @brief 纯鼠标临时忽略吸附时连起笔也使用连续时间；旧入口默认保持原行为。
+    bool bypassSnapAtStart{ false };
 };
 
 /**

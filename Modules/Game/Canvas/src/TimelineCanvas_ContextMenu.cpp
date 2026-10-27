@@ -223,6 +223,26 @@ bool TimelineCanvas::handleTimingContextMenu(ImVec2 origin, ImVec2 size,
                         Logic::CmdSetPlayState{ true }));
             }
         }
+        ImGui::Separator();
+        // 点和段落是下一笔的显式意图，菜单本身不生成 Timing 实体。
+        // 菜单只在空闲抓取或选择工具中打开，不会重解释进行中的区间拖动。
+        // 临时开关与主画布共用方案状态，但不修改 Timing 的 BPM 或 Scroll 值。
+        // 已冻结的菜单锚点保持不变，下一次打开才读取新的吸附状态。
+        // 显式 false 与空模式区分：前者是纯鼠标点模式，后者保留经典 Shift。
+        // 开关值不进入剪贴板、谱面保存或撤销历史。
+        // 使用反馈菜单确保文字行和勾选区域都有相同的点击反馈。
+        if ( UI::FeedbackMenuItem(TR("ui.mouse_drawing.bypass_snap").data(),
+                                  nullptr,
+                                  profile.bypassSnapping()) )
+            profile.setBypassSnapping(!profile.bypassSnapping());
+        if ( UI::FeedbackMenuItem(TR("ui.mouse_drawing.timing_point").data(),
+                                  nullptr,
+                                  profile.timingInterpolationDraw() == false) )
+            profile.setTimingInterpolationDraw(false);
+        if ( UI::FeedbackMenuItem(TR("ui.mouse_drawing.timing_range").data(),
+                                  nullptr,
+                                  profile.timingInterpolationDraw() == true) )
+            profile.setTimingInterpolationDraw(true);
         ImGui::EndDisabled();
         // 标准菜单激活后自然关闭，返回值仍拦截本帧鼠标释放，防止穿透编辑。
         ImGui::EndPopup();

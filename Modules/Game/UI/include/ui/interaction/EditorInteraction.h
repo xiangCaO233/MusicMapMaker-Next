@@ -110,6 +110,16 @@ public:
     virtual std::optional<bool> eraseWholePolyline() const;
     /// @brief 更新纯鼠标后续擦除的粒度，活动事务由画布锁存起笔值。
     virtual void setEraseWholePolyline(bool whole);
+    /// @brief 是否临时绕过吸附；经典方案始终返回假，不改写原磁吸配置。
+    /// @warning 每帧读取 UI 线程标量，不访问会话或伪造 Ctrl。
+    virtual bool bypassSnapping() const;
+    /// @brief 设置纯鼠标的临时吸附策略，切出方案后清除。
+    virtual void setBypassSnapping(bool bypass);
+    /// @brief Timing 绘制模式；空表示经典 Shift 手势，显式值区分点与插值段。
+    /// @warning 起笔读取一次，活动插值手势保持自身解释。
+    virtual std::optional<bool> timingInterpolationDraw() const;
+    /// @brief 只设置后续 Timing 手势，不改变主画布折线绘制方式。
+    virtual void setTimingInterpolationDraw(bool interpolation);
     /// @brief 解释滚轮方向与倍率，横纵轴分开，不改变 ImGui 控件自身滚动。
     virtual float wheel(Surface surface, float physical, bool horizontal) const;
     /// @brief 解释键盘主键，支持整套键位语义替换；参数为 ImGui 命名键值。
@@ -196,6 +206,9 @@ bool modifier(Modifier modifier);
 /// @brief 当前方案是否将画笔移动解释为持续段或折线延伸。
 /// @warning UI 热路径只查询方案，不伪造物理按键或分配手势状态。
 bool extendBrush();
+/// @brief 独立的忽略吸附语义，组合物理 Ctrl 与当前方案临时开关。
+/// @warning 每帧固定标量查询；不得用于选择切换、滚轮修饰或框选集合操作。
+bool bypassSnapping();
 /// @brief 查询主键边沿，保留旧调用者是否允许重复的语义。
 bool keyPressed(int key, bool repeat = true);
 /// @brief 查询主键保持状态，供连续编辑使用。

@@ -5168,6 +5168,24 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
                                      whole) )
                 profile.setEraseWholePolyline(true);
             ImGui::Separator();
+            ImGui::TextUnformatted(TR("ui.mouse_drawing.timing_mode").data());
+            // 只影响 Timing 泳道，不把插值模式传到主画布折线绘制。
+            // 点模式的显式 false 与经典缺省模式不同，不再读取物理 Shift。
+            // 两个控件采用正文高度，不能继承图标工具栏的零边距。
+            // 插值段在松手后仍进入既有参数编辑器，选项切换本身不编辑谱面。
+            // STOP 的事件语义没有连续区间，提示明确保留普通时间点回退。
+            bool range = profile.timingInterpolationDraw().value_or(false);
+            if ( FeedbackRadioButton(TR("ui.mouse_drawing.timing_point").data(),
+                                     !range) ) {
+                range = false;
+                profile.setTimingInterpolationDraw(false);
+            }
+            if ( FeedbackRadioButton(TR("ui.mouse_drawing.timing_range").data(),
+                                     range) )
+                profile.setTimingInterpolationDraw(true);
+            ImGui::TextDisabled("%s",
+                                TR("ui.mouse_drawing.timing_hint").data());
+            ImGui::Separator();
             ImGui::TextUnformatted(TR("ui.mouse_drawing.cancel_hint").data());
             // 提示只说明纯鼠标的取消组合，不向经典方案传播虚拟按键。
             // 字体和弹窗栈均在同一条件分支配对，缺失正文时使用默认字体。
@@ -5321,6 +5339,18 @@ void ToolbarView::renderMagnetPopup(float dpiScale)
             appConfig.save();
         };
 
+        auto& profile = Interaction::activeProfile();
+        if ( profile.selectionContextMenu() ) {
+            // 本次交互覆盖层不写回 editorConfig；再次切换方案时恢复原吸附。
+            // 不能调用 persistConfig，否则临时操作会覆盖用户永久磁吸偏好。
+            // 把它与下方永久配置分隔，保留已有滚动吸附与物件吸附的独立性。
+            // 不将本开关映射为通用 Ctrl，避免影响选择和滚轮加速语义。
+            bool bypass = profile.bypassSnapping();
+            if ( FeedbackCheckbox(TR("ui.mouse_drawing.bypass_snap").data(),
+                                  &bypass) )
+                profile.setBypassSnapping(bypass);
+            ImGui::Separator();
+        }
         // 滚动画布吸附与物件放置吸附为独立开关。
         // 先复制到 bool 以适配 ImGui 可写指针接口。
         bool scrollSnap = editorConfig.settings.scrollSnap;

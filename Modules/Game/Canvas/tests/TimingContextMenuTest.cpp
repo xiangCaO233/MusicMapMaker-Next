@@ -9,12 +9,15 @@
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "log/colorful-log.h"
+#include "logic/EditorEngine.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "ui/interaction/EditorInteraction.h"
 #include <cmath>
 #include <cstddef>
 #include <entt/entity/entity.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <memory>
 #include <string>
 #include <variant>
 #include <vector>
@@ -37,6 +40,38 @@ struct TimingContextMenuTestAccess {
         // 不保存临时拷贝，菜单中的身份检查必须看到下一帧更新后的实例号。
         canvas.m_currentSnapshot = &snapshot;
         canvas.handleTimingCanvasInteraction(origin, { 500, 500 }, true, true);
+    }
+    /// @brief 只观察真实手势、弹窗草稿与投影，不直接调用业务创建或取消。
+    /// @details 范围结果按值返回，测试不持有 UI 私有结构的跨帧引用。
+    static bool dragging(const TimelineCanvas& c)
+    {
+        return c.m_isInterpolationDragging;
+    }
+    /// @brief 请求弹窗也属于准备完成，不要求在测试里渲染编辑器正文。
+    static bool editor(const TimelineCanvas& c)
+    {
+        return c.m_isInterpolationEditorOpen || c.m_requestInterpolationEditor;
+    }
+    /// @brief 返回松手后工作副本的区间长度，单位秒。
+    static double duration(const TimelineCanvas& c)
+    {
+        return c.m_interpolationEdit.interpolation.m_duration;
+    }
+    /// @brief 使用生产投影，隔离用户缩放与 DPI 对区间断言的影响。
+    static double time(const TimelineCanvas& c, float y)
+    {
+        return c.canvasTimeAtLocalY({ 500, 500 }, y);
+    }
+    /// @brief 取消后不得意外进入普通创建弹窗；只读标志，不替测试清理状态。
+    static bool pointEditor(const TimelineCanvas& c)
+    {
+        return c.m_isCreatePopupOpen;
+    }
+    /// @brief 检查 STOP 普通点弹窗，避免插值模式吞掉第五泳道点击。
+    /// @return 只允许普通创建弹窗且创建类型仍为 STOP 时返回真。
+    static bool stopPoint(const TimelineCanvas& c)
+    {
+        return c.m_isCreatePopupOpen && c.m_createType == 4;
     }
     /// @brief 给定已有多选前置条件，后续复制与删除必须自行维护该集合。
     /// @param canvas 仅在用例开始时建立多选，不在菜单动作之间反复重置。
@@ -128,7 +163,7 @@ ImGuiWindow* open(Canvas::TimelineCanvas&         canvas,
 /// @param snapshot 所有点击共用的只读输入快照。
 /// @param point 新一轮菜单打开时的画布吸附坐标。
 /// @param row 菜单中不含分隔线的零起始行号。
-/// @note 四条分隔线分别位于第 2、第 6、第 8 和第 11 行之前。
+/// @note 分隔线分别位于第 2、6、8、11 和 13 行之前，索引不含分隔线。
 /// @return 真实菜单行被激活并关闭后返回真。
 /// @details 不按翻译文本搜索行，避免测试依赖桌面语言或字体配置。
 /// @warning 仅测试读取 ImGui 内部窗口几何，生产代码不依赖该结构。
@@ -141,7 +176,8 @@ bool click(Canvas::TimelineCanvas&         canvas,
     const auto&  style      = ImGui::GetStyle();
     const float  line       = ImGui::GetTextLineHeightWithSpacing();
     const int    separators = (row >= 2 ? 1 : 0) + (row >= 6 ? 1 : 0) +
-                              (row >= 8 ? 1 : 0) + (row >= 11 ? 1 : 0);
+                              (row >= 8 ? 1 : 0) + (row >= 11 ? 1 : 0) +
+                              (row >= 13 ? 1 : 0);
     const ImVec2 target{ popup->Pos.x + popup->Size.x * 0.5F,
                          popup->DC.CursorStartPos.y + row * line +
                              separators * (1.0F + style.ItemSpacing.y) +
@@ -351,6 +387,26 @@ bool checkMenu()
     tap(first);
     passed &= Access::count(canvas) == 1 && Access::contains(canvas, 43);
     snapshot.currentTool = Logic::EditTool::Marquee;
+    // 新项目位于菜单末尾，逐项通过真正鼠标激活，避免仅测试策略 setter。
+    // 先选段再选点，既检验勾选状态又检验两个可见入口都能执行。
+    // 列表末尾新增行不改旧剪贴板、导航和集合模式行的位置。
+    passed &= click(canvas, snapshot, point, 15);
+    passed &=
+        UI::Interaction::activeProfile().timingInterpolationDraw() == true;
+    passed &= click(canvas, snapshot, point, 14);
+    passed &=
+        UI::Interaction::activeProfile().timingInterpolationDraw() == false;
+    // 吸附开关来自菜单实际激活，而不是下面范围用例的准备 setter。
+    // 再次打开菜单时必须使用新的落点策略，原菜单锚点仍保持已锁存的值。
+    passed &= click(canvas, snapshot, point, 13);
+    passed &= UI::Interaction::activeProfile().bypassSnapping();
+    // 打开位置恰好命中 marker，但临时免吸附应采用真实投影而非 3.25 秒。
+    passed &= open(canvas, snapshot, point) != nullptr;
+    passed &=
+        std::abs(Access::anchor(canvas) - Access::time(canvas, 150)) < 1e-9;
+    frame(canvas, snapshot, { 700, 600 }, true);
+    frame(canvas, snapshot, { 700, 600 });
+    UI::Interaction::activeProfile().setBypassSnapping(false);
     // 还原工具后再检查旧菜单失效，防止工具变化本身提前关闭菜单造成假通过。
     // 同路径重载后的新实例不能接收旧菜单，关闭时也不得穿透出编辑命令。
     // 在未产生任何菜单项点击时切换代数，生产校验应主动关闭旧菜单。
@@ -392,6 +448,157 @@ bool checkMenu()
             "failed");
     return passed;
 }
+/// @brief 验证纯鼠标插值范围、反向拖动和右键取消，并保留经典 Shift 门禁。
+/// @details 每个场景使用新视图，避免尚未渲染的编辑弹窗影响下一场景。
+/// @return 无键盘即可画段，取消不创建单点，经典不改变时返回真。
+bool checkRangeDrawing()
+{
+    // 插值编辑器需要复制活动会话的冲突检查数据，快照本身不能替代真实会话。
+    // 只创建内存空谱面，不启动引擎循环或音频播放，关闭时禁止写项目工作区。
+    auto&      engine  = Logic::EditorEngine::instance();
+    const auto session = engine.createSession(std::make_shared<BeatMap>(),
+                                              "Timing range test",
+                                              false,
+                                              "TimingRangeTest",
+                                              true);
+    // 会话只提供冲突校验所需的空 Registry，输入仍由独立 RenderSnapshot 驱动。
+    // 使用固定相机身份和恢复入口，避免把测试画布写入用户工作区。
+    Common::Render::RenderSnapshot snapshot;
+    snapshot.hasBeatmap  = true;
+    snapshot.currentTool = Logic::EditTool::Draw;
+    // 选择未来仍为正的显示区间，避免起点非负钳制使反向拖动断言退化。
+    // marker 集合保持为空，使范围只由画布投影决定，不受已有时间点拾取干扰。
+    snapshot.currentTime       = 4.0;
+    snapshot.beatmapPathKey    = "range.mmm";
+    snapshot.beatmapInstanceId = 1;
+    // 本用例独立记录失败阶段，避免某个门禁未触发时被后面的结果覆盖。
+    // 日志不读取 ECS 或控制器私有状态，所有断言仍观察正式手势产生的结果。
+    bool passed = true;
+    auto expect = [&](bool value, const char* stage) {
+        if ( !value ) XERROR("Timing range stage failed: {}", stage);
+        passed &= value;
+    };
+    // 订阅不消费事件，仍可检测其他分支意外提前提交的创建命令。
+    // 观察闭包在会话关闭前解除，避免局部计数被后续单例生命周期访问。
+    int   created = 0;
+    auto& bus     = Event::EventBus::instance();
+    // 菜单和拖动不应直接创建时间点，只有后续编辑器确认才允许提交段落。
+    const auto subscription =
+        bus.subscribe<Event::LogicCommandEvent>([&](const auto& e) {
+            created += std::holds_alternative<Logic::CmdCreateTimelineEvents>(
+                e.command);
+        });
+    // 临时免吸附让 expected 能直接由相同投影计算，不预设拍线网格相位。
+    // 帧辅助函数只注入左右键，证明无键盘参与也能进入持续拖动状态。
+    UI::Interaction::activeProfile().setTimingInterpolationDraw(true);
+    UI::Interaction::activeProfile().setBypassSnapping(true);
+    for ( bool cancel : { false, true } ) {
+        Canvas::TimelineCanvas canvas(
+            cancel ? "CancelRange" : "DrawRange", 500, 500, nullptr);
+        const auto origin = frame(canvas, snapshot, { 100, 100 });
+        // 屏幕向下是反向时间拖动，最终段落仍必须按较早时间作为起点。
+        // 起终点都在第二泳道，横向越界不会触发无关的类型切换。
+        const ImVec2 first{ origin.x + 150, origin.y + 200 },
+            last{ origin.x + 150, origin.y + 350 };
+        // 首点立即开始预览，不能等待拖动阈值或额外键盘按下才记录起点。
+        // 本帧保留左键，后续 right=true 验证的是组合取消而非普通右键菜单。
+        frame(canvas, snapshot, first, true);
+        expect(Access::dragging(canvas), "mouse range start");
+        frame(canvas, snapshot, last, true);
+        // 外部模式变化不重解释已经开始的手势；只有下一笔才按点模式。
+        UI::Interaction::activeProfile().setTimingInterpolationDraw(false);
+        // false 在活动段期间仅是下一笔偏好；本笔仍采用已锁存的显式范围模式。
+        // 若实现逐帧重新解释该值，松手会丢失区间或错误打开普通点弹窗。
+        if ( cancel ) {
+            // 指针已移动到终点才取消，确保被清理的是有效区间而非空笔。
+            // 两键仍按下时就要结束预览，不允许等左键松开后才撤销。
+            frame(canvas, snapshot, last, true, true);
+            expect(!Access::dragging(canvas) && !Access::editor(canvas),
+                   "right cancel");
+        }
+        frame(canvas, snapshot, last);
+        if ( !cancel ) {
+            // 保存结果必须覆盖最后的释放位置，而非上一帧或最初的范围。
+            // 容差只吸收投影浮点误差，不接受拍线量化造成的时间跳变。
+            const double expected =
+                std::abs(Access::time(canvas, 200) - Access::time(canvas, 350));
+            expect(Access::editor(canvas) &&
+                       std::abs(Access::duration(canvas) - expected) < 1e-9,
+                   "reverse range release");
+        } else
+            expect(!Access::editor(canvas) && !Access::pointEditor(canvas) &&
+                       created == 0,
+                   "cancel release no point");
+        // 右键和左键都释放后再次开始，不能把取消后的尾点误认为新单点。
+        frame(canvas, snapshot, last);
+        UI::Interaction::activeProfile().setTimingInterpolationDraw(true);
+    }
+    // 所有物理按钮已释放，按正式两帧门禁切换，不能直接替换策略指针。
+    // 临时开关不写用户配置，切出后的经典分支应继续使用原磁吸规则。
+    UI::Interaction::activeProfile().setBypassSnapping(false);
+    UI::Interaction::synchronizeProfile("classic-desktop", true);
+    UI::Interaction::synchronizeProfile("classic-desktop", true);
+    Canvas::TimelineCanvas classic("ClassicRange", 500, 500, nullptr);
+    const auto             origin = frame(classic, snapshot, { 100, 100 });
+    // 经典输入仍用相同泳道和投影；唯一差异是方案与真实 Shift 状态。
+    // 不切换 permanent snap 设置，因此能够检查方案状态未回写到磁吸配置。
+    const ImVec2 first{ origin.x + 150, origin.y + 200 };
+    frame(classic, snapshot, first, true);
+    expect(!Access::dragging(classic), "classic no shift");
+    // 普通点释放会打开创建弹窗；先模拟开始播放取消预览，隔离下一笔 Shift。
+    // 不能让未渲染的普通点弹窗阻止 Shift 起笔，造成与新模式无关的假失败。
+    snapshot.isPlaying = true;
+    frame(classic, snapshot, first);
+    snapshot.isPlaying = false;
+    // 经典 Shift 仍可起段；松开 Shift 必须即时取消，不等待鼠标释放。
+    ImGui::GetIO().AddKeyEvent(ImGuiMod_Shift, true);
+    frame(classic, snapshot, first, true);
+    expect(Access::dragging(classic), "classic shift start");
+    // 左键继续保持，只有 Shift 释放；这能区分经典门禁与新右键取消路径。
+    // 同帧的状态必须立即清理，不借助下一次释放事件补偿旧手势。
+    ImGui::GetIO().AddKeyEvent(ImGuiMod_Shift, false);
+    frame(classic, snapshot, first, true);
+    expect(!Access::dragging(classic) && !Access::editor(classic),
+           "classic release shift");
+    frame(classic, snapshot, first);
+    // 纯鼠标点模式即使碰巧按着 Shift，也不能偷偷切换成区间绘制。
+    // 这与经典默认值为空不同：显式 false 必须有独立语义。
+    UI::Interaction::synchronizeProfile("mouse-only", true);
+    UI::Interaction::synchronizeProfile("mouse-only", true);
+    // 上一笔已取消并完整释放，切换回纯鼠标后应立即采用点模式。
+    // 这也覆盖旧经典手势的可选锁存状态不会泄漏到另一个视图。
+    UI::Interaction::activeProfile().setTimingInterpolationDraw(false);
+    Canvas::TimelineCanvas pointCanvas("PointMode", 500, 500, nullptr);
+    ImGui::GetIO().AddKeyEvent(ImGuiMod_Shift, true);
+    frame(pointCanvas, snapshot, first, true);
+    expect(!Access::dragging(pointCanvas), "explicit point ignores shift");
+    // 先取消点预览再释放，避免其弹窗遮挡后续 STOP 的真实点击。
+    snapshot.isPlaying = true;
+    ImGui::GetIO().AddKeyEvent(ImGuiMod_Shift, false);
+    frame(pointCanvas, snapshot, first);
+    snapshot.isPlaying = false;
+    UI::Interaction::activeProfile().setTimingInterpolationDraw(true);
+    Canvas::TimelineCanvas stopCanvas("StopRangeFallback", 500, 500, nullptr);
+    const ImVec2           stop{ origin.x + 450, origin.y + 200 };
+    // 先推进无按键帧，让第五泳道位置与上个场景的释放独立。
+    // STOP 只验证正常点弹窗打开，不借由测试调用私有创建方法。
+    frame(stopCanvas, snapshot, stop);
+    frame(stopCanvas, snapshot, stop, true);
+    expect(!Access::dragging(stopCanvas), "stop never interpolates");
+    frame(stopCanvas, snapshot, stop);
+    expect(Access::stopPoint(stopCanvas), "stop point fallback");
+    // 以上所有操作只准备弹窗，尚未确认创建，不能产生任何谱面命令。
+    // 普通点和范围弹窗都没有被确认，检查命令数量能发现过早写入谱面的实现。
+    // 取消后的普通点弹窗另有显式断言，不仅依赖零创建命令推断取消正确。
+    expect(created == 0, "no premature commit");
+    bus.unsubscribe<Event::LogicCommandEvent>(subscription);
+    // 先解除局部观察闭包再释放会话，销毁事件不能访问已结束的计数生命周期。
+    // 会话索引来自实际创建结果，不关闭测试进程可能持有的其他条目。
+    engine.closeSession(session, false);
+    if ( !passed )
+        XERROR("Timing range mode, cancellation or classic isolation failed");
+    return passed;
+}
 }  // namespace
 
 /// @brief 使用 CPU ImGui 帧验证鼠标菜单，不初始化 Vulkan 或操作系统窗口。
@@ -424,7 +631,8 @@ int main()
     ImGui::GetPlatformIO().Platform_GetClipboardTextFn = [](ImGuiContext*) {
         return "";
     };
-    const bool passed = checkMenu();
+    bool passed = checkMenu();
+    passed &= checkRangeDrawing();
     ImGui::DestroyContext();
     // 配置恢复放在上下文销毁之后，确保测试失败时也不会污染后续设置断言。
     settings = original;

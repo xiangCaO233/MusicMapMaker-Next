@@ -59,6 +59,24 @@ public:
     {
         m_eraseWholePolyline = whole;
     }
+    /// @brief 临时吸附只属于纯鼠标方案，不写入软件配置。
+    /// @warning 每帧返回本地标量，无跨线程同步。
+    bool bypassSnapping() const override { return m_bypassSnapping; }
+    /// @brief 修改后由下一次输入查询立即采用，不推迟本地交互。
+    void setBypassSnapping(bool bypass) override { m_bypassSnapping = bypass; }
+    /// @brief 点模式为默认，插值模式只用于 Timing 表面。
+    /// @warning 每次起笔只读取标量，不复制曲线或快照。
+    std::optional<bool> timingInterpolationDraw() const override
+    {
+        return m_timingInterpolation;
+    }
+    /// @brief 活动手势由画布锁存，设置只影响下一笔。
+    void setTimingInterpolationDraw(bool interpolation) override
+    {
+        m_timingInterpolation = interpolation;
+    }
+    /// @brief 切出时清除临时忽略吸附，重新进入不会继承隐藏开关。
+    void deactivate() override { m_bypassSnapping = false; }
     /// @brief 主画布无需修饰键即可延伸画笔，其他表面保留原语义。
     /// @warning 连续绘制只做枚举判断，不持有会话或跨帧指针。
     bool extendBrush(Surface surface, bool shift) const override
@@ -71,6 +89,10 @@ public:
 private:
     /// @brief 纯鼠标擦除粒度，跨工具切换保留，但不影响经典方案。
     bool m_eraseWholePolyline{ false };
+    /// @brief 不持久化的吸附覆盖值，与键盘修饰和磁吸偏好独立。
+    bool m_bypassSnapping{ false };
+    /// @brief Timing 后续绘制选择，主画布仍沿用原有单键与折线策略。
+    bool m_timingInterpolation{ false };
     /// @brief 模式仅由 UI 线程读写，不参与每帧配置保存。
     Logic::SelectionOperation m_selectionOperation{
         Logic::SelectionOperation::Replace
@@ -185,6 +207,28 @@ std::optional<bool> IEditorInteractionProfile::eraseWholePolyline() const
 }
 /// @brief 经典方案忽略纯鼠标设置，不留下影响物理修饰键的隐藏状态。
 void IEditorInteractionProfile::setEraseWholePolyline(bool) {}
+/// @brief 经典模式没有额外吸附覆盖，继续使用原物理修饰键。
+/// @warning 纯常量查询，不访问配置或输入设备。
+bool IEditorInteractionProfile::bypassSnapping() const
+{
+    return false;
+}
+/// @brief 经典方案忽略纯鼠标临时设置，不能产生跨方案污染。
+void IEditorInteractionProfile::setBypassSnapping(bool) {}
+/// @brief 空模式保留原有 Shift 创建和维持插值范围的规则。
+/// @warning 仅返回空标量，不创建或销毁任何手势。
+std::optional<bool> IEditorInteractionProfile::timingInterpolationDraw() const
+{
+    return std::nullopt;
+}
+/// @brief 经典模式不保存纯鼠标 Timing 选择。
+void IEditorInteractionProfile::setTimingInterpolationDraw(bool) {}
+/// @brief 吸附覆盖与修饰键组合仅用于放置、移动，不影响选择语义。
+/// @warning 常量时间查询，不能把结果当作通用 Ctrl 状态。
+bool bypassSnapping()
+{
+    return activeProfile().bypassSnapping() || modifier(Modifier::Control);
+}
 
 /// @brief 将当前表面及修饰键解释传给方案，避免画布识别具体方案 ID。
 /// @warning 起笔和连续更新使用同一入口，无额外手势分配或等待。

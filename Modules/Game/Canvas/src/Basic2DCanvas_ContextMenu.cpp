@@ -72,6 +72,15 @@ void Basic2DCanvasInteraction::renderSelectionMenuExtras(UI::UIManager* manager)
                                            manager);
         UI::FeedbackEndMenu();
     }
+    ImGui::Separator();
+    // 临时开关只影响坐标吸附，不伪造 Ctrl 或保存用户配置。
+    // 当前菜单位置已经冻结；更改开关只影响下一次打开菜单的落点。
+    // 调用方只在纯鼠标菜单内渲染本函数，经典右键不会出现额外选项。
+    auto& profile = UI::Interaction::activeProfile();
+    if ( UI::FeedbackMenuItem(TR("ui.mouse_drawing.bypass_snap").data(),
+                              nullptr,
+                              profile.bypassSnapping()) )
+        profile.setBypassSnapping(!profile.bypassSnapping());
 }
 
 /// @brief 选择右键列表中的有效物件部位，并保持其后续拾取优先级。

@@ -1730,12 +1730,29 @@ bool checkMouseDrawingOptions()
                 // 弹窗宽度与单选项的可交互宽度不必相等。
                 const float x = popup->Pos.x + style.WindowPadding.x + 8 * dpi;
                 const float rowStep = ImGui::GetFrameHeightWithSpacing();
+                // Timing 组位于两条擦除选项之后，仍按实际正文度量定位。
+                // 标题和分隔线都有垂直间距，不能假定所有行都是单选按钮高度。
+                const float pointY = firstY + 2 * rowStep + 1 +
+                                     style.ItemSpacing.y +
+                                     ImGui::GetTextLineHeightWithSpacing();
                 if ( bodyFont ) ImGui::PopFont();
                 click({ x, firstY + rowStep });
                 passed &=
                     Interaction::activeProfile().eraseWholePolyline() == true;
                 click({ x, firstY });
                 passed &=
+                    Interaction::activeProfile().eraseWholePolyline() == false;
+                // 不模拟 Shift，确认两个实际控件只更改 Timing
+                // 意图而非擦除粒度。 配置提交计数在弹窗关闭后统一核对，不能以
+                // setter 成功代替界面测试。
+                click({ x, pointY + rowStep });
+                passed &=
+                    Interaction::activeProfile().timingInterpolationDraw() ==
+                    true;
+                click({ x, pointY });
+                passed &=
+                    Interaction::activeProfile().timingInterpolationDraw() ==
+                        false &&
                     Interaction::activeProfile().eraseWholePolyline() == false;
             }
             // 点击外部关闭，证明纯鼠标不依赖 Escape。

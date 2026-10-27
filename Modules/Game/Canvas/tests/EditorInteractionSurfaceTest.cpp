@@ -255,6 +255,56 @@ bool testSelectionOperations()
            ctx.selectedSampleEntities.empty() && ctx.marqueeBoxes.empty() &&
            !ctx.marqueeUsesOperations && ctx.marqueeBaselineNotes.empty();
 }
+/// @brief 同一非拍线位置分别走经典起笔与显式临时免吸附，验证实际草稿落点。
+/// @return 新字段改变初次落点，且经典 Ctrl 起笔仍保持旧结果时返回真。
+/// @details 不启动线程；缓存建立后只调用正式 DrawTool，不直接写画笔时间。
+bool testUnsnapBrushStart()
+{
+    using namespace MMM::Logic;
+    SessionContext context;
+    // 判定线为 300px，偏移 13px 得到非分拍时间，不能与吸附结果偶然相同。
+    context.currentBeatmap = std::make_shared<MMM::BeatMap>();
+    context.currentBeatmap->m_baseMapMetadata.track_count = 4;
+    context.trackCount                                    = 4;
+    context.currentTime = context.animateTime       = 1.0;
+    context.lastConfig.visual.trackLayout.left      = 0.1f;
+    context.lastConfig.visual.trackLayout.right     = 0.5f;
+    context.lastConfig.visual.judgeline_pos         = 0.5f;
+    context.lastConfig.settings.objectPlacementSnap = true;
+    context.cameras.emplace("Basic2DCanvas",
+                            CameraInfo{ "Basic2DCanvas", 1000, 600, 0 });
+    // 不使用假吸附结果；实体时间表由生产缓存读取，确保免吸附测试确实有可忽略的候选。
+    // BPM 与鼠标的原始秒时间刻意不同，断言不能靠两者恰好重合通过。
+    // 真正的 BPM 事件与会话缓存共同生成分拍，不把 expected 写回工具状态。
+    const auto bpm = context.timelineRegistry.create();
+    context.timelineRegistry.emplace<TimelineComponent>(
+        bpm, 0.0, MMM::TimingEffect::BPM, 120.0);
+    auto& cache = context.timelineRegistry.ctx().emplace<System::ScrollCache>();
+    cache.rebuild(context.timelineRegistry,
+                  context.lastConfig,
+                  context.currentBeatmap.get());
+    DrawTool tool;
+    tool.handleStartBrush(context, { "Basic2DCanvas", 150, 287, false, true });
+    const double snapped = context.brushState.time;
+    const bool   active  = context.brushState.isActive;
+    tool.handleEndBrush(context, { .cancel = true });
+    // 取消第一笔只清理草稿，不提交物件或改变历史，也不删除用于比较的 BPM。
+    // 同一个工具和视口再次起笔，唯一差异是新字段，隔离布局或配置变化。
+    // 新字段只为显式方案绕过起笔吸附；经典 Ctrl 的旧语义不被重定义。
+    tool.handleStartBrush(
+        context, { "Basic2DCanvas", 150, 287, false, true, false, true });
+    // 用缓存独立反解未吸附时间，不把待测工具计算出的时间用作期望值。
+    // 活动状态断言可以发现取消或起笔失败后仅残留旧时间值的假通过。
+    // 同时要求吸附值与原始值不同，保证该非拍线输入确实覆盖了两条路径。
+    // 容差只容纳双精度映射舍入，不能掩盖正常的分拍量化误差。
+    const double raw    = cache.getTime(cache.getAbsY(1.0) + 13.0);
+    const bool   passed = active && context.brushState.isActive &&
+                          std::abs(context.brushState.time - raw) < 1e-9 &&
+                          std::abs(snapped - raw) > 1e-6;
+    tool.handleEndBrush(context, { .cancel = true });
+    // 最后一笔也按取消收尾，确保没有临时物件影响其他领域用例。
+    return passed;
+}
 /// @brief 菜单锁存的吸附时间优先于播放头，整批粘贴保留相对时间。
 /// @return 显式定位、默认定位及非法输入拒绝全部符合契约时返回真。
 /// @details 只驱动正式粘贴控制器，不通过更改播放时间伪造粘贴位置。
@@ -873,7 +923,8 @@ int main()
         // 门禁仍要求有效谱面和停止播放，测试不能依靠绕过编辑许可起笔。
         snapshot.hasBeatmap = true;
         int  starts = 0, updates = 0, ends = 0;
-        bool extended = true;
+        bool extended      = true;
+        bool bypassPayload = true;
         // 记录所有画笔事件而非最后一次事件，起笔错误不能被后续更新掩盖。
         // 计数限定本次订阅生命周期，前面的方案接管测试不计入。
         const auto brushSubscription =
@@ -885,17 +936,23 @@ int main()
                                  &event.command) ) {
                         ++starts;
                         extended &= start->isShiftDown;
+                        bypassPayload &=
+                            start->isCtrlDown && start->bypassSnapAtStart;
                     }
                     if ( const auto* update =
                              std::get_if<MMM::Logic::CmdUpdateBrush>(
                                  &event.command) ) {
                         ++updates;
                         extended &= update->isShiftDown;
+                        bypassPayload &= update->isCtrlDown;
                     }
                     if ( std::holds_alternative<MMM::Logic::CmdEndBrush>(
                              event.command) )
                         ++ends;
                 });
+        // 用真实鼠标绘制验证临时状态进入起笔和连续命令，不伪造物理 Ctrl。
+        // 起笔拥有独立字段，避免改变经典 Ctrl 初始落点的既有解释。
+        Interaction::activeProfile().setBypassSnapping(true);
         // 无移动点按只有起笔与结束，不能为了纯鼠标绘制凭空生成持续段。
         // 原工具从 NOTE 类型开始，形状变化必须由后续移动命令驱动。
         // 释放不附带额外更新时，单击自然提交单键而不是零长持续段。
@@ -914,7 +971,10 @@ int main()
         frame(interaction, snapshot, true, { 220, 250 });
         frame(interaction, snapshot, false, { 220, 250 });
         ok &= starts == 2 && updates >= 2 && ends == 2 && extended &&
-              !io.KeyShift;
+              !io.KeyShift && !io.KeyCtrl && bypassPayload;
+        // 下一段领域测试按原网格继续执行，不能继承本用例的免吸附开关。
+        // 策略仅保存 UI 线程状态，清理不需要等待后台会话处理配置命令。
+        Interaction::activeProfile().setBypassSnapping(false);
         // 仅移除本次观察者，后续经典模式检查继续使用相同主窗口。
         bus.unsubscribe<MMM::Event::LogicCommandEvent>(brushSubscription);
         // 画布命令正确后继续验证领域结果，避免只证明 Shift 字段被改写。
@@ -922,6 +982,9 @@ int main()
         if ( !continuation )
             XERROR("Mouse brush continuation/cancel restore failed");
         ok &= continuation;
+        const bool unsnap = testUnsnapBrushStart();
+        if ( !unsnap ) XERROR("Raw brush start or classic start regression");
+        ok &= unsnap;
         ok &= testExplicitPasteAnchor();
         if ( !testSelectionOperations() ) {
             XERROR("Selection operation geometry or baseline regression");

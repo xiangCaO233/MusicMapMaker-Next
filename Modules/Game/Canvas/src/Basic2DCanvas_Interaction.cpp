@@ -733,7 +733,10 @@ bool isTemporaryPackagePath(const std::filesystem::path& path)
 bool publishCanvasHoverSeek(const Common::Render::RenderSnapshot& snapshot)
 {
     const double targetTime =
-        snapshot.isSnapped ? snapshot.snappedTime : snapshot.hoveredTime;
+        (snapshot.isSnapped &&
+         !UI::Interaction::activeProfile().bypassSnapping())
+            ? snapshot.snappedTime
+            : snapshot.hoveredTime;
     // 一微秒容差过滤浮点投影往返，避免原地点击重启音频或广播视野。
     if ( !std::isfinite(targetTime) ||
          std::abs(targetTime - snapshot.currentTime) <= 1e-6 ) {
@@ -2196,9 +2199,11 @@ void Basic2DCanvasInteraction::update(
                 // 无吸附时使用可见鼠标时间，仍不回退到播放头。
                 // 使用同一快照的 snappedTime，与本帧高亮线的绘制时间一致。
                 // 不写入全局粘贴偏好，避免一次右键操作影响后续快捷键。
-                m_selectionPasteTime = currentSnapshot->isSnapped
-                                           ? currentSnapshot->snappedTime
-                                           : currentSnapshot->hoveredTime;
+                m_selectionPasteTime =
+                    currentSnapshot->isSnapped &&
+                            !UI::Interaction::activeProfile().bypassSnapping()
+                        ? currentSnapshot->snappedTime
+                        : currentSnapshot->hoveredTime;
                 m_selectionMenuPoint = m_lastMouseCommand.pos;
                 // 菜单可跨多个快照停留；记录谱面实例以隔离同路径重载。
                 // 所有候选仍是值语义 ID，不借用逻辑线程里的对象或容器。
@@ -5542,11 +5547,11 @@ void Basic2DCanvasInteraction::handleInteractions(
                                 Logic::CmdCreateAudioSample{
                                     .audioResourceId =
                                         std::move(audioResourceId),
-                                    .cameraId   = m_cameraId,
-                                    .mouseX     = localMousePos.x,
-                                    .mouseY     = localMousePos.y,
-                                    .isCtrlDown = UI::Interaction::modifier(
-                                        UI::Interaction::Modifier::Control),
+                                    .cameraId = m_cameraId,
+                                    .mouseX   = localMousePos.x,
+                                    .mouseY   = localMousePos.y,
+                                    .isCtrlDown =
+                                        UI::Interaction::bypassSnapping(),
                                 }));
                     }
                 }
@@ -6206,8 +6211,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                             Event::LogicCommandEvent(Logic::CmdStartDrag{
                                 hoveredEntity,
                                 m_cameraId,
-                                UI::Interaction::modifier(
-                                    UI::Interaction::Modifier::Control),
+                                UI::Interaction::bypassSnapping(),
                                 hoveredObjectKind,
                                 hoveredPart,
                                 hoveredSubIndex }));
@@ -6232,15 +6236,13 @@ void Basic2DCanvasInteraction::handleInteractions(
                      hoveredEntity != entt::null ) {
                     // 抓取工具不负责选中，保留用户已有的多选集合。
                     // 头部与首段身体共用根实体，仅传实体无法区分两种手势。
-                    UI::Interaction::dispatchCommand(
-                        Event::LogicCommandEvent(Logic::CmdStartDrag{
-                            hoveredEntity,
-                            m_cameraId,
-                            UI::Interaction::modifier(
-                                UI::Interaction::Modifier::Control),
-                            hoveredObjectKind,
-                            hoveredPart,
-                            hoveredSubIndex }));
+                    UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
+                        Logic::CmdStartDrag{ hoveredEntity,
+                                             m_cameraId,
+                                             UI::Interaction::bypassSnapping(),
+                                             hoveredObjectKind,
+                                             hoveredPart,
+                                             hoveredSubIndex }));
                     m_leftPressStartedObjectDrag = true;
                 }
             } else if ( currentSnapshot->currentTool ==
@@ -6256,15 +6258,15 @@ void Basic2DCanvasInteraction::handleInteractions(
                     // 子段门槛同样随本次手势冻结，最终清洗后由逻辑层核验。
                     m_brushMinimumSubNotes =
                         m_standaloneBrush ? m_walkthroughMinimumSubNotes : 0;
-                    UI::Interaction::dispatchCommand(
-                        Event::LogicCommandEvent(Logic::CmdStartBrush{
-                            m_cameraId,
-                            localMousePos.x,
-                            localMousePos.y,
-                            UI::Interaction::extendBrush(),
-                            UI::Interaction::modifier(
-                                UI::Interaction::Modifier::Control),
-                            m_standaloneBrush }));
+                    UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
+                        Logic::CmdStartBrush{ m_cameraId,
+                                              localMousePos.x,
+                                              localMousePos.y,
+                                              UI::Interaction::extendBrush(),
+                                              UI::Interaction::bypassSnapping(),
+                                              m_standaloneBrush,
+                                              UI::Interaction::activeProfile()
+                                                  .bypassSnapping() }));
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::ColorBrush ) {
@@ -6379,8 +6381,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                      { localMousePos.x, localMousePos.y },
                      *currentSnapshot,
                      UI::Interaction::extendBrush(),
-                     UI::Interaction::modifier(
-                         UI::Interaction::Modifier::Control)) ||
+                     UI::Interaction::bypassSnapping()) ||
                  playbackScrolled || finishingLeftDrag ) {
                 // 延伸意图与 Ctrl 属于去重键，方案绘制语义与起笔保持一致。
                 UI::Interaction::dispatchCommand(
@@ -6389,8 +6390,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                         localMousePos.x,
                         localMousePos.y,
                         UI::Interaction::extendBrush(),
-                        UI::Interaction::modifier(
-                            UI::Interaction::Modifier::Control) }));
+                        UI::Interaction::bypassSnapping() }));
             }
         } else if ( m_leftPressStartedObjectDrag &&
                     (currentSnapshot->currentTool == Logic::EditTool::Move ||
@@ -6447,19 +6447,16 @@ void Basic2DCanvasInteraction::handleInteractions(
                     m_lastMoveUpdateCommand,
                     { localMousePos.x, localMousePos.y },
                     *currentSnapshot,
-                    UI::Interaction::modifier(
-                        UI::Interaction::Modifier::Control),
+                    UI::Interaction::bypassSnapping(),
                     false) ||
                 finishingLeftDrag || autoPanned || playbackScrolled;
             if ( shouldUpdateMove ) {
                 // Ctrl 状态允许逻辑层在拖动期间切换复制/约束语义。
-                UI::Interaction::dispatchCommand(
-                    Event::LogicCommandEvent(Logic::CmdUpdateDrag{
-                        m_cameraId,
-                        localMousePos.x,
-                        localMousePos.y,
-                        UI::Interaction::modifier(
-                            UI::Interaction::Modifier::Control) }));
+                UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
+                    Logic::CmdUpdateDrag{ m_cameraId,
+                                          localMousePos.x,
+                                          localMousePos.y,
+                                          UI::Interaction::bypassSnapping() }));
             }
         } else if ( m_leftPressStartedOnCanvas &&
                     currentSnapshot->currentTool ==
@@ -6632,8 +6629,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                         localMousePos.x,
                         localMousePos.y,
                         UI::Interaction::extendBrush(),
-                        UI::Interaction::modifier(
-                            UI::Interaction::Modifier::Control) }));
+                        UI::Interaction::bypassSnapping() }));
             }
         }
     }

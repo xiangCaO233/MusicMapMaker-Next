@@ -539,6 +539,33 @@ int main()
                   "whole polyline erase mode");
     Interaction::activeProfile().setEraseWholePolyline(false);
     ok &= require(mouse.eraseWholePolyline() == false, "segment erase mode");
+    // 两个设置都只在当前方案对象中存储，不通过改写 ImGuiIO 制造修饰键。
+    // setter 与查询成对验证，防止只在控件里显示勾选却没有影响策略结果。
+    // 临时吸附状态只改变专用查询，不能成为选择、滚轮或平移的虚拟 Ctrl。
+    Interaction::activeProfile().setBypassSnapping(true);
+    Interaction::activeProfile().setTimingInterpolationDraw(true);
+    ok &= require(mouse.bypassSnapping() &&
+                      mouse.timingInterpolationDraw() == true &&
+                      !mouse.modifier(Interaction::Surface::MainCanvas,
+                                      Interaction::Modifier::Control,
+                                      false),
+                  "independent mouse intent");
+    // 这里故意先留下启用状态再退出，比单独测试 false 默认值更严格。
+    // 显式请求设置经典方案也必须是无副作用操作，不能留下共享全局状态。
+    // 切出方案清理临时覆盖，但经典方案仍返回空绘制模式和关闭的临时开关。
+    Interaction::synchronizeProfile("classic-desktop", true);
+    Interaction::synchronizeProfile("classic-desktop", true);
+    Interaction::activeProfile().setBypassSnapping(true);
+    Interaction::activeProfile().setTimingInterpolationDraw(true);
+    ok &=
+        require(!classic.bypassSnapping() && !classic.timingInterpolationDraw(),
+                "classic snap and timing unchanged");
+    Interaction::synchronizeProfile("mouse-only", true);
+    Interaction::synchronizeProfile("mouse-only", true);
+    ok &= require(!mouse.bypassSnapping(), "temporary snap reset");
+    Interaction::activeProfile().setTimingInterpolationDraw(false);
+    // 下一段仍验证无 Shift 的折线意图，避免独立模式污染主画布绘制规则。
+    // 把 Timing 恢复到点模式，后续镜像动作测试不依赖本轮设置顺序。
     // 方案注册必须能通过持久化身份查到，不能只在菜单中添加展示条目。
     // 连续安全帧沿用切换门禁，避免把尚未结束的画笔移交给新方案。
     // 此处不构造 ImGui 上下文，直接检验不依赖设备状态的策略契约。

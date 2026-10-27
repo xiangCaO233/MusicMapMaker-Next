@@ -210,7 +210,7 @@ void TimelineCanvas::openInterpolationEditor(
 /// @param hovered 输入是否位于画布有效区域且未覆盖菜单按钮。
 /// @return 输入属于段落交互时返回真，普通时间点逻辑应跳过本帧。
 /// @pre 调用方已检查焦点、弹窗、播放状态和文本输入。
-/// @details Shift 手势保留段首和当前段尾，不逐次发布逻辑命令。
+/// @details 经典 Shift 或纯鼠标显式段落模式保留两端，不逐次发布逻辑命令。
 /// @note 沿用时间线吸附，手势可反向拖动，松手时才排序两端时间。
 /// @note 移动模式仍允许抓取原 Timing 标记来移动整个段落。
 /// @note 右键正文删除单个段落实体，所有曲线字段进入已有撤销栈。
@@ -226,13 +226,20 @@ bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
     // 手势开始后不随鼠标横向越过泳道而偷偷改变正在绘制的参数。
     // 泳道边缘留出四像素，使相邻类型范围不会共享命中外观。
     const float laneWidth = professional ? size.x / 5.0f : size.x;
-    const int lane = std::clamp(static_cast<int>((io.MousePos.x - position.x) /
-                                                 std::max(1.0f, laneWidth)),
-                                0,
-                                4);
-    if ( !m_isInterpolationDragging && hovered &&
-         UI::Interaction::modifier(UI::Interaction::Modifier::Shift) &&
-         !UI::Interaction::modifier(UI::Interaction::Modifier::Control) &&
+    const int  lane = std::clamp(static_cast<int>((io.MousePos.x - position.x) /
+                                                  std::max(1.0f, laneWidth)),
+                                 0,
+                                 4);
+    const auto drawMode =
+        UI::Interaction::activeProfile().timingInterpolationDraw();
+    // 显式模式独立于键盘；空模式保留经典 Shift 且非 Ctrl 的起笔门禁。
+    // value_or 只提供经典缺省值，显式点模式不能与物理 Shift 做或运算。
+    // 模式只在开始时取样，持续拖动使用成员锁存值，避免外部设置中途改意图。
+    // 经典门禁保留 Ctrl 排除规则，不复用临时免吸附的语义查询。
+    const bool startsRange = drawMode.value_or(
+        UI::Interaction::modifier(UI::Interaction::Modifier::Shift) &&
+        !UI::Interaction::modifier(UI::Interaction::Modifier::Control));
+    if ( !m_isInterpolationDragging && hovered && startsRange &&
          m_currentSnapshot->currentTool == Logic::EditTool::Draw &&
          UI::Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
         // 第五泳道只允许普通 STOP 点，不能回退为 HS 曲线。
@@ -240,9 +247,10 @@ bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
         // 新手势不继承旧的编辑实体，否则确认可能覆盖上一个段落。
         // 保留首点直到松手，连续拖动只改变当前尾点。
         // 手势也绑定谱面实例，跨标签切换后松手不能写入新的谱面。
-        m_interpolationBeatmapKey = m_currentSnapshot->beatmapPathKey;
-        m_interpolationInstanceId = m_currentSnapshot->beatmapInstanceId;
-        m_interpolationEdit       = {};
+        m_interpolationBeatmapKey  = m_currentSnapshot->beatmapPathKey;
+        m_interpolationGestureMode = drawMode;
+        m_interpolationInstanceId  = m_currentSnapshot->beatmapInstanceId;
+        m_interpolationEdit        = {};
         m_interpolationEdit.effect =
             INTERPOLATION_EFFECTS[professional
                                       ? lane
@@ -283,13 +291,16 @@ bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
     // 活动手势优先于正文命中，向已有段落拖动时仍能完成范围选择。
     // 合法性由弹窗明确提示，不能在半途中静默切换到普通点放置。
     if ( m_isInterpolationDragging ) {
-        // 手势全程要求 Shift；松开修饰键或按 Esc 取消而非写入退化时间点。
+        // 经典手势全程要求 Shift；纯鼠标手势由起笔模式锁存并可右键取消。
         // 取消手势后立即消费本帧输入，普通点放置不再处理同一次鼠标释放。
-        // 全程 Shift 要求与主画布的长条手势一致，避免修饰键松开后误创建。
+        // 两套门禁独立，纯鼠标无需维持修饰键，取消后也不能创建普通时间点。
         // 文件路径相同但重新加载也需要取消，不能仅以文件名判断来源。
         // 取消只清除 UI 手势，无需提交或等待逻辑线程撤销。
         // 取消读取语义动作，使自定义键位与插值弹窗关闭使用同一入口。
-        if ( !UI::Interaction::modifier(UI::Interaction::Modifier::Shift) ||
+        if ( (!m_interpolationGestureMode &&
+              !UI::Interaction::modifier(UI::Interaction::Modifier::Shift)) ||
+             (m_interpolationGestureMode &&
+              UI::Interaction::mouseClicked(ImGuiMouseButton_Right)) ||
              UI::ShortcutUtils::isActionShortcutPressed("cancelInteraction",
                                                         true) ||
              m_currentSnapshot->beatmapPathKey != m_interpolationBeatmapKey ||
@@ -413,7 +424,7 @@ void TimelineCanvas::renderInterpolationOverlay(const ImVec2& position,
                 4.0f;
             const float right = left + laneWidth - 8.0f;
             const float y1    = position.y + static_cast<float>(canvasYAtTime(
-                                              size, segment.time));
+                                                 size, segment.time));
             const float y2 =
                 position.y + static_cast<float>(canvasYAtTime(size, end));
             const float top = std::min(y1, y2), bottom = std::max(y1, y2);

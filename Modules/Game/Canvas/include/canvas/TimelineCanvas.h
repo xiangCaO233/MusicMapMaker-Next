@@ -532,6 +532,8 @@ private:
     TimingInterpolationPreview m_interpolationDragPreview;
     /// @brief 在拖动期间保留段首，不让手势变成单点放置。
     bool m_isInterpolationDragging{ false };
+    /// @brief 起笔锁存显式插值模式；空时继续要求经典物理 Shift。
+    std::optional<bool> m_interpolationGestureMode;
     /// @brief 段落编辑窗口的值语义工作副本。
     Common::Render::TimingInterpolationElement m_interpolationEdit;
     /// @brief 用户当前调整的段尾时间，单位秒。
