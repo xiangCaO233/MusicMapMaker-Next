@@ -1,18 +1,23 @@
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "canvas/PlanarObservationInput.h"
 #include "common/LogicCommands.h"
+#include "common/SelectionOperation.h"
 #include "common/render/RenderSnapshot.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "log/colorful-log.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/SampleComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
 #include "logic/session/ClipboardTypes.h"
+#include "logic/session/InteractionController.h"
+#include "logic/session/SelectionState.h"
 #include "logic/session/context/SessionContext.h"
 #include "logic/session/tool/DrawTool.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/interaction/EditorInteraction.h"
+#include <array>
 #include <cmath>
 #include <imgui.h>
 #include <limits>
@@ -24,6 +29,206 @@
 namespace
 {
 namespace Interaction = MMM::UI::Interaction;
+/// @brief 验证显式选择集合操作、重复框选、缩框及移框后的有序重算。
+/// @return 同号跨领域对象互不干扰且经典 Ctrl 语义仍成立时返回真。
+/// @details 通过正式命令入口和选择索引检查结果，不直接写选中组件模拟成功。
+/// 选择属于非破坏性交互，不应往谱面编辑历史写入新动作。
+/// 固定投影只提供确定的命中位置，不替代生产几何算法。
+/// 操作按输入顺序运行，不能仅测试最终框的并集。
+/// 缩框检查关注按住期间的反馈，不能只在释放后修正结果。
+/// 移框从重叠区域开始，验证最后创建的框拥有移除优先级。
+/// 同号 Note 与 Sample 刻意共存，防止跨 Registry 清错选择。
+/// 点选与矩形选择混合，验证基线不会被旧框重新覆盖。
+/// 末尾回到经典命令，检查 Ctrl 行为没有被新字段接管。
+bool testSelectionOperations()
+{
+    using namespace MMM::Logic;
+    SessionContext ctx;
+    ctx.currentBeatmap = std::make_shared<MMM::BeatMap>();
+    ctx.currentBeatmap->m_baseMapMetadata.track_count = 4;
+    ctx.trackCount                                    = 4;
+    ctx.bgmTrackCount                                 = 1;
+    ctx.currentTool                                   = EditTool::Marquee;
+    ctx.animateTime = ctx.currentTime        = 1.0;
+    ctx.lastConfig.settings.professionalMode = true;
+    ctx.lastConfig.settings.selectionMode =
+        MMM::Config::SelectionMode::Intersection;
+    ctx.lastConfig.visual.trackLayout.left  = 0.1f;
+    ctx.lastConfig.visual.trackLayout.right = 0.5f;
+    ctx.lastConfig.visual.judgeline_pos     = 0.5f;
+    // 每轨一百像素，中心分别在 150、250、350，避免边界包含规则混入断言。
+    // 元数据与运行态均为四轨，排除布局来源不一致的干扰。
+    // BGM 轨提供独立采样域，不和玩家 Note 共用物件身份。
+    // 一秒视野对应一秒候选，时间粗筛会同时覆盖多个不同横向位置。
+    // 因此可检查未命中矩形的基线成员仍保持选中。
+    ctx.cameras.emplace("Basic2DCanvas",
+                        CameraInfo{ "Basic2DCanvas", 1000, 600, 0 });
+    auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    if ( !cache )
+        cache = &ctx.timelineRegistry.ctx().emplace<System::ScrollCache>();
+    cache->rebuild(
+        ctx.timelineRegistry, ctx.lastConfig, ctx.currentBeatmap.get());
+    std::array<entt::entity, 3> notes;
+    for ( int i = 0; i < 3; ++i ) {
+        notes[i] = ctx.noteRegistry.create();
+        ctx.noteRegistry.emplace<NoteComponent>(
+            notes[i], NoteComponent{ .m_timestamp = 1.0, .m_trackIndex = i });
+        // 提供正常会话的排序缓存，候选查询不需要全量 Registry 兜底。
+        // Note 分属不同轨道，窄框一次只能命中一项。
+        // 不使用重叠 Note，避免重叠层策略干扰集合运算。
+        ctx.sortedNoteEntities.push_back(notes[i]);
+        ctx.sortedNoteMaxEndPrefix.push_back(1.0);
+    }
+    const auto sample = ctx.sampleRegistry.create();
+    // 独立 Registry 从首个实体分配，同值 ID 也不能共用选择索引。
+    // 采样触发时间与锚点一致，不额外扩大本场景的命中几何。
+    ctx.sampleRegistry.emplace<SampleComponent>(
+        sample, SampleComponent{ .m_timestamp = 1.0, .m_track = 4 });
+    ctx.sortedSampleEntities     = { sample };
+    ctx.sortedSampleMaxEndPrefix = { 1.0 };
+    InteractionController controller(ctx);
+    /// @brief 模拟一次完整框选，每次更新均经过生产的几何命中和集合同步。
+    // 起笔冻结模式，后续命令只携带终点，与真实画布协议一致。
+    // 先刷新预览再结束，覆盖连续更新与最终同步两种状态。
+    const auto box =
+        [&](SelectionOperation operation, float left, float right) {
+            controller.handleCommand(CmdStartMarquee{
+                "Basic2DCanvas", left, 400, false, operation });
+            controller.handleCommand(CmdUpdateMarquee{ right, 100 });
+            controller.updateMarqueeSelection();
+            controller.handleCommand(CmdEndMarquee{});
+            controller.updateMarqueeSelection();
+        };
+    /// @brief 校验音符索引中的目标身份，组件一致性由统一选择入口保证。
+    const auto selected = [&](int i) {
+        return ctx.selectedNoteEntities.contains(notes[i]);
+    };
+    // 多次框选必须保留先前结果，减选只移除命中的成员。
+    // 第一笔选择 A，第二笔追加 B，不要求两个区域相邻。
+    // 第三笔覆盖 A，原加选框继续存在也不能把 A 重新选入。
+    box(SelectionOperation::Replace, 120, 180);
+    if ( !selected(0) || selected(1) ) return false;
+    box(SelectionOperation::Add, 220, 280);
+    if ( !selected(0) || !selected(1) || ctx.marqueeBoxes.size() != 2 )
+        return false;
+    box(SelectionOperation::Subtract, 120, 180);
+    if ( selected(0) || !selected(1) ) return false;
+    // 后来的加选可以恢复前面减掉的 A，运算不能按类型统一分组执行。
+    // 随后移除这次加选，前面的减选又应生效，B 在两次操作中始终保留。
+    box(SelectionOperation::Add, 120, 180);
+    if ( !selected(0) || !selected(1) ) return false;
+    controller.handleCommand(CmdRemoveMarqueeAt{ "Basic2DCanvas", 150, 300 });
+    controller.updateMarqueeSelection();
+    if ( selected(0) || !selected(1) ) return false;
+    // 强制刷新不能把减选框误当作加选框，或丢弃前面操作的顺序。
+    // 最终同步等低频请求必须与普通脏刷新产生相同集合。
+    controller.updateMarqueeSelection(true);
+    if ( selected(0) || !selected(1) ) return false;
+    // 拖动减选框先覆盖 B，再缩回起点；被临时排除的 B 必须即时恢复。
+    // A 已由前一笔排除，缩框只能恢复 B，不能回退整段历史。
+    // 新框归零后仍保留之前的有效框，结束不应丢弃整个序列。
+    controller.handleCommand(CmdStartMarquee{
+        "Basic2DCanvas", 220, 400, false, SelectionOperation::Subtract });
+    controller.handleCommand(CmdUpdateMarquee{ 280, 100 });
+    controller.updateMarqueeSelection();
+    if ( selected(1) ) return false;
+    controller.handleCommand(CmdUpdateMarquee{ 220, 400 });
+    controller.updateMarqueeSelection();
+    if ( !selected(1) ) return false;
+    controller.handleCommand(CmdEndMarquee{});
+    controller.updateMarqueeSelection();
+    // 相同落点优先移除最后创建的框，移掉减选框应恢复 A。
+    // 单次只移除一个框，不能同时删除重叠的原始加选框。
+    // 剩余框重新求值，不依赖被移除框上一次覆盖的实体缓存。
+    controller.handleCommand(CmdRemoveMarqueeAt{ "Basic2DCanvas", 150, 300 });
+    controller.updateMarqueeSelection();
+    if ( !selected(0) || !selected(1) || ctx.marqueeBoxes.size() != 2 )
+        return false;
+    controller.handleCommand(CmdRemoveMarqueeAt{ "Basic2DCanvas", 150, 300 });
+    controller.updateMarqueeSelection();
+    if ( selected(0) || !selected(1) ) return false;
+    controller.handleCommand(CmdRemoveMarqueeAt{ "Basic2DCanvas", 250, 300 });
+    if ( !ctx.marqueeBoxes.empty() || !ctx.selectedNoteEntities.empty() )
+        return false;
+    // 基线包含手动选择和同号 Sample，移除框时不能将其一并清除。
+    // 先建立手动基线再添加矩形，与仅由框形成的集合对照。
+    // 玩家轨道上的减选不能通过同号句柄错误移除采样。
+    // 最后一个减选框移除后不再有几何驱动，但手动基线继续有效。
+    controller.handleCommand(CmdSelectEntity{
+        notes[0], true, ChartObjectKind::PlayerNote, SelectionOperation::Add });
+    setChartObjectSelected(ctx, ChartObjectKind::AudioSample, sample, true);
+    // 只有一个活动框时，缩回零面积会让整个准备集合为空。
+    // 先检查覆盖时确实减掉 A，避免整个手势未命中却令恢复断言通过。
+    // 恢复检查同时核对 Sample，防止空框分支误用清空全部选择。
+    // 这里不发送释放事件，必须由连续刷新入口完成恢复。
+    // 此时仍须在按住期间恢复基线，不能依赖 EndMarquee 补偿。
+    controller.handleCommand(CmdStartMarquee{
+        "Basic2DCanvas", 120, 400, false, SelectionOperation::Subtract });
+    controller.handleCommand(CmdUpdateMarquee{ 180, 100 });
+    controller.updateMarqueeSelection();
+    if ( selected(0) ) return false;
+    controller.handleCommand(CmdUpdateMarquee{ 120, 400 });
+    controller.updateMarqueeSelection();
+    if ( !selected(0) || !ctx.selectedSampleEntities.contains(sample) )
+        return false;
+    // 释放丢弃零面积临时框；接下来再次框选应重新捕获恢复后的选择。
+    // 起笔保存的基线不能在归零时提前销毁，否则下一次恢复将丢失手动选择。
+    controller.handleCommand(CmdEndMarquee{});
+    box(SelectionOperation::Subtract, 120, 180);
+    if ( selected(0) || !ctx.selectedSampleEntities.contains(sample) )
+        return false;
+    controller.handleCommand(CmdRemoveMarqueeAt{ "Basic2DCanvas", 150, 300 });
+    if ( !selected(0) || !ctx.selectedSampleEntities.contains(sample) )
+        return false;
+    // 追加点击已选对象应幂等，减选点击未选对象也不能反向选中。
+    // 手动点击结束之前的框序列，后续加选从已经解析出的实体集合重新开始。
+    // 这可以防止点击移出的对象在下一次框选脏刷新时被旧矩形选回。
+    // 同一命令执行两次，刻意区分显式模式与经典 Ctrl 的切换。
+    // 无关的 A 与 Sample 必须保留，不能误当作替换模式清除。
+    for ( int i = 0; i < 2; ++i )
+        controller.handleCommand(CmdSelectEntity{ notes[2],
+                                                  false,
+                                                  ChartObjectKind::PlayerNote,
+                                                  SelectionOperation::Add });
+    if ( !selected(0) || !selected(2) ) return false;
+    for ( int i = 0; i < 2; ++i )
+        controller.handleCommand(
+            CmdSelectEntity{ notes[2],
+                             false,
+                             ChartObjectKind::PlayerNote,
+                             SelectionOperation::Subtract });
+    if ( !selected(0) || selected(2) ) return false;
+    // 显式参数缺省后仍保留经典替换与 Ctrl 追加框选，不继承减选解释。
+    // 该检查通过不带新字段的聚合命令执行，覆盖原调用点的缺省初始化。
+    // 不在测试里切换实体标志来模拟 Ctrl，而由现有工具实际解析追加参数。
+    // 经典框仍按并集合并，显式框的运算字段不会改变原来的几何规则。
+    // 首个经典框清除手动基线，第二个 Ctrl 框再追加另一项。
+    // 模式标志需要复位，经典框不能继续参与显式减选序列。
+    controller.handleCommand(
+        CmdStartMarquee{ "Basic2DCanvas", 120, 400, false });
+    controller.handleCommand(CmdUpdateMarquee{ 180, 100 });
+    controller.handleCommand(CmdEndMarquee{});
+    controller.updateMarqueeSelection();
+    controller.handleCommand(
+        CmdStartMarquee{ "Basic2DCanvas", 220, 400, true });
+    controller.handleCommand(CmdUpdateMarquee{ 280, 100 });
+    controller.handleCommand(CmdEndMarquee{});
+    controller.updateMarqueeSelection();
+    if ( !selected(0) || !selected(1) || ctx.marqueeUsesOperations )
+        return false;
+    // 为空的显式模式保留经典 Ctrl 点击切换；清空同时解除所有框和基线。
+    // 第一次取消 A，第二次重新选入 A，验证旧切换规则仍然成立。
+    // 空目标加 clearOthers 是非破坏性的清空，不得误发删除命令。
+    // 最后检查基线释放，后续手势不能继承已经结束的选择序列。
+    controller.handleCommand(CmdSelectEntity{ notes[0], false });
+    if ( selected(0) ) return false;
+    controller.handleCommand(CmdSelectEntity{ notes[0], false });
+    if ( !selected(0) ) return false;
+    controller.handleCommand(CmdSelectEntity{ entt::null, true });
+    return ctx.selectedNoteEntities.empty() &&
+           ctx.selectedSampleEntities.empty() && ctx.marqueeBoxes.empty() &&
+           !ctx.marqueeUsesOperations && ctx.marqueeBaselineNotes.empty();
+}
 /// @brief 菜单锁存的吸附时间优先于播放头，整批粘贴保留相对时间。
 /// @return 显式定位、默认定位及非法输入拒绝全部符合契约时返回真。
 /// @details 只驱动正式粘贴控制器，不通过更改播放时间伪造粘贴位置。
@@ -383,6 +588,10 @@ int main()
         // 画布命令正确后继续验证领域结果，避免只证明 Shift 字段被改写。
         ok &= testMouseBrushContinuation();
         ok &= testExplicitPasteAnchor();
+        if ( !testSelectionOperations() ) {
+            XERROR("Selection operation geometry or baseline regression");
+            ok = false;
+        }
         // 选中工具右键必须打开菜单，Draw 工具的擦除逻辑不能被同时触发。
         // 前面的绘制事务已释放，清理模拟快照后再切换工具。
         // 使用真实按钮事件，不调用 OpenPopup 跳过方案和工具门禁。

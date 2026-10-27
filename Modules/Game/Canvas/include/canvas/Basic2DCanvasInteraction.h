@@ -408,6 +408,8 @@ private:
     bool m_rightEraseActive{ false };
     /// @brief 右键菜单打开时的可见吸附时间，菜单内移动不会改变该锚点。
     double m_selectionPasteTime{ 0.0 };
+    /// @brief 右键起点的画布局部坐标，移除框选不得使用菜单项上的鼠标位置。
+    glm::vec2 m_selectionMenuPoint{ 0.0F, 0.0F };
     /// @brief 上一次发送的框选拖动更新。
     LastContinuousEditCommand m_lastMarqueeUpdateCommand;
     /// @brief 上一次发送的绘制笔刷拖动更新。

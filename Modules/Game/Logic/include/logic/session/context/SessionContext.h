@@ -4,6 +4,7 @@
 
 #include "common/ChartObjectKind.h"
 #include "common/EditTool.h"
+#include "common/SelectionOperation.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "config/EditorConfig.h"
 #include "logic/PreviewDensity.h"
@@ -57,6 +58,8 @@ struct MarqueeBox {
     float       startTrack{ 0.0f };  ///< 起始轨道索引
     float       endTrack{ 0.0f };    ///< 结束轨道索引
     std::string cameraId;            ///< 所属视口 ID
+    /// @brief 显式框选按创建顺序应用，加选与减选不会退化为所有框的并集。
+    SelectionOperation operation{ SelectionOperation::Add };
 };
 
 /// @brief 提供给渲染系统的拖动中实体列表视图。
@@ -278,6 +281,12 @@ struct SessionContext {
     /// @brief 框选区域变化后是否需要重算实体选中状态
     bool                    isMarqueeSelectionDirty{ false };
     std::vector<MarqueeBox> marqueeBoxes;  ///< 当前活跃的框选框列表
+    /// @brief 当前框序列是否采用独立于 Ctrl 的显式集合操作。
+    bool marqueeUsesOperations{ false };
+    /// @brief 第一笔显式框选前的音符选择，只在新序列起笔时复制。
+    std::unordered_set<entt::entity> marqueeBaselineNotes;
+    /// @brief 第一笔显式框选前的采样选择，独立 Registry 保留同号实体身份。
+    std::unordered_set<entt::entity> marqueeBaselineSamples;
 
     // --- 笔刷工具状态 ---
     struct BrushState {

@@ -37,6 +37,17 @@ public:
     /// @brief 选中工具提供右键菜单，绘制工具仍保留右键擦除。
     /// @warning 每帧常量策略，不持有弹窗或画布状态。
     bool selectionContextMenu() const override { return true; }
+    /// @brief 返回应用级纯鼠标模式，默认替换选择。
+    /// @warning 每帧只读枚举成员，不复制选择或配置容器。
+    std::optional<Logic::SelectionOperation> selectionOperation() const override
+    {
+        return m_selectionOperation;
+    }
+    /// @brief 菜单只改 UI 意图，起笔命令负责向逻辑线程锁存本次模式。
+    void setSelectionOperation(Logic::SelectionOperation operation) override
+    {
+        m_selectionOperation = operation;
+    }
     /// @brief 主画布无需修饰键即可延伸画笔，其他表面保留原语义。
     /// @warning 连续绘制只做枚举判断，不持有会话或跨帧指针。
     bool extendBrush(Surface surface, bool shift) const override
@@ -45,6 +56,12 @@ public:
         // 保留逻辑层的折线能力门禁、取消和撤销事务，不在方案中重复实现。
         return surface == Surface::MainCanvas || shift;
     }
+
+private:
+    /// @brief 模式仅由 UI 线程读写，不参与每帧配置保存。
+    Logic::SelectionOperation m_selectionOperation{
+        Logic::SelectionOperation::Replace
+    };
 };
 /// @brief 注册表只拥有方案；活动指针在 vector 扩容后仍指向独立对象。
 struct Registry {
@@ -135,6 +152,17 @@ bool IEditorInteractionProfile::extendBrush(Surface, bool shift) const
 bool IEditorInteractionProfile::selectionContextMenu() const
 {
     return false;
+}
+/// @brief 默认不接管选择语义，避免改变经典点击切换和 Ctrl 框选。
+/// @warning 每帧返回空标量，不创建任何输入状态。
+std::optional<Logic::SelectionOperation>
+IEditorInteractionProfile::selectionOperation() const
+{
+    return std::nullopt;
+}
+/// @brief 经典方案忽略模式设置，不引入隐藏的输入状态。
+void IEditorInteractionProfile::setSelectionOperation(Logic::SelectionOperation)
+{
 }
 
 /// @brief 将当前表面及修饰键解释传给方案，避免画布识别具体方案 ID。

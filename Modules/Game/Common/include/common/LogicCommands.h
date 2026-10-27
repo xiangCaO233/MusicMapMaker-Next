@@ -6,6 +6,7 @@
 #include "common/ChartObjectKind.h"
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
+#include "common/SelectionOperation.h"
 #include "common/walkthrough/ComposeLessonNotes.h"
 #include "config/EditorConfig.h"
 #include "mmm/annotation/BeatmapAnnotation.h"
@@ -105,6 +106,8 @@ struct CmdSelectEntity {
     bool         clearOthers;
     /// @brief 实体所在的独立 ECS 注册表。
     ChartObjectKind kind{ ChartObjectKind::PlayerNote };
+    /// @brief 显式集合操作；为空时保留经典 clearOthers 与 Ctrl 切换语义。
+    std::optional<SelectionOperation> selectionOperation;
 };
 
 /**
@@ -234,6 +237,8 @@ struct CmdStartMarquee {
     float       mouseX;
     float       mouseY;
     bool        isCtrlDown{ false };
+    /// @brief 本次框选锁存的集合操作；为空时沿用经典追加修饰键。
+    std::optional<SelectionOperation> selectionOperation;
 };
 
 /**

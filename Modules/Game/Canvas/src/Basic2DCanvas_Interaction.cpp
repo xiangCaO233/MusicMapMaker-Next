@@ -2150,6 +2150,8 @@ void Basic2DCanvasInteraction::update(
                 m_selectionPasteTime = currentSnapshot->isSnapped
                                            ? currentSnapshot->snappedTime
                                            : currentSnapshot->hoveredTime;
+                m_selectionMenuPoint = m_lastMouseCommand.pos;
+                // 坐标已经过当前相机逆投影，菜单点击不重新取屏幕坐标换算。
                 ImGui::OpenPopup("SelectionEditMenu");
             }
             // 标准菜单沿用 ImGui 的关闭和点击捕获，无需新增可见按钮样式。
@@ -2160,6 +2162,24 @@ void Basic2DCanvasInteraction::update(
                 if ( !selectionMenu ) ImGui::CloseCurrentPopup();
                 ImGui::BeginDisabled(!selectionMenu ||
                                      currentSnapshot->isPlaying);
+                // 模式只影响下一笔，活动框在起笔命令中锁存自己的集合操作。
+                // 单选菜单使追加与减选互斥，不借用全局 Ctrl 或 Shift 状态。
+                // 勾选项表示下一笔模式，不重解释已有框选的结果。
+                auto& profile = UI::Interaction::activeProfile();
+                for ( const auto& [operation, key] :
+                      { std::pair{ Logic::SelectionOperation::Replace,
+                                   "ui.selection.replace" },
+                        std::pair{ Logic::SelectionOperation::Add,
+                                   "ui.selection.add" },
+                        std::pair{ Logic::SelectionOperation::Subtract,
+                                   "ui.selection.subtract" } } ) {
+                    if ( ImGui::MenuItem(
+                             TR(key).data(),
+                             nullptr,
+                             profile.selectionOperation() == operation) )
+                        profile.setSelectionOperation(operation);
+                }
+                ImGui::Separator();
                 // 历史操作指向当前编辑器，沿用原撤销栈；空历史由逻辑层忽略。
                 // 菜单激活不携带快捷键来源，避免转入独立 BPM 工具的历史。
                 if ( ImGui::MenuItem(TR("ui.edit.undo").data()) )
@@ -2191,6 +2211,17 @@ void Basic2DCanvasInteraction::update(
                 if ( ImGui::MenuItem(TR("ui.edit.select_all").data()) )
                     UI::Interaction::executeAction("SelectAllAction",
                                                    sourceManager);
+                // 清空选择是非破坏性状态操作，不使用删除物件命令。
+                if ( ImGui::MenuItem(TR("ui.selection.clear").data()) )
+                    UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
+                        Logic::CmdSelectEntity{ entt::null, true }));
+                // 与经典
+                // Ctrl+右键复用同相机命中规则，仅移除右键起点下的一个框。
+                if ( ImGui::MenuItem(TR("ui.selection.remove_marquee").data()) )
+                    UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
+                        Logic::CmdRemoveMarqueeAt{ m_cameraId,
+                                                   m_selectionMenuPoint.x,
+                                                   m_selectionMenuPoint.y }));
                 ImGui::EndDisabled();
                 ImGui::EndPopup();
             }
@@ -6042,14 +6073,21 @@ void Basic2DCanvasInteraction::handleInteractions(
                 // 框选工具在实体上按下时先选择并转为对象拖拽；空白处才开始
                 // 新框选矩形。
                 if ( hoveredEntity != entt::null ) {
-                    // 未按 Ctrl 时替换选择，按 Ctrl 时保留既有选择集合。
+                    const auto operation =
+                        UI::Interaction::activeProfile().selectionOperation();
+                    // 经典方案不指定集合操作，继续由 Ctrl 决定选择切换。
+                    // 纯鼠标模式由命令明确携带，不能只用 clearOthers 模拟减选。
                     UI::Interaction::dispatchCommand(
                         Event::LogicCommandEvent(Logic::CmdSelectEntity{
                             hoveredEntity,
                             !UI::Interaction::modifier(
                                 UI::Interaction::Modifier::Control),
-                            hoveredObjectKind }));
-                    if ( !currentSnapshot->isPlaying ) {
+                            hoveredObjectKind,
+                            operation }));
+                    // 减选点击只改变集合，不能把刚移出的对象再次加入拖动事务。
+                    // 追加和替换仍可拖动已选集合，保留常规批量移动。
+                    if ( !currentSnapshot->isPlaying &&
+                         operation != Logic::SelectionOperation::Subtract ) {
                         // 播放时仍允许选择查看，但不允许改变对象位置。
                         // 按下处的命中部位与子索引随命令一起入队，避免拖拽工具
                         // 在稍后的逻辑帧误读到另一处悬停状态。
@@ -6072,7 +6110,9 @@ void Basic2DCanvasInteraction::handleInteractions(
                             localMousePos.x,
                             localMousePos.y,
                             UI::Interaction::modifier(
-                                UI::Interaction::Modifier::Control) }));
+                                UI::Interaction::Modifier::Control),
+                            UI::Interaction::activeProfile()
+                                .selectionOperation() }));
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Move ) {

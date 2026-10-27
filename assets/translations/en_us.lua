@@ -59,6 +59,11 @@ return {
 	["ui.menu.frame_stats_fmt"] = "FT: {:.2f} ms | FPS: {:.1f} | UPS: {:.1f}",
 
 	["ui.edit"] = "&Edit",
+	["ui.selection.replace"] = "Replace selection",
+	["ui.selection.add"] = "Add to selection",
+	["ui.selection.subtract"] = "Subtract from selection",
+	["ui.selection.clear"] = "Clear selection",
+	["ui.selection.remove_marquee"] = "Remove this marquee",
 	["ui.edit.undo"] = "Undo",
 	["ui.edit.redo"] = "Redo",
 	["ui.edit.cut"] = "Cut",

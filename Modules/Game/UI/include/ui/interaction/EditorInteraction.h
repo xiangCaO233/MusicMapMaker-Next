@@ -1,7 +1,9 @@
 #pragma once
+#include "common/SelectionOperation.h"
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string_view>
 
@@ -98,6 +100,11 @@ public:
     /// @brief 是否在选中工具中启用无需键盘的右键编辑菜单。
     /// @warning 每帧只返回方案策略，不查询选择集合或访问会话锁。
     virtual bool selectionContextMenu() const;
+    /// @brief 显式选择模式；经典方案返回空以保留物理修饰键语义。
+    /// @warning 每帧只读取 UI 线程标量，不访问选择集合。
+    virtual std::optional<Logic::SelectionOperation> selectionOperation() const;
+    /// @brief 在未进行选择手势时切换纯鼠标选择模式。
+    virtual void setSelectionOperation(Logic::SelectionOperation operation);
     /// @brief 解释滚轮方向与倍率，横纵轴分开，不改变 ImGui 控件自身滚动。
     virtual float wheel(Surface surface, float physical, bool horizontal) const;
     /// @brief 解释键盘主键，支持整套键位语义替换；参数为 ImGui 命名键值。

@@ -1,3 +1,4 @@
+#include "common/SelectionOperation.h"
 #include "config/EditorSettings.h"
 #include "config/EditorShortcutActions.h"
 #include "event/core/EventBus.h"
@@ -418,6 +419,13 @@ int main()
     // 任一契约失败均保留非零退出码，CTest 不以是否打印日志判断结果。
     // 新方案只改变画笔意图，经典方案必须继续区分有无 Shift。
     const auto& classic = Interaction::activeProfile();
+    // 默认方案不返回显式模式，画布必须继续读取经典物理 Ctrl。
+    // 测试在真实注册表中切换方案，不能只验证一个独立的策略替身。
+    // 即使收到模式设置请求，经典方案也不能留下会影响下一次点击的状态。
+    Interaction::activeProfile().setSelectionOperation(
+        MMM::Logic::SelectionOperation::Subtract);
+    ok &= require(!classic.selectionOperation(),
+                  "classic selection operation unchanged");
     // 新菜单随方案启用，经典右键移除框选的约定不应改变。
     ok &= require(!classic.selectionContextMenu(),
                   "classic right click unchanged");
@@ -428,6 +436,18 @@ int main()
     Interaction::synchronizeProfile("mouse-only", true);
     Interaction::synchronizeProfile("mouse-only", true);
     const auto& mouse = Interaction::activeProfile();
+    // 三种模式切换只改变独立意图，不能借修改键盘状态实现追加或减选。
+    // 每次读取都应得到刚设置的值，起笔才能把它锁存在逻辑命令中。
+    for ( const auto mode : { MMM::Logic::SelectionOperation::Replace,
+                              MMM::Logic::SelectionOperation::Add,
+                              MMM::Logic::SelectionOperation::Subtract } ) {
+        Interaction::activeProfile().setSelectionOperation(mode);
+        ok &= require(mouse.selectionOperation() == mode,
+                      "mouse selection operation");
+    }
+    // 结束前恢复默认值，后续输入契约不应依赖本循环最后一次选择。
+    Interaction::activeProfile().setSelectionOperation(
+        MMM::Logic::SelectionOperation::Replace);
     ok &= require(mouse.selectionContextMenu(), "mouse-only selection menu");
     // 方案注册必须能通过持久化身份查到，不能只在菜单中添加展示条目。
     // 连续安全帧沿用切换门禁，避免把尚未结束的画笔移交给新方案。
