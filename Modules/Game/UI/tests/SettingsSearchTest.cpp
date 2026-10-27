@@ -588,7 +588,25 @@ bool checkNavigation(MMM::UI::UIManager& manager)
         view, SettingsTab::Software, "ui.settings.software.professional_mode");
     frame();
     frame();
-    return professionalChosen && SettingsSearchTestAccess::highlighted(view);
+    if ( !professionalChosen || !SettingsSearchTestAccess::highlighted(view) )
+        return false;
+    // 交互方案迁入软件页后，搜索必须定位真实标准行，不能仍指向快捷键页。
+    // 保留原翻译键避免破坏皮肤覆写；所属分类由目录明确指定。
+    // 搜索条目存在还不够，必须让软件页真实控件报告可见行矩形。
+    // 连续两帧使跨页滚动和 Clay 布局完成，避免用目录身份冒充显示成功。
+    // 快捷键页不再包含该目标，旧分类查询不能误跳到另一行。
+    // 导航只观察页面布局，不切换用户实际的操作方案或保存配置。
+    const bool profileChosen = SettingsSearchTestAccess::choose(
+        view,
+        SettingsTab::Software,
+        "ui.settings.shortcut.interaction_profile");
+    frame();
+    frame();
+    return profileChosen && SettingsSearchTestAccess::highlighted(view) &&
+           !SettingsSearchTestAccess::choose(
+               view,
+               SettingsTab::Shortcut,
+               "ui.settings.shortcut.interaction_profile");
 }
 }  // namespace
 

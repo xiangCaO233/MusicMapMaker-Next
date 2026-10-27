@@ -209,27 +209,6 @@ void SettingsView::drawShortcutSettings()
     auto& settings  = appConfig.getEditorSettings();
     bool  changed   = false;
 
-    // 方案身份属于应用设置；只请求切换，运行时等待旧手势自然结束。
-    const auto& active = Interaction::activeProfile();
-    if ( ImGui::BeginCombo(
-             TR("ui.settings.shortcut.interaction_profile").data(),
-             active.name().data()) ) {
-        for ( const auto& profile : Interaction::profiles() ) {
-            // 显示名称允许相同；控件身份始终使用唯一方案 ID。
-            const auto profileId = profile->id();
-            ImGui::PushID(profileId.data(),
-                          profileId.data() + profileId.size());
-            const bool selected =
-                settings.m_interactionProfileId == profile->id();
-            if ( ImGui::Selectable(profile->name().data(), selected) ) {
-                settings.m_interactionProfileId = profile->id();
-                changed                         = true;
-            }
-            ImGui::PopID();
-        }
-        ImGui::EndCombo();
-    }
-
     if ( m_recordingShortcutTarget == ShortcutRecordTarget::None ) {
         // 页面重新打开或录制已结束时，确保全局路由不残留录制态。
         ShortcutUtils::setShortcutRecordingActive(false);
