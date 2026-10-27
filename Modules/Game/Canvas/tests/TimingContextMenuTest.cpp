@@ -5,6 +5,7 @@
 #include "common/render/TimelineInteractiveElement.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
+#include "config/VisualConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "log/colorful-log.h"
@@ -14,6 +15,7 @@
 #include <entt/entity/entity.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -126,7 +128,7 @@ ImGuiWindow* open(Canvas::TimelineCanvas&         canvas,
 /// @param snapshot 所有点击共用的只读输入快照。
 /// @param point 新一轮菜单打开时的画布吸附坐标。
 /// @param row 菜单中不含分隔线的零起始行号。
-/// @note 三条分隔线分别位于第 2、第 6 和第 8 行之前。
+/// @note 四条分隔线分别位于第 2、第 6、第 8 和第 11 行之前。
 /// @return 真实菜单行被激活并关闭后返回真。
 /// @details 不按翻译文本搜索行，避免测试依赖桌面语言或字体配置。
 /// @warning 仅测试读取 ImGui 内部窗口几何，生产代码不依赖该结构。
@@ -136,10 +138,10 @@ bool click(Canvas::TimelineCanvas&         canvas,
     const auto* popup = open(canvas, snapshot, point);
     if ( !popup ) return false;
     // Selectable 行含 ItemSpacing；分隔线还增加一个像素高度。
-    const auto& style = ImGui::GetStyle();
-    const float line  = ImGui::GetTextLineHeightWithSpacing();
-    const int   separators =
-        (row >= 2 ? 1 : 0) + (row >= 6 ? 1 : 0) + (row >= 8 ? 1 : 0);
+    const auto&  style      = ImGui::GetStyle();
+    const float  line       = ImGui::GetTextLineHeightWithSpacing();
+    const int    separators = (row >= 2 ? 1 : 0) + (row >= 6 ? 1 : 0) +
+                              (row >= 8 ? 1 : 0) + (row >= 11 ? 1 : 0);
     const ImVec2 target{ popup->Pos.x + popup->Size.x * 0.5F,
                          popup->DC.CursorStartPos.y + row * line +
                              separators * (1.0F + style.ItemSpacing.y) +
@@ -203,6 +205,8 @@ bool checkMenu()
     bool        passed  = true;
     std::size_t deleted = 0, undo = 0, redo = 0, noteEdits = 0;
     std::vector<Logic::CmdCreateTimelineEvents::Entry> created;
+    std::vector<double>                                seeks;
+    std::string                                        navigationOrder;
     auto&      bus = Event::EventBus::instance();
     const auto subscription =
         bus.subscribe<Event::LogicCommandEvent>([&](const auto& event) {
@@ -217,6 +221,14 @@ bool checkMenu()
                 deleted += batch->entities.size();
             undo += std::holds_alternative<Logic::CmdUndo>(event.command);
             redo += std::holds_alternative<Logic::CmdRedo>(event.command);
+            if ( const auto* command =
+                     std::get_if<Logic::CmdSeek>(&event.command) ) {
+                seeks.push_back(command->time);
+                navigationOrder += 's';
+            }
+            if ( const auto* command =
+                     std::get_if<Logic::CmdSetPlayState>(&event.command) )
+                navigationOrder += command->isPlaying ? 'p' : 'x';
             noteEdits +=
                 std::holds_alternative<Logic::CmdSelectEntity>(event.command) ||
                 std::holds_alternative<Logic::CmdDeleteSelected>(
@@ -255,6 +267,24 @@ bool checkMenu()
     passed &= click(canvas, snapshot, point, 6);
     passed &= click(canvas, snapshot, point, 3);
     passed &= deleted == 4 && Access::count(canvas) == 0;
+    // 时间线锚点位于 3.25 秒，不能误用 1 秒播放头或菜单中的实时坐标。
+    // 导航单独计数，不把之前的复制、剪切和撤销命令混入播放顺序。
+    // 观察的是正式 CmdSeek 的播放时间，不能只检查 UI 本地保存的锚点。
+    // 测试不应用命令，快照仍为暂停，不模拟音频线程的异步状态回流。
+    // 单独定位保持暂停，从此播放应严格先发 Seek，再发开启播放命令。
+    // 每次新开菜单都重新采集落点，两轮顺序字符串必须精确为 s、s、p。
+    // 偏移包含用户与平台固定分量，换算口径与主画布导航一致。
+    // 所有捕获的 Seek 都要核对时间，不能只检查最后一次结果。
+    // 导航不负责改变选择，后续多选断言继续使用剪切后的本地状态。
+    passed &= click(canvas, snapshot, point, 11);
+    passed &= seeks.size() == 1 && navigationOrder == "s";
+    passed &= click(canvas, snapshot, point, 12);
+    passed &= seeks.size() == 2 && navigationOrder == "ssp";
+    const auto offset = Config::AppConfig::instance()
+                            .getVisualConfig()
+                            .getEffectiveVisualOffset();
+    for ( const auto time : seeks )
+        passed &= std::abs(time - (3.25 - offset)) < 1e-9;
     // 三种模式都从真实菜单选择，随后只用鼠标点选和框选，不伪造 Ctrl。
     // 模式是应用级状态，菜单退出后主画布也应读到同一个值。
     using Operation = Logic::SelectionOperation;

@@ -1,6 +1,8 @@
 #include "canvas/TimelineCanvas.h"
 #include "common/LogicCommands.h"
 #include "common/render/RenderSnapshot.h"
+#include "config/AppConfig.h"
+#include "config/VisualConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "ui/imgui/ClipboardBridge.h"
@@ -8,6 +10,7 @@
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
+#include <cmath>
 #include <imgui.h>
 #include <utility>
 
@@ -193,7 +196,35 @@ bool TimelineCanvas::handleTimingContextMenu(ImVec2 origin, ImVec2 size,
                      profile.selectionOperation() == operation) )
                 profile.setSelectionOperation(operation);
         }
+        ImGui::Separator();
+        // 导航复用菜单打开时的 Timing 吸附锚点，不使用菜单内指针或当前播放头。
+        // 没有激活时不做时间换算或命令组装，普通菜单帧只绘制静态项目。
+        const bool seek =
+            UI::FeedbackMenuItem(TR("ui.selection.seek_here").data());
+        const bool play =
+            UI::FeedbackMenuItem(TR("ui.selection.play_here").data());
+        if ( seek || play ) {
+            // 与画布坐标换算保持一致，CmdSeek 接收移除视觉偏移后的播放时间。
+            // 无效锚点不能仅跳过 Seek 后仍开启播放，否则会在旧播放头误播。
+            const double offset    = Config::AppConfig::instance()
+                                         .getVisualConfig()
+                                         .getEffectiveVisualOffset();
+            const double audioTime = m_timingContextTime - offset;
+            if ( std::isfinite(m_timingContextTime) &&
+                 std::isfinite(audioTime) ) {
+                // 发布仍经过时间线既有路由，保持用户输入与会话归属一致。
+                // 此操作不改变本地选区或框选基线，也不编辑任何 Timing 参数。
+                publishTimelineCommand(
+                    Event::LogicCommandEvent(Logic::CmdSeek{ audioTime }));
+                // 定位必须先于开始播放；只跳转不会改变原本的暂停状态。
+                // 依赖事件队列维持顺序，不插入 sleep 或阻塞等待音频同步。
+                if ( play )
+                    publishTimelineCommand(Event::LogicCommandEvent(
+                        Logic::CmdSetPlayState{ true }));
+            }
+        }
         ImGui::EndDisabled();
+        // 标准菜单激活后自然关闭，返回值仍拦截本帧鼠标释放，防止穿透编辑。
         ImGui::EndPopup();
     }
     m_timingContextWasOpen = ImGui::IsPopupOpen("TimingEditMenu");

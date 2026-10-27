@@ -125,6 +125,9 @@ private:
     /// @brief 绘制右键冻结的重叠候选，显示身份与实际选择共享同一列表。
     /// @warning 菜单展开时只遍历当前指针候选，不读取 ECS 或文件。
     void renderHoverLayerMenu(const Common::Render::RenderSnapshot& snapshot);
+    /// @brief 绘制纯鼠标菜单的确定落点导航和选中物件属性入口。
+    /// @warning 菜单展开时仅读取已有选择标志；窗口和导航仅在激活时执行。
+    void renderSelectionMenuExtras(UI::UIManager* manager);
     /// @brief 当前可见画布的坐标桥，仅由 UI 线程读写，不访问可变会话数据。
     PlanarObservationInputProjection m_inputProjection;
     /// @brief 动态物件命中框需要移除的播放插值，逻辑命令仍接收显示平面坐标。

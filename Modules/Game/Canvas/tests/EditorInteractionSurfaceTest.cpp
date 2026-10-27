@@ -4,6 +4,8 @@
 #include "common/SelectionOperation.h"
 #include "common/render/HoverRenderData.h"
 #include "common/render/RenderSnapshot.h"
+#include "config/AppConfig.h"
+#include "config/VisualConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "log/colorful-log.h"
@@ -21,11 +23,14 @@
 #include <array>
 #include <cmath>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <limits>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace MMM::Canvas
 {
@@ -496,6 +501,134 @@ bool frame(MMM::Canvas::Basic2DCanvasInteraction&     interaction,
     ImGui::EndFrame();
     return menuOpen;
 }
+/// @brief 用实际右键菜单验证导航锁存、视觉偏移及先定位后播放的顺序。
+/// @return 菜单点击只产生预期导航命令且经典方案不出现入口时返回真。
+/// @details 所有点击经过正式 update，不直接调用私有扩展菜单函数。
+/// 弹窗打开后故意改变快照时间，避免只验证静止场景下的偶然一致。
+/// 非有限落点应无副作用退出，不能以播放头或零点代替指定位置。
+/// @pre ImGui 上下文已建立，前一个用例的菜单和指针事务已经结束。
+/// @post 临时视觉配置、方案和事件订阅在返回前恢复。
+/// @note 固定窗口使用真实 ImGui 弹窗尺寸，允许自动避让屏幕边缘。
+/// @note 不创建音频或 GPU 设备，只观察发往逻辑层的语义命令。
+/// @note 计数区分定位、开启播放和开始编辑，避免仅按事件总数判断。
+/// @note 临时偏移仅修改内存，退出时恢复，不写入个人配置文件。
+bool testMenuNavigation()
+{
+    using namespace MMM;
+    auto&      visual         = Config::AppConfig::instance().getVisualConfig();
+    const auto originalOffset = visual.visualOffset;
+    visual.visualOffset       = 0.125F;
+    const double                     offset = visual.getEffectiveVisualOffset();
+    Canvas::Basic2DCanvasInteraction controller("SurfaceTest", "Canvas_Probe");
+    Common::Render::RenderSnapshot   snapshot;
+    snapshot.hasBeatmap        = true;
+    snapshot.isHoveringCanvas  = true;
+    snapshot.currentTool       = Logic::EditTool::Marquee;
+    snapshot.trackCount        = 4;
+    snapshot.beatmapPathKey    = "navigation.mmm";
+    snapshot.beatmapInstanceId = 1;
+    snapshot.isSnapped         = true;
+    snapshot.currentTime       = 1.0;
+    std::vector<double> seeks;
+    std::string         order;
+    int                 edits = 0;
+    auto&               bus   = Event::EventBus::instance();
+    const auto          subscription =
+        bus.subscribe<Event::LogicCommandEvent>([&](const auto& event) {
+            // 捕获生产队列中的实际时间与事件顺序，不能只看按钮视觉反馈。
+            // 订阅不应用命令，后续快照变化只由用例显式提供。
+            // 小写 p 只表示显式开启，错误的暂停会写为 x 而非同一计数。
+            // 普通 hover 更新不算编辑，起笔类命令才表示关闭点击发生穿透。
+            if ( const auto* command =
+                     std::get_if<Logic::CmdSeek>(&event.command) ) {
+                seeks.push_back(command->time);
+                order += 's';
+            }
+            if ( const auto* command =
+                     std::get_if<Logic::CmdSetPlayState>(&event.command) )
+                order += command->isPlaying ? 'p' : 'x';
+            edits +=
+                std::holds_alternative<Logic::CmdStartMarquee>(event.command) ||
+                std::holds_alternative<Logic::CmdStartBrush>(event.command);
+        });
+    // 无 hitbox 保证没有重叠子菜单，行号只表示真实可见项的顺序。
+    // 控制器独立于前一个用例的候选和实例，不借用其私有菜单状态。
+    // 没有选中物件时属性子菜单仍占一行，但不能改变导航项的顺序。
+    // 每轮新开菜单，下一轮目标必须重新锁存，不能复用上一次锚点。
+    // 起点由真实右键边沿记录，测试不直接赋值控制器的目标时间。
+    // 右键释放之后才取弹窗几何，避免用首次出现的临时尺寸计算坐标。
+    auto clickNavigation = [&](double anchor, bool play) {
+        snapshot.snappedTime = anchor;
+        snapshot.hoveredTime = anchor;
+        frame(controller, snapshot, false);
+        ImGui::GetIO().AddMouseButtonEvent(1, true);
+        const bool opened = frame(controller, snapshot, false);
+        ImGui::GetIO().AddMouseButtonEvent(1, false);
+        frame(controller, snapshot, false);
+        auto& stack = ImGui::GetCurrentContext()->OpenPopupStack;
+        if ( !opened || stack.empty() || !stack.back().Window ) return false;
+        const auto* popup = stack.back().Window;
+        // 前 14 项后有四条分隔线；弹窗会避让边缘，不硬编码屏幕位置。
+        // 使用当前字体行高，保持菜单边距与项目真实交互一致。
+        // 行号计数包含三种选择模式，分隔线只累加像素高度而不是行数。
+        // 读取窗口几何仅限测试，生产菜单不依赖 ImGui 内部窗口结构。
+        const int    row   = play ? 15 : 14;
+        const auto&  style = ImGui::GetStyle();
+        const ImVec2 target{ popup->Pos.x + popup->Size.x * 0.5F,
+                             popup->DC.CursorStartPos.y +
+                                 row * ImGui::GetTextLineHeightWithSpacing() +
+                                 4 * (1.0F + style.ItemSpacing.y) +
+                                 ImGui::GetTextLineHeight() * 0.5F };
+        // 指针移到菜单且快照更新到别处后，仍必须使用右键起点。
+        // 鼠标按下与释放分两帧送入，不能绕过标准菜单的激活时机。
+        // 两个时间字段都改变，能够发现吸附与连续时间被任意重读的错误。
+        // 关闭后还推进一个空闲帧，确保下一次右键属于独立事务。
+        snapshot.snappedTime = 12.0;
+        snapshot.hoveredTime = 13.0;
+        frame(controller, snapshot, true, target);
+        frame(controller, snapshot, false, target);
+        const bool closed = ImGui::GetCurrentContext()->OpenPopupStack.empty();
+        frame(controller, snapshot, false);
+        return closed;
+    };
+    bool passed = clickNavigation(3.25, false);
+    passed &= seeks.size() == 1 && order == "s";
+    passed &= clickNavigation(4.5, true);
+    passed &= seeks.size() == 2 && order == "ssp";
+    if ( seeks.size() == 2 ) {
+        // 偏移包含平台固定分量，不只减去用户配置的可变部分。
+        // 用户偏移设为非零，使完全遗漏换算的实现无法偶然通过。
+        // 先验证条目数量再索引，错误行或重复命令以断言失败结束。
+        passed &= std::abs(seeks[0] - (3.25 - offset)) < 1e-9;
+        passed &= std::abs(seeks[1] - (4.5 - offset)) < 1e-9;
+    }
+    snapshot.isSnapped = false;
+    passed &= clickNavigation(2.75, false);
+    passed &=
+        seeks.size() == 3 && std::abs(seeks.back() - (2.75 - offset)) < 1e-9;
+    // 菜单关闭的左键点击不得穿透为画布框选或绘制。
+    // 连续时间场景关闭吸附标记，旧的 snappedTime 不应重新参与导航。
+    // 非有限落点仍真实点击播放项，不能只测试一个未被激活的禁用按钮。
+    // 非法输入既不能 Seek，也不能单独在旧播放头开启播放。
+    passed &= edits == 0;
+    passed &= clickNavigation(std::numeric_limits<double>::quiet_NaN(), true);
+    passed &= seeks.size() == 3 && order == "ssps";
+    // 经典右键仍采用原工具行为，不出现本轮新增的导航菜单。
+    // 走正式方案切换边界，不直接替换策略或修改物理修饰键。
+    // 所有按钮都已释放，不能把活动手势阻止切换误认为经典菜单行为。
+    // 退出前恢复纯鼠标方案和视觉配置，监听解除先于局部状态析构。
+    Interaction::synchronizeProfile("classic-desktop", true);
+    Interaction::synchronizeProfile("classic-desktop", true);
+    ImGui::GetIO().AddMouseButtonEvent(1, true);
+    passed &= !frame(controller, snapshot, false);
+    ImGui::GetIO().AddMouseButtonEvent(1, false);
+    frame(controller, snapshot, false);
+    Interaction::synchronizeProfile("mouse-only", true);
+    Interaction::synchronizeProfile("mouse-only", true);
+    bus.unsubscribe<Event::LogicCommandEvent>(subscription);
+    visual.visualOffset = originalOffset;
+    return passed;
+}
 }  // namespace
 
 /// @brief 确认新方案独占生产画布、释放收尾和经典操作恢复的完整链路。
@@ -770,6 +903,7 @@ int main()
         bus.unsubscribe<MMM::Event::LogicCommandEvent>(subscription);
     }
     // 控制器已先析构并解除 guard，此时才释放底层 ImGui 输入快照。
+    ok &= testMenuNavigation();
     ImGui::DestroyContext();
     if ( !ok )
         XERROR(

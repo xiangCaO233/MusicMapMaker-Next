@@ -2252,6 +2252,8 @@ void Basic2DCanvasInteraction::update(
                         Logic::CmdRemoveMarqueeAt{ m_cameraId,
                                                    m_selectionMenuPoint.x,
                                                    m_selectionMenuPoint.y }));
+                // 扩展入口沿用当前谱面校验和播放禁用作用域，不另起输入状态机。
+                renderSelectionMenuExtras(sourceManager);
                 ImGui::EndDisabled();
                 ImGui::EndPopup();
             }

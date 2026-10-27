@@ -2,16 +2,78 @@
 #include "common/LogicCommands.h"
 #include "common/render/HoverRenderData.h"
 #include "common/render/RenderSnapshot.h"
+#include "config/AppConfig.h"
+#include "config/EditorSettings.h"
+#include "config/VisualConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "logic/EditorEngine.h"
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
+#include <cmath>
 #include <fmt/format.h>
 #include <imgui.h>
 
 namespace MMM::Canvas
 {
+/// @brief 追加无需修饰键的吸附点导航和已选物件编辑入口。
+/// @param manager 本帧菜单动作的 UI 管理器，不保存到后续帧。
+/// @pre 调用方已校验菜单所属谱面，且菜单位于编辑允许的禁用作用域内。
+/// @details 时间只读取右键打开时的锁存值，移动到菜单文字不会重定向播放头。
+/// 属性入口通过原动作路由检查专业模式、选择状态和窗口生命周期。
+/// @note 空选区只禁用属性子菜单，导航仍然可用。
+/// @note 专业模式音量入口与顶栏保持相同能力，不另设绕过开关。
+/// @warning 菜单热路径读取逻辑线程已发布的选择标志，不获取会话长锁或扫描 ECS。
+void Basic2DCanvasInteraction::renderSelectionMenuExtras(UI::UIManager* manager)
+{
+    ImGui::Separator();
+    // 跳转和播放只使用视觉时间与播放时间之间的既有偏移关系。
+    // 不修改全局粘贴偏好，也不依赖执行时的 hover 或播放头快照。
+    const bool seek = UI::FeedbackMenuItem(TR("ui.selection.seek_here").data());
+    const bool play = UI::FeedbackMenuItem(TR("ui.selection.play_here").data());
+    if ( seek || play ) {
+        const double offset    = Config::AppConfig::instance()
+                                     .getVisualConfig()
+                                     .getEffectiveVisualOffset();
+        const double audioTime = m_selectionPasteTime - offset;
+        // 退化投影可能产生非有限值；拒绝导航，不能回退到另一处播放头。
+        if ( std::isfinite(m_selectionPasteTime) && std::isfinite(audioTime) ) {
+            UI::Interaction::dispatchCommand(
+                Event::LogicCommandEvent(Logic::CmdSeek{ audioTime }));
+            // 先定位再显式开启播放，避免用 toggle 把已有状态错误切成暂停。
+            // 命令顺序交给既有队列，不在 UI 线程等待定位或音频预读完成。
+            if ( play )
+                UI::Interaction::dispatchCommand(
+                    Event::LogicCommandEvent(Logic::CmdSetPlayState{ true }));
+        }
+    }
+    ImGui::Separator();
+    // 该查询读取既有发布标志，菜单不读取可变 SessionContext 或持有 Registry
+    // 锁。
+    const bool hasSelection =
+        Logic::EditorEngine::instance().hasActiveChartObjectSelection();
+    if ( UI::FeedbackBeginMenu(TR("ui.selection.properties").data(),
+                               hasSelection) ) {
+        // 属性与批注沿用顶栏动作身份，动作激活时再次验证可用性。
+        // 这里只提供入口，不复制批量属性或采样参数的编辑实现。
+        if ( UI::FeedbackMenuItem(TR("ui.edit.note_metadata").data()) )
+            UI::Interaction::executeAction("OpenNoteMetadataAction", manager);
+        // 音量编辑属于专业模式能力，普通模式不展示一个无法执行的入口。
+        if ( Config::AppConfig::instance()
+                 .getEditorSettings()
+                 .professionalMode &&
+             UI::FeedbackMenuItem(TR("ui.edit.selected_volume").data()) )
+            UI::Interaction::executeAction("EditSelectedObjectVolumeAction",
+                                           manager);
+        if ( UI::FeedbackMenuItem(
+                 TR("ui.edit.add_selected_annotation").data()) )
+            UI::Interaction::executeAction("AddSelectedObjectAnnotationAction",
+                                           manager);
+        UI::FeedbackEndMenu();
+    }
+}
+
 /// @brief 选择右键列表中的有效物件部位，并保持其后续拾取优先级。
 /// @param index 右键打开时冻结列表中的位置，不是实体编号。
 /// @param snapshot 本帧不可变快照，负责证明候选仍属于当前谱面。
