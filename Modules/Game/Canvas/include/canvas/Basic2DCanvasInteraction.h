@@ -2,6 +2,7 @@
 
 #include "ui/interaction/EditorInteraction.h"
 
+#include "canvas/HoverLayerSelection.h"
 #include "canvas/PlanarObservationInput.h"
 #include "canvas/TrackLayoutEditing.h"
 #include "common/CanvasComponentLayout.h"
@@ -10,6 +11,7 @@
 #include "event/core/EventBus.h"
 #include "mmm/annotation/BeatmapAnnotation.h"
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
@@ -114,6 +116,15 @@ public:
         bool                                  allowSelectionScroll = true);
 
 private:
+    /// @brief 无 GPU 测试从真实右键候选执行选择，不直接改写悬浮状态。
+    friend struct EditorInteractionSurfaceTestAccess;
+    /// @brief 验证右键候选仍存在后选择它，并保留后续重叠命中的优先身份。
+    /// @warning 仅菜单激活时扫描本帧可见命中框，不访问 ECS 或等待逻辑线程。
+    bool selectHoverLayer(std::size_t                           index,
+                          const Common::Render::RenderSnapshot& snapshot);
+    /// @brief 绘制右键冻结的重叠候选，显示身份与实际选择共享同一列表。
+    /// @warning 菜单展开时只遍历当前指针候选，不读取 ECS 或文件。
+    void renderHoverLayerMenu(const Common::Render::RenderSnapshot& snapshot);
     /// @brief 当前可见画布的坐标桥，仅由 UI 线程读写，不访问可变会话数据。
     PlanarObservationInputProjection m_inputProjection;
     /// @brief 动态物件命中框需要移除的播放插值，逻辑命令仍接收显示平面坐标。
@@ -311,6 +322,14 @@ private:
     int m_hoverLayerIndex{ 0 };
     /// @brief 当前鼠标下可切换的悬浮候选层数量。
     int m_hoverLayerCount{ 0 };
+    /// @brief 右键按下时的值语义候选，菜单移动不重新拾取目标。
+    std::vector<HoverLayerCandidate> m_menuHoverLayers;
+    /// @brief 最近明确选择的重叠部位；仅当前谱面候选中仍存在时才优先使用。
+    std::optional<HoverLayerCandidate> m_preferredHoverLayer;
+    /// @brief 右键目标所属谱面路径和实例共同防止跨谱面实体号复用。
+    std::string m_selectionMenuBeatmapKey;
+    /// @brief 路径相同但重新加载也应失效旧菜单候选。
+    std::uintptr_t m_selectionMenuBeatmapInstance{ 0 };
     /// @brief 当前悬浮物件试听按钮的跨帧锚点。
     struct AudioPreviewOverlayState {
         /// @brief 是否持有有效物件与屏幕边界。

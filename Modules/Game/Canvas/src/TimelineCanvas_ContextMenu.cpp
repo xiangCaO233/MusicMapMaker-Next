@@ -1,0 +1,153 @@
+#include "canvas/TimelineCanvas.h"
+#include "common/LogicCommands.h"
+#include "common/render/RenderSnapshot.h"
+#include "config/skin/translation/Translation.h"
+#include "event/logic/LogicCommandEvent.h"
+#include "ui/imgui/ClipboardBridge.h"
+#include "ui/imgui/ShortcutUtils.h"
+#include "ui/interaction/EditorInteraction.h"
+#include "ui/utils/UIWidgetUtils.h"
+#include <algorithm>
+#include <imgui.h>
+
+namespace MMM::Canvas
+{
+/// @brief 全选 Timing 画布可见的可编辑目标，与键盘入口保持同一过滤规则。
+/// @details 使用快照目标而非 ECS 遍历，保留 BPM 参与选择的配置开关。
+/// @post 当前集合只含本快照中可编辑的实体；没有目标时为空。
+/// 同时间同类型的重复几何通过实体集合去重，不产生重复编辑条目。
+/// @warning 仅在用户激活全选时收集可见目标，不增加逐帧全选扫描。
+void TimelineCanvas::selectAllTimingEvents()
+{
+    m_selectedTimingEntities.clear();
+    // 不从主画布借用音符选区；时间线仅操作自身可编辑的时间点。
+    // 这个入口也用于 Ctrl+A，保证新增鼠标入口不会改变经典全选范围。
+    for ( const auto& target : collectVisibleTimingTargets() ) {
+        if ( isTimingTargetSelectable(target) )
+            m_selectedTimingEntities.insert(target.entity);
+    }
+}
+
+/// @brief 维护纯鼠标 Timing 右键菜单，所有业务仍通过时间线自身入口执行。
+/// @param origin 当前时间线图像的屏幕原点。
+/// @param size 图像交互尺寸，不含父窗口边框或工具栏。
+/// @param hovered 上层确认指针属于当前画布。
+/// @return 菜单开启、持续或刚关闭的帧返回真，阻止后续输入穿透。
+/// @pre 当前快照存在且已通过 hasBeatmap 检查，并处于时间线输入域。
+/// @details 每个视图用名称隔离弹窗，谱面路径与实例代数隔离菜单目标。
+/// 普通右键菜单不会接管画笔擦除、活动拖动或已经打开的编辑弹窗。
+/// @warning 每帧不读 ECS 或剪贴板；只在用户选择菜单项后组装编辑命令。
+bool TimelineCanvas::handleTimingContextMenu(ImVec2 origin, ImVec2 size,
+                                             bool hovered)
+{
+    ImGui::PushID(m_name.c_str());
+    // ImGui 可能在本帧开始就关闭外部点击的弹窗，仍需记住上一帧所有权。
+    const bool wasOpen =
+        ImGui::IsPopupOpen("TimingEditMenu") || m_timingContextWasOpen;
+    const auto tool = m_currentSnapshot->currentTool;
+    // 工具和播放状态动态校验，菜单停留期间也不能绕过编辑门禁。
+    // 经典方案返回假，不改变其右键交互或键盘快捷键路径。
+    const bool enabled =
+        UI::Interaction::activeProfile().selectionContextMenu() &&
+        (tool == Logic::EditTool::Move || tool == Logic::EditTool::Marquee) &&
+        !m_currentSnapshot->isPlaying;
+    const auto mouse = ImGui::GetMousePos();
+    const auto local = ImVec2(mouse.x - origin.x, mouse.y - origin.y);
+    // hovered 是窗口级信息，额外用图像范围排除边距和画布外右键。
+    const bool inside =
+        local.x >= 0 && local.y >= 0 && local.x < size.x && local.y < size.y;
+    const bool anotherPopup = ImGui::IsPopupOpen(
+        nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    // 其他弹窗优先拥有输入；这里不强制抢焦点，也不关闭用户现有草稿。
+    bool opened = false;
+    // 右上角 56 像素保留给既有工具按钮，不同时打开两个菜单。
+    // 左键和中键按住时不插入右键事务，避免吞掉尚未提交的编辑手势。
+    // 画笔右键仍负责擦除；已有拖动或其他模态不能被右键菜单夺走释放事件。
+    if ( enabled && !wasOpen && !anotherPopup && hovered && inside &&
+         !(local.x >= size.x - 56 && local.y <= 56) &&
+         !hasActivePointerGesture() && !m_isPopupOpen && !m_isCreatePopupOpen &&
+         !m_isInterpolationEditorOpen && !m_requestInterpolationEditor &&
+         !ImGui::GetIO().WantTextInput &&
+         !UI::ShortcutUtils::isShortcutRecordingActive() &&
+         !UI::Interaction::mouseDown(0) && !UI::Interaction::mouseDown(2) &&
+         UI::Interaction::mouseClicked(1) ) {
+        // 在打开时锁存吸附结果，鼠标随后移到菜单不再改变粘贴锚点。
+        // 复用 Timing 的坐标反投影与吸附，不用播放头时间或主画布音符吸附。
+        // 零点钳制与既有时间线粘贴规则一致，避免创建负时间事件。
+        bool snapped        = false;
+        m_timingContextTime = std::max(
+            0.0,
+            snapTimingTime(
+                size, canvasTimeAtLocalY(size, local.y), local.y, snapped));
+        m_timingContextBeatmapKey = m_currentSnapshot->beatmapPathKey;
+        m_timingContextInstance   = m_currentSnapshot->beatmapInstanceId;
+        // 同路径重新打开也是新实例，不能仅靠文件名认为旧实体仍然有效。
+        // 空选区可以直接右键一个时间点；已有多选保持原集合，不因菜单位置丢失。
+        // pickTimingTarget 仍按专业模式泳道限制类型，不能只比较纵坐标。
+        // 不可选 BPM 保持空选择，菜单里的复制和删除因此仍然禁用。
+        if ( m_selectedTimingEntities.empty() ) {
+            const auto target = pickTimingTarget(origin, size, local.y);
+            if ( target && isTimingTargetSelectable(*target) )
+                m_selectedTimingEntities.insert(target->entity);
+        }
+        ImGui::OpenPopup("TimingEditMenu");
+        opened = true;
+    }
+    if ( ImGui::BeginPopup("TimingEditMenu") ) {
+        // 每帧重新验证会话，而不是等点击时把旧菜单操作发送到新谱面。
+        const bool sameBeatmap =
+            m_timingContextBeatmapKey == m_currentSnapshot->beatmapPathKey &&
+            m_timingContextInstance == m_currentSnapshot->beatmapInstanceId;
+        if ( !enabled || !sameBeatmap ) ImGui::CloseCurrentPopup();
+        // CloseCurrentPopup 只请求关闭，本帧剩余项目必须同步禁用。
+        ImGui::BeginDisabled(!enabled || !sameBeatmap);
+        // 历史属于当前时间线会话，不走可能针对主画布音符的全局编辑动作。
+        // 撤销栈为空时由逻辑层忽略，与原快捷键行为一致。
+        if ( UI::FeedbackMenuItem(TR("ui.edit.undo").data()) )
+            publishTimelineCommand(Event::LogicCommandEvent(Logic::CmdUndo{}));
+        if ( UI::FeedbackMenuItem(TR("ui.edit.redo").data()) )
+            publishTimelineCommand(Event::LogicCommandEvent(Logic::CmdRedo{}));
+        ImGui::Separator();
+        const bool hasSelection = !m_selectedTimingEntities.empty();
+        // 空选择禁用剪切、复制和删除；粘贴不依赖本地是否选中时间点。
+        // 这些入口负责批量命令和历史边界，不在菜单中重复组装业务载荷。
+        if ( UI::FeedbackMenuItem(
+                 TR("ui.edit.copy").data(), nullptr, false, hasSelection) )
+            copySelectedTimingEvents(false);
+        if ( UI::FeedbackMenuItem(
+                 TR("ui.edit.cut").data(), nullptr, false, hasSelection) )
+            copySelectedTimingEvents(true);
+        if ( UI::FeedbackMenuItem(TR("ui.edit.paste").data()) ) {
+            // 只在点击时读取系统剪贴板，保留原 Timing 粘贴的拍位和元数据语义。
+            // 外部内容可被原桥接器解析；无法导入时仍保留编辑器内部剪贴板。
+            // 不主动更改全局粘贴时间偏好，锚点仅作用于本次右键操作。
+            UI::ClipboardBridge::importEditorClipboardFromSystem();
+            pasteTimingClipboard(m_timingContextTime);
+        }
+        if ( UI::FeedbackMenuItem(
+                 TR("ui.common.delete").data(), nullptr, false, hasSelection) )
+            // 批量删除由共用函数一次提交，撤销不需要逐个恢复时间点。
+            deleteSelectedTimingEvents();
+        ImGui::Separator();
+        if ( UI::FeedbackMenuItem(TR("ui.edit.select_all").data()) )
+            selectAllTimingEvents();
+        // 清空只改变即时选择，不删除时间点，也不追加谱面撤销历史。
+        if ( UI::FeedbackMenuItem(TR("ui.selection.clear").data(),
+                                  nullptr,
+                                  false,
+                                  hasSelection) ) {
+            m_selectedTimingEntities.clear();
+            // 旧框选基线不能在下一次框选中复活已清空的选择。
+            m_timingMarqueeBaseSelection.clear();
+        }
+        ImGui::EndDisabled();
+        ImGui::EndPopup();
+    }
+    m_timingContextWasOpen = ImGui::IsPopupOpen("TimingEditMenu");
+    ImGui::PopID();
+    // 下一帧可以重新取得窗口焦点；这里不主动调用 SetWindowFocus 抢占弹窗。
+    // 关闭帧也消费输入；返回画布的下一次独立按下才可以开启新编辑手势。
+    return wasOpen || opened || m_timingContextWasOpen;
+}
+
+}  // namespace MMM::Canvas

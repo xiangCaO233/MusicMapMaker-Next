@@ -19,6 +19,8 @@ struct HoverLayerCandidate {
     std::uint8_t part{ 0 };
     /// @brief Polyline 等复合物件的子部位索引。
     int subIndex{ -1 };
+    /// @brief 实体、领域、部位和子索引共同构成可跨帧验证的候选身份。
+    bool operator==(const HoverLayerCandidate&) const = default;
 };
 
 /// @brief 追加悬浮物件候选，并合并同一自动采样的主体与偏移句柄。

@@ -60,6 +60,10 @@ return {
 
 	["ui.edit"] = "&Edit",
 	["ui.selection.replace"] = "Replace selection",
+	["ui.selection.overlapping"] = "Select overlapping object",
+	["ui.selection.audio_sample"] = "Audio sample",
+	["ui.selection.note"] = "Note",
+	["ui.canvas.hover.hold_body"] = "Hold body",
 	["ui.selection.add"] = "Add to selection",
 	["ui.selection.subtract"] = "Subtract from selection",
 	["ui.selection.clear"] = "Clear selection",

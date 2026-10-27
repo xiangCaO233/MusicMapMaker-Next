@@ -194,10 +194,18 @@ protected:
 private:
     /// @brief 测试直接驱动画笔创建与命令警告入口，不替换生产映射或发布逻辑。
     friend struct TimelineStopCreationTestAccess;
+    /// @brief 允许无 GPU 回归驱动真实菜单并检查本地选择，不开放业务接口。
+    friend struct TimingContextMenuTestAccess;
     /// @brief 提交时间线命令，记录原格式无法保存的修改但始终允许编辑。
     /// @param event 待发布的时间线操作；批量命令共用一次提示。
     /// @warning 低频提交路径：只读取快照，不访问可变 ECS 或文件系统。
     void publishTimelineCommand(const Event::LogicCommandEvent& event);
+    /// @brief 处理纯鼠标 Timing 编辑菜单，锁定本次选区和吸附粘贴时间。
+    /// @return 菜单拥有本帧输入或正在关闭时返回真，防止底层手势穿透。
+    /// @warning UI 热路径只绘制菜单；收集全选和剪贴板访问仅由显式激活触发。
+    bool handleTimingContextMenu(ImVec2 origin, ImVec2 size, bool hovered);
+    /// @brief 将当前可见且允许选择的 Timing 加入选区，复用原 Ctrl+A 的范围。
+    void selectAllTimingEvents();
 
     /// @brief 在编辑手势及其它弹窗结束后显示格式支持度警告。
     /// @warning UI 热路径：每帧只检查本地标志；配置仅在用户确认时保存。
@@ -639,6 +647,14 @@ private:
 
     /// @brief Timeline 当前选中的 Timing 实体集合。
     std::unordered_set<entt::entity> m_selectedTimingEntities;
+    /// @brief 上一帧菜单拥有输入，外部点击关闭时也不能穿透到 Timing 画布。
+    bool m_timingContextWasOpen{ false };
+    /// @brief 菜单打开时高亮的吸附时间，不跟随菜单里的指针移动。
+    double m_timingContextTime{ 0.0 };
+    /// @brief 右键菜单绑定的谱面路径，防止切换谱面后向新谱面提交旧操作。
+    std::string m_timingContextBeatmapKey;
+    /// @brief 同一路径重新加载时，旧菜单同样失效。
+    std::uintptr_t m_timingContextInstance{ 0 };
 
     /// @brief Timeline 本地 Timing 剪贴板镜像，用于兼容现有交互状态。
     std::vector<TimelineClipboardEntry> m_timingClipboard;

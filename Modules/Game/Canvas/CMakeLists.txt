@@ -35,11 +35,15 @@ add_library(
   # 编辑练习的快照核对与目标投影单独编译，减轻主画布更新文件的职责。
   src/Basic2DCanvas_WalkthroughEditing.cpp
   src/Basic2DCanvas_Interaction.cpp
+  # 右键候选验证和菜单绘制单独维护，避免主画布输入路由继续膨胀。
+  src/Basic2DCanvas_ContextMenu.cpp
   src/Basic2DCanvas_Rendering.cpp
   src/MarqueeAutoScroll.cpp
   src/PreviewCanvas.cpp
   src/TimelineCanvas.cpp
   src/TimelineCanvas_Interaction.cpp
+  # 时间点右键菜单复用时间线本地选择、命令和吸附，不借用主画布动作。
+  src/TimelineCanvas_ContextMenu.cpp
   # 插值段落编辑与原函数预览独立维护，不在 UI 中展开导出事件。
   src/TimelineCanvas_Interpolation.cpp
   # 模板库和整组放置窗口独立编译，不把个人配置 IO 放入画布更新。
@@ -335,6 +339,12 @@ mmm_add_test_executable(Canvas TimelineStopCreationTest
 target_link_libraries(TimelineStopCreationTest PRIVATE Canvas)
 mmm_register_test_case(NAME TimelineStopCreationTest COMMAND
                        TimelineStopCreationTest)
+
+# 用真实鼠标菜单验证 Timing 选区、批量命令与吸附锚点，避免误走音符剪贴板。
+mmm_add_test_executable(Canvas TimingContextMenuTest
+                        tests/TimingContextMenuTest.cpp)
+target_link_libraries(TimingContextMenuTest PRIVATE Canvas)
+mmm_register_test_case(NAME TimingContextMenuTest COMMAND TimingContextMenuTest)
 
 # 新方案通过真实主画布控制器接管输入，不能只验证接口替身的返回值。 用例同时验证独占命令出口、坐标投影和释放后切回经典方案。
 mmm_add_test_executable(Canvas EditorInteractionSurfaceTest

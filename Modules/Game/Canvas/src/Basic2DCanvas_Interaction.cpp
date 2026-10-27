@@ -60,6 +60,7 @@
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughService.h"
 
+#include <fmt/format.h>
 #include <glm/vec2.hpp>
 #include <glm/vec4.hpp>
 
@@ -2053,6 +2054,7 @@ void Basic2DCanvasInteraction::setInputProjection(
 /// @details 拖放优先处理，因为它可能触发项目切换；有快照时再处理
 /// 快捷键和具体手势；最后无条件推进瞬态提示计时器。
 /// @warning UI 热路径：每帧调用，不得在此加入同步文件读取或 ECS 遍历。
+
 /// @brief 推进完整编辑交互，屏幕控件与谱面工具使用各自的坐标空间。
 /// @warning 每帧调用；投影缓存已由画布发布，禁止重复求逆或读取可变会话。
 /// @details 操作方案只借用本帧快照与坐标投影，不能保存它们用于下一帧拾取。
@@ -2151,6 +2153,11 @@ void Basic2DCanvasInteraction::update(
                                            ? currentSnapshot->snappedTime
                                            : currentSnapshot->hoveredTime;
                 m_selectionMenuPoint = m_lastMouseCommand.pos;
+                // 菜单可跨多个快照停留；记录谱面实例以隔离同路径重载。
+                // 所有候选仍是值语义 ID，不借用逻辑线程里的对象或容器。
+                m_selectionMenuBeatmapKey = currentSnapshot->beatmapPathKey;
+                m_selectionMenuBeatmapInstance =
+                    currentSnapshot->beatmapInstanceId;
                 // 坐标已经过当前相机逆投影，菜单点击不重新取屏幕坐标换算。
                 ImGui::OpenPopup("SelectionEditMenu");
             }
@@ -2159,9 +2166,17 @@ void Basic2DCanvasInteraction::update(
             // 不在每帧探测系统剪贴板，避免平台调用阻塞菜单绘制。
             // 管理器只在同步激活时借用，不保存到后续帧。
             if ( ImGui::BeginPopup("SelectionEditMenu") ) {
-                if ( !selectionMenu ) ImGui::CloseCurrentPopup();
-                ImGui::BeginDisabled(!selectionMenu ||
+                // 异步切换会话后 ImGui 弹窗仍可能存在，需要主动终止旧上下文。
+                // 请求关闭与禁用同时执行，确保本帧后续菜单项不能被激活。
+                const bool sameBeatmap = m_selectionMenuBeatmapKey ==
+                                             currentSnapshot->beatmapPathKey &&
+                                         m_selectionMenuBeatmapInstance ==
+                                             currentSnapshot->beatmapInstanceId;
+                if ( !selectionMenu || !sameBeatmap )
+                    ImGui::CloseCurrentPopup();
+                ImGui::BeginDisabled(!selectionMenu || !sameBeatmap ||
                                      currentSnapshot->isPlaying);
+                renderHoverLayerMenu(*currentSnapshot);
                 // 模式只影响下一笔，活动框在起笔命令中锁存自己的集合操作。
                 // 单选菜单使追加与减选互斥，不借用全局 Ctrl 或 Shift 状态。
                 // 勾选项表示下一笔模式，不重解释已有框选的结果。
@@ -5958,6 +5973,32 @@ void Basic2DCanvasInteraction::handleInteractions(
     }
 
     m_hoverLayerCount = static_cast<int>(candidates.size());
+    // 纯鼠标优先项必须跟随方案和谱面生命周期，不能泄漏到经典键盘切层。
+    // 路径用于隔离不同谱面，实例号补充隔离同一文件的重新打开。
+    const bool mouseOnly =
+        UI::Interaction::activeProfile().selectionContextMenu();
+    if ( !mouseOnly ||
+         m_selectionMenuBeatmapKey != currentSnapshot->beatmapPathKey ||
+         m_selectionMenuBeatmapInstance != currentSnapshot->beatmapInstanceId )
+        m_preferredHoverLayer.reset();
+    if ( mouseOnly && m_preferredHoverLayer ) {
+        // 鼠标移向菜单会临时没有候选，因此不因一次空命中清除用户选择。
+        // 返回重叠位置后按身份查找；候选顺序变化也不会抓到另一个节点。
+        // 此查找仅遍历已有局部候选，不增加 ECS 扫描或额外排序。
+        const auto preferred = std::find(
+            candidates.begin(), candidates.end(), *m_preferredHoverLayer);
+        if ( preferred != candidates.end() )
+            m_hoverLayerIndex =
+                static_cast<int>(preferred - candidates.begin());
+    }
+    // 仅在右键起笔复制候选；菜单逐帧绘制不重新分配或搜索整份谱面。
+    // 此时 hitbox 已完成当前投影的拾取，菜单无需再做另一套坐标换算。
+    // 冻结顺序与右键落点一致，鼠标移到菜单文字上不会改变列表内容。
+    // 折线子项和采样去重仍由原候选收集规则负责，避免菜单独立解释几何。
+    if ( mouseOnly &&
+         currentSnapshot->currentTool == Logic::EditTool::Marquee &&
+         isHovered && UI::Interaction::mouseClicked(1) )
+        m_menuHoverLayers = candidates;
     if ( candidates.empty() ) {
         // 空集合归零索引，保持 tooltip 展示条件简单。
         m_hoverLayerIndex = 0;
@@ -5975,6 +6016,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                  UI::ShortcutUtils::isActionShortcutPressed("nextLayerRight",
                                                             false) ) {
                 m_hoverLayerIndex = (m_hoverLayerIndex + 1) % m_hoverLayerCount;
+                m_preferredHoverLayer.reset();
             } else if ( UI::ShortcutUtils::isActionShortcutPressed(
                             "previousLayerUp", false) ||
                         UI::ShortcutUtils::isActionShortcutPressed(
@@ -5982,6 +6024,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                 m_hoverLayerIndex =
                     (m_hoverLayerIndex + m_hoverLayerCount - 1) %
                     m_hoverLayerCount;
+                m_preferredHoverLayer.reset();
             }
         }
 

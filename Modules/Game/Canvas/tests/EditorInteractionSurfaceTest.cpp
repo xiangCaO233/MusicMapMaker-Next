@@ -2,6 +2,7 @@
 #include "canvas/PlanarObservationInput.h"
 #include "common/LogicCommands.h"
 #include "common/SelectionOperation.h"
+#include "common/render/HoverRenderData.h"
 #include "common/render/RenderSnapshot.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
@@ -25,6 +26,26 @@
 #include <string_view>
 #include <utility>
 #include <variant>
+
+namespace MMM::Canvas
+{
+/// @brief 从真实右键采集的候选触发生产选择入口，不构造虚假的悬浮优先级。
+struct EditorInteractionSurfaceTestAccess {
+    /// @brief 菜单点击与测试共用身份验证和命令发布，不绕过新快照校验。
+    /// @param controller 通过真实鼠标输入打开过右键菜单的控制器。
+    /// @param index 对应右键落点冻结的候选位置。
+    /// @param snapshot 激活时的快照，可能已删除节点或切换谱面实例。
+    /// @return 命令是否真实发布，不能仅用菜单存在与否判断成功。
+    /// @pre 菜单目标已由真实右键冻结，访问器不得自行填充候选。
+    /// @note 激活不执行拖动，拖动身份必须由下一次真实左键另行验证。
+    /// @note 测试独占事件总线观察窗口，不跨异步线程读取控制器私有状态。
+    static bool choose(Basic2DCanvasInteraction& controller, std::size_t index,
+                       const Common::Render::RenderSnapshot& snapshot)
+    {
+        return controller.selectHoverLayer(index, snapshot);
+    }
+};
+}  // namespace MMM::Canvas
 
 namespace
 {
@@ -637,6 +658,99 @@ int main()
         if ( edits != 0 ) XERROR("Selection menu close leaked {} edits", edits);
         ok &= edits == 0;
         bus.unsubscribe<MMM::Event::LogicCommandEvent>(menuSubscription);
+        // 三个候选包含同号采样与折线的不同部位，必须保留完整复合身份。
+        // 相同矩形确保命中顺序取决于真实图层规则，而不是测试坐标误差。
+        // 节点与头部同属一个音符实体，采样则故意复用相同实体整数。
+        // 这个组合能够同时检出只按 entity 去重和丢弃 subIndex 的回归。
+        // 三个候选严格按快照顺序插入，预期列表使用画布原有的逆序拾取。
+        // 不加载真实资源，避免图形设备或纹理状态影响身份验证结论。
+        // 后续仅删除其中一个部位，不通过清空整个快照简化陈旧条目场景。
+        // 测试使用新实体号，避免前面的菜单穿透计数掺入本轮选择断言。
+        snapshot.hitboxes = { { static_cast<entt::entity>(70),
+                                MMM::Common::Render::HoverPart::Head,
+                                -1,
+                                100,
+                                100,
+                                100,
+                                100 },
+                              { static_cast<entt::entity>(70),
+                                MMM::Common::Render::HoverPart::PolylineNode,
+                                2,
+                                100,
+                                100,
+                                100,
+                                100 },
+                              { static_cast<entt::entity>(70),
+                                MMM::Common::Render::HoverPart::SampleAnchor,
+                                -1,
+                                100,
+                                100,
+                                100,
+                                100,
+                                MMM::Logic::ChartObjectKind::AudioSample } };
+        frame(interaction, snapshot, false);
+        io.AddMouseButtonEvent(1, true);
+        ok &= frame(interaction, snapshot, false);
+        // 观察发布结果，而不是仅检查私有优先项是否被赋值。
+        // 后续真实左键需要把同一完整身份写入拖动起笔载荷。
+        int                         chosen      = 0;
+        bool                        nodeDragged = false;
+        MMM::Logic::ChartObjectKind chosenKind{};
+        const auto                  layerSubscription = bus.subscribe<
+            MMM::Event::LogicCommandEvent>([&](const auto& event) {
+            if ( const auto* command = std::get_if<MMM::Logic::CmdSelectEntity>(
+                     &event.command) ) {
+                ++chosen;
+                chosenKind = command->kind;
+            }
+            if ( const auto* command =
+                     std::get_if<MMM::Logic::CmdStartDrag>(&event.command) )
+                nodeDragged =
+                    command->entity == static_cast<entt::entity>(70) &&
+                    command->kind == MMM::Logic::ChartObjectKind::PlayerNote &&
+                    command->hitPart ==
+                        static_cast<std::uint8_t>(
+                            MMM::Common::Render::HoverPart::PolylineNode) &&
+                    command->hitSubIndex == 2;
+        });
+        // 列表按渲染逆序，第二项为折线节点；菜单选择必须真的发布选择命令。
+        // 直接调用的仅是菜单项激活辅助函数，候选采集与下一次拖动均为真实输入。
+        // 若生产代码只更新菜单勾选而没有改变拾取优先级，后续断言会失败。
+        ok &= MMM::Canvas::EditorInteractionSurfaceTestAccess::choose(
+            interaction, 1, snapshot);
+        ok &= chosen == 1 &&
+              chosenKind == MMM::Logic::ChartObjectKind::PlayerNote;
+        io.AddMouseButtonEvent(1, false);
+        frame(interaction, snapshot, false);
+        frame(interaction, snapshot, true, { 50, 250 });
+        frame(interaction, snapshot, false, { 50, 250 });
+        // 返回重叠区域后仍应抓到刚选的节点，不能自动退回最上面的采样。
+        // 关闭菜单的点击不属于拖动；释放后另起一笔才允许编辑。
+        // 中间空闲帧使 hover 正常刷新，不依赖打开菜单前的缓存命中。
+        frame(interaction, snapshot, false);
+        frame(interaction, snapshot, true);
+        frame(interaction, snapshot, false);
+        ok &= nodeDragged;
+        // 同号跨 Registry 候选独立选择，不能只按实体整数查找和去重。
+        // AudioSample 是独立领域，发给 PlayerNote 注册表会修改错误对象。
+        // 两次菜单激活不需要靠重新创建控制器清理状态。
+        ok &= MMM::Canvas::EditorInteractionSurfaceTestAccess::choose(
+            interaction, 0, snapshot);
+        ok &= chosenKind == MMM::Logic::ChartObjectKind::AudioSample;
+        const int beforeStale = chosen;
+        // 节点在菜单停留时被其他编辑移除；陈旧条目必须没有命令副作用。
+        // 只删除节点 hitbox，保留同实体头部，避免整实体检查误判为安全。
+        snapshot.hitboxes.erase(snapshot.hitboxes.begin() + 1);
+        ok &= !MMM::Canvas::EditorInteractionSurfaceTestAccess::choose(
+            interaction, 1, snapshot);
+        // 同路径重新载入也会复用实体号，实例代数必须阻止旧菜单操作新谱面。
+        // 文件路径保持不变，使测试明确覆盖代数检查而非仅路径比较。
+        // 计数保持不变证明失效选择不会静默发送到当前活动会话。
+        ++snapshot.beatmapInstanceId;
+        ok &= !MMM::Canvas::EditorInteractionSurfaceTestAccess::choose(
+            interaction, 0, snapshot);
+        ok &= chosen == beforeStale;
+        bus.unsubscribe<MMM::Event::LogicCommandEvent>(layerSubscription);
         // 弹窗已完成一次外部点击关闭，后续画布帧应重新获得正常输入权。
         // 只撤销本用例的监听，不影响注册表或其他订阅者。
         bus.unsubscribe<MMM::Event::LogicCommandEvent>(subscription);

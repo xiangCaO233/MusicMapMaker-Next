@@ -490,7 +490,7 @@ double TimelineCanvas::canvasYAtTime(const ImVec2& size, double time) const
     const auto& visual        = Config::AppConfig::instance().getVisualConfig();
     const float judgmentLineY = size.y * visual.judgmentLinePositionForKeyCount(
                                              m_currentSnapshot->trackCount);
-    const auto& segments = m_currentSnapshot->scrollSegments;
+    const auto& segments      = m_currentSnapshot->scrollSegments;
     if ( segments.empty() ) {
         float  zoom  = visual.timelineZoom;
         double speed = 500.0 * zoom;
@@ -1319,10 +1319,10 @@ void TimelineCanvas::copySelectedTimingEvents(bool cut)
     sharedClipboard.reserve(selectedTargets.size());
     for ( const auto& target : selectedTargets ) {
         TimelineClipboardEntry entry;
-        entry.relativeTime = target.time - anchorTime;
-        entry.relativeBeat = timelineClipboardTimeToBeat(
-                                 beatTimeline, target.time, fallbackBpm) -
-                             anchorBeat;
+        entry.relativeTime    = target.time - anchorTime;
+        entry.relativeBeat    = timelineClipboardTimeToBeat(
+                                    beatTimeline, target.time, fallbackBpm) -
+                                anchorBeat;
         entry.effect          = target.effect;
         entry.value           = target.value;
         entry.hasBeatPosition = true;
@@ -1613,6 +1613,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
 
     // 已失效的时间点只在经典分支清理，新方案拥有自己的临时命中状态。
     pruneInvalidTimingSelection();
+    if ( handleTimingContextMenu(canvasPos, size, isHovered) ) return;
 
     ImGuiIO&    io          = ImGui::GetIO();
     const float localMouseY = io.MousePos.y - canvasPos.y;
@@ -1770,12 +1771,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                                                      true)) ) {
         if ( m_currentSnapshot->currentTool == Logic::EditTool::Move ||
              m_currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
-            m_selectedTimingEntities.clear();
-            for ( const auto& target : collectVisibleTimingTargets() ) {
-                if ( isTimingTargetSelectable(target) ) {
-                    m_selectedTimingEntities.insert(target.entity);
-                }
-            }
+            selectAllTimingEvents();
         }
         handledKeyboardCommand = true;
     }
@@ -1928,12 +1924,12 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     case Logic::EditTool::Marquee: {
         auto makeMarqueeRect = [&]() {
             TimingSelectionRect rect;
-            rect.left = canvasPos.x +
-                        std::min(m_timingMarqueeStartX, m_timingMarqueeEndX);
-            rect.right = canvasPos.x +
-                         std::max(m_timingMarqueeStartX, m_timingMarqueeEndX);
-            rect.top = canvasPos.y +
-                       std::min(m_timingMarqueeStartY, m_timingMarqueeEndY);
+            rect.left   = canvasPos.x +
+                          std::min(m_timingMarqueeStartX, m_timingMarqueeEndX);
+            rect.right  = canvasPos.x +
+                          std::max(m_timingMarqueeStartX, m_timingMarqueeEndX);
+            rect.top    = canvasPos.y +
+                          std::min(m_timingMarqueeStartY, m_timingMarqueeEndY);
             rect.bottom = canvasPos.y +
                           std::max(m_timingMarqueeStartY, m_timingMarqueeEndY);
             rect.valid =
