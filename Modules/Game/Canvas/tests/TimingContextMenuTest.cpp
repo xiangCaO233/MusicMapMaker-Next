@@ -156,6 +156,19 @@ struct TimingContextMenuTestAccess {
     {
         c.renderEventEditorPopup();
     }
+    /// @brief 在 Begin 前执行实际窗口聚焦流程，不绕过生产侧的弹窗门禁。
+    /// @param c 保留跨帧焦点请求的时间线实例。
+    static void prepareWindow(TimelineCanvas& c)
+    {
+        c.applyPendingWindowFocus();
+    }
+    /// @brief 重现画布点击后既有的当前帧及下一帧聚焦请求。
+    /// @note 测试只建立输入前提，延迟请求仍由生产函数消费。
+    static void focusClickedCanvas(TimelineCanvas& c)
+    {
+        ImGui::SetWindowFocus();
+        c.m_shouldFocusNextFrame = true;
+    }
 };
 }  // namespace MMM::Canvas
 
@@ -185,9 +198,20 @@ ImVec2 frame(Canvas::TimelineCanvas&         canvas,
     // 禁用持久布局后，每次运行都从相同几何和相同弹窗相对位置开始。
     ImGui::SetNextWindowPos({ 0, 0 });
     ImGui::SetNextWindowSize({ 600, 600 });
-    // 弹窗拥有焦点时不强制聚焦父窗口，否则会掩盖菜单点击所有权错误。
+    // 延迟聚焦必须先于 Begin，复现正式窗口可能关闭上一帧右键菜单的顺序。
+    Access::prepareWindow(canvas);
     ImGui::Begin("TimingMenuTest", nullptr, ImGuiWindowFlags_NoSavedSettings);
     const auto origin = ImGui::GetCursorScreenPos();
+    // 只在真实父窗口内部点击时排队聚焦；点击菜单不属于画布点击。
+    // 不伪造 clicked 标记，菜单开启和下一帧存活都由真实按下/释放边沿验证。
+    const bool inside = mouse.x >= origin.x && mouse.y >= origin.y &&
+                        mouse.x < origin.x + 500 && mouse.y < origin.y + 500;
+    if ( inside &&
+         ImGui::IsWindowHovered(
+             ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+         (ImGui::IsMouseClicked(0) || ImGui::IsMouseClicked(1) ||
+          ImGui::IsMouseClicked(2)) )
+        Access::focusClickedCanvas(canvas);
     // 即便弹窗拥有焦点仍要推进控制器，让菜单关闭帧执行输入防穿透逻辑。
     Access::interact(canvas, snapshot, origin);
     // 与正式时间线保持同一父窗口层级；不能在 TimingEditMenu 内绘制目标编辑器。
@@ -208,6 +232,9 @@ ImGuiWindow* open(Canvas::TimelineCanvas&         canvas,
     frame(canvas, snapshot, point);
     // 第一帧确保上一笔释放，随后才产生独立的右键按下边沿。
     frame(canvas, snapshot, point, false, true);
+    // 正式点击已排队下一帧聚焦，此次释放帧会先执行生产窗口的聚焦入口。
+    // 若入口只排除模态而未保护普通菜单，Begin 会清空弹窗，下面必须返回空。
+    // 因而所有菜单点击用例同时验证跨帧存活，不能只凭按下帧打开判定成功。
     frame(canvas, snapshot, point);
     const auto& stack = ImGui::GetCurrentContext()->OpenPopupStack;
     // 弹窗不存在就显式失败，不能回退到父窗口坐标继续点击。

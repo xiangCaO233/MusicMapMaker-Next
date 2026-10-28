@@ -546,12 +546,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         fmt::format("{}###{}", TR("canvas.timeline"), m_name);
     bool windowOpen = editorSettings.showTimelineWindow;
 
-    if ( m_shouldFocusNextFrame ) {
-        // 聚焦请求在 Begin 前设置，并在本帧立即清除避免持续抢焦点。
-        // 模态窗口独占输入时丢弃旧聚焦请求，不能把焦点抢回时间线。
-        if ( !isCanvasInputBlockedByModal() ) ImGui::SetNextWindowFocus();
-        m_shouldFocusNextFrame = false;
-    }
+    applyPendingWindowFocus();
     UI::LayoutContext lctx(
         *this, windowName, true, ImGuiWindowFlags_NoScrollbar, &windowOpen);
     if ( auto* window = ImGui::GetCurrentWindow();
@@ -1199,6 +1194,21 @@ void TimelineCanvas::renderProfessionalTimelineOverlay(const ImVec2& canvasPos,
     }
 
     drawList->PopClipRect();
+}
+
+/// @brief 在 Begin 前处理一次延迟聚焦，保持窗口和交互焦点请求分离。
+/// @details 点击画布后仅消费一次请求，不能持续将键盘焦点拉回父窗口。
+/// @warning 每帧只读取 UI 本地状态；不查询逻辑会话、不分配或等待资源。
+void TimelineCanvas::applyPendingWindowFocus()
+{
+    if ( !m_shouldFocusNextFrame ) return;
+    // 右键菜单是普通 popup，不会触发模态阻挡，但同样必须持有窗口焦点。
+    // Begin 前强制聚焦父窗口会关闭上帧菜单，故菜单打开期间丢弃旧请求。
+    // 无论是否实际聚焦都要清空，避免稍后关闭弹窗又重新抢占焦点。
+    // 其他情况下沿用原聚焦规则，不改变经典桌面方案的窗口切换行为。
+    if ( !isCanvasInputBlockedByModal() && !m_timingContextWasOpen )
+        ImGui::SetNextWindowFocus();
+    m_shouldFocusNextFrame = false;
 }
 
 /// @brief 请求下一帧将时间线窗口聚焦到前台。

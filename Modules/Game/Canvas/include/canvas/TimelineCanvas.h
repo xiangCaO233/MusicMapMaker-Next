@@ -586,6 +586,9 @@ private:
     bool m_isTableWindowFocusedAndReachable{ false };
     /// @brief 下一帧是否调用 ImGui::SetNextWindowFocus 聚焦时间线窗口。
     bool m_shouldFocusNextFrame{ false };
+    /// @brief 在创建时间线窗口前消费延迟聚焦请求，弹窗拥有焦点时不抢占。
+    /// @warning 每帧仅检查本地标志和 ImGui 弹窗状态，不访问会话或等待同步。
+    void applyPendingWindowFocus();
     /// @brief 时间线上一帧是否拥有 Timing 编辑焦点。
     bool m_wasFocusedLastFrame{ false };
     /// @brief Timeline Timing 编辑焦点是否仍归属于时间线窗口。
