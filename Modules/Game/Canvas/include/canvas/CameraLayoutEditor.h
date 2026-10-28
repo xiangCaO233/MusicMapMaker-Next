@@ -53,6 +53,9 @@ private:
     /// @warning 每帧固定控件；上下文仅在首次显示时分配。
     void drawParameterWindow(const std::string&    id,
                              Config::VisualConfig& visual);
+    /// @brief 在参数窗口分配的两行区域绘制纯鼠标相机选项。
+    /// @warning 每帧固定三个控件；活动手势期间禁止切换，不访问会话或磁盘。
+    void drawPointerOptions();
     /// @brief 无 GPU 回归仅控制模式切换，实际绘制仍调用生产入口。
     friend struct CameraLayoutEditorTestAccess;
     /// @brief 摄像机模式与元素模式互斥；默认进入正视元素布局。
@@ -63,6 +66,10 @@ private:
     int m_axis{ -1 };
     /// @brief 鼠标中键导航只由操作视图按下边沿获取。
     bool m_orbiting{ false };
+    /// @brief 纯鼠标中键按下时锁存导航意图，活动手势不随其它窗口改变。
+    bool m_navigationPan{ false };
+    /// @brief 纯鼠标轴或旋转环按下时锁存精细倍率，经典仍动态读取 Shift。
+    bool m_fineAdjustment{ false };
     /// @brief 事务开始位置，Esc 恢复此值。
     std::array<float, 3> m_startPosition{};
     /// @brief 事务开始姿态，Esc 恢复此值。

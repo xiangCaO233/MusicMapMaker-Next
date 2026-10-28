@@ -12,9 +12,12 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
+#include "ui/interaction/EditorInteraction.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <glm/ext/matrix_clip_space.hpp>
+#include <glm/ext/matrix_transform.hpp>
 #include <glm/vec4.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -28,6 +31,77 @@ namespace MMM::Canvas
 // 生产位置计算、窗口绘制和生命周期判定均不替换为模拟。
 // 测试不访问应用主窗口，也不需要图形设备。
 struct CameraLayoutEditorTestAccess {
+    /// @brief 测试只开放生产选项绘制，不替换点击判定与禁用条件。
+    /// @param editor 使用与场景相同的控制器，以验证活动事务会禁用选项。
+    static void options(CameraLayoutEditor& editor)
+    {
+        editor.drawPointerOptions();
+    }
+    /// @brief 单独绘制操作空间，使无 GPU 测试不依赖预览窗口的遮挡位置。
+    /// @param visual 与参数控件共享的目标值，导航不得修改它。
+    /// @note 显式输入域与 update 一致，避免测试默认应用域而遗漏按钮映射。
+    static void scene(CameraLayoutEditor& editor, Config::VisualConfig& visual)
+    {
+        const UI::Interaction::SurfaceScope scope(
+            UI::Interaction::Surface::CameraLayout);
+        editor.drawScene("mouse-camera", { 40, 60 }, { 760, 600 }, visual);
+    }
+    /// @brief 辅助观察中心不属于目标相机配置，允许测试独立验证两者边界。
+    static glm::vec3 center(const CameraLayoutEditor& editor)
+    {
+        return editor.m_center;
+    }
+    /// @brief 读取观察角，不把目标姿态误当成中键导航的输出。
+    static glm::vec2 orbit(const CameraLayoutEditor& editor)
+    {
+        return editor.m_orbit;
+    }
+    /// @brief 从绘制使用的世界空间句柄取一个可点击点，不计算预期变换量。
+    /// @details
+    /// 此投影仅为定位鼠标，实际拾取、起笔、累积和取消仍由生产状态机完成。
+    /// @param ring 为真时定位旋转环，为假时定位平移轴。
+    /// @return 逻辑像素位置，与鼠标事件队列及生产拾取采用相同坐标系。
+    /// @note 不使用本函数输出作为结果基准；最终断言比较两次真实变换。
+    static ImVec2 handlePoint(const CameraLayoutEditor&   editor,
+                              const Config::VisualConfig& visual, bool ring)
+    {
+        // 辅助相机与目标相机独立；须使用当前观察角定位已经转动后的句柄。
+        // 不能拿目标姿态构造观察矩阵，否则导航后测试会点到空白区域。
+        const auto rotation = cameraEulerRotation(
+            glm::radians(editor.m_orbit.y), glm::radians(editor.m_orbit.x), 0);
+        const auto eye =
+            editor.m_center +
+            glm::vec3(rotation *
+                      glm::vec4(0, -editor.m_distance, editor.m_distance, 0));
+        // 与操作空间同用零至一深度，再单独翻转屏幕 Y。
+        // 此处固定的宽高只描述测试窗口，不限制生产窗口的比例。
+        auto projection = glm::perspectiveRH_ZO(
+            glm::radians(45.0F), 760.0F / 600, 0.01F, 1024.0F);
+        projection[1][1] *= -1;
+        // 轴选择 X 末端；环选择 Z 环的中段，避免三环交点产生拾取歧义。
+        const float radius = editor.m_distance * 0.09F;
+        glm::vec3   point(visual.canvasCameraPosition[0],
+                          visual.canvasCameraPosition[1],
+                          visual.canvasCameraPosition[2]);
+        point += ring ? glm::vec3(radius * 0.70710678F, radius * 0.70710678F, 0)
+                      : glm::vec3(radius, 0, 0);
+        // 复用生产投影的齐次除法与裁剪规则，避免测试采用另一套像素约定。
+        glm::vec2 screen{};
+        projectCameraHandle(
+            projection *
+                glm::lookAtRH(eye, editor.m_center, glm::vec3(0, 0, 1)),
+            point,
+            { 40, 60 },
+            { 760, 600 },
+            screen);
+        return { screen.x, screen.y };
+    }
+    /// @brief 通过已存在的工具状态选环，鼠标起笔依然必须真实命中。
+    /// @note 此入口只替代另一窗口中的工具选择，不直接设置活动轴或事务起点。
+    static void rotate(CameraLayoutEditor& editor, bool rotate)
+    {
+        editor.m_rotate = rotate;
+    }
     /// @brief 仅查询工具选择，不模拟实际快捷键事件处理。
     static bool rotating(const CameraLayoutEditor& editor)
     {
@@ -755,6 +829,262 @@ bool checkMath()
     return std::abs(cameraHandleDistance({ 5, 3 }, { 0, 0 }, { 10, 0 }) - 3) <
            0.001F;
 }
+/// @brief 真实鼠标事件验证相机选项、导航归属、精细倍率及经典隔离。
+/// @return 所有断言通过才成功，不需要 Vulkan、桌面后端或用户配置文件。
+/// @details 生产拾取入口负责建立事务；测试只定位已绘制的句柄与固定选项控件。
+bool checkMouseCamera()
+{
+    // 单独上下文隔离默认字体、焦点和按键状态，不能污染后续旧方案回归。
+    // 测试固定时间步只用于 ImGui 事件处理，不引入真实等待或平台定时器。
+    namespace Interaction = MMM::UI::Interaction;
+    using Access          = MMM::Canvas::CameraLayoutEditorTestAccess;
+    ImGui::CreateContext();
+    auto& io       = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = { 1280, 900 };
+    io.DeltaTime   = 1.0F / 60;
+    unsigned char* pixels{};
+    int            width{}, height{};
+    // NewFrame 之前准备 CPU 字体图集；不需要创建 GPU 纹理或图形设备。
+    // pixels 只由图集拥有，测试不能释放它或把它交给实际预览窗口。
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    // 固定尺寸仅用于 CPU 测试定位；实际选项仍使用原生 RadioButton 与 Checkbox。
+    // 不把鼠标坐标写进生产代码，也不调用 setter 代替本轮控件点击。
+    bool passed = true;
+    {
+        // 内层作用域保证观察者先注销，随后才销毁它借用的 ImGui 上下文。
+        // 自由相机姿态直接启用，避免把旧配置迁移误计入拖动结果。
+        MMM::Canvas::CameraLayoutEditor editor;
+        MMM::Config::VisualConfig       visual;
+        visual.canvasCameraPoseEnabled = true;
+        visual.canvasCameraPosition    = { 0, 0, 1 };
+        visual.canvasCameraRotation    = { 0, 0, 0 };
+        // 控件位置每帧按当前样式重算，不缓存 Clay 内部元素地址。
+        ImVec2 panClick{}, fineClick{};
+        /// @brief 最后提交的精细控件是否被实际标记为禁用，而非只显示灰色。
+        bool optionsDisabled{};
+        /// @brief 推进一帧生产选项及操作空间，两个窗口不相互遮挡。
+        /// @note 不强制夺取焦点，必须由真实鼠标点击完成窗口归属切换。
+        /// @warning 只供测试调用；固定几何之外的交互完全沿用生产路径。
+        const auto frame = [&] {
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos({ 20, 20 });
+            ImGui::SetNextWindowSize({ 800, 700 });
+            ImGui::Begin("MouseCameraScene");
+            // 场景先处理输入，再绘制选项，与生产 update 中的调用顺序一致。
+            // 点击右侧选项不能穿透到左侧画布启动变换。
+            Access::scene(editor, visual);
+            ImGui::End();
+            ImGui::SetNextWindowPos({ 840, 20 });
+            ImGui::SetNextWindowSize({ 420, 180 });
+            ImGui::Begin("MouseCameraOptions");
+            const auto  origin = ImGui::GetCursorScreenPos();
+            const float row    = ImGui::GetFrameHeight();
+            // 用本帧字体实值定位第二个单选框和第二行勾选框，覆盖真实命中范围。
+            panClick = { origin.x + row + ImGui::GetStyle().ItemInnerSpacing.x +
+                             ImGui::CalcTextSize("中键旋转").x +
+                             ImGui::GetStyle().ItemSpacing.x + row / 2,
+                         origin.y + row / 2 };
+            fineClick = { origin.x + row / 2,
+                          origin.y + row + ImGui::GetStyle().ItemSpacing.y +
+                              row / 2 };
+            // 两个窗口保持独立 ID，不能因控件重复命名共享活动状态。
+            // 选项入口会自行判断方案能力，经典方案应不提交这些控件。
+            Access::options(editor);
+            // 读取真实控件标志，不能用 hasActivePointerGesture
+            // 重新计算期望值代替验证。 EndDisabled 退出作用域后，LastItemData
+            // 仍保留该控件提交时的输入门禁。
+            if ( Interaction::activeProfile().cameraPointerOptions() )
+                optionsDisabled = (GImGui->LastItemData.ItemFlags &
+                                   ImGuiItemFlags_Disabled) != 0;
+            ImGui::End();
+            ImGui::Render();
+        };
+        /// @brief 分帧发送移动、按下和释放，保留 ImGui 的正常输入节流规则。
+        /// @param point 当前帧测量得到的控件内部位置，使用逻辑像素。
+        /// @note 释放帧必须送达生产控件，不能只制造一次按下就检查策略值。
+        const auto click = [&](ImVec2 point) {
+            io.AddMousePosEvent(point.x, point.y);
+            frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            frame();
+        };
+        /// @brief 失败时保留阶段名，避免一个测试入口只返回不透明的失败状态。
+        /// @param condition 已完成生产调用后的断言结果，不重新执行输入操作。
+        /// @param stage 固定诊断标签，输出仍使用项目日志入口。
+        const auto expect = [&](bool condition, const char* stage) {
+            if ( !condition ) XERROR("Mouse camera: {}", stage);
+            passed &= condition;
+        };
+        Interaction::synchronizeProfile("mouse-only", true);
+        Interaction::synchronizeProfile("mouse-only", true);
+        // 注册表持有稳定方案对象；借用引用跨切换仍有效，不能复制共享所有权。
+        // 两次安全边沿满足真实切换协议，不通过直接修改活动指针绕过保护。
+        auto& mouse = Interaction::activeProfile();
+        frame();
+        frame();
+        // 预热建立窗口悬停信息后，再检查可见单选框确实能修改模式。
+        // 如果新增控件高度或命中范围错误，这里会在进入场景之前失败。
+        click(panClick);
+        expect(mouse.cameraPointerOptions()->m_pan, "pan radio click");
+        // 精细开关独立于导航模式；点击后不应该把平移模式切回旋转。
+        click(fineClick);
+        expect(mouse.cameraPointerOptions()->m_fine, "fine checkbox click");
+        // 勾选精细倍率不得修改刚选定的平移意图，两项必须能够同时启用。
+        // 这项断言同时覆盖控件 ID 冲突导致单选状态被第二行重置的情况。
+        expect(mouse.cameraPointerOptions()->m_pan,
+               "fine preserves navigation");
+        // 导航只改变观察中心或观察角，目标相机的位置与旋转必须完全保留。
+        // 覆盖纯鼠标两种模式与经典 Shift 的两种状态，不能用全局虚拟键蒙混通过。
+        const auto initialPosition = visual.canvasCameraPosition;
+        const auto initialRotation = visual.canvasCameraRotation;
+        for ( bool pure : { true, false } ) {
+            const char* id = pure ? "mouse-only" : "classic-desktop";
+            Interaction::synchronizeProfile(id, true);
+            Interaction::synchronizeProfile(id, true);
+            for ( bool pan : { false, true } ) {
+                Interaction::activeProfile().setCameraPointerOptions(
+                    { pan, false });
+                // 纯鼠标刻意使用相反 Shift，确保显式模式优先而非偶然沿用键盘。
+                // 经典则使用实际 Shift，空选项必须完整退回原解释。
+                io.AddKeyEvent(ImGuiMod_Shift, pure ? !pan : pan);
+                io.AddMousePosEvent(650, 520);
+                frame();
+                frame();
+                // 在按下之前保存独立副本，避免借用同一可变字段造成恒真比较。
+                // 每种模式必须只有对应的观察量发生变化，不能同时旋转和平移。
+                const auto beforeCenter = Access::center(editor);
+                const auto beforeOrbit  = Access::orbit(editor);
+                io.AddMouseButtonEvent(ImGuiMouseButton_Middle, true);
+                frame();
+                expect(editor.hasActivePointerGesture(),
+                       "middle navigation begins");
+                // 中键导航期间参数控件已经真正禁用，不能靠勾选切换当前模式。
+                // 经典不提交这些控件，因此只对显式相机方案检查 LastItemData。
+                if ( pure )
+                    expect(optionsDisabled,
+                           "options disabled during navigation");
+                // 模拟另一个相机窗口在手势中修改选项，本事务仍使用按下时的模式。
+                if ( pure ) mouse.setCameraPointerOptions({ !pan, false });
+                io.AddMousePosEvent(674, 534);
+                frame();
+                expect((glm::length(Access::center(editor) - beforeCenter) >
+                        0.001F) == pan,
+                       "navigation pan intent");
+                expect((glm::length(Access::orbit(editor) - beforeOrbit) >
+                        0.001F) == !pan,
+                       "navigation orbit intent");
+                // 导航事务在松开边沿结束，不能要求额外点击或键盘确认。
+                // 这也确保下一次方案切换不会被仍然活跃的观察者阻挡。
+                io.AddMouseButtonEvent(ImGuiMouseButton_Middle, false);
+                frame();
+                expect(!editor.hasActivePointerGesture(), "navigation release");
+            }
+        }
+        expect(visual.canvasCameraPosition == initialPosition &&
+                   visual.canvasCameraRotation == initialRotation,
+               "navigation leaves target unchanged");
+        // 清理物理修饰键，后续精细倍率测试仅使用可见选项。
+        // 消费释放事件后再开始新的鼠标事务，避免事件节流产生假阳性。
+        io.AddKeyEvent(ImGuiMod_Shift, false);
+        frame();
+        Interaction::synchronizeProfile("mouse-only", true);
+        Interaction::synchronizeProfile("mouse-only", true);
+        // 平移和旋转分别比较正常与精细拖动，验证两条增量路径都采用同一倍率。
+        // 每次使用真实句柄起笔，右键取消恢复完整目标姿态，下一轮不继承累积量。
+        for ( bool pure : { true, false } ) {
+            // 每组开始都经过正常切换协议；上一组的右键与左键已经独立释放。
+            // 若事务泄漏，切换失败也会被随后的倍率与取消断言暴露。
+            const char* id = pure ? "mouse-only" : "classic-desktop";
+            Interaction::synchronizeProfile(id, true);
+            Interaction::synchronizeProfile(id, true);
+            for ( bool ring : { false, true } ) {
+                Access::rotate(editor, ring);
+                float normal{};
+                for ( bool fine : { false, true } ) {
+                    Interaction::activeProfile().setCameraPointerOptions(
+                        { false, fine });
+                    // 经典在按下时刻使用相反修饰值，移动前再切换到被测倍率。
+                    // 这样能发现错误地把经典 Shift 也锁存在起笔时的回归。
+                    // 纯鼠标同样从相反 Shift
+                    // 开始，但必须完全由显式选项决定结果。
+                    io.AddKeyEvent(ImGuiMod_Shift, !fine);
+                    // 每轮取消后目标回到相同姿态，辅助观察视角也保持不变。
+                    // 因此正常与精细样本只改变倍率，不混入透视或轴方向变化。
+                    const auto point =
+                        Access::handlePoint(editor, visual, ring);
+                    io.AddMousePosEvent(point.x, point.y);
+                    frame();
+                    frame();
+                    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+                    frame();
+                    expect(editor.hasActivePointerGesture(),
+                           "handle hit starts transform");
+                    // 纯鼠标在活动事务中反向修改方案设置，当前倍率必须保持锁存。
+                    // 经典方案忽略 setter，移到句柄之后才改变
+                    // Shift，必须立即采用新倍率。
+                    // 两类方案用相同鼠标轨迹，禁止通过固定帧延迟等待修饰状态更新。
+                    Interaction::activeProfile().setCameraPointerOptions(
+                        { false, !fine });
+                    if ( !pure ) {
+                        // ImGui
+                        // 会按序消费修饰键变化与鼠标事件；先完成修饰边沿帧。
+                        // 手势仍保持按住，在下一帧移动才能单独验证动态倍率。
+                        io.AddKeyEvent(ImGuiMod_Shift, fine);
+                        frame();
+                    }
+                    io.AddMousePosEvent(point.x + 12, point.y + 8);
+                    frame();
+                    // 检查最终配置，而不是编辑器内部累计值；两条数学路径都必须更新目标。
+                    // 位移与角度分别比较，不能用位置不变误判旋转没有执行。
+                    const auto& before =
+                        ring ? initialRotation : initialPosition;
+                    const auto& after = ring ? visual.canvasCameraRotation
+                                             : visual.canvasCameraPosition;
+                    const float amount =
+                        glm::length(glm::vec3(after[0] - before[0],
+                                              after[1] - before[1],
+                                              after[2] - before[2]));
+                    expect(amount > 0.00001F,
+                           "drag updates target immediately");
+                    // 用相同鼠标增量建立正常样本，十倍关系不依赖投影尺寸或
+                    // DPI。
+                    // 单轴小角度旋转的欧拉分量仍在线性区间，容差仅覆盖浮点误差。
+                    if ( !fine )
+                        normal = amount;
+                    else
+                        expect(std::abs(amount / normal - 0.1F) < 0.002F,
+                               "fine is one tenth");
+                    // 右键取消不依赖 Esc，也不能留下尚未结束的手势保护。
+                    io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
+                    frame();
+                    expect(visual.canvasCameraPosition == initialPosition &&
+                               visual.canvasCameraRotation == initialRotation &&
+                               !editor.hasActivePointerGesture(),
+                           "right click cancels transform");
+                    // 取消后分别释放两个按钮，下一轮必须重新命中才能开始。
+                    // 不依赖释放顺序触发额外提交，也不保留右键菜单或轴约束。
+                    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+                    frame();
+                    io.AddMouseButtonEvent(ImGuiMouseButton_Right, false);
+                    frame();
+                }
+            }
+        }
+        // 物理键与方案选项各自清理，避免旧窗口测试继承按住 Shift 的状态。
+        // 这里仍通过输入队列消费释放，不直接改写 ImGuiIO 的已解析修饰标志。
+        io.AddKeyEvent(ImGuiMod_Shift, false);
+        frame();
+        // 退出前恢复经典方案，后面的旧窗口和快捷键回归不依赖测试执行顺序。
+        // 编辑器先析构并注销观察者，再销毁 ImGui 上下文。
+        Interaction::synchronizeProfile("classic-desktop", true);
+        Interaction::synchronizeProfile("classic-desktop", true);
+    }
+    ImGui::DestroyContext();
+    return passed;
+}
 /// @brief 真实 ImGui 帧检查预览只在摄像机模式存在。
 bool checkWindows()
 {
@@ -877,7 +1207,7 @@ int main()
 {
     if ( !checkMath() || !checkCanvasLength() || !checkCompensation() ||
          !checkDynamicThickness() || !checkPartialThickness() ||
-         !checkWindows() ) {
+         !checkMouseCamera() || !checkWindows() ) {
         XERROR("CameraLayoutEditorTest failed");
         return 1;
     }

@@ -47,6 +47,32 @@ CameraLayoutEditor::~CameraLayoutEditor()
         UI::CLayWrapperCore::instance().destroyWindowContext(m_parameterLayout);
 }
 
+/// @brief 显式意图与真实修饰键隔离，经典方案不提交任何额外控件。
+/// @warning 每帧只绘制固定控件，所有状态修改在 UI 线程即时完成。
+void CameraLayoutEditor::drawPointerOptions()
+{
+    auto& profile = UI::Interaction::activeProfile();
+    // 空值表示当前方案沿用经典修饰规则，不能将它当作显式关闭。
+    const auto previous = profile.cameraPointerOptions();
+    if ( !previous ) return;
+    auto options = *previous;
+    // 控件禁用与起笔锁存共同保证活动事务不被重新解释。
+    // 其它相机窗口可以设置下一次意图，但不能影响此窗口正在执行的手势。
+    // 控件作用域与参数窗口相同，状态跨帧保存于方案而不是 ImGui 静态存储。
+    // 禁用只作用于本行，不把后续位置和姿态数值框一起冻结。
+    ImGui::BeginDisabled(hasActivePointerGesture());
+    if ( ImGui::RadioButton("中键旋转", !options.m_pan) ) options.m_pan = false;
+    ImGui::SameLine();
+    if ( ImGui::RadioButton("中键平移", options.m_pan) ) options.m_pan = true;
+    ImGui::Checkbox("精细调整（轴／旋转环 10%）", &options.m_fine);
+    ImGui::EndDisabled();
+    // 不变状态不重复发布，选项不触发配置保存或逻辑线程同步。
+    // 显式比较两个字段，后续扩展 DTO 时不依赖结构体填充字节的内容。
+    if ( options.m_pan != previous->m_pan ||
+         options.m_fine != previous->m_fine )
+        profile.setCameraPointerOptions(options);
+}
+
 /// @brief Clay 负责纵向分组与按钮等宽排列，ImGui 负责控件交互。
 /// @param id 当前画布的稳定身份，用于隔离独立参数窗口。
 /// @param visual 与三维操作空间共用的可编辑姿态配置。
@@ -134,6 +160,16 @@ void CameraLayoutEditor::drawParameterWindow(const std::string&    id,
             });
         root.addLayout(
             "tools", tools, UI::Sizing::Grow(), UI::Sizing::Fixed(rowHeight));
+        // 只有提供显式相机意图的方案显示此行；经典窗口的布局与手势保持原样。
+        // 状态属于方案，窗口只借用两个标量；不借用谱面会话或持久化配置。
+        // 活动手势禁用控件，起笔锁存同时防止其它相机窗口改写当前事务。
+        if ( UI::Interaction::activeProfile().cameraPointerOptions() ) {
+            root.addElement(
+                "pointer-options",
+                UI::Sizing::Grow(),
+                UI::Sizing::Fixed(rowHeight * 2 + gap),
+                [&](Clay_BoundingBox, bool) { drawPointerOptions(); });
+        }
         // 标签在输入行上方，数值框获得完整宽度；XYZ 由 DragFloat3 等宽分配。
         // 固定两行高度根据字体计算，不裁掉 DPI 放大后的文字。
         // 可见标签与隐藏 ID 分离，标签宽度不占用三列数值框空间。
@@ -282,6 +318,14 @@ void CameraLayoutEditor::drawParameterWindow(const std::string&    id,
             UI::Sizing::Grow(),
             UI::Sizing::Fixed(ImGui::GetTextLineHeightWithSpacing() * 4),
             [](Clay_BoundingBox, bool) {
+                if ( UI::Interaction::activeProfile().cameraPointerOptions() ) {
+                    // 纯鼠标提示只描述可见入口，不再把键盘作为完成操作的前提。
+                    ImGui::TextUnformatted("中键旋转／平移 · 滚轮缩放");
+                    ImGui::TextUnformatted("拖动轴／环调整 · 右键取消");
+                    ImGui::TextUnformatted("X 红 / Y 绿 / Z 蓝；Z 垂直画布");
+                    ImGui::TextUnformatted("画布中心为原点，高度为 1");
+                    return;
+                }
                 ImGui::TextUnformatted("中键旋转 · Shift+中键平移 · 滚轮缩放");
                 ImGui::TextUnformatted(
                     "G/R 切换工具 · 拖动轴/环调整 · Esc 取消");
@@ -399,13 +443,23 @@ void CameraLayoutEditor::drawScene(const std::string& id, ImVec2 origin,
     if ( !UI::Interaction::mouseDown(ImGuiMouseButton_Middle) )
         m_orbiting = false;
     if ( hovered && m_axis < 0 &&
-         UI::Interaction::mouseClicked(ImGuiMouseButton_Middle) )
+         UI::Interaction::mouseClicked(ImGuiMouseButton_Middle) ) {
         m_orbiting = true;
+        // 纯鼠标导航按下时锁存，后续跨出画布也不改变旋转或平移含义。
+        const auto options =
+            UI::Interaction::activeProfile().cameraPointerOptions();
+        // 锁存值只在显式方案生效；经典后续仍逐帧读取真实 Shift。
+        m_navigationPan = options && options->m_pan;
+    }
     // 导航只能由画布内的中键按下建立。
     // 取得所有权后允许拖出画布，松开立即结束。
     // 输入逐帧推进，不使用同步等待或固定延迟。
     if ( m_orbiting ) {
-        if ( UI::Interaction::modifier(UI::Interaction::Modifier::Shift) ) {
+        const auto options =
+            UI::Interaction::activeProfile().cameraPointerOptions();
+        if ( options ? m_navigationPan
+                     : UI::Interaction::modifier(
+                           UI::Interaction::Modifier::Shift) ) {
             // 平移沿观察平面进行，距离越远单位像素覆盖的世界范围越大。
             const auto rotation = cameraEulerRotation(
                 glm::radians(m_orbit.y), glm::radians(m_orbit.x), 0.0F);
@@ -591,6 +645,11 @@ void CameraLayoutEditor::drawScene(const std::string& id, ImVec2 origin,
         m_startRotation = visual.canvasCameraRotation;
         m_dragDelta     = { 0, 0 };
         m_rotationDelta = 0;
+        // 精细倍率与导航一样只覆盖相机意图，不改写任何全局 Shift 状态。
+        const auto options =
+            UI::Interaction::activeProfile().cameraPointerOptions();
+        // 起点与倍率同帧捕获，第一帧只建立事务，不消费之前的鼠标移动。
+        m_fineAdjustment = options && options->m_fine;
         return;
     }
     if ( m_axis < 0 ) return;
@@ -620,13 +679,20 @@ void CameraLayoutEditor::drawScene(const std::string& id, ImVec2 origin,
         m_axis = 1;
     if ( UI::ShortcutUtils::isActionShortcutPressed("cameraAxisZ", false) )
         m_axis = 2;
-    // Shift 只缩小本帧增量，实现连续精细调整。
+    // 经典 Shift 仍可逐帧缩小增量；纯鼠标使用起笔时锁存的显式倍率。
     // 累计值与帧率无关，也不按固定时间抽样。
     // 局部反馈在输入发生的当前帧完成。
+    const auto options =
+        UI::Interaction::activeProfile().cameraPointerOptions();
+    // 两条变换路径共用倍率，旋转不得再次缩放已经累计的历史角度。
+    // 没有显式选项时保持原动态修饰逻辑，可在经典拖动中按下或释放 Shift。
+    const float adjustmentScale =
+        (options ? m_fineAdjustment
+                 : UI::Interaction::modifier(UI::Interaction::Modifier::Shift))
+            ? 0.1F
+            : 1.0F;
     m_dragDelta +=
-        glm::vec2(io.MouseDelta.x, io.MouseDelta.y) *
-        (UI::Interaction::modifier(UI::Interaction::Modifier::Shift) ? 0.1F
-                                                                     : 1.0F);
+        glm::vec2(io.MouseDelta.x, io.MouseDelta.y) * adjustmentScale;
     visual.canvasCameraPosition = m_startPosition;
     visual.canvasCameraRotation = m_startRotation;
     if ( m_rotate ) {
@@ -644,10 +710,7 @@ void CameraLayoutEditor::drawScene(const std::string& id, ImVec2 origin,
                     mouse - glm::vec2(io.MouseDelta.x, io.MouseDelta.y) -
                         center,
                     mouse - center) *
-                direction *
-                (UI::Interaction::modifier(UI::Interaction::Modifier::Shift)
-                     ? 0.1F
-                     : 1.0F);
+                direction * adjustmentScale;
         }
         // 世界轴旋转左乘初始姿态，然后分解回 XYZ 显示值。
         // 这里只读取旋转分量，位置不会绕世界原点公转。

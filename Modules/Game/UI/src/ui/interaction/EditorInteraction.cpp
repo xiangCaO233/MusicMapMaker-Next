@@ -25,8 +25,8 @@ public:
     /// @brief 初期名称不依赖皮肤或翻译初始化顺序。
     std::string_view name() const override { return "经典桌面"; }
 };
-/// @brief 纯鼠标方案的画笔直接延伸，其他操作暂时沿用现有入口。
-/// @details 仅声明绘制意图，不改写全局 Shift，避免影响框选和滚动。
+/// @brief 纯鼠标方案通过独立语义选项和上下文菜单提供编辑入口。
+/// @details 意图按表面解释，不改写全局 Shift，避免影响框选和滚动。
 class MouseOnlyProfile final : public IEditorInteractionProfile
 {
 public:
@@ -75,8 +75,23 @@ public:
     {
         m_timingInterpolation = interpolation;
     }
-    /// @brief 切出时清除临时忽略吸附，重新进入不会继承隐藏开关。
-    void deactivate() override { m_bypassSnapping = false; }
+    /// @brief 纯鼠标相机意图按值读取，不影响画笔与滚轮的修饰语义。
+    /// @warning 每帧只读取本地标量，不访问配置或会话。
+    std::optional<CameraPointerOptions> cameraPointerOptions() const override
+    {
+        return m_cameraPointerOptions;
+    }
+    /// @brief 控件设置只供后续手势锁存，不能重解释活动事务。
+    void setCameraPointerOptions(CameraPointerOptions options) override
+    {
+        m_cameraPointerOptions = options;
+    }
+    /// @brief 切出时清除临时吸附及相机选项，重新进入不继承隐藏开关。
+    void deactivate() override
+    {
+        m_bypassSnapping       = false;
+        m_cameraPointerOptions = {};
+    }
     /// @brief 主画布无需修饰键即可延伸画笔，其他表面保留原语义。
     /// @warning 连续绘制只做枚举判断，不持有会话或跨帧指针。
     bool extendBrush(Surface surface, bool shift) const override
@@ -87,6 +102,8 @@ public:
     }
 
 private:
+    /// @brief 相机专用意图，不持久化、不模拟 Shift，生命周期属于当前方案。
+    CameraPointerOptions m_cameraPointerOptions{};
     /// @brief 纯鼠标擦除粒度，跨工具切换保留，但不影响经典方案。
     bool m_eraseWholePolyline{ false };
     /// @brief 不持久化的吸附覆盖值，与键盘修饰和磁吸偏好独立。
@@ -223,6 +240,15 @@ std::optional<bool> IEditorInteractionProfile::timingInterpolationDraw() const
 }
 /// @brief 经典模式不保存纯鼠标 Timing 选择。
 void IEditorInteractionProfile::setTimingInterpolationDraw(bool) {}
+/// @brief 经典相机继续读取真实 Shift，不继承纯鼠标选项。
+/// @warning 每帧只返回空值，不查询输入或分配状态。
+std::optional<CameraPointerOptions>
+IEditorInteractionProfile::cameraPointerOptions() const
+{
+    return std::nullopt;
+}
+/// @brief 经典模式忽略显式相机意图，防止跨方案污染。
+void IEditorInteractionProfile::setCameraPointerOptions(CameraPointerOptions) {}
 /// @brief 查询明确的主画布延伸策略，不依赖方案身份字符串或当前 UI 输入域。
 /// @warning 每帧无分配，不查询会话或伪造键盘事件。
 bool modifierFreeBrush()

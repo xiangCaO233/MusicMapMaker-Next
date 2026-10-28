@@ -45,6 +45,13 @@ enum class Surface {
 };
 /// @brief 指针修饰语义，保留 Ctrl 与 Command 的独立配置能力。
 enum class Modifier { Control, Shift, Alt, Super };
+/// @brief 相机指针意图独立于键盘修饰，供鼠标及后续触控入口共用。
+struct CameraPointerOptions {
+    /// @brief 中键导航沿观察平面平移；关闭时绕观察中心旋转。
+    bool m_pan{ false };
+    /// @brief 轴和旋转环采用十分之一增量，不改变目标相机的数值精度。
+    bool m_fine{ false };
+};
 /// @brief 供新方案替换整段交互的单帧上下文，不拥有视图或谱面。
 /// @warning 仅在 UI 调用栈内借用，不能保存 snapshot 到下一帧。
 struct SurfaceFrame {
@@ -120,6 +127,11 @@ public:
     virtual std::optional<bool> timingInterpolationDraw() const;
     /// @brief 只设置后续 Timing 手势，不改变主画布折线绘制方式。
     virtual void setTimingInterpolationDraw(bool interpolation);
+    /// @brief 显式相机指针意图；经典返回空以保留动态 Shift 手势。
+    /// @warning 每帧按值读取两个标量，不分配资源或访问会话。
+    virtual std::optional<CameraPointerOptions> cameraPointerOptions() const;
+    /// @brief 只更新后续相机手势的意图，不修改物理键盘状态。
+    virtual void setCameraPointerOptions(CameraPointerOptions options);
     /// @brief 解释滚轮方向与倍率，横纵轴分开，不改变 ImGui 控件自身滚动。
     virtual float wheel(Surface surface, float physical, bool horizontal) const;
     /// @brief 解释键盘主键，支持整套键位语义替换；参数为 ImGui 命名键值。

@@ -593,6 +593,22 @@ int main()
     Interaction::activeProfile().setSelectionOperation(
         MMM::Logic::SelectionOperation::Replace);
     ok &= require(mouse.selectionContextMenu(), "mouse-only selection menu");
+    // 相机选项与画布修饰完全分离，不能把平移选择变成全局 Shift。
+    // 四种组合按值来回设置，验证窗口展示的意图确实进入方案策略。
+    // 此查询不依赖窗口或鼠标硬件，后续触控入口也应取得相同值语义。
+    // 设置一组值不能重置另一字段，两个维度必须可以独立组合。
+    for ( bool pan : { false, true } )
+        for ( bool fine : { false, true } ) {
+            Interaction::activeProfile().setCameraPointerOptions({ pan, fine });
+            const auto options = mouse.cameraPointerOptions();
+            ok &= require(
+                options && options->m_pan == pan && options->m_fine == fine,
+                "mouse camera options");
+            ok &= require(!mouse.modifier(Interaction::Surface::MainCanvas,
+                                          Interaction::Modifier::Shift,
+                                          false),
+                          "camera options do not synthesize shift");
+        }
     // 设置只改变擦除语义，不可泄漏到绘制延伸、框选或物理修饰键。
     Interaction::activeProfile().setEraseWholePolyline(true);
     ok &= require(mouse.eraseWholePolyline() == true,
@@ -620,9 +636,17 @@ int main()
     ok &=
         require(!classic.bypassSnapping() && !classic.timingInterpolationDraw(),
                 "classic snap and timing unchanged");
+    // 即使显式向经典方案设置，仍必须返回空，才能保留物理 Shift 的动态语义。
+    Interaction::activeProfile().setCameraPointerOptions({ true, true });
+    ok &= require(!classic.cameraPointerOptions(), "classic camera unchanged");
     Interaction::synchronizeProfile("mouse-only", true);
     Interaction::synchronizeProfile("mouse-only", true);
     ok &= require(!mouse.bypassSnapping(), "temporary snap reset");
+    // 退出时清除相机临时状态；再次进入不能默认带着不可见的精细倍率。
+    // 仍返回显式选项，不能因清理过程意外退回经典键盘模式。
+    const auto resetCamera = mouse.cameraPointerOptions();
+    ok &= require(resetCamera && !resetCamera->m_pan && !resetCamera->m_fine,
+                  "temporary camera reset");
     Interaction::activeProfile().setTimingInterpolationDraw(false);
     // 下一段仍验证无 Shift 的折线意图，避免独立模式污染主画布绘制规则。
     // 把 Timing 恢复到点模式，后续镜像动作测试不依赖本轮设置顺序。
