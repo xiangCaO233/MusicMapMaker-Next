@@ -2468,9 +2468,11 @@ bool Basic2DCanvasInteraction::handleModifierWheel(
 
     if ( isCommandPressed ) {
         if ( scrollsActiveSelection ) {
-            // 符号取反与普通画布滚动方向约定一致，Shift 交给逻辑层加速。
+            // 符号取反与普通画布一致，专用意图只改变时间滚动的加速标志。
             UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
-                Logic::CmdScroll{ m_cameraId, -wheel, isShiftPressed }));
+                Logic::CmdScroll{ m_cameraId,
+                                  -wheel,
+                                  UI::Interaction::acceleratedScroll() }));
         } else {
             auto  editorCfg = engine.getEditorConfig();
             float step      = 0.1f;
@@ -5990,8 +5992,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                 UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
                     Logic::CmdScroll{ m_cameraId,
                                       -UI::Interaction::mouseWheel(),
-                                      UI::Interaction::modifier(
-                                          UI::Interaction::Modifier::Shift) }));
+                                      UI::Interaction::acceleratedScroll() }));
             }
         }
         // 批注层阻挡时不执行音频覆盖层、拾取或常规工具处理。
@@ -6364,7 +6365,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                     targetHeight,
                     localMousePos.y,
                     ImGui::GetIO().DeltaTime,
-                    UI::Interaction::modifier(UI::Interaction::Modifier::Shift),
+                    UI::Interaction::acceleratedScroll(),
                     autoScrolled);
                 if ( autoScrolled ) {
                     // CmdSeek 接收音频时间，需移除仅用于视觉显示的偏移量。
@@ -6641,8 +6642,7 @@ void Basic2DCanvasInteraction::handleInteractions(
             UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
                 Logic::CmdScroll{ m_cameraId,
                                   -wheel,
-                                  UI::Interaction::modifier(
-                                      UI::Interaction::Modifier::Shift) }));
+                                  UI::Interaction::acceleratedScroll() }));
 
             const bool canUpdateActiveBrush =
                 currentSnapshot->currentTool == Logic::EditTool::Draw &&

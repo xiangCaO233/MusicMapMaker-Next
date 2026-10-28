@@ -1,4 +1,6 @@
+#include "common/SelectionOperation.h"
 #include "config/EditorSettings.h"
+#include "config/skin/translation/Translation.h"
 #include "ui/imgui/manager/ProjectAudioToolView.h"
 
 #include "audio/AudioManager.h"
@@ -12,6 +14,7 @@
 #include "runtime/AppThreadPool.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/ProjectAudioPreviewControls.h"
+#include "ui/interaction/EditorInteraction.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -31,6 +34,40 @@
 /// @brief 使用真实工具视图验证停靠、标签切换和双轴滚动。
 /// @details 不启动 GPU；连续试听通过 SDL 虚拟设备消费构建树中的合成 PCM。
 /// 所有项目写入都位于构建树，ImGui 禁止写入个人工作区 ini。
+namespace MMM::UI
+{
+/// @brief 测试只读取本地选择与手势，并绘制正式控件；不直接修改资源选择位。
+struct ProjectAudioToolSelectionTestAccess {
+    /// @brief 控件探针复用生产入口，鼠标事件仍由 ImGui 的真实窗口处理。
+    /// @param view 与实际资源画布共用的视图，控件不得操作另一份模式副本。
+    static void controls(ProjectAudioToolView& view)
+    {
+        view.renderSelectionControls();
+    }
+    /// @brief 固定三个资源按稳定 ID 编成位掩码，不依赖提升层级后的数组顺序。
+    /// @return 低三位分别对应夹具中的三个独立方块。
+    /// @param view 已处理本帧真实输入的视图，不在查询时触发资源重建。
+    /// @note 掩码只用于测试比对，不回写生产容器或逻辑线程。
+    static unsigned selected(const ProjectAudioToolView& view)
+    {
+        unsigned mask{};
+        // 激活可能重排缓存，因此禁止用数组下标作为断言身份。
+        for ( const auto& item : view.m_items )
+            for ( unsigned i = 0; i < 3; ++i )
+                if ( item.batchSelected &&
+                     item.audioResourceId == "pf1_" + std::to_string(i) )
+                    mask |= 1U << i;
+        return mask;
+    }
+    /// @brief 选中行为不得偷偷创建移动、缩放或批量拖动事务。
+    /// @return 任一布局变换处于活动状态就失败，不能只检查当前选中数量。
+    static bool dragging(const ProjectAudioToolView& view)
+    {
+        return view.m_draggingItem || view.m_resizingItem ||
+               view.m_batchDragging;
+    }
+};
+}  // namespace MMM::UI
 namespace
 {
 /// @brief 查找真实工具创建的画布子窗口。
@@ -59,6 +96,7 @@ ImGuiWindow* findCanvas()
 /// @param shift 是否按住 Shift，显式请求横向滚动。
 /// @param pointer 指针位置，表格场景使用真实行坐标选择资源。
 /// @param horizontalWheel 后端已转换的横轴滚轮增量，负值向右。
+/// @param selectionProbe 为真时额外绘制正式选择控件，供纯鼠标点击回归使用。
 /// @note 横轴与纵轴分别注入，允许测试真实触控板事件而非只模拟传统鼠标。
 /// @note Shift 状态仍独立进入队列，不能通过移除修饰键来绕过平台行为。
 /// @note 本入口接收 ImGui 后端事件，不负责模拟操作系统的 Shift 轴转换。
@@ -66,8 +104,8 @@ ImGuiWindow* findCanvas()
 void drawFrame(MMM::UI::UIManager& manager, MMM::UI::ProjectAudioToolView& view,
                bool docked, float wheel = 0.0F, bool focusOther = false,
                float height = 450.0F, bool shift = false,
-               ImVec2 pointer         = ImVec2(200.0F, 250.0F),
-               float  horizontalWheel = 0.0F)
+               ImVec2 pointer        = ImVec2(200.0F, 250.0F),
+               float horizontalWheel = 0.0F, bool selectionProbe = false)
 {
     auto& io = ImGui::GetIO();
     // 指针放在画布空白处，避免点击音频预览或拖动资源。
@@ -93,9 +131,23 @@ void drawFrame(MMM::UI::UIManager& manager, MMM::UI::ProjectAudioToolView& view,
     // 测试显式选择工具标签，避免新建的辅助标签默认抢走初始焦点。
     // focusOther 分支故意不给工具焦点，以真实经过隐藏内容帧。
     // 活动弹层必须保留自身焦点，不能由测试夹具每帧强行聚焦背景窗口。
-    if ( !focusOther && ImGui::GetCurrentContext()->OpenPopupStack.empty() )
+    if ( !selectionProbe && !focusOther &&
+         ImGui::GetCurrentContext()->OpenPopupStack.empty() )
         view.requestFocus();
     view.update(&manager);
+    if ( selectionProbe ) {
+        // 控件单独放在右侧，避免测试每帧给工具聚焦时与标题栏坐标耦合。
+        // 此阶段不强制主窗口焦点，控件必须经正常点击获得输入归属。
+        // 探针不持有资源快照，模式变化仍写入真实输入方案对象。
+        // 正式工具本身仍完整绘制，实际方块选择不通过探针直接修改。
+        ImGui::SetNextWindowPos({ 610, 20 });
+        ImGui::SetNextWindowSize({ 600, 200 });
+        ImGui::Begin("AudioSelectionControlsProbe",
+                     nullptr,
+                     ImGuiWindowFlags_NoSavedSettings);
+        MMM::UI::ProjectAudioToolSelectionTestAccess::controls(view);
+        ImGui::End();
+    }
     // 真实标签切换会隐藏工具内容；重新激活后必须仍可滚动。
     if ( docked ) {
         ImGui::SetNextWindowDockID(dockId, ImGuiCond_Always);
@@ -642,6 +694,198 @@ bool checkScrolling(MMM::UI::UIManager&            manager,
     // 只要求方向和非零位移，不将平台相关的滚动像素数硬编码为预期结果。
     io.ConfigMacOSXBehaviors = originalMacOSBehavior;
     return horizontalPassed;
+}
+/// @brief 通过真实控件与画布鼠标事件验证多次框选、减选恢复及经典追加。
+/// @details 三个方块分列布置；点按位于卡片正文，避开边缘与试听控件。
+/// @return 所有集合、手势和原布局约束成立时返回真。
+/// @param manager 已建立的 UI 管理器，提供正常工具依赖但不替换选择策略。
+/// @param view 前面滚动回归使用的同一视图，用于检测旧手势与缓存残留。
+/// @pre 测试项目已打开，鼠标上一轮拖动与弹层已经结束。
+/// @note 所有资源和工作区写入都位于 CTest 的构建树隔离目录。
+/// @post 恢复经典模式，后续表格及资源测试仍使用默认输入协议。
+bool checkMouseSelection(MMM::UI::UIManager&            manager,
+                         MMM::UI::ProjectAudioToolView& view)
+{
+    namespace Interaction = MMM::UI::Interaction;
+    using Access          = MMM::UI::ProjectAudioToolSelectionTestAccess;
+    auto* project = MMM::Logic::ProjectController::instance().currentProject();
+    if ( !project ) return false;
+    prepareResources(*project);
+    // 只保留三张卡片，让每个选择组合都有唯一、可见且不会触及滚动边界的目标。
+    // 资源本身不需要解码，选中操作也不应触发试听或改变工作区矩形。
+    // 保留原资源稳定 ID 及文件路径，仅减少可见样本数量。
+    // 测试不以重命名或创建真实音频文件代替选择结果。
+    project->m_audioResources.resize(3);
+    auto& workspace = project->m_settings.m_workspace;
+    workspace.m_projectAudioToolPreviewEffectOnSelection = false;
+    // 不预设活动画笔目标，框选空白处的原有清空行为不会影响集合断言。
+    // 活动资源与批量布局集合属于不同状态，不能混为一个选中位。
+    workspace.m_projectAudioToolSelectedResourceId.clear();
+    workspace.m_projectAudioToolPlacements.resize(3);
+    for ( std::size_t i = 0; i < 3; ++i ) {
+        auto& item = workspace.m_projectAudioToolPlacements[i];
+        item.m_x   = 24 + i * 185;
+        item.m_y   = 24;
+    }
+    // 通过正式项目事件使缓存标脏，不能直接给私有 m_items 填入假选择状态。
+    MMM::Event::EventBus::instance().publish(MMM::Event::ProjectSavedEvent{});
+    Interaction::synchronizeProfile("mouse-only", true);
+    Interaction::synchronizeProfile("mouse-only", true);
+    // 右侧控件探针需要独立可见区域，不以缩小生产字体来挤压真实单选框。
+    const auto savedDisplay      = ImGui::GetIO().DisplaySize;
+    ImGui::GetIO().DisplaySize.x = 1400;
+    bool passed                  = true;
+    /// @brief 以真实几何推进工具，探针只增加共享控件的独立鼠标入口。
+    /// @param point 逻辑像素的屏幕坐标，与真实平台事件约定一致。
+    /// @param shift 仅用于经典追加样本，纯鼠标样本始终不需要键盘。
+    const auto at = [&](ImVec2 point, bool shift = false) {
+        drawFrame(manager, view, false, 0, false, 700, shift, point, 0, true);
+    };
+    // 多帧预热会消费资源脏标记并发布真实子窗口位置，不直接操作视图缓存。
+    for ( int i = 0; i < 4; ++i ) at({ 200, 650 });
+    auto* canvas   = findCanvas();
+    auto* controls = ImGui::FindWindowByName("AudioSelectionControlsProbe");
+    if ( !canvas || !controls ) return false;
+    // 上一阶段特意滚到了右侧；用真实水平滚轮归零，确保第一张卡片完整可见。
+    // 不直接修改视图相机或原生 Scroll 字段，避免隐藏内容裁剪与命中边界错误。
+    drawFrame(manager,
+              view,
+              false,
+              0,
+              false,
+              700,
+              false,
+              { canvas->InnerRect.Min.x + 20, canvas->InnerRect.Min.y + 20 },
+              100,
+              true);
+    // 水平滚轮与后续移动由 ImGui 分帧消费，再发布一次原生滚动目标。
+    // 这些帧推进输入和窗口布局，不等待真实时间，也不尝试重做选择断言。
+    at({ 200, 650 });
+    at({ 200, 650 });
+    if ( canvas->Scroll.x != 0 ) {
+        XERROR("Audio selection fixture still scrolled: {}", canvas->Scroll.x);
+        return false;
+    }
+
+    /// @brief 将夹具逻辑位置换算为本次真实画布坐标，避免新增控件改变起点。
+    /// @note 每次读取当前子窗口原点，方案隐藏控件后画布会重新排布。
+    /// @param x 资源逻辑横坐标，不含窗口内边距与滚动偏移。
+    /// @param y 资源逻辑纵坐标，框选与点选使用同一换算。
+    const auto point = [&](float x, float y) {
+        const auto origin = canvas->DC.CursorStartPos;
+        return ImVec2(origin.x + x, origin.y + y);
+    };
+    /// @brief 独立按下、移动和释放，覆盖连续反馈与最终结果的同步。
+    /// @param start 位于空白区域或正文的起点，不从上方工具栏拖入。
+    /// @param end 释放时仍由同一事务处理的终点，允许与起点重合模拟点按。
+    /// @param shift 通过真实输入队列传递，不修改已解析的 ImGuiIO。
+    const auto drag = [&](ImVec2 start, ImVec2 end, bool shift = false) {
+        at(start, shift);
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        at(start, shift);
+        at(end, shift);
+        ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        at(end, shift);
+    };
+    /// @brief 生产单选框真实点击，不能用 setter 代替入口验收。
+    /// @param operation 本轮希望启用的集合模式，仍需由实际控件确认成功。
+    /// @note 文字宽度按当前语言计算，不能假定英文与中文单选框宽度相同。
+    const auto choose = [&](MMM::Logic::SelectionOperation operation) {
+        const auto& style = ImGui::GetStyle();
+        float       x     = controls->Pos.x + controls->WindowPadding.x +
+                            ImGui::GetFrameHeight() / 2;
+        const float y     = controls->DC.CursorStartPos.y +
+                            ImGui::GetTextLineHeightWithSpacing() +
+                            ImGui::GetFrameHeight() / 2;
+        // 控件顺序与正式入口一致，坐标只用于注入输入，不作为模式结果基准。
+        const char* keys[]{ "ui.selection.replace",
+                            "ui.selection.add",
+                            "ui.selection.subtract" };
+        const int   index =
+            operation == MMM::Logic::SelectionOperation::Replace ? 0
+            : operation == MMM::Logic::SelectionOperation::Add   ? 1
+                                                                 : 2;
+        for ( int i = 0; i < index; ++i )
+            x += ImGui::GetFrameHeight() + style.ItemInnerSpacing.x +
+                 ImGui::CalcTextSize(TR(keys[i]).data()).x +
+                 style.ItemSpacing.x;
+        drag({ x, y }, { x, y });
+        if ( Interaction::activeProfile().selectionOperation() != operation ) {
+            XERROR("Audio selection radio did not switch: {}", index);
+            passed = false;
+        }
+    };
+    /// @brief 按稳定身份检查集合，并同时确认选中没有误启动布局拖动。
+    /// @param mask 独立编写的期望位集合，不能从生产选择数组复制生成。
+    /// @param stage 区分框选、点选、缩框与释放，便于定位不同状态转换。
+    const auto expect = [&](unsigned mask, const char* stage) {
+        if ( Access::selected(view) != mask || Access::dragging(view) ) {
+            XERROR("Audio mouse selection {}: mask {}, expected {}",
+                   stage,
+                   Access::selected(view),
+                   mask);
+            passed = false;
+        }
+    };
+    // 第一笔替换只包含左侧卡片，接下来第二笔必须保留它才能证明追加有效。
+    // 框选矩形四周留有空隙，严格包含与相交设置都能形成确定命中。
+    choose(MMM::Logic::SelectionOperation::Replace);
+    drag(point(8, 8), point(172, 134));
+    expect(1, "replace first box");
+    choose(MMM::Logic::SelectionOperation::Add);
+    drag(point(190, 8), point(355, 134));
+    expect(3, "append second box");
+    // 第三张未命中资源始终保持未选，防止实现错误地把追加解释成全选。
+    // 本轮通过精确位掩码比较三张卡片，而不是只比较选中数量。
+    // 同一资源重复追加必须幂等，不能像 Ctrl 点按一样反向切换选中位。
+    // 点击中部避开试听控件，当前模式只能解释为选择，不能开始单项拖动。
+    drag(point(279, 54), point(279, 54));
+    expect(3, "idempotent append click");
+    choose(MMM::Logic::SelectionOperation::Subtract);
+    // 持续减选必须以起笔基线重算；缩回后第二张卡片立即恢复。
+    // 仅检查释放后的差集会遗漏把每一帧命中永久扣除的错误实现。
+    const auto start = point(190, 8);
+    at(start);
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    at(start);
+    at(point(355, 134));
+    expect(1, "subtract during drag");
+    at(point(195, 12));
+    expect(3, "shrink restores baseline");
+    // 其它窗口切换全局模式也不能重解释本次已开始的减选。
+    Interaction::activeProfile().setSelectionOperation(
+        MMM::Logic::SelectionOperation::Add);
+    at(point(355, 134));
+    ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    at(point(355, 134));
+    expect(1, "latched subtract on release");
+    // 本次释放后才允许下一笔读取新模式，不能由下一次移动补交最终结果。
+    // 后续点按以第一张卡片为目标，进一步验证缓存顺序没有随选择重排。
+    // 点按减选不应启动原来的批量拖动，未移动也必须立即移出集合。
+    choose(MMM::Logic::SelectionOperation::Subtract);
+    drag(point(94, 54), point(94, 54));
+    expect(0, "subtract click");
+    // 经典方案忽略共享纯鼠标模式，仍按真实 Shift 在不同框选之间追加。
+    // 默认无 Shift 的框选继续替换，不得残留上一轮减选的锁存值。
+    Interaction::synchronizeProfile("classic-desktop", true);
+    Interaction::synchronizeProfile("classic-desktop", true);
+    // 方案切换隐藏纯鼠标行，先发布新的子窗口原点再生成经典点击坐标。
+    at({ 200, 650 });
+    at({ 200, 650 });
+    drag(point(8, 8), point(172, 134));
+    expect(1, "classic replace");
+    drag(point(190, 8), point(355, 134), true);
+    expect(3, "classic shift append");
+    at(point(8, 8));
+    // 下一阶段原表格测试会重建资源，批量选择不写入音频或布局字段。
+    // 这里不直接清除测试观察到的选中位，防止清理掩盖生产释放问题。
+    // 恢复屏幕尺寸后，后续表格测试仍按原先宿主几何验证滚动和命中。
+    // 恢复原大资源集，后续表格滚动和搜索测试仍覆盖视口外的数据。
+    // 通过项目事件重建，不把三个资源的小夹具泄漏给原有测试。
+    prepareResources(*project);
+    MMM::Event::EventBus::instance().publish(MMM::Event::ProjectSavedEvent{});
+    ImGui::GetIO().DisplaySize = savedDisplay;
+    return passed;
 }
 /// @brief 通过真实多级菜单验证字段排序与排序重置，不直接调用表格排序 API。
 /// @param manager 真实工具依赖的 UI 管理器。
@@ -1196,6 +1440,10 @@ int main()
         if ( passed ) {
             passed = checkScrolling(manager, view);
             if ( !passed ) XERROR("Project audio scrolling regression");
+        }
+        if ( passed ) {
+            passed = checkMouseSelection(manager, view);
+            if ( !passed ) XERROR("Project audio mouse selection regression");
         }
         if ( passed ) {
             passed = checkTableView(manager, view);

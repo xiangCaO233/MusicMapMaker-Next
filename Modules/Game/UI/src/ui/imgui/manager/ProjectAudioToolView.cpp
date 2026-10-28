@@ -28,6 +28,7 @@
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
 namespace MMM::UI
 {
@@ -722,8 +723,8 @@ void ProjectAudioToolView::rebuildItems(float visibleWidth, float dpiScale)
                                          : 1.0F;
             }
             // 零值表示使用自动尺寸；非有限或负值也按未自定义处理。
-            const bool hasSavedWidth = std::isfinite(saved->second.m_width) &&
-                                       saved->second.m_width > 0.0F;
+            const bool hasSavedWidth  = std::isfinite(saved->second.m_width) &&
+                                        saved->second.m_width > 0.0F;
             const bool hasSavedHeight = std::isfinite(saved->second.m_height) &&
                                         saved->second.m_height > 0.0F;
             // 自定义标志决定后续保存时是否写回真实尺寸或零占位。
@@ -927,11 +928,11 @@ void ProjectAudioToolView::refreshInteractionLabelRects()
     const auto activeItem = m_draggingItem ? m_draggingItem : m_resizingItem;
     for ( std::size_t index = 0; index < m_items.size(); ++index ) {
         // 移动项自身标签使用完整当前矩形，固定项从缓存基础区开始。
-        const bool movingItem  = m_batchDragging
-                                     ? m_items[index].batchSelected
-                                     : activeItem && *activeItem == index;
-        auto       visibleRect = movingItem ? m_items[index].rect
-                                            : m_interactionBaseLabelRects[index];
+        const bool movingItem = m_batchDragging
+                                    ? m_items[index].batchSelected
+                                    : activeItem && *activeItem == index;
+        auto visibleRect      = movingItem ? m_items[index].rect
+                                           : m_interactionBaseLabelRects[index];
 
         if ( m_batchDragging ) {
             // 只有层级高于当前固定项的移动方块才会遮挡其标签。
@@ -1846,6 +1847,47 @@ ImVec2 ProjectAudioToolView::calculateContentSize(float visibleWidth,
     return { right, bottom };
 }
 
+/// @brief 纯鼠标使用共享选择意图，框选与点选在各自起笔时读取。
+/// @details 这里只切换集合操作，不保存项目布局，也不清空已有批量选择。
+/// @warning 每帧固定控件；不遍历资源、执行文件操作或等待逻辑线程。
+void ProjectAudioToolView::renderSelectionControls()
+{
+    auto&      profile   = Interaction::activeProfile();
+    const auto operation = profile.selectionOperation();
+    if ( !operation ) return;
+    // 同一方案的画布与资源工具共用集合语义，不能伪造 Ctrl 或 Shift。
+    // 活动拖动禁止操作此行，另一窗口修改模式也不改变已锁存的框选事务。
+    ImGui::TextUnformatted(TR("ui.audio_tool.selection_mode").data());
+    // 可用宽度先于单选框测量；英文标签或窄停靠窗口可以自然换行。
+    // 单选框的宽度包含圆点和内间距，不能只按显示文字计算剩余空间。
+    // 换行仍采用 ImGui 的普通流式高度，不让搜索框或画布覆盖选项。
+    const float rowRight =
+        ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+    ImGui::BeginDisabled(m_marqueeSelecting || m_draggingItem ||
+                         m_resizingItem || m_batchDragging);
+    for ( const auto& [value, key] :
+          { std::pair{ Logic::SelectionOperation::Replace,
+                       "ui.selection.replace" },
+            std::pair{ Logic::SelectionOperation::Add, "ui.selection.add" },
+            std::pair{ Logic::SelectionOperation::Subtract,
+                       "ui.selection.subtract" } } ) {
+        const auto  label = TR(key);
+        const float width = ImGui::GetFrameHeight() +
+                            ImGui::GetStyle().ItemInnerSpacing.x +
+                            ImGui::CalcTextSize(label.data()).x;
+        if ( value != Logic::SelectionOperation::Replace &&
+             ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x +
+                     width <=
+                 rowRight )
+            ImGui::SameLine();
+        if ( FeedbackRadioButton(label.data(), *operation == value) )
+            profile.setSelectionOperation(value);
+    }
+    ImGui::EndDisabled();
+    // 提示参与普通流式布局，窄窗口自动换行，后续画布使用剩余可见高度。
+    ImGui::TextWrapped("%s", TR("ui.audio_tool.selection_hint").data());
+}
+
 /// @brief 绘制项目音频工具并推进搜索、预览、选择、拖动和缩放交互。
 /// @param sourceManager 调用视图的 UI 管理器，用于判断项目切换状态。
 ///
@@ -1866,7 +1908,7 @@ ImVec2 ProjectAudioToolView::calculateContentSize(float visibleWidth,
 /// Ctrl+滚轮以指针为缩放锚点，状态栏滑条以视口中心为锚点。
 /// 两种缩放路径最终都夹取滚动范围，防止内容缩小时留下越界空白。
 /// 框选支持严格包含和宽松相交两种项目统一选择模式。
-/// Ctrl 或 Shift 框选从手势开始快照追加，普通框选先清除旧批量集合。
+/// 经典 Ctrl 或 Shift 框选沿用追加；纯鼠标通过显式模式决定替换、追加或减选。
 /// 单项激活与拖动会提升 Z 序，批量拖动则整体提升所有选中方块。
 /// 拖动和缩放使用吸附滞回锁，只有仍真实对齐时才绘制参考线。
 /// 连续交互只更新内存几何；鼠标松开时统一保存最终工作区状态。
@@ -1985,6 +2027,9 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
         renderRenamePopup(dpiScale);
         return;
     }
+
+    // 表格保留原有资源浏览；批量布局选框只属于方块画布。
+    renderSelectionControls();
 
     // 搜索框占满可用宽度，Enter 提交当前高亮结果。
     ImGui::SetNextItemWidth(-1.0F);
@@ -2554,7 +2599,7 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
 
     /// @brief 按当前框选矩形刷新批量选择状态。
     ///
-    /// 基础选择快照用于 Ctrl 或 Shift 追加模式，普通模式的快照全部为未选中。
+    /// 基础选择快照用于追加和减选，替换模式的快照全部为未选中。
     /// Strict 模式要求完整包含方块，宽松模式只要求存在矩形交集。
     /// @warning 框选热路径：每次鼠标移动线性遍历方块，只执行几何判断。
     const auto refreshMarqueeSelection = [&]() {
@@ -2572,14 +2617,19 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
             // 每帧从交互开始快照重算，反向拖动不会累积错误选择。
             bool selected = m_marqueeBaseSelection[index] != 0;
             if ( selectionValid ) {
-                // 追加模式将基础选择与本帧几何命中做逻辑或。
+                // 每帧只组合当前命中与起笔基线；缩框时须恢复先前被减去的方块。
+                // 严格包含和相交命中仍使用原配置，集合模式不能改变几何判定。
+                // 替换的基线在起笔已经归零，所以与追加共用并集计算。
+                const bool hit =
+                    selectionMode == Config::SelectionMode::Strict
+                        ? containsRect(selectionRect, m_items[index].rect)
+                        : ProjectAudioToolLayout::intersection(
+                              selectionRect, m_items[index].rect)
+                              .has_value();
                 selected =
-                    selected ||
-                    (selectionMode == Config::SelectionMode::Strict
-                         ? containsRect(selectionRect, m_items[index].rect)
-                         : ProjectAudioToolLayout::intersection(
-                               selectionRect, m_items[index].rect)
-                               .has_value());
+                    m_marqueeOperation == Logic::SelectionOperation::Subtract
+                        ? selected && !hit
+                        : selected || hit;
             }
             m_items[index].batchSelected = selected;
         }
@@ -2589,7 +2639,15 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     if ( canvasHovered && !audioControlsHovered && !m_draggingItem &&
          !m_resizingItem && !m_batchDragging && !m_marqueeSelecting &&
          Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
-        if ( hoveredItem ) {
+        const auto operation =
+            Interaction::activeProfile().selectionOperation();
+        if ( hoveredItem && operation &&
+             *operation != Logic::SelectionOperation::Replace ) {
+            // 显式追加和减选只更改集合，不能让一次选择意外变成移动、缩放或试听。
+            // 点击已选项的追加保持幂等；减选同样不能反向加入未选中的资源。
+            m_items[*hoveredItem].batchSelected =
+                *operation == Logic::SelectionOperation::Add;
+        } else if ( hoveredItem ) {
             // 已批量选择方块优先启动整体拖动，不再显示单项缩放语义。
             if ( m_items[*hoveredItem].batchSelected ) {
                 beginBatchDrag(*hoveredItem, mouseLogical);
@@ -2609,18 +2667,24 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
                 clearActiveItem();
                 persistWorkspace();
             }
-            // Ctrl 或 Shift 保留交互开始前的批量选择，其余情况从空集合开始。
-            const bool additiveSelection =
-                Interaction::modifier(Interaction::Modifier::Control) ||
-                Interaction::modifier(Interaction::Modifier::Shift);
+            // 显式模式优先；只有经典空模式才解释原有 Ctrl / Shift 追加。
+            // 空值与显式替换不同，不能因真实按下 Shift 覆盖纯鼠标选择模式。
+            // 模式只保存在当前手势，不写入项目资源或改变原方块的持久化字段。
+            // 起笔后锁存，不让其它窗口的模式切换改变半次框选的含义。
+            m_marqueeOperation = operation.value_or(
+                (Interaction::modifier(Interaction::Modifier::Control) ||
+                 Interaction::modifier(Interaction::Modifier::Shift))
+                    ? Logic::SelectionOperation::Add
+                    : Logic::SelectionOperation::Replace);
             // 框选起止点初始化为同一逻辑坐标，首帧尚未形成有效矩形。
             m_marqueeSelecting = true;
             m_marqueeStart     = mouseLogical;
             m_marqueeEnd       = mouseLogical;
             // 使用字节快照避免 vector<bool> 代理语义，并与方块索引一一对应。
+            // 选框基线只在按下边沿分配，连续移动不创建新的资源快照。
             m_marqueeBaseSelection.assign(m_items.size(), 0);
-            if ( additiveSelection ) {
-                // 追加模式复制现有选择位，拖动过程中始终以此为基线。
+            if ( m_marqueeOperation != Logic::SelectionOperation::Replace ) {
+                // 追加和减选都复制现有选择位，拖动过程中始终以此为基线。
                 for ( std::size_t index = 0; index < m_items.size(); ++index ) {
                     m_marqueeBaseSelection[index] =
                         m_items[index].batchSelected ? 1 : 0;

@@ -418,6 +418,69 @@ bool testLessonGesturePolicies()
     ImGui::DestroyContext();
     return ok;
 }
+/// @brief 验证快速滚动开关只覆盖专用查询，经典仍实时读取物理 Shift。
+/// @return 两种表面、两种键盘状态和两种开关组合均符合契约时返回真。
+/// @post 销毁独立输入上下文，恢复经典方案，不写用户软件配置。
+bool checkAcceleratedScroll()
+{
+    // 独立上下文隔离键盘缓存，上一轮画笔测试的修饰值不能成为默认输入。
+    // 禁止写入 ini；固定时间步只推进 ImGui 状态，不依赖真实等待。
+    ImGui::CreateContext();
+    auto& io       = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = { 800, 600 };
+    io.DeltaTime   = 1.0F / 60;
+    unsigned char* pixels{};
+    int            width{}, height{};
+    // 查询前准备 CPU 字体图集，以满足 NewFrame 的正常前置条件。
+    // 字体内存由上下文拥有，测试不释放像素指针或创建图形资源。
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    bool ok = true;
+    // 纯鼠标显式关闭必须覆盖真实 Shift；经典 setter 则必须完全无效。
+    // 同时检查两个表面，避免开关只在主画布有效而遗漏 Timing。
+    for ( bool pure : { true, false } ) {
+        const auto id = pure ? "mouse-only" : "classic-desktop";
+        Interaction::synchronizeProfile(id, true);
+        Interaction::synchronizeProfile(id, true);
+        // 覆盖显式关闭加真实 Shift，以及显式开启加无 Shift 两种关键反例。
+        // 只验证同时启用会漏掉错误地使用逻辑或组合两种状态的实现。
+        for ( bool shift : { false, true } )
+            for ( bool accelerated : { false, true } ) {
+                Interaction::activeProfile().setAcceleratedScrolling(
+                    accelerated);
+                io.AddKeyEvent(ImGuiMod_Shift, shift);
+                // 所有查询位于同一个已解析输入帧，不能直接修改 io.KeyShift。
+                ImGui::NewFrame();
+                for ( auto surface : { Interaction::Surface::MainCanvas,
+                                       Interaction::Surface::Timeline } ) {
+                    const Interaction::SurfaceScope scope(surface);
+                    ok &= require(Interaction::acceleratedScroll() ==
+                                      (pure ? accelerated : shift),
+                                  "accelerated scrolling policy");
+                    // 通用修饰键不能受滚动开关影响，否则绘制、选择和缩放都会改变。
+                    ok &= require(Interaction::modifier(
+                                      Interaction::Modifier::Shift) == shift &&
+                                      io.KeyShift == shift,
+                                  "scroll option leaves shift intact");
+                }
+                // 不提交 UI 窗口也配对结束帧，确保下一组事件能正常推进。
+                ImGui::EndFrame();
+            }
+    }
+    // 上一组纯鼠标最后留下启用值；切出再切入必须恢复常速，不继承隐藏状态。
+    Interaction::synchronizeProfile("mouse-only", true);
+    Interaction::synchronizeProfile("mouse-only", true);
+    // 返回值必须仍是显式常速，不能因清理临时状态而退回经典空模式。
+    // 这样切回纯鼠标后即使真实 Shift 尚未释放，也不会意外快速滚动。
+    ok &= require(Interaction::activeProfile().acceleratedScrolling() == false,
+                  "fast scrolling reset on exit");
+    Interaction::synchronizeProfile("classic-desktop", true);
+    Interaction::synchronizeProfile("classic-desktop", true);
+    // 恢复方案先于销毁上下文，不能把上一组的加速开关留给后续动作测试。
+    // 真实键盘缓存随上下文一起释放，无需向生产全局输入注入补偿事件。
+    ImGui::DestroyContext();
+    return ok;
+}
 }  // namespace
 /// @brief 验证应用级方案、真实输入映射、动作权限、生命周期和配置兼容。
 /// @details 本用例由独立 CTest 进程运行，测试方案不会进入用户的生产注册表。
@@ -665,5 +728,7 @@ int main()
         "mouse-only brush isolation");
     ok &= testMirrorActions();
     ok &= testLessonGesturePolicies();
+    // 保留前面首次激活的精确代数断言，再执行需要多次切换的滚动矩阵。
+    ok &= checkAcceleratedScroll();
     return ok ? 0 : 1;
 }

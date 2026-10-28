@@ -1963,10 +1963,16 @@ void ToolbarView::update(UIManager* sourceManager)
         // 标题、分隔线、滑条、两排按钮与关闭按钮构成完整内容高度。
         // 竖栏底部锚点必须用完整高度判断向上展开，不能复用已裁窄的缓存。
         // 多留一行间距吸收像素舍入，实际窗口仍由内容自动确定大小。
+        // 纯鼠标多出的开关与分隔线也参与初始高度估算，避免底部首次弹出被裁掉。
+        const bool hasFastScroll =
+            Interaction::activeProfile().acceleratedScrolling().has_value();
         const float requiredHeight =
             popupStyle.WindowPadding.y * 2 + ImGui::GetTextLineHeight() + 1.0f +
             ImGui::GetFrameHeight() * 2 + buttonHeight * 2 +
-            popupStyle.ItemSpacing.y * 6;
+            popupStyle.ItemSpacing.y * 6 +
+            (hasFastScroll
+                 ? ImGui::GetFrameHeight() + 1 + popupStyle.ItemSpacing.y * 2
+                 : 0);
         positionToolbarPopup(
             *toolbarWindow,
             m_lastZoomBtnPos,
@@ -2072,6 +2078,25 @@ void ToolbarView::update(UIManager* sourceManager)
                 config.visual.timelineZoom =
                     std::clamp(percent / 100.0f, 0.1f, 10.0f);
                 updateEditorConfig(config);
+            }
+            // 快速滚动独立于缩放数值，只影响时间滚轮和框选边缘速度。
+            // 状态属于当前输入方案，不能通过 updateEditorConfig
+            // 写回永久视觉参数。
+            // 开关变化不创建谱面撤销节点，也不向逻辑线程发送虚假的零位移滚动。
+            // 经典空模式不提交控件，保留原窗口布局和物理 Shift 行为。
+            auto& scrollProfile = Interaction::activeProfile();
+            if ( const auto accelerated =
+                     scrollProfile.acceleratedScrolling() ) {
+                ImGui::Separator();
+                bool enabled = *accelerated;
+                if ( FeedbackCheckbox(TR("ui.mouse_scroll.fast").data(),
+                                      &enabled) )
+                    scrollProfile.setAcceleratedScrolling(enabled);
+                // 开关解释不占浮层宽度；中文、英文与高 DPI
+                // 下仍保持原按钮行完整。
+                if ( ImGui::IsItemHovered() )
+                    ImGui::SetTooltip("%s",
+                                      TR("ui.mouse_scroll.fast_hint").data());
             }
             // 明确的关闭按钮保证触屏无悬浮、无右键时也能退出。
             if ( FeedbackButton(TR("ui.window.close").data()) )

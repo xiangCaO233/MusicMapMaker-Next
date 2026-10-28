@@ -291,7 +291,7 @@ ImU32 timelineGearBackgroundColor(const ImVec4& gearColor, bool hovered)
     const float luminance = 0.2126f * gearColor.x * gearColor.x +
                             0.7152f * gearColor.y * gearColor.y +
                             0.0722f * gearColor.z * gearColor.z;
-    const int alpha = hovered ? 242 : 218;
+    const int   alpha     = hovered ? 242 : 218;
     if ( luminance < 0.18f ) {
         // 深色齿轮配浅底，浅色齿轮配近黑底；悬停只提高底板 alpha。
         return IM_COL32(248, 250, 255, alpha);
@@ -614,10 +614,10 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 ImGui::IsItemDeactivatedAfterEdit();
             if ( sliderChanged ) {
                 // UI 滑块编辑视觉时间，逻辑 Seek 使用扣除视觉偏移的音频时间。
-                float visualOffset = Config::AppConfig::instance()
-                                         .getVisualConfig()
-                                         .getEffectiveVisualOffset();
-                double targetTime = static_cast<double>(time);
+                float  visualOffset = Config::AppConfig::instance()
+                                          .getVisualConfig()
+                                          .getEffectiveVisualOffset();
+                double targetTime   = static_cast<double>(time);
                 if ( UI::Interaction::modifier(
                          UI::Interaction::Modifier::Shift) ) {
                     // Shift 吸附仅影响本次候选，不永久改变 beat divisor。
@@ -720,8 +720,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                         Event::LogicCommandEvent(Logic::CmdScroll{
                             m_name,
                             -wheel,
-                            UI::Interaction::modifier(
-                                UI::Interaction::Modifier::Shift) }));
+                            UI::Interaction::acceleratedScroll() }));
                 }
             }
 
@@ -851,8 +850,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
 
             auto isNearInlineGearTime =
                 [&](const Common::Render::TimelineInteractiveElement& el) {
-                    bool isNearTime = hoveredSnapped &&
-                                      std::abs(el.time - hoveredTime) < 1e-5;
+                    bool isNearTime  = hoveredSnapped &&
+                                       std::abs(el.time - hoveredTime) < 1e-5;
                     bool isNearPixel = std::abs(localMouseY - el.y) < proximity;
                     // 精确吸附时间或视觉像素接近任一成立即可展示齿轮。
                     return isNearTime || isNearPixel;
@@ -1533,7 +1532,7 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
             const int       lane      = professionalTimingLane(effect);
             noteW                     = std::max(1.0f, laneWidth - 2.0f);
             noteX                     = laneWidth * static_cast<float>(lane) +
-                    (laneWidth - noteW) * 0.5f;
+                                        (laneWidth - noteW) * 0.5f;
         }
 
         float noteH = noteW * 0.36f;
@@ -1638,9 +1637,9 @@ void TimelineCanvas::refreshTimelineInteractionDecoration(const ImVec2& size)
         // 所有状态都以实体 ID 与当前本地交互集合比较，不查询 registry。
         const bool selected = m_selectedTimingEntities.find(target.entity) !=
                               m_selectedTimingEntities.end();
-        const bool hovered = target.entity == m_hoveredTimingEntity;
-        const bool erasing = m_timingEraseTargetEntities.find(target.entity) !=
-                             m_timingEraseTargetEntities.end();
+        const bool hovered  = target.entity == m_hoveredTimingEntity;
+        const bool erasing  = m_timingEraseTargetEntities.find(target.entity) !=
+                              m_timingEraseTargetEntities.end();
         const bool dragging = m_isTimingDragging && selected;
         const bool popupEditing =
             m_isPopupOpen && target.entity == m_editingEntity;

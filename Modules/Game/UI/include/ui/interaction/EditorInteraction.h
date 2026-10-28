@@ -132,6 +132,11 @@ public:
     virtual std::optional<CameraPointerOptions> cameraPointerOptions() const;
     /// @brief 只更新后续相机手势的意图，不修改物理键盘状态。
     virtual void setCameraPointerOptions(CameraPointerOptions options);
+    /// @brief 显式时间滚动加速；经典返回空，继续动态读取真实 Shift。
+    /// @warning 每帧只读取方案标量，不改变分拍、缩放或物理修饰键。
+    virtual std::optional<bool> acceleratedScrolling() const;
+    /// @brief 设置纯鼠标快速滚动意图，切出方案时清除。
+    virtual void setAcceleratedScrolling(bool accelerated);
     /// @brief 解释滚轮方向与倍率，横纵轴分开，不改变 ImGui 控件自身滚动。
     virtual float wheel(Surface surface, float physical, bool horizontal) const;
     /// @brief 解释键盘主键，支持整套键位语义替换；参数为 ImGui 命名键值。
@@ -228,6 +233,9 @@ bool lessonBrushModifiersMatch(bool extending);
 /// @brief 独立的忽略吸附语义，组合物理 Ctrl 与当前方案临时开关。
 /// @warning 每帧固定标量查询；不得用于选择切换、滚轮修饰或框选集合操作。
 bool bypassSnapping();
+/// @brief 只为时间滚轮与框选边缘滚动解析加速，不作为通用 Shift 使用。
+/// @warning 每帧常量查询；经典沿用物理 Shift，纯鼠标使用显式开关。
+bool acceleratedScroll();
 /// @brief 查询主键边沿，保留旧调用者是否允许重复的语义。
 bool keyPressed(int key, bool repeat = true);
 /// @brief 查询主键保持状态，供连续编辑使用。

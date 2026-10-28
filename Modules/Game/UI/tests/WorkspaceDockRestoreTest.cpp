@@ -1415,6 +1415,11 @@ bool checkMouseOnlyTimelineZoom()
     settings.toolbarVisibility.independentButtons = {
         false, false, false, false, false, false, false, false, false, true
     };
+    // 显式启用纯鼠标，快速滚动开关与缩放按钮共享真实浮层。
+    // 退出时恢复原方案，前后场景不依赖测试进程恰好处于哪个模式。
+    const std::string savedProfile(MMM::UI::Interaction::activeProfile().id());
+    MMM::UI::Interaction::synchronizeProfile("mouse-only", true);
+    MMM::UI::Interaction::synchronizeProfile("mouse-only", true);
     createContext();
     bool passed = true;
     // 前面的窗口测试会释放当前 Clay 上下文，管理器构造需要有效上下文。
@@ -1604,9 +1609,30 @@ bool checkMouseOnlyTimelineZoom()
                 click(ImVec2(presetX, presetY));
                 passed &= std::abs(service.m_config.visual.timelineZoom -
                                    4.0f) < 0.001f;
+                // 真实开关紧邻关闭按钮，定位使用当前浮层高度而非旧版固定行数。
+                // 新增行必须完整位于视口，点击不能误触底部关闭按钮或缩放预设。
+                // 缩放提交次数同时作为副作用检查，开关不得改写视觉配置。
+                // 同一坐标开关两次，窗口无需关闭重建即可反映最新策略。
+                // 此时处于竖栏布局，浮层尺寸已经按新增行重新测量。
+                const auto   scrollToggleUpdates = service.m_updates;
+                const ImVec2 fastPoint{ popup->Pos.x + style.WindowPadding.x +
+                                            ImGui::GetFrameHeight() / 2,
+                                        popup->Pos.y + popup->Size.y -
+                                            style.WindowPadding.y -
+                                            ImGui::GetFrameHeight() * 1.5F -
+                                            style.ItemSpacing.y };
+                click(fastPoint);
+                passed &= MMM::UI::Interaction::activeProfile()
+                              .acceleratedScrolling() == true;
+                click(fastPoint);
+                passed &= MMM::UI::Interaction::activeProfile()
+                                  .acceleratedScrolling() == false &&
+                          service.m_updates == scrollToggleUpdates;
             }
         }
     }
+    MMM::UI::Interaction::synchronizeProfile(savedProfile, true);
+    MMM::UI::Interaction::synchronizeProfile(savedProfile, true);
     ImGui::DestroyContext();
     settings = saved;
     // 管理器已经销毁，才能释放其测量回调所属的布局上下文。

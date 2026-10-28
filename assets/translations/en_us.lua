@@ -59,6 +59,10 @@ return {
 	["ui.menu.frame_stats_fmt"] = "FT: {:.2f} ms | FPS: {:.1f} | UPS: {:.1f}",
 
 	["ui.edit"] = "&Edit",
+	["ui.mouse_scroll.fast"] = "Fast scrolling",
+	["ui.mouse_scroll.fast_hint"] = "Accelerate time scrolling and selection edge scrolling in the main canvas and Timing view.",
+	["ui.audio_tool.selection_mode"] = "Resource selection mode",
+	["ui.audio_tool.selection_hint"] = "Add / Subtract: click or box-select resources. Replace: retain dragging, resizing and preview controls.",
 	["ui.selection.replace"] = "Replace selection",
 	["ui.selection.overlapping"] = "Select overlapping object",
 	["ui.selection.audio_sample"] = "Audio sample",

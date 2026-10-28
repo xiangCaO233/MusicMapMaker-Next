@@ -86,11 +86,23 @@ public:
     {
         m_cameraPointerOptions = options;
     }
-    /// @brief 切出时清除临时吸附及相机选项，重新进入不继承隐藏开关。
+    /// @brief 显式快速滚动与其它表面修饰分离，不改变滚轮数值本身。
+    /// @warning 每帧只读取本地布尔值，不访问配置或会话。
+    std::optional<bool> acceleratedScrolling() const override
+    {
+        return m_acceleratedScrolling;
+    }
+    /// @brief 后续滚轮与边缘滚动立即采用新开关，不需要保存或线程同步。
+    void setAcceleratedScrolling(bool accelerated) override
+    {
+        m_acceleratedScrolling = accelerated;
+    }
+    /// @brief 切出时清除临时吸附、相机和滚动选项，防止隐藏状态跨方案残留。
     void deactivate() override
     {
         m_bypassSnapping       = false;
         m_cameraPointerOptions = {};
+        m_acceleratedScrolling = false;
     }
     /// @brief 主画布无需修饰键即可延伸画笔，其他表面保留原语义。
     /// @warning 连续绘制只做枚举判断，不持有会话或跨帧指针。
@@ -102,6 +114,8 @@ public:
     }
 
 private:
+    /// @brief 只覆盖时间滚动加速，不用于选择、画笔或属性滚轮调整。
+    bool m_acceleratedScrolling{ false };
     /// @brief 相机专用意图，不持久化、不模拟 Shift，生命周期属于当前方案。
     CameraPointerOptions m_cameraPointerOptions{};
     /// @brief 纯鼠标擦除粒度，跨工具切换保留，但不影响经典方案。
@@ -249,6 +263,21 @@ IEditorInteractionProfile::cameraPointerOptions() const
 }
 /// @brief 经典模式忽略显式相机意图，防止跨方案污染。
 void IEditorInteractionProfile::setCameraPointerOptions(CameraPointerOptions) {}
+/// @brief 经典模式的空值明确保留物理 Shift 的原始解释。
+/// @warning 每帧仅返回空标量，不产生额外状态。
+std::optional<bool> IEditorInteractionProfile::acceleratedScrolling() const
+{
+    return std::nullopt;
+}
+/// @brief 经典方案忽略纯鼠标开关，不引入全局虚拟修饰键。
+void IEditorInteractionProfile::setAcceleratedScrolling(bool) {}
+/// @brief 在时间滚动入口解析专用意图，避免加速泄漏到其它 Shift 操作。
+/// @warning 每帧固定次数的方案查询，不访问会话或改变输入事件队列。
+bool acceleratedScroll()
+{
+    const auto accelerated = activeProfile().acceleratedScrolling();
+    return accelerated ? *accelerated : modifier(Modifier::Shift);
+}
 /// @brief 查询明确的主画布延伸策略，不依赖方案身份字符串或当前 UI 输入域。
 /// @warning 每帧无分配，不查询会话或伪造键盘事件。
 bool modifierFreeBrush()

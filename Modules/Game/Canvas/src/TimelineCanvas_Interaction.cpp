@@ -2030,7 +2030,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                     size.y,
                     localMouseY,
                     io.DeltaTime,
-                    UI::Interaction::modifier(UI::Interaction::Modifier::Shift),
+                    UI::Interaction::acceleratedScroll(),
                     autoScrolled);
                 if ( autoScrolled ) {
                     const double visualOffset = Config::AppConfig::instance()

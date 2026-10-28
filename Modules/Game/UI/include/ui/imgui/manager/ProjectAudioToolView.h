@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common/SelectionOperation.h"
 #include "event/core/EventBus.h"
 #include "mmm/project/AudioTrackType.h"
 #include "ui/IUIView.h"
@@ -52,6 +53,11 @@ public:
     void disableProfessionalEditing();
 
 private:
+    /// @brief 绘制纯鼠标资源选择模式；经典方案不增加控件或改变布局。
+    /// @warning 每帧固定三个控件，只更新 UI 意图，活动布局手势禁止切换。
+    void renderSelectionControls();
+    /// @brief CPU 回归只观察稳定资源身份和本地手势，不替代生产选择算法。
+    friend struct ProjectAudioToolSelectionTestAccess;
     /// @brief 绘制可滚动资源表格，复用选择、试听、音量与重命名流程。
     /// @param dpiScale 当前窗口内容缩放。
     /// @warning UI 热路径：只提交可见缓存行；资源筛选仅在脏标记变化时重建。
@@ -357,6 +363,10 @@ private:
 
     /// @brief 是否正在从空白画布拖出批量布局选框。
     bool m_marqueeSelecting{ false };
+    /// @brief 框选按下时锁存集合操作，持续拖动始终从起笔基线重算。
+    Logic::SelectionOperation m_marqueeOperation{
+        Logic::SelectionOperation::Replace
+    };
 
     /// @brief 批量布局选框在逻辑画布中的起点。
     ImVec2 m_marqueeStart{ 0.0F, 0.0F };
