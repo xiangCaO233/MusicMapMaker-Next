@@ -203,21 +203,23 @@ void TimelineCanvas::openInterpolationEditor(
     m_requestInterpolationEditor = true;
 }
 
-/// @brief Shift 拖动放置范围；正文双击编辑，右键删除整个段落。
+/// @brief 自动点按创建单点、拖动创建范围；经典保留 Shift 拖动。
 /// @warning 每帧输入路径，使用已发布段落描述；不扫描 ECS 或等待异步提交。
 /// @param position 当前 Timeline 图像的屏幕左上角。
 /// @param size 与快照换算使用相同的图像尺寸。
 /// @param hovered 输入是否位于画布有效区域且未覆盖菜单按钮。
 /// @return 输入属于段落交互时返回真，普通时间点逻辑应跳过本帧。
 /// @pre 调用方已检查焦点、弹窗、播放状态和文本输入。
-/// @details 经典 Shift 或纯鼠标显式段落模式保留两端，不逐次发布逻辑命令。
+/// @details 自动手势先显示起点，越过拖动阈值再扩展范围，不逐次发布逻辑命令。
+/// @param canCreateAutomaticPoint 起笔未命中普通
+/// Timing，允许在零范围释放时新建时间点。
 /// @note 沿用时间线吸附，手势可反向拖动，松手时才排序两端时间。
 /// @note 移动模式仍允许抓取原 Timing 标记来移动整个段落。
 /// @note 右键正文删除单个段落实体，所有曲线字段进入已有撤销栈。
 /// @note 双击正文只打开编辑副本，不在当前帧改变数据。
-bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
-                                                    const ImVec2& size,
-                                                    bool          hovered)
+bool TimelineCanvas::handleInterpolationInteraction(
+    const ImVec2& position, const ImVec2& size, bool hovered,
+    bool canCreateAutomaticPoint)
 {
     auto&      io = ImGui::GetIO();
     const bool professional =
@@ -230,15 +232,21 @@ bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
                                                   std::max(1.0f, laneWidth)),
                                  0,
                                  4);
-    const auto drawMode =
-        UI::Interaction::activeProfile().timingInterpolationDraw();
-    // 显式模式独立于键盘；空模式保留经典 Shift 且非 Ctrl 的起笔门禁。
-    // value_or 只提供经典缺省值，显式点模式不能与物理 Shift 做或运算。
-    // 模式只在开始时取样，持续拖动使用成员锁存值，避免外部设置中途改意图。
-    // 经典门禁保留 Ctrl 排除规则，不复用临时免吸附的语义查询。
-    const bool startsRange = drawMode.value_or(
-        UI::Interaction::modifier(UI::Interaction::Modifier::Shift) &&
-        !UI::Interaction::modifier(UI::Interaction::Modifier::Control));
+    const bool automatic =
+        UI::Interaction::activeProfile().automaticTimingDraw();
+    // 自动起笔先尊重已有段落正文，保留双击编辑和右键删除，不能在正文内叠加新点。
+    // 活动手势则优先完成自己的范围，不被途中遇到的旧段落抢走释放事件。
+    if ( automatic && !m_isInterpolationDragging && hovered &&
+         handleInterpolationBody(position, size) )
+        return true;
+    // 普通 Timing 的拾取结果由调用方复用，不能为自动点按再扫描一次目标集合。
+    // 在已有点上仍允许起拖画段，但点按不得创建重复点；擦除事务则禁止起笔。
+    const bool startsRange =
+        automatic
+            ? !m_isTimingErasing
+            : UI::Interaction::modifier(UI::Interaction::Modifier::Shift) &&
+                  !UI::Interaction::modifier(
+                      UI::Interaction::Modifier::Control);
     if ( !m_isInterpolationDragging && hovered && startsRange &&
          m_currentSnapshot->currentTool == Logic::EditTool::Draw &&
          UI::Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
@@ -247,20 +255,25 @@ bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
         // 新手势不继承旧的编辑实体，否则确认可能覆盖上一个段落。
         // 保留首点直到松手，连续拖动只改变当前尾点。
         // 手势也绑定谱面实例，跨标签切换后松手不能写入新的谱面。
-        m_interpolationBeatmapKey  = m_currentSnapshot->beatmapPathKey;
-        m_interpolationGestureMode = drawMode;
-        m_interpolationInstanceId  = m_currentSnapshot->beatmapInstanceId;
-        m_interpolationEdit        = {};
+        m_interpolationBeatmapKey       = m_currentSnapshot->beatmapPathKey;
+        m_interpolationGestureAutomatic = automatic;
+        m_interpolationPointAllowed     = canCreateAutomaticPoint;
+        m_interpolationDragMoved        = false;
+        m_interpolationInstanceId       = m_currentSnapshot->beatmapInstanceId;
+        m_interpolationEdit             = {};
         m_interpolationEdit.effect =
             INTERPOLATION_EFFECTS[professional
                                       ? lane
                                       : std::clamp(m_createType, 0, 3)];
         bool snapped = false;
-        m_interpolationEdit.time =
-            snapTimingTime(size,
-                           canvasTimeAtLocalY(size, io.MousePos.y - position.y),
-                           io.MousePos.y - position.y,
-                           snapped);
+        // 原始时间留给普通点弹窗的来源选项，段落起点另行使用吸附后的非负值。
+        // 两者职责不同，不能把原始值覆盖成段落用的钳制时间。
+        m_interpolationStartRawTime =
+            canvasTimeAtLocalY(size, io.MousePos.y - position.y);
+        m_interpolationEdit.time = snapTimingTime(size,
+                                                  m_interpolationStartRawTime,
+                                                  io.MousePos.y - position.y,
+                                                  snapped);
         // 吸附可能命中首 BPM 以前的负拍，但段落创建起点不能为负。
         // 用户仍能在窗口中以秒精度进一步调整有效范围。
         m_interpolationEdit.time = std::max(0.0, m_interpolationEdit.time);
@@ -286,21 +299,28 @@ bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
             m_interpolationEdit.value;
         m_interpolationEnd        = m_interpolationEdit.time;
         m_isInterpolationDragging = true;
-        m_isTimingDrawPreviewing  = false;
+        m_isTimingDrawPreviewing  = automatic && m_interpolationPointAllowed;
+        if ( automatic ) {
+            // 单点预览直接复用 Timing 标记装饰，类型和原点都在按下时固定。
+            m_createType            = professional ? lane : m_createType;
+            m_timingDrawPreviewTime = m_interpolationEdit.time;
+        }
     }
     // 活动手势优先于正文命中，向已有段落拖动时仍能完成范围选择。
     // 合法性由弹窗明确提示，不能在半途中静默切换到普通点放置。
     if ( m_isInterpolationDragging ) {
-        // 经典手势全程要求 Shift；纯鼠标手势由起笔模式锁存并可右键取消。
+        // 经典手势全程要求 Shift；自动手势锁存起笔能力并可右键取消。
         // 取消手势后立即消费本帧输入，普通点放置不再处理同一次鼠标释放。
         // 两套门禁独立，纯鼠标无需维持修饰键，取消后也不能创建普通时间点。
         // 文件路径相同但重新加载也需要取消，不能仅以文件名判断来源。
         // 取消只清除 UI 手势，无需提交或等待逻辑线程撤销。
         // 取消读取语义动作，使自定义键位与插值弹窗关闭使用同一入口。
-        if ( (!m_interpolationGestureMode &&
+        if ( (!m_interpolationGestureAutomatic &&
               !UI::Interaction::modifier(UI::Interaction::Modifier::Shift)) ||
-             (m_interpolationGestureMode &&
+             (m_interpolationGestureAutomatic &&
               UI::Interaction::mouseClicked(ImGuiMouseButton_Right)) ||
+             (m_interpolationGestureAutomatic &&
+              m_currentSnapshot->currentTool != Logic::EditTool::Draw) ||
              UI::ShortcutUtils::isActionShortcutPressed("cancelInteraction",
                                                         true) ||
              m_currentSnapshot->beatmapPathKey != m_interpolationBeatmapKey ||
@@ -308,6 +328,7 @@ bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
                  m_interpolationInstanceId ) {
             // 取消后不保留半段定义作为普通时间点，不需要追加撤销动作。
             m_isInterpolationDragging = false;
+            m_isTimingDrawPreviewing  = false;
             return true;
         }
         bool snapped       = false;
@@ -317,6 +338,24 @@ bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
                            canvasTimeAtLocalY(size, io.MousePos.y - position.y),
                            io.MousePos.y - position.y,
                            snapped));
+        if ( m_interpolationGestureAutomatic ) {
+            // 读取原始增量后比较用户阈值，释放帧初次采样到远端也能正确升级。
+            // 库的最大拖动距离缓存可能尚未计入释放位置，不能依赖其历史锁存。
+            // 阈值仍使用原有 ImGui 配置，避免微小抖动或吸附跳格误开段落窗口。
+            const auto delta =
+                UI::Interaction::mouseDragDelta(ImGuiMouseButton_Left, 0.0F);
+            // 越过阈值后保留升级状态；返回起点时仍由最终时间范围判断是否退化。
+            // 时间轴缩放或吸附变化本身不是手指移动，不能单独触发类型升级。
+            const float distanceSquared = delta.x * delta.x + delta.y * delta.y;
+            const float threshold       = std::max(0.0F, io.MouseDragThreshold);
+            m_interpolationDragMoved |=
+                distanceSquared > 0 && distanceSquared >= threshold * threshold;
+            const bool hasRange = m_interpolationDragMoved &&
+                                  std::abs(m_interpolationEnd -
+                                           m_interpolationEdit.time) >= 0.001;
+            m_isTimingDrawPreviewing = m_interpolationPointAllowed && !hasRange;
+            if ( !hasRange ) m_interpolationEnd = m_interpolationEdit.time;
+        }
         // 松手是唯一的新段提交准备点；之前的连续鼠标反馈完全在 UI 内。
         // 打开弹窗只是准备工作副本，用户确认前没有任何谱面变更。
         // 单击零范围不打开段落窗口，避免与普通单点放置手势混淆。
@@ -324,8 +363,9 @@ bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
         // 手势结束后立即消除预览，提交之前不会产生可撤销实体。
         if ( UI::Interaction::mouseReleased(ImGuiMouseButton_Left) ) {
             m_isInterpolationDragging = false;
+            m_isTimingDrawPreviewing  = false;
             // 反向拖动在松手时统一时间顺序，曲线本身仍按早到晚定义。
-            // 不足一毫秒的退化范围丢弃，不制造空段落或重复起点。
+            // 经典丢弃退化范围；自动模式回到普通点弹窗，不制造空段落。
             const double start =
                 std::min(m_interpolationEdit.time, m_interpolationEnd);
             const double duration =
@@ -334,13 +374,44 @@ bool TimelineCanvas::handleInterpolationInteraction(const ImVec2& position,
                 m_interpolationEdit.time                     = start;
                 m_interpolationEdit.interpolation.m_duration = duration;
                 openInterpolationEditor(m_interpolationEdit);
+            } else if ( m_interpolationGestureAutomatic &&
+                        m_interpolationPointAllowed ) {
+                // 未形成范围时走原普通点弹窗，使用起笔类型与原始时间，不取松手泳道。
+                // 用当前投影还原原始时间，即使按住期间视野变化也不会把起点移走。
+                m_createType = interpolationLane(m_interpolationEdit.effect);
+                const float startY = static_cast<float>(
+                    canvasYAtTime(size, m_interpolationStartRawTime));
+                const float startX =
+                    (static_cast<float>(m_createType) + 0.5F) * laneWidth;
+                // 泳道中心只用于恢复已锁存类型，不是重新从释放位置拾取类型。
+                // 普通模式忽略横坐标，仍沿用原有创建参数与位置来源选择。
+                openTimingCreatePopupAtY(size, startY, startX, false);
             }
         }
         return true;
     }
-    // 起始命中必须在画布内部，已有手势的松手可发生在图像外。
-    // 因此活动手势的处理位于这个边界检查之前。
-    if ( !hovered ) return false;
+    // 自动模式已经在起笔前处理正文，经典则保留原有 Shift 起段优先级。
+    return !automatic && hovered && handleInterpolationBody(position, size);
+}
+
+/// @brief 已有段落正文保留原来的编辑、删除和绘制遮挡语义。
+/// @param position 当前图像的屏幕原点，与正文拾取共用同一坐标系。
+/// @param size 当前图像尺寸，只用于时间投影与专业模式泳道划分。
+/// @return 已有正文消费输入时返回真，空白区域由调用方继续处理起笔。
+/// @warning 每帧只遍历段落快照，单击不产生新实体，活动新手势不调用此入口。
+bool TimelineCanvas::handleInterpolationBody(const ImVec2& position,
+                                             const ImVec2& size)
+{
+    // 此入口仅处理没有活动新笔的正文命中，原有段落身份与内容始终来自快照。
+    // 拆出共用命中逻辑，使经典保留 Shift 优先，自动模式则先保护已有正文。
+    auto&      io = ImGui::GetIO();
+    const bool professional =
+        Config::AppConfig::instance().getEditorSettings().professionalMode;
+    const float laneWidth = professional ? size.x / 5.0F : size.x;
+    const int lane = std::clamp(static_cast<int>((io.MousePos.x - position.x) /
+                                                 std::max(1.0F, laneWidth)),
+                                0,
+                                4);
     // 循环遍历的是缓存段落描述，不遍历时间线 ECS，也不展开采样点。
     // 只在对应泳道正文内响应双击或删除，不抢走相邻效果区域的输入。
     for ( const auto& segment : m_currentSnapshot->timingInterpolations ) {
@@ -490,7 +561,10 @@ void TimelineCanvas::renderInterpolationOverlay(const ImVec2& position,
     }
     // 活动预览只借用 UI 的两个端点，正式描述仍来自逻辑快照。
     // 松手进入窗口后不继续画出旧手势，防止范围修改显示两份结果。
-    if ( m_isInterpolationDragging )
+    // 点候选复用普通标记装饰，升级后才绘制区间带，避免叠加两份起点反馈。
+    if ( m_isInterpolationDragging && !m_isTimingDrawPreviewing &&
+         (!m_interpolationGestureAutomatic ||
+          std::abs(m_interpolationEnd - m_interpolationEdit.time) >= 0.001) )
         render(m_interpolationEdit,
                m_interpolationEnd,
                m_interpolationDragPreview);

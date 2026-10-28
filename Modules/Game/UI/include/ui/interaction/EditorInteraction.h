@@ -129,11 +129,9 @@ public:
     virtual bool bypassSnapping() const;
     /// @brief 设置纯鼠标的临时吸附策略，切出方案后清除。
     virtual void setBypassSnapping(bool bypass);
-    /// @brief Timing 绘制模式；空表示经典 Shift 手势，显式值区分点与插值段。
-    /// @warning 起笔读取一次，活动插值手势保持自身解释。
-    virtual std::optional<bool> timingInterpolationDraw() const;
-    /// @brief 只设置后续 Timing 手势，不改变主画布折线绘制方式。
-    virtual void setTimingInterpolationDraw(bool interpolation);
+    /// @brief Timing 是否按点按与拖动自动区分单点和插值段落。
+    /// @warning 每帧仅查询方案能力，不改变真实 Shift 或分配手势状态。
+    virtual bool automaticTimingDraw() const;
     /// @brief 显式相机指针意图；经典返回空以保留动态 Shift 手势。
     /// @warning 每帧按值读取两个标量，不分配资源或访问会话。
     virtual std::optional<CameraPointerOptions> cameraPointerOptions() const;

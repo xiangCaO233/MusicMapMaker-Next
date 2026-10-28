@@ -12,6 +12,7 @@
 #include "logic/EditorEngine.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/interaction/EditorInteraction.h"
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <entt/entity/entity.hpp>
@@ -46,6 +47,34 @@ struct TimingContextMenuTestAccess {
     static bool dragging(const TimelineCanvas& c)
     {
         return c.m_isInterpolationDragging;
+    }
+    /// @brief 普通点装饰必须在按下时出现，不能等到释放才反推用户意图。
+    /// @param c 只读本地手势状态，不复制快照或请求新一轮 UI 更新。
+    /// @return 升级为段落、取消或释放之后必须为假。
+    static bool pointPreview(const TimelineCanvas& c)
+    {
+        return c.m_isTimingDrawPreviewing;
+    }
+    /// @brief 单点草稿按起笔类型定位，横跨泳道不能改变本笔的参数种类。
+    /// @return 创建类型的原有索引，不从鼠标释放位置重新计算。
+    static int pointType(const TimelineCanvas& c) { return c.m_createType; }
+    /// @brief 保留鼠标原始时间来源，不把轻微抖动后的释放时间当作点按起点。
+    /// @return 单位为秒，保留普通创建弹窗中的原始位置来源。
+    static double pointTime(const TimelineCanvas& c)
+    {
+        return c.m_createTimeRaw;
+    }
+    /// @brief 按值观察插值工作副本的类型和实体，区分新段与已有段编辑。
+    /// @return 实际效果类型，不能仅靠弹窗开启状态推断泳道正确。
+    static TimingEffect rangeType(const TimelineCanvas& c)
+    {
+        return c.m_interpolationEdit.effect;
+    }
+    /// @brief 编辑已有段落必须保留其稳定实体身份。
+    /// @return 原实体句柄，新建与编辑混淆时此断言必须失败。
+    static entt::entity editEntity(const TimelineCanvas& c)
+    {
+        return c.m_interpolationEdit.entity;
     }
     /// @brief 请求弹窗也属于准备完成，不要求在测试里渲染编辑器正文。
     static bool editor(const TimelineCanvas& c)
@@ -387,15 +416,8 @@ bool checkMenu()
     tap(first);
     passed &= Access::count(canvas) == 1 && Access::contains(canvas, 43);
     snapshot.currentTool = Logic::EditTool::Marquee;
-    // 新项目位于菜单末尾，逐项通过真正鼠标激活，避免仅测试策略 setter。
-    // 先选段再选点，既检验勾选状态又检验两个可见入口都能执行。
-    // 列表末尾新增行不改旧剪贴板、导航和集合模式行的位置。
-    passed &= click(canvas, snapshot, point, 15);
-    passed &=
-        UI::Interaction::activeProfile().timingInterpolationDraw() == true;
-    passed &= click(canvas, snapshot, point, 14);
-    passed &=
-        UI::Interaction::activeProfile().timingInterpolationDraw() == false;
+    // Timing 点拖自动识别，不再通过右键菜单切换绘制偏好。
+    passed &= UI::Interaction::activeProfile().automaticTimingDraw();
     // 吸附开关来自菜单实际激活，而不是下面范围用例的准备 setter。
     // 再次打开菜单时必须使用新的落点策略，原菜单锚点仍保持已锁存的值。
     passed &= click(canvas, snapshot, point, 13);
@@ -448,9 +470,13 @@ bool checkMenu()
             "failed");
     return passed;
 }
-/// @brief 验证纯鼠标插值范围、反向拖动和右键取消，并保留经典 Shift 门禁。
+/// @brief 验证纯鼠标 Timing 点拖自动分流、取消及旧段编辑，保留经典 Shift 门禁。
 /// @details 每个场景使用新视图，避免尚未渲染的编辑弹窗影响下一场景。
 /// @return 无键盘即可画段，取消不创建单点，经典不改变时返回真。
+/// @pre 使用 CPU ImGui 上下文和独立空谱面，不启动图形或音频后端。
+/// @note 参数草稿是输出边界，未确认时不得产生谱面创建命令。
+/// @note 每个鼠标边沿都经生产路由，不直接设置拖动标志或编辑状态。
+/// @note STOP 没有连续区间定义，必须始终走原有普通时间点创建流程。
 bool checkRangeDrawing()
 {
     // 插值编辑器需要复制活动会话的冲突检查数据，快照本身不能替代真实会话。
@@ -474,6 +500,9 @@ bool checkRangeDrawing()
     // 本用例独立记录失败阶段，避免某个门禁未触发时被后面的结果覆盖。
     // 日志不读取 ECS 或控制器私有状态，所有断言仍观察正式手势产生的结果。
     bool passed = true;
+    /// @brief 记录各阶段失败，不以最后一次成功覆盖先前错误。
+    /// @param value 已经完成真实输入路由后的断言结果。
+    /// @param stage 区分起笔、升级、取消与已有段编辑的诊断身份。
     auto expect = [&](bool value, const char* stage) {
         if ( !value ) XERROR("Timing range stage failed: {}", stage);
         passed &= value;
@@ -490,48 +519,180 @@ bool checkRangeDrawing()
         });
     // 临时免吸附让 expected 能直接由相同投影计算，不预设拍线网格相位。
     // 帧辅助函数只注入左右键，证明无键盘参与也能进入持续拖动状态。
-    UI::Interaction::activeProfile().setTimingInterpolationDraw(true);
     UI::Interaction::activeProfile().setBypassSnapping(true);
-    for ( bool cancel : { false, true } ) {
+    // 四种可插值泳道共享同一自动手势，不给某种效果另设点或段模式。
+    const std::array effects{ TimingEffect::BPM,
+                              TimingEffect::SCROLL,
+                              TimingEffect::JUMP,
+                              TimingEffect::HS };
+    for ( int lane = 0; lane < 4; ++lane ) {
+        // 点按、抖动、横移、释放帧拖动、正向拖动和反向拖动都从真实按下开始。
+        // 场景之间使用新视图，未确认的参数草稿不能阻塞下一个独立用户动作。
+        for ( int scenario = 0; scenario < 6; ++scenario ) {
+            // 新画布只隔离未确认草稿，指针输入仍共用同一个真实窗口。
+            // 唯一名称同时隔离守卫身份，不能把旧事务误算为本轮成功。
+            Canvas::TimelineCanvas canvas(
+                "AutoTiming" + std::to_string(lane * 6 + scenario),
+                500,
+                500,
+                nullptr);
+            const auto   origin = frame(canvas, snapshot, { 100, 100 });
+            const ImVec2 first{ origin.x + (lane + 0.5F) * 100,
+                                origin.y + 200 };
+            // 起终点重合模拟点按，微小二维抖动不能绕过用户拖动阈值。
+            ImVec2 last = first;
+            if ( scenario == 1 ) {
+                last.x += 1;
+                last.y += 1;
+            }
+            // 纯横移虽越过阈值，却没有时间范围，仍应创建起笔泳道的点。
+            if ( scenario == 2 ) last.x = origin.x + (lane == 3 ? 50 : 450);
+            // 有效范围都横跨其它泳道，类型必须来自起笔而非释放帧。
+            // 第三场景只在释放时移动，其余两种分别覆盖正向和反向时间。
+            if ( scenario >= 3 ) {
+                last.y = origin.y + (scenario == 5 ? 350 : 70);
+                last.x = origin.x + (lane == 3 ? 50 : 450);
+            }
+            // Shift
+            // 故意在部分单点和段落中保持按住，纯鼠标必须始终按移动量区分。
+            // 原始时间与类型从起笔独立记录，断言不能照抄最后鼠标位置。
+            ImGui::GetIO().AddKeyEvent(ImGuiMod_Shift, lane % 2 != 0);
+            frame(canvas, snapshot, first, true);
+            expect(Access::dragging(canvas) && Access::pointPreview(canvas),
+                   "point preview at press");
+            // 期望时间取原始投影，不从被测工作副本复制起点作为答案。
+            const double startTime = Access::time(canvas, 200);
+            if ( scenario != 3 ) frame(canvas, snapshot, last, true);
+            frame(canvas, snapshot, last);
+            if ( scenario < 3 ) {
+                // 未越阈值及纯横移都没有有效时间范围，必须回到同一普通点创建流程。
+                // 即使横移跨过多条泳道，也保留按下时的类型和时间。
+                expect(
+                    Access::pointEditor(canvas) && !Access::editor(canvas) &&
+                        Access::pointType(canvas) == lane &&
+                        std::abs(Access::pointTime(canvas) - startTime) < 1e-9,
+                    "click or degenerate drag creates point");
+            } else {
+                // 时间跨度与横向轨迹无关，反向拖动仅改变起终点的顺序。
+                const double expected = std::abs(
+                    startTime - Access::time(canvas, scenario == 5 ? 350 : 70));
+                expect(Access::editor(canvas) && !Access::pointEditor(canvas) &&
+                           Access::rangeType(canvas) == effects[lane] &&
+                           std::abs(Access::duration(canvas) - expected) < 1e-9,
+                       "drag creates latched range");
+            }
+            // 测试只检视草稿，不渲染参数弹窗；清理全局非模态请求后销毁所属视图。
+            // 真实手势与草稿结果已断言完毕，清理不能代替生产取消或改变被测结果。
+            // 请求尚未 BeginPopup，Window
+            // 为空，必须显式清理该测试草稿的请求层级。
+            // 这些弹窗不属于真实用户环境，断言之后清理不会改变被测取消结果。
+            if ( !ImGui::GetCurrentContext()->OpenPopupStack.empty() )
+                ImGui::ClosePopupToLevel(0, true);
+            // 消费真实修饰键释放，下一轮不能依赖上一轮按键缓存。
+            ImGui::GetIO().AddKeyEvent(ImGuiMod_Shift, false);
+            frame(canvas, snapshot, last);
+        }
+    }
+    // 取消既覆盖未拖动的点候选，也覆盖已经升级的有效插值范围。
+    // 两类取消都必须消费后续释放，不能偷偷打开普通点窗口或删除旧实体。
+    for ( int scenario = 0; scenario < 4; ++scenario ) {
+        // 取消覆盖相同的非退化区间，不能因区间本来为空而碰巧没有提交。
         Canvas::TimelineCanvas canvas(
-            cancel ? "CancelRange" : "DrawRange", 500, 500, nullptr);
-        const auto origin = frame(canvas, snapshot, { 100, 100 });
-        // 屏幕向下是反向时间拖动，最终段落仍必须按较早时间作为起点。
-        // 起终点都在第二泳道，横向越界不会触发无关的类型切换。
+            "CancelAutoTiming" + std::to_string(scenario), 500, 500, nullptr);
+        const auto   origin = frame(canvas, snapshot, { 100, 100 });
         const ImVec2 first{ origin.x + 150, origin.y + 200 },
             last{ origin.x + 150, origin.y + 350 };
-        // 首点立即开始预览，不能等待拖动阈值或额外键盘按下才记录起点。
-        // 本帧保留左键，后续 right=true 验证的是组合取消而非普通右键菜单。
         frame(canvas, snapshot, first, true);
-        expect(Access::dragging(canvas), "mouse range start");
-        frame(canvas, snapshot, last, true);
-        // 外部模式变化不重解释已经开始的手势；只有下一笔才按点模式。
-        UI::Interaction::activeProfile().setTimingInterpolationDraw(false);
-        // false 在活动段期间仅是下一笔偏好；本笔仍采用已锁存的显式范围模式。
-        // 若实现逐帧重新解释该值，松手会丢失区间或错误打开普通点弹窗。
-        if ( cancel ) {
-            // 指针已移动到终点才取消，确保被清理的是有效区间而非空笔。
-            // 两键仍按下时就要结束预览，不允许等左键松开后才撤销。
-            frame(canvas, snapshot, last, true, true);
-            expect(!Access::dragging(canvas) && !Access::editor(canvas),
-                   "right cancel");
+        if ( scenario != 0 ) frame(canvas, snapshot, last, true);
+        if ( scenario < 2 )
+            frame(canvas, snapshot, scenario == 0 ? first : last, true, true);
+        else if ( scenario == 2 ) {
+            // 文件名相同的重新加载也使手势来源失效，不能将旧笔提交到新实例。
+            snapshot.beatmapInstanceId = 2;
+            frame(canvas, snapshot, last, true);
+        } else {
+            // 外部切换工具取消自动候选；不能在已经进入选择工具时释放出新时间点。
+            snapshot.currentTool = Logic::EditTool::Marquee;
+            frame(canvas, snapshot, last, true);
         }
+        expect(!Access::dragging(canvas) && !Access::pointPreview(canvas),
+               "cancel clears both previews");
         frame(canvas, snapshot, last);
-        if ( !cancel ) {
-            // 保存结果必须覆盖最后的释放位置，而非上一帧或最初的范围。
-            // 容差只吸收投影浮点误差，不接受拍线量化造成的时间跳变。
-            const double expected =
-                std::abs(Access::time(canvas, 200) - Access::time(canvas, 350));
-            expect(Access::editor(canvas) &&
-                       std::abs(Access::duration(canvas) - expected) < 1e-9,
-                   "reverse range release");
-        } else
-            expect(!Access::editor(canvas) && !Access::pointEditor(canvas) &&
-                       created == 0,
-                   "cancel release no point");
-        // 右键和左键都释放后再次开始，不能把取消后的尾点误认为新单点。
+        expect(!Access::editor(canvas) && !Access::pointEditor(canvas) &&
+                   created == 0,
+               "cancel release creates nothing");
+        // 恢复的是下一笔的前置条件，当前取消结果已经在恢复之前完成检查。
+        // 左右键仍通过帧释放，不直接清除控制器的按下标志。
+        snapshot.beatmapInstanceId = 1;
+        snapshot.currentTool       = Logic::EditTool::Draw;
         frame(canvas, snapshot, last);
-        UI::Interaction::activeProfile().setTimingInterpolationDraw(true);
+    }
+    // 已有时间点的点按与拖动也必须自动区分，不能因保护单击而失去起拖画段能力。
+    // 这保持了原 Shift 范围绘制可从普通时间点起笔的能力，不新增重复事件。
+    for ( bool drag : { false, true } ) {
+        Canvas::TimelineCanvas canvas(
+            drag ? "ExistingPointDrag" : "ExistingPointClick",
+            500,
+            500,
+            nullptr);
+        const auto origin = frame(canvas, snapshot, { 100, 100 });
+        Common::Render::TimelineInteractiveElement marker{};
+        marker.effects   = Common::Render::SCROLL_EFFECT_BPM;
+        marker.bpmEntity = static_cast<entt::entity>(88);
+        marker.bpmValue  = 120;
+        // 稳定实体只用于 UI 拾取，不向空 Registry 插入虚假的用户时间点。
+        // 参数保持为合法红线值，避免把数值校验失败误算成手势分流错误。
+        // 时间和可见 Y 使用同一投影，避免把错误的命中夹具当成已存在的起点。
+        marker.time = Access::time(canvas, 200);
+        marker.y    = 200;
+        snapshot.timelineElements.push_back(marker);
+        const ImVec2 first{ origin.x + 50, origin.y + 200 },
+            last{ origin.x + 50, origin.y + 70 };
+        frame(canvas, snapshot, first);
+        frame(canvas, snapshot, first, true);
+        // 两个样本使用完全相同的已有起点，差别只能来自后续是否移动。
+        // 按下只取得输入所有权，不能在判定为点按之前发布重复时间点。
+        if ( drag ) frame(canvas, snapshot, last, true);
+        frame(canvas, snapshot, drag ? last : first);
+        // 单击保留原事件；拖动必须进入段落草稿，不能误建成普通点。
+        // 检查两个弹窗类型互斥，不能用“任一窗口打开”代替起拖成功。
+        expect(!Access::pointEditor(canvas) && Access::editor(canvas) == drag,
+               "existing point click versus drag");
+        frame(canvas, snapshot, drag ? last : first);
+        // 快照只用于本次样本，不把该 marker 留给下一轮旧段落正文拾取。
+        snapshot.timelineElements.clear();
+    }
+    {
+        // 自动起笔不能抢走已有段落正文，单击正文保持原有的阻挡语义。
+        // 双击编辑的是旧实体；同一位置的第二次按下不能被误认为新段起点。
+        Canvas::TimelineCanvas canvas("ExistingAutoTiming", 500, 500, nullptr);
+        const auto             origin = frame(canvas, snapshot, { 100, 100 });
+        Common::Render::TimingInterpolationElement segment;
+        segment.entity = static_cast<entt::entity>(99);
+        segment.effect = TimingEffect::SCROLL;
+        segment.time =
+            std::min(Access::time(canvas, 200), Access::time(canvas, 350));
+        segment.interpolation.m_duration =
+            std::abs(Access::time(canvas, 200) - Access::time(canvas, 350));
+        snapshot.timingInterpolations.push_back(segment);
+        const ImVec2 body{ origin.x + 150, origin.y + 275 };
+        const auto   doubleClickTime = ImGui::GetIO().MouseDoubleClickTime;
+        // 仅恢复独立上下文的偏好，不伪造 MouseDoubleClicked 标志。
+        // 第一击不得开启新点窗口，否则第二击将被错误的模态门禁拦截。
+        ImGui::GetIO().MouseDoubleClickTime = 0.3F;
+        frame(canvas, snapshot, body);
+        frame(canvas, snapshot, body, true);
+        frame(canvas, snapshot, body);
+        expect(!Access::dragging(canvas) && !Access::pointEditor(canvas),
+               "existing body blocks new point");
+        frame(canvas, snapshot, body, true);
+        expect(Access::editor(canvas) &&
+                   Access::editEntity(canvas) == segment.entity,
+               "existing body double click edits original");
+        frame(canvas, snapshot, body);
+        ImGui::GetIO().MouseDoubleClickTime = doubleClickTime;
+        // 此旧段只属于本场景，不可泄漏到经典 Shift 的后续起笔区域。
+        snapshot.timingInterpolations.clear();
     }
     // 所有物理按钮已释放，按正式两帧门禁切换，不能直接替换策略指针。
     // 临时开关不写用户配置，切出后的经典分支应继续使用原磁吸规则。
@@ -561,23 +722,10 @@ bool checkRangeDrawing()
     expect(!Access::dragging(classic) && !Access::editor(classic),
            "classic release shift");
     frame(classic, snapshot, first);
-    // 纯鼠标点模式即使碰巧按着 Shift，也不能偷偷切换成区间绘制。
-    // 这与经典默认值为空不同：显式 false 必须有独立语义。
+    // 纯鼠标没有点模式开关；真实 Shift 不改变点按与拖动的区分。
     UI::Interaction::synchronizeProfile("mouse-only", true);
     UI::Interaction::synchronizeProfile("mouse-only", true);
-    // 上一笔已取消并完整释放，切换回纯鼠标后应立即采用点模式。
-    // 这也覆盖旧经典手势的可选锁存状态不会泄漏到另一个视图。
-    UI::Interaction::activeProfile().setTimingInterpolationDraw(false);
-    Canvas::TimelineCanvas pointCanvas("PointMode", 500, 500, nullptr);
-    ImGui::GetIO().AddKeyEvent(ImGuiMod_Shift, true);
-    frame(pointCanvas, snapshot, first, true);
-    expect(!Access::dragging(pointCanvas), "explicit point ignores shift");
-    // 先取消点预览再释放，避免其弹窗遮挡后续 STOP 的真实点击。
-    snapshot.isPlaying = true;
     ImGui::GetIO().AddKeyEvent(ImGuiMod_Shift, false);
-    frame(pointCanvas, snapshot, first);
-    snapshot.isPlaying = false;
-    UI::Interaction::activeProfile().setTimingInterpolationDraw(true);
     Canvas::TimelineCanvas stopCanvas("StopRangeFallback", 500, 500, nullptr);
     const ImVec2           stop{ origin.x + 450, origin.y + 200 };
     // 先推进无按键帧，让第五泳道位置与上个场景的释放独立。
@@ -596,7 +744,9 @@ bool checkRangeDrawing()
     // 会话索引来自实际创建结果，不关闭测试进程可能持有的其他条目。
     engine.closeSession(session, false);
     if ( !passed )
-        XERROR("Timing range mode, cancellation or classic isolation failed");
+        XERROR(
+            "Automatic Timing drawing, cancellation or classic isolation "
+            "failed");
     return passed;
 }
 }  // namespace

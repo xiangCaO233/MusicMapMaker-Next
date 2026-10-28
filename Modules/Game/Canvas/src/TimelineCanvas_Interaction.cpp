@@ -1706,7 +1706,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     }
 
     if ( handleInterpolationInteraction(
-             canvasPos, size, isHovered && !overMenuButton) )
+             canvasPos, size, isHovered && !overMenuButton, !hoveredTarget) )
         return;
 
     const bool ctrl =

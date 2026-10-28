@@ -493,10 +493,15 @@ private:
     /// @return ImGui 颜色。
     ImU32 timingEffectColor(::MMM::TimingEffect effect, int alpha) const;
 
-    /// @brief Shift 手势或段落正文命中处理；已消费输入时返回真。
+    /// @brief 自动点拖或经典 Shift 手势及段落正文命中；已消费输入时返回真。
+    /// @param canCreateAutomaticPoint 起笔未命中普通时间点，点按时允许新建。
     /// @warning 每帧 UI 输入路径；只读取快照，不等待逻辑线程。
     bool handleInterpolationInteraction(const ImVec2& position,
-                                        const ImVec2& size, bool hovered);
+                                        const ImVec2& size, bool hovered,
+                                        bool canCreateAutomaticPoint);
+    /// @brief 处理已有段落的正文命中，自动绘制起笔前保留双击编辑与右键删除。
+    /// @warning 每帧只读取已发布的段落缓存，不扫描 ECS 或等待逻辑线程。
+    bool handleInterpolationBody(const ImVec2& position, const ImVec2& size);
     /// @brief 绘制段落范围，使用与编辑窗口一致的峰谷保留预览。
     /// @warning 每帧复用缓存；每段最多 4096 个像素桶，每桶最多四个顶点。
     void renderInterpolationOverlay(const ImVec2& position, const ImVec2& size);
@@ -532,10 +537,16 @@ private:
     std::vector<TimingInterpolationPreview> m_interpolationOverlayPreviews;
     /// @brief 新建手势独立复用预览，不能覆盖已保存段落的缓存。
     TimingInterpolationPreview m_interpolationDragPreview;
-    /// @brief 在拖动期间保留段首，不让手势变成单点放置。
+    /// @brief 新建手势持有起点，自动模式从单点候选按移动量升级为段落。
     bool m_isInterpolationDragging{ false };
-    /// @brief 起笔锁存显式插值模式；空时继续要求经典物理 Shift。
-    std::optional<bool> m_interpolationGestureMode;
+    /// @brief 起笔锁存自动点拖语义；关闭时继续要求经典物理 Shift。
+    bool m_interpolationGestureAutomatic{ false };
+    /// @brief 已有时间点允许起拖画段，但零范围单击不得再创建重复点。
+    bool m_interpolationPointAllowed{ false };
+    /// @brief 是否越过正常拖动阈值，轻微抖动不能把点按升级为插值段落。
+    bool m_interpolationDragMoved{ false };
+    /// @brief 原始按下时间保留给单点弹窗，不因缩放或吸附丢失鼠标位置来源。
+    double m_interpolationStartRawTime{ 0.0 };
     /// @brief 段落编辑窗口的值语义工作副本。
     Common::Render::TimingInterpolationElement m_interpolationEdit;
     /// @brief 用户当前调整的段尾时间，单位秒。

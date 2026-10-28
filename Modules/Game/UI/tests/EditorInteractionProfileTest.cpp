@@ -700,27 +700,24 @@ int main()
                   "whole polyline erase mode");
     Interaction::activeProfile().setEraseWholePolyline(false);
     ok &= require(mouse.eraseWholePolyline() == false, "segment erase mode");
-    // 两个设置都只在当前方案对象中存储，不通过改写 ImGuiIO 制造修饰键。
-    // setter 与查询成对验证，防止只在控件里显示勾选却没有影响策略结果。
+    // 临时吸附和自动 Timing 绘制都独立于真实键盘，不通过改写 ImGuiIO
+    // 制造修饰键。 setter
+    // 与查询成对验证，防止只在控件里显示勾选却没有影响策略结果。
     // 临时吸附状态只改变专用查询，不能成为选择、滚轮或平移的虚拟 Ctrl。
     Interaction::activeProfile().setBypassSnapping(true);
-    Interaction::activeProfile().setTimingInterpolationDraw(true);
-    ok &= require(mouse.bypassSnapping() &&
-                      mouse.timingInterpolationDraw() == true &&
+    ok &= require(mouse.bypassSnapping() && mouse.automaticTimingDraw() &&
                       !mouse.modifier(Interaction::Surface::MainCanvas,
                                       Interaction::Modifier::Control,
                                       false),
                   "independent mouse intent");
     // 这里故意先留下启用状态再退出，比单独测试 false 默认值更严格。
     // 显式请求设置经典方案也必须是无副作用操作，不能留下共享全局状态。
-    // 切出方案清理临时覆盖，但经典方案仍返回空绘制模式和关闭的临时开关。
+    // 切出方案清理临时覆盖；经典仍关闭自动绘制能力并保留原 Shift 门禁。
     Interaction::synchronizeProfile("classic-desktop", true);
     Interaction::synchronizeProfile("classic-desktop", true);
     Interaction::activeProfile().setBypassSnapping(true);
-    Interaction::activeProfile().setTimingInterpolationDraw(true);
-    ok &=
-        require(!classic.bypassSnapping() && !classic.timingInterpolationDraw(),
-                "classic snap and timing unchanged");
+    ok &= require(!classic.bypassSnapping() && !classic.automaticTimingDraw(),
+                  "classic snap and timing unchanged");
     // 即使显式向经典方案设置，仍必须返回空，才能保留物理 Shift 的动态语义。
     Interaction::activeProfile().setCameraPointerOptions({ true, true });
     ok &= require(!classic.cameraPointerOptions(), "classic camera unchanged");
@@ -732,9 +729,8 @@ int main()
     const auto resetCamera = mouse.cameraPointerOptions();
     ok &= require(resetCamera && !resetCamera->m_pan && !resetCamera->m_fine,
                   "temporary camera reset");
-    Interaction::activeProfile().setTimingInterpolationDraw(false);
     // 下一段仍验证无 Shift 的折线意图，避免独立模式污染主画布绘制规则。
-    // 把 Timing 恢复到点模式，后续镜像动作测试不依赖本轮设置顺序。
+    // Timing 根据单次手势自动分流，后续测试不依赖可切换的绘制偏好。
     // 方案注册必须能通过持久化身份查到，不能只在菜单中添加展示条目。
     // 连续安全帧沿用切换门禁，避免把尚未结束的画笔移交给新方案。
     // 此处不构造 ImGui 上下文，直接检验不依赖设备状态的策略契约。

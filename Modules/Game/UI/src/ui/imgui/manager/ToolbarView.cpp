@@ -5229,23 +5229,9 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
                                      whole) )
                 profile.setEraseWholePolyline(true);
             ImGui::Separator();
-            ImGui::TextUnformatted(TR("ui.mouse_drawing.timing_mode").data());
-            // 只影响 Timing 泳道，不把插值模式传到主画布折线绘制。
-            // 点模式的显式 false 与经典缺省模式不同，不再读取物理 Shift。
-            // 两个控件采用正文高度，不能继承图标工具栏的零边距。
-            // 插值段在松手后仍进入既有参数编辑器，选项切换本身不编辑谱面。
-            // STOP 的事件语义没有连续区间，提示明确保留普通时间点回退。
-            bool range = profile.timingInterpolationDraw().value_or(false);
-            if ( FeedbackRadioButton(TR("ui.mouse_drawing.timing_point").data(),
-                                     !range) ) {
-                range = false;
-                profile.setTimingInterpolationDraw(false);
-            }
-            if ( FeedbackRadioButton(TR("ui.mouse_drawing.timing_range").data(),
-                                     range) )
-                profile.setTimingInterpolationDraw(true);
-            ImGui::TextDisabled("%s",
-                                TR("ui.mouse_drawing.timing_hint").data());
+            // Timing 点按与拖动自动分流，不再提供需要来回切换的模式控件。
+            // 提示沿用普通文本换行，既有擦除粒度与临时免吸附开关保持独立。
+            ImGui::TextWrapped("%s", TR("ui.mouse_drawing.timing_hint").data());
             ImGui::Separator();
             ImGui::TextUnformatted(TR("ui.mouse_drawing.cancel_hint").data());
             // 提示只说明纯鼠标的取消组合，不向经典方案传播虚拟按键。
