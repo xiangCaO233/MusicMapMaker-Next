@@ -1043,8 +1043,14 @@ int main()
                            ImGui::GetMainViewport());
     spotlight.keepAlive();
     spotlight.render(1.0F, "Got it");
+    // 方案切换只更新提示，不能重新生成步骤令牌或清除当前画布目标。
+    // 保留令牌也保证已有绘制命令仍归属于同一练习，不会被当成旧步骤丢弃。
+    const auto promptToken = spotlight.stepToken();
+    spotlight.updatePrompt("Use the mouse to complete this same path");
     const bool canvasOnly =
-        spotlight.resolvedTargetId() == "compose.lesson.practice";
+        spotlight.resolvedTargetId() == "compose.lesson.practice" &&
+        spotlight.stepToken() == promptToken && spotlight.active() &&
+        !spotlight.completed();
     // 帧结束前清理状态，后面的模态向导测试必须从空状态开始。
     // 两阶段使用独立返回码，以区分工具门禁与画布交接故障。
     spotlight.stop();

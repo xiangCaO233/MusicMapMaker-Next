@@ -37,6 +37,8 @@ add_library(
   src/Basic2DCanvas_Interaction.cpp
   # 右键候选验证和菜单绘制单独维护，避免主画布输入路由继续膨胀。
   src/Basic2DCanvas_ContextMenu.cpp
+  # 批注菜单只管理 UI 身份和编辑器缓冲，独立于画布绘制与谱面命令实现。
+  src/Basic2DCanvas_AnnotationMenu.cpp
   src/Basic2DCanvas_Rendering.cpp
   src/MarqueeAutoScroll.cpp
   src/PreviewCanvas.cpp
@@ -360,3 +362,11 @@ mmm_add_test_executable(Canvas TimingTableMouseSelectionTest
 target_link_libraries(TimingTableMouseSelectionTest PRIVATE Canvas)
 mmm_register_test_case(NAME TimingTableMouseSelectionTest COMMAND
                        TimingTableMouseSelectionTest)
+
+# 批注菜单只在点击编辑时准备缓冲，真实 ImGui 回归覆盖只读、播放与重载失效。 独立登记便于排查输入归属，不依赖 GPU、音频后端或操作系统剪贴板。 -
+# 夹具仅构造进程内快照与字体，禁止向源码测试资源目录写出配置。
+mmm_add_test_executable(Canvas MouseAnnotationMenuTest
+                        tests/MouseAnnotationMenuTest.cpp)
+target_link_libraries(MouseAnnotationMenuTest PRIVATE Canvas)
+mmm_register_test_case(NAME MouseAnnotationMenuTest COMMAND
+                       MouseAnnotationMenuTest)

@@ -101,6 +101,8 @@ std::string_view lessonGif(std::string_view title)
 }
 
 /// @brief 根据批注中的教学动作给出实际鼠标手势，而非暴露内部草稿答案。
+/// @param title 来自内置教学批注的动作标题，不从物件类型推断操作。
+/// @param mouseOnly 为真时省去修饰键要求，动作目标与释放提交规则仍保持一致。
 /// @return 中文和英文的练习提示；新增未知段落时给出可执行的通用定位说明。
 /// @warning 目录生成时调用，不进入绘制或编辑的每帧路径。
 /// @details 同一种 Note 的放置、移动、尾部调整和删除使用不同输入事件。
@@ -111,8 +113,77 @@ std::string_view lessonGif(std::string_view title)
 /// 删除类操作明确右键目标，避免将程序的撤销入口误写成教学步骤。
 /// 两种语言按同一分支返回，使翻译不会落到另一教学段落的操作说明。
 std::pair<std::string_view, std::string_view> lessonPracticeInstruction(
-    std::string_view title)
+    std::string_view title, bool mouseOnly = false)
 {
+    // 目录同时保存两套说明，切换方案不改步骤身份、学习记录或参考物件。
+    // 只替换确实依赖修饰键的动作说明，既有移动与尾部调整继续共用原文。
+    if ( mouseOnly ) {
+        // - 替代说明只改变输入方式，段落标题、目标次序和几何参考完全共用。
+        // - 不动态删改经典句子，避免把移动、删除等不同手势错误改成画笔延伸。
+        // - 单键仍由下方共用分支说明点按，不把所有纯鼠标动作都描述为拖动。
+        // - 现有 GIF 的目标几何继续有效，文字明确说明当前方案可直接操作。
+        // - 长条始终限定同轨从头到尾，纯鼠标省去持续按键但仍保留释放提交。
+        // - 实际时长与类型由画布和逻辑层校验，文字不能代替成功条件。
+        if ( title == "长条放置教学" )
+            return { "使用绘制工具，按住左键从长条头拖到尾，松开左键完成长条。",
+                     "Use Draw and left-drag from each hold head to its end, "
+                     "then release." };
+        // - 滑键通过横向终点区分方向，不提示移动旧物件或先创建另一种 Note。
+        // - 纯鼠标只是省去修饰键，起点与箭头目标仍沿用当前段落要求。
+        if ( title == "滑键教学（给嚓音踩滑键）" )
+            return {
+                "使用绘制工具，按住左键从滑键头横向拖到箭头目标，再松开左键。",
+                "Use Draw and left-drag from each flick head to its arrow "
+                "target, then release."
+            };
+        // - 整条路径仍是一笔连续手势，不允许靠多次点击节点假装经过路线。
+        // - 目标依次经过与松手位置是独立门禁，省去键盘不能省去这些约束。
+        if ( title == "折线放置教学" )
+            return {
+                "使用绘制工具，按住左键沿青色折线路径依次经过全部目标，完成后松"
+                "开左键。",
+                "Use Draw and left-drag through every cyan polyline target in "
+                "order, then release."
+            };
+        // - 续写必须从已有末端进入，避免用户把说明理解成另起一条重叠路径。
+        // - 蓝色目标仍按已有段完成度前进，不要求用户重绘已经正确的子段。
+        if ( title == "续写折线教学" )
+            return {
+                "使用绘制工具，从已有折线的末端按住左键，沿蓝色目标继续拖动，完"
+                "成后松开左键。",
+                "Use Draw and left-drag from the existing polyline end through "
+                "the blue targets, then release."
+            };
+        // - 连接点沿用原编辑工具的允许范围，不因免修饰键而扩大可连接部位。
+        // - 说明只要求连续拖动，最终连接仍由正式物件修订与几何验收确认。
+        if ( title == "折线连接教学" )
+            return {
+                "使用绘制工具，从已有折线末端按住左键拖到另一段折线的连接位置，"
+                "再松开左键。",
+                "Use Draw and left-drag from one polyline end to the next "
+                "connection point, then release."
+            };
+        // - 路径清理由本段既有临时策略启用，不让纯鼠标文案要求用户手动删键。
+        // - 操作结束仍需等待逻辑线程发布最终物件，提示不能提前推进教学。
+        if ( title == "折线覆盖物件教学" )
+            return {
+                "使用绘制工具，按住左键沿青色目标路径拖过已有单键；本段已开启路"
+                "径清理，完成后松开左键。",
+                "Use Draw and left-drag along the cyan path across existing "
+                "taps. Path cleanup is enabled for this lesson."
+            };
+        // - 纯鼠标整条擦除是显式开关，说明先切回局部粒度以免删掉整个目标。
+        // - 同一头部仍表示整件身份，不能把任意位置的右键都说成仅断开节点。
+        if ( title == "折线删除子物件教学" )
+            return {
+                "使用绘制工具，再次点击已激活的绘制按钮，选择“擦除命中子段”；右"
+                "键依次断开标出的折线节点，直到成为七条独立长条，不要擦除折线头"
+                "。",
+                "Use Draw: click the active Draw button again and choose erase "
+                "hit segment. Right-click the marked nodes until seven "
+                "separate holds remain. Avoid the polyline head."
+            };
+    }
     // 单键直接点按创建，不要求拖动；青色目标提供轨道和拍位。
     // 这里不写 Shift，避免用户误进入其它物件的绘制方式。
     if ( title == "单键放置教学" )
@@ -1067,6 +1138,20 @@ void populateComposeLessonTopic(Topic&                            topic,
                     ? std::string(
                           lessonPracticeInstruction(lesson.m_title).second)
                     : "Replay this section to review your result.";
+            if ( phaseIndex == 1 ) {
+                // 生成时保存替代文案，页面只做稳定借用，不在每帧拼接操作提示。
+                // - 只为实操阶段准备替代文本，首播和复播继续共用播放说明。
+                // - 两个语言版本一起保存，不在 UI 帧临时拼接或解析教材标题。
+                // -
+                // 缺少替代字段的外部教程通过模型接口原样回退，不强制迁移资产。
+                const auto instructions =
+                    lessonPracticeInstruction(lesson.m_title, true);
+                step.m_mouseOnlyBody.emplace();
+                step.m_mouseOnlyBody->m_translations["zh_cn"] =
+                    instructions.first;
+                step.m_mouseOnlyBody->m_translations["en_us"] =
+                    instructions.second;
+            }
             // 练习提示由动作名称决定，和青色轮廓、蓝色落点共同说明操作。
             // 草稿几何只供后台验收，不能要求用户看不可见的内部参考。
             // 播放与编辑各有独立语义目标；UI 只接收业务状态机的完成通知。
@@ -1085,6 +1170,17 @@ void populateComposeLessonTopic(Topic&                            topic,
             guide.m_prompt.m_translations["en_us"] =
                 "Lesson " + std::to_string(index + 1) + ": " + lesson.m_title +
                 "\n" + step.m_body.m_translations["en_us"];
+            // - 突出提示与正文使用同一份动作说明，避免两处给出互相冲突的手势。
+            // - 仅增加替代文字，不生成新的步骤 ID，已有学习记录仍然适用。
+            if ( step.m_mouseOnlyBody ) {
+                guide.m_mouseOnlyPrompt.emplace();
+                guide.m_mouseOnlyPrompt->m_translations["zh_cn"] =
+                    "第 " + std::to_string(index + 1) + " 段 · " +
+                    lesson.m_title + "\n" + step.m_mouseOnlyBody->get("zh_cn");
+                guide.m_mouseOnlyPrompt->m_translations["en_us"] =
+                    "Lesson " + std::to_string(index + 1) + ": " +
+                    lesson.m_title + "\n" + step.m_mouseOnlyBody->get("en_us");
+            }
             step.m_guide = std::move(guide);
             // 页面只需要时间窗、阶段和目录索引，不复制整份草稿答案。
             // 参考数组始终由 Service 持有，编辑完成后才低频取出比较。

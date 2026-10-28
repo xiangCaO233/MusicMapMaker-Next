@@ -5189,6 +5189,20 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
             ImGui::TextUnformatted(TR("ui.mouse_drawing.cancel_hint").data());
             // 提示只说明纯鼠标的取消组合，不向经典方案传播虚拟按键。
             // 字体和弹窗栈均在同一条件分支配对，缺失正文时使用默认字体。
+            if ( sourceManager ) {
+                // - 绘制选项属于独立弹窗，工具按钮的亮区不能覆盖实际单选控件。
+                // -
+                // 只补充当前练习的可交互区域，不把弹窗当成教程完成的业务动作。
+                // - 弹窗关闭后停止上报，遮罩自然恢复到画布和工具栏范围。
+                // - 仅纯鼠标选项经过本分支，经典工具按钮和键盘教学不改变。
+                const auto minimum = ImGui::GetWindowPos();
+                const auto size    = ImGui::GetWindowSize();
+                sourceManager->walkthroughSpotlight().reportCompanionRegion(
+                    "compose.lesson.practice",
+                    minimum,
+                    { minimum.x + size.x, minimum.y + size.y },
+                    ImGui::GetWindowViewport());
+            }
             if ( bodyFont ) ImGui::PopFont();
             ImGui::PopStyleVar(2);
             ImGui::EndPopup();

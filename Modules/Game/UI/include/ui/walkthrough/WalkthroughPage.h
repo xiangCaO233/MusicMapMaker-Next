@@ -100,6 +100,8 @@ private:
         Logic::EditTool composeRequiredTool{ Logic::EditTool::Draw };
         /// @brief 工具切换完成后恢复的原始画布练习提示。
         std::string composePracticePrompt;
+        /// @brief 当前提示使用的修饰语义；变化时只刷新文字，不重新开始练习。
+        bool composeMouseOnly{ false };
     };
 
     /// @brief 当前正文主题 ID，切换主题时用于重置展开项。

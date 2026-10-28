@@ -206,6 +206,13 @@ bool modifier(Modifier modifier);
 /// @brief 当前方案是否将画笔移动解释为持续段或折线延伸。
 /// @warning UI 热路径只查询方案，不伪造物理按键或分配手势状态。
 bool extendBrush();
+/// @brief 主画布是否无需修饰键即可延伸，用于同一方案的教学提示与输入验收。
+/// @warning 每帧只查询当前方案标量，不改写真实 Shift 或 Ctrl。
+bool modifierFreeBrush();
+/// @brief 验证教学画笔的修饰语义，实际路线和物件几何仍由画布与逻辑层验收。
+/// @param extending 该练习是否需要拖动延伸；纯鼠标点按仍由移动量区分单键。
+/// @warning 每帧常量查询，经典保留 Shift 与 Ctrl 的完整门禁。
+bool lessonBrushModifiersMatch(bool extending);
 /// @brief 独立的忽略吸附语义，组合物理 Ctrl 与当前方案临时开关。
 /// @warning 每帧固定标量查询；不得用于选择切换、滚轮修饰或框选集合操作。
 bool bypassSnapping();

@@ -61,6 +61,9 @@ public:
     /// @brief 回看阶段不接受已有业务状态驱动的自动推进。
     bool reviewing() const { return m_reviewing; }
 
+    /// @brief 仅更新当前提示，保留目标索引、步骤令牌、回滚记录和完成状态。
+    /// @warning 只在交互方案变化的低频路径调用；禁止每帧拼接并提交提示文本。
+    void updatePrompt(std::string prompt);
     /// @brief 结束当前引导并立即停止后续目标采集。
     void stop();
 

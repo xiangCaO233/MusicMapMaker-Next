@@ -23,6 +23,15 @@ struct Text {
 struct Guide {
     /// @brief 没有控件目标时的操作提示，有目标时显示在突出框附近。
     Text m_prompt;
+    /// @brief 内置纯鼠标引导的替代提示，未提供时沿用普通提示。
+    std::optional<Text> m_mouseOnlyPrompt;
+    /// @brief 按当前交互语义借用已加载文本，不重建目录或保存两份学习进度。
+    /// @warning 查询不分配，提示文本生命周期由目录持有。
+    const std::string& prompt(std::string_view language, bool mouseOnly) const
+    {
+        return (mouseOnly && m_mouseOnlyPrompt ? *m_mouseOnlyPrompt : m_prompt)
+            .get(language);
+    }
     /// @brief 可选的随步骤播放的内置操作 GIF 目标。
     std::string m_gif;
     /// @brief 与具体控件注册点约定的稳定语义目标 ID。
@@ -47,8 +56,17 @@ struct ComposeLessonStep {
 /// 步骤 ID 在整个主题内唯一，跨分支前置引用也使用该 ID。
 /// 手动确认跳过前置限制；自动完成则同时检查前置步骤与信号。
 struct Step {
-    std::string              m_id;       ///< 稳定步骤标识。
-    Text                     m_title;    ///< 步骤标题。
+    std::string m_id;     ///< 稳定步骤标识。
+    Text        m_title;  ///< 步骤标题。
+    /// @brief 仅内置教材生成的纯鼠标正文，不改变外部教程的经典文案。
+    std::optional<Text> m_mouseOnlyBody;
+    /// @brief 根据方案选择正文；缺省时保持原有语言回退行为。
+    /// @warning 每帧返回稳定借用，不复制 Markdown 或查询配置。
+    const std::string& body(std::string_view language, bool mouseOnly) const
+    {
+        return (mouseOnly && m_mouseOnlyBody ? *m_mouseOnlyBody : m_body)
+            .get(language);
+    }
     Text                     m_body;     ///< Markdown 正文。
     std::vector<std::string> m_signals;  ///< 自动完成所需信号。
     bool m_allSignals{ false };  ///< true 要求全部信号，否则任一信号即可。

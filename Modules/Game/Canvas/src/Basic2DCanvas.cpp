@@ -779,8 +779,8 @@ bool Basic2DCanvas::updateComposeLessonHints(
                                          : ImTextureID{};
     const TextureID   headTexture =
         uvMap.contains(static_cast<std::uint32_t>(TextureID::HoldHead))
-              ? TextureID::HoldHead
-              : TextureID::Note;
+            ? TextureID::HoldHead
+            : TextureID::Note;
     // 头部可选是皮肤协议的一部分，普通 Note 是旧皮肤的兼容回退。
     // 必须在求尺寸之前确定最终纹理，否则头部与真实物件宽高不同。
     // Hold、Flick 和 Polyline 均共享这个选择；Tap 始终使用 Note。
@@ -1549,7 +1549,7 @@ bool Basic2DCanvas::updateComposeLessonHints(
 /// 两个分支都按时间递增排列，从而遵守 DrawTool 的非负持续时间规则。
 ///
 /// @par 长条手势验收
-/// Shift 必须在按下左键之前生效，并保持到左键释放；Ctrl 始终不允许。
+/// 经典 Shift 必须覆盖整次左键手势；纯鼠标按方案延伸语义验收，Ctrl 始终不允许。
 /// 任一采样帧违反修饰键规则都会锁存失败，稍后恢复按键也不会清除失败。
 /// 指针横向必须始终在目标轨内，避免折线模式下跨轨再返回留下子段。
 /// 释放帧既检查鼠标在终点框内，也检查最新逻辑画笔的类型、头尾时间与轨号。
@@ -2030,16 +2030,14 @@ void Basic2DCanvas::updateComposeWalkthrough(
              walkthroughPointInRect(
                  mouse, canvasScreenPosition, canvasMaximum) ) {
             // 画布内任何起笔都成为一次尝试，错点起笔会在释放时取消。
-            // Shift 和绘制工具必须在按下时已启用，末尾补按不算完成。
+            // 当前方案的延伸意图与绘制工具必须在按下时有效，不能在末尾补齐。
             // 新尝试清除旧 pending，避免前一笔延迟快照完成后一笔路线。
             m_walkthroughPolylineAttemptActive = true;
             m_walkthroughPolylineAttemptValid =
                 walkthroughPointInRect(
                     mouse, waypointRects[0][0], waypointRects[0][1]) &&
                 snapshot.currentTool == Logic::EditTool::Draw &&
-                UI::Interaction::modifier(UI::Interaction::Modifier::Shift) &&
-                !UI::Interaction::modifier(
-                    UI::Interaction::Modifier::Control) &&
+                UI::Interaction::lessonBrushModifiersMatch(true) &&
                 Config::AppConfig::instance()
                     .getEditorSettings()
                     .enablePolylineEditing;
@@ -2049,13 +2047,11 @@ void Basic2DCanvas::updateComposeWalkthrough(
             m_walkthroughPolylinePendingToken = 0;
         }
         if ( m_walkthroughPolylineAttemptActive ) {
-            // 修饰键中途变化会锁存失败，不因之后重新按回而恢复资格。
+            // 经典修饰键失效会锁存失败；纯鼠标延伸不依赖真实 Shift。
             // 拖动与路径命中分别核对，直接依次点击节点不能形成一次折线。
             // 每帧最多推进一个检查点，防止相邻框重叠时跨越顺序要求。
             m_walkthroughPolylineAttemptValid &=
-                UI::Interaction::modifier(UI::Interaction::Modifier::Shift) &&
-                !UI::Interaction::modifier(
-                    UI::Interaction::Modifier::Control) &&
+                UI::Interaction::lessonBrushModifiersMatch(true) &&
                 Config::AppConfig::instance()
                     .getEditorSettings()
                     .enablePolylineEditing;
@@ -2526,9 +2522,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
         m_walkthroughNoteDragged       = false;
         m_walkthroughNoteBrushObserved = false;
         m_walkthroughNoteModifierUsed =
-            (UI::Interaction::modifier(UI::Interaction::Modifier::Shift) !=
-             requiresShift) ||
-            UI::Interaction::modifier(UI::Interaction::Modifier::Control);
+            !UI::Interaction::lessonBrushModifiersMatch(requiresShift);
     }
     if ( m_walkthroughNoteAttemptActive ) {
         // ImGui 拖动阈值证明这不是起点内的普通点击。逻辑快照确认画笔真正
@@ -2539,9 +2533,7 @@ void Basic2DCanvas::updateComposeWalkthrough(
             snapshot.brush.isActive && !snapshot.brush.createsAudioSample &&
             snapshot.currentTool == Logic::EditTool::Draw;
         m_walkthroughNoteModifierUsed |=
-            (UI::Interaction::modifier(UI::Interaction::Modifier::Shift) !=
-             requiresShift) ||
-            UI::Interaction::modifier(UI::Interaction::Modifier::Control);
+            !UI::Interaction::lessonBrushModifiersMatch(requiresShift);
         // 长条练习全程限定在选定轨道内，横移后返回也不能误当纯 Hold 成功。
         // 使用轨道边界而非 Note 纹理宽度，允许轨道内部的自然指针抖动。
         if ( placingHold ) {
@@ -2750,7 +2742,7 @@ void Basic2DCanvas::update(UI::UIManager* sourceManager)
     // 不等待逻辑线程生成下一份画面，也不能让旧 dirty 标志留在标签上。
     const bool titleHasBeatmap = !isLogoPlaceholder && m_currentSnapshot &&
                                  m_currentSnapshot->hasBeatmap;
-    const std::string title = makeCanvasTabTitle(
+    const std::string title    = makeCanvasTabTitle(
         TR("canvas.editor").data(),
         titleHasBeatmap,
         m_currentSnapshot ? m_currentSnapshot->beatmapName : std::string_view{},
@@ -3077,9 +3069,9 @@ void Basic2DCanvas::updateCollaborationViewports(
     const auto& visual = Config::AppConfig::instance().getVisualConfig();
     // 渲染模式是本地显示偏好，不写入 ParticipantViewport；不同用户
     // 可独立选择填充、轮廓或轨道边缘而不影响网络协议。
-    const auto viewportRenderMode = Config::AppConfig::instance()
-                                        .getEditorSettings()
-                                        .collaborationViewportRenderMode;
+    const auto  viewportRenderMode = Config::AppConfig::instance()
+                                         .getEditorSettings()
+                                         .collaborationViewportRenderMode;
     const auto& layout =
         visual.trackLayoutForKeyCount(m_currentSnapshot->trackCount);
     // 使用当前轨道数对应布局，使动态扩轨后的协作范围立即跟随

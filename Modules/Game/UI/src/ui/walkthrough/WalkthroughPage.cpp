@@ -1,5 +1,6 @@
 #include "ui/walkthrough/WalkthroughPage.h"
 #include "config/EditorConfig.h"
+#include "ui/interaction/EditorInteraction.h"
 
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
@@ -355,7 +356,10 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
     // 在新聚光灯开放画布之前发布设置，首个绘制手势就应使用正确策略。
     // 非覆盖步骤立即恢复原值，后续折线不会继续清理其它章节的物件。
     setTemporaryPolylinePathRemoval(teachPolylinePathRemoval);
-    const auto& configuredPrompt = step.m_guide->m_prompt.get(language);
+    // - 在进入步骤时选择当前方案的说明，经典与外部教程仍回退到原提示。
+    // - 两套正文都由目录持有，这里不按字符串替换 Shift 来猜测操作含义。
+    const auto& configuredPrompt =
+        step.m_guide->prompt(language, Interaction::modifierFreeBrush());
     // 路线顺序是前后导航的唯一依据，历史完成度不能删除回看入口。
     bool hasPrevious = false;
     // 没有 guide 的说明项不属于可执行导航节点，不能成为返回后的死路。
@@ -489,6 +493,7 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
         // 练习进入时保持暂停；用户之后可自行试听，播放到段尾自动停止。
         const auto& lesson            = *step.m_composeLesson;
         auto&       guide             = *m_activeGuide;
+        guide.composeMouseOnly        = Interaction::modifierFreeBrush();
         guide.composeSession          = std::move(composeSession);
         guide.composeBuffer           = std::move(composeBuffer);
         guide.composeBeatmapKey       = std::move(composeBeatmapKey);
@@ -681,8 +686,30 @@ void WalkthroughPage::updateGuide(UIManager* manager)
     if ( current->m_composeLesson ) {
         // 只读画布已发布的数据，避免每帧等待会话 update 的长持锁区。
         // 快照消失或换谱面后，继续验收会污染另一张谱面的学习进度。
-        const auto& lesson   = *current->m_composeLesson;
-        auto&       guide    = *m_activeGuide;
+        const auto& lesson    = *current->m_composeLesson;
+        auto&       guide     = *m_activeGuide;
+        const bool  mouseOnly = Interaction::modifierFreeBrush();
+        if ( guide.composeMouseOnly != mouseOnly ) {
+            // 常态帧只比较标量；切换方案时才复制另一份已加载的提示。
+            // 不重建会话、目标路线或步骤令牌，已有物件验收和返回记录都保留。
+            // - 文字变化不等于练习重来，不能调用 startGuide 重置起始修订。
+            // - 尚未选对工具时保留工具提示，只替换后续要恢复的操作文案。
+            // - 已进入画布阶段时仅更新 Spotlight 文本，目标高亮和令牌保持不变。
+            // - 副本只在语义确实变化时构造，常态帧不复制 Markdown。
+            // - 预览与复播没有鼠标专用文本，原播放提示保持不变。
+            guide.composeMouseOnly = mouseOnly;
+            if ( current->m_guide && current->m_guide->m_mouseOnlyPrompt ) {
+                const auto& language =
+                    Config::AppConfig::instance().getEditorSettings().language;
+                std::string prompt =
+                    current->m_guide->prompt(language, mouseOnly);
+                prompt += "\n" + TR("ui.walkthrough.escape_to_exit").toString();
+                if ( guide.composeToolSelectionPending )
+                    guide.composePracticePrompt = std::move(prompt);
+                else
+                    spotlight.updatePrompt(std::move(prompt));
+            }
+        }
         const auto* snapshot = guide.composeBuffer
                                    ? guide.composeBuffer->getReadingSnapshot()
                                    : nullptr;
@@ -896,7 +923,8 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
         for ( const auto& branch : topic.m_branches )
             for ( const auto& step : branch.m_steps )
                 // 分支步骤正文也可能引用图片，需与主题说明一并预热。
-                images->prepareDocument(step.m_body.get(language));
+                images->prepareDocument(
+                    step.body(language, Interaction::modifierFreeBrush()));
         // 两个身份都在准备完成后更新，避免半完成状态被视为有效缓存。
         m_preparedTopic    = topic.m_id;
         m_preparedLanguage = language;
@@ -1085,7 +1113,9 @@ void WalkthroughPage::render(UIManager* manager, std::size_t topicIndex)
                     ImGui::TextWrapped("%s",
                                        step.m_title.get(language).c_str());
                     // 步骤正文允许包含格式化说明和预热过的本地图片。
-                    renderMarkdown(step.m_body.get(language), markdownOptions);
+                    renderMarkdown(
+                        step.body(language, Interaction::modifierFreeBrush()),
+                        markdownOptions);
                     ImGui::Spacing();
                     // 已完成步骤禁用再次确认，来源标签仍可解释完成方式。
                     const bool completed = progress.completed(topic, step);

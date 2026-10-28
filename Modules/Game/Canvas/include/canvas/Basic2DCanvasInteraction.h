@@ -24,7 +24,8 @@
 namespace MMM::Common::Render
 {
 struct RenderSnapshot;
-}
+struct AnnotationRenderMarker;
+}  // namespace MMM::Common::Render
 
 namespace MMM::UI
 {
@@ -123,6 +124,8 @@ private:
         const Common::Render::RenderSnapshot& snapshot, bool hovered);
     /// @brief 无 GPU 测试从真实右键候选执行选择，不直接改写悬浮状态。
     friend struct EditorInteractionSurfaceTestAccess;
+    /// @brief 批注菜单回归只驱动真实输入并观察缓冲，不开放业务写入口。
+    friend struct MouseAnnotationMenuTestAccess;
     /// @brief 验证右键候选仍存在后选择它，并保留后续重叠命中的优先身份。
     /// @warning 仅菜单激活时扫描本帧可见命中框，不访问 ECS 或等待逻辑线程。
     bool selectHoverLayer(std::size_t                           index,
@@ -393,6 +396,23 @@ private:
             content{};
     };
 
+    /// @brief 纯鼠标菜单绑定当前谱面和批注 ID，不持有快照指针。
+    struct AnnotationMenuState {
+        std::string    m_beatmapKey;     ///< 菜单打开时的谱面路径身份。
+        std::uintptr_t m_instance{};     ///< 同路径重载也必须取消旧菜单。
+        std::size_t    m_markerIndex{};  ///< 当前快照中待核验的分组位置。
+        std::string    m_markerId;       ///< 分组首条 ID，防止索引被新组复用。
+        std::string m_selectedId;  ///< 阅读目标的稳定身份，不以条目序号代替。
+        bool        m_wasOpen{};   ///< 关闭帧继续消费输入，防止释放穿透。
+    };
+    /// @brief 菜单跨帧只保存轻量身份，文本在点击编辑时才复制。
+    AnnotationMenuState m_annotationMenu;
+    /// @brief 在气泡或详情卡右键打开纯鼠标阅读与编辑入口。
+    /// @warning 每帧只校验当前快照，不访问会话或文件系统。
+    bool renderMouseAnnotationMenu(
+        const Common::Render::RenderSnapshot&         snapshot,
+        const Common::Render::AnnotationRenderMarker* hovered,
+        std::size_t itemIndex, bool linkHovered);
     /// @brief 当前批注编辑弹窗状态。
     AnnotationEditorState m_annotationEditor;
     /// @brief 当前悬浮标记的首条批注 ID，用于检测标记变化。

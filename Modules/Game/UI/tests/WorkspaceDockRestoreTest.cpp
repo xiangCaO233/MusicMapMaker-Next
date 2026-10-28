@@ -17,6 +17,7 @@
 #include "ui/imgui/manager/ToolbarView.h"
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/CLayWrapperCore.h"
+#include "ui/walkthrough/WalkthroughSpotlight.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -1671,14 +1672,32 @@ bool checkMouseDrawingOptions()
             MMM::Config::AppConfig::instance().getWindowContentScale();
         const float padding =
             std::floor(settings.aesthetics.windowPadding * dpi);
-        auto draw = [&] {
+        // 真实教程遮罩必须启用，才能发现“按钮可打开但选项被遮罩挡住”的回归。
+        // 画布几何只作输入白名单的前置条件，实际弹窗和单选仍由工具栏创建。
+        auto& spotlight = manager.walkthroughSpotlight();
+        spotlight.start({ "compose.lesson.practice" },
+                        "Mouse-only practice",
+                        false,
+                        false,
+                        true);
+        const auto lessonToken = spotlight.stepToken();
+        auto       draw        = [&] {
             // 固定窗口只建立可重复的输入环境，弹窗尺寸仍由正式布局计算。
             // 每帧完成 Render，输入边沿按生产方式发布。
             // 控件动画依赖 DeltaTime，不插入阻塞等待。
             ImGui::NewFrame();
+            spotlight.beginFrame();
             ImGui::SetNextWindowPos({ 100, 20 });
             ImGui::SetNextWindowSize({ 700, 32 * dpi + 2 * padding });
             toolbar.update(&manager);
+            // 主目标远离选项圆点，不能靠主亮区偶然覆盖弹窗而令测试通过。
+            // 伴随区域必须由正式工具栏在 BeginPopup 内上报。
+            spotlight.reportTarget("compose.lesson.practice",
+                                   { 400, 200 },
+                                   { 600, 400 },
+                                   ImGui::GetMainViewport());
+            spotlight.keepAlive();
+            spotlight.render(dpi, "Got it");
             ImGui::Render();
         };
         auto click = [&](ImVec2 point) {
@@ -1755,6 +1774,10 @@ bool checkMouseDrawingOptions()
                         false &&
                     Interaction::activeProfile().eraseWholePolyline() == false;
             }
+            // 选项点击只能改变下一笔策略，不能结束练习或换掉当前步骤令牌。
+            passed &= spotlight.active() && !spotlight.completed() &&
+                      spotlight.stepToken() == lessonToken;
+            spotlight.stop();
             // 点击外部关闭，证明纯鼠标不依赖 Escape。
             // 之后切回经典，重复点击绘制工具不得再弹出选项。
             click({ 750, 500 });

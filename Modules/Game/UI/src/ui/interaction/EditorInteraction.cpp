@@ -223,6 +223,21 @@ std::optional<bool> IEditorInteractionProfile::timingInterpolationDraw() const
 }
 /// @brief 经典模式不保存纯鼠标 Timing 选择。
 void IEditorInteractionProfile::setTimingInterpolationDraw(bool) {}
+/// @brief 查询明确的主画布延伸策略，不依赖方案身份字符串或当前 UI 输入域。
+/// @warning 每帧无分配，不查询会话或伪造键盘事件。
+bool modifierFreeBrush()
+{
+    return activeProfile().extendBrush(Surface::MainCanvas, false);
+}
+/// @brief 教学沿用当前方案的绘制语义，经典模式仍严格检查真实修饰键。
+/// @warning 每帧只读标量，禁止通过本入口跳过路线或最终物件验收。
+bool lessonBrushModifiersMatch(bool extending)
+{
+    // 纯鼠标用移动量区分单键和延伸，不要求反向按住或松开 Shift。
+    // Ctrl 仍会改变吸附，所有方案保持原有禁止 Ctrl 的教学约束。
+    return (modifierFreeBrush() || modifier(Modifier::Shift) == extending) &&
+           !modifier(Modifier::Control);
+}
 /// @brief 吸附覆盖与修饰键组合仅用于放置、移动，不影响选择语义。
 /// @warning 常量时间查询，不能把结果当作通用 Ctrl 状态。
 bool bypassSnapping()

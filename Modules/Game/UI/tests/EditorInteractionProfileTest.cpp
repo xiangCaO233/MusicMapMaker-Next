@@ -359,6 +359,66 @@ bool testMirrorActions()
 }
 }  // namespace
 
+namespace
+{
+/// @brief 使用真实 ImGui 修饰键帧验证教学门禁，不以方案 ID 绕过实际输入。
+/// @pre 输入上下文由用例独立创建，运行时没有活动画笔或拖动守卫。
+/// @post 不保存软件配置，键盘状态随独立上下文销毁。
+/// @note 两套方案共用相同测试矩阵，不能用不同测试输入规避经典门禁差异。
+/// @return 纯鼠标免 Shift，经典严格保持原规则，且 Ctrl 始终被拒绝时返回真。
+/// @details 两套方案都覆盖点按与延伸；最终几何验收仍由既有画笔测试覆盖。
+bool testLessonGesturePolicies()
+{
+    ImGui::CreateContext();
+    auto& io                        = ImGui::GetIO();
+    io.IniFilename                  = nullptr;
+    io.DisplaySize                  = { 800, 600 };
+    io.DeltaTime                    = 1.0f / 60;
+    io.ConfigInputTrickleEventQueue = false;
+    unsigned char* pixels{};
+    int            width{}, height{};
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    // - 用例拥有独立上下文，任何真实键盘状态都不能从前一测试继承。
+    // - 只测试本轮的输入门禁，路线和最终几何仍由既有画笔回归负责。
+    bool ok = true;
+    for ( const bool mouseOnly : { false, true } ) {
+        const auto id = mouseOnly ? "mouse-only" : "classic-desktop";
+        // 按安全帧门禁切换，不能直接替换注册表的当前指针。
+        Interaction::synchronizeProfile(id, true);
+        Interaction::synchronizeProfile(id, true);
+        // - 两种 Shift 状态都需要覆盖，纯鼠标不能只在默认未按键时碰巧通过。
+        // - Ctrl 是禁止吸附变化的独立条件，不能用免 Shift 顺带放宽 Ctrl。
+        // - 每种组合单独推进 NewFrame，查询值必须来自同一真实输入帧。
+        for ( const bool shift : { false, true } )
+            for ( const bool control : { false, true } ) {
+                io.AddKeyEvent(ImGuiMod_Shift, shift);
+                io.AddKeyEvent(ImGuiMod_Ctrl, control);
+                ImGui::NewFrame();
+                const Interaction::SurfaceScope scope(
+                    Interaction::Surface::MainCanvas);
+                // - 点按和延伸共享策略入口，但经典对 Shift 的要求恰好相反。
+                // - 这能检出简单把 extendBrush
+                // 替换成真导致单键练习全部失效的实现。
+                // - 期望值按契约独立计算，不调用待测函数生成自己的答案。
+                for ( const bool extended : { false, true } ) {
+                    const bool expected =
+                        !control && (mouseOnly || shift == extended);
+                    ok &= require(Interaction::lessonBrushModifiersMatch(
+                                      extended) == expected,
+                                  "lesson gesture modifiers");
+                }
+                // 策略查询不能写回 ImGuiIO，避免影响选择、滚轮和文本输入。
+                ok &= require(io.KeyShift == shift && io.KeyCtrl == control,
+                              "lesson leaves physical input intact");
+                ImGui::EndFrame();
+            }
+    }
+    // - 测试不修改持久化方案设置，键盘缓存随本上下文销毁。
+    // - 返回累计结果，不因最后一个组合通过而掩盖更早的门禁错误。
+    ImGui::DestroyContext();
+    return ok;
+}
+}  // namespace
 /// @brief 验证应用级方案、真实输入映射、动作权限、生命周期和配置兼容。
 /// @details 本用例由独立 CTest 进程运行，测试方案不会进入用户的生产注册表。
 /// 配置目录由 mmm_register_test_case 隔离，不读写真实用户的键位设置。
@@ -580,5 +640,6 @@ int main()
                             false),
         "mouse-only brush isolation");
     ok &= testMirrorActions();
+    ok &= testLessonGesturePolicies();
     return ok ? 0 : 1;
 }

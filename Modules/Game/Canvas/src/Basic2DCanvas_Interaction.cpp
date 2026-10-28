@@ -4671,7 +4671,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
 /// - 切换同组条目后同样重置完整正文滚动位置。
 /// - 列表当前项使用强调色。
 /// - 非当前项使用低权重文字色。
-/// - 多条时显示方向键或滚轮提示。
+/// - 多条时经典显示原键盘提示，纯鼠标显示批注菜单入口。
 /// - 单条长内容只显示滚动提示。
 /// - 标题同时说明时间戳与聚合数量。
 /// - 详情元数据先于 Markdown 正文展示。
@@ -4874,7 +4874,18 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
         drawList->PopClipRect();
     }
 
-    if ( hoveredMarker && !hoveredMarker->items.empty() ) {
+    // 右键菜单独立于 hover 保持；移动到菜单后仍由冻结的稳定身份校验归属。
+    // 纯鼠标模式不再要求详情卡 Shift+右键，经典入口完全保留。
+    const bool mouseAnnotationMenu =
+        UI::Interaction::activeProfile().selectionContextMenu();
+    const bool annotationMenuHandled = renderMouseAnnotationMenu(
+        currentSnapshot,
+        hoveredMarker,
+        hoveredDetailIndex.value_or(m_annotationHoverDetailIndex),
+        detailLinkHovered);
+    // - 关闭帧继续属于批注层，不能让同一次右键或释放落到下层画笔。
+    if ( !annotationMenuHandled && hoveredMarker &&
+         !hoveredMarker->items.empty() ) {
         // 聚合标记使用首条批注 ID 作为稳定分组键；同一标记内切换详情
         // 不会错误触发整组重置。
         const std::string& markerId = hoveredMarker->items.front().id;
@@ -4898,7 +4909,10 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
             // 详情内容已直接显示在画布上，悬停时只提示编辑手势，避免再
             // 叠加一份完整 tooltip 遮挡相邻卡片。
             ImGui::BeginTooltip();
-            ImGui::TextUnformatted(TR("ui.annotation.detail_edit_hint").data());
+            ImGui::TextUnformatted(TR(mouseAnnotationMenu
+                                          ? "ui.annotation.mouse_edit_hint"
+                                          : "ui.annotation.detail_edit_hint")
+                                       .data());
             ImGui::EndTooltip();
         } else {
             // 气泡 tooltip 允许纵向滚动；宽度限制避免长 Markdown 占满画布。
@@ -4985,8 +4999,12 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
             }
             if ( hoveredMarker->items.size() > 1U ) {
                 // 多条聚合优先提示切换方式；单条长文本才提示滚动。
-                ImGui::TextDisabled("%s",
-                                    TR("ui.annotation.wheel_hint").data());
+                // 纯鼠标提示菜单入口，避免仍要求用户用方向键切换详情。
+                ImGui::TextDisabled(
+                    "%s",
+                    TR(mouseAnnotationMenu ? "ui.annotation.mouse_edit_hint"
+                                           : "ui.annotation.wheel_hint")
+                        .data());
             } else if ( tooltipMaxScrollY > 0.01F ) {
                 ImGui::TextDisabled("%s",
                                     TR("ui.annotation.scroll_hint").data());
@@ -5028,12 +5046,14 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
              currentSnapshot.acceptsInteraction ) {
             // 播放中或只读会话禁止修改批注，但悬停和阅读仍然可用。
             if ( !detailLinkHovered &&
-                 (detailCardHovered ? UI::Interaction::modifier(
-                                          UI::Interaction::Modifier::Shift) &&
-                                          UI::Interaction::mouseClicked(
-                                              ImGuiMouseButton_Right, false)
-                                    : UI::Interaction::mouseClicked(
-                                          ImGuiMouseButton_Left, false)) ) {
+                 (detailCardHovered
+                      ? !mouseAnnotationMenu &&
+                            UI::Interaction::modifier(
+                                UI::Interaction::Modifier::Shift) &&
+                            UI::Interaction::mouseClicked(
+                                ImGuiMouseButton_Right, false)
+                      : UI::Interaction::mouseClicked(ImGuiMouseButton_Left,
+                                                      false)) ) {
                 // 详情卡用 Shift+右键编辑，气泡用左键编辑；两者区分是为了
                 // 给卡片内部链接和普通右键新建手势留出空间。
                 const auto& selected =
@@ -5049,7 +5069,10 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
                                      m_annotationEditor.content.size() - 1U),
                             m_annotationEditor.content.data());
                 m_annotationEditor.requestOpen = true;
-            } else if ( !detailCardHovered && !detailLinkHovered &&
+                // -
+                // 纯鼠标菜单因其他输入所有权未打开时，也不能回退为经典右键新增。
+            } else if ( !mouseAnnotationMenu && !detailCardHovered &&
+                        !detailLinkHovered &&
                         UI::Interaction::mouseClicked(ImGuiMouseButton_Right,
                                                       false) ) {
                 // 在已有时间戳气泡上右键表示新增同时间批注，不携带旧 ID。
@@ -5060,9 +5083,13 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
                 m_annotationEditor.requestOpen = true;
             }
         }
-    } else if ( gutterHovered && !currentSnapshot.isPlaying &&
+    } else if ( !annotationMenuHandled && gutterHovered &&
+                !currentSnapshot.isPlaying &&
+                (!mouseAnnotationMenu || !hasActivePointerGesture()) &&
                 currentSnapshot.acceptsInteraction &&
                 UI::Interaction::mouseClicked(ImGuiMouseButton_Right, false) ) {
+        // -
+        // 菜单已消费的右键不能再次作为空白新增，活动手势也不能被新建弹窗抢走。
         // 空白批注栏右键以当前指针时间新建；启用吸附时使用吸附时间，
         // 从而与画布画笔的节奏定位一致。
         m_annotationEditor.annotationId.clear();
@@ -5169,7 +5196,8 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
     }
 
     const bool annotationHovered = gutterHovered || detailCardHovered;
-    const bool editorPopupOpen   = ImGui::IsPopupOpen(popupLabel.c_str());
+    const bool editorPopupOpen =
+        annotationMenuHandled || ImGui::IsPopupOpen(popupLabel.c_str());
     // 最终返回值把“阻止画布点击”和“滚轮是否透传”分开表达。
     // 弹窗始终阻止画布；悬停详情若已内部滚动，也不能再滚动画布。
     return {
