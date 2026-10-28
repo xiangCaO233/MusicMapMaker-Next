@@ -672,6 +672,8 @@ private:
     std::unordered_set<entt::entity> m_selectedTimingEntities;
     /// @brief 上一帧菜单拥有输入，外部点击关闭时也不能穿透到 Timing 画布。
     bool m_timingContextWasOpen{ false };
+    /// @brief 右键时锁存的参数编辑目标；空白处仅允许回退到唯一选中项。
+    entt::entity m_timingContextEntity{ entt::null };
     /// @brief 菜单打开时高亮的吸附时间，不跟随菜单里的指针移动。
     double m_timingContextTime{ 0.0 };
     /// @brief 右键菜单绑定的谱面路径，防止切换谱面后向新谱面提交旧操作。

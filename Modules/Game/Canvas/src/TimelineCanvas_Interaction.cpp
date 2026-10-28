@@ -35,6 +35,7 @@
 #include <fmt/format.h>
 #include <limits>
 #include <optional>
+#include <unordered_set>
 
 #include <utility>
 
@@ -1172,6 +1173,12 @@ void TimelineCanvas::pruneInvalidTimingSelection()
     for ( const auto& target : collectVisibleTimingTargets() ) {
         snapshotEntities.insert(target.entity);
     }
+    // 纯鼠标可从段落正文右键选择，段首离屏不代表实体已被删除。
+    // 仍只检查当前快照中的稳定身份；经典方案保留原有 marker 选择生命周期。
+    if ( UI::Interaction::activeProfile().selectionContextMenu() ) {
+        for ( const auto& segment : m_currentSnapshot->timingInterpolations )
+            snapshotEntities.insert(segment.entity);
+    }
 
     std::erase_if(m_selectedTimingEntities, [&](entt::entity entity) {
         return entity == entt::null ||
@@ -1293,6 +1300,25 @@ void TimelineCanvas::copySelectedTimingEvents(bool cut)
         if ( m_selectedTimingEntities.find(target.entity) !=
              m_selectedTimingEntities.end() ) {
             selectedTargets.push_back(target);
+        }
+    }
+    // 正文右键取得的段落可能没有可见首标记，复制须补齐其原始起点和参数。
+    // 补齐只发生在复制/剪切边沿，不给逐帧拾取引入额外扫描或排序。
+    if ( UI::Interaction::activeProfile().selectionContextMenu() ) {
+        std::unordered_set<entt::entity> represented;
+        represented.reserve(selectedTargets.size());
+        for ( const auto& target : selectedTargets )
+            represented.insert(target.entity);
+        for ( const auto& segment : m_currentSnapshot->timingInterpolations ) {
+            if ( m_selectedTimingEntities.contains(segment.entity) &&
+                 represented.insert(segment.entity).second ) {
+                // 有首标记时不重复加入，保持一次粘贴只创建一个完整插值实体。
+                // 曲线定义继续由下方既有共享剪贴板路径按稳定实体身份携带。
+                selectedTargets.push_back({ segment.entity,
+                                            segment.effect,
+                                            segment.time,
+                                            segment.value });
+            }
         }
     }
     if ( selectedTargets.empty() ) {

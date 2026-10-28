@@ -78,6 +78,7 @@ return {
 	["ui.selection.seek_here"] = "定位到此处",
 	["ui.selection.play_here"] = "从此处播放",
 	["ui.selection.properties"] = "选中物件属性",
+	["ui.timeline.edit_target"] = "编辑时间点／插值段落",
 	["ui.mouse_drawing.options"] = "纯鼠标绘制",
 	["ui.mouse_drawing.erase_segment"] = "右键：擦除命中子段",
 	["ui.mouse_drawing.erase_whole"] = "右键：擦除整条折线",

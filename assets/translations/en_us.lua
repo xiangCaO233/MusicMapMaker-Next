@@ -79,6 +79,7 @@ return {
 	["ui.selection.seek_here"] = "Seek here",
 	["ui.selection.play_here"] = "Play from here",
 	["ui.selection.properties"] = "Selected object properties",
+	["ui.timeline.edit_target"] = "Edit timing point / interpolation segment",
 	["ui.mouse_drawing.options"] = "Mouse-only drawing",
 	["ui.mouse_drawing.erase_segment"] = "Right click: erase hit segment",
 	["ui.mouse_drawing.erase_whole"] = "Right click: erase whole polyline",

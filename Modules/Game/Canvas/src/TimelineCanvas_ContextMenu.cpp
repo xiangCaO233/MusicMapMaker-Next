@@ -2,6 +2,7 @@
 #include "common/LogicCommands.h"
 #include "common/render/RenderSnapshot.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/VisualConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/logic/LogicCommandEvent.h"
@@ -63,6 +64,20 @@ void TimelineCanvas::selectAllTimingEvents()
         if ( isTimingTargetSelectable(target) )
             m_selectedTimingEntities.insert(target.entity);
     }
+    // 纯鼠标全选同时包含段落正文，不能要求段首 marker 仍在视野中。
+    // 实体集合去重，正文与段首同时出现时仍只选择、复制和删除一次。
+    if ( UI::Interaction::activeProfile().selectionContextMenu() ) {
+        for ( const auto& segment : m_currentSnapshot->timingInterpolations ) {
+            TimelineHitTarget target;
+            target.entity = segment.entity;
+            target.effect = segment.effect;
+            // BPM 仍遵循用户的红线参与选择开关，不因新增正文入口扩大权限。
+            // 空实体是无目标哨兵，不能被全选塞入后续批量删除命令。
+            if ( segment.entity != entt::null &&
+                 isTimingTargetSelectable(target) )
+                m_selectedTimingEntities.insert(segment.entity);
+        }
+    }
 }
 
 /// @brief 维护纯鼠标 Timing 右键菜单，所有业务仍通过时间线自身入口执行。
@@ -97,6 +112,8 @@ bool TimelineCanvas::handleTimingContextMenu(ImVec2 origin, ImVec2 size,
         nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
     // 其他弹窗优先拥有输入；这里不强制抢焦点，也不关闭用户现有草稿。
     bool opened = false;
+    // 编辑器在菜单结束、恢复父窗口 ID 栈之后打开，避免创建成菜单的子弹窗。
+    bool editRequested = false;
     // 右上角 56 像素保留给既有工具按钮，不同时打开两个菜单。
     // 左键和中键按住时不插入右键事务，避免吞掉尚未提交的编辑手势。
     // 画笔右键仍负责擦除；已有拖动或其他模态不能被右键菜单夺走释放事件。
@@ -122,11 +139,55 @@ bool TimelineCanvas::handleTimingContextMenu(ImVec2 origin, ImVec2 size,
         // 空选区可以直接右键一个时间点；已有多选保持原集合，不因菜单位置丢失。
         // pickTimingTarget 仍按专业模式泳道限制类型，不能只比较纵坐标。
         // 不可选 BPM 保持空选择，菜单里的复制和删除因此仍然禁用。
+        auto target           = pickTimingTarget(origin, size, local.y);
+        m_timingContextEntity = target ? target->entity : entt::null;
+        // 段落首标记可能已滚出可见区；正文按相同泳道和投影识别原实体。
+        // 仅在打开菜单的边沿扫描，普通菜单帧不会重复收集或遍历时间点。
+        if ( !target ) {
+            const bool professional = Config::AppConfig::instance()
+                                          .getEditorSettings()
+                                          .professionalMode;
+            for ( const auto& segment :
+                  m_currentSnapshot->timingInterpolations ) {
+                TimelineHitTarget lane;
+                lane.effect = segment.effect;
+                // 使用既有泳道中心映射，不依赖 TimingEffect 的底层枚举顺序。
+                // 普通布局延续正文的全宽命中，专业布局限定在所属的五分之一。
+                if ( professional &&
+                     std::abs(mouse.x -
+                              timingTargetCenterX(lane, origin, size)) >
+                         size.x / 10.0F )
+                    continue;
+                const double first = canvasYAtTime(size, segment.time);
+                // 反向滚动可能颠倒两端投影，命中仍使用完整段落的上下边界。
+                // 段首 marker 不必位于可见区，也不要求正文存在独立采样点。
+                const double last = canvasYAtTime(
+                    size, segment.time + segment.interpolation.m_duration);
+                if ( local.y < std::min(first, last) ||
+                     local.y > std::max(first, last) )
+                    continue;
+                m_timingContextEntity = segment.entity;
+                // 正文同样建立普通编辑选区，使复制、剪切和删除立即可用。
+                // 只保存段首原值，不把正文鼠标时间误当成剪贴板内容的起始时间。
+                target = TimelineHitTarget{ segment.entity,
+                                            segment.effect,
+                                            segment.time,
+                                            segment.value,
+                                            static_cast<float>(first) };
+                break;
+            }
+        }
         if ( m_selectedTimingEntities.empty() ) {
-            const auto target = pickTimingTarget(origin, size, local.y);
             if ( target && isTimingTargetSelectable(*target) )
                 m_selectedTimingEntities.insert(target->entity);
         }
+        // 参数编辑不批量覆盖多选；直接命中始终优先，空白处才用唯一选中项。
+        // BPM 多选开关只控制集合，不禁止像原齿轮入口一样直接编辑红线。
+        if ( m_timingContextEntity == entt::null &&
+             m_selectedTimingEntities.size() == 1 )
+            m_timingContextEntity = *m_selectedTimingEntities.begin();
+        // 每次打开都先清空再解析目标，上一轮菜单的实体不能成为本轮默认值。
+        // 保留选区只影响集合，不把编辑目标反向写入选区或改变多选模式。
         ImGui::OpenPopup("TimingEditMenu");
         opened = true;
     }
@@ -235,12 +296,61 @@ bool TimelineCanvas::handleTimingContextMenu(ImVec2 origin, ImVec2 size,
                                   nullptr,
                                   profile.bypassSnapping()) )
             profile.setBypassSnapping(!profile.bypassSnapping());
+        ImGui::Separator();
+        // 锁存实体而非草稿，打开参数窗口时使用当前快照里的最新值。
+        // 同路径重载与播放状态仍由上方统一门禁阻断，不能跨会话打开旧目标。
+        editRequested =
+            UI::FeedbackMenuItem(TR("ui.timeline.edit_target").data(),
+                                 nullptr,
+                                 false,
+                                 m_timingContextEntity != entt::null);
         ImGui::EndDisabled();
         // 标准菜单激活后自然关闭，返回值仍拦截本帧鼠标释放，防止穿透编辑。
         ImGui::EndPopup();
     }
     m_timingContextWasOpen = ImGui::IsPopupOpen("TimingEditMenu");
     ImGui::PopID();
+    if ( editRequested ) {
+        // 只在项目被实际激活的这一帧解析草稿，悬浮菜单不会产生副作用。
+        // 参数编辑器负责最终校验，菜单不另造更新命令或隐式批量覆盖。
+        // 优先检查原始段落，不能把段首 marker 当成普通点而丢失曲线定义。
+        // 命令仅在已有编辑器确认时提交；菜单操作本身不改变谱面与撤销栈。
+        const auto segment =
+            std::find_if(m_currentSnapshot->timingInterpolations.begin(),
+                         m_currentSnapshot->timingInterpolations.end(),
+                         [&](const auto& value) {
+                             return value.entity == m_timingContextEntity;
+                         });
+        if ( segment != m_currentSnapshot->timingInterpolations.end() ) {
+            openInterpolationEditor(*segment);
+        } else {
+            // 目标可能在菜单停留期间被删除；重新从当前快照解析，失效就忽略。
+            // 不存储跨帧指针，也不为打开普通参数窗口访问逻辑注册表或等待长锁。
+            for ( const auto& value : collectVisibleTimingTargets() ) {
+                if ( value.entity != m_timingContextEntity ) continue;
+                m_editingEntity = value.entity;
+                m_editTime      = value.time;
+                m_editValue     = value.value;
+                // 保持原齿轮入口的类型字符串，包括 STOP 的大写形式。
+                // 显示单位和参数范围继续由原弹窗解释，不在菜单中提前换算。
+                switch ( value.effect ) {
+                case TimingEffect::BPM: m_editType = "BPM"; break;
+                case TimingEffect::SCROLL: m_editType = "Scroll"; break;
+                case TimingEffect::JUMP: m_editType = "Jump"; break;
+                case TimingEffect::HS: m_editType = "HS"; break;
+                case TimingEffect::STOP: m_editType = "STOP"; break;
+                }
+                // 与原齿轮入口保持相同草稿初值，模式切换不继承上次 BPM 联动。
+                m_keepSpeedOnBpmEdit   = false;
+                m_isPopupOpen          = true;
+                m_isCreatePopupOpen    = false;
+                m_shouldFocusNextFrame = false;
+                // 活动指针手势已经在菜单打开门禁被排除，无需创建额外取消命令。
+                // 本帧仍返回菜单已消费，鼠标释放不会穿透而移动原时间点。
+                break;
+            }
+        }
+    }
     // 下一帧可以重新取得窗口焦点；这里不主动调用 SetWindowFocus 抢占弹窗。
     // 关闭帧也消费输入；返回画布的下一次独立按下才可以开启新编辑手势。
     return wasOpen || opened || m_timingContextWasOpen;

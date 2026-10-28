@@ -133,6 +133,29 @@ struct TimingContextMenuTestAccess {
     {
         return canvas.m_timingContextTime;
     }
+    /// @brief 核对普通点编辑副本，区分右键目标与播放头、唯一选中项和旧值。
+    /// @param c 菜单动作后仍存活的画布，不直接修改其弹窗状态。
+    /// @return 参数编辑器请求、原实体、精确时间和值均匹配时为真。
+    /// @note 不把“有任意弹窗”视为成功，创建窗口与普通点编辑窗口必须区分。
+    /// @note 保持速度的复选框默认清除，不能继承上次编辑 BPM 的联动状态。
+    static bool pointEdit(const TimelineCanvas& c, entt::entity entity,
+                          double time, double value, const char* type)
+    {
+        return c.m_isPopupOpen && c.m_editingEntity == entity &&
+               c.m_editTime == time && c.m_editValue == value &&
+               c.m_editType == type && !c.m_keepSpeedOnBpmEdit;
+    }
+    /// @brief 已有点参数窗口与新建点弹窗拥有不同状态，不能混用断言。
+    /// @return 不读取新建请求或插值请求，只观察原有事件详情窗口。
+    static bool eventEditor(const TimelineCanvas& c) { return c.m_isPopupOpen; }
+    /// @brief 在父窗口层级绘制生产模态窗口，验证菜单关闭后的 ID 栈衔接。
+    /// @param c 已由真实菜单准备好参数的画布，不直接创建或修改 Timing。
+    /// @note 只用于普通点；段落测试继续观察原编辑器保留的完整定义。
+    /// @warning 仅由独立 CPU 测试帧调用，不初始化音频设备或后台逻辑循环。
+    static void renderEventEditor(TimelineCanvas& c)
+    {
+        c.renderEventEditorPopup();
+    }
 };
 }  // namespace MMM::Canvas
 
@@ -147,10 +170,12 @@ using Access = Canvas::TimingContextMenuTestAccess;
 /// @param mouse 屏幕坐标，菜单展开后与原右键坐标故意不同。
 /// @param left 当前左键状态，不直接伪造 clicked 或 released 标记。
 /// @param right 当前右键状态，用于打开菜单或验证画笔擦除边界。
+/// @param showEditor
+/// 仅在菜单参数测试中绘制普通事件模态，其他手势用例保持无弹窗正文。
 /// @return 固定窗口的内容原点，避免依赖用户的布局和 DPI。
 ImVec2 frame(Canvas::TimelineCanvas&         canvas,
              Common::Render::RenderSnapshot& snapshot, ImVec2 mouse,
-             bool left = false, bool right = false)
+             bool left = false, bool right = false, bool showEditor = false)
 {
     auto& io = ImGui::GetIO();
     io.AddMousePosEvent(mouse.x, mouse.y);
@@ -165,6 +190,8 @@ ImVec2 frame(Canvas::TimelineCanvas&         canvas,
     const auto origin = ImGui::GetCursorScreenPos();
     // 即便弹窗拥有焦点仍要推进控制器，让菜单关闭帧执行输入防穿透逻辑。
     Access::interact(canvas, snapshot, origin);
+    // 与正式时间线保持同一父窗口层级；不能在 TimingEditMenu 内绘制目标编辑器。
+    if ( showEditor ) Access::renderEventEditor(canvas);
     ImGui::End();
     ImGui::EndFrame();
     return origin;
@@ -192,7 +219,7 @@ ImGuiWindow* open(Canvas::TimelineCanvas&         canvas,
 /// @param snapshot 所有点击共用的只读输入快照。
 /// @param point 新一轮菜单打开时的画布吸附坐标。
 /// @param row 菜单中不含分隔线的零起始行号。
-/// @note 分隔线分别位于第 2、6、8、11 和 13 行之前，索引不含分隔线。
+/// @note 分隔线分别位于第 2、6、8、11、13 和 14 行之前，索引不含分隔线。
 /// @return 真实菜单行被激活并关闭后返回真。
 /// @details 不按翻译文本搜索行，避免测试依赖桌面语言或字体配置。
 /// @warning 仅测试读取 ImGui 内部窗口几何，生产代码不依赖该结构。
@@ -206,7 +233,7 @@ bool click(Canvas::TimelineCanvas&         canvas,
     const float  line       = ImGui::GetTextLineHeightWithSpacing();
     const int    separators = (row >= 2 ? 1 : 0) + (row >= 6 ? 1 : 0) +
                               (row >= 8 ? 1 : 0) + (row >= 11 ? 1 : 0) +
-                              (row >= 13 ? 1 : 0);
+                              (row >= 13 ? 1 : 0) + (row >= 14 ? 1 : 0);
     const ImVec2 target{ popup->Pos.x + popup->Size.x * 0.5F,
                          popup->DC.CursorStartPos.y + row * line +
                              separators * (1.0F + style.ItemSpacing.y) +
@@ -470,6 +497,375 @@ bool checkMenu()
             "failed");
     return passed;
 }
+/// @brief 验证段落正文的完整鼠标编辑链，而非仅检查参数编辑器是否打开。
+/// @return
+/// 复制、粘贴、剪切、删除、全选、清空与历史入口均按时间线语义运行时为真。
+/// @details 同时覆盖可见首标记与没有首标记两种快照，禁止重复或遗漏段落实体。
+/// @note 观察正式创建批次中的曲线参数，不允许粘贴退化为普通时间点。
+/// @note 所有副作用限制在当前测试进程，既不读用户剪贴板，也不写入项目文件。
+bool checkSegmentClipboard()
+{
+    bool passed = true;
+    // 两种快照共用正式菜单路径，模式和 BPM 选择门禁保持同一初始配置。
+    // 不直接调用控制器的私有复制方法，避免绕过菜单禁用和选区失效检查。
+    // 模式只影响后续点击；右键已有对象必须能建立可执行复制的普通选区。
+    // 用同一套真实菜单坐标驱动，不能由访问器直接调用复制或删除函数。
+    for ( bool hasMarker : { false, true } ) {
+        Common::Render::RenderSnapshot snapshot;
+        snapshot.hasBeatmap        = true;
+        snapshot.currentTool       = Logic::EditTool::Marquee;
+        snapshot.currentTime       = 4;
+        snapshot.beatmapPathKey    = "segment-clipboard.mmm";
+        snapshot.beatmapInstanceId = 1;
+        Common::Render::TimingInterpolationElement segment;
+        segment.entity                   = static_cast<entt::entity>(101);
+        segment.effect                   = TimingEffect::SCROLL;
+        segment.time                     = 3;
+        segment.value                    = 1.25;
+        segment.interpolation.m_duration = 1.5;
+        segment.interpolation.m_endValue = 2.5;
+        segment.interpolation.m_curve    = TimingCurve::EaseOut;
+        segment.interpolation.m_samplesPerSecond = 32;
+        // 使用非默认曲线与密度，单独复制段首或重建默认插值都不能通过比较。
+        // 终值也不同于起值，排除长度正确但实际变成恒定倍率的假成功。
+        snapshot.timingInterpolations.push_back(segment);
+        // 独立 BPM 与段落混合复制，保持原有相对秒差，不能全贴在同一锚点。
+        // BPM 不位于正文泳道，右键段落时只应选中原段落实体。
+        Common::Render::TimelineInteractiveElement point{};
+        point.effects   = Common::Render::SCROLL_EFFECT_BPM;
+        point.bpmEntity = static_cast<entt::entity>(42);
+        point.bpmValue  = 120;
+        point.time      = 4.5;
+        point.y         = 150;
+        snapshot.timelineElements.push_back(point);
+        if ( hasMarker ) {
+            // 段首与正文引用同一个实体，复制和全选不能因此产生两个条目。
+            // 单独的首标记仍远离正文落点，测试不能依靠误命中段首而通过。
+            auto marker         = point;
+            marker.effects      = Common::Render::SCROLL_EFFECT_SCROLL;
+            marker.bpmEntity    = entt::null;
+            marker.scrollEntity = segment.entity;
+            marker.scrollValue  = segment.value;
+            marker.time         = segment.time;
+            marker.y            = 50;
+            snapshot.timelineElements.push_back(marker);
+        }
+        Canvas::TimelineCanvas canvas(
+            hasMarker ? "SegmentCopyWithMarker" : "SegmentCopyNoMarker",
+            500,
+            500,
+            nullptr);
+        const auto  origin = frame(canvas, snapshot, { 100, 100 });
+        const float bodyY  = static_cast<float>((200 + 350) * .5F);
+        // 起终投影取实际画布，确保正文位于可见区，不依赖默认缩放的偶然结果。
+        // 只调整本测试的时间范围；类型和曲线定义始终由同一个段落实体提供。
+        snapshot.timingInterpolations[0].time =
+            std::min(Access::time(canvas, 200), Access::time(canvas, 350));
+        snapshot.timingInterpolations[0].interpolation.m_duration =
+            std::abs(Access::time(canvas, 350) - Access::time(canvas, 200));
+        const auto& source = snapshot.timingInterpolations[0];
+        // source 借用本轮固定快照，后续不再增删段落，避免引用因扩容失效。
+        // 可选首标记与段落时间一致，而其屏幕 Y 故意不在正文点击范围内。
+        if ( hasMarker ) snapshot.timelineElements[1].time = source.time;
+        snapshot.timelineElements[0].time = source.time + 1.5;
+        const ImVec2 body{ origin.x + 150, origin.y + bodyY },
+            blank{ origin.x + 400, origin.y + 400 };
+        std::vector<Logic::CmdCreateTimelineEvents::Entry> created;
+        // 本轮捕获创建结果的值副本；下一次粘贴会整体替换，不累计旧批次。
+        // 对数量和相对位置分别断言，防止重复发布也碰巧满足非空检查。
+        std::size_t deleted = 0, undo = 0, redo = 0;
+        auto&       bus = Event::EventBus::instance();
+        const auto  subscription =
+            bus.subscribe<Event::LogicCommandEvent>([&](const auto& event) {
+                // 所有批量操作都经正式命令通路；只记录载荷，不伪造逻辑快照回流。
+                // 这能检出菜单把段落拆成采样点、重复创建或误发主画布命令的回归。
+                if ( const auto* batch =
+                         std::get_if<Logic::CmdCreateTimelineEvents>(
+                             &event.command) )
+                    created = batch->events;
+                if ( const auto* batch =
+                         std::get_if<Logic::CmdDeleteTimelineEvents>(
+                             &event.command) )
+                    deleted += batch->entities.size();
+                undo += std::holds_alternative<Logic::CmdUndo>(event.command);
+                redo += std::holds_alternative<Logic::CmdRedo>(event.command);
+            });
+        /// @brief 检查完整定义随剪贴板跨入口保留，不仅检查生成条目数量。
+        /// @return 起始值、终值、曲线、时长与采样密度同时保持时为真。
+        auto copiedRange = [&]() {
+            // 插值字段本身必须存在，不能因普通点起始值相同而误判复制成功。
+            // 类型、倍率与连续定义分开比较，检出泳道或字段映射错误。
+            if ( created.empty() || !created[0].interpolation ) return false;
+            const auto& range = *created[0].interpolation;
+            return created[0].type == source.effect &&
+                   created[0].value == source.value &&
+                   range.m_duration == source.interpolation.m_duration &&
+                   range.m_endValue == source.interpolation.m_endValue &&
+                   range.m_curve == source.interpolation.m_curve &&
+                   range.m_samplesPerSecond ==
+                       source.interpolation.m_samplesPerSecond;
+        };
+        // 第一次右键正文即有可复制选区，关闭菜单后不能被 marker 清理流程抹去。
+        // 粘贴以打开菜单时的吸附位置为锚点，移入菜单不会改用播放头或菜单坐标。
+        passed &=
+            click(canvas, snapshot, body, 2) && Access::count(canvas) == 1;
+        passed &= click(canvas, snapshot, blank, 4) && created.size() == 1 &&
+                  copiedRange();
+        if ( !created.empty() )
+            passed &= std::abs(created[0].time - Access::anchor(canvas)) < 1e-9;
+        // 全选必须同时包含没有首标记的段落与普通点；有首标记时仍然去重。
+        // 全选后的复制从空白处激活，右键不能悄悄替换为附近单个 marker。
+        // 剪贴板包含 BPM 时延续既有相对秒语义，避免新红线改变后续拍位换算。
+        // 混合粘贴只产生两个实体，并保留普通点相对段首的一点五秒偏移。
+        passed &=
+            click(canvas, snapshot, blank, 6) && Access::count(canvas) == 2;
+        passed &= click(canvas, snapshot, blank, 2);
+        passed &= click(canvas, snapshot, blank, 4) && created.size() == 2 &&
+                  copiedRange();
+        if ( created.size() == 2 )
+            passed &= std::abs(created[1].time - created[0].time - 1.5) < 1e-9;
+        // 剪切先保留完整定义，再删除一个原段落；本地选区立即清空。
+        // 点击粘贴前不清理或重建选区，跨帧保留必须由正式控制器负责。
+        // 复制与粘贴分属独立菜单事务，目标位置不沿用上次右键的正文时间。
+        // 后续粘贴仍使用剪切结果，不能因删除后选择为空而丢失曲线。
+        passed &= click(canvas, snapshot, body, 3) && deleted == 1 &&
+                  Access::count(canvas) == 0;
+        passed &= click(canvas, snapshot, blank, 4) && created.size() == 1 &&
+                  copiedRange();
+        // 快照刻意未应用删除结果，使下一次正文右键能独立验证删除入口。
+        // 实际逻辑批量命令与撤销恢复由既有 Timing 命令测试覆盖。
+        // 历史入口操作当前时间线会话，不能转发成主画布的音符选择或粘贴。
+        // 本测试只核对一次命令；撤销栈实际恢复由逻辑层测试验证。
+        passed &= click(canvas, snapshot, body, 5) && deleted == 2;
+        passed &= click(canvas, snapshot, blank, 0);
+        passed &= click(canvas, snapshot, blank, 1);
+        passed &= undo == 1 && redo == 1;
+        // 清空选择只更改本地集合，不能追加删除指令或改变剪贴板。
+        // 快照刻意保留原段落与普通点，全选后清空必须覆盖两种实体来源。
+        // 选择变化不构成谱面编辑，删除总数在清空前后应保持不变。
+        // 右键空白不会自动重新选中段落，因此此处能检出选区清理失效。
+        passed &= click(canvas, snapshot, blank, 6);
+        passed &= click(canvas, snapshot, blank, 7) &&
+                  Access::count(canvas) == 0 && deleted == 2;
+        // 解除监听后才销毁捕获目标，避免下一组会话事件访问已结束的计数生命周期。
+        bus.unsubscribe<Event::LogicCommandEvent>(subscription);
+    }
+    if ( !passed )
+        XERROR("Timing segment context clipboard or selection failed");
+    return passed;
+}
+/// @brief 通过真实右键菜单验证普通参数编辑，不借用画笔齿轮或双击入口。
+/// @return 五种效果、唯一选中回退及多选拒绝均保持原实体与参数时为真。
+/// @details 各场景使用独立画布，避免未渲染的模态请求影响下一次菜单。
+/// @note 本用例不确认参数，打开菜单和准备草稿不能生成谱面修改命令。
+/// @pre 两个工具共用参数弹窗；不通过切换到绘制工具来获得编辑权限。
+/// @post 普通点只读取快照，测试无需创建虚假的逻辑会话或时间线 Registry。
+/// @warning 模态输入拥有焦点时仍推进父控制器，验证释放事件不会穿透画布。
+/// @pre 专业模式已由主函数启用，所有五类 marker 均采用固定泳道。
+/// @post 本函数解除命令监听；BPM 的选择配置恢复到调用前的测试设定。
+/// @note 多选只影响参数入口的回退规则，命中目标不会清空既有集合。
+/// @note 空白处多选没有确定的单个参数，不允许以容器迭代顺序选取目标。
+/// @note 编辑窗口显示使用既有模态组件，不需要 Vulkan 纹理或音频输出。
+bool checkPointEditing()
+{
+    // 方案切换通过安全帧完成，不能为了测试绕过物理按钮的释放门禁。
+    // 前一组菜单测试已经释放左右键，因此这里无需伪造按键缓存。
+    UI::Interaction::synchronizeProfile("mouse-only", true);
+    UI::Interaction::synchronizeProfile("mouse-only", true);
+    // 集合模式跨方案切换保留，上一组减选测试不能成为本用例的隐含初始条件。
+    // 这里只设下一笔的正常替换语义；具体对象仍经真实点击建立唯一选择。
+    UI::Interaction::activeProfile().setSelectionOperation(
+        Logic::SelectionOperation::Replace);
+    bool passed = true;
+    // 草稿打开不是数据修改；监听整条命令通路，可检出菜单误触删除或更新。
+    // 订阅生命周期严格短于本函数，所有引用在解除监听前保持存活。
+    int        commands     = 0;
+    auto&      bus          = Event::EventBus::instance();
+    const auto subscription = bus.subscribe<Event::LogicCommandEvent>(
+        [&](const auto&) { ++commands; });
+    const std::array<const char*, 5> types{
+        "BPM", "Scroll", "Jump", "HS", "STOP"
+    };
+    // 两个工具均可编辑；BPM 的多选关闭也不能屏蔽直接参数编辑。
+    // 其他场景包括已有多选、空白唯一选择、空白多选及打开菜单后的目标删除。
+    for ( int scenario = 0; scenario < 10; ++scenario ) {
+        bool scenarioPassed = true;
+        // 每轮绑定独立快照，避免上个实体草稿或菜单身份令牌残留。
+        // 专业模式固定五泳道，类型断言不依赖字体或翻译后的标签宽度。
+        const int                      lane = scenario < 5 ? scenario : 1;
+        Common::Render::RenderSnapshot snapshot;
+        snapshot.hasBeatmap = true;
+        snapshot.currentTool =
+            scenario % 2 ? Logic::EditTool::Move : Logic::EditTool::Marquee;
+        snapshot.currentTime = 4;
+        // 播放头故意不同于 marker 时间；参数编辑必须取对象时间而非导航位置。
+        // 固定路径与实例号仅标识本测试快照，不关联磁盘上的同名谱面文件。
+        snapshot.beatmapPathKey    = "point-edit.mmm";
+        snapshot.beatmapInstanceId = 1;
+        Common::Render::TimelineInteractiveElement marker{};
+        marker.time = 3.25;
+        marker.y    = 150;
+        // 实体是稳定值标识；菜单不能通过空测试 Registry 重新查找普通点参数。
+        // 只有插值编辑器的冲突检查需要真实会话，本组普通点无需创建会话。
+        const auto entity =
+            static_cast<entt::entity>(scenario >= 5 ? 42 : 50 + lane);
+        // 专用 effect 位和字段共同决定拾取，不能只改文字标签来模拟五种类型。
+        // 各类型使用不相同的非默认参数，保证菜单确实从当前快照取值。
+        const double value = 120.0 + lane;
+        switch ( lane ) {
+        case 0:
+            // 红线使用原始 BPM 参数，不能误读绿线的默认倍率字段。
+            marker.effects   = Common::Render::SCROLL_EFFECT_BPM;
+            marker.bpmEntity = entity;
+            marker.bpmValue  = value;
+            break;
+        case 1:
+            // 绿线取存储倍率，打开窗口时不重新乘除参考 BPM。
+            marker.effects      = Common::Render::SCROLL_EFFECT_SCROLL;
+            marker.scrollEntity = entity;
+            marker.scrollValue  = value;
+            break;
+        case 2:
+            // Jump 的存储值直接送入现有编辑器，由其统一展示单位。
+            marker.effects    = Common::Render::SCROLL_EFFECT_JUMP;
+            marker.jumpEntity = entity;
+            marker.jumpValue  = value;
+            break;
+        case 3:
+            // HS 必须保持独立类型，不能回退到普通 Scroll 编辑分支。
+            marker.effects  = Common::Render::SCROLL_EFFECT_HS;
+            marker.hsEntity = entity;
+            marker.hsValue  = value;
+            break;
+        case 4:
+            // STOP 的类型字符串需与原弹窗严格一致，避免错误显示倍率控件。
+            marker.effects    = Common::Render::SCROLL_EFFECT_STOP;
+            marker.stopEntity = entity;
+            marker.stopValue  = value;
+            break;
+        }
+        // 效果位与对应实体字段缺一不可，这里只发布当前类型的 marker。
+        // 测试无需构建 Vulkan 几何，生产拾取的最小命中矩形即可提供入口。
+        snapshot.timelineElements.push_back(marker);
+        auto other         = marker;
+        other.time         = 3.75;
+        other.y            = 220;
+        other.scrollEntity = static_cast<entt::entity>(43);
+        // 第二个事件与右键目标位于不同 Y，避免重复几何造成无意重叠。
+        // 42、43 与已有选区访问器一致，使多选断言确实有两个有效实体。
+        if ( scenario >= 5 ) snapshot.timelineElements.push_back(other);
+        Canvas::TimelineCanvas canvas(
+            "PointEdit" + std::to_string(scenario), 500, 500, nullptr);
+        const auto origin = frame(canvas, snapshot, { 100, 100 });
+        ImVec2     point{ origin.x + 50 + lane * 100, origin.y + 150 };
+        // 上一轮模态可能自动聚焦数值框，关闭后推进一帧清理文本输入所有权。
+        // 这里不直接篡改 WantTextInput，否则会掩盖生产菜单的录入防穿透门禁。
+        frame(canvas, snapshot, point);
+        if ( scenario == 0 )
+            Config::AppConfig::instance()
+                .getEditorSettings()
+                .timelineSelectionIncludesBpm = false;
+        if ( scenario >= 5 ) {
+            // 选择与编辑是独立事务；右键打开编辑器不会改变已经建立的多选集合。
+            // 场景 5 命中 42，同时保留 43，避免编辑入口先替换整个选区。
+            // 独立 marker 与右键命中对象不同，已有多选不能把编辑目标换成首项。
+            // 唯一选择通过真实左键建立，测试只为多选场景初始化两个成员。
+            if ( scenario == 5 || scenario == 7 )
+                Access::select(canvas);
+            else {
+                frame(canvas, snapshot, point, true);
+                frame(canvas, snapshot, point);
+            }
+        }
+        // 400 像素处远离两个 marker，只能走唯一选择回退，不能直接命中。
+        // 场景 7 保留两项选择，因此必须拒绝猜测一个对象作为参数编辑目标。
+        if ( scenario == 6 || scenario == 7 || scenario == 9 )
+            point.y = origin.y + 400;
+        bool activated = false;
+        if ( scenario == 8 || scenario == 9 ) {
+            // 菜单停留期间删除或更新目标，点击须从当前快照重新解析而非使用旧副本。
+            const auto* popup = open(canvas, snapshot, point);
+            scenarioPassed &= popup != nullptr;
+            if ( popup ) {
+                const auto& style = ImGui::GetStyle();
+                // 使用真实弹窗的起点和行间距，菜单为避屏幕边缘而上移也不影响点击。
+                // 目标位置与右键锚点分离，可以检出菜单激活时重新拾取鼠标的错误。
+                const ImVec2 row{
+                    popup->Pos.x + popup->Size.x * .5F,
+                    popup->DC.CursorStartPos.y +
+                        14 * ImGui::GetTextLineHeightWithSpacing() +
+                        6 * (1 + style.ItemSpacing.y) +
+                        ImGui::GetTextLineHeight() * .5F
+                };
+                if ( scenario == 8 )
+                    snapshot.timelineElements.clear();
+                else
+                    snapshot.timelineElements[0].scrollValue = value + 1;
+                // 该更新不改变第二个事件，断言可区分锁存的目标与选区内其他对象。
+                // 使用整型可精确表示的 double 增量，排除文本格式化与舍入误差。
+                // 删除后仍点击原菜单行，拒绝编辑的原因必须来自目标失效检查。
+                // 更新场景只改参数，实体身份不变，必须读到新的精确值。
+                frame(canvas, snapshot, row, true);
+                frame(canvas, snapshot, row);
+                activated = ImGui::GetCurrentContext()->OpenPopupStack.empty();
+            }
+        } else
+            activated = click(canvas, snapshot, point, 14);
+        const bool shouldEdit = scenario != 7 && scenario != 8;
+        // 删除后的快照没有目标，与已有目标但空白处多选不唯一属于两种失败来源。
+        // 两种情形都不得意外打开新建点弹窗，也不得沿用上一轮参数编辑状态。
+        // 多选空白的条目保持禁用，菜单不关闭；其余有效目标必须准确匹配。
+        // 错误实体、错误字段或 STOP 大小写错误都会使参数断言失败。
+        if ( shouldEdit )
+            scenarioPassed &=
+                activated &&
+                Access::pointEdit(canvas,
+                                  entity,
+                                  marker.time,
+                                  scenario == 9 ? value + 1 : value,
+                                  types[lane]);
+        else
+            scenarioPassed &= !Access::eventEditor(canvas);
+        if ( shouldEdit ) {
+            // 请求标志正确还不够：正式模态必须在菜单关闭后于父窗口层级可见。
+            // 只绘制正文，不按应用或删除按钮，因此不会向空测试会话提交数据。
+            frame(canvas, snapshot, point, false, false, true);
+            const auto& stack = ImGui::GetCurrentContext()->OpenPopupStack;
+            // 菜单若未正确退出，参数窗口会成为其子弹窗，堆栈深度就不再为一。
+            // 同时检查实际窗口与 Modal 标志，避免仅有打开请求造成假通过。
+            scenarioPassed &=
+                stack.size() == 1 && stack.back().Window &&
+                (stack.back().Window->Flags & ImGuiWindowFlags_Modal);
+        }
+        if ( !scenarioPassed )
+            XERROR(
+                "Timing point context edit failed: scenario={}, activated={}, "
+                "selected={}, editor={}",
+                scenario,
+                activated,
+                Access::count(canvas),
+                Access::eventEditor(canvas));
+        passed &= scenarioPassed;
+        // 配置只临时限制红线集合参与，不改变后续场景的选择范围。
+        // 参数编辑与集合门禁是两种权限，恢复操作发生在断言之后。
+        if ( scenario == 0 )
+            Config::AppConfig::instance()
+                .getEditorSettings()
+                .timelineSelectionIncludesBpm = true;
+        // 未渲染的菜单请求不一定具有 Window，必须在画布销毁前显式收尾。
+        // 这里仅清除当前独立场景的弹窗，不改变生产编辑控制器状态。
+        if ( !ImGui::GetCurrentContext()->OpenPopupStack.empty() )
+            ImGui::ClosePopupToLevel(0, true);
+        frame(canvas, snapshot, point);
+    }
+    // 打开参数窗口、失效目标与禁用多选入口均不得提前修改谱面。
+    // 窗口内的应用和删除仍由既有弹窗测试覆盖，不在此重写其业务命令。
+    passed &= commands == 0;
+    // 先解除捕获局部计数的闭包，再进入后续需要真实会话的段落测试。
+    bus.unsubscribe<Event::LogicCommandEvent>(subscription);
+    if ( !passed ) XERROR("Timing context point parameter editing failed");
+    return passed;
+}
 /// @brief 验证纯鼠标 Timing 点拖自动分流、取消及旧段编辑，保留经典 Shift 门禁。
 /// @details 每个场景使用新视图，避免尚未渲染的编辑弹窗影响下一场景。
 /// @return 无键盘即可画段，取消不创建单点，经典不改变时返回真。
@@ -694,6 +1090,40 @@ bool checkRangeDrawing()
         // 此旧段只属于本场景，不可泄漏到经典 Shift 的后续起笔区域。
         snapshot.timingInterpolations.clear();
     }
+    // 选择工具菜单必须能从首标记不可见的段落正文打开原编辑器。
+    // 用同一真实会话取得冲突检查上下文，曲线和采样定义不能退化成普通时间点。
+    for ( bool professional : { true, false } ) {
+        Config::AppConfig::instance().getEditorSettings().professionalMode =
+            professional;
+        snapshot.currentTool = Logic::EditTool::Marquee;
+        Canvas::TimelineCanvas canvas(
+            professional ? "RangeMenuPro" : "RangeMenuNormal",
+            500,
+            500,
+            nullptr);
+        const auto origin = frame(canvas, snapshot, { 100, 100 });
+        Common::Render::TimingInterpolationElement segment;
+        segment.entity = static_cast<entt::entity>(101);
+        segment.effect = TimingEffect::SCROLL;
+        segment.value  = 1.25;
+        segment.time =
+            std::min(Access::time(canvas, 200), Access::time(canvas, 350));
+        segment.interpolation.m_duration =
+            std::abs(Access::time(canvas, 200) - Access::time(canvas, 350));
+        snapshot.timingInterpolations.push_back(segment);
+        const ImVec2 body{ origin.x + 150, origin.y + 275 };
+        expect(click(canvas, snapshot, body, 14),
+               "range menu closes before editor");
+        expect(Access::editor(canvas) &&
+                   Access::editEntity(canvas) == segment.entity &&
+                   Access::rangeType(canvas) == segment.effect &&
+                   Access::duration(canvas) == segment.interpolation.m_duration,
+               "range context edits original definition");
+        snapshot.timingInterpolations.clear();
+        frame(canvas, snapshot, body);
+    }
+    Config::AppConfig::instance().getEditorSettings().professionalMode = true;
+    snapshot.currentTool = Logic::EditTool::Draw;
     // 所有物理按钮已释放，按正式两帧门禁切换，不能直接替换策略指针。
     // 临时开关不写用户配置，切出后的经典分支应继续使用原磁吸规则。
     UI::Interaction::activeProfile().setBypassSnapping(false);
@@ -782,6 +1212,8 @@ int main()
         return "";
     };
     bool passed = checkMenu();
+    passed &= checkSegmentClipboard();
+    passed &= checkPointEditing();
     passed &= checkRangeDrawing();
     ImGui::DestroyContext();
     // 配置恢复放在上下文销毁之后，确保测试失败时也不会污染后续设置断言。
