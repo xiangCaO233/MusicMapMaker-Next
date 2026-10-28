@@ -1609,24 +1609,63 @@ bool checkMouseOnlyTimelineZoom()
                 click(ImVec2(presetX, presetY));
                 passed &= std::abs(service.m_config.visual.timelineZoom -
                                    4.0f) < 0.001f;
-                // 真实开关紧邻关闭按钮，定位使用当前浮层高度而非旧版固定行数。
-                // 新增行必须完整位于视口，点击不能误触底部关闭按钮或缩放预设。
-                // 缩放提交次数同时作为副作用检查，开关不得改写视觉配置。
-                // 同一坐标开关两次，窗口无需关闭重建即可反映最新策略。
-                // 此时处于竖栏布局，浮层尺寸已经按新增行重新测量。
-                const auto   scrollToggleUpdates = service.m_updates;
-                const ImVec2 fastPoint{ popup->Pos.x + style.WindowPadding.x +
-                                            ImGui::GetFrameHeight() / 2,
-                                        popup->Pos.y + popup->Size.y -
-                                            style.WindowPadding.y -
-                                            ImGui::GetFrameHeight() * 1.5F -
+                // 三个开关使用实际浮层高度定位，覆盖竖栏展开后的视口避让。
+                // 最后一行预览开关紧邻关闭按钮，吸附行在它上方一个标准行高。
+                // 快速滚动与导航组之间还有分隔线，必须按样式实值扣除间距。
+                const auto scrollToggleUpdates = service.m_updates;
+                // 行高包括主题间距，不假定字体、DPI 或 FramePadding
+                // 的固定数值。 坐标只定位输入，期望状态仍由独立的逻辑断言给出。
+                const float rowStep =
+                    ImGui::GetFrameHeight() + style.ItemSpacing.y;
+                const ImVec2 previewPoint{
+                    popup->Pos.x + style.WindowPadding.x +
+                        ImGui::GetFrameHeight() / 2,
+                    popup->Pos.y + popup->Size.y - style.WindowPadding.y -
+                        ImGui::GetFrameHeight() * 1.5F - style.ItemSpacing.y
+                };
+                const ImVec2 scrubPoint{ previewPoint.x,
+                                         previewPoint.y - rowStep };
+                const ImVec2 fastPoint{ previewPoint.x,
+                                        scrubPoint.y - rowStep - 1 -
                                             style.ItemSpacing.y };
+                // 先确认新增行完整落在浮层内，不能依靠不可见控件接收点击。
+                passed &= fastPoint.y >= popup->Pos.y + style.WindowPadding.y;
+                // 保留原快速滚动入口的开关回归，新增两行不能挤掉或改变它的身份。
                 click(fastPoint);
                 passed &= MMM::UI::Interaction::activeProfile()
                               .acceleratedScrolling() == true;
                 click(fastPoint);
                 passed &= MMM::UI::Interaction::activeProfile()
-                                  .acceleratedScrolling() == false &&
+                              .acceleratedScrolling() == false;
+                // 第一次只开启进度条吸附，不依赖真实 Shift 或键盘焦点。
+                // 缩放预设保持刚提交的 400%，开关不能提交新的视觉配置。
+                click(scrubPoint);
+                auto options = MMM::UI::Interaction::activeProfile()
+                                   .navigationPointerOptions();
+                // 吸附开启后预览仍常速，证明两个控件没有共享内部 ID 或状态。
+                passed &= options && options->m_snapScrub &&
+                          !options->m_fastPreviewZoom;
+                // 同时开启再交叉关闭，检测误用互斥单选或共享内部 ID 的实现。
+                // 查询当前方案的最新值，不使用打开浮层时的旧状态副本。
+                click(previewPoint);
+                options = MMM::UI::Interaction::activeProfile()
+                              .navigationPointerOptions();
+                passed &= options && options->m_snapScrub &&
+                          options->m_fastPreviewZoom;
+                click(scrubPoint);
+                options = MMM::UI::Interaction::activeProfile()
+                              .navigationPointerOptions();
+                // 关闭吸附不能复位预览；两项同时开启及交叉关闭都走真实鼠标事件。
+                passed &= options && !options->m_snapScrub &&
+                          options->m_fastPreviewZoom;
+                click(previewPoint);
+                options = MMM::UI::Interaction::activeProfile()
+                              .navigationPointerOptions();
+                // 导航意图不回写缩放值，不触发保存或额外的编辑器配置提交。
+                // 结束前恢复两个关闭值，后续场景不会继承本次试验的临时模式。
+                // 按下与释放分帧推进，最终关闭状态必须在事件处理后立即可见。
+                passed &= options && !options->m_snapScrub &&
+                          !options->m_fastPreviewZoom &&
                           service.m_updates == scrollToggleUpdates;
             }
         }

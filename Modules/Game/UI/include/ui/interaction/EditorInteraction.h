@@ -52,6 +52,13 @@ struct CameraPointerOptions {
     /// @brief 轴和旋转环采用十分之一增量，不改变目标相机的数值精度。
     bool m_fine{ false };
 };
+/// @brief 纯鼠标的定位与预览意图，不改变主画布缩放或全局修饰键。
+struct NavigationPointerOptions {
+    /// @brief 拖动 Timing 音频进度条时吸附到当前拍线网格。
+    bool m_snapScrub{ false };
+    /// @brief 预览滚轮采用两倍步长，范围仍由原有预览配置约束。
+    bool m_fastPreviewZoom{ false };
+};
 /// @brief 供新方案替换整段交互的单帧上下文，不拥有视图或谱面。
 /// @warning 仅在 UI 调用栈内借用，不能保存 snapshot 到下一帧。
 struct SurfaceFrame {
@@ -137,6 +144,12 @@ public:
     virtual std::optional<bool> acceleratedScrolling() const;
     /// @brief 设置纯鼠标快速滚动意图，切出方案时清除。
     virtual void setAcceleratedScrolling(bool accelerated);
+    /// @brief 显式定位与预览意图；经典返回空以保留物理 Shift 行为。
+    /// @warning 每帧按值读取两个布尔值，不分配资源或访问会话。
+    virtual std::optional<NavigationPointerOptions>
+    navigationPointerOptions() const;
+    /// @brief 更新纯鼠标导航意图，切出方案时恢复默认关闭状态。
+    virtual void setNavigationPointerOptions(NavigationPointerOptions options);
     /// @brief 解释滚轮方向与倍率，横纵轴分开，不改变 ImGui 控件自身滚动。
     virtual float wheel(Surface surface, float physical, bool horizontal) const;
     /// @brief 解释键盘主键，支持整套键位语义替换；参数为 ImGui 命名键值。
@@ -236,6 +249,12 @@ bool bypassSnapping();
 /// @brief 只为时间滚轮与框选边缘滚动解析加速，不作为通用 Shift 使用。
 /// @warning 每帧常量查询；经典沿用物理 Shift，纯鼠标使用显式开关。
 bool acceleratedScroll();
+/// @brief 仅为 Timing 音频进度条解析拍线吸附，不改变其它放置吸附策略。
+/// @warning 每帧常量查询；经典仍动态读取 Shift，不伪造键盘状态。
+bool snapTimelineScrub();
+/// @brief 仅为预览滚轮解析两倍缩放步长，与时间滚动加速相互独立。
+/// @warning 每帧常量查询，不改变滚轮数值或访问可变会话。
+bool fastPreviewZoom();
 /// @brief 查询主键边沿，保留旧调用者是否允许重复的语义。
 bool keyPressed(int key, bool repeat = true);
 /// @brief 查询主键保持状态，供连续编辑使用。

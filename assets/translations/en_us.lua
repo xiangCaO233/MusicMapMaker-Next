@@ -59,6 +59,10 @@ return {
 	["ui.menu.frame_stats_fmt"] = "FT: {:.2f} ms | FPS: {:.1f} | UPS: {:.1f}",
 
 	["ui.edit"] = "&Edit",
+	["ui.mouse_navigation.snap_scrub"] = "Snap playback slider",
+	["ui.mouse_navigation.snap_scrub_hint"] = "Snap the Timing audio slider to the current beat grid without changing object placement snapping.",
+	["ui.mouse_navigation.fast_preview_zoom"] = "Fast preview zoom",
+	["ui.mouse_navigation.fast_preview_zoom_hint"] = "Double the preview wheel zoom step without changing the main canvas zoom or playback speed.",
 	["ui.mouse_scroll.fast"] = "Fast scrolling",
 	["ui.mouse_scroll.fast_hint"] = "Accelerate time scrolling and selection edge scrolling in the main canvas and Timing view.",
 	["ui.audio_tool.selection_mode"] = "Resource selection mode",

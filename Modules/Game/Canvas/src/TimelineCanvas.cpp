@@ -618,9 +618,9 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                           .getVisualConfig()
                                           .getEffectiveVisualOffset();
                 double targetTime   = static_cast<double>(time);
-                if ( UI::Interaction::modifier(
-                         UI::Interaction::Modifier::Shift) ) {
-                    // Shift 吸附仅影响本次候选，不永久改变 beat divisor。
+                if ( UI::Interaction::snapTimelineScrub() ) {
+                    // 经典读取 Shift，纯鼠标读取专用开关；只吸附本次候选。
+                    // 继续使用原拍线算法及视觉偏移，不改写全局 beat divisor。
                     targetTime = std::clamp(snapTimeToBeatLine(targetTime),
                                             0.0,
                                             static_cast<double>(total));

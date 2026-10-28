@@ -1966,13 +1966,20 @@ void ToolbarView::update(UIManager* sourceManager)
         // 纯鼠标多出的开关与分隔线也参与初始高度估算，避免底部首次弹出被裁掉。
         const bool hasFastScroll =
             Interaction::activeProfile().acceleratedScrolling().has_value();
+        // 定位吸附与预览缩放增加两行及独立分隔线，首次弹出也须完整避让视口。
+        // 能力与快速滚动独立，后续方案可以只提供其中一种显式意图。
+        const bool hasNavigationOptions =
+            Interaction::activeProfile().navigationPointerOptions().has_value();
         const float requiredHeight =
             popupStyle.WindowPadding.y * 2 + ImGui::GetTextLineHeight() + 1.0f +
             ImGui::GetFrameHeight() * 2 + buttonHeight * 2 +
             popupStyle.ItemSpacing.y * 6 +
             (hasFastScroll
                  ? ImGui::GetFrameHeight() + 1 + popupStyle.ItemSpacing.y * 2
-                 : 0);
+                 : 0) +
+            (hasNavigationOptions ? ImGui::GetFrameHeight() * 2 + 1 +
+                                        popupStyle.ItemSpacing.y * 3
+                                  : 0);
         positionToolbarPopup(
             *toolbarWindow,
             m_lastZoomBtnPos,
@@ -2097,6 +2104,35 @@ void ToolbarView::update(UIManager* sourceManager)
                 if ( ImGui::IsItemHovered() )
                     ImGui::SetTooltip("%s",
                                       TR("ui.mouse_scroll.fast_hint").data());
+            }
+            // 两个导航开关组成独立分隔组，不改写主画布的缩放和滚动参数。
+            // 默认关闭仍表示支持此能力，不能以字段值决定控件是否出现。
+            if ( const auto navigation =
+                     scrollProfile.navigationPointerOptions() ) {
+                ImGui::Separator();
+                // 两个标量按值编辑，不保留窗口或快照的跨帧指针。
+                auto options = *navigation;
+                // 两个控件只改变各自表面的输入解释，不能回写主画布缩放或物件吸附配置。
+                // 每个控件结束后立即保留最新值，同帧点击不会用旧副本覆盖另一个字段。
+                bool changedNavigation = FeedbackCheckbox(
+                    TR("ui.mouse_navigation.snap_scrub").data(),
+                    &options.m_snapScrub);
+                if ( ImGui::IsItemHovered() )
+                    ImGui::SetTooltip(
+                        "%s", TR("ui.mouse_navigation.snap_scrub_hint").data());
+                // 使用按位或合并结果，不能用逻辑或短路而跳过第二个控件的绘制。
+                changedNavigation |= FeedbackCheckbox(
+                    TR("ui.mouse_navigation.fast_preview_zoom").data(),
+                    &options.m_fastPreviewZoom);
+                if ( ImGui::IsItemHovered() )
+                    ImGui::SetTooltip(
+                        "%s",
+                        TR("ui.mouse_navigation.fast_preview_zoom_hint")
+                            .data());
+                // 未变化不重复发布，也不创建谱面撤销记录或触发配置保存。
+                // 方案退出会清除这些临时意图，经典设置不参与此更新。
+                if ( changedNavigation )
+                    scrollProfile.setNavigationPointerOptions(options);
             }
             // 明确的关闭按钮保证触屏无悬浮、无右键时也能退出。
             if ( FeedbackButton(TR("ui.window.close").data()) )

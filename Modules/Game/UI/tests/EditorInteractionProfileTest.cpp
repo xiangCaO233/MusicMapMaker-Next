@@ -418,7 +418,9 @@ bool testLessonGesturePolicies()
     ImGui::DestroyContext();
     return ok;
 }
-/// @brief 验证快速滚动开关只覆盖专用查询，经典仍实时读取物理 Shift。
+/// @brief 验证滚动、定位与预览各自覆盖专用查询，经典仍实时读取物理 Shift。
+/// @note 两个导航字段采用相反值，检查独立性及显式关闭优先于真实 Shift。
+/// @details 经典 setter 保持无效，空能力值不能误作纯鼠标的显式关闭。
 /// @return 两种表面、两种键盘状态和两种开关组合均符合契约时返回真。
 /// @post 销毁独立输入上下文，恢复经典方案，不写用户软件配置。
 bool checkAcceleratedScroll()
@@ -448,6 +450,10 @@ bool checkAcceleratedScroll()
             for ( bool accelerated : { false, true } ) {
                 Interaction::activeProfile().setAcceleratedScrolling(
                     accelerated);
+                // 定位与预览采用相反开关，能检出两个字段错误绑定到同一布尔值。
+                // setter 在经典方案必须完全无效，原 Shift 解释不能受它污染。
+                Interaction::activeProfile().setNavigationPointerOptions(
+                    { accelerated, !accelerated });
                 io.AddKeyEvent(ImGuiMod_Shift, shift);
                 // 所有查询位于同一个已解析输入帧，不能直接修改 io.KeyShift。
                 ImGui::NewFrame();
@@ -457,6 +463,12 @@ bool checkAcceleratedScroll()
                     ok &= require(Interaction::acceleratedScroll() ==
                                       (pure ? accelerated : shift),
                                   "accelerated scrolling policy");
+                    ok &= require(Interaction::snapTimelineScrub() ==
+                                      (pure ? accelerated : shift),
+                                  "timeline slider snap policy");
+                    ok &= require(Interaction::fastPreviewZoom() ==
+                                      (pure ? !accelerated : shift),
+                                  "preview fast zoom policy");
                     // 通用修饰键不能受滚动开关影响，否则绘制、选择和缩放都会改变。
                     ok &= require(Interaction::modifier(
                                       Interaction::Modifier::Shift) == shift &&
@@ -466,6 +478,11 @@ bool checkAcceleratedScroll()
                 // 不提交 UI 窗口也配对结束帧，确保下一组事件能正常推进。
                 ImGui::EndFrame();
             }
+        // 离开纯鼠标前故意留下两个开启值，再验证切换后的清理确实生效。
+        // 不能只测试默认关闭，否则遗漏 deactivate 也会碰巧通过。
+        if ( pure )
+            Interaction::activeProfile().setNavigationPointerOptions(
+                { true, true });
     }
     // 上一组纯鼠标最后留下启用值；切出再切入必须恢复常速，不继承隐藏状态。
     Interaction::synchronizeProfile("mouse-only", true);
@@ -474,6 +491,11 @@ bool checkAcceleratedScroll()
     // 这样切回纯鼠标后即使真实 Shift 尚未释放，也不会意外快速滚动。
     ok &= require(Interaction::activeProfile().acceleratedScrolling() == false,
                   "fast scrolling reset on exit");
+    const auto resetNavigation =
+        Interaction::activeProfile().navigationPointerOptions();
+    ok &= require(resetNavigation && !resetNavigation->m_snapScrub &&
+                      !resetNavigation->m_fastPreviewZoom,
+                  "navigation options reset on exit");
     Interaction::synchronizeProfile("classic-desktop", true);
     Interaction::synchronizeProfile("classic-desktop", true);
     // 恢复方案先于销毁上下文，不能把上一组的加速开关留给后续动作测试。

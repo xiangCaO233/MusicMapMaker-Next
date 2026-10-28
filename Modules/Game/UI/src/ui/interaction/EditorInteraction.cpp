@@ -97,12 +97,25 @@ public:
     {
         m_acceleratedScrolling = accelerated;
     }
-    /// @brief 切出时清除临时吸附、相机和滚动选项，防止隐藏状态跨方案残留。
+    /// @brief 返回定位与预览专用意图，不借用画笔或滚动开关的状态。
+    /// @warning 每帧仅复制两个标量，不查询设备或软件配置。
+    std::optional<NavigationPointerOptions>
+    navigationPointerOptions() const override
+    {
+        return m_navigationPointerOptions;
+    }
+    /// @brief 两个独立开关按值更新，后续输入立即采用，不触发配置保存。
+    void setNavigationPointerOptions(NavigationPointerOptions options) override
+    {
+        m_navigationPointerOptions = options;
+    }
+    /// @brief 切出时清除临时吸附、相机和导航选项，防止隐藏状态跨方案残留。
     void deactivate() override
     {
-        m_bypassSnapping       = false;
-        m_cameraPointerOptions = {};
-        m_acceleratedScrolling = false;
+        m_bypassSnapping           = false;
+        m_cameraPointerOptions     = {};
+        m_acceleratedScrolling     = false;
+        m_navigationPointerOptions = {};
     }
     /// @brief 主画布无需修饰键即可延伸画笔，其他表面保留原语义。
     /// @warning 连续绘制只做枚举判断，不持有会话或跨帧指针。
@@ -114,6 +127,8 @@ public:
     }
 
 private:
+    /// @brief 定位吸附与预览快缩放的临时意图，仅在 UI 线程读写。
+    NavigationPointerOptions m_navigationPointerOptions{};
     /// @brief 只覆盖时间滚动加速，不用于选择、画笔或属性滚轮调整。
     bool m_acceleratedScrolling{ false };
     /// @brief 相机专用意图，不持久化、不模拟 Shift，生命周期属于当前方案。
@@ -277,6 +292,32 @@ bool acceleratedScroll()
 {
     const auto accelerated = activeProfile().acceleratedScrolling();
     return accelerated ? *accelerated : modifier(Modifier::Shift);
+}
+/// @brief 经典不保存纯鼠标导航状态，空值保证仍按物理修饰键解释。
+/// @warning 每帧只返回空标量，不访问窗口或分配资源。
+std::optional<NavigationPointerOptions>
+IEditorInteractionProfile::navigationPointerOptions() const
+{
+    return std::nullopt;
+}
+/// @brief 经典忽略显式导航设置，不能把纯鼠标选项泄漏到旧方案。
+void IEditorInteractionProfile::setNavigationPointerOptions(
+    NavigationPointerOptions)
+{
+}
+/// @brief 独立解析音频进度条吸附，既不影响放置吸附，也不修改真实 Shift。
+/// @warning 每帧固定次数的方案与修饰键查询，不访问逻辑会话。
+bool snapTimelineScrub()
+{
+    const auto options = activeProfile().navigationPointerOptions();
+    return options ? options->m_snapScrub : modifier(Modifier::Shift);
+}
+/// @brief 只选择预览缩放步长，原始范围夹取与布局保存仍由预览视图负责。
+/// @warning 每帧只读 UI 标量，不发布编辑命令或执行文件操作。
+bool fastPreviewZoom()
+{
+    const auto options = activeProfile().navigationPointerOptions();
+    return options ? options->m_fastPreviewZoom : modifier(Modifier::Shift);
 }
 /// @brief 查询明确的主画布延伸策略，不依赖方案身份字符串或当前 UI 输入域。
 /// @warning 每帧无分配，不查询会话或伪造键盘事件。
