@@ -9,6 +9,7 @@
     <!-- 默认资源与配置仍在私有目录，授权不改变缓存和产物位置。 -->
     <!-- Activity 只承载 SDL 原生窗口，界面与资源生命周期继续由 C++ 主程序维护。 -->
     <application android:label="MusicMapMaker Next Android" android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <!-- 初期沿用桌面编辑器排版，横屏显示，不增加触控交互逻辑。 -->
         <!-- configChanges 交给 SDL 处理，避免普通旋转重新初始化整套编辑器。 -->
