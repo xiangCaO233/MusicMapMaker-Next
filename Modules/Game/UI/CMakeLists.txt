@@ -84,6 +84,9 @@ add_library(
   src/ui/interaction/EditorInteractionActions.cpp
   # 视图基础接口与演练流程。
   src/ui/IUIView.cpp
+  # 公共视图只认识工作区策略，平台工厂在下面按目标系统独立选择。
+  src/ui/workspace/WorkspacePresentation.cpp
+  src/ui/workspace/MobileWorkspaceModel.cpp
   # 教学段落目录仅在服务构造时读取资源，运行时按已生成模型推进。
   src/ui/walkthrough/ComposeLessonCatalog.cpp
   src/ui/walkthrough/WalkthroughModel.cpp
@@ -655,9 +658,23 @@ target_link_libraries(EditorInteractionProfileTest PRIVATE UI Config 3rd_imgui)
 # 每个用例独立进程，测试方案不会进入生产方案列表或污染其他用例。
 mmm_register_test_case(NAME EditorInteractionProfileTest COMMAND
                        EditorInteractionProfileTest)
+
+# 纯状态机回归不要求 Android SDK 或 Vulkan；设备端另验收真实层级与触摸。
+mmm_add_test_executable(UI MobileWorkspaceModelTest
+                        tests/MobileWorkspaceModelTest.cpp)
+target_link_libraries(MobileWorkspaceModelTest PRIVATE UI Log)
+mmm_register_test_case(NAME MobileWorkspaceModelTest COMMAND
+                       MobileWorkspaceModelTest)
 # Android 暂不提供桌面文件选择器，兼容层明确报告不支持，不能静默丢失用户文件。
 if(ANDROID)
   target_sources(UI PRIVATE src/ui/utils/AndroidFileDialog.cpp)
+  # 移动外壳不编译桌面组合根，避免两套布局分支交织在业务视图中。
+  target_sources(UI PRIVATE src/ui/workspace/MobileWorkspacePresentation.cpp
+                            src/ui/workspace/MobileButton.cpp)
+else()
+  # 桌面完整保留原有外壳；公共布局入口只链接唯一的平台工厂。
+  target_sources(UI PRIVATE src/ui/workspace/DesktopWorkspacePresentation.cpp
+                            src/ui/workspace/DesktopMainWorkspace.cpp)
 endif()
 
 # 工具插件直接读取 FFmpeg codec ID，必须显式继承其头文件和首次构建依赖。 不能依赖预编译 ICE

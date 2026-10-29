@@ -3,6 +3,7 @@ package top.xiang233.musicmapmaker;
 import org.libsdl.app.SDLActivity;
 import android.content.Intent;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Environment;
 import android.provider.Settings;
 import android.net.Uri;
@@ -20,6 +21,27 @@ import android.util.Base64;
  * SDL Java 实现来自构建使用的同一上游源码目录，不在仓库复制维护。
  */
 public final class MainActivity extends SDLActivity {
+    /** 返回回调只在 Activity 生命周期内存活，旧版系统不解析 API 33 类型。 */
+    private Object backNavigationCallback;
+
+    /** 返回只请求移动工作区导航，不能直接调用 finish 或退出原生进程。 */
+    static native void requestNativeBack();
+
+    /** SDL 初始化之后接管系统返回手势，保留平台 IME 的更高优先级处理。 */
+    @Override protected void onCreate(Bundle state) {
+        super.onCreate(state);
+        backNavigationCallback = BackNavigation.register(this);
+    }
+
+    /** Activity 销毁时精确解除自己的回调，SDL 生命周期仍由基类负责。 */
+    @Override protected void onDestroy() {
+        BackNavigation.unregister(this, backNavigationCallback);
+        super.onDestroy();
+    }
+
+    /** 兼容三键导航及旧系统，统一进入移动端的独立退出确认。 */
+    @Override public void onBackPressed() { requestNativeBack(); }
+
     /**
      * @brief 为原生 TLS 导出本应用默认信任管理器接受的根证书。
      * @return 仅含公开证书的 PEM 字节；没有可用信任管理器时返回空数组。

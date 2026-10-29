@@ -62,6 +62,9 @@ public:
     /// @warning UI 热路径：每帧执行；仅允许当前子视图绘制、DockNode
     /// 几何修正和轻量鼠标交互处理。
     void update(UIManager* sourceManager) override;
+    /// @brief 在移动抽屉提供的固定内容窗口中复用当前子视图。
+    /// @warning UI 热路径：不执行桌面停靠缩放、最小边界或自动折叠逻辑。
+    void updateAsDrawer(UIManager* sourceManager);
 
     void* getActualInstance() override { return this; }
 

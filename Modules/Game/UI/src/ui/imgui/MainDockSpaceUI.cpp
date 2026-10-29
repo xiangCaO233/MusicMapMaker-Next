@@ -32,6 +32,7 @@
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <concurrentqueue.h>
@@ -549,132 +550,23 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     m_beatmapLoadDiagnosticFeedback.update();
     m_mainMenuview.update(sourceManager, m_statusMessageService);
 
-    // 本帧复用引擎、皮肤、视口和 DPI 引用，避免各布局块采样到不同配置。
-    auto&                engine   = Logic::EditorEngine::instance();
-    Config::SkinManager& skinCfg  = Config::SkinManager::instance();
-    ImGuiViewport*       viewport = ImGui::GetMainViewport();
-    float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
-
-    // IGFD 翻译当前受库封装限制；此处不在热路径重复写入静态文案表。
-
-    if ( auto* nativeWindow =
-             sourceManager ? sourceManager->getNativeWindow() : nullptr ) {
-        // 每帧从平台窗口校正状态，覆盖可能延迟或丢失的事件通知。
-        m_isMaximized = nativeWindow->isWindowMaximized();
-    }
-
+    auto&       engine   = Logic::EditorEngine::instance();
+    auto&       skinCfg  = Config::SkinManager::instance();
+    auto*       viewport = ImGui::GetMainViewport();
+    const float dpiScale =
+        Config::AppConfig::instance().getWindowContentScale();
     const auto& editorSettings =
-        Config::AppConfig::instance().getEditorConfig().settings;
-    const auto& aesthetics = editorSettings.aesthetics;
-
-    float windowPaddingVal = std::floor(aesthetics.windowPadding * dpiScale);
-
-    // 独立侧栏宽度包含两侧窗口内边距，固定工具栏另按四边几何预留。
-    float sidebarWidth =
-        SideBarUI::GetSidebarWidth(dpiScale) + 2.0f * windowPaddingVal;
-    // 四边工具栏在停靠宿主内统一扣除，菜单不再只为右侧栏单独扣宽度。
-    // 固定几何与宿主共享计算入口，不能让两处布局产生重叠或重复预留。
-    const float toolbarLayoutWidth = 0.0f;
-
-    float       extraPaddingY = std::floor(4.0f * dpiScale);
-    ImGuiStyle& style         = ImGui::GetStyle();
-
-    // 把皮肤审美参数转换为整数像素并同步到本帧全局 ImGui 样式。
-    float windowRound     = std::floor(aesthetics.windowRounding * dpiScale);
-    float frameRound      = std::floor(aesthetics.frameRounding * dpiScale);
-    style.WindowRounding  = windowRound;
-    style.ChildRounding   = windowRound;
-    style.FrameRounding   = frameRound;
-    style.PopupRounding   = frameRound;
-    style.TabRounding     = frameRound;
-    style.ItemSpacing     = { std::floor(aesthetics.itemSpacing * dpiScale),
-                              std::floor(aesthetics.itemSpacing * dpiScale) };
-    style.WindowPadding   = { windowPaddingVal, windowPaddingVal };
-    style.FrameBorderSize = 0.0f;
-
-    // 菜单栏与状态栏等高，形成对称的顶部和底部固定区域。
-    float menuBarHeight =
-        ImGui::GetFontSize() + (style.FramePadding.y + extraPaddingY) * 2.0f;
-    float statusBarHeight = menuBarHeight;
-
-    // 在提交窗口控件前设置边缘鼠标形状，避免被中央内容覆盖。
-    handleNativeWindowFrameInteraction(sourceManager, dpiScale);
-
-    // 顶部菜单栏占据主视口第一条固定带。
-    renderMenuBar(sourceManager,
-                  menuBarHeight,
-                  sidebarWidth,
-                  toolbarLayoutWidth,
-                  dpiScale);
-
-    // 中央 DockSpace 使用扣除四周固定区域后的剩余矩形。
-    renderDockingSpace(sourceManager,
-                       menuBarHeight,
-                       statusBarHeight,
-                       sidebarWidth,
-                       toolbarLayoutWidth);
-
-    // 状态栏在 DockSpace 之后绘制，以覆盖底部边界接缝。
-    renderStatusBar(sourceManager, statusBarHeight, dpiScale);
-
-    // 固定工具栏直接占据宿主留出的边缘矩形，不使用任何 Dock 节点。
-    // renderDockingSpace 已在移出窗口前记录实际停靠边缘，不能用旧缓存定位。
-    if ( editorSettings.fixedToolWindow ) {
-        const float gap  = std::floor(aesthetics.windowGap * dpiScale);
-        const auto  edge = toolbarDockDirection(editorSettings.toolbarDockEdge);
-        const bool  horizontal = edge == ImGuiDir_Up || edge == ImGuiDir_Down;
-        const float thickness =
-            std::floor(
-                (horizontal && editorSettings.showToolLabels ? 46.0f : 32.0f) *
-                dpiScale) +
-            2.0f * windowPaddingVal;
-        // 左侧包含侧栏外边距和栏间距，右侧仅保留一份外边距。
-        // 与宿主使用同一基础矩形，避免固定工具栏右侧重复留白。
-        const auto geometry = calculateToolbarWorkspaceGeometry(
-            ImVec2(viewport->WorkPos.x + sidebarWidth + 2.0f * gap,
-                   viewport->WorkPos.y + menuBarHeight + gap),
-            ImVec2(viewport->WorkSize.x - sidebarWidth - 3.0f * gap,
-                   viewport->WorkSize.y - menuBarHeight - statusBarHeight -
-                       2.0f * gap),
-            true,
-            edge,
-            thickness,
-            gap);
-        // 始终相对当前视口设定，主窗口缩放和 DPI 改变后仍紧贴同一条边。
-        // 必须在 ToolbarView::Begin 之前提交，停靠标签宿主不再参与固定几何。
-        // 非固定阶段不提交这些约束，用户拖动位置和长轴尺寸由 ImGui 保存。
-        ImGui::SetNextWindowPos(geometry.m_toolbarPos);
-        ImGui::SetNextWindowSize(geometry.m_toolbarSize);
-        // 管理器展开时左侧固定带位于它与画布之间，以本帧占位叶几何定位。
-        // 占位只提供矩形，实际工具窗口仍强制移出 DockSpace 并保持独立固定。
-        if ( edge == ImGuiDir_Left ) {
-            const auto* slotWindow =
-                ImGui::FindWindowByName(TOOLBAR_MANAGER_SLOT_NAME);
-            const auto* slot = slotWindow ? slotWindow->DockNode : nullptr;
-            if ( slot ) {
-                ImGui::SetNextWindowPos(slot->Pos);
-                ImGui::SetNextWindowSize(ImVec2(thickness, slot->Size.y));
-            }
-        }
-        ImGui::SetNextWindowDockID(0);
-    }
-    ImGui::SetNextWindowViewport(viewport->ID);
-    m_toolbarView.update(sourceManager);
-
-    // 前景边框在所有主工作区窗口后绘制，确保无边框轮廓不被遮盖。
-    renderNativeWindowFrameOverlay(sourceManager, dpiScale);
+        Config::AppConfig::instance().getEditorSettings();
+    // 平台外壳负责布局，事件队列、导入和确认流程继续复用公共业务实现。
+    sourceManager->workspacePresentation().renderWorkspace(*this,
+                                                           *sourceManager);
 
     // Android 字体已经按密度缩放，文件对话框的固定像素尺寸也要匹配。
     // 视口比例上限保证底部文件名和确认按钮仍在屏幕内，不改变桌面尺寸约定。
     // 这里只计算两个标量，不枚举文件、不查询 JNI，也不进行布局树复制。
-#ifdef __ANDROID__
-    const ImVec2 fileDialogSize{
-        std::min(600.0f * dpiScale, viewport->WorkSize.x * 0.92f),
-        std::min(400.0f * dpiScale, viewport->WorkSize.y * 0.88f)
-    };
-#else
-    const ImVec2 fileDialogSize{ 600, 400 };
-#endif
+    const ImVec2 fileDialogSize =
+        sourceManager->workspacePresentation().fileDialogSize(
+            dpiScale, viewport->WorkSize);
 
     // Unified 模式的所有文件选择器都由同一 ImGuiFileDialog 实例逐帧驱动。
     if ( editorSettings.filePickerStyle == Config::FilePickerStyle::Unified ) {

@@ -7,6 +7,7 @@
 #include "config/skin/translation/Translation.h"
 #include "imgui_internal.h"
 #include "ui/layout/CLayDefs.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -958,8 +959,8 @@ void finishButtonFeedback(ImGuiID id, bool clicked, ImGuiStorage* storage,
         isHovered || (wasUpdatedCurrentFrame && storedHovered);
     const bool feedbackEnabled = isInteractionFeedbackEnabled();
 
-    if ( feedbackEnabled && isHovered && !wasHovered &&
-         !(wasUpdatedCurrentFrame && storedHovered) ) {
+    if ( feedbackEnabled && workspaceAllowsHoverFeedback() && isHovered &&
+         !wasHovered && !(wasUpdatedCurrentFrame && storedHovered) ) {
         Audio::AudioManager::instance().playSoundEffect(
             BUTTON_HOVER_SFX_KEY, BUTTON_HOVER_SFX_VOLUME);
     }
