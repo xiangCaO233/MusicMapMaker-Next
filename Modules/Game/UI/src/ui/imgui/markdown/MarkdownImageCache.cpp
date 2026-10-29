@@ -4,6 +4,7 @@
 #include "config/AppPaths.h"
 #include "graphic/imguivk/VKTexture.h"
 #include "log/colorful-log.h"
+#include "network/CurlHandle.h"
 #include "runtime/AppThreadPool.h"
 #include "ui/imgui/markdown/MarkdownParser.h"
 
@@ -433,7 +434,7 @@ MarkdownImagePixels loadUpdateImage(const std::string& url,
     std::vector<unsigned char> bytes;
     // unique_ptr 保证所有提前返回路径都执行 curl_easy_cleanup。
     auto curl = std::unique_ptr<CURL, decltype(&curl_easy_cleanup)>(
-        curl_easy_init(), curl_easy_cleanup);
+        Network::createCurlHandle(), curl_easy_cleanup);
     if ( !curl ) return {};
     // 初始和重定向协议都限制为 HTTP(S)，不允许 file 等本地 scheme。
     curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
