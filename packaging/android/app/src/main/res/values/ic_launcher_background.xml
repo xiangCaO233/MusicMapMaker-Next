@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 背景覆盖整个遮罩，标志本身保持桌面 SVG 的配色与透明留白。 -->
+<resources>
+    <color name="ic_launcher_background">#F4F6F8</color>
+</resources>
