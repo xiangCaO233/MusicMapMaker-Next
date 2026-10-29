@@ -3,6 +3,7 @@
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/CLayWrapperCore.h"
 #include "ui/layout/LayoutContext.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 
 #include "config/AppConfig.h"
 #include "config/skin/SkinConfig.h"
@@ -109,10 +110,10 @@ LayoutContext::LayoutContext(IUIView& view, const std::string& windowName,
     const bool wasOpenBeforeBegin = open != nullptr && *open;
     if ( customWindowFlags ) {
         // 自定义模式完整采用调用方标志。
-        ImGui::Begin(windowName.c_str(), open, windowFlags);
+        beginWorkspaceWindow(view.m_name, windowName, open, windowFlags);
     } else {
         // 默认模式让 ImGui 使用标准窗口行为。
-        ImGui::Begin(windowName.c_str(), open);
+        beginWorkspaceWindow(view.m_name, windowName, open);
     }
     // 补充原生关闭按钮的统一音效和 Dock 标签悬停反馈。
     FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin, open);

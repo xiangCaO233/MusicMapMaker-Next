@@ -15,6 +15,8 @@ enum class NativeEventType {
     GLFW_WINDOW_RESIZED,
     GLFW_WINDOW_CONTENT_SCALE_CHANGED,
     GLFW_WINDOW_FOCUS_CHANGED,
+    /// @brief 移动平台返回导航请求，不等同于确认关闭主窗口。
+    MOBILE_BACK_REQUEST,
 };
 
 /// @brief 在 UI 与 GLFW 窗口后端之间传递原生窗口操作。

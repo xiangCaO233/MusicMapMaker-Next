@@ -1,6 +1,8 @@
 #include "graphic/sdl/AndroidNativeWindow.h"
 #include "config/AppConfig.h"
+#include "event/core/EventBus.h"
 #include "event/ui/GLFWNativeEvent.h"
+#include "graphic/window/BackNavigation.h"
 #include "log/colorful-log.h"
 #include <SDL3/SDL.h>
 #include <cmath>
@@ -17,7 +19,26 @@ namespace
 {
 /// @brief Android 只有一个 Activity 窗口，此观察指针仅在 SDL 主线程使用。
 NativeWindow* activeWindow = nullptr;
+/// @brief Java 返回手势仅投递 SDL 事件，由原 UI 线程决定返回或退出确认。
+Uint32 mobileBackEventType()
+{
+    // 事件编号只分配一次；SDL 的注册与投递接口允许来自 Activity 线程。
+    static const Uint32 type = SDL_RegisterEvents(1);
+    return type;
+}
 }  // namespace
+
+/// @brief 将系统返回请求转为应用自己的 SDL 用户事件。
+/// @details 独立类型避免把返回误认为不可取消的 SDL_QUIT。
+/// 调用线程不拥有窗口，也不读取 UI 管理器成员。
+/// @warning 仅用户导航时投递，由 UI 线程在正常事件泵中消费。
+void requestMobileBackNavigation()
+{
+    // Java 线程只向 SDL 的线程安全队列发送值对象，不能触碰 ImGui 上下文。
+    SDL_Event event{};
+    event.type = mobileBackEventType();
+    if ( event.type != 0 ) SDL_PushEvent(&event);
+}
 
 /// @brief 使用同一 SDL3 实例创建 Vulkan 窗口，正式 UI 与启动流程共用该边界。
 NativeWindow::NativeWindow(int width, int height, const char* title,
@@ -86,6 +107,13 @@ void NativeWindow::pollEvents() const
     // 所有输入直接使用 SDL 后端的坐标与触点鼠标合成，不额外修改业务状态。
     SDL_Event event;
     while ( SDL_PollEvent(&event) ) {
+        // 这里只发布意图；确认后的正常关闭仍沿用既有窗口命令通道。
+        if ( event.type == mobileBackEventType() ) {
+            Event::GLFWNativeEvent back;
+            back.type           = Event::NativeEventType::MOBILE_BACK_REQUEST;
+            back.hasStateChange = true;
+            Event::EventBus::instance().publish(back);
+        }
         if ( ImGui::GetCurrentContext() ) ImGui_ImplSDL3_ProcessEvent(&event);
         // 关闭请求保留到既有未保存工程确认流程处理。
         if ( event.type == SDL_EVENT_QUIT ||
