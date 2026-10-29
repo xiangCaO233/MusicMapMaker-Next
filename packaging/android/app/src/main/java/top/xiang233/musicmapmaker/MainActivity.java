@@ -7,12 +7,45 @@ import android.os.Environment;
 import android.provider.Settings;
 import android.net.Uri;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyStore;
+import java.security.GeneralSecurityException;
+import java.security.cert.X509Certificate;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509TrustManager;
+import android.util.Base64;
 
 /**
  * Android 仅提供 Activity 外壳，现有编辑器界面和业务逻辑仍由 C++ 实现。
  * SDL Java 实现来自构建使用的同一上游源码目录，不在仓库复制维护。
  */
 public final class MainActivity extends SDLActivity {
+    /**
+     * @brief 为原生 TLS 导出本应用默认信任管理器接受的根证书。
+     * @return 仅含公开证书的 PEM 字节；没有可用信任管理器时返回空数组。
+     * @throws GeneralSecurityException 平台证书读取失败，由 JNI 边界转换为失败结果。
+     * @warning 仅原生启动阶段调用，不在 UI 帧内遍历系统证书。
+     */
+    public byte[] systemCaCertificates() throws GeneralSecurityException {
+        // null 使用平台默认信任配置，避免硬编码 Android 版本相关的 APEX 文件路径。
+        TrustManagerFactory factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        factory.init((KeyStore) null);
+        StringBuilder pem = new StringBuilder();
+        // 只导出默认管理器已经接受的信任锚，不把远端站点证书提升为根证书。
+        for (TrustManager manager : factory.getTrustManagers()) {
+            if (!(manager instanceof X509TrustManager)) continue;
+            // 证书禁用与平台根证书更新在下次进程启动时重新取样。
+            // 不访问用户私钥，也不要求存储权限或额外网络下载。
+            for (X509Certificate certificate : ((X509TrustManager) manager).getAcceptedIssuers()) {
+                pem.append("-----BEGIN CERTIFICATE-----\n");
+                pem.append(Base64.encodeToString(certificate.getEncoded(), Base64.NO_WRAP));
+                pem.append("\n-----END CERTIFICATE-----\n");
+            }
+        }
+        // PEM 为纯 ASCII，通过 byte[] 传递而不依赖 JNI modified UTF-8。
+        return pem.toString().getBytes(StandardCharsets.US_ASCII);
+    }
+
     /** 高刷偏好只作用于本应用窗口，与桌面渲染后端无关。 */
     private final HighRefreshRate highRefreshRate = new HighRefreshRate(this);
 

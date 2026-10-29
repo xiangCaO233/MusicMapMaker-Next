@@ -4,6 +4,7 @@
 #include "main/PGOProfiler.h"
 #include "log/colorful-log.h"
 #include "mmmversion.h"
+#include "network/CurlHandle.h"
 #include "runtime/AppThreadPool.h"
 
 #ifdef MMM_PGO_INSTRUMENT
@@ -288,7 +289,7 @@ bool uploadProfile(const std::string& filePath, long long runtimeSeconds)
           runtimeSeconds);
 
     // 全局 curl 已在初始化阶段准备，这里只创建当前请求的 easy 句柄。
-    auto curl = curl_easy_init();
+    auto curl = Network::createCurlHandle();
     if ( !curl ) {
         // 句柄创建失败时没有需要释放的 MIME 对象，可直接发布失败终态。
         XERROR("PGO: curl_easy_init failed");
