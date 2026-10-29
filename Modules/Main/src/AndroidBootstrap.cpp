@@ -3,15 +3,67 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "network/AssetSyncService.h"
+#include "network/CurlHandle.h"
 #include <SDL3/SDL.h>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <jni.h>
 #include <memory>
 #include <string>
 
 namespace MMM::Main
 {
+namespace
+{
+/// @brief 在网络线程创建前复制平台默认信任锚，不保留跨线程 JNI 引用。
+/// @return 平台异常、方法缺失或空信任集均返回空串，由网络层拒绝 HTTPS 请求。
+/// @details 平台负责选择当前 Android 版本的证书来源，原生层不猜测系统目录。
+/// @note 每次进程启动重新取样，不在请求工作线程读取可变的平台信任状态。
+/// @warning 仅启动阶段执行一次，包含平台证书枚举与一次 PEM 内存复制。
+std::string readSystemCaCertificates()
+{
+    auto* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
+    // JNIEnv 只属于当前 SDL 线程，不得保存到网络层供其他线程访问。
+    if ( !env ) return {};
+    // 局部帧覆盖以下所有 Java 引用，提前返回也不能泄漏 Activity 或数组。
+    if ( env->PushLocalFrame(8) < 0 ) {
+        env->ExceptionClear();
+        return {};
+    }
+    std::string certificates = [env]() -> std::string {
+        // SDL 返回局部引用，后续整个读取过程都位于上面的局部帧内。
+        auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
+        if ( !activity || env->ExceptionCheck() ) return {};
+        auto type = env->GetObjectClass(activity);
+        // 每次 JNI 调用后先检查挂起异常，不能带着异常继续解析方法或数组。
+        if ( !type || env->ExceptionCheck() ) return {};
+        // 使用实际 Activity 的类加载器，原生工作线程不自行猜测应用类名。
+        auto method = env->GetMethodID(type, "systemCaCertificates", "()[B");
+        if ( !method || env->ExceptionCheck() ) return {};
+        auto data =
+            static_cast<jbyteArray>(env->CallObjectMethod(activity, method));
+        if ( !data || env->ExceptionCheck() ) return {};
+        auto size = env->GetArrayLength(data);
+        if ( env->ExceptionCheck() ) return {};
+        // 正常空数组保留为空值，由调用方区分信任源不可用而非放宽验证。
+        // 显式长度复制保证 PEM 尾部不依赖 Java 数组以 NUL 结束。
+        std::string result(static_cast<std::size_t>(size), '\0');
+        env->GetByteArrayRegion(
+            data, 0, size, reinterpret_cast<jbyte*>(result.data()));
+        return result;
+    }();
+    // Java 检查型失败在 JNI 边界转为显式空值，不传播到无异常 C++ 路径。
+    if ( env->ExceptionCheck() ) {
+        env->ExceptionClear();
+        certificates.clear();
+    }
+    // 只有原生值越过本函数边界；Activity、Class 和 byte[] 均在此释放。
+    env->PopLocalFrame(nullptr);
+    return certificates;
+}
+}  // namespace
+
 /// @brief 随包资源只在版本变化时展开，配置始终写到应用私有目录。
 /// @details 不把 APK 内的虚拟资源路径或 Android content URI 当作普通文件路径。
 /// 首次启动在资源初始化阶段使用现有安全 ZIP 解压服务，之后维持低频版本检查。
@@ -39,6 +91,13 @@ bool prepareAndroidRuntime()
                          Config::pathToUtf8(storageRoot / "config").c_str(),
                          1) != 0 )
         return false;
+    // 配置根确定后才允许首次日志输出，避免日志单例缓存错误的桌面目录。
+    // 信任快照必须先于任何后台请求发布；资源已缓存时也不能跳过。
+    // 失败只影响联网，离线编辑器仍可启动，绝不通过关闭校验继续连接。
+    if ( Network::initializeCurlTrust(readSystemCaCertificates()) )
+        XINFO("Android system TLS trust anchors initialized");
+    else
+        XERROR("Android system TLS trust anchors could not be initialized");
     // AppPaths 从刚设置的根派生资源路径，保持桌面与 Android 的相对布局相同。
     // 皮肤中的字体、图像和 Lua 相对引用因此无需改写。
     const auto assets = Config::AppPaths::assetsRootPath();

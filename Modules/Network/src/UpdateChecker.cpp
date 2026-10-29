@@ -3,6 +3,7 @@
 #include "log/colorful-log.h"
 #include "mmmversion.h"
 #include "network/AssetSyncService.h"
+#include "network/CurlHandle.h"
 #include "runtime/AppThreadPool.h"
 #include <algorithm>
 #include <cctype>
@@ -805,7 +806,7 @@ void UpdateChecker::checkAsync()
             result.currentVersion        = MMM_VERSION_STRING;
             result.currentHotfixRevision = MMM_HOTFIX_REVISION;
 
-            CURL* curl = curl_easy_init();
+            CURL* curl = createCurlHandle();
             // libcurl 初始化失败无法通过重试改善，直接发布终态错误。
             if ( !curl ) {
                 result.status       = UpdateStatus::kError;
@@ -1116,7 +1117,7 @@ void UpdateChecker::downloadAsync()
                 return;
             }
 
-            CURL* uCurl = curl_easy_init();
+            CURL* uCurl = createCurlHandle();
             if ( !uCurl ) {
                 // 文件句柄已取得，任何后续初始化失败都必须先关闭。
                 fclose(uFile);
@@ -1224,7 +1225,7 @@ void UpdateChecker::downloadAsync()
             return;
         }
 
-        CURL* mCurl = curl_easy_init();
+        CURL* mCurl = createCurlHandle();
         if ( !mCurl ) {
             fclose(mFile);
             fail("Failed to initialize libcurl for main program");
