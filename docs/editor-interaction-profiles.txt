@@ -4,8 +4,8 @@
   feat/editor-interaction-profiles 从 origin/main 的 4586d813 签出。
   安卓接入仍保留在原 feat/android-sdl3 分支，本分支不夹带该分支的构建环境与 APK 修改。
   操作方案属于整个应用，所有打开的谱面统一使用当前选择；不随工程工作区切换。
-  生产内置方案目前只有 classic-desktop，保留原有 PC 操作。
-  本批提供替换接口，不预先定义另一套 PC 操作或移动端手势。
+  生产内置 classic-desktop 与 mouse-only 两种方案，默认仍为经典桌面。
+  mouse-only 提供无需组合键的常用编辑入口；原生多指输入和移动端手势尚未接入。
 
 入口
   Modules/Game/UI/include/ui/interaction/EditorInteraction.h
@@ -52,7 +52,7 @@
   在初始化阶段调用 Interaction::registerProfile(std::make_unique<MyProfile>())。
   新实现源文件必须在 UI/CMakeLists.txt 中显式登记，不使用递归 glob。
   重复或空身份会被拒绝，注册不会替换活动对象；当前不提供运行期卸载入口。
-  设置 > 快捷键 > 编辑操作方案列出所有已注册方案。
+  设置 > 软件 > 编辑操作方案列出所有已注册方案，设置搜索也会定位到该处。
   设置保存字段为 interactionProfileId，缺失时选择 classic-desktop。
   不认识的身份运行时回退经典方案，但不删除保存值，方便以后恢复该方案。
   用户修改快捷键继续保存在 shortcutConfig；方案可在其基础上提供自己的解释。
@@ -90,11 +90,22 @@
   按住是否重复仍由调用方决定，配置绑定不把一次按下变成每帧新操作。
   设置页录制读取物理按键，避免把方案已经转换的键再次写回配置。
 
+纯鼠标方案
+  时间线缩放使用工具栏图标入口，拖动按十个百分点吸附，加减按五个百分点调整。
+  主画布点按绘制单 Note，拖动绘制并续写折线，右键可取消当前绘制。
+  选择使用替换、追加、减选三种模式；右键提供复制、剪切、粘贴、删除和历史操作。
+  菜单粘贴使用右键时锁定的吸附线；插值段落正文也能复制和剪切完整定义。
+  Timing 点按创建时间点，拖动创建插值段落，不再切换单点与段落模式；STOP 只创建点。
+  时间线右键菜单持有焦点，延迟聚焦不能在下一帧把菜单关闭。
+  音轨选择、批注、教程、相机导航、精细调整和快速滚动提供相应鼠标入口。
+  各开关只覆盖自己的输入语义，经典桌面继续使用原修饰键规则。
+
 验证
   EditorInteractionProfileTest 检查配置往返、旧配置回退、重复身份、生命周期、
   真实 ImGui 按下/拖动/释放、按下原点、滚轮、嵌套表面、语义动作和命令出口。
   EditorInteractionSurfaceTest 通过实际 Basic2DCanvasInteraction 验证独占输入、
   投影上下文、未释放时的切换门禁及恢复经典控制器。
   其他既有画布、Timeline、BPM、快捷键、配置与工具测试继续验证经典方案回归。
+  TimingContextMenuTest 包含正式窗口延迟聚焦流程，验证菜单跨帧存活与编辑动作。
   测试通过 mmm_add_test_executable/mmm_register_test_case 登记，配置和输出位于 build。
   本批尚未提供或验证原生多指输入源，也没有移动端交互方案或设备验收结论。
