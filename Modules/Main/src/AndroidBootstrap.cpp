@@ -1,6 +1,7 @@
 #include "main/AndroidBootstrap.h"
 #include "config/AppPaths.h"
 #include "config/Utf8Path.h"
+#include "graphic/window/BackNavigation.h"
 #include "log/colorful-log.h"
 #include "network/AssetSyncService.h"
 #include "network/CurlHandle.h"
@@ -181,3 +182,11 @@ bool prepareAndroidRuntime()
     return true;
 }
 }  // namespace MMM::Main
+
+/// @brief JNI 入口直接链接进 libmain，避免静态归档隐藏导出符号。
+/// @warning Activity 线程仅投递导航，不在此执行界面或退出流程。
+extern "C" JNIEXPORT void JNICALL
+Java_top_xiang233_musicmapmaker_MainActivity_requestNativeBack(JNIEnv*, jclass)
+{
+    MMM::Graphic::requestMobileBackNavigation();
+}

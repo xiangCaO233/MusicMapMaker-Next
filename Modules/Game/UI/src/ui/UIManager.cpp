@@ -52,6 +52,7 @@
 #include "ui/walkthrough/WalkthroughService.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
 #include "ui/walkthrough/WelcomeView.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
 #include <concurrentqueue.h>
 #include <ice/thread/ThreadPool.hpp>
@@ -66,6 +67,10 @@ namespace MMM::UI
 /// @details
 /// 队列仍使用原有同步方式；每帧注册表、观察指针与原子标志保留在管理器中。
 struct UIManager::Impl {
+    /// @brief 平台工厂仅在初始化时选择布局策略，不在各视图内判断 Android。
+    std::unique_ptr<IWorkspacePresentation> m_workspacePresentation{
+        createWorkspacePresentation()
+    };
     /// @brief 跨线程投递到 UI 的项目生命周期快照。
     struct ProjectUiLifecycleUpdate {
         /// @brief 本次更新类型。
@@ -460,6 +465,12 @@ Walkthrough::Spotlight& UIManager::walkthroughSpotlight()
     return *m_walkthroughSpotlight;
 }
 
+/// @brief 返回管理器独占的外壳策略，不复制所有权或重新选择平台。
+IWorkspacePresentation& UIManager::workspacePresentation()
+{
+    return *m_impl->m_workspacePresentation;
+}
+
 /// @brief 构造 UI 管理器、引导服务、拖放路由并订阅项目生命周期事件。
 ///
 /// 事件回调可能来自非 UI
@@ -798,7 +809,9 @@ void UIManager::captureProjectWorkspaceState()
 
     // 慢速载图时画布可能尚未提交首帧，此时保留磁盘中已保存的完整停靠树。
     const auto* tabs = getView<CanvasTabManager>("CanvasTabManager");
-    if ( !tabs || !tabs->projectWorkspaceDockRestorePending() ) {
+    // 移动外壳保留项目原有桌面布局数据，不能用手机窗口树覆盖它。
+    if ( m_impl->m_workspacePresentation->usesDesktopLayout() &&
+         (!tabs || !tabs->projectWorkspaceDockRestorePending()) ) {
         size_t      iniSize = 0;
         const char* iniData = ImGui::SaveIniSettingsToMemory(&iniSize);
         if ( iniData && iniSize > 0 ) {
@@ -806,7 +819,8 @@ void UIManager::captureProjectWorkspaceState()
         }
     }
 
-    if ( m_nativeWindow ) {
+    if ( m_nativeWindow &&
+         m_impl->m_workspacePresentation->usesDesktopLayout() ) {
         // 主窗口位置属于项目工作区，但只有绑定原生窗口时才可取得。
         auto& windowState = workspace->m_mainWindow;
         m_nativeWindow->getWindowPlacement(windowState.m_x,
@@ -1201,7 +1215,8 @@ void UIManager::syncProjectWorkspaceState()
         clearProjectWorkspaceViews();
 
         const auto& workspace = m_impl->m_pendingProjectWorkspace;
-        if ( !workspace.m_imguiIniData.empty() ) {
+        if ( m_impl->m_workspacePresentation->usesDesktopLayout() &&
+             !workspace.m_imguiIniData.empty() ) {
             // 过滤平台多视口和欢迎页后才交给 ImGui 加载。
             std::string sanitizedIni =
                 sanitizeProjectWorkspaceIni(workspace.m_imguiIniData);
@@ -1218,7 +1233,8 @@ void UIManager::syncProjectWorkspaceState()
 
         // 画布可能在加载布局后下一帧才首次 Begin；以实际成功恢复的会话
         // 核对原节点，避免缺失谱面或显式打开单谱面阻止后续布局捕获。
-        if ( auto* tabs = getView<CanvasTabManager>("CanvasTabManager") ) {
+        if ( auto* tabs = getView<CanvasTabManager>("CanvasTabManager");
+             tabs && m_impl->m_workspacePresentation->usesDesktopLayout() ) {
             std::vector<CanvasWorkspaceEntry> entries;
             if ( auto* canvasWorkspace = getCanvasWorkspaceService() ) {
                 canvasWorkspace->fillEntries(entries);
@@ -1226,7 +1242,8 @@ void UIManager::syncProjectWorkspaceState()
             tabs->prepareProjectWorkspaceDockRestore(workspace, entries);
         }
 
-        if ( m_nativeWindow && workspace.m_mainWindow.m_valid ) {
+        if ( m_nativeWindow && workspace.m_mainWindow.m_valid &&
+             m_impl->m_workspacePresentation->usesDesktopLayout() ) {
             // 只有有效 placement 且窗口已绑定时恢复平台窗口几何。
             const auto& windowState = workspace.m_mainWindow;
             m_nativeWindow->applyWindowPlacement(windowState.m_x,
@@ -1698,6 +1715,9 @@ void UIManager::onPrepareResources(vk::PhysicalDevice&   physicalDevice,
 /// 遍历或完整排序。
 void UIManager::onUpdateUI()
 {
+    // 平台策略只在帧边界绑定；触摸归属必须先于画布原始事件转换确定。
+    const WorkspaceFrameScope workspaceFrame(*m_impl->m_workspacePresentation);
+    m_impl->m_workspacePresentation->beginFrame(*this);
     // 帧作用域为新方案提供真实 UI 服务，不延长窗口或会话生命周期。
     // 释放帧先交给旧控制器完成收尾，下一安全帧才允许替换方案。
     const Interaction::UiFrameScope interactionFrame(this);
@@ -1888,14 +1908,16 @@ void UIManager::onUpdateUI()
         }
 
         // 视图内部提交 ImGui 控件及必要画笔数据。
-        it->second->update(this);
+        if ( m_impl->m_workspacePresentation->updatesView(name) )
+            it->second->update(this);
     }
 
     // 这里仍处于同一 ImGui 帧，插件列表和主编辑区节点均已创建。
     // 用户可把工具窗口拖到画布、时间线或其他窗口，而非只能拖到插件列表。
     // 视图可能在本轮被注销；只从注册表查询当前存活实例。
-    if ( auto* tools = getView<ToolPluginView>("ToolPluginView") )
-        tools->update(this);
+    if ( m_impl->m_workspacePresentation->updatesView("ToolPluginView") )
+        if ( auto* tools = getView<ToolPluginView>("ToolPluginView") )
+            tools->update(this);
 
     // 主画布由 CanvasTabManager 在 update 中注册，欢迎页必须排在它之后。
     // 逻辑会话可能迟到，保留打开请求直到画布确实存在，不靠固定延时猜测就绪。
@@ -1924,6 +1946,8 @@ void UIManager::onUpdateUI()
         sideBarManager->restoreDockResizeMouseAfterDockSpace();
     }
 
+    // 抽屉与遮罩最后组合，不能把移动端布局混入桌面视图的更新函数。
+    m_impl->m_workspacePresentation->endFrame(*this);
     // 所有控件完成目标上报后再绘制突出层，亮区使用本帧最终布局坐标。
     m_walkthroughSpotlight->render(
         Config::AppConfig::instance().getWindowContentScale(),
