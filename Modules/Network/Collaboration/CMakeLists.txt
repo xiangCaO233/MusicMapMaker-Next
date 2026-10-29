@@ -107,23 +107,26 @@ target_link_libraries(CollaborationResourceSyncTest
 mmm_register_test_case(NAME CollaborationResourceSyncTest COMMAND
                        CollaborationResourceSyncTest)
 
-# 本机真实 WebRTC 集成测试覆盖中心信令、瞬时释放、DataChannel、身份和资源同步。
-mmm_add_test_executable(Collaboration CollaborationRoomTest
-                        tests/CollaborationRoomTest.cpp)
-# 房间集成目标同时链接客户端状态机和可嵌入信令服务。
-target_link_libraries(
-  CollaborationRoomTest PRIVATE NetworkCollaboration NetworkCollaborationServer
-                                Runtime)
-# 该目标故意不注册自动 CTest，避免同进程 RTC 客户端与服务端全局状态竞争。 同进程混用 libdatachannel 服务端与 WebRTC
-# 客户端会受全局句柄调度影响。 `p2p`、`resource` 与 `external` 链路保留为手动部署探针。
-# 稳定自动覆盖由状态机、资源同步、目录与服务端测试共同承担。
+# Android 不创建协作服务端目标，这两项进程内服务端集成测试仅在桌面声明。 客户端状态机与资源同步测试仍按原配置构建，不能为设备探针裁掉客户端覆盖。
+if(NOT ANDROID)
+  # 本机真实 WebRTC 集成测试覆盖中心信令、瞬时释放、DataChannel、身份和资源同步。
+  mmm_add_test_executable(Collaboration CollaborationRoomTest
+                          tests/CollaborationRoomTest.cpp)
+  # 房间集成目标同时链接客户端状态机和可嵌入信令服务。
+  target_link_libraries(
+    CollaborationRoomTest PRIVATE NetworkCollaboration
+                                  NetworkCollaborationServer Runtime)
+  # 该目标故意不注册自动 CTest，避免同进程 RTC 客户端与服务端全局状态竞争。 同进程混用 libdatachannel 服务端与 WebRTC
+  # 客户端会受全局句柄调度影响。 `p2p`、`resource` 与 `external` 链路保留为手动部署探针。
+  # 稳定自动覆盖由状态机、资源同步、目录与服务端测试共同承担。
 
-# 公网目录客户端测试覆盖房间列表订阅、刷新与异常消息隔离。
-mmm_add_test_executable(Collaboration CollaborationDirectoryClientTest
-                        tests/CollaborationDirectoryClientTest.cpp)
-# 目录测试在进程内启动信令服务并由客户端订阅房间列表。
-target_link_libraries(CollaborationDirectoryClientTest
-                      PRIVATE NetworkCollaboration NetworkCollaborationServer)
-# 该稳定路径保留为自动 CTest，替代易受全局 RTC 句柄影响的房间探针。
-mmm_register_test_case(NAME CollaborationDirectoryClientTest COMMAND
-                       CollaborationDirectoryClientTest)
+  # 公网目录客户端测试覆盖房间列表订阅、刷新与异常消息隔离。
+  mmm_add_test_executable(Collaboration CollaborationDirectoryClientTest
+                          tests/CollaborationDirectoryClientTest.cpp)
+  # 目录测试在进程内启动信令服务并由客户端订阅房间列表。
+  target_link_libraries(CollaborationDirectoryClientTest
+                        PRIVATE NetworkCollaboration NetworkCollaborationServer)
+  # 该稳定路径保留为自动 CTest，替代易受全局 RTC 句柄影响的房间探针。
+  mmm_register_test_case(NAME CollaborationDirectoryClientTest COMMAND
+                         CollaborationDirectoryClientTest)
+endif()
