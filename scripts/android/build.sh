@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# @brief Linux 开发机上的 Android 实验构建入口，所有生成物集中到仓库外。
+# @brief Linux 开发机上的 Android 实验构建入口，生成物集中到已忽略的专用目录。
 set -euo pipefail
 # 脚本位置确定源码根，不依赖调用终端当前目录。
 android_repo="$(git -C "$(dirname "$(readlink -f "$0")")" rev-parse --show-toplevel)"
 cd "$android_repo"
-# SDK 复用已有安装；工作目录与源码目录必须分离。
+# SDK 复用已有安装；生成物使用专用构建树，不与业务源码目录混放。
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
-android_work="${MMM_ANDROID_WORK_DIR:-$ANDROID_HOME/../mmm-smoke/main}"
-# 先规范化路径再检查边界，防止通过 ../ 意外把生成物放回仓库。
+android_work="${MMM_ANDROID_WORK_DIR:-$android_repo/build-android}"
+# 先规范化路径再检查边界，防止通过 ../ 意外写入仓库根或业务源码目录。
 # 用户可用环境变量迁移整棵工作树，源码中只保存可重建的配置。
 android_work="$(realpath -m "$android_work")"
-if [[ "$android_work" == "$android_repo" || "$android_work" == "$android_repo/"* ]]; then
-    echo 'Android work directory must be outside the repository.' >&2
+if [[ "$android_work" == "$android_repo" || ( "$android_work" == "$android_repo/"* && "$android_work" != "$android_repo/build-android" && "$android_work" != "$android_repo/build-android/"* ) ]]; then
+    echo 'Use build-android or a directory outside the repository.' >&2
     exit 1
 fi
 # 固定 NDK 与已验证 JDK，系统 Java 默认版本保持不变。
@@ -19,9 +19,9 @@ fi
 android_ndk="$ANDROID_HOME/ndk/30.0.16248370"
 export JAVA_HOME="${MMM_ANDROID_JAVA_HOME:-/usr/lib/jvm/openjdk-21}"
 # 两个 Android 验证工程共用下载缓存，不能回到用户的全局 Gradle 缓存。
-# 下载缓存可与前一个最小探针共用，项目缓存按 main 单独隔离。
+# 下载缓存默认留在专用构建树，显式环境变量仍可供多个构建共用。
 # Gradle 临时文件和签名也归入该工作树，不能写入新的源码侧隐藏目录。
-export GRADLE_USER_HOME="${MMM_ANDROID_GRADLE_CACHE:-$android_work/../cache/gradle}"
+export GRADLE_USER_HOME="${MMM_ANDROID_GRADLE_CACHE:-$android_work/cache/gradle-user}"
 export TMPDIR="$android_work/cache/tmp"
 mkdir -p "$android_work"/{cache,evidence,dependencies,build/assets,build/jni,apk} "$TMPDIR"
 if [[ ! -x "$JAVA_HOME/bin/java" || ! -f "$android_ndk/build/cmake/android.toolchain.cmake" ]]; then
@@ -58,7 +58,9 @@ for android_abi in $android_abis; do
         -DCMAKE_BUILD_TYPE=RelWithDebInfo -DSOURCES_BUILD=ON -DBUILD_TESTING=OFF \
         -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF -DMMM_DISABLE_CLANG_LTO=ON \
         -DMMM_PGO_INSTRUMENT=OFF -DMMM_PGO_USE=OFF \
-        -DVulkan_INCLUDE_DIR="$android_headers/include"
+        -DVulkan_INCLUDE_DIR="$android_headers/include" \
+        -DPROCESSOR_COUNT="${MMM_ANDROID_JOBS:-24}"
+    # 外部 Make 与外层 Ninja 共用上限，避免空计数退成无上限的 make -j。
     # 原生依赖使用相同 NDK，任何一步失败都不继续生成包含陈旧库的 APK。
     cmake --build "$android_native" --target MusicMapMaker-Next --parallel "${MMM_ANDROID_JOBS:-24}"
     android_jni="$android_work/build/jni/$android_abi"

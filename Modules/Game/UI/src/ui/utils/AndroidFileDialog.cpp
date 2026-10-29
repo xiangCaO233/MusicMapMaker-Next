@@ -1,6 +1,8 @@
+#include "ui/utils/NativeFileDialog.h"
+
 #include "common/platform/DocumentStorage.h"
 #include "config/AppConfig.h"
-#include "ui/utils/NativeFileDialog.h"
+#include "config/EditorSettings.h"
 
 /// @brief Android 异步 SAF 无需初始化桌面库，允许业务初始化继续。
 nfdresult_t NFD_Init()

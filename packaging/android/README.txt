@@ -3,7 +3,7 @@ Android 主项目实验构建
 范围
   Android 使用 SDL3 窗口、事件与 ImGui 平台后端；桌面仍使用 GLFW。
   Vulkan、现有业务 UI、Lua 皮肤与字体共用原项目实现。
-  默认同时构建 arm64-v8a 手机和 x86_64 模拟器调试 APK。
+  Linux 入口默认同时构建手机 arm64-v8a 和模拟器 x86_64；Windows 默认只构建模拟器。
   当前 UI 保持横屏和桌面布局，仅使用 SDL 标准输入，不做触控手势优化。
   工程目录、音频导入和谱面另存为已接异步 SAF；部分次要原生选择入口仍待迁移。
   Android 请求 Vulkan 1.3，桌面保持原要求；设备仍需满足实际使用的功能和格式。
@@ -12,34 +12,64 @@ Android 主项目实验构建
 在项目根目录执行
   ./scripts/android/build.sh
 
+Windows 原生构建（无 WSL）
+  使用 PowerShell 7、现有 MSYS2 clang64、CMake >= 3.31、Ninja、make、Meson、Python 与完整 JDK 21。
+  默认 SDK 为 %USERPROFILE%/Android/Sdk，JDK 放在同级 jdk 目录下；可用参数显式指定。
+  MSYS2 只提供 configure/make 等宿主工具，安卓库由 Windows NDK 编译，不能混用桌面库。
+  命令行工具固定 19.0；安装 SDK 36.1、Build Tools 36.1.0 和 NDK 30.0.16248370。
+  SDK 环境重建命令（先设置 JAVA_HOME 指向完整 JDK 21）：
+    sdkmanager.bat --sdk_root=<SDK绝对路径> "platform-tools" "platforms;android-36.1" "build-tools;36.1.0" "ndk;30.0.16248370" "emulator" "system-images;android-36;default;x86_64"
+  默认只构建 x86_64，以减少磁盘占用与首次编译时间：
+    pwsh -File ./scripts/android/build-windows.ps1
+  手机 ABI 或双 ABI 构建可从 PowerShell 直接指定：
+    ./scripts/android/build-windows.ps1 -Abi arm64-v8a
+    ./scripts/android/build-windows.ps1 -Abi x86_64,arm64-v8a
+  -SdkRoot、-JavaHome、-WorkDir、-MsysRoot 和 -Jobs 可覆盖默认路径与并发。
+  默认生成物集中在仓库 build-android，不进入业务源码目录或桌面 build。
+  APK 为 apk/MusicMapMaker-Next-android-debug.apk，原生符号保存在 build/<ABI>。
+  模拟器使用单个 API 36 AOSP x86_64 镜像，不安装 Google Play 或 Android Studio：
+    pwsh -File ./scripts/android/emulator-windows.ps1 -CreateOnly
+    pwsh -File ./scripts/android/emulator-windows.ps1
+  默认显示交互窗口；仅自动测试时显式传 -Headless，启动前检查 WHPX 加速。
+  配置使用两核、2560 MiB RAM、720×1280 屏幕，禁用 SD 卡与快照。
+  userdata 请求 2 GiB；API 36 镜像会提高逻辑容量，但 qcow2 按实际写入占用磁盘。
+  已有 AVD 不覆盖、不清除 userdata；反复测试保留应用私有工程与设置。
+  adb 命令使用本次 SDK 的 platform-tools/adb.exe，并显式指定 emulator-5554：
+    adb -s emulator-5554 install -r <APK绝对路径>
+    adb -s emulator-5554 shell am start -n top.xiang233.musicmapmaker.next.dev/top.xiang233.musicmapmaker.MainActivity
+    adb -s emulator-5554 emu kill
+  系统镜像 API 36 与编译 SDK 36.1 职责不同；无需再下载第二份模拟器镜像。
+
 已验证工具组合
   Linux x86_64 宿主；CMake >= 3.31、Ninja、make、Meson、Python3、curl、tar、Git LFS。
   ANDROID_HOME 默认 ~/Android/Sdk。
   NDK 30.0.16248370，SDK 36.1，Build Tools 36.1.0。
   Java 21；脚本默认 /usr/lib/jvm/openjdk-21，不修改系统默认 Java。
   Gradle 9.3.0 wrapper、AGP 9.0.1；wrapper JAR 是引导文件，随源码保存。
-  Vulkan-Headers 固定 vulkan-sdk-1.4.363.0，自动下载到外部依赖目录。
+  Vulkan-Headers 固定 vulkan-sdk-1.4.363.0，自动下载到专用构建树的 dependencies 目录。
   SDL Java 和 native 使用同一子模块版本，不复制上游 Java 实现到仓库。
   需先检出项目原有依赖子模块与完整 LFS 资源；缺失资源会终止打包。
 
 集中目录
-  MMM_ANDROID_WORK_DIR 默认 ~/Android/mmm-smoke/main，必须在源码仓库外。
+  MMM_ANDROID_WORK_DIR 默认 <仓库>/build-android，已由 .gitignore 明确排除。
+  也可显式指定仓库外目录；仓库内只允许 build-android 及其子目录。
   build/<ABI>          各 ABI 独立的原生 CMake/Ninja、依赖生成物与未剥离符号
   build/gradle         Java 与 APK 打包输出
   build/jni/<ABI>      各 ABI 的 main、SDL3 和 libc++ 共享库
   build/assets         受 Git 管理的默认资源 ZIP 与内容版本标记
   dependencies         Vulkan 公共头文件
   cache                临时文件、项目 Gradle 缓存与独立调试签名
+  avd                  本项目模拟器配置、userdata 与运行时磁盘
   apk                  可安装的交付 APK
   evidence             本机验证日志和截图，构建脚本不强制生成验证记录
-  Gradle 下载缓存默认共用工作目录同级 cache/gradle。
-  可通过 MMM_ANDROID_GRADLE_CACHE、MMM_ANDROID_JAVA_HOME 和 MMM_ANDROID_JOBS 覆盖。
-  MMM_ANDROID_ABIS="arm64-v8a" 可仅构建手机，默认 "arm64-v8a x86_64"。
+  Gradle 下载缓存默认位于工作目录内的 cache/gradle-user。
+  Linux 可通过 MMM_ANDROID_GRADLE_CACHE、MMM_ANDROID_JAVA_HOME 和 MMM_ANDROID_JOBS 覆盖。
+  Linux 的 MMM_ANDROID_ABIS="arm64-v8a" 可仅构建手机，默认 "arm64-v8a x86_64"。
   本机 SDK、NDK、JDK、下载缓存和构建输出不进入 Git；无需追加全局忽略规则。
   清理 build/ 不影响源码；保留 cache/debug.keystore 可保持重复安装签名一致。
 
 安装与启动
-  adb -s <设备序列号> install -r ~/Android/mmm-smoke/main/apk/MusicMapMaker-Next-android-debug.apk
+  adb -s <设备序列号> install -r <仓库>/build-android/apk/MusicMapMaker-Next-android-debug.apk
   adb -s <设备序列号> shell am start -W -n top.xiang233.musicmapmaker.next.dev/top.xiang233.musicmapmaker.MainActivity
 
 手机数据
@@ -56,9 +86,9 @@ Android Studio
   File > Open 选择仓库下 packaging/android，不选择整个 CMake 源码根目录。
   Gradle daemon 由 gradle/gradle-daemon-jvm.properties 固定使用完整 JDK 21。
   Settings > Build, Execution, Deployment > Build Tools > Gradle：
-    Gradle JDK 选 /usr/lib/jvm/openjdk-21，避免 VS Code 扩展自带的无 jlink JRE。
-    Gradle user home 选 ~/Android/mmm-smoke/cache/gradle，共用下载缓存。
-  Java 或 Manifest 修改后可由 Studio 打包；修改 C++ 后须先运行统一 build.sh。
+    Gradle JDK 选完整 JDK 21（Windows 可选 ~/Android/jdk 下的安装），避免无 jlink 的 JRE。
+    Gradle user home 选 <仓库>/build-android/cache/gradle-user，复用脚本下载缓存。
+  Java 或 Manifest 修改后可由 Studio 打包；修改 C++ 后须先运行对应平台的构建脚本。
   原生生成物、资源与签名仍取自集中工作树，Studio 不隐式重复构建另一套 CMake。
   .idea、Android 的 .gradle 和 local.properties 为忽略的本机文件，wrapper 继续入 Git。
 
@@ -96,3 +126,11 @@ Android Studio
   未读取到受保护的 GPU 忙碌计数器，不能将 CPU 提交统计当作物理显示或 GPU 完成次数。
   验收后已关闭真机临时渲染性能日志；本批逐文件注释率见集中 evidence/comment-audit.tsv。
   触控优化尚未开展。
+
+Windows 原生验收（2026-10-29）
+  Windows NDK r30、MSYS2 宿主工具、JDK 21、Gradle 9.3.0 和 AGP 9.0.1 完成 x86_64 构建。
+  默认 build-android 工作树完成原生链接、资源打包、APK 生成和 apksigner 校验。
+  单个 API 36 AOSP x86_64 模拟器通过 WHPX 启动；中文主界面、设置页点击与 Home/恢复通过。
+  横屏由模拟器系统旋转设置验证，恢复前后 PID 一致，crash buffer 无崩溃记录。
+  更新检查记录 libcurl 证书校验错误（res=60），未绕过 HTTPS 验证；联网功能尚不能视为通过。
+  桌面完整构建和 CTest 180/180 通过；本轮未重新构建手机 arm64-v8a。

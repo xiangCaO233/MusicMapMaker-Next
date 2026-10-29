@@ -1,6 +1,8 @@
 *build/
 *build*/
 build/
+# 安卓原生、Gradle、资源、APK、缓存和模拟器数据统一收在此目录。
+/build-android/
 .cache/
 .vscode/
 .idea/

@@ -9,7 +9,7 @@ import zipfile
 
 def main():
     """按 Git 文件清单生成 Android 资源 ZIP 和内容版本标记。"""
-    # 参数只接受输入根和生成目录；调用者负责将生成目录放在仓库外。
+    # 参数只接受输入根和生成目录；调用者将输出集中到专用构建树。
     # ZIP 内容不包含开发机配置、密钥或本地下载文件。
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", type=Path, required=True)
