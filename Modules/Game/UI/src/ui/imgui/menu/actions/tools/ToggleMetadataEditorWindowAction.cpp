@@ -1,6 +1,7 @@
 #include "../edit/MetadataEditorWindowRenderers.h"
 #include "ui/imgui/menu/actions/MainMenuToolsActions.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -11,6 +12,14 @@ namespace
 class ToggleMetadataEditorWindowAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    /// @details 菜单与操作方案共用开关翻转入口，禁止先修改值再派发。
+    std::string_view operationId() const override
+    {
+        return "ToggleMetadataEditorWindowAction";
+    }
+
     /// @brief 切换谱面额外元数据编辑窗口打开状态。
     /// @param context 单帧主菜单上下文，本动作无需读取。
     /// @param activation 激活来源，不影响窗口切换语义。

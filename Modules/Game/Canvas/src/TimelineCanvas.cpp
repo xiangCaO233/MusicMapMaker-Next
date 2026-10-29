@@ -1,3 +1,5 @@
+#include "canvas/TimelineCanvas.h"
+#include "ui/interaction/EditorInteraction.h"
 /// @file TimelineCanvas.cpp
 /// @brief 实现总时间线窗口、时间点交互装饰与 Vulkan 命令录制。
 ///
@@ -14,7 +16,6 @@
 /// Vulkan 录制仅消费预生成顶点、索引和命令列表，按纹理与裁剪状态
 /// 避免重复绑定；皮肤资源和 shader 文件只在低频重载路径访问。
 // 时间线读取和修改客户端显示配置，完整定义只向此消费端提供。
-#include "canvas/TimelineCanvas.h"
 #include "audio/AudioManager.h"
 #include "canvas/CanvasModalInput.h"
 #include "canvas/TimelineTableWindowState.h"
@@ -157,7 +158,7 @@ bool handleTimelineModifierWheel(const std::string& timelineId, float wheel,
             .getEditorConfig()
             .settings.stopPlaybackOnScroll;
     // 零位移命令表达修饰键调整意图，让逻辑层按用户设置停止播放。
-    Event::EventBus::instance().publish(Event::LogicCommandEvent(
+    UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
         Logic::CmdScroll{ timelineId,
                           0.0f,
                           false,
@@ -190,7 +191,7 @@ bool handleTimelineModifierWheel(const std::string& timelineId, float wheel,
         const double newSpeed = presets[bestIdx];
         if ( std::abs(newSpeed - currentSpeed) > 1e-4 ) {
             // 只有倍率实际变化才更新音频线程并启动两秒非阻塞提示。
-            Event::EventBus::instance().publish(Event::LogicCommandEvent(
+            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
                 Logic::CmdSetPlaybackSpeed{ newSpeed }));
             speedTooltipValue = static_cast<float>(newSpeed);
             speedTooltipTimer = 2.0f;
@@ -389,6 +390,7 @@ TimelineCanvas::TimelineCanvas(
     , m_canvasName(name)
     , m_syncBuffer(std::move(syncBuffer))
 {
+    UI::Interaction::registerInteractionGuard(*this);
     // 逻辑尺寸用于首次注册视口，物理尺寸由后续 framebuffer scale 换算。
     m_targetWidth   = w;
     m_targetHeight  = h;
@@ -406,7 +408,7 @@ void TimelineCanvas::commitAudioTimeSliderScrub()
     // 未处于连续拖动时不发布多余的最终 Seek。
     if ( !m_isAudioTimeSliderScrubbing ) return;
     // 最终命令携带最近一次候选并把 isScrubbing 复位，逻辑层据此提交。
-    Event::EventBus::instance().publish(Event::LogicCommandEvent(Logic::CmdSeek{
+    UI::Interaction::dispatchCommand(Event::LogicCommandEvent(Logic::CmdSeek{
         .time        = m_audioTimeSliderScrubTarget,
         .isScrubbing = false,
     }));
@@ -501,8 +503,26 @@ void TimelineCanvas::commitAudioTimeSliderScrub()
 /// @param sourceManager UI 管理器。
 /// @warning UI 热路径：每帧调用；主窗口隐藏时仅维护独立表格窗口。
 /// 禁止引入文件系统访问、阻塞操作或全量排序。
+/// @details 时间线接管必须早于任何滚轮、快捷键或齿轮命中区消费输入。
+/// 调用者只发布一次表面帧，私有工具入口使用已检查标志避免重复派发。
+/// 方案返回接管后，经典滚动与画笔都跳过，不能只屏蔽其中一个入口。
+/// 默认方案保留原来的窗口焦点锁存和工具栏归属，不额外切换活动谱面。
+/// 表面帧中的快照、屏幕矩形与相机名称全部借用当前窗口数据。
+/// 动作方案并不拥有纹理、descriptor 或逻辑会话，渲染资源仍由原视图维护。
+/// 专业分轨与普通时间线复用同一输入身份，不能按显示布局复制两套键位。
+/// 控制器 guard 覆盖画笔预览、框选、擦除、插值和表格拖动。
+/// 物理按键松开但预览事务尚未收尾时，仍不能把当前操作交给另一方案。
+/// 窗口析构先移除 guard，运行时只能查询仍然存在的控制器。
+/// 方案只负责解释编辑意图，命令层继续处理范围、格式和权限校验。
+/// 回到经典方案时沿用既有状态机，不把新方案的手势状态注入旧控制器。
+/// 所有连续反馈保持逐帧推进，切换不引入固定延迟窗口或跨线程等待。
+/// 弹窗和标准 ImGui 数值编辑仍由原控件管理，方案不修改原始 IO。
+/// 时间线表格中的业务动作仍走统一命令出口，输入映射不直接修改谱面数据。
+/// 已有离屏命令和快照准备继续独立推进，不受 UI 方案对象所有权影响。
 void TimelineCanvas::update(UI::UIManager* sourceManager)
 {
+    const UI::Interaction::SurfaceScope interactionScope(
+        UI::Interaction::Surface::Timeline);
     // sourceManager 当前由拆分的表格/弹窗实现消费，本层保持接口一致。
     auto& appConfig      = Config::AppConfig::instance();
     auto& editorSettings = appConfig.getEditorSettings();
@@ -526,12 +546,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         fmt::format("{}###{}", TR("canvas.timeline"), m_name);
     bool windowOpen = editorSettings.showTimelineWindow;
 
-    if ( m_shouldFocusNextFrame ) {
-        // 聚焦请求在 Begin 前设置，并在本帧立即清除避免持续抢焦点。
-        // 模态窗口独占输入时丢弃旧聚焦请求，不能把焦点抢回时间线。
-        if ( !isCanvasInputBlockedByModal() ) ImGui::SetNextWindowFocus();
-        m_shouldFocusNextFrame = false;
-    }
+    applyPendingWindowFocus();
     UI::LayoutContext lctx(
         *this, windowName, true, ImGuiWindowFlags_NoScrollbar, &windowOpen);
     if ( auto* window = ImGui::GetCurrentWindow();
@@ -598,8 +613,9 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                                           .getVisualConfig()
                                           .getEffectiveVisualOffset();
                 double targetTime   = static_cast<double>(time);
-                if ( ImGui::GetIO().KeyShift ) {
-                    // Shift 吸附仅影响本次候选，不永久改变 beat divisor。
+                if ( UI::Interaction::snapTimelineScrub() ) {
+                    // 经典读取 Shift，纯鼠标读取专用开关；只吸附本次候选。
+                    // 继续使用原拍线算法及视觉偏移，不改写全局 beat divisor。
                     targetTime = std::clamp(snapTimeToBeatLine(targetTime),
                                             0.0,
                                             static_cast<double>(total));
@@ -610,7 +626,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                 m_isAudioTimeSliderScrubbing = sliderActive;
                 // 保存最近目标，窗口中断时由统一提交入口补发最终命令。
                 m_audioTimeSliderScrubTarget = commandTime;
-                Event::EventBus::instance().publish(
+                UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdSeek{
                         .time        = commandTime,
                         .isScrubbing = sliderActive,
@@ -662,21 +678,44 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                   mousePos.x <= canvasPos.x + size.x &&
                   mousePos.y >= canvasPos.y &&
                   mousePos.y <= canvasPos.y + size.y));
+            // 整段接管先于滚轮、齿轮热区和经典工具，防止一帧执行两套编辑逻辑。
+            const UI::Interaction::SurfaceFrame interactionFrame{
+                UI::Interaction::Surface::Timeline,
+                m_name,
+                m_currentSnapshot,
+                canvasPos.x,
+                canvasPos.y,
+                size.x,
+                size.y,
+                isHovered,
+                isCanvasWindowFocused() || m_hasTimingInteractionFocus,
+                sourceManager
+            };
+            const bool profileHandled =
+                UI::Interaction::dispatchSurface(interactionFrame);
             // 几何回退覆盖 active item；弹窗子窗口和模态遮罩始终排除。
             const ImGuiIO& io    = ImGui::GetIO();
-            float          wheel = io.MouseWheel;
-            if ( isHovered && std::abs(wheel) > 0.01f ) {
+            float          wheel = UI::Interaction::mouseWheel();
+            if ( !profileHandled && isHovered && std::abs(wheel) > 0.01f ) {
                 // 修饰键 helper 返回 false 时才执行普通纵向时间滚动。
-                if ( !handleTimelineModifierWheel(m_name,
-                                                  wheel,
-                                                  io.KeyCtrl || io.KeySuper,
-                                                  io.KeyAlt,
-                                                  io.KeyShift,
-                                                  m_speedTooltipValue,
-                                                  m_speedTooltipTimer) ) {
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(
-                            Logic::CmdScroll{ m_name, -wheel, io.KeyShift }));
+                if ( !handleTimelineModifierWheel(
+                         m_name,
+                         wheel,
+                         UI::Interaction::modifier(
+                             UI::Interaction::Modifier::Control) ||
+                             UI::Interaction::modifier(
+                                 UI::Interaction::Modifier::Super),
+                         UI::Interaction::modifier(
+                             UI::Interaction::Modifier::Alt),
+                         UI::Interaction::modifier(
+                             UI::Interaction::Modifier::Shift),
+                         m_speedTooltipValue,
+                         m_speedTooltipTimer) ) {
+                    UI::Interaction::dispatchCommand(
+                        Event::LogicCommandEvent(Logic::CmdScroll{
+                            m_name,
+                            -wheel,
+                            UI::Interaction::acceleratedScroll() }));
                 }
             }
 
@@ -684,13 +723,15 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             bool       windowFocused           = isCanvasWindowFocused();
             const bool toolbarFocusedOrHovered = isToolbarFocusedOrHovered();
             const bool timelineMouseClicked =
-                isHovered && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                              ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
-                              ImGui::IsMouseClicked(ImGuiMouseButton_Middle));
+                isHovered &&
+                (UI::Interaction::mouseClicked(ImGuiMouseButton_Left) ||
+                 UI::Interaction::mouseClicked(ImGuiMouseButton_Right) ||
+                 UI::Interaction::mouseClicked(ImGuiMouseButton_Middle));
             const bool outsideMouseClicked =
-                !isHovered && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                               ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
-                               ImGui::IsMouseClicked(ImGuiMouseButton_Middle));
+                !isHovered &&
+                (UI::Interaction::mouseClicked(ImGuiMouseButton_Left) ||
+                 UI::Interaction::mouseClicked(ImGuiMouseButton_Right) ||
+                 UI::Interaction::mouseClicked(ImGuiMouseButton_Middle));
             if ( modalBlocked ) {
                 // 锁存焦点只能用于普通工具栏；模态操作不能复用它编辑底层。
                 m_hasTimingInteractionFocus = false;
@@ -737,10 +778,10 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             // 右上菜单按钮有自己的点击语义，不能同时产生 Timing 吸附。
             const bool timelineHoveringForSnap = isHovered && !overMenuButton;
             const bool timelineDragging =
-                ImGui::IsMouseDragging(ImGuiMouseButton_Left) ||
-                ImGui::IsMouseDragging(ImGuiMouseButton_Right) ||
-                ImGui::IsMouseDragging(ImGuiMouseButton_Middle);
-            Event::EventBus::instance().publish(
+                UI::Interaction::mouseDragging(ImGuiMouseButton_Left) ||
+                UI::Interaction::mouseDragging(ImGuiMouseButton_Right) ||
+                UI::Interaction::mouseDragging(ImGuiMouseButton_Middle);
+            UI::Interaction::dispatchCommand(
                 Event::LogicCommandEvent(Logic::CmdSetMousePosition{
                     .cameraId       = m_name,
                     .mouseX         = localMouseX,
@@ -956,15 +997,19 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
                     if ( inlineGearHit ) break;
                 }
             }
-            if ( inlineGearCanOpenEditor && inlineGearHit &&
-                 ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+            if ( !profileHandled && inlineGearCanOpenEditor && inlineGearHit &&
+                 UI::Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
                 // 在 InvisibleButton 建立前也能于按下首帧打开编辑器。
                 openInlineGearEditor(*inlineGearHit);
                 inlineGearEditorOpened = true;
             }
 
-            handleTimingCanvasInteraction(
-                canvasPos, size, isHovered, hasTimingInteractionFocus);
+            if ( !profileHandled )
+                handleTimingCanvasInteraction(canvasPos,
+                                              size,
+                                              isHovered,
+                                              hasTimingInteractionFocus,
+                                              true);
             refreshTimelineInteractionDecoration(size);
             // 交互状态先推进，再基于最终状态生成本帧临时几何。
             if ( editorSettings.professionalMode ) {
@@ -1149,6 +1194,21 @@ void TimelineCanvas::renderProfessionalTimelineOverlay(const ImVec2& canvasPos,
     }
 
     drawList->PopClipRect();
+}
+
+/// @brief 在 Begin 前处理一次延迟聚焦，保持窗口和交互焦点请求分离。
+/// @details 点击画布后仅消费一次请求，不能持续将键盘焦点拉回父窗口。
+/// @warning 每帧只读取 UI 本地状态；不查询逻辑会话、不分配或等待资源。
+void TimelineCanvas::applyPendingWindowFocus()
+{
+    if ( !m_shouldFocusNextFrame ) return;
+    // 右键菜单是普通 popup，不会触发模态阻挡，但同样必须持有窗口焦点。
+    // Begin 前强制聚焦父窗口会关闭上帧菜单，故菜单打开期间丢弃旧请求。
+    // 无论是否实际聚焦都要清空，避免稍后关闭弹窗又重新抢占焦点。
+    // 其他情况下沿用原聚焦规则，不改变经典桌面方案的窗口切换行为。
+    if ( !isCanvasInputBlockedByModal() && !m_timingContextWasOpen )
+        ImGui::SetNextWindowFocus();
+    m_shouldFocusNextFrame = false;
 }
 
 /// @brief 请求下一帧将时间线窗口聚焦到前台。
@@ -1984,4 +2044,13 @@ bool TimelineCanvas::hasGlowDrawCmds() const
     return m_currentSnapshot && !m_currentSnapshot->glowCmds.empty();
 }
 
+}  // namespace MMM::Canvas
+
+namespace MMM::Canvas
+{
+/// @brief 删除手势观察登记后再释放 Timeline 状态，避免方案持有悬空视图。
+TimelineCanvas::~TimelineCanvas()
+{
+    UI::Interaction::unregisterInteractionGuard(*this);
+}
 }  // namespace MMM::Canvas

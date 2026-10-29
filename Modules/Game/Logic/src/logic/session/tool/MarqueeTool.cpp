@@ -21,10 +21,36 @@ namespace MMM::Logic
 void MarqueeTool::handleStartMarquee(SessionContext&        ctx,
                                      const CmdStartMarquee& cmd)
 {
+    if ( cmd.selectionOperation ) {
+        // 替换开始一段新序列；由经典模式转入时冻结现有结果，不重放旧框。
+        // 基线只在起笔时复制已选索引，连续拖动不重复采集或遍历全部物件。
+        // 加选和减选共享同一序列，后续框保留创建先后关系。
+        if ( *cmd.selectionOperation == SelectionOperation::Replace ) {
+            ctx.marqueeBoxes.clear();
+            clearChartObjectSelection(ctx);
+        }
+        if ( ctx.marqueeBoxes.empty() || !ctx.marqueeUsesOperations ) {
+            // 手动点击会解除旧框驱动，新框应基于点击后的选择。
+            // 从经典框过渡时保存最终选择，避免误解释先前的 Ctrl 框。
+            ctx.marqueeBoxes.clear();
+            ctx.marqueeBaselineNotes   = ctx.selectedNoteEntities;
+            ctx.marqueeBaselineSamples = ctx.selectedSampleEntities;
+        }
+        ctx.marqueeUsesOperations = true;
+    } else {
+        // 经典修饰键路径不继承纯鼠标序列的基线和减选解释。
+        if ( ctx.marqueeUsesOperations ) ctx.marqueeBoxes.clear();
+        resetMarqueeSelectionBaseline(ctx);
+    }
     ctx.isSelecting         = true;
     ctx.hasMarqueeSelection = true;
-    ctx.marqueeIsAdditive   = cmd.isCtrlDown;
+    ctx.marqueeIsAdditive =
+        cmd.selectionOperation
+            ? *cmd.selectionOperation != SelectionOperation::Replace
+            : cmd.isCtrlDown;
     // 追加策略在按下时确定，移动过程不会因修饰键变化重置选择基线。
+    // 显式减选也保留原框，此标志这里只决定是否清除旧集合。
+    // 加减运算保存在每一个框上，由统一候选精筛按顺序执行。
 
     // 普通框选替换旧结果；追加模式保留旧框与已有实体选择。
     if ( !ctx.marqueeIsAdditive ) {
@@ -41,6 +67,9 @@ void MarqueeTool::handleStartMarquee(SessionContext&        ctx,
         if ( it != ctx.cameras.end() ) {
             // 只有缓存和目标相机同时可用才能构造有意义的框选起点。
             MarqueeBox newBox;
+            // 同一框拖动期间不再读取方案，模式切换只影响下一次起笔。
+            newBox.operation =
+                cmd.selectionOperation.value_or(SelectionOperation::Add);
             newBox.cameraId = cmd.cameraId;
             // 记录发起相机，拖动更新不能因鼠标经过其他画布而改变坐标解释。
 
@@ -203,6 +232,11 @@ void MarqueeTool::handleEndMarquee(SessionContext&      ctx,
             ctx.marqueeBoxes.pop_back();
             // 只移除这次手势创建的末尾框，不丢弃先前的追加选择框。
             if ( ctx.marqueeBoxes.empty() ) {
+                // 零面积加选/减选不应永久改变基线，退回起笔前的集合。
+                if ( ctx.marqueeUsesOperations ) {
+                    restoreMarqueeSelectionBaseline(ctx);
+                    resetMarqueeSelectionBaseline(ctx);
+                }
                 // 没有剩余框时停止框选计算，避免空集合触发无意义刷新。
                 ctx.hasMarqueeSelection     = false;
                 ctx.isMarqueeSelectionDirty = false;
@@ -212,6 +246,7 @@ void MarqueeTool::handleEndMarquee(SessionContext&      ctx,
             }
         } else {
             // 确认有效框时再标脏，确保最终选择结果覆盖最后一个手势状态。
+            // 显式框保留在序列中，后续加选、减选和移框都以此为依据。
             ctx.isMarqueeSelectionDirty = true;
         }
     }
@@ -299,6 +334,20 @@ void MarqueeTool::handleRemoveMarqueeAt(SessionContext&           ctx,
              clickTrack >= minTrack && clickTrack <= maxTrack ) {
             // 边缘也算命中，避免细框只能从内部极窄区域移除。
             ctx.marqueeBoxes.erase(ctx.marqueeBoxes.begin() + i);
+            if ( ctx.marqueeUsesOperations ) {
+                // 按剩余操作序列重算；移除减选框也应恢复它原本排除的对象。
+                // 先恢复基线，下一次脏刷新再应用仍然存在的框。
+                // 最后一个框移除后保留手动选择，不能清空无关对象。
+                restoreMarqueeSelectionBaseline(ctx);
+                ctx.hasMarqueeSelection     = !ctx.marqueeBoxes.empty();
+                ctx.isMarqueeSelectionDirty = ctx.hasMarqueeSelection;
+                if ( !ctx.hasMarqueeSelection ) {
+                    // 结束序列后释放旧身份，避免下一笔继承失效基线。
+                    ctx.marqueeIsAdditive = false;
+                    resetMarqueeSelectionBaseline(ctx);
+                }
+                return;
+            }
             // 仅删除命中的框，其他框的相对顺序保持不变，继续决定重叠时的优先级。
 
             // 不能只撤销该框曾选中的实体：多个框可能共同覆盖同一物件。

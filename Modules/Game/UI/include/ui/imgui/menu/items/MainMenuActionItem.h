@@ -14,6 +14,9 @@ namespace MMM::UI
 class MainMenuActionItem final : public IMainMenuItem
 {
 public:
+    /// @brief 移除动作登记后再销毁处理器，保持方案借用安全。
+    ~MainMenuActionItem() override;
+
     /// @brief 构造普通主菜单项。
     /// @param icon 菜单项默认图标文本，可为空。
     /// @param label 菜单项文本或翻译键。

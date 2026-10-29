@@ -409,6 +409,9 @@ struct ToolbarIndependentButtonVisibility {
 
     /// @brief 是否显示分拍数量按钮。
     bool beatDivisor{ false };
+
+    /// @brief 默认显示时间线缩放入口，鼠标和触屏均无需修饰键即可操作。
+    bool timelineZoom{ true };
 };
 
 /// @brief 将独立按钮可见性配置序列化为 JSON。
@@ -726,6 +729,10 @@ struct EditorSettings {
 
     /// @brief 编辑器自定义快捷键配置。
     ShortcutConfig shortcutConfig;
+
+    /// @brief 应用级操作方案身份，不存入工程或谱面工作区。
+    /// @details 缺失时保持原桌面操作，未知身份由运行时回退但保留保存值。
+    std::string m_interactionProfileId{ "classic-desktop" };
 };
 
 /// @brief 将全软件工具栏显示配置从源设置复制到目标设置。

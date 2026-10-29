@@ -6,6 +6,7 @@
 #include "common/ChartObjectKind.h"
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
+#include "common/SelectionOperation.h"
 #include "common/walkthrough/ComposeLessonNotes.h"
 #include "config/EditorConfig.h"
 #include "mmm/annotation/BeatmapAnnotation.h"
@@ -105,6 +106,8 @@ struct CmdSelectEntity {
     bool         clearOthers;
     /// @brief 实体所在的独立 ECS 注册表。
     ChartObjectKind kind{ ChartObjectKind::PlayerNote };
+    /// @brief 显式集合操作；为空时保留经典 clearOthers 与 Ctrl 切换语义。
+    std::optional<SelectionOperation> selectionOperation;
 };
 
 /**
@@ -234,6 +237,8 @@ struct CmdStartMarquee {
     float       mouseX;
     float       mouseY;
     bool        isCtrlDown{ false };
+    /// @brief 本次框选锁存的集合操作；为空时沿用经典追加修饰键。
+    std::optional<SelectionOperation> selectionOperation;
 };
 
 /**
@@ -269,6 +274,8 @@ struct CmdStartBrush {
     bool        isCtrlDown;   ///< 当前 Ctrl 键是否按下 (用于禁用磁吸)
     /// @brief 练习新建独立物件时禁用从已有物件续接，避免失败手势改动原谱面。
     bool createStandalone{ false };
+    /// @brief 纯鼠标临时忽略吸附时连起笔也使用连续时间；旧入口默认保持原行为。
+    bool bypassSnapAtStart{ false };
 };
 
 /**
@@ -295,6 +302,8 @@ struct CmdEndBrush {
     std::uint64_t walkthroughToken{ 0 };
     /// @brief 折线教学要求的最少最终子段数；普通绘制保持零。
     std::uint8_t walkthroughMinimumSubNotes{ 0 };
+    /// @brief 纯鼠标取消时精确恢复本笔续写前的临时删除，旧入口默认不启用。
+    bool restoreReplacedObjectOnCancel{ false };
 };
 
 /**
@@ -525,6 +534,9 @@ struct CmdPaste {
 
     /// @brief 是否在粘贴后清空旧选择并选中新粘贴出的物件。
     bool m_selectPastedObjects{ false };
+    /// @brief 显式粘贴锚点（秒）；为空时沿用用户的播放头或鼠标位置偏好。
+    /// @details 上下文菜单锁存可见吸附线，避免执行时重新读取移动后的鼠标。
+    std::optional<double> m_targetTime;
 };
 
 /**

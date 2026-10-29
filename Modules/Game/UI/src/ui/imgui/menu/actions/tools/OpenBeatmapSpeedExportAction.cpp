@@ -450,6 +450,13 @@ void copyToInputBuffer(std::array<char, 192>& buffer, const std::string& value)
 class OpenBeatmapSpeedExportAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "OpenBeatmapSpeedExportAction";
+    }
+
     /// @brief 仅在存在活跃谱面且未运行倍速任务时允许打开。
     /// @param context 单帧主菜单上下文。
     /// @return 满足谱面与任务状态条件时返回 true。

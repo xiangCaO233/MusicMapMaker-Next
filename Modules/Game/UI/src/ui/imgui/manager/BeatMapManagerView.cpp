@@ -17,6 +17,7 @@
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/LayoutContext.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -1111,7 +1112,7 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
                     }
 
                     if ( hovered &&
-                         ImGui::IsMouseClicked(ImGuiMouseButton_Right) ) {
+                         Interaction::mouseClicked(ImGuiMouseButton_Right) ) {
                         // 右键只记录稳定相对路径，模态在表格之后绘制。
                         m_manageBeatmapPath = beatmap.m_filePath;
                         m_openManageModal   = true;

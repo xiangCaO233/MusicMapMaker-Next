@@ -1,6 +1,7 @@
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuToolsActions.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
+#include <string_view>
 
 #include "config/AppPaths.h"
 #include "config/Utf8Path.h"
@@ -43,6 +44,13 @@ struct PendingPluginToggle {
 class OpenPluginListAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "OpenPluginListAction";
+    }
+
     /// @brief 打开插件列表窗口。
     /// @param context 单帧主菜单上下文。
     /// @param activation 菜单项激活载荷。

@@ -22,6 +22,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/manager/SettingsView.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
@@ -716,6 +717,45 @@ void SettingsView::drawSoftwareSettings()
                     Config::SkinManager::instance().getTranslator().switchLang(
                         settings.language);
                     changed = true;
+                }
+            });
+
+        // 交互方案是应用级偏好，与语言一起放在软件页的通用组。
+        // 使用标准设置行提供左侧标签，组合框只占右侧值列，不重复绘制标题。
+        // 标签参与软件页统一宽度测量，长翻译不会挤到下拉框右侧。
+        // 仍沿用原翻译键与配置字段，已有皮肤文本和用户选择无需迁移。
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.shortcut.interaction_profile").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                // 运行态仍由安全帧切换协议管理，选择只写持久化请求。
+                // 引用仅在本帧使用，不把活动方案借用保存进布局缓存。
+                const auto& active = Interaction::activeProfile();
+                // 宽度来自 Clay 实际值列，窗口缩放和主题留白由统一布局处理。
+                // 控件使用隐藏 ID，显示标签由设置行负责，避免重复计算文字占位。
+                ImGui::SetNextItemWidth(r.width);
+                if ( FeedbackBeginCombo("##InteractionProfile",
+                                        active.name().data()) ) {
+                    for ( const auto& profile : Interaction::profiles() ) {
+                        // 名称可本地化或重名，控件身份始终来自稳定方案 ID。
+                        const auto id = profile->id();
+                        ImGui::PushID(id.data(), id.data() + id.size());
+                        const bool selected =
+                            settings.m_interactionProfileId == id;
+                        // 保存选择请求而非直接激活，避免移交尚未结束的画布手势。
+                        // 运行态预览跟随安全帧协议，待切换期间仍显示真实活动方案。
+                        if ( FeedbackSelectable(profile->name().data(),
+                                                selected) ) {
+                            settings.m_interactionProfileId = id;
+                            changed                         = true;
+                            // 复用软件页末尾的一次配置发布和保存，不单独写文件。
+                        }
+                        ImGui::PopID();
+                    }
+                    // 和统一反馈控件成对结束，保持悬浮与点击反馈一致。
+                    FeedbackEndCombo();
                 }
             });
 
@@ -2416,7 +2456,7 @@ void SettingsView::drawSoftwareSettings()
     if ( changed ) {
         // 一帧内全部普通设置变化合并为一次逻辑命令和一次磁盘保存。
         // 即时副作用已经执行，完整配置命令保证其他消费者最终一致。
-        Event::EventBus::instance().publish(
+        Interaction::dispatchCommand(
             Event::LogicCommandEvent(Logic::CmdUpdateEditorConfig{
                 Config::AppConfig::instance().getEditorConfig() }));
         // AppConfig 负责序列化路径和失败日志，本页不直接写文件。

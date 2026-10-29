@@ -5,7 +5,9 @@
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/interaction/EditorInteraction.h"
 #include <string>
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -16,6 +18,16 @@ namespace
 class MirrorPasteAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "MirrorPasteAction";
+    }
+    /// @brief 菜单提示与触发共用方案解析后的快捷键身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view shortcutActionId() const override { return "mirrorPaste"; }
+
     /// @brief 获取用户配置的镜像粘贴快捷键提示。
     /// @param context 单帧主菜单上下文，本查询无需读取。
     /// @param fallbackShortcut 配置为空时使用的静态提示。
@@ -36,20 +48,21 @@ public:
 
     /// @brief 从系统剪贴板同步并发布镜像粘贴命令。
     /// @param context 单帧主菜单上下文，本动作无需读取。
-    /// @param activation 激活来源，不改变镜像粘贴语义。
+    /// @param activation 激活来源；右键入口可显式指定打开时的吸附时间。
     /// @note 新对象选择策略沿用普通粘贴的编辑器设置。
     /// @warning 系统剪贴板访问仅应由用户显式激活触发。
     void execute(MainMenuContext&              context,
                  const MainMenuItemActivation& activation) override
     {
-        (void)activation;
         // 在构造命令前导入外部内容，保证编辑器剪贴板状态最新。
         ClipboardBridge::importEditorClipboardFromSystem();
         // true 明确选择镜像模式，实际坐标变换由逻辑层负责。
+        // 无显式锚点的顶栏和快捷键仍采用原粘贴位置设置，不留下跨次缓存。
         MenuUtil::dispatchCommand(Logic::CmdPaste{ true,
                                                    Config::AppConfig::instance()
                                                        .getEditorSettings()
-                                                       .selectPastedObjects });
+                                                       .selectPastedObjects,
+                                                   activation.m_pasteTime });
     }
 
     /// @brief 消费用户配置的镜像粘贴快捷键。
@@ -62,8 +75,12 @@ public:
         if ( !MenuUtil::canTriggerCanvasEditingShortcut() ) return false;
         const auto& shortcutConfig =
             Config::AppConfig::instance().getEditorSettings().shortcutConfig;
-        if ( ShortcutUtils::isShortcutPressed(shortcutConfig.mirrorPaste) ) {
-            execute(context, MainMenuItemActivation{});
+        if ( ShortcutUtils::isActionShortcutPressed("mirrorPaste") ) {
+            Interaction::dispatchAction(
+                *this,
+                context,
+                MainMenuItemActivation{
+                    .m_source = MainMenuActivationSource::Shortcut });
             return true;
         }
         return false;

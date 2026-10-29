@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui/interaction/EditorInteraction.h"
+
 #include "canvas/CanvasSnapshotPrepare.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "graphic/imguivk/VKTextureAtlas.h"
@@ -16,7 +18,8 @@ namespace MMM::Canvas
  * @brief 预览画布类，专门用于右侧预览窗口。
  * 独立于 Basic2DCanvas，具有精简的交互逻辑（仅点击跳转时间）。
  */
-class PreviewCanvas : public UI::IRenderableView,
+class PreviewCanvas : public UI::Interaction::IInteractionGuard,
+                      public UI::IRenderableView,
                       public UI::IParallelUiPreparable
 {
 public:
@@ -28,8 +31,14 @@ public:
     PreviewCanvas& operator=(PreviewCanvas&&)      = delete;
     PreviewCanvas& operator=(const PreviewCanvas&) = delete;
 
-    ~PreviewCanvas() override = default;
+    ~PreviewCanvas() override;
 
+    /// @brief 密度栏或预览内容仍在拖动时，操作方案必须等待其提交收尾。
+    /// @warning 每帧只访问 UI 本地状态，不等待逻辑相机发布快照。
+    bool hasActivePointerGesture() const override
+    {
+        return m_wasDensitySeekActive || m_lastMouseCommand.isDragging;
+    }
     // 接口实现
     /// @brief 更新预览画布 ImGui 窗口和鼠标交互。
     /// @warning 热路径：主渲染线程每帧执行；禁止文件系统访问、完整 ECS

@@ -13,8 +13,11 @@
 #endif
 
 // 时间线弹窗修改设置字段，类型定义留在实际编辑设置的实现中。
-#include "canvas/AuxiliaryWindowUi.h"
 #include "canvas/TimelineCanvas.h"
+#include "ui/imgui/ShortcutUtils.h"
+#include "ui/interaction/EditorInteraction.h"
+
+#include "canvas/AuxiliaryWindowUi.h"
 #include "canvas/TimelineStopDuration.h"
 #include "canvas/TimelineTableSnapshotState.h"
 #include "canvas/TimelineTableWindowState.h"
@@ -2041,6 +2044,9 @@ void TimelineCanvas::renderEventCreationPopup()
 /// - 拖选开始时冻结原选择集。
 /// - 带修饰键拖选把范围并入基线。
 /// - 普通拖选以当前范围替换选择。
+/// - 纯鼠标显式模式在序号按下时锁存，点选与拖选共用同一集合操作。
+/// - 追加与减选每次从起笔集合重新计算，缩小拖选范围可以恢复原有成员。
+/// - 显式模式下新增常驻选择控件，经典表格仍使用原 Ctrl/Shift 入口。
 /// - 选择锚点若已不在选择集中则重新规整。
 /// - 单选集合可自动成为新的锚点。
 /// - 快照删除实体后选择集合由公共清理流程更新。
@@ -2314,6 +2320,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         m_isTableRowDragSelecting    = false;
         m_tableRowDragAnchorEntity   = entt::null;
         m_tableRowDragBaseSelection.clear();
+        m_tableRowSelectionOperation.reset();
         m_hasTableRowDragSelectionMoved = false;
         finishKeepSpeedBinding();
         return;
@@ -2331,6 +2338,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         m_isTableRowDragSelecting         = false;
         m_tableRowDragAnchorEntity        = entt::null;
         m_tableRowDragBaseSelection.clear();
+        m_tableRowSelectionOperation.reset();
         m_hasTableRowDragSelectionMoved = false;
         finishKeepSpeedBinding();
     };
@@ -2445,6 +2453,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             m_tableRowDragAnchorEntity      = entt::null;
             m_hasTableRowDragSelectionMoved = false;
             m_tableRowDragBaseSelection.clear();
+            m_tableRowSelectionOperation.reset();
             finishKeepSpeedBinding();
             ImGui::BeginDisabled();
         }
@@ -2971,6 +2980,52 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         ImGui::Separator();
         ImGui::Spacing();
 
+        // 纯鼠标控制位于批量工具折叠区之外，普通表格操作无需发现快捷键提示。
+        // 复用应用级选择模式，表格和时间线画布不会保留两套互相冲突的意图。
+        auto& selectionProfile = UI::Interaction::activeProfile();
+        if ( selectionProfile.selectionOperation() ) {
+            ImGui::PushID("TimingTableMouseSelection");
+            for ( const auto& [operation, key] :
+                  { std::pair{ Logic::SelectionOperation::Replace,
+                               "ui.selection.replace" },
+                    std::pair{ Logic::SelectionOperation::Add,
+                               "ui.selection.add" },
+                    std::pair{ Logic::SelectionOperation::Subtract,
+                               "ui.selection.subtract" } } ) {
+                if ( operation != Logic::SelectionOperation::Replace )
+                    ImGui::SameLine();
+                // 设置只作用于下一笔，不改变已有选择或当前拖选的锁存模式。
+                if ( UI::FeedbackRadioButton(
+                         TR(key).data(),
+                         selectionProfile.selectionOperation() == operation) )
+                    selectionProfile.setSelectionOperation(operation);
+            }
+            // 全选只包含筛选后的结果，与表格原 Ctrl+A 的范围相同。
+            // 不扫描 Registry，也不把隐藏的其他类型或数值结果一并选入。
+            ImGui::BeginDisabled(visibleElementIndices.empty());
+            if ( UI::FeedbackButton(TR("ui.selection.all_results").data()) ) {
+                m_selectedTimingEntities.clear();
+                for ( const auto index : visibleElementIndices )
+                    m_selectedTimingEntities.insert(
+                        getElementEntity(elements[index]));
+                m_tableSelectionAnchorEntity =
+                    getElementEntity(elements[visibleElementIndices.front()]);
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::BeginDisabled(m_selectedTimingEntities.empty());
+            if ( UI::FeedbackButton(TR("ui.selection.clear").data()) ) {
+                // 显式清空可移除筛选隐藏的旧选择，空白点击则继续遵守集合模式。
+                m_selectedTimingEntities.clear();
+                m_tableSelectionAnchorEntity = entt::null;
+            }
+            ImGui::EndDisabled();
+            ImGui::PopID();
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+        }
+
         // 渲染表格
         const float tableScrollbarSize = std::max(
             ImGui::GetStyle().ScrollbarSize,
@@ -3105,9 +3160,27 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                                elements[elementIndex]) ==
                                            m_tableSelectionAnchorEntity;
                                 });
-                            if ( io.KeyShift &&
-                                 anchor != visibleElementIndices.end() ) {
-                                if ( !io.KeyCtrl ) {
+                            if ( m_tableRowSelectionOperation ) {
+                                // 减选是差集，重复点击不会像 Ctrl
+                                // 那样反向选中。
+                                // 使用按下前基线，释放帧不读取可能已被外部切换的模式。
+                                // 选中集由本视图拥有，不通过 ECS
+                                // 标签或后台线程重新推断。
+                                // 替换的基线已在按下时清空，追加与减选则保留之前各笔的结果。
+                                m_selectedTimingEntities =
+                                    m_tableRowDragBaseSelection;
+                                if ( *m_tableRowSelectionOperation ==
+                                     Logic::SelectionOperation::Subtract )
+                                    m_selectedTimingEntities.erase(ent);
+                                else
+                                    m_selectedTimingEntities.insert(ent);
+                                m_tableSelectionAnchorEntity = ent;
+                            } else if ( UI::Interaction::modifier(
+                                            UI::Interaction::Modifier::Shift) &&
+                                        anchor !=
+                                            visibleElementIndices.end() ) {
+                                if ( !UI::Interaction::modifier(
+                                         UI::Interaction::Modifier::Control) ) {
                                     m_selectedTimingEntities.clear();
                                 }
                                 const int anchorIndex =
@@ -3135,7 +3208,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                                      [static_cast<std::size_t>(
                                                          selectedIndex)]]));
                                 }
-                            } else if ( io.KeyCtrl ) {
+                            } else if ( UI::Interaction::modifier(
+                                            UI::Interaction::Modifier::
+                                                Control) ) {
                                 if ( rowSelected ) {
                                     m_selectedTimingEntities.erase(ent);
                                 } else {
@@ -3165,23 +3240,43 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         ImVec2(rowNumberCellMin.x + rowNumberCellWidth,
                                rowNumberItemMax.y));
                     if ( !editingDisabled && rowNumberHovered &&
-                         ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+                         UI::Interaction::mouseClicked(
+                             ImGuiMouseButton_Left) ) {
                         const ImGuiIO& io               = ImGui::GetIO();
                         m_isTableRowDragSelecting       = true;
                         m_tableRowDragAnchorEntity      = ent;
                         m_tableSelectionAnchorEntity    = ent;
                         m_hasTableRowDragSelectionMoved = false;
+                        // 模式与基线共同锁存；只有替换会从空集合开始。
+                        // 设置项只描述下一笔意图，不能把减选伪装成物理 Ctrl
+                        // 切换。
+                        // 先捕获旧集合再等待移动，缩小范围时才能恢复不再覆盖的成员。
+                        // 经典空模式仍按原 Ctrl 决定是否保留旧集合。
+                        m_tableRowSelectionOperation =
+                            selectionProfile.selectionOperation();
                         m_tableRowDragBaseSelection =
-                            io.KeyCtrl ? m_selectedTimingEntities
-                                       : std::unordered_set<entt::entity>{};
+                            (m_tableRowSelectionOperation
+                                 ? *m_tableRowSelectionOperation !=
+                                       Logic::SelectionOperation::Replace
+                                 : UI::Interaction::modifier(
+                                       UI::Interaction::Modifier::Control))
+                                ? m_selectedTimingEntities
+                                : std::unordered_set<entt::entity>{};
                     }
                     const float mouseY = ImGui::GetIO().MousePos.y;
                     const bool  rowDragTargetHovered =
                         mouseY >= rowNumberItemMin.y &&
                         mouseY < rowNumberItemMax.y;
+                    // 纯鼠标采用正常拖动阈值，单击不能在按下帧被标成拖选。
+                    // 经典仍使用原来的零阈值，不改变其 Ctrl/Shift 处理分支。
                     if ( m_isTableRowDragSelecting && rowDragTargetHovered &&
-                         ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
-                         ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f) ) {
+                         ((UI::Interaction::mouseDown(ImGuiMouseButton_Left) &&
+                           UI::Interaction::mouseDragging(
+                               ImGuiMouseButton_Left,
+                               m_tableRowSelectionOperation ? -1.0f : 0.0f)) ||
+                          (m_tableRowSelectionOperation &&
+                           UI::Interaction::mouseReleased(
+                               ImGuiMouseButton_Left))) ) {
                         const auto dragAnchor = std::find_if(
                             visibleElementIndices.begin(),
                             visibleElementIndices.end(),
@@ -3204,11 +3299,18 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                             for ( int selectedIndex = first;
                                   selectedIndex <= last;
                                   ++selectedIndex ) {
-                                m_selectedTimingEntities.insert(
-                                    getElementEntity(
-                                        elements[visibleElementIndices
-                                                     [static_cast<std::size_t>(
-                                                         selectedIndex)]]));
+                                const auto target = getElementEntity(
+                                    elements[visibleElementIndices[static_cast<
+                                        std::size_t>(selectedIndex)]]);
+                                // 每帧从起笔集合重算，减选范围缩回时恢复未再覆盖的成员。
+                                // 释放帧也应用最后位置，快速松手不能丢失最后跨过的行。
+                                // 纯鼠标终点取样与持续移动共用一段逻辑，经典保持原释放处理。
+                                // 基线不写回为当前预览，避免缩框后无法恢复此前暂时减去的行。
+                                if ( m_tableRowSelectionOperation ==
+                                     Logic::SelectionOperation::Subtract )
+                                    m_selectedTimingEntities.erase(target);
+                                else
+                                    m_selectedTimingEntities.insert(target);
                             }
                         }
                     }
@@ -3412,11 +3514,12 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 }
             }
             if ( m_isTableRowDragSelecting &&
-                 !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+                 !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
                 m_isTableRowDragSelecting       = false;
                 m_tableRowDragAnchorEntity      = entt::null;
                 m_hasTableRowDragSelectionMoved = false;
                 m_tableRowDragBaseSelection.clear();
+                m_tableRowSelectionOperation.reset();
             }
             ImGui::EndTable();
         }
@@ -3449,8 +3552,13 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             ImGui::IsWindowHovered(
                 ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
             !ImGui::IsAnyItemHovered();
-        if ( ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-             (mouseInsideTimingTableBlank || mouseInsideOutsideTableBlank) ) {
+        if ( UI::Interaction::mouseClicked(ImGuiMouseButton_Left) &&
+             (mouseInsideTimingTableBlank || mouseInsideOutsideTableBlank) &&
+             selectionProfile.selectionOperation().value_or(
+                 Logic::SelectionOperation::Replace) ==
+                 Logic::SelectionOperation::Replace ) {
+            // 追加和减选的空白点击不应破坏此前集合；经典缺省仍然清空。
+            // 显式清空按钮不受此规则限制，筛选隐藏的成员也能由用户一次清除。
             m_selectedTimingEntities.clear();
             m_tableSelectionAnchorEntity = entt::null;
         }
@@ -3460,11 +3568,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         const ImGuiIO& io = ImGui::GetIO();
         if ( !editingDisabled && tableShortcutFocused &&
              !ImGui::IsAnyItemActive() && !io.WantTextInput ) {
-            const bool ctrlOnly =
-                io.KeyCtrl && !io.KeyAlt && !io.KeyShift && !io.KeySuper;
-            const bool noModifier =
-                !io.KeyCtrl && !io.KeyAlt && !io.KeyShift && !io.KeySuper;
-            if ( ctrlOnly && ImGui::IsKeyPressed(ImGuiKey_A, false) ) {
+            if ( UI::ShortcutUtils::isActionShortcutPressed(
+                     "selectAll", false, 0) ) {
                 m_selectedTimingEntities.clear();
                 for ( std::size_t elementIndex : visibleElementIndices ) {
                     m_selectedTimingEntities.insert(
@@ -3475,18 +3580,23 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         ? entt::null
                         : getElementEntity(
                               elements[visibleElementIndices.front()]);
-            } else if ( ctrlOnly && ImGui::IsKeyPressed(ImGuiKey_C, false) ) {
+            } else if ( UI::ShortcutUtils::isActionShortcutPressed(
+                            "copy", false, 0) ) {
                 copyTableSelection(false);
-            } else if ( ctrlOnly && ImGui::IsKeyPressed(ImGuiKey_X, false) ) {
+            } else if ( UI::ShortcutUtils::isActionShortcutPressed(
+                            "cut", false, 0) ) {
                 copyTableSelection(true);
-            } else if ( ctrlOnly && ImGui::IsKeyPressed(ImGuiKey_V, false) ) {
+            } else if ( UI::ShortcutUtils::isActionShortcutPressed(
+                            "paste", false, 0) ) {
                 pasteTableSelection();
-            } else if ( noModifier &&
-                        (ImGui::IsKeyPressed(ImGuiKey_Delete, false) ||
-                         ImGui::IsKeyPressed(ImGuiKey_Backspace, false)) ) {
+            } else if ( (UI::ShortcutUtils::isActionShortcutPressed(
+                             "deleteSelected", false, 0) ||
+                         UI::ShortcutUtils::isActionShortcutPressed(
+                             "deleteAlternative", false, 0)) ) {
                 deleteSelectedTimingEvents();
                 m_tableSelectionAnchorEntity = entt::null;
-            } else if ( ImGui::IsKeyPressed(ImGuiKey_Escape, false) ) {
+            } else if ( UI::ShortcutUtils::isActionShortcutPressed(
+                            "cancelInteraction", false) ) {
                 m_selectedTimingEntities.clear();
                 m_tableSelectionAnchorEntity = entt::null;
             }
@@ -3519,6 +3629,15 @@ void TimelineCanvas::renderTimingPointsTableWindow()
 /// - 实体身份只在快照中解析，失效实体沿用逻辑线程原有检查。
 /// - 本地提示不发送到其他联机用户，避免远端命令重复弹窗。
 /// - 命令中的元数据与插值内容原样传递，不能因能力检查被裁剪。
+/// @details 操作方案接管只位于本机 UI 出口，不拦截远端协作或逻辑线程维护命令。
+/// 原格式风险提示在本表面保留，不能把不支持格式的私有状态误说成已安全导出。
+/// 业务权限和撤销事务继续交给命令层，不由输入绑定判断可写性。
+/// 重映射若需要发布替代命令，应选择自己的语义目标，不能重新进入同一拦截递归。
+/// 命令负载与事件时间戳在同步发布期间有效，方案不能保留其内部引用。
+/// 新方案消费命令后不会再走默认总线出口，避免一次手势修改两遍。
+/// 默认方案不消费，沿用原有命令、联机传播与历史记录顺序。
+/// 连续拖动仍只提交现有控制器产生的必要状态，不为方案切换增加等待。
+/// 输入解释改变不等于外部保存完成，导出和持久化仍由既有服务确认。
 void TimelineCanvas::publishTimelineCommand(
     const Event::LogicCommandEvent& event)
 {
@@ -3622,7 +3741,7 @@ void TimelineCanvas::publishTimelineCommand(
         }
     }
     // 能力不足只产生提醒，始终保留命令、撤销和联机同步原有路径。
-    Event::EventBus::instance().publish(event);
+    UI::Interaction::dispatchCommand(event);
 }
 
 /// @brief 展示原格式保存风险，用户确认只关闭提示、不撤销编辑。
@@ -3652,8 +3771,8 @@ void TimelineCanvas::renderTimingFormatWarning()
         "时间线格式支持度提示###TimelineFormatWarning";
     // 输入仍激活或编辑弹窗未关时延后显示，避免打断连续输入和拖动。
     if ( m_timingFormatWarningPending && !ImGui::IsAnyItemActive() &&
-         !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
-         !ImGui::IsMouseDown(ImGuiMouseButton_Right) &&
+         !UI::Interaction::mouseDown(ImGuiMouseButton_Left) &&
+         !UI::Interaction::mouseDown(ImGuiMouseButton_Right) &&
          !ImGui::IsPopupOpen(
              nullptr,
              ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) ) {

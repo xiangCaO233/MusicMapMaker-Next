@@ -1,6 +1,9 @@
 #include "config/EditorSettings.h"
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
+#include "ui/interaction/EditorInteraction.h"
+#include <string_view>
 
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
@@ -111,6 +114,16 @@ void ensureSaveActionSubscriptions()
 class SaveBeatmapAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "SaveBeatmapAction";
+    }
+    /// @brief 菜单提示与触发共用方案解析后的快捷键身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view shortcutActionId() const override { return "save"; }
+
     /// @brief 构造保存动作并确保保存事件订阅完成。
     /// @note action 自身不被 EventBus 回调捕获，重建不会留下悬空指针。
     /// @note 初始状态不打开任何弹窗，所有展示都由后续请求触发。
@@ -147,9 +160,12 @@ public:
     bool handleShortcut(MainMenuContext& context) override
     {
         (void)context;
-        ImGuiIO& io = ImGui::GetIO();
-        if ( io.KeyCtrl && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_S) ) {
-            requestSaveBeatmap(false);
+        if ( ShortcutUtils::isActionShortcutPressed("save", true) ) {
+            Interaction::dispatchAction(
+                *this,
+                context,
+                MainMenuItemActivation{
+                    .m_source = MainMenuActivationSource::Shortcut });
             return true;
         }
         return false;

@@ -1,7 +1,10 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "config/EditorSettings.h"
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
+#include "ui/interaction/EditorInteraction.h"
+#include <string_view>
 
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
@@ -36,6 +39,16 @@ namespace
 class SaveBeatmapAsAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "SaveBeatmapAsAction";
+    }
+    /// @brief 菜单提示与触发共用方案解析后的快捷键身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view shortcutActionId() const override { return "saveAs"; }
+
     /// @brief 仅在存在活跃谱面时允许另存为。
     /// @param context 单帧主菜单上下文，本判断无需读取。
     /// @return 当前存在活动谱面时返回 true。
@@ -68,8 +81,7 @@ public:
     {
         (void)context;
         // 输入状态只在当前 ImGui 帧读取，不跨帧缓存。
-        ImGuiIO& io = ImGui::GetIO();
-        if ( io.KeyCtrl && io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_S) ) {
+        if ( ShortcutUtils::isActionShortcutPressed("saveAs", true) ) {
             // 快捷键复用菜单点击入口的全格式选择流程。
             openExportFilePicker("");
             return true;

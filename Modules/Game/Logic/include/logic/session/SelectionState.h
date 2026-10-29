@@ -96,6 +96,26 @@ inline void clearChartObjectSelection(SessionContext& ctx)
     clearKind(ChartObjectKind::AudioSample);
 }
 
+/// @brief 将显式框选的临时结果恢复到序列开始前的选择集合。
+/// @warning 仅在框变化或手势结束时调用；只遍历已选索引，不扫描 Registry。
+inline void restoreMarqueeSelectionBaseline(SessionContext& ctx)
+{
+    clearChartObjectSelection(ctx);
+    // 索引与组件通过统一入口同步，失效实体不会被重新创建。
+    for ( const auto entity : ctx.marqueeBaselineNotes )
+        setChartObjectSelected(ctx, ChartObjectKind::PlayerNote, entity, true);
+    for ( const auto entity : ctx.marqueeBaselineSamples )
+        setChartObjectSelected(ctx, ChartObjectKind::AudioSample, entity, true);
+}
+
+/// @brief 解除显式框序列基线，不改动当前已经解析出的选择。
+inline void resetMarqueeSelectionBaseline(SessionContext& ctx)
+{
+    ctx.marqueeUsesOperations = false;
+    ctx.marqueeBaselineNotes.clear();
+    ctx.marqueeBaselineSamples.clear();
+}
+
 /// @brief 在整体重建 Registry 时清空对应领域的已选索引。
 /// @param ctx 当前会话上下文。
 /// @param kind 被整体重建的谱面物件领域。

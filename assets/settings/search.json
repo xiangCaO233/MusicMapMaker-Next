@@ -23,6 +23,14 @@
     {
       "tab": "Software",
       "section": "ui.settings.software.general",
+      "label": "ui.settings.shortcut.interaction_profile",
+      "fields": [],
+      "keywords": "interactionProfileId",
+      "aliases": "编辑操作方案 经典桌面 纯鼠标 鼠标操作 Interaction profile Classic desktop Mouse only"
+    },
+    {
+      "tab": "Software",
+      "section": "ui.settings.software.general",
       "label": "ui.settings.software.default_creator",
       "fields": [
         "ui.settings.software.default_creator.hint"

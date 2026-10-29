@@ -106,6 +106,9 @@ void MainMenuToolbarVisibilityItem::render(MainMenuContext& context)
     // 节拍细分按钮保留为独立入口，便于只展示节奏编辑控件。
     changed |=
         drawVisibilityToggle("ui.toolbar.beat_divisor", buttons.beatDivisor);
+    // 缩放与播放倍速分别控制，隐藏入口不改变当前时间线比例。
+    changed |= drawVisibilityToggle("ui.settings.visual.timeline_zoom",
+                                    buttons.timelineZoom);
 
     // 只有实际切换过开关才写配置，避免展开菜单导致无效磁盘写入。
     if ( changed ) {

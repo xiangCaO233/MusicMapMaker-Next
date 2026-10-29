@@ -1,5 +1,7 @@
 #include "canvas/TimelineCanvas.h"
 #include "config/EditorSettings.h"
+#include "ui/imgui/ShortcutUtils.h"
+#include "ui/interaction/EditorInteraction.h"
 
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
@@ -639,9 +641,9 @@ void renderTemplatePoints(TimingTemplateEditorState& state, bool editable,
         if ( UI::FeedbackButton("添加时间点") ) {
             TimingTemplatePoint point;
             // 新点相距一个显示单位，空草稿第一条自然成为基准。
-            point.m_offset = draft.m_points.empty()
-                                 ? 0
-                                 : draft.m_points.back().m_offset + 1.0 / scale;
+            point.m_offset                         = draft.m_points.empty()
+                                                         ? 0
+                                                         : draft.m_points.back().m_offset + 1.0 / scale;
             point.m_timing.m_timingEffect          = TimingEffect::SCROLL;
             point.m_timing.m_timingEffectParameter = 1;
             draft.m_points.push_back(std::move(point));
@@ -857,9 +859,9 @@ void TimelineCanvas::renderTimingTemplateEditor()
                              phase == TimingTemplateEditorPhase::FromSelection;
         // selected 是已存库选项；FromSelection 草稿不视作已存模板。
         // 即使模板名称与库中相同，也不能在保存前假装加入了个人库。
-        const bool  selected = state.m_libraryIndex >= 0 &&
-                               static_cast<std::size_t>(state.m_libraryIndex) <
-                                   state.m_library.size();
+        const bool selected = state.m_libraryIndex >= 0 &&
+                              static_cast<std::size_t>(state.m_libraryIndex) <
+                                  state.m_library.size();
         const char* headings[] = {
             "模板查看", "模板添加", "模板创建", "从选中创建", "模板放置"
         };
@@ -1244,7 +1246,8 @@ void TimelineCanvas::renderTimingTemplateEditor()
                 ImGuiFileDialog::Instance()->Close();
             }
         }
-        if ( !importing && ImGui::IsKeyPressed(ImGuiKey_Escape) ) {
+        if ( !importing && UI::ShortcutUtils::isActionShortcutPressed(
+                               "cancelInteraction", true) ) {
             // Esc 在操作页取消当前步骤，只有查看页才关闭整个工具。
             if ( phase == TimingTemplateEditorPhase::View ) {
                 state.m_open = false;

@@ -8,6 +8,7 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "network/collaboration/RtcDiagnosticLogging.h"
 #include "ui/imgui/manager/SettingsView.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/UIWidgetUtils.h"
 
 #include "imgui.h"
@@ -265,7 +266,7 @@ void SettingsView::drawDebugSettings()
     // 调试页只保留诊断设置；相机布局由画布工具独占并负责保存。
     // 已移除相机控件，不再维护旧实验滑杆的延迟保存状态。
     if ( changed ) {
-        Event::EventBus::instance().publish(Event::LogicCommandEvent(
+        Interaction::dispatchCommand(Event::LogicCommandEvent(
             Logic::CmdUpdateEditorConfig{ appConfig.getEditorConfig() }));
         appConfig.save();
     }

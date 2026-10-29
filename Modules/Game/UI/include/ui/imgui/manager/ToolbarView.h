@@ -79,7 +79,13 @@ private:
     bool m_layoutVisualConfigDirty{ false };
     /// @brief 上一帧布局组件颜色选择器是否打开。
     bool m_layoutComponentColorPickerOpen{ false };
-    bool m_showDivisorPopup = false;
+    /// @brief 时间线缩放浮层的显示状态，不存储缩放值副本。
+    bool m_showZoomPopup{ false };
+    /// @brief 本帧缩放按钮屏幕坐标，随横竖工具栏重新定位。
+    glm::vec2 m_lastZoomBtnPos{ 0.0f, 0.0f };
+    /// @brief 缩放浮层实际尺寸缓存，用于四边停靠时朝内展开。
+    glm::vec2 m_zoomPopupSize{ 220.0f, 180.0f };
+    bool      m_showDivisorPopup = false;
     /// @brief 本帧分拍数量按钮的完整屏幕锚点。
     glm::vec2 m_lastBtnPos{ 0.0f, 0.0f };
     float     m_popupWidth   = 160.0f;

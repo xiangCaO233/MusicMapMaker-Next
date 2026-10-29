@@ -1,6 +1,7 @@
 #include "ui/imgui/manager/ToolbarView.h"
 #include "config/EditorSettings.h"
 #include "config/VisualConfig.h"
+#include "ui/interaction/EditorInteraction.h"
 
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
@@ -41,6 +42,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <filesystem>
+#include <fmt/format.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <iterator>
@@ -825,6 +827,7 @@ void ToolbarView::update(UIManager* sourceManager)
     if ( !independentButtonVisibility.playbackSpeed ) {
         m_showSpeedPopup = false;
     }
+    if ( !independentButtonVisibility.timelineZoom ) m_showZoomPopup = false;
     if ( !independentButtonVisibility.trackCount ) m_showKeyPopup = false;
     if ( !independentButtonVisibility.beatDivisor ) {
         m_showDivisorPopup = false;
@@ -983,10 +986,9 @@ void ToolbarView::update(UIManager* sourceManager)
         };
 
         /// @brief 检测一个配置快捷键并提交调用方定义的配置翻转。
-        auto applyConfigToggleShortcut =
-            [&](const Config::ShortcutBinding& binding,
-                auto                           applyChange) -> bool {
-            if ( !ShortcutUtils::isShortcutPressed(binding) ) {
+        auto applyConfigToggleShortcut = [&](std::string_view action,
+                                             auto applyChange) -> bool {
+            if ( !ShortcutUtils::isActionShortcutPressed(action) ) {
                 // 未触发时不复制配置。
                 return false;
             }
@@ -1013,68 +1015,64 @@ void ToolbarView::update(UIManager* sourceManager)
             // 固定优先级链保证重叠绑定每帧只执行第一项。
             bool handledShortcut = false;
             /// @brief 尝试尚未处理的下一项快捷键。
-            auto tryToggleShortcut = [&](const Config::ShortcutBinding& binding,
-                                         auto applyChange) {
+            auto tryToggleShortcut = [&](std::string_view action,
+                                         auto             applyChange) {
                 if ( handledShortcut ) {
                     // 前一项已消费后立即跳过余下候选。
                     return;
                 }
                 handledShortcut =
-                    applyConfigToggleShortcut(binding, applyChange);
+                    applyConfigToggleShortcut(action, applyChange);
             };
             // 反向滚动优先级最高，保证导航方向切换不会与吸附选项同时发生。
-            tryToggleShortcut(shortcutConfig.toggleReverseScroll,
+            tryToggleShortcut("toggleReverseScroll",
                               [](Config::EditorConfig& config) {
                                   config.settings.reverseScroll =
                                       !config.settings.reverseScroll;
                               });
             // 滚动吸附控制时间游标是否落在分拍网格。
-            tryToggleShortcut(shortcutConfig.toggleScrollSnap,
-                              [](Config::EditorConfig& config) {
-                                  config.settings.scrollSnap =
-                                      !config.settings.scrollSnap;
-                              });
+            tryToggleShortcut(
+                "toggleScrollSnap", [](Config::EditorConfig& config) {
+                    config.settings.scrollSnap = !config.settings.scrollSnap;
+                });
             // 向下取整吸附只在吸附算法内部改变舍入方向。
-            tryToggleShortcut(shortcutConfig.toggleSnapFloor,
-                              [](Config::EditorConfig& config) {
-                                  config.settings.snapFloor =
-                                      !config.settings.snapFloor;
-                              });
+            tryToggleShortcut(
+                "toggleSnapFloor", [](Config::EditorConfig& config) {
+                    config.settings.snapFloor = !config.settings.snapFloor;
+                });
             // 时序映射开关在视觉配置中保存线性映射的反向语义。
-            tryToggleShortcut(shortcutConfig.toggleScrollTimingMapping,
+            tryToggleShortcut("toggleScrollTimingMapping",
                               [](Config::EditorConfig& config) {
                                   config.visual.enableLinearScrollMapping =
                                       !config.visual.enableLinearScrollMapping;
                               });
             // 分拍线快捷键在隐藏态和最近可见模式之间切换。
-            tryToggleShortcut(shortcutConfig.toggleBeatLines,
+            tryToggleShortcut("toggleBeatLines",
                               [this](Config::EditorConfig& config) {
                                   config.visual.beatLineDisplayMode =
                                       m_beatLineDisplayModeHistory.toggleTarget(
                                           config.visual.beatLineDisplayMode);
                               });
             // 滚动停止播放是编辑交互偏好，不直接发播放命令。
-            tryToggleShortcut(shortcutConfig.toggleStopPlaybackOnScroll,
+            tryToggleShortcut("toggleStopPlaybackOnScroll",
                               [](Config::EditorConfig& config) {
                                   config.settings.stopPlaybackOnScroll =
                                       !config.settings.stopPlaybackOnScroll;
                               });
             // 击打音开关写入音效配置，由应用层同步到运行时。
-            tryToggleShortcut(shortcutConfig.toggleHitSfx,
-                              [](Config::EditorConfig& config) {
-                                  config.settings.sfxConfig.enableHitSfx =
-                                      !config.settings.sfxConfig.enableHitSfx;
-                              });
+            tryToggleShortcut("toggleHitSfx", [](Config::EditorConfig& config) {
+                config.settings.sfxConfig.enableHitSfx =
+                    !config.settings.sfxConfig.enableHitSfx;
+            });
             // 击打视觉特效独立于声音总开关。
-            tryToggleShortcut(shortcutConfig.toggleHitEffects,
+            tryToggleShortcut("toggleHitEffects",
                               [](Config::EditorConfig& config) {
                                   config.visual.enableHitEffects =
                                       !config.visual.enableHitEffects;
                               });
             // 运行时同步主音频不是 EditorConfig 字段，单独调用引擎接口。
-            if ( !handledShortcut &&
-                 ShortcutUtils::isShortcutPressed(
-                     shortcutConfig.toggleSyncSameMainAudio) ) {
+            if ( !handledShortcut && ShortcutUtils::isActionShortcutPressed(
+                                         "toggleSyncSameMainAudio") ) {
                 engine.setSyncSameMainAudioCanvases(
                     !engine.isSyncSameMainAudioCanvasesEnabled());
             }
@@ -1280,6 +1278,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     m_showDivisorPopup    = false;
                     m_showKeyPopup        = false;
                     m_showSpeedPopup      = false;
+                    m_showZoomPopup       = false;
                     m_showBeatLinePopup   = false;
                     m_showMagnetPopup     = false;
                     m_showSoundEffectTool = false;
@@ -1366,6 +1365,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     m_showDivisorPopup    = false;
                     m_showKeyPopup        = false;
                     m_showSpeedPopup      = false;
+                    m_showZoomPopup       = false;
                     m_showBeatLinePopup   = false;
                     m_showSoundEffectTool = false;
                 }
@@ -1415,6 +1415,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     m_showDivisorPopup    = false;
                     m_showKeyPopup        = false;
                     m_showSpeedPopup      = false;
+                    m_showZoomPopup       = false;
                     m_showMagnetPopup     = false;
                     m_showSoundEffectTool = false;
                 }
@@ -1458,6 +1459,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     m_showDivisorPopup  = false;
                     m_showKeyPopup      = false;
                     m_showSpeedPopup    = false;
+                    m_showZoomPopup     = false;
                     m_showBeatLinePopup = false;
                     m_showMagnetPopup   = false;
                 }
@@ -1498,7 +1500,8 @@ void ToolbarView::update(UIManager* sourceManager)
             static_cast<int>(independentButtonVisibility.playback) +
             static_cast<int>(independentButtonVisibility.playbackSpeed) +
             static_cast<int>(independentButtonVisibility.trackCount) +
-            static_cast<int>(independentButtonVisibility.beatDivisor);
+            static_cast<int>(independentButtonVisibility.beatDivisor) +
+            static_cast<int>(independentButtonVisibility.timelineZoom);
         // 播放按钮可能包含文字，因此使用 btnHeight；其余数值按钮保持方形。
         float bottomButtonsH = 0.0f;
         // 播放按钮图标随运行态在播放与暂停间切换，active 样式对应正在播放。
@@ -1511,7 +1514,8 @@ void ToolbarView::update(UIManager* sourceManager)
             static_cast<float>(
                 static_cast<int>(independentButtonVisibility.playbackSpeed) +
                 static_cast<int>(independentButtonVisibility.trackCount) +
-                static_cast<int>(independentButtonVisibility.beatDivisor));
+                static_cast<int>(independentButtonVisibility.beatDivisor) +
+                static_cast<int>(independentButtonVisibility.timelineZoom));
         // 间距只存在于相邻可见项之间，隐藏项不应留下空槽。
         if ( bottomButtonCount > 1 ) {
             bottomButtonsH +=
@@ -1614,6 +1618,7 @@ void ToolbarView::update(UIManager* sourceManager)
                                                 ImVec2(btnSize, btnSize)) ) {
                     m_showSpeedPopup = !m_showSpeedPopup;
                     if ( m_showSpeedPopup ) {
+                        m_showZoomPopup = false;
                         // 数值弹层共享工具栏内侧空间，任一时刻只保留一个。
                         m_showKeyPopup        = false;
                         m_showDivisorPopup    = false;
@@ -1629,7 +1634,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     // 滚轮调节是可选交互；关闭设置后悬浮仅显示说明。
                     if ( editorCfg.settings
                              .enableToolbarValueWheelAdjustment ) {
-                        const float wheel = ImGui::GetIO().MouseWheel;
+                        const float wheel = Interaction::mouseWheel();
                         if ( std::abs(wheel) > 0.1F ) {
                             // 先吸附到最近预设再沿滚轮方向移动一档，避免
                             // 外部设置的非预设倍速导致首次滚动方向不直观。
@@ -1709,6 +1714,7 @@ void ToolbarView::update(UIManager* sourceManager)
                         // 轨道数弹层与其他锚定弹层互斥。
                         m_showDivisorPopup    = false;
                         m_showSpeedPopup      = false;
+                        m_showZoomPopup       = false;
                         m_showBeatLinePopup   = false;
                         m_showMagnetPopup     = false;
                         m_showSoundEffectTool = false;
@@ -1721,7 +1727,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     // 滚轮每格调整一轨，范围与元数据编辑页保持一致。
                     if ( editorCfg.settings
                              .enableToolbarValueWheelAdjustment ) {
-                        const float wheel = ImGui::GetIO().MouseWheel;
+                        const float wheel = Interaction::mouseWheel();
                         if ( std::abs(wheel) > 0.1F ) {
                             const int newTracks = std::clamp(
                                 currentTracks + (wheel > 0.0F ? 1 : -1), 1, 32);
@@ -1774,6 +1780,7 @@ void ToolbarView::update(UIManager* sourceManager)
                     // 打开分拍弹层时关闭其他数值和工具弹层。
                     m_showKeyPopup        = false;
                     m_showSpeedPopup      = false;
+                    m_showZoomPopup       = false;
                     m_showBeatLinePopup   = false;
                     m_showMagnetPopup     = false;
                     m_showSoundEffectTool = false;
@@ -1784,11 +1791,12 @@ void ToolbarView::update(UIManager* sourceManager)
             if ( ImGui::IsItemHovered() ) {
                 if ( editorCfg.settings.enableToolbarValueWheelAdjustment ) {
                     const auto& io    = ImGui::GetIO();
-                    const float wheel = io.MouseWheel;
+                    const float wheel = Interaction::mouseWheel();
                     if ( std::abs(wheel) > 0.1F ) {
                         // Shift 使用用户配置的滚动倍率，普通滚轮只移动一格。
                         int step = wheel > 0.0F ? 1 : -1;
-                        if ( io.KeyShift ) {
+                        if ( Interaction::modifier(
+                                 Interaction::Modifier::Shift) ) {
                             step *= static_cast<int>(
                                 editorCfg.settings.scrollSpeedMultiplier);
                         }
@@ -1807,6 +1815,50 @@ void ToolbarView::update(UIManager* sourceManager)
                 drawTooltip(TR("ui.toolbar.beat_divisor").data());
             }
             if ( contentFont ) ImGui::PopFont();
+            ImGui::PopStyleColor(3);
+            advanceBottomButton();
+        }
+
+        // 缩放属于全局视觉配置，空项目也可预设；按钮不获取会话锁。
+        // 与播放倍率分开显示，避免视觉调整被误认为音频变速。
+        // 入口使用固定放大镜图标，具体倍率在展开面板中显示。
+        // 不保存第二份倍率状态，避免不同入口互相覆盖。
+        if ( independentButtonVisibility.timelineZoom ) {
+            pushBtnStyle(m_showZoomPopup);
+            if ( drawIconButton(ICON_MMM_SEARCH,
+                                "###ToolbarTimelineZoom",
+                                nullptr,
+                                btnSize,
+                                btnSize,
+                                false) ) {
+                m_showZoomPopup = !m_showZoomPopup;
+                if ( m_showZoomPopup ) {
+                    // 同一工具栏内只保留一个参数浮层，触屏无需悬浮才能发现控制项。
+                    m_showDivisorPopup = m_showKeyPopup = m_showSpeedPopup =
+                        false;
+                    m_showBeatLinePopup       = m_showMagnetPopup =
+                        m_showSoundEffectTool = false;
+                    m_showLayoutPopup = m_showColorPopup = false;
+                }
+            }
+            // 停靠方向改变后，浮层继续跟随当前按钮的屏幕坐标。
+            m_lastZoomBtnPos = toolbarButtonPosition();
+            if ( ImGui::IsItemHovered() ) {
+                // 滚轮是可选捷径；主要操作始终可由点击和拖动完成。
+                const float wheel = Interaction::mouseWheel();
+                if ( editorCfg.settings.enableToolbarValueWheelAdjustment &&
+                     std::abs(wheel) > 0.001f ) {
+                    auto        config = currentEditorConfig();
+                    const float zoom   = std::clamp(
+                        config.visual.timelineZoom + wheel * 0.1f, 0.1f, 10.0f);
+                    // 到达边界后的滚轮不再提交相同配置。
+                    if ( zoom != config.visual.timelineZoom ) {
+                        config.visual.timelineZoom = zoom;
+                        updateEditorConfig(config);
+                    }
+                }
+                drawTooltip(TR("ui.settings.visual.timeline_zoom").data());
+            }
             ImGui::PopStyleColor(3);
             advanceBottomButton();
         }
@@ -1876,6 +1928,222 @@ void ToolbarView::update(UIManager* sourceManager)
     renderMagnetPopup(dpiScale);
     renderBeatLinePopup(dpiScale);
     renderSoundEffectTool(dpiScale);
+
+    // 所有输入共用现有视觉配置入口，后续手势只需提交同一缩放值。
+    // 值逐次即时更新，不等待鼠标释放，也不访问音频播放参数。
+    // 百分比仅用于展示，配置仍然使用既有浮点倍率。
+    // 100% 对应 1.0，不改变谱面时间、分拍或音频速度。
+    // 浮层关闭后没有额外的连续输入处理。
+    if ( m_showZoomPopup ) {
+        const auto* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar");
+        // 复用四边停靠规则，让浮层向可用空间展开。
+        // 上一帧尺寸用于边界约束，布局后再记录真实尺寸。
+        // 窗口被边缘裁窄后不能把裁剪宽度当作所需宽度，否则会持续向右溢出。
+        // 滑条和按钮行提供内容最小宽度，确保靠右按钮始终选择向左对齐。
+        // 预设行包含四个按钮和三个间距，主题扩大间距时也需纳入估计。
+        // 这里只决定对齐方向，视口尺寸上限仍由公共定位函数控制。
+        const auto& popupStyle = ImGui::GetStyle();
+        // 百分比必须连同两侧内边距完整容纳，不能仅按 DPI 固定按钮宽度。
+        // 三列操作与四列预设分别取等宽，文字大小改变后仍保持整齐。
+        const float labelWidth = ImGui::CalcTextSize("400%").x;
+        const float presetWidth =
+            std::max(48.0f * dpiScale,
+                     std::ceil(labelWidth + popupStyle.FramePadding.x * 2));
+        const float actionWidth =
+            std::max(64.0f * dpiScale,
+                     std::ceil(labelWidth + popupStyle.FramePadding.x * 2));
+        const float buttonHeight =
+            std::max(32.0f * dpiScale, ImGui::GetFrameHeight());
+        const float contentWidth =
+            std::max({ 220.0f * dpiScale,
+                       presetWidth * 4 + popupStyle.ItemSpacing.x * 3,
+                       actionWidth * 3 + popupStyle.ItemSpacing.x * 2 });
+        const float requiredWidth =
+            contentWidth + popupStyle.WindowPadding.x * 2;
+        // 标题、分隔线、滑条、两排按钮与关闭按钮构成完整内容高度。
+        // 竖栏底部锚点必须用完整高度判断向上展开，不能复用已裁窄的缓存。
+        // 多留一行间距吸收像素舍入，实际窗口仍由内容自动确定大小。
+        // 纯鼠标多出的开关与分隔线也参与初始高度估算，避免底部首次弹出被裁掉。
+        const bool hasFastScroll =
+            Interaction::activeProfile().acceleratedScrolling().has_value();
+        // 定位吸附与预览缩放增加两行及独立分隔线，首次弹出也须完整避让视口。
+        // 能力与快速滚动独立，后续方案可以只提供其中一种显式意图。
+        const bool hasNavigationOptions =
+            Interaction::activeProfile().navigationPointerOptions().has_value();
+        const float requiredHeight =
+            popupStyle.WindowPadding.y * 2 + ImGui::GetTextLineHeight() + 1.0f +
+            ImGui::GetFrameHeight() * 2 + buttonHeight * 2 +
+            popupStyle.ItemSpacing.y * 6 +
+            (hasFastScroll
+                 ? ImGui::GetFrameHeight() + 1 + popupStyle.ItemSpacing.y * 2
+                 : 0) +
+            (hasNavigationOptions ? ImGui::GetFrameHeight() * 2 + 1 +
+                                        popupStyle.ItemSpacing.y * 3
+                                  : 0);
+        positionToolbarPopup(
+            *toolbarWindow,
+            m_lastZoomBtnPos,
+            ImVec2(std::max(m_zoomPopupSize.x, requiredWidth),
+                   std::max(m_zoomPopupSize.y, requiredHeight)),
+            dpiScale);
+        const auto flags = ImGuiWindowFlags_NoTitleBar |
+                           ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                           ImGuiWindowFlags_NoSavedSettings |
+                           ImGuiWindowFlags_AlwaysAutoResize;
+        if ( ImGui::Begin("##TimelineZoomPopup", nullptr, flags) ) {
+            ImGui::TextUnformatted(
+                TR("ui.settings.visual.timeline_zoom").data());
+            ImGui::Separator();
+            // 每次读取最新快照，只修改缩放字段。
+            // 不使用浮层打开时的旧配置覆盖其他入口的后续修改。
+            auto  config = currentEditorConfig();
+            float percent =
+                std::clamp(config.visual.timelineZoom * 100.0f, 10.0f, 1000.0f);
+            bool changed = false;
+            // 对数滑条让常用低倍率有足够的拖动空间；禁止切入键盘输入模式。
+            // 合法范围严格为正，因此可以直接使用对数映射。
+            // 拖动负责连续调整，加减按钮负责可重复的细调。
+            // 所有提交统一限制范围，防止按钮加减越界。
+            ImGui::SetNextItemWidth(contentWidth);
+            if ( FeedbackSliderFloat("##TimelineZoomSlider",
+                                     &percent,
+                                     10.0f,
+                                     1000.0f,
+                                     "",
+                                     ImGuiSliderFlags_Logarithmic |
+                                         ImGuiSliderFlags_AlwaysClamp |
+                                         ImGuiSliderFlags_NoInput) ) {
+                // 仅拖动时吸附十个百分点，保留按钮或预设选择的五个百分点值。
+                percent = std::round(percent / 10.0f) * 10.0f;
+                changed = true;
+            }
+            // 原生滑条在返回前已绘制数值，必须隐藏原始文本再绘制吸附结果。
+            // 不能只在返回后修改配置，否则本帧仍会短暂显示未对齐的百分比。
+            if ( ImGui::IsItemActive() ) {
+                const float snapped = std::round(percent / 10.0f) * 10.0f;
+                changed |= snapped != percent;
+                percent = snapped;
+            }
+            // 复用滑条实际矩形和当前字体，使显示与本帧提交的数值完全一致。
+            // 装饰文字不创建新控件，保留滑条的鼠标捕获与反馈状态。
+            const auto zoomText  = fmt::format("{:.0f}%", percent);
+            const auto textSize  = ImGui::CalcTextSize(zoomText.c_str());
+            const auto sliderMin = ImGui::GetItemRectMin();
+            const auto sliderMax = ImGui::GetItemRectMax();
+            // 文本居中绘制，窗口自身裁剪仍然生效，不越过浮层边界。
+            // 非拖动状态保留预设或加减选择的五个百分点精度。
+            ImGui::GetWindowDrawList()->AddText(
+                ImVec2((sliderMin.x + sliderMax.x - textSize.x) * 0.5f,
+                       (sliderMin.y + sliderMax.y - textSize.y) * 0.5f),
+                ImGui::GetColorU32(ImGuiCol_Text),
+                zoomText.c_str());
+            const ImVec2 buttonSize(actionWidth, buttonHeight);
+            // 命中区随 DPI 缩放，不单纯依赖符号文字的宽度。
+            // 到达边界时保留按钮位置，仅禁用不可执行的方向。
+            // 百分比加减沿五个百分点网格移动，旧配置的零散值也会对齐。
+            // 不使用当前倍率乘法，避免连续点击时步长越来越大。
+            // 最终钳位还覆盖距离边界不足一个步长的情况。
+            // 禁用状态由当前数值推导，不保留可能失效的额外标志。
+            ImGui::BeginDisabled(percent <= 10.0f);
+            if ( FeedbackButton("-###TimelineZoomOut", buttonSize) ) {
+                // 微小容差只抵消倍率转百分比的舍入，避免整点跨过一档。
+                percent = (std::ceil(percent / 5.0f - 0.0001f) - 1.0f) * 5.0f;
+                changed = true;
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if ( FeedbackButton("100%###TimelineZoomReset", buttonSize) ) {
+                // 恢复默认无需双击、右键或键盘输入。
+                percent = 100.0f;
+                changed = true;
+            }
+            ImGui::SameLine();
+            ImGui::BeginDisabled(percent >= 1000.0f);
+            if ( FeedbackButton("+###TimelineZoomIn", buttonSize) ) {
+                // 向上选择下一个五的倍数，与减号的向下对齐语义对称。
+                percent = (std::floor(percent / 5.0f + 0.0001f) + 1.0f) * 5.0f;
+                changed = true;
+            }
+            ImGui::EndDisabled();
+            // 预设与加减按钮提供离散操作，不要求精确拖动或任何修饰键。
+            // 预设仅覆盖常用值，完整范围仍由滑条和加减提供。
+            // 稳定 ID 独立于显示文字，避免显示变化重建交互身份。
+            for ( const float preset : { 25.0f, 50.0f, 200.0f, 400.0f } ) {
+                if ( preset != 25.0f ) ImGui::SameLine();
+                const auto text = fmt::format(
+                    "{:.0f}%###TimelineZoomPreset{:.0f}", preset, preset);
+                if ( FeedbackButton(text.c_str(),
+                                    ImVec2(presetWidth, buttonHeight)) ) {
+                    percent = preset;
+                    changed = true;
+                }
+            }
+            if ( changed ) {
+                // 和画布滚轮保持相同合法范围；更新只发生于用户真正操作时。
+                // 不修改播放配置，因此调整不会触发音频速度变换。
+                // 应用端口负责将更新发布给编辑器，工具栏不直接接触会话。
+                config.visual.timelineZoom =
+                    std::clamp(percent / 100.0f, 0.1f, 10.0f);
+                updateEditorConfig(config);
+            }
+            // 快速滚动独立于缩放数值，只影响时间滚轮和框选边缘速度。
+            // 状态属于当前输入方案，不能通过 updateEditorConfig
+            // 写回永久视觉参数。
+            // 开关变化不创建谱面撤销节点，也不向逻辑线程发送虚假的零位移滚动。
+            // 经典空模式不提交控件，保留原窗口布局和物理 Shift 行为。
+            auto& scrollProfile = Interaction::activeProfile();
+            if ( const auto accelerated =
+                     scrollProfile.acceleratedScrolling() ) {
+                ImGui::Separator();
+                bool enabled = *accelerated;
+                if ( FeedbackCheckbox(TR("ui.mouse_scroll.fast").data(),
+                                      &enabled) )
+                    scrollProfile.setAcceleratedScrolling(enabled);
+                // 开关解释不占浮层宽度；中文、英文与高 DPI
+                // 下仍保持原按钮行完整。
+                if ( ImGui::IsItemHovered() )
+                    ImGui::SetTooltip("%s",
+                                      TR("ui.mouse_scroll.fast_hint").data());
+            }
+            // 两个导航开关组成独立分隔组，不改写主画布的缩放和滚动参数。
+            // 默认关闭仍表示支持此能力，不能以字段值决定控件是否出现。
+            if ( const auto navigation =
+                     scrollProfile.navigationPointerOptions() ) {
+                ImGui::Separator();
+                // 两个标量按值编辑，不保留窗口或快照的跨帧指针。
+                auto options = *navigation;
+                // 两个控件只改变各自表面的输入解释，不能回写主画布缩放或物件吸附配置。
+                // 每个控件结束后立即保留最新值，同帧点击不会用旧副本覆盖另一个字段。
+                bool changedNavigation = FeedbackCheckbox(
+                    TR("ui.mouse_navigation.snap_scrub").data(),
+                    &options.m_snapScrub);
+                if ( ImGui::IsItemHovered() )
+                    ImGui::SetTooltip(
+                        "%s", TR("ui.mouse_navigation.snap_scrub_hint").data());
+                // 使用按位或合并结果，不能用逻辑或短路而跳过第二个控件的绘制。
+                changedNavigation |= FeedbackCheckbox(
+                    TR("ui.mouse_navigation.fast_preview_zoom").data(),
+                    &options.m_fastPreviewZoom);
+                if ( ImGui::IsItemHovered() )
+                    ImGui::SetTooltip(
+                        "%s",
+                        TR("ui.mouse_navigation.fast_preview_zoom_hint")
+                            .data());
+                // 未变化不重复发布，也不创建谱面撤销记录或触发配置保存。
+                // 方案退出会清除这些临时意图，经典设置不参与此更新。
+                if ( changedNavigation )
+                    scrollProfile.setNavigationPointerOptions(options);
+            }
+            // 明确的关闭按钮保证触屏无悬浮、无右键时也能退出。
+            if ( FeedbackButton(TR("ui.window.close").data()) )
+                m_showZoomPopup = false;
+            // 实际尺寸随字体、翻译和 DPI 改变，不能固定为初始估计值。
+            // 下一帧使用此值约束浮层，避免右侧或底部越过视口。
+            const auto size = ImGui::GetWindowSize();
+            m_zoomPopupSize = { size.x, size.y };
+        }
+        ImGui::End();
+    }
 
     // --- 绘制分拍数量设置悬浮窗 ---
     //
@@ -4813,6 +5081,8 @@ bool ToolbarView::drawIconButton(const char* icon, const char* id,
 /// m_currentTool 是本帧显示快照，权威状态由 update 开头从应用服务同步。
 /// 点击非活动按钮先更新本地快照以立即反馈，再向逻辑层投递 CmdChangeTool。
 /// 重复点击普通工具不会退出工具；只有 Layout 工具有显式再次点击恢复语义。
+/// 纯鼠标的活动 Draw 按钮再次点击会打开擦除选项，仍然不退出绘制工具。
+/// 弹窗恢复正文的字体和默认配色，不继承仅用于图标按钮的展示状态。
 ///
 /// 焦点恢复只针对上一帧已经聚焦的 TimelineWindow，避免点击工具栏后编辑器
 /// 键盘输入永久离开画布，同时不抢占文件管理器、设置页等其他窗口焦点。
@@ -4824,6 +5094,10 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
 {
     // 活动态来自引擎同步后的当前工具成员。
     bool isActive = (m_currentTool == tool);
+    // 仅显式提供擦除粒度的方案开放绘制选项，经典按钮重复点击仍无副作用。
+    const bool mouseDrawOptions =
+        tool == Logic::EditTool::Draw &&
+        Interaction::activeProfile().eraseWholePolyline().has_value();
 
     if ( isActive ) {
         // 三种按钮状态固定同色，鼠标经过不会掩盖当前工具语义。
@@ -4895,6 +5169,11 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
             }
         }
     }
+    // 再次左键点击已激活的绘制按钮即可设置，触屏也无需发现右键工具栏菜单。
+    // 擦除或平移尚未松开时不打开，避免改变一笔仍进行中的交互解释。
+    if ( clicked && isActive && mouseDrawOptions &&
+         !Interaction::mouseDown(1) && !Interaction::mouseDown(2) )
+        ImGui::OpenPopup("MouseDrawOptions");
     ImGui::PopID();
 
     // 工具提示在基础说明后追加当前配置对应的快捷键文本。
@@ -4909,10 +5188,74 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
         tooltipText += shortcutText;
         tooltipText += ")";
     }
+    if ( mouseDrawOptions ) {
+        tooltipText += "\n";
+        tooltipText += TR("ui.mouse_drawing.open_options").data();
+    }
     drawTooltip(tooltipText.c_str());
 
     // 两种样式分支都保证压入三项颜色，统一恢复。
     ImGui::PopStyleColor(3);
+    if ( mouseDrawOptions ) {
+        // 弹窗沿用绘制按钮的稳定 ID，但不继承活动按钮的固定背景色。
+        ImGui::PushID(static_cast<int>(tool));
+        if ( ImGui::BeginPopup("MouseDrawOptions") ) {
+            // 工具栏自身把间距置零，正文弹窗恢复常规间距，避免单选项挤在一起。
+            const float optionScale =
+                Config::AppConfig::instance().getWindowContentScale();
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                                ImVec2(8 * optionScale, 4 * optionScale));
+            ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                                ImVec2(4 * optionScale, 3 * optionScale));
+            // 单选命中高度不能继承工具栏图标的零内边距，正文设置需要完整点击区。
+            // 仅本弹窗覆盖这两项样式，关闭后不改变经典工具栏和其他窗口。
+            // 工具栏可能正使用图标字体，正文必须显式切回皮肤内容字体。
+            ImFont* bodyFont =
+                Config::SkinManager::instance().getFont("content");
+            if ( bodyFont ) ImGui::PushFont(bodyFont, bodyFont->LegacySize);
+            ImGui::TextUnformatted(TR("ui.mouse_drawing.options").data());
+            ImGui::Separator();
+            auto& profile = Interaction::activeProfile();
+            bool  whole   = profile.eraseWholePolyline().value_or(false);
+            // 两个选项表达后续擦除意图，不伪造 Shift，也不立即编辑谱面。
+            // 该值仅存在当前方案内，不保存完整编辑器配置或触发资源更新。
+            // 当前擦除事务已经起笔锁存，因此单选变化不会重解释旧手势。
+            if ( FeedbackRadioButton(
+                     TR("ui.mouse_drawing.erase_segment").data(), !whole) ) {
+                whole = false;
+                profile.setEraseWholePolyline(false);
+            }
+            if ( FeedbackRadioButton(TR("ui.mouse_drawing.erase_whole").data(),
+                                     whole) )
+                profile.setEraseWholePolyline(true);
+            ImGui::Separator();
+            // Timing 点按与拖动自动分流，不再提供需要来回切换的模式控件。
+            // 提示沿用普通文本换行，既有擦除粒度与临时免吸附开关保持独立。
+            ImGui::TextWrapped("%s", TR("ui.mouse_drawing.timing_hint").data());
+            ImGui::Separator();
+            ImGui::TextUnformatted(TR("ui.mouse_drawing.cancel_hint").data());
+            // 提示只说明纯鼠标的取消组合，不向经典方案传播虚拟按键。
+            // 字体和弹窗栈均在同一条件分支配对，缺失正文时使用默认字体。
+            if ( sourceManager ) {
+                // - 绘制选项属于独立弹窗，工具按钮的亮区不能覆盖实际单选控件。
+                // -
+                // 只补充当前练习的可交互区域，不把弹窗当成教程完成的业务动作。
+                // - 弹窗关闭后停止上报，遮罩自然恢复到画布和工具栏范围。
+                // - 仅纯鼠标选项经过本分支，经典工具按钮和键盘教学不改变。
+                const auto minimum = ImGui::GetWindowPos();
+                const auto size    = ImGui::GetWindowSize();
+                sourceManager->walkthroughSpotlight().reportCompanionRegion(
+                    "compose.lesson.practice",
+                    minimum,
+                    { minimum.x + size.x, minimum.y + size.y },
+                    ImGui::GetWindowViewport());
+            }
+            if ( bodyFont ) ImGui::PopFont();
+            ImGui::PopStyleVar(2);
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
+    }
 }
 
 /// @brief 绘制布局工具按钮并实现再次点击返回前一工具的切换语义。
@@ -5057,6 +5400,18 @@ void ToolbarView::renderMagnetPopup(float dpiScale)
             appConfig.save();
         };
 
+        auto& profile = Interaction::activeProfile();
+        if ( profile.selectionContextMenu() ) {
+            // 本次交互覆盖层不写回 editorConfig；再次切换方案时恢复原吸附。
+            // 不能调用 persistConfig，否则临时操作会覆盖用户永久磁吸偏好。
+            // 把它与下方永久配置分隔，保留已有滚动吸附与物件吸附的独立性。
+            // 不将本开关映射为通用 Ctrl，避免影响选择和滚轮加速语义。
+            bool bypass = profile.bypassSnapping();
+            if ( FeedbackCheckbox(TR("ui.mouse_drawing.bypass_snap").data(),
+                                  &bypass) )
+                profile.setBypassSnapping(bypass);
+            ImGui::Separator();
+        }
         // 滚动画布吸附与物件放置吸附为独立开关。
         // 先复制到 bool 以适配 ImGui 可写指针接口。
         bool scrollSnap = editorConfig.settings.scrollSnap;

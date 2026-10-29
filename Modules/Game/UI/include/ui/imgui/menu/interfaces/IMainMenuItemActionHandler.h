@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string_view>
+
 namespace MMM::UI
 {
 struct MainMenuContext;
@@ -11,6 +13,12 @@ class IMainMenuItemActionHandler
 public:
     /// @brief 默认析构菜单项业务处理接口。
     virtual ~IMainMenuItemActionHandler() = default;
+
+    /// @brief 稳定动作身份，供不同操作方案直接请求同一个业务动作。
+    virtual std::string_view operationId() const = 0;
+
+    /// @brief 对应统一快捷键目录的动作身份；无键盘入口的动作返回空。
+    virtual std::string_view shortcutActionId() const { return {}; }
 
     /// @brief 更新 action 持有的跨帧状态。
     /// @param context 单帧主菜单上下文。
@@ -57,6 +65,13 @@ public:
     /// @param activation 菜单项激活载荷。
     virtual void execute(MainMenuContext&              context,
                          const MainMenuItemActivation& activation) = 0;
+
+    /// @brief 语义激活入口；普通动作直接执行，勾选动作先翻转再提交。
+    virtual void perform(MainMenuContext&              context,
+                         const MainMenuItemActivation& activation)
+    {
+        execute(context, activation);
+    }
 
     /// @brief 渲染 action 触发的延迟窗口或弹窗。
     /// @param context 单帧主菜单上下文。

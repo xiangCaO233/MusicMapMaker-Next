@@ -154,6 +154,30 @@ std::string formatShortcut(const Config::ShortcutBinding& binding);
 bool isShortcutPressed(const Config::ShortcutBinding& binding,
                        bool                           repeat = false);
 
+/// @brief 通过稳定动作身份查询绑定，菜单、画布和新方案共用同一个入口。
+/// @details
+/// 仅在默认硬编码组合未改动时保留其宽松修饰键语义，用户重绑定严格匹配。
+/// @warning 每帧只读配置和固定目录，不分配或保存配置。
+/// @param action 固定动作字段名，目录查找失败即不触发任何编辑操作。
+/// @param repeat 调用者决定是否重复，工具切换和菜单通常只消费首帧。
+/// @param legacyModifiers
+/// 当前表面对旧默认组合的额外修饰键要求；表格用零保持严格匹配。
+/// @return 当前方案解析后的绑定在这一帧命中时返回 true。
+/// @details 动作身份与主键不同，重映射复制不能顺带改掉所有字母 C 的操作。
+/// 配置引用由 AppConfig 持有，方案返回的引用同样必须稳定。
+/// 禁用或空键立即拒绝，不以其他动作的默认键补齐。
+/// 只有完整等于旧默认组合时才启用历史修饰键通配规则。
+/// 新绑定采用严格匹配，避免额外 Ctrl 或 Shift 同时触发多个编辑动作。
+/// 主键查询也经过表面输入映射，按下、保持与释放使用同一键身份。
+/// 设置页录制仍读取物理键，不把已经解释后的键再次保存为配置。
+/// 调用者必须先检查弹窗、文本焦点和录制隔离，本 helper 不取得输入所有权。
+/// BPM 和主画布继续各自决定动作归属，不能单凭绑定命中转交到后台谱面。
+/// 目录是固定小表，不在热路径生成哈希字典或扫描文件系统。
+/// 逻辑命令与保存流程在命中后单独执行，此函数本身没有编辑副作用。
+bool isActionShortcutPressed(
+    std::string_view action, bool repeat = false,
+    std::optional<unsigned> legacyModifiers = std::nullopt);
+
 /// @brief 获取快捷键录制全局状态。
 /// @return 当前进程内共享的录制状态。
 /// @note 状态只由 UI 线程访问，不使用原子同步。

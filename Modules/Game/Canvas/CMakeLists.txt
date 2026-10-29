@@ -35,11 +35,17 @@ add_library(
   # 编辑练习的快照核对与目标投影单独编译，减轻主画布更新文件的职责。
   src/Basic2DCanvas_WalkthroughEditing.cpp
   src/Basic2DCanvas_Interaction.cpp
+  # 右键候选验证和菜单绘制单独维护，避免主画布输入路由继续膨胀。
+  src/Basic2DCanvas_ContextMenu.cpp
+  # 批注菜单只管理 UI 身份和编辑器缓冲，独立于画布绘制与谱面命令实现。
+  src/Basic2DCanvas_AnnotationMenu.cpp
   src/Basic2DCanvas_Rendering.cpp
   src/MarqueeAutoScroll.cpp
   src/PreviewCanvas.cpp
   src/TimelineCanvas.cpp
   src/TimelineCanvas_Interaction.cpp
+  # 时间点右键菜单复用时间线本地选择、命令和吸附，不借用主画布动作。
+  src/TimelineCanvas_ContextMenu.cpp
   # 插值段落编辑与原函数预览独立维护，不在 UI 中展开导出事件。
   src/TimelineCanvas_Interpolation.cpp
   # 模板库和整组放置窗口独立编译，不把个人配置 IO 放入画布更新。
@@ -314,7 +320,7 @@ mmm_add_test_executable(
   tests/TimingInterpolationControlsTest.cpp src/TimingInterpolationControls.cpp)
 target_include_directories(TimingInterpolationControlsTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(TimingInterpolationControlsTest PRIVATE Config MMM Log
+target_link_libraries(TimingInterpolationControlsTest PRIVATE UI Config MMM Log
                                                               3rd_imgui)
 # 独立登记用例，鼠标输入夹具不写用户配置和 imgui.ini。
 mmm_register_test_case(NAME TimingInterpolationControlsTest COMMAND
@@ -335,3 +341,32 @@ mmm_add_test_executable(Canvas TimelineStopCreationTest
 target_link_libraries(TimelineStopCreationTest PRIVATE Canvas)
 mmm_register_test_case(NAME TimelineStopCreationTest COMMAND
                        TimelineStopCreationTest)
+
+# 用真实鼠标菜单验证 Timing 选区、批量命令与吸附锚点，避免误走音符剪贴板。
+mmm_add_test_executable(Canvas TimingContextMenuTest
+                        tests/TimingContextMenuTest.cpp)
+target_link_libraries(TimingContextMenuTest PRIVATE Canvas)
+mmm_register_test_case(NAME TimingContextMenuTest COMMAND TimingContextMenuTest)
+
+# 新方案通过真实主画布控制器接管输入，不能只验证接口替身的返回值。 用例同时验证独占命令出口、坐标投影和释放后切回经典方案。
+mmm_add_test_executable(Canvas EditorInteractionSurfaceTest
+                        tests/EditorInteractionSurfaceTest.cpp)
+target_link_libraries(EditorInteractionSurfaceTest PRIVATE Canvas)
+mmm_register_test_case(NAME EditorInteractionSurfaceTest COMMAND
+                       EditorInteractionSurfaceTest)
+
+# Timing 表格通过真实 CPU ImGui 帧验证行选择、过滤全选和经典修饰键隔离。 用例链接 Canvas 本体，避免只测独立集合 helper
+# 而遗漏控件绑定与释放顺序。
+mmm_add_test_executable(Canvas TimingTableMouseSelectionTest
+                        tests/TimingTableMouseSelectionTest.cpp)
+target_link_libraries(TimingTableMouseSelectionTest PRIVATE Canvas)
+mmm_register_test_case(NAME TimingTableMouseSelectionTest COMMAND
+                       TimingTableMouseSelectionTest)
+
+# 批注菜单只在点击编辑时准备缓冲，真实 ImGui 回归覆盖只读、播放与重载失效。 独立登记便于排查输入归属，不依赖 GPU、音频后端或操作系统剪贴板。 -
+# 夹具仅构造进程内快照与字体，禁止向源码测试资源目录写出配置。
+mmm_add_test_executable(Canvas MouseAnnotationMenuTest
+                        tests/MouseAnnotationMenuTest.cpp)
+target_link_libraries(MouseAnnotationMenuTest PRIVATE Canvas)
+mmm_register_test_case(NAME MouseAnnotationMenuTest COMMAND
+                       MouseAnnotationMenuTest)

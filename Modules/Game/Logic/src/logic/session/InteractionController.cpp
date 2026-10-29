@@ -189,6 +189,7 @@ void clearSelection(SessionContext& ctx)
     ctx.isMarqueeSelectionDirty = false;
     ctx.marqueeBoxes.clear();
 
+    resetMarqueeSelectionBaseline(ctx);
     clearChartObjectSelection(ctx);
 }
 
@@ -205,6 +206,7 @@ void detachMarqueeSelection(SessionContext& ctx)
     ctx.marqueeIsAdditive       = false;
     ctx.isMarqueeSelectionDirty = false;
     ctx.marqueeBoxes.clear();
+    resetMarqueeSelectionBaseline(ctx);
 }
 
 /// @brief 解析分区全选应使用的轨道区。
@@ -1594,9 +1596,22 @@ void InteractionController::handleCommand(const CmdSelectEntity& cmd)
     auto& ic          = registry.get<InteractionComponent>(cmd.entity);
     bool  wasSelected = ic.isSelected;
 
+    if ( cmd.selectionOperation &&
+         *cmd.selectionOperation != SelectionOperation::Replace ) {
+        // 显式追加不切换已选对象；减选也绝不反向选入未选对象。
+        // 手动点选解除旧框驱动，后续新序列以当前实体集合重新建立基线。
+        detachMarqueeSelection(m_ctx);
+        setChartObjectSelected(
+            m_ctx,
+            cmd.kind,
+            cmd.entity,
+            *cmd.selectionOperation == SelectionOperation::Add);
+        return;
+    }
+
     // 叠加点击按当前状态切换单个实体，并解除旧框对集合的驱动。
     // 否则下一次框选脏刷新可能把手动取消的对象重新选中。
-    if ( !cmd.clearOthers ) {
+    if ( !cmd.selectionOperation && !cmd.clearOthers ) {
         detachMarqueeSelection(m_ctx);
         setChartObjectSelected(m_ctx, cmd.kind, cmd.entity, !ic.isSelected);
         return;
@@ -2681,8 +2696,8 @@ void InteractionController::handleCommand(const CmdEndErase& cmd)
 /// @brief 根据当前框选区域重新计算实体选中状态。
 /// @warning 逻辑热路径：框选框变化时执行；使用已缓存的排序/视口/图集数据，
 /// 禁止文件系统访问、阻塞等待或完整无关 ECS 遍历。
-/// @param forceFullSync 忽略脏标记并按现有框替换选择，不保留叠加旧集合。
-/// @note 无有效框时不修改已有选择，清空语义由显式选择命令处理。
+/// @param forceFullSync 忽略脏标记；经典模式替换旧集合，显式模式仍从基线重放。
+/// @note 无有效框时经典模式保持选择，显式模式恢复基线；清空由选择命令处理。
 void InteractionController::updateMarqueeSelection(bool forceFullSync)
 {
     // 普通 update 只做脏标记检查，框未变化时跳过候选和几何计算。
@@ -2698,12 +2713,21 @@ void InteractionController::updateMarqueeSelection(bool forceFullSync)
     // 按每个框自己的相机准备屏幕数据，后续候选重复使用这些结果。
     // 没有有效框时不先清除选中集合，避免缺少视口时丢失选择。
     const auto preparedBoxes = prepareMarqueeBoxes(m_ctx, cache);
-    if ( preparedBoxes.empty() ) return;
+    if ( preparedBoxes.empty() ) {
+        // 唯一的减选框缩成零面积时也要即时恢复基线，不能等到松手。
+        // 经典模式仍保留无有效框时不改变选择的既有约定。
+        if ( m_ctx.marqueeUsesOperations )
+            restoreMarqueeSelectionBaseline(m_ctx);
+        return;
+    }
 
     auto mode = m_ctx.lastConfig.settings.selectionMode;
     // 普通替换与强制同步先清旧选择，再建立框的并集。
     // 叠加模式保留旧集合，仅把新命中的候选加入。
-    if ( forceFullSync || !m_ctx.marqueeIsAdditive ) {
+    if ( m_ctx.marqueeUsesOperations ) {
+        // 从起始选择重放有序框，缩小拖动范围时能恢复刚才临时减掉的对象。
+        restoreMarqueeSelectionBaseline(m_ctx);
+    } else if ( forceFullSync || !m_ctx.marqueeIsAdditive ) {
         clearSelectedEntityFlags(m_ctx);
     }
 
@@ -2714,7 +2738,10 @@ void InteractionController::updateMarqueeSelection(bool forceFullSync)
     collectMarqueeSampleCandidates(m_ctx, preparedBoxes, candidates);
 
     for ( const auto& candidate : candidates ) {
-        bool isSelectedInAny = false;
+        // 候选粗筛可能覆盖框外基线对象；未命中任何框时必须保留其原状态。
+        bool isSelectedInAny = m_ctx.marqueeUsesOperations &&
+                               selectedChartObjectIndex(m_ctx, candidate.kind)
+                                   .contains(candidate.entity);
         if ( candidate.kind == ChartObjectKind::PlayerNote ||
              candidate.kind == ChartObjectKind::DraftNote ) {
             if ( !m_ctx.noteRegistry.valid(candidate.entity) ||
@@ -2731,17 +2758,20 @@ void InteractionController::updateMarqueeSelection(bool forceFullSync)
                  note.m_isSubNote ) {
                 continue;
             }
-            // 多个框按并集处理，命中一个就停止扫描后续框。
+            // 经典框按并集处理，显式框依次覆盖命中结果，不能提前停止。
             // 严格或相交规则由几何助手决定，不在这里重复计算包围框。
             for ( const auto& box : preparedBoxes ) {
                 if ( noteMatchesSelection(note, box.screen, box.rect, mode) ) {
-                    isSelectedInAny = true;
-                    break;
+                    isSelectedInAny =
+                        !m_ctx.marqueeUsesOperations ||
+                        box.box.operation != SelectionOperation::Subtract;
+                    // 显式框按时间顺序覆盖命中结果，后面的加选可恢复先前减选。
+                    if ( !m_ctx.marqueeUsesOperations ) break;
                 }
             }
-            if ( !isSelectedInAny ) continue;
+            if ( !isSelectedInAny && !m_ctx.marqueeUsesOperations ) continue;
             setChartObjectSelected(
-                m_ctx, candidate.kind, candidate.entity, true);
+                m_ctx, candidate.kind, candidate.entity, isSelectedInAny);
             continue;
         }
 
@@ -2761,13 +2791,17 @@ void InteractionController::updateMarqueeSelection(bool forceFullSync)
                 continue;
             }
             if ( sampleMatchesSelection(sample, box.screen, box.rect, mode) ) {
-                isSelectedInAny = true;
-                break;
+                isSelectedInAny =
+                    !m_ctx.marqueeUsesOperations ||
+                    box.box.operation != SelectionOperation::Subtract;
+                if ( !m_ctx.marqueeUsesOperations ) break;
             }
         }
-        if ( !isSelectedInAny ) continue;
-        setChartObjectSelected(
-            m_ctx, ChartObjectKind::AudioSample, candidate.entity, true);
+        if ( !isSelectedInAny && !m_ctx.marqueeUsesOperations ) continue;
+        setChartObjectSelected(m_ctx,
+                               ChartObjectKind::AudioSample,
+                               candidate.entity,
+                               isSelectedInAny);
     }
 }
 

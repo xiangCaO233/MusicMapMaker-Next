@@ -13,6 +13,7 @@
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "ui/UIManager.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/LayoutContext.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/TimeFormatUtils.h"
@@ -453,9 +454,9 @@ void AudioWaveformView::update(UIManager* sourceManager)
             // 悬浮绿色竖线跟随指针；拖拽时额外预览平移后的主画布视野框。
             if ( ImPlot::IsPlotHovered() || s_lastActive[chanIdx] ) {
                 // Plot 屏幕矩形用于后续鼠标坐标归一化命令。
-                ImVec2 plotMin = ImPlot::GetPlotPos();
-                ImVec2 plotMax = { plotMin.x + ImPlot::GetPlotSize().x,
-                                   plotMin.y + ImPlot::GetPlotSize().y };
+                ImVec2 plotMin         = ImPlot::GetPlotPos();
+                ImVec2 plotMax         = { plotMin.x + ImPlot::GetPlotSize().x,
+                                           plotMin.y + ImPlot::GetPlotSize().y };
                 double hoverVisualTime = currentHoverVisualTime;
                 double hoverAudioTime  = currentHoverAudioTime;
 
@@ -529,16 +530,15 @@ void AudioWaveformView::update(UIManager* sourceManager)
                     // 拖拽期间持续发布相对 Plot 鼠标位置和预览视觉时间。
                     // 宽高随命令一起发送，逻辑层可独立把局部坐标归一化到画布视野。
                     ImVec2 mousePos = ImGui::GetMousePos();
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(
-                            Logic::CmdSetMousePosition{ "AudioWaveform",
-                                                        mousePos.x - plotMin.x,
-                                                        mousePos.y - plotMin.y,
-                                                        plotMax.x - plotMin.x,
-                                                        plotMax.y - plotMin.y,
-                                                        true,
-                                                        true,
-                                                        hoverVisualTime }));
+                    Interaction::dispatchCommand(Event::LogicCommandEvent(
+                        Logic::CmdSetMousePosition{ "AudioWaveform",
+                                                    mousePos.x - plotMin.x,
+                                                    mousePos.y - plotMin.y,
+                                                    plotMax.x - plotMin.x,
+                                                    plotMax.y - plotMin.y,
+                                                    true,
+                                                    true,
+                                                    hoverVisualTime }));
                 }
 
                 if ( ImGui::IsItemDeactivated() &&
@@ -546,21 +546,19 @@ void AudioWaveformView::update(UIManager* sourceManager)
                     // 左键释放立即提交最终音频 Seek，不使用固定时长等待。
                     // Seek 与 inactive
                     // 鼠标命令保持同帧顺序，先确定播放位置再结束预览。
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(
-                            Logic::CmdSeek{ hoverAudioTime }));
+                    Interaction::dispatchCommand(Event::LogicCommandEvent(
+                        Logic::CmdSeek{ hoverAudioTime }));
                     // 同帧发布 inactive 鼠标状态，结束主画布预览拖拽。
                     ImVec2 mousePos = ImGui::GetMousePos();
-                    Event::EventBus::instance().publish(
-                        Event::LogicCommandEvent(
-                            Logic::CmdSetMousePosition{ "AudioWaveform",
-                                                        mousePos.x - plotMin.x,
-                                                        mousePos.y - plotMin.y,
-                                                        plotMax.x - plotMin.x,
-                                                        plotMax.y - plotMin.y,
-                                                        false,
-                                                        false,
-                                                        -1.0 }));
+                    Interaction::dispatchCommand(Event::LogicCommandEvent(
+                        Logic::CmdSetMousePosition{ "AudioWaveform",
+                                                    mousePos.x - plotMin.x,
+                                                    mousePos.y - plotMin.y,
+                                                    plotMax.x - plotMin.x,
+                                                    plotMax.y - plotMin.y,
+                                                    false,
+                                                    false,
+                                                    -1.0 }));
                 }
             }
         }
@@ -762,8 +760,8 @@ void AudioWaveformView::updateEnvelopes(double visualTime, double totalTime,
     for ( int i = 0; i < m_samplePoints; ++i ) {
         // 固定采样点均匀覆盖整个可见时间窗。
         // 分母使用点数而非点数减一，保持历史右端开区间采样语义。
-        double t   = viewStart + (static_cast<double>(i) / m_samplePoints) *
-                                     (viewEnd - viewStart);
+        double t = viewStart + (static_cast<double>(i) / m_samplePoints) *
+                                   (viewEnd - viewStart);
         m_times[i] = t;
 
         // 缓存索引属于音频时间，需要扣除波形视觉偏移。

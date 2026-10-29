@@ -425,6 +425,20 @@ int main(int argc, char** argv)
             if ( body.find("草稿") != std::string::npos ||
                  body.find("工具") == std::string::npos )
                 return 183;
+            // 教材同时提供两套文案，读取纯鼠标版本不能覆盖经典原文或丢失语言回退。
+            // 实操阶段不再提示任何 Shift，预览和复播则沿用相同的播放说明。
+            // - 两种语言都验证正文和突出提示，避免其中一个入口继续要求键盘。
+            // - 经典正文仍按原字段读取，替代文本不能覆盖原教程或重置步骤身份。
+            for ( const auto language : { "zh_cn", "en_us" } ) {
+                if ( !step.m_mouseOnlyBody || !step.m_guide ||
+                     !step.m_guide->m_mouseOnlyPrompt ||
+                     step.body(language, true).find("Shift") !=
+                         std::string::npos ||
+                     step.m_guide->prompt(language, true).find("Shift") !=
+                         std::string::npos ||
+                     step.body(language, false) != step.m_body.get(language) )
+                    return 188;
+            }
             const auto lessonIndex = step.m_composeLesson->m_lessonIndex;
             // 这些段落通过 Shift 拖拽提交新路径，需显式指出左键手势。
             // 其余调整段使用拖拽工具，不应错误地强加 Shift 条件。

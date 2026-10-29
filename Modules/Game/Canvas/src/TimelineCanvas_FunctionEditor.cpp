@@ -1,5 +1,6 @@
 #include "canvas/TimelineCanvas.h"
 #include "mmm/timing/TimingInterpolationAlgorithms.h"
+#include "ui/interaction/EditorInteraction.h"
 
 #include "canvas/TimingFormula.h"
 #include "canvas/TimingInterpolationPreview.h"
@@ -350,7 +351,7 @@ void TimelineCanvas::renderTimingFunctionEditor()
             const float cellWidth = widest +
                                     ImGui::GetStyle().FramePadding.x * 2 +
                                     ImGui::GetStyle().ItemSpacing.x;
-            const auto  columns   = static_cast<std::size_t>(std::max(
+            const auto columns = static_cast<std::size_t>(std::max(
                 1.f, std::floor(ImGui::GetContentRegionAvail().x / cellWidth)));
             for ( std::size_t i = 0; i < SYMBOLS.size(); ++i ) {
                 if ( i % columns ) ImGui::SameLine();
@@ -487,7 +488,8 @@ void TimelineCanvas::renderTimingFunctionEditor()
     // 仅左键绘制手势更新格点，鼠标离开后仍按有效范围夹取。
     // 每帧覆盖相邻旧点和新点之间的全部格点，不遗漏快速移动。
     // 鼠标方向倒转仍使用相同线性补齐规则。
-    if ( ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+    if ( ImGui::IsItemActive() &&
+         UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
         const auto   mouse = ImGui::GetIO().MousePos;
         const double ratio = std::clamp(
             static_cast<double>((mouse.x - origin.x) / size.x), 0.0, 1.0);

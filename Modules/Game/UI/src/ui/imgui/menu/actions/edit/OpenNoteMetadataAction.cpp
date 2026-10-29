@@ -2,6 +2,7 @@
 #include "logic/EditorEngine.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -13,6 +14,13 @@ namespace
 class OpenNoteMetadataAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "OpenNoteMetadataAction";
+    }
+
     /// @brief 仅在当前会话存在选中玩家物件或自动采样时允许打开。
     /// @param context 统一菜单上下文，本检查无需读取。
     /// @return 存在可编辑图表对象选择时返回 true。

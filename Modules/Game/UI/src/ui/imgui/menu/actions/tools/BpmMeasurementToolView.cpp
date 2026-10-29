@@ -26,6 +26,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/SpectrumTimeMapping.h"
 #include "ui/imgui/menu/actions/tools/BpmAutomaticMeasurementPolicy.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/LayoutContext.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIThemeUtils.h"
@@ -797,7 +798,7 @@ PlaybackTimelineState readPlaybackTimelineState(BpmPlaybackRoute route)
     state.visualTime = state.audioTime + state.visualOffset;
     state.totalTime  = getPlaybackTotalTime(route, audioManager);
     state.isPlaying  = getPlaybackStatus(route, audioManager) ==
-                       Audio::PlaybackStatus::Playing;
+                      Audio::PlaybackStatus::Playing;
 
     if ( route != BpmPlaybackRoute::SynchronizedWithEditor ) {
         // audition 路由到此已经获得完整状态，无需查询画布同步缓冲。
@@ -1044,6 +1045,11 @@ void BpmMeasurementToolView::requestAutomaticMeasurement(
 /// - 根据窗口状态消抖或强制保存偏好。
 void BpmMeasurementToolView::update(UIManager* sourceManager)
 {
+    // 测量工具的自定义手势按独立表面解释，避免继承调用方画布的按键映射。
+    // 作用域覆盖全部子绘制，并在提前返回时恢复外层表面，防止影响后续视图。
+    const Interaction::SurfaceScope interactionScope(
+        Interaction::Surface::BpmTool);
+
     // 项目切换期间会替换会话和资源列表，禁止读取正在迁移的对象。
     const bool projectTransition =
         sourceManager && sourceManager->isProjectTransitionInProgress();
@@ -1133,7 +1139,7 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
         ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows);
     const bool toolFocused =
         ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-    if ( (toolHovered && (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+    if ( (toolHovered && (Interaction::mouseClicked(ImGuiMouseButton_Left) ||
                           input.MouseWheel != 0.0f)) ||
          (toolFocused && input.WantTextInput && ImGui::IsAnyItemActive()) )
         beginMeasurementHistoryGesture();
@@ -1186,7 +1192,7 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
     // 数值控件的编辑可以持续多帧，鼠标释放不一定表示文本编辑已结束。
     // 自定义绘图交互没有 ImGui ActiveId，必须同时检查自身拖动捕获。
     // 鼠标在画布外释放也允许结束事务，不要求结束帧仍悬浮工具。
-    if ( !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+    if ( !Interaction::mouseDown(ImGuiMouseButton_Left) &&
          !ImGui::IsAnyItemActive() && !m_isBeatMarkerDragging &&
          !m_isPlaybackCursorDragging && !m_isTimelinePanning )
         finishMeasurementHistoryGesture();
@@ -2611,7 +2617,7 @@ void BpmMeasurementToolView::renderOverviewTimelineScrollbar(const ImVec2& size)
     }
 
     const bool active = ImGui::IsItemActive();
-    if ( active && ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+    if ( active && Interaction::mouseDown(ImGuiMouseButton_Left) ) {
         // 首次按下与后续拖动共用路径，点击也能立即居中并 seek。
         const bool dragStarted       = !m_isOverviewTimelineDragging;
         m_isOverviewTimelineDragging = true;
@@ -2631,7 +2637,7 @@ void BpmMeasurementToolView::renderOverviewTimelineScrollbar(const ImVec2& size)
             // 已加载时拖动既导航视野也控制播放，保持指针不脱离中心。
             seekPlaybackToCanvasTime(targetCanvasTime);
         }
-    } else if ( !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+    } else if ( !Interaction::mouseDown(ImGuiMouseButton_Left) ) {
         // 在控件外释放鼠标也必须结束拖动，防止状态黏住。
         m_isOverviewTimelineDragging = false;
     }
@@ -2753,8 +2759,8 @@ void BpmMeasurementToolView::updateMetronomePlayback()
         std::abs(m_metronomeScheduledBeatLength - activeBeatLength) > 1e-9;
     // 超过两拍或逆向移动视为 seek，不能沿用连续播放游标。
     const double jumpThreshold = std::max(0.25, activeBeatLength * 2.0);
-    const bool   jumped = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
-                          audioTime - m_lastMetronomeAudioTime > jumpThreshold;
+    const bool   jumped        = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
+                        audioTime - m_lastMetronomeAudioTime > jumpThreshold;
     // 修改视觉偏移使未来预约失效，不能让旧时间的一拍与新时间的一拍同时响。
     // 只清除本工具的两个音效池，不改动歌曲 transport 或其他编辑器音效。
     if ( m_metronomeScheduleInitialized && (gridChanged || jumped) ) {
@@ -2857,7 +2863,7 @@ bool BpmMeasurementToolView::ensureMetronomeSoundEffects()
     // 皮肤可分别覆盖普通拍和重拍音效；缺项时回退内置资源路径。
     const auto& skinData         = Config::SkinManager::instance().getData();
     auto        resolveAudioPath = [&](const char*                  key,
-                                       const std::filesystem::path& fallback) {
+                                const std::filesystem::path& fallback) {
         if ( const auto it = skinData.audioPaths.find(key);
              it != skinData.audioPaths.end() ) {
             // 皮肤表记录的路径已经由 SkinManager 解析为文件系统路径。
@@ -3065,7 +3071,7 @@ void BpmMeasurementToolView::renderWaveformPlot(const ImVec2& size)
                 mousePos.x, 0.0, std::max(0.0, canvasDuration));
             ImGui::SetTooltip(
                 "%s", MMM::UI::Utils::formatCanvasTime(hoverTime).c_str());
-            if ( ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) ) {
+            if ( Interaction::mouseDoubleClicked(ImGuiMouseButton_Left) ) {
                 // 双击是快速设置基准首拍入口，并同步到第一 Timing 段。
                 m_firstBeatTime = hoverTime;
                 syncPrimaryTimingFieldsToSegments();
@@ -3128,9 +3134,9 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
             const double intersectStart = std::max(texStart, pixelStart);
             const double intersectEnd   = std::min(texEnd, pixelEnd);
             const float  uv0x = static_cast<float>((intersectStart - texStart) /
-                                                   texture->width());
+                                                  texture->width());
             const float  uv1x = static_cast<float>((intersectEnd - texStart) /
-                                                   texture->width());
+                                                  texture->width());
             const float  screenX0 =
                 imageMin.x + static_cast<float>((intersectStart - pixelStart) /
                                                 pixelWidth * size.x);
@@ -3179,7 +3185,7 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
             viewStart + relX * viewRange, 0.0, std::max(0.0, canvasDuration));
         ImGui::SetTooltip("%s",
                           MMM::UI::Utils::formatCanvasTime(hoverTime).c_str());
-        if ( ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) ) {
+        if ( Interaction::mouseDoubleClicked(ImGuiMouseButton_Left) ) {
             // 与波形保持一致的双击首拍语义。
             m_firstBeatTime = hoverTime;
             syncPrimaryTimingFieldsToSegments();
@@ -3755,7 +3761,7 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(
         drawMarkerGlow(hoveredMarkerTime, hoveredMode);
     }
 
-    if ( hasHoveredLine && ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+    if ( hasHoveredLine && Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
         // 捕获候选身份，后续帧不再受重新命中其他线影响。
         m_isBeatMarkerDragging    = true;
         m_isTimelinePanning       = false;
@@ -3765,7 +3771,7 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(
         m_draggedBeatSegmentIndex = hoveredSegmentIndex;
     }
 
-    if ( !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+    if ( !Interaction::mouseDown(ImGuiMouseButton_Left) ) {
         if ( m_beatMarkerDragOwner == ownerId ) {
             // 鼠标在任意位置松开都结束所属区域的拖动。
             m_isBeatMarkerDragging = false;
@@ -4011,7 +4017,7 @@ void BpmMeasurementToolView::handlePlaybackCursorDrag(
         drawList->PopClipRect();
     }
 
-    if ( hoverHandle && ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+    if ( hoverHandle && Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
         // 只有明确按下手柄才加载试听；普通绘制和悬浮不会触发文件读取。
         if ( !isSelectedTrackLoadedForPlayback() &&
              !loadSelectedTrackForPlayback() )
@@ -4032,7 +4038,7 @@ void BpmMeasurementToolView::handlePlaybackCursorDrag(
     }
 
     ImGuiIO&     io        = ImGui::GetIO();
-    const bool   mouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    const bool   mouseDown = Interaction::mouseDown(ImGuiMouseButton_Left);
     const double rectWidth = std::max(1.0f, rectMax.x - rectMin.x);
 
     // 拖到边缘时视野会移动，后续像素换算必须使用移动后的预览范围。
@@ -4061,8 +4067,8 @@ void BpmMeasurementToolView::handlePlaybackCursorDrag(
         // 限制单帧时间跨度，避免窗口恢复或调试暂停后一次越过过长距离。
         const double frameSeconds = std::clamp<double>(io.DeltaTime, 0.0, 0.1);
         const double scrollDelta  = static_cast<double>(edgeDistance) *
-                                    edgeScrollSensitivity * frameSeconds;
-        m_viewCenter              = std::clamp<double>(
+                                   edgeScrollSensitivity * frameSeconds;
+        m_viewCenter = std::clamp<double>(
             m_viewCenter + scrollDelta, 0.0, playbackCanvasDuration());
         // 边缘滚动属于用户视野选择，需要纳入持久化偏好。
         markUserPreferencesChanged(false, true);
@@ -4174,10 +4180,13 @@ void BpmMeasurementToolView::handleTimelineNavigation(const ImVec2& rectMin,
         return std::clamp(center, 0.0, std::max(0.0, canvasDuration));
     };
 
-    if ( hover && io.MouseWheel != 0.0f && io.KeyCtrl && io.KeyAlt ) {
+    if ( hover && Interaction::mouseWheel() != 0.0f &&
+         Interaction::modifier(Interaction::Modifier::Control) &&
+         Interaction::modifier(Interaction::Modifier::Alt) ) {
         // 沿用主画布的组合键，优先于 Ctrl 缩放分支。
-        adjustPlaybackSpeedFromShortcut(io.MouseWheel);
-    } else if ( hover && io.MouseWheel != 0.0f && !io.KeyCtrl ) {
+        adjustPlaybackSpeedFromShortcut(Interaction::mouseWheel());
+    } else if ( hover && Interaction::mouseWheel() != 0.0f &&
+                !Interaction::modifier(Interaction::Modifier::Control) ) {
         // 普通滚轮按当前分拍精确移动播放位置，不修改缩放。
         // 步长由游标所在 BPM 段决定，不固定使用首段 BPM。
         // 分拍数决定精度，用户无需通过宽音频进度条定位细小差异。
@@ -4193,15 +4202,16 @@ void BpmMeasurementToolView::handleTimelineNavigation(const ImVec2& rectMin,
                                                           : m_viewCenter,
                        0.0,
                        canvasDuration);
-        seekPlaybackToCanvasTime(wheelSeekTarget(currentTime, io.MouseWheel));
+        seekPlaybackToCanvasTime(
+            wheelSeekTarget(currentTime, Interaction::mouseWheel()));
         markUserPreferencesChanged(false, true);
-    } else if ( hover && io.MouseWheel != 0.0f ) {
+    } else if ( hover && Interaction::mouseWheel() != 0.0f ) {
         // 缩放锚定鼠标下的时间，避免波形内容在滚轮时横向漂移。
         const double mouseRatio = std::clamp<double>(
             (io.MousePos.x - rectMin.x) / rectWidth, 0.0, 1.0);
         const double anchorTime = viewStart + mouseRatio * viewRange;
         // 指数倍率使不同滚轮步数形成平滑、方向对称的缩放。
-        const double zoomFactor = std::pow(0.86, io.MouseWheel);
+        const double zoomFactor = std::pow(0.86, Interaction::mouseWheel());
         const double maxZoom = std::max(0.1, std::max(canvasDuration, 120.0));
         const double nextZoom =
             std::clamp(m_zoomSeconds * zoomFactor, 0.01, maxZoom);
@@ -4212,19 +4222,19 @@ void BpmMeasurementToolView::handleTimelineNavigation(const ImVec2& rectMin,
         markUserPreferencesChanged(false, true);
     }
 
-    if ( hover && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-         !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) ) {
+    if ( hover && Interaction::mouseClicked(ImGuiMouseButton_Left) &&
+         !Interaction::mouseDoubleClicked(ImGuiMouseButton_Left) ) {
         // 双击保留给首拍设置，单击拖动才捕获背景平移。
         m_isTimelinePanning = true;
     }
 
-    if ( !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+    if ( !Interaction::mouseDown(ImGuiMouseButton_Left) ) {
         // 在区域外释放也结束平移捕获。
         m_isTimelinePanning = false;
     }
 
     if ( m_isTimelinePanning &&
-         ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f) ) {
+         Interaction::mouseDragging(ImGuiMouseButton_Left, 0.0f) ) {
         // 向右拖内容等价于时间中心向前移动，因此使用负号。
         const double timeDelta =
             -static_cast<double>(io.MouseDelta.x) / rectWidth * viewRange;
@@ -4614,7 +4624,7 @@ void BpmMeasurementToolView::flushUserPreferences(bool force)
                      m_userPreferencesSaveDelaySeconds -
                          static_cast<double>(ImGui::GetIO().DeltaTime));
         if ( m_userPreferencesSaveDelaySeconds > 0.0 ||
-             ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
+             Interaction::mouseDown(ImGuiMouseButton_Left) ||
              ImGui::IsAnyItemActive() ) {
             // 用户仍在连续操作时延后落盘，内存值已即时生效。
             return;
@@ -5309,7 +5319,7 @@ void BpmMeasurementToolView::analyzeTrack(
                 // 使用模平方比较避免循环内重复开方。
                 const double magSq = fftOutput[i][0] * fftOutput[i][0] +
                                      fftOutput[i][1] * fftOutput[i][1];
-                maxMagnitude       = std::max(maxMagnitude, magSq);
+                maxMagnitude = std::max(maxMagnitude, magSq);
             }
             // 仅峰值确定后开方并归一化到 FFT 大小，再转换为 dB。
             const double db =

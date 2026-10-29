@@ -3,8 +3,16 @@
 /// @details 同步参数的 ADL 声明由轻量 SyncConfig.h 与类型一同提供。
 /// 完整 JSON 操作仍留在此实现，移动类型不改变字段名和旧值回退规则。
 #include "config/AudioPlaybackConfig.h"
+#include "config/BeatLinePalette.h"
 #include "config/CreatorIdentity.h"
 #include "config/EditorConfig.h"
+#include "config/EditorSettings.h"
+#include "config/EditorShortcutActions.h"
+#include "config/FrameLimitPreference.h"
+#include "config/NotePalette.h"
+#include "config/ObjectPlacementSnap.h"
+#include "config/SfxConfig.h"
+#include "config/ShortcutConfig.h"
 #include "config/SyncConfig.h"
 #include "config/TimingInterpolationPreferences.h"
 
@@ -375,32 +383,10 @@ void from_json(const nlohmann::json& json, ShortcutBinding& binding)
 /// @note 动作字段名是持久化和设置界面之间的稳定标识。
 void to_json(nlohmann::json& json, const ShortcutConfig& config)
 {
-    // 工具切换动作保持在列表前部，便于人工阅读配置文件。
-    json = nlohmann::json{
-        { "toolMove", config.toolMove },
-        { "toolMarquee", config.toolMarquee },
-        { "toolDraw", config.toolDraw },
-        { "toolColorBrush", config.toolColorBrush },
-        { "toolColorEraser", config.toolColorEraser },
-        // 变换和编辑动作紧随工具组，字段顺序不影响 JSON 读取。
-        { "mirror", config.mirror },
-        { "mirrorPaste", config.mirrorPaste },
-        { "editSelectedVolume", config.editSelectedVolume },
-        { "addSelectedAnnotation", config.addSelectedAnnotation },
-        { "deleteSelected", config.deleteSelected },
-        // 剩余字段为播放及视图状态切换，不保存瞬时 UI 状态。
-        { "togglePlayback", config.togglePlayback },
-        { "addBpmSegmentAtViewCenter", config.addBpmSegmentAtViewCenter },
-        { "toggleReverseScroll", config.toggleReverseScroll },
-        { "toggleScrollSnap", config.toggleScrollSnap },
-        { "toggleSnapFloor", config.toggleSnapFloor },
-        { "toggleScrollTimingMapping", config.toggleScrollTimingMapping },
-        { "toggleBeatLines", config.toggleBeatLines },
-        { "toggleStopPlaybackOnScroll", config.toggleStopPlaybackOnScroll },
-        { "toggleHitSfx", config.toggleHitSfx },
-        { "toggleHitEffects", config.toggleHitEffects },
-        { "toggleSyncSameMainAudio", config.toggleSyncSameMainAudio }
-    };
+    // 稳定身份是唯一持久化键，目录扩展同时覆盖序列化和设置页。
+    json = nlohmann::json::object();
+    for ( const auto& entry : editorShortcutActions() )
+        json[entry.m_id] = config.*(entry.m_binding);
 }
 
 /// @brief 从 JSON 恢复全部快捷键并迁移旧版冲突绑定。
@@ -409,52 +395,17 @@ void to_json(nlohmann::json& json, const ShortcutConfig& config)
 /// @note 每个缺失动作从当前默认配置取得，新增动作无需迁移旧文件。
 void from_json(const nlohmann::json& json, ShortcutConfig& config)
 {
-    // 单一 defaults 快照保证同一次读取中的所有回退值来自同一版本。
+    // 所有缺失字段从同一个默认快照恢复，用户已有绑定不因新增动作丢失。
     const ShortcutConfig defaults;
-    config.toolMove    = json.value("toolMove", defaults.toolMove);
-    config.toolMarquee = json.value("toolMarquee", defaults.toolMarquee);
-    config.toolDraw    = json.value("toolDraw", defaults.toolDraw);
-    config.toolColorBrush =
-        json.value("toolColorBrush", defaults.toolColorBrush);
-    config.toolColorEraser =
-        json.value("toolColorEraser", defaults.toolColorEraser);
-    config.mirror      = json.value("mirror", defaults.mirror);
-    config.mirrorPaste = json.value("mirrorPaste", defaults.mirrorPaste);
-    config.editSelectedVolume =
-        json.value("editSelectedVolume", defaults.editSelectedVolume);
-    config.addSelectedAnnotation =
-        json.value("addSelectedAnnotation", defaults.addSelectedAnnotation);
-    // 旧版注释快捷键与现有动作冲突时恢复新默认，避免升级后双重触发。
+    for ( const auto& entry : editorShortcutActions() )
+        config.*(entry.m_binding) =
+            json.value(std::string(entry.m_id), defaults.*(entry.m_binding));
+    // 旧版批注绑定曾与其他编辑入口冲突，迁移必须在普通字段恢复后进行。
     const ShortcutBinding legacyAnnotationShortcut{ true,  "A",  true,
                                                     false, true, false };
-    // 使用行为级冲突比较而非 JSON 原文，覆盖字段缺失后的等价组合。
     if ( shortcutBindingsConflict(config.addSelectedAnnotation,
-                                  legacyAnnotationShortcut) ) {
+                                  legacyAnnotationShortcut) )
         config.addSelectedAnnotation = defaults.addSelectedAnnotation;
-    }
-    config.deleteSelected =
-        json.value("deleteSelected", defaults.deleteSelected);
-    config.togglePlayback =
-        json.value("togglePlayback", defaults.togglePlayback);
-    config.addBpmSegmentAtViewCenter = json.value(
-        "addBpmSegmentAtViewCenter", defaults.addBpmSegmentAtViewCenter);
-    config.toggleReverseScroll =
-        json.value("toggleReverseScroll", defaults.toggleReverseScroll);
-    config.toggleScrollSnap =
-        json.value("toggleScrollSnap", defaults.toggleScrollSnap);
-    config.toggleSnapFloor =
-        json.value("toggleSnapFloor", defaults.toggleSnapFloor);
-    config.toggleScrollTimingMapping = json.value(
-        "toggleScrollTimingMapping", defaults.toggleScrollTimingMapping);
-    config.toggleBeatLines =
-        json.value("toggleBeatLines", defaults.toggleBeatLines);
-    config.toggleStopPlaybackOnScroll = json.value(
-        "toggleStopPlaybackOnScroll", defaults.toggleStopPlaybackOnScroll);
-    config.toggleHitSfx = json.value("toggleHitSfx", defaults.toggleHitSfx);
-    config.toggleHitEffects =
-        json.value("toggleHitEffects", defaults.toggleHitEffects);
-    config.toggleSyncSameMainAudio =
-        json.value("toggleSyncSameMainAudio", defaults.toggleSyncSameMainAudio);
 }
 
 /// @brief 将音频播放后端写为稳定英文标识。
@@ -960,7 +911,8 @@ void to_json(nlohmann::json&                           json,
                            { "playback", visibility.playback },
                            { "playbackSpeed", visibility.playbackSpeed },
                            { "trackCount", visibility.trackCount },
-                           { "beatDivisor", visibility.beatDivisor } };
+                           { "beatDivisor", visibility.beatDivisor },
+                           { "timelineZoom", visibility.timelineZoom } };
 }
 
 /// @brief 从 JSON 恢复非互斥工具栏按钮可见性。
@@ -985,6 +937,8 @@ void from_json(const nlohmann::json&               json,
         json.value("playbackSpeed", defaults.playbackSpeed);
     visibility.trackCount  = json.value("trackCount", defaults.trackCount);
     visibility.beatDivisor = json.value("beatDivisor", defaults.beatDivisor);
+    // 旧配置自动补充无修饰键缩放入口，显式隐藏则继续保留。
+    visibility.timelineZoom = json.value("timelineZoom", defaults.timelineZoom);
 }
 
 /// @brief 序列化工具栏可见性的两个职责分组。
@@ -1197,7 +1151,8 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "colorPalettes", settings.colorPalettes },
         { "defaultColorPaletteSchemeName",
           settings.defaultColorPaletteSchemeName },
-        { "shortcutConfig", settings.shortcutConfig }
+        { "shortcutConfig", settings.shortcutConfig },
+        { "interactionProfileId", settings.m_interactionProfileId }
     };
 }
 
@@ -1412,6 +1367,9 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
         json.value("defaultColorPaletteSchemeName",
                    std::string(COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID));
     settings.shortcutConfig = json.value("shortcutConfig", ShortcutConfig());
+    // 旧配置没有操作方案字段时继续使用经典桌面，不重置用户快捷键。
+    settings.m_interactionProfileId =
+        json.value("interactionProfileId", std::string("classic-desktop"));
 }
 
 /// @brief 序列化编辑器配置根对象。

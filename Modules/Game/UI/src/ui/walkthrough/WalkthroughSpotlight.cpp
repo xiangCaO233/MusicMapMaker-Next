@@ -398,6 +398,13 @@ void Spotlight::start(const std::vector<std::string>& targets,
     m_acknowledgeButtonCenter.reset();
 }
 
+/// @brief 方案变化只刷新文字，不重启练习或重置已报告的目标。
+/// @warning 低频入口接管已准备的字符串，常态 UI 帧不调用。
+void Spotlight::updatePrompt(std::string prompt)
+{
+    // 不调用 start，避免生成新步骤令牌或清除同一练习的回滚与完成标志。
+    if ( active() ) m_prompt = std::move(prompt);
+}
 /// @brief 停止引导并清除可见目标与提示文本。
 void Spotlight::stop()
 {

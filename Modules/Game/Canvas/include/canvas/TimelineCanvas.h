@@ -1,11 +1,14 @@
 #pragma once
 
+#include "ui/interaction/EditorInteraction.h"
+
 #include "canvas/CanvasSnapshotPrepare.h"
 #include "canvas/TimelineAuxiliaryWindowState.h"
 #include "canvas/TimelineFormatSupport.h"
 #include "canvas/TimingFunctionEditorState.h"
 #include "canvas/TimingInterpolationPreview.h"
 #include "canvas/TimingTemplateEditorState.h"
+#include "common/SelectionOperation.h"
 #include "common/render/RenderSnapshot.h"
 #include "common/render/RenderSnapshotBuffer.h"
 #include "common/render/TimingInterpolationRenderData.h"
@@ -42,11 +45,22 @@ namespace MMM::Canvas
  * @brief 时间线标尺画布类
  * 停靠在侧边栏与主画布之间，显示小节线、拍线以及 BPM/流速变更标记。
  */
-class TimelineCanvas : public UI::IRenderableView,
+class TimelineCanvas : public UI::Interaction::IInteractionGuard,
+                       public UI::IRenderableView,
                        public UI::IParallelUiPreparable,
                        public UI::ICanvasView
 {
 public:
+    /// @brief 方案切换只能发生在 Timing、插值和表格手势全部结束之后。
+    /// @warning 每帧只读取 UI 本地标志，不等待逻辑线程或遍历物件。
+    bool hasActivePointerGesture() const override
+    {
+        return m_isTimingDragging || m_isTimingErasing ||
+               m_isTimingMarqueeSelecting || m_isTimingDrawPreviewing ||
+               m_isInterpolationDragging || m_isTableRowDragSelecting ||
+               m_isAudioTimeSliderScrubbing;
+    }
+
     /// @brief 创建 Timeline 画布并立即发布初始逻辑视口尺寸。
     /// @param name 画布稳定名称。
     /// @param w 初始逻辑宽度。
@@ -56,7 +70,7 @@ public:
     TimelineCanvas(
         const std::string& name, uint32_t w, uint32_t h,
         std::shared_ptr<Common::Render::RenderSnapshotBuffer> syncBuffer);
-    ~TimelineCanvas() override = default;
+    ~TimelineCanvas() override;
 
     // IUIView 接口
     void update(UI::UIManager* sourceManager) override;
@@ -181,10 +195,24 @@ protected:
 private:
     /// @brief 测试直接驱动画笔创建与命令警告入口，不替换生产映射或发布逻辑。
     friend struct TimelineStopCreationTestAccess;
+    /// @brief 允许无 GPU 回归驱动真实菜单并检查本地选择，不开放业务接口。
+    friend struct TimingContextMenuTestAccess;
+    /// @brief 表格回归夹具只绑定输入和观察状态，业务操作必须经过真实控件。
+    friend struct TimingTableMouseSelectionTestAccess;
     /// @brief 提交时间线命令，记录原格式无法保存的修改但始终允许编辑。
     /// @param event 待发布的时间线操作；批量命令共用一次提示。
     /// @warning 低频提交路径：只读取快照，不访问可变 ECS 或文件系统。
     void publishTimelineCommand(const Event::LogicCommandEvent& event);
+    /// @brief 处理纯鼠标 Timing 编辑菜单，锁定本次选区和吸附粘贴时间。
+    /// @return 菜单拥有本帧输入或正在关闭时返回真，防止底层手势穿透。
+    /// @warning UI 热路径只绘制菜单；收集全选和剪贴板访问仅由显式激活触发。
+    bool handleTimingContextMenu(ImVec2 origin, ImVec2 size, bool hovered);
+    /// @brief 将当前可见且允许选择的 Timing 加入选区，复用原 Ctrl+A 的范围。
+    void selectAllTimingEvents();
+    /// @brief 按活动方案更新命中时间点的选择；经典模式保留修饰键切换。
+    /// @return 目标仍允许开始拖动时返回真，减选与经典切出均返回假。
+    bool selectTimingTarget(entt::entity entity, bool preserveGroup,
+                            bool additiveSelection);
 
     /// @brief 在编辑手势及其它弹窗结束后显示格式支持度警告。
     /// @warning UI 热路径：每帧只检查本地标志；配置仅在用户确认时保存。
@@ -284,7 +312,8 @@ private:
     /// 交互；禁止引入文件系统访问或阻塞操作。
     void handleTimingCanvasInteraction(const ImVec2& canvasPos,
                                        const ImVec2& size, bool isHovered,
-                                       bool isFocused);
+                                       bool isFocused,
+                                       bool profileAlreadyChecked = false);
 
     /// @brief 绘制 Timeline Timing 的 hover、选中、拖动和框选反馈。
     /// @param canvasPos 画布左上角屏幕坐标。
@@ -464,10 +493,15 @@ private:
     /// @return ImGui 颜色。
     ImU32 timingEffectColor(::MMM::TimingEffect effect, int alpha) const;
 
-    /// @brief Shift 手势或段落正文命中处理；已消费输入时返回真。
+    /// @brief 自动点拖或经典 Shift 手势及段落正文命中；已消费输入时返回真。
+    /// @param canCreateAutomaticPoint 起笔未命中普通时间点，点按时允许新建。
     /// @warning 每帧 UI 输入路径；只读取快照，不等待逻辑线程。
     bool handleInterpolationInteraction(const ImVec2& position,
-                                        const ImVec2& size, bool hovered);
+                                        const ImVec2& size, bool hovered,
+                                        bool canCreateAutomaticPoint);
+    /// @brief 处理已有段落的正文命中，自动绘制起笔前保留双击编辑与右键删除。
+    /// @warning 每帧只读取已发布的段落缓存，不扫描 ECS 或等待逻辑线程。
+    bool handleInterpolationBody(const ImVec2& position, const ImVec2& size);
     /// @brief 绘制段落范围，使用与编辑窗口一致的峰谷保留预览。
     /// @warning 每帧复用缓存；每段最多 4096 个像素桶，每桶最多四个顶点。
     void renderInterpolationOverlay(const ImVec2& position, const ImVec2& size);
@@ -503,8 +537,16 @@ private:
     std::vector<TimingInterpolationPreview> m_interpolationOverlayPreviews;
     /// @brief 新建手势独立复用预览，不能覆盖已保存段落的缓存。
     TimingInterpolationPreview m_interpolationDragPreview;
-    /// @brief 在拖动期间保留段首，不让手势变成单点放置。
+    /// @brief 新建手势持有起点，自动模式从单点候选按移动量升级为段落。
     bool m_isInterpolationDragging{ false };
+    /// @brief 起笔锁存自动点拖语义；关闭时继续要求经典物理 Shift。
+    bool m_interpolationGestureAutomatic{ false };
+    /// @brief 已有时间点允许起拖画段，但零范围单击不得再创建重复点。
+    bool m_interpolationPointAllowed{ false };
+    /// @brief 是否越过正常拖动阈值，轻微抖动不能把点按升级为插值段落。
+    bool m_interpolationDragMoved{ false };
+    /// @brief 原始按下时间保留给单点弹窗，不因缩放或吸附丢失鼠标位置来源。
+    double m_interpolationStartRawTime{ 0.0 };
     /// @brief 段落编辑窗口的值语义工作副本。
     Common::Render::TimingInterpolationElement m_interpolationEdit;
     /// @brief 用户当前调整的段尾时间，单位秒。
@@ -544,6 +586,9 @@ private:
     bool m_isTableWindowFocusedAndReachable{ false };
     /// @brief 下一帧是否调用 ImGui::SetNextWindowFocus 聚焦时间线窗口。
     bool m_shouldFocusNextFrame{ false };
+    /// @brief 在创建时间线窗口前消费延迟聚焦请求，弹窗拥有焦点时不抢占。
+    /// @warning 每帧仅检查本地标志和 ImGui 弹窗状态，不访问会话或等待同步。
+    void applyPendingWindowFocus();
     /// @brief 时间线上一帧是否拥有 Timing 编辑焦点。
     bool m_wasFocusedLastFrame{ false };
     /// @brief Timeline Timing 编辑焦点是否仍归属于时间线窗口。
@@ -572,6 +617,9 @@ private:
     entt::entity m_tableRowDragAnchorEntity{ entt::null };
     /// @brief 时间点表格序号列拖选开始前保留的追加选择。
     std::unordered_set<entt::entity> m_tableRowDragBaseSelection;
+    /// @brief 表格本次手势的集合模式；空值保持经典 Ctrl/Shift 规则。
+    /// @details 起笔锁存，后续外部模式变化不能重解释当前拖选。
+    std::optional<Logic::SelectionOperation> m_tableRowSelectionOperation;
     /// @brief 当前序号列拖选是否已经越过起始行。
     bool m_hasTableRowDragSelectionMoved{ false };
     /// @brief 时间点表格是否只显示 BPM 行。
@@ -625,6 +673,16 @@ private:
 
     /// @brief Timeline 当前选中的 Timing 实体集合。
     std::unordered_set<entt::entity> m_selectedTimingEntities;
+    /// @brief 上一帧菜单拥有输入，外部点击关闭时也不能穿透到 Timing 画布。
+    bool m_timingContextWasOpen{ false };
+    /// @brief 右键时锁存的参数编辑目标；空白处仅允许回退到唯一选中项。
+    entt::entity m_timingContextEntity{ entt::null };
+    /// @brief 菜单打开时高亮的吸附时间，不跟随菜单里的指针移动。
+    double m_timingContextTime{ 0.0 };
+    /// @brief 右键菜单绑定的谱面路径，防止切换谱面后向新谱面提交旧操作。
+    std::string m_timingContextBeatmapKey;
+    /// @brief 同一路径重新加载时，旧菜单同样失效。
+    std::uintptr_t m_timingContextInstance{ 0 };
 
     /// @brief Timeline 本地 Timing 剪贴板镜像，用于兼容现有交互状态。
     std::vector<TimelineClipboardEntry> m_timingClipboard;
@@ -649,6 +707,11 @@ private:
 
     /// @brief 是否正在 Timeline 中框选 Timing。
     bool m_isTimingMarqueeSelecting{ false };
+
+    /// @brief 框选起笔锁存集合操作，拖动期间切换方案或模式不重解释当前事务。
+    Logic::SelectionOperation m_timingMarqueeOperation{
+        Logic::SelectionOperation::Replace
+    };
 
     /// @brief Timeline 框选起点 Y 坐标。
     float m_timingMarqueeStartY{ 0.0f };

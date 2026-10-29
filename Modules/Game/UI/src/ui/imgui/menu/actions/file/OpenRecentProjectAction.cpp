@@ -4,6 +4,7 @@
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuFileActions.h"
 #include "ui/walkthrough/WalkthroughService.h"
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -15,6 +16,13 @@ namespace
 class OpenRecentProjectAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override
+    {
+        return "OpenRecentProjectAction";
+    }
+
     /// @brief 按激活载荷中的路径发布打开项目事件。
     /// @param context 统一菜单上下文，本动作无需读取。
     /// @param activation textPayload 携带最近项目 UTF-8 路径。

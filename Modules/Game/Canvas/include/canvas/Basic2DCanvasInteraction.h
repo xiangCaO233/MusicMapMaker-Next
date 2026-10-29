@@ -1,5 +1,8 @@
 #pragma once
 
+#include "ui/interaction/EditorInteraction.h"
+
+#include "canvas/HoverLayerSelection.h"
 #include "canvas/PlanarObservationInput.h"
 #include "canvas/TrackLayoutEditing.h"
 #include "common/CanvasComponentLayout.h"
@@ -8,6 +11,7 @@
 #include "event/core/EventBus.h"
 #include "mmm/annotation/BeatmapAnnotation.h"
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
@@ -20,7 +24,8 @@
 namespace MMM::Common::Render
 {
 struct RenderSnapshot;
-}
+struct AnnotationRenderMarker;
+}  // namespace MMM::Common::Render
 
 namespace MMM::UI
 {
@@ -30,7 +35,7 @@ class UIManager;
 namespace MMM::Canvas
 {
 
-class Basic2DCanvasInteraction
+class Basic2DCanvasInteraction : public UI::Interaction::IInteractionGuard
 {
 public:
     Basic2DCanvasInteraction(const std::string& canvasName,
@@ -49,10 +54,11 @@ public:
                             float snapshotYOffset = 0.0F);
     /// @brief 判断画布是否持有未结束的编辑手势，防止摄像机抢走释放事件。
     /// @warning 每帧常量时间读取 UI 本地门闩，不读取逻辑线程状态。
-    bool hasActivePointerGesture() const
+    bool hasActivePointerGesture() const override
     {
         return m_leftPressStartedOnCanvas || m_leftPressStartedObjectDrag ||
-               m_rightEraseActive || m_isMiddleCanvasPanning;
+               m_rightEraseActive || m_isMiddleCanvasPanning ||
+               m_mouseBrushCancelAwaitingRelease;
     }
 
     /// @brief 请求本帧左键释放时丢弃画笔而不是提交物件。
@@ -112,6 +118,24 @@ public:
         bool                                  allowSelectionScroll = true);
 
 private:
+    /// @brief 纯鼠标绘制中右键取消预览，并消费同一组按钮的剩余释放。
+    /// @warning 每帧只检查本地手势和输入边沿，取消时发布一次既有结束命令。
+    bool handleMouseBrushCancellation(
+        const Common::Render::RenderSnapshot& snapshot, bool hovered);
+    /// @brief 无 GPU 测试从真实右键候选执行选择，不直接改写悬浮状态。
+    friend struct EditorInteractionSurfaceTestAccess;
+    /// @brief 批注菜单回归只驱动真实输入并观察缓冲，不开放业务写入口。
+    friend struct MouseAnnotationMenuTestAccess;
+    /// @brief 验证右键候选仍存在后选择它，并保留后续重叠命中的优先身份。
+    /// @warning 仅菜单激活时扫描本帧可见命中框，不访问 ECS 或等待逻辑线程。
+    bool selectHoverLayer(std::size_t                           index,
+                          const Common::Render::RenderSnapshot& snapshot);
+    /// @brief 绘制右键冻结的重叠候选，显示身份与实际选择共享同一列表。
+    /// @warning 菜单展开时只遍历当前指针候选，不读取 ECS 或文件。
+    void renderHoverLayerMenu(const Common::Render::RenderSnapshot& snapshot);
+    /// @brief 绘制纯鼠标菜单的确定落点导航和选中物件属性入口。
+    /// @warning 菜单展开时仅读取已有选择标志；窗口和导航仅在激活时执行。
+    void renderSelectionMenuExtras(UI::UIManager* manager);
     /// @brief 当前可见画布的坐标桥，仅由 UI 线程读写，不访问可变会话数据。
     PlanarObservationInputProjection m_inputProjection;
     /// @brief 动态物件命中框需要移除的播放插值，逻辑命令仍接收显示平面坐标。
@@ -208,6 +232,8 @@ private:
 
     /// @brief 下一次绘制工具释放是否只清理临时画笔。
     bool m_cancelBrushOnNextRelease{ false };
+    /// @brief 已取消的绘制仍持有按钮，全部松开前不允许变成擦除或新画笔。
+    bool m_mouseBrushCancelAwaitingRelease{ false };
     /// @brief 当前引导是否要求独立放置，下一次起笔时读取。
     bool m_walkthroughPlacement{ false };
     /// @brief 当前活动画笔锁存的独立放置策略，不随步骤确认或结束改变。
@@ -309,6 +335,14 @@ private:
     int m_hoverLayerIndex{ 0 };
     /// @brief 当前鼠标下可切换的悬浮候选层数量。
     int m_hoverLayerCount{ 0 };
+    /// @brief 右键按下时的值语义候选，菜单移动不重新拾取目标。
+    std::vector<HoverLayerCandidate> m_menuHoverLayers;
+    /// @brief 最近明确选择的重叠部位；仅当前谱面候选中仍存在时才优先使用。
+    std::optional<HoverLayerCandidate> m_preferredHoverLayer;
+    /// @brief 右键目标所属谱面路径和实例共同防止跨谱面实体号复用。
+    std::string m_selectionMenuBeatmapKey;
+    /// @brief 路径相同但重新加载也应失效旧菜单候选。
+    std::uintptr_t m_selectionMenuBeatmapInstance{ 0 };
     /// @brief 当前悬浮物件试听按钮的跨帧锚点。
     struct AudioPreviewOverlayState {
         /// @brief 是否持有有效物件与屏幕边界。
@@ -362,6 +396,23 @@ private:
             content{};
     };
 
+    /// @brief 纯鼠标菜单绑定当前谱面和批注 ID，不持有快照指针。
+    struct AnnotationMenuState {
+        std::string    m_beatmapKey;     ///< 菜单打开时的谱面路径身份。
+        std::uintptr_t m_instance{};     ///< 同路径重载也必须取消旧菜单。
+        std::size_t    m_markerIndex{};  ///< 当前快照中待核验的分组位置。
+        std::string    m_markerId;       ///< 分组首条 ID，防止索引被新组复用。
+        std::string m_selectedId;  ///< 阅读目标的稳定身份，不以条目序号代替。
+        bool        m_wasOpen{};   ///< 关闭帧继续消费输入，防止释放穿透。
+    };
+    /// @brief 菜单跨帧只保存轻量身份，文本在点击编辑时才复制。
+    AnnotationMenuState m_annotationMenu;
+    /// @brief 在气泡或详情卡右键打开纯鼠标阅读与编辑入口。
+    /// @warning 每帧只校验当前快照，不访问会话或文件系统。
+    bool renderMouseAnnotationMenu(
+        const Common::Render::RenderSnapshot&         snapshot,
+        const Common::Render::AnnotationRenderMarker* hovered,
+        std::size_t itemIndex, bool linkHovered);
     /// @brief 当前批注编辑弹窗状态。
     AnnotationEditorState m_annotationEditor;
     /// @brief 当前悬浮标记的首条批注 ID，用于检测标记变化。
@@ -404,6 +455,12 @@ private:
     std::unordered_set<entt::entity> m_colorStrokeEntities;
     /// @brief 当前右键擦除手势是否已经向逻辑线程发送开始命令。
     bool m_rightEraseActive{ false };
+    /// @brief 纯鼠标起笔粒度；为空时经典擦除仍逐帧读取物理 Shift。
+    std::optional<bool> m_eraseWholePolylineMode;
+    /// @brief 右键菜单打开时的可见吸附时间，菜单内移动不会改变该锚点。
+    double m_selectionPasteTime{ 0.0 };
+    /// @brief 右键起点的画布局部坐标，移除框选不得使用菜单项上的鼠标位置。
+    glm::vec2 m_selectionMenuPoint{ 0.0F, 0.0F };
     /// @brief 上一次发送的框选拖动更新。
     LastContinuousEditCommand m_lastMarqueeUpdateCommand;
     /// @brief 上一次发送的绘制笔刷拖动更新。

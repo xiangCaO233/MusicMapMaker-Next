@@ -1,5 +1,6 @@
 #include "ui/IUIView.h"
 #include "config/EditorSettings.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/CLayWrapperCore.h"
 #include "ui/layout/LayoutContext.h"
 
@@ -123,7 +124,7 @@ LayoutContext::LayoutContext(IUIView& view, const std::string& windowName,
     m_startPos    = ImGui::GetCursorScreenPos();
     m_avail       = ImGui::GetContentRegionAvail();
     m_mousePos    = ImGui::GetMousePos();
-    m_isMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    m_isMouseDown = Interaction::mouseDown(ImGuiMouseButton_Left);
 
     // Clay 使用相对内容起点的指针坐标，与 ImGui 屏幕坐标完成转换。
     Clay_SetPointerState(

@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace MMM::UI
@@ -57,10 +58,23 @@ enum class MainMenuItemTextKind : std::uint8_t {
     Literal,
 };
 
+/// @brief 激活来源描述输入路径，不把键位或显示控件当作业务动作身份。
+enum class MainMenuActivationSource { Menu, Shortcut, InteractionProfile };
+
+/// @brief 动作所属编辑上下文，工具手势不能误修改后台谱面的播放或历史。
+enum class MainMenuActivationTarget { Editor, BpmMeasurementTool };
+
 /// @brief 菜单项被激活时携带的上下文载荷。
 struct MainMenuItemActivation {
+    /// @brief 默认仍为菜单点击，新方案可以显式标记自己的激活来源。
+    MainMenuActivationSource m_source{ MainMenuActivationSource::Menu };
+    /// @brief 默认作用于谱面；独立工具可显式请求自己的播放和测量历史。
+    MainMenuActivationTarget m_target{ MainMenuActivationTarget::Editor };
+
     /// @brief 可选文本载荷，例如最近项目路径。
     std::string textPayload;
+    /// @brief 上下文粘贴的确定时间；普通菜单和快捷键不指定此值。
+    std::optional<double> m_pasteTime;
 };
 
 }  // namespace MMM::UI

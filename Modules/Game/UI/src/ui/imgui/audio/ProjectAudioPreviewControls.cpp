@@ -1,4 +1,5 @@
 #include "ui/imgui/audio/ProjectAudioPreviewControls.h"
+#include "ui/interaction/EditorInteraction.h"
 
 #include "audio/AudioManager.h"
 #include "config/Utf8Path.h"
@@ -386,8 +387,8 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
         const bool manualHovered = isPreviewControlHovered(
             buttonPosition, buttonExtent, acceptExplicitPointerHit);
         const bool clicked =
-            feedbackClicked ||
-            (manualHovered && ImGui::IsMouseReleased(ImGuiMouseButton_Left));
+            feedbackClicked || (manualHovered && Interaction::mouseReleased(
+                                                     ImGuiMouseButton_Left));
         if ( clicked && triggerPreview ) {
             // 空池键仍允许按钮呈现，但不会向 AudioManager 提交动作。
             if ( !previewPoolKey.empty() ) {
@@ -404,7 +405,7 @@ ProjectAudioPreviewControlsResult renderProjectAudioPreviewControls(
         const bool hovered = ImGui::IsItemHovered() || manualHovered;
         const bool active =
             ImGui::IsItemActive() ||
-            (manualHovered && ImGui::IsMouseDown(ImGuiMouseButton_Left));
+            (manualHovered && Interaction::mouseDown(ImGuiMouseButton_Left));
         accumulateLastItemState(result);
         result.hovered = result.hovered || hovered || active;
         drawPreviewButton(buttonPosition, buttonExtent, icon, hovered, active);

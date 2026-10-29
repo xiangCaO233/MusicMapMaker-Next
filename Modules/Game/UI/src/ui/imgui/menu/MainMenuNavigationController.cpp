@@ -1,4 +1,6 @@
 #include "ui/imgui/menu/MainMenuNavigationController.h"
+#include "ui/imgui/ShortcutUtils.h"
+#include "ui/interaction/EditorInteraction.h"
 
 #include "config/skin/translation/Translation.h"
 
@@ -12,24 +14,21 @@ namespace MMM::UI
 /// @note 每个按键使用非重复触发，长按 Alt 不会连续切换菜单。
 void MainMenuNavigationController::handleShortcuts()
 {
-    const ImGuiIO& io = ImGui::GetIO();
-    // 未按住 Alt 时立即退出，避免查询其余固定快捷键。
-    if ( !io.KeyAlt ) return;
-
+    // 导航入口也按动作身份匹配，用户重绑定后不再强制要求 Alt。
     // 各入口只登记下一帧请求，由菜单绘制阶段实际操作弹窗。
-    if ( ImGui::IsKeyPressed(ImGuiKey_F, false) ) {
+    if ( ShortcutUtils::isActionShortcutPressed("menuFile") ) {
         toggleMenu(MainMenuId::File, TR("ui.file").data());
     }
-    if ( ImGui::IsKeyPressed(ImGuiKey_E, false) ) {
+    if ( ShortcutUtils::isActionShortcutPressed("menuEdit") ) {
         toggleMenu(MainMenuId::Edit, TR("ui.edit").data());
     }
-    if ( ImGui::IsKeyPressed(ImGuiKey_T, false) ) {
+    if ( ShortcutUtils::isActionShortcutPressed("menuTools") ) {
         toggleMenu(MainMenuId::Tools, TR("ui.tools").data());
     }
-    if ( ImGui::IsKeyPressed(ImGuiKey_V, false) ) {
+    if ( ShortcutUtils::isActionShortcutPressed("menuView") ) {
         toggleMenu(MainMenuId::View, TR("ui.view").data());
     }
-    if ( ImGui::IsKeyPressed(ImGuiKey_H, false) ) {
+    if ( ShortcutUtils::isActionShortcutPressed("menuHelp") ) {
         toggleMenu(MainMenuId::Help, TR("ui.help").data());
     }
 }

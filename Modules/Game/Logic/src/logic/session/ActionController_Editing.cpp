@@ -3092,7 +3092,13 @@ void ActionController::handleCommand(const CmdPaste& cmd)
     }
 
     // 先预计算粘贴目标，确保不会在负时间创建新物件。
-    const double pasteTime = resolveClipboardPasteTime(m_ctx);
+    // 菜单已锁存用户看到的吸附线，显式锚点优先于全局粘贴位置偏好。
+    // 普通快捷键仍按既有规则计算，不因新增菜单改变播放头粘贴语义。
+    const double pasteTime =
+        cmd.m_targetTime ? *cmd.m_targetTime : resolveClipboardPasteTime(m_ctx);
+    // 无效显式时间拒绝整批，不创建实体，也不回退到用户未指定的位置。
+    if ( cmd.m_targetTime && (!std::isfinite(pasteTime) || pasteTime < 0.0) )
+        return;
 
     if ( !noteClipboard.empty() || !sampleClipboard.empty() ) {
         // Note 与 Sample 共用同一个最早锚点，保持混合编排的相对时间。

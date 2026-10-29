@@ -120,6 +120,115 @@ struct ShortcutConfig {
     /// @brief 切换同主音轨画布同步。
     ShortcutBinding toggleSyncSameMainAudio{ false, "",    false,
                                              false, false, false };
+    /// @brief 撤销的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_undo{ true, "Z", true, false, false, false };
+
+    /// @brief 重做的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_redo{ true, "Y", true, false, false, false };
+
+    /// @brief 重做（备用）的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_redoAlternative{ true, "Z", true, true, false, false };
+
+    /// @brief 复制的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_copy{ true, "C", true, false, false, false };
+
+    /// @brief 剪切的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_cut{ true, "X", true, false, false, false };
+
+    /// @brief 粘贴的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_paste{ true, "V", true, false, false, false };
+
+    /// @brief 全选当前轨道区的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_selectAll{ true, "A", true, false, false, false };
+
+    /// @brief 全选全部物件的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_selectAllObjects{ true, "A", true, true, false, false };
+
+    /// @brief 新建工程的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_newProject{ true, "N", true, true, false, false };
+
+    /// @brief 新建谱面的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_newBeatmap{ true, "N", true, false, false, false };
+
+    /// @brief 打开工程的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_openProject{ true, "O", true, false, false, false };
+
+    /// @brief 保存的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_save{ true, "S", true, false, false, false };
+
+    /// @brief 另存为的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_saveAs{ true, "S", true, true, false, false };
+
+    /// @brief 导入音频的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_importAudio{ true, "I", true, false, false, false };
+
+    /// @brief 文件菜单的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_menuFile{ true, "F", false, false, true, false };
+
+    /// @brief 编辑菜单的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_menuEdit{ true, "E", false, false, true, false };
+
+    /// @brief 工具菜单的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_menuTools{ true, "T", false, false, true, false };
+
+    /// @brief 查看菜单的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_menuView{ true, "V", false, false, true, false };
+
+    /// @brief 帮助菜单的应用级快捷键，缺失时沿用既有桌面组合。
+    ShortcutBinding m_menuHelp{ true, "H", false, false, true, false };
+    /// @brief 按常用分拍对齐，默认保留原有按键与上下文。
+    ShortcutBinding m_alignSelected{ true, "F", true, false, false, false };
+
+    /// @brief 取消当前操作，默认保留原有按键与上下文。
+    ShortcutBinding m_cancelInteraction{ true,  "Escape", false,
+                                         false, false,    false };
+
+    /// @brief 上一个重叠层（上），默认保留原有按键与上下文。
+    ShortcutBinding m_previousLayerUp{ true,  "UpArrow", false,
+                                       false, false,     false };
+
+    /// @brief 上一个重叠层（左），默认保留原有按键与上下文。
+    ShortcutBinding m_previousLayerLeft{ true,  "LeftArrow", false,
+                                         false, false,       false };
+
+    /// @brief 下一个重叠层（下），默认保留原有按键与上下文。
+    ShortcutBinding m_nextLayerDown{ true,  "DownArrow", false,
+                                     false, false,       false };
+
+    /// @brief 下一个重叠层（右），默认保留原有按键与上下文。
+    ShortcutBinding m_nextLayerRight{ true,  "RightArrow", false,
+                                      false, false,        false };
+
+    /// @brief 相机平移工具，默认保留原有按键与上下文。
+    ShortcutBinding m_cameraMove{ true, "G", false, false, false, false };
+
+    /// @brief 相机旋转工具，默认保留原有按键与上下文。
+    ShortcutBinding m_cameraRotate{ true, "R", false, false, false, false };
+
+    /// @brief 相机约束 X 轴，默认保留原有按键与上下文。
+    ShortcutBinding m_cameraAxisX{ true, "X", false, false, false, false };
+
+    /// @brief 相机约束 Y 轴，默认保留原有按键与上下文。
+    ShortcutBinding m_cameraAxisY{ true, "Y", false, false, false, false };
+
+    /// @brief 相机约束 Z 轴，默认保留原有按键与上下文。
+    ShortcutBinding m_cameraAxisZ{ true, "Z", false, false, false, false };
+
+    /// @brief 时间线删除（备用），默认保留原有按键与上下文。
+    ShortcutBinding m_deleteAlternative{ true,  "Backspace", false,
+                                         false, false,       false };
+
+    /// @brief BPM 工具播放暂停，默认保留原有按键与上下文。
+    ShortcutBinding m_bpmTogglePlayback{ true,  "Space", false,
+                                         false, false,   false };
+
+    /// @brief 音频搜索下一项，默认保留原有按键与上下文。
+    ShortcutBinding m_audioResultNext{ true,  "DownArrow", false,
+                                       false, false,       false };
+
+    /// @brief 音频搜索上一项，默认保留原有按键与上下文。
+    ShortcutBinding m_audioResultPrevious{ true,  "UpArrow", false,
+                                           false, false,     false };
 };
 
 /// @brief 将快捷键配置序列化为 JSON。

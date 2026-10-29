@@ -1,4 +1,5 @@
 #include "canvas/TimingInterpolationControls.h"
+#include "ui/interaction/EditorInteraction.h"
 
 #include "config/TimingInterpolationPreferences.h"
 #include "mmm/timing/Timing.h"
@@ -158,7 +159,7 @@ bool renderTimingBezierControls(TimingInterpolation& curve, const ImVec2& size)
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
         // 激活帧的鼠标位移属于到达手柄的移动，不能误当成拖动增量。
         if ( ImGui::IsItemActive() && !ImGui::IsItemActivated() &&
-             ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0) ) {
+             UI::Interaction::mouseDragging(ImGuiMouseButton_Left, 0) ) {
             // 使用增量保持抓取偏移，点击手柄边缘时不会突然跳到鼠标中心。
             const auto delta = ImGui::GetIO().MouseDelta;
             // X 和 Y 分别按自己的屏幕跨度归一，窗口长宽不同也不扭曲拖动。

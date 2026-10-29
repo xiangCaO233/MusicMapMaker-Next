@@ -4,7 +4,9 @@
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/interaction/EditorInteraction.h"
 #include <string>
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -15,6 +17,13 @@ namespace
 class MirrorAction final : public IMainMenuItemActionHandler
 {
 public:
+    /// @brief 跨菜单和操作方案复用的稳定动作身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view operationId() const override { return "MirrorAction"; }
+    /// @brief 菜单提示与触发共用方案解析后的快捷键身份。
+    /// @warning UI 热路径只返回静态身份，不构造字符串或执行配置查询。
+    std::string_view shortcutActionId() const override { return "mirror"; }
+
     /// @brief 获取用户配置的镜像快捷键提示。
     /// @param context 单帧主菜单上下文，本查询无需读取。
     /// @param fallbackShortcut 配置无法格式化时使用的静态提示。
@@ -54,8 +63,12 @@ public:
         if ( !MenuUtil::canTriggerCanvasEditingShortcut() ) return false;
         const auto& shortcutConfig =
             Config::AppConfig::instance().getEditorSettings().shortcutConfig;
-        if ( ShortcutUtils::isShortcutPressed(shortcutConfig.mirror) ) {
-            execute(context, MainMenuItemActivation{});
+        if ( ShortcutUtils::isActionShortcutPressed("mirror") ) {
+            Interaction::dispatchAction(
+                *this,
+                context,
+                MainMenuItemActivation{
+                    .m_source = MainMenuActivationSource::Shortcut });
             return true;
         }
         return false;

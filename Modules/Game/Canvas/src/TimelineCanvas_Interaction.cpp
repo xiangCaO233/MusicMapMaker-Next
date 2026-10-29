@@ -1,3 +1,5 @@
+#include "canvas/TimelineCanvas.h"
+#include "ui/interaction/EditorInteraction.h"
 /// @file TimelineCanvas_Interaction.cpp
 /// @brief 实现总时间线 Timing 的投影、吸附、选择、拖拽、擦除和剪贴板交互。
 ///
@@ -7,7 +9,6 @@
 ///
 /// 复制粘贴支持按秒保持间隔和按连续 beat 保持节奏两种语义，BPM 时间线
 /// 仅从快照构建。框选、拖动和擦除以按下/更新/释放事务推进，不使用阻塞等待。
-#include "canvas/TimelineCanvas.h"
 #include "config/EditorConfig.h"
 #include "config/EditorSettings.h"
 #include "config/VisualConfig.h"
@@ -34,6 +35,7 @@
 #include <fmt/format.h>
 #include <limits>
 #include <optional>
+#include <unordered_set>
 
 #include <utility>
 
@@ -587,6 +589,8 @@ double TimelineCanvas::snapTimingTime(const ImVec2& size, double rawTime,
     if ( !m_currentSnapshot || !std::isfinite(rawTime) ) {
         return rawTime;
     }
+    // 仅显式纯鼠标开关覆盖吸附，经典 Timing 对 Ctrl 的既有解释不变。
+    if ( UI::Interaction::activeProfile().bypassSnapping() ) return rawTime;
 
     const auto& appConfig    = Config::AppConfig::instance();
     const auto& editorConfig = appConfig.getEditorConfig();
@@ -1169,6 +1173,12 @@ void TimelineCanvas::pruneInvalidTimingSelection()
     for ( const auto& target : collectVisibleTimingTargets() ) {
         snapshotEntities.insert(target.entity);
     }
+    // 纯鼠标可从段落正文右键选择，段首离屏不代表实体已被删除。
+    // 仍只检查当前快照中的稳定身份；经典方案保留原有 marker 选择生命周期。
+    if ( UI::Interaction::activeProfile().selectionContextMenu() ) {
+        for ( const auto& segment : m_currentSnapshot->timingInterpolations )
+            snapshotEntities.insert(segment.entity);
+    }
 
     std::erase_if(m_selectedTimingEntities, [&](entt::entity entity) {
         return entity == entt::null ||
@@ -1290,6 +1300,25 @@ void TimelineCanvas::copySelectedTimingEvents(bool cut)
         if ( m_selectedTimingEntities.find(target.entity) !=
              m_selectedTimingEntities.end() ) {
             selectedTargets.push_back(target);
+        }
+    }
+    // 正文右键取得的段落可能没有可见首标记，复制须补齐其原始起点和参数。
+    // 补齐只发生在复制/剪切边沿，不给逐帧拾取引入额外扫描或排序。
+    if ( UI::Interaction::activeProfile().selectionContextMenu() ) {
+        std::unordered_set<entt::entity> represented;
+        represented.reserve(selectedTargets.size());
+        for ( const auto& target : selectedTargets )
+            represented.insert(target.entity);
+        for ( const auto& segment : m_currentSnapshot->timingInterpolations ) {
+            if ( m_selectedTimingEntities.contains(segment.entity) &&
+                 represented.insert(segment.entity).second ) {
+                // 有首标记时不重复加入，保持一次粘贴只创建一个完整插值实体。
+                // 曲线定义继续由下方既有共享剪贴板路径按稳定实体身份携带。
+                selectedTargets.push_back({ segment.entity,
+                                            segment.effect,
+                                            segment.time,
+                                            segment.value });
+            }
         }
     }
     if ( selectedTargets.empty() ) {
@@ -1567,10 +1596,20 @@ void TimelineCanvas::pasteTimingClipboard(double anchorTime)
 /// @param isFocused Timeline 窗口是否聚焦。
 /// @warning UI 热路径：每帧处理 Timeline Timing
 /// 交互；禁止引入文件系统访问或阻塞操作。
+/// @param profileAlreadyChecked 上层已经在滚轮前解释本表面，避免再次调用方案。
+/// @details 测试与独立调用仍可使用默认参数进入同一接管门禁。
+/// 整段接管的判断先于经典删除、复制、拖动和画笔状态转换。
+/// 未接管分支继续使用同一批不可变时间点，不能从逻辑线程借用可变实体容器。
+/// 键位身份来自统一目录，用户修改复制或撤销绑定也会影响本时间线。
+/// 焦点和播放门禁仍由此分支判断，不因绑定变更而允许播放中修改。
+/// 逻辑按钮的按下与释放通过同一方案映射，不能在一次事务中切换解释。
+/// 只有完整松开并结束本地预览的帧才释放 guard，避免换方案时遗留临时操作。
+/// 新方案若需要旧业务动作应请求语义命令，不模拟时间线控件的鼠标点击。
 void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                                                    const ImVec2& size,
                                                    bool          isHovered,
-                                                   bool          isFocused)
+                                                   bool          isFocused,
+                                                   bool profileAlreadyChecked)
 {
     if ( !m_currentSnapshot || !m_currentSnapshot->hasBeatmap ) {
         m_hoveredTimingEntity = entt::null;
@@ -1579,7 +1618,30 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         return;
     }
 
+    // 测试或独立调用不依赖上层传递输入域，提前退出同样恢复旧域。
+    const UI::Interaction::SurfaceScope inputScope(
+        UI::Interaction::Surface::Timeline);
+    // 表面接管发生在经典状态机开始前，避免同一输入被两套操作解释。
+    const UI::Interaction::SurfaceFrame frame{
+        UI::Interaction::Surface::Timeline,
+        m_name,
+        m_currentSnapshot,
+        canvasPos.x,
+        canvasPos.y,
+        size.x,
+        size.y,
+        isHovered,
+        isFocused
+    };
+    // 上层 update 已检查方案时只推进经典分支，不能重复执行同一帧接管。
+    // 独立调用仍在这里同步检查，借用的快照只在当前调用栈内有效。
+    // 输入域作用域覆盖两条入口，使后续按钮映射始终采用时间线语义。
+    if ( !profileAlreadyChecked && UI::Interaction::dispatchSurface(frame) )
+        return;
+
+    // 已失效的时间点只在经典分支清理，新方案拥有自己的临时命中状态。
     pruneInvalidTimingSelection();
+    if ( handleTimingContextMenu(canvasPos, size, isHovered) ) return;
 
     ImGuiIO&    io          = ImGui::GetIO();
     const float localMouseY = io.MousePos.y - canvasPos.y;
@@ -1649,7 +1711,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
 
     if ( !isFocused ) {
         if ( m_isTimingErasing &&
-             !ImGui::IsMouseDown(ImGuiMouseButton_Right) ) {
+             !UI::Interaction::mouseDown(ImGuiMouseButton_Right) ) {
             m_isTimingErasing = false;
             m_timingEraseTargetEntities.clear();
         }
@@ -1662,7 +1724,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
          overMenuButton || io.WantTextInput ||
          UI::ShortcutUtils::isShortcutRecordingActive() ) {
         if ( m_isTimingErasing &&
-             !ImGui::IsMouseDown(ImGuiMouseButton_Right) ) {
+             !UI::Interaction::mouseDown(ImGuiMouseButton_Right) ) {
             m_isTimingErasing = false;
             m_timingEraseTargetEntities.clear();
         }
@@ -1670,21 +1732,31 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     }
 
     if ( handleInterpolationInteraction(
-             canvasPos, size, isHovered && !overMenuButton) )
+             canvasPos, size, isHovered && !overMenuButton, !hoveredTarget) )
         return;
 
-    const bool  ctrl              = io.KeyCtrl;
-    const bool  shift             = io.KeyShift;
-    const bool  additiveSelection = ctrl || shift;
+    const bool ctrl =
+        UI::Interaction::modifier(UI::Interaction::Modifier::Control);
+    const bool shift =
+        UI::Interaction::modifier(UI::Interaction::Modifier::Shift);
+    const bool additiveSelection = ctrl || shift;
+    // 纯鼠标使用显式集合模式；经典方案返回空，继续保留 Ctrl/Shift 切换语义。
+    const auto selectionOperation =
+        UI::Interaction::activeProfile().selectionOperation();
     const auto& settings = Config::AppConfig::instance().getEditorSettings();
     bool        handledKeyboardCommand = m_currentSnapshot->isPlaying;
-    if ( !handledKeyboardCommand && ctrl && ImGui::IsKeyPressed(ImGuiKey_Z) ) {
+    if ( !handledKeyboardCommand &&
+         (UI::ShortcutUtils::isActionShortcutPressed("undo", true) ||
+          UI::ShortcutUtils::isActionShortcutPressed("redoAlternative",
+                                                     true)) ) {
         publishTimelineCommand(Event::LogicCommandEvent(
-            shift ? Logic::LogicCommand{ Logic::CmdRedo{} }
-                  : Logic::LogicCommand{ Logic::CmdUndo{} }));
+            UI::ShortcutUtils::isActionShortcutPressed("redoAlternative", true)
+                ? Logic::LogicCommand{ Logic::CmdRedo{} }
+                : Logic::LogicCommand{ Logic::CmdUndo{} }));
         handledKeyboardCommand = true;
     }
-    if ( !handledKeyboardCommand && ctrl && ImGui::IsKeyPressed(ImGuiKey_Y) ) {
+    if ( !handledKeyboardCommand &&
+         UI::ShortcutUtils::isActionShortcutPressed("redo", true) ) {
         publishTimelineCommand(Event::LogicCommandEvent(Logic::CmdRedo{}));
         handledKeyboardCommand = true;
     }
@@ -1724,34 +1796,36 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         }
         return true;
     };
-    if ( !handledKeyboardCommand && ImGui::IsKeyPressed(ImGuiKey_A) && ctrl ) {
+    if ( !handledKeyboardCommand &&
+         (UI::ShortcutUtils::isActionShortcutPressed("selectAll", true) ||
+          UI::ShortcutUtils::isActionShortcutPressed("selectAllObjects",
+                                                     true)) ) {
         if ( m_currentSnapshot->currentTool == Logic::EditTool::Move ||
              m_currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
-            m_selectedTimingEntities.clear();
-            for ( const auto& target : collectVisibleTimingTargets() ) {
-                if ( isTimingTargetSelectable(target) ) {
-                    m_selectedTimingEntities.insert(target.entity);
-                }
-            }
+            selectAllTimingEvents();
         }
         handledKeyboardCommand = true;
     }
-    if ( !handledKeyboardCommand && ImGui::IsKeyPressed(ImGuiKey_C) && ctrl ) {
+    if ( !handledKeyboardCommand &&
+         UI::ShortcutUtils::isActionShortcutPressed("copy", true) ) {
         copySelectedTimingEvents(false);
         handledKeyboardCommand = true;
     }
-    if ( !handledKeyboardCommand && ImGui::IsKeyPressed(ImGuiKey_X) && ctrl ) {
+    if ( !handledKeyboardCommand &&
+         UI::ShortcutUtils::isActionShortcutPressed("cut", true) ) {
         copySelectedTimingEvents(true);
         handledKeyboardCommand = true;
     }
-    if ( !handledKeyboardCommand && ImGui::IsKeyPressed(ImGuiKey_V) && ctrl ) {
+    if ( !handledKeyboardCommand &&
+         UI::ShortcutUtils::isActionShortcutPressed("paste", true) ) {
         ::MMM::UI::ClipboardBridge::importEditorClipboardFromSystem();
         pasteTimingClipboard(std::max(0.0, m_currentSnapshot->currentTime));
         handledKeyboardCommand = true;
     }
-    if ( !handledKeyboardCommand &&
-         (ImGui::IsKeyPressed(ImGuiKey_Delete) ||
-          ImGui::IsKeyPressed(ImGuiKey_Backspace)) ) {
+    if ( !handledKeyboardCommand && (UI::ShortcutUtils::isActionShortcutPressed(
+                                         "deleteSelected", true, 15) ||
+                                     UI::ShortcutUtils::isActionShortcutPressed(
+                                         "deleteAlternative", true)) ) {
         deleteSelectedTimingEvents();
         handledKeyboardCommand = true;
     }
@@ -1761,15 +1835,17 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         m_isTimingErasing = false;
         m_timingEraseTargetEntities.clear();
     } else {
-        if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) ) {
+        if ( isHovered &&
+             UI::Interaction::mouseClicked(ImGuiMouseButton_Right) ) {
             m_isTimingErasing = true;
             updateTimingEraseTarget(hoveredTarget);
         }
-        if ( m_isTimingErasing && ImGui::IsMouseDown(ImGuiMouseButton_Right) ) {
+        if ( m_isTimingErasing &&
+             UI::Interaction::mouseDown(ImGuiMouseButton_Right) ) {
             updateTimingEraseTarget(isHovered ? hoveredTarget : std::nullopt);
         }
         if ( m_isTimingErasing &&
-             ImGui::IsMouseReleased(ImGuiMouseButton_Right) ) {
+             UI::Interaction::mouseReleased(ImGuiMouseButton_Right) ) {
             updateTimingEraseTarget(isHovered ? hoveredTarget : std::nullopt);
             commitTimingEraseTargets();
             m_isTimingErasing = false;
@@ -1780,7 +1856,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
     switch ( m_currentSnapshot->currentTool ) {
     case Logic::EditTool::Draw:
         if ( !m_isTimingErasing && isHovered && !hoveredTarget &&
-             ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+             UI::Interaction::mouseClicked(ImGuiMouseButton_Left) &&
              applyProfessionalCreateType() ) {
             m_isTimingDrawPreviewing = true;
             bool snapped             = false;
@@ -1792,11 +1868,12 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
             m_timingDrawPreviewY = static_cast<float>(
                 canvasYAtTime(size, m_timingDrawPreviewTime));
         }
-        if ( hoveredTarget && ImGui::IsMouseReleased(ImGuiMouseButton_Left) ) {
+        if ( hoveredTarget &&
+             UI::Interaction::mouseReleased(ImGuiMouseButton_Left) ) {
             m_isTimingDrawPreviewing = false;
         }
         if ( !m_isTimingErasing && m_isTimingDrawPreviewing &&
-             ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+             UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             if ( !applyProfessionalCreateType() ) {
                 m_isTimingDrawPreviewing = false;
                 break;
@@ -1811,31 +1888,18 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                 canvasYAtTime(size, m_timingDrawPreviewTime));
         }
         if ( !m_isTimingErasing && m_isTimingDrawPreviewing &&
-             ImGui::IsMouseReleased(ImGuiMouseButton_Left) ) {
+             UI::Interaction::mouseReleased(ImGuiMouseButton_Left) ) {
             openTimingCreatePopupAtY(size, localMouseY, localMouseX, false);
             m_isTimingDrawPreviewing = false;
         }
         break;
     case Logic::EditTool::Move:
-        if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+        if ( isHovered &&
+             UI::Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
             if ( hoveredTarget ) {
-                const bool wasSelected =
-                    m_selectedTimingEntities.find(hoveredTarget->entity) !=
-                    m_selectedTimingEntities.end();
-                bool shouldBeginTimingDrag = true;
-                if ( additiveSelection ) {
-                    if ( wasSelected ) {
-                        m_selectedTimingEntities.erase(hoveredTarget->entity);
-                        shouldBeginTimingDrag = false;
-                    } else {
-                        m_selectedTimingEntities.insert(hoveredTarget->entity);
-                    }
-                } else {
-                    if ( !wasSelected ) {
-                        m_selectedTimingEntities.clear();
-                    }
-                    m_selectedTimingEntities.insert(hoveredTarget->entity);
-                }
+                // 同一选择入口区分经典切换与纯鼠标集合模式；减选不启动拖动。
+                const bool shouldBeginTimingDrag = selectTimingTarget(
+                    hoveredTarget->entity, true, additiveSelection);
 
                 if ( !shouldBeginTimingDrag ) {
                     m_isTimingDragging       = false;
@@ -1860,16 +1924,20 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                             { target.entity, target.time, target.value });
                     }
                 }
-            } else if ( !additiveSelection ) {
+            } else if ( selectionOperation ==
+                            Logic::SelectionOperation::Replace ||
+                        (!selectionOperation && !additiveSelection) ) {
+                // 追加和减选点空白不丢弃原集合；经典方案沿用原修饰键判断。
                 m_selectedTimingEntities.clear();
             }
         }
 
-        if ( m_isTimingDragging && ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+        if ( m_isTimingDragging &&
+             UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             updateTimingDragPreview();
         }
         if ( m_isTimingDragging &&
-             !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+             !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             finishTimingDrag();
         }
         break;
@@ -1936,26 +2004,23 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
             for ( const auto& target : collectVisibleTimingTargets() ) {
                 if ( isTimingTargetSelectable(target) &&
                      selectionMatchesTarget(selectionRect, target) ) {
-                    m_selectedTimingEntities.insert(target.entity);
+                    // 每帧从起笔基线重算，缩回框选时必须恢复刚才暂时减去的目标。
+                    // 不能把减选写成持续 erase，否则同一手势回缩后无法恢复。
+                    if ( m_timingMarqueeOperation ==
+                         Logic::SelectionOperation::Subtract )
+                        m_selectedTimingEntities.erase(target.entity);
+                    else
+                        m_selectedTimingEntities.insert(target.entity);
                 }
             }
         };
 
-        if ( isHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) ) {
+        if ( isHovered &&
+             UI::Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
             if ( hoveredTarget && isTimingTargetSelectable(*hoveredTarget) ) {
-                const bool wasSelected =
-                    m_selectedTimingEntities.find(hoveredTarget->entity) !=
-                    m_selectedTimingEntities.end();
-                if ( additiveSelection ) {
-                    if ( wasSelected ) {
-                        m_selectedTimingEntities.erase(hoveredTarget->entity);
-                    } else {
-                        m_selectedTimingEntities.insert(hoveredTarget->entity);
-                    }
-                } else {
-                    m_selectedTimingEntities.clear();
-                    m_selectedTimingEntities.insert(hoveredTarget->entity);
-                }
+                // 选中工具不保留抓取分组；显式追加、减选与主画布模式一致。
+                selectTimingTarget(
+                    hoveredTarget->entity, false, additiveSelection);
                 m_isTimingMarqueeSelecting = false;
                 m_timingMarqueeBaseSelection.clear();
             } else {
@@ -1967,26 +2032,32 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                 m_timingMarqueeEndTime = m_timingMarqueeStartTime;
                 refreshMarqueeScreenY();
                 m_timingMarqueeBaseSelection.clear();
-                if ( additiveSelection ) {
+                // 一笔框选只解释一次模式；经典修饰键仍在起笔决定是否保留基线。
+                m_timingMarqueeOperation = selectionOperation.value_or(
+                    additiveSelection ? Logic::SelectionOperation::Add
+                                      : Logic::SelectionOperation::Replace);
+                if ( m_timingMarqueeOperation !=
+                     Logic::SelectionOperation::Replace ) {
                     m_timingMarqueeBaseSelection = m_selectedTimingEntities;
                 }
-                if ( !additiveSelection ) {
+                if ( m_timingMarqueeOperation ==
+                     Logic::SelectionOperation::Replace ) {
                     m_selectedTimingEntities.clear();
                 }
                 refreshMarqueeTargets();
             }
         }
         if ( m_isTimingMarqueeSelecting &&
-             ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+             UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             bool autoScrolled = false;
             if ( !m_currentSnapshot->isPlaying ) {
-                const double autoScrollTargetTime =
-                    marqueeAutoScrollTargetTime(*m_currentSnapshot,
-                                                size.y,
-                                                localMouseY,
-                                                io.DeltaTime,
-                                                io.KeyShift,
-                                                autoScrolled);
+                const double autoScrollTargetTime = marqueeAutoScrollTargetTime(
+                    *m_currentSnapshot,
+                    size.y,
+                    localMouseY,
+                    io.DeltaTime,
+                    UI::Interaction::acceleratedScroll(),
+                    autoScrolled);
                 if ( autoScrolled ) {
                     const double visualOffset = Config::AppConfig::instance()
                                                     .getVisualConfig()
@@ -2000,7 +2071,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
             refreshMarqueeTargets();
         }
         if ( m_isTimingMarqueeSelecting &&
-             !ImGui::IsMouseDown(ImGuiMouseButton_Left) ) {
+             !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             refreshMarqueeTargets();
             m_isTimingMarqueeSelecting = false;
             m_timingMarqueeBaseSelection.clear();

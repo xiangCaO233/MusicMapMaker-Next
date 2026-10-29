@@ -1,7 +1,9 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
+
 #include "canvas/AnnotationTableWindow.h"
 #include "config/EditorSettings.h"
 #include "config/VisualConfig.h"
+#include "ui/interaction/EditorInteraction.h"
 
 #include "canvas/AuxiliaryWindowState.h"
 #include "canvas/AuxiliaryWindowUi.h"
@@ -638,9 +640,11 @@ void AnnotationTableWindow::update(UI::UIManager* sourceManager)
                             ImVec2(0.0F, ImGui::GetFrameHeight()));
                         // AllowOverlap 允许同一行的操作按钮独立响应；只有点击
                         // 非按钮区域时 Selectable 才承担整行选择。
+                        // 双击使用映射按键，行归属仍以实际悬停为准。
                         const bool rowDoubleClicked =
                             ImGui::IsItemHovered() &&
-                            ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+                            UI::Interaction::mouseDoubleClicked(
+                                ImGuiMouseButton_Left);
                         if ( rowClicked ) {
                             // 详情区引用索引只在当前 rows 生命周期内使用。
                             m_selectedRow = index;
