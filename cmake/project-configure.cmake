@@ -287,6 +287,10 @@ if(WIN32)
   set(MMM_PLATFORM "windows")
 elseif(APPLE)
   set(MMM_PLATFORM "macos")
+elseif(ANDROID)
+  # Android 不能沿用 Linux 平台标识，否则更新检查会匹配桌面包与独立更新器。 仅消费清单中的 android
+  # 节点；服务端尚未提供时不借用其他平台产物。
+  set(MMM_PLATFORM "android")
 else()
   set(MMM_PLATFORM "linux")
 endif()
