@@ -5,11 +5,12 @@ dependencyResolutionManagement { repositories { google(); mavenCentral() } }
 rootProject.name = 'MusicMapMakerAndroid'
 include ':app'
 
-// Studio 直接打开时也使用与脚本相同的仓库外工作树，避免要求用户创建本机路径配置。
-def sdk = System.getenv('ANDROID_HOME') ?: new File(System.getProperty('user.home'), 'Android/Sdk').path
-def work = new File(providers.gradleProperty('mmmAndroidWorkDir').getOrElse("${sdk}/../mmm-smoke/main")).canonicalFile
+// Studio 与脚本共用已 ignore 的专用构建目录，不在源码根散落输出文件。
 def repository = new File(settingsDir, '../..').canonicalFile
-if (work.toPath().startsWith(repository.toPath())) throw new GradleException('Android work directory must be outside the repository.')
+def allowedBuild = new File(repository, 'build-android').canonicalFile
+def work = new File(providers.gradleProperty('mmmAndroidWorkDir').getOrElse(System.getenv('MMM_ANDROID_WORK_DIR') ?: allowedBuild.path)).canonicalFile
+// 只允许专用构建树或仓库外目录，拒绝把业务源码与根目录当作 Gradle 输出。
+if (work == repository || (work.toPath().startsWith(repository.toPath()) && !work.toPath().startsWith(allowedBuild.toPath()))) throw new GradleException('Use build-android or a directory outside the repository.')
 // 项目缓存独立于 Gradle 下载缓存，Studio 同步也不能生成源码旁的 .gradle。
 if (gradle.startParameter.projectCacheDir == null) gradle.startParameter.projectCacheDir = new File(work, 'cache/gradle-project')
 // 根工程和应用模块共享规范化后的路径，命令行仍可用 -P 显式覆盖。
