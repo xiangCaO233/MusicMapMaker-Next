@@ -84,9 +84,7 @@ private:
     /// @brief 固定位置的移动外壳窗口，不写入桌面 imgui.ini。
     bool beginPanel(const char* id, MobileRect rect, bool background = true);
     /// @brief 绘制最小触摸区域与细握柄，点击和拖动共用状态机。
-    void drawHandle(const char* id, MobileRect rect);
-    /// @brief 两侧共用标题、滑动提示和明确收起入口，内容层从标题下方开始。
-    void drawDrawerHeader(MobileRect rect);
+    void drawHandle(const char* id, MobileRect rect, bool opened = false);
     /// @brief 左侧第一级提供常用分类，第二级保留现有业务管理器。
     void drawLeftDrawer(UIManager& manager, MobileRect rect);
     /// @brief 右侧以明确的选中状态提供三个窗口开关。
@@ -387,87 +385,71 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
 
 /// @brief 只绘制握柄，不再建立第二套点击或拖动状态。
 /// @param id 当前一侧把手的稳定窗口身份。
-/// @param rect 由纯模型给出的完整触摸区，不等于细握柄的可见宽度。
+/// @param rect 纯模型给出的完整触摸区，不等于细握柄的可见宽度。
+/// @param opened 为 true 时只绘制外沿握柄，收起把手则保留入口图标。
 /// @details 移动外壳在所有背景内容之后绘制握柄，便于拇指发现入口。
 /// 命中区与系统最外侧返回区域错开，图形上不添加桌面悬浮说明。
 /// 左侧文件夹表示资源入口，右侧滑杆表示工作区显示控制。
 /// 图标只提供识别，不额外创建一个与手势模型竞争的按钮 Item。
 /// @warning 固定图元绘制，不申请纹理或执行异步工作。
-void MobileWorkspacePresentation::drawHandle(const char* id, MobileRect rect)
+void MobileWorkspacePresentation::drawHandle(const char* id, MobileRect rect,
+                                             bool opened)
 {
     // 把手窗口自身不添加内容内边距，整块透明区域都是触摸目标。
     // 可见握柄只占其中少量宽度，避免长期遮住画布。
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{});
     if ( beginPanel(id, rect, false) ) {
-        const auto color = ImGui::GetColorU32(ImGuiCol_Text);
-        const auto pos   = ImGui::GetWindowPos();
-        // 握柄本身不是按钮，48dp 透明命中区已由纯手势状态机处理。
-        // 细握柄在命中区中居中，不把图形边缘误当成触摸边缘。
-        // 颜色来自当前主题，浅色与深色皮肤均保留足够辨识度。
-        const float x    = pos.x + rect.m_width * 0.5f;
-        auto*       draw = ImGui::GetWindowDrawList();
-        // 图标说明入口职责，短握柄说明可以拖动；两者共享原来的触摸目标。
-        // 背景只占命中区内部，不扩大对主画布的遮挡范围。
-        draw->AddRectFilled(
-            { x - 18 * m_scale, pos.y + 4 * m_scale },
-            { x + 18 * m_scale, pos.y + rect.m_height - 4 * m_scale },
-            ImGui::GetColorU32(ImGuiCol_Button),
-            4 * m_scale);
-        auto* font = Config::SkinManager::instance().getFont("pure_icons");
-        // 字体已由皮肤生命周期持有，把手不缓存跨皮肤重载的指针。
-        // 回退字体仅用于皮肤缺少专用图标字体时保持绘制接口有效。
-        if ( !font ) font = ImGui::GetFont();
-        const char* icon = id == std::string_view("MobileLeftHandle")
-                               ? ICON_MMM_FOLDER_OPEN
-                               : ICON_MMM_SLIDERS;
-        // 专用字体尺寸明确，避免当前窗口文字字体缺少私用区图标。
-        const auto bounds =
-            font->CalcTextSizeA(22 * m_scale, 100 * m_scale, 0, icon);
-        // 用实际字形宽度居中，两个入口不会因为图标本身宽度不同而偏移。
-        draw->AddText(font,
-                      22 * m_scale,
-                      { x - bounds.x * .5f, pos.y + 12 * m_scale },
-                      color,
-                      icon);
-        draw->AddRectFilled(
-            { x - 2 * m_scale, pos.y + rect.m_height - 29 * m_scale },
-            { x + 2 * m_scale, pos.y + rect.m_height - 12 * m_scale },
-            color,
-            2 * m_scale);
+        if ( opened ) {
+            // 不创建第二个收起按钮，点击和拖动都由同一个把手命中区处理。
+            // 展开把手只绘制细握柄，透明命中区仍保持完整触摸宽度。
+            // 它位于面板边缘，不占用任何业务内容行或标签栏。
+            const auto  pos = ImGui::GetWindowPos();
+            const float x   = pos.x + rect.m_width * .5f;
+            ImGui::GetWindowDrawList()->AddRectFilled(
+                { x - 3 * m_scale, pos.y + 12 * m_scale },
+                { x + 3 * m_scale, pos.y + rect.m_height - 12 * m_scale },
+                ImGui::GetColorU32(ImGuiCol_Text),
+                3 * m_scale);
+        } else {
+            const auto color = ImGui::GetColorU32(ImGuiCol_Text);
+            const auto pos   = ImGui::GetWindowPos();
+            // 握柄本身不是按钮，48dp 透明命中区已由纯手势状态机处理。
+            // 细握柄在命中区中居中，不把图形边缘误当成触摸边缘。
+            // 颜色来自当前主题，浅色与深色皮肤均保留足够辨识度。
+            const float x    = pos.x + rect.m_width * 0.5f;
+            auto*       draw = ImGui::GetWindowDrawList();
+            // 图标说明入口职责，短握柄说明可以拖动；两者共享原来的触摸目标。
+            // 背景只占命中区内部，不扩大对主画布的遮挡范围。
+            draw->AddRectFilled(
+                { x - 18 * m_scale, pos.y + 4 * m_scale },
+                { x + 18 * m_scale, pos.y + rect.m_height - 4 * m_scale },
+                ImGui::GetColorU32(ImGuiCol_Button),
+                4 * m_scale);
+            auto* font = Config::SkinManager::instance().getFont("pure_icons");
+            // 字体已由皮肤生命周期持有，把手不缓存跨皮肤重载的指针。
+            // 回退字体仅用于皮肤缺少专用图标字体时保持绘制接口有效。
+            if ( !font ) font = ImGui::GetFont();
+            const char* icon = id == std::string_view("MobileLeftHandle")
+                                   ? ICON_MMM_FOLDER_OPEN
+                                   : ICON_MMM_SLIDERS;
+            // 专用字体尺寸明确，避免当前窗口文字字体缺少私用区图标。
+            const auto bounds =
+                font->CalcTextSizeA(22 * m_scale, 100 * m_scale, 0, icon);
+            // 用实际字形宽度居中，两个入口不会因为图标本身宽度不同而偏移。
+            draw->AddText(font,
+                          22 * m_scale,
+                          { x - bounds.x * .5f, pos.y + 12 * m_scale },
+                          color,
+                          icon);
+            draw->AddRectFilled(
+                { x - 2 * m_scale, pos.y + rect.m_height - 29 * m_scale },
+                { x + 2 * m_scale, pos.y + rect.m_height - 12 * m_scale },
+                color,
+                2 * m_scale);
+        }
     }
     ImGui::End();
     ImGui::PopStyleVar();
-}
-
-/// @brief 为抽屉提供无需悬浮即可发现的收起操作。
-/// @param rect 完整抽屉边界，标题内部仅使用顶部固定高度。
-/// @details 标题是模型唯一允许反向滑动的区域，业务列表保留自己的手势。
-/// 收起按钮位于拖动区域之外，因此按下按钮不会同时捕获一个标题拖动。
-/// @warning 每帧只绘制固定内容，点击仅更新本地模型，不销毁管理器。
-void MobileWorkspacePresentation::drawDrawerHeader(MobileRect rect)
-{
-    // 标题和内容是独立窗口，但共享同一个抽屉矩形的水平动画偏移。
-    // 标题固定在顶端，不随分类列表和文件列表的纵向滚动离开屏幕。
-    rect.m_height = m_model.headerHeight();
-    if ( beginPanel("MobileDrawerHeader", rect) ) {
-        // 明示滑动方向，同时保留独立按钮，用户不需要先知道手势才能返回。
-        const bool left = m_model.drawer() == MobileDrawer::Left;
-        ImGui::TextUnformatted(left ? "资源面板" : "工作区");
-        ImGui::TextDisabled(left ? "向左滑动收起" : "向右滑动收起");
-        const float buttonWidth = 104.0f * m_scale;
-        // 图标与文字作为一个按钮，按钮区不属于模型的标题滑动范围。
-        // 命中区至少 48dp 高；可见收起入口不依赖系统导航模式。
-        ImGui::SetCursorScreenPos(
-            { m_origin.x + rect.m_x + rect.m_width - m_padding - buttonWidth,
-              m_origin.y + rect.m_y +
-                  (rect.m_height - 48.0f * m_scale) * .5f });
-        if ( MobileActionButton("drawerClose",
-                                ICON_MMM_MINIMIZE,
-                                "收起",
-                                { buttonWidth, 48.0f * m_scale }) )
-            m_model.closeDrawer();
-    }
-    ImGui::End();
 }
 
 /// @brief 组合类别导航和当前业务管理器，形成联动的两级抽屉。
@@ -537,7 +519,7 @@ void MobileWorkspacePresentation::drawLeftDrawer(UIManager& manager,
 }
 
 /// @brief 通过大面积选中按钮控制辅助编辑窗口的显示状态。
-/// @param rect 已扣除固定标题的内容矩形，禁止再次扣除标题高度。
+/// @param rect 完整内容矩形，外沿把手不参与面板内部高度分配。
 /// @details 标签和底色直接表达状态，不使用悬浮 tooltip 解释开关。
 /// 开关属于移动工作区会话，不把每次触摸写入配置文件。
 /// 几何变化在下一帧统一计算，避免同帧部分窗口使用旧边界。
@@ -706,18 +688,14 @@ void MobileWorkspacePresentation::endFrame(UIManager& manager)
         ImGui::End();
         ImGui::PopStyleColor();
         const auto rect = m_model.drawerRect();
-        drawDrawerHeader(rect);
-        // 标题与内容使用同一平移动画，不能出现标题已收起而列表还停在原地。
-        // 两级内容共同扣除标题高度，导航点击不会落入标题的拖动命中区。
-        MobileRect body{ rect.m_x,
-                         rect.m_y + m_model.headerHeight(),
-                         rect.m_width,
-                         std::max(1.0f,
-                                  rect.m_height - m_model.headerHeight()) };
+        // 面板内容用满高度，外沿把手单独叠加，不再扣除顶部收起条。
         if ( m_model.drawer() == MobileDrawer::Left )
-            drawLeftDrawer(manager, body);
+            drawLeftDrawer(manager, rect);
         else
-            drawRightDrawer(manager, body);
+            drawRightDrawer(manager, rect);
+        drawHandle("MobileDrawerGrip", m_model.drawerGrip(), true);
+        // 外沿把手与抽屉共享展开比例，内容区域不因把手显隐改变宽高。
+        // 普通弹层仍由 ImGui 保持在上方，握柄不会抢占其输入。
     }
     if ( !popup && m_model.drawer() == MobileDrawer::None ) {
         drawHandle("MobileLeftHandle", m_model.leftHandle());
