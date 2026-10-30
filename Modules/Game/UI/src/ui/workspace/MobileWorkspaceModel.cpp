@@ -25,17 +25,23 @@ bool MobileRect::contains(float x, float y) const
 /// @param width 工作区宽度，不包含系统已经排除的屏幕安全区。
 /// @param height 工作区高度，决定把手垂直居中位置。
 /// @param scale 统一内容倍率，手势阈值和按钮几何使用同一单位。
+/// @param rightInset 右侧工具栏的占用宽度，来自组合根本帧几何。
 /// @details 旋转不重置目标状态，业务视图仍保留当前选择。
 /// @warning UI 线程本地赋值，不等待平台窗口或交换链重建。
-void MobileWorkspaceModel::resize(float width, float height, float scale)
+void MobileWorkspaceModel::resize(float width, float height, float scale,
+                                  float rightInset)
 {
     // 旋转会改变滑动分母和坐标系，旧触点不能继续控制新的矩形。
-    if ( m_width != width || m_height != height || m_scale != scale )
+    if ( m_width != width || m_height != height || m_scale != scale ||
+         m_rightInset != rightInset )
         cancelGesture();
     // 异常布局值不能产生负窗口或非有限手势阈值。
     m_width  = std::max(1.0f, width);
     m_height = std::max(1.0f, height);
     m_scale  = std::max(0.5f, scale);
+    // 工具栏显隐只平移把手，不能把用户已拖动的纵向偏好重置到屏幕中点。
+    // 夹取保留区防止极窄布局生成负横坐标；命中与绘制共用此几何。
+    m_rightInset = std::clamp(rightInset, 0.0f, m_width);
 }
 
 /// @brief 限制展开区宽度，同时适应狭窄手机屏幕。
@@ -70,7 +76,9 @@ MobileRect MobileWorkspaceModel::rightHandle() const
 {
     auto rect = leftHandle();
     // 复用宽高和左右留白后再覆盖纵向位置，不能继承左侧已经移动的上沿。
-    rect.m_x = m_width - rect.m_width - rect.m_x;
+    // 右把手始终位于工具栏左侧，任意纵向位置都不会盖住其可点击按钮。
+    // 工具栏隐藏时保留区为零，入口自动回到原来的右缘位置。
+    rect.m_x = std::max(0.0f, m_width - m_rightInset - rect.m_width - rect.m_x);
     // 右把手只镜像边距；独立中心确保移动左把手不会连带移动右把手。
     rect.m_y = std::clamp(m_rightHandleCenter * m_height - rect.m_height * .5f,
                           0.0f,
