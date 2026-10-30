@@ -83,6 +83,8 @@ private:
 
         /// @brief 当前是否展开全局设置段落。
         bool showGlobalSettings{ true };
+        /// @brief 是否显示输出设备行；平台能力也参与布局缓存键，防止保留空行。
+        bool showOutputDeviceSelector{ true };
     };
 
     /// @brief 音频管理器布局测量缓存。
