@@ -87,6 +87,8 @@ add_library(
   # 公共视图只认识工作区策略，平台工厂在下面按目标系统独立选择。
   src/ui/workspace/WorkspacePresentation.cpp
   src/ui/workspace/MobileWorkspaceModel.cpp
+  # 空白触屏滚动独立于业务视图，桌面只在无 GPU 回归中主动创建。
+  src/ui/workspace/MobileTouchScroll.cpp
   # 教学段落目录仅在服务构造时读取资源，运行时按已生成模型推进。
   src/ui/walkthrough/ComposeLessonCatalog.cpp
   src/ui/walkthrough/WalkthroughModel.cpp
@@ -665,6 +667,12 @@ mmm_add_test_executable(UI MobileWorkspaceModelTest
 target_link_libraries(MobileWorkspaceModelTest PRIVATE UI Log)
 mmm_register_test_case(NAME MobileWorkspaceModelTest COMMAND
                        MobileWorkspaceModelTest)
+
+# 用真实 ImGui 窗口验证空白滚动与控件输入归属，不创建平台窗口或 Vulkan。
+mmm_add_test_executable(UI MobileTouchScrollTest
+                        tests/MobileTouchScrollTest.cpp)
+target_link_libraries(MobileTouchScrollTest PRIVATE UI Log)
+mmm_register_test_case(NAME MobileTouchScrollTest COMMAND MobileTouchScrollTest)
 # Android 暂不提供桌面文件选择器，兼容层明确报告不支持，不能静默丢失用户文件。
 if(ANDROID)
   target_sources(UI PRIVATE src/ui/utils/AndroidFileDialog.cpp)

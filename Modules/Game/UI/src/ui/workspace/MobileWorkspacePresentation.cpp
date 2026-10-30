@@ -15,6 +15,7 @@
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 #include "ui/workspace/MobileButton.h"
+#include "ui/workspace/MobileTouchScroll.h"
 #include "ui/workspace/MobileWorkspaceModel.h"
 #include <algorithm>
 #include <array>
@@ -63,7 +64,7 @@ public:
     /// @brief 抽屉与关闭手势释放保护统一阻挡画布原始输入。
     bool blocksCanvasInput() const override
     {
-        return m_model.blocksCanvasInput();
+        return m_model.blocksCanvasInput() || m_touchScroll.ownsPointer();
     }
     /// @brief 手指没有悬浮状态，外壳采用按下与选中反馈。
     bool allowsHoverFeedback() const override { return false; }
@@ -96,6 +97,8 @@ private:
 
     /// @brief 纯手势状态只属于 UI 线程，关闭抽屉不影响文件选择状态。
     MobileWorkspaceModel m_model;
+    /// @brief 全局空白拖动滚动，只接管触屏，业务画布仍保留自己的绘制手势。
+    MobileTouchScroll m_touchScroll;
     /// @brief 下一帧收到的原生返回请求，由 SDL 事件泵写入。
     bool m_backRequested{}, m_initialized{}, m_drawingDrawer{},
         m_settingsSelected{};
@@ -170,6 +173,8 @@ void MobileWorkspacePresentation::beginFrame(UIManager&)
                      ImGui::IsMouseReleased(0) },
                    io.DeltaTime,
                    popupOpen);
+    m_touchScroll.beginFrame(m_scale);
+    // 仅预采样触点；控件提交后才确认空白，不抢先吞掉按钮按下。
 }
 
 /// @brief 从公共更新序列中移出由抽屉承载的管理器窗口。
@@ -702,6 +707,7 @@ void MobileWorkspacePresentation::endFrame(UIManager& manager)
         drawHandle("MobileRightHandle", m_model.rightHandle());
     }
     drawExitConfirmation();
+    m_touchScroll.endFrame();
     ImGui::PopStyleVar();
     // 确认只发布既有窗口命令，继续走工程收尾和资源销毁流程。
     // 不调用进程终止、Activity.finish 或跨线程 join 来模拟退出。
