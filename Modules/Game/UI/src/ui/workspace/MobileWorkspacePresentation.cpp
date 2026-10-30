@@ -69,6 +69,8 @@ public:
     bool allowsHoverFeedback() const override { return false; }
     /// @brief 手机旋转和抽屉不消费桌面停靠树，也不覆盖其持久化内容。
     bool usesDesktopLayout() const override { return false; }
+    /// @brief 移动端不显示桌面输出设备组合框，继续使用现有音量控制。
+    bool showsAudioOutputDeviceSelector() const override { return false; }
     /// @brief 文件对话框始终保留设备工作区边距。
     ImVec2 fileDialogSize(float scale, ImVec2 available) const override
     {
