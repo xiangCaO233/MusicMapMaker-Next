@@ -280,7 +280,22 @@ private:
 
     /// @brief 当前项目文件树使用的根目录快照。
     std::filesystem::path m_currentRoot;
-    bool                  m_showRoot = true;
+    /// @brief 根切换后异步准备的显示名与来源位置，不参与实际文件访问。
+    std::string m_rootDisplayName, m_rootDisplayLocation;
+    /// @brief 就绪后停止轮询，普通帧不跨 JNI 查询授权映射。
+    bool m_rootPresentationPending{};
+    /// @brief 最近项目的轻量展示缓存，不持有 provider 或实际文件资源。
+    struct RecentPathDisplay {
+        /// @brief 目录显示名与等待状态，完成后不再跨 JNI 查询。
+        std::string m_name;
+        bool        m_pending{ true };
+    };
+    /// @brief 按原始存取路径缓存显示名，同名的不同项目不会互相覆盖。
+    std::unordered_map<std::string, RecentPathDisplay> m_recentPathDisplays;
+    /// @brief 为最近列表取得已经准备好的名称，不等待后台目录查询。
+    /// @warning 只有新路径插入缓存；普通帧只做缓存查找和短结果轮询。
+    const RecentPathDisplay& recentPathDisplay(const std::string& path);
+    bool                     m_showRoot = true;
     /// @brief 当前文件树排序字段。
     FileSortKey m_fileSortKey{ FileSortKey::Name };
 

@@ -25,6 +25,7 @@
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/DesktopPathUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -834,16 +835,43 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
         Sizing::Grow(),
         Sizing::Fixed(ImGui::GetFrameHeight()),
         [this, projectRoot](Clay_BoundingBox r, bool isHovered) {
-            // 可见名只展示根目录 basename，完整路径放入 tooltip。
-            std::string rootName = Config::pathToUtf8(projectRoot.filename());
+            // 展示身份来自根切换后准备的快照，不能直接使用 SAF 私有目录
+            // basename。 普通桌面根仍由原 basename
+            // 构成，平台映射只替换可见文字。
             Utils::renderScrollingCollapsingHeader(
-                "ProjectRootHeader", rootName, &m_showRoot, r);
-            if ( ImGui::IsItemHovered() ) {
+                "ProjectRootHeader", m_rootDisplayName, &m_showRoot, r);
+            if ( workspaceAllowsHoverFeedback() && ImGui::IsItemHovered() ) {
                 // tooltip 帮助区分同名但位于不同位置的项目。
-                std::string fullPath = Config::pathToUtf8(projectRoot);
+                std::string fullPath = m_rootDisplayLocation.empty()
+                                           ? Config::pathToUtf8(projectRoot)
+                                           : m_rootDisplayLocation;
                 ImGui::SetTooltip("%s", fullPath.c_str());
             }
         });
+
+    if ( !workspaceAllowsHoverFeedback() && !m_rootDisplayLocation.empty() ) {
+        // 名称与来源分成两行，路径说明不占用根节点标题的可点击空间。
+        // 先测量换行高度再交给 Clay，使文件表格起点跟随真实文字高度。
+        // 只读已有字符串与字体，不在此处解析 URI 或读取授权映射。
+        // 触屏将来源常驻换行显示，不依赖悬浮，也不让长路径撑出横向画布。
+        const float width =
+            std::max(1.0f, layoutContext.m_avail.x - 2 * rootPadding);
+        const float height =
+            ImGui::CalcTextSize(
+                m_rootDisplayLocation.c_str(), nullptr, false, width)
+                .y;
+        treeVBox.addElement(
+            "ProjectRootLocation",
+            Sizing::Grow(),
+            Sizing::Fixed(height),
+            [this](Clay_BoundingBox r, bool) {
+                ImGui::SetCursorScreenPos({ r.x, r.y });
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + r.width);
+                // 来源文本止于抽屉右边界，长目录层级不产生横向内容宽度。
+                ImGui::TextDisabled("%s", m_rootDisplayLocation.c_str());
+                ImGui::PopTextWrapPos();
+            });
+    }
 
     if ( m_showRoot ) {
         // 展开根节点后让表格占满剩余纵向空间。
@@ -1024,7 +1052,8 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
         }
         // 条目右键菜单与第一列 item 绑定，并允许行 hover 显示完整路径。
         renderFileEntryContextMenu(entry, sourceManager);
-        if ( rowHovered ) {
+        if ( rowHovered && workspaceAllowsHoverFeedback() ) {
+            // 手指停留不代表鼠标悬浮，移动端不弹出私有副本的完整路径。
             Utils::renderTooltip(entry.fullPath.c_str());
         }
 

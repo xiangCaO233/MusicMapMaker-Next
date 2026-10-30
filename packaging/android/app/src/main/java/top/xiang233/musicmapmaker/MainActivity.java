@@ -103,6 +103,11 @@ public final class MainActivity extends SDLActivity {
     /** 返回值为短 UTF-8 载荷，尚未完成时为 null，不能阻塞 SDL 生命周期。 */
     public byte[] takeDocumentSelection() { return documents().takeResult(); }
 
+    /** 显示信息由文件线程准备；SDL 帧只取已经发布的短结果，不等待 provider。 */
+    public byte[] documentPresentation(byte[] path) {
+        return documents().presentation(new String(path, StandardCharsets.UTF_8));
+    }
+
     /** 只有低频文件写入调用此接口，平台错误必须传回 C++ 保存结果。 */
     public byte[] publishDocument(byte[] name) {
         // 原生 writer 已关闭文件，结果必须传回业务保存事务而非只在 Java 吞掉。

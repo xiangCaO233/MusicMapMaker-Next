@@ -1,4 +1,5 @@
 #include "ui/imgui/manager/FileManagerView.h"
+#include "common/platform/DocumentStorage.h"
 #include "config/AppConfig.h"
 #include "config/EditorConfig.h"
 #include "config/Utf8Path.h"
@@ -11,9 +12,11 @@
 #include "imgui.h"
 #include "ui/UIManager.h"
 #include "ui/layout/LayoutContext.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <utility>
 
 /// @file FileManagerView.cpp
 /// @brief 文件管理器的事件订阅、项目状态同步、最小尺寸计算和帧入口实现。
@@ -22,6 +25,31 @@
 
 namespace MMM::UI
 {
+/// @brief 缓存最近项目显示名，原始路径只保留为打开操作身份。
+/// @details 所有平台解析都非阻塞，完成后的条目不再读取文件或 JNI 状态。
+/// @param path 最近项目记录中的完整存取路径，不作为向用户展示的默认标题。
+/// @return 随当前视图存活的缓存值，不向调用方转移文件或平台对象所有权。
+/// @warning 每个可见最近项目查询一次，只有首次出现路径才插入缓存。
+const FileManagerView::RecentPathDisplay& FileManagerView::recentPathDisplay(
+    const std::string& path)
+{
+    auto [entry, inserted] = m_recentPathDisplays.try_emplace(path);
+    if ( inserted ) entry->second.m_name = "项目";
+    // 准备中使用中性标题，不能先闪现内部哈希再替换成用户目录名。
+    if ( entry->second.m_pending ) {
+        // 以完整路径配对结果，多个最近项目可以同时准备而不会串用名称。
+        const auto nativePath = Config::utf8ToPath(path);
+        if ( auto display = Common::documentPresentation(nativePath) ) {
+            entry->second.m_name =
+                display->m_name.empty()
+                    ? Config::pathToUtf8(nativePath.filename())
+                    : std::move(display->m_name);
+            entry->second.m_pending = false;
+            // 异步结果已复制到本机值对象，后续绘制不再依赖 Java 数组的寿命。
+        }
+    }
+    return entry->second;
+}
 
 /// @brief 创建文件管理器并订阅拖放、保存和目录刷新事件。
 /// @param subViewName FloatingManagerUI 注册该子视图时使用的名称。
@@ -225,15 +253,39 @@ void FileManagerView::syncProjectUiState(UIManager* sourceManager)
     if ( hasActiveProject ) {
         // 只有活动项目状态下才读取根目录快照。
         const auto& projectRoot = sourceManager->getActiveProjectRoot();
-        if ( projectRoot != m_currentRoot ) {
+        if ( projectRoot != m_currentRoot || !m_hasActiveProjectUiState ) {
             // 项目切换或临时项目转正时替换根并失效旧目录缓存。
             m_currentRoot = projectRoot;
+            // 移动端准备完成前不闪现内部哈希；桌面仍保留原有 basename。
+            m_rootDisplayName = workspaceAllowsHoverFeedback()
+                                    ? Config::pathToUtf8(projectRoot.filename())
+                                    : "项目";
+            m_rootDisplayLocation.clear();
+            m_rootPresentationPending = true;
+            // 存取根始终保留原值，展示路径不能成为目录枚举或保存的输入。
             invalidateDirectoryCache();
         }
     } else if ( !m_currentRoot.empty() ) {
         // 项目关闭后清除根路径，防止无项目界面继续引用旧目录。
         m_currentRoot.clear();
+        m_rootDisplayName.clear();
+        m_rootDisplayLocation.clear();
+        m_rootPresentationPending = false;
         invalidateDirectoryCache();
+    }
+    if ( hasActiveProject && m_rootPresentationPending ) {
+        // 初始化与当前工作目录相同的项目也要准备名称，不能只依赖路径不相等。
+        // 结果与请求根配对，快速切换项目时不会把前一个目录的标题用于新项目。
+        // 平台仅返回已经完成的短快照；文件与 provider 操作均在工作线程。
+        if ( auto display = Common::documentPresentation(m_currentRoot) ) {
+            m_rootDisplayName =
+                display->m_name.empty()
+                    ? Config::pathToUtf8(m_currentRoot.filename())
+                    : std::move(display->m_name);
+            m_rootDisplayLocation     = std::move(display->m_location);
+            m_rootPresentationPending = false;
+            // 只提交完整结果，避免同一帧标题来自新根而来源文字仍属于旧根。
+        }
     }
     // 最后提交存在状态，使同帧渲染选择与已同步根路径一致。
     m_hasActiveProjectUiState = hasActiveProject;
