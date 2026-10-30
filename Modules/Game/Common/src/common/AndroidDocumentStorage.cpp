@@ -89,6 +89,35 @@ public:
 };
 }  // namespace
 
+/// @brief 只从 Java 原子发布槽取短显示值，查询授权来源由后台文件线程执行。
+/// @details 使用 NUL 分隔两个 UTF-8 字段，名称中的换行不会破坏载荷边界。
+/// @warning 根切换后轮询至就绪，不在此处打开映射文件或等待 provider。
+std::optional<DocumentPresentation> documentPresentation(
+    const std::filesystem::path& path)
+{
+    ActivityCall call;
+    const auto   method = call.method("documentPresentation", "([B)[B");
+    // 桥接不可用时结束准备，不能让文件视图一直反复发起失败请求。
+    if ( !method ) return DocumentPresentation{};
+    const auto utf8 = path.u8string();
+    auto       name =
+        call.bytes({ reinterpret_cast<const char*>(utf8.data()), utf8.size() });
+    auto result = static_cast<jbyteArray>(
+        call.m_env->CallObjectMethod(call.m_activity, method, name));
+    if ( name ) call.m_env->DeleteLocalRef(name);
+    if ( call.m_env->ExceptionCheck() ) return DocumentPresentation{};
+    const auto value = call.take(result);
+    // null 与空显示信息不同：前者让视图保留准备状态，后者结束普通路径查询。
+    // 完成后视图会缓存原生字符串，不继续逐帧创建 JNI local reference。
+    if ( !value ) return std::nullopt;
+    const auto separator = value->find('\0');
+    // 只消费原始路径对应的两个字段，显示文本从不反向决定实际保存位置。
+    // 非法载荷采用普通路径回退，不把截断的名称当作文件系统地址。
+    if ( separator == std::string::npos ) return DocumentPresentation{};
+    return DocumentPresentation{ value->substr(0, separator),
+                                 value->substr(separator + 1) };
+}
+
 /// @brief 取得平台检查权限后返回的共享目录，不缓存可被系统撤销的授权。
 /// @return 仅完整支持本机访问的系统提供普通路径，其他情况保持 SAF 模式。
 /// @warning 用户点击低频路径；不得由逐帧显示状态代码查询。

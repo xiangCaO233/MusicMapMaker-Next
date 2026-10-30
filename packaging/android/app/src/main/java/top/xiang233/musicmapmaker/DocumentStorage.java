@@ -17,8 +17,10 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
@@ -52,6 +54,85 @@ final class DocumentStorage {
     private JSONObject mounts;
     /** 文件操作门闩只允许工作线程等待，原生保存使用 tryLock 立即返回忙状态。 */
     private final ReentrantLock fileGate = new ReentrantLock();
+    /** 发布后不再修改的展示快照；并发映射负责文件线程到 SDL 线程的可见性。 */
+    private final ConcurrentHashMap<String, Presentation> presentations = new ConcurrentHashMap<>();
+    /** 仅由 SDL 查询线程写入，最近项目可同时准备多个根而不重复排队。 */
+    private final Set<String> presentationRequests = new HashSet<>();
+
+    /** 原始请求身份与结果一起发布，切换项目时不能误用上一个根的名称。 */
+    private static final class Presentation {
+        /** 不作规范化的查询身份，只用于与 SDL 本次请求配对。 */
+        final String path;
+        /** 两个 NUL 分隔的 UTF-8 字段；发布后只读，不跨线程修改数组。 */
+        final byte[] value;
+        /** 创建独立快照，不借用工作线程正在写入的 JSON 对象。 */
+        Presentation(String path, String name, String location) {
+            this.path = path;
+            value = (name + '\0' + location).getBytes(StandardCharsets.UTF_8);
+        }
+    }
+
+    /**
+     * @brief SDL 线程非阻塞查询显示信息，同一路径最多挂起一个准备任务。
+     * @return null 表示后台未完成；空字段表示普通文件系统路径。
+     * @warning 这里不读文件、不查 provider，也不等待 fileGate。
+     */
+    byte[] presentation(String path) {
+        Presentation ready = presentations.get(path);
+        if (ready != null) return ready.value;
+        if (presentationRequests.add(path)) {
+            worker.execute(() -> preparePresentation(path));
+        }
+        return null;
+    }
+
+    /**
+     * @brief 只在文件工作线程解析授权映射，兼容升级前没有展示字段的索引。
+     * @details 仅补充本包索引，不重命名、复制或修改用户工程及其工作副本。
+     * @warning provider 查询可能慢，不能移到 SDL 或 Java UI 线程。
+     */
+    private void preparePresentation(String path) {
+        fileGate.lock();
+        try {
+            load();
+            String canonical = new File(path).getCanonicalPath();
+            for (Iterator<String> keys = mounts.keys(); keys.hasNext();) {
+                JSONObject mount = mounts.getJSONObject(keys.next());
+                if (!mount.optBoolean("tree")) continue;
+                String local = mount.getString("path");
+                if (!canonical.equals(local) && !canonical.startsWith(local + "/")) continue;
+                Uri tree = Uri.parse(mount.getString("source"));
+                String name = mount.optString("displayName");
+                String location = mount.optString("displayLocation");
+                if (name.isEmpty()) {
+                    Uri document = DocumentsContract.buildDocumentUriUsingTree(tree, DocumentsContract.getTreeDocumentId(tree));
+                    name = nameOf(document);
+                    location = name;
+                    // 仅对本机存储提供器解释其逻辑位置供展示，绝不拿它进行磁盘访问。
+                    if ("com.android.externalstorage.documents".equals(tree.getAuthority())) {
+                        String id = DocumentsContract.getTreeDocumentId(tree);
+                        int colon = id.indexOf(':');
+                        if (colon >= 0 && colon + 1 < id.length())
+                            location = (id.startsWith("primary:") ? "" : id.substring(0, colon) + "/") + id.substring(colon + 1);
+                    }
+                    mount.put("displayName", name).put("displayLocation", location);
+                    persist();
+                }
+                // 在授权树内部另选子目录时保留相对层级，不显示私有根的哈希。
+                if (!canonical.equals(local)) {
+                    String relative = canonical.substring(local.length() + 1);
+                    name = new File(canonical).getName();
+                    location += "/" + relative;
+                }
+                presentations.put(path, new Presentation(path, name, location));
+                return;
+            }
+            presentations.put(path, new Presentation(path, "", ""));
+        } catch (Exception error) {
+            // 展示失败不改变工程存取；私有副本仍保留，避免权限变化丢失编辑内容。
+            presentations.put(path, new Presentation(path, "所选项目", "系统授权目录"));
+        } finally { fileGate.unlock(); }
+    }
 
     /**
      * @brief 建立目录身份，磁盘读取延迟到实际用户操作的工作线程。
