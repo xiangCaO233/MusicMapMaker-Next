@@ -1717,6 +1717,9 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     /// 表格默认展示 ID 与路径，类型、大小和修改时间按需由用户打开。
     /// 自定义表头菜单替代 ImGui 默认菜单，但继续使用其内部列状态字段。
     /// 分组头和资源行使用相同固定高度，使 ImGuiListClipper 可准确估算范围。
+    /// 移动端只启用整行资源标识，点击行仍打开原有音轨控制器。
+    /// 不为适配列宽改变资源缓存、分组顺序或固定行高，保持裁剪器索引稳定。
+    /// 触屏表格不沿用桌面保存的列宽，字体与抽屉尺寸变化时主列自动伸缩。
     /// 每个资源行先提交跨列命中区，再在各可见列直接绘制滚动文本。
     /// 展开状态在裁剪遍历结束后更新，确保当前帧的逻辑行映射保持不变。
     auto renderAudioResourcesTable = [&](Clay_BoundingBox r, bool) {
@@ -1725,15 +1728,27 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         // 纵向滚动条样式只覆盖该表格，析构时自动恢复。
         Utils::VerticalScrollbarStyleScope verticalScrollbarStyle(dpiScale);
         // 支持用户调整、重排、隐藏与排序列，并固定表头进行纵向滚动。
-        const ImGuiTableFlags tableFlags =
+        ImGuiTableFlags tableFlags =
             ImGuiTableFlags_BordersV | ImGuiTableFlags_BordersOuterH |
             ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
             ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable |
             ImGuiTableFlags_Sortable | ImGuiTableFlags_ScrollY |
             ImGuiTableFlags_SizingStretchProp;
+        // 移动列表以资源标识为主要入口，路径等详情不再平分抽屉宽度。
+        // 分组头与资源行因此共用整行，长英文分类也不会被第一列裁掉。
+        // 独立表格身份隔离旧列宽；桌面列设置和元数据惰性加载保持原样。
+        if ( touchLayout ) {
+            tableFlags &=
+                ~(ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
+                  ImGuiTableFlags_Hideable);
+            tableFlags |= ImGuiTableFlags_NoSavedSettings;
+        }
+        const ImGuiTableColumnFlags detailFlags =
+            touchLayout ? ImGuiTableColumnFlags_Disabled : 0;
 
         // BeginTable 失败时不能调用任何 Table API，也无需显式 EndTable。
-        if ( ImGui::BeginTable("AudioManagerGroupedTable",
+        if ( ImGui::BeginTable(touchLayout ? "AudioManagerTouchTable"
+                                           : "AudioManagerGroupedTable",
                                5,
                                tableFlags,
                                { r.width, r.height }) ) {
@@ -1748,26 +1763,26 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             // 类型列默认隐藏，但提供固定宽度以避免显示后挤压不稳定。
             ImGui::TableSetupColumn(
                 TR("ui.audio_manager.column_type").data(),
-                ImGuiTableColumnFlags_DefaultHide |
+                detailFlags | ImGuiTableColumnFlags_DefaultHide |
                     ImGuiTableColumnFlags_WidthFixed |
                     ImGuiTableColumnFlags_PreferSortAscending,
                 std::max(96.0f, 116.0f * ImGui::GetFontSize() / 17.0f));
             // 路径列承担剩余宽度，超长内容由单元格滚动绘制器处理。
             ImGui::TableSetupColumn(
                 TR("ui.audio_manager.column_path").data(),
-                ImGuiTableColumnFlags_WidthStretch |
+                detailFlags | ImGuiTableColumnFlags_WidthStretch |
                     ImGuiTableColumnFlags_PreferSortAscending);
             // 大小列涉及文件查询，默认隐藏以避免无需求值。
             ImGui::TableSetupColumn(
                 TR("ui.audio_manager.column_size").data(),
-                ImGuiTableColumnFlags_DefaultHide |
+                detailFlags | ImGuiTableColumnFlags_DefaultHide |
                     ImGuiTableColumnFlags_WidthFixed |
                     ImGuiTableColumnFlags_PreferSortAscending,
                 std::max(96.0f, 104.0f * ImGui::GetFontSize() / 17.0f));
             // 修改时间按固定格式预留宽度，并偏好最近时间在前。
             ImGui::TableSetupColumn(
                 TR("ui.audio_manager.column_modified_time").data(),
-                ImGuiTableColumnFlags_DefaultHide |
+                detailFlags | ImGuiTableColumnFlags_DefaultHide |
                     ImGuiTableColumnFlags_WidthFixed |
                     ImGuiTableColumnFlags_PreferSortDescending,
                 std::max(168.0f,
