@@ -89,6 +89,8 @@ add_library(
   src/ui/workspace/MobileWorkspaceModel.cpp
   # 空白触屏滚动独立于业务视图，桌面只在无 GPU 回归中主动创建。
   src/ui/workspace/MobileTouchScroll.cpp
+  # 移动停靠树统一标签与内容边界，桌面仅通过无 GPU 测试创建。
+  src/ui/workspace/MobileDockLayout.cpp
   # 教学段落目录仅在服务构造时读取资源，运行时按已生成模型推进。
   src/ui/walkthrough/ComposeLessonCatalog.cpp
   src/ui/walkthrough/WalkthroughModel.cpp
@@ -673,6 +675,11 @@ mmm_add_test_executable(UI MobileTouchScrollTest
                         tests/MobileTouchScrollTest.cpp)
 target_link_libraries(MobileTouchScrollTest PRIVATE UI Log)
 mmm_register_test_case(NAME MobileTouchScrollTest COMMAND MobileTouchScrollTest)
+
+# 真实停靠树回归验证三个分区等高以及辅助窗口显隐后的结构。
+mmm_add_test_executable(UI MobileDockLayoutTest tests/MobileDockLayoutTest.cpp)
+target_link_libraries(MobileDockLayoutTest PRIVATE UI Log)
+mmm_register_test_case(NAME MobileDockLayoutTest COMMAND MobileDockLayoutTest)
 # Android 暂不提供桌面文件选择器，兼容层明确报告不支持，不能静默丢失用户文件。
 if(ANDROID)
   target_sources(UI PRIVATE src/ui/utils/AndroidFileDialog.cpp)
