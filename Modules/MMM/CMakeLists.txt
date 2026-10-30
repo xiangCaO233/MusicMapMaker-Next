@@ -126,6 +126,15 @@ target_include_directories(MalodyEdgeCaseTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 mmm_register_test_case(NAME Test_Malody_Edge_Case COMMAND MalodyEdgeCaseTest)
 
+# 密集函数 SV 的采样副本必须保留折线引用，不能把子长条和滑键重复写为顶层物件。 程序化 MMM 夹具只写构建目录，同时覆盖原生重开、文档输出与 MC
+# 文件往返。
+mmm_add_test_executable(MMM MalodyInterpolationPolylineTest
+                        tests/MalodyInterpolationPolylineTest.cpp)
+target_link_libraries(MalodyInterpolationPolylineTest PRIVATE MMM Log)
+mmm_register_test_case(
+  NAME MalodyInterpolationPolylineTest COMMAND MalodyInterpolationPolylineTest
+  "${TEST_OUTPUT_DIR}/malody_interpolation_polyline")
+
 # 首拍矩阵独立列出八类条件及零点有无绿线的预期，不复用生产判断公式。
 
 # 正式 MC 写出与回读检查绝对时序，包含不同 BPM、长条两端和局部采样 offset。

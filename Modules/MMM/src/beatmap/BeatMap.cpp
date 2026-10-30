@@ -19,10 +19,71 @@
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <unordered_map>
 #include <utility>
 
 namespace MMM
 {
+namespace
+{
+/// @brief 为 timing 采样副本复制物件，并将折线引用改绑到副本自己的容器。
+/// @param source 当前谱面拥有的物件与折线引用。
+/// @param target 新建导出副本中的物件数据，不允许和 source 为同一对象。
+/// @return 每条引用均属于来源容器并能重建时为真，否则拒绝本次导出。
+/// @details NoteData 的默认复制只复制 reference_wrapper 的地址。
+/// sync 只重建顶层索引，不能修复折线内的引用；不重绑会让保存器的地址
+/// 去重失效，把同一折线的 Hold/Flick 额外写成顶层物件。
+/// 以对象身份而非时间/轨道匹配，保留同拍重叠、共享引用和节点原有次序。
+/// 通用序列及两种分类序列都须重建，不能只适配 MC 的一种遍历方式。
+/// @warning 保存低频路径：复制拥有型容器并建立临时地址表，不用于逐帧调用。
+bool copyExportNoteData(const NoteData& source, NoteData& target)
+{
+    target = source;
+    // deque 复制完成后不再改变容器规模，地址表中的目标指针始终稳定。
+    // 基类地址统一三种拥有型容器，通用序列保留原 Hold/Flick 交错顺序。
+    std::unordered_map<const Note*, Note*> copied;
+    copied.reserve(source.notes.size() + source.holds.size() +
+                   source.flicks.size());
+    // 普通节点也登记，兼容旧原生折线中的显式节点，不仅处理两种派生类型。
+    for ( std::size_t i = 0; i < source.notes.size(); ++i )
+        copied.emplace(&source.notes[i], &target.notes[i]);
+    for ( std::size_t i = 0; i < source.holds.size(); ++i )
+        copied.emplace(&source.holds[i], &target.holds[i]);
+    for ( std::size_t i = 0; i < source.flicks.size(); ++i )
+        copied.emplace(&source.flicks[i], &target.flicks[i]);
+    for ( std::size_t i = 0; i < source.polylines.size(); ++i ) {
+        const auto& original = source.polylines[i];
+        auto&       poly     = target.polylines[i];
+        // 清除浅复制留下的全部来源引用；失败时整个临时副本随调用栈销毁。
+        // 不接触 source，也不把不完整模型交给任何格式 writer。
+        poly.m_subNotes.clear();
+        poly.m_subHolds.clear();
+        poly.m_subFlicks.clear();
+        for ( const auto& node : original.m_subNotes ) {
+            // 未归属于来源拥有型容器的引用不能带入导出，禁止静默丢段。
+            const auto found = copied.find(&node.get());
+            if ( found == copied.end() ) return false;
+            poly.m_subNotes.emplace_back(*found->second);
+        }
+        // 分类序列同样指向拥有型副本；强转前检查真实类型，拒绝畸形模型。
+        for ( const auto& node : original.m_subHolds ) {
+            const auto found = copied.find(&node.get());
+            if ( found == copied.end() ||
+                 found->second->m_type != NoteType::HOLD )
+                return false;
+            poly.m_subHolds.emplace_back(static_cast<Hold&>(*found->second));
+        }
+        for ( const auto& node : original.m_subFlicks ) {
+            const auto found = copied.find(&node.get());
+            if ( found == copied.end() ||
+                 found->second->m_type != NoteType::FLICK )
+                return false;
+            poly.m_subFlicks.emplace_back(static_cast<Flick&>(*found->second));
+        }
+    }
+    return true;
+}
+}  // namespace
 
 /// @brief 按文件扩展名或无扩展名内容探测加载谱面。
 /// @param mapFilePath 待加载谱面文件路径。
@@ -138,14 +199,15 @@ bool BeatMap::saveToFileInternal(std::filesystem::path mapFilePath,
                             TimingVariable::Beat;
              }) ) {
         // 独立容器只供同步 writer，来源模型保持不变。
-        // 子 Note 引用借用稳定源数据，不修改任何物件。
+        // 子 Note 必须引用副本，避免来源与副本身份混用导致重复写出。
         // 全部段落成功后才写出，不能部分使用旧拍域。
         // 数学域失败拒绝保存，不降级成普通时间点。
         // 临时副本不成为新撤销基线，不修改来源元数据。
         // writer 不保留局部地址，来源在调用结束前存活。
         // 原生和外部格式消费同一条已准备红线时间轴。
         BeatMap prepared;
-        prepared.m_noteData        = m_noteData;
+        if ( !copyExportNoteData(m_noteData, prepared.m_noteData) )
+            return false;
         prepared.m_audioSamples    = m_audioSamples;
         prepared.m_annotations     = m_annotations;
         prepared.m_metadata        = m_metadata;
@@ -201,10 +263,10 @@ bool BeatMap::saveToFileInternal(std::filesystem::path mapFilePath,
         // 只有含段落的低频保存分支复制领域数据，普通保存沿用原入口。
         BeatMap sampled;
         // 临时副本只服务同步 writer；来源谱面在整个保存调用期间存活。
-        // NoteData 中共享的折线节点只被只读访问，不修改源父子关系。
+        // 复制后重绑折线引用，源与副本各自维持完整父子关系。
         // 节点语义不依赖曲线采样，不能在导出时重新生成物件身份。
         // 递归调用面对的所有 Timing 均已清除段落字段，不会重复展开。
-        sampled.m_noteData        = m_noteData;
+        if ( !copyExportNoteData(m_noteData, sampled.m_noteData) ) return false;
         sampled.m_audioSamples    = m_audioSamples;
         sampled.m_annotations     = m_annotations;
         sampled.m_metadata        = m_metadata;
