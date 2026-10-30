@@ -76,7 +76,7 @@ bool verifyDrawerGestures(MMM::UI::MobileDrawer side)
     // 取拖动区中央坐标，避开独立收起按钮的排除区。
     const auto  grip = model.drawerGrip();
     const float gx   = grip.m_x + grip.m_width * .5f;
-    const float gy   = grip.m_height * .5f;
+    const float gy   = grip.m_y + grip.m_height * .5f;
     model.update({ gx, gy, true, true, false }, .016f, false);
     model.update({ gx - inward * 16, gy, false, false, true }, .016f, false);
     // 16 像素已经超过抖动锁定区，实际检查的是短拖动回弹而不是轻点。

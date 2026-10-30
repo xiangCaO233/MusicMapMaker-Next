@@ -83,23 +83,20 @@ MobileRect MobileWorkspaceModel::drawerRect() const
              m_height };
 }
 
-/// @brief 标题区为两级抽屉共用，不挤占分类按钮和业务列表的触摸区域。
-/// @details 高度与关闭按钮的 48dp 命中区分开计算，保留上下留白。
-float MobileWorkspaceModel::headerHeight() const
-{
-    return std::min(m_height, 72.0f * m_scale);
-}
-
-/// @brief 只有标题可拖动收起，文件列表的水平和纵向操作均留给业务内容。
-/// @return 排除右侧按钮及留白的标题区域，使用工作区相对坐标。
-/// @details 收起按钮包含图标、短标签和外边距，不能只扣除图标的宽度。
-/// 排除区略宽于按钮，使手指按在文字边缘时也不会启动拖动。
+/// @brief 将额外把手放到面板外沿，内容区不再预留顶部收起条。
+/// @return 工作区坐标中的独立命中区，遮罩关闭判定必须先排除它。
+/// @details 水平位置跟随抽屉动画，纵向位置与该侧收起把手共用。
+/// 窄屏外侧留白不足 48dp 时向内夹取，仍保证完整命中区在屏幕内。
+/// 纵向由同侧把手处理边界，横向只校正外沿命中区，避免重复偏移。
+/// 额外把手不改变面板本身宽度，文件与音频列表不会因它出现而重新换行。
 MobileRect MobileWorkspaceModel::drawerGrip() const
 {
-    auto rect = drawerRect();
-    // 标题与显式按钮互斥，不能一次点击既激活按钮又开始拖动。
-    rect.m_width  = std::max(0.0f, rect.m_width - 144.0f * m_scale);
-    rect.m_height = headerHeight();
+    const auto drawer = drawerRect();
+    auto rect = m_drawer == MobileDrawer::Left ? leftHandle() : rightHandle();
+    const float edge = m_drawer == MobileDrawer::Left
+                           ? drawer.m_x + drawer.m_width
+                           : drawer.m_x - rect.m_width;
+    rect.m_x = std::clamp(edge, 0.0f, std::max(0.0f, m_width - rect.m_width));
     return rect;
 }
 
@@ -237,12 +234,14 @@ void MobileWorkspaceModel::update(MobilePointer pointer, float seconds,
                           pointer.m_x > m_width - 12.0f * m_scale;
         if ( m_drawer != MobileDrawer::None ) {
             // 已展开时先判断遮罩，背景按下只收起，不建立第二个打开手势。
-            if ( !drawerRect().contains(pointer.m_x, pointer.m_y) )
+            // 外沿把手位于遮罩一侧，必须在背景点击之前取得所有权。
+            if ( drawerGrip().contains(pointer.m_x, pointer.m_y) ) {
+                m_handleSide = m_drawer;
+                beginGesture(Gesture::Handle, pointer);
+            } else if ( !drawerRect().contains(pointer.m_x, pointer.m_y) )
                 closeDrawer();
             else if ( edge )
                 beginGesture(Gesture::Back, pointer);
-            else if ( drawerGrip().contains(pointer.m_x, pointer.m_y) )
-                beginGesture(Gesture::Drawer, pointer);
         } else if ( edge ) {
             beginGesture(Gesture::Back, pointer);
         } else {
@@ -283,7 +282,7 @@ void MobileWorkspaceModel::update(MobilePointer pointer, float seconds,
             m_horizontalLocked = true;
         } else if ( pointer.m_released ) {
             m_drawer     = m_handleSide;
-            m_targetOpen = true;
+            m_targetOpen = !m_startOpen;
         }
     }
     if ( m_gesture == Gesture::Reposition ) {

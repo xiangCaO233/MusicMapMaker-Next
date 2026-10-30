@@ -52,10 +52,8 @@ public:
     MobileRect rightHandle() const;
     /// @brief 展开的两级抽屉共同占用的区域。
     MobileRect drawerRect() const;
-    /// @brief 抽屉标题区的拖动区域，右侧为独立收起按钮保留空间。
+    /// @brief 展开抽屉外沿的独立把手，与该侧收起把手共享纵向位置。
     MobileRect drawerGrip() const;
-    /// @brief 标题和关闭按钮共同占据的高度，内容区从其下方开始。
-    float headerHeight() const;
     /// @brief 根据手持屏幕宽度限制抽屉宽度，始终留出遮罩点击区域。
     float drawerWidth() const;
 
