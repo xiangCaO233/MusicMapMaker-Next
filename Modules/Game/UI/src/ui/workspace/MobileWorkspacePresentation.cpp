@@ -286,11 +286,12 @@ void MobileWorkspacePresentation::renderWorkspace(MainDockSpaceUI&,
     style.ItemSpacing       = { spacing, spacing };
     // 可见分区缝隙直接采用美化配置，触屏只扩大透明命中范围。
     style.DockingSeparatorSize = m_gap;
-    // 一个宿主统一提供三块内容区的上下边界，辅助窗口也保留各自标签。
-    const ImVec2 position{ m_origin.x + m_gap, m_origin.y + m_gap };
-    const ImVec2 size{ std::max(1.0f, m_size.x - 2 * m_gap - m_toolbarWidth),
-                       std::max(1.0f, m_size.y - 2 * m_gap) };
-    m_dock.render(position, size, m_scale, m_showTiming, m_showPreview);
+    // 根宿主直接铺满系统可用区，不把内部窗口间距再次加到屏幕四周。
+    // 工具条只扣除自身宽度；安全区已经包含在 m_origin 与 m_size 中。
+    // 停靠分隔条仍使用上面的美化间距，内容内边距仍由各业务窗口处理。
+    const ImVec2 size{ std::max(1.0f, m_size.x - m_toolbarWidth),
+                       std::max(1.0f, m_size.y) };
+    m_dock.render(m_origin, size, m_scale, m_showTiming, m_showPreview);
     m_centerDock = m_dock.center();
     MainDockSpaceUI::setCenterDockId(m_centerDock);
     MainDockSpaceUI::setToolDockId(0);
@@ -590,10 +591,9 @@ void MobileWorkspacePresentation::drawRightDrawer(UIManager& manager,
 /// @warning 每帧只读稳定服务观察指针，点击时投递低频编辑命令。
 void MobileWorkspacePresentation::drawToolbar(UIManager& manager)
 {
-    MobileRect rect{ m_size.x - m_toolbarWidth - m_gap,
-                     m_gap,
-                     m_toolbarWidth,
-                     m_size.y - 2 * m_gap };
+    // 工具条与宿主共享上下边界，右侧也不再额外缩进一个窗口间距。
+    // 按钮周围的可配置留白仍由工具条内部 padding 提供。
+    MobileRect rect{ m_size.x - m_toolbarWidth, 0, m_toolbarWidth, m_size.y };
     if ( beginPanel("MobileTouchToolbar", rect) ) {
         // 基础工具只组合公共命令，原有工具实现仍掌管选取和物件修改。
         // 此处不复制编辑器手势状态机，也不模拟键盘快捷键。
