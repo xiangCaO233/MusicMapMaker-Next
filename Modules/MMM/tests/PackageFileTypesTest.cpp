@@ -1,10 +1,25 @@
 #include "mmm/project/PackageFileTypes.h"
 #include "log/colorful-log.h"
+#include "mmm/project/PackagePathFilter.h"
 
 #include <cstdlib>
 
 namespace
 {
+/// @brief 自动备份与正式 MMM 使用同后缀，必须按路径归属而非后缀区别。
+/// @return 内部状态均拒绝，普通谱面和素材文件名仍能接受时为真。
+/// @note 只做词法检查，测试不需要真的创建备份目录。
+bool testInternalPackagePaths()
+{
+    // 覆盖目录自身、历史谱面、规范化别名，以及名称相近的合法文件。
+    // chart.mmm 是用户谱面；不能为了排除备份而整体禁止原生格式。
+    return MMM::isInternalPackagePath(".mmm") &&
+           MMM::isInternalPackagePath(".mmm/backups/chart/backup.mmm") &&
+           MMM::isInternalPackagePath("./folder/../.mmm/backups/test.mc") &&
+           !MMM::isInternalPackagePath("chart.mmm") &&
+           !MMM::isInternalPackagePath("charts/chart.mmm") &&
+           !MMM::isInternalPackagePath(".mmm-song/music.wav");
+}
 
 /// @file PackageFileTypesTest.cpp
 /// @brief 验证 MCZ 打包候选枚举与最终资源校验使用同一扩展名白名单。
@@ -80,7 +95,8 @@ bool testMczKeepsAudioAllowlist()
 /// @return 两组允许项、反例和大小写规则全部正确时返回成功。
 int main()
 {
-    return testMczKeepsImageAllowlist() && testMczKeepsAudioAllowlist()
+    return testInternalPackagePaths() && testMczKeepsImageAllowlist() &&
+                   testMczKeepsAudioAllowlist()
                ? EXIT_SUCCESS
                : EXIT_FAILURE;
 }
