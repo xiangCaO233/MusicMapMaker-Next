@@ -26,6 +26,7 @@
 #include "ui/imgui/manager/CollaborationRoomCoverImage.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -120,14 +121,26 @@ static_assert(beijingClockTime(-1) == std::array<std::int64_t, 3>{ 7, 59, 59 });
     });
 }
 
-/// @brief 把较长说明收进悬停帮助提示。
+/// @brief 根据交互能力将长说明显示为悬浮提示或触屏内联段落。
 /// @param text 需要按段落换行展示的本地化说明。
 ///
 /// 默认只占用短问号标签，悬停时用约 24 个字体宽度限制说明文本，避免宽 tooltip
 /// 遮挡整个协作面板。
+/// 触屏直接在独立行显示完整说明，不依赖长按或问号悬浮。
+/// 换行宽度使用当前内容区域，不沿用桌面 tooltip 的字符宽度。
+/// 内联段落参与原生滚动高度计算，面板较短时可直接触摸拖动浏览。
 /// @warning UI 热路径：仅绘制一个短标签，悬停时才创建 tooltip。
 void drawHelpMarker(const char* text)
 {
+    // 触屏不依赖悬浮问号；长说明在独立行内完整显示并参与窗口滚动。
+    if ( !workspaceAllowsHoverFeedback() ) {
+        // 调用点位于标签 SameLine 后，换行后才有完整面板宽度可用。
+        ImGui::NewLine();
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextDisabled("%s", text);
+        ImGui::PopTextWrapPos();
+        return;
+    }
     // 禁用色提示该标记不是主要操作按钮。
     ImGui::TextDisabled("(?)");
     // 未悬停时不创建 tooltip 或计算换行内容。
@@ -1119,10 +1132,16 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
         drawHelpMarker(TR("ui.collaboration.host_desc").data());
         if ( !hasProject ) {
             // 开房必须依赖本机项目与活动谱面。
-            ImGui::SameLine();
+            const bool touch = !workspaceAllowsHoverFeedback();
+            // 换行只覆盖这条前提说明，不改变后续输入框和封面按钮的排布。
+            if ( touch )
+                ImGui::PushTextWrapPos(0);
+            else
+                ImGui::SameLine();
             ImGui::TextColored(ImVec4(1.0F, 0.45F, 0.35F, 1.0F),
                                "%s",
                                TR("ui.collaboration.project_required").data());
+            if ( touch ) ImGui::PopTextWrapPos();
         }
 
         // 本地预览使用稳定 ID 隔离同窗口内的其他 InvisibleButton。
