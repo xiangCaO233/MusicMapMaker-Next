@@ -198,6 +198,17 @@ set_tests_properties(AudioManagerTimelineIntegrationTest
 # 下列实时安全测试直接依赖当前 ICE 内部实现和新增接口。使用预编译 ICE 时不创建 目标，避免新测试源与旧二进制 ABI 混用；主 Audio
 # 行为测试仍保持可构建。
 if(SOURCES_BUILD)
+  # SDL 按需供数必须验证本次源码，避免预编译模式误测旧版线程推送实现。 dummy 设备验证固定块尾连续性、暂停恢复及停止销毁的在途回调屏障。
+  mmm_add_test_executable(Audio SDLPlayerCallbackTest
+                          tests/SDLPlayerCallbackTest.cpp)
+  target_link_libraries(SDLPlayerCallbackTest PRIVATE ICE::IonCachyEngine)
+  mmm_register_test_case(NAME SDLPlayerCallbackTest COMMAND
+                         SDLPlayerCallbackTest)
+  # 超时只约束测试门闩故障，不在产品音频路径引入任何等待窗口。
+  set_tests_properties(
+    SDLPlayerCallbackTest PROPERTIES ENVIRONMENT "SDL_AUDIODRIVER=dummy"
+                                     TIMEOUT 15)
+
   # 全局分配替换仅随首个对象目标编译一次，三个实时用例共享线程局部探针。 不拆分额外可执行文件，也不放宽链接器重复定义检查。 MixBus
   # 实时安全测试覆盖不可变来源快照、并发回收、稳定顺序和预备容量边界。
   mmm_add_test_executable(
