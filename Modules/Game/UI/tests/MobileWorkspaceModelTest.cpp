@@ -28,18 +28,28 @@ bool verifyDrawerGestures(MMM::UI::MobileDrawer side)
     const auto handle =
         side == MobileDrawer::Left ? model.leftHandle() : model.rightHandle();
     const float x      = handle.m_x + handle.m_width * .5f;
-    const float y      = handle.m_y + handle.m_height * .5f;
+    float       y      = handle.m_y + handle.m_height * .5f;
     const float inward = side == MobileDrawer::Left ? 1.0f : -1.0f;
     // 80 像素显著超过触摸抖动区，必须被识别为纵向意图。
     // 释放仍保留同一位置，避免由回跳坐标掩盖误触判断。
     // 纵向划过把手不能在松手时变成一次轻点打开。
-    // 取消后即便仍然收到释放，也只消费本次手势。
+    // 方向锁定后释放只结束移动，不触发抽屉打开动作。
+    // 后续通过新位置的横向拖动同时验证两种语义不会互相覆盖。
     model.update({ x, y, true, true, false }, .016f, false);
     model.update({ x, y + 80, false, true, false }, .016f, false);
     model.update({ x, y + 80, false, false, true }, .016f, false);
     settle(model);
     if ( model.drawer() != MobileDrawer::None || model.blocksCanvasInput() )
         return false;
+    // 纵向拖动现在移动把手；后续横向操作必须在新位置继续生效。
+    const auto moved =
+        side == MobileDrawer::Left ? model.leftHandle() : model.rightHandle();
+    if ( std::abs(moved.m_y - handle.m_y - 80) > .01f ) return false;
+    y = moved.m_y + moved.m_height * .5f;
+    // 对侧把手的归一化中心独立，不应受到本次拖动影响。
+    const auto peer =
+        side == MobileDrawer::Left ? model.rightHandle() : model.leftHandle();
+    if ( std::abs(peer.m_y - handle.m_y) > .01f ) return false;
     // 确认移动帧立即更新展开比例，没有等松手或动画结束才变化。
     // 镜像方向只影响位移符号，比例必须对两侧相同。
     model.update({ x, y, true, true, false }, .016f, false);
