@@ -10,6 +10,7 @@
 #include "config/skin/translation/TranslationFormat.h"
 #include "logic/EditorEngine.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <algorithm>
 #include <array>
 #include <imgui.h>
 
@@ -64,16 +65,27 @@ void drawAudioPresetControls()
                                ? TR_CACHE("ui.audio_presets.default").data()
                                : library.m_selected.c_str());
     // 限制弹层尺寸，十五段 EQ 展开后使用滚动而不是越过屏幕边界。
-    ImGui::SetNextWindowSizeConstraints(
-        { 400, 0 }, { 650, ImGui::GetIO().DisplaySize.y * 0.85F });
+    // 宽度随安全区收缩，旋转或窄屏时不以桌面最小宽度把控件推到屏幕外。
+    const auto  workSize = ImGui::GetMainViewport()->WorkSize;
+    const float maxWidth = std::min(650.0f, workSize.x * 0.9f);
+    ImGui::SetNextWindowSizeConstraints({ std::min(400.0f, maxWidth), 0 },
+                                        { maxWidth, workSize.y * 0.85F });
     if ( !ImGui::BeginPopup("AudioPresetSettings") ) return;
     // 弹层内部 ID 不随语言变化，保留已打开状态与已有滚动位置。
     // 说明经格式占位转发，翻译中的百分号不能作为 ImGui 格式说明符。
-    ImGui::TextUnformatted(TR_CACHE("ui.audio_presets.title").data());
+    ImGui::TextWrapped("%s", TR_CACHE("ui.audio_presets.title").data());
+    /// @brief 字段标签独占一行，后续控件获得弹层当前完整可用宽度。
+    /// @warning 仅做固定字段的布局提交，不能触发配置保存或重建音频图。
+    const auto fieldLabel = [](const char* label) {
+        ImGui::TextWrapped("%s", label);
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    };
     ImGui::TextWrapped("%s", TR_CACHE("ui.audio_presets.description").data());
     // 选择项使用库中名字作为身份，删除前项不会导致序号错配。
     // 每次选中先捕获旧方案，再把目标方案完整应用到音频图。
-    if ( FeedbackBeginCombo(TR_CACHE("ui.audio_presets.current").data(),
+    // 文案与输入框分行，长译文不再被计入原生控件右侧的标签占位。
+    fieldLabel(TR_CACHE("ui.audio_presets.current").data());
+    if ( FeedbackBeginCombo("##CurrentPreset",
                             library.m_selected == "默认"
                                 ? TR_CACHE("ui.audio_presets.default").data()
                                 : library.m_selected.c_str()) ) {
@@ -99,29 +111,32 @@ void drawAudioPresetControls()
     // 不自动使用当前名字，避免复制时误以为正在覆盖已有预设。
     static std::array<char, 128> name{};
     static bool                  invalidName = false;
-    ImGui::InputText(
-        TR_CACHE("ui.audio_presets.name").data(), name.data(), name.size());
+    fieldLabel(TR_CACHE("ui.audio_presets.name").data());
+    ImGui::InputText("##PresetName", name.data(), name.size());
     // 复制包含 EQ 与拉伸参数，适合从当前耳机方案调整出外放方案。
     // 深拷贝确保后续拖动副本不会改变原方案。
-    if ( FeedbackButton(TR_CACHE("ui.audio_presets.duplicate").data()) ) {
+    if ( FeedbackButton(TR_CACHE("ui.audio_presets.duplicate").data(),
+                        { -1, 0 }) ) {
         invalidName = !library.duplicate(name.data(), app.getEditorSettings());
         if ( !invalidName ) app.save();
     }
-    ImGui::SameLine();
+    // 管理动作逐行占满宽度，删除入口不会被较长的复制按钮挤出弹层。
+    // 原有禁用和失败处理保持不变，不借助横向滚动寻找按钮。
     // 重命名只改变库内身份，音频图保持原状态，无需重新应用。
     // 错误提示保留至下一次命名操作成功，输入内容不会丢弃。
     // 重命名失败时不能替换当前项或重建播放路由，名称草稿继续保留。
     // 用户输入不参与翻译，中文方案名在英文界面中仍属于用户内容。
-    if ( FeedbackButton(TR_CACHE("ui.audio_presets.rename").data()) ) {
+    if ( FeedbackButton(TR_CACHE("ui.audio_presets.rename").data(),
+                        { -1, 0 }) ) {
         invalidName = !library.rename(name.data());
         if ( !invalidName ) app.save();
     }
-    ImGui::SameLine();
     // 库不能为空，最后一项仍允许改名和编辑。
     // 删除成功立即恢复剩余项，不能只让下拉框换名字而声音未变化。
     // current() 要求库非空，因此最后一项可以编辑与重命名，但不能删除。
     ImGui::BeginDisabled(library.m_items.size() <= 1);
-    if ( FeedbackButton(TR_CACHE("ui.audio_presets.delete").data()) &&
+    if ( FeedbackButton(TR_CACHE("ui.audio_presets.delete").data(),
+                        { -1, 0 }) &&
          library.remove(app.getEditorSettings()) )
         applySelection();
     ImGui::EndDisabled();
@@ -142,10 +157,13 @@ void drawAudioPresetControls()
         // 静音与倍率独立，取消静音后仍恢复先前调节的位置。
         // 标签作为 ID 作用域，使各行同名静音控件互不干扰。
         ImGui::PushID(label);
-        mixChanged |= FeedbackVolumeSlider(label, &gain);
-        ImGui::SameLine();
+        ImGui::TextWrapped("%s", label);
         mixChanged |=
             ImGui::Checkbox(TR_CACHE("ui.audio_manager.mute").data(), &muted);
+        ImGui::SameLine();
+        // 静音只占自身宽度，剩余区域全部交给轨道，不再在右侧追加长标签。
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+        mixChanged |= FeedbackVolumeSlider("##Gain", &gain);
         ImGui::PopID();
     };
     mix(TR_CACHE("ui.audio_manager.global_volume").data(),
@@ -201,10 +219,8 @@ void drawAudioPresetControls()
     const char* eqItems[]{ TR_CACHE("ui.audio_manager.eq_none").data(),
                            TR_CACHE("ui.audio_manager.eq_10_band").data(),
                            TR_CACHE("ui.audio_manager.eq_15_band").data() };
-    if ( FeedbackCombo(TR_CACHE("ui.audio_manager.eq_control").data(),
-                       &preset.m_eqPreset,
-                       eqItems,
-                       3) ) {
+    fieldLabel(TR_CACHE("ui.audio_manager.eq_control").data());
+    if ( FeedbackCombo("##EqPreset", &preset.m_eqPreset, eqItems, 3) ) {
         const int count =
             preset.m_eqPreset == 1 ? 10 : (preset.m_eqPreset == 2 ? 15 : 0);
         preset.m_eqGains.assign(count, 0.0F);
@@ -222,28 +238,22 @@ void drawAudioPresetControls()
             ImGui::PushID(static_cast<int>(i));
             ImGui::TextUnformatted(
                 TR_FMT("ui.audio_presets.band_fmt", i + 1).c_str());
-            effectChanged |=
-                FeedbackSliderFloat(TR_CACHE("ui.audio_manager.gain_db").data(),
-                                    &preset.m_eqGains[i],
-                                    -24,
-                                    24,
-                                    "%.1f");
-            effectChanged |=
-                FeedbackSliderFloat("Q", &preset.m_eqQs[i], 0.1F, 10, "%.2f");
+            fieldLabel(TR_CACHE("ui.audio_manager.gain_db").data());
+            effectChanged |= FeedbackSliderFloat(
+                "##EqGain", &preset.m_eqGains[i], -24, 24, "%.1f");
+            fieldLabel("Q");
+            effectChanged |= FeedbackSliderFloat(
+                "##EqQ", &preset.m_eqQs[i], 0.1F, 10, "%.2f");
             ImGui::PopID();
         }
     // UI 使用 float 草稿，持久格式仍保留 double 的速度和半音值。
     // 保存只发生在用户改变参数时，空闲显示不降低旧数据精度。
     float speed = static_cast<float>(preset.m_speed);
     float pitch = static_cast<float>(preset.m_pitch);
-    effectChanged |=
-        FeedbackSliderFloat(TR_CACHE("ui.audio_manager.speed_value").data(),
-                            &speed,
-                            0.1F,
-                            4,
-                            "%.2fx");
-    effectChanged |= FeedbackSliderFloat(
-        TR_CACHE("ui.audio_presets.pitch").data(), &pitch, -24, 24, "%.1f");
+    fieldLabel(TR_CACHE("ui.audio_manager.speed_value").data());
+    effectChanged |= FeedbackSliderFloat("##Speed", &speed, 0.1F, 4, "%.2fx");
+    fieldLabel(TR_CACHE("ui.audio_presets.pitch").data());
+    effectChanged |= FeedbackSliderFloat("##Pitch", &pitch, -24, 24, "%.1f");
     // 选项数组只借用翻译器稳定指针，不复制文本，也不修改质量序号。
     const char* qualityItems[]{
         TR_CACHE("ui.audio_manager.quality_fast").data(),
@@ -251,11 +261,9 @@ void drawAudioPresetControls()
         TR_CACHE("ui.audio_manager.quality_finer").data(),
         TR_CACHE("ui.audio_manager.quality_best").data()
     };
+    fieldLabel(TR_CACHE("ui.audio_manager.stretch_quality").data());
     effectChanged |=
-        FeedbackCombo(TR_CACHE("ui.audio_manager.stretch_quality").data(),
-                      &preset.m_quality,
-                      qualityItems,
-                      4);
+        FeedbackCombo("##Quality", &preset.m_quality, qualityItems, 4);
     // 效果器参数与音量使用同一方案身份，不更新项目的资源缓存。
     // 既有主音轨控制面板也写入此项，两个入口展示的是同一状态。
     // 译文更新本身不算编辑，不能触发参数写回、音频图发布或磁盘保存。
