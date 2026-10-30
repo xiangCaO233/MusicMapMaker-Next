@@ -130,20 +130,19 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
     // FloatingManagerUI 由 UIManager 拥有，此处观察指针仅用于构造期登记子视图。
     auto sidebar_manager =
         m_uiManager.getView<UI::FloatingManagerUI>("SideBarManager");
+    // 子视图以翻译键注册，窗口绘制时再解析当前语言，避免启动时冻结标题。
     sidebar_manager->registerSubView(
-        TR("title.search_manager").toString(),
-        std::make_unique<UI::SearchView>(
-            TR("title.search_manager").toString()));
-    sidebar_manager->registerSubView(TR("title.file_manager").toString(),
-                                     std::make_unique<UI::FileManagerView>(
-                                         TR("title.file_manager").toString()));
-    sidebar_manager->registerSubView(TR("title.audio_manager").toString(),
-                                     std::make_unique<UI::AudioManagerView>(
-                                         TR("title.audio_manager").toString()));
+        "title.search_manager",
+        std::make_unique<UI::SearchView>("title.search_manager"));
     sidebar_manager->registerSubView(
-        TR("title.beatmap_manager").toString(),
-        std::make_unique<UI::BeatMapManagerView>(
-            TR("title.beatmap_manager").toString()));
+        "title.file_manager",
+        std::make_unique<UI::FileManagerView>("title.file_manager"));
+    sidebar_manager->registerSubView(
+        "title.audio_manager",
+        std::make_unique<UI::AudioManagerView>("title.audio_manager"));
+    sidebar_manager->registerSubView(
+        "title.beatmap_manager",
+        std::make_unique<UI::BeatMapManagerView>("title.beatmap_manager"));
     // 协作房间在管理视图和日志窗口间共享，退出时由这些所有者共同释放。
     auto collaborationRoom =
         std::make_shared<Network::Collaboration::CollaborationRoom>();
@@ -161,9 +160,9 @@ GameLoop::GameLoop() : g_vkContext(Graphic::VKContext::get())
     // UIManager 保存非拥有访问，shared_ptr 由两个已注册协作视图维持。
     m_uiManager.setCollaborationRoom(collaborationRoom.get());
     sidebar_manager->registerSubView(
-        TR("title.collaboration_manager").toString(),
-        std::make_unique<UI::CollaborationView>(
-            TR("title.collaboration_manager").toString(), collaborationRoom));
+        "title.collaboration_manager",
+        std::make_unique<UI::CollaborationView>("title.collaboration_manager",
+                                                collaborationRoom));
     m_uiManager.registerView("CollaborationLogWindow",
                              std::make_unique<UI::CollaborationLogWindow>(
                                  "CollaborationLogWindow", collaborationRoom));

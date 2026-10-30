@@ -1,5 +1,6 @@
 #include "ui/interaction/EditorInteraction.h"
 #include "config/EditorSettings.h"
+#include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
@@ -22,8 +23,11 @@ class ClassicDesktopProfile final : public IEditorInteractionProfile
 public:
     /// @brief 稳定身份与旧版没有方案字段的配置兼容。
     std::string_view id() const override { return "classic-desktop"; }
-    /// @brief 初期名称不依赖皮肤或翻译初始化顺序。
-    std::string_view name() const override { return "经典桌面"; }
+    /// @brief 名称随当前语言更新，稳定方案 ID 不参与翻译。
+    std::string_view name() const override
+    {
+        return TR_CACHE("ui.interaction.classic_desktop").view();
+    }
 };
 /// @brief 纯鼠标方案通过独立语义选项和上下文菜单提供编辑入口。
 /// @details 意图按表面解释，不改写全局 Shift，避免影响框选和滚动。
@@ -33,7 +37,10 @@ public:
     /// @brief 稳定身份供设置页保存，经典方案仍为旧配置默认值。
     std::string_view id() const override { return "mouse-only"; }
     /// @brief 与经典方案并列显示，用户可在交互设置中切换。
-    std::string_view name() const override { return "纯鼠标"; }
+    std::string_view name() const override
+    {
+        return TR_CACHE("ui.interaction.mouse_only").view();
+    }
     /// @brief 选中工具提供右键菜单，绘制工具仍保留右键擦除。
     /// @warning 每帧常量策略，不持有弹窗或画布状态。
     bool selectionContextMenu() const override { return true; }

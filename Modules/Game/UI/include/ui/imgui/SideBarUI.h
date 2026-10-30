@@ -30,20 +30,18 @@ enum class SideBarTab {
     Settings
 };
 
-/// @brief 将页签映射为 FloatingManagerUI 使用的本地化子视图 ID。
+/// @brief 将页签映射为 FloatingManagerUI 使用的稳定翻译键 ID。
 /// @param tab 待映射页签。
-/// @return 对应管理器标题；无内容页签返回空字符串。
+/// @return 与语言无关的管理器身份；无内容页签返回空字符串。
 static std::string TabToSubViewId(SideBarTab tab)
 {
-    // 子视图当前以本地化标题注册，映射必须与管理器构造时使用的键一致。
+    // 注册身份与显示标题分离，切换语言不会让当前子视图失配。
     switch ( tab ) {
-    case SideBarTab::Search: return TR("title.search_manager").toString();
-    case SideBarTab::FileExplorer: return TR("title.file_manager").toString();
-    case SideBarTab::AudioExplorer: return TR("title.audio_manager").toString();
-    case SideBarTab::BeatMapExplorer:
-        return TR("title.beatmap_manager").toString();
-    case SideBarTab::Collaboration:
-        return TR("title.collaboration_manager").toString();
+    case SideBarTab::Search: return "title.search_manager";
+    case SideBarTab::FileExplorer: return "title.file_manager";
+    case SideBarTab::AudioExplorer: return "title.audio_manager";
+    case SideBarTab::BeatMapExplorer: return "title.beatmap_manager";
+    case SideBarTab::Collaboration: return "title.collaboration_manager";
     // Settings 与 None 均不属于侧栏浮动管理器的子视图。
     default: return "";
     }
@@ -100,35 +98,24 @@ static std::string TabToShortLabel(SideBarTab tab)
     default: break;
     }
     if ( label.empty() ) {
-        // 缺少新增短标签翻译时回退稳定中文，避免按钮只剩空白图标区。
-        switch ( tab ) {
-        case SideBarTab::Search: return "搜索";
-        case SideBarTab::FileExplorer: return "文件";
-        case SideBarTab::AudioExplorer: return "音频";
-        case SideBarTab::BeatMapExplorer: return "谱面";
-        case SideBarTab::Collaboration: return "协作";
-        case SideBarTab::Settings: return "设置";
-        default: return "";
-        }
+        // 短标签缺失时退回同一语言的完整名称，不额外嵌入中文文案。
+        return TabToTooltip(tab);
     }
     return label;
 }
 
-/// @brief 将 FloatingManagerUI 当前本地化子视图 ID 反向映射为页签。
+/// @brief 将 FloatingManagerUI 当前稳定子视图 ID 反向映射为页签。
 /// @param subViewId 管理器当前子视图 ID。
 /// @return 匹配的内容页签；未知 ID 返回 None。
 static SideBarTab SubViewIdToTab(const std::string& subViewId)
 {
-    // 逐项与当前语言标题比较，确保侧栏状态跟随实际管理器视图。
-    if ( subViewId == TR("title.search_manager").view() )
-        return SideBarTab::Search;
-    if ( subViewId == TR("title.file_manager").view() )
-        return SideBarTab::FileExplorer;
-    if ( subViewId == TR("title.audio_manager").view() )
-        return SideBarTab::AudioExplorer;
-    if ( subViewId == TR("title.beatmap_manager").view() )
+    // 只比较稳定身份，工作区恢复和语言切换不依赖显示文字。
+    if ( subViewId == "title.search_manager" ) return SideBarTab::Search;
+    if ( subViewId == "title.file_manager" ) return SideBarTab::FileExplorer;
+    if ( subViewId == "title.audio_manager" ) return SideBarTab::AudioExplorer;
+    if ( subViewId == "title.beatmap_manager" )
         return SideBarTab::BeatMapExplorer;
-    if ( subViewId == TR("title.collaboration_manager").view() )
+    if ( subViewId == "title.collaboration_manager" )
         return SideBarTab::Collaboration;
     // Settings 不在 SideBarManager 中，因此不会从子视图 ID 恢复。
     return SideBarTab::None;

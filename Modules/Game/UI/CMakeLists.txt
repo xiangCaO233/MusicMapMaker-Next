@@ -660,8 +660,10 @@ mmm_add_test_executable(UI EditorInteractionProfileTest
                         tests/EditorInteractionProfileTest.cpp)
 target_link_libraries(EditorInteractionProfileTest PRIVATE UI Config 3rd_imgui)
 # 每个用例独立进程，测试方案不会进入生产方案列表或污染其他用例。
-mmm_register_test_case(NAME EditorInteractionProfileTest COMMAND
-                       EditorInteractionProfileTest)
+mmm_register_test_case(
+  NAME EditorInteractionProfileTest COMMAND EditorInteractionProfileTest
+  "${PROJECT_SOURCE_DIR}/assets/translations/zh_cn.lua"
+  "${PROJECT_SOURCE_DIR}/assets/translations/en_us.lua")
 
 # 纯状态机回归不要求 Android SDK 或 Vulkan；设备端另验收真实层级与触摸。
 mmm_add_test_executable(UI MobileWorkspaceModelTest
