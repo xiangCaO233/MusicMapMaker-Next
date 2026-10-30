@@ -24,7 +24,7 @@ ImGuiID MobileDockLayout::node(MobileDockPanel panel) const
 /// @param timing 是否为时间线预留独立叶节点。
 /// @param preview 是否为预览预留独立叶节点。
 /// @details 不启用自动隐藏标签栏，单窗口叶节点也保留自己的标签。
-/// 暂沿用固定宽度策略，业务窗口本身不提供拖出或关闭入口。
+/// 分区宽度由原生分隔条连续调整，业务窗口不提供拖出或关闭入口。
 /// @warning 普通帧只读固定数量节点，不执行业务数据扫描或同步等待。
 void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
                               bool timing, bool preview)
@@ -47,10 +47,10 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
     // 显隐组成两位键；单纯横竖屏切换保留原生树内的相对分割比例。
     // 所有 ID 都在宿主作用域取得，避免与业务视图的同名控件碰撞。
     const int  visible = (timing ? 1 : 0) | (preview ? 2 : 0);
-    const auto flags =
-        ImGuiDockNodeFlags_NoDockingSplit | ImGuiDockNodeFlags_NoUndocking |
-        ImGuiDockNodeFlags_NoWindowMenuButton |
-        ImGuiDockNodeFlags_NoCloseButton | ImGuiDockNodeFlags_NoResize;
+    const auto flags   = ImGuiDockNodeFlags_NoDockingSplit |
+                         ImGuiDockNodeFlags_NoUndocking |
+                         ImGuiDockNodeFlags_NoWindowMenuButton |
+                         ImGuiDockNodeFlags_NoCloseButton;
     if ( !ImGui::DockBuilderGetNode(m_root) || visible != m_visibility ) {
         // 先读取旧节点的实际尺寸，再进行任何删除；删除会使观察指针失效。
         if ( const auto* root = ImGui::DockBuilderGetNode(m_root);
@@ -95,7 +95,29 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
         m_visibility = visible;
     }
     ImGui::DockSpace(m_root, {}, flags);
+    // 使用原生分隔条承接拖动，握柄只提供视觉提示，不创建竞争命中区。
+    // 握柄属于宿主绘制层，业务菜单和模态仍可正常覆盖它。
+    for ( const auto id : { m_timing, m_preview } ) {
+        // 每个右侧叶节点的左边界对应一个分割，隐藏叶节点不绘制握柄。
+        // 读取当前几何使握柄随原生拖动实时移动，不保存另一份坐标。
+        if ( const auto* leaf = ImGui::DockBuilderGetNode(id) ) {
+            // 分隔条位于叶节点左侧间隙，图形中心与原生命中区域中心一致。
+            // 根宿主高度统一，因此两个握柄都保持在同一水平线上。
+            const float x =
+                leaf->Pos.x - ImGui::GetStyle().DockingSeparatorSize * .5f;
+            const float y = position.y + size.y * .5f;
+            // DockSpace 创建自己的子宿主；画到该层才能覆盖分隔条底色。
+            const auto* root = ImGui::DockBuilderGetNode(m_root);
+            auto* draw = root && root->HostWindow ? root->HostWindow->DrawList
+                                                  : ImGui::GetWindowDrawList();
+            draw->AddRectFilled({ x - 2 * scale, y - 24 * scale },
+                                { x + 2 * scale, y + 24 * scale },
+                                ImGui::GetColorU32(ImGuiCol_Text),
+                                2 * scale);
+        }
+    }
     // 所有标签栏交由同一个停靠宿主计算，不再独立拼接无标题浮窗。
+    // 与宿主窗口和样式推入顺序配对，不能将零内边距泄漏给业务视图。
     ImGui::End();
     ImGui::PopStyleVar();
 }
