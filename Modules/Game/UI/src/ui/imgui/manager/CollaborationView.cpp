@@ -626,6 +626,9 @@ void CollaborationView::onUpdate(LayoutContext&, UIManager* sourceManager)
     }
 
     // 两类挂起动作在绘制按钮前推进，界面即时反映最新状态。
+    const bool touch = !workspaceAllowsHoverFeedback();
+    // 抽屉正文按实际宽度换行，说明、错误和长身份不能撑出横向滚动区域。
+    if ( touch ) ImGui::PushTextWrapPos(0);
     advancePendingHostStart();
     advancePendingGuestJoin(sourceManager);
 
@@ -635,6 +638,8 @@ void CollaborationView::onUpdate(LayoutContext&, UIManager* sourceManager)
         // drawActiveRoom 可能处理断开按钮，因此聊天前复查。
         if ( m_room->isActive() ) drawChatSection();
         drawLogSection(sourceManager);
+        // 活动房间路径也恢复正文换行栈，不能泄漏到其他管理器窗口。
+        if ( touch ) ImGui::PopTextWrapPos();
         return;
     }
 
@@ -647,6 +652,7 @@ void CollaborationView::onUpdate(LayoutContext&, UIManager* sourceManager)
     // 内置封面选择器必须在离线主控件之后持续驱动。
     renderRoomCoverFilePicker();
     drawLogSection(sourceManager);
+    if ( touch ) ImGui::PopTextWrapPos();
 }
 
 /// @brief 返回协作侧栏可读内容的最小尺寸。
@@ -1015,7 +1021,7 @@ bool CollaborationView::drawIdentitySection(UIManager* sourceManager)
     const auto creator = Config::normalizeCreatorIdentity(
         Config::AppConfig::instance().getEditorSettings().defaultCreator);
     ImGui::TextUnformatted(TR("ui.collaboration.identity").data());
-    ImGui::SameLine();
+    if ( workspaceAllowsHoverFeedback() ) ImGui::SameLine();
     if ( creator.empty() ) {
         // 警告色与其他协作前置条件保持一致。
         ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f),
@@ -1062,6 +1068,7 @@ bool CollaborationView::drawIdentitySection(UIManager* sourceManager)
 void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
                                         bool       creatorValid)
 {
+    const bool touch = !workspaceAllowsHoverFeedback();
     // 当前活动会话和项目共同决定能否作为房主。
     auto&       engine        = Logic::EditorEngine::instance();
     auto        activeSession = engine.getActiveNonLogoSession();
@@ -1150,7 +1157,7 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
         const float coverWidth = ImGui::GetContentRegionAvail().x;
         drawRoomCover(HOST_ROOM_COVER_TEXTURE_KEY,
                       ImVec2(coverWidth, coverWidth * 9.0F / 16.0F));
-        if ( ImGui::IsItemHovered() && !m_roomCoverPath.empty() ) {
+        if ( !touch && ImGui::IsItemHovered() && !m_roomCoverPath.empty() ) {
             // tooltip 展示完整路径，主界面只保留图像预览。
             ImGui::BeginTooltip();
             ImGui::TextUnformatted(Config::pathToUtf8(m_roomCoverPath).c_str());
@@ -1158,29 +1165,37 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
         }
         ImGui::PopID();
 
-        // 三等分按钮分别选择、恢复谱面默认和清除封面。
+        // 桌面保留三列，抽屉中纵向排列，翻译文字和触摸尺寸均不挤出列边界。
+        const auto coverButton = [touch](const char* label, const char* icon) {
+            // 移动按钮使用统一图文反馈；桌面仍沿用原来的紧凑小按钮。
+            return touch ? workspaceActionButton(label, icon, { -1, 0 })
+                         : FeedbackSmallButton(label);
+        };
         if ( ImGui::BeginTable("CollaborationRoomCoverActions",
-                               3,
+                               touch ? 1 : 3,
                                ImGuiTableFlags_SizingStretchSame) ) {
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
-            if ( FeedbackSmallButton(
-                     TR("ui.collaboration.cover_choose").data()) ) {
+            if ( coverButton(TR("ui.collaboration.cover_choose").data(),
+                             ICON_MMM_FOLDER_OPEN) ) {
                 // 选择器结果会进入 Custom 模式。
                 openRoomCoverFilePicker();
             }
-            ImGui::TableSetColumnIndex(1);
-            if ( FeedbackSmallButton(
-                     TR("ui.collaboration.cover_use_beatmap").data()) ) {
+            if ( touch ) ImGui::TableNextRow();
+            // 单列模式明确开始新行，不能用超出列数的索引模拟换行。
+            ImGui::TableSetColumnIndex(touch ? 0 : 1);
+            if ( coverButton(TR("ui.collaboration.cover_use_beatmap").data(),
+                             ICON_MMM_MUSIC) ) {
                 // 显式切回 Follow 后立即应用当前默认路径。
                 m_roomCoverDefaultMode = CollaborationDefaultMode::Follow;
                 setRoomCoverPath(m_defaultRoomCoverPath, false);
             }
-            ImGui::TableSetColumnIndex(2);
+            if ( touch ) ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(touch ? 0 : 2);
             // 没有编码图片时清除按钮无有效动作。
             ImGui::BeginDisabled(m_roomCoverImage.empty());
-            if ( FeedbackSmallButton(
-                     TR("ui.collaboration.cover_clear").data()) ) {
+            if ( coverButton(TR("ui.collaboration.cover_clear").data(),
+                             ICON_MMM_CLOSE) ) {
                 setRoomCoverPath({}, true);
             }
             ImGui::EndDisabled();
@@ -1195,9 +1210,13 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
 
         // 房间名默认跟随活动谱面标题，按钮可从 Custom 回到 Follow。
         ImGui::TextDisabled("%s", TR("ui.collaboration.room_name").data());
-        ImGui::SameLine();
-        if ( FeedbackSmallButton(
-                 TR("ui.collaboration.room_name_follow_beatmap").data()) ) {
+        if ( !touch ) ImGui::SameLine();
+        // 跟随操作单独成行，房间名标签与按钮不竞争同一行的剩余宽度。
+        const char* followLabel =
+            TR("ui.collaboration.room_name_follow_beatmap").data();
+        if ( touch
+                 ? workspaceActionButton(followLabel, ICON_MMM_MUSIC, { -1, 0 })
+                 : FeedbackSmallButton(followLabel) ) {
             m_roomNameDefaultMode = CollaborationDefaultMode::Follow;
             setInputBuffer(m_roomName, m_defaultRoomName);
         }
@@ -1265,9 +1284,13 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
     if ( FeedbackCollapsingHeader(TR("ui.collaboration.online_rooms").data(),
                                   headerFlags) ) {
         drawHelpMarker(TR("ui.collaboration.join_desc").data());
-        ImGui::SameLine();
-        if ( FeedbackSmallButton(
-                 TR("ui.collaboration.refresh_rooms").data()) ) {
+        // 触屏说明已换行占满正文宽度，刷新必须从下一行开始，不能再 SameLine。
+        if ( !touch ) ImGui::SameLine();
+        const char* refreshLabel = TR("ui.collaboration.refresh_rooms").data();
+        // 独占一行后的按钮宽度取当前内容区，说明再长也不会把它推到抽屉外。
+        if ( touch ? workspaceActionButton(
+                         refreshLabel, ICON_MMM_REFRESH, { -1, 0 })
+                   : FeedbackSmallButton(refreshLabel) ) {
             // 网络刷新由房间服务异步执行，UI 不等待结果。
             static_cast<void>(m_room->refreshDirectory());
         }
