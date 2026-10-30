@@ -26,7 +26,8 @@ class MobileWorkspaceModel
 {
 public:
     /// @brief 重新计算可用区域；旋转时只修改几何，不销毁业务视图。
-    void resize(float width, float height, float scale);
+    /// @param rightInset 右侧工具栏保留宽度；把手在其左侧，避免遮挡工具按钮。
+    void resize(float width, float height, float scale, float rightInset = 0);
     /// @brief 先确定触摸归属，再允许画布处理本帧原始输入。
     /// @warning 每帧固定规模运算，不分配或同步等待。
     void update(MobilePointer pointer, float deltaSeconds, bool popupBlocked);
@@ -74,6 +75,8 @@ private:
     void advanceAnimation(float seconds);
     /// @brief 可用尺寸与物理内容缩放，只由 UI 线程写入。
     float m_width{ 1 }, m_height{ 1 }, m_scale{ 1 };
+    /// @brief 仅影响收起时的右把手横坐标，不改变抽屉宽度与纵向位置偏好。
+    float m_rightInset{};
     /// @brief 当前侧及归一化展开量，不与文件管理器选中状态绑定。
     MobileDrawer m_drawer{ MobileDrawer::None };
     /// @brief 当前展开量、手势初始展开量及固定触摸起点。

@@ -1,6 +1,7 @@
 #include "ui/workspace/MobileWorkspaceModel.h"
 #include "log/colorful-log.h"
 #include <cmath>
+#include <initializer_list>
 
 namespace
 {
@@ -160,6 +161,90 @@ bool verifyGestureCancellation()
     settle(model);
     return model.drawer() == MobileDrawer::None && !model.exitConfirmation();
 }
+
+/// @brief 验证工具栏显示、缩放和把手移动后，绘制与触摸入口始终分离。
+/// @details 覆盖真机高密度屏、不同配置留白以及三个纵向停放位置。
+/// 只断言几何不相交与实际手势结果，不在测试中复制把手布局公式。
+/// @return 遮挡工具、恢复位置或移动后触点归属有误时返回 false。
+bool verifyToolbarClearance()
+{
+    using namespace MMM::UI;
+    // 尺寸使用同一倍率转换，包含真机 2.75 倍内容缩放的工作区比例。
+    // 小于一与非整数倍率分别检查最小触摸尺寸和分数像素计算。
+    // 不用屏幕物理像素替代内容倍率，二者混用会让高密度设备再次产生遮挡。
+    for ( const float scale : { .75f, 1.0f, 2.75f } ) {
+        // 工具栏包含按钮和双侧可配置留白，不能只避开固定的按钮宽度。
+        // 零留白与较大留白均验证真实保留区域，而非某一皮肤下碰巧不相交。
+        for ( const float padding : { 0.0f, 8.0f, 20.0f } ) {
+            // 保留非中心位置，检测工具栏显隐是否无意重置已保存的把手偏好。
+            for ( const float center : { .2f, .5f, .8f } ) {
+                // 每个场景独占模型，避免上一场景的动画或释放保护掩盖新命中错误。
+                MobileWorkspaceModel model;
+                const float          width        = 980 * scale;
+                const float          height       = 440 * scale;
+                const float          toolbarWidth = (64 + 2 * padding) * scale;
+                model.restoreHandleCenters(.5f, center);
+                model.resize(width, height, scale);
+                const auto original = model.rightHandle();
+                const auto left     = model.leftHandle();
+                // 先提供无工具栏的屏幕，再显示工具栏，覆盖实际开关引发的几何变化。
+                // 不能一开始就只构造最终尺寸，否则无法发现旧触点区域残留。
+                model.resize(width, height, scale, toolbarWidth);
+                const auto moved = model.rightHandle();
+                // 任意纵向停放位置都必须避开工具栏，不依赖默认中点碰巧有空白。
+                // 把手原有触摸尺寸与左把手位置不能因右侧保留区而缩水或联动。
+                if ( moved.m_x + moved.m_width > width - toolbarWidth ||
+                     moved.m_width != original.m_width ||
+                     moved.m_height != original.m_height ||
+                     moved.m_y != original.m_y ||
+                     model.leftHandle().m_x != left.m_x ||
+                     model.leftHandle().m_y != left.m_y )
+                    return false;
+                // 原右缘位置现在属于工具栏，不能仍被隐藏的旧把手拦截。
+                // 该点远离系统最外缘返回区，因此输入阻挡只能来自错误的把手归属。
+                const float oldX = original.m_x + original.m_width * .5f;
+                const float y    = moved.m_y + moved.m_height * .5f;
+                model.update({ oldX, y, true, true, false }, .016f, false);
+                if ( model.blocksCanvasInput() ) return false;
+                model.update({ oldX, y, false, false, true }, .016f, false);
+                settle(model);
+                // 新矩形必须是真正的可操作入口，不能只移动绘制而遗留旧命中区。
+                // 按下与释放分帧提交，避免零位移点击被触点取消流程替代。
+                const float x = moved.m_x + moved.m_width * .5f;
+                model.update({ x, y, true, true, false }, .016f, false);
+                model.update({ x, y, false, false, true }, .016f, false);
+                settle(model);
+                if ( model.drawer() != MobileDrawer::Right ) return false;
+                // 从真正打开过的抽屉返回，下一次拖动必须再次属于收起把手。
+                // 用合成帧收敛动画，不能在测试中引入平台等待或固定墙钟延迟。
+                model.closeDrawer();
+                settle(model);
+                // 上下拖动继续在工具栏左侧进行，且不会改变归属或打开抽屉。
+                // 位移超过方向锁阈值，三个中心处又都不触及屏幕上下边界。
+                // 因而必须完整移动给定距离，不能让边界夹取掩盖错误的中心换算。
+                model.update({ x, y, true, true, false }, .016f, false);
+                model.update(
+                    { x, y + 20 * scale, false, true, false }, .016f, false);
+                model.update(
+                    { x, y + 20 * scale, false, false, true }, .016f, false);
+                settle(model);
+                if ( model.drawer() != MobileDrawer::None ||
+                     std::abs(model.rightHandle().m_y - moved.m_y -
+                              20 * scale) > .01f )
+                    return false;
+                // 隐藏工具栏后回到右缘，只恢复横向位置，不覆盖用户新纵向偏好。
+                // 使用刚完成的拖动结果比较，不能只检查最初写入的配置值。
+                const auto repositioned = model.rightHandle();
+                model.resize(width, height, scale);
+                const auto hidden = model.rightHandle();
+                if ( hidden.m_x != original.m_x ||
+                     hidden.m_y != repositioned.m_y )
+                    return false;
+            }
+        }
+    }
+    return true;
+}
 }  // namespace
 
 /// @brief 验证启动收起、把手归属、遮罩关闭以及返回确认的状态边界。
@@ -275,6 +360,8 @@ int main()
           "right drawer gesture ownership");
     check(verifyGestureCancellation(),
           "cancelled and interrupted gestures release input");
+    check(verifyToolbarClearance(),
+          "toolbar and movable right handle keep separate touch regions");
     // 模拟新进程读取独立客户端值，恢复后仍保持抽屉收起。
     MobileWorkspaceModel restored;
     // 使用全新模型，避免前一手势的释放保护或动画状态参与恢复结果。
