@@ -33,7 +33,8 @@ bool MobileButton(const char* label, ImVec2 size, bool selected)
         static_cast<float>(ImGui::GetTime()) - storage->GetFloat(key, -100.0f);
     // 插值只改变颜色，不推迟命令提交；动画期间主线程继续正常更新。
     // 有界区间使首次绘制和长时间返回前台后的状态直接回到常态。
-    const float  flash = std::clamp(1.0f - age / 0.38f, 0.0f, 1.0f);
+    // 松手后在 140ms 内回归常态，保留短促反馈而不拖慢连续触摸的观感。
+    const float  flash = std::clamp(1.0f - age / 0.14f, 0.0f, 1.0f);
     const ImVec4 base  = ImGui::GetStyleColorVec4(
         selected ? ImGuiCol_ButtonActive : ImGuiCol_Button);
     // 从当前皮肤底色提亮，避免硬编码纯白遮掉浅色主题的按钮边界。
