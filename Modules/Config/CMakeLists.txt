@@ -15,6 +15,8 @@ add_library(
   src/skin/translation/Translation.cpp
   src/AppPaths.cpp
   src/AppConfig.cpp
+  # 移动外壳标量单独序列化，禁止把像素坐标和平台停靠树写入项目快照。
+  src/MobileWorkspaceSettings.cpp
   # 配置快照使用单槽后台写入队列，连续布局编辑不等待磁盘。
   src/ConfigSnapshotWriter.cpp
   src/AudioPresets.cpp
@@ -308,3 +310,15 @@ mmm_add_test_executable(Config PastePositionConfigTest
 target_link_libraries(PastePositionConfigTest PRIVATE Config)
 mmm_register_test_case(NAME PastePositionConfigTest COMMAND
                        PastePositionConfigTest)
+
+# 移动客户端布局测试使用独立输出目录，覆盖后台保存和重启恢复。 不启动图形后端，持续集成不需要安卓设备即可验证持久化边界。
+mmm_add_test_executable(Config MobileWorkspaceSettingsTest
+                        tests/MobileWorkspaceSettingsTest.cpp)
+target_link_libraries(MobileWorkspaceSettingsTest PRIVATE Config Log)
+# 私有写入器只用于测试等待真实后台完成，不成为业务模块公开依赖。
+target_include_directories(MobileWorkspaceSettingsTest
+                           PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+# 序列化边界、旧配置默认与桌面布局隔离在同一进程独立核验。
+mmm_register_test_case(
+  NAME MobileWorkspaceSettingsTest COMMAND MobileWorkspaceSettingsTest
+  "${CMAKE_BINARY_DIR}/test_output/mobile_workspace")
