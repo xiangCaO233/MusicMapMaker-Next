@@ -1585,4 +1585,11 @@ return {
 	["ui.audio_presets.band_fmt"] = "Band {}",
 	["ui.audio_presets.pitch"] = "Pitch (Semitones)",
 	["ui.project.placeholder"] = "Project",
+
+	-- 听音预设的分组导航与混音表头。
+	["ui.audio_presets.tab_mixer"] = "Mixer",
+	["ui.audio_presets.tab_effects"] = "Effects",
+	["ui.audio_presets.tab_manage"] = "Presets",
+	["ui.audio_presets.channel"] = "Channel",
+	["ui.audio_presets.auto_save"] = "Auto-save",
 }

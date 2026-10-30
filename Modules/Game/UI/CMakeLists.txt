@@ -678,6 +678,15 @@ mmm_add_test_executable(UI MobileTouchScrollTest
 target_link_libraries(MobileTouchScrollTest PRIVATE UI Log)
 mmm_register_test_case(NAME MobileTouchScrollTest COMMAND MobileTouchScrollTest)
 
+# 使用正式弹层和输入检查三类预设页的屏幕边界、内部滚动与固定关闭入口。 两种生产语言与不同屏幕比例共享测试入口，不初始化平台窗口或音频设备。
+mmm_add_test_executable(UI AudioPresetLayoutTest
+                        tests/AudioPresetLayoutTest.cpp)
+target_link_libraries(AudioPresetLayoutTest PRIVATE UI Log)
+mmm_register_test_case(
+  NAME AudioPresetLayoutTest COMMAND AudioPresetLayoutTest
+  "${PROJECT_SOURCE_DIR}/assets/translations/zh_cn.lua"
+  "${PROJECT_SOURCE_DIR}/assets/translations/en_us.lua")
+
 # 真实停靠树回归验证三个分区等高以及辅助窗口显隐后的结构。
 mmm_add_test_executable(UI MobileDockLayoutTest tests/MobileDockLayoutTest.cpp)
 target_link_libraries(MobileDockLayoutTest PRIVATE UI Log)
