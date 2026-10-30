@@ -178,7 +178,12 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
     const float previousPadding = borderPadding;
     // 修改仅包围这次原生 DockSpace，之后恢复，避免扩大其他窗口边界。
     borderPadding = std::max(borderPadding, 16.0f * scale);
+    // 触屏释放后仍保留最后鼠标坐标，但并不存在真实悬浮，不能持续点亮整条缝隙。
+    // 仅抑制无按下悬浮色；实际拖动仍沿用主题 SeparatorActive 反馈。
+    ImGui::PushStyleColor(ImGuiCol_SeparatorHovered,
+                          style.Colors[ImGuiCol_WindowBg]);
     ImGui::DockSpace(m_root, {}, flags);
+    ImGui::PopStyleColor();
     borderPadding = previousPadding;
     // 使用原生分隔条承接拖动，握柄只提供视觉提示，不创建竞争命中区。
     // 握柄属于宿主绘制层，业务菜单和模态仍可正常覆盖它。

@@ -283,9 +283,8 @@ void MobileWorkspacePresentation::renderWorkspace(MainDockSpaceUI&,
     style.WindowPadding     = { m_padding, m_padding };
     const float spacing     = std::floor(aesthetics.itemSpacing * m_scale);
     style.ItemSpacing       = { spacing, spacing };
-    // 分区缝隙沿用既有桌面映射；触屏扩大透明命中区而非可见分隔条。
-    style.DockingSeparatorSize =
-        std::clamp(m_gap, 3.0f * m_scale, 8.0f * m_scale);
+    // 可见分区缝隙直接采用美化配置，触屏只扩大透明命中范围。
+    style.DockingSeparatorSize = m_gap;
     // 一个宿主统一提供三块内容区的上下边界，辅助窗口也保留各自标签。
     const ImVec2 position{ m_origin.x + m_gap, m_origin.y + m_gap };
     const ImVec2 size{ std::max(1.0f, m_size.x - 2 * m_gap - m_toolbarWidth),
