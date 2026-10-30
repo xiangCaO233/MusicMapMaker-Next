@@ -14,6 +14,7 @@ struct EditorSettings;
 struct VisualConfig;
 struct AudioPresets;
 struct LayoutPresets;
+struct MobileWorkspaceSettings;
 
 /// @brief 全局应用配置管理器
 class AppConfig
@@ -34,6 +35,13 @@ public:
     LayoutPresets& getLayoutPresets();
     /// @brief 只读访问布局预设集合。
     const LayoutPresets& getLayoutPresets() const;
+    /// @brief 借用本机移动布局，不读取项目或桌面布局预设。
+    /// @warning UI 线程初始化读取，不加锁、分配或访问文件。
+    const MobileWorkspaceSettings& getMobileWorkspaceSettings() const;
+    /// @brief 显式交互结束后保存移动布局，未变化时不生成 JSON 或磁盘请求。
+    /// @warning 只在切换、手势结束或返回边沿调用；后台执行磁盘写入。
+    void saveMobileWorkspaceSettings(const MobileWorkspaceSettings& value,
+                                     const std::filesystem::path&   path = "");
 
     /// @brief 获取视觉配置
     VisualConfig&       getVisualConfig();

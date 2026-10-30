@@ -275,5 +275,22 @@ int main()
           "right drawer gesture ownership");
     check(verifyGestureCancellation(),
           "cancelled and interrupted gestures release input");
+    // 模拟新进程读取独立客户端值，恢复后仍保持抽屉收起。
+    MobileWorkspaceModel restored;
+    // 使用全新模型，避免前一手势的释放保护或动画状态参与恢复结果。
+    restored.restoreHandleCenters(.2f, .8f);
+    restored.resize(1280, 720, 1);
+    check(restored.drawer() == MobileDrawer::None &&
+              restored.leftHandle().m_y < restored.rightHandle().m_y,
+          "restart restores independent handles without opening drawer");
+    // 旋转只重新映射像素位置，不把归一化中心重置到屏幕正中。
+    restored.resize(720, 1280, 1);
+    // 先恢复后提供屏幕尺寸也必须有效，模拟配置早于平台窗口准备完成。
+    // 只比较布局状态，不将打开抽屉的运行中手势写入持久化。
+    check(restored.leftHandleCenter() == .2f &&
+              restored.rightHandleCenter() == .8f &&
+              restored.rightHandle().m_y + restored.rightHandle().m_height <=
+                  1280,
+          "rotation preserves restored positions inside screen");
     return failures == 0 ? 0 : 1;
 }
