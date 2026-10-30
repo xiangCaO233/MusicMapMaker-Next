@@ -16,6 +16,7 @@
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 #include "ui/workspace/MobileButton.h"
+#include "ui/workspace/MobileDockLayout.h"
 #include "ui/workspace/MobileTouchScroll.h"
 #include "ui/workspace/MobileWorkspaceModel.h"
 #include <algorithm>
@@ -98,6 +99,8 @@ private:
     MobileWorkspaceModel m_model;
     /// @brief 全局空白拖动滚动，只接管触屏，业务画布仍保留自己的绘制手势。
     MobileTouchScroll m_touchScroll;
+    /// @brief 主画布与辅助窗口共用水平停靠树，标签与内容高度同步。
+    MobileDockLayout m_dock;
     /// @brief 下一帧收到的原生返回请求，由 SDL 事件泵写入。
     bool m_backRequested{}, m_initialized{}, m_drawingDrawer{};
     /// @brief 窗口开关属于移动外壳，初次启动全部收起。
@@ -251,51 +254,14 @@ void MobileWorkspacePresentation::renderWorkspace(MainDockSpaceUI&,
         12.0f * m_scale,
         std::max(4.0f * m_scale, (48.0f * m_scale - ImGui::GetFontSize()) * .5f)
     };
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{});
-    // 辅助窗口从同一份可用宽度中扣除，不让画布和工具条重复预留空间。
-    // 比例上限使较窄设备仍保留可以辨认的中央编辑区。
-    const float timingWidth =
-        m_showTiming ? std::min(280.0f * m_scale, m_size.x * 0.28f) : 0.0f;
-    const float previewWidth =
-        m_showPreview ? std::min(200.0f * m_scale, m_size.x * 0.2f) : 0.0f;
-    MobileRect rect{ m_gap,
-                     m_gap,
-                     std::max(1.0f,
-                              m_size.x - 2 * m_gap - m_toolbarWidth -
-                                  timingWidth - previewWidth),
-                     std::max(1.0f, m_size.y - 2 * m_gap) };
-    ImGui::SetNextWindowPos({ m_origin.x + rect.m_x, m_origin.y + rect.m_y });
-    ImGui::SetNextWindowSize({ rect.m_width, rect.m_height });
-    // 这个窗口只承载 DockSpace，不绘制菜单、状态信息或业务按钮。
-    // 固定宿主不能因背景点击跑到抽屉上面。
-    ImGui::Begin("MobileCanvasHost",
-                 nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                     ImGuiWindowFlags_NoDocking |
-                     ImGuiWindowFlags_NoSavedSettings |
-                     ImGuiWindowFlags_NoBringToFrontOnFocus);
-    m_centerDock = ImGui::GetID("MobileMainCanvasDock");
-    // 页签仍可切换，但不提供分割、拖出、窗口菜单或关闭入口。
-    // 单独的移动 Dock 身份保证桌面分栏状态不会恢复到当前工作区。
-    const auto flags = ImGuiDockNodeFlags_NoDockingSplit |
-                       ImGuiDockNodeFlags_NoUndocking |
-                       ImGuiDockNodeFlags_NoWindowMenuButton |
-                       ImGuiDockNodeFlags_NoCloseButton;
-    // 节点仅在缺失时创建，不能为了旋转或打开抽屉逐帧重建标签。
-    // 已创建画布继续保留相同 ImGui 身份与业务对象。
-    if ( !ImGui::DockBuilderGetNode(m_centerDock) ) {
-        ImGui::DockBuilderAddNode(m_centerDock,
-                                  ImGuiDockNodeFlags_DockSpace | flags);
-        ImGui::DockBuilderSetNodeSize(m_centerDock,
-                                      { rect.m_width, rect.m_height });
-        ImGui::DockBuilderFinish(m_centerDock);
-    }
-    // 中央节点与桌面 ini 不共用身份；历史分栏不会污染移动端启动布局。
+    // 一个宿主统一提供三块内容区的上下边界，辅助窗口也保留各自标签。
+    const ImVec2 position{ m_origin.x + m_gap, m_origin.y + m_gap };
+    const ImVec2 size{ std::max(1.0f, m_size.x - 2 * m_gap - m_toolbarWidth),
+                       std::max(1.0f, m_size.y - 2 * m_gap) };
+    m_dock.render(position, size, m_scale, m_showTiming, m_showPreview);
+    m_centerDock = m_dock.center();
     MainDockSpaceUI::setCenterDockId(m_centerDock);
     MainDockSpaceUI::setToolDockId(0);
-    ImGui::DockSpace(m_centerDock, {}, flags);
-    ImGui::End();
-    ImGui::PopStyleVar();
     if ( m_showToolbar ) drawToolbar(manager);
 }
 
@@ -323,7 +289,7 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
         // 使用整个中心区域，不把桌面最小宽度约束带入移动端标签。
         if ( settingsWindow )
             ImGui::SetNextWindowSizeConstraints({ 1, 1 }, m_size);
-        ImGui::SetNextWindowDockID(m_centerDock, ImGuiCond_Always);
+        m_dock.target(MobileDockPanel::Main, title.c_str());
         flags |= ImGuiWindowFlags_NoMove;
         if ( m_model.blocksCanvasInput() ) flags |= ImGuiWindowFlags_NoInputs;
         if ( mainCanvas ) {
@@ -351,21 +317,13 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
         // 其宽度计算与中央宿主扣除值一致，避免窗口相互覆盖。
     } else if ( id == "TimelineWindow" || id == "Timeline" ||
                 id == "PreviewWindow" ) {
-        const bool  preview = id == "PreviewWindow";
-        const float width = preview
-                                ? std::min(200.0f * m_scale, m_size.x * 0.2f)
-                                : std::min(280.0f * m_scale, m_size.x * 0.28f);
-        const float previewWidth =
-            m_showPreview ? std::min(200.0f * m_scale, m_size.x * 0.2f) : 0.0f;
-        ImGui::SetNextWindowDockID(0);
-        ImGui::SetNextWindowPos({ m_origin.x + m_size.x - m_gap -
-                                      m_toolbarWidth - width -
-                                      (preview ? 0 : previewWidth),
-                                  m_origin.y + m_gap });
-        ImGui::SetNextWindowSize(
-            { width, std::max(1.0f, m_size.y - 2 * m_gap) });
-        flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
-                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDocking;
+        // 辅助面板进入自己的叶节点，不再用无标签的绝对定位窗口模拟列布局。
+        m_dock.target(id == "PreviewWindow" ? MobileDockPanel::Preview
+                                            : MobileDockPanel::Timing,
+                      title.c_str());
+        ImGui::SetNextWindowSizeConstraints({ 1, 1 }, m_size);
+        flags &= ~(ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoDocking);
+        flags |= ImGuiWindowFlags_NoMove;
         if ( m_model.blocksCanvasInput() ) flags |= ImGuiWindowFlags_NoInputs;
     } else {
         // 设置等临时业务窗口不允许落入中央 Dock，避免挤走两个主要页签。
