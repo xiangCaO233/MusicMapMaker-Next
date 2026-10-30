@@ -70,6 +70,29 @@ struct Fixture {
         for ( int frameIndex = 0; frameIndex < 5; ++frameIndex )
             frame(timing, preview, height);
     }
+
+    /// @brief 通过真实指针事件拖动原生分隔条，不直接写节点尺寸。
+    /// @param x 分隔条中心坐标，读取当前叶节点边界后计算。
+    /// @param dx 水平位移，纵坐标固定在宿主中间。
+    /// @details 每次输入之间推进一帧，模拟按下、持续拖动和释放。
+    /// 使用触屏来源验证移动端路径，不依赖桌面鼠标悬浮提示。
+    void drag(float x, float dx)
+    {
+        auto& io = ImGui::GetIO();
+        io.AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
+        // 共享布局无需键盘修饰键，单根触指即可启动分区宽度调整。
+        io.AddMousePosEvent(x, 300);
+        // 先建立触点所在宿主的悬停状态，按下帧才能命中原生分隔条。
+        frame();
+        io.AddMouseButtonEvent(0, true);
+        frame();
+        io.AddMousePosEvent(x + dx, 300);
+        frame();
+        io.AddMouseButtonEvent(0, false);
+        // 松开后继续普通帧，验证布局不会被默认比例立即覆盖回去。
+        frame();
+        settle();
+    }
 };
 }  // namespace
 
@@ -135,6 +158,25 @@ int main()
             std::abs(fixture.bounds[2].height - fixture.bounds[0].height) < .5f,
         "resize preserves equal height");
     // 显式隐藏只移除对应叶节点，保留另一个辅助分区和主画布。
+    fixture.settle();
+    const auto* timingNode = ImGui::DockBuilderGetNode(timing);
+    // 节点指针仅在下一次拓扑变化前有效，这里只做连续输入不切换显隐。
+    const float timingBefore = timingNode->Size.x;
+    fixture.drag(
+        timingNode->Pos.x - ImGui::GetStyle().DockingSeparatorSize * .5f, -60);
+    check(ImGui::DockBuilderGetNode(timing)->Size.x > timingBefore + 30,
+          "touch resizes main/timing separator");
+    // 第二条分隔线属于外层分割，同样必须可拖动且保留两侧标签。
+    const auto* previewNode = ImGui::DockBuilderGetNode(preview);
+    // 以第二次拖动开始时的实际尺寸为基准，避免依赖初始默认比例。
+    const float previewBefore = previewNode->Size.x;
+    fixture.drag(
+        previewNode->Pos.x - ImGui::GetStyle().DockingSeparatorSize * .5f, -50);
+    check(ImGui::DockBuilderGetNode(preview)->Size.x > previewBefore + 25,
+          "touch resizes timing/preview separator");
+    // 连续拖动不允许改变垂直内容边界；宽度调整不能变回独立浮窗。
+    check(std::abs(fixture.bounds[2].height - fixture.bounds[0].height) < .5f,
+          "resizing widths retains equal content heights");
     fixture.settle(true, false);
     // 隐藏后继续推进真实帧，验证结果不依赖已失效节点的残留指针。
     check(fixture.layout.node(MobileDockPanel::Preview) == 0 &&
