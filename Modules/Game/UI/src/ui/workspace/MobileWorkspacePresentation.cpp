@@ -149,9 +149,16 @@ void MobileWorkspacePresentation::beginFrame(UIManager&)
     // 原生返回可能来自业务弹窗，不能越过它额外弹出退出确认。
     // 本外壳自己的退出确认仍允许再次返回取消，保持返回层级一致。
     const bool modalOpen = ImGui::GetTopMostPopupModal() != nullptr;
-    if ( std::exchange(m_backRequested, false) &&
-         (!modalOpen || m_model.exitConfirmation()) )
-        m_model.requestBack();
+    const bool popupOpen = ImGui::IsPopupOpen(
+        nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    if ( std::exchange(m_backRequested, false) ) {
+        // 普通弹层可以越过抽屉边界；返回先关闭最上层弹层，不连带关闭父抽屉。
+        if ( popupOpen && !modalOpen )
+            ImGui::ClosePopupToLevel(
+                ImGui::GetCurrentContext()->OpenPopupStack.Size - 1, true);
+        else if ( !modalOpen || m_model.exitConfirmation() )
+            m_model.requestBack();
+    }
     // 同一帧采样一份触摸坐标，避免两个窗口分别建立不同手势起点。
     // 高层模态独占输入时，模型保持状态而不是抢占其点击。
     const auto& io = ImGui::GetIO();
@@ -162,7 +169,7 @@ void MobileWorkspacePresentation::beginFrame(UIManager&)
                      ImGui::IsMouseDown(0),
                      ImGui::IsMouseReleased(0) },
                    io.DeltaTime,
-                   modalOpen);
+                   popupOpen);
 }
 
 /// @brief 从公共更新序列中移出由抽屉承载的管理器窗口。
