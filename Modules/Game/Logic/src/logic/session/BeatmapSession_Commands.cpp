@@ -34,6 +34,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/PackageFileTypes.h"
+#include "mmm/project/PackagePathFilter.h"
 #include "mmm/project/Project.h"
 #include "runtime/AppThreadPool.h"
 #include <algorithm>
@@ -1886,6 +1887,19 @@ bool writeBeatmapPackage(
     bool                           alignNonOggMainAudioToOrigin,
     MMM::BmsPackageAlignmentMode bmsAlignmentMode, bool bmsMyO2Grid)
 {
+    // UI 不枚举内部历史；命令层也检查，防止旧选择列表或其他入口夹带备份。
+    // 任何不合法选择先整体失败，不创建或覆盖已有压缩包。
+    // 此校验先于 BMS 分派，所有包格式共享同一项目内部目录边界。
+    // 正式 chart.mmm 是普通资源，不能仅依据 MMM 后缀来区分备份。
+    for ( const auto& relative : selectedRelativePaths ) {
+        if ( MMM::isInternalPackagePath(MMM::Config::utf8ToPath(relative)) ) {
+            XERROR(
+                "PackBeatmap: internal project path is not a package resource: "
+                "{}",
+                relative);
+            return false;
+        }
+    }
     // BMS ZIP 使用独立资源事务，避免把 MCZ 私有首拍规则套入标准 BMS。
     // 对齐计划和生成音频按谱面隔离，同一音乐可供不同首拍偏移的难度共享。
     // 调用仍位于原有用户导出命令事务中，不从常态更新循环额外执行编码。

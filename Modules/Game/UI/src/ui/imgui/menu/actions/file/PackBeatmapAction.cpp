@@ -12,6 +12,7 @@
 #include "logic/ProjectResourceService.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/PackageFileTypes.h"
+#include "mmm/project/PackagePathFilter.h"
 #include "mmm/project/Project.h"
 #include "ui/imgui/menu/package/PackageDefaultSelection.h"
 #include "ui/imgui/menu/package/PackageDialogState.h"
@@ -2125,6 +2126,15 @@ void PackBeatmapAction::rebuildPackageCandidateFiles()
     // 目录只在此低频阶段完整遍历，UI 每帧仅使用缓存。
     while ( iterator != endIterator ) {
         const auto& entry = *iterator;
+        // 自动备份属于内部历史，不是可供用户发布的难度或素材。
+        // 进入目录之前就停止递归，避免逐个解析大量历史 MMM 文件。
+        if ( isInternalPackagePath(
+                 entry.path().lexically_relative(projectRoot)) ) {
+            iterator.disable_recursion_pending();
+            iterator.increment(filesystemError);
+            if ( filesystemError ) break;
+            continue;
+        }
         if ( entry.is_regular_file(filesystemError) && !filesystemError ) {
             // 只处理普通文件，目录和特殊节点不进入包候选。
             const auto path = entry.path();

@@ -8,6 +8,7 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/Project.h"
+#include "mmm/timing/TimingInterpolationAlgorithms.h"
 #include "runtime/AppThreadPool.h"
 
 #include <algorithm>
@@ -288,27 +289,102 @@ bool checkExport(const std::filesystem::path& root, double referenceBpm,
 /// @param alignOrigin 是否额外启用旧的非 OGG 原点对齐选项。
 /// @param firstTime 原首红线时刻，与源 PCM 的零点独立。
 /// @param padding 独立给出的参考段规范化位移，不从输出推导。
+/// @param interpolated 增加带自定义函数 SV 的折线，验证 MCZ 不拆分子物件。
 /// @return 包内 MC 与实际编码音频同步且源文件未改动时返回真。
 /// @note 100 BPM 参考段补 600ms，再结合 100ms 原点对齐后净补偿为 500ms。
 /// @details 同一源文件先做另存为验证，再进入真实项目打包路径。
 /// 解包检查条目选择、格式转换、音频替换和资源引用一致性。
 /// 净补偿长度由场景表给出，不从包内红线反推音频期望。
+///
+/// 插值回归独立选用首 BPM 等于参考 BPM 的零相位场景。
+/// 这样只会展开 SV，不发生音频转码或参考红线前导补偿。
+/// 折线以两组 Hold/Flick 表示，覆盖通用和分类三种引用列表。
+/// 真实 MMM 保存后重开由打包命令完成，测试不复用内存中的指针。
+/// SV 放在所有玩家物件之后，仍必须保持整首谱面的连接结构。
+/// 因此失败不能被解释成局部 Scroll 对画面的正常影响。
+///
+/// 完成的 MCZ 必须包含源音频与一张 MC，而不是源 MMM 或内部备份。
+/// 解压后的 MC 再走正式加载器检查父子数量及全部转向。
+/// 顶层应只有原点击和一条折线，子物件不得重复出现在同拍位置。
+/// 同时核对源 MMM 与音频字节，防止修复通过修改项目来获得正确包。
+///
+/// 自动备份夹具使用真实存在且内容有效的 MMM，和正式谱面后缀相同。
+/// 如果只制造不存在的备份，普通文件缺失检查也会令旧实现拒绝。
+/// 先保存合法包，再重放带备份的选择，验证失败事务不会截断旧输出。
+/// 归档比较和解包检查同时存在，不能把一次失败通知当成完整验证。
+/// 源选择、候选 UI 和实际打包命令是不同入口，需要分别固化边界。
+/// 新场景的文件仍集中在 CTest 给定的构建输出根目录下。
+/// 其他首拍与音频场景保留原矩阵，不通过跳过它们来缩小验证范围。
 bool checkPackage(const std::filesystem::path& root, double referenceBpm,
                   bool alignOrigin, double firstTime = 0,
-                  unsigned padding = 600)
+                  unsigned padding = 600, bool interpolated = false)
 {
     const unsigned expectedPadding = referenceBpm == 120 ? 0 : padding;
     if ( !checkExport(
              root, referenceBpm, true, expectedPadding, 0, false, firstTime) )
         return false;
     const auto sourcePath = root / "source.mmm";
-    if ( alignOrigin ) {
+    if ( alignOrigin || interpolated ) {
         auto source = MMM::BeatMap::loadFromFile(sourcePath);
         // 主音轨仍从零点开始；只改变内容与 timing，复现旧裁头选项的真实相位。
-        for ( auto& timing : source.m_timings ) timing.m_timestamp += 100;
-        for ( auto& note : source.m_noteData.notes ) note.m_timestamp += 100;
+        if ( alignOrigin ) {
+            for ( auto& timing : source.m_timings ) timing.m_timestamp += 100;
+            for ( auto& note : source.m_noteData.notes )
+                note.m_timestamp += 100;
+        }
+        if ( interpolated ) {
+            // 曲线位于折线之后，排除局部变速几何影响；只有复制路径会变化。
+            // 使用真实自定义表达式，不能用手写采样数组绕过故障入口。
+            MMM::Timing sv;
+            sv.m_timestamp                         = 6000;
+            sv.m_timingEffect                      = MMM::TimingEffect::SCROLL;
+            sv.m_interpolation                     = MMM::TimingInterpolation{};
+            sv.m_interpolation->m_samplesPerSecond = 198;
+            std::string functionError;
+            if ( !MMM::setTimingInterpolationFunction(
+                     *sv.m_interpolation,
+                     "1+t",
+                     sv.m_timingEffectParameter,
+                     functionError) )
+                return false;
+            source.m_timings.push_back(sv);
+            auto& poly       = source.m_noteData.polylines.emplace_back();
+            poly.m_timestamp = 1000;
+            poly.m_track     = 0;
+            for ( int i = 0; i < 2; ++i ) {
+                // 所有子物件由原生容器拥有，重开后也必须保持同一折线归属。
+                auto& hold       = source.m_noteData.holds.emplace_back();
+                hold.m_timestamp = 1000 + i * 500;
+                hold.m_track     = i;
+                hold.m_duration  = 500;
+                hold.m_isSubNote = true;
+                poly.m_subNotes.emplace_back(hold);
+                poly.m_subHolds.emplace_back(hold);
+                auto& flick       = source.m_noteData.flicks.emplace_back();
+                flick.m_timestamp = 1500 + i * 500;
+                flick.m_track     = i;
+                flick.m_dtrack    = 1;
+                flick.m_isSubNote = true;
+                poly.m_subNotes.emplace_back(flick);
+                poly.m_subFlicks.emplace_back(flick);
+            }
+        }
         source.sync();
         if ( !source.saveToFile(sourcePath) ) return false;
+    }
+    if ( interpolated ) {
+        // 真实创建与源谱面同内容的备份；不存在的路径即使旧实现也会拒绝，
+        // 不能作为内部资源过滤已经生效的证据。
+        std::error_code backupError;
+        const auto      backup = root / ".mmm/backups/test/backup.mmm";
+        std::filesystem::create_directories(backup.parent_path(), backupError);
+        if ( backupError ) return false;
+        std::filesystem::copy_file(
+            sourcePath,
+            backup,
+            std::filesystem::copy_options::overwrite_existing,
+            backupError);
+        if ( backupError ) return false;
     }
     const auto originalMap = readBytes(sourcePath);
     // 包事务同时检查源谱面与源音频，临时对齐副本不能回写项目文件。
@@ -331,6 +407,25 @@ bool checkPackage(const std::filesystem::path& root, double referenceBpm,
         .selectedProjectRelativePaths = { "source.mmm", "input.wav" },
         .alignNonOggMainAudioToOrigin = alignOrigin } });
     session.update(0, MMM::Config::EditorConfig{}, false);
+    if ( interpolated ) {
+        // 合法打包完成后重放一份含内部备份的旧选择，必须拒绝且保留原包。
+        // 直接走正式命令入口，不能仅验证 UI 已隐藏候选。
+        const auto validPackage = readBytes(output);
+        // 空文件不可能成为合法基线；第二次拒绝不能掩盖第一次打包失败。
+        if ( validPackage.empty() ) return false;
+        session.pushCommand(
+            MMM::Logic::LogicCommand{ MMM::Logic::CmdPackBeatmap{
+                .exportPath                   = MMM::Config::pathToUtf8(output),
+                .selectedProjectRelativePaths = {
+                    "source.mmm",
+                    "input.wav",
+                    ".mmm/backups/test/backup.mmm" } } });
+        session.update(0, MMM::Config::EditorConfig{}, false);
+        if ( readBytes(output) != validPackage ) {
+            (void)controller.closeProject();
+            return false;
+        }
+    }
     (void)controller.closeProject();
     // 项目关闭后再读包，能暴露打包是否仍错误借用项目生命周期中的缓冲区。
     // 包读取发生在同步命令完成之后；失败不能被旧输出文件掩盖。
@@ -366,6 +461,14 @@ bool checkPackage(const std::filesystem::path& root, double referenceBpm,
     // Note 事先多出的 100ms 抵消裁切，其最终位置仍与直接补头一致。
     const double expectedNoteTime = firstTime + 1000 + expectedPadding;
     auto         chart = MMM::BeatMap::loadFromFile(unpacked / "source.mc");
+    // 检查归档内实际 MC，不用单独另存成功替代打包入口验证。
+    // 一次点击加一条两段折线应只有两个顶层玩家物件，四个子物件不可重复。
+    if ( interpolated &&
+         (chart.m_allNotes.size() != 2 ||
+          chart.m_noteData.polylines.size() != 1 ||
+          chart.m_noteData.polylines.front().m_subHolds.size() != 2 ||
+          chart.m_noteData.polylines.front().m_subFlicks.size() != 2) )
+        return false;
     // 比较实际 PCM 的静音长度和回读 Note 时间，不能只检查压缩包非空。
     return checkPaddedAudio(unpacked / "input.wav", expectedAudioPadding) &&
            chart.m_noteData.notes.size() == 1 &&
@@ -397,6 +500,7 @@ int main(int argc, char** argv)
         checkExport(root / "main_offset", 100, true, 600, 223) &&
         checkExport(root / "same_named_effect", 100, true, 600, 0, true) &&
         checkPackage(root / "package_same", 120, false) &&
+        checkPackage(root / "package_interpolated", 120, false, 0, 600, true) &&
         checkPackage(root / "package_different", 100, false) &&
         checkPackage(root / "package_combined", 100, true) &&
         // 真实 MCZ 不能继续固定补整拍；非零回卷和正参考锚点分别验证。
