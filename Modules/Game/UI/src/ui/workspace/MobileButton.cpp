@@ -51,14 +51,12 @@ bool MobileButton(const char* label, ImVec2 size, bool selected)
     ImGui::PushStyleColor(ImGuiCol_Button, color);
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, color);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, bright);
-    // 小圆角保持偏方形轮廓，最小触摸尺寸与视觉尺寸采用同一矩形。
-    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 3.0f * scale);
+    // 圆角沿用当前美化设置；按钮的触摸尺寸不参与主题参数覆盖。
     const bool clicked = FeedbackButton(label, size);
     // 点击时间记录在本窗口存储，隐藏再显示不会创建全局动画任务。
     // 统一入口仍负责点击音效，移动控件不重复播放或修改音效池。
     // 反馈结束只回到基础色，选中工具继续保留选中底色。
     if ( clicked ) storage->SetFloat(key, static_cast<float>(ImGui::GetTime()));
-    ImGui::PopStyleVar();
     ImGui::PopStyleColor(3);
     return clicked;
 }
