@@ -125,6 +125,16 @@ if(APPLE)
             src/system/SystemThemeMacOS.mm)
   # AppKit 只服务本目标的原生窗口实现，不作为 Graphic 公共链接接口传播。
   target_link_libraries(Graphic PRIVATE "-framework AppKit")
+  # 原生 mouse-down/up 通过 AppKit 派发，覆盖快速移动后关闭浮窗及 Dock 节点。
+  # 测试不请求辅助功能授权，不向其他应用发送输入，也不需要 Vulkan 渲染设备。
+  mmm_add_test_executable(Graphic MacOSMouseInputTest
+                          tests/MacOSMouseInputTest.mm)
+  # 包装器默认扩展名为 cpp；本例包含原生事件语法，必须保留 Objective-C++。
+  set_source_files_properties(
+    "${CMAKE_CURRENT_BINARY_DIR}/MacOSMouseInputTest_TestEntry.cpp"
+    PROPERTIES LANGUAGE OBJCXX)
+  target_link_libraries(MacOSMouseInputTest PRIVATE Graphic "-framework AppKit")
+  mmm_register_test_case(NAME MacOSMouseInputTest COMMAND MacOSMouseInputTest)
 endif()
 
 if(UNIX AND NOT APPLE)

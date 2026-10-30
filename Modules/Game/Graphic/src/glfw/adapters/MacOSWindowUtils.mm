@@ -5,6 +5,9 @@
 
 #import <AppKit/AppKit.h>
 #include <algorithm>
+#include <backends/imgui_impl_glfw.h>
+#include <cmath>
+#include <imgui.h>
 #include <objc/runtime.h>
 
 namespace MMM::Graphic
@@ -133,13 +136,13 @@ bool centerMacOSWindowInVisibleFrame(GLFWwindow* window, int requestedWidth,
     }
 
     // 宽高独立钳制，既保留请求的较小维度，也保证超大窗口四周都有可见余量。
-    const NSRect visibleFrame = [screen visibleFrame];
-    const CGFloat targetWidth =
-        std::min<CGFloat>(static_cast<CGFloat>(requestedWidth),
-                          visibleFrame.size.width * STARTUP_VISIBLE_FRAME_RATIO);
-    const CGFloat targetHeight =
-        std::min<CGFloat>(static_cast<CGFloat>(requestedHeight),
-                          visibleFrame.size.height * STARTUP_VISIBLE_FRAME_RATIO);
+    const NSRect  visibleFrame = [screen visibleFrame];
+    const CGFloat targetWidth  = std::min<CGFloat>(
+        static_cast<CGFloat>(requestedWidth),
+        visibleFrame.size.width * STARTUP_VISIBLE_FRAME_RATIO);
+    const CGFloat targetHeight = std::min<CGFloat>(
+        static_cast<CGFloat>(requestedHeight),
+        visibleFrame.size.height * STARTUP_VISIBLE_FRAME_RATIO);
     // Cocoa 使用左下原点；直接在 visibleFrame 坐标系内计算居中位置，不与 GLFW
     // 的窗口坐标约定混算。
     const CGFloat targetX =
@@ -148,9 +151,10 @@ bool centerMacOSWindowInVisibleFrame(GLFWwindow* window, int requestedWidth,
         visibleFrame.origin.y + (visibleFrame.size.height - targetHeight) * 0.5;
 
     // 一次提交最终 frame，避免先 resize 再 move 产生两轮 framebuffer 重建请求。
-    [nativeWindow setFrame:NSMakeRect(targetX, targetY, targetWidth, targetHeight)
-                   display:YES
-                   animate:NO];
+    [nativeWindow
+        setFrame:NSMakeRect(targetX, targetY, targetWidth, targetHeight)
+         display:YES
+         animate:NO];
     return true;
 }
 
@@ -192,6 +196,50 @@ bool enableMacOSFirstMouse(GLFWwindow* window)
                         reinterpret_cast<IMP>(acceptFirstMouse),
                         "c@:@");
     [nativeWindow setAcceptsMouseMovedEvents:YES];
+    return true;
+}
+
+/// @brief 使用同一次 mouse-down/up 的事件坐标建立 UI 按键命中位置。
+/// @details ImGui NewFrame 轮询的位置可能晚于 GLFW 按键回调才进入输入队列。
+/// 先排入按键、再排入位置时，快速移动后点击关闭按钮会在旧位置建立 ActiveId，
+/// 即使随后光标画在叉号上，释放也不会关闭窗口。原生事件坐标才是本次边沿的
+/// 权威位置，不能等待下一帧，也不能通过延长按住时间来补偿。
+/// @note 本函数在 ImGui GLFW 按键回调链中的用户回调内执行；位置回调只更新
+/// 光标与项目位置通知，不会再次调用按键回调，按下和释放仍由后端各提交一次。
+bool syncMacOSMouseButtonPosition(GLFWwindow* window, double& cursorX,
+                                  double& cursorY)
+{
+    if ( !window ) return false;
+    NSWindow* nativeWindow = glfwGetCocoaWindow(window);
+    NSEvent*  event        = [NSApp currentEvent];
+    // 过滤其他窗口、键盘和滚轮事件；人工调用 GLFW callback 时安全沿用回退值。
+    if ( !nativeWindow || !event || event.window != nativeWindow ) return false;
+    switch ( event.type ) {
+    case NSEventTypeLeftMouseDown:
+    case NSEventTypeLeftMouseUp:
+    case NSEventTypeRightMouseDown:
+    case NSEventTypeRightMouseUp:
+    case NSEventTypeOtherMouseDown:
+    case NSEventTypeOtherMouseUp: break;
+    default: return false;
+    }
+    NSView* view = nativeWindow.contentView;
+    if ( !view ) return false;
+    // NSEvent 先转换到实际内容视图，再按视图是否翻转统一为 GLFW 左上角原点。
+    // 全程使用逻辑点，不乘 Retina backingScaleFactor；释放到窗口外也不钳制。
+    const NSPoint point  = [view convertPoint:event.locationInWindow
+                                     fromView:nil];
+    const NSRect  bounds = view.bounds;
+    const double  x      = point.x - NSMinX(bounds);
+    const double  y =
+        view.flipped ? point.y - NSMinY(bounds) : NSMaxY(bounds) - point.y;
+    if ( !std::isfinite(x) || !std::isfinite(y) ) return false;
+    cursorX = x;
+    cursorY = y;
+    // 窗口创建早于 ImGui 后端初始化；此时仍返回正确 frame 命中位置，但不访问
+    // 尚不存在的后端。有效后端通过正常 cursor callback 排队，保持多视口换算。
+    if ( ImGui::GetCurrentContext() && ImGui::GetIO().BackendPlatformUserData )
+        ImGui_ImplGlfw_CursorPosCallback(window, x, y);
     return true;
 }
 

@@ -825,6 +825,11 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle,
             // GLFW 按键 callback 不携带位置，读取同一时刻客户区 cursor 坐标。
             double xpos, ypos;
             glfwGetCursorPos(w, &xpos, &ypos);
+#if defined(__APPLE__)
+            // Cocoa 按键事件的位置须先进入 ImGui 队列，不能等下一帧轮询。
+            // frame adapter 也使用该事件的位置，避免把控件点击误当成拖窗。
+            syncMacOSMouseButtonPosition(w, xpos, ypos);
+#endif
             e.pos = { static_cast<float>(xpos), static_cast<float>(ypos) };
 
             // 平台 frame 行为具有优先级，成功接管时不再把同一 press 发送给业务
