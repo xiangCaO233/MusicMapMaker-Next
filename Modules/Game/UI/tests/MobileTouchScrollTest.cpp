@@ -20,10 +20,23 @@ struct Fixture {
     float value{ .2f };
     /// @brief 当前帧已应用的滚动位置，取自 Begin 后的窗口内容。
     ImVec2 offset{};
+    /// @brief 按需在同一个可滚动背景中加入真实下拉框与背景控件。
+    bool withPopup{ false };
+    /// @brief 背景控件不得被用于关闭弹层的同一次触摸激活。
+    bool checked{ false };
+    /// @brief 从真实布局记录入口和背景控件的位置，不依赖默认字体尺寸。
+    ImVec2 comboCenter{}, checkboxCenter{}, popupBlank{};
+    /// @brief 弹层滚动量与最终开合状态，分别验证内容拖动和原生收起。
+    float popupOffset{};
+    /// @brief 在 Render 之后采样，包含 ImGui 帧末执行的关闭行为。
+    bool popupOpen{ false };
 
     /// @brief 提交一次输入和完整 ImGui 帧，位置采用屏幕逻辑像素。
     /// @param wide 为 true 时同时提供横向超宽内容。
     /// @details 禁止读取用户 ini，所有几何固定，断言不依赖屏幕与帧率。
+    /// withPopup 场景把控件放入子窗口，覆盖设置页的嵌套滚动结构。
+    /// 弹层仍由 BeginCombo 创建，使阻挡背景和焦点恢复使用真实 ImGui 路径。
+    /// 调用顺序与移动外壳一致：布局前采样，所有控件提交后确认归属。
     void frame(ImVec2 pointer, bool down, bool wide = false)
     {
         // 输入来源显式设置为触屏；生产桌面鼠标不应该受此控制器影响。
@@ -41,15 +54,59 @@ struct Fixture {
                            ImGuiWindowFlags_NoSavedSettings |
                            (wide ? ImGuiWindowFlags_HorizontalScrollbar : 0);
         ImGui::Begin("TouchFixture", nullptr, flags);
+        // 设置页的滚动发生在子窗口，父窗口仍是弹层的焦点恢复目标。
+        if ( withPopup ) ImGui::BeginChild("SettingsBody");
         // 无标题固定位置保证测试触点不会落到窗口拖动区或系统边框。
         // 控件位于顶部，其他位置保持空白，便于区分两种触摸起点。
         ImGui::SliderFloat("value", &value, 0, 1);
+        if ( withPopup ) {
+            // 弹层移到背景窗口旁边，入口、背景空白和弹层内部互不重叠。
+            ImGui::SetNextWindowPos({ 420, 80 });
+            if ( ImGui::BeginCombo(
+                     "profile", "desktop", ImGuiComboFlags_HeightSmall) ) {
+                // 真正的长内容产生滚动范围，不能通过手动改写 ScrollMax 伪造。
+                // 保留可选项和空白两类区域，空白滚动不能用选择动作代替。
+                // 原生弹层限制高度，长内容不会因为自动扩展而失去滚动范围。
+                ImGui::Selectable("desktop");
+                ImGui::Selectable("touch");
+                const auto position = ImGui::GetCursorScreenPos();
+                // 起点落在选项下方、滚动条左侧，避免被可点击项目正常占用。
+                popupBlank = { position.x + 60, position.y + 12 };
+                ImGui::Dummy({ 180, 700 });
+                popupOffset = ImGui::GetScrollY();
+                ImGui::EndCombo();
+            }
+            // EndCombo 恢复入口的 LastItem，中心点对应实际可见触摸区域。
+            const auto min = ImGui::GetItemRectMin();
+            const auto max = ImGui::GetItemRectMax();
+            comboCenter    = { (min.x + max.x) / 2, (min.y + max.y) / 2 };
+            ImGui::Checkbox("background", &checked);
+            // 背景控件独立记录命中区，不假设下拉入口和行高保持固定偏移。
+            const auto checkMin = ImGui::GetItemRectMin();
+            const auto checkMax = ImGui::GetItemRectMax();
+            checkboxCenter      = { (checkMin.x + checkMax.x) / 2,
+                                    (checkMin.y + checkMax.y) / 2 };
+        }
         ImGui::Dummy({ wide ? 800.0f : 1.0f, 700 });
         offset = { ImGui::GetScrollX(), ImGui::GetScrollY() };
+        if ( withPopup ) ImGui::EndChild();
         // 读取实际应用值，不能以控制器计划提交的目标代替视觉已更新的证据。
         ImGui::End();
         scroll.endFrame();
         ImGui::Render();
+        // 原生关闭发生在帧末，BeginCombo 的返回值不足以证明已经收起。
+        popupOpen = !ImGui::GetCurrentContext()->OpenPopupStack.empty();
+    }
+
+    /// @brief 轻点包含完整按下与释放，检查入口不会在释放时重新打开。
+    /// @details 不合并成一个帧，以保留原生按钮和弹层的按下、释放语义。
+    void tap(ImVec2 pointer)
+    {
+        frame(pointer, true);
+        frame(pointer, false);
+        // 经过出现帧保护后再执行下一手势，同时验证释放没有再次打开入口。
+        frame(pointer, false);
+        frame(pointer, false);
     }
 
     /// @brief 清除滚动目标并推进布局，避免上一个场景的位置掩盖断言。
@@ -125,6 +182,47 @@ int main()
     check(fixture.offset.x > 70 && fixture.offset.y > 70,
           "wide content supports both axes");
     fixture.frame({ 250, 120 }, false, true);
+    fixture.withPopup = true;
+    fixture.reset();
+    // 先证明子窗口确实可以滚动，否则关闭检查可能绕过问题路径。
+    fixture.frame({ 330, 210 }, true);
+    check(fixture.scroll.ownsPointer(),
+          "scrollable settings child captures blank");
+    fixture.frame({ 330, 210 }, false);
+    fixture.tap(fixture.comboCenter);
+    check(fixture.popupOpen, "combo opens on touch");
+    // 背景具有真实滚动范围，复现空白滚动控制器抢占关闭点击的条件。
+    // 弹层阻挡的背景没有活动控件，不能将这种状态误认为允许空白拖动。
+    fixture.frame({ 330, 210 }, true);
+    check(!fixture.scroll.ownsPointer(),
+          "outside popup press cannot capture scrolling");
+    fixture.frame({ 330, 210 }, false);
+    check(!fixture.popupOpen, "outside blank touch dismisses combo");
+    // 各场景重新打开真实弹层，保证关闭状态不会让后续检查退化成空操作。
+    fixture.tap(fixture.comboCenter);
+    check(fixture.popupOpen, "combo reopens after outside dismissal");
+    // 再点入口属于弹层外点击，释放以后也必须保持关闭。
+    fixture.tap(fixture.comboCenter);
+    check(!fixture.popupOpen, "second touch on opener dismisses combo");
+    fixture.tap(fixture.comboCenter);
+    check(fixture.popupOpen, "combo opens before background control test");
+    fixture.tap(fixture.checkboxCenter);
+    // 与空白位置分别验证：用户经常直接点击另一个设置项来收起列表。
+    // 关闭手势不能穿透，避免用户收起菜单时意外修改设置。
+    check(!fixture.popupOpen && !fixture.checked,
+          "outside control dismisses without activating background");
+    fixture.tap(fixture.comboCenter);
+    check(fixture.popupOpen, "combo opens before content scrolling test");
+    fixture.frame(fixture.popupBlank, false);
+    const auto blank = fixture.popupBlank;
+    // 稳定布局后固定手势原点，拖动过程中不追随内容移动。
+    fixture.frame(blank, true);
+    check(fixture.scroll.ownsPointer(), "popup blank still captures scrolling");
+    fixture.frame({ blank.x, blank.y - 30 }, true);
+    // 弹层内部的空白拖动仍应立即滚动，不能为了关闭行为禁用所有弹层滚动。
+    check(fixture.popupOpen && fixture.popupOffset > 20,
+          "popup content scrolls without closing");
+    fixture.frame({ blank.x, blank.y - 30 }, false);
     // 销毁上下文之前释放任何残留输入，测试可以连续创建新的 ImGui 上下文。
     fixture.frame({ 250, 120 }, false, true);
     ImGui::DestroyContext();

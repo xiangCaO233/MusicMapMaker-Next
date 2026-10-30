@@ -114,6 +114,19 @@ void MobileTouchScroll::endFrame()
         cancel();
         return;
     }
+    const auto& popups = ImGui::GetCurrentContext()->OpenPopupStack;
+    if ( !popups.empty() ) {
+        // 弹层外的触摸留给 ImGui 恢复焦点并收起，不能建立背景滚动的 ActiveID。
+        // 再点入口也属于此情况；同一次触摸仍由弹层阻挡，不激活入口或背景控件。
+        // 只检查最上层，父弹层空白不会抢走关闭子弹层的点击。
+        auto* popup = popups.back().Window;
+        if ( !popup || !ImGui::IsWindowWithinBeginStackOf(hit, popup) ) {
+            cancel();
+            return;
+        }
+        // 弹层自己的空白与滚动子窗口继续使用原有拖动路径。
+        // 尚未 Begin 的弹层没有有效窗口，不能借用上一帧的背景身份。
+    }
     auto* window = hit;
     // 两轴可由不同层级承载，未找到某一轴时才继续向祖先查找。
     // 已找到的最近目标不被更外层的窗口覆盖，避免内容突然跳动。
