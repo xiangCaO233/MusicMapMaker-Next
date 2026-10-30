@@ -225,17 +225,30 @@ jobs:
           # 远端暂存路径只使用 GitHub 的数字运行身份。
           set -euo pipefail
           stage="/home/podman/.local/share/mmm-cdn/hotfix-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # SSH 在长时间远端上传期间发送保活，链路失效在一分钟内退出。
+          ssh_options=(-o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
           # 暂存目录按运行和尝试隔离，失败内容不会被后续发布静默复用。
-          ssh -p 22 podman@xiang233.top "mkdir -p '${stage}/tools'"
-          scp -P 22 -r hotfix-output/. "podman@xiang233.top:${stage}/"
-          scp -P 22 scripts/hotfix/prepare_assets.py scripts/hotfix/prepare_program.py scripts/hotfix/publish_assets.py "podman@xiang233.top:${stage}/tools/"
+          ssh "${ssh_options[@]}" -p 22 podman@xiang233.top "mkdir -p '${stage}/tools'"
+          scp "${ssh_options[@]}" -P 22 -r hotfix-output/. "podman@xiang233.top:${stage}/"
+          scp "${ssh_options[@]}" -P 22 scripts/hotfix/prepare_assets.py scripts/hotfix/prepare_program.py scripts/hotfix/publish_assets.py "podman@xiang233.top:${stage}/tools/"
+          # R2 密钥留在服务器，只将限时单对象许可写入私有临时文件。
+          # 由 Runner 直传同一候选，避开网站服务器向 R2 的慢速出口。
+          # 许可位于 workspace 外，且创建时间晚于 Artifact 上传，不会被归档。
+          upload_grants="$(mktemp "${RUNNER_TEMP}/mmm-hotfix-upload.XXXXXX")"
+          chmod 600 "${upload_grants}"
+          trap 'rm -f -- "${upload_grants}"' EXIT
+          ssh "${ssh_options[@]}" -p 22 podman@xiang233.top "/home/podman/.local/share/mmm-cdn/venv/bin/python '${stage}/tools/publish_assets.py' --stage '${stage}' --root /home/podman/data/caddy/web/mmm --sign-uploads" > "${upload_grants}"
+          python3 scripts/hotfix/direct_upload.py --stage hotfix-output --grants "${upload_grants}"
+          # 服务器随后仍逐对象回读正文并校验公开 CDN，通过后才切清单。
           # 密钥只留在 podman 主机，CI 不下载或打印 credentials.env。
           # 上传器先核对原清单、全部制品和公开 CDN 字节，最后切换清单。
           # 同版本目录不可覆盖不同内容，重试只能复用相同对象。
           # 资产清单先切换，程序清单最后切换，资源须兼容旧修订。
           # 此步骤不重新部署网站，也不调用会改写两个清单的普通 CDN main。
           # 只切换选择范围的清单，网站构建和普通 release 元数据不被重写。
-          ssh -p 22 podman@xiang233.top "/home/podman/.local/share/mmm-cdn/venv/bin/python '${stage}/tools/publish_assets.py' --stage '${stage}' --root /home/podman/data/caddy/web/mmm --apply"
+          # 远端最长运行 45 分钟；断连留下的进程不会无限期持有发布锁。
+          # 无缓冲输出及时送回 Actions，进度不再等到进程结束才刷新。
+          ssh "${ssh_options[@]}" -p 22 podman@xiang233.top "timeout --signal=TERM --kill-after=30s 45m /home/podman/.local/share/mmm-cdn/venv/bin/python -u '${stage}/tools/publish_assets.py' --stage '${stage}' --root /home/podman/data/caddy/web/mmm --apply"
 
       - name: Publish APT and Gentoo hotfix packages
         # 后半流程失败不回滚已公开的网页程序，Artifact 用于仅恢复软件源。
