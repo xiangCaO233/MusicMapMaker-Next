@@ -953,6 +953,37 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     // 绘制只读取缓存后的尺寸，避免在多个 Clay 回调中重复测量。
     const auto& layoutMetrics = getLayoutMetrics(dpiScale);
     const float maxLabelW     = layoutMetrics.footerLabelWidth;
+    // 抽屉宽度由屏幕决定，不能强制采用桌面上由最长译文推导的最小窗口宽度。
+    // 不足以同时容纳标签与可操作轨道时分成两行，桌面布局继续沿用原有规则。
+    const bool touchLayout = !workspaceAllowsHoverFeedback();
+    const bool stackedControls =
+        touchLayout && layoutContext.m_avail.x < layoutMetrics.minContentSize.x;
+    // 换行宽度扣除页脚自身留白，与 Clay 最终分配的标签区域一致。
+    // 采用当前绘制字体测量，不能复用桌面文件字体的宽度来决定触摸轨道。
+    const float controlLabelWidth =
+        std::max(1.0f,
+                 layoutContext.m_avail.x - 2 * layoutMetrics.footerPaddingX -
+                     (touchLayout ? ImGui::GetStyle().ScrollbarSize : 0.0f));
+    /// @brief 计算当前字体下标签独占一行所需的高度，允许长译文自然换行。
+    /// @warning 每帧最多测量四条固定标签，不扫描音轨、不改变布局缓存键。
+    const auto labelHeight = [&](const char* label) {
+        return ImGui::CalcTextSize(label, nullptr, false, controlLabelWidth).y;
+    };
+    // 页脚的实际高度与提交行数保持一致，否则第二行会挤入导入按钮或列表。
+    // 折叠状态不提交额外标签，因此不能保留展开时的行高。
+    // 移动平台没有设备选择行，只累计实际绘制的四类增益。
+    // 每条新标签也是父容器的一项，必须同时计入一次父级间距。
+    // 分隔尺寸改变时本帧立即重新计算，不等待资源刷新或持久化配置。
+    // 这里只改变几何分配，音量与静音仍调用原来的即时更新回调。
+    float stackedHeight = 0;
+    if ( stackedControls && m_showGlobalSettings ) {
+        for ( const char* label :
+              { TR("ui.audio_manager.global_volume").data(),
+                TR("ui.audio_manager.bgm_gain").data(),
+                TR("ui.audio_manager.sfx_gain").data(),
+                TR("ui.audio_manager.interaction_sfx_volume").data() } )
+            stackedHeight += labelHeight(label) + layoutMetrics.footerSpacing;
+    }
     // Clay 的像素尺寸使用无符号整数；先夹到非负值再向上取整。
     auto toLayoutPixels = [](float value) {
         return static_cast<uint16_t>(std::ceil(std::max(0.0f, value)));
@@ -1040,11 +1071,26 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         // 弹簧将标签推到左侧，同时维持所有行的右边界一致。
         leftBox.addSpring();
 
-        // 左列禁止横向增长，避免长滑条反向挤压标签对齐线。
-        row.addLayout((std::string(id) + "_left").c_str(),
-                      leftBox,
-                      Sizing::Fixed(labelWidth),
-                      Sizing::Grow());
+        if ( stackedControls ) {
+            // 标签不再参与控制行的横向分配，静音按钮之后的整段宽度留给滑条。
+            // 每条标签按自身换行高度占位，英文和中文使用同一布局判断。
+            parent.addElement(
+                std::string(id) + "_stacked_label",
+                Sizing::Grow(),
+                Sizing::Fixed(labelHeight(label)),
+                [label](Clay_BoundingBox r, bool) {
+                    ImGui::SetCursorScreenPos({ r.x, r.y });
+                    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + r.width);
+                    ImGui::TextUnformatted(label);
+                    ImGui::PopTextWrapPos();
+                });
+        } else {
+            // 桌面和足够宽的抽屉保留对齐的双列，避免无必要地增加面板高度。
+            row.addLayout((std::string(id) + "_left").c_str(),
+                          leftBox,
+                          Sizing::Fixed(labelWidth),
+                          Sizing::Grow());
+        }
 
         // 右列承载固定尺寸静音按钮和占据余量的滑条。
         CLayHBox& rightBox = this->getSubHBox(subHBoxIndex++);
@@ -2264,7 +2310,17 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
     // 布局分为可伸缩列表、固定页脚控制和底部等宽按钮三个区域。
     // 页脚高度已由缓存结合折叠状态计算，本帧不再重新测量子控件。
-    float footerH = layoutMetrics.footerHeight;
+    const float fullControlH =
+        layoutMetrics.globalControlsHeight + stackedHeight;
+    // 音轨资源是主内容，展开全局混音不能让固定页脚吞掉整个移动抽屉。
+    // 只限制可见控制区，内部内容仍保留完整高度并交给独立子窗口滚动。
+    // 下方导入入口继续固定，上方通常可保留超过半屏的可操作列表。
+    const float controlH =
+        touchLayout ? std::min(fullControlH,
+                               std::max(1.0f, layoutContext.m_avail.y * 0.4f))
+                    : fullControlH;
+    const float footerH =
+        layoutMetrics.footerHeight + stackedHeight - (fullControlH - controlH);
 
     // 根容器只描述顶部列表区域，它自动占据扣除页脚后的全部高度。
     rootVBox
@@ -2334,10 +2390,27 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                          layoutContext.m_startPos.y + listAreaHeight };
 
     // 控制区高度不包含下方导入按钮及两区之间的间隔。
-    float controlH = layoutMetrics.globalControlsHeight;
     // 折叠时仍渲染标题行，展开时容器内包含全部控制项。
-    footerVBox.renderInCurrent(footerPos,
-                               { layoutContext.m_avail.x, controlH });
+    if ( touchLayout ) {
+        // 子窗口只提供纵向滚动，不让长英文标题制造横向溢出。
+        // 零内边距保持原页脚与列表对齐，右侧滚动条由可用宽度自动扣除。
+        ImGui::SetCursorScreenPos(footerPos);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{});
+        if ( ImGui::BeginChild("AudioGlobalControls",
+                               { layoutContext.m_avail.x, controlH }) ) {
+            // 渲染原有布局和回调，不维护第二份增益值，也不延迟本地音量更新。
+            footerVBox.renderInCurrent(
+                ImGui::GetCursorScreenPos(),
+                { ImGui::GetContentRegionAvail().x, fullControlH });
+        }
+        // 被裁剪的子窗口同样必须结束，后续导入按钮才能回到外层父窗口。
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+    } else {
+        // 桌面保留固定页脚，窗口原有最小尺寸约束继续生效。
+        footerVBox.renderInCurrent(footerPos,
+                                   { layoutContext.m_avail.x, controlH });
+    }
     if ( controlH > 0.0F )
         // 控制区按展开状态使用实际高度；折叠时标题行仍提供可理解锚点。
         sourceManager->walkthroughSpotlight().reportTarget(
