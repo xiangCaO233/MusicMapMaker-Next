@@ -65,4 +65,14 @@ bool workspaceAllowsHoverFeedback()
 {
     return !activePresentation || activePresentation->allowsHoverFeedback();
 }
+
+/// @brief 将平台设备选择能力传给共享混音视图，不向业务视图泄漏平台宏。
+/// @details 布局准备在 UI 主线程捕获此值，后台计算只读取快照中的布尔量。
+/// 无作用域的桌面测试与旧入口保持原有可见性，不依赖设备枚举推断平台。
+/// @warning 每帧只读取当前线程观察指针和固定能力，不访问音频后端。
+bool workspaceShowsAudioOutputDeviceSelector()
+{
+    return !activePresentation ||
+           activePresentation->showsAudioOutputDeviceSelector();
+}
 }  // namespace MMM::UI

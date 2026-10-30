@@ -31,6 +31,7 @@
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <array>
@@ -597,7 +598,9 @@ AudioManagerView::captureLayoutInput() const
     input.permanentSfxCount =
         Config::SkinManager::instance().getData().audioPaths.size();
     input.showGlobalSettings = m_showGlobalSettings;
-    input.projectAudioCount  = project ? project->m_audioResources.size() : 0;
+    // 平台能力只在 UI 线程捕获，布局计算不读取可变外壳对象。
+    input.showOutputDeviceSelector = workspaceShowsAudioOutputDeviceSelector();
+    input.projectAudioCount = project ? project->m_audioResources.size() : 0;
     return input;
 }
 
@@ -623,7 +626,8 @@ bool AudioManagerView::layoutMetricsMatch(const LayoutMetricsCache&  cache,
         cache.input.hasProject == input.hasProject &&
         cache.input.permanentSfxCount == input.permanentSfxCount &&
         cache.input.projectAudioCount == input.projectAudioCount &&
-        cache.input.showGlobalSettings == input.showGlobalSettings;
+        cache.input.showGlobalSettings == input.showGlobalSettings &&
+        cache.input.showOutputDeviceSelector == input.showOutputDeviceSelector;
 
     // 除业务输入外，任何会改变文字宽度或控件间距的 UI 输入都要匹配。
     return cache.valid && inputMatch &&
@@ -743,7 +747,11 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     };
 
     float labelWidth = 0.0f;
-    for ( const char* label : controlLabels ) {
+    // 隐藏设备选择时不测量其标签，移动窗口也不为隐藏文本预留固定列宽。
+    for ( size_t index = input.showOutputDeviceSelector ? 0u : 1u;
+          index < controlLabels.size();
+          ++index ) {
+        const char* label = controlLabels[index];
         // 翻译文本长度随语言变化，因此必须逐项取最大值。
         labelWidth =
             std::max(labelWidth,
@@ -805,10 +813,12 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
         addAudioManagerListRow(listHeight, listRows, hintRowH, rowSpacingY);
     }
 
-    // 页脚标题始终存在，展开后再加入五个固定高度控制行。
+    // 页脚标题始终存在，设备选择由平台能力决定，其余四个音量行保留。
     float footerH = 2.0F * cache.footerHeaderHeight + footerSpacing;
     if ( input.showGlobalSettings ) {
-        footerH += 5.0f * controlRowH + 5.0f * footerSpacing;
+        // 缓存中的行数与实际提交的控件保持一致，隐藏行不能留下可点击空白。
+        const float controlRows = input.showOutputDeviceSelector ? 5.0f : 4.0f;
+        footerH += controlRows * controlRowH + controlRows * footerSpacing;
     }
     // 导入与项目工具按钮独立于折叠区域，始终计入总高度。
     footerH += importButtonH + importButtonGap;
@@ -947,10 +957,11 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     auto toLayoutPixels = [](float value) {
         return static_cast<uint16_t>(std::ceil(std::max(0.0f, value)));
     };
-    // 输出设备枚举可能涉及后端查询，仅在后端变化或显式标脏时刷新。
+    // 没有设备选择入口的平台也不做后端设备枚举，避免隐藏控件仍触发查询。
     const auto playbackBackend = audioManager.getPlaybackBackend();
-    if ( m_outputDevicesDirty ||
-         m_cachedOutputDeviceBackend != playbackBackend ) {
+    if ( layoutMetrics.input.showOutputDeviceSelector &&
+         (m_outputDevicesDirty ||
+          m_cachedOutputDeviceBackend != playbackBackend) ) {
         m_cachedOutputDevices       = audioManager.listOutputDevices();
         m_cachedOutputDeviceBackend = playbackBackend;
         m_outputDevicesDirty        = false;
@@ -2172,10 +2183,11 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
     if ( m_showGlobalSettings ) {
         // 设备选择置于所有音量控制之前，明确这些值作用于当前输出。
-        addDeviceComboRow(footerVBox,
-                          "OutputDevice",
-                          TR("ui.audio_manager.output_device").data(),
-                          maxLabelW);
+        if ( layoutMetrics.input.showOutputDeviceSelector )
+            addDeviceComboRow(footerVBox,
+                              "OutputDevice",
+                              TR("ui.audio_manager.output_device").data(),
+                              maxLabelW);
 
         // 全局音量控制最终混音输出，并显示当前左右输出电平输入。
         addControlRow(
