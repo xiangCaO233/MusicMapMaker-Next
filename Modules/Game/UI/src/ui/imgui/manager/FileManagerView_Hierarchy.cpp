@@ -800,7 +800,9 @@ bool copyFilesystemEntry(const std::filesystem::path& source,
 ///
 /// Clay 负责根标题与表格的纵向分配，ImGui
 /// 表格提供冻结表头、列显隐、排序和滚动。 列宽按当前字体、DPI
-/// 和容器宽度计算，名称列吸收剩余空间，修改时间列可拉伸。
+/// 和容器宽度计算，桌面名称列吸收剩余空间，修改时间列可拉伸。
+/// 触屏抽屉仅显示名称主列，避免依赖悬浮才能辨认被裁剪的文件名。
+/// 两种表格使用独立身份，移动端重新计算列宽，不读取桌面保存的像素尺寸。
 /// @warning UI 热路径：每帧绘制；文件系统访问由目录快照缓存限制在失效重建时。
 void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
                                               UIManager*     sourceManager)
@@ -887,13 +889,23 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
                     Utils::VerticalScrollbarStyleScope verticalScrollbarStyle(
                         dpiScale);
                     // 表格允许用户调整、重排、隐藏和排序列，并在内部纵向滚动。
-                    const ImGuiTableFlags tableFlags =
+                    const bool touchLayout = !workspaceAllowsHoverFeedback();
+                    ImGuiTableFlags tableFlags =
                         ImGuiTableFlags_BordersV |
                         ImGuiTableFlags_BordersOuterH | ImGuiTableFlags_RowBg |
                         ImGuiTableFlags_Resizable |
                         ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable |
                         ImGuiTableFlags_Sortable | ImGuiTableFlags_ScrollY |
                         ImGuiTableFlags_SizingStretchProp;
+                    // 触屏抽屉优先给名称整行宽度，不能让日期等桌面列挤走导航入口。
+                    // 使用独立身份且不保存列配置，旧版窄列宽不会在重启后重新生效。
+                    // 桌面仍保留原表格身份、列显隐、重排与持久化规则。
+                    if ( touchLayout ) {
+                        tableFlags &= ~(ImGuiTableFlags_Resizable |
+                                        ImGuiTableFlags_Reorderable |
+                                        ImGuiTableFlags_Hideable);
+                        tableFlags |= ImGuiTableFlags_NoSavedSettings;
+                    }
                     // 宽度下限结合字体缩放，避免翻译或大字体被裁切。
                     const auto& tableStyle = ImGui::GetStyle();
                     const float fontScale  = ImGui::GetFontSize() / 17.0f;
@@ -925,7 +937,8 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
                         r.width - typeColumnWidth - sizeColumnWidth -
                             modifiedColumnPreferredWidth - tableReserveWidth);
 
-                    if ( ImGui::BeginTable("FileTreeTableV2",
+                    if ( ImGui::BeginTable(touchLayout ? "FileTreeTouchTable"
+                                                       : "FileTreeTableV2",
                                            4,
                                            tableFlags,
                                            { r.width, r.height }) ) {
@@ -936,23 +949,28 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
                         ImGui::TableSetupColumn(
                             TR("ui.file_manager.column_name").data(),
                             ImGuiTableColumnFlags_DefaultSort |
-                                ImGuiTableColumnFlags_WidthFixed |
+                                (touchLayout
+                                     ? ImGuiTableColumnFlags_WidthStretch
+                                     : ImGuiTableColumnFlags_WidthFixed) |
                                 ImGuiTableColumnFlags_PreferSortAscending,
-                            nameColumnWidth);
+                            touchLayout ? 1.0f : nameColumnWidth);
+                        // 保留列索引与排序字段映射；移动端只改变展示，不改文件操作。
+                        const ImGuiTableColumnFlags detailFlags =
+                            touchLayout ? ImGuiTableColumnFlags_Disabled : 0;
                         ImGui::TableSetupColumn(
                             TR("ui.file_manager.column_type").data(),
-                            ImGuiTableColumnFlags_DefaultHide |
+                            detailFlags | ImGuiTableColumnFlags_DefaultHide |
                                 ImGuiTableColumnFlags_WidthFixed |
                                 ImGuiTableColumnFlags_PreferSortAscending,
                             typeColumnWidth);
                         ImGui::TableSetupColumn(
                             TR("ui.file_manager.column_size").data(),
-                            ImGuiTableColumnFlags_WidthFixed |
+                            detailFlags | ImGuiTableColumnFlags_WidthFixed |
                                 ImGuiTableColumnFlags_PreferSortAscending,
                             sizeColumnWidth);
                         ImGui::TableSetupColumn(
                             TR("ui.file_manager.column_modified_time").data(),
-                            ImGuiTableColumnFlags_WidthStretch |
+                            detailFlags | ImGuiTableColumnFlags_WidthStretch |
                                 ImGuiTableColumnFlags_PreferSortDescending,
                             1.0f);
                         if ( ImGuiTable* table = ImGui::GetCurrentTable() ) {
@@ -994,7 +1012,8 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
 /// @param path 当前目录绝对路径。
 /// @param sourceManager 用于激活谱面、音频或打开相关视图。
 ///
-/// 每个条目占一行四列；第一列是透明背景 TreeNode，自行以整行 hover 色覆盖表格。
+/// 每个条目保留四列索引；触屏只启用名称，桌面继续按用户列设置绘制。
+/// 第一列是透明背景 TreeNode，自行以整行 hover 色覆盖表格。
 /// 只有目录节点处于展开状态时才递归获取子快照，折叠目录不会触发磁盘读取。
 /// @warning UI 热路径：按可见展开树线性遍历缓存条目，不得每帧全量扫描项目根。
 void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
@@ -1064,14 +1083,16 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
         }
 
         // 大小列由表格 API 自行跳过隐藏状态，文本构造保持轻量。
-        ImGui::TableNextColumn();
-        const std::string sizeText = formatSizeColumn(entry);
-        ImGui::TextUnformatted(sizeText.c_str());
+        if ( ImGui::TableNextColumn() ) {
+            const std::string sizeText = formatSizeColumn(entry);
+            ImGui::TextUnformatted(sizeText.c_str());
+        }
 
         // 修改时间在快照构建时已读取，此处只做本地格式化。
-        ImGui::TableNextColumn();
-        const std::string modifiedText = formatModifiedColumn(entry);
-        ImGui::TextUnformatted(modifiedText.c_str());
+        if ( ImGui::TableNextColumn() ) {
+            const std::string modifiedText = formatModifiedColumn(entry);
+            ImGui::TextUnformatted(modifiedText.c_str());
+        }
 
         if ( entry.isDirectory && open ) {
             // 递归只发生在用户展开目录时，结束后必须对称 TreePop。

@@ -331,7 +331,7 @@ bool renderScrollingCollapsingHeader(const std::string& id,
     return open;
 }
 
-/// @brief 渲染带自动滚动文本的树节点核心。
+/// @brief 渲染树节点核心；桌面长文本滚动，触屏长文本静态换行。
 /// @param id ImGui 控件 ID。
 /// @param text 显示文本。
 /// @param width 控件宽度。
@@ -347,10 +347,32 @@ ScrollingTreeNodeResult renderScrollingTreeNodeCore(const std::string& id,
                                                     const std::string& tooltip)
 {
     // 保存原始游标，TreeNode 提交后在同一行上覆盖可见滚动文本。
-    const ImVec2      cursorPos    = ImGui::GetCursorScreenPos();
-    const ImGuiStyle& style        = ImGui::GetStyle();
-    const float       targetHeight = std::max(height, ImGui::GetFrameHeight());
+    const ImVec2      cursorPos   = ImGui::GetCursorScreenPos();
+    const ImGuiStyle& style       = ImGui::GetStyle();
+    const bool        touchLayout = !workspaceAllowsHoverFeedback();
+    const float       arrowWidth  = ImGui::GetTreeNodeToLabelSpacing();
+    // 叶节点不保留箭头槽；触屏换行宽度与最终绘制宽度必须完全一致。
+    // 留白取当前主题，避免大字号或深层缩进时仍按桌面固定像素排字。
+    const float treeGutterWidth = isLeaf ? 0.0f : arrowWidth;
+    const float textAvailableWidth =
+        std::max(1.0f,
+                 width - treeGutterWidth -
+                     (touchLayout ? 2 * style.FramePadding.x : 8.0f));
+    const float textHeight =
+        touchLayout ? ImGui::CalcTextSize(
+                          text.c_str(), nullptr, false, textAvailableWidth)
+                          .y
+                    : ImGui::GetFontSize();
+    // 先把完整换行高度交给 TreeNode，再提交文字；命中区与表格下一行同步增高。
+    // 只测量当前可见节点，不扫描目录，也不缓存可能跨字体重载失效的字形。
+    const float targetHeight = std::max(
+        { height,
+          ImGui::GetFrameHeight(),
+          touchLayout ? textHeight + 2 * style.FramePadding.y : 0.0f });
     // 纵向 padding 至少沿用主题，并能把文字居中到调用方目标高度。
+    // 空标签 TreeNode 仍以单行字高结算命中区，额外行高必须折入上下 padding。
+    // 只增加自定义节点所需的高度，不把整个窗口或相邻控件的主题留白一起放大。
+    // 目录箭头因此与整块可点击文本区域共用中心，展开后的子行不会盖住末行文字。
     const float framePaddingY = std::max(
         style.FramePadding.y, (targetHeight - ImGui::GetFontSize()) * 0.5f);
 
@@ -379,14 +401,31 @@ ScrollingTreeNodeResult renderScrollingTreeNodeCore(const std::string& id,
         renderTooltip(tooltip.c_str());
     }
 
-    const float arrowWidth = ImGui::GetTreeNodeToLabelSpacing();
-    // 叶节点无需为展开箭头预留 gutter，非叶节点扣除箭头宽度。
-    const float  treeGutterWidth    = isLeaf ? 0.0f : arrowWidth;
-    const float  textAvailableWidth = width - treeGutterWidth - 8.0f;
     const ImVec2 textStartPos = { cursorPos.x + treeGutterWidth, cursorPos.y };
 
-    // 长名称在可用文字区域内裁剪滚动，不覆盖展开箭头。
-    drawScrollingText(text, textStartPos, textAvailableWidth, targetHeight);
+    if ( touchLayout ) {
+        // 手指没有悬浮状态，完整名称直接换行，不再按时间横移或隐藏开头图标。
+        // 绘制列表不提交第二个 Item，点击、目录展开和拖放仍属于原 TreeNode。
+        ImGui::PushClipRect(textStartPos,
+                            { textStartPos.x + textAvailableWidth,
+                              textStartPos.y + targetHeight },
+                            true);
+        // 与父表格裁剪区求交，保留冻结表头及滚动边界，换行不能越界覆盖下一面板。
+        // 显式传入测量时的字体和字号，避免皮肤字体切换后绘制使用不同的换行宽度。
+        ImGui::GetWindowDrawList()->AddText(
+            ImGui::GetFont(),
+            ImGui::GetFontSize(),
+            { textStartPos.x,
+              textStartPos.y + (targetHeight - textHeight) * .5f },
+            ImGui::GetColorU32(ImGuiCol_Text),
+            text.c_str(),
+            nullptr,
+            textAvailableWidth);
+        ImGui::PopClipRect();
+    } else {
+        // 桌面继续使用原有单行跑马灯，不改变其行高和鼠标交互。
+        drawScrollingText(text, textStartPos, textAvailableWidth, targetHeight);
+    }
     return { .open = open, .clicked = isClicked };
 }
 
