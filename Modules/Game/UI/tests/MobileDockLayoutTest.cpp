@@ -30,6 +30,10 @@ struct Fixture {
     bool styleIntact{ true };
     /// @brief 内容上沿不得越过原生标签下沿，防止内容背景覆盖标签。
     bool titleFits{ true };
+    /// @brief 模拟惰性设置页连续请求聚焦，不能覆盖恢复后的主区活动标签。
+    bool lateFocus{};
+    /// @brief 非整数倍率产生的宿主宽度，覆盖真实设备而非仅测试整数几何。
+    float hostWidth{ 900.85f };
     // 每次 Begin 累积检查，首次出现、缩放和拖动帧都不能短暂盖住标签。
 
     /// @brief 将一个测试窗口送入对应分区并读取其实际内容矩形。
@@ -69,16 +73,19 @@ struct Fixture {
         const auto padding = ImGui::GetStyle().FramePadding;
         // 每帧捕获进入时的值；前一帧泄漏不能被下一帧取样掩盖。
         const auto separator = ImGui::GetStyle().DockingSeparatorSize;
-        layout.render({ 0, 0 }, { 900, height }, 1, timing, preview);
+        layout.render({ 0, 0 }, { hostWidth, height }, 1, timing, preview);
         // 既检查平衡恢复，也检查自定义美化宽度没有被固定触摸尺寸替换。
         styleIntact &= ImGui::GetStyle().FramePadding.x == padding.x &&
                        ImGui::GetStyle().FramePadding.y == padding.y &&
                        ImGui::GetStyle().DockingSeparatorSize == separator;
         bounds[0] = pane(MMM::UI::MobileDockPanel::Main, "Main");
+        if ( lateFocus ) ImGui::SetNextWindowFocus();
+        pane(MMM::UI::MobileDockPanel::Main, "Other");
         if ( timing )
             bounds[1] = pane(MMM::UI::MobileDockPanel::Timing, "Timing");
         if ( preview )
             bounds[2] = pane(MMM::UI::MobileDockPanel::Preview, "Preview");
+        layout.finishFrame();
         ImGui::Render();
     }
 
@@ -118,6 +125,9 @@ struct Fixture {
 
 /// @brief 验证单窗口标签、实际内容等高、宿主缩放和分区显隐。
 /// @details 所有输入来自 CPU 上下文，不读取用户 ini 或实际窗口状态。
+/// 触摸拖动后捕获布局，反复销毁布局对象再恢复，检查是否累积像素偏移。
+/// 各次恢复都使用新对象，不复用私有缓存或旧节点观察指针。
+/// 宿主的现存原生窗口仍参与新树构建，覆盖历史 ini 已提供窗口身份的场景。
 int main()
 {
     using namespace MMM::UI;
@@ -184,6 +194,7 @@ int main()
             std::abs(fixture.bounds[2].height - fixture.bounds[0].height) < .5f,
         "resize preserves equal height");
     // 显式隐藏只移除对应叶节点，保留另一个辅助分区和主画布。
+    // 实际拖动值从节点捕获；后续重建必须恢复这些值而非代码默认比例。
     fixture.settle();
     const auto* timingNode = ImGui::DockBuilderGetNode(timing);
     // 节点指针仅在下一次拓扑变化前有效，这里只做连续输入不切换显隐。
@@ -203,6 +214,10 @@ int main()
     // 连续拖动不允许改变垂直内容边界；宽度调整不能变回独立浮窗。
     check(std::abs(fixture.bounds[2].height - fixture.bounds[0].height) < .5f,
           "resizing widths retains equal content heights");
+    float   savedTiming = 0, savedPreview = 0;
+    ImGuiID savedTab = 0;
+    fixture.layout.capture(savedTiming, savedPreview, savedTab);
+    // 捕获后还会执行隐藏与重建，保存值必须独立于节点指针的生命周期。
     fixture.settle(true, false);
     // 隐藏后继续推进真实帧，验证结果不依赖已失效节点的残留指针。
     check(fixture.layout.node(MobileDockPanel::Preview) == 0 &&
@@ -214,6 +229,56 @@ int main()
     check(fixture.layout.center() != 0 &&
               fixture.layout.node(MobileDockPanel::Timing) == 0,
           "main remains when auxiliaries close");
+    // 新布局对象模拟外壳重建，旧节点仍存在也不能覆盖已读取的客户端值。
+    fixture.layout = MobileDockLayout{};
+    // 清空内部 ID 与缓存，只给新对象公开的恢复接口提供已保存标量。
+    fixture.layout.restore(savedTiming, savedPreview, savedTab);
+    fixture.settle();
+    float   restoredTiming = 0, restoredPreview = 0;
+    ImGuiID restoredTab = 0;
+    fixture.layout.capture(restoredTiming, restoredPreview, restoredTab);
+    // 允许像素取整产生小比例差，不能允许重新采用默认宽度的明显跳变。
+    // 标签身份也必须恢复，防止尺寸正确但主区跳回另一页签。
+    check(std::abs(restoredTiming - savedTiming) < .01f &&
+              std::abs(restoredPreview - savedPreview) < .01f &&
+              restoredTab == savedTab,
+          "restart restores resized panes and selected tab");
+    // 多轮恢复必须仍落在同一像素宽度，不能每次扣除一条缝隙而逐渐漂移。
+    // 先把初次捕获值固定作为基线，循环里不以刚漂移的值覆盖预期。
+    const float baselineTiming  = restoredTiming,
+                baselinePreview = restoredPreview;
+    for ( int cycle = 0; cycle < 12; ++cycle ) {
+        fixture.layout = MobileDockLayout{};
+        fixture.layout.restore(restoredTiming, restoredPreview, restoredTab);
+        fixture.settle();
+        fixture.layout.capture(restoredTiming, restoredPreview, restoredTab);
+    }
+    check(std::abs(restoredTiming - baselineTiming) < .001f &&
+              std::abs(restoredPreview - baselinePreview) < .001f,
+          "repeated restores do not accumulate pixel drift");
+    // 恢复非默认的第一个标签，并模拟另一窗口在随后每帧请求焦点。
+    // 保存的是窗口身份，不能把原生 TabId 与窗口 ID 混用而碰巧回到默认页。
+    const auto mainWindow = ImGui::FindWindowByName("Main")->ID;
+    fixture.layout        = MobileDockLayout{};
+    fixture.layout.restore(restoredTiming, restoredPreview, mainWindow);
+    fixture.lateFocus = true;
+    // 连续请求模拟异步惰性创建，不允许靠猜测固定等待帧数恢复选中页。
+    // 此时没有用户按下，恢复保护才可覆盖初始化请求，不能改写真实交互。
+    fixture.settle();
+    fixture.layout.capture(restoredTiming, restoredPreview, restoredTab);
+    check(restoredTab == mainWindow,
+          "late windows cannot override restored active tab");
+    // 一次真实按下必须终止启动恢复保护，后续导航不能被旧活动标签锁住。
+    // 让另一窗口继续请求焦点，检验释放保护后的普通聚焦确实重新生效。
+    io.AddMousePosEvent(850, 650);
+    // 触点位于宿主外，单独验证恢复生命周期边界，不依赖标签命中结果。
+    io.AddMouseButtonEvent(0, true);
+    fixture.frame();
+    io.AddMouseButtonEvent(0, false);
+    fixture.settle();
+    fixture.layout.capture(restoredTiming, restoredPreview, restoredTab);
+    check(restoredTab == ImGui::FindWindowByName("Other")->ID,
+          "first interaction releases startup focus protection");
     ImGui::DestroyContext();
     // 所有窗口、字体和节点统一由上下文销毁，测试不保留跨用例状态。
     return failures == 0 ? 0 : 1;

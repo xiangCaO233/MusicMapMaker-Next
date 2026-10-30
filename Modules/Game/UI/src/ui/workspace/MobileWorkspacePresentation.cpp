@@ -2,6 +2,7 @@
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
+#include "config/MobileWorkspaceSettings.h"
 #include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/ui/GLFWNativeEvent.h"
@@ -100,6 +101,9 @@ private:
     void drawToolbar(UIManager& manager);
     /// @brief 退出确认是独立移动端窗口，不复用桌面菜单退出弹窗。
     void drawExitConfirmation();
+    /// @brief 交互结束时冻结移动布局并交给配置层异步保存。
+    /// @warning 只在释放或返回边沿调用，不在连续拖动或空闲帧生成快照。
+    void saveLayout(UIManager& manager);
 
     /// @brief 纯手势状态只属于 UI 线程，关闭抽屉不影响文件选择状态。
     MobileWorkspaceModel m_model;
@@ -111,6 +115,10 @@ private:
     bool m_backRequested{}, m_initialized{}, m_drawingDrawer{};
     /// @brief 窗口开关属于移动外壳，初次启动全部收起。
     bool m_showToolbar{}, m_showTiming{}, m_showPreview{};
+    /// @brief 返回操作可没有触屏释放，用独立边沿提交设置关闭状态。
+    bool m_commitLayout{};
+    /// @brief 等公共首次工作区初始化完成后，再恢复客户端资源类别。
+    int m_restoreResourceTab{};
     /// @brief 当前帧几何不跨线程共享，旋转后立即重新计算。
     ImVec2 m_origin{}, m_size{};
     float  m_scale{ 1 }, m_padding{}, m_gap{}, m_toolbarWidth{};
@@ -144,12 +152,21 @@ void MobileWorkspacePresentation::beginFrame(UIManager& manager)
     // 字号在平台外壳中统一提高，保留用户二次缩放，不逐帧累乘。
     ImGui::GetStyle().FontScaleMain =
         std::clamp(settings.fontSizeMultiplier * 1.25f, 1.0f, 2.5f);
-    // 首次进入移动外壳只保留两个中心页签，辅助窗口默认收起。
-    // 这不是改写用户桌面布局，平台工厂已经在更早的阶段分离。
+    // 首次安装采用两中心页签默认；再次启动读取独立客户端布局。
+    // 不从桌面停靠 ini 推断显隐，也不把移动树写回桌面布局预设。
     if ( !m_initialized ) {
-        m_showTiming  = false;
-        m_showPreview = false;
-        m_initialized = true;
+        const auto& saved = config.getMobileWorkspaceSettings();
+        m_showToolbar     = saved.m_toolbar;
+        m_showTiming      = saved.m_timing;
+        m_showPreview     = saved.m_preview;
+        m_model.restoreHandleCenters(saved.m_leftCenter, saved.m_rightCenter);
+        m_dock.restore(
+            saved.m_timingRatio, saved.m_previewRatio, saved.m_selectedTab);
+        if ( saved.m_settingsOpen )
+            manager.openSettingsWindow(Event::SettingsTab::Software);
+        // 公共无项目初始化会在本帧稍后选择文件页，资源类别必须延后到帧末恢复。
+        m_restoreResourceTab = saved.m_resourceTab;
+        m_initialized        = true;
     }
     // 共享窗口仍通过原有显示字段判断是否准备内容。
     // 移动状态只发布最新值，不为未变化的开关执行保存。
@@ -177,6 +194,7 @@ void MobileWorkspacePresentation::beginFrame(UIManager& manager)
                     settings->setOpen(false);
                 // 视图即将移除，结束可能仍在进行的快捷键录制状态。
                 ShortcutUtils::setShortcutRecordingActive(false);
+                m_commitLayout = true;
             } else
                 m_model.requestBack();
         }
@@ -316,7 +334,9 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
         if ( m_model.blocksCanvasInput() ) flags |= ImGuiWindowFlags_NoInputs;
         if ( mainCanvas ) {
             const std::string name = "主画布###" + std::string(id);
-            const bool visible     = ImGui::Begin(name.c_str(), nullptr, flags);
+            // 显示标题改写后再次匹配固定身份，恢复不依赖项目标题文本。
+            m_dock.target(MobileDockPanel::Main, name.c_str());
+            const bool visible = ImGui::Begin(name.c_str(), nullptr, flags);
             ImGui::PopStyleVar();
             return visible;
         }
@@ -655,6 +675,18 @@ void MobileWorkspacePresentation::drawExitConfirmation()
 /// @warning 每帧固定数量面板与状态检查，不执行文件、网络或跨线程等待。
 void MobileWorkspacePresentation::endFrame(UIManager& manager)
 {
+    // 此时公共生命周期和工作区初始化已完成，不会覆盖刚恢复的客户端选择。
+    // 只保留一次待恢复意图；视图尚未注册时留待下一帧，不用等待或重复创建。
+    if ( m_restoreResourceTab > 0 ) {
+        auto* sidebar  = manager.getView<SideBarUI>("SideBarUI");
+        auto* floating = manager.getView<FloatingManagerUI>("SideBarManager");
+        if ( sidebar && floating ) {
+            const auto tab = static_cast<SideBarTab>(m_restoreResourceTab);
+            sidebar->setActiveTab(tab);
+            floating->restoreSubViewState(TabToSubViewId(tab), true);
+            m_restoreResourceTab = 0;
+        }
+    }
     // 业务模态拥有比抽屉更高的优先级，文件选择与确认流程不受外壳干扰。
     // 遮罩不是装饰效果，它和原始输入守卫一起建立明确的输入归属。
     const bool popup = ImGui::GetTopMostPopupModal() != nullptr;
@@ -686,7 +718,11 @@ void MobileWorkspacePresentation::endFrame(UIManager& manager)
     }
     drawExitConfirmation();
     m_touchScroll.endFrame();
+    m_dock.finishFrame();
     ImGui::PopStyleVar();
+    // 普通帧和拖动中不保存；松手读取最终比例，也覆盖原生分隔条拖动。
+    const bool commitLayout = std::exchange(m_commitLayout, false);
+    if ( ImGui::IsMouseReleased(0) || commitLayout ) saveLayout(manager);
     // 确认只发布既有窗口命令，继续走工程收尾和资源销毁流程。
     // 不调用进程终止、Activity.finish 或跨线程 join 来模拟退出。
     if ( m_model.takeExitRequest() ) {
@@ -695,6 +731,31 @@ void MobileWorkspacePresentation::endFrame(UIManager& manager)
         request.type = Event::NativeEventType::GLFW_CLOSE_WINDOW;
         Event::EventBus::instance().publish(request);
     }
+}
+
+/// @brief 将当前移动布局按值冻结，配置层仅在实际变化时发布后台请求。
+/// @details 活动标签和宽度取原生树的最终值，把手取归一化位置。
+/// 不保存抽屉开合动画，重启始终从清晰的双把手入口开始。
+/// @warning 仅由明确交互边沿调用；不得移入逐帧或连续触点更新路径。
+void MobileWorkspacePresentation::saveLayout(UIManager& manager)
+{
+    auto& app   = Config::AppConfig::instance();
+    auto  value = app.getMobileWorkspaceSettings();
+    // 从上次提交副本开始，未显示的分区与未匹配的旧标签不会被零值覆盖。
+    // 配置层再以值比较去重，无布局变化的普通点击不产生完整保存请求。
+    value.m_toolbar     = m_showToolbar;
+    value.m_timing      = m_showTiming;
+    value.m_preview     = m_showPreview;
+    value.m_leftCenter  = m_model.leftHandleCenter();
+    value.m_rightCenter = m_model.rightHandleCenter();
+    m_dock.capture(
+        value.m_timingRatio, value.m_previewRatio, value.m_selectedTab);
+    const auto* settings = manager.getView<IUIView>("SettingsWindow");
+    // 原生返回可能刚关闭设置页，读取业务开关而非上一帧可见窗口缓存。
+    value.m_settingsOpen = settings && settings->isOpen();
+    if ( const auto* sidebar = manager.getView<SideBarUI>("SideBarUI") )
+        value.m_resourceTab = static_cast<int>(sidebar->getActiveTab());
+    app.saveMobileWorkspaceSettings(value);
 }
 }  // namespace
 

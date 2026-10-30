@@ -1,9 +1,65 @@
 #include "ui/workspace/MobileDockLayout.h"
 #include <algorithm>
+#include <cmath>
 #include <imgui_internal.h>
 
 namespace MMM::UI
 {
+/// @brief 从独立移动配置恢复首次分割参数，下一次提交按当前屏幕建树。
+/// @details 活动标签待匹配窗口出现时消费，不持有窗口或节点指针。
+void MobileDockLayout::restore(float timingRatio, float previewRatio,
+                               ImGuiID selectedTab)
+{
+    m_timingRatio  = timingRatio;
+    m_previewRatio = previewRatio;
+    m_restoreFocus = selectedTab;
+    m_startupFocus = selectedTab;
+    m_visibility   = -1;
+}
+
+/// @brief 冻结用户实际调整结果，不能用最初默认比例冒充当前停靠宽度。
+/// @details 隐藏叶节点没有几何，继续使用隐藏前缓存的比例。
+/// @warning 交互提交时只访问三叶一根，不遍历整个 ImGui 窗口集合。
+void MobileDockLayout::capture(float& timingRatio, float& previewRatio,
+                               ImGuiID& selectedTab) const
+{
+    timingRatio  = m_timingRatio;
+    previewRatio = m_previewRatio;
+    // 尚未显示的树不能生成有效快照，保留调用方先前保存的标签身份。
+    const auto* root = ImGui::DockBuilderGetNode(m_root);
+    if ( !root || root->Size.x <= 0 ) return;
+    if ( const auto* leaf = ImGui::DockBuilderGetNode(m_timing) )
+        timingRatio = leaf->Size.x / root->Size.x;
+    if ( const auto* leaf = ImGui::DockBuilderGetNode(m_preview) )
+        previewRatio = leaf->Size.x / root->Size.x;
+    if ( const auto* leaf = ImGui::DockBuilderGetNode(m_center);
+         leaf && leaf->VisibleWindow )
+        // 保存窗口 ID；原生 TabId 是从窗口 ID 派生的另一身份，不能用于 Begin
+        // 匹配。
+        selectedTab = leaf->VisibleWindow->ID;
+}
+
+/// @brief 在所有业务窗口提交后处理启动焦点，兼容惰性窗口的连续聚焦请求。
+/// @details 用户第一次按下立即结束恢复保护，后续完全交还普通导航规则。
+/// 弹层始终更优先，不能为了恢复中心标签夺走确认或文件选择的输入。
+/// @warning 每帧只查找一个固定窗口 ID，无遍历、资源创建或同步等待。
+void MobileDockLayout::finishFrame()
+{
+    if ( !m_startupFocus ) return;
+    if ( ImGui::IsMouseClicked(0) ) {
+        m_startupFocus = m_restoreFocus = 0;
+        return;
+    }
+    if ( ImGui::IsPopupOpen(
+             nullptr,
+             ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) )
+        return;
+    // 未出现的窗口留待下一帧，无需猜测初始化耗时或设定等待帧数。
+    if ( auto* window = ImGui::FindWindowByID(m_startupFocus);
+         window && window->Active )
+        ImGui::FocusWindow(window);
+}
+
 /// @brief 保留主题横向留白，并仅为标签交互提供最小触摸高度。
 /// @details 宿主生成标签和业务 Begin 计算标题高度时需要同一值。
 /// 内容控件不继承这一扩展，避免固定高度布局被标签尺寸撑坏。
@@ -41,6 +97,12 @@ ImGuiID MobileDockLayout::node(MobileDockPanel panel) const
 void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
                               bool timing, bool preview)
 {
+    // 与 ImGui 窗口的整数像素几何一致，避免非整数 UI
+    // 倍率让重建和最终宿主差一像素。
+    // 所有比例换算都基于这份实际尺寸，反复重启才不会累积取整误差。
+    position = { std::floor(position.x), std::floor(position.y) };
+    size     = { std::max(1.0f, std::floor(size.x)),
+                 std::max(1.0f, std::floor(size.y)) };
     // 分隔条可见尺寸由调用方美化样式提供，不为触摸命中额外画粗。
     // 三个分区共享宿主顶部和底部，标签栏使用同一帧字号与 FramePadding。
     const auto& style = ImGui::GetStyle();
@@ -71,12 +133,13 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
              root && root->Size.x > 0 ) {
             if ( const auto* old = ImGui::DockBuilderGetNode(m_timing) )
                 m_timingRatio =
-                    std::clamp(old->Size.x / root->Size.x, .1f, .6f);
+                    std::clamp(old->Size.x / root->Size.x, .02f, .95f);
             if ( const auto* old = ImGui::DockBuilderGetNode(m_preview) )
                 m_previewRatio =
-                    std::clamp(old->Size.x / root->Size.x, .1f, .6f);
-            if ( const auto* old = ImGui::DockBuilderGetNode(m_center) )
-                m_restoreFocus = old->SelectedTabId;
+                    std::clamp(old->Size.x / root->Size.x, .02f, .95f);
+            if ( const auto* old = ImGui::DockBuilderGetNode(m_center);
+                 old && old->VisibleWindow )
+                m_restoreFocus = old->VisibleWindow->ID;
             ImGui::DockBuilderRemoveNode(m_root);
         }
         // 只在拓扑变化时重建，不能逐帧用默认比例覆盖用户拖动结果。
@@ -87,22 +150,24 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
         // 重建后先清除隐藏节点，不能将旧 ID 发布给后续业务 Begin。
         // 主区可直接是根叶节点，也可以在分割后成为最后剩余的左叶。
         m_timing = m_preview = 0;
-        if ( preview )
-            ImGui::DockBuilderSplitNode(m_center,
-                                        ImGuiDir_Right,
-                                        m_previewRatio,
-                                        &m_preview,
-                                        &m_center);
-        if ( timing ) {
-            // 第二次分割作用于扣除预览后的剩余宽度，换算比例避免重复扣除。
-            const float remaining = preview ? 1.0f - m_previewRatio : 1.0f;
+        // 保存值相对于根宽度；原生 split 的比例却相对于扣除缝隙后的父宽度。
+        // 先恢复目标像素再换算，不能在每次重启时重复扣除一次缝隙。
+        const auto splitRight = [&](float ratio, ImGuiID& leaf) {
+            const auto* parent = ImGui::DockBuilderGetNode(m_center);
+            const float available =
+                std::max(1.0f, parent->Size.x - style.DockingSeparatorSize);
+            // 原生先截断左子区，右子区取余数；半像素偏置保证整数目标不会向上漂移。
+            // 像素取整只发生在重建，不影响原生持续拖动的即时几何反馈。
+            const float desired = std::round(size.x * ratio);
             ImGui::DockBuilderSplitNode(
                 m_center,
                 ImGuiDir_Right,
-                std::clamp(m_timingRatio / remaining, .1f, .75f),
-                &m_timing,
+                std::clamp((desired - .5f) / available, .01f, .99f),
+                &leaf,
                 &m_center);
-        }
+        };
+        if ( preview ) splitRight(m_previewRatio, m_preview);
+        if ( timing ) splitRight(m_timingRatio, m_timing);
         ImGui::DockBuilderFinish(m_root);
         // 完成整棵树后再记录组合，下一帧即可走不重建的稳定路径。
         // 业务窗口稍后依次 Begin，并从当前布局获取各自所属叶节点。

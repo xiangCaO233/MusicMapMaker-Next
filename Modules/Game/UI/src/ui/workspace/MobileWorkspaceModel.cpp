@@ -5,6 +5,14 @@
 
 namespace MMM::UI
 {
+/// @brief 恢复归一化位置，具体像素边界仍由当前屏幕尺寸计算。
+/// @details 配置读取已验证有限性；边界夹紧防止把手落到设备可用区外。
+void MobileWorkspaceModel::restoreHandleCenters(float left, float right)
+{
+    m_leftHandleCenter  = std::clamp(left, 0.0f, 1.0f);
+    m_rightHandleCenter = std::clamp(right, 0.0f, 1.0f);
+}
+
 /// @brief 以左上角和尺寸判断触摸是否属于本矩形。
 /// @return 右边和下边不归本矩形，避免相邻层竞争同一触点。
 /// @warning 仅做标量比较，不引用窗口或会话对象。

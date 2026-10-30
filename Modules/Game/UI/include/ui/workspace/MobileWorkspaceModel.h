@@ -56,6 +56,12 @@ public:
     MobileRect drawerGrip() const;
     /// @brief 根据手持屏幕宽度限制抽屉宽度，始终留出遮罩点击区域。
     float drawerWidth() const;
+    /// @brief 从客户端布局恢复左右归一化中心，不恢复未结束的触摸手势。
+    void restoreHandleCenters(float left, float right);
+    /// @brief 当前左把手归一化位置，用于释放边沿保存。
+    float leftHandleCenter() const { return m_leftHandleCenter; }
+    /// @brief 当前右把手归一化位置，始终与左侧独立。
+    float rightHandleCenter() const { return m_rightHandleCenter; }
 
 private:
     /// @brief 手势起点确定唯一所有者，中途不能从业务内容切换到抽屉。
