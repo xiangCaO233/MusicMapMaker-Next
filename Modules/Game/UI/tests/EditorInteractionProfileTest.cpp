@@ -2,10 +2,12 @@
 #include "common/SelectionOperation.h"
 #include "config/EditorSettings.h"
 #include "config/EditorShortcutActions.h"
+#include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "log/colorful-log.h"
 #include "ui/imgui/ShortcutUtils.h"
+#include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
 #include "ui/imgui/menu/interfaces/IMainMenuItemActionHandler.h"
@@ -515,9 +517,47 @@ bool checkAcceleratedScroll()
 /// 禁用门禁同时覆盖源与目标，不能因重映射改变编辑能力。
 /// 命令出口使用正式 EventBus 订阅，私有副本变化不算发布成功。
 /// 所有订阅与动作登记在返回前清理，避免影响套件 runner 的退出。
-int main()
+int main(int argc, char** argv)
 {
     bool ok = true;
+    // 使用正式语言资源切换同一套对象，防止名称只在构造时翻译一次。
+    // 方案 ID 与侧栏注册身份必须保持不变，否则持久化和当前选中项会失配。
+    // 路径由 CTest 注入源码资源，测试不依赖用户安装目录中的语言副本。
+    // 加载失败单独报告，不能用回退键名误判成语言切换成功。
+    if ( argc != 3 ) return 1;
+    auto& translator = MMM::Translation::getActiveTranslator();
+    ok &= require(translator.loadLanguage("zh_cn", argv[1]) &&
+                      translator.loadLanguage("en_us", argv[2]),
+                  "load production translations");
+    // 注册身份在切换前保存，后续不允许依赖当前显示标题重新寻找子视图。
+    // 同时验证反向映射，覆盖菜单入口与工作区恢复使用的两条路径。
+    const auto sidebarId =
+        MMM::UI::TabToSubViewId(MMM::UI::SideBarTab::FileExplorer);
+    // 中文、英文、再回中文，覆盖翻译缓存失效和同一对象的重复读取。
+    for ( const char* language : { "zh_cn", "en_us", "zh_cn" } ) {
+        ok &= require(translator.switchLang(language), "switch language");
+        // 对同一组已注册方案读取名称，避免重新构造对象掩盖冻结标题的问题。
+        // 判断完整译文，不只检查名称非空或不等于翻译键。
+        const bool english = std::string_view(language) == "en_us";
+        for ( const auto& profile : Interaction::profiles() ) {
+            if ( profile->id() == "classic-desktop" )
+                ok &= require(profile->name() ==
+                                  (english ? "Classic Desktop" : "经典桌面"),
+                              "localized classic profile");
+            if ( profile->id() == "mouse-only" )
+                ok &= require(
+                    profile->name() == (english ? "Mouse Only" : "纯鼠标"),
+                    "localized mouse profile");
+        }
+        // 翻译键直接作为稳定身份，显示标题则每次按当前语言解析。
+        ok &= require(sidebarId == MMM::UI::TabToSubViewId(
+                                       MMM::UI::SideBarTab::FileExplorer) &&
+                          MMM::UI::SubViewIdToTab(sidebarId) ==
+                              MMM::UI::SideBarTab::FileExplorer &&
+                          TR(sidebarId.c_str()).view() ==
+                              (english ? "File Browser" : "文件浏览"),
+                      "stable sidebar identity and translated title");
+    }
     // 旧配置仍保留原来的镜像绑定，新动作自动使用之前硬编码的组合。
     MMM::Config::EditorSettings source;
     source.m_interactionProfileId    = "test-profile";

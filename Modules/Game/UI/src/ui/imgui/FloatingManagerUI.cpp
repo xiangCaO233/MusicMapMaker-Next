@@ -1323,8 +1323,9 @@ void FloatingManagerUI::applyDockResizeConstraintsBeforeDockSpace(
                           : it->second->getMinContentSize(dpiScale),
         dpiScale);
     // ### 后缀与 update 中一致，标题变化不改变内部窗口 ID。
-    const std::string windowName = m_currentSubViewId + "###" + m_name;
-    ImGuiWindow*      window     = ImGui::FindWindowByName(windowName.c_str());
+    const std::string windowName =
+        TR(m_currentSubViewId.c_str()).toString() + "###" + m_name;
+    ImGuiWindow* window = ImGui::FindWindowByName(windowName.c_str());
     if ( !window || !window->DockNode ) {
         // 首帧或浮动窗口由常规 ImGui 尺寸约束处理。
         return;
@@ -1713,10 +1714,11 @@ void FloatingManagerUI::updateAsDrawer(UIManager* sourceManager)
     const auto it = m_subViews.find(m_currentSubViewId);
     if ( !m_isVisible || it == m_subViews.end() ) return;
     it->second->syncProjectUiState(sourceManager);
-    LayoutContext context(*this,
-                          m_currentSubViewId + "###" + m_name,
-                          true,
-                          ImGuiWindowFlags_NoTitleBar);
+    LayoutContext context(
+        *this,
+        TR(m_currentSubViewId.c_str()).toString() + "###" + m_name,
+        true,
+        ImGuiWindowFlags_NoTitleBar);
     if ( sourceManager->isProjectTransitionInProgress() )
         Utils::renderProjectTransitionPlaceholder();
     else
@@ -1786,7 +1788,8 @@ void FloatingManagerUI::update(UIManager* sourceManager)
 
     // 使用 ### 后缀强制固定 ImGui 内部窗口
     // ID，即使显示的标题变化也不会丢失停靠状态
-    std::string   windowName   = m_currentSubViewId + "###" + m_name;
+    std::string windowName =
+        TR(m_currentSubViewId.c_str()).toString() + "###" + m_name;
     const ImGuiID resumeDockId = resumeCollapsedResize ? m_collapsedDockId : 0;
     const float   visibilityAlpha = m_isVisible
                                         ? easeOutCubic(m_visibilityAnimAmount)
