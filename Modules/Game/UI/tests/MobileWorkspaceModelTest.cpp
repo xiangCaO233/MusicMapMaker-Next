@@ -139,6 +139,12 @@ bool verifyGestureCancellation()
     model.update({ rx, ry, true, true, false }, .016f, false);
     model.update({ rx, ry, false, false, true }, .016f, false);
     settle(model);
+    // 非模态弹层也可以超出抽屉几何边界，点击应归弹层而不是背景遮罩。
+    model.update({ 10, 200, true, true, false }, .016f, true);
+    model.update({ 10, 200, false, false, true }, .016f, true);
+    // 空帧推进后仍保持展开，确认没有遗留待执行的遮罩关闭意图。
+    settle(model);
+    if ( model.drawer() != MobileDrawer::Right ) return false;
     model.closeDrawer();
     // 显式收起没有触摸采样参数，动画及保护状态都必须由模型自行收尾。
     settle(model);
