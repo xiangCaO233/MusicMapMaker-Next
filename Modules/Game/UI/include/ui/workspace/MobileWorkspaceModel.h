@@ -61,7 +61,7 @@ public:
 
 private:
     /// @brief 手势起点确定唯一所有者，中途不能从业务内容切换到抽屉。
-    enum class Gesture { None, Drawer, Back };
+    enum class Gesture { None, Handle, Reposition, Drawer, Back };
     /// @brief 从起点保存展开状态，取消、旋转和业务模态打断时恢复目标。
     void beginGesture(Gesture gesture, MobilePointer pointer);
     /// @brief 结束未提交手势，不把失焦或触点取消当作一次点击。
@@ -79,6 +79,11 @@ private:
     /// @brief 当前手势及起点状态；水平锁定前不移动内容或提交返回。
     Gesture m_gesture{ Gesture::None };
     bool    m_startOpen{}, m_horizontalLocked{}, m_backFromLeft{};
+    /// @brief 左右把手独立保存归一化中心，旋转后仍落在可触及范围内。
+    float m_leftHandleCenter{ .5f }, m_rightHandleCenter{ .5f },
+        m_startHandleCenter{};
+    /// @brief 把手起点所属一侧，拖动途中不能切换另一侧。
+    MobileDrawer m_handleSide{ MobileDrawer::None };
     /// @brief 退出确认由用户明确决定，返回手势本身不关闭进程。
     bool m_exitConfirmation{}, m_exitRequested{};
 };

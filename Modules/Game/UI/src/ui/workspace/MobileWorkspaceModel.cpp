@@ -41,11 +41,16 @@ float MobileWorkspaceModel::drawerWidth() const
 /// @brief 生成左把手触摸矩形，可见握柄由绘制器另行居中。
 /// @details 高度不超出工作区；窄视觉不代表窄命中区域。
 /// 系统返回起点与应用把手分开，避免同向手势互相抢占。
+/// 中心初值为屏幕中点，但后续帧不能覆盖用户已移动的位置。
+/// 几何按当前可用高度夹取，短屏和旋转不会把完整命中区放到屏幕外。
 MobileRect MobileWorkspaceModel::leftHandle() const
 {
     // 远离系统返回手势起点；握柄窄，实际触摸区保持 48dp。
     return { 16.0f * m_scale,
-             std::max(0.0f, (m_height - 72.0f * m_scale) * 0.5f),
+             std::clamp(m_leftHandleCenter * m_height -
+                            std::min(m_height, 72.0f * m_scale) * .5f,
+                        0.0f,
+                        std::max(0.0f, m_height - 72.0f * m_scale)),
              48.0f * m_scale,
              std::min(m_height, 72.0f * m_scale) };
 }
@@ -56,7 +61,12 @@ MobileRect MobileWorkspaceModel::leftHandle() const
 MobileRect MobileWorkspaceModel::rightHandle() const
 {
     auto rect = leftHandle();
-    rect.m_x  = m_width - rect.m_width - rect.m_x;
+    // 复用宽高和左右留白后再覆盖纵向位置，不能继承左侧已经移动的上沿。
+    rect.m_x = m_width - rect.m_width - rect.m_x;
+    // 右把手只镜像边距；独立中心确保移动左把手不会连带移动右把手。
+    rect.m_y = std::clamp(m_rightHandleCenter * m_height - rect.m_height * .5f,
+                          0.0f,
+                          m_height - rect.m_height);
     return rect;
 }
 
@@ -106,6 +116,14 @@ void MobileWorkspaceModel::beginGesture(Gesture gesture, MobilePointer pointer)
     m_startOpen        = m_targetOpen;
     m_horizontalLocked = false;
     m_backFromLeft     = pointer.m_x < m_width * .5f;
+    // 起点保持实际夹取后的中心，旋转后第一次拖动不会出现位置跳变。
+    if ( gesture == Gesture::Handle ) {
+        // 以把手中心加相对位移，按在把手边缘也不会瞬间跳到手指中心。
+        // 只在按下沿采样，持续移动不会累计舍入误差或重复偏移。
+        const auto handle =
+            m_handleSide == MobileDrawer::Left ? leftHandle() : rightHandle();
+        m_startHandleCenter = handle.m_y + handle.m_height * .5f;
+    }
 }
 
 /// @brief 取消恢复原目标，不根据无效的最后坐标选择展开或收起。
@@ -234,8 +252,9 @@ void MobileWorkspaceModel::update(MobilePointer pointer, float seconds,
                                   ? MobileDrawer::Right
                                   : MobileDrawer::None;
             if ( side != MobileDrawer::None ) {
-                m_drawer = side;
-                beginGesture(Gesture::Drawer, pointer);
+                // 未锁定方向前保留把手可见性，不提前显示半开的抽屉。
+                m_handleSide = side;
+                beginGesture(Gesture::Handle, pointer);
             }
         }
     }
@@ -251,6 +270,43 @@ void MobileWorkspaceModel::update(MobilePointer pointer, float seconds,
     const float horizontal = pointer.m_x - m_startX;
     const float vertical   = pointer.m_y - m_startY;
     const float slop       = 8.0f * m_scale;
+    if ( m_gesture == Gesture::Handle ) {
+        // 方向未确定期间不创建抽屉身份，垂直拖动始终能看见原把手。
+        // 把手具有两种互斥语义，按主方向锁定，微小抖动仍按轻点处理。
+        // 一旦进入上下移动，后续水平漂移不能意外打开抽屉。
+        if ( std::abs(vertical) > slop &&
+             std::abs(vertical) >= std::abs(horizontal) ) {
+            m_gesture = Gesture::Reposition;
+        } else if ( std::abs(horizontal) > slop ) {
+            m_drawer           = m_handleSide;
+            m_gesture          = Gesture::Drawer;
+            m_horizontalLocked = true;
+        } else if ( pointer.m_released ) {
+            m_drawer     = m_handleSide;
+            m_targetOpen = true;
+        }
+    }
+    if ( m_gesture == Gesture::Reposition ) {
+        // 该分支只修改选中一侧的位置，展开比例与当前资源选择保持原样。
+        // 归一化中心随屏幕高度缩放，像素中心始终保持在完整命中区的边界内。
+        // 先夹取再除高度，因此不会把手指拖出屏幕后的无效距离保存为偏好。
+        const float half = std::min(m_height, 72.0f * m_scale) * .5f;
+        const float center =
+            std::clamp(m_startHandleCenter + vertical, half, m_height - half) /
+            m_height;
+        if ( m_handleSide == MobileDrawer::Left )
+            m_leftHandleCenter = center;
+        else
+            m_rightHandleCenter = center;
+        // 连续触摸直接更新几何，不使用抽屉动画推迟位置反馈。
+        // 松手只结束本次所有权，最终位置保留供下一次轻点与横向拖动。
+        if ( pointer.m_released ) {
+            m_gesture        = Gesture::None;
+            m_swallowRelease = true;
+            // 把手已移动到新位置，当前释放不能立即变成背景画布的点击。
+        }
+        return;
+    }
     if ( !m_horizontalLocked ) {
         // 一旦确定纵向意图就放弃本次抽屉手势，后续水平漂移不能重新抢占。
         if ( std::abs(vertical) > slop &&
@@ -276,7 +332,7 @@ void MobileWorkspaceModel::update(MobilePointer pointer, float seconds,
                                ? m_fraction >= (m_startOpen ? .75f : .25f)
                                : true;
         }
-    } else if ( pointer.m_released ) {
+    } else if ( m_gesture == Gesture::Back && pointer.m_released ) {
         // 返回只能从对应边缘向内滑，不能把右缘向右或左缘向左误判为退出。
         const float inward = horizontal * (m_backFromLeft ? 1.0f : -1.0f);
         if ( inward > 64.0f * m_scale && std::abs(vertical) < 48.0f * m_scale )
