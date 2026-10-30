@@ -14,6 +14,136 @@ void settle(MMM::UI::MobileWorkspaceModel& model)
     for ( int frame = 0; frame < 60; ++frame )
         model.update({}, 1.0f / 60.0f, false);
 }
+
+/// @brief 同一组断言镜像验证两侧抽屉，避免右侧手势沿用左侧方向。
+/// @param side 本次检查的把手和抽屉方向。
+/// @details 测试连续拖动、纵向误触、业务内容归属和标题反向收起。
+/// 不检查绘制像素，模型需要保证的是输入层级及可立即读取的展开量。
+/// @return 任一归属、实时展开量或最终状态不符合契约时返回 false。
+bool verifyDrawerGestures(MMM::UI::MobileDrawer side)
+{
+    using namespace MMM::UI;
+    MobileWorkspaceModel model;
+    model.resize(1280, 720, 1);
+    const auto handle =
+        side == MobileDrawer::Left ? model.leftHandle() : model.rightHandle();
+    const float x      = handle.m_x + handle.m_width * .5f;
+    const float y      = handle.m_y + handle.m_height * .5f;
+    const float inward = side == MobileDrawer::Left ? 1.0f : -1.0f;
+    // 80 像素显著超过触摸抖动区，必须被识别为纵向意图。
+    // 释放仍保留同一位置，避免由回跳坐标掩盖误触判断。
+    // 纵向划过把手不能在松手时变成一次轻点打开。
+    // 取消后即便仍然收到释放，也只消费本次手势。
+    model.update({ x, y, true, true, false }, .016f, false);
+    model.update({ x, y + 80, false, true, false }, .016f, false);
+    model.update({ x, y + 80, false, false, true }, .016f, false);
+    settle(model);
+    if ( model.drawer() != MobileDrawer::None || model.blocksCanvasInput() )
+        return false;
+    // 确认移动帧立即更新展开比例，没有等松手或动画结束才变化。
+    // 镜像方向只影响位移符号，比例必须对两侧相同。
+    model.update({ x, y, true, true, false }, .016f, false);
+    model.update({ x + inward * 160, y, false, true, false }, .016f, false);
+    // 160 像素足以越过展开阈值，但尚未到全开，能够检测延迟更新。
+    // 允许小幅浮点误差，不把测试绑定到某一种计算舍入顺序。
+    if ( std::abs(model.fraction() - 160 / model.drawerWidth()) > .001f )
+        return false;
+    model.update({ x + inward * 160, y, false, false, true }, .016f, false);
+    settle(model);
+    if ( model.drawer() != side || model.fraction() < .99f ) return false;
+    // 内容区开始的水平移动不能接管为关闭手势，文件选择仍归业务视图。
+    // 故意让终点离开内容区，确保判定只依据起点。
+    const auto  rect     = model.drawerRect();
+    const float contentX = rect.m_x + rect.m_width * .5f;
+    // 内容坐标低于 72dp 标题，不能触发专属标题拖动。
+    // 中间没有额外按下沿，因此滑出内容后仍属于原业务触摸。
+    model.update({ contentX, 200, true, true, false }, .016f, false);
+    model.update(
+        { contentX - inward * 200, 200, false, false, true }, .016f, false);
+    settle(model);
+    if ( model.drawer() != side || model.fraction() < .99f ) return false;
+    // 标题只微移后释放应回弹打开，不因手指抖动意外关闭内容。
+    // 取拖动区中央坐标，避开独立收起按钮的排除区。
+    const auto  grip = model.drawerGrip();
+    const float gx   = grip.m_x + grip.m_width * .5f;
+    const float gy   = grip.m_height * .5f;
+    model.update({ gx, gy, true, true, false }, .016f, false);
+    model.update({ gx - inward * 16, gy, false, false, true }, .016f, false);
+    // 16 像素已经超过抖动锁定区，实际检查的是短拖动回弹而不是轻点。
+    settle(model);
+    if ( model.drawer() != side || model.fraction() < .99f ) return false;
+    // 明确反向拖过四分之一宽度才收起，连续移动时仍实时跟随触点。
+    // 关闭当帧保留画布保护，收敛后才允许下一次编辑。
+    model.update({ gx, gy, true, true, false }, .016f, false);
+    model.update({ gx - inward * 200, gy, false, true, false }, .016f, false);
+    // 200 像素尚未拉到屏幕边界，比例断言可发现只在终点刷新布局的问题。
+    if ( model.fraction() > .6f || !model.blocksCanvasInput() ) return false;
+    model.update({ gx - inward * 200, gy, false, false, true }, .016f, false);
+    settle(model);
+    return model.drawer() == MobileDrawer::None && !model.blocksCanvasInput();
+}
+
+/// @brief 验证中断不会遗留捕获，业务模态和旋转也不会伪造点击。
+/// @details 这些场景没有可靠释放沿，不能用正常松手流程代替取消。
+/// 每个中断后重新开始普通画布触摸，确认模型已释放手势所有权。
+bool verifyGestureCancellation()
+{
+    using namespace MMM::UI;
+    MobileWorkspaceModel model;
+    model.resize(1280, 720, 1);
+    // 返回触点取消后不能永久拦住画布，也不能弹出退出确认。
+    model.update({ 2, 200, true, true, false }, .016f, false);
+    // 下一次空采样模拟平台取消，没有人工补造一个正常释放事件。
+    model.update({}, .016f, false);
+    settle(model);
+    if ( model.blocksCanvasInput() || model.exitConfirmation() ) return false;
+    // 右侧向外移动只是一种无效返回，不能使用绝对位移判定退出。
+    // 下一次反向向内滑才产生退出意图。
+    model.update({ 1278, 200, true, true, false }, .016f, false);
+    model.update({ 1350, 200, false, false, true }, .016f, false);
+    // 终点故意越过视口，指针捕获流可能包含此类坐标，仍须检查方向。
+    settle(model);
+    if ( model.exitConfirmation() ) return false;
+    model.update({ 1278, 200, true, true, false }, .016f, false);
+    model.update({ 1170, 200, false, false, true }, .016f, false);
+    if ( !model.exitConfirmation() ) return false;
+    model.finishExitConfirmation(false);
+    settle(model);
+    // 高层模态中途接管时恢复拖动前的收起目标。
+    // 关闭模态后不能拿旧坐标继续展开。
+    const auto  handle = model.leftHandle();
+    const float x      = handle.m_x + handle.m_width * .5f;
+    const float y      = handle.m_y + handle.m_height * .5f;
+    model.update({ x, y, true, true, false }, .016f, false);
+    model.update({ x + 160, y, false, true, false }, .016f, false);
+    model.update({ x + 160, y, false, true, false }, .016f, true);
+    // 模态在已有可见展开量后出现，只有真正撤销目标才能通过后续断言。
+    // 模态解除后的释放沿不应把此前的半开状态重新提交为打开。
+    model.update({ x + 160, y, false, false, true }, .016f, false);
+    settle(model);
+    if ( model.drawer() != MobileDrawer::None || model.blocksCanvasInput() )
+        return false;
+    // 旋转同时改变坐标系和拖动分母，必须取消旧手势并回到原目标。
+    model.update({ x, y, true, true, false }, .016f, false);
+    model.update({ x + 160, y, false, true, false }, .016f, false);
+    model.resize(720, 1280, 1);
+    // 不使用旧方向坐标补释放，验证旋转入口本身已经清理捕获状态。
+    settle(model);
+    if ( model.drawer() != MobileDrawer::None || model.blocksCanvasInput() )
+        return false;
+    // 显式按钮与返回均能关闭抽屉，不需要等待一个额外的触摸释放。
+    // 重新从模型取得竖屏把手，避免用横屏常量绕过几何更新。
+    const auto  right = model.rightHandle();
+    const float rx    = right.m_x + right.m_width * .5f;
+    const float ry    = right.m_y + right.m_height * .5f;
+    model.update({ rx, ry, true, true, false }, .016f, false);
+    model.update({ rx, ry, false, false, true }, .016f, false);
+    settle(model);
+    model.closeDrawer();
+    // 显式收起没有触摸采样参数，动画及保护状态都必须由模型自行收尾。
+    settle(model);
+    return model.drawer() == MobileDrawer::None && !model.exitConfirmation();
+}
 }  // namespace
 
 /// @brief 验证启动收起、把手归属、遮罩关闭以及返回确认的状态边界。
@@ -123,5 +253,11 @@ int main()
           "back closes drawer before asking exit");
     // 测试进程正常返回，不通过终止进程或实际关闭 Activity 验证模型。
     // 真实退出按钮和 JNI 桥接留给模拟器交互验证。
+    check(verifyDrawerGestures(MobileDrawer::Left),
+          "left drawer gesture ownership");
+    check(verifyDrawerGestures(MobileDrawer::Right),
+          "right drawer gesture ownership");
+    check(verifyGestureCancellation(),
+          "cancelled and interrupted gestures release input");
     return failures == 0 ? 0 : 1;
 }

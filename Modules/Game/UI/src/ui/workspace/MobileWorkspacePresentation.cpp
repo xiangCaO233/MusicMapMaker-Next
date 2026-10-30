@@ -2,10 +2,12 @@
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
+#include "config/skin/SkinConfig.h"
 #include "event/core/EventBus.h"
 #include "event/ui/GLFWNativeEvent.h"
 #include "event/ui/UISettingsTabEvent.h"
 #include "ui/IEditorApplicationService.h"
+#include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/FloatingManagerUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
@@ -79,6 +81,8 @@ private:
     bool beginPanel(const char* id, MobileRect rect, bool background = true);
     /// @brief 绘制最小触摸区域与细握柄，点击和拖动共用状态机。
     void drawHandle(const char* id, MobileRect rect);
+    /// @brief 两侧共用标题、滑动提示和明确收起入口，内容层从标题下方开始。
+    void drawDrawerHeader(MobileRect rect);
     /// @brief 左侧第一级提供常用分类，第二级保留现有业务管理器。
     void drawLeftDrawer(UIManager& manager, MobileRect rect);
     /// @brief 右侧以明确的选中状态提供三个窗口开关。
@@ -205,6 +209,7 @@ bool MobileWorkspacePresentation::beginPanel(const char* id, MobileRect rect,
 }
 
 /// @brief 建立只容纳编辑画布和欢迎页的中央宿主。
+/// @param manager 提供既有工具服务，外壳不持有编辑会话所有权。
 /// @details 移动宿主拥有独立 Dock ID，桌面 ini 中的侧栏分割不参与恢复。
 /// 时间线、预览和触摸工具条使用自己的边缘区域，不占中央页签。
 /// 窗口显隐只改变本帧区域，不销毁已经建立的编辑会话。
@@ -351,9 +356,12 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
 }
 
 /// @brief 只绘制握柄，不再建立第二套点击或拖动状态。
+/// @param id 当前一侧把手的稳定窗口身份。
 /// @param rect 由纯模型给出的完整触摸区，不等于细握柄的可见宽度。
 /// @details 移动外壳在所有背景内容之后绘制握柄，便于拇指发现入口。
 /// 命中区与系统最外侧返回区域错开，图形上不添加桌面悬浮说明。
+/// 左侧文件夹表示资源入口，右侧滑杆表示工作区显示控制。
+/// 图标只提供识别，不额外创建一个与手势模型竞争的按钮 Item。
 /// @warning 固定图元绘制，不申请纹理或执行异步工作。
 void MobileWorkspacePresentation::drawHandle(const char* id, MobileRect rect)
 {
@@ -361,23 +369,79 @@ void MobileWorkspacePresentation::drawHandle(const char* id, MobileRect rect)
     // 可见握柄只占其中少量宽度，避免长期遮住画布。
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{});
     if ( beginPanel(id, rect, false) ) {
-        const auto color = ImGui::GetColorU32(ImGuiCol_ButtonActive);
+        const auto color = ImGui::GetColorU32(ImGuiCol_Text);
         const auto pos   = ImGui::GetWindowPos();
         // 握柄本身不是按钮，48dp 透明命中区已由纯手势状态机处理。
         // 细握柄在命中区中居中，不把图形边缘误当成触摸边缘。
         // 颜色来自当前主题，浅色与深色皮肤均保留足够辨识度。
-        const float x = pos.x + rect.m_width * 0.5f;
-        ImGui::GetWindowDrawList()->AddRectFilled(
-            { x - 3 * m_scale, pos.y + 12 * m_scale },
-            { x + 3 * m_scale, pos.y + rect.m_height - 12 * m_scale },
+        const float x    = pos.x + rect.m_width * 0.5f;
+        auto*       draw = ImGui::GetWindowDrawList();
+        // 图标说明入口职责，短握柄说明可以拖动；两者共享原来的触摸目标。
+        // 背景只占命中区内部，不扩大对主画布的遮挡范围。
+        draw->AddRectFilled(
+            { x - 18 * m_scale, pos.y + 4 * m_scale },
+            { x + 18 * m_scale, pos.y + rect.m_height - 4 * m_scale },
+            ImGui::GetColorU32(ImGuiCol_Button),
+            4 * m_scale);
+        auto* font = Config::SkinManager::instance().getFont("pure_icons");
+        // 字体已由皮肤生命周期持有，把手不缓存跨皮肤重载的指针。
+        // 回退字体仅用于皮肤缺少专用图标字体时保持绘制接口有效。
+        if ( !font ) font = ImGui::GetFont();
+        const char* icon = id == std::string_view("MobileLeftHandle")
+                               ? ICON_MMM_FOLDER_OPEN
+                               : ICON_MMM_SLIDERS;
+        // 专用字体尺寸明确，避免当前窗口文字字体缺少私用区图标。
+        const auto bounds =
+            font->CalcTextSizeA(22 * m_scale, 100 * m_scale, 0, icon);
+        // 用实际字形宽度居中，两个入口不会因为图标本身宽度不同而偏移。
+        draw->AddText(font,
+                      22 * m_scale,
+                      { x - bounds.x * .5f, pos.y + 12 * m_scale },
+                      color,
+                      icon);
+        draw->AddRectFilled(
+            { x - 2 * m_scale, pos.y + rect.m_height - 29 * m_scale },
+            { x + 2 * m_scale, pos.y + rect.m_height - 12 * m_scale },
             color,
-            3 * m_scale);
+            2 * m_scale);
     }
     ImGui::End();
     ImGui::PopStyleVar();
 }
 
+/// @brief 为抽屉提供无需悬浮即可发现的收起操作。
+/// @param rect 完整抽屉边界，标题内部仅使用顶部固定高度。
+/// @details 标题是模型唯一允许反向滑动的区域，业务列表保留自己的手势。
+/// 收起按钮位于拖动区域之外，因此按下按钮不会同时捕获一个标题拖动。
+/// @warning 每帧只绘制固定内容，点击仅更新本地模型，不销毁管理器。
+void MobileWorkspacePresentation::drawDrawerHeader(MobileRect rect)
+{
+    // 标题和内容是独立窗口，但共享同一个抽屉矩形的水平动画偏移。
+    // 标题固定在顶端，不随分类列表和文件列表的纵向滚动离开屏幕。
+    rect.m_height = m_model.headerHeight();
+    if ( beginPanel("MobileDrawerHeader", rect) ) {
+        // 明示滑动方向，同时保留独立按钮，用户不需要先知道手势才能返回。
+        const bool left = m_model.drawer() == MobileDrawer::Left;
+        ImGui::TextUnformatted(left ? "资源与设置" : "工作区");
+        ImGui::TextDisabled(left ? "向左滑动收起" : "向右滑动收起");
+        const float buttonWidth = 104.0f * m_scale;
+        // 图标与文字作为一个按钮，按钮区不属于模型的标题滑动范围。
+        // 命中区至少 48dp 高；可见收起入口不依赖系统导航模式。
+        ImGui::SetCursorScreenPos(
+            { m_origin.x + rect.m_x + rect.m_width - m_padding - buttonWidth,
+              m_origin.y + rect.m_y +
+                  (rect.m_height - 48.0f * m_scale) * .5f });
+        if ( MobileActionButton("drawerClose",
+                                ICON_MMM_MINIMIZE,
+                                "收起",
+                                { buttonWidth, 48.0f * m_scale }) )
+            m_model.closeDrawer();
+    }
+    ImGui::End();
+}
+
 /// @brief 组合类别导航和当前业务管理器，形成联动的两级抽屉。
+/// @param manager 管理内容视图的原宿主，借用仅在本帧有效。
 /// @param rect 两级抽屉的整体矩形，遮罩判定也使用此同一边界。
 /// @details 设置页属于内容层，其他类别继续选择既有 FloatingManager 子视图。
 /// 关闭抽屉不清空活动类别，下一次打开仍能直接看到原来的内容。
@@ -389,19 +453,24 @@ void MobileWorkspacePresentation::drawLeftDrawer(UIManager& manager,
     auto* floating = manager.getView<FloatingManagerUI>("SideBarManager");
     // 第一级宽度先容纳文字按钮，再增加左右配置留白。
     // 第二级使用整体抽屉的剩余区域，与第一级共享动画位移。
-    const float railWidth = 76.0f * m_scale + 2 * m_padding;
-    MobileRect  rail{
+    // 窄屏压缩导航建议宽度，不压缩按钮外侧由用户配置的留白。
+    const float railWidth =
+        (m_size.x < 600.0f * m_scale ? 64.0f : 76.0f) * m_scale + 2 * m_padding;
+    MobileRect rail{
         rect.m_x, rect.m_y, std::min(railWidth, rect.m_width), rect.m_height
     };
     if ( beginPanel("MobileNavigationDrawer", rail) ) {
         const std::array tabs{
-            SideBarTab::Search,        SideBarTab::FileExplorer,
-            SideBarTab::AudioExplorer, SideBarTab::BeatMapExplorer,
-            SideBarTab::Collaboration, SideBarTab::Settings
+            std::pair{ SideBarTab::Search, ICON_MMM_SEARCH },
+            std::pair{ SideBarTab::FileExplorer, ICON_MMM_FOLDER_OPEN },
+            std::pair{ SideBarTab::AudioExplorer, ICON_MMM_MUSIC },
+            std::pair{ SideBarTab::BeatMapExplorer, ICON_MMM_FILE },
+            std::pair{ SideBarTab::Collaboration, ICON_MMM_USERS },
+            std::pair{ SideBarTab::Settings, ICON_MMM_COG }
         };
         // 类别列表固定且数量有限，不在绘制路径扫描业务视图注册表。
         // 选中状态直接可见，不要求用户通过悬停才能区分入口。
-        for ( auto tab : tabs ) {
+        for ( const auto& [tab, icon] : tabs ) {
             const auto label    = TabToShortLabel(tab);
             const bool selected = tab == SideBarTab::Settings
                                       ? m_settingsSelected
@@ -409,9 +478,16 @@ void MobileWorkspacePresentation::drawLeftDrawer(UIManager& manager,
                                             sidebar->getActiveTab() == tab;
             // 点击设置只选择设置内容层，不清空文件管理器已经保留的选择。
             // 其他类别直接复用已注册的子视图，不重复构造资源管理器。
-            if ( MobileButton(label.c_str(),
-                              { rail.m_width - 2 * m_padding, 56 * m_scale },
-                              selected) ) {
+            ImGui::PushID(static_cast<int>(tab));
+            // 分类枚举保证稳定身份，图标或翻译变化不会丢失按下反馈。
+            const bool clicked = MobileNavigationButton(
+                "category",
+                icon,
+                label.c_str(),
+                { rail.m_width - 2 * m_padding, 72 * m_scale },
+                selected);
+            ImGui::PopID();
+            if ( clicked ) {
                 m_settingsSelected = tab == SideBarTab::Settings;
                 if ( m_settingsSelected )
                     manager.openSettingsWindow(Event::SettingsTab::Software);
@@ -441,6 +517,7 @@ void MobileWorkspacePresentation::drawLeftDrawer(UIManager& manager,
 }
 
 /// @brief 通过大面积选中按钮控制辅助编辑窗口的显示状态。
+/// @param rect 已扣除固定标题的内容矩形，禁止再次扣除标题高度。
 /// @details 标签和底色直接表达状态，不使用悬浮 tooltip 解释开关。
 /// 开关属于移动工作区会话，不把每次触摸写入配置文件。
 /// 几何变化在下一帧统一计算，避免同帧部分窗口使用旧边界。
@@ -452,26 +529,36 @@ void MobileWorkspacePresentation::drawRightDrawer(MobileRect rect)
     if ( beginPanel("MobileWorkspaceControls", rect) ) {
         // 开关属于显式操作，不利用悬浮、长按或隐蔽的右键菜单来发现。
         // 固定标题与选中底色使用户可以直接判断当前工作区状态。
-        ImGui::TextUnformatted("工作区");
-        ImGui::Separator();
+        ImGui::TextUnformatted("显示窗口");
+        // 状态文案与稳定 ID 分开，切换显示状态后仍从同一按钮继续渐暗。
+        // 图标表达窗口职责，文字和选中底色共同表达当前开关状态。
+        // 隐藏窗口只停止显示，不终止其会话或重新加载谱面资源。
         // 选中底色表达状态，开关不依赖 tooltip 或小型复选框。
-        if ( MobileButton("工具栏",
-                          { rect.m_width - 2 * m_padding, 56 * m_scale },
-                          m_showToolbar) )
+        if ( MobileActionButton("MobileToolbarToggle",
+                                ICON_MMM_SLIDERS,
+                                m_showToolbar ? "工具栏：显示" : "工具栏：隐藏",
+                                { rect.m_width - 2 * m_padding, 56 * m_scale },
+                                m_showToolbar) )
             m_showToolbar = !m_showToolbar;
-        if ( MobileButton("Timing 编辑",
-                          { rect.m_width - 2 * m_padding, 56 * m_scale },
-                          m_showTiming) )
+        if ( MobileActionButton(
+                 "MobileTimingToggle",
+                 ICON_MMM_CLOCK,
+                 m_showTiming ? "Timing 编辑：显示" : "Timing 编辑：隐藏",
+                 { rect.m_width - 2 * m_padding, 56 * m_scale },
+                 m_showTiming) )
             m_showTiming = !m_showTiming;
-        if ( MobileButton("预览区",
-                          { rect.m_width - 2 * m_padding, 56 * m_scale },
-                          m_showPreview) )
+        if ( MobileActionButton("MobilePreviewToggle",
+                                ICON_MMM_EYE,
+                                m_showPreview ? "预览区：显示" : "预览区：隐藏",
+                                { rect.m_width - 2 * m_padding, 56 * m_scale },
+                                m_showPreview) )
             m_showPreview = !m_showPreview;
     }
     ImGui::End();
 }
 
 /// @brief 绘制独立的触摸工具条，工具语义由既有命令通道解释。
+/// @param manager 提供当前工具权威状态，不以按钮最近点击代替业务状态。
 /// @details 工具高亮从应用服务读取，不以按钮上次点击结果冒充权威状态。
 /// 每个按钮保持方形倾向，同时为中文标签保留实际测量出的宽度。
 /// 外框宽度包含配置留白，不能只给按钮分配宽度导致边缘裁切。
@@ -489,12 +576,22 @@ void MobileWorkspacePresentation::drawToolbar(UIManager& manager)
                                 std::pair{ "选取", Logic::EditTool::Marquee },
                                 std::pair{ "绘制", Logic::EditTool::Draw } };
         const auto*      service = manager.getEditorApplicationService();
+        // 图标沿用桌面工具的语义，文字常驻，触摸用户无需猜测图形含义。
+        const std::array icons{ ICON_MMM_HAND,
+                                ICON_MMM_SQUARE_SELECT,
+                                ICON_MMM_PEN };
+        // 图标顺序与固定工具表对应，不能依据当前工具名称动态查找字体资源。
+        std::size_t index = 0;
         // 服务尚未绑定时不显示虚假的选中工具，点击仍走统一命令路由。
         for ( const auto& [label, tool] : tools ) {
-            if ( MobileButton(label,
-                              { rect.m_width - 2 * m_padding, 56 * m_scale },
-                              service && service->currentTool() == tool) )
+            if ( MobileNavigationButton(
+                     label,
+                     icons[index],
+                     label,
+                     { rect.m_width - 2 * m_padding, 72 * m_scale },
+                     service && service->currentTool() == tool) )
                 MenuUtil::dispatchCommand(Logic::CmdChangeTool{ tool });
+            ++index;
         }
     }
     ImGui::End();
@@ -536,11 +633,17 @@ void MobileWorkspacePresentation::drawExitConfirmation()
         // 退出必须由独立确认按钮完成；手势、遮罩点击均不能直接终止进程。
         ImGui::TextWrapped("是否退出 MusicMapMaker？");
         ImGui::Dummy({ 0, 12 * m_scale });
-        if ( MobileButton("继续编辑", { -1, 56 * m_scale }) ) {
+        if ( MobileActionButton("cancelExit",
+                                ICON_MMM_ARROW_LEFT,
+                                "继续编辑",
+                                { -1, 56 * m_scale }) ) {
             m_model.finishExitConfirmation(false);
             ImGui::CloseCurrentPopup();
         }
-        if ( MobileButton("确认退出", { -1, 56 * m_scale }) ) {
+        if ( MobileActionButton("confirmExit",
+                                ICON_MMM_CLOSE,
+                                "确认退出",
+                                { -1, 56 * m_scale }) ) {
             m_model.finishExitConfirmation(true);
             ImGui::CloseCurrentPopup();
         }
@@ -549,6 +652,7 @@ void MobileWorkspacePresentation::drawExitConfirmation()
 }
 
 /// @brief 按背景、遮罩、抽屉、确认层的顺序完成移动帧组合。
+/// @param manager 当前 UI 宿主，业务子视图仍由其统一持有和销毁。
 /// @details 更高层业务模态存在时不重新提升抽屉，保留其输入优先级。
 /// 原始画布输入和 ImGui 窗口层级共同阻挡，不能仅依赖视觉暗化。
 /// 返回事件只在确认后消费一次，避免下一帧重复发送应用关闭命令。
@@ -570,10 +674,19 @@ void MobileWorkspacePresentation::endFrame(UIManager& manager)
         beginPanel("MobileDrawerScrim", { 0, 0, m_size.x, m_size.y });
         ImGui::End();
         ImGui::PopStyleColor();
+        const auto rect = m_model.drawerRect();
+        drawDrawerHeader(rect);
+        // 标题与内容使用同一平移动画，不能出现标题已收起而列表还停在原地。
+        // 两级内容共同扣除标题高度，导航点击不会落入标题的拖动命中区。
+        MobileRect body{ rect.m_x,
+                         rect.m_y + m_model.headerHeight(),
+                         rect.m_width,
+                         std::max(1.0f,
+                                  rect.m_height - m_model.headerHeight()) };
         if ( m_model.drawer() == MobileDrawer::Left )
-            drawLeftDrawer(manager, m_model.drawerRect());
+            drawLeftDrawer(manager, body);
         else
-            drawRightDrawer(m_model.drawerRect());
+            drawRightDrawer(body);
     }
     if ( !popup && m_model.drawer() == MobileDrawer::None ) {
         drawHandle("MobileLeftHandle", m_model.leftHandle());
