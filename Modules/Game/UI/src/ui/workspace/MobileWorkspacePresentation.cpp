@@ -4,6 +4,7 @@
 #include "config/EditorSettings.h"
 #include "config/MobileWorkspaceSettings.h"
 #include "config/skin/SkinConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/ui/GLFWNativeEvent.h"
 #include "event/ui/UISettingsTabEvent.h"
@@ -332,7 +333,9 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
         flags |= ImGuiWindowFlags_NoMove;
         if ( m_model.blocksCanvasInput() ) flags |= ImGuiWindowFlags_NoInputs;
         if ( mainCanvas ) {
-            const std::string name = "主画布###" + std::string(id);
+            const std::string name =
+                TR_CACHE("ui.mobile.main_canvas").toString() + "###" +
+                std::string(id);
             // 显示标题改写后再次匹配固定身份，恢复不依赖项目标题文本。
             m_dock.target(MobileDockPanel::Main, name.c_str());
             const bool visible = ImGui::Begin(name.c_str(), nullptr, flags);
@@ -534,36 +537,43 @@ void MobileWorkspacePresentation::drawRightDrawer(UIManager& manager,
     if ( beginPanel("MobileWorkspaceControls", rect) ) {
         // 开关属于显式操作，不利用悬浮、长按或隐蔽的右键菜单来发现。
         // 固定标题与选中底色使用户可以直接判断当前工作区状态。
-        ImGui::TextUnformatted("显示窗口");
+        // 移动入口和桌面共享语言版本，不在工作区初始化时缓存显示文字。
+        // 专用状态句允许不同语言调整词序，不能简单拼接中文冒号和动词。
+        ImGui::TextUnformatted(TR_CACHE("ui.mobile.windows").data());
         // 状态文案与稳定 ID 分开，切换显示状态后仍从同一按钮继续渐暗。
         // 图标表达窗口职责，文字和选中底色共同表达当前开关状态。
         // 隐藏窗口只停止显示，不终止其会话或重新加载谱面资源。
         // 选中底色表达状态，开关不依赖 tooltip 或小型复选框。
-        if ( MobileActionButton("MobileToolbarToggle",
-                                ICON_MMM_SLIDERS,
-                                m_showToolbar ? "工具栏：显示" : "工具栏：隐藏",
-                                { rect.m_width - 2 * m_padding, 56 * m_scale },
-                                m_showToolbar) )
+        if ( MobileActionButton(
+                 "MobileToolbarToggle",
+                 ICON_MMM_SLIDERS,
+                 m_showToolbar ? TR_CACHE("ui.mobile.toolbar_shown").data()
+                               : TR_CACHE("ui.mobile.toolbar_hidden").data(),
+                 { rect.m_width - 2 * m_padding, 56 * m_scale },
+                 m_showToolbar) )
             m_showToolbar = !m_showToolbar;
         if ( MobileActionButton(
                  "MobileTimingToggle",
                  ICON_MMM_CLOCK,
-                 m_showTiming ? "Timing 编辑：显示" : "Timing 编辑：隐藏",
+                 m_showTiming ? TR_CACHE("ui.mobile.timing_shown").data()
+                              : TR_CACHE("ui.mobile.timing_hidden").data(),
                  { rect.m_width - 2 * m_padding, 56 * m_scale },
                  m_showTiming) )
             m_showTiming = !m_showTiming;
-        if ( MobileActionButton("MobilePreviewToggle",
-                                ICON_MMM_EYE,
-                                m_showPreview ? "预览区：显示" : "预览区：隐藏",
-                                { rect.m_width - 2 * m_padding, 56 * m_scale },
-                                m_showPreview) )
+        if ( MobileActionButton(
+                 "MobilePreviewToggle",
+                 ICON_MMM_EYE,
+                 m_showPreview ? TR_CACHE("ui.mobile.preview_shown").data()
+                               : TR_CACHE("ui.mobile.preview_hidden").data(),
+                 { rect.m_width - 2 * m_padding, 56 * m_scale },
+                 m_showPreview) )
             m_showPreview = !m_showPreview;
         // 设置由专用入口打开为中心大标签，不占用资源管理器的窄内容区。
         ImGui::Separator();
         if ( MobileActionButton(
                  "MobileSettings",
                  ICON_MMM_COG,
-                 "设置",
+                 TR_CACHE("title.settings_manager").data(),
                  { rect.m_width - 2 * m_padding, 56 * m_scale }) ) {
             manager.openSettingsWindow(Event::SettingsTab::Software);
             m_model.closeDrawer();
@@ -587,10 +597,15 @@ void MobileWorkspacePresentation::drawToolbar(UIManager& manager)
     if ( beginPanel("MobileTouchToolbar", rect) ) {
         // 基础工具只组合公共命令，原有工具实现仍掌管选取和物件修改。
         // 此处不复制编辑器手势状态机，也不模拟键盘快捷键。
-        const std::array tools{ std::pair{ "抓取", Logic::EditTool::Move },
-                                std::pair{ "选取", Logic::EditTool::Marquee },
-                                std::pair{ "绘制", Logic::EditTool::Draw } };
-        const auto*      service = manager.getEditorApplicationService();
+        const std::array tools{
+            std::pair{ TR_CACHE("ui.toolbar.short.move").data(),
+                       Logic::EditTool::Move },
+            std::pair{ TR_CACHE("ui.toolbar.short.marquee").data(),
+                       Logic::EditTool::Marquee },
+            std::pair{ TR_CACHE("ui.toolbar.short.draw").data(),
+                       Logic::EditTool::Draw }
+        };
+        const auto* service = manager.getEditorApplicationService();
         // 图标沿用桌面工具的语义，文字常驻，触摸用户无需猜测图形含义。
         const std::array icons{ ICON_MMM_HAND,
                                 ICON_MMM_SQUARE_SELECT,
@@ -599,13 +614,17 @@ void MobileWorkspacePresentation::drawToolbar(UIManager& manager)
         std::size_t index = 0;
         // 服务尚未绑定时不显示虚假的选中工具，点击仍走统一命令路由。
         for ( const auto& [label, tool] : tools ) {
+            // 工具枚举提供稳定作用域，标签只是显示值，不参与操作语义。
+            // 语言变化不会重置正在播放的按钮反馈或改变命令目标。
+            ImGui::PushID(static_cast<int>(tool));
             if ( MobileNavigationButton(
-                     label,
+                     "tool",
                      icons[index],
                      label,
                      { rect.m_width - 2 * m_padding, 72 * m_scale },
                      service && service->currentTool() == tool) )
                 MenuUtil::dispatchCommand(Logic::CmdChangeTool{ tool });
+            ImGui::PopID();
             ++index;
         }
     }
@@ -621,8 +640,12 @@ void MobileWorkspacePresentation::drawExitConfirmation()
 {
     // 模型拥有是否退出的意图，ImGui Popup 仅承担这一状态的显示。
     // 业务退出事件必须等确认按钮，不根据 Popup 是否消失推断同意。
+    // 标题通过 ### 固定内部身份，已打开时切换语言也不新建第二个确认框。
+    // 提示与两个操作均实时读取当前语言，取消和退出仍由原模型解释。
     if ( m_model.exitConfirmation() )
-        ImGui::OpenPopup("确认退出###MobileExitConfirmation");
+        ImGui::OpenPopup((TR_CACHE("ui.exit.confirm_title").toString() +
+                          "###MobileExitConfirmation")
+                             .c_str());
     // 确认窗口按当前安全区居中，旋转后仍保留屏幕边距。
     // 不缓存上一次方向的像素位置，防止按钮落到屏幕之外。
     const auto* viewport = ImGui::GetMainViewport();
@@ -634,7 +657,9 @@ void MobileWorkspacePresentation::drawExitConfirmation()
     ImGui::SetNextWindowSize(
         { std::min(420.0f * m_scale, viewport->WorkSize.x * .9f), 0 });
     if ( ImGui::BeginPopupModal(
-             "确认退出###MobileExitConfirmation",
+             (TR_CACHE("ui.exit.confirm_title").toString() +
+              "###MobileExitConfirmation")
+                 .c_str(),
              nullptr,
              ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove) ) {
         // 再次返回可以撤销退出意图，但不能让 ImGui 留下无状态的模态窗口。
@@ -646,18 +671,18 @@ void MobileWorkspacePresentation::drawExitConfirmation()
             return;
         }
         // 退出必须由独立确认按钮完成；手势、遮罩点击均不能直接终止进程。
-        ImGui::TextWrapped("是否退出 MusicMapMaker？");
+        ImGui::TextWrapped("%s", TR_CACHE("ui.mobile.exit_message").data());
         ImGui::Dummy({ 0, 12 * m_scale });
         if ( MobileActionButton("cancelExit",
                                 ICON_MMM_ARROW_LEFT,
-                                "继续编辑",
+                                TR_CACHE("ui.mobile.continue_editing").data(),
                                 { -1, 56 * m_scale }) ) {
             m_model.finishExitConfirmation(false);
             ImGui::CloseCurrentPopup();
         }
         if ( MobileActionButton("confirmExit",
                                 ICON_MMM_CLOSE,
-                                "确认退出",
+                                TR_CACHE("ui.exit.confirm_title").data(),
                                 { -1, 56 * m_scale }) ) {
             m_model.finishExitConfirmation(true);
             ImGui::CloseCurrentPopup();

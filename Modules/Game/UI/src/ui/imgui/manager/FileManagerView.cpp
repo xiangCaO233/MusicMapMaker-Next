@@ -34,7 +34,8 @@ const FileManagerView::RecentPathDisplay& FileManagerView::recentPathDisplay(
     const std::string& path)
 {
     auto [entry, inserted] = m_recentPathDisplays.try_emplace(path);
-    if ( inserted ) entry->second.m_name = "项目";
+    if ( inserted )
+        entry->second.m_name = TR_CACHE("ui.project.placeholder").data();
     // 准备中使用中性标题，不能先闪现内部哈希再替换成用户目录名。
     if ( entry->second.m_pending ) {
         // 以完整路径配对结果，多个最近项目可以同时准备而不会串用名称。
@@ -259,7 +260,7 @@ void FileManagerView::syncProjectUiState(UIManager* sourceManager)
             // 移动端准备完成前不闪现内部哈希；桌面仍保留原有 basename。
             m_rootDisplayName = workspaceAllowsHoverFeedback()
                                     ? Config::pathToUtf8(projectRoot.filename())
-                                    : "项目";
+                                    : TR_CACHE("ui.project.placeholder").data();
             m_rootDisplayLocation.clear();
             m_rootPresentationPending = true;
             // 存取根始终保留原值，展示路径不能成为目录枚举或保存的输入。
