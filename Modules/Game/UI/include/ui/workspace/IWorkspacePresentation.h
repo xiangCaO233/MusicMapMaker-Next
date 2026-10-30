@@ -37,6 +37,9 @@ public:
     virtual bool usesDesktopLayout() const { return true; }
     /// @brief 是否显示应用内音频输出设备选择；移动端交由系统音频路由管理。
     virtual bool showsAudioOutputDeviceSelector() const { return true; }
+    /// @brief 公共模态的操作按钮，由平台决定触摸尺寸和图标排布。
+    /// @warning 每帧只绘制按钮，不在策略内部执行对应业务操作。
+    virtual bool actionButton(const char* label, const char* icon, ImVec2 size);
     /// @brief 根据平台可用空间限制公共文件对话框。
     virtual ImVec2 fileDialogSize(float scale, ImVec2 available) const;
 };
@@ -66,4 +69,6 @@ bool workspaceBlocksCanvasInput();
 bool workspaceAllowsHoverFeedback();
 /// @brief 查询本帧的音频设备选择能力；没有工作区作用域时保留桌面行为。
 bool workspaceShowsAudioOutputDeviceSelector();
+/// @brief 公共弹窗复用当前平台操作按钮，无帧作用域时保持桌面入口。
+bool workspaceActionButton(const char* label, const char* icon, ImVec2 size);
 }  // namespace MMM::UI
