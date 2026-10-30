@@ -74,6 +74,12 @@ public:
     bool usesDesktopLayout() const override { return false; }
     /// @brief 移动端不显示桌面输出设备组合框，继续使用现有音量控制。
     bool showsAudioOutputDeviceSelector() const override { return false; }
+    /// @brief 公共模态采用与抽屉相同的触摸图文按钮及短按反馈。
+    /// @warning 每帧只提交一个按钮，业务动作仍由共享弹窗消费返回值。
+    bool actionButton(const char* label, const char* icon, ImVec2 size) override
+    {
+        return MobileActionButton(label, icon, label, size);
+    }
     /// @brief 文件对话框始终保留设备工作区边距。
     ImVec2 fileDialogSize(float scale, ImVec2 available) const override
     {
