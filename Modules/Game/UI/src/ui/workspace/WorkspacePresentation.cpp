@@ -1,12 +1,33 @@
+#include "ui/utils/UIWidgetUtils.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 
 namespace MMM::UI
 {
+/// @brief 桌面平台保留原有文字按钮，不改变菜单动作的激活方式。
+/// @details 图标参数只供触摸平台使用，桌面布局尺寸仍由调用方决定。
+/// @warning 每帧只转发统一反馈按钮，不读取平台或执行持久化。
+bool IWorkspacePresentation::actionButton(const char* label, const char*,
+                                          ImVec2      size)
+{
+    return FeedbackButton(label, size);
+}
+
 namespace
 {
 /// @brief 仅 UI 线程使用的借用指针，帧作用域结束后立即恢复。
 thread_local IWorkspacePresentation* activePresentation = nullptr;
 }  // namespace
+
+/// @brief 依当前平台选择触摸图文或桌面文字按钮。
+/// @details 公共模态不引入平台宏，默认桌面与无绑定测试仍用原反馈入口。
+/// 策略只提供外观，是否下载或关闭弹窗继续由调用方消费激活结果。
+/// @warning 固定次数虚调用，无所有权复制或后台任务。
+bool workspaceActionButton(const char* label, const char* icon, ImVec2 size)
+{
+    return activePresentation
+               ? activePresentation->actionButton(label, icon, size)
+               : FeedbackButton(label, size);
+}
 
 /// @brief 默认窗口适配保持桌面参数的原始语义。
 /// @details 不在公共入口推断设备类型；移动实现显式覆盖本方法。
