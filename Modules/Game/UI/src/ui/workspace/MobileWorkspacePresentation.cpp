@@ -174,7 +174,9 @@ void MobileWorkspacePresentation::beginFrame(UIManager& manager)
     settings.showTimelineWindow = m_showTiming;
     settings.showPreviewWindow  = m_showPreview;
     m_toolbarWidth = m_showToolbar ? 64.0f * m_scale + 2.0f * m_padding : 0.0f;
-    m_model.resize(m_size.x, m_size.y, m_scale);
+    // 工具栏和把手不能共享同一命中区，纵向拖到任意位置也必须能选择工具。
+    // 保留宽度传入纯模型，绘制与按下沿判定使用同一个移位后的矩形。
+    m_model.resize(m_size.x, m_size.y, m_scale, m_toolbarWidth);
     // 原生返回可能来自业务弹窗，不能越过它额外弹出退出确认。
     // 本外壳自己的退出确认仍允许再次返回取消，保持返回层级一致。
     const bool modalOpen = ImGui::GetTopMostPopupModal() != nullptr;
