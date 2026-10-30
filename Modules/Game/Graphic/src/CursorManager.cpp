@@ -124,6 +124,15 @@ void CursorManager::reloadSkinTextures(vk::PhysicalDevice& phyDevice,
 /// 绘制命令。
 void CursorManager::UpdateAndDraw(float smokeLifeOverride)
 {
+    // 触屏没有悬浮指针，按真实输入来源关闭软件光标，鼠标和笔继续使用原路径。
+    // 切换来源时只清理已有的有界粒子；之后触屏帧直接返回，不反复创建队列。
+    // 这也避免松手后在最后触点残留亮环、拖尾和烟雾，遮住移动按钮的反馈。
+    if ( ImGui::GetIO().MouseSource == ImGuiMouseSource_TouchScreen ) {
+        if ( !m_trailPoints.empty() ) m_trailPoints.clear();
+        if ( !m_smokePoints.empty() ) m_smokePoints.clear();
+        m_pressAmount = 0.0f;
+        return;
+    }
     // 鼠标位置和帧间隔来自同一 ImGui 帧，保持粒子积分时基一致。
     ImGuiIO& io        = ImGui::GetIO();
     ImVec2   mousePos  = io.MousePos;

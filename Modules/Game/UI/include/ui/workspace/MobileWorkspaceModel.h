@@ -32,6 +32,8 @@ public:
     void update(MobilePointer pointer, float deltaSeconds, bool popupBlocked);
     /// @brief 返回先收起抽屉，空闲时再进入专用退出确认。
     void requestBack();
+    /// @brief 显式关闭当前抽屉，保持业务选择并消费关闭动作的释放。
+    void closeDrawer();
     /// @brief 取消确认只返回编辑，确认后由组合根提交正常退出事件。
     void finishExitConfirmation(bool accepted);
     /// @brief 消费一次确认后的退出请求，不直接终止进程。
@@ -50,10 +52,22 @@ public:
     MobileRect rightHandle() const;
     /// @brief 展开的两级抽屉共同占用的区域。
     MobileRect drawerRect() const;
+    /// @brief 抽屉标题区的拖动区域，右侧为独立收起按钮保留空间。
+    MobileRect drawerGrip() const;
+    /// @brief 标题和关闭按钮共同占据的高度，内容区从其下方开始。
+    float headerHeight() const;
     /// @brief 根据手持屏幕宽度限制抽屉宽度，始终留出遮罩点击区域。
     float drawerWidth() const;
 
 private:
+    /// @brief 手势起点确定唯一所有者，中途不能从业务内容切换到抽屉。
+    enum class Gesture { None, Drawer, Back };
+    /// @brief 从起点保存展开状态，取消、旋转和业务模态打断时恢复目标。
+    void beginGesture(Gesture gesture, MobilePointer pointer);
+    /// @brief 结束未提交手势，不把失焦或触点取消当作一次点击。
+    void cancelGesture();
+    /// @brief 仅在非拖动帧推进收起或展开动画，不阻塞 UI 线程。
+    void advanceAnimation(float seconds);
     /// @brief 可用尺寸与物理内容缩放，只由 UI 线程写入。
     float m_width{ 1 }, m_height{ 1 }, m_scale{ 1 };
     /// @brief 当前侧及归一化展开量，不与文件管理器选中状态绑定。
@@ -61,7 +75,10 @@ private:
     /// @brief 当前展开量、手势初始展开量及固定触摸起点。
     float m_fraction{}, m_startFraction{}, m_startX{}, m_startY{};
     /// @brief 一次手势从开始到释放始终由同一控制器处理。
-    bool m_dragging{}, m_backDragging{}, m_targetOpen{}, m_swallowRelease{};
+    bool m_targetOpen{}, m_swallowRelease{};
+    /// @brief 当前手势及起点状态；水平锁定前不移动内容或提交返回。
+    Gesture m_gesture{ Gesture::None };
+    bool    m_startOpen{}, m_horizontalLocked{}, m_backFromLeft{};
     /// @brief 退出确认由用户明确决定，返回手势本身不关闭进程。
     bool m_exitConfirmation{}, m_exitRequested{};
 };
