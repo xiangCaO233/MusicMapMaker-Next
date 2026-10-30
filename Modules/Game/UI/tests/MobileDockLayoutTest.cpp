@@ -26,6 +26,11 @@ struct Fixture {
     MMM::UI::MobileDockLayout layout;
     /// @brief 主画布、Timing 和预览各自 Begin 后采样的边界。
     std::array<Bounds, 3> bounds{};
+    /// @brief 宿主的局部触摸样式必须成对恢复，不能泄漏到共享窗口。
+    bool styleIntact{ true };
+    /// @brief 内容上沿不得越过原生标签下沿，防止内容背景覆盖标签。
+    bool titleFits{ true };
+    // 每次 Begin 累积检查，首次出现、缩放和拖动帧都不能短暂盖住标签。
 
     /// @brief 将一个测试窗口送入对应分区并读取其实际内容矩形。
     /// @param panel 真实布局提供的分区身份。
@@ -34,10 +39,18 @@ struct Fixture {
     Bounds pane(MMM::UI::MobileDockPanel panel, const char* name)
     {
         layout.target(panel, name);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                            MMM::UI::MobileDockLayout::tabPadding(1));
         ImGui::Begin(
             name,
             nullptr,
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+        ImGui::PopStyleVar();
+        // 比较实际节点标签边界，避免三个窗口同时错位仍被等高断言放过。
+        const auto* node = ImGui::GetCurrentWindow()->DockNode;
+        if ( node && node->TabBar )
+            titleFits &= ImGui::GetCurrentWindow()->InnerRect.Min.y + .5f >=
+                         node->TabBar->BarRect.Max.y;
         // 不绘制额外控件，三者的内容高度只由标签栏和内边距决定。
         const Bounds result{ ImGui::GetCursorScreenPos(),
                              ImGui::GetContentRegionAvail().y };
@@ -53,7 +66,14 @@ struct Fixture {
     void frame(bool timing = true, bool preview = true, float height = 600)
     {
         ImGui::NewFrame();
+        const auto padding = ImGui::GetStyle().FramePadding;
+        // 每帧捕获进入时的值；前一帧泄漏不能被下一帧取样掩盖。
+        const auto separator = ImGui::GetStyle().DockingSeparatorSize;
         layout.render({ 0, 0 }, { 900, height }, 1, timing, preview);
+        // 既检查平衡恢复，也检查自定义美化宽度没有被固定触摸尺寸替换。
+        styleIntact &= ImGui::GetStyle().FramePadding.x == padding.x &&
+                       ImGui::GetStyle().FramePadding.y == padding.y &&
+                       ImGui::GetStyle().DockingSeparatorSize == separator;
         bounds[0] = pane(MMM::UI::MobileDockPanel::Main, "Main");
         if ( timing )
             bounds[1] = pane(MMM::UI::MobileDockPanel::Timing, "Timing");
@@ -123,6 +143,12 @@ int main()
         }
     };
     fixture.settle();
+    // 使用不同于默认值的分隔条尺寸，确保渲染尊重外部美化样式。
+    ImGui::GetStyle().DockingSeparatorSize = 6;
+    // 后续两次真实触摸拖动也沿用窄分隔条，验证外观与命中区独立。
+    fixture.settle();
+    check(fixture.styleIntact,
+          "touch styles remain scoped and preserve separator width");
     // 首次显示同时覆盖两次水平分割；不能仅测试主画布的单叶情况。
     // 三个窗口均真实 Begin，原生停靠才会建立对应标签对象。
     // 三个叶节点必须独立，不能把辅助窗口误送进主画布的标签组。
@@ -184,6 +210,7 @@ int main()
           "hide one auxiliary panel");
     fixture.settle(false, false);
     // 最终回到单区时，清除辅助 ID，防止下一次打开误用旧叶节点。
+    check(fixture.titleFits, "content cannot overlap dock tabs");
     check(fixture.layout.center() != 0 &&
               fixture.layout.node(MobileDockPanel::Timing) == 0,
           "main remains when auxiliaries close");
