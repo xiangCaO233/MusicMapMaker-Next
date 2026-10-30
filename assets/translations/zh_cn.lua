@@ -1584,4 +1584,11 @@ return {
 	["ui.audio_presets.band_fmt"] = "频段 {}",
 	["ui.audio_presets.pitch"] = "音高（半音）",
 	["ui.project.placeholder"] = "项目",
+
+	-- 听音预设的分组导航与混音表头。
+	["ui.audio_presets.tab_mixer"] = "混音",
+	["ui.audio_presets.tab_effects"] = "效果器",
+	["ui.audio_presets.tab_manage"] = "预设管理",
+	["ui.audio_presets.channel"] = "音量类别",
+	["ui.audio_presets.auto_save"] = "自动保存",
 }
