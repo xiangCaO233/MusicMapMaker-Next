@@ -11,6 +11,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/FloatingManagerUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/workspace/IWorkspacePresentation.h"
@@ -51,7 +52,7 @@ public:
             m_backSubscription);
     }
     /// @brief 布局和手势先于原始画布输入，拖动过程中不使用定时阻塞。
-    void beginFrame(UIManager&) override;
+    void beginFrame(UIManager& manager) override;
     /// @brief 只创建移动主画布宿主，不绘制桌面菜单栏和状态栏。
     void renderWorkspace(MainDockSpaceUI&, UIManager& manager) override;
     /// @brief 管理器由抽屉组合，窗口开关由移动端入口管理。
@@ -89,7 +90,7 @@ private:
     /// @brief 左侧第一级提供常用分类，第二级保留现有业务管理器。
     void drawLeftDrawer(UIManager& manager, MobileRect rect);
     /// @brief 右侧以明确的选中状态提供三个窗口开关。
-    void drawRightDrawer(MobileRect rect);
+    void drawRightDrawer(UIManager& manager, MobileRect rect);
     /// @brief 独立的触摸工具条，工具命令复用原业务入口。
     void drawToolbar(UIManager& manager);
     /// @brief 退出确认是独立移动端窗口，不复用桌面菜单退出弹窗。
@@ -100,14 +101,13 @@ private:
     /// @brief 全局空白拖动滚动，只接管触屏，业务画布仍保留自己的绘制手势。
     MobileTouchScroll m_touchScroll;
     /// @brief 下一帧收到的原生返回请求，由 SDL 事件泵写入。
-    bool m_backRequested{}, m_initialized{}, m_drawingDrawer{},
-        m_settingsSelected{};
+    bool m_backRequested{}, m_initialized{}, m_drawingDrawer{};
     /// @brief 窗口开关属于移动外壳，初次启动全部收起。
     bool m_showToolbar{}, m_showTiming{}, m_showPreview{};
     /// @brief 当前帧几何不跨线程共享，旋转后立即重新计算。
     ImVec2 m_origin{}, m_size{};
     float  m_scale{ 1 }, m_padding{}, m_gap{}, m_toolbarWidth{};
-    /// @brief 中央宿主只接受主画布与欢迎页，不接收管理器停靠。
+    /// @brief 中央宿主接收画布、欢迎和独立设置标签，不接收资源管理器停靠。
     ImGuiID m_centerDock{};
     /// @brief 绘制管理器时的固定内容矩形，退出作用域后不再使用。
     MobileRect m_contentRect;
@@ -120,7 +120,7 @@ private:
 /// 显示开关与当前几何分开保存，旋转不会重新创建文件管理器。
 /// 字号使用绝对倍率写入，不在皮肤的上一帧缩放结果上继续累乘。
 /// @warning UI 每帧执行；只有固定规模数学、局部状态与输入采样。
-void MobileWorkspacePresentation::beginFrame(UIManager&)
+void MobileWorkspacePresentation::beginFrame(UIManager& manager)
 {
     // 工作区使用平台已经扣除安全区后的矩形，不硬编码状态栏高度。
     const auto* viewport = ImGui::GetMainViewport();
@@ -159,8 +159,19 @@ void MobileWorkspacePresentation::beginFrame(UIManager&)
         if ( popupOpen && !modalOpen )
             ImGui::ClosePopupToLevel(
                 ImGui::GetCurrentContext()->OpenPopupStack.Size - 1, true);
-        else if ( !modalOpen || m_model.exitConfirmation() )
-            m_model.requestBack();
+        else if ( !modalOpen || m_model.exitConfirmation() ) {
+            const auto* window = ImGui::FindWindowByName("###SettingsWindow");
+            // 返回先离开当前设置标签，不把关闭设置当作退出整个软件。
+            if ( !modalOpen && m_model.drawer() == MobileDrawer::None &&
+                 window && window->WasActive && window->DockTabIsVisible ) {
+                if ( auto* settings =
+                         manager.getView<IUIView>("SettingsWindow") )
+                    settings->setOpen(false);
+                // 视图即将移除，结束可能仍在进行的快捷键录制状态。
+                ShortcutUtils::setShortcutRecordingActive(false);
+            } else
+                m_model.requestBack();
+        }
     }
     // 同一帧采样一份触摸坐标，避免两个窗口分别建立不同手势起点。
     // 高层模态独占输入时，模型保持状态而不是抢占其点击。
@@ -187,7 +198,7 @@ bool MobileWorkspacePresentation::updatesView(std::string_view name) const
     // 新增业务面板默认仍走公共循环，只有明确由外壳接管的类型才跳过。
     // 视图仍归 UIManager 持有；隐藏抽屉只暂停其 UI 提交，不销毁业务状态。
     return name != "SideBarUI" && name != "SideBarManager" &&
-           name != "ToolPluginView" && name != "SettingsWindow";
+           name != "ToolPluginView";
 }
 
 /// @brief 开始移动外壳自管的非停靠面板，调用方始终配对 End。
@@ -222,7 +233,7 @@ bool MobileWorkspacePresentation::beginPanel(const char* id, MobileRect rect,
     return visible;
 }
 
-/// @brief 建立只容纳编辑画布和欢迎页的中央宿主。
+/// @brief 建立容纳画布、欢迎与独立设置标签的中央宿主。
 /// @param manager 提供既有工具服务，外壳不持有编辑会话所有权。
 /// @details 移动宿主拥有独立 Dock ID，桌面 ini 中的侧栏分割不参与恢复。
 /// 时间线、预览和触摸工具条使用自己的边缘区域，不占中央页签。
@@ -308,7 +319,12 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
     const bool mainCanvas = id.starts_with("Canvas_") || id == "Basic2DCanvas";
     // 中央宿主只接收主画布和欢迎页，其他管理器不占用这里的标签空间。
     // 抽屉打开时窗口输入与原始画布命令必须同时阻挡。
-    if ( mainCanvas || id == "Welcome" ) {
+    // 设置构造名随翻译变化，窗口标题的 ### 后缀才是稳定身份。
+    const bool settingsWindow = title.ends_with("###SettingsWindow");
+    if ( mainCanvas || id == "Welcome" || settingsWindow ) {
+        // 使用整个中心区域，不把桌面最小宽度约束带入移动端标签。
+        if ( settingsWindow )
+            ImGui::SetNextWindowSizeConstraints({ 1, 1 }, m_size);
         ImGui::SetNextWindowDockID(m_centerDock, ImGuiCond_Always);
         flags |= ImGuiWindowFlags_NoMove;
         if ( m_model.blocksCanvasInput() ) flags |= ImGuiWindowFlags_NoInputs;
@@ -436,7 +452,7 @@ void MobileWorkspacePresentation::drawDrawerHeader(MobileRect rect)
     if ( beginPanel("MobileDrawerHeader", rect) ) {
         // 明示滑动方向，同时保留独立按钮，用户不需要先知道手势才能返回。
         const bool left = m_model.drawer() == MobileDrawer::Left;
-        ImGui::TextUnformatted(left ? "资源与设置" : "工作区");
+        ImGui::TextUnformatted(left ? "资源面板" : "工作区");
         ImGui::TextDisabled(left ? "向左滑动收起" : "向右滑动收起");
         const float buttonWidth = 104.0f * m_scale;
         // 图标与文字作为一个按钮，按钮区不属于模型的标题滑动范围。
@@ -457,7 +473,7 @@ void MobileWorkspacePresentation::drawDrawerHeader(MobileRect rect)
 /// @brief 组合类别导航和当前业务管理器，形成联动的两级抽屉。
 /// @param manager 管理内容视图的原宿主，借用仅在本帧有效。
 /// @param rect 两级抽屉的整体矩形，遮罩判定也使用此同一边界。
-/// @details 设置页属于内容层，其他类别继续选择既有 FloatingManager 子视图。
+/// @details 资源类别选择既有 FloatingManager 子视图，设置由右侧专用入口打开。
 /// 关闭抽屉不清空活动类别，下一次打开仍能直接看到原来的内容。
 /// @warning 每帧只绘制固定导航项和当前内容，不复制文件树或音轨列表。
 void MobileWorkspacePresentation::drawLeftDrawer(UIManager& manager,
@@ -479,18 +495,14 @@ void MobileWorkspacePresentation::drawLeftDrawer(UIManager& manager,
             std::pair{ SideBarTab::FileExplorer, ICON_MMM_FOLDER_OPEN },
             std::pair{ SideBarTab::AudioExplorer, ICON_MMM_MUSIC },
             std::pair{ SideBarTab::BeatMapExplorer, ICON_MMM_FILE },
-            std::pair{ SideBarTab::Collaboration, ICON_MMM_USERS },
-            std::pair{ SideBarTab::Settings, ICON_MMM_COG }
+            std::pair{ SideBarTab::Collaboration, ICON_MMM_USERS }
         };
         // 类别列表固定且数量有限，不在绘制路径扫描业务视图注册表。
         // 选中状态直接可见，不要求用户通过悬停才能区分入口。
         for ( const auto& [tab, icon] : tabs ) {
             const auto label    = TabToShortLabel(tab);
-            const bool selected = tab == SideBarTab::Settings
-                                      ? m_settingsSelected
-                                      : !m_settingsSelected && sidebar &&
-                                            sidebar->getActiveTab() == tab;
-            // 点击设置只选择设置内容层，不清空文件管理器已经保留的选择。
+            const bool selected = sidebar && sidebar->getActiveTab() == tab;
+            // 切换类别保留其他资源管理器的当前业务选择。
             // 其他类别直接复用已注册的子视图，不重复构造资源管理器。
             ImGui::PushID(static_cast<int>(tab));
             // 分类枚举保证稳定身份，图标或翻译变化不会丢失按下反馈。
@@ -502,10 +514,7 @@ void MobileWorkspacePresentation::drawLeftDrawer(UIManager& manager,
                 selected);
             ImGui::PopID();
             if ( clicked ) {
-                m_settingsSelected = tab == SideBarTab::Settings;
-                if ( m_settingsSelected )
-                    manager.openSettingsWindow(Event::SettingsTab::Software);
-                else if ( floating && sidebar ) {
+                if ( floating && sidebar ) {
                     sidebar->setActiveTab(tab);
                     floating->restoreSubViewState(TabToSubViewId(tab), true);
                 }
@@ -520,10 +529,7 @@ void MobileWorkspacePresentation::drawLeftDrawer(UIManager& manager,
     m_drawingDrawer = true;
     // 借用标记仅包围同步 update，公共窗口入口据此应用内容矩形。
     // 业务视图和文件选择状态的所有权仍留在原管理器中。
-    if ( m_settingsSelected ) {
-        if ( auto* settings = manager.getView<IUIView>("SettingsWindow") )
-            settings->update(&manager);
-    } else if ( floating && floating->isVisible() ) {
+    if ( floating && floating->isVisible() ) {
         floating->updateAsDrawer(&manager);
     }
     m_drawingDrawer = false;
@@ -536,7 +542,8 @@ void MobileWorkspacePresentation::drawLeftDrawer(UIManager& manager,
 /// 开关属于移动工作区会话，不把每次触摸写入配置文件。
 /// 几何变化在下一帧统一计算，避免同帧部分窗口使用旧边界。
 /// @warning 用户激活时只改布尔值，连续绘制不执行持久化 I/O。
-void MobileWorkspacePresentation::drawRightDrawer(MobileRect rect)
+void MobileWorkspacePresentation::drawRightDrawer(UIManager& manager,
+                                                  MobileRect rect)
 {
     // 三个开关彼此独立，开关按钮自身始终留在抽屉内。
     // 因此关闭工具栏不会同时移除重新打开它的入口。
@@ -567,6 +574,16 @@ void MobileWorkspacePresentation::drawRightDrawer(MobileRect rect)
                                 { rect.m_width - 2 * m_padding, 56 * m_scale },
                                 m_showPreview) )
             m_showPreview = !m_showPreview;
+        // 设置由专用入口打开为中心大标签，不占用资源管理器的窄内容区。
+        ImGui::Separator();
+        if ( MobileActionButton(
+                 "MobileSettings",
+                 ICON_MMM_COG,
+                 "设置",
+                 { rect.m_width - 2 * m_padding, 56 * m_scale }) ) {
+            manager.openSettingsWindow(Event::SettingsTab::Software);
+            m_model.closeDrawer();
+        }
     }
     ImGui::End();
 }
@@ -700,7 +717,7 @@ void MobileWorkspacePresentation::endFrame(UIManager& manager)
         if ( m_model.drawer() == MobileDrawer::Left )
             drawLeftDrawer(manager, body);
         else
-            drawRightDrawer(body);
+            drawRightDrawer(manager, body);
     }
     if ( !popup && m_model.drawer() == MobileDrawer::None ) {
         drawHandle("MobileLeftHandle", m_model.leftHandle());
