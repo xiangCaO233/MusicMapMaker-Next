@@ -4,6 +4,18 @@
 
 namespace MMM::UI
 {
+/// @brief 保留主题横向留白，并仅为标签交互提供最小触摸高度。
+/// @details 宿主生成标签和业务 Begin 计算标题高度时需要同一值。
+/// 内容控件不继承这一扩展，避免固定高度布局被标签尺寸撑坏。
+/// @warning 每个停靠窗口每帧调用，只有固定规模标量运算。
+ImVec2 MobileDockLayout::tabPadding(float scale)
+{
+    const auto& style = ImGui::GetStyle();
+    return { style.FramePadding.x,
+             std::max(style.FramePadding.y,
+                      (48.0f * scale - ImGui::GetFontSize()) * .5f) };
+}
+
 /// @brief 返回当前分区的叶节点，调用方不能把根分割节点用于业务停靠。
 /// @details 节点 ID 在显隐切换时可能变化，业务窗口应每帧重新取得目标。
 /// 隐藏分区返回零，避免业务窗口继续使用已经删除的辅助叶节点。
@@ -29,9 +41,11 @@ ImGuiID MobileDockLayout::node(MobileDockPanel panel) const
 void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
                               bool timing, bool preview)
 {
-    // 加宽原生分隔条并绘制中心握柄，让触屏用户有明确的落指位置。
+    // 分隔条可见尺寸由调用方美化样式提供，不为触摸命中额外画粗。
     // 三个分区共享宿主顶部和底部，标签栏使用同一帧字号与 FramePadding。
-    ImGui::GetStyle().DockingSeparatorSize = 16.0f * scale;
+    const auto& style = ImGui::GetStyle();
+    // 只在停靠树提交期间扩展标签高度，不能挤坏共享弹窗的固定高度控件。
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, tabPadding(scale));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{});
     // 宿主不产生额外内边距，实际内容内边距由每个业务窗口自己管理。
     // 根位置采用安全区坐标，不能依赖上次 ini 中保存的桌面窗口位置。
@@ -94,7 +108,13 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
         // 业务窗口稍后依次 Begin，并从当前布局获取各自所属叶节点。
         m_visibility = visible;
     }
+    // 原生分割器支持独立的边缘命中扩展，透明范围不影响可见样式。
+    auto& borderPadding = ImGui::GetCurrentContext()->WindowsBorderHoverPadding;
+    const float previousPadding = borderPadding;
+    // 修改仅包围这次原生 DockSpace，之后恢复，避免扩大其他窗口边界。
+    borderPadding = std::max(borderPadding, 16.0f * scale);
     ImGui::DockSpace(m_root, {}, flags);
+    borderPadding = previousPadding;
     // 使用原生分隔条承接拖动，握柄只提供视觉提示，不创建竞争命中区。
     // 握柄属于宿主绘制层，业务菜单和模态仍可正常覆盖它。
     for ( const auto id : { m_timing, m_preview } ) {
@@ -106,20 +126,23 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
             const float x =
                 leaf->Pos.x - ImGui::GetStyle().DockingSeparatorSize * .5f;
             const float y = position.y + size.y * .5f;
+            const float halfWidth =
+                std::max(0.5f, style.DockingSeparatorSize * .15f);
+            // 握柄跟随分隔缝隙缩窄；颜色和端部圆角同样使用当前主题。
             // DockSpace 创建自己的子宿主；画到该层才能覆盖分隔条底色。
             const auto* root = ImGui::DockBuilderGetNode(m_root);
             auto* draw = root && root->HostWindow ? root->HostWindow->DrawList
                                                   : ImGui::GetWindowDrawList();
-            draw->AddRectFilled({ x - 2 * scale, y - 24 * scale },
-                                { x + 2 * scale, y + 24 * scale },
-                                ImGui::GetColorU32(ImGuiCol_Text),
-                                2 * scale);
+            draw->AddRectFilled({ x - halfWidth, y - 24 * scale },
+                                { x + halfWidth, y + 24 * scale },
+                                ImGui::GetColorU32(ImGuiCol_TextDisabled),
+                                style.GrabRounding);
         }
     }
     // 所有标签栏交由同一个停靠宿主计算，不再独立拼接无标题浮窗。
     // 与宿主窗口和样式推入顺序配对，不能将零内边距泄漏给业务视图。
     ImGui::End();
-    ImGui::PopStyleVar();
+    ImGui::PopStyleVar(2);
 }
 
 /// @brief 将共享业务窗口放入受控分区，窗口内容仍由原视图绘制。

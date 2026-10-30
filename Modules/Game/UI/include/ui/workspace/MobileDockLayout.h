@@ -21,6 +21,9 @@ public:
     ImGuiID center() const { return m_center; }
     /// @brief 返回指定分区的节点身份，隐藏分区返回零。
     ImGuiID node(MobileDockPanel panel) const;
+    /// @brief 返回一致的触摸标签内边距，宿主和业务 Begin 必须共用。
+    /// @warning 每帧只读取当前样式与字号，不分配或查询平台状态。
+    static ImVec2 tabPadding(float scale);
 
 private:
     /// @brief 仅保存稳定 ID，不跨帧缓存可能因分割失效的节点指针。

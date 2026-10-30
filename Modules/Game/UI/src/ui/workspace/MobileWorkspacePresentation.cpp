@@ -132,8 +132,9 @@ void MobileWorkspacePresentation::beginFrame(UIManager& manager)
     m_scale              = config.getWindowContentScale();
     // 留白来自用户审美配置，按钮增大时不会挤占这部分边界。
     // 间距设置下限避免高密度屏幕上的相邻命中区视觉粘连。
-    m_padding = std::max(0.0f, settings.aesthetics.windowPadding * m_scale);
-    m_gap = std::max(2.0f * m_scale, settings.aesthetics.windowGap * m_scale);
+    m_padding =
+        std::max(0.0f, std::floor(settings.aesthetics.windowPadding * m_scale));
+    m_gap = std::max(0.0f, std::floor(settings.aesthetics.windowGap * m_scale));
     // 字号在平台外壳中统一提高，保留用户二次缩放，不逐帧累乘。
     ImGui::GetStyle().FontScaleMain =
         std::clamp(settings.fontSizeMultiplier * 1.25f, 1.0f, 2.5f);
@@ -244,16 +245,23 @@ void MobileWorkspacePresentation::renderWorkspace(MainDockSpaceUI&,
                                                   UIManager& manager)
 {
     auto& style = ImGui::GetStyle();
-    // 只调整本外壳的基础密度，小圆角比胶囊形更容易辨认相邻触摸目标。
-    style.FrameRounding = 3.0f * m_scale;
-    style.TabRounding   = 3.0f * m_scale;
-    style.ScrollbarSize = std::max(style.ScrollbarSize, 18.0f * m_scale);
-    // 标签页也是触摸入口，不能只放大抽屉按钮而留下细窄的页签。
-    // 用实际字号反推内边距，使标签和标准输入框至少接近 48dp。
-    style.FramePadding = {
-        12.0f * m_scale,
-        std::max(4.0f * m_scale, (48.0f * m_scale - ImGui::GetFontSize()) * .5f)
-    };
+    // 与桌面一样由美化设置给出最终圆角和间距，不用移动端常量覆盖皮肤。
+    // 触摸最小命中尺寸属于交互规则，不能通过放大全局内边距实现。
+    const auto& aesthetics =
+        Config::AppConfig::instance().getEditorSettings().aesthetics;
+    style.WindowRounding    = std::floor(aesthetics.windowRounding * m_scale);
+    style.ChildRounding     = style.WindowRounding;
+    style.FrameRounding     = std::floor(aesthetics.frameRounding * m_scale);
+    style.PopupRounding     = style.FrameRounding;
+    style.TabRounding       = style.FrameRounding;
+    style.GrabRounding      = style.FrameRounding;
+    style.ScrollbarRounding = style.FrameRounding;
+    style.WindowPadding     = { m_padding, m_padding };
+    const float spacing     = std::floor(aesthetics.itemSpacing * m_scale);
+    style.ItemSpacing       = { spacing, spacing };
+    // 分区缝隙沿用既有桌面映射；触屏扩大透明命中区而非可见分隔条。
+    style.DockingSeparatorSize =
+        std::clamp(m_gap, 3.0f * m_scale, 8.0f * m_scale);
     // 一个宿主统一提供三块内容区的上下边界，辅助窗口也保留各自标签。
     const ImVec2 position{ m_origin.x + m_gap, m_origin.y + m_gap };
     const ImVec2 size{ std::max(1.0f, m_size.x - 2 * m_gap - m_toolbarWidth),
@@ -285,6 +293,14 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
     // 抽屉打开时窗口输入与原始画布命令必须同时阻挡。
     // 设置构造名随翻译变化，窗口标题的 ### 后缀才是稳定身份。
     const bool settingsWindow = title.ends_with("###SettingsWindow");
+    const bool docked = mainCanvas || id == "Welcome" || settingsWindow ||
+                        id == "TimelineWindow" || id == "Timeline" ||
+                        id == "PreviewWindow";
+    // Begin 同样计算标题区域高度，必须与宿主标签计算使用相同内边距。
+    // Begin 后立即恢复，不把触摸标签的高度传播给内容中的输入和按钮。
+    if ( docked )
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                            MobileDockLayout::tabPadding(m_scale));
     if ( mainCanvas || id == "Welcome" || settingsWindow ) {
         // 使用整个中心区域，不把桌面最小宽度约束带入移动端标签。
         if ( settingsWindow )
@@ -294,7 +310,9 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
         if ( m_model.blocksCanvasInput() ) flags |= ImGuiWindowFlags_NoInputs;
         if ( mainCanvas ) {
             const std::string name = "主画布###" + std::string(id);
-            return ImGui::Begin(name.c_str(), nullptr, flags);
+            const bool visible     = ImGui::Begin(name.c_str(), nullptr, flags);
+            ImGui::PopStyleVar();
+            return visible;
         }
         // 内容层沿用原有配置与数据，外壳只替换显示位置和关闭方式。
         // 这个标记只在同步绘制作用域有效，不能传给后台数据准备任务。
@@ -333,6 +351,7 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
     // 所有分支在同一个位置开始窗口，保证返回值和 Begin/End 契约一致。
     // 只提升当前抽屉内容的显示层级，不主动夺走文本编辑焦点。
     const bool visible = ImGui::Begin(title.c_str(), nullptr, flags);
+    if ( docked ) ImGui::PopStyleVar();
     if ( m_drawingDrawer &&
          !ImGui::IsPopupOpen(
              nullptr,
@@ -367,7 +386,7 @@ void MobileWorkspacePresentation::drawHandle(const char* id, MobileRect rect,
                 { x - 3 * m_scale, pos.y + 12 * m_scale },
                 { x + 3 * m_scale, pos.y + rect.m_height - 12 * m_scale },
                 ImGui::GetColorU32(ImGuiCol_Text),
-                3 * m_scale);
+                ImGui::GetStyle().GrabRounding);
         } else {
             const auto color = ImGui::GetColorU32(ImGuiCol_Text);
             const auto pos   = ImGui::GetWindowPos();
@@ -382,7 +401,7 @@ void MobileWorkspacePresentation::drawHandle(const char* id, MobileRect rect,
                 { x - 18 * m_scale, pos.y + 4 * m_scale },
                 { x + 18 * m_scale, pos.y + rect.m_height - 4 * m_scale },
                 ImGui::GetColorU32(ImGuiCol_Button),
-                4 * m_scale);
+                ImGui::GetStyle().FrameRounding);
             auto* font = Config::SkinManager::instance().getFont("pure_icons");
             // 字体已由皮肤生命周期持有，把手不缓存跨皮肤重载的指针。
             // 回退字体仅用于皮肤缺少专用图标字体时保持绘制接口有效。
@@ -403,7 +422,7 @@ void MobileWorkspacePresentation::drawHandle(const char* id, MobileRect rect,
                 { x - 2 * m_scale, pos.y + rect.m_height - 29 * m_scale },
                 { x + 2 * m_scale, pos.y + rect.m_height - 12 * m_scale },
                 color,
-                2 * m_scale);
+                ImGui::GetStyle().GrabRounding);
         }
     }
     ImGui::End();
