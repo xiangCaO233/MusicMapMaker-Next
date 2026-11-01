@@ -1,4 +1,20 @@
-# 预编译库配套检查（2026-09-14）
+# 预编译库配套检查（2026-11-01）
+
+## 当前音频引擎包
+
+- 源码为 `IonCachyEngine` 的 `8c15136af7eda2a7b1374371bf6b19d6e72fcb6a`，包含 SDL 按需回调供数；主仓基线为 `78cbd10d`。
+- Linux 与 Windows 均在 debsrv 的既有 `github-runner-mmm:trixie` 容器中构建独立源码快照，不改 Runner 原工作区分支。
+- Linux GCC 14、Clang 19；Windows MSVC ABI/LLVM 22、MinGW clang64、MinGW ucrt64，全部包含 Debug 与 RelWithDebInfo；同时更新原有 MSVC 动态库、导入库和 PDB。
+- macOS ARM64 在原生 Mac Runner 使用 AppleClang 17、Xcode 26.1 SDK、macOS 11.0 部署下限构建 Debug 与 RelWithDebInfo。
+- 共完成 14 组构建，带回 18 个二进制文件；公开头与同一源码快照逐字节一致，修正 `AudioBuffer.hpp` 和 `SDLPlayer.hpp` 的旧副本。
+- 引擎本体从源码编译，第三方依赖显式使用 `SOURCES_BUILD=OFF` 的既有对应平台包；未进行 PGO 插桩或 strip。原生静态库调试段保留，两个 Windows DLL 与对应 PDB 的 GUID 匹配。
+- 四组 Linux、两组 macOS 引擎实时回归测试通过；Windows 示例与测试程序完成交叉链接，没有宣称 Windows 原生运行验证。
+- macOS 独立示例消费方显式链接 IOKit、CoreServices、Foundation；这只补齐独立验证程序的系统框架闭包，不修改引擎或第三方源码。
+- 本机主项目预编译模式完整构建成功，最终 CTest 为 179/179；音频集成用例首轮出现一次共享拉伸器/节拍路由时序失败，随后单独连续三次与最终全量均通过，没有调整断言。
+- 校验了带回产物的 SHA256、归档结构、静态库调试段、公开头一致性及 Windows DLL/PDB 配套。详细本机证据集中于 `build/ice-prebuilt-update-20261101/`。
+- 同步公开头文件不保留旧修改时间，消费方 ABI 指纹改变后已触发相关翻译单元重编。
+
+## 历史兼容性记录（2026-09-14）
 
 ## 已修复
 

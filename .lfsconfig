@@ -1,2 +1,5 @@
 [lfs]
+    # 两个项目共用 NAS 对象库；Git 提交与源码仍由 GitHub 托管。
+    url = https://gitea.xiang233.top/xiang/mmm-lfs.git/info/lfs
+    # 保留按需拉取策略，由构建脚本显式选择资源和平台包。
 	fetchexclude = *
