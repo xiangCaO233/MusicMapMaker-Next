@@ -12,7 +12,7 @@ on:
         type: string
 
 permissions:
-  # 主仓 token 只读取发布元数据，跨仓写入由专用部署密钥完成。
+  # 主仓 token 只读取发布元数据，跨仓 HTTPS 写入使用 Runner 已有 Git 凭据。
   contents: read
 
 concurrency:
@@ -24,9 +24,9 @@ concurrency:
 jobs:
   sync:
     # 无需重建应用或占用自托管产物目录。
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, debian]
     timeout-minutes: 10
-    # 凭据与临时 checkout 由 helper 在退出时统一清理。
+    # 沿用此 Runner 的 HTTPS Git 凭据；临时 checkout 在退出时清理。
     steps:
       - uses: actions/checkout@v4
         # 只读取触发 ref 的脚本，发布版本身份仍取输入 tag 的远端对象。
@@ -36,12 +36,11 @@ jobs:
           submodules: false
           persist-credentials: false
       - name: Sync published stable source ebuild
-        # 专用密钥只能写 overlay，GH_TOKEN 仅用于读取主仓发布身份。
+        # HTTPS 使用 Runner 已有凭据，GH_TOKEN 仅用于读取主仓发布身份。
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
-          MMM_GENTOO_OVERLAY_SSH_KEY: ${{ secrets.GENTOO_OVERLAY_SSH_KEY }}
         run: |
           # 输入仅通过带引号的 argv 传递，校验和幂等性由 helper 负责。
-          # 缺失密钥、旧标签或并发 push 冲突均返回失败，不降级或强推。
+          # 认证失败、旧标签或并发 push 冲突均返回失败，不降级或强推。
           bash scripts/ci/update-gentoo-overlay.sh "${RELEASE_TAG}"

@@ -30,6 +30,8 @@ DEB 包保持应用版本不变，以 `0.6.3-2+hotfix.1`、`0.6.3-2+hotfix.2` �
 
 Gentoo 源码新增 `musicmapmaker-next-0.6.3-r1.ebuild`，固定到不可变的 `v0.6.3-hotfix.1` tag，并在配置时写入相同应用修订。Gentoo 二进制包新增 `musicmapmaker-next-bin-0.6.3-r2.ebuild`（原正式二进制为 r1），绑定同一热修复 DEB 的固定 CDN 地址和 Manifest 摘要。标签只允许新建或复用同 SHA，不移动正式 tag，也不另建正式 Release。
 
+网页发布与 APT/Gentoo 同步分为独立 job。新版流程的软件源 job 失败后，使用 Actions 的“Re-run failed jobs”只重试软件源，读取同一 run 的原候选 Artifact，不重新准备或上传网页修订；不要选择“Re-run all jobs”。GitHub overlay 克隆与推送使用 CI Docker 已有的 HTTPS Git 凭据。
+
 如果网页程序已公开，但 APT 或 Gentoo 同步失败，运行 `mmm-hotfix-package-sync`，输入原 `ci.yaml` hotfix 发布 run ID。恢复读取原 Artifact，检查本仓 hotfix 人工运行身份和精确 SHA，再对照当前公开清单与 DEB 载荷，只重试两个软件源；纯资产、未公开候选和已过期修订不能通过恢复。Artifact 过期或丢失时不得用重新编译的包冒充原发布对象。
 
 ## 分支与基线
