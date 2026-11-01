@@ -67,8 +67,8 @@ jobs:
     permissions:
       # 写权限只服务新增不可变的热修复 tag，不影响普通 ci-build。
       contents: write
-    secrets:
-      GENTOO_OVERLAY_SSH_KEY: ${{ secrets.GENTOO_OVERLAY_SSH_KEY }}
+      # 包管理器独立 job 只读本次运行的原始候选 Artifact。
+      actions: read
     # 分支与基线检查由被调用工作流在构建前执行。
     if: github.event_name == 'workflow_dispatch' && inputs.job == 'hotfix'
     uses: ./.github/workflows/hotfix-release.yaml

@@ -69,24 +69,17 @@ PY
     fi
 fi
 
-# 私钥仅可写 overlay 仓；空 secret 明确失败，不借用 Runner 的个人凭据。
-: "${MMM_GENTOO_OVERLAY_SSH_KEY:?Missing GENTOO_OVERLAY_SSH_KEY secret}"
-# 密钥、主机公钥及 checkout 均放在本次私有临时目录，不污染共享 Runner。
+# 使用 CI Docker 环境已配置的 HTTPS Git 凭据，不另建部署密钥或覆盖 credential helper。
+# 主仓 GH_TOKEN 仍供 gh API 使用；Git 保留宿主已有认证配置和授权范围。
+# 禁止终端提示，凭据不可用时明确失败，不在无人值守任务中等待输入。
+export GIT_TERMINAL_PROMPT=0
+# 临时目录只保存 checkout；URL、脚本和 Git 配置均不写入凭据。
 temporary_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/mmm-overlay-sync.XXXXXX")"
 trap 'rm -rf -- "${temporary_root}"' EXIT
 umask 077
-printf '%s\n' "${MMM_GENTOO_OVERLAY_SSH_KEY}" > "${temporary_root}/key"
-# 主机公钥通过 GitHub HTTPS API 获取，SSH 必须严格验证，禁止关闭校验。
-gh api meta --jq '.ssh_keys[] | "github.com " + .' > "${temporary_root}/known_hosts"
-# 非空检查防止 API 异常产生空信任文件，且不允许自动接受未知主机密钥。
-[[ -s "${temporary_root}/known_hosts" ]] || exit 1
-# shell 转义只构造 SSH argv，不将标签、提交消息或私钥拼进命令字符串。
-printf -v GIT_SSH_COMMAND 'ssh -i %q -o IdentitiesOnly=yes -o UserKnownHostsFile=%q -o StrictHostKeyChecking=yes' \
-    "${temporary_root}/key" "${temporary_root}/known_hosts"
-export GIT_SSH_COMMAND
 
 # 只获取当前 main；push 不强制覆盖，并发写入时失败后可以安全重试。
-git clone --depth 1 --branch main "git@github.com:${overlay_repository}.git" "${temporary_root}/overlay"
+git clone --depth 1 --branch main "https://github.com/${overlay_repository}.git" "${temporary_root}/overlay"
 overlay_root="${temporary_root}/overlay"
 generator_args=(--tag "${release_tag}")
 # 同一生成器覆盖普通正式版本与热修复，保留既有普通发布行为。

@@ -63,18 +63,6 @@ jobs:
       MMM_RELEASE_TYPE: ${{ inputs.release_type }}
 
     steps:
-      - name: release->Check Gentoo sync credentials
-        # 正式发布前先确认跨仓凭据，避免 Release 成功后才发现无法更新源码包。
-        if: inputs.release_type == 'stable'
-        env:
-          MMM_GENTOO_OVERLAY_SSH_KEY: ${{ secrets.GENTOO_OVERLAY_SSH_KEY }}
-        run: |
-          # 仅检查存在性，任何日志都不得包含私钥内容。
-          test -n "${MMM_GENTOO_OVERLAY_SSH_KEY}" || {
-            printf 'error: missing GENTOO_OVERLAY_SSH_KEY secret\n' >&2
-            exit 1
-          }
-
       - name: release->Package and publish GitHub Release
         # publish 的输出由下一步写入 GitHub Summary。
         id: publish
@@ -141,7 +129,6 @@ jobs:
         if: inputs.release_type == 'stable'
         env:
           RELEASE_TAG: ${{ steps.publish.outputs.release_tag }}
-          MMM_GENTOO_OVERLAY_SSH_KEY: ${{ secrets.GENTOO_OVERLAY_SSH_KEY }}
         run: |
           # 标签及源码 SHA 必须来自同一成功发布，不能使用 Runner 分支名替代。
           bash scripts/ci/update-gentoo-overlay.sh "${RELEASE_TAG}" "${GITHUB_SHA}"
