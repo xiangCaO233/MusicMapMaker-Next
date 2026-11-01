@@ -622,8 +622,8 @@ struct CmdSaveBeatmapAs {
     /// @note false 保持原时间位置；非 BMS 家族格式忽略本字段。
     bool bmsShiftEventsToGrid{ true };
 
-    /// @brief 默认吸附 MyO2 网格；false 仅供内部原精度诊断。
-    bool bmsMyO2Grid{ true };
+    /// @brief 显式启用有损 MyO2 吸附；默认保留变速及物件的原精度。
+    bool bmsMyO2Grid{ false };
 
     /// @brief 导出目标路径，使用 UTF-8 编码。
     std::string path;
@@ -678,8 +678,8 @@ struct CmdPackBeatmap {
         MMM::BmsPackageAlignmentMode::ShiftEvents
     };
 
-    /// @brief BMS 导出副本是否按 MyO2 建议吸附；不修改源项目。
-    bool bmsMyO2Grid{ true };
+    /// @brief 显式启用有损 MyO2 吸附；默认保真且不修改源项目。
+    bool bmsMyO2Grid{ false };
 
     /// @brief 转换指定谱面时临时覆盖的元数据列表。
     std::vector<PackageBeatmapMetadataOverride> metadataOverrides;

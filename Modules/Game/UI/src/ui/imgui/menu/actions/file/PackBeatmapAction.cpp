@@ -1152,6 +1152,8 @@ void PackBeatmapAction::requestPackBeatmapTo(std::string path)
             : std::nullopt,
         // BMS 模式是单个枚举值，界面无法构造同时选择或全部取消的命令。
         .bmsAlignmentMode = m_package.bmsAlignmentMode,
+        // 兼容吸附必须来自本次明确选择，不能靠命令默认值隐式开启。
+        .bmsMyO2Grid = m_package.m_bmsMyO2Grid,
         // 覆盖项只作用于本次转换，不回写源谱面元数据。
         .metadataOverrides = m_package.pendingMetadataOverrides,
     });
@@ -1346,11 +1348,13 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
                 // 默认值由 PackageDialogState 初始化，第一次打开也有确定选择。
                 // 用户切换后保留该值，输出路径确认期间不会重新应用默认策略。
                 // 两种策略不能相加，否则音乐和物件会承受两次相位补偿。
-                // 批量模式对所有选中谱面的导出副本使用同一网格策略。
-                // 首拍音频处理完成后才量化事件，避免之后再次平移破坏网格。
+                // 批量模式对所有选中谱面的导出副本使用同一精度策略。
+                // 默认保真；只读末行的转换器需明确选择有损吸附。
                 ImGui::TextWrapped(
-                    "BMS 为有损导出：自动吸附到 MyO2 网格，"
-                    "可能微调音符、长条端点及时间线位置；吸附冲突时拒绝导出。");
+                    "默认保留变速和物件时间；高精度叠加行可能不兼容 MyO2。"
+                    "有损吸附会移动或合并变速事件，复杂变速谱可能明显偏移。");
+                ::MMM::UI::FeedbackCheckbox("MyO2 兼容吸附（有损）",
+                                            &m_package.m_bmsMyO2Grid);
                 ImGui::TextUnformatted("首拍对齐方式（必选其一）：");
                 if ( ::MMM::UI::FeedbackRadioButton(
                          "裁剪／补静音音乐副本",
@@ -1368,7 +1372,7 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
                 // 唯一例外是 BMS 头部 BPM，标准格式要求其从零点生效。
                 ImGui::TextWrapped(
                     "物件与除开头初始 BPM "
-                    "外的所有红线统一移动，再进行格线吸附。"
+                    "外的所有红线统一移动；默认不进行格线吸附。"
                     "Key 采样不重编码，项目源文件不变。");
             }
 

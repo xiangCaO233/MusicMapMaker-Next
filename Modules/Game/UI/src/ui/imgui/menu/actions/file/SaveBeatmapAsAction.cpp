@@ -112,19 +112,22 @@ private:
     /// @param addStoreModeExtForMalodyExport 是否为 MC 导出写入上架皮肤
     /// mode_ext。
     /// @param bmsShiftEventsToGrid BMS 是否整体后移事件；从不允许重写音频。
+    /// @param bmsMyO2Grid 是否明确接受有损 MyO2 网格吸附。
     /// @note 命令按值携带路径和临时选项，菜单不直接执行序列化。
     /// @warning 只能在覆盖与兼容性确认全部完成后调用。
     /// @pre path 必须是经过选择器格式规范化并由用户确认的 UTF-8 路径。
     void dispatchSaveBeatmapAs(const std::string&        path,
                                std::optional<MalodyMode> malodyExportMode,
                                bool addStoreModeExtForMalodyExport = false,
-                               bool bmsShiftEventsToGrid           = true)
+                               bool bmsShiftEventsToGrid           = true,
+                               bool bmsMyO2Grid                    = false)
     {
         // 逻辑命令统一承担导出、错误反馈和会话状态处理。
         MenuUtil::dispatchCommand(Logic::CmdSaveBeatmapAs{
             .malodyExportMode               = malodyExportMode,
             .addStoreModeExtForMalodyExport = addStoreModeExtForMalodyExport,
             .bmsShiftEventsToGrid           = bmsShiftEventsToGrid,
+            .bmsMyO2Grid                    = bmsMyO2Grid,
             .path                           = path,
         });
     }
@@ -177,6 +180,7 @@ private:
         // 每次另存为默认后移到首拍；用户仍可选择保留原点，源音频不变。
         m_pendingExportShowBmsAlignmentOption = showBmsAlignmentOption;
         m_pendingExportBmsShiftEventsToGrid   = true;
+        m_pendingExportBmsMyO2Grid            = false;
         m_pendingExportShowStoreModeExtOption = showStoreModeExtOption;
         // 保留元素能力标志，以便用户切换 Malody 模式时重新计算选项可见性。
         m_pendingExportHasStoreModeExtEligibleElements =
@@ -644,13 +648,15 @@ private:
                 // 两个状态始终互斥；单文件导出不显示音乐裁剪或补静音选项。
                 // RadioButton 重复激活已选项也不会使所有选项都取消。
                 ImGui::Spacing();
-                // BMS 一律进行网格吸附，不再提供需要用户识别的兼容开关。
+                // 默认保真，旧版转换器所需的有损吸附必须由用户明确选择。
                 // 默认整体后移 BGM 与物件，保持源音频文件不被重编码。
-                // 将格式本身的有损行为明确告知用户，避免被理解为原样存储。
-                // 确认后的命令只携带首拍策略，网格由 BMS 导出器统一执行。
+                // 原精度采用标准叠加行；不能承诺只读末行的转换器兼容。
+                // 临时选项随命令复制，取消或结束流程后恢复保真默认值。
                 MenuUtil::drawWrappedBulletText(
-                    "BMS 为有损导出：自动吸附到 MyO2 网格，"
-                    "可能微调音符、长条端点及时间线位置；吸附冲突时拒绝导出。");
+                    "默认保留变速和物件时间；高精度叠加行可能不兼容 MyO2。"
+                    "有损吸附会移动或合并变速事件，复杂变速谱可能明显偏移。");
+                ::MMM::UI::FeedbackCheckbox("MyO2 兼容吸附（有损）",
+                                            &m_pendingExportBmsMyO2Grid);
                 ImGui::TextUnformatted("首拍对齐方式：");
                 if ( ::MMM::UI::FeedbackRadioButton(
                          "保持原时间位置",
@@ -716,7 +722,9 @@ private:
                         m_pendingExportAddStoreModeExt,
                     // 仅 BMS 选项可见时传递后移请求，MC 等格式保持原行为。
                     m_pendingExportShowBmsAlignmentOption &&
-                        m_pendingExportBmsShiftEventsToGrid);
+                        m_pendingExportBmsShiftEventsToGrid,
+                    m_pendingExportShowBmsAlignmentOption &&
+                        m_pendingExportBmsMyO2Grid);
                 // 命令已复制所需字段，随后清空全部临时状态。
                 clearCompatibilityWarningState();
                 ImGui::CloseCurrentPopup();
@@ -764,6 +772,9 @@ private:
     /// @brief 仅本次 BMS 导出是否后移事件，默认对齐首分拍。
     /// @note 不携带音频重写枚举，避免误用资源包的裁剪策略。
     bool m_pendingExportBmsShiftEventsToGrid = true;
+    /// @brief 本次导出是否明确启用有损 MyO2 网格吸附。
+    /// @note 不持久化为全局默认，防止后续导出在无提示下改变时轴。
+    bool m_pendingExportBmsMyO2Grid = false;
 
     /// @brief 待确认导出是否显示上架 mode_ext 选项。
     /// @note 仅在 MC Slide 模式且存在 Flick 或折线时为 true。
