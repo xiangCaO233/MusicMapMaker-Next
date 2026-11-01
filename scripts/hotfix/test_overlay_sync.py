@@ -99,6 +99,32 @@ class OverlaySyncTest(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stdout)
         self.assertEqual(after, self.run_git('--git-dir', str(self.remote), 'rev-parse', 'main'))
 
+    # /// @brief 工作流 token 仅留给主仓 API，不能覆盖跨仓 Git 的登录账号。
+    def test_ci_token_is_scoped_to_api(self):
+        # 使用无权限的占位符模拟 Actions 自动注入值，不读取任何真实凭据。
+        # 两类公共 token 和两类 Enterprise token 都必须从 Git 环境移除。
+        for name in ('GH_TOKEN', 'GITHUB_TOKEN', 'GH_ENTERPRISE_TOKEN', 'GITHUB_ENTERPRISE_TOKEN'):
+            self.env[name] = 'workflow-token-fixture'
+        bindir = self.root / 'bin'
+        gh = bindir / 'gh'
+        # API 替身要求主 token 仍存在，禁止通过全局 unset 顺便破坏主仓 API。
+        # 插入到元数据分支之前，保证每次查询都验证认证作用域。
+        gh.write_text(gh.read_text().replace('#!/bin/sh\n',
+            '#!/bin/sh\n[ "$GH_TOKEN" = workflow-token-fixture ] || exit 92\n'))
+        wrapper = bindir / 'git'
+        # Git 替身只检查进程环境，然后交给真实 Git 执行克隆、提交和推送。
+        # 相比检查脚本文本，这能捕获某条 Git 调用漏用隔离入口的回归。
+        # 远端仍为临时裸仓，不访问真实 GitHub 或 Docker 的 credential store。
+        wrapper.write_text('#!/bin/sh\n'
+            '[ -z "${GH_TOKEN+x}${GITHUB_TOKEN+x}${GH_ENTERPRISE_TOKEN+x}${GITHUB_ENTERPRISE_TOKEN+x}" ] || exit 91\n'
+            'exec "$FIXTURE_REAL_GIT" "$@"\n')
+        wrapper.chmod(0o700)
+        self.env['FIXTURE_REAL_GIT'] = self.git
+        # 脚本必须完整成功，证明 API 与跨仓 Git 可以使用不同凭据来源。
+        # 若在父 shell 清空 token，API 替身会先于远端写入报错。
+        result = self.sync()
+        self.assertEqual(result.returncode, 0, result.stdout)
+
     # /// @brief 已过期的发布身份在任何跨仓写入前被拒绝。
     def test_stale_release_does_not_push(self):
         before = self.run_git('--git-dir', str(self.remote), 'rev-parse', 'main')

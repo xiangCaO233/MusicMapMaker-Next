@@ -78,8 +78,16 @@ temporary_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/mmm-overlay-sync.XXXXXX")"
 trap 'rm -rf -- "${temporary_root}"' EXIT
 umask 077
 
+# /// @brief 跨仓 Git 使用 Docker 已登录凭据，主仓 API 保留工作流短期 token。
+# gh credential helper 优先读取环境 token，直接继承会把跨仓身份变成 github-actions[bot]。
+# 仅在 Git 子进程去除覆盖值；不退出 gh 登录、不改 credential helper 或持久化凭据。
+# 四个变量覆盖 GitHub 公有服务与 Enterprise 的环境优先级，防止备用变量再次遮蔽登录。
+overlayGit() {
+    env -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u GITHUB_ENTERPRISE_TOKEN git "$@"
+}
+
 # 只获取当前 main；push 不强制覆盖，并发写入时失败后可以安全重试。
-git clone --depth 1 --branch main "https://github.com/${overlay_repository}.git" "${temporary_root}/overlay"
+overlayGit clone --depth 1 --branch main "https://github.com/${overlay_repository}.git" "${temporary_root}/overlay"
 overlay_root="${temporary_root}/overlay"
 generator_args=(--tag "${release_tag}")
 # 同一生成器覆盖普通正式版本与热修复，保留既有普通发布行为。
@@ -94,26 +102,26 @@ if [[ "${hotfix_revision}" != 0 ]]; then suffix="-r${hotfix_revision}"; fi
 ebuild_path="app-editors/musicmapmaker-next/musicmapmaker-next-${release_tag#v}${suffix}.ebuild"
 # 新配方至少通过 Bash 语法检查；构建选项由已验证的开发版模板继承。
 bash -n "${overlay_root}/${ebuild_path}"
-git -C "${overlay_root}" add -- "${ebuild_path}"
+overlayGit -C "${overlay_root}" add -- "${ebuild_path}"
 if [[ "${hotfix_revision}" != 0 ]]; then
     # Manifest 使用原 DEB 字节生成，不能下载另一个工具链的包来凑更新。
     # 二进制源比正式 r1 高一个修订；所有文件和 Manifest 在同一提交中公布。
     binary_path="app-editors/musicmapmaker-next-bin/musicmapmaker-next-bin-${release_tag#v}-r$((hotfix_revision + 1)).ebuild"
     bash -n "${overlay_root}/${binary_path}"
-    git -C "${overlay_root}" add -- "${binary_path}" app-editors/musicmapmaker-next-bin/Manifest
+    overlayGit -C "${overlay_root}" add -- "${binary_path}" app-editors/musicmapmaker-next-bin/Manifest
 fi
-if git -C "${overlay_root}" diff --cached --quiet; then
+if overlayGit -C "${overlay_root}" diff --cached --quiet; then
     # 同一 tag 的恢复操作不生成重复提交，也不改旧配方。
     printf 'Gentoo source ebuild already synchronized: %s\n' "${release_tag}"
     exit 0
 fi
-git -C "${overlay_root}" diff --cached --check
+overlayGit -C "${overlay_root}" diff --cached --check
 # 源码配方、二进制配方和摘要一起提交，客户端不会看到缺少 Manifest 的中间状态。
 # 提交仅包含本次新版本配方；身份固定为 Actions bot，遵循中文提交规范。
-git -C "${overlay_root}" -c user.name='github-actions[bot]' \
+overlayGit -C "${overlay_root}" -c user.name='github-actions[bot]' \
     -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
     commit -m "ci(gentoo): 更新软件包至 ${release_tag}${suffix}"
-git -C "${overlay_root}" push origin HEAD:main
+overlayGit -C "${overlay_root}" push origin HEAD:main
 # 跨仓 push 冲突不覆盖别人提交；使用保留的包单独恢复本步骤。
 # 只有远端 push 成功才报告完成，失败时现有 Release 和 tag 均保持原状。
 printf 'Gentoo source ebuild synchronized: %s (%s)\n' "${release_tag}" "${published_sha}"
