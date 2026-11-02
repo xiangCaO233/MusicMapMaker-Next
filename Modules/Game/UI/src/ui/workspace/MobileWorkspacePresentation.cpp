@@ -182,9 +182,9 @@ void MobileWorkspacePresentation::beginFrame(UIManager& manager)
     const float buttonHeight =
         std::max(72.0f * m_scale, ImGui::GetFontSize() * 2 + 16.0f * m_scale);
     const float contentHeight =
-        buttonHeight * 7 +
-        std::floor(settings.aesthetics.itemSpacing * m_scale) * 6 +
-        2 * m_padding;
+        buttonHeight * 8 +
+        std::floor(settings.aesthetics.itemSpacing * m_scale) * 7 +
+        buttonHeight * .5f + 2 * m_padding;
     m_toolbarWidth =
         m_showToolbar
             ? MobilePlaybackControls::buttonWidth(m_scale) + 2 * m_padding +
@@ -268,7 +268,7 @@ bool MobileWorkspacePresentation::beginPanel(const char* id, MobileRect rect,
     // 位置与尺寸由外壳管理，因此不写入通用 imgui.ini。
     auto flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                  ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings;
-    // 七个直接入口在矮屏上允许滚动；空白拖动继续交给统一触屏滚动器。
+    // 八个直接入口在矮屏上允许滚动；空白拖动继续交给统一触屏滚动器。
     if ( std::string_view(id) == "MobileTouchToolbar" )
         flags &= ~ImGuiWindowFlags_NoScrollbar;
     if ( !background ) flags |= ImGuiWindowFlags_NoBackground;
@@ -650,7 +650,17 @@ void MobileWorkspacePresentation::drawToolbar(UIManager& manager)
             ImGui::PopID();
             ++index;
         }
-        // 参数与工具共用同一滚动区域，短屏不会让最后一项永久落在视口外。
+        // 与桌面相同，参数组贴底；空间不足时只保留组间空白而不覆盖工具。
+        // 使用真实字号和主题间距计算，按钮不会因旋转或美化配置改变而重叠。
+        const float height = std::max(
+            72.0f * m_scale, ImGui::GetFontSize() * 2 + 16.0f * m_scale);
+        const float groupHeight =
+            height * 5 + ImGui::GetStyle().ItemSpacing.y * 4;
+        ImGui::SetCursorPosY(
+            ImGui::GetCursorPosY() +
+            std::max(height * .5f,
+                     ImGui::GetContentRegionAvail().y - groupHeight));
+        // 两组仍共用滚动区，短屏能从空白处拖动到最末的缩放按钮。
         m_playbackControls.drawButtons(
             manager, ImGui::GetContentRegionAvail().x, m_scale);
     }
