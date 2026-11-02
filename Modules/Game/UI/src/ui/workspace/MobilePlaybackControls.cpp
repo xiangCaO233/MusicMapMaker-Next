@@ -98,6 +98,7 @@ float MobilePlaybackControls::buttonWidth(float scale)
     // 数值取合法范围中较长的表示；工具文字与实际按钮共用当前字体。
     for ( const char* label :
           { "0.25x",
+            "1000%",
             "32K",
             "64",
             TR_CACHE("ui.toolbar.short.move").data(),
@@ -223,11 +224,16 @@ void MobilePlaybackControls::drawButtons(UIManager& manager, float width,
                                 size,
                                 m_popup == Popup::Divisor) )
         open(Popup::Divisor);
-    // 与桌面缩放入口相同，只显示放大镜图标，不挤入当前百分比。
+    // 放大镜下常驻当前百分比，让触屏用户不打开弹层也能确认缩放状态。
     // 缩放属于全局视觉配置，无谱面时同样允许预先调整。
+    const auto zoomText = fmt::format(
+        "{:.0f}%",
+        Config::AppConfig::instance().getEditorConfig().visual.timelineZoom *
+            100);
+    // 直接读取权威配置，预设、滑条和其他设置入口的变化均即时回显。
     if ( MobileNavigationButton("timeline-zoom",
                                 ICON_MMM_SEARCH,
-                                "",
+                                zoomText.c_str(),
                                 size,
                                 m_popup == Popup::Zoom) )
         open(Popup::Zoom);
