@@ -60,9 +60,11 @@ public:
     /// @param query 支持空白分隔的多个关键词，全部关键词必须命中。
     /// @param translationVersion 翻译器发布的版本，用于使文本缓存失效。
     /// @param translate 查询当前语言文本的回调。
+    /// @param showCursorSettings 是否允许搜索桌面光标组；纯触屏工作区传入
+    /// false。
     /// @warning UI 热路径仅比较缓存键；重建由用户输入或语言切换触发。
     void update(std::string_view query, uint32_t translationVersion,
-                const Translate& translate);
+                const Translate& translate, bool showCursorSettings = true);
 
     /// @brief 返回当前语言下的目录，用于显示结果及定位真实设置行。
     const std::vector<SettingsSearchEntry>& entries() const
@@ -90,5 +92,7 @@ private:
     uint32_t m_translationVersion{ 0 };
     /// @brief 首次查询也需要生成本地化文本，不能把版本零误认为已缓存。
     bool m_translated{ false };
+    /// @brief 光标组可见性参与查询缓存键，不改变条目身份或持久化配置。
+    bool m_showCursorSettings{ true };
 };
 }  // namespace MMM::UI

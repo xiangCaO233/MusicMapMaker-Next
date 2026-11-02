@@ -18,17 +18,21 @@ foreach(
         software-personalization
         # 编辑器个性化复用实际画布布局边界，需要随程序一起嵌入。
         editor-personalization)
+  # 触屏软件设置没有光标组，使用独立教程声明，不让引导停在不存在的控件。 两端保留相同主题及其余步骤 ID，已有学习进度无需迁移或重置。
+  set(_mmm_walkthrough_file
+      "${PROJECT_SOURCE_DIR}/assets/walkthroughs/${_mmm_walkthrough}.json")
+  if(ANDROID AND _mmm_walkthrough STREQUAL "software-personalization")
+    set(_mmm_walkthrough_file
+        "${PROJECT_SOURCE_DIR}/assets/walkthroughs/mobile/software-personalization.json"
+    )
+  endif()
   # 所有主题 JSON 都列为配置依赖，编辑演练内容无需手动重新配置。
   set_property(
     DIRECTORY
     APPEND
-    PROPERTY
-      CMAKE_CONFIGURE_DEPENDS
-      "${PROJECT_SOURCE_DIR}/assets/walkthroughs/${_mmm_walkthrough}.json")
+    PROPERTY CMAKE_CONFIGURE_DEPENDS "${_mmm_walkthrough_file}")
   # 嵌入当前文件正文，与 WalkthroughService 中的内置注册顺序对应。
-  file(READ
-       "${PROJECT_SOURCE_DIR}/assets/walkthroughs/${_mmm_walkthrough}.json"
-       MMM_WALKTHROUGH_${_mmm_walkthrough})
+  file(READ "${_mmm_walkthrough_file}" MMM_WALKTHROUGH_${_mmm_walkthrough})
 endforeach()
 configure_file(
   src/ui/walkthrough/BuiltinWalkthrough.h.in

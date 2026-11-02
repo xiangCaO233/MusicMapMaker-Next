@@ -30,6 +30,7 @@
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <filesystem>
@@ -841,10 +842,10 @@ void SettingsView::drawSoftwareSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 // UI 整数只映射 Cached 与 Streaming 两个稳定模式。
-                int         mode    = settings.audioDecodingMode ==
-                                   Config::AudioDecodingMode::Streaming
-                                          ? 1
-                                          : 0;
+                int         mode = settings.audioDecodingMode ==
+                                           Config::AudioDecodingMode::Streaming
+                                       ? 1
+                                       : 0;
                 const char* modes[] = {
                     TR_CACHE("ui.settings.software.audio_decoding.cached")
                         .data(),
@@ -878,10 +879,10 @@ void SettingsView::drawSoftwareSettings()
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
                 // 零映射 SDL，一映射 OpenAL；未知配置在此回退 SDL 预览。
-                int         backend    = settings.audioPlaybackBackend ==
+                int backend = settings.audioPlaybackBackend ==
                                       Config::AudioPlaybackBackend::OpenAL
-                                             ? 1
-                                             : 0;
+                                  ? 1
+                                  : 0;
                 const char* backends[] = {
                     TR_CACHE("ui.settings.software.audio_backend.sdl").data(),
                     TR_CACHE("ui.settings.software.audio_backend.openal").data()
@@ -1629,10 +1630,15 @@ void SettingsView::drawSoftwareSettings()
     // - BPM 同步启用时固定 smokeLifeTime 仍保留但不可编辑；
     // - 所有字段只改变后续帧绘制，不创建或销毁持久资源。
     // 光标组选择系统光标或软件绘制光标，并展示后者的粒子参数。
+    // 纯触屏工作区不创建标题或内部控件，不根据外接鼠标改变入口可见性。
+    // 仅隐藏界面，保留已有配置，桌面工作区继续按原规则显示。
     if ( auto* sec =
-             addHeader(TR_CACHE("ui.settings.software.cursor_params").data(),
+             workspaceAllowsHoverFeedback()
+                 ? addHeader(
+                       TR_CACHE("ui.settings.software.cursor_params").data(),
                        true,
-                       "personalization.settings.cursor") ) {
+                       "personalization.settings.cursor")
+                 : nullptr ) {
 
         // 采用统一标签宽度，使动态软件光标参数保持对齐。
 
