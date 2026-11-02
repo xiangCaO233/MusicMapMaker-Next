@@ -1,6 +1,6 @@
 /// @file MobilePlaybackControls.cpp
 /// @brief 触屏播放参数控件，界面意图与编辑器权威状态分开维护。
-/// @details 四个入口不持有谱面对象，也不执行桌面工具栏的完整更新流程。
+/// @details 五个入口不持有谱面对象，也不执行桌面工具栏的完整更新流程。
 /// 播放开关经应用服务读取，实际动作统一进入已有命令通道。
 /// 分拍属于软件编辑配置，未打开谱面时也允许预先选择。
 /// 键数和速度绑定真实谱面，欢迎占位会话不能接受这些操作。
@@ -129,7 +129,7 @@ void MobilePlaybackControls::open(Popup popup)
     m_openRequested = true;
 }
 
-/// @brief 读取已发布播放状态及非阻塞轨数缓存，绘制四个直接操作入口。
+/// @brief 读取已发布播放状态及非阻塞轨数缓存，绘制五个直接操作入口。
 /// @warning 每帧只尝试一次会话锁，忙时沿用标量，不复制会话共享所有权。
 /// @param manager 提供寿命覆盖当前帧的应用服务观察指针。
 /// @param width 已扣除主题留白与滚动条的实际内容宽度。
@@ -184,30 +184,6 @@ void MobilePlaybackControls::drawButtons(UIManager& manager, float width,
         MenuUtil::dispatchCommand(Logic::CmdSetPlayState{ !playing });
     ImGui::EndDisabled();
 
-    // 分拍与桌面一样属于编辑配置，无活动谱面时仍可预先调整。
-    const int divisor =
-        Config::AppConfig::instance().getEditorConfig().settings.beatDivisor;
-    // 短标签只显示当前分拍数，完整含义由点击后的常驻标题说明。
-    // 不在组件内保存第二份分拍值，其他配置入口的修改可直接回显。
-    const auto divisorText = fmt::format("{}", divisor);
-    if ( MobileNavigationButton("beat-divisor",
-                                ICON_MMM_BARS,
-                                divisorText.c_str(),
-                                size,
-                                m_popup == Popup::Divisor) )
-        open(Popup::Divisor);
-    // 尚未读到新会话轨数时保持禁用，不能把默认 4K 冒充元数据。
-    // 已有缓存但逻辑繁忙时仍能操作，命令只携带目标轨数。
-    ImGui::BeginDisabled(!hasBeatmap || m_trackCount <= 0);
-    const auto keyText =
-        m_trackCount > 0 ? fmt::format("{}K", m_trackCount) : "--";
-    if ( MobileNavigationButton("key-count",
-                                ICON_MMM_KEYBOARD,
-                                keyText.c_str(),
-                                size,
-                                m_popup == Popup::Keys) )
-        open(Popup::Keys);
-    ImGui::EndDisabled();
     ImGui::BeginDisabled(!hasBeatmap);
     // 速度读取音频运行时，未载入谱面时显示占位。
     // 沿用桌面的两位有效数字展示，不隐式量化实际播放速度。
@@ -223,6 +199,38 @@ void MobilePlaybackControls::drawButtons(UIManager& manager, float width,
                                 m_popup == Popup::Speed) )
         open(Popup::Speed);
     ImGui::EndDisabled();
+    // 尚未读到新会话轨数时保持禁用，不能把默认 4K 冒充元数据。
+    // 已有缓存但逻辑繁忙时仍能操作，命令只携带目标轨数。
+    ImGui::BeginDisabled(!hasBeatmap || m_trackCount <= 0);
+    const auto keyText =
+        m_trackCount > 0 ? fmt::format("{}K", m_trackCount) : "--";
+    if ( MobileNavigationButton("key-count",
+                                ICON_MMM_KEYBOARD,
+                                keyText.c_str(),
+                                size,
+                                m_popup == Popup::Keys) )
+        open(Popup::Keys);
+    ImGui::EndDisabled();
+    // 分拍与桌面一样属于编辑配置，无活动谱面时仍可预先调整。
+    const int divisor =
+        Config::AppConfig::instance().getEditorConfig().settings.beatDivisor;
+    // 短标签只显示当前分拍数，完整含义由点击后的常驻标题说明。
+    // 不在组件内保存第二份分拍值，其他配置入口的修改可直接回显。
+    const auto divisorText = fmt::format("{}", divisor);
+    if ( MobileNavigationButton("beat-divisor",
+                                ICON_MMM_BARS,
+                                divisorText.c_str(),
+                                size,
+                                m_popup == Popup::Divisor) )
+        open(Popup::Divisor);
+    // 与桌面缩放入口相同，只显示放大镜图标，不挤入当前百分比。
+    // 缩放属于全局视觉配置，无谱面时同样允许预先调整。
+    if ( MobileNavigationButton("timeline-zoom",
+                                ICON_MMM_SEARCH,
+                                "",
+                                size,
+                                m_popup == Popup::Zoom) )
+        open(Popup::Zoom);
 }
 
 /// @brief 在屏幕内居中组合标题、可滚动正文与常驻关闭入口。
@@ -271,9 +279,9 @@ void MobilePlaybackControls::drawPopup(UIManager& manager, float scale,
                                ImGuiWindowFlags_NoSavedSettings) ) {
         auto& engine = Logic::EditorEngine::instance();
         // 隐藏工具栏或失去原会话时，只关闭组件自己的弹层。
-        // 分拍属于全局配置，不因活动谱面变化取消选择。
+        // 分拍和缩放属于全局配置，不因活动谱面变化取消选择。
         if ( !enabled ||
-             (m_popup != Popup::Divisor &&
+             (m_popup != Popup::Divisor && m_popup != Popup::Zoom &&
               (!engine.hasActiveBeatmap() ||
                engine.getActiveSessionIndex() != m_popupSessionIndex)) ) {
             // 打开期间切换或关闭谱面时，不能把旧弹层中的参数应用到另一张谱面。
@@ -284,6 +292,8 @@ void MobilePlaybackControls::drawPopup(UIManager& manager, float scale,
                     ? TR_CACHE("ui.toolbar.beat_divisor").data()
                 : m_popup == Popup::Keys
                     ? TR_CACHE("ui.settings.beatmap.tracks").data()
+                : m_popup == Popup::Zoom
+                    ? TR_CACHE("ui.settings.visual.timeline_zoom").data()
                     : TR_CACHE("ui.toolbar.playback_speed").data();
             // 标题使用业务翻译，长英文换行而不挤压关闭入口。
             ImGui::TextWrapped("%s", title);
@@ -311,7 +321,105 @@ void MobilePlaybackControls::drawPopup(UIManager& manager, float scale,
                 auto* service = manager.getEditorApplicationService();
                 // 每帧读取配置副本，只在本次真正操作以后修改目标字段。
                 // 不使用打开时的旧副本覆盖其他入口刚修改的设置。
-                if ( m_popup == Popup::Divisor ) {
+                if ( m_popup == Popup::Zoom ) {
+                    // 配置副本只覆盖本次操作；其余编辑与美化字段必须保留。
+                    // 应用服务不可用时仍可展示当前配置，但不会绕过服务提交。
+                    auto config =
+                        service
+                            ? service->editorConfig()
+                            : Config::AppConfig::instance().getEditorConfig();
+                    // 与桌面保持同一正数范围，对数映射保留低倍率的触摸精度。
+                    float percent = std::clamp(
+                        config.visual.timelineZoom * 100.0f, 10.0f, 1000.0f);
+                    // 下界不能取零，否则对数滑条映射失去定义。
+                    // 上界与画布滚轮共用，不能额外开放桌面不支持的倍率。
+                    bool changed = FeedbackSliderFloat(
+                        "##TimelineZoom",
+                        &percent,
+                        10.0f,
+                        1000.0f,
+                        "",
+                        flags | ImGuiSliderFlags_Logarithmic);
+                    // 拖动和本帧显示同时吸附到十个百分点，避免先闪过原始小数。
+                    // 预设 25% 或加减得到的 105% 在未拖动时仍保留原精度。
+                    if ( changed || ImGui::IsItemActive() ) {
+                        const float snapped =
+                            std::round(percent / 10.0f) * 10.0f;
+                        // 触点按下但尚未位移时也对齐，显示与提交从首帧起一致。
+                        // 仅吸附后的值变化才发布，防止空闲弹层重复更新配置。
+                        changed |= snapped != percent;
+                        percent = snapped;
+                    }
+                    // 隐藏原生滑条文字后覆盖吸附值；不创建新命中区或抢走触点。
+                    const auto text     = fmt::format("{:.0f}%", percent);
+                    const auto textSize = ImGui::CalcTextSize(text.c_str());
+                    // 使用实际滑条矩形，不依赖字体基线或窗口估算宽度。
+                    // DrawList 继承正文 Child 裁剪，不会覆盖固定关闭区。
+                    const auto minimum = ImGui::GetItemRectMin();
+                    const auto maximum = ImGui::GetItemRectMax();
+                    ImGui::GetWindowDrawList()->AddText(
+                        { (minimum.x + maximum.x - textSize.x) * .5f,
+                          (minimum.y + maximum.y - textSize.y) * .5f },
+                        ImGui::GetColorU32(ImGuiCol_Text),
+                        text.c_str());
+                    // 大命中高度只作用于滑条，后续按钮继续使用统一移动样式。
+                    ImGui::PopStyleVar();
+                    // 三个动作与桌面一致，按实际文字测量宽度并允许窄屏换行。
+                    // 微小容差仅抵消倍率转百分比的浮点误差，不改变步长。
+                    const auto [columns, width] = presetGrid("100%", 3, scale);
+                    // 边界只禁用方向按钮，保留其占位以避免预设排列跳动。
+                    ImGui::BeginDisabled(percent <= 10.0f);
+                    if ( MobileButton("-###ZoomOut",
+                                      { width, buttonHeight }) ) {
+                        // 向下选下一个五的倍数，兼容旧配置中的非整点数值。
+                        // 先对齐再减一档，不能让 100% 因浮点误差跳到 90%。
+                        percent = (std::ceil(percent / 5.0f - .0001f) - 1) * 5;
+                        changed = true;
+                    }
+                    ImGui::EndDisabled();
+                    if ( columns > 1 ) ImGui::SameLine();
+                    if ( MobileButton("100%###ZoomReset",
+                                      { width, buttonHeight }) ) {
+                        // 重置不依赖双击和键盘输入，单次触摸即可恢复默认。
+                        percent = 100.0f;
+                        changed = true;
+                    }
+                    // 第二个动作可能已经换行；第三个按实际列数决定续行。
+                    // 极窄屏可退为单列，仍保留三个独立的触摸目标。
+                    if ( 2 % columns != 0 ) ImGui::SameLine();
+                    ImGui::BeginDisabled(percent >= 1000.0f);
+                    if ( MobileButton("+###ZoomIn", { width, buttonHeight }) ) {
+                        // 与减号对称向上选择整档，连续点击保持固定步长。
+                        percent = (std::floor(percent / 5.0f + .0001f) + 1) * 5;
+                        changed = true;
+                    }
+                    ImGui::EndDisabled();
+                    // 常用倍率与桌面一致，完整范围仍由滑条与加减入口提供。
+                    const auto [presetColumns, presetWidth] =
+                        presetGrid("400%", 4, scale);
+                    // 预设另起一组计算列数，不继承上方三动作的换行状态。
+                    // 最长文本决定最小宽度，英文数字和百分号不会被截断。
+                    int column = 0;
+                    for ( const int preset : { 25, 50, 200, 400 } ) {
+                        if ( column++ % presetColumns != 0 ) ImGui::SameLine();
+                        if ( MobileButton(fmt::format("{}%", preset).c_str(),
+                                          { presetWidth, buttonHeight }) ) {
+                            percent = static_cast<float>(preset);
+                            changed = true;
+                        }
+                    }
+                    // 每次只回写最新配置的缩放字段，沿用桌面发布入口。
+                    // 缩放只影响时间尺度，不提交谱面编辑或音频速度命令。
+                    if ( changed && service ) {
+                        // 统一出口再次钳位，覆盖按钮舍入后的浮点边界误差。
+                        // 连续拖动立即发布，不等待抬手或固定毫秒窗口同步画布。
+                        config.visual.timelineZoom =
+                            std::clamp(percent / 100.0f, .1f, 10.0f);
+                        service->updateEditorConfig(config);
+                        // 与桌面包装入口一致，用户布局的持久化走后台单槽队列。
+                        Config::AppConfig::instance().saveLayoutChanges();
+                    }
+                } else if ( m_popup == Popup::Divisor ) {
                     auto config =
                         service
                             ? service->editorConfig()
