@@ -698,9 +698,15 @@ mmm_register_test_case(NAME MobileDockLayoutTest COMMAND MobileDockLayoutTest)
 # Android 暂不提供桌面文件选择器，兼容层明确报告不支持，不能静默丢失用户文件。
 if(ANDROID)
   target_sources(UI PRIVATE src/ui/utils/AndroidFileDialog.cpp)
+  # 参数弹层在移动组合根的面板结束后提交，不进入桌面工具栏更新流程。
+
   # 移动外壳不编译桌面组合根，避免两套布局分支交织在业务视图中。
-  target_sources(UI PRIVATE src/ui/workspace/MobileWorkspacePresentation.cpp
-                            src/ui/workspace/MobileButton.cpp)
+  target_sources(
+    UI
+    PRIVATE src/ui/workspace/MobileWorkspacePresentation.cpp
+            src/ui/workspace/MobileButton.cpp
+            # 参数控件保持独立，播放与轨数仍复用正式命令。
+            src/ui/workspace/MobilePlaybackControls.cpp)
 else()
   # 桌面完整保留原有外壳；公共布局入口只链接唯一的平台工厂。
   target_sources(UI PRIVATE src/ui/workspace/DesktopWorkspacePresentation.cpp

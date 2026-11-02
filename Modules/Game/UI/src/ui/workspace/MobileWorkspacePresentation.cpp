@@ -19,6 +19,7 @@
 #include "ui/workspace/IWorkspacePresentation.h"
 #include "ui/workspace/MobileButton.h"
 #include "ui/workspace/MobileDockLayout.h"
+#include "ui/workspace/MobilePlaybackControls.h"
 #include "ui/workspace/MobileTouchScroll.h"
 #include "ui/workspace/MobileWorkspaceModel.h"
 #include <algorithm>
@@ -68,7 +69,8 @@ public:
     /// @brief 抽屉与关闭手势释放保护统一阻挡画布原始输入。
     bool blocksCanvasInput() const override
     {
-        return m_model.blocksCanvasInput() || m_touchScroll.ownsPointer();
+        return m_model.blocksCanvasInput() || m_touchScroll.ownsPointer() ||
+               m_playbackControls.blocksCanvasInput();
     }
     /// @brief 手指没有悬浮状态，外壳采用按下与选中反馈。
     bool allowsHoverFeedback() const override { return false; }
@@ -123,6 +125,8 @@ private:
     /// @brief 当前帧几何不跨线程共享，旋转后立即重新计算。
     ImVec2 m_origin{}, m_size{};
     float  m_scale{ 1 }, m_padding{}, m_gap{}, m_toolbarWidth{};
+    /// @brief 参数弹层只持有 UI 意图和轨数标量，不拥有编辑会话。
+    MobilePlaybackControls m_playbackControls;
     /// @brief 中央宿主接收画布、欢迎和独立设置标签，不接收资源管理器停靠。
     ImGuiID m_centerDock{};
     /// @brief 绘制管理器时的固定内容矩形，退出作用域后不再使用。
@@ -173,7 +177,21 @@ void MobileWorkspacePresentation::beginFrame(UIManager& manager)
     // 移动状态只发布最新值，不为未变化的开关执行保存。
     settings.showTimelineWindow = m_showTiming;
     settings.showPreviewWindow  = m_showPreview;
-    m_toolbarWidth = m_showToolbar ? 64.0f * m_scale + 2.0f * m_padding : 0.0f;
+    // 按当前语言和字号预留最宽标签，数值变化不会改变工具栏宽度。
+    // 矮屏只增加滚动条槽位，不把按钮压到低于触摸尺寸。
+    const float buttonHeight =
+        std::max(72.0f * m_scale, ImGui::GetFontSize() * 2 + 16.0f * m_scale);
+    const float contentHeight =
+        buttonHeight * 7 +
+        std::floor(settings.aesthetics.itemSpacing * m_scale) * 6 +
+        2 * m_padding;
+    m_toolbarWidth =
+        m_showToolbar
+            ? MobilePlaybackControls::buttonWidth(m_scale) + 2 * m_padding +
+                  (contentHeight > m_size.y ? ImGui::GetStyle().ScrollbarSize
+                                            : 0.0f)
+            : 0.0f;
+    m_playbackControls.beginFrame();
     // 工具栏和把手不能共享同一命中区，纵向拖到任意位置也必须能选择工具。
     // 保留宽度传入纯模型，绘制与按下沿判定使用同一个移位后的矩形。
     m_model.resize(m_size.x, m_size.y, m_scale, m_toolbarWidth);
@@ -250,6 +268,9 @@ bool MobileWorkspacePresentation::beginPanel(const char* id, MobileRect rect,
     // 位置与尺寸由外壳管理，因此不写入通用 imgui.ini。
     auto flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
                  ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings;
+    // 七个直接入口在矮屏上允许滚动；空白拖动继续交给统一触屏滚动器。
+    if ( std::string_view(id) == "MobileTouchToolbar" )
+        flags &= ~ImGuiWindowFlags_NoScrollbar;
     if ( !background ) flags |= ImGuiWindowFlags_NoBackground;
     // Begin 即使不可见也必须由调用方 End，保留 ImGui 栈平衡。
     // 普通弹出菜单已经打开时不重排窗口，避免遮罩盖住其菜单项。
@@ -623,12 +644,15 @@ void MobileWorkspacePresentation::drawToolbar(UIManager& manager)
                      "tool",
                      icons[index],
                      label,
-                     { rect.m_width - 2 * m_padding, 72 * m_scale },
+                     { ImGui::GetContentRegionAvail().x, 72 * m_scale },
                      service && service->currentTool() == tool) )
                 MenuUtil::dispatchCommand(Logic::CmdChangeTool{ tool });
             ImGui::PopID();
             ++index;
         }
+        // 参数与工具共用同一滚动区域，短屏不会让最后一项永久落在视口外。
+        m_playbackControls.drawButtons(
+            manager, ImGui::GetContentRegionAvail().x, m_scale);
     }
     ImGui::End();
 }
@@ -742,6 +766,8 @@ void MobileWorkspacePresentation::endFrame(UIManager& manager)
         drawHandle("MobileLeftHandle", m_model.leftHandle());
         drawHandle("MobileRightHandle", m_model.rightHandle());
     }
+    // 参数弹层在所有边缘面板结束后提交，保持独立的裁剪区和输入优先级。
+    m_playbackControls.drawPopup(manager, m_scale, m_showToolbar);
     drawExitConfirmation();
     m_touchScroll.endFrame();
     m_dock.finishFrame();
