@@ -33,6 +33,8 @@ public:
     virtual bool blocksCanvasInput() const { return false; }
     /// @brief 平台是否使用鼠标悬浮反馈，触摸外壳只使用按下反馈。
     virtual bool allowsHoverFeedback() const { return true; }
+    /// @brief 当前数值组件允许水平拖动；桌面无需额外登记。
+    virtual void registerHorizontalDragItem() {}
     /// @brief 是否恢复桌面停靠树及原生窗口位置，移动外壳独立管理几何。
     virtual bool usesDesktopLayout() const { return true; }
     /// @brief 是否显示应用内音频输出设备选择；移动端交由系统音频路由管理。
@@ -67,6 +69,9 @@ bool beginWorkspaceWindow(std::string_view id, const std::string& title,
 bool workspaceBlocksCanvasInput();
 /// @brief 供公共反馈设施查询平台策略；没有 UI 帧时保留桌面悬浮行为。
 bool workspaceAllowsHoverFeedback();
+/// @brief 为刚提交的数值控件登记横向拖动，默认桌面路径为空操作。
+/// @warning 每帧固定次数策略转发，不保留组件引用。
+void workspaceRegisterHorizontalDragItem();
 /// @brief 查询本帧的音频设备选择能力；没有工作区作用域时保留桌面行为。
 bool workspaceShowsAudioOutputDeviceSelector();
 /// @brief 公共弹窗复用当前平台操作按钮，无帧作用域时保持桌面入口。

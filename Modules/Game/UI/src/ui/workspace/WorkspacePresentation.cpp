@@ -87,6 +87,14 @@ bool workspaceAllowsHoverFeedback()
     return !activePresentation || activePresentation->allowsHoverFeedback();
 }
 
+/// @brief 数值组件仅提交语义，是否进行触摸方向仲裁由当前外壳决定。
+/// @details 无平台作用域的桌面和测试不改变原生输入行为。
+/// @warning 固定次数虚调用，不复制所有权或创建每帧登记容器。
+void workspaceRegisterHorizontalDragItem()
+{
+    if ( activePresentation ) activePresentation->registerHorizontalDragItem();
+}
+
 /// @brief 将平台设备选择能力传给共享混音视图，不向业务视图泄漏平台宏。
 /// @details 布局准备在 UI 主线程捕获此值，后台计算只读取快照中的布尔量。
 /// 无作用域的桌面测试与旧入口保持原有可见性，不依赖设备枚举推断平台。

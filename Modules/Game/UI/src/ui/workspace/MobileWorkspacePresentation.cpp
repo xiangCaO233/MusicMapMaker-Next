@@ -58,6 +58,11 @@ public:
     }
     /// @brief 布局和手势先于原始画布输入，拖动过程中不使用定时阻塞。
     void beginFrame(UIManager& manager) override;
+    /// @brief 数值组件显式声明横向拖动，纵向手势仍可滚动所在内容。
+    void registerHorizontalDragItem() override
+    {
+        m_touchScroll.registerHorizontalDragItem();
+    }
     /// @brief 只创建移动主画布宿主，不绘制桌面菜单栏和状态栏。
     void renderWorkspace(MainDockSpaceUI&, UIManager& manager) override;
     /// @brief 管理器由抽屉组合，窗口开关由移动端入口管理。
@@ -115,7 +120,7 @@ private:
 
     /// @brief 纯手势状态只属于 UI 线程，关闭抽屉不影响文件选择状态。
     MobileWorkspaceModel m_model;
-    /// @brief 全局空白拖动滚动，只接管触屏，业务画布仍保留自己的绘制手势。
+    /// @brief 全局内容拖动滚动，只接管触屏，业务画布仍保留自己的绘制手势。
     MobileTouchScroll m_touchScroll;
     /// @brief 主画布与辅助窗口共用水平停靠树，标签与内容高度同步。
     MobileDockLayout m_dock;
@@ -240,7 +245,7 @@ void MobileWorkspacePresentation::beginFrame(UIManager& manager)
                    io.DeltaTime,
                    popupOpen);
     m_touchScroll.beginFrame(m_scale);
-    // 仅预采样触点；控件提交后才确认空白，不抢先吞掉按钮按下。
+    // 可滚动内容先仲裁方向；组件只在确认轻点或横向调值后收到按下。
 }
 
 /// @brief 从公共更新序列中移出由抽屉承载的管理器窗口。

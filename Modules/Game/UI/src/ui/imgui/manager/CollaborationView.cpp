@@ -1837,6 +1837,8 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
                              5,
                              60,
                              "%d Hz");
+            // 纵向滑过该设置行滚动，横向才交给数值拖动。
+            workspaceRegisterHorizontalDragItem();
             if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                 // 拖动结束才提交最终值，避免每个像素变化发送配置更新。
                 m_room->setViewportPublishRateHz(
