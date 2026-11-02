@@ -11,6 +11,7 @@
 #include "ui/IEditorApplicationService.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
+#include "ui/imgui/CanvasTabManager.h"
 #include "ui/imgui/FloatingManagerUI.h"
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/ShortcutUtils.h"
@@ -70,7 +71,8 @@ public:
     bool blocksCanvasInput() const override
     {
         return m_model.blocksCanvasInput() || m_touchScroll.ownsPointer() ||
-               m_playbackControls.blocksCanvasInput();
+               m_playbackControls.blocksCanvasInput() ||
+               m_dock.tabMenuOwnsPointer();
     }
     /// @brief 手指没有悬浮状态，外壳采用按下与选中反馈。
     bool allowsHoverFeedback() const override { return false; }
@@ -94,6 +96,9 @@ public:
 private:
     /// @brief 固定位置的移动外壳窗口，不写入桌面 imgui.ini。
     bool beginPanel(const char* id, MobileRect rect, bool background = true);
+    /// @brief 标签长按菜单只提出关闭意图，保存确认和视图回收继续由业务负责。
+    /// @warning 每个停靠窗口每帧调用，仅查询已注册画布集合大小。
+    void processTabMenu(std::string_view id, bool* open, bool mainCanvas);
     /// @brief 绘制最小触摸区域与细握柄，点击和拖动共用状态机。
     void drawHandle(const char* id, MobileRect rect, bool opened = false);
     /// @brief 左侧第一级提供常用分类，第二级保留现有业务管理器。
@@ -133,6 +138,8 @@ private:
     MobileRect m_contentRect;
     /// @brief 返回事件订阅由组合根生命周期管理。
     Event::SubscriptionID m_backSubscription{};
+    /// @brief 仅在当前 UI 帧借用管理器，帧末清空，不传给后台任务。
+    UIManager* m_frameManager{};
 };
 
 /// @brief 在业务视图读取输入之前建立本帧移动工作区快照。
@@ -142,6 +149,7 @@ private:
 /// @warning UI 每帧执行；只有固定规模数学、局部状态与输入采样。
 void MobileWorkspacePresentation::beginFrame(UIManager& manager)
 {
+    m_frameManager = &manager;
     // 工作区使用平台已经扣除安全区后的矩形，不硬编码状态栏高度。
     const auto* viewport = ImGui::GetMainViewport();
     m_origin             = viewport->WorkPos;
@@ -324,14 +332,15 @@ void MobileWorkspacePresentation::renderWorkspace(MainDockSpaceUI&,
 /// @brief 将共享业务窗口接入移动外壳的当前绘制作用域。
 /// @param id 视图稳定身份，负责区分画布、欢迎页和边缘编辑窗口。
 /// @param title 保留业务提供的标题及内部 ID，不据可见文字推断窗口类型。
-/// @details 关闭指针由移动外壳统一移除，显示开关不再依赖标签 X。
+/// @details 原生标签不显示 X，长按菜单把关闭意图交回业务打开指针。
 /// 抽屉内容与中央画布共用业务对象，但采用不同的几何和输入归属。
 /// @warning 仅在 UI 窗口 Begin 前执行，禁止从并行准备任务调用。
 bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
-                                              const std::string& title, bool*,
+                                              const std::string& title,
+                                              bool*              open,
                                               ImGuiWindowFlags   flags)
 {
-    // 所有普通窗口不再传入关闭指针；显示与收起只能通过移动端入口改变。
+    // 不把关闭指针交给原生标签，避免 X 与长按菜单形成两套关闭入口。
     flags |=
         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
     // 分类使用注册名，不依赖皮肤语言或当前谱面名称。
@@ -364,6 +373,7 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
             m_dock.target(MobileDockPanel::Main, name.c_str());
             const bool visible = ImGui::Begin(name.c_str(), nullptr, flags);
             ImGui::PopStyleVar();
+            processTabMenu(id, open, true);
             return visible;
         }
         // 内容层沿用原有配置与数据，外壳只替换显示位置和关闭方式。
@@ -404,12 +414,50 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
     // 只提升当前抽屉内容的显示层级，不主动夺走文本编辑焦点。
     const bool visible = ImGui::Begin(title.c_str(), nullptr, flags);
     if ( docked ) ImGui::PopStyleVar();
+    if ( docked ) processTabMenu(id, open, false);
     if ( m_drawingDrawer &&
          !ImGui::IsPopupOpen(
              nullptr,
              ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) )
         ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
     return visible;
+}
+
+/// @brief 统一处理移动标签关闭，辅助窗口显隐与抽屉开关保持同一状态。
+/// @details 不注销画布或直接关闭会话，未保存确认继续经过原有视图生命周期。
+/// @param id 稳定视图身份，辅助窗口显隐不依赖可见标题。
+/// @param open 本次 Begin 作用域的关闭状态，不保存指针或延长其生命周期。
+/// @param mainCanvas 主画布额外检查数量，欢迎和设置不参加该保护条件。
+/// @warning UI 热路径不查询逻辑会话；画布数取 UI 线程已注册集合。
+void MobileWorkspacePresentation::processTabMenu(std::string_view id,
+                                                 bool* open, bool mainCanvas)
+{
+    const auto* tabs =
+        m_frameManager
+            ? m_frameManager->getView<CanvasTabManager>("CanvasTabManager")
+            : nullptr;
+    // 最后一个主画布即使打开了欢迎或设置页，也不能被当作多画布关闭。
+    const bool canClose =
+        open && *open && (!mainCanvas || (tabs && tabs->hasMultipleCanvases()));
+    if ( !m_dock.tabCloseRequested(
+             TR_CACHE("ui.window.close").data(),
+             m_scale,
+             canClose,
+             !m_model.blocksCanvasInput() &&
+                 !m_playbackControls.blocksCanvasInput()) )
+        return;
+    // open 可能是辅助窗口的栈变量，必须在这次同步 Begin 作用域内写回。
+    // 业务画布下一帧再处理保存确认，不能在此直接注销正在绘制的视图。
+    *open = false;
+    // 辅助窗口保留注册对象，仅收起显示；下一帧建树会移除对应叶节点。
+    if ( id == "TimelineWindow" || id == "Timeline" ) m_showTiming = false;
+    if ( id == "PreviewWindow" ) m_showPreview = false;
+    // 设置可能正处于录制状态；关闭后不能留下吞键的全局录制标志。
+    if ( std::string_view(ImGui::GetCurrentWindow()->Name)
+             .ends_with("###SettingsWindow") )
+        ShortcutUtils::setShortcutRecordingActive(false);
+    // 设置、辅助窗口和中央标签都在明确关闭边沿捕获布局，而非逐帧保存。
+    m_commitLayout = true;
 }
 
 /// @brief 只绘制握柄，不再建立第二套点击或拖动状态。
@@ -600,6 +648,15 @@ void MobileWorkspacePresentation::drawRightDrawer(UIManager& manager,
                  TR_CACHE("title.settings_manager").data(),
                  { rect.m_width - 2 * m_padding, 56 * m_scale }) ) {
             manager.openSettingsWindow(Event::SettingsTab::Software);
+            m_model.closeDrawer();
+        }
+        // 欢迎标签关闭后仍有纯触屏重开入口，不要求重启或使用桌面菜单。
+        if ( MobileActionButton(
+                 "MobileWelcome",
+                 ICON_MMM_BOOK,
+                 TR_CACHE("ui.welcome.title").data(),
+                 { rect.m_width - 2 * m_padding, 56 * m_scale }) ) {
+            manager.openWelcome();
             m_model.closeDrawer();
         }
     }
@@ -793,6 +850,7 @@ void MobileWorkspacePresentation::endFrame(UIManager& manager)
         request.type = Event::NativeEventType::GLFW_CLOSE_WINDOW;
         Event::EventBus::instance().publish(request);
     }
+    m_frameManager = nullptr;
 }
 
 /// @brief 将当前移动布局按值冻结，配置层仅在实际变化时发布后台请求。

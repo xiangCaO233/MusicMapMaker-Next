@@ -60,6 +60,13 @@ public:
         return !m_initializedCanvases.empty();
     }
 
+    /// @brief 移动标签关闭策略查询已注册主画布数，不将欢迎或设置页计入。
+    /// @warning UI 热路径只读取 UI 线程集合大小，不获取逻辑会话锁。
+    [[nodiscard]] bool hasMultipleCanvases() const
+    {
+        return m_initializedCanvases.size() > 1;
+    }
+
     /// @brief 查询工作区是否至少包含一个真实谱面编辑器标签页。
     /// @warning UI 热路径：只读取本帧工作区快照归约出的布尔状态。
     [[nodiscard]] bool hasOpenBeatmapCanvas() const
