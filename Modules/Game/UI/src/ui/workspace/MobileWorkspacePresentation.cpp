@@ -367,9 +367,11 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
         if ( m_model.blocksCanvasInput() ) flags |= ImGuiWindowFlags_NoInputs;
         if ( mainCanvas ) {
             const std::string name =
-                TR_CACHE("ui.mobile.main_canvas").toString() + "###" +
-                std::string(id);
-            // 显示标题改写后再次匹配固定身份，恢复不依赖项目标题文本。
+                open ? title
+                     : TR_CACHE("ui.mobile.main_canvas").toString() + "###" +
+                           std::string(id);
+            // 真实谱面直接沿用业务标题中的谱名、脏标记和协作状态。
+            // 空占位画布没有关闭指针，保留简洁名称；### 后身份不发生变化。
             m_dock.target(MobileDockPanel::Main, name.c_str());
             const bool visible = ImGui::Begin(name.c_str(), nullptr, flags);
             ImGui::PopStyleVar();

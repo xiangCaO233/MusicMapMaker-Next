@@ -313,6 +313,16 @@ void drawScrollingText(std::string_view text, ImVec2 startPos,
                        float availableWidth, float targetHeight,
                        bool centerWhenFits = false);
 
+/// @brief 向指定宿主绘制同一滚动文本，用于原生停靠标签等独立绘制层。
+/// @param drawList 已由调用方确定生命周期的宿主绘制列表。
+/// @param color 主题已计算的文字颜色，不重复应用窗口透明度。
+/// @details 只操作绘制列表的局部裁剪，不切换当前业务窗口或改变输入矩形。
+/// @warning UI 热路径：复用原有滚动曲线，不分配资源或创建交互 Item。
+void drawScrollingTextOnDrawList(ImDrawList& drawList, std::string_view text,
+                                 ImVec2 startPos, float availableWidth,
+                                 float targetHeight, ImU32 color,
+                                 bool centerWhenFits = false);
+
 /// @brief Selectable 滚动文本核心绘制结果。
 struct ScrollingSelectableResult {
     /// @brief 背景 Selectable 本帧是否被点击。
