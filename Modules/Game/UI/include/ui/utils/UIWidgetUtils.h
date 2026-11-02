@@ -390,11 +390,12 @@ bool renderScrollingCollapsingHeader(const std::string& id,
 /// @param height 控件高度。
 /// @param isLeaf 是否为叶子节点。
 /// @param tooltip 悬浮提示文本。
+/// @param icon 独立前导图标；触屏为其保留固定位置，文件名在右侧换行。
 /// @return 本帧交互结果。
 /// @warning UI 热路径：只执行 ImGui 控件绘制和局部文本滚动计算。
 ScrollingTreeNodeResult renderScrollingTreeNodeCore(
     const std::string& id, const std::string& text, float width, float height,
-    bool isLeaf, const std::string& tooltip = "");
+    bool isLeaf, const std::string& tooltip = "", std::string_view icon = {});
 
 /// @brief 渲染带自动滚动的树节点（针对文件浏览器）。
 /// @param id ImGui 控件 ID。
@@ -404,15 +405,17 @@ ScrollingTreeNodeResult renderScrollingTreeNodeCore(
 /// @param isLeaf 是否为叶子节点。
 /// @param onClick 点击回调。
 /// @param tooltip 悬浮提示文本。
+/// @param icon 独立前导图标；不参与文本换行或控件 ID。
 /// @return 本帧展开状态。
 /// @warning UI 热路径：模板层只分发点击回调，绘制逻辑在 .cpp 中。
 template<typename OnClick>
 bool renderScrollingTreeNode(const std::string& id, const std::string& text,
                              float width, float height, bool isLeaf,
-                             OnClick onClick, const std::string& tooltip = "")
+                             OnClick onClick, const std::string& tooltip = "",
+                             std::string_view icon = {})
 {
-    const auto result =
-        renderScrollingTreeNodeCore(id, text, width, height, isLeaf, tooltip);
+    const auto result = renderScrollingTreeNodeCore(
+        id, text, width, height, isLeaf, tooltip, icon);
     if ( result.clicked ) {
         onClick();
     }

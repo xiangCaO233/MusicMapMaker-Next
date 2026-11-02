@@ -1032,8 +1032,8 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
 
         // 首列承载树层级、图标、名称和激活动作。
         ImGui::TableNextColumn();
-        const std::string displayName =
-            fmt::format("{}  {}", fileEntryIcon(entry), entry.filename);
+        // 图标与原始文件名单独传入，触屏换行不能把图标挤成独立一行。
+        // 显示分离不改变路径 ID、排序、激活或拖放使用的目录快照。
         const float nameColumnWidth = ImGui::GetContentRegionAvail().x;
         // TreeNode 默认 header 颜色设透明，整行 hover 由表格背景统一处理。
         const ImVec4 transparent{ 0.0f, 0.0f, 0.0f, 0.0f };
@@ -1043,7 +1043,7 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
         // 文件作为叶节点，目录返回 open 状态决定是否递归。
         const bool open = Utils::renderScrollingTreeNode(
             entry.fullPath,
-            displayName,
+            entry.filename,
             nameColumnWidth,
             itemH,
             !entry.isDirectory,
@@ -1051,7 +1051,8 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
                 // 激活回调在当前条目引用仍有效的同一绘制调用内执行。
                 activateFileEntry(entry, sourceManager);
             },
-            "");
+            "",
+            fileEntryIcon(entry));
         ImGui::PopStyleColor(3);
 
         // 以 ImGui 表格行边界和首列结算高度判定 Hover，避免手算偏差。

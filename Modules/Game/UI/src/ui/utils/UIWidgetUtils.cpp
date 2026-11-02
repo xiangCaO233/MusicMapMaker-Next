@@ -9,6 +9,8 @@
 #include "ui/layout/CLayDefs.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 
+#include <fmt/format.h>
+
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
@@ -338,13 +340,12 @@ bool renderScrollingCollapsingHeader(const std::string& id,
 /// @param height 控件高度。
 /// @param isLeaf 是否为叶子节点。
 /// @param tooltip 悬浮提示文本。
+/// @param icon 独立前导图标；与文件名共用首行基线，不参与换行。
 /// @return 本帧交互结果。
 /// @warning UI 热路径：只执行 ImGui 控件绘制和局部文本滚动计算。
-ScrollingTreeNodeResult renderScrollingTreeNodeCore(const std::string& id,
-                                                    const std::string& text,
-                                                    float width, float height,
-                                                    bool               isLeaf,
-                                                    const std::string& tooltip)
+ScrollingTreeNodeResult renderScrollingTreeNodeCore(
+    const std::string& id, const std::string& text, float width, float height,
+    bool isLeaf, const std::string& tooltip, std::string_view icon)
 {
     // 保存原始游标，TreeNode 提交后在同一行上覆盖可见滚动文本。
     const ImVec2      cursorPos   = ImGui::GetCursorScreenPos();
@@ -358,11 +359,19 @@ ScrollingTreeNodeResult renderScrollingTreeNodeCore(const std::string& id,
         std::max(1.0f,
                  width - treeGutterWidth -
                      (touchLayout ? 2 * style.FramePadding.x : 8.0f));
+    // 图标单独占用固定槽位，不能作为英文单词换行算法里的第一个词。
+    // 宽度按当前字体实测，间隔沿用主题；后续所有文件名行共用右侧起点。
+    // 触屏只借用图标和名称，不再为每个可见条目拼接临时字符串。
+    const float iconWidth =
+        touchLayout && !icon.empty()
+            ? ImGui::CalcTextSize(icon.data(), icon.data() + icon.size()).x +
+                  style.ItemInnerSpacing.x
+            : 0.0f;
+    const float nameWidth = std::max(1.0f, textAvailableWidth - iconWidth);
     const float textHeight =
-        touchLayout ? ImGui::CalcTextSize(
-                          text.c_str(), nullptr, false, textAvailableWidth)
-                          .y
-                    : ImGui::GetFontSize();
+        touchLayout
+            ? ImGui::CalcTextSize(text.c_str(), nullptr, false, nameWidth).y
+            : ImGui::GetFontSize();
     // 先把完整换行高度交给 TreeNode，再提交文字；命中区与表格下一行同步增高。
     // 只测量当前可见节点，不扫描目录，也不缓存可能跨字体重载失效的字形。
     const float targetHeight = std::max(
@@ -404,7 +413,7 @@ ScrollingTreeNodeResult renderScrollingTreeNodeCore(const std::string& id,
     const ImVec2 textStartPos = { cursorPos.x + treeGutterWidth, cursorPos.y };
 
     if ( touchLayout ) {
-        // 手指没有悬浮状态，完整名称直接换行，不再按时间横移或隐藏开头图标。
+        // 手指没有悬浮状态，完整名称在固定图标右侧换行，不按时间横移。
         // 绘制列表不提交第二个 Item，点击、目录展开和拖放仍属于原 TreeNode。
         ImGui::PushClipRect(textStartPos,
                             { textStartPos.x + textAvailableWidth,
@@ -412,19 +421,39 @@ ScrollingTreeNodeResult renderScrollingTreeNodeCore(const std::string& id,
                             true);
         // 与父表格裁剪区求交，保留冻结表头及滚动边界，换行不能越界覆盖下一面板。
         // 显式传入测量时的字体和字号，避免皮肤字体切换后绘制使用不同的换行宽度。
+        const float textY = textStartPos.y + (targetHeight - textHeight) * .5f;
+        if ( !icon.empty() ) {
+            // 图标始终和首行对齐；不提交额外 Item，整行选择和拖放仍由 TreeNode
+            // 接收。
+            ImGui::GetWindowDrawList()->AddText(
+                ImGui::GetFont(),
+                ImGui::GetFontSize(),
+                { textStartPos.x, textY },
+                ImGui::GetColorU32(ImGuiCol_Text),
+                icon.data(),
+                icon.data() + icon.size());
+        }
         ImGui::GetWindowDrawList()->AddText(
             ImGui::GetFont(),
             ImGui::GetFontSize(),
-            { textStartPos.x,
-              textStartPos.y + (targetHeight - textHeight) * .5f },
+            { textStartPos.x + iconWidth, textY },
             ImGui::GetColorU32(ImGuiCol_Text),
             text.c_str(),
             nullptr,
-            textAvailableWidth);
+            nameWidth);
         ImGui::PopClipRect();
     } else {
         // 桌面继续使用原有单行跑马灯，不改变其行高和鼠标交互。
-        drawScrollingText(text, textStartPos, textAvailableWidth, targetHeight);
+        // 仍把图标和名称作为同一滚动段，保留原来的双空格间隔与分配频率。
+        if ( icon.empty() ) {
+            drawScrollingText(
+                text, textStartPos, textAvailableWidth, targetHeight);
+        } else {
+            drawScrollingText(fmt::format("{}  {}", icon, text),
+                              textStartPos,
+                              textAvailableWidth,
+                              targetHeight);
+        }
     }
     return { .open = open, .clicked = isClicked };
 }
