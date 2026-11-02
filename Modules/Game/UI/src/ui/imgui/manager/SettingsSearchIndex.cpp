@@ -141,18 +141,25 @@ SettingsSearchIndex::SettingsSearchIndex()
 /// - 同分时保留目录顺序，避免输入期间候选无故交换位置。
 /// Translate 返回翻译池视图，仅在本次低频重建中复制为索引拥有的文本。
 /// 双语别名与当前皮肤覆写文案并存，不因切换界面语言丢失另一语言入口。
+/// @param showCursorSettings 纯触屏工作区关闭光标组检索，桌面保持默认可见。
 /// @warning UI 热路径常态帧只比较查询与版本，过滤和排序仅发生在缓存失效时。
 void SettingsSearchIndex::update(std::string_view query,
                                  uint32_t         translationVersion,
-                                 const Translate& translate)
+                                 const Translate& translate,
+                                 bool             showCursorSettings)
 {
     // 先比较原始输入的归一化形式，英文大小写和首尾空白不会重复重建结果。
     const bool languageChanged =
         !m_translated || m_translationVersion != translationVersion;
-    if ( !languageChanged && query == m_input ) return;
-    m_input        = query;
-    auto nextQuery = fold(query);
-    if ( !languageChanged && nextQuery == m_query ) return;
+    // 可见性变化必须重建命中缓存，即使查询和语言都没有改变。
+    // 保留完整目录中的稳定索引，避免平台筛选后导航落到另一条设置。
+    const bool visibilityChanged = m_showCursorSettings != showCursorSettings;
+    if ( !languageChanged && !visibilityChanged && query == m_input ) return;
+    m_showCursorSettings = showCursorSettings;
+    m_input              = query;
+    auto nextQuery       = fold(query);
+    if ( !languageChanged && !visibilityChanged && nextQuery == m_query )
+        return;
     m_query = std::move(nextQuery);
     if ( languageChanged ) {
         for ( auto& entry : m_entries ) {
@@ -189,6 +196,10 @@ void SettingsSearchIndex::update(std::string_view query,
     const auto words = tokens(m_query);
     for ( std::size_t i = 0; i < m_entries.size(); ++i ) {
         const auto& entry = m_entries[i];
+        // 按整组身份筛选，样式、尺寸、拖尾及烟雾参数都不能从搜索重新出现。
+        if ( !m_showCursorSettings &&
+             entry.m_sectionKey == "ui.settings.software.cursor_params" )
+            continue;
         // 每个词都必须命中；例如“视觉 偏移”能够跨分类和标签两个字段匹配。
         if ( !std::all_of(words.begin(), words.end(), [&entry](auto word) {
                  return entry.m_searchText.find(word) != std::string::npos;

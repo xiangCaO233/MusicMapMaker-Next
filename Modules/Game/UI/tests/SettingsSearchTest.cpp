@@ -119,13 +119,17 @@ std::string_view translate(std::string_view key)
 /// @brief 将查询转换为稳定标签键集合，避免断言依赖可见语言或结果行号。
 /// @param index 使用生产内置目录的索引。
 /// @param query 用户可输入的关键词或多词组合。
+/// @param showCursorSettings 模拟桌面或纯触屏工作区的光标组可见性。
 /// @return 命中真实行的稳定标签键集合。
 /// @details 排序在单独用例验证，此处只检查跨语言命中身份。
 std::set<std::string> matches(SettingsSearchIndex& index,
-                              std::string_view     query)
+                              std::string_view     query,
+                              bool                 showCursorSettings = true)
 {
-    index.update(
-        query, MMM::Translation::getActiveTranslator().getVersion(), translate);
+    index.update(query,
+                 MMM::Translation::getActiveTranslator().getVersion(),
+                 translate,
+                 showCursorSettings);
     std::set<std::string> result;
     for ( const auto& match : index.results() )
         result.insert(index.entries()[match.m_index].m_labelKey);
@@ -224,6 +228,20 @@ bool checkSynonyms()
     };
     for ( const auto* language : { "zh_cn", "en_us" } ) {
         if ( !translator.switchLang(language) ) return false;
+        // 相同查询跨平台切换也必须使缓存失效，不能残留桌面的光标组命中。
+        // 逐个检查组内稳定标签键，覆盖全部参数，而非仅检查本地化的组名。
+        // 分组键不作为搜索词收录，不能用它构造本来就不命中的查询。
+        for ( const auto& entry : index.entries() ) {
+            if ( entry.m_sectionKey != "ui.settings.software.cursor_params" )
+                continue;
+            // 目录身份在重译和筛选期间保持稳定，查询不依赖结果行号。
+            const auto desktopCursor = matches(index, entry.m_labelKey);
+            if ( !desktopCursor.contains(entry.m_labelKey) ||
+                 matches(index, entry.m_labelKey, false)
+                     .contains(entry.m_labelKey) ||
+                 matches(index, entry.m_labelKey) != desktopCursor )
+                return false;
+        }
         for ( const auto* query : { "offset", "  OFFSET\t", "偏移", "误差" } ) {
             const auto result = matches(index, query);
             // 允许其他明确含偏移的设置出现，但截图中的三项必须全部命中。

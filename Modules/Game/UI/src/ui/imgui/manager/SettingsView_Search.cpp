@@ -4,6 +4,7 @@
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/manager/SettingsSearchIndex.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 
 #include "imgui.h"
 
@@ -26,16 +27,23 @@ void SettingsView::drawSettingsSearchBar()
     const auto translate = [&translator](std::string_view key) {
         return translator.translate(Hash::hashString(key), key.data()).view();
     };
-    m_settingsSearch->update(
-        m_settingsSearchInput.data(), translator.getVersion(), translate);
+    // 与软件页共用工作区能力；触屏端不提供光标设置的搜索或导航入口。
+    // 常态更新和输入变化必须传入同一能力，避免重复查询时复用桌面结果。
+    const bool showCursorSettings = workspaceAllowsHoverFeedback();
+    m_settingsSearch->update(m_settingsSearchInput.data(),
+                             translator.getVersion(),
+                             translate,
+                             showCursorSettings);
     // 搜索占用自己的整行，窗口窄时操作按钮放在下一行，避免挤掉输入框。
     ImGui::SetNextItemWidth(-1.0f);
     if ( ImGui::InputTextWithHint("##SettingsSearch",
                                   TR_CACHE("ui.settings.search.hint").data(),
                                   m_settingsSearchInput.data(),
                                   m_settingsSearchInput.size()) ) {
-        m_settingsSearch->update(
-            m_settingsSearchInput.data(), translator.getVersion(), translate);
+        m_settingsSearch->update(m_settingsSearchInput.data(),
+                                 translator.getVersion(),
+                                 translate,
+                                 showCursorSettings);
         m_showSettingsSearchResults = m_settingsSearch->hasQuery();
         // 新查询取消旧定位，不能让旧高亮或滚动抢占新结果列表。
         m_settingsSearchTarget.reset();
