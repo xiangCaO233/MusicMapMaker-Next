@@ -1,4 +1,5 @@
 #include "ui/workspace/MobileDockLayout.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
 #include <cmath>
 #include <imgui_internal.h>
@@ -45,6 +46,19 @@ void MobileDockLayout::capture(float& timingRatio, float& previewRatio,
 /// @warning 每帧只查找一个固定窗口 ID，无遍历、资源创建或同步等待。
 void MobileDockLayout::finishFrame()
 {
+    // 菜单状态先于启动焦点的早退处理，关闭标签后也必须推进释放保护。
+    // 释放帧也保持输入保护，直到下一个没有触点的完整帧才交还画布。
+    if ( !ImGui::IsMouseDown(0) && !ImGui::IsMouseReleased(0) )
+        m_releaseGuard = false;
+    // 原窗口可能被项目切换移除，不能让失效身份永久占用输入。
+    if ( m_menuWindow ) {
+        const auto* window = ImGui::FindWindowByID(m_menuWindow);
+        if ( !window || !window->Active ) {
+            m_menuWindow   = 0;
+            m_releaseGuard = true;
+        }
+    }
+    if ( !ImGui::IsMouseDown(0) ) m_holdWindow = 0;
     if ( !m_startupFocus ) return;
     if ( ImGui::IsMouseClicked(0) ) {
         m_startupFocus = m_restoreFocus = 0;
@@ -58,6 +72,110 @@ void MobileDockLayout::finishFrame()
     if ( auto* window = ImGui::FindWindowByID(m_startupFocus);
          window && window->Active )
         ImGui::FocusWindow(window);
+}
+
+/// @brief 用非阻塞长按打开标签操作菜单，关闭仍由业务窗口消费原有打开指针。
+/// @details 命中原生标签实际矩形，并扣除滚动裁剪，不能把标签旁空白当作标签。
+/// @param closeLabel 当前界面语言的关闭文案，不参与窗口身份计算。
+/// @param scale 触摸容差和命中高度的内容倍率，不覆盖主题圆角。
+/// @param canClose 业务关闭权限，无可用操作时不弹出空菜单。
+/// @param enabled 是否允许开始新手势，不影响已经打开菜单的正常取消。
+/// @warning UI 热路径：只读取当前 Dock 标签与触点标量，不保存窗口观察指针。
+bool MobileDockLayout::tabCloseRequested(const char* closeLabel, float scale,
+                                         bool canClose, bool enabled)
+{
+    auto* window = ImGui::GetCurrentWindow();
+    auto* bar    = window->DockNode ? window->DockNode->TabBar : nullptr;
+    auto* tab    = bar ? ImGui::TabBarFindTabByID(bar, window->TabId) : nullptr;
+    // 初次 Begin 尚未建立标签时先不识别长按，等待下一帧真实几何。
+    if ( !tab ) return false;
+    // 跟随原生标签排序与滚动，不按标题文本宽度另建一份命中几何。
+    // 当前预编译 ImGui 尚未导出 TabBarGetTabPos，按官方标签布局公式换算。
+    const float scroll =
+        tab->Flags & ImGuiTabItemFlags_SectionMask_ ? 0.0f : bar->ScrollingAnim;
+    const ImVec2 position{ bar->BarRect.Min.x +
+                               std::trunc(tab->Offset - scroll),
+                           bar->BarRect.Min.y };
+    ImRect rect(position, { position.x + tab->Width, bar->BarRect.Max.y });
+    // 当前窗口的内容裁剪不包含标签栏，不能用 IsItemHovered 代替标签命中。
+    rect.ClipWith(bar->BarRect);
+    if ( !(tab->Flags & ImGuiTabItemFlags_SectionMask_) ) {
+        // 普通标签随滚动裁剪，首尾露出部分以外的按下不属于这个标签。
+        // 固定前后缀标签不参加滚动，因此只对中间区应用这一边界。
+        rect.Min.x = std::max(rect.Min.x, bar->ScrollingRectMinX);
+        rect.Max.x = std::min(rect.Max.x, bar->ScrollingRectMaxX);
+    }
+    const auto& io        = ImGui::GetIO();
+    const bool  popupOpen = ImGui::IsPopupOpen(
+        nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    // 只从标签内的新按下开始；从内容滑入、菜单遮挡及鼠标来源均不启动。
+    if ( enabled && canClose && !popupOpen &&
+         io.MouseSource == ImGuiMouseSource_TouchScreen &&
+         ImGui::IsMouseClicked(0) && rect.Contains(io.MousePos) ) {
+        m_holdWindow = window->ID;
+        m_holdOrigin = io.MousePos;
+        // 使用 ImGui 的单调帧时间，不以固定帧数判定，低帧率也有相同阈值。
+        m_holdStarted = ImGui::GetTime();
+    }
+    if ( m_holdWindow == window->ID ) {
+        const float dx = io.MousePos.x - m_holdOrigin.x;
+        const float dy = io.MousePos.y - m_holdOrigin.y;
+        // 容差按内容 DPI 换算为像素，手机与平板保留相同的手指位移语义。
+        const float tolerance = 10 * scale;
+        // 一旦开始滑动就取消整个触点，移回原处也不能重新累计长按。
+        if ( !enabled || !canClose || popupOpen || !ImGui::IsMouseDown(0) ||
+             !rect.Contains(io.MousePos) ||
+             dx * dx + dy * dy > tolerance * tolerance )
+            m_holdWindow = 0;
+        else if ( ImGui::GetTime() - m_holdStarted >= .55 ) {
+            // 时间只用于识别手势，不阻塞 UI，也不延迟原生标签的短按切换。
+            // Popup ID 属于当前业务窗口，关闭菜单不会错误地改绑相邻标签。
+            ImGui::OpenPopup("##MobileTabMenu");
+            m_menuWindow = window->ID;
+            // 手指仍按在标题上，菜单出现并不表示用户已选择其中的关闭项。
+            m_waitMenuRelease = true;
+            m_holdWindow      = 0;
+        }
+    }
+    if ( m_menuWindow == window->ID &&
+         !ImGui::IsPopupOpen("##MobileTabMenu") ) {
+        // 点击外部或原生返回关闭同样拦截最后的触点释放。
+        m_menuWindow   = 0;
+        m_releaseGuard = true;
+    }
+    // 只返回本次显式命令，不把正在显示菜单当作关闭成功。
+    bool close = false;
+    if ( m_menuWindow == window->ID ) {
+        // 菜单宽度服从安全工作区；关闭项保留完整手指命中高度。
+        // 位置由普通 Popup 的安全区避让处理，不用固定屏幕坐标保存菜单。
+        const auto* viewport = ImGui::GetMainViewport();
+        const float width    = std::min(220 * scale, viewport->WorkSize.x);
+        ImGui::SetNextWindowSizeConstraints({ width, 0 }, viewport->WorkSize);
+        // 父窗口即使刚被切为后台标签，也保留本窗口作用域的菜单身份。
+        if ( ImGui::BeginPopup("##MobileTabMenu") ) {
+            if ( !ImGui::IsMouseDown(0) && !ImGui::IsMouseReleased(0) )
+                // 连释放帧都排除，必须由下一次独立触摸激活关闭。
+                m_waitMenuRelease = false;
+            // 权限在菜单打开期间变化时也必须移除关闭项，不留下空的禁用按钮。
+            if ( !canClose )
+                ImGui::CloseCurrentPopup();
+            else {
+                ImGui::BeginDisabled(m_waitMenuRelease);
+                if ( FeedbackButton(
+                         closeLabel,
+                         { -1,
+                           std::max(48 * scale, ImGui::GetFrameHeight()) }) ) {
+                    close          = true;
+                    m_releaseGuard = true;
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::EndDisabled();
+            }
+            // 关闭权限由调用方实时提供，欢迎和设置不能充当额外主画布。
+            ImGui::EndPopup();
+        }
+    }
+    return close;
 }
 
 /// @brief 保留主题横向留白，并仅为标签交互提供最小触摸高度。
@@ -92,7 +210,7 @@ ImGuiID MobileDockLayout::node(MobileDockPanel panel) const
 /// @param timing 是否为时间线预留独立叶节点。
 /// @param preview 是否为预览预留独立叶节点。
 /// @details 不启用自动隐藏标签栏，单窗口叶节点也保留自己的标签。
-/// 分区宽度由原生分隔条连续调整，业务窗口不提供拖出或关闭入口。
+/// 分区宽度由原生分隔条连续调整，不允许拖出；关闭使用标签长按菜单。
 /// @warning 普通帧只读固定数量节点，不执行业务数据扫描或同步等待。
 void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
                               bool timing, bool preview)

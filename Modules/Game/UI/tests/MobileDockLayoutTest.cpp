@@ -7,9 +7,11 @@
  */
 #include "ui/workspace/MobileDockLayout.h"
 #include "log/colorful-log.h"
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <imgui_internal.h>
+#include <string_view>
 
 namespace
 {
@@ -34,6 +36,10 @@ struct Fixture {
     bool lateFocus{};
     /// @brief 非整数倍率产生的宿主宽度，覆盖真实设备而非仅测试整数几何。
     float hostWidth{ 900.85f };
+    /// @brief 菜单只返回意图；测试不销毁窗口，便于连续检查各个叶节点。
+    int closeRequests{};
+    /// @brief 模拟最后主画布受保护，其余测试标签仍可关闭。
+    bool mainClosable{ false };
     // 每次 Begin 累积检查，首次出现、缩放和拖动帧都不能短暂盖住标签。
 
     /// @brief 将一个测试窗口送入对应分区并读取其实际内容矩形。
@@ -50,6 +56,12 @@ struct Fixture {
             nullptr,
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
         ImGui::PopStyleVar();
+        if ( layout.tabCloseRequested(
+                 "Close",
+                 1,
+                 std::string_view(name) != "Main" || mainClosable,
+                 true) )
+            ++closeRequests;
         // 比较实际节点标签边界，避免三个窗口同时错位仍被等高断言放过。
         const auto* node = ImGui::GetCurrentWindow()->DockNode;
         if ( node && node->TabBar )
@@ -119,6 +131,74 @@ struct Fixture {
         // 松开后继续普通帧，验证布局不会被默认比例立即覆盖回去。
         frame();
         settle();
+    }
+
+    /// @brief 从实际标签矩形发起触屏长按，可选移动用于验证手势取消。
+    /// @details 推进有限 UI 帧模拟时间，不等待真实时钟或写入私有手势状态。
+    /// @param name 已由夹具创建的稳定窗口名，不包含动态标题或翻译。
+    /// @param move 按下后平移一次并继续保持，验证移回停留不会重新计时。
+    /// @param frames 按住期间推进的帧数，默认超过长按阈值。
+    void holdTab(const char* name, bool move = false, int frames = 40)
+    {
+        // 窗口由本用例前面的 settle 提交，测试只借用当前帧有效的节点。
+        auto* window = ImGui::FindWindowByName(name);
+        auto* bar    = window->DockNode->TabBar;
+        // 通过稳定窗口 TabId 找原生标签，不能把窗口 ID 当作 TabId。
+        const auto* tab = ImGui::TabBarFindTabByID(bar, window->TabId);
+        // 滚动动画可能来自上一轮标签切换，输入位置必须跟随当前可见偏移。
+        const ImVec2 position{ bar->BarRect.Min.x + tab->Offset -
+                                   bar->ScrollingAnim,
+                               bar->BarRect.Min.y };
+        // 宿主和标签已完成布局，后续只经官方输入队列模拟触摸。
+        auto& io = ImGui::GetIO();
+        // 恢复场景的窄辅助区可能裁剪标签，只能按到实际露出的部分。
+        const float left = std::max(position.x, bar->ScrollingRectMinX);
+        const float right =
+            std::min(position.x + tab->Width, bar->ScrollingRectMaxX);
+        const ImVec2 point{ (left + right) * .5f,
+                            (position.y + bar->BarRect.Max.y) * .5f };
+        // 来源明确为触屏，不能让默认鼠标事件意外绕过移动端识别规则。
+        io.AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
+        io.AddMousePosEvent(point.x, point.y);
+        // 先使原生停靠宿主观察到位置，再在下一帧开始按下。
+        frame();
+        io.AddMouseButtonEvent(0, true);
+        frame();
+        // 移动只发生一次，此后继续停留，验证取消后不会重新开始计时。
+        if ( move ) io.AddMousePosEvent(point.x + 20, point.y);
+        // 用 DeltaTime 累积长按时间，测试不调用 sleep 或修改生产状态。
+        for ( int index = 0; index < frames; ++index ) frame();
+        // 释放与后续稳定帧覆盖菜单首次出现后的输入保护。
+        io.AddMouseButtonEvent(0, false);
+        settle();
+    }
+
+    /// @brief 点击真实弹层的关闭项，测试返回值而不是直接调用业务关闭接口。
+    /// @return 是否确实存在可点击菜单，避免失败后访问空窗口。
+    /// @details 返回值只说明发出了触摸序列，是否成功关闭必须由计数单独断言。
+    /// 菜单是否出现与关闭计数分别检查，不能把发出触摸序列直接视为关闭成功。
+    bool clickCloseMenu()
+    {
+        // 菜单不存在时返回失败，不能用空指针继续制造一次假点击。
+        auto& context = *ImGui::GetCurrentContext();
+        if ( context.OpenPopupStack.empty() ||
+             !context.OpenPopupStack.back().Window )
+            return false;
+        // 读取经过视口避让后的实际位置，不假设菜单始终在标签正下方。
+        const auto* popup = context.OpenPopupStack.back().Window;
+        // 唯一关闭项有 48 像素命中高度，选择中心避开窗口内边距。
+        const ImVec2 point{ popup->Pos.x + popup->Size.x * .5f,
+                            popup->Pos.y + popup->WindowPadding.y + 24 };
+        auto&        io = ImGui::GetIO();
+        // 单独的新按下和抬起才表示选择菜单项，不能复用发起菜单的长按。
+        io.AddMousePosEvent(point.x, point.y);
+        frame();
+        io.AddMouseButtonEvent(0, true);
+        frame();
+        io.AddMouseButtonEvent(0, false);
+        // 连续普通帧还检查关闭意图不会在菜单隐藏后反复发送。
+        settle();
+        return true;
     }
 };
 }  // namespace
@@ -279,6 +359,74 @@ int main()
     fixture.layout.capture(restoredTiming, restoredPreview, restoredTab);
     check(restoredTab == ImGui::FindWindowByName("Other")->ID,
           "first interaction releases startup focus protection");
+    // 长按测试使用普通交互焦点，不让上面的恢复场景主动抢选标签。
+    // 仍复用上面经多次恢复和缩窄的停靠树，覆盖实际标签裁剪后的命中区。
+    fixture.lateFocus = false;
+    fixture.settle();
+    // 查询任意层弹层，避免只在当前测试窗口 ID 栈下查找而漏掉菜单。
+    const auto menuOpen = [&]() {
+        return ImGui::IsPopupOpen(
+            nullptr,
+            ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    };
+    // 短按只切换页面；在标签内移动后持续停留也不能变成关闭长按。
+    // 三帧显著短于手势阈值，仍经过完整按下和释放序列。
+    fixture.holdTab("Other", false, 3);
+    // 此处不检查选中项名称，选中行为归原生 TabBar，菜单只负责关闭入口。
+    check(!menuOpen(), "short tap does not open tab menu");
+    // 后续保持四十帧，排除只是计时不足而没有出现菜单的伪通过。
+    fixture.holdTab("Other", true);
+    check(!menuOpen(), "moving touch cancels long press");
+    // 普通可关闭标签不附带业务销毁，用计数器观察唯一关闭意图。
+    fixture.holdTab("Other");
+    check(menuOpen() && fixture.closeRequests == 0,
+          "long press opens menu without closing on release");
+    // 菜单出现和关闭是两个独立动作，第一次松手不能增加计数。
+    check(fixture.clickCloseMenu() && fixture.closeRequests == 1,
+          "menu closes only after explicit selection");
+    // 最后主画布没有关闭项，当前没有其他操作时也不显示空菜单。
+    fixture.holdTab("Main");
+    check(!menuOpen() && fixture.closeRequests == 1,
+          "last main canvas exposes no close item or empty menu");
+    // 从可关闭标签再次打开菜单，单独检验不选择任何操作时的外部取消。
+    fixture.holdTab("Other");
+    check(menuOpen(), "closable tab menu can reopen");
+    // 点击菜单外部取消，使用完整触屏序列而不依赖键盘导航配置。
+    io.AddMousePosEvent(850, 650);
+    fixture.frame();
+    io.AddMouseButtonEvent(0, true);
+    fixture.frame();
+    io.AddMouseButtonEvent(0, false);
+    fixture.settle();
+    // 取消既不能留下弹层，也不能让独立的关闭释放保护永久阻塞画布。
+    check(!menuOpen() && !fixture.layout.tabMenuOwnsPointer(),
+          "outside tap dismisses menu and releases input protection");
+    // 辅助区只有一个标签仍可长按关闭，不能按叶节点标签数误禁用。
+    for ( const char* name : { "Timing", "Preview" } ) {
+        // 每个辅助标签单独检查增量，避免另一个标签误关闭时抵消结果。
+        const int before = fixture.closeRequests;
+        fixture.holdTab(name);
+        const bool opened  = menuOpen();
+        const bool clicked = opened && fixture.clickCloseMenu();
+        if ( !opened || !clicked || fixture.closeRequests != before + 1 )
+            XERROR("Auxiliary menu {}: opened={}, clicked={}, count={}/{}",
+                   name,
+                   opened,
+                   clicked,
+                   fixture.closeRequests,
+                   before);
+        check(opened && clicked && fixture.closeRequests == before + 1,
+              "auxiliary tab supports explicit menu close");
+    }
+    // 有额外主画布时恢复同一菜单操作，关闭权限与标签数量解耦。
+    // 权限从受保护切到可关闭后无需重建布局，原窗口身份和菜单 ID 不变。
+    // 这里只改变调用方给出的关闭权限，不直接改被测菜单内部状态。
+    fixture.mainClosable = true;
+    const int before     = fixture.closeRequests;
+    fixture.holdTab("Main");
+    check(menuOpen() && fixture.clickCloseMenu() &&
+              fixture.closeRequests == before + 1,
+          "additional main canvas can close");
     ImGui::DestroyContext();
     // 所有窗口、字体和节点统一由上下文销毁，测试不保留跨用例状态。
     return failures == 0 ? 0 : 1;
