@@ -5,6 +5,7 @@
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -192,6 +193,8 @@ void CameraLayoutEditor::drawParameterWindow(const std::string&    id,
                                        "%.4f",
                                        ImGuiSliderFlags_AlwaysClamp) )
                     m_axis = -1;
+                // 移动端按手势方向区分数值拖动和设置内容滚动。
+                UI::workspaceRegisterHorizontalDragItem();
             });
         root.addElement(
             "rotation",
@@ -213,6 +216,8 @@ void CameraLayoutEditor::drawParameterWindow(const std::string&    id,
                                        "%.3f",
                                        ImGuiSliderFlags_AlwaysClamp) )
                     m_axis = -1;
+                // 移动端按手势方向区分数值拖动和设置内容滚动。
+                UI::workspaceRegisterHorizontalDragItem();
             });
         actions.addElement(
             "reset",
@@ -274,6 +279,8 @@ void CameraLayoutEditor::drawParameterWindow(const std::string&    id,
                                       ImGuiSliderFlags_AlwaysClamp) &&
                      std::isfinite(length) )
                     visual.canvasCameraLength = std::clamp(length, 1.0F, 32.0F);
+                // 只声明组件方向，配置仍沿用原来的有限值与边界检查。
+                UI::workspaceRegisterHorizontalDragItem();
             });
         // 补偿逐次写入本地配置，由宿主捕获布局预设并发布最新逻辑快照。
         // 两个参数分别控制投影与局部几何，不借用已有长度或皮肤缩放值。

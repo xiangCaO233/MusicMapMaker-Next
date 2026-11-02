@@ -16,6 +16,7 @@
 #include "ui/imgui/audio/ProjectAudioPreviewControls.h"
 #include "ui/imgui/manager/ProjectAudioToolSearch.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 
 #include <imgui_internal.h>
 
@@ -3107,12 +3108,16 @@ void ProjectAudioToolView::update(UIManager* sourceManager)
     // 内部倍率转换为整数百分比，并限制到 UI 支持的 50% 至 400%。
     int zoomPercentage = std::clamp(
         static_cast<int>(std::lround(m_canvasZoom * 100.0F)), 50, 400);
-    if ( ImGui::SliderInt("##ProjectAudioToolCanvasZoom",
-                          &zoomPercentage,
-                          50,
-                          400,
-                          "%d%%",
-                          ImGuiSliderFlags_AlwaysClamp) ) {
+    const bool zoomChanged = ImGui::SliderInt("##ProjectAudioToolCanvasZoom",
+                                              &zoomPercentage,
+                                              50,
+                                              400,
+                                              "%d%%",
+                                              ImGuiSliderFlags_AlwaysClamp);
+    // 数值条的横向调整与纵向内容滚动分别识别，不改变缩放业务。
+    // 平台登记不消费控件的编辑完成状态，释放后保存仍由下方原有流程处理。
+    workspaceRegisterHorizontalDragItem();
+    if ( zoomChanged ) {
         // 状态栏缩放以视口中心为锚点，区别于 Ctrl+滚轮的指针锚点。
         const auto zoomResult = ProjectAudioToolLayout::zoomCameraToPointer(
             m_canvasZoom,

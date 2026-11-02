@@ -1984,6 +1984,8 @@ bool FeedbackSliderFloat(const char* label, float* value, float minValue,
     const bool changed =
         ImGui::SliderFloat(label, value, minValue, maxValue, format, flags) &&
         previous != *value;
+    // 横向调值与纵向滚动由平台仲裁，桌面默认不改变输入。
+    workspaceRegisterHorizontalDragItem();
     const bool clicked = isLastItemFeedbackActivated();
     // 当前百分比映射到统一滑块音效音高。
     ImGui::PopStyleColor(pushedColorCount);
@@ -2016,6 +2018,8 @@ bool FeedbackSliderInt(const char* label, int* value, int minValue,
     const bool    changed =
         ImGui::SliderInt(label, value, minValue, maxValue, format, flags) &&
         previous != *value;
+    // 横向调值与纵向滚动由平台仲裁，桌面默认不改变输入。
+    workspaceRegisterHorizontalDragItem();
     const bool clicked = isLastItemFeedbackActivated();
     ImGui::PopStyleColor(pushedColorCount);
     // 复合控件只抑制中间数值的滑动音效，保留统一悬浮动画及焦点行为。
@@ -2081,6 +2085,8 @@ bool FeedbackDragFloat(const char* label, float* value, float speed,
     const int  pushedColorCount = pushAnimatedFrameColors(hoverAmount, false);
     const bool changed          = ImGui::DragFloat(
         label, value, speed, minValue, maxValue, format, flags);
+    // 横向调值与纵向滚动由平台仲裁，桌面默认不改变输入。
+    workspaceRegisterHorizontalDragItem();
     const bool clicked = isLastItemFeedbackActivated();
     ImGui::PopStyleColor(pushedColorCount);
     finishLastItemFeedback(id, clicked);
@@ -2107,6 +2113,8 @@ bool FeedbackDragInt2(const char* label, int values[2], float speed,
     const int  pushedColorCount = pushAnimatedFrameColors(hoverAmount, false);
     const bool changed          = ImGui::DragInt2(
         label, values, speed, minValue, maxValue, format, flags);
+    // 横向调值与纵向滚动由平台仲裁，桌面默认不改变输入。
+    workspaceRegisterHorizontalDragItem();
     const bool clicked = isLastItemFeedbackActivated();
     ImGui::PopStyleColor(pushedColorCount);
     finishLastItemFeedback(id, clicked);
@@ -2134,6 +2142,8 @@ bool FeedbackDragScalar(const char* label, ImGuiDataType dataType, void* value,
     const int  pushedColorCount = pushAnimatedFrameColors(hoverAmount, false);
     const bool changed          = ImGui::DragScalar(
         label, dataType, value, speed, minValue, maxValue, format, flags);
+    // 横向调值与纵向滚动由平台仲裁，桌面默认不改变输入。
+    workspaceRegisterHorizontalDragItem();
     const bool clicked = isLastItemFeedbackActivated();
     ImGui::PopStyleColor(pushedColorCount);
     finishLastItemFeedback(id, clicked);
