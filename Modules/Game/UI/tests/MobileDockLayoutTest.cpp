@@ -11,6 +11,7 @@
 #include <array>
 #include <cmath>
 #include <imgui_internal.h>
+#include <string>
 #include <string_view>
 
 namespace
@@ -40,6 +41,13 @@ struct Fixture {
     int closeRequests{};
     /// @brief 模拟最后主画布受保护，其余测试标签仍可关闭。
     bool mainClosable{ false };
+    /// @brief 独立长标题窗口，复用稳定后缀来检查重命名与滚动裁剪。
+    bool longCaption{};
+    /// @brief 完整标题用于展示，固定后缀用于检验窗口身份不随谱名变化。
+    std::string longTitle{
+        "Editor [4K] A deliberately long beatmap name that must keep its full "
+        "title###LongCanvas"
+    };
     // 每次 Begin 累积检查，首次出现、缩放和拖动帧都不能短暂盖住标签。
 
     /// @brief 将一个测试窗口送入对应分区并读取其实际内容矩形。
@@ -93,6 +101,8 @@ struct Fixture {
         bounds[0] = pane(MMM::UI::MobileDockPanel::Main, "Main");
         if ( lateFocus ) ImGui::SetNextWindowFocus();
         pane(MMM::UI::MobileDockPanel::Main, "Other");
+        if ( longCaption )
+            pane(MMM::UI::MobileDockPanel::Main, longTitle.c_str());
         if ( timing )
             bounds[1] = pane(MMM::UI::MobileDockPanel::Timing, "Timing");
         if ( preview )
@@ -427,6 +437,44 @@ int main()
     check(menuOpen() && fixture.clickCloseMenu() &&
               fixture.closeRequests == before + 1,
           "additional main canvas can close");
+    // 长标题仍保留原生窗口名与 ID，宽度约束只影响标签外观。
+    // 新窗口与短标题同处原生节点，验证上限不是靠只有一个标签时的巧合。
+    fixture.longCaption = true;
+    fixture.settle();
+    // 从原生 TabBar 读取真实宽度，不重复计算被测代码的测量公式。
+    // 该断言同样覆盖已存在节点中首次加入长标题的常见路径。
+    auto* longWindow = ImGui::FindWindowByName(fixture.longTitle.c_str());
+    auto* longTab    = ImGui::TabBarFindTabByID(longWindow->DockNode->TabBar,
+                                                longWindow->TabId);
+    check(longTab && longTab->Width <= 240.5f,
+          "long caption has a bounded native tab width");
+    // 视觉裁剪不能破坏隐藏的完整业务标题，后续滚动需要仍能访问其末尾。
+    check(std::string_view(longWindow->Name) == fixture.longTitle,
+          "caption clipping does not truncate the window name");
+    // 保存标量身份；下一次 Begin 可能重分配窗口名缓冲区，不能保存其字符串视图。
+    const auto titleId = longWindow->ID;
+    // 重命名、脏标记和非 ASCII 谱名必须保持同一标签，不创建第二个业务窗口。
+    fixture.longTitle =
+        "Editor* [7K] 更改后的超长谱面标题与协作状态###LongCanvas";
+    fixture.settle();
+    // 修改标题后重新取得窗口，只以 ### 后缀比较身份稳定性。
+    longWindow = ImGui::FindWindowByName(fixture.longTitle.c_str());
+    longTab    = ImGui::TabBarFindTabByID(longWindow->DockNode->TabBar,
+                                          longWindow->TabId);
+    check(longWindow->ID == titleId && longTab && longTab->Width <= 240.5f,
+          "renaming preserves identity and width limit");
+    // 非 ASCII 标题走同一字体测量路径，不能按 UTF-8 字节数截短名称。
+    // 文字透明仅限原生绘制阶段，不能污染下一帧的窗口主题缓存。
+    // 原主题色的 Alpha 必须可见，否则下一帧原生页签会持续丢失文字。
+    check((longWindow->DockStyle.Colors[ImGuiWindowDockStyleCol_Text] &
+           IM_COL32_A_MASK) != 0,
+          "caption rendering restores the native text color");
+    // 自动滚动只改变文字，缩窄后的真实标签仍须能长按并明确关闭。
+    const int beforeCaptionClose = fixture.closeRequests;
+    fixture.holdTab(fixture.longTitle.c_str());
+    check(menuOpen() && fixture.clickCloseMenu() &&
+              fixture.closeRequests == beforeCaptionClose + 1,
+          "bounded caption preserves native long press interaction");
     ImGui::DestroyContext();
     // 所有窗口、字体和节点统一由上下文销毁，测试不保留跨用例状态。
     return failures == 0 ? 0 : 1;

@@ -1,5 +1,6 @@
 #pragma once
 #include <imgui.h>
+#include <vector>
 
 namespace MMM::UI
 {
@@ -44,6 +45,21 @@ public:
     bool tabMenuOwnsPointer() const { return m_menuWindow || m_releaseGuard; }
 
 private:
+    /// @brief 在原生标签排版前限制宽度并暂存各窗口文字主题色。
+    /// @warning 每帧只访问三个受控节点；缓存容量仅在新增标签时增长。
+    void prepareTabCaptions(float scale);
+    /// @brief 恢复原生主题色，并在宿主标签矩形中复用滚动文本绘制。
+    /// @warning 每帧按当前标签追加文字，不扫描顶点或重新建立命中区域。
+    void drawTabCaptions();
+    /// @brief 仅用于当前 render 作用域的颜色快照，不持有窗口观察指针。
+    struct TabCaption {
+        /// @brief 仅供本轮绘制重新查询窗口的稳定身份。
+        ImGuiID m_window{};
+        /// @brief 临时隐藏原生文字之前的最终主题颜色。
+        ImU32 m_color{};
+    };
+    /// @brief 复用已有容量；窗口名称和几何每帧借用，不缓存跨帧字符串视图。
+    std::vector<TabCaption> m_tabCaptions;
     /// @brief 仅保存稳定 ID，不跨帧缓存可能因分割失效的节点指针。
     ImGuiID m_root{}, m_center{}, m_timing{}, m_preview{}, m_restoreFocus{};
     /// @brief 首次交互前保留已保存窗口，防止惰性设置页的初始聚焦覆盖它。

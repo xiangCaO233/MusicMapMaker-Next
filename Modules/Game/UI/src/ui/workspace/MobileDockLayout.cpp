@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <imgui_internal.h>
+#include <string_view>
 
 namespace MMM::UI
 {
@@ -178,6 +179,99 @@ bool MobileDockLayout::tabCloseRequested(const char* closeLabel, float scale,
     return close;
 }
 
+/// @brief 在原生 TabBar 排版前约束实际宽度，不截短窗口名称或更换窗口 ID。
+/// @details 每个页签最多占 240 个逻辑像素，窄分区再限制为分区宽度的一半。
+/// @param scale 当前内容倍率，旋转后重新结合节点宽度计算上限。
+/// @warning 每帧访问少量已注册窗口；颜色快照复用容量，只在新标签加入时增长。
+void MobileDockLayout::prepareTabCaptions(float scale)
+{
+    // 只复用存储容量，不复用上一帧颜色快照或窗口名观察指针。
+    // 显隐重建之后旧叶节点 ID 可失效，颜色恢复按窗口稳定 ID 完成。
+    m_tabCaptions.clear();
+    for ( const auto id : { m_center, m_timing, m_preview } ) {
+        auto* node = ImGui::DockBuilderGetNode(id);
+        if ( !node ) continue;
+        // 标签宽度和触摸高度分开处理，长名字不能扩大整个工作区。
+        // DPI 只缩放逻辑上限；分区缩窄时不能让单页签独占整排。
+        const float maximum =
+            std::min(240 * scale, std::max(64 * scale, node->Size.x * .5f));
+        for ( auto* window : node->Windows ) {
+            // 暂时隐藏原生文字，背景、选中态、排序和滚动箭头仍由原生绘制。
+            // 不覆盖标签背景，也不遍历顶点擦除文字，保持主题与批处理顺序。
+            // 原生滚动箭头不使用这个窗口缓存色，因此仍保留正常可见反馈。
+            auto& color =
+                window->DockStyle.Colors[ImGuiWindowDockStyleCol_Text];
+            m_tabCaptions.push_back({ window->ID, color });
+            color &= ~IM_COL32_A_MASK;
+            // 首次建树尚无 TabBar 时仍记录颜色，原生创建后由绘制阶段恢复。
+            if ( !node->TabBar ) continue;
+            auto* tab = ImGui::TabBarFindTabByID(node->TabBar, window->TabId);
+            // 新窗口先登记宽度，再由本轮原生布局安排位置，避免先撑满再收缩。
+            // 已登记的标签不可再次 AddTab，避免原生顺序与窗口身份重复。
+            if ( !tab ) {
+                ImGui::TabBarAddTab(node->TabBar,
+                                    window->WindowClass.TabItemFlagsOverrideSet,
+                                    window);
+                tab = ImGui::TabBarFindTabByID(node->TabBar, window->TabId);
+            }
+            const auto* end = ImGui::FindRenderedTextEnd(window->Name);
+            // 测量仍使用完整可见标题；仅提交显示宽度，不破坏谱名和脏标记。
+            const float natural = ImGui::CalcTextSize(window->Name, end).x +
+                                  ImGui::GetStyle().FramePadding.x * 2;
+            // 原生宽度先变化，短按和长按都沿用这一份真实命中矩形。
+            // 这里只改标签排版，不修改业务窗口尺寸或其完整标题字符串。
+            if ( tab ) tab->RequestedWidth = std::min(maximum, natural);
+        }
+    }
+}
+
+/// @brief 在原生标签宿主层绘制完整标题，溢出时复用公共往复滚动文本。
+/// @details 原生命中区完全保留，文字滚动不影响短按、拖动排序或长按菜单。
+/// @warning 每帧只查找保存的窗口 ID，不持有跨帧窗口指针，不重新布局业务窗口。
+void MobileDockLayout::drawTabCaptions()
+{
+    for ( const auto& caption : m_tabCaptions ) {
+        // DockSpace 可能调整标签顺序，重新按 ID 找窗口而不依赖旧数组索引。
+        auto* window = ImGui::FindWindowByID(caption.m_window);
+        if ( !window ) continue;
+        // 原生标签已经提交后立即恢复缓存色，不能把透明色传给下一次业务 Begin。
+        // 即使原生节点在提交中消失，也须先恢复窗口颜色再检查标签是否仍存在。
+        window->DockStyle.Colors[ImGuiWindowDockStyleCol_Text] =
+            caption.m_color;
+        auto* bar = window->DockNode ? window->DockNode->TabBar : nullptr;
+        auto* tab =
+            bar ? ImGui::TabBarFindTabByID(bar, window->TabId) : nullptr;
+        if ( !tab || !bar->Window ) continue;
+        const bool  central = !(tab->Flags & ImGuiTabItemFlags_SectionMask_);
+        const float x = bar->BarRect.Min.x +
+                        (central ? std::trunc(tab->Offset - bar->ScrollingAnim)
+                                 : tab->Offset);
+        // 标签栏自身横向滚动时，只画出原生命中范围内露出的部分。
+        const float left =
+            central ? bar->ScrollingRectMinX : bar->BarRect.Min.x;
+        const float right =
+            central ? bar->ScrollingRectMaxX : bar->BarRect.Max.x;
+        // 必须提交到原生宿主层，后台业务窗口自己的 DrawList 不会显示。
+        auto& draw = *bar->Window->DrawList;
+        // 宿主当前内容裁剪可能排除标题栏，显式采用标签栏的原生边界。
+        draw.PushClipRect(
+            { left, bar->BarRect.Min.y }, { right, bar->BarRect.Max.y }, false);
+        // ### 后缀只负责稳定身份，不能把内部相机 ID 当作可见标题滚出来。
+        const auto* end = ImGui::FindRenderedTextEnd(window->Name);
+        // 共享曲线包含两端停留；短标题保持静止，不依赖鼠标悬浮才展示信息。
+        Utils::drawScrollingTextOnDrawList(
+            draw,
+            std::string_view(window->Name, end - window->Name),
+            { x + bar->FramePadding.x, bar->BarRect.Min.y },
+            std::max(0.0f, tab->Width - 2 * bar->FramePadding.x),
+            bar->BarRect.GetHeight(),
+            caption.m_color,
+            true);
+        // 独立宿主的裁剪栈到此恢复，后续分隔握柄和弹层不继承标签矩形。
+        draw.PopClipRect();
+    }
+}
+
 /// @brief 保留主题横向留白，并仅为标签交互提供最小触摸高度。
 /// @details 宿主生成标签和业务 Begin 计算标题高度时需要同一值。
 /// 内容控件不继承这一扩展，避免固定高度布局被标签尺寸撑坏。
@@ -300,7 +394,9 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
     // 仅抑制无按下悬浮色；实际拖动仍沿用主题 SeparatorActive 反馈。
     ImGui::PushStyleColor(ImGuiCol_SeparatorHovered,
                           style.Colors[ImGuiCol_WindowBg]);
+    prepareTabCaptions(scale);
     ImGui::DockSpace(m_root, {}, flags);
+    drawTabCaptions();
     ImGui::PopStyleColor();
     borderPadding = previousPadding;
     // 使用原生分隔条承接拖动，握柄只提供视觉提示，不创建竞争命中区。

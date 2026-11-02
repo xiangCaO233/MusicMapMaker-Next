@@ -190,6 +190,25 @@ void drawScrollingText(std::string_view text, ImVec2 startPos,
                        float availableWidth, float targetHeight,
                        bool centerWhenFits)
 {
+    // 普通控件继续使用当前窗口及主题色，调用方无需感知独立宿主绘制路径。
+    drawScrollingTextOnDrawList(*ImGui::GetWindowDrawList(),
+                                text,
+                                startPos,
+                                availableWidth,
+                                targetHeight,
+                                ImGui::GetColorU32(ImGuiCol_Text),
+                                centerWhenFits);
+}
+
+/// @brief 在指定绘制列表上复用现有往复滚动和端点停留效果。
+/// @details 裁剪只包围本次文字，支持停靠宿主与当前业务窗口不同的情况。
+/// @param color 由调用方提供最终主题色，宿主透明度不在这里二次叠乘。
+/// @warning UI 热路径：只测量文字并追加图元，不修改窗口上下文或输入状态。
+void drawScrollingTextOnDrawList(ImDrawList& drawList, std::string_view text,
+                                 ImVec2 startPos, float availableWidth,
+                                 float targetHeight, ImU32 color,
+                                 bool centerWhenFits)
+{
     // 空文本不修改裁剪栈或 DrawList。
     if ( text.empty() ) return;
 
@@ -208,16 +227,16 @@ void drawScrollingText(std::string_view text, ImVec2 startPos,
                                    : 0.0f;
 
     // 裁剪只包围本次 DrawList 文本提交，结束后立即恢复。
-    ImGui::PushClipRect(
+    drawList.PushClipRect(
         startPos,
         ImVec2(startPos.x + visibleWidth, startPos.y + targetHeight),
         true);
-    ImGui::GetWindowDrawList()->AddText(
+    drawList.AddText(
         ImVec2(startPos.x + centerOffset - offset, startPos.y + offsetY),
-        ImGui::GetColorU32(ImGuiCol_Text),
+        color,
         textBegin,
         textEnd);
-    ImGui::PopClipRect();
+    drawList.PopClipRect();
 }
 
 /// @brief 渲染一个带水平自动滚动文本的 Selectable 核心。
