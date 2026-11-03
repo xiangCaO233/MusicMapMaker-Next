@@ -695,6 +695,12 @@ mmm_register_test_case(
 mmm_add_test_executable(UI MobileDockLayoutTest tests/MobileDockLayoutTest.cpp)
 target_link_libraries(MobileDockLayoutTest PRIVATE UI Log)
 mmm_register_test_case(NAME MobileDockLayoutTest COMMAND MobileDockLayoutTest)
+# 表格触摸密度回归： - 使用真实选择区与裁剪器，不依赖 GPU 和设备配置。 - 手机和平板密度各自建立隔离上下文，禁止读写用户 ini。 - UI
+# 提供生产尺寸策略和反馈控件，Log 负责聚合失败信息。 - 独立测试身份便于与手势滚动及音频面板布局回归共同运行。
+mmm_add_test_executable(UI MobileTableLayoutTest
+                        tests/MobileTableLayoutTest.cpp)
+target_link_libraries(MobileTableLayoutTest PRIVATE UI Log)
+mmm_register_test_case(NAME MobileTableLayoutTest COMMAND MobileTableLayoutTest)
 # Android 暂不提供桌面文件选择器，兼容层明确报告不支持，不能静默丢失用户文件。
 if(ANDROID)
   target_sources(UI PRIVATE src/ui/utils/AndroidFileDialog.cpp)

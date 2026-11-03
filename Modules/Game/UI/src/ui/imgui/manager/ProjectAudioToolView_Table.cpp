@@ -6,6 +6,7 @@
 #include "ui/imgui/audio/ProjectAudioPreviewControls.h"
 #include "ui/imgui/manager/ProjectAudioToolSearch.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -156,8 +157,9 @@ void ProjectAudioToolView::renderTableView(float dpiScale)
     const float buttonSize      = ImGui::GetFrameHeight();
     const float progressHeight  = 5.0F * dpiScale;
     const float progressSpacing = 4.0F * dpiScale;
-    const float contentHeight   = buttonSize + progressHeight + progressSpacing;
-    const float rowHeight       = contentHeight + style.CellPadding.y * 2.0F;
+    const float contentHeight   = workspaceTableItemHeight(
+        buttonSize + progressHeight + progressSpacing, dpiScale);
+    const float rowHeight = contentHeight + style.CellPadding.y * 2.0F;
     const ImGuiTableFlags flags =
         ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
         ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |

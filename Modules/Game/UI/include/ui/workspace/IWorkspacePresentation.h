@@ -69,6 +69,14 @@ bool beginWorkspaceWindow(std::string_view id, const std::string& title,
 bool workspaceBlocksCanvasInput();
 /// @brief 供公共反馈设施查询平台策略；没有 UI 帧时保留桌面悬浮行为。
 bool workspaceAllowsHoverFeedback();
+/// @brief 表格项目内容高度；触屏至少保留 48 个逻辑像素，桌面原值返回。
+/// @details 不包含 CellPadding；显式步长的裁剪器须另加上下单元格留白。
+/// @warning 每个可见列表固定次数测量，不分配或访问设备。
+float workspaceTableItemHeight(float desktopHeight, float scale);
+/// @brief 移动表格统一留白，纯文字行也至少达到 48 个逻辑像素。
+/// @details 仅计算样式值，由移动外壳在帧内成对应用，不更改持久化主题。
+/// @warning 每帧仅测量当前字体，不执行资源操作或访问跨线程可变状态。
+ImVec2 workspaceTableCellPadding(float scale);
 /// @brief 为刚提交的数值控件登记横向拖动，默认桌面路径为空操作。
 /// @warning 每帧固定次数策略转发，不保留组件引用。
 void workspaceRegisterHorizontalDragItem();

@@ -1023,8 +1023,9 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
     const auto& snapshot = getDirectorySnapshot(path);
     const float dpiScale =
         std::max(1.0f, Config::AppConfig::instance().getWindowContentScale());
-    // 行高至少为 24 个缩放像素，并容纳当前 ImGui Frame。
-    const float itemH = std::max(24.0f * dpiScale, ImGui::GetFrameHeight());
+    // 桌面保留原有高度；触屏命中区使用统一下限，并容纳当前 ImGui Frame。
+    const float itemH = workspaceTableItemHeight(
+        std::max(24.0f * dpiScale, ImGui::GetFrameHeight()), dpiScale);
 
     for ( const auto& entry : snapshot.entries ) {
         // 固定最小行高让所有列和整行 hover 区域一致。
