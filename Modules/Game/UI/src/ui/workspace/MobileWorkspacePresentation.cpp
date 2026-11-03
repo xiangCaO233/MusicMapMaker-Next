@@ -17,6 +17,7 @@
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 #include "ui/workspace/MobileButton.h"
 #include "ui/workspace/MobileDockLayout.h"
@@ -117,6 +118,9 @@ private:
     void drawRightDrawer(UIManager& manager, MobileRect rect);
     /// @brief 独立的触摸工具条，工具命令复用原业务入口。
     void drawToolbar(UIManager& manager);
+    /// @brief 主画布专属的触摸编辑区，调用既有语义动作而不模拟键盘。
+    /// @warning 每帧固定按钮布局；动作仅在明确点击时执行。
+    void drawWorkbench(UIManager& manager);
     /// @brief 退出确认是独立移动端窗口，不复用桌面菜单退出弹窗。
     void drawExitConfirmation();
     /// @brief 交互结束时冻结移动布局并交给配置层异步保存。
@@ -133,6 +137,8 @@ private:
     bool m_backRequested{}, m_initialized{}, m_drawingDrawer{};
     /// @brief 窗口开关属于移动外壳，初次启动全部收起。
     bool m_showToolbar{}, m_showTiming{}, m_showPreview{};
+    /// @brief 用户开关独立于临时页签显隐，切到设置不覆盖工作台恢复偏好。
+    bool m_showWorkbench{ true };
     /// @brief 返回操作可没有触屏释放，用独立边沿提交设置关闭状态。
     bool m_commitLayout{};
     /// @brief 等公共首次工作区初始化完成后，再恢复客户端资源类别。
@@ -186,9 +192,12 @@ void MobileWorkspacePresentation::beginFrame(UIManager& manager)
         m_showToolbar     = saved.m_toolbar;
         m_showTiming      = saved.m_timing;
         m_showPreview     = saved.m_preview;
+        m_showWorkbench   = saved.m_workbench;
         m_model.restoreHandleCenters(saved.m_leftCenter, saved.m_rightCenter);
-        m_dock.restore(
-            saved.m_timingRatio, saved.m_previewRatio, saved.m_selectedTab);
+        m_dock.restore(saved.m_timingRatio,
+                       saved.m_previewRatio,
+                       saved.m_selectedTab,
+                       saved.m_workbenchRatio);
         if ( saved.m_settingsOpen )
             manager.openSettingsWindow(Event::SettingsTab::Software);
         // 公共无项目初始化会在本帧稍后选择文件页，资源类别必须延后到帧末恢复。
@@ -336,11 +345,17 @@ void MobileWorkspacePresentation::renderWorkspace(MainDockSpaceUI&,
     // 停靠分隔条仍使用上面的美化间距，内容内边距仍由各业务窗口处理。
     const ImVec2 size{ std::max(1.0f, m_size.x - m_toolbarWidth),
                        std::max(1.0f, m_size.y) };
-    m_dock.render(m_origin, size, m_scale, m_showTiming, m_showPreview);
+    // 实际选中的主区标签决定工作台显隐，不能仅以后台仍有活动谱面判断。
+    // 拓扑变更由同一停靠对象保存宽度和焦点，欢迎与设置可以使用释放的空间。
+    // 后台仍有谱面不代表当前选中它，音频页也必须释放工具区空间。
+    const bool workbench = m_showWorkbench && m_dock.isMainCanvasSelected();
+    m_dock.render(
+        m_origin, size, m_scale, m_showTiming, m_showPreview, workbench);
     m_centerDock = m_dock.center();
     MainDockSpaceUI::setCenterDockId(m_centerDock);
     MainDockSpaceUI::setToolDockId(0);
     if ( m_showToolbar ) drawToolbar(manager);
+    if ( workbench ) drawWorkbench(manager);
 }
 
 /// @brief 将共享业务窗口接入移动外壳的当前绘制作用域。
@@ -367,10 +382,11 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
     const bool analysisWindow = MobileDockLayout::isAudioAnalysisWindow(title);
     // 控制器不是谱面画布，独立关闭不能受最后一个主画布的数量保护限制。
     const bool audioController = id.starts_with("TrackController_");
+    const bool workbench       = id == "MobileWorkbench";
     const bool docked = mainCanvas || id == "Welcome" || settingsWindow ||
                         analysisWindow || audioController ||
                         id == "TimelineWindow" || id == "Timeline" ||
-                        id == "PreviewWindow";
+                        id == "PreviewWindow" || workbench;
     // Begin 同样计算标题区域高度，必须与宿主标签计算使用相同内边距。
     // Begin 后立即恢复，不把触摸标签的高度传播给内容中的输入和按钮。
     if ( docked )
@@ -421,10 +437,11 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
         // 时间线和预览各自保留独立区域，显示开关不会创建重复编辑器。
         // 其宽度计算与中央宿主扣除值一致，避免窗口相互覆盖。
     } else if ( id == "TimelineWindow" || id == "Timeline" ||
-                id == "PreviewWindow" ) {
+                id == "PreviewWindow" || workbench ) {
         // 辅助面板进入自己的叶节点，不再用无标签的绝对定位窗口模拟列布局。
-        m_dock.target(id == "PreviewWindow" ? MobileDockPanel::Preview
-                                            : MobileDockPanel::Timing,
+        m_dock.target(workbench               ? MobileDockPanel::Workbench
+                      : id == "PreviewWindow" ? MobileDockPanel::Preview
+                                              : MobileDockPanel::Timing,
                       title.c_str());
         ImGui::SetNextWindowSizeConstraints({ 1, 1 }, m_size);
         flags &= ~(ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoDocking);
@@ -477,6 +494,7 @@ void MobileWorkspacePresentation::processTabMenu(std::string_view id,
     // 辅助窗口保留注册对象，仅收起显示；下一帧建树会移除对应叶节点。
     if ( id == "TimelineWindow" || id == "Timeline" ) m_showTiming = false;
     if ( id == "PreviewWindow" ) m_showPreview = false;
+    if ( id == "MobileWorkbench" ) m_showWorkbench = false;
     // 设置可能正处于录制状态；关闭后不能留下吞键的全局录制标志。
     if ( std::string_view(ImGui::GetCurrentWindow()->Name)
              .ends_with("###SettingsWindow") )
@@ -665,6 +683,15 @@ void MobileWorkspacePresentation::drawRightDrawer(UIManager& manager,
                  { rect.m_width - 2 * m_padding, 56 * m_scale },
                  m_showPreview) )
             m_showPreview = !m_showPreview;
+        if ( MobileActionButton(
+                 "MobileWorkbenchToggle",
+                 ICON_MMM_COPY,
+                 m_showWorkbench
+                     ? TR_CACHE("ui.mobile.workbench_shown").data()
+                     : TR_CACHE("ui.mobile.workbench_hidden").data(),
+                 { rect.m_width - 2 * m_padding, 56 * m_scale },
+                 m_showWorkbench) )
+            m_showWorkbench = !m_showWorkbench;
         // 设置由专用入口打开为中心大标签，不占用资源管理器的窄内容区。
         ImGui::Separator();
         if ( MobileActionButton(
@@ -685,6 +712,65 @@ void MobileWorkspacePresentation::drawRightDrawer(UIManager& manager,
             m_model.closeDrawer();
         }
     }
+    ImGui::End();
+}
+
+/// @brief 专属触摸工作台复用公共动作，剪贴板与撤销历史仍由原编辑命令维护。
+/// @details 只随主画布选中状态提交，不把欢迎、设置和音频页当作编辑目标。
+/// @warning 每帧只绘制固定数量按钮；不读取会话锁、文件或可变谱面容器。
+void MobileWorkspacePresentation::drawWorkbench(UIManager& manager)
+{
+    const std::string title =
+        TR_CACHE("ui.mobile.workbench").toString() + "###MobileWorkbench";
+    // 标题翻译与内部身份分开；原生标签继续支持长按关闭与分隔条调整。
+    const bool opened =
+        beginWindow("MobileWorkbench", title, &m_showWorkbench, 0);
+    if ( opened ) {
+        // 文字与图标共存，不依赖悬浮提示；窄屏按单列排布并允许空白拖动滚动。
+        // 稳定动作身份沿用桌面菜单，系统剪贴板导入与教程确认不会出现第二套实现。
+        // 每项只保存稳定身份，不在绘制时复制业务对象或剪贴板内容。
+        struct Action {
+            /// @brief 语义动作、翻译键和图标都是编译期稳定观察值。
+            const char* m_id;
+            const char* m_label;
+            const char* m_icon;
+        };
+        // 绘制只访问固定表，动作查找仅在明确激活时执行。
+        const std::array actions{
+            // 系统剪贴板由既有动作桥接，移动与桌面保持相同数据格式。
+            Action{ "CopyAction", "ui.edit.copy", ICON_MMM_COPY },
+            Action{ "PasteAction", "ui.edit.paste", ICON_MMM_PASTE },
+            Action{ "CutAction", "ui.edit.cut", ICON_MMM_SCISSORS },
+            // 历史仍由谱面事务维护，一次按钮激活只提交一次语义操作。
+            Action{ "UndoAction", "ui.edit.undo", ICON_MMM_UNDO },
+            Action{ "RedoAction", "ui.edit.redo", ICON_MMM_REDO },
+            // 工具区不是轨道区，全选不能依赖最后悬停的轨道位置。
+            Action{ "SelectAllObjectsAction",
+                    "ui.mobile.select_all",
+                    ICON_MMM_SELECT_ALL }
+        };
+        // 仅在用户触发时查找动作，绘制本身不访问会话或复制剪贴板载荷。
+        // 外部模态或抽屉仍通过 beginWindow 的输入屏蔽阻止后台编辑。
+        // 默认单列保留完整命中高度，短屏由本窗口滚动而非缩小按钮。
+        // 从按钮起手滑动仍经过移动仲裁，不把浏览误作编辑命令。
+        for ( const auto& action : actions ) {
+            if ( MobileActionButton(
+                     action.m_id,
+                     action.m_icon,
+                     TR(action.m_label).data(),
+                     { ImGui::GetContentRegionAvail().x, 56 * m_scale }) )
+                Interaction::executeAction(action.m_id, &manager);
+        }
+        // 删除沿用统一命令通道，目标为当前主画布，不能修改时间线自己的选区。
+        // 不复制底层删除实现，恢复能力继续由原来的撤销事务保证。
+        if ( MobileActionButton(
+                 "MobileDelete",
+                 ICON_MMM_ERASER,
+                 TR_CACHE("ui.settings.shortcut.delete_selected").data(),
+                 { ImGui::GetContentRegionAvail().x, 56 * m_scale }) )
+            MenuUtil::dispatchCommand(Logic::CmdDeleteSelected{});
+    }
+    // Begin 无论是否可见都配对结束，长按关闭不能泄漏样式或窗口栈。
     ImGui::End();
 }
 
@@ -893,10 +979,13 @@ void MobileWorkspacePresentation::saveLayout(UIManager& manager)
     value.m_toolbar     = m_showToolbar;
     value.m_timing      = m_showTiming;
     value.m_preview     = m_showPreview;
+    value.m_workbench   = m_showWorkbench;
     value.m_leftCenter  = m_model.leftHandleCenter();
     value.m_rightCenter = m_model.rightHandleCenter();
-    m_dock.capture(
-        value.m_timingRatio, value.m_previewRatio, value.m_selectedTab);
+    m_dock.capture(value.m_timingRatio,
+                   value.m_previewRatio,
+                   value.m_selectedTab,
+                   &value.m_workbenchRatio);
     const auto* settings = manager.getView<IUIView>("SettingsWindow");
     // 原生返回可能刚关闭设置页，读取业务开关而非上一帧可见窗口缓存。
     value.m_settingsOpen = settings && settings->isOpen();

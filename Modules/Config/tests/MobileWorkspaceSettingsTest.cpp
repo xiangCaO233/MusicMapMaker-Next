@@ -52,7 +52,10 @@ int main(int argc, char** argv)
     expected.m_rightCenter                 = .8f;
     expected.m_timingRatio                 = .24f;
     expected.m_previewRatio                = .31f;
-    expected.m_selectedTab                 = 0xfedcba98u;
+    // 非默认工作台宽度与关闭偏好必须和其他辅助区独立往返。
+    expected.m_workbench      = false;
+    expected.m_workbenchRatio = .18f;
+    expected.m_selectedTab    = 0xfedcba98u;
     // 高位身份能够暴露把无符号窗口哈希错误读为有符号整数的实现。
     expected.m_resourceTab = 3;
     // 所有开关同时开启覆盖多个分区的恢复，不以全默认对象冒充往返验证。
@@ -80,7 +83,9 @@ int main(int argc, char** argv)
         // 极端输入只修复比例总量，其他布尔和标签仍应保留代码默认。
         nlohmann::json{ { "timingRatio", .6 }, { "previewRatio", .6 } }
             .get<MobileWorkspaceSettings>();
-    check(crowded.m_timingRatio + crowded.m_previewRatio <= .951f,
+    check(crowded.m_timingRatio + crowded.m_previewRatio +
+                  crowded.m_workbenchRatio <=
+              .951f,
           "main retains space");
     auto& app = AppConfig::instance();
     // 单例只在本测试隔离进程中使用，reset 不会触及用户持久化文件。

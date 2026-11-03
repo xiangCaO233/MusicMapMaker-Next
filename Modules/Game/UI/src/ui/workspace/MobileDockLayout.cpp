@@ -20,23 +20,27 @@ bool MobileDockLayout::isAudioAnalysisWindow(std::string_view title)
 /// @brief 从独立移动配置恢复首次分割参数，下一次提交按当前屏幕建树。
 /// @details 活动标签待匹配窗口出现时消费，不持有窗口或节点指针。
 void MobileDockLayout::restore(float timingRatio, float previewRatio,
-                               ImGuiID selectedTab)
+                               ImGuiID selectedTab, float workbenchRatio)
 {
-    m_timingRatio  = timingRatio;
-    m_previewRatio = previewRatio;
-    m_restoreFocus = selectedTab;
-    m_startupFocus = selectedTab;
-    m_visibility   = -1;
+    m_timingRatio    = timingRatio;
+    m_previewRatio   = previewRatio;
+    m_workbenchRatio = workbenchRatio;
+    m_restoreFocus   = selectedTab;
+    m_startupFocus   = selectedTab;
+    m_visibility     = -1;
 }
 
 /// @brief 冻结用户实际调整结果，不能用最初默认比例冒充当前停靠宽度。
 /// @details 隐藏叶节点没有几何，继续使用隐藏前缓存的比例。
 /// @warning 交互提交时只访问三叶一根，不遍历整个 ImGui 窗口集合。
 void MobileDockLayout::capture(float& timingRatio, float& previewRatio,
-                               ImGuiID& selectedTab) const
+                               ImGuiID& selectedTab,
+                               float*   workbenchRatio) const
 {
     timingRatio  = m_timingRatio;
     previewRatio = m_previewRatio;
+    // 可选输出兼容旧调用，生产外壳同时保存工作台独立宽度。
+    if ( workbenchRatio ) *workbenchRatio = m_workbenchRatio;
     // 尚未显示的树不能生成有效快照，保留调用方先前保存的标签身份。
     const auto* root = ImGui::DockBuilderGetNode(m_root);
     if ( !root || root->Size.x <= 0 ) return;
@@ -44,6 +48,9 @@ void MobileDockLayout::capture(float& timingRatio, float& previewRatio,
         timingRatio = leaf->Size.x / root->Size.x;
     if ( const auto* leaf = ImGui::DockBuilderGetNode(m_preview) )
         previewRatio = leaf->Size.x / root->Size.x;
+    if ( const auto* leaf = ImGui::DockBuilderGetNode(m_workbench);
+         leaf && workbenchRatio )
+        *workbenchRatio = leaf->Size.x / root->Size.x;
     if ( const auto* leaf = ImGui::DockBuilderGetNode(m_center);
          leaf && leaf->VisibleWindow )
         // 保存窗口 ID；原生 TabId 是从窗口 ID 派生的另一身份，不能用于 Begin
@@ -198,7 +205,7 @@ void MobileDockLayout::prepareTabCaptions(float scale)
     // 只复用存储容量，不复用上一帧颜色快照或窗口名观察指针。
     // 显隐重建之后旧叶节点 ID 可失效，颜色恢复按窗口稳定 ID 完成。
     m_tabCaptions.clear();
-    for ( const auto id : { m_center, m_timing, m_preview } ) {
+    for ( const auto id : { m_center, m_timing, m_preview, m_workbench } ) {
         auto* node = ImGui::DockBuilderGetNode(id);
         if ( !node ) continue;
         // 标签宽度和触摸高度分开处理，长名字不能扩大整个工作区。
@@ -302,12 +309,33 @@ ImGuiID MobileDockLayout::node(MobileDockPanel panel) const
     switch ( panel ) {
     case MobileDockPanel::Timing: return m_timing;
     case MobileDockPanel::Preview: return m_preview;
+    case MobileDockPanel::Workbench: return m_workbench;
     default: return m_center;
     }
 }
 
+/// @brief 可见主画布才提供触摸编辑工作台，欢迎、设置和音频页不占此区域。
+/// @details 使用原生叶节点的当前选中窗口，工具窗口抢焦点不影响主区标签身份。
+/// @warning 每帧固定节点查询，不分配字符串或访问后台会话。
+bool MobileDockLayout::isMainCanvasSelected() const
+{
+    const auto* node = ImGui::DockBuilderGetNode(m_center);
+    // 重建首帧尚未结算原生可见页，先使用待恢复身份，避免显隐条件反向触发重建。
+    const auto* window = m_startupFocus ? ImGui::FindWindowByID(m_startupFocus)
+                         : node         ? node->VisibleWindow
+                                        : nullptr;
+    if ( !window ) return false;
+    const std::string_view name(window->Name);
+    // 标题随谱名和语言变化，不能以可见文字判断编辑上下文。
+    const auto separator = name.rfind("###");
+    const auto id =
+        separator == std::string_view::npos ? name : name.substr(separator + 3);
+    // 显示标题可包含谱名和脏标记，只有稳定内部身份能够区分真正的编辑画布。
+    return id.starts_with("Canvas_") || id == "Basic2DCanvas";
+}
+
 /// @brief
-/// 在一个根停靠区内组合三个等高叶节点，标签与内容边界由同一原生节点树计算。
+/// 在一个根停靠区内组合主区与可选的等高辅助叶节点，标签与内容边界由同一原生节点树计算。
 /// @param position 已扣除系统安全区与外边距的宿主左上角。
 /// @param size 宿主整体尺寸，工具栏由外壳在调用前另行扣除。
 /// @param scale 内容倍率，分隔条与可见握柄使用同一触摸尺度。
@@ -317,7 +345,7 @@ ImGuiID MobileDockLayout::node(MobileDockPanel panel) const
 /// 分区宽度由原生分隔条连续调整，不允许拖出；关闭使用标签长按菜单。
 /// @warning 普通帧只读固定数量节点，不执行业务数据扫描或同步等待。
 void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
-                              bool timing, bool preview)
+                              bool timing, bool preview, bool workbench)
 {
     // 与 ImGui 窗口的整数像素几何一致，避免非整数 UI
     // 倍率让重建和最终宿主差一像素。
@@ -326,7 +354,7 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
     size     = { std::max(1.0f, std::floor(size.x)),
                  std::max(1.0f, std::floor(size.y)) };
     // 分隔条可见尺寸由调用方美化样式提供，不为触摸命中额外画粗。
-    // 三个分区共享宿主顶部和底部，标签栏使用同一帧字号与 FramePadding。
+    // 所有分区共享宿主顶部和底部，标签栏使用同一帧字号与 FramePadding。
     const auto& style = ImGui::GetStyle();
     // 只在停靠树提交期间扩展标签高度，不能挤坏共享弹窗的固定高度控件。
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, tabPadding(scale));
@@ -342,13 +370,15 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
                      ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoBringToFrontOnFocus);
     m_root = ImGui::GetID("MobileDockRoot");
-    // 显隐组成两位键；单纯横竖屏切换保留原生树内的相对分割比例。
+    // 显隐组成三位键；单纯横竖屏切换保留原生树内的相对分割比例。
     // 所有 ID 都在宿主作用域取得，避免与业务视图的同名控件碰撞。
-    const int  visible = (timing ? 1 : 0) | (preview ? 2 : 0);
-    const auto flags   = ImGuiDockNodeFlags_NoDockingSplit |
-                         ImGuiDockNodeFlags_NoUndocking |
-                         ImGuiDockNodeFlags_NoWindowMenuButton |
-                         ImGuiDockNodeFlags_NoCloseButton;
+    // 此位表示实际占用空间，用户开关由外壳独立保存。
+    const int visible =
+        (timing ? 1 : 0) | (preview ? 2 : 0) | (workbench ? 4 : 0);
+    const auto flags = ImGuiDockNodeFlags_NoDockingSplit |
+                       ImGuiDockNodeFlags_NoUndocking |
+                       ImGuiDockNodeFlags_NoWindowMenuButton |
+                       ImGuiDockNodeFlags_NoCloseButton;
     if ( !ImGui::DockBuilderGetNode(m_root) || visible != m_visibility ) {
         // 先读取旧节点的实际尺寸，再进行任何删除；删除会使观察指针失效。
         if ( const auto* root = ImGui::DockBuilderGetNode(m_root);
@@ -359,9 +389,16 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
             if ( const auto* old = ImGui::DockBuilderGetNode(m_preview) )
                 m_previewRatio =
                     std::clamp(old->Size.x / root->Size.x, .02f, .95f);
+            // 先缓存最终宽度再删除节点，切回画布不回退到默认比例。
+            if ( const auto* old = ImGui::DockBuilderGetNode(m_workbench) )
+                m_workbenchRatio =
+                    std::clamp(old->Size.x / root->Size.x, .02f, .95f);
             if ( const auto* old = ImGui::DockBuilderGetNode(m_center);
-                 old && old->VisibleWindow )
+                 old && old->VisibleWindow ) {
                 m_restoreFocus = old->VisibleWindow->ID;
+                // 保护的是明确选中的身份而非固定帧数；下一次真实按下立即交还导航。
+                m_startupFocus = m_restoreFocus;
+            }
             ImGui::DockBuilderRemoveNode(m_root);
         }
         // 只在拓扑变化时重建，不能逐帧用默认比例覆盖用户拖动结果。
@@ -370,26 +407,36 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
         ImGui::DockBuilderSetNodeSize(m_root, size);
         m_center = m_root;
         // 重建后先清除隐藏节点，不能将旧 ID 发布给后续业务 Begin。
-        // 主区可直接是根叶节点，也可以在分割后成为最后剩余的左叶。
-        m_timing = m_preview = 0;
+        // 左侧预览和右侧时间线、工作台分别切出，剩余叶始终属于主区。
+        m_timing = m_preview = m_workbench = 0;
         // 保存值相对于根宽度；原生 split 的比例却相对于扣除缝隙后的父宽度。
         // 先恢复目标像素再换算，不能在每次重启时重复扣除一次缝隙。
-        const auto splitRight = [&](float ratio, ImGuiID& leaf) {
-            const auto* parent = ImGui::DockBuilderGetNode(m_center);
-            const float available =
-                std::max(1.0f, parent->Size.x - style.DockingSeparatorSize);
-            // 原生先截断左子区，右子区取余数；半像素偏置保证整数目标不会向上漂移。
-            // 像素取整只发生在重建，不影响原生持续拖动的即时几何反馈。
-            const float desired = std::round(size.x * ratio);
-            ImGui::DockBuilderSplitNode(
-                m_center,
-                ImGuiDir_Right,
-                std::clamp((desired - .5f) / available, .01f, .99f),
-                &leaf,
-                &m_center);
-        };
-        if ( preview ) splitRight(m_previewRatio, m_preview);
-        if ( timing ) splitRight(m_timingRatio, m_timing);
+        const auto splitSide =
+            [&](float ratio, ImGuiDir direction, ImGuiID& leaf) {
+                const auto* parent = ImGui::DockBuilderGetNode(m_center);
+                const float available =
+                    std::max(1.0f, parent->Size.x - style.DockingSeparatorSize);
+                // 左叶直接截断、右叶取余数，两侧偏置相反以恢复同一个整数目标宽度。
+                // 像素取整只发生在重建，不影响原生持续拖动的即时几何反馈。
+                const float desired = std::round(size.x * ratio);
+                ImGui::DockBuilderSplitNode(
+                    m_center,
+                    direction,
+                    std::clamp(
+                        (desired + (direction == ImGuiDir_Left ? .5f : -.5f)) /
+                            available,
+                        .01f,
+                        .99f),
+                    &leaf,
+                    &m_center);
+            };
+        // 从两侧向内切出辅助区，最终为预览、主区、时间线、工作台。
+        // 恢复仍沿用各分区自身宽度比例，不把旧版保存的左右位置当作新布局依据。
+        // 最右工作台先切出，随后时间线仅使用剩余空间，不会越过工作台。
+        if ( workbench )
+            splitSide(m_workbenchRatio, ImGuiDir_Right, m_workbench);
+        if ( preview ) splitSide(m_previewRatio, ImGuiDir_Left, m_preview);
+        if ( timing ) splitSide(m_timingRatio, ImGuiDir_Right, m_timing);
         ImGui::DockBuilderFinish(m_root);
         // 完成整棵树后再记录组合，下一帧即可走不重建的稳定路径。
         // 业务窗口稍后依次 Begin，并从当前布局获取各自所属叶节点。
@@ -411,14 +458,17 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
     borderPadding = previousPadding;
     // 使用原生分隔条承接拖动，握柄只提供视觉提示，不创建竞争命中区。
     // 握柄属于宿主绘制层，业务菜单和模态仍可正常覆盖它。
-    for ( const auto id : { m_timing, m_preview } ) {
-        // 每个右侧叶节点的左边界对应一个分割，隐藏叶节点不绘制握柄。
+    for ( const auto id : { m_timing, m_preview, m_workbench } ) {
+        // 预览的右边界、时间线和工作台的左边界对应各自分割，隐藏区不绘制握柄。
         // 读取当前几何使握柄随原生拖动实时移动，不保存另一份坐标。
         if ( const auto* leaf = ImGui::DockBuilderGetNode(id) ) {
-            // 分隔条位于叶节点左侧间隙，图形中心与原生命中区域中心一致。
+            // 分隔条中心从实际节点边界取得，左右分割不能共用同一侧坐标。
             // 根宿主高度统一，因此两个握柄都保持在同一水平线上。
             const float x =
-                leaf->Pos.x - ImGui::GetStyle().DockingSeparatorSize * .5f;
+                id == m_preview
+                    ? leaf->Pos.x + leaf->Size.x +
+                          style.DockingSeparatorSize * .5f
+                    : leaf->Pos.x - style.DockingSeparatorSize * .5f;
             const float y = position.y + size.y * .5f;
             const float halfWidth =
                 std::max(0.5f, style.DockingSeparatorSize * .15f);
