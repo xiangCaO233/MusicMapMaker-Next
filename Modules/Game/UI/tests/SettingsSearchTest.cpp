@@ -12,6 +12,7 @@
 #include "ui/imgui/menu/items/MainMenuToggleItem.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -64,6 +65,37 @@ struct SettingsSearchTestAccess {
         view.navigateToSetting(
             static_cast<std::size_t>(item - entries.begin()));
         return true;
+    }
+    /// @brief 在真实嵌套分组里绘制共用单选行，保留各层生产内边距。
+    /// @details 此入口只构造夹具，不替代 RadioButton 测量、换行或控件绘制。
+    /// @param view 本用例独占的生产设置视图，对象池在本次渲染期间保持存活。
+    /// @param options 从同一数据生成测量控件和生产控件，避免测试文案不一致。
+    /// 两层分组模拟自动备份等关联设置项，不能只在无边距根容器里验证。
+    /// 配置值仅为夹具局部变量，不调用 AppConfig 的持久化或事件发布入口。
+    /// 当前值与 changed 的局部生命周期覆盖 renderInCurrent 中所有绘制回调。
+    /// 节点查询结果只在本帧检查，下一次 Clay_BeginLayout 后不复用旧矩形。
+    static void drawRadioRow(
+        SettingsView&                                   view,
+        const std::vector<std::pair<std::string, int>>& options)
+    {
+        CLayVBox root;
+        root.setPadding(8, 8, 8, 8);
+        size_t row = 0, section = 0;
+        auto&  group = view.addSettingGroup(root, section, "RadioGroup");
+        auto& nested = view.addSettingGroup(group, section, "NestedRadioGroup");
+        int   current = 0;
+        bool  changed = false;
+        view.addRadioSetting(nested,
+                             row,
+                             section,
+                             "Radio clipping",
+                             200,
+                             options,
+                             current,
+                             changed);
+        // 生成并执行真实 Clay 节点后，测试从公开节点查询取得最终分配矩形。
+        root.renderInCurrent(ImGui::GetCursorScreenPos(),
+                             { ImGui::GetContentRegionAvail().x, 0 });
     }
     /// @brief 检查真实行已经出现，且高亮在目标可见后仍有完整三秒。
     /// 检查必须放在滚动请求生效之后，不能只验证目标索引存在。
@@ -502,6 +534,136 @@ bool checkTooltipViewportBounds()
     return passed;
 }
 
+/// @brief 为同一设置行选择移动布局策略，不创建平台窗口或真实管理器资源。
+class TouchSettingsPresentation final : public MMM::UI::IWorkspacePresentation
+{
+public:
+    /// @brief 夹具直接绘制设置行，不提交工作区外壳。
+    void renderWorkspace(MMM::UI::MainDockSpaceUI&,
+                         MMM::UI::UIManager&) override
+    {
+    }
+    /// @brief 关闭悬浮反馈与生产移动外壳一致，触发窄屏纵向布局分支。
+    bool allowsHoverFeedback() const override { return false; }
+};
+
+/// @brief 对照真实原生控件边界验证设置行，不能用同一宽度公式伪造预期值。
+/// @details 覆盖手机和平板宽度、英文长选项及不同字体与帧内边距。
+/// 相邻项不重叠、完整命中区不越出分配区域，才说明文字不会被后项圆点盖住。
+/// 测试保存并恢复主题与视口，不修改隔离配置中的任何业务选项。
+/// 手机宽度覆盖单项不能放入固定值列时的纵向排版。
+/// 平板宽度覆盖保持双列但多个选项必须换行的情况。
+/// 字体倍率和帧内边距同时变化，复现固定圆点预留值小于实际控件的问题。
+/// 以原生 GetItemRectSize 作为独立参照，不在断言中重复生产测量公式。
+/// 分配宽度必须至少容纳原生完整组件，而不是仅容纳其文本或选中圆点。
+/// 最右边界还必须位于宿主内容范围内，避免扩大控件却把裁切移到视口外。
+/// 同行用水平边界判定相邻项分离，换行则要求前行底边不超过后行顶边。
+/// 半像素容差只容纳 Clay 与 ImGui 的浮点取整，不接受整字符宽度的裁切。
+/// 所有几何在真实布局执行之后读取，缺失节点按失败处理。
+/// 使用同一视图连续切换宽度，兼顾对象池复用后是否残留上一种排版。
+/// 选项包含保存格式、事件触发和时间单位等长文案，不用短占位符代替问题场景。
+/// 原生参照使用未选中状态，选中圆点只改变绘制颜色而不应改变尺寸。
+/// 反馈包装只改变颜色与音效，参照故意直接使用原生组件作为独立尺寸来源。
+/// 不比较 GPU 像素，字体与布局的最终浮点矩形足以证明组件发生相互遮盖。
+/// @return 所有宽度和样式组合都满足完整边界与不重叠约束时返回 true。
+/// @warning 只推进有限内存 UI 帧，不创建窗口、GPU 纹理或平台服务。
+bool checkRadioGeometry()
+{
+    MMM::UI::SettingsView        view("RadioGeometryTest");
+    TouchSettingsPresentation    presentation;
+    MMM::UI::WorkspaceFrameScope scope(presentation);
+    auto&                        io           = ImGui::GetIO();
+    const auto                   savedStyle   = ImGui::GetStyle();
+    const auto                   savedDisplay = io.DisplaySize;
+    io.DisplaySize                            = { 1600, 1000 };
+    const std::vector<std::pair<std::string, int>> options{
+        { "Keep original file format", 0 },
+        { "Force save as .mmm", 1 },
+        { "Event triggered", 2 },
+        { "Seconds / Minutes", 3 }
+    };
+    bool passed = true;
+    for ( const float scale : { 1.0f, 2.0f } ) {
+        // 固定标签列宽让窄场景明确触发移动纵向路径，宽场景保留双列。
+        // 两种布局都比较实际原生尺寸，不能只断言某个分支布尔量。
+        for ( const float width : { 620.0f, 1100.0f } ) {
+            ImGui::GetStyle().FontScaleMain    = scale;
+            ImGui::GetStyle().FramePadding     = { 4 * scale, 12 * scale };
+            ImGui::GetStyle().ItemInnerSpacing = { 9 * scale, 4 * scale };
+            // 先稳定窗口尺寸；第一次 Begin 可能仍引用前一场景的可用内容宽度。
+            for ( int frame = 0; frame < 2; ++frame ) {
+                ImGui::NewFrame();
+                ImGui::SetNextWindowPos({ 0, 0 });
+                ImGui::SetNextWindowSize({ width, 900 });
+                ImGui::Begin("RadioGeometryHost",
+                             nullptr,
+                             ImGuiWindowFlags_NoSavedSettings |
+                                 ImGuiWindowFlags_NoTitleBar);
+                const auto origin = ImGui::GetCursorScreenPos();
+                // 参照组件与设置行在同一窗口、同一字体和样式作用域内绘制。
+                // 只读取它们的最终尺寸，不用自己的文本宽度推导来替代原生结果。
+                std::vector<ImVec2> nativeSizes;
+                for ( const auto& option : options ) {
+                    // 原生 RadioButton 自己报告尺寸，与生产布局估算相互独立。
+                    ImGui::RadioButton(option.first.c_str(), false);
+                    nativeSizes.push_back(ImGui::GetItemRectSize());
+                }
+                ImGui::SetCursorScreenPos(origin);
+                // 测量组件没有参与 Clay 树，重置游标后不应改变被测区域的起点。
+                // 后续边界检查全部采用根布局局部坐标，不混用屏幕原点偏移。
+                const float available = ImGui::GetContentRegionAvail().x;
+                // 恢复原起点后执行生产布局，参照控件不能占掉设置行的可用空间。
+                // 原生组件只是测量参照，不参与被测布局的换行决策。
+                SettingsSearchTestAccess::drawRadioRow(view, options);
+                Clay_BoundingBox previous{};
+                for ( size_t i = 0; i < options.size(); ++i ) {
+                    // 两层生产分组已消费 section
+                    // 0/1，行前缀由生产索引规则确定。
+                    const std::string id =
+                        "S2_R1_L_Radio clipping_opt_" + std::to_string(i);
+                    const auto item = Clay_GetElementData(
+                        Clay_GetElementId(MMM::UI::ToCS(id)));
+                    const auto& box = item.boundingBox;
+                    const bool  fits =
+                        item.found && box.width + .5f >= nativeSizes[i].x &&
+                        box.height + .5f >= nativeSizes[i].y &&
+                        box.x + nativeSizes[i].x <= available + .5f;
+                    // 相邻元素可能在同一行或下一行，分别验证两种合法空间关系。
+                    // 不限定必须几行，字体和翻译变化后仍允许布局自行选择换行位置。
+                    const bool separated =
+                        i == 0 ||
+                        (box.y >= previous.y + previous.height - .5f) ||
+                        (box.x >= previous.x + previous.width - .5f);
+                    if ( frame && (!fits || !separated) ) {
+                        XERROR(
+                            "Radio geometry: scale={}, width={}, option={}, "
+                            "allocated=({}, {}, {}, {}), native=({}, {})",
+                            scale,
+                            width,
+                            i,
+                            box.x,
+                            box.y,
+                            box.width,
+                            box.height,
+                            nativeSizes[i].x,
+                            nativeSizes[i].y);
+                        // 保留失败状态并继续检查其他矩形，日志可定位所有有问题的组合。
+                        passed = false;
+                    }
+                    previous = box;
+                }
+                ImGui::End();
+                ImGui::Render();
+            }
+        }
+    }
+    // 归还完整样式快照，避免本组的大圆点尺寸影响其他设置页回归。
+    // 视图与平台策略在上下文销毁前析构，不保留 Clay 节点的借用结果。
+    ImGui::GetStyle() = savedStyle;
+    io.DisplaySize    = savedDisplay;
+    return passed;
+}
+
 /// @brief 驱动真实视觉页，验证展开、滚动、三秒高亮及手动滚动不被抢回。
 /// @param manager 唯一 UIManager，负责初始化 Clay 字体测量桥。
 /// @return 所有实际布局和隐藏设置场景都通过时返回 true。
@@ -668,7 +830,8 @@ int main(int argc, char** argv)
         // 管理器初始化 Clay 文本测量，并早于 ImGui 上下文析构释放视图。
         MMM::UI::UIManager manager;
         passed = checkProfessionalDisabledTooltip() &&
-                 checkTooltipViewportBounds() && checkNavigation(manager);
+                 checkTooltipViewportBounds() && checkRadioGeometry() &&
+                 checkNavigation(manager);
     }
     ImGui::DestroyContext();
     return passed ? 0 : 5;
