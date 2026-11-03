@@ -50,8 +50,11 @@ int main(int argc, char** argv)
         expected.m_settingsOpen            = true;
     expected.m_leftCenter                  = .2f;
     expected.m_rightCenter                 = .8f;
-    expected.m_timingRatio                 = .24f;
-    expected.m_previewRatio                = .31f;
+    // 左右采用相反偏好，捕获错误地共用一个收边字段的情况。
+    expected.m_leftHandleDocked  = false;
+    expected.m_rightHandleDocked = true;
+    expected.m_timingRatio       = .24f;
+    expected.m_previewRatio      = .31f;
     // 非默认工作台宽度与关闭偏好必须和其他辅助区独立往返。
     expected.m_workbench      = false;
     expected.m_workbenchRatio = .18f;

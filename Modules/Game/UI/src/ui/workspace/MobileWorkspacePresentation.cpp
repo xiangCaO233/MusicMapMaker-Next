@@ -111,7 +111,8 @@ private:
     /// @warning 每个停靠窗口每帧调用，仅查询已注册画布集合大小。
     void processTabMenu(std::string_view id, bool* open, bool mainCanvas);
     /// @brief 绘制最小触摸区域与细握柄，点击和拖动共用状态机。
-    void drawHandle(const char* id, MobileRect rect, bool opened = false);
+    void drawHandle(const char* id, MobileRect rect, bool opened = false,
+                    bool retracted = false);
     /// @brief 左侧第一级提供常用分类，第二级保留现有业务管理器。
     void drawLeftDrawer(UIManager& manager, MobileRect rect);
     /// @brief 右侧以明确的选中状态提供三个窗口开关。
@@ -194,6 +195,8 @@ void MobileWorkspacePresentation::beginFrame(UIManager& manager)
         m_showPreview     = saved.m_preview;
         m_showWorkbench   = saved.m_workbench;
         m_model.restoreHandleCenters(saved.m_leftCenter, saved.m_rightCenter);
+        m_model.restoreHandleDocking(saved.m_leftHandleDocked,
+                                     saved.m_rightHandleDocked);
         m_dock.restore(saved.m_timingRatio,
                        saved.m_previewRatio,
                        saved.m_selectedTab,
@@ -507,13 +510,16 @@ void MobileWorkspacePresentation::processTabMenu(std::string_view id,
 /// @param id 当前一侧把手的稳定窗口身份。
 /// @param rect 纯模型给出的完整触摸区，不等于细握柄的可见宽度。
 /// @param opened 为 true 时只绘制外沿握柄，收起把手则保留入口图标。
+/// @param retracted 为 true 时只画屏幕内窄条，完整矩形仍交由模型处理。
+/// @details 收边入口贴合安全工作区，不借工具栏或预览窗口的边界定位。
+/// 收边与悬浮态使用相同主题色，切换语言或皮肤不创建新的入口身份。
 /// @details 移动外壳在所有背景内容之后绘制握柄，便于拇指发现入口。
 /// 命中区与系统最外侧返回区域错开，图形上不添加桌面悬浮说明。
 /// 左侧文件夹表示资源入口，右侧滑杆表示工作区显示控制。
 /// 图标只提供识别，不额外创建一个与手势模型竞争的按钮 Item。
 /// @warning 固定图元绘制，不申请纹理或执行异步工作。
 void MobileWorkspacePresentation::drawHandle(const char* id, MobileRect rect,
-                                             bool opened)
+                                             bool opened, bool retracted)
 {
     // 把手窗口自身不添加内容内边距，整块透明区域都是触摸目标。
     // 可见握柄只占其中少量宽度，避免长期遮住画布。
@@ -529,6 +535,27 @@ void MobileWorkspacePresentation::drawHandle(const char* id, MobileRect rect,
                 { x - 3 * m_scale, pos.y + 12 * m_scale },
                 { x + 3 * m_scale, pos.y + rect.m_height - 12 * m_scale },
                 ImGui::GetColorU32(ImGuiCol_Text),
+                ImGui::GetStyle().GrabRounding);
+        } else if ( retracted ) {
+            // 此时不是缩小手势坐标：模型仍持有原触点，向外拖动不会因命中区移动而中断。
+            // 可见宽度独立于主题圆角，放大圆角不能扩大对编辑画面的遮挡。
+            // 完整命中窗口部分位于屏幕外，只绘制留在安全工作区内的窄边条。
+            // 收边时不画被截半的图标，端部圆角与颜色仍服从当前美化配置。
+            const auto pos  = ImGui::GetWindowPos();
+            const bool left = std::string_view(id) == "MobileLeftHandle";
+            // 左端只露出矩形末段，右端只露出起始段，不将窄条画到屏幕外。
+            const float x = pos.x + (left ? rect.m_width - 12 * m_scale : 0);
+            // 两个图元共用原窗口裁剪，不额外建立与手势模型竞争的按钮。
+            auto* draw = ImGui::GetWindowDrawList();
+            draw->AddRectFilled(
+                { x, pos.y + 4 * m_scale },
+                { x + 12 * m_scale, pos.y + rect.m_height - 4 * m_scale },
+                ImGui::GetColorU32(ImGuiCol_Button),
+                ImGui::GetStyle().FrameRounding);
+            draw->AddRectFilled(
+                { x + 5 * m_scale, pos.y + 20 * m_scale },
+                { x + 7 * m_scale, pos.y + rect.m_height - 20 * m_scale },
+                ImGui::GetColorU32(ImGuiCol_TextDisabled),
                 ImGui::GetStyle().GrabRounding);
         } else {
             const auto color = ImGui::GetColorU32(ImGuiCol_Text);
@@ -941,8 +968,14 @@ void MobileWorkspacePresentation::endFrame(UIManager& manager)
         // 普通弹层仍由 ImGui 保持在上方，握柄不会抢占其输入。
     }
     if ( !popup && m_model.drawer() == MobileDrawer::None ) {
-        drawHandle("MobileLeftHandle", m_model.leftHandle());
-        drawHandle("MobileRightHandle", m_model.rightHandle());
+        drawHandle("MobileLeftHandle",
+                   m_model.leftHandle(),
+                   false,
+                   m_model.handleDocked(MobileDrawer::Left));
+        drawHandle("MobileRightHandle",
+                   m_model.rightHandle(),
+                   false,
+                   m_model.handleDocked(MobileDrawer::Right));
     }
     // 参数弹层在所有边缘面板结束后提交，保持独立的裁剪区和输入优先级。
     m_playbackControls.drawPopup(manager, m_scale, m_showToolbar);
@@ -982,6 +1015,10 @@ void MobileWorkspacePresentation::saveLayout(UIManager& manager)
     value.m_workbench   = m_showWorkbench;
     value.m_leftCenter  = m_model.leftHandleCenter();
     value.m_rightCenter = m_model.rightHandleCenter();
+    // 只保存已提交的收边偏好，不保存抽屉展开量或未结束的触点。
+    // 两侧独立写回，移动其中一侧不能让另一侧的入口突然变宽。
+    value.m_leftHandleDocked  = m_model.handleDocked(MobileDrawer::Left);
+    value.m_rightHandleDocked = m_model.handleDocked(MobileDrawer::Right);
     m_dock.capture(value.m_timingRatio,
                    value.m_previewRatio,
                    value.m_selectedTab,

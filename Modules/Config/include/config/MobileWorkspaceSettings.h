@@ -14,6 +14,8 @@ struct MobileWorkspaceSettings {
     bool m_workbench{ true };
     /// @brief 左右把手独立归一化中心，屏幕尺寸变化后仍可重新定位。
     float m_leftCenter{ .5f }, m_rightCenter{ .5f };
+    /// @brief 默认收边减少画布遮挡，左右独立保存且不影响归一化中心。
+    bool m_leftHandleDocked{ true }, m_rightHandleDocked{ true };
     /// @brief 辅助分区占整个中央宿主宽度的比例，隐藏时保留上次值。
     float m_timingRatio{ .28f }, m_previewRatio{ .2f },
         m_workbenchRatio{ .22f };
