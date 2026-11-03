@@ -821,6 +821,7 @@ return {
 	["ui.settings.editor.toolbar_value_wheel_adjustment_tooltip"] = "When enabled, hover the playback speed, track count, or beat divisor button on the right toolbar and scroll to adjust its value directly.",
 	["ui.settings.editor.scroll_multiplier_tooltip"] = "On canvas:\n- Use Scroll to scroll the timeline\n- Use Shift+Scroll to accelerate scrolling by this multiplier",
 	["ui.audio_manager.eq_control"] = "Graphic Equalizer (EQ)",
+	["ui.audio_manager.eq_plot_height"] = "Curve height",
 	["ui.audio_manager.reset_eq"] = "Reset EQ",
 	["ui.audio_manager.eq_none"] = "None",
 	["ui.audio_manager.open_waveform"] = "Show Waveform Window",

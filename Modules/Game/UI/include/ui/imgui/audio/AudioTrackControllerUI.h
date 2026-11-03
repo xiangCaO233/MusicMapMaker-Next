@@ -251,6 +251,9 @@ private:
     TrackType   m_type;
 
     Audio::EQPreset m_currentPreset{ Audio::EQPreset::None };
+    /// @brief 移动响应图的逻辑高度，只影响当前控制器布局，不修改音频配置。
+    /// @details 单独保存整数草稿，避免拖动图表尺寸被标记为谱面或 EQ 参数变化。
+    int m_eqPlotHeight{ 240 };
 
     /// @brief 倍速滑块拖动时的界面草稿；松开后才提交离线音频处理。
     float m_speedSliderDraft{ 1.0f };

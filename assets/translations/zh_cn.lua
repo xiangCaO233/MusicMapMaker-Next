@@ -820,6 +820,7 @@ return {
 	["ui.settings.editor.toolbar_value_wheel_adjustment_tooltip"] = "启用后，将光标悬浮在右侧工具栏的播放速度、轨道数量或分拍数量按钮上滚动滚轮，可直接调整对应数值。",
 	["ui.settings.editor.scroll_multiplier_tooltip"] = "在画布上：\n- 使用 滚轮 滚动时间线\n- 使用 Shift+滚轮 以此乘数加速滚动",
 	["ui.audio_manager.eq_control"] = "图形均衡器 (EQ)",
+	["ui.audio_manager.eq_plot_height"] = "曲线图高度",
 	["ui.audio_manager.reset_eq"] = "重置 EQ",
 	["ui.audio_manager.eq_none"] = "无",
 	["ui.audio_manager.open_waveform"] = "开启实时波形图窗口",

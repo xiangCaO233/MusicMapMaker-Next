@@ -1,10 +1,13 @@
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 
+#include "config/AppConfig.h"
 #include "config/skin/translation/TranslationFormat.h"
 #include "imgui.h"
 #include "implot.h"
 #include "mmm/project/AudioTrackConfig.h"
+#include "ui/imgui/audio/AudioEqualizerPlotLayout.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 
 #include <algorithm>
 #include <array>
@@ -189,7 +192,12 @@ void AudioTrackControllerUI::renderEQSection(AudioTrackConfig& config,
 
     // 预设下拉框使用固定宽度并在当前内容区水平居中。
     const float contentWidth = ImGui::GetContentRegionAvail().x;
-    const float comboWidth   = 200.0F;
+    const bool  touch        = !workspaceAllowsHoverFeedback();
+    // 尺寸来自当前平台能力，不使用分散的 Android 条件编译。
+    // 同一控制器切换面板宽度后，曲线立即跟随实际可用区域。
+    const float scale = Config::AppConfig::instance().getWindowContentScale();
+    const float comboWidth =
+        touch ? std::min(contentWidth, 200.0f * scale) : 200.0F;
 
     const char* title      = TR("ui.audio_manager.eq_control").data();
     const float titleWidth = ImGui::CalcTextSize(title).x;
@@ -249,8 +257,37 @@ void AudioTrackControllerUI::renderEQSection(AudioTrackConfig& config,
     std::array<ice::BiquadFilter, FIFTEEN_BAND_FREQUENCIES.size()> filters;
     prepareEqualizerPreviewFilters(config, frequencies, filters);
 
+    if ( touch ) {
+        // 高度草稿属于控制器，切换频段或重新渲染不能重置用户选择。
+        // 触摸高度与字号分别约束，大字体仍须完整显示当前数值。
+        // 尺寸是纯显示状态，不能复用下面的 changed 标记触发音频重算。
+        // 横向滑条复用既有触摸方向仲裁，纵向起手仍可滚动整页。
+        ImGui::TextUnformatted(TR("ui.audio_manager.eq_plot_height").data());
+        const auto padding = ImGui::GetStyle().FramePadding;
+        ImGui::PushStyleVar(
+            ImGuiStyleVar_FramePadding,
+            ImVec2(padding.x,
+                   std::max(padding.y,
+                            (48.0f * scale - ImGui::GetFontSize()) * .5f)));
+        ImGui::SetNextItemWidth(-1);
+        // 禁止长按切换为键盘输入，手机无需唤出软键盘调整图表。
+        // 此处处理横向尺寸滑动，原生纵向滚动保留整页浏览能力。
+        FeedbackSliderInt("##EQPlotHeight",
+                          &m_eqPlotHeight,
+                          240,
+                          640,
+                          "%d",
+                          ImGuiSliderFlags_NoInput);
+        ImGui::PopStyleVar();
+    }
+    // 预留数据区需要的高度，而不是让字体和轴标签瓜分固定 150 像素。
+    // 宽度跟随可调面板，超过屏幕的纵向内容继续使用原有窗口滚动。
+    const float plotHeight = audioEqualizerPlotHeight(
+        static_cast<float>(m_eqPlotHeight), scale, ImGui::GetFontSize(), touch);
+    // 放大只改变显示区域，不改变频段、曲线采样数或滤波器计算量。
+    // BeginPlot 与 EndPlot 仍在原分支配对，隐藏窗口不会遗留绘图状态。
     if ( ImPlot::BeginPlot("##EQCurve",
-                           ImVec2(-1, 150),
+                           ImVec2(-1, plotHeight),
                            ImPlotFlags_NoLegend | ImPlotFlags_NoMenus) ) {
         ImPlot::SetupAxis(ImAxis_X1, TR("ui.audio_manager.freq_hz").data());
         ImPlot::SetupAxis(ImAxis_Y1, TR("ui.audio_manager.gain_db").data());
