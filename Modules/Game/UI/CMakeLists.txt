@@ -711,7 +711,8 @@ if(ANDROID)
     UI
     PRIVATE src/ui/workspace/MobileWorkspacePresentation.cpp
             src/ui/workspace/MobileButton.cpp
-            # 参数控件保持独立，播放与轨数仍复用正式命令。
+            # 参数控件保持独立，播放与轨数仍复用正式命令。 工作台仅提供移动触摸入口，桌面继续使用原工具条和编辑菜单。
+            src/ui/workspace/MobileWorkbench.cpp
             src/ui/workspace/MobilePlaybackControls.cpp)
 else()
   # 桌面完整保留原有外壳；公共布局入口只链接唯一的平台工厂。

@@ -16,6 +16,7 @@
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/SideBarUI.h"
+#include "ui/imgui/manager/ToolbarView.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/workspace/IWorkspacePresentation.h"
@@ -23,11 +24,13 @@
 #include "ui/workspace/MobileDockLayout.h"
 #include "ui/workspace/MobilePlaybackControls.h"
 #include "ui/workspace/MobileTouchScroll.h"
+#include "ui/workspace/MobileWorkbench.h"
 #include "ui/workspace/MobileWorkspaceModel.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <imgui_internal.h>
+#include <tuple>
 #include <utility>
 
 namespace MMM::UI
@@ -459,7 +462,12 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
     // 只提升当前抽屉内容的显示层级，不主动夺走文本编辑焦点。
     const bool visible = ImGui::Begin(title.c_str(), nullptr, flags);
     if ( docked ) ImGui::PopStyleVar();
-    if ( docked ) processTabMenu(id, open, false);
+    // 工作台隐藏标签后不再提交标签长按检测，不能把顶部按钮误判成关闭入口。
+    // 右侧抽屉保留工作台显示开关，因此省掉标签不会丢失收起和重开能力。
+    // 其它停靠窗口仍使用原生页签菜单，包括最后主画布的关闭保护。
+    // 无页签仅改变本叶节点的装饰，不影响其它分区的标签高度与内容边界。
+    // 工作台正文填满自己的窗口，窗口滚动条不借用相邻时间线的裁剪区域。
+    if ( docked && !workbench ) processTabMenu(id, open, false);
     if ( m_drawingDrawer &&
          !ImGui::IsPopupOpen(
              nullptr,
@@ -719,6 +727,44 @@ void MobileWorkspacePresentation::drawRightDrawer(UIManager& manager,
                  { rect.m_width - 2 * m_padding, 56 * m_scale },
                  m_showWorkbench) )
             m_showWorkbench = !m_showWorkbench;
+        // 编辑模式放在抽屉中，复用菜单动作的门禁、配置广播和持久化。
+        // 专业模式是全局能力开关，不能与工作台的临时显隐保存在同一配置值。
+        // BMS 在普通模式下显示为关闭，但保留用户专业模式下的子偏好。
+        // 折线独立于 BMS，不通过一个总开关同时改写两个功能。
+        // 动作处理器会在执行时复核能力，表中状态只是本帧显示快照。
+        ImGui::Separator();
+        const auto& settings =
+            Config::AppConfig::instance().getEditorSettings();
+        const std::array modes{ std::tuple{ "ProfessionalModeToggleAction",
+                                            "ui.edit.professional_mode",
+                                            ICON_MMM_SLIDERS,
+                                            settings.professionalMode,
+                                            true },
+                                std::tuple{ "BmsEditingToggleAction",
+                                            "ui.edit.bms_editing",
+                                            ICON_MMM_KEYBOARD,
+                                            settings.professionalMode &&
+                                                settings.enableBmsEditing,
+                                            settings.professionalMode },
+                                std::tuple{ "PolylineEditingToggleAction",
+                                            "ui.edit.polyline_editing",
+                                            ICON_MMM_POLYLINE,
+                                            settings.enablePolylineEditing,
+                                            true } };
+        for ( const auto& [id, label, icon, active, enabled] : modes ) {
+            // 常驻状态底色用于触摸识别，不以 tooltip 代替开关状态。
+            // 按钮 ID 不包含翻译或状态，语言和专业模式变化不会中断反馈。
+            // BeginDisabled 只覆盖这一项，不能让 BMS 门禁影响下面的折线入口。
+            ImGui::BeginDisabled(!enabled);
+            if ( MobileActionButton(
+                     id,
+                     icon,
+                     TR(label).data(),
+                     { rect.m_width - 2 * m_padding, 56 * m_scale },
+                     active) )
+                Interaction::executeAction(id, &manager);
+            ImGui::EndDisabled();
+        }
         // 设置由专用入口打开为中心大标签，不占用资源管理器的窄内容区。
         ImGui::Separator();
         if ( MobileActionButton(
@@ -749,55 +795,13 @@ void MobileWorkspacePresentation::drawWorkbench(UIManager& manager)
 {
     const std::string title =
         TR_CACHE("ui.mobile.workbench").toString() + "###MobileWorkbench";
-    // 标题翻译与内部身份分开；原生标签继续支持长按关闭与分隔条调整。
-    const bool opened =
-        beginWindow("MobileWorkbench", title, &m_showWorkbench, 0);
-    if ( opened ) {
-        // 文字与图标共存，不依赖悬浮提示；窄屏按单列排布并允许空白拖动滚动。
-        // 稳定动作身份沿用桌面菜单，系统剪贴板导入与教程确认不会出现第二套实现。
-        // 每项只保存稳定身份，不在绘制时复制业务对象或剪贴板内容。
-        struct Action {
-            /// @brief 语义动作、翻译键和图标都是编译期稳定观察值。
-            const char* m_id;
-            const char* m_label;
-            const char* m_icon;
-        };
-        // 绘制只访问固定表，动作查找仅在明确激活时执行。
-        const std::array actions{
-            // 系统剪贴板由既有动作桥接，移动与桌面保持相同数据格式。
-            Action{ "CopyAction", "ui.edit.copy", ICON_MMM_COPY },
-            Action{ "PasteAction", "ui.edit.paste", ICON_MMM_PASTE },
-            Action{ "CutAction", "ui.edit.cut", ICON_MMM_SCISSORS },
-            // 历史仍由谱面事务维护，一次按钮激活只提交一次语义操作。
-            Action{ "UndoAction", "ui.edit.undo", ICON_MMM_UNDO },
-            Action{ "RedoAction", "ui.edit.redo", ICON_MMM_REDO },
-            // 工具区不是轨道区，全选不能依赖最后悬停的轨道位置。
-            Action{ "SelectAllObjectsAction",
-                    "ui.mobile.select_all",
-                    ICON_MMM_SELECT_ALL }
-        };
-        // 仅在用户触发时查找动作，绘制本身不访问会话或复制剪贴板载荷。
-        // 外部模态或抽屉仍通过 beginWindow 的输入屏蔽阻止后台编辑。
-        // 默认单列保留完整命中高度，短屏由本窗口滚动而非缩小按钮。
-        // 从按钮起手滑动仍经过移动仲裁，不把浏览误作编辑命令。
-        for ( const auto& action : actions ) {
-            if ( MobileActionButton(
-                     action.m_id,
-                     action.m_icon,
-                     TR(action.m_label).data(),
-                     { ImGui::GetContentRegionAvail().x, 56 * m_scale }) )
-                Interaction::executeAction(action.m_id, &manager);
-        }
-        // 删除沿用统一命令通道，目标为当前主画布，不能修改时间线自己的选区。
-        // 不复制底层删除实现，恢复能力继续由原来的撤销事务保证。
-        if ( MobileActionButton(
-                 "MobileDelete",
-                 ICON_MMM_ERASER,
-                 TR_CACHE("ui.settings.shortcut.delete_selected").data(),
-                 { ImGui::GetContentRegionAvail().x, 56 * m_scale }) )
-            MenuUtil::dispatchCommand(Logic::CmdDeleteSelected{});
-    }
-    // Begin 无论是否可见都配对结束，长按关闭不能泄漏样式或窗口栈。
+    // 工具区没有页签；关闭和重新显示统一由右侧抽屉负责，分隔条仍可调整。
+    // 固定身份仍用于停靠与宽度恢复，去掉标签不等于创建另一个浮动窗口。
+    // 窗口只提供滚动和裁剪，按钮布局完全交给移动工作台实现。
+    // 主区标签选择决定是否调用本函数，后台活动谱面不能自行拉回工作台。
+    const bool opened = beginWindow("MobileWorkbench", title, nullptr, 0);
+    if ( opened ) drawMobileWorkbench(manager, m_scale);
+    // Begin 即使被遮住也必须配对结束，不能把按钮裁剪传播到主画布。
     ImGui::End();
 }
 
@@ -979,6 +983,20 @@ void MobileWorkspacePresentation::endFrame(UIManager& manager)
     }
     // 参数弹层在所有边缘面板结束后提交，保持独立的裁剪区和输入优先级。
     m_playbackControls.drawPopup(manager, m_scale, m_showToolbar);
+    // 共享的工具内容在主布局之后推进，入口来自工作台，不运行桌面工具条。
+    // 主界面拥有工具对象；移动入口只借用，不能通过注册第二个 ToolbarView 获取。
+    // 在抽屉和业务窗口之后提交，工具内容不继承工作台的窄矩形裁剪。
+    // 外壳隐藏时仍推进关闭分支，以便保存未完成连续编辑的最终值。
+    // 观察指针在当前帧重新获取，不跨越主界面的销毁和重建。
+    if ( auto* toolbar = [&]() -> ToolbarView* {
+             auto* dock = manager.getView<MainDockSpaceUI>("MainDockSpaceUI");
+             return dock ? &dock->toolbarView() : nullptr;
+         }() )
+        toolbar->renderMobileTools(&manager,
+                                   m_scale,
+                                   m_showWorkbench &&
+                                       m_dock.isMainCanvasSelected() &&
+                                       !m_model.blocksCanvasInput());
     drawExitConfirmation();
     m_touchScroll.endFrame();
     m_dock.finishFrame();

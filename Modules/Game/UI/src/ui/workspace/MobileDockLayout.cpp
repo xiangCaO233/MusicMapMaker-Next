@@ -437,6 +437,9 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
             splitSide(m_workbenchRatio, ImGuiDir_Right, m_workbench);
         if ( preview ) splitSide(m_previewRatio, ImGuiDir_Left, m_preview);
         if ( timing ) splitSide(m_timingRatio, ImGuiDir_Right, m_timing);
+        // 工作台是固定工具区，不提供页签、关闭菜单或隐藏栏三角；宽度仍可拖动。
+        if ( auto* tools = ImGui::DockBuilderGetNode(m_workbench) )
+            tools->LocalFlags |= ImGuiDockNodeFlags_NoTabBar;
         ImGui::DockBuilderFinish(m_root);
         // 完成整棵树后再记录组合，下一帧即可走不重建的稳定路径。
         // 业务窗口稍后依次 Begin，并从当前布局获取各自所属叶节点。
