@@ -14,6 +14,7 @@
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 
 #include <algorithm>
 #include <array>
@@ -1363,6 +1364,9 @@ void AudioTrackControllerUI::buildAnalysisButtons(CLayVBox&  parent,
                         std::make_unique<AudioWaveformView>(
                             TR("ui.audio_manager.waveform_title").data()));
                 }
+                // 已存在的移动分析页也要切到前台，不能让入口变成无反馈点击。
+                if ( !workspaceAllowsHoverFeedback() )
+                    ImGui::SetWindowFocus("###AudioWaveformViewGlobal");
             }
             // 频谱按钮与波形按钮保持同一行和缓存间距。
             ImGui::SameLine(0, gap);
@@ -1379,6 +1383,9 @@ void AudioTrackControllerUI::buildAnalysisButtons(CLayVBox&  parent,
                         std::make_unique<AudioSpectrumView>(
                             TR("ui.audio_manager.spectrum_title").data()));
                 }
+                // 固定窗口身份与本地化文字分离，避免切换语言后找不到已打开页。
+                if ( !workspaceAllowsHoverFeedback() )
+                    ImGui::SetWindowFocus("###AudioSpectrumViewGlobal");
             }
         });
 
