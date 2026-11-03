@@ -43,6 +43,8 @@ struct Fixture {
     bool mainClosable{ false };
     /// @brief 独立长标题窗口，复用稳定后缀来检查重命名与滚动裁剪。
     bool longCaption{};
+    /// @brief 同时提交两个分析视图，检查它们与主画布共用中央原生标签栏。
+    bool analysisViews{};
     /// @brief 完整标题用于展示，固定后缀用于检验窗口身份不随谱名变化。
     std::string longTitle{
         "Editor [4K] A deliberately long beatmap name that must keep its full "
@@ -103,6 +105,13 @@ struct Fixture {
         pane(MMM::UI::MobileDockPanel::Main, "Other");
         if ( longCaption )
             pane(MMM::UI::MobileDockPanel::Main, longTitle.c_str());
+        if ( analysisViews ) {
+            // 复用生产标题分类，不能在测试里按显示语言另写窗口匹配规则。
+            for ( const char* title : { "Wave###AudioWaveformViewGlobal",
+                                        "频谱###AudioSpectrumViewGlobal" } )
+                if ( MMM::UI::MobileDockLayout::isAudioAnalysisWindow(title) )
+                    pane(MMM::UI::MobileDockPanel::Main, title);
+        }
         if ( timing )
             bounds[1] = pane(MMM::UI::MobileDockPanel::Timing, "Timing");
         if ( preview )
@@ -475,6 +484,31 @@ int main()
     check(menuOpen() && fixture.clickCloseMenu() &&
               fixture.closeRequests == beforeCaptionClose + 1,
           "bounded caption preserves native long press interaction");
+    // 分析页必须真正出现在中央标签栏，不能仅确认分类函数返回了 true。
+    fixture.analysisViews = true;
+    // 原有谱面和辅助分区仍存在，分析页不能替换它们取得空间。
+    // 先推进原生停靠结算，首次 Begin 的浮动位置不算成功。
+    fixture.settle();
+    for ( const char* title : { "Wave###AudioWaveformViewGlobal",
+                                "频谱###AudioSpectrumViewGlobal" } ) {
+        // DockId 相同不足以证明可切换，还须找到真实原生 TabId。
+        // 两种语言同时提交，验证路由不依赖显示名称。
+        const auto* analysis = ImGui::FindWindowByName(title);
+        check(analysis && analysis->DockId == fixture.layout.center() &&
+                  analysis->DockNode && analysis->DockNode->TabBar &&
+                  ImGui::TabBarFindTabByID(analysis->DockNode->TabBar,
+                                           analysis->TabId),
+              "audio analysis is a real central tab");
+    }
+    // 音频页沿用中央标签长按关闭，独立于最后主画布的保护策略。
+    const int beforeAnalysisClose = fixture.closeRequests;
+    // 复用真实长按与菜单点击，不直接修改关闭请求计数。
+    // 分析页没有最后画布保护，必须提供可操作关闭入口。
+    // 此处只返回关闭意图，生产注销仍由下一帧公共生命周期执行。
+    fixture.holdTab("Wave###AudioWaveformViewGlobal");
+    check(menuOpen() && fixture.clickCloseMenu() &&
+              fixture.closeRequests == beforeAnalysisClose + 1,
+          "audio analysis tab can close through touch menu");
     ImGui::DestroyContext();
     // 所有窗口、字体和节点统一由上下文销毁，测试不保留跨用例状态。
     return failures == 0 ? 0 : 1;

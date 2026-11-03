@@ -7,6 +7,16 @@
 
 namespace MMM::UI
 {
+/// @brief 波形和频谱归入主区标签，避免移动端出现无法操作的桌面浮窗。
+/// @details 后缀与业务视图的 ### 身份一致，语言切换不改变其归属。
+/// @warning 每帧常量级文本比较，不拥有窗口或业务会话。
+bool MobileDockLayout::isAudioAnalysisWindow(std::string_view title)
+{
+    // 只接管明确支持的分析页，项目向导等独立弹窗继续由原有路径管理。
+    return title.ends_with("###AudioWaveformViewGlobal") ||
+           title.ends_with("###AudioSpectrumViewGlobal");
+}
+
 /// @brief 从独立移动配置恢复首次分割参数，下一次提交按当前屏幕建树。
 /// @details 活动标签待匹配窗口出现时消费，不持有窗口或节点指针。
 void MobileDockLayout::restore(float timingRatio, float previewRatio,

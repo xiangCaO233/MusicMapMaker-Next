@@ -1,5 +1,6 @@
 #pragma once
 #include <imgui.h>
+#include <string_view>
 #include <vector>
 
 namespace MMM::UI
@@ -12,6 +13,9 @@ enum class MobileDockPanel { Main, Timing, Preview };
 class MobileDockLayout
 {
 public:
+    /// @brief 以稳定窗口后缀识别两个音频分析页，不依赖本地化标题。
+    /// @warning 每帧固定长度比较，不查询视图容器或音频状态。
+    static bool isAudioAnalysisWindow(std::string_view title);
     /// @brief 提交工作区宿主及固定的水平分区，不创建业务视图。
     /// @warning 每帧绘制固定节点；重建仅发生在显隐切换的低频路径。
     void render(ImVec2 position, ImVec2 size, float scale, bool timing,

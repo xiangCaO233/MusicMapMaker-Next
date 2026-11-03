@@ -359,15 +359,20 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
     // 抽屉打开时窗口输入与原始画布命令必须同时阻挡。
     // 设置构造名随翻译变化，窗口标题的 ### 后缀才是稳定身份。
     const bool settingsWindow = title.ends_with("###SettingsWindow");
+    const bool analysisWindow = MobileDockLayout::isAudioAnalysisWindow(title);
     const bool docked = mainCanvas || id == "Welcome" || settingsWindow ||
-                        id == "TimelineWindow" || id == "Timeline" ||
-                        id == "PreviewWindow";
+                        analysisWindow || id == "TimelineWindow" ||
+                        id == "Timeline" || id == "PreviewWindow";
     // Begin 同样计算标题区域高度，必须与宿主标签计算使用相同内边距。
     // Begin 后立即恢复，不把触摸标签的高度传播给内容中的输入和按钮。
     if ( docked )
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                             MobileDockLayout::tabPadding(m_scale));
-    if ( mainCanvas || id == "Welcome" || settingsWindow ) {
+    if ( mainCanvas || id == "Welcome" || settingsWindow || analysisWindow ) {
+        // 分析页首次出现聚焦一次；后续允许用户自由切换，不逐帧抢回标签。
+        const auto* previous = ImGui::FindWindowByName(title.c_str());
+        if ( analysisWindow && (!previous || !previous->WasActive) )
+            ImGui::SetNextWindowFocus();
         // 使用整个中心区域，不把桌面最小宽度约束带入移动端标签。
         if ( settingsWindow )
             ImGui::SetNextWindowSizeConstraints({ 1, 1 }, m_size);
