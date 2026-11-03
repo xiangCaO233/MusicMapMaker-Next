@@ -12,6 +12,7 @@
 #include "ui/UIManager.h"
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <cfloat>
 #include <cmath>
 
@@ -151,11 +152,15 @@ void AudioTrackControllerUI::update(UIManager* sourceManager)
     // 默认尺寸只在首次使用生效，之后尊重用户保存的窗口布局。
     ImGui::SetNextWindowSize(ImVec2(400, 500), ImGuiCond_FirstUseEver);
     // 可见标题允许改名，### 后缀以 trackId 维持内部窗口身份。
-    std::string windowTitle =
-        m_trackName + "###" + AudioTrackControllerUI::makeViewName(m_trackId);
-    const bool wasOpenBeforeBegin = m_isOpen;
-    const bool opened = ImGui::Begin(windowTitle.c_str(), &m_isOpen);
-    FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin, &m_isOpen);
+    const std::string viewName =
+        AudioTrackControllerUI::makeViewName(m_trackId);
+    std::string windowTitle        = m_trackName + "###" + viewName;
+    const bool  wasOpenBeforeBegin = m_isOpen;
+    // 注册身份与关闭指针同时交给平台，移动端才能提交原生标签长按菜单。
+    // 桌面策略仍使用同样的 Begin 参数，保留原有 X 关闭和停靠行为。
+    const bool opened = beginWorkspaceWindow(viewName, windowTitle, &m_isOpen);
+    if ( workspaceAllowsHoverFeedback() )
+        FeedbackCurrentWindowCloseButton(wasOpenBeforeBegin, &m_isOpen);
     if ( opened ) {
         // 工程切换时不读取可能正在替换的项目和音频资源容器。
         if ( sourceManager && sourceManager->isProjectTransitionInProgress() ) {

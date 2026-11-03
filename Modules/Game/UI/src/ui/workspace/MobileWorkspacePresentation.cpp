@@ -355,26 +355,30 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
     // 分类使用注册名，不依赖皮肤语言或当前谱面名称。
     // 画布改显示标题仍保留 ### 后的 ID，切换项目不会建立另一套窗口状态。
     const bool mainCanvas = id.starts_with("Canvas_") || id == "Basic2DCanvas";
-    // 中央宿主只接收主画布和欢迎页，其他管理器不占用这里的标签空间。
+    // 中央宿主承载画布和工具页，资源管理器保留在抽屉内。
     // 抽屉打开时窗口输入与原始画布命令必须同时阻挡。
     // 设置构造名随翻译变化，窗口标题的 ### 后缀才是稳定身份。
     const bool settingsWindow = title.ends_with("###SettingsWindow");
     const bool analysisWindow = MobileDockLayout::isAudioAnalysisWindow(title);
+    // 控制器不是谱面画布，独立关闭不能受最后一个主画布的数量保护限制。
+    const bool audioController = id.starts_with("TrackController_");
     const bool docked = mainCanvas || id == "Welcome" || settingsWindow ||
-                        analysisWindow || id == "TimelineWindow" ||
-                        id == "Timeline" || id == "PreviewWindow";
+                        analysisWindow || audioController ||
+                        id == "TimelineWindow" || id == "Timeline" ||
+                        id == "PreviewWindow";
     // Begin 同样计算标题区域高度，必须与宿主标签计算使用相同内边距。
     // Begin 后立即恢复，不把触摸标签的高度传播给内容中的输入和按钮。
     if ( docked )
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                             MobileDockLayout::tabPadding(m_scale));
-    if ( mainCanvas || id == "Welcome" || settingsWindow || analysisWindow ) {
+    if ( mainCanvas || id == "Welcome" || settingsWindow || analysisWindow ||
+         audioController ) {
         // 分析页首次出现聚焦一次；后续允许用户自由切换，不逐帧抢回标签。
         const auto* previous = ImGui::FindWindowByName(title.c_str());
         if ( analysisWindow && (!previous || !previous->WasActive) )
             ImGui::SetNextWindowFocus();
         // 使用整个中心区域，不把桌面最小宽度约束带入移动端标签。
-        if ( settingsWindow )
+        if ( settingsWindow || audioController )
             ImGui::SetNextWindowSizeConstraints({ 1, 1 }, m_size);
         m_dock.target(MobileDockPanel::Main, title.c_str());
         flags |= ImGuiWindowFlags_NoMove;
