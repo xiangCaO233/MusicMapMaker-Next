@@ -1,5 +1,7 @@
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/workspace/IWorkspacePresentation.h"
+#include <algorithm>
+#include <cmath>
 
 namespace MMM::UI
 {
@@ -85,6 +87,32 @@ bool workspaceBlocksCanvasInput()
 bool workspaceAllowsHoverFeedback()
 {
     return !activePresentation || activePresentation->allowsHoverFeedback();
+}
+
+/// @brief 保持桌面密度，触屏整行的实际可点击内容不小于手指目标。
+/// @details 调用方应把返回值同时用于行布局与选择区，而非仅扩大背景。
+/// @warning 每帧常量级字体测量，不查询配置或跨线程状态。
+float workspaceTableItemHeight(float desktopHeight, float scale)
+{
+    // 外壳能力沿用公共触屏分支；无绑定测试仍保持桌面尺寸。
+    if ( workspaceAllowsHoverFeedback() ) return desktopHeight;
+    return std::ceil(
+        std::max({ desktopHeight, 48.0f * scale, ImGui::GetFrameHeight() }));
+}
+
+/// @brief 统一表格的基础呼吸空间，同时尊重主题中更大的既有留白。
+/// @details 纯文本表格、表头及自动换行到下一列的行均继承该样式。
+/// 可点击列表另行测量内容高度，避免把单元格留白误当成命中区。
+/// @warning 移动外壳每帧调用一次，只做固定规模数学和 ImGui 样式读取。
+ImVec2 workspaceTableCellPadding(float scale)
+{
+    const auto padding = ImGui::GetStyle().CellPadding;
+    // 不硬改字体和全局倍率；高 DPI 与用户大字号分别参与尺寸下限。
+    return { std::max(padding.x, 8.0f * scale),
+             std::max(
+                 { padding.y,
+                   6.0f * scale,
+                   std::ceil((48.0f * scale - ImGui::GetFontSize()) * .5f) }) };
 }
 
 /// @brief 数值组件仅提交语义，是否进行触摸方向仲裁由当前外壳决定。

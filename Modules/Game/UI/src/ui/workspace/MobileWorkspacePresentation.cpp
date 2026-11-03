@@ -170,6 +170,10 @@ void MobileWorkspacePresentation::beginFrame(UIManager& manager)
     // 字号在平台外壳中统一提高，保留用户二次缩放，不逐帧累乘。
     ImGui::GetStyle().FontScaleMain =
         std::clamp(settings.fontSizeMultiplier * 1.25f, 1.0f, 2.5f);
+    // 所有业务表格共用触屏留白；帧末恢复，不能污染桌面或持久化美化设置。
+    // 只扩大表格单元格，普通输入框与中央画布不受影响。
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,
+                        workspaceTableCellPadding(m_scale));
     // 首次安装采用两中心页签默认；再次启动读取独立客户端布局。
     // 不从桌面停靠 ini 推断显隐，也不把移动树写回桌面布局预设。
     if ( !m_initialized ) {
@@ -857,6 +861,8 @@ void MobileWorkspacePresentation::endFrame(UIManager& manager)
         request.type = Event::NativeEventType::GLFW_CLOSE_WINDOW;
         Event::EventBus::instance().publish(request);
     }
+    // 与 beginFrame 的表格样式配对，抽屉和公共模态均已完成绘制。
+    ImGui::PopStyleVar();
     m_frameManager = nullptr;
 }
 

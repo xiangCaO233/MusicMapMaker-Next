@@ -1829,7 +1829,12 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             }
 
             // 行视觉高度包含单元格内边距，可点击内容高度需扣除上下内边距。
-            const float rowHeight = layoutMetrics.audioItemHeight;
+            // 选择区与分组头同步放大；裁剪器继续按首行实测步长虚拟化。
+            const float rowHeight =
+                touchLayout ? workspaceTableItemHeight(
+                                  layoutMetrics.audioItemHeight, dpiScale) +
+                                  ImGui::GetStyle().CellPadding.y * 2.0f
+                            : layoutMetrics.audioItemHeight;
             const float rowSelectableHeight =
                 std::max(ImGui::GetFontSize(),
                          rowHeight - ImGui::GetStyle().CellPadding.y * 2.0f);

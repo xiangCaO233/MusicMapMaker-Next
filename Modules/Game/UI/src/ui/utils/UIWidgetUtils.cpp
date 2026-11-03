@@ -1222,6 +1222,21 @@ bool shouldUseTableRowHighlight(ImGuiSelectableFlags flags)
            GImGui->CurrentTable != nullptr;
 }
 
+/// @brief 仅在触屏表格内扩大真实选择区，不影响普通菜单与桌面列表。
+/// @details 其他表格可能没有显式项目高度，统一入口保证留白不是唯一的可见变化。
+/// 显式更大的卡片高度原样保留；裁剪器应实测行高或使用相同内容尺寸。
+/// @warning 每个可见选择区常量级测量，只读取当前 UI 线程的倍率与表格身份。
+ImVec2 tableSelectableSize(ImVec2 size)
+{
+    // 弹层或普通列表没有当前表格，不能继承父视图的资源行密度。
+    if ( !workspaceAllowsHoverFeedback() && ImGui::GetCurrentTable() ) {
+        const float scale =
+            Config::AppConfig::instance().getWindowContentScale();
+        size.y = workspaceTableItemHeight(size.y, scale);
+    }
+    return size;
+}
+
 /// @brief 写入表格整行高亮背景。
 /// @param color 背景颜色。
 /// @warning UI 热路径：只调用 ImGui 表格行背景 API。
@@ -1798,8 +1813,10 @@ bool FeedbackSelectable(const char* label, bool selected,
     if ( !useTableRowHighlight ) {
         beginRoundedHighlightLayer(&highlightLayer);
     }
-    const int    pushedColorCount = pushTransparentHeaderColors();
-    const bool   clicked = ImGui::Selectable(label, selected, flags, size);
+    const int pushedColorCount = pushTransparentHeaderColors();
+    // 自动高度表格也需要扩大实际 Item，不能仅让背景行看起来更高。
+    const bool clicked =
+        ImGui::Selectable(label, selected, flags, tableSelectableSize(size));
     const bool   hovered = ImGui::IsItemHovered();
     const bool   active  = ImGui::IsItemActive();
     const ImRect itemRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
@@ -1834,8 +1851,10 @@ bool FeedbackSelectable(const char* label, bool* pSelected,
     if ( !useTableRowHighlight ) {
         beginRoundedHighlightLayer(&highlightLayer);
     }
-    const int    pushedColorCount = pushTransparentHeaderColors();
-    const bool   clicked  = ImGui::Selectable(label, pSelected, flags, size);
+    const int pushedColorCount = pushTransparentHeaderColors();
+    // 指针重载与值重载采用相同触摸尺寸，避免不同选择模型出现密度差异。
+    const bool clicked =
+        ImGui::Selectable(label, pSelected, flags, tableSelectableSize(size));
     const bool   hovered  = ImGui::IsItemHovered();
     const bool   active   = ImGui::IsItemActive();
     const bool   selected = pSelected && *pSelected;
