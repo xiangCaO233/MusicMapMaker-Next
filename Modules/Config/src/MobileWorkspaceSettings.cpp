@@ -20,11 +20,14 @@ void to_json(nlohmann::json& j, const MobileWorkspaceSettings& v)
     j = { { "toolbar", v.m_toolbar },
           { "timing", v.m_timing },
           { "preview", v.m_preview },
+          // 保存用户开关，切到设置页不能永久关闭工作台。
+          { "workbench", v.m_workbench },
           { "settingsOpen", v.m_settingsOpen },
           { "leftCenter", v.m_leftCenter },
           { "rightCenter", v.m_rightCenter },
           { "timingRatio", v.m_timingRatio },
           { "previewRatio", v.m_previewRatio },
+          { "workbenchRatio", v.m_workbenchRatio },
           { "selectedTab", v.m_selectedTab },
           { "resourceTab", v.m_resourceTab } };
 }
@@ -47,6 +50,7 @@ void from_json(const nlohmann::json& j, MobileWorkspaceSettings& v)
     boolean("toolbar", v.m_toolbar);
     boolean("timing", v.m_timing);
     boolean("preview", v.m_preview);
+    boolean("workbench", v.m_workbench);
     boolean("settingsOpen", v.m_settingsOpen);
     // 比例先用 double 校验有限性与边界，再缩窄到 float，禁止 NaN 进入停靠树。
     // 每个字段独立处理；一个把手损坏不能重置用户另外一侧的位置。
@@ -66,12 +70,16 @@ void from_json(const nlohmann::json& j, MobileWorkspaceSettings& v)
     number("rightCenter", v.m_rightCenter, 0, 1);
     number("timingRatio", v.m_timingRatio, .02, .95);
     number("previewRatio", v.m_previewRatio, .02, .95);
+    // 隐藏分区仍保留宽度，重新开启时不能让主区失去可用空间。
+    // 新字段缺失沿用默认值，旧配置无需丢弃其他窗口的位置偏好。
+    number("workbenchRatio", v.m_workbenchRatio, .02, .95);
     // 至少保留主区的非零比例，像素级最小尺寸仍由当前屏幕上的原生停靠约束。
-    const float sum = v.m_timingRatio + v.m_previewRatio;
+    const float sum = v.m_timingRatio + v.m_previewRatio + v.m_workbenchRatio;
     // 按相同比例收缩辅助区，修复总量时仍保留用户原来的宽度相对关系。
     if ( sum > .95f ) {
         v.m_timingRatio *= .95f / sum;
         v.m_previewRatio *= .95f / sum;
+        v.m_workbenchRatio *= .95f / sum;
     }
     // 标签哈希采用固定宽度无符号值，负数和超范围值不得截断后误匹配窗口。
     if ( const auto it = j.find("selectedTab");

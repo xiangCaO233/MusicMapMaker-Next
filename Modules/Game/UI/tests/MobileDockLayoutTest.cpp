@@ -45,6 +45,9 @@ struct Fixture {
     bool longCaption{};
     /// @brief 同时提交两个分析视图，检查它们与主画布共用中央原生标签栏。
     bool analysisViews{};
+    /// @brief
+    /// 仅在工作台专属场景提交真实画布身份，其他既有标签仍模拟欢迎或设置。
+    bool m_canvasPage{}, m_workbenchRequested{};
     /// @brief 完整标题用于展示，固定后缀用于检验窗口身份不随谱名变化。
     std::string longTitle{
         "Editor [4K] A deliberately long beatmap name that must keep its full "
@@ -95,7 +98,12 @@ struct Fixture {
         const auto padding = ImGui::GetStyle().FramePadding;
         // 每帧捕获进入时的值；前一帧泄漏不能被下一帧取样掩盖。
         const auto separator = ImGui::GetStyle().DockingSeparatorSize;
-        layout.render({ 0, 0 }, { hostWidth, height }, 1, timing, preview);
+        layout.render({ 0, 0 },
+                      { hostWidth, height },
+                      1,
+                      timing,
+                      preview,
+                      m_workbenchRequested && layout.isMainCanvasSelected());
         // 既检查平衡恢复，也检查自定义美化宽度没有被固定触摸尺寸替换。
         styleIntact &= ImGui::GetStyle().FramePadding.x == padding.x &&
                        ImGui::GetStyle().FramePadding.y == padding.y &&
@@ -103,6 +111,8 @@ struct Fixture {
         bounds[0] = pane(MMM::UI::MobileDockPanel::Main, "Main");
         if ( lateFocus ) ImGui::SetNextWindowFocus();
         pane(MMM::UI::MobileDockPanel::Main, "Other");
+        if ( m_canvasPage )
+            pane(MMM::UI::MobileDockPanel::Main, "Chart###Canvas_workbench");
         if ( longCaption )
             pane(MMM::UI::MobileDockPanel::Main, longTitle.c_str());
         if ( analysisViews ) {
@@ -116,6 +126,8 @@ struct Fixture {
             bounds[1] = pane(MMM::UI::MobileDockPanel::Timing, "Timing");
         if ( preview )
             bounds[2] = pane(MMM::UI::MobileDockPanel::Preview, "Preview");
+        if ( layout.node(MMM::UI::MobileDockPanel::Workbench) )
+            pane(MMM::UI::MobileDockPanel::Workbench, "Workbench");
         layout.finishFrame();
         ImGui::Render();
     }
@@ -267,6 +279,29 @@ int main()
     check(center && timing && preview && center != timing &&
               center != preview && timing != preview,
           "three independent leaves");
+    // 检查真实节点边界，不能只验证三个窗口均存在而漏掉左右顺序回归。
+    // 显隐与重建后节点身份会改变，每次检查重新查询，不复用初始叶指针。
+    const auto checkLeftLayout = [&]() {
+        float right = 0;
+        // 显隐后的零身份不代表一个空白占位区，直接检查仍存在的实际叶节点。
+        // 同一顺序同时覆盖独立预览、独立时间线和两者并排三种布局。
+        for ( const auto panel : { MobileDockPanel::Preview,
+                                   MobileDockPanel::Main,
+                                   MobileDockPanel::Timing,
+                                   MobileDockPanel::Workbench } ) {
+            const auto* leaf =
+                ImGui::DockBuilderGetNode(fixture.layout.node(panel));
+            if ( !leaf ) continue;
+            check(leaf->Pos.x >= right - .5f,
+                  "panel order is preview, main, timing, workbench");
+            right = leaf->Pos.x + leaf->Size.x;
+        }
+        // 最后一个可见分区铺到宿主右边，不额外创建空白占位叶节点。
+        // 工具栏由外壳提前扣除；此处只检查传入宿主，不能把工具栏宽度重复扣除。
+        check(std::abs(right - std::floor(fixture.hostWidth)) < .5f,
+              "last visible panel reaches the right edge of the dock host");
+    };
+    checkLeftLayout();
     // 单窗口的辅助节点也保留标签，不使用 NoTitleBar 的浮窗模拟分区。
     for ( const auto id : { center, timing, preview } ) {
         // 辅助区只有一个标签也必须存在，不能依赖多窗口碰巧显示标题。
@@ -302,14 +337,18 @@ int main()
         timingNode->Pos.x - ImGui::GetStyle().DockingSeparatorSize * .5f, -60);
     check(ImGui::DockBuilderGetNode(timing)->Size.x > timingBefore + 30,
           "touch resizes main/timing separator");
-    // 第二条分隔线属于外层分割，同样必须可拖动且保留两侧标签。
+    // 左预览取右边界正向拖动、右时间线取左边界负向拖动，不能整体镜像两者。
+    // 第二次重新读取几何，因为上一次拖动可能已经改变相邻节点的位置。
+    // 第二条分隔线属于预览外层分割，同样必须可拖动且保留两侧标签。
     const auto* previewNode = ImGui::DockBuilderGetNode(preview);
     // 以第二次拖动开始时的实际尺寸为基准，避免依赖初始默认比例。
     const float previewBefore = previewNode->Size.x;
-    fixture.drag(
-        previewNode->Pos.x - ImGui::GetStyle().DockingSeparatorSize * .5f, -50);
+    fixture.drag(previewNode->Pos.x + previewNode->Size.x +
+                     ImGui::GetStyle().DockingSeparatorSize * .5f,
+                 50);
     check(ImGui::DockBuilderGetNode(preview)->Size.x > previewBefore + 25,
-          "touch resizes timing/preview separator");
+          "touch resizes preview/main separator");
+    checkLeftLayout();
     // 连续拖动不允许改变垂直内容边界；宽度调整不能变回独立浮窗。
     check(std::abs(fixture.bounds[2].height - fixture.bounds[0].height) < .5f,
           "resizing widths retains equal content heights");
@@ -322,12 +361,21 @@ int main()
     check(fixture.layout.node(MobileDockPanel::Preview) == 0 &&
               fixture.layout.node(MobileDockPanel::Timing) != 0,
           "hide one auxiliary panel");
+    checkLeftLayout();
+    // 两个辅助窗口既可同时打开，也可分别打开，预览始终在主区左侧。
+    // 这次拓扑转换还覆盖原先隐藏的预览再次出现时使用缓存宽度。
+    fixture.settle(false, true);
+    check(fixture.layout.node(MobileDockPanel::Timing) == 0 &&
+              fixture.layout.node(MobileDockPanel::Preview) != 0,
+          "preview can remain on the left without timing");
+    checkLeftLayout();
     fixture.settle(false, false);
     // 最终回到单区时，清除辅助 ID，防止下一次打开误用旧叶节点。
     check(fixture.titleFits, "content cannot overlap dock tabs");
     check(fixture.layout.center() != 0 &&
               fixture.layout.node(MobileDockPanel::Timing) == 0,
           "main remains when auxiliaries close");
+    checkLeftLayout();
     // 新布局对象模拟外壳重建，旧节点仍存在也不能覆盖已读取的客户端值。
     fixture.layout = MobileDockLayout{};
     // 清空内部 ID 与缓存，只给新对象公开的恢复接口提供已保存标量。
@@ -342,7 +390,10 @@ int main()
               std::abs(restoredPreview - savedPreview) < .01f &&
               restoredTab == savedTab,
           "restart restores resized panes and selected tab");
+    checkLeftLayout();
     // 多轮恢复必须仍落在同一像素宽度，不能每次扣除一条缝隙而逐渐漂移。
+    // 从旧节点重新创建对象时，也必须重新套用当前的左右布局约定。
+    // 保存字段只表达宽度和活动标签，不应隐含窗口仍在旧版右侧的位置。
     // 先把初次捕获值固定作为基线，循环里不以刚漂移的值覆盖预期。
     const float baselineTiming  = restoredTiming,
                 baselinePreview = restoredPreview;
@@ -355,6 +406,7 @@ int main()
     check(std::abs(restoredTiming - baselineTiming) < .001f &&
               std::abs(restoredPreview - baselinePreview) < .001f,
           "repeated restores do not accumulate pixel drift");
+    checkLeftLayout();
     // 恢复非默认的第一个标签，并模拟另一窗口在随后每帧请求焦点。
     // 保存的是窗口身份，不能把原生 TabId 与窗口 ID 混用而碰巧回到默认页。
     const auto mainWindow = ImGui::FindWindowByName("Main")->ID;
@@ -509,6 +561,64 @@ int main()
     check(menuOpen() && fixture.clickCloseMenu() &&
               fixture.closeRequests == beforeAnalysisClose + 1,
           "audio analysis tab can close through touch menu");
+    // 工作台只由主区选中的真实画布打开，后台会话存在不能让欢迎和设置占着它。
+    // 独立工具标签抢焦点不等于主区切走，因此也不能将整个工作台隐藏。
+    // 新窗口先经历真实停靠，再请求选中，不改写原生私有选中字段。
+    // 显示标题故意不同，识别只依赖 ### 后面的画布身份。
+    // 页签切换注入真实短按，启动恢复保护必须由用户交互而非外部聚焦命令解除。
+    // 这样同时覆盖原生点击、显隐重建和焦点恢复的完整顺序。
+    fixture.m_canvasPage = fixture.m_workbenchRequested = true;
+    fixture.settle();
+    fixture.holdTab("Chart###Canvas_workbench", false, 3);
+    fixture.settle();
+    check(fixture.layout.isMainCanvasSelected() &&
+              fixture.layout.node(MobileDockPanel::Workbench),
+          "selected real canvas shows workbench");
+    checkLeftLayout();
+    // 工作台拖动来自左边界，不把相邻时间线整块内容当作分隔条。
+    // 最终宽度读回真实节点，排除只绘制握柄但不能调整的情况。
+    const auto  workbenchId = fixture.layout.node(MobileDockPanel::Workbench);
+    const auto* workbench   = ImGui::DockBuilderGetNode(workbenchId);
+    // 缺失节点已经由上面的契约报错；继续解引用只会掩盖真正的显隐故障。
+    if ( !workbench ) {
+        ImGui::DestroyContext();
+        return 1;
+    }
+    const float workbenchBefore = workbench->Size.x;
+    fixture.drag(
+        workbench->Pos.x - ImGui::GetStyle().DockingSeparatorSize * .5f, -30);
+    check(ImGui::DockBuilderGetNode(workbenchId)->Size.x > workbenchBefore + 15,
+          "touch resizes timing/workbench separator");
+    // 捕获拖动结束后的实际比例，后续显隐必须复用此值。
+    // 节点观察指针不得跨越下面的拓扑删除与重建。
+    float savedWorkbench = 0;
+    fixture.layout.capture(
+        restoredTiming, restoredPreview, restoredTab, &savedWorkbench);
+    // 工具按钮会取得焦点，但主区选中的画布保持不变。
+    // 因此不能通过全局聚焦窗口判断工作台是否仍应显示。
+    fixture.holdTab("Workbench", false, 3);
+    fixture.settle();
+    check(fixture.layout.node(MobileDockPanel::Workbench) != 0,
+          "workbench focus keeps the selected canvas context");
+    // 旧窗口模拟欢迎与设置，后台画布仍存在也须释放工具区。
+    // 断言节点消失，而非仅隐藏正文，避免空白栏继续挤占画布。
+    fixture.holdTab("Other", false, 3);
+    fixture.settle();
+    check(!fixture.layout.isMainCanvasSelected() &&
+              !fixture.layout.node(MobileDockPanel::Workbench),
+          "non-canvas page releases workbench space");
+    // 重新显示不能恢复默认宽度；同一对象先捕获旧叶再重建，隐藏期间不丢失比例。
+    fixture.holdTab("Chart###Canvas_workbench", false, 3);
+    fixture.settle();
+    // 切回同一画布身份，不重建业务对象，也不重写保存宽度。
+    // 再次读回公开捕获接口，检查恢复完成后的最终几何。
+    float afterWorkbench = 0;
+    fixture.layout.capture(
+        restoredTiming, restoredPreview, restoredTab, &afterWorkbench);
+    check(std::abs(afterWorkbench - savedWorkbench) < .002f,
+          "returning to canvas preserves resized workbench width");
+    checkLeftLayout();
+    // 显隐循环最后再检查四栏顺序，恢复工作台不能改变时间线的位置。
     ImGui::DestroyContext();
     // 所有窗口、字体和节点统一由上下文销毁，测试不保留跨用例状态。
     return failures == 0 ? 0 : 1;

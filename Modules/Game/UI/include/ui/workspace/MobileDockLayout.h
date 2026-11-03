@@ -6,7 +6,7 @@
 namespace MMM::UI
 {
 /// @brief 移动工作区的三个受控停靠分区，资源抽屉不参与此布局。
-enum class MobileDockPanel { Main, Timing, Preview };
+enum class MobileDockPanel { Main, Timing, Preview, Workbench };
 
 /// @brief 同一根节点提供等高标签区和原生可调宽分隔条。
 /// @details 只在辅助窗口显隐变化时重建分割，普通帧保留用户调整的宽度。
@@ -19,7 +19,10 @@ public:
     /// @brief 提交工作区宿主及固定的水平分区，不创建业务视图。
     /// @warning 每帧绘制固定节点；重建仅发生在显隐切换的低频路径。
     void render(ImVec2 position, ImVec2 size, float scale, bool timing,
-                bool preview);
+                bool preview, bool workbench = false);
+    /// @brief 查询主区实际选中的稳定画布身份，不把逻辑活动会话当作可见标签。
+    /// @warning 每帧只读一个节点和短标题后缀，不扫描视图或取得会话锁。
+    bool isMainCanvasSelected() const;
     /// @brief 在业务窗口 Begin 前指定所属分区，并恢复重建前活动标签。
     void target(MobileDockPanel panel, const char* title);
     /// @brief 当前主画布、欢迎和设置共用的中心叶节点。
@@ -30,11 +33,12 @@ public:
     /// @warning 每帧只读取当前样式与字号，不分配或查询平台状态。
     static ImVec2 tabPadding(float scale);
     /// @brief 首次建树前恢复客户端比例和中心活动标签，不消费桌面 ini。
-    void restore(float timingRatio, float previewRatio, ImGuiID selectedTab);
+    void restore(float timingRatio, float previewRatio, ImGuiID selectedTab,
+                 float workbenchRatio = .22f);
     /// @brief 在显式提交边沿读取实际比例和中心标签，隐藏区保留原比例。
     /// @warning 只查询固定数量节点，不构造 JSON 或执行文件访问。
-    void capture(float& timingRatio, float& previewRatio,
-                 ImGuiID& selectedTab) const;
+    void capture(float& timingRatio, float& previewRatio, ImGuiID& selectedTab,
+                 float* workbenchRatio = nullptr) const;
     /// @brief 帧末恢复启动活动窗口，首次用户按下后停止覆盖启动焦点请求。
     /// @warning 固定 ID 查询；不抢业务弹窗焦点，不等待视图创建。
     void finishFrame();
@@ -65,13 +69,15 @@ private:
     /// @brief 复用已有容量；窗口名称和几何每帧借用，不缓存跨帧字符串视图。
     std::vector<TabCaption> m_tabCaptions;
     /// @brief 仅保存稳定 ID，不跨帧缓存可能因分割失效的节点指针。
-    ImGuiID m_root{}, m_center{}, m_timing{}, m_preview{}, m_restoreFocus{};
+    ImGuiID m_root{}, m_center{}, m_timing{}, m_preview{}, m_workbench{},
+        m_restoreFocus{};
     /// @brief 首次交互前保留已保存窗口，防止惰性设置页的初始聚焦覆盖它。
     ImGuiID m_startupFocus{};
     /// @brief 最近显隐组合，不把旋转或宿主变宽误判为需要重建。
     int m_visibility{ -1 };
     /// @brief 各辅助分区占根宽度的比例，隐藏前保留用户实际调整值。
-    float m_timingRatio{ .28f }, m_previewRatio{ .2f };
+    float m_timingRatio{ .28f }, m_previewRatio{ .2f },
+        m_workbenchRatio{ .22f };
     /// @brief 长按仅保存窗口身份与起点；移动超过容差后本次触点永久取消。
     ImGuiID m_holdWindow{};
     ImVec2  m_holdOrigin{};
