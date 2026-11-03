@@ -63,6 +63,11 @@ public:
     {
         m_touchScroll.registerHorizontalDragItem();
     }
+    /// @brief EQ 等竖滑条沿自身方向调值，横向仍交给频段列表滚动。
+    void registerVerticalDragItem() override
+    {
+        m_touchScroll.registerVerticalDragItem();
+    }
     /// @brief 只创建移动主画布宿主，不绘制桌面菜单栏和状态栏。
     void renderWorkspace(MainDockSpaceUI&, UIManager& manager) override;
     /// @brief 管理器由抽屉组合，窗口开关由移动端入口管理。
