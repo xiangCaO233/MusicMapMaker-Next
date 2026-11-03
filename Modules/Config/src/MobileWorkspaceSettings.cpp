@@ -25,6 +25,8 @@ void to_json(nlohmann::json& j, const MobileWorkspaceSettings& v)
           { "settingsOpen", v.m_settingsOpen },
           { "leftCenter", v.m_leftCenter },
           { "rightCenter", v.m_rightCenter },
+          { "leftHandleDocked", v.m_leftHandleDocked },
+          { "rightHandleDocked", v.m_rightHandleDocked },
           { "timingRatio", v.m_timingRatio },
           { "previewRatio", v.m_previewRatio },
           { "workbenchRatio", v.m_workbenchRatio },
@@ -51,6 +53,9 @@ void from_json(const nlohmann::json& j, MobileWorkspaceSettings& v)
     boolean("timing", v.m_timing);
     boolean("preview", v.m_preview);
     boolean("workbench", v.m_workbench);
+    // 收边是用户偏好，不写入当前抽屉动画状态；旧文件缺字段默认使用窄入口。
+    boolean("leftHandleDocked", v.m_leftHandleDocked);
+    boolean("rightHandleDocked", v.m_rightHandleDocked);
     boolean("settingsOpen", v.m_settingsOpen);
     // 比例先用 double 校验有限性与边界，再缩窄到 float，禁止 NaN 进入停靠树。
     // 每个字段独立处理；一个把手损坏不能重置用户另外一侧的位置。

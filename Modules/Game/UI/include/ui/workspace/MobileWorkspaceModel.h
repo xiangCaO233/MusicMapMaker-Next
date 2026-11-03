@@ -59,6 +59,10 @@ public:
     float drawerWidth() const;
     /// @brief 从客户端布局恢复左右归一化中心，不恢复未结束的触摸手势。
     void restoreHandleCenters(float left, float right);
+    /// @brief 恢复两侧独立收边偏好，不恢复抽屉或运行中的触点。
+    void restoreHandleDocking(bool left, bool right);
+    /// @brief 收边后保留可见窄条，仍可纵向移动和向内打开抽屉。
+    bool handleDocked(MobileDrawer side) const;
     /// @brief 当前左把手归一化位置，用于释放边沿保存。
     float leftHandleCenter() const { return m_leftHandleCenter; }
     /// @brief 当前右把手归一化位置，始终与左侧独立。
@@ -66,7 +70,7 @@ public:
 
 private:
     /// @brief 手势起点确定唯一所有者，中途不能从业务内容切换到抽屉。
-    enum class Gesture { None, Handle, Reposition, Drawer, Back };
+    enum class Gesture { None, Handle, Reposition, Retract, Drawer, Back };
     /// @brief 从起点保存展开状态，取消、旋转和业务模态打断时恢复目标。
     void beginGesture(Gesture gesture, MobilePointer pointer);
     /// @brief 结束未提交手势，不把失焦或触点取消当作一次点击。
@@ -91,6 +95,8 @@ private:
         m_startHandleCenter{};
     /// @brief 把手起点所属一侧，拖动途中不能切换另一侧。
     MobileDrawer m_handleSide{ MobileDrawer::None };
+    /// @brief 收边只改变入口横坐标，左右偏好和原有纵向位置独立保存。
+    bool m_leftDocked{}, m_rightDocked{}, m_startHandleDocked{};
     /// @brief 退出确认由用户明确决定，返回手势本身不关闭进程。
     bool m_exitConfirmation{}, m_exitRequested{};
 };

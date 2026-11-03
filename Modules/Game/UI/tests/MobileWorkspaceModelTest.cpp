@@ -43,6 +43,7 @@ bool verifyDrawerGestures(MMM::UI::MobileDrawer side)
     if ( model.drawer() != MobileDrawer::None || model.blocksCanvasInput() )
         return false;
     // 纵向拖动现在移动把手；后续横向操作必须在新位置继续生效。
+    // 连续移动后的几何必须已经更新，不能只在释放后等待动画重新摆放。
     const auto moved =
         side == MobileDrawer::Left ? model.leftHandle() : model.rightHandle();
     if ( std::abs(moved.m_y - handle.m_y - 80) > .01f ) return false;
@@ -117,6 +118,7 @@ bool verifyGestureCancellation()
     if ( model.exitConfirmation() ) return false;
     model.update({ 1278, 200, true, true, false }, .016f, false);
     model.update({ 1170, 200, false, false, true }, .016f, false);
+    // 检查的是确认状态而非实际退出，测试不会终止进程或依赖 Activity。
     if ( !model.exitConfirmation() ) return false;
     model.finishExitConfirmation(false);
     settle(model);
@@ -245,6 +247,83 @@ bool verifyToolbarClearance()
     }
     return true;
 }
+/// @brief 验证收边后的窄入口仍支持纵向拖动、轻点和向内拉出，两侧采用镜像输入。
+/// @details 所有触点来自生产矩形，不直接改写模型的手势枚举或内部展开量。
+/// 工具栏保留区只影响悬浮入口，收边入口必须落在屏幕本身的最外沿。
+/// 释放后逐帧推进动画，检查同一次触点不会穿透画布或变成退出请求。
+/// 工具栏宽度保持非零，右侧检查能够区分屏幕边缘与工具条左边界。
+/// 命中坐标选在真正露出的窄条内部，不能用屏幕外的完整矩形中心冒充可操作。
+/// 返回手势另选把手高度外的位置，验证局部优先级没有禁用整条屏幕边缘。
+bool verifyHandleDocking(MMM::UI::MobileDrawer side)
+{
+    using namespace MMM::UI;
+    MobileWorkspaceModel model;
+    model.resize(1280, 720, 1, 80);
+    const bool  left   = side == MobileDrawer::Left;
+    const float inward = left ? 1 : -1;
+    const auto  handle = left ? model.leftHandle() : model.rightHandle();
+    const float x      = handle.m_x + handle.m_width * .5f;
+    float       y      = handle.m_y + handle.m_height * .5f;
+    // 向外推只提交收边，不建立抽屉身份；移动当帧即可读到最终可见几何。
+    model.update({ x, y, true, true, false }, .016f, false);
+    model.update({ x - inward * 60, y, false, true, false }, .016f, false);
+    if ( !model.handleDocked(side) || model.drawer() != MobileDrawer::None )
+        return false;
+    model.update({ x - inward * 60, y, false, false, true }, .016f, false);
+    settle(model);
+    // 使用公开几何确认可见宽度，不以布尔标记为真代替真正的屏幕收边。
+    const auto docked = left ? model.leftHandle() : model.rightHandle();
+    // 完整矩形部分离开屏幕，必须仍有窄段可触摸，不能把入口彻底藏掉。
+    if ( left ? !(docked.m_x < 0 && docked.m_x + docked.m_width > 0)
+              : !(docked.m_x < 1280 && docked.m_x + docked.m_width > 1280) )
+        return false;
+    // 两侧取距边缘相同的位置，专门验证系统返回区域内的入口优先级。
+    const float edgeX = left ? 6 : 1274;
+    // 收边优先命中本入口，所以相同边缘坐标上的纵向操作不会触发返回。
+    // 另一侧不随动，归一化中心仍由原来的独立偏好控制。
+    model.update({ edgeX, y, true, true, false }, .016f, false);
+    model.update({ edgeX, y + 90, false, true, false }, .016f, false);
+    model.update({ edgeX, y + 90, false, false, true }, .016f, false);
+    settle(model);
+    const auto moved = left ? model.leftHandle() : model.rightHandle();
+    if ( std::abs(moved.m_y - docked.m_y - 90) > .01f ||
+         !model.handleDocked(side) || model.exitConfirmation() )
+        return false;
+    // 下一手势从新位置开始，旧位置不能因上一帧捕获状态而继续有效。
+    y += 90;
+    // 窄条轻点仍能打开抽屉；点按不改变收边偏好，关闭后仍回到原来的窄入口。
+    model.update({ edgeX, y, true, true, false }, .016f, false);
+    model.update({ edgeX, y, false, false, true }, .016f, false);
+    settle(model);
+    // 轻点打开和向内拖出采用不同收边提交策略，必须分别验证。
+    if ( model.drawer() != side || !model.handleDocked(side) ) return false;
+    model.closeDrawer();
+    settle(model);
+    // 向内拉出的连续手势恢复悬浮把手，并沿用原有抽屉展开比例与释放阈值。
+    // 不能把本手势误交给同一屏幕边缘上的应用退出手势。
+    model.update({ edgeX, y, true, true, false }, .016f, false);
+    model.update({ edgeX + inward * 160, y, false, true, false }, .016f, false);
+    // 展开量在移动帧检查，防止只在手势结束时才响应触指。
+    if ( model.handleDocked(side) || model.fraction() <= .3f ) return false;
+    model.update({ edgeX + inward * 160, y, false, false, true }, .016f, false);
+    settle(model);
+    model.closeDrawer();
+    settle(model);
+    // 把手以外的同侧边缘仍保留原有返回契约，收边不能禁用整条系统边缘。
+    model.update({ edgeX, 50, true, true, false }, .016f, false);
+    model.update(
+        { edgeX + inward * 110, 50, false, false, true }, .016f, false);
+    if ( !model.exitConfirmation() ) return false;
+    model.finishExitConfirmation(false);
+    settle(model);
+    // 恢复配置后再旋转，横向收边与纵向中心互相独立，不恢复未结束的抽屉动画。
+    // 使用相反的左右偏好，若实现把两侧错误地绑定为同一个字段就会失败。
+    // 旋转不恢复旧触点，也不能凭配置加载意外打开资源面板。
+    model.restoreHandleDocking(left, !left);
+    model.resize(720, 1280, 1, 80);
+    return model.handleDocked(side) && model.drawer() == MobileDrawer::None &&
+           !model.blocksCanvasInput() && !model.takeExitRequest();
+}
 }  // namespace
 
 /// @brief 验证启动收起、把手归属、遮罩关闭以及返回确认的状态边界。
@@ -362,6 +441,10 @@ int main()
           "cancelled and interrupted gestures release input");
     check(verifyToolbarClearance(),
           "toolbar and movable right handle keep separate touch regions");
+    check(verifyHandleDocking(MobileDrawer::Left),
+          "left handle retracts and remains movable");
+    check(verifyHandleDocking(MobileDrawer::Right),
+          "right handle retracts and remains movable");
     // 模拟新进程读取独立客户端值，恢复后仍保持抽屉收起。
     MobileWorkspaceModel restored;
     // 使用全新模型，避免前一手势的释放保护或动画状态参与恢复结果。
