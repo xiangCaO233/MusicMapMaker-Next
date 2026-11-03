@@ -596,7 +596,18 @@ int main()
         restoredTiming, restoredPreview, restoredTab, &savedWorkbench);
     // 工具按钮会取得焦点，但主区选中的画布保持不变。
     // 因此不能通过全局聚焦窗口判断工作台是否仍应显示。
-    fixture.holdTab("Workbench", false, 3);
+    // 原生节点必须主动禁用标签，而非仅把标题文字画成透明。
+    // 这样内容从本区域顶部开始，且不会留下可误触的关闭菜单命中区。
+    const auto* toolWindow = ImGui::FindWindowByName("Workbench");
+    check(toolWindow && toolWindow->DockNode &&
+              toolWindow->DockNode->IsNoTabBar(),
+          "workbench has no tab strip");
+    // 触摸工具正文取得焦点，不能依赖已经取消的工作台标签来模拟操作。
+    auto& toolIo = ImGui::GetIO();
+    toolIo.AddMousePosEvent(toolWindow->Pos.x + 30, toolWindow->Pos.y + 80);
+    toolIo.AddMouseButtonEvent(0, true);
+    fixture.frame();
+    toolIo.AddMouseButtonEvent(0, false);
     fixture.settle();
     check(fixture.layout.node(MobileDockPanel::Workbench) != 0,
           "workbench focus keeps the selected canvas context");
