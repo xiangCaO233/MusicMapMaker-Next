@@ -2,12 +2,14 @@
 #include "config/AudioPresets.h"
 #include "config/skin/translation/Translation.h"
 #include "log/colorful-log.h"
+#include "ui/imgui/audio/AudioEqualizerPlotLayout.h"
 #include "ui/imgui/audio/AudioPresetControls.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 #include <array>
 #include <cmath>
 #include <imgui_internal.h>
+#include <implot.h>
 #include <nlohmann/json.hpp>
 #include <string_view>
 
@@ -194,6 +196,68 @@ int main(int argc, char** argv)
             check(!fixture.m_popup, "fixed close button dismisses popup");
         }
     }
+    // 原生响应图必须保留可用数据区域，外框变高但轴标签仍挤作一团也属于失败。
+    // 使用真实 ImPlot 排版，避免仅断言生产高度公式返回较大的数字。
+    // 全部预设弹层已经关闭，独立绘图窗口不能借用旧弹层裁剪矩形。
+    // 保留已有 CPU 字体图集，只创建配对的 ImPlot 上下文。
+    ImPlot::CreateContext();
+    const float originalFontScale = ImGui::GetStyle().FontScaleMain;
+    io.DisplaySize                = { 1800, 2200 };
+    for ( float scale : { 1.0f, 2.0f } ) {
+        float previousDataHeight = 0;
+        // 同一窗口连续改变图表高度，验证用户调整真正传入绘图布局。
+        // 两档密度使用较大字号，复现固定外框被文字消耗殆尽的原问题。
+        ImGui::GetStyle().FontScaleMain = 1.6f * scale;
+        for ( float requested : { 240.0f, 480.0f } ) {
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos({ 0, 0 });
+            ImGui::SetNextWindowSize({ 800 * scale, 1000 * scale });
+            ImGui::Begin(
+                "EqPlotGeometry", nullptr, ImGuiWindowFlags_NoSavedSettings);
+            // 使用实际字号，不从请求的 FontScaleMain 反推尺寸。
+            // 生产策略负责逻辑像素换算，测试不能额外乘倍率。
+            const float fontHeight  = ImGui::GetFontSize();
+            const float outerHeight = MMM::UI::audioEqualizerPlotHeight(
+                requested, scale, fontHeight, true);
+            if ( ImPlot::BeginPlot(
+                     "Response", { -1, outerHeight }, ImPlotFlags_NoLegend) ) {
+                // 轴标题和单位与真实响应图一致，数据区域须扣除这些装饰。
+                ImPlot::SetupAxis(ImAxis_X1, "Frequency (Hz)");
+                ImPlot::SetupAxis(ImAxis_Y1, "Gain (dB)");
+                ImPlot::SetupAxisScale(ImAxis_X1, ImPlotScale_Log10);
+                ImPlot::SetupAxisLimits(ImAxis_X1, 20, 20000);
+                ImPlot::SetupAxisLimits(ImAxis_Y1, -24, 24);
+                ImPlot::SetupAxisFormat(ImAxis_Y1, "%.0f dB");
+                ImPlot::SetupFinish();
+                // 公开 API 返回扣除轴装饰后的真实区域，捕获外框增高无效。
+                // 先完成 Setup，避免读取尚未结算的中间几何。
+                const float dataHeight = ImPlot::GetPlotSize().y;
+                check(dataHeight > fontHeight * 4,
+                      "EQ plot retains readable data area");
+                // 绝对下限先保证可读性，再比较两次调整的增量，不能用比例掩盖塌陷。
+                check(previousDataHeight == 0 ||
+                          dataHeight > previousDataHeight + 100 * scale,
+                      "EQ plot height adjustment expands actual data area");
+                // 只提交轴即可测空间，不引入滤波器或真实音频初始化。
+                // 失败应定位到布局，而非后端或资源可用性。
+                previousDataHeight = dataHeight;
+                ImPlot::EndPlot();
+            } else {
+                // 视口足以容纳最大请求高度，BeginPlot 失败不能静默跳过。
+                check(false, "EQ plot is visible");
+            }
+            // 显式结束当前窗口后再推进下一档高度，不复用未结算的绘图状态。
+            ImGui::End();
+            ImGui::Render();
+        }
+        check(MMM::UI::audioEqualizerPlotHeight(480, scale, 40, false) == 150,
+              "desktop EQ height is unchanged");
+        // 同一上下文中的桌面调用不能被触屏测量污染。
+        // 也覆盖用户调大高度后切回桌面能力的状态。
+    }
+    // ImPlot 依赖当前 ImGui 上下文，必须先销毁；字体倍率恢复到进入测试前状态。
+    ImPlot::DestroyContext();
+    ImGui::GetStyle().FontScaleMain = originalFontScale;
     // 分类与尺寸切换只改变显示，不得把未编辑字段重新量化或写回方案。
     check(nlohmann::json(
               MMM::Config::AppConfig::instance().getAudioPresets()) == original,
