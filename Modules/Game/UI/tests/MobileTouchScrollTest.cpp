@@ -18,6 +18,12 @@ struct Fixture {
     MMM::UI::MobileTouchScroll scroll;
     /// @brief 用真实滑条确认横向调值与纵向滚动在确定方向前都不会误改值。
     float value{ .2f };
+    /// @brief 竖滑条单独启用，原有按钮与弹层场景的位置保持不变。
+    bool m_withVertical{};
+    /// @brief 直接观察真实竖滑条数值，不通过改写内部 ActiveID 模拟调节。
+    float m_verticalValue{ .5f };
+    /// @brief 每帧记录真实命中中心，测试无需假设滑条的边框和留白。
+    ImVec2 m_verticalCenter{};
     /// @brief 原生按钮的真实激活次数，用于检查滑动和轻点是否被正确区分。
     int buttonClicks{};
     /// @brief 由实际控件布局记录起点，避免字号变化使测试落在空白处。
@@ -85,10 +91,22 @@ struct Fixture {
         }
         // 无标题固定位置保证测试触点不会落到窗口拖动区或系统边框。
         // 控件位于顶部，其他位置保持空白，便于区分两种触摸起点。
-        ImGui::SliderFloat("value", &value, 0, 1);
-        // 与生产 FeedbackSlider 使用同一语义登记；测试无需创建音频反馈设备。
-        // 不登记其他组件，以证明普通按钮和下拉框不需要各自添加滚动补丁。
-        scroll.registerHorizontalDragItem();
+        if ( m_withVertical ) {
+            // 纵向主方向应编辑参数，横向则留给超宽频段列表滚动。
+            // 起手先登记几何，不让物理按下提前改变数值。
+            ImGui::VSliderFloat(
+                "##vertical", { 48, 160 }, &m_verticalValue, 0, 1, "");
+            scroll.registerVerticalDragItem();
+            const auto min   = ImGui::GetItemRectMin();
+            const auto max   = ImGui::GetItemRectMax();
+            m_verticalCenter = { (min.x + max.x) * .5f, (min.y + max.y) * .5f };
+        } else {
+            ImGui::SliderFloat("value", &value, 0, 1);
+            // 与生产 FeedbackSlider
+            // 使用同一语义登记；测试无需创建音频反馈设备。
+            // 不登记其他组件，以证明普通按钮和下拉框不需要各自添加滚动补丁。
+            scroll.registerHorizontalDragItem();
+        }
         // 原生按钮没有统一反馈辅助也须受全局滚动仲裁保护。
         // 该控件只属于无音频设备的测试夹具，不属于业务可见按钮。
         if ( ImGui::Button("Action", { 200, 30 }) ) ++buttonClicks;
@@ -415,6 +433,35 @@ int main()
     check(fixture.buttonClicks == beforeRapid + 1 &&
               fixture.checked != beforeCheck,
           "back-to-back taps on different controls preserve both actions");
+    // 与横向数值控件对称验证竖滑条；窗口和控制器仍使用前面同一个实例。
+    // 关闭弹层并复位，避免历史滚动量把滑条移到裁剪区之外。
+    fixture.withPopup      = false;
+    fixture.m_withVertical = true;
+    fixture.reset(true);
+    const auto vertical   = fixture.m_verticalCenter;
+    const auto beforeGain = fixture.m_verticalValue;
+    // 不只检查最终值：按下帧必须仍保持旧值，方向确定后才交给原生滑条。
+    // 55 像素行程位于滑条内部，排除窗口外捕获或上下边界钳制带来的巧合。
+    // 同时检查父页偏移，避免错误地让调值与纵向滚动一起发生。
+    fixture.frame(vertical, true, true);
+    check(fixture.m_verticalValue == beforeGain,
+          "vertical slider defers physical press");
+    fixture.frame({ vertical.x, vertical.y - 55 }, true, true);
+    check(fixture.m_verticalValue > beforeGain + .2f && fixture.offset.y < .01f,
+          "vertical slider adjusts on its primary axis without scrolling page");
+    fixture.frame({ vertical.x, vertical.y - 55 }, false, true);
+    fixture.reset(true);
+    const auto beforePan = fixture.m_verticalValue;
+    const auto panOrigin = fixture.m_verticalCenter;
+    // 使用相同组件验证正交方向，不能通过只登记空白区域绕过组件起手问题。
+    // 宽窗口的真实内容提供横向范围；断言的是本帧已应用位置而非待提交目标。
+    fixture.frame(panOrigin, true, true);
+    fixture.frame({ panOrigin.x - 100, panOrigin.y }, true, true);
+    // 横向浏览必须当帧可见，同时不能先误改增益再恢复。
+    check(fixture.offset.x > 90 && fixture.m_verticalValue == beforePan,
+          "horizontal gesture on vertical slider pans bands without changing "
+          "value");
+    fixture.frame({ panOrigin.x - 100, panOrigin.y }, false, true);
     ImGui::DestroyContext();
     // Fixture 只持有稳定 ID 与值状态，随后析构不会触及已销毁的窗口。
     return failures == 0 ? 0 : 1;

@@ -35,6 +35,8 @@ public:
     virtual bool allowsHoverFeedback() const { return true; }
     /// @brief 当前数值组件允许水平拖动；桌面无需额外登记。
     virtual void registerHorizontalDragItem() {}
+    /// @brief 竖直数值条沿纵向调值，横向仍允许浏览内容；桌面保持原生输入。
+    virtual void registerVerticalDragItem() {}
     /// @brief 是否恢复桌面停靠树及原生窗口位置，移动外壳独立管理几何。
     virtual bool usesDesktopLayout() const { return true; }
     /// @brief 是否显示应用内音频输出设备选择；移动端交由系统音频路由管理。
@@ -80,6 +82,9 @@ ImVec2 workspaceTableCellPadding(float scale);
 /// @brief 为刚提交的数值控件登记横向拖动，默认桌面路径为空操作。
 /// @warning 每帧固定次数策略转发，不保留组件引用。
 void workspaceRegisterHorizontalDragItem();
+/// @brief 为刚提交的竖滑条登记触摸方向，默认桌面路径为空操作。
+/// @warning 每帧只转发当前平台，不保存组件引用或延迟本地数值变化。
+void workspaceRegisterVerticalDragItem();
 /// @brief 查询本帧的音频设备选择能力；没有工作区作用域时保留桌面行为。
 bool workspaceShowsAudioOutputDeviceSelector();
 /// @brief 公共弹窗复用当前平台操作按钮，无帧作用域时保持桌面入口。

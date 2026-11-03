@@ -2075,6 +2075,8 @@ bool FeedbackVSliderFloat(const char* label, const ImVec2& size, float* value,
         ImGui::VSliderFloat(
             label, size, value, minValue, maxValue, format, flags) &&
         previous != *value;
+    // 告知移动外壳纵向手势属于调值，横向仍可浏览相邻频段。
+    workspaceRegisterVerticalDragItem();
     const bool clicked = isLastItemFeedbackActivated();
     ImGui::PopStyleColor(pushedColorCount);
     if ( changed )

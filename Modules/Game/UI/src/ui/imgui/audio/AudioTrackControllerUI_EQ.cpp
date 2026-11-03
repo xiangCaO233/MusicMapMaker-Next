@@ -342,9 +342,16 @@ void AudioTrackControllerUI::renderEQSection(AudioTrackConfig& config,
     ImGui::Separator();
 
     // 竖滑块宽度取标准控件高度，标签列再按最宽频率文本扩展。
-    const float sliderWidth   = ImGui::GetFrameHeight();
-    const float eqSpacing     = 8.0F;
-    float       maxLabelWidth = 0.0F;
+    // 移动命中宽度至少 48 逻辑像素，不能只扩大字体而保留细窄的触摸区。
+    // 留白继续尊重主题配置，下限仅保证相邻频段可被手指可靠区分。
+    const float sliderWidth =
+        touch ? std::max(48.0f * scale, ImGui::GetFrameHeight())
+              : ImGui::GetFrameHeight();
+    const float eqSpacing =
+        touch ? std::max(12.0f * scale, ImGui::GetStyle().ItemSpacing.x) : 8.0F;
+    const float rowSpacing =
+        touch ? std::max(8.0f * scale, ImGui::GetStyle().ItemSpacing.y) : 4.0F;
+    float maxLabelWidth = 0.0F;
     for ( const float frequency : frequencies ) {
         // 千赫以上使用 k 后缀缩短标签，低频保留整数 Hz。
         char label[32]{};
@@ -357,7 +364,14 @@ void AudioTrackControllerUI::renderEQSection(AudioTrackConfig& config,
     }
 
     // 每列必须同时容纳滑块与标签，避免频率文本相互覆盖。
-    const float colWidth = std::max(sliderWidth, maxLabelWidth);
+    // 触屏常驻显示增益和 Q，列宽同时覆盖最宽读数，不靠悬浮提示辨认参数。
+    const float colWidth =
+        touch ? std::max({ sliderWidth,
+                           maxLabelWidth,
+                           96.0f * scale,
+                           ImGui::CalcTextSize("-24.0 dB").x +
+                               2 * ImGui::GetStyle().FramePadding.x })
+              : std::max(sliderWidth, maxLabelWidth);
     const float totalWidth =
         static_cast<float>(bandCount) * (colWidth + eqSpacing) - eqSpacing;
     const float availWidth           = ImGui::GetContentRegionAvail().x;
@@ -377,7 +391,15 @@ void AudioTrackControllerUI::renderEQSection(AudioTrackConfig& config,
         ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
     const float availHeight = ImGui::GetContentRegionAvail().y;
     // 最低 220 像素保证两个竖滑块和频率标签均具有基本可操作空间。
-    const float childHeight = std::max(220.0F, availHeight - footerHeight);
+    const auto touchHeights =
+        audioEqualizerBandHeights(scale, ImGui::GetFontSize());
+    // 手机剩余空间再小也不能压缩滑条；完整频段组通过父页纵向滚动浏览。
+    // 横向滚动条和三行文字均单独预留，避免末尾 Q 读数被裁掉。
+    const float childHeight =
+        touch ? touchHeights.m_gain + touchHeights.m_q +
+                    3 * ImGui::GetFontSize() + 5 * rowSpacing +
+                    ImGui::GetStyle().ScrollbarSize + 6 * scale
+              : std::max(220.0F, availHeight - footerHeight);
 
     // 子窗口移除内边距，列起点由 START_X 精确控制。
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
@@ -389,22 +411,28 @@ void AudioTrackControllerUI::renderEQSection(AudioTrackConfig& config,
 
     if ( opened ) {
         // 横向列间距固定，纵向间距只影响同列标签和两个滑块。
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(eqSpacing, 4));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
+                            ImVec2(eqSpacing, rowSpacing));
 
         constexpr float START_X = 1.0F;
         const float     startY  = ImGui::GetCursorPosY();
         // 扣除标签和余量后，增益占六成高度，Q 占四成且各有最小值。
         const float totalSlidersHeight = childHeight - 48.0F;
         const float gainSliderHeight =
-            std::max(60.0F, totalSlidersHeight * 0.6F);
-        const float qSliderHeight = std::max(40.0F, totalSlidersHeight * 0.4F);
+            touch ? touchHeights.m_gain
+                  : std::max(60.0F, totalSlidersHeight * 0.6F);
+        const float qSliderHeight =
+            touch ? touchHeights.m_q
+                  : std::max(40.0F, totalSlidersHeight * 0.4F);
 
         for ( std::size_t index = 0; index < bandCount; ++index ) {
             // 频段索引建立独立 ImGui ID 空间，使重复 Gain/Q 标签不会冲突。
             ImGui::PushID(static_cast<int>(index));
-            ImGui::SetCursorPos(ImVec2(
-                START_X + static_cast<float>(index) * (colWidth + eqSpacing),
-                startY + 3.0F));
+            const float columnX =
+                START_X + static_cast<float>(index) * (colWidth + eqSpacing);
+            // 移动读数另起一行会改变游标；滑条始终回到固定列轴，不能逐项累加偏移。
+            // 列的位置只受频段索引和横向滚动影响，拖动增益不会推动相邻 Q 控件。
+            ImGui::SetCursorPos(ImVec2(columnX, startY + 3.0F));
             ImGui::BeginGroup();
             // Group 让同一频段的标签、增益和 Q 作为完整布局单元。
 
@@ -428,7 +456,7 @@ void AudioTrackControllerUI::renderEQSection(AudioTrackConfig& config,
                                  (colWidth - textWidth) * 0.5F);
             ImGui::TextUnformatted(label);
 
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+            ImGui::SetCursorPosX((touch ? columnX : ImGui::GetCursorPosX()) +
                                  (colWidth - sliderWidth) * 0.5F);
             if ( ::MMM::UI::FeedbackVSliderFloat(
                      "##Gain",
@@ -437,17 +465,20 @@ void AudioTrackControllerUI::renderEQSection(AudioTrackConfig& config,
                      -24.0F,
                      24.0F,
                      "") ) {
-                // 空格式隐藏滑块旁常驻值，精确值仅在 Tooltip 中显示。
+                // 滑块内部留空；移动读数另起一行，桌面仍使用原有提示。
                 changed = true;
             }
             // 拖动或悬停时显示精确 dB，常态只保留紧凑频率标签。
-            if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
+            if ( !touch && (ImGui::IsItemActive() || ImGui::IsItemHovered()) ) {
                 ImGui::SetTooltip(
                     "%s",
                     TR_FMT("ui.audio_manager.eq_tooltip", label, gain).c_str());
             }
+            // 数值独立于滑条命中区绘制，调节时不会挡住触指或依赖鼠标悬浮。
+            // dB 与下方 Q 的单位始终可见，避免跨频段比较时混淆两个调节目标。
+            if ( touch ) ImGui::Text("%.1f dB", gain);
 
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() +
+            ImGui::SetCursorPosX((touch ? columnX : ImGui::GetCursorPosX()) +
                                  (colWidth - sliderWidth) * 0.5F);
             if ( ::MMM::UI::FeedbackVSliderFloat(
                      "##Q",
@@ -460,11 +491,12 @@ void AudioTrackControllerUI::renderEQSection(AudioTrackConfig& config,
                 changed = true;
             }
             // Q 提示独立于增益，避免在狭窄列中长期显示数值文本。
-            if ( ImGui::IsItemActive() || ImGui::IsItemHovered() ) {
+            if ( !touch && (ImGui::IsItemActive() || ImGui::IsItemHovered()) ) {
                 ImGui::SetTooltip(
                     "%s",
                     TR_FMT("ui.audio_manager.q_factor_tooltip", q).c_str());
             }
+            if ( touch ) ImGui::Text("Q %.2f", q);
 
             ImGui::EndGroup();
             // 每轮频段结束后恢复 ID，避免影响重置按钮和后续窗口控件。

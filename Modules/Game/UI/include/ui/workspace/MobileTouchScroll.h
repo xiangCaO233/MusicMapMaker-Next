@@ -17,6 +17,9 @@ public:
     /// @brief 标记刚提交的水平滑条或拖拽数值，横向手势交给组件、纵向滚动。
     /// @warning 仅在候选按下帧检查当前 Item，不保存组件指针或回调。
     void registerHorizontalDragItem();
+    /// @brief 登记竖滑条，纵向调值、横向滚动，不能把调值误识别成整页滚动。
+    /// @warning 只在初始触点检查当前组件矩形，无容器遍历或分配。
+    void registerVerticalDragItem();
     /// @brief 候选、滚动、点击交付及其最终释放均不能穿透到编辑画布。
     bool ownsPointer() const
     {
@@ -24,6 +27,8 @@ public:
     }
 
 private:
+    /// @brief 共用初始命中门禁，只登记当前组件的主拖动方向。
+    void registerDragItem(bool vertical);
     /// @brief 仅清除自己持有的 ActiveID，不销毁业务组件的活动状态。
     void cancel();
     /// @brief 从内容命中向上寻找最近可滚动祖先，弹层与画布是边界。
@@ -60,7 +65,7 @@ private:
     /// @brief 候选、滚动、横向组件拖动以及点击释放分开推进。
     bool m_captured{}, m_dragging{}, m_widgetDrag{}, m_tapRelease{};
     /// @brief 按下帧才登记组件方向；窗口失效后吞掉余下触点直到抬手。
-    bool m_justPressed{}, m_horizontal{}, m_cancelled{};
+    bool m_justPressed{}, m_horizontal{}, m_vertical{}, m_cancelled{};
     /// @brief 帧内输入过滤、释放保护及连点补交状态均由 UI 线程独占。
     bool m_filtered{}, m_releaseGuard{}, m_deferredPress{};
 };

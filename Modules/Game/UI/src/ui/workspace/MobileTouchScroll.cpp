@@ -20,7 +20,7 @@ void MobileTouchScroll::cancel()
     // 所有目标同时失效，下一次按下必须重新解析窗口父链与滚动起点。
     m_captured = m_dragging = m_widgetDrag = m_cancelled = false;
     m_pressedWindow = m_xWindow = m_yWindow = m_activeId = m_item = 0;
-    m_horizontal                                                  = false;
+    m_horizontal = m_vertical = false;
 }
 
 /// @brief 在 UI 提交期间统一过滤左键及其命名键别名，不能只屏蔽按钮 API。
@@ -208,8 +208,12 @@ void MobileTouchScroll::beginFrame(float scale)
     const bool  moved = delta.x * delta.x + delta.y * delta.y > slop * slop ||
                         io.MouseDragMaxDistanceSqr[0] > slop * slop;
     if ( !m_cancelled && !m_dragging && moved ) {
-        if ( m_horizontal && std::abs(delta.x) > std::abs(delta.y) &&
-             m_raw.m_down ) {
+        const bool widgetDirection =
+            (m_horizontal && std::abs(delta.x) > std::abs(delta.y)) ||
+            (m_vertical && std::abs(delta.y) > std::abs(delta.x));
+        // 初始命中的控件决定主轴，移动途中不能改由滑过的其他控件接管。
+        // EQ 纵向调值与横向浏览复用同一判定，不额外屏蔽父页的普通空白滚动。
+        if ( widgetDirection && m_raw.m_down ) {
             const auto item = m_item;
             cancel();
             m_widgetDrag = true;
@@ -270,6 +274,20 @@ void MobileTouchScroll::beginFrame(float scale)
 /// @warning 每个数值组件只进行常量矩形测试，不建立每帧组件索引或拥有型引用。
 void MobileTouchScroll::registerHorizontalDragItem()
 {
+    registerDragItem(false);
+}
+
+/// @brief 竖滑条使用相同的延后按下和释放流程，仅交换主方向。
+/// @warning 每个数值组件常量时间登记，不提前修改数值或触发业务命令。
+void MobileTouchScroll::registerVerticalDragItem()
+{
+    registerDragItem(true);
+}
+
+/// @brief 在有效初始命中区登记方向，保证滚出裁剪区域的组件不能抢走手势。
+/// @warning 只保存方向位，稳定 Item ID 仍由帧末统一捕获。
+void MobileTouchScroll::registerDragItem(bool vertical)
+{
     // 登记仅是一位方向语义，不改组件值，也不会让它提前收到按下。
     // 无可滚动祖先时直接为空操作，桌面和普通大小的参数弹层无需参与仲裁。
     if ( !m_justPressed || !m_captured ) return;
@@ -279,8 +297,10 @@ void MobileTouchScroll::registerHorizontalDragItem()
         return;
     // 使用真实矩形与窗口裁剪，不让被裁掉的行或同坐标后台组件取得方向优先权。
     if ( context.LastItemData.Rect.Contains(m_origin) &&
-         context.CurrentWindow->ClipRect.Contains(m_origin) )
-        m_horizontal = true;
+         context.CurrentWindow->ClipRect.Contains(m_origin) ) {
+        m_vertical   = vertical;
+        m_horizontal = !vertical;
+    }
 }
 
 /// @brief 冻结初始命中组件并恢复输入快照，原生后端的去重仍基于真实触摸。
