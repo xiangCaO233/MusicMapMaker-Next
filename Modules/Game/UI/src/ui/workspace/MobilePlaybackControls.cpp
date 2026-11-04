@@ -94,7 +94,7 @@ float MobilePlaybackControls::buttonWidth(float scale)
 {
     // 取整个工具栏的最大宽度，不只测量当前播放状态。
     // 播放变暂停或 1x 变 0.25x 时，主画布不会随之左右跳动。
-    float width = 64.0f * scale;
+    float width = 56.0f * scale;
     // 数值取合法范围中较长的表示；工具文字与实际按钮共用当前字体。
     for ( const char* label :
           { "0.25x",
@@ -106,7 +106,7 @@ float MobilePlaybackControls::buttonWidth(float scale)
             TR_CACHE("ui.toolbar.short.draw").data(),
             TR_CACHE("ui.toolbar.short.play_pause").data(),
             TR_CACHE("ui.tools.bpm_measure.pause").data() } )
-        width = std::max(width, ImGui::CalcTextSize(label).x + 16.0f * scale);
+        width = std::max(width, ImGui::CalcTextSize(label).x + 14.0f * scale);
     // 字体可能返回分数像素，向下舍入会裁掉最后一列字形。
     return std::ceil(width);
 }
@@ -169,9 +169,10 @@ void MobilePlaybackControls::drawButtons(UIManager& manager, float width,
     }
     // 初始化时没有虚构的播放状态，服务观察指针不跨帧持有。
     // 播放显示与菜单共用权威来源，按钮不自行维护播放计时器。
+    // 紧凑导航高度保证手机横屏下左侧三个工具与底部五个播放参数按钮无需滚动即可同屏显示。
     const auto*  service = manager.getEditorApplicationService();
     const bool   playing = service && service->isPlaybackPlaying();
-    const ImVec2 size{ width, 72.0f * scale };
+    const ImVec2 size{ width, 52.0f * scale };
     // 空白工作区不能通过占位入口启动音频，但保留固定按钮位置。
     // 图标及文字变化不改变内部 ID，也不重置反馈动画。
     ImGui::BeginDisabled(!hasBeatmap);

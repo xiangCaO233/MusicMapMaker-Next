@@ -12,6 +12,9 @@ bool MobileButton(const char* label, ImVec2 size = {}, bool selected = false);
 /// @warning 每帧只测量两个短标签，不重新加载皮肤字体。
 bool MobileNavigationButton(const char* id, const char* icon, const char* label,
                             ImVec2 size, bool selected = false);
+/// @brief 预先测量固定列宽下的换行高度，布局与实际命中矩形保持一致。
+/// @warning 每帧只读当前字体与内容宽度，不保存字体指针。
+ImVec2 mobileActionButtonSize(const char* label, ImVec2 size);
 /// @brief 图标与常驻文字横排的操作按钮，适用于开关、收起和确认操作。
 /// @param id 独立于可见文字的稳定身份，状态文案改变时保留点击反馈。
 /// @warning 每帧只测量短标签，动画与导航按钮共用窗口局部存储。

@@ -46,7 +46,6 @@ namespace
 /// @details 分拍线只在 Always 与 Hidden 间切换，不提供鼠标附近显示模式。
 enum class Operation {
     Action,
-    Delete,
     /// @brief 只切换相机姿态启用状态，用户保存的位置与旋转不重置。
     Camera,
     /// @brief 两态显示开关，开启固定输出 Always。
@@ -97,7 +96,7 @@ bool gridButton(const char* id, const char* icon, const char* label,
     auto*      font = Config::SkinManager::instance().getFont("pure_icons");
     if ( !font ) font = ImGui::GetFont();
     // 图标与正文各用自身字体，增大字号时按整行高度布局而不缩小文字。
-    const float iconSize   = 20 * scale;
+    const float iconSize   = 18 * scale;
     const auto  iconBounds = font->CalcTextSizeA(iconSize, 10000, 0, icon);
     const float top =
         min.y + (max.y - min.y - iconSize - text.y - 4 * scale) * .5f;
@@ -166,11 +165,7 @@ void activate(const Entry& entry, UIManager& manager)
         Interaction::executeAction(entry.m_id, &manager);
         return;
     }
-    // 删除与配色工具均走逻辑命令，由会话继续校验编辑权限与专业能力。
-    if ( entry.m_operation == Operation::Delete ) {
-        MenuUtil::dispatchCommand(Logic::CmdDeleteSelected{});
-        return;
-    }
+    // 配色工具走逻辑命令通道，由会话继续校验联机编辑权限与专业模式能力。
     if ( entry.m_operation == Operation::ColorBrush ||
          entry.m_operation == Operation::ColorEraser ) {
         MenuUtil::dispatchCommand(
@@ -221,37 +216,10 @@ void activate(const Entry& entry, UIManager& manager)
 /// @warning 每帧只访问固定表、本地配置和已发布的工具状态，不加会话长锁。
 void drawMobileWorkbench(UIManager& manager, float scale)
 {
-    // 剪贴板组：剪切先标记来源，成功粘贴后才由原事务删除旧对象。
-    // 因此按钮不能私自组合 Copy 和 Delete，跨谱面粘贴也需原实现判断来源。
+    // 高频物件编辑与历史动作已收拢至画布长按快捷菜单，工作台仅常驻视图开关与辅助工具。
+    // 辅助表由既有视图能力打开，不能因为时间线面板隐藏而创建第二个实例。
+    // 谱面设置使用设置页路由；打开后由外壳自然释放工作台占用空间。
     const std::array entries{
-        Entry{ "CopyAction", "ui.edit.copy", ICON_MMM_COPY },
-        Entry{ "PasteAction", "ui.edit.paste", ICON_MMM_PASTE },
-        Entry{ "CutAction", "ui.edit.cut", ICON_MMM_SCISSORS },
-        Entry{ "Delete",
-               "ui.settings.shortcut.delete_selected",
-               ICON_MMM_ERASER,
-               Operation::Delete },
-        // 历史操作不依赖工作台窗口的焦点，实际目标由公共谱面动作选择。
-        // 全选显式采用所有轨道范围，避免移动触点被解释为最后悬停的轨道。
-        Entry{ "UndoAction", "ui.edit.undo", ICON_MMM_UNDO },
-        Entry{ "RedoAction", "ui.edit.redo", ICON_MMM_REDO },
-        Entry{ "SelectAllObjectsAction",
-               "ui.mobile.select_all",
-               ICON_MMM_SELECT_ALL },
-        Entry{ "MirrorAction", "ui.edit.mirror", ICON_MMM_MIRROR },
-        // 原地镜像与镜像粘贴是不同事务，不能在粘贴之后另发一个镜像命令。
-        // 新增批注仍保留对象范围选择和输入确认，不直接修改注册表中的对象。
-        Entry{ "MirrorPasteAction", "ui.edit.mirror_paste", ICON_MMM_PASTE },
-        Entry{ "AddSelectedObjectAnnotationAction",
-               "ui.mobile.annotate",
-               ICON_MMM_COMMENT },
-        Entry{
-            "OpenNoteMetadataAction", "ui.edit.note_metadata", ICON_MMM_PEN },
-        Entry{ "EditSelectedObjectVolumeAction",
-               "ui.mobile.selected_volume",
-               ICON_MMM_VOLUME_HIGH },
-        // 辅助表由既有视图能力打开，不能因为时间线面板隐藏而创建第二个实例。
-        // 谱面设置使用设置页路由；打开后由外壳自然释放工作台占用空间。
         Entry{ "OpenTimingPointsTableAction",
                "ui.mobile.timing_table",
                ICON_MMM_CLOCK },
@@ -280,7 +248,7 @@ void drawMobileWorkbench(UIManager& manager, float scale)
                Operation::ColorEraser }
     };
     // 工具内容独立于入口网格，只有真正打开时才绘制原工具设置。
-    // 先绘制高频的复制粘贴和历史，再集中提供布局、磁铁、音效和调色盘。
+    // 先绘制视图与显示模式开关，再集中提供布局、磁铁、音效和调色盘。
     auto* toolbar = [&]() -> ToolbarView* {
         auto* dock = manager.getView<MainDockSpaceUI>("MainDockSpaceUI");
         return dock ? &dock->toolbarView() : nullptr;
@@ -293,8 +261,8 @@ void drawMobileWorkbench(UIManager& manager, float scale)
     // 最小宽度保留指尖目标，屏幕变窄时不能把一行偷偷改成三列或更密集排列。
     const float gap = ImGui::GetStyle().ItemSpacing.x;
     const float width =
-        std::max(48 * scale, (ImGui::GetContentRegionAvail().x - gap) * .5f);
-    // 固定两列；短屏只增加纵向滚动，不压低触摸高度或改变用户字号。
+        std::max(44 * scale, (ImGui::GetContentRegionAvail().x - gap) * .5f);
+    // 固定两列；紧凑高度使全部六行十二个常驻按钮在手机横屏下无需滚动即可完整展示。
     for ( std::size_t i = 0; i < entries.size(); i += 2 ) {
         // 先量同行的两种文案，再提交任何按钮，避免后量到的长文案压住下一行。
         // 当前行内不切换语言，翻译系统提供的只读指针只借用至本轮绘制结束。
@@ -305,7 +273,7 @@ void drawMobileWorkbench(UIManager& manager, float scale)
             std::max(ImGui::CalcTextSize(left, nullptr, false, wrap).y,
                      ImGui::CalcTextSize(right, nullptr, false, wrap).y);
         const ImVec2 size{ width,
-                           std::max(56 * scale, textHeight + 36 * scale) };
+                           std::max(48 * scale, textHeight + 28 * scale) };
         for ( std::size_t j = i; j < i + 2; ++j ) {
             const auto& entry = entries[j];
             // 配色工具沿用专业模式门禁，禁用时不提交会被后台拒绝的命令。
@@ -358,7 +326,7 @@ void drawMobileWorkbench(UIManager& manager, float scale)
                      "Tool",
                      icons[j],
                      TR(labels[j]).data(),
-                     { width, std::max(56 * scale, textHeight + 36 * scale) },
+                     { width, std::max(48 * scale, textHeight + 28 * scale) },
                      scale,
                      toolbar->mobileToolOpen(tools[j])) ) {
                 // 必须在按钮提交后取得锚点，滚动后的屏幕位置才与用户触点一致。
