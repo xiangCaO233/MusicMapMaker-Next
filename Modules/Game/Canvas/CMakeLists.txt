@@ -1,7 +1,12 @@
-# Modules/Game/Canvas/CMakeLists.txt
+# Modules/Game/Canvas/CMakeLists.txt 平台工厂采用互斥源文件，避免靠预处理宏隐藏平台实现。
+# 公共控制器头不暴露手势模型，私有包含根不作为 PUBLIC 传播。 CPU 测试编译移动生产策略，专用调用同样获得编译检查。
+# 手势测试观察正式命令，不能只用私有标志判断选区未变。 测试不要求图形设备，手机和平板触摸验收另外执行。
 
 # cmake-format: off
 # 维护约定：
+# - 触摸策略公开声明只存在于模块私有目录，不传播到其他业务头。
+# - 桌面策略独立链接，保留原有即时起笔和修饰键交互。
+# - 测试显式构造移动实现，不替换桌面生产工厂。
 # - Canvas 是业务 UI 模块，不向 Graphic 反向暴露 Brush、DrawCmd 等高层结构；新增渲染协作继续通过既有抽象回调完成。
 # - Basic2DCanvas 与 TimelineCanvas 的交互、渲染和弹窗实现保持分文件登记，避免单个翻译单元继续扩大。
 # - PreviewCanvas 复用逻辑快照但拥有独立视口，依赖调整时不能把预览生命周期重新绑定到主画布窗口显隐。
@@ -58,6 +63,23 @@ add_library(
   # 贝塞尔拖拽和工具选项映射可独立测试，不依赖画布会话或图形后端。
   src/TimingInterpolationControls.cpp
   src/TimelineCanvas_Popups.cpp)
+
+# 公共控制器只链接中立桥；平台私有头与实现由目标选择，不向公开包含目录传播。
+target_sources(Canvas
+               PRIVATE src/presentation/CanvasInteractionPresentation.cpp)
+target_include_directories(Canvas PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+if(ANDROID)
+  # 安卓仅编译触摸仲裁与双列菜单，不引入桌面右键路径。
+  target_sources(
+    Canvas
+    PRIVATE src/presentation/mobile/MobileCanvasInteractionPresentation.cpp
+            src/presentation/mobile/MobileCanvasFactory.cpp)
+else()
+  # 桌面保持原有即时鼠标输入与标准菜单，工厂符号只有一个实现。
+  target_sources(
+    Canvas
+    PRIVATE src/presentation/desktop/DesktopCanvasInteractionPresentation.cpp)
+endif()
 
 # PUBLIC 依赖构成 Canvas 公开头的传递接口；业务实现需要的新依赖应优先检查 能否保持 PRIVATE，避免继续扩大下游翻译单元的包含和链接范围。
 target_link_libraries(
@@ -370,3 +392,18 @@ mmm_add_test_executable(Canvas MouseAnnotationMenuTest
 target_link_libraries(MouseAnnotationMenuTest PRIVATE Canvas)
 mmm_register_test_case(NAME MouseAnnotationMenuTest COMMAND
                        MouseAnnotationMenuTest)
+
+# 移动输入意图采用固定时间轴验证，独立于 GPU、Android 后端与设备帧率。
+mmm_add_test_executable(Canvas MobileCanvasGestureTest
+                        tests/MobileCanvasGestureTest.cpp)
+target_include_directories(MobileCanvasGestureTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(MobileCanvasGestureTest PRIVATE Canvas Log 3rd_imgui)
+# 桌面回归编译同一触摸策略，防止安卓专用调用在本地验证中被遗漏。
+if(NOT ANDROID)
+  target_sources(
+    MobileCanvasGestureTest
+    PRIVATE src/presentation/mobile/MobileCanvasInteractionPresentation.cpp)
+endif()
+mmm_register_test_case(NAME MobileCanvasGestureTest COMMAND
+                       MobileCanvasGestureTest)

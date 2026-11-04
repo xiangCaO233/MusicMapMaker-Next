@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -35,6 +36,8 @@ class UIManager;
 namespace MMM::Canvas
 {
 
+class CanvasInteractionPresentation;
+
 class Basic2DCanvasInteraction : public UI::Interaction::IInteractionGuard
 {
 public:
@@ -54,12 +57,7 @@ public:
                             float snapshotYOffset = 0.0F);
     /// @brief 判断画布是否持有未结束的编辑手势，防止摄像机抢走释放事件。
     /// @warning 每帧常量时间读取 UI 本地门闩，不读取逻辑线程状态。
-    bool hasActivePointerGesture() const override
-    {
-        return m_leftPressStartedOnCanvas || m_leftPressStartedObjectDrag ||
-               m_rightEraseActive || m_isMiddleCanvasPanning ||
-               m_mouseBrushCancelAwaitingRelease;
-    }
+    bool hasActivePointerGesture() const override;
 
     /// @brief 请求本帧左键释放时丢弃画笔而不是提交物件。
     /// @details 供上层事务式教学在发现拖拽落点错误后撤销本次临时放置；
@@ -118,6 +116,10 @@ public:
         bool                                  allowSelectionScroll = true);
 
 private:
+    /// @brief 平台策略仅由实现文件创建；公共头不包含移动手势或菜单定义。
+    friend class CanvasInteractionPresentation;
+    /// @brief 每画布独占的长生命周期输入策略，不在每帧分配。
+    std::unique_ptr<CanvasInteractionPresentation> m_pointerPresentation;
     /// @brief 纯鼠标绘制中右键取消预览，并消费同一组按钮的剩余释放。
     /// @warning 每帧只检查本地手势和输入边沿，取消时发布一次既有结束命令。
     bool handleMouseBrushCancellation(
@@ -343,6 +345,8 @@ private:
     std::string m_selectionMenuBeatmapKey;
     /// @brief 路径相同但重新加载也应失效旧菜单候选。
     std::uintptr_t m_selectionMenuBeatmapInstance{ 0 };
+    /// @brief 本帧拾取命中的重叠部位列表，供长按或右键打开菜单时直接锁存。
+    std::vector<HoverLayerCandidate> m_currentHoverCandidates;
     /// @brief 当前悬浮物件试听按钮的跨帧锚点。
     struct AudioPreviewOverlayState {
         /// @brief 是否持有有效物件与屏幕边界。

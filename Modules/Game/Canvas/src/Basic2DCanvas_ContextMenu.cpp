@@ -205,4 +205,5 @@ void Basic2DCanvasInteraction::renderHoverLayerMenu(
         // 只对实际展开的子菜单配对结束，单一候选分支不改变 ImGui 栈。
     }
 }
+
 }  // namespace MMM::Canvas
