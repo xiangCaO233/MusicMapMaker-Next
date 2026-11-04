@@ -89,6 +89,14 @@ bool workspaceAllowsHoverFeedback()
     return !activePresentation || activePresentation->allowsHoverFeedback();
 }
 
+/// @brief 标签布局由平台组合根决定，公共画布不包含任何移动实现头。
+/// @warning 固定一次虚调用，桌面默认返回 false，保留其原有绘制路径。
+bool workspaceRenderTimelineLaneLabels(ImVec2 origin, ImVec2 size)
+{
+    return activePresentation &&
+           activePresentation->renderTimelineLaneLabels(origin, size);
+}
+
 /// @brief 保持桌面密度，触屏整行的实际可点击内容不小于手指目标。
 /// @details 调用方应把返回值同时用于行布局与选择区，而非仅扩大背景。
 /// @warning 每帧常量级字体测量，不查询配置或跨线程状态。

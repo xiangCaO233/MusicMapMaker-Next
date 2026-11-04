@@ -23,6 +23,7 @@
 #include "ui/workspace/MobileButton.h"
 #include "ui/workspace/MobileDockLayout.h"
 #include "ui/workspace/MobilePlaybackControls.h"
+#include "ui/workspace/MobileTimelineLabels.h"
 #include "ui/workspace/MobileTouchScroll.h"
 #include "ui/workspace/MobileWorkbench.h"
 #include "ui/workspace/MobileWorkspaceModel.h"
@@ -90,6 +91,12 @@ public:
     }
     /// @brief 手指没有悬浮状态，外壳采用按下与选中反馈。
     bool allowsHoverFeedback() const override { return false; }
+    /// @brief 窄栏文字由移动布局独立绘制，避免裁掉类型名称。
+    bool renderTimelineLaneLabels(ImVec2 origin, ImVec2 size) override
+    {
+        drawMobileTimelineLaneLabels(origin, size);
+        return true;
+    }
     /// @brief 手机旋转和抽屉不消费桌面停靠树，也不覆盖其持久化内容。
     bool usesDesktopLayout() const override { return false; }
     /// @brief 移动端不显示桌面输出设备组合框，继续使用现有音量控制。

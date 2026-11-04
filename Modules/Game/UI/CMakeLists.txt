@@ -80,6 +80,8 @@ configure_file(
 # - 音频、协作和设置的拆分实现保持相邻；
 # - 自动生成的演练头仅通过私有生成目录提供。
 # cmake-format: on
+# 移动控件通过 CPU 绘制几何检查，回归不依赖截图颜色。 测试专用平台源不进入桌面 UI 库，维持生产实现隔离。 安卓 UI
+# 库已有移动绘制对象，测试不重复登记定义。
 add_library(
   UI STATIC
   # 操作方案拥有输入解释与动作路由，不进入底层渲染模块。
@@ -710,6 +712,8 @@ if(ANDROID)
   target_sources(
     UI
     PRIVATE src/ui/workspace/MobileWorkspacePresentation.cpp
+            # 时间线窄栏标签只在移动目标编译，公共画布通过中立策略转发。
+            src/ui/workspace/MobileTimelineLabels.cpp
             src/ui/workspace/MobileButton.cpp
             # 参数控件保持独立，播放与轨数仍复用正式命令。 工作台仅提供移动触摸入口，桌面继续使用原工具条和编辑菜单。
             src/ui/workspace/MobileWorkbench.cpp
@@ -726,3 +730,16 @@ target_link_libraries(UI PRIVATE 3rd_ffmpeg)
 
 # 异步选择器共用回调契约，Android 不阻塞 SDL 主循环，桌面沿用原 NFD。
 target_sources(UI PRIVATE src/ui/utils/NativeFileDialogAsync.cpp)
+
+# 桌面测试直接编译移动控件，生产桌面 UI 不链接这些平台实现。 安卓目标已经拥有相同对象，避免重复工厂与绘制符号。 -
+# 几何用例复用既有测试套件，不另建平台应用入口。
+mmm_add_test_executable(UI MobileWidgetGeometryTest
+                        tests/MobileWidgetGeometryTest.cpp)
+target_link_libraries(MobileWidgetGeometryTest PRIVATE UI Log)
+if(NOT ANDROID)
+  target_sources(
+    MobileWidgetGeometryTest PRIVATE src/ui/workspace/MobileButton.cpp
+                                     src/ui/workspace/MobileTimelineLabels.cpp)
+endif()
+mmm_register_test_case(NAME MobileWidgetGeometryTest COMMAND
+                       MobileWidgetGeometryTest)
