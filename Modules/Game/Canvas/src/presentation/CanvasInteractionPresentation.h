@@ -1,0 +1,86 @@
+#pragma once
+#include "canvas/HoverLayerSelection.h"
+#include <cstdint>
+#include <glm/vec2.hpp>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace MMM::UI
+{
+class UIManager;
+}
+namespace MMM::UI::Interaction
+{
+struct SurfaceFrame;
+}
+namespace MMM::Common::Render
+{
+struct RenderSnapshot;
+}
+namespace MMM::Canvas
+{
+class Basic2DCanvasInteraction;
+/// @brief 平台菜单借用同一画布的轻量状态，引用只能活在当前更新调用栈。
+/// @details 不拥有会话、谱面或 ImGui 窗口，不向后台线程传递。
+/// 相机身份、坐标和谱面身份来自同一个控制器，不允许拼接另一画布的数据。
+/// 菜单打开后位置冻结，但当前候选只用于打开瞬间锁存。
+/// 容器只包含值语义候选，不借用 ECS 注册表或跨线程组件。
+/// 由中立桥建立引用集合，平台派生类无法访问其余控制器私有状态。
+struct CanvasMenuContext {
+    const std::string& cameraId;      ///< 稳定相机身份隔离多个画布的弹层。
+    double&            pasteTime;     ///< 菜单激活时冻结的吸附时间。
+    glm::vec2&         menuPoint;     ///< 移除框选等操作使用的画布局部落点。
+    const glm::vec2&   pointerPoint;  ///< 正常拾取路径发布的当前局部指针。
+    std::string&       beatmapKey;  ///< 路径与实例共同防止跨谱面实体身份复用。
+    std::uintptr_t&    beatmapInstance;  ///< 同路径重新加载也会改变该身份。
+    std::vector<HoverLayerCandidate>& layers;  ///< 弹层打开时锁存的值语义候选。
+    const std::vector<HoverLayerCandidate>&
+        candidates;  ///< 当前帧拾取结果，只读借用。
+};
+/// @brief 平台独立选择输入与菜单呈现，通用画布不判断安卓或触屏布局。
+/// @details 桌面与移动实现、工厂及私有头由 CMake 选择，运行时不散落宏分支。
+/// 公共头只前置声明本类，调用方不需要编译任一平台菜单定义。
+/// 实现对象随画布构造一次，更新路径只进行虚调用。
+/// 平台类可以改变输入呈现和布局，但不能绕过正式编辑命令。
+/// 重叠选择和批注编辑保持公共业务实现，防止两端行为分叉。
+class CanvasInteractionPresentation
+{
+public:
+    /// @brief 在画布更新停止后销毁，仅拥有本地轻量交互状态。
+    virtual ~CanvasInteractionPresentation() = default;
+    /// @brief 解释一次已通过外部方案检查的画布帧。
+    /// @warning 每帧执行；禁止等待会话长锁、文件操作和逐帧分配。
+    virtual void update(Basic2DCanvasInteraction&             canvas,
+                        UI::UIManager*                        manager,
+                        const Common::Render::RenderSnapshot* snapshot,
+                        const UI::Interaction::SurfaceFrame& frame, float width,
+                        float height) = 0;
+    /// @brief 待定触点同样拥有输入，摄像机不能在意图未定时接管。
+    /// @warning 每帧只读取平台本地标量，不访问会话或加锁。
+    virtual bool hasGesture() const { return false; }
+
+protected:
+    /// @details 以下桥只允许同步转发，不保存管理器、快照或编辑器的所有权。
+    /// 静态桥维持私有访问边界，平台派生类不能直接修改其他输入状态。
+    /// @brief 短期借用共同菜单状态，不泄露整个控制器的私有实现。
+    static CanvasMenuContext context(Basic2DCanvasInteraction& canvas);
+    /// @brief 平台只安排输入，实际编辑仍由既有控制器和逻辑命令执行。
+    /// @warning 每帧调用，保留原有连续命令去重和权限检查。
+    static void routeInput(Basic2DCanvasInteraction&             canvas,
+                           const Common::Render::RenderSnapshot* snapshot,
+                           float width, float height);
+    /// @brief 两种平台都可复用重叠物件选择，目标归当前画布。
+    static void renderLayers(Basic2DCanvasInteraction&             canvas,
+                             const Common::Render::RenderSnapshot& snapshot);
+    /// @brief 桌面扩展项沿用旧选择、属性和批注入口。
+    static void renderExtras(Basic2DCanvasInteraction& canvas,
+                             UI::UIManager*            manager);
+    /// @brief 新建时间戳批注只准备原编辑器请求，不直接写入谱面。
+    static void requestAnnotation(Basic2DCanvasInteraction& canvas,
+                                  double                    time);
+};
+/// @brief 每个画布构造时只创建一次目标平台实现，调用方不包含平台私有头。
+std::unique_ptr<CanvasInteractionPresentation>
+createCanvasInteractionPresentation();
+}  // namespace MMM::Canvas
