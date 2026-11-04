@@ -86,9 +86,11 @@ bool MobileTouchScroll::capture(ImVec2 origin, ImU16 count, ImGuiID windowId)
     auto* window = hit;
     for ( int depth = 0; window && depth < 32;
           ++depth, window = window->ParentWindow ) {
-        // 自定义编辑画布的拖动不属于标准滚动，也不委托给外层滚动窗口。
+        // 自定义编辑画布的拖动不属于标准滚动，也不委托给外层滚动窗口；
+        // AutoResizeY 排版子面板自身不产生滚动条，需继续向上查找外层滚动容器。
         if ( (window->Flags & ImGuiWindowFlags_NoScrollWithMouse) &&
-             (window->Flags & ImGuiWindowFlags_NoScrollbar) )
+             (window->Flags & ImGuiWindowFlags_NoScrollbar) &&
+             !(window->ChildFlags & ImGuiChildFlags_AutoResizeY) )
             break;
         if ( !m_xWindow && window->ScrollMax.x > 0 ) m_xWindow = window->ID;
         if ( !m_yWindow && window->ScrollMax.y > 0 ) m_yWindow = window->ID;
@@ -240,10 +242,11 @@ void MobileTouchScroll::beginFrame(float scale)
     // 在边界滑动也保持这份所有权，不能因没有更多可滚距离而突然触发按钮。
     filter(false, false, false);
     if ( m_raw.m_released ) {
-        // 空白轻点没有业务目标，无须制造按钮事件；这同时避免多余的补交帧。
-        // 极快连点可能已在补交期间抬手，其目标由即将提交的布局正常命中。
-        const bool tap   = !m_dragging && !m_cancelled &&
-                           (m_item != 0 || (deferred && m_justPressed));
+        // 空白轻点没有业务目标，无须制造按钮事件；单帧内按下并抬手的快速轻点
+        // 在本帧提交布局时即可直接命中目标控件，不应因尚未经历 endFrame
+        // 采样而丢失。
+        const bool tap =
+            !m_dragging && !m_cancelled && (m_item != 0 || m_justPressed);
         const auto item  = m_item;
         const auto count = m_clickCount;
         m_tapPosition    = io.MousePos;
