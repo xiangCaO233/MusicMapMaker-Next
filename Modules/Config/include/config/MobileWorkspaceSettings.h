@@ -18,7 +18,7 @@ struct MobileWorkspaceSettings {
     bool m_leftHandleDocked{ true }, m_rightHandleDocked{ true };
     /// @brief 辅助分区占整个中央宿主宽度的比例，隐藏时保留上次值。
     float m_timingRatio{ .28f }, m_previewRatio{ .2f },
-        m_workbenchRatio{ .22f };
+        m_workbenchRatio{ .17f };
     /// @brief 主区选中标签的稳定哈希；找不到旧窗口时由原生停靠选择回退。
     std::uint32_t m_selectedTab{};
     /// @brief 左资源抽屉选中类别，零表示尚未选择，不恢复抽屉的展开动画。

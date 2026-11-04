@@ -34,7 +34,7 @@ public:
     static ImVec2 tabPadding(float scale);
     /// @brief 首次建树前恢复客户端比例和中心活动标签，不消费桌面 ini。
     void restore(float timingRatio, float previewRatio, ImGuiID selectedTab,
-                 float workbenchRatio = .22f);
+                 float workbenchRatio = .17f);
     /// @brief 在显式提交边沿读取实际比例和中心标签，隐藏区保留原比例。
     /// @warning 只查询固定数量节点，不构造 JSON 或执行文件访问。
     void capture(float& timingRatio, float& previewRatio, ImGuiID& selectedTab,
@@ -77,7 +77,7 @@ private:
     int m_visibility{ -1 };
     /// @brief 各辅助分区占根宽度的比例，隐藏前保留用户实际调整值。
     float m_timingRatio{ .28f }, m_previewRatio{ .2f },
-        m_workbenchRatio{ .22f };
+        m_workbenchRatio{ .17f };
     /// @brief 长按仅保存窗口身份与起点；移动超过容差后本次触点永久取消。
     ImGuiID m_holdWindow{};
     ImVec2  m_holdOrigin{};

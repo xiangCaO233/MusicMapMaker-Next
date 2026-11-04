@@ -182,9 +182,9 @@ void MobileWorkspacePresentation::beginFrame(UIManager& manager)
     m_padding =
         std::max(0.0f, std::floor(settings.aesthetics.windowPadding * m_scale));
     m_gap = std::max(0.0f, std::floor(settings.aesthetics.windowGap * m_scale));
-    // 字号在平台外壳中统一提高，保留用户二次缩放，不逐帧累乘。
+    // 字号在平台外壳中适度提高，既保证触屏清晰度，又避免过度放大导致短屏换行拥挤。
     ImGui::GetStyle().FontScaleMain =
-        std::clamp(settings.fontSizeMultiplier * 1.25f, 1.0f, 2.5f);
+        std::clamp(settings.fontSizeMultiplier * 1.10f, 1.0f, 2.5f);
     // 所有业务表格共用触屏留白；帧末恢复，不能污染桌面或持久化美化设置。
     // 只扩大表格单元格，普通输入框与中央画布不受影响。
     ImGui::PushStyleVar(ImGuiStyleVar_CellPadding,
@@ -217,7 +217,7 @@ void MobileWorkspacePresentation::beginFrame(UIManager& manager)
     // 按当前语言和字号预留最宽标签，数值变化不会改变工具栏宽度。
     // 矮屏只增加滚动条槽位，不把按钮压到低于触摸尺寸。
     const float buttonHeight =
-        std::max(72.0f * m_scale, ImGui::GetFontSize() * 2 + 16.0f * m_scale);
+        std::max(52.0f * m_scale, ImGui::GetFontSize() * 2 + 12.0f * m_scale);
     const float contentHeight =
         buttonHeight * 8 +
         std::floor(settings.aesthetics.itemSpacing * m_scale) * 7 +
@@ -647,7 +647,7 @@ void MobileWorkspacePresentation::drawLeftDrawer(UIManager& manager,
                 "category",
                 icon,
                 label.c_str(),
-                { rail.m_width - 2 * m_padding, 72 * m_scale },
+                { rail.m_width - 2 * m_padding, 56 * m_scale },
                 selected);
             ImGui::PopID();
             if ( clicked ) {
@@ -690,6 +690,40 @@ void MobileWorkspacePresentation::drawRightDrawer(UIManager& manager,
         // 移动入口和桌面共享语言版本，不在工作区初始化时缓存显示文字。
         // 专用状态句允许不同语言调整词序，不能简单拼接中文冒号和动词。
         ImGui::TextUnformatted(TR_CACHE("ui.mobile.windows").data());
+        // 采用两列紧凑卡片网格排布，使手机横屏一屏即可展示全部面板开关、编辑模式和系统入口。
+        // 列宽从当前内容区实时扣除单个横向间距后平分，不硬编码设备分辨率或抽屉像素宽度。
+        // 奇数项编辑模式在末尾独占整行宽度，保持左右边界与上方双列按钮完全对齐。
+        // 两列布局只用于移动抽屉，桌面菜单不使用这些宽度约束。
+        // 较长翻译增加高度而不缩小阅读字号，保持触控目标清晰。
+        // 显隐两种状态预留相同高度，点击后不让按钮位置突然跳动。
+        // 统一高度保证右列与左列的触摸矩形处于同一行。
+        // 不缓存字体测量，语言或字号切换下一帧即可正确刷新。
+        // 测量只读取 UI 本地样式，不访问文件或可变会话。
+        const float gap      = ImGui::GetStyle().ItemSpacing.x;
+        const float availW   = std::max(1.0f, ImGui::GetContentRegionAvail().x);
+        const float colWidth = std::max(44.0f * m_scale, (availW - gap) * 0.5f);
+        float       rowHeight = 48.0f * m_scale;
+        // 两列采用同一实测高度，较长英文开关不能让右列覆盖下一行。
+        // 显隐两种文案都参与测量，点击切换时不会产生布局抖动。
+        for ( const char* key : { "ui.mobile.toolbar_shown",
+                                  "ui.mobile.toolbar_hidden",
+                                  "ui.mobile.timing_shown",
+                                  "ui.mobile.timing_hidden",
+                                  "ui.mobile.preview_shown",
+                                  "ui.mobile.preview_hidden",
+                                  "ui.mobile.workbench_shown",
+                                  "ui.mobile.workbench_hidden",
+                                  "ui.edit.professional_mode",
+                                  "ui.edit.bms_editing",
+                                  "ui.edit.polyline_editing",
+                                  "title.settings_manager",
+                                  "ui.welcome.title" } )
+            rowHeight = std::max(
+                rowHeight,
+                mobileActionButtonSize(TR(key).data(), { colWidth, rowHeight })
+                    .y);
+        const ImVec2 halfSize = { colWidth, rowHeight };
+        const ImVec2 fullSize = { availW, 48.0f * m_scale };
         // 状态文案与稳定 ID 分开，切换显示状态后仍从同一按钮继续渐暗。
         // 图标表达窗口职责，文字和选中底色共同表达当前开关状态。
         // 隐藏窗口只停止显示，不终止其会话或重新加载谱面资源。
@@ -699,15 +733,16 @@ void MobileWorkspacePresentation::drawRightDrawer(UIManager& manager,
                  ICON_MMM_SLIDERS,
                  m_showToolbar ? TR_CACHE("ui.mobile.toolbar_shown").data()
                                : TR_CACHE("ui.mobile.toolbar_hidden").data(),
-                 { rect.m_width - 2 * m_padding, 56 * m_scale },
+                 halfSize,
                  m_showToolbar) )
             m_showToolbar = !m_showToolbar;
+        ImGui::SameLine(0.0f, gap);
         if ( MobileActionButton(
                  "MobileTimingToggle",
                  ICON_MMM_CLOCK,
                  m_showTiming ? TR_CACHE("ui.mobile.timing_shown").data()
                               : TR_CACHE("ui.mobile.timing_hidden").data(),
-                 { rect.m_width - 2 * m_padding, 56 * m_scale },
+                 halfSize,
                  m_showTiming) )
             m_showTiming = !m_showTiming;
         if ( MobileActionButton(
@@ -715,16 +750,17 @@ void MobileWorkspacePresentation::drawRightDrawer(UIManager& manager,
                  ICON_MMM_EYE,
                  m_showPreview ? TR_CACHE("ui.mobile.preview_shown").data()
                                : TR_CACHE("ui.mobile.preview_hidden").data(),
-                 { rect.m_width - 2 * m_padding, 56 * m_scale },
+                 halfSize,
                  m_showPreview) )
             m_showPreview = !m_showPreview;
+        ImGui::SameLine(0.0f, gap);
         if ( MobileActionButton(
                  "MobileWorkbenchToggle",
                  ICON_MMM_COPY,
                  m_showWorkbench
                      ? TR_CACHE("ui.mobile.workbench_shown").data()
                      : TR_CACHE("ui.mobile.workbench_hidden").data(),
-                 { rect.m_width - 2 * m_padding, 56 * m_scale },
+                 halfSize,
                  m_showWorkbench) )
             m_showWorkbench = !m_showWorkbench;
         // 编辑模式放在抽屉中，复用菜单动作的门禁、配置广播和持久化。
@@ -751,36 +787,37 @@ void MobileWorkspacePresentation::drawRightDrawer(UIManager& manager,
                                             ICON_MMM_POLYLINE,
                                             settings.enablePolylineEditing,
                                             true } };
-        for ( const auto& [id, label, icon, active, enabled] : modes ) {
+        for ( std::size_t i = 0; i < modes.size(); ++i ) {
+            const auto& [id, label, icon, active, enabled] = modes[i];
             // 常驻状态底色用于触摸识别，不以 tooltip 代替开关状态。
             // 按钮 ID 不包含翻译或状态，语言和专业模式变化不会中断反馈。
             // BeginDisabled 只覆盖这一项，不能让 BMS 门禁影响下面的折线入口。
+            const ImVec2 modeSize =
+                (i + 1 == modes.size() && (modes.size() % 2 == 1)) ? fullSize
+                                                                   : halfSize;
             ImGui::BeginDisabled(!enabled);
             if ( MobileActionButton(
-                     id,
-                     icon,
-                     TR(label).data(),
-                     { rect.m_width - 2 * m_padding, 56 * m_scale },
-                     active) )
+                     id, icon, TR(label).data(), modeSize, active) )
                 Interaction::executeAction(id, &manager);
             ImGui::EndDisabled();
+            if ( i % 2 == 0 && i + 1 < modes.size() )
+                ImGui::SameLine(0.0f, gap);
         }
-        // 设置由专用入口打开为中心大标签，不占用资源管理器的窄内容区。
+        // 设置与欢迎页入口并排置于底部，无需滚动即可直达系统配置或教程。
         ImGui::Separator();
-        if ( MobileActionButton(
-                 "MobileSettings",
-                 ICON_MMM_COG,
-                 TR_CACHE("title.settings_manager").data(),
-                 { rect.m_width - 2 * m_padding, 56 * m_scale }) ) {
+        if ( MobileActionButton("MobileSettings",
+                                ICON_MMM_COG,
+                                TR_CACHE("title.settings_manager").data(),
+                                halfSize) ) {
             manager.openSettingsWindow(Event::SettingsTab::Software);
             m_model.closeDrawer();
         }
+        ImGui::SameLine(0.0f, gap);
         // 欢迎标签关闭后仍有纯触屏重开入口，不要求重启或使用桌面菜单。
-        if ( MobileActionButton(
-                 "MobileWelcome",
-                 ICON_MMM_BOOK,
-                 TR_CACHE("ui.welcome.title").data(),
-                 { rect.m_width - 2 * m_padding, 56 * m_scale }) ) {
+        if ( MobileActionButton("MobileWelcome",
+                                ICON_MMM_BOOK,
+                                TR_CACHE("ui.welcome.title").data(),
+                                halfSize) ) {
             manager.openWelcome();
             m_model.closeDrawer();
         }
@@ -843,7 +880,7 @@ void MobileWorkspacePresentation::drawToolbar(UIManager& manager)
                      "tool",
                      icons[index],
                      label,
-                     { ImGui::GetContentRegionAvail().x, 72 * m_scale },
+                     { ImGui::GetContentRegionAvail().x, 52 * m_scale },
                      service && service->currentTool() == tool) )
                 MenuUtil::dispatchCommand(Logic::CmdChangeTool{ tool });
             ImGui::PopID();
@@ -852,7 +889,7 @@ void MobileWorkspacePresentation::drawToolbar(UIManager& manager)
         // 与桌面相同，参数组贴底；空间不足时只保留组间空白而不覆盖工具。
         // 使用真实字号和主题间距计算，按钮不会因旋转或美化配置改变而重叠。
         const float height = std::max(
-            72.0f * m_scale, ImGui::GetFontSize() * 2 + 16.0f * m_scale);
+            52.0f * m_scale, ImGui::GetFontSize() * 2 + 12.0f * m_scale);
         const float groupHeight =
             height * 5 + ImGui::GetStyle().ItemSpacing.y * 4;
         ImGui::SetCursorPosY(
