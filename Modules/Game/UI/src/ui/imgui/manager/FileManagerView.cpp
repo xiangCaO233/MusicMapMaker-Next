@@ -130,17 +130,20 @@ FileManagerView::getEmptyProjectViewMetrics(float dpiScale) const
     metrics.padding = std::ceil(12.0f * scale);
     // 行间距至少八逻辑像素，同时尊重主题更大的 ItemSpacing。
     metrics.gap = std::ceil(std::max(style.ItemSpacing.y, 8.0f * scale));
-    // 提示和按钮行至少四十逻辑像素，也不能低于当前控件帧高。
+    // 提示和按钮行至少四十逻辑像素，移动工作区进一步扩展到触控目标高度。
+    // 桌面端 workspaceTableItemHeight 原样返回输入高度，不改变既有紧凑布局。
     metrics.hintRowHeight   = std::ceil(std::max(40.0f * scale, frameH));
-    metrics.buttonRowHeight = std::ceil(std::max(40.0f * scale, frameH));
+    metrics.buttonRowHeight = std::ceil(
+        workspaceTableItemHeight(std::max(40.0f * scale, frameH), scale));
     // 最近项目标题至少二十逻辑像素，并保证容纳一行文本。
     metrics.recentTitleHeight = std::ceil(std::max(20.0f * scale, textLineH));
-    // 最近项目项需同时容纳按钮帧和带 padding 的文本。
-    metrics.recentItemHeight =
-        std::ceil(std::max({ 20.0f * scale, frameH, textLineH + rowPadding }));
-    // 列表顶部使用与外层一致的 padding，按钮实际高度沿用 ImGui 帧高。
+    // 最近项目项需同时容纳按钮帧、带 padding 的文本以及移动端触控最小行高。
+    metrics.recentItemHeight = std::ceil(workspaceTableItemHeight(
+        std::max({ 20.0f * scale, frameH, textLineH + rowPadding }), scale));
+    // 列表顶部使用与外层一致的 padding，按钮实际高度在移动端同样满足触控目标。
+    // 这样无项目欢迎卡片中的“打开文件夹”按钮与最近项目条目都具备一致的点击高度。
     metrics.recentTopPadding = metrics.padding;
-    metrics.buttonHeight     = std::ceil(frameH);
+    metrics.buttonHeight = std::ceil(workspaceTableItemHeight(frameH, scale));
     return metrics;
 }
 
