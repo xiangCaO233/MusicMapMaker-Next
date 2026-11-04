@@ -1,5 +1,6 @@
 #include "canvas/TimelineCanvas.h"
 #include "ui/interaction/EditorInteraction.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 /// @file TimelineCanvas.cpp
 /// @brief 实现总时间线窗口、时间点交互装饰与 Vulkan 命令录制。
 ///
@@ -1162,6 +1163,9 @@ void TimelineCanvas::renderProfessionalTimelineOverlay(const ImVec2& canvasPos,
         // 无快照或退化视口无法建立四泳道，直接跳过覆盖层。
         return;
     }
+
+    // 移动端窄栏采用独立文字布局；桌面仍使用原有水平泳道标签。
+    if ( UI::workspaceRenderTimelineLaneLabels(canvasPos, size) ) return;
 
     ImDrawList*  drawList = ImGui::GetWindowDrawList();
     const ImVec2 clipMax(canvasPos.x + size.x, canvasPos.y + size.y);

@@ -33,6 +33,12 @@ public:
     virtual bool blocksCanvasInput() const { return false; }
     /// @brief 平台是否使用鼠标悬浮反馈，触摸外壳只使用按下反馈。
     virtual bool allowsHoverFeedback() const { return true; }
+    /// @brief 平台可接管窄时间线类型标签；默认 false 保留桌面原覆盖层。
+    /// @warning 每帧只绘制固定五个标签，不读取会话或创建资源。
+    virtual bool renderTimelineLaneLabels(ImVec2 origin, ImVec2 size)
+    {
+        return false;
+    }
     /// @brief 当前数值组件允许水平拖动；桌面无需额外登记。
     virtual void registerHorizontalDragItem() {}
     /// @brief 竖直数值条沿纵向调值，横向仍允许浏览内容；桌面保持原生输入。
@@ -71,6 +77,9 @@ bool beginWorkspaceWindow(std::string_view id, const std::string& title,
 bool workspaceBlocksCanvasInput();
 /// @brief 供公共反馈设施查询平台策略；没有 UI 帧时保留桌面悬浮行为。
 bool workspaceAllowsHoverFeedback();
+/// @brief 平台中立的时间线标签入口，无策略时由原画布继续绘制。
+/// @warning 每帧只进行一次非拥有策略转发。
+bool workspaceRenderTimelineLaneLabels(ImVec2 origin, ImVec2 size);
 /// @brief 表格项目内容高度；触屏至少保留 48 个逻辑像素，桌面原值返回。
 /// @details 不包含 CellPadding；显式步长的裁剪器须另加上下单元格留白。
 /// @warning 每个可见列表固定次数测量，不分配或访问设备。
