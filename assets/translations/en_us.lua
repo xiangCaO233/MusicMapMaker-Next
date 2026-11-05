@@ -1559,7 +1559,7 @@ return {
 	["ui.interaction.classic_desktop"] = "Classic Desktop",
 	["ui.interaction.mouse_only"] = "Mouse Only",
 	["ui.mobile.main_canvas"] = "Canvas",
-	["ui.mobile.windows"] = "Workspace Windows",
+	["ui.mobile.workspace"] = "Workspace",
 	["ui.mobile.toolbar_shown"] = "Toolbar: Shown",
 	["ui.mobile.toolbar_hidden"] = "Toolbar: Hidden",
 	["ui.mobile.timing_shown"] = "Timing Editor: Shown",

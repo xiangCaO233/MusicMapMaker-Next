@@ -696,7 +696,7 @@ void MobileWorkspacePresentation::drawRightDrawer(UIManager& manager,
         // 固定标题与选中底色使用户可以直接判断当前工作区状态。
         // 移动入口和桌面共享语言版本，不在工作区初始化时缓存显示文字。
         // 专用状态句允许不同语言调整词序，不能简单拼接中文冒号和动词。
-        ImGui::TextUnformatted(TR_CACHE("ui.mobile.windows").data());
+        ImGui::TextUnformatted(TR_CACHE("ui.mobile.workspace").data());
         // 采用两列紧凑卡片网格排布，使手机横屏一屏即可展示全部面板开关、编辑模式和系统入口。
         // 列宽从当前内容区实时扣除单个横向间距后平分，不硬编码设备分辨率或抽屉像素宽度。
         // 奇数项编辑模式在末尾独占整行宽度，保持左右边界与上方双列按钮完全对齐。
