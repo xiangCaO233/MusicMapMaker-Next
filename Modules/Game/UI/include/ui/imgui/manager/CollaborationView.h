@@ -110,6 +110,11 @@ private:
 
     /// @brief 应用级协作房间。
     std::shared_ptr<Network::Collaboration::CollaborationRoom> m_room;
+    /// @brief 仅供系统选择回调检查视图存活，同一 UI 线程销毁后不得再访问视图。
+    /// @warning 只在用户打开选择器时创建弱引用，不在逐帧路径复制所有权。
+    std::shared_ptr<const bool> m_roomCoverPickerLifetime;
+    /// @brief UI 线程独占的在途选择标志，重复点击不覆盖原请求。
+    bool m_roomCoverPickerPending{};
     /// @brief 公网目录展示的房间名称输入。
     std::array<char, 160> m_roomName{};
     /// @brief 当前谱面提供的默认房间名称。
