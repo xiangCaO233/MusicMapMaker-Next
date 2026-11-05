@@ -1558,7 +1558,7 @@ return {
 	["ui.interaction.classic_desktop"] = "经典桌面",
 	["ui.interaction.mouse_only"] = "纯鼠标",
 	["ui.mobile.main_canvas"] = "主画布",
-	["ui.mobile.windows"] = "显示窗口",
+	["ui.mobile.workspace"] = "工作区",
 	["ui.mobile.toolbar_shown"] = "工具栏：显示",
 	["ui.mobile.toolbar_hidden"] = "工具栏：隐藏",
 	["ui.mobile.timing_shown"] = "Timing 编辑：显示",
