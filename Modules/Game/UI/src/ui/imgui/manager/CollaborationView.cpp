@@ -34,6 +34,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <nfd.h>
 #include <string>
 #include <system_error>
@@ -583,7 +584,9 @@ void drawOfflineMemberHistoryRow(
 CollaborationView::CollaborationView(
     const std::string&                                         subViewName,
     std::shared_ptr<Network::Collaboration::CollaborationRoom> room)
-    : ISubView(subViewName), m_room(std::move(room))
+    : ISubView(subViewName)
+    , m_room(std::move(room))
+    , m_roomCoverPickerLifetime(std::make_shared<const bool>(true))
 {
     if ( m_room ) {
         // UI 整数值以服务当前配置为真实初值。
@@ -597,6 +600,8 @@ CollaborationView::CollaborationView(
 /// 只有 PendingGuestJoin 会主动设置该门；活动房间的正常解除由房间生命周期负责。
 CollaborationView::~CollaborationView()
 {
+    // 先使晚到的系统选择结果失效，再解除项目门控及销毁预览资源。
+    m_roomCoverPickerLifetime.reset();
     if ( m_pendingGuestJoin ) {
         // 防止视图销毁后本机永久无法打开项目。
         Logic::ProjectController::instance()
@@ -740,17 +745,21 @@ void CollaborationView::reloadTextures(vk::PhysicalDevice& physicalDevice,
 
 /// @brief 打开用于房主房卡的图片选择器。
 ///
-/// 初始目录依次取当前自定义封面、谱面默认封面和软件最近目录。原生选择器同步返回，
-/// 内置选择器跨帧显示；两者只允许单张常见图片并在成功后保存最近父目录。
-/// @warning 低频用户路径：原生选择器会阻塞 UI，只由“选择封面”按钮触发。
+/// 初始目录依次取当前自定义封面、谱面默认封面和软件最近目录。安卓系统选择器异步返回，
+/// 桌面原生选择器保持同步，内置选择器跨帧显示；确认后复用原封面编码与最近目录逻辑。
+/// @warning
+/// 用户触发的低频路径：桌面原生选择仍可能阻塞；安卓不等待授权或文件复制。
 /// @details lastFilePickerPath
 /// 只在用户确认有效图片后更新并保存，取消或对话框错误不
 /// 污染最近目录。当前路径父目录优先保证连续更换封面时回到同一素材位置。
 /// 内置选择器的 wasOpen
 /// 检查确保重复点击或状态恢复不会重复播放打开反馈；原生窗口
-/// 每次调用都是新的同步交互，因此直接播放一次。
+/// 每次启动原生选择前播放一次，在途请求不重复创建或覆盖回调。
+/// 回调不拥有视图；原生选择完成后仍由同一 UI 线程校验存活并应用结果。
 void CollaborationView::openRoomCoverFilePicker()
 {
+    // 系统返回前保留唯一请求，不能用后一次点击覆盖先前的选择回调。
+    if ( m_roomCoverPickerPending ) return;
     auto& app      = Config::AppConfig::instance();
     auto& settings = app.getEditorSettings();
     // 优先在用户当前封面所在目录重新打开。
@@ -768,31 +777,42 @@ void CollaborationView::openRoomCoverFilePicker()
                                         ? std::string(".")
                                         : Config::pathToUtf8(defaultDirectory);
 
-    if ( settings.filePickerStyle == Config::FilePickerStyle::Native ) {
+    if ( NativeFileDialog::requiresSystemPicker() ||
+         settings.filePickerStyle == Config::FilePickerStyle::Native ) {
         // 原生对话框打开前播放统一弹窗反馈。
         PlayPopupOpenFeedback();
-        nfdu8char_t*      selectedPath = nullptr;
-        nfdu8filteritem_t filters[1]   = { { "Image Files",
-                                             "png,jpg,jpeg,bmp,tga" } };
-        const nfdresult_t result       = NativeFileDialog::openFile(
-            &selectedPath, filters, 1, defaultPath.c_str());
-        if ( result == NFD_OKAY && selectedPath ) {
-            // 先复制平台分配字符串，再释放 NFD 内存。
-            const auto path = Config::utf8ToPath(selectedPath);
-            NFD_FreePathU8(selectedPath);
-            // 自定义选择成功后切换默认模式并排队预览纹理。
-            setRoomCoverPath(path, true);
-            if ( !path.parent_path().empty() ) {
-                // 最近目录属于低频用户配置，选择成功后立即保存。
-                settings.lastFilePickerPath =
-                    Config::pathToUtf8(path.parent_path());
-                app.save();
-            }
-        } else if ( result == NFD_ERROR ) {
-            // 用户取消不记录错误，NFD 故障写入日志。
-            XERROR("Failed to open collaboration room cover picker: {}",
-                   NFD_GetError() ? NFD_GetError() : "Unknown NFD error");
-        }
+        const nfdu8filteritem_t filters[1] = { { "Image Files",
+                                                 "png,jpg,jpeg,bmp,tga" } };
+        m_roomCoverPickerPending           = true;
+        NativeFileDialog::openFileAsync(
+            filters,
+            1,
+            defaultPath.c_str(),
+            [this,
+             lifetime = std::weak_ptr<const bool>(m_roomCoverPickerLifetime)](
+                nfdresult_t result, const std::string& selectedPath) {
+                // 完成回调与视图销毁均在 UI 线程，不在 Java 工作线程访问视图。
+                // 不捕获本次调用栈的配置或路径引用；视图销毁后直接丢弃结果。
+                if ( lifetime.expired() ) return;
+                m_roomCoverPickerPending = false;
+                if ( result == NFD_OKAY && !selectedPath.empty() ) {
+                    // 安卓交回已复制的普通路径，编码和预览继续由原业务入口校验。
+                    const auto path = Config::utf8ToPath(selectedPath);
+                    setRoomCoverPath(path, true);
+                    if ( !path.parent_path().empty() ) {
+                        // 回调时重新取得配置，只在确认选择后更新最近目录。
+                        auto& config = Config::AppConfig::instance();
+                        config.getEditorSettings().lastFilePickerPath =
+                            Config::pathToUtf8(path.parent_path());
+                        config.save();
+                    }
+                } else if ( result == NFD_ERROR ) {
+                    // 失败给出可见提示，旧封面仍保留；取消则完全不修改封面及最近目录。
+                    m_roomCoverErrorKey =
+                        "ui.collaboration.cover_error_unavailable";
+                    XERROR("Failed to open collaboration room cover picker");
+                }
+            });
         return;
     }
 
