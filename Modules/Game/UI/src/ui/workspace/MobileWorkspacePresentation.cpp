@@ -492,6 +492,12 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
 void MobileWorkspacePresentation::processTabMenu(std::string_view id,
                                                  bool* open, bool mainCanvas)
 {
+    // 辅助视图可能没有提供业务关闭指针，仍允许通过外壳显隐状态关闭。
+    // 只在本次调用借用成员地址，不把临时指针交给异步任务或持久化保存。
+    if ( !open ) {
+        if ( id == "TimelineWindow" || id == "Timeline" ) open = &m_showTiming;
+        if ( id == "PreviewWindow" ) open = &m_showPreview;
+    }
     const auto* tabs =
         m_frameManager
             ? m_frameManager->getView<CanvasTabManager>("CanvasTabManager")
