@@ -696,7 +696,11 @@ void MobileDockLayout::target(MobileDockPanel panel, const char* title)
     // 首次打开且没有有效位置时才给出默认位置；工作台与文档遵循相同规则。
     // ImGuiCond_Always 仅用于这个一次性缺省落点，不作为每帧布局约束。
     // 后续原生排序、拖出、合并和分割都不再被外壳覆盖。
-    if ( ready && first && !existing && (!saved || dockId != 0) )
+    // 登记不是 Begin 完成：适配链重复请求同一新窗口时仍需保留首次落点。
+    // 只有实际绘制过的浮动窗口才代表用户选择，不能把尚未创建的窗口当作浮动。
+    const bool awaitingFirstBegin = !window || window->LastFrameActive < 0;
+    if ( ready && (first || awaitingFirstBegin) && !existing &&
+         (!saved || dockId != 0) )
         ImGui::SetNextWindowDockID(node(panel), ImGuiCond_Always);
     else
         // 覆盖共享业务入口预设的 Always

@@ -415,7 +415,6 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
         // 使用整个中心区域，不把桌面最小宽度约束带入移动端标签。
         if ( settingsWindow || audioController )
             ImGui::SetNextWindowSizeConstraints({ 1, 1 }, m_size);
-        m_dock.target(MobileDockPanel::Main, title.c_str());
         // 原生标题和标签承接触摸拖动；内容区仍由画布或滚动器独占。
         flags &= ~(ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking);
         if ( m_model.blocksCanvasInput() ) flags |= ImGuiWindowFlags_NoInputs;
@@ -432,6 +431,8 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
             processTabMenu(id, open, true);
             return visible;
         }
+        // 每个 Begin 只提交一次最终标题，避免覆盖主画布尚未消费的首次停靠。
+        m_dock.target(MobileDockPanel::Main, title.c_str());
         // 内容层沿用原有配置与数据，外壳只替换显示位置和关闭方式。
         // 这个标记只在同步绘制作用域有效，不能传给后台数据准备任务。
     } else if ( m_drawingDrawer ) {

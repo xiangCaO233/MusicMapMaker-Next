@@ -16,6 +16,49 @@
 
 namespace
 {
+/// @brief 在无 ini 的全新上下文中检查首次主画布确实进入中心节点。
+/// @details 连续两次目标请求模拟外壳分类和标题适配，不预先伪造窗口设置。
+/// Begin 使用正常持久化标志，覆盖真机清配置后 FirstUseEver 的真实语义。
+/// @return 主画布属于中心叶且占据完整宿主时返回 true。
+/// @note 浮窗即使仍在视图注册表中，也可能被宿主遮住，因此必须检查几何。
+/// 测试前后完整销毁上下文，不能用前一轮已停靠窗口掩盖首次初始化失败。
+/// 有限帧只推进 ImGui 状态机，不使用真实时间等待模拟业务就绪。
+bool freshCanvasDocked()
+{
+    ImGui::CreateContext();
+    auto& io       = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = { 1000, 700 };
+    io.DeltaTime   = 1.0f / 60;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    unsigned char* pixels{};
+    int            width{}, height{};
+    // 只建立 CPU 字体，不需要平台窗口或 GPU。
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    MMM::UI::MobileDockLayout layout;
+    // 首帧提交后继续推进原生停靠状态，排除只检查 NextWindowData 的假阳性。
+    // 不向窗口注入尺寸或 DockId，因此断言必须由布局策略本身满足。
+    // 本夹具只活在独立上下文，不能把临时树或字体状态带入后续用例。
+    for ( int frame = 0; frame < 5; ++frame ) {
+        ImGui::NewFrame();
+        layout.render({ 0, 0 }, { 1000, 700 }, 1, false, false);
+        // 同一稳定窗口身份的重复请求必须保留尚未消费的首次停靠。
+        layout.target(MMM::UI::MobileDockPanel::Main, "Logo###Canvas_fresh");
+        layout.target(MMM::UI::MobileDockPanel::Main, "Logo###Canvas_fresh");
+        ImGui::Begin("Logo###Canvas_fresh");
+        ImGui::End();
+        layout.finishFrame();
+        ImGui::Render();
+    }
+    const auto* canvas = ImGui::FindWindowByName("Logo###Canvas_fresh");
+    // 检查真实归属和几何，不能仅以节点已创建或窗口存在判定成功。
+    const bool docked = canvas && canvas->DockId == layout.center() &&
+                        canvas->DockId != 0 && canvas->Size.x > 900 &&
+                        canvas->Size.y > 600;
+    ImGui::DestroyContext();
+    return docked;
+}
+
 /// @brief 一个业务分区 Begin 后的实际内容边界，不以宿主尺寸代替可用高度。
 struct Bounds {
     /// @brief 内容左上角和剩余高度，用于比较标签下方的真实区域。
@@ -263,6 +306,7 @@ struct Fixture {
 int main()
 {
     using namespace MMM::UI;
+    const bool freshDocked = freshCanvasDocked();
     ImGui::CreateContext();
     // 上下文由本测试独占；禁用 ini，避免本机历史布局影响叶节点身份。
     auto& io       = ImGui::GetIO();
@@ -284,6 +328,8 @@ int main()
             XERROR("Mobile dock: {}", message);
         }
     };
+    check(freshDocked,
+          "fresh logo canvas fills the center after repeated targeting");
     // 真实 UI 注册顺序允许画布先于移动宿主出现；下一帧仍须正确建立缺省停靠。
     // 不能在根 ID 尚未创建时就永久消费首次定位请求。
     ImGui::NewFrame();
