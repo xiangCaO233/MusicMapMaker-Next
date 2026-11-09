@@ -1800,7 +1800,7 @@ void Basic2DCanvasInteraction::resetContinuousEditCommands()
 /// @param pointerX 鼠标画布局部横坐标。
 /// @param pointerY 鼠标画布局部纵坐标。
 /// @return 控件、音量编辑器或对象到控件桥接区需要阻挡画布手势时返回 true。
-/// @details 仅 Move 工具且未进行其它按键手势时显示。
+/// @details 仅选择工具且未进行其它按键手势时显示。
 /// 指针离开物件后，只要仍在对象与控件联合保留区或音量编辑器打开，
 /// 就锁定上一目标，避免控件在移动鼠标途中消失。
 /// 同一实体可能拥有多个 hitbox，首次按指针命中优先，
@@ -1815,7 +1815,7 @@ bool Basic2DCanvasInteraction::renderObjectAudioPreviewControls(
     auto*       project = Logic::EditorEngine::instance().getCurrentProject();
     // 任何编辑手势开始后立即清空悬浮控件，防止按钮覆盖或消费正在
     // 进行的画布拖动；无项目和退化视口同样无法解析音频资源。
-    if ( currentSnapshot.currentTool != Logic::EditTool::Move ||
+    if ( currentSnapshot.currentTool != Logic::EditTool::Marquee ||
          m_leftPressStartedOnCanvas || m_leftPressStartedOnEntity ||
          m_rightEraseActive || !project || targetWidth <= 0.0F ||
          targetHeight <= 0.0F ) {
@@ -2761,7 +2761,7 @@ void Basic2DCanvasInteraction::handleDrops(UI::UIManager* sourceManager)
 /// @param currentSnapshot 当前渲染快照。
 /// @details Layout 工具有专用交互且不响应普通工具快捷键。
 /// 文本输入、弹窗和快捷键录制状态由 ShortcutUtils 统一阻挡；
-/// 五种可编辑工具按固定顺序匹配，首个命中即发布一次 CmdChangeTool。
+/// 四种可编辑工具按固定顺序匹配，首个命中即发布一次 CmdChangeTool。
 /// 删除快捷键只在没有工具切换时处理，全局复制/撤销/播放由主菜单负责。
 /// @warning UI 热路径：每帧检查输入状态；禁止加入文件系统访问、ECS
 /// 全量遍历或阻塞操作。
@@ -2781,15 +2781,21 @@ void Basic2DCanvasInteraction::handleHotkeys(
     if ( UI::ShortcutUtils::isShortcutRecordingActive() ) return;
 
     const auto& settings = Config::AppConfig::instance().getEditorSettings();
-    const std::array<Logic::EditTool, 5> editableTools{
-        Logic::EditTool::Move,        Logic::EditTool::Marquee,
-        Logic::EditTool::Draw,        Logic::EditTool::ColorBrush,
+    const std::array<Logic::EditTool, 4> editableTools{
+        Logic::EditTool::Marquee,
+        Logic::EditTool::Draw,
+        Logic::EditTool::ColorBrush,
         Logic::EditTool::ColorEraser,
     };
 
-    bool handledShortcut = false;
+    bool handledShortcut =
+        UI::ShortcutUtils::isActionShortcutPressed("toolMove");
+    if ( handledShortcut )
+        UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
+            Logic::CmdChangeTool{ Logic::EditTool::Marquee }));
     // 同一物理组合即使误配给多个工具，也只采用数组顺序中的首项。
     for ( Logic::EditTool tool : editableTools ) {
+        if ( handledShortcut ) break;
         if ( UI::ShortcutUtils::isShortcutPressed(
                  UI::ShortcutUtils::getToolShortcut(settings, tool)) ) {
             UI::Interaction::dispatchCommand(
@@ -6259,22 +6265,6 @@ void Basic2DCanvasInteraction::handleInteractions(
                                 .selectionOperation() }));
                 }
             } else if ( currentSnapshot->currentTool ==
-                        Logic::EditTool::Move ) {
-                // Move 工具只在实体命中且停止播放时开启拖拽事务。
-                if ( !currentSnapshot->isPlaying &&
-                     hoveredEntity != entt::null ) {
-                    // 抓取工具不负责选中，保留用户已有的多选集合。
-                    // 头部与首段身体共用根实体，仅传实体无法区分两种手势。
-                    UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
-                        Logic::CmdStartDrag{ hoveredEntity,
-                                             m_cameraId,
-                                             UI::Interaction::bypassSnapping(),
-                                             hoveredObjectKind,
-                                             hoveredPart,
-                                             hoveredSubIndex }));
-                    m_leftPressStartedObjectDrag = true;
-                }
-            } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Draw ) {
                 if ( !currentSnapshot->isPlaying ) {
                     // 画笔起点连同方案延伸意图与 Ctrl 状态发送，逻辑层决定
@@ -6321,7 +6311,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         // 保留单击与拖动的区别，释放帧不会凭空把普通单击升级为拖拽。
         m_leftPressDragged = true;
 
-        if ( m_leftPressStartedOnCanvas && !m_leftPressStartedObjectDrag &&
+        if ( m_leftPressStartedOnCanvas && !m_leftPressStartedOnEntity &&
              currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             // 框选可以越过视口上下边缘自动滚动；逻辑矩形仍以当前指针
             // 局部坐标更新，保证选择范围连续。
@@ -6422,9 +6412,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                         UI::Interaction::bypassSnapping() }));
             }
         } else if ( m_leftPressStartedObjectDrag &&
-                    (currentSnapshot->currentTool == Logic::EditTool::Move ||
-                     currentSnapshot->currentTool ==
-                         Logic::EditTool::Marquee) ) {
+                    currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             // 对象拖拽在边缘触发二维自动平移，灵敏度来自预览交互配置。
             glm::vec2 autoPanDelta =
                 currentSnapshot->hasBeatmap && !currentSnapshot->isPlaying &&
@@ -6503,7 +6491,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         // 此分支不依赖窗口 hover，拖出窗口或失效射线都必须结束已拥有的事务。
         // 有效最终位置已经在上方提交，End 只负责固化状态与撤销记录。
         // 清理门闩晚于事件发布，避免结束命令失去按下时记录的对象拖动身份。
-        // Shift+单击 seek 只属于 Move 工具，要求按下与释放都在轨道区、
+        // Shift+单击 seek 属于选择工具，要求按下与释放都在轨道区、
         // 全程未拖动且未从实体开始。
         const bool shiftReleaseSeek =
             m_leftPressStartedOnCanvas && m_leftPressStartedInTrackLayout &&
@@ -6511,9 +6499,9 @@ void Basic2DCanvasInteraction::handleInteractions(
             UI::Interaction::modifier(UI::Interaction::Modifier::Shift) &&
             currentSnapshot->isHoveringCanvas && currentSnapshot->hasBeatmap &&
             !currentSnapshot->isPlaying &&
-            currentSnapshot->currentTool == Logic::EditTool::Move;
+            currentSnapshot->currentTool == Logic::EditTool::Marquee;
 
-        if ( m_leftPressStartedOnCanvas && !m_leftPressStartedObjectDrag &&
+        if ( m_leftPressStartedOnCanvas && !m_leftPressStartedOnEntity &&
              currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             // 释放命令依据按下时锁存的手势种类，而非释放位置的 hover。
             UI::Interaction::dispatchCommand(
@@ -6534,10 +6522,13 @@ void Basic2DCanvasInteraction::handleInteractions(
                 Event::LogicCommandEvent(Logic::CmdEndDrag{ m_cameraId }));
         }
 
-        if ( currentSnapshot->currentTool == Logic::EditTool::Move ) {
-            // Move 工具空白单击清空选择；Ctrl 保留/切换选择语义由命令处理。
+        if ( currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
+            // 选择工具空白单击清空选择；追加、减选模式保留原集合。
             if ( m_leftPressStartedOnCanvas && !m_leftPressStartedOnEntity &&
-                 !m_leftPressDragged && !shiftReleaseSeek ) {
+                 !m_leftPressDragged && !shiftReleaseSeek &&
+                 (!UI::Interaction::activeProfile().selectionOperation() ||
+                  UI::Interaction::activeProfile().selectionOperation() ==
+                      Logic::SelectionOperation::Replace) ) {
                 UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdSelectEntity{
                         entt::null,
@@ -6687,11 +6678,10 @@ void Basic2DCanvasInteraction::renderHoverInspection(
              currentSnapshot->isHoveringCanvas,
              currentSnapshot->isPlaying) ) {
         if ( isMouseInTrackLayout ) {
-            // Move/Marquee 只在存在吸附或对象检查内容时显示；绘制类工具
+            // 选择工具只在存在吸附或对象检查内容时显示；绘制类工具
             // 始终需要时间与拍点反馈。
             bool isEditTool =
-                (currentSnapshot->currentTool != Logic::EditTool::Move &&
-                 currentSnapshot->currentTool != Logic::EditTool::Marquee);
+                currentSnapshot->currentTool != Logic::EditTool::Marquee;
 
             if ( currentSnapshot->isSnapped || isEditTool ||
                  currentSnapshot->hoverInspect.show ) {

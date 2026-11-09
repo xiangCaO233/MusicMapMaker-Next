@@ -274,9 +274,6 @@ const Config::ShortcutBinding& getToolShortcut(
 {
     // 只读重载直接返回 EditorSettings 内部绑定，调用方不得延长其生命周期。
     switch ( tool ) {
-    case Logic::EditTool::Move:
-        return Interaction::activeProfile().shortcut(
-            "toolMove", settings.shortcutConfig.toolMove);
     case Logic::EditTool::Marquee:
         return Interaction::activeProfile().shortcut(
             "toolMarquee", settings.shortcutConfig.toolMarquee);
@@ -291,9 +288,9 @@ const Config::ShortcutBinding& getToolShortcut(
             "toolColorEraser", settings.shortcutConfig.toolColorEraser);
     case Logic::EditTool::Layout: break;
     }
-    // Layout 当前没有独立绑定，回退 Move 保持返回引用始终有效。
+    // Layout 当前没有独立绑定，回退选择工具 保持返回引用始终有效。
     return Interaction::activeProfile().shortcut(
-        "toolMove", settings.shortcutConfig.toolMove);
+        "toolMarquee", settings.shortcutConfig.toolMarquee);
 }
 
 /// @brief 获取指定编辑工具对应的可写快捷键绑定。
@@ -307,7 +304,6 @@ Config::ShortcutBinding& getToolShortcut(Config::EditorSettings& settings,
 {
     // 可写重载与只读重载保持完全相同的工具到字段映射。
     switch ( tool ) {
-    case Logic::EditTool::Move: return settings.shortcutConfig.toolMove;
     case Logic::EditTool::Marquee: return settings.shortcutConfig.toolMarquee;
     case Logic::EditTool::Draw: return settings.shortcutConfig.toolDraw;
     case Logic::EditTool::ColorBrush:
@@ -316,8 +312,8 @@ Config::ShortcutBinding& getToolShortcut(Config::EditorSettings& settings,
         return settings.shortcutConfig.toolColorEraser;
     case Logic::EditTool::Layout: break;
     }
-    // 未单独配置的 Layout 返回可写 Move 绑定作为兼容回退。
-    return settings.shortcutConfig.toolMove;
+    // 未单独配置的 Layout 返回可写选择工具绑定作为兼容回退。
+    return settings.shortcutConfig.toolMarquee;
 }
 
 }  // namespace MMM::UI::ShortcutUtils

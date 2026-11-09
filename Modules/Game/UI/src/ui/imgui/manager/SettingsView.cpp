@@ -342,8 +342,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
     case Event::SettingsTab::Shortcut: {
         // 快捷键页每个可录制动作都参与标签列宽度估算。
         // 快捷键字符串和操作按钮的宽度在 widget 测量函数中单独计算。
-        const std::array<const char*, 21> labels{
-            TR_CACHE("ui.settings.shortcut.tool_move").data(),
+        const std::array<const char*, 20> labels{
             TR_CACHE("ui.settings.shortcut.tool_marquee").data(),
             TR_CACHE("ui.settings.shortcut.tool_draw").data(),
             TR_CACHE("ui.settings.shortcut.tool_color_brush").data(),

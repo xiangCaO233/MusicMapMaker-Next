@@ -65,7 +65,7 @@ struct EditorEngine::Impl {
     /// @brief 当前全局编辑工具。
     /// @warning 逻辑/UI 热路径/原子：UI 命令写入、会话 update
     /// 读取；只传递枚举状态，使用 relaxed。
-    std::atomic<EditTool> m_currentTool{ EditTool::Move };
+    std::atomic<EditTool> m_currentTool{ EditTool::Marquee };
 
     /// @brief 编辑器级画笔配色，各会话创建或重新激活时从此状态恢复。
     std::array<std::optional<glm::vec4>, NOTE_COLOR_SLOT_COUNT>

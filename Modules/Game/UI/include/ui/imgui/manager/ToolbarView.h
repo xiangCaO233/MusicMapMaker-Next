@@ -60,9 +60,9 @@ private:
         BeatLine,
     };
 
-    Logic::EditTool m_currentTool = Logic::EditTool::Move;
+    Logic::EditTool m_currentTool = Logic::EditTool::Marquee;
     /// @brief 进入布局模式前使用的工具，用于再次点击按钮时恢复。
-    Logic::EditTool m_toolBeforeLayout = Logic::EditTool::Move;
+    Logic::EditTool m_toolBeforeLayout = Logic::EditTool::Marquee;
     /// @brief 是否显示布局组件管理弹层。
     bool m_showLayoutPopup{ false };
     /// @brief 本帧布局工具按钮的屏幕左上角坐标，用于定位弹层。

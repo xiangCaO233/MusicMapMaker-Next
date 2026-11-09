@@ -406,8 +406,8 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
                     ? "Preview complete. Select the required tool in the "
                       "toolbar before editing: "
                     : "预览完成，请先在工具栏选择本段需要的工具，再开始编辑：";
-            prompt += composeRequiredTool == Logic::EditTool::Move
-                          ? (language == "en_us" ? "Move" : "拖拽工具")
+            prompt += composeRequiredTool == Logic::EditTool::Marquee
+                          ? (language == "en_us" ? "Select" : "选择工具")
                           : (language == "en_us" ? "Draw" : "绘制工具");
             prompt += "\n";
             prompt += TR("ui.walkthrough.escape_to_exit").toString();
@@ -443,7 +443,7 @@ void WalkthroughPage::startGuide(UIManager*                 manager,
         // 单独目标不能与画布排在同一列表：Spotlight 会优先采用
         // 当前帧已出现的后续目标，直接把画布放入会跳过工具按钮。
         manager->walkthroughSpotlight().start(
-            { composeRequiredTool == Logic::EditTool::Move
+            { composeRequiredTool == Logic::EditTool::Marquee
                   ? "compose.lesson.select-move-tool"
                   : "compose.lesson.select-draw-tool" },
             std::move(prompt),

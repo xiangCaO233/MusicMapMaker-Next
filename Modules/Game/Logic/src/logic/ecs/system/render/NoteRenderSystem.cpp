@@ -350,13 +350,13 @@ void NoteRenderSystem::generateSnapshot(
         snapshot->uiInterpolationYOffsetScale  = 1.0;
     }
 
-    // Timeline 右键创建事件与主画布 Move 工具空白拖动需要完整映射；
+    // Timeline 右键创建事件与主画布选择工具空白拖动需要完整映射；
     // 普通播放快照只携带线性补间速度。
     if ( cameraId == "Timeline" ||
          (isMainCanvas && snapshot->acceptsInteraction &&
-          snapshot->currentTool == EditTool::Move) ) {
+          snapshot->currentTool == EditTool::Marquee) ) {
         // 交互视图需要逆映射任意位置，线性速度不足以处理整张时间线。
-        // 只在指定视图或 Move 工具交互时复制，普通播放避免携带完整段表。
+        // 只在指定视图或选择工具交互时复制，普通播放避免携带完整段表。
         // 复制的是动画后的映射，与当前显示缩放保持一致。
         cache->copyAnimatedSegmentsTo(snapshot->scrollSegments);
     }

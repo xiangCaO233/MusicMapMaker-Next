@@ -239,9 +239,9 @@ struct SessionContext {
     double lastSnapshotTime{ 0.0 };
 
     // --- 交互与工具状态 ---
-    EditTool    currentTool{ EditTool::Move };  ///< 当前选中的编辑工具类型
-    std::string mouseCameraId;                  ///< 鼠标当前所在的视口 ID
-    glm::vec2   lastMousePos{ 0.0f, 0.0f };     ///< 鼠标在对应视口内的最后坐标
+    EditTool    currentTool{ EditTool::Marquee };  ///< 当前选中的编辑工具类型
+    std::string mouseCameraId;                     ///< 鼠标当前所在的视口 ID
+    glm::vec2   lastMousePos{ 0.0f, 0.0f };  ///< 鼠标在对应视口内的最后坐标
     /// @brief 鼠标最后一次悬停的主画布 ID，用于菜单触发的分区全选。
     std::string lastMainCanvasCameraId;
     /// @brief 鼠标最后一次悬停主画布时的局部坐标。

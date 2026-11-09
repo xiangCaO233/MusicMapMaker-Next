@@ -49,15 +49,13 @@ bool testShortcutUtilityBoundary()
     MMM::Config::EditorSettings settings;
     // 只读入口使用原对象的 const 视图，避免值拷贝掩盖引用身份错误。
     const auto& readOnly = settings;
-    // 成员指针表固定五种有独立绑定的工具，避免只验证默认 Move 而遗漏字段映射。
-    const std::array tools{ EditTool::Move,
-                            EditTool::Marquee,
+    // 成员指针表固定四种有独立绑定的工具，避免只验证选择工具而遗漏字段映射。
+    const std::array tools{ EditTool::Marquee,
                             EditTool::Draw,
                             EditTool::ColorBrush,
                             EditTool::ColorEraser };
     // 期望地址直接取自配置字段，不以被测函数生成期望结果。
-    const std::array bindings{ &settings.shortcutConfig.toolMove,
-                               &settings.shortcutConfig.toolMarquee,
+    const std::array bindings{ &settings.shortcutConfig.toolMarquee,
                                &settings.shortcutConfig.toolDraw,
                                &settings.shortcutConfig.toolColorBrush,
                                &settings.shortcutConfig.toolColorEraser };
@@ -67,9 +65,9 @@ bool testShortcutUtilityBoundary()
              &getToolShortcut(readOnly, tools[i]) != bindings[i] )
             return false;
     }
-    // Layout 沿用 Move 回退；通过返回引用写入后立即观察原设置。
+    // Layout 沿用选择工具回退；通过返回引用写入后立即观察原设置。
     getToolShortcut(settings, EditTool::Layout).key = "FutureKey";
-    if ( settings.shortcutConfig.toolMove.key != "FutureKey" ||
+    if ( settings.shortcutConfig.toolMarquee.key != "FutureKey" ||
          &getToolShortcut(readOnly, EditTool::Layout) != bindings.front() )
         return false;
     // 未知未来按键仍显示原文字，禁用绑定不显示；不依赖当前 ImGui 上下文。

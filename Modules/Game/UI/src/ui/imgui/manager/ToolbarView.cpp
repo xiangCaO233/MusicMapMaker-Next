@@ -1153,20 +1153,8 @@ void ToolbarView::update(UIManager* sourceManager)
         // 每个工具后调用 advanceItem，只在该项确实可见时产生间距。
         const bool isLayoutEditing = m_currentTool == Logic::EditTool::Layout;
         ImGui::BeginDisabled(isLayoutEditing);
-        if ( stateToolVisibility.move ) {
-            // 移动工具负责平移视图和直接拖动物件。
-            drawToolButton(ICON_MMM_HAND,
-                           Logic::EditTool::Move,
-                           TR("ui.toolbar.move").data(),
-                           btnSize,
-                           btnHeight,
-                           TR("ui.toolbar.short.move").data(),
-                           showToolLabels,
-                           sourceManager);
-            advanceItem();
-        }
         if ( stateToolVisibility.marquee ) {
-            // 框选工具进入矩形选择状态机。
+            // 选择工具同时提供物件拖动和空白框选。
             drawToolButton(ICON_MMM_SQUARE_SELECT,
                            Logic::EditTool::Marquee,
                            TR("ui.toolbar.marquee").data(),
@@ -1223,9 +1211,9 @@ void ToolbarView::update(UIManager* sourceManager)
 
         // 分隔线只在上下两组均至少有一个可见项时绘制。
         const bool hasVisibleStateTool =
-            stateToolVisibility.move || stateToolVisibility.marquee ||
-            stateToolVisibility.draw || stateToolVisibility.colorBrush ||
-            stateToolVisibility.colorEraser || stateToolVisibility.layout;
+            stateToolVisibility.marquee || stateToolVisibility.draw ||
+            stateToolVisibility.colorBrush || stateToolVisibility.colorEraser ||
+            stateToolVisibility.layout;
         const bool hasVisibleUpperIndependentButton =
             independentButtonVisibility.notePalette ||
             independentButtonVisibility.magnet ||
@@ -5133,7 +5121,7 @@ void ToolbarView::drawToolButton(const char* icon, Logic::EditTool tool,
         // 通用绘制工具选择步骤仍沿用旧目标，维护旧教程阶段的完成条件。
         // 新目标只在当前按钮绘制时报告，聚光灯不会高亮相邻的工具按钮。
         // 用户若已选中目标工具，可由步骤的确认入口继续而不伪造点击。
-        if ( tool == Logic::EditTool::Move ) {
+        if ( tool == Logic::EditTool::Marquee ) {
             spotlight.reportLastItem("compose.toolbar.select-move-tool");
             // 创作练习换工具阶段只高亮此按钮；真正切换由页面读取
             // 已发布的编辑器工具状态确认，不凭点击提前开放画布。
@@ -5301,7 +5289,7 @@ void ToolbarView::drawLayoutButton(float width, float height, bool showLabel,
         Logic::EditTool nextTool = Logic::EditTool::Layout;
         if ( isActive ) {
             nextTool          = m_toolBeforeLayout == Logic::EditTool::Layout
-                                    ? Logic::EditTool::Move
+                                    ? Logic::EditTool::Marquee
                                     : m_toolBeforeLayout;
             m_showLayoutPopup = false;
         } else {

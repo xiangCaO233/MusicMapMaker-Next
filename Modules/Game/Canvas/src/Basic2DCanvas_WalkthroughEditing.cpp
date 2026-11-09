@@ -60,7 +60,7 @@ bool Basic2DCanvas::updateComposeEditWalkthrough(
                                 0,
                                 Common::Render::HoverPart::Head,
                                 -1,
-                                Logic::EditTool::Move },
+                                Logic::EditTool::Marquee },
         // Hold 尾部独立于身体命中框，拉伸只改变时长而不移动头部。
         // 缩短和延长都合法，完成条件比较正式的 duration。
         ComposeEditGuideTarget{ "compose.canvas.resize-hold",
@@ -68,7 +68,7 @@ bool Basic2DCanvas::updateComposeEditWalkthrough(
                                 1,
                                 Common::Render::HoverPart::HoldEnd,
                                 -1,
-                                Logic::EditTool::Move },
+                                Logic::EditTool::Marquee },
         // Flick 箭头指向终点轨，拖动它改变带符号的 dtrack。
         // 根头部仍由原创建令牌定位，横移整个 Flick 不算改距离。
         ComposeEditGuideTarget{ "compose.canvas.resize-flick",
@@ -76,7 +76,7 @@ bool Basic2DCanvas::updateComposeEditWalkthrough(
                                 2,
                                 Common::Render::HoverPart::FlickArrow,
                                 -1,
-                                Logic::EditTool::Move },
+                                Logic::EditTool::Marquee },
         // 折线路线的第三子段是中间 Hold，横移会带着后缀同向移动。
         // 此步骤保持子段数量，避免误把结构合并提前算作位置练习。
         ComposeEditGuideTarget{ "compose.canvas.move-sub-hold",
@@ -84,7 +84,7 @@ bool Basic2DCanvas::updateComposeEditWalkthrough(
                                 3,
                                 Common::Render::HoverPart::HoldBody,
                                 2,
-                                Logic::EditTool::Move },
+                                Logic::EditTool::Marquee },
         // 第四子段是中间 Flick，纵移会同时改变上一 Hold 的长度。
         // 命中框沿用 HoldBody，但索引必须准确匹配到该子段。
         ComposeEditGuideTarget{ "compose.canvas.move-sub-flick",
@@ -92,7 +92,7 @@ bool Basic2DCanvas::updateComposeEditWalkthrough(
                                 3,
                                 Common::Render::HoverPart::HoldBody,
                                 3,
-                                Logic::EditTool::Move },
+                                Logic::EditTool::Marquee },
         // 再次拖动第四段至相邻 Hold 起点，会触发退化清理。
         // 清理后的根可能降级为独立 Hold，验收仍以原槽位为准。
         ComposeEditGuideTarget{ "compose.canvas.merge-sub-note",
@@ -100,7 +100,7 @@ bool Basic2DCanvas::updateComposeEditWalkthrough(
                                 3,
                                 Common::Render::HoverPart::HoldBody,
                                 3,
-                                Logic::EditTool::Move },
+                                Logic::EditTool::Marquee },
         // 独立 Hold 可以在尾部起笔，改变轨道后生成新的折线根。
         // 旧 Hold 的创建身份会通过 Action 传给这个新根。
         ComposeEditGuideTarget{ "compose.canvas.extend-note",

@@ -1248,18 +1248,10 @@
     {
       "tab": "Shortcut",
       "section": "ui.settings.shortcut",
-      "label": "ui.settings.shortcut.tool_move",
-      "fields": [],
-      "keywords": "shortcut.tool_move toolMove shortcut",
-      "aliases": "抓取工具 快捷键配置 Grab Tool Shortcut Config"
-    },
-    {
-      "tab": "Shortcut",
-      "section": "ui.settings.shortcut",
       "label": "ui.settings.shortcut.tool_marquee",
       "fields": [],
       "keywords": "shortcut.tool_marquee toolMarquee",
-      "aliases": "选取工具 快捷键配置 Marquee Tool Shortcut Config"
+      "aliases": "选择工具 抓取 移动 快捷键配置 Selection Tool Move Grab Shortcut Config"
     },
     {
       "tab": "Shortcut",
