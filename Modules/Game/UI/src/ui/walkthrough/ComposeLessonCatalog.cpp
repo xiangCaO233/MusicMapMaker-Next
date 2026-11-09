@@ -59,7 +59,7 @@ Logic::EditTool requiredComposeLessonTool(std::string_view title)
     };
     return std::find(moveLessons.begin(), moveLessons.end(), title) !=
                    moveLessons.end()
-               ? Logic::EditTool::Move
+               ? Logic::EditTool::Marquee
                : Logic::EditTool::Draw;
 }
 
@@ -219,17 +219,17 @@ std::pair<std::string_view, std::string_view> lessonPracticeInstruction(
             "left button is released."
         };
     // 移动现有物件要抓住头部，蓝点标出最终位置。
-    // 此段使用拖拽工具，不创建第二个同类型 Note。
+    // 此段使用选择工具，不创建第二个同类型 Note。
     if ( title == "拖拽移动教学" )
         return {
-            "使用拖拽工具，按住左键拖动标出的物件头部到蓝色落点。",
+            "使用选择工具，按住左键拖动标出的物件头部到蓝色落点。",
             "Use Move: left-drag each marked note head to its blue target."
         };
     // 调整滑键只移动箭头终点；旧头部已经是正确的起点。
     // 文案显式提醒不要移动头部，以保持物件拍位不变。
     if ( title == "滑键拖拽调整教学" )
         return {
-            "使用拖拽工具，按住左键将滑键箭头尾部拖到蓝色落点，不要移动滑键头"
+            "使用选择工具，按住左键将滑键箭头尾部拖到蓝色落点，不要移动滑键头"
             "。",
             "Use Move: left-drag each flick arrow to its blue target without "
             "moving the head."
@@ -238,7 +238,7 @@ std::pair<std::string_view, std::string_view> lessonPracticeInstruction(
     // 蓝色落点代表新的尾端，不是重画长条的起笔点。
     if ( title == "长条拖拽调整教学" )
         return {
-            "使用拖拽工具，按住左键将长条尾部拖到蓝色落点，不要移动长条头。",
+            "使用选择工具，按住左键将长条尾部拖到蓝色落点，不要移动长条头。",
             "Use Move: left-drag each hold end to its blue target without "
             "moving the head."
         };
@@ -288,7 +288,7 @@ std::pair<std::string_view, std::string_view> lessonPracticeInstruction(
     // 抓取节点而非空白折线主体，才能只改对应子段。
     if ( title == "折线拖拽调整教学" )
         return {
-            "使用拖拽工具，按住左键拖动需要调整的折线节点到对应蓝色落点，逐个修"
+            "使用选择工具，按住左键拖动需要调整的折线节点到对应蓝色落点，逐个修"
             "正路径。",
             "Use Move: left-drag each polyline node that needs adjustment to "
             "its blue target."
@@ -297,7 +297,7 @@ std::pair<std::string_view, std::string_view> lessonPracticeInstruction(
     // 两段路径的其它正确节点不需要重新绘制。
     if ( title == "折线拖拽合并教学" )
         return {
-            "使用拖拽工具，分别按住左键将两条折线内侧的上方连接节点向下拖到"
+            "使用选择工具，分别按住左键将两条折线内侧的上方连接节点向下拖到"
             "同轨蓝色落点；松开后中间的往返段会一次合并。",
             "Use Move: on each polyline, left-drag the upper inner connection "
             "node down to the blue point on the same lane. Releasing merges "

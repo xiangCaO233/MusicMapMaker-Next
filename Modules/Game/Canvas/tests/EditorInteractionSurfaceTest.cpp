@@ -5,6 +5,8 @@
 #include "common/render/HoverRenderData.h"
 #include "common/render/RenderSnapshot.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
+#include "config/ShortcutConfig.h"
 #include "config/VisualConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
@@ -559,7 +561,11 @@ bool frame(MMM::Canvas::Basic2DCanvasInteraction&     interaction,
     ImGui::NewFrame();
     ImGui::SetNextWindowPos({ 0, 0 });
     ImGui::SetNextWindowSize({ 400, 400 });
-    ImGui::Begin("SurfaceTest", nullptr, ImGuiWindowFlags_NoSavedSettings);
+    // 使用真实主画布的稳定 ID 前缀，让快捷键经过生产焦点门禁。
+    // 可见标题不变，菜单和拾取仍复用同一固定测试窗口。
+    ImGui::Begin("SurfaceTest###Canvas_Probe",
+                 nullptr,
+                 ImGuiWindowFlags_NoSavedSettings);
     // 焦点来自正式窗口栈，不能把测试硬编码的 focused 标志交给方案。
     // 已打开菜单时保留其焦点，强制聚焦父窗口会人为关闭标准弹出菜单。
     if ( !ImGui::IsPopupOpen(
@@ -574,6 +580,193 @@ bool frame(MMM::Canvas::Basic2DCanvasInteraction&     interaction,
     ImGui::End();
     ImGui::EndFrame();
     return menuOpen;
+}
+/// @brief 验证统一选择工具按起笔命中区分物件拖动与空白框选。
+/// @return 子部件身份完整转发且跨过另一类区域不切换手势时返回真。
+/// @details 使用正式 ImGui 输入帧和事件总线，不直接修改控制器手势标志。
+/// 这里只验收输入归属，位移、撤销与跨域转换由逻辑层测试覆盖。
+/// @pre 上下文已初始化，前一用例的指针和弹窗事务已经结束。
+/// @post 恢复双击参数并解除事件订阅，不写入个人配置或测试资源。
+/// @note 起笔身份来自当前 hitbox，不允许复用上一个样本的部位信息。
+/// @note 玩家物件和音频采样复用数字实体号，用对象领域防止身份混淆。
+/// @note 离开物件后仍要求移动和结束，不能因下一帧没有 hover 就丢失事务。
+/// @note 空白框选进入物件区域后仍不发布 StartDrag，避免途中抢占归属。
+/// @note 快捷键竞争使用相同物理键，验证当前可配置工具优先于隐藏兼容入口。
+/// @note 禁用绘制绑定后再次按键，单独验证旧入口仍可进入选择工具。
+/// @note 快捷键只观察 CmdChangeTool，不要求测试进程创建真实编辑会话。
+/// @note 完整保存和恢复绑定值，避免用户的原始组合键被测试覆盖。
+/// @note 两次按键之间经过正式释放帧，不能用连续按住触发的重复冒充新输入。
+bool testUnifiedSelectionGestureOwnership()
+{
+    using namespace MMM;
+    // 使用应用的真实方案交接，保持默认键鼠语义和工具分派。
+    Interaction::synchronizeProfile("classic-desktop", true);
+    Interaction::synchronizeProfile("classic-desktop", true);
+    Canvas::Basic2DCanvasInteraction controller("SurfaceTest", "Canvas_Probe");
+    // 快照和控制器跨帧保留；重新创建控制器会掩盖手势归属丢失。
+    // 这里只提供拾取身份，不创建 ECS 对象或模拟逻辑线程回流。
+    Common::Render::RenderSnapshot snapshot;
+    snapshot.hasBeatmap = snapshot.isHoveringCanvas = true;
+    snapshot.trackCount                             = 4;
+    snapshot.currentTool                            = Logic::EditTool::Marquee;
+    // 禁用双击寻时，连续样本仍各自代表一次独立的拖动手势。
+    auto&       io              = ImGui::GetIO();
+    const float doubleClickTime = io.MouseDoubleClickTime;
+    io.MouseDoubleClickTime     = 0.0F;
+    // 起笔命令按值保留，才能在帧结束后检查部位、领域与子索引。
+    // 移动和结束分开计数，只有完整的事务序列才代表可用拖动。
+    int                              deletions = 0;
+    std::vector<Logic::EditTool>     switchedTools;
+    std::vector<Logic::CmdStartDrag> starts;
+    int                              marquees = 0, updates = 0, ends = 0;
+    auto&                            bus = Event::EventBus::instance();
+    // 订阅正式事件出口，框选和拖动命令不能在同一笔中同时出现。
+    // 订阅不应用命令，避免把逻辑层选择副作用混入本层命中测试。
+    const auto subscription =
+        bus.subscribe<Event::LogicCommandEvent>([&](const auto& event) {
+            // 工具切换也观察正式出口，不能靠快照中的旧工具推断按键结果。
+            if ( const auto* change =
+                     std::get_if<Logic::CmdChangeTool>(&event.command) )
+                switchedTools.push_back(change->tool);
+            if ( const auto* start =
+                     std::get_if<Logic::CmdStartDrag>(&event.command) )
+                starts.push_back(*start);
+            deletions +=
+                std::holds_alternative<Logic::CmdDeleteSelected>(event.command);
+            marquees +=
+                std::holds_alternative<Logic::CmdStartMarquee>(event.command);
+            updates +=
+                std::holds_alternative<Logic::CmdUpdateDrag>(event.command);
+            ends += std::holds_alternative<Logic::CmdEndDrag>(event.command);
+        });
+    // 聚合所有样本的失败，不能让后一个成功样本覆盖前一个失败结果。
+    // 整组完成后才恢复输入环境，保证五类部件共享相同的窗口和配置。
+    bool passed = true;
+    // 头部、长条尾、箭头和折线节点必须保留各自命中语义。
+    // 节点索引故意使用非零值，防止只转发根实体却丢失细分部件。
+    const std::array parts{ Logic::HoverPart::Head,
+                            Logic::HoverPart::HoldEnd,
+                            Logic::HoverPart::FlickArrow,
+                            Logic::HoverPart::PolylineNode,
+                            Logic::HoverPart::SampleOffset };
+    // 每个样本都包含按下、越过物件边界和释放，覆盖持续手势的锁存。
+    // 音频偏移使用独立对象领域，验证不把同号实体误当玩家物件。
+    for ( const auto part : parts ) {
+        const auto kind   = part == Logic::HoverPart::SampleOffset
+                                ? Logic::ChartObjectKind::AudioSample
+                                : Logic::ChartObjectKind::PlayerNote;
+        snapshot.hitboxes = { { .entity   = static_cast<entt::entity>(42),
+                                .part     = part,
+                                .subIndex = 2,
+                                .x        = 0,
+                                .y        = 0,
+                                .w        = 180,
+                                .h        = 180,
+                                .kind     = kind } };
+        // 上一笔已释放，空闲帧只恢复悬浮，不能制造新的起笔命令。
+        // 清空计数晚于该帧，使断言仅统计当前样本自己的事务。
+        frame(controller, snapshot, false);
+        starts.clear();
+        marquees = updates = ends = 0;
+        frame(controller, snapshot, true);
+        // 移到物件框外也只能继续原拖动，不能临时创建选择框。
+        // 横坐标保持在玩家区，避免批注栏的独立输入门禁截获样本。
+        frame(controller, snapshot, true, { 150, 250 });
+        frame(controller, snapshot, false, { 150, 250 });
+        // 必须有移动增量和唯一结束，按下后立即结束的伪拖动不能通过。
+        // 先确认数量再访问命令，失败路径也不能越界读取并掩盖原始故障。
+        bool matched =
+            starts.size() == 1 && marquees == 0 && updates > 0 && ends == 1;
+        if ( starts.size() == 1 )
+            matched &= starts[0].entity == static_cast<entt::entity>(42) &&
+                       starts[0].kind == kind &&
+                       starts[0].hitPart == static_cast<int>(part) &&
+                       starts[0].hitSubIndex == 2;
+        // 保留失败计数以区分拾取失败、分派遗漏和过早结束。
+        // 部位不匹配即使计数正确也必须报告，不能退化成仅检查工具状态。
+        if ( !matched )
+            XERROR(
+                "Selection drag part {}: starts={}, marquees={}, updates={}, "
+                "ends={}",
+                static_cast<int>(part),
+                starts.size(),
+                marquees,
+                updates,
+                ends);
+        passed &= matched;
+    }
+    // 从空白起笔，随后经过物件命中区域，整笔仍由框选持有。
+    // 固定 hitbox 不随指针改写，避免测试把空白条件人为保持到结束。
+    // 改变命中区域后保留同一控制器，验证上一笔的部件锁存确实已清除。
+    // 框选终点位于这个新区域内，因此会经过真实的物件悬浮候选。
+    snapshot.hitboxes.front().x = 0;
+    snapshot.hitboxes.front().y = 200;
+    snapshot.hitboxes.front().w = 180;
+    snapshot.hitboxes.front().h = 80;
+    frame(controller, snapshot, false, { 100, 100 });
+    // 此次计数从空白按下开始，不能把前面物件事务的结束误算进来。
+    // 经过目标时仍不允许发布任何对象拖动更新或结束命令。
+    starts.clear();
+    marquees = updates = ends = 0;
+    frame(controller, snapshot, true, { 100, 100 });
+    frame(controller, snapshot, true, { 150, 250 });
+    frame(controller, snapshot, false, { 150, 250 });
+    if ( marquees != 1 || !starts.empty() || updates != 0 || ends != 0 )
+        XERROR(
+            "Selection blank drag: starts={}, marquees={}, updates={}, ends={}",
+            starts.size(),
+            marquees,
+            updates,
+            ends);
+    passed &= marquees == 1 && starts.empty() && updates == 0 && ends == 0;
+    // 旧抓取的 1 键仍可进入选择，但不能遮蔽用户将绘制重绑为 1 的意图。
+    // 只修改内存配置，离开本用例前恢复完整绑定，避免污染后续菜单测试。
+    auto& shortcuts =
+        Config::AppConfig::instance().getEditorSettings().shortcutConfig;
+    const auto originalShortcuts = shortcuts;
+    shortcuts.toolMove           = { true, "1", false, false, false, false };
+    shortcuts.toolDraw           = shortcuts.toolMove;
+    // 显式释放后再按下，确保两轮都是真实边沿，而不是平台按键重复。
+    // 当前控制器和窗口不重建，验证和物件拖动共用的正式快捷键入口。
+    frame(controller, snapshot, false);
+    switchedTools.clear();
+    io.AddKeyEvent(ImGuiKey_1, true);
+    frame(controller, snapshot, false);
+    io.AddKeyEvent(ImGuiKey_1, false);
+    frame(controller, snapshot, false);
+    passed &= switchedTools.size() == 1 &&
+              switchedTools.front() == Logic::EditTool::Draw;
+    // 没有其他工具占用旧键时，保留向统一选择工具的兼容回退。
+    // 禁用绘制绑定只影响第二轮，不能用直接调用分派函数伪造测试结果。
+    shortcuts.toolDraw.enabled = false;
+    switchedTools.clear();
+    io.AddKeyEvent(ImGuiKey_1, true);
+    frame(controller, snapshot, false);
+    io.AddKeyEvent(ImGuiKey_1, false);
+    frame(controller, snapshot, false);
+    passed &= switchedTools.size() == 1 &&
+              switchedTools.front() == Logic::EditTool::Marquee;
+    // 编辑动作也能占用旧键；隐藏入口不能在删除命令之前抢先切换工具。
+    // 删除只观察事件，不应用到实际谱面，避免测试改变用户数据。
+    shortcuts.deleteSelected = shortcuts.toolMove;
+    switchedTools.clear();
+    deletions = 0;
+    // 第三轮仍经同一焦点窗口与真实物理边沿，不直接调用快捷键 helper。
+    // 单次删除和零次切换必须同时满足，不能接受同一按键双重分派。
+    io.AddKeyEvent(ImGuiKey_1, true);
+    frame(controller, snapshot, false);
+    io.AddKeyEvent(ImGuiKey_1, false);
+    frame(controller, snapshot, false);
+    passed &= switchedTools.empty() && deletions == 1;
+    shortcuts = originalShortcuts;
+    // 清理晚于最后一次释放，确保结束命令也被事件订阅验收。
+    bus.unsubscribe<Event::LogicCommandEvent>(subscription);
+    // 双击配置和方案都恢复，后续菜单测试使用其原本的交互入口。
+    // 最后一帧已经释放按钮，方案交接不依靠强行清空私有状态。
+    io.MouseDoubleClickTime = doubleClickTime;
+    Interaction::synchronizeProfile("mouse-only", true);
+    Interaction::synchronizeProfile("mouse-only", true);
+    return passed;
 }
 /// @brief 用实际右键菜单验证导航锁存、视觉偏移及先定位后播放的顺序。
 /// @return 菜单点击只产生预期导航命令且经典方案不出现入口时返回真。
@@ -1133,6 +1326,10 @@ int main()
         bus.unsubscribe<MMM::Event::LogicCommandEvent>(subscription);
     }
     // 控制器已先析构并解除 guard，此时才释放底层 ImGui 输入快照。
+    if ( !testUnifiedSelectionGestureOwnership() ) {
+        XERROR("Unified selection gesture ownership failed");
+        ok = false;
+    }
     ok &= testMenuNavigation();
     ok &= testMouseEraseAndCancel();
     ImGui::DestroyContext();

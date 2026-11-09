@@ -142,7 +142,7 @@ void cancelActiveEditingState(SessionContext& ctx)
     // 单独残留的 isDragging 或 isSelecting 标志不足以恢复一次编辑。
     const bool keepMarquee  = ctx.currentTool == EditTool::Marquee &&
                               ctx.isSelecting && !ctx.marqueeBoxes.empty();
-    const bool keepMoveDrag = ctx.currentTool == EditTool::Move &&
+    const bool keepMoveDrag = ctx.currentTool == EditTool::Marquee &&
                               ctx.draggedEntity != entt::null &&
                               ctx.noteRegistry.valid(ctx.draggedEntity) &&
                               ctx.dragInitialNote.has_value();

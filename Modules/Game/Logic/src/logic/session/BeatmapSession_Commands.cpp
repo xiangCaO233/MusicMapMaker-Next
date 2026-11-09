@@ -2849,9 +2849,6 @@ bool BeatmapSession::processCommands()
                     switch ( resolveEditToolForMode(
                         arg.tool,
                         m_ctx->lastConfig.settings.professionalMode) ) {
-                    case EditTool::Move:
-                        toolName = TR("ui.status.tool.select_move").data();
-                        break;
                     case EditTool::Marquee:
                         toolName = TR("ui.status.tool.marquee").data();
                         break;

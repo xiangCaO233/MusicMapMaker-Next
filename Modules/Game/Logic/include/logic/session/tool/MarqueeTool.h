@@ -1,12 +1,13 @@
 #pragma once
 
-#include "logic/session/tool/IEditTool.h"
+#include "logic/session/tool/GrabTool.h"
 
 namespace MMM::Logic
 {
 
-/// @brief 框选工具，负责创建、更新和删除矩形框选区域。
-class MarqueeTool : public IEditTool
+/// @brief 选择工具，复用物件及子部件拖动事务，并处理空白区域框选。
+/// @details GrabTool 仅保留为内部拖动实现，不再注册为独立可选工具。
+class MarqueeTool : public GrabTool
 {
 public:
     /// @brief 开始创建框选区域，并在非加选模式下清空旧选择。

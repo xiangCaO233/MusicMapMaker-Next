@@ -876,26 +876,25 @@ void normalizeBeatmapMetadataPathsForProject(BeatMap&       beatMap,
 
 /// @brief 将编辑工具枚举转换为项目工作区中的稳定文本。
 /// @param tool 当前会话工具。
-/// @return 工作区格式中的稳定名称；临时 Layout 与未知值回退 Move。
+/// @return 工作区格式中的稳定名称；临时 Layout 与未知值回退 Marquee。
 /// @note 文本是项目文件兼容接口，不能直接序列化枚举底层整数。
 std::string editToolToWorkspaceName(EditTool tool)
 {
     // 工作区保存的是稳定文本而非枚举数值，避免枚举排列调整影响旧文件。
-    // Layout 不作为恢复后的默认编辑状态，统一回退到移动工具。
+    // Layout 不作为恢复后的默认编辑状态，统一回退到选择工具。
     switch ( tool ) {
     case EditTool::Marquee: return "Marquee";
     case EditTool::Draw: return "Draw";
     case EditTool::ColorBrush: return "ColorBrush";
     case EditTool::ColorEraser: return "ColorEraser";
     case EditTool::Layout:
-    case EditTool::Move:
-    default: return "Move";
+    default: return "Marquee";
     }
 }
 
 /// @brief 将项目工作区中的稳定文本转换为编辑工具枚举。
 /// @param name 工作区保存的工具文本。
-/// @return 支持的工具，未知名称按 Move 兼容恢复。
+/// @return 支持的工具，旧 Move 与未知名称按 Marquee 兼容恢复。
 /// @note 只识别可持久化的编辑工具，临时布局工具不会从工作区恢复。
 EditTool workspaceNameToEditTool(const std::string& name)
 {
@@ -913,7 +912,7 @@ EditTool workspaceNameToEditTool(const std::string& name)
     }
     // 兼容未认识或旧版本工具名，不让工作区加载因单个偏好失败。
     // 恢复不会猜测新增工具的枚举编号。
-    return EditTool::Move;
+    return EditTool::Marquee;
 }
 
 /// @brief 将分拍线显示模式转换为项目工作区稳定文本。
@@ -3176,7 +3175,7 @@ bool EditorEngine::isActiveSessionSelectingMarquee() const
 }
 
 /// @brief 判断当前活跃 Session 是否正在拖拽物件。
-/// @return Move 工具存在有效拖拽实体且手势进行中时返回 true。
+/// @return 选择工具存在有效拖拽实体且手势进行中时返回 true。
 /// @warning UI 热路径：会短暂锁定 SessionRegistry 并读取活跃 Session
 /// 的常量状态，且不复制 shared_ptr 所有权。
 bool EditorEngine::isActiveSessionDraggingNote() const
@@ -3189,7 +3188,7 @@ bool EditorEngine::isActiveSessionDraggingNote() const
          sessions[idx].session ) {
         const auto& ctx = sessions[idx].session->getContext();
         // draggedEntity 哨兵可排除仅开始空白区域手势但未命中对象的状态。
-        return ctx.currentTool == EditTool::Move && ctx.isDragging &&
+        return ctx.currentTool == EditTool::Marquee && ctx.isDragging &&
                ctx.draggedEntity != entt::null;
     }
     return false;

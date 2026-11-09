@@ -19,9 +19,9 @@ namespace MMM::Canvas
 {
 /// @brief 将命中目标并入或移出本地 Timing 选择，不直接修改谱面数据。
 /// @param entity 已由调用方按泳道、部位和可选设置验证过的目标。
-/// @param preserveGroup 抓取工具点击已选项时保留组，选中工具直接替换。
+/// @param preserveGroup 直接拖动已选项时保留组，菜单替换操作不保留。
 /// @param additiveSelection 经典 Ctrl/Shift 的切换意图，显式方案模式优先。
-/// @details 本函数不验证目标是否可选，选中工具和抓取工具保留各自原有门禁。
+/// @details 本函数不验证目标是否可选，框选与直接拖动由调用方分别校验门禁。
 /// 返回值只控制后续拖动，单纯更新选择不会向逻辑层提交谱面修改。
 /// @return 可以从该目标开始拖动时返回真，减选操作返回假。
 /// @warning 只在点击边沿操作本地集合，不读 ECS 或等待逻辑线程。
@@ -43,7 +43,7 @@ bool TimelineCanvas::selectTimingTarget(entt::entity entity, bool preserveGroup,
     }
     const bool replace = operation == Logic::SelectionOperation::Replace ||
                          (!operation && !additiveSelection);
-    // 抓取已选项保留整组移动；选中工具的替换始终只留下直接点击的目标。
+    // 已选项保留整组移动；菜单的替换操作只留下直接点击的目标。
     if ( replace && (!preserveGroup || !wasSelected) )
         m_selectedTimingEntities.clear();
     m_selectedTimingEntities.insert(entity);
@@ -101,8 +101,7 @@ bool TimelineCanvas::handleTimingContextMenu(ImVec2 origin, ImVec2 size,
     // 经典方案返回假，不改变其右键交互或键盘快捷键路径。
     const bool enabled =
         UI::Interaction::activeProfile().selectionContextMenu() &&
-        (tool == Logic::EditTool::Move || tool == Logic::EditTool::Marquee) &&
-        !m_currentSnapshot->isPlaying;
+        tool == Logic::EditTool::Marquee && !m_currentSnapshot->isPlaying;
     const auto mouse = ImGui::GetMousePos();
     const auto local = ImVec2(mouse.x - origin.x, mouse.y - origin.y);
     // hovered 是窗口级信息，额外用图像范围排除边距和画布外右键。

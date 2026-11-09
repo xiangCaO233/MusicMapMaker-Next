@@ -155,11 +155,26 @@ bool isActionShortcutPressed(std::string_view action, bool repeat,
             const bool pressed = Interaction::modifier(modifier);
             return required ? pressed : (!pressed || (extras & bit) != 0);
         };
-    return matches(Interaction::Modifier::Control, binding.ctrl, 1) &&
-           matches(Interaction::Modifier::Shift, binding.shift, 2) &&
-           matches(Interaction::Modifier::Alt, binding.alt, 4) &&
-           matches(Interaction::Modifier::Super, binding.super, 8) &&
-           Interaction::keyPressed(key->key, repeat);
+    const bool pressed =
+        matches(Interaction::Modifier::Control, binding.ctrl, 1) &&
+        matches(Interaction::Modifier::Shift, binding.shift, 2) &&
+        matches(Interaction::Modifier::Alt, binding.alt, 4) &&
+        matches(Interaction::Modifier::Super, binding.super, 8) &&
+        Interaction::keyPressed(key->key, repeat);
+    if ( !pressed || action != "toolMove" ) return pressed;
+    // 旧抓取动作只保留选择工具的兼容键，所有仍可配置的动作拥有优先权。
+    // 仅在实际命中兼容键时扫描固定目录，普通 UI 帧不增加整表匹配成本。
+    const auto& shortcuts =
+        Config::AppConfig::instance().getEditorSettings().shortcutConfig;
+    for ( const auto& entry : Config::editorShortcutActions() ) {
+        if ( entry.m_id == "toolMove" ) continue;
+        const auto& other = Interaction::activeProfile().shortcut(
+            entry.m_id, shortcuts.*(entry.m_binding));
+        // 同时尊重当前方案的绑定重映射，不能只比较持久化配置中的旧主键。
+        // 禁用绑定不会冲突，也就不会剥夺用户原来的选择工具兼容键。
+        if ( Config::shortcutBindingsConflict(binding, other) ) return false;
+    }
+    return true;
 }
 
 /// @brief 获取快捷键录制全局状态。
@@ -274,9 +289,6 @@ const Config::ShortcutBinding& getToolShortcut(
 {
     // 只读重载直接返回 EditorSettings 内部绑定，调用方不得延长其生命周期。
     switch ( tool ) {
-    case Logic::EditTool::Move:
-        return Interaction::activeProfile().shortcut(
-            "toolMove", settings.shortcutConfig.toolMove);
     case Logic::EditTool::Marquee:
         return Interaction::activeProfile().shortcut(
             "toolMarquee", settings.shortcutConfig.toolMarquee);
@@ -291,9 +303,9 @@ const Config::ShortcutBinding& getToolShortcut(
             "toolColorEraser", settings.shortcutConfig.toolColorEraser);
     case Logic::EditTool::Layout: break;
     }
-    // Layout 当前没有独立绑定，回退 Move 保持返回引用始终有效。
+    // Layout 当前没有独立绑定，回退选择工具 保持返回引用始终有效。
     return Interaction::activeProfile().shortcut(
-        "toolMove", settings.shortcutConfig.toolMove);
+        "toolMarquee", settings.shortcutConfig.toolMarquee);
 }
 
 /// @brief 获取指定编辑工具对应的可写快捷键绑定。
@@ -307,7 +319,6 @@ Config::ShortcutBinding& getToolShortcut(Config::EditorSettings& settings,
 {
     // 可写重载与只读重载保持完全相同的工具到字段映射。
     switch ( tool ) {
-    case Logic::EditTool::Move: return settings.shortcutConfig.toolMove;
     case Logic::EditTool::Marquee: return settings.shortcutConfig.toolMarquee;
     case Logic::EditTool::Draw: return settings.shortcutConfig.toolDraw;
     case Logic::EditTool::ColorBrush:
@@ -316,8 +327,8 @@ Config::ShortcutBinding& getToolShortcut(Config::EditorSettings& settings,
         return settings.shortcutConfig.toolColorEraser;
     case Logic::EditTool::Layout: break;
     }
-    // 未单独配置的 Layout 返回可写 Move 绑定作为兼容回退。
-    return settings.shortcutConfig.toolMove;
+    // 未单独配置的 Layout 返回可写选择工具绑定作为兼容回退。
+    return settings.shortcutConfig.toolMarquee;
 }
 
 }  // namespace MMM::UI::ShortcutUtils

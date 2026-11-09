@@ -64,7 +64,7 @@ constexpr const char* ICON_MMM_TRACK_LAYOUT =
 constexpr const char* ICON_MMM_HAND =
     "\xef\x89\x96";  ///< \uf256 hand-back-fist (Move tool)
 constexpr const char* ICON_MMM_SQUARE_SELECT =
-    "\xef\x83\x88";  ///< \uf0c8 square (Marquee Tool)
+    "\xef\x82\x96";  ///< \uf096 空心方框（选择工具）。
 constexpr const char* ICON_MMM_PAINT_BRUSH =
     "\xef\x87\xbc";  ///< \uf1fc paint-brush (Color Brush Tool)
 constexpr const char* ICON_MMM_ERASER =

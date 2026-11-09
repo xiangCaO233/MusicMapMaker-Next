@@ -78,7 +78,8 @@ void SettingsView::drawShortcutBindingControl(Config::ShortcutBinding& binding,
             changed                   = true;
             m_recordingShortcutTarget = ShortcutRecordTarget::None;
             ShortcutUtils::setShortcutRecordingActive(false);
-            if ( target == ShortcutRecordTarget::ToolMove && m_sourceManager )
+            if ( target == ShortcutRecordTarget::ToolMarquee &&
+                 m_sourceManager )
                 // 录制到完整组合键后再推进；仅进入录制态不算设置成功。
                 // 其他快捷键继续使用原有保存路径，不影响本引导的进度。
                 m_sourceManager->walkthroughSpotlight().completeTarget(
@@ -241,6 +242,10 @@ void SettingsView::drawShortcutSettings()
             shortcutEntries.begin(),
             shortcutEntries.end(),
             [&](const auto& entry) {
+                // 旧抓取入口只在未命中现有工具时回退，不作为独立工具报告冲突。
+                // 隐藏绑定不能让选择工具重绑为旧键后仍显示无法解除的冲突。
+                if ( entry.m_action == ShortcutRecordTarget::ToolMove )
+                    return false;
                 const auto& candidate = shortcutConfig.*(entry.m_binding);
                 return &candidate != &binding &&
                        Config::shortcutBindingsConflict(candidate, binding);
@@ -284,12 +289,14 @@ void SettingsView::drawShortcutSettings()
 
     // 目录驱动显示、冲突和录制，新增动作无需修改此页面的控制流。
     for ( const auto& entry : shortcutEntries ) {
+        // 旧抓取绑定仍可读取和触发选择工具，但不再作为独立工具展示。
+        if ( entry.m_action == ShortcutRecordTarget::ToolMove ) continue;
         addShortcutRow(shortcutSection,
                        TR(entry.m_labelKey).data(),
                        shortcutConfig.*(entry.m_binding),
                        entry.m_action,
                        entry.m_id.data(),
-                       entry.m_action == ShortcutRecordTarget::ToolMove
+                       entry.m_action == ShortcutRecordTarget::ToolMarquee
                            ? "personalization.settings.shortcut-move"
                            : nullptr);
     }

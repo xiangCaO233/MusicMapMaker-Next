@@ -1760,9 +1760,10 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         publishTimelineCommand(Event::LogicCommandEvent(Logic::CmdRedo{}));
         handledKeyboardCommand = true;
     }
-    const std::array<Logic::EditTool, 5> editableTools{
-        Logic::EditTool::Move,        Logic::EditTool::Marquee,
-        Logic::EditTool::Draw,        Logic::EditTool::ColorBrush,
+    const std::array<Logic::EditTool, 4> editableTools{
+        Logic::EditTool::Marquee,
+        Logic::EditTool::Draw,
+        Logic::EditTool::ColorBrush,
         Logic::EditTool::ColorEraser,
     };
     const bool isLayoutEditing =
@@ -1770,6 +1771,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         Logic::EditTool::Layout;
     if ( !handledKeyboardCommand && !isLayoutEditing ) {
         for ( Logic::EditTool tool : editableTools ) {
+            if ( handledKeyboardCommand ) break;
             if ( UI::ShortcutUtils::isShortcutPressed(
                      UI::ShortcutUtils::getToolShortcut(settings, tool)) ) {
                 publishTimelineCommand(
@@ -1778,6 +1780,14 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                 break;
             }
         }
+    }
+    // 旧抓取键只在当前工具绑定全部未命中时回退，主画布与时间线顺序一致。
+    // 布局编辑和已处理的撤销等命令仍独占该帧，不补发工具切换。
+    if ( !handledKeyboardCommand && !isLayoutEditing &&
+         UI::ShortcutUtils::isActionShortcutPressed("toolMove") ) {
+        publishTimelineCommand(Event::LogicCommandEvent(
+            Logic::CmdChangeTool{ Logic::EditTool::Marquee }));
+        handledKeyboardCommand = true;
     }
     auto applyProfessionalCreateType = [&]() {
         if ( !professionalMode ) {
@@ -1800,8 +1810,7 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
          (UI::ShortcutUtils::isActionShortcutPressed("selectAll", true) ||
           UI::ShortcutUtils::isActionShortcutPressed("selectAllObjects",
                                                      true)) ) {
-        if ( m_currentSnapshot->currentTool == Logic::EditTool::Move ||
-             m_currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
+        if ( m_currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             selectAllTimingEvents();
         }
         handledKeyboardCommand = true;
@@ -1893,54 +1902,6 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
             m_isTimingDrawPreviewing = false;
         }
         break;
-    case Logic::EditTool::Move:
-        if ( isHovered &&
-             UI::Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
-            if ( hoveredTarget ) {
-                // 同一选择入口区分经典切换与纯鼠标集合模式；减选不启动拖动。
-                const bool shouldBeginTimingDrag = selectTimingTarget(
-                    hoveredTarget->entity, true, additiveSelection);
-
-                if ( !shouldBeginTimingDrag ) {
-                    m_isTimingDragging       = false;
-                    m_timingDragPreviewDelta = 0.0;
-                    m_timingDragEntries.clear();
-                    break;
-                }
-
-                if ( m_selectedTimingEntities.empty() ) {
-                    m_selectedTimingEntities.clear();
-                    break;
-                }
-
-                m_isTimingDragging       = true;
-                m_timingDragStartTime    = hoveredTarget->time;
-                m_timingDragPreviewDelta = 0.0;
-                m_timingDragEntries.clear();
-                for ( const auto& target : collectVisibleTimingTargets() ) {
-                    if ( m_selectedTimingEntities.find(target.entity) !=
-                         m_selectedTimingEntities.end() ) {
-                        m_timingDragEntries.push_back(
-                            { target.entity, target.time, target.value });
-                    }
-                }
-            } else if ( selectionOperation ==
-                            Logic::SelectionOperation::Replace ||
-                        (!selectionOperation && !additiveSelection) ) {
-                // 追加和减选点空白不丢弃原集合；经典方案沿用原修饰键判断。
-                m_selectedTimingEntities.clear();
-            }
-        }
-
-        if ( m_isTimingDragging &&
-             UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
-            updateTimingDragPreview();
-        }
-        if ( m_isTimingDragging &&
-             !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
-            finishTimingDrag();
-        }
-        break;
     case Logic::EditTool::Marquee: {
         auto makeMarqueeRect = [&]() {
             TimingSelectionRect rect;
@@ -2017,12 +1978,31 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
 
         if ( isHovered &&
              UI::Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
-            if ( hoveredTarget && isTimingTargetSelectable(*hoveredTarget) ) {
-                // 选中工具不保留抓取分组；显式追加、减选与主画布模式一致。
-                selectTimingTarget(
-                    hoveredTarget->entity, false, additiveSelection);
+            if ( hoveredTarget ) {
+                // 命中标记或段落正文时优先拖动；已选项保持整组选择。
+                // BPM 的框选开关不限制直接拖动，沿用原抓取工具的能力。
+                // 减选只更新集合，不建立拖动事务或框选矩形。
                 m_isTimingMarqueeSelecting = false;
                 m_timingMarqueeBaseSelection.clear();
+                if ( !selectTimingTarget(
+                         hoveredTarget->entity, true, additiveSelection) ) {
+                    m_isTimingDragging       = false;
+                    m_timingDragPreviewDelta = 0.0;
+                    m_timingDragEntries.clear();
+                    break;
+                }
+                m_isTimingDragging       = true;
+                m_timingDragStartTime    = hoveredTarget->time;
+                m_timingDragPreviewDelta = 0.0;
+                m_timingDragEntries.clear();
+                for ( const auto& target : collectVisibleTimingTargets() ) {
+                    if ( m_selectedTimingEntities.find(target.entity) !=
+                         m_selectedTimingEntities.end() ) {
+                        m_timingDragEntries.push_back(
+                            { target.entity, target.time, target.value });
+                    }
+                }
+
             } else {
                 m_isTimingMarqueeSelecting = true;
                 m_timingMarqueeStartX      = localMouseX;
@@ -2047,6 +2027,12 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                 refreshMarqueeTargets();
             }
         }
+        if ( m_isTimingDragging &&
+             UI::Interaction::mouseDown(ImGuiMouseButton_Left) )
+            updateTimingDragPreview();
+        if ( m_isTimingDragging &&
+             !UI::Interaction::mouseDown(ImGuiMouseButton_Left) )
+            finishTimingDrag();
         if ( m_isTimingMarqueeSelecting &&
              UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             bool autoScrolled = false;

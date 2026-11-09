@@ -1208,6 +1208,71 @@ bool checkRangeDrawing()
 }
 }  // namespace
 
+/// @brief 验证选择工具可直接拖动 Timing，同时只在空白起笔框选。
+/// @return 直接拖动提交正确事件且不受 BPM 框选开关限制时返回真。
+/// @details 与主画布一样从真实按下、移动和释放帧验收，不直接提交命令。
+/// @note 框选仍服从 BPM 可选设置，直接拖动沿用原抓取能力。
+bool checkUnifiedSelectionDragging()
+{
+    auto& settings = Config::AppConfig::instance().getEditorSettings();
+    // 该开关只限制区域选择；直接拖动必须继续允许修改 BPM。
+    // 临时修改仅限内存，测试结束时恢复同一个配置对象。
+    const bool includesBpm = settings.timelineSelectionIncludesBpm;
+    settings.timelineSelectionIncludesBpm = false;
+    // 使用正式两帧方案交接，不绕过活动手势的安全门禁。
+    // 初始执行保证前面没有绘制测试遗留的创建窗口占用输入。
+    UI::Interaction::synchronizeProfile("classic-desktop", true);
+    UI::Interaction::synchronizeProfile("classic-desktop", true);
+    Common::Render::RenderSnapshot snapshot;
+    snapshot.hasBeatmap = snapshot.isHoveringCanvas = true;
+    snapshot.currentTool                            = Logic::EditTool::Marquee;
+    // 使用单个明确的 BPM 标记，排除重叠候选和段落优先级影响。
+    Common::Render::TimelineInteractiveElement bpm{};
+    bpm.time      = 3.25;
+    bpm.y         = 150;
+    bpm.effects   = Common::Render::SCROLL_EFFECT_BPM;
+    bpm.bpmEntity = static_cast<entt::entity>(42);
+    bpm.bpmValue  = 120;
+    // 只读快照提供可见位置，实际投影和拖动归属仍由控件计算。
+    // 不给控制器注入选中集合，起笔必须自行选中命中的标记。
+    snapshot.timelineElements = { bpm };
+    Canvas::TimelineCanvas canvas("UnifiedSelectionTiming", 500, 500, nullptr);
+    const auto             origin = frame(canvas, snapshot, { 200, 150 });
+    const ImVec2           start{ origin.x + 50, origin.y + 150 };
+    const ImVec2           end{ origin.x + 50, origin.y + 210 };
+    // 观察的是交给逻辑层的完整命令，不用预览标志代替实际提交。
+    // 本用例不运行逻辑线程，因此无需等待实体状态异步回流。
+    std::vector<Logic::CmdUpdateTimelineEvents> commands;
+    auto&      bus = Event::EventBus::instance();
+    const auto subscription =
+        bus.subscribe<Event::LogicCommandEvent>([&](const auto& event) {
+            if ( const auto* command =
+                     std::get_if<Logic::CmdUpdateTimelineEvents>(
+                         &event.command) )
+                commands.push_back(*command);
+        });
+    // 空闲帧先建立真实窗口悬浮；按下才是本笔手势的唯一开始。
+    // 保持同一目标的横坐标，位移只改变时间而不会切换泳道。
+    frame(canvas, snapshot, start);
+    frame(canvas, snapshot, start, true);
+    frame(canvas, snapshot, end, true);
+    frame(canvas, snapshot, end);
+    // 一笔只提交一个批次；实体、值和最终时间必须来自被拖动的目标。
+    // 判断时间确实改变，避免把零位移选择误当成可编辑功能通过。
+    if ( commands.size() != 1 )
+        XERROR("Unified timing drag submitted {} batches", commands.size());
+    bool passed = commands.size() == 1;
+    if ( passed )
+        passed &= commands[0].events.size() == 1 &&
+                  commands[0].events[0].entity == bpm.bpmEntity &&
+                  std::abs(commands[0].events[0].newTime - bpm.time) > 0.1;
+    bus.unsubscribe<Event::LogicCommandEvent>(subscription);
+    // 监听先解除，避免后续用例的命令引用已经析构的局部容器。
+    // 恢复框选偏好不反向改写本笔已经提交的 BPM 更新命令。
+    settings.timelineSelectionIncludesBpm = includesBpm;
+    return passed;
+}
+
 /// @brief 使用 CPU ImGui 帧验证鼠标菜单，不初始化 Vulkan 或操作系统窗口。
 /// @return 所有业务和输入所有权断言通过时返回零。
 /// @note 临时专业模式和系统剪贴板回调都只影响独立测试进程。
@@ -1238,10 +1303,20 @@ int main()
     ImGui::GetPlatformIO().Platform_GetClipboardTextFn = [](ImGuiContext*) {
         return "";
     };
-    bool passed = checkMenu();
-    passed &= checkSegmentClipboard();
-    passed &= checkPointEditing();
-    passed &= checkRangeDrawing();
+    bool passed = true;
+    // 先验证选择工具，避免范围绘制样本尚未确认的弹窗占用后续输入。
+    // 每项仍独立执行并记录结果，不因前一个失败跳过其余回归覆盖。
+    const std::array checks{
+        std::pair{ "unified selection", checkUnifiedSelectionDragging() },
+        std::pair{ "menu", checkMenu() },
+        std::pair{ "segment clipboard", checkSegmentClipboard() },
+        std::pair{ "point editing", checkPointEditing() },
+        std::pair{ "range drawing", checkRangeDrawing() }
+    };
+    for ( const auto& [name, result] : checks ) {
+        if ( !result ) XERROR("Timing interaction regression failed: {}", name);
+        passed &= result;
+    }
     ImGui::DestroyContext();
     // 配置恢复放在上下文销毁之后，确保测试失败时也不会污染后续设置断言。
     settings = original;

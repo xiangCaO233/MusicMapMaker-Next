@@ -20,7 +20,6 @@
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "logic/session/tool/DrawTool.h"
-#include "logic/session/tool/GrabTool.h"
 #include "logic/session/tool/MarqueeTool.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/note/HoldScrollSemantics.h"
@@ -1500,12 +1499,11 @@ std::vector<PreparedMarqueeBox> prepareMarqueeBoxes(
 }
 }  // namespace
 
-/// @brief 创建会话持有的移动、框选与画笔工具。
+/// @brief 创建会话持有的选择与画笔工具。
 /// @param ctx 生命周期覆盖控制器的会话状态。
 /// @note 工具在初始化时创建，命令路由中只查找并借用已有实例。
 InteractionController::InteractionController(SessionContext& ctx) : m_ctx(ctx)
 {
-    m_tools[EditTool::Move]    = std::make_unique<GrabTool>();
     m_tools[EditTool::Marquee] = std::make_unique<MarqueeTool>();
     m_tools[EditTool::Draw]    = std::make_unique<DrawTool>();
 }
@@ -1583,7 +1581,7 @@ void InteractionController::handleCommand(const CmdSelectEntity& cmd)
         return;
     }
 
-    // 只有在框选工具模式下才允许通过点击实体修改选中状态。
+    // 只有在选择工具模式下才允许通过点击实体修改选中状态。
     if ( m_ctx.currentTool != EditTool::Marquee ) return;
 
     if ( !isEditableChartObject(m_ctx, cmd.kind, cmd.entity) ) return;
@@ -1681,35 +1679,35 @@ void InteractionController::handleCommand(const CmdSelectAll& cmd)
     }
 }
 
-/// @brief 校验拖动目标后交给移动工具开始手势。
+/// @brief 校验拖动目标后交给选择工具开始手势。
 /// @param cmd 目标身份及拖动起点。
 /// @warning 输入热路径：固定工具查找与单实体校验，禁止阻塞等待。
 void InteractionController::handleCommand(const CmdStartDrag& cmd)
 {
     if ( !isEditableChartObject(m_ctx, cmd.kind, cmd.entity) ) return;
-    const auto tool = m_tools.find(EditTool::Move);
+    const auto tool = m_tools.find(EditTool::Marquee);
     if ( tool != m_tools.end() ) {
         tool->second->handleStartDrag(m_ctx, cmd);
     }
 }
 
-/// @brief 将拖动的连续位置更新交给移动工具。
+/// @brief 将拖动的连续位置更新交给选择工具。
 /// @param cmd 当前鼠标位置和修饰键。
 /// @warning 拖动热路径：立即转发最新状态，不用定时等待合并交互。
 void InteractionController::handleCommand(const CmdUpdateDrag& cmd)
 {
-    const auto tool = m_tools.find(EditTool::Move);
+    const auto tool = m_tools.find(EditTool::Marquee);
     if ( tool != m_tools.end() ) {
         tool->second->handleUpdateDrag(m_ctx, cmd);
     }
 }
 
-/// @brief 将手势结束交给移动工具提交最终状态。
+/// @brief 将手势结束交给选择工具提交最终状态。
 /// @param cmd 结束拖动的相机与输入状态。
 /// @warning 输入热路径：不延迟最终提交，具体事务由工具负责。
 void InteractionController::handleCommand(const CmdEndDrag& cmd)
 {
-    const auto tool = m_tools.find(EditTool::Move);
+    const auto tool = m_tools.find(EditTool::Marquee);
     if ( tool != m_tools.end() ) {
         tool->second->handleEndDrag(m_ctx, cmd);
     }

@@ -64,8 +64,6 @@ void MainMenuToolbarVisibilityItem::render(MainMenuContext& context)
     // 状态工具组对应互斥或协作的画布操作模式入口。
     ImGui::SeparatorText(TR("ui.view.toolbar_switch_tools").data());
     // 移动、框选与绘制是基础编辑状态工具。
-    changed |=
-        drawVisibilityToggle("ui.toolbar.move", visibility.stateTools.move);
     changed |= drawVisibilityToggle("ui.toolbar.marquee",
                                     visibility.stateTools.marquee);
     changed |=

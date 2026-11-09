@@ -306,7 +306,7 @@ struct RenderSnapshot {
     };
 
     /// @brief 生成当前交互快照时启用的编辑工具。
-    EditTool currentTool{ EditTool::Move };
+    EditTool currentTool{ EditTool::Marquee };
     /// @brief 当前快照是否允许生成拾取/悬浮等交互数据。
     bool                            acceptsInteraction{ false };
     bool                            isHoveringCanvas{ false };
@@ -548,7 +548,7 @@ struct RenderSnapshot {
         currentBpm       = 120.0;
         currentBeatIndex = 0;
         currentSv        = 1.0;
-        currentTool      = EditTool::Move;
+        currentTool      = EditTool::Marquee;
         // 清除全部交互与磁吸状态，避免复用时延续上一帧手势反馈。
         acceptsInteraction = false;
         isHoveringCanvas   = false;
