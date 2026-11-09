@@ -716,6 +716,8 @@ if(ANDROID)
             src/ui/workspace/MobileTimelineLabels.cpp
             src/ui/workspace/MobileButton.cpp
             # 参数控件保持独立，播放与轨数仍复用正式命令。 工作台仅提供移动触摸入口，桌面继续使用原工具条和编辑菜单。
+            # 抽屉菜单只编译移动入口，业务动作继续复用公共注册表。
+            src/ui/workspace/MobileDrawerMenus.cpp
             src/ui/workspace/MobileWorkbench.cpp
             src/ui/workspace/MobilePlaybackControls.cpp)
 else()

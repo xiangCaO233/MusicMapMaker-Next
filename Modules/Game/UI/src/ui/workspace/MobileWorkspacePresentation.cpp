@@ -22,6 +22,7 @@
 #include "ui/workspace/IWorkspacePresentation.h"
 #include "ui/workspace/MobileButton.h"
 #include "ui/workspace/MobileDockLayout.h"
+#include "ui/workspace/MobileDrawerMenus.h"
 #include "ui/workspace/MobilePlaybackControls.h"
 #include "ui/workspace/MobileTimelineLabels.h"
 #include "ui/workspace/MobileTouchScroll.h"
@@ -834,6 +835,10 @@ void MobileWorkspacePresentation::drawRightDrawer(UIManager& manager,
             manager.openWelcome();
             m_model.closeDrawer();
         }
+        // 移动分组在自己的实现中布局，只借用公共业务动作，不包含桌面菜单头。
+        // 新工具激活后先解除抽屉遮罩，下一帧由动作持有者显示其窗口。
+        ImGui::Separator();
+        if ( drawMobileDrawerMenus(manager, m_scale) ) m_model.closeDrawer();
     }
     ImGui::End();
 }
