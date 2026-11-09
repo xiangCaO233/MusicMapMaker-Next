@@ -9,6 +9,7 @@
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
+#include "ui/imgui/menu/MainMenuView.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
 #include "ui/imgui/menu/interfaces/IMainMenuItemActionHandler.h"
 #include "ui/imgui/menu/interfaces/IMainMenuToggleItemActionHandler.h"
@@ -163,10 +164,18 @@ public:
         std::string_view action, MMM::UI::MainMenuContext& context,
         const MMM::UI::MainMenuItemActivation& activation) override
     {
+        // 打开项目用例仅观察语义请求，避免夹具真的启动系统选择器。
+        // 其它动作仍按原有重映射规则执行，不能在测试方案中统一吞掉所有命令。
+        if ( action == "OpenProjectAction" ) {
+            ++m_menuShortcuts;
+            return true;
+        }
         if ( action != "test-source" ) return false;
         Interaction::executeAction("test-destination", context, activation);
         return true;
     }
+    /// @brief 无桌面菜单栏时收到的打开项目请求，文本输入帧不得增加此计数。
+    int m_menuShortcuts{};
     /// @brief 只消费本地 Undo，其他命令必须继续进入真实总线。
     /// @details 测试只拦截 Undo，确保消费一个命令不会吞掉相邻的 Redo。
     /// @warning 事件只在本次调用有效，不复制大型命令或保留内部引用。
@@ -505,6 +514,67 @@ bool checkAcceleratedScroll()
     ImGui::DestroyContext();
     return ok;
 }
+/// @brief 只推进公共菜单更新，验证无桌面菜单栏时打开项目快捷键仍可派发。
+/// @param profile 接管项目打开请求的测试方案，避免系统窗口副作用。
+/// @return 单次按下只派发一次且文本输入期间不派发时返回 true。
+/// @details 打开项目无需已有谱面，因此可在真实能力门禁下验证公共入口。
+/// 保存动作仍保留活跃谱面检查，不能为无谱面测试放宽生产保存权限。
+/// 实际保存、撤销与重做的磁盘结果由设备上的独立工程回读验证。
+bool testMenuHotkeysWithoutMenuBar(Profile& profile)
+{
+    ImGui::CreateContext();
+    auto& io       = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = { 1000, 700 };
+    io.DeltaTime   = 1.0f / 60;
+    // 同一测试帧明确投递完整组合键，不能由事件排队策略拆成多个断言阶段。
+    io.ConfigInputTrickleEventQueue = false;
+    unsigned char* pixels{};
+    int            width{}, height{};
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    // 与真实应用相同，先在连续安全帧中切换方案，再开始组合键手势。
+    // 前面的测试可能停留在其他方案，不能依赖执行顺序碰巧留下目标对象。
+    Interaction::synchronizeProfile("test-profile", true);
+    Interaction::synchronizeProfile("test-profile", true);
+    bool ok = true;
+    {
+        // 真实注册表与动作负责输入路由；打开项目的最终业务由方案观察并消费。
+        MMM::UI::MainMenuView menus;
+        Sink                  sink;
+        const int             before = profile.m_menuShortcuts;
+        const auto            frame  = [&](bool textInput = false) {
+            ImGui::NewFrame();
+            // 直接声明文本编辑所有权，无需创建输入框干扰本用例的菜单入口。
+            // 菜单栏完全不绘制；若快捷键仍绑在 renderMenus，这里不会派发。
+            io.WantTextInput = textInput;
+            menus.update(nullptr, sink);
+            ImGui::EndFrame();
+        };
+        frame();
+        io.AddKeyEvent(ImGuiMod_Ctrl, true);
+        io.AddKeyEvent(ImGuiKey_O, true);
+        frame();
+        // 保持到下一普通帧，但不跨越按键重复阈值，检测同一边沿是否重复派发。
+        // 不能只检查命中绑定：计数必须来自方案收到的最终语义动作。
+        frame();
+        ok &= require(profile.m_menuShortcuts == before + 1,
+                      "open shortcut without menu bar dispatched once");
+        // 释放后重新按下建立独立边沿，文本编辑应保留 Ctrl+O 的输入所有权。
+        io.AddKeyEvent(ImGuiKey_O, false);
+        frame();
+        io.AddKeyEvent(ImGuiKey_O, true);
+        frame(true);
+        // 文本输入阻挡发生在公共入口，不应交给单个保存或打开动作各自猜测。
+        // 因此已登记动作和有效组合键同时存在时，计数仍必须保持不变。
+        ok &= require(profile.m_menuShortcuts == before + 1,
+                      "text input blocks shared menu hotkeys");
+    }
+    // 菜单注销全部动作后再销毁上下文，不留下失效的处理器或按键状态。
+    Interaction::synchronizeProfile("classic-desktop", true);
+    Interaction::synchronizeProfile("classic-desktop", true);
+    ImGui::DestroyContext();
+    return ok;
+}
 }  // namespace
 /// @brief 验证应用级方案、真实输入映射、动作权限、生命周期和配置兼容。
 /// @details 本用例由独立 CTest 进程运行，测试方案不会进入用户的生产注册表。
@@ -788,5 +858,6 @@ int main(int argc, char** argv)
     ok &= testLessonGesturePolicies();
     // 保留前面首次激活的精确代数断言，再执行需要多次切换的滚动矩阵。
     ok &= checkAcceleratedScroll();
+    ok &= testMenuHotkeysWithoutMenuBar(*observer);
     return ok ? 0 : 1;
 }
