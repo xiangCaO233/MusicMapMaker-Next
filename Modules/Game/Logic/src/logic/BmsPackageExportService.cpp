@@ -237,7 +237,7 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
     const Project& project, const std::vector<std::string>& selectedPaths,
     const std::filesystem::path&                       outputPath,
     const std::vector<PackageBeatmapMetadataOverride>& overrides,
-    BmsPackageAlignmentMode                            alignmentMode)
+    BmsPackageAlignmentMode alignmentMode, bool myO2Grid)
 {
     BmsPackageExportResult result;
     // 空列表不能只产生 ZIP 尾记录，否则 UI 会误报一个没有谱面的成功包。
@@ -457,6 +457,9 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
                 return result;
         // 包目标是标准 BMS/iBMSC，允许叠加稀疏行；这不是额外的文件协议指令。
         // 开关只存在于本次导出副本，原项目与普通另存为策略都不受影响。
+        // 显式覆盖快照选项，防止源元数据意外开启有损网格转换。
+        map.m_metadata.map_properties[MapMetadataType::BMS]["myo2_grid"] =
+            myO2Grid ? "1" : "0";
         map.m_metadata.map_properties[MapMetadataType::BMS]["compact_rows"] =
             "1";
         // 保存器直到验证全部物件和时间线后才写出，失败不会留下有效归档条目。

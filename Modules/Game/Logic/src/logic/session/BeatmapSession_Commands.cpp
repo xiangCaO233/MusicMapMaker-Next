@@ -34,6 +34,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/PackageFileTypes.h"
+#include "mmm/project/PackagePathFilter.h"
 #include "mmm/project/Project.h"
 #include "runtime/AppThreadPool.h"
 #include <algorithm>
@@ -1884,8 +1885,21 @@ bool writeBeatmapPackage(
     bool                           addStoreModeExtForMalodyExport,
     bool                           stripMainAudioVolumeFromMalodyExport,
     bool                           alignNonOggMainAudioToOrigin,
-    MMM::BmsPackageAlignmentMode   bmsAlignmentMode)
+    MMM::BmsPackageAlignmentMode bmsAlignmentMode, bool bmsMyO2Grid)
 {
+    // UI 不枚举内部历史；命令层也检查，防止旧选择列表或其他入口夹带备份。
+    // 任何不合法选择先整体失败，不创建或覆盖已有压缩包。
+    // 此校验先于 BMS 分派，所有包格式共享同一项目内部目录边界。
+    // 正式 chart.mmm 是普通资源，不能仅依据 MMM 后缀来区分备份。
+    for ( const auto& relative : selectedRelativePaths ) {
+        if ( MMM::isInternalPackagePath(MMM::Config::utf8ToPath(relative)) ) {
+            XERROR(
+                "PackBeatmap: internal project path is not a package resource: "
+                "{}",
+                relative);
+            return false;
+        }
+    }
     // BMS ZIP 使用独立资源事务，避免把 MCZ 私有首拍规则套入标准 BMS。
     // 对齐计划和生成音频按谱面隔离，同一音乐可供不同首拍偏移的难度共享。
     // 调用仍位于原有用户导出命令事务中，不从常态更新循环额外执行编码。
@@ -1899,7 +1913,8 @@ bool writeBeatmapPackage(
             selectedRelativePaths,
             outputPath,
             metadataOverrides,
-            bmsAlignmentMode);
+            bmsAlignmentMode,
+            bmsMyO2Grid);
         if ( !result.success )
             XERROR("BMS package export failed: {}", result.errorMessage);
         return result.success;
@@ -4108,6 +4123,11 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
         // 所有后续红线与 BGM/Note 共用同一位移，初始 BPM 独立延长到零点。
         // 选项关闭时保持既有另存为语义；其他格式不接受 BMS 对齐参数。
         // 对齐失败与资源缺失一样阻止序列化，已有目标不能被提前截断。
+        // 有损网格选项只写入导出快照，不污染当前谱面或普通保存。
+        if ( exportMap && isBms )
+            exportMap->m_metadata
+                .map_properties[MapMetadataType::BMS]["myo2_grid"] =
+                cmd.bmsMyO2Grid ? "1" : "0";
         std::string bmsAlignmentError;
         if ( referencesValid && exportMap && isBms &&
              cmd.bmsShiftEventsToGrid ) {
@@ -4326,7 +4346,8 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
                             cmd.addStoreModeExtForMalodyExport,
                             cmd.stripMainAudioVolumeFromMalodyExport,
                             cmd.alignNonOggMainAudioToOrigin,
-                            cmd.bmsAlignmentMode);
+                            cmd.bmsAlignmentMode,
+                            cmd.bmsMyO2Grid);
     if ( success ) {
         // writeBeatmapPackage 只有最终目标文件完整写出才返回成功。
         XINFO("PackBeatmap: package written to {}", cmd.exportPath);

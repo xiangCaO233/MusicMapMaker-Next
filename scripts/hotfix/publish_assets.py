@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""在网站服务器上传已准备的资源热更新，最后切换唯一资源清单。
+"""在网站服务器上传已准备的热修复制品，最后切换选定清单。
 
-本入口仅由人工发布 CI 调用；不会修改程序更新清单或重启网站。
+本入口用于人工发布及失败恢复；程序与资源按候选范围分别校验。
 凭据复用服务器已有受保护配置，日志只包含公开对象路径。
 """
 
@@ -12,6 +12,9 @@ import json
 from pathlib import Path
 import re
 import shutil
+import sys
+import threading
+import time
 from urllib.parse import quote
 
 from prepare_assets import digest, safe_path
@@ -98,6 +101,140 @@ def validate_bundle(stage, root):
     return documents
 
 
+# /// @brief 把 SDK 的分片回调汇总为有限频率的可见进度。
+class TransferProgress:
+    """只打印公开对象名及字节数，不接触凭据或请求头。
+
+    SDK 可能在多个线程调用回调；重试时还可能回退已发送计数。
+    锁只保护本地计数和输出，不阻塞网络线程等待另一项传输完成。
+    """
+    def __init__(self, key, size):
+        """每个对象独立计数，开始阶段由调用方另行输出。"""
+        self.key, self.size, self.sent = key, size, 0
+        self.last = time.monotonic()
+        self.lock = threading.Lock()
+
+    def __call__(self, count):
+        """最多每五秒输出一次；达到总字节数时立即报告。"""
+        with self.lock:
+            self.sent = max(0, self.sent + count)
+            now = time.monotonic()
+            # 回调代表数据交给 SDK，不代表 R2 已确认写入成功。
+            # 上传完成后的正文和公开 CDN 校验仍由调用方独立执行。
+            if now - self.last >= 5 or self.sent >= self.size:
+                print(f'[hotfix] 上传 {self.key}: {self.sent}/{self.size} bytes', flush=True)
+                self.last = now
+
+
+# /// @brief 上传并验证一个不可变对象，成功后才写入本地直连副本。
+def publish_record(client, bucket, domain, stage, root, record, publisher, transfer):
+    """恢复复用同摘要对象，不允许覆盖同修订的不同内容。
+
+    每个阶段均立即输出，SSH 保活期间也能判断当前是在上传还是校验。
+    传输配置由正式入口统一创建，测试可注入独立客户端验证事务边界。
+    """
+    key = record['key']
+    source = Path(stage) / key
+    print(f'[hotfix] 检查对象 {key} ({record["size"]} bytes)', flush=True)
+    objects = client.list_objects_v2(Bucket=bucket, Prefix=key)
+    if any(e['Key'] == key for e in objects.get('Contents', [])):
+        head = client.head_object(Bucket=bucket, Key=key)
+        if (head.get('Metadata', {}).get('sha256') != record['sha256']
+                or head['ContentLength'] != record['size']):
+            raise ValueError('immutable object conflict')
+        print(f'[hotfix] 复用已有对象 {key}', flush=True)
+    else:
+        # 小于 64MiB 的程序走单次 PUT，避免默认十路分片在弱链路上拥塞。
+        # 更大的对象仍支持分片，最大并发由统一 TransferConfig 限制。
+        client.upload_file(str(source), bucket, key, Config=transfer,
+                           Callback=TransferProgress(key, record['size']), ExtraArgs={
+            'Metadata': {'sha256': record['sha256']},
+            'ContentType': 'application/octet-stream',
+            'CacheControl': 'public, max-age=31536000, immutable'})
+    print(f'[hotfix] 回读 R2 正文 {key}', flush=True)
+    body = client.get_object(Bucket=bucket, Key=key)['Body']
+    actual = hashlib.sha256()
+    try:
+        for block in iter(lambda: body.read(1024 * 1024), b''):
+            actual.update(block)
+    finally:
+        # 网络或摘要失败同样释放连接，避免恢复时积累失效 socket。
+        body.close()
+    if actual.hexdigest() != record['sha256'] or digest(source) != record['sha256']:
+        raise ValueError('uploaded object checksum mismatch')
+    print(f'[hotfix] 校验公开 CDN {key}', flush=True)
+    publisher.verify_public(domain, '/' + quote(key, safe='/'), record['sha256'])
+    target = Path(root) / key
+    target.parent.mkdir(parents=True, exist_ok=True)
+    # 只有两处正文验证完成后才推进本地镜像，保留原有不可变约束。
+    if target.exists() and digest(target) != record['sha256']:
+        raise ValueError('local immutable object conflict')
+    shutil.copyfile(source, target)
+    print(f'[hotfix] 对象完成 {key}', flush=True)
+
+
+# /// @brief 服务器加载固定 R2 身份，调用者永远不接触原始密钥。
+def load_backend():
+    """程序与资源发布共享同一受保护配置，不接受外部桶或端点参数。
+
+    此函数仅在服务器执行；CI 只接收限时、限定对象的上传许可。
+    返回客户端与公开域名，不返回可被调用方意外序列化的凭据字典。
+    """
+    # 只加载受维护的固定 helper，凭据读取保持现有权限校验。
+    helper = Path("/home/podman/.local/share/mmm-cdn/publish-r2.py")
+    spec = importlib.util.spec_from_file_location("mmm_cdn", helper)
+    publisher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(publisher)
+    values = publisher.read_credentials("/home/podman/.config/mmm-cdn/credentials.env")
+    import boto3
+    from botocore.config import Config
+    # 显式连接和读取超时使断链能够失败返回，而非无限等待。
+    # 标准重试次数有上界，候选原件保持不变，便于之后恢复。
+    client = boto3.client("s3", endpoint_url=values["R2_ENDPOINT"],
+                          aws_access_key_id=values["R2_ACCESS_KEY_ID"],
+                          aws_secret_access_key=values["R2_SECRET_ACCESS_KEY"],
+                          region_name="auto", config=Config(signature_version="s3v4", connect_timeout=15, read_timeout=120,
+                          retries={"mode": "standard", "total_max_attempts": 4},
+                          request_checksum_calculation="when_required",
+                          response_checksum_validation="when_required"))
+    # 桶与公开域名来自受保护配置，workflow 输入不得覆盖。
+    bucket = values["R2_BUCKET"]
+    domain = values["CDN_DOMAIN"]
+    return client, bucket, domain, publisher
+
+
+# /// @brief 服务器验证候选后签发单对象上传许可，不切换任何清单。
+def sign_uploads(stage, root):
+    """许可仅有效三十分钟，固定对象、长度、摘要元数据及缓存头。
+
+    CI 用已有候选直接上传 R2，避开网站服务器的慢速上传出口。
+    后续 publish 仍完整回读 R2/CDN 正文，签名成功不代表发布完成。
+    本函数的 JSON 输出含限时许可，工作流必须只写私有临时文件。
+    """
+    documents = validate_bundle(stage, root)
+    client, bucket, _, _ = load_backend()
+    items = []
+    for record in [r for _, plan, _ in documents for r in plan['uploads']]:
+        key = record['key']
+        # 已有对象只在摘要与长度匹配时复用，不重新签发覆盖许可。
+        objects = client.list_objects_v2(Bucket=bucket, Prefix=key)
+        if any(e['Key'] == key for e in objects.get('Contents', [])):
+            head = client.head_object(Bucket=bucket, Key=key)
+            if (head.get('Metadata', {}).get('sha256') != record['sha256']
+                    or head['ContentLength'] != record['size']):
+                raise ValueError('immutable object conflict')
+            continue
+        params = dict(Bucket=bucket, Key=key, ContentLength=record['size'],
+                      Metadata={'sha256': record['sha256']},
+                      ContentType='application/octet-stream',
+                      CacheControl='public, max-age=31536000, immutable')
+        url = client.generate_presigned_url('put_object', Params=params,
+                                           ExpiresIn=1800, HttpMethod='PUT')
+        items.append(dict(**record, url=url))
+    # 不记录 URL 到日志；SDK 长期访问密钥始终保留在服务器。
+    return {'uploads': items}
+
+
 # /// @brief 在持有网站发布锁时执行上传和清单切换。
 def publish(stage, root):
     """使用服务器现有身份发布不可变资源，再更新固定清单入口。
@@ -115,58 +252,23 @@ def publish(stage, root):
     # 服务器锁串行资源热更新，CI 另与完整网站发布共用 debsrv 发布锁。
     import fcntl
     with Path("/home/podman/.local/share/mmm-cdn/publish.lock").open("a") as lock:
+        print('[hotfix] 等待发布锁', flush=True)
         fcntl.flock(lock, fcntl.LOCK_EX)
+        print('[hotfix] 已取得发布锁，校验候选', flush=True)
         # 全部候选先预检，程序不合法时不能先上传部分资产。
         documents = validate_bundle(stage, root)
-        # 只加载受维护的固定 helper，凭据读取保持现有权限校验。
-        helper = Path("/home/podman/.local/share/mmm-cdn/publish-r2.py")
-        spec = importlib.util.spec_from_file_location("mmm_cdn", helper)
-        publisher = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(publisher)
-        values = publisher.read_credentials("/home/podman/.config/mmm-cdn/credentials.env")
-        import boto3
-        from botocore.config import Config
-        client = boto3.client("s3", endpoint_url=values["R2_ENDPOINT"],
-                              aws_access_key_id=values["R2_ACCESS_KEY_ID"],
-                              aws_secret_access_key=values["R2_SECRET_ACCESS_KEY"],
-                              region_name="auto", config=Config(retries={"max_attempts": 3},
-                              request_checksum_calculation="when_required",
-                              response_checksum_validation="when_required"))
-        # 桶与公开域名来自受保护配置，workflow 输入不得覆盖。
-        bucket = values["R2_BUCKET"]
-        domain = values["CDN_DOMAIN"]
-        for record in [record for _, plan, _ in documents for record in plan['uploads']]:
-            key = record["key"]
-            source = Path(stage) / key
-            # 同一修订不可覆盖已有不同对象；列表精确匹配后才读取元数据。
-            objects = client.list_objects_v2(Bucket=bucket, Prefix=key)
-            if any(e["Key"] == key for e in objects.get("Contents", [])):
-                head = client.head_object(Bucket=bucket, Key=key)
-                if head.get("Metadata", {}).get("sha256") != record["sha256"] or head["ContentLength"] != record["size"]:
-                    raise ValueError("immutable object conflict")
-            else:
-                client.upload_file(str(source), bucket, key, ExtraArgs={
-                    "Metadata": {"sha256": record["sha256"]},
-                    "ContentType": "application/octet-stream",
-                    "CacheControl": "public, max-age=31536000, immutable"})
-            # 完整对象和公开下载都验证后，才允许清单引用新内容。
-            # 对象元数据只能用于识别，正文仍须完整读取验证。
-            body = client.get_object(Bucket=bucket, Key=key)["Body"]
-            actual = hashlib.sha256()
-            for block in iter(lambda: body.read(1024 * 1024), b""):
-                actual.update(block)
-            body.close()
-            # 上传后的本地源再次校验，避免上传期间出现静默内容变化。
-            if actual.hexdigest() != record["sha256"] or digest(source) != record["sha256"]:
-                raise ValueError("uploaded object checksum mismatch")
-            publisher.verify_public(domain, "/" + quote(key, safe="/"), record["sha256"])
-            # CDN 返回错误字节时不会切换当前清单；直连副本只接收已验证对象。
-            target = Path(root) / key
-            target.parent.mkdir(parents=True, exist_ok=True)
-            # 本地直连备份也遵守不可变约束，不覆盖另一份同修订文件。
-            if target.exists() and digest(target) != record['sha256']:
-                raise ValueError('local immutable object conflict')
-            shutil.copyfile(source, target)
+        client, bucket, domain, publisher = load_backend()
+        from boto3.s3.transfer import TransferConfig
+        # 采用公开 SDK 配置接口；与正文摘要校验相互独立。
+        # 小程序单连接传输，大对象最多双路并发，减少弱链路拥塞。
+        transfer = TransferConfig(multipart_threshold=64 * 1024**2,
+                                  multipart_chunksize=16 * 1024**2,
+                                  max_concurrency=2, preferred_transfer_client='classic')
+        records = [record for _, plan, _ in documents for record in plan['uploads']]
+        print(f'[hotfix] 共 {len(records)} 个制品，'
+              f'{sum(r["size"] for r in records)} bytes', flush=True)
+        for record in records:
+            publish_record(client, bucket, domain, stage, root, record, publisher, transfer)
         # 完整部署尚未共用锁时也能检测其是否改变了本次基线。
         validate_bundle(stage, root)
         for document, plan, manifest_key in documents:
@@ -179,11 +281,13 @@ def publish(stage, root):
             publisher.rewrite_resources(document, domain, {
                 '/' + r['key']: (r['sha256'], r['size']) for r in plan['uploads']})
             # JSON 公开校验通过后再切换直连入口，失败保留当前本地清单。
+            print(f'[hotfix] 发布清单 {manifest_key}', flush=True)
             checksum = publisher.publish_json(client, bucket, manifest_key, document)
             publisher.verify_public(domain, '/' + manifest_key, checksum)
             if digest(current) != plan['baseline_sha256']:
                 raise ValueError('baseline changed during publication')
             publisher.atomic_json(current, document)
+            print(f'[hotfix] 清单已切换 {manifest_key}', flush=True)
             # 前一份清单完成后处理下一份，程序入口总是最后发布。
 
 
@@ -198,9 +302,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage", required=True)
     parser.add_argument("--root", required=True)
-    parser.add_argument("--apply", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true")
+    mode.add_argument("--sign-uploads", action="store_true")
     args = parser.parse_args()
-    if args.apply:
+    if args.sign_uploads:
+        # 私有输出只能通过 SSH 写入 Runner 临时文件，不能上传为 Artifact。
+        json.dump(sign_uploads(args.stage, args.root), sys.stdout)
+    elif args.apply:
         publish(args.stage, args.root)
     else:
         # 离线校验模式不导入 boto3，也不读取服务器凭据。
