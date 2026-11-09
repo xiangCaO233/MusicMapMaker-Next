@@ -771,7 +771,7 @@ void ToolbarView::toggleMobileTool(MobileTool tool, glm::vec2 anchor)
             m_currentTool = Logic::EditTool::Layout;
         } else {
             m_currentTool = m_toolBeforeLayout == Logic::EditTool::Layout
-                                ? Logic::EditTool::Move
+                                ? Logic::EditTool::Marquee
                                 : m_toolBeforeLayout;
         }
         m_showLayoutPopup  = open;

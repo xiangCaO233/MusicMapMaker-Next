@@ -254,8 +254,9 @@ void drawMobileWorkbench(UIManager& manager, float scale)
         return dock ? &dock->toolbarView() : nullptr;
     }();
     const auto* service = manager.getEditorApplicationService();
-    const auto  tool = service ? service->currentTool() : Logic::EditTool::Move;
-    const auto& app  = Config::AppConfig::instance();
+    const auto  tool =
+        service ? service->currentTool() : Logic::EditTool::Marquee;
+    const auto& app    = Config::AppConfig::instance();
     const auto& config = app.getEditorConfig();
     // 主题间距只扣一次；两列加间距必须恰好位于父窗口的内容宽度内。
     // 最小宽度保留指尖目标，屏幕变窄时不能把一行偷偷改成三列或更密集排列。

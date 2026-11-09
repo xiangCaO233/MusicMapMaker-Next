@@ -875,8 +875,6 @@ void MobileWorkspacePresentation::drawToolbar(UIManager& manager)
         // 基础工具只组合公共命令，原有工具实现仍掌管选取和物件修改。
         // 此处不复制编辑器手势状态机，也不模拟键盘快捷键。
         const std::array tools{
-            std::pair{ TR_CACHE("ui.toolbar.short.move").data(),
-                       Logic::EditTool::Move },
             std::pair{ TR_CACHE("ui.toolbar.short.marquee").data(),
                        Logic::EditTool::Marquee },
             std::pair{ TR_CACHE("ui.toolbar.short.draw").data(),
@@ -884,9 +882,9 @@ void MobileWorkspacePresentation::drawToolbar(UIManager& manager)
         };
         const auto* service = manager.getEditorApplicationService();
         // 图标沿用桌面工具的语义，文字常驻，触摸用户无需猜测图形含义。
-        const std::array icons{ ICON_MMM_HAND,
-                                ICON_MMM_SQUARE_SELECT,
-                                ICON_MMM_PEN };
+        // 选择工具统一承接物件/子物件拖动与空白框选，触屏端不再保留抓取入口。
+        // 工具和图标一一对应，避免同值兼容别名产生重复按钮与 ImGui ID。
+        const std::array icons{ ICON_MMM_SQUARE_SELECT, ICON_MMM_PEN };
         // 图标顺序与固定工具表对应，不能依据当前工具名称动态查找字体资源。
         std::size_t index = 0;
         // 服务尚未绑定时不显示虚假的选中工具，点击仍走统一命令路由。
