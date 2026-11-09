@@ -155,11 +155,26 @@ bool isActionShortcutPressed(std::string_view action, bool repeat,
             const bool pressed = Interaction::modifier(modifier);
             return required ? pressed : (!pressed || (extras & bit) != 0);
         };
-    return matches(Interaction::Modifier::Control, binding.ctrl, 1) &&
-           matches(Interaction::Modifier::Shift, binding.shift, 2) &&
-           matches(Interaction::Modifier::Alt, binding.alt, 4) &&
-           matches(Interaction::Modifier::Super, binding.super, 8) &&
-           Interaction::keyPressed(key->key, repeat);
+    const bool pressed =
+        matches(Interaction::Modifier::Control, binding.ctrl, 1) &&
+        matches(Interaction::Modifier::Shift, binding.shift, 2) &&
+        matches(Interaction::Modifier::Alt, binding.alt, 4) &&
+        matches(Interaction::Modifier::Super, binding.super, 8) &&
+        Interaction::keyPressed(key->key, repeat);
+    if ( !pressed || action != "toolMove" ) return pressed;
+    // 旧抓取动作只保留选择工具的兼容键，所有仍可配置的动作拥有优先权。
+    // 仅在实际命中兼容键时扫描固定目录，普通 UI 帧不增加整表匹配成本。
+    const auto& shortcuts =
+        Config::AppConfig::instance().getEditorSettings().shortcutConfig;
+    for ( const auto& entry : Config::editorShortcutActions() ) {
+        if ( entry.m_id == "toolMove" ) continue;
+        const auto& other = Interaction::activeProfile().shortcut(
+            entry.m_id, shortcuts.*(entry.m_binding));
+        // 同时尊重当前方案的绑定重映射，不能只比较持久化配置中的旧主键。
+        // 禁用绑定不会冲突，也就不会剥夺用户原来的选择工具兼容键。
+        if ( Config::shortcutBindingsConflict(binding, other) ) return false;
+    }
+    return true;
 }
 
 /// @brief 获取快捷键录制全局状态。

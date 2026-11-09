@@ -2788,11 +2788,7 @@ void Basic2DCanvasInteraction::handleHotkeys(
         Logic::EditTool::ColorEraser,
     };
 
-    bool handledShortcut =
-        UI::ShortcutUtils::isActionShortcutPressed("toolMove");
-    if ( handledShortcut )
-        UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
-            Logic::CmdChangeTool{ Logic::EditTool::Marquee }));
+    bool handledShortcut = false;
     // 同一物理组合即使误配给多个工具，也只采用数组顺序中的首项。
     for ( Logic::EditTool tool : editableTools ) {
         if ( handledShortcut ) break;
@@ -2804,6 +2800,15 @@ void Basic2DCanvasInteraction::handleHotkeys(
             // 一帧只切换一次工具，不继续匹配其它配置。
             break;
         }
+    }
+
+    // 隐藏的旧抓取键仅作兼容回退，不得抢占用户为现有工具重绑的键。
+    // 先匹配可编辑绑定，旧配置与新选择工具相同也只发送一次切换。
+    if ( !handledShortcut &&
+         UI::ShortcutUtils::isActionShortcutPressed("toolMove") ) {
+        UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
+            Logic::CmdChangeTool{ Logic::EditTool::Marquee }));
+        handledShortcut = true;
     }
 
     if ( !handledShortcut &&

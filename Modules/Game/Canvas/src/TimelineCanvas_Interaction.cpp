@@ -1770,12 +1770,6 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         Logic::EditorEngine::instance().getCurrentTool() ==
         Logic::EditTool::Layout;
     if ( !handledKeyboardCommand && !isLayoutEditing ) {
-        // 原抓取快捷键作为选择工具的兼容入口，不再切换独立模式。
-        if ( UI::ShortcutUtils::isActionShortcutPressed("toolMove") ) {
-            publishTimelineCommand(Event::LogicCommandEvent(
-                Logic::CmdChangeTool{ Logic::EditTool::Marquee }));
-            handledKeyboardCommand = true;
-        }
         for ( Logic::EditTool tool : editableTools ) {
             if ( handledKeyboardCommand ) break;
             if ( UI::ShortcutUtils::isShortcutPressed(
@@ -1786,6 +1780,14 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                 break;
             }
         }
+    }
+    // 旧抓取键只在当前工具绑定全部未命中时回退，主画布与时间线顺序一致。
+    // 布局编辑和已处理的撤销等命令仍独占该帧，不补发工具切换。
+    if ( !handledKeyboardCommand && !isLayoutEditing &&
+         UI::ShortcutUtils::isActionShortcutPressed("toolMove") ) {
+        publishTimelineCommand(Event::LogicCommandEvent(
+            Logic::CmdChangeTool{ Logic::EditTool::Marquee }));
+        handledKeyboardCommand = true;
     }
     auto applyProfessionalCreateType = [&]() {
         if ( !professionalMode ) {

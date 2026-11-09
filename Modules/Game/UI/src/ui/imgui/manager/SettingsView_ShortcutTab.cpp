@@ -242,6 +242,10 @@ void SettingsView::drawShortcutSettings()
             shortcutEntries.begin(),
             shortcutEntries.end(),
             [&](const auto& entry) {
+                // 旧抓取入口只在未命中现有工具时回退，不作为独立工具报告冲突。
+                // 隐藏绑定不能让选择工具重绑为旧键后仍显示无法解除的冲突。
+                if ( entry.m_action == ShortcutRecordTarget::ToolMove )
+                    return false;
                 const auto& candidate = shortcutConfig.*(entry.m_binding);
                 return &candidate != &binding &&
                        Config::shortcutBindingsConflict(candidate, binding);

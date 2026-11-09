@@ -5,6 +5,8 @@
 #include "common/render/HoverRenderData.h"
 #include "common/render/RenderSnapshot.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
+#include "config/ShortcutConfig.h"
 #include "config/VisualConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
@@ -559,7 +561,11 @@ bool frame(MMM::Canvas::Basic2DCanvasInteraction&     interaction,
     ImGui::NewFrame();
     ImGui::SetNextWindowPos({ 0, 0 });
     ImGui::SetNextWindowSize({ 400, 400 });
-    ImGui::Begin("SurfaceTest", nullptr, ImGuiWindowFlags_NoSavedSettings);
+    // 使用真实主画布的稳定 ID 前缀，让快捷键经过生产焦点门禁。
+    // 可见标题不变，菜单和拾取仍复用同一固定测试窗口。
+    ImGui::Begin("SurfaceTest###Canvas_Probe",
+                 nullptr,
+                 ImGuiWindowFlags_NoSavedSettings);
     // 焦点来自正式窗口栈，不能把测试硬编码的 focused 标志交给方案。
     // 已打开菜单时保留其焦点，强制聚焦父窗口会人为关闭标准弹出菜单。
     if ( !ImGui::IsPopupOpen(
@@ -585,6 +591,11 @@ bool frame(MMM::Canvas::Basic2DCanvasInteraction&     interaction,
 /// @note 玩家物件和音频采样复用数字实体号，用对象领域防止身份混淆。
 /// @note 离开物件后仍要求移动和结束，不能因下一帧没有 hover 就丢失事务。
 /// @note 空白框选进入物件区域后仍不发布 StartDrag，避免途中抢占归属。
+/// @note 快捷键竞争使用相同物理键，验证当前可配置工具优先于隐藏兼容入口。
+/// @note 禁用绘制绑定后再次按键，单独验证旧入口仍可进入选择工具。
+/// @note 快捷键只观察 CmdChangeTool，不要求测试进程创建真实编辑会话。
+/// @note 完整保存和恢复绑定值，避免用户的原始组合键被测试覆盖。
+/// @note 两次按键之间经过正式释放帧，不能用连续按住触发的重复冒充新输入。
 bool testUnifiedSelectionGestureOwnership()
 {
     using namespace MMM;
@@ -604,6 +615,8 @@ bool testUnifiedSelectionGestureOwnership()
     io.MouseDoubleClickTime     = 0.0F;
     // 起笔命令按值保留，才能在帧结束后检查部位、领域与子索引。
     // 移动和结束分开计数，只有完整的事务序列才代表可用拖动。
+    int                              deletions = 0;
+    std::vector<Logic::EditTool>     switchedTools;
     std::vector<Logic::CmdStartDrag> starts;
     int                              marquees = 0, updates = 0, ends = 0;
     auto&                            bus = Event::EventBus::instance();
@@ -611,9 +624,15 @@ bool testUnifiedSelectionGestureOwnership()
     // 订阅不应用命令，避免把逻辑层选择副作用混入本层命中测试。
     const auto subscription =
         bus.subscribe<Event::LogicCommandEvent>([&](const auto& event) {
+            // 工具切换也观察正式出口，不能靠快照中的旧工具推断按键结果。
+            if ( const auto* change =
+                     std::get_if<Logic::CmdChangeTool>(&event.command) )
+                switchedTools.push_back(change->tool);
             if ( const auto* start =
                      std::get_if<Logic::CmdStartDrag>(&event.command) )
                 starts.push_back(*start);
+            deletions +=
+                std::holds_alternative<Logic::CmdDeleteSelected>(event.command);
             marquees +=
                 std::holds_alternative<Logic::CmdStartMarquee>(event.command);
             updates +=
@@ -700,6 +719,46 @@ bool testUnifiedSelectionGestureOwnership()
             updates,
             ends);
     passed &= marquees == 1 && starts.empty() && updates == 0 && ends == 0;
+    // 旧抓取的 1 键仍可进入选择，但不能遮蔽用户将绘制重绑为 1 的意图。
+    // 只修改内存配置，离开本用例前恢复完整绑定，避免污染后续菜单测试。
+    auto& shortcuts =
+        Config::AppConfig::instance().getEditorSettings().shortcutConfig;
+    const auto originalShortcuts = shortcuts;
+    shortcuts.toolMove           = { true, "1", false, false, false, false };
+    shortcuts.toolDraw           = shortcuts.toolMove;
+    // 显式释放后再按下，确保两轮都是真实边沿，而不是平台按键重复。
+    // 当前控制器和窗口不重建，验证和物件拖动共用的正式快捷键入口。
+    frame(controller, snapshot, false);
+    switchedTools.clear();
+    io.AddKeyEvent(ImGuiKey_1, true);
+    frame(controller, snapshot, false);
+    io.AddKeyEvent(ImGuiKey_1, false);
+    frame(controller, snapshot, false);
+    passed &= switchedTools.size() == 1 &&
+              switchedTools.front() == Logic::EditTool::Draw;
+    // 没有其他工具占用旧键时，保留向统一选择工具的兼容回退。
+    // 禁用绘制绑定只影响第二轮，不能用直接调用分派函数伪造测试结果。
+    shortcuts.toolDraw.enabled = false;
+    switchedTools.clear();
+    io.AddKeyEvent(ImGuiKey_1, true);
+    frame(controller, snapshot, false);
+    io.AddKeyEvent(ImGuiKey_1, false);
+    frame(controller, snapshot, false);
+    passed &= switchedTools.size() == 1 &&
+              switchedTools.front() == Logic::EditTool::Marquee;
+    // 编辑动作也能占用旧键；隐藏入口不能在删除命令之前抢先切换工具。
+    // 删除只观察事件，不应用到实际谱面，避免测试改变用户数据。
+    shortcuts.deleteSelected = shortcuts.toolMove;
+    switchedTools.clear();
+    deletions = 0;
+    // 第三轮仍经同一焦点窗口与真实物理边沿，不直接调用快捷键 helper。
+    // 单次删除和零次切换必须同时满足，不能接受同一按键双重分派。
+    io.AddKeyEvent(ImGuiKey_1, true);
+    frame(controller, snapshot, false);
+    io.AddKeyEvent(ImGuiKey_1, false);
+    frame(controller, snapshot, false);
+    passed &= switchedTools.empty() && deletions == 1;
+    shortcuts = originalShortcuts;
     // 清理晚于最后一次释放，确保结束命令也被事件订阅验收。
     bus.unsubscribe<Event::LogicCommandEvent>(subscription);
     // 双击配置和方案都恢复，后续菜单测试使用其原本的交互入口。
