@@ -416,7 +416,8 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
         if ( settingsWindow || audioController )
             ImGui::SetNextWindowSizeConstraints({ 1, 1 }, m_size);
         m_dock.target(MobileDockPanel::Main, title.c_str());
-        flags |= ImGuiWindowFlags_NoMove;
+        // 原生标题和标签承接触摸拖动；内容区仍由画布或滚动器独占。
+        flags &= ~(ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking);
         if ( m_model.blocksCanvasInput() ) flags |= ImGuiWindowFlags_NoInputs;
         if ( mainCanvas ) {
             const std::string name =
@@ -459,7 +460,8 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
                       title.c_str());
         ImGui::SetNextWindowSizeConstraints({ 1, 1 }, m_size);
         flags &= ~(ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoDocking);
-        flags |= ImGuiWindowFlags_NoMove;
+        // 原生标题和标签承接触摸拖动；内容区仍由画布或滚动器独占。
+        flags &= ~(ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking);
         if ( m_model.blocksCanvasInput() ) flags |= ImGuiWindowFlags_NoInputs;
     } else {
         // 设置等临时业务窗口不允许落入中央 Dock，避免挤走两个主要页签。
@@ -470,12 +472,9 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
     // 只提升当前抽屉内容的显示层级，不主动夺走文本编辑焦点。
     const bool visible = ImGui::Begin(title.c_str(), nullptr, flags);
     if ( docked ) ImGui::PopStyleVar();
-    // 工作台隐藏标签后不再提交标签长按检测，不能把顶部按钮误判成关闭入口。
-    // 右侧抽屉保留工作台显示开关，因此省掉标签不会丢失收起和重开能力。
-    // 其它停靠窗口仍使用原生页签菜单，包括最后主画布的关闭保护。
-    // 无页签仅改变本叶节点的装饰，不影响其它分区的标签高度与内容边界。
-    // 工作台正文填满自己的窗口，窗口滚动条不借用相邻时间线的裁剪区域。
-    if ( docked && !workbench ) processTabMenu(id, open, false);
+    // 工作台与文档使用同一标签交互；最后一个主画布的关闭保护仍单独检查。
+    // 触摸拖动沿用原生停靠，长按菜单仅在停留且具有关闭权限时出现。
+    if ( docked ) processTabMenu(id, open, false);
     if ( m_drawingDrawer &&
          !ImGui::IsPopupOpen(
              nullptr,
@@ -498,6 +497,7 @@ void MobileWorkspacePresentation::processTabMenu(std::string_view id,
     if ( !open ) {
         if ( id == "TimelineWindow" || id == "Timeline" ) open = &m_showTiming;
         if ( id == "PreviewWindow" ) open = &m_showPreview;
+        if ( id == "MobileWorkbench" ) open = &m_showWorkbench;
     }
     const auto* tabs =
         m_frameManager
@@ -850,8 +850,8 @@ void MobileWorkspacePresentation::drawWorkbench(UIManager& manager)
 {
     const std::string title =
         TR_CACHE("ui.mobile.workbench").toString() + "###MobileWorkbench";
-    // 工具区没有页签；关闭和重新显示统一由右侧抽屉负责，分隔条仍可调整。
-    // 固定身份仍用于停靠与宽度恢复，去掉标签不等于创建另一个浮动窗口。
+    // 工具区保留标签，可拖动布局或长按关闭；右侧抽屉始终提供重新打开入口。
+    // 固定身份继续用于停靠与恢复，切换语言只更改可见标题。
     // 窗口只提供滚动和裁剪，按钮布局完全交给移动工作台实现。
     // 主区标签选择决定是否调用本函数，后台活动谱面不能自行拉回工作台。
     const bool opened = beginWindow("MobileWorkbench", title, nullptr, 0);

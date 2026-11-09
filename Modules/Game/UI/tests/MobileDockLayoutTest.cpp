@@ -48,6 +48,8 @@ struct Fixture {
     /// @brief
     /// 仅在工作台专属场景提交真实画布身份，其他既有标签仍模拟欢迎或设置。
     bool m_canvasPage{}, m_workbenchRequested{};
+    /// @brief 仅在内存 ini 往返用例启用窗口设置，不触及用户磁盘。
+    bool m_persistWindows{};
     /// @brief 完整标题用于展示，固定后缀用于检验窗口身份不随谱名变化。
     std::string longTitle{
         "Editor [4K] A deliberately long beatmap name that must keep its full "
@@ -61,13 +63,15 @@ struct Fixture {
     /// @return Begin 完成后由 ImGui 计算的可用内容边界。
     Bounds pane(MMM::UI::MobileDockPanel panel, const char* name)
     {
+        // 共享业务视图可能先提供桌面默认落点；移动策略必须覆盖该条件而非沿用它。
+        // 自定义合并、浮动和上下分割仍应在这个预设存在时保持稳定。
+        ImGui::SetNextWindowDockID(layout.node(panel), ImGuiCond_Always);
         layout.target(panel, name);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                             MMM::UI::MobileDockLayout::tabPadding(1));
-        ImGui::Begin(
-            name,
-            nullptr,
-            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+        ImGui::Begin(name,
+                     nullptr,
+                     m_persistWindows ? 0 : ImGuiWindowFlags_NoSavedSettings);
         ImGui::PopStyleVar();
         if ( layout.tabCloseRequested(
                  "Close",
@@ -123,11 +127,14 @@ struct Fixture {
                     pane(MMM::UI::MobileDockPanel::Main, title);
         }
         if ( timing )
-            bounds[1] = pane(MMM::UI::MobileDockPanel::Timing, "Timing");
+            bounds[1] =
+                pane(MMM::UI::MobileDockPanel::Timing, "Timing###Timeline");
         if ( preview )
-            bounds[2] = pane(MMM::UI::MobileDockPanel::Preview, "Preview");
+            bounds[2] = pane(MMM::UI::MobileDockPanel::Preview,
+                             "Preview###PreviewWindow");
         if ( layout.node(MMM::UI::MobileDockPanel::Workbench) )
-            pane(MMM::UI::MobileDockPanel::Workbench, "Workbench");
+            pane(MMM::UI::MobileDockPanel::Workbench,
+                 "Tools###MobileWorkbench");
         layout.finishFrame();
         ImGui::Render();
     }
@@ -169,7 +176,9 @@ struct Fixture {
     /// @param name 已由夹具创建的稳定窗口名，不包含动态标题或翻译。
     /// @param move 按下后平移一次并继续保持，验证移回停留不会重新计时。
     /// @param frames 按住期间推进的帧数，默认超过长按阈值。
-    void holdTab(const char* name, bool move = false, int frames = 40)
+    /// @param revealAttempt 限制滚出屏幕标签的准备次数，失败不得无限递归。
+    void holdTab(const char* name, bool move = false, int frames = 40,
+                 int revealAttempt = 0)
     {
         // 窗口由本用例前面的 settle 提交，测试只借用当前帧有效的节点。
         auto* window = ImGui::FindWindowByName(name);
@@ -186,6 +195,18 @@ struct Fixture {
         const float left = std::max(position.x, bar->ScrollingRectMinX);
         const float right =
             std::min(position.x + tab->Width, bar->ScrollingRectMaxX);
+        // 整个标签已滚出可见区时先通过原生聚焦让其滚入，不能向负宽命中区点击。
+        // 这只准备可见起点，后续长按、拖动与关闭仍使用真实触屏事件。
+        if ( right <= left ) {
+            if ( revealAttempt >= 2 ) {
+                XERROR("Unable to reveal tab {}", name);
+                return;
+            }
+            ImGui::SetWindowFocus(name);
+            settle();
+            holdTab(name, move, frames, revealAttempt + 1);
+            return;
+        }
         const ImVec2 point{ (left + right) * .5f,
                             (position.y + bar->BarRect.Max.y) * .5f };
         // 来源明确为触屏，不能让默认鼠标事件意外绕过移动端识别规则。
@@ -263,6 +284,11 @@ int main()
             XERROR("Mobile dock: {}", message);
         }
     };
+    // 真实 UI 注册顺序允许画布先于移动宿主出现；下一帧仍须正确建立缺省停靠。
+    // 不能在根 ID 尚未创建时就永久消费首次定位请求。
+    ImGui::NewFrame();
+    fixture.pane(MobileDockPanel::Main, "Main");
+    ImGui::Render();
     fixture.settle();
     // 使用不同于默认值的分隔条尺寸，确保渲染尊重外部美化样式。
     ImGui::GetStyle().DockingSeparatorSize = 6;
@@ -473,7 +499,8 @@ int main()
     check(!menuOpen() && !fixture.layout.tabMenuOwnsPointer(),
           "outside tap dismisses menu and releases input protection");
     // 辅助区只有一个标签仍可长按关闭，不能按叶节点标签数误禁用。
-    for ( const char* name : { "Timing", "Preview" } ) {
+    for ( const char* name :
+          { "Timing###Timeline", "Preview###PreviewWindow" } ) {
         // 每个辅助标签单独检查增量，避免另一个标签误关闭时抵消结果。
         const int before = fixture.closeRequests;
         fixture.holdTab(name);
@@ -596,13 +623,14 @@ int main()
         restoredTiming, restoredPreview, restoredTab, &savedWorkbench);
     // 工具按钮会取得焦点，但主区选中的画布保持不变。
     // 因此不能通过全局聚焦窗口判断工作台是否仍应显示。
-    // 原生节点必须主动禁用标签，而非仅把标题文字画成透明。
-    // 这样内容从本区域顶部开始，且不会留下可误触的关闭菜单命中区。
-    const auto* toolWindow = ImGui::FindWindowByName("Workbench");
+    // 工作台与其他窗口一样保留真实原生标签，不能仅绘制一行不可拖动的装饰文字。
+    // 标签参与停靠和长按关闭，内容从标签栏下方开始且不覆盖命中区域。
+    const auto* toolWindow = ImGui::FindWindowByName("Tools###MobileWorkbench");
     check(toolWindow && toolWindow->DockNode &&
-              toolWindow->DockNode->IsNoTabBar(),
-          "workbench has no tab strip");
-    // 触摸工具正文取得焦点，不能依赖已经取消的工作台标签来模拟操作。
+              !toolWindow->DockNode->IsNoTabBar() &&
+              toolWindow->DockNode->TabBar,
+          "workbench retains a draggable tab strip");
+    // 触摸工具正文取得焦点，不能让工具页焦点误清除当前文档上下文。
     auto& toolIo = ImGui::GetIO();
     toolIo.AddMousePosEvent(toolWindow->Pos.x + 30, toolWindow->Pos.y + 80);
     toolIo.AddMouseButtonEvent(0, true);
@@ -630,6 +658,109 @@ int main()
           "returning to canvas preserves resized workbench width");
     checkLeftLayout();
     // 显隐循环最后再检查四栏顺序，恢复工作台不能改变时间线的位置。
+    // 欢迎或设置文档独立分屏且始终可见，工作台仍应属于最近聚焦的画布。
+    // 这覆盖按登记顺序选中旁边文档、导致工作台每帧显隐翻转的真实回归。
+    ImGuiID sideDocument{}, remainingDocuments{};
+    ImGui::DockBuilderSplitNode(fixture.layout.center(),
+                                ImGuiDir_Left,
+                                .25f,
+                                &sideDocument,
+                                &remainingDocuments);
+    ImGui::DockBuilderDockWindow("Other", sideDocument);
+    ImGui::SetWindowFocus("Chart###Canvas_workbench");
+    fixture.settle();
+    // 工作台也可与主画布合并；选中工具标签不能让自己的显示条件反复翻转。
+    // 原生停靠 API 模拟用户已完成的落点，后续普通帧不得把它拉回默认右侧。
+    // 合并前读取真实画布节点，避免复制生产默认分栏比例掩盖错误。
+    // 窗口数量并非关闭权限的依据，最后主画布和工具页仍各自检查。
+    const auto canvasDock =
+        ImGui::FindWindowByName("Chart###Canvas_workbench")->DockId;
+    ImGui::DockBuilderDockWindow("Tools###MobileWorkbench", canvasDock);
+    ImGui::SetWindowFocus("Tools###MobileWorkbench");
+    fixture.settle();
+    check(ImGui::FindWindowByName("Tools###MobileWorkbench")->DockId ==
+                  canvasDock &&
+              fixture.layout.isMainCanvasSelected(),
+          "merged workbench keeps canvas context and docking position");
+    // 选中工作台时应保存其文档身份，不能在重启后等待未创建的工具页才能展开工具页。
+    // 工具标签的布局由原生 ini 保存，文档上下文与工具焦点分开记录。
+    ImGuiID toolDocument{};
+    fixture.layout.capture(restoredTiming, restoredPreview, toolDocument);
+    check(
+        toolDocument == ImGui::FindWindowByName("Chart###Canvas_workbench")->ID,
+        "selected workbench saves its document context");
+    // 关闭菜单必须来自新的触摸长按，再由独立轻点确认。
+    // 计数是消费业务意图的观测值，不直接修改被测内部状态。
+    const int beforeToolClose = fixture.closeRequests;
+    fixture.holdTab("Tools###MobileWorkbench");
+    check(menuOpen() && fixture.clickCloseMenu() &&
+              fixture.closeRequests == beforeToolClose + 1,
+          "workbench tab supports touch close menu");
+    // 合并后的预览仍可隐藏和重开，主区标签和其它节点不得被整树重建覆盖。
+    // 欢迎或设置文档成为当前页后，工具区应正常释放。
+    // 此处设置原生焦点以建立新场景，后续只检验拖动结果是否被回写覆盖。
+    ImGui::SetWindowFocus("Other");
+    fixture.settle();
+    const auto documentDock = ImGui::FindWindowByName("Other")->DockId;
+    ImGui::DockBuilderDockWindow("Preview###PreviewWindow", documentDock);
+    fixture.settle();
+    check(ImGui::FindWindowByName("Preview###PreviewWindow")->DockId ==
+              documentDock,
+          "user merged preview stays with documents");
+    // 隐藏辅助窗口不应清空整个节点，因为节点还承载可见的主文档。
+    // 再次显示时沿用原生 DockId，不能按旧分类强制切回最左侧。
+    fixture.settle(true, false);
+    fixture.settle();
+    check(ImGui::FindWindowByName("Preview###PreviewWindow")->DockId ==
+              documentDock,
+          "hide and reopen preserve custom merged preview");
+    // 上下分割补充旧水平默认布局没有覆盖的拓扑；只调整目标文档叶。
+    // 记录最终原生 ID，不能用“看起来差不多”的比例判断实际落点。
+    // 两个输出 ID 只在稳定帧后比较，不保留 DockNode 观察指针跨越分割。
+    // 同时检查时间线与主文档，排除两者都被错误送回默认树的情况。
+    ImGuiID lower{}, upper{};
+    ImGui::DockBuilderSplitNode(
+        documentDock, ImGuiDir_Down, .35f, &lower, &upper);
+    ImGui::DockBuilderDockWindow("Timing###Timeline", lower);
+    fixture.settle();
+    check(ImGui::FindWindowByName("Timing###Timeline")->DockId == lower &&
+              ImGui::FindWindowByName("Other")->DockId == upper,
+          "user vertical split survives ordinary frames");
+    // 内存 ini 完整往返覆盖真正的全新 ImGui 上下文，排除复用旧节点的假恢复。
+    // 打开窗口设置后只序列化到内存，明确禁用 IniFilename，避免改动本机配置。
+    // 原先几何夹具故意禁用保存；本场景显式启用后先推进正常帧。
+    // 这样生成的窗口条目来自正式 Begin，而不是测试手工拼接 ini 文本。
+    fixture.m_persistWindows = true;
+    fixture.settle();
+    std::size_t       iniSize{};
+    const char*       iniText = ImGui::SaveIniSettingsToMemory(&iniSize);
+    const std::string savedIni(iniText, iniSize);
+    // 全新上下文没有旧运行期窗口或节点，因此能检验真正的启动恢复路径。
+    // 保存字符串独立拥有内存，不持有已销毁上下文的缓冲区。
+    ImGui::DestroyContext();
+    ImGui::CreateContext();
+    auto& restoredIo       = ImGui::GetIO();
+    restoredIo.IniFilename = nullptr;
+    restoredIo.DisplaySize = { 1000, 700 };
+    restoredIo.DeltaTime   = 1.0f / 60;
+    // 不启动平台视口或 GPU 后端，布局恢复应仅依赖原生设置和字体度量。
+    // 新字体图集必须在第一次 NewFrame
+    // 前构建，避免把前置条件失败误判为布局问题。
+    restoredIo.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    restoredIo.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    // 加载发生在首个移动宿主提交之前，顺序与生产环境一致。
+    // 若外壳首帧仍无条件重建整树，下面保存的上下分割 ID 将无法保留。
+    ImGui::LoadIniSettingsFromMemory(savedIni.data(), savedIni.size());
+    // 新布局对象同样不保留旧绑定；只允许读取正式的原生设置和缺省比例。
+    // 选中标签设置为零，防止强制恢复焦点掩盖窗口归属错误。
+    fixture.layout = MobileDockLayout{};
+    fixture.layout.restore(savedTiming, savedPreview, 0);
+    fixture.settle();
+    check(
+        ImGui::FindWindowByName("Timing###Timeline")->DockId == lower &&
+            ImGui::FindWindowByName("Other")->DockId == upper &&
+            ImGui::FindWindowByName("Preview###PreviewWindow")->DockId == upper,
+        "fresh context restores custom native topology");
     ImGui::DestroyContext();
     // 所有窗口、字体和节点统一由上下文销毁，测试不保留跨用例状态。
     return failures == 0 ? 0 : 1;

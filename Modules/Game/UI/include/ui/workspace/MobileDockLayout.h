@@ -9,15 +9,16 @@ namespace MMM::UI
 enum class MobileDockPanel { Main, Timing, Preview, Workbench };
 
 /// @brief 同一根节点提供等高标签区和原生可调宽分隔条。
-/// @details 只在辅助窗口显隐变化时重建分割，普通帧保留用户调整的宽度。
+/// @details
+/// 首次创建默认分区，随后由原生停靠维护拖动结果，显隐切换不重建用户布局。
 class MobileDockLayout
 {
 public:
     /// @brief 以稳定窗口后缀识别两个音频分析页，不依赖本地化标题。
     /// @warning 每帧固定长度比较，不查询视图容器或音频状态。
     static bool isAudioAnalysisWindow(std::string_view title);
-    /// @brief 提交工作区宿主及固定的水平分区，不创建业务视图。
-    /// @warning 每帧绘制固定节点；重建仅发生在显隐切换的低频路径。
+    /// @brief 提交可自由停靠的移动宿主，默认水平分区只用于首次布局。
+    /// @warning 每帧只访问 UI 停靠节点；仅缺少新面板位置时增量分割。
     void render(ImVec2 position, ImVec2 size, float scale, bool timing,
                 bool preview, bool workbench = false);
     /// @brief 查询主区实际选中的稳定画布身份，不把逻辑活动会话当作可见标签。
@@ -50,9 +51,24 @@ public:
     bool tabCloseRequested(const char* closeLabel, float scale, bool canClose,
                            bool enabled);
     /// @brief 菜单和关闭释放帧拦截画布原始输入，防止菜单触点穿透。
-    bool tabMenuOwnsPointer() const { return m_menuWindow || m_releaseGuard; }
+    bool tabMenuOwnsPointer() const
+    {
+        return m_menuWindow || m_dragWindow || m_releaseGuard;
+    }
 
 private:
+    /// @brief 从原生窗口与保存的身份刷新实际分区，兼容跨分区合并与拆分。
+    /// @warning 每帧仅访问已登记 UI 窗口及停靠树，不查询业务对象。
+    void refreshNodes();
+    /// @brief 缺失面板初次显示时只分割主区，不销毁用户已有树。
+    void ensurePanel(MobileDockPanel panel, float ratio, bool left);
+    /// @brief 窗口登记只保存稳定身份，原生节点和窗口指针不跨帧持有。
+    struct WindowBinding {
+        ImGuiID         m_window{};  ///< 与 ### 后缀一致的稳定窗口哈希。
+        MobileDockPanel m_panel{};   ///< 只用于首次默认位置和工作台上下文判断。
+    };
+    /// @brief 新窗口首次提交时增长，普通帧复用已有 UI 登记。
+    std::vector<WindowBinding> m_windows;
     /// @brief 在原生标签排版前限制宽度并暂存各窗口文字主题色。
     /// @warning 每帧只访问三个受控节点；缓存容量仅在新增标签时增长。
     void prepareTabCaptions(float scale);
@@ -73,13 +89,16 @@ private:
         m_restoreFocus{};
     /// @brief 首次交互前保留已保存窗口，防止惰性设置页的初始聚焦覆盖它。
     ImGuiID m_startupFocus{};
+    /// @brief
+    /// 工作台与画布合并后沿用最后文档上下文，避免工具页选中导致自身反复显隐。
+    ImGuiID m_lastMainSelection{};
     /// @brief 最近显隐组合，不把旋转或宿主变宽误判为需要重建。
     int m_visibility{ -1 };
     /// @brief 各辅助分区占根宽度的比例，隐藏前保留用户实际调整值。
     float m_timingRatio{ .28f }, m_previewRatio{ .2f },
         m_workbenchRatio{ .17f };
     /// @brief 长按仅保存窗口身份与起点；移动超过容差后本次触点永久取消。
-    ImGuiID m_holdWindow{};
+    ImGuiID m_holdWindow{}, m_dragWindow{};
     ImVec2  m_holdOrigin{};
     double  m_holdStarted{};
     /// @brief 菜单窗口身份不拥有视图，关闭原窗口后由帧末清理。
