@@ -24,11 +24,6 @@ on:
         # 复用原跨平台采样选项，不另外引入一套编译器配置。
         type: boolean
         default: true
-    secrets:
-      # 显式传递最小凭据集合，不通过 secrets: inherit 暴露其他发布密钥。
-      GENTOO_OVERLAY_SSH_KEY:
-        # 纯资产不需要软件源凭据，程序发布在 preflight 检查存在性。
-        required: false
 
 concurrency:
   # 发布串行组保持到整个 hotfix 流程结束，普通网站发布在此期间等待。
@@ -69,16 +64,10 @@ jobs:
         working-directory: hotfix-source
         env:
           GH_TOKEN: ${{ github.token }}
-          MMM_GENTOO_OVERLAY_SSH_KEY: ${{ secrets.GENTOO_OVERLAY_SSH_KEY }}
         run: |
           # 分支错、基线错或无已发布 Release 时立刻失败，不消费构建资源。
           set -euo pipefail
           [[ "${GITHUB_REF}" == refs/heads/hotfix ]]
-          # 在构建和公开写入前检查凭据，纯资产保持原路径。
-          if [[ "${HOTFIX_SCOPE}" != assets ]]; then
-            # 失败发生在构建之前，避免消耗完整矩阵后才发现不能同步软件源。
-            test -n "${MMM_GENTOO_OVERLAY_SSH_KEY}"
-          fi
           # pin 文件只能在 tag 后首个维护提交声明；后补文件不放行。
           # 同名 tag 移动、源码版本不符或新正式 tag 混入都会拒绝。
           # 普通第二父链功能合并不改变维护基线，可以正常通过。
@@ -119,8 +108,8 @@ jobs:
 
   publish:
     permissions:
-      # 只追加不可变的 hotfix tag；正式 tag 和 Release 保持不变。
-      contents: write
+      # 此 job 只发布网页，源码 tag 写权限归后续软件源 job。
+      contents: read
     # 所有下载、摘要、解包和 SDK 操作只在低频 CI 发布路径执行。
     # 只有资产模式允许跳过程序构建，其他范围必须消费本次成功聚合。
     # always 只用于允许 assets 模式跳过 build，绝不忽略 preflight 或构建失败。
@@ -225,30 +214,64 @@ jobs:
           # 远端暂存路径只使用 GitHub 的数字运行身份。
           set -euo pipefail
           stage="/home/podman/.local/share/mmm-cdn/hotfix-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # SSH 在长时间远端上传期间发送保活，链路失效在一分钟内退出。
+          ssh_options=(-o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4)
           # 暂存目录按运行和尝试隔离，失败内容不会被后续发布静默复用。
-          ssh -p 22 podman@xiang233.top "mkdir -p '${stage}/tools'"
-          scp -P 22 -r hotfix-output/. "podman@xiang233.top:${stage}/"
-          scp -P 22 scripts/hotfix/prepare_assets.py scripts/hotfix/prepare_program.py scripts/hotfix/publish_assets.py "podman@xiang233.top:${stage}/tools/"
+          ssh "${ssh_options[@]}" -p 22 podman@xiang233.top "mkdir -p '${stage}/tools'"
+          scp "${ssh_options[@]}" -P 22 -r hotfix-output/. "podman@xiang233.top:${stage}/"
+          scp "${ssh_options[@]}" -P 22 scripts/hotfix/prepare_assets.py scripts/hotfix/prepare_program.py scripts/hotfix/publish_assets.py "podman@xiang233.top:${stage}/tools/"
+          # R2 密钥留在服务器，只将限时单对象许可写入私有临时文件。
+          # 由 Runner 直传同一候选，避开网站服务器向 R2 的慢速出口。
+          # 许可位于 workspace 外，且创建时间晚于 Artifact 上传，不会被归档。
+          upload_grants="$(mktemp "${RUNNER_TEMP}/mmm-hotfix-upload.XXXXXX")"
+          chmod 600 "${upload_grants}"
+          trap 'rm -f -- "${upload_grants}"' EXIT
+          ssh "${ssh_options[@]}" -p 22 podman@xiang233.top "/home/podman/.local/share/mmm-cdn/venv/bin/python '${stage}/tools/publish_assets.py' --stage '${stage}' --root /home/podman/data/caddy/web/mmm --sign-uploads" > "${upload_grants}"
+          python3 scripts/hotfix/direct_upload.py --stage hotfix-output --grants "${upload_grants}"
+          # 服务器随后仍逐对象回读正文并校验公开 CDN，通过后才切清单。
           # 密钥只留在 podman 主机，CI 不下载或打印 credentials.env。
           # 上传器先核对原清单、全部制品和公开 CDN 字节，最后切换清单。
           # 同版本目录不可覆盖不同内容，重试只能复用相同对象。
           # 资产清单先切换，程序清单最后切换，资源须兼容旧修订。
           # 此步骤不重新部署网站，也不调用会改写两个清单的普通 CDN main。
           # 只切换选择范围的清单，网站构建和普通 release 元数据不被重写。
-          ssh -p 22 podman@xiang233.top "/home/podman/.local/share/mmm-cdn/venv/bin/python '${stage}/tools/publish_assets.py' --stage '${stage}' --root /home/podman/data/caddy/web/mmm --apply"
+          # 远端最长运行 45 分钟；断连留下的进程不会无限期持有发布锁。
+          # 无缓冲输出及时送回 Actions，进度不再等到进程结束才刷新。
+          ssh "${ssh_options[@]}" -p 22 podman@xiang233.top "timeout --signal=TERM --kill-after=30s 45m /home/podman/.local/share/mmm-cdn/venv/bin/python -u '${stage}/tools/publish_assets.py' --stage '${stage}' --root /home/podman/data/caddy/web/mmm --apply"
 
+  packages:
+    # 网页发布与软件源分成独立 job，重跑失败任务只恢复软件源，不重新创建修订。
+    # 原候选由同一 run 的不可变 Artifact 提供，不能从共享构建目录重新选包。
+    needs: publish
+    if: inputs.scope != 'assets'
+    permissions:
+      # 下载原候选及创建源码 hotfix tag；跨仓 HTTPS 写入沿用 Runner 已有凭据。
+      actions: read
+      contents: write
+    runs-on: [self-hosted, Linux, X64, debian]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # 发布脚本与程序绑定同一源码 SHA，重试也不追随分支推进。
+          ref: ${{ inputs.source_ref }}
+          path: hotfix-package-source
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          # 同一 run 的候选由网页发布前持久化，不重建或覆盖同名制品。
+          name: hotfix-${{ github.run_id }}
+          path: hotfix-package-candidate
       - name: Publish APT and Gentoo hotfix packages
         # 后半流程失败不回滚已公开的网页程序，Artifact 用于仅恢复软件源。
         # 网页程序先发布成功，再对照公开身份更新包管理器，失败明确标记任务失败。
-        if: inputs.scope != 'assets'
-        working-directory: hotfix-source
+        working-directory: hotfix-package-source
         env:
           GH_TOKEN: ${{ github.token }}
-          MMM_GENTOO_OVERLAY_SSH_KEY: ${{ secrets.GENTOO_OVERLAY_SSH_KEY }}
         run: |
           set -euo pipefail
           base="$(python3 -c "import json; print(json.load(open('hotfix-base.json'))['tag'])")"
-          debs=("${PWD}"/hotfix-output/packages/musicmapmaker-next_*.deb)
+          debs=("${GITHUB_WORKSPACE}"/hotfix-package-candidate/packages/musicmapmaker-next_*.deb)
           # 所有输入来自前面已验证的本轮候选，禁止从共享构建缓存选包。
           [[ "${#debs[@]}" == 1 && -f "${debs[0]}" ]]
           # 恢复入口只镜像已公开程序，绝不重新切换网页或移动正式 tag。

@@ -98,8 +98,12 @@ struct PackageDialogState {
     /// @brief BMS 首拍对齐始终选中一种策略，点击另一项只切换策略。
     /// @note 不使用可空值或两个布尔值，避免出现全选或全不选。
     BmsPackageAlignmentMode bmsAlignmentMode{
-        BmsPackageAlignmentMode::RewriteAudio
+        BmsPackageAlignmentMode::ShiftEvents
     };
+
+    /// @brief 本次打包是否显式进行有损 MyO2 网格吸附。
+    /// @note 默认保留原精度，避免密集变速被吸附合并后累计偏移。
+    bool m_bmsMyO2Grid{ false };
 
     /// @brief 当前打包格式下可选择的候选文件。
     std::vector<PackageCandidateFile> candidateFiles;

@@ -1,5 +1,9 @@
+#include "../src/beatmap/BmsMyO2Grid.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/note/Hold.h"
+#include "mmm/note/Note.h"
+#include "mmm/timing/Timing.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -8,9 +12,51 @@
 #include <map>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 namespace
 {
+/// @brief 独立数值夹具验证 MyO2 中点舍入、跨小节及冲突拒绝。
+/// @return 兼容转换没有丢弃事件且使用确定的建议网格时为 true。
+/// @note 测试直接给定拍位，不借用 writer 反算期望时间。
+bool verifyMyO2Grid()
+{
+    using namespace MMM::Bms;
+    if ( myO2Round(.5) != 0 || myO2Round(1.5) != 2 || myO2Round(2.5) != 2 )
+        return false;
+    // 1 tick 到两种网格同距，原工具建议 48 分，结果归零。
+    ExportRows single{ { { 0, 0x11 }, { { 1.0 / 192, 1 } } } };
+    if ( !quantizeMyO2Rows(single) ||
+         single.begin()->second.front().first != 0 )
+        return false;
+    // 小节尾吸附至下一小节；同拍 BGM 复音必须保留。
+    ExportRows boundary{ { { 0, 1 },
+                           { { 191.0 / 192, 1 }, { 191.0 / 192, 2 } } } };
+    if ( !quantizeMyO2Rows(boundary) || boundary.count({ 1, 1 }) != 1 ||
+         boundary.begin()->second.size() != 2 )
+        return false;
+    // 玩家音符不能以覆盖同槽的方式通过零偏移检查。
+    ExportRows collision{
+        { { 0, 0x11 }, { { .1 / 192, 1 }, { .2 / 192, 2 }, { 1.0 / 192, 3 } } }
+    };
+    if ( quantizeMyO2Rows(collision) ) return false;
+    // 已位于 64 分网格上的位置不应发生移动。
+    ExportRows aligned{ { { 0, 0x11 },
+                          { { 3.0 / 192, 1 }, { 9.0 / 192, 2 } } } };
+    if ( !quantizeMyO2Rows(aligned) ||
+         aligned.begin()->second.front().first != 3.0 / 192 )
+        return false;
+    // 原工具把亚 tick 距离逐次舍入为零，但仍可能显示警告行。
+    // 兼容模式不能因为两列都为零就保留这些原始浮点残差。
+    ExportRows residual{ { { 0, 0x11 }, { { 4.1 / 192, 1 } } } };
+    if ( !quantizeMyO2Rows(residual) ||
+         residual.begin()->second.front().first != 4.0 / 192 )
+        return false;
+    return true;
+}
+
 /// @brief 明确验证导入后的音乐时间，不用 writer 的计算作为期望。
 /// @param map 通过公共格式入口重新载入的独立结果。
 /// @return 物件、资源和 STOP 的数量与绝对时间全部匹配时返回 true。
@@ -51,6 +97,175 @@ bool verify(const MMM::BeatMap& map)
     }
     return stops == 1;
 }
+/// @brief 验证重复 BPM 不消耗新编号，同时保留全部变速位置和值。
+/// @param root 构建树内的测试输出目录，不接触来源谱面。
+/// @return 重复定义复用、接近值区分及容量边界均成立时为真。
+/// @note 变速次数超过两位编号容量；真正不同的 BPM 仍受容量限制。
+bool verifyBpmDefinitionReuse(const std::filesystem::path& root)
+{
+    // 明确使用写出器支持的键数，避免容量测试先在格式能力检查中返回。
+    // 参考 BPM 与首条红线一致，初始积分不依赖默认元数据。
+    MMM::BeatMap map;
+    map.m_baseMapMetadata.track_count    = 4;
+    map.m_baseMapMetadata.preference_bpm = 120;
+    // 第三个值故意接近 120，禁止用近似比较把不同速度合并。
+    // 每次切换恰好间隔一拍，期望时刻独立按上一段 BPM 累加。
+    constexpr std::array<double, 3> speeds{ 120, 240, 120.000001 };
+    double                          milliseconds = 0;
+    for ( int i = 0; i < 1652; ++i ) {
+        MMM::Timing timing;
+        timing.m_timestamp             = milliseconds;
+        timing.m_timingEffect          = MMM::TimingEffect::BPM;
+        timing.m_timingEffectParameter = speeds[i % speeds.size()];
+        map.m_timings.push_back(timing);
+        // 当前速度控制下一段一拍的时长，切回旧值也不能取消这一段。
+        // 总拍数小于标准小节容量，失败只能来自定义分配或事件处理。
+        milliseconds += 60000 / timing.m_timingEffectParameter;
+    }
+    // 保留实际判定物件，使公共读取入口不能把空谱默认值当作成功。
+    // 物件位于零点，容量测试改变时轴后也不引入非法负时间。
+    MMM::Note note;
+    map.m_noteData.notes.push_back(note);
+    /// @brief 独立统计磁盘中的编号定义，排除没有编号的初始 #BPM。
+    // 只检查协议文本，不借用 writer 内部表，避免循环验证分配算法。
+    const auto definitions = [](const std::filesystem::path& path) {
+        std::ifstream file(path);
+        std::string   line;
+        int           count = 0;
+        while ( std::getline(file, line) )
+            if ( line.starts_with("#BPM") && line.size() > 6 && line[6] == ' ' )
+                ++count;
+        return count;
+    };
+    // 原精度与默认兼容模式都必须复用定义，不能只修复其中一条分支。
+    // 整拍夹具在两种网格上都可精确表达，任何移动都属于回归。
+    for ( const auto* mode : { "0", "1" } ) {
+        // 每轮从同一份未修改模型保存，避免上轮加载结果掩盖来源变化。
+        // 文件名隔离两个模式，不能把旧文件误认为本轮成功的结果。
+        map.m_metadata.map_properties[MMM::MapMetadataType::BMS]["myo2_grid"] =
+            mode;
+        const auto path = root / (std::string("repeated_bpm_") + mode + ".bms");
+        if ( !map.saveToFile(path) || definitions(path) != 3 ) return false;
+        const auto restored = MMM::BeatMap::loadFromFile(path);
+        // 读取器额外生成初始 BPM；其后每条通道事件都必须独立保留。
+        // 比较事件数可发现误把重复定义当成冗余变速并删除的实现。
+        if ( restored.m_noteData.notes.size() != 1 ||
+             restored.m_timings.size() != map.m_timings.size() + 1 )
+            return false;
+        for ( std::size_t i = 0; i < map.m_timings.size(); ++i ) {
+            // 按原有稳定顺序逐一匹配，而非只统计不同 BPM 的集合。
+            // 重复切换到同一速度仍是时间线事件，必须有对应输出。
+            const auto& actual   = restored.m_timings[i + 1];
+            const auto& expected = map.m_timings[i];
+            // 累积时间与每次 BPM 同时比较，防止只保持事件数量。
+            // 接近值的差异大于断言容差，因此不能被宽松比较掩盖。
+            if ( actual.m_timingEffect != MMM::TimingEffect::BPM ||
+                 std::abs(actual.m_timestamp - expected.m_timestamp) > 1e-4 ||
+                 std::abs(actual.m_timingEffectParameter -
+                          expected.m_timingEffectParameter) > 1e-8 )
+                return false;
+        }
+    }
+    // 真正超过 1295 种不同 BPM 时仍应拒绝，不能回绕并覆盖旧定义。
+    // 使用独立内容作为目标，失败还必须保证已有用户文件不被截断。
+    map.m_timings.clear();
+    // 容量夹具保留原来的零点物件，替换的只是独立测试模型的时轴。
+    // 不读取用户资源，因此失败边界可在各平台 CTest 中直接复现。
+    milliseconds = 0;
+    for ( int i = 0; i < 1296; ++i ) {
+        MMM::Timing timing;
+        timing.m_timestamp             = milliseconds;
+        timing.m_timingEffect          = MMM::TimingEffect::BPM;
+        timing.m_timingEffectParameter = 120 + i;
+        map.m_timings.push_back(timing);
+        milliseconds += 60000 / timing.m_timingEffectParameter;
+    }
+    const auto boundary = root / "bpm_definition_capacity.bms";
+    {
+        std::ofstream file(boundary);
+        file << "preserve-existing-chart\n";
+    }
+    if ( map.saveToFile(boundary) ) return false;
+    {
+        // 在失败调用之后重新打开文件，避免复用旧流缓冲绕过完整性检查。
+        // 已有内容必须逐字保留，返回 false 不能掩盖提前截断的副作用。
+        std::ifstream file(boundary);
+        std::string   line;
+        if ( !std::getline(file, line) || line != "preserve-existing-chart" )
+            return false;
+    }
+    // 精确达到容量上限仍合法，避免把最后一个 ZZ 编号错误地排除。
+    // 移除最后一种速度，不删除任何仍在验证范围内的通道事件。
+    map.m_timings.pop_back();
+    return map.saveToFile(boundary) && definitions(boundary) == 1295;
+}
+
+/// @brief 默认保存密集离拍变速时，逐事件验证时轴与长条两端精度。
+/// @param root 构建树内的输出目录，生成夹具不依赖外部曲库。
+/// @return 每条变速、点按和长条均未被吸附移动或合并时为真。
+/// @note 毫秒位置直接指定，不能用写出器拍位积分反算测试期望。
+bool verifyDenseBpmTiming(const std::filesystem::path& root)
+{
+    MMM::BeatMap map;
+    map.m_baseMapMetadata.track_count = 4;
+    // 切换间隔小于常见兼容网格，旧默认会合并多次变速并产生累计漂移。
+    // 交替速度相差明显，不能靠全谱平均 BPM 伪造相同总时长。
+    constexpr std::array<double, 3> speeds{ 66, 198, 330 };
+    for ( int i = 0; i < 128; ++i ) {
+        MMM::Timing timing;
+        timing.m_timestamp             = i * 7.25;
+        timing.m_timingEffect          = MMM::TimingEffect::BPM;
+        timing.m_timingEffectParameter = speeds[i % speeds.size()];
+        map.m_timings.push_back(timing);
+        // 同刻重复红线来自真实曲库，不能因共用定义而被序列化器覆盖。
+        if ( i % 31 == 0 ) map.m_timings.push_back(timing);
+    }
+    // 点按故意离拍；只保留红线而继续默认吸附 Note 也不能通过。
+    // 分别比较早段和晚段，覆盖累计积分误差，而非只看第一颗物件。
+    for ( double time : { 1.125, 133.25, 950.123 } ) {
+        MMM::Note note;
+        note.m_timestamp = time;
+        map.m_noteData.notes.push_back(note);
+    }
+    // 长条跨越多次 BPM 切换，头部正确不能替代尾部时间的独立检查。
+    // 使用另一轨避免无关的 Note/Hold 判定重叠影响格式验证。
+    MMM::Hold hold;
+    hold.m_track     = 1;
+    hold.m_timestamp = 300.25;
+    hold.m_duration  = 600.5;
+    map.m_noteData.holds.push_back(hold);
+    const auto path = root / "dense_bpm_default.bms";
+    // 不设置任何精度属性，真正验证普通保存入口的保真默认值。
+    // 只允许文本编码误差，不能通过删除事件降低输出分辨率。
+    if ( !map.saveToFile(path) ) return false;
+    const auto restored = MMM::BeatMap::loadFromFile(path);
+    if ( restored.m_timings.size() != map.m_timings.size() + 1 ||
+         restored.m_noteData.notes.size() != map.m_noteData.notes.size() ||
+         restored.m_noteData.holds.size() != 1 )
+        return false;
+    for ( std::size_t i = 0; i < map.m_timings.size(); ++i ) {
+        const auto& actual   = restored.m_timings[i + 1];
+        const auto& expected = map.m_timings[i];
+        // 相同 BPM 可重复引用定义，但每次切换的时刻和值均应保持。
+        // 时刻容差与现有跨格式探针一致，不能容忍兼容吸附的毫秒级漂移。
+        if ( actual.m_timingEffect != MMM::TimingEffect::BPM ||
+             std::abs(actual.m_timestamp - expected.m_timestamp) > .03 ||
+             std::abs(actual.m_timingEffectParameter -
+                      expected.m_timingEffectParameter) > 1e-8 )
+            return false;
+    }
+    for ( std::size_t i = 0; i < map.m_noteData.notes.size(); ++i )
+        if ( std::abs(map.m_noteData.notes[i].m_timestamp -
+                      restored.m_noteData.notes[i].m_timestamp) > .03 )
+            return false;
+    // 尾部由起点加持续时间得到；单比持续时间可能掩盖整体漂移。
+    // 头尾均需满足同一精度，不能把误差转移到长条的另一端。
+    const auto& actualHold = restored.m_noteData.holds.front();
+    return std::abs(actualHold.m_timestamp - hold.m_timestamp) <= .03 &&
+           std::abs(actualHold.m_timestamp + actualHold.m_duration -
+                    hold.m_timestamp - hold.m_duration) <= .03;
+}
+
 /// @brief 检查四至八键在三个后缀下的实际通道、长条端点和重复行。
 /// @param root 调用方提供的构建输出目录。
 /// @param seed 含有效资源绑定的基准谱面，只读取元数据及物件模板。
@@ -74,6 +289,10 @@ bool verifyKeyboardChannels(const std::filesystem::path& root,
             MMM::BeatMap map;
             map.m_baseMapMetadata             = seed.m_baseMapMetadata;
             map.m_baseMapMetadata.track_count = tracks;
+            // 本夹具专门检查只读末行的转换器，因此明确选择兼容模式。
+            // 默认保真允许标准叠加行，其时轴契约由密集变速夹具独立验证。
+            map.m_metadata
+                .map_properties[MMM::MapMetadataType::BMS]["myo2_grid"] = "1";
             // 使用整拍时轴，使失败只来自通道或文本结构，不混入速度误差。
             // 各轨均有四个点按以及一个同小节内起止的长条。
             MMM::Timing bpm;
@@ -171,8 +390,181 @@ bool verifyKeyboardChannels(const std::filesystem::path& root,
 }  // namespace
 
 /// @brief 生成独立夹具并验证 BMS、MMM 两条往返路径及失败边界。
+/// @param argc 普通回归接收输出目录；外部探针接收模式、来源及目标。
+/// @param argv 路径由调用方提供，所有生成物必须位于构建输出目录。
+/// @return 零表示验证全部通过；非零区分加载、保存、数量与偏移失败。
+/// @note 外部探针只读用户来源，不创建项目或重写媒体文件。
+/// @note 普通模式验收原精度，有损模式只记录实际移动而不宣称无损。
+/// @note 报告同时包含判定、音乐时轴及 BGM，三者不能互相抵扣。
+/// @note 同一入口供 CTest、手动复现和历史曲库回归使用。
+/// @warning 低频离线测试，完整遍历与排序仅作用于独立验证记录。
 int main(int argc, char** argv)
 {
+    // 批量探针只调用生产读写入口，输出由外部驱动逐份独立检查。
+    // 不生成普通单元测试夹具，避免数千份语料重复覆盖同一目录。
+    // 加载失败必须独立计数，不能把默认空谱保存成功当作覆盖通过。
+    if ( argc == 4 && (std::string_view(argv[1]) == "--export" ||
+                       std::string_view(argv[1]) == "--export-myo2") ) {
+        auto source = MMM::BeatMap::loadFromFile(argv[2]);
+        // 兼容路径与普通路径共享生产导出器，仅显式覆盖本次模式。
+        source.m_metadata
+            .map_properties[MMM::MapMetadataType::BMS]["myo2_grid"] =
+            std::string_view(argv[1]) == "--export-myo2" ? "1" : "0";
+        if ( source.m_baseMapMetadata.map_path.empty() ) return 30;
+        if ( !source.saveToFile(argv[3]) ) return 31;
+        const auto target = MMM::BeatMap::loadFromFile(argv[3]);
+        // 独立核对音符数量，避免兼容转换以丢弃音符换取零偏移。
+        // 原始谱面永远只读；所有检查只作用于派生的导出结果。
+        if ( source.m_noteData.notes.size() != target.m_noteData.notes.size() ||
+             source.m_noteData.holds.size() != target.m_noteData.holds.size() ||
+             source.m_audioSamples.size() != target.m_audioSamples.size() )
+            return 32;
+        // 按类型和轨道排序后比较头尾，排除同刻和弦容器换序。
+        // 兼容模式允许主动移动，普通模式仍坚持亚毫秒时间精度。
+        // 源文件没有被量化，所以它是普通模式时间精度的独立基准。
+        // 不通过重新积分导出 BPM 来制造与 writer 相同的预期结果。
+        // 头尾分别比较，不能只比较持续时长掩盖整体平移。
+        // 使用轨道作为第一排序键，保证跨轨交换不会误判为成功。
+        // 普通 Note 和 Hold 分开调用，防止两种类型数量互相抵消。
+        /// @brief 比较数量已相等的同类型物件集合，返回最大毫秒差。
+        // 一至三键导出会补空转盘；比较时应用已公开的键位映射。
+        // PMS 不补转盘，其余键数也不能套用此偏移。
+        const int laneOffset =
+            source.m_baseMapMetadata.track_count <= 3 &&
+                    std::filesystem::path(argv[3]).extension() != ".pms"
+                ? 1
+                : 0;
+        const auto timingError = [laneOffset](const auto& left,
+                                              const auto& right) {
+            using Entry = std::tuple<int, double, double>;
+            std::vector<Entry> a, b;
+            // 中间记录只保存数值，不复制绑定资源或修改源物件身份。
+            // 排序的是独立测试数组，不依赖加载器的容器排列顺序。
+            /// @brief 提取轨道、起点及终点，作为两侧匹配的规范顺序。
+            const auto collect =
+                [](const auto& objects, auto& entries, int offset) {
+                    for ( const auto& object : objects ) {
+                        double length = 0;
+                        if constexpr ( requires { object.m_duration; } )
+                            length = object.m_duration;
+                        entries.emplace_back(object.m_track + offset,
+                                             object.m_timestamp,
+                                             object.m_timestamp + length);
+                    }
+                    std::sort(entries.begin(), entries.end());
+                };
+            collect(left, a, laneOffset);
+            collect(right, b, 0);
+            // 轨道不一致使用明确的大值失败，不能按时间近似忽略轨道。
+            // 输入数量已经检查，遍历期间不会访问缺失的目标对象。
+            double error = 0;
+            for ( std::size_t i = 0; i < a.size(); ++i ) {
+                if ( std::get<0>(a[i]) != std::get<0>(b[i]) ) return 1e100;
+                error = std::max(
+                    { error,
+                      std::abs(std::get<1>(a[i]) - std::get<1>(b[i])),
+                      std::abs(std::get<2>(a[i]) - std::get<2>(b[i])) });
+            }
+            return error;
+        };
+        const double delta = std::max(
+            timingError(source.m_noteData.notes, target.m_noteData.notes),
+            timingError(source.m_noteData.holds, target.m_noteData.holds));
+        /// @brief 收集实际音乐时轴，忽略目标格式不承载的纯视觉滚速。
+        // 读取器额外创建一条头部 BPM；只移除这一条，不合并重复变速。
+        // 按时刻稳定排序，避免来源容器顺序不同造成错误的配对。
+        const auto musicTimings = [](const MMM::BeatMap& map, bool initial) {
+            // SCROLL 不参与音乐时钟；不能为了消除数量差过滤 BPM 或 STOP。
+            // 初始头部不是一次来源变速，只在目标侧扣除读取器补出的那条。
+            std::vector<std::tuple<double, int, double>> values;
+            for ( const auto& timing : map.m_timings )
+                if ( timing.m_timingEffect == MMM::TimingEffect::BPM ||
+                     timing.m_timingEffect == MMM::TimingEffect::STOP )
+                    values.emplace_back(timing.m_timestamp,
+                                        static_cast<int>(timing.m_timingEffect),
+                                        timing.m_timingEffectParameter);
+            if ( initial && !values.empty() ) values.erase(values.begin());
+            std::stable_sort(
+                values.begin(), values.end(), [](const auto& a, const auto& b) {
+                    return std::get<0>(a) < std::get<0>(b);
+                });
+            return values;
+        };
+        // 真实曲库还包含同刻重复红线，逐条保留能防止编号复用被误写成事件去重。
+        const auto beforeTimings = musicTimings(source, false);
+        const auto afterTimings  = musicTimings(target, true);
+        // 数量不同即标记失败，后续配对的偏移只供定位，不能成为通过依据。
+        // 只遍历两侧共同范围，避免异常来源在诊断时导致越界。
+        bool   timingsPreserved = beforeTimings.size() == afterTimings.size();
+        double timingDelta      = 0;
+        // 同时检查数量、类型和值，不能把相同最终 BPM 当作完整变速序列。
+        // 参数容差只容纳十二位有效数字的文本编码，不允许近似合并速度。
+        for ( std::size_t i = 0;
+              i < std::min(beforeTimings.size(), afterTimings.size());
+              ++i ) {
+            const auto& a = beforeTimings[i];
+            const auto& b = afterTimings[i];
+            // BPM 参数是速度值，STOP 参数是秒；类型一致才允许比较其数值。
+            // 相对容差兼顾大 BPM，最小绝对尺度避免接近零的 STOP 被误判。
+            timingsPreserved &=
+                std::get<1>(a) == std::get<1>(b) &&
+                std::abs(std::get<2>(a) - std::get<2>(b)) <=
+                    std::max(1., std::abs(std::get<2>(a))) * 1e-10;
+            timingDelta = std::max(timingDelta,
+                                   std::abs(std::get<0>(a) - std::get<0>(b)));
+        }
+        /// @brief 按音频引用与触发时刻匹配 BGM，避免只测物件而漏掉音画错位。
+        // 同文件多次触发分别保留；排序只规范测试记录，不修改来源样本。
+        const auto audioTimings = [](const MMM::BeatMap& map) {
+            std::vector<std::pair<std::string, double>> values;
+            for ( const auto& sample : map.m_audioSamples )
+                values.emplace_back(sample.m_audioResourceId,
+                                    sample.effectiveTimestamp());
+            std::sort(values.begin(), values.end());
+            return values;
+        };
+        const auto beforeAudio = audioTimings(source);
+        const auto afterAudio  = audioTimings(target);
+        // 即使不解码音频，也必须证明主曲的触发点仍与物件共用时轴。
+        // 来源没有自动采样时，空集合只能与目标的空集合匹配。
+        bool   audioPreserved = beforeAudio.size() == afterAudio.size();
+        double audioDelta     = 0;
+        // 先检查身份再比较时刻，不能把漏掉的 Main 与其他自动音效互相抵消。
+        // 这些离线检查不启动音频设备，也不读取或重编码音频文件。
+        for ( std::size_t i = 0;
+              i < std::min(beforeAudio.size(), afterAudio.size());
+              ++i ) {
+            audioPreserved &= beforeAudio[i].first == afterAudio[i].first;
+            audioDelta = std::max(
+                audioDelta,
+                std::abs(beforeAudio[i].second - afterAudio[i].second));
+        }
+        // 旁路报告使批量驱动记录主动吸附幅度，不把零网格偏移等同无损。
+        // 报告跟随导出路径，所有临时数据均落在显式输出目录。
+        // JSON 仅含有限的最大误差，失败行仍会保留进程日志。
+        std::ofstream stats(std::string(argv[3]) + ".json");
+        // 先落下完整报告再返回偏移失败，使批量工具保留真实误差与事件数。
+        // 布尔值显式写成 JSON 字面量，不依赖进程流的 boolalpha 状态。
+        stats << "{\"max_note_delta_ms\":" << delta
+              << ",\"max_timing_delta_ms\":" << timingDelta
+              << ",\"max_bgm_delta_ms\":" << audioDelta
+              << ",\"timing_events_before\":" << beforeTimings.size()
+              << ",\"timing_events_after\":" << afterTimings.size()
+              << ",\"timings_preserved\":"
+              << (timingsPreserved ? "true" : "false")
+              << ",\"audio_preserved\":" << (audioPreserved ? "true" : "false")
+              << "}";
+        // 阈值与已有单文件现场探针一致，远小于 osu 的整数毫秒量化。
+        // 兼容模式的移动是用户显式选择，记录但不套用普通模式阈值。
+        if ( std::string_view(argv[1]) == "--export" && delta > .25 ) return 33;
+        // 普通导出对完整音乐时轴执行同一偏移阈值，不能只通过音符检查。
+        // 显式有损模式仍记录数据，事件合并及偏移不能被报告成保真成功。
+        if ( std::string_view(argv[1]) == "--export" &&
+             (!timingsPreserved || !audioPreserved || timingDelta > .25 ||
+              audioDelta > .25) )
+            return 34;
+        return 0;
+    }
     // 输出目录由 CTest 传入构建树，测试不会写入只读资源目录。
     // 独立命令运行同样必须明确提供输出位置。
     if ( argc != 2 && argc != 3 ) return 1;
@@ -180,6 +572,9 @@ int main(int argc, char** argv)
     std::error_code             error;
     std::filesystem::create_directories(root, error);
     if ( error ) return 2;
+    if ( !verifyMyO2Grid() ) return 40;
+    if ( !verifyBpmDefinitionReuse(root) ) return 41;
+    if ( !verifyDenseBpmTiming(root) ) return 42;
     // 每轮重写生成夹具，不能依赖上一次导出留下的内容。
     // WAV 名称只用于模型绑定验证，不需要音频解码或真实设备。
     const auto source = root / "source.bms";
@@ -291,6 +686,9 @@ int main(int argc, char** argv)
     // 毫秒量化位置、非默认增益和视觉滚速共同覆盖外部谱面的常见导出路径。
     auto keyboard = MMM::BeatMap::loadFromFile(root / "source.bms");
     keyboard.m_baseMapMetadata.track_count = 4;
+    // 此夹具独立验证旧精度数值与通道降级，明确关闭默认有损吸附。
+    keyboard.m_metadata.map_properties[MMM::MapMetadataType::BMS]["myo2_grid"] =
+        "0";
     // 四轨夹具不沿用原六轨长条，避免来源键数与物件轨号互相矛盾。
     // 原来的长条往返已由 verify 覆盖，这里专门检查四轨转换边界。
     keyboard.m_noteData.holds.clear();
@@ -333,7 +731,10 @@ int main(int argc, char** argv)
         // 现场输入使用公共格式分派，覆盖 OSU 载入而非手工重建近似模型。
         // 源文件只读，输出固定为 external.bms，避免覆盖用户已保存的谱面。
         // 四至八轨的预期轨号与来源一致，与生产通道计算独立比较。
-        const auto external = MMM::BeatMap::loadFromFile(argv[2]);
+        auto external = MMM::BeatMap::loadFromFile(argv[2]);
+        // 可选诊断保留原精度，正式导出默认吸附由命令链路回归覆盖。
+        external.m_metadata
+            .map_properties[MMM::MapMetadataType::BMS]["myo2_grid"] = "0";
         if ( !external.saveToFile(root / "external.bms") ) return 14;
         const auto result = MMM::BeatMap::loadFromFile(root / "external.bms");
         if ( result.m_noteData.notes.size() !=

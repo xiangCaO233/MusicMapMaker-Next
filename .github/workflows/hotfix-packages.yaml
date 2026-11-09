@@ -43,7 +43,7 @@ jobs:
           # 只读取发布脚本，单独目录不替换原构建和 hotfix 的 checkout。
           path: hotfix-package-recovery
           persist-credentials: false
-          # 代码 checkout 不保留写权限，跨仓写入只由专用密钥完成。
+          # 代码 checkout 不保留写权限，跨仓 HTTPS 写入沿用 Runner 已有凭据。
           lfs: false
           submodules: false
       - uses: actions/download-artifact@v4
@@ -58,10 +58,9 @@ jobs:
       - name: Recover APT and Gentoo synchronization
         working-directory: hotfix-package-recovery
         env:
-          # 私钥通过环境传入，绝不写入 Summary 或上传为恢复制品。
+          # 主仓短期 token 只读取运行身份及写入热修复 tag。
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN: ${{ inputs.run_id }}
-          MMM_GENTOO_OVERLAY_SSH_KEY: ${{ secrets.GENTOO_OVERLAY_SSH_KEY }}
           RECOVERY_CANDIDATE: ${{ github.workspace }}/hotfix-package-candidate-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           # 包身份和当前公开清单再次校验，通过后才写软件源。
