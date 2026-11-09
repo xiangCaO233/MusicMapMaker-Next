@@ -145,6 +145,30 @@ public:
                 const UI::Interaction::SurfaceFrame& frame, float width,
                 float height) override
     {
+        // 安全帧完成方案切换后清除旧方案弹层，不能让触控菜单沿用鼠标菜单身份。
+        // 仅在代际变化时关闭；常态帧不能反复关闭纯鼠标方案自己打开的弹层。
+        const auto generation = UI::Interaction::profileGeneration();
+        if ( m_generation != generation ) {
+            m_generation = generation;
+            m_gesture.cancelPending();
+            auto ctx = context(canvas);
+            ImGui::PushID(ctx.cameraId.c_str());
+            if ( ImGui::BeginPopup("SelectionEditMenu") ) {
+                ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+            ImGui::PopID();
+            m_waitRelease = false;
+        }
+        // 桌面解释器随画布创建一次，能力变化不在热路径上分配新解释器。
+        // 原始指针输入直接透传，不让长按阈值延迟经典方案的起笔。
+        // 未激活的解释器不消费本帧事件，两个状态机不能同时响应一次按下。
+        // 操作方案决定是否解释触控，安卓平台本身不再隐式启用长按菜单。
+        // 非触控方案复用完整桌面解释器，保留经典右键与纯鼠标扩展菜单。
+        if ( !UI::Interaction::activeProfile().touchGestures() ) {
+            m_desktop->update(canvas, manager, snapshot, frame, width, height);
+            return;
+        }
         auto ctx = context(canvas);
         ImGui::PushID(ctx.cameraId.c_str());
         const bool menuOpen = ImGui::IsPopupOpen("SelectionEditMenu");
@@ -420,6 +444,12 @@ private:
     unsigned short m_clickCount{
         1
     };  ///< 回放保留原生双击计数，长按不伪造双击。
+    /// @brief 每画布复用一个桌面解释器，切换方案不创建资源或迁移手势。
+    std::unique_ptr<CanvasInteractionPresentation> m_desktop{
+        createDesktopCanvasInteractionPresentation()
+    };
+    /// @brief 每画布缓存方案代际，切换时丢弃已关闭方案的弹层状态。
+    std::uint64_t       m_generation{ UI::Interaction::profileGeneration() };
     MobileCanvasGesture m_gesture;  ///< 每画布独占，不向公共头传播手势类型。
     bool m_waitRelease{};  ///< 菜单打开的原始触点与释放帧都不能激活按钮。
 };

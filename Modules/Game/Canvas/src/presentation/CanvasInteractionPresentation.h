@@ -83,4 +83,8 @@ protected:
 /// @brief 每个画布构造时只创建一次目标平台实现，调用方不包含平台私有头。
 std::unique_ptr<CanvasInteractionPresentation>
 createCanvasInteractionPresentation();
+/// @brief 经典和纯鼠标方案共用桌面输入解释器，安卓接鼠标时同样可用。
+/// @details 每个画布只构造一次，不在切换方案或逐帧更新时分配。
+std::unique_ptr<CanvasInteractionPresentation>
+createDesktopCanvasInteractionPresentation();
 }  // namespace MMM::Canvas

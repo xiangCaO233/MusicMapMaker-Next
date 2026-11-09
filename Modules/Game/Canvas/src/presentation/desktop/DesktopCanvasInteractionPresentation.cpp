@@ -181,9 +181,9 @@ public:
     }
 };
 }  // namespace
-/// @brief 桌面目标只创建桌面策略；安卓工厂位于另一个编译单元。
+/// @brief 创建可由桌面和安卓鼠标方案复用的输入解释器。
 std::unique_ptr<CanvasInteractionPresentation>
-createCanvasInteractionPresentation()
+createDesktopCanvasInteractionPresentation()
 {
     return std::make_unique<DesktopCanvasInteractionPresentation>();
 }

@@ -62,9 +62,11 @@ public:
     /// @param translate 查询当前语言文本的回调。
     /// @param showCursorSettings 是否允许搜索桌面光标组；纯触屏工作区传入
     /// false。
-    /// @warning UI 热路径仅比较缓存键；重建由用户输入或语言切换触发。
+    /// @param showPointerSettings 是否允许快捷键、操作方案和鼠标专属参数。
+    /// @warning UI 热路径仅比较缓存键；重建由输入、语言或设备能力变化触发。
     void update(std::string_view query, uint32_t translationVersion,
-                const Translate& translate, bool showCursorSettings = true);
+                const Translate& translate, bool showCursorSettings = true,
+                bool showPointerSettings = true);
 
     /// @brief 返回当前语言下的目录，用于显示结果及定位真实设置行。
     const std::vector<SettingsSearchEntry>& entries() const
@@ -94,5 +96,7 @@ private:
     bool m_translated{ false };
     /// @brief 光标组可见性参与查询缓存键，不改变条目身份或持久化配置。
     bool m_showCursorSettings{ true };
+    /// @brief 鼠标连接能力参与缓存键，插拔后原查询也必须重新筛选。
+    bool m_showPointerSettings{ true };
 };
 }  // namespace MMM::UI

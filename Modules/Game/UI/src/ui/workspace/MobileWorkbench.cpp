@@ -263,6 +263,15 @@ void drawMobileWorkbench(UIManager& manager, float scale)
     const float gap = ImGui::GetStyle().ItemSpacing.x;
     const float width =
         std::max(44 * scale, (ImGui::GetContentRegionAvail().x - gap) * .5f);
+    // 保存直接复用正式动作，文件格式偏好、冲突提示与 SAF 回写仍由原处理器负责。
+    // 始终占据工作台第一行，不要求用户使用键盘或展开长按菜单。
+    ImGui::BeginDisabled(!MenuUtil::hasActiveBeatmap(true));
+    if ( MobileActionButton("MobileSave",
+                            ICON_MMM_SAVE,
+                            TR("ui.file.save").data(),
+                            { -1.0f, 48 * scale }) )
+        Interaction::executeAction("SaveBeatmapAction", &manager);
+    ImGui::EndDisabled();
     // 固定两列；紧凑高度使全部六行十二个常驻按钮在手机横屏下无需滚动即可完整展示。
     for ( std::size_t i = 0; i < entries.size(); i += 2 ) {
         // 先量同行的两种文案，再提交任何按钮，避免后量到的长文案压住下一行。

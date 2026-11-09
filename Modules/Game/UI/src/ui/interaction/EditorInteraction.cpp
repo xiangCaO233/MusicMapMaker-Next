@@ -29,6 +29,22 @@ public:
         return TR_CACHE("ui.interaction.classic_desktop").view();
     }
 };
+/// @brief 触控方案复用公共编辑命令，手势状态仍由各个画布独立持有。
+/// @details 长按、轻点回放和触摸菜单按此能力接通，切换方案不伪造键盘修饰键。
+class TouchGestureProfile final : public IEditorInteractionProfile
+{
+public:
+    /// @brief 固定身份用于设备策略和持久化请求，显示名可随语言切换。
+    std::string_view id() const override { return "touch-gestures"; }
+    /// @brief 名称使用全局翻译资源，不在每帧临时构造字符串。
+    std::string_view name() const override
+    {
+        return TR_CACHE("ui.interaction.touch_gestures").view();
+    }
+    /// @brief 只有此方案授权触控长按解释，经典及纯鼠标方案默认关闭。
+    /// @warning 每帧只返回固定布尔值，不访问手势状态或逻辑会话。
+    bool touchGestures() const override { return true; }
+};
 /// @brief 纯鼠标方案通过独立语义选项和上下文菜单提供编辑入口。
 /// @details 意图按表面解释，不改写全局 Shift，避免影响框选和滚动。
 class MouseOnlyProfile final : public IEditorInteractionProfile
@@ -160,6 +176,7 @@ struct Registry {
     {
         m_entries.push_back(std::make_unique<ClassicDesktopProfile>());
         m_entries.push_back(std::make_unique<MouseOnlyProfile>());
+        m_entries.push_back(std::make_unique<TouchGestureProfile>());
         m_active = m_entries.front().get();
     }
 };

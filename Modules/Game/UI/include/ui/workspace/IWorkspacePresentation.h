@@ -47,6 +47,9 @@ public:
     virtual bool usesDesktopLayout() const { return true; }
     /// @brief 是否显示应用内音频输出设备选择；移动端交由系统音频路由管理。
     virtual bool showsAudioOutputDeviceSelector() const { return true; }
+    /// @brief 外壳是否提供鼠标相关设置、快捷键页和方案选择，桌面始终保留。
+    /// @warning 读取 UI 线程能力快照，不在设置控件内查询系统设备。
+    virtual bool showsPointerSettings() const { return true; }
     /// @brief 公共模态的操作按钮，由平台决定触摸尺寸和图标排布。
     /// @warning 每帧只绘制按钮，不在策略内部执行对应业务操作。
     virtual bool actionButton(const char* label, const char* icon, ImVec2 size);
@@ -98,4 +101,14 @@ void workspaceRegisterVerticalDragItem();
 bool workspaceShowsAudioOutputDeviceSelector();
 /// @brief 公共弹窗复用当前平台操作按钮，无帧作用域时保持桌面入口。
 bool workspaceActionButton(const char* label, const char* icon, ImVec2 size);
+}  // namespace MMM::UI
+
+namespace MMM::UI
+{
+/// @brief 当前帧的键鼠设置能力；无外壳的桌面测试保留原有入口。
+/// @warning 常量级虚调用，不枚举设备、不等待平台线程。
+bool workspaceShowsPointerSettings();
+/// @brief 移动端用中性触控文案替换设备限定词，桌面返回原翻译键。
+/// @warning 返回静态字符串或输入借用，不分配临时文本。
+std::string_view workspaceSettingLabelKey(std::string_view key);
 }  // namespace MMM::UI

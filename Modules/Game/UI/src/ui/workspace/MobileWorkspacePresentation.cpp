@@ -8,6 +8,7 @@
 #include "event/core/EventBus.h"
 #include "event/ui/GLFWNativeEvent.h"
 #include "event/ui/UISettingsTabEvent.h"
+#include "graphic/window/InputDevices.h"
 #include "ui/IEditorApplicationService.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
@@ -23,6 +24,7 @@
 #include "ui/workspace/MobileButton.h"
 #include "ui/workspace/MobileDockLayout.h"
 #include "ui/workspace/MobileDrawerMenus.h"
+#include "ui/workspace/MobileInputPolicy.h"
 #include "ui/workspace/MobilePlaybackControls.h"
 #include "ui/workspace/MobileTimelineLabels.h"
 #include "ui/workspace/MobileTouchScroll.h"
@@ -64,6 +66,11 @@ public:
     }
     /// @brief 布局和手势先于原始画布输入，拖动过程中不使用定时阻塞。
     void beginFrame(UIManager& manager) override;
+    /// @brief 控件显隐使用本帧已发布能力，不能按最后一次鼠标移动猜测。
+    bool showsPointerSettings() const override
+    {
+        return m_inputPolicy.hasMouse();
+    }
     /// @brief 数值组件显式声明横向拖动，纵向手势仍可滚动所在内容。
     void registerHorizontalDragItem() override
     {
@@ -168,6 +175,8 @@ private:
     Event::SubscriptionID m_backSubscription{};
     /// @brief 仅在当前 UI 帧借用管理器，帧末清空，不传给后台任务。
     UIManager* m_frameManager{};
+    /// @brief 设备边沿策略只属于当前移动外壳，不修改桌面方案选择。
+    MobileInputPolicy m_inputPolicy;
 };
 
 /// @brief 在业务视图读取输入之前建立本帧移动工作区快照。
@@ -184,7 +193,11 @@ void MobileWorkspacePresentation::beginFrame(UIManager& manager)
     m_size               = viewport->WorkSize;
     auto& config         = Config::AppConfig::instance();
     auto& settings       = config.getEditorSettings();
-    m_scale              = config.getWindowContentScale();
+    // 仅设备边沿应用默认值，连接期间保留用户主动选择的其他操作方案。
+    // 实际切换仍由 UIManager 的安全帧协议执行，不移交半次编辑手势。
+    m_inputPolicy.update(Graphic::hasExternalMouse(),
+                         settings.m_interactionProfileId);
+    m_scale = config.getWindowContentScale();
     // 留白来自用户审美配置，按钮增大时不会挤占这部分边界。
     // 间距设置下限避免高密度屏幕上的相邻命中区视觉粘连。
     m_padding =
@@ -511,7 +524,8 @@ void MobileWorkspacePresentation::processTabMenu(std::string_view id,
              TR_CACHE("ui.window.close").data(),
              m_scale,
              canClose,
-             !m_model.blocksCanvasInput() &&
+             Interaction::activeProfile().touchGestures() &&
+                 !m_model.blocksCanvasInput() &&
                  !m_playbackControls.blocksCanvasInput()) )
         return;
     // open 可能是辅助窗口的栈变量，必须在这次同步 Begin 作用域内写回。

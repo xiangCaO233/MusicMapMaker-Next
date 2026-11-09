@@ -8,6 +8,7 @@
 #include "presentation/CanvasInteractionPresentation.h"
 #include "presentation/mobile/MobileCanvasInteractionPresentation.h"
 #include "ui/interaction/EditorInteraction.h"
+#include <string_view>
 #include <variant>
 
 /// @par 回归契约
@@ -63,7 +64,7 @@ void check(bool value, const char* message)
 /// @note 原始触点仍由正式策略负责释放保护，测试不改其门闩。
 /// @note 同时统计直接选择命令，防止漏掉清空选区副作用。
 /// @note 此层验证真实接线，轻点与拖动边界由后续模型用例覆盖。
-void testControllerLongPress()
+void testControllerLongPress(bool touch)
 {
     using namespace MMM;
     for ( auto tool : { Logic::EditTool::Marquee, Logic::EditTool::Draw } ) {
@@ -133,10 +134,13 @@ void testControllerLongPress()
                 ImGui::End();
                 ImGui::Render();
             }
+            // 非触控方案相反：按住期间必须即时起笔，且不能打开触摸菜单。
+            // 三种方案使用同一生产移动解释器，避免只测独立能力标志。
             // 菜单真的打开且没有编辑，两个条件必须同时成立。
             // 否则完全不处理输入的错误实现也会满足“没有副作用”。
-            check(menu, "production controller opens touch menu");
-            check(edits == 0, "production long press does not clear or draw");
+            check(menu == touch, "only touch profile opens long press menu");
+            check(touch ? edits == 0 : edits > 0,
+                  "profile routes press through its actual editing path");
             bus.unsubscribe<Event::LogicCommandEvent>(subscription);
         }
         // 正式控制器和策略先销毁，再结束其借用的 ImGui 上下文。
@@ -148,7 +152,18 @@ void testControllerLongPress()
 /// @details 尤其保证等待期间不产生 Begin，避免框选清空或画笔提前落笔。
 int main()
 {
-    testControllerLongPress();
+    // 同一安卓解释器在经典和纯鼠标方案下不能截获长按或延迟普通起笔。
+    // 逐个销毁画布上下文后切换方案，避免活动手势阻挡合法的安全帧切换。
+    for ( const auto* id :
+          { "classic-desktop", "mouse-only", "touch-gestures" } ) {
+        MMM::UI::Interaction::synchronizeProfile(id, true);
+        MMM::UI::Interaction::synchronizeProfile(id, true);
+        const bool touch =
+            MMM::UI::Interaction::activeProfile().touchGestures();
+        check(touch == (std::string_view(id) == "touch-gestures"),
+              "touch capability belongs only to touch profile");
+        testControllerLongPress(touch);
+    }
     using G = MMM::Canvas::MobileCanvasGesture;
     using O = G::Output;
     // 每个场景拥有独立实例，前一手势不能向后一场景遗留释放请求。

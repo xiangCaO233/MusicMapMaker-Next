@@ -2,6 +2,7 @@
 #include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace MMM::UI
 {
@@ -146,5 +147,40 @@ bool workspaceShowsAudioOutputDeviceSelector()
 {
     return !activePresentation ||
            activePresentation->showsAudioOutputDeviceSelector();
+}
+}  // namespace MMM::UI
+
+namespace MMM::UI
+{
+/// @brief 共用查询保证分类、设置行与搜索结果使用同一份设备能力。
+/// @warning UI 每帧只借用已绑定外壳，不获取任何跨线程资源。
+bool workspaceShowsPointerSettings()
+{
+    return !activePresentation || activePresentation->showsPointerSettings();
+}
+/// @brief 设备用语只在移动外壳替换，桌面翻译和自定义方案入口保持原样。
+/// @warning 每行只比较固定数量翻译键，无文件或设备访问。
+std::string_view workspaceSettingLabelKey(std::string_view key)
+{
+    if ( !activePresentation || activePresentation->usesDesktopLayout() )
+        return key;
+    // 独立移动翻译键保留桌面的鼠标、滚轮与修饰键说明。
+    // 搜索索引同样采用这些键，显示名称必须能定位回实际控件。
+    for ( const auto& [original, mobile] :
+          { std::pair{ "ui.settings.software.save_format",
+                       "ui.mobile.settings.save_format" },
+            std::pair{ "ui.settings.editor.reverse_scroll",
+                       "ui.mobile.settings.reverse_scroll" },
+            std::pair{ "ui.settings.editor.scroll_snap",
+                       "ui.mobile.settings.scroll_snap" },
+            std::pair{ "ui.settings.editor.snap_floor_tooltip",
+                       "ui.mobile.settings.snap_floor_tooltip" },
+            std::pair{
+                "ui.settings.editor.disable_scroll_accel_while_drawing",
+                "ui.mobile.settings.disable_scroll_accel_while_drawing" },
+            std::pair{ "ui.settings.editor.paste_position.mouse_cursor",
+                       "ui.mobile.settings.paste_position" } } )
+        if ( key == original ) return mobile;
+    return key;
 }
 }  // namespace MMM::UI

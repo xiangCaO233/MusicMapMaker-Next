@@ -23,6 +23,10 @@ import android.util.Base64;
 public final class MainActivity extends SDLActivity {
     /** 返回回调只在 Activity 生命周期内存活，旧版系统不解析 API 33 类型。 */
     private Object backNavigationCallback;
+    /** 鼠标监听器随 Activity 注册和释放，不依赖原生窗口是否已经构造。 */
+    private InputDevices inputDevices;
+    /** 低频发布设备能力，不能在此切换原生方案或直接访问 ImGui。 */
+    static native void updateMouseConnection(boolean connected);
 
     /** 返回只请求移动工作区导航，不能直接调用 finish 或退出原生进程。 */
     static native void requestNativeBack();
@@ -31,10 +35,12 @@ public final class MainActivity extends SDLActivity {
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         backNavigationCallback = BackNavigation.register(this);
+        inputDevices = new InputDevices(this);
     }
 
     /** Activity 销毁时精确解除自己的回调，SDL 生命周期仍由基类负责。 */
     @Override protected void onDestroy() {
+        if (inputDevices != null) inputDevices.close();
         BackNavigation.unregister(this, backNavigationCallback);
         super.onDestroy();
     }

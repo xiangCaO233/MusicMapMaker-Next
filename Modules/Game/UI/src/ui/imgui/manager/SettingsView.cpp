@@ -16,6 +16,7 @@
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
 #include <array>
 #include <cfloat>
@@ -998,6 +999,15 @@ void SettingsView::update(UIManager* sourceManager)
 /// 热路径：设置窗口可见时每帧调用；不得复制共享所有权或执行阻塞操作。
 void SettingsView::drawContent()
 {
+    // 热插拔发生在快捷键页或录制期间时，立即退回软件页并解除全局录制。
+    // 隐藏入口和正文必须同帧生效，不能让旧页残留或吞掉新的触控输入。
+    if ( !workspaceShowsPointerSettings() &&
+         m_currentTab == Event::SettingsTab::Shortcut ) {
+        m_currentTab              = Event::SettingsTab::Software;
+        m_recordingShortcutTarget = ShortcutRecordTarget::None;
+        ShortcutUtils::setShortcutRecordingActive(false);
+        cancelSettingsSearchNavigation();
+    }
     // 搜索栏独立于内容 Child 的滚动，长结果列表和离屏设置仍可随时重新查询。
     drawSettingsSearchBar();
     // SkinManager 提供布局宽度和分类栏所需字体。
@@ -1241,17 +1251,19 @@ void SettingsView::drawContent()
                                 rect);
                         });
 
-        vbox.addElement("ShortcutTab",
-                        Sizing::Grow(),
-                        Sizing::Fixed(btnSize),
-                        [&](Clay_BoundingBox rect, bool) {
-                            // 快捷键页入口可进入全局按键录制状态。
-                            DrawCategoryButton(
-                                Event::SettingsTab::Shortcut,
-                                ICON_MMM_KEYBOARD,
-                                TR_CACHE("ui.settings.shortcut").data(),
-                                rect);
-                        });
+        if ( workspaceShowsPointerSettings() ) {
+            vbox.addElement("ShortcutTab",
+                            Sizing::Grow(),
+                            Sizing::Fixed(btnSize),
+                            [&](Clay_BoundingBox rect, bool) {
+                                // 快捷键页入口可进入全局按键录制状态。
+                                DrawCategoryButton(
+                                    Event::SettingsTab::Shortcut,
+                                    ICON_MMM_KEYBOARD,
+                                    TR_CACHE("ui.settings.shortcut").data(),
+                                    rect);
+                            });
+        }
 
         vbox.addElement("DebugTab",
                         Sizing::Grow(),

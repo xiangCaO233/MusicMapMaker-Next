@@ -1,4 +1,13 @@
 return {
+	-- 移动工作区专用词条，不覆盖桌面的鼠标和快捷键说明。
+	["ui.interaction.touch_gestures"] = "触控手势",
+	["ui.mobile.settings.save_format"] = "保存为",
+	["ui.mobile.settings.reverse_scroll"] = "反转滚动方向",
+	["ui.mobile.settings.scroll_snap"] = "滚动时启用磁吸",
+	["ui.mobile.settings.snap_floor_tooltip"] = "开启后总是吸附到早于操作位置的分拍线",
+	["ui.mobile.settings.disable_scroll_accel_while_drawing"] = "绘制物件时屏蔽滚动加速",
+	["ui.mobile.settings.paste_position"] = "操作位置",
+
 	-- [Translation Key] = "翻译后的目标文本"
 
 	-- 普通文本

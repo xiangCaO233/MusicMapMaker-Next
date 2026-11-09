@@ -1,4 +1,13 @@
 return {
+	-- 移动工作区专用词条，不覆盖桌面的鼠标和快捷键说明。
+	["ui.interaction.touch_gestures"] = "Touch gestures",
+	["ui.mobile.settings.save_format"] = "Save as",
+	["ui.mobile.settings.reverse_scroll"] = "Reverse scrolling direction",
+	["ui.mobile.settings.scroll_snap"] = "Snap while scrolling",
+	["ui.mobile.settings.snap_floor_tooltip"] = "Always snap to a beat line earlier than the interaction position",
+	["ui.mobile.settings.disable_scroll_accel_while_drawing"] = "Disable scroll acceleration while drawing",
+	["ui.mobile.settings.paste_position"] = "Interaction position",
+
 	-- [Translation Key] = "Translated text"
 
 	-- Common Text

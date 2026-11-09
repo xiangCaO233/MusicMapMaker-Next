@@ -3,8 +3,10 @@
 #include "event/core/EventBus.h"
 #include "event/ui/GLFWNativeEvent.h"
 #include "graphic/window/BackNavigation.h"
+#include "graphic/window/InputDevices.h"
 #include "log/colorful-log.h"
 #include <SDL3/SDL.h>
+#include <atomic>
 #include <cmath>
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
@@ -19,6 +21,10 @@ namespace
 {
 /// @brief Android 只有一个 Activity 窗口，此观察指针仅在 SDL 主线程使用。
 NativeWindow* activeWindow = nullptr;
+/// @brief Activity 线程写、SDL UI 线程读的独立鼠标能力快照。
+/// @warning 仅设备连接变化时写入；不与资源生命周期关联，relaxed 已足够。
+/// 避免每帧跨 JNI 枚举输入设备，也不让设置页等待 Android 主线程。
+std::atomic_bool externalMouseConnected{ false };
 /// @brief Java 返回手势仅投递 SDL 事件，由原 UI 线程决定返回或退出确认。
 Uint32 mobileBackEventType()
 {
@@ -38,6 +44,19 @@ void requestMobileBackNavigation()
     SDL_Event event{};
     event.type = mobileBackEventType();
     if ( event.type != 0 ) SDL_PushEvent(&event);
+}
+
+/// @brief 读取独立设备能力，不访问窗口或 Android 系统服务。
+/// @warning 每帧由移动外壳读取；Activity 是唯一写入方，无其他数据发布关系。
+bool hasExternalMouse()
+{
+    return externalMouseConnected.load(std::memory_order_relaxed);
+}
+/// @brief 接收 Activity 的低频输入设备快照，原生窗口尚未创建时也可调用。
+/// @warning 不调用 ImGui 或配置保存；独立布尔值采用 relaxed 写入。
+void publishExternalMouse(bool connected)
+{
+    externalMouseConnected.store(connected, std::memory_order_relaxed);
 }
 
 /// @brief 使用同一 SDL3 实例创建 Vulkan 窗口，正式 UI 与启动流程共用该边界。

@@ -152,16 +152,19 @@ std::string_view translate(std::string_view key)
 /// @param index 使用生产内置目录的索引。
 /// @param query 用户可输入的关键词或多词组合。
 /// @param showCursorSettings 模拟桌面或纯触屏工作区的光标组可见性。
+/// @param showPointerSettings 模拟外接鼠标决定的快捷键与指针专属行。
 /// @return 命中真实行的稳定标签键集合。
 /// @details 排序在单独用例验证，此处只检查跨语言命中身份。
 std::set<std::string> matches(SettingsSearchIndex& index,
                               std::string_view     query,
-                              bool                 showCursorSettings = true)
+                              bool                 showCursorSettings  = true,
+                              bool                 showPointerSettings = true)
 {
     index.update(query,
                  MMM::Translation::getActiveTranslator().getVersion(),
                  translate,
-                 showCursorSettings);
+                 showCursorSettings,
+                 showPointerSettings);
     std::set<std::string> result;
     for ( const auto& match : index.results() )
         result.insert(index.entries()[match.m_index].m_labelKey);
@@ -274,6 +277,31 @@ bool checkSynonyms()
                  matches(index, entry.m_labelKey) != desktopCursor )
                 return false;
         }
+        // 每个内置条目都独立验证，新增快捷键不能遗漏到触屏搜索结果中。
+        // 设备变化不要求重新加载语言包，缓存命中也必须遵守新能力。
+        // 比较整组身份集合，同时检查恢复设备能力后没有遗漏其他匹配行。
+        // 不把翻译文本写死，避免语言切换掩盖稳定目录身份的错误。
+        // 同一查询在鼠标能力变化后重新筛选，恢复能力后须找回原命中。
+        // 用目录身份覆盖全部快捷键行及两个仅限滚轮的编辑参数。
+        for ( const auto& entry : index.entries() ) {
+            const bool pointerOnly =
+                entry.m_tab == SettingsTab::Shortcut ||
+                entry.m_labelKey.starts_with("ui.settings.shortcut.") ||
+                entry.m_labelKey ==
+                    "ui.settings.editor.toolbar_value_wheel_adjustment" ||
+                entry.m_labelKey == "ui.settings.editor.scroll_multiplier";
+            if ( !pointerOnly ) continue;
+            const auto withMouse = matches(index, entry.m_labelKey);
+            if ( !withMouse.contains(entry.m_labelKey) ||
+                 matches(index, entry.m_labelKey, true, false)
+                     .contains(entry.m_labelKey) ||
+                 matches(index, entry.m_labelKey) != withMouse )
+                return false;
+        }
+        // 通用滚动设置仍属于触控方案，不能因移除“鼠标”文案而隐藏整组。
+        if ( !matches(index, "ui.settings.editor.reverse_scroll", true, false)
+                  .contains("ui.settings.editor.reverse_scroll") )
+            return false;
         for ( const auto* query : { "offset", "  OFFSET\t", "偏移", "误差" } ) {
             const auto result = matches(index, query);
             // 允许其他明确含偏移的设置出现，但截图中的三项必须全部命中。

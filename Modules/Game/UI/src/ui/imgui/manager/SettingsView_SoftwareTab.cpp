@@ -729,40 +729,48 @@ void SettingsView::drawSoftwareSettings()
         // 使用标准设置行提供左侧标签，组合框只占右侧值列，不重复绘制标题。
         // 标签参与软件页统一宽度测量，长翻译不会挤到下拉框右侧。
         // 仍沿用原翻译键与配置字段，已有皮肤文本和用户选择无需迁移。
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.shortcut.interaction_profile").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                // 运行态仍由安全帧切换协议管理，选择只写持久化请求。
-                // 引用仅在本帧使用，不把活动方案借用保存进布局缓存。
-                const auto& active = Interaction::activeProfile();
-                // 宽度来自 Clay 实际值列，窗口缩放和主题留白由统一布局处理。
-                // 控件使用隐藏 ID，显示标签由设置行负责，避免重复计算文字占位。
-                ImGui::SetNextItemWidth(r.width);
-                if ( FeedbackBeginCombo("##InteractionProfile",
-                                        active.name().data()) ) {
-                    for ( const auto& profile : Interaction::profiles() ) {
-                        // 名称可本地化或重名，控件身份始终来自稳定方案 ID。
-                        const auto id = profile->id();
-                        ImGui::PushID(id.data(), id.data() + id.size());
-                        const bool selected =
-                            settings.m_interactionProfileId == id;
-                        // 保存选择请求而非直接激活，避免移交尚未结束的画布手势。
-                        // 运行态预览跟随安全帧协议，待切换期间仍显示真实活动方案。
-                        if ( FeedbackSelectable(profile->name().data(),
-                                                selected) ) {
-                            settings.m_interactionProfileId = id;
-                            changed                         = true;
-                            // 复用软件页末尾的一次配置发布和保存，不单独写文件。
+        if ( workspaceShowsPointerSettings() ) {
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE("ui.settings.shortcut.interaction_profile").data(),
+                maxLabelW,
+                [&](Clay_BoundingBox r, bool) {
+                    // 运行态仍由安全帧切换协议管理，选择只写持久化请求。
+                    // 引用仅在本帧使用，不把活动方案借用保存进布局缓存。
+                    const auto& active = Interaction::activeProfile();
+                    // 宽度来自 Clay
+                    // 实际值列，窗口缩放和主题留白由统一布局处理。 控件使用隐藏
+                    // ID，显示标签由设置行负责，避免重复计算文字占位。
+                    ImGui::SetNextItemWidth(r.width);
+                    if ( FeedbackBeginCombo("##InteractionProfile",
+                                            active.name().data()) ) {
+                        for ( const auto& profile : Interaction::profiles() ) {
+                            // 名称可本地化或重名，控件身份始终来自稳定方案 ID。
+                            const auto id = profile->id();
+                            // 触控方案仅用于移动端，桌面的可选项保持原样。
+                            if ( profile->touchGestures() && m_sourceManager &&
+                                 m_sourceManager->workspacePresentation()
+                                     .usesDesktopLayout() )
+                                continue;
+                            ImGui::PushID(id.data(), id.data() + id.size());
+                            const bool selected =
+                                settings.m_interactionProfileId == id;
+                            // 保存选择请求而非直接激活，避免移交尚未结束的画布手势。
+                            // 运行态预览跟随安全帧协议，待切换期间仍显示真实活动方案。
+                            if ( FeedbackSelectable(profile->name().data(),
+                                                    selected) ) {
+                                settings.m_interactionProfileId = id;
+                                changed                         = true;
+                                // 复用软件页末尾的一次配置发布和保存，不单独写文件。
+                            }
+                            ImGui::PopID();
                         }
-                        ImGui::PopID();
+                        // 和统一反馈控件成对结束，保持悬浮与点击反馈一致。
+                        FeedbackEndCombo();
                     }
-                    // 和统一反馈控件成对结束，保持悬浮与点击反馈一致。
-                    FeedbackEndCombo();
-                }
-            });
+                });
+        }
 
         addSettingItem(
             *sec,
@@ -2013,7 +2021,9 @@ void SettingsView::drawSoftwareSettings()
             *sec,
             rowIndex,
             sectionIndex,
-            TR_CACHE("ui.settings.software.save_format").data(),
+            TR(workspaceSettingLabelKey("ui.settings.software.save_format")
+                   .data())
+                .data(),
             maxLabelW,
             { { TR_CACHE("ui.settings.software.save_format.original").data(),
                 (int)Config::SaveFormatPreference::Original },

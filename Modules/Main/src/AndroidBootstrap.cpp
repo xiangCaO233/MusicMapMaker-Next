@@ -2,6 +2,7 @@
 #include "config/AppPaths.h"
 #include "config/Utf8Path.h"
 #include "graphic/window/BackNavigation.h"
+#include "graphic/window/InputDevices.h"
 #include "log/colorful-log.h"
 #include "network/AssetSyncService.h"
 #include "network/CurlHandle.h"
@@ -189,4 +190,15 @@ extern "C" JNIEXPORT void JNICALL
 Java_top_xiang233_musicmapmaker_MainActivity_requestNativeBack(JNIEnv*, jclass)
 {
     MMM::Graphic::requestMobileBackNavigation();
+}
+
+/// @brief JNI 只发布实际指针设备能力，设置显隐和方案切换由 SDL UI 线程处理。
+/// @warning Activity 设备通知低频调用，不访问原生窗口或持有逻辑锁。
+extern "C" JNIEXPORT void JNICALL
+Java_top_xiang233_musicmapmaker_MainActivity_updateMouseConnection(
+    JNIEnv*, jclass, jboolean connected)
+{
+    // Activity 通知可能早于 SDL 窗口构造，发布入口必须与窗口指针解耦。
+    // 不附带资源所有权；下一 UI 帧会应用设备策略和安全切换协议。
+    MMM::Graphic::publishExternalMouse(connected == JNI_TRUE);
 }

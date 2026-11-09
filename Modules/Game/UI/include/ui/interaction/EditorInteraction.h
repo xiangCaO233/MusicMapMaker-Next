@@ -114,6 +114,9 @@ public:
     /// @brief 是否在选中工具中启用无需键盘的右键编辑菜单。
     /// @warning 每帧只返回方案策略，不查询选择集合或访问会话锁。
     virtual bool selectionContextMenu() const;
+    /// @brief 触控仲裁与长按菜单只由触控方案启用，不由编译平台决定。
+    /// @warning 每帧返回固定能力，不查询操作系统或复制方案所有权。
+    virtual bool touchGestures() const { return false; }
     /// @brief 显式选择模式；经典方案返回空以保留物理修饰键语义。
     /// @warning 每帧只读取 UI 线程标量，不访问选择集合。
     virtual std::optional<Logic::SelectionOperation> selectionOperation() const;

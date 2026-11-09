@@ -15,6 +15,7 @@
 #include "ui/imgui/menu/interfaces/IMainMenuToggleItemActionHandler.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
 #include "ui/interaction/EditorInteraction.h"
+#include "ui/workspace/MobileInputPolicy.h"
 #include <imgui.h>
 #include <memory>
 #include <nlohmann/json.hpp>
@@ -514,6 +515,48 @@ bool checkAcceleratedScroll()
     ImGui::DestroyContext();
     return ok;
 }
+/// @brief 验证移动设备边沿默认值与连接期间的用户选择互不覆盖。
+/// @details 使用真实请求字符串，不依赖 Android 服务或持久化用户配置。
+/// @return 初始化、插入、拔出与再次插入都满足契约时返回 true。
+bool testMobileInputPolicy()
+{
+    MMM::UI::MobileInputPolicy policy;
+    std::string                request = "mouse-only";
+    bool                       ok =
+        require(policy.update(false, request) && request == "touch-gestures",
+                "touch default without mouse");
+    // 首次启动模拟已保存纯鼠标偏好，验证设备能力优先于历史选择。
+    // 策略只写请求，不直接替换注册表中的活动方案。
+    // 测试不依赖 Android 服务，因此连接事件的重复通知也能稳定复现。
+    // 活动手势的释放与安全帧延迟由既有 synchronizeProfile 用例负责。
+    // 这层只验证边沿：常态鼠标帧不应覆盖用户手选。
+    // 两种能力启动分别创建策略，避免复用初始化标志掩盖启动回归。
+    // 字符串来自真实内置方案身份，测试不引入额外的替身注册项。
+    // 无鼠标期间即使恢复了不合适的历史请求，也必须回到可操作的触控方案。
+    request = "classic-desktop";
+    policy.update(false, request);
+    ok &= require(request == "touch-gestures" && !policy.hasMouse(),
+                  "touch enforced");
+    policy.update(true, request);
+    ok &= require(request == "classic-desktop" && policy.hasMouse(),
+                  "attach selects classic");
+    // 连接期间保留用户主动选择；不能每帧把纯鼠标方案覆盖回经典。
+    request = "mouse-only";
+    ok &= require(!policy.update(true, request) && request == "mouse-only",
+                  "manual mouse profile retained");
+    policy.update(false, request);
+    ok &= require(request == "touch-gestures", "detach selects touch");
+    policy.update(true, request);
+    ok &=
+        require(request == "classic-desktop", "reattach selects classic again");
+    // 已连接设备启动同样默认经典，不依赖先发生一次真实设备通知。
+    MMM::UI::MobileInputPolicy startup;
+    request = "mouse-only";
+    startup.update(true, request);
+    ok &=
+        require(request == "classic-desktop", "mouse startup selects classic");
+    return ok;
+}
 /// @brief 只推进公共菜单更新，验证无桌面菜单栏时打开项目快捷键仍可派发。
 /// @param profile 接管项目打开请求的测试方案，避免系统窗口副作用。
 /// @return 单次按下只派发一次且文本输入期间不派发时返回 true。
@@ -859,5 +902,6 @@ int main(int argc, char** argv)
     // 保留前面首次激活的精确代数断言，再执行需要多次切换的滚动矩阵。
     ok &= checkAcceleratedScroll();
     ok &= testMenuHotkeysWithoutMenuBar(*observer);
+    ok &= testMobileInputPolicy();
     return ok ? 0 : 1;
 }

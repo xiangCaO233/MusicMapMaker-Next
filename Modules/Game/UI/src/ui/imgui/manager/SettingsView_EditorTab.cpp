@@ -1,3 +1,4 @@
+#include "ui/workspace/IWorkspacePresentation.h"
 // 编辑器页既编辑完整配置，也构造更新命令，两者定义由此消费端负责。
 // 公共引擎接口不再替设置页传播这些完整值类型。
 #include "audio/AudioManager.h"
@@ -277,17 +278,26 @@ void SettingsView::drawEditorSettings()
             });
 
         // 后续设置项采用统一标签宽度，使开关和数值控件共享对齐基线。
+        // 移动外壳只替换用户可见标签；控件 ID 与配置字段维持原身份。
+        // 带滚轮或修饰键的专属参数按设备能力省略整个布局行。
+        // 不用禁用态保留占位，因此无鼠标设备不会看到无法操作的设置。
+        // 显隐不写回 changed，连接变化不能被当作用户修改设置。
+        // 通用滚动与吸附设置仍可由触控解释器消费，不能一起隐藏。
+        // 搜索层通过相同标签映射和能力检查与正文保持一致。
 
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.editor.reverse_scroll").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           // 反向滚动仅反转输入方向，不改变已有时间位置。
-                           // 键盘导航和其他时间跳转不读取该鼠标滚动选项。
-                           changed |= ::MMM::UI::FeedbackCheckbox(
-                               "##ReverseScroll", &settings.reverseScroll);
-                       });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR(workspaceSettingLabelKey("ui.settings.editor.reverse_scroll")
+                   .data())
+                .data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                // 反向滚动仅反转输入方向，不改变已有时间位置。
+                // 键盘导航和其他时间跳转不读取该鼠标滚动选项。
+                changed |= ::MMM::UI::FeedbackCheckbox("##ReverseScroll",
+                                                       &settings.reverseScroll);
+            });
         addSettingItem(
             *sec,
             rowIndex,
@@ -301,7 +311,10 @@ void SettingsView::drawEditorSettings()
                 if ( ImGui::IsItemHovered() ) {
                     // 提示补充 floor 与普通最近点吸附的差异。
                     Utils::renderTooltip(
-                        TR("ui.settings.editor.snap_floor_tooltip").data(),
+                        TR(workspaceSettingLabelKey(
+                               "ui.settings.editor.snap_floor_tooltip")
+                               .data())
+                            .data(),
                         Utils::TooltipDir::Right);
                 }
             });
@@ -316,26 +329,31 @@ void SettingsView::drawEditorSettings()
                 changed |= ::MMM::UI::FeedbackCheckbox(
                     "##StopPlaybackOnScroll", &settings.stopPlaybackOnScroll);
             });
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.editor.toolbar_value_wheel_adjustment")
-                .data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                // 允许滚轮编辑工具栏值时，控件消费者仍需检查悬浮与焦点。
-                // 此页仅配置许可，不截获当前滚轮输入。
-                changed |= ::MMM::UI::FeedbackCheckbox(
-                    "##ToolbarValueWheelAdjustment",
-                    &settings.enableToolbarValueWheelAdjustment);
-                if ( ImGui::IsItemHovered() ) {
-                    // Tooltip 说明滚轮作用范围，避免与时间线滚动混淆。
-                    Utils::renderTooltip(TR("ui.settings.editor.toolbar_value_"
-                                            "wheel_adjustment_tooltip")
-                                             .data(),
-                                         Utils::TooltipDir::Right);
-                }
-            });
+        // 鼠标专属控件只控制显隐，拔出设备不能改写已保存参数。
+        if ( workspaceShowsPointerSettings() ) {
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE("ui.settings.editor.toolbar_value_wheel_adjustment")
+                    .data(),
+                maxLabelW,
+                [&](Clay_BoundingBox r, bool) {
+                    // 允许滚轮编辑工具栏值时，控件消费者仍需检查悬浮与焦点。
+                    // 此页仅配置许可，不截获当前滚轮输入。
+                    changed |= ::MMM::UI::FeedbackCheckbox(
+                        "##ToolbarValueWheelAdjustment",
+                        &settings.enableToolbarValueWheelAdjustment);
+                    if ( ImGui::IsItemHovered() ) {
+                        // Tooltip 说明滚轮作用范围，避免与时间线滚动混淆。
+                        Utils::renderTooltip(
+                            TR("ui.settings.editor.toolbar_value_"
+                               "wheel_adjustment_tooltip")
+                                .data(),
+                            Utils::TooltipDir::Right);
+                    }
+                });
+        }
+
         addSettingItem(*sec,
                        rowIndex,
                        TR_CACHE("ui.settings.editor.hit_effects").data(),
@@ -361,20 +379,25 @@ void SettingsView::drawEditorSettings()
                         syncSameMainAudioCanvases);
                 }
             });
-        addSettingItem(*sec,
-                       rowIndex,
-                       TR_CACHE("ui.settings.editor.scroll_snap").data(),
-                       maxLabelW,
-                       [&](Clay_BoundingBox r, bool) {
-                           // 滚动吸附决定滚动结束后是否落到离散时间网格。
-                           // 它与对象绘制吸附分离，由时间线滚动控制器读取。
-                           changed |= ::MMM::UI::FeedbackCheckbox(
-                               "##ScrollSnap", &settings.scrollSnap);
-                       });
         addSettingItem(
             *sec,
             rowIndex,
-            TR_CACHE("ui.settings.editor.disable_scroll_accel_while_drawing")
+            TR(workspaceSettingLabelKey("ui.settings.editor.scroll_snap")
+                   .data())
+                .data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                // 滚动吸附决定滚动结束后是否落到离散时间网格。
+                // 它与对象绘制吸附分离，由时间线滚动控制器读取。
+                changed |= ::MMM::UI::FeedbackCheckbox("##ScrollSnap",
+                                                       &settings.scrollSnap);
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR(workspaceSettingLabelKey(
+                   "ui.settings.editor.disable_scroll_accel_while_drawing")
+                   .data())
                 .data(),
             maxLabelW,
             [&](Clay_BoundingBox r, bool) {
@@ -418,7 +441,9 @@ void SettingsView::drawEditorSettings()
             { { TR_CACHE("ui.settings.editor.paste_position.judgment_line")
                     .data(),
                 (int)Config::PastePosition::JudgmentLine },
-              { TR_CACHE("ui.settings.editor.paste_position.mouse_cursor")
+              { TR(workspaceSettingLabelKey(
+                       "ui.settings.editor.paste_position.mouse_cursor")
+                       .data())
                     .data(),
                 (int)Config::PastePosition::MouseCursor } },
             (int&)settings.pastePosition,
@@ -439,28 +464,32 @@ void SettingsView::drawEditorSettings()
                 (int)Config::CopyPasteTimeBasis::Beat } },
             (int&)settings.copyPasteTimeBasis,
             changed);
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.editor.scroll_multiplier").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                // 滚动倍率是无量纲系数，消费者与基础滚动速度相乘。
-                ImGui::SetNextItemWidth(r.width);
-                changed |= ::MMM::UI::FeedbackSliderFloat(
-                    "##ScrollMul",
-                    &settings.scrollSpeedMultiplier,
-                    1.0f,
-                    10.0f,
-                    "%.4f");
-                if ( ImGui::IsItemHovered() ) {
-                    // 提示解释倍率含义，仅在用户检查该控件时显示。
-                    Utils::renderTooltip(
-                        TR("ui.settings.editor.scroll_multiplier_tooltip")
-                            .data(),
-                        Utils::TooltipDir::Right);
-                }
-            });
+        // 鼠标专属控件只控制显隐，拔出设备不能改写已保存参数。
+        if ( workspaceShowsPointerSettings() ) {
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE("ui.settings.editor.scroll_multiplier").data(),
+                maxLabelW,
+                [&](Clay_BoundingBox r, bool) {
+                    // 滚动倍率是无量纲系数，消费者与基础滚动速度相乘。
+                    ImGui::SetNextItemWidth(r.width);
+                    changed |= ::MMM::UI::FeedbackSliderFloat(
+                        "##ScrollMul",
+                        &settings.scrollSpeedMultiplier,
+                        1.0f,
+                        10.0f,
+                        "%.4f");
+                    if ( ImGui::IsItemHovered() ) {
+                        // 提示解释倍率含义，仅在用户检查该控件时显示。
+                        Utils::renderTooltip(
+                            TR("ui.settings.editor.scroll_multiplier_tooltip")
+                                .data(),
+                            Utils::TooltipDir::Right);
+                    }
+                });
+        }
+
         addSettingItem(
             *sec,
             rowIndex,

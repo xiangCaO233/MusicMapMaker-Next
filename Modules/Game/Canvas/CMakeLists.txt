@@ -65,20 +65,22 @@ add_library(
   src/TimelineCanvas_Popups.cpp)
 
 # 公共控制器只链接中立桥；平台私有头与实现由目标选择，不向公开包含目录传播。
-target_sources(Canvas
-               PRIVATE src/presentation/CanvasInteractionPresentation.cpp)
+target_sources(
+  Canvas
+  PRIVATE src/presentation/CanvasInteractionPresentation.cpp
+          # 安卓接入鼠标后复用经典与纯鼠标解释器，不复制右键菜单。
+          src/presentation/desktop/DesktopCanvasInteractionPresentation.cpp)
 target_include_directories(Canvas PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 if(ANDROID)
-  # 安卓仅编译触摸仲裁与双列菜单，不引入桌面右键路径。
+  # 安卓工厂根据当前操作方案选择触控仲裁或共用的桌面指针解释器。
   target_sources(
     Canvas
     PRIVATE src/presentation/mobile/MobileCanvasInteractionPresentation.cpp
             src/presentation/mobile/MobileCanvasFactory.cpp)
 else()
   # 桌面保持原有即时鼠标输入与标准菜单，工厂符号只有一个实现。
-  target_sources(
-    Canvas
-    PRIVATE src/presentation/desktop/DesktopCanvasInteractionPresentation.cpp)
+  target_sources(Canvas
+                 PRIVATE src/presentation/desktop/DesktopCanvasFactory.cpp)
 endif()
 
 # PUBLIC 依赖构成 Canvas 公开头的传递接口；业务实现需要的新依赖应优先检查 能否保持 PRIVATE，避免继续扩大下游翻译单元的包含和链接范围。
