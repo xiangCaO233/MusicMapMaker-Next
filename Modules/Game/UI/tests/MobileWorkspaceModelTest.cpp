@@ -24,6 +24,9 @@ bool verifyDrawerGestures(MMM::UI::MobileDrawer side)
 {
     using namespace MMM::UI;
     MobileWorkspaceModel model;
+    // 定位手势用屏幕中部起点，避免新的贴底默认把向下移动夹紧。
+    // 首次启动的贴底几何由主测试独立检查，不能与用户移动场景混用。
+    model.restoreHandleCenters(.5f, .5f);
     model.resize(1280, 720, 1);
     const auto handle =
         side == MobileDrawer::Left ? model.leftHandle() : model.rightHandle();
@@ -275,6 +278,10 @@ int main()
           "startup is collapsed");
     // 把手提供完整手指命中面积，但避开操作系统最外侧返回区。
     const auto handle = model.leftHandle();
+    // 默认归一化中心一必须夹紧到完整标签的下边缘，不能有半个触摸区出屏。
+    check(handle.m_y + handle.m_height == 720 &&
+              model.rightHandle().m_y + model.rightHandle().m_height == 720,
+          "both tabs start at bottom without clipping");
     check(handle.m_width >= 48 && handle.m_height >= 48 && handle.m_x >= 12,
           "touch target and back edge are separate");
     const float x = handle.m_x + handle.m_width * .5f;

@@ -43,6 +43,9 @@ int main(int argc, char** argv)
     const auto defaults =
         nlohmann::json::object().get<MobileWorkspaceSettings>();
     check(defaults == MobileWorkspaceSettings{}, "old config defaults");
+    // 缺少位置字段的旧文件沿用贴底默认，不依赖构造与读取两处同时写错。
+    check(defaults.m_leftCenter == 1.0f && defaults.m_rightCenter == 1.0f,
+          "new and missing positions default to bottom");
     // 与代码默认整体比较，未来增加字段时旧配置兼容性仍受覆盖。
     // 构造不对称的现场，防止两个把手共用一个值或隐藏分区比例丢失。
     MobileWorkspaceSettings expected;

@@ -12,8 +12,9 @@ struct MobileWorkspaceSettings {
     bool m_toolbar{}, m_timing{}, m_preview{}, m_settingsOpen{};
     /// @brief 工作台默认可用，但只在主画布选中时实际占用布局空间。
     bool m_workbench{ true };
-    /// @brief 左右把手独立归一化中心，屏幕尺寸变化后仍可重新定位。
-    float m_leftCenter{ .5f }, m_rightCenter{ .5f };
+    /// @brief 左右页耳默认贴底；独立归一化中心保留用户拖动后的停放位置。
+    /// @details 归一化值一由布局夹紧到完整触摸区的最低位置，不裁切页耳。
+    float m_leftCenter{ 1.0f }, m_rightCenter{ 1.0f };
     /// @brief 默认收边减少画布遮挡，左右独立保存且不影响归一化中心。
     bool m_leftHandleDocked{ true }, m_rightHandleDocked{ true };
     /// @brief 辅助分区占整个中央宿主宽度的比例，隐藏时保留上次值。

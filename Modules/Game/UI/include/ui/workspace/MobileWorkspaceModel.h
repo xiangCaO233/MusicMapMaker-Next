@@ -91,8 +91,8 @@ private:
     /// @brief 当前手势不接管屏幕边缘返回，返回只来自平台导航事件。
     Gesture m_gesture{ Gesture::None };
 
-    /// @brief 左右把手独立保存归一化中心，旋转后仍落在可触及范围内。
-    float m_leftHandleCenter{ .5f }, m_rightHandleCenter{ .5f },
+    /// @brief 左右页耳默认贴底，恢复的用户位置优先于默认值且旋转后保持可触及。
+    float m_leftHandleCenter{ 1.0f }, m_rightHandleCenter{ 1.0f },
         m_startHandleCenter{};
     /// @brief 把手起点所属一侧，拖动途中不能切换另一侧。
     MobileDrawer m_handleSide{ MobileDrawer::None };
