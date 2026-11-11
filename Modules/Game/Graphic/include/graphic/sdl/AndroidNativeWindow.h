@@ -10,7 +10,8 @@ class IWindowFrameAdapter;
 /// @brief 保持启动窗口与正式窗口角色接口，Android 均使用单个 Activity 窗口。
 enum class NativeWindowMode : std::uint8_t { Application, Startup };
 /// @brief Android 原生窗口平台层，只在 SDL 原生主线程访问窗口和事件。
-/// @details 不承担双指手势或编辑命令转换，输入统一交给 ImGui SDL3 后端。
+/// @details 只发布原始多触点快照，双指含义与编辑事务由独立移动交互层解释。
+/// 单指控件继续使用 ImGui SDL3 后端，不在窗口层调用业务编辑命令。
 class NativeWindow final
 {
 public:

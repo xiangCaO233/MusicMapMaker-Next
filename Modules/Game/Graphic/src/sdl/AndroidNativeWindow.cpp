@@ -2,6 +2,7 @@
 #include "config/AppConfig.h"
 #include "event/core/EventBus.h"
 #include "event/ui/GLFWNativeEvent.h"
+#include "graphic/mobile/MobileTouchInput.h"
 #include "graphic/window/BackNavigation.h"
 #include "graphic/window/InputDevices.h"
 #include "log/colorful-log.h"
@@ -63,7 +64,7 @@ void publishExternalMouse(bool connected)
 NativeWindow::NativeWindow(int width, int height, const char* title,
                            NativeWindowMode)
 {
-    // 触屏仅采用 SDL 自带的主触点鼠标合成，不增加手势消抖或编辑命令旁路。
+    // 单指控件仍使用 SDL 主触点鼠标合成，真实多指身份另由轻量快照发布。
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "1");
     SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
     m_window = SDL_CreateWindow(title,
@@ -126,6 +127,34 @@ void NativeWindow::pollEvents() const
     // 所有输入直接使用 SDL 后端的坐标与触点鼠标合成，不额外修改业务状态。
     SDL_Event event;
     while ( SDL_PollEvent(&event) ) {
+        // 同一轮事件泵内的多指按下和抬起按顺序处理，不能只读取最终鼠标状态。
+        // 即使 UI 渲染时已无活跃手指，消费方仍能读取本次手势的最高触点数量。
+        // 先发布原始身份，再交给 ImGui 的单指兼容入口，业务层不读取 SDL
+        // 联合体。 坐标保留窗口归一化值，避免混用物理像素和 ImGui 内容倍率。
+        if ( event.type == SDL_EVENT_FINGER_DOWN ||
+             event.type == SDL_EVENT_FINGER_MOTION ||
+             event.type == SDL_EVENT_FINGER_UP ||
+             event.type == SDL_EVENT_FINGER_CANCELED ) {
+            const auto phase =
+                event.type == SDL_EVENT_FINGER_DOWN     ? TouchPhase::Down
+                : event.type == SDL_EVENT_FINGER_MOTION ? TouchPhase::Move
+                : event.type == SDL_EVENT_FINGER_UP     ? TouchPhase::Up
+                                                        : TouchPhase::Cancel;
+            publishMobileTouch(
+                phase,
+                event.tfinger.touchID,
+                event.tfinger.fingerID,
+                event.tfinger.x,
+                event.tfinger.y,
+                static_cast<double>(event.tfinger.timestamp) * 1e-9);
+        }
+        // 多指快照仅由这个事件泵写入，UI 同线程借用，无需跨线程原子发布。
+        // 平台输入与业务命令解耦，原生窗口不决定框选、绘制或撤销的含义。
+        // 中断没有可靠的抬手事件，快照必须显式失效，不能等待超时恢复。
+        if ( event.type == SDL_EVENT_WINDOW_FOCUS_LOST ||
+             event.type == SDL_EVENT_WILL_ENTER_BACKGROUND ||
+             event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED )
+            cancelMobileTouch();
         // 这里只发布意图；确认后的正常关闭仍沿用既有窗口命令通道。
         if ( event.type == mobileBackEventType() ) {
             Event::GLFWNativeEvent back;

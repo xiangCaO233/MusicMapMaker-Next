@@ -52,7 +52,9 @@ add_library(
   src/theme/ImGuiTheme.cpp
   src/theme/ImGuiThemeRegistry.cpp
   src/system/SystemTheme.cpp
-  src/CursorManager.cpp)
+  src/CursorManager.cpp
+  # 原始触点快照不引用平台 SDK，桌面回归与安卓事件泵共用同一纯值实现。
+  src/mobile/MobileTouchInput.cpp)
 
 # 验证层只影响图形模块的 instance 初始化，不传播为上层模块的编译接口。 关闭时不定义宏，使默认构建跳过 layer 查询与 Debug Utils
 # messenger。
@@ -177,3 +179,10 @@ else()
             src/imguivk/context/VKContextGLFW.cpp)
   target_link_libraries(Graphic PUBLIC 3rd_glfw)
 endif()
+
+# 多触点跟踪只消费内存事件，不要求设备、窗口或 GPU。 测试复用生产目标的快照实现，不能另写只用于通过断言的触点跟踪器。
+# 覆盖快速多指轻点、稳定身份、取消与容量上限，防止退化成单指误编辑。
+mmm_add_test_executable(Graphic MobileTouchInputTest
+                        tests/MobileTouchInputTest.cpp)
+target_link_libraries(MobileTouchInputTest PRIVATE Graphic Log)
+mmm_register_test_case(NAME MobileTouchInputTest COMMAND MobileTouchInputTest)
