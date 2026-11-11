@@ -991,10 +991,8 @@ void captureToolbarWorkspaceState(ProjectWorkspaceState&      workspace,
     toolbarState.m_valid = true;
     // valid 必须先随整份内存快照写入；实际磁盘序列化只会在函数完成后发生。
     toolbarState.m_reverseScroll = editorConfig.settings.reverseScroll;
-    toolbarState.m_scrollSnap    = editorConfig.settings.scrollSnap;
-    // 放置磁吸总开关、具体模式和公共分拍掩码共同描述完整吸附策略。
-    toolbarState.m_objectPlacementSnap =
-        editorConfig.settings.objectPlacementSnap;
+    // 两个吸附总开关属于应用偏好，不捕获到项目现场。
+    // 项目只恢复具体分拍模式和组合，打开旧工程不能关闭新安装的默认磁吸。
     toolbarState.m_objectPlacementSnapMode =
         objectPlacementSnapModeToWorkspaceName(
             editorConfig.settings.objectPlacementSnapMode);
@@ -1033,9 +1031,7 @@ void applyToolbarWorkspaceState(
 {
     // 布尔偏好可直接恢复，枚举与数值字段则通过兼容转换和边界钳制处理。
     editorConfig.settings.reverseScroll = toolbarState.m_reverseScroll;
-    editorConfig.settings.scrollSnap    = toolbarState.m_scrollSnap;
-    editorConfig.settings.objectPlacementSnap =
-        toolbarState.m_objectPlacementSnap;
+    // 保留当前软件的滚动和放置吸附开关，旧工程的开关不再是恢复来源。
     // 文本模式解析失败时由转换函数给出兼容默认值。
     editorConfig.settings.objectPlacementSnapMode =
         workspaceNameToObjectPlacementSnapMode(

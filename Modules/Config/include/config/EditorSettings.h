@@ -475,7 +475,8 @@ struct EditorSettings {
     /// @brief 是否反转鼠标滚动方向
     bool reverseScroll{ false };
 
-    /// @brief 是否开启滚动吸附；安卓首次使用默认开启，已有选择仍由配置恢复。
+    /// @brief
+    /// 是否开启滚动吸附；桌面和安卓首次使用默认开启，已有选择仍由配置恢复。
     bool scrollSnap{ defaultMagnetEnabled() };
 
     /// @brief 是否开启物件放置磁吸，与当前平台的首次使用策略保持一致。

@@ -2,6 +2,32 @@
 
 更新时间：2026-11-11。当前分支 `feat/android-sdl3`，接续基线 `d2f63983`。本轮范围为保留长按菜单撤销／重做，完善单指点选、物件拖动和空白框选；本轮改动随本次提交记录，尚未推送。
 
+## 磁吸开关作用域修复
+
+用户已选择滚动吸附和物件放置吸附两个总开关按整个应用保存。安卓首次初始化本来已默认开启；问题出在打开旧工程时，有效工具栏工作区保存的 false 又覆盖了软件设置，因此卸载重装后仍会重现。
+
+- 已从 ProjectWorkspaceToolbarState 与引擎的捕获／恢复路径移除这两个总开关。新工程配置不再写出它们，旧 JSON 键被忽略；旧 m_editorOverride 中同名字段也不再参与项目持久化。
+- 按用户后续要求，桌面与安卓首次默认都开启两个磁吸；共用配置实现不再按平台返回不同值。MagnetDefaultsTest 直接断言默认开启，并验证四种显式组合序列化往返，防止同一错误默认值互相比较而漏检。
+- 具体吸附模式、常用分拍组合仍按工程恢复；软件配置已有的显式关闭继续保留，不在启动时强制开启。
+- ProjectCompatibilityTest 覆盖两个开关四种组合、工作区与编辑器覆盖两条旧路径、新保存不再写出旧键，以及其它项目字段仍恢复。连同 MagnetDefaultsTest、ObjectPlacementSnapTest，相关 3 项通过。
+- 前轮桌面和 Android arm64-v8a／x86_64 构建成功；本轮统一默认值后重新完成 Linux 桌面构建和相关 3 项测试，完整 CTest 为 193/194，仅先前已记录的 CanvasTouchNavigationTest 失败。前轮音频测试一次波动后单独复跑及连续三次通过，本轮全量也通过。
+- Terra 用独立 `.next.magnetprobe` 身份验证：原包全新初始两个 true，打开有效 legacy-off 工作区变成两个 false；修复版全新初始两个 true，打开同形状旧工作区仍为两个 true。手动关闭后，重启再打开有效 legacy-on（两个旧开关为 true）仍保持两个 false；配置回读与 UI 一致。隔离包已卸载。
+- 隔离测试只改 probe 私有工程；用户确认“不必保存”后，由 Terra 覆盖安装真实 `.next.dev`，未清数据，软件中两项开关已开启，打开原工程后仍为 true，Unified 文件访问模式保留。构建、隔离 APK 和证据集中在 `/home/xiang/Android/mmm-smoke/main/evidence/magnet-defaults-20261111`。
+
+本批仅检查以下修改代码，逐文件均达到 30%，未刷新全仓基线。
+
+| 路径 | 注释行 | 代码行 | 比例 |
+| --- | ---: | ---: | ---: |
+| `Modules/Game/Logic/src/logic/EditorEngine.cpp` | 1637 | 3785 | 30.19% |
+| `Modules/Game/Logic/tests/ProjectCompatibilityTest.cpp` | 179 | 415 | 30.13% |
+| `Modules/Config/include/config/EditorSettings.h` | 240 | 333 | 41.88% |
+| `Modules/MMM/src/project/ProjectSettings.cpp` | 139 | 312 | 30.82% |
+| `Modules/Game/Logic/tests/ObjectPlacementSnapTest.cpp` | 52 | 121 | 30.06% |
+| `Modules/MMM/include/mmm/project/ProjectWorkspaceState.h` | 109 | 107 | 50.46% |
+| `Modules/Config/tests/MagnetDefaultsTest.cpp` | 19 | 41 | 31.67% |
+| `Modules/Config/src/EditorPlatformDefaults.cpp` | 5 | 8 | 38.46% |
+| `Modules/Config/include/config/EditorPlatformDefaults.h` | 6 | 5 | 54.55% |
+
 ## 当前交互
 
 - 触控选择工具：点按物件选中，拖动物件及其可命中子部位沿用原有移动／调整语义；从空白处拖动才框选。空白轻点清空选择，框选后可拖动已选集合。
