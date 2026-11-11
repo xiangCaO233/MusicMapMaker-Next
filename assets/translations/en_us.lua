@@ -1569,6 +1569,7 @@ return {
 	["ui.interaction.mouse_only"] = "Mouse Only",
 	["ui.mobile.main_canvas"] = "Canvas",
 	["ui.mobile.workspace"] = "Workspace",
+	["ui.mobile.resources"] = "Resources",
 	["ui.mobile.tools"] = "Tools",
 	["ui.mobile.view"] = "View",
 	["ui.mobile.help"] = "Help",

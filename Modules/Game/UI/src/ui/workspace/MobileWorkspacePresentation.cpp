@@ -20,6 +20,7 @@
 #include "ui/imgui/manager/ToolbarView.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/interaction/EditorInteraction.h"
+#include "ui/utils/UIWidgetUtils.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 #include "ui/workspace/MobileButton.h"
 #include "ui/workspace/MobileDockLayout.h"
@@ -128,9 +129,8 @@ private:
     /// @brief 标签长按菜单只提出关闭意图，保存确认和视图回收继续由业务负责。
     /// @warning 每个停靠窗口每帧调用，仅查询已注册画布集合大小。
     void processTabMenu(std::string_view id, bool* open, bool mainCanvas);
-    /// @brief 绘制最小触摸区域与细握柄，点击和拖动共用状态机。
-    void drawHandle(const char* id, MobileRect rect, bool opened = false,
-                    bool retracted = false);
+    /// @brief 绘制常驻资源或工具标签，点击与纵向移动由纯状态机独占。
+    void drawHandle(const char* id, MobileRect rect, bool opened = false);
     /// @brief 左侧第一级提供常用分类，第二级保留现有业务管理器。
     void drawLeftDrawer(UIManager& manager, MobileRect rect);
     /// @brief 右侧以明确的选中状态提供三个窗口开关。
@@ -219,8 +219,7 @@ void MobileWorkspacePresentation::beginFrame(UIManager& manager)
         m_showPreview     = saved.m_preview;
         m_showWorkbench   = saved.m_workbench;
         m_model.restoreHandleCenters(saved.m_leftCenter, saved.m_rightCenter);
-        m_model.restoreHandleDocking(saved.m_leftHandleDocked,
-                                     saved.m_rightHandleDocked);
+        // 旧版缩边字段仍可解析，但入口现在始终展示完整图文标签。
         m_dock.restore(saved.m_timingRatio,
                        saved.m_previewRatio,
                        saved.m_selectedTab,
@@ -252,7 +251,17 @@ void MobileWorkspacePresentation::beginFrame(UIManager& manager)
     m_playbackControls.beginFrame();
     // 工具栏和把手不能共享同一命中区，纵向拖到任意位置也必须能选择工具。
     // 保留宽度传入纯模型，绘制与按下沿判定使用同一个移位后的矩形。
-    m_model.resize(m_size.x, m_size.y, m_scale, m_toolbarWidth);
+    // 本地化文字和用户字号参与标签尺寸测量，不能只扩大图形而保留旧命中区。
+    // 两侧采用同一宽高，打开抽屉后外沿标签也复用这一规格。
+    const float labelWidth =
+        std::max(ImGui::CalcTextSize(TR("ui.mobile.resources").data()).x,
+                 ImGui::CalcTextSize(TR("ui.mobile.tools").data()).x);
+    m_model.resize(m_size.x,
+                   m_size.y,
+                   m_scale,
+                   m_toolbarWidth,
+                   std::max(64.0f, labelWidth / m_scale + 38.0f),
+                   std::max(48.0f, ImGui::GetFontSize() / m_scale + 16.0f));
     // 原生返回可能来自业务弹窗，不能越过它额外弹出退出确认。
     // 本外壳自己的退出确认仍允许再次返回取消，保持返回层级一致。
     const bool modalOpen = ImGui::GetTopMostPopupModal() != nullptr;
@@ -543,94 +552,92 @@ void MobileWorkspacePresentation::processTabMenu(std::string_view id,
     m_commitLayout = true;
 }
 
-/// @brief 只绘制握柄，不再建立第二套点击或拖动状态。
-/// @param id 当前一侧把手的稳定窗口身份。
-/// @param rect 纯模型给出的完整触摸区，不等于细握柄的可见宽度。
-/// @param opened 为 true 时只绘制外沿握柄，收起把手则保留入口图标。
-/// @param retracted 为 true 时只画屏幕内窄条，完整矩形仍交由模型处理。
-/// @details 收边入口贴合安全工作区，不借工具栏或预览窗口的边界定位。
-/// 收边与悬浮态使用相同主题色，切换语言或皮肤不创建新的入口身份。
-/// @details 移动外壳在所有背景内容之后绘制握柄，便于拇指发现入口。
-/// 命中区与系统最外侧返回区域错开，图形上不添加桌面悬浮说明。
-/// 左侧文件夹表示资源入口，右侧滑杆表示工作区显示控制。
-/// 图标只提供识别，不额外创建一个与手势模型竞争的按钮 Item。
-/// @warning 固定图元绘制，不申请纹理或执行异步工作。
+/// @brief 侧边页耳连接到所属边界，避免形成遮挡画布的悬浮卡片。
+/// @param id 页耳的稳定窗口身份，不随翻译或选中状态变化。
+/// @param rect 完整触摸矩形，系统边缘缓冲只绘制而不参与开关命中。
+/// @param opened 展开时连接抽屉外沿，收起时连接屏幕或工具栏边界。
+/// @details 可见页耳较矮，实际点击和纵向拖动仍保留完整手指高度。
+/// 图标文字横排，主题圆角只作用于伸向画布的一端，不创建额外边框。
+/// @warning 每帧只借用当前字体并绘制固定图元，不加载资源或分配后台任务。
 void MobileWorkspacePresentation::drawHandle(const char* id, MobileRect rect,
-                                             bool opened, bool retracted)
+                                             bool opened)
 {
-    // 把手窗口自身不添加内容内边距，整块透明区域都是触摸目标。
-    // 可见握柄只占其中少量宽度，避免长期遮住画布。
+    const bool left  = opened ? m_model.drawer() == MobileDrawer::Left
+                              : std::string_view(id) == "MobileLeftHandle";
+    auto       panel = rect;
+    if ( !opened ) {
+        // 连接条仅用于视觉归属，系统最外缘继续留给 Android 返回导航。
+        // 右侧有工具栏时连接到工具栏左边界，而不是穿过按钮画到屏幕外。
+        const float connector = 32.0f * m_scale;
+        if ( left ) panel.m_x -= connector;
+        panel.m_width += connector;
+    }
+    // 面板不添加自己的背景和内边距，页耳底色仅由下方单个矩形决定。
+    // 保持独立窗口层级，抽屉遮罩不应遮住页耳本身。
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{});
-    if ( beginPanel(id, rect, false) ) {
-        if ( opened ) {
-            // 不创建第二个收起按钮，点击和拖动都由同一个把手命中区处理。
-            // 展开把手只绘制细握柄，透明命中区仍保持完整触摸宽度。
-            // 它位于面板边缘，不占用任何业务内容行或标签栏。
-            const auto  pos = ImGui::GetWindowPos();
-            const float x   = pos.x + rect.m_width * .5f;
-            ImGui::GetWindowDrawList()->AddRectFilled(
-                { x - 3 * m_scale, pos.y + 12 * m_scale },
-                { x + 3 * m_scale, pos.y + rect.m_height - 12 * m_scale },
-                ImGui::GetColorU32(ImGuiCol_Text),
-                ImGui::GetStyle().GrabRounding);
-        } else if ( retracted ) {
-            // 此时不是缩小手势坐标：模型仍持有原触点，向外拖动不会因命中区移动而中断。
-            // 可见宽度独立于主题圆角，放大圆角不能扩大对编辑画面的遮挡。
-            // 完整命中窗口部分位于屏幕外，只绘制留在安全工作区内的窄边条。
-            // 收边时不画被截半的图标，端部圆角与颜色仍服从当前美化配置。
-            const auto pos  = ImGui::GetWindowPos();
-            const bool left = std::string_view(id) == "MobileLeftHandle";
-            // 左端只露出矩形末段，右端只露出起始段，不将窄条画到屏幕外。
-            const float x = pos.x + (left ? rect.m_width - 12 * m_scale : 0);
-            // 两个图元共用原窗口裁剪，不额外建立与手势模型竞争的按钮。
-            auto* draw = ImGui::GetWindowDrawList();
-            draw->AddRectFilled(
-                { x, pos.y + 4 * m_scale },
-                { x + 12 * m_scale, pos.y + rect.m_height - 4 * m_scale },
-                ImGui::GetColorU32(ImGuiCol_Button),
-                ImGui::GetStyle().FrameRounding);
-            draw->AddRectFilled(
-                { x + 5 * m_scale, pos.y + 20 * m_scale },
-                { x + 7 * m_scale, pos.y + rect.m_height - 20 * m_scale },
-                ImGui::GetColorU32(ImGuiCol_TextDisabled),
-                ImGui::GetStyle().GrabRounding);
-        } else {
-            const auto color = ImGui::GetColorU32(ImGuiCol_Text);
-            const auto pos   = ImGui::GetWindowPos();
-            // 握柄本身不是按钮，48dp 透明命中区已由纯手势状态机处理。
-            // 细握柄在命中区中居中，不把图形边缘误当成触摸边缘。
-            // 颜色来自当前主题，浅色与深色皮肤均保留足够辨识度。
-            const float x    = pos.x + rect.m_width * 0.5f;
-            auto*       draw = ImGui::GetWindowDrawList();
-            // 图标说明入口职责，短握柄说明可以拖动；两者共享原来的触摸目标。
-            // 背景只占命中区内部，不扩大对主画布的遮挡范围。
-            draw->AddRectFilled(
-                { x - 18 * m_scale, pos.y + 4 * m_scale },
-                { x + 18 * m_scale, pos.y + rect.m_height - 4 * m_scale },
-                ImGui::GetColorU32(ImGuiCol_Button),
-                ImGui::GetStyle().FrameRounding);
-            auto* font = Config::SkinManager::instance().getFont("pure_icons");
-            // 字体已由皮肤生命周期持有，把手不缓存跨皮肤重载的指针。
-            // 回退字体仅用于皮肤缺少专用图标字体时保持绘制接口有效。
-            if ( !font ) font = ImGui::GetFont();
-            const char* icon = id == std::string_view("MobileLeftHandle")
-                                   ? ICON_MMM_FOLDER_OPEN
-                                   : ICON_MMM_SLIDERS;
-            // 专用字体尺寸明确，避免当前窗口文字字体缺少私用区图标。
-            const auto bounds =
-                font->CalcTextSizeA(22 * m_scale, 100 * m_scale, 0, icon);
-            // 用实际字形宽度居中，两个入口不会因为图标本身宽度不同而偏移。
-            draw->AddText(font,
-                          22 * m_scale,
-                          { x - bounds.x * .5f, pos.y + 12 * m_scale },
-                          color,
-                          icon);
-            draw->AddRectFilled(
-                { x - 2 * m_scale, pos.y + rect.m_height - 29 * m_scale },
-                { x + 2 * m_scale, pos.y + rect.m_height - 12 * m_scale },
-                color,
-                ImGui::GetStyle().GrabRounding);
-        }
+    if ( beginPanel(id, panel, false) ) {
+        auto*        draw = ImGui::GetWindowDrawList();
+        const ImVec2 hit{ m_origin.x + rect.m_x, m_origin.y + rect.m_y };
+        // 视觉高度与触摸高度分离，小页耳不要求用户精确点中一条细线。
+        // 用户放大字号时随完整触摸区一起增高，不能裁掉文字上下边缘。
+        const float  inset = std::min(8.0f * m_scale, rect.m_height * .15f);
+        const ImVec2 start{ m_origin.x + panel.m_x, hit.y + inset };
+        const ImVec2 end{ start.x + panel.m_width,
+                          hit.y + rect.m_height - inset };
+        const bool   pressed =
+            ImGui::IsMouseDown(0) &&
+            rect.contains(ImGui::GetIO().MousePos.x - m_origin.x,
+                          ImGui::GetIO().MousePos.y - m_origin.y);
+        // 底色与圆角都取当前主题，浅色和深色皮肤使用同一侧边形状。
+        // 只给内侧端圆角，使外侧边与屏幕或抽屉衔接，不出现四周悬空的胶囊。
+        draw->AddRectFilled(
+            start,
+            end,
+            ImGui::GetColorU32(opened || pressed ? ImGuiCol_HeaderActive
+                                                 : ImGuiCol_Header),
+            ImGui::GetStyle().FrameRounding,
+            left ? ImDrawFlags_RoundCornersRight
+                 : ImDrawFlags_RoundCornersLeft);
+        // 隐藏标签的反馈按钮只负责统一音效和输入 Item，不再绘制第二层卡片。
+        // 开关动作仍由纯模型独占；不能在此重复提交一次点击。
+        ImGui::SetCursorScreenPos(hit);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.0f);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4{});
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4{});
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4{});
+        (void)FeedbackButton("##drawerTab", { rect.m_width, rect.m_height });
+        // 透明按钮的样式作用域立即结束，不能影响随后绘制的抽屉业务控件。
+        // 页耳不会留下可见按钮边框，也不修改持久化的主题参数。
+        ImGui::PopStyleColor(3);
+        ImGui::PopStyleVar();
+        // 图标字体与文字字体分别借用当前皮肤，切换皮肤后不保留旧指针。
+        // 组合块在真实命中区内居中，连接条不挤占文字布局宽度。
+        auto* iconFont = Config::SkinManager::instance().getFont("pure_icons");
+        if ( !iconFont ) iconFont = ImGui::GetFont();
+        const char* icon = left ? ICON_MMM_FOLDER_OPEN : ICON_MMM_SLIDERS;
+        // 翻译结果借用稳定字符串池，本帧不创建拥有字符串或复制字体资源。
+        // 展开与收起共用同一职责文案，身份只依赖固定窗口 ID。
+        const auto label = TR(left ? "ui.mobile.resources" : "ui.mobile.tools");
+        const auto textSize  = ImGui::CalcTextSize(label.data());
+        const float iconSize = 16.0f * m_scale;
+        const auto  iconBounds =
+            iconFont->CalcTextSizeA(iconSize, rect.m_width, 0, icon);
+        // 间隔随内容倍率缩放；文案宽度已经由帧首模型几何预留。
+        // 英文和中文都按实际字形宽度居中，不借缩小字号塞进固定宽度。
+        const float gap = 6.0f * m_scale;
+        const float x =
+            hit.x + (rect.m_width - iconBounds.x - gap - textSize.x) * .5f;
+        const float centerY = hit.y + rect.m_height * .5f;
+        // 使用窗口裁剪约束页耳图元，动画或短屏情况下不盖到其他分区。
+        const auto color = ImGui::GetColorU32(ImGuiCol_Text);
+        draw->AddText(iconFont,
+                      iconSize,
+                      { x, centerY - iconBounds.y * .5f },
+                      color,
+                      icon);
+        draw->AddText({ x + iconBounds.x + gap, centerY - textSize.y * .5f },
+                      color,
+                      label.data());
     }
     ImGui::End();
     ImGui::PopStyleVar();
@@ -1040,14 +1047,8 @@ void MobileWorkspacePresentation::endFrame(UIManager& manager)
         // 普通弹层仍由 ImGui 保持在上方，握柄不会抢占其输入。
     }
     if ( !popup && m_model.drawer() == MobileDrawer::None ) {
-        drawHandle("MobileLeftHandle",
-                   m_model.leftHandle(),
-                   false,
-                   m_model.handleDocked(MobileDrawer::Left));
-        drawHandle("MobileRightHandle",
-                   m_model.rightHandle(),
-                   false,
-                   m_model.handleDocked(MobileDrawer::Right));
+        drawHandle("MobileLeftHandle", m_model.leftHandle());
+        drawHandle("MobileRightHandle", m_model.rightHandle());
     }
     // 参数弹层在所有边缘面板结束后提交，保持独立的裁剪区和输入优先级。
     m_playbackControls.drawPopup(manager, m_scale, m_showToolbar);
@@ -1101,10 +1102,10 @@ void MobileWorkspacePresentation::saveLayout(UIManager& manager)
     value.m_workbench   = m_showWorkbench;
     value.m_leftCenter  = m_model.leftHandleCenter();
     value.m_rightCenter = m_model.rightHandleCenter();
-    // 只保存已提交的收边偏好，不保存抽屉展开量或未结束的触点。
-    // 两侧独立写回，移动其中一侧不能让另一侧的入口突然变宽。
-    value.m_leftHandleDocked  = m_model.handleDocked(MobileDrawer::Left);
-    value.m_rightHandleDocked = m_model.handleDocked(MobileDrawer::Right);
+    // 保留旧配置字段以兼容存档，新的完整标签不再恢复隐藏细线状态。
+    // 纵向位置仍分别保存，不记录开合动画或未结束的触点。
+    value.m_leftHandleDocked  = false;
+    value.m_rightHandleDocked = false;
     m_dock.capture(value.m_timingRatio,
                    value.m_previewRatio,
                    value.m_selectedTab,

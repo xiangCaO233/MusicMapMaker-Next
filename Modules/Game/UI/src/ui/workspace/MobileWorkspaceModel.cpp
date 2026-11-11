@@ -5,22 +5,6 @@
 
 namespace MMM::UI
 {
-/// @brief 保存客户端收边偏好，实际可见宽度由当前内容倍率换算。
-void MobileWorkspaceModel::restoreHandleDocking(bool left, bool right)
-{
-    // 收边与纵向中心分别恢复，不能让一侧偏好覆盖另一侧的手持位置。
-    m_leftDocked  = left;
-    m_rightDocked = right;
-}
-
-/// @brief 查询同一侧的独立状态，未选中一侧时不能误读右把手偏好。
-bool MobileWorkspaceModel::handleDocked(MobileDrawer side) const
-{
-    return side == MobileDrawer::Left
-               ? m_leftDocked
-               : side == MobileDrawer::Right && m_rightDocked;
-}
-
 /// @brief 恢复归一化位置，具体像素边界仍由当前屏幕尺寸计算。
 /// @details 配置读取已验证有限性；边界夹紧防止把手落到设备可用区外。
 void MobileWorkspaceModel::restoreHandleCenters(float left, float right)
@@ -45,11 +29,13 @@ bool MobileRect::contains(float x, float y) const
 /// @details 旋转不重置目标状态，业务视图仍保留当前选择。
 /// @warning UI 线程本地赋值，不等待平台窗口或交换链重建。
 void MobileWorkspaceModel::resize(float width, float height, float scale,
-                                  float rightInset)
+                                  float rightInset, float handleWidth,
+                                  float handleHeight)
 {
     // 旋转会改变滑动分母和坐标系，旧触点不能继续控制新的矩形。
     if ( m_width != width || m_height != height || m_scale != scale ||
-         m_rightInset != rightInset )
+         m_rightInset != rightInset || m_handleWidth != handleWidth ||
+         m_handleHeight != handleHeight )
         cancelGesture();
     // 异常布局值不能产生负窗口或非有限手势阈值。
     m_width  = std::max(1.0f, width);
@@ -58,6 +44,9 @@ void MobileWorkspaceModel::resize(float width, float height, float scale,
     // 工具栏显隐只平移把手，不能把用户已拖动的纵向偏好重置到屏幕中点。
     // 夹取保留区防止极窄布局生成负横坐标；命中与绘制共用此几何。
     m_rightInset = std::clamp(rightInset, 0.0f, m_width);
+    // 标签尺寸独立于屏幕像素倍率，文字放大后命中与绘制仍用同一矩形。
+    m_handleWidth  = std::max(56.0f, handleWidth);
+    m_handleHeight = std::max(48.0f, handleHeight);
 }
 
 /// @brief 限制展开区宽度，同时适应狭窄手机屏幕。
@@ -75,15 +64,15 @@ float MobileWorkspaceModel::drawerWidth() const
 /// 几何按当前可用高度夹取，短屏和旋转不会把完整命中区放到屏幕外。
 MobileRect MobileWorkspaceModel::leftHandle() const
 {
-    // 远离系统返回手势起点；握柄窄，实际触摸区保持 48dp。
-    // 收边后仅露出 12dp；命中、绘制和纵向移动仍使用同一个完整矩形。
-    return { (m_leftDocked ? -36.0f : 16.0f) * m_scale,
-             std::clamp(m_leftHandleCenter * m_height -
-                            std::min(m_height, 72.0f * m_scale) * .5f,
+    // 收起入口始终完整可见，旧配置的缩边偏好不再使其退化成细线。
+    // 只为标签留出边缘距离，画布仍然使用完整工作区，不添加根窗口外边距。
+    const float height = std::min(m_height, m_handleHeight * m_scale);
+    return { 32.0f * m_scale,
+             std::clamp(m_leftHandleCenter * m_height - height * .5f,
                         0.0f,
-                        std::max(0.0f, m_height - 72.0f * m_scale)),
-             48.0f * m_scale,
-             std::min(m_height, 72.0f * m_scale) };
+                        m_height - height),
+             m_handleWidth * m_scale,
+             height };
 }
 
 /// @brief 将同一把手规格镜像到右侧，不复制手势阈值常量。
@@ -92,16 +81,10 @@ MobileRect MobileWorkspaceModel::leftHandle() const
 MobileRect MobileWorkspaceModel::rightHandle() const
 {
     auto rect = leftHandle();
-    // 复用宽高和左右留白后再覆盖纵向位置，不能继承左侧已经移动的上沿。
-    // 右把手始终位于工具栏左侧，任意纵向位置都不会盖住其可点击按钮。
-    // 工具栏隐藏时保留区为零，入口自动回到原来的右缘位置。
-    // 收边贴住安全区边缘，展开入口继续避开工具栏的实际按钮。
-    // 左把手已收边时其横坐标为负，不能再直接镜像它的当前偏移。
+    // 标签位于工具栏左侧，系统最外缘不作为抽屉命中区。
+    // 工具栏显隐只改变横坐标，左右标签仍各自保留纵向偏好。
     rect.m_x =
-        m_rightDocked
-            ? m_width - 12.0f * m_scale
-            : std::max(0.0f,
-                       m_width - m_rightInset - rect.m_width - 16.0f * m_scale);
+        std::max(0.0f, m_width - m_rightInset - rect.m_width - 32.0f * m_scale);
     // 右把手只镜像边距；独立中心确保移动左把手不会连带移动右把手。
     rect.m_y = std::clamp(m_rightHandleCenter * m_height - rect.m_height * .5f,
                           0.0f,
@@ -145,13 +128,9 @@ MobileRect MobileWorkspaceModel::drawerGrip() const
 /// @warning 输入采样路径只写本地标量，不向后台发布中间状态。
 void MobileWorkspaceModel::beginGesture(Gesture gesture, MobilePointer pointer)
 {
-    m_gesture          = gesture;
-    m_startX           = pointer.m_x;
-    m_startY           = pointer.m_y;
-    m_startFraction    = m_fraction;
-    m_startOpen        = m_targetOpen;
-    m_horizontalLocked = false;
-    m_backFromLeft     = pointer.m_x < m_width * .5f;
+    m_gesture = gesture;
+    m_startX  = pointer.m_x;
+    m_startY  = pointer.m_y;
     // 起点保持实际夹取后的中心，旋转后第一次拖动不会出现位置跳变。
     if ( gesture == Gesture::Handle ) {
         // 以把手中心加相对位移，按在把手边缘也不会瞬间跳到手指中心。
@@ -159,7 +138,6 @@ void MobileWorkspaceModel::beginGesture(Gesture gesture, MobilePointer pointer)
         const auto handle =
             m_handleSide == MobileDrawer::Left ? leftHandle() : rightHandle();
         m_startHandleCenter = handle.m_y + handle.m_height * .5f;
-        m_startHandleDocked = handleDocked(m_handleSide);
     }
 }
 
@@ -170,15 +148,7 @@ void MobileWorkspaceModel::beginGesture(Gesture gesture, MobilePointer pointer)
 void MobileWorkspaceModel::cancelGesture()
 {
     if ( m_gesture == Gesture::None ) return;
-    if ( m_gesture == Gesture::Drawer ) m_targetOpen = m_startOpen;
-    // 起始偏好在按下沿冻结，只回滚本触点所属一侧，不重置两侧配置。
-    if ( m_gesture == Gesture::Retract || m_gesture == Gesture::Drawer ) {
-        // 中断不提交收边状态变化，旋转和业务模态不能把一次擦过变成偏好修改。
-        if ( m_handleSide == MobileDrawer::Left )
-            m_leftDocked = m_startHandleDocked;
-        else if ( m_handleSide == MobileDrawer::Right )
-            m_rightDocked = m_startHandleDocked;
-    }
+    // 抽屉目标只在有效轻点释放时提交，中断不需要回滚半开的抽屉。
     m_gesture        = Gesture::None;
     m_swallowRelease = true;
 }
@@ -210,7 +180,7 @@ void MobileWorkspaceModel::closeDrawer()
     m_swallowRelease = true;
 }
 
-/// @brief 系统返回与应用边缘返回共用相同的层级规则。
+/// @brief 系统返回事件遵循抽屉、确认窗口、退出确认的层级规则。
 /// @details 抽屉优先收起，已有确认优先取消，其余情况请求退出确认。
 /// 这里只记录意图，不终止线程或修改打开的项目。
 void MobileWorkspaceModel::requestBack()
@@ -276,99 +246,51 @@ void MobileWorkspaceModel::update(MobilePointer pointer, float seconds,
         advanceAnimation(seconds);
         return;
     }
-    // 仅按下沿决定归属，内容区开始的操作中途经过标题也不能抢走。
+    // 抽屉开合只由标签点击、遮罩和平台返回决定，不截获系统边缘滑动。
+    // 一次触点的归属固定，画布或列表起手后经过标签不会突然被接管。
     if ( pointer.m_pressed && !m_swallowRelease ) {
-        const bool edge = pointer.m_x < 12.0f * m_scale ||
-                          pointer.m_x > m_width - 12.0f * m_scale;
         if ( m_drawer != MobileDrawer::None ) {
-            // 已展开时先判断遮罩，背景按下只收起，不建立第二个打开手势。
-            // 外沿把手位于遮罩一侧，必须在背景点击之前取得所有权。
             if ( drawerGrip().contains(pointer.m_x, pointer.m_y) ) {
                 m_handleSide = m_drawer;
                 beginGesture(Gesture::Handle, pointer);
             } else if ( !drawerRect().contains(pointer.m_x, pointer.m_y) )
                 closeDrawer();
-            else if ( edge )
-                beginGesture(Gesture::Back, pointer);
         } else {
-            // 收边命中优先于返回，但仅覆盖这段窄条的真实纵向高度。
-            // 画布普通起手不会因为后来经过窄条而被重新捕获。
             const auto side = leftHandle().contains(pointer.m_x, pointer.m_y)
                                   ? MobileDrawer::Left
                               : rightHandle().contains(pointer.m_x, pointer.m_y)
                                   ? MobileDrawer::Right
                                   : MobileDrawer::None;
             if ( side != MobileDrawer::None ) {
-                // 未锁定方向前保留把手可见性，不提前显示半开的抽屉。
                 m_handleSide = side;
                 beginGesture(Gesture::Handle, pointer);
-            } else if ( edge )
-                beginGesture(Gesture::Back, pointer);
-            // 收边入口和系统边缘重叠时只在把手高度内优先，其他边缘仍可返回。
+            }
         }
     }
-    // 无释放沿按取消处理，不能凭空把零位移解释为轻点。
+    // 平台取消不等于松手，不能让失焦或模态中断意外打开抽屉。
     if ( m_gesture != Gesture::None && !pointer.m_down && !pointer.m_released )
         cancelGesture();
-    if ( m_gesture == Gesture::None ) {
-        // 普通业务触摸不进入手势计算，但已提交的收起动画仍继续推进。
-        advanceAnimation(seconds);
-        return;
-    }
-    // 水平方向锁定前忽略微抖；纵向浏览优先取消，避免把手被擦过时展开。
     const float horizontal = pointer.m_x - m_startX;
     const float vertical   = pointer.m_y - m_startY;
     const float slop       = 8.0f * m_scale;
     if ( m_gesture == Gesture::Handle ) {
-        // 方向未确定期间不创建抽屉身份，垂直拖动始终能看见原把手。
-        // 把手具有两种互斥语义，按主方向锁定，微小抖动仍按轻点处理。
-        // 一旦进入上下移动，后续水平漂移不能意外打开抽屉。
+        // 方向只锁定一次；横向划过后即使手指划回原位也不能变成点击。
+        // 上下移动后锁住标签归属，不再根据随后的横向漂移触发开关。
         if ( std::abs(vertical) > slop &&
-             std::abs(vertical) >= std::abs(horizontal) ) {
+             std::abs(vertical) >= std::abs(horizontal) )
             m_gesture = Gesture::Reposition;
-        } else if ( std::abs(horizontal) > slop ) {
-            const float inward =
-                horizontal *
-                (m_handleSide == MobileDrawer::Left ? 1.0f : -1.0f);
-            if ( m_drawer == MobileDrawer::None && inward < 0 ) {
-                // 关闭状态向外推只收边，不创建抽屉，也不触发应用退出。
-                // 本状态锁住方向，反向划回也不突然打开抽屉或变成普通点击。
-                m_gesture = Gesture::Retract;
-                if ( m_handleSide == MobileDrawer::Left )
-                    m_leftDocked = true;
-                else
-                    m_rightDocked = true;
-            } else {
-                // 向内拖出时恢复完整入口；轻点窄条则仍保留收边偏好。
-                if ( m_drawer == MobileDrawer::None ) {
-                    if ( m_handleSide == MobileDrawer::Left )
-                        m_leftDocked = false;
-                    else
-                        m_rightDocked = false;
-                }
-                m_drawer           = m_handleSide;
-                m_gesture          = Gesture::Drawer;
-                m_horizontalLocked = true;
-            }
-        } else if ( pointer.m_released ) {
+        else if ( std::abs(horizontal) > slop )
+            m_gesture = Gesture::Cancelled;
+        else if ( pointer.m_released ) {
+            // 仅完整轻点提交一次开关；展开后的标签同样点击收起。
             m_drawer     = m_handleSide;
-            m_targetOpen = !m_startOpen;
+            m_targetOpen = !m_targetOpen;
         }
     }
-    if ( m_gesture == Gesture::Retract ) {
-        // 横向归属锁定后不允许中途变成纵向拖动，释放也不透传给画布。
-        if ( pointer.m_released ) {
-            m_gesture        = Gesture::None;
-            m_swallowRelease = true;
-        }
-        return;
-    }
-    // 纵向移动不改变收边位；横向可见宽度始终由同侧偏好决定。
     if ( m_gesture == Gesture::Reposition ) {
-        // 该分支只修改选中一侧的位置，展开比例与当前资源选择保持原样。
-        // 归一化中心随屏幕高度缩放，像素中心始终保持在完整命中区的边界内。
-        // 先夹取再除高度，因此不会把手指拖出屏幕后的无效距离保存为偏好。
-        const float half = std::min(m_height, 72.0f * m_scale) * .5f;
+        // 直接跟随手指更新位置，不等待动画、磁盘保存或后台任务。
+        // 中心按实际标签高度夹紧，放大字号和旋转后也不会有半个标签出屏。
+        const float half = std::min(m_height, m_handleHeight * m_scale) * .5f;
         const float center =
             std::clamp(m_startHandleCenter + vertical, half, m_height - half) /
             m_height;
@@ -376,49 +298,13 @@ void MobileWorkspaceModel::update(MobilePointer pointer, float seconds,
             m_leftHandleCenter = center;
         else
             m_rightHandleCenter = center;
-        // 连续触摸直接更新几何，不使用抽屉动画推迟位置反馈。
-        // 松手只结束本次所有权，最终位置保留供下一次轻点与横向拖动。
-        if ( pointer.m_released ) {
-            m_gesture        = Gesture::None;
-            m_swallowRelease = true;
-            // 把手已移动到新位置，当前释放不能立即变成背景画布的点击。
-        }
-        return;
     }
-    if ( !m_horizontalLocked ) {
-        // 一旦确定纵向意图就放弃本次抽屉手势，后续水平漂移不能重新抢占。
-        if ( std::abs(vertical) > slop &&
-             std::abs(vertical) >= std::abs(horizontal) ) {
-            cancelGesture();
-            advanceAnimation(seconds);
-            return;
-        }
-        m_horizontalLocked = std::abs(horizontal) > slop;
-    }
-    if ( m_gesture == Gesture::Drawer ) {
-        // 直接由固定起点计算展开量，手指移动与本地显示处于同一帧。
-        const float direction = m_drawer == MobileDrawer::Left ? 1.0f : -1.0f;
-        if ( m_horizontalLocked )
-            m_fraction = std::clamp(
-                m_startFraction + direction * horizontal / drawerWidth(),
-                0.0f,
-                1.0f);
-        if ( pointer.m_released ) {
-            // 从收起开始轻点即打开；标题轻点不关闭，只有按钮或明确滑动才收起。
-            // 展开与收起均需跨过四分之一宽度，轻微抖动回到原目标。
-            m_targetOpen = m_horizontalLocked
-                               ? m_fraction >= (m_startOpen ? .75f : .25f)
-                               : true;
-        }
-    } else if ( m_gesture == Gesture::Back && pointer.m_released ) {
-        // 返回只能从对应边缘向内滑，不能把右缘向右或左缘向左误判为退出。
-        const float inward = horizontal * (m_backFromLeft ? 1.0f : -1.0f);
-        if ( inward > 64.0f * m_scale && std::abs(vertical) < 48.0f * m_scale )
-            requestBack();
-    }
-    if ( pointer.m_released ) {
+    if ( m_gesture != Gesture::None && pointer.m_released ) {
+        // 取消横拖也吞掉释放，不让这一触点误落到背景编辑器。
         m_gesture        = Gesture::None;
         m_swallowRelease = true;
     }
+    // 开合动画与标签位置互不依赖，移动标签不暂停或反转抽屉动画。
+    advanceAnimation(seconds);
 }
 }  // namespace MMM::UI
