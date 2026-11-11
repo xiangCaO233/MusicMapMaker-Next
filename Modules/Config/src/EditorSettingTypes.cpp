@@ -6,6 +6,7 @@
 #include "config/BeatLinePalette.h"
 #include "config/CreatorIdentity.h"
 #include "config/EditorConfig.h"
+#include "config/EditorPlatformDefaults.h"
 #include "config/EditorSettings.h"
 #include "config/EditorShortcutActions.h"
 #include "config/FrameLimitPreference.h"
@@ -1192,7 +1193,8 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
         json.value("enableToolbarValueWheelAdjustment", false);
     settings.overlapTimeWindowMs = json.value("overlapTimeWindowMs", 5.0f);
     settings.reverseScroll       = json.value("reverseScroll", false);
-    settings.scrollSnap          = json.value("scrollSnap", false);
+    // 只有缺失字段采用平台默认；明确关闭必须保留，不能在每次启动强制开启。
+    settings.scrollSnap = json.value("scrollSnap", defaultMagnetEnabled());
     // 新放置吸附开关缺失时继承旧 scrollSnap，完成行为迁移。
     settings.objectPlacementSnap =
         json.value("objectPlacementSnap", settings.scrollSnap);

@@ -1,6 +1,7 @@
 #pragma once
 #include "config/AudioPlaybackConfig.h"
 #include "config/BeatLinePalette.h"
+#include "config/EditorPlatformDefaults.h"
 #include "config/FrameLimitPreference.h"
 #include "config/NotePalette.h"
 #include "config/ObjectPlacementSnap.h"
@@ -474,11 +475,11 @@ struct EditorSettings {
     /// @brief 是否反转鼠标滚动方向
     bool reverseScroll{ false };
 
-    /// @brief 是否开启滚动吸附
-    bool scrollSnap{ false };
+    /// @brief 是否开启滚动吸附；安卓首次使用默认开启，已有选择仍由配置恢复。
+    bool scrollSnap{ defaultMagnetEnabled() };
 
-    /// @brief 是否开启物件放置磁吸。
-    bool objectPlacementSnap{ false };
+    /// @brief 是否开启物件放置磁吸，与当前平台的首次使用策略保持一致。
+    bool objectPlacementSnap{ defaultMagnetEnabled() };
 
     /// @brief 物件放置磁吸使用当前分拍策略或常用分拍集合。
     ObjectPlacementSnapMode objectPlacementSnapMode{
