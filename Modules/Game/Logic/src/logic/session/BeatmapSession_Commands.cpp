@@ -3556,6 +3556,10 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
     }
     // 先判断需清理的能力与交互，再提交配置供 isNoteEditable 判断。
     m_ctx->lastConfig = cmd.config;
+    // 外部设置或手势最终配置成为新的权威值，不保留旧的局部缩放覆盖。
+    // 配置已排入同一会话队列，不能从 UI 线程直接写这个临时状态。
+    m_ctx->m_pointerTimelineZoom.reset();
+    m_ctx->m_pointerZoomFinished = false;
     if ( disablePolylineEditing ) {
         // 能力关闭是低频设置动作，允许遍历 Note 交互视图清理不可编辑对象。
         auto view =

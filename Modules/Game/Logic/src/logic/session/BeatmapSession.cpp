@@ -1024,6 +1024,24 @@ void BeatmapSession::updateAnimateTime(double                      dt,
 void BeatmapSession::updateAnimatedTimelineZoom(
     double dt, const Config::EditorConfig& config)
 {
+    if ( m_ctx->m_pointerTimelineZoom && m_ctx->m_pointerZoomFinished &&
+         std::abs(config.visual.timelineZoom - *m_ctx->m_pointerTimelineZoom) <
+             VISUAL_ANIMATION_EPSILON ) {
+        // 最终配置已进入本轮；此前一直显示最新本地目标，没有固定等待窗口。
+        // 只移除显示覆盖，不再次修改时间，避免锚点在交接时被重复求解。
+        // 积分缓存的最终目标失效已在 update 的配置边沿处理。
+        // 常态手势帧仍走下方直接倍率分支，不触发全谱面更新。
+        m_ctx->m_pointerTimelineZoom.reset();
+        m_ctx->m_pointerZoomFinished = false;
+    }
+    if ( m_ctx->m_pointerTimelineZoom ) {
+        // 直接操纵必须跟手，不能再给捏合目标叠加桌面滚轮的缩放缓动。
+        // 临时倍率只属于会话显示，不逐帧更新全局配置或重建时间线缓存。
+        m_ctx->animatedTimelineZoom       = *m_ctx->m_pointerTimelineZoom;
+        m_ctx->animatedTimelineZoomTarget = *m_ctx->m_pointerTimelineZoom;
+        m_ctx->animatedTimelineZoomAnimationActive = false;
+        return;
+    }
     const double targetZoom = sanitizeTimelineZoom(config.visual.timelineZoom);
     // 目标值与历史动画值都须为有效正尺度，避免插值从退化投影开始。
     m_ctx->animatedTimelineZoomTarget = static_cast<float>(targetZoom);
@@ -1078,6 +1096,15 @@ void BeatmapSession::updateAnimatedTimelineZoom(
 void BeatmapSession::update(double dt, const Config::EditorConfig& config,
                             bool isActiveSession)
 {
+    if ( sanitizeTimelineZoom(m_ctx->lastConfig.visual.timelineZoom) !=
+         sanitizeTimelineZoom(config.visual.timelineZoom) ) {
+        // 轻量缩放发布不广播完整设置命令，只有最终目标变化才重建积分。
+        // 手势中的局部倍率不改配置，所以常态移动不进入这个低频分支。
+        if ( auto* cache =
+                 m_ctx->timelineRegistry.ctx().find<System::ScrollCache>() )
+            cache->isDirty = true;
+        m_ctx->isTransformDirty = true;
+    }
     m_ctx->lastConfig      = config;
     m_ctx->isActiveSession = isActiveSession;
     // 完成检查不等待后台任务；先提交旧保存结果，再消费本轮可能新增的编辑命令。

@@ -1,7 +1,9 @@
 #include "MobileCanvasInteractionPresentation.h"
 #include "MobileCanvasGesture.h"
+#include "MobileCanvasNavigation.h"
 #include "MobilePointerOwnership.h"
 #include "canvas/Basic2DCanvasInteraction.h"
+#include "canvas/PlanarObservationInput.h"
 #include "common/LogicCommands.h"
 #include "common/render/RenderSnapshot.h"
 #include "config/AppConfig.h"
@@ -14,8 +16,12 @@
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
+#include <glm/vec2.hpp>
 #include <imgui_internal.h>
+#include <optional>
+#include <string>
 
 namespace MMM::Canvas
 {
@@ -45,6 +51,7 @@ public:
     /// @param mode 等待阶段隐藏左键，起笔与收尾分别呈现唯一边沿。
     /// @param point 已锁存的原点或终点，不能使用当前菜单指针代替。
     /// @param count 原生按下时保存的点击次数，延迟回放不重新计算。
+    /// @param hidePointer 全部抬起或多指接管时局部清除悬浮，不影响其他控件。
     /// @details 所有修改严格局限于 routeInput 的同步调用栈。
     /// 不调用 AddMouseButtonEvent，因为入队事件要到下一轮 NewFrame 才生效。
     /// 也不直接调用编辑命令，否则会绕过权限、投影和当前工具的事务规则。
@@ -55,7 +62,7 @@ public:
     /// 该作用域不执行可见按钮，后续弹层按原始触点处理释放保护。
     /// @warning 每帧栈上构造，仅保存固定大小字段，无堆分配或线程同步。
     TouchInputScope(MobileCanvasGesture::Output mode, ImVec2 point,
-                    unsigned short count)
+                    unsigned short count, bool hidePointer = false)
         : m_io(ImGui::GetIO())
         , m_pos(m_io.MousePos)
         , m_delta(m_io.MouseDelta)
@@ -81,6 +88,12 @@ public:
         m_io.MouseDownDuration[0]       = mode == O::Begin ? 0.0f : -1.0f;
         m_io.MouseDownDurationPrev[0]   = mode == O::Release ? 0.0f : -1.0f;
         m_io.MouseDragMaxDistanceSqr[0] = 0;
+        if ( mode == O::Suppress && hidePointer ) {
+            // 触摸没有离开后继续悬浮的语义，不能留下桌面 tooltip 和待绘制虚影。
+            // 仅在画布调用栈内隐藏；恢复真实 IO 后按钮仍收到正常释放边沿。
+            m_io.MousePos   = { -FLT_MAX, -FLT_MAX };
+            m_io.MouseDelta = {};
+        }
         if ( mode == O::Begin || mode == O::Release ) {
             // 起笔必须位于最初触点，释放必须位于最后触点，不能跳到菜单位置。
             m_io.MousePos   = point;
@@ -124,7 +137,7 @@ public:
     /// @brief 等待中的手势也保有指针，防止摄像机在长按期间平移。
     bool hasGesture() const override
     {
-        return m_gesture.active() ||
+        return m_gesture.active() || m_navigation.active() ||
                m_ownership.active(Graphic::mobileTouchSnapshot());
     }
     /// @brief 先判断触摸意图，再把已经确定的编辑边沿交给原控制器。
@@ -207,9 +220,10 @@ public:
         const float originY = raw.m_originY * display.y;
         const bool  acceptsOrigin =
             snapshot->hasBeatmap && !snapshot->isPlaying && !overlay &&
-            !UI::workspaceBlocksCanvasInput() && originX >= frame.m_x &&
-            originX < frame.m_x + frame.m_width && originY >= frame.m_y &&
-            originY < frame.m_y + frame.m_height;
+            frame.m_hovered && !UI::workspaceBlocksCanvasInput() &&
+            originX >= frame.m_x && originX < frame.m_x + frame.m_width &&
+            originY >= frame.m_y && originY < frame.m_y + frame.m_height;
+        // 初始归属还要通过真实窗口命中，避免导航穿透同位置的音频等浮层。
         // 越出画布不取消已认定的拖动；遮罩、播放或系统取消才中断事务。
         const bool interrupted = !snapshot->hasBeatmap || snapshot->isPlaying ||
                                  UI::workspaceBlocksCanvasInput() || overlay;
@@ -220,6 +234,13 @@ public:
             cancelInput(canvas, *snapshot);
             m_gesture.cancel();
         }
+        navigate(raw,
+                 m_ownership.ownsGesture() && !interrupted,
+                 ctx.cameraId,
+                 frame,
+                 *snapshot,
+                 width,
+                 height);
         auto output = MobileCanvasGesture::Output::Suppress;
         if ( !menuOpen ) {
             // 先发布正常悬浮位置，长按菜单才能使用当前触点的吸附时间。
@@ -239,8 +260,14 @@ public:
                     10.0f * scale,
                     eligible || (raw.m_epoch != 0 && m_gesture.active() &&
                                  !interrupted));
+            // 轻点的 Begin/Release
+            // 回放仍保留落点，不能因原始触点已抬起吞掉提交。
+            // 多指导航和真正结束的空闲帧才撤去普通鼠标悬浮反馈。
+            const bool hidePointer =
+                raw.m_epoch != 0 && (m_ownership.blocksSingle() ||
+                                     (raw.m_count == 0 && !m_gesture.active()));
             TouchInputScope input(
-                output, m_gesture.replayPoint(), m_clickCount);
+                output, m_gesture.replayPoint(), m_clickCount, hidePointer);
             routeInput(canvas, snapshot, width, height, true);
         } else {
             // 弹层接管后不补发候选轻点，编辑起笔从未发生，无需发送 End 或
@@ -277,6 +304,91 @@ public:
     }
 
 private:
+    /// @brief 多指导航只发布增量和最终倍率，不修改键盘状态或借用桌面中键。
+    /// @warning 每帧固定数学，只有释放边沿更新配置值；不取得会话长锁。
+    /// @param raw 原始手势值快照，只在本次 UI 栈内借用。
+    /// @param allowed 包含画布起点归属、播放与弹层阻挡的最终导航许可。
+    /// @param camera 命令绑定原始画布，焦点改变不允许重投活动会话。
+    /// @param frame 内容区原点与逆投影矩阵，不能保存到下一帧。
+    /// @param snapshot 本帧显示缩放，用于消除预览压缩等附加比例。
+    /// @param width 逻辑画布宽度，与普通指针命令使用相同投影域。
+    /// @param height 逻辑画布高度，不包含页签或窗口边框。
+    /// @details 原始坐标先换成屏幕逻辑像素，再反投影到谱面平面。
+    /// 二维和三维共用命令；没有有效平面交点时不制造替代落点。
+    /// 最终设置只提交已经实际显示过的倍率，不能提交被投影拒绝的目标。
+    /// 配置值只在释放边沿发布，连续帧不复制完整设置或保存项目文件。
+    /// 所有权仍由 UI 外壳管理，本方法不创建会话或后台任务。
+    void navigate(const Graphic::MobileTouchSnapshot& raw, bool allowed,
+                  const std::string&                    camera,
+                  const UI::Interaction::SurfaceFrame&  frame,
+                  const Common::Render::RenderSnapshot& snapshot, float width,
+                  float height)
+    {
+        auto&      app     = Config::AppConfig::instance();
+        auto&      zoom    = app.getEditorConfig().visual.timelineZoom;
+        const auto display = ImGui::GetIO().DisplaySize;
+        const auto delta =
+            m_navigation.update(raw,
+                                allowed,
+                                display.x,
+                                display.y,
+                                zoom,
+                                10.0f * app.getWindowContentScale());
+        if ( delta.m_changed ) {
+            // 与普通拾取共用屏幕到谱面平面的逆投影，三维视角不另猜移动比例。
+            const glm::vec2 oldScreen{ delta.m_anchorX - frame.m_x,
+                                       delta.m_anchorY - frame.m_y };
+            const glm::vec2 newScreen =
+                oldScreen + glm::vec2(delta.m_x, delta.m_y);
+            const auto oldPoint =
+                frame.m_projection
+                    ? planarObservationUnproject(*frame.m_projection, oldScreen)
+                    : std::optional<glm::vec2>(oldScreen);
+            const auto newPoint =
+                frame.m_projection
+                    ? planarObservationUnproject(*frame.m_projection, newScreen)
+                    : std::optional<glm::vec2>(newScreen);
+            if ( oldPoint && newPoint ) {
+                // 两个点必须来自同一矩阵，分别在不同帧求交会带入摄像机变化。
+                // 旧点提供缩放锚点，新旧差值提供与渲染一致的平移方向。
+                // 一条命令同时求解平移与缩放锚点，避免两条异步命令相互覆盖。
+                // 矩阵无有效交点时不钳制到边缘，也不提交尚未显示过的倍率。
+                m_navigationZoom = delta.m_zoom;
+                UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
+                    Logic::CmdPanCanvas{ .cameraId = camera,
+                                         .deltaX   = newPoint->x - oldPoint->x,
+                                         .deltaY   = newPoint->y - oldPoint->y,
+                                         .viewportWidth  = width,
+                                         .viewportHeight = height,
+                                         .renderScaleY = snapshot.renderScaleY,
+                                         .timelineZoom = delta.m_zoom,
+                                         .anchorY      = oldPoint->y }));
+            }
+        }
+        if ( delta.m_finished ) {
+            // 收尾后保留旧手势的单指屏蔽门闩；导航结束不等于重新允许编辑。
+            // 下一笔编辑必须由新的原始触摸代际开始。
+            // UI
+            // 值立即显示最终倍率；仅发布一个缩放字段，不广播整份设置或等待会话。
+            // 逻辑侧先保留当前直接显示值，下一轮配置可见后再无缝移除局部覆盖。
+            // 一次手势只有一次收尾；第二指先抬起时就提交，不等待残留指针。
+            // 外部取消也保留已完成的视图变换，因为它没有修改谱面物件。
+            zoom = m_navigationZoom;
+            Logic::EditorEngine::instance().updateTimelineZoom(zoom);
+            UI::Interaction::dispatchCommand(
+                Event::LogicCommandEvent(Logic::CmdPanCanvas{
+                    .cameraId = camera, .finishNavigation = true }));
+        }
+        // 历史轻触只有全部抬起后才发动作；已移动或取消的手势不会进入这里。
+        // 历史目标显式带画布身份，关闭目标后丢弃而不回退其他标签。
+        // 短触分类与动作执行分开，权限、撤销和联机仍由原业务入口处理。
+        if ( delta.m_undo )
+            UI::Interaction::dispatchCommand(
+                Event::LogicCommandEvent(Logic::CmdUndo{ .cameraId = camera }));
+        if ( delta.m_redo )
+            UI::Interaction::dispatchCommand(
+                Event::LogicCommandEvent(Logic::CmdRedo{ camera }));
+    }
     /// @brief 长按弹层复用桌面业务动作，布局与触摸释放保护仅在移动端编译。
     /// @param canvas 用于关联批注和重叠层菜单，不能切到其他画布。
     /// @param manager 短期同步动作接收者，不参与手势状态生命周期。
@@ -493,6 +605,11 @@ private:
     std::uint64_t          m_generation{ UI::Interaction::profileGeneration() };
     MobileCanvasGesture    m_gesture;  ///< 每画布独占，不向公共头传播手势类型。
     MobilePointerOwnership m_ownership;  ///< 原始多指接管门闩仅在移动实现可见。
+    MobileCanvasNavigation
+          m_navigation;  ///< 双指坐标、距离与历史轻触门闩不传播到公共头。
+    float m_navigationZoom{
+        1.0f
+    };  ///< 最后真正送入逻辑侧的倍率，拒绝无效投影的目标。
     bool m_waitRelease{};  ///< 菜单打开的原始触点与释放帧都不能激活按钮。
 };
 }  // namespace

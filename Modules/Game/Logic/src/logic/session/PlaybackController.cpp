@@ -948,6 +948,18 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
 /// 不得在此增加阻塞等待、文件操作或额外全量扫描。
 void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
 {
+    if ( cmd.finishNavigation ) {
+        // 收尾不需要有效视口或尚存相机；窗口关闭仍能释放局部覆盖。
+        // 标记最终配置已经发布，显示覆盖由会话在同版配置可见时移除。
+        // 不阻塞等待，也不让处理到旧配置的当前轮次产生一次缩放回跳。
+        m_ctx.m_pointerZoomFinished = true;
+        // 连续定位的最终状态立即提交，不能让音频或联机停留在中间帧。
+        // 即使最后一帧没有位移，也需要结束 isScrubbing 生命周期。
+        // 纯横移从未开启定位，不为它额外触发一次音频 seek。
+        if ( m_ctx.isSeekScrubbing )
+            handleCommand(CmdSeek{ .time = m_ctx.currentTime });
+        return;
+    }
     // 中键纵移同样是用户定位；首播和复播时不允许改变自动演示位置。
     if ( m_ctx.composeLessonInputMode == ComposeLessonInputMode::AutoPlayback )
         return;
@@ -995,7 +1007,14 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
         }
     }
 
-    if ( !std::isfinite(cmd.deltaY) || std::abs(cmd.deltaY) <= 0.001F ) {
+    const bool directNavigation = std::isfinite(cmd.timelineZoom) &&
+                                  cmd.timelineZoom > 0.0F &&
+                                  std::isfinite(cmd.anchorY);
+    const bool directZoom =
+        directNavigation &&
+        std::abs(cmd.timelineZoom - m_ctx.animatedTimelineZoom) > 1e-6F;
+    if ( !std::isfinite(cmd.deltaY) ||
+         (std::abs(cmd.deltaY) <= 0.001F && !directZoom) ) {
         // 纯横向输入已经处理完毕，不要额外触发音频 seek 或命中特效重建。
         return;
     }
@@ -1011,16 +1030,43 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
     }
     // 有效负缩放仍保留符号，像素拖动方向应与实际渲染方向一致。
 
-    double      targetVisualTime = visualTime;
-    const auto* cache =
-        m_ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    double targetVisualTime = visualTime;
+    auto*  cache = m_ctx.timelineRegistry.ctx().find<System::ScrollCache>();
     // 只借用会话内已有缓存，本次换算不复制缓存或取得跨线程共享所有权。
     if ( cache ) {
         // 滚速事件使像素与时间不再线性，必须先移动绝对纵坐标再反查时间。
         // 增量除以渲染缩放后才属于缓存所使用的未缩放坐标空间。
         const double currentAbsY = cache->getVisualAnchorAbsY(visualTime);
-        targetVisualTime         = cache->getTime(
-            currentAbsY + static_cast<double>(cmd.deltaY) / renderScaleY);
+        if ( directZoom ) {
+            // 缩放前后的积分坐标成比例，中点锚定只需要这一比例。
+            // 不先反查锚点时间：负 SV 和 Jump 中同一位置未必有唯一时间。
+            const double judgmentY =
+                camera.viewportHeight * m_ctx.lastConfig.visual.judgeline_pos;
+            const double oldScale = cache->getAnimatedZoomScale();
+            const float  zoom     = std::clamp(cmd.timelineZoom, .1F, 10.0F);
+            double       baseZoom = cache->getBaseZoom();
+            if ( !std::isfinite(baseZoom) || baseZoom <= 1e-9 ) baseZoom = 1.0;
+            // ScrollCache 已包含基础缩放，只更新动画相对倍率，复杂 SV
+            // 不重积分。
+            // 拾取、裁剪和渲染共用该缓存，不能只在纹理显示层做假缩放。
+            m_ctx.m_pointerTimelineZoom = zoom;
+            m_ctx.m_pointerZoomFinished = false;
+            m_ctx.animatedTimelineZoom  = m_ctx.animatedTimelineZoomTarget =
+                zoom;
+            m_ctx.animatedTimelineZoomAnimationActive = false;
+            cache->setAnimatedZoomScale(zoom / baseZoom);
+            const double ratio = cache->getAnimatedZoomScale() / oldScale;
+            // 旧中点偏移随倍率放大，再把新中点移动量叠加到同一表达式。
+            // 这条路径只查询已有索引，不遍历事件或重新积分。
+            const double offset = (judgmentY - cmd.anchorY) / renderScaleY;
+            targetVisualTime =
+                cache->getTime(currentAbsY * ratio + offset * (ratio - 1.0) +
+                               cmd.deltaY / renderScaleY);
+            // 动画倍率已有完整投影路径，连续缩放不触发全谱面 Transform 重建。
+        } else {
+            targetVisualTime = cache->getTime(
+                currentAbsY + static_cast<double>(cmd.deltaY) / renderScaleY);
+        }
     } else {
         // 缓存尚未就绪时提供固定比例的可用平移，不在输入路径临时重建缓存。
         constexpr double FALLBACK_PIXELS_PER_SECOND = 500.0;
@@ -1036,7 +1082,8 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
 
     // 复用统一定位入口处理范围、暂停偏好及音频归属；传入前转回谱面时间。
     // 未设置连续 scrub 标记，中键纵移采用定位命令默认的提交语义。
-    handleCommand(CmdSeek{ targetVisualTime - visualOffset });
+    handleCommand(CmdSeek{ .time        = targetVisualTime - visualOffset,
+                           .isScrubbing = directNavigation });
 
     // 直接操作期间不叠加滚动动画，否则视觉内容会落后于中键指针。
     // 使用定位后已钳制的会话时间，而不是可能超出曲尾的原始拖动目标。

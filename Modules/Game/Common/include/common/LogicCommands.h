@@ -519,7 +519,7 @@ struct CmdClearAllNoteColorOverrides {
 struct CmdUndo {
     /// @brief 非零时只回滚对应教学创建，不执行普通栈顶撤销。
     std::uint64_t walkthroughToken{ 0 };
-    /// @brief 教学撤销的原始画布；关闭后丢弃，不回退到当前活动谱面。
+    /// @brief 显式撤销的原始画布；关闭后丢弃，空值沿用桌面活动会话。
     std::string cameraId;
 };
 
@@ -527,6 +527,8 @@ struct CmdUndo {
  * @brief 重做指令
  */
 struct CmdRedo {
+    /// @brief 触摸历史动作的画布身份；空值保留桌面活动会话路由。
+    std::string cameraId;
 };
 
 /**
@@ -736,6 +738,12 @@ struct CmdPanCanvas {
 
     /// @brief 当前画布纵向渲染缩放。
     float renderScaleY{ 1.0F };
+    /// @brief 直接导航的绝对缩放；零保留原鼠标平移语义，不改缓存倍率。
+    float timelineZoom{ 0.0F };
+    /// @brief 缩放前的双指中点纵坐标，相对于画布内容区域。
+    float anchorY{ 0.0F };
+    /// @brief 全部导航更新结束后清除局部缩放；配置发布必须先于此命令。
+    bool finishNavigation{ false };
 };
 
 /**

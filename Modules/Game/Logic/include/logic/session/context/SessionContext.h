@@ -124,6 +124,12 @@ struct SessionContext {
     float animatedTimelineZoomTarget{ 1.0f };
     /// @brief 时间线缩放动画是否仍需继续推进。
     bool animatedTimelineZoomAnimationActive{ false };
+    /// @brief 指针直接缩放的临时目标，仅由逻辑线程更新，不写入谱面。
+    /// @details 手势期间借用缓存动画倍率，避免逐帧重建滚速索引或广播完整配置。
+    /// 释放时 UI 发布最终配置，再清除此值；此状态不进入项目序列化。
+    std::optional<float> m_pointerTimelineZoom;
+    /// @brief 释放已发布最终配置；保持本地显示覆盖直到该配置进入逻辑轮次。
+    bool m_pointerZoomFinished{ false };
     bool isPlaying{ false };  ///< 是否正在播放
     /// @brief 是否正在本地预览连续 Seek；联机视口需等提交后再同步。
     bool isSeekScrubbing{ false };

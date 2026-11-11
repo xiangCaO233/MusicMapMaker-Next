@@ -683,7 +683,11 @@ void syncScrollCacheAnimatedZoom(SessionContext&             ctx,
 
     // 滚动缓存已按目标缩放构建。
     // 本次只提供动画相对目标的比例，不重复乘目标 zoom。
-    double targetZoom = static_cast<double>(config.visual.timelineZoom);
+    // 脏缓存将在本轮按配置重建；否则积分可能仍使用手势开始前的基础倍率。
+    // 必须以实际积分基准换算，不能把已发布的新目标当作缓存已经重建。
+    double targetZoom = cache->isDirty
+                            ? static_cast<double>(config.visual.timelineZoom)
+                            : cache->getBaseZoom();
     if ( !std::isfinite(targetZoom) || targetZoom <= 1e-9 ) {
         targetZoom = 1.0;
     }

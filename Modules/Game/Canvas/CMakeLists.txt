@@ -409,3 +409,14 @@ if(NOT ANDROID)
 endif()
 mmm_register_test_case(NAME MobileCanvasGestureTest COMMAND
                        MobileCanvasGestureTest)
+
+# 多触点导航直接消费生产跟踪器，使用固定事件时间而非真实设备计时。 测试不初始化 ImGui 或 Vulkan，手机上的布局与注入验收另行执行。
+# 私有手势头只暴露给这个测试目标，不成为 Canvas 的公共包含依赖。 真实跟踪器通过 Graphic 链接，防止测试复制输入身份维护算法。
+mmm_add_test_executable(Canvas MobileCanvasNavigationTest
+                        tests/MobileCanvasNavigationTest.cpp)
+target_include_directories(MobileCanvasNavigationTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# 仅链接生产输入和日志实现，不把窗口初始化变成导航测试前提。
+target_link_libraries(MobileCanvasNavigationTest PRIVATE Graphic Log)
+mmm_register_test_case(NAME MobileCanvasNavigationTest COMMAND
+                       MobileCanvasNavigationTest)

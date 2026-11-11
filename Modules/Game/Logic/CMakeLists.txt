@@ -507,3 +507,11 @@ target_link_libraries(BmsPackageExportServiceTest PRIVATE Logic Log)
 mmm_register_test_case(
   NAME BmsPackageExportServiceTest COMMAND BmsPackageExportServiceTest
   "${CMAKE_BINARY_DIR}/test_output/bms_package")
+
+# 直接导航通过真实 Session 更新验证缩放锚点和最终配置采纳时序。 不初始化音频设备，也不依赖用户谱面或模拟器的输入速度。
+mmm_add_test_executable(Logic CanvasTouchNavigationTest
+                        tests/CanvasTouchNavigationTest.cpp)
+# 链接真实会话控制器，避免测试公式复制掩盖配置交接错误。
+target_link_libraries(CanvasTouchNavigationTest PRIVATE Logic Log)
+mmm_register_test_case(NAME CanvasTouchNavigationTest COMMAND
+                       CanvasTouchNavigationTest)
