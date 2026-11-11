@@ -410,6 +410,17 @@ endif()
 mmm_register_test_case(NAME MobileCanvasGestureTest COMMAND
                        MobileCanvasGestureTest)
 
+# 单指选择覆盖真实生产解释器的拾取、子部件锁存与快速释放。 桌面用同一个夹具核验双击跳转，确保移动语义不扩散到经典方案。
+mmm_add_test_executable(Canvas MobileCanvasSelectionTest
+                        tests/MobileCanvasSelectionTest.cpp)
+target_include_directories(MobileCanvasSelectionTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(MobileCanvasSelectionTest PRIVATE Canvas Log 3rd_imgui)
+# 同属 Canvas 测试套件，移动生产策略已由 MobileCanvasGestureTest 编译一次。 不重复加入实现，避免套件链接出现同名工厂符号。
+# 单指验证边界： - CPU 用例只观察正式输入派发，不持有用户会话。 - 实际谱面保存与轨道、时间变化仍由设备验收。
+mmm_register_test_case(NAME MobileCanvasSelectionTest COMMAND
+                       MobileCanvasSelectionTest)
+
 # 多触点导航直接消费生产跟踪器，使用固定事件时间而非真实设备计时。 测试不初始化 ImGui 或 Vulkan，手机上的布局与注入验收另行执行。
 # 私有手势头只暴露给这个测试目标，不成为 Canvas 的公共包含依赖。 真实跟踪器通过 Graphic 链接，防止测试复制输入身份维护算法。
 mmm_add_test_executable(Canvas MobileCanvasNavigationTest

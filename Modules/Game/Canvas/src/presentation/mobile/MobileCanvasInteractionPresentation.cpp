@@ -50,7 +50,7 @@ public:
     /// @brief 保存物理状态后呈现本帧已经确定的编辑意图。
     /// @param mode 等待阶段隐藏左键，起笔与收尾分别呈现唯一边沿。
     /// @param point 已锁存的原点或终点，不能使用当前菜单指针代替。
-    /// @param count 原生按下时保存的点击次数，延迟回放不重新计算。
+    /// @param count 方案确认的点击次数，选择工具将连续轻点保持为单次选择。
     /// @param hidePointer 全部抬起或多指接管时局部清除悬浮，不影响其他控件。
     /// @details 所有修改严格局限于 routeInput 的同步调用栈。
     /// 不调用 AddMouseButtonEvent，因为入队事件要到下一轮 NewFrame 才生效。
@@ -267,8 +267,22 @@ public:
                 raw.m_epoch != 0 && (m_ownership.blocksSingle() ||
                                      (raw.m_count == 0 && !m_gesture.active()));
             TouchInputScope input(
-                output, m_gesture.replayPoint(), m_clickCount, hidePointer);
-            routeInput(canvas, snapshot, width, height, true);
+                output,
+                m_gesture.replayPoint(),
+                snapshot->currentTool == Logic::EditTool::Marquee
+                    ? 1
+                    : m_clickCount,
+                hidePointer);
+            // 选择工具的连续轻点只选择，不借用桌面双击 seek。
+            // 拖动起点仍回放原命中；快速释放由桥补交最后矩形或物件位置。
+            // 触控容差内的抖动没有完成拖动标志，因此不会改变物件数据。
+            routeInput(canvas,
+                       snapshot,
+                       width,
+                       height,
+                       true,
+                       snapshot->currentTool == Logic::EditTool::Marquee &&
+                           m_gesture.finishedDrag());
         } else {
             // 弹层接管后不补发候选轻点，编辑起笔从未发生，无需发送 End 或
             // Cancel。

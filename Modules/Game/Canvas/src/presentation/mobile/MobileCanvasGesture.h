@@ -26,9 +26,12 @@ public:
     Output update(bool clicked, bool down, bool released, ImVec2 point,
                   double time, float tolerance, bool eligible)
     {
+        // 收尾标志只在本次更新有效，不能把前一笔拖动带给下一次轻点。
+        m_finishedDrag = false;
         // 轻点的起笔与收尾分属两个 UI 帧，使原工具完整看到两次边沿。
         // 同帧到达的新触点先锁存，不能因上一轻点的回放被吃掉。
         if ( m_releaseQueued ) {
+            m_finishedDrag  = m_dragging;
             m_releaseQueued = false;
             m_replay        = m_end;
             if ( clicked && eligible ) begin(point, time);
@@ -36,7 +39,10 @@ public:
         }
         if ( m_editing ) {
             // 认定拖动后不再回到长按候选；回到起点也不会误开菜单。
-            if ( released || !down ) m_editing = false;
+            if ( released || !down ) {
+                m_finishedDrag = m_dragging;
+                m_editing      = false;
+            }
             return Output::Pass;
         }
         if ( !m_pending ) {
@@ -51,6 +57,9 @@ public:
         const float dx = point.x - m_origin.x, dy = point.y - m_origin.y;
         if ( dx * dx + dy * dy > tolerance * tolerance || released || !down ) {
             // 回放起点而非当前位置，保持选中对象与长条起拍的原有语义。
+            // 即使移动和抬手同帧到达，也保留越过触控容差的事实。
+            // 通用工具只认物理 Down 时的拖动，不能据此丢失快速手势的终点。
+            m_dragging      = dx * dx + dy * dy > tolerance * tolerance;
             m_pending       = false;
             m_replay        = m_origin;
             m_editing       = down;
@@ -72,9 +81,13 @@ public:
     {
         // 连已排队的轻点释放也必须丢弃，否则会提交刚被取消的画笔。
         m_pending = m_editing = m_releaseQueued = false;
+        m_dragging = m_finishedDrag = false;
     }
     /// @brief 输入归属包括等待与回放阶段，摄像机不可抢占。
     bool active() const { return m_pending || m_editing || m_releaseQueued; }
+    /// @brief 本帧是否结束已越过触控容差的拖动，包含无持续帧的快速抬手。
+    /// @warning 每帧只读标量；桥只据此提交终点，不合成额外按下或历史命令。
+    bool finishedDrag() const { return m_finishedDrag; }
     /// @brief 返回当前回放落点，生命周期仅为下一次 update 之前。
     ImVec2 replayPoint() const { return m_replay; }
 
@@ -82,13 +95,16 @@ private:
     /// @brief 新触点只锁存屏幕起点和时钟，等待移动或释放决定语义。
     void begin(ImVec2 point, double time)
     {
-        m_pending = true;
-        m_origin  = point;
-        m_started = time;
+        m_dragging = false;
+        m_pending  = true;
+        m_origin   = point;
+        m_started  = time;
     }
     ImVec2 m_origin{}, m_end{},
         m_replay{};      ///< 当前触点与一次轻点回放的值坐标。
     double m_started{};  ///< 单调 UI 时钟，不使用定时线程或 sleep。
-    bool   m_pending{}, m_editing{}, m_releaseQueued{};  ///< 三个互斥推进阶段。
+    bool   m_dragging{},
+        m_finishedDrag{};  ///< 触控位移锁存与单帧收尾，和物理 Down 独立。
+    bool m_pending{}, m_editing{}, m_releaseQueued{};  ///< 三个互斥推进阶段。
 };
 }  // namespace MMM::Canvas
