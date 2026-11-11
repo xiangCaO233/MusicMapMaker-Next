@@ -69,7 +69,11 @@ protected:
     /// @warning 每帧调用，保留原有连续命令去重和权限检查。
     static void routeInput(Basic2DCanvasInteraction&             canvas,
                            const Common::Render::RenderSnapshot* snapshot,
-                           float width, float height);
+                           float width, float height, bool cancellable = false);
+    /// @brief 输入被接管时回退尚未提交的编辑，不触及此前的撤销历史。
+    /// @warning 仅在取消边沿调用；通过命令队列顺序执行，不等待逻辑线程。
+    static void cancelInput(Basic2DCanvasInteraction&             canvas,
+                            const Common::Render::RenderSnapshot& snapshot);
     /// @brief 两种平台都可复用重叠物件选择，目标归当前画布。
     static void renderLayers(Basic2DCanvasInteraction&             canvas,
                              const Common::Render::RenderSnapshot& snapshot);

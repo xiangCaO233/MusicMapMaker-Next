@@ -4,9 +4,11 @@
 #include "common/render/RenderSnapshot.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "graphic/mobile/MobileTouchInput.h"
 #include "log/colorful-log.h"
 #include "presentation/CanvasInteractionPresentation.h"
 #include "presentation/mobile/MobileCanvasInteractionPresentation.h"
+#include "presentation/mobile/MobilePointerOwnership.h"
 #include "ui/interaction/EditorInteraction.h"
 #include <string_view>
 #include <variant>
@@ -64,7 +66,26 @@ void check(bool value, const char* message)
 /// @note 原始触点仍由正式策略负责释放保护，测试不改其门闩。
 /// @note 同时统计直接选择命令，防止漏掉清空选区副作用。
 /// @note 此层验证真实接线，轻点与拖动边界由后续模型用例覆盖。
-void testControllerLongPress(bool touch)
+/// @param multi 用真实多触点流覆盖已经起笔后的接管，而不是只测候选取消。
+/// @details 输入模拟保留 SDL 先发布、ImGui 后消费的生产顺序。
+/// 同一画布先绘制、再由第二指取消、全部抬起后再次轻点。
+/// 新轻点仍需完整起笔，因此不能通过永久吞掉输入令用例通过。
+/// 框选和画笔分别验证，取消必须使用各自业务命令。
+/// 第一指先释放后第二指继续按住，覆盖最容易误落单键的阶段。
+/// 全部抬起后的空帧用于检测迟到的合成鼠标释放。
+/// 每个场景只统计命令，不应用到用户会话。
+/// 取消数只统计 cancel=true，正常释放不能冒充取消。
+/// 手势过程中不创建后台等待，时间推进完全由测试帧控制。
+/// 再次起笔位于不同轨道，防止错误复用上次起点也满足计数。
+/// 测试不要求特定帧率；10dp 阈值只通过明确越界触发。
+/// 菜单是否打开独立断言，避免取消同时错误弹出编辑菜单。
+/// 工具切换在两个上下文之间完成，不在手势中改变工具。
+/// 原始输入的设备及手指身份固定，释放顺序与鼠标状态分别提供。
+/// 合成鼠标不能取代原始峰值，因为一次轮询可能包含全部多指事件。
+/// 下一次触点建立新代际，旧接管门闩必须自然复位。
+/// 窗口在头两帧预热，避免首帧悬浮建立影响拾取结果。
+/// 无触控方案仍执行旧断言，检测桌面输入是否被无意延迟。
+void testControllerLongPress(bool touch, bool multi = false)
 {
     using namespace MMM;
     for ( auto tool : { Logic::EditTool::Marquee, Logic::EditTool::Draw } ) {
@@ -89,25 +110,75 @@ void testControllerLongPress(bool touch)
             snapshot.trackCount                             = 4;
             snapshot.beatmapPathKey    = "touch-fixture.mmm";
             snapshot.beatmapInstanceId = 1;
-            int        edits{};
+            int        edits{}, cancelled{};
             auto&      bus = Event::EventBus::instance();
+            int        currentFrame{};
+            bool       leakedSelection{};
             const auto subscription =
                 bus.subscribe<Event::LogicCommandEvent>([&](const auto& event) {
+                    if ( const auto* end =
+                             std::get_if<Logic::CmdEndBrush>(&event.command) )
+                        cancelled += end->cancel;
+                    if ( const auto* end =
+                             std::get_if<Logic::CmdEndMarquee>(&event.command) )
+                        cancelled += end->cancel;
                     // 普通位置反馈不算编辑；选择和起笔都是需要防止的副作用。
                     // 先清空再结束框选并不能恢复原选择，必须从根源阻止此类命令。
+                    const bool selection =
+                        std::holds_alternative<Logic::CmdSelectEntity>(
+                            event.command);
+                    // 正常空白轻点的释放允许额外清空选择，不能把它计作第三次起笔。
+                    // 因此起笔次数与选择副作用按独立契约观察。
+                    // 只在新轻点正常释放后允许清空选择，残留手指不能产生选择副作用。
+                    leakedSelection |= multi && selection &&
+                                       currentFrame >= 4 && currentFrame < 8;
                     edits += std::holds_alternative<Logic::CmdStartMarquee>(
                                  event.command) ||
                              std::holds_alternative<Logic::CmdStartBrush>(
                                  event.command) ||
-                             std::holds_alternative<Logic::CmdSelectEntity>(
-                                 event.command);
+                             (!multi && selection);
                 });
             bool menu{};
-            for ( int frame = 0; frame < 9; ++frame ) {
+            for ( int frame = 0; frame < (multi ? 12 : 9); ++frame ) {
                 // 前两帧建立真实窗口悬浮，后续按住超过正式阈值。
                 // 输入经过事件队列与 NewFrame，不能直接伪造 Clicked 字段。
-                io.AddMousePosEvent(150, 150);
-                io.AddMouseButtonEvent(0, frame >= 2);
+                currentFrame = frame;
+                // 阶段编号供事件订阅辨认取消后的禁用区间，不参与生产手势判断。
+                if ( multi ) {
+                    // 原始事件先于 ImGui
+                    // 帧；第二指加入、第一指先抬和全部抬起分帧验收。
+                    using Graphic::TouchPhase;
+                    if ( frame == 2 )
+                        Graphic::publishMobileTouch(
+                            TouchPhase::Down, 1, 1, .15f, 1.0f / 6, .2);
+                    if ( frame == 3 )
+                        Graphic::publishMobileTouch(
+                            TouchPhase::Move, 1, 1, .22f, 1.0f / 6, .3);
+                    if ( frame == 4 )
+                        Graphic::publishMobileTouch(
+                            TouchPhase::Down, 1, 2, .35f, 1.0f / 6, .4);
+                    if ( frame == 5 )
+                        Graphic::publishMobileTouch(
+                            TouchPhase::Up, 1, 1, .22f, 1.0f / 6, .5);
+                    if ( frame == 6 )
+                        Graphic::publishMobileTouch(
+                            TouchPhase::Up, 1, 2, .35f, 1.0f / 6, .6);
+                    if ( frame == 8 )
+                        Graphic::publishMobileTouch(
+                            TouchPhase::Down, 1, 3, .4f, 1.0f / 6, .8);
+                    if ( frame == 9 )
+                        Graphic::publishMobileTouch(
+                            TouchPhase::Up, 1, 3, .4f, 1.0f / 6, .9);
+                    io.AddMousePosEvent(frame < 3   ? 150
+                                        : frame < 8 ? 220
+                                                    : 400,
+                                        150);
+                    io.AddMouseButtonEvent(
+                        0, (frame >= 2 && frame < 5) || frame == 8);
+                } else {
+                    io.AddMousePosEvent(150, 150);
+                    io.AddMouseButtonEvent(0, frame >= 2);
+                }
                 ImGui::NewFrame();
                 ImGui::SetNextWindowPos({ 0, 0 });
                 ImGui::SetNextWindowSize({ 700, 800 });
@@ -138,9 +209,25 @@ void testControllerLongPress(bool touch)
             // 三种方案使用同一生产移动解释器，避免只测独立能力标志。
             // 菜单真的打开且没有编辑，两个条件必须同时成立。
             // 否则完全不处理输入的错误实现也会满足“没有副作用”。
-            check(menu == touch, "only touch profile opens long press menu");
-            check(touch ? edits == 0 : edits > 0,
-                  "profile routes press through its actual editing path");
+            if ( multi ) {
+                // 先起笔再被双指取消；所有旧触点抬起后，新轻点必须恢复正常编辑。
+                // 一个取消对应第一个已开始事务，第二个事务走正常释放。
+                // 菜单和残留选择都单独检查，不能用起笔计数掩盖其他副作用。
+                if ( menu || edits != 2 || cancelled != 1 )
+                    XERROR("tool={} menu={} starts={} cancelled={}",
+                           static_cast<int>(tool),
+                           menu,
+                           edits,
+                           cancelled);
+                check(!menu && edits == 2 && cancelled == 1 && !leakedSelection,
+                      "multi-touch cancels once, suppresses remaining finger "
+                      "and accepts next tap");
+            } else {
+                check(menu == touch,
+                      "only touch profile opens long press menu");
+                check(touch ? edits == 0 : edits > 0,
+                      "profile routes press through its actual editing path");
+            }
             bus.unsubscribe<Event::LogicCommandEvent>(subscription);
         }
         // 正式控制器和策略先销毁，再结束其借用的 ImGui 上下文。
@@ -238,5 +325,19 @@ int main()
     check(consecutive.update(false, false, false, { 60, 70 }, 0.08, 10, true) ==
               O::Release,
           "next rapid tap completes");
+    // 原始输入用例最后执行，模拟设备代际不会污染前面的无设备夹具。
+    // 正式控制器收到的取消命令需与工具开始次数一并匹配。
+    MMM::UI::Interaction::synchronizeProfile("touch-gestures", true);
+    testControllerLongPress(true, true);
+    using namespace MMM;
+    Canvas::MobilePointerOwnership owner;
+    Graphic::MobileTouchTracker    tracker;
+    tracker.update(Graphic::TouchPhase::Down, 1, 1, .2f, .3f, 0);
+    check(!owner.update(tracker.snapshot(), false, false),
+          "outside origin never owns canvas");
+    tracker.update(Graphic::TouchPhase::Move, 1, 1, .4f, .3f, .1);
+    owner.update(tracker.snapshot(), true, false);
+    check(owner.blocksSingle() && !owner.ownsGesture(),
+          "entering canvas cannot steal gesture");
     return failures == 0 ? 0 : 1;
 }

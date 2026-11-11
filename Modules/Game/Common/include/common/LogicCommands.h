@@ -140,6 +140,8 @@ struct CmdUpdateDrag {
  */
 struct CmdEndDrag {
     std::string cameraId;
+    /// @brief 输入被系统或导航手势接管时恢复预览，不新增撤销历史。
+    bool cancel{ false };
 };
 
 /// @brief 将项目音频资源作为自动采样放入主画布 BGM 轨道区。
@@ -239,6 +241,8 @@ struct CmdStartMarquee {
     bool        isCtrlDown{ false };
     /// @brief 本次框选锁存的集合操作；为空时沿用经典追加修饰键。
     std::optional<SelectionOperation> selectionOperation;
+    /// @brief 可取消的触摸事务保存旧选择；桌面默认不承担复制成本。
+    bool captureSelectionForCancel{ false };
 };
 
 /**
@@ -252,7 +256,10 @@ struct CmdUpdateMarquee {
 /**
  * @brief 结束框选指令
  */
-struct CmdEndMarquee {};
+struct CmdEndMarquee {
+    /// @brief 恢复起框前的选择及框序列，仅对保存了检查点的事务生效。
+    bool cancel{ false };
+};
 
 /**
  * @brief 移除指定位置的框选区域
@@ -503,7 +510,8 @@ struct CmdClearNoteColorOverrides {
 };
 
 /// @brief 清除当前谱面全部正式音符及折线子段的自定义颜色。
-struct CmdClearAllNoteColorOverrides {};
+struct CmdClearAllNoteColorOverrides {
+};
 
 /**
  * @brief 撤销指令
@@ -518,12 +526,14 @@ struct CmdUndo {
 /**
  * @brief 重做指令
  */
-struct CmdRedo {};
+struct CmdRedo {
+};
 
 /**
  * @brief 复制指令
  */
-struct CmdCopy {};
+struct CmdCopy {
+};
 
 /**
  * @brief 粘贴指令
@@ -542,12 +552,14 @@ struct CmdPaste {
 /**
  * @brief 剪切指令
  */
-struct CmdCut {};
+struct CmdCut {
+};
 
 /**
  * @brief 删除选中物件指令
  */
-struct CmdDeleteSelected {};
+struct CmdDeleteSelected {
+};
 
 /// @brief 删除创作教学红框指定的错误根物件，避免普通撤销误伤其它编辑。
 struct CmdRemoveComposeLessonNote {
@@ -562,12 +574,14 @@ struct CmdRemoveComposeLessonNote {
 /**
  * @brief 镜像选中物件指令
  */
-struct CmdMirrorSelected {};
+struct CmdMirrorSelected {
+};
 
 /**
  * @brief 对齐选中物件至常用分拍指令
  */
-struct CmdAlignSelectedToCommonBeats {};
+struct CmdAlignSelectedToCommonBeats {
+};
 
 /// @brief 全选命令的轨道区范围。
 enum class SelectAllScope : std::uint8_t {
@@ -1030,7 +1044,8 @@ struct CmdUpdateBeatmapMetadata {
 };
 
 /// @brief 标记直接修改的扩展谱面元数据，并请求尾随自动保存。
-struct CmdMarkBeatmapMetadataDirty {};
+struct CmdMarkBeatmapMetadataDirty {
+};
 
 /**
  * @brief 导入音频指令

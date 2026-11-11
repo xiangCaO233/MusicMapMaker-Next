@@ -442,6 +442,8 @@ private:
     /// @brief 是否已经发送过悬浮状态。
     bool m_hasLastHovered{ false };
     /// @brief 左键按下时是否位于画布内。
+    /// @brief 平台解释器只在可取消触摸起笔期间启用检查点，桌面默认关闭。
+    bool m_pointerCancellationEnabled{ false };
     bool m_leftPressStartedOnCanvas{ false };
     /// @brief 左键按下时是否位于轨道布局内。
     bool m_leftPressStartedInTrackLayout{ false };

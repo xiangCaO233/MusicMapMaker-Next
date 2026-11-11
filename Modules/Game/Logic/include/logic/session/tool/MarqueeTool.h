@@ -1,6 +1,7 @@
 #pragma once
 
 #include "logic/session/tool/GrabTool.h"
+#include <memory>
 
 namespace MMM::Logic
 {
@@ -10,6 +11,10 @@ namespace MMM::Logic
 class MarqueeTool : public GrabTool
 {
 public:
+    /// @brief 检查点随工具分配一次，普通桌面框选不复制选择集合。
+    MarqueeTool();
+    /// @brief 在实现文件中销毁私有检查点，公开头不传播会话容器。
+    ~MarqueeTool() override;
     /// @brief 开始创建框选区域，并在非加选模式下清空旧选择。
     /// @param ctx 会话上下文
     /// @param cmd 开始框选指令
@@ -22,7 +27,7 @@ public:
     void handleUpdateMarquee(SessionContext&         ctx,
                              const CmdUpdateMarquee& cmd) override;
 
-    /// @brief 结束框选区域创建，并处理无效的小尺寸框选。
+    /// @brief 结束框选；取消恢复检查点，正常释放处理无效的小尺寸框选。
     /// @param ctx 会话上下文
     /// @param cmd 结束框选指令
     void handleEndMarquee(SessionContext&      ctx,
@@ -33,6 +38,12 @@ public:
     /// @param cmd 移除框选框指令
     void handleRemoveMarqueeAt(SessionContext&           ctx,
                                const CmdRemoveMarqueeAt& cmd) override;
+
+private:
+    /// @brief 仅保存本次可取消框选开始前的选择，不拥有会话或实体。
+    struct SelectionCheckpoint;
+    std::unique_ptr<SelectionCheckpoint>
+        m_checkpoint;  ///< 容器容量跨手势复用。
 };
 
 }  // namespace MMM::Logic

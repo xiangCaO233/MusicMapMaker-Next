@@ -2363,7 +2363,7 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
     m_hasLastAppliedDragTarget = false;
 }
 
-/// @brief 结束物件移动或局部编辑拖拽并提交动作。
+/// @brief 结束物件移动或局部编辑拖拽，按显式取消意图恢复或提交动作。
 /// @param ctx 会话上下文。
 /// @param cmd 拖拽结束命令。
 /// @warning 释放低频路径：汇总参与组件并构造历史动作，随后刷新打击事件。
@@ -2372,8 +2372,55 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
 /// @note 活动身份为空时直接返回；调用者不能用重复释放代替开始失败的清理。
 void GrabTool::handleEndDrag(SessionContext& ctx, const CmdEndDrag& cmd)
 {
-    (void)cmd;
     if ( ctx.draggedEntity == entt::null ) return;
+    if ( cmd.cancel ) {
+        // 初始快照在正式 StartDrag 建立，包含组内所有被拖动的物件。
+        // 修改仅覆盖仍然存在且仍含对应组件的实体，不重建已删除身份。
+        // 子实体和根组件一起恢复，避免折线下次同步继续使用预览位置。
+        // 音频采样使用独立注册表，数值相同的实体编号不能跨域写入。
+        // 回滚不生成新动作，已有 Undo/Redo 分支均不改变。
+        // 失效标记交给后续系统消费，不在取消边沿重新扫描整张谱面。
+        // 固定渲染集合只用于本次拖动，必须在恢复坐标之后清理。
+        // 不保留统一跨域和子项拖动模式，下一笔需要重新选择求解器。
+        // 教学完成事件只属于正式释放提交，取消不得推进演示步骤。
+        // 早返回阻止下方结构合并、位置批次与动作栈写入。
+        // 按下快照覆盖所有参与的父子实体，只回退本次预览，不能用 Undo
+        // 误撤销用户前一个操作；结构动作尚未在释放路径中提交。
+        for ( const auto& [entity, state] : m_initialStates ) {
+            if ( ctx.noteRegistry.valid(entity) &&
+                 ctx.noteRegistry.all_of<NoteComponent>(entity) )
+                ctx.noteRegistry.replace<NoteComponent>(entity, state.note);
+        }
+        for ( const auto& [entity, state] : m_initialSampleStates ) {
+            if ( ctx.sampleRegistry.valid(entity) &&
+                 ctx.sampleRegistry.all_of<SampleComponent>(entity) )
+                ctx.sampleRegistry.replace<SampleComponent>(entity,
+                                                            state.sample);
+        }
+        // 预览位置可能跨过可见性分桶；清除固定列表前使位置缓存失效。
+        ctx.isNoteOrderDirty             = true;
+        ctx.isNoteStatsDirty             = true;
+        ctx.isAnnotationRenderCacheDirty = true;
+        ctx.isTransformDirty             = true;
+        clearDraggingFlags(ctx, m_initialStates);
+        clearSampleDraggingFlags(ctx, m_initialSampleStates);
+        clearSessionDragState(ctx);
+        ctx.draggedEntity     = entt::null;
+        ctx.draggedObjectKind = ChartObjectKind::PlayerNote;
+        ctx.dragInitialNote.reset();
+        ctx.dragInitialSample.reset();
+        ctx.dragRenderPinnedEntities.clear();
+        ctx.dragSampleRenderPinnedEntities.clear();
+        m_initialStates.clear();
+        m_initialSampleStates.clear();
+        m_isFirstPolylineBodyDrag  = false;
+        m_usesUnifiedObjectDrag    = false;
+        m_isSampleOffsetDrag       = false;
+        m_isPolylineSubDrag        = false;
+        m_hasLastAppliedDragTarget = false;
+        // 不发布教学完成事件、不重建历史；下一次按下重新建立完整事务。
+        return;
+    }
     // 只发布释放事务的身份；几何仍由随后生成的正式快照验收。
     // 预览中的移动不能凭鼠标松开就推进教学步骤。
     auto& editEvent = ctx.walkthroughEditEvent;

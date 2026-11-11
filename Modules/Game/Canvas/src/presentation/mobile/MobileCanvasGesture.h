@@ -67,6 +67,12 @@ public:
     }
     /// @brief 外部弹层接管时取消尚未交给工具的候选。
     void cancelPending() { m_pending = false; }
+    /// @brief 多指或系统接管时丢弃所有回放，原业务事务由中立桥负责取消。
+    void cancel()
+    {
+        // 连已排队的轻点释放也必须丢弃，否则会提交刚被取消的画笔。
+        m_pending = m_editing = m_releaseQueued = false;
+    }
     /// @brief 输入归属包括等待与回放阶段，摄像机不可抢占。
     bool active() const { return m_pending || m_editing || m_releaseQueued; }
     /// @brief 返回当前回放落点，生命周期仅为下一次 update 之前。

@@ -1,5 +1,6 @@
 #include "MobileCanvasInteractionPresentation.h"
 #include "MobileCanvasGesture.h"
+#include "MobilePointerOwnership.h"
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "common/LogicCommands.h"
 #include "common/render/RenderSnapshot.h"
@@ -121,7 +122,11 @@ class MobileCanvasInteractionPresentation final
 {
 public:
     /// @brief 等待中的手势也保有指针，防止摄像机在长按期间平移。
-    bool hasGesture() const override { return m_gesture.active(); }
+    bool hasGesture() const override
+    {
+        return m_gesture.active() ||
+               m_ownership.active(Graphic::mobileTouchSnapshot());
+    }
     /// @brief 先判断触摸意图，再把已经确定的编辑边沿交给原控制器。
     /// @param canvas 同步借用当前画布，策略不拥有会话或渲染快照。
     /// @param manager 菜单动作执行时借用，不留存到下一帧。
@@ -139,7 +144,7 @@ public:
     /// 谱面实例参与校验，同路径文件重新加载也不能使用旧菜单目标。
     /// 播放中禁用编辑入口，仍由正式动作处理器复核权限与目标。
     /// 菜单操作不重复初始化动作注册表，也不保存 UIManager 的所有权。
-    /// @warning 每帧固定状态更新，不回滚命令、不读取 ECS 或等待逻辑线程。
+    /// @warning 每帧固定状态更新；取消仅发命令，不读取 ECS 或等待逻辑线程。
     void update(Basic2DCanvasInteraction& canvas, UI::UIManager* manager,
                 const Common::Render::RenderSnapshot* snapshot,
                 const UI::Interaction::SurfaceFrame& frame, float width,
@@ -182,7 +187,40 @@ public:
                               point.x < frame.m_x + frame.m_width &&
                               point.y < frame.m_y + frame.m_height &&
                               !UI::workspaceBlocksCanvasInput();
-        auto       output   = MobileCanvasGesture::Output::Suppress;
+        // 原始输入与 ImGui 鼠标可能相差一个队列帧，接管不能依赖 MouseDown。
+        // 代际峰值保留到全部抬起后，防止快捏合被拆成一次延迟轻点。
+        // 坐标从窗口归一化输入换成逻辑像素，不能使用 framebuffer 分辨率。
+        // 多画布只认第一指起点，不随第二指落点切换会话。
+        // 抽屉遮罩属于外部中断，越出原矩形仅是正常的连续拖动。
+        // 菜单里的新触点交给控件，不能成为被遮住画布的新候选。
+        // 取消桥通过原命令队列排在上次预览之后，不等待后台确认。
+        // 结束代际仍屏蔽旧鼠标边沿，但不会永久持有方案切换门闩。
+        // 单指路径继续复用起点回放，拾取与显示投影不用复制一份实现。
+        const auto& raw     = Graphic::mobileTouchSnapshot();
+        const auto  display = ImGui::GetIO().DisplaySize;
+        // 通用属性弹层同样遮住画布，不能仅识别本类自己的长按菜单。
+        // 任意层弹窗都先取得输入，关闭后仍需一次新的触摸代际。
+        const bool overlay = ImGui::IsPopupOpen(
+            nullptr,
+            ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        const float originX = raw.m_originX * display.x;
+        const float originY = raw.m_originY * display.y;
+        const bool  acceptsOrigin =
+            snapshot->hasBeatmap && !snapshot->isPlaying && !overlay &&
+            !UI::workspaceBlocksCanvasInput() && originX >= frame.m_x &&
+            originX < frame.m_x + frame.m_width && originY >= frame.m_y &&
+            originY < frame.m_y + frame.m_height;
+        // 越出画布不取消已认定的拖动；遮罩、播放或系统取消才中断事务。
+        const bool interrupted = !snapshot->hasBeatmap || snapshot->isPlaying ||
+                                 UI::workspaceBlocksCanvasInput() || overlay;
+        const bool taken = m_ownership.update(raw, acceptsOrigin, interrupted);
+        // 新触点从画布外开始时，也要丢弃上一轻点尚未完成的回放。
+        // 外部手势不能令旧回放永久占有画布，或在之后误补发释放。
+        if ( taken || (m_ownership.blocksSingle() && m_gesture.active()) ) {
+            cancelInput(canvas, *snapshot);
+            m_gesture.cancel();
+        }
+        auto output = MobileCanvasGesture::Output::Suppress;
         if ( !menuOpen ) {
             // 先发布正常悬浮位置，长按菜单才能使用当前触点的吸附时间。
             // 输入作用域只保护原画布调用，弹窗始终读取真实按下与释放状态。
@@ -191,16 +229,19 @@ public:
             // 双击计数仅在原生按下时锁存，延迟到释放回放时 IO 计数已清零。
             if ( ImGui::IsMouseClicked(0) )
                 m_clickCount = ImGui::GetIO().MouseClickedCount[0];
-            output = m_gesture.update(ImGui::IsMouseClicked(0),
-                                      ImGui::IsMouseDown(0),
-                                      ImGui::IsMouseReleased(0),
-                                      point,
-                                      ImGui::GetTime(),
-                                      10.0f * scale,
-                                      eligible);
+            if ( !m_ownership.blocksSingle() )
+                output = m_gesture.update(
+                    ImGui::IsMouseClicked(0),
+                    ImGui::IsMouseDown(0),
+                    ImGui::IsMouseReleased(0),
+                    point,
+                    ImGui::GetTime(),
+                    10.0f * scale,
+                    eligible || (raw.m_epoch != 0 && m_gesture.active() &&
+                                 !interrupted));
             TouchInputScope input(
                 output, m_gesture.replayPoint(), m_clickCount);
-            routeInput(canvas, snapshot, width, height);
+            routeInput(canvas, snapshot, width, height, true);
         } else {
             // 弹层接管后不补发候选轻点，编辑起笔从未发生，无需发送 End 或
             // Cancel。
@@ -449,8 +490,9 @@ private:
         createDesktopCanvasInteractionPresentation()
     };
     /// @brief 每画布缓存方案代际，切换时丢弃已关闭方案的弹层状态。
-    std::uint64_t       m_generation{ UI::Interaction::profileGeneration() };
-    MobileCanvasGesture m_gesture;  ///< 每画布独占，不向公共头传播手势类型。
+    std::uint64_t          m_generation{ UI::Interaction::profileGeneration() };
+    MobileCanvasGesture    m_gesture;  ///< 每画布独占，不向公共头传播手势类型。
+    MobilePointerOwnership m_ownership;  ///< 原始多指接管门闩仅在移动实现可见。
     bool m_waitRelease{};  ///< 菜单打开的原始触点与释放帧都不能激活按钮。
 };
 }  // namespace

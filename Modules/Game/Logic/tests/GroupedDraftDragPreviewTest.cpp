@@ -4,8 +4,10 @@
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/CanvasCamera.h"
+#include "logic/session/SelectionState.h"
 #include "logic/session/context/SessionContext.h"
 #include "logic/session/tool/GrabTool.h"
+#include "logic/session/tool/MarqueeTool.h"
 #include "mmm/beatmap/BeatMap.h"
 
 #include <cmath>
@@ -245,7 +247,7 @@ bool previewMatchesDelta(const MMM::Logic::SessionContext& context,
 /// @brief 验证未预选中的单个宽折线不会被玩家域钳制。
 /// @return 玩家区内跨边界预览和完整草稿区提交都连续时返回 true。
 /// @note 与多选用例分别初始化，不能依赖前一个用例建立的选中状态。
-bool testStandalonePolylineDoesNotBlockDraftPreview()
+bool testStandalonePolylineDoesNotBlockDraftPreview(bool cancel = false)
 {
     // 独立 Session 隔离多选用例，保证实体从未预选状态进入 Mode B。
     MMM::Logic::SessionContext context;
@@ -288,7 +290,14 @@ bool testStandalonePolylineDoesNotBlockDraftPreview()
         return false;
     }
     // 完整进入 Draft 后再松开，避免把临时跨域状态误当作可持久化谱面。
-    tool.handleEndDrag(context, MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+    tool.handleEndDrag(context,
+                       MMM::Logic::CmdEndDrag{ "Basic2DCanvas", cancel });
+    if ( cancel ) {
+        // 整条折线的内嵌节点必须同时恢复，取消不能消耗任何撤销记录。
+        return standalonePreviewMatchesDelta(context, polylineEntity, 0) &&
+               context.actionStack.getUndoStackSize() == 0U &&
+               !context.isDragging && context.dragRenderPinnedEntities.empty();
+    }
 
     // 单物件提交仍只生成一条撤销记录，并清理全部即时渲染固定项。
     // 不在提交后重跑预览更新，让断言能发现结束命令将位置回滚的错误。
@@ -300,7 +309,7 @@ bool testStandalonePolylineDoesNotBlockDraftPreview()
 /// @brief 验证宽折线不会阻塞以单键为焦点的跨区拖动虚影。
 /// @return 玩家区、草稿区及返回玩家区的每次更新均连续时返回 true。
 /// @note 覆盖同一手势内的往返切换，不能用多次独立拖动替代这条序列。
-bool testWidePolylineDoesNotBlockDraftPreview()
+bool testWidePolylineDoesNotBlockDraftPreview(bool cancel = false)
 {
     // 每次测试使用全新 SessionContext，避免动作栈或选择状态跨用例泄漏。
     // 先创建宽折线，再创建 Tap，使主锚点身份完全由命令而非实体顺序决定。
@@ -366,7 +375,14 @@ bool testWidePolylineDoesNotBlockDraftPreview()
     tool.handleUpdateDrag(
         context,
         MMM::Logic::CmdUpdateDrag{ "Basic2DCanvas", 30.0F, 300.0F, true });
-    tool.handleEndDrag(context, MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+    tool.handleEndDrag(context,
+                       MMM::Logic::CmdEndDrag{ "Basic2DCanvas", cancel });
+    if ( cancel ) {
+        // 混合宽折线及单键组跨域预览后回滚，不能只恢复主锚点。
+        return previewMatchesDelta(context, tapEntity, polylineEntity, 0) &&
+               context.actionStack.getUndoStackSize() == 0U &&
+               !context.isDragging && context.dragRenderPinnedEntities.empty();
+    }
     // 提交后组件仍保留最终草稿坐标，并且拖动生命周期状态必须完全清理。
     // 单次整组移动只允许生成一条撤销记录，保持操作原子性。
     if ( !previewMatchesDelta(context, tapEntity, polylineEntity, -4) ||
@@ -384,6 +400,61 @@ bool testWidePolylineDoesNotBlockDraftPreview()
                .get<MMM::Logic::InteractionComponent>(polylineEntity)
                .isSelected;
 }
+/// @brief 替换框选取消后恢复旧框和精确选择，不能把空替换结果当作基线。
+/// @details 使用真实 MarqueeTool，取消行为不能仅由 UI 命令数量证明。
+/// 原框包含非零时间区间，恢复空框或新框都不能通过。
+/// 初始实体同时存在选择组件与索引，二者必须保持同步。
+/// 显式 Replace 起框会先移除旧结果，形成确实需要回滚的状态。
+/// 新框更新后仍不做正式释放，模拟第二根手指中途加入。
+/// 测试检查旧运算基线，防止下一次追加选择回放错误集合。
+/// 检查点只应保存一次，更新帧不能用已清空的选择覆盖它。
+/// 取消不能产生空撤销动作，也不能消耗之前的历史。
+/// 固定相机与滚动缓存复用拖动夹具，不读取图形或音频设备。
+/// 新框的屏幕坐标故意不同于旧框，防止保留新框被误判成功。
+/// 取消后 isSelecting 为 false，旧框仅是完成状态的可视结果。
+/// 选择标记不是按框几何重新推导，而是精确恢复原索引。
+/// 同一个工具以后仍可起框，不把检查点当作永久选择缓存。
+/// 本用例覆盖 Replace，追加/减选仍共享相同保存和恢复路径。
+/// 组件恢复通过生产选择入口执行，不直接写测试专属状态。
+/// 容器交换后检查点立即失效，重复取消不能让选择再次反转。
+/// 测试的实体只活在内存会话，不向测试资源目录写任何文件。
+/// 拖动回归另行验证多实体及完整折线节点，不能用框选替代位置恢复。
+bool testMarqueeCancellation()
+{
+    // 一次完整的开始、更新及取消均使用正式工具接口，保持真实状态转换。
+    using namespace MMM::Logic;
+    SessionContext context;
+    configureDragContext(context);
+    const auto entity = createSelectedAnchorTap(context);
+    setChartObjectSelected(context, ChartObjectKind::PlayerNote, entity, true);
+    context.hasMarqueeSelection = context.marqueeUsesOperations = true;
+    context.marqueeBaselineNotes.insert(entity);
+    MarqueeBox old;
+    old.startTime = 0.25;
+    old.endTime   = 0.75;
+    old.cameraId  = "Basic2DCanvas";
+    context.marqueeBoxes.push_back(old);
+    MarqueeTool tool;
+    // 新框尚未发布之前就复制检查点，Replace 会移除原选择及框序列。
+    tool.handleStartMarquee(context,
+                            CmdStartMarquee{ "Basic2DCanvas",
+                                             150,
+                                             300,
+                                             false,
+                                             SelectionOperation::Replace,
+                                             true });
+    const bool cleared = context.selectedNoteEntities.empty();
+    tool.handleUpdateMarquee(context, CmdUpdateMarquee{ 350, 400 });
+    tool.handleEndMarquee(context, CmdEndMarquee{ true });
+    // 验证索引、组件、旧框以及运算基线，而不只验证选择数量。
+    return cleared && context.selectedNoteEntities.contains(entity) &&
+           context.noteRegistry.get<InteractionComponent>(entity).isSelected &&
+           context.marqueeBoxes.size() == 1 &&
+           context.marqueeBoxes.front().startTime == 0.25 &&
+           context.marqueeBaselineNotes.contains(entity) &&
+           context.hasMarqueeSelection && context.marqueeUsesOperations &&
+           !context.isSelecting && context.actionStack.getUndoStackSize() == 0;
+}
 }  // namespace
 
 /// @brief 运行单物件与多选组跨入草稿区的即时虚影回归测试。
@@ -395,5 +466,20 @@ int main()
     const bool standalonePassed =
         testStandalonePolylineDoesNotBlockDraftPreview();
     const bool groupedPassed = testWidePolylineDoesNotBlockDraftPreview();
-    return standalonePassed && groupedPassed ? 0 : 1;
+    const bool standaloneCancelled =
+        testStandalonePolylineDoesNotBlockDraftPreview(true);
+    const bool groupedCancelled =
+        testWidePolylineDoesNotBlockDraftPreview(true);
+    const bool marqueeCancelled = testMarqueeCancellation();
+    // 分别报告被破坏的事务边界，避免只看到聚合测试退出码。
+    // 折线单体失败指向内嵌节点恢复，组拖动失败指向参与集合恢复。
+    // 框选失败需要检查旧框、选择索引及集合运算基线是否一并恢复。
+    if ( !standaloneCancelled )
+        XERROR("Standalone polyline cancellation failed");
+    if ( !groupedCancelled ) XERROR("Grouped drag cancellation failed");
+    if ( !marqueeCancelled ) XERROR("Marquee checkpoint cancellation failed");
+    return standalonePassed && groupedPassed && standaloneCancelled &&
+                   groupedCancelled && marqueeCancelled
+               ? 0
+               : 1;
 }

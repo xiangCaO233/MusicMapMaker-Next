@@ -7,9 +7,38 @@
 #include "logic/session/SelectionState.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
+#include <memory>
+#include <unordered_set>
+#include <vector>
 
 namespace MMM::Logic
 {
+/// @brief 仅在可取消的起框事件复制索引；每帧框选更新不接触本容器。
+/// @details 不存储注册表指针，取消时校验实体仍然存在，避免跨生命周期恢复。
+struct MarqueeTool::SelectionCheckpoint {
+    /// @details 检查点属于一次正在创建的框，不是整张谱面的备份。
+    /// 开始时保存已选实体集合，不遍历未选物件。
+    /// 框序列以逻辑时间和轨道坐标保存，不依赖屏幕尺寸。
+    /// 运算基线与最终选择分别保存，两者含义不能合并。
+    /// m_dirty 保存原选择系统尚未消费的工作，不在取消时推测结果。
+    /// 普通释放将 m_active 清零，容器保留容量供下次触摸复用。
+    /// 工具销毁后检查点自动销毁，不向其他会话传递实体身份。
+    /// 没有来自 UI 或后台任务的异步访问，不需要互斥或原子成员。
+    std::vector<MarqueeBox>          m_boxes;  ///< 起框前的多次框选序列。
+    std::unordered_set<entt::entity> m_notes,
+        m_samples;  ///< 起框前的精确选择索引。
+    std::unordered_set<entt::entity> m_baselineNotes,
+        m_baselineSamples;  ///< 旧集合运算基线。
+    bool m_active{}, m_hasSelection{}, m_additive{}, m_dirty{},
+        m_usesOperations{};  ///< 旧解释状态。
+};
+/// @brief 生命周期只随工具建立，桌面路径不会额外复制索引。
+MarqueeTool::MarqueeTool()
+    : m_checkpoint(std::make_unique<SelectionCheckpoint>())
+{
+}
+/// @brief 完整类型在此可见，检查点不传播会话依赖。
+MarqueeTool::~MarqueeTool() = default;
 
 /// @brief 开始一次框选，并以输入相机的坐标建立新的选择框。
 /// @param ctx 保存相机、框选集合与选择状态的会话。
@@ -21,6 +50,20 @@ namespace MMM::Logic
 void MarqueeTool::handleStartMarquee(SessionContext&        ctx,
                                      const CmdStartMarquee& cmd)
 {
+    auto& saved    = *m_checkpoint;
+    saved.m_active = cmd.captureSelectionForCancel;
+    if ( saved.m_active ) {
+        // 必须先于替换模式清空旧框；否则取消只能恢复空选择。
+        saved.m_boxes           = ctx.marqueeBoxes;
+        saved.m_notes           = ctx.selectedNoteEntities;
+        saved.m_samples         = ctx.selectedSampleEntities;
+        saved.m_baselineNotes   = ctx.marqueeBaselineNotes;
+        saved.m_baselineSamples = ctx.marqueeBaselineSamples;
+        saved.m_hasSelection    = ctx.hasMarqueeSelection;
+        saved.m_additive        = ctx.marqueeIsAdditive;
+        saved.m_dirty           = ctx.isMarqueeSelectionDirty;
+        saved.m_usesOperations  = ctx.marqueeUsesOperations;
+    }
     if ( cmd.selectionOperation ) {
         // 替换开始一段新序列；由经典模式转入时冻结现有结果，不重放旧框。
         // 基线只在起笔时复制已选索引，连续拖动不重复采集或遍历全部物件。
@@ -222,6 +265,35 @@ void MarqueeTool::handleEndMarquee(SessionContext&      ctx,
                                    const CmdEndMarquee& cmd)
 {
     ctx.isSelecting = false;
+    auto& saved     = *m_checkpoint;
+    if ( cmd.cancel && saved.m_active ) {
+        // 只遍历参与选择的索引，不能为取消一次框选扫描整张谱面。
+        // 起框后的临时结果先解除，避免恢复时混入新框选中的物件。
+        // 组件选择位和哈希索引通过同一入口更新，不能只替换索引容器。
+        // 已删除实体由选择入口过滤，检查点不会复活无效注册表身份。
+        // 旧框按原顺序恢复，保持多次加减选的运算次序。
+        // 旧脏标记一并恢复，取消不会要求重复计算一个原本稳定的结果。
+        // 当前 isSelecting 始终结束，旧框仅作为已完成选择显示。
+        // 检查点交换后失效，迟到的第二次取消不能再交换回新框。
+        clearChartObjectSelection(ctx);
+        for ( const auto entity : saved.m_notes )
+            setChartObjectSelected(
+                ctx, ChartObjectKind::PlayerNote, entity, true);
+        for ( const auto entity : saved.m_samples )
+            setChartObjectSelected(
+                ctx, ChartObjectKind::AudioSample, entity, true);
+        // 交换可复用容量；不重放新框覆盖范围，保持手势前选择的精确值。
+        ctx.marqueeBoxes.swap(saved.m_boxes);
+        ctx.marqueeBaselineNotes.swap(saved.m_baselineNotes);
+        ctx.marqueeBaselineSamples.swap(saved.m_baselineSamples);
+        ctx.hasMarqueeSelection     = saved.m_hasSelection;
+        ctx.marqueeIsAdditive       = saved.m_additive;
+        ctx.isMarqueeSelectionDirty = saved.m_dirty;
+        ctx.marqueeUsesOperations   = saved.m_usesOperations;
+        saved.m_active              = false;
+        return;
+    }
+    saved.m_active = false;
     // 先关闭拖动状态，再处理框的有效性，避免后续输入继续修改已结束的框。
     if ( !ctx.marqueeBoxes.empty() ) {
         auto& lastBox = ctx.marqueeBoxes.back();

@@ -6142,7 +6142,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                             UI::Interaction::modifier(
                                 UI::Interaction::Modifier::Control),
                             UI::Interaction::activeProfile()
-                                .selectionOperation() }));
+                                .selectionOperation(),
+                            m_pointerCancellationEnabled }));
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Draw ) {
