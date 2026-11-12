@@ -4,6 +4,7 @@
 /// 状态快照来自 UpdateChecker，图像生命周期由独立缓存视图管理。
 /// UI 层不得通过等待下载完成来推进检查、下载或重启阶段。
 #define IMGUI_DEFINE_MATH_OPERATORS
+#include "DeferredUpdatePopup.h"
 #include "config/AppConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "mmmversion.h"
@@ -103,8 +104,6 @@ public:
         m_isSilentCheck = false;
         // 打开请求延迟到 renderDeferred 转换为 ImGui 状态。
         m_showCheckingPopup = true;
-        // 新一轮检查允许发现更新后重新打开确认弹窗。
-        m_updatePopupCanceled = false;
         // 清除上一轮启动更新器失败文本，避免污染新任务。
         m_updateRestartError.clear();
         // UpdateChecker 在后台执行请求，当前调用立即返回。
@@ -156,11 +155,9 @@ private:
     /// @note 检查中、已最新、发现更新和错误四种状态互斥展示。
     void renderUpdateCheckingPopup()
     {
-        if ( m_showCheckingPopup ) {
-            // 将一次性打开请求交给统一反馈入口后立即清除。
-            ::MMM::UI::FeedbackOpenPopup(TR("ui.help.check_update").data());
-            m_showCheckingPopup = false;
-        }
+        // PGO 同意框等其它弹层结束后才消费请求，防止同层窗口互相顶掉。
+        Detail::openDeferredUpdatePopup(TR("ui.help.check_update").data(),
+                                        m_showCheckingPopup);
 
         // 每帧读取当前 DPI，使弹窗和进度控件跟随窗口缩放。
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
@@ -232,16 +229,10 @@ private:
         // 初始快照用于决定弹窗打开和布局大小。
         auto info = m_updateChecker->getInfo();
 
-        if ( m_showUpdatePopup ) {
-            // 显式请求优先打开弹窗，并立即消费一次性标志。
-            ::MMM::UI::FeedbackOpenPopup(TR("ui.help.update_found").data());
-            m_showUpdatePopup = false;
-        } else if ( info.status == MMM::Network::UpdateStatus::kUpdateFound &&
-                    !m_updatePopupCanceled ) {
-            // 未取消时维持发现更新弹窗，覆盖外部意外关闭后的状态恢复。
-            if ( !ImGui::IsPopupOpen(TR("ui.help.update_found").data()) )
-                ::MMM::UI::FeedbackOpenPopup(TR("ui.help.update_found").data());
-        }
+        // 发现更新只产生一次打开事件；持续终态不能重开窗口或反复发声。
+        // 忙碌时保留请求，其他模态关闭后再显示，不丢失启动检查结果。
+        Detail::openDeferredUpdatePopup(TR("ui.help.update_found").data(),
+                                        m_showUpdatePopup);
 
         // 布局使用当前内容缩放，不依赖可能过期的菜单上下文。
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
@@ -377,11 +368,9 @@ private:
     /// @note 成功标记通常来自更新器重启后的启动阶段。
     void renderUpdateSuccessPopup()
     {
-        if ( m_showUpdateSuccessPopup ) {
-            // 一次性请求转换为 ImGui 弹窗状态后立即清除。
-            ::MMM::UI::FeedbackOpenPopup(TR("ui.help.update_success").data());
-            m_showUpdateSuccessPopup = false;
-        }
+        // 更新完成通知同样等待其它模态结束，不覆盖当前用户确认流程。
+        Detail::openDeferredUpdatePopup(TR("ui.help.update_success").data(),
+                                        m_showUpdateSuccessPopup);
 
         // 成功窗口同样跟随当前 DPI 缩放。
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
@@ -614,8 +603,7 @@ private:
                  ImVec2(buttonWidth, 36.0f * dpiScale)) ) {
             // 用户取消仅关闭当前弹窗，不删除已获取的更新信息。
             ImGui::CloseCurrentPopup();
-            // 标志阻止 kUpdateFound 状态在下一帧自动重开弹窗。
-            m_updatePopupCanceled = true;
+            // 缓存终态不重开弹窗，下次手动检查仍可产生新请求。
         }
     }
 
@@ -726,9 +714,9 @@ private:
         }
         if ( workspaceActionButton(
                  cancel, ICON_MMM_ARROW_LEFT, { width, height }) ) {
-            // 继续沿用共享取消标记，下一帧不能因仍有更新而自动重开。
+            // 只关闭本次通知，下次显式检查仍可产生新的打开请求。
             ImGui::CloseCurrentPopup();
-            m_updatePopupCanceled = true;
+            // 关闭只消费这次提示，不能由持久的发现更新状态自动重开。
             // 仅关闭展示，不清除已取得的日志缓存和网络检查结果。
         }
     }
@@ -873,10 +861,6 @@ private:
     /// @brief 是否在下一帧打开更新成功弹窗。
     /// @note 由启动更新成功标记置位，在渲染阶段消费。
     bool m_showUpdateSuccessPopup = false;
-
-    /// @brief 用户是否取消或关闭了更新弹窗。
-    /// @note 新的手动检查开始时清除，避免旧取消状态屏蔽新结果。
-    bool m_updatePopupCanceled = false;
 
     /// @brief 点击重启更新失败时显示的错误信息。
     /// @note 新检查、新下载或新重启尝试开始时清除。

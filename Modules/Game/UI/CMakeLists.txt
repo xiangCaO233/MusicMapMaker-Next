@@ -380,6 +380,20 @@ target_include_directories(MarkdownRendererTest
 target_link_libraries(MarkdownRendererTest PRIVATE 3rd_imgui)
 mmm_register_test_case(NAME MarkdownRendererTest COMMAND MarkdownRendererTest)
 
+# cmake-format: off
+# 更新通知回归契约：
+# - 使用真实 Popup 栈验证已有模态排队，不以布尔镜像替代窗口状态。
+# - 关闭后保持静默，用户明确重查仍能产生第二次提示。
+# - 显式禁用反馈音，不请求网络或打开真实音频设备。
+# cmake-format: on
+mmm_add_test_executable(UI DeferredUpdatePopupTest
+                        tests/DeferredUpdatePopupTest.cpp)
+target_include_directories(DeferredUpdatePopupTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(DeferredUpdatePopupTest PRIVATE UI 3rd_imgui)
+mmm_register_test_case(NAME DeferredUpdatePopupTest COMMAND
+                       DeferredUpdatePopupTest)
+
 # 更新图片测试默认离线，覆盖相对地址、非法协议和多帧 GIF 解码。 链接 UI 以复用正式 Markdown 图片缓存实现及其资源边界。
 mmm_add_test_executable(UI MarkdownImageCacheTest
                         tests/MarkdownImageCacheTest.cpp)
