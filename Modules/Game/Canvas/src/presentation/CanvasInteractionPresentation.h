@@ -68,11 +68,14 @@ protected:
     /// @brief 平台只安排输入，实际编辑仍由既有控制器和逻辑命令执行。
     /// @param completedDrag 平台已确认的拖动释放，补足同帧移动抬手的终点更新。
     /// 默认关闭，桌面仍按物理拖动门槛与原有释放门闩判断。
+    /// @param selectionOnly 已完成分类的轻点只改变选择，不建立编辑历史。
+    /// 起笔和释放都使用该意图；普通拖动及桌面入口保持默认关闭。
     /// @warning 每帧调用，保留原有连续命令去重和权限检查。
     static void routeInput(Basic2DCanvasInteraction&             canvas,
                            const Common::Render::RenderSnapshot* snapshot,
                            float width, float height, bool cancellable = false,
-                           bool completedDrag = false);
+                           bool completedDrag = false,
+                           bool selectionOnly = false);
     /// @brief 输入被接管时回退尚未提交的编辑，不触及此前的撤销历史。
     /// @warning 仅在取消边沿调用；通过命令队列顺序执行，不等待逻辑线程。
     static void cancelInput(Basic2DCanvasInteraction&             canvas,

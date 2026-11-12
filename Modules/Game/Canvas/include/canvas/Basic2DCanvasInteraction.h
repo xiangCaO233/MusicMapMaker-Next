@@ -444,6 +444,9 @@ private:
     /// @brief 左键按下时是否位于画布内。
     /// @brief 平台解释器只在可取消触摸起笔期间启用检查点，桌面默认关闭。
     bool m_pointerCancellationEnabled{ false };
+    /// @brief 已确定的纯选择输入，不开始物件拖动或空白框选事务。
+    /// @details 只在中立输入桥的同步调用期间生效，桌面默认关闭。
+    bool m_pointerSelectionOnly{ false };
     bool m_leftPressStartedOnCanvas{ false };
     /// @brief 左键按下时是否位于轨道布局内。
     bool m_leftPressStartedInTrackLayout{ false };

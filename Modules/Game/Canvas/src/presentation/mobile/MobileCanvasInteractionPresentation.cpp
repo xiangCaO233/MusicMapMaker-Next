@@ -276,13 +276,22 @@ public:
             // 选择工具的连续轻点只选择，不借用桌面双击 seek。
             // 拖动起点仍回放原命中；快速释放由桥补交最后矩形或物件位置。
             // 触控容差内的抖动没有完成拖动标志，因此不会改变物件数据。
+            // 轻点只执行选择，不能沿用 StartDrag/EndDrag 制造空撤销记录。
+            // 已排队的释放可能与下一触点同帧到达，使用旧手势的收尾分类。
+            const bool selectionOnly =
+                snapshot->currentTool == Logic::EditTool::Marquee &&
+                ((output == MobileCanvasGesture::Output::Begin &&
+                  !m_gesture.dragging()) ||
+                 (output == MobileCanvasGesture::Output::Release &&
+                  !m_gesture.finishedDrag()));
             routeInput(canvas,
                        snapshot,
                        width,
                        height,
                        true,
                        snapshot->currentTool == Logic::EditTool::Marquee &&
-                           m_gesture.finishedDrag());
+                           m_gesture.finishedDrag(),
+                       selectionOnly);
         } else {
             // 弹层接管后不补发候选轻点，编辑起笔从未发生，无需发送 End 或
             // Cancel。

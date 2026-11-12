@@ -29,11 +29,15 @@ CanvasMenuContext CanvasInteractionPresentation::context(
 /// @warning 每帧固定转发，禁止在桥中等待逻辑线程或复制谱面。
 void CanvasInteractionPresentation::routeInput(
     Basic2DCanvasInteraction& c, const Common::Render::RenderSnapshot* snapshot,
-    float width, float height, bool cancellable, bool completedDrag)
+    float width, float height, bool cancellable, bool completedDrag,
+    bool selectionOnly)
 {
     // 快捷键先于普通指针，保留已有命令顺序和去重策略。
     const bool previous            = c.m_pointerCancellationEnabled;
     c.m_pointerCancellationEnabled = cancellable;
+    // 纯选择仍复用原拾取和集合运算，但不能发出会清除重做栈的空编辑。
+    const bool previousSelection = c.m_pointerSelectionOnly;
+    c.m_pointerSelectionOnly     = selectionOnly;
     // 只有既有手势的释放帧能补足拖动门闩，不能把普通轻点升级为移动。
     // 复用通用控制器的最终 Update → End 顺序，不直接执行任何编辑命令。
     // 释放后控制器会清理该门闩，不为下一触点保留平台判定。
@@ -42,6 +46,7 @@ void CanvasInteractionPresentation::routeInput(
     c.handleHotkeys(snapshot);
     c.handleInteractions(snapshot, width, height);
     c.m_pointerCancellationEnabled = previous;
+    c.m_pointerSelectionOnly       = previousSelection;
 }
 /// @brief 输入归属改变时明确取消预览，随后清除旧释放事件的 UI 门闩。
 /// @warning 只在手势接管边沿执行，无会话等待、注册表读取或历史回放。

@@ -114,6 +114,7 @@ void testControllerLongPress(bool touch, bool multi = false)
             auto&      bus = Event::EventBus::instance();
             int        currentFrame{};
             bool       leakedSelection{};
+            int        lateSelections{};  ///< 全部抬起后的新轻点必须仍可选择。
             const auto subscription =
                 bus.subscribe<Event::LogicCommandEvent>([&](const auto& event) {
                     if ( const auto* end =
@@ -132,6 +133,8 @@ void testControllerLongPress(bool touch, bool multi = false)
                     // 只在新轻点正常释放后允许清空选择，残留手指不能产生选择副作用。
                     leakedSelection |= multi && selection &&
                                        currentFrame >= 4 && currentFrame < 8;
+                    if ( multi && selection && currentFrame >= 8 )
+                        ++lateSelections;
                     edits += std::holds_alternative<Logic::CmdStartMarquee>(
                                  event.command) ||
                              std::holds_alternative<Logic::CmdStartBrush>(
@@ -211,15 +214,26 @@ void testControllerLongPress(bool touch, bool multi = false)
             // 否则完全不处理输入的错误实现也会满足“没有副作用”。
             if ( multi ) {
                 // 先起笔再被双指取消；所有旧触点抬起后，新轻点必须恢复正常编辑。
-                // 一个取消对应第一个已开始事务，第二个事务走正常释放。
+                // 一个取消只对应第一个已开始事务，新轻点按当前工具重新分类。
                 // 菜单和残留选择都单独检查，不能用起笔计数掩盖其他副作用。
-                if ( menu || edits != 2 || cancelled != 1 )
+                // 选择工具的新轻点只选择，不再建立第二次空框选事务。
+                // 绘制工具仍应起笔两次，不能因修复历史污染而吞掉新 Note。
+                const int expectedEdits =
+                    tool == Logic::EditTool::Marquee ? 1 : 2;
+                const int expectedSelections =
+                    tool == Logic::EditTool::Marquee ? 1 : 0;
+                // 独立检查新轻点的选择，不能用少一次起笔掩盖触点被全部吞掉。
+                // 旧触点阶段另由 leakedSelection 保证没有误清空基线。
+                // 失败日志使用同一分类预期，正常纯选择不应留下错误日志。
+                if ( menu || edits != expectedEdits || cancelled != 1 )
                     XERROR("tool={} menu={} starts={} cancelled={}",
                            static_cast<int>(tool),
                            menu,
                            edits,
                            cancelled);
-                check(!menu && edits == 2 && cancelled == 1 && !leakedSelection,
+                check(!menu && edits == expectedEdits && cancelled == 1 &&
+                          !leakedSelection &&
+                          lateSelections == expectedSelections,
                       "multi-touch cancels once, suppresses remaining finger "
                       "and accepts next tap");
             } else {

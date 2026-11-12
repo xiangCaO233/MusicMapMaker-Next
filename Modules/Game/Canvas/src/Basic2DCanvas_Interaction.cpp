@@ -6117,7 +6117,10 @@ void Basic2DCanvasInteraction::handleInteractions(
                             operation }));
                     // 减选点击只改变集合，不能把刚移出的对象再次加入拖动事务。
                     // 追加和替换仍可拖动已选集合，保留常规批量移动。
-                    if ( !currentSnapshot->isPlaying &&
+                    // 已分类的轻点只选中；拖动门槛属于输入策略，不能用空动作
+                    // 代替选择，否则未保存标记和重做分支都会被无意义地改变。
+                    if ( !m_pointerSelectionOnly &&
+                         !currentSnapshot->isPlaying &&
                          operation != Logic::SelectionOperation::Subtract ) {
                         // 播放时仍允许选择查看，但不允许改变对象位置。
                         // 按下处的命中部位与子索引随命令一起入队，避免拖拽工具
@@ -6132,7 +6135,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                                 hoveredSubIndex }));
                         m_leftPressStartedObjectDrag = true;
                     }
-                } else {
+                } else if ( !m_pointerSelectionOnly ) {
                     // 框选起点使用当前画布局部坐标，逻辑层维护矩形终点。
                     UI::Interaction::dispatchCommand(
                         Event::LogicCommandEvent(Logic::CmdStartMarquee{
@@ -6385,8 +6388,11 @@ void Basic2DCanvasInteraction::handleInteractions(
         if ( m_leftPressStartedOnCanvas && !m_leftPressStartedOnEntity &&
              currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             // 释放命令依据按下时锁存的手势种类，而非释放位置的 hover。
-            UI::Interaction::dispatchCommand(
-                Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
+            // 纯轻点没有开始框选，仅在下方按既有规则清空选择。
+            // 不向逻辑层补发孤立 End，保留旧框与当前集合操作的语义。
+            if ( !m_pointerSelectionOnly )
+                UI::Interaction::dispatchCommand(
+                    Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
         } else if ( m_leftPressStartedOnCanvas &&
                     currentSnapshot->currentTool == Logic::EditTool::Draw ) {
             UI::Interaction::dispatchCommand(

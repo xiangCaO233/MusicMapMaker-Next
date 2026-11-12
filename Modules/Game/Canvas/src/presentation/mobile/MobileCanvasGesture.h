@@ -88,6 +88,9 @@ public:
     /// @brief 本帧是否结束已越过触控容差的拖动，包含无持续帧的快速抬手。
     /// @warning 每帧只读标量；桥只据此提交终点，不合成额外按下或历史命令。
     bool finishedDrag() const { return m_finishedDrag; }
+    /// @brief 起笔回放是否来自已经越过容差的拖动，轻点不得建立编辑事务。
+    /// @warning 每帧只读分类结果；释放回放应读取 finishedDrag，避免新触点覆盖。
+    bool dragging() const { return m_dragging; }
     /// @brief 返回当前回放落点，生命周期仅为下一次 update 之前。
     ImVec2 replayPoint() const { return m_replay; }
 

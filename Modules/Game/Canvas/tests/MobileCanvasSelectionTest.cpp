@@ -5,6 +5,14 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "graphic/mobile/MobileTouchInput.h"
 #include "log/colorful-log.h"
+#include "logic/ecs/components/InteractionComponent.h"
+#include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/system/ScrollCache.h"
+#include "logic/session/CanvasCamera.h"
+#include "logic/session/InteractionController.h"
+#include "logic/session/NoteAction.h"
+#include "logic/session/context/SessionContext.h"
+#include "mmm/beatmap/BeatMap.h"
 #include "presentation/CanvasInteractionPresentation.h"
 #include "presentation/mobile/MobileCanvasInteractionPresentation.h"
 #include "ui/interaction/EditorInteraction.h"
@@ -13,6 +21,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <variant>
 #include <vector>
 
@@ -22,6 +31,8 @@ using namespace MMM;
 /// @brief 记录正式命令，不复制拾取算法或手动改变工具状态。
 /// @details 实体身份、子部位和最终坐标分别验证，不能只比较命令总数。
 struct Capture {
+    /// @brief 按原顺序保留影响选择或拖动的正式命令，供真实历史栈回归重放。
+    std::vector<Logic::LogicCommand> m_editCommands;
     /// @brief 包括错误的空白清空。
     std::vector<Logic::CmdSelectEntity> m_selections;
     /// @brief 起点应锁定原实体与子物件。
@@ -42,6 +53,13 @@ struct Capture {
     /// 记录结束之后再来的更新，用于检查正式提交的顺序边界。
     void record(const Logic::LogicCommand& command)
     {
+        // 只保存本回归需要执行的业务命令，不把布局/悬浮反馈当作编辑。
+        // 相同载荷随后送入正式控制器，不能只以 UI 计数推断历史栈未变化。
+        if ( std::holds_alternative<Logic::CmdSelectEntity>(command) ||
+             std::holds_alternative<Logic::CmdStartDrag>(command) ||
+             std::holds_alternative<Logic::CmdUpdateDrag>(command) ||
+             std::holds_alternative<Logic::CmdEndDrag>(command) )
+            m_editCommands.push_back(command);
         // 空实体选择也必须记录；快速框选退化成空白单击会在这里暴露。
         // 不从最终高亮反推命令，以免中途清空后又选回掩盖副作用。
         if ( const auto* c = std::get_if<Logic::CmdSelectEntity>(&command) )
@@ -241,8 +259,11 @@ void testObject()
     check(tap.m_selections.size() == 1 &&
               tap.m_selections.front().entity == static_cast<entt::entity>(77),
           "jittering tap selects original object");
-    check(tap.m_moves.empty() && tap.m_ends == 1 && tap.m_marquees.empty(),
-          "tap does not move or marquee");
+    // 空拖动即使没有 Update 也会写入普通动作栈并清掉 Redo。
+    // 因而必须同时约束 Start 与 End，而非只检查最终音符位置。
+    check(tap.m_starts.empty() && tap.m_moves.empty() && tap.m_ends == 0 &&
+              tap.m_marquees.empty(),
+          "tap selects without creating an editing transaction");
     // 快速抬手前没有一个完整的持续拖动帧，最易丢失最后位移。
     // 不能靠延长测试按住时间，让普通 Pass 路径掩盖收尾问题。
     // 触点坐标先于释放入队，允许同一事件泵内只产生一个终点 Move。
@@ -301,6 +322,9 @@ void testBlank()
     check(blank.m_selections.size() == 1 &&
               blank.m_selections.front().entity == entt::null,
           "blank tap clears selection");
+    // 空白轻点也不建立框选事务，避免结束回放覆盖已有集合运算基线。
+    check(blank.m_marquees.empty() && blank.m_boxEnds == 0,
+          "blank tap clears without a marquee transaction");
     // 同一物件连续轻点应始终点选，不能沿用桌面双击跳转播放头。
     // 经典方案仍要保留双击 seek，避免把移动规则扩散到桌面。
     const std::vector<Sample> twice{ { { 150, 150 }, true },
@@ -316,6 +340,76 @@ void testBlank()
     const auto desktop = run(twice, false);
     check(desktop.m_seeks == 1, "classic double-click seek remains available");
 }
+/// @brief 将真实触控轻点派发结果送入逻辑控制器，验证重做分支与保存点。
+/// @details 音符身份与 UI 命中一致；先产生可重做的真实位置动作。
+/// 选择成功、重做深度、未保存状态与重做结果同时检查，空夹具不能通过。
+/// 不初始化音频、文件或引擎线程，源游标与资源加载不参与选择历史断言。
+void testTapPreservesRedo()
+{
+    using namespace MMM::Logic;
+    SessionContext ctx;
+    // 草稿身份匹配命中夹具；专业模式只开放编辑权限，不改变位置。
+    // 使用正式选择工具，避免控制器因当前工具不匹配而直接忽略整段命令。
+    // 只为可编辑性创建谱面对象，任何磁盘资源都不参与本测试。
+    ctx.currentTool                          = EditTool::Marquee;
+    ctx.currentBeatmap                       = std::make_shared<BeatMap>();
+    ctx.lastConfig.settings.professionalMode = true;
+    ctx.trackCount = ctx.draftTrackCount = 4;
+    ctx.bgmTrackCount                    = 1;
+    // 相机身份与捕获命令一致，旧拖动路径也必须能找到有效视口。
+    // 旧行为不能因缺少相机而跳过历史提交，导致测试意外通过。
+    ctx.cameras.emplace("SelectionCamera",
+                        CameraInfo{ "SelectionCamera", 600, 700, 0 });
+    auto& cache = ctx.timelineRegistry.ctx().emplace<System::ScrollCache>();
+    // 滚动缓存为正式工具提供上下文，但轻点不应修改其积分。
+    cache.rebuild(
+        ctx.timelineRegistry, ctx.lastConfig, ctx.currentBeatmap.get());
+    // 使用相同实体编号，防止选择命令因目标不存在而被忽略后假通过。
+    const auto entity = ctx.noteRegistry.create(static_cast<entt::entity>(77));
+    NoteComponent before{ .m_timestamp  = 1,
+                          .m_trackIndex = -1,
+                          .m_isDraft    = true };
+    // 两份值快照独立，原动作载荷不随注册表的当前位置而变化。
+    auto after        = before;
+    after.m_timestamp = 2;
+    ctx.noteRegistry.emplace<NoteComponent>(entity, before);
+    ctx.noteRegistry.emplace<InteractionComponent>(entity);
+    // 初始未选中，后面的选择断言证明捕获命令确实进入业务控制器。
+    // 先建立、撤回并保存真实动作，重做栈不能由测试直接写入。
+    ctx.actionStack.pushAndExecute(
+        std::make_unique<NoteAction>(
+            NoteAction::Type::Update, entity, before, after),
+        ctx);
+    ctx.actionStack.undo(ctx);
+    // 保存撤回状态，既保留重做分支，又能检查轻点是否误置脏标志。
+    ctx.actionStack.markSaved();
+    InteractionController controller(ctx);
+    const auto tap = run({ { { 150, 150 }, true }, { { 158, 150 }, false } });
+    // UI 上下文先完整结束，再重放载荷，逻辑不借用任何 ImGui 状态。
+    // 输入包含容差内抖动，不能只验证坐标完全不变的理想点击。
+    // 保留发布顺序；若轻点再次产生空拖动，正式 End 会清空现有重做分支。
+    // 命中和集合选择仍由生产控制器完成，不手动设置选中标志。
+    for ( const auto& command : tap.m_editCommands ) {
+        if ( const auto* c = std::get_if<CmdSelectEntity>(&command) )
+            controller.handleCommand(*c);
+        if ( const auto* c = std::get_if<CmdStartDrag>(&command) )
+            controller.handleCommand(*c);
+        if ( const auto* c = std::get_if<CmdUpdateDrag>(&command) )
+            controller.handleCommand(*c);
+        if ( const auto* c = std::get_if<CmdEndDrag>(&command) )
+            controller.handleCommand(*c);
+    }
+    // 轻点应真实选中对象，同时保留已保存状态及原来的唯一重做动作。
+    check(ctx.noteRegistry.get<InteractionComponent>(entity).isSelected &&
+              ctx.actionStack.getUndoStackSize() == 0 &&
+              ctx.actionStack.getRedoStackSize() == 1 &&
+              !ctx.actionStack.isDirty(),
+          "selection tap preserves real redo stack and saved state");
+    // 继续执行重做，验证保留的动作仍有正确载荷，而非仅保留一个空栈条目。
+    ctx.actionStack.redo(ctx);
+    check(ctx.noteRegistry.get<NoteComponent>(entity).m_timestamp == 2,
+          "redo after selection still restores actual object change");
+}
 }  // namespace
 /// @brief 返回所有语义断言结果，不把某个计数成功当作整组通过。
 /// @post 所有场景均已解除订阅和销毁上下文，不保留设备或文件句柄。
@@ -323,5 +417,6 @@ int main()
 {
     testObject();
     testBlank();
+    testTapPreservesRedo();
     return failures == 0 ? 0 : 1;
 }
