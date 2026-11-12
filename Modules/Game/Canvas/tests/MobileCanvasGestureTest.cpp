@@ -237,8 +237,9 @@ void testControllerLongPress(bool touch, bool multi = false)
                       "multi-touch cancels once, suppresses remaining finger "
                       "and accepts next tap");
             } else {
-                check(menu == touch,
-                      "only touch profile opens long press menu");
+                // 绘制工具静止按住仍等待起笔，不用选择菜单截走这根手指。
+                check(menu == (touch && tool != Logic::EditTool::Draw),
+                      "only touch selection opens long press menu");
                 check(touch ? edits == 0 : edits > 0,
                       "profile routes press through its actual editing path");
             }

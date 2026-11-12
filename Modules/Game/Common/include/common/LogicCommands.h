@@ -283,6 +283,9 @@ struct CmdStartBrush {
     bool createStandalone{ false };
     /// @brief 纯鼠标临时忽略吸附时连起笔也使用连续时间；旧入口默认保持原行为。
     bool bypassSnapAtStart{ false };
+    /// @brief 固定起轨且仅创建单键或长条；默认关闭，保留自由画笔与折线语义。
+    /// 起笔时锁存，后续更新不依赖设备类型或实时键盘状态。
+    bool m_noteHoldOnly{ false };
 };
 
 /**
@@ -510,8 +513,7 @@ struct CmdClearNoteColorOverrides {
 };
 
 /// @brief 清除当前谱面全部正式音符及折线子段的自定义颜色。
-struct CmdClearAllNoteColorOverrides {
-};
+struct CmdClearAllNoteColorOverrides {};
 
 /**
  * @brief 撤销指令
@@ -534,8 +536,7 @@ struct CmdRedo {
 /**
  * @brief 复制指令
  */
-struct CmdCopy {
-};
+struct CmdCopy {};
 
 /**
  * @brief 粘贴指令
@@ -554,14 +555,12 @@ struct CmdPaste {
 /**
  * @brief 剪切指令
  */
-struct CmdCut {
-};
+struct CmdCut {};
 
 /**
  * @brief 删除选中物件指令
  */
-struct CmdDeleteSelected {
-};
+struct CmdDeleteSelected {};
 
 /// @brief 删除创作教学红框指定的错误根物件，避免普通撤销误伤其它编辑。
 struct CmdRemoveComposeLessonNote {
@@ -576,14 +575,12 @@ struct CmdRemoveComposeLessonNote {
 /**
  * @brief 镜像选中物件指令
  */
-struct CmdMirrorSelected {
-};
+struct CmdMirrorSelected {};
 
 /**
  * @brief 对齐选中物件至常用分拍指令
  */
-struct CmdAlignSelectedToCommonBeats {
-};
+struct CmdAlignSelectedToCommonBeats {};
 
 /// @brief 全选命令的轨道区范围。
 enum class SelectAllScope : std::uint8_t {
@@ -1052,8 +1049,7 @@ struct CmdUpdateBeatmapMetadata {
 };
 
 /// @brief 标记直接修改的扩展谱面元数据，并请求尾随自动保存。
-struct CmdMarkBeatmapMetadataDirty {
-};
+struct CmdMarkBeatmapMetadataDirty {};
 
 /**
  * @brief 导入音频指令

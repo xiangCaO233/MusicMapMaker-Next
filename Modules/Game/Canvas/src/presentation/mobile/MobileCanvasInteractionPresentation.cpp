@@ -250,6 +250,8 @@ public:
             // 双击计数仅在原生按下时锁存，延迟到释放回放时 IO 计数已清零。
             if ( ImGui::IsMouseClicked(0) )
                 m_clickCount = ImGui::GetIO().MouseClickedCount[0];
+            // 绘制只在移动或释放后起笔，静止按住不能被选择菜单夺走。
+            // 其他工具仍可长按，桌面回退路径不经过这个触控开关。
             if ( !m_ownership.blocksSingle() )
                 output = m_gesture.update(
                     ImGui::IsMouseClicked(0),
@@ -259,7 +261,8 @@ public:
                     ImGui::GetTime(),
                     10.0f * scale,
                     eligible || (raw.m_epoch != 0 && m_gesture.active() &&
-                                 !interrupted));
+                                 !interrupted),
+                    snapshot->currentTool != Logic::EditTool::Draw);
             // 轻点的 Begin/Release
             // 回放仍保留落点，不能因原始触点已抬起吞掉提交。
             // 多指导航和真正结束的空闲帧才撤去普通鼠标悬浮反馈。
@@ -289,7 +292,8 @@ public:
                        width,
                        height,
                        true,
-                       snapshot->currentTool == Logic::EditTool::Marquee &&
+                       (snapshot->currentTool == Logic::EditTool::Marquee ||
+                        snapshot->currentTool == Logic::EditTool::Draw) &&
                            m_gesture.finishedDrag(),
                        selectionOnly);
         } else {

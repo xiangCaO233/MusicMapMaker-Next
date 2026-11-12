@@ -45,6 +45,18 @@ public:
     /// @brief 只有此方案授权触控长按解释，经典及纯鼠标方案默认关闭。
     /// @warning 每帧只返回固定布尔值，不访问手势状态或逻辑会话。
     bool touchGestures() const override { return true; }
+    /// @brief 主画布使用固定轨道绘制，Timing 等表面保留各自输入约定。
+    /// @warning 每次起笔只比较表面枚举，不访问逻辑线程或修改配置。
+    bool noteHoldBrush(Surface surface) const override
+    {
+        return surface == Surface::MainCanvas;
+    }
+    /// @brief 主画布持续绘制无需修饰键，具体形状由起笔策略限制为单键／长条。
+    /// @warning 每帧只比较表面枚举，不改写真实 Shift，其他表面沿用原语义。
+    bool extendBrush(Surface surface, bool shift) const override
+    {
+        return surface == Surface::MainCanvas || shift;
+    }
     /// @brief 触控使用显式集合操作，不借用桌面 Ctrl 状态。
     /// @warning UI 热路径每帧只读取本方案标量，不访问逻辑线程或持锁状态。
     std::optional<Logic::SelectionOperation> selectionOperation() const override

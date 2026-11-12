@@ -6161,15 +6161,17 @@ void Basic2DCanvasInteraction::handleInteractions(
                     // 子段门槛同样随本次手势冻结，最终清洗后由逻辑层核验。
                     m_brushMinimumSubNotes =
                         m_standaloneBrush ? m_walkthroughMinimumSubNotes : 0;
-                    UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
-                        Logic::CmdStartBrush{ m_cameraId,
-                                              localMousePos.x,
-                                              localMousePos.y,
-                                              UI::Interaction::extendBrush(),
-                                              UI::Interaction::bypassSnapping(),
-                                              m_standaloneBrush,
-                                              UI::Interaction::activeProfile()
-                                                  .bypassSnapping() }));
+                    UI::Interaction::dispatchCommand(
+                        Event::LogicCommandEvent(Logic::CmdStartBrush{
+                            m_cameraId,
+                            localMousePos.x,
+                            localMousePos.y,
+                            UI::Interaction::extendBrush(),
+                            UI::Interaction::bypassSnapping(),
+                            m_standaloneBrush,
+                            UI::Interaction::activeProfile().bypassSnapping(),
+                            UI::Interaction::activeProfile().noteHoldBrush(
+                                UI::Interaction::currentSurface()) }));
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::ColorBrush ) {

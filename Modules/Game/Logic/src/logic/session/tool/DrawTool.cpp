@@ -122,6 +122,7 @@ void resetBrushState(SessionContext& ctx)
     ctx.brushState.duration           = 0.0;
     ctx.brushState.dtrack             = 0;
     ctx.brushState.createsAudioSample = false;
+    ctx.brushState.m_noteHoldOnly     = false;
     ctx.brushState.isActive           = false;
 }
 
@@ -298,6 +299,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     // 重置替换标志，只有成功续接并删除原对象后才重新置位。
     ctx.brushState.isActive           = true;
     ctx.brushState.hasPolylineGesture = false;
+    // 策略只在起笔锁存，后续配置变化不能把同一笔改成折线或移动起轨。
+    ctx.brushState.m_noteHoldOnly = cmd.m_noteHoldOnly && !createsAudioSample;
     ctx.brushState.createsAudioSample = createsAudioSample;
     ctx.brushState.duration           = 0.0;
     ctx.brushState.dtrack             = 0;
@@ -404,7 +407,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     // 普通起笔仍可发生在已有对象附近，不隐式删除悬浮物件。
     bool isResuming = false;
     // 独立教学放置不能借 Shift 起笔删除已有物件，否则失败取消无法保留原谱。
-    if ( !cmd.createStandalone &&
+    if ( !cmd.createStandalone && !cmd.m_noteHoldOnly &&
          ctx.lastConfig.settings.enablePolylineEditing && cmd.isShiftDown &&
          isHoveredPlayerNote(ctx) ) {
         const auto& note =
@@ -614,7 +617,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     // 续接成功已恢复原始参照，不能再用鼠标按下位置覆盖。
     // 新 Shift 手势才记录持续段起点，形状升级由更新入口决定。
     if ( !isResuming ) {
-        if ( cmd.isShiftDown ) {
+        if ( cmd.isShiftDown || cmd.m_noteHoldOnly ) {
             ctx.brushState.type = ::MMM::NoteType::NOTE;  // 初始为 Note
             ctx.brushState.holdStartTime = ctx.brushState.time;
             ctx.brushState.startTrack    = ctx.brushState.track;
@@ -712,6 +715,24 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         return;
     }
     currentPosTime = std::max(MIN_PLACEABLE_NOTE_TIME, currentPosTime);
+
+    // 固定轨道策略独立于折线能力开关，不会因手指横向漂移产生滑键。
+    // 起拍参照保持不变；向任一时间方向拖动都归一化为正时长。
+    // 回到同一吸附时间退回单键，不能创建零长度长条或移动原始轨道。
+    if ( ctx.brushState.m_noteHoldOnly ) {
+        const double anchor = ctx.brushState.holdStartTime;
+        const double length = std::abs(currentPosTime - anchor);
+        const bool   hold   = length > 1e-5;
+        ctx.brushState.type =
+            hold ? ::MMM::NoteType::HOLD : ::MMM::NoteType::NOTE;
+        ctx.brushState.time = hold ? std::min(anchor, currentPosTime) : anchor;
+        ctx.brushState.duration = hold ? length : 0.0;
+        ctx.brushState.track    = ctx.brushState.startTrack;
+        ctx.brushState.dtrack   = 0;
+        return;
+    }
+
+
 
     const bool isPreview =
         cmd.cameraId == "Preview" || cmd.cameraId == "PreviewCanvas";
@@ -1084,6 +1105,11 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
 {
     if ( !ctx.brushState.isActive ) return;
 
+    // 简单笔画只提交自己的新物件；即使尾部重叠也不能合并或删除原谱面。
+    // 教学仍使用命令中的独立放置标志及令牌，两种来源不相互覆盖。
+    const bool standalone =
+        cmd.createStandalone || ctx.brushState.m_noteHoldOnly;
+
     // 教学手势未落入指定目标时直接丢弃临时画笔。取消发生在创建动作入栈前，
     // 对用户表现为本次失败放置已撤销，同时不会误撤销更早的有效编辑。
     if ( cmd.cancel ) {
@@ -1244,7 +1270,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
         // 清洗可能清空列表，先检查非空再读取末段。
         // 只有 Hold 和 Flick 在下面定义有效尾部，正常状态机应提供这两类尾段。
         // 独立练习仍规范化自身几何，但不得合并或删除附近已有物件。
-        if ( !cmd.createStandalone && segments.size() >= 1 ) {
+        if ( !standalone && segments.size() >= 1 ) {
             // 计算尾部的时间和轨道
             // 这里保存工作列表末元素引用，后续分支会向同一向量追加元素。
             // 向量扩容会使该引用失效，追加后的后续匹配存在既有生命周期风险。
@@ -1480,7 +1506,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
         // 该选项当前按路径节点匹配物件起点，不做段内部连续几何相交检测。
         // 候选仅限独立 NOTE、HOLD、FLICK，完整折线不在这段清理中删除。
         // 路径清除同样属于隐式改写，独立放置不能借此删除此前成功的练习。
-        if ( !cmd.createStandalone &&
+        if ( !standalone &&
              ctx.lastConfig.settings.removeObjectsOnPolylinePath ) {
             /// @brief 提交阶段用于起点重叠匹配的路径节点。
             struct Node {

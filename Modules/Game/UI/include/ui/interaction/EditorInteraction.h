@@ -111,6 +111,9 @@ public:
     /// @brief 解释画笔延伸意图，独立于选择、滚动等操作的 Shift 语义。
     /// @warning 每帧常量查询；起笔、拖动和滚动更新必须使用相同解释。
     virtual bool extendBrush(Surface surface, bool shift) const;
+    /// @brief 是否以固定轨道的单键／长条策略起笔，不续接已有折线。
+    /// @warning 每次起笔只查询方案能力；逻辑工具锁存结果，不模拟修饰键。
+    virtual bool noteHoldBrush(Surface) const { return false; }
     /// @brief 是否在选中工具中启用无需键盘的右键编辑菜单。
     /// @warning 每帧只返回方案策略，不查询选择集合或访问会话锁。
     virtual bool selectionContextMenu() const;

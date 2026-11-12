@@ -421,6 +421,17 @@ target_link_libraries(MobileCanvasSelectionTest PRIVATE Canvas Log 3rd_imgui)
 mmm_register_test_case(NAME MobileCanvasSelectionTest COMMAND
                        MobileCanvasSelectionTest)
 
+# 单键和长条回归贯通真实触点、移动解释器以及逻辑工具，检查实际几何与历史。 使用内存谱面，不创建 Vulkan 或音频设备，也不写入用户工程与配置。
+# 同一套件已编译移动工厂，不重复加入实现文件，防止同名符号重复定义。 桌面对照通过相同工厂的回退路径，确保固定轨道策略不会扩散到桌面方案。
+# 真机与模拟器验收仍负责设备事件和布局，CPU 测试专门覆盖帧合并与事务。
+mmm_add_test_executable(Canvas MobileCanvasDrawingTest
+                        tests/MobileCanvasDrawingTest.cpp)
+target_include_directories(MobileCanvasDrawingTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(MobileCanvasDrawingTest PRIVATE Canvas Log 3rd_imgui)
+mmm_register_test_case(NAME MobileCanvasDrawingTest COMMAND
+                       MobileCanvasDrawingTest)
+
 # 多触点导航直接消费生产跟踪器，使用固定事件时间而非真实设备计时。 测试不初始化 ImGui 或 Vulkan，手机上的布局与注入验收另行执行。
 # 私有手势头只暴露给这个测试目标，不成为 Canvas 的公共包含依赖。 真实跟踪器通过 Graphic 链接，防止测试复制输入身份维护算法。
 mmm_add_test_executable(Canvas MobileCanvasNavigationTest

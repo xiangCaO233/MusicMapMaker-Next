@@ -23,8 +23,10 @@ public:
     /// @param time 单调 UI 时间，由调用方提供便于确定性测试。
     /// @param tolerance 已转换为屏幕逻辑像素的移动容差。
     /// @param eligible 当前窗口、播放和遮罩允许新编辑意图。
+    /// @param allowMenu 关闭时静止按住继续等待，绘制不会被长按菜单抢走。
     Output update(bool clicked, bool down, bool released, ImVec2 point,
-                  double time, float tolerance, bool eligible)
+                  double time, float tolerance, bool eligible,
+                  bool allowMenu = true)
     {
         // 收尾标志只在本次更新有效，不能把前一笔拖动带给下一次轻点。
         m_finishedDrag = false;
@@ -67,7 +69,7 @@ public:
             m_end           = point;
             return Output::Begin;
         }
-        if ( time - m_started >= 0.45 ) {
+        if ( allowMenu && time - m_started >= 0.45 ) {
             // 长按只产生菜单意图，原编辑器从未看到按下边沿。
             m_pending = false;
             return Output::Menu;
