@@ -1915,8 +1915,9 @@ void DrawTool::handleStartErase(SessionContext& ctx, const CmdStartErase& cmd)
 {
     // 目标集合描述当前预览，不是沿鼠标轨迹累计的擦除历史。
     // 起笔时清空旧目标，防止上一笔未完成状态混入本次释放。
-    ctx.eraserState.isActive    = true;
-    ctx.eraserState.isShiftDown = cmd.isShiftDown;
+    ctx.eraserState.limitToTarget = false;
+    ctx.eraserState.isActive      = true;
+    ctx.eraserState.isShiftDown   = cmd.isShiftDown;
     ctx.eraserState.targetEntities.clear();
     // Note 和草稿共用 Note Registry，但领域标签仍保留命中类型。
     // 只读悬浮校验已经确认组件存在，后面才能安全解析父关系。
@@ -2014,7 +2015,7 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
         std::unordered_set<entt::entity> toDelete;
         // 选择集合在释放时读取，预览移动不承担完整扫描。
         // 同号 Note 实体不参与本次采样删除计划。
-        if ( targetIsSelected ) {
+        if ( targetIsSelected && !ctx.eraserState.limitToTarget ) {
             const auto selectedView =
                 ctx.sampleRegistry
                     .view<InteractionComponent, SampleComponent>();
@@ -2090,7 +2091,7 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
             }
         }
 
-        if ( targetIsSelected ) {
+        if ( targetIsSelected && !ctx.eraserState.limitToTarget ) {
             // 场景 A: 擦除的目标中包含选中物件 -> 删除所有选中的物件 +
             // 擦除的目标物件
             // 选择扩展和显式目标可能重叠，先按本地身份去重再准备条目。

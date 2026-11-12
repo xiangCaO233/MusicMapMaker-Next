@@ -16,10 +16,12 @@
 #include "mmm/beatmap/BeatMap.h"
 #include "presentation/CanvasInteractionPresentation.h"
 #include "presentation/mobile/MobileCanvasInteractionPresentation.h"
+#include "presentation/mobile/MobileNoteHandles.h"
 #include "ui/interaction/EditorInteraction.h"
 #include <entt/entity/entity.hpp>
 #include <imgui.h>
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <initializer_list>
@@ -140,7 +142,8 @@ struct Sample {
 Capture run(
     const std::vector<Sample>& samples, bool touch = true,
     Logic::SelectionOperation operation = Logic::SelectionOperation::Replace,
-    bool handles = false, bool surfaceHovered = true)
+    bool handles = false, bool surfaceHovered = true,
+    Common::Render::HoverPart part = Common::Render::HoverPart::HoldStart)
 {
     // 两个安全边界符合生产切换契约；不能在旧画布仍持有手势时硬切。
     // 当前场景的控制器在切换之后创建，不继承上一方案的待定触点。
@@ -201,8 +204,12 @@ Capture run(
             snapshot.hitboxes[0].kind     = Logic::ChartObjectKind::PlayerNote;
             snapshot.hitboxes[0].part     = Common::Render::HoverPart::Head;
             snapshot.hitboxes[0].subIndex = -1;
-            snapshot.hitboxes[0].touchHandle =
-                Common::Render::HoverPart::HoldStart;
+            snapshot.hitboxes[0].touchHandle = part;
+            if ( part == Common::Render::HoverPart::PolylineNode ) {
+                snapshot.hitboxes[0].part           = part;
+                snapshot.hitboxes[0].subIndex       = 2;
+                snapshot.hitboxes[0].touchNodeToken = 123;
+            }
             snapshot.hitboxes.push_back(
                 { .entity      = static_cast<entt::entity>(77),
                   .part        = Common::Render::HoverPart::HoldEnd,
@@ -430,6 +437,124 @@ void testHandles()
             true);
     check(desktop.m_starts.empty(), "classic ignores touch-only handles");
 }
+/// @brief 局部节点与滑键箭头必须经过生产触控桥锁定部件。
+/// @details 手指移动后不能把折线索引变成另一对象，也不能把尾部当整体移动。
+void testLocalParts()
+{
+    // 捕获正式起笔载荷，不能用界面高亮代替索引检查。
+    // 最后释放点离开起始节点，仍应只结束锁定的原事务。
+    // 稳定令牌用于逻辑线程拒绝过期结构，不是另一个实体编号。
+
+    // 本例绕过原几何框中心，仍从扩大的触控热区进入。
+    // 节点索引和令牌必须同时出现，缺少任意一项都无法安全延迟派发。
+    const auto node = run({ { { 150, 155 }, true }, { { 210, 220 }, false } },
+                          true,
+                          Logic::SelectionOperation::Replace,
+                          true,
+                          true,
+                          Common::Render::HoverPart::PolylineNode);
+    check(node.m_starts.size() == 1 && node.m_starts[0].hitSubIndex == 2 &&
+              node.m_starts[0].hitNodeToken == 123 && node.m_ends == 1,
+          "polyline touch drag freezes node identity and index");
+    // 独立 Flick 尾部以右侧胶囊起笔，释放的横向位置传入原工具。
+    // 箭头部位只用于局部长度修改，不应被降级为 Head 整体平移。
+    // 起点与释放位置相隔较远，检验事务锁定而非偶然悬浮一致。
+    const auto flick = run({ { { 194, 155 }, true }, { { 300, 155 }, false } },
+                           true,
+                           Logic::SelectionOperation::Replace,
+                           true,
+                           true,
+                           Common::Render::HoverPart::FlickArrow);
+    check(flick.m_starts.size() == 1 &&
+              flick.m_starts[0].hitPart ==
+                  static_cast<std::uint8_t>(
+                      Common::Render::HoverPart::FlickArrow) &&
+              flick.m_ends == 1,
+          "flick touch target retains endpoint semantics");
+}
+/// @brief 相邻节点热区交叠时，显式选层优先且不跨越其实际热区。
+/// @details 用正式移动命中 helper 检查目标选择，不复制最近距离算法。
+/// 两个节点属于同一父并具有不同令牌，确保只比实体号会失败。
+/// 固定窗口提供真实裁剪区，未选优先项时仍维持顶层拾取规则。
+void testDenseNodes()
+{
+    // 使用真实 ImGui 上下文，让绘制及裁剪依赖与生产一致。
+    // 不创建 Vulkan 或窗口设备，节点选择的回归可以在 CPU CI 执行。
+    // 禁止读取开发者 imgui.ini，测试不受停靠和历史窗口位置影响。
+    // 字库只为布局准备，像素不会上传 GPU，也不会写资源目录。
+
+    ImGui::CreateContext();
+    auto& io       = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = { 800, 600 };
+    io.DeltaTime   = 1.0f / 60;
+    unsigned char* pixels{};
+    int            w{}, h{};
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos({ 0, 0 });
+    ImGui::SetNextWindowSize({ 700, 500 });
+    ImGui::Begin("DenseNodes");
+    // 两个中心相隔十像素，目标半径仍为二十二像素。
+    // 触点更接近后绘制节点，显式选择前一节点时不能被抢走。
+    std::array<Common::Render::Hitbox, 2> boxes{
+        { { .entity         = static_cast<entt::entity>(77),
+            .part           = Common::Render::HoverPart::PolylineNode,
+            .subIndex       = 1,
+            .x              = 140,
+            .y              = 140,
+            .w              = 10,
+            .h              = 10,
+            .touchHandle    = Common::Render::HoverPart::PolylineNode,
+            .touchNodeToken = 11 },
+          { .entity         = static_cast<entt::entity>(77),
+            .part           = Common::Render::HoverPart::PolylineNode,
+            .subIndex       = 2,
+            .x              = 150,
+            .y              = 140,
+            .w              = 10,
+            .h              = 10,
+            .touchHandle    = Common::Render::HoverPart::PolylineNode,
+            .touchNodeToken = 22 } }
+    };
+    // 优先候选必须同时匹配父句柄、部位、子索引和稳定令牌。
+    // 两节点共享父句柄，所以只比较 entity 的实现会给出错误结果。
+    // 几何输入只是两个可见节点框，不含后台注册表或可变模型。
+    // 新选区令牌在当前栈上存活，helper 不得保存其地址到下一帧。
+    const Canvas::HoverLayerCandidate preferred{
+        static_cast<entt::entity>(77),
+        Logic::ChartObjectKind::PlayerNote,
+        static_cast<uint8_t>(Common::Render::HoverPart::PolylineNode),
+        1,
+        11
+    };
+    // 无优先层先验证正常最近距离，证明没有把节点拾取整体关闭。
+    // 相同触点再加优先层，只有目标规则改变，其他输入保持相同。
+    // 返回结果须携带原令牌，不能只把显示索引改成期望值。
+    // 既有抬手和门槛测试继续通过生产 routeInput 检查命令时序。
+    const auto nearest = Canvas::MobileNoteHandles::render(
+        boxes, { 0, 0 }, { 155, 145 }, 1, nullptr, 0);
+    const auto pinned = Canvas::MobileNoteHandles::render(
+        boxes, { 0, 0 }, { 155, 145 }, 1, nullptr, 0, nullptr, &preferred);
+    check(nearest && nearest->subIndex == 2 && pinned && *pinned == preferred,
+          "explicit overlapping node layer overrides nearest node");
+    // 优先节点二十二像素范围之外，正常目标仍可获得输入。
+    // 这防止菜单优先层永久吸附整个画布的下一根手指。
+    // 该位置在优先节点之外但仍在相邻节点范围内。
+    // 只能退回正常拾取，不能沿用上一次返回值冒充本次命中。
+    // 这样显式选层不会变成跨整个画布的全局吸附状态。
+    // 释放后是否清除悬浮由独立把手收尾用例验证。
+    const auto outside = Canvas::MobileNoteHandles::render(
+        boxes, { 0, 0 }, { 175, 145 }, 1, nullptr, 0, nullptr, &preferred);
+    check(outside && outside->subIndex == 2,
+          "preferred node cannot steal another touch region");
+    // 提交这一帧再销毁上下文，遵守正式绘制生命周期。
+    // 测试不保留命中列表引用，下一帧不能观察已销毁的局部数组。
+    // 相邻物件的完整拖动事务另外由命令桥用例覆盖。
+    ImGui::End();
+    ImGui::Render();
+    ImGui::DestroyContext();
+}
 /// @brief 空白起点跨过物件仍维持框选，释放不能误当单击清空结果。
 /// @details 快速框选与普通框选具有同样的正式起点、终点和收尾顺序。
 void testBlank()
@@ -575,6 +700,8 @@ int main()
 {
     testObject();
     testHandles();
+    testLocalParts();
+    testDenseNodes();
     testBlank();
     testTapPreservesRedo();
     return failures == 0 ? 0 : 1;

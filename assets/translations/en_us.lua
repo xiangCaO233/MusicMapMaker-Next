@@ -1,4 +1,11 @@
 return {
+	["ui.mobile.node.root_delete"] = "The first node represents the whole path. Use Delete objects instead.",
+	-- 折线节点菜单仅改变明确锁定的局部目标。
+	["ui.mobile.node.insert"] = "Insert after node",
+	["ui.mobile.node.delete"] = "Delete this node",
+	["ui.mobile.node.choose_layer"] = "Choose an overlapping layer first",
+	["ui.mobile.node.no_segment"] = "Continue the last node with the polyline tool; no segment available to split.",
+	["ui.mobile.node.stale"] = "The node changed. Select it again.",
 	-- 移动工作区专用词条，不覆盖桌面的鼠标和快捷键说明。
 	["ui.interaction.touch_gestures"] = "Touch gestures",
 	-- 工作台使用短标题，避免两列触摸按钮被桌面菜单的完整描述撑高。

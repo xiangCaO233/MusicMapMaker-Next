@@ -3056,6 +3056,8 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdEndDrag> ||
                     std::is_same_v<T, CmdCreateAudioSample> ||
                     std::is_same_v<T, CmdUpdateAudioSampleProperties> ||
+                    // 节点结构编辑经过统一权限、脏标记和协作通知。
+                    std::is_same_v<T, CmdEditPolylineNode> ||
                     std::is_same_v<T, CmdUpdateObjectTimestamp> ||
                     std::is_same_v<T, CmdUpdateObjectSampleVolume> ||
                     std::is_same_v<T, CmdUpdateSelectedObjectSampleVolume> ||
@@ -3135,6 +3137,8 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdEndDrag> ||
                     std::is_same_v<T, CmdCreateAudioSample> ||
                     std::is_same_v<T, CmdUpdateAudioSampleProperties> ||
+                    // 节点结构编辑经过统一权限、脏标记和协作通知。
+                    std::is_same_v<T, CmdEditPolylineNode> ||
                     std::is_same_v<T, CmdUpdateObjectTimestamp> ||
                     std::is_same_v<T, CmdUpdateObjectSampleVolume> ||
                     std::is_same_v<T, CmdUpdateSelectedObjectSampleVolume> ||

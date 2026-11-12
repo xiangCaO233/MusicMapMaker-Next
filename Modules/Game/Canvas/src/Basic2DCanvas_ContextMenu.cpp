@@ -114,7 +114,8 @@ bool Basic2DCanvasInteraction::selectHoverLayer(
             return HoverLayerCandidate{ hitbox.entity,
                                         hitbox.kind,
                                         static_cast<std::uint8_t>(hitbox.part),
-                                        hitbox.subIndex } == candidate;
+                                        hitbox.subIndex,
+                                        hitbox.touchNodeToken } == candidate;
         });
     if ( !present ) return false;
     // 优先项跨鼠标移入菜单的短暂空命中保留；返回重叠处才能继续抓取。
@@ -189,8 +190,20 @@ void Basic2DCanvasInteraction::renderHoverLayerMenu(
                     ? "ui.selection.audio_sample"
                     : "ui.selection.note";
             // 全局序号同时区分多个同类对象，不依赖实体号作为可见标签。
-            const auto label = fmt::format(
-                "{}: {} · {}", i + 1, TR(kindKey).data(), TR(partKey).data());
+            // 编号只用于显示，命令仍携带完整候选身份。
+            // 同轨同时间的节点也能区分，不必猜测渲染顺序。
+            // 序号取父列表下标，不是当前命中候选的排序位置。
+            // 子索引使用一基序号显示，密集节点不能只有相同的“节点”标签。
+            const auto label = candidate.subIndex >= 0
+                                   ? fmt::format("{}: {} · {} #{}",
+                                                 i + 1,
+                                                 TR(kindKey).data(),
+                                                 TR(partKey).data(),
+                                                 candidate.subIndex + 1)
+                                   : fmt::format("{}: {} · {}",
+                                                 i + 1,
+                                                 TR(kindKey).data(),
+                                                 TR(partKey).data());
             ImGui::PushID(static_cast<int>(i));
             // 独立 ID 防止同名部位共享点击状态，选中项只用完整身份匹配。
             // 该勾选不等价于逻辑多选集合，减选模式下也能指定后续拾取层。

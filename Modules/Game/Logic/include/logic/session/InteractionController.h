@@ -51,6 +51,10 @@ public:
     /// @param cmd 带对象领域的实体与目标秒时间。
     void handleCommand(const CmdUpdateObjectTimestamp& cmd);
 
+    /// @brief 用同一历史事务插入节点或沿既有路径断开删除。
+    /// @param cmd 父实体、领域、子索引和冻结稳定令牌。
+    void handleCommand(const CmdEditPolylineNode& cmd);
+
     /// @brief 更新单个玩家绑定或自动采样的物件音量。
     /// @param cmd 带类型的实体、可选子物件索引与音量倍率。
     void handleCommand(const CmdUpdateObjectSampleVolume& cmd);

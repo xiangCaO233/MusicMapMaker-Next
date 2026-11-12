@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <glm/vec2.hpp>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,7 @@ struct CanvasMenuContext {
     std::vector<HoverLayerCandidate>& layers;  ///< 弹层打开时锁存的值语义候选。
     const std::vector<HoverLayerCandidate>&
         candidates;  ///< 当前帧拾取结果，只读借用。
+    std::optional<HoverLayerCandidate>& preferred;  ///< 显式选择的重叠层身份。
 };
 /// @brief 平台独立选择输入与菜单呈现，通用画布不判断安卓或触屏布局。
 /// @details 桌面与移动实现、工厂及私有头由 CMake 选择，运行时不散落宏分支。

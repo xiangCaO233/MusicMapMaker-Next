@@ -1,9 +1,13 @@
+#include "common/LogicCommandMutationClassification.h"
 #include "log/colorful-log.h"
 #include "logic/ecs/components/InteractionComponent.h"
+#include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/CanvasCamera.h"
+#include "logic/session/InteractionController.h"
+#include "logic/session/NoteIdentity.h"
 #include "logic/session/SelectionState.h"
 #include "logic/session/context/SessionContext.h"
 #include "logic/session/tool/GrabTool.h"
@@ -541,6 +545,8 @@ bool testHoldStart(bool draft, bool cancel, bool tail = false)
     // 结束命令不携带时间，因此必须采用最后一次 Update 的结果。
     tool.handleEndDrag(ctx, { "Basic2DCanvas", cancel });
     // 取消直接恢复，不得借一次 Undo 消耗上一笔操作。
+    // Cancel 从正在预览的反向值回滚，不是原地轻点的空事务。
+    // 正常分支则将两次更新合并，证明中途跨越根轨没有提前提交。
     if ( cancel )
         return ctx.actionStack.getUndoStackSize() == 0 &&
                ctx.noteRegistry.get<Note>(entity).m_timestamp == 1.0;
@@ -559,6 +565,442 @@ bool testHoldStart(bool draft, bool cancel, bool tail = false)
                     (tail ? 1.0 : 1.5)) < 1e-5 &&
            std::abs(ctx.noteRegistry.get<Note>(entity).m_duration -
                     (tail ? 0.5 : 1.5)) < 1e-5;
+}
+/// @brief 创建包含斜向、长条和双轨滑键连接的折线及其子实体。
+/// @details 各段稳定 ID 和元数据用于识别插入后是否错误覆盖相邻节点。
+/// @param ctx 已配置最小谱面、相机与草稿范围的会话。
+/// @param draft 使用负轨号，确保结构编辑不偷偷把草稿变成玩家物件。
+entt::entity makeNodeFixture(MMM::Logic::SessionContext& ctx, bool draft)
+{
+    // 夹具不加载磁盘文件，避免混入解析或解码错误。
+    // 仍保留真实谱面、相机和滚动缓存以走完整权限路径。
+    // 正负轨号使用同样的局部连接，只改变所属域。
+    using namespace MMM;
+    Logic::NoteComponent note{ .m_type       = NoteType::POLYLINE,
+                               .m_timestamp  = 1.0,
+                               .m_trackIndex = draft ? -4 : 0,
+                               .m_isDraft    = draft };
+    const int            base = draft ? -4 : 0;
+    // 四个节点包含斜向、竖向和瞬时横向连接。
+    // 首尾几何明确，便于检查后缀是否意外移动。
+    // 重复时刻在 Flick 接点合法，不能误当时间倒退。
+    // 每个连接由生产规则判定，不在测试里模拟插点求解。
+    note.m_subNotes = {
+        { .type = NoteType::NOTE, .timestamp = 1, .trackIndex = base },
+        { .type       = NoteType::HOLD,
+          .timestamp  = 2,
+          .duration   = 1,
+          .trackIndex = base + 1 },
+        { .type       = NoteType::FLICK,
+          .timestamp  = 3,
+          .trackIndex = base + 1,
+          .dtrack     = 2 },
+        { .type = NoteType::NOTE, .timestamp = 3, .trackIndex = base + 3 }
+    };
+    // 不同节点的局部属性不能因下标平移迁移到新增节点。
+    note.m_subNotes[1].annotation = "保留原批注";
+    note.m_subNotes[1]
+        .metadata.note_properties[NoteMetadataType::MMM]["fixture"] = "keep";
+    // 由生产助手生成稳定 ID，而非手工把索引当身份。
+    // 父与子分别编号，才能发现误把一个标识复制给所有节点。
+    // 新增点必须保留空白来源，原点身份则不能变化。
+    Logic::ensureNoteCollaborationIdentity(note);
+    const auto root = ctx.noteRegistry.create();
+    ctx.noteRegistry.emplace<Logic::NoteComponent>(root, note);
+    ctx.noteRegistry.emplace<Logic::InteractionComponent>(
+        root, Logic::InteractionComponent{ .isSelected = true });
+    // 独立子实体与父内嵌列表同时构造，避免只测模型容器。
+    // 撤销以后旧句柄仍须恢复，不能只恢复父列表长度。
+    // 子域跟随父域，不因结构操作偷偷转成正式物件。
+    for ( int i = 0; i < 4; ++i ) {
+        auto child = Logic::makeNoteComponentFromSubNote(
+            note.m_subNotes[i], true, root, i);
+        child.m_isDraft   = draft;
+        const auto entity = ctx.noteRegistry.create();
+        ctx.noteRegistry.emplace<Logic::NoteComponent>(entity,
+                                                       std::move(child));
+        ctx.noteRegistry.emplace<Logic::InteractionComponent>(entity);
+    }
+    return root;
+}
+/// @brief 三类连接分别插入，撤销重做必须同时恢复根与子实体索引。
+/// @param draft 玩家/草稿独立构造，不让一个域的成功掩盖另一个。
+/// @param index 指定被拆分的 NOTE、HOLD 或 FLICK 段。
+/// @return 全部几何、身份和一次历史记录保持契约时返回真。
+bool testNodeInsert(bool draft, int index)
+{
+    // 每个连接用独立会话，不继承前一用例的历史或身份。
+    // 三种段类型分别测试，不能只用普通斜线代替。
+    // 调用真实控制器与动作栈，不手工生成预期 after。
+    using namespace MMM;
+    Logic::SessionContext ctx;
+    configureDragContext(ctx);
+    const auto root   = makeNodeFixture(ctx, draft);
+    const auto before = ctx.noteRegistry.get<Logic::NoteComponent>(root);
+    Logic::InteractionController     controller(ctx);
+    const Logic::CmdEditPolylineNode cmd{
+        root,
+        draft ? Logic::ChartObjectKind::DraftNote
+              : Logic::ChartObjectKind::PlayerNote,
+        index,
+        Common::Render::polylineTouchToken(
+            before.m_subNotes[index].collaborationId),
+        true
+    };
+    // 命令必须进入物件权限分类，不能绕过联机只读谱面的限制。
+    if ( Logic::requiredBeatmapMutationFlags(Logic::LogicCommand{ cmd }) !=
+         BeatmapMutationFlags::Objects )
+        return false;
+    // 载荷明确父领域、索引与稳定令牌，不借用未来 hover。
+    // 权限分类须与实际物件变更一致，联机只读门闩才能正确工作。
+    // 执行以后继续验证注册表与历史，不能只检查命令返回。
+    controller.handleCommand(cmd);
+    const auto& after = ctx.noteRegistry.get<Logic::NoteComponent>(root);
+    // 有效插入只增一个点和一条历史。
+    // 离散操作不能建立空拖动事务。
+    // 数量相同仍不足以证明目标正确，后续继续核对身份与几何。
+    if ( after.m_subNotes.size() != 5 ||
+         ctx.actionStack.getUndoStackSize() != 1 )
+        return false;
+    // 新增身份不复用左右节点，原节点顺序和后继终点保持不变。
+    // 对照插入前后相同的后继节点，而不是比较当前相邻两个索引。
+    // 这样能区分正确下标迁移与错误地给整条路径重新分配身份。
+    if ( after.m_subNotes[index + 1].collaborationId.empty() ||
+         after.m_subNotes[index + 1].collaborationId ==
+             before.m_subNotes[index].collaborationId ||
+         after.m_subNotes[index + 2].collaborationId !=
+             before.m_subNotes[index + 1].collaborationId )
+        return false;
+    // 长条两半时长之和保持原值，左右端点均不能平移。
+    // 批注仍附在原节点，不应转移到新增点。
+    // 横段两半轨差之和保持原跨度，时间必须保持瞬时。
+    if ( index == 1 && (after.m_subNotes[1].duration != 0.5 ||
+                        after.m_subNotes[2].duration != 0.5 ||
+                        after.m_subNotes[1].annotation != "保留原批注") )
+        return false;
+    if ( index == 2 &&
+         (after.m_subNotes[2].dtrack != 1 || after.m_subNotes[3].dtrack != 1) )
+        return false;
+    // 子实体数量及索引必须与父列表一致，否则画面和下一次拾取会过期。
+    // 逐项检查子实体与父列表的最终索引。
+    // 只数实体会漏掉旧下标残留导致的下一次误拾取。
+    // 草稿版本不能丢失负轨域标志。
+    int children{};
+    for ( const auto entity : ctx.noteRegistry.view<Logic::NoteComponent>() ) {
+        const auto& child = ctx.noteRegistry.get<Logic::NoteComponent>(entity);
+        if ( child.m_parentPolyline != root || !child.m_isSubNote ) continue;
+        ++children;
+        if ( child.m_isDraft != draft || child.m_subIndex < 0 ||
+             child.m_subIndex >= 5 ||
+             child.m_collaborationId !=
+                 after.m_subNotes[child.m_subIndex].collaborationId )
+            return false;
+    }
+    // 根实体不参与 children 计数，旧子投影若未删除便会超过五个。
+    // 子身份对应父列表同一索引，检查结果可以直接用于下一次拾取。
+    if ( children != 5 ) return false;
+    // 一次撤销同时恢复父列表与子实体布局。
+    // 重做不再次发送插入命令，所以不能靠重新计算伪装回放。
+    // 新增节点 ID 不按回放次数重新生成。
+    ctx.actionStack.undo(ctx);
+    if ( ctx.noteRegistry.get<Logic::NoteComponent>(root).m_subNotes.size() !=
+         4 )
+        return false;
+    ctx.actionStack.redo(ctx);
+    if ( ctx.noteRegistry.get<Logic::NoteComponent>(root).m_subNotes.size() !=
+         5 )
+        return false;
+    // 插入后原索引可能已经指向新增点；旧令牌必须拒绝，而不是修改邻点。
+    // 故意使用插入前下一点的旧下标。
+    // 该处如今是新增点，原稳定令牌必须令命令失败。
+    // 失败不改变历史大小，也不清掉已有重做分支。
+    if ( index < 2 ) {
+        const auto size = ctx.actionStack.getUndoStackSize();
+        controller.handleCommand(
+            { root,
+              cmd.kind,
+              index + 1,
+              Common::Render::polylineTouchToken(
+                  before.m_subNotes[index + 1].collaborationId),
+              true });
+        if ( ctx.actionStack.getUndoStackSize() != size ) return false;
+    }
+    return true;
+}
+/// @brief 节点删除沿用断开语义，已选中的其它物件不能被选区扩展误删。
+/// @details 无效首节点与播放中请求不改变历史，正常删除一次即可完整撤销。
+bool testNodeDelete()
+{
+    // 根目标和另一个哨兵都选中，验证不会扩展删除集合。
+    // 不靠先清空选择来规避风险。
+    // 删除采用真实橡皮擦断开路径，左右部分不自动连接。
+    using namespace MMM;
+    Logic::SessionContext ctx;
+    configureDragContext(ctx);
+    const auto root     = makeNodeFixture(ctx, false);
+    const auto original = ctx.noteRegistry.get<Logic::NoteComponent>(root);
+    const auto sentinel = ctx.noteRegistry.create();
+    ctx.noteRegistry.emplace<Logic::NoteComponent>(
+        sentinel, Logic::NoteComponent{ .m_timestamp = 9 });
+    ctx.noteRegistry.emplace<Logic::InteractionComponent>(
+        sentinel, Logic::InteractionComponent{ .isSelected = true });
+    Logic::InteractionController controller(ctx);
+    Logic::CmdEditPolylineNode   command{
+        root,
+        Logic::ChartObjectKind::PlayerNote,
+        0,
+        Common::Render::polylineTouchToken(
+            original.m_subNotes[0].collaborationId),
+        false
+    };
+    // 首节点代表整条，局部入口拒绝它。
+    // 整物件删除由原菜单提供，不能悄悄换成另一操作。
+    // 无效请求必须保持空历史。
+    controller.handleCommand(command);
+    if ( ctx.actionStack.getUndoStackSize() != 0 ) return false;
+    // 中间删除既不自动连接左右部分，也不删除另一个已选根物件。
+    command.subIndex  = 1;
+    command.nodeToken = Common::Render::polylineTouchToken(
+        original.m_subNotes[1].collaborationId);
+    // 弹窗可能跨过播放状态切换，业务层不能只信 UI 禁用态。
+    // 相同载荷先验证门禁，再执行合法删除。
+    // 一次拒绝不得污染下一次合法请求。
+    ctx.isPlaying = true;
+    controller.handleCommand(command);
+    ctx.isPlaying = false;
+    if ( ctx.actionStack.getUndoStackSize() != 0 ) return false;
+    // 合法删除与前面的拒绝使用同一个控制器，避免重建掩盖状态泄漏。
+    // 原根消失而哨兵存在，是断开重建与扩大选区删除的区别。
+    controller.handleCommand(command);
+    if ( ctx.actionStack.getUndoStackSize() != 1 ||
+         ctx.noteRegistry.valid(root) || !ctx.noteRegistry.valid(sentinel) )
+        return false;
+    // 断开可能创建两个新根，撤销仍要恢复原父句柄。
+    // 哨兵在执行、撤销、重做后都必须存在。
+    // 不从屏幕高亮推断对象是否真实被删除。
+    ctx.actionStack.undo(ctx);
+    if ( !ctx.noteRegistry.valid(root) ||
+         ctx.noteRegistry.get<Logic::NoteComponent>(root).m_subNotes.size() !=
+             4 )
+        return false;
+    ctx.actionStack.redo(ctx);
+    return !ctx.noteRegistry.valid(root) && ctx.noteRegistry.valid(sentinel);
+}
+/// @brief Flick 尾部只改方向/长度，草稿域不能进入整体跨域搬移。
+/// @param draft 使用负轨号版本，与玩家版本复用相同长度变化和反向逻辑。
+/// @param cancel 第二次反向后取消，应恢复整笔起始几何且不建历史。
+bool testFlickEndpoint(bool draft, bool cancel)
+{
+    // 独立 Flick 不进入折线分支，需要单独验证。
+    // 方向翻转必须经过根轨，不能只测同向拉长。
+    // 草稿版本检出旧玩家域钳制对负轨的错误限制。
+    using namespace MMM;
+    Logic::SessionContext ctx;
+    configureDragContext(ctx);
+    const auto entity = ctx.noteRegistry.create();
+    const int  track  = draft ? -3 : 1;
+    ctx.noteRegistry.emplace<Logic::NoteComponent>(
+        entity,
+        Logic::NoteComponent{ .m_type       = NoteType::FLICK,
+                              .m_timestamp  = 1,
+                              .m_trackIndex = track,
+                              .m_dtrack     = 1,
+                              .m_isDraft    = draft });
+    ctx.noteRegistry.emplace<Logic::InteractionComponent>(
+        entity, Logic::InteractionComponent{ .isSelected = true });
+    // 真实工具保存初始组件，测试不手工恢复 before。
+    // 起笔明确是箭头，不能读取上一帧的悬浮部位。
+    // 纵坐标固定，排除时间插值对结果的影响。
+    Logic::GrabTool tool;
+    tool.handleStartDrag(ctx,
+                         { entity,
+                           "Basic2DCanvas",
+                           true,
+                           draft ? Logic::ChartObjectKind::DraftNote
+                                 : Logic::ChartObjectKind::PlayerNote,
+                           static_cast<uint8_t>(Logic::HoverPart::FlickArrow),
+                           -1 });
+    // 先拉长两轨，再越过根轨反向；两个过程都保持根轨与时间不变。
+    // 玩家与草稿像素的零点不同，期望的相对轨差却相同。
+    // 两套坐标显式给出，不能让测试跟随被测投影函数一起算错。
+    tool.handleUpdateDrag(
+        ctx, { "Basic2DCanvas", draft ? 30.0f : 450.0f, 300, true });
+    if ( ctx.noteRegistry.get<Logic::NoteComponent>(entity).m_dtrack != 2 ) {
+        XERROR("Flick length actual={} track={} dragging={}",
+               ctx.noteRegistry.get<Logic::NoteComponent>(entity).m_dtrack,
+               ctx.noteRegistry.get<Logic::NoteComponent>(entity).m_trackIndex,
+               ctx.isDragging);
+        return false;
+    }
+    tool.handleUpdateDrag(
+        ctx, { "Basic2DCanvas", draft ? -90.0f : 150.0f, 300, true });
+    const auto& preview = ctx.noteRegistry.get<Logic::NoteComponent>(entity);
+    if ( preview.m_dtrack != -1 || preview.m_timestamp != 1 ||
+         preview.m_trackIndex != track )
+        return false;
+    // 取消与提交各用独立会话，不互相借用历史。
+    // 方向翻转不能拆成两笔 Undo。
+    // 撤销恢复原长度，重做恢复最终反向值。
+    tool.handleEndDrag(ctx, { "Basic2DCanvas", cancel });
+    // Cancel 从正在预览的反向值回滚，不是原地轻点的空事务。
+    // 正常分支则将两次更新合并，证明中途跨越根轨没有提前提交。
+    if ( cancel )
+        return ctx.actionStack.getUndoStackSize() == 0 &&
+               ctx.noteRegistry.get<Logic::NoteComponent>(entity).m_dtrack == 1;
+    if ( ctx.actionStack.getUndoStackSize() != 1 ) return false;
+    ctx.actionStack.undo(ctx);
+    if ( ctx.noteRegistry.get<Logic::NoteComponent>(entity).m_dtrack != 1 )
+        return false;
+    ctx.actionStack.redo(ctx);
+    return ctx.noteRegistry.get<Logic::NoteComponent>(entity).m_dtrack == -1;
+}
+/// @brief 起笔前已经被结构编辑替换的节点，不允许借旧下标开始拖动。
+/// @details UI 合成回放与逻辑队列不同步，因此必须在真实 GrabTool 验证。
+/// 原实体仍有效，专门排除只检查根句柄就通过的错误实现。
+/// 有效令牌对照必须能起笔，不能通过禁用所有局部拖动来让拒绝用例通过。
+/// 取消后原节点几何、身份及历史同时保持原样。
+bool testNodeDragToken()
+{
+    // 此测试只验证起笔身份与取消，不复写局部拖动的几何算法。
+    // 实际几何联动由既有 PolylineFirstBodyDragTest 继续覆盖。
+    // 令牌错误时根仍有效，区别于实体已经删除的简单失败情况。
+    // 因而只做 registry.valid 判断的实现会被这个用例检出。
+
+    using namespace MMM;
+    Logic::SessionContext ctx;
+    configureDragContext(ctx);
+    const auto      root   = makeNodeFixture(ctx, false);
+    const auto      before = ctx.noteRegistry.get<Logic::NoteComponent>(root);
+    Logic::GrabTool tool;
+    // 错误令牌来自同一父内另一个节点，根句柄与下标都仍合法。
+    // 失败应发生在建立拖动事务之前，不得需要事后 Undo。
+    Logic::CmdStartDrag start{
+        root,
+        "Basic2DCanvas",
+        true,
+        Logic::ChartObjectKind::PlayerNote,
+        static_cast<uint8_t>(Logic::HoverPart::PolylineNode),
+        1,
+        Common::Render::polylineTouchToken(before.m_subNotes[2].collaborationId)
+    };
+    tool.handleStartDrag(ctx, start);
+    if ( ctx.isDragging || ctx.actionStack.getUndoStackSize() != 0 )
+        return false;
+    // 用正确身份重复完全相同的输入，证明局部编辑仍可正常开始。
+    // 此对照也检验错误请求没有残留旧参与集合。
+    // 正确令牌取相同父列表中的目标节点，不从当前 Hover 状态取得。
+    // 重复起笔前没有重新构造会话，验证失败路径清理完整。
+    // 原数组、索引和目标轨道完全相同，只有身份参数改变。
+    start.hitNodeToken = Common::Render::polylineTouchToken(
+        before.m_subNotes[1].collaborationId);
+    tool.handleStartDrag(ctx, start);
+    if ( !ctx.isDragging || ctx.draggedSubIndex != 1 ) return false;
+    // 先产生可见位移再取消，确保恢复路径真正经过发生变化的组件。
+    // 锁定的节点索引与令牌在整笔期间不能由后续 Hover 替换。
+    tool.handleUpdateDrag(ctx, { "Basic2DCanvas", 350, 250, true });
+    tool.handleEndDrag(ctx, { "Basic2DCanvas", true });
+    // Cancel 恢复原快照，不能把有效对照变成一条空编辑历史。
+    // 组件引用在 End 之后重新取得，避免读取已被 action 替换的旧存储。
+    // 取消应保留原批注和稳定身份，不能用删除重建模拟恢复。
+    // 确认没有历史条目，也防止一次无位移拖动清掉用户重做分支。
+    const auto& after = ctx.noteRegistry.get<Logic::NoteComponent>(root);
+    return !ctx.isDragging && ctx.actionStack.getUndoStackSize() == 0 &&
+           after.m_subNotes[1].timestamp == before.m_subNotes[1].timestamp &&
+           after.m_subNotes[1].collaborationId ==
+               before.m_subNotes[1].collaborationId;
+}
+/// @brief 普通折线锚点和 Flick 后的显式末节点均能完成真实局部移动。
+/// @param draft 玩家与草稿使用各自投影，保持负轨号所属域。
+/// @param flickEnd 末节点是前一 Flick 的同时间终点，应同时改变其跨度。
+/// @param cancel 取消恢复原节点，正常提交只生成一次可回放历史。
+/// @details 旧局部分支只识别 Hold/Flick，NOTE 会命中却不修改数据。
+/// 这里直接验证模型变化，不能用星号或手指悬浮代替执行结果。
+/// @pre 已载入谱面并开放折线编辑，不能通过权限拒绝伪装测试成功。
+/// @note Ctrl 输入只跳过磁吸，不跳过稳定身份或草稿负轨域校验。
+/// @return 预览、历史深度与撤销重做后的轨道均符合契约时返回真。
+/// @warning 仅构造 CPU 会话，不初始化图形设备、音频线程或磁盘资源。
+bool testPlainNodeDrag(bool draft, bool flickEnd, bool cancel)
+{
+    using namespace MMM;
+    Logic::SessionContext ctx;
+    configureDragContext(ctx);
+    const auto root   = makeNodeFixture(ctx, draft);
+    auto&      parent = ctx.noteRegistry.get<Logic::NoteComponent>(root);
+    const int  index  = flickEnd ? 3 : 1;
+    if ( !flickEnd ) {
+        // 将中间段改为普通锚点，前后时刻为一秒和三秒。
+        // 夹具同时更新对应子投影，起始父子数据必须一致。
+        // 保留原批注和身份，只改变段类型以隔离 NOTE 的缺失处理。
+        // 不重建父实体，确保锁定命令仍引用原根。
+        parent.m_subNotes[1].type     = NoteType::NOTE;
+        parent.m_subNotes[1].duration = 0;
+        for ( auto e : ctx.noteRegistry.view<Logic::NoteComponent>() ) {
+            auto& child = ctx.noteRegistry.get<Logic::NoteComponent>(e);
+            if ( child.m_isSubNote && child.m_parentPolyline == root &&
+                 child.m_subIndex == 1 ) {
+                child.m_type     = NoteType::NOTE;
+                child.m_duration = 0;
+            }
+        }
+    }
+    // 判定线上输入直接映射到期望时间，不从被测工具反推坐标。
+    // Flick 末端即使收到其它时间也须保持前段的瞬时关系。
+    ctx.currentTime = ctx.animateTime = 2.5;
+    const auto      before            = parent;
+    Logic::GrabTool tool;
+    tool.handleStartDrag(ctx,
+                         { root,
+                           "Basic2DCanvas",
+                           true,
+                           draft ? Logic::ChartObjectKind::DraftNote
+                                 : Logic::ChartObjectKind::PlayerNote,
+                           static_cast<uint8_t>(Logic::HoverPart::PolylineNode),
+                           index,
+                           Common::Render::polylineTouchToken(
+                               before.m_subNotes[index].collaborationId) });
+    // 两个域的目标均为相对第三轨，几何与根的原始位置无关。
+    // 原终点位于相对第四轨，所以该输入真实缩短 Flick 而不是空拖动。
+    tool.handleUpdateDrag(
+        ctx, { "Basic2DCanvas", draft ? -10.0f : 350.0f, 300, true });
+    const auto& preview = ctx.noteRegistry.get<Logic::NoteComponent>(root);
+    const int   expectedTrack = draft ? -2 : 2;
+    // 同一个输入时间在两类锚点具有不同含义，避免用一套期望掩盖分支遗漏。
+    // 普通点接受时间移动，瞬时横段的终点则保持原前段时刻。
+    const double expectedTime = flickEnd ? 3.0 : 2.5;
+    if ( preview.m_subNotes[index].trackIndex != expectedTrack ||
+         preview.m_subNotes[index].timestamp != expectedTime ||
+         preview.m_subNotes[index].collaborationId !=
+             before.m_subNotes[index].collaborationId )
+        return false;
+    // 前缀的根和独立批注不跟着点移动，避免误走整条位移。
+    // 横段终点的附属 NOTE 必须与前段轨差保持一致。
+    if ( preview.m_trackIndex != before.m_trackIndex ||
+         preview.m_timestamp != before.m_timestamp ||
+         (flickEnd && preview.m_subNotes[2].dtrack != 1) )
+        return false;
+    tool.handleEndDrag(ctx, { "Basic2DCanvas", cancel });
+    // 子实体同步由正式工具完成，测试不直接写入期待的 after 状态。
+    // 释放后的回放还会再同步一次，所以继续检查逻辑模型而非截屏。
+    // 释放后重新取组件，历史动作可以替换原存储。
+    // 取消不建立历史，正常提交不能把横向与纵向变化拆成两笔。
+    const auto& finished = ctx.noteRegistry.get<Logic::NoteComponent>(root);
+    if ( cancel )
+        return ctx.actionStack.getUndoStackSize() == 0 &&
+               finished.m_subNotes[index].trackIndex ==
+                   before.m_subNotes[index].trackIndex;
+    if ( ctx.actionStack.getUndoStackSize() != 1 ) return false;
+    ctx.actionStack.undo(ctx);
+    // 一次撤销恢复节点及相邻 Flick，不靠额外位置命令回滚。
+    // 重做必须沿用同一稳定身份，不再生成一次新的插点动作。
+    const auto& undone = ctx.noteRegistry.get<Logic::NoteComponent>(root);
+    if ( undone.m_subNotes[index].trackIndex !=
+             before.m_subNotes[index].trackIndex ||
+         (flickEnd && undone.m_subNotes[2].dtrack != 2) )
+        return false;
+    ctx.actionStack.redo(ctx);
+    return ctx.noteRegistry.get<Logic::NoteComponent>(root)
+               .m_subNotes[index]
+               .trackIndex == expectedTrack;
 }
 /// @return 测试通过时返回 0。
 /// @note 两个分支分别执行，再汇总退出码，避免前一失败令后一分支被短路跳过。
@@ -584,6 +1026,41 @@ int main()
     // 取消场景从空历史开始，旧已完成操作的保护由既有取消用例共同覆盖。
     // 同一组负时间与越尾样本对两端给出不同期望，检查钳制方向。
     // 提交场景最后回到合法长度，再回放一次完整的撤销与重做。
+    // 删除、插入和拖动共享注册表模型，但各自使用独立夹具。
+    // 每项都执行真实历史回放，失败日志仅用于区分事务来源。
+    bool       nodes       = testNodeDelete();
+    const bool tokenPassed = testNodeDragToken();
+    if ( !tokenPassed ) XERROR("node drag token failed");
+    nodes &= tokenPassed;
+    for ( bool draft : { false, true } )
+        for ( bool cancel : { false, true } ) {
+            const bool result = testFlickEndpoint(draft, cancel);
+            if ( !result )
+                XERROR("Flick draft={} cancel={} failed", draft, cancel);
+            nodes &= result;
+        }
+    // 普通锚点与横段显式终点分别覆盖提交和取消，避免只测试原有 Hold 分支。
+    for ( bool draft : { false, true } )
+        for ( bool end : { false, true } )
+            for ( bool cancel : { false, true } ) {
+                const bool passed = testPlainNodeDrag(draft, end, cancel);
+                if ( !passed )
+                    XERROR("Plain node draft={} end={} cancel={} failed",
+                           draft,
+                           end,
+                           cancel);
+                nodes &= passed;
+            }
+    // 三个连接在玩家与草稿上各执行一次，不能只测一个正轨样本。
+    // 同时保持原有跨域整组选中测试，防止局部修复禁用整体搬移。
+    for ( bool draft : { false, true } )
+        for ( int i = 0; i < 3; ++i ) {
+            const bool result = testNodeInsert(draft, i);
+            if ( !result )
+                XERROR("insert draft={} segment={} failed", draft, i);
+            nodes &= result;
+        }
+    if ( !nodes ) XERROR("Polyline node structural editing regression failed");
     bool endpoints = true;
     for ( bool draft : { false, true } )
         for ( bool cancel : { false, true } ) {
@@ -600,7 +1077,7 @@ int main()
             endpoints &= tailPassed;
         }
     if ( !endpoints ) XERROR("Hold start endpoint regression failed");
-    return endpoints && standalonePassed && groupedPassed &&
+    return nodes && endpoints && standalonePassed && groupedPassed &&
                    standaloneCancelled && groupedCancelled && marqueeCancelled
                ? 0
                : 1;

@@ -1,5 +1,8 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/note/Flick.h"
+#include "mmm/note/Hold.h"
+#include "mmm/note/Polyline.h"
 #include "mmm/project/ProjectSettings.h"
 
 #include <algorithm>
@@ -10,8 +13,10 @@
 #include <iterator>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 /**
  * @file MetadataCompatibilityTest.cpp
@@ -1349,6 +1354,99 @@ bool testMMMPolylineAnnotationRoundTrip(
         "MMM polyline annotations should round-trip independently");
 }
 
+/// @brief 无批注的编辑节点也必须保留分段边界和稳定身份。
+/// @param outputDirectory 测试输出目录，不写入源码资源。
+/// @return 连续两次原生格式往返仍保留全部节点时返回真。
+/// @details 插点得到的两个连续 Hold 具有相同轨道且几何连续，
+/// 单纯比较总时长无法发现中间编辑节点被合并；必须比较节点数与身份。
+/// 测试不创建对象批注或音频绑定，因此唯一的保护依据就是节点 ID。
+/// 这是编辑器既有稳定身份契约的往返验证，不引入新的格式字段。
+/// 普通 Note 同样是有效编辑锚点，不能因没有持续参数而消失。
+bool testMMMPolylineIdentityRoundTrip(
+    const std::filesystem::path& outputDirectory)
+{
+    MMM::BeatMap source;
+    source.m_baseMapMetadata.track_count = 4;
+    // 使用正式拥有容器建立引用，sync 后不能留下栈上节点的悬垂引用。
+    // 所有批注保持为空，避免旧批注保护条件让回归意外通过。
+    auto& node             = source.m_noteData.notes.emplace_back();
+    node.m_timestamp       = 500;
+    node.m_track           = 1;
+    node.m_isSubNote       = true;
+    node.m_collaborationId = "touch-node";
+    auto& poly             = source.m_noteData.polylines.emplace_back();
+    poly.m_timestamp       = 500;
+    poly.m_track           = 1;
+    // 根引用普通子节点；它没有可合并的持续区间，旧清洗会将其直接丢弃。
+    // 若仅保护两个 Hold 而未保护 Note，下面四节点断言仍会失败。
+    poly.m_subNotes.emplace_back(node);
+    // 两个相邻 Hold 正是一次等分插点的结果，端点和总时长没有变化。
+    // 不使用批注强制保形，也不额外设置私有元数据绕开保存器。
+    // 根自身不需要身份，确保保护条件真正来自内嵌节点。
+    // 各自身份不同，保存器不能把第二个点当作冗余导入片段清洗。
+    for ( int i = 0; i < 2; ++i ) {
+        auto& hold             = source.m_noteData.holds.emplace_back();
+        hold.m_timestamp       = 500 + 250 * i;
+        hold.m_duration        = 250;
+        hold.m_track           = 1;
+        hold.m_isSubNote       = true;
+        hold.m_collaborationId = i == 0 ? "hold-original" : "hold-inserted";
+        poly.m_subNotes.emplace_back(hold);
+        poly.m_subHolds.emplace_back(hold);
+    }
+    // 异构尾段阻止整个样本降级为独立 Hold，覆盖节点数组的写出路径。
+    // 时间恰好接到第二个 Hold 末尾，样本不依赖异常拓扑触发保护。
+    // 正向轨差一确保加载后尾部仍具有有效方向。
+    auto& flick             = source.m_noteData.flicks.emplace_back();
+    flick.m_timestamp       = 1000;
+    flick.m_track           = 1;
+    flick.m_dtrack          = 1;
+    flick.m_isSubNote       = true;
+    flick.m_collaborationId = "flick-tail";
+    poly.m_subNotes.emplace_back(flick);
+    poly.m_subFlicks.emplace_back(flick);
+    // 统一索引只列出顶层根，子节点必须通过父列表序列化。
+    // 否则顶层重复副本可能令数量断言误判为成功。
+    source.sync();
+    // 第二轮在正式读取结果上继续保存，排除只写出一次但读入就合并的实现。
+    // 文件名按轮次区分，失败时保留每个阶段供诊断。
+    const std::array<std::string_view, 4> ids{
+        "touch-node", "hold-original", "hold-inserted", "flick-tail"
+    };
+    for ( int pass = 0; pass < 2; ++pass ) {
+        const auto path = outputDirectory / ("polyline_identity_" +
+                                             std::to_string(pass) + ".mmm");
+        if ( !source.saveToFile(path) ) return false;
+        auto restored = MMM::BeatMap::loadFromFile(path);
+        if ( !check(
+                 restored.m_noteData.polylines.size() == 1 &&
+                     restored.m_noteData.polylines.front().m_subNotes.size() ==
+                         4,
+                 "native save must preserve unannotated editing nodes") )
+            return false;
+        const auto& nodes = restored.m_noteData.polylines.front().m_subNotes;
+        // 身份同时检查顺序，不能只保留四个不同但重新生成的 ID。
+        // 第一轮核对写出保护，第二轮核对读入后继续编辑所需的身份持续性。
+        // Hold 的独立时刻与时长用于确认原中点仍是可编辑边界。
+        for ( std::size_t i = 0; i < ids.size(); ++i )
+            if ( !check(nodes[i].get().m_collaborationId == ids[i],
+                        "native save must retain each node identity") )
+                return false;
+        if ( !check(
+                 nodes[0].get().m_type == MMM::NoteType::NOTE &&
+                     nodes[2].get().m_type == MMM::NoteType::HOLD &&
+                     nodes[2].get().m_timestamp == 750 &&
+                     static_cast<const MMM::Hold&>(nodes[2].get()).m_duration ==
+                         250,
+                 "inserted hold boundary must survive native reload") )
+            return false;
+        // 值移动转交拥有容器；后续不再访问上轮节点引用。
+        // 不通过重新执行插点命令伪造保存后的结构。
+        source = std::move(restored);
+    }
+    return true;
+}
+
 /**
  * @brief 验证 MMM 原生格式保留同时间戳的多条 Markdown 批注及物件目标。
  *
@@ -1556,6 +1654,8 @@ int main(int argc, char* argv[])
     ok &= testBeatmapConverterFormatMatrix(outputDirectory);
     // 批注组验证折线层级以及同时间戳多目标的稳定身份。
     ok &= testMMMPolylineAnnotationRoundTrip(outputDirectory);
+    // 无批注的触控插点使用同一原生模型和稳定身份保护。
+    ok &= testMMMPolylineIdentityRoundTrip(outputDirectory);
     ok &= testMMMBeatmapAnnotationsRoundTrip(outputDirectory);
 
     if ( ok ) {

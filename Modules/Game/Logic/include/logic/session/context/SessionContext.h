@@ -362,6 +362,8 @@ struct SessionContext {
     // --- 橡皮擦工具状态 ---
     struct EraserState {
         bool isActive{ false };
+        /// @brief 离散节点删除只作用于冻结目标，不扩展到其余选中物件。
+        bool limitToTarget{ false };
         bool isShiftDown{ false };  ///< Shift 按下时整体删除 Polyline
         /// @brief 当前擦除目标所在的独立 ECS 注册表。
         ChartObjectKind targetObjectKind{ ChartObjectKind::PlayerNote };

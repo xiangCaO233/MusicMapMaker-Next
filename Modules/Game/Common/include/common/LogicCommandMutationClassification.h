@@ -70,7 +70,8 @@ namespace MMM::Logic
                 // 创建采样和修改采样属性都会直接改变音频时间线对象。
                 // 两者目标领域明确，无需读取当前采样注册表即可授权。
                 return ::MMM::BeatmapMutationFlags::AudioSamples;
-            } else if constexpr ( std::is_same_v<T, CmdUpdateObjectTimestamp> ||
+            } else if constexpr ( std::is_same_v<T, CmdEditPolylineNode> ||
+                                  std::is_same_v<T, CmdUpdateObjectTimestamp> ||
                                   std::is_same_v<
                                       T,
                                       CmdUpdateObjectSampleVolume> ) {

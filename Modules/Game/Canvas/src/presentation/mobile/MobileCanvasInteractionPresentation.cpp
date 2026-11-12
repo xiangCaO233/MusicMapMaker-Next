@@ -5,6 +5,7 @@
 #include "MobileNoteHandles.h"
 #include "MobilePointerInputScope.h"
 #include "MobilePointerOwnership.h"
+#include "MobilePolylineNodeMenu.h"
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "canvas/PlanarObservationInput.h"
 #include "common/LogicCommands.h"
@@ -126,7 +127,8 @@ public:
                 Config::AppConfig::instance().getWindowContentScale(),
                 frame.m_projection,
                 frame.m_snapshotYOffset,
-                m_handle ? &*m_handle : nullptr);
+                m_handle ? &*m_handle : nullptr,
+                ctx.preferred ? &*ctx.preferred : nullptr);
             // 延迟回放期间忽略后来触点，旧手势不能借用新手指的命中。
             // 即使快照提前刷新，活动事务仍持有开始时的部件身份。
             // 空白起点明确清空旧身份，后续跨过把手也只能继续框选。
@@ -281,7 +283,27 @@ public:
             ctx.beatmapKey      = snapshot->beatmapPathKey;
             ctx.beatmapInstance = snapshot->beatmapInstanceId;
             ctx.layers          = ctx.candidates;
-            m_waitRelease       = true;
+            // 扩大的把手区域可以位于原框外，菜单也必须知道这次锁定的部件。
+            if ( m_handle &&
+                 std::find(ctx.layers.begin(), ctx.layers.end(), *m_handle) ==
+                     ctx.layers.end() )
+                ctx.layers.insert(ctx.layers.begin(), *m_handle);
+            // 旧优先层必须属于本次长按候选，不能跨位置串用。
+            // 扩大的把手可能在原框外，所以显式补入冻结目标。
+            // 节点令牌保留到命令线程，不仅靠下标识别。
+            const auto validPreferred =
+                ctx.preferred && std::find(ctx.layers.begin(),
+                                           ctx.layers.end(),
+                                           *ctx.preferred) != ctx.layers.end()
+                    ? ctx.preferred
+                    : std::nullopt;
+            const auto target = validPreferred ? validPreferred
+                                : m_handle     ? m_handle
+                                : ctx.layers.empty()
+                                    ? std::nullopt
+                                    : std::optional{ ctx.layers.front() };
+            m_nodeMenu.capture(*snapshot, target);
+            m_waitRelease = true;
             ImGui::OpenPopup("SelectionEditMenu");
         }
         if ( ImGui::BeginPopup("SelectionEditMenu") ) {
@@ -302,6 +324,8 @@ public:
 private:
     /// @brief 起笔把手值身份，接管和方案切换立即清除，不借用旧快照。
     std::optional<HoverLayerCandidate> m_handle;
+    /// @brief 节点长按只持有值载荷，切换谱面后外层关闭旧弹窗。
+    MobilePolylineNodeMenu m_nodeMenu;
     /// @brief 实例身份隔离同路径重新载入，旧实体编号不跨会话复用。
     std::uintptr_t m_handleInstance{};
     /// @brief 多指导航只发布增量和最终倍率，不修改键盘状态或借用桌面中键。
@@ -416,6 +440,20 @@ private:
             }
             return clicked;
         };
+
+        // 节点入口遵循上方显式重叠层选择，菜单本身不修改选区或数据。
+        const auto validPreferred =
+            ctx.preferred && std::find(ctx.layers.begin(),
+                                       ctx.layers.end(),
+                                       *ctx.preferred) != ctx.layers.end()
+                ? ctx.preferred
+                : std::nullopt;
+        // 这里只接受本次候选里显式选中的重叠层。
+        // 另一位置的旧优先项不能冒充当前节点。
+        // 密集重叠先选层，再提供局部破坏性动作。
+        // 整物件菜单保持原复制、粘贴与删除语义。
+        m_nodeMenu.render(
+            snapshot, validPreferred, ctx.layers.size() > 1, buttonSize, gap);
 
         // 第一行：复制与粘贴（粘贴使用长按锁存的吸附时间作为落点锚点）。
         // 复制仅在存在活动选区时启用；粘贴保持可用，由动作处理器在激活时读取剪贴板内容。

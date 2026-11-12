@@ -34,6 +34,7 @@ public:
     /// @param scale 内容倍率只影响把手尺寸，不改变拖动时间映射。
     /// @param projection 当前画布正向投影，二维表面可为空。
     /// @param yOffset 快照图形尚未应用的动态纵向偏移。
+    /// @param preferred 长按菜单显式指定的重叠层，可覆盖最近距离优先。
     /// @param active 已锁存的拖动目标，仅用于按住强调色，不参与重新拾取。
     /// @return 最近的把手；没有命中时继续普通图形拾取。
     /// @details 原热区半径仍是 22 个逻辑像素，不能按可见胶囊尺寸缩放。
@@ -47,12 +48,16 @@ public:
         std::span<const Common::Render::Hitbox> boxes, ImVec2 origin,
         ImVec2 point, float scale,
         const PlanarObservationInputProjection* projection, float yOffset,
-        const HoverLayerCandidate* active = nullptr)
+        const HoverLayerCandidate* active    = nullptr,
+        const HoverLayerCandidate* preferred = nullptr)
     {
         std::optional<HoverLayerCandidate> result;
         // 严格比较在相同距离时保留逆序遍历的顶层对象。
         float best = 22 * scale * 22 * scale;
         auto* draw = ImGui::GetWindowDrawList();
+        // 优先层只在自己的热区内生效，不能跨空白吸走触点。
+        // 命中后仍绘制其余标记，不能提前结束框遍历。
+        bool pinned{};
         // 可见标记使用主题颜色；按住时加深，不用悬浮作为唯一反馈。
         // 细图形与手指热区独立，不能用胶囊的宽度代替原有命中半径。
         for ( auto it = boxes.rbegin(); it != boxes.rend(); ++it ) {
@@ -71,14 +76,16 @@ public:
                 anchor = *projected;
             }
             const bool note =
-                box.touchHandle == Common::Render::HoverPart::Head;
+                box.touchHandle == Common::Render::HoverPart::Head ||
+                box.touchHandle == Common::Render::HoverPart::PolylineNode;
             const bool start =
                 box.touchHandle == Common::Render::HoverPart::HoldStart;
             const HoverLayerCandidate candidate{ box.entity,
                                                  box.kind,
                                                  static_cast<std::uint8_t>(
                                                      box.touchHandle),
-                                                 box.subIndex };
+                                                 box.subIndex,
+                                                 box.touchNodeToken };
             const bool                pressed = active && *active == candidate;
             const auto                color   = ImGui::GetColorU32(
                 pressed ? ImGuiCol_SliderGrabActive : ImGuiCol_SliderGrab,
@@ -153,20 +160,25 @@ public:
             // 热区取原圆与新胶囊邻域的并集，不能因视觉变细缩小可操作面积。
             // 两处重叠仍只返回一个完整身份，不额外创建编辑事务。
             const float gx = point.x - grip.x, gy = point.y - grip.y;
-            const float distance =
-                std::min(visible(c) ? dx * dx + dy * dy : best,
-                         visible(grip) ? gx * gx + gy * gy : best);
+            const float distance = std::min(
+                visible(c) ? dx * dx + dy * dy : 22 * scale * 22 * scale,
+                visible(grip) ? gx * gx + gy * gy : 22 * scale * 22 * scale);
             // 距离以两个候选区域中最近者计算，重叠时仍保留顶层优先级。
             // 原中心在裁剪区外时沿用旧入口的拒绝规则，新的可见入口独立判断。
             // 不把触摸范围写回渲染包围盒，桌面及其它工具的拾取不受影响。
-            if ( distance >= best ) continue;
+            if ( distance >= 22 * scale * 22 * scale ) continue;
+            // 已显式选择的重叠层优先，不能让扩大的相邻热区抢回目标。
+            const bool chosen = preferred && *preferred == candidate;
+            if ( !chosen && (pinned || distance >= best) ) continue;
+            pinned = chosen;
             // 完整复合身份随触点锁存，不用下一帧 Hover 推断端点。
             best = distance;
             result =
                 HoverLayerCandidate{ box.entity,
                                      box.kind,
                                      static_cast<std::uint8_t>(box.touchHandle),
-                                     box.subIndex };
+                                     box.subIndex,
+                                     box.touchNodeToken };
         }
         return result;
     }

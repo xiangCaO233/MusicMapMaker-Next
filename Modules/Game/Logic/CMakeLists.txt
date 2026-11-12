@@ -10,6 +10,8 @@ add_library(
   # 命令入口与帧更新分开编译，避免继续扩张会话主实现。
   src/logic/session/BeatmapSession_Commands.cpp
   src/logic/session/InteractionController.cpp
+  # 折线节点离散编辑单独编译，复用公共撤销与橡皮擦断开语义。
+  src/logic/session/InteractionController_Polyline.cpp
   src/logic/session/PlaybackController.cpp
   src/logic/session/ActionController_Editing.cpp
   # 加载和运行期同步都使用 SessionUtils，但分别维护各自低频与热路径约束。

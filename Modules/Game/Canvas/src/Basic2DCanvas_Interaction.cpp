@@ -5916,6 +5916,9 @@ void Basic2DCanvasInteraction::handleInteractions(
     };
     uint8_t hoveredPart     = 0;
     int     hoveredSubIndex = -1;
+    /// @brief 本帧节点身份随按下命令锁存，不以未来帧的下标替代。
+    // 零令牌兼容旧调用，有令牌的起笔必须核对稳定子身份。
+    std::uint64_t hoveredNodeToken{};
 
     std::vector<HoverLayerCandidate> candidates;
     std::string                      layerSignature;
@@ -5938,7 +5941,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                     { hitbox.entity,
                       hitbox.kind,
                       static_cast<std::uint8_t>(hitbox.part),
-                      hitbox.subIndex });
+                      hitbox.subIndex,
+                      hitbox.touchNodeToken });
                 // 同一实体部件可能贡献多个相交矩形，只保留一个层候选。
                 if ( !appended ) continue;
                 // 签名包含实体、类型、部件和子索引；集合变化时重置层选择。
@@ -6022,6 +6026,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         hoveredObjectKind = candidate.kind;
         hoveredPart       = candidate.part;
         hoveredSubIndex   = candidate.subIndex;
+        hoveredNodeToken  = candidate.nodeToken;
     }
 
     // 平台可见把手已验证起点身份；后续命令仍走同一个控制器。
@@ -6032,6 +6037,7 @@ void Basic2DCanvasInteraction::handleInteractions(
         hoveredObjectKind = m_pointerTarget->kind;
         hoveredPart       = m_pointerTarget->part;
         hoveredSubIndex   = m_pointerTarget->subIndex;
+        hoveredNodeToken  = m_pointerTarget->nodeToken;
     }
     bool shouldSendHover = !m_hasLastHovered ||
                            m_lastHoveredEntity != hoveredEntity ||
@@ -6140,7 +6146,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                                 UI::Interaction::bypassSnapping(),
                                 hoveredObjectKind,
                                 hoveredPart,
-                                hoveredSubIndex }));
+                                hoveredSubIndex,
+                                hoveredNodeToken }));
                         m_leftPressStartedObjectDrag = true;
                     }
                 } else if ( !m_pointerTapOnly ) {

@@ -21,6 +21,8 @@ struct HoverLayerCandidate {
     int subIndex{ -1 };
     /// @brief 实体、领域、部位和子索引共同构成可跨帧验证的候选身份。
     bool operator==(const HoverLayerCandidate&) const = default;
+    /// @brief 触控子节点令牌；零值表示旧桌面拾取入口。
+    std::uint64_t nodeToken{};
 };
 
 /// @brief 追加悬浮物件候选，并合并同一自动采样的主体与偏移句柄。

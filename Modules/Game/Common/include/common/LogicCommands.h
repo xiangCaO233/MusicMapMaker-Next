@@ -123,6 +123,8 @@ struct CmdStartDrag {
     std::optional<std::uint8_t> hitPart;
     /// @brief 按下瞬间命中的折线子项索引，与 hitPart 一起锁定手势目标。
     std::optional<std::int32_t> hitSubIndex;
+    /// @brief 触控节点起笔的身份校验；零值保留经典调用行为。
+    std::uint64_t hitNodeToken{};
 };
 
 /**
@@ -178,6 +180,21 @@ struct CmdUpdateAudioSampleProperties {
 
     /// @brief 自动采样物件音量。
     float volume{ 1.0F };
+};
+
+/// @brief 对一个已锁定的折线节点执行离散结构编辑。
+/// @details 插入拆分后继段，删除沿用现有橡皮擦的断开路径语义。
+struct CmdEditPolylineNode {
+    /// @brief 目标父实体，不能使用另一注册表中的同号句柄。
+    entt::entity entity{ entt::null };
+    /// @brief 玩家与草稿沿用各自编辑权限。
+    ChartObjectKind kind{ ChartObjectKind::PlayerNote };
+    /// @brief 节点索引必须与稳定令牌同时匹配。
+    int subIndex{ -1 };
+    /// @brief 菜单打开时冻结，节点被替换后拒绝旧命令。
+    std::uint64_t nodeToken{};
+    /// @brief 为真拆分后继段，否则执行局部断开删除。
+    bool insertAfter{};
 };
 
 /// @brief 将单个谱面物件移动到精确秒时间戳。

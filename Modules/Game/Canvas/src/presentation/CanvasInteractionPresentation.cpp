@@ -25,7 +25,8 @@ CanvasMenuContext CanvasInteractionPresentation::context(
              c.m_selectionMenuBeatmapKey,
              c.m_selectionMenuBeatmapInstance,
              c.m_menuHoverLayers,
-             c.m_currentHoverCandidates };
+             c.m_currentHoverCandidates,
+             c.m_preferredHoverLayer };
 }
 /// @brief 不改变业务路径，平台只控制此次调用看到的输入快照。
 /// @warning 每帧固定转发，禁止在桥中等待逻辑线程或复制谱面。

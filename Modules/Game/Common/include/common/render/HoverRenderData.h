@@ -4,11 +4,21 @@
 #include <cmath>
 #include <cstdint>
 #include <entt/entity/entity.hpp>
+#include <functional>
 #include <string>
+#include <string_view>
 
 namespace MMM::Common::Render
 {
 using Logic::ChartObjectKind;
+
+/// @brief 将稳定子节点身份压成同进程触控校验令牌，空身份不能编辑结构。
+/// @warning 可见命中框热路径只散列固定长度身份，不分配、不生成新身份。
+inline std::uint64_t polylineTouchToken(std::string_view identity)
+{
+    // 令牌只用于拒绝过期索引，不作为持久化或跨设备协议身份。
+    return identity.empty() ? 0 : std::hash<std::string_view>{}(identity);
+}
 
 /// @brief 拾取包围盒对应的可交互物件部位。
 /// @note 部位用于选择拖动语义，具体物件领域另由 ChartObjectKind 表示。
@@ -156,6 +166,10 @@ struct Hitbox {
     ChartObjectKind kind{ ChartObjectKind::PlayerNote };
     /// @brief 仅独立 Note/Hold 的已选部件允许呈现触控调整目标。
     HoverPart touchHandle{ HoverPart::None };
+    /// @brief 折线子节点稳定身份令牌，防止旧菜单下标套用到相邻节点。
+    std::uint64_t touchNodeToken{};
+    /// @brief 此节点后仍有可拆分连接段，触控菜单才允许插入。
+    bool touchCanInsert{};
 };
 
 /// @brief 以包围盒中心为基准缩放交互拾取区域。
