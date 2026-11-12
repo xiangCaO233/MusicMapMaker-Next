@@ -125,7 +125,8 @@ public:
                 point,
                 Config::AppConfig::instance().getWindowContentScale(),
                 frame.m_projection,
-                frame.m_snapshotYOffset);
+                frame.m_snapshotYOffset,
+                m_handle ? &*m_handle : nullptr);
             // 延迟回放期间忽略后来触点，旧手势不能借用新手指的命中。
             // 即使快照提前刷新，活动事务仍持有开始时的部件身份。
             // 空白起点明确清空旧身份，后续跨过把手也只能继续框选。

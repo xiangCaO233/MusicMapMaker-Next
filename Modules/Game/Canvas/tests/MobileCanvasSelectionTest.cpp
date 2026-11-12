@@ -358,6 +358,35 @@ void testHandles()
                   static_cast<uint8_t>(Common::Render::HoverPart::HoldStart) &&
               start.m_ends == 1 && start.m_marquees.empty(),
           "head handle starts local resize");
+    // 旧热区外缘离中心 21 像素；改为胶囊后仍必须可以起笔。
+    // 新胶囊附近的触点位于旧热区之外，用于确认新视觉也有直接入口。
+    // 左外缘专门落在新胶囊区域之外，能够发现误把旧热区挪走的问题。
+    // 内缘样本反过来只依靠新增区域，两条断言各自约束一个入口。
+    // 每次仍以原手势起点锁定部件，后续位置不得重新选择另一物件。
+    // 释放点跨过触控容差，避免只触发选中而掩盖无法开始拉伸。
+    // 这里验证输入接线，真实时长与持久化结果由设备回读检查。
+    for ( const ImVec2 point : { ImVec2{ 95, 155 }, ImVec2{ 145, 155 } } ) {
+        const auto hit =
+            run({ { point, true }, { { point.x, point.y + 65 }, false } },
+                true,
+                Logic::SelectionOperation::Replace,
+                true);
+        check(
+            hit.m_starts.size() == 1 &&
+                hit.m_starts[0].hitPart ==
+                    static_cast<uint8_t>(Common::Render::HoverPart::HoldStart),
+            "old touch radius and new capsule remain reachable");
+    }
+    // 尾把手的旧外缘也不能缩小，只改首端会遗漏另一侧热区。
+    const auto tailEdge =
+        run({ { { 215, 75 }, true }, { { 215, 130 }, false } },
+            true,
+            Logic::SelectionOperation::Replace,
+            true);
+    check(tailEdge.m_starts.size() == 1 &&
+              tailEdge.m_starts[0].hitPart ==
+                  static_cast<uint8_t>(Common::Render::HoverPart::HoldEnd),
+          "old tail radius remains reachable");
     // 尾把手保持尾部语义，即使释放位置经过另一物件也只结束原事务。
     // 尾把手的右侧偏移不会变更轨道；局部工具只采纳纵向时间。
     // 最终坐标故意落在哨兵上，以检查释放不会重新拾取并替换目标。
