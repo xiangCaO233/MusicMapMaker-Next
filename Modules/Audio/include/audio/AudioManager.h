@@ -47,6 +47,10 @@ class BackgroundSpectrumCaptureNode;
  */
 class AudioManager
 {
+    /// @brief UI 回归夹具只暂停虚拟输出回调，以隔离磁盘耗时与源游标断言。
+    /// 不导出运行期测试接口，也不改变播放路径或设备的生产生命周期。
+    friend struct ProjectAudioToolOutputTestAccess;
+
 public:
     /// @brief 设置后续加载的时间线和试听音频解码方式，既有音轨在重载后生效。
     /// 离线分析、资源级 DSP 和音效保持完整缓存，保证稳定视图和低延迟。
