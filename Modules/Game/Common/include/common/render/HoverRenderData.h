@@ -168,8 +168,6 @@ struct Hitbox {
     HoverPart touchHandle{ HoverPart::None };
     /// @brief 折线子节点稳定身份令牌，防止旧菜单下标套用到相邻节点。
     std::uint64_t touchNodeToken{};
-    /// @brief 此节点后仍有可拆分连接段，触控菜单才允许插入。
-    bool touchCanInsert{};
 };
 
 /// @brief 以包围盒中心为基准缩放交互拾取区域。

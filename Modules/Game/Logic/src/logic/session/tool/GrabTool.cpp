@@ -1,5 +1,6 @@
 #include "logic/session/tool/GrabTool.h"
 #include "common/LogicCommands.h"
+#include "common/PolylineGeometry.h"
 #include "common/walkthrough/WalkthroughEditEvent.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
@@ -738,6 +739,16 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
         const auto* note =
             ctx.noteRegistry.try_get<const NoteComponent>(draggedEntity);
         const int index = cmd.hitSubIndex.value_or(-1);
+        // 触控目标必须来自合法的交替 Hold/Flick 路径；普通 Note 不是自由锚点。
+        // 稳定令牌只证明身份，不证明前后几何连接，因此两者分别验证。
+        // 拒绝旧畸形数据时不自动改写或删除，保留原内容供明确修复。
+        if ( note && !Common::isCanonicalPolyline(
+                         note->m_subNotes,
+                         note->m_timestamp,
+                         note->m_trackIndex,
+                         note->m_isDraft ? -ctx.draftTrackCount : 0,
+                         note->m_isDraft ? -1 : ctx.trackCount - 1) )
+            return;
         if ( !note || index < 0 ||
              index >= static_cast<int>(note->m_subNotes.size()) ||
              Common::Render::polylineTouchToken(
@@ -1660,43 +1671,6 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
             note->m_subNotes[subIdx].dtrack =
                 std::clamp(targetTrack, minimumTrack, maximumTrack) -
                 initSub.trackIndex;
-        } else if ( initSub.type == ::MMM::NoteType::NOTE && subIdx > 0 &&
-                    ctx.draggedPart == HoverPart::PolylineNode ) {
-            // 普通节点是独立锚点，不能因不携带 duration/dtrack 而忽略拖动。
-            // 只修改当前点，前后时序与相邻已有载体的结束位置共同限定时间。
-            // 对紧随横向 Flick 的终点保持同一时刻，仅改变前段的横向跨度。
-            // 首节点继续代表整条移动，此处只接受内部或末端的显式节点。
-            // 尾参数命中若与实际类型不符，不得借用节点索引读取前一项。
-            const auto& previous = initSubNotes[subIdx - 1];
-            auto&       current  = note->m_subNotes[subIdx];
-            if ( previous.type == ::MMM::NoteType::FLICK &&
-                 std::abs(previous.timestamp - initSub.timestamp) < 1e-7 ) {
-                current.trackIndex =
-                    std::clamp(targetTrack, minimumTrack, maximumTrack);
-                current.timestamp = previous.timestamp;
-                // 前段跨度由原起轨重新求得，不累计多帧指针轨差。
-                note->m_subNotes[subIdx - 1].dtrack =
-                    current.trackIndex - previous.trackIndex;
-            } else {
-                // 已有 Hold 不在此隐式改长，避免把点移动升级为另一段的拉伸。
-                // 末尾没有后继时只受非负时间与前缀末端约束。
-                const double lower = std::max(
-                    0.0,
-                    previous.timestamp + (previous.type == ::MMM::NoteType::HOLD
-                                              ? previous.duration
-                                              : 0.0));
-                const double upper =
-                    subIdx + 1 < static_cast<int>(initSubNotes.size())
-                        ? initSubNotes[subIdx + 1].timestamp
-                        : std::numeric_limits<double>::infinity();
-                // 输入本身倒序时保持旧预览，不调用前置条件不满足的 clamp。
-                if ( lower > upper ) return;
-                // 先完成时序校验再写任何字段，拒绝时不能残留半次横向移动。
-                // 普通节点不平移后缀，原连接仍由相邻已有节点决定。
-                current.trackIndex =
-                    std::clamp(targetTrack, minimumTrack, maximumTrack);
-                current.timestamp = std::clamp(targetTime, lower, upper);
-            }
         } else if ( initSub.type == ::MMM::NoteType::HOLD ) {
             // 拖动内部 Hold 身体改变该段及后续段的轨道，时间保持不动。
             // 限制共同轨差以保留后续折线的横向结构。

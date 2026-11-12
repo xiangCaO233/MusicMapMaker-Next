@@ -1,10 +1,9 @@
 return {
 	["ui.mobile.node.root_delete"] = "首节点代表整条路径，请使用删除物件入口。",
 	-- 折线节点菜单仅改变明确锁定的局部目标。
-	["ui.mobile.node.insert"] = "在节点后插入",
+    ["ui.mobile.node.draw"] = "新增转折请使用折线绘制，或从已有节点续写。",
 	["ui.mobile.node.delete"] = "删除此节点",
 	["ui.mobile.node.choose_layer"] = "重叠处请先选择目标层",
-	["ui.mobile.node.no_segment"] = "末尾可用折线绘制继续；无可拆分连接时不能插点。",
 	["ui.mobile.node.stale"] = "节点已变化，请重新选择。",
 	-- 移动工作区专用词条，不覆盖桌面的鼠标和快捷键说明。
 	["ui.interaction.touch_gestures"] = "触控手势",

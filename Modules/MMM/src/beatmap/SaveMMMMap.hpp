@@ -360,7 +360,7 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
             const auto& poly = static_cast<const Polyline&>(note);
 
             // 折线自身、任一节点存在批注，或节点已有稳定身份时保留原结构。
-            // 显式插入的编辑锚点即使无批注，也不能在保存时被相邻同类段吞并。
+            // 合法绘制或续写的转折即使无批注，也不能在保存时丢失节点身份。
             // 与读取器的节点身份保护保持对称，无身份的旧导入段仍可规范化。
             const bool preserveNodeStructure =
                 !poly.m_annotation.empty() ||

@@ -3,8 +3,6 @@
 #include "mmm/metadata/NoteMetadata.h"
 #include "mmm/note/NoteType.h"
 #include "mmm/sample/AudioSample.h"
-#include <cmath>
-#include <cstdint>
 #include <glm/vec4.hpp>
 #include <optional>
 #include <string>
@@ -52,21 +50,4 @@ struct PolylineSubNote {
     std::string collaborationId;
 };
 
-/// @brief 判断后继连接能否无损拆成两个合法子段。
-/// @warning 渲染与离散命令共用的常量判断，不修改原节点或分配资源。
-inline bool canSplitPolylineConnection(const PolylineSubNote& a,
-                                       const PolylineSubNote& b)
-{
-    // 仅拆分已存在的连接；零长度和不连续的异常段不猜测修复。
-    const double dt = b.timestamp - a.timestamp;
-    if ( !std::isfinite(dt) ) return false;
-    if ( a.type == ::MMM::NoteType::NOTE ) return dt > 0.000002;
-    if ( a.type == ::MMM::NoteType::HOLD )
-        return dt > 0.000002 && a.trackIndex == b.trackIndex &&
-               std::abs(a.duration - dt) < 1e-6;
-    const std::int64_t delta = std::int64_t(b.trackIndex) - a.trackIndex;
-    // 横向 Flick 只能在同一时间的整数轨道之间拆分。
-    return a.type == ::MMM::NoteType::FLICK && std::abs(dt) < 1e-7 &&
-           (delta >= 2 || delta <= -2) && delta == a.dtrack;
-}
 }  // namespace MMM::Common::Render

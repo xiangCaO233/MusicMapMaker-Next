@@ -590,9 +590,12 @@ void NoteRenderSystem::renderNotes(
                             hitbox.subIndex <
                                 static_cast<int>(note->m_subNotes.size()) ) {
                     // 局部标记只发布节点及尾参数，不把连接体扩大成整条热区。
-                    if ( hitbox.part == HoverPart::PolylineNode ||
-                         hitbox.part == HoverPart::HoldEnd ||
-                         hitbox.part == HoverPart::FlickArrow )
+                    const auto type = note->m_subNotes[hitbox.subIndex].type;
+                    if ( (type == ::MMM::NoteType::HOLD ||
+                          type == ::MMM::NoteType::FLICK) &&
+                         (hitbox.part == HoverPart::PolylineNode ||
+                          hitbox.part == HoverPart::HoldEnd ||
+                          hitbox.part == HoverPart::FlickArrow) )
                         hitbox.touchHandle = hitbox.part;
                 } else if ( note->m_type == ::MMM::NoteType::NOTE &&
                             hitbox.part == HoverPart::Head ) {
@@ -607,11 +610,6 @@ void NoteRenderSystem::renderNotes(
                 const auto& node = note->m_subNotes[hitbox.subIndex];
                 hitbox.touchNodeToken =
                     Common::Render::polylineTouchToken(node.collaborationId);
-                hitbox.touchCanInsert =
-                    hitbox.subIndex + 1 <
-                        static_cast<int>(note->m_subNotes.size()) &&
-                    Common::Render::canSplitPolylineConnection(
-                        node, note->m_subNotes[hitbox.subIndex + 1]);
             }
             if ( note && note->m_isDraft ) {
                 hitbox.kind = ChartObjectKind::DraftNote;

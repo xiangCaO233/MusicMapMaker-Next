@@ -49,7 +49,7 @@ struct CmdCreateAudioSample;
 struct CmdUpdateAudioSampleProperties;
 
 /// @brief 折线节点的显式局部结构编辑。
-struct CmdEditPolylineNode;
+struct CmdDeletePolylineNode;
 /// @brief 将单个谱面物件移动到精确秒时间戳，完整载荷定义位于 LogicCommands.h。
 struct CmdUpdateObjectTimestamp;
 
@@ -328,7 +328,7 @@ using LogicCommand = std::variant<
     CmdUpdateEditorConfig, CmdUpdateViewport, CmdSetPlayState, CmdLoadBeatmap,
     CmdCreateBeatmap, CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag,
     CmdUpdateDrag, CmdEndDrag, CmdCreateAudioSample,
-    CmdUpdateAudioSampleProperties, CmdEditPolylineNode,
+    CmdUpdateAudioSampleProperties, CmdDeletePolylineNode,
     CmdUpdateObjectTimestamp, CmdUpdateObjectSampleVolume,
     CmdUpdateSelectedObjectSampleVolume, CmdUpdateTrackCount,
     CmdUpdateBgmTrackCount, CmdUpdateDraftTrackCount, CmdSeek,
