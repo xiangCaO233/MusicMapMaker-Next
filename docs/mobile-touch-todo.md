@@ -1,13 +1,13 @@
 # 移动端触屏交互 TODO
 
-更新时间：2026-11-13。继续当前分支 `feat/android-sdl3`。此前 Timing 验收基线为 `caa2e82ec4e5fbc9fb2c707e313cdf385936fbf5`（`feat(android): 适配时间线触屏编辑与导航`），其前序为 `5a2fe815`。
+更新时间：2026-11-13。继续当前分支 `feat/android-sdl3`。当前业务基线为 `3dfb348c`（按桌面约束修正触控折线结构），包含 `9f6a9d43` 的更新弹窗与循环提示音修复。下一项从 **T03 采样锚点与偏移** 开始；T02 本修订仅完成模拟器复验，实体机未安装、未验。
 
 ## 换机接续入口
 
 - 先阅读仓库根目录 `AGENTS.md` 和本文。用户明确要求继续当前分支；保持经典桌面、纯鼠标方案和业务模型不变，一个职责一个提交，不夹带重构或公开发布。
 - 换机后先获取远端 `feat/android-sdl3`，核对 `git status`、当前分支及上述业务提交是否存在，核对 T02 模拟器复验记录后再继续 T03；实体机按可用性单独补验。已有本地修改时先保留，不以重置或强推覆盖。
 - T02 正交结构已完成模拟器复验，后续从 T03 继续；先核对已有能力，再设计触控入口。表中的“待完善”包含已有桌面功能的触控强化，不能当作这些业务功能完全不存在，也不能宣称所有候选问题都已在设备复现。
-- `build-android/` 已忽略，截图、测试工程、ADB 注入脚本、APK 和设备状态不会随普通 Git 拉取迁移。新机器重新检查 SDK／NDK／JDK、依赖、可用设备和签名；不得沿用本机 ADB 序号、路径或授权状态作为已连接证据。
+- 本机产物、缓存和证据集中在 `/home/xiang/Android/mmm-smoke/main`，不会随普通 Git 拉取迁移；需要原始证据时单独复制，不能将备份、APK 或缓存加入源码提交。新机器重新检查 SDK／NDK／JDK、依赖、可用设备和签名；不得沿用本机 ADB 序号、路径或授权状态作为已连接证据。
 
 ## 触屏交互 TODO
 
@@ -71,14 +71,15 @@
 - 已知 Linux `CanvasTouchNavigationTest` 的最终缩放采纳问题单独登记，Windows 197/197 不能替代 Linux 验证；不要在无授权的交互批次顺便扩大修复范围。
 
 
-## 验收基线与换机注意事项
+## 历史验收基线与换机注意事项
 
-- 业务基线 `caa2e82e`：Windows 完整构建成功，CTest **197/197 通过**；x86_64 与 arm64 Android 打包成功。手机模拟器、平板模拟器及 NX809J 独立验收包均完成 Timing 核心编辑回归，保存回读核对创建、粘贴、移动、撤销／重做与多指取消。
+- 此前 Timing 业务基线 `caa2e82e`（前序 `5a2fe815`；不代表当前 T02 修订验收）：Windows 完整构建成功，CTest **197/197 通过**；x86_64 与 arm64 Android 打包成功。手机模拟器、平板模拟器及 NX809J 独立验收包均完成 Timing 核心编辑回归，保存回读核对创建、粘贴、移动、撤销／重做与多指取消。
 - 此前音频集成测试和皮肤包测试各出现一次偶发失败，独立复跑及最终完整套件均通过；未删测试或改动这两个模块。新机器仍需实际运行，不能沿用本机结果宣称新环境通过。
 - NX809J 第三指可能触发系统 Cancel，不能把它误判为重做；该设备使用长按菜单重做。ADB 注入通过不替代真人手指手感验收。
-- 本机使用手机模拟器 1280×720／160dpi、平板模拟器 2560×1600／320dpi；新机器检查实际尺寸及密度。实体机沿用原有密度，不为截图方便修改全局设置。
-- 实机测试使用独立 `.next.drawprobe`（MMM Touch Regression），不得覆盖、卸载原 `.next.dev` 或 `.next.touchtest` 及其用户数据；换机先核对包名和签名。
+- 历史验收使用手机模拟器 1280×720／160dpi、平板模拟器 2560×1600／320dpi；最新 T02 复验后已恢复 1080×2400／420dpi。上述为验收结束时状态，新机器检查实际尺寸及密度。实体机沿用原有密度，不为截图方便修改全局设置。
+- 早期验收使用独立 `.next.drawprobe`；本轮改用 `top.xiang233.musicmapmaker.next.t01probe`。不得覆盖、卸载原 `.next.dev`、`.next.touchtest`、旧 `.next.drawprobe` 及其用户数据；换机先核对包名和签名。手机当前不可供测试，用户恢复授权可用后再补验；操作手机须使用 Terra 模型。
 - 本机 32GB 内存同时运行两个模拟器时，Windows 和 Android 原生构建顺序进行、使用 2 个编译任务；完整 CTest／重音频测试不与原生编译并发。新机器根据实际资源调整，不在编译过程中修改源码。
 - Windows 入口：`cmake --build build --parallel 2`、`ctest --test-dir build --output-on-failure`；Android 入口：`scripts/android/build-windows.ps1 -Abi x86_64 -Jobs 2` 或 `-Abi arm64-v8a -Jobs 2`，均在项目根执行。
-- 默认 APK 输出会被下一种 ABI 覆盖，安装前核对包名、ABI、签名及摘要。测试产物仅在忽略的 `build-android/` 内，本文件不保留旧批次流水账。
+- Linux 构建从项目根执行：`MMM_ANDROID_WORK_DIR=/home/xiang/Android/mmm-smoke/main MMM_ANDROID_ABIS="arm64-v8a x86_64" bash scripts/android/build.sh`；换机可选择另一处集中工作目录，显式设置 `MMM_ANDROID_WORK_DIR`，不要散落到源码目录。Windows 入口使用其专用工作目录。
+- 默认 APK 输出会被后续构建覆盖，安装前核对包名、ABI、签名及摘要。本轮标准 APK 为 `/home/xiang/Android/mmm-smoke/main/apk/MusicMapMaker-Next-android-debug.apk`，SHA256 为 `79799886d38137246aadeb05c6dd169eb4a8c04594af708edb28ee76db87743f`；独立 x86_64 验收包摘要与签名见 `evidence/t02-legality-20261113/acceptance-summary.json`，不能将标准包当成已安装的验收包。
 - 数据回读注意：`.mmm` Timing 时间戳单位是毫秒，插值 `duration` 单位是秒；吸附阈值外保留实际时间，不能强行断言所有触点都落在固定分拍。
