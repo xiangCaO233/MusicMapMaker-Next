@@ -337,6 +337,13 @@ struct SessionContext {
 
         /// @brief 当前画笔是否通过先删除已有物件进入恢复或转换编辑。
         bool replacesExistingObject{ false };
+        /// @brief 本笔续写延迟到释放提交；默认关闭，不改变桌面两阶段路径。
+        bool m_transactionalResume{ false };
+        /// @brief 尚未执行的原物件删除快照；只在续写起笔时分配，取消直接丢弃。
+        /// 预览不改变谱面，保存和联机同步始终读取完整的原对象。
+        std::unique_ptr<IEditorAction> m_pendingResume;
+        /// @brief 起笔时的历史修订，其他编辑插入后不能用旧快照覆盖新内容。
+        std::uint64_t m_resumeRevision{ 0 };
         /// @brief 本笔续写删除动作的精确身份，供纯鼠标取消恢复；普通绘制为零。
         std::uint64_t resumedDeleteActionId{ 0 };
         /// @brief 续接前的根实体；用于把教学身份转移给替换后的折线。

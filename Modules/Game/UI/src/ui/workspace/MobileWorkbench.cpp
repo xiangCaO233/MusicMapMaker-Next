@@ -131,6 +131,52 @@ bool gridButton(const char* id, const char* icon, const char* label,
     return clicked;
 }
 
+/// @brief 绘制工具的触控意图显式二选一，避免手指偏移把普通长条变成折线。
+/// @param width 已扣除主题间距的单列宽度。
+/// @param gap 两列之间的主题间距。
+/// @param scale 与其它移动按钮一致的触摸尺寸倍率。
+/// @warning 每帧只读方案和配置标量，点击时只改 UI 线程的后续起笔意图。
+void renderTouchDrawingControls(float width, float gap, float scale)
+{
+    auto&       profile  = Interaction::activeProfile();
+    const auto* simple   = TR("ui.mobile.draw.note_hold").data();
+    const auto* polyline = TR("ui.mobile.draw.polyline").data();
+    const float wrap     = std::max(1.0f, width - 12 * scale);
+    // 两列按当前语言共同量高；图标和正文不会挤到下一行或覆盖相邻单元。
+    const float textHeight =
+        std::max(ImGui::CalcTextSize(simple, nullptr, false, wrap).y,
+                 ImGui::CalcTextSize(polyline, nullptr, false, wrap).y);
+    const ImVec2 size{ width, std::max(48 * scale, textHeight + 28 * scale) };
+    // 显示态从方案读取，切换工具再返回仍保留最近一次意图。
+    // 简单模式不写入桌面配置，也不修改真实 Shift 或 Ctrl 状态。
+    // 用户需要明确选择折线，普通长条的手指漂移不会自动切换模式。
+    // 起笔时会锁存结果，笔画不依赖工作台下一帧是否仍然可见。
+    const bool simpleMode =
+        profile.noteHoldBrush(Interaction::Surface::MainCanvas);
+    if ( gridButton(
+             "TouchNoteHold", ICON_MMM_PEN, simple, size, scale, simpleMode) )
+        profile.setNoteHoldBrush(true);
+    ImGui::SameLine(0, gap);
+    const bool enabled = Config::AppConfig::instance()
+                             .getEditorConfig()
+                             .settings.enablePolylineEditing;
+    // 既有折线能力开关继续生效；这里不暗中开启专业模式或更改谱面配置。
+    ImGui::BeginDisabled(!enabled);
+    if ( gridButton("TouchPolyline",
+                    ICON_MMM_POLYLINE,
+                    polyline,
+                    size,
+                    scale,
+                    !simpleMode) )
+        profile.setNoteHoldBrush(false);
+    ImGui::EndDisabled();
+    // 禁用原因使用正文，手机没有悬浮鼠标也能知道从哪里开启能力。
+    // 说明遵循当前列宽换行，不缩小用户设定字号或截断英文。
+    // 此处仅解释全局门禁，不在绘制按钮上暗中改变谱面编辑权限。
+    if ( !enabled )
+        ImGui::TextWrapped("%s", TR("ui.mobile.draw.enable_polyline").data());
+}
+
 /// @brief 触控选择工具使用独立两列布局，集合运算仍由公共命令解释。
 /// @param width 单列的可用宽度，已经扣除主题间距。
 /// @param gap 当前主题的同行间距，不重设全局样式。
@@ -368,6 +414,10 @@ void drawMobileWorkbench(UIManager& manager, float scale)
     if ( tool == Logic::EditTool::Marquee &&
          Interaction::activeProfile().touchGestures() )
         renderTouchSelectionControls(width, gap, scale);
+    // 绘制意图属于移动工作台，公共画布只接收轻量命令，不包含移动布局头。
+    if ( tool == Logic::EditTool::Draw &&
+         Interaction::activeProfile().touchGestures() )
+        renderTouchDrawingControls(width, gap, scale);
     // 固定两列；紧凑高度使全部六行十二个常驻按钮在手机横屏下无需滚动即可完整展示。
     for ( std::size_t i = 0; i < entries.size(); i += 2 ) {
         // 先量同行的两种文案，再提交任何按钮，避免后量到的长文案压住下一行。

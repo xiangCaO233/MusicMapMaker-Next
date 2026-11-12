@@ -6119,8 +6119,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                     // 追加和替换仍可拖动已选集合，保留常规批量移动。
                     // 已分类的轻点只选中；拖动门槛属于输入策略，不能用空动作
                     // 代替选择，否则未保存标记和重做分支都会被无意义地改变。
-                    if ( !m_pointerSelectionOnly &&
-                         !currentSnapshot->isPlaying &&
+                    if ( !m_pointerTapOnly && !currentSnapshot->isPlaying &&
                          operation != Logic::SelectionOperation::Subtract ) {
                         // 播放时仍允许选择查看，但不允许改变对象位置。
                         // 按下处的命中部位与子索引随命令一起入队，避免拖拽工具
@@ -6135,7 +6134,7 @@ void Basic2DCanvasInteraction::handleInteractions(
                                 hoveredSubIndex }));
                         m_leftPressStartedObjectDrag = true;
                     }
-                } else if ( !m_pointerSelectionOnly ) {
+                } else if ( !m_pointerTapOnly ) {
                     // 框选起点使用当前画布局部坐标，逻辑层维护矩形终点。
                     UI::Interaction::dispatchCommand(
                         Event::LogicCommandEvent(Logic::CmdStartMarquee{
@@ -6154,13 +6153,27 @@ void Basic2DCanvasInteraction::handleInteractions(
                     // 画笔起点连同方案延伸意图与 Ctrl 状态发送，逻辑层决定
                     // 物件种类、吸附与复合绘制模式。
                     // 教学策略只在起笔锁存，跳过提示也不能在结束时意外合并旧物件。
-                    m_standaloneBrush = m_walkthroughPlacement;
+                    // 折线模式轻点已有对象只选择，拖动才进入续写；第二指取消不需要撤销。
+                    // 该中立轻点意图只由触控桥提供，桌面和纯鼠标默认关闭。
+                    if ( m_pointerTapOnly && !m_walkthroughPlacement &&
+                         !UI::Interaction::activeProfile().noteHoldBrush(
+                             UI::Interaction::currentSurface()) &&
+                         hoveredEntity != entt::null ) {
+                        UI::Interaction::dispatchCommand(
+                            Event::LogicCommandEvent(Logic::CmdSelectEntity{
+                                hoveredEntity, true, hoveredObjectKind }));
+                        m_leftPressStartedOnCanvas = false;
+                        return;
+                    }
+                    m_standaloneBrush =
+                        m_walkthroughPlacement || m_pointerTapOnly;
                     // 固定起笔身份，后续返回或跳步不能把提交归属到另一次练习。
                     m_brushWalkthroughToken =
-                        m_standaloneBrush ? m_walkthroughToken : 0;
+                        m_walkthroughPlacement ? m_walkthroughToken : 0;
                     // 子段门槛同样随本次手势冻结，最终清洗后由逻辑层核验。
-                    m_brushMinimumSubNotes =
-                        m_standaloneBrush ? m_walkthroughMinimumSubNotes : 0;
+                    m_brushMinimumSubNotes = m_walkthroughPlacement
+                                                 ? m_walkthroughMinimumSubNotes
+                                                 : 0;
                     UI::Interaction::dispatchCommand(
                         Event::LogicCommandEvent(Logic::CmdStartBrush{
                             m_cameraId,
@@ -6171,7 +6184,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                             m_standaloneBrush,
                             UI::Interaction::activeProfile().bypassSnapping(),
                             UI::Interaction::activeProfile().noteHoldBrush(
-                                UI::Interaction::currentSurface()) }));
+                                UI::Interaction::currentSurface()),
+                            m_pointerCancellationEnabled }));
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::ColorBrush ) {
@@ -6392,7 +6406,7 @@ void Basic2DCanvasInteraction::handleInteractions(
             // 释放命令依据按下时锁存的手势种类，而非释放位置的 hover。
             // 纯轻点没有开始框选，仅在下方按既有规则清空选择。
             // 不向逻辑层补发孤立 End，保留旧框与当前集合操作的语义。
-            if ( !m_pointerSelectionOnly )
+            if ( !m_pointerTapOnly )
                 UI::Interaction::dispatchCommand(
                     Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
         } else if ( m_leftPressStartedOnCanvas &&

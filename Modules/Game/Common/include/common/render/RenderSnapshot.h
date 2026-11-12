@@ -360,6 +360,8 @@ struct RenderSnapshot {
     /// @brief 当前绘制手势交给画布展示的预览状态。
     struct BrushSnapshot {
         bool isActive{ false };  ///< 是否激活
+        /// @brief 预览替代的原根身份；只隐藏绘制候选，不删除正式谱面数据。
+        entt::entity m_replacedEntity{ entt::null };
         /// @brief 当前手势是否创建 BGM 区自动采样。
         bool            createsAudioSample{ false };
         double          time{ 0.0 };                    ///< 位置/起始时间
@@ -575,6 +577,7 @@ struct RenderSnapshot {
         previewHoverTime        = 0.0;
         isPreviewDragging       = false;
         // 笔刷内部容器保留容量，但清空当前预览身份和颜色覆盖。
+        brush.m_replacedEntity   = entt::null;
         brush.isActive           = false;
         brush.createsAudioSample = false;
         brush.customColors       = {};

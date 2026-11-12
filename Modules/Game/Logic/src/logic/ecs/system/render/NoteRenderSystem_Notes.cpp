@@ -449,6 +449,11 @@ void NoteRenderSystem::renderNotes(
         noteSeen,
         snapshot->isPlaying && config.visual.simulateAutoplay);
 
+    // 续写期间旧根仍是正式数据，只在本帧局部候选中隐藏，避免与画笔预览重影。
+    // 不触发注册表更新、索引重建或联机变更；取消后下一快照自然恢复原物件。
+    if ( snapshot->brush.m_replacedEntity != entt::null )
+        std::erase(noteEntities, snapshot->brush.m_replacedEntity);
+
     // 非专业模式统一过滤草稿，所有后续主体、发光和命中层使用相同可见集合。
     // 不要只在绘制层隐藏草稿而留下可拾取的命中区域。
     // 模拟判定只读当前画布时间，向前或向后跳转都不保留历史完成标记。

@@ -1,90 +1,75 @@
 # 移动端触屏交互阶段交接
 
-更新时间：2026-11-12。分支 `feat/android-sdl3`，绘制适配接续 `df76335b`。先完成 NX809J 的选择交互回归，再实现主画布点按单键／拖动长条。
+更新时间：2026-11-12。当前分支 `feat/android-sdl3`，本批接续 `23e815fb`，完成移动端折线绘制与续写，本批为独立提交。
 
-## 当前绘制批次
+## 本批行为
 
-- 触控主画布在起笔命令中提供轻量 `m_noteHoldOnly` 意图；逻辑工具锁存到本笔状态，固定初始轨道，只创建 Note 或 Hold。默认关闭，经典桌面和纯鼠标的原画笔不变。
-- 拖动先经过既有触控容差，之后连续更新本地预览；快速移动并抬手仍补交最终 Update → End。长条支持双向时间拖动，提交时按起点与终点的最小时间及正时长归一化。
-- 简单笔画不续接、删除或合并已有物件；第二指或系统接管通过正式取消入口丢弃未提交笔画，不用普通 Undo。BGM 自动采样继续沿用原逻辑。
-- 绘制工具静止按住不会打开选择菜单；选择工具的长按菜单继续保留。私有手势实现仍位于移动目录，公共接口只增加中立语义，不引入平台宏或移动私有类型。
-- 新增 `MobileCanvasDrawingTest`，通过生产触点解释器取得命令，再由真实 `InteractionController` 回放，检查几何、已有对象保护和一笔一次撤销。
-- 教程的无修饰键提示与条件校验同步识别简单绘制策略；最终物件和路线仍由既有几何验收判断，经典桌面的 Shift／Ctrl 约束不变。
-- Windows 最终完整构建及六项相关回归通过，完整 CTest **196/196 通过**；Android x86_64 原生构建与打包成功，已安装至手机和平板模拟器。
-- 手机 1280×720／160dpi／50% 缩放／英文／物件磁吸开启，平板 2560×1600／320dpi／100% 缩放／中文／物件磁吸关闭，均通过点按、抖动轻点、静止长按单键、正反向长条、横向漂移不换轨、明确末端 Move 的 40ms 快速拖动、第二指取消。每一步保存回读均核对所有已有物件完全不变。
-- 正反向笔画回读的时间范围一致、时长为正；手机得到 250ms 起点／250ms 时长，平板在无磁吸下得到约 250.2858ms 起点／250ms 时长。没有滑键或折线子段。
-- 取消后一次撤销只移除最后有效的快速笔画，一次重做恢复完整音符数组，证明取消不产生空历史节点。最终模拟器留下已保存的绘制样例和绘制工具，供继续查看；有意重叠的快速笔画另存于验收证据中。
-- 证据：`build-android/evidence/touch-drawing-*`，包括构建日志、CTest 日志、逐文件注释 CSV、触摸脚本、截图与各步谱面回读。实体机本批只回归已完成的选择交互，新绘制在两个模拟器验收。
+- 绘制工具下，移动工作台增加“单键／长条”和“折线”两列模式按钮，分别提供中英文短译文及图标。默认简单绘制；折线模式受既有折线编辑开关约束，禁用原因直接显示正文。
+- 折线模式从空白拖动，按纵向／横向转向形成连接段；从单键、长条尾、滑键箭头或已有折线最后一段的节点或尾端拖动可续写。轻点已有物件只选择，轻点空白仍创建独立单键；长条身体起笔不截短原长条。
+- 跨过触控容差后，同帧依次回放原点起笔与实际位移，防止首个拐角丢失。补交只处理指针，不重复执行快捷键；松手帧也保留转向后的真实长条长度，不依赖下一帧才能完成末段。
+- 事务续写先保留正式原根和所有子实体，只在局部渲染候选中隐藏原根，由画笔展示临时几何。释放后一次删除旧对象并创建结果，一次撤销／重做覆盖完整续写；根注释、额外元数据和颜色继续保留。
+- 第二指或系统取消直接丢弃未执行的删除快照，不调用普通 Undo，不清除原有重做分支。预览期间发生其他内容修订则拒绝过期提交。
+- 播放／定位、只读切换、能力失效和权威替换时同步清理待提交快照。权威同步暂存普通画笔改用移动，独占动作不通过共享所有权复制。
+- 教学续写的复合动作保留新产物的定向补偿能力；普通撤销恢复原物件，教学返回只移除该步骤的延伸结果。
+- 经典桌面和纯鼠标继续使用原画笔、修饰键与两阶段续写历史。新命令意图默认关闭；移动实现与私有头保持隔离，公共层不包含移动布局头，也未增加平台条件宏。
 
-## 实机选择回归
+## 验证
 
-NX809J `9125282100E7` 使用 `df76335b` 的 arm64 构建，经 ADB 触摸注入验证，不等同于真实手指手感验收。
+- Windows 完整构建通过；8 项相关 CTest 全部通过，完整 CTest **196/196 通过**，耗时 231.89 秒。
+- 生产输入回归覆盖空白新画、四类来源续写、最后一段、第二指取消、非空重做保留、过期提交、一次撤销／重做及教程返回。夹具预热坐标与每笔起点一致，避免 ImGui 队列分帧使不同来源漏掉首个采样。
+- Android x86_64 原生构建、Gradle 打包通过，已安装手机和平板模拟器。中文／英文的两列模式按钮、图标和文字完整显示；手机英文短标题允许两行，不截断。
+- 两个模拟器均完成三段折线新建、末端续写为五段，逐段保存回读确认原三段前缀时间、轨道、长度精确不变，五个原始物件完整保留。
+- 两个模拟器均完成“一次撤销恢复原折线 → 轻点末端 → 第二指取消续写 → 重做恢复完整五段”的数据回读，证明轻点和取消均不清空已有重做分支。
+- 两个模拟器进一步通过真实拾取的单键、长条尾、滑键箭头续写；各自一次撤销完整恢复来源，简单／折线模式切换和简单长条创建正常。
+- 最终保存内容恢复为原五个物件加已验收的五段折线，两个 MMM 进程保持运行，当前进程 AndroidRuntime／libc 日志无致命异常。模拟器与应用均保持开启。
+- 本批证据前缀为 `build-android/evidence/touch-polyline-*`，包含构建与测试日志、注释 CSV、触摸注入脚本、截图及逐步保存回读。辅助工具在已忽略的 `build-android/tools`。
 
-- “移动保存 → 撤销保存 → 点选 → 重做保存”完整回读通过；点选后页签没有未保存星号，重做恢复原来的完整音符数组。
-- 追加点选与框选、点按减选、空白点按保留集合后成组移动，仅剩余 note01、note03 同步增加 250ms，其他属性及长条长度未变。再用减选框排除 note01，后续只有 note03 移动。
-- 原 `.next.dev` 签名与本机不同，使用新身份 `.next.drawprobe`、名称 `MMM Touch Regression` 安装独立回归包。原 `.next.dev` 与 `.next.touchtest` 的安装、配置和工程均未改写。
-- 每次注入前核对前台包名；发现用户切换应用后立即暂停，获得可用时段后继续。实机注入已结束，后续构建与绘制验收使用模拟器。
-- 证据：`build-android/evidence/touch-selection-physical-result.txt`、同前缀保存回读和截图；独立回归 APK 为 `build-android/apk/touch-selection-physical-probe.apk`。
+## 已完成基础与实机边界
 
-## 本轮修复与进度
+- `23e815fb`：触控点按单键、固定轨道双向拖动长条；简单笔画不续接、不删除或合并已有物件，第二指取消不制造空历史。
+- `df76335b`：触控选择的替换／追加／减选及清空；点选、分多次框选共用集合语义，桌面与纯鼠标状态独立。
+- `df7fd397`：容差内轻点只改变选择，不建立空拖动历史，不清除重做；`e616b050` 修复重复试听测试的时序干扰，生产音频逻辑不改。
+- NX809J `9125282100E7` 前轮使用 `df76335b` 的独立包 `.next.drawprobe`（MMM Touch Regression）完成选择回归。原 `.next.dev` 签名与本机不同，既有 `.next.dev`、`.next.touchtest` 的安装和数据没有改写。本批折线只要求两个模拟器，不把旧包实机结果当成新功能验收。
+- 原始多触点、稳定手指身份、双指导航与捏合沿用已有实现。第二指接管后须全部抬起，才能重新单指编辑；取消不等于撤销已完成编辑。
 
-- `df7fd397`：已分类的触控轻点只改变选择，不再启动空拖动或框选事务。修复点选误置未保存标记、清除重做分支的问题；通用桥的纯选择意图默认关闭，桌面行为保持原样。
-- `e616b050`：重复试听回归在点击期间停止 dummy 输出回调，检查源游标精确归零并恢复输出。生产试听与保存调用不改，不放宽时间阈值；消除磁盘保存耗时污染断言的问题。
-- 当前批次：触控工作台提供替换、追加、减选与清空选择，固定两列；模式只在选择工具下显示。点选和空白起手的框选复用同一集合运算，追加／减选时空白轻点保留选区。
-- 追加／减选状态属于触控方案实例，经典桌面和纯鼠标方案各自保持原有状态；当前选择模式不会模拟 Ctrl、Shift 或其他键盘输入。
-- 工作台使用独立的中英文短译文，英文为 Replace、Add、Remove、Clear，避免复用桌面菜单长标题使两列按钮换行过多；桌面文案保持不变。
+## 已知边界与后续
 
-## 已有基础与实现边界
+- NX809J 第三指落下时系统会发送 Cancel；不能将系统 Cancel 当作重做。该设备继续使用长按菜单重做，支持完整事件流的设备保留二／三指分类。
+- 前轮 Linux 曾有 `CanvasTouchNavigationTest` 最终缩放采纳被空闲节流跳过的问题，本批未修复，Windows 通过不代表跨平台已解决。
+- 很短的 `adb input swipe` 可能没有完整末端 Move；验收使用明确的终点 Move → Up。ADB 注入验证事件与数据，不代替真实手指手感验收。
+- 本批完成折线后再继续移动 Timing，最后完善属性与辅助面板；当前不能把基础选择、简单绘制和折线等同于全套移动编辑完成。
 
-原始多触点、稳定触点身份、第二指接管取消、双指平移与捏合已在前轮实现。取消恢复当前事务初始状态，不使用普通 Undo；剩余单指必须全部抬起才能重新编辑。
+## 构建与设备
 
-移动主画布解释器及私有头位于 `Modules/Game/Canvas/src/presentation/mobile/`。工作台布局位于移动专用 `MobileWorkbench.cpp`，公共头没有包含移动布局类型。公共输入方案只保存轻量语义值，不在桌面布局散布 Android 条件宏。
+在项目根目录执行 Windows `cmake --build build --parallel 2`、`ctest --test-dir build --output-on-failure`；安卓 `scripts/android/build-windows.ps1 -Abi x86_64 -Jobs 2`。同时运行两个模拟器时，不并发原生构建，也不把完整 CTest／重音频测试与原生编译叠加。
 
-连续导航不逐帧重建全谱面滚速积分；松手后发布最终缩放配置。新选择方式只发布已有逻辑命令，不在 UI 遍历 ECS 或等待会话长锁。
+手机 `emulator-5554`／`mmm-api36-minimal`：1280×720、160dpi、50% 时间线缩放、英文、放置磁吸开启。平板 `emulator-5556`／`mmm-api36-tablet`：2560×1600、320dpi、100% 时间线缩放、中文、放置磁吸关闭。测试后保持两个模拟器和 MMM 开启。
 
-## 验证状态
+APK 位于已忽略的 `build-android/apk`，默认文件会随 ABI 覆盖，安装前核对 ABI 与签名，禁止靠卸载用户原应用解决签名差异。测试工程为模拟器私有 `files/acceptance-project` 副本，五个原始物件和原媒体不属于用户工程。
 
-- 两项修复完成 Windows 完整构建与 **195/195 CTest**；试听、触控手势、触控选择三个用例各连续十次通过。
-- 另增真实 `InteractionController`／历史栈回归：先建立并撤销位置动作，重放生产移动解释器的轻点命令，确认选中成功、保存点不变、重做栈保留，且重做恢复实际位置。
-- Android x86_64 修复包构建和打包成功；手机和平板均复现并验证“移动保存 → 撤销保存 → 点选 → 重做保存”，完整音符数组恢复到之前的移动结果。点选后页签没有未保存星号。
-- 追加／减选完成 Windows 完整构建与 **195/195 CTest**，Android x86_64 构建和打包成功；手机和平板均验证多次追加框选、点按减选、框选减选、空白轻点保留集合、替换及清空。保存回读确认只移动最终选中的物件，时间增量一致，其他属性及长条长度保持不变。
-- 缩短移动按钮译文后重新完成桌面与 Android 构建，语言资源及选择交互相关 **6/6 CTest** 通过；手机英文新增按钮单行完整显示，平板中文布局复核通过。
-- 桌面双击跳转和纯鼠标选择约定由既有测试继续覆盖；后续修改仍需保持这两条路径不变。
+一项逻辑修改独立提交；提交或换机前用 `git status` 核对状态，不从旧 APK 推断当前源码。本批未授权推送或公开发布。
 
-## 已知边界
+## 本批逐文件注释检查
 
-- 前轮真实手指诊断已确认 NX809J 第三指落下后系统会发送 Cancel。没有关闭系统截屏手势，也不能把 Cancel 当作重做；该设备继续使用长按菜单重做。支持完整事件流的设备保留二指撤销／三指重做分类。
-- 前轮 Linux 曾出现 `CanvasTouchNavigationTest` 的最终缩放采纳被空闲节流跳过。拉取验收时 Windows 单独连续十次通过，但没有修改该独立问题，不能据此宣称跨平台已修复。
-- 很短的 `adb input swipe` 可能没有完整终点 Move。平板 40ms 普通 swipe 的终点曾不完整；明确发送终点 Move 后再 Up 的 40ms 注入可正确跨一轨。模拟器注入不替代真实手指体验测试。
-
-## 后续顺序
-
-本批完成点按单键／拖动长条后，再做折线续写及 Timing，最后完善属性与辅助面板。当前不能把基础选择与简单绘制当作全套移动编辑已完成。
-
-一项逻辑改动保持独立提交；提交或换机前用 `git status` 核对本地与远端状态，不从旧 APK 推断当前源码。
-
-## 本机构建与测试约束
-
-Windows：`cmake --build build --parallel 2`、`ctest --test-dir build --output-on-failure`；安卓：`scripts/android/build-windows.ps1 -Abi x86_64 -Jobs 2`。本机同时运行两个模拟器，不并发执行多个原生构建，也不把重音频测试与原生编译叠加。
-
-手机 AVD `mmm-api36-minimal` 为 1280×720、160dpi；平板 `mmm-api36-tablet` 为 2560×1600、320dpi。测试后保持模拟器和 MMM 开启。实体机本批仅新增独立 `.next.drawprobe`，既有 `.next.dev` 与 `.next.touchtest` 数据不动。
-
-APK 和证据位于已忽略的 `build-android/apk`、`build-android/evidence`。默认 APK 路径会随 ABI 覆盖，安装前核对 ABI 和签名；不要通过卸载原应用解决签名差异。五物件测试工程是模拟器私有目录中的 `files/acceptance-project` 副本，不是用户原工程。
-
-## 本轮逐文件注释检查
-
-仅检查当前绘制批次修改的代码与构建脚本，按 cloc 的 comment / (comment + code) 逐文件计算，均达到 30%；未刷新全仓基线。
+仅检查本批 18 个修改的 C++ 文件，按 cloc 的 `comment / (comment + code)` 逐文件计算，全部达到 30%；未重新扫描全仓基线。两份翻译 Lua 是纯资源表，文档与忽略的验收输出不计入代码统计。
 
 | 路径 | 注释行 | 代码行 | 比例 |
 | --- | ---: | ---: | ---: |
-| `Modules/Game/Canvas/src/Basic2DCanvas_Interaction.cpp` | 2014 | 4692 | 30.03% |
-| `Modules/Game/Logic/src/logic/session/tool/DrawTool.cpp` | 667 | 1555 | 30.02% |
-| `Modules/Game/Common/include/common/LogicCommands.h` | 404 | 565 | 41.69% |
-| `Modules/Game/UI/src/ui/interaction/EditorInteraction.cpp` | 232 | 490 | 32.13% |
-| `Modules/Game/Canvas/src/presentation/mobile/MobileCanvasInteractionPresentation.cpp` | 191 | 441 | 30.22% |
-| `Modules/Game/Canvas/tests/MobileCanvasDrawingTest.cpp` | 125 | 290 | 30.12% |
-| `Modules/Game/Canvas/CMakeLists.txt` | 122 | 283 | 30.12% |
-| `Modules/Game/Canvas/tests/MobileCanvasGestureTest.cpp` | 109 | 248 | 30.53% |
-| `Modules/Game/Logic/include/logic/session/context/SessionContext.h` | 111 | 230 | 32.55% |
-| `Modules/Game/UI/include/ui/interaction/EditorInteraction.h` | 148 | 178 | 45.40% |
-| `Modules/Game/Canvas/src/presentation/mobile/MobileCanvasGesture.h` | 36 | 77 | 31.86% |
+| `Modules/Game/Canvas/src/Basic2DCanvas_Interaction.cpp` | 2016 | 4704 | 30.00% |
+| `Modules/Game/Logic/src/logic/session/ActionController_Editing.cpp` | 1405 | 3270 | 30.05% |
+| `Modules/Game/Logic/src/logic/session/BeatmapSession_Commands.cpp` | 1317 | 3060 | 30.09% |
+| `Modules/Game/Logic/src/logic/ecs/system/render/NoteRenderSystem_Notes.cpp` | 998 | 2301 | 30.25% |
+| `Modules/Game/Logic/src/logic/session/tool/DrawTool.cpp` | 704 | 1637 | 30.07% |
+| `Modules/Game/Logic/src/logic/session/BeatmapSession_Rendering.cpp` | 650 | 1516 | 30.01% |
+| `Modules/Game/Logic/src/logic/session/PlaybackController.cpp` | 312 | 725 | 30.09% |
+| `Modules/Game/Common/include/common/LogicCommands.h` | 406 | 566 | 41.77% |
+| `Modules/Game/Canvas/tests/MobileCanvasDrawingTest.cpp` | 228 | 517 | 30.60% |
+| `Modules/Game/UI/src/ui/interaction/EditorInteraction.cpp` | 234 | 492 | 32.23% |
+| `Modules/Game/Canvas/src/presentation/mobile/MobileCanvasInteractionPresentation.cpp` | 203 | 467 | 30.30% |
+| `Modules/Game/Common/include/common/render/RenderSnapshot.h` | 172 | 368 | 31.85% |
+| `Modules/Game/UI/src/ui/workspace/MobileWorkbench.cpp` | 148 | 343 | 30.14% |
+| `Modules/Game/Canvas/include/canvas/Basic2DCanvasInteraction.h` | 244 | 277 | 46.83% |
+| `Modules/Game/Logic/include/logic/session/context/SessionContext.h` | 115 | 233 | 33.05% |
+| `Modules/Game/UI/include/ui/interaction/EditorInteraction.h` | 150 | 179 | 45.59% |
+| `Modules/Game/Canvas/src/presentation/CanvasInteractionPresentation.cpp` | 41 | 89 | 31.54% |
+| `Modules/Game/Canvas/src/presentation/CanvasInteractionPresentation.h` | 37 | 64 | 36.63% |

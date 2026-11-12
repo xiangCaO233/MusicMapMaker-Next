@@ -51,6 +51,7 @@ public:
     /// @param mode 等待阶段隐藏左键，起笔与收尾分别呈现唯一边沿。
     /// @param point 已锁存的原点或终点，不能使用当前菜单指针代替。
     /// @param count 方案确认的点击次数，选择工具将连续轻点保持为单次选择。
+    /// @param continuing 起笔后同帧补交真实位移，不产生第二次按下或快捷键。
     /// @param hidePointer 全部抬起或多指接管时局部清除悬浮，不影响其他控件。
     /// @details 所有修改严格局限于 routeInput 的同步调用栈。
     /// 不调用 AddMouseButtonEvent，因为入队事件要到下一轮 NewFrame 才生效。
@@ -62,7 +63,8 @@ public:
     /// 该作用域不执行可见按钮，后续弹层按原始触点处理释放保护。
     /// @warning 每帧栈上构造，仅保存固定大小字段，无堆分配或线程同步。
     TouchInputScope(MobileCanvasGesture::Output mode, ImVec2 point,
-                    unsigned short count, bool hidePointer = false)
+                    unsigned short count, bool hidePointer = false,
+                    bool continuing = false)
         : m_io(ImGui::GetIO())
         , m_pos(m_io.MousePos)
         , m_delta(m_io.MouseDelta)
@@ -77,6 +79,28 @@ public:
         , m_distance(m_io.MouseDragMaxDistanceSqr[0])
     {
         using O = MobileCanvasGesture::Output;
+        if ( continuing ) {
+            // 原点 Begin
+            // 已经派发；本次只回放跨过触控容差的实际坐标，不重复按下。
+            // 若舍弃此点，下一帧已经转向时会把首个拐角错误合成对角线。
+            // 持续样本保留原手势的 ClickedPos，不能把当前位置变成第二个起点。
+            // 累计位移由这两个点重算，不借用上一物理触点的拖动距离残留。
+            // 快速抬手也先补交位移，已经排队的 Release 随后负责唯一一次结束。
+            // 内层析构先恢复外层 Begin，外层结束后再恢复原始
+            // IO，期间不绘制按钮。
+            const float dx                  = point.x - m_clickedPos.x,
+                        dy                  = point.y - m_clickedPos.y;
+            m_io.MouseDown[0]               = true;
+            m_io.MouseClicked[0]            = m_io.MouseReleased[0] =
+                m_io.MouseDoubleClicked[0]  = false;
+            m_io.MouseClickedCount[0]       = 0;
+            m_io.MousePos                   = point;
+            m_io.MouseDelta                 = { dx, dy };
+            m_io.MouseDownDuration[0]       = m_io.DeltaTime;
+            m_io.MouseDownDurationPrev[0]   = 0;
+            m_io.MouseDragMaxDistanceSqr[0] = dx * dx + dy * dy;
+            return;
+        }
         // Pass 完全保留连续拖动。等待阶段连 Down 都屏蔽，画笔与框选均无法起笔。
         if ( mode == O::Pass ) return;
         m_io.MouseDown[0]          = mode == O::Begin;
@@ -281,8 +305,9 @@ public:
             // 触控容差内的抖动没有完成拖动标志，因此不会改变物件数据。
             // 轻点只执行选择，不能沿用 StartDrag/EndDrag 制造空撤销记录。
             // 已排队的释放可能与下一触点同帧到达，使用旧手势的收尾分类。
-            const bool selectionOnly =
-                snapshot->currentTool == Logic::EditTool::Marquee &&
+            const bool tapOnly =
+                (snapshot->currentTool == Logic::EditTool::Marquee ||
+                 snapshot->currentTool == Logic::EditTool::Draw) &&
                 ((output == MobileCanvasGesture::Output::Begin &&
                   !m_gesture.dragging()) ||
                  (output == MobileCanvasGesture::Output::Release &&
@@ -295,7 +320,20 @@ public:
                        (snapshot->currentTool == Logic::EditTool::Marquee ||
                         snapshot->currentTool == Logic::EditTool::Draw) &&
                            m_gesture.finishedDrag(),
-                       selectionOnly);
+                       tapOnly);
+            if ( output == MobileCanvasGesture::Output::Begin &&
+                 m_gesture.dragging() &&
+                 snapshot->currentTool == Logic::EditTool::Draw &&
+                 !UI::Interaction::activeProfile().noteHoldBrush(
+                     UI::Interaction::Surface::MainCanvas) ) {
+                // 同一 UI 帧按原点起笔、实际点更新的顺序入队，保留第一次转向。
+                // 回放只包围公共指针入口，不向原始事件队列插入任何合成触摸。
+                // 简单长条和桌面回退不经过此路径，菜单与其它窗口仍读真实输入。
+                TouchInputScope continued(
+                    MobileCanvasGesture::Output::Pass, point, 1, false, true);
+                routeInput(
+                    canvas, snapshot, width, height, true, false, false, true);
+            }
         } else {
             // 弹层接管后不补发候选轻点，编辑起笔从未发生，无需发送 End 或
             // Cancel。

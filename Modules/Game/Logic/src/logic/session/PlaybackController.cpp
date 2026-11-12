@@ -175,7 +175,11 @@ void cancelActiveEditingState(SessionContext& ctx)
 
     if ( !keepBrush ) {
         // 清掉长条起点与折线段，下一次绘制不继承上次尚未提交的形状。
-        ctx.brushState.isActive = false;
+        // 播放或定位打断续写时丢弃未执行的删除计划，正式原物件保持完整。
+        // 不执行普通 Undo，也不清理用户已有的重做分支。
+        ctx.brushState.m_pendingResume.reset();
+        ctx.brushState.m_transactionalResume = false;
+        ctx.brushState.isActive              = false;
         ctx.brushState.polylineSegments.clear();
         ctx.brushState.holdStartTime = -1.0;
         ctx.brushState.duration      = 0.0;

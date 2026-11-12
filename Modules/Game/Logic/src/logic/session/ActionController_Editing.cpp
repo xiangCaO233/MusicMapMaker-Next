@@ -1628,6 +1628,10 @@ void replaceNoteComponents(SessionContext&                   ctx,
     if ( ctx.brushState.isActive && !ctx.brushState.createsAudioSample ) {
         // Note 画笔依赖旧对象集合；自动采样画笔属于独立数据域，可继续保留。
         ctx.brushState.isActive = false;
+        // 权威替换已经终止本地续写，未执行的删除快照只能丢弃，不能事后重放。
+        // 清理独占动作不会修改原谱面或历史，避免失效计划存活到下一笔。
+        ctx.brushState.m_pendingResume.reset();
+        ctx.brushState.m_transactionalResume = false;
         ctx.brushState.polylineSegments.clear();
         ctx.brushState.activeAudioResourceId.clear();
         ctx.brushState.activeSampleBinding.reset();

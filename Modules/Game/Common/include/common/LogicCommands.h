@@ -286,6 +286,9 @@ struct CmdStartBrush {
     /// @brief 固定起轨且仅创建单键或长条；默认关闭，保留自由画笔与折线语义。
     /// 起笔时锁存，后续更新不依赖设备类型或实时键盘状态。
     bool m_noteHoldOnly{ false };
+    /// @brief 续写只预览，释放时把删除与创建合成一次事务；旧入口默认关闭。
+    /// 取消不改动注册表、撤销栈或重做栈，期间发生其他编辑则拒绝过期提交。
+    bool m_transactionalResume{ false };
 };
 
 /**

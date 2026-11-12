@@ -2184,6 +2184,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             snapshot->brush.isActive = true;
             snapshot->brush.createsAudioSample =
                 m_ctx->brushState.createsAudioSample;
+            snapshot->brush.m_replacedEntity =
+                m_ctx->brushState.m_pendingResume
+                    ? m_ctx->brushState.resumedEntity
+                    : entt::null;
             snapshot->brush.time         = m_ctx->brushState.time;
             snapshot->brush.duration     = m_ctx->brushState.duration;
             snapshot->brush.track        = m_ctx->brushState.track;

@@ -114,6 +114,9 @@ public:
     /// @brief 是否以固定轨道的单键／长条策略起笔，不续接已有折线。
     /// @warning 每次起笔只查询方案能力；逻辑工具锁存结果，不模拟修饰键。
     virtual bool noteHoldBrush(Surface) const { return false; }
+    /// @brief 显式选择简单笔画；默认不接受模式切换，桌面方案保持原规则。
+    /// @param enabled 为真只绘制单键／长条，为假允许自由折线及末端续写。
+    virtual void setNoteHoldBrush(bool enabled) {}
     /// @brief 是否在选中工具中启用无需键盘的右键编辑菜单。
     /// @warning 每帧只返回方案策略，不查询选择集合或访问会话锁。
     virtual bool selectionContextMenu() const;

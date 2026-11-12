@@ -2776,7 +2776,9 @@ bool BeatmapSession::processCommands()
         if ( preservesActiveBrush ) {
             // 纯物件权威替换会重置交互缓存；先保存画笔草稿，使远端物件成为
             // 当前基线后仍可继续原手势并在松键时提交。
-            preservedBrushState.emplace(m_ctx->brushState);
+            // 纯新增画笔才进入此分支；替换处理器会清空旧草稿，暂存采用移动。
+            // 不复制独占的续写计划或其组件快照，命令结束后再移回完整草稿。
+            preservedBrushState.emplace(std::move(m_ctx->brushState));
             preservedBrushDragging     = m_ctx->isDragging;
             preservedBrushDragCameraId = m_ctx->dragCameraId;
         }
@@ -3323,8 +3325,11 @@ void BeatmapSession::handleCommand(
     m_ctx->marqueeBoxes.clear();
 
     // 画笔可能携带音频资源和折线临时段，只读切换不能让松键后继续提交。
-    m_ctx->brushState.isActive           = false;
-    m_ctx->brushState.createsAudioSample = false;
+    // 尚未执行的续写删除只需丢弃，不能在权限恢复后重放到新的权威状态。
+    m_ctx->brushState.m_pendingResume.reset();
+    m_ctx->brushState.m_transactionalResume = false;
+    m_ctx->brushState.isActive              = false;
+    m_ctx->brushState.createsAudioSample    = false;
     m_ctx->brushState.activeAudioResourceId.clear();
     m_ctx->brushState.activeSampleBinding.reset();
     m_ctx->brushState.polylineSegments.clear();
@@ -3462,8 +3467,11 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
             // 配色目标集合仅是暂存输入，清空不触碰正式 Note 或撤销历史。
             // 必须先停用手势再替换工具，否则释放事件会交给基础工具处理旧目标。
             // 当前工具已经属于基础集合时不执行此分支，保持正常绘制连续性。
-            m_ctx->brushState.isActive  = false;
-            m_ctx->eraserState.isActive = false;
+            // 工具能力失效即终止整笔预览，独占的续写计划也不能跨工具存活。
+            m_ctx->brushState.m_pendingResume.reset();
+            m_ctx->brushState.m_transactionalResume = false;
+            m_ctx->brushState.isActive              = false;
+            m_ctx->eraserState.isActive             = false;
             m_ctx->eraserState.targetEntities.clear();
             m_ctx->currentTool = availableTool;
         }
@@ -3471,8 +3479,11 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
         if ( m_ctx->brushState.isActive &&
              (m_ctx->brushState.createsAudioSample ||
               m_ctx->brushState.activeSampleBinding) ) {
-            m_ctx->brushState.isActive           = false;
-            m_ctx->brushState.createsAudioSample = false;
+            // 带绑定的续写也可能被能力门禁取消，旧物件本身仍保留正式数据。
+            m_ctx->brushState.m_pendingResume.reset();
+            m_ctx->brushState.m_transactionalResume = false;
+            m_ctx->brushState.isActive              = false;
+            m_ctx->brushState.createsAudioSample    = false;
         }
         // 仅清理放置偏好，不删除谱面中已存在的采样或绑定音频数据。
         // 活动资源和选择资源分别属于手势快照与工具偏好，二者都必须清空。
