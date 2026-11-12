@@ -21,10 +21,12 @@
 
 #include "common/EditTool.h"
 #include "common/LogicCommands.h"
+#include "common/SelectionOperation.h"
 #include "config/AppConfig.h"
 #include "config/EditorConfig.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
+#include "event/logic/LogicCommandEvent.h"
 #include "ui/IEditorApplicationService.h"
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
@@ -34,9 +36,12 @@
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/workspace/MobileButton.h"
 
+#include <entt/entity/entity.hpp>
+#include <imgui.h>
+
 #include <algorithm>
 #include <array>
-#include <imgui.h>
+#include <optional>
 
 namespace MMM::UI
 {
@@ -124,6 +129,93 @@ bool gridButton(const char* id, const char* icon, const char* label,
     draw->PopClipRect();
     ImGui::PopID();
     return clicked;
+}
+
+/// @brief 触控选择工具使用独立两列布局，集合运算仍由公共命令解释。
+/// @param width 单列的可用宽度，已经扣除主题间距。
+/// @param gap 当前主题的同行间距，不重设全局样式。
+/// @param scale 移动外壳提供的逻辑尺寸倍率。
+/// @warning 每帧只读取方案标量和活动谱面标志，点击时才发布选择命令。
+void renderTouchSelectionControls(float width, float gap, float scale)
+{
+    auto& profile = Interaction::activeProfile();
+    // 只由移动工作台调用，桌面菜单和资源选择面板的布局保持独立。
+    // 四个稳定 ID 与翻译显示文字分离，切换语言不会改变触摸目标身份。
+    /// @brief 固定入口描述，不保存窗口或字体等跨帧资源的指针。
+    struct Choice {
+        /// @brief 当前按钮的稳定身份。
+        const char* m_id;
+        /// @brief 复用公共选择语义的翻译键。
+        const char* m_label;
+        /// @brief 文字之外的触控识别图标。
+        const char* m_icon;
+        /// @brief 空值表示立即清空，其余值切换后续选择意图。
+        std::optional<Logic::SelectionOperation> m_operation;
+    };
+    // 描述表是静态常量，不随每帧读取配置重新建立动态文本或容器。
+    static constexpr std::array choices{
+        Choice{ "TouchReplace",
+                "ui.mobile.selection.replace",
+                ICON_MMM_SQUARE_SELECT,
+                Logic::SelectionOperation::Replace },
+        Choice{ "TouchAdd",
+                "ui.mobile.selection.add",
+                ICON_MMM_PLUS,
+                Logic::SelectionOperation::Add },
+        Choice{ "TouchSubtract",
+                "ui.mobile.selection.subtract",
+                ICON_MMM_ERASER,
+                Logic::SelectionOperation::Subtract },
+        Choice{ "TouchClear",
+                "ui.mobile.selection.clear",
+                ICON_MMM_CLOSE,
+                std::nullopt }
+    };
+    // 先测量同行文案，英文换行时一起增高，不能截断右列或侵占下一行。
+    // 选中态来自方案的实际值，关闭工作台或重新打开仍能看见当前意图。
+    for ( std::size_t i = 0; i < choices.size(); i += 2 ) {
+        const float wrap       = std::max(1.0f, width - 12 * scale);
+        const float textHeight = std::max(
+            ImGui::CalcTextSize(
+                TR(choices[i].m_label).data(), nullptr, false, wrap)
+                .y,
+            ImGui::CalcTextSize(
+                TR(choices[i + 1].m_label).data(), nullptr, false, wrap)
+                .y);
+        // 行高只增加到容纳当前语言所需的程度，触控下限仍为 48dp。
+        // 两列共用同一高度，长文案不能覆盖同行按钮或下一行。
+        const ImVec2 size{ width,
+                           std::max(48 * scale, textHeight + 28 * scale) };
+        for ( std::size_t j = i; j < i + 2; ++j ) {
+            const auto& choice = choices[j];
+            // 模式可以预先选择；清空只对已有活动谱面开放，避免跨窗口误操作。
+            const bool clear = !choice.m_operation;
+            ImGui::BeginDisabled(clear && !MenuUtil::hasActiveBeatmap(true));
+            if ( gridButton(
+                     choice.m_id,
+                     choice.m_icon,
+                     TR(choice.m_label).data(),
+                     size,
+                     scale,
+                     choice.m_operation &&
+                         profile.selectionOperation() == choice.m_operation) ) {
+                if ( choice.m_operation ) {
+                    // 点选与框选后续都读取这个值，不模拟任何键盘修饰键。
+                    // 切换不清理现有选区，追加/减选必须以当前集合为起点。
+                    profile.setSelectionOperation(*choice.m_operation);
+                } else {
+                    // 显式清空不受追加/减选模式影响，也不切换当前工具。
+                    Interaction::dispatchCommand(Event::LogicCommandEvent(
+                        Logic::CmdSelectEntity{ entt::null, true }));
+                }
+            }
+            // 禁用域只覆盖当前按钮，不影响下一列可预先切换的模式。
+            // 按钮复用移动反馈，滑动取消与点击动画仍由外壳处理。
+            ImGui::EndDisabled();
+            if ( j == i ) ImGui::SameLine(0, gap);
+        }
+    }
+    ImGui::Separator();
 }
 
 /// @brief 从权威配置计算持久状态，按钮高亮不依赖上次点击或悬浮。
@@ -272,6 +364,10 @@ void drawMobileWorkbench(UIManager& manager, float scale)
                             { -1.0f, 48 * scale }) )
         Interaction::executeAction("SaveBeatmapAction", &manager);
     ImGui::EndDisabled();
+    // 选择方式紧邻保存入口，只在触控选择工具下出现，不挤占绘制工具布局。
+    if ( tool == Logic::EditTool::Marquee &&
+         Interaction::activeProfile().touchGestures() )
+        renderTouchSelectionControls(width, gap, scale);
     // 固定两列；紧凑高度使全部六行十二个常驻按钮在手机横屏下无需滚动即可完整展示。
     for ( std::size_t i = 0; i < entries.size(); i += 2 ) {
         // 先量同行的两种文案，再提交任何按钮，避免后量到的长文案压住下一行。

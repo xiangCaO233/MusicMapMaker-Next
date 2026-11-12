@@ -17,6 +17,7 @@
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/workspace/MobileInputPolicy.h"
 #include <imgui.h>
+#include <initializer_list>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -815,6 +816,24 @@ int main(int argc, char** argv)
         require(!classic.extendBrush(Interaction::Surface::MainCanvas, false) &&
                     classic.extendBrush(Interaction::Surface::MainCanvas, true),
                 "classic brush modifiers");
+    // 触控方案独立保存集合运算，不依赖键盘或修改经典方案状态。
+    // 三种模式用于点选和框选，不能让减选设置静默回退成替换。
+    // 按实际方案实例读回，防止测试仅验证输入参数而遗漏策略内部保存。
+    Interaction::synchronizeProfile("touch-gestures", true);
+    for ( const auto mode : { MMM::Logic::SelectionOperation::Replace,
+                              MMM::Logic::SelectionOperation::Add,
+                              MMM::Logic::SelectionOperation::Subtract } ) {
+        Interaction::activeProfile().setSelectionOperation(mode);
+        ok &= require(Interaction::activeProfile().selectionOperation() == mode,
+                      "touch selection operation");
+    }
+    // 恢复默认意图，后续场景和设备策略不能继承这个测试的减选模式。
+    Interaction::activeProfile().setSelectionOperation(
+        MMM::Logic::SelectionOperation::Replace);
+    // 触控设置属于另一实例，经典策略仍必须维持物理修饰键语义。
+    // 检查旧引用，避免切回经典时的重置掩盖状态泄漏。
+    ok &= require(!classic.selectionOperation(),
+                  "touch mode does not alter classic");
     Interaction::synchronizeProfile("mouse-only", true);
     Interaction::synchronizeProfile("mouse-only", true);
     const auto& mouse = Interaction::activeProfile();

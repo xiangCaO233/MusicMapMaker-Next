@@ -1,5 +1,6 @@
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "common/LogicCommands.h"
+#include "common/SelectionOperation.h"
 #include "common/render/RenderSnapshot.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
@@ -21,6 +22,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <variant>
 #include <vector>
@@ -121,8 +123,11 @@ struct Sample {
 /// 这些测试不替代真机保存回读，只验证输入到命令的确定性边界。
 /// @param samples 非空的完整触点序列，最后一个样本必须已抬手。
 /// @param touch 为 false 时同一生产入口转交经典桌面解释器。
+/// @param operation 触控点选和框选共用的集合意图，每个场景单独设置。
 /// @return 按发布顺序收集的编辑命令，不持有事件总线订阅。
-Capture run(const std::vector<Sample>& samples, bool touch = true)
+Capture run(
+    const std::vector<Sample>& samples, bool touch = true,
+    Logic::SelectionOperation operation = Logic::SelectionOperation::Replace)
 {
     // 两个安全边界符合生产切换契约；不能在旧画布仍持有手势时硬切。
     // 当前场景的控制器在切换之后创建，不继承上一方案的待定触点。
@@ -131,6 +136,10 @@ Capture run(const std::vector<Sample>& samples, bool touch = true)
     UI::Interaction::synchronizeProfile(
         touch ? "touch-gestures" : "classic-desktop", true);
     ImGui::CreateContext();
+    // 每个场景明确设置触控模式，避免上一次减选状态污染后续历史测试。
+    // 经典方案不接收模式设置，继续从真实键盘状态解释集合意图。
+    if ( touch )
+        UI::Interaction::activeProfile().setSelectionOperation(operation);
     // 不读取本机 imgui.ini，测试尺寸与停靠状态不受开发者桌面影响。
     // 时钟用固定帧增量推进，快速释放无需等待实际墙钟时间。
     auto& io       = ImGui::GetIO();
@@ -339,6 +348,34 @@ void testBlank()
     // 这个对照能发现把全局双击计数永久清零的错误实现。
     const auto desktop = run(twice, false);
     check(desktop.m_seeks == 1, "classic double-click seek remains available");
+    // 通过生产移动解释器检查模式接线，不直接构造集合操作命令。
+    // 单击和从空白开始的框选必须携带同一个意图，不能只改按钮底色。
+    for ( const auto mode : { Logic::SelectionOperation::Add,
+                              Logic::SelectionOperation::Subtract } ) {
+        const auto tap = run(
+            { { { 150, 150 }, true }, { { 150, 150 }, false } }, true, mode);
+        check(tap.m_selections.size() == 1 &&
+                  tap.m_selections.front().selectionOperation == mode &&
+                  tap.m_starts.empty(),
+              "touch selection mode reaches tap without drag history");
+        const auto box =
+            run({ { { 90, 90 }, true }, { { 305, 305 }, false } }, true, mode);
+        // 起点不命中物件，明确要求仍走可取消的正式框选事务。
+        // 结束坐标与模式一起保留，重复框选才能累积或扣除原有集合。
+        check(box.m_marquees.size() == 1 &&
+                  box.m_marquees.front().selectionOperation == mode &&
+                  box.m_boxEnds == 1,
+              "touch selection mode reaches marquee");
+        // 追加或减选中的空白轻点应保留集合，不沿用替换模式的清空行为。
+        // 继续经过正式按下/抬手，防止只测模式查询而漏掉释放路径。
+        // 命令为空才能排除先清空再选回造成的中途副作用。
+        // 实际集合增减和重复框选结果另在模拟器中通过成组移动回读验证。
+        // 此处只约束移动输入到正式命令的边界，不复制逻辑层的集合算法。
+        const auto blank =
+            run({ { { 90, 90 }, true }, { { 90, 90 }, false } }, true, mode);
+        check(blank.m_selections.empty() && blank.m_marquees.empty(),
+              "blank touch preserves add or subtract selection");
+    }
 }
 /// @brief 将真实触控轻点派发结果送入逻辑控制器，验证重做分支与保存点。
 /// @details 音符身份与 UI 命中一致；先产生可重做的真实位置动作。

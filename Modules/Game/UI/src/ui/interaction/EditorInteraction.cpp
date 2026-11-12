@@ -1,4 +1,5 @@
 #include "ui/interaction/EditorInteraction.h"
+#include "common/SelectionOperation.h"
 #include "config/EditorSettings.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
@@ -44,6 +45,25 @@ public:
     /// @brief 只有此方案授权触控长按解释，经典及纯鼠标方案默认关闭。
     /// @warning 每帧只返回固定布尔值，不访问手势状态或逻辑会话。
     bool touchGestures() const override { return true; }
+    /// @brief 触控使用显式集合操作，不借用桌面 Ctrl 状态。
+    /// @warning UI 热路径每帧只读取本方案标量，不访问逻辑线程或持锁状态。
+    std::optional<Logic::SelectionOperation> selectionOperation() const override
+    {
+        return m_selectionOperation;
+    }
+    /// @brief 只改变后续选择意图，按钮本身不创建编辑或修改现有选区。
+    /// @param operation UI 线程在点击模式按钮时提交的集合运算。
+    void setSelectionOperation(Logic::SelectionOperation operation) override
+    {
+        m_selectionOperation = operation;
+    }
+
+private:
+    /// @brief 状态归触控方案所有，不与经典桌面或纯鼠标方案相互覆盖。
+    /// 切换谱面继续沿用当前意图，点选与框选从同一标量读取集合操作。
+    Logic::SelectionOperation m_selectionOperation{
+        Logic::SelectionOperation::Replace
+    };
 };
 /// @brief 纯鼠标方案通过独立语义选项和上下文菜单提供编辑入口。
 /// @details 意图按表面解释，不改写全局 Shift，避免影响框选和滚动。

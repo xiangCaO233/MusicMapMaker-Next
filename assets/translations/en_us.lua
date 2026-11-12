@@ -1,6 +1,11 @@
 return {
 	-- 移动工作区专用词条，不覆盖桌面的鼠标和快捷键说明。
 	["ui.interaction.touch_gestures"] = "Touch gestures",
+	-- 工作台使用短标题，避免两列触摸按钮被桌面菜单的完整描述撑高。
+	["ui.mobile.selection.replace"] = "Replace",
+	["ui.mobile.selection.add"] = "Add",
+	["ui.mobile.selection.subtract"] = "Remove",
+	["ui.mobile.selection.clear"] = "Clear",
 	["ui.mobile.settings.save_format"] = "Save as",
 	["ui.mobile.settings.reverse_scroll"] = "Reverse scrolling direction",
 	["ui.mobile.settings.scroll_snap"] = "Snap while scrolling",
