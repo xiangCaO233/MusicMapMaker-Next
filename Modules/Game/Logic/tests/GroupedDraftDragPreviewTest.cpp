@@ -10,6 +10,7 @@
 #include "logic/session/tool/MarqueeTool.h"
 #include "mmm/beatmap/BeatMap.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -458,6 +459,107 @@ bool testMarqueeCancellation()
 }  // namespace
 
 /// @brief 运行单物件与多选组跨入草稿区的即时虚影回归测试。
+/// @brief 长条首把手保留原尾时刻，连续更新以起笔快照为准。
+/// @details 玩家与草稿分别执行，取消不产生历史，提交一次可完整撤销重做。
+/// @param draft 使用真实负轨号检查局部编辑不会误入统一跨域平移。
+/// @param tail 使用同一边界序列检查旧尾部拉伸，不允许跨域路径覆盖局部语义。
+/// @param cancel 正常提交与中断恢复分别使用独立会话，不互相借用历史。
+/// @return 时间、持续时长、轨道及历史边界全部保持契约时返回 true。
+/// @note 首把手只调整时间，指针横移不应修改所属轨道。
+/// @note 同时存在的已选哨兵检出错误收集整组或应用共同时间增量。
+/// @note 重做校验使用最后有效目标，不只检查撤销栈的条数。
+bool testHoldStart(bool draft, bool cancel, bool tail = false)
+{
+    MMM::Logic::SessionContext ctx;
+    configureDragContext(ctx);
+    // 场景复用生产相机与滚动缓存，只省略音频、文件解析及 GPU。
+    // 原谱面对象保留在会话中，编辑权限检查与正式应用一致。
+    using Note        = MMM::Logic::NoteComponent;
+    const auto entity = ctx.noteRegistry.create();
+    // 起点一秒、尾部三秒；同时选中的哨兵不应加入局部拖动。
+    ctx.noteRegistry.emplace<Note>(entity,
+                                   Note{ .m_type       = MMM::NoteType::HOLD,
+                                         .m_timestamp  = 1.0,
+                                         .m_duration   = 2.0,
+                                         .m_trackIndex = draft ? -1 : 1,
+                                         .m_isDraft    = draft });
+    ctx.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
+        entity, MMM::Logic::InteractionComponent{ .isSelected = true });
+    // 哨兵不参与局部快照，取消也不能顺带更改其选中状态或时间。
+    // 若只检查主物件，整组错误位移仍可能恰好通过端点断言。
+    const auto sentinel = ctx.noteRegistry.create();
+    ctx.noteRegistry.emplace<Note>(sentinel, Note{ .m_timestamp = 4.0 });
+    ctx.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
+        sentinel, MMM::Logic::InteractionComponent{ .isSelected = true });
+    MMM::Logic::GrabTool tool;
+    tool.handleStartDrag(
+        ctx,
+        { entity,
+          "Basic2DCanvas",
+          true,
+          draft ? MMM::Logic::ChartObjectKind::DraftNote
+                : MMM::Logic::ChartObjectKind::PlayerNote,
+          static_cast<uint8_t>(tail ? MMM::Logic::HoverPart::HoldEnd
+                                    : MMM::Logic::HoverPart::HoldStart),
+          -1 });
+    const auto& cache =
+        ctx.timelineRegistry.ctx().get<MMM::Logic::System::ScrollCache>();
+    // 用实际滚动缓存投影目标时间，避免测试依赖固定像素速度。
+    // 先前拉再后拉覆盖方向反转，持续时间不能按上一帧累计。
+    // 越过尾部与负时间均是暂态预览，不在这些中间点结束手势。
+    // 最后一帧回到合法范围，检查零长度预览仍可继续恢复。
+    // 绕过吸附使边界断言只对应端点契约，吸附沿用公共目标求解器。
+    for ( double target : { 0.5, 2.0, 4.0, -1.0, 1.5 } ) {
+        const float y = static_cast<float>(300 + cache.getAbsY(1.0) -
+                                           cache.getAbsY(target));
+        tool.handleUpdateDrag(
+            ctx, { "Basic2DCanvas", draft ? 30.0F : 250.0F, y, true });
+        const auto&  note     = ctx.noteRegistry.get<Note>(entity);
+        const double expected = tail ? 1.0 : std::clamp(target, 0.0, 3.0);
+        // 尾把手保持原首点，首把手保持原尾点；两者边界并不对称。
+        // 小于零的尾目标先钳到起点，不能产生负持续时间。
+        const double expectedEnd = tail ? std::max(1.0, target) : 3.0;
+        if ( std::abs(note.m_timestamp - expected) > 1e-5 ||
+             std::abs(note.m_timestamp + note.m_duration - expectedEnd) >
+                 1e-5 ||
+             note.m_trackIndex != (draft ? -1 : 1) ||
+             ctx.noteRegistry.get<Note>(sentinel).m_timestamp != 4.0 ) {
+            XERROR(
+                "Hold start preview draft={} cancel={} target={} actual={} "
+                "duration={} track={}",
+                draft,
+                cancel,
+                target,
+                note.m_timestamp,
+                note.m_duration,
+                note.m_trackIndex);
+            return false;
+        }
+    }
+    // 仅在最后一个合法样本结束，之前越界样本均不应提交历史。
+    // 两端都保留原对象类型，零时长仅为可继续编辑的中间状态。
+    // 结束命令不携带时间，因此必须采用最后一次 Update 的结果。
+    tool.handleEndDrag(ctx, { "Basic2DCanvas", cancel });
+    // 取消直接恢复，不得借一次 Undo 消耗上一笔操作。
+    if ( cancel )
+        return ctx.actionStack.getUndoStackSize() == 0 &&
+               ctx.noteRegistry.get<Note>(entity).m_timestamp == 1.0;
+    // 连续五次预览只能合成一个操作，不能随方向反转拆分事务。
+    // 这同时验证局部编辑没有把哨兵写入额外的历史条目。
+    if ( ctx.actionStack.getUndoStackSize() != 1 ) return false;
+    // 一个 Undo 必须同时恢复起点与时长，二者分成两条历史会在这里失败。
+    // 后续 Redo 不重复发拖动命令，因此不能靠重新计算目标自证。
+    ctx.actionStack.undo(ctx);
+    if ( ctx.noteRegistry.get<Note>(entity).m_timestamp != 1.0 ||
+         ctx.noteRegistry.get<Note>(entity).m_duration != 2.0 )
+        return false;
+    ctx.actionStack.redo(ctx);
+    // 回放结果和手势结束前的最后一次即时预览保持一致。
+    return std::abs(ctx.noteRegistry.get<Note>(entity).m_timestamp -
+                    (tail ? 1.0 : 1.5)) < 1e-5 &&
+           std::abs(ctx.noteRegistry.get<Note>(entity).m_duration -
+                    (tail ? 0.5 : 1.5)) < 1e-5;
+}
 /// @return 测试通过时返回 0。
 /// @note 两个分支分别执行，再汇总退出码，避免前一失败令后一分支被短路跳过。
 int main()
@@ -478,8 +580,28 @@ int main()
         XERROR("Standalone polyline cancellation failed");
     if ( !groupedCancelled ) XERROR("Grouped drag cancellation failed");
     if ( !marqueeCancelled ) XERROR("Marquee checkpoint cancellation failed");
-    return standalonePassed && groupedPassed && standaloneCancelled &&
-                   groupedCancelled && marqueeCancelled
+    // 每种轨道域分别覆盖首尾两端及提交/取消，不依赖其它场景先运行。
+    // 取消场景从空历史开始，旧已完成操作的保护由既有取消用例共同覆盖。
+    // 同一组负时间与越尾样本对两端给出不同期望，检查钳制方向。
+    // 提交场景最后回到合法长度，再回放一次完整的撤销与重做。
+    bool endpoints = true;
+    for ( bool draft : { false, true } )
+        for ( bool cancel : { false, true } ) {
+            const bool passed = testHoldStart(draft, cancel);
+            if ( !passed )
+                XERROR(
+                    "Hold endpoint draft={} cancel={} failed", draft, cancel);
+            endpoints &= passed;
+            // 不短路尾部用例，首端失败时也需报告既有尾端是否受影响。
+            // 草稿和玩家使用不同轨道域，不能拿一个域的成功替代另一个。
+            const bool tailPassed = testHoldStart(draft, cancel, true);
+            if ( !tailPassed )
+                XERROR("Hold tail draft={} cancel={} failed", draft, cancel);
+            endpoints &= tailPassed;
+        }
+    if ( !endpoints ) XERROR("Hold start endpoint regression failed");
+    return endpoints && standalonePassed && groupedPassed &&
+                   standaloneCancelled && groupedCancelled && marqueeCancelled
                ? 0
                : 1;
 }

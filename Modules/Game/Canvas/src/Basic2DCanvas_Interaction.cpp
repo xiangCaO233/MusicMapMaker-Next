@@ -6024,6 +6024,15 @@ void Basic2DCanvasInteraction::handleInteractions(
         hoveredSubIndex   = candidate.subIndex;
     }
 
+    // 平台可见把手已验证起点身份；后续命令仍走同一个控制器。
+    // 普通输入传空值，桌面及未选物件的拾取优先级保持原样。
+    // 覆盖只在同步调用有效，不能存为跨谱面悬浮缓存。
+    if ( m_pointerTarget ) {
+        hoveredEntity     = m_pointerTarget->entity;
+        hoveredObjectKind = m_pointerTarget->kind;
+        hoveredPart       = m_pointerTarget->part;
+        hoveredSubIndex   = m_pointerTarget->subIndex;
+    }
     bool shouldSendHover = !m_hasLastHovered ||
                            m_lastHoveredEntity != hoveredEntity ||
                            m_lastHoveredObjectKind != hoveredObjectKind ||

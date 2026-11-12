@@ -539,6 +539,21 @@ void NoteRenderSystem::renderNotes(
             auto&       hitbox = snapshot->hitboxes[index];
             const auto* note =
                 registry.try_get<const NoteComponent>(hitbox.entity);
+            // 复用可见命中框发布选择能力，不让 UI 遍历可变 ECS。
+            const auto* interaction =
+                registry.try_get<const InteractionComponent>(hitbox.entity);
+            if ( note && !note->m_isSubNote && interaction &&
+                 interaction->isSelected ) {
+                if ( note->m_type == ::MMM::NoteType::HOLD ) {
+                    if ( hitbox.part == HoverPart::Head )
+                        hitbox.touchHandle = HoverPart::HoldStart;
+                    if ( hitbox.part == HoverPart::HoldEnd )
+                        hitbox.touchHandle = HoverPart::HoldEnd;
+                } else if ( note->m_type == ::MMM::NoteType::NOTE &&
+                            hitbox.part == HoverPart::Head ) {
+                    hitbox.touchHandle = HoverPart::Head;
+                }
+            }
             if ( note && note->m_isDraft ) {
                 hitbox.kind = ChartObjectKind::DraftNote;
             }

@@ -2,6 +2,7 @@
 #include "MobileCanvasGesture.h"
 #include "MobileCanvasNavigation.h"
 #include "MobileNavigationRouting.h"
+#include "MobileNoteHandles.h"
 #include "MobilePointerInputScope.h"
 #include "MobilePointerOwnership.h"
 #include "canvas/Basic2DCanvasInteraction.h"
@@ -20,6 +21,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstdint>
 #include <glm/vec2.hpp>
 #include <imgui_internal.h>
 #include <optional>
@@ -70,6 +72,7 @@ public:
         if ( m_generation != generation ) {
             m_generation = generation;
             m_gesture.cancelPending();
+            m_handle.reset();
             auto ctx = context(canvas);
             ImGui::PushID(ctx.cameraId.c_str());
             if ( ImGui::BeginPopup("SelectionEditMenu") ) {
@@ -94,7 +97,46 @@ public:
         ImGui::PopID();
         // 屏幕边界与窗口悬浮共同限定新候选；页签和抽屉留白不属于编辑区。
         // 使用屏幕逻辑像素，容差随后按窗口内容倍率转换，不猜测设备分辨率。
-        const auto point    = ImGui::GetMousePos();
+        if ( m_handle && (m_handleInstance != snapshot->beatmapInstanceId ||
+                          snapshot->currentTool != Logic::EditTool::Marquee) ) {
+            // 场景切换不能把旧部件身份带入新谱面，也不能交给下一工具提交。
+            cancelInput(canvas, *snapshot);
+            m_gesture.cancel();
+            m_handle.reset();
+        }
+        const auto point = ImGui::GetMousePos();
+        // 仅选择方案显示把手；原点命中锁存到整次手势结束，不能随指针切换实体。
+        // 播放及弹层接管时隐藏目标，已有取消桥负责回退未提交的事务。
+        // 把手不建立独立 ImGui 控件，避免控制器与按钮同时消费同一次释放。
+        // 待定触点只保存值身份；跨过原有容差后才开始正式编辑。
+        // 头尾采用不同 HoverPart，长条主体的整体移动无需额外模式切换。
+        // 当前绘制快照只负责提供可见范围，最终存在性仍由逻辑层检查。
+        const bool handlesAllowed =
+            snapshot->hasBeatmap && !snapshot->isPlaying &&
+            snapshot->currentTool == Logic::EditTool::Marquee && !menuOpen &&
+            !UI::workspaceBlocksCanvasInput() &&
+            !ImGui::IsPopupOpen(
+                nullptr,
+                ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        if ( handlesAllowed ) {
+            const auto hit = MobileNoteHandles::render(
+                snapshot->hitboxes,
+                { frame.m_x, frame.m_y },
+                point,
+                Config::AppConfig::instance().getWindowContentScale(),
+                frame.m_projection,
+                frame.m_snapshotYOffset);
+            // 延迟回放期间忽略后来触点，旧手势不能借用新手指的命中。
+            // 即使快照提前刷新，活动事务仍持有开始时的部件身份。
+            // 空白起点明确清空旧身份，后续跨过把手也只能继续框选。
+            // 真正的系统取消由所有权状态机优先处理，不当作正常抬手。
+            if ( ImGui::IsMouseClicked(0) && !m_gesture.active() ) {
+                // 被其它窗口遮住的画布不能借用几何把手发布悬浮身份。
+                m_handle         = frame.m_hovered ? hit : std::nullopt;
+                m_handleInstance = snapshot->beatmapInstanceId;
+            }
+        } else
+            m_handle.reset();
         const bool eligible = snapshot->hasBeatmap && !snapshot->isPlaying &&
                               frame.m_hovered && point.x >= frame.m_x &&
                               point.y >= frame.m_y &&
@@ -134,6 +176,7 @@ public:
         if ( taken || (m_ownership.blocksSingle() && m_gesture.active()) ) {
             cancelInput(canvas, *snapshot);
             m_gesture.cancel();
+            m_handle.reset();
         }
         navigate(raw,
                  m_ownership.ownsGesture() && !interrupted,
@@ -197,7 +240,17 @@ public:
                        (snapshot->currentTool == Logic::EditTool::Marquee ||
                         snapshot->currentTool == Logic::EditTool::Draw) &&
                            m_gesture.finishedDrag(),
-                       tapOnly);
+                       tapOnly,
+                       false,
+                       m_handle ? &*m_handle : nullptr);
+            // 释放路由已完成，空闲帧必须清除把手覆盖，避免触摸结束仍有 Hover。
+            // 显式悬浮撤销由同步桥处理；本地锁存也在同一收尾边沿清空。
+            // 连续拖动沿用 Pass 中的真实 Up；快速回放才返回专用 Release。
+            // 两种收尾必须同时清锁存，不能只覆盖快速拖动用例。
+            if ( output == MobileCanvasGesture::Output::Release ||
+                 (output == MobileCanvasGesture::Output::Pass &&
+                  !ImGui::IsMouseDown(0)) )
+                m_handle.reset();
             if ( output == MobileCanvasGesture::Output::Begin &&
                  m_gesture.dragging() &&
                  snapshot->currentTool == Logic::EditTool::Draw &&
@@ -246,6 +299,10 @@ public:
     }
 
 private:
+    /// @brief 起笔把手值身份，接管和方案切换立即清除，不借用旧快照。
+    std::optional<HoverLayerCandidate> m_handle;
+    /// @brief 实例身份隔离同路径重新载入，旧实体编号不跨会话复用。
+    std::uintptr_t m_handleInstance{};
     /// @brief 多指导航只发布增量和最终倍率，不修改键盘状态或借用桌面中键。
     /// @warning 每帧固定数学，只有释放边沿更新配置值；不取得会话长锁。
     /// @param raw 原始手势值快照，只在本次 UI 栈内借用。

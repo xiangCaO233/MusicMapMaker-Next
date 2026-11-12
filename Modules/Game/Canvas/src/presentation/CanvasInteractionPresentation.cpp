@@ -4,6 +4,8 @@
 #include "common/render/RenderSnapshot.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "ui/interaction/EditorInteraction.h"
+#include <entt/entity/entity.hpp>
+
 #include <algorithm>
 
 namespace MMM::Canvas
@@ -30,7 +32,7 @@ CanvasMenuContext CanvasInteractionPresentation::context(
 void CanvasInteractionPresentation::routeInput(
     Basic2DCanvasInteraction& c, const Common::Render::RenderSnapshot* snapshot,
     float width, float height, bool cancellable, bool completedDrag,
-    bool tapOnly, bool pointerOnly)
+    bool tapOnly, bool pointerOnly, const HoverLayerCandidate* target)
 {
     // 快捷键先于普通指针，保留已有命令顺序和去重策略。
     const bool previous            = c.m_pointerCancellationEnabled;
@@ -44,10 +46,22 @@ void CanvasInteractionPresentation::routeInput(
     if ( completedDrag && UI::Interaction::mouseReleased(0) )
         c.m_leftPressDragged = true;
     // 起笔后的同帧坐标补交只处理指针，不能重复触发本帧已经处理的快捷键。
+    // 把手与图形错开以避免遮挡；覆盖身份但保留原投影及取消事务。
+    const auto* previousTarget = c.m_pointerTarget;
+    c.m_pointerTarget          = target;
     if ( !pointerOnly ) c.handleHotkeys(snapshot);
     c.handleInteractions(snapshot, width, height);
+    // 触控把手的释放帧还需要真实终点，不能提前隐藏指针。
+    // 提交后立即撤去悬浮，避免下一空闲帧被批注覆盖层提前返回而留下旧身份。
+    if ( target && UI::Interaction::mouseReleased(0) ) {
+        UI::Interaction::dispatchCommand(
+            Event::LogicCommandEvent(Logic::CmdSetHoveredEntity{
+                entt::null, 0, -1, target->kind, c.m_cameraId }));
+        c.m_hasLastHovered = false;
+    }
     c.m_pointerCancellationEnabled = previous;
     c.m_pointerTapOnly             = previousSelection;
+    c.m_pointerTarget              = previousTarget;
 }
 /// @brief 输入归属改变时明确取消预览，随后清除旧释放事件的 UI 门闩。
 /// @warning 只在手势接管边沿执行，无会话等待、注册表读取或历史回放。

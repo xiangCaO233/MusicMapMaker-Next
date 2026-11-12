@@ -448,7 +448,9 @@ private:
     /// @details 只在中立输入桥的同步调用期间生效，桌面默认关闭。
     /// @brief 轻点已排除拖动；选择只改集合，折线模式命中旧物件只选择。
     bool m_pointerTapOnly{ false };
-    bool m_leftPressStartedOnCanvas{ false };
+    /// @brief 平台把手只在同步路由调用期间覆盖命中身份，不改变真实指针坐标。
+    const HoverLayerCandidate* m_pointerTarget{ nullptr };
+    bool                       m_leftPressStartedOnCanvas{ false };
     /// @brief 左键按下时是否位于轨道布局内。
     bool m_leftPressStartedInTrackLayout{ false };
     /// @brief 左键按下时是否命中实体。

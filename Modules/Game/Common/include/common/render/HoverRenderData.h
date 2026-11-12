@@ -20,7 +20,9 @@ enum class HoverPart : uint8_t {
     FlickArrow,
     PolylineNode,
     SampleAnchor,
-    SampleOffset
+    SampleOffset,
+    /// @brief 显式调整独立长条起点，尾部时间保持不变。
+    HoldStart
 };
 
 /// @brief UI 悬浮检视面板展示的细分物件结构类型。
@@ -152,6 +154,8 @@ struct Hitbox {
     float h;
     /// @brief 实体所在的独立 ECS 注册表。
     ChartObjectKind kind{ ChartObjectKind::PlayerNote };
+    /// @brief 仅独立 Note/Hold 的已选部件允许呈现触控调整目标。
+    HoverPart touchHandle{ HoverPart::None };
 };
 
 /// @brief 以包围盒中心为基准缩放交互拾取区域。

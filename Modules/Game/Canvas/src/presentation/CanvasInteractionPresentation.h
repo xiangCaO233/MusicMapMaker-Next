@@ -68,6 +68,7 @@ protected:
     /// @brief 平台只安排输入，实际编辑仍由既有控制器和逻辑命令执行。
     /// @param completedDrag 平台已确认的拖动释放，补足同帧移动抬手的终点更新。
     /// 默认关闭，桌面仍按物理拖动门槛与原有释放门闩判断。
+    /// @param target 平台已锁存的可见把手目标；空值保留普通拾取。
     /// @param pointerOnly
     /// 同帧补交连续指针样本时跳过快捷键，避免一次按键重复执行。
     /// 只适用于已经起笔的输入回放，普通帧和桌面入口保持默认关闭。
@@ -78,7 +79,8 @@ protected:
                            const Common::Render::RenderSnapshot* snapshot,
                            float width, float height, bool cancellable = false,
                            bool completedDrag = false, bool tapOnly = false,
-                           bool pointerOnly = false);
+                           bool                       pointerOnly = false,
+                           const HoverLayerCandidate* target      = nullptr);
     /// @brief 输入被接管时回退尚未提交的编辑，不触及此前的撤销历史。
     /// @warning 仅在取消边沿调用；通过命令队列顺序执行，不等待逻辑线程。
     static void cancelInput(Basic2DCanvasInteraction&             canvas,

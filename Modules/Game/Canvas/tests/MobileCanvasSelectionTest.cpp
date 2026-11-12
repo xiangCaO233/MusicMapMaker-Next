@@ -35,6 +35,8 @@ using namespace MMM;
 struct Capture {
     /// @brief 按原顺序保留影响选择或拖动的正式命令，供真实历史栈回归重放。
     std::vector<Logic::LogicCommand> m_editCommands;
+    /// @brief 保存最后悬浮身份，结束后的空闲帧必须清除触摸目标。
+    entt::entity m_lastHover{ entt::null };
     /// @brief 包括错误的空白清空。
     std::vector<Logic::CmdSelectEntity> m_selections;
     /// @brief 起点应锁定原实体与子物件。
@@ -55,6 +57,10 @@ struct Capture {
     /// 记录结束之后再来的更新，用于检查正式提交的顺序边界。
     void record(const Logic::LogicCommand& command)
     {
+        // Hover 不进入历史断言，但能检出释放后把手覆盖未撤销的残留。
+        if ( const auto* hover =
+                 std::get_if<Logic::CmdSetHoveredEntity>(&command) )
+            m_lastHover = hover->entity;
         // 只保存本回归需要执行的业务命令，不把布局/悬浮反馈当作编辑。
         // 相同载荷随后送入正式控制器，不能只以 UI 计数推断历史栈未变化。
         if ( std::holds_alternative<Logic::CmdSelectEntity>(command) ||
@@ -124,10 +130,17 @@ struct Sample {
 /// @param samples 非空的完整触点序列，最后一个样本必须已抬手。
 /// @param touch 为 false 时同一生产入口转交经典桌面解释器。
 /// @param operation 触控点选和框选共用的集合意图，每个场景单独设置。
+/// @param surfaceHovered 画布被另一窗口遮挡时拒绝把手归属。
+/// @param handles 发布已选独立长条的首尾触控目标，默认保留旧折线场景。
+/// 把手中心位于原始矩形外，可暴露只有图形内命中才生效的错误。
+/// 两端使用同一个实体，断言必须同时检查部件，不能仅检查实体计数。
+/// 测试不将 UI 捕获命令自动反馈到快照，避免用自证逻辑掩盖路由缺口。
+/// 短点击不生成拖动，与已经通过触控容差的快速拖动分别断言。
 /// @return 按发布顺序收集的编辑命令，不持有事件总线订阅。
 Capture run(
     const std::vector<Sample>& samples, bool touch = true,
-    Logic::SelectionOperation operation = Logic::SelectionOperation::Replace)
+    Logic::SelectionOperation operation = Logic::SelectionOperation::Replace,
+    bool handles = false, bool surfaceHovered = true)
 {
     // 两个安全边界符合生产切换契约；不能在旧画布仍持有手势时硬切。
     // 当前场景的控制器在切换之后创建，不继承上一方案的待定触点。
@@ -183,6 +196,22 @@ Capture run(
                                       .y      = 290,
                                       .w      = 30,
                                       .h      = 30 });
+        if ( handles ) {
+            // 头部在左侧显示局部首把手，尾部位于右侧；中间留给整体移动。
+            snapshot.hitboxes[0].kind     = Logic::ChartObjectKind::PlayerNote;
+            snapshot.hitboxes[0].part     = Common::Render::HoverPart::Head;
+            snapshot.hitboxes[0].subIndex = -1;
+            snapshot.hitboxes[0].touchHandle =
+                Common::Render::HoverPart::HoldStart;
+            snapshot.hitboxes.push_back(
+                { .entity      = static_cast<entt::entity>(77),
+                  .part        = Common::Render::HoverPart::HoldEnd,
+                  .x           = 140,
+                  .y           = 60,
+                  .w           = 30,
+                  .h           = 30,
+                  .touchHandle = Common::Render::HoverPart::HoldEnd });
+        }
         // 总线只在控制器存活期间订阅，按引用捕获的结果不会跨场景悬空。
         // 事件不送入会话，因此用例不会修改文件或用户撤销栈。
         auto&      bus          = Event::EventBus::instance();
@@ -240,7 +269,7 @@ Capture run(
                 origin.y,
                 600,
                 700,
-                true,
+                surfaceHovered,
                 true,
                 nullptr
             };
@@ -308,6 +337,69 @@ void testObject()
               !drag.m_moves.empty() &&
               std::abs(drag.m_moves.back().mouseY - 305) < .01f,
           "continuous drag submits release endpoint");
+}
+/// @brief 从图形外的可见首尾把手起笔，不能误发框选或整体移动。
+/// @details 快速释放必须保留原部件；经典方案忽略移动专属把手。
+void testHandles()
+{
+    // 每个场景重建输入与画布，防止上一个把手的锁存身份掩盖错误。
+    // 所有坐标均位于同一内容区；真实窗口悬浮仍由 ImGui 判定。
+
+    // Hold 首把手中心为 (116,155)，不在原始图形命中矩形中。
+    // 原始矩形的左边为 140，因此 116 必须通过平台把手进入。
+    // 结束点离开圆形热区后仍应保留 HoldStart，不能回退到空白框选。
+    // 这里只检查命令时序，时间钳制及历史回放由真实工具测试负责。
+    const auto start = run({ { { 116, 155 }, true }, { { 116, 220 }, false } },
+                           true,
+                           Logic::SelectionOperation::Replace,
+                           true);
+    check(start.m_starts.size() == 1 &&
+              start.m_starts[0].hitPart ==
+                  static_cast<uint8_t>(Common::Render::HoverPart::HoldStart) &&
+              start.m_ends == 1 && start.m_marquees.empty(),
+          "head handle starts local resize");
+    // 尾把手保持尾部语义，即使释放位置经过另一物件也只结束原事务。
+    // 尾把手的右侧偏移不会变更轨道；局部工具只采纳纵向时间。
+    // 最终坐标故意落在哨兵上，以检查释放不会重新拾取并替换目标。
+    // 即时最终更新必须排在唯一 End 之前，结束后不可迟到修改。
+    const auto end = run({ { { 194, 75 }, true }, { { 305, 305 }, false } },
+                         true,
+                         Logic::SelectionOperation::Replace,
+                         true);
+    check(end.m_starts.size() == 1 &&
+              end.m_starts[0].entity == static_cast<entt::entity>(77) &&
+              end.m_starts[0].hitPart ==
+                  static_cast<uint8_t>(Common::Render::HoverPart::HoldEnd) &&
+              end.m_ends == 1 && !end.m_updateAfterEnd,
+          "tail handle retains target on release");
+    // 触摸结束不存在鼠标式悬浮，释放后的空帧必须清除原部件身份。
+    // 仅检查 End 计数不足以发现旧目标继续驱动高亮和检视的情况。
+    check(end.m_lastHover == entt::null, "handle release clears touch hover");
+    // 即使几何位置位于把手上，被外部窗口遮挡的起点也不属于画布。
+    // 此对照不能只看没有编辑，旧把手身份也不能穿透到悬浮反馈。
+    const auto blocked =
+        run({ { { 116, 155 }, true }, { { 116, 220 }, false } },
+            true,
+            Logic::SelectionOperation::Replace,
+            true,
+            false);
+    check(blocked.m_starts.empty() && blocked.m_lastHover == entt::null,
+          "occluded canvas cannot acquire a handle");
+    // 轻点把手只选中，不开始会影响重做分支的空历史事务。
+    // 同位置抬手不跨过容差；即使目标部位可调整也不能创建编辑事务。
+    // 这与一般图形轻点保持一致，避免消耗用户已有的重做分支。
+    const auto tap = run({ { { 116, 155 }, true }, { { 116, 155 }, false } },
+                         true,
+                         Logic::SelectionOperation::Replace,
+                         true);
+    check(tap.m_starts.empty() && tap.m_ends == 0,
+          "handle tap creates no drag");
+    const auto desktop =
+        run({ { { 116, 155 }, true }, { { 116, 220 }, false } },
+            false,
+            Logic::SelectionOperation::Replace,
+            true);
+    check(desktop.m_starts.empty(), "classic ignores touch-only handles");
 }
 /// @brief 空白起点跨过物件仍维持框选，释放不能误当单击清空结果。
 /// @details 快速框选与普通框选具有同样的正式起点、终点和收尾顺序。
@@ -453,6 +545,7 @@ void testTapPreservesRedo()
 int main()
 {
     testObject();
+    testHandles();
     testBlank();
     testTapPreservesRedo();
     return failures == 0 ? 0 : 1;

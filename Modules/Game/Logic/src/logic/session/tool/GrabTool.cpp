@@ -804,7 +804,9 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
     }
     // 草稿从起始帧就使用统一有符号轨号，不能先进入只接受玩家轨的兼容路径。
     // 后面是否包含采样不会取消这一最初的跨域要求。
-    if ( cmd.kind == ChartObjectKind::DraftNote && !m_isFirstPolylineBodyDrag &&
+    if ( cmd.kind == ChartObjectKind::DraftNote &&
+         ctx.draggedPart != HoverPart::HoldStart &&
+         ctx.draggedPart != HoverPart::HoldEnd && !m_isFirstPolylineBodyDrag &&
          !m_isPolylineSubDrag ) {
         // 首段身体有自己的有符号轨号计算，不进入整条折线跨域平移。
         m_usesUnifiedObjectDrag = true;
@@ -921,8 +923,8 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
         // 该快照用于最终撤销，不以连续拖动后的临时位置作为 before。
         // 已选中根的首段身体仍是局部编辑，不带动其他选中物件。
         // 原有选择标志继续留在实体上，只缩小本次拖动的参与集合。
-        if ( primarySelected && !m_isFirstPolylineBodyDrag &&
-             !m_isPolylineSubDrag ) {
+        if ( primarySelected && ctx.draggedPart != HoverPart::HoldStart &&
+             !m_isFirstPolylineBodyDrag && !m_isPolylineSubDrag ) {
             // 模式 A: 拖动整个选中组
             auto view = registry.view<InteractionComponent, NoteComponent>();
             for ( auto entity : view ) {
@@ -1393,7 +1395,13 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
     }
     // 统一路径已接管时直接结束，避免同一输入被两套规则重复应用。
     // 普通路径必须找到主对象初始快照，不能临时以当前值作为起点。
-    if ( handleUnifiedDragUpdate(ctx, cmd) ) return;
+    // 首把手不能被横向跨域检测升级为整体移动，草稿轨尤其如此。
+    // 专用分支随后仍复用普通时间反投影、吸附和负时间钳制。
+    // 先在路由入口保护局部语义，不能等统一路径改完组件后再修正。
+    if ( ctx.draggedPart != HoverPart::HoldStart &&
+         ctx.draggedPart != HoverPart::HoldEnd &&
+         handleUnifiedDragUpdate(ctx, cmd) )
+        return;
     // 普通音符拖动必须有参与快照，没有状态时不试图重建手势。
     // 主要实体还需存在于映射中，避免下标访问插入默认组件。
     if ( m_initialStates.empty() ) return;
@@ -1594,6 +1602,19 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         m_lastAppliedDragTargetTrack = targetTrack;
     }
 
+    // 显式首把手只作用于独立长条；以起笔快照尾时刻为不变量。
+    // 不改变轨道、不收集选中组，越过尾部时钳制为零长条预览。
+    // 取消和收尾仍消费相同初始快照，本分支不额外建立历史记录。
+    if ( ctx.draggedPart == HoverPart::HoldStart ) {
+        auto* note = ctx.noteRegistry.try_get<NoteComponent>(ctx.draggedEntity);
+        const auto& initial = primaryInitialState.note;
+        if ( note && initial.m_type == ::MMM::NoteType::HOLD ) {
+            const double end  = initial.m_timestamp + initial.m_duration;
+            note->m_timestamp = std::clamp(targetTime, 0.0, std::max(0.0, end));
+            note->m_duration  = end - note->m_timestamp;
+        }
+        return;
+    }
     if ( isPolylineSubDrag ) {
         auto* note = ctx.noteRegistry.try_get<NoteComponent>(ctx.draggedEntity);
         if ( !note ) return;
