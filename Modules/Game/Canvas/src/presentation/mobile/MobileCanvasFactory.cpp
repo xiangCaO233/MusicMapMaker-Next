@@ -1,5 +1,7 @@
 #include "MobileCanvasInteractionPresentation.h"
+#include "MobileTimelineInteractionPresentation.h"
 #include "presentation/CanvasInteractionPresentation.h"
+#include "presentation/TimelineInteractionPresentation.h"
 namespace MMM::Canvas
 {
 /// @brief 安卓编译目标的唯一工厂；桌面目标选择另一个编译单元。
@@ -11,5 +13,14 @@ createCanvasInteractionPresentation()
     // 测试可以显式构造移动策略，无需替换生产桌面工厂。
     // 所有触摸菜单与手势状态都由移动实现独占。
     return createMobileCanvasInteractionPresentation();
+}
+/// @brief 时间线与主画布采用相同的构造期平台隔离，不在公共头嵌入平台宏。
+/// @details 返回中立基类，调用方不需要包含具体平台头。
+/// Timeline 与主画布拥有不同实例，不能共享待定触点或菜单释放状态。
+std::unique_ptr<TimelineInteractionPresentation>
+createTimelineInteractionPresentation()
+{
+    // 只在画布创建时分配，热路径不重复创建状态机。
+    return createMobileTimelineInteractionPresentation();
 }
 }  // namespace MMM::Canvas

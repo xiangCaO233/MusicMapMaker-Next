@@ -1,4 +1,5 @@
 #include "canvas/TimelineCanvas.h"
+#include "presentation/TimelineInteractionPresentation.h"
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 /// @file TimelineCanvas.cpp
@@ -388,6 +389,7 @@ TimelineCanvas::TimelineCanvas(
     std::shared_ptr<Common::Render::RenderSnapshotBuffer> syncBuffer)
     : UI::IUIView(name)
     , UI::IRenderableView(name)
+    , m_timingPresentation(createTimelineInteractionPresentation())
     , m_canvasName(name)
     , m_syncBuffer(std::move(syncBuffer))
 {
@@ -528,6 +530,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
     auto& appConfig      = Config::AppConfig::instance();
     auto& editorSettings = appConfig.getEditorSettings();
     if ( !editorSettings.showTimelineWindow ) {
+        m_timingPresentation->suspend(*this);
         // 主窗口隐藏不能阻断独立表格快照和交互生命周期。
         commitAudioTimeSliderScrub();
         renderTimingPointsTableWindow();
@@ -570,6 +573,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
     }
     m_wasFocusedLastFrame = m_hasTimingInteractionFocus;
     if ( !windowOpen ) {
+        m_timingPresentation->suspend(*this);
         // 标题栏关闭是持久设置变更，同时终止所有主窗口局部状态。
         commitAudioTimeSliderScrub();
         m_wasFocusedLastFrame             = false;
@@ -954,6 +958,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             };
 
             const bool inlineGearCanOpenEditor =
+                m_timingPresentation->showHoverDetails() &&
                 !m_currentSnapshot->isPlaying &&
                 Logic::EditorEngine::instance().getCurrentTool() ==
                     Logic::EditTool::Draw;

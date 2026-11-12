@@ -14,8 +14,11 @@
 
 // 时间线弹窗修改设置字段，类型定义留在实际编辑设置的实现中。
 #include "canvas/TimelineCanvas.h"
+#include "presentation/TimelineInteractionPresentation.h"
+#include "ui/Icons.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/interaction/EditorInteraction.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 
 #include "canvas/AuxiliaryWindowUi.h"
 #include "canvas/TimelineStopDuration.h"
@@ -1660,14 +1663,20 @@ void TimelineCanvas::renderEventEditorPopup()
 
         const float actionButtonWidth =
             calcButtonRowWidth(3, std::floor(80.0f * dpiScale));
+        // 平台策略只调整按钮命中高度，桌面零高度继续使用原来的自动测量。
+        // 图标由工作区呈现，参数写入、删除和取消仍共用下方业务分支。
+        // 不为触摸尺寸修改全局样式，后续表格和其他弹窗不受影响。
         // BPM 为负数时禁用应用，零值仍按用户要求作为合法输入。
         const bool editValueValid =
             isValidTimingEditorValue(editEffect, m_editValue);
         // 无效草稿只禁用 Apply，Delete 和 Cancel 仍应可用。
         if ( !editValueValid ) ImGui::BeginDisabled();
-        if ( ::MMM::UI::FeedbackButton(
+        if ( ::MMM::UI::workspaceActionButton(
                  TR("ui.timeline.event_editor.apply").data(),
-                 ImVec2(actionButtonWidth, 0)) ) {
+                 UI::ICON_MMM_CHECK,
+                 ImVec2(
+                     actionButtonWidth,
+                     m_timingPresentation->parameterButtonHeight(dpiScale))) ) {
             double finalValue =
                 getStoredValue(editEffect, m_editValue, m_editingEntity);
 
@@ -1693,9 +1702,12 @@ void TimelineCanvas::renderEventEditorPopup()
         if ( !editValueValid ) ImGui::EndDisabled();
 
         ImGui::SameLine();
-        if ( ::MMM::UI::FeedbackButton(
+        if ( ::MMM::UI::workspaceActionButton(
                  TR("ui.timeline.event_editor.delete").data(),
-                 ImVec2(actionButtonWidth, 0)) ) {
+                 UI::ICON_MMM_ERASER,
+                 ImVec2(
+                     actionButtonWidth,
+                     m_timingPresentation->parameterButtonHeight(dpiScale))) ) {
             publishTimelineCommand(Event::LogicCommandEvent(
                 Logic::CmdDeleteTimelineEvent{ m_editingEntity }));
             ImGui::CloseCurrentPopup();
@@ -1707,9 +1719,12 @@ void TimelineCanvas::renderEventEditorPopup()
         }
 
         ImGui::SameLine();
-        if ( ::MMM::UI::FeedbackButton(
+        if ( ::MMM::UI::workspaceActionButton(
                  TR("ui.timeline.event_editor.cancel").data(),
-                 ImVec2(actionButtonWidth, 0)) ) {
+                 UI::ICON_MMM_CLOSE,
+                 ImVec2(
+                     actionButtonWidth,
+                     m_timingPresentation->parameterButtonHeight(dpiScale))) ) {
             ImGui::CloseCurrentPopup();
             m_isPopupOpen = false;
         }
@@ -1817,10 +1832,10 @@ void TimelineCanvas::renderEventCreationPopup()
 
         ImGui::TextUnformatted(TR("ui.timeline.event_creator.pos_type").data());
 
+        // 位置仍来自原始起笔；平台只替换来源文案，不改变吸附和当前时间选项。
+        // 移动端不要求用户理解“鼠标点击”，桌面继续使用原键和原布局。
         std::string posClickLabel =
-            m_isTimeSnapped
-                ? TR("ui.timeline.event_creator.pos_click_snapped").data()
-                : TR("ui.timeline.event_creator.pos_click").data();
+            TR(m_timingPresentation->pointPositionKey(m_isTimeSnapped)).data();
         std::string posCurrentLabel =
             TR("ui.timeline.event_creator.pos_current").data();
 
@@ -1928,9 +1943,12 @@ void TimelineCanvas::renderEventCreationPopup()
             isValidTimingEditorValue(createEffect, m_createValue);
         // 校验与编辑弹窗共用同一 helper，两个入口保持一致。
         if ( !createValueValid ) ImGui::BeginDisabled();
-        if ( ::MMM::UI::FeedbackButton(
+        if ( ::MMM::UI::workspaceActionButton(
                  TR("ui.timeline.event_creator.create").data(),
-                 ImVec2(actionButtonWidth, 0)) ) {
+                 UI::ICON_MMM_PLUS,
+                 ImVec2(
+                     actionButtonWidth,
+                     m_timingPresentation->parameterButtonHeight(dpiScale))) ) {
             const auto type       = createEffect;
             double     finalValue = getStoredValue(type, m_createValue);
 
@@ -1961,9 +1979,12 @@ void TimelineCanvas::renderEventCreationPopup()
         }
 
         ImGui::SameLine();
-        if ( ::MMM::UI::FeedbackButton(
+        if ( ::MMM::UI::workspaceActionButton(
                  TR("ui.timeline.event_editor.cancel").data(),
-                 ImVec2(actionButtonWidth, 0)) ) {
+                 UI::ICON_MMM_CLOSE,
+                 ImVec2(
+                     actionButtonWidth,
+                     m_timingPresentation->parameterButtonHeight(dpiScale))) ) {
             ImGui::CloseCurrentPopup();
             m_isCreatePopupOpen = false;
         }

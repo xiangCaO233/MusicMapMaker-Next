@@ -40,6 +40,7 @@ struct LogicCommandEvent;
 
 namespace MMM::Canvas
 {
+class TimelineInteractionPresentation;
 
 /**
  * @brief 时间线标尺画布类
@@ -53,13 +54,7 @@ class TimelineCanvas : public UI::Interaction::IInteractionGuard,
 public:
     /// @brief 方案切换只能发生在 Timing、插值和表格手势全部结束之后。
     /// @warning 每帧只读取 UI 本地标志，不等待逻辑线程或遍历物件。
-    bool hasActivePointerGesture() const override
-    {
-        return m_isTimingDragging || m_isTimingErasing ||
-               m_isTimingMarqueeSelecting || m_isTimingDrawPreviewing ||
-               m_isInterpolationDragging || m_isTableRowDragSelecting ||
-               m_isAudioTimeSliderScrubbing;
-    }
+    bool hasActivePointerGesture() const override;
 
     /// @brief 创建 Timeline 画布并立即发布初始逻辑视口尺寸。
     /// @param name 画布稳定名称。
@@ -197,6 +192,10 @@ private:
     friend struct TimelineStopCreationTestAccess;
     /// @brief 允许无 GPU 回归驱动真实菜单并检查本地选择，不开放业务接口。
     friend struct TimingContextMenuTestAccess;
+    /// @brief 中立桥独占控制器访问，移动私有头不传播到公共接口。
+    friend class TimelineInteractionPresentation;
+    /// @brief 只在 CPU 回归测试中替换平台呈现对象。
+    friend struct MobileTimingInteractionTestAccess;
     /// @brief 表格回归夹具只绑定输入和观察状态，业务操作必须经过真实控件。
     friend struct TimingTableMouseSelectionTestAccess;
     /// @brief 提交时间线命令，记录原格式无法保存的修改但始终允许编辑。
@@ -314,6 +313,17 @@ private:
                                        const ImVec2& size, bool isHovered,
                                        bool isFocused,
                                        bool profileAlreadyChecked = false);
+
+    /// @brief 已分类的指针输入复用既有 Timing 编辑事务。
+    /// @warning 每帧执行；禁止等待会话或访问文件。
+    void handleTimingCanvasPointerInput(const ImVec2& canvasPos,
+                                        const ImVec2& size, bool isHovered,
+                                        bool isFocused,
+                                        bool profileAlreadyChecked);
+    /// @brief 锁存上下文位置与目标，桌面右键和移动长按共用业务规则。
+    void prepareTimingContextMenu(const ImVec2& origin, const ImVec2& size);
+    /// @brief 参数窗口始终在菜单 ID 栈退出后打开，避免弹窗父级错误。
+    void editTimingContextTarget();
 
     /// @brief 绘制 Timeline Timing 的 hover、选中、拖动和框选反馈。
     /// @param canvasPos 画布左上角屏幕坐标。
@@ -569,6 +579,12 @@ private:
     /// @brief 分拍合法性或红线映射错误，取消窗口仍允许退出。
     bool m_interpolationAxisValid{ true };
 
+    /// @brief 生命周期随画布，仅在构造时分配的平台输入解释器。
+    std::unique_ptr<TimelineInteractionPresentation> m_timingPresentation;
+    bool m_pointerTapOnly{ false };  ///< 触控轻点只选中，不建立零位移拖动。
+    bool m_pointerFinalUpdate{
+        false
+    };  ///< 触控释放帧补交最终位置，桌面保持原规则。
     std::string                                           m_canvasName;
     bool                                                  m_needReload{ true };
     std::shared_ptr<Common::Render::RenderSnapshotBuffer> m_syncBuffer;

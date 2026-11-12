@@ -45,6 +45,17 @@ public:
     /// @brief 只有此方案授权触控长按解释，经典及纯鼠标方案默认关闭。
     /// @warning 每帧只返回固定布尔值，不访问手势状态或逻辑会话。
     bool touchGestures() const override { return true; }
+    /// @brief Timing 点按与范围拖动无需键盘，起笔类型由时间线已有规则锁存。
+    /// @warning UI 热路径只返回常量，不合成 Shift 或改变普通控件的输入。
+    bool automaticTimingDraw() const override { return true; }
+    /// @brief 触屏长按菜单复用时间线完整点与段落选择能力。
+    /// @warning 每帧常量查询；具体菜单外观由移动私有实现负责。
+    bool selectionContextMenu() const override { return true; }
+    /// @brief 临时吸附意图只保存在触控方案内，不覆盖桌面和纯鼠标状态。
+    /// @warning 起笔和连续更新只读取 UI 线程标量，不改写键盘输入。
+    bool bypassSnapping() const override { return m_bypassSnap; }
+    /// @brief 下一笔可临时忽略吸附，工具菜单点击不产生谱面历史。
+    void setBypassSnapping(bool bypass) override { m_bypassSnap = bypass; }
     /// @brief 主画布使用固定轨道绘制，Timing 等表面保留各自输入约定。
     /// @warning 每次起笔只比较表面枚举，不访问逻辑线程或修改配置。
     bool noteHoldBrush(Surface surface) const override
@@ -75,6 +86,8 @@ public:
 private:
     /// @brief 简单绘制默认开启，折线需由工作台明确选择，避免横向抖动误建折线。
     bool m_noteHoldOnly{ true };
+    /// @brief 临时连续落点开关；只在触控菜单离散激活时改变。
+    bool m_bypassSnap{ false };
     /// @brief 状态归触控方案所有，不与经典桌面或纯鼠标方案相互覆盖。
     /// 切换谱面继续沿用当前意图，点选与框选从同一标量读取集合操作。
     Logic::SelectionOperation m_selectionOperation{

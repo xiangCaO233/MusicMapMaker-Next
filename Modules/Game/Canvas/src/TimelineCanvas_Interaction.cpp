@@ -1,4 +1,5 @@
 #include "canvas/TimelineCanvas.h"
+#include "presentation/TimelineInteractionPresentation.h"
 #include "ui/interaction/EditorInteraction.h"
 /// @file TimelineCanvas_Interaction.cpp
 /// @brief 实现总时间线 Timing 的投影、吸附、选择、拖拽、擦除和剪贴板交互。
@@ -1605,11 +1606,11 @@ void TimelineCanvas::pasteTimingClipboard(double anchorTime)
 /// 逻辑按钮的按下与释放通过同一方案映射，不能在一次事务中切换解释。
 /// 只有完整松开并结束本地预览的帧才释放 guard，避免换方案时遗留临时操作。
 /// 新方案若需要旧业务动作应请求语义命令，不模拟时间线控件的鼠标点击。
-void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
-                                                   const ImVec2& size,
-                                                   bool          isHovered,
-                                                   bool          isFocused,
-                                                   bool profileAlreadyChecked)
+void TimelineCanvas::handleTimingCanvasPointerInput(const ImVec2& canvasPos,
+                                                    const ImVec2& size,
+                                                    bool          isHovered,
+                                                    bool          isFocused,
+                                                    bool profileAlreadyChecked)
 {
     if ( !m_currentSnapshot || !m_currentSnapshot->hasBeatmap ) {
         m_hoveredTimingEntity = entt::null;
@@ -1655,7 +1656,8 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                                 : std::nullopt;
     m_hoveredTimingEntity = hoveredTarget ? hoveredTarget->entity : entt::null;
 
-    if ( isHovered && hoveredTarget ) {
+    if ( m_timingPresentation->showHoverDetails() && isHovered &&
+         hoveredTarget ) {
         const auto descriptor =
             timelineTimingTooltipDescriptor(hoveredTarget->effect);
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
@@ -1991,6 +1993,8 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                     m_timingDragEntries.clear();
                     break;
                 }
+                // 轻点只改变选择；触控容差内抖动不得建立移动历史。
+                if ( m_pointerTapOnly ) break;
                 m_isTimingDragging       = true;
                 m_timingDragStartTime    = hoveredTarget->time;
                 m_timingDragPreviewDelta = 0.0;
@@ -2004,6 +2008,13 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
                 }
 
             } else {
+                // 空白轻点仅在替换模式清空选择，追加与减选保留原集合。
+                if ( m_pointerTapOnly ) {
+                    if ( selectionOperation ==
+                         Logic::SelectionOperation::Replace )
+                        m_selectedTimingEntities.clear();
+                    break;
+                }
                 m_isTimingMarqueeSelecting = true;
                 m_timingMarqueeStartX      = localMouseX;
                 m_timingMarqueeEndX        = localMouseX;
@@ -2031,8 +2042,11 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
              UI::Interaction::mouseDown(ImGuiMouseButton_Left) )
             updateTimingDragPreview();
         if ( m_isTimingDragging &&
-             !UI::Interaction::mouseDown(ImGuiMouseButton_Left) )
+             !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
+            // 快速移动与抬手可合并在一帧，触控收尾必须采用最后坐标。
+            if ( m_pointerFinalUpdate ) updateTimingDragPreview();
             finishTimingDrag();
+        }
         if ( m_isTimingMarqueeSelecting &&
              UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
             bool autoScrolled = false;
@@ -2058,6 +2072,11 @@ void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& canvasPos,
         }
         if ( m_isTimingMarqueeSelecting &&
              !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
+            // 不借用上一帧的末端，防止快速框选漏掉最后一行。
+            if ( m_pointerFinalUpdate ) {
+                m_timingMarqueeEndX    = localMouseX;
+                m_timingMarqueeEndTime = canvasTimeAtLocalY(size, localMouseY);
+            }
             refreshMarqueeTargets();
             m_isTimingMarqueeSelecting = false;
             m_timingMarqueeBaseSelection.clear();

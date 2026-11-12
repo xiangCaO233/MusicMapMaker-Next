@@ -67,7 +67,8 @@ add_library(
 # 公共控制器只链接中立桥；平台私有头与实现由目标选择，不向公开包含目录传播。
 target_sources(
   Canvas
-  PRIVATE src/presentation/CanvasInteractionPresentation.cpp
+  PRIVATE src/presentation/TimelineInteractionPresentation.cpp
+          src/presentation/CanvasInteractionPresentation.cpp
           # 安卓接入鼠标后复用经典与纯鼠标解释器，不复制右键菜单。
           src/presentation/desktop/DesktopCanvasInteractionPresentation.cpp)
 target_include_directories(Canvas PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -75,7 +76,8 @@ if(ANDROID)
   # 安卓工厂根据当前操作方案选择触控仲裁或共用的桌面指针解释器。
   target_sources(
     Canvas
-    PRIVATE src/presentation/mobile/MobileCanvasInteractionPresentation.cpp
+    PRIVATE src/presentation/mobile/MobileTimelineInteractionPresentation.cpp
+            src/presentation/mobile/MobileCanvasInteractionPresentation.cpp
             src/presentation/mobile/MobileCanvasFactory.cpp)
 else()
   # 桌面保持原有即时鼠标输入与标准菜单，工厂符号只有一个实现。
@@ -442,3 +444,29 @@ target_include_directories(MobileCanvasNavigationTest
 target_link_libraries(MobileCanvasNavigationTest PRIVATE Graphic Log)
 mmm_register_test_case(NAME MobileCanvasNavigationTest COMMAND
                        MobileCanvasNavigationTest)
+
+# 时间线触控回归使用生产移动解释器，桌面工厂保持原样；安卓不重复编译实现。
+mmm_add_test_executable(Canvas MobileTimingInteractionTest
+                        tests/MobileTimingInteractionTest.cpp)
+target_include_directories(MobileTimingInteractionTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(MobileTimingInteractionTest PRIVATE Canvas Log 3rd_imgui)
+if(NOT ANDROID)
+  target_sources(
+    MobileTimingInteractionTest
+    PRIVATE src/presentation/mobile/MobileTimelineInteractionPresentation.cpp)
+endif()
+mmm_register_test_case(NAME MobileTimingInteractionTest COMMAND
+                       MobileTimingInteractionTest)
+
+# 该测试只创建 CPU ImGui 上下文，不启动窗口或上传字体纹理。 独立链接生产移动实现，保证桌面构建也能验证触控接管与取消。
+# 公共平台工厂没有替换，桌面兼容用例继续采用原默认解释器。 测试数据全部驻留内存，不产生源码资源目录下的输出文件。
+# 设备布局与真实后端事件差异另由手机、平板和实体机验收覆盖。 测试套件集成由顶层 helper 完成，不自行选择二进制输出目录。
+# 改动菜单或触点协议时，该目标与既有桌面 Timing 测试共同回归。
+
+# cmake-format: off
+# Timing 触控测试的职责边界：
+# 移动输入解释器使用真实原始触点代际，不替换公共平台工厂。
+# Windows 负责确定性状态机及桌面对照，Android 设备负责后端与布局验收。
+# 新增源文件只加入自维护 Canvas 目标，不修改第三方依赖的构建定义。
+# cmake-format: on

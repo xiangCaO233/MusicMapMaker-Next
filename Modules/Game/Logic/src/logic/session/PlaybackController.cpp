@@ -943,11 +943,11 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
     restoreActiveHoldEffectsAfterPlaybackJump(m_ctx);
 }
 
-/// @brief 处理主画布中键二维平移。
+/// @brief 处理画布二维平移及移动时间线的直接导航。
 /// @param cmd 逻辑像素空间中的平移增量和输入视口尺寸。
 /// @details 横向位移保存在指定相机，纵向位移转换为会话时间并复用定位入口。
 /// @note 纵向使用视觉时间与滚速缓存；传输时间不直接按像素线性相加。
-/// @warning 中键拖动期间可每个 update
+/// @warning 指针拖动或触控导航期间可每个 update
 /// 调用；纵向输入还会进入定位与特效恢复流程。
 /// 不得在此增加阻塞等待、文件操作或额外全量扫描。
 void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
@@ -967,8 +967,13 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
     // 中键纵移同样是用户定位；首播和复播时不允许改变自动演示位置。
     if ( m_ctx.composeLessonInputMode == ComposeLessonInputMode::AutoPlayback )
         return;
-    // 预览和时间线有各自的坐标与交互规则，不套用主画布的二维拖动解释。
-    if ( !SessionUtils::isMainCanvasCameraId(cmd.cameraId) ) {
+    // 时间线仅放行移动直接导航；普通中键及预览相机仍保留既有规则。
+    // 直接导航与主画布共用滚速逆映射，不能用固定像素比例猜测谱面时间。
+    const bool timelineNavigation =
+        cmd.cameraId == "Timeline" && std::isfinite(cmd.timelineZoom) &&
+        cmd.timelineZoom > 0 && std::isfinite(cmd.anchorY);
+    if ( !SessionUtils::isMainCanvasCameraId(cmd.cameraId) &&
+         !timelineNavigation ) {
         return;
     }
 
@@ -1003,7 +1008,8 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
         camera.viewportHeight = cmd.viewportHeight;
     }
 
-    if ( std::isfinite(cmd.deltaX) ) {
+    // 时间线泳道横坐标固定，多指横移只参与捏合，不能平移参数泳道。
+    if ( !timelineNavigation && std::isfinite(cmd.deltaX) ) {
         // 横向平移不改变谱面时间；累加溢出时仅恢复该相机的横向原点。
         camera.horizontalOffsetX += cmd.deltaX;
         if ( !std::isfinite(camera.horizontalOffsetX) ) {
