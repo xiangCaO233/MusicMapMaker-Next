@@ -1337,13 +1337,68 @@ bool testBmsLaneLabels()
     return true;
 }
 
+/// @brief 采样仅在已选且允许交互时发布两种不同的触控能力。
+/// @details 使用生产渲染器生成实际命中框，不手填 touchHandle 让 UI 自证。
+/// 零偏移的触发点也应存在；悬浮不等于选中，播放和只读视图不能残留把手。
+/// 断言同时覆盖只读视图和旧桌面悬浮，不扩大其拾取区域。
+/// 每轮使用全新快照，旧能力不能在下一帧被重复利用。
+/// 字库关闭只排除标签噪声，时间线、轨道和本体仍走生产渲染器。
+bool testSampleTouchCapabilities()
+{
+    using namespace MMM;
+    // 同一采样的选中与否决定平台编辑能力，不由是否有声音资源决定。
+    // 零偏移不会自然生成一条可分辨的连接线，必须保留独立部位。
+    // 偏移为零不能被当作禁用偏移编辑的理由。
+    for ( const bool selected : { false, true } ) {
+        for ( const bool accepts : { false, true } ) {
+            Logic::RenderSnapshot snapshot;
+            // 只读视图仍可绘制本体，但不能发布新的编辑热点。
+            // 不改变生产函数的播放或对象选择条件来迁就预期计数。
+            snapshot.acceptsInteraction = accepts;
+            // 非选中对照仍保留悬浮，验证触屏能力不会随旧桌面 Hover 出现。
+            renderSingleSample(snapshot,
+                               "sample.wav",
+                               0,
+                               false,
+                               1.2f,
+                               1.2f,
+                               false,
+                               !selected,
+                               selected);
+            // 统计能力而非命中框总量；普通桌面拾取框仍可正常存在。
+            // 两种类型分别计数，不能用两个同类框满足数量断言。
+            // 原始 kind 与 part 已由生产函数生成，不在测试中修补。
+            int anchors = 0, offsets = 0;
+            for ( const auto& box : snapshot.hitboxes ) {
+                anchors +=
+                    box.touchHandle == Common::Render::HoverPart::SampleAnchor;
+                offsets +=
+                    box.touchHandle == Common::Render::HoverPart::SampleOffset;
+            }
+            // 两类能力均只出现一次，不能靠另一个身份或普通桌面框冒充。
+            const int expected = selected && accepts ? 1 : 0;
+            if ( anchors != expected || offsets != expected ) {
+                XERROR(
+                    "Sample touch capability mismatch: selected={}, "
+                    "accepts={}, anchors={}, offsets={}",
+                    selected,
+                    accepts,
+                    anchors,
+                    offsets);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 int main()
 {
     // 先验证公共布局，再验证采样本体和标签，便于首条日志定位失败职责。
     // 每个用例自建状态，短路执行不会改变后续用例所需的全局初始化。
-    return testBmsLaneLabels() && testPerspectiveAuxiliaryLanes() &&
-                   testLaneLayoutVisuals() && testDraftLaneLabels() &&
-                   testNarrowLaneLabelMarquee() &&
+    return testSampleTouchCapabilities() && testBmsLaneLabels() &&
+                   testPerspectiveAuxiliaryLanes() && testLaneLayoutVisuals() &&
+                   testDraftLaneLabels() && testNarrowLaneLabelMarquee() &&
                    testSampleBodyMatchesTapTextureAndSize() &&
                    testSampleUsesIndependentBgmLaneWidth() &&
                    testSampleBrushPreview() && testSampleErasePreview() &&

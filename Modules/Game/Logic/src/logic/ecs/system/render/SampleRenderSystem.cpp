@@ -732,6 +732,9 @@ void SampleRenderSystem::renderSamples(
                 bodyWidth,
                 bodyHeight,
                 ChartObjectKind::AudioSample,
+                // 只发布已选采样的触控能力，不扩展桌面拾取矩形。
+                interaction && interaction->isSelected ? HoverPart::SampleAnchor
+                                                       : HoverPart::None,
             });
             if ( showOffsetHandle ) {
                 // 手柄隐藏时不能留下透明拾取区，否则零偏移本体附近会误入偏移拖动。
@@ -744,6 +747,10 @@ void SampleRenderSystem::renderSamples(
                     offsetHandleSize,
                     offsetHandleSize,
                     ChartObjectKind::AudioSample,
+                    // 零偏移也有独立触发目标；移动呈现决定触摸热区大小。
+                    interaction && interaction->isSelected
+                        ? HoverPart::SampleOffset
+                        : HoverPart::None,
                 });
                 // 锚点与手柄即使重合也保留不同部位，拾取优先级由消费端统一处理。
             }

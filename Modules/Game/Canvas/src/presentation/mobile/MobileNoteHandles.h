@@ -2,6 +2,7 @@
 #include "canvas/HoverLayerSelection.h"
 #include "canvas/PlanarObservationInput.h"
 #include "common/render/HoverRenderData.h"
+#include "config/skin/translation/Translation.h"
 #include <glm/vec2.hpp>
 #include <imgui.h>
 
@@ -78,8 +79,16 @@ public:
             const bool note =
                 box.touchHandle == Common::Render::HoverPart::Head ||
                 box.touchHandle == Common::Render::HoverPart::PolylineNode;
+            // 采样本体与实际触发点拥有不同时间，左右分居避免零偏移重合误抓。
+            // 两个目标仍使用原 SampleAnchor/SampleOffset 命令，不伪造音符身份。
+            // 已选能力由渲染发布，平台解释器不读取可变采样组件。
+            const bool sample = box.kind == Logic::ChartObjectKind::AudioSample;
+            const bool sampleOffset =
+                sample &&
+                box.touchHandle == Common::Render::HoverPart::SampleOffset;
             const bool start =
-                box.touchHandle == Common::Render::HoverPart::HoldStart;
+                box.touchHandle == Common::Render::HoverPart::HoldStart ||
+                (sample && !sampleOffset);
             const HoverLayerCandidate candidate{ box.entity,
                                                  box.kind,
                                                  static_cast<std::uint8_t>(
@@ -94,7 +103,6 @@ public:
             // 不移动旧中心，保证热区边缘仍覆盖改版前可操作的位置。
             const float offset =
                 note ? 0 : (start ? -1 : 1) * (box.w * 0.5f + 24 * scale);
-            const ImVec2 c{ origin.x + anchor.x + offset, origin.y + anchor.y };
             // 胶囊贴在真实投影边缘，而非用未投影宽度猜测透视位置。
             // 屏幕尺寸固定，缩放物件不会让胶囊变成大面积遮挡。
             glm::vec2 edge{ start ? box.x : box.x + box.w,
@@ -107,8 +115,13 @@ public:
             }
             const ImVec2 grip{ note ? origin.x + anchor.x : origin.x + edge.x,
                                origin.y + (note ? anchor.y : edge.y) };
-            const auto   min     = draw->GetClipRectMin(),
-                         max     = draw->GetClipRectMax();
+            // 采样热区围绕实际边缘，不沿用长条的旧外侧圆心。
+            // 锚点本体左边缘与触发点右边缘即使同拍仍可分别命中。
+            const ImVec2 c   = sample ? grip
+                                      : ImVec2{ origin.x + anchor.x + offset,
+                                                origin.y + anchor.y };
+            const auto   min = draw->GetClipRectMin(),
+                         max = draw->GetClipRectMax();
             const auto   visible = [&](ImVec2 p) {
                 return p.x >= min.x && p.x <= max.x && p.y >= min.y &&
                        p.y <= max.y;
@@ -153,6 +166,37 @@ public:
                     { grip.x + 2 * scale, grip.y + 9 * scale },
                     color,
                     std::min(ImGui::GetStyle().FrameRounding, 2 * scale));
+            }
+            // 说明只在真实按住目标时出现，不把鼠标悬浮当作触屏反馈。
+            // 使用既有译文，按主题字号绘制；没有全局样式或配置写入。
+            if ( sample && pressed && visible(grip) ) {
+                const auto label =
+                    TR(sampleOffset ? "ui.canvas.hover.sample_trigger"
+                                    : "ui.canvas.hover.sample_anchor");
+                // 靠近上沿与右沿时把说明留在内容裁剪区内，不盖住页签。
+                // 翻译宽度参与定位，不假定中英文长度相同。
+                // 极窄视图仍以左边界为下限，不能给 clamp 传入倒置范围。
+                const auto textSize = ImGui::CalcTextSize(label.data());
+                // 画布图片不服从界面主题明暗，说明需自带主题底色保持对比度。
+                // 包围盒连同样式内边距一起夹入内容区，不能盖住页签。
+                const auto&  style   = ImGui::GetStyle();
+                const auto   padding = style.FramePadding;
+                const ImVec2 textPoint{
+                    std::max(min.x + padding.x,
+                             std::min(grip.x + 6 * scale,
+                                      max.x - textSize.x - padding.x)),
+                    std::max(min.y + padding.y,
+                             grip.y - ImGui::GetFontSize() - 10 * scale)
+                };
+                // 圆角与间距直接跟随当前样式，不另外保存固定移动端外观。
+                draw->AddRectFilled(
+                    { textPoint.x - padding.x, textPoint.y - padding.y },
+                    { textPoint.x + textSize.x + padding.x,
+                      textPoint.y + textSize.y + padding.y },
+                    ImGui::GetColorU32(ImGuiCol_PopupBg),
+                    style.FrameRounding);
+                draw->AddText(
+                    textPoint, ImGui::GetColorU32(ImGuiCol_Text), label.data());
             }
             const float dx = point.x - c.x, dy = point.y - c.y;
             // 平方距离避免每个可见部件执行开方，也无需生成排序列表。

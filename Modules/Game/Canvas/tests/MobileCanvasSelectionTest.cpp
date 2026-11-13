@@ -8,6 +8,7 @@
 #include "log/colorful-log.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/SampleComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/InteractionController.h"
@@ -201,9 +202,15 @@ Capture run(
                                       .h      = 30 });
         if ( handles ) {
             // 头部在左侧显示局部首把手，尾部位于右侧；中间留给整体移动。
-            snapshot.hitboxes[0].kind     = Logic::ChartObjectKind::PlayerNote;
-            snapshot.hitboxes[0].part     = Common::Render::HoverPart::Head;
-            snapshot.hitboxes[0].subIndex = -1;
+            snapshot.hitboxes[0].kind = Logic::ChartObjectKind::PlayerNote;
+            snapshot.hitboxes[0].part = Common::Render::HoverPart::Head;
+            // 同号采样与音符共存，不能把局部目标的领域退回默认玩家对象。
+            if ( part == Common::Render::HoverPart::SampleAnchor ||
+                 part == Common::Render::HoverPart::SampleOffset ) {
+                snapshot.hitboxes[0].kind = Logic::ChartObjectKind::AudioSample;
+                snapshot.hitboxes[0].part = part;
+            }
+            snapshot.hitboxes[0].subIndex    = -1;
             snapshot.hitboxes[0].touchHandle = part;
             if ( part == Common::Render::HoverPart::PolylineNode ) {
                 snapshot.hitboxes[0].part           = part;
@@ -623,6 +630,193 @@ void testBlank()
               "blank touch preserves add or subtract selection");
     }
 }
+/// @brief 采样左右目标经过生产触控解释器，再进入真实混合对象拖动事务。
+/// @details 零偏移和正负偏移均保留锚点与触发时间的独立语义。
+/// 同号玩家音符作为选中哨兵，偏移操作不得误改它或其注册表。
+/// @note 普通点按只选择；拖动、撤销、重做及取消分别检查实际组件。
+/// @warning 测试串行消费命令，不启动渲染或会话线程，也不等待音频回调。
+void testSampleHandles()
+{
+    using namespace MMM::Logic;
+    using Part = Common::Render::HoverPart;
+    // 每种部位独立运行，不能用锚点成功代替触发点成功。
+    // 两个图形即使同拍也属于不同的命令载荷。
+    // 原生触点经容差分类后才发布 Start，不在按下时提前修改模型。
+    // 这里不直接调用私有拾取函数，避免绕开扩大热区的生产接线。
+    for ( const auto part : { Part::SampleAnchor, Part::SampleOffset } ) {
+        const float x = part == Part::SampleAnchor ? 122 : 188;
+        // 起点落在原小矩形之外，也必须能通过手指热区取得完整身份。
+        // 快速释放前没有稳定拖动帧，必须补交最终坐标。
+        // 与相邻对象相交不应重新解释本次起点的对象域。
+        // 所有载荷先收集再用于逻辑测试，不借用 ImGui 上下文寿命。
+        const auto events = run({ { { x, 155 }, true }, { { x, 220 }, false } },
+                                true,
+                                SelectionOperation::Replace,
+                                true,
+                                true,
+                                part);
+        check(
+            events.m_starts.size() == 1 && events.m_ends == 1 &&
+                events.m_starts.front().kind == ChartObjectKind::AudioSample &&
+                events.m_starts.front().hitPart == static_cast<uint8_t>(part),
+            "sample touch target retains registry and anchor/offset part");
+        // 容差内轻点不能制造空编辑，否则会清除上一笔的重做分支。
+        const auto tap = run({ { { x, 155 }, true }, { { x, 155 }, false } },
+                             true,
+                             SelectionOperation::Replace,
+                             true,
+                             true,
+                             part);
+        check(tap.m_starts.empty() && tap.m_ends == 0,
+              "sample handle tap selects without edit history");
+        // 初始负偏移用于覆盖提前触发，正偏移覆盖延后触发。
+        // 零偏移是两类屏幕标记重合的关键边界，不能仅测试非零值。
+        // 初始偏移只改变模型基线，不用测试代码替代触控目标分类。
+        // 目标时间由生产相机与 ScrollCache 解释，不复制其反投影公式。
+        // 同一原框外起点在经典方案中仍为空白框选，不扩展桌面拾取。
+        // 负例必须真实移动，单纯没有命令不能证明仍保留原输入路径。
+        // touchHandle 元数据可以共享，是否解释其扩展几何由平台入口决定。
+        const auto desktop =
+            run({ { { x, 155 }, true }, { { x, 220 }, false } },
+                false,
+                SelectionOperation::Replace,
+                true,
+                true,
+                part);
+        check(desktop.m_starts.empty() && desktop.m_marquees.size() == 1,
+              "sample touch hit expansion does not change classic desktop");
+        for ( const auto offset : { -125, 0, 125 } ) {
+            // 成功和取消使用完全相同的起笔、路径及组件。
+            // 对照只改变最后的事务收尾，不能用从未开始的空操作冒充取消。
+            // 每轮重建上下文，历史与选择不能从上一种偏移泄漏。
+            // 全部对象驻留内存，既不调用音频设备也不创建测试资源文件。
+            for ( const bool cancel : { false, true } ) {
+                // 会话提供正式业务门禁，不把渲染快照当可写注册表。
+                // 专业模式允许玩家哨兵参与整体拖动，才能验证混合组隔离。
+                // 相机只为该上下文创建，字段映射与捕获命令的 ID 相同。
+                // 时间初值大于零，提前触发不会被绝对起点边界遮蔽。
+                SessionContext ctx;
+                ctx.currentBeatmap = std::make_shared<BeatMap>();
+                ctx.currentTool    = EditTool::Marquee;
+                ctx.lastConfig.settings.professionalMode = true;
+                ctx.currentTime = ctx.animateTime = 1;
+                ctx.trackCount = ctx.draftTrackCount = 4;
+                ctx.bgmTrackCount                    = 1;
+                // 测试的横坐标位于 BGM 区，排除跨域转换干扰局部时间语义。
+                auto& layout          = ctx.lastConfig.visual.trackLayout;
+                layout.left           = .5f;
+                layout.right          = .9f;
+                layout.bgmLanes.left  = .1f;
+                layout.bgmLanes.width = .3f;
+                ctx.lastConfig.visual.judgeline_pos = .5f;
+                ctx.cameras.emplace(
+                    "SelectionCamera",
+                    CameraInfo{ "SelectionCamera", 1000, 600, 0 });
+                auto& cache =
+                    ctx.timelineRegistry.ctx().emplace<System::ScrollCache>();
+                cache.rebuild(ctx.timelineRegistry,
+                              ctx.lastConfig,
+                              ctx.currentBeatmap.get());
+                // 故意创建相同数值 ID，检出遗漏 ChartObjectKind 的误写。
+                // 玩家音符和采样属于不同 Registry，真实选择也分别保存。
+                // 音符时间不同于采样，不能用相同终点掩盖意外整体平移。
+                // 不提供真实磁盘资源；测试只约束已有绑定字符串不被改变。
+                const auto e = static_cast<entt::entity>(77);
+                (void)ctx.sampleRegistry.create(e);
+                (void)ctx.noteRegistry.create(e);
+                // 锚点使用秒而偏移使用毫秒，两个字段不能共用同一换算。
+                const SampleComponent before{ .m_timestamp       = 1,
+                                              .m_offsetMs        = offset,
+                                              .m_track           = 4,
+                                              .m_audioResourceId = "effect.wav",
+                                              .m_volume          = .4f };
+                ctx.sampleRegistry.emplace<SampleComponent>(e, before);
+                ctx.sampleRegistry.emplace<InteractionComponent>(
+                    e, InteractionComponent{ .isSelected = true });
+                ctx.noteRegistry.emplace<NoteComponent>(
+                    e, NoteComponent{ .m_timestamp = 2, .m_trackIndex = 0 });
+                ctx.noteRegistry.emplace<InteractionComponent>(
+                    e, InteractionComponent{ .isSelected = true });
+                // 控制器接收真实 CmdStartDrag 部位，不在测试中手设
+                // draggedPart。 因而捕获层若丢失
+                // SampleOffset，这里的独立偏移断言会失败。
+                // 初始选区刻意包含哨兵，不能靠空选区让隔离测试通过。
+                // 组件副本在命令执行前保存，避免引用随 Registry 更新而漂移。
+                InteractionController controller(ctx);
+                // 使用 UI 实际捕获载荷；只在取消对照中替换最后的事务收尾。
+                for ( const auto& event : events.m_editCommands ) {
+                    if ( const auto* c = std::get_if<CmdSelectEntity>(&event) )
+                        controller.handleCommand(*c);
+                    if ( const auto* c = std::get_if<CmdStartDrag>(&event) )
+                        controller.handleCommand(*c);
+                    if ( const auto* c = std::get_if<CmdUpdateDrag>(&event) )
+                        controller.handleCommand(*c);
+                    if ( const auto* c = std::get_if<CmdEndDrag>(&event) )
+                        controller.handleCommand(
+                            CmdEndDrag{ c->cameraId, cancel });
+                }
+                // 读取持久组件而非 UI 预览，检查实际命令的最终结果。
+                // 结束时才计入历史，中间移动次数不能制造多份撤销动作。
+                // after 是值副本，后面 Undo/Redo 不会同时改写预期结果。
+                const auto after = ctx.sampleRegistry.get<SampleComponent>(e);
+                // 资源、音量与锚点所属轨道不能因局部拖动发生隐式变更。
+                check(after.m_audioResourceId == before.m_audioResourceId &&
+                          after.m_volume == before.m_volume &&
+                          after.m_track == 4,
+                      "sample local drag preserves resource volume and lane");
+                // 取消需要恢复两套 Registry；只恢复主采样会漏掉混合组预览。
+                // 历史必须为空，不能先提交再靠 Undo 伪装取消成功。
+                // 此分支不继续调用 Redo，避免把合法无动作状态当作失败。
+                if ( cancel ) {
+                    check(after.m_timestamp == 1 &&
+                              after.m_offsetMs == offset &&
+                              ctx.noteRegistry.get<NoteComponent>(e)
+                                      .m_timestamp == 2 &&
+                              ctx.actionStack.getUndoStackSize() == 0,
+                          "cancel sample gesture restores both registries "
+                          "without history");
+                    continue;
+                }
+                // 锚点移动继续遵循原整组选中行为，不新增另一套位置算法。
+                // 触发偏移则只能修改主要采样，不能改变锚点或玩家哨兵。
+                // 检查字段独立性比仅检查屏幕图形发生变化更严格。
+                if ( part == Part::SampleOffset )
+                    check(after.m_timestamp == 1 &&
+                              after.m_offsetMs != offset &&
+                              ctx.noteRegistry.get<NoteComponent>(e)
+                                      .m_timestamp == 2,
+                          "offset handle changes only signed trigger offset");
+                else
+                    check(
+                        after.m_timestamp != 1 && after.m_offsetMs == offset,
+                        "anchor handle moves time and preserves signed offset");
+                // 一次手势只建一个动作，撤销恢复 before，重做恢复最终值。
+                check(ctx.actionStack.getUndoStackSize() == 1,
+                      "sample gesture commits one action");
+                // 一次撤销必须回到原始有符号偏移，不把负值夹成零。
+                // 同时验证锚点恢复，避免偏移字段恢复但实体仍停在新时间。
+                // 原资源属性在上面的共享断言中已核对。
+                ctx.actionStack.undo(ctx);
+                check(
+                    ctx.sampleRegistry.get<SampleComponent>(e).m_timestamp ==
+                            1 &&
+                        ctx.sampleRegistry.get<SampleComponent>(e).m_offsetMs ==
+                            offset,
+                    "sample undo restores independent anchor and offset");
+                // 重做比较之前保存的真实 after，而非再次计算目标像素。
+                // 这会检出动作载荷引用了已被撤销改写的组件存储。
+                // 对每种初始偏移分别执行，不从单个正例推断整个符号范围。
+                ctx.actionStack.redo(ctx);
+                check(
+                    ctx.sampleRegistry.get<SampleComponent>(e).m_timestamp ==
+                            after.m_timestamp &&
+                        ctx.sampleRegistry.get<SampleComponent>(e).m_offsetMs ==
+                            after.m_offsetMs,
+                    "sample redo restores actual final component");
+            }
+        }
+    }
+}
 /// @brief 将真实触控轻点派发结果送入逻辑控制器，验证重做分支与保存点。
 /// @details 音符身份与 UI 命中一致；先产生可重做的真实位置动作。
 /// 选择成功、重做深度、未保存状态与重做结果同时检查，空夹具不能通过。
@@ -702,6 +896,7 @@ int main()
     testHandles();
     testLocalParts();
     testDenseNodes();
+    testSampleHandles();
     testBlank();
     testTapPreservesRedo();
     return failures == 0 ? 0 : 1;
