@@ -623,6 +623,12 @@ bool CenteredModalPopupScope::begin(const char* name, bool* pOpen,
     prepareCenteredModalWindow(desiredSize);
 
     flags |= ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize;
+    // 高 DPI 横屏键盘可能只留下不到一半高度，标题栏不能挤占活动字段。
+    // 仅键盘可见的移动模态临时省略原生标题；业务正文和确认／取消仍保留。
+    if ( !workspaceAllowsHoverFeedback() &&
+         workspaceTextInputWindowArea().m_size.y + 1 <
+             workspaceFloatingWindowArea().m_size.y )
+        flags |= ImGuiWindowFlags_NoTitleBar;
     if ( autoResize ) {
         flags |= ImGuiWindowFlags_AlwaysAutoResize;
     }

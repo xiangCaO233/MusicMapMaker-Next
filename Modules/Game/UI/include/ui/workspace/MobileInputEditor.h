@@ -13,6 +13,10 @@ bool mobileScalarPrecisionItem(ImGuiDataType type, void* value,
 /// @details 只清除活动输入，不提交草稿或关闭业务弹窗；出现与动画中不抢焦点。
 /// @warning 每帧只检查两个布尔值和 ImGui 状态，不查询平台或业务对象。
 void releaseMobileTextFocusAfterKeyboardDismiss(bool wasVisible, bool visible);
+/// @brief 紧跟输入控件调用，用其真实矩形保持活动字段可见。
+/// @details 只滚动移动正文子窗，不依据复合控件的导航矩形，也不移动确认行。
+/// @warning 每帧固定状态与几何检查，无分配、平台调用或业务锁。
+void keepMobileInputItemVisible();
 /// @brief 键盘出现时把较长表单内容变成滚动区，底部确认行继续留在父窗口。
 /// @details 移动表单始终保留同一子窗口，键盘切换只改高度，避免输入身份变化。
 /// 桌面不创建子窗口，保留原有布局与控件 ID。

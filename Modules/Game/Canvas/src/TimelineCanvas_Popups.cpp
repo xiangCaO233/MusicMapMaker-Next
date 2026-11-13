@@ -1274,7 +1274,10 @@ bool drawTimeEditor(const char* id, double& value,
         Config::AppConfig::instance().getEditorSettings().timeFormatPreference;
     if ( preference == Config::TimeFormatPreference::Seconds ) {
         ImGui::SetNextItemWidth(-FLT_MIN);
-        return ImGui::InputDouble(id, &value, 0.001, 0.01, "%.4f");
+        const bool changed =
+            ImGui::InputDouble(id, &value, 0.001, 0.01, "%.4f");
+        UI::keepMobileInputItemVisible();
+        return changed;
     }
 
     std::string label =
@@ -1291,6 +1294,7 @@ bool drawTimeEditor(const char* id, double& value,
     if ( ImGui::BeginPopup(id) ) {
         ImGui::SetNextItemWidth(180.0f);
         changed = ImGui::InputDouble("##Seconds", &value, 0.001, 0.01, "%.4f");
+        UI::keepMobileInputItemVisible();
         ImGui::EndPopup();
     }
     return changed;
@@ -1351,9 +1355,11 @@ double drawPopupBeatPositionEditor(
     ImGui::TextUnformatted("拍号");
     ImGui::SetNextItemWidth(-FLT_MIN);
     const bool beatChanged = ImGui::InputInt("##PopupBeat", &beatIndex, 1, 4);
+    UI::keepMobileInputItemVisible();
     ImGui::TextUnformatted("分拍位");
     const bool fractionChanged =
         drawTimingTableFractionInput("##PopupBeatFraction", fit, fraction);
+    UI::keepMobileInputItemVisible();
     if ( ImGui::IsItemHovered() ) {
         ImGui::SetTooltip("支持分数（如 1/4）或小数；拟合误差 %.3f ms",
                           fit.errorMs);
@@ -1404,6 +1410,7 @@ void drawStopDurationEditor(double& seconds, double bpm, bool& bmsUnits)
                             bmsUnits ? 48.0 : 0.1,
                             "%.6f") )
         seconds = stopDurationSeconds(display, bpm, bmsUnits);
+    UI::keepMobileInputItemVisible();
     ImGui::PopID();
     // 单位说明常驻可见，清晰区分时长与事件发生时间。
     if ( bmsUnits )
@@ -1421,6 +1428,8 @@ bool drawFullWidthInputDouble(const char* id, double& value, double step,
 {
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputDouble(id, &value, step, stepFast, format);
+    // 读取复合输入的真实矩形，不能在后续提示项覆盖 LastItem 后才定位。
+    UI::keepMobileInputItemVisible();
     return ImGui::IsItemDeactivatedAfterEdit();
 }
 

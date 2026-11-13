@@ -145,6 +145,21 @@ void releaseMobileTextFocusAfterKeyboardDismiss(bool wasVisible, bool visible)
     if ( wasVisible && !visible && ImGui::GetIO().WantTextInput )
         ImGui::ClearActiveID();
 }
+/// @brief 输入提交后按真实 ItemRect 滚动正文，复合数值框也采用同一口径。
+/// @details InputDouble 等复合控件的导航矩形未必代表实际活动输入框。
+/// 在对应控件后立即读取矩形，不在正文结束时借用最后一个提示项或旧导航位置。
+/// @warning 高频固定检查；仅滚动当前子窗，禁止递归把父模态操作行推出边界。
+void keepMobileInputItemVisible()
+{
+    if ( workspaceAllowsHoverFeedback() || !ImGui::IsItemActive() ) return;
+    auto* window = ImGui::GetCurrentWindow();
+    // 根窗口没有独立正文与底部行，不能因普通字段激活而滚动整个模态。
+    if ( !(window->Flags & ImGuiWindowFlags_ChildWindow) ) return;
+    ImGui::ScrollToRect(
+        window,
+        ImRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax()),
+        ImGuiScrollFlags_KeepVisibleEdgeY | ImGuiScrollFlags_NoScrollParent);
+}
 /// @brief 不改变页面整体大小，正文可以在键盘上方滚动且按钮始终可见。
 /// @param id 表单内稳定的正文身份，不能包含随输入内容变化的标题。
 /// @details 子窗口始终存在，键盘动画只改变尺寸约束，焦点不跨窗口迁移。
@@ -154,9 +169,11 @@ MobileInputBodyScope::MobileInputBodyScope(const char* id)
 {
     if ( workspaceAllowsHoverFeedback() ) return;
     // 不使用旧物理像素，确认行下限与移动操作按钮使用同一 DPI。
-    const float scale  = Config::AppConfig::instance().getWindowContentScale();
+    const float scale = Config::AppConfig::instance().getWindowContentScale();
+    // EndChild 后只需要一行间隔；三倍留白会在高 DPI 大键盘下耗尽正文。
+    // 操作行高度继续遵守触摸下限，不通过缩小按钮来换取输入空间。
     const float footer = std::max(ImGui::GetFrameHeight(), 48.0f * scale) +
-                         ImGui::GetStyle().ItemSpacing.y * 3;
+                         ImGui::GetStyle().ItemSpacing.y;
     // 同一移动表单始终保留子窗口，IME 切换只改变约束，输入框 ID 不变。
     // 自动高度让短表单紧凑，超出上限后由正文滚动，底部按钮不随正文移动。
     // 自动尺寸的父窗不能用上一帧小高度限制正文，否则首次打开会被锁死。
@@ -197,19 +214,6 @@ void MobileInputBodyScope::end()
 {
     // 幂等结束允许显式操作行与析构共同使用，不会重复弹出窗口。
     if ( !m_open ) return;
-    auto& context = *ImGui::GetCurrentContext();
-    auto* window  = ImGui::GetCurrentWindow();
-    if ( context.IO.WantTextInput && context.ActiveId &&
-         context.NavId == context.ActiveId && context.NavWindow == window ) {
-        // IME 缩小时原焦点没有重新激活，仍须让已聚焦的字段回到正文可见区。
-        // 只滚动正文，禁止默认递归滚动父模态，否则底部按钮会再次被推出边界。
-        auto rect = window->NavRectRel[ImGuiNavLayer_Main];
-        rect.Translate(window->Pos);
-        ImGui::ScrollToRect(window,
-                            rect,
-                            ImGuiScrollFlags_KeepVisibleEdgeY |
-                                ImGuiScrollFlags_NoScrollParent);
-    }
     ImGui::EndChild();
     m_open = false;
 }
@@ -333,6 +337,7 @@ bool mobileScalarPrecisionItem(ImGuiDataType type, void* value,
                                   ImGuiInputTextFlags_CharsScientific |
                                       ImGuiInputTextFlags_AutoSelectAll) )
                 parseDraft();
+            keepMobileInputItemVisible();
             ImGui::TextUnformatted(TR("ui.mobile.precision.step").data());
             // 固定四个选项无动态容器；整数不显示不能表示的分数步长。
             // 显示文本不作为持久化键，PushID 由固定数值生成。

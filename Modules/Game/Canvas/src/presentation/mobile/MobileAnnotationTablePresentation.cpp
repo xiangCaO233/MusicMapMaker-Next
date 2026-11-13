@@ -324,6 +324,8 @@ private:
                                std::min(area.m_size.y * .3f,
                                         ImGui::GetFontSize() * 10)) });
                 // 收起键盘只改变高度，正文 ID 与草稿保持；提交仍需明确按钮。
+                // 只让活动正文保持可见，保存与取消继续固定在父窗。
+                UI::keepMobileInputItemVisible();
                 inputBody.end();
                 ImGui::BeginDisabled(!data.writable() || conflict ||
                                      !m_text.front());

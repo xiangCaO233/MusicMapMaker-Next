@@ -6,6 +6,8 @@
  * 源字段、Changed 次数与弹窗边界共同判断结果，截图或成功打开不算提交成功。
  */
 #include "ui/workspace/MobileInputEditor.h"
+#include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/skin/translation/Translation.h"
 #include "graphic/mobile/MobileKeyboard.h"
 #include "graphic/mobile/MobileTouchInput.h"
@@ -68,9 +70,13 @@ struct Fixture : MMM::UI::IWorkspacePresentation {
     /// 本夹具只模拟外壳已换算好的比例，不复制生产弹窗尺寸公式。
     MMM::UI::WorkspaceWindowArea textInputWindowArea() const override
     {
+        // 显示尺寸与字号分别变化，不能把高 DPI 等价为仅扩大屏幕。
+        // 先扣工作区边距再应用遮挡比例，保持同一输入几何口径。
+        const auto size = ImGui::GetIO().DisplaySize;
         return { { 30, 20 },
-                 { 740,
-                   760 * (1 - MMM::Graphic::mobileKeyboardBottomFraction()) } };
+                 { size.x - 60,
+                   (size.y - 40) *
+                       (1 - MMM::Graphic::mobileKeyboardBottomFraction()) } };
     }
     /// @brief 真实 ImGui 上下文独占于本场景，不读取个人 ini 或配置路径。
     /// @details 固定帧间隔用于输入阈值，不使用系统时间影响回归稳定性。
@@ -335,11 +341,23 @@ void keyboardFocusAndConflict()
 /// @brief 真实长表单在键盘缩小后仍保留完整操作行，并滚动到活动末字段。
 /// @details 使用自动高度父模态和生产正文容器，复现 Timing 多字段的布局约束。
 /// 只比较实际提交的矩形及裁剪区域，不把设置的期望高度当作布局成功。
-void longFormFooter()
+/// @param scale 同时放大正文与几何，覆盖真机大字号和高键盘，不只扩大显示面积。
+void longFormFooter(float scale = 1)
 {
     Fixture f;
-    double  value{};
-    ImVec2  fieldMin{}, fieldMax{}, footerMin{}, footerMax{}, clipMin{},
+    auto&   config = MMM::Config::AppConfig::instance();
+    // 倍率是临时测试输入，退出前恢复底层系统比例，不持久化 AppConfig。
+    const float originalScale = config.getWindowContentScale() /
+                                config.getEditorSettings().uiScaleMultiplier;
+    config.setWindowContentScale(scale);
+    if ( scale > 1 ) {
+        // 使用实机横屏尺寸与 792 像素高输入法，不能拿低 DPI 小窗代替。
+        ImGui::GetIO().DisplaySize = { 2688, 1216 };
+        ImGui::GetStyle().ScaleAllSizes(scale);
+        ImGui::GetStyle().FontScaleMain = scale;
+    }
+    double value{};
+    ImVec2 fieldMin{}, fieldMax{}, footerMin{}, footerMax{}, clipMin{},
         clipMax{};
     ImGuiWindow* modalWindow{};
     // 独立表单帧没有原始触点；焦点由正式键盘请求建立，不修改内部 ActiveId。
@@ -355,15 +373,20 @@ void longFormFooter()
         {
             // 样式必须在宿主 End 前恢复，与生产弹窗调用的嵌套作用域一致。
             MMM::UI::Utils::CenteredModalPopupScope modal;
-            if ( modal.begin("LongForm", nullptr, 0, { 350, 0 }) ) {
+            if ( modal.begin("LongForm", nullptr, 0, { 350 * scale, 0 }) ) {
                 modalWindow = ImGui::GetCurrentWindow();
+                // 参数窗在正文之前还有类型摘要，同样计入真实可用高度。
+                ImGui::TextUnformatted("Scroll details");
+                ImGui::Separator();
+                ImGui::Spacing();
                 MMM::UI::MobileInputBodyScope body("LongFields");
                 for ( int i = 0; i < 8; ++i ) {
                     ImGui::PushID(i);
                     ImGui::TextUnformatted("Field");
                     // 末字段在键盘出现前处于可见区，缩小时不能仅靠重新点击取得焦点。
                     if ( focus && i == 7 ) ImGui::SetKeyboardFocusHere();
-                    ImGui::InputDouble("##Value", &value);
+                    ImGui::InputDouble("##Value", &value, .01, .1);
+                    MMM::UI::keepMobileInputItemVisible();
                     if ( i == 7 ) {
                         fieldMin = ImGui::GetItemRectMin();
                         fieldMax = ImGui::GetItemRectMax();
@@ -375,7 +398,7 @@ void longFormFooter()
                 clipMax = ImGui::GetCurrentWindow()->ClipRect.Max;
                 body.end();
                 // 与 Timing 操作行相同，按钮在父窗且具有明确触摸高度。
-                MMM::UI::FeedbackButton("Confirm", { 0, 48 });
+                MMM::UI::FeedbackButton("Confirm", { 0, 48 * scale });
                 footerMin = ImGui::GetItemRectMin();
                 footerMax = ImGui::GetItemRectMax();
                 ImGui::EndPopup();
@@ -393,7 +416,8 @@ void longFormFooter()
     // 该遮挡让表单总高度超过模态的实际最大值，触发正文局部滚动。
     // 非零安全区原点由 Fixture 提供，不得把屏幕原点当作表单起点。
     // 上限还需扣除父模态留白，不能只与整块键盘安全区比较。
-    MMM::Graphic::publishMobileKeyboardOcclusion(500, 800);
+    MMM::Graphic::publishMobileKeyboardOcclusion(scale > 1 ? 792 : 500,
+                                                 scale > 1 ? 1216 : 800);
     // 尺寸与滚动目标都经过真实 ImGui 帧推进，没有固定时长阻塞等待。
     for ( int i = 0; i < 4; ++i ) formFrame(false, false);
     // 与父窗 ClipRect 比较可抓住正文预留过高导致的按钮半截可见问题。
@@ -410,6 +434,8 @@ void longFormFooter()
     // 数值仍为初值，表明焦点滚动不会伪造字符输入或编辑完成通知。
     check(ImGui::GetActiveID() == active && value == 0,
           "long form resize retains focus without writing value");
+    // 其它场景继续使用自己的 DPI，不能继承高字号的系统比例。
+    config.setWindowContentScale(originalScale);
 }
 }  // namespace
 /// @brief 场景各自拥有 UI 上下文，不以新建对象掩盖同一场景内的取消行为。
@@ -422,5 +448,6 @@ int main()
     keyboardGeometry();
     keyboardFocusAndConflict();
     longFormFooter();
+    longFormFooter(2.7625f);
     return failures ? 1 : 0;
 }

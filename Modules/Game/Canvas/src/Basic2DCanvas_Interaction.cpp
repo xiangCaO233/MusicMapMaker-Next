@@ -5079,6 +5079,9 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
                                 ImGuiInputTextFlags_CtrlEnterForNewLine) &&
             !touchText;
         // 手机 Enter 保留为换行，输入变化与焦点离开不能隐式保存。
+        // 活动正文用自身真实矩形定位，不借用随后保存按钮的 LastItem。
+        // 只调整滚动位置，不改变批注草稿或保存许可。
+        UI::keepMobileInputItemVisible();
         inputBody.end();
 
         // 空正文不能保存；新增还要求规范化后的创作者非空。
