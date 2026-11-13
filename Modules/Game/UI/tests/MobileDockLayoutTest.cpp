@@ -164,8 +164,11 @@ struct Fixture {
             pane(MMM::UI::MobileDockPanel::Main, longTitle.c_str());
         if ( analysisViews ) {
             // 复用生产标题分类，不能在测试里按显示语言另写窗口匹配规则。
+            // BPM 必须实际创建并停靠，不能只断言分类函数返回真。
+            // 后续几何检查会独立查找此窗口，漏接管将导致失败。
             for ( const char* title : { "Wave###AudioWaveformViewGlobal",
-                                        "频谱###AudioSpectrumViewGlobal" } )
+                                        "频谱###AudioSpectrumViewGlobal",
+                                        "BPM###BpmMeasurementTool" } )
                 if ( MMM::UI::MobileDockLayout::isAudioAnalysisWindow(title) )
                     pane(MMM::UI::MobileDockPanel::Main, title);
         }
@@ -615,7 +618,8 @@ int main()
     // 先推进原生停靠结算，首次 Begin 的浮动位置不算成功。
     fixture.settle();
     for ( const char* title : { "Wave###AudioWaveformViewGlobal",
-                                "频谱###AudioSpectrumViewGlobal" } ) {
+                                "频谱###AudioSpectrumViewGlobal",
+                                "BPM###BpmMeasurementTool" } ) {
         // DockId 相同不足以证明可切换，还须找到真实原生 TabId。
         // 两种语言同时提交，验证路由不依赖显示名称。
         const auto* analysis = ImGui::FindWindowByName(title);

@@ -32,6 +32,7 @@
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -43,6 +44,7 @@
 #include <ice/manage/AudioBuffer.hpp>
 #include <ice/manage/AudioTrack.hpp>
 #include <ice/thread/ThreadPool.hpp>
+#include <imgui_internal.h>
 #include <limits>
 #include <mutex>
 #include <numeric>
@@ -798,7 +800,7 @@ PlaybackTimelineState readPlaybackTimelineState(BpmPlaybackRoute route)
     state.visualTime = state.audioTime + state.visualOffset;
     state.totalTime  = getPlaybackTotalTime(route, audioManager);
     state.isPlaying  = getPlaybackStatus(route, audioManager) ==
-                      Audio::PlaybackStatus::Playing;
+                       Audio::PlaybackStatus::Playing;
 
     if ( route != BpmPlaybackRoute::SynchronizedWithEditor ) {
         // audition 路由到此已经获得完整状态，无需查询画布同步缓冲。
@@ -1097,7 +1099,11 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const float          dpiScale =
         Config::AppConfig::instance().getWindowContentScale();
-    if ( viewport ) {
+    // 移动中央页签的位置完全交给外壳；Appearing 的显式位置会使 ImGui
+    // 在同帧收到 Dock 请求后再次脱离节点，导致工具被主画布遮挡。
+    // 桌面浮窗保留原默认尺寸、首次位置和多视口选择规则。
+    const bool desktopPlacement = workspaceAllowsHoverFeedback();
+    if ( viewport && desktopPlacement ) {
         // 默认尺寸按 DPI 缩放，并限制在主视口工作区内部。
         const ImVec2 defaultWindowSize =
             calculateDefaultBpmMeasureWindowSize(*viewport, dpiScale);
@@ -1106,7 +1112,7 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
         ImGui::SetNextWindowViewport(viewport->ID);
         ImGui::SetNextWindowSize(defaultWindowSize, ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowPos(defaultWindowPos, ImGuiCond_Appearing);
-    } else {
+    } else if ( desktopPlacement ) {
         // 极早期初始化没有主视口时使用逻辑像素兜底。
         ImGui::SetNextWindowSize(ImVec2(BPM_MEASURE_DEFAULT_WINDOW_WIDTH,
                                         BPM_MEASURE_DEFAULT_WINDOW_HEIGHT),
@@ -1123,6 +1129,7 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
         &m_isOpen);
 
     if ( projectTransition ) {
+        if ( m_mobilePlot.active() ) suspendMobilePlot();
         // 占位界面避免迁移过程中误触发音轨或谱面操作。
         Utils::renderProjectTransitionPlaceholder();
         return;
@@ -1144,47 +1151,51 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
          (toolFocused && input.WantTextInput && ImGui::IsAnyItemActive()) )
         beginMeasurementHistoryGesture();
 
-    const float contentWidth = ImGui::GetContentRegionAvail().x;
-    // 控制栏保持可操作宽度，剩余空间全部交给时频图。
-    const float controlsWidth =
-        std::clamp(contentWidth * 0.30f, 320.0f, 420.0f);
-    if ( ImGui::BeginTable("##BpmMeasureLayout",
-                           2,
-                           ImGuiTableFlags_Resizable |
-                               ImGuiTableFlags_SizingStretchProp |
-                               ImGuiTableFlags_BordersInnerV) ) {
-        ImGui::TableSetupColumn(
-            "##Analysis", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-        ImGui::TableSetupColumn(
-            "##Controls", ImGuiTableColumnFlags_WidthFixed, controlsWidth);
+    if ( !workspaceAllowsHoverFeedback() ) {
+        renderMobilePanel(sourceManager);
+    } else {
+        const float contentWidth = ImGui::GetContentRegionAvail().x;
+        // 控制栏保持可操作宽度，剩余空间全部交给时频图。
+        const float controlsWidth =
+            std::clamp(contentWidth * 0.30f, 320.0f, 420.0f);
+        if ( ImGui::BeginTable("##BpmMeasureLayout",
+                               2,
+                               ImGuiTableFlags_Resizable |
+                                   ImGuiTableFlags_SizingStretchProp |
+                                   ImGuiTableFlags_BordersInnerV) ) {
+            ImGui::TableSetupColumn(
+                "##Analysis", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+            ImGui::TableSetupColumn(
+                "##Controls", ImGuiTableColumnFlags_WidthFixed, controlsWidth);
 
-        ImGui::TableNextRow();
-        ImGui::TableNextColumn();
-        if ( ImGui::BeginChild("##BpmMeasureAnalysisChild",
-                               ImVec2(0.0f, 0.0f),
-                               ImGuiChildFlags_None,
-                               ImGuiWindowFlags_NoScrollbar |
-                                   ImGuiWindowFlags_NoScrollWithMouse) ) {
-            // 分析画布自行处理缩放和拖动，禁用 ImGui 子窗口滚轮滚动。
-            renderAnalysisPanel();
-        }
-        ImGui::EndChild();
-        ImGui::TableNextColumn();
-        {
-            // 右栏内容可纵向滚动，局部样式保证滚动条适配 DPI。
-            Utils::VerticalScrollbarStyleScope scrollbarStyle(dpiScale);
-            if ( ImGui::BeginChild("##BpmMeasureControlsChild",
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            if ( ImGui::BeginChild("##BpmMeasureAnalysisChild",
                                    ImVec2(0.0f, 0.0f),
                                    ImGuiChildFlags_None,
-                                   ImGuiWindowFlags_AlwaysVerticalScrollbar) ) {
-                renderControlPanel(sourceManager);
+                                   ImGuiWindowFlags_NoScrollbar |
+                                       ImGuiWindowFlags_NoScrollWithMouse) ) {
+                // 分析画布自行处理缩放和拖动，禁用 ImGui 子窗口滚轮滚动。
+                renderAnalysisPanel();
             }
             ImGui::EndChild();
+            ImGui::TableNextColumn();
+            {
+                // 右栏内容可纵向滚动，局部样式保证滚动条适配 DPI。
+                Utils::VerticalScrollbarStyleScope scrollbarStyle(dpiScale);
+                if ( ImGui::BeginChild(
+                         "##BpmMeasureControlsChild",
+                         ImVec2(0.0f, 0.0f),
+                         ImGuiChildFlags_None,
+                         ImGuiWindowFlags_AlwaysVerticalScrollbar) ) {
+                    renderControlPanel(sourceManager);
+                }
+                ImGui::EndChild();
+            }
+
+            ImGui::EndTable();
         }
-
-        ImGui::EndTable();
     }
-
     renderAutoApplyOffsetPopup(sourceManager);
     renderApplyTimingPopup(sourceManager);
 
@@ -1194,7 +1205,8 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
     // 鼠标在画布外释放也允许结束事务，不要求结束帧仍悬浮工具。
     if ( !Interaction::mouseDown(ImGuiMouseButton_Left) &&
          !ImGui::IsAnyItemActive() && !m_isBeatMarkerDragging &&
-         !m_isPlaybackCursorDragging && !m_isTimelinePanning )
+         !m_isPlaybackCursorDragging && !m_isTimelinePanning &&
+         !m_mobilePlot.active() )
         finishMeasurementHistoryGesture();
 
     if ( m_isOpen && sourceManager && !m_walkthroughTarget.empty() ) {
@@ -1211,6 +1223,7 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
     }
 
     if ( !m_isOpen ) {
+        suspendMobilePlot();
         // 关闭是明确提交点：立即保存偏好并释放独立试听轨。
         flushUserPreferences(true);
         Audio::AudioManager::instance().unloadAuditionTrack();
@@ -2137,12 +2150,28 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
 }
 
 /// @brief 绘制自动测偏移后的应用确认弹窗。
+/// @param sourceManager 向导遮罩的当前帧宿主；普通测量时允许为空。
 /// @note 此弹窗只确认是否进入目标谱面选择，不直接写入任何会话。
 /// @details 打开请求来自后台结果消费阶段，实际 OpenPopup 延迟到 UI 绘制。
 /// “应用”只排队打开下一层目标选择；“取消”保留工具内测量结果供继续调整。
 void BpmMeasurementToolView::renderAutoApplyOffsetPopup(
     UIManager* sourceManager)
 {
+    // 确认流程位于参数子窗口之外，需独立保留移动控件的 48dp 命中高度。
+    // 样式仅覆盖本层及嵌套确认框，退出函数后不影响其它业务窗口。
+    // 桌面完全保留原来的按钮与标题栏尺寸，不按移动 DPI 放大。
+    const bool  mobile = !workspaceAllowsHoverFeedback();
+    const float scale =
+        mobile ? Config::AppConfig::instance().getWindowContentScale() : 1.0f;
+    if ( mobile ) {
+        const auto padding = ImGui::GetStyle().FramePadding;
+        ImGui::PushStyleVar(
+            ImGuiStyleVar_FramePadding,
+            ImVec2(padding.x,
+                   std::max(padding.y,
+                            (48.0f * scale - ImGui::GetFontSize()) * .5f)));
+    }
+
     const char* popupTitle = TR("ui.tools.bpm_measure.auto_apply_title").data();
     if ( m_shouldOpenAutoApplyPopup ) {
         // OpenPopup 必须在绘制线程触发，后台结果通过布尔请求延迟到此处。
@@ -2156,7 +2185,7 @@ void BpmMeasurementToolView::renderAutoApplyOffsetPopup(
         ImGui::TextWrapped(
             "%s", TR("ui.tools.bpm_measure.auto_apply_message").data());
         ImGui::Spacing();
-        const float buttonWidth = 120.0f;
+        const float buttonWidth = 120.0f * scale;
         if ( !m_applyValidationError.empty() ) {
             // 状态栏处于确认框背后；在本弹窗内呈现失败原因并保留重试入口。
             // 不自动清除用户的目标选择和保速选项，允许修正条件后再次确认。
@@ -2181,14 +2210,32 @@ void BpmMeasurementToolView::renderAutoApplyOffsetPopup(
                 m_walkthroughTarget);
         ImGui::EndPopup();
     }
+    // 即使弹窗本帧尚未打开也配对恢复，避免空闲帧污染全局 FramePadding。
+    if ( mobile ) ImGui::PopStyleVar();
 }
 
 /// @brief 绘制将测量结果应用到已打开谱面的弹窗。
+/// @param sourceManager 仅用于上报本帧确认框几何，不持有编辑会话所有权。
 /// @warning UI 热路径：弹窗打开时按会话快照重建候选列表，不持有会话所有权。
 /// @details 弹窗持续验证先前选择的会话索引；目标失效时回退首个候选，
 /// 所有候选消失时禁用应用按钮。真正修改通过可撤销命令提交。
 void BpmMeasurementToolView::renderApplyTimingPopup(UIManager* sourceManager)
 {
+    // 确认流程位于参数子窗口之外，需独立保留移动控件的 48dp 命中高度。
+    // 样式仅覆盖本层及嵌套确认框，退出函数后不影响其它业务窗口。
+    // 桌面完全保留原来的按钮与标题栏尺寸，不按移动 DPI 放大。
+    const bool  mobile = !workspaceAllowsHoverFeedback();
+    const float scale =
+        mobile ? Config::AppConfig::instance().getWindowContentScale() : 1.0f;
+    if ( mobile ) {
+        const auto padding = ImGui::GetStyle().FramePadding;
+        ImGui::PushStyleVar(
+            ImGuiStyleVar_FramePadding,
+            ImVec2(padding.x,
+                   std::max(padding.y,
+                            (48.0f * scale - ImGui::GetFontSize()) * .5f)));
+    }
+
     const char* popupTitle =
         TR("ui.tools.bpm_measure.apply_popup_title").data();
     if ( m_shouldOpenApplyTimingPopup ) {
@@ -2230,7 +2277,7 @@ void BpmMeasurementToolView::renderApplyTimingPopup(UIManager* sourceManager)
             }
 
             ImGui::Text("%s", TR("ui.tools.bpm_measure.apply_target").data());
-            ImGui::SetNextItemWidth(360.0f);
+            ImGui::SetNextItemWidth(360.0f * scale);
             if ( ::MMM::UI::FeedbackBeginCombo("##BpmApplyTarget",
                                                preview.c_str()) ) {
                 for ( const auto& option : options ) {
@@ -2258,7 +2305,7 @@ void BpmMeasurementToolView::renderApplyTimingPopup(UIManager* sourceManager)
         }
 
         ImGui::Spacing();
-        const float buttonWidth = 120.0f;
+        const float buttonWidth = 120.0f * scale;
         if ( options.empty() ) {
             // 没有目标时禁用应用按钮，但仍允许用户取消弹窗。
             ImGui::BeginDisabled();
@@ -2292,7 +2339,7 @@ void BpmMeasurementToolView::renderApplyTimingPopup(UIManager* sourceManager)
                  ImGuiWindowFlags_AlwaysAutoResize) ) {
             ImGui::TextWrapped(
                 "%s", TR("ui.tools.bpm_measure.reference_required").data());
-            ImGui::SetNextItemWidth(240.0f);
+            ImGui::SetNextItemWidth(240.0f * scale);
             FeedbackDragFloat(TR("ui.tools.bpm_measure.reference_bpm").data(),
                               &m_applyReferenceBpm,
                               0.1f,
@@ -2319,6 +2366,8 @@ void BpmMeasurementToolView::renderApplyTimingPopup(UIManager* sourceManager)
         if ( referenceApplied ) ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
+    // 即使弹窗本帧尚未打开也配对恢复，避免空闲帧污染全局 FramePadding。
+    if ( mobile ) ImGui::PopStyleVar();
 }
 
 /// @brief 绘制试听播放、暂停、进度和倍速控制。
@@ -2478,6 +2527,295 @@ void BpmMeasurementToolView::renderPlaybackControls()
     }
 }
 
+/// @brief 移动图表的触摸捕获与桌面鼠标状态共同结束。
+/// @details 此处没有从音频后端读取状态，结束成本只与当前测量历史有关。
+/// 已修改的 Timing 草稿保留，未发生数据变化的浏览由历史层自动忽略。
+/// 拍点 owner 与拖动模式一起释放，不能留下半个有效的段落索引。
+/// 下次进入图表时必须等新的原始 Down，不接受旧触点经过窗口边缘。
+/// 图表不向系统请求独占三指手势，第三指仍由平台正常处理。
+/// 控制器不控制声音设备，暂停和停止仍由播放工具的现有路由完成。
+/// 关闭测量窗口时独立试听轨由 update 的既有收尾路径卸载。
+/// 参数页数值弹窗不共享这套图表捕获，取消精调不会修改图表的最后合法值。
+/// 操作方案切换不能将触控的虚拟鼠标按下状态接续为经典拖线。
+/// @details 仅封锁本工具已观察到的代际，不取消其它窗口的全局触摸。
+/// 分页后同一次抬手不能再次命中图表，既有合法拍点则保留在本地历史。
+void BpmMeasurementToolView::suspendMobilePlot()
+{
+    m_mobilePlot.suspend(Graphic::mobileTouchSnapshot().m_epoch);
+    m_mobilePlotResult = {};
+    // 图表模式切换没有音频 Scrub 状态，不能补发另一路由的 Seek。
+    // 本地历史收尾只比较 Timing，不把视野变化变成可撤销的数据修改。
+    m_isBeatMarkerDragging = false;
+    m_beatMarkerDragOwner  = 0;
+    m_beatMarkerDragMode   = BeatMarkerDragMode::None;
+    m_isTimelinePanning    = false;
+    finishMeasurementHistoryGesture();
+}
+
+/// @brief 窄屏图表与长参数表分开呈现，避免桌面固定宽右栏挤掉图表。
+/// @param sourceManager 参数页应用 Timing 时沿用的 UI 命令宿主。
+/// @details 分页不是另一个测量器，两个页面访问相同音轨和 Timing 草稿。
+/// 图表页面只保留连续操作入口，自动测量与目标选择仍在参数页。
+/// 改变页面不会自动应用到谱面，只有原确认流程可以提交正式修改。
+/// 图表和参数的显式按钮复用公共反馈设施，不维护额外音效状态。
+/// 移动布局由外壳能力决定，不依赖当前是否接入鼠标。
+/// 图表输入则由活动操作方案决定，两种能力不能互相替代。
+/// 页签和工具模式不写入项目配置，重新打开不会污染用户谱面。
+/// @warning 每帧只计算当前页几何；无指针输入时不建立测量历史副本。
+/// @details 模式、帮助和历史始终可见；数值精调继续使用公共应用／取消流程。
+void BpmMeasurementToolView::renderMobilePanel(UIManager* sourceManager)
+{
+    const float gap   = ImGui::GetStyle().ItemSpacing.x;
+    const float scale = Config::AppConfig::instance().getWindowContentScale();
+    const float width = ImGui::GetContentRegionAvail().x;
+    // 两个页签均分当前安全窗口的内容宽度，不使用桌面固定 320px 控制栏。
+    // 间距只扣一次，旋转和高 DPI 缩放后仍保持页签在内容边界以内。
+    const float half   = std::max(1.0f, (width - gap) * .5f);
+    const float height = std::max(48.0f * scale, ImGui::GetFrameHeight());
+    /// @brief 公共反馈按钮保留桌面构建可链接性，移动端显式给定 48dp 命中高度。
+    const auto button =
+        [](const char* label, ImVec2 size, bool selected = false) {
+            return FeedbackSelectableButton(label, selected, size);
+        };
+    // 分页按钮高度与手指命中一致；翻页只改变展示，不提交任何测量结果。
+    if ( button("图表###BpmPlotPage", { half, height }, !m_mobileParameters) ) {
+        suspendMobilePlot();
+        m_mobileParameters = false;
+    }
+    ImGui::SameLine();
+    if ( button("参数与应用###BpmParameterPage",
+                { half, height },
+                m_mobileParameters) ) {
+        suspendMobilePlot();
+        m_mobileParameters = true;
+    }
+    // 长表单与不可滚动图表不共用纵向滚动父窗口。
+    // 参数页内的数值长按会打开独立草稿，后台图表不处理该次手指释放。
+    // 切换页签已调用 suspend，因此隐藏的 owner 不会长期抑制播放跟随。
+    if ( m_mobileParameters ) {
+        // 控制栏已有音轨、自动测量、段落和目标选择，保持原业务调用顺序。
+        // 子窗口承担纵向滚动，公共精调弹窗负责键盘避让和草稿取消。
+        Utils::VerticalScrollbarStyleScope scrollbarStyle(scale);
+        if ( ImGui::BeginChild("##BpmMobileParameters",
+                               {},
+                               ImGuiChildFlags_None,
+                               ImGuiWindowFlags_AlwaysVerticalScrollbar) ) {
+            // 长表单允许纵向滚动，每个输入行仍需维持独立的 48dp 命中高度。
+            // 只增大当前参数页的 FramePadding，不修改持久化主题或桌面工具。
+            // 拍长、首拍和倍速继续使用原反馈控件与公共精调，不另造数据草稿。
+            // 图表区域没有此样式，坐标轴不会因表单命中区变高而再次挤压波形。
+            const auto padding = ImGui::GetStyle().FramePadding;
+            ImGui::PushStyleVar(
+                ImGuiStyleVar_FramePadding,
+                ImVec2(padding.x,
+                       std::max(padding.y,
+                                (height - ImGui::GetFontSize()) * .5f)));
+            renderControlPanel(sourceManager);
+            ImGui::PopStyleVar();
+        }
+        ImGui::EndChild();
+        return;
+    }
+    // 操作按钮按三列排布；每个按钮的高度独立于标签字符数量。
+    // 播放按钮放在第一排，历史按钮放在第二排，避免向下滚动才能撤销。
+    const float third = std::max(1.0f, (width - gap * 2) / 3);
+    // 模式、图种与播放共用一行，不再增加一行页签压缩横屏图表高度。
+    const float fourth = std::max(1.0f, (width - gap * 3) / 4);
+    // 触控方案下显式区分浏览与拍点修改，手指经过密集拍线不会意外改速。
+    // 接入鼠标后的经典方案仍走原鼠标图表逻辑，移动布局本身不随之消失。
+    const bool touch = Interaction::activeProfile().touchGestures();
+    // 经典鼠标模式下禁用触控专属模式选择，但保留播放和历史按钮。
+    // 不因为布局仍是移动外壳而吞掉鼠标的原有拖线和滚轮行为。
+    ImGui::BeginDisabled(!touch);
+    if ( button(
+             "浏览 / 缩放###BpmBrowse", { fourth, height }, !m_mobileEdit) ) {
+        suspendMobilePlot();
+        m_mobileEdit = false;
+    }
+    ImGui::SameLine();
+    if ( button("调整拍点###BpmEditBeats", { fourth, height }, m_mobileEdit) ) {
+        suspendMobilePlot();
+        m_mobileEdit = true;
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    // 一次只展示一张可操作的图，高 DPI 坐标轴不能占满半张波形图。
+    // 切图保留共享秒域视野和全部测量草稿，只封锁旧触点的剩余抬手。
+    if ( button(m_mobileSpectrum ? "切换到波形###BpmGraphKind"
+                                 : "切换到频谱###BpmGraphKind",
+                { fourth, height }) ) {
+        suspendMobilePlot();
+        m_mobileSpectrum = !m_mobileSpectrum;
+    }
+    ImGui::SameLine();
+    // 以常驻文字提供试听入口，不要求理解只有悬浮解释的播放图标。
+    ImGui::BeginDisabled(m_selectedAudioTrackId.empty());
+    if ( button("播放 / 暂停###BpmTouchPlay", { fourth, height }) )
+        togglePlaybackFromShortcut();
+    ImGui::EndDisabled();
+    // 首拍沿用当前中心的精确秒值，可先轻点定位、再用参数页精调。
+    // 这是独立显式动作，不把连续浏览或双击当成数据修改。
+    // 音轨未分析出合法时长时不给首拍按钮提交默认零值。
+    // 点击首拍的事务明确独立成条，即使此前有尚未结束的图表捕获。
+    // 不读取播放后端的迟到快照，用户看到的中心就是本次提交的秒值。
+    ImGui::BeginDisabled(playbackCanvasDuration() <= 0);
+    if ( button("中心设为首拍###BpmTouchFirst", { third, height }) ) {
+        suspendMobilePlot();
+        beginMeasurementHistoryGesture();
+        m_firstBeatTime = m_viewCenter;
+        syncPrimaryTimingFieldsToSegments();
+        finishMeasurementHistoryGesture();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    // 撤销仅针对测量草稿，不调用主谱面的物件历史。
+    // 导航没有数据修改，因此浏览之后仍能重做上一笔 BPM 调整。
+    ImGui::BeginDisabled(!canUndoMeasurement());
+    if ( button(TR("ui.edit.undo").data(), { third, height }) ) {
+        suspendMobilePlot();
+        undoMeasurementFromShortcut();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!canRedoMeasurement());
+    if ( button(TR("ui.edit.redo").data(), { third, height }) ) {
+        suspendMobilePlot();
+        redoMeasurementFromShortcut();
+    }
+    ImGui::EndDisabled();
+    // 提示依模式常驻，禁止手指按住后反复生成 Tooltip 或弹窗音效。
+    if ( touch )
+        ImGui::TextWrapped(
+            "%s",
+            m_mobileEdit
+                ? "拖红线移动段落起点，拖其它整拍调整 BPM；长按参数可精调。"
+                : "轻点定位，单指拖动浏览，双指缩放；修改拍点请切换模式。");
+    else
+        ImGui::TextWrapped(
+            "%s",
+            "鼠标模式：拖拍线调整，Ctrl+滚轮缩放；参数页提供精调与应用。");
+    // 图表获得分页工具条以外的全部剩余高度，两个图表使用同一视野。
+    if ( ImGui::BeginChild("##BpmMobilePlots",
+                           {},
+                           ImGuiChildFlags_None,
+                           ImGuiWindowFlags_NoScrollbar |
+                               ImGuiWindowFlags_NoScrollWithMouse) )
+        renderAnalysisPanel();
+    ImGui::EndChild();
+    if ( !touch && m_mobilePlot.active() ) suspendMobilePlot();
+}
+
+/// @brief 把有限原始触点转换为本地浏览或既有拍点编辑输入。
+/// @param minimum 波形绘图区或频谱实际图像的左上角。
+/// @param maximum 对应右下角，不包括坐标轴和标题。
+/// @param start 本帧绘制已经采用的左侧画布时间。
+/// @param end 本帧绘制已经采用的右侧画布时间。
+/// @param hovered ImGui 对图层遮挡和弹窗完成裁决后的起点许可。
+/// @param owner 波形和频谱的固定区域编号。
+/// @details 输入状态机只产生标量，不知道当前是编辑器同步还是独立试听。
+/// 因而不能直接复用只向主谱面发命令的音频资源图表控制器。
+/// 轻点定位经既有视觉偏移入口转换，频谱的 FFT 显示偏移不参与播放。
+/// 拍点编辑经原有处理器保持多段 Timing 的邻接约束和 BPM 合法范围。
+/// 整笔编辑结束时统一提交本地历史，取消也保留已经展示的合法结果。
+/// @warning 每张可见图每帧执行；不加载音频、不发布后台分析任务。
+/// @details 波形与频谱的 owner 固定到全抬，跨区移动不能抢走归属。
+void BpmMeasurementToolView::handleMobilePlot(const ImVec2& minimum,
+                                              const ImVec2& maximum,
+                                              double start, double end,
+                                              bool hovered, int owner)
+{
+    const auto& raw   = Graphic::mobileTouchSnapshot();
+    const float scale = Config::AppConfig::instance().getWindowContentScale();
+    // 弹窗出现时结束底层输入；关闭后同一代际的旧 Up 不能再编辑拍点。
+    // 取消仅影响本工具，不能清掉弹窗或其它窗口的全局原始触点。
+    if ( ImGui::IsPopupOpen(
+             nullptr,
+             ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) ) {
+        if ( m_mobilePlot.active() ) suspendMobilePlot();
+        return;
+    }
+    bool originAllowed = hovered;
+    if ( raw.m_epoch != m_mobilePlot.epoch() ) {
+        // 快速换手可能没有独立 Up 绘制帧，先提交上一笔再建立新的历史起点。
+        if ( m_isBeatMarkerDragging ) {
+            m_isBeatMarkerDragging = false;
+            m_beatMarkerDragOwner  = 0;
+            m_beatMarkerDragMode   = BeatMarkerDragMode::None;
+            finishMeasurementHistoryGesture();
+        }
+        // 原始 Down/Up 可能在一帧内完成，而公共滚动层会推迟合成鼠标位置。
+        // 首次认领按原始落点裁决图层，不能因旧鼠标仍在按钮上而吞掉轻点。
+        // 仅在新代际做一次窗口命中，不在每帧或每个 Move 遍历窗口。
+        // 采用 ImGui 原生遮挡规则，前景浮窗不能被矩形命中绕过。
+        // 不修改 MousePos、HoveredWindow 或修饰键，其它控件保持独立输入。
+        const auto   display = ImGui::GetIO().DisplaySize;
+        const ImVec2 origin{ raw.m_originX * display.x,
+                             raw.m_originY * display.y };
+        ImGuiWindow* hit{};
+        ImGuiWindow* underMoving{};
+        // 原生查询借用上一帧窗口树，移动或隐藏后的投影仍由控制器的几何守卫拒绝。
+        // 查询结果只在本次起点判定使用，不跨帧持有窗口生命周期。
+        ImGui::FindHoveredWindowEx(origin, false, &hit, &underMoving);
+        auto* current = ImGui::GetCurrentWindow();
+        originAllowed = hit && hit == current &&
+                        !(current->Flags & ImGuiWindowFlags_NoMouseInputs) &&
+                        ImGui::IsWindowContentHoverable(current, 0);
+    }
+    m_mobilePlotResult =
+        m_mobilePlot.update(raw,
+                            { .m_min        = minimum,
+                              .m_max        = maximum,
+                              .m_display    = ImGui::GetIO().DisplaySize,
+                              .m_center     = m_viewCenter,
+                              .m_zoom       = m_zoomSeconds,
+                              .m_duration   = playbackCanvasDuration(),
+                              .m_slop       = 8.0f * scale,
+                              .m_owner      = owner,
+                              .m_frame      = ImGui::GetFrameCount(),
+                              .m_generation = Interaction::profileGeneration(),
+                              .m_hovered    = originAllowed,
+                              .m_edit       = m_mobileEdit });
+    const auto& event = m_mobilePlotResult;
+    // 同帧第二张图只会得到空输出，不能把第一张图更新的中心改回旧值。
+    // 导航的脏标记仅合并偏好保存，不推迟本地视野的即时更新。
+    // 按住手指时播放跟随被 active 抑制，避免两个来源争夺中心。
+    if ( event.m_navigation ) {
+        // 浏览只改变共享视野；不调用 AudioPlotTouch 的主谱面 Seek 路由。
+        m_viewCenter  = event.m_center;
+        m_zoomSeconds = event.m_zoom;
+        markUserPreferencesChanged(false, true);
+    }
+    // 轻点完成前不 Seek，移动达到阈值后即永久退出本代轻点分支。
+    // 手指从图表外开始、第三指加入或系统取消时均没有 tapped 输出。
+    // 两种图表都使用已显示的秒域，而不是未施加视觉偏移的 PCM 时间。
+    if ( event.m_tapped && !m_mobileEdit ) {
+        // 正常抬手后才定位；系统取消、双指或从外部移入均不会触发。
+        const double ratio =
+            std::clamp<double>((event.m_point.x - minimum.x) /
+                                   std::max(1.0f, maximum.x - minimum.x),
+                               0.0,
+                               1.0);
+        seekPlaybackToCanvasTime(start + ratio * (end - start));
+        markUserPreferencesChanged(false, true);
+    }
+    if ( m_mobileEdit && (event.m_pressed || event.m_down || event.m_moved) ) {
+        // 拍点业务保持原边界、网格吸附和 BPM 反算；仅替换输入来源。
+        // 按下事务跨所有移动帧，最终一次 Up 仍使用正常释放位置。
+        if ( event.m_pressed ) beginMeasurementHistoryGesture();
+        handleBeatMarkerDrag(minimum, maximum, start, end, true, owner);
+    }
+    // 系统 Cancel 的结果没有 moved，因此不会先经过上面的拍点输入处理。
+    // 正常 Up 可带最后的 moved 坐标，先更新合法值再释放所有者。
+    // history 比较结果自行剔除静止轻点，不清空用户已有的 redo。
+    if ( event.m_finished ) {
+        // Cancel 不回滚已经展示的合法值，也不读取取消坐标补一次修改。
+        m_isBeatMarkerDragging = false;
+        m_beatMarkerDragOwner  = 0;
+        m_beatMarkerDragMode   = BeatMarkerDragMode::None;
+        finishMeasurementHistoryGesture();
+    }
+}
+
 /// @brief 绘制左侧波形和频谱面板。
 /// @warning UI 热路径：每帧计算布局并调用三个内存绘制入口。
 /// @details 波形和频谱共享时间中心与缩放，中间的全局滚动条用于长距离导航；
@@ -2493,6 +2831,28 @@ void BpmMeasurementToolView::renderAnalysisPanel()
     // 跟随逻辑先更新中心点，使本帧波形和频谱使用一致视野。
     followPlaybackIfNeeded();
 
+    if ( !workspaceAllowsHoverFeedback() ) {
+        // 工具条上切换图种，不增加占高度的第二排图表页签。
+        // 全局定位由参数页的播放位置、视图中心及首拍居中控件继续提供。
+        // 本页只保留完整绘图区域，触摸不会误落到窄小的桌面总览滚动条。
+        // 波形和频谱仍引用同一中心与半窗，切换不会丢失缩放锚点。
+        ImGui::Text("%s",
+                    TR(m_mobileSpectrum ? "ui.tools.bpm_measure.spectrum"
+                                        : "ui.tools.bpm_measure.waveform")
+                        .data());
+        // 剩余高度包含图表自身坐标轴，标题已经在上一条 Text 中扣除。
+        // 不按 DPI 再次放大图表高度，避免把逻辑可用空间误当成设计像素。
+        // 空间退化时最小一像素只供隐藏帧安全收尾，正常手机由完整单图获得高度。
+        const ImVec2 graphSize{
+            avail.x, std::max(1.0f, ImGui::GetContentRegionAvail().y)
+        };
+        if ( m_mobileSpectrum )
+            renderSpectrumImage(graphSize);
+        else
+            renderWaveformPlot(graphSize);
+        return;
+    }
+
     ImGui::Text("%s", TR("ui.tools.bpm_measure.waveform").data());
     const float textH    = ImGui::GetTextLineHeightWithSpacing();
     const float spacingY = ImGui::GetStyle().ItemSpacing.y;
@@ -2502,7 +2862,7 @@ void BpmMeasurementToolView::renderAnalysisPanel()
     const float contentHeight = std::max(
         0.0f, avail.y - textH * 2.0f - overviewHeight - spacingY * 3.0f);
     // 波形约占可用区域四成，频谱获得余下空间并各自保留最低高度。
-    const float waveHeight = std::max(120.0f, contentHeight * 0.42f);
+    const float waveHeight = std::max(120.0f, contentHeight * .42f);
     const float specHeight = std::max(160.0f, contentHeight - waveHeight);
 
     renderWaveformPlot(ImVec2(avail.x, waveHeight));
@@ -2663,9 +3023,9 @@ void BpmMeasurementToolView::renderOverviewTimelineScrollbar(const ImVec2& size)
 /// 暂停状态保持用户视野不变，只有实际播放且画布时长有效时更新中心。
 void BpmMeasurementToolView::followPlaybackIfNeeded()
 {
-    if ( m_isTimelinePanning || m_isOverviewTimelineDragging ||
-         m_isPlaybackCursorDragging || m_isBeatMarkerDragging ||
-         !isSelectedTrackLoadedForPlayback() ) {
+    if ( m_mobilePlot.active() || m_isTimelinePanning ||
+         m_isOverviewTimelineDragging || m_isPlaybackCursorDragging ||
+         m_isBeatMarkerDragging || !isSelectedTrackLoadedForPlayback() ) {
         // 任意显式拖动优先于自动跟随，避免视图与鼠标争夺控制权。
         return;
     }
@@ -2759,8 +3119,8 @@ void BpmMeasurementToolView::updateMetronomePlayback()
         std::abs(m_metronomeScheduledBeatLength - activeBeatLength) > 1e-9;
     // 超过两拍或逆向移动视为 seek，不能沿用连续播放游标。
     const double jumpThreshold = std::max(0.25, activeBeatLength * 2.0);
-    const bool   jumped        = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
-                        audioTime - m_lastMetronomeAudioTime > jumpThreshold;
+    const bool   jumped = audioTime + 1e-4 < m_lastMetronomeAudioTime ||
+                          audioTime - m_lastMetronomeAudioTime > jumpThreshold;
     // 修改视觉偏移使未来预约失效，不能让旧时间的一拍与新时间的一拍同时响。
     // 只清除本工具的两个音效池，不改动歌曲 transport 或其他编辑器音效。
     if ( m_metronomeScheduleInitialized && (gridChanged || jumped) ) {
@@ -2863,7 +3223,7 @@ bool BpmMeasurementToolView::ensureMetronomeSoundEffects()
     // 皮肤可分别覆盖普通拍和重拍音效；缺项时回退内置资源路径。
     const auto& skinData         = Config::SkinManager::instance().getData();
     auto        resolveAudioPath = [&](const char*                  key,
-                                const std::filesystem::path& fallback) {
+                                       const std::filesystem::path& fallback) {
         if ( const auto it = skinData.audioPaths.find(key);
              it != skinData.audioPaths.end() ) {
             // 皮肤表记录的路径已经由 SkinManager 解析为文件系统路径。
@@ -3056,21 +3416,29 @@ void BpmMeasurementToolView::renderWaveformPlot(const ImVec2& size)
             *ImGui::GetWindowDrawList(), plotMin, plotMax, viewStart, viewEnd);
         const bool interactionHovered = ImPlot::IsPlotHovered();
         // 播放游标优先于拍点拖动；各处理器通过共享状态避免争抢。
-        handlePlaybackCursorDrag(
-            plotMin, plotMax, viewStart, viewEnd, interactionHovered, 1);
-        handleBeatMarkerDrag(
-            plotMin, plotMax, viewStart, viewEnd, interactionHovered, 1);
-        handleTimelineNavigation(
-            plotMin, plotMax, viewStart, viewEnd, interactionHovered);
+        if ( !workspaceAllowsHoverFeedback() &&
+             Interaction::activeProfile().touchGestures() ) {
+            handleMobilePlot(
+                plotMin, plotMax, viewStart, viewEnd, interactionHovered, 1);
+        } else {
+            handlePlaybackCursorDrag(
+                plotMin, plotMax, viewStart, viewEnd, interactionHovered, 1);
+            handleBeatMarkerDrag(
+                plotMin, plotMax, viewStart, viewEnd, interactionHovered, 1);
+            handleTimelineNavigation(
+                plotMin, plotMax, viewStart, viewEnd, interactionHovered);
+        }
         ImPlot::PopPlotClipRect();
 
-        if ( interactionHovered ) {
+        if ( interactionHovered &&
+             !Interaction::activeProfile().touchGestures() ) {
             // 悬停时间由 ImPlot 坐标直接提供，避免重复像素转换。
             ImPlotPoint  mousePos  = ImPlot::GetPlotMousePos();
             const double hoverTime = std::clamp<double>(
                 mousePos.x, 0.0, std::max(0.0, canvasDuration));
-            ImGui::SetTooltip(
-                "%s", MMM::UI::Utils::formatCanvasTime(hoverTime).c_str());
+            if ( workspaceAllowsHoverFeedback() )
+                ImGui::SetTooltip(
+                    "%s", MMM::UI::Utils::formatCanvasTime(hoverTime).c_str());
             if ( Interaction::mouseDoubleClicked(ImGuiMouseButton_Left) ) {
                 // 双击是快速设置基准首拍入口，并同步到第一 Timing 段。
                 m_firstBeatTime = hoverTime;
@@ -3134,9 +3502,9 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
             const double intersectStart = std::max(texStart, pixelStart);
             const double intersectEnd   = std::min(texEnd, pixelEnd);
             const float  uv0x = static_cast<float>((intersectStart - texStart) /
-                                                  texture->width());
+                                                   texture->width());
             const float  uv1x = static_cast<float>((intersectEnd - texStart) /
-                                                  texture->width());
+                                                   texture->width());
             const float  screenX0 =
                 imageMin.x + static_cast<float>((intersectStart - pixelStart) /
                                                 pixelWidth * size.x);
@@ -3168,13 +3536,19 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
         ImVec2(imageMax.x - imageMin.x, imageMax.y - imageMin.y));
     const bool isSpectrumHovered = ImGui::IsItemHovered();
     // 使用不同区域 ID 让跨波形、频谱拖动时能识别当前命中来源。
-    handlePlaybackCursorDrag(
-        imageMin, imageMax, viewStart, viewEnd, isSpectrumHovered, 2);
-    handleBeatMarkerDrag(
-        imageMin, imageMax, viewStart, viewEnd, isSpectrumHovered, 2);
-    handleTimelineNavigation(
-        imageMin, imageMax, viewStart, viewEnd, isSpectrumHovered);
-    if ( isSpectrumHovered ) {
+    if ( !workspaceAllowsHoverFeedback() &&
+         Interaction::activeProfile().touchGestures() ) {
+        handleMobilePlot(
+            imageMin, imageMax, viewStart, viewEnd, isSpectrumHovered, 2);
+    } else {
+        handlePlaybackCursorDrag(
+            imageMin, imageMax, viewStart, viewEnd, isSpectrumHovered, 2);
+        handleBeatMarkerDrag(
+            imageMin, imageMax, viewStart, viewEnd, isSpectrumHovered, 2);
+        handleTimelineNavigation(
+            imageMin, imageMax, viewStart, viewEnd, isSpectrumHovered);
+    }
+    if ( isSpectrumHovered && !Interaction::activeProfile().touchGestures() ) {
         // 频谱未使用 ImPlot，需要手工把鼠标横坐标映射为画布时间。
         const ImVec2 mousePos = ImGui::GetMousePos();
         const double relX     = std::clamp<double>(
@@ -3183,8 +3557,9 @@ void BpmMeasurementToolView::renderSpectrumImage(const ImVec2& size)
             1.0);
         const double hoverTime = std::clamp<double>(
             viewStart + relX * viewRange, 0.0, std::max(0.0, canvasDuration));
-        ImGui::SetTooltip("%s",
-                          MMM::UI::Utils::formatCanvasTime(hoverTime).c_str());
+        if ( workspaceAllowsHoverFeedback() )
+            ImGui::SetTooltip(
+                "%s", MMM::UI::Utils::formatCanvasTime(hoverTime).c_str());
         if ( Interaction::mouseDoubleClicked(ImGuiMouseButton_Left) ) {
             // 与波形保持一致的双击首拍语义。
             m_firstBeatTime = hoverTime;
@@ -3649,7 +4024,20 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(
     };
 
     // 命中扫描保留距离最近的线，解决高缩放下多个候选半径重叠。
-    const ImVec2       mousePos = ImGui::GetMousePos();
+    const bool   touch = !workspaceAllowsHoverFeedback() &&
+                         Interaction::activeProfile().touchGestures();
+    const ImVec2 mousePos =
+        touch ? m_mobilePlotResult.m_point : ImGui::GetMousePos();
+    // 移动拍点模式整条竖线保留至少 48dp 命中宽度，不改变细线外观。
+    // 命中只扩宽输入带，拍线渲染仍保持细线，不绘制覆盖音频的触摸圆圈。
+    // 多条线落入宽命中区时继续选择最近者，避免先枚举的段落抢走普通拍。
+    // 捕获后冻结段落和整拍索引，手指经过其它拍线不能切换编辑目标。
+    const float radius =
+        touch
+            ? std::max(
+                  BEAT_MARKER_LINE_PICK_RADIUS,
+                  24.0f * Config::AppConfig::instance().getWindowContentScale())
+            : BEAT_MARKER_LINE_PICK_RADIUS;
     int64_t            hoveredIndex{ 0 };
     std::size_t        hoveredSegmentIndex{ 0 };
     double             hoveredMarkerTime{ 0.0 };
@@ -3669,9 +4057,11 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(
         }
 
         const float  lineX = timeToX(markerTime);
-        const ImVec2 hitMin(lineX - BEAT_MARKER_LINE_PICK_RADIUS, rectMin.y);
-        const ImVec2 hitMax(lineX + BEAT_MARKER_LINE_PICK_RADIUS, rectMax.y);
-        if ( !ImGui::IsMouseHoveringRect(hitMin, hitMax, true) ) {
+        const ImVec2 hitMin(lineX - radius, rectMin.y);
+        const ImVec2 hitMax(lineX + radius, rectMax.y);
+        if ( touch ? (mousePos.x < hitMin.x || mousePos.x > hitMax.x ||
+                      mousePos.y < hitMin.y || mousePos.y > hitMax.y)
+                   : !ImGui::IsMouseHoveringRect(hitMin, hitMax, true) ) {
             // 水平命中半径覆盖整条竖线，垂直范围由画布矩形限制。
             return;
         }
@@ -3761,8 +4151,17 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(
         drawMarkerGlow(hoveredMarkerTime, hoveredMode);
     }
 
-    if ( hasHoveredLine && Interaction::mouseClicked(ImGuiMouseButton_Left) ) {
+    if ( hasHoveredLine &&
+         (touch ? m_mobilePlotResult.m_pressed
+                : Interaction::mouseClicked(ImGuiMouseButton_Left)) ) {
         // 捕获候选身份，后续帧不再受重新命中其他线影响。
+        if ( touch ) {
+            // 指尖可在宽命中区边缘，保存真实拍线与指尖的差值以消除按下跳变。
+            const double ratio =
+                std::clamp<double>((mousePos.x - rectMin.x) / width, 0.0, 1.0);
+            m_mobileBeatGrabOffset =
+                hoveredMarkerTime - (viewStart + ratio * (viewEnd - viewStart));
+        }
         m_isBeatMarkerDragging    = true;
         m_isTimelinePanning       = false;
         m_beatMarkerDragOwner     = ownerId;
@@ -3771,7 +4170,10 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(
         m_draggedBeatSegmentIndex = hoveredSegmentIndex;
     }
 
-    if ( !Interaction::mouseDown(ImGuiMouseButton_Left) ) {
+    if ( touch
+             ? !(m_mobilePlotResult.m_down ||
+                 (m_mobilePlotResult.m_finished && m_mobilePlotResult.m_moved))
+             : !Interaction::mouseDown(ImGuiMouseButton_Left) ) {
         if ( m_beatMarkerDragOwner == ownerId ) {
             // 鼠标在任意位置松开都结束所属区域的拖动。
             m_isBeatMarkerDragging = false;
@@ -3792,11 +4194,14 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(
         return;
     }
 
+    // 静止轻点只捕获拍线，不将微小抖动写为 BPM 历史。
+    if ( touch && !m_mobilePlotResult.m_moved ) return;
     const double rectWidth = std::max(1.0f, rectMax.x - rectMin.x);
     const double relX =
         std::clamp<double>((mousePos.x - rectMin.x) / rectWidth, 0.0, 1.0);
     // 鼠标只钳制到交互矩形；首段起点稍后可按专用规则允许负值。
-    const double targetMarkerTime = viewStart + relX * (viewEnd - viewStart);
+    const double targetMarkerTime = viewStart + relX * (viewEnd - viewStart) +
+                                    (touch ? m_mobileBeatGrabOffset : 0.0);
     const double targetBeatTime =
         std::clamp<double>(targetMarkerTime, 0.0, canvasDuration);
     auto& segment = m_timingSegments[m_draggedBeatSegmentIndex];
@@ -4067,8 +4472,8 @@ void BpmMeasurementToolView::handlePlaybackCursorDrag(
         // 限制单帧时间跨度，避免窗口恢复或调试暂停后一次越过过长距离。
         const double frameSeconds = std::clamp<double>(io.DeltaTime, 0.0, 0.1);
         const double scrollDelta  = static_cast<double>(edgeDistance) *
-                                   edgeScrollSensitivity * frameSeconds;
-        m_viewCenter = std::clamp<double>(
+                                    edgeScrollSensitivity * frameSeconds;
+        m_viewCenter              = std::clamp<double>(
             m_viewCenter + scrollDelta, 0.0, playbackCanvasDuration());
         // 边缘滚动属于用户视野选择，需要纳入持久化偏好。
         markUserPreferencesChanged(false, true);
@@ -4276,6 +4681,7 @@ void BpmMeasurementToolView::setSelectedAudioTrackId(
     const std::string& audioTrackId)
 {
     if ( m_selectedAudioTrackId != audioTrackId ) {
+        suspendMobilePlot();
         // 独立试听轨可能引用旧资源，选择切换前立即卸载。
         Audio::AudioManager::instance().unloadAuditionTrack();
     }
@@ -5319,7 +5725,7 @@ void BpmMeasurementToolView::analyzeTrack(
                 // 使用模平方比较避免循环内重复开方。
                 const double magSq = fftOutput[i][0] * fftOutput[i][0] +
                                      fftOutput[i][1] * fftOutput[i][1];
-                maxMagnitude = std::max(maxMagnitude, magSq);
+                maxMagnitude       = std::max(maxMagnitude, magSq);
             }
             // 仅峰值确定后开方并归一化到 FFT 大小，再转换为 dB。
             const double db =

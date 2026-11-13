@@ -15,8 +15,11 @@ namespace MMM::UI
 bool MobileDockLayout::isAudioAnalysisWindow(std::string_view title)
 {
     // 只接管明确支持的分析页，项目向导等独立弹窗继续由原有路径管理。
+    // BPM 测量与音频图表同属中央页签，不能成为被主画布盖住的普通浮窗。
+    // 固定后缀避免语言切换时创建第二个工具或误接管自动测量确认弹窗。
     return title.ends_with("###AudioWaveformViewGlobal") ||
-           title.ends_with("###AudioSpectrumViewGlobal");
+           title.ends_with("###AudioSpectrumViewGlobal") ||
+           title.ends_with("###BpmMeasurementTool");
 }
 
 /// @brief 从独立移动配置恢复首次分割参数，下一次提交按当前屏幕建树。

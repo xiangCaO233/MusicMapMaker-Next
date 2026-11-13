@@ -9,6 +9,7 @@
 #include "ui/ITextureLoader.h"
 #include "ui/imgui/menu/actions/tools/BpmAutoDetector.h"
 #include "ui/imgui/menu/actions/tools/BpmPlaybackRouting.h"
+#include "ui/imgui/menu/actions/tools/BpmPlotTouch.h"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -155,6 +156,27 @@ public:
     void* getActualInstance() override { return this; }
 
 private:
+    /// @brief 移动端图表与参数分页，桌面继续使用双栏。
+    /// @warning 每帧只绘制现有控件，分页时结束原始触摸捕获。
+    void renderMobilePanel(UIManager* sourceManager);
+    /// @brief 图表触摸只改变本地视野或复用原拍点／播放入口。
+    /// @warning 每张图每帧固定触点运算，不复制音频缓存或等待会话锁。
+    void handleMobilePlot(const ImVec2& minimum, const ImVec2& maximum,
+                          double start, double end, bool hovered, int owner);
+    /// @brief 分页、切轨及关闭时封锁旧手势，保留最后已显示的合法修改。
+    void suspendMobilePlot();
+    /// @brief 图表的触摸捕获与模式只属于此窗口，不写入工程。
+    BpmPlotTouch m_mobilePlot;
+    /// @brief 当前有效触摸输出供既有拍点算法消费，不合成全局鼠标事件。
+    BpmPlotTouchResult m_mobilePlotResult;
+    /// @brief 参数分页和拍点模式显式切换，浏览不会意外改变 BPM。
+    bool m_mobileParameters{}, m_mobileEdit{};
+    /// @brief 手机横屏一次显示一张完整分析图，避免高 DPI
+    /// 下两张图的坐标轴挤掉绘图区。
+    bool m_mobileSpectrum{};
+    /// @brief 宽命中区域保留抓取偏差，按下时拍点不跳到指尖。
+    double m_mobileBeatGrabOffset{};
+
     /// @brief 频谱贴图分块数据。
     struct TextureChunkData {
         /// @brief RGBA 像素数据。
