@@ -8,6 +8,7 @@
 #include "MobilePointerInputScope.h"
 #include "MobilePointerOwnership.h"
 #include "MobilePolylineNodeMenu.h"
+#include "MobileReadPress.h"
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "canvas/PlanarObservationInput.h"
 #include "common/LogicCommands.h"
@@ -46,6 +47,14 @@ public:
     {
         // 按住把手的简短说明由移动呈现绘制，避免两层提示同时遮挡画布。
         return !UI::Interaction::activeProfile().touchGestures();
+    }
+    /// @brief 批注点按或静止长按打开常驻阅读，移动与多指不打开编辑窗口。
+    /// @warning 每帧只比较触点代际与稳定目标身份，不访问会话。
+    bool annotationMenuRequested(std::uint32_t id, bool eligible) override
+    {
+        if ( !UI::Interaction::activeProfile().touchGestures() ) return false;
+        return m_annotationPress.update(id, id != 0, eligible) !=
+               MobileReadPress::Result::None;
     }
     /// @brief 等待中的手势也保有指针，防止摄像机在长按期间平移。
     bool hasGesture() const override
@@ -426,6 +435,8 @@ public:
     }
 
 private:
+    MobileReadPress
+        m_annotationPress;  ///< 批注阅读与普通画布手势各自锁存，避免合成点击穿透。
     /// @details 擦除状态只随当前画布存活，不通过 UIManager 共享给其它页签。
     /// 与公共画笔分开持有，取消本地预览不需要取得逻辑会话的所有权。
     /// @brief 配色只持有可见候选和起笔颜色；正常释放形成单条历史。

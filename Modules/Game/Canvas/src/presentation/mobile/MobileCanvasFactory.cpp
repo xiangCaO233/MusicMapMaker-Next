@@ -1,5 +1,6 @@
 #include "MobileCanvasInteractionPresentation.h"
 #include "MobileTimelineInteractionPresentation.h"
+#include "presentation/AnnotationTablePresentation.h"
 #include "presentation/CanvasInteractionPresentation.h"
 #include "presentation/TimelineInteractionPresentation.h"
 namespace MMM::Canvas
@@ -22,5 +23,10 @@ createTimelineInteractionPresentation()
 {
     // 只在画布创建时分配，热路径不重复创建状态机。
     return createMobileTimelineInteractionPresentation();
+}
+/// @brief 批注表与画布分别构造平台对象，不共享未提交编辑或触点。
+std::unique_ptr<AnnotationTablePresentation> createAnnotationTablePresentation()
+{
+    return createMobileAnnotationTablePresentation();
 }
 }  // namespace MMM::Canvas

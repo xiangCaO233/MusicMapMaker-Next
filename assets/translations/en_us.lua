@@ -1766,4 +1766,7 @@ return {
     ["ui.mobile.color.apply_history"] = "Apply Object Colors",
     ["ui.mobile.color.clear_history"] = "Clear Object Colors",
     ["ui.common.close"] = "Close",
+    ["ui.mobile.annotation.list_hint"] = "Tap to read, hold to edit; swipe to browse.",
+    ["ui.mobile.annotation.changed"] = "This annotation changed. Cancel and reopen it.",
+    ["ui.mobile.timing.table_hint"] = "Tap to select, hold to edit; swipe to browse. Selected rows can be copied, cut or deleted.",
 }

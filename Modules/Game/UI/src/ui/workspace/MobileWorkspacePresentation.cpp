@@ -98,6 +98,15 @@ public:
                m_playbackControls.blocksCanvasInput() ||
                m_dock.tabMenuOwnsPointer();
     }
+    /// @brief 辅助窗口避开常驻工具栏，关闭按钮不能被后画的工具栏遮住。
+    /// @warning 每帧读取外壳本地几何，不访问主画布或用户配置。
+    WorkspaceWindowArea floatingWindowArea() const override
+    {
+        // 保留宽度与实际工具栏使用同一标量，隐藏工具栏时自动回到全宽。
+        // 浮动窗可以覆盖工作台，不能覆盖常驻工具栏的独立输入区域。
+        return { m_origin,
+                 { std::max(1.0f, m_size.x - m_toolbarWidth), m_size.y } };
+    }
     /// @brief 手指没有悬浮状态，外壳采用按下与选中反馈。
     bool allowsHoverFeedback() const override { return false; }
     /// @brief 窄栏文字由移动布局独立绘制，避免裁掉类型名称。

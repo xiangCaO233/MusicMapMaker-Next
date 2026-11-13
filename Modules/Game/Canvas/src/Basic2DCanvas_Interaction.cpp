@@ -4769,7 +4769,9 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
         hoveredDetailIndex.value_or(m_annotationHoverDetailIndex),
         detailLinkHovered);
     // - 关闭帧继续属于批注层，不能让同一次右键或释放落到下层画笔。
-    if ( !annotationMenuHandled && hoveredMarker &&
+    const bool hoverAnnotations =
+        m_pointerPresentation->allowsHoverInspection();
+    if ( hoverAnnotations && !annotationMenuHandled && hoveredMarker &&
          !hoveredMarker->items.empty() ) {
         // 聚合标记使用首条批注 ID 作为稳定分组键；同一标记内切换详情
         // 不会错误触发整组重置。
@@ -4968,7 +4970,7 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
                 m_annotationEditor.requestOpen = true;
             }
         }
-    } else if ( !annotationMenuHandled && gutterHovered &&
+    } else if ( hoverAnnotations && !annotationMenuHandled && gutterHovered &&
                 !currentSnapshot.isPlaying &&
                 (!mouseAnnotationMenu || !hasActivePointerGesture()) &&
                 currentSnapshot.acceptsInteraction &&

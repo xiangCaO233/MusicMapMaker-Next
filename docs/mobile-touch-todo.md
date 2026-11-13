@@ -1,17 +1,59 @@
 # 移动端触屏交互 TODO
 
-更新时间：2026-11-13。继续当前分支 `feat/android-sdl3`。本机从 `809cda5d` 接回，T01／T02 核心回归及 T03 三设备核心验收已完成，历史补验边界见下文。T04～T07 均完成手机／平板模拟器验收。下一项为 **T08 批注与数据表格**。
+更新时间：2026-11-13。继续当前分支 `feat/android-sdl3`。本机已快进拉取至 `26a210f8`，接回 T03～T07；本批补齐 **T08 批注与数据表格**，核心验收及限制见下文。下一项为 **T09 预览区导航**。
 
 ## 换机接续入口
 
 - 先阅读仓库根目录 `AGENTS.md` 和本文。用户明确要求继续当前分支；保持经典桌面、纯鼠标方案和业务模型不变，一个职责一个提交，不夹带重构或公开发布。
-- 换机后先获取远端 `feat/android-sdl3`，核对 `git status`、当前分支及上述业务提交是否存在，核对本机回归及 T07 验收记录后再继续 T08；实体机按可用性单独补验。已有本地修改时先保留，不以重置或强推覆盖。
-- T02 正交结构已完成本机三设备核心回归，后续从 T08 继续；先核对已有能力，再设计触控入口。表中的“待完善”包含已有桌面功能的触控强化，不能当作这些业务功能完全不存在，也不能宣称所有候选问题都已在设备复现。
+- 换机后先获取远端 `feat/android-sdl3`，核对 `git status`、当前分支及上述业务提交是否存在，核对本机回归及 T08 验收记录后再继续 T09；实体机按可用性单独补验。已有本地修改时先保留，不以重置或强推覆盖。
+- T02 正交结构已完成本机三设备核心回归，后续从 T09 继续；先核对已有能力，再设计触控入口。表中的“待完善”包含已有桌面功能的触控强化，不能当作这些业务功能完全不存在，也不能宣称所有候选问题都已在设备复现。
 - 上一机器产物在 `/home/xiang/Android/mmm-smoke/main`，本次 Windows 产物在项目忽略目录 `build-android`；这些内容不会随普通 Git 拉取迁移；需要原始证据时单独复制，不能将备份、APK 或缓存加入源码提交。新机器重新检查 SDK／NDK／JDK、依赖、可用设备和签名；不得沿用本机 ADB 序号、路径或授权状态作为已连接证据。
 
 ## 触屏交互 TODO
 
 优先级及顺序沿用本轮讨论；每项先检查实际缺口，再按独立职责实现、验收和提交。`待完善` 不是已确认缺陷清单。
+
+### T08 批注与数据表格（2026-11-13）
+
+- 批注气泡／卡片点按或静止长按可打开常驻 Markdown 阅读菜单，保留同时间戳条目的前后切换、编辑和新增。触屏不再依赖 Hover／右键，也不把按下即视为编辑；桌面原入口保留。
+- 批注表采用可滚动摘要列表与独立正文阅读区，点按选择、长按编辑，显式跳转／编辑／删除／撤销／重做。编辑使用稳定 ID 的正文副本，确认时检查谱面实例、目标存在、写入许可及可见的源正文冲突；只更新正文，保留原作者、时间、关联物件和目标领域。没有新增批注批量删除语义；原导出功能继续共用。
+- Timing 表触屏点按按替换／追加／减选模式更新集合，滑动只浏览，不沿用鼠标范围拖选；时间和数值单元格只读，静止长按或“编辑参数”进入原参数窗。复制／剪切／删除／粘贴及历史按钮在高级折叠区外，沿用正式命令与一次历史。普通点弹窗与插值窗均独立于主时间线的显示状态。
+- 触屏窗口使用外壳发布的可用区域，避开常驻右侧工具栏；等待快照的占位窗也使用相同几何。创建工具默认折叠、常用按钮按空间同行显示，避免高 DPI 下耗尽数据区；Timing 触屏列使用独立布局 ID 与字体单位首选宽度，不继承桌面过窄列宽。摘要文本仅在数据／语言／时间格式变化时重建，不在常态帧重复格式化全表。
+- Linux 完整构建通过，最终相关 CTest **6/6**；完整套件 **198/199**，只有已登记的 `CanvasTouchNavigationTest` 失败，未修改该测试或声称修复。一次并行构建期间的 `AudioManagerTimelineIntegrationTest` 计时失败在无原生编译的完整复跑中通过。Android **x86_64／arm64-v8a** 均构建、签名校验通过；APK 中原生库与集中构建库按 ELF Build ID 匹配，AGP 去除调试信息后的字节哈希不要求相等。
+- 小屏模拟器 **1280×720／160dpi**、平板尺寸 **2560×1600／320dpi** 与 NX809J **2688×1216／沿用 442dpi** 已验证批注列表与明确操作。小屏、真机完成关联物件批注正文编辑、空作者批注删除、一次撤销／重做及整谱保存回读；平板完成批注删除／历史。Timing 小屏、平板完成两行多选删除与精确历史；真机从隐藏时间线的独立表格长按打开参数窗，修改流速并一次撤销，保存回读精确恢复。最终布局复核与清理结果记录在集中证据目录。
+- CPU 测试使用正式 ImGui、全局滚动仲裁、真实会话和命令历史，覆盖多指／Cancel、滑动不误选、空作者／物件关联、同时间戳多条、草稿取消、源正文变化拒绝覆盖、播放禁写、方案切换、主时间线隐藏后的实际模态及占位窗首次尺寸。设备操作使用 ADB 触点注入，不代表真人手感或所有系统手势场景；协作跨线程竞态仍由既有业务命令处理，不把 UI 缓存检查当成原子冲突合并。
+- 软键盘出现时可先按系统返回隐藏键盘，再按显式保存／应用；返回不自动提交。自动避让活动输入与确认按钮属于 **T11**，本批未宣称完成。批注导出格式／SAF 与 Timing 剪贴板的全部设备组合未在本批重验。
+- 产物、缓存、截图、完整谱面、备份与逐文件注释率 CSV 集中在 `/home/xiang/Android/mmm-smoke/main/evidence/t08-20261113` 及同一 `main` 工作树。模拟器仅更新独立 `.next.t01probe`，真机使用新增 `.next.t08probe`（MMM T08 Regression），不覆盖 `.next.dev` 或旧验收包；测试工程与配置均隔离，不提交 APK／缓存，不改 `.gitignore`。模拟器恢复原配置／INI（逐字节核对）及 **1080×2400／420dpi**，原有 13 份谱面字节不变，模拟器继续在线；真机新建的 `.next.t08probe` 验收后已移除，原应用与 442dpi 设置保持原样。本批保留本地提交，不自动推送或合并主线。
+
+本批逐文件 `cloc --by-file` 结果如下；翻译纯数据不计入代码。
+
+| 路径 | 注释行 | 代码行 | 注释率 |
+| --- | ---: | ---: | ---: |
+| `Modules/Game/Canvas/CMakeLists.txt` | 141 | 327 | 30.13% |
+| `Modules/Game/Canvas/include/canvas/AnnotationTableData.h` | 40 | 61 | 39.60% |
+| `Modules/Game/Canvas/include/canvas/AnnotationTableWindow.h` | 38 | 47 | 44.71% |
+| `Modules/Game/Canvas/src/AnnotationTableData.cpp` | 72 | 166 | 30.25% |
+| `Modules/Game/Canvas/src/AnnotationTableWindow.cpp` | 263 | 597 | 30.58% |
+| `Modules/Game/Canvas/src/Basic2DCanvas_AnnotationMenu.cpp` | 63 | 145 | 30.29% |
+| `Modules/Game/Canvas/src/Basic2DCanvas_Interaction.cpp` | 2024 | 4718 | 30.02% |
+| `Modules/Game/Canvas/src/TimelineCanvas.cpp` | 579 | 1337 | 30.22% |
+| `Modules/Game/Canvas/src/TimelineCanvas_Popups.cpp` | 1159 | 2694 | 30.08% |
+| `Modules/Game/Canvas/src/presentation/CanvasInteractionPresentation.h` | 43 | 69 | 38.39% |
+| `Modules/Game/Canvas/src/presentation/TimelineInteractionPresentation.h` | 77 | 102 | 43.02% |
+| `Modules/Game/Canvas/src/presentation/desktop/DesktopCanvasFactory.cpp` | 9 | 20 | 31.03% |
+| `Modules/Game/Canvas/src/presentation/mobile/MobileCanvasFactory.cpp` | 10 | 22 | 31.25% |
+| `Modules/Game/Canvas/src/presentation/mobile/MobileCanvasInteractionPresentation.cpp` | 219 | 505 | 30.25% |
+| `Modules/Game/Canvas/src/presentation/mobile/MobileTimelineInteractionPresentation.cpp` | 245 | 571 | 30.02% |
+| `Modules/Game/Canvas/tests/MouseAnnotationMenuTest.cpp` | 168 | 389 | 30.16% |
+| `Modules/Game/Canvas/tests/TimingTableMouseSelectionTest.cpp` | 218 | 496 | 30.53% |
+| `Modules/Game/UI/include/ui/workspace/IWorkspacePresentation.h` | 54 | 65 | 45.38% |
+| `Modules/Game/UI/src/ui/workspace/MobileWorkspacePresentation.cpp` | 341 | 785 | 30.28% |
+| `Modules/Game/UI/src/ui/workspace/WorkspacePresentation.cpp` | 57 | 132 | 30.16% |
+| `Modules/Game/Canvas/src/presentation/AnnotationTablePresentation.h` | 12 | 24 | 33.33% |
+| `Modules/Game/Canvas/src/presentation/mobile/MobileAnnotationTablePresentation.cpp` | 112 | 260 | 30.11% |
+| `Modules/Game/Canvas/src/presentation/mobile/MobileAuxiliaryWindow.h` | 10 | 23 | 30.30% |
+| `Modules/Game/Canvas/src/presentation/mobile/MobileReadPress.h` | 32 | 74 | 30.19% |
+| `Modules/Game/Canvas/tests/MobileAnnotationTableTest.cpp` | 162 | 378 | 30.00% |
 
 ### T07 本机收尾与接续（2026-11-13）
 
@@ -20,7 +62,7 @@
 - 移动解释器和私有状态头位于 `presentation/mobile`，桌面通过中立呈现接口保留原输入和布局，不改变插值模型、业务命令或拟合算法。
 - Windows 完整构建、相关 CTest **7/7** 和最终完整 CTest **199/199** 通过，Android **x86_64** 最终 APK 构建通过。真实 ImGui CPU 回归覆盖两种缩放、控制点抓取／往返、手绘完整覆盖、取消与既有拟合保留、页面滚动仲裁及预览导航。格式化、差异检查及翻译参数契约检查通过。
 - 手机 **1280×720／160dpi（英文）**、平板 **2560×1600／320dpi（中文）** 均完成控制点拖动、第二指与注入 `ACTION_CANCEL`、完整手绘拟合、输出图按钮／单指平移／双指缩放／全段恢复，以及保存回读和一次精确撤销／重做。逐份存档核对无关对象与字段不变，外层保存前磁盘谱面不变。测试结束恢复原谱面、配置和工作区，两台模拟器保持开启。本项未构建 ARM、未操作实体手机，注入不代替真人手感。
-- 证据、脚本、APK 位于忽略目录 `build-android`，前缀 `t07-*`，不随 Git 迁移。下一项 **T08 批注与数据表格**：先核对已有长按入口，再补查看／编辑／删除、行选择与批量操作，不提前扩展 T09 预览窗口导航。本轮仅本地提交，尚未推送。
+- 证据、脚本、APK 位于忽略目录 `build-android`，前缀 `t07-*`，不随 Git 迁移。下一项 **T08 批注与数据表格**：先核对已有长按入口，再补查看／编辑／删除、行选择与批量操作，不提前扩展 T09 预览窗口导航。该机器收尾时仅本地提交；本机现已从远端拉取到 `26a210f8`，T07 已随分支同步。
 
 本批逐文件注释率如下，CSV 为 `build-android/evidence/t07-comments-final.csv`；翻译纯数据不计入代码。
 
@@ -46,7 +88,7 @@
 | T05 | P1 | 已实现，手机／平板模拟器验收通过 | 调色笔刷与选区填色 | 点按／拖涂和配色橡皮抬手一次提交；独立触屏调色页显式填色／清色，修改调色盘不自动修改选区。 |
 | T06 | P2 | 已实现，手机／平板模拟器验收通过 | Timing 段落局部修改 | 点选首标记后左右把手分别调整首尾，固定另一端；保留原标记整体移动，复用原插值、吸附和单次撤销命令。 |
 | T07 | P2 | 已实现，手机／平板模拟器验收通过 | 高级曲线与预览图 | 扩大控制点热区、单指手绘与取消；输出图单指平移、双指缩放及明确缩小／全段／放大按钮；与页面滚动隔离。 |
-| T08 | P2 | 待完善 | 批注与数据表格 | 添加批注已有菜单入口；核对批注查看／编辑／删除、Timing 表和批注表的长按、行选择及批量操作，替代尚存的右键／双击依赖。 |
+| T08 | P2 | 已实现，核心验收通过 | 批注与数据表格 | 批注点按常驻阅读、长按编辑及明确删除／历史；Timing 点选、多选、批量操作与独立参数窗。范围及设备边界见本批记录。 |
 | T09 | P2 | 待完善 | 预览区导航 | 区分轻点定位、拖动浏览与缩放，接入触点归属、多指接管和取消；确认不会误移动主画布物件或穿透其他窗口。 |
 | T10 | P2 | 待完善 | 音频图表与资源面板 | 保留已有 EQ／行高／按钮布局成果；核对波形／频谱导航、资源长按操作与拖放替代入口，区分滑块精调和页面滚动。 |
 | T11 | P2 | 待完善 | 数值与文本属性输入 | 支持便捷精调、明确确认／取消；手机软键盘不能遮住活动字段与提交按钮，焦点切换和返回不能误保存。 |
@@ -165,7 +207,7 @@
 - 此前音频集成测试和皮肤包测试各出现一次偶发失败，独立复跑及最终完整套件均通过；未删测试或改动这两个模块。新机器仍需实际运行，不能沿用本机结果宣称新环境通过。
 - NX809J 第三指可能触发系统 Cancel，不能把它误判为重做；该设备使用长按菜单重做。ADB 注入通过不替代真人手指手感验收。
 - 历史验收使用手机模拟器 1280×720／160dpi、平板模拟器 2560×1600／320dpi；最新 T02 复验后已恢复 1080×2400／420dpi。上述为验收结束时状态，新机器检查实际尺寸及密度。实体机沿用原有密度，不为截图方便修改全局设置。
-- 早期验收使用独立 `.next.drawprobe`；本轮改用 `top.xiang233.musicmapmaker.next.t01probe`。不得覆盖、卸载原 `.next.dev`、`.next.touchtest`、旧 `.next.drawprobe` 及其用户数据；换机先核对包名和签名。本机已重新获准使用实体机，测试使用另建的 `.next.t03probe`；后续按实际授权与设备状态复核。操作手机须使用 Terra 模型。
+- 早期验收使用独立 `.next.drawprobe`；本轮改用 `top.xiang233.musicmapmaker.next.t01probe`。不得覆盖、卸载原 `.next.dev`、`.next.touchtest`、旧 `.next.drawprobe` 及其用户数据；换机先核对包名和签名。本机已重新获准使用实体机，测试使用另建的 `.next.t03probe`；后续按实际授权与设备状态复核。用户已更新要求：之后由当前智能体直接使用 `android-automation` skill 操作手机，不再将手机步骤交给另一智能体；操作前仍须核对设备与当前前台状态。
 - 本机 32GB 内存同时运行两个模拟器时，Windows 和 Android 原生构建顺序进行、使用 2 个编译任务；完整 CTest／重音频测试不与原生编译并发。新机器根据实际资源调整，不在编译过程中修改源码。
 - Windows 入口：`cmake --build build --parallel 2`、`ctest --test-dir build --output-on-failure`；Android 入口：`scripts/android/build-windows.ps1 -Abi x86_64 -Jobs 2` 或 `-Abi arm64-v8a -Jobs 2`，均在项目根执行。
 - Linux 构建从项目根执行：`MMM_ANDROID_WORK_DIR=/home/xiang/Android/mmm-smoke/main MMM_ANDROID_ABIS="arm64-v8a x86_64" bash scripts/android/build.sh`；换机可选择另一处集中工作目录，显式设置 `MMM_ANDROID_WORK_DIR`，不要散落到源码目录。Windows 入口使用其专用工作目录。

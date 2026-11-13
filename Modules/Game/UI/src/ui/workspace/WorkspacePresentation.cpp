@@ -19,7 +19,28 @@ namespace
 {
 /// @brief 仅 UI 线程使用的借用指针，帧作用域结束后立即恢复。
 thread_local IWorkspacePresentation* activePresentation = nullptr;
+/// @brief 没有平台绑定时保留桌面主视口几何，不猜测移动端保留宽度。
+/// @warning 只在 UI 帧内读取 ImGui 标量，没有设备或会话查询。
+WorkspaceWindowArea viewportWindowArea()
+{
+    const auto* viewport = ImGui::GetMainViewport();
+    return { viewport->WorkPos, viewport->WorkSize };
+}
 }  // namespace
+
+/// @brief 默认平台使用完整工作区，已保存的桌面窗口布局继续由调用方管理。
+WorkspaceWindowArea IWorkspacePresentation::floatingWindowArea() const
+{
+    return viewportWindowArea();
+}
+/// @brief 统一转发当前帧的平台布局，调用方不包含移动外壳的私有状态。
+/// @warning 高频查询只读 UI 线程已发布的矩形，不等待后台或复制所有权。
+// 无帧绑定的 CPU 测试与桌面默认视图也必须获得同一坐标口径。
+WorkspaceWindowArea workspaceFloatingWindowArea()
+{
+    return activePresentation ? activePresentation->floatingWindowArea()
+                              : viewportWindowArea();
+}
 
 /// @brief 依当前平台选择触摸图文或桌面文字按钮。
 /// @details 公共模态不引入平台宏，默认桌面与无绑定测试仍用原反馈入口。

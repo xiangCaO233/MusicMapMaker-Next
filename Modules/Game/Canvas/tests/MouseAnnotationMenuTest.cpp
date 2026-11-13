@@ -24,8 +24,11 @@
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "graphic/mobile/MobileTouchInput.h"
 #include "log/colorful-log.h"
 #include "logic/session/CanvasCamera.h"
+#include "presentation/CanvasInteractionPresentation.h"
+#include "presentation/mobile/MobileCanvasInteractionPresentation.h"
 #include "ui/interaction/EditorInteraction.h"
 #include <cstddef>
 #include <imgui.h>
@@ -39,6 +42,12 @@ namespace MMM::Canvas
 /// @brief 只提供已命中的标记前置条件，动作由生产菜单控件处理。
 /// @details 不直接调用编辑回调，也不把期望结果写入编辑器缓冲。
 struct MouseAnnotationMenuTestAccess {
+    /// @brief 只替换平台解释器，批注栏、稳定菜单与编辑器仍为生产实现。
+    static void mobile(Basic2DCanvasInteraction& c)
+    {
+        c.m_pointerPresentation = createMobileCanvasInteractionPresentation();
+    }
+
     /// @brief 接入与气泡、连线卡片相同的菜单入口，不创建图形设备。
     /// @param controller 当前场景拥有的正式控制器，不借用桌面应用的活动实例。
     /// @param snapshot 在整轮输入帧中保持存活的只读发布快照。
@@ -191,8 +200,11 @@ bool frame(Controller& controller, Common::Render::RenderSnapshot& snapshot,
     // - 不强制抢回焦点，否则可能让菜单按钮无法按正式输入所有权激活。
     ImGui::SetNextWindowPos({ 0, 0 });
     ImGui::SetNextWindowSize({ 700, 600 });
-    ImGui::Begin(
-        "AnnotationMenuTest", nullptr, ImGuiWindowFlags_NoSavedSettings);
+    // 与移动工作区一样，内容区按住不能启动原生拖窗并抢回焦点。
+    // 固定父窗用于隔离批注输入，避免菜单被夹具的背景拖窗关闭。
+    ImGui::Begin("AnnotationMenuTest",
+                 nullptr,
+                 ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
     const UI::Interaction::SurfaceScope scope(
         UI::Interaction::Surface::MainCanvas);
     const bool consumed =
@@ -454,6 +466,78 @@ bool run()
         check(!Access::menuOpen(c) &&
                   !ImGui::GetCurrentContext()->OpenPopupStack.empty(),
               "classic gutter new annotation preserved");
+    }
+    // 原始触点与鼠标兼容事件同时进入整条批注栏，避免只测私有菜单开关。
+    ImGui::ClosePopupToLevel(0, true);
+    UI::Interaction::synchronizeProfile("touch-gestures", true);
+    UI::Interaction::synchronizeProfile("touch-gestures", true);
+    {
+        auto       s = fixture();
+        Controller c("TouchGutterTest", "TouchGutterCanvas");
+        Access::mobile(c);
+        frame(c, s, { 600, 500 }, false, false, false, false, true);
+        const auto point = Access::bubble(s);
+        auto&      io    = ImGui::GetIO();
+        double     tick{};
+        // 原始跟踪器与 ImGui 每帧收到同一设备坐标，避免测试只修改鼠标状态。
+        // 手指 ID 区分首指与次指，抬起次指后 peak 仍保留双指身份。
+        // 整条批注栏入口还会执行旧气泡与详情逻辑，可发现误入经典编辑路径。
+        // 时间由固定帧步长推进，测试不依赖宿主调度或实际等待。
+        const auto touch =
+            [&](Graphic::TouchPhase phase, bool down, int finger = 1) {
+                Graphic::publishMobileTouch(phase,
+                                            77,
+                                            finger,
+                                            point.x / io.DisplaySize.x,
+                                            point.y / io.DisplaySize.y,
+                                            tick);
+                tick += io.DeltaTime;
+                io.AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
+                frame(c, s, point, down, false, true, false, true);
+            };
+        // 按下帧只建立阅读候选，此时不得打开正文编辑模态。
+        // 抬手才得到轻点结果；菜单常驻以后指针可移入按钮和正文。
+        // 断言同时检查菜单身份与编辑请求，不能只观察有无任意弹窗。
+        touch(Graphic::TouchPhase::Down, true);
+        check(!Access::menuOpen(c) && !Access::requested(c),
+              "touch down does not immediately edit annotation");
+        touch(Graphic::TouchPhase::Up, false);
+        check(Access::menuOpen(c) && !Access::requested(c),
+              "tap opens persistent reader without editing");
+        // 用户点外关闭后，同一代的残留鼠标状态不能重新打开阅读窗。
+        ImGui::ClosePopupToLevel(0, true);
+        frame(c, s, { 800, 650 }, false, false, false, false, true);
+        touch(Graphic::TouchPhase::Down, true);
+        // 第二指属于同一代，不能把它抬起后剩下的单指当成新轻点。
+        // 这里分别发布两次 Up，覆盖厂商输入后端常见的分帧抬手。
+        // 测试没有调用生产取消方法，错误门闩不能被清理代码掩盖。
+        touch(Graphic::TouchPhase::Down, true, 2);
+        touch(Graphic::TouchPhase::Up, true, 2);
+        touch(Graphic::TouchPhase::Up, false);
+        check(!Access::menuOpen(c) && !Access::requested(c),
+              "two-finger gesture cannot become annotation tap");
+        touch(Graphic::TouchPhase::Down, true);
+        // Cancel 不是普通 Up，系统抢占不应触发阅读菜单的轻点分支。
+        // 额外空闲帧允许合成鼠标队列自然完成，观察是否会迟到打开。
+        // 用例没有改系统手势设置，也不把注入成功等同真人手势兼容。
+        touch(Graphic::TouchPhase::Cancel, false);
+        frame(c, s, point, false, false, true, false, true);
+        check(!Access::menuOpen(c) && !Access::requested(c),
+              "system cancel cannot become annotation tap");
+        touch(Graphic::TouchPhase::Down, true);
+        // 长按阳性对照证明系统没有通过吞掉全部触点来通过取消用例。
+        // 重复静止 Move 只推进真实时间，不改变位移峰值或重新开始代际。
+        // 超过阈值后仍须只打开阅读菜单，编辑保持由显式按钮决定。
+        // 测试结束关闭本夹具弹层，不触及用户应用或其它用例窗口。
+        for ( int i = 0; i < 35; ++i ) touch(Graphic::TouchPhase::Move, true);
+        // 菜单身份断言确认是批注常驻阅读层，而不是普通画布长按菜单。
+        // 编辑请求仍为空，用户可以先阅读再明确选择编辑或新增。
+        // 这保持了读取与写入分离，也使只读和播放期间的阅读入口可复用。
+        check(Access::menuOpen(c) && !Access::requested(c),
+              "stationary hold opens reader once");
+        touch(Graphic::TouchPhase::Up, false);
+        if ( !ImGui::GetCurrentContext()->OpenPopupStack.empty() )
+            ImGui::ClosePopupToLevel(0, true);
     }
     check(writes == 0, "menu does not prematurely mutate beatmap");
     // - 先移除捕获局部计数的订阅，再结束其生命周期，避免后续析构事件悬空访问。

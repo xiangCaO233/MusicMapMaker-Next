@@ -3,6 +3,7 @@
 #include "canvas/AnnotationTableWindow.h"
 #include "config/EditorSettings.h"
 #include "config/VisualConfig.h"
+#include "presentation/AnnotationTablePresentation.h"
 #include "ui/interaction/EditorInteraction.h"
 
 #include "canvas/AuxiliaryWindowState.h"
@@ -119,9 +120,11 @@ AnnotationExportLabels makeExportLabels()
 /// 可见性、数据缓存与选择状态均由本类独立持有，不继承时间线窗口的
 /// 生命周期；构造时保持关闭，等待菜单命令显式激活。
 AnnotationTableWindow::AnnotationTableWindow(const std::string& name)
-    : UI::IUIView(name)
+    : UI::IUIView(name), m_presentation(createAnnotationTablePresentation())
 {
 }
+/// @brief 平台对象在完整类型可见处析构，不在头文件要求移动实现。
+AnnotationTableWindow::~AnnotationTableWindow() = default;
 
 /// @brief 查询批注表窗口自身的可见状态。
 /// @return 窗口应参与本帧绘制时返回 true。
@@ -199,6 +202,7 @@ void AnnotationTableWindow::restoreSelection(const std::string& selectedId)
 /// 会话失效和显式隐藏三条路径共享同一清理规则。
 void AnnotationTableWindow::resetData()
 {
+    m_presentation->reset();
     m_data.reset();
     m_dataStatus = AnnotationTableDataStatus::Close;
     m_selectedRow.reset();
@@ -433,6 +437,8 @@ void AnnotationTableWindow::update(UI::UIManager* sourceManager)
 
     // 仅首次出现时指定默认大小，之后尊重用户在 imgui.ini 中保存的布局。
     ImGui::SetNextWindowSize(ImVec2(860.0F, 560.0F), ImGuiCond_FirstUseEver);
+    // 平台仅在触控方案覆盖初次尺寸，桌面和鼠标方案保留原工作区布局。
+    m_presentation->prepareWindow();
     if ( m_shouldFocusWindow ) {
         // SetNextWindowFocus 必须位于 Begin 之前，并且只消费一次激活请求。
         ImGui::SetNextWindowFocus();
@@ -482,7 +488,9 @@ void AnnotationTableWindow::update(UI::UIManager* sourceManager)
                 "%s", TR_FMT("ui.annotation.table.count", rows.size()).c_str());
             // TR_FMT 临时字符串存活到完整表达式结束，ImGui 会在调用内复制文本。
             ImGui::SameLine();
-            ImGui::TextDisabled("%s", TR("ui.annotation.table.hint").data());
+            if ( !m_presentation->touchLayout() )
+                ImGui::TextDisabled("%s",
+                                    TR("ui.annotation.table.hint").data());
 
             // 选择项固定且很少，保持在滚动表格外，使长批注表仍能直接导出。
             // 文件格式与定位方式是正交选项，三种输出共用同一套记录。
@@ -502,14 +510,14 @@ void AnnotationTableWindow::update(UI::UIManager* sourceManager)
             ImGui::SetNextItemWidth(120.0F * dpiScale);
             UI::FeedbackCombo(
                 "##AnnotationExportFormat", &m_exportFormat, formats, 3);
-            ImGui::SameLine();
+            if ( !m_presentation->touchLayout() ) ImGui::SameLine();
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted(TR("ui.annotation.export.position").data());
             ImGui::SameLine();
             ImGui::SetNextItemWidth(130.0F * dpiScale);
             UI::FeedbackCombo(
                 "##AnnotationExportPosition", &m_exportPosition, positions, 2);
-            ImGui::SameLine();
+            if ( !m_presentation->touchLayout() ) ImGui::SameLine();
             if ( UI::FeedbackButton(
                      TR("ui.annotation.export.button").data()) ) {
                 // 点击后才可能打开平台保存对话框；普通 UI 帧不碰文件系统。
@@ -528,327 +536,351 @@ void AnnotationTableWindow::update(UI::UIManager* sourceManager)
 
             // 详情区占可用高度的固定比例，并限制上下界；表格获得剩余空间，
             // 从而在矮窗口中仍保留至少一段可滚动的行区域。
-            const float availableHeight = ImGui::GetContentRegionAvail().y;
-            const float detailHeight =
-                // 比例用于适配常规窗口，上下界分别保障详情可读性与表格容量。
-                std::clamp(availableHeight * 0.38F, 150.0F, 260.0F);
-            const float tableHeight =
-                // 扣除详情、主题间距和少量边界余量，避免两个区域发生重叠。
-                std::max(160.0F,
-                         availableHeight - detailHeight -
-                             ImGui::GetStyle().ItemSpacing.y - 4.0F);
-            // 表格负责结构化浏览，详情负责完整阅读；两者共享同一份只读 rows。
-            constexpr ImGuiTableFlags tableFlags =
-                // 用户可以调整列宽，交替底色与边框提高长列表的横向可读性；
-                // ScrollY 将内容限制在计算出的 tableHeight 内。
-                ImGuiTableFlags_Resizable | ImGuiTableFlags_RowBg |
-                ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV |
-                ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
-            if ( ImGui::BeginTable("AnnotationTableRows",
-                                   8,
-                                   tableFlags,
-                                   ImVec2(0.0F, tableHeight)) ) {
-                // 禁用 ImGui 默认列菜单，避免与业务窗口自身的右键语义冲突。
-                if ( ImGuiTable* table = ImGui::GetCurrentTable() ) {
-                    table->DisableDefaultContextMenu = true;
-                }
-                // 表头固定在纵向滚动区域顶部；数据行仍由 clipper 虚拟化。
-                ImGui::TableSetupScrollFreeze(0, 1);
-                ImGui::TableSetupColumn(
-                    TR("ui.annotation.table.index").data(),
-                    // 序号列保持固定宽度，避免正文拉伸时漂移。
-                    ImGuiTableColumnFlags_WidthFixed,
-                    52.0F * dpiScale);
-                ImGui::TableSetupColumn(
-                    TR("ui.annotation.timestamp").data(),
-                    // 时间格式长度可预测，固定宽度留给正文。
-                    ImGuiTableColumnFlags_WidthFixed,
-                    125.0F * dpiScale);
-                ImGui::TableSetupColumn(
-                    TR("ui.canvas.beat_index").data(),
-                    // 拍号独立于时间显示偏好，固定宽度便于纵向核对。
-                    ImGuiTableColumnFlags_WidthFixed,
-                    70.0F * dpiScale);
-                ImGui::TableSetupColumn(
-                    TR("ui.canvas.beat_fraction").data(),
-                    // 分拍位使用约分后的短分数，列宽无需参与正文拉伸。
-                    ImGuiTableColumnFlags_WidthFixed,
-                    82.0F * dpiScale);
-                ImGui::TableSetupColumn(TR("ui.annotation.target").data(),
-                                        // 目标类型与轨道号共同使用此固定列。
-                                        ImGuiTableColumnFlags_WidthFixed,
-                                        140.0F * dpiScale);
-                ImGui::TableSetupColumn(TR("ui.annotation.author").data(),
-                                        // 作者和正文按相对权重分享剩余宽度。
-                                        ImGuiTableColumnFlags_WidthStretch,
-                                        0.75F);
-                ImGui::TableSetupColumn(
-                    TR("ui.annotation.table.content").data(),
-                    // 正文摘要权重更高，优先减少长文本截断。
-                    ImGuiTableColumnFlags_WidthStretch,
-                    1.7F);
-                // 两个操作按钮共享列宽。用翻译后较长标签计算，避免某种语言
-                // 下按钮文字截断或挤压正文列。
-                const ImGuiStyle& style = ImGui::GetStyle();
-                const float       actionButtonWidth =
-                    std::max(
-                        ImGui::CalcTextSize(
-                            TR("ui.annotation.table.jump").data())
-                            .x,
-                        ImGui::CalcTextSize(TR("ui.common.delete").data()).x) +
-                    style.FramePadding.x * 2.0F;
-                const float actionColumnWidth =
-                    actionButtonWidth * 2.0F +
-                    // 两按钮之间保留主题定义的间距，
-                    // 额外留白避免右侧边框贴近控件。
-                    style.ItemSpacing.x + 8.0F * dpiScale;
-                ImGui::TableSetupColumn(
-                    TR("ui.annotation.table.action").data(),
-                    // 操作列不参与剩余宽度分配，始终容纳双按钮。
-                    ImGuiTableColumnFlags_WidthFixed,
-                    actionColumnWidth);
-                ImGui::TableHeadersRow();
-
-                // Clipper 只遍历当前可见行，批注正文很多时仍保持绘制开销稳定。
-                ImGuiListClipper clipper;
-                // rows 在整段绘制期间不变，因此 clipper 的总数与索引始终一致。
-                clipper.Begin(static_cast<int>(rows.size()));
-                while ( clipper.Step() ) {
-                    // DisplayStart/DisplayEnd 已由当前滚动位置裁剪，循环中不得
-                    // 再对全量 rows 排序或构造派生列表。
-                    for ( int rowIndex = clipper.DisplayStart;
-                          rowIndex < clipper.DisplayEnd;
-                          ++rowIndex ) {
-                        const auto index = static_cast<std::size_t>(rowIndex);
-                        // Clipper 返回有符号范围，转换发生在确认位于 rows
-                        // 范围后。
-                        const auto& row      = rows[index];
-                        const bool  selected = m_selectedRow == index;
-                        ImGui::TableNextRow();
-                        // 每行首先创建跨列
-                        // Selectable，之后各列内容覆盖在同一行上。
-                        ImGui::TableSetColumnIndex(0);
-                        // 显示序号与稳定控件 ID 分离，排序或翻译不会造成 ID
-                        // 冲突。
-                        const std::string rowLabel = fmt::format(
-                            "#{}###AnnotationTableRow_{}", index + 1U, index);
-                        const bool rowClicked = ::MMM::UI::FeedbackSelectable(
-                            rowLabel.c_str(),
-                            selected,
-                            ImGuiSelectableFlags_SpanAllColumns |
-                                ImGuiSelectableFlags_AllowOverlap,
-                            ImVec2(0.0F, ImGui::GetFrameHeight()));
-                        // AllowOverlap 允许同一行的操作按钮独立响应；只有点击
-                        // 非按钮区域时 Selectable 才承担整行选择。
-                        // 双击使用映射按键，行归属仍以实际悬停为准。
-                        const bool rowDoubleClicked =
-                            ImGui::IsItemHovered() &&
-                            UI::Interaction::mouseDoubleClicked(
-                                ImGuiMouseButton_Left);
-                        if ( rowClicked ) {
-                            // 详情区引用索引只在当前 rows 生命周期内使用。
-                            m_selectedRow = index;
-                        }
-
-                        // 单击仅选择供阅读，双击与“跳转”按钮共享同一定位逻辑。
-                        // 视觉偏移在发命令时读取，确保运行时配置变更立即生效。
-                        const auto seekToRow = [&row]() {
-                            const float visualOffset =
-                                Config::AppConfig::instance()
-                                    .getVisualConfig()
-                                    .getEffectiveVisualOffset();
-                            Event::EventBus::instance().publish(
-                                // Seek
-                                // 进入逻辑命令队列，由会话线程统一修改时间； UI
-                                // 不直接触碰播放时钟或画布相机。
-                                Event::LogicCommandEvent(Logic::CmdSeek{
-                                    row.timestamp - visualOffset }));
-                        };
-                        if ( rowDoubleClicked ) seekToRow();
-                        // 跳转不会自动关闭窗口，用户可以连续核对多条批注位置。
-
-                        // 时间文本由批注表自己的 Timing 上下文格式化，不读取
-                        // 时间线窗口快照，因此时间线隐藏时仍能正常显示拍号位置。
-                        ImGui::TableSetColumnIndex(1);
-                        ImGui::AlignTextToFramePadding();
-                        const auto timeText = MMM::UI::Utils::formatCanvasTime(
-                            row.timestamp, m_data.timeFormatContext());
-                        ImGui::TextUnformatted(timeText.c_str());
-                        // timeText 生命周期覆盖本次调用，TextUnformatted
-                        // 不保存指针。
-
-                        // 拍号与分拍位始终分列显示，不受全局时间格式偏好影响；
-                        // 结构化换算复用已缓存节点，不在可见行循环中分配或排序。
-                        const auto beatPosition =
-                            MMM::UI::Utils::calculateCanvasBeatPosition(
-                                row.timestamp, m_data.timeFormatContext());
-                        ImGui::TableSetColumnIndex(2);
-                        ImGui::AlignTextToFramePadding();
-                        if ( beatPosition.valid ) {
-                            ImGui::Text("%lld",
-                                        static_cast<long long>(
-                                            beatPosition.beatNumber));
-                        } else {
-                            // 空 BPM
-                            // 时间线无法推导拍位置，占位符也能区别合法零拍号。
-                            ImGui::TextDisabled("-");
-                        }
-                        ImGui::TableSetColumnIndex(3);
-                        ImGui::AlignTextToFramePadding();
-                        if ( beatPosition.valid ) {
-                            ImGui::Text("%d/%d",
-                                        beatPosition.numerator,
-                                        beatPosition.denominator);
-                        } else {
-                            ImGui::TextDisabled("-");
-                        }
-
-                        // 目标轨仅对存在具体轨道的批注显示；内部零基索引转换为
-                        // 面向用户的一基编号，丢失目标另以醒目标记提示。
-                        ImGui::TableSetColumnIndex(4);
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextUnformatted(
-                            TR(annotationTargetLabelKey(row.targetKind))
-                                .data());
-                        // 轨道号仅作为目标类型的补充，不改变目标类型的翻译文本。
-                        if ( row.track >= 0 ) {
-                            ImGui::SameLine();
-                            ImGui::TextDisabled("#%d", row.track + 1);
-                        }
-                        if ( row.targetMissing ) {
-                            // 单字符警告保持表格紧凑，完整说明在下方详情中展示。
-                            ImGui::SameLine();
-                            ImGui::TextColored(ImVec4(1.0F, 0.42F, 0.32F, 1.0F),
-                                               "!");
-                        }
-
-                        // 空作者使用翻译后的占位文本，不把空字符串渲染成空格。
-                        ImGui::TableSetColumnIndex(5);
-                        ImGui::AlignTextToFramePadding();
-                        ImGui::TextUnformatted(
-                            // 占位键由翻译系统提供，避免在代码内固化界面语言。
-                            row.author.empty()
-                                ? TR("ui.annotation.unknown_author").data()
-                                : row.author.c_str());
-
-                        // 表格只显示 Markdown
-                        // 首行作为摘要，完整正文留给详情区；
-                        // 使用指针对避免为每个可见行创建临时子串。
-                        ImGui::TableSetColumnIndex(6);
-                        ImGui::AlignTextToFramePadding();
-                        const auto firstLineEnd = row.content.find('\n');
-                        // npos 分支使用完整长度，指针终点始终落在 string
-                        // 存储范围内。
-                        const std::size_t firstLineLength =
-                            firstLineEnd == std::string::npos
-                                ? row.content.size()
-                                : firstLineEnd;
-                        ImGui::TextUnformatted(
-                            row.content.data(),
-                            row.content.data() + firstLineLength);
-
-                        // 操作列按当前单元格剩余宽度均分，窄窗口下仍保证正尺寸。
-                        ImGui::TableSetColumnIndex(7);
-                        const float rowActionWidth =
-                            // 列被用户压缩到极窄时以 1 像素兜底，避免向 ImGui
-                            // 传入负宽度后按钮反向占满可用区域。
-                            std::max(1.0F,
-                                     (ImGui::GetContentRegionAvail().x -
-                                      ImGui::GetStyle().ItemSpacing.x) /
-                                         2.0F);
-                        const std::string jumpLabel =
-                            // ## 后缀只参与 ImGui ID，不会显示给用户。
-                            fmt::format("{}##AnnotationTableJump_{}",
-                                        TR("ui.annotation.table.jump").view(),
-                                        index);
-                        if ( ::MMM::UI::FeedbackButton(
-                                 jumpLabel.c_str(),
-                                 ImVec2(rowActionWidth,
-                                        ImGui::GetFrameHeight())) ) {
-                            seekToRow();
-                        }
-                        ImGui::SameLine();
-                        // 控件 ID 包含行号，使相同的翻译标签在每行仍保持唯一。
-                        const std::string deleteLabel =
-                            fmt::format("{}##AnnotationTableDelete_{}",
-                                        TR("ui.common.delete").view(),
-                                        index);
-                        if ( ::MMM::UI::FeedbackButton(
-                                 deleteLabel.c_str(),
-                                 ImVec2(rowActionWidth,
-                                        ImGui::GetFrameHeight())) ) {
-                            // 删除通过逻辑命令排队；当前帧继续使用现有 rows，等
-                            // 下次修订号变化后统一刷新，避免迭代中修改容器。
-                            Event::EventBus::instance().publish(
-                                // 仅传稳定 ID，不把表格行地址跨线程传给逻辑层。
-                                Event::LogicCommandEvent(
-                                    Logic::CmdRemoveBeatmapAnnotation{
-                                        row.id }));
-                        }
-                        // 逻辑命令只会在后续缓存修订中反映到 rows，本循环继续
-                        // 使用当前不可变快照，保证 clipper 的索引范围始终有效。
+            if ( !m_presentation->render(m_data, m_selectedRow) ) {
+                const float availableHeight = ImGui::GetContentRegionAvail().y;
+                const float detailHeight =
+                    // 比例用于适配常规窗口，上下界分别保障详情可读性与表格容量。
+                    std::clamp(availableHeight * 0.38F, 150.0F, 260.0F);
+                const float tableHeight =
+                    // 扣除详情、主题间距和少量边界余量，避免两个区域发生重叠。
+                    std::max(160.0F,
+                             availableHeight - detailHeight -
+                                 ImGui::GetStyle().ItemSpacing.y - 4.0F);
+                // 表格负责结构化浏览，详情负责完整阅读；两者共享同一份只读
+                // rows。
+                constexpr ImGuiTableFlags tableFlags =
+                    // 用户可以调整列宽，交替底色与边框提高长列表的横向可读性；
+                    // ScrollY 将内容限制在计算出的 tableHeight 内。
+                    ImGuiTableFlags_Resizable | ImGuiTableFlags_RowBg |
+                    ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV |
+                    ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp;
+                if ( ImGui::BeginTable("AnnotationTableRows",
+                                       8,
+                                       tableFlags,
+                                       ImVec2(0.0F, tableHeight)) ) {
+                    // 禁用 ImGui 默认列菜单，避免与业务窗口自身的右键语义冲突。
+                    if ( ImGuiTable* table = ImGui::GetCurrentTable() ) {
+                        table->DisableDefaultContextMenu = true;
                     }
-                }
-                ImGui::EndTable();
-                // EndTable 在 BeginTable 成功的同一分支内调用，维持 ImGui
-                // 栈平衡。
-            }
+                    // 表头固定在纵向滚动区域顶部；数据行仍由 clipper 虚拟化。
+                    ImGui::TableSetupScrollFreeze(0, 1);
+                    ImGui::TableSetupColumn(
+                        TR("ui.annotation.table.index").data(),
+                        // 序号列保持固定宽度，避免正文拉伸时漂移。
+                        ImGuiTableColumnFlags_WidthFixed,
+                        52.0F * dpiScale);
+                    ImGui::TableSetupColumn(
+                        TR("ui.annotation.timestamp").data(),
+                        // 时间格式长度可预测，固定宽度留给正文。
+                        ImGuiTableColumnFlags_WidthFixed,
+                        125.0F * dpiScale);
+                    ImGui::TableSetupColumn(
+                        TR("ui.canvas.beat_index").data(),
+                        // 拍号独立于时间显示偏好，固定宽度便于纵向核对。
+                        ImGuiTableColumnFlags_WidthFixed,
+                        70.0F * dpiScale);
+                    ImGui::TableSetupColumn(
+                        TR("ui.canvas.beat_fraction").data(),
+                        // 分拍位使用约分后的短分数，列宽无需参与正文拉伸。
+                        ImGuiTableColumnFlags_WidthFixed,
+                        82.0F * dpiScale);
+                    ImGui::TableSetupColumn(
+                        TR("ui.annotation.target").data(),
+                        // 目标类型与轨道号共同使用此固定列。
+                        ImGuiTableColumnFlags_WidthFixed,
+                        140.0F * dpiScale);
+                    ImGui::TableSetupColumn(
+                        TR("ui.annotation.author").data(),
+                        // 作者和正文按相对权重分享剩余宽度。
+                        ImGuiTableColumnFlags_WidthStretch,
+                        0.75F);
+                    ImGui::TableSetupColumn(
+                        TR("ui.annotation.table.content").data(),
+                        // 正文摘要权重更高，优先减少长文本截断。
+                        ImGuiTableColumnFlags_WidthStretch,
+                        1.7F);
+                    // 两个操作按钮共享列宽。用翻译后较长标签计算，避免某种语言
+                    // 下按钮文字截断或挤压正文列。
+                    const ImGuiStyle& style = ImGui::GetStyle();
+                    const float       actionButtonWidth =
+                        std::max(
+                            ImGui::CalcTextSize(
+                                TR("ui.annotation.table.jump").data())
+                                .x,
+                            ImGui::CalcTextSize(TR("ui.common.delete").data())
+                                .x) +
+                        style.FramePadding.x * 2.0F;
+                    const float actionColumnWidth =
+                        actionButtonWidth * 2.0F +
+                        // 两按钮之间保留主题定义的间距，
+                        // 额外留白避免右侧边框贴近控件。
+                        style.ItemSpacing.x + 8.0F * dpiScale;
+                    ImGui::TableSetupColumn(
+                        TR("ui.annotation.table.action").data(),
+                        // 操作列不参与剩余宽度分配，始终容纳双按钮。
+                        ImGuiTableColumnFlags_WidthFixed,
+                        actionColumnWidth);
+                    ImGui::TableHeadersRow();
 
-            if ( rows.empty() ) {
-                // 空状态位于表格之后，保留列标题以帮助用户理解窗口用途。
-                ImGui::TextDisabled("%s",
-                                    TR("ui.annotation.table.empty").data());
-            } else if ( m_selectedRow && *m_selectedRow < rows.size() ) {
-                // 重新检查边界以防关闭或异步刷新后的过期选择进入详情绘制。
-                const auto& selected = rows[*m_selectedRow];
-                // selected 引用仅覆盖当前绘制分支，不会保存到下一帧。
-                // 详情使用独立可滚动 Child，长 Markdown 不会挤压或扩张主窗口。
-                ImGui::BeginChild("AnnotationTableDetail",
-                                  ImVec2(0.0F, detailHeight),
-                                  ImGuiChildFlags_Borders);
-                // 固定 Child ID 让 ImGui 跨帧保存详情正文自身的滚动位置。
-                // 标题行组合时间、作者与目标元数据，正文仍交给 Markdown
-                // 渲染器。
-                const auto timeText = MMM::UI::Utils::formatCanvasTime(
-                    selected.timestamp, m_data.timeFormatContext());
-                ImGui::Text("%s: %s",
-                            TR("ui.annotation.timestamp").data(),
-                            timeText.c_str());
-                // 作者与时间放在同一视觉行，点号只承担元数据分隔作用。
-                ImGui::SameLine();
-                ImGui::TextDisabled(
-                    "· %s",
-                    selected.author.empty()
-                        ? TR("ui.annotation.unknown_author").data()
-                        : selected.author.c_str());
-                // 目标状态另起一行，避免作者较长时挤掉目标与轨道提示。
-                ImGui::Text(
-                    "%s: %s",
-                    TR("ui.annotation.target").data(),
-                    TR(annotationTargetLabelKey(selected.targetKind)).data());
-                // 详情重复目标信息，使横向滚动表格后仍能独立理解正文上下文。
-                if ( selected.track >= 0 ) {
-                    // 与表格列一致，面向用户展示一基轨道编号。
-                    ImGui::SameLine();
-                    ImGui::TextDisabled("#%d", selected.track + 1);
+                    // Clipper
+                    // 只遍历当前可见行，批注正文很多时仍保持绘制开销稳定。
+                    ImGuiListClipper clipper;
+                    // rows 在整段绘制期间不变，因此 clipper
+                    // 的总数与索引始终一致。
+                    clipper.Begin(static_cast<int>(rows.size()));
+                    while ( clipper.Step() ) {
+                        // DisplayStart/DisplayEnd
+                        // 已由当前滚动位置裁剪，循环中不得 再对全量 rows
+                        // 排序或构造派生列表。
+                        for ( int rowIndex = clipper.DisplayStart;
+                              rowIndex < clipper.DisplayEnd;
+                              ++rowIndex ) {
+                            const auto index =
+                                static_cast<std::size_t>(rowIndex);
+                            // Clipper 返回有符号范围，转换发生在确认位于 rows
+                            // 范围后。
+                            const auto& row      = rows[index];
+                            const bool  selected = m_selectedRow == index;
+                            ImGui::TableNextRow();
+                            // 每行首先创建跨列
+                            // Selectable，之后各列内容覆盖在同一行上。
+                            ImGui::TableSetColumnIndex(0);
+                            // 显示序号与稳定控件 ID 分离，排序或翻译不会造成 ID
+                            // 冲突。
+                            const std::string rowLabel =
+                                fmt::format("#{}###AnnotationTableRow_{}",
+                                            index + 1U,
+                                            index);
+                            const bool rowClicked =
+                                ::MMM::UI::FeedbackSelectable(
+                                    rowLabel.c_str(),
+                                    selected,
+                                    ImGuiSelectableFlags_SpanAllColumns |
+                                        ImGuiSelectableFlags_AllowOverlap,
+                                    ImVec2(0.0F, ImGui::GetFrameHeight()));
+                            // AllowOverlap
+                            // 允许同一行的操作按钮独立响应；只有点击
+                            // 非按钮区域时 Selectable 才承担整行选择。
+                            // 双击使用映射按键，行归属仍以实际悬停为准。
+                            const bool rowDoubleClicked =
+                                ImGui::IsItemHovered() &&
+                                UI::Interaction::mouseDoubleClicked(
+                                    ImGuiMouseButton_Left);
+                            if ( rowClicked ) {
+                                // 详情区引用索引只在当前 rows 生命周期内使用。
+                                m_selectedRow = index;
+                            }
+
+                            // 单击仅选择供阅读，双击与“跳转”按钮共享同一定位逻辑。
+                            // 视觉偏移在发命令时读取，确保运行时配置变更立即生效。
+                            const auto seekToRow = [&row]() {
+                                const float visualOffset =
+                                    Config::AppConfig::instance()
+                                        .getVisualConfig()
+                                        .getEffectiveVisualOffset();
+                                Event::EventBus::instance().publish(
+                                    // Seek
+                                    // 进入逻辑命令队列，由会话线程统一修改时间；
+                                    // UI 不直接触碰播放时钟或画布相机。
+                                    Event::LogicCommandEvent(Logic::CmdSeek{
+                                        row.timestamp - visualOffset }));
+                            };
+                            if ( rowDoubleClicked ) seekToRow();
+                            // 跳转不会自动关闭窗口，用户可以连续核对多条批注位置。
+
+                            // 时间文本由批注表自己的 Timing
+                            // 上下文格式化，不读取
+                            // 时间线窗口快照，因此时间线隐藏时仍能正常显示拍号位置。
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::AlignTextToFramePadding();
+                            const auto timeText =
+                                MMM::UI::Utils::formatCanvasTime(
+                                    row.timestamp, m_data.timeFormatContext());
+                            ImGui::TextUnformatted(timeText.c_str());
+                            // timeText 生命周期覆盖本次调用，TextUnformatted
+                            // 不保存指针。
+
+                            // 拍号与分拍位始终分列显示，不受全局时间格式偏好影响；
+                            // 结构化换算复用已缓存节点，不在可见行循环中分配或排序。
+                            const auto beatPosition =
+                                MMM::UI::Utils::calculateCanvasBeatPosition(
+                                    row.timestamp, m_data.timeFormatContext());
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::AlignTextToFramePadding();
+                            if ( beatPosition.valid ) {
+                                ImGui::Text("%lld",
+                                            static_cast<long long>(
+                                                beatPosition.beatNumber));
+                            } else {
+                                // 空 BPM
+                                // 时间线无法推导拍位置，占位符也能区别合法零拍号。
+                                ImGui::TextDisabled("-");
+                            }
+                            ImGui::TableSetColumnIndex(3);
+                            ImGui::AlignTextToFramePadding();
+                            if ( beatPosition.valid ) {
+                                ImGui::Text("%d/%d",
+                                            beatPosition.numerator,
+                                            beatPosition.denominator);
+                            } else {
+                                ImGui::TextDisabled("-");
+                            }
+
+                            // 目标轨仅对存在具体轨道的批注显示；内部零基索引转换为
+                            // 面向用户的一基编号，丢失目标另以醒目标记提示。
+                            ImGui::TableSetColumnIndex(4);
+                            ImGui::AlignTextToFramePadding();
+                            ImGui::TextUnformatted(
+                                TR(annotationTargetLabelKey(row.targetKind))
+                                    .data());
+                            // 轨道号仅作为目标类型的补充，不改变目标类型的翻译文本。
+                            if ( row.track >= 0 ) {
+                                ImGui::SameLine();
+                                ImGui::TextDisabled("#%d", row.track + 1);
+                            }
+                            if ( row.targetMissing ) {
+                                // 单字符警告保持表格紧凑，完整说明在下方详情中展示。
+                                ImGui::SameLine();
+                                ImGui::TextColored(
+                                    ImVec4(1.0F, 0.42F, 0.32F, 1.0F), "!");
+                            }
+
+                            // 空作者使用翻译后的占位文本，不把空字符串渲染成空格。
+                            ImGui::TableSetColumnIndex(5);
+                            ImGui::AlignTextToFramePadding();
+                            ImGui::TextUnformatted(
+                                // 占位键由翻译系统提供，避免在代码内固化界面语言。
+                                row.author.empty()
+                                    ? TR("ui.annotation.unknown_author").data()
+                                    : row.author.c_str());
+
+                            // 表格只显示 Markdown
+                            // 首行作为摘要，完整正文留给详情区；
+                            // 使用指针对避免为每个可见行创建临时子串。
+                            ImGui::TableSetColumnIndex(6);
+                            ImGui::AlignTextToFramePadding();
+                            const auto firstLineEnd = row.content.find('\n');
+                            // npos 分支使用完整长度，指针终点始终落在 string
+                            // 存储范围内。
+                            const std::size_t firstLineLength =
+                                firstLineEnd == std::string::npos
+                                    ? row.content.size()
+                                    : firstLineEnd;
+                            ImGui::TextUnformatted(
+                                row.content.data(),
+                                row.content.data() + firstLineLength);
+
+                            // 操作列按当前单元格剩余宽度均分，窄窗口下仍保证正尺寸。
+                            ImGui::TableSetColumnIndex(7);
+                            const float rowActionWidth =
+                                // 列被用户压缩到极窄时以 1 像素兜底，避免向
+                                // ImGui 传入负宽度后按钮反向占满可用区域。
+                                std::max(1.0F,
+                                         (ImGui::GetContentRegionAvail().x -
+                                          ImGui::GetStyle().ItemSpacing.x) /
+                                             2.0F);
+                            const std::string jumpLabel =
+                                // ## 后缀只参与 ImGui ID，不会显示给用户。
+                                fmt::format(
+                                    "{}##AnnotationTableJump_{}",
+                                    TR("ui.annotation.table.jump").view(),
+                                    index);
+                            if ( ::MMM::UI::FeedbackButton(
+                                     jumpLabel.c_str(),
+                                     ImVec2(rowActionWidth,
+                                            ImGui::GetFrameHeight())) ) {
+                                seekToRow();
+                            }
+                            ImGui::SameLine();
+                            // 控件 ID
+                            // 包含行号，使相同的翻译标签在每行仍保持唯一。
+                            const std::string deleteLabel =
+                                fmt::format("{}##AnnotationTableDelete_{}",
+                                            TR("ui.common.delete").view(),
+                                            index);
+                            if ( ::MMM::UI::FeedbackButton(
+                                     deleteLabel.c_str(),
+                                     ImVec2(rowActionWidth,
+                                            ImGui::GetFrameHeight())) ) {
+                                // 删除通过逻辑命令排队；当前帧继续使用现有
+                                // rows，等
+                                // 下次修订号变化后统一刷新，避免迭代中修改容器。
+                                Event::EventBus::instance().publish(
+                                    // 仅传稳定
+                                    // ID，不把表格行地址跨线程传给逻辑层。
+                                    Event::LogicCommandEvent(
+                                        Logic::CmdRemoveBeatmapAnnotation{
+                                            row.id }));
+                            }
+                            // 逻辑命令只会在后续缓存修订中反映到
+                            // rows，本循环继续 使用当前不可变快照，保证 clipper
+                            // 的索引范围始终有效。
+                        }
+                    }
+                    ImGui::EndTable();
+                    // EndTable 在 BeginTable 成功的同一分支内调用，维持 ImGui
+                    // 栈平衡。
                 }
-                if ( selected.targetMissing ) {
-                    // 丢失目标不影响批注正文可读性，只附加明确的状态警告。
+
+                if ( rows.empty() ) {
+                    // 空状态位于表格之后，保留列标题以帮助用户理解窗口用途。
+                    ImGui::TextDisabled("%s",
+                                        TR("ui.annotation.table.empty").data());
+                } else if ( m_selectedRow && *m_selectedRow < rows.size() ) {
+                    // 重新检查边界以防关闭或异步刷新后的过期选择进入详情绘制。
+                    const auto& selected = rows[*m_selectedRow];
+                    // selected 引用仅覆盖当前绘制分支，不会保存到下一帧。
+                    // 详情使用独立可滚动 Child，长 Markdown
+                    // 不会挤压或扩张主窗口。
+                    ImGui::BeginChild("AnnotationTableDetail",
+                                      ImVec2(0.0F, detailHeight),
+                                      ImGuiChildFlags_Borders);
+                    // 固定 Child ID 让 ImGui 跨帧保存详情正文自身的滚动位置。
+                    // 标题行组合时间、作者与目标元数据，正文仍交给 Markdown
+                    // 渲染器。
+                    const auto timeText = MMM::UI::Utils::formatCanvasTime(
+                        selected.timestamp, m_data.timeFormatContext());
+                    ImGui::Text("%s: %s",
+                                TR("ui.annotation.timestamp").data(),
+                                timeText.c_str());
+                    // 作者与时间放在同一视觉行，点号只承担元数据分隔作用。
                     ImGui::SameLine();
-                    ImGui::TextColored(
-                        ImVec4(1.0F, 0.42F, 0.32F, 1.0F),
-                        "%s",
-                        TR("ui.annotation.target_missing").data());
+                    ImGui::TextDisabled(
+                        "· %s",
+                        selected.author.empty()
+                            ? TR("ui.annotation.unknown_author").data()
+                            : selected.author.c_str());
+                    // 目标状态另起一行，避免作者较长时挤掉目标与轨道提示。
+                    ImGui::Text(
+                        "%s: %s",
+                        TR("ui.annotation.target").data(),
+                        TR(annotationTargetLabelKey(selected.targetKind))
+                            .data());
+                    // 详情重复目标信息，使横向滚动表格后仍能独立理解正文上下文。
+                    if ( selected.track >= 0 ) {
+                        // 与表格列一致，面向用户展示一基轨道编号。
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("#%d", selected.track + 1);
+                    }
+                    if ( selected.targetMissing ) {
+                        // 丢失目标不影响批注正文可读性，只附加明确的状态警告。
+                        ImGui::SameLine();
+                        ImGui::TextColored(
+                            ImVec4(1.0F, 0.42F, 0.32F, 1.0F),
+                            "%s",
+                            TR("ui.annotation.target_missing").data());
+                    }
+                    // 即使目标已丢失，作者、时间和正文仍是有效的批注历史信息。
+                    ImGui::Separator();
+                    // 分隔线明确区分结构化元数据与用户编写的自由格式正文。
+                    // 正文保留完整 Markdown 语义，包括链接、图片和换行。
+                    UI::renderMarkdown(selected.content);
+                    // MarkdownRenderer 在当前 Child
+                    // 的裁剪矩形内输出，滚动状态由 Child
+                    // 自己保存，不会改变上方表格的滚动位置。
+                    ImGui::EndChild();
                 }
-                // 即使目标已丢失，作者、时间和正文仍是有效的批注历史信息。
-                ImGui::Separator();
-                // 分隔线明确区分结构化元数据与用户编写的自由格式正文。
-                // 正文保留完整 Markdown 语义，包括链接、图片和换行。
-                UI::renderMarkdown(selected.content);
-                // MarkdownRenderer 在当前 Child 的裁剪矩形内输出，滚动状态由
-                // Child 自己保存，不会改变上方表格的滚动位置。
-                ImGui::EndChild();
-            }
+            }  // 桌面列表回退只在平台未呈现时执行。
         }
     }
     ImGui::End();

@@ -76,7 +76,8 @@ if(ANDROID)
   # 安卓工厂根据当前操作方案选择触控仲裁或共用的桌面指针解释器。
   target_sources(
     Canvas
-    PRIVATE src/presentation/mobile/MobileTimelineInteractionPresentation.cpp
+    PRIVATE src/presentation/mobile/MobileAnnotationTablePresentation.cpp
+            src/presentation/mobile/MobileTimelineInteractionPresentation.cpp
             src/presentation/mobile/MobileCanvasInteractionPresentation.cpp
             src/presentation/mobile/MobileCanvasFactory.cpp)
 else()
@@ -386,6 +387,9 @@ mmm_register_test_case(NAME EditorInteractionSurfaceTest COMMAND
 mmm_add_test_executable(Canvas TimingTableMouseSelectionTest
                         tests/TimingTableMouseSelectionTest.cpp)
 target_link_libraries(TimingTableMouseSelectionTest PRIVATE Canvas)
+# 表格触点回归借用套件已编译的移动生产呈现，不重复定义工厂。
+target_include_directories(TimingTableMouseSelectionTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 mmm_register_test_case(NAME TimingTableMouseSelectionTest COMMAND
                        TimingTableMouseSelectionTest)
 
@@ -394,6 +398,9 @@ mmm_register_test_case(NAME TimingTableMouseSelectionTest COMMAND
 mmm_add_test_executable(Canvas MouseAnnotationMenuTest
                         tests/MouseAnnotationMenuTest.cpp)
 target_link_libraries(MouseAnnotationMenuTest PRIVATE Canvas)
+# 整条批注栏测试显式选择移动工厂；实现已由套件链接，不再重复编译。
+target_include_directories(MouseAnnotationMenuTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 mmm_register_test_case(NAME MouseAnnotationMenuTest COMMAND
                        MouseAnnotationMenuTest)
 
@@ -482,3 +489,26 @@ mmm_register_test_case(NAME MobileTimingCurveInteractionTest COMMAND
 # Windows 负责确定性状态机及桌面对照，Android 设备负责后端与布局验收。
 # 新增源文件只加入自维护 Canvas 目标，不修改第三方依赖的构建定义。
 # cmake-format: on
+
+# 批注列表回归采用正式移动呈现与全局滚动仲裁，桌面显式链接移动实现。 数据来自独立内存会话；翻译只读源码字典，不写测试资源或用户配置。
+mmm_add_test_executable(Canvas MobileAnnotationTableTest
+                        tests/MobileAnnotationTableTest.cpp)
+target_include_directories(MobileAnnotationTableTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(MobileAnnotationTableTest PRIVATE Canvas Log 3rd_imgui)
+target_compile_definitions(
+  MobileAnnotationTableTest
+  PRIVATE
+    MMM_T08_TRANSLATION="${CMAKE_SOURCE_DIR}/assets/translations/en_us.lua")
+if(NOT ANDROID)
+  target_sources(
+    MobileAnnotationTableTest
+    PRIVATE src/presentation/mobile/MobileAnnotationTablePresentation.cpp)
+endif()
+mmm_register_test_case(NAME MobileAnnotationTableTest COMMAND
+                       MobileAnnotationTableTest)
+
+# 本批测试入口只读取源码语言文件，不在测试资源目录生成文件。 移动平台工厂与桌面平台工厂互斥，避免改变宿主生产布局。
+# 属性草稿、选择和正式命令分别验证，构建通过不替代设备验收。 CPU 测试无图形及音频设备，设备证据继续集中存入外置工作树。
+
+# 表格私有呈现头只提供给实际消费目标，不能扩大 Canvas 的公开依赖。

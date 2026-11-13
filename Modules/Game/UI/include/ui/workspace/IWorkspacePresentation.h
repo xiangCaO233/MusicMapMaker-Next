@@ -10,6 +10,12 @@ namespace MMM::UI
 class UIManager;
 class MainDockSpaceUI;
 
+/// @brief 浮动辅助窗口可以使用的屏幕区域，不包含平台常驻工具栏。
+/// @details 原点与尺寸均为当前 ImGui 屏幕坐标，不保存设备或窗口所有权。
+struct WorkspaceWindowArea {
+    ImVec2 m_origin;  ///< 区域左上角，包含当前主视口工作区偏移。
+    ImVec2 m_size;    ///< 可用尺寸；平台遮挡只在外壳内部计算。
+};
 /// @brief 工作区外壳策略；桌面与移动端分别组合布局，不改变编辑器业务视图。
 class IWorkspacePresentation
 {
@@ -39,6 +45,9 @@ public:
     {
         return false;
     }
+    /// @brief 公共辅助窗口的安全区域，桌面默认返回完整主视口工作区。
+    /// @warning 每帧固定标量读取，不访问窗口树或执行跨线程查询。
+    virtual WorkspaceWindowArea floatingWindowArea() const;
     /// @brief 当前数值组件允许水平拖动；桌面无需额外登记。
     virtual void registerHorizontalDragItem() {}
     /// @brief 竖直数值条沿纵向调值，横向仍允许浏览内容；桌面保持原生输入。
@@ -73,6 +82,9 @@ private:
     /// @brief 外层 UI 帧的观察指针，不拥有其生命周期。
     IWorkspacePresentation* m_previous;
 };
+/// @brief 查询当前外壳安全区域；无帧作用域时使用完整主视口工作区。
+/// @warning 每帧只借用策略并复制四个标量，不分配或等待。
+WorkspaceWindowArea workspaceFloatingWindowArea();
 /// @brief 供 LayoutContext 与直接窗口入口共用，不改变默认桌面行为。
 bool beginWorkspaceWindow(std::string_view id, const std::string& title,
                           bool* open, ImGuiWindowFlags flags = 0);

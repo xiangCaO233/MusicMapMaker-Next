@@ -8,13 +8,17 @@
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
+#include "graphic/mobile/MobileTouchInput.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "presentation/TimelineInteractionPresentation.h"
+#include "presentation/mobile/MobileTimelineInteractionPresentation.h"
 #include "ui/interaction/EditorInteraction.h"
+#include "ui/workspace/MobileTouchScroll.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -42,6 +46,17 @@ struct TimingTableMouseSelectionTestAccess {
     {
         canvas.m_currentSnapshot                            = &snapshot;
         canvas.m_auxiliaryWindowState.timingPointsTableOpen = true;
+    }
+    /// @brief 仅替换平台呈现，行布局、数据源和集合更新仍为正式实现。
+    static void mobile(TimelineCanvas& canvas)
+    {
+        canvas.m_timingPresentation =
+            createMobileTimelineInteractionPresentation();
+    }
+    /// @brief 长按只能准备原参数副本，不能提前提交修改。
+    static bool editing(const TimelineCanvas& c, entt::entity entity)
+    {
+        return c.m_isPopupOpen && c.m_editingEntity == entity;
     }
     /// @brief 每个输入帧走完整表格，不以独立集合运算替代 UI 行为。
     /// @pre 调用者已开始 ImGui 帧，且尚未调用 Render。
@@ -102,6 +117,10 @@ void frame(Canvas::TimelineCanvas& canvas, ImVec2 pointer = { 1300, 850 },
     auto& io = ImGui::GetIO();
     io.AddMousePosEvent(pointer.x, pointer.y);
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, down);
+    // 全局过滤可能延后普通鼠标点击，正式触屏行必须只交付一次选择。
+    // 结束过滤后恢复物理输入，下一帧仍能正确识别原始边沿。
+    // 表格长按只创建参数副本，本夹具不主动绘制或确认那个参数窗。
+    // 因此观察到原 editing 标志仍不等于已产生谱面修改命令。
     ImGui::NewFrame();
     // 位置每帧固定，排除拖动窗口或工作区 ini 对行点击坐标的影响。
     // 第一帧允许正式窗口使用自身的首次尺寸，第二帧取得稳定的测试尺寸。
@@ -127,9 +146,15 @@ struct Layout {
     explicit Layout(int count) : rows(count)
     {
         window = ImGui::FindWindowByName("###TimingPointsTableWindow");
-        if ( window )
+        if ( window ) {
             table = ImGui::GetCurrentContext()->Tables.GetByKey(
                 window->GetID("TimingPointsTableMainV3"));
+            // 同一上下文先验桌面再验触屏，两种表格都可能仍留在注册表。
+            // 只选择本帧确实绘制的表格，避免复用上一场景的旧行几何。
+            if ( !table || table->LastFrameActive != ImGui::GetFrameCount() )
+                table = ImGui::GetCurrentContext()->Tables.GetByKey(
+                    window->GetID("TimingPointsTouchTableV1"));
+        }
     }
     /// @brief 序号列中点，不与行内时间输入框或删除按钮重叠。
     /// @param index 当前可见结果的零起始位置，不能越过 rows。
@@ -216,6 +241,9 @@ void tap(Canvas::TimelineCanvas& canvas, ImVec2 point)
 /// @post 所有订阅在局部捕获变量析构前移除；不保存个人操作方案配置。
 bool run()
 {
+    // 谱面只存在于当前测试进程，关闭会话时禁止工作区持久化。
+    // 地址令牌来自真实活动实例，同路径名字不能代替该身份。
+    // 正式载入至少推进一次，才能满足表格对活动谱面的归属检查。
     auto       map          = std::make_shared<BeatMap>();
     auto&      engine       = Logic::EditorEngine::instance();
     const auto sessionIndex = engine.createSession(
@@ -230,6 +258,9 @@ bool run()
     // 载入可能补充默认 BPM，明确清空后才能让四个实体对应四条可见行。
     // 不启动逻辑线程，直接建立前置 Registry 不会与 UI 读取发生并发竞争。
     registry.clear();
+    // 四个普通点都可见，行高一致，可以从实际表格几何反推各行位置。
+    // 首末两行间距离超过滑动容差，正好用来区分滚动与旧式拖选。
+    // 不同数值和稳定实体一起构成目标证据，不用显示序号替代实体身份。
     std::array<entt::entity, 4> entities{};
     constexpr std::array        types{ TimingEffect::BPM,
                                        TimingEffect::SCROLL,
@@ -260,8 +291,11 @@ bool run()
         if ( !value ) XERROR("Timing table mouse test: {}", phase);
         passed &= value;
     };
-    int        commands     = 0;
-    auto&      bus          = Event::EventBus::instance();
+    int   commands = 0;
+    auto& bus      = Event::EventBus::instance();
+    // 只记录由正式命令出口发布的事件，不依赖窗口私有的预览颜色。
+    // 计数从本场景开始，鼠标用例此前的载入和收尾不混入触屏结论。
+    // 订阅在引用的局部计数离开作用域之前撤销，避免析构事件悬空回调。
     const auto subscription = bus.subscribe<Event::LogicCommandEvent>(
         [&](const auto&) { ++commands; });
     {
@@ -271,6 +305,9 @@ bool run()
         // 字体与布局的初始化帧不包含点击，不能被当作选择行为的一部分。
         frame(canvas);
         frame(canvas);
+        // 真实表格必须已完成两帧布局，才能读取最终列宽与行高。
+        // 几何缺失会明确失败，不能跳过点击后把空测试视作通过。
+        // 所有坐标在本上下文中使用，不能跨窗口销毁保存内部 ImGui 指针。
         Layout layout(4);
         if ( !layout.table ) {
             XERROR("Timing table layout missing");
@@ -431,6 +468,224 @@ bool run()
     engine.closeSession(sessionIndex, false);
     return passed;
 }
+/// @brief 原始触点通过全局滚动仲裁，点选、滑动和长按必须拥有不同结果。
+/// @details 真实表格读取内存会话 Registry；不以私有手势标志冒充选区变化。
+// 触屏与前面的鼠标用例使用同一正式窗口和表格数据收集路径。
+// 本段单独创建活动会话，不复用鼠标测试里已销毁的 Registry 或实体。
+// 替换的只有平台呈现对象，集合语义仍由正式表格函数执行。
+// 经典与纯鼠标用例先独立通过，不能用移动结果覆盖它们的兼容性结论。
+// 表格不需要主画布可见，也不使用当前时间线视野内的裁剪行。
+// 所有选择动作都必须保持命令计数为零，历史只属于后续确认的编辑。
+bool touchTable()
+{
+    auto&      engine = Logic::EditorEngine::instance();
+    auto       map    = std::make_shared<BeatMap>();
+    const auto index  = engine.createSession(
+        map, "TouchTable", false, "TouchTimingTable", true);
+    const auto session = engine.getActiveSession();
+    session->update(0, engine.getEditorConfig(), true);
+    auto& registry = session->getContextMutable().timelineRegistry;
+    registry.clear();
+    std::array<entt::entity, 4> entities{};
+    // 不同数值使编辑目标错位也能在后续草稿验证中被识别。
+    for ( std::size_t i = 0; i < entities.size(); ++i ) {
+        entities[i] = registry.create();
+        registry.emplace<Logic::TimelineComponent>(
+            entities[i], static_cast<double>(i), TimingEffect::BPM, 120.0 + i);
+    }
+    Common::Render::RenderSnapshot snapshot;
+    snapshot.hasBeatmap        = true;
+    snapshot.beatmapPathKey    = "touch-table.mmm";
+    snapshot.beatmapInstanceId = reinterpret_cast<std::uintptr_t>(map.get());
+    // 方案同步走正式注册表；重复同步用于满足已有的安全切换边界。
+    // 这里不伪造 Ctrl、Shift 或鼠标右键来触发移动选择。
+    // 下一笔模式可以显式切换，但已经发生的集合结果不会被设置直接改写。
+    UI::Interaction::synchronizeProfile("touch-gestures", true);
+    UI::Interaction::synchronizeProfile("touch-gestures", true);
+    // 触屏用例的错误单独累计，不因前面的鼠标场景失败而跳过。
+    // 后续取消、长按和收尾仍会执行，可以暴露同一输入造成的次生问题。
+    // 最终退出码综合桌面和触屏结论，不用一次成功覆盖另一项失败。
+    bool ok     = true;
+    auto expect = [&](bool value, const char* text) {
+        if ( !value ) XERROR("Touch timing table: {}", text);
+        ok &= value;
+    };
+    int        writes{};
+    const auto subscription =
+        Event::EventBus::instance().subscribe<Event::LogicCommandEvent>(
+            [&](const auto&) { ++writes; });
+    {
+        Canvas::TimelineCanvas canvas("TouchTable", 500, 500, nullptr);
+        Access::mobile(canvas);
+        // 真实设备打开时可能先走占位窗；它会消费相同内部 ID 的 Appearing。
+        // 若此路径遗漏平台几何，快照随后到达也无法补回初次尺寸。
+        // 先用未就绪快照验证实际窗口高度，再恢复正式数据进行后续选择。
+        snapshot.hasBeatmap = false;
+        Access::open(canvas, snapshot);
+        // 上一鼠标场景复用了窗口 ID；插入未绘制帧模拟真实关闭后再次打开。
+        ImGui::NewFrame();
+        ImGui::Render();
+        frame(canvas);
+        const auto* waiting =
+            ImGui::FindWindowByName("###TimingPointsTableWindow");
+        expect(waiting && waiting->Size.y > ImGui::GetIO().DisplaySize.y * .8f,
+               "syncing window keeps touch viewport geometry");
+        snapshot.hasBeatmap = true;
+        // 使用真实页面仲裁器，序号列滑动必须与其它可滚动内容遵守同一规则。
+        // 原始触点分类与合成鼠标回放都在本帧执行，不能只验证其中一条路径。
+        // 父窗口布局每帧固定，排除窗口拖移造成行命中变化。
+        UI::MobileTouchScroll scroll;
+        auto&                 editorSettings =
+            Config::AppConfig::instance().getEditorSettings();
+        const bool timelineWasVisible     = editorSettings.showTimelineWindow;
+        editorSettings.showTimelineWindow = false;
+        bool   previous{}, second{};
+        double tick{};
+        // 原始跟踪器与 ImGui 使用同一屏幕坐标，第二指不伪造右键或 Ctrl。
+        // p 使用窗口屏幕坐标，只在原始后端入口做归一化。
+        // 首指状态和第二指状态各自记忆，Down、Move、Up 不能混为重复按下。
+        // 系统取消独立发布，不能让正常 Up 的成功掩盖 Cancel 的处理遗漏。
+        // 帧时间固定，仅用于长按计时，不引入阻塞等待或后台线程同步。
+        // 输入事件先于 NewFrame，滚动过滤先于表格控件提交。
+        const auto input = [&](ImVec2 p,
+                               bool   down    = false,
+                               bool   another = false,
+                               bool   cancel  = false) {
+            auto& io = ImGui::GetIO();
+            using Graphic::TouchPhase;
+            if ( down || previous || cancel )
+                Graphic::publishMobileTouch(
+                    cancel ? TouchPhase::Cancel
+                    : down ? (previous ? TouchPhase::Move : TouchPhase::Down)
+                           : TouchPhase::Up,
+                    88,
+                    1,
+                    p.x / io.DisplaySize.x,
+                    p.y / io.DisplaySize.y,
+                    tick);
+            if ( another || second )
+                Graphic::publishMobileTouch(
+                    another ? (second ? TouchPhase::Move : TouchPhase::Down)
+                            : TouchPhase::Up,
+                    88,
+                    2,
+                    (p.x + 60) / io.DisplaySize.x,
+                    p.y / io.DisplaySize.y,
+                    tick);
+            previous = down && !cancel;
+            second   = another;
+            tick += io.DeltaTime;
+            io.AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
+            io.AddMousePosEvent(p.x, p.y);
+            io.AddMouseButtonEvent(0, previous);
+            ImGui::NewFrame();
+            scroll.beginFrame(1);
+            ImGui::SetNextWindowPos({ 20, 20 });
+            ImGui::SetNextWindowSize({ 1200, 800 });
+            // 走生产隐藏窗口分支，草稿标志不能代替实际参数弹窗绘制成功。
+            canvas.update(nullptr);
+            scroll.endFrame();
+            ImGui::Render();
+        };
+        const auto click = [&](ImVec2 p) {
+            input(p);
+            input(p, true);
+            input(p);
+            input(p);
+        };
+        input({ 1300, 850 });
+        input({ 1300, 850 });
+        Layout layout(4);
+        expect(layout.table != nullptr, "production table exists");
+        if ( layout.table ) {
+            const auto a = layout.row(0), b = layout.row(2), c = layout.row(3);
+            // 第一次正常点按是阳性对照，确保行输入不是被全部屏蔽。
+            // 选中成员与集合数量同时判断，避免选错但数量相同的假通过。
+            // 追加模式重复点击末行两次应保持选中，不能退化为 Ctrl 反选。
+            click(a);
+            expect(Access::count(canvas) == 1 &&
+                       Access::selected(canvas, entities[0]),
+                   "tap replaces selection");
+            // 这些设置只选择下一笔意图；实际集合必须由正式行点击更新。
+            UI::Interaction::activeProfile().setSelectionOperation(
+                Logic::SelectionOperation::Add);
+            click(c);
+            click(c);
+            expect(Access::count(canvas) == 2 &&
+                       Access::selected(canvas, entities[3]),
+                   "touch addition is idempotent");
+            UI::Interaction::activeProfile().setSelectionOperation(
+                Logic::SelectionOperation::Subtract);
+            click(c);
+            expect(Access::count(canvas) == 1 &&
+                       !Access::selected(canvas, entities[3]),
+                   "touch subtraction is a difference");
+            UI::Interaction::activeProfile().setSelectionOperation(
+                Logic::SelectionOperation::Replace);
+            // 从首行滑到末行，旧桌面路径会形成连续范围拖选。
+            // 触屏必须保留此前选择，让全局页面仲裁处理浏览动作。
+            // 最后两帧分别是正常 Up 与迟到鼠标配对，均不能再改变集合。
+            // 这也检查向下滑动达到滚动边界时不会回退为行选择。
+            input(a, true);
+            input(c, true);
+            input(c);
+            input(c);
+            expect(Access::count(canvas) == 1 &&
+                       Access::selected(canvas, entities[0]),
+                   "swipe never starts row drag selection");
+            input(b, true);
+            // 两指分阶段进入同一代，第二指抬起不会恢复第一指的编辑候选。
+            // 后续独立 Cancel 场景重新开始首指，不能借前一场景 blocked
+            // 状态蒙混。
+            // 检查同时包含选区、编辑目标与命令数量，覆盖误选和误写两类错误。
+            input(b, true, true);
+            // 长按后的松手不再成为另一笔轻点，已锁存目标不能重复激活。
+            // 本场景不确认参数副本，所以最终命令数量始终必须为零。
+            // 关闭内存会话也不保存这个临时参数窗到个人工作区。
+            input(b);
+            input(b);
+            input(b, true);
+            // 系统取消必须经过生产原始跟踪器，不能直接复位选择或编辑标志。
+            // 随后空闲帧检查是否存在延后点击，普通抬手路径不能替它收尾。
+            // 取消之后再进行阳性轻点，证明下一代输入仍然可用。
+            input(b, false, false, true);
+            input(b);
+            expect(Access::count(canvas) == 1 &&
+                       !Access::editing(canvas, entities[2]) && writes == 0,
+                   "second finger and Cancel produce no edit");
+            // 取消用例配对正常点按，不能让吞掉所有输入的实现也通过回归。
+            click(b);
+            expect(Access::count(canvas) == 1 &&
+                       Access::selected(canvas, entities[2]),
+                   "positive tap after cancellations");
+            input(b, true);
+            // 固定帧步长累计越过长按阈值，过程中没有任何 sleep。
+            // 进入参数窗仍不允许发布更新；确认按钮是唯一提交边界。
+            // 长按结束后的 Up 继续走正式表格，用于发现迟到点击重复选择。
+            // 最后由会话自然收尾，不直接擦除生产输入门闩。
+            for ( int i = 0; i < 35; ++i ) input(b, true);
+            expect(Access::editing(canvas, entities[2]) && writes == 0,
+                   "hold opens original-ID draft without publishing");
+            input(b);
+            input(b);
+            // 检查的是正式 ImGui 模态窗口，不是只读私有 m_isPopupOpen 标志。
+            // 未绘制的旧窗口仍可能留在 ImGui
+            // 注册表，因此同时要求本帧活动且可见。 输入路径经过 update
+            // 的隐藏时间线分支，可捕获独立表格遗漏弹窗的回归。
+            // 这里只打开草稿，没有按应用；正常抬手不能自行补发更新命令。
+            // 旧鼠标用例继续直接绘制原表格，两套输入不会共享触点解释器。
+            // 还原全局显示偏好后才析构视图，避免本用例配置影响下一次会话。
+            const auto* editor = ImGui::FindWindowByName("TimelineEventEditor");
+            expect(editor && editor->Active && !editor->Hidden,
+                   "hidden timeline still renders the actual event modal");
+        }
+        editorSettings.showTimelineWindow = timelineWasVisible;
+    }
+    Event::EventBus::instance().unsubscribe<Event::LogicCommandEvent>(
+        subscription);
+    engine.closeSession(index, false);
+    return ok;
+}
 }  // namespace
 
 /// @brief 创建 CPU 字体图集并执行真实鼠标帧，测试失败返回非零退出码。
@@ -460,7 +715,7 @@ int main()
     // 像素由 ImGui 拥有，测试只借用图集构建结果，不将其注册为应用纹理。
     // 上下文销毁时统一释放，无需独立资源清理或图形设备同步。
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
-    const bool passed = run();
+    const bool passed = run() & touchTable();
     ImGui::DestroyContext();
     return passed ? 0 : 1;
 }

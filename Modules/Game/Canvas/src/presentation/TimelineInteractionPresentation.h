@@ -1,5 +1,6 @@
 #pragma once
 #include "canvas/TimelineCanvas.h"
+#include <cstdint>
 #include <memory>
 #include <unordered_set>
 
@@ -38,6 +39,19 @@ public:
     virtual void update(TimelineCanvas& canvas, const ImVec2& origin,
                         const ImVec2& size, bool hovered, bool focused,
                         bool profileAlreadyChecked);
+    /// @brief 平台可以在 Begin 前约束辅助表格的位置和尺寸，桌面保持原布局。
+    /// @warning 每帧只提交平台几何约束，不执行 I/O 或同步等待。
+    virtual void prepareTableWindow() const {}
+    /// @brief 平台决定紧凑只读表格；桌面保留原有单元格输入。
+    virtual bool touchTable() const { return false; }
+    /// @brief 表格行返回零、轻点或长按；桌面继续原鼠标选择与拖选。
+    /// @warning 每个可见行固定触点分类，不访问会话或构造目标列表。
+    virtual int tableRow(std::uint32_t, const ImVec2&, const ImVec2&)
+    {
+        return 0;
+    }
+    /// @brief 关闭、切谱或播放时丢弃表格候选，不撤销已有历史。
+    virtual void resetTableInput() {}
     /// @brief 待定触点和导航同样占有输入，切换方案前必须全部结束。
     /// @warning 每帧仅访问平台本地状态，不读取逻辑注册表。
     virtual bool hasGesture() const { return false; }

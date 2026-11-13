@@ -1765,4 +1765,7 @@ return {
     ["ui.mobile.color.apply_history"] = "应用物件配色",
     ["ui.mobile.color.clear_history"] = "清除物件配色",
     ["ui.common.close"] = "关闭",
+    ["ui.mobile.annotation.list_hint"] = "点按选择阅读，长按编辑；滑动浏览列表。",
+    ["ui.mobile.annotation.changed"] = "批注已被修改，请取消后重新打开。",
+    ["ui.mobile.timing.table_hint"] = "点按选择，长按编辑；滑动浏览。多选后可复制、剪切或删除。",
 }

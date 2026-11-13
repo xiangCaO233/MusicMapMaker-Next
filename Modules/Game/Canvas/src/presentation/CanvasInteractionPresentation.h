@@ -58,6 +58,9 @@ public:
                         const Common::Render::RenderSnapshot* snapshot,
                         const UI::Interaction::SurfaceFrame& frame, float width,
                         float height) = 0;
+    /// @brief 平台批注入口：移动可请求常驻阅读菜单，桌面仍使用右键。
+    /// @warning 每帧只分类输入，不保存快照或发送编辑命令。
+    virtual bool annotationMenuRequested(std::uint32_t, bool) { return false; }
     /// @brief 待定触点同样拥有输入，摄像机不能在意图未定时接管。
     /// @warning 每帧只读取平台本地标量，不访问会话或加锁。
     virtual bool hasGesture() const { return false; }

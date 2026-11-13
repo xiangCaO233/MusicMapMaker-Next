@@ -534,6 +534,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         // 主窗口隐藏不能阻断独立表格快照和交互生命周期。
         commitAudioTimeSliderScrub();
         renderTimingPointsTableWindow();
+        // 普通点编辑和插值编辑同样独立于主画布，表格长按后必须继续绘制。
+        renderEventEditorPopup();
         // 插值编辑器是独立模态窗口，隐藏 Timeline 不应丢弃已打开的副本。
         // 即使只从独立表格进入，也保留确认、取消和 Esc 的完整生命周期。
         renderInterpolationEditor();
@@ -581,6 +583,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         editorSettings.showTimelineWindow = false;
         appConfig.save();
         renderTimingPointsTableWindow();
+        // 普通点编辑和插值编辑同样独立于主画布，表格长按后必须继续绘制。
+        renderEventEditorPopup();
         renderInterpolationEditor();
         renderTimingTemplateEditor();
         return;
@@ -1136,12 +1140,13 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             }
             // 5. 渲染弹窗
 
-            renderEventEditorPopup();
             renderEventCreationPopup();
         }
     }
 
     renderTimingPointsTableWindow();
+    // 表格入口在本帧准备的副本也立即可见；每帧仅在统一位置绘制一次。
+    renderEventEditorPopup();
     renderInterpolationEditor();
     renderTimingTemplateEditor();
     // 警告晚于所有编辑窗口绘制，不在用户确认前抢占编辑弹窗。

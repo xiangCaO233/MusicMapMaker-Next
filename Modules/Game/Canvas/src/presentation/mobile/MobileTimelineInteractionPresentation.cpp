@@ -1,8 +1,10 @@
 #include "MobileTimelineInteractionPresentation.h"
+#include "MobileAuxiliaryWindow.h"
 #include "MobileCanvasGesture.h"
 #include "MobileNavigationRouting.h"
 #include "MobilePointerInputScope.h"
 #include "MobilePointerOwnership.h"
+#include "MobileReadPress.h"
 #include "MobileTimingCurveEditor.h"
 #include "MobileTimingRange.h"
 #include "common/SelectionOperation.h"
@@ -57,6 +59,37 @@ class MobileTimelineInteractionPresentation final
     : public TimelineInteractionPresentation
 {
 public:
+    /// @brief 触屏表格使用外壳安全区域，常驻工具栏不遮住标题和关闭按钮。
+    /// @warning 每帧只提交本地几何，不改动时间线模型或系统显示设置。
+    void prepareTableWindow() const override
+    {
+        if ( touchTable() ) prepareMobileAuxiliaryWindow();
+    }
+    /// @brief 安卓接鼠标后沿用原桌面表格，触控才启用只读单元格与显式编辑。
+    bool touchTable() const override
+    {
+        return UI::Interaction::activeProfile().touchGestures();
+    }
+    /// @brief 点按选择，静止长按进入原参数窗；滑动与第二指只交给页面仲裁。
+    /// @warning 每个可见行只分类固定触点，不复制选区或等待逻辑线程。
+    // 返回值只有离散意图，表格自身仍负责原有集合操作与参数草稿。
+    // 页面滚动控制器可能屏蔽合成鼠标按下，因此直接观察原始触点。
+    // 行命中同时要求原始起点与当前窗口归属，滑入邻窗不会被接管。
+    // 不向原始跟踪器写入事件，也不以修饰键模拟多选。
+    int tableRow(std::uint32_t id, const ImVec2& min,
+                 const ImVec2& max) override
+    {
+        if ( !touchTable() ) return 0;
+        return static_cast<int>(m_tablePress.update(
+            id,
+            MobileReadPress::originInside(min, max) &&
+                ImGui::IsWindowHovered(
+                    ImGuiHoveredFlags_AllowWhenBlockedByActiveItem),
+            true));
+    }
+    /// @brief 窗口隐藏时拒绝残留触点，不重放过期轻点。
+    void resetTableInput() override { m_tablePress.cancel(); }
+
     /// @brief 移动图表交互独立保存，经典方案仍使用默认指针控件。
     /// @warning 模态帧只消费窗口副本，不访问谱面注册表。
     // 移动图表的候选与热区均由私有成员管理，不进入 TimelineCanvas 的公开定义。
@@ -602,6 +635,8 @@ public:
     }
 
 private:
+    MobileReadPress
+        m_tablePress;  ///< 表格与画布各自锁定原始代际，不共享编辑状态。
     /// @brief 单选才提供局部边界，复选继续沿用正文整组平移。
     /// @details 普通点或失效句柄返回空，不用屏幕最近段落猜测用户选中对象。
     /// 非法时间或短于最小范围的段落不提供端点，避免构造无序夹取边界。
