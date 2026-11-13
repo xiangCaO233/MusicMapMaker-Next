@@ -6582,6 +6582,10 @@ void Basic2DCanvasInteraction::renderHoverInspection(
 {
     if ( !currentSnapshot ) return;
     const ImVec2 mousePos{ mouseX, mouseY };
+    // 鼠标详情属于平台呈现策略；触屏使用自己的按住反馈。
+    // 不通过清空悬浮身份抑制窗口，否则会破坏命中、拖动与吸附。
+    // 桌面默认仍进入原路径，后台画布也遵守同一个呈现边界。
+    if ( !m_pointerPresentation->allowsHoverInspection() ) return;
     // 物件颜色遮罩使用画布局部位置，必须在打开提示窗口之前保存原画布原点。
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     const auto   plane  = planarObservationUnproject(

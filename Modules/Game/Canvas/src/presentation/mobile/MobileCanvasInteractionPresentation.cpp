@@ -38,6 +38,13 @@ class MobileCanvasInteractionPresentation final
     : public CanvasInteractionPresentation
 {
 public:
+    /// @brief 触屏不绘制鼠标跟随详情，经典与纯鼠标方案保留原检视。
+    /// @warning 每帧只读操作方案能力，不能等待逻辑线程或创建提示状态。
+    bool allowsHoverInspection() const override
+    {
+        // 按住把手的简短说明由移动呈现绘制，避免两层提示同时遮挡画布。
+        return !UI::Interaction::activeProfile().touchGestures();
+    }
     /// @brief 等待中的手势也保有指针，防止摄像机在长按期间平移。
     bool hasGesture() const override
     {

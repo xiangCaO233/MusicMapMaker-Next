@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -887,11 +888,33 @@ void testTapPreservesRedo()
     check(ctx.noteRegistry.get<NoteComponent>(entity).m_timestamp == 2,
           "redo after selection still restores actual object change");
 }
+/// @brief 呈现策略在方案切换后立即分离触屏反馈和鼠标详情。
+/// @details 同一移动实例还要服务经典与纯鼠标方案，不能按编译平台永久关闭。
+void testInspectionPolicy()
+{
+    // 工厂对象只创建一次，再切换三种真实方案，暴露错误缓存的策略结果。
+    auto mobile  = Canvas::createMobileCanvasInteractionPresentation();
+    auto desktop = Canvas::createDesktopCanvasInteractionPresentation();
+    for ( const auto* id :
+          { "touch-gestures", "classic-desktop", "mouse-only" } ) {
+        // 两次安全边界完成旧方案卸载和新方案激活，不沿用上一代策略。
+        UI::Interaction::synchronizeProfile(id, true);
+        UI::Interaction::synchronizeProfile(id, true);
+        // 桌面对象始终保留旧详情；移动对象只在触屏方案使用简短反馈。
+        // 选择集合和历史不参与显示策略，切换不能要求创建编辑事务。
+        // 预期来自用例标识，不能用被测策略自己的能力值作为预期。
+        check(desktop->allowsHoverInspection() &&
+                  mobile->allowsHoverInspection() ==
+                      (std::string_view(id) != "touch-gestures"),
+              "hover inspection follows presentation without changing desktop");
+    }
+}
 }  // namespace
 /// @brief 返回所有语义断言结果，不把某个计数成功当作整组通过。
 /// @post 所有场景均已解除订阅和销毁上下文，不保留设备或文件句柄。
 int main()
 {
+    testInspectionPolicy();
     testObject();
     testHandles();
     testLocalParts();

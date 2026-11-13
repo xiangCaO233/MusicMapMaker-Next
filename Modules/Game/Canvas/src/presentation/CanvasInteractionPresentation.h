@@ -61,6 +61,10 @@ public:
     /// @brief 待定触点同样拥有输入，摄像机不能在意图未定时接管。
     /// @warning 每帧只读取平台本地标量，不访问会话或加锁。
     virtual bool hasGesture() const { return false; }
+    /// @brief 平台呈现决定是否显示跟随鼠标的详细检视框。
+    /// @details 桌面默认保留，触屏使用本地按住反馈，公共画布不判断平台。
+    /// @warning 每帧只读取操作方案能力，不分配、不访问会话或加锁。
+    virtual bool allowsHoverInspection() const { return true; }
 
 protected:
     /// @details 以下桥只允许同步转发，不保存管理器、快照或编辑器的所有权。
