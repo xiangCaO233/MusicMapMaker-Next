@@ -904,6 +904,7 @@ return {
 	["ui.audio_manager.visual_offset_tooltip"] = "调整整体渲染相对于音频的偏移量(ms)，正值代表物件提前显示",
 	["ui.audio_manager.audio_tracks"] = "主音轨列表",
 	["ui.audio_manager.project_sfx"] = "项目音效",
+	["ui.audio_manager.use_for_drawing"] = "用于绘制",
 	["ui.audio_manager.drag_to_bgm"] = "拖到主画布 BGM 轨道创建采样",
 	["ui.audio_manager.drag_unavailable"] = "资源 ID 为空或过长，无法拖到主画布",
 	["ui.audio_manager.column_id"] = "ID",

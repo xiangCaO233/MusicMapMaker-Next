@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/workspace/AudioPlotTouch.h"
 
 #include "ui/IUIView.h"
 #include <memory>
@@ -30,7 +31,13 @@ public:
     /// @warning UI 热路径：窗口可见时每帧调用，重计算必须由缓存状态约束。
     void update(UIManager* sourceManager) override;
 
+    /// @brief 关闭窗口时立即结束触控定位，不留待再次打开才提交。
+    void setOpen(bool open) override;
+
 private:
+    /// @brief 两个声道共用固定大小的触控导航状态，不持有快照。
+    AudioPlotTouch m_touchNavigation;
+
     /// @brief 按当前视野刷新波形包络采样缓存。
     /// @param visualTime 当前全局视觉时间，单位为秒。
     /// @param duration 音频总时长，单位为秒。

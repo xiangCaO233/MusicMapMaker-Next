@@ -1038,20 +1038,26 @@ void MobileWorkspacePresentation::endFrame(UIManager& manager)
     // 关闭动画结束前继续保留遮罩，避免抽屉还可见时背景先收到输入。
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                         ImVec2{ m_padding, m_padding });
-    if ( !popup && m_model.drawer() != MobileDrawer::None ) {
+    // 业务模态由抽屉内的文件／音频面板提交，模态存在时仍须推进其宿主。
+    // ImGui 自身阻挡背景输入；隐藏整个宿主会使确认框下一帧因未提交而消失。
+    // 只省略外壳遮罩和握柄，不撤掉面板、输入字段及确认操作的生命周期。
+    if ( m_model.drawer() != MobileDrawer::None ) {
         // 遮罩窗口占据背景输入层，原始画布输入另由模型守卫共同阻挡。
-        ImGui::PushStyleColor(ImGuiCol_WindowBg,
-                              ImVec4{ 0, 0, 0, .42f * m_model.fraction() });
-        beginPanel("MobileDrawerScrim", { 0, 0, m_size.x, m_size.y });
-        ImGui::End();
-        ImGui::PopStyleColor();
+        if ( !popup ) {
+            ImGui::PushStyleColor(ImGuiCol_WindowBg,
+                                  ImVec4{ 0, 0, 0, .42f * m_model.fraction() });
+            beginPanel("MobileDrawerScrim", { 0, 0, m_size.x, m_size.y });
+            ImGui::End();
+            ImGui::PopStyleColor();
+        }
         const auto rect = m_model.drawerRect();
         // 面板内容用满高度，外沿把手单独叠加，不再扣除顶部收起条。
         if ( m_model.drawer() == MobileDrawer::Left )
             drawLeftDrawer(manager, rect);
         else
             drawRightDrawer(manager, rect);
-        drawHandle("MobileDrawerGrip", m_model.drawerGrip(), true);
+        if ( !popup )
+            drawHandle("MobileDrawerGrip", m_model.drawerGrip(), true);
         // 外沿把手与抽屉共享展开比例，内容区域不因把手显隐改变宽高。
         // 普通弹层仍由 ImGui 保持在上方，握柄不会抢占其输入。
     }

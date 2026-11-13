@@ -22,6 +22,7 @@
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "ui/imgui/manager/FileManagerView.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/DesktopPathUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -1050,7 +1051,8 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
             !entry.isDirectory,
             [this, &entry, sourceManager]() {
                 // 激活回调在当前条目引用仍有效的同一绘制调用内执行。
-                activateFileEntry(entry, sourceManager);
+                if ( !Interaction::activeProfile().touchGestures() )
+                    activateFileEntry(entry, sourceManager);
             },
             "",
             fileEntryIcon(entry));
@@ -1446,6 +1448,32 @@ void FileManagerView::renderFileSortContextMenu()
 /// 并提供显式缓存刷新；剪贴板无效时保持粘贴项可见但禁用。
 void FileManagerView::renderFileBackgroundContextMenu(UIManager* sourceManager)
 {
+    if ( Interaction::activeProfile().touchGestures() ) {
+        // 空目录也必须有新建／粘贴入口；行已认领时同一个分类器拒绝背景接管。
+        // 表格滚动子窗仍属于文件面板，标题和其他面板则不在该窗口命中内。
+        const ImVec2 min = ImGui::GetWindowPos(), size = ImGui::GetWindowSize();
+        // 起点在条目时，先提交的行已锁定稳定身份，背景不能借用同一长按。
+        // 空白只提供根目录操作，不把鼠标当前位置推断成目标子目录。
+        // 弹层存在时撤去许可，关闭后残留抬手不能变成目录菜单。
+        // 纵向滚动使用原始位移峰值，经过空白不会重新开始计时。
+        // 没有 Tap 分支，普通空白轻点不会弹菜单或创建文件。
+        // 文件写入仍由已有入口复核路径和错误，不在每帧访问文件系统。
+        // 窗口命中包含表格子窗，相邻面板仍由原生遮挡规则排除。
+        const bool hit = TouchReadPress::originInside(
+            min, { min.x + size.x, min.y + size.y });
+        const bool blocked = ImGui::IsPopupOpen(
+            nullptr,
+            ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        const auto press = m_resourcePress.update(
+            ImGui::GetID("FileTreeBackgroundContextMenu"),
+            hit && !blocked &&
+                ImGui::IsWindowHovered(
+                    ImGuiHoveredFlags_ChildWindows |
+                    ImGuiHoveredFlags_AllowWhenBlockedByActiveItem),
+            hit && !blocked);
+        if ( press == TouchReadPress::Result::Hold )
+            FeedbackOpenPopup("FileTreeBackgroundContextMenu");
+    }
     // 右键只在没有条目 item 命中的窗口区域打开。
     constexpr ImGuiPopupFlags popupFlags =
         ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems;
@@ -1496,6 +1524,29 @@ void FileManagerView::renderFileEntryContextMenu(
 {
     // 完整路径构造稳定且唯一的上下文菜单 ID。
     const std::string popupId = "FileEntryContext_" + entry.fullPath;
+    // 触控使用原始 Down 冻结条目，滑动和长按结束不补交普通行点击。
+    // 目录箭头仍走原 TreeNode 展开，文件轻点只打开一次，不要求双击。
+    if ( Interaction::activeProfile().touchGestures() ) {
+        const bool hit = TouchReadPress::originInside(ImGui::GetItemRectMin(),
+                                                      ImGui::GetItemRectMax());
+        // 完整路径构成稳定目标，排序后的可见位置不是资源身份。
+        // 几何失效直接拒绝待定长按，不能在移动到另一行后恢复计时。
+        // 菜单复用已有文件操作及确认流程，不在输入分类器直接写文件。
+        const auto press = m_resourcePress.update(
+            ImGui::GetID(popupId.c_str()),
+            hit && ImGui::IsWindowHovered(
+                       ImGuiHoveredFlags_AllowWhenBlockedByActiveItem),
+            hit && !ImGui::IsPopupOpen(nullptr,
+                                       ImGuiPopupFlags_AnyPopupId |
+                                           ImGuiPopupFlags_AnyPopupLevel));
+        if ( press == TouchReadPress::Result::Tap && !entry.isDirectory )
+            activateFileEntry(entry, sourceManager);
+        if ( press == TouchReadPress::Result::Hold )
+            FeedbackOpenPopup(popupId.c_str());
+    } else {
+        // 切回经典方案后，上一触屏代际的残留 Up 不得重新激活资源。
+        m_resourcePress.cancel();
+    }
     if ( !ImGui::BeginPopupContextItem(popupId.c_str(),
                                        ImGuiPopupFlags_MouseButtonRight) ) {
         return;

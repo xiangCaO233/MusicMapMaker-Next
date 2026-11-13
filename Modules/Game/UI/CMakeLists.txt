@@ -94,6 +94,8 @@ add_library(
   src/ui/workspace/WorkspacePresentation.cpp
   src/ui/workspace/MobileWorkspaceModel.cpp
   # 空白触屏滚动独立于业务视图，桌面只在无 GPU 回归中主动创建。
+  src/ui/workspace/AudioPlotTouch.cpp
+  src/ui/workspace/TouchReadPress.cpp
   src/ui/workspace/MobileTouchScroll.cpp
   # 移动停靠树统一标签与内容边界，桌面仅通过无 GPU 测试创建。
   src/ui/workspace/MobileDockLayout.cpp
@@ -761,3 +763,10 @@ if(NOT ANDROID)
 endif()
 mmm_register_test_case(NAME MobileWidgetGeometryTest COMMAND
                        MobileWidgetGeometryTest)
+
+# 音频图表与资源行使用真实原始触点、ImGui 页面仲裁和正式播放控制器回归。 测试不创建 GPU 或音频设备，配置与所有运行输出仍由公共包装器隔离。
+mmm_add_test_executable(UI MobileAudioNavigationTest
+                        tests/MobileAudioNavigationTest.cpp)
+target_link_libraries(MobileAudioNavigationTest PRIVATE UI Logic Log)
+mmm_register_test_case(NAME MobileAudioNavigationTest COMMAND
+                       MobileAudioNavigationTest)

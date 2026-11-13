@@ -3,6 +3,7 @@
 #include "event/core/EventBus.h"
 #include "ui/ISubView.h"
 #include "ui/layout/box/CLayBox.h"
+#include "ui/workspace/TouchReadPress.h"
 #include <array>
 #include <concurrentqueue.h>
 #include <cstdint>
@@ -125,6 +126,9 @@ public:
     };
 
 private:
+    /// @brief 资源行原始触点分类器，稳定 ID 不随可见行索引改变。
+    TouchReadPress m_resourcePress;
+
     /// @brief 文件管理器剪贴板操作模式。
     enum class FileClipboardMode {
         /// @brief 当前没有可粘贴项目。

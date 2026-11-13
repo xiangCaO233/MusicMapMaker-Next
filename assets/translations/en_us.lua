@@ -905,6 +905,7 @@ return {
 	["ui.audio_manager.visual_offset_tooltip"] = "Adjust overall rendering offset relative to audio (ms)",
 	["ui.audio_manager.audio_tracks"] = "Main Audio Tracks",
 	["ui.audio_manager.project_sfx"] = "Project SFX",
+	["ui.audio_manager.use_for_drawing"] = "Use for Drawing",
 	["ui.audio_manager.drag_to_bgm"] = "Drag to a BGM lane on the main canvas to create a sample",
 	["ui.audio_manager.drag_unavailable"] = "The resource ID is empty or too long to drag onto the main canvas",
 	["ui.audio_manager.column_id"] = "ID",

@@ -6,6 +6,7 @@
 #include "ui/imgui/manager/AudioManagerView.h"
 #include "audio/AudioManager.h"
 #include "common/AudioResourceDragPayload.h"
+#include "common/EditTool.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/EditorConfig.h"
@@ -25,6 +26,7 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/AudioPresetControls.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/LayoutContext.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/NativeFileDialog.h"
@@ -937,10 +939,14 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     m_sourceManager = sourceManager;
     auto& engine    = Logic::EditorEngine::instance();
     // 查看与写入身份分开，访客资源不能作为项目管理命令的数据源。
-    const auto* project      = sourceManager->getAudioProject();
-    const bool  readOnly     = sourceManager->isAudioReadOnly();
-    auto&       skinCfg      = Config::SkinManager::instance();
-    auto&       audioManager = Audio::AudioManager::instance();
+    const auto* project = sourceManager->getAudioProject();
+    // 不同项目可能复用同名资源与相对路径，不能沿用上一项目的待定长按。
+    // 已有缓存身份可做常量检查，不逐帧拼接绝对路径或查询文件系统。
+    // 只封锁旧代际，后续新 Down 仍按新项目的实际可见行重新认领。
+    if ( project != m_cachedAudioTableProject ) m_resourcePress.cancel();
+    const bool readOnly     = sourceManager->isAudioReadOnly();
+    auto&      skinCfg      = Config::SkinManager::instance();
+    auto&      audioManager = Audio::AudioManager::instance();
 
     // 文件管理字体与资源表格的视觉语义一致；缺失时沿用当前字体。
     // 子视图只借用当前帧尺寸，持久 Clay Arena 仍由外层视图拥有。
@@ -1867,13 +1873,45 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                                         rowData.m_id,
                                                         rowData.m_path,
                                                         rowIndex);
-                const bool        clicked = ::MMM::UI::FeedbackSelectable(
+                bool              clicked = ::MMM::UI::FeedbackSelectable(
                     rowId.c_str(),
                     false,
                     ImGuiSelectableFlags_SpanAllColumns,
                     { 0.0f, rowSelectableHeight });
                 // 在移动到其他列之前捕获整行悬浮态。
                 const bool hovered = ImGui::IsItemHovered();
+                const bool touchInput =
+                    Interaction::activeProfile().touchGestures();
+                // 行点击与长按都以原始输入为准，不能把鼠标补交沿当成第二次动作。
+                // 资源行只存稳定身份，不跨帧借用排序缓存中的元素引用。
+                // 滑动、多指或系统取消之后，本代际不得再打开控制器。
+                TouchReadPress::Result press = TouchReadPress::Result::None;
+                if ( touchInput ) {
+                    const bool hit = TouchReadPress::originInside(
+                        ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+                    // 类型和路径确定资源身份，可见行索引只属于当前排序视图。
+                    // 列表排序或裁剪变化不能把已经按住的资源菜单转交给相邻行。
+                    // 读写权限继续在菜单及正式命令入口复核，分类器不授予模型写权限。
+                    press = m_resourcePress.update(
+                        // 哈希输入是稳定资源键，不包含可能随表头排序变化的
+                        // rowIndex。
+                        ImHashStr(rowData.m_path.c_str(),
+                                  0,
+                                  ImHashStr(rowData.m_id.c_str())),
+                        hit &&
+                            ImGui::IsWindowHovered(
+                                ImGuiHoveredFlags_AllowWhenBlockedByActiveItem),
+                        hit && !ImGui::IsPopupOpen(
+                                   nullptr,
+                                   ImGuiPopupFlags_AnyPopupId |
+                                       ImGuiPopupFlags_AnyPopupLevel));
+                    // 长按只打开菜单；全局滚动层稍后的点击回放不能打开控制器。
+                    // 单指页面滑动由原始峰值拒绝，不会误触试听或编辑资源。
+                    clicked = press == TouchReadPress::Result::Tap;
+                } else {
+                    m_resourcePress.cancel();
+                }
+
                 const bool isProjectAudioResource =
                     rowData.m_kind == AudioTableRowKind::MainTrack ||
                     rowData.m_kind == AudioTableRowKind::ProjectSfx;
@@ -1887,7 +1925,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         .getEditorSettings()
                         .professionalMode &&
                     Common::canStoreAudioResourceDragId(rowData.m_id);
-                if ( canDragAudioResource &&
+                if ( canDragAudioResource && !touchInput &&
                      ImGui::BeginDragDropSource(ImGuiDragDropFlags_None) ) {
                     // 由公共 helper 构造固定布局载荷，避免传递临时字符串指针。
                     const auto payload = Common::makeAudioResourceDragPayload(
@@ -1927,10 +1965,30 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
                                         popupItemSpacing);
                     // 使用独立 ID 打开行级右键菜单，不与表头菜单冲突。
+                    // 长按只把同一个右键菜单打开一次，资源操作语义保持共用。
+                    // 松手不再触发普通行打开，不会同时出现控制器和菜单。
+                    // 不改动皮肤资源的只读约束，也不在滑动过程中开始跨窗口拖放。
+                    if ( press == TouchReadPress::Result::Hold )
+                        FeedbackOpenPopup(contextMenuId.c_str());
                     const bool contextMenuOpen = ImGui::BeginPopupContextItem(
                         contextMenuId.c_str(),
                         ImGuiPopupFlags_MouseButtonRight);
                     if ( contextMenuOpen ) {
+                        if ( touchInput ) {
+                            // 触屏不依赖跨窗口拖放：选择画笔资源后在目标轨道放置。
+                            // 只设置绘制偏好，资源合法性与写权限仍由正式命令复核。
+                            if ( FeedbackMenuItem(
+                                     TR("ui.audio_manager.use_for_drawing")
+                                         .data()) ) {
+                                engine.pushCommand(
+                                    Logic::CmdSetBrushAudioResource{
+                                        rowData.m_id, rowData.m_type });
+                                engine.pushCommand(Logic::CmdChangeTool{
+                                    Logic::EditTool::Draw });
+                            }
+                            ImGui::Separator();
+                        }
+
                         /// @brief 绘制一种目标音轨类型并提交撤销命令。
                         auto changeTrackType = [&](AudioTrackType targetType,
                                                    const char*    label) {
