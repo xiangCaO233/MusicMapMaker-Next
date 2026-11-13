@@ -114,17 +114,28 @@ public:
             m_fingerB  = b.m_finger;
             m_pair     = true;
         }
-        // 位移与距离变化任一超出容差就开始，不要求两指严格同向运动。
-        // 一旦开始便持续推进，缩回原始距离也不会回到待定轻触状态。
+        // 平移开始不能隐式解锁缩放，否则手指间的自然开合会持续改变倍率。
+        // 缩放同时考虑逻辑像素与初始指距，手机和平板使用相同的触觉尺度。
+        const float pinchSlop = std::max(slop * 1.5f, m_span * .08f);
+        const float spanDelta = span - m_span;
+        // 位移与有效捏合任一成立就导航，轻微开合本身不能提前启动。
+        // 一旦开始便持续推进，回程不会重新成为历史轻触。
         if ( !m_running && std::hypot(x - m_lastX, y - m_lastY) <= slop &&
-             std::abs(span - m_span) <= slop )
+             std::abs(spanDelta) <= pinchSlop )
             return result;
         m_running = m_moved = true;
-        // 以起始距离计算绝对倍率，不能逐帧相乘放大采样误差。
+        // 只把超出死区的距离交给缩放，边界处从原倍率连续开始，不突然跳档。
+        // 仍以同一配对的起始距离计算绝对倍率，回到起始区间就恢复原倍率。
+        const float pinchDelta = std::copysign(
+            std::max(std::abs(spanDelta) - pinchSlop, 0.0f), spanDelta);
         // 手指初始重合时只做平移，避免除以接近零的距离产生缩放爆跳。
+        // 死区内直接返回基准值，避免浮点乘除令纯平移产生微小倍率差。
         const float target =
-            m_span > slop ? std::clamp(m_baseZoom * span / m_span, .1f, 10.0f)
-                          : m_zoom;
+            m_span <= slop ? m_zoom
+            : pinchDelta == 0
+                ? m_baseZoom
+                : std::clamp(
+                      m_baseZoom * (m_span + pinchDelta) / m_span, .1f, 10.0f);
         result.m_x       = x - m_lastX;
         result.m_y       = y - m_lastY;
         result.m_anchorX = m_lastX;

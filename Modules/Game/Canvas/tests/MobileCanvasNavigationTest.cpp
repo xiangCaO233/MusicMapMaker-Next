@@ -2,6 +2,7 @@
 #include "graphic/mobile/MobileTouchInput.h"
 #include "log/colorful-log.h"
 #include <cmath>
+#include <initializer_list>
 
 namespace
 {
@@ -58,11 +59,11 @@ void testNavigation()
           "two-finger pan follows centroid");
     check(near(delta.m_anchorX, 300) && near(delta.m_anchorY, 400),
           "anchor belongs to previous centroid");
-    // 中点保持不动时张开到两倍距离，只改变时间线缩放。
+    // 中点保持不动时明确张开，只把超出缩放死区的距离映射到倍率。
     tracker.update(P::Move, 1, 8, .15f, .5f, .08);
     tracker.update(P::Move, 1, 9, .55f, .5f, .08);
     delta = step();
-    check(near(delta.m_zoom, 2) && near(delta.m_x, 0) && near(delta.m_y, 0),
+    check(near(delta.m_zoom, 1.92f) && near(delta.m_x, 0) && near(delta.m_y, 0),
           "pinch scales around stationary midpoint");
     // 回到原始距离应回到一倍，防止逐帧乘法产生累计误差。
     tracker.update(P::Move, 1, 8, .25f, .5f, .11);
@@ -166,6 +167,87 @@ void testCancellation()
     check(!delta.m_undo && !delta.m_redo && !delta.m_changed,
           "system cancellation never edits history");
 }
+/// @brief 平移中的轻微开合不改变倍率，明确捏合仍能在同一手势起效。
+/// @details 同一逻辑手势以两种像素密度重放，覆盖上下往返和交错触点更新。
+/// 比较倍率使用精确相等，不能以较大的近似容差掩盖持续微调。
+/// 配置倍率始终不回流，覆盖逻辑线程尚未发布新值的连续输入。
+/// @note 释放倍率也参与检查，避免只验证拖动中而漏掉提交时的回跳。
+/// @warning 仅同步推进 CPU 输入，不创建图形设备或修改真实谱面。
+void testPanRejectsPinchNoise()
+{
+    using namespace MMM;
+    using P = Graphic::TouchPhase;
+    for ( const float density : { 1.0f, 2.0f } ) {
+        // 两个密度用例独立建基，上一轮的最终倍率不能污染下一轮输入。
+        Graphic::MobileTouchTracker    tracker;
+        Canvas::MobileCanvasNavigation navigation;
+        // 窗口宽高不相等；像素密度只改变防抖尺寸，不改变归一化路径。
+        // 配置固定在 1.25，不能在测试里把当前结果送回去帮助算法维持基线。
+        const auto step = [&] {
+            return navigation.update(tracker.snapshot(),
+                                     true,
+                                     1000 * density,
+                                     600 * density,
+                                     1.25f,
+                                     10 * density);
+        };
+        tracker.update(P::Down, 1, 1, .3f, .4f, 0);
+        tracker.update(P::Down, 1, 2, .5f, .4f, .01);
+        step();
+        // 先开始明显平移，再反复产生不足死区的开合；不能沿用导航总门槛。
+        // 单指先更新的一帧也要保持原倍率，模拟两指事件不完全同时到达。
+        // 扰动方向相反，明确改变指距，不能用严格等距移动假装覆盖噪声。
+        float previousY = .4f;
+        for ( int i = 0; i < 12; ++i ) {
+            const float y = i < 6 ? .45f + i * .02f : .55f - (i - 5) * .02f;
+            const float jitter = i % 2 == 0 ? .006f : -.006f;
+            // 另一指尚未追上时就读取结果，不能只验证合并两点后的理想帧。
+            tracker.update(P::Move, 1, 1, .3f - jitter, y, .02 + i * .01);
+            check(step().m_zoom == 1.25f,
+                  "staggered pan contact does not unlock pinch noise");
+            tracker.update(P::Move, 1, 2, .5f + jitter, y, .025 + i * .01);
+            const auto delta = step();
+            // 累计中点变化仍需完整交付，不能靠吞掉导航来抑制缩放。
+            // 剩余纵向增量立即出现，不等捏合成立或释放时再补发。
+            check(delta.m_zoom == 1.25f && (delta.m_changed || y == previousY),
+                  "vertical pan remains responsive without zoom "
+                  "micro-adjustment");
+            previousY = y;
+        }
+        // 超过容差少量距离时应连续启动，而不是立即应用整个初始跨度差。
+        // 初始指距为 200 逻辑像素，仅越界少量距离检查输出是否发生突跳。
+        // 检查可感知的连续性，不在测试中重写生产阈值公式。
+        tracker.update(P::Move, 1, 1, .2915f, previousY, .15);
+        tracker.update(P::Move, 1, 2, .5085f, previousY, .15);
+        const auto edge = step();
+        check(edge.m_zoom > 1.25f && edge.m_zoom < 1.26f,
+              "intentional pinch starts continuously beyond dead zone");
+        // 同一手势继续明确张开、合拢和回到起点，不能锁死为纯平移。
+        // 不更换手指或建立新代际，防止通过重新按下绕过状态转换。
+        tracker.update(P::Move, 1, 1, .2f, previousY, .17);
+        tracker.update(P::Move, 1, 2, .6f, previousY, .17);
+        check(near(step().m_zoom, 2.4f),
+              "pan can transition to deliberate pinch");
+        // 有符号距离差也必须有效，不能只保留放大而吞掉缩小。
+        tracker.update(P::Move, 1, 1, .35f, previousY, .19);
+        tracker.update(P::Move, 1, 2, .45f, previousY, .19);
+        check(step().m_zoom < 1.25f, "deliberate inward pinch is retained");
+        // 原跨度精确对应原倍率，不允许以近似容差掩盖反复手势的残差。
+        tracker.update(P::Move, 1, 1, .3f, previousY, .21);
+        tracker.update(P::Move, 1, 2, .5f, previousY, .21);
+        check(step().m_zoom == 1.25f,
+              "returning fingers restores exact base zoom");
+        // 第一次抬指提交原倍率一次，全抬后不能误当二指撤销。
+        // 全程在 0.3 秒轻触时限内，不能靠超时令误撤销断言偶然通过。
+        tracker.update(P::Up, 1, 1, .3f, previousY, .23);
+        const auto end = step();
+        check(end.m_finished && end.m_zoom == 1.25f,
+              "release keeps filtered final zoom");
+        // 剩余指针只结束原代际，不属于下一次双指导航。
+        tracker.update(P::Up, 1, 2, .5f, previousY, .24);
+        check(!step().m_undo, "pan with pinch noise cannot undo an edit");
+    }
+}
 }  // namespace
 /// @brief 固定事件序列覆盖导航、捏合、历史及系统接管，不启动原生窗口。
 int main()
@@ -175,5 +257,6 @@ int main()
     // 历史分支使用独立输入流，导航回程不允许污染轻触分类。
     testHistory();
     testCancellation();
+    testPanRejectsPinchNoise();
     return failures == 0 ? 0 : 1;
 }
