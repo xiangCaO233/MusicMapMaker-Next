@@ -54,7 +54,9 @@ add_library(
   src/system/SystemTheme.cpp
   src/CursorManager.cpp
   # 原始触点快照不引用平台 SDK，桌面回归与安卓事件泵共用同一纯值实现。
-  src/mobile/MobileTouchInput.cpp)
+  src/mobile/MobileTouchInput.cpp
+  # 键盘几何只发布完整值快照，不向 Graphic 引入业务 UI。
+  src/mobile/MobileKeyboard.cpp)
 
 # 验证层只影响图形模块的 instance 初始化，不传播为上层模块的编译接口。 关闭时不定义宏，使默认构建跳过 layer 查询与 Debug Utils
 # messenger。

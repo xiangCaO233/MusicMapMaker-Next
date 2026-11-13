@@ -1,6 +1,7 @@
 #include "main/AndroidBootstrap.h"
 #include "config/AppPaths.h"
 #include "config/Utf8Path.h"
+#include "graphic/mobile/MobileKeyboard.h"
 #include "graphic/window/BackNavigation.h"
 #include "graphic/window/InputDevices.h"
 #include "log/colorful-log.h"
@@ -201,4 +202,16 @@ Java_top_xiang233_musicmapmaker_MainActivity_updateMouseConnection(
     // Activity 通知可能早于 SDL 窗口构造，发布入口必须与窗口指针解耦。
     // 不附带资源所有权；下一 UI 帧会应用设备策略和安全切换协议。
     MMM::Graphic::publishExternalMouse(connected == JNI_TRUE);
+}
+
+/// @brief 键盘 JNI 直接导出于 libmain，静态 Graphic 归档继续保持隐藏符号。
+/// @details 平台线程只复制几何，不读取 JNIEnv 或保存任何 Java 对象。
+/// @warning Activity Insets／动画回调仅发布独立快照，不操作 UI、窗口或业务锁。
+extern "C" JNIEXPORT void JNICALL
+Java_top_xiang233_musicmapmaker_SoftKeyboard_publishOcclusion(JNIEnv*, jclass,
+                                                              jint bottom,
+                                                              jint height)
+{
+    // 跟原生窗口生命周期解耦，首次 Insets 可以早于 SDL 创建 Surface。
+    MMM::Graphic::publishMobileKeyboardOcclusion(bottom, height);
 }

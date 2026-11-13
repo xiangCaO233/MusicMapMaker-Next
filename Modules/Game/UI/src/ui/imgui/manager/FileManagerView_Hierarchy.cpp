@@ -2076,18 +2076,25 @@ void FileManagerView::renderFileOperationPopups(float dpiScale)
                               &open,
                               ImGuiWindowFlags_NoCollapse,
                               { 360.0f * dpiScale, 0.0f }) ) {
+            // 名称输入限定在模态可见宽度内，防止键盘重定位后产生横向滚动。
+            if ( !workspaceAllowsHoverFeedback() ) ImGui::SetScrollX(0);
             ImGui::TextUnformatted(label);
             if ( m_shouldFocusFileOperationInput ) {
                 // 只在弹窗首次出现时把键盘焦点交给输入框。
                 ImGui::SetKeyboardFocusHere();
                 m_shouldFocusFileOperationInput = false;
             }
-            // EnterReturnsTrue 与确认按钮共用同一回调。
+            // 触屏字段使用窗口真实余宽，不继承资源表格的列宽或 item width。
+            if ( !workspaceAllowsHoverFeedback() ) ImGui::SetNextItemWidth(-1);
+            // 桌面 Enter 与确认共用回调；手机只由显式按钮提交文件操作。
             const bool enterPressed =
                 ImGui::InputText("##FileManagerOperationName",
                                  m_fileOperationInput.data(),
                                  m_fileOperationInput.size(),
-                                 ImGuiInputTextFlags_EnterReturnsTrue);
+                                 workspaceAllowsHoverFeedback()
+                                     ? ImGuiInputTextFlags_EnterReturnsTrue
+                                     : ImGuiInputTextFlags_None) &&
+                workspaceAllowsHoverFeedback();
             if ( !m_fileOperationError.empty() ) {
                 // 失败保留弹窗和输入，方便用户直接修正。
                 ImGui::TextDisabled("%s", m_fileOperationError.c_str());

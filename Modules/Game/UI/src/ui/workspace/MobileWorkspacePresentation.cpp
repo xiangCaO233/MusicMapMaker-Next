@@ -8,6 +8,7 @@
 #include "event/core/EventBus.h"
 #include "event/ui/GLFWNativeEvent.h"
 #include "event/ui/UISettingsTabEvent.h"
+#include "graphic/mobile/MobileKeyboard.h"
 #include "graphic/window/InputDevices.h"
 #include "ui/IEditorApplicationService.h"
 #include "ui/Icons.h"
@@ -25,6 +26,7 @@
 #include "ui/workspace/MobileButton.h"
 #include "ui/workspace/MobileDockLayout.h"
 #include "ui/workspace/MobileDrawerMenus.h"
+#include "ui/workspace/MobileInputEditor.h"
 #include "ui/workspace/MobileInputPolicy.h"
 #include "ui/workspace/MobilePlaybackControls.h"
 #include "ui/workspace/MobileTimelineLabels.h"
@@ -107,6 +109,15 @@ public:
         return { m_origin,
                  { std::max(1.0f, m_size.x - m_toolbarWidth), m_size.y } };
     }
+    /// @brief 文本表单避开键盘；背景浮动窗不因编辑输入而改写大小。
+    /// @warning 仅使用本帧已缓存比例，不逐个窗口跨 JNI 查询。
+    WorkspaceWindowArea textInputWindowArea() const override
+    {
+        auto area = floatingWindowArea();
+        area.m_size.y =
+            std::max(1.0f, area.m_size.y * (1.0f - m_keyboardBottom));
+        return area;
+    }
     /// @brief 手指没有悬浮状态，外壳采用按下与选中反馈。
     bool allowsHoverFeedback() const override { return false; }
     /// @brief 窄栏文字由移动布局独立绘制，避免裁掉类型名称。
@@ -184,6 +195,8 @@ private:
     Event::SubscriptionID m_backSubscription{};
     /// @brief 仅在当前 UI 帧借用管理器，帧末清空，不传给后台任务。
     UIManager* m_frameManager{};
+    /// @brief 本帧键盘遮挡快照；弹窗间使用一致的可见区域，不移动主画布。
+    float m_keyboardBottom{};
     /// @brief 设备边沿策略只属于当前移动外壳，不修改桌面方案选择。
     MobileInputPolicy m_inputPolicy;
 };
@@ -196,6 +209,12 @@ private:
 void MobileWorkspacePresentation::beginFrame(UIManager& manager)
 {
     m_frameManager = &manager;
+    // 仅本帧入口读取平台值，业务窗口不逐个跨 JNI 查询输入法。
+    const float keyboardBottom = Graphic::mobileKeyboardBottomFraction();
+    // 系统返回只结束输入请求，不让活动字段再次弹起键盘，也不隐式保存草稿。
+    releaseMobileTextFocusAfterKeyboardDismiss(m_keyboardBottom > 0,
+                                               keyboardBottom > 0);
+    m_keyboardBottom = keyboardBottom;
     // 工作区使用平台已经扣除安全区后的矩形，不硬编码状态栏高度。
     const auto* viewport = ImGui::GetMainViewport();
     m_origin             = viewport->WorkPos;

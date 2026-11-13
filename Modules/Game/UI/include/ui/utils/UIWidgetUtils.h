@@ -442,6 +442,9 @@ void renderProjectTransitionPlaceholder();
 /// @param desiredSize 期望尺寸，任意轴为 0 时不强制该轴尺寸。
 /// @warning UI 热路径：只写入 ImGui 下一窗口状态。
 void prepareCenteredModalWindow(ImVec2 desiredSize = ImVec2(0.0f, 0.0f));
+/// @brief 返回含留白和小屏夹取的模态尺寸上限，正文与父窗口共用同一口径。
+/// @warning 每帧固定几何运算，不访问系统输入法或业务锁。
+ImVec2 centeredModalWindowMaxSize();
 
 /// @brief 在局部作用域内为纵向滚动容器推入 DPI 感知的最小滚动条宽度。
 /// @warning UI 热路径：构造与析构只读取当前 DPI/主题并执行一次 ImGui

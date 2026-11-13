@@ -25,6 +25,8 @@ public final class MainActivity extends SDLActivity {
     private Object backNavigationCallback;
     /** 鼠标监听器随 Activity 注册和释放，不依赖原生窗口是否已经构造。 */
     private InputDevices inputDevices;
+    /** 键盘观察者只报告遮挡，SDL 仍负责文本与焦点。 */
+    private SoftKeyboard softKeyboard;
     /** 低频发布设备能力，不能在此切换原生方案或直接访问 ImGui。 */
     static native void updateMouseConnection(boolean connected);
 
@@ -36,10 +38,12 @@ public final class MainActivity extends SDLActivity {
         super.onCreate(state);
         backNavigationCallback = BackNavigation.register(this);
         inputDevices = new InputDevices(this);
+        softKeyboard = new SoftKeyboard(this);
     }
 
     /** Activity 销毁时精确解除自己的回调，SDL 生命周期仍由基类负责。 */
     @Override protected void onDestroy() {
+        if (softKeyboard != null) softKeyboard.close();
         if (inputDevices != null) inputDevices.close();
         BackNavigation.unregister(this, backNavigationCallback);
         super.onDestroy();

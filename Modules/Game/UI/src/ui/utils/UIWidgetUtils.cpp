@@ -8,6 +8,7 @@
 #include "imgui_internal.h"
 #include "ui/layout/CLayDefs.h"
 #include "ui/workspace/IWorkspacePresentation.h"
+#include "ui/workspace/MobileInputEditor.h"
 
 #include <fmt/format.h>
 
@@ -477,17 +478,14 @@ ScrollingTreeNodeResult renderScrollingTreeNodeCore(
     return { .open = open, .clicked = isClicked };
 }
 
-/// @brief 将下一个弹出式窗口固定到主视口中心。
-/// @param desiredSize 期望尺寸，任意轴为 0 时不强制该轴尺寸。
-/// @warning UI 热路径：只写入 ImGui 下一窗口状态。
-void prepareCenteredModalWindow(ImVec2 desiredSize)
+/// @brief 取得居中模态实际尺寸上限，正文预留操作行时使用同一约束。
+/// @details 包含主题留白与小屏最小尺寸夹取，不能直接拿整块键盘安全高度替代。
+/// @warning 每帧只读缓存几何和配置标量，无平台调用或资源访问。
+ImVec2 centeredModalWindowMaxSize()
 {
-    // 模态始终绑定主视口，避免多视口环境下出现在无关窗口。
-    ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowViewport(viewport->ID);
-    ImGui::SetNextWindowPos(
-        viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-
+    const auto* viewport    = ImGui::GetMainViewport();
+    const bool  touchLayout = !workspaceAllowsHoverFeedback();
+    const auto  area        = workspaceTextInputWindowArea();
     // 边缘留白随 DPI 增长，并保证至少 16 像素。
     const float dpiScale =
         Config::AppConfig::instance().getWindowContentScale();
@@ -503,10 +501,32 @@ void prepareCenteredModalWindow(ImVec2 desiredSize)
         return std::max(1.0f, std::min(clampedSize, workSize));
     };
     // 两轴独立计算，支持窄屏或横向多视口布局。
-    const ImVec2 maxWindowSize{
-        maxAxisSize(viewport->WorkSize.x, 160.0f * dpiScale),
-        maxAxisSize(viewport->WorkSize.y, 160.0f * dpiScale),
+    return {
+        maxAxisSize(touchLayout ? area.m_size.x : viewport->WorkSize.x,
+                    160.0f * dpiScale),
+        maxAxisSize(touchLayout ? area.m_size.y : viewport->WorkSize.y,
+                    160.0f * dpiScale),
     };
+}
+
+/// @brief 将下一个弹出式窗口固定到主视口中心。
+/// @param desiredSize 期望尺寸，任意轴为 0 时不强制该轴尺寸。
+/// @warning UI 热路径：只写入 ImGui 下一窗口状态。
+void prepareCenteredModalWindow(ImVec2 desiredSize)
+{
+    // 模态始终绑定主视口，避免多视口环境下出现在无关窗口。
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowViewport(viewport->ID);
+    // 移动弹窗使用外壳扣除键盘与常驻工具栏后的区域，桌面保持既有中心。
+    const bool   touchLayout = !workspaceAllowsHoverFeedback();
+    const auto   area        = workspaceTextInputWindowArea();
+    const ImVec2 center = touchLayout
+                              ? ImVec2(area.m_origin.x + area.m_size.x * .5f,
+                                       area.m_origin.y + area.m_size.y * .5f)
+                              : viewport->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+
+    const ImVec2 maxWindowSize = centeredModalWindowMaxSize();
     ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), maxWindowSize);
 
     if ( desiredSize.x > 0.0f || desiredSize.y > 0.0f ) {
@@ -2011,7 +2031,12 @@ bool FeedbackSliderFloat(const char* label, float* value, float minValue,
     if ( changed )
         playSliderValueChangeFeedback(previous, *value, minValue, maxValue);
     finishLastItemFeedback(id, clicked);
-    return changed;
+    // 精调只在应用边沿写回；原生横拖和经典鼠标路径继续使用原返回值。
+    const bool precisionChanged =
+        !(flags & ImGuiSliderFlags_NoInput) &&
+        mobileScalarPrecisionItem(
+            ImGuiDataType_Float, value, &minValue, &maxValue, .01);
+    return changed || precisionChanged;
 }
 
 /// @brief 绘制带统一反馈的 ImGui Int 滑块。
@@ -2048,7 +2073,12 @@ bool FeedbackSliderInt(const char* label, int* value, int minValue,
                                       static_cast<float>(minValue),
                                       static_cast<float>(maxValue));
     finishLastItemFeedback(id, clicked);
-    return changed;
+    // 精调只在应用边沿写回；原生横拖和经典鼠标路径继续使用原返回值。
+    const bool precisionChanged =
+        !(flags & ImGuiSliderFlags_NoInput) &&
+        mobileScalarPrecisionItem(
+            ImGuiDataType_S32, value, &minValue, &maxValue, 1);
+    return changed || precisionChanged;
 }
 
 /// @brief 绘制带统一反馈的 ImGui 垂直 Float 滑块。
@@ -2082,7 +2112,12 @@ bool FeedbackVSliderFloat(const char* label, const ImVec2& size, float* value,
     if ( changed )
         playSliderValueChangeFeedback(previous, *value, minValue, maxValue);
     finishLastItemFeedback(id, clicked);
-    return changed;
+    // 精调只在应用边沿写回；原生横拖和经典鼠标路径继续使用原返回值。
+    const bool precisionChanged =
+        !(flags & ImGuiSliderFlags_NoInput) &&
+        mobileScalarPrecisionItem(
+            ImGuiDataType_Float, value, &minValue, &maxValue, .01);
+    return changed || precisionChanged;
 }
 
 /// @brief 绘制带统一反馈的 ImGui Float 拖拽输入。
@@ -2111,7 +2146,12 @@ bool FeedbackDragFloat(const char* label, float* value, float speed,
     const bool clicked = isLastItemFeedbackActivated();
     ImGui::PopStyleColor(pushedColorCount);
     finishLastItemFeedback(id, clicked);
-    return changed;
+    // 精调只在应用边沿写回；原生横拖和经典鼠标路径继续使用原返回值。
+    const bool precisionChanged =
+        !(flags & ImGuiSliderFlags_NoInput) &&
+        mobileScalarPrecisionItem(
+            ImGuiDataType_Float, value, &minValue, &maxValue, speed);
+    return changed || precisionChanged;
 }
 
 /// @brief 绘制带统一反馈的 ImGui 二维 Int 拖拽输入。
@@ -2168,7 +2208,11 @@ bool FeedbackDragScalar(const char* label, ImGuiDataType dataType, void* value,
     const bool clicked = isLastItemFeedbackActivated();
     ImGui::PopStyleColor(pushedColorCount);
     finishLastItemFeedback(id, clicked);
-    return changed;
+    // 精调只在应用边沿写回；原生横拖和经典鼠标路径继续使用原返回值。
+    const bool precisionChanged =
+        !(flags & ImGuiSliderFlags_NoInput) &&
+        mobileScalarPrecisionItem(dataType, value, minValue, maxValue, speed);
+    return changed || precisionChanged;
 }
 
 /// @brief 给上一条 ImGui Item 补充统一交互音效。

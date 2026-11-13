@@ -19,6 +19,7 @@
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/workspace/IWorkspacePresentation.h"
+#include "ui/workspace/MobileInputEditor.h"
 
 #include "canvas/AuxiliaryWindowUi.h"
 #include "canvas/TimelineStopDuration.h"
@@ -1610,6 +1611,8 @@ void TimelineCanvas::renderEventEditorPopup()
             ImGui::BeginDisabled();
         }
 
+        // 长表单在键盘上方滚动，确认与取消始终留在父弹窗底部。
+        UI::MobileInputBodyScope inputBody("TimelineEventFields");
         ImGui::TextUnformatted(TR("ui.timeline.event_editor.timestamp").data());
         drawTimeEditor("##Time", m_editTime, m_currentSnapshot);
         const double stopBpm =
@@ -1663,6 +1666,8 @@ void TimelineCanvas::renderEventEditorPopup()
         ImGui::Separator();
         ImGui::Spacing();
 
+        // 正文结束后再提交操作行，滚动位置不能把它推到键盘下面。
+        inputBody.end();
         const float actionButtonWidth =
             calcButtonRowWidth(3, std::floor(80.0f * dpiScale));
         // 平台策略只调整按钮命中高度，桌面零高度继续使用原来的自动测量。

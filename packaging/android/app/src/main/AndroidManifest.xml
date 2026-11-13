@@ -15,6 +15,7 @@
         <!-- configChanges 交给 SDL 处理，避免普通旋转重新初始化整套编辑器。 -->
         <!-- 原生入口也设置 SDL 方向提示，使运行时请求与此处的横屏声明一致。 -->
         <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="sensorLandscape"
+            android:windowSoftInputMode="adjustNothing"
             android:configChanges="keyboard|keyboardHidden|orientation|screenSize|smallestScreenSize|screenLayout|uiMode|density">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

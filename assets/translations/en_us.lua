@@ -1770,4 +1770,7 @@ return {
     ["ui.mobile.annotation.list_hint"] = "Tap to read, hold to edit; swipe to browse.",
     ["ui.mobile.annotation.changed"] = "This annotation changed. Cancel and reopen it.",
     ["ui.mobile.timing.table_hint"] = "Tap to select, hold to edit; swipe to browse. Selected rows can be copied, cut or deleted.",
+    ["ui.mobile.precision.title"] = "Precise Value",
+    ["ui.mobile.precision.step"] = "Step",
+    ["ui.mobile.precision.invalid"] = "Enter a valid value within the allowed range",
 }

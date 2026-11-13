@@ -1769,4 +1769,7 @@ return {
     ["ui.mobile.annotation.list_hint"] = "点按选择阅读，长按编辑；滑动浏览列表。",
     ["ui.mobile.annotation.changed"] = "批注已被修改，请取消后重新打开。",
     ["ui.mobile.timing.table_hint"] = "点按选择，长按编辑；滑动浏览。多选后可复制、剪切或删除。",
+    ["ui.mobile.precision.title"] = "数值精调",
+    ["ui.mobile.precision.step"] = "步长",
+    ["ui.mobile.precision.invalid"] = "请输入范围内的有效数值",
 }

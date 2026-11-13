@@ -12,6 +12,7 @@
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/MobileInputEditor.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -278,12 +279,15 @@ private:
             ImGui::OpenPopup(popup);
             m_request = false;
         }
-        const auto viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowSize(
-            { std::min(viewport->WorkSize.x * 0.9f, ImGui::GetFontSize() * 32),
-              0 });
-        if ( ImGui::BeginPopupModal(
-                 popup, nullptr, ImGuiWindowFlags_AlwaysAutoResize) ) {
+        // 与批注栏编辑共用键盘安全区；长正文只滚动内容，不带走保存／取消。
+        const auto area = UI::workspaceTextInputWindowArea();
+        UI::Utils::CenteredModalPopupScope modal;
+        if ( modal.begin(
+                 popup,
+                 nullptr,
+                 ImGuiWindowFlags_NoTitleBar,
+                 { std::min(area.m_size.x * .9f, ImGui::GetFontSize() * 32),
+                   0 }) ) {
             // 切换操作方案或窗口归属时不猜测新目标，也不借 Undo
             // 撤回用户上一笔。
             const auto& rows = data.rows();
@@ -300,6 +304,7 @@ private:
             if ( !valid )
                 ImGui::CloseCurrentPopup();
             else {
+                UI::MobileInputBodyScope inputBody("AnnotationTableFields");
                 ImGui::TextUnformatted(TR("ui.annotation.editor_title").data());
                 // 正文比较用于拒绝可见的协作冲突，不尝试自动合并自由文本。
                 // 用户可取消后重新打开取得当前版本，避免旧副本静默覆盖对方修改。
@@ -315,8 +320,11 @@ private:
                     m_text.data(),
                     m_text.size(),
                     { -1,
-                      std::min(viewport->WorkSize.y * 0.35f,
-                               ImGui::GetFontSize() * 10) });
+                      std::max(ImGui::GetFrameHeight() * 2,
+                               std::min(area.m_size.y * .3f,
+                                        ImGui::GetFontSize() * 10)) });
+                // 收起键盘只改变高度，正文 ID 与草稿保持；提交仍需明确按钮。
+                inputBody.end();
                 ImGui::BeginDisabled(!data.writable() || conflict ||
                                      !m_text.front());
                 // 确认只发布一次 Upsert，界面随即关闭，不等待后台执行。

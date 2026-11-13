@@ -1,4 +1,5 @@
 #include "ui/interaction/EditorInteraction.h"
+#include "ui/workspace/MobileInputEditor.h"
 /// @file Basic2DCanvas_Interaction.cpp
 /// @brief 实现主画布输入路由、编辑手势、布局编辑和批注交互。
 ///
@@ -4581,8 +4582,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
 /// - 新增批注要求规范化后的默认创作者非空。
 /// - 历史批注允许展示未知作者。
 /// - 正文为空时保存按钮禁用。
-/// - 输入框上方提示 Enter 提交与 Shift+Enter 换行。
-/// - Enter 与保存按钮复用同一校验和提交路径。
+/// - 桌面提示 Enter 提交，移动端 Enter 仅换行。
+/// - 桌面 Enter 与保存按钮复用校验，触屏只有保存按钮提交。
 /// - 新增和编辑统一发布 `CmdUpsertBeatmapAnnotation`。
 /// - 空 ID 的生成职责属于逻辑层。
 /// - 时间点新建使用 TIMESTAMP 目标类型。
@@ -5004,8 +5005,19 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
         ImGui::OpenPopup(popupLabel.c_str());
         m_annotationEditor.requestOpen = false;
     }
-    if ( ImGui::BeginPopupModal(
-             popupLabel.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize) ) {
+    // 移动端按键盘可见区域限制弹窗；桌面保留原生位置和样式。
+    // 可选样式只在触屏路径构造，避免桌面被移动居中策略间接重排。
+    const bool mobileAnnotation = !UI::workspaceAllowsHoverFeedback();
+    std::optional<UI::Utils::CenteredModalPopupScope> annotationModal;
+    if ( mobileAnnotation ) annotationModal.emplace();
+    const bool annotationOpened =
+        mobileAnnotation
+            ? annotationModal->begin(popupLabel.c_str())
+            : ImGui::BeginPopupModal(popupLabel.c_str(),
+                                     nullptr,
+                                     ImGuiWindowFlags_AlwaysAutoResize);
+    if ( annotationOpened ) {
+        UI::MobileInputBodyScope inputBody("AnnotationEditorFields");
         // annotationId 是编辑与新增的唯一判据；作者为空可能是历史数据，
         // 不能据此误判为新增。
         const bool editingExisting = !m_annotationEditor.annotationId.empty();
@@ -5033,15 +5045,41 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
                                TR("ui.annotation.creator_required").data());
         }
         ImGui::TextDisabled("%s", TR("ui.annotation.markdown_hint").data());
-        ImGui::TextDisabled("%s", TR("ui.annotation.input_submit_hint").data());
+        if ( UI::workspaceAllowsHoverFeedback() )
+            ImGui::TextDisabled("%s",
+                                TR("ui.annotation.input_submit_hint").data());
         // 组合标志让普通 Enter 返回确认，Shift+Enter 仍由多行输入框插入换行。
-        const bool submitWithEnter = ImGui::InputTextMultiline(
-            "##BeatmapAnnotationMarkdown",
-            m_annotationEditor.content.data(),
-            m_annotationEditor.content.size(),
-            ImVec2(520.0F, 220.0F),
-            ImGuiInputTextFlags_EnterReturnsTrue |
-                ImGuiInputTextFlags_CtrlEnterForNewLine);
+        // 移动端输入返回值表示正文变化，不表示提交请求。
+        // 即使平台将键盘完成键映射成 Enter，也只按显式按钮保存。
+        // 本地缓冲跨焦点保留，取消仍由原批注事务负责。
+        const bool touchText = !UI::workspaceAllowsHoverFeedback();
+        // 这里限制的是编辑正文的阅读高度，不能改变实际保存文本的容量。
+        // 文本区最多占输入安全高度的三成，为作者、提示和确认行保留空间。
+        // 两行下限保证光标与换行可见，较长内容仍由输入框自身纵向滚动。
+        // 普通辅助窗几何不参与临时 IME 限制，键盘收起不改变其保存尺寸。
+        const bool submitWithEnter =
+            ImGui::InputTextMultiline(
+                "##BeatmapAnnotationMarkdown",
+                m_annotationEditor.content.data(),
+                m_annotationEditor.content.size(),
+                ImVec2(
+                    touchText
+                        ? std::min(520.0f, ImGui::GetContentRegionAvail().x)
+                        : 520.0f,
+                    touchText
+                        ? std::min(
+                              220.0f,
+                              std::max(
+                                  ImGui::GetFrameHeight() * 2,
+                                  UI::workspaceTextInputWindowArea().m_size.y *
+                                      .3f))
+                        : 220.0f),
+                touchText ? ImGuiInputTextFlags_None
+                          : ImGuiInputTextFlags_EnterReturnsTrue |
+                                ImGuiInputTextFlags_CtrlEnterForNewLine) &&
+            !touchText;
+        // 手机 Enter 保留为换行，输入变化与焦点离开不能隐式保存。
+        inputBody.end();
 
         // 空正文不能保存；新增还要求规范化后的创作者非空。
         const bool canSave = m_annotationEditor.content.front() != '\0' &&

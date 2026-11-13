@@ -48,6 +48,10 @@ public:
     /// @brief 公共辅助窗口的安全区域，桌面默认返回完整主视口工作区。
     /// @warning 每帧固定标量读取，不访问窗口树或执行跨线程查询。
     virtual WorkspaceWindowArea floatingWindowArea() const;
+    /// @brief 文本模态的可用区域，移动端可进一步扣除
+    /// IME；普通辅助窗不随键盘缩小。
+    /// @warning 每帧仅读取外壳缓存几何，桌面默认与 floatingWindowArea 一致。
+    virtual WorkspaceWindowArea textInputWindowArea() const;
     /// @brief 当前数值组件允许水平拖动；桌面无需额外登记。
     virtual void registerHorizontalDragItem() {}
     /// @brief 竖直数值条沿纵向调值，横向仍允许浏览内容；桌面保持原生输入。
@@ -85,6 +89,9 @@ private:
 /// @brief 查询当前外壳安全区域；无帧作用域时使用完整主视口工作区。
 /// @warning 每帧只借用策略并复制四个标量，不分配或等待。
 WorkspaceWindowArea workspaceFloatingWindowArea();
+/// @brief 查询文本表单专用区域，不将临时键盘尺寸写入普通浮动窗布局。
+/// @warning 每帧只复制几何；没有帧绑定时返回完整主视口工作区。
+WorkspaceWindowArea workspaceTextInputWindowArea();
 /// @brief 供 LayoutContext 与直接窗口入口共用，不改变默认桌面行为。
 bool beginWorkspaceWindow(std::string_view id, const std::string& title,
                           bool* open, ImGuiWindowFlags flags = 0);

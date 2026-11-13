@@ -94,6 +94,8 @@ add_library(
   src/ui/workspace/WorkspacePresentation.cpp
   src/ui/workspace/MobileWorkspaceModel.cpp
   # 空白触屏滚动独立于业务视图，桌面只在无 GPU 回归中主动创建。
+  # 键盘避让与数值精调共用 UI 草稿，不在平台层修改业务属性。
+  src/ui/workspace/MobileInputEditor.cpp
   src/ui/workspace/AudioPlotTouch.cpp
   src/ui/workspace/TouchReadPress.cpp
   src/ui/workspace/MobileTouchScroll.cpp
@@ -770,3 +772,9 @@ mmm_add_test_executable(UI MobileAudioNavigationTest
 target_link_libraries(MobileAudioNavigationTest PRIVATE UI Logic Log)
 mmm_register_test_case(NAME MobileAudioNavigationTest COMMAND
                        MobileAudioNavigationTest)
+
+# 参数输入回归使用真实 ImGui、原始触点与平台键盘快照，禁止创建系统音频设备。
+mmm_add_test_executable(UI MobileInputEditorTest
+                        tests/MobileInputEditorTest.cpp)
+target_link_libraries(MobileInputEditorTest PRIVATE UI Logic Log)
+mmm_register_test_case(NAME MobileInputEditorTest COMMAND MobileInputEditorTest)

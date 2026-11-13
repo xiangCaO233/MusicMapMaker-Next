@@ -1,17 +1,52 @@
 # 移动端触屏交互 TODO
 
-更新时间：2026-11-13。继续当前分支 `feat/android-sdl3`。已接回 T03～T07，本地 T08／T09 已完成；本批补齐 **T10 音频图表与资源面板**，小屏／平板模拟器及 NX809J 核心验收通过。下一项为 **T11 数值与文本属性输入**。
+更新时间：2026-11-13。继续当前分支 `feat/android-sdl3`。已接回 T03～T07，本地 T08／T09 已完成；本批补齐 **T11 数值与文本属性输入** 的公共入口与核心表单，小屏／平板模拟器验收通过；NX809J 当前锁屏，真机待补验。后续先补 T11 真机验收，再进入 **T12 辅助工具审计**。
 
 ## 换机接续入口
 
 - 先阅读仓库根目录 `AGENTS.md` 和本文。用户明确要求继续当前分支；保持经典桌面、纯鼠标方案和业务模型不变，一个职责一个提交，不夹带重构或公开发布。
-- 换机后先获取远端 `feat/android-sdl3`，核对 `git status`、当前分支及上述业务提交是否存在，核对本机回归及 T10 验收记录后再继续 T11；实体机按可用性单独补验。已有本地修改时先保留，不以重置或强推覆盖。
-- T02 正交结构已完成本机三设备核心回归，后续从 T11 继续；先核对已有能力，再设计触控入口。表中的“待完善”包含已有桌面功能的触控强化，不能当作这些业务功能完全不存在，也不能宣称所有候选问题都已在设备复现。
+- 换机后先获取远端 `feat/android-sdl3`，核对 `git status`、当前分支及上述业务提交是否存在，核对本机回归及 T11 验收记录后继续；实体机按可用性补验 T11，再审计 T12。已有本地修改时先保留，不以重置或强推覆盖。
+- T02 正交结构已完成本机三设备核心回归，后续按 T11 真机待验与 T12 清单继续；先核对已有能力，再设计触控入口。表中的“待完善”包含已有桌面功能的触控强化，不能当作这些业务功能完全不存在，也不能宣称所有候选问题都已在设备复现。
 - 上一机器产物在 `/home/xiang/Android/mmm-smoke/main`，本次 Windows 产物在项目忽略目录 `build-android`；这些内容不会随普通 Git 拉取迁移；需要原始证据时单独复制，不能将备份、APK 或缓存加入源码提交。新机器重新检查 SDK／NDK／JDK、依赖、可用设备和签名；不得沿用本机 ADB 序号、路径或授权状态作为已连接证据。
 
 ## 触屏交互 TODO
 
 优先级及顺序沿用本轮讨论；每项先检查实际缺口，再按独立职责实现、验收和提交。`待完善` 不是已确认缺陷清单。
+
+### T11 数值与文本属性输入（2026-11-13）
+
+- 触控方案为公共单值 Slider／Drag 增加静止长按精调，支持 `float`、`double`、`int32`；草稿与源值分离，显式应用／取消，提供步长切换与加减。严格检查全文、有限性、范围和整数语义；源值变化、目标隐藏、方案／上下文切换拒绝旧草稿。不支持的标量类型、多分量控件及显式 `NoInput` 控件保留原入口；没有精度降级地接管 64 位整数。应用沿用原 Changed 与编辑完成边沿，只报告一次真实存储值变化，兼容只在释放时落盘的既有设置。
+- Java 被动观察本窗口 IME Insets 与动画，几何通过独立快照发布，JNI 从 `libmain` 的 Android 启动模块导出。文本模态使用单独输入安全区，不把临时键盘尺寸固化成普通辅助窗布局；主画布不随 IME 缩小。正文与父模态共用含留白的尺寸上限，固定正文身份、局部滚动和底部操作行，键盘缩小时把活动字段滚回可见区。系统收起键盘只结束文本焦点、保留草稿，防止后端立即重弹。
+- 已接入普通 Timing 参数窗、画布批注和批注表独立编辑窗；文件重命名／新建目录的字段按模态余宽排布。移动批注 Enter 只换行，文件名和精调 Enter 不提交，保存／应用仍需明确按钮；桌面批注保留原生弹窗、尺寸与 Enter 语义。
+- 小屏模拟器 **1280×720／160dpi**：实际软键盘下精调字段和操作行可见；界面倍率 `1 → 1.05` 落盘并恢复。文件名输入／Enter／取消不重命名，明确确认后目录变为 `T11Renamed`，内部 `Readme.txt` SHA 不变。批注两行正文经过换行、返回收起、取消及保存验证，最终保存回读为 `T11_saved\nsecond_line`，原身份、作者、时间和其它整谱字段不变。Timing 长表单的活动 SV 输入和三按钮完整可见，`2 → 2.125` 保存回读正确，一次撤销后整谱精确恢复。
+- 平板尺寸 **2560×1600／320dpi**：Timing 输入和底部操作行位于键盘上方；输入 `3.375` 后取消并保存，整谱与取消前完全一致。以上使用隔离工程和 ADB 输入，不代表真人手感或所有输入法／系统返回手势组合。
+- Linux 完整构建通过，最终相关回归 **6/6**、完整 CTest **202/202**。新增真实 ImGui 回归覆盖草稿、重复打开自动全选、单次应用及编辑完成边沿、取消、越界／隐藏／源冲突、键盘出现保持焦点、收起不保存，以及自动高度长表单的实际字段与操作行裁剪。此前登记的 `CanvasTouchNavigationTest` 初次失败、最终复跑通过，未修改其测试或逻辑模型。Android **x86_64／arm64-v8a** 构建、签名、JNI 导出和 APK 原生库 Build ID 核对通过。
+- **待验边界**：NX809J 整批保持锁屏，未安装或操作真机验收包；需解锁后补 T11 真机验证。API 26～29 的可视框回退只完成构建，未在对应系统运行。其它辅助工具的专用长表单及修饰键入口按 T12 逐项审计，不能把公共避让接入视为所有窗口均已设备验收。
+- 证据、脚本、APK、注释率 CSV 集中在 `/home/xiang/Android/mmm-smoke/main/evidence/t11-20261113`，构建与缓存仍在同一 `main` 工作树。模拟器只更新 `.next.t01probe`，原配置／INI 已逐字节恢复，13 份旧谱面哈希不变；移除本批工程，恢复 **1080×2400／420dpi** 并保持模拟器在线。手机原应用、数据和 442dpi 未改动；不改 `.gitignore`，不提交产物／缓存。本批仅本地提交，不推送或合并。
+
+本批 19 个新增／修改代码与 CMake 文件均达到逐文件 30% 注释率，翻译与 Manifest 纯配置不计入代码；完整统计在上述集中目录。
+
+| 路径 | 注释行 | 代码行 | 注释率 |
+| --- | ---: | ---: | ---: |
+| `Modules/Game/Canvas/src/Basic2DCanvas_Interaction.cpp` | 2034 | 4746 | 30.0% |
+| `Modules/Game/Canvas/src/TimelineCanvas_Popups.cpp` | 1161 | 2697 | 30.09% |
+| `Modules/Game/UI/src/ui/utils/UIWidgetUtils.cpp` | 683 | 1593 | 30.01% |
+| `Modules/Game/UI/src/ui/imgui/manager/FileManagerView_Hierarchy.cpp` | 639 | 1485 | 30.08% |
+| `Modules/Game/UI/src/ui/workspace/MobileWorkspacePresentation.cpp` | 349 | 802 | 30.32% |
+| `Modules/Game/UI/CMakeLists.txt` | 221 | 509 | 30.27% |
+| `Modules/Game/UI/tests/MobileInputEditorTest.cpp` | 129 | 296 | 30.35% |
+| `Modules/Game/UI/src/ui/workspace/MobileInputEditor.cpp` | 127 | 292 | 30.31% |
+| `Modules/Game/Canvas/src/presentation/mobile/MobileAnnotationTablePresentation.cpp` | 114 | 266 | 30.0% |
+| `Modules/Game/UI/include/ui/utils/UIWidgetUtils.h` | 317 | 172 | 64.83% |
+| `Modules/Main/src/AndroidBootstrap.cpp` | 65 | 147 | 30.66% |
+| `Modules/Game/UI/src/ui/workspace/WorkspacePresentation.cpp` | 62 | 141 | 30.54% |
+| `Modules/Game/Graphic/CMakeLists.txt` | 53 | 122 | 30.29% |
+| `packaging/android/app/src/main/java/top/xiang233/musicmapmaker/MainActivity.java` | 49 | 96 | 33.79% |
+| `packaging/android/app/src/main/java/top/xiang233/musicmapmaker/SoftKeyboard.java` | 34 | 73 | 31.78% |
+| `Modules/Game/UI/include/ui/workspace/IWorkspacePresentation.h` | 59 | 67 | 46.83% |
+| `Modules/Game/Graphic/src/mobile/MobileKeyboard.cpp` | 16 | 26 | 38.1% |
+| `Modules/Game/UI/include/ui/workspace/MobileInputEditor.h` | 14 | 20 | 41.18% |
+| `Modules/Game/Graphic/include/graphic/mobile/MobileKeyboard.h` | 5 | 6 | 45.45% |
 
 ### T10 音频图表与资源面板（2026-11-13）
 
@@ -142,7 +177,7 @@
 | T08 | P2 | 已实现，核心验收通过 | 批注与数据表格 | 批注点按常驻阅读、长按编辑及明确删除／历史；Timing 点选、多选、批量操作与独立参数窗。范围及设备边界见本批记录。 |
 | T09 | P2 | 已实现，三设备核心验收通过 | 预览区导航 | 轻点、单指浏览、双指缩放、密度定位及取消已回归；设备注入边界见本批记录。 |
 | T10 | P2 | 核心完成 | 音频图表与资源面板 | 保留已有 EQ／行高／按钮布局成果；核对波形／频谱导航、资源长按操作与拖放替代入口，区分滑块精调和页面滚动。 |
-| T11 | P2 | 待完善 | 数值与文本属性输入 | 支持便捷精调、明确确认／取消；手机软键盘不能遮住活动字段与提交按钮，焦点切换和返回不能误保存。 |
+| T11 | P2 | 核心已实现，模拟器通过；真机待验 | 数值与文本属性输入 | 支持便捷精调、明确确认／取消；手机软键盘不能遮住活动字段与提交按钮，焦点切换和返回不能误保存。 |
 | T12 | P3 | 待审计 | 其余辅助工具 | 逐项检查布局、BMS、测速等窗口中的修饰键、右键、双击和 Hover 唯一入口；先登记可复现缺口，再按功能独立适配。 |
 
 ### T01 当前实现与验收

@@ -42,6 +42,21 @@ WorkspaceWindowArea workspaceFloatingWindowArea()
                               : viewportWindowArea();
 }
 
+/// @brief 默认文本窗不额外预留输入法区域，移动策略独立提供遮挡几何。
+/// @warning 每帧只读取当前策略，不访问平台线程。
+WorkspaceWindowArea IWorkspacePresentation::textInputWindowArea() const
+{
+    return floatingWindowArea();
+}
+/// @brief 只为模态表单转发输入安全区域，普通工作窗保持其原尺寸。
+/// @details 键盘是临时遮挡，不能把其高度固化成浮动窗口的保存布局。
+/// @warning 高频入口不查询设备、不复制所有权或等待会话。
+WorkspaceWindowArea workspaceTextInputWindowArea()
+{
+    return activePresentation ? activePresentation->textInputWindowArea()
+                              : viewportWindowArea();
+}
+
 /// @brief 依当前平台选择触摸图文或桌面文字按钮。
 /// @details 公共模态不引入平台宏，默认桌面与无绑定测试仍用原反馈入口。
 /// 策略只提供外观，是否下载或关闭弹窗继续由调用方消费激活结果。
