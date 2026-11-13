@@ -6,6 +6,7 @@
 #include "common/ChartObjectKind.h"
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
+#include "common/NotePaletteStroke.h"
 #include "common/ObjectDeletion.h"
 #include "common/SelectionOperation.h"
 #include "common/walkthrough/ComposeLessonNotes.h"
@@ -517,12 +518,18 @@ struct CmdSetBrushAudioResource {
 struct CmdApplyNotePaletteToSelection {
     /// @brief 完整自定义颜色表，顺序与 NoteColorSlot 一致。
     std::array<glm::vec4, NOTE_COLOR_SLOT_COUNT> colors;
+    /// @brief 明确清除选区全部配色，默认保持桌面完整填色语义。
+    bool m_clear{};
+    /// @brief 移动显式确认入口额外复核播放和专业模式，不影响旧桌面入口。
+    bool m_touch{};
 };
 
 /// @brief 将当前画笔调色盘应用到指定音符物件。
 struct CmdApplyBrushPaletteToEntity {
-    /// @brief 目标音符实体。
+    /// @brief 默认单目标沿用桌面连续染色语义。
     entt::entity entity{ entt::null };
+    /// @brief 显式批次只在正常释放提交，一次命令形成一次颜色历史。
+    std::optional<NotePaletteStroke> m_stroke;
 };
 
 /// @brief 清除指定音符物件的自定义配色覆写。

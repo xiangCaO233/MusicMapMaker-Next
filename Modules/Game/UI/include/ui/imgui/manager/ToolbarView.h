@@ -57,6 +57,11 @@ public:
 private:
     /// @brief 仅移动入口设为真，工具内容以工作台而非桌面工具栏定位。
     bool m_mobileTools{};
+    /// @brief 高级方案管理与快捷调色分开，重新打开默认回到手指友好页。
+    bool m_mobilePaletteDetails{};
+    /// @brief 移动调色页只修改画笔；选区需要显式确认，不复用桌面调色布局。
+    /// @warning 每帧只读本地颜色和应用标量，不读取可变 SessionContext。
+    void renderMobileColorPalette(float scale);
     /// @brief 编辑器状态读取与简单命令提交服务。
     IEditorApplicationService* m_editorApplicationService{ nullptr };
 
@@ -314,7 +319,7 @@ private:
     void pushPaletteToBrush(bool resetDrawColors = true);
 
     /// @brief 将当前调色盘颜色应用到选中物件。
-    void pushPaletteToSelection();
+    void pushPaletteToSelection(bool explicitTouch = false);
 
     /// @brief 将当前分拍线配色写入运行时渲染配置。
     void pushBeatLinePaletteToRenderer();

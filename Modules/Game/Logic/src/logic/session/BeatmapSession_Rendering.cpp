@@ -2177,6 +2177,15 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             finalMainHeight = mainCameraFinal->viewportHeight;
         }
 
+        // 颜色笔在移动端起笔之前仍处于空闲状态，也需要完整画笔值快照。
+        // 仅颜色工具发布这份固定大小值，不把空闲几何伪装为活动预览。
+        // UI 起笔锁存此值，不能在释放消费时才读取可能已切换的调色盘。
+        // 现有 Draw 预览继续只在活动笔画中发布，桌面输入与几何语义不变。
+        // 颜色表没有动态容器或共享所有权，复制不增加分配、锁或等待。
+        // 后台会话仍不暴露前台画笔，避免不同谱面互相借用预设状态。
+        if ( isActiveSession && m_ctx->currentTool == EditTool::ColorBrush )
+            snapshot->brush.customColors = m_ctx->brushState.customColors;
+
         // --- 注入画笔预览状态 ---
         // 只有活跃会话发布未提交画笔状态。
         // 几何数据按值复制，UI 不借用正在追加的折线段数组。

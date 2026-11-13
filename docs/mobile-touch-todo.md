@@ -1,12 +1,12 @@
 # 移动端触屏交互 TODO
 
-更新时间：2026-11-13。继续当前分支 `feat/android-sdl3`。本机从 `809cda5d` 接回，已完成 T01／T02 核心回归，继续 T03 采样锚点与偏移；T03 核心交互已完成三设备验收；最后的显示策略修订见下方记录。T04 触屏物件擦除已实现；最终验收记录见下文。下一项为 **T05 调色笔刷与选区填色**。
+更新时间：2026-11-13。继续当前分支 `feat/android-sdl3`。本机从 `809cda5d` 接回，T01／T02 核心回归及 T03 三设备核心验收已完成，历史补验边界见下文。T04 物件擦除、T05 调色笔刷与选区填色均完成手机／平板模拟器验收。下一项为 **T06 Timing 段落局部修改**。
 
 ## 换机接续入口
 
 - 先阅读仓库根目录 `AGENTS.md` 和本文。用户明确要求继续当前分支；保持经典桌面、纯鼠标方案和业务模型不变，一个职责一个提交，不夹带重构或公开发布。
-- 换机后先获取远端 `feat/android-sdl3`，核对 `git status`、当前分支及上述业务提交是否存在，核对本机回归及 T04 验收记录后再继续 T05；实体机按可用性单独补验。已有本地修改时先保留，不以重置或强推覆盖。
-- T02 正交结构已完成本机三设备核心回归，后续从 T05 继续；先核对已有能力，再设计触控入口。表中的“待完善”包含已有桌面功能的触控强化，不能当作这些业务功能完全不存在，也不能宣称所有候选问题都已在设备复现。
+- 换机后先获取远端 `feat/android-sdl3`，核对 `git status`、当前分支及上述业务提交是否存在，核对本机回归及 T05 验收记录后再继续 T06；实体机按可用性单独补验。已有本地修改时先保留，不以重置或强推覆盖。
+- T02 正交结构已完成本机三设备核心回归，后续从 T06 继续；先核对已有能力，再设计触控入口。表中的“待完善”包含已有桌面功能的触控强化，不能当作这些业务功能完全不存在，也不能宣称所有候选问题都已在设备复现。
 - 上一机器产物在 `/home/xiang/Android/mmm-smoke/main`，本次 Windows 产物在项目忽略目录 `build-android`；这些内容不会随普通 Git 拉取迁移；需要原始证据时单独复制，不能将备份、APK 或缓存加入源码提交。新机器重新检查 SDK／NDK／JDK、依赖、可用设备和签名；不得沿用本机 ADB 序号、路径或授权状态作为已连接证据。
 
 ## 触屏交互 TODO
@@ -19,7 +19,7 @@
 | T02 | P1 | 正交约束已修正，本机三设备核心回归通过 | 折线节点与 Flick 修改 | 类型交替、接缝、父锚点、域边界与精确历史已回归；历史补验限制见本机记录。 |
 | T03 | P1 | 已实现，三设备核心验收通过 | 采样锚点与偏移 | 左侧移动锚点，右侧调整触发偏移；零／正／负偏移、跨零、取消与精确历史已验证，显示策略修订见下文。 |
 | T04 | P1 | 已实现，手机／平板模拟器验收通过 | 橡皮擦 | 绘制工具选择物件擦除；点按或连续扫过整物件，释放后一次提交，多指／系统取消保留之前历史。 |
-| T05 | P1 | 待完善 | 调色笔刷与选区填色 | 检查点按、拖涂、选区应用和调色盘交互；统一触控反馈与取消边界，避免滑动经过物件即意外改色。 |
+| T05 | P1 | 已实现，手机／平板模拟器验收通过 | 调色笔刷与选区填色 | 点按／拖涂和配色橡皮抬手一次提交；独立触屏调色页显式填色／清色，修改调色盘不自动修改选区。 |
 | T06 | P2 | 待完善 | Timing 段落局部修改 | 创建和整批移动已完成；检查段落首尾独立调整与普通点命中区分，复用原插值语义、采样和撤销命令。 |
 | T07 | P2 | 待完善 | 高级曲线与预览图 | 控制点、自由绘制曲线、局部缩放／平移／重置增加触控路径；预览目前仍有滚轮／双击逻辑。补齐图表与页面滚动仲裁及历史中文字段翻译。 |
 | T08 | P2 | 待完善 | 批注与数据表格 | 添加批注已有菜单入口；核对批注查看／编辑／删除、Timing 表和批注表的长按、行选择及批量操作，替代尚存的右键／双击依赖。 |
@@ -147,3 +147,30 @@
 - Linux 构建从项目根执行：`MMM_ANDROID_WORK_DIR=/home/xiang/Android/mmm-smoke/main MMM_ANDROID_ABIS="arm64-v8a x86_64" bash scripts/android/build.sh`；换机可选择另一处集中工作目录，显式设置 `MMM_ANDROID_WORK_DIR`，不要散落到源码目录。Windows 入口使用其专用工作目录。
 - 默认 APK 输出会被后续构建覆盖，安装前核对包名、ABI、签名及摘要。本轮标准 APK 为 `/home/xiang/Android/mmm-smoke/main/apk/MusicMapMaker-Next-android-debug.apk`，SHA256 为 `79799886d38137246aadeb05c6dd169eb4a8c04594af708edb28ee76db87743f`；独立 x86_64 验收包摘要与签名见 `evidence/t02-legality-20261113/acceptance-summary.json`，不能将标准包当成已安装的验收包。
 - 数据回读注意：`.mmm` Timing 时间戳单位是毫秒，插值 `duration` 单位是秒；吸附阈值外保留实际时间，不能强行断言所有触点都落在固定分拍。
+
+### T05 触屏调色与选区填色（2026-11-13）
+
+- 工作台“笔刷／橡皮”分别提供点按和连续拖涂、清除整物件配色。沿途目标描边预览，正常抬手形成一个批次；往返去重，折线按根物件处理，采样始终忽略。起笔锁定颜色与谱面身份；空白、同色重复、第二指、系统取消、播放、切谱及弹层接管不制造历史，不借助 Undo 取消本笔，保留原来的重做。
+- “配色”进入独立移动布局：具名槽位、图形色相／明暗／透明度，以及“应用到选中／清除选区配色”明确按钮。取色拖动只调整画笔；点外收起不向画布补涂。方案、导入导出和分拍线管理通过原高级入口保留，本项不宣称重做其全部布局。选区填色沿用原有类型权限，普通物件不额外要求专业模式；颜色工具仍遵守原专业模式权限。
+- 移动手势与候选私有头位于移动目录，调色布局另设实现文件；公共载荷只有颜色、身份和目标值。桌面原有单目标染色与自动应用入口保留。起笔预留本笔容量，连续帧不扫描 ECS、不加锁／等待或分配；发布空闲颜色笔的固定大小颜色表，保持几何画笔非活动。修复下拉列表的释放保护误关父调色窗，并正确配对反馈 Combo 的样式栈。
+- Windows 最终完整构建及 CTest **198/198** 通过，相关回归 **6/6**。新增真实会话命令到快照发布的连接验证，另覆盖帧合并、去重、根／子身份、同号音频、无变化保留重做、普通选区权限与桌面阳性对照。过程中 `SkinPackageServiceTest` 根目录导入与 `AudioManagerTimelineIntegrationTest` 共享拉伸器计时曾失败，均在原环境独立复跑通过；未修改其模块，也未据此声称修复间歇问题。最终日志为 `t05-host-verified.log`、`t05-related-verified.log`、`t05-suite-verified.log`。
+- Android **x86_64** 最终包构建成功。手机 **1280×720／160dpi（英文）**、平板 **2560×1600／320dpi（中文）** 均通过槽位切换、三种取色拖动、点外防穿透、点涂／往返扫涂、同色无操作、多指与 `ACTION_CANCEL`、配色橡皮和明确选区填色／清色。每步保存回读完整谱面，未命中音符、采样及其他字段保持原值；按住截图确认仅描边预览，整笔和选区操作均一次撤销／重做精确恢复。最终用撤销恢复原谱面，重启前恢复原配置／工作区，两台模拟器保持开启。本项未构建 ARM、未操作实体机，触点注入不代替真人手感。
+- APK、输入脚本、截图和完整存档位于忽略目录 `build-android`，本批证据前缀 `t05-*`；不会随源码提交迁移。下一项为 **T06 Timing 段落局部修改**。
+
+本批代码逐文件注释率如下，CSV 为 `build-android/evidence/t05-comments-final.csv`；翻译字典为纯数据，不计入代码统计。
+
+| 路径 | 注释行 | 代码行 | 注释率 |
+| --- | ---: | ---: | ---: |
+| `Modules/Game/UI/src/ui/imgui/manager/ToolbarView.cpp` | 1990 | 4631 | 30.06% |
+| `Modules/Game/Logic/src/logic/session/ActionController_Editing.cpp` | 1444 | 3367 | 30.01% |
+| `Modules/Game/Logic/src/logic/session/BeatmapSession_Rendering.cpp` | 656 | 1518 | 30.17% |
+| `Modules/Game/Canvas/tests/MobileCanvasDrawingTest.cpp` | 447 | 1037 | 30.12% |
+| `Modules/Game/UI/src/ui/workspace/MobileWorkspacePresentation.cpp` | 337 | 780 | 30.17% |
+| `Modules/Game/Common/include/common/LogicCommands.h` | 418 | 580 | 41.88% |
+| `Modules/Game/UI/CMakeLists.txt` | 218 | 497 | 30.49% |
+| `Modules/Game/Canvas/src/presentation/mobile/MobileCanvasInteractionPresentation.cpp` | 217 | 496 | 30.43% |
+| `Modules/Game/UI/src/ui/workspace/MobileWorkbench.cpp` | 157 | 364 | 30.13% |
+| `Modules/Game/Canvas/src/presentation/mobile/MobileColorStroke.h` | 78 | 180 | 30.23% |
+| `Modules/Game/UI/include/ui/imgui/manager/ToolbarView.h` | 201 | 176 | 53.32% |
+| `Modules/Game/UI/src/ui/workspace/MobilePaletteControls.cpp` | 50 | 105 | 32.26% |
+| `Modules/Game/Common/include/common/NotePaletteStroke.h` | 7 | 14 | 33.33% |

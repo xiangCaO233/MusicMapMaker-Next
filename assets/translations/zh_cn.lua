@@ -1642,4 +1642,11 @@ return {
 	["ui.audio_presets.tab_manage"] = "预设管理",
 	["ui.audio_presets.channel"] = "音量类别",
 	["ui.audio_presets.auto_save"] = "自动保存",
+    ["ui.mobile.color.stroke_hint"] = "点按或拖涂，松手提交整笔配色；第二指取消本笔。选区填色请打开调色盘。",
+    ["ui.mobile.color.palette_hint"] = "这里只调整画笔；选区配色需明确点击应用或清除。",
+    ["ui.mobile.color.clear_selection"] = "清除选区配色",
+    ["ui.mobile.color.details"] = "方案与分拍线设置",
+    ["ui.mobile.color.apply_history"] = "应用物件配色",
+    ["ui.mobile.color.clear_history"] = "清除物件配色",
+    ["ui.common.close"] = "关闭",
 }

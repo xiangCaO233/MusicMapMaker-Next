@@ -2974,7 +2974,17 @@ void ActionController::handleCommand(const CmdApplyNotePaletteToSelection& cmd)
 {
     // 命令颜色数组只转换一次，避免为每个选中实体重复构建覆写对象。
     std::vector<BatchNoteAction::Entry> entries;
-    auto colors = makeNoteColorOverrides(cmd.colors);
+    // 移动选区只接受用户明确确认，播放或另一编辑事务期间拒绝。
+    // 默认桌面入口维持原来的许可与历史语义。
+    if ( cmd.m_touch &&
+         (!m_ctx.currentBeatmap || m_ctx.isPlaying || m_ctx.isDragging ||
+          m_ctx.brushState.isActive || m_ctx.eraserState.isActive) )
+        return;
+    // 清除覆写恢复皮肤继承，不把皮肤当前颜色固化为对象显式 RGBA。
+    // 空 optional 与透明黑色含义不同，继续交给统一颜色助手处理。
+    // 固定颜色表只在离散确认时转换，不在 UI 连续拖动中构造。
+    auto colors =
+        cmd.m_clear ? NoteColorOverrides{} : makeNoteColorOverrides(cmd.colors);
 
     auto view = m_ctx.noteRegistry.view<InteractionComponent, NoteComponent>();
     for ( auto entity : view ) {
@@ -2989,13 +2999,21 @@ void ActionController::handleCommand(const CmdApplyNotePaletteToSelection& cmd)
 
         auto newNote = oldNote;
         applyNoteColorOverrides(newNote, colors);
+        // 移动重复点击相同结果不制造空历史，也不能清空之前的重做。
+        if ( cmd.m_touch && isSameNoteColorOverrides(oldNote.m_customColors,
+                                                     newNote.m_customColors) )
+            continue;
         entries.push_back({ entity, oldNote, newNote });
     }
 
     if ( entries.empty() ) return;
 
-    auto action = std::make_unique<BatchNoteAction>(std::move(entries),
-                                                    "Set Note Palette");
+    auto action = std::make_unique<BatchNoteAction>(
+        std::move(entries),
+        cmd.m_touch ? TR(cmd.m_clear ? "ui.mobile.color.clear_history"
+                                     : "ui.mobile.color.apply_history")
+                          .data()
+                    : "Set Note Palette");
     m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
     m_ctx.lastActionMessage = "Note palette applied";
 }
@@ -3008,6 +3026,60 @@ void ActionController::handleCommand(const CmdApplyNotePaletteToSelection& cmd)
 /// 仍需检查当前编辑能力，防止颜色画笔修改已被设置隐藏的类型。
 void ActionController::handleCommand(const CmdApplyBrushPaletteToEntity& cmd)
 {
+    if ( cmd.m_stroke ) {
+        // 一笔只在释放构建 before/after；连续 UI 帧不访问 Registry。
+        // 过期实例、播放及另一编辑事务不接受迟到的颜色请求。
+        const auto& stroke = *cmd.m_stroke;
+        if ( !m_ctx.currentBeatmap || m_ctx.isPlaying || m_ctx.isDragging ||
+             m_ctx.brushState.isActive || m_ctx.eraserState.isActive ||
+             !m_ctx.lastConfig.settings.professionalMode ||
+             stroke.m_instance !=
+                 reinterpret_cast<std::uintptr_t>(m_ctx.currentBeatmap.get()) )
+            return;
+        if ( !stroke.m_clear && !hasAnyNoteColorOverride(stroke.m_colors) )
+            return;
+        // UI 目标可能包含同一折线的多个投影，提升到根后再次去重。
+        // 候选列表与选区完全独立，不得临时改选择标志再恢复。
+        // 根级去重保证一个物件只有一份 before，不重复修改临时子投影。
+        // 所有候选先收集，再统一执行批量动作，避免销毁或重建中的句柄变化。
+        // 容器仅存在于释放路径，不给每帧触点处理增加分配。
+        std::unordered_set<entt::entity>    roots;
+        std::vector<BatchNoteAction::Entry> entries;
+        // 起笔颜色随命令按值保存，不能改用消费时可能更换的调色盘。
+        // 空画笔与明确清除已在门禁区分，后续只处理一种确定语义。
+        // 无变化请求保留现有保存点和重做，不补造空历史节点。
+        const auto colors =
+            stroke.m_clear ? NoteColorOverrides{} : stroke.m_colors;
+        for ( const auto entity : stroke.m_targets ) {
+            const auto target = resolveNoteColorTargetEntity(m_ctx, entity);
+            if ( target == entt::null || !roots.insert(target).second )
+                continue;
+            const auto& before = m_ctx.noteRegistry.get<NoteComponent>(target);
+            if ( !SessionUtils::isNoteEditable(before,
+                                               m_ctx.lastConfig.settings) )
+                continue;
+            // 整个 NoteComponent 按值复制保证未涉及的业务字段保持原值。
+            // 不重建几何、不改变稳定身份，也不临时迁移当前选择。
+            // 失效或不可编辑根直接跳过，不能从邻近物件寻找替代目标。
+            auto after = before;
+            // 统一颜色助手保留格式元数据、几何、采样与批注的原有值语义。
+            // 根的颜色传播继续由原 BatchNoteAction 与渲染重建负责。
+            applyNoteColorOverrides(after, colors);
+            if ( isSameNoteColorOverrides(before.m_customColors,
+                                          after.m_customColors) )
+                continue;
+            entries.push_back({ target, before, std::move(after) });
+        }
+        // 空批次和无变化不触碰历史；不能回退桌面单目标入口。
+        if ( entries.empty() ) return;
+        auto action = std::make_unique<BatchNoteAction>(
+            std::move(entries),
+            TR(stroke.m_clear ? "ui.mobile.color.clear_history"
+                              : "ui.mobile.color.apply_history")
+                .data());
+        m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
+        return;
+    }
     // 目标解析同时验证实体和 Polyline 父关系。
     entt::entity target = resolveNoteColorTargetEntity(m_ctx, cmd.entity);
     if ( target == entt::null ) return;

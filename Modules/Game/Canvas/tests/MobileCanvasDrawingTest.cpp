@@ -2,6 +2,8 @@
 #include "common/EditTool.h"
 #include "common/LogicCommandMutationClassification.h"
 #include "common/LogicCommands.h"
+#include "common/NoteColor.h"
+#include "common/NotePaletteStroke.h"
 #include "common/ObjectDeletion.h"
 #include "common/PolylineGeometry.h"
 #include "common/render/HoverRenderData.h"
@@ -11,6 +13,7 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "graphic/mobile/MobileTouchInput.h"
 #include "log/colorful-log.h"
+#include "logic/BeatmapSession.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
@@ -21,6 +24,7 @@
 #include "logic/session/EditorAction.h"
 #include "logic/session/InteractionController.h"
 #include "logic/session/NoteAction.h"
+#include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/note/NoteType.h"
@@ -29,6 +33,7 @@
 #include "ui/interaction/EditorInteraction.h"
 
 #include <entt/entity/registry.hpp>
+#include <glm/vec4.hpp>
 #include <imgui.h>
 
 #include <array>
@@ -70,6 +75,7 @@ struct Sample {
     bool   m_cancel{};   ///< 原始系统取消，不模拟普通释放。
     bool   m_playing{};  ///< 播放接管不允许提交旧擦除。
     bool   m_scene{};    ///< 切换实例，旧目标不得用于新谱面。
+    bool   m_palette{};  ///< 普通调色浮层同样必须阻断旧画布手势。
 };
 /// @brief 通过真实 ImGui 帧和生产移动解释器取得正式笔画命令。
 /// @param samples 起笔至全部抬起的非空序列。
@@ -86,11 +92,14 @@ struct Sample {
 /// @note 当前输入快照不代替逻辑层可变状态；命令保存后才做独立回放。
 /// @note 没有注册 UIManager，不执行文件对话框、保存或其他系统动作。
 /// @note 任何菜单副作用都作为失败，不能只以音符数量断言绘制正确。
+/// @param tool 本场景实际工具，配色与绘制共用同一生产输入链。
+/// 配色夹具仍保留音符／采样同号候选，用于验证真正的领域过滤。
+/// 桌面对照使用相同几何，避免把缺少目标误判为保留旧逻辑。
 std::vector<Logic::LogicCommand> capture(
     const std::vector<Sample>& samples,
     std::string_view profile = "touch-gestures", bool simple = true,
-    std::optional<Common::Render::Hitbox> hit   = std::nullopt,
-    bool                                  erase = false)
+    std::optional<Common::Render::Hitbox> hit = std::nullopt,
+    bool erase = false, Logic::EditTool tool = Logic::EditTool::Draw)
 {
     // 两个安全边界完成方案切换，旧画布和待定笔画不能跨场景残留。
     UI::Interaction::synchronizeProfile(profile, true);
@@ -132,11 +141,14 @@ std::vector<Logic::LogicCommand> capture(
         auto presentation = Canvas::createMobileCanvasInteractionPresentation();
         Common::Render::RenderSnapshot snapshot;
         snapshot.hasBeatmap = snapshot.isHoveringCanvas = true;
-        snapshot.currentTool                            = Logic::EditTool::Draw;
+        snapshot.currentTool                            = tool;
         snapshot.trackCount                             = 4;
         // 末端拾取由正式控制器完成，夹具只提供渲染层本来会发布的命中盒。
         if ( hit ) snapshot.hitboxes.push_back(*hit);
-        if ( erase ) {
+        snapshot.brush.customColors.head = glm::vec4(1, 0, 0, 1);
+        snapshot.brush.customColors.hold = glm::vec4(1, 0, 0, 1);
+        if ( erase || tool == Logic::EditTool::ColorBrush ||
+             tool == Logic::EditTool::ColorEraser ) {
             // 三个固定可见对象覆盖短帧跨越、空白释放和混合领域同号身份。
             // 不预置选择，正式移动解释器必须自行从扫过路径收集目标。
             for ( int i = 0; i < 3; ++i )
@@ -166,22 +178,23 @@ std::vector<Logic::LogicCommand> capture(
         snapshot.beatmapInstanceId = 1;
         auto& bus                  = Event::EventBus::instance();
         // 订阅只捕获正式命令；菜单、悬浮和测试自己的采样不创建编辑记录。
-        const auto token =
-            bus.subscribe<Event::LogicCommandEvent>([&](const auto& event) {
-                const auto& command = event.command;
-                if ( std::holds_alternative<Logic::CmdStartBrush>(command) ||
-                     std::holds_alternative<Logic::CmdUpdateBrush>(command) ||
-                     std::holds_alternative<Logic::CmdEndBrush>(command) ||
-                     std::holds_alternative<Logic::CmdSetHoveredEntity>(
-                         command) ||
-                     std::holds_alternative<Logic::CmdSelectEntity>(command) ||
-                     std::holds_alternative<Logic::CmdDeleteSelected>(
-                         command) ||
-                     (erase &&
-                      std::holds_alternative<Logic::CmdSetMousePosition>(
-                          command)) )
-                    commands.push_back(command);
-            });
+        const auto token = bus.subscribe<
+            Event::LogicCommandEvent>([&](const auto& event) {
+            const auto& command = event.command;
+            if ( std::holds_alternative<Logic::CmdStartBrush>(command) ||
+                 std::holds_alternative<Logic::CmdUpdateBrush>(command) ||
+                 std::holds_alternative<Logic::CmdEndBrush>(command) ||
+                 std::holds_alternative<Logic::CmdSetHoveredEntity>(command) ||
+                 std::holds_alternative<Logic::CmdSelectEntity>(command) ||
+                 std::holds_alternative<Logic::CmdApplyBrushPaletteToEntity>(
+                     event.command) ||
+                 std::holds_alternative<Logic::CmdClearNoteColorOverrides>(
+                     event.command) ||
+                 std::holds_alternative<Logic::CmdDeleteSelected>(command) ||
+                 (erase &&
+                  std::holds_alternative<Logic::CmdSetMousePosition>(command)) )
+                commands.push_back(command);
+        });
         // 只捕获笔画命令而非相机悬浮反馈，命令数量不能被无关事件污染。
         // 载荷按值保存，不保留事件对象或事件总线内部存储的引用。
         // 订阅只在当前控制器生命周期内有效，场景之间不能重复记账。
@@ -260,6 +273,17 @@ std::vector<Logic::LogicCommand> capture(
             // 作用域离开后恢复外层方案解释，不让本用例污染后续窗口。
             const UI::Interaction::SurfaceScope scope(
                 UI::Interaction::Surface::MainCanvas);
+            // 普通工具窗口不在 ImGui Popup 栈中，专门检查这条接管边界。
+            // 浮层放在画布之外，不能靠几何遮住触点来使取消断言偶然通过。
+            // 外观与输入来自真实 Begin/End，而非测试伪造一个 overlay 布尔值。
+            if ( sample.m_palette ) {
+                ImGui::SetNextWindowPos({ 720, 30 });
+                ImGui::SetNextWindowSize({ 200, 150 });
+                ImGui::Begin("##ColorPalettePopup",
+                             nullptr,
+                             ImGuiWindowFlags_NoSavedSettings);
+                ImGui::End();
+            }
             presentation->update(canvas, nullptr, &snapshot, surface, 600, 700);
             ImGui::PushID("DrawingCamera");
             // 按相机固定 ID 查询菜单，不能只检查全局是否存在任意弹窗。
@@ -675,6 +699,336 @@ void verifyPolyline(std::optional<NoteType> sourceType, bool cancel = false,
     }
 }
 
+/// @brief 配色触点复用真实生产输入，连续拖涂只能在释放交付一个批次。
+/// @details 与擦除共用固定命中框，采样同号目标必须被忽略。
+/// 颜色断言使用命令里的起笔值，而不是测试自己重演取色或命中算法。
+/// @warning 同步 CPU 回归，不连接设备、不等待真实时钟。
+void testTouchColors()
+{
+    // 用生产解释器建立从 Down 到尾部空闲的完整事件序列。
+    // 不直接调用移动局部收集器，避免测试与实现共享命中结果。
+    // 快照只提供渲染器本来会发布的几何，不能预先标记待涂对象。
+    // 两种配色工具共用相同夹具，消除输入来源不同造成的假对照。
+    const auto run = [&](std::vector<Sample> points,
+                         int                 count,
+                         Logic::EditTool     tool) {
+        const auto commands =
+            capture(points, "touch-gestures", true, std::nullopt, false, tool);
+        // 统计完整生命周期内的全部提交，不以最后一个命令代替整笔计数。
+        // 捕获集同时保留桌面立即染色命令，保证能发现意外穿透。
+        // 目标身份是带代数的实体值，不以坐标或颜色相似性代替身份。
+        int batches = 0;
+        for ( const auto& command : commands ) {
+            // 桌面逐实体路径在触屏必须完全被屏蔽，否则取消会留下已染物件。
+            check(!std::holds_alternative<Logic::CmdClearNoteColorOverrides>(
+                      command),
+                  "touch clear never uses desktop immediate command");
+            check(!std::holds_alternative<Logic::CmdStartBrush>(command),
+                  "color stroke never draws notes");
+            if ( const auto* color =
+                     std::get_if<Logic::CmdApplyBrushPaletteToEntity>(
+                         &command) ) {
+                // 桌面逐实体命令也使用同一类型，因此必须检查显式批次字段。
+                // 有命令但缺批次不能仅凭总数相同被当作正确触屏行为。
+                // 错误时继续检查后续命令，不让首个失败掩盖重复提交。
+                ++batches;
+                check(color->m_stroke.has_value(),
+                      "color stroke always has explicit batch");
+                if ( !color->m_stroke ) continue;
+                const auto& stroke = *color->m_stroke;
+                // 同号采样不能重复记录；领域过滤发生在收集而非后台猜测。
+                check(stroke.m_targets.size() ==
+                              static_cast<std::size_t>(count) &&
+                          stroke.m_instance == 1,
+                      "color targets and instance preserved");
+                // 清除与设置携带同样的目标，却具有不同的业务含义。
+                // 不用空颜色模拟清除，否则尚未选择画笔也会擦掉旧配色。
+                // 颜色本身锁在载荷里，取消之后不应再查询变化中的画笔。
+                check(stroke.m_clear == (tool == Logic::EditTool::ColorEraser),
+                      "clear and paint remain distinct");
+                check(stroke.m_colors.head ==
+                          std::optional{ glm::vec4(1, 0, 0, 1) },
+                      "stroke locks brush color");
+            }
+        }
+        // 包含所有尾部空闲帧，防止系统取消之后补发迟到的轻点。
+        // 没有目标时要求完全不发命令，不能发送一个空批次再依靠后台吞掉。
+        // 有目标时只接受一个批次，不接受按物件数量拆分成多条历史。
+        // 尾部帧保留同一指针位置，专门发现抬手后误复用悬浮的提交。
+        check(batches == int(count > 0), "one color action only on release");
+    };
+    // 两种工具逐项使用同一组 Down／Move／Up，防止仅适配了染色入口。
+    // 系统取消和多指接管均要阻止清除旧色，不能只阻止添加新色。
+    // 运行之间重新建立输入呈现状态，不共享上一笔的候选或导航归属。
+    for ( auto tool :
+          { Logic::EditTool::ColorBrush, Logic::EditTool::ColorEraser } ) {
+        // 阳性轻点必须真正命中，不能靠屏蔽所有触点让取消用例通过。
+        // 三个框之间留空白，连续扫动验证跨越而非只检查停留的终点。
+        // 同路径返回验证去重，采样与首个音符同号验证领域过滤。
+        run({ { { 120, 310 }, true }, { { 120, 310 }, false } }, 1, tool);
+        run({ { { 80, 310 }, true },
+              { { 460, 310 }, true },
+              { { 80, 310 }, true },
+              { { 80, 310 }, false } },
+            3,
+            tool);
+        // 快速移动和松手同帧仍补交经过的薄框，不能只涂起点。
+        run({ { { 80, 310 }, true }, { { 460, 310 }, false } }, 3, tool);
+        run({ { { 80, 310 }, true }, { { 80, 310 }, false } }, 0, tool);
+        // 空白轻点保留空目标，不允许回退当前选中或悬停物件。
+        // 快速释放用不同终点，防止只回放起点的旧缺陷再次出现。
+        // 多指接管与系统 Cancel 分别覆盖已经有候选的活动笔画。
+        run({ { { 80, 310 }, true },
+              { { 250, 310 }, true },
+              { { 460, 310 }, true, true },
+              { { 460, 310 }, false } },
+            0,
+            tool);
+        run({ { { 80, 310 }, true },
+              { { 250, 310 }, true },
+              { { 460, 310 }, true, false, true },
+              { { 460, 310 }, false } },
+            0,
+            tool);
+        run({ { { 120, 310 }, true },
+              { { 120, 310 }, true, false, false, false, true },
+              { { 120, 310 }, false } },
+            0,
+            tool);
+        run({ { { 80, 310 }, true },
+              { { 250, 310 }, true },
+              { { 460, 310 }, true, false, false, true },
+              { { 460, 310 }, false } },
+            0,
+            tool);
+        // 切谱发生在尚未开始拖动的轻点候选阶段，同样不能延后提交。
+        // 播放场景先产生有效候选，再切换状态，不以无目标解释拒绝。
+        // 双指场景让第一指已经移动，避免只测尚未起笔的空取消。
+        // 已经扫过物件后打开普通调色浮层，旧候选必须作废。
+        // 浮层出现的下一帧就抬手，验证关闭后不会补交迟到释放。
+        // 与系统取消分开，避免仅覆盖原始触点 Cancel 而遗漏普通窗口。
+        run({ { { 80, 310 }, true },
+              { { 250, 310 }, true },
+              { { 460, 310 }, true, false, false, false, false, true },
+              { { 460, 310 }, false } },
+            0,
+            tool);
+        // 静止长按不是选择菜单，不通过右键或键盘实现涂色。
+        std::vector<Sample> held(14, Sample{ { 120, 310 }, true });
+        held.push_back({ { 120, 310 }, false });
+        run(held, 1, tool);
+    }
+    // 经典方案仍由原桌面控制器逐目标即时提交，不承接移动批次状态。
+    // 阳性点击使用同一命中框，确保桌面对照不是简单忽略输入。
+    // 本断言不要求桌面采用触屏的释放时机，保留原工具的连续行为。
+    const auto desktop =
+        capture({ { { 120, 310 }, true }, { { 120, 310 }, false } },
+                "classic-desktop",
+                true,
+                std::nullopt,
+                false,
+                Logic::EditTool::ColorBrush);
+    bool desktopPaint = false;
+    for ( const auto& command : desktop ) {
+        if ( const auto* paint =
+                 std::get_if<Logic::CmdApplyBrushPaletteToEntity>(&command) ) {
+            desktopPaint = true;
+            check(!paint->m_stroke,
+                  "classic color keeps immediate single-entity command");
+        }
+    }
+    // 实际观测到旧单目标命令后才判通过，不能以没有新批次作为唯一证据。
+    // 未修改物理修饰键，也未用触控方案的临时状态替代经典控制器。
+    check(desktopPaint, "classic desktop color still responds to click");
+}
+/// @brief 配色批次、选区填色及清除都复用正式历史栈验证可逆性。
+/// @details 根和投影命中合并，属性与其它领域不能随配色改变。
+/// 无变化、空列表、过期实例、播放拒绝必须保留已有重做。
+void testColorActions()
+{
+    // 历史模型回归与触点捕获分开：一个检查意图，一个检查可逆业务状态。
+    // 会话只在本用例存活，不借用真实编辑器、配置文件或用户谱面。
+    // 原数据不是通过历史创建，Undo 不会顺带撤销测试夹具的搭建。
+    // 颜色字段与几何、批注及采样分别作为哨兵，避免只检查屏幕视觉。
+    Logic::SessionContext ctx;
+    ctx.currentBeatmap                       = std::make_shared<BeatMap>();
+    ctx.lastConfig.settings.professionalMode = true;
+    // 专业模式与折线能力在原正式配置上开启，而不是绕过权限分支。
+    // 后续关闭许可用例会复用同一组有效目标，保证门禁存在阳性对照。
+    // 未开启能力的草稿不能因为画面上仍然可见就被意外改色。
+    ctx.lastConfig.settings.enablePolylineEditing = true;
+    const auto root                               = ctx.noteRegistry.create(),
+               child                              = ctx.noteRegistry.create(),
+               other                              = ctx.noteRegistry.create();
+    // 根使用合法三段正交结构；颜色修改不能重写其类型、接缝和元数据。
+    Logic::NoteComponent before{ .m_type       = NoteType::POLYLINE,
+                                 .m_timestamp  = 1,
+                                 .m_trackIndex = 1 };
+    // Hold 尾与 Flick 同时刻，Flick 末轨与后 Hold 同轨，满足原正交契约。
+    // 测试只读生产颜色助手的结果，不自行把节点着色后再声称命令正确。
+    // 原根批注是独立保存字段，颜色事务不能只重建外观而丢失它。
+    before.m_subNotes = { { .type       = NoteType::HOLD,
+                            .timestamp  = 1,
+                            .duration   = .5,
+                            .trackIndex = 1 },
+                          { .type       = NoteType::FLICK,
+                            .timestamp  = 1.5,
+                            .trackIndex = 1,
+                            .dtrack     = 1 },
+                          { .type       = NoteType::HOLD,
+                            .timestamp  = 1.5,
+                            .duration   = .5,
+                            .trackIndex = 2 } };
+    // 原几何首尾与根锚点一致；没有用不合法子列表掩盖根级传播行为。
+    // 一个子投影足以验证解析父根，权威保存结构仍是内嵌三段列表。
+    // 不调用结构修复器，配色不能凭空修改或规范化任何谱面几何。
+    before.m_annotation = "keep annotation";
+    ctx.noteRegistry.emplace<Logic::NoteComponent>(root, before);
+    ctx.noteRegistry.emplace<Logic::NoteComponent>(
+        child,
+        Logic::NoteComponent{ .m_type           = NoteType::HOLD,
+                              .m_timestamp      = 1,
+                              .m_duration       = .5,
+                              .m_trackIndex     = 1,
+                              .m_isSubNote      = true,
+                              .m_parentPolyline = root,
+                              .m_subIndex       = 0 });
+    ctx.noteRegistry.emplace<Logic::NoteComponent>(
+        other, Logic::NoteComponent{ .m_timestamp = 9 });
+    ctx.noteRegistry.emplace<Logic::InteractionComponent>(other).isSelected =
+        true;
+    // 样本实体与根恰好同号，两个 Registry 的领域边界不能靠数值区分。
+    // 负偏移选为非零哨兵，染色后不能被错误重置成默认触发点。
+    // 该对象不参与音符命令目标，断言其原值可发现跨域写入。
+    const auto sample = ctx.sampleRegistry.create();
+    ctx.sampleRegistry.emplace<Logic::SampleComponent>(
+        sample, Logic::SampleComponent{ .m_timestamp = 3, .m_offsetMs = -24 });
+    const auto instance =
+        reinterpret_cast<std::uintptr_t>(ctx.currentBeatmap.get());
+    Common::Render::NoteColorOverrides red;
+    red.head = red.hold = glm::vec4(1, 0, 0, 1);
+    Logic::ActionController                   controller(ctx);
+    const Logic::CmdApplyBrushPaletteToEntity paint{
+        entt::null,
+        Logic::NotePaletteStroke{ instance, { child, root, child }, red, false }
+    };
+    // 输入刻意同时列出根和重复子项，不能由测试先去重再交给业务端。
+    // 正式处理器应解析父根后合并，最终仅占一个可逆历史槽位。
+    // 配色不临时取消选区，无关选中音符必须保留自己的原始颜色。
+    controller.handleCommand(paint);
+    // 投影和根只形成一个历史槽，无关选区与同号采样仍保持原值。
+    const auto& colored = ctx.noteRegistry.get<Logic::NoteComponent>(root);
+    check(colored.m_customColors.head == red.head &&
+              colored.m_annotation == before.m_annotation,
+          "stroke applies colors and retains annotation");
+    // 几何合法性独立于颜色相等，颜色正确不能抵扣原生折线结构被破坏。
+    // 同一根带多个投影目标时，后台只应替换权威根而非拆出新物件。
+    // 不使用实体数量变化作为填色成功条件，配色本身不应创建或删除实体。
+    check(Common::isCanonicalPolyline(colored.m_subNotes, 1, 1, 0, 3),
+          "color preserves canonical geometry");
+    check(ctx.actionStack.getUndoStackSize() == 1 &&
+              !ctx.noteRegistry.get<Logic::NoteComponent>(other)
+                   .m_customColors.head,
+          "stroke leaves unrelated selected note unchanged");
+    check(ctx.sampleRegistry.get<Logic::SampleComponent>(sample).m_offsetMs ==
+              -24,
+          "color ignores sample registry");
+    controller.handleCommand(paint);
+    // 重复涂相同颜色必须在真实已染色数据上执行，不能用空命中代替。
+    // 不创建空动作可保证用户撤销一次就回到本次实际编辑前的状态。
+    // 后台不能为避免空动作而先执行一次修改再用 Undo 回滚。
+    check(ctx.actionStack.getUndoStackSize() == 1,
+          "same color does not create empty history");
+    // 清除前已经有真实覆写，必须产生有效动作；这不是空结果阳性测试。
+    // 使用完整清除标志，不逐槽提交而制造多次撤销才能恢复的结果。
+    // 撤销清除应回到红色，再撤销原笔画应恢复无覆写状态。
+    controller.handleCommand(Logic::CmdApplyBrushPaletteToEntity{
+        entt::null, Logic::NotePaletteStroke{ instance, { root }, {}, true } });
+    check(!ctx.noteRegistry.get<Logic::NoteComponent>(root).m_customColors.head,
+          "color eraser clears only overrides");
+    ctx.actionStack.undo(ctx);
+    check(
+        ctx.noteRegistry.get<Logic::NoteComponent>(root).m_customColors.head ==
+            red.head,
+        "undo clear restores exact colors");
+    ctx.actionStack.undo(ctx);
+    // 无效请求执行在已有重做上，不能通过清历史让断言假通过。
+    // 空载荷不借用当前已选物件；播放中也不补交之前排队的笔画。
+    controller.handleCommand(Logic::CmdApplyBrushPaletteToEntity{
+        entt::null, Logic::NotePaletteStroke{ instance, {}, red, false } });
+    controller.handleCommand(Logic::CmdApplyBrushPaletteToEntity{
+        entt::null,
+        Logic::NotePaletteStroke{ instance + 1, { root }, red, false } });
+    ctx.isPlaying = true;
+    controller.handleCommand(paint);
+    ctx.isPlaying = false;
+    check(ctx.actionStack.getUndoStackSize() == 0 &&
+              ctx.actionStack.getRedoStackSize() == 2,
+          "invalid color requests preserve redo");
+    // 上述无效批次均执行在重做哨兵存在时，才能发现错误的清栈行为。
+    // 再实际重做一次，避免仅检查栈深却没有验证动作内容仍然可执行。
+    // 重做结果取实际组件，不取测试缓存的期望对象冒充恢复状态。
+    ctx.actionStack.redo(ctx);
+    check(
+        ctx.noteRegistry.get<Logic::NoteComponent>(root).m_customColors.head ==
+            red.head,
+        "redo restores palette batch");
+    // 选区填色使用既有命令，只有显式移动清除标志改变操作含义。
+    std::array<glm::vec4, Logic::NOTE_COLOR_SLOT_COUNT> blue;
+    // 选区填色使用另一种明显颜色，与先前笔画目标区分开。
+    // 完整六槽数组能发现只更新当前可见部件而漏掉其它槽位的问题。
+    // 非选中根继续保持红色，选区身份不由 UI 可见范围截断。
+    blue.fill({ 0, 0, 1, 1 });
+    controller.handleCommand(
+        Logic::CmdApplyNotePaletteToSelection{ blue, false, true });
+    check(
+        ctx.noteRegistry.get<Logic::NoteComponent>(other).m_customColors.tap ==
+            std::optional{ glm::vec4(0, 0, 1, 1) },
+        "explicit selection fill changes selected object");
+    check(
+        ctx.noteRegistry.get<Logic::NoteComponent>(root).m_customColors.head ==
+            red.head,
+        "selection fill does not recolor unselected root");
+    controller.handleCommand(
+        Logic::CmdApplyNotePaletteToSelection{ blue, true, true });
+    // 清除全部配色恢复继承语义，不把某个当前皮肤颜色写回物件。
+    // 这与设置透明色不同，因此检查 optional 为空而不只检查 RGBA 值。
+    // 填色与清除分别占一条真实动作，撤销只恢复最近一次确认。
+    check(!ctx.noteRegistry.get<Logic::NoteComponent>(other).m_customColors.tap,
+          "selection clear removes all overrides");
+    ctx.actionStack.undo(ctx);
+    check(
+        ctx.noteRegistry.get<Logic::NoteComponent>(other).m_customColors.tap ==
+            std::optional{ glm::vec4(0, 0, 1, 1) },
+        "one undo restores selection colors");
+    // 相同填色不能丢失刚才清除操作的重做。
+    controller.handleCommand(
+        Logic::CmdApplyNotePaletteToSelection{ blue, false, true });
+    // 刚撤销的清除仍应能重做，相同填色请求不应该剪断这条历史分支。
+    // 再次确认是无变化离散操作，与活动笔画取消的路径分别验证。
+    // 此处不调用保存标记或清理历史，结果完全来自正式动作栈。
+    check(ctx.actionStack.getRedoStackSize() == 1,
+          "no-op selection fill preserves redo");
+    // 播放期间保留有效选区与已有颜色，拒绝必须来自活动交互门禁。
+    // 无效确认不能清空之前的重做，也不能悄悄更改选区或已有颜色。
+    // 普通物件填色不额外要求专业模式，继续复用桌面的类型权限。
+    ctx.lastConfig.settings.professionalMode = false;
+    ctx.isPlaying                            = true;
+    controller.handleCommand(
+        Logic::CmdApplyNotePaletteToSelection{ blue, true, true });
+    check(ctx.actionStack.getRedoStackSize() == 1,
+          "playing mobile fill preserves redo");
+    ctx.isPlaying = false;
+    // 停止播放后同一普通物件可以确认清色，不能因关闭专业模式而变成死按钮。
+    // 这里具有真实已染色选区，与空选择的无操作用例明确区分。
+    // 保持原选择组件不变，不通过重选或换工具绕过普通模式的能力检查。
+    controller.handleCommand(
+        Logic::CmdApplyNotePaletteToSelection{ blue, true, true });
+    check(
+        !ctx.noteRegistry.get<Logic::NoteComponent>(other).m_customColors.tap,
+        "ordinary selection colors remain editable without professional mode");
+}
+
 /// @brief 真实触点擦除只在释放发一次显式删除，不启动画笔或桌面右键擦除。
 /// @details 空白起笔、短帧扫过、往返去重、混合域同号以及全部取消边界独立断言。
 /// 不向 UI 伪造已擦除的快照，预览期间模型始终保持原样。
@@ -968,6 +1322,51 @@ void testEraseDeletion()
               ctx.actionStack.getRedoStackSize() == 1,
           "sample edit capability is enforced");
 }
+/// @brief 从真实会话发布空闲颜色笔快照，补上纯输入夹具与模型间的连接验证。
+/// @details 不直接填写 RenderSnapshot
+/// 颜色；必须经命令、会话更新与正式缓冲取得。
+/// 活动几何仍为空，调色后的六槽来源不能依赖桌面 StartBrush 才存在。
+/// Alpha 与 RGB 一起检查，避免只有取色 UI 变化而实际笔画仍是空载荷。
+void testIdleColorSnapshot()
+{
+    Logic::BeatmapSession session;
+    auto&                 ctx = session.getContextMutable();
+    // 使用内存谱面和本地快照池，不读取设备文件、音频或其它会话的缓冲。
+    // 相机固定为主视口，避免辅助相机的播放限频影响一次更新的发布断言。
+    // 缓冲属于本测试会话，测试结束后随会话一起销毁，无跨用例悬空引用。
+    Logic::SessionUtils::loadBeatmap(ctx, std::make_shared<BeatMap>());
+    ctx.cameras.emplace(
+        "Basic2DCanvas",
+        Logic::CameraInfo{ "Basic2DCanvas", 1000.0F, 600.0F, 0.0F });
+    ctx.syncBuffers.emplace(
+        "Basic2DCanvas",
+        std::make_shared<Common::Render::RenderSnapshotBuffer>());
+    constexpr glm::vec4 color{ .91F, .22F, .13F, .47F };
+    // 正式命令先更新画笔再切换工具，始终不发送 StartBrush。
+    session.pushCommand(
+        Logic::CmdSetBrushNoteColor{ Logic::NoteColorSlot::Head, color });
+    session.pushCommand(Logic::CmdChangeTool{ Logic::EditTool::ColorBrush });
+    // 配色工具沿用原专业模式权限，夹具须显式开启而非依赖宿主用户配置。
+    auto config                      = ctx.lastConfig;
+    config.settings.professionalMode = true;
+    // 零步长只消费离散命令，不用固定时长等待后台线程或等待预览变为活动。
+    // 发布数据从只读端拉取，不能检查写入端暂存对象来掩盖遗漏的提交。
+    session.update(0.0, config, true);
+    const auto* snapshot =
+        ctx.syncBuffers.at("Basic2DCanvas")->pullLatestSnapshot();
+    // 确认测到实际发布的颜色工具，而不是缓冲中残留的默认工作对象。
+    check(snapshot && snapshot->currentTool == Logic::EditTool::ColorBrush,
+          "color tool publishes a real session snapshot");
+    if ( !snapshot ) return;
+    // 不能为了提供颜色把几何笔画标为活动，否则会与触控本地事务冲突。
+    // 检查完整 optional，未发布不能被默认黑色或皮肤继承误判为有效 RGBA。
+    // 与独立手势用例组合，约束实际生产源和输入消费端使用同一颜色契约。
+    check(!ctx.brushState.isActive && !snapshot->brush.isActive,
+          "idle color snapshot never starts a geometry brush");
+    check(snapshot->brush.customColors.head &&
+              *snapshot->brush.customColors.head == color,
+          "idle color snapshot carries exact RGBA from the palette command");
+}
 }  // namespace
 
 /// @brief 组合覆盖轻点、静止按住、快速终点、双向长条和第二指接管。
@@ -1081,6 +1480,9 @@ int main()
               "endpoint tap never begins resume");
     }
     check(selected, "endpoint tap selects original object");
+    testIdleColorSnapshot();
+    testTouchColors();
+    testColorActions();
     testTouchEraser();
     testEraseDeletion();
     UI::Interaction::activeProfile().setNoteHoldBrush(true);

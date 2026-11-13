@@ -1,6 +1,7 @@
 #include "MobileCanvasInteractionPresentation.h"
 #include "MobileCanvasGesture.h"
 #include "MobileCanvasNavigation.h"
+#include "MobileColorStroke.h"
 #include "MobileNavigationRouting.h"
 #include "MobileNoteHandles.h"
 #include "MobileObjectEraser.h"
@@ -83,6 +84,7 @@ public:
             m_gesture.cancelPending();
             m_handle.reset();
             m_eraser.cancel();
+            m_colorStroke.cancel();
             auto ctx = context(canvas);
             ImGui::PushID(ctx.cameraId.c_str());
             if ( ImGui::BeginPopup("SelectionEditMenu") ) {
@@ -106,15 +108,28 @@ public:
         // 读取 UI 线程方案标量，不按工具名或平台宏猜测能力。
         const bool erasing = snapshot->currentTool == Logic::EditTool::Draw &&
                              UI::Interaction::activeProfile().objectEraser();
+        // 配色与颜色橡皮使用各自明确工具值，不通过平台或按钮名字推断。
+        // 当前帧只读标量，临时颜色与候选由本画布私有状态保存。
+        // 切到其它页签或工具不把未完成的配色转交给普通桌面控制器。
+        const bool coloring =
+            snapshot->currentTool == Logic::EditTool::ColorBrush ||
+            snapshot->currentTool == Logic::EditTool::ColorEraser;
+        const auto colorTool =
+            coloring ? snapshot->currentTool : Logic::EditTool::Draw;
+        // 配色笔、配色橡皮互换也属于新意图，不能让同一手指继承前一笔。
         // 改工具、改意图或切谱立即丢弃本地预览，旧手指不能在新场景补发删除。
-        if ( m_erasing != erasing ||
-             (m_erasing && (m_eraser.active() || m_gesture.active()) &&
+        if ( m_erasing != erasing || m_colorTool != colorTool ||
+             ((m_erasing || m_colorTool != Logic::EditTool::Draw) &&
+              (m_eraser.active() || m_colorStroke.active() ||
+               m_gesture.active()) &&
               m_eraseInstance != snapshot->beatmapInstanceId) ) {
             // 待定轻点也要取消；切谱不能等到实际扫动开始才检查实例。
             cancelInput(canvas, *snapshot);
             m_eraser.cancel();
+            m_colorStroke.cancel();
             m_gesture.cancel();
         }
+        m_colorTool     = colorTool;
         m_erasing       = erasing;
         m_eraseInstance = snapshot->beatmapInstanceId;
         ImGui::PushID(ctx.cameraId.c_str());
@@ -183,9 +198,15 @@ public:
         const auto  display = ImGui::GetIO().DisplaySize;
         // 通用属性弹层同样遮住画布，不能仅识别本类自己的长按菜单。
         // 任意层弹窗都先取得输入，关闭后仍需一次新的触摸代际。
-        const bool overlay = ImGui::IsPopupOpen(
-            nullptr,
-            ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        // 调色工具使用普通浮层窗口，也必须先取得触控输入而不是穿透画布。
+        // 点外关闭的这一整次触点由所有权门闩拒绝，不能在弹层消失后补涂。
+        // 只查询已知窗口，当前帧与上一帧可见性兼容两种绘制先后顺序。
+        const auto* palette = ImGui::FindWindowByName("##ColorPalettePopup");
+        const bool  overlay =
+            ImGui::IsPopupOpen(
+                nullptr,
+                ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) ||
+            (palette && (palette->Active || palette->WasActive));
         const float originX = raw.m_originX * display.x;
         const float originY = raw.m_originY * display.y;
         const bool  acceptsOrigin =
@@ -202,6 +223,7 @@ public:
         // 外部手势不能令旧回放永久占有画布，或在之后误补发释放。
         if ( taken || (m_ownership.blocksSingle() && m_gesture.active()) ) {
             m_eraser.cancel();
+            m_colorStroke.cancel();
             cancelInput(canvas, *snapshot);
             m_gesture.cancel();
             m_handle.reset();
@@ -219,6 +241,7 @@ public:
         // 不依赖逻辑线程回传的 brush 标志，本笔从未写入正式数据。
         if ( interrupted ) {
             m_eraser.cancel();
+            m_colorStroke.cancel();
             m_gesture.cancel();
         }
         auto output = MobileCanvasGesture::Output::Suppress;
@@ -242,11 +265,12 @@ public:
                     10.0f * scale,
                     eligible || (raw.m_epoch != 0 && m_gesture.active() &&
                                  !interrupted),
-                    snapshot->currentTool != Logic::EditTool::Draw);
+                    snapshot->currentTool != Logic::EditTool::Draw &&
+                        !coloring);
             // 删除候选只在移动私有头中，公共画布无需感知手指模式。
             // 该入口与原画笔互斥，不先执行绘制再通过 Undo 假装擦除。
             // 所有权与导航仲裁已完成，第二指及系统取消先于本笔更新。
-            if ( erasing ) {
+            if ( erasing || coloring ) {
                 // 松手后的普通控制器立即撤去悬浮反馈；擦除器仍单独消费真实终点。
                 // 回放起点与指针显示相互独立，不能让触点离开后遗留鼠标高亮。
                 const bool hidePointer =
@@ -271,15 +295,23 @@ public:
                         : point;
                 // 起点回放和真实点使用同一投影，不重复解释桌面轨道规则。
                 // 最终载荷绑定原实例，排队期间切谱也不能删除新对象。
-                m_eraser.update(output, samplePoint, *snapshot, frame, scale);
+                // 两个移动局部事务共用输入仲裁，模型动作各自独立。
+                // 配色不回放桌面逐实体提交，也不借用删除作为预览。
+                // 每个分类只推进当前工具的本地状态机，另一种笔画不重复消费。
+                // 回放起点和实际移动仍使用同一投影与窗口裁剪范围。
+                const auto advanceStroke =
+                    [&](MobileCanvasGesture::Output phase, ImVec2 p) {
+                        if ( coloring )
+                            m_colorStroke.update(
+                                phase, p, *snapshot, frame, scale);
+                        else
+                            m_eraser.update(phase, p, *snapshot, frame, scale);
+                    };
+                advanceStroke(output, samplePoint);
                 // 跨过拖动门槛的当帧仍先采原点，再补真实点，不能漏掉首个扫过对象。
                 if ( output == MobileCanvasGesture::Output::Begin &&
                      m_gesture.dragging() )
-                    m_eraser.update(MobileCanvasGesture::Output::Pass,
-                                    point,
-                                    *snapshot,
-                                    frame,
-                                    scale);
+                    advanceStroke(MobileCanvasGesture::Output::Pass, point);
                 return;
             }
             // 轻点的 Begin/Release
@@ -396,6 +428,10 @@ public:
 private:
     /// @details 擦除状态只随当前画布存活，不通过 UIManager 共享给其它页签。
     /// 与公共画笔分开持有，取消本地预览不需要取得逻辑会话的所有权。
+    /// @brief 配色只持有可见候选和起笔颜色；正常释放形成单条历史。
+    MobileColorStroke m_colorStroke;
+    /// @brief 上帧配色意图，切换工具取消本地事务，不沿用旧手指。
+    Logic::EditTool    m_colorTool{ Logic::EditTool::Draw };
     MobileObjectEraser m_eraser;     ///< 只在触控编译的本地擦除候选及预览。
     bool               m_erasing{};  ///< 模式切换取消旧候选，不移交半次笔画。
     std::uintptr_t     m_eraseInstance{};  ///< 切谱时不沿用旧实体编号。

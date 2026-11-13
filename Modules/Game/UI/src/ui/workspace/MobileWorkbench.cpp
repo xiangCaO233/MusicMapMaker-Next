@@ -443,6 +443,11 @@ void drawMobileWorkbench(UIManager& manager, float scale)
     if ( tool == Logic::EditTool::Draw &&
          Interaction::activeProfile().touchGestures() )
         renderTouchDrawingControls(width, gap, scale);
+    // 配色手势的提交与取消范围常驻解释，手机没有 Hover 入口。
+    // 选区填色在调色页明确确认，不由经过物件或改调色盘触发。
+    if ( tool == Logic::EditTool::ColorBrush ||
+         tool == Logic::EditTool::ColorEraser )
+        ImGui::TextWrapped("%s", TR("ui.mobile.color.stroke_hint").data());
     // 固定两列；紧凑高度使全部六行十二个常驻按钮在手机横屏下无需滚动即可完整展示。
     for ( std::size_t i = 0; i < entries.size(); i += 2 ) {
         // 先量同行的两种文案，再提交任何按钮，避免后量到的长文案压住下一行。

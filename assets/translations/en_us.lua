@@ -1643,4 +1643,11 @@ return {
 	["ui.audio_presets.tab_manage"] = "Presets",
 	["ui.audio_presets.channel"] = "Channel",
 	["ui.audio_presets.auto_save"] = "Auto-save",
+    ["ui.mobile.color.stroke_hint"] = "Tap or sweep, then release to apply. A second finger cancels. Open Colors to fill a selection.",
+    ["ui.mobile.color.palette_hint"] = "Adjust the brush here. Apply or clear selection colors explicitly.",
+    ["ui.mobile.color.clear_selection"] = "Clear Selection Colors",
+    ["ui.mobile.color.details"] = "Schemes and Beat Line Settings",
+    ["ui.mobile.color.apply_history"] = "Apply Object Colors",
+    ["ui.mobile.color.clear_history"] = "Clear Object Colors",
+    ["ui.common.close"] = "Close",
 }

@@ -791,8 +791,9 @@ void ToolbarView::toggleMobileTool(MobileTool tool, glm::vec2 anchor)
             std::numeric_limits<std::uint64_t>::max();
         break;
     case MobileTool::Palette:
-        m_showColorPopup  = open;
-        m_lastColorBtnPos = anchor;
+        m_mobilePaletteDetails = false;
+        m_showColorPopup       = open;
+        m_lastColorBtnPos      = anchor;
         break;
     }
 }
@@ -854,7 +855,11 @@ void ToolbarView::renderMobileTools(UIManager* manager, float scale,
     renderLayoutPopup(scale, manager);
     renderMagnetPopup(scale);
     renderSoundEffectTool(scale);
-    renderColorPalettePopup(scale);
+    // 移动快捷页独立布局，高级方案仍复用原有导入导出与分拍线配置。
+    if ( m_mobilePaletteDetails )
+        renderColorPalettePopup(scale);
+    else
+        renderMobileColorPalette(scale);
     renderPaletteExportFileDialog(scale);
     renderPaletteImportFileDialog(scale);
     drawLayoutPresetFileDialogs();
@@ -3727,10 +3732,14 @@ void ToolbarView::pushPaletteToBrush(bool resetDrawColors)
 /// 命令携带所有槽位，使逻辑层能按各音符所属槽位一次处理当前选择集合。
 /// 颜色选择器只在编辑结束时调用，避免拖动期间生成大量选择修改命令。
 /// 该入口不检查选择是否为空，逻辑层把空选择作为正常无操作处理。
-void ToolbarView::pushPaletteToSelection()
+void ToolbarView::pushPaletteToSelection(bool explicitTouch)
 {
+    // 移动调色只更改后续画笔，选区由快捷页上的明确按钮提交。
+    // 高级方案页同样不能因拖动取色或改文本而悄悄改选区。
+    if ( m_mobileTools && !explicitTouch ) return;
     Logic::EditorEngine::instance().pushCommand(
-        Logic::CmdApplyNotePaletteToSelection{ m_paletteColors });
+        Logic::CmdApplyNotePaletteToSelection{
+            m_paletteColors, false, m_mobileTools });
 }
 
 /// @brief 把当前分拍线与玩家音符默认配色写入编辑器运行时视觉配置。
@@ -5042,7 +5051,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
             if ( ::MMM::UI::FeedbackButton(
                      TR("ui.toolbar.note_palette.apply_selected").data(),
                      ImVec2(std::floor(140.0f * dpiScale), buttonH)) ) {
-                pushPaletteToSelection();
+                pushPaletteToSelection(true);
             }
             ImGui::SameLine();
             // 清除单槽自定义使用空 optional 命令恢复对象默认语义。

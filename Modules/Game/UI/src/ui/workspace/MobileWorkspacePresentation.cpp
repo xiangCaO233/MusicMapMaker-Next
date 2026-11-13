@@ -1057,6 +1057,9 @@ void MobileWorkspacePresentation::endFrame(UIManager& manager)
     // 在抽屉和业务窗口之后提交，工具内容不继承工作台的窄矩形裁剪。
     // 外壳隐藏时仍推进关闭分支，以便保存未完成连续编辑的最终值。
     // 观察指针在当前帧重新获取，不跨越主界面的销毁和重建。
+    // 弹出列表的触点会暂时阻挡背景输入，但不能因此关闭它的父工具窗口。
+    // 工具可见性只跟随实际抽屉／退出确认，不复用含释放保护的输入门禁。
+    // 下拉选项与取色器继续独占触点，画布仍由原来的输入门禁保护。
     if ( auto* toolbar = [&]() -> ToolbarView* {
              auto* dock = manager.getView<MainDockSpaceUI>("MainDockSpaceUI");
              return dock ? &dock->toolbarView() : nullptr;
@@ -1065,7 +1068,8 @@ void MobileWorkspacePresentation::endFrame(UIManager& manager)
                                    m_scale,
                                    m_showWorkbench &&
                                        m_dock.isMainCanvasSelected() &&
-                                       !m_model.blocksCanvasInput());
+                                       m_model.drawer() == MobileDrawer::None &&
+                                       !m_model.exitConfirmation());
     drawExitConfirmation();
     m_touchScroll.endFrame();
     m_dock.finishFrame();

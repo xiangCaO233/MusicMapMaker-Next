@@ -249,6 +249,8 @@ add_library(
   src/ui/imgui/manager/SettingsView_Tabs.cpp
   src/ui/imgui/manager/SettingsView_VisualTab.cpp
   src/ui/imgui/manager/ToolbarView.cpp
+  # 移动调色实现独立于桌面布局；公共移动工具入口也由无图形测试链接。
+  src/ui/workspace/MobilePaletteControls.cpp
   # 音轨控制、试听控件、波形和频谱视图。
   src/ui/imgui/audio/AudioTrackControllerUI.cpp
   src/ui/imgui/audio/AudioTrackControllerUI_Widgets.cpp
