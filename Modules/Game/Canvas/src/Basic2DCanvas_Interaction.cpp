@@ -1608,7 +1608,7 @@ bool Basic2DCanvasInteraction::hasActivePointerGesture() const
 {
     return m_leftPressStartedOnCanvas || m_leftPressStartedObjectDrag ||
            m_rightEraseActive || m_isMiddleCanvasPanning ||
-           m_mouseBrushCancelAwaitingRelease ||
+           m_mouseBrushCancelAwaitingRelease || m_layoutTouch.active() ||
            m_pointerPresentation->hasGesture();
 }
 
@@ -2781,6 +2781,9 @@ void Basic2DCanvasInteraction::rebuildNoteLayoutInstances(
 /// @warning UI 手势边界路径：配置保存可能访问磁盘，仅在拖动结束执行。
 void Basic2DCanvasInteraction::finishLayoutEditing()
 {
+    // 原始触点在弹层、换工具或正常结束后不能接续旧布局。
+    m_layoutTouch.suspend(Graphic::mobileTouchSnapshot().m_epoch);
+    m_layoutTouchGrabOffset = {};
     if ( m_layoutConfigurationChanged ) {
         // 连续拖动只修改内存配置，最终释放时合并为一次磁盘保存和反馈。
         Config::AppConfig::instance().save();
@@ -2822,7 +2825,9 @@ void Basic2DCanvasInteraction::finishLayoutEditing()
 /// - 已经开始的拖动始终锁定原目标和原句柄。
 /// - 音符四角缩放句柄优先于文字组件。
 /// - 文字组件四角和主体优先于主轨道大矩形。
-/// - 主轨道边缘、中心和判定线优先于辅助区域。
+/// - 桌面主轨道边缘、中心和判定线优先于辅助区域。
+/// - 触控宽命中带重叠时按实际距离选择，公共交接边仍优先主区域。
+/// - 已捕获目标不参加新的距离仲裁，余下移动不允许切换区域。
 /// - 辅助区按批注、草稿、BGM 的固定顺序消解重叠命中。
 /// - 音符主体不在 Layout 模式移动，只允许四角调整全局渲染比例。
 /// - 隐藏文字组件和零面积字形不能成为命中目标。
@@ -2936,6 +2941,68 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     float targetWidth, float targetHeight, bool isHovered,
     const Common::Render::RenderSnapshot& currentSnapshot)
 {
+    // 移动布局与输入方案分别判定；外接鼠标时仍使用本来的即时鼠标路径。
+    // 原始快照只在触控方案读取，不能让桌面同时拥有第二套按下来源。
+    const bool        touch = !UI::workspaceAllowsHoverFeedback() &&
+                              UI::Interaction::activeProfile().touchGestures();
+    LayoutTouchResult touchInput;
+    if ( touch ) {
+        // 原始快照由 UI 线程事件泵发布，本次只借用到函数返回。
+        // 不读取 SDL 设备、不等待平台查询，也不保存可变数组元素地址。
+        const auto& raw     = Graphic::mobileTouchSnapshot();
+        const auto  display = ImGui::GetIO().DisplaySize;
+        bool        allowed = false;
+        if ( raw.m_epoch != m_layoutTouch.epoch() ) {
+            // 只在新落点查询窗口树，延迟合成鼠标不能决定触控归属。
+            // 从真实起点裁决前景窗口，不能通过矩形范围绕过弹层遮挡。
+            // 只有新代际查询一次，持续 Move 不遍历窗口树。
+            ImGuiWindow* hit{};
+            ImGuiWindow* under{};
+            ImGui::FindHoveredWindowEx(
+                { raw.m_originX * display.x, raw.m_originY * display.y },
+                false,
+                &hit,
+                &under);
+            allowed =
+                hit == ImGui::GetCurrentWindow() &&
+                ImGui::IsWindowContentHoverable(ImGui::GetCurrentWindow(), 0) &&
+                !UI::workspaceBlocksCanvasInput();
+        }
+        // 身份和几何来自同一不可变快照及当前画布，键数不能使用另一会话。
+        // 隐藏、重排或方案变化时控制器只报告结束，不使用旧投影补一次修改。
+        // 时间容差不参与布局编辑，静止长按不会在后台自动变成一次拖动。
+        touchInput = m_layoutTouch.update(
+            raw,
+            { .m_origin     = { canvasScreenX, canvasScreenY },
+              .m_size       = { targetWidth, targetHeight },
+              .m_display    = display,
+              .m_window     = ImGui::GetCurrentWindow()->ID,
+              .m_dock       = ImGui::GetCurrentWindow()->DockId,
+              .m_instance   = currentSnapshot.beatmapInstanceId,
+              .m_generation = UI::Interaction::profileGeneration(),
+              .m_frame      = ImGui::GetFrameCount(),
+              .m_keyCount   = currentSnapshot.trackCount,
+              .m_slop =
+                  8 * Config::AppConfig::instance().getWindowContentScale(),
+              .m_allowed = allowed });
+        // 算法继续接收原有画布局部坐标；平台归一化在输入层只转换一次。
+        // 按下回放使用真实原点，快速抬手下一帧再处理被保存的合法终点。
+        pointerX  = touchInput.m_point.x - canvasScreenX;
+        pointerY  = touchInput.m_point.y - canvasScreenY;
+        isHovered = touchInput.m_pressed || m_layoutTouch.active();
+    }
+    // 输入先经过代际、投影和多指门禁，后续业务分支不再推断系统取消。
+    // 按下时只锁定原候选和抓取偏差，不物化一次未发生的布局修改。
+    // 正常 Up 与 Cancel 的更新许可不同，不能统一解释为鼠标松开。
+    // 单指只有越过容差才更新配置；正常抬手仍可带最后一个合法终点。
+    const bool layoutDown =
+        touch ? touchInput.m_moved
+              : UI::Interaction::mouseDown(ImGuiMouseButton_Left);
+    // 捕获与更新分开：Down 可以命中并冻结，但不能因为放大命中带而跳位。
+    // 终点更新与真正的释放收尾也分开，保留 Up 所带的最后一个位移样本。
+    const bool layoutPressed =
+        touch ? touchInput.m_pressed
+              : UI::Interaction::mouseClicked(ImGuiMouseButton_Left, false);
     // 视口退化时无法继续几何换算；若鼠标已经释放，仍需完成并清理
     // 先前手势，避免拖动状态在窗口恢复后继续生效。
     if ( targetWidth <= 0.0f || targetHeight <= 0.0f ) {
@@ -2944,7 +3011,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                   HorizontalRegionDragHandle::None ||
               m_noteScaleDragTarget.has_value() ||
               m_canvasComponentDragTarget.has_value()) &&
-             !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
+             !layoutDown ) {
             finishLayoutEditing();
         }
         return;
@@ -2962,7 +3029,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         appConfig.getVisualConfig().trackLayoutForKeyCount(keyCount));
     // 无谱面时使用 keyCount=0 的独立布局配置；真实谱面至少按一轨处理。
     const float cameraOffsetX = currentSnapshot.canvasHorizontalOffsetX;
-    const float worldPointerX = pointerX - cameraOffsetX;
+    float       worldPointerX = pointerX - cameraOffsetX;
     // 主轨道随相机横移，配置仍存世界归一化坐标，命中时需先去掉偏移。
     // 辅助区布局使用零相机偏移解析为世界坐标，便于直接写回归一化值。
     const auto auxiliaryProjection =
@@ -3014,12 +3081,23 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     };
     float judgmentLinePosition = sanitizeJudgmentLinePosition(
         appConfig.getVisualConfig().judgmentLinePositionForKeyCount(keyCount));
+    // 触控边缘与角点的半径为 24dp，对应完整 48dp 命中带。
+    // 该范围只影响输入判定，显示把手仍使用原来的精细线宽和尺寸。
+    // 密集重叠区域继续遵循下面的目标优先级，不同时修改多个组件。
+    // 文字主体额外优先 Move，避免小字号全部被扩大的角点覆盖。
+    // 移动中心同样扩大命中，轨道移动仍保持按下相对位置。
+    // 每次捕获只锁定一个句柄，途中跨入其它命中带不会改变编辑方向。
+    // 吸附距离保持原配置，不随触摸命中半径扩大而改变对齐效果。
+    // 经典鼠标与纯鼠标方案继续使用原来的七像素角点半径。
     // 命中半径随 DPI 放大并保留逻辑像素下限；移动中心句柄范围大于
     // 边缘/角点，使精细缩放仍优先落在边界附近。
-    const float dpiScale                 = appConfig.getWindowContentScale();
-    const float edgeHitRadius            = std::max(6.0f, 7.0f * dpiScale);
-    const float moveHandleRadius         = std::max(12.0f, 15.0f * dpiScale);
-    const float componentCornerHitRadius = std::max(6.0f, 7.0f * dpiScale);
+    const float dpiScale = appConfig.getWindowContentScale();
+    const float edgeHitRadius =
+        std::max(6.0f, (touch ? 24.0f : 7.0f) * dpiScale);
+    const float moveHandleRadius =
+        std::max(12.0f, (touch ? 24.0f : 15.0f) * dpiScale);
+    const float componentCornerHitRadius =
+        std::max(6.0f, (touch ? 24.0f : 7.0f) * dpiScale);
     const float componentSnapDistance =
         std::max(CANVAS_COMPONENT_SNAP_DISTANCE,
                  CANVAS_COMPONENT_SNAP_DISTANCE * dpiScale);
@@ -3161,7 +3239,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     if ( (!movingCanvasComponent && !movingTrackLayout &&
           !movingHorizontalRegion && !resizingHorizontalRegion &&
           !resizingTrackWidth) ||
-         !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
+         !layoutDown ) {
         m_canvasComponentSnapGuideX.reset();
         m_canvasComponentSnapGuideY.reset();
     }
@@ -3221,8 +3299,16 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 // 无实际字形面积的组件不能产生移动或缩放句柄。
                 continue;
             }
-            const auto hit = Logic::hitTestCanvasComponent(
-                bounds, pointerX, pointerY, componentCornerHitRadius);
+            // 文字主体优先移动；放大的角点带只在主体外侧负责缩放。
+            // 否则小字号的整块文字都会被 48dp 角点覆盖，无法移动。
+            const bool body =
+                touch && pointerX >= bounds.left && pointerX <= bounds.right &&
+                pointerY >= bounds.top && pointerY <= bounds.bottom;
+            const auto hit =
+                body
+                    ? Logic::CanvasComponentDragHandle::Move
+                    : Logic::hitTestCanvasComponent(
+                          bounds, pointerX, pointerY, componentCornerHitRadius);
             if ( hit != Logic::CanvasComponentDragHandle::None ) {
                 // 保存完整实例快照，按下时需要其 instanceIndex、内容边界
                 // 和允许布局区域，而不仅是组件类型。
@@ -3255,35 +3341,100 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     HorizontalRegionDragHandle hoveredHorizontalHandle =
         HorizontalRegionDragHandle::None;
     if ( m_horizontalRegionDragHandle != HorizontalRegionDragHandle::None ) {
-        // 拖动期间锁定最初区域，避免重叠句柄导致目标切换。
+        // 捕获期间保持区域与句柄，不让途中经过的主轨道边缘抢走目标。
         hoveredAuxiliaryRegion  = m_auxiliaryLayoutRegion;
         hoveredHorizontalHandle = m_horizontalRegionDragHandle;
+        if ( touch ) hoveredHandle = TrackLayoutDragHandle::None;
     } else if ( auxiliaryProjection.valid && isHovered &&
-                hoveredHandle == TrackLayoutDragHandle::None &&
+                m_trackLayoutDragHandle == TrackLayoutDragHandle::None &&
+                (touch || hoveredHandle == TrackLayoutDragHandle::None) &&
                 !hoveredNote.has_value() && !hoveredComponent.has_value() ) {
-        // 辅助区命中只在更高优先级对象均未命中时执行；固定数组顺序
-        // 处理区域重叠时的稳定优先级。
-        constexpr std::array regions{
-            AuxiliaryLayoutRegion::Annotation,
-            AuxiliaryLayoutRegion::Draft,
-            AuxiliaryLayoutRegion::Bgm,
-        };
+        // 触控命中带可能覆盖整个窄批注区，需按实际距离消解区域之间的重叠。
+        // 桌面仍按主轨道优先及批注、草稿、BGM 的固定顺序命中。
+        // 只对当前触点附近的固定四个区域比较距离，不扫描谱面或完整对象集。
+        // 距离均在去掉相机横移的世界逻辑像素中计算，不能混入屏幕 X。
+        // 边缘用法向距离，中心和判定线把手用方形命中带的最大轴距。
+        // 该度量与现有矩形命中区域一致，不按控件绘制面积加权。
+        // 无限初值表示主轨道未命中，任意合法辅助候选均可取得归属。
+        float best = std::numeric_limits<float>::infinity();
+        if ( touch ) {
+            const float cx = (layout.left + layout.right) * .5f * targetWidth;
+            const float cy = (layout.top + layout.bottom) * .5f * targetHeight;
+            // 主轨道候选先参与比较，严格更近的辅助句柄才可以替换它。
+            // 因此公共交接边精确重合时仍保持原主区域优先，避免输入抖动。
+            // 只修改悬浮候选；真正捕获在后面唯一的按下分支完成。
+            switch ( hoveredHandle ) {
+            case TrackLayoutDragHandle::Left:
+                best = std::abs(worldPointerX - layout.left * targetWidth);
+                break;
+            case TrackLayoutDragHandle::Right:
+                best = std::abs(worldPointerX - layout.right * targetWidth);
+                break;
+            case TrackLayoutDragHandle::Top:
+                best = std::abs(pointerY - layout.top * targetHeight);
+                break;
+            case TrackLayoutDragHandle::Bottom:
+                best = std::abs(pointerY - layout.bottom * targetHeight);
+                break;
+            case TrackLayoutDragHandle::JudgmentLine:
+                best = std::max(
+                    std::abs(worldPointerX - layout.right * targetWidth),
+                    std::abs(pointerY - judgmentLinePosition * targetHeight));
+                break;
+            case TrackLayoutDragHandle::Move:
+                best = std::max(std::abs(worldPointerX - cx),
+                                std::abs(pointerY - cy));
+                break;
+            case TrackLayoutDragHandle::None: break;
+            }
+        }
+        constexpr std::array regions{ AuxiliaryLayoutRegion::Annotation,
+                                      AuxiliaryLayoutRegion::Draft,
+                                      AuxiliaryLayoutRegion::Bgm };
+        // 固定枚举顺序也是辅助候选等距时的稳定裁决，不依赖容器插入顺序。
+        // 只有尚未捕获的按下阶段允许这次比较，持续拖动在上面的锁定分支。
+        // 原桌面分支不比较距离，继续保持原来的首命中即停止规则。
         for ( const auto region : regions ) {
-            // 所有区域共享主轨道上下边界，但使用各自横向归一化边界。
+            // 区域边界与写回算法共用同一投影，草稿／BGM 仍表示完整轨道组。
+            // 这里只决定选哪个把手，不改变单轨宽度或相邻链的变换语义。
+            const auto bounds = regionBounds(region);
             const auto hit =
-                hitTestHorizontalRegion(regionBounds(region),
+                hitTestHorizontalRegion(bounds,
                                         layout.top * targetHeight,
                                         layout.bottom * targetHeight,
                                         worldPointerX,
                                         pointerY,
                                         targetWidth,
                                         edgeHitRadius,
-                                        moveHandleRadius);
+                                        moveHandleRadius,
+                                        touch);
             if ( hit == HorizontalRegionDragHandle::None ) continue;
-            // 首个命中即停止，避免同一按下同时激活多个区域。
+            if ( touch ) {
+                // helper 已在窄区内部消解中心与两侧的重叠，这里再与主轨道比较。
+                // 不扩大配置范围，不把绘制圆点尺寸当成额外的吸附半径。
+                const float x =
+                    (hit == HorizontalRegionDragHandle::Left ? bounds.left
+                     : hit == HorizontalRegionDragHandle::Right
+                         ? bounds.right()
+                         : bounds.left + bounds.width * .5f) *
+                    targetWidth;
+                float distance = std::abs(worldPointerX - x);
+                if ( hit == HorizontalRegionDragHandle::Move )
+                    distance = std::max(
+                        distance,
+                        std::abs(pointerY - (layout.top + layout.bottom) * .5f *
+                                                targetHeight));
+                // 真正重合的公共边仍保留原主区域优先，不来回切换同一位置。
+                // 中心把手距离更小时才取代宽边缘带，窄辅助区因此仍能移动。
+                if ( distance >= best ) continue;
+                best          = distance;
+                hoveredHandle = TrackLayoutDragHandle::None;
+            }
+            // 只保存最终区域的值身份，按下冻结前不借用临时 bounds 的地址。
+            // 被替换的主轨道候选已经清空，后面的捕获分支不会同时启动两者。
             hoveredAuxiliaryRegion  = region;
             hoveredHorizontalHandle = hit;
-            break;
+            if ( !touch ) break;
         }
     }
 
@@ -3322,8 +3473,75 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
     }
 
-    if ( isHovered &&
-         UI::Interaction::mouseClicked(ImGuiMouseButton_Left, false) ) {
+    if ( isHovered && layoutPressed ) {
+        // 每次新的物理按下都从零偏差开始，不能继承上一组件角点的补偿。
+        // 选择仍沿用原命中优先级，不把大范围触摸当成框选或物件拖动。
+        m_layoutTouchGrabOffset = {};
+        if ( touch ) {
+            // 抓取偏差保存在 UI 线程的固定向量，不随最新渲染快照重新求解。
+            // 组件尺寸因本次拖动变化后，起点仍保持冻结，避免反馈成指数缩放。
+            // 主轨道、辅助区和文字都复用相同屏幕域，不叠加两次相机横移。
+            // 扩大的角点／边缘输入带不改变真实几何，保留按下偏差。
+            // 移动主体已有冻结相对起点，不需要额外补偿。
+            const auto cornerOffset =
+                [&](const Logic::CanvasComponentBounds& bounds,
+                    Logic::CanvasComponentDragHandle    handle) {
+                    // 普通文字 Move 已保存中心偏差；只有四角需要对齐真实角点。
+                    // 音符四角同样使用这套补偿，不改变音符全局缩放的计算公式。
+                    using H = Logic::CanvasComponentDragHandle;
+                    if ( handle == H::Move || handle == H::None ) return;
+                    const bool left =
+                        handle == H::TopLeft || handle == H::BottomLeft;
+                    const bool top =
+                        handle == H::TopLeft || handle == H::TopRight;
+                    m_layoutTouchGrabOffset = {
+                        (left ? bounds.left : bounds.right) - pointerX,
+                        (top ? bounds.top : bounds.bottom) - pointerY
+                    };
+                };
+            // 更高层的音符或文字命中阻止底层轨道边界取得补偿和捕获。
+            // 只读取本帧有效包围盒，后续变换仍使用按下时冻结的几何。
+            if ( hoveredNoteBounds )
+                cornerOffset(*hoveredNoteBounds, hoveredNoteHandle);
+            else if ( hoveredComponentInstance )
+                cornerOffset(
+                    canvasComponentContentBounds(*hoveredComponentInstance),
+                    hoveredComponentHandle);
+            else if ( hoveredHorizontalHandle !=
+                          HorizontalRegionDragHandle::None &&
+                      hoveredHorizontalHandle !=
+                          HorizontalRegionDragHandle::Move ) {
+                // 辅助区存世界横坐标，只补 X，不能引入不存在的纵向编辑。
+                // 单轨宽度和相邻区域联动仍由原 helper 统一维护。
+                const auto bounds = regionBounds(hoveredAuxiliaryRegion);
+                m_layoutTouchGrabOffset.x =
+                    (hoveredHorizontalHandle == HorizontalRegionDragHandle::Left
+                         ? bounds.left
+                         : bounds.right()) *
+                        targetWidth -
+                    worldPointerX;
+            } else {
+                if ( hoveredHandle == TrackLayoutDragHandle::Left ||
+                     hoveredHandle == TrackLayoutDragHandle::Right )
+                    m_layoutTouchGrabOffset.x =
+                        (hoveredHandle == TrackLayoutDragHandle::Left
+                             ? layout.left
+                             : layout.right) *
+                            targetWidth -
+                        worldPointerX;
+                if ( hoveredHandle == TrackLayoutDragHandle::Top ||
+                     hoveredHandle == TrackLayoutDragHandle::Bottom ||
+                     hoveredHandle == TrackLayoutDragHandle::JudgmentLine )
+                    m_layoutTouchGrabOffset.y =
+                        (hoveredHandle == TrackLayoutDragHandle::Top
+                             ? layout.top
+                         : hoveredHandle == TrackLayoutDragHandle::Bottom
+                             ? layout.bottom
+                             : judgmentLinePosition) *
+                            targetHeight -
+                        pointerY;
+            }
+        }
         // 鼠标按下首帧按同一优先级冻结目标和起始几何；后续分支只读取
         // 成员状态，不再重新解释当前 hover。
         if ( hoveredNote.has_value() && hoveredNoteBounds.has_value() ) {
@@ -3452,8 +3670,17 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         }
     }
 
-    if ( m_noteScaleDragTarget.has_value() &&
-         UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
+    if ( touch ) {
+        // 补偿位于目标冻结之后，避免按下命中被修正坐标改变成另一个角点。
+        // 正常释放可继续用同一偏差；多指和取消没有更新许可，不写入候选。
+        // 桌面不进入本分支，原来的边缘拖动与鼠标位置语义保持一致。
+        // 捕获后使用同一偏差，包括正常 Up 的最后坐标；取消没有 moved 输出。
+        pointerX += m_layoutTouchGrabOffset.x;
+        pointerY += m_layoutTouchGrabOffset.y;
+        worldPointerX = pointerX - cameraOffsetX;
+    }
+
+    if ( m_noteScaleDragTarget.has_value() && layoutDown ) {
         // 角点拖动使用冻结 hitbox 和起始全局缩放计算候选，避免当前
         // 缩放反馈到新快照后再次叠加造成指数变化。
         constexpr float scaleEpsilon = 1e-6f;
@@ -3478,8 +3705,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         }
     }
 
-    if ( m_canvasComponentDragTarget.has_value() &&
-         UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
+    if ( m_canvasComponentDragTarget.has_value() && layoutDown ) {
         // 文字组件移动/缩放写入当前 keyCount 和 instanceIndex 对应的
         // 可编辑 placement，不覆盖其它轨道数配置。
         constexpr float componentPositionEpsilon = 1e-6f;
@@ -3852,7 +4078,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     if ( !m_noteScaleDragTarget.has_value() &&
          !m_canvasComponentDragTarget.has_value() &&
          m_horizontalRegionDragHandle != HorizontalRegionDragHandle::None &&
-         UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
+         layoutDown ) {
         // 辅助区拖动与文本组件拖动互斥；前面的条件确保同一帧只有一个
         // 布局对象能消费左键手势。
         // 缩放吸附指针边缘；整体移动随后比较候选区域的左右两侧。
@@ -3943,7 +4169,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     if ( !m_noteScaleDragTarget.has_value() &&
          !m_canvasComponentDragTarget.has_value() &&
          m_trackLayoutDragHandle != TrackLayoutDragHandle::None &&
-         UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
+         layoutDown ) {
         // 主轨道布局最后处理，优先级低于音符比例、文字组件和辅助区。
         // 非左右句柄保持未吸附的原始世界坐标。
         HorizontalResizeSnapResult widthSnap{ .position = worldPointerX };
@@ -4116,11 +4342,14 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         }
     }
 
+    // 等待越过容差的 Down 不属于释放，否则会把刚捕获的目标提前清掉。
+    // 正常结束先经过上方候选更新，再执行唯一保存；取消只执行本收尾。
+    // 句柄、吸附线与冻结目标共用清理入口，不会在下一笔引用旧目标。
     if ( (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
           m_horizontalRegionDragHandle != HorizontalRegionDragHandle::None ||
           m_noteScaleDragTarget.has_value() ||
           m_canvasComponentDragTarget.has_value()) &&
-         !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
+         (touch ? touchInput.m_finished : !layoutDown) ) {
         // 释放发生在画布外也必须结束手势并落盘，不能依赖 hovered 状态。
         finishLayoutEditing();
     }

@@ -3,6 +3,7 @@
 #include "ui/interaction/EditorInteraction.h"
 
 #include "canvas/HoverLayerSelection.h"
+#include "canvas/LayoutTouchInput.h"
 #include "canvas/PlanarObservationInput.h"
 #include "canvas/TrackLayoutEditing.h"
 #include "common/CanvasComponentLayout.h"
@@ -126,6 +127,8 @@ private:
         const Common::Render::RenderSnapshot& snapshot, bool hovered);
     /// @brief 无 GPU 测试从真实右键候选执行选择，不直接改写悬浮状态。
     friend struct EditorInteractionSurfaceTestAccess;
+    /// @brief CPU 回归只转发生产布局入口，不直接设置捕获或修改结果。
+    friend struct MobileLayoutEditingTestAccess;
     /// @brief 批注菜单回归只驱动真实输入并观察缓冲，不开放业务写入口。
     friend struct MouseAnnotationMenuTestAccess;
     /// @brief 验证右键候选仍存在后选择它，并保留后续重叠命中的优先身份。
@@ -487,6 +490,10 @@ private:
     };
     /// @brief 轨道布局拖动开始时的矩形。
     Config::TrackLayout m_trackLayoutDragStart;
+    /// @brief 布局触点不经过普通长按菜单，状态只属于本画布。
+    LayoutTouchInput m_layoutTouch;
+    /// @brief 放大命中带后保留指尖与实际边／角点的偏差，按下不跳变。
+    glm::vec2 m_layoutTouchGrabOffset{};
     /// @brief 轨道布局拖动开始时的归一化指针坐标。
     glm::vec2 m_trackLayoutPointerStart{ 0.0f, 0.0f };
     /// @brief 当前独立横向拖动的辅助区域。

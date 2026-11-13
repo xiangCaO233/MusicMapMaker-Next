@@ -142,6 +142,14 @@ target_include_directories(LayoutEditingTest
 target_link_libraries(LayoutEditingTest PRIVATE Common Config)
 mmm_register_test_case(NAME LayoutEditingTest COMMAND LayoutEditingTest)
 
+# 布局触控回归进入真实 ImGui 窗口与生产布局处理器，覆盖宽命中、终点和取消。 独立 CTest 配置根隔离生产保存；不创建
+# Vulkan、音频设备或修改用户工作区。
+mmm_add_test_executable(Canvas MobileLayoutEditingTest
+                        tests/MobileLayoutEditingTest.cpp)
+target_link_libraries(MobileLayoutEditingTest PRIVATE Canvas)
+mmm_register_test_case(NAME MobileLayoutEditingTest COMMAND
+                       MobileLayoutEditingTest)
+
 # 画布标签测试覆盖标题格式与隐藏主画布的实际快照消费。 显式链接 Canvas 以验证无 GPU 的准备/交换入口，不以复制可见性判断代替生产路径。
 mmm_add_test_executable(Canvas CanvasTabTitleTest tests/CanvasTabTitleTest.cpp)
 target_include_directories(CanvasTabTitleTest

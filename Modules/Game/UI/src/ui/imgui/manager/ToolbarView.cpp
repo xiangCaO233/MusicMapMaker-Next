@@ -5919,8 +5919,14 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
     const float popupH = m_layoutPopupHeight > 0
                              ? m_layoutPopupHeight
                              : std::floor(100.0f * dpiScale);
-    positionToolbarPopup(
+    const auto  geometry = positionToolbarPopup(
         *toolbarWindow, m_lastLayoutBtnPos, ImVec2(popupW, popupH), dpiScale);
+    if ( m_mobileTools ) {
+        // 移动面板宽度按实际内侧空间夹取，长名称不能撑出屏幕或盖住工作台。
+        // 高度继续自动计算并受既有最大高度约束，超长表单只在面板内滚动。
+        ImGui::SetNextWindowSize(
+            { std::min(420.f * dpiScale, geometry.m_maximumSize.x), 0 });
+    }
 
     // 自动尺寸由展开的折叠分组决定。窗口不可移动或缩放，也不写 imgui.ini，
     // 因为它的生命周期绑定 Layout 工具而非独立工作区面板。上一帧尺寸仅用于
@@ -5940,6 +5946,15 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,
                         std::floor(aesthetics.frameRounding * dpiScale));
 
+    if ( m_mobileTools ) {
+        // 只扩大本面板控件的输入行，桌面密度与持久化主题不受影响。
+        const auto padding = ImGui::GetStyle().FramePadding;
+        ImGui::PushStyleVar(
+            ImGuiStyleVar_FramePadding,
+            ImVec2(padding.x,
+                   std::max(padding.y,
+                            (48.f * dpiScale - ImGui::GetFontSize()) * .5f)));
+    }
     if ( ImGui::Begin("##LayoutComponentsPopup", nullptr, popupFlags) ) {
         // 移动布局工具需覆盖整棵停靠宿主，不能被工作台自身盖住一部分。
         if ( m_mobileTools &&
@@ -5982,7 +5997,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
             m_layoutPopupHeight = size.y;
             // 提前返回仍须配对 Begin 和样式栈，不能影响后续工具窗口。
             ImGui::End();
-            ImGui::PopStyleVar(3);
+            ImGui::PopStyleVar(m_mobileTools ? 4 : 3);
             return;
         }
         auto& appConfig = Config::AppConfig::instance();
@@ -6010,8 +6025,12 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         // 颜色按钮、控制宽度和恢复按钮列共同定义各分组的视觉网格。恢复按钮
         // 宽度按当前翻译文本测量，颜色列相对它定位，因此语言切换后仍对齐。
         // 视觉滑条采用统一宽度，自动尺寸弹层不会随当前数值文本抖动。
-        const float colorButtonSize    = std::floor(22.0f * dpiScale);
-        const float visualControlWidth = std::floor(230.0f * dpiScale);
+        const float colorButtonSize =
+            std::floor((m_mobileTools ? 48.0f : 22.0f) * dpiScale);
+        const float visualControlWidth =
+            m_mobileTools ? std::min(std::floor(230.0f * dpiScale),
+                                     ImGui::GetContentRegionAvail().x)
+                          : std::floor(230.0f * dpiScale);
         const auto  resetButtonLabel = TR("ui.toolbar.layout_component_reset");
         const float resetButtonWidth =
             ImGui::CalcTextSize(resetButtonLabel.data()).x +
@@ -6458,7 +6477,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
 
             if ( showColor ) {
                 // 频谱使用左右声道专用颜色，因此不显示通用组件色按钮。
-                ImGui::SameLine();
+                // 移动端独立一行放颜色与恢复，长组件名不会把按钮推出面板。
+                if ( !m_mobileTools ) ImGui::SameLine();
                 // 颜色按钮固定在复位列左侧，避免组件名称长度改变颜色列位置。
                 const float contentRight =
                     ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
@@ -6489,7 +6509,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                 }
             }
 
-            ImGui::SameLine();
+            if ( showColor || !m_mobileTools ) ImGui::SameLine();
             // 将所有复位按钮锚定到弹窗内容区右侧，避免标签长度造成错位。
             const float remainingWidth = ImGui::GetContentRegionAvail().x;
             if ( remainingWidth > resetButtonWidth ) {
@@ -6878,8 +6898,15 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         // 保存本帧聚合状态，供下一帧检测关闭边沿。
         m_layoutComponentColorPickerOpen = anyColorPickerOpen;
 
-        ImGui::TextDisabled("%s",
-                            TR("ui.toolbar.layout_component_drag_hint").data());
+        if ( m_mobileTools ) {
+            // 说明常驻并自动换行，触屏不依赖 Hover 或桌面修饰键。
+            ImGui::TextWrapped(
+                "单指拖边框或中心把手调整轨道；拖文字主体移动，从外角拖动缩放。"
+                "轻点不修改，双指或系统取消会结束本次拖动。");
+        } else {
+            ImGui::TextDisabled(
+                "%s", TR("ui.toolbar.layout_component_drag_hint").data());
+        }
 
         // 编辑器个性化始终保持右侧布局设置可见；用户需要一边看画布组件，
         // 一边检查显隐、同步与尺寸选项。设置区与画布目标分别挖孔，不能
@@ -6924,7 +6951,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
     }
     ImGui::End();
     // 恢复仅属于 Layout 弹层的窗口样式。
-    ImGui::PopStyleVar(3);
+    ImGui::PopStyleVar(m_mobileTools ? 4 : 3);
 }
 
 /// @brief 在工具栏项目左侧绘制统一悬浮提示。

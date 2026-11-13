@@ -545,12 +545,13 @@ inline void storeHorizontalLayoutBounds(Config::TrackLayout&   layout,
 /// @param viewportWidth 逻辑视口宽度。
 /// @param edgeHitRadius 边缘命中半径。
 /// @param moveHandleRadius 中心移动句柄半径。
+/// @param nearestHandle 触控宽命中带中优先最近句柄，桌面保留原优先级。
 /// @return 最近的横向句柄；纵向边界只参与命中，不可编辑。
 /// @warning UI 热路径纯计算：辅助区布局编辑期间每帧调用，不执行分配。
 [[nodiscard]] inline HorizontalRegionDragHandle hitTestHorizontalRegion(
     HorizontalRegionBounds bounds, float top, float bottom, float pointerX,
     float pointerY, float viewportWidth, float edgeHitRadius,
-    float moveHandleRadius)
+    float moveHandleRadius, bool nearestHandle = false)
 {
     bounds = sanitizeHorizontalRegionBounds(bounds);
     // 纵向只决定是否允许命中，辅助区不拥有独立的纵向编辑状态。
@@ -561,6 +562,27 @@ inline void storeHorizontalLayoutBounds(Config::TrackLayout&   layout,
     const float left   = bounds.left * viewportWidth;
     const float right  = bounds.right() * viewportWidth;
     const float center = (left + right) * 0.5F;
+    if ( nearestHandle ) {
+        // 中心采用最大轴距，与方形移动命中范围一致，不额外创建圆形手势区。
+        // 只有严格更近才改为 Move，边缘与中心等距时保持边缘的稳定优先级。
+        // 桌面默认 false，原有窄区命中及已发布交互语义保持不变。
+        // 窄辅助区的整块宽度可能小于两个触控边缘命中带之和。
+        // 若仍无条件优先左边，中心移动与右边缩放都会变得不可访问。
+        const float centerY = (top + bottom) * .5F;
+        const float moveDistance =
+            std::max(std::abs(pointerX - center), std::abs(pointerY - centerY));
+        const float leftDistance  = std::abs(pointerX - left);
+        const float rightDistance = std::abs(pointerX - right);
+        if ( moveDistance <= moveHandleRadius &&
+             moveDistance < std::min(leftDistance, rightDistance) )
+            return HorizontalRegionDragHandle::Move;
+        // 边缘仍以自己的半径约束，等距时稳定优先左侧，不改变几何或吸附。
+        if ( std::min(leftDistance, rightDistance) <= edgeHitRadius )
+            return leftDistance <= rightDistance
+                       ? HorizontalRegionDragHandle::Left
+                       : HorizontalRegionDragHandle::Right;
+        return HorizontalRegionDragHandle::None;
+    }
     // 边缘优先于中心，窄区域仍可稳定缩放。
     if ( std::abs(pointerX - left) <= edgeHitRadius ) {
         return HorizontalRegionDragHandle::Left;

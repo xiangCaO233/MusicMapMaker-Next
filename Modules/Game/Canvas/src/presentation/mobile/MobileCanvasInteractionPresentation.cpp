@@ -112,6 +112,14 @@ public:
             m_desktop->update(canvas, manager, snapshot, frame, width, height);
             return;
         }
+        if ( snapshot->currentTool == Logic::EditTool::Layout ) {
+            // 元素布局拥有原始单指状态机，不经过长按菜单或双指画布导航。
+            // 每帧仍调用正式控制器绘制句柄，未移动的按住不会改动配置。
+            m_gesture.cancel();
+            m_handle.reset();
+            routeInput(canvas, snapshot, width, height, true);
+            return;
+        }
         auto ctx = context(canvas);
         // 擦除意图只在触控绘制工具生效，不将选择或 Timing 变成删除。
         // 读取 UI 线程方案标量，不按工具名或平台宏猜测能力。
