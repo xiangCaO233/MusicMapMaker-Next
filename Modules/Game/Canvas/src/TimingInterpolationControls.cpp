@@ -125,7 +125,8 @@ bool moveTimingBezierControl(TimingInterpolation& curve, int index, double x,
 /// 图形与数字输入共用真值，没有需要额外确认或同步的第二份曲线。
 /// @note 背景、折线和手柄颜色来自当前 ImGui 样式，适应主题切换。
 /// @warning 每帧最多绘制 64 段；拖动即刻生效，不进行采样数组或配置写入。
-bool renderTimingBezierControls(TimingInterpolation& curve, const ImVec2& size)
+bool renderTimingBezierControls(TimingInterpolation& curve, const ImVec2& size,
+                                bool pointerInput)
 {
     const auto   origin = ImGui::GetCursorScreenPos();
     const ImVec2 inner(origin.x + 16, origin.y + 16);
@@ -152,13 +153,20 @@ bool renderTimingBezierControls(TimingInterpolation& curve, const ImVec2& size)
         ImGui::SetCursorScreenPos({ point.x - 10, point.y - 10 });
         ImGui::PushID(index);
         // 无外观命中区不使用普通按钮反馈；句柄本身提供悬浮高亮。
-        ImGui::InvisibleButton("handle", { 20, 20 });
-        highlighted[index] = ImGui::IsItemHovered() || ImGui::IsItemActive();
+        // 平台接管时只跳过鼠标命中，不改变任何贝塞尔求值和几何绘制步骤。
+        // 默认 true 保持桌面稳定句柄 ID 与原有抓取增量语义。
+        if ( pointerInput )
+            ImGui::InvisibleButton("handle", { 20, 20 });
+        else
+            ImGui::Dummy({ 20, 20 });
+        highlighted[index] =
+            pointerInput && (ImGui::IsItemHovered() || ImGui::IsItemActive());
         // 鼠标离开命中框后仍显示活动反馈，表明此次拖动继续控制原手柄。
         if ( highlighted[index] )
             ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
         // 激活帧的鼠标位移属于到达手柄的移动，不能误当成拖动增量。
-        if ( ImGui::IsItemActive() && !ImGui::IsItemActivated() &&
+        if ( pointerInput && ImGui::IsItemActive() &&
+             !ImGui::IsItemActivated() &&
              UI::Interaction::mouseDragging(ImGuiMouseButton_Left, 0) ) {
             // 使用增量保持抓取偏移，点击手柄边缘时不会突然跳到鼠标中心。
             const auto delta = ImGui::GetIO().MouseDelta;

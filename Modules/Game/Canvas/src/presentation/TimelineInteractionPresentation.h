@@ -5,6 +5,8 @@
 
 namespace MMM::Canvas
 {
+struct TimingFunctionEditorState;
+class TimingInterpolationPreview;
 /// @brief 时间线菜单语义，不携带移动控件或桌面快捷键定义。
 /// @details 命令统一经过时间线原有业务入口，平台只决定输入意图。
 enum class TimingMenuAction {
@@ -70,6 +72,53 @@ public:
     /// @brief 移动端替换修饰键说明，空键表示继续原桌面说明。
     /// @warning 弹窗帧只返回静态键，不执行工具动作。
     virtual const char* rangeHintKey(bool) const { return nullptr; }
+    /// @brief 平台独立的贝塞尔输入；默认继续原鼠标控件和命中范围。
+    /// @warning 参数帧只编辑窗口副本，不发布谱面命令或访问会话。
+    virtual bool bezierControls(TimingInterpolation&, const ImVec2&);
+    /// @brief 移动图表建立独立触点区域；桌面不增加子窗口。
+    /// @return 已 BeginChild 时为真，调用者必须配对 EndChild。
+    /// @warning 每帧只登记布局，区域外仍交给原页面滚动。
+    virtual bool beginCurveSurface(const char*, const ImVec2&) { return false; }
+    /// @brief 手绘输入已由平台消费时返回真，默认继续原鼠标状态机。
+    /// @warning 连续帧只处理固定格点，不编译函数或写入谱面。
+    virtual bool sketchInput(TimingFunctionEditorState&, const ImVec2&,
+                             const ImVec2&)
+    {
+        return false;
+    }
+    /// @brief 预览视野只改变本地显示；默认继续滚轮、拖动和双击。
+    /// @warning 每帧处理固定触点，不触发采样重建或复制共享所有权。
+    virtual bool previewInput(TimingInterpolationPreview&, const ImVec2&,
+                              const ImVec2&)
+    {
+        return false;
+    }
+    /// @brief 图表外的显式导航入口，桌面保留原布局不添加按钮。
+    virtual void previewButtons(TimingInterpolationPreview&) {}
+    /// @brief 只调整移动图表高度，桌面使用原像素尺寸。
+    /// @warning 每帧固定标量计算，不读取设备或修改全局字体。
+    virtual float curveGraphHeight(float height, float) const { return height; }
+    /// @brief 新参数副本不继承旧图表手势；默认桌面无额外状态。
+    virtual void resetCurveInput() {}
+    /// @brief 触屏记录最近符号的用法，桌面仍在 Hover 显示原说明。
+    virtual bool symbolHelp(const char*, const char*, bool) { return false; }
+    /// @brief 在符号网格外显示最近用法，不依赖触屏不存在的悬浮。
+    virtual void finishSymbols() {}
+    /// @brief 未提交的图表被折叠或隐藏时取消本笔，桌面无额外事务。
+    /// @warning 每帧只复核本地图表状态，不发布命令或等待后台。
+    virtual void finishCurveFrame(TimingInterpolation&,
+                                  TimingFunctionEditorState&)
+    {
+    }
+    /// @brief 数值字段由平台决定排版，默认保留桌面右侧标签与原输入参数。
+    /// @warning 每帧只提交控件，修改仍限于窗口副本。
+    virtual bool curveDouble(const char*, double*, const char*);
+    /// @brief 分拍整数沿用原输入语义，移动端只改变标签位置。
+    /// @warning 每帧固定控件，不写应用配置或谱面。
+    virtual bool curveInt(const char*, int*);
+    /// @brief 下拉列表只负责显示，领域枚举顺序不受翻译影响。
+    /// @warning 每帧借用静态短列表，不构造选项容器。
+    virtual bool curveCombo(const char*, int*, const char* const*, int);
 
 protected:
     /// @brief

@@ -1,4 +1,5 @@
 #include "TimelineInteractionPresentation.h"
+#include "canvas/TimingInterpolationControls.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/VisualConfig.h"
@@ -9,6 +10,37 @@
 
 namespace MMM::Canvas
 {
+/// @brief 原桌面图形控件保持默认鼠标参数，不扩大命中或改变拖动时机。
+/// @warning 参数窗口每帧调用，只绘制固定数量的几何。
+bool TimelineInteractionPresentation::bezierControls(TimingInterpolation& c,
+                                                     const ImVec2&        size)
+{
+    return renderTimingBezierControls(c, size);
+}
+/// @brief 桌面数字输入保留步进参数和原有可见标签。
+/// @warning 参数帧只提交原控件，不创建新的数值副本或保存配置。
+bool TimelineInteractionPresentation::curveDouble(const char* label,
+                                                  double*     value,
+                                                  const char* format)
+{
+    // 不增加统一输入缓存，保持原工作副本地址和完成时机。
+    return ImGui::InputDouble(label, value, 0, 0, format);
+}
+/// @brief 桌面分拍整数保留原生布局与无步进按钮设置。
+/// @warning 每帧固定布局，不访问领域注册表。
+bool TimelineInteractionPresentation::curveInt(const char* label, int* value)
+{
+    // 与改造前的分拍输入参数一致，不额外合成增减按键。
+    return ImGui::InputInt(label, value, 0, 0);
+}
+/// @brief 桌面下拉继续使用原控件，选项只替换为当前语言。
+/// @warning 每帧借用选项指针，不复制动态容器。
+bool TimelineInteractionPresentation::curveCombo(const char* label, int* value,
+                                                 const char* const* items,
+                                                 int                count)
+{
+    return ImGui::Combo(label, value, items, count);
+}
 /// @brief 平台端点编辑借用既有时间轴，不复制 BPM、HS 或吸附算法。
 /// @warning 连续帧 snap=false 只反投影；snap=true 仅允许释放时调用。
 double TimelineInteractionPresentation::rangeTime(TimelineCanvas& c,

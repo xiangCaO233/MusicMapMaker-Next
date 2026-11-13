@@ -3,6 +3,7 @@
 #include "MobileNavigationRouting.h"
 #include "MobilePointerInputScope.h"
 #include "MobilePointerOwnership.h"
+#include "MobileTimingCurveEditor.h"
 #include "MobileTimingRange.h"
 #include "common/SelectionOperation.h"
 #include "common/render/RenderSnapshot.h"
@@ -56,6 +57,143 @@ class MobileTimelineInteractionPresentation final
     : public TimelineInteractionPresentation
 {
 public:
+    /// @brief 移动图表交互独立保存，经典方案仍使用默认指针控件。
+    /// @warning 模态帧只消费窗口副本，不访问谱面注册表。
+    // 移动图表的候选与热区均由私有成员管理，不进入 TimelineCanvas 的公开定义。
+    // 经典方案直接转交基类，数字字段与原有快捷键不经过触点夹取。
+    bool bezierControls(TimingInterpolation& curve, const ImVec2& size) override
+    {
+        if ( !UI::Interaction::activeProfile().touchGestures() )
+            return TimelineInteractionPresentation::bezierControls(curve, size);
+        return m_curveEditor.bezier(
+            curve, size, Config::AppConfig::instance().getWindowContentScale());
+    }
+    /// @brief 触屏图表阻止父页抢笔；不在桌面函数中嵌入平台条件宏。
+    /// @warning 每帧建立固定子窗，调用者负责配对结束。
+    // 子窗只作为局部输入边界，不能把整个参数表单标记为不可滚动。
+    // 配对义务由返回值明确表达，调用方不依赖子窗的首次隐藏测量结果。
+    bool beginCurveSurface(const char* id, const ImVec2& size) override
+    {
+        return UI::Interaction::activeProfile().touchGestures() &&
+               m_curveEditor.beginSurface(id, size);
+    }
+    /// @brief 自由绘制及取消只影响参数窗口副本。
+    /// @warning 每帧固定 129 格点预算，不拟合或发布逻辑命令。
+    // 手绘图共享原来的 129 个格点，平台层不改变拟合算法、权重或输出语义。
+    // 第二指和 Cancel 只丢弃本笔草稿，不借用全局撤销栈恢复。
+    bool sketchInput(TimingFunctionEditorState& s, const ImVec2& o,
+                     const ImVec2& size) override
+    {
+        return UI::Interaction::activeProfile().touchGestures() &&
+               m_curveEditor.sketch(s, o, size);
+    }
+    /// @brief 预览使用原双指导航器；谱面历史不接收图内二指轻触。
+    /// @warning 每帧只改本地视野，不复制数学缓存。
+    // 图内导航不消费双指撤销或三指重做标志，避免修改背景谱面。
+    // 预览倍率归局部视野，不覆盖主画布或 Timing 的缩放配置。
+    bool previewInput(TimingInterpolationPreview& p, const ImVec2& o,
+                      const ImVec2& size) override
+    {
+        return UI::Interaction::activeProfile().touchGestures() &&
+               m_curveEditor.preview(
+                   p,
+                   o,
+                   size,
+                   Config::AppConfig::instance().getWindowContentScale());
+    }
+    /// @brief 重置与放大缩小按钮放在图外，避免点击落成一次绘制。
+    // 显式入口满足单手操作与发现性，手势不是唯一的缩放或重置方式。
+    // 按钮在图外排版，沿用统一反馈入口及当前主题的圆角和间距。
+    void previewButtons(TimingInterpolationPreview& p) override
+    {
+        if ( UI::Interaction::activeProfile().touchGestures() )
+            m_curveEditor.previewButtons(
+                p, Config::AppConfig::instance().getWindowContentScale());
+    }
+    /// @brief 高度按触摸倍率扩展，宽度继续由当前正文区域决定。
+    /// @warning 每帧常量计算，不改变桌面尺寸。
+    // 内容宽度由调用者测量，此处只提供可触摸的纵向下限。
+    // 不向配置写回临时尺寸，也不改变桌面全局字号或缩放。
+    float curveGraphHeight(float h, float scale) const override
+    {
+        return UI::Interaction::activeProfile().touchGestures()
+                   ? std::max(h, 220 * scale)
+                   : h;
+    }
+    /// @brief 新参数副本不能继承旧触点身份。
+    void resetCurveInput() override { m_curveEditor.reset(); }
+    /// @brief 最近符号帮助由移动面板显式显示，桌面 Hover 保持原有入口。
+    // 符号只插入原有数学模板，触屏帮助不是第二个解析器或独立表达式副本。
+    // 帮助文本来自静态翻译键，不能把用户公式或字符内容当作键名。
+    bool symbolHelp(const char* input, const char* help, bool clicked) override
+    {
+        if ( !UI::Interaction::activeProfile().touchGestures() ) return false;
+        m_curveEditor.symbolHelp(input, help, clicked);
+        return true;
+    }
+    /// @brief 只在符号网格外显示最近说明，不抢占公式输入焦点。
+    void finishSymbols() override
+    {
+        if ( UI::Interaction::activeProfile().touchGestures() )
+            m_curveEditor.finishSymbols();
+    }
+    /// @brief 活动图未提交布局时取消笔画，不能因折叠保留半笔候选。
+    /// @warning 每帧只处理窗口副本，不访问会话或历史。
+    // 仅取消本窗口遗漏的活动图，不扫描其它画布或联机实体。
+    // 新副本 reset 已清理旧触点，不能恢复到另一段落的备份值。
+    void finishCurveFrame(TimingInterpolation&       c,
+                          TimingFunctionEditorState& s) override
+    {
+        if ( UI::Interaction::activeProfile().touchGestures() )
+            m_curveEditor.finish(c, s);
+    }
+    /// @brief 触屏数值标签独占一行，英文标签不能挤掉可编辑区域。
+    /// @warning 每帧只调整布局，数值与完成时机仍由原 InputDouble 管理。
+    // 标签独立换行是移动排版策略，数值合法性仍由原参数窗口与模型校验。
+    // 隐藏 ID 使用标签的局部栈，多个全宽字段不能共享同一个活动输入框。
+    bool curveDouble(const char* label, double* value,
+                     const char* format) override
+    {
+        if ( !UI::Interaction::activeProfile().touchGestures() )
+            return TimelineInteractionPresentation::curveDouble(
+                label, value, format);
+        ImGui::PushID(label);
+        ImGui::TextWrapped("%s", label);
+        ImGui::SetNextItemWidth(-1);
+        const bool changed = ImGui::InputDouble("##value", value, 0, 0, format);
+        ImGui::PopID();
+        return changed;
+    }
+    /// @brief 分拍输入全宽，避免触屏英文排版产生横向滚动。
+    /// @warning 每帧只提交一个标准整数控件。
+    bool curveInt(const char* label, int* value) override
+    {
+        if ( !UI::Interaction::activeProfile().touchGestures() )
+            return TimelineInteractionPresentation::curveInt(label, value);
+        ImGui::PushID(label);
+        ImGui::TextWrapped("%s", label);
+        ImGui::SetNextItemWidth(-1);
+        const bool changed = ImGui::InputInt("##value", value, 0, 0);
+        ImGui::PopID();
+        return changed;
+    }
+    /// @brief 完整标签与下拉分行，共用列表选择和保存语义。
+    /// @warning 每帧借用选项指针，不复制动态列表。
+    // 传入列表按领域枚举次序排列，界面宽度调整不会交换选项身份。
+    // 只有触屏方案使用全宽下拉，桌面和纯鼠标保留原生横向布局。
+    bool curveCombo(const char* label, int* value, const char* const* items,
+                    int count) override
+    {
+        if ( !UI::Interaction::activeProfile().touchGestures() )
+            return TimelineInteractionPresentation::curveCombo(
+                label, value, items, count);
+        ImGui::PushID(label);
+        ImGui::TextWrapped("%s", label);
+        ImGui::SetNextItemWidth(-1);
+        const bool changed = ImGui::Combo("##value", value, items, count);
+        ImGui::PopID();
+        return changed;
+    }
     /// @brief 包括待定触点及双指导航，避免方案切换截断手势。
     /// @warning 每帧只读固定大小本地状态，不等待逻辑线程。
     bool hasGesture() const override
@@ -620,6 +758,8 @@ private:
         ImGui::EndDisabled();
         return edit;
     }
+    MobileTimingCurveEditor
+                      m_curveEditor;  ///< 参数图表私有输入，不暴露到公开头。
     MobileTimingRange m_range;  ///< 移动端局部首尾候选，公共画布不包含其定义。
     MobileCanvasGesture    m_gesture;     ///< 轻点、拖动和长按的非阻塞分类器。
     MobilePointerOwnership m_ownership;   ///< 原始代际归属及多指接管门闩。

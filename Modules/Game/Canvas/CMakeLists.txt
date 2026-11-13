@@ -459,6 +459,18 @@ endif()
 mmm_register_test_case(NAME MobileTimingInteractionTest COMMAND
                        MobileTimingInteractionTest)
 
+# 图表触控与页面滚动共用真实 CPU ImGui 帧，独立验证夺笔、取消和双指视野。 通过正式 Canvas
+# 目标解析图表辅助，避免套件重复编译同名实现产生重复符号。 夹具只实例化窗口副本，不启动会话或替换桌面平台工厂；原鼠标控件另有阳性回归。
+mmm_add_test_executable(Canvas MobileTimingCurveInteractionTest
+                        tests/MobileTimingCurveInteractionTest.cpp)
+target_include_directories(
+  MobileTimingCurveInteractionTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                                           ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(MobileTimingCurveInteractionTest PRIVATE Canvas Log
+                                                               3rd_imgui)
+mmm_register_test_case(NAME MobileTimingCurveInteractionTest COMMAND
+                       MobileTimingCurveInteractionTest)
+
 # 该测试只创建 CPU ImGui 上下文，不启动窗口或上传字体纹理。 独立链接生产移动实现，保证桌面构建也能验证触控接管与取消。
 # 公共平台工厂没有替换，桌面兼容用例继续采用原默认解释器。 测试数据全部驻留内存，不产生源码资源目录下的输出文件。
 # 设备布局与真实后端事件差异另由手机、平板和实体机验收覆盖。 测试套件集成由顶层 helper 完成，不自行选择二进制输出目录。

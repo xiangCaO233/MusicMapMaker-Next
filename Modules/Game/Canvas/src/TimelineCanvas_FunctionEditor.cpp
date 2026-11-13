@@ -1,9 +1,12 @@
 #include "canvas/TimelineCanvas.h"
 #include "mmm/timing/TimingInterpolationAlgorithms.h"
+#include "presentation/TimelineInteractionPresentation.h"
 #include "ui/interaction/EditorInteraction.h"
 
 #include "canvas/TimingFormula.h"
 #include "canvas/TimingInterpolationPreview.h"
+#include "config/AppConfig.h"
+#include "config/skin/translation/Translation.h"
 #include "mmm/timing/TimingFunction.h"
 #include "mmm/timing/TimingFunctionFit.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -13,12 +16,38 @@
 #include <cstring>
 #include <fmt/format.h>
 #include <imgui.h>
+#include <string>
 #include <string_view>
+#include <utility>
 
 namespace MMM::Canvas
 {
 namespace
 {
+/// @brief 旧数学结果保留稳定值语义，UI 边界只翻译已知固定提示与函数族。
+/// @details 未识别的解析错误仍完整显示原文，不把用户输入当作翻译键。
+/// @warning 参数帧仅比较有限短表，不分配字符串或重新编译表达式。
+const char* fitDisplayText(const std::string& value)
+{
+    // 模型不是 UI 模块，不引入翻译依赖，也不改变已持久化公式源码。
+    // 返回值借用模型字符串或翻译缓存，只在本次绘制期间使用。
+    constexpr std::array pairs{
+        std::pair{ "多项式复合", "ui.timing.curve.family_polynomial" },
+        std::pair{ "正弦与余弦复合", "ui.timing.curve.family_fourier" },
+        std::pair{ "指数复合", "ui.timing.curve.family_exponential" },
+        std::pair{ "对数复合", "ui.timing.curve.family_logarithm" },
+        std::pair{ "平方根复合", "ui.timing.curve.family_sqrt" },
+        std::pair{ "立方根复合", "ui.timing.curve.family_cbrt" },
+        std::pair{ "拟合结果已失效，请重新拟合。",
+                   "ui.timing.curve.fit_stale" },
+        std::pair{ "拟合函数超出当前段落的合法参数范围，请调整后重新拟合。",
+                   "ui.timing.curve.fit_invalid" }
+    };
+    for ( const auto& [source, key] : pairs )
+        if ( value == source ) return TR(key).data();
+    // 未知动态解析错误原样保留，不能丢失具体位置或用户输入片段。
+    return value.c_str();
+}
 /// @brief 安全复制到固定编辑缓冲，超出预算时不截断成另一条函数。
 /// @param state 当前模态窗口拥有的缓冲。
 /// @param source 完整 UTF-8 表达式，字节数须小于固定容量。
@@ -65,68 +94,36 @@ struct MathInput {
 /// 每个模板的例子与模型测试中独立的数学答案一致。
 /// 正式排版来自编译树，面板不是另一套公式解析器。
 constexpr std::array SYMBOLS{
-    MathInput{ "π", "π", "圆周率常数。例：sin(π × t)。也可写 pi。" },
-    MathInput{ "e", "e", "自然常数 e。例：e^t。exp(t) 与 e^t 等价。" },
-    MathInput{ "×", "×", "乘法。例：20 × t。也可写 *。" },
-    MathInput{ "÷", "÷", "除法，预览排为分式。例：120 ÷ (1+t)。也可写 /。" },
-    MathInput{ "−", "−", "减法或负号。例：120 − 20 × t。也可写 -。" },
-    MathInput{ "x²", "²", "对左侧表达式平方。例：(1+t)²。也可写 ^2。" },
-    MathInput{ "x³", "³", "对左侧表达式立方。例：t³。也可写 ^3。" },
-    MathInput{ "xⁿ",
-               "^(2)",
-               "幂。例：t^(2.5) 或 pow(t,2.5)。负底数只允许常整数指数。",
-               "x",
-               "n",
-               true },
-    MathInput{
-        "√", "√(t)", "平方根。例：√(t+1)，也可写 sqrt(t+1)。被开方数须非负。" },
-    MathInput{ "∛", "∛(t)", "立方根。例：∛(t)，也可写 cbrt(t)。允许负输入。" },
-    MathInput{ "ln",
-               "ln(1+t)",
-               "自然对数。ln(x) 或 log(x)，底数为 e。x 必须大于零。" },
+    MathInput{ "π", "π", "ui.timing.curve.symbol_0" },
+    MathInput{ "e", "e", "ui.timing.curve.symbol_1" },
+    MathInput{ "×", "×", "ui.timing.curve.symbol_2" },
+    MathInput{ "÷", "÷", "ui.timing.curve.symbol_3" },
+    MathInput{ "−", "−", "ui.timing.curve.symbol_4" },
+    MathInput{ "x²", "²", "ui.timing.curve.symbol_5" },
+    MathInput{ "x³", "³", "ui.timing.curve.symbol_6" },
+    MathInput{ "xⁿ", "^(2)", "ui.timing.curve.symbol_7", "x", "n", true },
+    MathInput{ "√", "√(t)", "ui.timing.curve.symbol_8" },
+    MathInput{ "∛", "∛(t)", "ui.timing.curve.symbol_9" },
+    MathInput{ "ln", "ln(1+t)", "ui.timing.curve.symbol_10" },
     MathInput{ "log₁₀",
                "log10(1+t)",
-               "常用对数，底数为 10。例：log10(1+t)。",
+               "ui.timing.curve.symbol_11",
                "log",
                "10",
                false },
     MathInput{
-        "log₂",
-        "log2(1+t)",
-        "二进制对数，底数为 2。例：log2(1+t)。其他底数可写 ln(x)/ln(b)。",
-        "log",
-        "2",
-        false },
-    MathInput{ "sin",
-               "sin(t)",
-               "正弦，参数单位为弧度。例：120+20 × sin(2 × π × t)。" },
-    MathInput{ "cos", "cos(t)", "余弦，参数单位为弧度。例：cos(π × t)。" },
-    MathInput{ "tan",
-               "tan(t/4)",
-               "正切，参数单位为弧度。整个范围不能经过 π/2+kπ 极点。" },
-    MathInput{
-        "exp", "exp(t)", "指数函数 e 的 x 次幂。例：exp(t)，与 e^t 等价。" },
-    MathInput{ "sinh", "sinh(t)", "双曲正弦。例：sinh(t)。" },
-    MathInput{ "cosh", "cosh(t)", "双曲余弦。例：cosh(t)。" },
-    MathInput{
-        "tanh", "tanh(t)", "双曲正切。例：tanh(t)，结果在 −1 与 1 之间。" },
-    MathInput{ "|x|", "abs(t)", "绝对值。例：abs(t−1)，预览显示为竖线包围。" },
-    MathInput{
-        "∫",
-        "int(x,0,t,x²)",
-        "定积分 "
-        "int(变量,下限,上限,函数体)。例：int(x,0,t,x²)=t³/3。函数体可引用时间 "
-        "t；x 只在函数体中有效。使用有界数值积分。" },
-    MathInput{
-        "Σ",
-        "sum(k,1,10,k²)",
-        "有限求和 sum(变量,下限,上限,函数体)。例：sum(k,1,10,k²)=385。从 "
-        "ceil(下限) 到 floor(上限) 的整数逐项求和，最多 256 项。" },
-    MathInput{ "Π",
-               "prod(k,1,5,k)",
-               "有限累乘 "
-               "prod(变量,下限,上限,函数体)。例：prod(k,1,5,k)="
-               "120。范围内整数逐项相乘，最多 256 项。空乘积为 1。" }
+        "log₂", "log2(1+t)", "ui.timing.curve.symbol_12", "log", "2", false },
+    MathInput{ "sin", "sin(t)", "ui.timing.curve.symbol_13" },
+    MathInput{ "cos", "cos(t)", "ui.timing.curve.symbol_14" },
+    MathInput{ "tan", "tan(t/4)", "ui.timing.curve.symbol_15" },
+    MathInput{ "exp", "exp(t)", "ui.timing.curve.symbol_16" },
+    MathInput{ "sinh", "sinh(t)", "ui.timing.curve.symbol_17" },
+    MathInput{ "cosh", "cosh(t)", "ui.timing.curve.symbol_18" },
+    MathInput{ "tanh", "tanh(t)", "ui.timing.curve.symbol_19" },
+    MathInput{ "|x|", "abs(t)", "ui.timing.curve.symbol_20" },
+    MathInput{ "∫", "int(x,0,t,x²)", "ui.timing.curve.symbol_21" },
+    MathInput{ "Σ", "sum(k,1,10,k²)", "ui.timing.curve.symbol_22" },
+    MathInput{ "Π", "prod(k,1,5,k)", "ui.timing.curve.symbol_23" }
 };
 /// @brief 数学标签使用独立上下标排版，避免字体缺少 Unicode 上下标字形。
 /// @note 符号的可见排版与输入函数式共用同一条模板身份。
@@ -146,9 +143,19 @@ constexpr std::array SYMBOLS{
 /// 反馈按钮返回值仍来自标准按下/释放手势。
 /// 绘制后紧邻的 IsItemHovered 继续查询该同一个按钮。
 /// 函数式模板与标签绑定，界面显示不能修改实际插入语法。
-bool mathSymbolButton(const MathInput& symbol)
+/// @param touchHeight 零保持桌面小按钮，正值为移动端最小触摸高度。
+/// @note 只改变排版与热区，符号模板和 InputText 插入规则保持不变。
+bool mathSymbolButton(const MathInput& symbol, float touchHeight)
 {
-    if ( !symbol.m_base ) return UI::FeedbackSmallButton(symbol.m_label);
+    if ( !symbol.m_base )
+        return touchHeight > 0
+                   ? UI::FeedbackButton(
+                         symbol.m_label,
+                         { std::max(touchHeight,
+                                    ImGui::CalcTextSize(symbol.m_label).x +
+                                        2 * ImGui::GetStyle().FramePadding.x),
+                           touchHeight })
+                   : UI::FeedbackSmallButton(symbol.m_label);
     const auto size      = ImGui::GetFontSize();
     const auto small     = size * .65f;
     const auto baseWidth = ImGui::CalcTextSize(symbol.m_base).x;
@@ -159,7 +166,8 @@ bool mathSymbolButton(const MathInput& symbol)
     ImGui::PushID(symbol.m_input);
     const bool clicked = UI::FeedbackButton(
         "##mathSymbol",
-        ImVec2(baseWidth + scriptWidth + 2 * padding.x, size + 2 * padding.y));
+        ImVec2(std::max(touchHeight, baseWidth + scriptWidth + 2 * padding.x),
+               std::max(touchHeight, size + 2 * padding.y)));
     ImGui::PopID();
     const auto origin = ImGui::GetItemRectMin();
     const auto color  = ImGui::GetColorU32(ImGuiCol_Text);
@@ -245,6 +253,8 @@ ImVec2 curvePoint(const ImVec2& origin, const ImVec2& size, double x,
 /// 当前对象拥有全部 UI 状态，关闭窗口不需要跨线程回收。
 void TimelineCanvas::initializeTimingFunctionEditor()
 {
+    // 每次载入新的工作副本清除旧图表归属，避免同路径重开后继续旧笔画。
+    m_timingPresentation->resetCurveInput();
     // 函数定义域取当前自变量单位，秒数只负责定位段落。
     // 拍域手绘格点在拍数上均分，而非在真实秒数上均分。
     // 分拍不改变 t 的拍单位，也不改变拟合的数学形状。
@@ -335,7 +345,10 @@ void TimelineCanvas::renderTimingFunctionEditor()
         // 面板可折叠，使用符号与语法之间的明确映射。
         // 悬浮说明由紧邻的按钮决定，不依赖当前选中的函数模式。
         // Tooltip 不转移输入焦点，用户仍可直接编辑原公式。
-        if ( ImGui::TreeNode("数学符号与函数") ) {
+        if ( ImGui::TreeNode(TR("ui.timing.curve.symbols").data()) ) {
+            const float touchHeight =
+                m_timingPresentation->parameterButtonHeight(
+                    Config::AppConfig::instance().getWindowContentScale());
             // 根据最宽短标签选择列数，缩窄窗口也不会把符号按钮画出右边界。
             float widest = 0;
             for ( const auto& symbol : SYMBOLS ) {
@@ -348,9 +361,10 @@ void TimelineCanvas::renderTimingFunctionEditor()
                          : 0);
                 widest = std::max(widest, width);
             }
-            const float cellWidth = widest +
-                                    ImGui::GetStyle().FramePadding.x * 2 +
-                                    ImGui::GetStyle().ItemSpacing.x;
+            const float cellWidth =
+                std::max(touchHeight,
+                         widest + ImGui::GetStyle().FramePadding.x * 2) +
+                ImGui::GetStyle().ItemSpacing.x;
             const auto columns = static_cast<std::size_t>(std::max(
                 1.f, std::floor(ImGui::GetContentRegionAvail().x / cellWidth)));
             for ( std::size_t i = 0; i < SYMBOLS.size(); ++i ) {
@@ -358,26 +372,30 @@ void TimelineCanvas::renderTimingFunctionEditor()
                 // 按钮先保存模板，输入回调再在原有选区插入。
                 // 不能简单追加到末尾，复合公式需要在用户指定位置修改。
                 // 模板字符串在按钮表内稳定拥有，队列只保存本次交互值。
-                if ( mathSymbolButton(SYMBOLS[i]) )
-                    state.m_pendingInsertion = SYMBOLS[i].m_input;
-                if ( ImGui::IsItemHovered() ) {
+                const bool clicked = mathSymbolButton(SYMBOLS[i], touchHeight);
+                if ( clicked ) state.m_pendingInsertion = SYMBOLS[i].m_input;
+                if ( !m_timingPresentation->symbolHelp(
+                         SYMBOLS[i].m_input, SYMBOLS[i].m_help, clicked) &&
+                     ImGui::IsItemHovered() ) {
                     ImGui::BeginTooltip();
                     ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28);
-                    ImGui::Text("函数式：%s", SYMBOLS[i].m_input);
-                    ImGui::TextWrapped("%s", SYMBOLS[i].m_help);
+                    ImGui::Text(TR("ui.timing.curve.symbol_expression").data(),
+                                SYMBOLS[i].m_input);
+                    ImGui::TextWrapped("%s", TR(SYMBOLS[i].m_help).data());
                     ImGui::TextUnformatted(
-                        "点击后在光标处插入；选中的内容会被模板替换。");
+                        TR("ui.timing.curve.symbol_insert").data());
                     ImGui::PopTextWrapPos();
                     ImGui::EndTooltip();
                 }
             }
+            m_timingPresentation->finishSymbols();
             ImGui::TreePop();
         }
         // 点击按钮后重新聚焦表达式框，CallbackAlways 消费待插入模板。
         // 没有待插入内容时保持用户当前焦点，不妨碍手绘或参数输入。
         // 回调产生的文本修改也走同一编译入口，不单独执行模板。
         // 标签独占一行，输入框使用全宽时不能把右侧标签挤出窗口。
-        ImGui::TextUnformatted("函数表达式 f(t)");
+        ImGui::TextUnformatted(TR("ui.timing.curve.expression").data());
         const auto& style = ImGui::GetStyle();
         // 按输入框实际换行宽度估计高度，预留滚动条槽保持换行规则稳定。
         // 只改变显示布局，不能往数学源码插入换行或改变光标的字节偏移。
@@ -402,13 +420,10 @@ void TimelineCanvas::renderTimingFunctionEditor()
             ImGuiInputTextFlags_CallbackAlways | ImGuiInputTextFlags_WordWrap,
             mathInputCallback,
             &state);
-        ImGui::TextWrapped(
-            "t 是距段落起点的%s，f(t) "
-            "是绝对参数。支持分式、幂、根式、三角、双曲、指数、对数、绝对值及 "
-            "定积分、求和、累乘及 min/max 等复合；π、×、÷、−、²、³、√、∛ "
-            "可直接输入。例：120 + 20 × "
-            "sin(2 × π × t)。",
-            curve.m_variable == TimingVariable::Beat ? "拍数" : "秒数");
+        ImGui::TextWrapped(TR("ui.timing.curve.expression_help").data(),
+                           curve.m_variable == TimingVariable::Beat
+                               ? TR("ui.timing.curve.beats").data()
+                               : TR("ui.timing.curve.seconds").data());
         // 相同表达式和相同时长沿用不可变缓存，预览不重复工作。
         // 改变时长仍需要重新证明全部定义域，即使文本没有变化。
         // 有效终点由 f(duration) 派生，不能独立修改成与函数矛盾的值。
@@ -430,11 +445,13 @@ void TimelineCanvas::renderTimingFunctionEditor()
     // 手绘对所有预设开放，应用时再切换为自定义模式。
     // 折叠状态不销毁已经绘制的格点或候选。
     // 参考曲线只作视觉对照，不是拟合样本。
-    if ( !ImGui::CollapsingHeader("自由绘制曲线并拟合") ) return;
+    if ( !ImGui::CollapsingHeader(TR("ui.timing.curve.sketch").data()) ) return;
     // 纵轴明确显示参数含义，不把鼠标像素直接当成 Timing 参数。
     // 轴值变化只改变视图；旧绘制点仍保存自己的实际参数值。
-    ImGui::InputDouble("绘制下界", &state.m_minimum, 0, 0, "%.6g");
-    ImGui::InputDouble("绘制上界", &state.m_maximum, 0, 0, "%.6g");
+    m_timingPresentation->curveDouble(
+        TR("ui.timing.curve.lower").data(), &state.m_minimum, "%.6g");
+    m_timingPresentation->curveDouble(
+        TR("ui.timing.curve.upper").data(), &state.m_maximum, "%.6g");
     // 除了上下界有限，还需检查差值有限；两个极端值之差可能溢出。
     // 无效纵轴立即结束面板绘图，禁止把 NaN 坐标提交渲染器。
     // 时间范围无效也不能从像素生成模型采样点。
@@ -447,18 +464,29 @@ void TimelineCanvas::renderTimingFunctionEditor()
         timingInterpolationVariableDuration(curve) > 0 &&
         curve.m_duration >= .001;
     if ( !validAxis || !validDuration ) {
-        ImGui::TextWrapped("请先设置有限且递增的绘制纵轴，以及有效时间范围。");
+        ImGui::TextWrapped("%s",
+                           TR("ui.timing.curve.invalid_drawing_axis").data());
         return;
     }
     // 区域宽度跟随窗口，绘制数据按归一横轴存储。
     // 窗口变宽或变窄不重采样已画曲线，也不会改变秒域含义。
     // 整个区域拥有共同剪裁框，纵轴外曲线不覆盖周围按钮。
+    const ImVec2 size(
+        std::max(180.f, ImGui::GetContentRegionAvail().x),
+        m_timingPresentation->curveGraphHeight(
+            200, Config::AppConfig::instance().getWindowContentScale()));
+    // 图表的实际高度由平台策略提供，原桌面固定高度保持不变。
+    // 子窗边界用于输入与裁剪隔离，不建立另一份拟合状态。
+    // 父页滚动仍可从图外空白与普通组件起手。
+    const bool surface =
+        m_timingPresentation->beginCurveSurface("##TimingSketchSurface", size);
     const ImVec2 origin = ImGui::GetCursorScreenPos();
-    const ImVec2 size(std::max(180.f, ImGui::GetContentRegionAvail().x), 200);
-    auto*        draw = ImGui::GetWindowDrawList();
+    auto*        draw   = ImGui::GetWindowDrawList();
     draw->AddRectFilled(origin,
                         ImVec2(origin.x + size.x, origin.y + size.y),
-                        IM_COL32(18, 24, 32, 255));
+                        surface ? ImGui::GetColorU32(ImGuiCol_FrameBg)
+                                : IM_COL32(18, 24, 32, 255),
+                        surface ? ImGui::GetStyle().FrameRounding : 0.f);
     // 网格和参考线被裁剪到同一绘制区域，超出纵轴不污染周围控件。
     draw->PushClipRect(
         origin, ImVec2(origin.x + size.x, origin.y + size.y), true);
@@ -484,11 +512,13 @@ void TimelineCanvas::renderTimingFunctionEditor()
                                        IM_COL32(110, 145, 175, 100));
     }
     // InvisibleButton 是没有可见按钮外观的绘制命中区，不触发普通按钮样式。
-    ImGui::InvisibleButton("函数自由绘制区域", size);
+    const bool touchSketch =
+        m_timingPresentation->sketchInput(state, origin, size);
+    if ( !touchSketch ) ImGui::InvisibleButton("函数自由绘制区域", size);
     // 仅左键绘制手势更新格点，鼠标离开后仍按有效范围夹取。
     // 每帧覆盖相邻旧点和新点之间的全部格点，不遗漏快速移动。
     // 鼠标方向倒转仍使用相同线性补齐规则。
-    if ( ImGui::IsItemActive() &&
+    if ( !touchSketch && ImGui::IsItemActive() &&
          UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
         const auto   mouse = ImGui::GetIO().MousePos;
         const double ratio = std::clamp(
@@ -523,7 +553,7 @@ void TimelineCanvas::renderTimingFunctionEditor()
         state.m_fit.reset();
         state.m_fitFunction.reset();
         state.m_fitError.clear();
-    } else
+    } else if ( !touchSketch )
         state.m_previousIndex = -1;
     // 只连接两个都有效的邻点，尚未覆盖区域必须保持可见空白。
     // 黄色线描述手绘意图，蓝色候选描述实际可保存函数。
@@ -579,18 +609,31 @@ void TimelineCanvas::renderTimingFunctionEditor()
                     2);
     }
     draw->PopClipRect();
-    ImGui::Text("横轴：0 – %.6g %s；纵轴：%.6g – %.6g。",
-                timingInterpolationVariableDuration(curve),
-                curve.m_variable == TimingVariable::Beat ? "拍" : "秒",
-                state.m_minimum,
-                state.m_maximum);
-    ImGui::TextWrapped(
-        "从左端画到右端覆盖整个段落，重复绘制可修改局部。黄色是手绘，蓝色是拟合"
-        "结果。拟合成功即更新下方输出预览，检查后保存段落。");
+    if ( surface ) ImGui::EndChild();
+    if ( surface )
+        ImGui::TextWrapped("%s", TR("ui.timing.curve.touch_sketch").data());
+    ImGui::TextWrapped(TR("ui.timing.curve.drawing_axes").data(),
+                       timingInterpolationVariableDuration(curve),
+                       curve.m_variable == TimingVariable::Beat
+                           ? TR("ui.timing.curve.beat_unit").data()
+                           : TR("ui.timing.curve.second_unit").data(),
+                       state.m_minimum,
+                       state.m_maximum);
+    ImGui::TextWrapped("%s", TR("ui.timing.curve.drawing_help").data());
     // 清空只影响手绘面板，现有函数和谱面内容保持不变。
     // 候选一并撤销，防止清空后仍应用旧手势的拟合结果。
     // 用户可重新完整绘制，再主动触发一次求解。
-    if ( UI::FeedbackButton("清空绘制") ) {
+    const float touchHeight = m_timingPresentation->parameterButtonHeight(
+        Config::AppConfig::instance().getWindowContentScale());
+    const ImVec2 actionSize{ touchHeight > 0
+                                 ? std::max(1.f,
+                                            (ImGui::GetContentRegionAvail().x -
+                                             ImGui::GetStyle().ItemSpacing.x) /
+                                                2)
+                                 : 0,
+                             touchHeight };
+    if ( UI::FeedbackButton(TR("ui.timing.curve.clear_drawing").data(),
+                            actionSize) ) {
         state.m_drawn.fill(false);
         state.m_fit.reset();
         state.m_fitFunction.reset();
@@ -600,14 +643,14 @@ void TimelineCanvas::renderTimingFunctionEditor()
     // 每次求解先丢弃旧候选与错误，失败不会显示上次成功的解。
     // 输入固定 129 点，覆盖起终时刻且按时间递增。
     // 模型负责比较多种函数族并返回完整秒域表达式。
-    if ( UI::FeedbackButton("自动拟合") ) {
+    if ( UI::FeedbackButton(TR("ui.timing.curve.fit").data(), actionSize) ) {
         state.m_fit.reset();
         state.m_fitFunction.reset();
         state.m_fitError.clear();
         if ( !std::all_of(state.m_drawn.begin(),
                           state.m_drawn.end(),
                           [](bool drawn) { return drawn; }) )
-            state.m_fitError = "请画满整个段落，不能留下未绘制的区间。";
+            state.m_fitError = TR("ui.timing.curve.incomplete").data();
         else {
             std::array<TimingCurvePoint, 129> points{};
             for ( std::size_t i = 0; i < points.size(); ++i )
@@ -644,8 +687,8 @@ void TimelineCanvas::renderTimingFunctionEditor()
         state.m_fitFunction && timingFunctionDuration(*state.m_fitFunction) ==
                                    timingInterpolationVariableDuration(curve);
     if ( state.m_fit && currentFit ) {
-        ImGui::Text("%s；均方根误差 %.6g；最大误差 %.6g。",
-                    state.m_fit->m_family.c_str(),
+        ImGui::Text(TR("ui.timing.curve.fit_errors").data(),
+                    fitDisplayText(state.m_fit->m_family),
                     state.m_fit->m_rmsError,
                     state.m_fit->m_maxError);
         // 主公式和候选公式同时可见，必须用独立 ID 隔离滚动与子窗口。
@@ -658,23 +701,23 @@ void TimelineCanvas::renderTimingFunctionEditor()
         const bool invalidBpm = edit.effect == TimingEffect::BPM &&
                                 (minimum < .1 || maximum > 10000);
         if ( invalidBpm )
-            ImGui::TextColored(
-                ImVec4(1, .35f, .35f, 1),
-                "拟合 BPM 在段内超出 0.1–10000，请调整绘制纵轴或曲线。");
+            ImGui::TextColored(ImVec4(1, .35f, .35f, 1),
+                               "%s",
+                               TR("ui.timing.curve.bpm_fit_range").data());
         // 拟合只在按钮触发时应用，随后手动编辑公式不能被旧候选逐帧覆盖。
         // 仍保留显式恢复入口，便于比较预设或手改函数后重新采用该结果。
         if ( curve.m_curve == TimingCurve::Custom &&
              curve.m_function == state.m_fitFunction )
-            ImGui::TextWrapped("拟合结果已用于下方输出预览，保存段落后生效。");
+            ImGui::TextWrapped("%s", TR("ui.timing.curve.fit_applied").data());
         else {
             ImGui::BeginDisabled(!state.m_fitError.empty() || invalidBpm);
-            if ( UI::FeedbackButton("重新采用拟合结果") )
+            if ( UI::FeedbackButton(TR("ui.timing.curve.use_fit").data()) )
                 state.applyFit(curve, edit.effect, edit.value);
             ImGui::EndDisabled();
         }
     }
     if ( !state.m_fitError.empty() )
         ImGui::TextColored(
-            ImVec4(1, .35f, .35f, 1), "%s", state.m_fitError.c_str());
+            ImVec4(1, .35f, .35f, 1), "%s", fitDisplayText(state.m_fitError));
 }
 }  // namespace MMM::Canvas
