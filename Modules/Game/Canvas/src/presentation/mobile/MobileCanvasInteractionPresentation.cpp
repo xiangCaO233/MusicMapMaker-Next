@@ -3,6 +3,7 @@
 #include "MobileCanvasNavigation.h"
 #include "MobileNavigationRouting.h"
 #include "MobileNoteHandles.h"
+#include "MobileObjectEraser.h"
 #include "MobilePointerInputScope.h"
 #include "MobilePointerOwnership.h"
 #include "MobilePolylineNodeMenu.h"
@@ -81,6 +82,7 @@ public:
             m_generation = generation;
             m_gesture.cancelPending();
             m_handle.reset();
+            m_eraser.cancel();
             auto ctx = context(canvas);
             ImGui::PushID(ctx.cameraId.c_str());
             if ( ImGui::BeginPopup("SelectionEditMenu") ) {
@@ -100,6 +102,21 @@ public:
             return;
         }
         auto ctx = context(canvas);
+        // 擦除意图只在触控绘制工具生效，不将选择或 Timing 变成删除。
+        // 读取 UI 线程方案标量，不按工具名或平台宏猜测能力。
+        const bool erasing = snapshot->currentTool == Logic::EditTool::Draw &&
+                             UI::Interaction::activeProfile().objectEraser();
+        // 改工具、改意图或切谱立即丢弃本地预览，旧手指不能在新场景补发删除。
+        if ( m_erasing != erasing ||
+             (m_erasing && (m_eraser.active() || m_gesture.active()) &&
+              m_eraseInstance != snapshot->beatmapInstanceId) ) {
+            // 待定轻点也要取消；切谱不能等到实际扫动开始才检查实例。
+            cancelInput(canvas, *snapshot);
+            m_eraser.cancel();
+            m_gesture.cancel();
+        }
+        m_erasing       = erasing;
+        m_eraseInstance = snapshot->beatmapInstanceId;
         ImGui::PushID(ctx.cameraId.c_str());
         const bool menuOpen = ImGui::IsPopupOpen("SelectionEditMenu");
         ImGui::PopID();
@@ -184,6 +201,7 @@ public:
         // 新触点从画布外开始时，也要丢弃上一轻点尚未完成的回放。
         // 外部手势不能令旧回放永久占有画布，或在之后误补发释放。
         if ( taken || (m_ownership.blocksSingle() && m_gesture.active()) ) {
+            m_eraser.cancel();
             cancelInput(canvas, *snapshot);
             m_gesture.cancel();
             m_handle.reset();
@@ -195,6 +213,14 @@ public:
                  *snapshot,
                  width,
                  height);
+        // 清本地预览不修改已保存数据，也不需要补一条逻辑线程取消命令。
+        // 同一帧的旧释放不应重新创建笔画，下面只消费正常的新分类输出。
+        // 静止等待期间的播放、外部弹层或系统接管也必须清掉擦除候选。
+        // 不依赖逻辑线程回传的 brush 标志，本笔从未写入正式数据。
+        if ( interrupted ) {
+            m_eraser.cancel();
+            m_gesture.cancel();
+        }
         auto output = MobileCanvasGesture::Output::Suppress;
         if ( !menuOpen ) {
             // 先发布正常悬浮位置，长按菜单才能使用当前触点的吸附时间。
@@ -217,6 +243,45 @@ public:
                     eligible || (raw.m_epoch != 0 && m_gesture.active() &&
                                  !interrupted),
                     snapshot->currentTool != Logic::EditTool::Draw);
+            // 删除候选只在移动私有头中，公共画布无需感知手指模式。
+            // 该入口与原画笔互斥，不先执行绘制再通过 Undo 假装擦除。
+            // 所有权与导航仲裁已完成，第二指及系统取消先于本笔更新。
+            if ( erasing ) {
+                // 松手后的普通控制器立即撤去悬浮反馈；擦除器仍单独消费真实终点。
+                // 回放起点与指针显示相互独立，不能让触点离开后遗留鼠标高亮。
+                const bool hidePointer =
+                    raw.m_epoch != 0 &&
+                    (m_ownership.blocksSingle() ||
+                     (raw.m_count == 0 && !m_gesture.active()));
+                // 擦除不借用桌面右键，原控制器只更新投影与悬浮，所有编辑边沿屏蔽。
+                // IO
+                // 作用域先结束，再让本地笔画读取真实松手，避免误认为一直按住。
+                {
+                    MobilePointerInputScope suppressed(
+                        MobileCanvasGesture::Output::Suppress,
+                        point,
+                        1,
+                        hidePointer);
+                    routeInput(canvas, snapshot, width, height, true);
+                }
+                const auto samplePoint =
+                    output == MobileCanvasGesture::Output::Begin ||
+                            output == MobileCanvasGesture::Output::Release
+                        ? m_gesture.replayPoint()
+                        : point;
+                // 起点回放和真实点使用同一投影，不重复解释桌面轨道规则。
+                // 最终载荷绑定原实例，排队期间切谱也不能删除新对象。
+                m_eraser.update(output, samplePoint, *snapshot, frame, scale);
+                // 跨过拖动门槛的当帧仍先采原点，再补真实点，不能漏掉首个扫过对象。
+                if ( output == MobileCanvasGesture::Output::Begin &&
+                     m_gesture.dragging() )
+                    m_eraser.update(MobileCanvasGesture::Output::Pass,
+                                    point,
+                                    *snapshot,
+                                    frame,
+                                    scale);
+                return;
+            }
             // 轻点的 Begin/Release
             // 回放仍保留落点，不能因原始触点已抬起吞掉提交。
             // 多指导航和真正结束的空闲帧才撤去普通鼠标悬浮反馈。
@@ -329,6 +394,11 @@ public:
     }
 
 private:
+    /// @details 擦除状态只随当前画布存活，不通过 UIManager 共享给其它页签。
+    /// 与公共画笔分开持有，取消本地预览不需要取得逻辑会话的所有权。
+    MobileObjectEraser m_eraser;     ///< 只在触控编译的本地擦除候选及预览。
+    bool               m_erasing{};  ///< 模式切换取消旧候选，不移交半次笔画。
+    std::uintptr_t     m_eraseInstance{};  ///< 切谱时不沿用旧实体编号。
     /// @brief 起笔把手值身份，接管和方案切换立即清除，不借用旧快照。
     std::optional<HoverLayerCandidate> m_handle;
     /// @brief 节点长按只持有值载荷，切换谱面后外层关闭旧弹窗。

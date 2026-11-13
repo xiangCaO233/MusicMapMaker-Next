@@ -146,9 +146,21 @@ namespace MMM::Logic
                 // 撤销和重做可能跨多个数据域，真实权限由历史命令执行路径处理。
                 // 入队边界缺少历史项内容，因此不能在此静态推断权限集合。
                 return ::MMM::BeatmapMutationFlags::None;
+            } else if constexpr ( std::is_same_v<T, CmdDeleteSelected> ) {
+                // 显式笔画已经携带完整领域，无需等到读取会话选择集才判断权限。
+                // 入队与消费复用同一分类，混合笔画必须同时具有两个领域权限。
+                // 默认桌面入口继续返回 None，沿用原有会话选择集细化逻辑。
+                auto flags = ::MMM::BeatmapMutationFlags::None;
+                if ( value.m_objects ) {
+                    for ( const auto& target : value.m_objects->m_targets ) {
+                        flags |= target.m_kind == ChartObjectKind::AudioSample
+                                     ? ::MMM::BeatmapMutationFlags::AudioSamples
+                                     : ::MMM::BeatmapMutationFlags::Objects;
+                    }
+                }
+                return flags;
             } else if constexpr ( std::is_same_v<T, CmdPaste> ||
                                   std::is_same_v<T, CmdCut> ||
-                                  std::is_same_v<T, CmdDeleteSelected> ||
                                   std::is_same_v<
                                       T,
                                       CmdUpdateSelectedObjectSampleVolume> ) {

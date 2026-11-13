@@ -371,7 +371,9 @@ bool BeatmapSession::blockCollaborationUnauthorizedEdit(
                 required = ::MMM::BeatmapMutationFlags::All;
             }
         } else if ( std::holds_alternative<CmdCut>(cmd) ||
-                    std::holds_alternative<CmdDeleteSelected>(cmd) ||
+                    // 明确目标已在静态入口分类，不再掺入无关的当前选区权限。
+                    (std::holds_alternative<CmdDeleteSelected>(cmd) &&
+                     !std::get<CmdDeleteSelected>(cmd).m_objects) ||
                     std::holds_alternative<CmdUpdateSelectedObjectSampleVolume>(
                         cmd) ) {
             // 选择集可能同时包含音符和样本，两个独立索引都参与分类。

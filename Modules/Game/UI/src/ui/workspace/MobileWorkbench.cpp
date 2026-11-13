@@ -152,10 +152,13 @@ void renderTouchDrawingControls(float width, float gap, float scale)
     // 用户需要明确选择折线，普通长条的手指漂移不会自动切换模式。
     // 起笔时会锁存结果，笔画不依赖工作台下一帧是否仍然可见。
     const bool simpleMode =
-        profile.noteHoldBrush(Interaction::Surface::MainCanvas);
+        profile.noteHoldBrush(Interaction::Surface::MainCanvas) &&
+        !profile.objectEraser();
     if ( gridButton(
-             "TouchNoteHold", ICON_MMM_PEN, simple, size, scale, simpleMode) )
+             "TouchNoteHold", ICON_MMM_PEN, simple, size, scale, simpleMode) ) {
+        profile.setObjectEraser(false);
         profile.setNoteHoldBrush(true);
+    }
     ImGui::SameLine(0, gap);
     const bool enabled = Config::AppConfig::instance()
                              .getEditorConfig()
@@ -167,14 +170,36 @@ void renderTouchDrawingControls(float width, float gap, float scale)
                     polyline,
                     size,
                     scale,
-                    !simpleMode) )
+                    !profile.noteHoldBrush(Interaction::Surface::MainCanvas) &&
+                        !profile.objectEraser()) ) {
+        profile.setObjectEraser(false);
         profile.setNoteHoldBrush(false);
+    }
     ImGui::EndDisabled();
     // 禁用原因使用正文，手机没有悬浮鼠标也能知道从哪里开启能力。
     // 说明遵循当前列宽换行，不缩小用户设定字号或截断英文。
     // 此处仅解释全局门禁，不在绘制按钮上暗中改变谱面编辑权限。
     if ( !enabled )
         ImGui::TextWrapped("%s", TR("ui.mobile.draw.enable_polyline").data());
+    // 独立物件擦除不能与配色橡皮混为一谈，正文说明整条折线删除范围。
+    // 与绘制意图放在同一组，开关不创建删除或选择历史。
+    // 英文标题按按钮宽度量高，说明按整个可用区域换行。
+    // 不靠缩小字号容纳长句，物件擦除和配色橡皮的职责明确分开。
+    // 开关本身既不删除当前选择，也不产生任何撤销节点。
+    const auto* erase = TR("ui.mobile.erase.objects").data();
+    const float eraseHeight =
+        ImGui::CalcTextSize(erase, nullptr, false, wrap).y;
+    if ( gridButton("TouchObjectEraser",
+                    ICON_MMM_ERASER,
+                    erase,
+                    { width, std::max(48 * scale, eraseHeight + 28 * scale) },
+                    scale,
+                    profile.objectEraser()) )
+        profile.setObjectEraser(!profile.objectEraser());
+    // 说明常驻可见，无需手机缺失的 Hover 才知道折线为整条删除。
+    // 退出擦除后仍沿用最近的简单或折线绘制偏好。
+    if ( profile.objectEraser() )
+        ImGui::TextWrapped("%s", TR("ui.mobile.erase.hint").data());
 }
 
 /// @brief 触控选择工具使用独立两列布局，集合运算仍由公共命令解释。

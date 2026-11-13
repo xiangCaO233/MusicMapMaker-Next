@@ -64,6 +64,11 @@ public:
     }
     /// @brief 工作台只修改触控方案，切换工具或谱面仍保留最近绘制意图。
     void setNoteHoldBrush(bool enabled) override { m_noteHoldOnly = enabled; }
+    /// @brief 物件擦除只属于触控主画布，不能泄漏到桌面与 Timing。
+    /// @warning UI 热路径只读取标量，不访问会话。
+    bool objectEraser() const override { return m_objectEraser; }
+    /// @brief 后续起笔采用新意图，活动笔画由呈现层取消而非提交。
+    void setObjectEraser(bool enabled) override { m_objectEraser = enabled; }
     /// @brief 主画布持续绘制无需修饰键，具体形状由起笔策略限制。
     /// @warning 每帧只比较表面枚举，不改写真实 Shift，其他表面沿用原语义。
     bool extendBrush(Surface surface, bool shift) const override
@@ -86,6 +91,8 @@ public:
 private:
     /// @brief 简单绘制默认开启，折线需由工作台明确选择，避免横向抖动误建折线。
     bool m_noteHoldOnly{ true };
+    /// @brief 默认仍为正常绘制，物件删除需要用户显式开启。
+    bool m_objectEraser{ false };
     /// @brief 临时连续落点开关；只在触控菜单离散激活时改变。
     bool m_bypassSnap{ false };
     /// @brief 状态归触控方案所有，不与经典桌面或纯鼠标方案相互覆盖。

@@ -2660,7 +2660,7 @@ void ActionController::handleCommand(const CmdCut& cmd)
 }
 
 /// @brief 删除当前可编辑选择；无选择时删除有效悬停目标。
-/// @param cmd 无附加参数的删除命令。
+/// @param cmd 默认删除选择；显式批次只删除所属谱面的指定目标。
 /// @details
 /// Note 与 Sample 分别收集为批量动作。Polyline 父被删除时追加全部投影子实体；
 /// 两个域同时存在则包装 CompositeEditorAction，保证一次撤销完整恢复。
@@ -2671,31 +2671,86 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
     std::vector<BatchNoteAction::Entry>   entries;
     std::vector<BatchSampleAction::Entry> sampleEntries;
 
-    auto view = m_ctx.noteRegistry.view<InteractionComponent, NoteComponent>();
-    for ( auto entity : view ) {
-        const auto& ic   = view.get<InteractionComponent>(entity);
-        const auto& note = view.get<NoteComponent>(entity);
-        if ( ic.isSelected &&
-             SessionUtils::isNoteEditable(note, m_ctx.lastConfig.settings) ) {
-            entries.push_back({ entity, note, std::nullopt });
+    // UI 只在释放提交明确目标，连续帧不进入删除计划构造。
+    // 两种入口共用级联及批量动作，保持撤销、同步与资源生命周期规则。
+    if ( cmd.m_objects ) {
+        // 显式目标只由完成的笔画提交，切谱、播放或其它活动编辑期间全部拒绝。
+        // 不暂改选择集，空批次、失效句柄和无权目标都不能回退当前悬浮。
+        if ( !m_ctx.currentBeatmap || m_ctx.isPlaying || m_ctx.isDragging ||
+             m_ctx.brushState.isActive || m_ctx.eraserState.isActive ||
+             cmd.m_objects->m_beatmapInstanceId !=
+                 reinterpret_cast<std::uintptr_t>(m_ctx.currentBeatmap.get()) )
+            return;
+        // 每个 Registry 单独去重，两个领域可以恰好拥有相同代数句柄。
+        // 临时集合仅在释放低频路径创建，不进入触控连续采样。
+        std::unordered_set<entt::entity> notes, samples;
+        // 不改任何 InteractionComponent，未擦到的已选对象保持原状态。
+        // 先准备所有 before 快照，后面统一执行，不边遍历边销毁。
+        // 联机编辑可能使旧句柄失效，缺失组件直接跳过，不寻找替代身份。
+        // 这些无效目标也不能清空已有重做栈或回退悬浮对象。
+        for ( const auto& target : cmd.m_objects->m_targets ) {
+            if ( target.m_kind == ChartObjectKind::AudioSample ) {
+                // 领域句柄不可混用；专业模式与 BMS 能力仍由原设置统一决定。
+                const auto* sample =
+                    m_ctx.sampleRegistry.try_get<const SampleComponent>(
+                        target.m_entity);
+                if ( sample &&
+                     m_ctx.lastConfig.settings.isBmsEditingEnabled() &&
+                     samples.insert(target.m_entity).second )
+                    sampleEntries.push_back(
+                        { target.m_entity, *sample, std::nullopt });
+            } else if ( target.m_kind == ChartObjectKind::PlayerNote ||
+                        target.m_kind == ChartObjectKind::DraftNote ) {
+                const auto* note =
+                    m_ctx.noteRegistry.try_get<const NoteComponent>(
+                        target.m_entity);
+                if ( !note || note->m_isDraft != (target.m_kind ==
+                                                  ChartObjectKind::DraftNote) )
+                    continue;
+                // 投影子项提升为根，整条擦除与节点局部断开保持不同的明确入口。
+                const auto entity = note->m_isSubNote ? note->m_parentPolyline
+                                                      : target.m_entity;
+                note = m_ctx.noteRegistry.try_get<const NoteComponent>(entity);
+                if ( note && !note->m_isSubNote &&
+                     note->m_isDraft ==
+                         (target.m_kind == ChartObjectKind::DraftNote) &&
+                     SessionUtils::isNoteEditable(*note,
+                                                  m_ctx.lastConfig.settings) &&
+                     notes.insert(entity).second )
+                    entries.push_back({ entity, *note, std::nullopt });
+            }
+        }
+    } else {
+        auto view =
+            m_ctx.noteRegistry.view<InteractionComponent, NoteComponent>();
+        for ( auto entity : view ) {
+            const auto& ic   = view.get<InteractionComponent>(entity);
+            const auto& note = view.get<NoteComponent>(entity);
+            if ( ic.isSelected && SessionUtils::isNoteEditable(
+                                      note, m_ctx.lastConfig.settings) ) {
+                entries.push_back({ entity, note, std::nullopt });
+            }
+        }
+
+        auto sampleView =
+            m_ctx.sampleRegistry.view<InteractionComponent, SampleComponent>();
+        for ( auto entity : sampleView ) {
+            const auto& interaction =
+                sampleView.get<InteractionComponent>(entity);
+            if ( interaction.isSelected ) {
+                sampleEntries.push_back({
+                    entity,
+                    sampleView.get<SampleComponent>(entity),
+                    std::nullopt,
+                });
+            }
         }
     }
 
-    auto sampleView =
-        m_ctx.sampleRegistry.view<InteractionComponent, SampleComponent>();
-    for ( auto entity : sampleView ) {
-        const auto& interaction = sampleView.get<InteractionComponent>(entity);
-        if ( interaction.isSelected ) {
-            sampleEntries.push_back({
-                entity,
-                sampleView.get<SampleComponent>(entity),
-                std::nullopt,
-            });
-        }
-    }
-
+    // 空显式列表与无选择的桌面删除有意区分，前者始终无操作。
+    // 默认入口仍保持原有选择、悬浮和权限行为。
     // 没有任何选择时才回退悬停目标，避免额外删除一个未选物件。
-    if ( entries.empty() && sampleEntries.empty() &&
+    if ( !cmd.m_objects && entries.empty() && sampleEntries.empty() &&
          m_ctx.hoveredEntity != entt::null ) {
         if ( (m_ctx.hoveredObjectKind == ChartObjectKind::PlayerNote ||
               m_ctx.hoveredObjectKind == ChartObjectKind::DraftNote) &&
@@ -2735,13 +2790,20 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
         // 每个非空数据域构造一个子动作，再按数量决定是否需要复合包装。
         std::vector<std::unique_ptr<IEditorAction>> actions;
         actions.reserve(2);
+        // 明确目标不是当前选区，历史标题使用独立的通用删除文案。
+        // 只给新入口本地化命名，桌面旧动作的名称与历史行为原样保留。
+        // 文本仅在释放准备动作时取得，不进入连续预览路径。
         if ( !entries.empty() ) {
             actions.push_back(std::make_unique<BatchNoteAction>(
-                std::move(entries), "Delete Selected"));
+                std::move(entries),
+                cmd.m_objects ? TR("ui.edit.delete_objects").data()
+                              : "Delete Selected"));
         }
         if ( !sampleEntries.empty() ) {
             actions.push_back(std::make_unique<BatchSampleAction>(
-                std::move(sampleEntries), "删除已选自动采样"));
+                std::move(sampleEntries),
+                cmd.m_objects ? TR("ui.edit.delete_objects").data()
+                              : "删除已选自动采样"));
         }
 
         std::unique_ptr<IEditorAction> action;
@@ -2751,7 +2813,9 @@ void ActionController::handleCommand(const CmdDeleteSelected& cmd)
         } else {
             // 混合选择只占一个撤销槽，按 Note、Sample 顺序执行。
             action = std::make_unique<CompositeEditorAction>(
-                std::move(actions), "删除已选谱面物件");
+                std::move(actions),
+                cmd.m_objects ? TR("ui.edit.delete_objects").data()
+                              : "删除已选谱面物件");
         }
         m_ctx.actionStack.pushAndExecute(std::move(action), m_ctx);
         XINFO("Deleted {} selected/hovered items", count);

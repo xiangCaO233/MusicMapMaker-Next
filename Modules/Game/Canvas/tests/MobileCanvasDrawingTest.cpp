@@ -1,6 +1,9 @@
 #include "canvas/Basic2DCanvasInteraction.h"
 #include "common/EditTool.h"
+#include "common/LogicCommandMutationClassification.h"
 #include "common/LogicCommands.h"
+#include "common/ObjectDeletion.h"
+#include "common/PolylineGeometry.h"
 #include "common/render/HoverRenderData.h"
 #include "common/render/RenderSnapshot.h"
 #include "config/EditorConfig.h"
@@ -11,7 +14,9 @@
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/SampleComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
+#include "logic/session/ActionController.h"
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/EditorAction.h"
 #include "logic/session/InteractionController.h"
@@ -26,8 +31,10 @@
 #include <entt/entity/registry.hpp>
 #include <imgui.h>
 
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 #include <memory>
 #include <optional>
@@ -57,9 +64,12 @@ void check(bool passed, const char* message)
 /// @brief 一个屏幕触点样本，坐标处于画布内容域。
 /// @details 固定 UI 时间推进，长按与快速释放不依赖宿主调度或真实 sleep。
 struct Sample {
-    ImVec2 m_point;     ///< 当前主触点的画布局部坐标。
-    bool   m_down{};    ///< 主触点按住状态。
-    bool   m_second{};  ///< 第二指接管，用于取消已经开始的画笔。
+    ImVec2 m_point;      ///< 当前主触点的画布局部坐标。
+    bool   m_down{};     ///< 主触点按住状态。
+    bool   m_second{};   ///< 第二指接管，用于取消已经开始的画笔。
+    bool   m_cancel{};   ///< 原始系统取消，不模拟普通释放。
+    bool   m_playing{};  ///< 播放接管不允许提交旧擦除。
+    bool   m_scene{};    ///< 切换实例，旧目标不得用于新谱面。
 };
 /// @brief 通过真实 ImGui 帧和生产移动解释器取得正式笔画命令。
 /// @param samples 起笔至全部抬起的非空序列。
@@ -79,7 +89,8 @@ struct Sample {
 std::vector<Logic::LogicCommand> capture(
     const std::vector<Sample>& samples,
     std::string_view profile = "touch-gestures", bool simple = true,
-    std::optional<Common::Render::Hitbox> hit = std::nullopt)
+    std::optional<Common::Render::Hitbox> hit   = std::nullopt,
+    bool                                  erase = false)
 {
     // 两个安全边界完成方案切换，旧画布和待定笔画不能跨场景残留。
     UI::Interaction::synchronizeProfile(profile, true);
@@ -90,6 +101,7 @@ std::vector<Logic::LogicCommand> capture(
     // 取消原始状态并不代表取消业务；本场景此时尚未创建任何画笔。
     Graphic::cancelMobileTouch();
     UI::Interaction::activeProfile().setNoteHoldBrush(simple);
+    UI::Interaction::activeProfile().setObjectEraser(erase);
     ImGui::CreateContext();
     // 教程与绘制共用方案能力，触控不能仍被旧 Shift 条件挡住。
     // 经典方案必须继续要求延伸时按 Shift；此处所有物理修饰键均未按下。
@@ -124,6 +136,28 @@ std::vector<Logic::LogicCommand> capture(
         snapshot.trackCount                             = 4;
         // 末端拾取由正式控制器完成，夹具只提供渲染层本来会发布的命中盒。
         if ( hit ) snapshot.hitboxes.push_back(*hit);
+        if ( erase ) {
+            // 三个固定可见对象覆盖短帧跨越、空白释放和混合领域同号身份。
+            // 不预置选择，正式移动解释器必须自行从扫过路径收集目标。
+            for ( int i = 0; i < 3; ++i )
+                snapshot.hitboxes.push_back(
+                    { entt::entity{ static_cast<unsigned>(i) },
+                      Common::Render::HoverPart::Head,
+                      -1,
+                      100.f + 100 * i,
+                      300,
+                      40,
+                      20 });
+            snapshot.hitboxes.push_back(
+                { entt::entity{ 0 },
+                  Common::Render::HoverPart::SampleAnchor,
+                  -1,
+                  400,
+                  300,
+                  40,
+                  20,
+                  Logic::ChartObjectKind::AudioSample });
+        }
         // 路径与实例同时固定，排除控制器以为谱面切换后提前取消笔画。
         // 有谱面且未播放，权限判断必须允许起笔；完全不派发输入不能假通过。
         // 不预置 brush.isActive，所有画笔状态必须由正式命令建立。
@@ -140,7 +174,12 @@ std::vector<Logic::LogicCommand> capture(
                      std::holds_alternative<Logic::CmdEndBrush>(command) ||
                      std::holds_alternative<Logic::CmdSetHoveredEntity>(
                          command) ||
-                     std::holds_alternative<Logic::CmdSelectEntity>(command) )
+                     std::holds_alternative<Logic::CmdSelectEntity>(command) ||
+                     std::holds_alternative<Logic::CmdDeleteSelected>(
+                         command) ||
+                     (erase &&
+                      std::holds_alternative<Logic::CmdSetMousePosition>(
+                          command)) )
                     commands.push_back(command);
             });
         // 只捕获笔画命令而非相机悬浮反馈，命令数量不能被无关事件污染。
@@ -178,6 +217,9 @@ std::vector<Logic::LogicCommand> capture(
                         .5f,
                         frame * .05);
             }
+            if ( sample.m_cancel ) Graphic::cancelMobileTouch();
+            snapshot.isPlaying = sample.m_playing;
+            if ( sample.m_scene ) snapshot.beatmapInstanceId = 2;
             down   = sample.m_down;
             second = sample.m_second;
             // 主触点的鼠标表示只对应真实事件，不能模拟 Shift 或切换工具。
@@ -233,6 +275,7 @@ std::vector<Logic::LogicCommand> capture(
         // 必须在观察容器与控制器销毁前退订，下一场景不能收到旧回调。
         bus.unsubscribe<Event::LogicCommandEvent>(token);
     }
+    UI::Interaction::activeProfile().setObjectEraser(false);
     ImGui::DestroyContext();
     return commands;
 }
@@ -632,6 +675,299 @@ void verifyPolyline(std::optional<NoteType> sourceType, bool cancel = false,
     }
 }
 
+/// @brief 真实触点擦除只在释放发一次显式删除，不启动画笔或桌面右键擦除。
+/// @details 空白起笔、短帧扫过、往返去重、混合域同号以及全部取消边界独立断言。
+/// 不向 UI 伪造已擦除的快照，预览期间模型始终保持原样。
+/// @warning 仅同步 CPU 输入，不操作真实设备或用户工程。
+/// 测试边界：
+/// - 原始触点和 ImGui 合成鼠标仍按后端正常顺序推进。
+/// - 不直接构造擦除意图输出，也不绕开 SurfaceScope。
+/// - 固定命中框仅替代渲染发布的数据，不包含删除或选择结果。
+/// - 空闲尾帧继续推进，检查取消后是否补发延迟的轻点。
+/// - 同号 Note 与 Sample 必须各留一个显式目标。
+/// - 取消不依赖关闭窗口或销毁整个编辑器。
+/// - 经典方案接到相同触控偏好设置仍忽略该标量。
+/// - 绘制和擦除不能在同一序列中同时提交。
+/// - 命令数量按完整笔画统计，不能按移动帧统计。
+/// - 移动阈值以下的轻点必须有阳性删除对照。
+/// - 手势跨过薄框而停在空白时仍需保留已扫过对象。
+/// - 系统取消用原始快照表达，不能伪装成普通抬手。
+/// - 播放与切谱分别验证，不能合并为一个提前返回场景。
+/// - 本测试不保存 APK 或用户配置，设备注入另行验收。
+void testTouchEraser()
+{
+    const auto run = [&](std::vector<Sample> samples,
+                         int                 targets,
+                         std::string_view    profile = "touch-gestures") {
+        const auto commands =
+            capture(samples, profile, true, std::nullopt, true);
+        // 累计的是整个输入序列的提交，尾部空闲帧也包括在内。
+        // 模式选择只改变触控呈现，桌面对照不使用此计数替代画笔阳性检查。
+        int deletions = 0;
+        // 仅捕获擦除场景的指针状态，不扩大普通绘制用例的序列。
+        // 抬手后必须撤去悬浮，不能留下需要鼠标停留的吸附反馈。
+        std::optional<bool> hovering;
+        for ( const auto& command : commands ) {
+            if ( const auto* pointer =
+                     std::get_if<Logic::CmdSetMousePosition>(&command) )
+                hovering = pointer->isHovering;
+            if ( const auto* deletion =
+                     std::get_if<Logic::CmdDeleteSelected>(&command) ) {
+                // 命令必须携带原实例及明确列表，不能发送默认的删除当前选择。
+                // 数量检查包括领域相同才去重的要求，返程不会再追加同一对象。
+                ++deletions;
+                check(deletion->m_objects &&
+                          deletion->m_objects->m_beatmapInstanceId == 1 &&
+                          deletion->m_objects->m_targets.size() ==
+                              static_cast<std::size_t>(targets),
+                      "erase preserves explicit domain targets and original "
+                      "instance");
+            }
+            // 已有画笔命令同样必须为零，否则擦除会边删边画。
+            if ( profile == "touch-gestures" )
+                check(!std::holds_alternative<Logic::CmdStartBrush>(command),
+                      "eraser never starts drawing");
+        }
+        // 尾部空闲帧已排空释放回放，最后指针状态必须表示手指离开。
+        // 经典鼠标仍允许停在窗口内悬浮，不能强加触控的收尾约束。
+        if ( profile == "touch-gestures" )
+            check(hovering && !*hovering,
+                  "finger release clears erase hover feedback");
+        check(deletions == int(targets > 0),
+              "one batch only on normal erase release");
+    };
+    // 每个场景重新创建解释器，避免上一笔的容量或实体身份遮掩状态错误。
+    // 阳性对照证明并非简单屏蔽所有输入导致后面的取消测试通过。
+    // 点按命中一个；空白轻点不能删除当前选择或悬浮残留。
+    run({ { { 120, 310 }, true }, { { 120, 310 }, false } }, 1);
+    run({ { { 80, 310 }, true }, { { 80, 310 }, false } }, 0);
+    // 两个位置之间一帧扫过四个对象，释放空白仍保留整笔目标。
+    // 同一路径回扫不能重复删除，Note 与 Sample 的同号身份都应存在。
+    run({ { { 80, 310 }, true },
+          { { 460, 310 }, true },
+          { { 80, 310 }, true },
+          { { 80, 310 }, false } },
+        4);
+    // 快速移动与抬手同帧到达，也必须补交整个扫动线段。
+    run({ { { 80, 310 }, true }, { { 460, 310 }, false } }, 4);
+    // 起笔后和开始前的第二指、系统取消、播放与切谱都不发迟到删除。
+    // 各序列留有真正移动，防止仅因为没有目标而使取消测试偶然通过。
+    run({ { { 80, 310 }, true },
+          { { 250, 310 }, true },
+          { { 460, 310 }, true, true },
+          { { 460, 310 }, false } },
+        0);
+    run({ { { 120, 310 }, true, true }, { { 120, 310 }, false } }, 0);
+    run({ { { 80, 310 }, true },
+          { { 250, 310 }, true },
+          { { 460, 310 }, true, false, true },
+          { { 460, 310 }, false } },
+        0);
+    run({ { { 80, 310 }, true },
+          { { 250, 310 }, true },
+          { { 460, 310 }, true, false, false, true },
+          { { 460, 310 }, false } },
+        0);
+    run({ { { 80, 310 }, true },
+          { { 250, 310 }, true },
+          { { 460, 310 }, true, false, false, false, true },
+          { { 460, 310 }, false } },
+        0);
+    // 还未跨过拖动门槛的轻点也不能跨实例回放，原点命中有效物件。
+    // 与上面已开始扫动后切谱分开，防止只检查活动擦除标志。
+    run({ { { 120, 310 }, true },
+          { { 120, 310 }, true, false, false, false, true },
+          { { 120, 310 }, false } },
+        0);
+    // 长按绘制模式不弹选择菜单；释放后仍仅删除一笔中的一个目标。
+    // 固定帧时钟超过长按阈值，不以真正 sleep 影响宿主或测试可重复性。
+    std::vector<Sample> held(14, Sample{ { 120, 310 }, true });
+    held.push_back({ { 120, 310 }, false });
+    run(held, 1);
+    // 设置触控偏好不能改变经典方案，经典输入仍走原画笔，不发显式擦除。
+    run({ { { 120, 310 }, true }, { { 120, 310 }, false } },
+        0,
+        "classic-desktop");
+}
+/// @brief 显式批次沿用既有删除动作，验证根子级联、领域隔离和一次精确历史。
+/// @details 选中的无关 Note 保留；空、过期和受限目标不能偷用选择或清重做。
+/// 这里直接回放语义命令，不在测试中重写删除、级联和撤销算法。
+/// 模型验收边界：
+/// - 原根、子投影及采样均在输入之前已存在，不属于新绘制历史。
+/// - 选中的无关物件作为范围哨兵，不能随目标根一起被误删。
+/// - 显式列表包含重复根及重复采样，必须在领域内去重。
+/// - 子实体命中提升到根，避免仅删除投影后留下不可见父内容。
+/// - 一次 Undo 同时恢复两个 Registry 的原始实体句柄。
+/// - 样本负偏移和根批注用于发现仅重建几何而遗失属性。
+/// - 过期实例命令不允许使用当前选择作为替代目标。
+/// - 空列表与空 optional 的默认桌面含义不同。
+/// - 领域错误的有效句柄也必须拒绝，不能仅验证索引存在。
+/// - 停止播放后旧取消笔画不能自动补提交。
+/// - 每种无效请求都在已有重做栈的情况下执行。
+/// - 专业模式关闭时采样仍可展示，但不允许本命令编辑。
+/// - 使用生产 ActionController 和 EditorActionStack，不手写撤销结果。
+void testEraseDeletion()
+{
+    Logic::SessionContext ctx;
+    ctx.currentBeatmap                            = std::make_shared<BeatMap>();
+    ctx.lastConfig.settings.professionalMode      = true;
+    ctx.lastConfig.settings.enablePolylineEditing = true;
+    const auto           parent                   = ctx.noteRegistry.create(),
+                         child                    = ctx.noteRegistry.create(),
+                         other                    = ctx.noteRegistry.create();
+    Logic::NoteComponent root{ .m_type       = NoteType::POLYLINE,
+                               .m_timestamp  = 1,
+                               .m_trackIndex = 1 };
+    // 使用合法 Hold→Flick→Hold，不能用空子列表冒充可级联的折线。
+    // 原根时间、轨道与首段一致；两个接缝分别保持时间和轨道连续。
+    root.m_subNotes = { { .type       = NoteType::HOLD,
+                          .timestamp  = 1,
+                          .duration   = .5,
+                          .trackIndex = 1 },
+                        { .type       = NoteType::FLICK,
+                          .timestamp  = 1.5,
+                          .trackIndex = 1,
+                          .dtrack     = 1 },
+                        { .type       = NoteType::HOLD,
+                          .timestamp  = 1.5,
+                          .duration   = .5,
+                          .trackIndex = 2 } };
+    check(Common::isCanonicalPolyline(root.m_subNotes, 1, 1, 0, 3),
+          "erase fixture is canonical");
+    root.m_annotation = "retained-history";
+    ctx.noteRegistry.emplace<Logic::NoteComponent>(parent, root);
+    // 三个投影子实体分别对应根数组，不复用无关已选物件作为假子项。
+    // 显式只命中一个子实体，后续删除必须通过父级联覆盖其它两个。
+    // 子投影只携带父句柄与各自序号，根的内嵌列表才是保存的几何来源。
+    // 两种表示须同时保留到 before 快照，不能只检查其中一种恢复。
+    // 首段不是普通 Note；用 Hold 类型确保与合法路径契约一致。
+    const std::array children{ child,
+                               ctx.noteRegistry.create(),
+                               ctx.noteRegistry.create() };
+    for ( std::size_t i = 0; i < children.size(); ++i ) {
+        const auto& part = root.m_subNotes[i];
+        ctx.noteRegistry.emplace<Logic::NoteComponent>(
+            children[i],
+            Logic::NoteComponent{ .m_type           = part.type,
+                                  .m_timestamp      = part.timestamp,
+                                  .m_duration       = part.duration,
+                                  .m_trackIndex     = part.trackIndex,
+                                  .m_dtrack         = part.dtrack,
+                                  .m_isSubNote      = true,
+                                  .m_parentPolyline = parent,
+                                  .m_subIndex       = static_cast<int>(i) });
+    }
+    ctx.noteRegistry.emplace<Logic::NoteComponent>(
+        other, Logic::NoteComponent{ .m_timestamp = 9 });
+    ctx.noteRegistry.emplace<Logic::InteractionComponent>(other).isSelected =
+        true;
+    // 样本与根编号相同，足以发现只按 entity 而忽略 Registry 的去重错误。
+    const auto sample = ctx.sampleRegistry.create();
+    check(sample == parent, "mixed deletion fixture shares entity numbers");
+    ctx.sampleRegistry.emplace<Logic::SampleComponent>(
+        sample,
+        Logic::SampleComponent{
+            .m_timestamp = 3, .m_offsetMs = -24, .m_track = 1 });
+    // 使用目标的指针宽度保存进程内实例，不能把设备地址截成固定 32 位编号。
+    const auto instance =
+        reinterpret_cast<std::uintptr_t>(ctx.currentBeatmap.get());
+    Logic::ActionController        controller(ctx);
+    const Logic::CmdDeleteSelected command{ Logic::ObjectDeletion{
+        instance,
+        { { child, Logic::ChartObjectKind::PlayerNote },
+          { parent, Logic::ChartObjectKind::PlayerNote },
+          { sample, Logic::ChartObjectKind::AudioSample },
+          { sample, Logic::ChartObjectKind::AudioSample } } } };
+    // 明确列表在入队之前即可精确分类，不能借用当前选区漏掉采样权限。
+    // 默认桌面命令仍延后到会话细化，空显式列表不要求无关领域权限。
+    check(Logic::requiredBeatmapMutationFlags(Logic::LogicCommand{ command }) ==
+              (BeatmapMutationFlags::Objects |
+               BeatmapMutationFlags::AudioSamples),
+          "mixed erase is classified before queueing");
+    check(Logic::requiredBeatmapMutationFlags(Logic::LogicCommand{
+              Logic::CmdDeleteSelected{} }) == BeatmapMutationFlags::None,
+          "default desktop deletion retains dynamic classification");
+    // 释放之前没有调用删除命令，批次执行后才检查两个领域的最终状态。
+    // 级联子项与显式重复根必须共用同一个 before 快照。
+    controller.handleCommand(command);
+    check(!ctx.noteRegistry.all_of<Logic::NoteComponent>(parent) &&
+              !ctx.noteRegistry.all_of<Logic::NoteComponent>(child) &&
+              !ctx.sampleRegistry.all_of<Logic::SampleComponent>(sample) &&
+              ctx.noteRegistry.all_of<Logic::NoteComponent>(other) &&
+              ctx.actionStack.getUndoStackSize() == 1,
+          "stroke deletes only explicit roots and samples in one action");
+    for ( const auto e : children )
+        check(!ctx.noteRegistry.all_of<Logic::NoteComponent>(e),
+              "all projections deleted with root");
+    ctx.actionStack.undo(ctx);
+    // 撤销不只是重新出现一个父实体，还要恢复合法子列表及每个投影关系。
+    // 几何契约独立校验，不能以实体数量正确代替结构正确。
+    const auto& restored = ctx.noteRegistry.get<Logic::NoteComponent>(parent);
+    check(Common::isCanonicalPolyline(restored.m_subNotes,
+                                      restored.m_timestamp,
+                                      restored.m_trackIndex,
+                                      0,
+                                      3),
+          "undo restores canonical polyline geometry");
+    for ( const auto e : children )
+        check(ctx.noteRegistry.get<Logic::NoteComponent>(e).m_parentPolyline ==
+                  parent,
+              "undo restores every child relationship");
+    check(
+        ctx.noteRegistry.get<Logic::NoteComponent>(parent).m_annotation ==
+                root.m_annotation &&
+            ctx.noteRegistry.get<Logic::NoteComponent>(child)
+                    .m_parentPolyline == parent &&
+            ctx.sampleRegistry.get<Logic::SampleComponent>(sample).m_offsetMs ==
+                -24,
+        "one undo restores root child and full signed sample offset");
+    // 级联检查以三个子项为阳性对照，局部命中不能只删一个投影实体。
+    // 保留下来的完整子列表继续满足原生折线契约，包含时间和轨道接缝。
+    // 测试没有调用修复器把非法几何改成合法结构，before 即是有效谱面。
+    // 删除的作用是移除指定根，不重写任何子段的类型或关联。
+    // 撤销时逐个验证原子实体句柄，不能用同样几何的新实体冒充恢复。
+    // 原根、投影子项和样本由同一个复合动作恢复，而非测试补建。
+    // 撤销后真实注册表仍包含完整负偏移，证明恢复的是 before 快照。
+    // 旧实体代数随 before 保留，过期目标不得通过创建新实体而重新变有效。
+    // 混合域一笔只有一个历史槽，不允许分两次撤销才恢复完整谱面。
+    // 同一批次的所有目标都在执行前准备，删除顺序不影响父子覆盖。
+    // 样本与根恰好同号，历史仍必须分别恢复两个独立 Registry。
+    // 后续无效请求都复用这一状态，不能各自创建空会话掩盖历史丢失。
+    // 空目标不应把上方选中的无关音符带入删除范围。
+    // 过期实例也不能通过相同实体编号获得当前谱面的删除权限。
+    // 错误草稿领域句柄不能绕过玩家与草稿的分离。
+    // 播放测试故意带有效目标，保证拒绝源于编辑状态而不是目标为空。
+    // 重做深度检查必须在这些请求之后，不能只在各自调用之前验证。
+    // 后续 Redo 应重放最初正确笔画，不能重放某个失败请求。
+    // 不调用 clear 或 markSaved 来人为制造预期的历史深度。
+    // 已有重做作为哨兵，所有无效批次不能新增空历史或丢失上一笔。
+    controller.handleCommand(
+        Logic::CmdDeleteSelected{ Logic::ObjectDeletion{ instance, {} } });
+    controller.handleCommand(Logic::CmdDeleteSelected{
+        Logic::ObjectDeletion{ instance + 1, command.m_objects->m_targets } });
+    controller.handleCommand(Logic::CmdDeleteSelected{ Logic::ObjectDeletion{
+        instance, { { other, Logic::ChartObjectKind::DraftNote } } } });
+    ctx.isPlaying = true;
+    controller.handleCommand(command);
+    ctx.isPlaying = false;
+    check(ctx.actionStack.getUndoStackSize() == 0 &&
+              ctx.actionStack.getRedoStackSize() == 1,
+          "empty stale wrong-domain and interrupted batches preserve redo");
+    ctx.actionStack.redo(ctx);
+    check(!ctx.noteRegistry.all_of<Logic::NoteComponent>(parent) &&
+              !ctx.sampleRegistry.all_of<Logic::SampleComponent>(sample) &&
+              ctx.noteRegistry.all_of<Logic::NoteComponent>(other),
+          "one redo repeats exact deletion");
+    ctx.actionStack.undo(ctx);
+    ctx.lastConfig.settings.professionalMode = false;
+    // 玩家折线仍按原能力开放，草稿与采样由专业模式各自限制。
+    // 本轮只提交采样，不能因为已有 Note 选择而扩大删除领域。
+    controller.handleCommand(Logic::CmdDeleteSelected{ Logic::ObjectDeletion{
+        instance, { { sample, Logic::ChartObjectKind::AudioSample } } } });
+    check(ctx.sampleRegistry.all_of<Logic::SampleComponent>(sample) &&
+              ctx.actionStack.getRedoStackSize() == 1,
+          "sample edit capability is enforced");
+}
 }  // namespace
 
 /// @brief 组合覆盖轻点、静止按住、快速终点、双向长条和第二指接管。
@@ -745,6 +1081,8 @@ int main()
               "endpoint tap never begins resume");
     }
     check(selected, "endpoint tap selects original object");
+    testTouchEraser();
+    testEraseDeletion();
     UI::Interaction::activeProfile().setNoteHoldBrush(true);
     return failures == 0 ? 0 : 1;
 }

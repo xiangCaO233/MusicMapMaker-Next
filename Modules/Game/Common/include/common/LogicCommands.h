@@ -6,6 +6,7 @@
 #include "common/ChartObjectKind.h"
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
+#include "common/ObjectDeletion.h"
 #include "common/SelectionOperation.h"
 #include "common/walkthrough/ComposeLessonNotes.h"
 #include "config/EditorConfig.h"
@@ -578,7 +579,11 @@ struct CmdCut {};
 /**
  * @brief 删除选中物件指令
  */
-struct CmdDeleteSelected {};
+struct CmdDeleteSelected {
+    /// @brief 空值保留桌面选择／悬浮语义；有值时仅删除明确目标。
+    /// 空列表是无操作，不允许回退选择，也不为预览创建中间历史。
+    std::optional<ObjectDeletion> m_objects;
+};
 
 /// @brief 删除创作教学红框指定的错误根物件，避免普通撤销误伤其它编辑。
 struct CmdRemoveComposeLessonNote {

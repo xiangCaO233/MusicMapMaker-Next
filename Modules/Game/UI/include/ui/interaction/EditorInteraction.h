@@ -117,6 +117,11 @@ public:
     /// @brief 显式选择简单笔画；默认不接受模式切换，桌面方案保持原规则。
     /// @param enabled 为真只绘制单键／长条，为假允许自由折线及末端续写。
     virtual void setNoteHoldBrush(bool enabled) {}
+    /// @brief 主画布显式物件擦除意图，默认关闭且不影响桌面右键。
+    /// @warning 每帧仅查询方案标量，实际笔画由移动私有解释器拥有。
+    virtual bool objectEraser() const { return false; }
+    /// @brief 只切换后续触控笔画，不更改当前工具、选区或物理输入。
+    virtual void setObjectEraser(bool enabled) {}
     /// @brief 是否在选中工具中启用无需键盘的右键编辑菜单。
     /// @warning 每帧只返回方案策略，不查询选择集合或访问会话锁。
     virtual bool selectionContextMenu() const;
