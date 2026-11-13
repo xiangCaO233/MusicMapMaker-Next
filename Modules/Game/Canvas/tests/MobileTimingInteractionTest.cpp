@@ -8,6 +8,10 @@
 #include "graphic/mobile/MobileTouchInput.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "logic/ecs/components/TimelineComponent.h"
+#include "logic/session/ActionController.h"
+#include "logic/session/EditorAction.h"
+#include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "presentation/TimelineInteractionPresentation.h"
 #include "presentation/mobile/MobileTimelineInteractionPresentation.h"
@@ -17,6 +21,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <memory>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -59,6 +64,11 @@ struct MobileTimingInteractionTestAccess {
     static double time(const TimelineCanvas& c, float y)
     {
         return c.canvasTimeAtLocalY({ 500, 500 }, y);
+    }
+    /// @brief 端点从实际画布正向投影取得，测试不另写像素／时间换算公式。
+    static float y(const TimelineCanvas& c, double time)
+    {
+        return static_cast<float>(c.canvasYAtTime({ 500, 500 }, time));
     }
     /// @brief 选择属于时间线自身，不借主画布选区作为成功证据。
     static std::size_t count(const TimelineCanvas& c)
@@ -126,7 +136,8 @@ public:
     }
     /// @brief 帧结束前仍推进控制器，快速抬手的延迟回放不能被测试省略。
     /// @warning 测试只做 CPU 布局与固定大小触点运算，不等待后台线程。
-    void frame(ImVec2 local, bool down = false, bool second = false)
+    void frame(ImVec2 local, bool down = false, bool second = false,
+               bool cancelled = false)
     {
         // 输入先用绝对屏幕逻辑像素进入 ImGui，再归一化发布给原始触点层。
         // 两条输入流采用同一个位置和顺序，不能用已经合成的鼠标代替原始峰值。
@@ -134,8 +145,9 @@ public:
         const ImVec2 point{ local.x + 8, local.y + 27 };
         using Graphic::TouchPhase;
         Graphic::publishMobileTouch(
-            down ? (m_down ? TouchPhase::Move : TouchPhase::Down)
-                 : TouchPhase::Up,
+            cancelled ? TouchPhase::Cancel
+            : down    ? (m_down ? TouchPhase::Move : TouchPhase::Down)
+                      : TouchPhase::Up,
             1,
             1,
             point.x / 1000,
@@ -197,10 +209,10 @@ private:
 /// 关闭输入分帧队列使每个样本边界可预测，生产分类仍采用真实 API。
 /// 方案切换先经历两个安全帧，不能沿用上一画布尚未退出的解释器。
 /// @details 测试只观察生产产生的草稿，不在夹具中替它提交。
-void begin()
+void begin(std::string_view profile = "touch-gestures")
 {
-    UI::Interaction::synchronizeProfile("touch-gestures", true);
-    UI::Interaction::synchronizeProfile("touch-gestures", true);
+    UI::Interaction::synchronizeProfile(profile, true);
+    UI::Interaction::synchronizeProfile(profile, true);
     ImGui::CreateContext();
     auto& io                        = ImGui::GetIO();
     io.IniFilename                  = nullptr;
@@ -342,6 +354,230 @@ void selections()
         ImGui::DestroyContext();
     }
 }
+/// @brief 一条真实触点产生的范围命令经过原动作栈，撤销／重做保留完整定义。
+/// @details 不调用画布私有提交函数，载荷只能来自上面的 EventBus 观察。
+/// @param submitted 真实触点发出的命令，不能用测试自己计算的新时间替代。
+/// @param source 起笔定义，作为 Undo 的独立期望值。
+/// @note 模型夹具没有先建历史，撤销必须只恢复这次端点调整。
+/// @note 参数值与函数定义按值比较，不以渲染后的像素相似作为正确性证据。
+void verifyRangeHistory(
+    const Logic::CmdUpdateTimelineEvent&              submitted,
+    const Common::Render::TimingInterpolationElement& source)
+{
+    Logic::SessionContext ctx;
+    // SessionContext 中的注册表独立于 UI 夹具，验证的确是跨边界命令消费。
+    // 内存谱面没有源路径，测试不加载工程或覆盖调用机器的工作区。
+    ctx.currentBeatmap              = std::make_shared<BeatMap>();
+    const auto               entity = ctx.timelineRegistry.create();
+    Logic::TimelineComponent original{ source.time,
+                                       source.effect,
+                                       source.value };
+    original.m_interpolation = source.interpolation;
+    ctx.timelineRegistry.emplace<Logic::TimelineComponent>(entity, original);
+    // 画布和模型夹具使用各自的代数句柄，仅替换路由身份，不改时间或曲线载荷。
+    auto command   = submitted;
+    command.entity = entity;
+    Logic::ActionController actions(ctx);
+    actions.handleCommand(command);
+    // 先保留实际 after，再撤销，Redo 不能只因返回了非空组件就判定成功。
+    // 时长、曲线及控制点一起比较，避免把段落错误退化成普通时间点。
+    const auto after =
+        ctx.timelineRegistry.get<Logic::TimelineComponent>(entity);
+    check(
+        after.m_timestamp == command.newTime &&
+            after.m_interpolation == command.interpolationOverride,
+        "touch range uses original model update and interpolation definition");
+    // 相同参数和曲线形状只改变范围，不应该因为重新采样而生成多个历史节点。
+    actions.handleCommand(Logic::CmdUndo{});
+    const auto& before =
+        ctx.timelineRegistry.get<Logic::TimelineComponent>(entity);
+    check(before.m_timestamp == original.m_timestamp &&
+              before.m_interpolation == original.m_interpolation,
+          "one undo restores the complete timing range");
+    actions.handleCommand(Logic::CmdRedo{});
+    // 读取原实体，不能因动作生成了另一个同时间事件而掩盖身份丢失。
+    const auto& redo =
+        ctx.timelineRegistry.get<Logic::TimelineComponent>(entity);
+    check(redo.m_timestamp == after.m_timestamp &&
+              redo.m_interpolation == after.m_interpolation,
+          "one redo restores the exact adjusted range");
+}
+/// @brief 选择首标记后从左右端点起手，区分端点、标记、普通点与取消边界。
+/// @details 四个方向都从真实输入开始；不直接填充选区或调用端点事务。
+/// @par 场景矩阵
+/// - 0／1：首端缩短与延长，原末端必须保持精确时间。
+/// - 2／3：末端缩短与延长，原起点不能随手指整体平移。
+/// - 4：把手轻点，没有实际移动，不能创建空历史。
+/// - 5：第二指接管已开始的预览，不能把残留第一指当作提交。
+/// - 6：平台 Cancel 不等于正常 Up，必须丢弃候选。
+/// - 7：同实体被协作修改，旧定义不能覆盖新值。
+/// - 8：同路径换实例，也不能复用相同实体编号提交。
+/// - 9：播放开始后拒绝原编辑，不通过修改播放位置继续拖动。
+/// - 10：移动后返回起点，精确恢复原范围，不留下吸附微调。
+/// - 11：扩大范围包含同泳道普通点，本地拒绝且不生成更新。
+/// - 12：没有持续移动帧，最终 Up 仍必须携带最后端点。
+/// - 13：首端跨过末端，只夹到 1 ms，不交换起终值。
+/// - 14：长按把手不打开正文菜单，释放也不制造编辑。
+/// - 15：切换到绘制工具，旧范围手势必须立即失效。
+/// - 16：经典桌面从同位置起手，仍走原整组移动命令。
+/// - 17：触屏从标记中央起手，仍保留正文整体移动空间。
+/// @note 初始范围使用曲线与非默认采样设置，线性默认值不能掩盖字段丢失。
+/// @note 只统计最终编辑命令，导航或视口通知不算作一次模型提交。
+void resizeRanges()
+{
+    for ( int scenario = 0; scenario < 18; ++scenario ) {
+        begin(scenario == 16 ? "classic-desktop" : "touch-gestures");
+        {
+            Fixture f(Logic::EditTool::Marquee);
+            // 先建立真实画布投影；后面按像素定义期望，但不复制其换算公式。
+            f.idle({ 150, 250 });
+            Common::Render::TimingInterpolationElement source;
+            source.entity = static_cast<entt::entity>(42);
+            source.effect = TimingEffect::SCROLL;
+            source.time   = Access::time(f.m_canvas, 350);
+            source.value  = 1.25;
+            source.interpolation.m_duration =
+                Access::time(f.m_canvas, 150) - source.time;
+            source.interpolation.m_endValue = 3.5;
+            // 非默认贝塞尔与密度提供不变量，只有 duration 允许随端点改变。
+            // 即使该曲线的视觉值接近直线，也不能在命令中替换为默认 Linear。
+            source.interpolation.m_curve            = TimingCurve::Bezier;
+            source.interpolation.m_samplesPerSecond = 33;
+            source.interpolation.m_controlX1        = .12;
+            source.interpolation.m_controlY2        = .81;
+            source.interpolation.m_beatNumerator    = 3;
+            source.interpolation.m_beatDenominator  = 8;
+            // 段落正文和首标记指向同一实体，是生产快照的两种描述。
+            // 两者都提供，防止只在人工孤立正文上通过而真实 marker 会抢走输入。
+            f.m_snapshot.timingInterpolations.push_back(source);
+            Common::Render::TimelineInteractiveElement row;
+            row.time          = source.time;
+            row.y             = 350;
+            row.scrollEntity  = source.entity;
+            row.scrollValue   = source.value;
+            row.effects       = Common::Render::SCROLL_EFFECT_SCROLL;
+            row.interpolation = source.interpolation;
+            // Timing 首点与正文都在同一滚动域，实体编号不同会让结果失去意义。
+            // 行结构的秒时间与插值的秒时长一致，不能误用原生文件毫秒时间戳。
+            f.m_snapshot.timelineElements.push_back(row);
+            // 段首标记中央轻点只选择，不应建立编辑或借用插值创建参数窗口。
+            f.frame({ 150, 350 }, true);
+            f.frame({ 150, 350 });
+            f.idle({ 150, 350 });
+            check(Access::count(f.m_canvas) == 1,
+                  "range marker tap selects the existing range");
+            std::vector<Logic::CmdUpdateTimelineEvent> updates;
+            // 单项范围更新与整组平移必须分开观察，不能只累计所有 Timing 命令。
+            // 订阅生命周期只覆盖这一笔，不能将夹具最初的选择动作算进来。
+            int        bodies{};
+            auto&      bus = Event::EventBus::instance();
+            const auto token =
+                bus.subscribe<Event::LogicCommandEvent>([&](const auto& e) {
+                    if ( const auto* cmd =
+                             std::get_if<Logic::CmdUpdateTimelineEvent>(
+                                 &e.command) )
+                        updates.push_back(*cmd);
+                    if ( std::holds_alternative<Logic::CmdUpdateTimelineEvents>(
+                             e.command) )
+                        ++bodies;
+                });
+            const bool tail = scenario == 2 || scenario == 3;
+            // 左右锚点位于泳道四分之一处；中央特例证明热区没有吃掉整个标记。
+            const ImVec2 from{ scenario >= 16 ? 150.F
+                               : tail         ? 175.F
+                                              : 125.F,
+                               tail ? 150.F : 350.F };
+            ImVec2       to{ from.x,
+                             tail ? (scenario == 2 ? 200.F : 100.F)
+                                  : (scenario == 1 ? 400.F : 300.F) };
+            if ( scenario == 13 ) to.y = 100;
+            if ( scenario == 11 ) {
+                // 同泳道普通点位于扩大范围内部；边界外的其他效果不能误报冲突。
+                auto other         = row;
+                other.scrollEntity = static_cast<entt::entity>(43);
+                other.interpolation.reset();
+                other.y    = 400;
+                other.time = Access::time(f.m_canvas, 400);
+                f.m_snapshot.timelineElements.push_back(other);
+                to.y = 450;
+            }
+            f.idle(from);
+            // 空闲仍推进原控制器，保证上一轻点的回放不会混入下一笔。
+            // 真正 Down 发生在最终锚点，不用移动之后的坐标代替起点。
+            f.frame(from, true);
+            if ( scenario == 14 )
+                // 固定 UI 时间步超过菜单阈值，不执行真实 sleep 或线程同步。
+                for ( int tick = 0; tick < 14; ++tick ) f.frame(from, true);
+            if ( scenario != 4 && scenario != 14 && scenario != 12 )
+                f.frame(to, true);
+            // 第二指、系统取消和会话变化必须丢弃这次 UI 预览，不能靠 Undo
+            // 回滚。 变更原定义的场景模拟协作更新，旧值不能在抬手时覆盖回来。
+            if ( scenario == 5 ) f.frame(to, true, true);
+            if ( scenario == 7 )
+                // 保留身份只改内容，不能被单纯的实体存在性检查漏过。
+                f.m_snapshot.timingInterpolations.front().value = 9;
+            if ( scenario == 8 ) f.m_snapshot.beatmapInstanceId = 2;
+            if ( scenario == 9 ) f.m_snapshot.isPlaying = true;
+            if ( scenario == 15 )
+                f.m_snapshot.currentTool = Logic::EditTool::Draw;
+            // 工具切换本身不是一次新的按下，不能从残留触点开始创建段落。
+            // 播放与换实例也不通过人为清理画布状态帮助被测实现取消。
+            if ( scenario == 10 ) {
+                // 先跨过移动门槛再回原点，区别于从未移动的把手轻点。
+                f.frame(from, true);
+                to = from;
+            }
+            f.frame(scenario == 4 || scenario == 14 ? from : to,
+                    false,
+                    false,
+                    scenario == 6);
+            f.idle(to);
+            // 排空四帧后观察，延后的 Begin／Release 不能在断言之后才补发更新。
+            // 成功场景必须一条，单纯吞掉所有触点也会被明确判错。
+            const bool success =
+                scenario < 4 || scenario == 12 || scenario == 13;
+            check(updates.size() == (success ? 1 : 0),
+                  "endpoint range commits once or cancels without history");
+            check(bodies == ((scenario == 16 || scenario == 17) ? 1 : 0),
+                  "endpoint never also dispatches whole-selection translation");
+            // 两个整体移动阳性对照证明未把原正文输入一并吞掉。
+            // 命令种类不同，端点更新与旧批量平移不能互相抵消计数错误。
+            if ( success && updates.size() == 1 ) {
+                const auto& cmd = updates.front();
+                check(
+                    cmd.entity == source.entity &&
+                        cmd.newValue == source.value &&
+                        cmd.interpolationOverride.has_value(),
+                    "range update retains the original entity and start value");
+                if ( cmd.interpolationOverride ) {
+                    // 仅允许 duration
+                    // 改变，其他函数与输出密度字段逐项语义相等。
+                    // 相反端点通过原范围独立计算，不读取被测对象的预览状态。
+                    auto expected       = source.interpolation;
+                    expected.m_duration = cmd.interpolationOverride->m_duration;
+                    check(*cmd.interpolationOverride == expected,
+                          "range resize preserves curve, density, end value "
+                          "and beat settings");
+                    check(
+                        tail ? cmd.newTime == source.time
+                             : std::abs(cmd.newTime +
+                                        cmd.interpolationOverride->m_duration -
+                                        source.time -
+                                        source.interpolation.m_duration) < 1e-9,
+                        "opposite endpoint remains fixed");
+                    if ( scenario == 13 )
+                        check(std::abs(expected.m_duration - .001) < 1e-9,
+                              "crossing the other endpoint clamps to one "
+                              "millisecond");
+                    verifyRangeHistory(cmd, source);
+                    // 真正动作栈验证在订阅退出前完成，模型与 UI 身份各自独立。
+                }
+            }
+            bus.unsubscribe<Event::LogicCommandEvent>(token);
+        }
+        ImGui::DestroyContext();
+    }
+}
 }  // namespace
 /// @brief 内存会话提供原参数校验所需环境，完成后不写项目工作区。
 int main()
@@ -363,6 +599,7 @@ int main()
     points();
     ranges();
     selections();
+    resizeRanges();
     engine.closeSession(session, false);
     settings = saved;
     return failures ? 1 : 0;

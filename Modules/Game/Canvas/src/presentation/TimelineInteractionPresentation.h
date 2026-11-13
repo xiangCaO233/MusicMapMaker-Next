@@ -39,6 +39,9 @@ public:
     /// @brief 待定触点和导航同样占有输入，切换方案前必须全部结束。
     /// @warning 每帧仅访问平台本地状态，不读取逻辑注册表。
     virtual bool hasGesture() const { return false; }
+    /// @brief 平台局部编辑附加层；桌面默认不绘制触控把手。
+    /// @warning 每帧只借用画布和快照，不发布数据或分配状态。
+    virtual void renderOverlay(TimelineCanvas&, const ImVec2&, const ImVec2&) {}
     /// @brief 鼠标可以使用悬浮说明，触屏改由长按参数入口承担。
     /// @warning 每帧只查询平台能力，不分配对象或读取会话状态。
     virtual bool showHoverDetails() const { return true; }
@@ -69,6 +72,17 @@ public:
     virtual const char* rangeHintKey(bool) const { return nullptr; }
 
 protected:
+    /// @brief
+    /// 使用原时间投影；吸附仅在明确释放时执行，连续预览不创建临时拍点表。
+    /// @warning 拖动帧只反投影；snap=true 是低频释放边沿，不得用于每帧回放。
+    static double rangeTime(TimelineCanvas&, const ImVec2& size, float localY,
+                            bool snap);
+    /// @brief 将范围边界投影到画布本地像素，包含布局补偿。
+    /// @warning 每帧只读取已发布的滚动分段，不扫描注册表。
+    static float rangeY(TimelineCanvas&, const ImVec2& size, double time);
+    /// @brief 抬手提交完整段落定义，沿用原格式元数据、合法性检查与单次撤销。
+    static void commitRange(TimelineCanvas&,
+                            const Common::Render::TimingInterpolationElement&);
     /// @brief 只借用当前不可变快照，不复制共享所有权。
     /// @warning 每帧只读取 UI 本地观察指针，禁止跨帧保存或等待逻辑线程。
     static const Common::Render::RenderSnapshot* snapshot(

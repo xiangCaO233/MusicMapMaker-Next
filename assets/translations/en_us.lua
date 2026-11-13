@@ -20,6 +20,8 @@ return {
 	["ui.mobile.timing.preview_hint"] = "Blue: curve. Yellow: actual output samples. Dense areas preserve peaks and valleys.",
 	["ui.mobile.timing.range_hint"] = "Drag to define a range. Long-press it with Select to edit again. Use Save or Cancel below.",
 	["ui.mobile.timing.save_range"] = "Save range",
+	["ui.mobile.timing.resize_hint"] = "Release to snap.\nSecond finger cancels.",
+	["ui.mobile.timing.resize_conflict"] = "Range overlaps another timing.\nRelease to cancel.",
 	["ui.mobile.settings.save_format"] = "Save as",
 	["ui.mobile.settings.reverse_scroll"] = "Reverse scrolling direction",
 	["ui.mobile.settings.scroll_snap"] = "Snap while scrolling",

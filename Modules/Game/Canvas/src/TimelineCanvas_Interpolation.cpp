@@ -575,6 +575,9 @@ void TimelineCanvas::renderInterpolationOverlay(const ImVec2& position,
                m_interpolationEnd,
                m_interpolationDragPreview);
     draw->PopClipRect();
+    // 平台附加层最后提交，使细把手不被原函数曲线或范围带盖住。
+    // 默认桌面实现为空，移动状态及其头文件不传播到共同画布定义。
+    m_timingPresentation->renderOverlay(*this, position, size);
 }
 
 /// @brief 使用工作副本编辑范围、函数与采样密度，一次提交一个可撤销事务。

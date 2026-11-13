@@ -3,6 +3,7 @@
 #include "MobileNavigationRouting.h"
 #include "MobilePointerInputScope.h"
 #include "MobilePointerOwnership.h"
+#include "MobileTimingRange.h"
 #include "common/SelectionOperation.h"
 #include "common/render/RenderSnapshot.h"
 #include "config/AppConfig.h"
@@ -14,6 +15,7 @@
 #include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <imgui.h>
 #include <string>
@@ -44,6 +46,12 @@ namespace
 /// 同路径重新加载会更换实例号，旧实体编号不得恢复到新实例。
 /// 菜单打开冻结目标和时间，随后移动到按钮不会改变粘贴锚点。
 /// 参数编辑沿用公共窗口，只有菜单呈现和输入分类归移动端所有。
+/// @par 局部范围
+/// 首尾候选拥有独立事务，不复用正文的整组选区移动标志。
+/// 把手只属于单选段落，标记中央和相邻泳道继续交给原选择器。
+/// 正常释放将时间与完整插值定义交给原命令，逻辑层仍是最终合法性来源。
+/// 局部附加绘制由中立虚接口调用，公共画布头不包含移动候选类型。
+/// 桌面派生退路不读取端点状态，原快捷键与鼠标拖动不经过移动夹取规则。
 class MobileTimelineInteractionPresentation final
     : public TimelineInteractionPresentation
 {
@@ -52,8 +60,43 @@ public:
     /// @warning 每帧只读固定大小本地状态，不等待逻辑线程。
     bool hasGesture() const override
     {
-        return m_gesture.active() || m_navigation.active() ||
+        return m_range.pending() || m_gesture.active() ||
+               m_navigation.active() ||
                m_ownership.active(Graphic::mobileTouchSnapshot());
+    }
+    /// @brief 只为单独选中的段落绘制端点，普通点不借用段落热区。
+    /// @details 此层位于原曲线之后，不改变曲线缓存、采样或播放值。
+    /// 未选对象没有端点热区，复选也不提供可能与整组平移冲突的局部入口。
+    /// 活动范围使用本地候选，原曲线保留为参考，不等待逻辑线程确认。
+    /// 参数弹窗、抽屉和播放拥有更高输入优先级，把手同步隐藏。
+    /// @warning 每帧借用快照和选择 ID，不复制定义或访问 Registry。
+    void renderOverlay(TimelineCanvas& c, const ImVec2& origin,
+                       const ImVec2& size) override
+    {
+        const auto* s = snapshot(c);
+        if ( !UI::Interaction::activeProfile().touchGestures() || !s ||
+             !s->hasBeatmap || s->isPlaying ||
+             s->currentTool != Logic::EditTool::Marquee ||
+             UI::workspaceBlocksCanvasInput() ||
+             ImGui::IsPopupOpen(
+                 nullptr,
+                 ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) )
+            return;
+        const auto* segment =
+            m_range.pending() ? m_range.preview() : selectedRange(c, *s);
+        if ( !segment ) return;
+        // 正反投影共用已有时间轴，离屏端点不夹成屏幕边缘的伪把手。
+        m_range.render(
+            *segment,
+            origin,
+            size,
+            Config::AppConfig::instance().getEditorSettings().professionalMode,
+            Config::AppConfig::instance().getWindowContentScale(),
+            origin.y + rangeY(c, size, segment->time),
+            origin.y +
+                rangeY(
+                    c, size, segment->time + segment->interpolation.m_duration),
+            !m_range.pending() || m_range.valid(*s));
     }
     /// @brief 触屏没有离开后悬浮，参数说明由菜单编辑入口承担。
     /// @warning 每帧仅读取当前方案能力，不执行动作或获取会话锁。
@@ -220,6 +263,13 @@ public:
         if ( taken || interrupted ||
              (m_ownership.blocksSingle() && m_gesture.active()) )
             rollback(c, same);
+        // 协作修改或工具切换使冻结定义失效，取消不能覆盖新段落。
+        // 原始触点尚未结束时不从当前指尖抓取另一个目标。
+        if ( m_range.pending() && (s->currentTool != Logic::EditTool::Marquee ||
+                                   !m_range.matches(*s)) )
+            rollback(c, same);
+        // 取消只清理本笔，导航仍可使用第二指即时更新视图。
+        // 接管不转写成鼠标释放，避免范围在中断时落盘。
         // 两指共用主画布的非阻塞平移和缩放协议，但 Timeline 忽略横向平移。
         // 此帧边界与普通 Timing 输入完全一致，导航不读取另一画布的相机矩阵。
         // 二维时间线没有横向摄像机自由度，逻辑入口只接受其直接导航协议。
@@ -250,6 +300,40 @@ public:
         auto       output = MobileCanvasGesture::Output::Suppress;
         const bool eligible =
             allowed && hovered && inside(point.x, point.y) && !overlay;
+        if ( eligible && !m_ownership.blocksSingle() &&
+             ImGui::IsMouseClicked(0) && !m_gesture.active() &&
+             s->currentTool == Logic::EditTool::Marquee ) {
+            // 身份锁存在真实按下，不在越过移动门槛后从正文重新抓目标。
+            // 抓取偏置包含当前显示补偿，热区边缘起手也不跳动。
+            // 单选只查集合大小和缓存 ID，不复制全部时间线目标。
+            if ( const auto* segment = selectedRange(c, *s) ) {
+                const float first = origin.y + rangeY(c, size, segment->time);
+                const float last =
+                    origin.y +
+                    rangeY(c,
+                           size,
+                           segment->time + segment->interpolation.m_duration);
+                const auto part = MobileTimingRange::hit(
+                    *segment,
+                    point,
+                    origin,
+                    size,
+                    Config::AppConfig::instance()
+                        .getEditorSettings()
+                        .professionalMode,
+                    Config::AppConfig::instance().getWindowContentScale(),
+                    first,
+                    last);
+                m_range.latch(
+                    *segment,
+                    part,
+                    (part == MobileTimingRange::Part::Start ? first : last) -
+                        point.y,
+                    point.y);
+            }
+        }
+        // 把手关闭长按菜单分类；静止按住只等待移动或释放。
+        // 正文未锁存端点，仍保持原有菜单与整体拖动能力。
         if ( !menuOpen && !m_menuWasOpen && !m_ownership.blocksSingle() ) {
             if ( ImGui::IsMouseClicked(0) ) m_origin = point;
             output = m_gesture.update(
@@ -260,7 +344,8 @@ public:
                 ImGui::GetTime(),
                 10 * Config::AppConfig::instance().getWindowContentScale(),
                 eligible || (m_gesture.active() && !interrupted),
-                s->currentTool == Logic::EditTool::Marquee);
+                s->currentTool == Logic::EditTool::Marquee &&
+                    !m_range.pending());
         }
         if ( !menuOpen && !m_menuWasOpen ) {
             // 一次轻点分为 Begin 和 Release 两帧回放，以复用原控制器生命周期。
@@ -275,11 +360,41 @@ public:
             // 本地选择会在拖动起笔时改变，因此接管前需要保留原集合。
             // 此复制只发生在用户开始一笔的边沿，不处于空闲逐帧路径。
             // 模型尚未变化，取消只需恢复 UI 集合并清除预览标志。
-            if ( output == MobileCanvasGesture::Output::Begin ) {
+            if ( output == MobileCanvasGesture::Output::Begin &&
+                 !m_range.pending() ) {
                 m_beforeSelection = selection(c);
                 m_hasBaseline     = true;
             }
-            {
+            if ( m_range.pending() ) {
+                // 不调用旧指针状态机，同一手指不能同时提交整组选区的平移。
+                // 相反端点和原函数已固定，连续帧只更新两个范围标量。
+                // 快速释放采用分类器保存的最终坐标，不用 Begin 的旧起点。
+                // 端点不回放正文整体拖动，连续预览只更新本地范围。
+                // 松手沿用原吸附助手，避免每帧创建它的临时拍点容器。
+                const bool released =
+                    output == MobileCanvasGesture::Output::Release ||
+                    (output == MobileCanvasGesture::Output::Pass &&
+                     !ImGui::IsMouseDown(0));
+                const bool moved =
+                    m_gesture.dragging() || m_gesture.finishedDrag();
+                const float y = output == MobileCanvasGesture::Output::Release
+                                    ? replay.y
+                                    : point.y;
+                if ( m_range.update(
+                         output,
+                         y,
+                         moved,
+                         released,
+                         *s,
+                         [&](float absoluteY, bool snap) {
+                             return rangeTime(
+                                 c, size, absoluteY - origin.y, snap);
+                         }) )
+                    commitRange(c, *m_range.preview());
+                if ( released ) m_range.cancel();
+                // 冲突或无变化也结束候选，不能留到下一次触摸时补交。
+                // 系统与多指中断已在上游清理，此处只可能消费正常释放。
+            } else {
                 MobilePointerInputScope input(
                     output,
                     replay,
@@ -349,6 +464,26 @@ public:
     }
 
 private:
+    /// @brief 单选才提供局部边界，复选继续沿用正文整组平移。
+    /// @details 普通点或失效句柄返回空，不用屏幕最近段落猜测用户选中对象。
+    /// 非法时间或短于最小范围的段落不提供端点，避免构造无序夹取边界。
+    /// @warning 每帧只匹配缓存 ID，不构造目标列表或复制插值缓存。
+    const Common::Render::TimingInterpolationElement* selectedRange(
+        TimelineCanvas& c, const Common::Render::RenderSnapshot& s) const
+    {
+        if ( selection(c).size() != 1 ) return nullptr;
+        // 本地集合只包含句柄；实际定义必须重新从本帧快照取得。
+        // 同号的普通点不会命中插值描述，因此不会误出现范围把手。
+        const auto entity = *selection(c).begin();
+        for ( const auto& range : s.timingInterpolations )
+            if ( range.entity == entity && range.time >= 0 &&
+                 std::isfinite(range.time) &&
+                 std::isfinite(range.interpolation.m_duration) &&
+                 std::isfinite(range.time + range.interpolation.m_duration) &&
+                 range.interpolation.m_duration >= .001 )
+                return &range;
+        return nullptr;
+    }
     /// @brief 接管回退本笔的 UI 选择及预览，不回滚任何此前已提交的修改。
     /// @details 只有同实例可以恢复基线；另一谱面不能复用实体编号。
     /// @pre 调用者已经判定第二指、系统取消、弹层或会话切换的接管原因。
@@ -359,6 +494,9 @@ private:
     /// 后续 clear 保留容量，连续多次编辑不会重复创建解释器或桶数组。
     void rollback(TimelineCanvas& c, bool same)
     {
+        // 本地端点从未改模型，丢弃 optional 不需要反向命令或历史补偿。
+        // 首次取消后即为空，后续遮罩帧重复调用不再增减缓存所有权。
+        m_range.cancel();
         if ( m_hasBaseline && same ) selection(c).swap(m_beforeSelection);
         if ( m_gesture.active() || m_hasBaseline ) cancel(c);
         m_gesture.cancel();
@@ -482,6 +620,7 @@ private:
         ImGui::EndDisabled();
         return edit;
     }
+    MobileTimingRange m_range;  ///< 移动端局部首尾候选，公共画布不包含其定义。
     MobileCanvasGesture    m_gesture;     ///< 轻点、拖动和长按的非阻塞分类器。
     MobilePointerOwnership m_ownership;   ///< 原始代际归属及多指接管门闩。
     MobileCanvasNavigation m_navigation;  ///< 双指平移缩放及历史轻触状态。

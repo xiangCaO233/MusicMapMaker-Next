@@ -5,9 +5,44 @@
 #include "event/logic/LogicCommandEvent.h"
 #include "ui/interaction/EditorInteraction.h"
 #include <cmath>
+#include <optional>
 
 namespace MMM::Canvas
 {
+/// @brief 平台端点编辑借用既有时间轴，不复制 BPM、HS 或吸附算法。
+/// @warning 连续帧 snap=false 只反投影；snap=true 仅允许释放时调用。
+double TimelineInteractionPresentation::rangeTime(TimelineCanvas& c,
+                                                  const ImVec2&   size,
+                                                  float localY, bool snap)
+{
+    const auto time = c.canvasTimeAtLocalY(size, localY);
+    if ( !snap ) return time;
+    // 原助手负责已有时间点、拍线、忽略吸附开关和曲线 BPM 的统一语义。
+    // 临时拍点容器限制在这次离散释放，不进入端点每帧跟随路径。
+    bool snapped{};
+    return c.snapTimingTime(size, time, localY, snapped);
+}
+/// @brief 正反投影来自同一画布，窗口移动或纵向补偿不会改变把手时间。
+/// @warning 每帧固定快照查询，不持有会话所有权。
+float TimelineInteractionPresentation::rangeY(TimelineCanvas& c,
+                                              const ImVec2& size, double time)
+{
+    return static_cast<float>(c.canvasYAtTime(size, time));
+}
+/// @brief 最终端点只提交一条原生 Timing 更新，保留全部曲线与采样参数。
+/// @warning 正常释放的离散路径复制值；不在预览帧复制共享缓存所有权。
+void TimelineInteractionPresentation::commitRange(
+    TimelineCanvas& c, const Common::Render::TimingInterpolationElement& value)
+{
+    // 不展开段落为采样点，不合并相邻段，不触碰其它已选时间点。
+    // 不传元数据覆盖，时间变化时由原命令清理失效拍位并保留其它格式属性。
+    c.publishTimelineCommand(Event::LogicCommandEvent(
+        Logic::CmdUpdateTimelineEvent{ value.entity,
+                                       value.time,
+                                       value.value,
+                                       std::nullopt,
+                                       value.interpolation }));
+}
 /// @brief 通用入口只进行一次平台分派，具体解释器拥有私有输入状态。
 /// @warning 每帧虚调用，不获取会话互斥锁或创建新的呈现对象。
 void TimelineCanvas::handleTimingCanvasInteraction(const ImVec2& origin,

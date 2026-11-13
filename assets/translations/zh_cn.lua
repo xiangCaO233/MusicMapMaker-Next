@@ -20,6 +20,8 @@ return {
 	["ui.mobile.timing.preview_hint"] = "蓝线为函数，黄色为真实输出采样；密集区域按像素保留峰谷。",
 	["ui.mobile.timing.range_hint"] = "拖动确定范围；选择工具下长按段落可再次编辑。使用下方保存或取消按钮结束。",
 	["ui.mobile.timing.save_range"] = "保存段落",
+	["ui.mobile.timing.resize_hint"] = "松手吸附；第二指取消。",
+	["ui.mobile.timing.resize_conflict"] = "范围与其他时间点冲突；松手取消。",
 	["ui.mobile.settings.save_format"] = "保存为",
 	["ui.mobile.settings.reverse_scroll"] = "反转滚动方向",
 	["ui.mobile.settings.scroll_snap"] = "滚动时启用磁吸",
