@@ -75,5 +75,15 @@ int main()
                  .5f,
                  5.1);
     if ( !input.snapshot().m_cancelled || input.snapshot().m_count ) return 10;
+    // 一帧内只有 Down 与 Up 仍须交付正常最终坐标；Cancel 不覆盖它。
+    // 最终释放位置不等于原始 Down，故意选择明显不同的坐标。
+    // 它只服务于正常单指完成，多指消费仍须检查 peak 和取消标记。
+    input.update(TouchPhase::Down, 1, 21, .2f, .3f, 6);
+    input.update(TouchPhase::Up, 1, 21, .4f, .7f, 6.1);
+    if ( input.snapshot().m_count || input.snapshot().m_releaseX != .4f ||
+         input.snapshot().m_releaseY != .7f )
+        return 11;
+    input.cancel();
+    if ( input.snapshot().m_releaseY != .7f ) return 12;
     return 0;
 }

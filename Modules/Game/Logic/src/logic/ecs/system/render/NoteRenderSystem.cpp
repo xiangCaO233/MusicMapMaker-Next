@@ -244,7 +244,7 @@ void NoteRenderSystem::generateSnapshot(
     float viewportWidth, float viewportHeight, float judgmentLineY,
     int32_t trackCount, int32_t bgmTrackCount, int32_t draftTrackCount,
     const Config::EditorConfig& config, float mainViewportHeight,
-    HitFXSystem* hitFXSystem)
+    HitFXSystem* hitFXSystem, float previewAreaRatio)
 {
     // 相机 ID 决定视图职责，不根据视口尺寸猜测主画布。
     // 多个主画布会话都应走相同的主画布分支。
@@ -590,6 +590,7 @@ void NoteRenderSystem::generateSnapshot(
                                                   trackCount,
                                                   config,
                                                   mainViewportHeight,
+                                                  previewAreaRatio,
                                                   leftX,
                                                   rightX,
                                                   topY,
@@ -1849,6 +1850,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
 /// @param trackCount 玩家轨数，用于计算单轨宽度。
 /// @param config 包含预览边距、覆盖范围和主画布布局的配置。
 /// @param mainViewportHeight 主画布像素高度。
+/// @param previewAreaRatio 本笔触控的范围覆盖；零保留经典方案配置。
 /// @param leftX 输出预览左边界。
 /// @param rightX 输出预览右边界。
 /// @param topY 输出预览上边界。
@@ -1863,8 +1865,9 @@ void NoteRenderSystem::generatePreviewSnapshot(
     RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
     float viewportWidth, float viewportHeight, float judgmentLineY,
     int32_t trackCount, const Config::EditorConfig& config,
-    float mainViewportHeight, float& leftX, float& rightX, float& topY,
-    float& bottomY, float& trackAreaW, float& singleTrackW, float& renderScaleY)
+    float mainViewportHeight, float previewAreaRatio, float& leftX,
+    float& rightX, float& topY, float& bottomY, float& trackAreaW,
+    float& singleTrackW, float& renderScaleY)
 {
     if ( !snapshot->hasBeatmap ) return;
 
@@ -1890,8 +1893,12 @@ void NoteRenderSystem::generatePreviewSnapshot(
     // 预览像素高度除以要覆盖的主画布滚动高度。
     // areaRatio 越大，同一时间跨度显示得越紧凑。
     // 调用方随后把同一比例用于音符、拍线与视野包围盒。
-    renderScaleY =
-        previewDrawH / (mainEffectiveH * config.visual.previewConfig.areaRatio);
+    // 手势尚未释放时也必须更新真实几何，不能只更新拾取反投影。
+    // 标量由会话传入，避免为了一个范围值逐帧复制整份编辑配置。
+    const float ratio = previewAreaRatio > 0.0f
+                            ? previewAreaRatio
+                            : config.visual.previewConfig.areaRatio;
+    renderScaleY      = previewDrawH / (mainEffectiveH * ratio);
 
     // 记录静态边界
     snapshot->staticVertexCount =

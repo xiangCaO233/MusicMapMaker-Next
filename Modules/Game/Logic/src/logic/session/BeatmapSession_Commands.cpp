@@ -3575,6 +3575,8 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
     // 配置已排入同一会话队列，不能从 UI 线程直接写这个临时状态。
     m_ctx->m_pointerTimelineZoom.reset();
     m_ctx->m_pointerZoomFinished = false;
+    m_ctx->m_pointerPreviewAreaRatio.reset();
+    m_ctx->m_pointerPreviewFinished = false;
     if ( disablePolylineEditing ) {
         // 能力关闭是低频设置动作，允许遍历 Note 交互视图清理不可编辑对象。
         auto view =

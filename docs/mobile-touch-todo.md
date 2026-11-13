@@ -1,17 +1,58 @@
 # 移动端触屏交互 TODO
 
-更新时间：2026-11-13。继续当前分支 `feat/android-sdl3`。本机已快进拉取至 `26a210f8`，接回 T03～T07；本批补齐 **T08 批注与数据表格**，核心验收及限制见下文。下一项为 **T09 预览区导航**。
+更新时间：2026-11-13。继续当前分支 `feat/android-sdl3`。本机已快进拉取至 `26a210f8`，接回 T03～T07；本地 `6fa7c907` 已完成 T08；本批补齐 **T09 预览区导航**，小屏／平板模拟器已验收，NX809J 当前锁屏、待手动解锁补验。下一项为 **T10 音频图表与资源面板**。
 
 ## 换机接续入口
 
 - 先阅读仓库根目录 `AGENTS.md` 和本文。用户明确要求继续当前分支；保持经典桌面、纯鼠标方案和业务模型不变，一个职责一个提交，不夹带重构或公开发布。
-- 换机后先获取远端 `feat/android-sdl3`，核对 `git status`、当前分支及上述业务提交是否存在，核对本机回归及 T08 验收记录后再继续 T09；实体机按可用性单独补验。已有本地修改时先保留，不以重置或强推覆盖。
-- T02 正交结构已完成本机三设备核心回归，后续从 T09 继续；先核对已有能力，再设计触控入口。表中的“待完善”包含已有桌面功能的触控强化，不能当作这些业务功能完全不存在，也不能宣称所有候选问题都已在设备复现。
+- 换机后先获取远端 `feat/android-sdl3`，核对 `git status`、当前分支及上述业务提交是否存在，核对本机回归及 T09 验收记录后再继续 T10；实体机按可用性单独补验。已有本地修改时先保留，不以重置或强推覆盖。
+- T02 正交结构已完成本机三设备核心回归，后续先补 T09 真机验收，再从 T10 继续；先核对已有能力，再设计触控入口。表中的“待完善”包含已有桌面功能的触控强化，不能当作这些业务功能完全不存在，也不能宣称所有候选问题都已在设备复现。
 - 上一机器产物在 `/home/xiang/Android/mmm-smoke/main`，本次 Windows 产物在项目忽略目录 `build-android`；这些内容不会随普通 Git 拉取迁移；需要原始证据时单独复制，不能将备份、APK 或缓存加入源码提交。新机器重新检查 SDK／NDK／JDK、依赖、可用设备和签名；不得沿用本机 ADB 序号、路径或授权状态作为已连接证据。
 
 ## 触屏交互 TODO
 
 优先级及顺序沿用本轮讨论；每项先检查实际缺口，再按独立职责实现、验收和提交。`待完善` 不是已确认缺陷清单。
+
+### T09 预览区导航（2026-11-13）
+
+- 触控方案下，内容区轻点按实际显示帧反投影定位；单指拖动浏览，双指平移／捏合缩放。密度栏继续按全谱时间定位，顶部为曲尾、底部为开头。预览范围限制沿用 1～50，不改变主画布倍率、横移、物件、选区或编辑历史；经典方案保留原鼠标路径。
+- 首触点决定窗口及内容／密度栏归属，跨窗第二指不接管；双指任一指抬起即结束，剩余指不回放点击。系统 Cancel、三指、几何变化、弹层、隐藏、切谱及切换方案结束最后有效浏览，未成立的轻点不补发。预览不使用主画布的二指撤销／三指重做。
+- 定位沿用真实 ScrollCache 和正式 Seek，支持跨变速段；轻点不读取滞后的 Hover 时间。排队命令绑定谱面实例，切谱后拒绝旧目标。正常 Up 单独保留最终坐标，Down／Up 合帧不丢拖动尾点。连续缩放只传标量覆盖，绘制、可见范围和反投影同步使用新倍率；释放后短配置锁发布最终范围，直到逻辑采纳才撤去覆盖，不逐帧广播整份配置或等待会话长锁。
+- Linux 完整构建及相关 CTest **7/7** 通过，最终完整套件 **199/200**；只有此前已登记的 `CanvasTouchNavigationTest` 失败，未修改或绕过。真实 ImGui／原始触点／播放控制器回归覆盖跨 SV 轻点、合帧尾点、多指死区与锚点、取消、外部起点、隐藏／弹层／切谱、经典方案回退和最终配置交接；实际会话渲染快照验证配置尚未采纳时预览几何已更新，主画布比例仍为一。
+- Android **x86_64／arm64-v8a** 均构建、签名校验通过；两份隔离 APK 内原生库与集中构建库按 ELF Build ID 核对一致。小屏 **1280×720／160dpi**、平板 **2560×1600／320dpi** 完成轻点、单指浏览、按住期间的双指缩放、密度栏及保存回读；平板另注入 `ACTION_CANCEL`，释放后图像保留最后有效浏览。两种布局导航后整份谱面 JSON 与各自首次保存基线一致，主画布倍率／横移仍为 1／0。正常退出读取工作区定位时间，小屏密度栏点按为约 17.453 秒，平板拖动为约 34.340 秒。
+- 本批使用 7 物件／3 Timing 的无声几何测试工程，未验收音频播放，也未以触点注入替代真人手感、系统手势冲突或热插拔测试。NX809J 新测试包 `.next.t09probe` 已安装，因系统锁屏尚未进入应用；需手动解锁后补验，不能算真机通过。不覆盖真实应用、旧验收包或修改 442dpi。
+- 证据、脚本、APK、配置备份及注释率 CSV 集中在 `/home/xiang/Android/mmm-smoke/main/evidence/t09-20261113`。模拟器仅更新独立 `.next.t01probe`，原配置／INI 已逐字节恢复，13 份旧谱面哈希不变，尺寸／密度恢复 **1080×2400／420dpi**，模拟器继续在线；本批几何工程与注入 jar 已从模拟器移除。不改 `.gitignore`，不提交产物／缓存。本批只保留本地提交，不推送或合并。
+
+本批 26 个新增／修改代码及 CMake 文件均满足逐文件 30% 注释率；`cloc --by-file` 结果如下（完整原始统计在上述集中目录）。
+
+| 路径 | 注释行 | 代码行 | 注释率 |
+| --- | ---: | ---: | ---: |
+| `Modules/Game/Canvas/CMakeLists.txt` | 146 | 340 | 30.04% |
+| `Modules/Game/Canvas/include/canvas/PreviewCanvas.h` | 89 | 106 | 45.64% |
+| `Modules/Game/Canvas/src/PreviewCanvas.cpp` | 360 | 829 | 30.28% |
+| `Modules/Game/Canvas/src/presentation/desktop/DesktopCanvasFactory.cpp` | 12 | 26 | 31.58% |
+| `Modules/Game/Canvas/src/presentation/mobile/MobileCanvasFactory.cpp` | 13 | 28 | 31.71% |
+| `Modules/Game/Common/include/common/LogicCommands.h` | 423 | 585 | 41.96% |
+| `Modules/Game/Graphic/include/graphic/mobile/MobileTouchInput.h` | 23 | 47 | 32.86% |
+| `Modules/Game/Graphic/src/mobile/MobileTouchInput.cpp` | 40 | 92 | 30.30% |
+| `Modules/Game/Graphic/tests/MobileTouchInputTest.cpp` | 27 | 61 | 30.68% |
+| `Modules/Game/Logic/CMakeLists.txt` | 139 | 321 | 30.22% |
+| `Modules/Game/Logic/include/logic/EditorEngine.h` | 350 | 229 | 60.45% |
+| `Modules/Game/Logic/include/logic/ecs/system/NoteRenderSystem.h` | 122 | 244 | 33.33% |
+| `Modules/Game/Logic/include/logic/session/PlaybackController.h` | 56 | 54 | 50.91% |
+| `Modules/Game/Logic/include/logic/session/context/SessionContext.h` | 118 | 236 | 33.33% |
+| `Modules/Game/Logic/src/logic/EditorEngine.cpp` | 1641 | 3794 | 30.19% |
+| `Modules/Game/Logic/src/logic/ecs/system/render/NoteRenderSystem.cpp` | 609 | 1415 | 30.09% |
+| `Modules/Game/Logic/src/logic/session/BeatmapSession.cpp` | 393 | 916 | 30.02% |
+| `Modules/Game/Logic/src/logic/session/BeatmapSession_Commands.cpp` | 1319 | 3064 | 30.09% |
+| `Modules/Game/Logic/src/logic/session/BeatmapSession_Rendering.cpp` | 656 | 1513 | 30.24% |
+| `Modules/Game/Logic/src/logic/session/PlaybackController.cpp` | 319 | 738 | 30.18% |
+| `Modules/Game/Canvas/src/presentation/PreviewInteractionPresentation.h` | 16 | 33 | 32.65% |
+| `Modules/Game/Canvas/src/presentation/mobile/MobilePreviewGesture.h` | 76 | 174 | 30.40% |
+| `Modules/Game/Canvas/src/presentation/mobile/MobilePreviewInteractionPresentation.cpp` | 61 | 142 | 30.05% |
+| `Modules/Game/Canvas/tests/MobilePreviewInteractionTest.cpp` | 181 | 421 | 30.07% |
+| `Modules/Game/Logic/src/logic/session/PlaybackController_Preview.cpp` | 29 | 67 | 30.21% |
+| `Modules/Game/Logic/src/logic/session/PreviewNavigationProjection.h` | 11 | 25 | 30.56% |
 
 ### T08 批注与数据表格（2026-11-13）
 
@@ -89,7 +130,7 @@
 | T06 | P2 | 已实现，手机／平板模拟器验收通过 | Timing 段落局部修改 | 点选首标记后左右把手分别调整首尾，固定另一端；保留原标记整体移动，复用原插值、吸附和单次撤销命令。 |
 | T07 | P2 | 已实现，手机／平板模拟器验收通过 | 高级曲线与预览图 | 扩大控制点热区、单指手绘与取消；输出图单指平移、双指缩放及明确缩小／全段／放大按钮；与页面滚动隔离。 |
 | T08 | P2 | 已实现，核心验收通过 | 批注与数据表格 | 批注点按常驻阅读、长按编辑及明确删除／历史；Timing 点选、多选、批量操作与独立参数窗。范围及设备边界见本批记录。 |
-| T09 | P2 | 待完善 | 预览区导航 | 区分轻点定位、拖动浏览与缩放，接入触点归属、多指接管和取消；确认不会误移动主画布物件或穿透其他窗口。 |
+| T09 | P2 | 已实现，手机／平板模拟器已验；真机待解锁 | 预览区导航 | 轻点、单指浏览、双指缩放、密度定位及取消已回归；真机补验与注入边界见本批记录。 |
 | T10 | P2 | 待完善 | 音频图表与资源面板 | 保留已有 EQ／行高／按钮布局成果；核对波形／频谱导航、资源长按操作与拖放替代入口，区分滑块精调和页面滚动。 |
 | T11 | P2 | 待完善 | 数值与文本属性输入 | 支持便捷精调、明确确认／取消；手机软键盘不能遮住活动字段与提交按钮，焦点切换和返回不能误保存。 |
 | T12 | P3 | 待审计 | 其余辅助工具 | 逐项检查布局、BMS、测速等窗口中的修饰键、右键、双击和 Hover 唯一入口；先登记可复现缺口，再按功能独立适配。 |

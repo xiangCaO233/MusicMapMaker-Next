@@ -1,5 +1,6 @@
 #include "presentation/AnnotationTablePresentation.h"
 #include "presentation/CanvasInteractionPresentation.h"
+#include "presentation/PreviewInteractionPresentation.h"
 #include "presentation/TimelineInteractionPresentation.h"
 namespace MMM::Canvas
 {
@@ -25,5 +26,13 @@ createTimelineInteractionPresentation()
 std::unique_ptr<AnnotationTablePresentation> createAnnotationTablePresentation()
 {
     return std::make_unique<AnnotationTablePresentation>();
+}
+/// @brief 预览导航拥有独立平台状态，不借用主画布手势解释器。
+// 构造只发生于视图创建，不在连续输入帧分配对象。
+// 预览状态独占，不能把主画布的选择或历史轻触带入导航。
+std::unique_ptr<PreviewInteractionPresentation>
+createPreviewInteractionPresentation()
+{
+    return std::make_unique<PreviewInteractionPresentation>();
 }
 }  // namespace MMM::Canvas

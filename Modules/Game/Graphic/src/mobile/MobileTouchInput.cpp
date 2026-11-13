@@ -75,6 +75,12 @@ void MobileTouchTracker::update(TouchPhase phase, std::uint64_t device,
         m_state.m_motionY =
             std::max(m_state.m_motionY, std::abs(y - found->m_startY));
         if ( phase == TouchPhase::Up || phase == TouchPhase::Cancel ) {
+            // 尾部触点移除后不再有效，单指消费者需要独立的最终正常释放坐标。
+            // Cancel 不更新它，不能把系统接管位置当作一次成功拖动落点。
+            if ( phase == TouchPhase::Up ) {
+                m_state.m_releaseX = x;
+                m_state.m_releaseY = y;
+            }
             // 保持存活触点的原来顺序；一根手指抬起不改变另一根的真实身份。
             std::move(found + 1, end, found);
             // 只压缩有效前缀，尾部残值从未对消费者声明为活跃。

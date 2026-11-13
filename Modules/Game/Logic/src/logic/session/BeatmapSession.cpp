@@ -1026,6 +1026,15 @@ void BeatmapSession::updateAnimateTime(double                      dt,
 void BeatmapSession::updateAnimatedTimelineZoom(
     double dt, const Config::EditorConfig& config)
 {
+    // 预览范围不参与时间线缩放积分，最终配置到达后只撤去本地显示覆盖。
+    // 未到达时继续正常推进逻辑，不等待配置版本或给输入加固定延时。
+    if ( m_ctx->m_pointerPreviewAreaRatio && m_ctx->m_pointerPreviewFinished &&
+         std::abs(config.visual.previewConfig.areaRatio -
+                  *m_ctx->m_pointerPreviewAreaRatio) <
+             VISUAL_ANIMATION_EPSILON ) {
+        m_ctx->m_pointerPreviewAreaRatio.reset();
+        m_ctx->m_pointerPreviewFinished = false;
+    }
     if ( m_ctx->m_pointerTimelineZoom && m_ctx->m_pointerZoomFinished &&
          std::abs(config.visual.timelineZoom - *m_ctx->m_pointerTimelineZoom) <
              VISUAL_ANIMATION_EPSILON ) {

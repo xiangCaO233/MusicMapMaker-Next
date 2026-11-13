@@ -388,6 +388,8 @@ struct CmdSeek {
 
     /// @brief 是否为拖动进度条期间的连续预览请求。
     bool isScrubbing{ false };
+    /// @brief 可选谱面实例约束；零保留既有全局定位，非零拒绝切谱后的旧命令。
+    std::uintptr_t beatmapInstanceId{ 0 };
 };
 
 /// @brief 在逻辑线程一次性截取指定教学段落的正式轨道根物件。
@@ -771,6 +773,15 @@ struct CmdPanCanvas {
     float anchorY{ 0.0F };
     /// @brief 全部导航更新结束后清除局部缩放；配置发布必须先于此命令。
     bool finishNavigation{ false };
+
+    /// @brief 预览专用范围倍率；正值启用 Preview 导航，不影响主画布缩放。
+    float previewAreaRatio{ 0.0F };
+    /// @brief 预览轻点按实际显示帧反投影，不消费滞后的鼠标悬浮时间。
+    bool previewTap{ false };
+    /// @brief 预览命令绑定谱面实例，切谱后拒绝旧手指剩余命令。
+    std::uintptr_t previewInstanceId{ 0 };
+    /// @brief 轻点对应快照的视觉时间，已包含有效视觉偏移。
+    double previewVisualTime{ 0.0 };
 };
 
 /**

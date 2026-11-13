@@ -34,6 +34,8 @@ struct MobileTouchSnapshot {
         m_revision{};  ///< 新手势与事件修订分开，空闲帧不伪造变化。
     float m_originX{},
         m_originY{};  ///< 首触点落点，用于确定唯一画布或面板归属。
+    /// @brief 最近一次正常 Up 的归一化位置，仅全抬起且单指峰值时作为最终落点。
+    float  m_releaseX{}, m_releaseY{};
     double m_started{}, m_updated{};  ///< 平台单调时间，单位秒，不读取墙钟。
     bool   m_cancelled{};             ///< 取消后剩余手指不能重新成为单指编辑。
 };

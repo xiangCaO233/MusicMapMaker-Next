@@ -50,6 +50,7 @@ public:
      * @param config 编辑器配置
      * @param mainViewportHeight 主画布视口高度 (用于预览区缩放对齐)
      * @param hitFXSystem 打击特效系统 (可选)
+     * @param previewAreaRatio 触控期间的预览范围；零表示沿用持久配置。
      * @warning
      * 热路径：逻辑线程为每个活动视口生成渲染快照时执行；禁止文件系统访问、完整
      * entt 遍历、完整排序、try/catch 和 shared_ptr 所有权复制。
@@ -65,7 +66,8 @@ public:
         float judgmentLineY, int32_t trackCount, int32_t bgmTrackCount,
         int32_t draftTrackCount, const Config::EditorConfig& config,
         float              mainViewportHeight = 1000.0f,
-        class HitFXSystem* hitFXSystem        = nullptr);
+        class HitFXSystem* hitFXSystem        = nullptr,
+        float              previewAreaRatio   = 0.0f);
 
 private:
     // --- 内部逻辑拆分方法 ---
@@ -85,9 +87,9 @@ private:
         RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
         float viewportWidth, float viewportHeight, float judgmentLineY,
         int32_t trackCount, const Config::EditorConfig& config,
-        float mainViewportHeight, float& leftX, float& rightX, float& topY,
-        float& bottomY, float& trackAreaW, float& singleTrackW,
-        float& renderScaleY);
+        float mainViewportHeight, float previewAreaRatio, float& leftX,
+        float& rightX, float& topY, float& bottomY, float& trackAreaW,
+        float& singleTrackW, float& renderScaleY);
 
     /// @warning 热路径：主画布每次快照生成时执行；禁止文件系统访问和完整
     /// registry 排序。

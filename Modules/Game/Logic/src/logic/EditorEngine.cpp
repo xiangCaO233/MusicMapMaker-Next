@@ -4237,6 +4237,20 @@ void EditorEngine::updateTimelineZoom(float zoom)
     impl().m_editorConfigRevision.fetch_add(1, std::memory_order_release);
 }
 
+/// @brief 发布预览手势的最终范围，保留主画布及其它全局配置。
+/// @warning 释放边沿仅持短配置锁，不进入完整设置广播或会话长锁。
+void EditorEngine::updatePreviewAreaRatio(float ratio)
+{
+    if ( !std::isfinite(ratio) ) return;
+    ratio = std::clamp(ratio, 1.0f, 50.0f);
+    // 与时间线标量入口共用已经审计的配置值锁，不调用 setEditorConfig。
+    // 逻辑线程从修订号采纳新值，手势显示覆盖在采纳之前持续有效。
+    std::lock_guard<std::mutex> lock(impl().m_editorConfigMutex);
+    if ( impl().m_editorConfig.visual.previewConfig.areaRatio == ratio ) return;
+    impl().m_editorConfig.visual.previewConfig.areaRatio = ratio;
+    impl().m_editorConfigRevision.fetch_add(1, std::memory_order_release);
+}
+
 /// @brief 合并完整软件配置并在设置操作时广播到会话。
 /// @param config 调用方提交的编辑器配置候选值。
 /// @warning 低频设置入口会取得注册表锁，不用于连续导航更新。

@@ -14,6 +14,7 @@
 
 namespace MMM::Canvas
 {
+class PreviewInteractionPresentation;
 /**
  * @brief 预览画布类，专门用于右侧预览窗口。
  * 独立于 Basic2DCanvas，具有精简的交互逻辑（仅点击跳转时间）。
@@ -35,10 +36,7 @@ public:
 
     /// @brief 密度栏或预览内容仍在拖动时，操作方案必须等待其提交收尾。
     /// @warning 每帧只访问 UI 本地状态，不等待逻辑相机发布快照。
-    bool hasActivePointerGesture() const override
-    {
-        return m_wasDensitySeekActive || m_lastMouseCommand.isDragging;
-    }
+    bool hasActivePointerGesture() const override;
     // 接口实现
     /// @brief 更新预览画布 ImGui 窗口和鼠标交互。
     /// @warning 热路径：主渲染线程每帧执行；禁止文件系统访问、完整 ECS
@@ -175,6 +173,9 @@ private:
         /// @brief 上一次发送的鼠标拖拽状态。
         bool isDragging{ false };
     };
+
+    /// @brief 平台状态只在构造期分配，公共头不传播移动端输入类型。
+    std::unique_ptr<PreviewInteractionPresentation> m_pointerPresentation;
 
     /// @brief 画布名称 (对应翻译和 ID)
     std::string m_canvasName;

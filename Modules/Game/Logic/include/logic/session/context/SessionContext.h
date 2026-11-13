@@ -130,6 +130,10 @@ struct SessionContext {
     std::optional<float> m_pointerTimelineZoom;
     /// @brief 释放已发布最终配置；保持本地显示覆盖直到该配置进入逻辑轮次。
     bool m_pointerZoomFinished{ false };
+    /// @brief 预览手势的局部范围覆盖，仅逻辑线程读写，不改变全谱滚速缓存。
+    std::optional<float> m_pointerPreviewAreaRatio;
+    /// @brief 保留已显示的预览范围，直到 UI 发布的最终配置进入同一逻辑轮次。
+    bool m_pointerPreviewFinished{ false };
     bool isPlaying{ false };  ///< 是否正在播放
     /// @brief 是否正在本地预览连续 Seek；联机视口需等提交后再同步。
     bool isSeekScrubbing{ false };

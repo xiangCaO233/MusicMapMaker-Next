@@ -76,7 +76,8 @@ if(ANDROID)
   # 安卓工厂根据当前操作方案选择触控仲裁或共用的桌面指针解释器。
   target_sources(
     Canvas
-    PRIVATE src/presentation/mobile/MobileAnnotationTablePresentation.cpp
+    PRIVATE src/presentation/mobile/MobilePreviewInteractionPresentation.cpp
+            src/presentation/mobile/MobileAnnotationTablePresentation.cpp
             src/presentation/mobile/MobileTimelineInteractionPresentation.cpp
             src/presentation/mobile/MobileCanvasInteractionPresentation.cpp
             src/presentation/mobile/MobileCanvasFactory.cpp)
@@ -512,3 +513,21 @@ mmm_register_test_case(NAME MobileAnnotationTableTest COMMAND
 # 属性草稿、选择和正式命令分别验证，构建通过不替代设备验收。 CPU 测试无图形及音频设备，设备证据继续集中存入外置工作树。
 
 # 表格私有呈现头只提供给实际消费目标，不能扩大 Canvas 的公开依赖。
+
+# 预览导航回归使用正式移动解释器和播放控制器，不初始化 GPU 或音频设备。 CTest 默认配置根位于
+# test_output，导航释放的布局保存不会写个人配置。 测试捕获正式事件再交给真实播放控制器，不以状态机私有布尔值代替结果。
+# 主画布横移、时间线倍率和不允许的命令作为交叉窗口污染的对照。
+mmm_add_test_executable(Canvas MobilePreviewInteractionTest
+                        tests/MobilePreviewInteractionTest.cpp)
+target_include_directories(MobilePreviewInteractionTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(MobilePreviewInteractionTest PRIVATE Canvas Log 3rd_imgui)
+if(NOT ANDROID)
+  target_sources(
+    MobilePreviewInteractionTest
+    PRIVATE src/presentation/mobile/MobilePreviewInteractionPresentation.cpp)
+endif()
+# 注册入口继续使用公共测试包装器，配置和运行输出归入二进制树。 设备验收包只写外置 Android 工作树，不属于此目标源码或测试资源。
+# 桌面生产工厂保持空策略；CPU 用例显式链接移动实现作平台对照。 不重复链接另一个同名工厂，避免测试套件发生符号冲突。
+mmm_register_test_case(NAME MobilePreviewInteractionTest COMMAND
+                       MobilePreviewInteractionTest)

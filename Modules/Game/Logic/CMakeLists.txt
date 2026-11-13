@@ -13,6 +13,8 @@ add_library(
   # 折线节点离散编辑单独编译，复用公共撤销与橡皮擦断开语义。
   src/logic/session/InteractionController_Polyline.cpp
   src/logic/session/PlaybackController.cpp
+  # 预览触控定位与缩放单独实现，复用会话播放和滚速索引。
+  src/logic/session/PlaybackController_Preview.cpp
   src/logic/session/ActionController_Editing.cpp
   # 加载和运行期同步都使用 SessionUtils，但分别维护各自低频与热路径约束。
   src/logic/session/SessionUtils_Loading.cpp

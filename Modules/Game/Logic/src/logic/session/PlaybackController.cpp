@@ -573,6 +573,15 @@ bool PlaybackController::stopAtComposeLessonEnd()
 /// @warning 输入命令路径；拖动会反复调用，不能增加阻塞等待或延迟本地定位反馈。
 void PlaybackController::handleCommand(const CmdSeek& cmd)
 {
+    // 原全局定位保留零约束；触控密度轴必须在队列消费时再次复核实例。
+    // 不带实例的旧快捷键和滚动条仍使用全局定位语义。
+    // 非零约束只用于已冻结谱面身份的输入，不能按文件路径猜测同一个实例。
+    // 拒绝发生在音频、Scrub 和播放暂停状态改变之前。
+    if ( cmd.beatmapInstanceId &&
+         (!m_ctx.currentBeatmap ||
+          cmd.beatmapInstanceId !=
+              reinterpret_cast<std::uintptr_t>(m_ctx.currentBeatmap.get())) )
+        return;
     // 自动首播和复播只接受教学自身在设置阶段前发出的定位命令。
     if ( m_ctx.composeLessonInputMode == ComposeLessonInputMode::AutoPlayback )
         return;
@@ -952,6 +961,11 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
 /// 不得在此增加阻塞等待、文件操作或额外全量扫描。
 void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
 {
+    // 只有显式预览载荷可以进入独立导航；经典预览鼠标路径保持原规则。
+    if ( cmd.cameraId == "Preview" && cmd.previewInstanceId ) {
+        handlePreviewNavigation(cmd);
+        return;
+    }
     if ( cmd.finishNavigation ) {
         // 收尾不需要有效视口或尚存相机；窗口关闭仍能释放局部覆盖。
         // 标记最终配置已经发布，显示覆盖由会话在同版配置可见时移除。
