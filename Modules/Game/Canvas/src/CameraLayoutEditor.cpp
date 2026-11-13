@@ -1,5 +1,6 @@
 #include "canvas/CameraLayoutEditor.h"
 #include "canvas/CameraLayoutMath.h"
+#include "config/AppConfig.h"
 #include "config/VisualConfig.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/interaction/EditorInteraction.h"
@@ -16,14 +17,28 @@
 
 namespace MMM::Canvas
 {
-/// @brief 在工具栏附着窗口内仅绘制布局模式切换。
+/// @brief 在工具栏附着窗口中切换模式，并嵌入移动相机参数。
+/// @param visual 与主画布渲染共用的本地配置，移动页不另建姿态副本。
+/// @details 桌面仍只绘制两个模式按钮，独立参数窗口归 update 管理。
+/// 移动端沿用调用方可滚动面板，不能重新以桌面固定尺寸创建浮窗。
+/// 模式按钮释放后才切换，进入相机页不会自动执行平移或旋转。
+/// 工具页关闭不代表退出相机编辑模式，重新打开继续显示原来的分页。
 /// @warning 每帧仅绘制固定控件；不新建窗口，不保存配置到磁盘。
-void CameraLayoutEditor::drawControls(Config::VisualConfig&)
+void CameraLayoutEditor::drawControls(Config::VisualConfig& visual)
 {
+    const bool   mobile = !UI::workspaceAllowsHoverFeedback();
+    const float  scale  = Config::AppConfig::instance().getWindowContentScale();
+    const ImVec2 buttonSize =
+        mobile ? ImVec2(std::max(1.0f,
+                                 (ImGui::GetContentRegionAvail().x -
+                                  ImGui::GetStyle().ItemSpacing.x) /
+                                     2),
+                        48 * scale)
+               : ImVec2{};
     // 元素模式只覆盖观察矩阵，不复位已修改的目标相机。
     // 当前手势已经写入的内存状态会保留。
     // 预览不再提交到 ImGui 后，正常窗口生命周期会将其隐藏。
-    if ( UI::FeedbackButton("画布元素") && m_cameraMode ) {
+    if ( UI::FeedbackButton("画布元素", buttonSize) && m_cameraMode ) {
         // 模式切换提交当前姿态并立即释放输入；预览窗口本帧不再提交。
         m_cameraMode = false;
         m_axis       = -1;
@@ -33,11 +48,175 @@ void CameraLayoutEditor::drawControls(Config::VisualConfig&)
     // 进入相机模式时重新取得独立手势状态。
     // 旧元素布局的鼠标所有权不能转为新的相机拖动。
     // 切换本身不移动目标相机。
-    if ( UI::FeedbackButton("摄像机位置") && !m_cameraMode ) {
+    if ( UI::FeedbackButton("摄像机位置", buttonSize) && !m_cameraMode ) {
         m_cameraMode = true;
         m_axis       = -1;
         m_orbiting   = false;
     }
+    // 移动参数借用既有布局面板，不能再叠加参数和预览两个独立窗口。
+    if ( mobile && m_cameraMode ) drawMobileControls(visual);
+}
+
+/// @brief 触控用常驻标签和单轴精调替代多分量 Ctrl 输入与中键观察操作。
+/// @details 姿态仍写入同一 VisualConfig，观察量只属于辅助视图。
+/// 预览不缓存描述符；每帧由 update 借用最新画布纹理绘制。
+/// @param visual 调用方独占的 UI 配置引用，不能传入逻辑线程中的可变状态。
+/// @pre 已进入相机布局模式，外壳负责侧栏的可用尺寸与页面滚动。
+/// @note 目标姿态由调用方比较修改前后值，捕获预设并发布补偿参数。
+/// 观察角、中心和距离只影响辅助场景，不属于目标配置发布范围。
+/// 两组分页互相独立，查看实际预览时仍可在观察页调节下一次观察位置。
+/// 数值与桌面使用相同单位，位置以画布高度归一化，姿态使用度。
+/// 不从观察矩阵逆推目标姿态，避免改变观察方向时意外旋转谱面。
+/// 参数页不提供键盘专属入口，多分量数组逐项交给公共单标量事务。
+/// 模态取消只结束当前标量草稿，不能把整组相机回滚到旧快照。
+/// @warning 每帧固定控件，不复制布局库、不保存文件、不等待逻辑更新。
+void CameraLayoutEditor::drawMobileControls(Config::VisualConfig& visual)
+{
+    const float scale = Config::AppConfig::instance().getWindowContentScale();
+    const float width = std::max(
+        1.0f,
+        (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) /
+            2);
+    // 相等列宽来自当前内容宽度，兼容抽屉收起及主题缩放。
+    // 按钮保持完整命中矩形，不能以字符宽度代替触摸宽度。
+    const ImVec2 buttonSize{ width, 48 * scale };
+    ImGui::Separator();
+    if ( UI::FeedbackSelectableButton(
+             "操作视图", !m_mobilePreview, buttonSize) )
+        m_mobilePreview = false;
+    ImGui::SameLine();
+    if ( UI::FeedbackSelectableButton("实际预览", m_mobilePreview, buttonSize) )
+        m_mobilePreview = true;
+    // 预览时不显示轴工具，避免操作不可见的操纵柄。
+    // 返回操作视图继续沿用上次选定的工具，不重置目标姿态。
+    if ( !m_mobilePreview ) {
+        // 仍保留原轴和旋转环工具，参数内嵌不能让既有模式入口消失。
+        // 切换只更换操纵柄，不能把当前指针位置当成新的变换起点。
+        if ( UI::FeedbackSelectableButton("平移轴", !m_rotate, buttonSize) ) {
+            m_rotate = false;
+            m_axis   = -1;
+        }
+        ImGui::SameLine();
+        if ( UI::FeedbackSelectableButton("旋转环", m_rotate, buttonSize) ) {
+            m_rotate = true;
+            m_axis   = -1;
+        }
+    }
+    // 观察页的数值不能写入目标相机；切页不改变任何已有姿态。
+    if ( UI::FeedbackSelectableButton(
+             "相机参数", !m_mobileObservation, buttonSize) )
+        m_mobileObservation = false;
+    ImGui::SameLine();
+    if ( UI::FeedbackSelectableButton(
+             "观察视图", m_mobileObservation, buttonSize) )
+        m_mobileObservation = true;
+    // 操作方式常驻显示，触屏无需悬浮才能知道长按入口。
+    // 使用软换行让窄屏保留完整说明，不将帮助文案塞进数值行。
+    ImGui::TextWrapped("横拖调整，长按数值精调；修改布局后退出工具即可保留。");
+    // 所有标量保留 48dp 命中高度，标签另起一行以免窄面板裁掉数值。
+    const auto padding = ImGui::GetStyle().FramePadding;
+    ImGui::PushStyleVar(
+        ImGuiStyleVar_FramePadding,
+        { padding.x,
+          std::max(padding.y, (48 * scale - ImGui::GetFontSize()) / 2) });
+    /// @brief 统一有限值、边界与单轴精调；不接管其它坐标的存储。
+    /// @param label 同时作为坐标身份和常驻标签，XYZ 不能共享相同 ID。
+    /// @param value 仅在控件真实 Changed 且有限时写回的目标标量。
+    /// @param speed 拖动速度沿用桌面单位，不受页面滚动速度影响。
+    /// @param minimum 与 maximum 同时约束拖动和显式精调。
+    /// @param format 小数显示精度，存储仍保持完整 float 值。
+    /// @warning 每次只检查一个标量；中间态不写盘或重建资源。
+    const auto scalar = [&](const char* label,
+                            float&      value,
+                            float       speed,
+                            float       minimum,
+                            float       maximum,
+                            const char* format) {
+        ImGui::PushID(label);
+        ImGui::TextUnformatted(label);
+        ImGui::SetNextItemWidth(-1);
+        // 临时值避免非法输入污染权威字段；精调弹窗自己保存跨帧草稿。
+        // 每帧重新取源值，旧弹窗还能检测外部修改并拒绝冲突提交。
+        float draft = value;
+        if ( UI::FeedbackDragFloat("##Value",
+                                   &draft,
+                                   speed,
+                                   minimum,
+                                   maximum,
+                                   format,
+                                   ImGuiSliderFlags_AlwaysClamp) &&
+             std::isfinite(draft) ) {
+            // 只在实际修改时终止旧轴事务，避免下一帧覆盖明确输入。
+            value  = std::clamp(draft, minimum, maximum);
+            m_axis = -1;
+        }
+        ImGui::PopID();
+    };
+    if ( m_mobileObservation ) {
+        // 辅助观察与目标相机分离，旋转、平移和缩放均可用单指完成。
+        // 俯仰限制避开 lookAt 的极点，距离下限与原滚轮路径一致。
+        // 方位使用有界数值入口，完整两周已经覆盖所有可见观察方向。
+        scalar("观察俯仰（度）", m_orbit.x, .3f, -85, 85, "%.3f");
+        scalar("观察方位（度）", m_orbit.y, .3f, -360, 360, "%.3f");
+        scalar("观察距离", m_distance, .02f, .5f, 200, "%.3f");
+        // 中心坐标是辅助世界空间，不是相机目标位置数组的别名。
+        // 默认折叠低频平移参数，常用观察角和距离始终先出现。
+        if ( UI::FeedbackCollapsingHeader("观察中心 XYZ") ) {
+            scalar("中心 X", m_center.x, .005f, -100, 100, "%.4f");
+            scalar("中心 Y", m_center.y, .005f, -100, 100, "%.4f");
+            scalar("中心 Z", m_center.z, .005f, -100, 100, "%.4f");
+        }
+        if ( UI::FeedbackButton("复位观察视图", { -1, 48 * scale }) ) {
+            // 复位不改变目标位置、旋转、长度或补偿；可随时重新观察同一结果。
+            m_orbit    = { 25, -35 };
+            m_distance = 4;
+            m_center   = { 0, 0, .4f };
+            m_orbiting = false;
+        }
+    } else {
+        // 六个分量分别使用公共精调事务；取消不会覆盖其它分量或整组姿态。
+        if ( UI::FeedbackCollapsingHeader("位置 XYZ",
+                                          ImGuiTreeNodeFlags_DefaultOpen) ) {
+            // 枚举固定三分量，不解析名字或在热路径构造动态字符串。
+            constexpr std::array labels{ "位置 X", "位置 Y", "位置 Z" };
+            for ( std::size_t i = 0; i < labels.size(); ++i )
+                scalar(labels[i],
+                       visual.canvasCameraPosition[i],
+                       .005f,
+                       -100,
+                       100,
+                       "%.4f");
+        }
+        if ( UI::FeedbackCollapsingHeader("旋转 XYZ（度）") ) {
+            constexpr std::array labels{ "旋转 X", "旋转 Y", "旋转 Z" };
+            for ( std::size_t i = 0; i < labels.size(); ++i )
+                scalar(labels[i],
+                       visual.canvasCameraRotation[i],
+                       .25f,
+                       -180,
+                       180,
+                       "%.3f");
+        }
+        // 长度与两项补偿沿用桌面边界，不能把预览缩放写成目标长度。
+        // 补偿值为百分比而非倍率，始终保留 0～100 的完整范围。
+        scalar("画布长度", visual.canvasCameraLength, .02f, 1, 32, "%.3f");
+        scalar(
+            "3D 运动补偿", visual.canvasMotionCompensation, 1, 0, 100, "%.0f");
+        scalar("3D 厚度补偿",
+               visual.canvasThicknessCompensation,
+               1,
+               0,
+               100,
+               "%.0f");
+        if ( UI::FeedbackButton("重置相机", { -1, 48 * scale }) ) {
+            // 与桌面复位一致，保留长度、补偿和布局中其它组件。
+            visual.canvasCameraPosition = { 0, 0, 1 };
+            visual.canvasCameraRotation = { 0, 0, 0 };
+            m_axis                      = -1;
+        }
+    }
+    // 在调用方结束布局窗口之前恢复样式，不能放大其它侧栏控件。
+    ImGui::PopStyleVar();
 }
 
 /// @brief 参数窗口不持有 GPU 资源，销毁仅释放自己的 Clay 内存。
@@ -376,6 +555,21 @@ bool CameraLayoutEditor::update(const std::string& id, ImVec2 origin,
     // 工具栏可能晚于画布更新；首次进入也须先迁移旧相机参数。
     enableCanvasCameraPose(visual);
     // 三维辅助几何写入父窗口，子窗口始终在上方，不被辅助背景覆盖。
+    if ( !UI::workspaceAllowsHoverFeedback() ) {
+        if ( m_mobilePreview ) {
+            // 宿主已在调用前提交主画布纹理；跳过辅助场景即显示实际结果。
+            // 预览模式不拾取隐藏的轴，也不把点按解释为谱面编辑。
+            // 不重复覆盖同一幅离屏图，避免移动端额外的全画布纹理填充。
+            // 显示范围由宿主统一管理，不另算比例或缓存上一帧的描述符。
+            // 无纹理时仍维持输入消费，不能落回物件编辑路径。
+            m_axis     = -1;
+            m_orbiting = false;
+        } else {
+            drawScene(id, origin, size, visual);
+        }
+        // 参数由 drawControls 嵌入移动面板；这里不再提交两个桌面浮窗。
+        return true;
+    }
     drawScene(id, origin, size, visual);
     drawParameterWindow(id, visual);
     const auto title = std::string("实际视角预览###CameraLayoutPreview_") + id;
