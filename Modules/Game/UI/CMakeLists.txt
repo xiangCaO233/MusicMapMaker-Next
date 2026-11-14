@@ -778,3 +778,8 @@ mmm_add_test_executable(UI MobileInputEditorTest
                         tests/MobileInputEditorTest.cpp)
 target_link_libraries(MobileInputEditorTest PRIVATE UI Logic Log)
 mmm_register_test_case(NAME MobileInputEditorTest COMMAND MobileInputEditorTest)
+
+# BMS 触控回归绘制真实选项与公共工厂创建的格式模态，检查高 DPI 正文和底部操作行。 不选择输出路径或启动引擎导出，文件与音频保真由独立服务回归负责。
+mmm_add_test_executable(UI BmsTouchDialogTest tests/BmsTouchDialogTest.cpp)
+target_link_libraries(BmsTouchDialogTest PRIVATE UI Logic Log)
+mmm_register_test_case(NAME BmsTouchDialogTest COMMAND BmsTouchDialogTest)

@@ -133,6 +133,22 @@ bool drawMobileDrawerMenus(UIManager& manager, float scale)
     // 普通工具成功激活才解除背景遮罩；显示偏好切换可在抽屉中连续操作。
     // 打开请求仍由公共菜单的延迟阶段处理，移动绘制不自行 Begin 工具窗口。
     bool activated = false;
+    if ( section("MobileFile", "ui.mobile.file", scale) ) {
+        // 两个流程复用公共动作和延迟窗口，不要求用户连接键盘触发快捷键。
+        // 单文件导出必须有活动谱面；资源包按项目扫描，不把门禁混为一谈。
+        // 成功派发后外壳统一关闭抽屉，下一帧由原动作显示格式模态。
+        // 目标格式仍在原选择器明确选择，不把新增入口固定成单一 BMS 格式。
+        // 抽屉只发布动作意图，文件写入与覆盖确认仍归原有事务。
+        const std::array entries{ Entry{ "SaveBeatmapAsAction",
+                                         "ui.file.save_as",
+                                         ICON_MMM_SAVE,
+                                         Requirement::Beatmap },
+                                  Entry{ "PackBeatmapAction",
+                                         "ui.file.pack",
+                                         ICON_MMM_FOLDER_OPEN,
+                                         Requirement::Project } };
+        activated |= actions(entries, manager, scale);
+    }
     if ( section("MobileTools", "ui.mobile.tools", scale) ) {
         // 测量读取项目音频，但不要求当前已有活动谱面。
         // 检测和元数据入口允许先打开空工具，再由原视图提示选择谱面。

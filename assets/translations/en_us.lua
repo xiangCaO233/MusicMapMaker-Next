@@ -1706,6 +1706,7 @@ return {
 	["ui.mobile.main_canvas"] = "Canvas",
 	["ui.mobile.workspace"] = "Workspace",
 	["ui.mobile.resources"] = "Resources",
+	["ui.mobile.file"] = "File",
 	["ui.mobile.tools"] = "Tools",
 	["ui.mobile.view"] = "View",
 	["ui.mobile.help"] = "Help",

@@ -1,4 +1,5 @@
 #include "logic/BmsPackageExportService.h"
+#include "common/platform/DocumentStorage.h"
 
 #include "audio/AudioOriginAlignmentService.h"
 #include "common/LogicCommands.h"
@@ -546,6 +547,11 @@ BmsPackageExportResult BmsPackageExportService::exportPackage(
     mz_free(buffer);
     result.success = !output.fail();
     if ( !result.success ) result.errorMessage = "无法写入 BMS ZIP";
+    // 工作副本完整关闭后才发布授权文档，provider 失败不能报告导出成功。
+    // 普通磁盘路径沿用原结果，平台 I/O 仅发生在用户明确导出的低频事务。
+    if ( result.success )
+        result.success =
+            Common::publishDocument(outputPath, result.errorMessage);
     return result;
 }
 }  // namespace MMM::Logic
