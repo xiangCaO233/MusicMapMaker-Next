@@ -394,11 +394,15 @@ void editing()
     // CPU 环境没有 Android 输入法，使用正常键盘事件替换已聚焦文本。
     // Ctrl+A 是测试输入手段，不是为触屏操作增加修饰键依赖。
     // 文本输入后先检查草稿未发布，再通过可见保存按钮完成确认。
-    io.AddKeyEvent(ImGuiMod_Ctrl, true);
+    // macOS 以 Command+A 全选；物理 Ctrl 会被转换成另一逻辑修饰键。
+    // 草稿仍必须经过真实选择和输入，不能直接覆盖内容来绕过编辑链。
+    const ImGuiKey inputModifier =
+        io.ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl;
+    io.AddKeyEvent(inputModifier, true);
     io.AddKeyEvent(ImGuiKey_A, true);
     f.frame(input);
     io.AddKeyEvent(ImGuiKey_A, false);
-    io.AddKeyEvent(ImGuiMod_Ctrl, false);
+    io.AddKeyEvent(inputModifier, false);
     f.frame(input);
     io.AddInputCharactersUTF8("Edited content");
     f.frame(input);

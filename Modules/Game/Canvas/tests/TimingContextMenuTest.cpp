@@ -311,7 +311,11 @@ bool checkEmptyTimingClipboard()
     frame(canvas, snapshot, point);
     bool  passed = true;
     auto& io     = ImGui::GetIO();
-    io.AddKeyEvent(ImGuiMod_Ctrl, true);
+    // 平台原始事件先经 ImGui 交换，macOS 的复制／剪切使用 Command。
+    // 保留正向有效复制对照，不能让所有快捷键失效后空复制仍假通过。
+    const ImGuiKey inputModifier =
+        io.ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl;
+    io.AddKeyEvent(inputModifier, true);
     // 两轮分别覆盖空集合和过期句柄集合；只有集合非空仍不足以复制。
     for ( const bool stale : { false, true } ) {
         // 访问器只准备旧选择身份，结果仍由用户实际按下快捷键触发。
@@ -362,7 +366,7 @@ bool checkEmptyTimingClipboard()
     // 只读内部发布槽，不调用 ImGui 的平台剪贴板写入回调。
     passed &= engine.consumePendingSystemClipboardText().has_value();
     io.AddKeyEvent(ImGuiKey_C, false);
-    io.AddKeyEvent(ImGuiMod_Ctrl, false);
+    io.AddKeyEvent(inputModifier, false);
     // 主键和修饰键都释放，后续菜单测试不能继承本场景的输入状态。
     // 快照只用于这个局部视图，结束后不向其他窗口传播准备的选择。
     frame(canvas, snapshot, point);
@@ -597,13 +601,17 @@ bool checkMenu()
     passed &= open(canvas, snapshot, point) == nullptr;
     // 经典无修饰点击仍然替换，Ctrl 点击已选项仍然切出，不读取纯鼠标模式。
     tap(first);
-    ImGui::GetIO().AddKeyEvent(ImGuiMod_Ctrl, true);
+    // 经典追加读取逻辑 Ctrl；macOS 注入对应的物理 Command。
+    // 不沿用纯鼠标模式，也不改写 KeyCtrl 来绕过平台事件处理。
+    const ImGuiKey inputModifier =
+        ImGui::GetIO().ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl;
+    ImGui::GetIO().AddKeyEvent(inputModifier, true);
     // 经典分支读取真实物理修饰键，不能被上次的纯鼠标减选模式覆盖。
     tap(second);
     passed &= Access::count(canvas) == 2;
     tap(first);
     passed &= Access::count(canvas) == 1 && Access::contains(canvas, 43);
-    ImGui::GetIO().AddKeyEvent(ImGuiMod_Ctrl, false);
+    ImGui::GetIO().AddKeyEvent(inputModifier, false);
     // 在切回纯鼠标方案前释放修饰键，确保最后的画笔用例独立于本断言。
     frame(canvas, snapshot, point);
     UI::Interaction::synchronizeProfile("mouse-only", true);

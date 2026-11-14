@@ -190,11 +190,15 @@ void scenario(bool confirm, bool mobile = true)
     check(GImGui->ActiveId == active, "focus survives reopen");
     // 全选和输入走正式 ImGui 编辑，不调用 SetDefaultFileName 偷换结果。
     // Ctrl+A 的按下、释放分别经过完整帧；不修改选区索引来伪装全选。
-    io.AddKeyEvent(ImGuiMod_Ctrl, true);
+    // CPU 夹具沿用宿主的文本编辑约定，macOS 的全选来自 Command+A。
+    // 不修改控件缓冲或关闭平台行为；选区必须由正式输入路径产生。
+    const ImGuiKey inputModifier =
+        io.ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl;
+    io.AddKeyEvent(inputModifier, true);
     io.AddKeyEvent(ImGuiKey_A, true);
     frame();
     io.AddKeyEvent(ImGuiKey_A, false);
-    io.AddKeyEvent(ImGuiMod_Ctrl, false);
+    io.AddKeyEvent(inputModifier, false);
     frame();
     // 输入从 IO 队列进入上游正式控件，不能直接覆盖文件名缓存。
     io.AddInputCharactersUTF8("HighKeyboard_谱面.bms");
