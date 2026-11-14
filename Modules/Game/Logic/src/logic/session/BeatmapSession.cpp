@@ -1191,11 +1191,22 @@ void BeatmapSession::update(double dt, const Config::EditorConfig& config,
         m_ctx->animatedTimelineZoomAnimationActive;
     const bool isEdgeScrollActive =
         std::abs(m_ctx->previewEdgeScrollVelocity) > 0.0001;
+    // 最终配置到达是需要立即消费的状态边沿，不能被当作空闲轮次跳过。
+    // 旧配置尚未追上时不强制保持忙碌，避免待采纳覆盖无限绕过空闲节流。
+    const bool navigationConfigReady =
+        (m_ctx->m_pointerTimelineZoom && m_ctx->m_pointerZoomFinished &&
+         std::abs(effectiveConfig.visual.timelineZoom -
+                  *m_ctx->m_pointerTimelineZoom) < VISUAL_ANIMATION_EPSILON) ||
+        (m_ctx->m_pointerPreviewAreaRatio && m_ctx->m_pointerPreviewFinished &&
+         std::abs(effectiveConfig.visual.previewConfig.areaRatio -
+                  *m_ctx->m_pointerPreviewAreaRatio) <
+             VISUAL_ANIMATION_EPSILON);
     bool isBusy = isInteracting || m_ctx->isPlaying ||
                   // 播放、动画、边缘滚动和剩余命令都要求继续推进逻辑。
                   m_ctx->isAudioTimelineSyncFollower ||
                   isVisualAnimationActive || isEdgeScrollActive ||
-                  hasPendingCommands();
+                  // 配置采纳轮次必须完成倍率覆盖清除及必要的积分缓存重建。
+                  navigationConfigReady || hasPendingCommands();
 
     if ( effectiveConfig.settings.frameLimit !=
              Config::FrameLimitPreference::VSync &&

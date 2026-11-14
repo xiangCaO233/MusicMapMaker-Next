@@ -1,5 +1,6 @@
 #include "common/LogicCommands.h"
 #include "config/EditorConfig.h"
+#include "config/FrameLimitPreference.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/ecs/components/TimelineComponent.h"
@@ -9,6 +10,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
 #include <cmath>
+#include <cstdint>
 #include <memory>
 
 namespace
@@ -58,6 +60,7 @@ void configureContext(MMM::Logic::SessionContext& context)
 /// 不初始化音频设备，非活动会话只测试时间和几何，不驱动系统播放。
 /// 两次缩放都在曲目中段进行，避免零秒钳制掩盖错误的锚点换算。
 /// @return 锚点像素、历史与缓存生命周期全部符合契约时返回 true。
+/// @param frameLimit 同时覆盖会启用空闲节流的模式及垂直同步反例。
 /// 第一轮放大同时平移，能发现先缩放后平移造成的双重位移。
 /// 第二轮保持中点缩小，检查绝对倍率而非对上帧结果再叠乘。
 /// 释放不立刻丢弃直接显示值，因为逻辑调度仍可能使用旧配置。
@@ -66,15 +69,19 @@ void configureContext(MMM::Logic::SessionContext& context)
 /// 缓存实际基准与目标倍率分别断言，防止临时比例被重复应用。
 /// 全程检查连续定位结束状态，音频提交不应停留在拖动模式。
 /// 本测试只验证视图导航，不允许向编辑撤销栈追加动作。
-bool testDirectZoomKeepsCentroidAnchor()
+bool testDirectZoomKeepsCentroidAnchor(
+    MMM::Config::FrameLimitPreference frameLimit)
 {
     using namespace MMM::Logic;
     BeatmapSession session;
     auto&          context = session.getContextMutable();
     configureContext(context);
+    // 显式选择帧率策略，测试不能依赖平台默认是否绕过空闲提前返回。
+    context.lastConfig.settings.frameLimit = frameLimit;
     // 描述符在夹具中已准备；不要让空音轨重建替换明确的可定位时长。
     context.isAudioTimelineDescriptorDirty = false;
     context.audioTimelineTotalTime         = 100;
+    // 远离零点与曲尾，范围钳制不能掩盖预览缩放后的定位变化。
     context.currentTime = context.animateTime = 10;
     context.lastConfig.visual.judgeline_pos   = .8f;
     context.isTransformDirty                  = false;
@@ -155,6 +162,62 @@ bool testDirectZoomKeepsCentroidAnchor()
             context.actionStack.getUndoStackSize());
     // 所有对象随局部会话销毁，不向后续测试留下活动谱面或全局设置。
     return passed;
+}
+
+/// @brief 预览范围覆盖也要在旧配置轮次后立即完成最终配置交接。
+/// @details 与主画布捏合分开建立会话，不能由前一用例的动画掩盖空闲节流。
+/// 使用正式预览命令和实例身份，不直接改写待采纳标志制造通过结果。
+/// 两次零 dt 更新模拟旧、新配置相继到达，不依赖墙钟等待。
+/// 预览范围不改变主画布积分基准，采纳时也不得产生编辑撤销记录。
+bool testPreviewOverrideAdoption()
+{
+    using namespace MMM::Logic;
+    BeatmapSession session;
+    auto&          context = session.getContextMutable();
+    configureContext(context);
+    // 禁用设备及资源重建副作用，保持与主画布导航回归相同的几何上下文。
+    context.isAudioTimelineDescriptorDirty = false;
+    context.audioTimelineTotalTime         = 100;
+    // 远离零点与曲尾，范围钳制不能掩盖预览缩放后的定位变化。
+    context.currentTime = context.animateTime = 10;
+    // 无限帧率仍启用会话空闲门禁，能够暴露最终配置到达却被跳过的问题。
+    // 垂直同步路径由前面的主画布矩阵独立覆盖，不能用它替代该条件。
+    context.lastConfig.settings.frameLimit =
+        MMM::Config::FrameLimitPreference::Unlimited;
+    auto               config = context.lastConfig;
+    PlaybackController controller(context);
+    const auto         instance =
+        reinterpret_cast<std::uintptr_t>(context.currentBeatmap.get());
+    controller.handleCommand(CmdPanCanvas{ .cameraId          = "Preview",
+                                           .viewportWidth     = 1000,
+                                           .viewportHeight    = 600,
+                                           .anchorY           = 200,
+                                           .previewAreaRatio  = 10,
+                                           .previewInstanceId = instance });
+    controller.handleCommand(CmdPanCanvas{ .cameraId          = "Preview",
+                                           .finishNavigation  = true,
+                                           .previewInstanceId = instance });
+    // 旧版配置仍可继续显示当前手势结果，不得以提前清除覆盖制造回跳。
+    session.update(0, config, false);
+    if ( !context.m_pointerPreviewAreaRatio ||
+         !context.m_pointerPreviewFinished || context.isSeekScrubbing )
+        return false;
+    // 保存已显示位置用于交接后的比较，不手工重设相机时间或缓存基准。
+    // 保留完整双精度观察值，不能通过像素取整掩盖小幅回跳。
+    const auto time = context.currentTime;
+    // 只发布预览范围，不靠额外的编辑命令或其它动画把会话伪装成忙碌。
+    // 直接显示仍由旧覆盖维持，随后必须由同一轮有效配置结束该覆盖。
+    config.visual.previewConfig.areaRatio = 10;
+    session.update(0, config, false);
+    // 最终配置采纳后立即结束覆盖；预览倍率不应污染主画布缩放和历史。
+    // 缓存和历史均读取生产会话本身，不能用测试副本掩盖未完成的交接。
+    // 本函数没有 sleep 或失败后重试，单次 update 必须满足最终状态契约。
+    const auto& cache =
+        context.timelineRegistry.ctx().get<System::ScrollCache>();
+    return !context.m_pointerPreviewAreaRatio &&
+           !context.m_pointerPreviewFinished && near(cache.getBaseZoom(), 1) &&
+           near(context.currentTime, time) &&
+           context.actionStack.getUndoStackSize() == 0;
 }
 
 /// @brief 小位移必须累计跨网格，开关与临时取消不改变保存的吸附偏好。
@@ -259,8 +322,17 @@ bool testPanSnapAccumulation()
 int main()
 {
     // 分别执行两个场景，既有捏合问题不能阻止新增吸附回归被执行。
-    const bool pinch = testDirectZoomKeepsCentroidAnchor();
-    const bool pan   = testPanSnapAccumulation();
+    using MMM::Config::FrameLimitPreference;
+    // 两种非垂直同步策略覆盖空闲门禁；垂直同步保留原来不节流的反例。
+    const bool pinch =
+        testDirectZoomKeepsCentroidAnchor(FrameLimitPreference::Refresh2x);
+    const bool unlimited =
+        testDirectZoomKeepsCentroidAnchor(FrameLimitPreference::Unlimited);
+    const bool vsync =
+        testDirectZoomKeepsCentroidAnchor(FrameLimitPreference::VSync);
+    const bool preview = testPreviewOverrideAdoption();
+    const bool pan     = testPanSnapAccumulation();
     if ( !pan ) XERROR("Continuous touch scroll snapping regression failed");
-    return pinch && pan ? 0 : 1;
+    if ( !preview ) XERROR("Preview configuration adoption regression failed");
+    return pinch && unlimited && vsync && preview && pan ? 0 : 1;
 }
