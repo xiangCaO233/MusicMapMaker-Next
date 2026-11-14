@@ -364,7 +364,9 @@ struct BpmBeatmapImportTestAccess {
         tool.m_analysisRunning.store(false, std::memory_order_relaxed);
         // 结果槽状态有意独立于完成标志，模拟生产者尚未发布完成的边界。
         // 测试没有工作线程，直接写槽不会形成跨线程竞争。
-        tool.m_pendingResult.emplace();
+        // 在友元作用域显式构造再移入结果槽，兼容旧 Clang 的嵌套类型构造检查。
+        // 仍放入真实待交付结果，不能以完成标志代替这一交付边界测试。
+        tool.m_pendingResult = BpmMeasurementToolView::AnalysisResult{};
         check(!tool.importSelectedBeatmapTimings(),
               "queued result rejected",
               passed);
