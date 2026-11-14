@@ -1,0 +1,32 @@
+// @brief 显式选择发布型 QA 包时注入测试身份与签名，不影响 Studio 的调试构建。
+// 密钥路径由 CI 宿主环境提供；仓库、Gradle 属性与制品均不保存密码内容。
+// 与既有 QA 包使用同一包名和证书，更新安装可以保留 QA 工程和配置。
+gradle.beforeProject { project ->
+    project.pluginManager.withPlugin('com.android.application') {
+        // AGP 完成 DSL 建立后再配置，避免插件默认值覆盖 QA 身份。
+        // 版本号必须显式传入，不能把当前分支误标成正式 Android 发布。
+        project.androidComponents.finalizeDsl { android ->
+            def code = System.getenv('MMM_ANDROID_QA_VERSION_CODE')?.toInteger()
+            def name = System.getenv('MMM_ANDROID_QA_VERSION_NAME')
+            // Android 的版本码上限由平台限制；缺值或越界时立即终止打包。
+            if (code == null || code < 1 || code > 2100000000 || !name) {
+                throw new GradleException('Missing or invalid QA version metadata.')
+            }
+            android.defaultConfig.applicationId = 'top.xiang233.musicmapmaker.next.qa'
+            android.defaultConfig.versionCode = code
+            android.defaultConfig.versionName = name
+            // 密码仅在配置阶段从受限文件读取，不输出到构建日志。
+            // QA 测试证书不承担正式发行身份，不能替换为生产发布私钥。
+            def signing = android.signingConfigs.maybeCreate('qaRelease')
+            signing.storeFile = new File(System.getenv('MMM_ANDROID_QA_KEYSTORE'))
+            signing.storePassword = new File(System.getenv('MMM_ANDROID_QA_PASSWORD_FILE')).text.trim()
+            signing.keyAlias = 'mmm-qa'
+            signing.keyPassword = signing.storePassword
+            // Java 外壳关闭调试；原生 RelWithDebInfo 符号仍留在集中构建树。
+            // 无密钥时由构建入口失败，不允许交付 unsigned 或 debug 伪装包。
+            android.buildTypes.release.signingConfig = signing
+            android.buildTypes.release.debuggable = false
+            android.buildTypes.release.jniDebuggable = false
+        }
+    }
+}

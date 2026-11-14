@@ -13,7 +13,7 @@ on:
         required: true
         type: choice
         default: website-release
-        options: [website-release, ci-build, hotfix]
+        options: [website-release, ci-build, android-build, hotfix]
       pgo_instrument:
         # 手动 false 必须传到构建子工作流，不能被表达式回退成 true。
         description: "启用业务模块 PGO 插桩采集（需要 LLVM 工具链）"
@@ -60,6 +60,13 @@ jobs:
     # 保留旧入口的名称、默认选项和人工触发条件。
     if: github.event_name == 'workflow_dispatch' && inputs.job == 'website-release'
     uses: ./.github/workflows/website-release.yaml
+  android-build:
+    # 单独验收安卓时不启动桌面五套构建和原生 Mac Runner。
+    # 与普通 ci-build 中的 Android 任务使用同一份工具链和打包逻辑。
+    if: github.event_name == 'workflow_dispatch' && inputs.job == 'android-build'
+    uses: ./.github/workflows/android-build.yaml
+    with:
+      source_ref: ${{ github.sha }}
   hotfix:
     # 错误分支要在 preflight 显式失败，不能仅用 if 条件静默跳过。
     # 0.6.2 程序热修复会被拒绝，0.6.3 起才能比较同版本修订号。

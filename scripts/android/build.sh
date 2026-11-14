@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# @brief Linux 开发机上的 Android 实验构建入口，生成物集中到已忽略的专用目录。
+# @brief Linux 开发机与 CI 共用的 Android 构建入口，生成物集中到专用目录。
 set -euo pipefail
 # 脚本位置确定源码根，不依赖调用终端当前目录。
 android_repo="$(git -C "$(dirname "$(readlink -f "$0")")" rev-parse --show-toplevel)"
@@ -22,8 +22,26 @@ export JAVA_HOME="${MMM_ANDROID_JAVA_HOME:-/usr/lib/jvm/openjdk-21}"
 # 下载缓存默认留在专用构建树，显式环境变量仍可供多个构建共用。
 # Gradle 临时文件和签名也归入该工作树，不能写入新的源码侧隐藏目录。
 export GRADLE_USER_HOME="${MMM_ANDROID_GRADLE_CACHE:-$android_work/cache/gradle-user}"
+# SDK 的用户偏好也属于本工作树，不能由 AGP 另建宿主 ~/.android 缓存。
+export ANDROID_USER_HOME="$android_work/cache/android-user"
 export TMPDIR="$android_work/cache/tmp"
 mkdir -p "$android_work"/{cache,evidence,dependencies,build/assets,build/jni,apk} "$TMPDIR"
+# 默认保留既有调试行为；发布型 QA 包必须显式选择并提供独立签名。
+# 在原生编译前拒绝拼写错误，避免长时间编译后才发现打包任务不存在。
+android_variant="${MMM_ANDROID_VARIANT:-debug}"
+android_gradle_args=()
+case "$android_variant" in
+    debug) android_task=assembleDebug ;;
+    release)
+        android_task=assembleRelease
+        android_gradle_args=(-I "$android_repo/scripts/android/qa-release.init.gradle")
+        # 只检查可读性，不把私钥或密码内容放入日志和命令行参数。
+        [[ -r "${MMM_ANDROID_QA_KEYSTORE:-}" && -r "${MMM_ANDROID_QA_PASSWORD_FILE:-}" ]] || {
+            echo 'QA release requires readable signing files.' >&2; exit 1;
+        }
+        ;;
+    *) echo "Unsupported Android variant: $android_variant" >&2; exit 1 ;;
+esac
 if [[ ! -x "$JAVA_HOME/bin/java" || ! -f "$android_ndk/build/cmake/android.toolchain.cmake" ]]; then
     echo 'Missing pinned NDK or compatible JDK; see Android setup instructions.' >&2
     exit 1
@@ -75,7 +93,8 @@ done
 # 资源 ZIP 和内容标记只生成到集中构建目录，LFS 内容缺失时立即失败。
 python3 "$android_repo/scripts/android/package_assets.py" --repo "$android_repo" --output "$android_work/build/assets"
 # 独立调试签名只属于实验包，不写入默认 ~/.android/debug.keystore。
-if [[ ! -f "$android_work/cache/debug.keystore" ]]; then
+# QA 发布型包不生成无关调试密钥，也不会回退到调试签名。
+if [[ "$android_variant" == debug && ! -f "$android_work/cache/debug.keystore" ]]; then
     "$JAVA_HOME/bin/keytool" -genkeypair -keystore "$android_work/cache/debug.keystore" \
         -storepass android -keypass android -alias androiddebugkey -keyalg RSA \
         -keysize 2048 -validity 10000 -dname 'CN=MusicMapMaker Android Dev,O=Local,C=CN'
@@ -88,11 +107,15 @@ android_sdl_java="$android_repo/3rdpty/sources/IonCachyEngine/3rdpty/sources/sdl
 # SDK 目录由 ANDROID_HOME 定位，不需要创建包含本机绝对路径的 local.properties。
 "$android_repo/packaging/android/gradlew" -p "$android_repo/packaging/android" \
     --project-cache-dir "$android_work/cache/gradle-project" --no-daemon \
+    "${android_gradle_args[@]}" \
     -PmmmAndroidWorkDir="$android_work" -PmmmSdlJavaDir="$android_sdl_java" \
-    -PmmmAndroidAbis="${android_abis// /,}" :app:assembleDebug
+    -PmmmAndroidAbis="${android_abis// /,}" ":app:$android_task"
 # 交付 APK 与调试符号分开存放；用户可以整体清理 build，而不碰源码和 SDK。
 # 仅复制当前成功构建的包，编译失败时不会把历史文件冒充本轮结果。
 # 外置工作树可整体迁移，但应用私有工程工作副本属于用户数据，不能当缓存清理。
-cp "$android_work/build/gradle/app/outputs/apk/debug/app-debug.apk" "$android_work/apk/MusicMapMaker-Next-android-debug.apk"
-"$ANDROID_HOME/build-tools/36.1.0/apksigner" verify "$android_work/apk/MusicMapMaker-Next-android-debug.apk"
-echo "APK: $android_work/apk/MusicMapMaker-Next-android-debug.apk"
+# 文件名包含变体，避免发布型 QA 交付覆盖同一工作树的调试安装包。
+# 签名检查针对交付副本，不能以 Gradle 任务成功代替可安装包的身份验证。
+android_apk="$android_work/apk/MusicMapMaker-Next-android-$android_variant.apk"
+cp "$android_work/build/gradle/app/outputs/apk/$android_variant/app-$android_variant.apk" "$android_apk"
+"$ANDROID_HOME/build-tools/36.1.0/apksigner" verify "$android_apk"
+echo "APK: $android_apk"

@@ -28,6 +28,13 @@ env:
   # 构建脚本无需新增参数，各平台都继承同一份修订环境。
   MMM_CI_PGO_OPTION: ${{ inputs.pgo_instrument && '--pgo-instrument' || '--no-pgo-instrument' }}
 jobs:
+  mmm-android-ci:
+    # 普通 CI 包含安卓 ARM64 QA；旧版 hotfix 基线未必包含 Android 后端。
+    # 热修复继续原有发布集合，不借此修改旧 tag 的平台范围或网站清单。
+    if: inputs.hotfix_revision == ''
+    uses: ./.github/workflows/android-build.yaml
+    with:
+      source_ref: ${{ inputs.source_ref }}
   mmm-debian-ci:
     # push 或人工 ci-build 才运行 Linux 宿主上的五套构建。
     # push 与手动构建的条件表达式必须在三个构建 job 中保持一致。
