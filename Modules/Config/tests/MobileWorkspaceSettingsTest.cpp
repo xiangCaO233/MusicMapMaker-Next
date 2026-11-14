@@ -39,10 +39,20 @@ int main(int argc, char** argv)
             XERROR("Mobile layout: {}", message);
         }
     };
-    // 首次启动和旧文件缺字段时必须仍收起辅助窗口，不能继承桌面显隐。
+    // 首次启动与缺字段旧文件显示三类辅助窗口，仍独立于桌面显隐配置。
     const auto defaults =
         nlohmann::json::object().get<MobileWorkspaceSettings>();
     check(defaults == MobileWorkspaceSettings{}, "old config defaults");
+    // 单独约束产品默认，避免构造与反序列化同时写错而整体比较仍通过。
+    check(defaults.m_toolbar && defaults.m_timing && defaults.m_preview &&
+              !defaults.m_settingsOpen,
+          "new layouts show toolbar timeline and preview");
+    // 显式关闭属于用户布局选择，更新默认不能在重启时强制展开用户收起的窗口。
+    const auto hidden = nlohmann::json{
+        { "toolbar", false }, { "timing", false }, { "preview", false }
+    }.get<MobileWorkspaceSettings>();
+    check(!hidden.m_toolbar && !hidden.m_timing && !hidden.m_preview,
+          "explicit hidden windows remain hidden");
     // 缺少位置字段的旧文件沿用贴底默认，不依赖构造与读取两处同时写错。
     check(defaults.m_leftCenter == 1.0f && defaults.m_rightCenter == 1.0f,
           "new and missing positions default to bottom");
@@ -79,7 +89,7 @@ int main(int argc, char** argv)
     };
     const auto repaired = invalid.get<MobileWorkspaceSettings>();
     // 同时检查有效边界和缺省字段，不能以整个对象回退掩盖逐字段修复。
-    check(!repaired.m_toolbar && repaired.m_leftCenter == 0 &&
+    check(repaired.m_toolbar && repaired.m_leftCenter == 0 &&
               repaired.m_rightCenter == 1 &&
               repaired.m_timingRatio == defaults.m_timingRatio &&
               repaired.m_selectedTab == 0 && repaired.m_resourceTab == 0,

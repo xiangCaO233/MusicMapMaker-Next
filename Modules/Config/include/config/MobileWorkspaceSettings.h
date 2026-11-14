@@ -8,8 +8,10 @@ namespace MMM::Config
 /// @brief 仅属于本机移动外壳的布局值，不参与谱面或桌面布局预设。
 /// @details 保存显隐、比例和稳定标签身份，不保存屏幕像素坐标或窗口指针。
 struct MobileWorkspaceSettings {
-    /// @brief 辅助窗口默认收起；首次启动仍只有主画布与欢迎两个标签。
-    bool m_toolbar{}, m_timing{}, m_preview{}, m_settingsOpen{};
+    /// @brief 首次启动显示工具栏、时间线和预览；旧配置缺字段也沿用该默认值。
+    bool m_toolbar{ true }, m_timing{ true }, m_preview{ true };
+    /// @brief 设置页仍由用户主动打开，不能随辅助窗口一起占用首次启动主区。
+    bool m_settingsOpen{};
     /// @brief 工作台默认可用，但只在主画布选中时实际占用布局空间。
     bool m_workbench{ true };
     /// @brief 左右页耳默认贴底；独立归一化中心保留用户拖动后的停放位置。

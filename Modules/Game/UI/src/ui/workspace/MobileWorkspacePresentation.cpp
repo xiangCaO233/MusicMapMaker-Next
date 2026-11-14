@@ -176,7 +176,7 @@ private:
     MobileDockLayout m_dock;
     /// @brief 下一帧收到的原生返回请求，由 SDL 事件泵写入。
     bool m_backRequested{}, m_initialized{}, m_drawingDrawer{};
-    /// @brief 窗口开关属于移动外壳，初次启动全部收起。
+    /// @brief 首帧从独立移动配置恢复显隐，这些临时值不参与首次启动布局选择。
     bool m_showToolbar{}, m_showTiming{}, m_showPreview{};
     /// @brief 用户开关独立于临时页签显隐，切到设置不覆盖工作台恢复偏好。
     bool m_showWorkbench{ true };
