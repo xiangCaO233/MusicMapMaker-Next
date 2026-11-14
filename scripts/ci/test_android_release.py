@@ -9,11 +9,15 @@ import importlib.util
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
 import zipfile
 
+
+# 测试只在集中输出目录产生夹具，不在源码旁缓存动态导入模块的字节码。
+sys.dont_write_bytecode = True
 
 # 同目录的发布模块通过文件位置加载，不依赖当前 shell 的工作目录。
 SPEC = importlib.util.spec_from_file_location("android_release", Path(__file__).with_name("android-release.py"))
