@@ -111,10 +111,21 @@ if(MMM_ENABLE_BUILD_TIMING)
 endif()
 
 # 启动辅助实现归入主目标，不额外暴露静态库或跨模块链接接口。
-target_sources(MusicMapMaker-Next PRIVATE src/PGOProfiler.cpp
-                                          src/StartupProgressDialog.cpp)
+target_sources(
+  MusicMapMaker-Next PRIVATE src/PGOProfiler.cpp src/PGOProfileCache.cpp
+                             src/StartupProgressDialog.cpp)
 # include 目录只服务 Main 内部实现，其他模块不得反向依赖启动层。 两个辅助头通过该私有目录供 main.cpp 使用，不构成安装接口。
 target_include_directories(MusicMapMaker-Next PRIVATE include)
+
+# 缓存回归只依赖文件系统，复用 Common 基础测试套件，不新增独立程序。 独立目录和小容量夹具验证边界，禁止触及用户真实临时缓存。
+mmm_add_test_executable(Common PGOProfileCacheTest
+                        tests/PGOProfileCacheTest.cpp src/PGOProfileCache.cpp)
+target_include_directories(PGOProfileCacheTest PRIVATE include)
+# 只链接日志以输出断言；容量算法不依赖图形、上传库或真实应用单例。
+target_link_libraries(PGOProfileCacheTest PRIVATE Log)
+# 输出固定在构建树，测试入口另建唯一子目录以隔离重复运行。
+mmm_register_test_case(NAME PGOProfileCacheTest COMMAND PGOProfileCacheTest
+                       "${CMAKE_BINARY_DIR}/test_output/PGOProfileCacheTest")
 
 # 主程序是依赖汇聚点；各业务模块之间仍按自身公开 target 传播依赖。 Runtime 必须保留在链接集合中，为启动同步和退出 PGO
 # 上传提供共享线程池。
