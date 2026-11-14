@@ -21,6 +21,9 @@ import android.util.Base64;
  * SDL Java 实现来自构建使用的同一上游源码目录，不在仓库复制维护。
  */
 public final class MainActivity extends SDLActivity {
+    /** 权限引导只属于当前 Activity，每次恢复重新核验系统实际授权。 */
+    private FileAccessPrompt fileAccessPrompt;
+
     /** 返回回调只在 Activity 生命周期内存活，旧版系统不解析 API 33 类型。 */
     private Object backNavigationCallback;
     /** 鼠标监听器随 Activity 注册和释放，不依赖原生窗口是否已经构造。 */
@@ -39,6 +42,8 @@ public final class MainActivity extends SDLActivity {
         backNavigationCallback = BackNavigation.register(this);
         inputDevices = new InputDevices(this);
         softKeyboard = new SoftKeyboard(this);
+        // 只建立引导对象，显示与返回核验统一交给 onResume，避免启动时重复弹窗。
+        fileAccessPrompt = new FileAccessPrompt(this, this::requestLocalFileAccess);
     }
 
     /** Activity 销毁时精确解除自己的回调，SDL 生命周期仍由基类负责。 */
@@ -85,6 +90,8 @@ public final class MainActivity extends SDLActivity {
     @Override protected void onResume() {
         super.onResume();
         getWindow().getDecorView().post(highRefreshRate::apply);
+        // 系统设置返回也必须重新核验；未授权时不能继续显示不可读的空目录。
+        getWindow().getDecorView().post(() -> fileAccessPrompt.showIfNeeded());
     }
 
     /** 系统文件选择器返回时可能替换 Surface，重新应用当前显示能力。 */
