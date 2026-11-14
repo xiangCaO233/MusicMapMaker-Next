@@ -265,7 +265,7 @@ void SettingsView::drawVisualSettings()
                                                   0.001f,
                                                   -0.5f,
                                                   0.5f,
-                                                  "%.3f s") )
+                                                  "%.4f s") )
                     changed = true;
             });
         addSettingItem(
@@ -282,7 +282,7 @@ void SettingsView::drawVisualSettings()
                                                   0.001f,
                                                   -0.5f,
                                                   0.5f,
-                                                  "%.3f s") )
+                                                  "%.4f s") )
                     changed = true;
             });
         addSettingItem(
@@ -299,7 +299,7 @@ void SettingsView::drawVisualSettings()
                                                   0.001f,
                                                   -0.5f,
                                                   0.5f,
-                                                  "%.3f s") )
+                                                  "%.4f s") )
                     changed = true;
             });
     }

@@ -350,6 +350,13 @@ target_include_directories(BpmPlaybackRoutingTest
 mmm_register_test_case(NAME BpmPlaybackRoutingTest COMMAND
                        BpmPlaybackRoutingTest)
 
+# 四位时间显示在共享无分配时钟和 UI 字符串入口分别验证，纯内存测试不写资源。
+
+# 本组覆盖分钟跨小时累计和极值进位，不依赖窗口、字体或当前个人配置。
+mmm_add_test_executable(UI TimeFormatUtilsTest tests/TimeFormatUtilsTest.cpp)
+target_link_libraries(TimeFormatUtilsTest PRIVATE UI)
+mmm_register_test_case(NAME TimeFormatUtilsTest COMMAND TimeFormatUtilsTest)
+
 # BPM 手工测量历史测试构造最小工具视图，验证拖动合并与切轨清理。
 mmm_add_test_executable(UI BpmMeasurementHistoryTest
                         tests/BpmMeasurementHistoryTest.cpp)

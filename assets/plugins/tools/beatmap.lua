@@ -111,7 +111,7 @@ return {
             widgets[#widgets + 1] = {
                 type = "text", id = "summary",
                 label = string.format(
-                    "来源：%s | 玩家轨：%d | BGM 轨：%d | BPM：%.3f | 长度：%.3f ms",
+                    "来源：%s | 玩家轨：%d | BGM 轨：%d | BPM：%.3f | 长度：%.4f ms",
                     info.format or "", info.track_count or 0,
                     info.bgm_track_count or 0, info.bpm or 0,
                     info.map_length or 0),

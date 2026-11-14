@@ -1,4 +1,5 @@
 #include "BeatmapSession_CommandState.h"
+#include "common/ClockTimeText.h"
 #include "common/LogicCommands.h"
 #include "common/platform/DocumentStorage.h"
 #include "config/EditorSettings.h"
@@ -928,39 +929,25 @@ bool shouldConfirmForcedMmmOverwrite(
 /// @return 按当前软件时间格式偏好生成的状态栏文本。
 /// @note Beat 格式缺少 BPM 上下文时回退秒格式，不能伪造拍号位置。
 /// @details
-/// Clock 与 Milliseconds 使用相同的毫秒四舍五入基准。小时保留累计值而不按天
-/// 截断；负时间单独处理符号，避免整数取模在预滚动区产生负字段。
+/// Clock 保留四位秒小数并累计分钟，Milliseconds 沿用整数毫秒。
+/// 负时间单独处理符号，避免整数取模在预滚动区产生负字段。
 std::string formatStatusTime(double timeSeconds)
 {
     auto preference = MMM::Config::AppConfig::instance()
                           .getEditorSettings()
                           .timeFormatPreference;
     switch ( preference ) {
-    case MMM::Config::TimeFormatPreference::Clock: {
-        // 符号与绝对时长分开处理，负预滚动时间仍保持固定时钟字段宽度。
-        bool    negative = timeSeconds < 0.0;
-        double  absTime  = std::abs(timeSeconds);
-        auto    totalMs  = static_cast<int64_t>(std::llround(absTime * 1000.0));
-        int64_t ms       = totalMs % 1000;
-        int64_t seconds  = (totalMs / 1000) % 60;
-        int64_t minutes  = (totalMs / 60000) % 60;
-        int64_t hours    = totalMs / 3600000;
-        // 小时不截断到 24，长谱面或异常大时间仍能完整展示累计时长。
-        return fmt::format("{}{:02}:{:02}:{:02}.{:03}",
-                           negative ? "-" : "",
-                           hours,
-                           minutes,
-                           seconds,
-                           ms);
-    }
+    case MMM::Config::TimeFormatPreference::Clock:
+        // 状态反馈与画布时间共用累计分钟格式，避免长时长重新引入小时字段。
+        return MMM::Common::formatClockTime(timeSeconds).data();
     case MMM::Config::TimeFormatPreference::Milliseconds:
-        // 毫秒模式统一四舍五入到整数，保持与时钟模式相同精度。
+        // 纯毫秒偏好仍显示整数毫秒，不改变其既有单位语义。
         return fmt::format(
             "{} ms", static_cast<int64_t>(std::llround(timeSeconds * 1000.0)));
     case MMM::Config::TimeFormatPreference::Beat:
     case MMM::Config::TimeFormatPreference::Seconds:
-        // 无 SessionSnapshot 时无法解析拍位，Beat 与未知偏好按三位秒数回退。
-    default: return fmt::format("{:.3f} s", timeSeconds);
+        // 无 SessionSnapshot 时无法解析拍位，Beat 与未知偏好按四位秒数回退。
+    default: return fmt::format("{:.4f} s", timeSeconds);
     }
 }
 

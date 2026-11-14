@@ -1,4 +1,5 @@
 #include "ui/utils/TimeFormatUtils.h"
+#include "common/ClockTimeText.h"
 #include "common/render/RenderSnapshot.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
@@ -20,30 +21,14 @@ namespace MMM::UI::Utils
 namespace TimeFormatDetail
 {
 
-/// @brief 格式化时:分:秒.毫秒。
+/// @brief 格式化累计分钟、秒及四位秒小数。
 /// @param timeSeconds 可为负值的时间，单位秒。
-/// @return 固定宽度 `HH:MM:SS.mmm` 文本，负值带前导负号。
-/// @note 先对绝对毫秒总数舍入，再拆分字段，保证进位一致。
+/// @return MM:SS.ffff 文本，分钟可超过 60，负零在舍入后归零。
+/// @note 使用共享整数拆分规则，保持状态栏、判定线和导出时间一致。
 std::string formatClock(double timeSeconds)
 {
-    // 符号与绝对值分开处理，避免负数取模产生负字段。
-    bool negative = timeSeconds < 0.0;
-    // llround 使毫秒舍入可以正确进位到秒、分和小时。
-    double absTime = std::abs(timeSeconds);
-    auto   totalMs = static_cast<int64_t>(std::llround(absTime * 1000.0));
-    // 由总毫秒依次拆出毫秒、秒、分，小时不限制位数。
-    int64_t ms      = totalMs % 1000;
-    int64_t seconds = (totalMs / 1000) % 60;
-    int64_t minutes = (totalMs / 60000) % 60;
-    int64_t hours   = totalMs / 3600000;
-
-    // 秒、分和毫秒始终补零，小时至少两位。
-    return fmt::format("{}{:02}:{:02}:{:02}.{:03}",
-                       negative ? "-" : "",
-                       hours,
-                       minutes,
-                       seconds,
-                       ms);
+    // UI 使用字符串接口，底层格式化仍与无分配的画布时间组件共用实现。
+    return Common::formatClockTime(timeSeconds).data();
 }
 
 /// @brief 格式化纯毫秒。
@@ -194,7 +179,7 @@ std::string formatBeatTimeWithPoints(
     const auto position =
         calculateBeatPositionWithPoints(timeSeconds, points, beatDivisor);
     // 原有格式化接口在无法换算时继续回退秒数，保持所有既有调用行为。
-    if ( !position.valid ) return fmt::format("{:.3f} s", timeSeconds);
+    if ( !position.valid ) return fmt::format("{:.4f} s", timeSeconds);
     return fmt::format("{} + {}/{}",
                        position.beatNumber,
                        position.numerator,
@@ -243,7 +228,7 @@ std::string formatTimeWithPreference(
     case Config::TimeFormatPreference::Beat:
         return formatBeatTime(timeSeconds, snapshot);
     case Config::TimeFormatPreference::Seconds:
-    default: return fmt::format("{:.3f} s", timeSeconds);
+    default: return fmt::format("{:.4f} s", timeSeconds);
     }
 }
 

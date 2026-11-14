@@ -1454,7 +1454,7 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
         if ( entry.item->track >= 0 ) {
             std::snprintf(metadata,
                           sizeof(metadata),
-                          "%.3f s · %s #%d%s",
+                          "%.4f s · %s #%d%s",
                           entry.marker->timestamp,
                           target.data(),
                           entry.item->track + 1,
@@ -1462,7 +1462,7 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
         } else {
             std::snprintf(metadata,
                           sizeof(metadata),
-                          "%.3f s · %s%s",
+                          "%.4f s · %s%s",
                           entry.marker->timestamp,
                           target.data(),
                           entry.item->targetMissing ? " !" : "");

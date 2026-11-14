@@ -1916,7 +1916,7 @@ void BpmMeasurementToolView::renderControlPanel(UIManager* sourceManager)
              0.01f,
              0.0f,
              static_cast<float>(std::max(0.001, playbackCanvasDuration())),
-             "%.3f") ) {
+             "%.4f") ) {
         // 视图中心独立于播放位置；只有跟随播放模式会持续覆盖它。
         m_viewCenter = std::clamp<double>(
             center, 0.0, std::max(0.0, playbackCanvasDuration()));
@@ -1963,7 +1963,7 @@ void BpmMeasurementToolView::renderControlPanel(UIManager* sourceManager)
     if ( m_duration > 0.0 ) {
         // 时长来自分析结果，作为诊断信息而非可编辑参数显示。
         ImGui::TextDisabled(
-            "%s %.3fs", TR("ui.tools.bpm_measure.duration").data(), m_duration);
+            "%s %.4fs", TR("ui.tools.bpm_measure.duration").data(), m_duration);
     }
 }
 
@@ -2010,8 +2010,8 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
                          .x) +
             ImGui::GetStyle().FramePadding.x * 2.0f;
         const float numericWidth =
-            // 正负时间和三位小数都需要显示；列宽也不能小于单位表头。
-            std::max(ImGui::CalcTextSize("-12345.678").x,
+            // 正负时间和四位小数都需要显示；列宽也不能小于单位表头。
+            std::max(ImGui::CalcTextSize("-12345.6789").x,
                      ImGui::CalcTextSize(
                          TR("ui.tools.bpm_measure.segment_time_column").data())
                          .x) +
@@ -2066,7 +2066,7 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
                              60.0 / ::MMM::normalizeBpmValue(segment.bpm))),
                          static_cast<float>(
                              std::max(0.001, playbackCanvasDuration())),
-                         "%.3f") ) {
+                         "%.4f") ) {
                     // 拖动期间暂存原始值，循环结束后统一排序和限幅。
                     segment.timestampSeconds = time;
                     changed                  = true;

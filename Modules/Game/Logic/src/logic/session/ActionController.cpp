@@ -463,12 +463,12 @@ void TimelineAction::execute(SessionContext& ctx)
         // 恢复时尝试沿用记录的实体提示，并保存实际返回身份以便后续撤销。
         if ( !reg.valid(m_entity) ) m_entity = reg.create(m_entity);
         reg.emplace_or_replace<TimelineComponent>(m_entity, *m_after);
-        XINFO("[Action] Create Timeline: Time={:.3f}, Val={:.2f}",
+        XINFO("[Action] Create Timeline: Time={:.4f}, Val={:.2f}",
               m_after->m_timestamp,
               m_after->m_value);
     } else if ( m_type == Type::Delete ) {
         if ( reg.valid(m_entity) ) {
-            XINFO("[Action] Delete Timeline: Time={:.3f}, Val={:.2f}",
+            XINFO("[Action] Delete Timeline: Time={:.4f}, Val={:.2f}",
                   m_before->m_timestamp,
                   m_before->m_value);
             reg.destroy(m_entity);
@@ -477,7 +477,7 @@ void TimelineAction::execute(SessionContext& ctx)
         if ( reg.valid(m_entity) ) {
             // patch 保留组件更新通知入口，不绕过注册表直接覆盖外部快照。
             XINFO(
-                "[Action] Update Timeline: [{:.3f}, {:.2f}] -> [{:.3f}, "
+                "[Action] Update Timeline: [{:.4f}, {:.2f}] -> [{:.4f}, "
                 "{:.2f}]",
                 m_before->m_timestamp,
                 m_before->m_value,
@@ -551,13 +551,13 @@ std::string TimelineAction::getName() const
         break;
     }
     if ( m_after )
-        return fmt::format("{} ({}: {:.3f})",
+        return fmt::format("{} ({}: {:.4f})",
                            typeStr,
                            TR("ui.status.info.time"),
                            m_after->m_timestamp);
     // 删除没有 after，改用 before 的位置，避免名称显示空时间或默认零。
     if ( m_before )
-        return fmt::format("{} ({}: {:.3f})",
+        return fmt::format("{} ({}: {:.4f})",
                            typeStr,
                            TR("ui.status.info.time"),
                            m_before->m_timestamp);
@@ -742,7 +742,7 @@ void NoteAction::execute(SessionContext& ctx)
             beatmapUpdatedIncrementally =
                 SessionUtils::syncCreatedNoteToBeatmap(ctx, *cacheAfter);
         }
-        XINFO("[Action] Create Note: Type={}, Time={:.3f}, Track={}",
+        XINFO("[Action] Create Note: Type={}, Time={:.4f}, Track={}",
               (int)m_after->m_type,
               m_after->m_timestamp,
               m_after->m_trackIndex);
@@ -754,7 +754,7 @@ void NoteAction::execute(SessionContext& ctx)
             cacheBefore = current;
             // 补身份只影响标识，不把当前几何覆盖进用于撤销的历史 before。
             // 缓存差量使用实际删除前的当前值，不只依赖可能较旧的动作快照。
-            XINFO("[Action] Delete Note: Time={:.3f}, Track={}",
+            XINFO("[Action] Delete Note: Time={:.4f}, Track={}",
                   m_before->m_timestamp,
                   m_before->m_trackIndex);
             forgetChartObjectSelection(ctx,
@@ -773,7 +773,7 @@ void NoteAction::execute(SessionContext& ctx)
             inheritNoteIdentity(current, m_after);
             cacheBefore = current;
             XINFO(
-                "[Action] Update Note: Time [{:.3f} -> {:.3f}], Track [{} -> "
+                "[Action] Update Note: Time [{:.4f} -> {:.4f}], Track [{} -> "
                 "{}]",
                 m_before->m_timestamp,
                 m_after->m_timestamp,
@@ -937,14 +937,14 @@ std::string NoteAction::getName() const
         break;
     }
     if ( m_after )
-        return fmt::format("{} ({}: {:.3f}, {}: {})",
+        return fmt::format("{} ({}: {:.4f}, {}: {})",
                            typeStr,
                            TR("ui.status.info.time"),
                            m_after->m_timestamp,
                            TR("ui.status.info.track"),
                            m_after->m_trackIndex);
     if ( m_before )
-        return fmt::format("{} ({}: {:.3f}, {}: {})",
+        return fmt::format("{} ({}: {:.4f}, {}: {})",
                            typeStr,
                            TR("ui.status.info.time"),
                            m_before->m_timestamp,

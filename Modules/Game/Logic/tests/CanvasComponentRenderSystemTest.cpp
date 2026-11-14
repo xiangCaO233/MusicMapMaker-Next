@@ -1061,7 +1061,7 @@ bool testHitEffectKpsRollingWindow()
 
 /// @brief 验证判定线时间的固定精度格式与负值处理。
 /// @return 常规、负值和非有限输入均符合约定时返回 true。
-/// @note 固定字符串比较覆盖小时、毫秒补零和负号，不受区域设置影响。
+/// @note 固定字符串比较覆盖累计分钟、四位小数补零和负号，不受区域设置影响。
 /// @note 非有限时间回退零；负拍号也以零表示。
 /// @note 不把时间单位转换与格式化混在一起，输入始终为秒。
 /// @note 通过立即复制返回缓冲构造字符串，不保留临时缓冲的 data 指针。
@@ -1072,12 +1072,12 @@ bool testJudgmentLineTimeFormatting()
     // 正值覆盖跨小时进位，负值覆盖符号与毫秒尾零。
     // NaN 不得流入时间整数换算，约定回退为零时间文本。
     return std::string(System::formatJudgmentLineTime(3723.456).data()) ==
-               "01:02:03.456" &&
+               "62:03.4560" &&
            std::string(System::formatJudgmentLineTime(-1.25).data()) ==
-               "-00:00:01.250" &&
+               "-00:01.2500" &&
            std::string(System::formatJudgmentLineTime(
                            std::numeric_limits<double>::quiet_NaN())
-                           .data()) == "00:00:00.000" &&
+                           .data()) == "00:00.0000" &&
            // 多位拍号不能截断，负数则按显示协议钳制为零。
            // 这与负时间保留负号的规则不同，不能共用同一格式化分支。
            std::string(System::formatBeatNumber(12345).data()) == "#12345" &&

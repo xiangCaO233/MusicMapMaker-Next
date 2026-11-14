@@ -6154,7 +6154,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                      &visual.nonHoldHitEffectDuration,
                      Config::VisualConfig::MIN_NON_HOLD_HIT_EFFECT_DURATION,
                      Config::VisualConfig::MAX_NON_HOLD_HIT_EFFECT_DURATION,
-                     "%.3f s") ) {
+                     "%.4f s") ) {
                 applyVisualConfig(visual);
                 m_layoutVisualConfigDirty = true;
             }

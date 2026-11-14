@@ -1361,7 +1361,7 @@ double drawPopupBeatPositionEditor(
         drawTimingTableFractionInput("##PopupBeatFraction", fit, fraction);
     UI::keepMobileInputItemVisible();
     if ( ImGui::IsItemHovered() ) {
-        ImGui::SetTooltip("支持分数（如 1/4）或小数；拟合误差 %.3f ms",
+        ImGui::SetTooltip("支持分数（如 1/4）或小数；拟合误差 %.4f ms",
                           fit.errorMs);
     }
     if ( beatChanged || fractionChanged ) {
@@ -3623,7 +3623,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         }
                         if ( hasFractionWarning ) {
                             if ( ImGui::IsItemHovered() ) {
-                                ImGui::SetTooltip("分拍位拟合误差 %.3f ms",
+                                ImGui::SetTooltip("分拍位拟合误差 %.4f ms",
                                                   fractionFit.errorMs);
                             }
                             ImGui::PopStyleColor(2);
@@ -3653,7 +3653,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                     el.interpolation->m_endValue);
                         if ( ImGui::IsItemHovered() )
                             ImGui::SetTooltip(
-                                "%.3f–%.3f s；%.4g Hz",
+                                "%.4f–%.4f s；%.4g Hz",
                                 el.time,
                                 el.time + el.interpolation->m_duration,
                                 el.interpolation->m_samplesPerSecond);
