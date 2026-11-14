@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <iterator>
 #include <limits>
 #include <string>
 
@@ -967,6 +968,8 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
         return;
     }
     if ( cmd.finishNavigation ) {
+        // 下次手势必须从实际落点开始，不能继承上一笔未满一格的余量。
+        m_ctx.m_pointerScrollVisualTime.reset();
         // 收尾不需要有效视口或尚存相机；窗口关闭仍能释放局部覆盖。
         // 标记最终配置已经发布，显示覆盖由会话在同版配置可见时移除。
         // 不阻塞等待，也不让处理到旧配置的当前轮次产生一次缩放回跳。
@@ -1046,7 +1049,17 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
     const double visualOffset =
         m_ctx.lastConfig.visual.getEffectiveVisualOffset();
     // 判定线的视觉偏移在映射前加、定位前减，保持两种时间域对称。
-    const double visualTime   = m_ctx.currentTime + visualOffset;
+    // timelineZoom 是触控直接导航的显式标识；经典中键保持原自由平移语义。
+    // 临时旁路只属于当前输入命令，不修改持久化的 scrollSnap。
+    const bool snapPan = directNavigation && !directZoom &&
+                         m_ctx.lastConfig.settings.scrollSnap &&
+                         !cmd.bypassScrollSnap;
+    // 缩放时优先保证双指中点锚定；纯平移才消费连续位移余量并显示分拍吸附。
+    // 自由滚动和临时取消吸附必须从实际显示位置接续，不能沿用旧的隐藏余量。
+    if ( !snapPan ) m_ctx.m_pointerScrollVisualTime.reset();
+    const double visualTime   = snapPan && m_ctx.m_pointerScrollVisualTime
+                                    ? *m_ctx.m_pointerScrollVisualTime
+                                    : m_ctx.currentTime + visualOffset;
     double       renderScaleY = static_cast<double>(cmd.renderScaleY);
     if ( !std::isfinite(renderScaleY) || std::abs(renderScaleY) <= 1e-6 ) {
         // 缩放用于除法，未初始化或接近零时采用单位比例避免放大噪声。
@@ -1104,10 +1117,61 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
         return;
     }
 
+    if ( snapPan ) {
+        // 原始位置独立于吸附结果：连续小增量累计后仍能跨过下一条分拍线。
+        m_ctx.m_pointerScrollVisualTime = targetVisualTime;
+        // BPM 变更后的脏缓存沿用会话维护规则，正常手势只读取已排序索引。
+        SessionUtils::ensureBpmEvents(m_ctx);
+        const auto& events = m_ctx.bpmEvents;
+        // 尚无 BPM 时保留自由定位，不能凭空创建谱面时间点或报一次吸附成功。
+        if ( !events.empty() ) {
+            // 缓存已排序，二分定位 BPM 段；触控每次更新不全量遍历时间线。
+            auto next = std::upper_bound(
+                events.begin(),
+                events.end(),
+                targetVisualTime,
+                [](double time, const TimelineComponent* timing) {
+                    return time < timing->m_timestamp;
+                });
+            // 首段之前沿首段外推，与现有滚轮前导区定位保持一致。
+            const auto* timing =
+                next == events.begin() ? events.front() : *std::prev(next);
+            const double fallback =
+                m_ctx.currentBeatmap
+                    ? m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+                    : ::MMM::DEFAULT_NORMALIZED_BPM;
+            // 与滚轮相同，滚动吸附采用当前分拍；物件放置模式是另一个独立设置。
+            const int divisor = m_ctx.lastConfig.settings.beatDivisor > 0
+                                    ? m_ctx.lastConfig.settings.beatDivisor
+                                    : 4;
+            // 先转视觉拍位，再取整；视觉偏移不会被误当成网格相位。
+            const double steps =
+                timelineBeatsAt(*timing, targetVisualTime, fallback) * divisor;
+            // 向下取整偏好同样适用于触控，默认则选择最近的可见分拍线。
+            const double snapped = m_ctx.lastConfig.settings.snapFloor
+                                       ? std::floor(steps + 1e-6)
+                                       : std::round(steps);
+            // 连续 BPM 在拍位域取整再反解，不能把变速段当作恒定秒间隔。
+            const double candidate =
+                timelineTimeAtBeat(*timing, snapped / divisor, fallback);
+            // 旧 BPM 段的网格不能越过下一段起点，段落边界本身仍可成为落点。
+            // 无效反解保持原连续位置，避免把非有限时间交给音频定位。
+            if ( std::isfinite(candidate) )
+                targetVisualTime =
+                    next == events.end()
+                        ? candidate
+                        : std::min(candidate, (*next)->m_timestamp);
+        }
+    }
+
     // 复用统一定位入口处理范围、暂停偏好及音频归属；传入前转回谱面时间。
     // 未设置连续 scrub 标记，中键纵移采用定位命令默认的提交语义。
     handleCommand(CmdSeek{ .time        = targetVisualTime - visualOffset,
                            .isScrubbing = directNavigation });
+    // 只有范围钳制才丢弃余量，普通吸附造成的距离必须留给后续小增量。
+    if ( snapPan &&
+         std::abs(m_ctx.currentTime + visualOffset - targetVisualTime) > 1e-7 )
+        m_ctx.m_pointerScrollVisualTime = m_ctx.currentTime + visualOffset;
 
     // 直接操作期间不叠加滚动动画，否则视觉内容会落后于中键指针。
     // 使用定位后已钳制的会话时间，而不是可能超出曲尾的原始拖动目标。

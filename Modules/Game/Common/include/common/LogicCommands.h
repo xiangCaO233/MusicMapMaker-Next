@@ -774,6 +774,9 @@ struct CmdPanCanvas {
     /// @brief 全部导航更新结束后清除局部缩放；配置发布必须先于此命令。
     bool finishNavigation{ false };
 
+    /// @brief 本次触控临时取消吸附，不覆盖应用保存的滚动磁吸偏好。
+    bool bypassScrollSnap{ false };
+
     /// @brief 预览专用范围倍率；正值启用 Preview 导航，不影响主画布缩放。
     float previewAreaRatio{ 0.0F };
     /// @brief 预览轻点按实际显示帧反投影，不消费滞后的鼠标悬浮时间。

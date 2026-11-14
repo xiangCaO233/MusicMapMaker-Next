@@ -130,6 +130,10 @@ struct SessionContext {
     std::optional<float> m_pointerTimelineZoom;
     /// @brief 释放已发布最终配置；保持本地显示覆盖直到该配置进入逻辑轮次。
     bool m_pointerZoomFinished{ false };
+    /// @brief 双指吸附前的连续视觉时间，只由逻辑线程在直接导航期间积分。
+    /// @details 保留不足一格的位移，避免逐次从吸附点重新计算而无法跨格。
+    /// 手势结束、取消吸附或捏合时清除，不持久化到项目。
+    std::optional<double> m_pointerScrollVisualTime;
     /// @brief 预览手势的局部范围覆盖，仅逻辑线程读写，不改变全谱滚速缓存。
     std::optional<float> m_pointerPreviewAreaRatio;
     /// @brief 保留已显示的预览范围，直到 UI 发布的最终配置进入同一逻辑轮次。

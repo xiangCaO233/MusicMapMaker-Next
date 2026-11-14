@@ -64,15 +64,17 @@ inline void routeMobileNavigation(
             // 一条命令同时求解平移与缩放锚点，避免两条异步命令相互覆盖。
             // 矩阵无有效交点时不钳制到边缘，也不提交尚未显示过的倍率。
             navigationZoom = delta.m_zoom;
-            UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
-                Logic::CmdPanCanvas{ .cameraId      = camera,
-                                     .deltaX        = newPoint->x - oldPoint->x,
-                                     .deltaY        = newPoint->y - oldPoint->y,
-                                     .viewportWidth = width,
-                                     .viewportHeight = height,
-                                     .renderScaleY   = snapshot.renderScaleY,
-                                     .timelineZoom   = delta.m_zoom,
-                                     .anchorY        = oldPoint->y }));
+            UI::Interaction::dispatchCommand(
+                Event::LogicCommandEvent(Logic::CmdPanCanvas{
+                    .cameraId         = camera,
+                    .deltaX           = newPoint->x - oldPoint->x,
+                    .deltaY           = newPoint->y - oldPoint->y,
+                    .viewportWidth    = width,
+                    .viewportHeight   = height,
+                    .renderScaleY     = snapshot.renderScaleY,
+                    .timelineZoom     = delta.m_zoom,
+                    .anchorY          = oldPoint->y,
+                    .bypassScrollSnap = UI::Interaction::bypassSnapping() }));
         }
     }
     if ( delta.m_finished ) {

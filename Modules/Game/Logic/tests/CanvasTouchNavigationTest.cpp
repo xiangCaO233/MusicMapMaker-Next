@@ -2,6 +2,7 @@
 #include "config/EditorConfig.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
+#include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/PlaybackController.h"
@@ -143,16 +144,123 @@ bool testDirectZoomKeepsCentroidAnchor()
         near(context.animatedTimelineZoom, .5) && near(anchorPixel(), 260) &&
         context.actionStack.getUndoStackSize() == 0;
     if ( !passed )
-        XERROR("Final pinch config adoption changed displayed anchor: {}",
-               anchorPixel());
+        XERROR(
+            "Final pinch adoption: anchor={}, pointer={}, finished={}, "
+            "base={}, zoom={}, undo={}",
+            anchorPixel(),
+            context.m_pointerTimelineZoom.has_value(),
+            context.m_pointerZoomFinished,
+            cache.getBaseZoom(),
+            context.animatedTimelineZoom,
+            context.actionStack.getUndoStackSize());
     // 所有对象随局部会话销毁，不向后续测试留下活动谱面或全局设置。
     return passed;
+}
+
+/// @brief 小位移必须累计跨网格，开关与临时取消不改变保存的吸附偏好。
+/// @details 使用真实 ScrollCache 求输入像素，不能用另一份像素比例验证自身。
+/// 带视觉偏移和非零 BPM 相位，区分传输时间与正在显示的分拍线。
+/// 生产连续定位会把每帧落点吸附；余量应独立存在且在结束时清空。
+/// @return 连续小量、反向、旁路和手势收尾全部通过时返回真。
+/// @warning 无音频、UI 或文件系统副作用，失败只改变本地会话夹具。
+/// 离散落点与连续积分分别断言，避免只检查最终位置漏掉卡住的中间帧。
+/// 浮点容差采用本文件统一秒级阈值，不把误差放大到整格。
+/// 时间线缩放固定为一，使本场景聚焦平移，捏合锚点由前一场景独立验证。
+/// 所有上下文读写都在同一测试线程，不依赖渲染快照发布的墙钟时序。
+/// 收尾断言同时覆盖原始余量与定位状态，避免只清掉其中一个状态。
+bool testPanSnapAccumulation()
+{
+    using namespace MMM::Logic;
+    BeatmapSession session;
+    auto&          context = session.getContextMutable();
+    configureContext(context);
+    context.isAudioTimelineDescriptorDirty = false;
+    context.audioTimelineTotalTime         = 100;
+    // 显式设置开关，不依赖测试是在桌面还是 Android 构建。
+    context.lastConfig.settings.scrollSnap  = true;
+    context.lastConfig.settings.beatDivisor = 4;
+    context.lastConfig.visual.visualOffset  = .035;
+    const double offset = context.lastConfig.visual.getEffectiveVisualOffset();
+    // 原点位于曲目中段且不在整秒，范围钳制不能掩盖分拍相位错误。
+    const double origin = 10.03;
+    // 时间网格以 BPM 起点为相位，不能直接对绝对秒数按 0.125 取整。
+    const auto entity = context.timelineRegistry.create();
+    context.timelineRegistry.emplace<TimelineComponent>(
+        entity,
+        TimelineComponent{ .m_timestamp = .03,
+                           .m_effect    = MMM::TimingEffect::BPM,
+                           .m_value     = 120 });
+    // 新增事件需要正式缓存维护，不直接塞入已排序指针数组。
+    context.isBpmEventsDirty = true;
+    auto& cache = context.timelineRegistry.ctx().get<System::ScrollCache>();
+    // 只在夹具准备时重建；逐次触控命令必须复用同一滚速缓存。
+    cache.rebuild(context.timelineRegistry,
+                  context.lastConfig,
+                  context.currentBeatmap.get());
+    context.currentTime = origin - offset;
+    context.animateTime = origin;
+    // 控制器操作同一 SessionContext，不能用测试自己的时间变量代替正式落点。
+    PlaybackController controller(context);
+    // 每个 5ms 小增量都小于半格，若直接从吸附后的 currentTime 积分将永远不动。
+    double     raw  = origin;
+    const auto move = [&](double seconds, bool bypass = false) {
+        const float pixels = cache.getVisualAnchorAbsY(raw + seconds) -
+                             cache.getVisualAnchorAbsY(raw);
+        // 增量基线属于手指本身，即使当前画布停在网格线上也继续推进。
+        raw += seconds;
+        controller.handleCommand(CmdPanCanvas{ .cameraId      = "Basic2DCanvas",
+                                               .deltaY        = pixels,
+                                               .viewportWidth = 1000,
+                                               .viewportHeight   = 600,
+                                               .timelineZoom     = 1,
+                                               .anchorY          = 200,
+                                               .bypassScrollSnap = bypass });
+    };
+    // 首批仅累计到 50ms，尚未跨过最近网格的半步分界。
+    for ( int i = 0; i < 10; ++i ) move(.005);
+    if ( !near(context.currentTime + offset, origin) ) return false;
+    for ( int i = 0; i < 10; ++i ) move(.005);
+    // 第二批越过半格，必须跳到下一条真实分拍线而不是停在原点。
+    if ( !near(context.currentTime + offset, origin + .125) ) return false;
+    // 返回同一连续原点必须精确回到原线，不按已吸附位置重复叠加漂移。
+    for ( int i = 0; i < 20; ++i ) move(-.005);
+    if ( !near(context.currentTime + offset, origin) ) return false;
+    controller.handleCommand(
+        CmdPanCanvas{ .cameraId = "Basic2DCanvas", .finishNavigation = true });
+    // 结束既释放积分余量，也提交连续音频定位的最终状态。
+    if ( context.m_pointerScrollVisualTime || context.isSeekScrubbing )
+        return false;
+    // 临时取消既不吸附也不把关闭状态写回应用配置。
+    // 旁路来自命令载荷，模拟触控菜单里的临时取消吸附。
+    move(.02, true);
+    if ( !near(context.currentTime + offset, origin + .02) ||
+         !context.lastConfig.settings.scrollSnap )
+        return false;
+    controller.handleCommand(
+        CmdPanCanvas{ .cameraId = "Basic2DCanvas", .finishNavigation = true });
+    // 显式关闭滚动吸附后仍需连续自由移动，物件吸附开关不参与本次判断。
+    // 该分支只关闭滚动磁吸，仍使用相同像素输入和相同控制器。
+    context.lastConfig.settings.scrollSnap = false;
+    move(.02);
+    if ( !near(context.currentTime + offset, origin + .04) ) return false;
+    controller.handleCommand(
+        CmdPanCanvas{ .cameraId = "Basic2DCanvas", .finishNavigation = true });
+    // 视图导航不产生谱面撤销记录，也不残留用于下次手势的隐式基线。
+    return !context.m_pointerScrollVisualTime &&
+           context.actionStack.getUndoStackSize() == 0;
 }
 
 
 }  // namespace
 /// @brief 退出码由真实控制器及 Session 更新的最终投影契约决定。
+/// 两个场景独立持有会话，不共享上一轮上下文或导航余量。
+/// 吸附场景通过也不能吞掉捏合场景的失败退出码。
+/// 单次执行同时保留旧回归和新增要求，不在测试内部重试失败断言。
 int main()
 {
-    return testDirectZoomKeepsCentroidAnchor() ? 0 : 1;
+    // 分别执行两个场景，既有捏合问题不能阻止新增吸附回归被执行。
+    const bool pinch = testDirectZoomKeepsCentroidAnchor();
+    const bool pan   = testPanSnapAccumulation();
+    if ( !pan ) XERROR("Continuous touch scroll snapping regression failed");
+    return pinch && pan ? 0 : 1;
 }
