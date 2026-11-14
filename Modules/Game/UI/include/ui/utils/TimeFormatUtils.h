@@ -34,10 +34,10 @@ struct CanvasBeatPosition {
 namespace TimeFormatDetail
 {
 
-/// @brief 格式化时:分:秒.毫秒。
+/// @brief 格式化累计分钟、秒及四位秒小数。
 /// @param timeSeconds 可为负值的时间，单位秒。
-/// @return 固定宽度 `HH:MM:SS.mmm` 文本，负值带前导负号。
-/// @note 先对绝对毫秒总数舍入，再拆分字段，保证进位一致。
+/// @return `MM:SS.ffff` 文本，分钟不回卷，负值带前导负号。
+/// @note 先对绝对时间按 0.1 ms 舍入，再拆分字段，保证进位一致。
 std::string formatClock(double timeSeconds);
 
 /// @brief 格式化纯毫秒。

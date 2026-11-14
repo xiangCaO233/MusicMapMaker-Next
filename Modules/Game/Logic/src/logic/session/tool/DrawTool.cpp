@@ -1442,7 +1442,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                         mergeDeleteEntries.push_back(
                             { entity, nc, std::nullopt });
                         XINFO(
-                            "Note merge: removing Note at t={:.3f} "
+                            "Note merge: removing Note at t={:.4f} "
                             "track={}",
                             nc.m_timestamp,
                             nc.m_trackIndex);
@@ -1542,7 +1542,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                                 { entity, nc, std::nullopt });
                             XINFO(
                                 "Note merge [1-2]: extended last "
-                                "subHold to Hold end t={:.3f}",
+                                "subHold to Hold end t={:.4f}",
                                 holdEnd);
                         }
                         continue;
@@ -1714,7 +1714,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                             alreadyQueued.insert(entity);
                             XINFO(
                                 "Polyline path clean: removing object {} at "
-                                "t={:.3f} "
+                                "t={:.4f} "
                                 "track={}",
                                 static_cast<uint32_t>(entity),
                                 nc.m_timestamp,
@@ -1825,7 +1825,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
     // 最终检查在合并后进行，目标对象贡献的子时间也属于验证范围。
     // 失败时删除计划仍只是值记录，不会误删连接候选。
     if ( !isPlaceableNote(note) ) {
-        XWARN("DrawTool: blocked note placement before 0s (time={:.3f})",
+        XWARN("DrawTool: blocked note placement before 0s (time={:.4f})",
               note.m_timestamp);
         resetBrushState(ctx);
         return;

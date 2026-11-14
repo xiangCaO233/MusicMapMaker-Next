@@ -266,8 +266,8 @@ void from_json(const nlohmann::json& json, AutoBackupConfig& config);
 
 /// @brief 画布时间戳显示格式偏好
 enum class TimeFormatPreference {
-    Clock,         ///< 时:分:秒.毫秒
-    Seconds,       ///< 秒，保留三位小数
+    Clock,         ///< 累计分钟:秒，保留四位秒小数
+    Seconds,       ///< 秒，保留四位小数
     Milliseconds,  ///< 纯毫秒
     Beat           ///< 拍号 + 分拍位
 };

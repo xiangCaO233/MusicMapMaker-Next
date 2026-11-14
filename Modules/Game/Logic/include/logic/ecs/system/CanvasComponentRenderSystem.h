@@ -74,9 +74,9 @@ public:
 
     /// @brief 将判定线时间格式化为固定精度显示文本。
     /// @param currentTime 当前判定线时间，单位秒。
-    /// @return `HH:MM:SS.mmm` 格式文本；负值保留前导负号。
+    /// @return `MM:SS.ffff` 格式文本；累计分钟不回卷，负值保留前导负号。
     /// @warning 热路径：组件启用时每次快照生成调用；不得引入堆分配。
-    [[nodiscard]] static std::array<char, 16> formatJudgmentLineTime(
+    [[nodiscard]] static std::array<char, 32> formatJudgmentLineTime(
         double currentTime);
 
     /// @brief 将一基拍号格式化为 ASCII 文本。

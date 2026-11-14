@@ -1,4 +1,5 @@
 #include "canvas/AnnotationExport.h"
+#include "common/ClockTimeText.h"
 
 #include "ui/utils/TimeFormatUtils.h"
 
@@ -19,26 +20,17 @@ namespace MMM::Canvas
 {
 namespace
 {
-/// @brief 将秒数固定为用户熟悉的 分:秒:毫秒 定位格式。
-/// @param timestamp 有限的谱面时间，单位秒。
-/// @return 例如 00:13:748；负时间保留前导负号。
-/// @details 谱面模型使用秒作为计算单位，而导出示例要求毫秒三段式。
-/// 先整体舍入为整数毫秒，再拆出分、秒、余毫秒，避免各段分别舍入
-/// 造成 59.9995 秒在显示上变成 00:59:1000 的非法结果。
-/// 负时间只在整体值前加负号，后续三段仍按绝对值拆解。
-/// 非有限输入不参与数值转换，以免整数转换出现未定义范围问题。
+/// @brief 将秒数格式化为累计分钟与四位秒小数的定位文本。
+/// @param timestamp 谱面时间，单位秒，负值保留整体负号。
+/// @return 例如 62:03.4567；分钟不按小时回卷。
+/// @details 导出文档与画布共用整数舍入基准，避免四位显示被毫秒取整丢失。
+/// 先按 0.1 ms 舍入再拆分字段，59.99996 秒正确进位到下一分钟。
+/// 非有限值统一显示零，极大输入在整数换算前保护范围。
+/// 此限制只作用于文本表示，谱面时间及文件读写模型不受影响。
 std::string formatExportTimestamp(double timestamp)
 {
-    if ( !std::isfinite(timestamp) ) return "00:00:000";
-    // 先保存符号；fabs 后的余数只用于展示，不改变真实谱面时间。
-    const bool negative = timestamp < 0.0;
-    const auto millis =
-        static_cast<std::int64_t>(std::llround(std::abs(timestamp) * 1000.0));
-    return fmt::format("{}{:02}:{:02}:{:03}",
-                       negative ? "-" : "",
-                       millis / 60000,
-                       (millis / 1000) % 60,
-                       millis % 1000);
+    // 文档中的时间位置与应用显示使用相同精度和累计分钟，不再损失亚毫秒信息。
+    return Common::formatClockTime(timestamp).data();
 }
 
 /// @brief 把批注对象类型和起止轨道组合为一段可读描述。

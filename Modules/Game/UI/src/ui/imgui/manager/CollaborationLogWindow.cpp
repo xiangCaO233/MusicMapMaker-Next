@@ -473,7 +473,7 @@ void CollaborationLogWindow::setOpen(bool open)
 std::string CollaborationLogWindow::formatEntry(
     const Network::Collaboration::CollaborationLogEntry& entry) const
 {
-    // 毫秒转秒后固定三位小数，便于比较事件先后间隔。
+    // 毫秒转秒后固定四位小数，便于比较事件先后间隔。
     const double seconds =
         static_cast<double>(entry.elapsedMilliseconds) / 1000.0;
     const std::string stableLabel =
@@ -522,6 +522,6 @@ std::string CollaborationLogWindow::formatEntry(
     const std::string message =
         // 翻译字符串作为运行时 fmt 模板，actor 与 detail 参数顺序保持统一。
         fmt::format(fmt::runtime(TR(formatKey).data()), actor, entry.detail);
-    return fmt::format("+{:07.3f}s  {}", seconds, message);
+    return fmt::format("+{:08.4f}s  {}", seconds, message);
 }
 }  // namespace MMM::UI

@@ -3343,7 +3343,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
 
             if ( !isPlaceableCreatedNote(newNote) ) {
                 // 一个非法 Note 会拒绝整批，尚未分配实体所以无需回滚。
-                XWARN("Paste blocked before 0s: target time={:.3f}",
+                XWARN("Paste blocked before 0s: target time={:.4f}",
                       newNote.m_timestamp);
                 return;
             }
@@ -3379,7 +3379,7 @@ void ActionController::handleCommand(const CmdPaste& cmd)
             }
             newSample.m_track = static_cast<std::uint32_t>(targetTrack);
             if ( !isPlaceableCreatedSample(newSample) ) {
-                XWARN("Sample paste blocked before 0s: target time={:.3f}",
+                XWARN("Sample paste blocked before 0s: target time={:.4f}",
                       newSample.m_timestamp);
                 return;
             }

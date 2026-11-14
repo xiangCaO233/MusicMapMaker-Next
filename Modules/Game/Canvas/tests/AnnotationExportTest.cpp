@@ -89,7 +89,7 @@ bool testRecords(const MMM::Canvas::AnnotationExportLabels& labels)
 {
     using namespace MMM::Canvas;
     std::vector<AnnotationTableRow> rows;
-    rows.push_back({ .timestamp = 13.748, .content = "这里写的跟屎一样" });
+    rows.push_back({ .timestamp = 13.7489, .content = "这里写的跟屎一样" });
     // 第一条来自用户所举的纯时间备注，验证无目标时的空描述。
     rows.push_back(
         { .timestamp      = 54.321,
@@ -147,11 +147,11 @@ bool testRecords(const MMM::Canvas::AnnotationExportLabels& labels)
     context.beatDivisor = 8;
     // 120 BPM 提供精确的半拍场景，13.748 秒逼近但不等于网格线。
 
-    // 按时间导出须保留用户给出的 分:秒:毫秒 写法和完整 Markdown 原文。
+    // 按时间导出使用累计分钟及四位秒小数，正文保留完整 Markdown 原文。
     const auto timed = buildAnnotationExportRecords(
         rows, context, AnnotationExportPosition::Timestamp, labels);
-    if ( timed.size() != 8 || timed[0].position != "00:13:748" ||
-         timed[1].position != "00:54:321" ||
+    if ( timed.size() != 8 || timed[0].position != "00:13.7489" ||
+         timed[1].position != "00:54.3210" ||
          timed[1].target != "轨道4＞1滑键" ||
          timed[2].target != "轨道1＞2折线" || timed[3].target != "轨道3长条" ||
          timed[4].target != "轨道1单键" ||
@@ -169,7 +169,7 @@ bool testRecords(const MMM::Canvas::AnnotationExportLabels& labels)
     context.bpmPoints.clear();
     const auto fallback = buildAnnotationExportRecords(
         rows, context, AnnotationExportPosition::Beat, labels);
-    return fallback[0].position == "00:13:748";
+    return fallback[0].position == "00:13.7489";
 }
 
 /// @brief 导出并解析三种文件，确保 OOXML 正文、表头和转义值均存在。
@@ -191,7 +191,7 @@ bool testFiles(const std::filesystem::path& output)
     if ( ec ) return false;
     const auto                                labels = makeLabels();
     const std::vector<AnnotationExportRecord> records{
-        { "00:13:748", "轨道1单键", "", "这里是💩 & <说明>\n第二行" },
+        { "00:13.7480", "轨道1单键", "", "这里是💩 & <说明>\n第二行" },
         { "#91 7/8", "轨道1＞2折线", "测试者", "另一条" },
     };
     std::string error;
@@ -210,7 +210,7 @@ bool testFiles(const std::filesystem::path& output)
     // 文本内容包含 UTF-8 BOM、原始换行及作者，不丢弃多行备注。
     const auto plain = readText(txt);
     if ( !plain.starts_with("\xEF\xBB\xBF") ||
-         plain.find("00:13:748 轨道1单键 这里是💩 & <说明>\n第二行") ==
+         plain.find("00:13.7480 轨道1单键 这里是💩 & <说明>\n第二行") ==
              std::string::npos ||
          plain.find("#91 7/8 轨道1＞2折线 [作者: 测试者] 另一条") ==
              std::string::npos ) {

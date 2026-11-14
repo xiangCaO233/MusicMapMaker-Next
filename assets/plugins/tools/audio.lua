@@ -77,7 +77,7 @@ local function describe(info)
     if info.error then return info.error end
     -- 标签允许为空；数值允许为零，不能用格式化错误中断窗口构建。
     return string.format(
-        "标题：%s\n艺术家：%s\n专辑：%s\n时长：%.3f 秒\n声道：%d\n采样率：%d Hz\n码率：%d bit/s\n总帧数：%d\n封面：%s",
+        "标题：%s\n艺术家：%s\n专辑：%s\n时长：%.4f 秒\n声道：%d\n采样率：%d Hz\n码率：%d bit/s\n总帧数：%d\n封面：%s",
         info.title or "", info.artist or "", info.album or "",
         info.duration or 0, info.channels or 0, info.sample_rate or 0,
         info.bitrate or 0, info.frames or 0,
@@ -110,7 +110,7 @@ local function describe_details(info)
     -- 基础信息仍可用时只显示详情错误，不覆盖上方摘要及封面。
     local lines = {
         "容器：" .. (info.container_long_name or info.container or ""),
-        string.format("容器时长：%.3f 秒", info.container_duration or 0),
+        string.format("容器时长：%.4f 秒", info.container_duration or 0),
     }
     append_tags(lines, "容器标签", info.format_tags)
     -- 逐流标签不与容器标签合并，避免相同键覆盖各自来源。
@@ -118,7 +118,7 @@ local function describe_details(info)
         -- 附图标志不代表像素上传完成，上方控件负责真实图片展示。
         -- 流序号保留 FFmpeg 原值，方便对应外部分析工具。
         lines[#lines + 1] = string.format(
-            "流 #%d：%s / %s / %s bit/s / %s Hz / %s 声道 / %.3f 秒%s",
+            "流 #%d：%s / %s / %s bit/s / %s Hz / %s 声道 / %.4f 秒%s",
             stream.index or 0, stream.type or "", stream.codec or "",
             stream.bitrate or 0, stream.sample_rate or 0,
             stream.channels or 0, stream.duration or 0,
@@ -143,7 +143,7 @@ return {
             status_text = string.format("正在导出：%.1f%%", (status.progress or 0) * 100)
         elseif status.state == "success" then
             -- duration 是按输入时钟和送入编码器的帧数计算的导出时长。
-            status_text = string.format("导出完成：%.3f 秒", status.duration or 0)
+            status_text = string.format("导出完成：%.4f 秒", status.duration or 0)
         elseif status.state == "error" then
             -- 编码器拒绝参数、文件打开失败等都沿同一错误通道呈现。
             status_text = "导出失败：" .. (status.error or "未知错误")

@@ -1655,7 +1655,7 @@ void TimelineCanvas::handleTimingCanvasPointerInput(const ImVec2& canvasPos,
         const auto descriptor =
             timelineTimingTooltipDescriptor(hoveredTarget->effect);
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        ImGui::SetTooltip("%.*s: %.6g%.*s\n%.3fs",
+        ImGui::SetTooltip("%.*s: %.6g%.*s\n%.4fs",
                           static_cast<int>(descriptor.label.size()),
                           descriptor.label.data(),
                           hoveredTarget->value,
@@ -2095,7 +2095,7 @@ void TimelineCanvas::handleTimingCanvasPointerInput(const ImVec2& canvasPos,
 ///
 /// @details 拖动提示：
 /// - 只有 Timing 拖动活动且时间增量超过容差时显示。
-/// - 文本使用带正负号的三位小数秒格式。
+/// - 文本使用带正负号的四位小数秒格式。
 /// - 提示跟随当前鼠标屏幕位置。
 /// - 十二像素偏移避免覆盖鼠标热点。
 /// - 文字使用高对比半透明白色。
@@ -2131,7 +2131,7 @@ void TimelineCanvas::renderTimingInteractionOverlay(const ImVec2& canvasPos,
         // 时间文本属于屏幕空间，不受时间线局部 Y 偏移影响。
         const ImVec2      mousePos = ImGui::GetMousePos();
         const std::string deltaText =
-            fmt::format("{:+.3f}s", m_timingDragPreviewDelta);
+            fmt::format("{:+.4f}s", m_timingDragPreviewDelta);
         drawList->AddText(ImVec2(mousePos.x + 12.0f, mousePos.y + 12.0f),
                           IM_COL32(255, 255, 255, 230),
                           deltaText.c_str());

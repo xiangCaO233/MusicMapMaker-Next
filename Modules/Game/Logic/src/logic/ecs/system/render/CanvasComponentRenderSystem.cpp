@@ -1,4 +1,5 @@
 #include "logic/ecs/system/CanvasComponentRenderSystem.h"
+#include "common/ClockTimeText.h"
 #include "common/render/GlyphTextureId.h"
 // 本实现写入完整快照，公共接口仅借用类型，不传播字形与顶点定义。
 #include "common/render/RenderSnapshot.h"
@@ -27,9 +28,6 @@ namespace MMM::Logic::System
 namespace
 {
 
-/// @brief 两位小时显示可容纳的最大毫秒数，即 99:59:59.999。
-constexpr std::int64_t MAX_DISPLAY_MILLIS =
-    ((99LL * 60LL + 59LL) * 60LL + 59LL) * 1000LL + 999LL;
 /// @brief 单帧允许生成的重复文字实例上限，防止异常 BPM 数据放大热路径负载。
 /// @note 每次网格文字调用独立计数，拍号与分拍时间不共用该额度。
 constexpr std::size_t MAX_VISIBLE_REPEATED_TEXT_INSTANCES = 4096U;
@@ -686,43 +684,16 @@ void CanvasComponentRenderSystem::render(
     batcher.flush();
 }
 
-/// @brief 将秒数格式化为带毫秒、可带负号的固定宽度时间文本。
+/// @brief 将秒数格式化为累计分钟、秒与四位秒小数。
 /// @param currentTime 时间秒数；非有限输入按零显示。
-/// @note 只改变显示形式，不将限幅结果回写到播放或编辑状态。
-/// @return 以空字符结尾的 HH:MM:SS.mmm 文本缓冲。
-/// @pre 有限输入的毫秒绝对值应可由 llround 转为 int64，显示限幅发生在转换之后。
+/// @note 显示边界只保护整数换算，不改变真实播放或编辑状态。
+/// @return 空字符结尾的 MM:SS.ffff 文本，累计分钟不按小时回卷。
 /// @warning 时间组件热路径调用；返回栈上固定数组，不进行动态字符串分配。
-std::array<char, 16> CanvasComponentRenderSystem::formatJudgmentLineTime(
+std::array<char, 32> CanvasComponentRenderSystem::formatJudgmentLineTime(
     double currentTime)
 {
-    std::array<char, 16> result{};
-    // 小于半毫秒的负值不显示负号，避免正常归零附近出现负零文本。
-    const bool   negative = std::isfinite(currentTime) && currentTime < -0.0005;
-    const double finiteTime = std::isfinite(currentTime) ? currentTime : 0.0;
-    // 符号与绝对时间分开处理，字段拆分不受负数取余规则影响。
-    // 先统一舍入到毫秒再拆字段，保证秒与分钟进位来自同一个整数时间。
-    const auto totalMillis = std::clamp<std::int64_t>(
-        static_cast<std::int64_t>(std::llround(std::abs(finiteTime) * 1000.0)),
-        0LL,
-        MAX_DISPLAY_MILLIS);
-    const auto millis       = totalMillis % 1000LL;
-    const auto totalSeconds = totalMillis / 1000LL;
-    const auto seconds      = totalSeconds % 60LL;
-    const auto totalMinutes = totalSeconds / 60LL;
-    const auto minutes      = totalMinutes % 60LL;
-    const auto hours        = totalMinutes / 60LL;
-
-    // 字段都由同一个毫秒整数拆分，避免秒、分钟边界各自舍入而产生不一致进位。
-    // 小时限制为两位，负号、毫秒及终止符都能放进固定缓冲。
-    std::snprintf(result.data(),
-                  result.size(),
-                  negative ? "-%02lld:%02lld:%02lld.%03lld"
-                           : "%02lld:%02lld:%02lld.%03lld",
-                  static_cast<long long>(hours),
-                  static_cast<long long>(minutes),
-                  static_cast<long long>(seconds),
-                  static_cast<long long>(millis));
-    return result;
+    // 与状态栏和 UI 共用同一舍入及溢出处理，避免各显示入口精度漂移。
+    return Common::formatClockTime(currentTime);
 }
 
 /// @brief 将节拍序号格式化为带 # 前缀的十进制文本。

@@ -194,16 +194,16 @@ struct RenderProfileAccumulator {
                                   std::max(elapsedSeconds, 0.000001);
         XINFO(
             "RenderProfile {:.2f}s frames={} fps={:.1f} "
-            "total(avg/max)={:.3f}/{:.3f}ms",
+            "total(avg/max)={:.4f}/{:.4f}ms",
             elapsedSeconds,
             frameCount,
             averageFps,
             total.average(frameCount),
             total.maxMs);
         XINFO(
-            "RenderStages avg/max ms: fence {:.3f}/{:.3f}, acquire "
-            "{:.3f}/{:.3f}, poll {:.3f}/{:.3f}, newFrame {:.3f}/{:.3f}, "
-            "prepare {:.3f}/{:.3f}, updateUI {:.3f}/{:.3f}",
+            "RenderStages avg/max ms: fence {:.4f}/{:.4f}, acquire "
+            "{:.4f}/{:.4f}, poll {:.4f}/{:.4f}, newFrame {:.4f}/{:.4f}, "
+            "prepare {:.4f}/{:.4f}, updateUI {:.4f}/{:.4f}",
             fence.average(frameCount),
             fence.maxMs,
             acquire.average(frameCount),
@@ -217,10 +217,10 @@ struct RenderProfileAccumulator {
             updateUi.average(frameCount),
             updateUi.maxMs);
         XINFO(
-            "RenderStages avg/max ms: imguiRender {:.3f}/{:.3f}, cmdSetup "
-            "{:.3f}/{:.3f}, offscreen {:.3f}/{:.3f}, mainPass {:.3f}/{:.3f}, "
-            "submit {:.3f}/{:.3f}, present {:.3f}/{:.3f}, platform "
-            "{:.3f}/{:.3f}",
+            "RenderStages avg/max ms: imguiRender {:.4f}/{:.4f}, cmdSetup "
+            "{:.4f}/{:.4f}, offscreen {:.4f}/{:.4f}, mainPass {:.4f}/{:.4f}, "
+            "submit {:.4f}/{:.4f}, present {:.4f}/{:.4f}, platform "
+            "{:.4f}/{:.4f}",
             imguiRender.average(frameCount),
             imguiRender.maxMs,
             commandSetup.average(frameCount),

@@ -493,7 +493,7 @@
         "ui.settings.software.time_format.beat"
       ],
       "keywords": "software.time_format timeFormatPreference software.time_format.clock software.time_format.seconds software.time_format.milliseconds software.time_format.beat",
-      "aliases": "画布时间格式 同步与时钟 软件配置 时:分:秒.毫秒 秒 (三位小数) 纯毫秒 拍号 + 分拍位 Canvas Time Format Sync & Clock Software Config HH:MM:SS.mmm Seconds (3 decimals) Milliseconds Beat + Fraction"
+      "aliases": "画布时间格式 同步与时钟 软件配置 分:秒（四位小数） 秒 (四位小数) 纯毫秒 拍号 + 分拍位 Canvas Time Format Sync & Clock Software Config MM:SS.ffff Seconds (4 decimals) Milliseconds Beat + Fraction"
     },
     {
       "tab": "Software",

@@ -275,7 +275,7 @@ struct VideoFrameDecoder::Impl {
         resetDecodeState();
 
         // 成功日志记录解码尺寸和已解析时长，便于诊断容器元数据。
-        XINFO("VideoFrameDecoder: Opened {} [{}x{}, {:.3f}s]",
+        XINFO("VideoFrameDecoder: Opened {} [{}x{}, {:.4f}s]",
               pathUtf8,
               videoInfo.width,
               videoInfo.height,
@@ -443,7 +443,7 @@ struct VideoFrameDecoder::Impl {
                                          AVSEEK_FLAG_BACKWARD);
         // BACKWARD 保证尽量落在目标之前的关键帧，由后续顺序解码精确选帧。
         if ( result < 0 ) {
-            XERROR("VideoFrameDecoder: Failed to seek {} to {:.3f}s: {}",
+            XERROR("VideoFrameDecoder: Failed to seek {} to {:.4f}s: {}",
                    mediaPath,
                    seconds,
                    ffmpegErrorText(result));

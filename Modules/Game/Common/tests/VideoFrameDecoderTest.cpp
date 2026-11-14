@@ -611,7 +611,7 @@ bool testExternalProbeFile()
                 // 任一拖动点失败都输出文件和目标秒数，便于复现特定 Seek。
                 XERROR(
                     "VideoFrameDecoderTest: Scrub decode failed for {} at "
-                    "{:.3f}s",
+                    "{:.4f}s",
                     videoPath.string(),
                     scrubTime);
                 return false;
@@ -622,7 +622,7 @@ bool testExternalProbeFile()
     // 成功日志保留外部文件、尺寸和最后帧时间，作为手动探针证据。
     XINFO(
         "VideoFrameDecoderTest: External probe passed for {} [{}x{}, "
-        "frame {:.3f}s]",
+        "frame {:.4f}s]",
         videoPath.string(),
         frame->width,
         frame->height,
