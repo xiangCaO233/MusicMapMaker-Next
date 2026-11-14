@@ -1,5 +1,5 @@
 name: Reusable Android ARM64 Build
-# Android 交付签名发布型 APK，不参与桌面发布目录或网站清单的聚合。
+# Android 交付签名发布型 APK；完整 CI 可选择将同源交付暂存供跨平台聚合。
 on:
   workflow_call:
     inputs:
@@ -7,6 +7,11 @@ on:
         # 调用者传入事件的精确 SHA，运行中不追随分支的新提交。
         required: true
         type: string
+      stage_release:
+        # 完整跨平台构建才需要聚合候选；单独下载 APK 不留下运行专属副本。
+        # 默认关闭，避免人工安卓构建不断累积未消费的 staging 目录。
+        type: boolean
+        default: false
 permissions:
   # 源码和制品使用当前任务身份，不需要写仓库或发布 Release 的权限。
   contents: read
@@ -27,6 +32,7 @@ jobs:
     env:
       GIT_LFS_SKIP_SMUDGE: "1"
       MMM_SOURCE_REF: ${{ inputs.source_ref }}
+      MMM_ANDROID_STAGE_RELEASE: ${{ inputs.stage_release && '1' || '0' }}
     # 同步和编译处于同一个 shell，文件锁不会在两个步骤之间提前释放。
     # 失败时后续上传步骤由默认 success 条件跳过，避免交付上次生成的旧包。
     steps:

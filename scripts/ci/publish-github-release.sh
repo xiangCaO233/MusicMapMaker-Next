@@ -129,6 +129,7 @@ require_command sha256sum
 require_command tar
 require_command unzip
 require_command zip
+require_command python3
 
 [[ -d "${source_root}/.git" ]] ||
     # 防止从复制出的孤立脚本误发布其他目录内容。
@@ -280,6 +281,13 @@ require_file "${source_release_dir}/macos-arm64/MusicMapMaker-Next.dmg"
 require_file "${source_release_dir}/macos-arm64/MusicMapMaker-Next.app.zip"
 require_file "${source_release_dir}/macos-arm64/MusicMapMaker-Updater"
 
+# Android 必须来自相同发布提交，禁止把旧包改名后当作本轮正式 APK。
+# 核验记录、实际摘要和 JNI 架构；签名已经由对应 CI 构建入口验过。
+# 此处不读取可变的 Android 工作目录，只消费已聚合的发布候选。
+android_apk="$(python3 "${source_root}/scripts/ci/android-release.py" verify \
+    --directory "${source_release_dir}/android-arm64" \
+    --source "${target_sha}" --version "${version_label}")"
+
 # 在源目录内递归创建最高压缩级别 ZIP。
 package_zip_directory() {
     local source_directory="$1"
@@ -313,6 +321,10 @@ for variant in "${linux_variants[@]}"; do
         "${source_release_dir}/${variant}" \
         "${output_dir}/MusicMapMaker-Next-${version_label}-${variant}-x86_64.tar.xz"
 done
+
+# APK 已由 Android 工具链压缩签名，直接保留原始字节，不套一层 ZIP。
+# 文件命名与其他平台相同：产品、正式版本、平台和架构。
+cp "${android_apk}" "${output_dir}/MusicMapMaker-Next-${version_label}-android-arm64.apk"
 
 # assets.zip 保留 assets 顶层目录，解压后可以直接作为程序资源目录使用。
 # 在聚合目录中打包，确保归档根包含 assets 名称。

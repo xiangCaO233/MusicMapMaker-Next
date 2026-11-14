@@ -37,6 +37,10 @@ android_version="$(sed -n 's/^set(APPVER "\([^"]*\)").*/\1/p' "$android_repo/CMa
 # 对外版本名与桌面 APPVER 一致，精确源码身份单独写入 build-info.json。
 # QA 前缀仅保留在历史签名接口中，不再写进交付文件名或版本名。
 export MMM_ANDROID_QA_VERSION_NAME="$android_version"
+# 交付契约测试只生成微型夹具，输出仍归入 Android 的集中工作目录。
+# 它们不能代替下面对实际 APK 的验签、资源完整性和架构检查。
+MMM_TEST_OUTPUT_DIR="$MMM_ANDROID_WORK_DIR/evidence/release-unit" \
+    python3 "$android_repo/scripts/ci/test_android_release.py"
 # 先完整生成并验签，再整理独立交付目录；失败不会上传历史 APK 冒充本次结果。
 # 原生符号和依赖保留在 work/build，短期制品只包含安装包、摘要与来源信息。
 bash "$android_repo/scripts/android/build.sh"
@@ -95,6 +99,15 @@ info = dict(source=os.environ['MMM_SOURCE_REF'], abi='arm64-v8a', variant='relea
 # 日志只回显交付清单，原生调试符号继续留在 Runner 的专用目录。
 print(json.dumps(info, indent=2))
 PY
+# 完整 CI 使用运行专属目录，不能在聚合时读取可能已被下一任务覆盖的 apk/ci。
+# 单独安卓构建只上传 Artifact，不制造无人消费的发布缓存。
+if [[ "${MMM_ANDROID_STAGE_RELEASE:-0}" == 1 ]]; then
+    [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]]
+    [[ -d /home/xiang/MusicMapMaker-Next/.git ]]
+    python3 "$android_repo/scripts/ci/android-release.py" stage \
+        --directory "$android_delivery" --source "$MMM_SOURCE_REF" --version "$android_version" \
+        --destination "/home/xiang/MusicMapMaker-Next/.git/mmm-ci-transfer/$GITHUB_RUN_ID/android-arm64"
+fi
 # 只有验签和二进制检查成功后才发布产物名称，供工作流的上传步骤使用。
 # 独立运行脚本时不要求 GitHub 环境，也不额外创建源码侧输出文件。
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then

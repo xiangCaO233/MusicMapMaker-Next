@@ -1,6 +1,6 @@
 # debsrv Android ARM64 CI
 
-现有 `Self Hosted CI Runner` 的人工任务新增 `android-build`，仅在 Debian Runner 上生成 ARM64 发布型 APK。普通 `ci-build` 也调用相同 Android 工作流；hotfix、网站清单与正式 Release 的发布范围保持原样。
+现有 `Self Hosted CI Runner` 的人工任务新增 `android-build`，仅在 Debian Runner 上生成 ARM64 发布型 APK。普通 `ci-build` 也调用相同 Android 工作流，并把同源 APK 聚合进正式候选；旧版 hotfix 继续原平台集合。构建成功不自动公开发布。
 
 ## 固定环境与目录
 
@@ -41,3 +41,13 @@ Gradle Wrapper 9.3.0 与 AGP 9.0.1 仅打包 Java 外壳、默认资源和匹配
 安装包统一为 `MusicMapMaker-Next-<APPVER>-android-arm64.apk`，例如 `MusicMapMaker-Next-0.6.4-android-arm64.apk`；GitHub Artifact 使用相同名称去掉 `.apk`。名称顺序与其他平台的产品名、版本、平台、架构保持一致，不再添加 `qa` 或源码短 SHA。SHA256 文件引用实际 APK 文件名，源码完整 SHA 与运行链接保存在 `build-info.json`。
 
 历史包名与签名接口中的 `qa` 保留用于兼容已有安装；这不再影响交付名称。此次不更换证书或 Android 应用身份，以便已有安装继续覆盖升级。
+
+## 正式发布链路
+
+完整 CI 通过 `stage_release=true` 将已验证交付放到主仓 `.git/mmm-ci-transfer/<run_id>/android-arm64`，聚合 job 等待桌面、macOS 与 Android 均成功，再原子替换 `release/android-arm64`。旧版 hotfix 显式跳过 Android 依赖；macOS 聚合不能提前删除共用传输根。人工单独 Android 构建只上传 Artifact，不留下未消费的跨 job staging。
+
+`scripts/ci/android-release.py` 是聚合与发布共用入口，验证完整来源 SHA、版本、发布变体、大小、SHA256、ZIP CRC 与实际 AArch64 JNI。签名仍在 Android 构建入口验证，摘要将后续交付绑定到同一份已签名文件。GitHub 正式发布将原 APK 直接作为附件，并写入 `SHA256SUMS`；网站发布向 `--android-apk` 传入同一候选，不重新构建或重签。
+
+网站只根据正式版 `platforms.android` 启用下载。当前 v0.6.4 hotfix.3 不加入新分支的 APK；下一次正式发布时 tag、源码、桌面与 Android 候选必须同源。网站稳定路径、版本化保存名、R2 MIME、摘要缓存键和公开 APK 完整回读由网站发布脚本维护，未提供 APK 的旧版本不生成下载链接。
+
+可在集中输出目录执行 `python3 scripts/ci/test_android_release.py`，测试包括实际 `publish-github-release.sh --package-only` 打包流程，不创建 tag 或公开 Release。
