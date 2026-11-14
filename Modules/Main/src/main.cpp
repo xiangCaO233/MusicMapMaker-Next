@@ -460,7 +460,7 @@ std::string buildTranslationOverrideWarning(
 
 /// @brief 使用独立窗口和独立图形上下文完成启动资源校验与皮肤加载。
 /// @return 资源准备结果；只有 Ready 状态允许继续创建正式主窗口。
-/// @warning 启动低频路径：内部创建并完整释放一套 GLFW、Vulkan 与 ImGui
+/// @warning 启动低频路径：内部创建并完整释放一套平台窗口、Vulkan 与 ImGui
 /// 资源，禁止从主渲染循环调用。
 StartupPreparationResult prepareStartupAssets()
 {
@@ -567,7 +567,7 @@ StartupPreparationResult prepareStartupAssets()
                         "assets.zip 并解压到：\n\n" +
                         Config::pathToUtf8(Config::AppPaths::assetsRootPath());
                 } else {
-                    // 用户选择只决定首选路径，解析失败仍必须回退随包默认皮肤。
+                    // 用户选择只决定首选路径，解析失败仍必须回退资源包的默认皮肤。
                     const auto startupSkinPath =
                         resolveStartupSkinPath(defaultSkinPath);
                     skinLoaded = Config::SkinManager::instance().loadSkin(
@@ -655,9 +655,9 @@ int main(int argc, char* argv[])
     using namespace Config;
 #ifdef __ANDROID__
     // 配置与日志初始化前先绑定应用私有目录，禁止读取桌面的配置状态。
-    // 配置根与随包资源必须先于首个配置单例准备完成，不能回退到不可写的桌面目录。
-    // 首次解压属于启动阶段，不推迟到主渲染循环或皮肤更新回调。
-    // 随包资源加载失败即结束启动，不能运行只准备了一部分资源的编辑器。
+    // 配置根先于首个配置单例准备完成，不能回退到不可写的桌面目录。
+    // 资源下载由后续共享启动界面完成，不能在平台准备阶段阻塞下载。
+    // 旧版私有目录保持不变，升级后可沿用资源、配置和用户工程。
     // 后台恢复继续使用既有视图和配置，不再次进入此资源准备入口。
     // 手机实验包具有独立
     // applicationId，因此不会覆盖桌面用户数据或其他探针配置。
@@ -693,17 +693,9 @@ int main(int argc, char* argv[])
 
     // 启动同步界面尚未加载完整音效资源，因此临时关闭按钮反馈声音。
     UI::SetInteractionFeedbackEnabled(false);
-#ifdef __ANDROID__
-    // Android 首轮使用已经随 APK 展开的资源，不创建第二套启动窗口或联网下载。
-    const auto skin =
-        Main::resolveStartupSkinPath(Config::AppPaths::defaultSkinFilePath());
-    const auto startupResult =
-        Config::SkinManager::instance().loadSkin(Config::pathToUtf8(skin))
-            ? Main::StartupPreparationResult::Ready
-            : Main::StartupPreparationResult::Failed;
-#else
+    // 所有平台共用后台下载、校验、离线回退和重试界面。
+    // Android 先绑定私有配置根，旧版随包解压资源也从相同路径参与同步。
     const auto startupResult = Main::prepareStartupAssets();
-#endif
     // 资源和皮肤准备完成后恢复正式 UI 的统一按钮反馈。
     UI::SetInteractionFeedbackEnabled(true);
     if ( startupResult == Main::StartupPreparationResult::Cancelled ) {
@@ -754,6 +746,12 @@ int main(int argc, char* argv[])
     Graphic::NativeWindow nativeWindow(Main::APPLICATION_WINDOW_WIDTH,
                                        Main::APPLICATION_WINDOW_HEIGHT,
                                        "MusicMapMaker(Gamma)");
+
+#ifdef __ANDROID__
+    // 私有资源已经就绪且正式平台窗口已建立，再允许工程目录权限引导。
+    // 首次下载的进度和失败重试不依赖共享存储授权，避免被平台弹窗遮挡。
+    Main::notifyAndroidEditorReady();
+#endif
 
     // 退出回调在图形上下文仍有效时显示可能需要的 PGO 上传进度。
     // argc 与 argv 原样交给 GameLoop，使命令行打开项目等入口保持集中处理。

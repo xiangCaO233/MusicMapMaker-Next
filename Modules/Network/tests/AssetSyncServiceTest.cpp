@@ -511,6 +511,8 @@ int testExtractZipArchive()
 /// @brief 测试已有本地资源时远程 manifest 不可用也允许启动。
 /// @return 降级状态或警告信息不符合预期的断言数量。
 /// @note 该路径保护离线启动，前提是关键本地皮肤资源已经存在。
+/// @details 同时覆盖 Android 旧包只有随包摘要、没有同步版本号的升级状态。
+/// 用户配置与工程位于资源根之外，服务只能更新其负责的资源目录。
 /// @warning 同步调用执行文件 I/O，仅在独立测试进程运行。
 int testSyncKeepsExistingAssetsWhenManifestUnavailable()
 {
@@ -523,6 +525,20 @@ int testSyncKeepsExistingAssetsWhenManifestUnavailable()
     fail += expectTrue(
         writeTextFile(assetsRoot / "skins/mmm-default/skin.lua", "skin"),
         "write existing local asset");
+
+    // Android 旧包只带随包摘要，没有桌面资源版本标记；离线升级仍要保留。
+    // 用户配置与工程位于 assets 之外，资源回退不能重建整个配置根。
+    fail += expectTrue(
+        writeTextFile(assetsRoot / ".android-bundle.sha256", "legacy-bundle"),
+        "write legacy Android bundle marker");
+    // 配置夹具故意不使用 JSON，确认资源服务不解析或重写上层配置。
+    // 工程也按不透明字节保护，文件内容格式不属于启动同步的职责。
+    fail +=
+        expectTrue(writeTextFile(root / "user_config.json", "custom settings"),
+                   "write existing user settings");
+    fail +=
+        expectTrue(writeTextFile(root / "projects/example.mmm", "user project"),
+                   "write existing user project");
 
     // manifest 指向不存在的本地 file URL，避免网络超时影响测试。
     AssetSyncOptions options;
@@ -542,6 +558,15 @@ int testSyncKeepsExistingAssetsWhenManifestUnavailable()
     // Ready 仍保留警告文本，让 UI 能提示远端检查失败而非静默忽略。
     fail += expectTrue(!result.errorMessage.empty(),
                        "missing manifest warning is retained");
+
+    // 离线服务不能把旧随包标记升级成未校验的远端版本，也不能改写用户文件。
+    fail += expectTrue(
+        readTextFile(assetsRoot / ".android-bundle.sha256") == "legacy-bundle",
+        "legacy bundle marker survives offline upgrade");
+    fail += expectTrue(
+        readTextFile(root / "user_config.json") == "custom settings" &&
+            readTextFile(root / "projects/example.mmm") == "user project",
+        "offline upgrade preserves settings and projects");
 
     // 结束时删除本地皮肤和缺失清单所在的整个临时根。
     std::error_code removeError;

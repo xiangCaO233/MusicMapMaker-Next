@@ -30,7 +30,7 @@ gh workflow run ci.yaml --ref feat/android-sdl3 -f job=android-build -f pgo_inst
 
 入口将事件精确 SHA 传给可复用工作流，整段源码同步与构建持有 `build.lock`。子模块按 gitlink 检出，只显式拉取 `assets/**` 的 NAS LFS 内容。原生库使用 NDK 官方 CMake toolchain，目标 `arm64-v8a`、最低 API 28、`c++_shared`、`RelWithDebInfo`，业务和依赖均不启用 PGO。默认并发 6，避免与服务器其它任务争用内存。
 
-Gradle Wrapper 9.3.0 与 AGP 9.0.1 仅打包 Java 外壳、默认资源和匹配的 JNI 库。发布型包显式关闭 Java/native 调试开关，原生符号留在集中构建树。默认本机构建仍为 debug、可选双 ABI；CI 显式选择 release 和单 ARM64，不修改开发者的默认行为。
+Gradle Wrapper 9.3.0 与 AGP 9.0.1 仅打包 Java 外壳、图标和匹配的 JNI 库。发布型包显式关闭 Java/native 调试开关，原生符号留在集中构建树。默认本机构建仍为 debug、可选双 ABI；CI 显式选择 release 和单 ARM64，不修改开发者的默认行为。
 
 安装身份沿用既有包名 `top.xiang233.musicmapmaker.next.qa` 和 `mmm-qa` 测试证书。私钥与密码文件由自托管宿主提供；缺失时失败，不退回 debug 或 unsigned 包。版本名与桌面一样使用 APPVER，精确源码 SHA 保存在 build-info.json 中；版本码使用 `2026111404 + GITHUB_RUN_NUMBER`，高于此前 QA 包，超过 Android 上限时明确拒绝。
 
@@ -51,3 +51,13 @@ Gradle Wrapper 9.3.0 与 AGP 9.0.1 仅打包 Java 外壳、默认资源和匹配
 网站只根据正式版 `platforms.android` 启用下载。当前 v0.6.4 hotfix.3 不加入新分支的 APK；下一次正式发布时 tag、源码、桌面与 Android 候选必须同源。网站稳定路径、版本化保存名、R2 MIME、摘要缓存键和公开 APK 完整回读由网站发布脚本维护，未提供 APK 的旧版本不生成下载链接。
 
 可在集中输出目录执行 `python3 scripts/ci/test_android_release.py`，测试包括实际 `publish-github-release.sh --package-only` 打包流程，不创建 tag 或公开 Release。
+
+## 启动下载资源
+
+APK 不再内置 `mmm-assets.zip` 或随包摘要，Gradle 显式不引用旧的资源打包目录。首次启动复用桌面的 HTTPS 清单、完整包下载、SHA256 校验及进度／失败重试界面，资源写入当前应用私有配置目录；系统字体负责尚未下载字体时的中文提示。
+
+已有完整资源时，断网仍可按桌面服务的回退策略进入编辑器。旧版 APK 解压的资源、配置和工程保持原路径，首次升级可离线复用；联网后按正式资源清单检查更新，不从旧随包标记推断新版本。清空应用数据或卸载后需要重新下载资源；APK 自身升级不清除这些文件。
+
+构建交付校验会拒绝含旧完整 ZIP 或旧随包摘要的 APK，防止复用构建缓存时再次变成大包。`package_assets.py` 保留作旧包复现工具，常规 Linux／Windows 构建入口均不再调用。
+
+开发分支首次下载仍读取公开的正式资源清单，可能暂时缺少尚未发布的移动端译文。正式发布时必须继续让同源 APK 与资源包一起进入发布候选并同步到 R2，不能只替换 APK 而沿用旧资源清单。

@@ -23,6 +23,8 @@ import android.util.Base64;
 public final class MainActivity extends SDLActivity {
     /** 权限引导只属于当前 Activity，每次恢复重新核验系统实际授权。 */
     private FileAccessPrompt fileAccessPrompt;
+    /** 只在 Java UI 线程修改；私有资源下载完成前不显示共享文件授权引导。 */
+    private boolean editorResourcesReady;
 
     /** 返回回调只在 Activity 生命周期内存活，旧版系统不解析 API 33 类型。 */
     private Object backNavigationCallback;
@@ -91,7 +93,22 @@ public final class MainActivity extends SDLActivity {
         super.onResume();
         getWindow().getDecorView().post(highRefreshRate::apply);
         // 系统设置返回也必须重新核验；未授权时不能继续显示不可读的空目录。
-        getWindow().getDecorView().post(() -> fileAccessPrompt.showIfNeeded());
+        getWindow().getDecorView().post(() -> {
+            if (editorResourcesReady) fileAccessPrompt.showIfNeeded();
+        });
+    }
+
+    /**
+     * @brief 原生资源同步完成且正式窗口建立后，才允许提示工程目录权限。
+     * @warning JNI 从 SDL 线程调用；状态与弹窗都投递到 Java UI 线程处理。
+     */
+    public void notifyEditorResourcesReady() {
+        // 下载只访问应用私有目录，不应被不相关的共享存储授权弹窗盖住。
+        // Activity 后续恢复继续沿用 onResume 的授权核验，不重复建立引导对象。
+        runOnUiThread(() -> {
+            editorResourcesReady = true;
+            fileAccessPrompt.showIfNeeded();
+        });
     }
 
     /** 系统文件选择器返回时可能替换 Surface，重新应用当前显示能力。 */
