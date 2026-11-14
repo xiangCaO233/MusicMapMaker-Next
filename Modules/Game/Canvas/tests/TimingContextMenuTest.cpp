@@ -5,11 +5,13 @@
 #include "common/render/TimelineInteractiveElement.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
+#include "config/ShortcutConfig.h"
 #include "config/VisualConfig.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
+#include "logic/session/ClipboardTypes.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "ui/interaction/EditorInteraction.h"
 #include <array>
@@ -18,6 +20,7 @@
 #include <entt/entity/entity.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <initializer_list>
 #include <memory>
 #include <string>
 #include <variant>
@@ -272,6 +275,98 @@ bool click(Canvas::TimelineCanvas&         canvas,
     // 关闭帧仍属于菜单；下一次独立按下前要让输入状态正常收尾。
     frame(canvas, snapshot, point);
     return closed;
+}
+
+/// @brief 空时间线选择的真实 Ctrl+C／Ctrl+X 不覆盖既有系统导出及 Timing 载荷。
+/// @details 同时覆盖没有选择及选择句柄已不在快照中的情况。
+/// 不直接调用私有复制入口，测试必须经过正常按键和焦点门禁。
+bool checkEmptyTimingClipboard()
+{
+    // 键盘验证使用经典方案，纯鼠标菜单的有效复制由其他场景独立覆盖。
+    // 切换仍经安全帧协议，不直接改写全局活动方案指针。
+    UI::Interaction::synchronizeProfile("classic-desktop", true);
+    UI::Interaction::synchronizeProfile("classic-desktop", true);
+    auto&                        engine = Logic::EditorEngine::instance();
+    Logic::TimelineClipboardItem original;
+    original.timeline.m_timestamp = 2.0;
+    original.timeline.m_effect    = TimingEffect::SCROLL;
+    original.timeline.m_value     = 1.5;
+    // 固定参数能区分保留原载荷与用另一个空对象或默认 SCROLL 取代。
+    // 先建立非空公开导出，并消费一次作为内容基线，不读取系统剪贴板。
+    engine.setTimelineClipboard({ original }, nullptr, false);
+    const auto exported = engine.consumePendingSystemClipboardText();
+    if ( !exported ) return false;
+    Common::Render::RenderSnapshot snapshot;
+    snapshot.hasBeatmap        = true;
+    snapshot.currentTool       = Logic::EditTool::Marquee;
+    snapshot.beatmapPathKey    = "empty-copy.mmm";
+    snapshot.beatmapInstanceId = 10;
+    // 快照没有时间点；hasBeatmap 保持真，确保经过实际空选择分支而非禁用画布。
+    // 画布实例独立于前面的有效复制场景，不能继承它的临时选择或弹窗。
+    Canvas::TimelineCanvas canvas("EmptyTimingCopy", 500, 500, nullptr);
+    const ImVec2           point{ 200, 250 };
+    frame(canvas, snapshot, point);
+    // 用真实按下和释放让父窗口获得输入归属，不能只伪造快捷键返回值。
+    frame(canvas, snapshot, point, true);
+    frame(canvas, snapshot, point);
+    bool  passed = true;
+    auto& io     = ImGui::GetIO();
+    io.AddKeyEvent(ImGuiMod_Ctrl, true);
+    // 两轮分别覆盖空集合和过期句柄集合；只有集合非空仍不足以复制。
+    for ( const bool stale : { false, true } ) {
+        // 访问器只准备旧选择身份，结果仍由用户实际按下快捷键触发。
+        if ( stale ) Access::select(canvas);
+        for ( const auto key : std::array{ ImGuiKey_C, ImGuiKey_X } ) {
+            // 保留尚未发布的旧请求，空操作既不能覆盖它，也不能把它清空。
+            engine.setTimelineClipboard({ original }, nullptr, false);
+            // 按下在 NewFrame 之前排入，正式输入路由负责识别 Ctrl 组合。
+            io.AddKeyEvent(key, true);
+            frame(canvas, snapshot, point);
+            const auto copied = engine.getTimelineClipboard(nullptr);
+            // 数量之外也核对时间和参数，避免错误清空后残留一个默认条目。
+            passed &= copied.size() == 1;
+            if ( copied.size() == 1 )
+                passed &= copied.front().timeline.m_timestamp == 2.0 &&
+                          copied.front().timeline.m_value == 1.5;
+            passed &= engine.consumePendingSystemClipboardText() == exported;
+            // 待发布槽是 UI
+            // 写系统剪贴板的唯一来源，逐字相等证明旧请求未被替换。
+            // 按键独立释放，下一轮必须产生新的边沿，不能依赖按住自动重复。
+            io.AddKeyEvent(key, false);
+            frame(canvas, snapshot, point);
+        }
+    }
+    // 正向对照：同一个窗口和按键路由必须仍能复制有效目标。
+    // 这样空操作不能仅因焦点或快捷键从未命中而碰巧通过。
+    Common::Render::TimelineInteractiveElement target{};
+    target.time         = 3.0;
+    target.y            = 150;
+    target.effects      = Common::Render::SCROLL_EFFECT_SCROLL;
+    target.scrollEntity = static_cast<entt::entity>(42);
+    target.scrollValue  = 2.5;
+    // 复制以快照中的实体身份匹配，不使用鼠标悬浮时间代替原事件时间。
+    // 新时间三秒与旧载荷两秒不同，可以排除全部复制都被忽略的错误实现。
+    // 参数也独立变化，不能只凭条目数量判断一次有效替换已经发生。
+    // 该实体属于 Access::select 准备的选择，另一陈旧实体不应被复制。
+    // 选中一个有效目标就应替换旧载荷，不能因为夹杂过期句柄而拒绝整次操作。
+    snapshot.timelineElements = { target };
+    Access::select(canvas);
+    io.AddKeyEvent(ImGuiKey_C, true);
+    frame(canvas, snapshot, point);
+    const auto copied = engine.getTimelineClipboard(nullptr);
+    passed &= copied.size() == 1;
+    if ( copied.size() == 1 )
+        passed &= copied.front().timeline.m_timestamp == 3.0 &&
+                  copied.front().timeline.m_value == 2.5;
+    // 有效复制必须产生新系统文本；空操作之前的旧请求已被测试消费。
+    // 只读内部发布槽，不调用 ImGui 的平台剪贴板写入回调。
+    passed &= engine.consumePendingSystemClipboardText().has_value();
+    io.AddKeyEvent(ImGuiKey_C, false);
+    io.AddKeyEvent(ImGuiMod_Ctrl, false);
+    // 主键和修饰键都释放，后续菜单测试不能继承本场景的输入状态。
+    // 快照只用于这个局部视图，结束后不向其他窗口传播准备的选择。
+    frame(canvas, snapshot, point);
+    return passed;
 }
 
 /// @brief 验证 Timing 菜单的独立选区、吸附粘贴和会话身份检查。
@@ -1286,6 +1381,10 @@ int main()
     settings.professionalMode = true;
     // 这些配置只影响当前测试进程，不能调用保存入口写入个人设置。
     settings.timelineSelectionIncludesBpm = true;
+    // 快捷键用例明确检查 Ctrl+C／Ctrl+X，退出时随完整软件设置一起恢复。
+    const MMM::Config::ShortcutConfig shortcuts;
+    settings.shortcutConfig.m_copy = shortcuts.m_copy;
+    settings.shortcutConfig.m_cut  = shortcuts.m_cut;
     ImGui::CreateContext();
     auto& io       = ImGui::GetIO();
     io.IniFilename = nullptr;
@@ -1308,6 +1407,7 @@ int main()
     // 每项仍独立执行并记录结果，不因前一个失败跳过其余回归覆盖。
     const std::array checks{
         std::pair{ "unified selection", checkUnifiedSelectionDragging() },
+        std::pair{ "empty clipboard", checkEmptyTimingClipboard() },
         std::pair{ "menu", checkMenu() },
         std::pair{ "segment clipboard", checkSegmentClipboard() },
         std::pair{ "point editing", checkPointEditing() },

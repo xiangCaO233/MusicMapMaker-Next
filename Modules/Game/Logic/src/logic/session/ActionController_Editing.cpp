@@ -18,6 +18,7 @@
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
 #include "logic/ecs/components/NoteComponent.h"
+#include "logic/ecs/components/SampleComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/components/TransformComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
@@ -2558,15 +2559,45 @@ void ActionController::handleCommand(const CmdRedo& cmd)
     m_ctx.isBpmEventsDirty = true;
 }
 
+namespace
+{
+/// @brief 检查当前选择是否实际包含可复制的 Note 或自动采样。
+/// @details 与复制收集使用同一组件和编辑许可，不能只依赖可能过期的选择计数。
+/// @warning 用户复制／剪切低频入口：遍历到首个有效项即返回，不用于逐帧查询。
+bool hasCopyableChartObjectSelection(const SessionContext& ctx)
+{
+    const auto notes =
+        ctx.noteRegistry.view<NoteComponent, InteractionComponent>();
+    for ( auto entity : notes ) {
+        // 配置可在选中后改变；隐藏草稿或不再允许编辑的形状不能清掉旧剪贴板。
+        if ( notes.get<InteractionComponent>(entity).isSelected &&
+             SessionUtils::isNoteEditable(notes.get<NoteComponent>(entity),
+                                          ctx.lastConfig.settings) )
+            return true;
+    }
+    const auto samples =
+        ctx.sampleRegistry.view<SampleComponent, InteractionComponent>();
+    for ( auto entity : samples ) {
+        // 采样是独立有效领域；音符为空不等于整个选区为空。
+        // 只有 InteractionComponent 的陈旧实体不能产生可序列化的物件。
+        if ( samples.get<InteractionComponent>(entity).isSelected ) return true;
+    }
+    return false;
+}
+}  // namespace
+
 /// @brief 将当前可编辑选择复制为 Note 与 Sample 双域剪贴板快照。
 /// @param cmd 无附加参数的复制命令。
 /// @details
 /// Note 保存完整组件及秒/拍两套定位信息；Sample 把绝对轨道转换为相对 BGM
 /// lane，使目标谱面玩家轨道数不同时仍能落到相同 BGM 区位置。结果同时写入
 /// 会话本地缓存和 EditorEngine 跨会话剪贴板。
-/// @warning 用户显式低频路径：会扫描一次 Note 和一次 Sample Registry。
+/// @warning 用户显式低频路径：验证选择后遍历 Note／Sample，禁止逐帧调用。
 void ActionController::handleCommand(const CmdCopy& cmd)
 {
+    // 空选择不构成新的复制事务；本地缓存、全局来源及系统导出槽均保持原值。
+    // 同时跳过成功提示，避免显示“已复制 0 个”而覆盖上一条有效状态消息。
+    if ( !hasCopyableChartObjectSelection(m_ctx) ) return;
     // 新复制事务完全替换旧载荷，避免两次不同选择意外合并。
     m_ctx.clipboard.clear();
     m_ctx.sampleClipboard.clear();
@@ -2626,6 +2657,9 @@ void ActionController::handleCommand(const CmdCopy& cmd)
 /// 本会话粘贴把删除旧对象和创建新对象合成一个动作；跨会话粘贴只创建副本。
 void ActionController::handleCommand(const CmdCut& cmd)
 {
+    // 复制为空时会保留旧载荷，剪切必须先拒绝，不能把旧内容重新标成当前来源。
+    // 该门槛与 Copy 一致，不给无领域组件或已不可编辑的选择设置 isCut。
+    if ( !hasCopyableChartObjectSelection(m_ctx) ) return;
     // 先复用复制流程建立完整载荷，避免出现 Cut 标记却没有剪贴板内容。
     handleCommand(CmdCopy{});
     auto view = m_ctx.noteRegistry.view<InteractionComponent, NoteComponent>();

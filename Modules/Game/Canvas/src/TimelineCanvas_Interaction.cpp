@@ -1286,15 +1286,11 @@ void TimelineCanvas::commitTimingEraseTargets()
 /// @param cut 是否在复制后删除原 Timing。
 void TimelineCanvas::copySelectedTimingEvents(bool cut)
 {
+    // 空复制／剪切不写系统剪贴板，也不清除上一次可粘贴的本地 Timing 载荷。
+    if ( m_selectedTimingEntities.empty() ) return;
     auto activeSession = Logic::EditorEngine::instance().getActiveSession();
     const auto* clipboardContext =
         activeSession ? &activeSession->getContext() : nullptr;
-    m_timingClipboard.clear();
-    if ( m_selectedTimingEntities.empty() ) {
-        Logic::EditorEngine::instance().setTimelineClipboard(
-            {}, clipboardContext, false);
-        return;
-    }
 
     std::vector<TimelineHitTarget> selectedTargets;
     for ( const auto& target : collectVisibleTimingTargets() ) {
@@ -1322,11 +1318,9 @@ void TimelineCanvas::copySelectedTimingEvents(bool cut)
             }
         }
     }
-    if ( selectedTargets.empty() ) {
-        Logic::EditorEngine::instance().setTimelineClipboard(
-            {}, clipboardContext, false);
-        return;
-    }
+    // 旧选择可能已不在当前快照中；只有取得有效内容才允许开始替换事务。
+    if ( selectedTargets.empty() ) return;
+    m_timingClipboard.clear();
 
     std::stable_sort(selectedTargets.begin(),
                      selectedTargets.end(),
