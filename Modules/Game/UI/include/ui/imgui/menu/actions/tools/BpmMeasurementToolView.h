@@ -12,6 +12,7 @@
 #include "ui/imgui/menu/actions/tools/BpmPlotTouch.h"
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -44,6 +45,8 @@ class BpmMeasurementToolView : public ITextureLoader
 public:
     /// @brief 供定向测试检查工具本地历史，不开放生产代码的内部状态。
     friend struct BpmMeasurementHistoryTestAccess;
+    /// @brief 导入回归使用真实项目、会话及测量历史，不开放生产写入口。
+    friend struct BpmBeatmapImportTestAccess;
 
     /// @brief 构造 BPM 测量工具窗口。
     explicit BpmMeasurementToolView(const std::string& name);
@@ -256,6 +259,49 @@ private:
         /// @brief 段落 BPM。
         double bpm{ 120.0 };
     };
+
+    /// @brief 关联谱面导入候选，只持有值语义身份及红线快照。
+    struct BeatmapImportOption {
+        /// @brief 规范化谱面绝对路径，确认时重新读取和验证绑定。
+        std::filesystem::path m_path;
+        /// @brief 包含文件路径的显示名，区分同名难度。
+        std::string m_label;
+        /// @brief 红线以秒表示，保留原精度和负时间，不套用手动拖动限幅。
+        std::vector<BpmTimingSegment> m_segments;
+        /// @brief 缺少红线或存在工具无法无损表达的数据时给出拒绝原因。
+        std::string m_error;
+    };
+
+    /// @brief 从当前音轨关联的指定谱面读取红线；已打开会话优先于磁盘。
+    /// @warning
+    /// 用户显式导入的低频路径；可能读取文件或等待会话锁，禁止逐帧调用。
+    std::optional<BeatmapImportOption> readBoundBeatmapTimings(
+        const std::filesystem::path& path) const;
+    /// @brief 检查分析任务及待交付结果，避免后台恢复覆盖刚导入的段落。
+    /// @warning 仅在用户请求和确认的低频边界获取结果槽锁，禁止逐帧调用。
+    bool hasAnalysisPendingForImport() const;
+    /// @brief 收集导入候选并冻结当前项目和音轨身份，然后请求打开选择弹窗。
+    /// @warning 用户点击低频路径；只在请求时枚举项目，不在弹窗帧重复扫描文件。
+    void requestOpenImportTimingPopup();
+    /// @brief 重新校验来源并把红线替换进工具，作为一次可撤销的测量编辑。
+    /// @warning 确认按钮低频路径，不写谱面、项目或音频文件。
+    bool importSelectedBeatmapTimings();
+    /// @brief 绘制缓存候选，只有确认时重新读取来源，支持移动控件尺寸。
+    /// @warning UI 热路径：无操作帧只读取内存列表，不获取会话锁或读取磁盘。
+    void renderImportTimingPopup(UIManager* sourceManager);
+
+    /// @brief 一次导入选择流程的项目根与音轨 ID，拒绝跨项目沿用同名资源。
+    std::filesystem::path m_importProjectRoot;
+    /// @brief 确认前必须仍是这一音轨，切歌后不把旧 BPM 应用到新歌。
+    std::string m_importAudioTrackId;
+    /// @brief 只在明确打开选择流程时刷新，避免逐帧扫描项目谱面。
+    std::vector<BeatmapImportOption> m_importOptions;
+    /// @brief 当前候选下标，只是本次弹窗的局部选择，不作为会话身份。
+    std::size_t m_importSelectedIndex{};
+    /// @brief 打开请求在工具主窗口层消费，避免继承参数子窗口的 ID 栈。
+    bool m_shouldOpenImportTimingPopup{};
+    /// @brief 当前确认失败原因，保留在模态内，不能只显示到被遮挡的主窗口。
+    std::string m_importError;
 
     /// @brief 一次用户操作前后的 BPM 工具本地状态快照。
     struct MeasurementHistorySnapshot {

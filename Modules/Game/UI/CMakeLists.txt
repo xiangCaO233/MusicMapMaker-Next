@@ -186,6 +186,8 @@ add_library(
   src/ui/imgui/menu/actions/tools/BpmMeasurementToolView.cpp
   # 用户手工测量历史与撤销重做独立维护，不参与后台分析任务。
   src/ui/imgui/menu/actions/tools/BpmMeasurementToolView_History.cpp
+  # 关联谱面红线导入独立维护，磁盘读取仅发生在明确请求及确认边界。
+  src/ui/imgui/menu/actions/tools/BpmMeasurementToolView_Import.cpp
   # 测量标记文件事务与章节编辑保持独立于频谱分析绘制。
   src/ui/imgui/menu/actions/tools/BpmMeasurementToolView_Markers.cpp
   src/ui/imgui/menu/actions/tools/OpenBeatmapSpeedExportAction.cpp
@@ -354,6 +356,12 @@ mmm_add_test_executable(UI BpmMeasurementHistoryTest
 target_link_libraries(BpmMeasurementHistoryTest PRIVATE UI)
 mmm_register_test_case(NAME BpmMeasurementHistoryTest COMMAND
                        BpmMeasurementHistoryTest)
+
+# 关联导入使用真实项目和原生谱面文件，生成物集中写入构建测试输出目录。
+mmm_add_test_executable(UI BpmBeatmapImportTest tests/BpmBeatmapImportTest.cpp)
+target_link_libraries(BpmBeatmapImportTest PRIVATE UI)
+mmm_register_test_case(NAME BpmBeatmapImportTest COMMAND BpmBeatmapImportTest
+                       "${CMAKE_BINARY_DIR}/test_output/BpmBeatmapImportTest")
 
 # 空格播放路由测试覆盖活动拖拽交互和控件导航激活隔离。 显式链接 ImGui，以构造路由判定所需的最小输入上下文。
 mmm_add_test_executable(UI PlaybackShortcutRoutingTest

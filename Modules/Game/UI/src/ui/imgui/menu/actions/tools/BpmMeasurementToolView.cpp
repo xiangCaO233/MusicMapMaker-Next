@@ -1197,6 +1197,7 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
         }
     }
     renderAutoApplyOffsetPopup(sourceManager);
+    renderImportTimingPopup(sourceManager);
     renderApplyTimingPopup(sourceManager);
 
     // 自动播放跟随不标记视野变化，空手势不会污染本地历史。
@@ -1979,6 +1980,14 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
 {
     ImGui::Spacing();
     ImGui::SeparatorText(TR("ui.tools.bpm_measure.segments").data());
+    // 关联谱面只在明确请求时读取，普通帧不为显示按钮扫描项目或等待会话锁。
+    // 分析完成前禁止导入，避免稍后交付的自动测量或音频标记覆盖导入结果。
+    ImGui::BeginDisabled(m_selectedAudioTrackId.empty() ||
+                         m_analysisRunning.load(std::memory_order_relaxed));
+    if ( FeedbackButton(TR("ui.tools.bpm_measure.import_beatmap").data(),
+                        ImVec2(-1.0f, 0.0f)) )
+        requestOpenImportTimingPopup();
+    ImGui::EndDisabled();
 
     // 表头和段落共用滚动容器，固定表头便于长变速谱面辨认列含义。
     const float rowHeight   = ImGui::GetFrameHeightWithSpacing();
