@@ -58,10 +58,16 @@ struct Fixture : UI::IWorkspacePresentation {
     float m_width{ 800 };  ///< 可变几何用于检查旋转／重排取消。
     /// @brief 预设 UI 用例在同一个真实宿主中绘制正式控件，而非伪造打开标志。
     bool   m_controls{};
-    ImVec2 m_comboPoint{};  ///< 从实际内容起点及字体高度定位下拉框。
-    double m_time{};        ///< 注入时间只维持事件顺序，不影响状态机判定。
+    ImVec2 m_comboPoint{};        ///< 从实际内容起点及字体高度定位下拉框。
+    float  m_inputHeight{ 600 };  ///< 外壳扣除键盘后的真实可用高度。
+    double m_time{};  ///< 注入时间只维持事件顺序，不影响状态机判定。
     /// @brief 测试显式指定移动呈现，不由宿主平台宏推断。
     bool allowsHoverFeedback() const override { return false; }
+    /// @brief 模拟外壳安全区域，不复制模态的标题或正文尺寸公式。
+    UI::WorkspaceWindowArea textInputWindowArea() const override
+    {
+        return { {}, { ImGui::GetIO().DisplaySize.x, m_inputHeight } };
+    }
     /// @brief 本测试只需要原生窗口树，不创建 Vulkan 或完整工作区。
     void renderWorkspace(UI::MainDockSpaceUI&, UI::UIManager&) override {}
     /// @brief 每个场景从相同合法布局开始，七键覆盖用于检查跨键数隔离。
@@ -123,13 +129,15 @@ struct Fixture : UI::IWorkspacePresentation {
         // 重排案例改变显示尺寸，原始触点和生产计时仍按正常顺序推进。
         ImGui::NewFrame();
         ImGui::SetNextWindowPos({ 0, 0 });
-        ImGui::SetNextWindowSize({ m_width + 200, 600 });
+        ImGui::SetNextWindowSize(m_controls ? ImGui::GetIO().DisplaySize
+                                            : ImVec2(m_width + 200, 600));
         ImGui::Begin("LayoutTest");
         UI::WorkspaceFrameScope scope(*this);
         if ( m_controls ) {
             // 模拟生产布局面板的 48dp 行高，位置来自实际窗口而非设备坐标。
             // 这里不复制控件 ID 或 popup 哈希，按下仍走生产 BeginCombo。
-            const float height = 48;
+            const float height =
+                48 * Config::AppConfig::instance().getWindowContentScale();
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
                                 { 4, (height - ImGui::GetFontSize()) * .5f });
             const auto origin = ImGui::GetCursorScreenPos();
@@ -340,6 +348,71 @@ void presetComboStyles()
     // 退出前关闭实际 popup，后续场景不能继承其前景窗口或导航身份。
     // 不直接清理 OpenPopupStack，按键生命周期仍由 ImGui 执行。
 }
+/// @brief 真机高键盘只余 424px 时，名称行必须完整可见且滚动稳定。
+/// @details 通过正式导航激活管理入口，不直接设置生产事务或弹窗状态。
+/// 标题若继承 48dp 表单 padding，会耗尽正文并让自动滚动交替裁切输入框。
+/// 检查真实活动子窗的裁剪高度和连续滚动值，不以按钮仍可见代替输入可用。
+void presetNameKeyboard()
+{
+    Fixture     f;
+    auto&       app   = Config::AppConfig::instance();
+    const float scale = 2.7625f;
+    // 同时缩放字体和主题尺寸，不能只放大显示分辨率来冒充真机 DPI。
+    // 控件高度由配置倍率计算，标题则读取 ImGui 样式，二者必须处于同一尺度。
+    // 保留完整工作区到弹窗打开以后，再模拟输入法动画收缩安全区域。
+    app.setNativeContentScale(scale);
+    ImGui::GetIO().DisplaySize = { 2688, 1216 };
+    ImGui::GetStyle().ScaleAllSizes(scale);
+    ImGui::GetStyle().FontScaleMain = scale;
+    f.m_controls                    = true;
+    f.m_inputHeight                 = 1216;
+    f.frame();
+    auto* parent = ImGui::FindWindowByName("LayoutTest");
+    // 使用正常控件激活队列，库仍由真实按钮驱动，测试不绕过只读保护。
+    ImGui::ActivateItemByID(parent->GetID("管理布局预设"));
+    f.frame();
+    ImGui::ActivateItemByID(parent->GetID("复制为新预设"));
+    f.frame();
+    f.frame();
+    // 复制按钮仅打开独立草稿；此时库大小不应增加，后续取消也不能改变它。
+    // 不用预先插入的自定义项替代真实复制入口，否则会绕过名称聚焦路径。
+    const auto count = app.getLayoutPresets().m_items.size();
+    // NX809J 的百度横屏键盘占 792px，1216px 屏幕只剩 424px。
+    // 该空间比 Gboard 场景更小，正是原输入框高于正文裁剪区的边界。
+    // 使用有限帧推进自动尺寸与滚动目标，不以墙钟等待或忽略首帧失败收敛。
+    f.m_inputHeight = 424;
+    for ( int i = 0; i < 5; ++i ) f.frame();
+    auto* field = GImGui->ActiveIdWindow;
+    // 活动窗口应是正文子窗；必须校验真实输入 ID，不能只检查模态还开着。
+    // 先判空再访问，首次聚焦失败也作为明确断言记录，不提前退出整个回归。
+    // 单行输入仍须持有焦点，不能通过结束编辑来隐藏几何失败。
+    const bool active =
+        field && ImGui::GetActiveID() == field->GetID("##LayoutPresetName");
+    check(active, "preset name must retain text focus");
+    if ( active ) {
+        const float height = field->ClipRect.GetHeight();
+        check(height >= 48 * scale, "preset name full row must fit body");
+        const float scroll = field->Scroll.y;
+        // 原故障会在几帧间反复试图显示输入框的上下端，产生肉眼可见闪烁。
+        // 帧推进本身无等待；连续六帧必须保持同一滚动位置与焦点。
+        for ( int i = 0; i < 6; ++i ) {
+            f.frame();
+            check(std::abs(field->Scroll.y - scroll) < .01f,
+                  "preset name scroll must not oscillate");
+        }
+    }
+    auto* modal = ImGui::GetTopMostPopupModal();
+    check(modal != nullptr, "preset name modal must actually open");
+    if ( modal ) {
+        // 明确取消再核对库；几何测试不能留下自定义副本或待提交动作。
+        ImGui::ActivateItemByID(modal->GetID("取消"));
+        f.frame();
+        f.frame();
+    }
+    check(app.getLayoutPresets().m_items.size() == count,
+          "keyboard layout must not commit preset draft");
+    app.setNativeContentScale(1);
+}
 /// @brief 合帧拖动仍按原点拾取，再补最终位置；窗口外起点不能中途移入。
 /// @details 原始事件泵一次接收 Down、Move、Up 时，渲染没有中间按住帧。
 /// 生产代码必须使用快照保存的起点与正常释放位置完成同一目标操作。
@@ -382,5 +455,6 @@ int main()
     contentAdjustment();
     narrowAuxiliary();
     presetComboStyles();
+    presetNameKeyboard();
     return failures ? 1 : 0;
 }

@@ -235,9 +235,18 @@ bool drawMobilePresetControls()
     // 临时名称只由本模态拥有，Enter 收键盘，不自动执行重命名或复制。
     Utils::CenteredModalPopupScope style(scale);
     Utils::prepareCenteredModalWindow({ 420.f * scale, 0 });
-    if ( ImGui::BeginPopupModal("管理布局预设###MobileLayoutPresetAction",
-                                nullptr,
-                                ImGuiWindowFlags_AlwaysAutoResize) ) {
+    // 标题不是触摸按钮，不继承为 48dp 表单控件设置的垂直内边距。
+    // 百度横屏键盘仅余约 150dp 高度；紧凑标题让正文容纳完整输入行。
+    // Begin 固定本帧标题几何后立即恢复，输入框与底部按钮仍保持原命中高度。
+    const auto padding = ImGui::GetStyle().FramePadding;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                        { padding.x, std::min(padding.y, 4.f * scale) });
+    const bool opened =
+        ImGui::BeginPopupModal("管理布局预设###MobileLayoutPresetAction",
+                               nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize);
+    ImGui::PopStyleVar();
+    if ( opened ) {
         // 库在其它入口变化后，旧模态不能把草稿提交到新选中的项。
         // 原名称作为稳定身份校验，失败时保留取消入口及原草稿。
         const bool           same = library.m_selected == state.m_target;
