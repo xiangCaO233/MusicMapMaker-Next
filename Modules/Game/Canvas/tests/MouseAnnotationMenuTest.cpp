@@ -155,6 +155,15 @@ struct MouseAnnotationMenuTestAccess {
                    "Second body" &&
                c.m_annotationEditor.timestamp == 3.25;
     }
+    /// @brief 完整画布打开编辑器后仍须保留右键选定的批注身份与正文。
+    /// @return 不依赖实时悬浮或播放头，确实准备第一条已有批注时为真。
+    static bool editingFirst(const Basic2DCanvasInteraction& c)
+    {
+        return c.m_annotationEditor.annotationId == "one" &&
+               c.m_annotationEditor.timestamp == 3.25 &&
+               std::string_view(c.m_annotationEditor.content.data()) ==
+                   "First body";
+    }
     /// @brief 新增入口必须清除旧条目 ID 与正文，仍使用同一组批注的显示时间。
     /// @return 没有继承上一条作者、内容或 ID 时才返回真。
     /// @note 后续编辑器会按默认作者处理新建，本菜单不能伪造历史作者归属。
@@ -183,13 +192,15 @@ using Access     = Canvas::MouseAnnotationMenuTestAccess;
 /// @param hovered 只在标记位置开启，所有菜单按钮帧都关闭该命中条件。
 /// @param link 明确由上层 Markdown 命中提供，不通过临时按下修饰键伪造。
 /// @param fullGutter 为真时包含整条批注栏路由，为假时隔离测试菜单本体。
+/// @param fullCanvas 为真时通过平台呈现执行整个画布输入和外层右键菜单。
 /// @return 是否由批注菜单消费本帧输入，不能以弹窗窗口仍存在代替。
 /// @pre 字体图集已经构建，输入事件在 NewFrame 中一次性发布。
 /// @post 命中由调用者显式给出，菜单内按钮不得暗中继承原卡片命中状态。
 /// @warning 夹具只借用本帧快照，不把其观察指针留到下一次 Render。
 bool frame(Controller& controller, Common::Render::RenderSnapshot& snapshot,
            ImVec2 point, bool left = false, bool right = false,
-           bool hovered = false, bool link = false, bool fullGutter = false)
+           bool hovered = false, bool link = false, bool fullGutter = false,
+           bool fullCanvas = false)
 {
     auto& io = ImGui::GetIO();
     io.AddMousePosEvent(point.x, point.y);
@@ -207,11 +218,20 @@ bool frame(Controller& controller, Common::Render::RenderSnapshot& snapshot,
                  ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
     const UI::Interaction::SurfaceScope scope(
         UI::Interaction::Surface::MainCanvas);
-    const bool consumed =
-        fullGutter
-            ? Access::gutter(
-                  controller, snapshot, ImGui::GetCursorScreenPos(), point)
-            : Access::menu(controller, snapshot, hovered, link);
+    bool consumed = false;
+    if ( fullCanvas ) {
+        // 外层桌面菜单会在 routeInput 返回后继续处理，必须纳入本轮调用。
+        // 仅直接调用 gutter 无法发现它覆盖同次右键已打开弹窗的问题。
+        controller.update(nullptr, &snapshot, 500, 400);
+        consumed = ImGui::IsPopupOpen(
+            nullptr,
+            ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    } else
+        consumed =
+            fullGutter
+                ? Access::gutter(
+                      controller, snapshot, ImGui::GetCursorScreenPos(), point)
+                : Access::menu(controller, snapshot, hovered, link);
     ImGui::End();
     ImGui::Render();
     return consumed;
@@ -303,6 +323,70 @@ Common::Render::RenderSnapshot fixture()
     // - 快照拥有字符串，测试只在其生命周期内向生产菜单提供观察指针。
     s.annotationMarkers.push_back(std::move(marker));
     return s;
+}
+
+/// @brief 完整纯鼠标画布中，批注菜单和编辑器不能被后处理的物件菜单替换。
+/// @return 右键、释放、点击编辑和普通物件菜单的正向对照均成立时为真。
+/// @details 先前的局部菜单测试不经过桌面呈现，无法覆盖两个弹层的竞争。
+bool fullCanvasRouting()
+{
+    // 场景切换只清理尚未关闭的真实弹层，空栈不能调用内部关闭入口。
+    // OpenPopupStack 容器属于当前 ImGui 上下文，引用在本场景内持续有效。
+    const auto& stack = ImGui::GetCurrentContext()->OpenPopupStack;
+    if ( !stack.empty() ) ImGui::ClosePopupToLevel(0, true);
+    UI::Interaction::synchronizeProfile("mouse-only", true);
+    UI::Interaction::synchronizeProfile("mouse-only", true);
+    auto s = fixture();
+    // 选择工具是外层物件菜单的必要条件；Draw 不会复现这场菜单竞争。
+    s.currentTool = Logic::EditTool::Marquee;
+    Controller c("FullAnnotationTest", "FullAnnotationCanvas");
+    const auto step = [&](ImVec2 point, bool left = false, bool right = false) {
+        // 最后一个参数启用完整 update，不绕过平台菜单后处理。
+        return frame(c, s, point, left, right, false, false, false, true);
+    };
+    // 正式投影提供气泡位置，外层仍看到相同的窗口悬浮和物理右键边沿。
+    step({ 600, 500 });
+    const auto point = Access::bubble(s);
+    step(point);
+    step(point, false, true);
+    // 根弹窗身份必须属于批注；仅检查任意弹窗存在会接受错误的物件菜单。
+    bool passed = Access::menuOpen(c);
+    step(point);
+    passed &= Access::menuOpen(c);
+    // 自然抬起右键后继续保留同一菜单，不能重新采集另一条悬浮批注。
+    // 必须确实打开批注菜单，才能用其实际尺寸定位编辑按钮。
+    // 物件菜单也会消费输入，但不能因此把错误路由算作通过。
+    if ( passed && !stack.empty() && stack.back().Window ) {
+        const auto edit = editPoint(*stack.back().Window, false);
+        // 普通左键点击菜单控件，不允许测试直接设置编辑器请求或正文。
+        step(edit);
+        step(edit, true);
+        step(edit);
+        passed &= Access::editingFirst(c) && !Access::menuOpen(c);
+        // 编辑器准备原 ID 和文本；菜单关闭不等于批注被删除或新增。
+    } else
+        passed = false;
+    // 空白批注栏必须保留原新增弹窗，不能同样被物件菜单覆盖。
+    // 独立清理上一弹层，下一次右键不能靠已有模态继续阻挡而假通过。
+    if ( !stack.empty() ) ImGui::ClosePopupToLevel(0, true);
+    const ImVec2 blank{ point.x, point.y + 60 };
+    // 横向仍在批注栏，纵向远离所有气泡，覆盖空白右键新增入口。
+    step(blank);
+    step(blank, false, true);
+    const auto* window      = ImGui::FindWindowByName("AnnotationMenuTest");
+    const auto  seed        = ImHashStr("FullAnnotationCanvas", 0, window->ID);
+    const auto  selectionId = ImHashStr("SelectionEditMenu", 0, seed);
+    // 控件采用相机作用域，根 ID 与生产 PushID 的结果逐项一致。
+    passed &= !stack.empty() && stack.front().PopupId != selectionId;
+    // 正向对照仍要在轨道区打开物件菜单，不能靠禁用所有右键菜单修复。
+    if ( !stack.empty() ) ImGui::ClosePopupToLevel(0, true);
+    step({ 100, 100 });
+    step({ 100, 100 }, false, true);
+    passed &= !stack.empty() && stack.front().PopupId == selectionId;
+    // 最后的阳性样本排除永久关闭物件菜单或整个纯鼠标方案的错误修复。
+    // 不发送保存命令，当前场景的全部临时 UI 状态在结束前释放。
+    if ( !stack.empty() ) ImGui::ClosePopupToLevel(0, true);
+    return passed;
 }
 
 /// @brief 验证普通右键、持续导航、写权限及跨谱面失效，保留经典入口。
@@ -562,7 +646,9 @@ int main()
     unsigned char* pixels{};
     int            width{}, height{};
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
-    const bool passed = run();
+    bool passed = run();
+    passed &= fullCanvasRouting();
+    if ( !passed ) XERROR("Full canvas annotation popup routing failed");
     ImGui::DestroyContext();
     return passed ? 0 : 1;
 }
