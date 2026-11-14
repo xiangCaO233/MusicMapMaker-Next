@@ -9,7 +9,9 @@
 
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <implot.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -21,6 +23,120 @@ namespace MMM::UI
 {
 /// @brief 通过友元验证真实工具历史和磁吸入口，不复制生产判定逻辑。
 struct BpmMeasurementHistoryTestAccess {
+    /// @brief 完整分析面板中频谱拍号不能越过子窗口底部裁剪线。
+    /// @return 不同高度与字体缩放下，图像和实际文字顶点均完整可见时为真。
+    /// @details 调用生产面板布局，不复制波形、总览条或标题的高度公式。
+    /// 拍号几何来自真实绘制列表，不用成功返回或存在文字命令代替完整显示。
+    /// 同时约束频谱命中区和文字顶点，不能靠把文字挪到图像之外绕过裁剪。
+    /// 绘制区域禁用父窗口滚动，与实际 BPM 左栏的输入归属保持一致。
+    /// @warning 仅在 CPU 回归执行顶点遍历，不进入产品逐帧布局调用链。
+    static bool checkAnalysisLabels(BpmMeasurementToolView& tool)
+    {
+        bool passed = true;
+        // 使用截图中的多段变速和可视时间范围，标签需跨 BPM 段连续显示。
+        // 分析缓存可以为空，CPU 回归仍绘制完整坐标轴、节拍线和拍号。
+        tool.m_timingSegments = { { 0, 120 }, { 8.5, 141.228 }, { 10.5, 120 } };
+        // 独立试听路由直接采用本地时长，不读取主谱面 transport 的时间偏移。
+        tool.m_playbackRoute        = BpmPlaybackRoute::Audition;
+        tool.m_selectedAudioSyncKey = "spectrum-label-probe";
+        tool.m_duration             = 60;
+        tool.m_viewCenter           = 9;
+        tool.m_zoomSeconds          = 2.39;
+        tool.m_texturesNeedReload   = true;
+        for ( const float scale : { 1.0f, 1.5f, 2.0f } ) {
+            // 字体和样式同时缩放，覆盖标题、控件与间距一起增高的桌面环境。
+            // 矮窗口特别检查旧频谱最低高度大于实际余量的分支。
+            for ( const float height : { 420.0f, 600.0f, 900.0f } ) {
+                // 各样本重建上下文，不能让上一尺寸的滚动位置掩盖越界。
+                ImGui::CreateContext();
+                ImPlot::CreateContext();
+                auto& io           = ImGui::GetIO();
+                io.IniFilename     = nullptr;
+                io.DisplaySize     = { 1200, 1000 };
+                io.DeltaTime       = 1.0f / 60;
+                io.FontGlobalScale = scale;
+                // 只影响本样本的独立上下文，下一种缩放从原始样式重新开始。
+                ImGui::GetStyle().ScaleAllSizes(scale);
+                unsigned char* pixels{};
+                int            w{}, h{};
+                io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+                // 鼠标离开图表，布局检查不得触发平移、缩放或悬浮提示。
+                io.AddMousePosEvent(-100, -100);
+                // 首帧建立子窗口几何，次帧按稳定裁剪矩形验证真实绘制命令。
+                for ( int frame = 0; frame < 2; ++frame ) {
+                    // 固定窗口位置，排除个人停靠布局造成的偶然裁剪。
+                    ImGui::NewFrame();
+                    ImGui::SetNextWindowPos({ 0, 0 });
+                    ImGui::SetNextWindowSize({ 1000, height });
+                    ImGui::Begin("BpmLabelClipRegression",
+                                 nullptr,
+                                 ImGuiWindowFlags_NoSavedSettings |
+                                     ImGuiWindowFlags_NoScrollbar);
+                    // 与桌面工具左栏相同：禁止自动滚动，只能由布局保证末行可见。
+                    ImGui::BeginChild("Analysis",
+                                      { 0, 0 },
+                                      ImGuiChildFlags_None,
+                                      ImGuiWindowFlags_NoScrollbar |
+                                          ImGuiWindowFlags_NoScrollWithMouse);
+                    const auto clipBottom =
+                        ImGui::GetCurrentWindow()->ClipRect.Max.y;
+                    tool.renderAnalysisPanel();
+                    // 父层裁剪线在绘图前保存，不能用错误图像高度反推期望边界。
+                    // 生产最后一个 item 是频谱命中区，尺寸与实际图像完全相同。
+                    const auto spectrumMin = ImGui::GetItemRectMin();
+                    const auto spectrumMax = ImGui::GetItemRectMax();
+                    // 图像底边本身也必须可见，不能只检查被移到更高位置的标签。
+                    bool        complete = spectrumMax.y <= clipBottom + .01f;
+                    int         labelVertices = 0;
+                    const auto& list          = *ImGui::GetWindowDrawList();
+                    // 拍号有专用文字色；检查实际索引对应顶点与 GPU
+                    // 命令裁剪矩形。 不能只验证原始字号或文本框高度，GPU
+                    // 仍可能裁掉下半行。
+                    for ( const auto& cmd : list.CmdBuffer ) {
+                        // 绘制命令含独立顶点偏移，不能假定文字全部处在同一批。
+                        for ( unsigned i = 0; i < cmd.ElemCount; ++i ) {
+                            const auto& vertex =
+                                list.VtxBuffer[cmd.VtxOffset +
+                                               list.IdxBuffer[cmd.IdxOffset +
+                                                              i]];
+                            if ( vertex.col != IM_COL32(255, 255, 255, 215) ||
+                                 vertex.pos.y < spectrumMin.y )
+                                continue;
+                            ++labelVertices;
+                            // 只约束纵向截断，时间视野边缘允许横向裁掉离屏拍号。
+                            complete &= vertex.pos.y <= cmd.ClipRect.w + .01f;
+                        }
+                    }
+                    // 空白图像或完全被裁掉的标签不能靠没有越界顶点而通过。
+                    // 首帧允许窗口尚在准备几何，最终断言始终来自第二帧。
+                    if ( frame == 1 ) {
+                        // 实际频谱文字必须存在，不能只把波形中的同色标签当对照。
+                        // 两种字体区域分开判断，避免窗口变矮后频谱被完全挤出仍通过。
+                        complete &= labelVertices > 0;
+                        if ( !complete )
+                            XERROR(
+                                "BPM spectrum label clipped: scale={}, "
+                                "height={}, imageBottom={}, clipBottom={}, "
+                                "textVertices={}",
+                                scale,
+                                height,
+                                spectrumMax.y,
+                                clipBottom,
+                                labelVertices);
+                        passed &= complete;
+                    }
+                    ImGui::EndChild();
+                    ImGui::End();
+                    ImGui::Render();
+                }
+                // 绘制上下文先于 ImGui 释放，不保留任何图表或字体观察指针。
+                ImPlot::DestroyContext();
+                ImGui::DestroyContext();
+            }
+        }
+        return passed;
+    }
+
     /// @brief 只比较测试浮点结果，容差不影响生产网格定位。
     static bool close(double lhs, double rhs)
     {
@@ -675,6 +791,7 @@ int main()
         MMM::UI::BpmMeasurementHistoryTestAccess::checkHistory(tool) &&
         MMM::UI::BpmMeasurementHistoryTestAccess::checkWheel(tool) &&
         MMM::UI::BpmMeasurementHistoryTestAccess::checkPlaybackCursor(tool) &&
+        MMM::UI::BpmMeasurementHistoryTestAccess::checkAnalysisLabels(tool) &&
         MMM::UI::BpmMeasurementHistoryTestAccess::checkChapterDeletion(tool) &&
         MMM::UI::BpmMeasurementHistoryTestAccess::checkMobileNavigation() &&
         MMM::UI::BpmMeasurementHistoryTestAccess::checkMobileBeats(tool);

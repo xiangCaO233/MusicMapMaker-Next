@@ -2861,9 +2861,8 @@ void BpmMeasurementToolView::renderAnalysisPanel()
         std::max(BPM_OVERVIEW_SCROLLBAR_MIN_HEIGHT, ImGui::GetFrameHeight());
     const float contentHeight = std::max(
         0.0f, avail.y - textH * 2.0f - overviewHeight - spacingY * 3.0f);
-    // 波形约占可用区域四成，频谱获得余下空间并各自保留最低高度。
+    // 波形约占预算区域四成；频谱高度在前面的实际控件提交后再确定。
     const float waveHeight = std::max(120.0f, contentHeight * .42f);
-    const float specHeight = std::max(160.0f, contentHeight - waveHeight);
 
     renderWaveformPlot(ImVec2(avail.x, waveHeight));
 
@@ -2872,6 +2871,9 @@ void BpmMeasurementToolView::renderAnalysisPanel()
     ImGui::Spacing();
 
     ImGui::Text("%s", TR("ui.tools.bpm_measure.spectrum").data());
+    // Text、Spacing 和图表自身都会推进游标，不能用预估高度代替真实余量。
+    // 缩放或窗口变矮时也不能强制最低频谱高度，否则底部拍号会被父窗口裁掉。
+    const float specHeight = std::max(1.0f, ImGui::GetContentRegionAvail().y);
     renderSpectrumImage(ImVec2(avail.x, specHeight));
 }
 
