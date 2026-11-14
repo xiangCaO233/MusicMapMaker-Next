@@ -147,6 +147,13 @@ target_link_libraries(EditorClipboardProtocolTest PRIVATE Logic Log)
 mmm_register_test_case(NAME EditorClipboardProtocolTest COMMAND
                        EditorClipboardProtocolTest)
 
+# 空选择必须保留内存剪贴板及系统导出槽；直接经过正式复制和剪切命令回归。 独立目标避免协议往返测试替代实际命令路径，资源身份不要求真实音频文件。
+mmm_add_test_executable(Logic EmptySelectionClipboardTest
+                        tests/EmptySelectionClipboardTest.cpp)
+target_link_libraries(EmptySelectionClipboardTest PRIVATE Logic Log)
+mmm_register_test_case(NAME EmptySelectionClipboardTest COMMAND
+                       EmptySelectionClipboardTest)
+
 # 预览密度与时间线批量元数据分成目标，便于只运行受影响的数据处理回归。
 mmm_add_test_executable(Logic PreviewDensityTest tests/PreviewDensityTest.cpp)
 # 密度计算单独保留 CTest 名称，可在画布密度回归时快速筛选。
