@@ -1,5 +1,5 @@
 name: Reusable Android ARM64 Build
-# Android 只交付 QA 制品，不参与桌面发布目录或网站清单的聚合。
+# Android 交付签名发布型 APK，不参与桌面发布目录或网站清单的聚合。
 on:
   workflow_call:
     inputs:
@@ -30,7 +30,8 @@ jobs:
     # 同步和编译处于同一个 shell，文件锁不会在两个步骤之间提前释放。
     # 失败时后续上传步骤由默认 success 条件跳过，避免交付上次生成的旧包。
     steps:
-      - name: Sync and build Android ARM64 QA
+      - name: Sync and build Android ARM64 release
+        id: build
         shell: bash
         # 子模块按 gitlink 固定；专用 checkout 的强制检出不触及用户工作树。
         # 工具链预先安装在宿主挂载卷，作业不修改容器镜像和系统默认 Java。
@@ -57,12 +58,13 @@ jobs:
           git lfs pull --include='assets/**' --exclude=''
           bash "$android_root/checkout/scripts/ci/android-build.sh"
       - name: Upload signed ARM64 APK
-        # APK 已压缩，不再重复压缩；仅保留短期 QA 下载，控制托管存储费用。
+        # APK 已压缩，不再重复压缩；仅保留短期构建下载，控制托管存储费用。
         uses: actions/upload-artifact@v4
         # 上传范围精确到公开交付子目录，不包含缓存、私钥和整个工作目录。
         # 保留期只作用于本制品，不能借此修改仓库现有 Release 的保存策略。
         with:
-          name: android-qa-arm64-${{ inputs.source_ref }}
+          # 名称来自已验证 APK，保持产品、版本、平台及架构与安装包一致。
+          name: ${{ steps.build.outputs.artifact_name }}
           path: /home/xiang/cross/android/work/apk/ci/*
           if-no-files-found: error
           compression-level: 0
