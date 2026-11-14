@@ -1,9 +1,12 @@
 #include "config/EditorConfig.h"
+#include "config/ShortcutConfig.h"
 
 #include "log/colorful-log.h"
 
 #include <cmath>
+#include <initializer_list>
 #include <nlohmann/json.hpp>
+#include <string_view>
 
 namespace
 {
@@ -603,6 +606,60 @@ bool testSelectedVolumeShortcutRoundTrip()
     return true;
 }
 
+/// @brief 旧默认选择／绘制 2／3 整体迁移到 1／2，自定义组合保持不变。
+/// @return 缺失回退、旧值迁移、保存回读和自定义保护均符合契约时为真。
+/// @details 通过正式 JSON 加载入口验证，不能只检查构造时的默认成员。
+bool testToolShortcutMigration()
+{
+    using MMM::Config::ShortcutBinding;
+    using MMM::Config::ShortcutConfig;
+    // 旧配置保留完整字段，复现默认值被磁盘保存值覆盖的真实路径。
+    // 默认身份由两个动作共同确定；单独出现一个旧键不足以确认未重绑定。
+    // 隐藏抓取绑定仍在配置内，迁移不应删除这个兼容字段。
+    ShortcutConfig old;
+    old.toolMarquee.key           = "2";
+    old.toolDraw.key              = "3";
+    const nlohmann::json encoded  = old;
+    const auto           migrated = encoded.get<ShortcutConfig>();
+    // 比较完整绑定，防止迁移只更换主键而遗漏启用或修饰键状态。
+    const ShortcutBinding selection{ true, "1", false, false, false, false };
+    const ShortcutBinding draw{ true, "2", false, false, false, false };
+    if ( nlohmann::json(migrated.toolMarquee) != nlohmann::json(selection) ||
+         nlohmann::json(migrated.toolDraw) != nlohmann::json(draw) )
+        return false;
+    // 空配置应直接使用新默认；迁移后保存再加载也不能反复改变键位。
+    // 对比整个对象，确保新旧入口的其它默认动作一致。
+    // 回读使用序列化结果，覆盖迁移值落盘后的下一次启动。
+    const auto missing  = nlohmann::json::object().get<ShortcutConfig>();
+    const auto restored = nlohmann::json(migrated).get<ShortcutConfig>();
+    if ( nlohmann::json(missing) != nlohmann::json(restored) ) return false;
+    // 两个动作都分别覆盖改键、修饰键和禁用；任一变化即保护整组。
+    // 每次只改一个字段，另一个仍是旧默认，防止发生单边强制迁移。
+    // 修饰键相同主键也是独立组合，不能仅凭数字 2／3 判断旧默认。
+    // 禁用状态表示用户主动取消动作，即使保留原主键也必须尊重。
+    for ( const auto* field : { "toolMarquee", "toolDraw" } ) {
+        for ( const auto* property :
+              { "key", "ctrl", "shift", "alt", "super", "enabled" } ) {
+            auto  custom = encoded;
+            auto& value  = custom[field][property];
+            // 自定义主键与旧默认明显不同；布尔值取反包含关闭绑定的情况。
+            if ( std::string_view(property) == "key" )
+                value = "Q";
+            else
+                value = !value.get<bool>();
+            const auto loaded = custom.get<ShortcutConfig>();
+            // 完整配置相等同时保护另一工具、隐藏兼容键和其它所有动作。
+            if ( nlohmann::json(loaded) != custom ) return false;
+        }
+    }
+    // 仅缺少其中一个动作时使用新默认，不把残缺配置误识别为旧默认整组。
+    // 缺失字段回退可能产生重复键，属于原有配置语义而非本次整组迁移。
+    auto partial = encoded;
+    partial.erase("toolDraw");
+    const auto loaded = partial.get<ShortcutConfig>();
+    return loaded.toolMarquee.key == "2" && loaded.toolDraw.key == "2";
+}
+
 /// @brief 验证添加选中物件批注快捷键可持久化并迁移旧默认组合键。
 /// @return 自定义组合键往返无损且缺失或旧默认字段恢复为 Ctrl+R 时返回 true。
 /// @note 旧 Ctrl+Alt+A 会与新增动作冲突，因此需要专门迁移。
@@ -1174,6 +1231,7 @@ int main()
                    testCollaborationViewportRenderModeRoundTrip() &&
                    testCollaborationChatTimePreference() &&
                    testSelectedVolumeShortcutRoundTrip() &&
+                   testToolShortcutMigration() &&
                    testSelectedAnnotationShortcutRoundTrip() &&
                    testAnnotationDetailVisibilityRoundTrip() &&
                    testPlaybackShortcutRoundTrip() &&
