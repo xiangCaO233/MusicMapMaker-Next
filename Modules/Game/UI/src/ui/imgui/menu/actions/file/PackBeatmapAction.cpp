@@ -78,11 +78,51 @@ void centerNextItem(float itemWidth)
 /// @return 按钮被点击时返回 true。
 /// @warning UI 绘制路径：只调整游标并调用统一反馈按钮。
 /// @note 统一反馈入口负责悬停与点击音效，本函数只封装布局。
+/// 长名称保持原字号，文字高度参与父窗滚动布局，不使用缩小字体或悬停提示补救。
+/// 展示副本仅用于当帧绘制，原按钮标签继续负责导航 ID 与反馈身份。
+/// 格式扩展名优先完整换行，只有更窄的窗口才继续按可用宽度折行。
 bool drawCenteredButton(const char* label, ImVec2 size)
 {
+    // 长格式名按当前字号换行，不能只按固定 dp 估计英文名称宽度。
+    // 保持完整标签作为按钮身份，导航激活、音效和轻点仍走统一入口。
+    const auto& style     = ImGui::GetStyle();
+    const float textWidth = std::max(1.f, size.x - style.FramePadding.x * 2);
+    const bool  wrap      = ImGui::CalcTextSize(label).x > textWidth;
+    // 后缀作为整体换到下一行，不能把 .mcz 拆成点号和扩展名两段。
+    // 只调整展示副本，按钮原标签仍作为稳定输入身份。
+    std::string displayLabel;
+    if ( wrap ) {
+        displayLabel         = label;
+        const auto extension = displayLabel.rfind(" (");
+        if ( extension != std::string::npos ) displayLabel[extension] = '\n';
+    }
+    const char* display = wrap ? displayLabel.c_str() : label;
+    const auto  textSize =
+        ImGui::CalcTextSize(display, nullptr, false, textWidth);
+    if ( wrap )
+        size.y = std::max(size.y, textSize.y + style.FramePadding.y * 2);
     // 必须在绘制按钮前调整游标，否则测量将作用于后续控件。
     centerNextItem(size.x);
-    return ::MMM::UI::FeedbackButton(label, size);
+    if ( !wrap ) return ::MMM::UI::FeedbackButton(label, size);
+    const auto textColor = ImGui::GetColorU32(ImGuiCol_Text);
+    // 隐藏原生单行文字，再在同一按钮矩形内绘制完整换行文本。
+    // 不增加第二个命中区，滑动起手仍由移动滚动器决定是否交付点击。
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 0, 0, 0));
+    const bool pressed = ::MMM::UI::FeedbackButton(label, size);
+    ImGui::PopStyleColor();
+    // 显示文字沿用按钮的裁剪区域；完整文字增加的高度已计入正文滚动范围。
+    // 多行布局仍只产生一个激活结果，不会在抬手时同时提交两次选择。
+    const auto origin = ImGui::GetItemRectMin();
+    ImGui::GetWindowDrawList()->AddText(
+        ImGui::GetFont(),
+        ImGui::GetFontSize(),
+        { origin.x + (size.x - textSize.x) * .5f,
+          origin.y + (size.y - textSize.y) * .5f },
+        textColor,
+        display,
+        nullptr,
+        textWidth);
+    return pressed;
 }
 
 /// @brief 估算 Checkbox 绘制指定标签时需要的宽度。
@@ -1356,6 +1396,8 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
             // 内容样式只活到当前模态结束，不能泄漏给工作台和后续系统选择器。
             // 成功 Begin 后才压栈，折叠或已经关闭的窗口没有需要恢复的内容层。
             touchLayout.beginContent();
+            // 换行只改变按钮高度，不把字体缩小成难以阅读的单行。
+            // 测量使用当前正文样式，避免标题字号与移动端正文倍率混用。
             const auto& style = ImGui::GetStyle();
             // 每帧从缓存统计选择数，候选变化只发生于本窗口交互。
             const auto selectedCount = static_cast<int>(

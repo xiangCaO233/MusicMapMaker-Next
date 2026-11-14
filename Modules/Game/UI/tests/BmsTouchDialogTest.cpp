@@ -6,6 +6,7 @@
 #include "ui/imgui/menu/package/BmsExportTouch.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
 #include "ui/workspace/MobileInputEditor.h"
+#include "ui/workspace/MobileTouchScroll.h"
 #include <cmath>
 #include <functional>
 #include <imgui_internal.h>
@@ -34,6 +35,8 @@ void check(bool result, const char* label)
 struct Fixture : MMM::UI::IWorkspacePresentation, MMM::UI::IStatusMessageSink {
     float m_scale;   ///< 字体、控件与工作区使用同一倍率。
     bool  m_mobile;  ///< 桌面反例仍必须保留原有控件密度。
+    /// @brief 复用生产滚动仲裁，不能只检查存在子窗口就断言可触摸滚动。
+    MMM::UI::MobileTouchScroll m_scroll;
     /// @brief 移动呈现由能力接口决定，不依赖宿主编译平台。
     bool allowsHoverFeedback() const override { return !m_mobile; }
     /// @brief CPU 回归不构建完整工作区，仅绑定生产呈现能力。
@@ -54,6 +57,8 @@ struct Fixture : MMM::UI::IWorkspacePresentation, MMM::UI::IStatusMessageSink {
         io.IniFilename = nullptr;
         io.DisplaySize = scale > 1 ? ImVec2(2688, 1216) : ImVec2(1280, 720);
         io.DeltaTime   = .016f;
+        // 真实移动外壳只仲裁触摸，鼠标事件不能冒充本回归的手指滑动。
+        if ( mobile ) io.AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
         ImGui::GetStyle().ScaleAllSizes(scale);
         ImGui::GetStyle().FontScaleMain = scale;
         // 图集仅构造一次，后续帧只用稳定的字体缓存测量与绘制。
@@ -81,7 +86,9 @@ struct Fixture : MMM::UI::IWorkspacePresentation, MMM::UI::IStatusMessageSink {
         ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
         ImGui::Begin("BmsHost");
         MMM::UI::WorkspaceFrameScope scope(*this);
+        if ( m_mobile ) m_scroll.beginFrame(m_scale);
         draw();
+        if ( m_mobile ) m_scroll.endFrame();
         ImGui::End();
         ImGui::Render();
         // 开放自动恢复不能掩盖样式栈错误；恢复计数本身也必须为零。
@@ -165,11 +172,14 @@ void options(float scale, bool package, bool mobile)
 }
 /// @brief 正式格式选择器在高 DPI 下必须可滚动且取消按钮仍在安全区。
 /// @details 不选格式，避免无项目夹具触发磁盘扫描或真实系统保存选择器。
-void formats(bool package)
+void formats(bool package, bool narrow = false)
 {
     // 使用实机密度与横屏尺寸，格式列表总高度会超过可用正文。
     // 原生选择模式只用来进入真实格式选择页，取消前不能调出系统文件窗。
     Fixture f(2.7625f, true);
+    // 字号不变而可用横宽变窄，复现分屏或远程镜像下完整英文格式名被裁切。
+    // 同时缩短高度，保证本回归实际走到正文溢出与手势滚动路径。
+    if ( narrow ) ImGui::GetIO().DisplaySize = { 720, 620 };
     MMM::Config::AppConfig::instance().getEditorSettings().filePickerStyle =
         MMM::Config::FilePickerStyle::Native;
     // 工厂拥有跨帧动作状态；创建新动作不能替代同一弹窗的连续帧验证。
@@ -188,11 +198,46 @@ void formats(bool package)
     // 滚动正文与父窗分离是可观测结构，不以窗口存在替代取消按钮可达性。
     // 沿窗口树核对真实父子归属，不能把任意后台 Child 当作格式正文。
     // 只读取当前活动窗，上一帧已经关闭的历史窗口不计入结论。
-    bool child = false;
+    bool         child = false;
+    ImGuiWindow* body  = nullptr;
     if ( modal )
         for ( auto* w : GImGui->Windows )
-            if ( w->ParentWindow == modal && w->Active ) child = true;
+            if ( w->ParentWindow == modal && w->Active ) {
+                child = true;
+                body  = w;
+            }
     check(child, "real format picker owns scrolling body");
+    // 只在打包页检查五种格式的滚动，单文件导出页由原有格式覆盖维持。
+    // 普通宽屏场景仍保留，防止新换行布局使常规 DPI 的取消按钮不可达。
+    if ( narrow && package && body ) {
+        // 五个完整格式名至少有一个会自动换行，溢出的正文必须保留滚动范围。
+        // 起手在按钮中央，不能仅在标题和分隔空白处才能滚动。
+        check(body->ScrollMax.y > 0,
+              "wrapped format names create scrollable body");
+        // 保存实际滚动起点，不直接写 Scroll 或 ScrollMax 来制造成功。
+        // 输入经过完整 NewFrame 和生产仲裁，覆盖弹窗层级的命中门禁。
+        const float  before = body->Scroll.y;
+        const ImVec2 start{ body->InnerClipRect.GetCenter().x,
+                            body->InnerClipRect.Min.y + 90 };
+        auto&        io = ImGui::GetIO();
+        io.AddMousePosEvent(start.x, start.y);
+        f.frame([&] { action->renderDeferred(context); });
+        io.AddMouseButtonEvent(0, true);
+        f.frame([&] { action->renderDeferred(context); });
+        // 位移超过当前 DPI 的触摸容差，按住状态仍由事件队列保持。
+        // 第二帧用于消费 ImGui 的滚动目标，不依赖真实时间或固定 sleep。
+        io.AddMousePosEvent(start.x, start.y - 80);
+        f.frame([&] { action->renderDeferred(context); });
+        f.frame([&] { action->renderDeferred(context); });
+        // 抬手后再推进配对帧，检查没有因延迟轻点协议误激活格式按钮。
+        // 模态身份必须保持，滚动不能偷偷推进到候选文件选择流程。
+        io.AddMouseButtonEvent(0, false);
+        f.frame([&] { action->renderDeferred(context); });
+        f.frame([&] { action->renderDeferred(context); });
+        check(body->Scroll.y > before, "swiping format button scrolls body");
+        check(ImGui::GetTopMostPopupModal() == modal,
+              "swiping does not select a format");
+    }
     ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true);
     f.frame([&] { action->renderDeferred(context); });
 }
@@ -207,5 +252,6 @@ int main()
     options(1, false, false);
     formats(true);
     formats(false);
+    formats(true, true);
     return failures ? 1 : 0;
 }
