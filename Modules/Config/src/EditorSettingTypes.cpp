@@ -1150,6 +1150,8 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         { "hideTimelineFormatWarning", settings.hideTimelineFormatWarning },
         { "showPreviewWindow", settings.showPreviewWindow },
         { "showAnnotationDetails", settings.showAnnotationDetails },
+        { "annotationSubmitWithShiftEnter",
+          settings.annotationSubmitWithShiftEnter },
         { "showToolLabels", settings.showToolLabels },
         { "toolbarVisibility", settings.toolbarVisibility },
         { "fixedToolWindow", settings.fixedToolWindow },
@@ -1355,6 +1357,9 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
             : json.value("timelineProfessionalMode", false);
     settings.showPreviewWindow     = json.value("showPreviewWindow", true);
     settings.showAnnotationDetails = json.value("showAnnotationDetails", false);
+    // 旧配置缺少偏好时直接采用 Enter 提交，不沿用原先只能点击按钮的行为。
+    settings.annotationSubmitWithShiftEnter =
+        json.value("annotationSubmitWithShiftEnter", false);
     // 工具栏显示字段属于全局设置，但仍在统一对象中完成持久化。
     settings.showToolLabels = json.value("showToolLabels", false);
     settings.toolbarVisibility =

@@ -62,10 +62,16 @@ public:
                              pointer.x < frame.m_x + frame.m_width &&
                              pointer.y < frame.m_y + frame.m_height;
         // 菜单 ID 作用域不包围原控制器，保持批注等既有控件身份不变。
+        // 原输入路径可能已用本次右键打开批注菜单或编辑模态，必须保留其归属。
+        // 这里在 routeInput 之后复查全部弹层，不能只使用调用前的物件菜单状态。
+        const bool popupOwnsClick = ImGui::IsPopupOpen(
+            nullptr,
+            ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
         ImGui::PushID(ctx.cameraId.c_str());
-        if ( selectionMenu && !menuOpen && frame.m_hovered && inside &&
-             !currentSnapshot->isPlaying && !currentSnapshot->isSelecting &&
-             !UI::Interaction::mouseDown(0) && !UI::Interaction::mouseDown(2) &&
+        if ( selectionMenu && !menuOpen && !popupOwnsClick && frame.m_hovered &&
+             inside && !currentSnapshot->isPlaying &&
+             !currentSnapshot->isSelecting && !UI::Interaction::mouseDown(0) &&
+             !UI::Interaction::mouseDown(2) &&
              UI::Interaction::mouseClicked(1) ) {
             // 锁存本帧实际显示的吸附线；菜单中的鼠标移动和后续快照不能改写。
             // 无吸附时使用可见鼠标时间，仍不回退到播放头。

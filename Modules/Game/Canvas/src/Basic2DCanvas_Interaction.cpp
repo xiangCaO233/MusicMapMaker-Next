@@ -57,6 +57,7 @@
 #include "ui/imgui/audio/ProjectAudioPreviewControls.h"
 #include "ui/imgui/markdown/MarkdownRenderer.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
+#include "ui/utils/AnnotationTextInput.h"
 #include "ui/utils/CanvasContentVisibility.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
@@ -5274,39 +5275,40 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
                                TR("ui.annotation.creator_required").data());
         }
         ImGui::TextDisabled("%s", TR("ui.annotation.markdown_hint").data());
+        const bool submitWithShiftEnter = Config::AppConfig::instance()
+                                              .getEditorSettings()
+                                              .annotationSubmitWithShiftEnter;
         if ( UI::workspaceAllowsHoverFeedback() )
             ImGui::TextDisabled("%s",
-                                TR("ui.annotation.input_submit_hint").data());
-        // 组合标志让普通 Enter 返回确认，Shift+Enter 仍由多行输入框插入换行。
-        // 移动端输入返回值表示正文变化，不表示提交请求。
-        // 即使平台将键盘完成键映射成 Enter，也只按显式按钮保存。
-        // 本地缓冲跨焦点保留，取消仍由原批注事务负责。
+                                TR(submitWithShiftEnter
+                                       ? "ui.annotation.input_submit_shift_hint"
+                                       : "ui.annotation.input_submit_hint")
+                                    .data());
+        // 与物件批注共用提交组合，换行不再错误地依赖 Ctrl 修饰键。
+        // 移动端仍只按显式按钮保存，本地缓冲跨焦点保留。
+        // 输入框返回提交意图，后面的 canSave 仍独立检查内容和作者。
+        // 修改已有批注与新增批注使用同一个偏好，避免弹窗来源改变键盘语义。
         const bool touchText = !UI::workspaceAllowsHoverFeedback();
         // 这里限制的是编辑正文的阅读高度，不能改变实际保存文本的容量。
         // 文本区最多占输入安全高度的三成，为作者、提示和确认行保留空间。
         // 两行下限保证光标与换行可见，较长内容仍由输入框自身纵向滚动。
         // 普通辅助窗几何不参与临时 IME 限制，键盘收起不改变其保存尺寸。
-        const bool submitWithEnter =
-            ImGui::InputTextMultiline(
-                "##BeatmapAnnotationMarkdown",
-                m_annotationEditor.content.data(),
-                m_annotationEditor.content.size(),
-                ImVec2(
-                    touchText
-                        ? std::min(520.0f, ImGui::GetContentRegionAvail().x)
-                        : 520.0f,
-                    touchText
-                        ? std::min(
-                              220.0f,
-                              std::max(
-                                  ImGui::GetFrameHeight() * 2,
-                                  UI::workspaceTextInputWindowArea().m_size.y *
-                                      .3f))
-                        : 220.0f),
-                touchText ? ImGuiInputTextFlags_None
-                          : ImGuiInputTextFlags_EnterReturnsTrue |
-                                ImGuiInputTextFlags_CtrlEnterForNewLine) &&
-            !touchText;
+        const bool submitWithEnter = UI::annotationTextInput(
+            "##BeatmapAnnotationMarkdown",
+            m_annotationEditor.content.data(),
+            m_annotationEditor.content.size(),
+            ImVec2(
+                touchText ? std::min(520.0f, ImGui::GetContentRegionAvail().x)
+                          : 520.0f,
+                touchText
+                    ? std::min(
+                          220.0f,
+                          std::max(ImGui::GetFrameHeight() * 2,
+                                   UI::workspaceTextInputWindowArea().m_size.y *
+                                       .3f))
+                    : 220.0f),
+            submitWithShiftEnter,
+            !touchText);
         // 手机 Enter 保留为换行，输入变化与焦点离开不能隐式保存。
         // 活动正文用自身真实矩形定位，不借用随后保存按钮的 LastItem。
         // 只调整滚动位置，不改变批注草稿或保存许可。

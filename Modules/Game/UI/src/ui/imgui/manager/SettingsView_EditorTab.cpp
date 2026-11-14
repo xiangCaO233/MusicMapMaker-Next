@@ -91,6 +91,8 @@ void SettingsView::drawEditorSettings()
         engine.isSyncSameMainAudioCanvasesEnabled();
     // changed 只汇总需要发布和持久化的 AppConfig 字段。
     bool changed = false;
+    // 单选 helper 借用整型状态；布局回调执行完毕后再写回持久化布尔偏好。
+    int annotationSubmitKey = settings.annotationSubmitWithShiftEnter ? 1 : 0;
 
     // 根 VBox 每帧重建父子关系，具体行和 section 由 SettingsView 缓存复用。
     // 清理布局树不会清空 AppConfig 中已经编辑的字段。
@@ -329,6 +331,27 @@ void SettingsView::drawEditorSettings()
                 changed |= ::MMM::UI::FeedbackCheckbox(
                     "##StopPlaybackOnScroll", &settings.stopPlaybackOnScroll);
             });
+        // 批注键位属于整个应用，两种组合互换提交和换行，不改变打开弹窗的快捷键。
+        // 选项使用统一单选布局，窄窗口仍按内容宽度换行，不手工固定按钮坐标。
+        // changed 与其它设置行共用，切换后只发布和保存一次完整配置。
+        // 布尔偏好通过局部整型桥接，不能把 bool 地址强转为 int 引用。
+        // 布局回调执行前不把临时值写入配置，避免显示与实际选择分离。
+        // 触屏正文的软键盘换行策略由输入控件保留，页面不直接重放按键。
+        addRadioSetting(
+            *sec,
+            rowIndex,
+            sectionIndex,
+            TR_CACHE("ui.settings.editor.annotation_submit_shortcut").data(),
+            maxLabelW,
+            { { TR_CACHE("ui.settings.editor.annotation_submit_shortcut.enter")
+                    .data(),
+                0 },
+              { TR_CACHE(
+                    "ui.settings.editor.annotation_submit_shortcut.shift_enter")
+                    .data(),
+                1 } },
+            annotationSubmitKey,
+            changed);
         // 鼠标专属控件只控制显隐，拔出设备不能改写已保存参数。
         if ( workspaceShowsPointerSettings() ) {
             addSettingItem(
@@ -695,6 +718,8 @@ void SettingsView::drawEditorSettings()
     // 推进 ImGui 游标，使父窗口正确计算内容高度和滚动范围。
     ImGui::SetCursorScreenPos({ startPos.x, startPos.y + sz.y });
 
+    // 单选状态的生命周期覆盖同步 Clay 回调，保存时必须读取本帧最终值。
+    settings.annotationSubmitWithShiftEnter = annotationSubmitKey != 0;
     if ( changed ) {
         // 先把完整 EditorConfig 发送给逻辑线程，再持久化同一内存对象。
         // 单帧多个控件变化只产生一次命令和一次保存操作。

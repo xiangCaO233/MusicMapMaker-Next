@@ -728,6 +728,26 @@ bool testAnnotationDetailVisibilityRoundTrip()
     return true;
 }
 
+/// @brief 批注提交组合是应用级偏好，旧配置默认 Enter，自定义选择可持久化。
+/// @return 两个选项保存回读后不变且缺失字段回退正确时为真。
+bool testAnnotationSubmitShortcutRoundTrip()
+{
+    // 空旧配置必须采用新默认，不能继续只支持鼠标按钮提交。
+    // 该偏好不属于谱面配置，打开其它工程不应替换它。
+    const auto legacy =
+        nlohmann::json::object().get<MMM::Config::EditorSettings>();
+    if ( legacy.annotationSubmitWithShiftEnter ) return false;
+    for ( const bool shiftEnter : { false, true } ) {
+        MMM::Config::EditorSettings source;
+        source.annotationSubmitWithShiftEnter = shiftEnter;
+        // 使用完整软件设置往返，覆盖实际 AppConfig 的字段归属。
+        const nlohmann::json saved  = source;
+        const auto           loaded = saved.get<MMM::Config::EditorSettings>();
+        if ( loaded.annotationSubmitWithShiftEnter != shiftEnter ) return false;
+    }
+    return true;
+}
+
 /// @brief 验证播放切换快捷键可持久化且旧配置保持空格默认值。
 /// @return 自定义组合键往返无损且缺失字段恢复为空格时返回 true。
 /// @note 自定义组合包含 Ctrl 和 Alt，覆盖多个修饰键的持久化。
@@ -1234,6 +1254,7 @@ int main()
                    testToolShortcutMigration() &&
                    testSelectedAnnotationShortcutRoundTrip() &&
                    testAnnotationDetailVisibilityRoundTrip() &&
+                   testAnnotationSubmitShortcutRoundTrip() &&
                    testPlaybackShortcutRoundTrip() &&
                    testBpmSegmentShortcutRoundTrip() &&
                    testShortcutConflictDetection() &&

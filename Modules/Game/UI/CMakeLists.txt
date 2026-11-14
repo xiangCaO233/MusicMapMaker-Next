@@ -365,6 +365,11 @@ target_link_libraries(PlaybackShortcutRoutingTest PRIVATE UI 3rd_imgui)
 mmm_register_test_case(NAME PlaybackShortcutRoutingTest COMMAND
                        PlaybackShortcutRoutingTest)
 
+# 批注回车必须经过真实模态与会话命令，覆盖两种提交组合及身份和权限门禁。
+mmm_add_test_executable(UI AnnotationSubmitTest tests/AnnotationSubmitTest.cpp)
+target_link_libraries(AnnotationSubmitTest PRIVATE UI)
+mmm_register_test_case(NAME AnnotationSubmitTest COMMAND AnnotationSubmitTest)
+
 # cmake-format: off
 # Markdown 测试分层：
 # - Parser 只验证块级和行内语法拆分；
