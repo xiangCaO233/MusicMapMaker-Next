@@ -80,13 +80,20 @@ private:
     std::string m_resourceRenameError;
 
     /// @brief 打开遵循用户设置的资源选择器。
-    /// @warning 用户点击时调用；原生选择器会阻塞至用户完成选择。
+    /// @warning 仅用户点击时调用；Android 系统选择器异步返回普通工作副本。
     void openResourcePicker(ResourceTarget target);
     /// @brief 在向导模态层内绘制资源选择器，防止被父窗口阻挡。
     void renderResourcePicker();
     /// @brief 复制所选资源并将其绑定到向导字段。
     /// @warning 仅文件选择完成时调用；执行文件复制、音频探测及项目保存。
     void importResource(const std::filesystem::path& path);
+    /// @brief 只接收当前向导、当前项目的异步成功结果。
+    /// @warning 用户选中文件后才访问项目和复制资源，不在逐帧路径轮询磁盘。
+    void completeResourceSelection(const std::filesystem::path& path,
+                                   const std::filesystem::path& projectRoot,
+                                   ResourceTarget               target);
+    /// @brief 单次选择请求的生命周期；关闭、重置、析构均使弱令牌失效。
+    std::shared_ptr<const bool> m_resourcePickerLifetime;
     /// @brief 当前资源选择器的导入用途。
     ResourceTarget m_resourceTarget{ ResourceTarget::Audio };
     /// @brief 最近一次导入失败的说明。

@@ -19,6 +19,7 @@
 #include "mmm/timing/BpmNormalization.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
+#include "ui/utils/MobileFileDialog.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/ProjectResourceImport.h"
 #include "ui/utils/UIThemeUtils.h"
@@ -1121,15 +1122,15 @@ void NewBeatmapWizard::renderTemplateSourceControls(
 /// @brief 按目标资源类型打开原生或 ImGui 文件选择器。
 /// @param target 音频、封面图或背景资源目标。
 ///
-/// 两种选择器使用相同扩展名白名单和最近目录。原生对话框同步返回并立即导入；
-/// ImGuiFileDialog 只在此发出打开请求，后续帧由 renderResourcePicker 消费结果。
-/// 音频白名单覆盖项目探针支持的常用格式；背景白名单是封面图片集合与视频集合的
-/// 并集，确保进入 importResource 后的类型判定与选择器展示保持一致。
-/// 原生 UTF-8 路径由 NFD 分配，成功导入后立即释放；取消不写错误，底层失败保留
-/// 诊断文本。内置对话框以稳定 key 延续到后续 UI 帧。
-/// @warning 低频交互路径：原生对话框会阻塞 UI，且只由用户点击导入按钮触发。
+/// 原生选择器通过统一异步入口返回路径，桌面仍在调用期间完成，Android
+/// 等待系统授权。 内置选择器继续由向导模态内部推进，避免被父窗口挡住。
+/// 三类资源共用导入校验，取消不修改选择或产生复制；错误只显示本次请求状态。
+/// @warning 用户触发的低频入口；Android 不阻塞 SDL 生命周期。
 void NewBeatmapWizard::openResourcePicker(ResourceTarget target)
 {
+    // 系统已有在途请求时不能替换用途或覆盖原回调。
+    // 选择器恢复 Activity 后仍由原请求消费，重复点击不能创建第二份资源。
+    if ( m_resourcePickerLifetime ) return;
     // 保存目标类型，异步 ImGui 对话框返回时据此分类导入结果。
     m_resourceTarget = target;
     // 新选择开始时移除上一次错误提示。
@@ -1142,11 +1143,23 @@ void NewBeatmapWizard::openResourcePicker(ResourceTarget target)
                                ? "ui.wizard.new_beatmap.import_image"
                                : "ui.wizard.new_beatmap.import_background")
                             .data();
-    if ( settings.filePickerStyle == Config::FilePickerStyle::Native ) {
+    if ( NativeFileDialog::requiresSystemPicker() ||
+         settings.filePickerStyle == Config::FilePickerStyle::Native ) {
+        // 平台能力检查优先于桌面样式偏好；Android 未授权目录访问时必须走 SAF。
+        // 不能调用同步 NFD 后再降级，因为该入口没有可等待的 Android 结果槽。
+        // 捕获正式项目身份，系统选择期间切换项目不能把资源导入另一个项目。
+        auto&                 engine = Logic::EditorEngine::instance();
+        std::filesystem::path projectRoot;
+        {
+            std::lock_guard lock(engine.getSessionMutex());
+            const auto*     project = engine.getCurrentProject();
+            if ( !project ) return;
+            projectRoot = project->m_projectRoot;
+        }
+        // 令牌只在用户点击时分配，UI 线程回调与销毁不会并发。
+        m_resourcePickerLifetime = std::make_shared<const bool>(true);
         // 原生窗口打开前播放统一弹窗反馈。
         PlayPopupOpenFeedback();
-        // NFD 通过输出指针返回 UTF-8 路径，成功后必须释放。
-        nfdu8char_t*            path = nullptr;
         const nfdu8filteritem_t filter{
             title,
             audio ? "mp3,ogg,wav,flac,opus,aac,m4a"
@@ -1154,17 +1167,29 @@ void NewBeatmapWizard::openResourcePicker(ResourceTarget target)
                 ? "png,jpg,jpeg,bmp,mp4,avi,mkv,webm,mov,flv,m4v"
                 : "png,jpg,jpeg,bmp"
         };
-        const auto result = NativeFileDialog::openFile(
-            &path, &filter, 1, settings.lastFilePickerPath.c_str());
-        if ( result == NFD_OKAY ) {
-            // 导入在路径内存释放前完成 filesystem::path 拷贝。
-            importResource(Config::utf8ToPath(path));
-            NFD_FreePathU8(path);
-        } else if ( result == NFD_ERROR ) {
-            // 用户取消不是错误，只有 NFD_ERROR 展示诊断文本。
-            m_resourceImportError = NFD_GetError();
-        }
-        // 原生路径已完成整个交互，不再打开 ImGui 对话框。
+        NativeFileDialog::openFileAsync(
+            &filter,
+            1,
+            settings.lastFilePickerPath.c_str(),
+            [this,
+             target,
+             projectRoot,
+             lifetime = std::weak_ptr<const bool>(m_resourcePickerLifetime)](
+                nfdresult_t result, const std::string& selectedPath) {
+                // 必须先验证弱令牌再访问 this；旧向导和旧请求不能复活。
+                if ( lifetime.expired() ) return;
+                // 先释放等待状态，再进行导入；失败后允许用户立即从同一入口重试。
+                m_resourcePickerLifetime.reset();
+                if ( result == NFD_OKAY && !selectedPath.empty() ) {
+                    completeResourceSelection(
+                        Config::utf8ToPath(selectedPath), projectRoot, target);
+                } else if ( result == NFD_ERROR ) {
+                    // Android 不读取同步 NFD 的能力错误；取消保持已有草稿。
+                    m_resourceImportError =
+                        TR("ui.wizard.new_beatmap.import_failed").toString();
+                }
+            });
+        // 桌面同步完成、Android 继续事件循环，均不再重复打开内置对话框。
         return;
     }
     // 内置选择器限制单选并隐藏与只读导入无关的列和文件名编辑。
@@ -1187,6 +1212,29 @@ void NewBeatmapWizard::openResourcePicker(ResourceTarget target)
     PlayPopupOpenFeedback();
 }
 
+/// @brief 在异步返回边界复核向导和项目身份，再使用原有资源导入事务。
+/// @param path 系统完成授权及工作副本准备后提供的普通路径。
+/// @param projectRoot 请求发起时的项目根目录。
+/// @param target 请求发起时的资源用途，不读取后来点击的控件状态。
+/// @warning 低频完成回调；递归会话锁覆盖复核与导入，避免中间切换项目。
+void NewBeatmapWizard::completeResourceSelection(
+    const std::filesystem::path& path, const std::filesystem::path& projectRoot,
+    ResourceTarget target)
+{
+    // 关闭向导是明确的取消边界，即使返回路径有效也不能提交草稿。
+    if ( !m_isOpen ) return;
+    // 项目复核与导入使用同一会话锁，不能在检查后留下切换窗口。
+    auto&           engine = Logic::EditorEngine::instance();
+    std::lock_guard lock(engine.getSessionMutex());
+    const auto*     project = engine.getCurrentProject();
+    // 同一个向导可能仍可见，但原项目已关闭或切换；此时丢弃陈旧结果。
+    if ( !project || project->m_projectRoot != projectRoot ) return;
+    // 用途取自请求快照，避免后台返回的封面被当成之后点击的音轨导入。
+    // 导入继续复用扩展名校验、音频解码和项目相对路径生成，不另写复制流程。
+    m_resourceTarget = target;
+    importResource(path);
+}
+
 /// @brief 驱动内置 ImGui 文件选择器并导入确认路径。
 ///
 /// 原生选择器不会进入该路径。Display 返回交互结束时，确认结果传给统一导入函数，
@@ -1203,10 +1251,12 @@ void NewBeatmapWizard::renderResourcePicker()
     // 居中尺寸由 helper 按当前内容缩放换算。
     Utils::CenteredModalPopupScope scope(
         Config::AppConfig::instance().getWindowContentScale());
-    Utils::prepareCenteredModalWindow({ 600, 400 });
-    if ( dialog->Display("NewBeatmapResourcePicker",
-                         ImGuiWindowFlags_NoCollapse,
-                         { 600, 400 }) ) {
+    // 文件名编辑与浏览共用键盘安全区，不能以固定最小高度覆盖 IME 避让。
+    const auto size = mobileFileDialogSize(
+        Config::AppConfig::instance().getWindowContentScale());
+    Utils::prepareCenteredModalWindow(size);
+    if ( dialog->Display(
+             "NewBeatmapResourcePicker", ImGuiWindowFlags_NoCollapse, size) ) {
         // 只有确认操作才读取路径并导入，取消不产生错误提示。
         if ( dialog->IsOk() )
             importResource(Config::utf8ToPath(dialog->GetFilePathName()));
@@ -1972,6 +2022,8 @@ void NewBeatmapWizard::publishInteraction(
 /// m_isOpen 对称结束 popup，避免破坏 ImGui 栈。
 void NewBeatmapWizard::close()
 {
+    // 系统授权可能晚于关闭返回，此时回调只能释放结果，不能访问草稿。
+    m_resourcePickerLifetime.reset();
     // 丢弃尚未匹配到资源控件的文件事件。
     m_pendingDrops.clear();
     // 命令提交已按值复制入口；取消关闭则必须防止旧入口泄漏到下次调用。
@@ -1992,6 +2044,8 @@ void NewBeatmapWizard::close()
 /// 选项使用值初始化恢复类型定义的默认策略，而非沿用上一轮用户选择。
 void NewBeatmapWizard::reset()
 {
+    // 再次打开是新草稿，旧系统选择结果不得绑定到这一轮。
+    m_resourcePickerLifetime.reset();
     // 清理瞬时输入和上一轮可见错误。
     m_pendingDrops.clear();
     m_resourceImportError.clear();

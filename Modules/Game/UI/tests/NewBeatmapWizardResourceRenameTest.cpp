@@ -15,6 +15,47 @@ namespace MMM::UI
 {
 /// @brief 通过友元操作真实向导，不创建谱面或复制资源改名实现。
 struct NewBeatmapWizardResourceRenameTestAccess {
+    /// @brief 验证系统选择晚到时不污染新草稿或其他项目。
+    /// @details 图片通过真实资源复制事务导入，测试不伪造下拉选择文字。
+    /// 已有重命名夹具保留，音频解码另由实际设备验收。
+    static bool selection(NewBeatmapWizard& wizard, MMM::Project& project)
+    {
+        // 目标类型来自正式向导枚举，测试不能用字符串绕过用途分派。
+        using Target    = NewBeatmapWizard::ResourceTarget;
+        const auto root = project.m_projectRoot;
+        // 资源来自上一步真实改名结果，存在性由主测试在调用前检查。
+        const auto source = root / "background.png";
+        wizard.m_isOpen   = true;
+        // 清空旧封面，确保陈旧请求不能靠已有相同选择蒙混通过。
+        wizard.m_selectedCoverImgPath.clear();
+        // 当前正式项目不同于请求根时，即使向导仍打开也不得导入。
+        wizard.completeResourceSelection(
+            source, root / "old-project", Target::Cover);
+        if ( !wizard.m_selectedCoverImgPath.empty() ) return false;
+        // 关闭后的完成结果不能使刚取消的向导恢复资源绑定。
+        // close 必须与用户按取消时的生产行为一致。
+        wizard.close();
+        wizard.completeResourceSelection(source, root, Target::Cover);
+        if ( !wizard.m_selectedCoverImgPath.empty() ) return false;
+        // 弱令牌代表这一轮请求，重置后旧完成回调必须先发现失效。
+        wizard.m_resourcePickerLifetime = std::make_shared<const bool>(true);
+        const auto old =
+            std::weak_ptr<const bool>(wizard.m_resourcePickerLifetime);
+        // reset 代表再次打开新草稿，复用同一向导实例仍应废弃旧令牌。
+        wizard.reset();
+        if ( !old.expired() ) return false;
+        // 不打开 ImGui 模态，直接验收异步业务完成边界。
+        wizard.m_isOpen = true;
+        // 正常完成仍使用原分类及导入方法，封面不能误绑为主音轨。
+        wizard.completeResourceSelection(source, root, Target::Cover);
+        if ( wizard.m_selectedCoverImgPath != "background.png" ) return false;
+        // 同一个文件作为背景时应更新背景字段，不能只更新封面字段。
+        wizard.completeResourceSelection(source, root, Target::Background);
+        // 两种视觉用途均不能制造主音轨 ID 或音频选择。
+        return wizard.m_selectedCoverPath == "background.png" &&
+               wizard.m_selectedAudioPath.empty();
+    }
+
     /// @brief 设置确认框新名称，测试输入遵守与 UI 相同的容量限制。
     static void name(NewBeatmapWizard& wizard, const char* value)
     {
@@ -147,12 +188,15 @@ int main(int argc, char** argv)
     project->m_audioResources.push_back(resource);
     MMM::UI::NewBeatmapWizard wizard;
     // 草稿与物理文件必须同时验证，选择路径变化不能代替磁盘提交。
-    const bool passed = MMM::UI::NewBeatmapWizardResourceRenameTestAccess::run(
-                            wizard, *project) &&
-                        std::filesystem::exists(root / "song.wav") &&
-                        std::filesystem::exists(root / "background.png") &&
-                        !std::filesystem::exists(root / "old.wav") &&
-                        !std::filesystem::exists(root / "cover.png");
+    const bool passed =
+        MMM::UI::NewBeatmapWizardResourceRenameTestAccess::run(wizard,
+                                                               *project) &&
+        std::filesystem::exists(root / "song.wav") &&
+        std::filesystem::exists(root / "background.png") &&
+        !std::filesystem::exists(root / "old.wav") &&
+        !std::filesystem::exists(root / "cover.png") &&
+        MMM::UI::NewBeatmapWizardResourceRenameTestAccess::selection(wizard,
+                                                                     *project);
     // 统一关闭项目，失败结果同样不能泄漏到后续测试。
     controller.closeProject();
     // 保留构建树内的夹具供失败诊断，不把测试输出写入源码资源目录。
