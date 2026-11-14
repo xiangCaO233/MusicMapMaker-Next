@@ -21,6 +21,8 @@ export MMM_ANDROID_ABIS=arm64-v8a
 # 首次源码构建需要控制峰值内存；本机有其它 Runner 作业，不使用满 CPU 并发。
 export MMM_ANDROID_JOBS="${MMM_ANDROID_JOBS:-6}"
 export MMM_ANDROID_VARIANT=release
+# 与桌面采样开关一致；人工关闭仍生成普通 RelWithDebInfo 发布包。
+export MMM_ANDROID_PGO_INSTRUMENT="${MMM_ANDROID_PGO_INSTRUMENT:-ON}"
 # 该证书仅用于既有 QA 身份，私有文件不进入源码、缓存归档或 GitHub 制品。
 export MMM_ANDROID_QA_KEYSTORE="$android_root/secrets/qa/mmm-qa.p12"
 export MMM_ANDROID_QA_PASSWORD_FILE="$android_root/secrets/qa/store-password"
@@ -93,6 +95,15 @@ info = dict(source=os.environ['MMM_SOURCE_REF'], abi='arm64-v8a', variant='relea
             bytes=apk.stat().st_size, sha256=digest, certificate=certificate,
             run=os.environ.get('GITHUB_SERVER_URL', '') + '/' + os.environ.get('GITHUB_REPOSITORY', '')
                 + '/actions/runs/' + os.environ.get('GITHUB_RUN_ID', ''))
+# 记录实际原生配置，不能由 release 变体名称推断是否收集 PGO。
+# 缓存与人工开关不一致时拒绝交付，避免复用旧构建树造成名义插桩。
+cache = Path(os.environ['MMM_ANDROID_WORK_DIR']) / 'build/arm64-v8a/CMakeCache.txt'
+options = dict(line.split('=', 1) for line in cache.read_text().splitlines()
+               if line.startswith(('CMAKE_BUILD_TYPE:STRING=', 'MMM_PGO_INSTRUMENT:BOOL=', 'MMM_PGO_USE:BOOL=')))
+assert options['CMAKE_BUILD_TYPE:STRING'] == 'RelWithDebInfo'
+assert options['MMM_PGO_INSTRUMENT:BOOL'] == os.environ['MMM_ANDROID_PGO_INSTRUMENT']
+assert options['MMM_PGO_USE:BOOL'] == 'OFF'
+info.update(buildType='RelWithDebInfo', pgoInstrument=options['MMM_PGO_INSTRUMENT:BOOL'] == 'ON', pgoUse=False)
 # 摘要文件使用相对 APK 名称，QA 下载整份制品后可以直接执行 sha256sum -c。
 (apk.parent / 'build-info.json').write_text(json.dumps(info, indent=2) + '\n')
 (apk.parent / (apk.name + '.sha256')).write_text(f'{digest}  {apk.name}\n')

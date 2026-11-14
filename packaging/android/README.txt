@@ -65,6 +65,8 @@ Windows 原生构建（无 WSL）
   Gradle 下载缓存默认位于工作目录内的 cache/gradle-user。
   Linux 可通过 MMM_ANDROID_GRADLE_CACHE、MMM_ANDROID_JAVA_HOME 和 MMM_ANDROID_JOBS 覆盖。
   Linux 的 MMM_ANDROID_ABIS="arm64-v8a" 可仅构建手机，默认 "arm64-v8a x86_64"。
+  原生构建保持 RelWithDebInfo，默认插桩采集业务 PGO；Linux 可用 MMM_ANDROID_PGO_INSTRUMENT=OFF 关闭。
+  Windows 的 -PgoInstrument OFF 提供相同对照开关；依赖不插桩。
   本机 SDK、NDK、JDK、下载缓存和构建输出不进入 Git；无需追加全局忽略规则。
   清理 build/ 不影响源码；保留 cache/debug.keystore 可保持重复安装签名一致。
 
@@ -81,6 +83,7 @@ Windows 原生构建（无 WSL）
   SAF 工作副本与 URI 映射属于 files/documents 用户数据，不是可随意清理的缓存。
   后续启动与桌面共用资源更新、校验及失败重试流程，APK 升级保留已有配置。
   旧版随包展开的资源保持原路径，可直接离线升级，不需要重新解压或搬移工程。
+  PGO 采集包先询问上传授权，运行满十分钟后正常退出才自动上传；强杀进程不保证上传。
   后台恢复只更新 Surface/交换链；业务视图和工程状态继续保留。
   初期使用 identity surface transform 由系统合成器补偿横屏方向。
   设备旋转的 GPU 预旋转优化仍待单独接入。

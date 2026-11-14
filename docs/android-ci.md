@@ -28,7 +28,7 @@ SDK/NDK 来自开发机已安装的官方 Linux x86_64 SDK 软件包，按固定
 gh workflow run ci.yaml --ref feat/android-sdl3 -f job=android-build -f pgo_instrument=false
 ```
 
-入口将事件精确 SHA 传给可复用工作流，整段源码同步与构建持有 `build.lock`。子模块按 gitlink 检出，只显式拉取 `assets/**` 的 NAS LFS 内容。原生库使用 NDK 官方 CMake toolchain，目标 `arm64-v8a`、最低 API 28、`c++_shared`、`RelWithDebInfo`，业务和依赖均不启用 PGO。默认并发 6，避免与服务器其它任务争用内存。
+入口将事件精确 SHA 传给可复用工作流，整段源码同步与构建持有 `build.lock`。子模块按 gitlink 检出，只显式拉取 `assets/**` 的 NAS LFS 内容。原生库使用 NDK 官方 CMake toolchain，目标 `arm64-v8a`、最低 API 28、`c++_shared`、`RelWithDebInfo`。业务默认启用 PGO 插桩，依赖继续禁止插桩。默认并发 6，避免与服务器其它任务争用内存。
 
 Gradle Wrapper 9.3.0 与 AGP 9.0.1 仅打包 Java 外壳、图标和匹配的 JNI 库。发布型包显式关闭 Java/native 调试开关，原生符号留在集中构建树。默认本机构建仍为 debug、可选双 ABI；CI 显式选择 release 和单 ARM64，不修改开发者的默认行为。
 
@@ -61,3 +61,9 @@ APK 不再内置 `mmm-assets.zip` 或随包摘要，Gradle 显式不引用旧的
 构建交付校验会拒绝含旧完整 ZIP 或旧随包摘要的 APK，防止复用构建缓存时再次变成大包。`package_assets.py` 保留作旧包复现工具，常规 Linux／Windows 构建入口均不再调用。
 
 开发分支首次下载仍读取公开的正式资源清单，可能暂时缺少尚未发布的移动端译文。正式发布时必须继续让同源 APK 与资源包一起进入发布候选并同步到 R2，不能只替换 APK 而沿用旧资源清单。
+
+## PGO 采集
+
+默认使用 `RelWithDebInfo` 采集业务模块计数器；Linux 本地可用 `MMM_ANDROID_PGO_INSTRUMENT=OFF` 关闭，Windows 使用 `-PgoInstrument OFF`。单独 Android 与完整 CI 都继承主入口的 `pgo_instrument` 布尔选择，交付元数据记录实际原生配置。第三方依赖和业务目标中编译的上游 FreeType loader 均不插桩。
+
+采集包沿用应用内上传授权，正常退出时写出私有缓存中的 `.profraw`；用户同意且实际运行达到 600 秒才上传到既有服务。系统强杀或划掉进程不保证执行正常退出上传。`MMM_PGO_USE` 与插桩互斥，采集包保持其为 OFF；使用已采集样本优化应另建构建树，并使用匹配 Android ABI 与 NDK LLVM 的数据。

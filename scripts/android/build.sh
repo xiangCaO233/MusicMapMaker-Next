@@ -65,6 +65,13 @@ fi
 # 两个 ABI 的目标三元组均由 NDK 提供，宿主 Linux 的 x86_64 库不能用于模拟器。
 # 各 ABI 的 CMake 缓存分离，重复构建只执行必要的增量编译和资源更新。
 android_abis="${MMM_ANDROID_ABIS:-arm64-v8a x86_64}"
+# 与桌面发布采样包保持一致；关闭只用于不收集计数器的对照构建。
+# 优化使用样本与采集互斥，本入口先产生样本，不同时传入 profile-use。
+android_pgo="${MMM_ANDROID_PGO_INSTRUMENT:-ON}"
+case "$android_pgo" in
+    ON|OFF) ;;
+    *) echo 'MMM_ANDROID_PGO_INSTRUMENT must be ON or OFF.' >&2; exit 1 ;;
+esac
 for android_abi in $android_abis; do
     case "$android_abi" in
         arm64-v8a) android_triple=aarch64-linux-android ;;
@@ -77,7 +84,7 @@ for android_abi in $android_abis; do
         -DANDROID_ABI="$android_abi" -DANDROID_PLATFORM=android-28 -DANDROID_STL=c++_shared \
         -DCMAKE_BUILD_TYPE=RelWithDebInfo -DSOURCES_BUILD=ON -DBUILD_TESTING=OFF \
         -DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF -DMMM_DISABLE_CLANG_LTO=ON \
-        -DMMM_PGO_INSTRUMENT=OFF -DMMM_PGO_USE=OFF \
+        -DMMM_PGO_INSTRUMENT="$android_pgo" -DMMM_PGO_USE=OFF \
         -DVulkan_INCLUDE_DIR="$android_headers/include" \
         -DPROCESSOR_COUNT="${MMM_ANDROID_JOBS:-24}"
     # 外部 Make 与外层 Ninja 共用上限，避免空计数退成无上限的 make -j。
