@@ -725,10 +725,32 @@ void MobileWorkspacePresentation::drawLeftDrawer(UIManager& manager,
         }
     }
     ImGui::End();
-    m_contentRect   = { rect.m_x + rail.m_width + m_gap,
-                        rect.m_y,
-                        std::max(1.0f, rect.m_width - rail.m_width - m_gap),
-                        rect.m_height };
+    m_contentRect = { rect.m_x + rail.m_width + m_gap,
+                      rect.m_y,
+                      std::max(1.0f, rect.m_width - rail.m_width - m_gap),
+                      rect.m_height };
+    if ( sidebar && sidebar->getActiveTab() == SideBarTab::FileExplorer ) {
+        // 文件操作固定在文件页顶部，不要求用户发现右侧工具抽屉的折叠分组。
+        // 按真实列宽与字体预留两行，文件树仍由原管理器占用下方独立区域。
+        const float height =
+            mobileFileActionsHeight(
+                std::max(1.f, m_contentRect.m_width - 2 * m_padding), m_scale) +
+            2 * m_padding;
+        auto actionsRect     = m_contentRect;
+        actionsRect.m_height = std::min(height, m_contentRect.m_height);
+        bool activated       = false;
+        if ( beginPanel("MobileFileActions", actionsRect) )
+            activated = drawMobileFileActions(manager, m_scale);
+        ImGui::End();
+        if ( activated ) {
+            // 延迟模态与关闭确认由公共菜单推进，抽屉遮罩不能盖住新窗口。
+            m_model.closeDrawer();
+            return;
+        }
+        m_contentRect.m_y += actionsRect.m_height + m_gap;
+        m_contentRect.m_height = std::max(
+            1.f, m_contentRect.m_height - actionsRect.m_height - m_gap);
+    }
     m_drawingDrawer = true;
     // 借用标记仅包围同步 update，公共窗口入口据此应用内容矩形。
     // 业务视图和文件选择状态的所有权仍留在原管理器中。

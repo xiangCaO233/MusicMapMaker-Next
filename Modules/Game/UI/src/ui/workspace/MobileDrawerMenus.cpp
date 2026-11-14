@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <imgui.h>
 #include <span>
 
@@ -36,6 +37,35 @@ struct Entry {
     const char* m_icon;    ///< 已加载图标字体中的语义字形。
     Requirement m_requirement{ Requirement::None };  ///< 入口前置条件。
 };
+
+/// @brief 文件页与工具抽屉共用动作身份，入口迁移不能遗漏关闭或导出。
+/// @details 导出仍是原另存为格式选择流程，不维护移动专用 writer。
+constexpr std::array FILE_ACTIONS{ Entry{ "SaveBeatmapAsAction",
+                                          "ui.mobile.export_chart",
+                                          ICON_MMM_SAVE,
+                                          Requirement::Beatmap },
+                                   Entry{ "PackBeatmapAction",
+                                          "ui.file.pack",
+                                          ICON_MMM_PACK,
+                                          Requirement::Project },
+                                   Entry{ "CloseProjectAction",
+                                          "ui.file.close_pro",
+                                          ICON_MMM_CLOSE,
+                                          Requirement::Project } };
+
+/// @brief 按实际文字和列宽量出一行动作高度，与文件页预留区域共用。
+/// @warning 可见帧只测量固定数量标签，不访问项目或文件系统。
+ImVec2 actionRowSize(std::span<const Entry> entries, std::size_t first,
+                     float width, float scale)
+{
+    ImVec2 size{ width, 48 * scale };
+    // 同行两列共用较高标签，窄屏和大字号不能把最后一个入口裁掉。
+    for ( auto i = first; i < std::min(first + 2, entries.size()); ++i )
+        size.y = std::max(
+            size.y,
+            mobileActionButtonSize(TR(entries[i].m_label).data(), size).y);
+    return size;
+}
 
 /// @brief 两列按钮共用整行高度，长英文不挤压相邻按钮。
 /// @param entries 固定入口表，不在绘制时创建或注册动作。
@@ -64,12 +94,7 @@ bool actions(std::span<const Entry> entries, UIManager& manager, float scale)
     for ( std::size_t i = 0; i < entries.size(); i += 2 ) {
         // 最小高度保留指尖目标；同行中较长标签决定两侧共同高度。
         // 奇数末项保持半宽，下一分组仍从完整新行开始。
-        ImVec2 size{ width, 48 * scale };
-        // 同行先完成测量，再绘制任一按钮，保持下一行起点稳定。
-        for ( std::size_t j = i; j < std::min(i + 2, entries.size()); ++j )
-            size.y = std::max(
-                size.y,
-                mobileActionButtonSize(TR(entries[j].m_label).data(), size).y);
+        const auto size = actionRowSize(entries, i, width, scale);
         for ( std::size_t j = i; j < std::min(i + 2, entries.size()); ++j ) {
             const auto& entry = entries[j];
             const bool  enabled =
@@ -123,6 +148,34 @@ bool section(const char* id, const char* key, float scale)
 }
 }  // namespace
 
+/// @brief 文件操作在移动文件页常驻，成功派发后由外壳关闭抽屉。
+/// @warning 每帧只渲染固定三项；业务启用条件及事务继续由公共动作复核。
+bool drawMobileFileActions(UIManager& manager, float scale)
+{
+    // 两处入口都以同一语义身份派发，禁用门禁也保持一致。
+    // 本函数不主动关闭项目，确保未保存提示和临时项目策略继续生效。
+    // 无项目时仅禁用按钮，固定布局不随启用状态跳动，便于找到同一入口。
+    return actions(FILE_ACTIONS, manager, scale);
+}
+
+/// @brief 预留与真实按钮完全一致的高度，文件树不覆盖固定操作行。
+/// @param availableWidth 已扣除外壳左右内边距的内容宽度。
+/// @param scale 当前逻辑尺寸倍率，不改变用户字体。
+/// @warning 每帧固定三标签测量，不保存临时窗口或文件状态。
+float mobileFileActionsHeight(float availableWidth, float scale)
+{
+    const float gap    = ImGui::GetStyle().ItemSpacing.x;
+    const float width  = std::max(1.f, (availableWidth - gap) * .5f);
+    float       height = 0;
+    for ( std::size_t i = 0; i < FILE_ACTIONS.size(); i += 2 ) {
+        // 行间距只计一次；末行即使只有关闭按钮也占完整触摸高度。
+        if ( i ) height += ImGui::GetStyle().ItemSpacing.y;
+        height += actionRowSize(FILE_ACTIONS, i, width, scale).y;
+    }
+    // 父窗口再加自己的 padding，本文不把外壳尺寸写入业务文件视图。
+    return height;
+}
+
 /// @brief 仅组合移动菜单，工具生命周期与弹窗仍由公共动作拥有。
 /// @details 返回激活结果后外壳收起抽屉，避免遮罩盖住新打开的工具。
 /// 各分组独立折叠，主窗口开关始终留在抽屉顶部。
@@ -134,20 +187,8 @@ bool drawMobileDrawerMenus(UIManager& manager, float scale)
     // 打开请求仍由公共菜单的延迟阶段处理，移动绘制不自行 Begin 工具窗口。
     bool activated = false;
     if ( section("MobileFile", "ui.mobile.file", scale) ) {
-        // 两个流程复用公共动作和延迟窗口，不要求用户连接键盘触发快捷键。
-        // 单文件导出必须有活动谱面；资源包按项目扫描，不把门禁混为一谈。
-        // 成功派发后外壳统一关闭抽屉，下一帧由原动作显示格式模态。
-        // 目标格式仍在原选择器明确选择，不把新增入口固定成单一 BMS 格式。
-        // 抽屉只发布动作意图，文件写入与覆盖确认仍归原有事务。
-        const std::array entries{ Entry{ "SaveBeatmapAsAction",
-                                         "ui.file.save_as",
-                                         ICON_MMM_SAVE,
-                                         Requirement::Beatmap },
-                                  Entry{ "PackBeatmapAction",
-                                         "ui.file.pack",
-                                         ICON_MMM_FOLDER_OPEN,
-                                         Requirement::Project } };
-        activated |= actions(entries, manager, scale);
+        // 与文件页共用同一入口表，导出保留格式选择，关闭保留未保存确认。
+        activated |= drawMobileFileActions(manager, scale);
     }
     if ( section("MobileTools", "ui.mobile.tools", scale) ) {
         // 测量读取项目音频，但不要求当前已有活动谱面。

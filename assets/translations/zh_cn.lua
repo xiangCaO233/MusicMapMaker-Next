@@ -1706,6 +1706,7 @@ return {
 	["ui.mobile.workspace"] = "工作区",
 	["ui.mobile.resources"] = "资源",
 	["ui.mobile.file"] = "文件",
+	["ui.mobile.export_chart"] = "导出谱面",
 	["ui.mobile.tools"] = "工具",
 	["ui.mobile.view"] = "查看",
 	["ui.mobile.help"] = "帮助",

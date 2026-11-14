@@ -1707,6 +1707,7 @@ return {
 	["ui.mobile.workspace"] = "Workspace",
 	["ui.mobile.resources"] = "Resources",
 	["ui.mobile.file"] = "File",
+	["ui.mobile.export_chart"] = "Export Chart",
 	["ui.mobile.tools"] = "Tools",
 	["ui.mobile.view"] = "View",
 	["ui.mobile.help"] = "Help",
