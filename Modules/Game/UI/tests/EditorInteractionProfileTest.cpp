@@ -227,7 +227,11 @@ bool testInput()
     // 输入排队顺序与 GLFW/SDL 平台后端一致，不直接写内部按键缓存。
     // 修饰键先于主键入队，避免用直接写 IO 的方式伪造一个不可能的状态。
     // Ctrl+B 同时验证语义绑定和物理主键重映射，避免只测静态配置值。
-    io.AddKeyEvent(ImGuiMod_Ctrl, true);
+    // AddKeyEvent 接收物理键；macOS 用 Command 产生快捷键所需的逻辑 Ctrl。
+    // 保留平台默认交换规则，不能关闭 macOS 行为来让测试碰巧通过。
+    const ImGuiKey inputModifier =
+        io.ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl;
+    io.AddKeyEvent(inputModifier, true);
     io.AddKeyEvent(ImGuiKey_B, true);
     io.AddMousePosEvent(123, 234);
     io.AddMouseButtonEvent(ImGuiMouseButton_Right, true);
@@ -393,6 +397,10 @@ bool testLessonGesturePolicies()
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
     // - 用例拥有独立上下文，任何真实键盘状态都不能从前一测试继承。
     // - 只测试本轮的输入门禁，路线和最终几何仍由既有画笔回归负责。
+    // 教学门禁检查逻辑 Ctrl；事件入口在 macOS 需要注入物理 Command。
+    // 按下与释放共用同一映射，矩阵末尾不能残留另一个修饰键。
+    const ImGuiKey inputModifier =
+        io.ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl;
     bool ok = true;
     for ( const bool mouseOnly : { false, true } ) {
         const auto id = mouseOnly ? "mouse-only" : "classic-desktop";
@@ -405,7 +413,7 @@ bool testLessonGesturePolicies()
         for ( const bool shift : { false, true } )
             for ( const bool control : { false, true } ) {
                 io.AddKeyEvent(ImGuiMod_Shift, shift);
-                io.AddKeyEvent(ImGuiMod_Ctrl, control);
+                io.AddKeyEvent(inputModifier, control);
                 ImGui::NewFrame();
                 const Interaction::SurfaceScope scope(
                     Interaction::Surface::MainCanvas);
@@ -580,6 +588,10 @@ bool testMenuHotkeysWithoutMenuBar(Profile& profile)
     // 前面的测试可能停留在其他方案，不能依赖执行顺序碰巧留下目标对象。
     Interaction::synchronizeProfile("test-profile", true);
     Interaction::synchronizeProfile("test-profile", true);
+    // 与平台后端相同，macOS 注入 Command，其他平台注入 Ctrl。
+    // 隐藏菜单和文本焦点门禁仍须经过真正的快捷键匹配。
+    const ImGuiKey inputModifier =
+        io.ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl;
     bool ok = true;
     {
         // 真实注册表与动作负责输入路由；打开项目的最终业务由方案观察并消费。
@@ -595,7 +607,7 @@ bool testMenuHotkeysWithoutMenuBar(Profile& profile)
             ImGui::EndFrame();
         };
         frame();
-        io.AddKeyEvent(ImGuiMod_Ctrl, true);
+        io.AddKeyEvent(inputModifier, true);
         io.AddKeyEvent(ImGuiKey_O, true);
         frame();
         // 保持到下一普通帧，但不跨越按键重复阈值，检测同一边沿是否重复派发。

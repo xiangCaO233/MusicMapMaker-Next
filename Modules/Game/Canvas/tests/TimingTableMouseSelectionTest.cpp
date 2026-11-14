@@ -444,12 +444,17 @@ bool run()
             tap(canvas, layout.row(0));
             // 经典追加继续由真实 Ctrl 驱动；纯鼠标的最后模式不能参与解释。
             // 本场景不使用新增控件，能检出将显式模式错误提升为全局默认的回归。
-            ImGui::GetIO().AddKeyEvent(ImGuiMod_Ctrl, true);
+            // macOS 的追加选择使用 Command，事件交换后仍由逻辑 Ctrl 查询。
+            // 不关闭平台行为，确保经典选择分支也在原生 Mac 上实际执行。
+            const ImGuiKey inputModifier = ImGui::GetIO().ConfigMacOSXBehaviors
+                                               ? ImGuiMod_Super
+                                               : ImGuiMod_Ctrl;
+            ImGui::GetIO().AddKeyEvent(inputModifier, true);
             tap(canvas, layout.row(1));
             expect(Access::count(canvas) == 2, "classic ctrl add");
             // 释放 Ctrl 后空白单击仍按原规则清空，不继承显式追加的空白保护。
             // 输入状态在场景结束前释放，后续套件析构不能看到半次键盘操作。
-            ImGui::GetIO().AddKeyEvent(ImGuiMod_Ctrl, false);
+            ImGui::GetIO().AddKeyEvent(inputModifier, false);
             // 不将经典现有的零阈值点按行为扩展为本轮修复，只验证新增模式未泄漏。
             // 无 Ctrl 的替换仍由原分支执行，不读取最后一次纯鼠标减选意图。
             tap(canvas, layout.row(2));
