@@ -18,6 +18,8 @@ fi
 # JDK 固定仅限本构建进程，避免影响 IDE、桌面应用或其他仓库的 Java 选择。
 android_ndk="$ANDROID_HOME/ndk/30.0.16248370"
 export JAVA_HOME="${MMM_ANDROID_JAVA_HOME:-/usr/lib/jvm/openjdk-21}"
+# apksigner 通过 PATH 启动 Java，也必须使用本次完整 JDK，不能依赖宿主默认值。
+export PATH="$JAVA_HOME/bin:$PATH"
 # 两个 Android 验证工程共用下载缓存，不能回到用户的全局 Gradle 缓存。
 # 下载缓存默认留在专用构建树，显式环境变量仍可供多个构建共用。
 # Gradle 临时文件和签名也归入该工作树，不能写入新的源码侧隐藏目录。
