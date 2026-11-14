@@ -363,6 +363,20 @@ target_link_libraries(BpmBeatmapImportTest PRIVATE UI)
 mmm_register_test_case(NAME BpmBeatmapImportTest COMMAND BpmBeatmapImportTest
                        "${CMAKE_BINARY_DIR}/test_output/BpmBeatmapImportTest")
 
+# 共享媒体改名通过真实设置弹窗与 IMD 夹具验证，副本和项目仅生成于构建树。 原格式关联与当前会话绑定分别断言，不能以测试中的路径赋值代替实际交互。
+mmm_add_test_executable(UI SettingsResourceRenameTest
+                        tests/SettingsResourceRenameTest.cpp)
+target_link_libraries(SettingsResourceRenameTest PRIVATE UI)
+# 测试仅读取已有媒体字节，输出仍由命令行构建目录参数隔离。 资源根只对该测试目标可见，不改变生产 UI 或其它测试的路径约定。 生成的
+# IMD、媒体副本及项目清单不加入源码测试资源，重复执行使用独立输出子目录。
+
+target_compile_definitions(
+  SettingsResourceRenameTest
+  PRIVATE "MMM_RESOURCE_DIR=\"${CMAKE_SOURCE_DIR}/assets\"")
+mmm_register_test_case(
+  NAME SettingsResourceRenameTest COMMAND SettingsResourceRenameTest
+  "${CMAKE_BINARY_DIR}/test_output/SettingsResourceRenameTest")
+
 # 空格播放路由测试覆盖活动拖拽交互和控件导航激活隔离。 显式链接 ImGui，以构造路由判定所需的最小输入上下文。
 mmm_add_test_executable(UI PlaybackShortcutRoutingTest
                         tests/PlaybackShortcutRoutingTest.cpp)

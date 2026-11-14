@@ -9,6 +9,7 @@
 #include "ui/IUIView.h"
 #include "ui/layout/box/CLayBox.h"
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
@@ -24,6 +25,15 @@ namespace MMM::Config
 struct ShortcutBinding;
 }  // namespace MMM::Config
 
+namespace MMM::Logic
+{
+struct SharedResourceRenamePlan;
+}
+namespace MMM
+{
+struct AudioResource;
+}
+
 namespace MMM::UI
 {
 /// @brief 搜索目录通过独立实现维护，公开视图头不包含目录解析依赖。
@@ -33,6 +43,8 @@ class SettingsSearchIndex;
 class SettingsView : virtual public IUIView, public IParallelUiPreparable
 {
 public:
+    /// @brief 资源改名回归验证确认前无副作用和当前谱面隔离。
+    friend struct SettingsResourceRenameTestAccess;
     /// @brief 构造设置面板视图。
     /// @param viewName 视图名称。
     SettingsView(const std::string& viewName);
@@ -231,6 +243,12 @@ private:
 
     /// @brief 重命名输入框首帧需要自动聚焦并选中旧文件名。
     bool m_focusResourceRenameInput{ false };
+    /// @brief 检查到共享引用后等待第二次明确确认，不等同于普通改名授权。
+    bool m_resourceRenameCopyPending{ false };
+    /// @brief 复制提示对应的目标名称；输入变化后必须重新确认。
+    std::string m_resourceRenameCopyName;
+    /// @brief 只在预检时更新的关联数量，常态帧不扫描谱面。
+    std::size_t m_resourceRenameReferenceCount{ 0 };
 
     /// @brief 重命名请求的项目与谱面身份，用于拒绝跨会话旧请求。
     std::filesystem::path m_resourceRenameProjectRoot;
@@ -455,10 +473,18 @@ private:
     /// @warning 每帧只绘制活动弹窗；文件操作仅在用户确认时发生。
     void renderBeatmapResourceRename(float dpiScale);
 
-    /// @brief 核对资源绑定身份并同步重命名文件及全部关联引用。
+    /// @brief 核对资源绑定身份，独占资源直接改名，共享资源经确认复制。
+    /// @param confirmCopy 只有看到复制提示后对同一目标名称再次确认才有效。
     /// @return 操作成功时返回 true；失败原因保留在资源错误信息中。
     /// @warning 低频确认路径：可能扫描项目谱面并保存资源引用。
-    bool renameBeatmapResource();
+    bool renameBeatmapResource(bool confirmCopy = false);
+    /// @brief 建立已明确确认的副本并只更新当前会话的资源引用。
+    /// @param plan 本次在会话锁内重新检查的路径与共享来源。
+    /// @param audio 需要保留配置并登记新主轨时的旧资源；视觉资源为空。
+    /// @return 文件及登记成功时为真，失败保留旧绑定及原文件。
+    /// @warning 低频确认路径，复制媒体及配套测量数据，不在绘制帧执行。
+    bool copyRenameBeatmapResource(const Logic::SharedResourceRenamePlan& plan,
+                                   const AudioResource* audio);
 
     /// @brief 绘制编辑器设置页。
     void drawEditorSettings();

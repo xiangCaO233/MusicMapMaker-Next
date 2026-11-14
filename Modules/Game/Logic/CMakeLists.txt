@@ -60,6 +60,8 @@ add_library(
   # 视觉资源改名包含独立的谱面磁盘事务与会话同步，避免扩张调度主文件。
   src/logic/EditorEngine_VisualResource.cpp
   src/logic/VisualResourceRenameService.cpp
+  # 谱面设置按真实共享引用选择副本，预检不修改其他格式谱面。
+  src/logic/SharedResourceRenameService.cpp
   # 音频时间描述和视觉时钟仍属于编辑逻辑，底层播放能力通过 Audio 依赖获得。
   src/logic/audio/AudioTimelineDescriptor.cpp
   src/logic/audio/PlaybackVisualClock.cpp
