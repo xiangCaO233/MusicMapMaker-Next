@@ -3,18 +3,24 @@
 #include "config/EditorSettings.h"
 #include "ui/imgui/manager/SettingsView.h"
 
+#include "audio/AudioMarkerService.h"
 #include "common/AudioInfoUtils.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
+#include "config/skin/translation/TranslationFormat.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectController.h"
+#include "logic/ProjectResourceService.h"
+#include "logic/SharedResourceRenameService.h"
+#include "logic/VisualResourceRenameService.h"
 #include "logic/session/context/SessionContext.h"
 // 导入流程访问活动谱面的资源字段，完整模型依赖仅放在实现端。
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/metadata/BaseMapMeta.h"
+#include "mmm/project/AudioResource.h"
 #include "mmm/project/AudioTrackType.h"
 #include "mmm/project/Project.h"
 #include "ui/utils/NativeFileDialog.h"
@@ -27,7 +33,11 @@
 #include <imgui.h>
 #include <mutex>
 #include <nfd.h>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <system_error>
+#include <vector>
 
 /// @file SettingsView_BeatmapResourceImport.cpp
 /// @brief 设置页的音频、图片与视频选择、工程复制及资源重命名。
@@ -46,7 +56,7 @@
 ///
 /// 选择器打开时用户可能切换项目或谱面，导入前必须再次核对身份。
 /// 身份不匹配时不复制、不提交旧草稿，取消选择也不改变已有引用。
-/// 元数据更新始终经过逻辑命令，以保留撤销与自动保存语义。
+/// 元数据更新始终经过逻辑命令，以保留会话校验与自动保存语义。
 
 namespace MMM::UI
 {
@@ -158,7 +168,7 @@ void SettingsView::renderBeatmapResourcePicker(float dpiScale)
 /// 文件成功复制后才改设置页草稿，失败不碰用户输入的其他元数据。
 /// 主音频登记后反查资源表，防止绑定到没有 Main 条目的普通文件。
 /// 已登记的同路径文件即使导入命令去重，也仍允许绑定为谱面主音频。
-/// 最终使用 CmdUpdateBeatmapMetadata 保持采样重定向和撤销逻辑一致。
+/// 最终使用 CmdUpdateBeatmapMetadata 保持采样重定向和保存逻辑一致。
 /// @warning 仅确认文件后执行复制与命令提交，不能从每帧设置绘制路径调用。
 void SettingsView::importBeatmapResource(const std::filesystem::path& source)
 {
@@ -273,6 +283,9 @@ void SettingsView::renderBeatmapResourceRename(float dpiScale)
     const auto title = TR("ui.file_manager.rename_title").toString() +
                        "###SettingsResourceRename";
     if ( m_openResourceRenamePopup ) {
+        // 新请求不能继承上一轮复制授权，取消后重新打开也必须重新提示。
+        m_resourceRenameCopyPending = false;
+        m_resourceRenameCopyName.clear();
         FeedbackOpenPopup(title.c_str());
         m_openResourceRenamePopup = false;
     }
@@ -306,11 +319,30 @@ void SettingsView::renderBeatmapResourceRename(float dpiScale)
         // 失败保留弹窗及输入，用户可直接修正目标名称后重试。
         ImGui::TextWrapped("%s", m_beatmapResourceImportError.c_str());
     }
+    // 修改目标名称撤销原确认，不能看过一个文件名的提示却复制成另一个名字。
+    if ( m_resourceRenameCopyPending &&
+         std::string_view(m_resourceRenameBuffer.data()) !=
+             m_resourceRenameCopyName )
+        m_resourceRenameCopyPending = false;
+    // 提示只对应当前输入名，第一次普通“重命名”不能直接视为复制授权。
+    // 此处不启动新的嵌套模态，避免键盘确认同时穿透两层弹窗。
+    if ( m_resourceRenameCopyPending ) {
+        // 只展示上次显式预检的结果，不在常态帧重复加载谱面或查询文件系统。
+        const auto hint = TR_FMT("ui.settings.beatmap.rename_copy_hint",
+                                 m_resourceRenameReferenceCount);
+        ImGui::TextWrapped("%s", hint.c_str());
+    }
+    // 复制的按钮文案显式说明实际操作，Enter 与按钮采用同一个二次确认状态。
+    // 点取消或标题栏关闭都不会调用文件复制入口。
     const bool confirm =
-        FeedbackButton(TR("ui.file_manager.context.rename").data());
+        FeedbackButton(TR(m_resourceRenameCopyPending
+                              ? "ui.settings.beatmap.rename_copy_confirm"
+                              : "ui.file_manager.context.rename")
+                           .data());
     // 键盘确认和鼠标确认走同一个事务，不能重复改名或跳过错误处理。
     // 成功才关闭，名称冲突、权限失败等都允许原地重试。
-    if ( (confirm || enter) && renameBeatmapResource() ) {
+    if ( (confirm || enter) &&
+         renameBeatmapResource(m_resourceRenameCopyPending) ) {
         m_renameResourceTarget = BeatmapResourceTarget::None;
         ImGui::CloseCurrentPopup();
     }
@@ -329,7 +361,7 @@ void SettingsView::renderBeatmapResourceRename(float dpiScale)
 /// @brief 对仍然绑定的原资源执行重命名并刷新设置草稿中的引用。
 /// @return 文件与引用同步成功返回 true，失败保留具体原因。
 /// @warning 显式确认路径：持有会话注册表锁，只允许低频调用。
-bool SettingsView::renameBeatmapResource()
+bool SettingsView::renameBeatmapResource(bool confirmCopy)
 {
     auto& engine = Logic::EditorEngine::instance();
     std::lock_guard<std::recursive_mutex> lock(engine.getSessionMutex());
@@ -369,6 +401,54 @@ bool SettingsView::renameBeatmapResource()
     const std::string newName = m_resourceRenameBuffer.data();
     // 输入仅传给逻辑事务，由它保留格式后缀并拒绝移动目录和覆盖。
     // UI 不预先改草稿；任何失败都必须继续显示旧的有效绑定。
+    // 共享资源预检独立于项目全局改名事务，未授权复制前只有只读查询。
+    // 不能根据旧事务的错误字符串猜测是否需要复制，路径或格式错误仍应直接失败。
+    const bool audioTarget =
+        m_renameResourceTarget == BeatmapResourceTarget::Audio;
+    const auto* audio =
+        audioTarget
+            ? Logic::ProjectResourceService::findAudioResourceForReference(
+                  *project, live.map_path, Config::pathToUtf8(current))
+            : nullptr;
+    if ( audioTarget && (!audio || audio->m_type != AudioTrackType::Main) ) {
+        m_beatmapResourceImportError =
+            TR("ui.settings.beatmap.rename_missing_audio").toString();
+        return false;
+    }
+    // 音频提示允许资源 ID，因此文件身份必须来自已经解析的项目资源表。
+    const auto source = audio ? Config::utf8ToPath(audio->m_path) : current;
+    // 调用方已持有会话注册表锁，观察指针仅用于这次预检。
+    // 复制会话列表只在显式确认发生，普通渲染帧不会复制 shared_ptr 所有权。
+    std::vector<const BeatMap*> openMaps;
+    const auto                  entries = engine.getSessionEntries();
+    for ( const auto& entry : entries )
+        if ( !entry.isLogoPlaceholder && entry.session &&
+             entry.session->getContext().currentBeatmap )
+            openMaps.push_back(
+                entry.session->getContext().currentBeatmap.get());
+    // 候选列表来自磁盘和打开模型；每次确认都重新检查，不复用陈旧授权结果。
+    const auto plan = Logic::SharedResourceRenameService::inspect(
+        *project, live.map_path, source, newName, audio, openMaps);
+    m_beatmapResourceImportError = plan.m_error;
+    // 名称冲突、扩展名变更和不可检查来源不能走“复制即可”的兜底。
+    // 所有校验错误都保留原资源引用，让用户可修正后重试。
+    if ( !plan.m_error.empty() ) return false;
+    if ( plan.m_requiresCopy ) {
+        if ( !confirmCopy || !m_resourceRenameCopyPending ||
+             m_resourceRenameCopyName != newName ) {
+            // 第一次点击只解释复制后果，不创建文件、不改资源表、不提交元数据。
+            m_resourceRenameCopyPending    = true;
+            m_resourceRenameCopyName       = newName;
+            m_resourceRenameReferenceCount = plan.m_references.size();
+            return false;
+        }
+        // 第二次确认仍重新运行了预检，新增关联或源文件消失不会沿用旧结果。
+        // 这里提前返回，禁止复制成功后再次调用会搬走原文件的全局重命名。
+        return copyRenameBeatmapResource(plan, audio);
+    }
+    // 独占资源继续采用既有事务，保留其路径、历史和磁盘引用的一致性处理。
+    // 不让这次共享资源修复改变其他改名入口的项目级语义。
+    m_resourceRenameCopyPending = false;
     if ( m_renameResourceTarget == BeatmapResourceTarget::Audio ) {
         // 音频必须通过现有事务，同时迁移资源 ID、玩家绑定和采样引用。
         // 这里先按登记路径匹配，旧格式的纯 ID 提示仍可直接命中资源。
@@ -426,7 +506,7 @@ bool SettingsView::renameBeatmapResource()
     }
     if ( !m_beatmapResourceImportError.empty() ) return false;
     // 逻辑层已经完成真实文件与引用事务，不再提交第二份完整元数据命令。
-    // 额外命令会生成无意义的撤销步骤，并可能覆盖并发刷新过的结构字段。
+    // 额外命令可能重复提交，并覆盖并发刷新过的结构字段。
     // 刷新全部资源字段，封面/背景共用文件时不能只刷新点击的那一行。
     // 文本草稿保留，避免低频资源操作覆盖尚在编辑的标题和作者。
     m_editingMeta.song_file_hint = live.song_file_hint;
@@ -436,6 +516,145 @@ bool SettingsView::renameBeatmapResource()
     // 两张视觉资源独立时，未命中的字段保持原值，不能隐式重新绑定。
     m_editingMeta.main_cover_path = live.main_cover_path;
     // 类型与时间偏移没有改变，下一帧仍由正常结构字段同步读取。
+    return true;
+}
+/// @brief 用户确认共享提示后建立新文件，以正常元数据动作改绑当前谱面。
+/// @details 原文件、其他谱面及其撤销历史完全保留。副本沿用编码字节与音轨配置。
+/// 图片共享封面和背景时两字段一起改绑；音频使用已有 Main BGM 重定向语义。
+/// @warning 仅在会话锁保护的显式确认路径执行，不从普通 UI 帧调用。
+bool SettingsView::copyRenameBeatmapResource(
+    const Logic::SharedResourceRenamePlan& plan, const AudioResource* audio)
+{
+    auto& engine  = Logic::EditorEngine::instance();
+    auto* project = engine.getCurrentProject();
+    auto  session = engine.getActiveSession();
+    // 调用方已经验证身份，仍避免未来调用者绕过必要项目和会话前置条件。
+    if ( !project || !session || !session->getContext().currentBeatmap )
+        return false;
+    // 相对路径写入项目根而非谱面目录，保持与正常资源导入的保存规范一致。
+    // 文件系统错误使用返回值处理，不能引入会抛异常的 canonical 重载。
+    std::error_code rootError;
+    const auto      root =
+        std::filesystem::canonical(project->m_projectRoot, rootError);
+    if ( rootError ) {
+        m_beatmapResourceImportError = rootError.message();
+        return false;
+    }
+    // 计划中的目标已在源目录下，当前工程再次规范化仅用于生成持久化相对路径。
+    // 不把开发机的绝对路径写入歌曲提示，工程整体移动后仍可解析副本。
+    const auto relative = plan.m_destination.lexically_relative(root);
+    // 先构造草稿，成功前不改当前模型；谱面字段由逻辑命令标脏和安排保存。
+    // 源模型的资源和结构字段可能比设置草稿更新，以确认当时的真实会话为准。
+    // 复制只替换对应资源字段，不提交尚未确认的标题和作者等编辑。
+    auto updated = session->getContext().currentBeatmap->m_baseMapMetadata;
+    // 音轨复制前先持有完整值快照，新增资源可能重分配项目 vector。
+    // 后续不再借用 audio 指向的元素，避免登记新轨后解引用失效地址。
+    std::optional<AudioResource> cloned;
+    if ( audio ) {
+        cloned         = *audio;
+        cloned->m_id   = Config::pathToUtf8(plan.m_destination.filename());
+        cloned->m_path = Config::pathToUtf8(relative);
+        updated.song_file_hint = relative;
+        updated.main_audio_path.clear();
+    } else {
+        Logic::VisualResourceRenameService::remapMetadata(
+            updated, project->m_projectRoot, plan.m_source, plan.m_destination);
+        // 源文件可能由符号链接解析到真实路径，但当前字段仍保存别名。
+        // 背景成功映射不代表用户正在重命名的封面也已映射，必须检查选中字段。
+        const auto& original =
+            session->getContext().currentBeatmap->m_baseMapMetadata;
+        const bool selectionChanged =
+            m_renameResourceTarget == BeatmapResourceTarget::Cover
+                ? updated.cover_path != original.cover_path
+                : updated.main_cover_path != original.main_cover_path;
+        if ( !selectionChanged ) {
+            // 无法投影时在复制之前拒绝，不能创建副本后沿用旧绑定却误报成功。
+            m_beatmapResourceImportError =
+                "无法映射当前资源路径，请重新选择该资源后重试";
+            return false;
+        }
+    }
+    std::error_code error;
+    // 精确配套 BPM 文件的协议名按完整音频文件名追加，不能与另一格式共用。
+    auto companion = plan.m_destination;
+    companion += ".mmm-timing.json";
+    // 原文件配套标记按只读来源复制，目标已有配套数据也不能覆盖。
+    // 即使目标音频尚不存在，旧测量旁路仍可能属于用户保留的数据。
+    if ( audio && (std::filesystem::exists(companion, error) || error) ) {
+        m_beatmapResourceImportError = "目标音频的配套测量文件已存在或不可访问";
+        return false;
+    }
+    // 本次副本将长期属于项目，不是删除原文件后的临时回滚材料。
+    // 其它谱面仍依赖原文件，因此复制成功也绝不删除或重命名源路径。
+    // copy_options::none 拒绝覆盖；绝不先改名再尝试修复其他谱面的引用。
+    if ( !std::filesystem::copy_file(plan.m_source,
+                                     plan.m_destination,
+                                     std::filesystem::copy_options::none,
+                                     error) ||
+         error ) {
+        m_beatmapResourceImportError = "复制资源失败：" + error.message();
+        return false;
+    }
+    // 先完成所有媒体字节和可选配套数据，再登记新资源并发出改绑命令。
+    // 失败不会把尚不存在的音轨发布给当前谱面的播放描述。
+    if ( audio ) {
+        error = Audio::AudioMarkerService::copyCompanion(plan.m_source,
+                                                         plan.m_destination);
+        if ( error ) {
+            // 配套数据损坏或写出失败时不登记新主轨，原文件始终可继续使用。
+            std::error_code cleanup;
+            std::filesystem::remove(plan.m_destination, cleanup);
+            m_beatmapResourceImportError =
+                "复制音频测量数据失败：" + error.message();
+            return false;
+        }
+        // 克隆保持原主轨音量、变速、变调和静音配置，不采用导入音频的默认值。
+        // 原资源条目保留，供 IMD 和其它谱面继续按原 ID、原路径解析。
+        // 新资源以新文件名为独立主键，其他工作区的选轨也不做全局迁移。
+        // 用户明确创建新资源时撤销该路径的历史排除，避免重开项目后扫描忽略副本。
+        // 保存失败需同时恢复排除表，不能只回退音轨登记。
+        const auto previousExcluded = project->m_excludedAudioPaths;
+        std::erase(project->m_excludedAudioPaths, cloned->m_path);
+        project->m_audioResources.push_back(*cloned);
+        if ( !Logic::ProjectController::instance().saveProject() ) {
+            // 先恢复资源表，再尽力恢复项目清单；只删除本次新建的副本。
+            project->m_audioResources.pop_back();
+            project->m_excludedAudioPaths = previousExcluded;
+            // 项目保存可能已更新部分分片，需要再保存旧表而不只改回内存。
+            // 恢复无法确认时保留副本，防止磁盘清单仍引用它却把文件删除。
+            const bool restored =
+                Logic::ProjectController::instance().saveProject();
+            if ( restored ) {
+                std::error_code cleanup;
+                std::filesystem::remove(plan.m_destination, cleanup);
+                // 目标配套文件在创建前已确认不存在，成功复制后属于本次事务。
+                // 不触碰源文件配套数据，也不删除工程中的其它测量结果。
+                std::filesystem::remove(companion, cleanup);
+            }
+            m_beatmapResourceImportError =
+                restored
+                    ? "保存项目失败，复制已取消"
+                    : "保存及恢复项目清单失败，副本已保留，请检查项目目录权限";
+            return false;
+        }
+    }
+    // 发送到确认过的会话，不能在命令消费前因活动标签切换误改另一张谱面。
+    // 正常元数据更新负责主 BGM 采样改绑、派生状态和尾随保存。
+    // 该入口沿用设置页既有提交语义，不重写其它会话的元数据或历史。
+    // 原文件继续存在，既有引用不会因当前谱面的副本选择而失效。
+    // 复制不触发项目级旧路径到新路径的广播或全局主键迁移。
+    session->pushCommand(Logic::CmdUpdateBeatmapMetadata{ updated });
+    // 仅投影资源字段，保留设置页尚未提交的标题、作者等文字草稿。
+    // 已提交的资源路径立即反映在设置行，但真实模型仍由指定会话消费命令。
+    // 保留整份 live 元数据作为命令来源，避免把设置中的旧结构字段覆盖回去。
+    m_editingMeta.song_file_hint  = updated.song_file_hint;
+    m_editingMeta.main_audio_path = updated.main_audio_path;
+    m_editingMeta.cover_path      = updated.cover_path;
+    m_editingMeta.main_cover_path = updated.main_cover_path;
+    // 完成后清除授权位；再次打开改名窗口必须重新检查是否还有其它谱面共享。
+    // 既有错误信息只在成功时清除，失败不会被空泛成功提示覆盖。
+    m_resourceRenameCopyPending = false;
+    m_beatmapResourceImportError.clear();
     return true;
 }
 }  // namespace MMM::UI
