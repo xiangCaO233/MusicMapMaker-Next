@@ -22,6 +22,7 @@
 #include "logic/session/context/SessionContext.h"
 #include "logic/session/tool/DrawTool.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "ui/imgui/ShortcutUtils.h"
 #include "ui/interaction/EditorInteraction.h"
 #include <array>
 #include <cmath>
@@ -30,6 +31,7 @@
 #include <initializer_list>
 #include <limits>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -995,8 +997,40 @@ bool testUnifiedSelectionGestureOwnership()
     auto& shortcuts =
         Config::AppConfig::instance().getEditorSettings().shortcutConfig;
     const auto originalShortcuts = shortcuts;
-    shortcuts.toolMove           = { true, "1", false, false, false, false };
-    shortcuts.toolDraw           = shortcuts.toolMove;
+    // 先加载完整旧默认配置；真实提示和物理键分派都必须使用迁移后的 1／2。
+    // 只改构造默认而未迁移磁盘值的实现，不能通过这一条正式加载链路。
+    // 配置借用当前测试对象；后面的兼容场景结束时统一还原原绑定。
+    // JSON 往返只发生在测试内，不读取或保存运行中应用的个人配置。
+    auto oldShortcuts        = originalShortcuts;
+    oldShortcuts.toolMarquee = { true, "2", false, false, false, false };
+    oldShortcuts.toolDraw    = { true, "3", false, false, false, false };
+    shortcuts = nlohmann::json(oldShortcuts).get<Config::ShortcutConfig>();
+    const auto& settings = Config::AppConfig::instance().getEditorSettings();
+    // 工具栏提示沿用同一个公开绑定和格式化入口，避免显示新键却执行旧键。
+    // 当前经典方案不重映射工具键，结果直接代表迁移后的有效绑定。
+    // 旧抓取键同样为 1，正式分派仍须只产生一次选择命令。
+    passed &=
+        UI::ShortcutUtils::formatShortcut(UI::ShortcutUtils::getToolShortcut(
+            settings, Logic::EditTool::Marquee)) == "1";
+    passed &=
+        UI::ShortcutUtils::formatShortcut(UI::ShortcutUtils::getToolShortcut(
+            settings, Logic::EditTool::Draw)) == "2";
+    for ( const auto& [key, tool] :
+          std::array{ std::pair{ ImGuiKey_1, Logic::EditTool::Marquee },
+                      std::pair{ ImGuiKey_2, Logic::EditTool::Draw } } ) {
+        // 按键前后都经过释放帧，并检查一次输入只产生一次正式工具切换。
+        // 不直接调用命令分派，避免遗漏焦点、兼容键或活动方案的竞争。
+        switchedTools.clear();
+        io.AddKeyEvent(key, true);
+        frame(controller, snapshot, false);
+        io.AddKeyEvent(key, false);
+        frame(controller, snapshot, false);
+        passed &= switchedTools.size() == 1 && switchedTools.front() == tool;
+    }
+    // 本场景模拟旧配置，显式把选择绑定到 2，避免新默认 1 抢先命中。
+    shortcuts.toolMarquee = { true, "2", false, false, false, false };
+    shortcuts.toolMove    = { true, "1", false, false, false, false };
+    shortcuts.toolDraw    = shortcuts.toolMove;
     // 显式释放后再按下，确保两轮都是真实边沿，而不是平台按键重复。
     // 当前控制器和窗口不重建，验证和物件拖动共用的正式快捷键入口。
     frame(controller, snapshot, false);

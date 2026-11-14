@@ -401,6 +401,17 @@ void from_json(const nlohmann::json& json, ShortcutConfig& config)
     for ( const auto& entry : editorShortcutActions() )
         config.*(entry.m_binding) =
             json.value(std::string(entry.m_id), defaults.*(entry.m_binding));
+    // 选择和绘制同时保持旧默认 2／3 时，视为未重绑定并整体迁移到 1／2。
+    // 成对匹配全部修饰键和启用状态，避免只改一个键而覆盖用户自定义组合。
+    const ShortcutBinding legacySelection{
+        true, "2", false, false, false, false
+    };
+    const ShortcutBinding legacyDraw{ true, "3", false, false, false, false };
+    if ( shortcutBindingsConflict(config.toolMarquee, legacySelection) &&
+         shortcutBindingsConflict(config.toolDraw, legacyDraw) ) {
+        config.toolMarquee = defaults.toolMarquee;
+        config.toolDraw    = defaults.toolDraw;
+    }
     // 旧版批注绑定曾与其他编辑入口冲突，迁移必须在普通字段恢复后进行。
     const ShortcutBinding legacyAnnotationShortcut{ true,  "A",  true,
                                                     false, true, false };

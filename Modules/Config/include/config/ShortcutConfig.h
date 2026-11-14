@@ -51,11 +51,11 @@ struct ShortcutConfig {
     /// @brief 切换到移动工具。
     ShortcutBinding toolMove{ true, "1", false, false, false, false };
 
-    /// @brief 切换到框选工具。
-    ShortcutBinding toolMarquee{ true, "2", false, false, false, false };
+    /// @brief 切换到合并后的选择工具，默认使用 1。
+    ShortcutBinding toolMarquee{ true, "1", false, false, false, false };
 
-    /// @brief 切换到绘制工具。
-    ShortcutBinding toolDraw{ true, "3", false, false, false, false };
+    /// @brief 切换到绘制工具，默认紧随选择工具使用 2。
+    ShortcutBinding toolDraw{ true, "2", false, false, false, false };
 
     /// @brief 切换到配色笔刷工具。
     ShortcutBinding toolColorBrush{ true, "4", false, false, false, false };
