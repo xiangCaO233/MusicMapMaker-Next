@@ -1,6 +1,7 @@
 #include "logic/ImdPackageExportService.h"
 
 #include "audio/AudioTimelineExportService.h"
+#include "common/platform/DocumentStorage.h"
 #include "config/Utf8Path.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/PackageFileTypes.h"
@@ -212,7 +213,7 @@ bool readFileBytes(const std::filesystem::path& path,
 /// @param size 归档字节数。
 /// @return 成功完整写入时返回 true。
 /// @pre size 非零时 data 指向至少 size 字节的有效归档缓冲。
-/// @note 成功表示写入后流状态正常，不包含落盘同步或重新读取校验。
+/// @note 成功表示输出流已关闭且状态正常；授权目标由上层最终提交时发布。
 /// @note data 仅被借用；本函数无论成功失败都不释放归档缓冲。
 /// @warning 此函数可能创建目标父目录并覆盖同名文件，不是只读检查。
 bool writePackageFile(const std::filesystem::path& path, const void* data,
@@ -233,7 +234,9 @@ bool writePackageFile(const std::filesystem::path& path, const void* data,
         file.write(static_cast<const char*>(data),
                    static_cast<std::streamsize>(size));
     }
-    return file.good();
+    // 显式关闭才能暴露最后一次刷新失败，不能让上层提前发布空缓冲。
+    file.close();
+    return !file.fail();
 }
 
 /// @brief 向 zip 归档添加一个根目录文件。
@@ -451,7 +454,10 @@ ImdPackageExportResult ImdPackageExportService::exportPackage(
     // 不论最终写入成功与否，都归还压缩库分配的缓冲区。
     if ( archiveBuffer ) mz_free(archiveBuffer);
 
-    result.success = success;
+    // 私有工作副本不是用户在系统保存器中选择的文档，必须完成平台回写。
+    // 发布失败保留本地完整 ZIP，并把诊断交给既有导出失败提示。
+    result.success =
+        success && Common::publishDocument(outputPath, result.errorMessage);
     // result 不持有临时路径或压缩缓冲，返回后可独立用于界面反馈。
     return result;
 }

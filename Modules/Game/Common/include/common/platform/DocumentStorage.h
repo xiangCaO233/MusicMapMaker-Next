@@ -22,6 +22,10 @@ struct DocumentPresentation {
 std::optional<DocumentPresentation> documentPresentation(
     const std::filesystem::path& path);
 bool publishDocument(const std::filesystem::path& path, std::string& error);
+/// @brief 清理创建保存目标后尚未写入的占位文档，保留已有内容和完整工作副本。
+/// @warning 仅导出事务退出时调用，Android 会检查提供器内容，不可逐帧执行。
+bool discardUnwrittenDocument(const std::filesystem::path& path,
+                              std::string&                 error);
 /// @brief 启动平台选择器；0 打开文件、1 创建目标、2 授权目录。
 /// @details 请求只调度 Java UI 操作，不阻塞 SDL 事件分发。
 bool beginDocumentSelection(int kind, std::string_view defaultName);
@@ -43,6 +47,11 @@ inline std::optional<DocumentPresentation> documentPresentation(
 }
 /// @brief 桌面 writer 直接使用文件系统，不引入 Android 文档发布步骤。
 inline bool publishDocument(const std::filesystem::path&, std::string&)
+{
+    return true;
+}
+/// @brief 桌面没有平台占位文件，失败不能删除原有用户目标。
+inline bool discardUnwrittenDocument(const std::filesystem::path&, std::string&)
 {
     return true;
 }

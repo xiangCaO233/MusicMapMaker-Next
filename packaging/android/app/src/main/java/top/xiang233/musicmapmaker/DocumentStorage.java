@@ -385,6 +385,8 @@ final class DocumentStorage {
             File target = new File(directory, name);
             // CREATE_DOCUMENT 已创建外部占位文件，但本地先不创建，保留应用的覆盖确认语义。
             String baseline = requestKind == 1 ? hash(uri) : copy(uri, target);
+            // 只有 CREATE_DOCUMENT 新建的空目标允许在转换失败后回收，已有输入不能删除。
+            mount.put("createdForOutput", requestKind == 1 && baseline.equals(digest(new byte[0])));
             files.put(name, new JSONObject().put("uri", uri.toString()).put("hash", baseline));
             path = target.getCanonicalPath();
         }
@@ -473,9 +475,45 @@ final class DocumentStorage {
             String expected = hex(hash.digest());
             if (!expected.equals(hash(target))) throw new IOException("文档提供者写入后内容校验失败");
             // 外部写入和读回校验完成后才推进冲突基线，失败不会被报告为保存成功。
-            entry.put("hash", expected); files.put(relative, entry); persist();
+            entry.put("hash", expected); files.put(relative, entry);
+            // 发布完成的目标不再是占位文件，即使合法输出为空也不能由清理器删除。
+            mount.put("createdForOutput", false); persist();
             return null;
         } catch (Exception error) { return "SAF 保存失败，本地副本已保留：" + error.getMessage(); }
+        finally { fileGate.unlock(); }
+    }
+
+    /**
+     * @brief 回收本次创建但转换尚未写出的空目标，防止失败被误认为零字节成功包。
+     * @param filename 原生写入事务的普通路径，外部 URI 不参与路径推断。
+     * @return null 表示无需清理或清理成功；异常保留映射与本地内容供诊断。
+     * @warning 只在导出退出时调用，不等待其它导入，也不扫描授权目录中的文件。
+     */
+    String discardUnwritten(String filename) {
+        if (!fileGate.tryLock()) return "文档操作忙，未清理空目标";
+        try {
+            load();
+            File source = new File(filename).getCanonicalFile();
+            File canonicalRoot = root.getCanonicalFile();
+            // 普通本机目录以及包含完整输出的副本一律保留，不能因发布失败丢掉恢复数据。
+            if (!source.toPath().startsWith(canonicalRoot.toPath()) || (source.isFile() && source.length() > 0)) return null;
+            String relative = canonicalRoot.toPath().relativize(source.toPath()).toString();
+            int separator = relative.indexOf('/');
+            if (separator < 0) return null;
+            String key = relative.substring(0, separator);
+            JSONObject mount = mounts.optJSONObject(key);
+            if (mount == null || !mount.optBoolean("createdForOutput") || mount.optBoolean("tree")) return null;
+            JSONObject entry = mount.getJSONObject("files").optJSONObject(relative.substring(separator + 1));
+            if (entry == null) return null;
+            Uri target = Uri.parse(entry.getString("uri"));
+            // 用户或其它应用在选择后写入的内容也必须保留；仅回收两次确认均为空的目标。
+            String empty = digest(new byte[0]);
+            if (!empty.equals(entry.getString("hash")) || !empty.equals(hash(target))) return null;
+            if (!DocumentsContract.deleteDocument(activity.getContentResolver(), target)) return "无法清理未写入的空目标";
+            // 目标删除成功后才移除授权映射，私有目录中的其它诊断材料保持原样。
+            mounts.remove(key); persist();
+            return null;
+        } catch (Exception error) { return "空目标清理失败：" + error.getMessage(); }
         finally { fileGate.unlock(); }
     }
 }

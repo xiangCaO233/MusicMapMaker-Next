@@ -125,6 +125,12 @@ public final class MainActivity extends SDLActivity {
         return error == null ? null : error.getBytes(StandardCharsets.UTF_8);
     }
 
+    /** 转换失败不能留下像成功包一样的零字节占位文件，完整工作副本保持可恢复。 */
+    public byte[] discardUnwrittenDocument(byte[] name) {
+        String error = documents().discardUnwritten(new String(name, StandardCharsets.UTF_8));
+        return error == null ? null : error.getBytes(StandardCharsets.UTF_8);
+    }
+
     /** 先路由自己的请求码，SDL 原有请求仍交给其基类处理。 */
     @Override protected void onActivityResult(int request, int result, Intent data) {
         // 不拦截 SDL 自己的权限与 Activity 请求，避免破坏上游生命周期。

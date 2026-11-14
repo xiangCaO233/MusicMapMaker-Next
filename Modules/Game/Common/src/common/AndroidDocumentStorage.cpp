@@ -179,13 +179,17 @@ std::optional<std::string> takeDocumentSelection()
     return call.take(result);
 }
 
-/// @brief writer 已成功关闭本地文件后，确认 provider 同样完成写入与内容校验。
-/// @details 普通路径不会扩张为 SAF 权限；工作副本必须具有持久映射。
-/// @warning 该同步调用只服务低频保存事务，禁止用于逐帧状态展示。
-bool publishDocument(const std::filesystem::path& path, std::string& error)
+namespace
+{
+/// @brief 共用文档写入与占位清理的 UTF-8/JNI 错误边界。
+/// @param methodName 由本文件固定的 Activity 方法名，不接受用户输入。
+/// @details 普通路径不会扩张为 SAF 权限，平台方法自行校验持久映射。
+/// @warning 同步调用只服务低频文件事务，禁止用于逐帧状态展示。
+bool callDocumentWrite(const char*                  methodName,
+                       const std::filesystem::path& path, std::string& error)
 {
     ActivityCall call;
-    const auto   method = call.method("publishDocument", "([B)[B");
+    const auto   method = call.method(methodName, "([B)[B");
     // 没有发布能力就拒绝声明保存成功，私有工作副本保留供重试。
     if ( !method ) {
         error = "Android document bridge unavailable";
@@ -211,5 +215,19 @@ bool publishDocument(const std::filesystem::path& path, std::string& error)
         return false;
     }
     return true;
+}
+}  // namespace
+/// @brief writer 关闭后确认授权目标已完整写入，失败保留本地副本。
+/// @warning 保存事务低频调用，包含 provider I/O，不可用于 UI 热路径。
+bool publishDocument(const std::filesystem::path& path, std::string& error)
+{
+    return callDocumentWrite("publishDocument", path, error);
+}
+/// @brief 事务结束时移除本次新建且未写入的 SAF 占位目标。
+/// @warning 低频调用，平台再次核对空内容，不能删除外部已有文档。
+bool discardUnwrittenDocument(const std::filesystem::path& path,
+                              std::string&                 error)
+{
+    return callDocumentWrite("discardUnwrittenDocument", path, error);
 }
 }  // namespace MMM::Common
