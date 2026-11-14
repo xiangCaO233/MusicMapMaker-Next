@@ -13,6 +13,8 @@ Android SDK 根目录；优先使用 ANDROID_HOME，否则采用用户 Android �
 既有 MSYS2 安装目录，只借用宿主工具，最终安卓库必须全部由 NDK 编译。
 .PARAMETER Jobs
 外层原生构建的并发数，不改变用户的桌面构建目录或系统环境变量。
+.PARAMETER PgoInstrument
+默认采集业务计数器；关闭用于对照构建，不与使用样本优化同时启用。
 #>
 [CmdletBinding()]
 param(
@@ -21,7 +23,8 @@ param(
     [string]$JavaHome = $env:MMM_ANDROID_JAVA_HOME,
     [string]$WorkDir = $env:MMM_ANDROID_WORK_DIR,
     [string]$MsysRoot = 'C:/msys64',
-    [ValidateRange(1, 128)][int]$Jobs = 12
+    [ValidateRange(1, 128)][int]$Jobs = 12,
+    [ValidateSet('ON', 'OFF')][string]$PgoInstrument = 'ON'
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -131,7 +134,7 @@ foreach ($androidAbi in $Abi) {
         "-DANDROID_ABI=$androidAbi", '-DANDROID_PLATFORM=android-28', '-DANDROID_STL=c++_shared',
         '-DCMAKE_BUILD_TYPE=RelWithDebInfo', '-DSOURCES_BUILD=ON', '-DBUILD_TESTING=OFF',
         '-DMMM_SYNC_TRANSLATIONS_AND_DEFAULT_SKIN=OFF', '-DMMM_DISABLE_CLANG_LTO=ON',
-        '-DMMM_PGO_INSTRUMENT=OFF', '-DMMM_PGO_USE=OFF', "-DVulkan_INCLUDE_DIR=$androidHeaders/include",
+        "-DMMM_PGO_INSTRUMENT=$PgoInstrument", '-DMMM_PGO_USE=OFF', "-DVulkan_INCLUDE_DIR=$androidHeaders/include",
         # 外部 Make 工程不读取 Ninja 的 --parallel，须显式传入同一并发上限。
         "-DPROCESSOR_COUNT=$Jobs")
     Invoke-AndroidTool $androidCmake @('--build', $androidNative, '--target', 'MusicMapMaker-Next', '--parallel', "$Jobs")

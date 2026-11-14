@@ -7,6 +7,10 @@ on:
         # 调用者传入事件的精确 SHA，运行中不追随分支的新提交。
         required: true
         type: string
+      pgo_instrument:
+        # 与桌面共用人工选择，默认发布采样包；false 必须真正关闭采集。
+        type: boolean
+        default: true
       stage_release:
         # 完整跨平台构建才需要聚合候选；单独下载 APK 不留下运行专属副本。
         # 默认关闭，避免人工安卓构建不断累积未消费的 staging 目录。
@@ -33,6 +37,7 @@ jobs:
       GIT_LFS_SKIP_SMUDGE: "1"
       MMM_SOURCE_REF: ${{ inputs.source_ref }}
       MMM_ANDROID_STAGE_RELEASE: ${{ inputs.stage_release && '1' || '0' }}
+      MMM_ANDROID_PGO_INSTRUMENT: ${{ inputs.pgo_instrument && 'ON' || 'OFF' }}
     # 同步和编译处于同一个 shell，文件锁不会在两个步骤之间提前释放。
     # 失败时后续上传步骤由默认 success 条件跳过，避免交付上次生成的旧包。
     steps:

@@ -36,6 +36,7 @@ jobs:
     with:
       source_ref: ${{ inputs.source_ref }}
       stage_release: true
+      pgo_instrument: ${{ inputs.pgo_instrument }}
   mmm-debian-ci:
     # push 或人工 ci-build 才运行 Linux 宿主上的五套构建。
     # push 与手动构建的条件表达式必须在三个构建 job 中保持一致。

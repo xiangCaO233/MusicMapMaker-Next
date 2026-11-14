@@ -67,6 +67,7 @@ jobs:
     uses: ./.github/workflows/android-build.yaml
     with:
       source_ref: ${{ github.sha }}
+      pgo_instrument: ${{ inputs.pgo_instrument }}
   hotfix:
     # 错误分支要在 preflight 显式失败，不能仅用 if 条件静默跳过。
     # 0.6.2 程序热修复会被拒绝，0.6.3 起才能比较同版本修订号。

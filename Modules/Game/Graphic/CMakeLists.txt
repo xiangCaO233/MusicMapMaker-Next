@@ -176,8 +176,11 @@ if(ANDROID)
   target_sources(Graphic PRIVATE "${MMM_ANDROID_IMGUI_FREETYPE_SOURCE}")
   # 宏只用于这个可选上游实现；启动字体显式选 loader，正式界面继续原策略。
   set_source_files_properties(
-    "${MMM_ANDROID_IMGUI_FREETYPE_SOURCE}" PROPERTIES COMPILE_DEFINITIONS
-                                                      IMGUI_ENABLE_FREETYPE)
+    "${MMM_ANDROID_IMGUI_FREETYPE_SOURCE}"
+    PROPERTIES COMPILE_DEFINITIONS IMGUI_ENABLE_FREETYPE
+               COMPILE_OPTIONS
+               "-fno-profile-instr-generate;-fno-profile-instr-use")
+  # 可选上游文件虽然归入业务 Graphic 目标，也不属于本项目 PGO 覆盖范围。 源文件级禁用排在目标选项之后，确保采集和消费样本都只作用于业务实现。
   target_link_libraries(Graphic PRIVATE freetype::freetype)
   target_sources(Graphic PRIVATE src/sdl/AndroidNativeWindow.cpp
                                  src/sdl/VKContextSDL.cpp)
