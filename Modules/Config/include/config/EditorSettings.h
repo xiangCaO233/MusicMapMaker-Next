@@ -700,6 +700,9 @@ struct EditorSettings {
     /// @brief 是否在主画布中绘制带连线的批注详情卡片。
     bool showAnnotationDetails{ false };
 
+    /// @brief 批注使用 Shift+Enter 提交；默认 Enter 提交，另一组合用于换行。
+    bool annotationSubmitWithShiftEnter{ false };
+
     /// @brief 是否在工具栏图标下方显示简短标签。
     bool showToolLabels{ false };
 

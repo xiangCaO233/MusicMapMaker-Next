@@ -1143,6 +1143,14 @@
     {
       "tab": "Editor",
       "section": "ui.settings.editor.behavior",
+      "label": "ui.settings.editor.annotation_submit_shortcut",
+      "fields": ["ui.settings.editor.annotation_submit_shortcut.enter", "ui.settings.editor.annotation_submit_shortcut.shift_enter"],
+      "keywords": "annotationSubmitWithShiftEnter annotation submit enter shift newline 批注 提交 添加 回车 换行",
+      "aliases": "添加批注快捷键 按Enter键 按Shift+Enter键 Add annotation shortcut Press Enter Press Shift+Enter"
+    },
+    {
+      "tab": "Editor",
+      "section": "ui.settings.editor.behavior",
       "label": "ui.settings.editor.scroll_multiplier",
       "fields": [
         "ui.settings.editor.scroll_multiplier_tooltip"

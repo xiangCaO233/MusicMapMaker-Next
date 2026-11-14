@@ -15,7 +15,9 @@
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/interaction/EditorInteraction.h"
+#include "ui/utils/AnnotationTextInput.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <string_view>
 
 #include <imgui.h>
@@ -249,16 +251,42 @@ public:
         }
         // Markdown 提示描述内容格式，不参与输入校验。
         ImGui::TextDisabled("%s", TR("ui.annotation.markdown_hint").data());
+        const bool keyboardSubmit       = workspaceAllowsHoverFeedback();
+        const bool submitWithShiftEnter = Config::AppConfig::instance()
+                                              .getEditorSettings()
+                                              .annotationSubmitWithShiftEnter;
+        // 提示与正文控件使用同一偏好，纯触屏软键盘仍只通过按钮保存。
+        if ( keyboardSubmit )
+            ImGui::TextDisabled("%s",
+                                TR(submitWithShiftEnter
+                                       ? "ui.annotation.input_submit_shift_hint"
+                                       : "ui.annotation.input_submit_hint")
+                                    .data());
+        // 新打开弹窗直接接收正文输入，随后各帧不抢回用户移动到按钮的焦点。
+        if ( ImGui::IsWindowAppearing() ) ImGui::SetKeyboardFocusHere();
         // 固定数组容量与 BeatmapAnnotation 协议上限一致，并预留结尾空字符。
-        ImGui::InputTextMultiline("##SelectedObjectAnnotationMarkdown",
-                                  m_content.data(),
-                                  m_content.size(),
-                                  ImVec2(-1.0F, 220.0F * context.dpiScale));
+        // 多行输入自身的 bool 表示内容变化，共用控件另行返回确认意图。
+        // 只有当前正文持有焦点时才允许键盘确认，其他控件的回车不能穿透。
+        // 确认组合不会插入结尾换行，另一组合仍作为正文的一部分保存。
+        // 表单内容保留在成员缓冲中，切换设置或焦点不会重新清空草稿。
+        // 作者和权限在输入完成后复核，不能缓存弹窗刚打开时的许可。
+        const bool submitFromKeyboard =
+            annotationTextInput("##SelectedObjectAnnotationMarkdown",
+                                m_content.data(),
+                                m_content.size(),
+                                ImVec2(-1.0F, 220.0F * context.dpiScale),
+                                submitWithShiftEnter,
+                                keyboardSubmit);
 
         // 提交需要权限、有效身份和至少一个非空首字节。
-        ImGui::BeginDisabled(!canAnnotate || creator.empty() ||
-                             m_content.front() == '\0');
-        if ( ::MMM::UI::FeedbackButton(TR("ui.annotation.add").data()) ) {
+        const bool canSubmit =
+            canAnnotate && !creator.empty() && m_content.front() != '\0';
+        ImGui::BeginDisabled(!canSubmit);
+        const bool addClicked =
+            ::MMM::UI::FeedbackButton(TR("ui.annotation.add").data());
+        ImGui::EndDisabled();
+        // 键盘和按钮共用有效性门禁，禁用按钮不能被回车绕过。
+        if ( canSubmit && (addClicked || submitFromKeyboard) ) {
             // 命令按值复制所有字段，离开弹窗与会话锁后不依赖 UI 缓冲区。
             engine.pushCommand(Logic::CmdUpsertBeatmapAnnotation{
                 .targetKind =
@@ -277,7 +305,6 @@ public:
             // 命令成功入队后关闭弹窗，避免重复提交相同批注。
             ImGui::CloseCurrentPopup();
         }
-        ImGui::EndDisabled();
         // 取消按钮与添加按钮同行显示，并始终保持可用。
         ImGui::SameLine();
         renderCancelButton();

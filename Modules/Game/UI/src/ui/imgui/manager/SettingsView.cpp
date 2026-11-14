@@ -309,7 +309,7 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
     case Event::SettingsTab::Editor: {
         // 编辑器页覆盖行为、选择和命中音效三组字段。
         // 动态滑键倍率行始终参与测量，开关切换时窗口尺寸不会跳变。
-        const std::array<const char*, 23> labels{
+        const std::array<const char*, 24> labels{
             TR_CACHE("ui.settings.editor.default_palette").data(),
             TR_CACHE("ui.settings.editor.reverse_scroll").data(),
             TR_CACHE("ui.settings.editor.snap_floor").data(),
@@ -325,6 +325,8 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
                 .data(),
             TR_CACHE("ui.settings.editor.select_pasted_objects").data(),
             TR_CACHE("ui.settings.editor.copy_paste_time_basis").data(),
+            // 提交组合使用本页标签列缓存，长翻译不能挤占单选项可用宽度。
+            TR_CACHE("ui.settings.editor.annotation_submit_shortcut").data(),
             TR_CACHE("ui.settings.editor.timeline_selection_includes_bpm")
                 .data(),
             TR_CACHE("ui.settings.editor.scroll_multiplier").data(),
