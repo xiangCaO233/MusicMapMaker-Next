@@ -29,12 +29,13 @@ env:
   MMM_CI_PGO_OPTION: ${{ inputs.pgo_instrument && '--pgo-instrument' || '--no-pgo-instrument' }}
 jobs:
   mmm-android-ci:
-    # 普通 CI 包含安卓 ARM64 QA；旧版 hotfix 基线未必包含 Android 后端。
+    # 普通 CI 包含安卓 ARM64 发布型 APK；旧版 hotfix 基线未必包含 Android 后端。
     # 热修复继续原有发布集合，不借此修改旧 tag 的平台范围或网站清单。
     if: inputs.hotfix_revision == ''
     uses: ./.github/workflows/android-build.yaml
     with:
       source_ref: ${{ inputs.source_ref }}
+      stage_release: true
   mmm-debian-ci:
     # push 或人工 ci-build 才运行 Linux 宿主上的五套构建。
     # push 与手动构建的条件表达式必须在三个构建 job 中保持一致。
@@ -296,7 +297,15 @@ jobs:
     # Debian 与 macOS 两个生产 job 都成功后才更新最终聚合目录。
     # needs 同时保证依赖顺序和失败传播。
     # 发布聚合 job 必须继续显式 needs 两个平台构建。
-    needs: [mmm-debian-ci, mmm-macos-ci]
+    # 正常构建必须等到 Android 实际交付成功，避免只发布桌面半套候选。
+    # 旧版 hotfix 的 Android job 会跳过，因此明确处理 skipped 依赖。
+    # 取消或平台失败不进入聚合，不能用上一次残留 APK 补齐本次结果。
+    needs: [mmm-debian-ci, mmm-macos-ci, mmm-android-ci]
+    if: >-
+      ${{ always() && !cancelled() &&
+          needs['mmm-debian-ci'].result == 'success' &&
+          needs['mmm-macos-ci'].result == 'success' &&
+          (inputs.hotfix_revision != '' || needs['mmm-android-ci'].result == 'success') }}
     runs-on: [self-hosted, Linux, X64, debian]
 
     defaults:
@@ -356,10 +365,23 @@ jobs:
             exit 1
           fi
 
-          # 成功切换后移除备份和本次跨主机传输根。
-          rm -rf "${previous_dir}" "${transfer_root}"
+          # Android staging 与 macOS 共用运行根，先仅移除已消费的 macOS 部分。
+          # 整个运行根必须等各平台都聚合成功后再清理。
+          rm -rf "${previous_dir}" "${source_dir}"
           # 最终清单记录聚合后的实际文件名与大小。
           find "${target_dir}" -maxdepth 1 -type f -printf '%f\t%s bytes\n' | sort
+
+      - name: ci->Aggregate Android Release
+        # 旧版热修复继续原有平台集合，不给旧 tag 混入新分支的安卓包。
+        # 普通构建必须携带同一提交、同一版本且实际通过校验的 APK。
+        if: inputs.hotfix_revision == ''
+        run: |
+          set -euo pipefail
+          android_version="$(sed -n 's/^set(APPVER "\([^"]*\)").*/\1/p' CMakeLists.txt)"
+          python3 scripts/ci/android-release.py stage \
+            --directory ".git/mmm-ci-transfer/${GITHUB_RUN_ID}/android-arm64" \
+            --destination release/android-arm64 \
+            --source "${MMM_SOURCE_REF}" --version "${android_version}"
 
       - name: Record release provenance
         # 元数据写入发生在原平台测试和聚合成功之后，不提前标记成功。
@@ -386,3 +408,6 @@ jobs:
             mkdir -p "${snapshot}"
             cp -a release/. "${snapshot}/"
           fi
+          # 到此所有候选已验证并记录来源，可删除本次已消费的传输缓存。
+          # 数字 run ID 已由聚合入口检查，不扫描或清理其他运行目录。
+          rm -rf ".git/mmm-ci-transfer/${GITHUB_RUN_ID}"

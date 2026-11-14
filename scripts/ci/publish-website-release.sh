@@ -537,6 +537,7 @@ build_and_deploy_website() {
     local macos_dmg
     local macos_app_zip
     local macos_updater
+    local android_apk=""
     local release_args
 
     # 首选目录允许 CI 覆盖，回退仅用于兼容聚合布局变化。
@@ -574,6 +575,14 @@ build_and_deploy_website() {
     if [[ -n "${linux_exe}" ]]; then
         # Linux 当前为可选下载，仅在发现产物时传给网站构建。
         release_args+=(--linux-exe "${linux_exe}")
+    fi
+    # 新的完整发布携带独立 APK；旧发布目录没有 Android 时保留兼容入口。
+    # 只接受已聚合且与当前源码、版本一致的包，不扫描其他工作树的缓存。
+    if [[ -d "${website_release_dir}/android-arm64" ]]; then
+        android_apk="$(python3 "${source_root}/scripts/ci/android-release.py" verify \
+            --directory "${website_release_dir}/android-arm64" \
+            --source "$(git -C "${source_root}" rev-parse HEAD)" --version "${release_version}")"
+        release_args+=(--android-apk "${android_apk}")
     fi
 
     log "安装网站依赖"
