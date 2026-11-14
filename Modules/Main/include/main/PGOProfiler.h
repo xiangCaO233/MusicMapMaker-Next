@@ -1,7 +1,7 @@
 /// @file PGOProfiler.h
 /// @brief PGO instrumentation 运行时 — profile 写入与异步上传
 ///
-/// 仅在 -DMMM_PGO_INSTRUMENT=ON 构建中生效。
+/// 采集仅在 -DMMM_PGO_INSTRUMENT=ON 构建中生效；所有构建启动时清理旧缓存。
 /// initPGOProfiler() 设置 profile 输出路径，
 /// shutdownPGOProfiler() 在用户允许时强制写出 profile，并按运行时间阈值上传。
 
@@ -53,16 +53,17 @@ struct PGOProfilerShutdownProgress {
     std::string message;
 };
 
-/// @brief 初始化 PGO profile 收集
+/// @brief 初始化 PGO profile 收集，并整理超过 100 MiB 的历史原始采样缓存。
 ///
 /// 设置 profile 文件的输出目录和文件名 (含版本号、时间戳、PID)。
 /// 应在 main() 中尽早调用。
+/// @warning 启动低频路径：缓存整理包含文件枚举、排序和删除，不在帧循环调用。
 void initPGOProfiler();
 
 /// @brief 写出 profile，并在允许时按运行时长阈值同步上传。
 ///
 /// @param uploadAllowed 用户是否允许自动上传 profile。
-/// 调用 __llvm_profile_write_file() 强制写出 .profraw 文件，
+/// 调用 __llvm_profile_dump() 写出并禁止退出重写 .profraw 文件，
 /// 随后通过 HTTP multipart POST 上传到配置的服务器。
 /// 应在 main() 返回前调用；该函数位于退出低频路径，允许执行短时网络上传。
 void shutdownPGOProfiler(bool uploadAllowed);

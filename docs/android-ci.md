@@ -67,3 +67,5 @@ APK 不再内置 `mmm-assets.zip` 或随包摘要，Gradle 显式不引用旧的
 默认使用 `RelWithDebInfo` 采集业务模块计数器；Linux 本地可用 `MMM_ANDROID_PGO_INSTRUMENT=OFF` 关闭，Windows 使用 `-PgoInstrument OFF`。单独 Android 与完整 CI 都继承主入口的 `pgo_instrument` 布尔选择，交付元数据记录实际原生配置。第三方依赖和业务目标中编译的上游 FreeType loader 均不插桩。
 
 采集包沿用应用内上传授权，正常退出时写出私有缓存中的 `.profraw`；用户同意且实际运行达到 600 秒才上传到既有服务。系统强杀或划掉进程不保证执行正常退出上传。`MMM_PGO_USE` 与插桩互斥，采集包保持其为 OFF；使用已采集样本优化应另建构建树，并使用匹配 Android ABI 与 NDK LLVM 的数据。
+
+本地原始采样总量超过 100 MiB 时按修改时间淘汰最旧文件，上传中的当前采样暂时保护，结束后继续清理。规则覆盖旧版本遗留数据，详见 [本地 PGO 缓存](pgo-cache.md)。

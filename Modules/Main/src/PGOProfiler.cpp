@@ -3,6 +3,7 @@
 
 #include "main/PGOProfiler.h"
 #include "log/colorful-log.h"
+#include "main/PGOProfileCache.h"
 #include "mmmversion.h"
 #include "network/CurlHandle.h"
 #include "runtime/AppThreadPool.h"
@@ -19,6 +20,7 @@
 #include <ice/thread/ThreadPool.hpp>
 #include <mutex>
 #include <string>
+#include <system_error>
 #include <utility>
 
 #include <cstdlib>
@@ -32,9 +34,9 @@
 extern "C" {
 /// @brief 在首次写出前覆盖 compiler-rt 的 profile 目标模板。
 void __llvm_profile_set_filename(const char*);
-/// @brief 立即把当前进程累计的计数器写入 profraw 文件。
+/// @brief 写出计数器并标记已完成，禁止 atexit 再次生成已被缓存清理的文件。
 /// @return 写出成功时返回 0。
-int __llvm_profile_write_file(void);
+int __llvm_profile_dump(void);
 }
 #endif
 
@@ -78,6 +80,55 @@ static EarlyPGOInitializer g_earlyPGOInit;
 
 namespace MMM::Main
 {
+namespace
+{
+/// @brief 所有构建启动时整理历史缓存；上传期间可显式保护本次文件。
+/// @param protectedProfile 当前 MIME 可能读取的文件，空值表示不存在活动读取者。
+/// @param forceBelowLimit 延续已触发的超限整理，防止跨上传阶段丢失严格目标。
+/// @return 上轮已超限且尚未严格降低时返回 true，供释放保护后续接。
+/// @details 只管理应用临时目录下的原始采样，不清理合并索引、资源或用户工程。
+/// 调用结果不影响上传成功与否，磁盘错误仅记录为可诊断的缓存状态。
+/// 多个调用不共享可变目录快照，后台任务只接收一个值语义的容量目标。
+/// @warning 启动与退出低频文件操作，不得从上传进度回调或帧循环调用。
+bool cleanupProfileCache(const std::filesystem::path& protectedProfile = {},
+                         bool                         forceBelowLimit  = false)
+{
+    std::error_code error;
+    const auto      root = std::filesystem::temp_directory_path(error);
+    if ( error ) {
+        XWARN("PGO: cannot resolve profile cache: {}", error.message());
+        return false;
+    }
+    // 默认临时根由平台绑定，Android 对应当前包私有 cache，而非共享存储。
+    // 目录不存在不会创建；普通非采集构建也只处理已经遗留的原始采样。
+    const auto result = trimPGOProfileCache(root / "MusicMapMaker",
+                                            protectedProfile,
+                                            PGO_PROFILE_CACHE_MAX_BYTES,
+                                            forceBelowLimit);
+    if ( result.m_removedFiles > 0 ) {
+        // 日志只报告容量和数量，不逐项输出可能带用户路径的旧文件名。
+        XINFO("PGO: removed {} old profile(s); cache {} -> {} bytes",
+              result.m_removedFiles,
+              result.m_bytesBefore,
+              result.m_bytesAfter);
+    }
+    // 是否继续整理包含此前已触发的状态，不能只根据本轮是否仍大于上限决定。
+    // 这使活动样本恰好为 100 MiB 的边界也能在上传结束后严格收敛。
+    const bool stillPending =
+        (forceBelowLimit ||
+         result.m_bytesBefore > PGO_PROFILE_CACHE_MAX_BYTES) &&
+        result.m_bytesAfter >= PGO_PROFILE_CACHE_MAX_BYTES;
+    if ( result.m_errors > 0 || stillPending ) {
+        // 当前上传文件可暂时超过限额，释放保护后会再次执行清理。
+        XWARN(
+            "PGO: profile cache cleanup incomplete ({} issue(s), {} bytes "
+            "remain)",
+            result.m_errors,
+            result.m_bytesAfter);
+    }
+    return stillPending;
+}
+}  // namespace
 
 #ifdef MMM_PGO_INSTRUMENT
 namespace
@@ -385,10 +436,11 @@ bool writeProfileAndShouldUpload(bool uploadAllowed)
         PGOProfilerShutdownStage::Writing, "PGO: writing profile", false);
 
     // compiler-rt 在此把内存中的全部插桩计数器强制刷新到已设置路径。
-    int ret = __llvm_profile_write_file();
+    // dump 同时关闭 LLVM 的退出自动重写，防止清理后的大文件被 atexit 重建。
+    int ret = __llvm_profile_dump();
     if ( ret != 0 ) {
         // compiler-rt 返回码不携带异常，直接转换为可展示的失败阶段。
-        XERROR("PGO: __llvm_profile_write_file() failed (code {})", ret);
+        XERROR("PGO: __llvm_profile_dump() failed (code {})", ret);
         setShutdownStage(PGOProfilerShutdownStage::Failed,
                          "PGO: failed to write profile",
                          true);
@@ -437,17 +489,21 @@ bool writeProfileAndShouldUpload(bool uploadAllowed)
 }
 
 /// @brief 执行已经准备好的 PGO 上传。
+/// @param forceBelowLimit 保留上传前受保护文件阻挡的严格容量目标。
 /// @warning 退出低频路径：包含文件读取和同步网络请求，只能在后台任务中调用。
-void uploadPreparedProfile()
+void uploadPreparedProfile(bool forceBelowLimit)
 {
     // 临近请求时重新取得运行时长，上传元数据覆盖完整应用会话。
     uploadProfile(s_profilePath, elapsedRuntimeSeconds());
+    // 请求及 MIME 文件读取结束后才能允许淘汰当前文件，失败也遵守总容量上限。
+    // 当前上传结果已发布，但后台任务要等缓存整理结束后才真正回收。
+    cleanupProfileCache({}, forceBelowLimit);
 }
 
 }  // namespace
 #endif
 
-// 以下公共入口在非插桩构建中保持无副作用，调用方无需条件编译。
+// 采样入口在非插桩构建中不采集数据，但仍允许启动清理历史缓存。
 
 /// @brief 初始化 compiler-rt profile 路径、计时起点和 curl 全局状态。
 /// @warning 应用启动低频路径：必须早于需要计入样本的主要业务流程调用。
@@ -469,6 +525,8 @@ void initPGOProfiler()
     // curl 全局初始化固定在单线程启动阶段，异步上传只创建 easy 句柄。
     curl_global_init(CURL_GLOBAL_DEFAULT);
 #endif
+    // 先清掉老版本积累；非采集构建也不能让历史缓存永久无人管理。
+    cleanupProfileCache();
 }
 
 /// @brief 同步写出 profile，并按配置和运行时长决定是否上传。
@@ -485,9 +543,14 @@ void shutdownPGOProfiler(bool uploadAllowed)
     }
 
     // 跳过和失败状态已由准备函数发布，只有 true 才能进入网络请求。
-    if ( writeProfileAndShouldUpload(uploadAllowed) ) {
+    const bool shouldUpload = writeProfileAndShouldUpload(uploadAllowed);
+    // 当前文件仅在即将上传时保护；拒绝、短会话和写盘失败可立即整理。
+    const bool strictCleanupPending =
+        cleanupProfileCache(shouldUpload ? std::filesystem::path(s_profilePath)
+                                         : std::filesystem::path{});
+    if ( shouldUpload ) {
         // 同步接口保留给没有可用图形退出窗口的调用路径。
-        uploadPreparedProfile();
+        uploadPreparedProfile(strictCleanupPending);
     }
 #else
     // 非插桩构建保留相同 API，显式消费参数避免平台编译警告。
@@ -504,7 +567,11 @@ bool beginShutdownPGOProfilerAsync(bool uploadAllowed)
 #ifdef MMM_PGO_INSTRUMENT
     // false 可能表示已有流程或当前样本无需上传，进度快照提供具体原因。
     if ( !claimShutdownStart(uploadAllowed) ) return false;
-    if ( !writeProfileAndShouldUpload(uploadAllowed) ) return false;
+    const bool shouldUpload = writeProfileAndShouldUpload(uploadAllowed);
+    const bool strictCleanupPending =
+        cleanupProfileCache(shouldUpload ? std::filesystem::path(s_profilePath)
+                                         : std::filesystem::path{});
+    if ( !shouldUpload ) return false;
 
     {
         // 在任务投递前发布 Uploading，避免退出 UI 短暂回退到 Writing。
@@ -521,12 +588,15 @@ bool beginShutdownPGOProfilerAsync(bool uploadAllowed)
         setShutdownStage(PGOProfilerShutdownStage::Failed,
                          "PGO: runtime thread pool is not initialized",
                          true);
+        cleanupProfileCache({}, strictCleanupPending);
         return false;
     }
     // future 保留任务完成句柄，最终退出可在必要时等待网络清理结束。
     s_shutdownFuture =
-        // 任务不捕获局部变量，只读取退出阶段保持有效的静态 profile 状态。
-        appThreadPool->enqueue([]() { uploadPreparedProfile(); });
+        // 只复制容量目标，不跨线程引用栈变量；采样路径在退出阶段保持有效。
+        appThreadPool->enqueue([strictCleanupPending]() {
+            uploadPreparedProfile(strictCleanupPending);
+        });
     return true;
 #else
     // 普通构建没有 compiler-rt 数据，始终表示无需展示异步上传界面。
