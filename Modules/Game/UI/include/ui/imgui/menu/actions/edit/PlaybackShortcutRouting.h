@@ -25,16 +25,19 @@ inline void consumePlaybackShortcutNavigationActivation(ImGuiContext* context)
 /// @param isDrawingBrush 主画布是否正在使用画笔绘制。
 /// @param isTimelineTimingDragging 时间线是否正在通过抓取工具拖动 Timing。
 /// @param isTimelineMarqueeSelecting 时间线是否正在框选 Timing。
+/// @param modifierFreeDrawing 当前方案是否无需 Shift 延伸画笔。
+/// @warning UI 每帧固定布尔判断，不访问会话或修改真实键盘状态。
 /// @return 当前活动交互允许快捷键切换播放时返回 true。
 constexpr bool shouldAllowPlaybackToggleWhileItemActive(
     bool shiftPressed, bool isMainCanvasMarqueeSelecting, bool isDraggingNote,
     bool isDrawingBrush, bool isTimelineTimingDragging,
-    bool isTimelineMarqueeSelecting)
+    bool isTimelineMarqueeSelecting, bool modifierFreeDrawing = false)
 {
     return (!shiftPressed &&
             (isMainCanvasMarqueeSelecting || isDraggingNote ||
              isTimelineTimingDragging || isTimelineMarqueeSelecting)) ||
-           (shiftPressed && isDrawingBrush);
+           // 无修饰键画笔与经典 Shift 画笔共享播放许可，不放宽普通控件门禁。
+           ((shiftPressed || modifierFreeDrawing) && isDrawingBrush);
 }
 
 }  // namespace MMM::UI

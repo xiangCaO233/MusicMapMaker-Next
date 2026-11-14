@@ -111,6 +111,9 @@ public:
     /// @brief 解释画笔延伸意图，独立于选择、滚动等操作的 Shift 语义。
     /// @warning 每帧常量查询；起笔、拖动和滚动更新必须使用相同解释。
     virtual bool extendBrush(Surface surface, bool shift) const;
+    /// @brief 无修饰键绘制是否要求拖到不同吸附线后才能生成持续段。
+    /// @warning 仅起笔查询并锁存，连续绘制不跨线程查询当前操作方案。
+    virtual bool requiresSnappedHoldDrag(Surface) const { return false; }
     /// @brief 是否以固定轨道的单键／长条策略起笔，不续接已有折线。
     /// @warning 每次起笔只查询方案能力；逻辑工具锁存结果，不模拟修饰键。
     virtual bool noteHoldBrush(Surface) const { return false; }
@@ -151,7 +154,7 @@ public:
     virtual std::optional<CameraPointerOptions> cameraPointerOptions() const;
     /// @brief 只更新后续相机手势的意图，不修改物理键盘状态。
     virtual void setCameraPointerOptions(CameraPointerOptions options);
-    /// @brief 显式时间滚动加速；经典返回空，继续动态读取真实 Shift。
+    /// @brief 附加时间滚动加速开关；所有方案仍可用真实 Shift 临时加速。
     /// @warning 每帧只读取方案标量，不改变分拍、缩放或物理修饰键。
     virtual std::optional<bool> acceleratedScrolling() const;
     /// @brief 设置纯鼠标快速滚动意图，切出方案时清除。

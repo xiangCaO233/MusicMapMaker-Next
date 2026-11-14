@@ -108,6 +108,12 @@ class MouseOnlyProfile final : public IEditorInteractionProfile
 public:
     /// @brief 稳定身份供设置页保存，经典方案仍为旧配置默认值。
     std::string_view id() const override { return "mouse-only"; }
+    /// @brief 纯鼠标不靠 Shift 表达绘制意图，必须跨过有效分拍线才升级为长条。
+    /// @warning 起笔常量查询；辅助表面继续采用自身的绘制规则。
+    bool requiresSnappedHoldDrag(Surface surface) const override
+    {
+        return surface == Surface::MainCanvas;
+    }
     /// @brief 与经典方案并列显示，用户可在交互设置中切换。
     std::string_view name() const override
     {
@@ -354,12 +360,13 @@ std::optional<bool> IEditorInteractionProfile::acceleratedScrolling() const
 }
 /// @brief 经典方案忽略纯鼠标开关，不引入全局虚拟修饰键。
 void IEditorInteractionProfile::setAcceleratedScrolling(bool) {}
-/// @brief 在时间滚动入口解析专用意图，避免加速泄漏到其它 Shift 操作。
+/// @brief 时间滚动合并显式加速开关与真实 Shift，不把常速开关当作键盘禁用。
 /// @warning 每帧固定次数的方案查询，不访问会话或改变输入事件队列。
 bool acceleratedScroll()
 {
     const auto accelerated = activeProfile().acceleratedScrolling();
-    return accelerated ? *accelerated : modifier(Modifier::Shift);
+    // 无键盘开关提供额外入口；按住 Shift 仍可临时加速，松开后回到开关值。
+    return accelerated.value_or(false) || modifier(Modifier::Shift);
 }
 /// @brief 经典不保存纯鼠标导航状态，空值保证仍按物理修饰键解释。
 /// @warning 每帧只返回空标量，不访问窗口或分配资源。

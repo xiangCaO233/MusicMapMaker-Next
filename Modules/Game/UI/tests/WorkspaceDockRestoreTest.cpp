@@ -1,6 +1,10 @@
 #include "ui/imgui/WorkspaceDockRestore.h"
+#include "common/LogicCommands.h"
 #include "config/EditorConfig.h"
 #include "config/EditorSettings.h"
+#include "config/ShortcutConfig.h"
+#include "event/core/EventBus.h"
+#include "event/logic/LogicCommandEvent.h"
 #include "ui/IEditorApplicationService.h"
 #include "ui/UIManager.h"
 
@@ -15,6 +19,9 @@
 #include "ui/imgui/ToolbarDockLayout.h"
 #include "ui/imgui/ToolbarPopupLayout.h"
 #include "ui/imgui/manager/ToolbarView.h"
+#include "ui/imgui/menu/MainMenuTypes.h"
+#include "ui/imgui/menu/actions/MainMenuEditActions.h"
+#include "ui/imgui/status/IStatusMessageSink.h"
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/CLayWrapperCore.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
@@ -23,6 +30,7 @@
 #include <cfloat>
 #include <cmath>
 #include <memory>
+#include <variant>
 
 #include <string>
 #include <utility>
@@ -1337,7 +1345,7 @@ bool checkToolbarPopupPlacement()
 namespace
 {
 /// @brief 记录工具栏提交的配置，避免测试启动音频、会话或后台逻辑线程。
-/// @details 仅配置接口参与此测试，其余应用操作均保持无项目空闲状态。
+/// @details 配置和播放路由各自显式设置标量，其他应用操作保持无项目空闲状态。
 /// 测试使用应用服务边界捕获提交，不替换 UI 控件实现。
 /// 返回配置保留真实接口的值语义，能发现只修改临时副本的错误。
 /// 不创建会话，同时验证无打开谱面时的全局缩放入口。
@@ -1348,6 +1356,8 @@ public:
     MMM::Config::EditorConfig m_config;
     /// @brief 观察提交次数，稳定绘制不应重复提交配置。
     int m_updates{};
+    /// @brief 播放快捷键场景只发布交互标量，不启动实际音频或逻辑线程。
+    bool m_drawing{}, m_playing{};
     /// @brief 工具状态由测试服务发布，不直接操纵工具栏私有成员。
     MMM::Logic::EditTool m_tool{ MMM::Logic::EditTool::Move };
     /// @brief 测试不加载项目。
@@ -1376,14 +1386,14 @@ public:
         m_config = config;
         ++m_updates;
     }
-    /// @brief 空闲测试不播放。
-    bool isPlaybackPlaying() const override { return false; }
+    /// @brief 使用最近一次播放命令的目标，验证连续两次空格分别播放与暂停。
+    bool isPlaybackPlaying() const override { return m_playing; }
     /// @brief 没有会话框选。
     bool isSelectingMarquee() const override { return false; }
     /// @brief 没有物件拖动。
     bool isDraggingNote() const override { return false; }
-    /// @brief 没有画笔手势。
-    bool isDrawingBrush() const override { return false; }
+    /// @brief 普通工具栏测试默认空闲，快捷键测试显式持有画笔。
+    bool isDrawingBrush() const override { return m_drawing; }
     /// @brief 测试不保存谱面。
     void requestAutoSave(MMM::UI::EditorAutoSaveReason) override {}
     /// @brief 无渲染线程消费者。
@@ -1394,6 +1404,132 @@ public:
         return false;
     }
 };
+
+/// @brief 用实际按住的画布命中区及真实空格事件验证绘制中的播放／暂停。
+/// @details 应用服务只提供状态，实际判断及命令派发均使用正式播放动作。
+/// 不设置 ActiveId、不直接调用 execute，也不初始化音频输出。
+/// @return 纯鼠标两种 Shift 状态都能切换，经典仍保留 Shift 绘制规则。
+bool checkDrawingPlaybackShortcut()
+{
+    /// @brief 播放动作无需显示状态消息，测试接收端不创建窗口或定时器。
+    struct PlaybackSink final : MMM::UI::IStatusMessageSink {
+        /// @brief 保留动作接口契约，忽略与键盘路由无关的可见反馈。
+        void showStatusMessage(std::string, float) override {}
+    } sink;
+    // 独立测试显式使用默认空格，用户重绑定不应改变本场景的输入含义。
+    // 退出时恢复绑定与方案，避免影响同进程后续 UI 回归。
+    const std::string savedProfile(MMM::UI::Interaction::activeProfile().id());
+    auto&             binding      = MMM::Config::AppConfig::instance()
+                                         .getEditorSettings()
+                                         .shortcutConfig.togglePlayback;
+    const auto        savedBinding = binding;
+    binding = MMM::Config::ShortcutConfig{}.togglePlayback;
+    // 两次按键分别验证播放和暂停，不能以一个被消费但无命令的返回值通过。
+    // 所有组合累积结果，最后成功的方案不得覆盖先前失败的经典对照。
+    bool passed = true;
+    for ( const bool pure : { false, true } ) {
+        // 每种方案使用独立上下文，鼠标捕获和键盘历史不能跨场景复用。
+        MMM::UI::Interaction::synchronizeProfile(
+            pure ? "mouse-only" : "classic-desktop", true);
+        MMM::UI::Interaction::synchronizeProfile(
+            pure ? "mouse-only" : "classic-desktop", true);
+        createContext();
+        auto& io = ImGui::GetIO();
+        // 输入样本按测试帧显式提交，不靠等待或自动拆分事件猜测按键时序。
+        io.ConfigInputTrickleEventQueue = false;
+        auto& clay                      = MMM::UI::CLayWrapperCore::instance();
+        auto  clayContext               = clay.createWindowContext();
+        clay.makeCurrent(clayContext.context);
+        // Clay 上下文必须早于管理器构造，独立场景不能借用上个窗口的 Arena。
+        // 管理器和动作先于 ImGui 上下文释放，防止观察指针跨生命周期使用。
+        {
+            auto  owner       = std::make_unique<ZoomTestService>();
+            auto& service     = *owner;
+            service.m_drawing = true;
+            // 服务由管理器持有，测试借用引用只用于同步读回公开状态。
+            // 不调用音频播放接口，避免回归测试改变开发机的声音输出。
+            MMM::UI::UIManager manager;
+            manager.setEditorApplicationService(std::move(owner));
+            auto action = MMM::UI::createTogglePlaybackAction();
+            MMM::UI::MainMenuContext context{ sink, &manager };
+            int                      commands = 0;
+            auto&                    bus = MMM::Event::EventBus::instance();
+            // 只观察正式播放命令；不能把 handleShortcut
+            // 返回真当作已经切换播放。
+            // 回写测试服务模拟下一帧已发布的权威状态，不直接修改动作内部成员。
+            const auto subscription =
+                bus.subscribe<MMM::Event::LogicCommandEvent>(
+                    [&](const auto& event) {
+                        if ( const auto* command =
+                                 std::get_if<MMM::Logic::CmdSetPlayState>(
+                                     &event.command) ) {
+                            service.m_playing = command->isPlaying;
+                            // 计数检测一次空格重复发送命令，最终布尔值不足以发现双触发。
+                            ++commands;
+                        }
+                    });
+            // InvisibleButton
+            // 仅作无外观的画布命中区，活跃状态来自真实左键按住。
+            // 入口与绘图画布相同，不借用文本框或伪造 ImGui 的私有导航标志。
+            const auto draw = [&](bool press) {
+                // 主键状态必须在 NewFrame
+                // 前入队，查询发生在相同的已解析输入帧。
+                io.AddKeyEvent(ImGuiKey_Space, press);
+                ImGui::NewFrame();
+                ImGui::SetNextWindowPos({ 0, 0 });
+                ImGui::SetNextWindowSize({ 400, 300 });
+                ImGui::Begin("Playback###Canvas_PlaybackProbe");
+                // 稳定画布 ID 使 BPM
+                // 焦点识别走真实主画布路径，不误落到工具路由。
+                ImGui::InvisibleButton("CanvasHitZone", { 300, 200 });
+                if ( press ) passed &= ImGui::IsAnyItemActive();
+                const bool handled = action->handleShortcut(context);
+                // 窗口保持打开直到动作处理完，焦点查询不能借用已结束的窗口。
+                ImGui::End();
+                ImGui::Render();
+                return handled;
+            };
+            io.AddMousePosEvent(100, 100);
+            // 先提交两帧窗口和悬浮，再按下左键，确保命中区已有有效几何。
+            // 只靠服务报告绘制无法复现故障，ImGui 项目也必须真实处于活跃态。
+            draw(false);
+            draw(false);
+            io.AddMouseButtonEvent(0, true);
+            draw(false);
+            for ( const bool shift : { false, true } ) {
+                // 两种物理 Shift 状态覆盖纯鼠标原始空格和既有 Shift 兼容路径。
+                io.AddKeyEvent(ImGuiMod_Shift, shift);
+                draw(false);
+                // 未按 Shift 的经典画笔仍应被拦截，纯鼠标无需额外修饰键。
+                // 两次空格之间释放主键但保持鼠标按住，验证不是仅首播可用。
+                const int  before  = commands;
+                const bool allowed = pure || shift;
+                // 使用 &= 保留所有断言的执行，早期失败不能跳过后续输入收尾。
+                passed &= draw(true) == allowed;
+                passed &= service.m_playing == allowed;
+                draw(false);
+                passed &= draw(true) == allowed;
+                passed &= !service.m_playing && service.m_drawing;
+                passed &= commands == before + (allowed ? 2 : 0);
+                // 主键释放独立成帧，第二次空格必须是新的边沿而非按键自动重复。
+                draw(false);
+            }
+            // 普通活动控件不能借方案能力获得播放许可；取消画笔后仍按住命中区。
+            service.m_drawing = false;
+            passed &= !draw(true);
+            io.AddMouseButtonEvent(0, false);
+            draw(false);
+            // 先解除订阅再回收服务，命令观察者不能捕获已经析构的局部引用。
+            bus.unsubscribe<MMM::Event::LogicCommandEvent>(subscription);
+        }
+        ImGui::DestroyContext();
+    }
+    binding = savedBinding;
+    // 恢复同样经过安全帧协议，测试不直接替换全局方案注册表的活动指针。
+    MMM::UI::Interaction::synchronizeProfile(savedProfile, true);
+    MMM::UI::Interaction::synchronizeProfile(savedProfile, true);
+    return passed;
+}
 
 /// @brief 用无修饰键鼠标点击验证缩放入口、增减与默认值恢复。
 /// @return 真实工具栏通过应用端口提交倍率且空闲帧不写配置时为真。
@@ -1874,7 +2010,8 @@ int main()
                    checkToolbarTransition(true) && checkSharedToolbarNode() &&
                    checkToolbarResize() && checkToolbarEdgeDocking() &&
                    checkToolbarAfterManager() && checkToolbarPopupPlacement() &&
-                   checkMouseOnlyTimelineZoom() && checkMouseDrawingOptions()
+                   checkMouseOnlyTimelineZoom() && checkMouseDrawingOptions() &&
+                   checkDrawingPlaybackShortcut()
                ? 0
                : 1;
 }
