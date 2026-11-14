@@ -10,6 +10,8 @@
 #include "event/input/translators/UniversalCodepoint.h"
 #include "event/ui/GLFWNativeEvent.h"
 #include "graphic/glfw/window/adapters/IWindowFrameAdapter.h"
+#include "graphic/window/InputDevices.h"
+#include "graphic/window/WindowPlatform.h"
 #include "log/colorful-log.h"
 #include <GLFW/glfw3.h>
 #include <algorithm>
@@ -1967,4 +1969,29 @@ void NativeWindow::ToggleFullscreen()
     refreshWindowFrameShape();
 }
 
+}  // namespace MMM::Graphic
+
+namespace MMM::Graphic
+{
+/// @brief 桌面保留完整指针设置，移动端设备策略不影响 GLFW 外壳。
+/// @warning 每帧返回固定能力，不枚举设备、取得业务锁或执行资源操作。
+bool hasExternalMouse()
+{
+    // 桌面继续提供完整指针设置，不因本轮移动端适配改变既有入口。
+    return true;
+}
+
+/// @brief 读取当前平台主窗口的关闭状态。
+/// @warning UI 每帧只读取平台标量，不等待逻辑线程。
+bool platformWindowShouldClose(void* handle)
+{
+    return handle && glfwWindowShouldClose(static_cast<GLFWwindow*>(handle));
+}
+/// @brief 保留桌面的关闭确认顺序，允许未保存工程撤销平台关闭标志。
+void setPlatformWindowShouldClose(void* handle, bool requested)
+{
+    if ( handle )
+        glfwSetWindowShouldClose(static_cast<GLFWwindow*>(handle),
+                                 requested ? GLFW_TRUE : GLFW_FALSE);
+}
 }  // namespace MMM::Graphic

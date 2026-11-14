@@ -18,6 +18,7 @@
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -107,7 +108,18 @@ AudioWaveformView::AudioWaveformView(const std::string& name) : IUIView(name)
 }
 
 /// @brief 销毁波形视图及其离线 PCM 工作缓冲。
-AudioWaveformView::~AudioWaveformView() = default;
+// 图表销毁前释放自己的最后有效定位，不能让音频永久处于 Scrub。
+// 宿主仍拥有会话和音频资源，这里不停止其他控制器或清空历史。
+AudioWaveformView::~AudioWaveformView()
+{
+    m_touchNavigation.suspend();
+}
+/// @brief 显式关闭不再等待下一帧图表提交来结束 Scrub。
+void AudioWaveformView::setOpen(bool open)
+{
+    if ( !open ) m_touchNavigation.suspend();
+    IUIView::setOpen(open);
+}
 
 /// @brief 更新并绘制双声道波形窗口。
 /// @param sourceManager 非拥有 UI 管理器，用于查询工程切换状态。
@@ -128,13 +140,20 @@ void AudioWaveformView::update(UIManager* sourceManager)
     // 首次打开使用可读默认尺寸，后续尊重用户停靠和缩放布局。
     ImGui::SetNextWindowSize(ImVec2(600, 400), ImGuiCond_FirstUseEver);
 
+
     // `###` 后缀固定内部窗口 ID，动态 m_name 不破坏停靠状态。
     std::string windowTitle = m_name + "###AudioWaveformViewGlobal";
     // LayoutContext 管理窗口 Begin/End 与关闭状态。
     LayoutContext layoutContext(
         *this, windowTitle, true, ImGuiWindowFlags_None, &m_isOpen);
+    if ( !m_isOpen ) {
+        m_touchNavigation.suspend();
+        return;
+    }
+
 
     if ( sourceManager && sourceManager->isProjectTransitionInProgress() ) {
+        m_touchNavigation.suspend();
         // 工程切换时不读取可能失效的音轨或 Session，只显示占位提示。
         Utils::renderProjectTransitionPlaceholder();
         return;
@@ -145,12 +164,14 @@ void AudioWaveformView::update(UIManager* sourceManager)
     auto  track        = audioManager.getBGMTrack();
 
     if ( !track ) {
+        m_touchNavigation.suspend();
         // 无主音轨时保持窗口可见并给出加载提示。
         ImGui::Text("%s", TR("ui.audio_manager.initial_hint").data());
         return;
     }
 
     if ( m_isCalculating ) {
+        m_touchNavigation.suspend();
         // 离线计算期间使用中心模态阻止重复触发重算或波形交互。
         ::MMM::UI::FeedbackOpenPopup("ProcessingWaveform");
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
@@ -198,6 +219,13 @@ void AudioWaveformView::update(UIManager* sourceManager)
         }
     }
 
+    // 原始触控图表保持本地连续浏览中心，经典方案仍跟随既有播放快照。
+    const bool touchInput = Interaction::activeProfile().touchGestures();
+    // 显示中心只在触控活动浏览期间由本地导航维护，平时继续跟随快照。
+    // 本地中心不改波形专用偏移，后者仍只控制采样缓存的时间对齐。
+    // 两个声道以相同中心采样，连续输入不能让左右图表使用不同基线。
+    visualTime = m_touchNavigation.begin(
+        visualTime, snapshot ? snapshot->beatmapInstanceId : 0);
     // 控制条宽度由当前主题字体、padding 与 item spacing 计算。
     ImGuiStyle& style  = ImGui::GetStyle();
     float       frameH = ImGui::GetFrameHeight();
@@ -332,6 +360,11 @@ void AudioWaveformView::update(UIManager* sourceManager)
     syncEQ();
     updateEnvelopes(visualTime, totalTime, speed, waveformVisualOffset);
 
+    // 两个声道和本帧包络必须使用同一旧半窗；输入的新缩放在下一帧统一绘制。
+    // 本帧包络已经按当前半窗提取，不能在下声道单独采用新倍率。
+    // 输入发生在绘制期间，新半窗与新包络在下一次常规 UI 帧一起使用。
+    // 这不是等待同步，线程继续正常推进，也不增加固定时间延迟。
+    const float drawZoom = m_zoom;
     // 剩余高度在左右声道两个纵向 Plot 之间平均分配。
     float totalAvailH = ImGui::GetContentRegionAvail().y;
     float channelH    = totalAvailH * 0.5f - ImGui::GetStyle().ItemSpacing.y;
@@ -346,8 +379,8 @@ void AudioWaveformView::update(UIManager* sourceManager)
                              const double* maxEnv,
                              const char*   label) {
         // m_zoom 表示播放头左右各自的时间跨度。
-        double viewStart = visualTime - m_zoom;
-        double viewEnd   = visualTime + m_zoom;
+        double viewStart = visualTime - drawZoom;
+        double viewEnd   = visualTime + drawZoom;
 
         // 上一帧活动状态让拖拽越过 Plot 悬浮边界时仍保持预览。
         static bool s_lastActive[2] = { false, false };
@@ -357,7 +390,8 @@ void AudioWaveformView::update(UIManager* sourceManager)
         if ( ImPlot::BeginPlot(id,
                                ImVec2(-1, channelH),
                                ImPlotFlags_NoMenus | ImPlotFlags_NoBoxSelect |
-                                   ImPlotFlags_NoMouseText) ) {
+                                   ImPlotFlags_NoMouseText |
+                                   (touchInput ? ImPlotFlags_NoInputs : 0)) ) {
 
             // X 轴使用当前视觉时间窗，Y 轴固定到标准 PCM 振幅范围附近。
             ImPlot::SetupAxis(ImAxis_X1, nullptr, ImPlotAxisFlags_None);
@@ -439,10 +473,35 @@ void AudioWaveformView::update(UIManager* sourceManager)
                 }
             }
 
+            if ( touchInput ) {
+                const ImVec2 min     = ImPlot::GetPlotPos(),
+                             size    = ImPlot::GetPlotSize();
+                const bool   blocked = ImGui::IsPopupOpen(
+                    nullptr,
+                    ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+                // 命中仅限实际 Plot 内容，坐标轴和顶部滑块不能成为定位起点。
+                // 只有原始触屏分支消费该输入，后面的经典鼠标路径必须互斥。
+                // 切谱时携带实例约束，排队的旧定位不会落到新的活动谱面。
+                // 这里只更改图表半窗，不触发整段波形重算或全局时间线倍率更新。
+                m_touchNavigation.update(
+                    { min,
+                      { min.x + size.x, min.y + size.y },
+                      visualTime,
+                      totalTime,
+                      globalVisualOffset,
+                      snapshot ? snapshot->beatmapInstanceId : 0,
+                      chanIdx,
+                      ImGui::IsWindowHovered(
+                          ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                          !blocked,
+                      snapshot && snapshot->hasBeatmap && !blocked },
+                    m_zoom);
+            }
             // 默认悬浮时间回退视图起点，只有 hover/drag 时读取鼠标 Plot 坐标。
             double currentHoverVisualTime = viewStart;
             double currentHoverAudioTime  = viewStart - globalVisualOffset;
-            if ( ImPlot::IsPlotHovered() || s_lastActive[chanIdx] ) {
+            if ( !touchInput &&
+                 (ImPlot::IsPlotHovered() || s_lastActive[chanIdx]) ) {
                 // ImPlot 返回 X 轴视觉时间，再扣通用偏移得到实际 Seek
                 // 音频时间。
                 ImPlotPoint mousePlotPos = ImPlot::GetPlotMousePos();
@@ -452,11 +511,12 @@ void AudioWaveformView::update(UIManager* sourceManager)
             }
 
             // 悬浮绿色竖线跟随指针；拖拽时额外预览平移后的主画布视野框。
-            if ( ImPlot::IsPlotHovered() || s_lastActive[chanIdx] ) {
+            if ( !touchInput &&
+                 (ImPlot::IsPlotHovered() || s_lastActive[chanIdx]) ) {
                 // Plot 屏幕矩形用于后续鼠标坐标归一化命令。
-                ImVec2 plotMin         = ImPlot::GetPlotPos();
-                ImVec2 plotMax         = { plotMin.x + ImPlot::GetPlotSize().x,
-                                           plotMin.y + ImPlot::GetPlotSize().y };
+                ImVec2 plotMin = ImPlot::GetPlotPos();
+                ImVec2 plotMax = { plotMin.x + ImPlot::GetPlotSize().x,
+                                   plotMin.y + ImPlot::GetPlotSize().y };
                 double hoverVisualTime = currentHoverVisualTime;
                 double hoverAudioTime  = currentHoverAudioTime;
 
@@ -512,9 +572,15 @@ void AudioWaveformView::update(UIManager* sourceManager)
             ImVec2 plotMin = ImGui::GetItemRectMin();
             ImVec2 plotMax = ImGui::GetItemRectMax();
             // 活动状态保存到下一帧，维持拖拽越界时的预览连续性。
-            s_lastActive[chanIdx] = ImGui::IsItemActive();
+            s_lastActive[chanIdx] = !touchInput && ImGui::IsItemActive();
+            // 登记的是当前 Plot 的命中区，横向意图交给浏览、纵向意图留给父页。
+            // 新解释器只读原始触点，不篡改全局鼠标回放和相邻滑块的 ActiveID。
+            // 两指操作不采用原生 ImPlot
+            // 拖拽，以免同时移动坐标轴或提交第二次定位。
+            if ( touchInput ) workspaceRegisterHorizontalDragItem();
 
-            if ( ImGui::IsItemHovered() || ImGui::IsItemActive() ) {
+            if ( !touchInput &&
+                 (ImGui::IsItemHovered() || ImGui::IsItemActive()) ) {
                 // Tooltip 显示视觉时间；Seek 命令使用扣除全局偏移后的音频时间。
                 // 即使指针离开 Plot，活动 Item
                 // 仍使用上一阶段取得的坐标维持连续拖拽。
@@ -760,8 +826,8 @@ void AudioWaveformView::updateEnvelopes(double visualTime, double totalTime,
     for ( int i = 0; i < m_samplePoints; ++i ) {
         // 固定采样点均匀覆盖整个可见时间窗。
         // 分母使用点数而非点数减一，保持历史右端开区间采样语义。
-        double t = viewStart + (static_cast<double>(i) / m_samplePoints) *
-                                   (viewEnd - viewStart);
+        double t   = viewStart + (static_cast<double>(i) / m_samplePoints) *
+                                     (viewEnd - viewStart);
         m_times[i] = t;
 
         // 缓存索引属于音频时间，需要扣除波形视觉偏移。

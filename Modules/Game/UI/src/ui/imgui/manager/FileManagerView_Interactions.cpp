@@ -13,12 +13,14 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/manager/FileManagerView.h"
+#include "ui/imgui/menu/utils/MenuUtil.h"
 // 子视图在此读取单帧布局区域，不拥有父窗口持久上下文。
 #include "ui/layout/LayoutContext.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughService.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <ImGuiFileDialog.h>
 #include <nfd.h>
 
@@ -265,13 +267,16 @@ void FileManagerView::renderEmptyProjectView(LayoutContext& layoutContext)
                 fmt::format("RecentItem_{}", i),
                 Sizing::Grow(),
                 Sizing::Fixed(metrics.recentItemHeight),
-                [path, i](Clay_BoundingBox r, bool isHovered) {
+                [this, path, i](Clay_BoundingBox r, bool isHovered) {
                     // isHovered 不直接使用，选择项通过 ImGui 当前 Item
                     // 状态判断。 路径按值捕获，配置数组变化不会使回调引用失效。
                     std::filesystem::path p = Config::utf8ToPath(path);
                     // 优先显示末级目录名，无法取得时回退完整缓存文本。
                     std::string name = Config::pathToUtf8(p.filename());
                     if ( name.empty() ) name = path;
+                    // 移动最近项目与活动文件树使用同一授权来源，不展示私有哈希。
+                    const bool touch = !workspaceAllowsHoverFeedback();
+                    if ( touch ) name = recentPathDisplay(path).m_name;
                     // ImGui ID 使用索引而非可见名称，支持同名项目。
                     const std::string itemId =
                         fmt::format("RecentProject_{}", i);
@@ -290,7 +295,7 @@ void FileManagerView::renderEmptyProjectView(LayoutContext& layoutContext)
                                 Event::EventBus::instance().publish(ev);
                             }
                         },
-                        path);
+                        touch ? std::string{} : path);
                     if ( ImGui::IsItemHovered() ) {
                         // 手形指针提示整行最近项目可点击。
                         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
@@ -326,6 +331,14 @@ void FileManagerView::renderEmptyProjectView(LayoutContext& layoutContext)
 /// @warning 用户点击低频路径：原生模式会阻塞 UI 线程直到关闭系统对话框。
 void FileManagerView::openFolderPicker()
 {
+    // Android 必须经过系统授权，复用菜单异步入口，不在当前 UI 帧等待 provider。
+    // Android 文件夹必须走 SAF 目录授权，不能把共享存储路径当作可访问根。
+    // 工程选择回调复用菜单入口，避免两套导入行为产生不同相对资源路径。
+    // Unknown 来源不要求仍处于当前文件管理器视图，系统返回后也可安全加载。
+    if ( NativeFileDialog::requiresSystemPicker() ) {
+        MenuUtil::openProjectFolderPicker(Event::ProjectOpenOrigin::Unknown);
+        return;
+    }
     // 文件选择器样式和历史目录来自软件级编辑器设置。
     auto& config = Config::AppConfig::instance().getEditorSettings();
     if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {

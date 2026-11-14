@@ -185,6 +185,13 @@ include("test-suites")
 
 # 第三方依赖默认使用预编译库；需要重建依赖时显式开启。 OFF 模式缺失任何预编译内容都应由 Find 模块报错，不能自动回退源码。
 option(SOURCES_BUILD "Build Deps from sources." OFF)
+# Android 尚未发布独立 ABI 预编译包，必须显式选择源码构建。 在依赖入口前拒绝缺包模式，避免把宿主 Linux 库误识别为 Android 产物。
+if(ANDROID AND NOT SOURCES_BUILD)
+  message(
+    FATAL_ERROR
+      "Android requires explicit SOURCES_BUILD=ON; no Android prebuilts are available."
+  )
+endif()
 
 # Windows 原生文件对话框默认会用最近访问目录覆盖 defaultPath； 另存为需要强制打开当前项目目录。 该缓存值传递给 NFD
 # 子项目，确保保存对话框尊重业务提供的目录。

@@ -67,6 +67,10 @@ AnnotationTableDataRefreshResult AnnotationTableData::refresh()
         m_beatmapInstanceId = beatmapInstanceId;
     }
 
+    // 许可在原有刷新锁内采样，不为每行控件增加跨线程查询。
+    m_writable = !context.isPlaying &&
+                 !activeEntry->session->isCollaborationOfflineReadOnly();
+
     // 脏标记表示逻辑侧正在等待重建批注缓存。此时保留旧行并返回 Pending，
     // 避免窗口把半成品当成空数据，从而清除用户当前选中的批注。
     if ( context.isAnnotationRenderCacheDirty ) {
@@ -168,6 +172,7 @@ AnnotationTableDataRefreshResult AnnotationTableData::refresh()
         rowsChanged          = true;
     }
 
+    bool displayChanged = rowsChanged;
     // 分拍数不属于 ScrollCache 的 Timing 修订号，因此单独参与刷新判断。
     const int beatDivisor =
         std::max(1, context.lastConfig.settings.beatDivisor);
@@ -211,8 +216,11 @@ AnnotationTableDataRefreshResult AnnotationTableData::refresh()
         m_timeFormatContext = std::move(refreshedContext);
         m_timingRevision    = scrollCache->getRevision();
         m_beatDivisor       = beatDivisor;
+        displayChanged      = true;
     }
 
+    // 派生文本只有这次发布改变时才失效，常态 UI 帧不重新格式化完整列表。
+    if ( displayChanged ) ++m_displayRevision;
     // 批注行 Ready 与 Timing 是否存在无关：没有滚动缓存时仍可用秒数显示，
     // 待缓存准备好后再通过独立修订号补齐拍号格式上下文。
     return { AnnotationTableDataStatus::Ready, rowsChanged };
@@ -226,6 +234,9 @@ void AnnotationTableData::reset()
 {
     // 先清除身份与版本，再释放数据，确保之后的 refresh 不会错误复用
     // 上一谱面的行或时间格式上下文。
+    // 平台派生文本也必须失效，不能只重置后台源缓存的版本哨兵。
+    ++m_displayRevision;
+    m_writable           = false;
     m_beatmapInstanceId  = 0U;
     m_annotationRevision = std::numeric_limits<std::uint64_t>::max();
     m_timingRevision     = std::numeric_limits<std::uint64_t>::max();

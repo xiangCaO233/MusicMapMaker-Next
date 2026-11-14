@@ -16,6 +16,8 @@
 #include "ui/imgui/audio/ProjectAudioPreviewControls.h"
 #include "ui/interaction/EditorInteraction.h"
 
+#include <ice/out/IReceiver.hpp>
+
 #include <imgui.h>
 #include <imgui_internal.h>
 
@@ -34,6 +36,19 @@
 /// @brief 使用真实工具视图验证停靠、标签切换和双轴滚动。
 /// @details 不启动 GPU；连续试听通过 SDL 虚拟设备消费构建树中的合成 PCM。
 /// 所有项目写入都位于构建树，ImGui 禁止写入个人工作区 ini。
+namespace MMM::Audio
+{
+/// @brief 仅供本用例借用既有虚拟输出，不替换音频图、资源或试听实现。
+struct ProjectAudioToolOutputTestAccess {
+    /// @brief 返回由 AudioManager 拥有的输出，借用期间不改变播放后端。
+    /// @warning 夹具低频停止回调并等待在途 PCM 完成；禁止用于业务热路径。
+    static ice::IReceiver* output(AudioManager& audio)
+    {
+        return audio.m_player.get();
+    }
+};
+}  // namespace MMM::Audio
+
 namespace MMM::UI
 {
 /// @brief 测试只读取本地选择与手势，并绘制正式控件；不直接修改资源选择位。
@@ -255,6 +270,7 @@ bool writePreviewFixture(const std::filesystem::path& root)
 /// 音源长度远大于断言阈值，自然播完不能满足测试的前进条件。
 /// ImGui 帧时间连续推进，不插入双击超时来规避第二次点击被吞。
 /// 等待只用于测试后端消费 PCM，不加入任何生产交互路径。
+/// 点击期间停止虚拟输出回调，项目保存再慢也不能使刚归零的源游标前进。
 bool checkRapidPreview(MMM::UI::UIManager&            manager,
                        MMM::UI::ProjectAudioToolView& view)
 {
@@ -318,6 +334,12 @@ bool checkRapidPreview(MMM::UI::UIManager&            manager,
                 // 交替覆盖正在播放和暂停两种状态；两者都必须重置源位置。
                 if ( click % 2 != 0 ) audio.pauseSoundEffect(key);
             }
+            // 回调停止屏障保留音源的旧位置与播放/暂停状态。
+            // 仅 UI 中真正的重播能够复位，停止设备不能替用 Stop 音效通过断言。
+            auto* output =
+                MMM::Audio::ProjectAudioToolOutputTestAccess::output(audio);
+            if ( !output || !output->is_running() ) return false;
+            output->stop();
             // 真实后端按下和释放分帧；不直接操作 ImGui 的双击计数。
             // 因而连续点击必须经过与用户相同的双击判定与拖动状态机。
             ImGui::GetIO().AddMouseButtonEvent(ImGuiMouseButton_Left, true);
@@ -328,14 +350,22 @@ bool checkRapidPreview(MMM::UI::UIManager&            manager,
                 "tool/" + workspace.m_projectAudioToolSelectedResourceId);
             // 新播放周期不能继承暂停位置，也不能继续保持暂停。
             // 读取的是最新实例源游标，旧实例自然排空不会使本断言误过。
-            // 容许音频线程在点击帧之间消费少量 PCM，但不容许保留旧进度。
-            // 没有加载成功的空池也必须失败，不能仅以零位置判断重播成功。
-            if ( !audio.isSFXPlaying(key) ||
-                 audio.getSFXPlaybackTime(key) >= 0.15 ) {
-                XERROR("Preview restart failed: table={}, click={}, time={}",
-                       tableMode,
-                       click,
-                       audio.getSFXPlaybackTime(key));
+            // 没有回调消费时应精确归零，磁盘保存耗时不进入任何容差窗口。
+            // 仍同时检查播放状态，空池的零位置不能冒充成功。
+            const double resetPosition = audio.getSFXPlaybackTime(key);
+            const bool   restarted =
+                audio.isSFXPlaying(key) && resetPosition == 0.0;
+            // 每个分支都先恢复输出，再报告失败，后续测试与析构不继承停止状态。
+            // 下一次点击前继续由真实 dummy 回调消费 PCM，仍能区分续播与重播。
+            const bool resumed = output->start();
+            if ( !restarted || !resumed ) {
+                XERROR(
+                    "Preview restart failed: table={}, click={}, time={}, "
+                    "output={}",
+                    tableMode,
+                    click,
+                    resetPosition,
+                    resumed);
                 return false;
             }
         }

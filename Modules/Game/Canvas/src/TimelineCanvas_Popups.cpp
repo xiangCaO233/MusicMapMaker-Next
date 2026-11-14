@@ -14,8 +14,12 @@
 
 // 时间线弹窗修改设置字段，类型定义留在实际编辑设置的实现中。
 #include "canvas/TimelineCanvas.h"
+#include "presentation/TimelineInteractionPresentation.h"
+#include "ui/Icons.h"
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/interaction/EditorInteraction.h"
+#include "ui/workspace/IWorkspacePresentation.h"
+#include "ui/workspace/MobileInputEditor.h"
 
 #include "canvas/AuxiliaryWindowUi.h"
 #include "canvas/TimelineStopDuration.h"
@@ -107,14 +111,15 @@ constexpr std::size_t TIMING_TABLE_SEARCH_EFFECT_COUNT = 5;
 /// - 本函数不主动拉取、轮询或等待逻辑线程。
 /// - 快照准备仍由 UiFrameData 生命周期异步推进。
 /// - 每帧返回后上层可继续渲染其它独立窗口。
+/// @param presentation 当前平台表格呈现，等待快照时仍复用同一窗口几何。
 /// @param windowOpen 窗口打开状态。
 /// @param shouldRecover 是否需要恢复窗口位置。
 /// @param shouldFocus 是否需要聚焦窗口。
 /// @param focusedAndReachable 上一帧记录的聚焦可访问状态。
 /// @warning UI 低频等待路径：只在打开请求早于首帧快照时短暂执行。
-void renderTimingTableSyncingWindow(bool& windowOpen, bool& shouldRecover,
-                                    bool& shouldFocus,
-                                    bool& focusedAndReachable)
+void renderTimingTableSyncingWindow(
+    const TimelineInteractionPresentation& presentation, bool& windowOpen,
+    bool& shouldRecover, bool& shouldFocus, bool& focusedAndReachable)
 {
     // 同步占位窗口沿用用户全局圆角、内边距和元素间距偏好。
     auto& editorSettings = Config::AppConfig::instance().getEditorSettings();
@@ -140,7 +145,8 @@ void renderTimingTableSyncingWindow(bool& windowOpen, bool& shouldRecover,
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
 
     ImGui::SetNextWindowSize(ImVec2(820.0F, 450.0F), ImGuiCond_FirstUseEver);
-    // 初次尺寸与真实表格一致，快照到达后窗口不会发生明显跳变。
+    // 占位窗口先消费 Appearing；平台尺寸必须在此生效，不能等快照到达后再补。
+    presentation.prepareTableWindow();
     if ( shouldFocus ) ImGui::SetNextWindowFocus();
 
     const std::string windowTitle =
@@ -1268,7 +1274,10 @@ bool drawTimeEditor(const char* id, double& value,
         Config::AppConfig::instance().getEditorSettings().timeFormatPreference;
     if ( preference == Config::TimeFormatPreference::Seconds ) {
         ImGui::SetNextItemWidth(-FLT_MIN);
-        return ImGui::InputDouble(id, &value, 0.001, 0.01, "%.4f");
+        const bool changed =
+            ImGui::InputDouble(id, &value, 0.001, 0.01, "%.4f");
+        UI::keepMobileInputItemVisible();
+        return changed;
     }
 
     std::string label =
@@ -1285,6 +1294,7 @@ bool drawTimeEditor(const char* id, double& value,
     if ( ImGui::BeginPopup(id) ) {
         ImGui::SetNextItemWidth(180.0f);
         changed = ImGui::InputDouble("##Seconds", &value, 0.001, 0.01, "%.4f");
+        UI::keepMobileInputItemVisible();
         ImGui::EndPopup();
     }
     return changed;
@@ -1345,9 +1355,11 @@ double drawPopupBeatPositionEditor(
     ImGui::TextUnformatted("拍号");
     ImGui::SetNextItemWidth(-FLT_MIN);
     const bool beatChanged = ImGui::InputInt("##PopupBeat", &beatIndex, 1, 4);
+    UI::keepMobileInputItemVisible();
     ImGui::TextUnformatted("分拍位");
     const bool fractionChanged =
         drawTimingTableFractionInput("##PopupBeatFraction", fit, fraction);
+    UI::keepMobileInputItemVisible();
     if ( ImGui::IsItemHovered() ) {
         ImGui::SetTooltip("支持分数（如 1/4）或小数；拟合误差 %.3f ms",
                           fit.errorMs);
@@ -1398,6 +1410,7 @@ void drawStopDurationEditor(double& seconds, double bpm, bool& bmsUnits)
                             bmsUnits ? 48.0 : 0.1,
                             "%.6f") )
         seconds = stopDurationSeconds(display, bpm, bmsUnits);
+    UI::keepMobileInputItemVisible();
     ImGui::PopID();
     // 单位说明常驻可见，清晰区分时长与事件发生时间。
     if ( bmsUnits )
@@ -1415,6 +1428,8 @@ bool drawFullWidthInputDouble(const char* id, double& value, double step,
 {
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputDouble(id, &value, step, stepFast, format);
+    // 读取复合输入的真实矩形，不能在后续提示项覆盖 LastItem 后才定位。
+    UI::keepMobileInputItemVisible();
     return ImGui::IsItemDeactivatedAfterEdit();
 }
 
@@ -1605,6 +1620,8 @@ void TimelineCanvas::renderEventEditorPopup()
             ImGui::BeginDisabled();
         }
 
+        // 长表单在键盘上方滚动，确认与取消始终留在父弹窗底部。
+        UI::MobileInputBodyScope inputBody("TimelineEventFields");
         ImGui::TextUnformatted(TR("ui.timeline.event_editor.timestamp").data());
         drawTimeEditor("##Time", m_editTime, m_currentSnapshot);
         const double stopBpm =
@@ -1658,16 +1675,24 @@ void TimelineCanvas::renderEventEditorPopup()
         ImGui::Separator();
         ImGui::Spacing();
 
+        // 正文结束后再提交操作行，滚动位置不能把它推到键盘下面。
+        inputBody.end();
         const float actionButtonWidth =
             calcButtonRowWidth(3, std::floor(80.0f * dpiScale));
+        // 平台策略只调整按钮命中高度，桌面零高度继续使用原来的自动测量。
+        // 图标由工作区呈现，参数写入、删除和取消仍共用下方业务分支。
+        // 不为触摸尺寸修改全局样式，后续表格和其他弹窗不受影响。
         // BPM 为负数时禁用应用，零值仍按用户要求作为合法输入。
         const bool editValueValid =
             isValidTimingEditorValue(editEffect, m_editValue);
         // 无效草稿只禁用 Apply，Delete 和 Cancel 仍应可用。
         if ( !editValueValid ) ImGui::BeginDisabled();
-        if ( ::MMM::UI::FeedbackButton(
+        if ( ::MMM::UI::workspaceActionButton(
                  TR("ui.timeline.event_editor.apply").data(),
-                 ImVec2(actionButtonWidth, 0)) ) {
+                 UI::ICON_MMM_CHECK,
+                 ImVec2(
+                     actionButtonWidth,
+                     m_timingPresentation->parameterButtonHeight(dpiScale))) ) {
             double finalValue =
                 getStoredValue(editEffect, m_editValue, m_editingEntity);
 
@@ -1693,9 +1718,12 @@ void TimelineCanvas::renderEventEditorPopup()
         if ( !editValueValid ) ImGui::EndDisabled();
 
         ImGui::SameLine();
-        if ( ::MMM::UI::FeedbackButton(
+        if ( ::MMM::UI::workspaceActionButton(
                  TR("ui.timeline.event_editor.delete").data(),
-                 ImVec2(actionButtonWidth, 0)) ) {
+                 UI::ICON_MMM_ERASER,
+                 ImVec2(
+                     actionButtonWidth,
+                     m_timingPresentation->parameterButtonHeight(dpiScale))) ) {
             publishTimelineCommand(Event::LogicCommandEvent(
                 Logic::CmdDeleteTimelineEvent{ m_editingEntity }));
             ImGui::CloseCurrentPopup();
@@ -1707,9 +1735,12 @@ void TimelineCanvas::renderEventEditorPopup()
         }
 
         ImGui::SameLine();
-        if ( ::MMM::UI::FeedbackButton(
+        if ( ::MMM::UI::workspaceActionButton(
                  TR("ui.timeline.event_editor.cancel").data(),
-                 ImVec2(actionButtonWidth, 0)) ) {
+                 UI::ICON_MMM_CLOSE,
+                 ImVec2(
+                     actionButtonWidth,
+                     m_timingPresentation->parameterButtonHeight(dpiScale))) ) {
             ImGui::CloseCurrentPopup();
             m_isPopupOpen = false;
         }
@@ -1817,10 +1848,10 @@ void TimelineCanvas::renderEventCreationPopup()
 
         ImGui::TextUnformatted(TR("ui.timeline.event_creator.pos_type").data());
 
+        // 位置仍来自原始起笔；平台只替换来源文案，不改变吸附和当前时间选项。
+        // 移动端不要求用户理解“鼠标点击”，桌面继续使用原键和原布局。
         std::string posClickLabel =
-            m_isTimeSnapped
-                ? TR("ui.timeline.event_creator.pos_click_snapped").data()
-                : TR("ui.timeline.event_creator.pos_click").data();
+            TR(m_timingPresentation->pointPositionKey(m_isTimeSnapped)).data();
         std::string posCurrentLabel =
             TR("ui.timeline.event_creator.pos_current").data();
 
@@ -1928,9 +1959,12 @@ void TimelineCanvas::renderEventCreationPopup()
             isValidTimingEditorValue(createEffect, m_createValue);
         // 校验与编辑弹窗共用同一 helper，两个入口保持一致。
         if ( !createValueValid ) ImGui::BeginDisabled();
-        if ( ::MMM::UI::FeedbackButton(
+        if ( ::MMM::UI::workspaceActionButton(
                  TR("ui.timeline.event_creator.create").data(),
-                 ImVec2(actionButtonWidth, 0)) ) {
+                 UI::ICON_MMM_PLUS,
+                 ImVec2(
+                     actionButtonWidth,
+                     m_timingPresentation->parameterButtonHeight(dpiScale))) ) {
             const auto type       = createEffect;
             double     finalValue = getStoredValue(type, m_createValue);
 
@@ -1961,9 +1995,12 @@ void TimelineCanvas::renderEventCreationPopup()
         }
 
         ImGui::SameLine();
-        if ( ::MMM::UI::FeedbackButton(
+        if ( ::MMM::UI::workspaceActionButton(
                  TR("ui.timeline.event_editor.cancel").data(),
-                 ImVec2(actionButtonWidth, 0)) ) {
+                 UI::ICON_MMM_CLOSE,
+                 ImVec2(
+                     actionButtonWidth,
+                     m_timingPresentation->parameterButtonHeight(dpiScale))) ) {
             ImGui::CloseCurrentPopup();
             m_isCreatePopupOpen = false;
         }
@@ -2311,6 +2348,7 @@ void TimelineCanvas::renderEventCreationPopup()
 void TimelineCanvas::renderTimingPointsTableWindow()
 {
     if ( !m_auxiliaryWindowState.timingPointsTableOpen ) {
+        m_timingPresentation->resetTableInput();
         // 关闭状态主动清空所有窗口局部锁存，下一次打开从干净状态开始。
         m_shouldRecoverTableWindow         = false;
         m_shouldFocusTableWindow           = false;
@@ -2327,6 +2365,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     }
 
     auto closeTableWindow = [this]() {
+        m_timingPresentation->resetTableInput();
         // 所有异常归属和用户关闭路径复用同一完整清理序列。
         m_auxiliaryWindowState.timingPointsTableOpen = false;
         m_shouldRecoverTableWindow                   = false;
@@ -2367,7 +2406,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     if ( snapshotStatus == TimelineTableSnapshotStatus::AwaitingSnapshot ) {
         // 主窗口隐藏启动时也允许先显示占位窗口，等待独立准备快照到达。
         bool& windowOpen = m_auxiliaryWindowState.timingPointsTableOpen;
-        renderTimingTableSyncingWindow(windowOpen,
+        renderTimingTableSyncingWindow(*m_timingPresentation,
+                                       windowOpen,
                                        m_shouldRecoverTableWindow,
                                        m_shouldFocusTableWindow,
                                        m_isTableWindowFocusedAndReachable);
@@ -2414,6 +2454,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, itemSpacing);
 
     ImGui::SetNextWindowSize(ImVec2(820, 450), ImGuiCond_FirstUseEver);
+    // 平台只覆盖触屏初次打开的几何，经典表格保留保存的位置与大小。
+    m_timingPresentation->prepareTableWindow();
     if ( m_shouldFocusTableWindow ) {
         ImGui::SetNextWindowFocus();
     }
@@ -2446,8 +2488,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
     m_shouldRecoverTableWindow = false;
     m_shouldFocusTableWindow   = false;
     if ( opened ) {
+        const bool touchTable      = m_timingPresentation->touchTable();
         const bool editingDisabled = m_currentSnapshot->isPlaying;
         if ( editingDisabled ) {
+            m_timingPresentation->resetTableInput();
             // 播放开始会终止无法继续的拖选与临时 BPM/Scroll 联动。
             m_isTableRowDragSelecting       = false;
             m_tableRowDragAnchorEntity      = entt::null;
@@ -2459,6 +2503,40 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         }
 
         auto elements = collectTimelineElements();
+        // 表格元素来自完整列表，不受当前时间线可见范围裁剪。
+        // 因此视口之外的点也可以打开属性，不重新从 hover 或选区推断目标。
+        // 本地编辑草稿与多选集合独立，单个属性窗不会批量覆盖其它选中行。
+        const auto editTableElement = [this](const auto& el) {
+            const auto entity = getElementEntity(el);
+            const auto effect = getElementEffect(el);
+            if ( el.interpolation ) {
+                openInterpolationEditor({ entity,
+                                          el.time,
+                                          getElementRawValue(el),
+                                          effect,
+                                          *el.interpolation });
+            } else {
+                // 只准备副本；普通点与段落均在原确认按钮处提交一次命令。
+                m_editingEntity = entity;
+                // 秒单位保持不变，显示与存储数值的换算沿用原参数编辑器。
+                // 特别是 STOP 使用秒，不能误套 BPM 或拍位单位。
+                // 打开副本不修改任何 FormatMetadata，最终确认仍由原命令处理。
+                m_editTime = el.time;
+                m_editValue =
+                    getDisplayValue(effect, getElementRawValue(el), entity);
+                switch ( effect ) {
+                case TimingEffect::BPM: m_editType = "BPM"; break;
+                case TimingEffect::SCROLL: m_editType = "Scroll"; break;
+                case TimingEffect::JUMP: m_editType = "Jump"; break;
+                case TimingEffect::HS: m_editType = "HS"; break;
+                case TimingEffect::STOP: m_editType = "STOP"; break;
+                }
+                m_keepSpeedOnBpmEdit   = false;
+                m_isPopupOpen          = true;
+                m_isCreatePopupOpen    = false;
+                m_shouldFocusNextFrame = false;
+            }
+        };
         // 完整表格元素独立从 Session 收集，不受当前视口裁剪范围限制。
         const auto beatTimeline =
             buildTimingTableBeatTimeline(*m_currentSnapshot);
@@ -2513,119 +2591,134 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             m_tableSelectionAnchorEntity = entt::null;
         };
 
-        // 顶层工具栏
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(TR("ui.timeline.event_creator.title").data());
-        ImGui::SameLine();
-        if ( ::MMM::UI::FeedbackButton("添加 BPM") ) {
-            // 工具栏快速新增使用活动 Session 时间，而非快照视觉偏移时间。
-            constexpr double DEFAULT_BPM_VALUE = 120.0;
-            publishTimelineCommand(Event::LogicCommandEvent(
-                Logic::CmdCreateTimelineEvent{ tableCurrentTime,
-                                               ::MMM::TimingEffect::BPM,
-                                               DEFAULT_BPM_VALUE }));
-            m_lastCreatedTimingTime   = tableCurrentTime;
-            m_lastCreatedTimingEffect = ::MMM::TimingEffect::BPM;
-            m_lastCreatedTimingHighlightUntil =
-                ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
+        // 触屏先把创建工具收进独立折叠组，有限高度优先用于阅读数据行。
+        // 经典表格保留原顶层入口；折叠不改变任何创建或保速命令。
+        // 两组折叠状态使用不同 ID，展开创建不能覆盖已有筛选与选中身份。
+        // keep-speed 与新增仍在同一职责组，折叠时不提交或撤销任何旧命令。
+        // 未绘制的创建按钮不参与触点竞争，列表浏览不再经过它们的命中区。
+        const bool createToolsOpen =
+            !touchTable ||
+            UI::FeedbackTreeNode(TR("ui.timeline.event_creator.title").data(),
+                                 ImGuiTreeNodeFlags_SpanAvailWidth |
+                                     ImGuiTreeNodeFlags_FramePadding);
+        if ( createToolsOpen ) {
+            // 顶层工具栏
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(
+                TR("ui.timeline.event_creator.title").data());
+            ImGui::SameLine();
+            if ( ::MMM::UI::FeedbackButton("添加 BPM") ) {
+                // 工具栏快速新增使用活动 Session 时间，而非快照视觉偏移时间。
+                constexpr double DEFAULT_BPM_VALUE = 120.0;
+                publishTimelineCommand(Event::LogicCommandEvent(
+                    Logic::CmdCreateTimelineEvent{ tableCurrentTime,
+                                                   ::MMM::TimingEffect::BPM,
+                                                   DEFAULT_BPM_VALUE }));
+                m_lastCreatedTimingTime   = tableCurrentTime;
+                m_lastCreatedTimingEffect = ::MMM::TimingEffect::BPM;
+                m_lastCreatedTimingHighlightUntil =
+                    ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
 
-            if ( m_keepSpeedOnBpmChange ) {
-                // 联动创建后按时间追踪异步回流的最新 BPM 与 Scroll 实体。
-                publishTimelineCommand(
-                    Event::LogicCommandEvent(makeKeepSpeedScrollEvent(
-                        tableCurrentTime, DEFAULT_BPM_VALUE)));
-                beginKeepSpeedBinding(tableCurrentTime);
+                if ( m_keepSpeedOnBpmChange ) {
+                    // 联动创建后按时间追踪异步回流的最新 BPM 与 Scroll 实体。
+                    publishTimelineCommand(
+                        Event::LogicCommandEvent(makeKeepSpeedScrollEvent(
+                            tableCurrentTime, DEFAULT_BPM_VALUE)));
+                    beginKeepSpeedBinding(tableCurrentTime);
+                }
             }
-        }
-        ImGui::SameLine();
-        ::MMM::UI::FeedbackCheckbox(
-            TR("ui.timeline.event_creator.keep_speed").data(),
-            &m_keepSpeedOnBpmChange);
-        ImGui::SameLine();
-        if ( ::MMM::UI::FeedbackButton("添加流速 (SV)") ) {
-            publishTimelineCommand(
-                Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
-                    tableCurrentTime, ::MMM::TimingEffect::SCROLL, 1.0 }));
-            m_lastCreatedTimingTime   = tableCurrentTime;
-            m_lastCreatedTimingEffect = ::MMM::TimingEffect::SCROLL;
-            m_lastCreatedTimingHighlightUntil =
-                ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
-        }
-        ImGui::SameLine();
-        if ( ::MMM::UI::FeedbackButton("添加 Jump") ) {
-            publishTimelineCommand(
-                Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
-                    tableCurrentTime, ::MMM::TimingEffect::JUMP, 1000.0 }));
-            m_lastCreatedTimingTime   = tableCurrentTime;
-            m_lastCreatedTimingEffect = ::MMM::TimingEffect::JUMP;
-            m_lastCreatedTimingHighlightUntil =
-                ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
-        }
-        ImGui::SameLine();
-        // 表格入口和画布入口提交同一类型，避免保存后丢失等待语义。
-        // 创建后沿用最后创建事件的高亮定位，而非直接访问 ECS 注册表。
-        // 按钮只在用户点击时生成命令，界面绘制不会重复创建事件。
-        // 标记秒数与其他类型分列展示，筛选逻辑也有独立 STOP 槽位。
-        // STOP 不改变 BPM、SV、Jump 或 HS 的后续累积值。
-        // 播放时是否冻结由音频调度处理，UI 不使用 sleep 模拟暂停。
-        // 对不支持的保存格式仍使用能力提示，不改变用户当前编辑权限。
-        if ( ::MMM::UI::FeedbackButton("添加 STOP") ) {
-            publishTimelineCommand(
-                Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
-                    tableCurrentTime, ::MMM::TimingEffect::STOP, 0.5 }));
-            m_lastCreatedTimingTime   = tableCurrentTime;
-            m_lastCreatedTimingEffect = ::MMM::TimingEffect::STOP;
-            m_lastCreatedTimingHighlightUntil =
-                ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
-        }
-        ImGui::SameLine();
-        if ( ::MMM::UI::FeedbackButton("添加 HS") ) {
-            publishTimelineCommand(
-                Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
-                    tableCurrentTime, ::MMM::TimingEffect::HS, 1.0 }));
-            m_lastCreatedTimingTime   = tableCurrentTime;
-            m_lastCreatedTimingEffect = ::MMM::TimingEffect::HS;
-            m_lastCreatedTimingHighlightUntil =
-                ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
-        }
-        ImGui::SameLine();
-        if ( elements.empty() ) {
-            ImGui::BeginDisabled();
-        }
-        if ( ::MMM::UI::FeedbackButton("定位判定线") ) {
-            m_tableScrollToCurrentTimePending = true;
-            m_tableScrollTargetTime           = tableCurrentTime;
-        }
-        if ( elements.empty() ) {
-            ImGui::EndDisabled();
-        }
+            ImGui::SameLine();
+            ::MMM::UI::FeedbackCheckbox(
+                TR("ui.timeline.event_creator.keep_speed").data(),
+                &m_keepSpeedOnBpmChange);
+            ImGui::SameLine();
+            if ( ::MMM::UI::FeedbackButton("添加流速 (SV)") ) {
+                publishTimelineCommand(
+                    Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
+                        tableCurrentTime, ::MMM::TimingEffect::SCROLL, 1.0 }));
+                m_lastCreatedTimingTime   = tableCurrentTime;
+                m_lastCreatedTimingEffect = ::MMM::TimingEffect::SCROLL;
+                m_lastCreatedTimingHighlightUntil =
+                    ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
+            }
+            ImGui::SameLine();
+            if ( ::MMM::UI::FeedbackButton("添加 Jump") ) {
+                publishTimelineCommand(
+                    Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
+                        tableCurrentTime, ::MMM::TimingEffect::JUMP, 1000.0 }));
+                m_lastCreatedTimingTime   = tableCurrentTime;
+                m_lastCreatedTimingEffect = ::MMM::TimingEffect::JUMP;
+                m_lastCreatedTimingHighlightUntil =
+                    ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
+            }
+            ImGui::SameLine();
+            // 表格入口和画布入口提交同一类型，避免保存后丢失等待语义。
+            // 创建后沿用最后创建事件的高亮定位，而非直接访问 ECS 注册表。
+            // 按钮只在用户点击时生成命令，界面绘制不会重复创建事件。
+            // 标记秒数与其他类型分列展示，筛选逻辑也有独立 STOP 槽位。
+            // STOP 不改变 BPM、SV、Jump 或 HS 的后续累积值。
+            // 播放时是否冻结由音频调度处理，UI 不使用 sleep 模拟暂停。
+            // 对不支持的保存格式仍使用能力提示，不改变用户当前编辑权限。
+            if ( ::MMM::UI::FeedbackButton("添加 STOP") ) {
+                publishTimelineCommand(
+                    Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
+                        tableCurrentTime, ::MMM::TimingEffect::STOP, 0.5 }));
+                m_lastCreatedTimingTime   = tableCurrentTime;
+                m_lastCreatedTimingEffect = ::MMM::TimingEffect::STOP;
+                m_lastCreatedTimingHighlightUntil =
+                    ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
+            }
+            ImGui::SameLine();
+            if ( ::MMM::UI::FeedbackButton("添加 HS") ) {
+                publishTimelineCommand(
+                    Event::LogicCommandEvent(Logic::CmdCreateTimelineEvent{
+                        tableCurrentTime, ::MMM::TimingEffect::HS, 1.0 }));
+                m_lastCreatedTimingTime   = tableCurrentTime;
+                m_lastCreatedTimingEffect = ::MMM::TimingEffect::HS;
+                m_lastCreatedTimingHighlightUntil =
+                    ImGui::GetTime() + NEW_TIMING_HIGHLIGHT_DURATION;
+            }
+            ImGui::SameLine();
+            if ( elements.empty() ) {
+                ImGui::BeginDisabled();
+            }
+            if ( ::MMM::UI::FeedbackButton("定位判定线") ) {
+                m_tableScrollToCurrentTimePending = true;
+                m_tableScrollTargetTime           = tableCurrentTime;
+            }
+            if ( elements.empty() ) {
+                ImGui::EndDisabled();
+            }
 
-        // 批量保速独立于折叠的高级批量工具；仅在点击时收集选中句柄。
-        // 逻辑端按当前组件筛选红线，因此过滤表格不会遗漏隐藏的选中行。
-        // 无选择时禁用，使批量操作的前置条件可见。
-        // 播放中由外层禁用区阻止编辑，嵌套禁用不能覆盖父级状态。
-        // 混合选择中的非红线由命令端忽略，不改变选择集合。
-        // 统一反馈按钮保持已有悬浮色与点击音效。
-        // 禁用状态仍显示提示，说明补偿规则及插值限制。
-        ImGui::BeginDisabled(m_selectedTimingEntities.empty());
-        if ( ::MMM::UI::FeedbackButton(
-                 TR("ui.timeline.timing_points_table.keep_original_speed")
-                     .data()) ) {
-            Logic::CmdKeepSpeedForBpmEvents command;
-            command.bpmEntities.assign(m_selectedTimingEntities.begin(),
-                                       m_selectedTimingEntities.end());
-            // 结束临时单点联动，防止其旧绑定在批量结果回流后重新覆盖绿线。
-            finishKeepSpeedBinding();
-            publishTimelineCommand(
-                Event::LogicCommandEvent(std::move(command)));
+            // 批量保速独立于折叠的高级批量工具；仅在点击时收集选中句柄。
+            // 逻辑端按当前组件筛选红线，因此过滤表格不会遗漏隐藏的选中行。
+            // 无选择时禁用，使批量操作的前置条件可见。
+            // 播放中由外层禁用区阻止编辑，嵌套禁用不能覆盖父级状态。
+            // 混合选择中的非红线由命令端忽略，不改变选择集合。
+            // 统一反馈按钮保持已有悬浮色与点击音效。
+            // 禁用状态仍显示提示，说明补偿规则及插值限制。
+            ImGui::BeginDisabled(m_selectedTimingEntities.empty());
+            if ( ::MMM::UI::FeedbackButton(
+                     TR("ui.timeline.timing_points_table.keep_original_speed")
+                         .data()) ) {
+                Logic::CmdKeepSpeedForBpmEvents command;
+                command.bpmEntities.assign(m_selectedTimingEntities.begin(),
+                                           m_selectedTimingEntities.end());
+                // 结束临时单点联动，防止其旧绑定在批量结果回流后重新覆盖绿线。
+                finishKeepSpeedBinding();
+                publishTimelineCommand(
+                    Event::LogicCommandEvent(std::move(command)));
+            }
+            if ( ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) ) {
+                ImGui::SetTooltip("%s",
+                                  TR("ui.timeline.timing_points_table."
+                                     "keep_original_speed_hint")
+                                      .data());
+            }
+            ImGui::EndDisabled();
+
+            if ( touchTable ) ImGui::TreePop();
         }
-        if ( ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) ) {
-            ImGui::SetTooltip("%s",
-                              TR("ui.timeline.timing_points_table."
-                                 "keep_original_speed_hint")
-                                  .data());
-        }
-        ImGui::EndDisabled();
 
         ImGui::Separator();
 
@@ -2871,7 +2964,7 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 ImGui::EndDisabled();
             }
             ImGui::SameLine();
-            ImGui::TextDisabled("Ctrl+A / C / X / V");
+            if ( !touchTable ) ImGui::TextDisabled("Ctrl+A / C / X / V");
 
             ImGui::Separator();
 
@@ -2976,9 +3069,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             rebuildVisibleElementIndices();
         }
 
-        ImGui::Spacing();
+        if ( !touchTable ) ImGui::Spacing();
         ImGui::Separator();
-        ImGui::Spacing();
+        if ( !touchTable ) ImGui::Spacing();
 
         // 纯鼠标控制位于批量工具折叠区之外，普通表格操作无需发现快捷键提示。
         // 复用应用级选择模式，表格和时间线画布不会保留两套互相冲突的意图。
@@ -3002,6 +3095,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             }
             // 全选只包含筛选后的结果，与表格原 Ctrl+A 的范围相同。
             // 不扫描 Registry，也不把隐藏的其他类型或数值结果一并选入。
+            // 横屏触控将模式和集合按钮放在同一行，避免大字号耗尽数据区。
+            if ( touchTable ) ImGui::SameLine();
             ImGui::BeginDisabled(visibleElementIndices.empty());
             if ( UI::FeedbackButton(TR("ui.selection.all_results").data()) ) {
                 m_selectedTimingEntities.clear();
@@ -3021,11 +3116,72 @@ void TimelineCanvas::renderTimingPointsTableWindow()
             }
             ImGui::EndDisabled();
             ImGui::PopID();
-            ImGui::Spacing();
+            if ( !touchTable ) ImGui::Spacing();
             ImGui::Separator();
-            ImGui::Spacing();
+            if ( !touchTable ) ImGui::Spacing();
         }
 
+        // 触屏常用命令在折叠区外显式提供；批量数值变换仍保留原入口。
+        // 复制成功后才允许剪切删除，粘贴锚点沿用表格冻结锚点或当前时间。
+        // 这里不维护第二份剪贴板，桌面和移动继续共享同一命令实现。
+        // 每个按钮只在激活边沿操作，空选择使用禁用状态而非发送空批次。
+        if ( touchTable ) {
+            ImGui::TextWrapped("%s", TR("ui.mobile.timing.table_hint").data());
+            ImGui::BeginDisabled(m_selectedTimingEntities.empty());
+            if ( UI::FeedbackButton(TR("ui.edit.copy").data()) )
+                copyTableSelection(false);
+            ImGui::SameLine();
+            if ( UI::FeedbackButton(TR("ui.edit.cut").data()) )
+                copyTableSelection(true);
+            ImGui::SameLine();
+            if ( UI::FeedbackButton(TR("ui.common.delete").data()) )
+                deleteSelectedTimingEvents();
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if ( UI::FeedbackButton(TR("ui.edit.paste").data()) )
+                pasteTableSelection();
+            // 剩余空间够放三项时复用当前行，否则自然换行，不压缩触摸命中区。
+            // 测量只针对固定三个标签，不遍历 Timing，也不复制选中集合。
+            // 翻译和主题字号改变后重用同一测量口径，不保存旧像素阈值。
+            // 折行只影响本帧几何；历史按钮仍走同一个活动会话命令出口。
+            const float trailingWidth =
+                ImGui::CalcTextSize(TR("ui.mobile.timing.edit_target").data())
+                    .x +
+                ImGui::CalcTextSize(TR("ui.edit.undo").data()).x +
+                ImGui::CalcTextSize(TR("ui.edit.redo").data()).x +
+                ImGui::GetStyle().FramePadding.x * 6 +
+                ImGui::GetStyle().ItemSpacing.x * 3;
+            if ( ImGui::GetWindowPos().x +
+                     ImGui::GetWindowContentRegionMax().x -
+                     ImGui::GetItemRectMax().x >=
+                 trailingWidth )
+                ImGui::SameLine();
+            // 属性编辑要求唯一选择；多选删除与复制不会被属性窗隐式触发。
+            // 查找使用完整元素表中的实体身份，不以屏幕行号解释剪贴板或历史。
+            // 筛选隐藏的旧选择仍计入数量，避免用户以为只修改了当前可见行。
+            ImGui::BeginDisabled(m_selectedTimingEntities.size() != 1);
+            if ( UI::FeedbackButton(
+                     TR("ui.mobile.timing.edit_target").data()) ) {
+                const auto target = std::find_if(
+                    elements.begin(), elements.end(), [&](const auto& el) {
+                        return m_selectedTimingEntities.contains(
+                            getElementEntity(el));
+                    });
+                if ( target != elements.end() ) editTableElement(*target);
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if ( UI::FeedbackButton(TR("ui.edit.undo").data()) )
+                publishTimelineCommand(
+                    Event::LogicCommandEvent(Logic::CmdUndo{}));
+            ImGui::SameLine();
+            if ( UI::FeedbackButton(TR("ui.edit.redo").data()) )
+                publishTimelineCommand(
+                    Event::LogicCommandEvent(Logic::CmdRedo{}));
+        }
+        // 表格返回到旧鼠标方案时不重建数据源，也不清空已有选择。
+        // 批量历史命令仍落在同一活动会话，不能被平台呈现对象截留。
+        // 本地按钮反馈与提交命令分离，按钮悬浮不会产生任何谱面改动。
         // 渲染表格
         const float tableScrollbarSize = std::max(
             ImGui::GetStyle().ScrollbarSize,
@@ -3042,31 +3198,42 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         float  timingTableBlankStartY = 0.0f;
         bool   hasTimingTableRect     = false;
         if ( ImGui::BeginTable(
-                 "TimingPointsTableMainV3",
+                 touchTable ? "TimingPointsTouchTableV1"
+                            : "TimingPointsTableMainV3",
                  7,
                  ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
                      ImGuiTableFlags_Hideable | ImGuiTableFlags_RowBg |
                      ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersV |
                      ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY,
                  ImVec2(0.0f, -ImGui::GetFrameHeightWithSpacing())) ) {
+            // 触屏使用独立列布局身份，不能继承旧桌面 ini 中过窄的绝对像素列。
+            // 首选宽度以当前字体为单位，序号、时间与按钮在真机大字号下仍可读。
+            // 横向总宽超过窗口时沿用原表格滚动，不缩小文字或触摸热区。
+            // 用户后续手工调整仍由 ImGui 保存；经典表格的 ID 与宽度保持不变。
+            const float tableFont = ImGui::GetFontSize();
+            const std::array<float, TIMING_TABLE_COLUMN_COUNT>
+                        touchColumnWidths{ tableFont * 3.5f, tableFont * 9,
+                                           tableFont * 3.5f, tableFont * 5,
+                                           tableFont * 6,    tableFont * 5,
+                                           tableFont * 9 };
+            const auto& columnWidths =
+                touchTable ? touchColumnWidths : TIMING_TABLE_COLUMN_MIN_WIDTHS;
             const ImGuiTableColumnFlags initialColumnFlags =
                 ImGuiTableColumnFlags_WidthFixed;
             ImGui::TableSetupColumn(
-                "序号", initialColumnFlags, TIMING_TABLE_COLUMN_MIN_WIDTHS[0]);
-            ImGui::TableSetupColumn("时间戳 (秒)",
-                                    initialColumnFlags,
-                                    TIMING_TABLE_COLUMN_MIN_WIDTHS[1]);
+                "序号", initialColumnFlags, columnWidths[0]);
             ImGui::TableSetupColumn(
-                "拍号", initialColumnFlags, TIMING_TABLE_COLUMN_MIN_WIDTHS[2]);
-            ImGui::TableSetupColumn("分拍位",
-                                    initialColumnFlags,
-                                    TIMING_TABLE_COLUMN_MIN_WIDTHS[3]);
+                "时间戳 (秒)", initialColumnFlags, columnWidths[1]);
             ImGui::TableSetupColumn(
-                "类型", initialColumnFlags, TIMING_TABLE_COLUMN_MIN_WIDTHS[4]);
+                "拍号", initialColumnFlags, columnWidths[2]);
             ImGui::TableSetupColumn(
-                "数值", initialColumnFlags, TIMING_TABLE_COLUMN_MIN_WIDTHS[5]);
+                "分拍位", initialColumnFlags, columnWidths[3]);
             ImGui::TableSetupColumn(
-                "操作", initialColumnFlags, TIMING_TABLE_COLUMN_MIN_WIDTHS[6]);
+                "类型", initialColumnFlags, columnWidths[4]);
+            ImGui::TableSetupColumn(
+                "数值", initialColumnFlags, columnWidths[5]);
+            ImGui::TableSetupColumn(
+                "操作", initialColumnFlags, columnWidths[6]);
             if ( ImGuiTable* table = ImGui::GetCurrentTable() ) {
                 table->DisableDefaultContextMenu = true;
                 timingTableMin                   = table->OuterRect.Min;
@@ -3074,6 +3241,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                 hasTimingTableRect               = true;
             }
             ImGui::TableHeadersRow();
+            // 桌面表头上下文菜单仍使用原规则；移动的行长按与表头作用域分离。
+            // 列的横向滚动继续由现有表格子窗口承担，不转换为时间点平移。
+            // 可见行虚拟化沿用原 clipper，新增触点分类不扫描全部 Registry。
             renderTimingTableHeaderContextMenu();
             timingTableBlankStartY = ImGui::GetCursorScreenPos().y;
 
@@ -3144,12 +3314,51 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         fmt::format("#{}###TimingTableRow_{}",
                                     displayIdx,
                                     static_cast<std::uint32_t>(ent));
-                    if ( ::MMM::UI::FeedbackSelectable(
-                             rowLabel.c_str(),
-                             rowSelected,
-                             ImGuiSelectableFlags_SpanAllColumns |
-                                 ImGuiSelectableFlags_AllowOverlap,
-                             ImVec2(0.0f, ImGui::GetFrameHeight())) ) {
+                    const bool rowClicked = ::MMM::UI::FeedbackSelectable(
+                        rowLabel.c_str(),
+                        rowSelected,
+                        ImGuiSelectableFlags_SpanAllColumns |
+                            ImGuiSelectableFlags_AllowOverlap,
+                        ImVec2(0.0f, ImGui::GetFrameHeight()));
+                    // 行控件先登记真实几何，移动呈现据此检查原始 Down 的归属。
+                    // 合成鼠标可能由页面滚动器延后，不能把它当作第二次行选择。
+                    // 静止长按只准备当前行参数，快速轻点则在释放后更新集合。
+                    // 移动结果是离散值，平台对象不持有当前元素引用或选区所有权。
+                    const int rowIntent =
+                        m_timingPresentation->tableRow(ImGui::GetItemID(),
+                                                       ImGui::GetItemRectMin(),
+                                                       ImGui::GetItemRectMax());
+                    if ( touchTable && rowIntent ) {
+                        // 模式描述集合操作，不伪造
+                        // Ctrl；长按的编辑目标独立于多选集合。
+                        // 长按目标是被按住的行，而非多选集合内任意一项。
+                        // 因此先前已有多选不会把单条属性编辑误解释成批量修改。
+                        // 参数窗确认之前不改时间、数值或原始插值定义。
+                        if ( rowIntent == 2 )
+                            editTableElement(el);
+                        else {
+                            // 触控多选使用显式替换、追加和减选模式，不要求外接修饰键。
+                            // 追加同一目标两次保持选中，减选同一目标两次仍保持移除。
+                            // 集合更新不发谱面命令，撤销栈只记录后续真实编辑动作。
+                            const auto operation =
+                                selectionProfile.selectionOperation().value_or(
+                                    Logic::SelectionOperation::Replace);
+                            if ( operation ==
+                                 Logic::SelectionOperation::Replace )
+                                m_selectedTimingEntities.clear();
+                            if ( operation ==
+                                 Logic::SelectionOperation::Subtract )
+                                m_selectedTimingEntities.erase(ent);
+                            else
+                                m_selectedTimingEntities.insert(ent);
+                            m_tableSelectionAnchorEntity = ent;
+                        }
+                    }
+                    // 鼠标 Selectable
+                    // 和触屏原始结果互斥，不能一次轻点更新两次集合。
+                    // 经典的范围选择仍保留原锚点和 Ctrl／Shift 规则。
+                    // 从触屏方案切回鼠标时，已选实体不需要重新建立身份。
+                    if ( !touchTable && rowClicked ) {
                         if ( !m_hasTableRowDragSelectionMoved ) {
                             const ImGuiIO& io     = ImGui::GetIO();
                             const auto     anchor = std::find_if(
@@ -3239,7 +3448,10 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         ImVec2(rowNumberCellMin.x, rowNumberItemMin.y),
                         ImVec2(rowNumberCellMin.x + rowNumberCellWidth,
                                rowNumberItemMax.y));
-                    if ( !editingDisabled && rowNumberHovered &&
+                    // 触屏拖动归页面浏览，不从序号列开始旧式范围拖选。
+                    // 桌面仍保留原 Ctrl／Shift 与拖选基线，不修改其手势门槛。
+                    // 这个门禁只影响起笔，旧鼠标事务的原有收尾逻辑继续执行。
+                    if ( !touchTable && !editingDisabled && rowNumberHovered &&
                          UI::Interaction::mouseClicked(
                              ImGuiMouseButton_Left) ) {
                         const ImGuiIO& io               = ImGui::GetIO();
@@ -3269,7 +3481,8 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         mouseY < rowNumberItemMax.y;
                     // 纯鼠标采用正常拖动阈值，单击不能在按下帧被标成拖选。
                     // 经典仍使用原来的零阈值，不改变其 Ctrl/Shift 处理分支。
-                    if ( m_isTableRowDragSelecting && rowDragTargetHovered &&
+                    if ( !touchTable && m_isTableRowDragSelecting &&
+                         rowDragTargetHovered &&
                          ((UI::Interaction::mouseDown(ImGuiMouseButton_Left) &&
                            UI::Interaction::mouseDragging(
                                ImGuiMouseButton_Left,
@@ -3315,84 +3528,108 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                         }
                     }
 
-                    // 第 1 列：时间戳（秒）
-                    ImGui::TableSetColumnIndex(1);
-                    double tVal = el.time;
-                    ImGui::SetNextItemWidth(-FLT_MIN);
-                    std::string tId = fmt::format("##T_{}", displayIdx);
-                    if ( drawTimeEditor(
-                             tId.c_str(), tVal, m_currentSnapshot) ) {
-                        entt::entity ent    = getElementEntity(el);
-                        double       rawVal = getElementRawValue(el);
-                        publishTimelineCommand(Event::LogicCommandEvent(
-                            Logic::CmdUpdateTimelineEvent{
-                                ent, tVal, rawVal }));
-                    }
-
-                    const double continuousBeat = timingTableTimeToBeat(
-                        beatTimeline, el.time, tableFallbackBpm);
-                    const auto fractionFit =
-                        fitTimingTableFractionWithError(continuousBeat,
-                                                        el.time,
-                                                        beatTimeline,
-                                                        tableFallbackBpm);
-
-                    // 第 2 列：拍号
-                    ImGui::TableSetColumnIndex(2);
-                    int beatIndexValue = fractionFit.beatIndex;
-                    ImGui::SetNextItemWidth(-FLT_MIN);
-                    std::string beatId = fmt::format("##Beat_{}", displayIdx);
-                    // 单元值下一帧会从快照重建，步进按钮必须在变化当帧提交。
-                    const bool beatIndexChanged =
-                        ImGui::InputInt(beatId.c_str(), &beatIndexValue, 1, 4);
-                    if ( beatIndexChanged ) {
-                        if ( auto command = makeTimingBeatPositionUpdate(
-                                 ent,
-                                 beatIndexValue,
-                                 fractionFit.fraction,
-                                 getElementRawValue(el),
-                                 beatTimeline,
-                                 tableFallbackBpm) ) {
-                            publishTimelineCommand(
-                                Event::LogicCommandEvent(std::move(*command)));
+                    // 触屏数据单元格只读，纵横滚动都不能改变谱面时间或拍位。
+                    // 完整精调通过显式编辑或长按参数窗执行，抬手也不会逐步提交数值。
+                    // 拍号与分拍位仍用正式换算函数，不能以四舍五入文本作为新存储值。
+                    // 本分支只改变显示方式，桌面原位输入与步进按钮保持原样。
+                    if ( touchTable ) {
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%.6f", el.time);
+                        const auto fit = fitTimingTableFractionWithError(
+                            timingTableTimeToBeat(
+                                beatTimeline, el.time, tableFallbackBpm),
+                            el.time,
+                            beatTimeline,
+                            tableFallbackBpm);
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::Text("%d", fit.beatIndex);
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::TextUnformatted(
+                            formatTimingTableFraction(fit).c_str());
+                    } else {
+                        // 第 1 列：时间戳（秒）
+                        ImGui::TableSetColumnIndex(1);
+                        double tVal = el.time;
+                        ImGui::SetNextItemWidth(-FLT_MIN);
+                        std::string tId = fmt::format("##T_{}", displayIdx);
+                        if ( drawTimeEditor(
+                                 tId.c_str(), tVal, m_currentSnapshot) ) {
+                            entt::entity ent    = getElementEntity(el);
+                            double       rawVal = getElementRawValue(el);
+                            publishTimelineCommand(Event::LogicCommandEvent(
+                                Logic::CmdUpdateTimelineEvent{
+                                    ent, tVal, rawVal }));
                         }
-                    }
 
-                    // 第 3 列：分拍位
-                    ImGui::TableSetColumnIndex(3);
-                    double      fractionValue = fractionFit.fraction;
-                    std::string fractionId =
-                        fmt::format("##BeatFrac_{}", displayIdx);
-                    const bool hasFractionWarning =
-                        fractionFit.errorMs >= TIMING_TABLE_FRACTION_WARNING_MS;
-                    if ( hasFractionWarning ) {
-                        ImGui::PushStyleColor(
-                            ImGuiCol_FrameBg,
-                            ImVec4(0.50f, 0.17f, 0.12f, 0.38f));
-                        ImGui::PushStyleColor(ImGuiCol_Text,
-                                              ImVec4(1.0f, 0.76f, 0.42f, 1.0f));
-                    }
-                    if ( drawTimingTableFractionInput(
-                             fractionId.c_str(), fractionFit, fractionValue) ) {
-                        if ( auto command = makeTimingBeatPositionUpdate(
-                                 ent,
-                                 fractionFit.beatIndex,
-                                 fractionValue,
-                                 getElementRawValue(el),
-                                 beatTimeline,
-                                 tableFallbackBpm) ) {
-                            publishTimelineCommand(
-                                Event::LogicCommandEvent(std::move(*command)));
-                        }
-                    }
-                    if ( hasFractionWarning ) {
-                        if ( ImGui::IsItemHovered() ) {
-                            ImGui::SetTooltip("分拍位拟合误差 %.3f ms",
-                                              fractionFit.errorMs);
-                        }
-                        ImGui::PopStyleColor(2);
-                    }
+                        const double continuousBeat = timingTableTimeToBeat(
+                            beatTimeline, el.time, tableFallbackBpm);
+                        const auto fractionFit =
+                            fitTimingTableFractionWithError(continuousBeat,
+                                                            el.time,
+                                                            beatTimeline,
+                                                            tableFallbackBpm);
 
+                        // 第 2 列：拍号
+                        ImGui::TableSetColumnIndex(2);
+                        int beatIndexValue = fractionFit.beatIndex;
+                        ImGui::SetNextItemWidth(-FLT_MIN);
+                        std::string beatId =
+                            fmt::format("##Beat_{}", displayIdx);
+                        // 单元值下一帧会从快照重建，步进按钮必须在变化当帧提交。
+                        const bool beatIndexChanged = ImGui::InputInt(
+                            beatId.c_str(), &beatIndexValue, 1, 4);
+                        if ( beatIndexChanged ) {
+                            if ( auto command = makeTimingBeatPositionUpdate(
+                                     ent,
+                                     beatIndexValue,
+                                     fractionFit.fraction,
+                                     getElementRawValue(el),
+                                     beatTimeline,
+                                     tableFallbackBpm) ) {
+                                publishTimelineCommand(Event::LogicCommandEvent(
+                                    std::move(*command)));
+                            }
+                        }
+
+                        // 第 3 列：分拍位
+                        ImGui::TableSetColumnIndex(3);
+                        double      fractionValue = fractionFit.fraction;
+                        std::string fractionId =
+                            fmt::format("##BeatFrac_{}", displayIdx);
+                        const bool hasFractionWarning =
+                            fractionFit.errorMs >=
+                            TIMING_TABLE_FRACTION_WARNING_MS;
+                        if ( hasFractionWarning ) {
+                            ImGui::PushStyleColor(
+                                ImGuiCol_FrameBg,
+                                ImVec4(0.50f, 0.17f, 0.12f, 0.38f));
+                            ImGui::PushStyleColor(
+                                ImGuiCol_Text,
+                                ImVec4(1.0f, 0.76f, 0.42f, 1.0f));
+                        }
+                        if ( drawTimingTableFractionInput(fractionId.c_str(),
+                                                          fractionFit,
+                                                          fractionValue) ) {
+                            if ( auto command = makeTimingBeatPositionUpdate(
+                                     ent,
+                                     fractionFit.beatIndex,
+                                     fractionValue,
+                                     getElementRawValue(el),
+                                     beatTimeline,
+                                     tableFallbackBpm) ) {
+                                publishTimelineCommand(Event::LogicCommandEvent(
+                                    std::move(*command)));
+                            }
+                        }
+                        if ( hasFractionWarning ) {
+                            if ( ImGui::IsItemHovered() ) {
+                                ImGui::SetTooltip("分拍位拟合误差 %.3f ms",
+                                                  fractionFit.errorMs);
+                            }
+                            ImGui::PopStyleColor(2);
+                        }
+
+                    }  // 触屏只读单元格与桌面原位编辑互斥。
                     // 第 4 列：类型
                     ImGui::TableSetColumnIndex(4);
                     ImGui::PushStyleColor(ImGuiCol_Text,
@@ -3420,6 +3657,14 @@ void TimelineCanvas::renderTimingPointsTableWindow()
                                 el.time,
                                 el.time + el.interpolation->m_duration,
                                 el.interpolation->m_samplesPerSecond);
+                        // 普通点显示当前单位下的值，不能借显示变化重新发布更新命令。
+                        // 段落仍在上方显示原始两端值，不把瞬时插值样本当作端点。
+                        // 只读单元格保留同一实体行
+                        // ID，与旁边操作按钮不存在身份竞争。
+                    } else if ( touchTable ) {
+                        ImGui::Text("%.6g",
+                                    getDisplayValue(
+                                        effect, getElementRawValue(el), ent));
                     } else {
                         double vVal = getDisplayValue(
                             effect, getElementRawValue(el), ent);
@@ -3525,6 +3770,9 @@ void TimelineCanvas::renderTimingPointsTableWindow()
         }
         ImGui::PopStyleVar(2);
 
+        // 空白区域清选仍沿用全局页面仲裁后的离散点击。
+        // 触屏浏览中的 Move 不会在这里生成点击，追加和减选模式也不清空旧集合。
+        // 子表格外的属性按钮不是空白，不能在激活同帧被这个分支清掉选择。
         const ImVec2 mousePosition = ImGui::GetMousePos();
         const bool   mouseInsideTimingTable =
             hasTimingTableRect && mousePosition.x >= timingTableMin.x &&

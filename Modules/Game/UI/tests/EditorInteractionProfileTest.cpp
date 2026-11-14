@@ -2,17 +2,22 @@
 #include "common/SelectionOperation.h"
 #include "config/EditorSettings.h"
 #include "config/EditorShortcutActions.h"
+#include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "log/colorful-log.h"
 #include "ui/imgui/ShortcutUtils.h"
+#include "ui/imgui/SideBarUI.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
+#include "ui/imgui/menu/MainMenuView.h"
 #include "ui/imgui/menu/actions/MainMenuEditActions.h"
 #include "ui/imgui/menu/interfaces/IMainMenuItemActionHandler.h"
 #include "ui/imgui/menu/interfaces/IMainMenuToggleItemActionHandler.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
 #include "ui/interaction/EditorInteraction.h"
+#include "ui/workspace/MobileInputPolicy.h"
 #include <imgui.h>
+#include <initializer_list>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -161,10 +166,18 @@ public:
         std::string_view action, MMM::UI::MainMenuContext& context,
         const MMM::UI::MainMenuItemActivation& activation) override
     {
+        // 打开项目用例仅观察语义请求，避免夹具真的启动系统选择器。
+        // 其它动作仍按原有重映射规则执行，不能在测试方案中统一吞掉所有命令。
+        if ( action == "OpenProjectAction" ) {
+            ++m_menuShortcuts;
+            return true;
+        }
         if ( action != "test-source" ) return false;
         Interaction::executeAction("test-destination", context, activation);
         return true;
     }
+    /// @brief 无桌面菜单栏时收到的打开项目请求，文本输入帧不得增加此计数。
+    int m_menuShortcuts{};
     /// @brief 只消费本地 Undo，其他命令必须继续进入真实总线。
     /// @details 测试只拦截 Undo，确保消费一个命令不会吞掉相邻的 Redo。
     /// @warning 事件只在本次调用有效，不复制大型命令或保留内部引用。
@@ -503,6 +516,109 @@ bool checkAcceleratedScroll()
     ImGui::DestroyContext();
     return ok;
 }
+/// @brief 验证移动设备边沿默认值与连接期间的用户选择互不覆盖。
+/// @details 使用真实请求字符串，不依赖 Android 服务或持久化用户配置。
+/// @return 初始化、插入、拔出与再次插入都满足契约时返回 true。
+bool testMobileInputPolicy()
+{
+    MMM::UI::MobileInputPolicy policy;
+    std::string                request = "mouse-only";
+    bool                       ok =
+        require(policy.update(false, request) && request == "touch-gestures",
+                "touch default without mouse");
+    // 首次启动模拟已保存纯鼠标偏好，验证设备能力优先于历史选择。
+    // 策略只写请求，不直接替换注册表中的活动方案。
+    // 测试不依赖 Android 服务，因此连接事件的重复通知也能稳定复现。
+    // 活动手势的释放与安全帧延迟由既有 synchronizeProfile 用例负责。
+    // 这层只验证边沿：常态鼠标帧不应覆盖用户手选。
+    // 两种能力启动分别创建策略，避免复用初始化标志掩盖启动回归。
+    // 字符串来自真实内置方案身份，测试不引入额外的替身注册项。
+    // 无鼠标期间即使恢复了不合适的历史请求，也必须回到可操作的触控方案。
+    request = "classic-desktop";
+    policy.update(false, request);
+    ok &= require(request == "touch-gestures" && !policy.hasMouse(),
+                  "touch enforced");
+    policy.update(true, request);
+    ok &= require(request == "classic-desktop" && policy.hasMouse(),
+                  "attach selects classic");
+    // 连接期间保留用户主动选择；不能每帧把纯鼠标方案覆盖回经典。
+    request = "mouse-only";
+    ok &= require(!policy.update(true, request) && request == "mouse-only",
+                  "manual mouse profile retained");
+    policy.update(false, request);
+    ok &= require(request == "touch-gestures", "detach selects touch");
+    policy.update(true, request);
+    ok &=
+        require(request == "classic-desktop", "reattach selects classic again");
+    // 已连接设备启动同样默认经典，不依赖先发生一次真实设备通知。
+    MMM::UI::MobileInputPolicy startup;
+    request = "mouse-only";
+    startup.update(true, request);
+    ok &=
+        require(request == "classic-desktop", "mouse startup selects classic");
+    return ok;
+}
+/// @brief 只推进公共菜单更新，验证无桌面菜单栏时打开项目快捷键仍可派发。
+/// @param profile 接管项目打开请求的测试方案，避免系统窗口副作用。
+/// @return 单次按下只派发一次且文本输入期间不派发时返回 true。
+/// @details 打开项目无需已有谱面，因此可在真实能力门禁下验证公共入口。
+/// 保存动作仍保留活跃谱面检查，不能为无谱面测试放宽生产保存权限。
+/// 实际保存、撤销与重做的磁盘结果由设备上的独立工程回读验证。
+bool testMenuHotkeysWithoutMenuBar(Profile& profile)
+{
+    ImGui::CreateContext();
+    auto& io       = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = { 1000, 700 };
+    io.DeltaTime   = 1.0f / 60;
+    // 同一测试帧明确投递完整组合键，不能由事件排队策略拆成多个断言阶段。
+    io.ConfigInputTrickleEventQueue = false;
+    unsigned char* pixels{};
+    int            width{}, height{};
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    // 与真实应用相同，先在连续安全帧中切换方案，再开始组合键手势。
+    // 前面的测试可能停留在其他方案，不能依赖执行顺序碰巧留下目标对象。
+    Interaction::synchronizeProfile("test-profile", true);
+    Interaction::synchronizeProfile("test-profile", true);
+    bool ok = true;
+    {
+        // 真实注册表与动作负责输入路由；打开项目的最终业务由方案观察并消费。
+        MMM::UI::MainMenuView menus;
+        Sink                  sink;
+        const int             before = profile.m_menuShortcuts;
+        const auto            frame  = [&](bool textInput = false) {
+            ImGui::NewFrame();
+            // 直接声明文本编辑所有权，无需创建输入框干扰本用例的菜单入口。
+            // 菜单栏完全不绘制；若快捷键仍绑在 renderMenus，这里不会派发。
+            io.WantTextInput = textInput;
+            menus.update(nullptr, sink);
+            ImGui::EndFrame();
+        };
+        frame();
+        io.AddKeyEvent(ImGuiMod_Ctrl, true);
+        io.AddKeyEvent(ImGuiKey_O, true);
+        frame();
+        // 保持到下一普通帧，但不跨越按键重复阈值，检测同一边沿是否重复派发。
+        // 不能只检查命中绑定：计数必须来自方案收到的最终语义动作。
+        frame();
+        ok &= require(profile.m_menuShortcuts == before + 1,
+                      "open shortcut without menu bar dispatched once");
+        // 释放后重新按下建立独立边沿，文本编辑应保留 Ctrl+O 的输入所有权。
+        io.AddKeyEvent(ImGuiKey_O, false);
+        frame();
+        io.AddKeyEvent(ImGuiKey_O, true);
+        frame(true);
+        // 文本输入阻挡发生在公共入口，不应交给单个保存或打开动作各自猜测。
+        // 因此已登记动作和有效组合键同时存在时，计数仍必须保持不变。
+        ok &= require(profile.m_menuShortcuts == before + 1,
+                      "text input blocks shared menu hotkeys");
+    }
+    // 菜单注销全部动作后再销毁上下文，不留下失效的处理器或按键状态。
+    Interaction::synchronizeProfile("classic-desktop", true);
+    Interaction::synchronizeProfile("classic-desktop", true);
+    ImGui::DestroyContext();
+    return ok;
+}
 }  // namespace
 /// @brief 验证应用级方案、真实输入映射、动作权限、生命周期和配置兼容。
 /// @details 本用例由独立 CTest 进程运行，测试方案不会进入用户的生产注册表。
@@ -515,9 +631,47 @@ bool checkAcceleratedScroll()
 /// 禁用门禁同时覆盖源与目标，不能因重映射改变编辑能力。
 /// 命令出口使用正式 EventBus 订阅，私有副本变化不算发布成功。
 /// 所有订阅与动作登记在返回前清理，避免影响套件 runner 的退出。
-int main()
+int main(int argc, char** argv)
 {
     bool ok = true;
+    // 使用正式语言资源切换同一套对象，防止名称只在构造时翻译一次。
+    // 方案 ID 与侧栏注册身份必须保持不变，否则持久化和当前选中项会失配。
+    // 路径由 CTest 注入源码资源，测试不依赖用户安装目录中的语言副本。
+    // 加载失败单独报告，不能用回退键名误判成语言切换成功。
+    if ( argc != 3 ) return 1;
+    auto& translator = MMM::Translation::getActiveTranslator();
+    ok &= require(translator.loadLanguage("zh_cn", argv[1]) &&
+                      translator.loadLanguage("en_us", argv[2]),
+                  "load production translations");
+    // 注册身份在切换前保存，后续不允许依赖当前显示标题重新寻找子视图。
+    // 同时验证反向映射，覆盖菜单入口与工作区恢复使用的两条路径。
+    const auto sidebarId =
+        MMM::UI::TabToSubViewId(MMM::UI::SideBarTab::FileExplorer);
+    // 中文、英文、再回中文，覆盖翻译缓存失效和同一对象的重复读取。
+    for ( const char* language : { "zh_cn", "en_us", "zh_cn" } ) {
+        ok &= require(translator.switchLang(language), "switch language");
+        // 对同一组已注册方案读取名称，避免重新构造对象掩盖冻结标题的问题。
+        // 判断完整译文，不只检查名称非空或不等于翻译键。
+        const bool english = std::string_view(language) == "en_us";
+        for ( const auto& profile : Interaction::profiles() ) {
+            if ( profile->id() == "classic-desktop" )
+                ok &= require(profile->name() ==
+                                  (english ? "Classic Desktop" : "经典桌面"),
+                              "localized classic profile");
+            if ( profile->id() == "mouse-only" )
+                ok &= require(
+                    profile->name() == (english ? "Mouse Only" : "纯鼠标"),
+                    "localized mouse profile");
+        }
+        // 翻译键直接作为稳定身份，显示标题则每次按当前语言解析。
+        ok &= require(sidebarId == MMM::UI::TabToSubViewId(
+                                       MMM::UI::SideBarTab::FileExplorer) &&
+                          MMM::UI::SubViewIdToTab(sidebarId) ==
+                              MMM::UI::SideBarTab::FileExplorer &&
+                          TR(sidebarId.c_str()).view() ==
+                              (english ? "File Browser" : "文件浏览"),
+                      "stable sidebar identity and translated title");
+    }
     // 旧配置仍保留原来的镜像绑定，新动作自动使用之前硬编码的组合。
     MMM::Config::EditorSettings source;
     source.m_interactionProfileId    = "test-profile";
@@ -662,6 +816,24 @@ int main()
         require(!classic.extendBrush(Interaction::Surface::MainCanvas, false) &&
                     classic.extendBrush(Interaction::Surface::MainCanvas, true),
                 "classic brush modifiers");
+    // 触控方案独立保存集合运算，不依赖键盘或修改经典方案状态。
+    // 三种模式用于点选和框选，不能让减选设置静默回退成替换。
+    // 按实际方案实例读回，防止测试仅验证输入参数而遗漏策略内部保存。
+    Interaction::synchronizeProfile("touch-gestures", true);
+    for ( const auto mode : { MMM::Logic::SelectionOperation::Replace,
+                              MMM::Logic::SelectionOperation::Add,
+                              MMM::Logic::SelectionOperation::Subtract } ) {
+        Interaction::activeProfile().setSelectionOperation(mode);
+        ok &= require(Interaction::activeProfile().selectionOperation() == mode,
+                      "touch selection operation");
+    }
+    // 恢复默认意图，后续场景和设备策略不能继承这个测试的减选模式。
+    Interaction::activeProfile().setSelectionOperation(
+        MMM::Logic::SelectionOperation::Replace);
+    // 触控设置属于另一实例，经典策略仍必须维持物理修饰键语义。
+    // 检查旧引用，避免切回经典时的重置掩盖状态泄漏。
+    ok &= require(!classic.selectionOperation(),
+                  "touch mode does not alter classic");
     Interaction::synchronizeProfile("mouse-only", true);
     Interaction::synchronizeProfile("mouse-only", true);
     const auto& mouse = Interaction::activeProfile();
@@ -748,5 +920,7 @@ int main()
     ok &= testLessonGesturePolicies();
     // 保留前面首次激活的精确代数断言，再执行需要多次切换的滚动矩阵。
     ok &= checkAcceleratedScroll();
+    ok &= testMenuHotkeysWithoutMenuBar(*observer);
+    ok &= testMobileInputPolicy();
     return ok ? 0 : 1;
 }

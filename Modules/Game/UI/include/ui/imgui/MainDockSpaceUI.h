@@ -77,6 +77,13 @@ public:
     ~MainDockSpaceUI() override;
 
     void update(UIManager* sourceManager) override;
+    /// @brief 桌面策略调用的原有工作区组合，不参与移动端布局。
+    /// @warning 每帧绘制桌面固定规模外壳，不等待其他线程。
+    void renderDesktopWorkspace(UIManager* sourceManager);
+
+    /// @brief 借用主界面持有的工具内容，移动入口不另建一套调色盘与设置状态。
+    /// @warning UI 线程常量访问，引用仅在主界面存活期间有效。
+    ToolbarView& toolbarView() { return m_toolbarView; }
 
     /// @brief 在新皮肤已生效后刷新工具栏中依赖皮肤的调色盘。
     void refreshPaletteAfterSkinChange();

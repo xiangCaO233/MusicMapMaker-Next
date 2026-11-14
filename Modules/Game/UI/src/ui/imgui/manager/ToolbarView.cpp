@@ -93,7 +93,10 @@ ToolbarPopupGeometry positionToolbarPopup(const ImGuiWindow& toolbar,
                    ? (leading ? ImGuiDir_Up : ImGuiDir_Down)
                    : (leading ? ImGuiDir_Left : ImGuiDir_Right);
     }
-    const auto geometry = calculateToolbarPopupGeometry(
+    // 移动工作台固定在右侧，弹层向内展开，不读取桌面停靠偏好。
+    if ( std::string_view(toolbar.Name).ends_with("###MobileWorkbench") )
+        edge = ImGuiDir_Right;
+    auto geometry = calculateToolbarPopupGeometry(
         toolbar.Pos,
         toolbar.Size,
         ImVec2(buttonPosition.x, buttonPosition.y),
@@ -103,7 +106,20 @@ ToolbarPopupGeometry positionToolbarPopup(const ImGuiWindow& toolbar,
         edge,
         std::floor(4.0f * dpiScale),
         std::floor(8.0f * dpiScale));
+    if ( std::string_view(toolbar.Name).ends_with("###MobileWorkbench") ) {
+        // 双列工具入口可能贴近底边，不能用按钮下方的残余高度约束整块内容。
+        // 移动端沿工作台内侧从安全区上沿展开，完整高度由内部滚动承载。
+        // 横向仍保留工作台操作区；桌面的按钮锚定、枢轴和宽高偏好不变。
+        const float padding   = std::floor(8.0f * dpiScale);
+        geometry.m_position.y = viewport->WorkPos.y + padding;
+        geometry.m_pivot.y    = 0;
+        geometry.m_maximumSize.y =
+            std::max(1.0f, viewport->WorkSize.y - 2 * padding);
+    }
     // 所有弹层共用定位协议；最大尺寸约束让高内容滚动而非覆盖工具栏。
+    // 移动锚点只改变展开方向，其余视口夹取与尺寸上限继续走同一实现。
+    // 桌面窗口名不匹配移动身份，仍严格使用原来的固定或浮动工具栏规则。
+    // 不保存工作台窗口观察指针，停靠树显隐重建后下一帧重新取得当前窗口。
     prepareToolbarPopup(geometry, viewport->ID);
     return geometry;
 }
@@ -711,6 +727,142 @@ void ToolbarView::updateEditorConfig(const Config::EditorConfig& config) const
         // 布局字段实际变化时立即建立用户项；文件写入走后台单槽队列。
         Config::AppConfig::instance().saveLayoutChanges();
     }
+}
+
+/// @brief 工具选中态只描述浮层是否可见，与桌面入口共用同一份状态。
+/// @param tool 入口选择的固定工具种类，不与桌面工具栏按钮索引耦合。
+/// @return 对应内容正在显示时为真；未知枚举安全回退为关闭。
+/// @details 选中态不能作为谱面编辑模式或配置值使用，两者由原工具各自读取。
+/// @warning 每帧只读固定标志，不查询后台会话。
+bool ToolbarView::mobileToolOpen(MobileTool tool) const
+{
+    switch ( tool ) {
+    case MobileTool::Layout: return m_showLayoutPopup;
+    case MobileTool::Magnet: return m_showMagnetPopup;
+    case MobileTool::SoundEffect: return m_showSoundEffectTool;
+    case MobileTool::Palette: return m_showColorPopup;
+    }
+    return false;
+}
+
+/// @brief 触摸入口切换已有工具内容，同时维护浮层互斥与布局工具返回状态。
+/// @details 只在真实按钮激活时调用；不模拟桌面按钮、鼠标悬浮或快捷键。
+/// @param tool 要展开或收起的内容，工具间互斥但不清空其配置。
+/// @param anchor 激活按钮的屏幕坐标，内容尺寸变化仍由原定位器夹取边界。
+/// 布局编辑需要成对的进入与恢复命令，其余三个入口只管理内容可见性。
+/// 音效窗口每次打开必须重新同步增益草稿，不能沿用已经失效的修订缓存。
+void ToolbarView::toggleMobileTool(MobileTool tool, glm::vec2 anchor)
+{
+    m_mobileTools   = true;
+    const bool open = !mobileToolOpen(tool);
+    // 同一时刻只展开一个重工具，避免手机上多个面板互相覆盖。
+    // 打开其它内容不强制结束 Layout 模式，保持桌面已有的布局编辑生命周期。
+    // 未完成连续编辑由下一次 renderLayoutPopup 的关闭分支统一收尾。
+    m_showLayoutPopup = m_showMagnetPopup = m_showSoundEffectTool =
+        m_showColorPopup                  = false;
+    switch ( tool ) {
+    case MobileTool::Layout:
+        // 应用服务发布的工具才是权威状态，不能复用上一次桌面绘制缓存。
+        if ( m_editorApplicationService )
+            m_currentTool = m_editorApplicationService->currentTool();
+        if ( open ) {
+            if ( m_currentTool != Logic::EditTool::Layout )
+                m_toolBeforeLayout = m_currentTool;
+            m_currentTool = Logic::EditTool::Layout;
+        } else {
+            m_currentTool = m_toolBeforeLayout == Logic::EditTool::Layout
+                                ? Logic::EditTool::Marquee
+                                : m_toolBeforeLayout;
+        }
+        m_showLayoutPopup  = open;
+        m_lastLayoutBtnPos = anchor;
+        MenuUtil::dispatchCommand(Logic::CmdChangeTool{ m_currentTool });
+        break;
+    case MobileTool::Magnet:
+        m_showMagnetPopup  = open;
+        m_lastMagnetBtnPos = anchor;
+        break;
+    case MobileTool::SoundEffect:
+        m_showSoundEffectTool       = open;
+        m_lastSoundEffectToolBtnPos = anchor;
+        // 每次重开重新取得权威混音值，不能复用上次拖动中的草稿。
+        m_soundEffectGainDraftInitialized = false;
+        m_soundEffectEditorConfigRevision =
+            std::numeric_limits<std::uint64_t>::max();
+        break;
+    case MobileTool::Palette:
+        m_mobilePaletteDetails = false;
+        m_showColorPopup       = open;
+        m_lastColorBtnPos      = anchor;
+        break;
+    }
+}
+
+/// @brief 移动端只复用工具内容，不执行桌面工具条的停靠、快捷键和按钮代码。
+/// @details 外壳提供可见性；切到非画布页时关闭浮层，保留各工具的业务配置。
+/// @param manager 当前 UI 管理器；应用服务观察指针只在本帧访问。
+/// @param scale 移动内容倍率，工具样式仍从用户美化设置读取。
+/// @param visible 工作台真正占用空间且没有被抽屉阻挡时为真。
+/// @note 工具内容共享不等于共享布局，移动调用不会改变桌面停靠偏好。
+/// 浮层位于停靠宿主之上，但内部下拉框仍由原生弹层栈保持优先级。
+/// 点外关闭只消费工具自己的显示标志，不关闭所属画布或其它业务表格。
+/// 模式切换和持久化仍由原工具实现，外壳只提供入口与显示生命周期。
+/// 普通帧不得调用 update：那会写入桌面的停靠方向与工具栏布局偏好。
+/// 隐藏状态仍处理已经启动的文件对话框，避免丢失导入导出确认或保存边沿。
+/// @warning 每帧调用；不持有会话长锁、不扫描谱面、不重新构建桌面布局。
+void ToolbarView::renderMobileTools(UIManager* manager, float scale,
+                                    bool visible)
+{
+    m_mobileTools = true;
+    setEditorApplicationService(manager ? manager->getEditorApplicationService()
+                                        : nullptr);
+    if ( m_editorApplicationService )
+        m_currentTool = m_editorApplicationService->currentTool();
+    // 独立于桌面的工具栏可见性偏好，入口由移动工作台决定。
+    if ( !visible )
+        m_showLayoutPopup = m_showMagnetPopup = m_showSoundEffectTool =
+            m_showColorPopup                  = false;
+    if ( visible ) {
+        // 调色盘初始化最多一次；项目身份不变时，原偏好路径立即返回。
+        // 不在移动外壳复制颜色方案库，避免两套状态在皮肤切换后分离。
+        // 初始化和项目偏好仍复用原有增量路径，不维护第二套调色盘配置。
+        if ( !m_colorPaletteInitialized ) initializeColorPalette();
+        applyProjectPalettePreference();
+    }
+    // 工具内容沿用原来的独立窗口；移动端补充点外收起，不让背景必须依赖鼠标。
+    // 判断按下沿而非释放沿，打开按钮的本次释放不会立即关闭刚出现的工具。
+    // 内部下拉框或颜色选择器展开时，由原生弹层优先处理，不能越级关闭工具。
+    // 标题固定且互斥，窗口查询只覆盖四个已知工具，不遍历全局窗口或谱面。
+    const bool nested = ImGui::IsPopupOpen(
+        nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    if ( !nested && ImGui::IsMouseClicked(0) ) {
+        const std::array windows{
+            std::pair{ &m_showLayoutPopup, "##LayoutComponentsPopup" },
+            std::pair{ &m_showMagnetPopup, "##MagnetToolPopup" },
+            std::pair{ &m_showSoundEffectTool, "##SoundEffectToolPopup" },
+            std::pair{ &m_showColorPopup, "##ColorPalettePopup" }
+        };
+        for ( const auto& [opened, name] : windows ) {
+            if ( !*opened ) continue;
+            const auto* window = ImGui::FindWindowByName(name);
+            // 尚未完成首次 Begin 时没有命中矩形，不凭空推断用户点了外部。
+            // 点击工作台另一个按钮时也关闭旧层，随后释放可打开新的工具。
+            if ( window && !window->Rect().Contains(ImGui::GetIO().MousePos) )
+                *opened = false;
+        }
+    }
+    // 关闭分支也必须推进：布局滑条失活前切页时需要提交最终配置。
+    renderLayoutPopup(scale, manager);
+    renderMagnetPopup(scale);
+    renderSoundEffectTool(scale);
+    // 移动快捷页独立布局，高级方案仍复用原有导入导出与分拍线配置。
+    if ( m_mobilePaletteDetails )
+        renderColorPalettePopup(scale);
+    else
+        renderMobileColorPalette(scale);
+    renderPaletteExportFileDialog(scale);
+    renderPaletteImportFileDialog(scale);
+    drawLayoutPresetFileDialogs();
 }
 
 /// @brief 绘制固定宽度工具栏并处理工具、快捷开关和各独立弹窗入口。
@@ -2516,7 +2668,8 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     if ( !m_showSoundEffectTool ) return;
 
     // 弹层必须锚定到同帧工具栏；工具栏未建立时等待下一帧重试。
-    ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar");
+    ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(
+        m_mobileTools ? "###MobileWorkbench" : " ###Toolbar");
     if ( !toolbarWindow ) return;
 
     // 轨道数只决定弹层行布局；逻辑线程持有会话锁更新时沿用上次布局，
@@ -2666,6 +2819,13 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
         return;
     }
 
+    // 移动停靠宿主包含多个叶节点，工具内容必须位于整棵宿主之上。
+    // 只提升层级，不逐帧抢焦点；内部弹层展开时保留原生父子显示顺序。
+    if ( m_mobileTools &&
+         !ImGui::IsPopupOpen(
+             nullptr,
+             ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) )
+        ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
     ImGui::TextUnformatted(TR("ui.key_sound_tool.title").data());
     ImGui::Separator();
 
@@ -2718,7 +2878,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     /// 调用者必须先压入能标识设置项或轨道的 ID，并与
     /// endSettingCard 成对调用。AlwaysUseWindowPadding 保证无边框子窗口仍
     /// 接受局部 WindowPadding；这是标签与背景边缘保持距离的必要条件。
-    /// 子窗口禁止独立滚动，所有滚轮输入都继续交给外层列表。
+    /// 卡片使用固定内容高度；移动触控沿父子关系交给外层列表，不在每张卡片单独积累偏移。
     const auto beginSettingCard = [&]() {
         ImGui::PushStyleColor(ImGuiCol_ChildBg, cardBackground);
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, frameRounding);
@@ -2728,7 +2888,12 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
             "##SettingCard",
             ImVec2(cardWidth, cardHeight),
             ImGuiChildFlags_AlwaysUseWindowPadding,
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+            // 移动卡片没有自己的滚动范围，只隐藏滚动条，让触控继续寻找外层列表。
+            // 两个禁止标志同时存在会形成输入边界，卡片内的文字和控件均无法起手滚动。
+            // 桌面保持原标志，不改变鼠标窗口与滚轮的既有行为。
+            m_mobileTools ? ImGuiWindowFlags_NoScrollbar
+                          : ImGuiWindowFlags_NoScrollbar |
+                                ImGuiWindowFlags_NoScrollWithMouse);
     };
 
     /// @brief 结束圆角设置卡片并恢复局部样式。
@@ -3572,10 +3737,14 @@ void ToolbarView::pushPaletteToBrush(bool resetDrawColors)
 /// 命令携带所有槽位，使逻辑层能按各音符所属槽位一次处理当前选择集合。
 /// 颜色选择器只在编辑结束时调用，避免拖动期间生成大量选择修改命令。
 /// 该入口不检查选择是否为空，逻辑层把空选择作为正常无操作处理。
-void ToolbarView::pushPaletteToSelection()
+void ToolbarView::pushPaletteToSelection(bool explicitTouch)
 {
+    // 移动调色只更改后续画笔，选区由快捷页上的明确按钮提交。
+    // 高级方案页同样不能因拖动取色或改文本而悄悄改选区。
+    if ( m_mobileTools && !explicitTouch ) return;
     Logic::EditorEngine::instance().pushCommand(
-        Logic::CmdApplyNotePaletteToSelection{ m_paletteColors });
+        Logic::CmdApplyNotePaletteToSelection{
+            m_paletteColors, false, m_mobileTools });
 }
 
 /// @brief 把当前分拍线与玩家音符默认配色写入编辑器运行时视觉配置。
@@ -4346,7 +4515,8 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
     if ( !m_showColorPopup ) return;
 
     // 通过稳定内部窗口名定位工具栏，以其位置作为浮层锚点。
-    ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar");
+    ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(
+        m_mobileTools ? "###MobileWorkbench" : " ###Toolbar");
     // 工具栏尚未创建或被隐藏时无法定位浮层。
     if ( !toolbarWindow ) return;
 
@@ -4381,6 +4551,12 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
                         ImVec2(itemSpacing, itemSpacing));
 
     if ( ImGui::Begin("##ColorPalettePopup", nullptr, popupFlags) ) {
+        // 移动停靠宿主不能盖住共享工具，内部下拉框仍保留自己的层级。
+        if ( m_mobileTools &&
+             !ImGui::IsPopupOpen(
+                 nullptr,
+                 ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) )
+            ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
         // 标题作为内容绘制，窗口本身不显示系统标题栏。
         ImGui::TextUnformatted(TR("ui.toolbar.note_palette.title").data());
         ImGui::Separator();
@@ -4880,7 +5056,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
             if ( ::MMM::UI::FeedbackButton(
                      TR("ui.toolbar.note_palette.apply_selected").data(),
                      ImVec2(std::floor(140.0f * dpiScale), buttonH)) ) {
-                pushPaletteToSelection();
+                pushPaletteToSelection(true);
             }
             ImGui::SameLine();
             // 清除单槽自定义使用空 optional 命令恢复对象默认语义。
@@ -5344,7 +5520,8 @@ void ToolbarView::renderMagnetPopup(float dpiScale)
     // 关闭状态不定位工具栏也不读取配置。
     if ( !m_showMagnetPopup ) return;
 
-    ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar");
+    ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(
+        m_mobileTools ? "###MobileWorkbench" : " ###Toolbar");
     // 工具栏不可见时缺少稳定锚点，本帧跳过浮层。
     if ( !toolbarWindow ) return;
 
@@ -5375,6 +5552,12 @@ void ToolbarView::renderMagnetPopup(float dpiScale)
                         std::floor(aesthetics.frameRounding * dpiScale));
 
     if ( ImGui::Begin("##MagnetToolPopup", nullptr, popupFlags) ) {
+        // 提升完整浮层而非只在相邻停靠叶的空隙中显示，不主动改变输入焦点。
+        if ( m_mobileTools &&
+             !ImGui::IsPopupOpen(
+                 nullptr,
+                 ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) )
+            ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
         // 所有控件读取同一份编辑器配置副本，修改后整份提交。
         ImGui::TextUnformatted(TR("ui.magnet_tool.title").data());
         ImGui::Separator();
@@ -5730,7 +5913,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         return;
     }
 
-    ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(" ###Toolbar");
+    ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(
+        m_mobileTools ? "###MobileWorkbench" : " ###Toolbar");
     // 找不到工具栏锚点时保持脏标记，不提前丢失待保存状态。
     if ( !toolbarWindow ) return;
 
@@ -5740,8 +5924,14 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
     const float popupH = m_layoutPopupHeight > 0
                              ? m_layoutPopupHeight
                              : std::floor(100.0f * dpiScale);
-    positionToolbarPopup(
+    const auto  geometry = positionToolbarPopup(
         *toolbarWindow, m_lastLayoutBtnPos, ImVec2(popupW, popupH), dpiScale);
+    if ( m_mobileTools ) {
+        // 移动面板宽度按实际内侧空间夹取，长名称不能撑出屏幕或盖住工作台。
+        // 高度继续自动计算并受既有最大高度约束，超长表单只在面板内滚动。
+        ImGui::SetNextWindowSize(
+            { std::min(420.f * dpiScale, geometry.m_maximumSize.x), 0 });
+    }
 
     // 自动尺寸由展开的折叠分组决定。窗口不可移动或缩放，也不写 imgui.ini，
     // 因为它的生命周期绑定 Layout 工具而非独立工作区面板。上一帧尺寸仅用于
@@ -5761,7 +5951,22 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,
                         std::floor(aesthetics.frameRounding * dpiScale));
 
+    if ( m_mobileTools ) {
+        // 只扩大本面板控件的输入行，桌面密度与持久化主题不受影响。
+        const auto padding = ImGui::GetStyle().FramePadding;
+        ImGui::PushStyleVar(
+            ImGuiStyleVar_FramePadding,
+            ImVec2(padding.x,
+                   std::max(padding.y,
+                            (48.f * dpiScale - ImGui::GetFontSize()) * .5f)));
+    }
     if ( ImGui::Begin("##LayoutComponentsPopup", nullptr, popupFlags) ) {
+        // 移动布局工具需覆盖整棵停靠宿主，不能被工作台自身盖住一部分。
+        if ( m_mobileTools &&
+             !ImGui::IsPopupOpen(
+                 nullptr,
+                 ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) )
+            ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
         // 所有设置分组共享同一个 AppConfig 实例和应用服务提交入口。
         ImGui::TextUnformatted(TR("ui.toolbar.layout_settings").data());
         ImGui::Separator();
@@ -5797,7 +6002,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
             m_layoutPopupHeight = size.y;
             // 提前返回仍须配对 Begin 和样式栈，不能影响后续工具窗口。
             ImGui::End();
-            ImGui::PopStyleVar(3);
+            ImGui::PopStyleVar(m_mobileTools ? 4 : 3);
             return;
         }
         auto& appConfig = Config::AppConfig::instance();
@@ -5825,8 +6030,12 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         // 颜色按钮、控制宽度和恢复按钮列共同定义各分组的视觉网格。恢复按钮
         // 宽度按当前翻译文本测量，颜色列相对它定位，因此语言切换后仍对齐。
         // 视觉滑条采用统一宽度，自动尺寸弹层不会随当前数值文本抖动。
-        const float colorButtonSize    = std::floor(22.0f * dpiScale);
-        const float visualControlWidth = std::floor(230.0f * dpiScale);
+        const float colorButtonSize =
+            std::floor((m_mobileTools ? 48.0f : 22.0f) * dpiScale);
+        const float visualControlWidth =
+            m_mobileTools ? std::min(std::floor(230.0f * dpiScale),
+                                     ImGui::GetContentRegionAvail().x)
+                          : std::floor(230.0f * dpiScale);
         const auto  resetButtonLabel = TR("ui.toolbar.layout_component_reset");
         const float resetButtonWidth =
             ImGui::CalcTextSize(resetButtonLabel.data()).x +
@@ -6273,7 +6482,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
 
             if ( showColor ) {
                 // 频谱使用左右声道专用颜色，因此不显示通用组件色按钮。
-                ImGui::SameLine();
+                // 移动端独立一行放颜色与恢复，长组件名不会把按钮推出面板。
+                if ( !m_mobileTools ) ImGui::SameLine();
                 // 颜色按钮固定在复位列左侧，避免组件名称长度改变颜色列位置。
                 const float contentRight =
                     ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
@@ -6304,7 +6514,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                 }
             }
 
-            ImGui::SameLine();
+            if ( showColor || !m_mobileTools ) ImGui::SameLine();
             // 将所有复位按钮锚定到弹窗内容区右侧，避免标签长度造成错位。
             const float remainingWidth = ImGui::GetContentRegionAvail().x;
             if ( remainingWidth > resetButtonWidth ) {
@@ -6693,8 +6903,15 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         // 保存本帧聚合状态，供下一帧检测关闭边沿。
         m_layoutComponentColorPickerOpen = anyColorPickerOpen;
 
-        ImGui::TextDisabled("%s",
-                            TR("ui.toolbar.layout_component_drag_hint").data());
+        if ( m_mobileTools ) {
+            // 说明常驻并自动换行，触屏不依赖 Hover 或桌面修饰键。
+            ImGui::TextWrapped(
+                "单指拖边框或中心把手调整轨道；拖文字主体移动，从外角拖动缩放。"
+                "轻点不修改，双指或系统取消会结束本次拖动。");
+        } else {
+            ImGui::TextDisabled(
+                "%s", TR("ui.toolbar.layout_component_drag_hint").data());
+        }
 
         // 编辑器个性化始终保持右侧布局设置可见；用户需要一边看画布组件，
         // 一边检查显隐、同步与尺寸选项。设置区与画布目标分别挖孔，不能
@@ -6739,7 +6956,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
     }
     ImGui::End();
     // 恢复仅属于 Layout 弹层的窗口样式。
-    ImGui::PopStyleVar(3);
+    ImGui::PopStyleVar(m_mobileTools ? 4 : 3);
 }
 
 /// @brief 在工具栏项目左侧绘制统一悬浮提示。

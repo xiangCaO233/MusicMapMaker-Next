@@ -1,5 +1,9 @@
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
+#ifdef __ANDROID__
+// Android 的资源目录由文档授权管理，不按桌面本地目录处理。
+#    include "common/platform/DocumentStorage.h"
+#endif
 #include "config/AppConfig.h"
 #include "config/AppPaths.h"
 #include "config/AudioPlaybackConfig.h"
@@ -26,6 +30,7 @@
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <filesystem>
@@ -724,40 +729,48 @@ void SettingsView::drawSoftwareSettings()
         // 使用标准设置行提供左侧标签，组合框只占右侧值列，不重复绘制标题。
         // 标签参与软件页统一宽度测量，长翻译不会挤到下拉框右侧。
         // 仍沿用原翻译键与配置字段，已有皮肤文本和用户选择无需迁移。
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.shortcut.interaction_profile").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                // 运行态仍由安全帧切换协议管理，选择只写持久化请求。
-                // 引用仅在本帧使用，不把活动方案借用保存进布局缓存。
-                const auto& active = Interaction::activeProfile();
-                // 宽度来自 Clay 实际值列，窗口缩放和主题留白由统一布局处理。
-                // 控件使用隐藏 ID，显示标签由设置行负责，避免重复计算文字占位。
-                ImGui::SetNextItemWidth(r.width);
-                if ( FeedbackBeginCombo("##InteractionProfile",
-                                        active.name().data()) ) {
-                    for ( const auto& profile : Interaction::profiles() ) {
-                        // 名称可本地化或重名，控件身份始终来自稳定方案 ID。
-                        const auto id = profile->id();
-                        ImGui::PushID(id.data(), id.data() + id.size());
-                        const bool selected =
-                            settings.m_interactionProfileId == id;
-                        // 保存选择请求而非直接激活，避免移交尚未结束的画布手势。
-                        // 运行态预览跟随安全帧协议，待切换期间仍显示真实活动方案。
-                        if ( FeedbackSelectable(profile->name().data(),
-                                                selected) ) {
-                            settings.m_interactionProfileId = id;
-                            changed                         = true;
-                            // 复用软件页末尾的一次配置发布和保存，不单独写文件。
+        if ( workspaceShowsPointerSettings() ) {
+            addSettingItem(
+                *sec,
+                rowIndex,
+                TR_CACHE("ui.settings.shortcut.interaction_profile").data(),
+                maxLabelW,
+                [&](Clay_BoundingBox r, bool) {
+                    // 运行态仍由安全帧切换协议管理，选择只写持久化请求。
+                    // 引用仅在本帧使用，不把活动方案借用保存进布局缓存。
+                    const auto& active = Interaction::activeProfile();
+                    // 宽度来自 Clay
+                    // 实际值列，窗口缩放和主题留白由统一布局处理。 控件使用隐藏
+                    // ID，显示标签由设置行负责，避免重复计算文字占位。
+                    ImGui::SetNextItemWidth(r.width);
+                    if ( FeedbackBeginCombo("##InteractionProfile",
+                                            active.name().data()) ) {
+                        for ( const auto& profile : Interaction::profiles() ) {
+                            // 名称可本地化或重名，控件身份始终来自稳定方案 ID。
+                            const auto id = profile->id();
+                            // 触控方案仅用于移动端，桌面的可选项保持原样。
+                            if ( profile->touchGestures() && m_sourceManager &&
+                                 m_sourceManager->workspacePresentation()
+                                     .usesDesktopLayout() )
+                                continue;
+                            ImGui::PushID(id.data(), id.data() + id.size());
+                            const bool selected =
+                                settings.m_interactionProfileId == id;
+                            // 保存选择请求而非直接激活，避免移交尚未结束的画布手势。
+                            // 运行态预览跟随安全帧协议，待切换期间仍显示真实活动方案。
+                            if ( FeedbackSelectable(profile->name().data(),
+                                                    selected) ) {
+                                settings.m_interactionProfileId = id;
+                                changed                         = true;
+                                // 复用软件页末尾的一次配置发布和保存，不单独写文件。
+                            }
+                            ImGui::PopID();
                         }
-                        ImGui::PopID();
+                        // 和统一反馈控件成对结束，保持悬浮与点击反馈一致。
+                        FeedbackEndCombo();
                     }
-                    // 和统一反馈控件成对结束，保持悬浮与点击反馈一致。
-                    FeedbackEndCombo();
-                }
-            });
+                });
+        }
 
         addSettingItem(
             *sec,
@@ -1625,10 +1638,15 @@ void SettingsView::drawSoftwareSettings()
     // - BPM 同步启用时固定 smokeLifeTime 仍保留但不可编辑；
     // - 所有字段只改变后续帧绘制，不创建或销毁持久资源。
     // 光标组选择系统光标或软件绘制光标，并展示后者的粒子参数。
+    // 纯触屏工作区不创建标题或内部控件，不根据外接鼠标改变入口可见性。
+    // 仅隐藏界面，保留已有配置，桌面工作区继续按原规则显示。
     if ( auto* sec =
-             addHeader(TR_CACHE("ui.settings.software.cursor_params").data(),
+             workspaceAllowsHoverFeedback()
+                 ? addHeader(
+                       TR_CACHE("ui.settings.software.cursor_params").data(),
                        true,
-                       "personalization.settings.cursor") ) {
+                       "personalization.settings.cursor")
+                 : nullptr ) {
 
         // 采用统一标签宽度，使动态软件光标参数保持对齐。
 
@@ -1945,6 +1963,43 @@ void SettingsView::drawSoftwareSettings()
 
         // 采用统一标签宽度，让动态模式参数不会改变值列起点。
 
+#ifdef __ANDROID__
+        // 兼容模式使用普通路径，必须由用户显式进入设置授权，不能因切换单选自动申请。
+        // Android 的 Unified 对应本机目录，Native 对应系统文档选择器。
+        // 此映射复用现有选择器消费流程，不增加第二套文件浏览布局。
+        // 权限是否有效只在打开选择器时确认，设置绘制不会访问系统服务。
+        // 单选改变偏好不改变现有工程来源，SAF 工作副本仍保留原授权映射。
+        // 用户从旧工作副本切换到直接目录时，须重新打开原始共享工程目录。
+        // 授权按钮只修改本包访问方式，不修复或扩大其他文件提供器的权限。
+        // 取消授权后仍可使用系统选择，不把空目录结果误报为成功。
+        // 兼容目录直接修改原文件，工作副本不会在两种模式之间自动互相覆盖。
+        // 文件入口在打开时刷新授权，用户从系统设置返回后无需重启应用。
+        // 授权入口与选择器模式分开保存，权限撤销仍由系统设置最终控制。
+        addRadioSetting(
+            *sec,
+            rowIndex,
+            sectionIndex,
+            "文件访问方式",
+            maxLabelW,
+            { { "本机目录兼容", (int)Config::FilePickerStyle::Unified },
+              { "系统文件选择", (int)Config::FilePickerStyle::Native } },
+            (int&)settings.filePickerStyle,
+            changed);
+        addSettingItem(
+            *sec,
+            rowIndex,
+            "本机目录授权",
+            maxLabelW,
+            [&settings, &changed](Clay_BoundingBox, bool) {
+                // 固定文字入口始终可见，也可用于撤销权限；无逐帧 JNI 状态查询。
+                if ( FeedbackButton("打开所有文件访问设置") ) {
+                    settings.filePickerStyle = Config::FilePickerStyle::Unified;
+                    changed                  = true;
+                    if ( !Common::requestLocalFileAccess() )
+                        XERROR("Failed to open Android file access settings");
+                }
+            });
+#else
         // 文件选择器偏好决定后续打开操作使用 ImGui 统一界面还是系统原生对话框。
         addRadioSetting(
             *sec,
@@ -1959,12 +2014,16 @@ void SettingsView::drawSoftwareSettings()
             (int&)settings.filePickerStyle,
             changed);
 
+#endif
+
         // 保存格式偏好只作用于后续保存；不会立即转换当前已打开的谱面文件。
         addRadioSetting(
             *sec,
             rowIndex,
             sectionIndex,
-            TR_CACHE("ui.settings.software.save_format").data(),
+            TR(workspaceSettingLabelKey("ui.settings.software.save_format")
+                   .data())
+                .data(),
             maxLabelW,
             { { TR_CACHE("ui.settings.software.save_format.original").data(),
                 (int)Config::SaveFormatPreference::Original },

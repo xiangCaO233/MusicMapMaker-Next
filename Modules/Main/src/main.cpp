@@ -1,3 +1,7 @@
+#ifdef __ANDROID__
+#    include "main/AndroidBootstrap.h"
+#    include <SDL3/SDL_main.h>
+#endif
 #include "config/AppConfig.h"
 #include "config/AppPaths.h"
 #include "config/CreatorIdentity.h"
@@ -649,6 +653,16 @@ int main(int argc, char* argv[])
 {
     using namespace MMM;
     using namespace Config;
+#ifdef __ANDROID__
+    // 配置与日志初始化前先绑定应用私有目录，禁止读取桌面的配置状态。
+    // 配置根与随包资源必须先于首个配置单例准备完成，不能回退到不可写的桌面目录。
+    // 首次解压属于启动阶段，不推迟到主渲染循环或皮肤更新回调。
+    // 随包资源加载失败即结束启动，不能运行只准备了一部分资源的编辑器。
+    // 后台恢复继续使用既有视图和配置，不再次进入此资源准备入口。
+    // 手机实验包具有独立
+    // applicationId，因此不会覆盖桌面用户数据或其他探针配置。
+    if ( !Main::prepareAndroidRuntime() ) return 1;
+#endif
 
     // 共享池必须早于指纹、资源同步、音频和逻辑子系统的后台任务初始化。
     auto& appThreadPool = Runtime::AppThreadPool::instance();
@@ -679,7 +693,17 @@ int main(int argc, char* argv[])
 
     // 启动同步界面尚未加载完整音效资源，因此临时关闭按钮反馈声音。
     UI::SetInteractionFeedbackEnabled(false);
+#ifdef __ANDROID__
+    // Android 首轮使用已经随 APK 展开的资源，不创建第二套启动窗口或联网下载。
+    const auto skin =
+        Main::resolveStartupSkinPath(Config::AppPaths::defaultSkinFilePath());
+    const auto startupResult =
+        Config::SkinManager::instance().loadSkin(Config::pathToUtf8(skin))
+            ? Main::StartupPreparationResult::Ready
+            : Main::StartupPreparationResult::Failed;
+#else
     const auto startupResult = Main::prepareStartupAssets();
+#endif
     // 资源和皮肤准备完成后恢复正式 UI 的统一按钮反馈。
     UI::SetInteractionFeedbackEnabled(true);
     if ( startupResult == Main::StartupPreparationResult::Cancelled ) {

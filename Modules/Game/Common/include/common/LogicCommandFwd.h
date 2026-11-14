@@ -48,6 +48,8 @@ struct CmdCreateAudioSample;
 /// @brief 原子更新一个自动采样的精确属性，完整载荷定义位于 LogicCommands.h。
 struct CmdUpdateAudioSampleProperties;
 
+/// @brief 折线节点的显式局部结构编辑。
+struct CmdDeletePolylineNode;
 /// @brief 将单个谱面物件移动到精确秒时间戳，完整载荷定义位于 LogicCommands.h。
 struct CmdUpdateObjectTimestamp;
 
@@ -326,10 +328,11 @@ using LogicCommand = std::variant<
     CmdUpdateEditorConfig, CmdUpdateViewport, CmdSetPlayState, CmdLoadBeatmap,
     CmdCreateBeatmap, CmdSetHoveredEntity, CmdSelectEntity, CmdStartDrag,
     CmdUpdateDrag, CmdEndDrag, CmdCreateAudioSample,
-    CmdUpdateAudioSampleProperties, CmdUpdateObjectTimestamp,
-    CmdUpdateObjectSampleVolume, CmdUpdateSelectedObjectSampleVolume,
-    CmdUpdateTrackCount, CmdUpdateBgmTrackCount, CmdUpdateDraftTrackCount,
-    CmdSeek, CmdCaptureComposeLessonNotes, CmdSetComposeLessonInputLimit,
+    CmdUpdateAudioSampleProperties, CmdDeletePolylineNode,
+    CmdUpdateObjectTimestamp, CmdUpdateObjectSampleVolume,
+    CmdUpdateSelectedObjectSampleVolume, CmdUpdateTrackCount,
+    CmdUpdateBgmTrackCount, CmdUpdateDraftTrackCount, CmdSeek,
+    CmdCaptureComposeLessonNotes, CmdSetComposeLessonInputLimit,
     CmdSetPlaybackSpeed, CmdSetPlaybackPitch, CmdSetKeySoundTrackMute,
     CmdSetKeySoundTrackGain, CmdSetKeySoundEffectGroupGain,
     CmdSetDraftKeySoundAreaMute, CmdSetBgmKeySoundAreaMute, CmdChangeTool,

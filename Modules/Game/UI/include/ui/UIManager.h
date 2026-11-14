@@ -47,6 +47,7 @@ class Service;
 class Spotlight;
 }  // namespace Walkthrough
 class ProjectDropRouter;
+class IWorkspacePresentation;
 class ICanvasView;
 class IAuxiliaryWindowView;
 class ICanvasWorkspaceService;
@@ -67,6 +68,9 @@ public:
 
     /// @brief 取消项目生命周期订阅并销毁 UI 管理器。
     ~UIManager();
+    /// @brief 返回本管理器的平台工作区策略，不转移所有权。
+    /// @warning UI 热路径：只读取独占实例，不分配或加锁。
+    IWorkspacePresentation& workspacePresentation();
     /// @brief 请求在下一帧打开欢迎页并返回主题目录，不改变启动偏好。
     void openWelcome();
     /// @brief 取得不依赖视图开关的演练服务。

@@ -6,6 +6,8 @@
 #include "common/ChartObjectKind.h"
 #include "common/EditTool.h"
 #include "common/NoteColor.h"
+#include "common/NotePaletteStroke.h"
+#include "common/ObjectDeletion.h"
 #include "common/SelectionOperation.h"
 #include "common/walkthrough/ComposeLessonNotes.h"
 #include "config/EditorConfig.h"
@@ -123,6 +125,8 @@ struct CmdStartDrag {
     std::optional<std::uint8_t> hitPart;
     /// @brief 按下瞬间命中的折线子项索引，与 hitPart 一起锁定手势目标。
     std::optional<std::int32_t> hitSubIndex;
+    /// @brief 触控节点起笔的身份校验；零值保留经典调用行为。
+    std::uint64_t hitNodeToken{};
 };
 
 /**
@@ -140,6 +144,8 @@ struct CmdUpdateDrag {
  */
 struct CmdEndDrag {
     std::string cameraId;
+    /// @brief 输入被系统或导航手势接管时恢复预览，不新增撤销历史。
+    bool cancel{ false };
 };
 
 /// @brief 将项目音频资源作为自动采样放入主画布 BGM 轨道区。
@@ -176,6 +182,19 @@ struct CmdUpdateAudioSampleProperties {
 
     /// @brief 自动采样物件音量。
     float volume{ 1.0F };
+};
+
+/// @brief 对一个已锁定的合法折线节点执行局部删除。
+/// @details 沿用现有橡皮擦的断开路径语义，不重连左右余段。
+struct CmdDeletePolylineNode {
+    /// @brief 目标父实体，不能使用另一注册表中的同号句柄。
+    entt::entity entity{ entt::null };
+    /// @brief 玩家与草稿沿用各自编辑权限。
+    ChartObjectKind kind{ ChartObjectKind::PlayerNote };
+    /// @brief 节点索引必须与稳定令牌同时匹配。
+    int subIndex{ -1 };
+    /// @brief 菜单打开时冻结，节点被替换后拒绝旧命令。
+    std::uint64_t nodeToken{};
 };
 
 /// @brief 将单个谱面物件移动到精确秒时间戳。
@@ -239,6 +258,8 @@ struct CmdStartMarquee {
     bool        isCtrlDown{ false };
     /// @brief 本次框选锁存的集合操作；为空时沿用经典追加修饰键。
     std::optional<SelectionOperation> selectionOperation;
+    /// @brief 可取消的触摸事务保存旧选择；桌面默认不承担复制成本。
+    bool captureSelectionForCancel{ false };
 };
 
 /**
@@ -252,7 +273,10 @@ struct CmdUpdateMarquee {
 /**
  * @brief 结束框选指令
  */
-struct CmdEndMarquee {};
+struct CmdEndMarquee {
+    /// @brief 恢复起框前的选择及框序列，仅对保存了检查点的事务生效。
+    bool cancel{ false };
+};
 
 /**
  * @brief 移除指定位置的框选区域
@@ -276,6 +300,12 @@ struct CmdStartBrush {
     bool createStandalone{ false };
     /// @brief 纯鼠标临时忽略吸附时连起笔也使用连续时间；旧入口默认保持原行为。
     bool bypassSnapAtStart{ false };
+    /// @brief 固定起轨且仅创建单键或长条；默认关闭，保留自由画笔与折线语义。
+    /// 起笔时锁存，后续更新不依赖设备类型或实时键盘状态。
+    bool m_noteHoldOnly{ false };
+    /// @brief 续写只预览，释放时把删除与创建合成一次事务；旧入口默认关闭。
+    /// 取消不改动注册表、撤销栈或重做栈，期间发生其他编辑则拒绝过期提交。
+    bool m_transactionalResume{ false };
 };
 
 /**
@@ -358,6 +388,8 @@ struct CmdSeek {
 
     /// @brief 是否为拖动进度条期间的连续预览请求。
     bool isScrubbing{ false };
+    /// @brief 可选谱面实例约束；零保留既有全局定位，非零拒绝切谱后的旧命令。
+    std::uintptr_t beatmapInstanceId{ 0 };
 };
 
 /// @brief 在逻辑线程一次性截取指定教学段落的正式轨道根物件。
@@ -488,12 +520,18 @@ struct CmdSetBrushAudioResource {
 struct CmdApplyNotePaletteToSelection {
     /// @brief 完整自定义颜色表，顺序与 NoteColorSlot 一致。
     std::array<glm::vec4, NOTE_COLOR_SLOT_COUNT> colors;
+    /// @brief 明确清除选区全部配色，默认保持桌面完整填色语义。
+    bool m_clear{};
+    /// @brief 移动显式确认入口额外复核播放和专业模式，不影响旧桌面入口。
+    bool m_touch{};
 };
 
 /// @brief 将当前画笔调色盘应用到指定音符物件。
 struct CmdApplyBrushPaletteToEntity {
-    /// @brief 目标音符实体。
+    /// @brief 默认单目标沿用桌面连续染色语义。
     entt::entity entity{ entt::null };
+    /// @brief 显式批次只在正常释放提交，一次命令形成一次颜色历史。
+    std::optional<NotePaletteStroke> m_stroke;
 };
 
 /// @brief 清除指定音符物件的自定义配色覆写。
@@ -511,14 +549,17 @@ struct CmdClearAllNoteColorOverrides {};
 struct CmdUndo {
     /// @brief 非零时只回滚对应教学创建，不执行普通栈顶撤销。
     std::uint64_t walkthroughToken{ 0 };
-    /// @brief 教学撤销的原始画布；关闭后丢弃，不回退到当前活动谱面。
+    /// @brief 显式撤销的原始画布；关闭后丢弃，空值沿用桌面活动会话。
     std::string cameraId;
 };
 
 /**
  * @brief 重做指令
  */
-struct CmdRedo {};
+struct CmdRedo {
+    /// @brief 触摸历史动作的画布身份；空值保留桌面活动会话路由。
+    std::string cameraId;
+};
 
 /**
  * @brief 复制指令
@@ -547,7 +588,11 @@ struct CmdCut {};
 /**
  * @brief 删除选中物件指令
  */
-struct CmdDeleteSelected {};
+struct CmdDeleteSelected {
+    /// @brief 空值保留桌面选择／悬浮语义；有值时仅删除明确目标。
+    /// 空列表是无操作，不允许回退选择，也不为预览创建中间历史。
+    std::optional<ObjectDeletion> m_objects;
+};
 
 /// @brief 删除创作教学红框指定的错误根物件，避免普通撤销误伤其它编辑。
 struct CmdRemoveComposeLessonNote {
@@ -722,6 +767,24 @@ struct CmdPanCanvas {
 
     /// @brief 当前画布纵向渲染缩放。
     float renderScaleY{ 1.0F };
+    /// @brief 直接导航的绝对缩放；零保留原鼠标平移语义，不改缓存倍率。
+    float timelineZoom{ 0.0F };
+    /// @brief 缩放前的双指中点纵坐标，相对于画布内容区域。
+    float anchorY{ 0.0F };
+    /// @brief 全部导航更新结束后清除局部缩放；配置发布必须先于此命令。
+    bool finishNavigation{ false };
+
+    /// @brief 本次触控临时取消吸附，不覆盖应用保存的滚动磁吸偏好。
+    bool bypassScrollSnap{ false };
+
+    /// @brief 预览专用范围倍率；正值启用 Preview 导航，不影响主画布缩放。
+    float previewAreaRatio{ 0.0F };
+    /// @brief 预览轻点按实际显示帧反投影，不消费滞后的鼠标悬浮时间。
+    bool previewTap{ false };
+    /// @brief 预览命令绑定谱面实例，切谱后拒绝旧手指剩余命令。
+    std::uintptr_t previewInstanceId{ 0 };
+    /// @brief 轻点对应快照的视觉时间，已包含有效视觉偏移。
+    double previewVisualTime{ 0.0 };
 };
 
 /**

@@ -34,7 +34,7 @@ public:
     /// @brief 销毁主菜单视图。
     ~MainMenuView();
 
-    /// @brief 遍历更新已注册菜单持有的 action 状态。
+    /// @brief 更新菜单动作并处理独立于菜单栏显隐的应用快捷键。
     /// @param sourceManager 当前 UI 管理器。
     /// @param statusMessageSink 状态消息接收接口。
     void update(UIManager*          sourceManager,

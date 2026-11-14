@@ -3765,8 +3765,28 @@ bool Basic2DCanvas::drawCameraLayoutControls()
     // 首帧尚未创建时跳过，下一帧自动显示；不在工具栏重复建立状态。
     if ( !m_layoutEditor ) return false;
     // 共用同一实例，按钮切换和三维手势不会出现两份模式状态。
-    m_layoutEditor->drawControls(
-        Config::AppConfig::instance().getVisualConfig());
+    auto& app    = Config::AppConfig::instance();
+    auto& visual = app.getVisualConfig();
+    // 移动标量绘制于工具面板，发生在画布 update 之外。
+    // 不能等下一帧再比较旧值，否则届时起点已经是修改后的值。
+    // 固定五组字段按值复制，不复制布局库或谱面快照。
+    const auto position  = visual.canvasCameraPosition;
+    const auto rotation  = visual.canvasCameraRotation;
+    const auto length    = visual.canvasCameraLength;
+    const auto motion    = visual.canvasMotionCompensation;
+    const auto thickness = visual.canvasThicknessCompensation;
+    m_layoutEditor->drawControls(visual);
+    if ( position != visual.canvasCameraPosition ||
+         rotation != visual.canvasCameraRotation ||
+         length != visual.canvasCameraLength ||
+         motion != visual.canvasMotionCompensation ||
+         thickness != visual.canvasThicknessCompensation ) {
+        // 只在真实修改边沿捕获预设，复用画布拖动相同的后台保存队列。
+        // 同一套参数必须通知厚度补偿与逻辑投影，不能只改变预览矩阵。
+        // 这里不等待会话更新长锁，也不做同步磁盘写入。
+        app.saveLayoutChanges();
+        Logic::EditorEngine::instance().updateCanvasCameraConfig(visual);
+    }
     return m_layoutEditor->cameraMode();
 }
 

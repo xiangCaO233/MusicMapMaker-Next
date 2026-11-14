@@ -24,8 +24,9 @@ bool near(double lhs, double rhs)
 /// @note 原始位置由调用方保留，此处不要求空结果的 snappedTime 等于输入。
 bool testDisabledPlacementSnap()
 {
-    // 不显式覆盖开关，同时约束 EditorSettings 的默认吸附状态为关闭。
+    // 首次默认开启由 MagnetDefaultsTest 覆盖，此处独立验证用户显式关闭。
     MMM::Config::EditorSettings settings;
+    settings.objectPlacementSnap = false;
     // 正常 BPM 与有限输入排除输入非法导致空结果的干扰。
     // 无穷右边界表示最后一个 BPM 段，本例不测试下一时间点截断。
     const auto result = MMM::Logic::SessionUtils::calculateObjectPlacementSnap(

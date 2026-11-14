@@ -4,11 +4,21 @@
 #include <cmath>
 #include <cstdint>
 #include <entt/entity/entity.hpp>
+#include <functional>
 #include <string>
+#include <string_view>
 
 namespace MMM::Common::Render
 {
 using Logic::ChartObjectKind;
+
+/// @brief 将稳定子节点身份压成同进程触控校验令牌，空身份不能编辑结构。
+/// @warning 可见命中框热路径只散列固定长度身份，不分配、不生成新身份。
+inline std::uint64_t polylineTouchToken(std::string_view identity)
+{
+    // 令牌只用于拒绝过期索引，不作为持久化或跨设备协议身份。
+    return identity.empty() ? 0 : std::hash<std::string_view>{}(identity);
+}
 
 /// @brief 拾取包围盒对应的可交互物件部位。
 /// @note 部位用于选择拖动语义，具体物件领域另由 ChartObjectKind 表示。
@@ -20,7 +30,9 @@ enum class HoverPart : uint8_t {
     FlickArrow,
     PolylineNode,
     SampleAnchor,
-    SampleOffset
+    SampleOffset,
+    /// @brief 显式调整独立长条起点，尾部时间保持不变。
+    HoldStart
 };
 
 /// @brief UI 悬浮检视面板展示的细分物件结构类型。
@@ -152,6 +164,10 @@ struct Hitbox {
     float h;
     /// @brief 实体所在的独立 ECS 注册表。
     ChartObjectKind kind{ ChartObjectKind::PlayerNote };
+    /// @brief 仅独立 Note/Hold 的已选部件允许呈现触控调整目标。
+    HoverPart touchHandle{ HoverPart::None };
+    /// @brief 折线子节点稳定身份令牌，防止旧菜单下标套用到相邻节点。
+    std::uint64_t touchNodeToken{};
 };
 
 /// @brief 以包围盒中心为基准缩放交互拾取区域。

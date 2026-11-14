@@ -538,6 +538,13 @@ public:
     /// @note 由 UI 线程在实际变化时调用，不更新 AppConfig 或广播会话命令。
     /// @warning 相机交互路径：只短持配置值锁，不等待会话更新或访问文件系统。
     void updateCanvasCameraConfig(const Config::VisualConfig& visual);
+    /// @brief 发布手势最终时间线缩放，仅更新配置值与修订，不等待会话。
+    /// @param zoom UI 已写入 AppConfig 的有限倍率，限制为 0.1 到 10。
+    /// @warning 释放边沿低频调用；只短持配置值锁，不取得会话注册表锁。
+    void updateTimelineZoom(float zoom);
+    /// @brief 只发布预览范围标量，不广播完整配置或等待会话更新锁。
+    /// @warning 触控导航释放时调用；短配置锁不跨会话更新或文件访问。
+    void updatePreviewAreaRatio(float ratio);
 
     /// @brief 更新当前项目对软件级谱面自动备份配置的可选覆盖。
     /// @param config 项目级配置；空值表示继承软件配置。

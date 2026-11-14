@@ -1,4 +1,5 @@
 #include "ui/interaction/EditorInteraction.h"
+#include "ui/workspace/MobileInputEditor.h"
 /// @file Basic2DCanvas_Interaction.cpp
 /// @brief 实现主画布输入路由、编辑手势、布局编辑和批注交互。
 ///
@@ -22,6 +23,7 @@
 #include "config/EditorSettings.h"
 #include "config/VisualConfig.h"
 #include "mmm/project/PackageFileTypes.h"
+#include "presentation/CanvasInteractionPresentation.h"
 
 #include "audio/AudioManager.h"
 #include "canvas/AnnotationDetailLayout.h"
@@ -59,6 +61,7 @@
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughService.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 
 #include <fmt/format.h>
 #include <glm/vec2.hpp>
@@ -1574,7 +1577,9 @@ AnnotationDetailCardHit renderConnectedAnnotationDetails(
 /// 订阅回调不访问 ImGui、项目或文件系统，避免平台事件线程越界。
 Basic2DCanvasInteraction::Basic2DCanvasInteraction(
     const std::string& canvasName, const std::string& cameraId)
-    : m_canvasName(canvasName), m_cameraId(cameraId)
+    : m_pointerPresentation(createCanvasInteractionPresentation())
+    , m_canvasName(canvasName)
+    , m_cameraId(cameraId)
 {
     UI::Interaction::registerInteractionGuard(*this);
     // 订阅 ID 由实例保存，析构时精确取消同一个回调。
@@ -1595,6 +1600,16 @@ Basic2DCanvasInteraction::~Basic2DCanvasInteraction()
 {
     UI::Interaction::unregisterInteractionGuard(*this);
     Event::EventBus::instance().unsubscribe<Event::GLFWDropEvent>(m_dropSubId);
+}
+
+/// @brief 原编辑手势与平台待定触点共同拥有输入，防止相机抢走释放。
+/// @warning 每帧仅查询本地标量和稳定策略，不访问后台会话。
+bool Basic2DCanvasInteraction::hasActivePointerGesture() const
+{
+    return m_leftPressStartedOnCanvas || m_leftPressStartedObjectDrag ||
+           m_rightEraseActive || m_isMiddleCanvasPanning ||
+           m_mouseBrushCancelAwaitingRelease || m_layoutTouch.active() ||
+           m_pointerPresentation->hasGesture();
 }
 
 /// @brief 将下一次绘制释放改为取消提交。
@@ -2159,159 +2174,17 @@ void Basic2DCanvasInteraction::update(
             &m_inputProjection,
             m_snapshotInputYOffset
         };
+        // 平台呈现只处理已通过表面路由的输入，不替代权限与工具语义。
+        // 公共控制器不包含移动端头，策略对象只在画布构造时创建一次。
+        // 此处不获取会话锁，编辑仍经原有命令队列异步推进。
         // 接管表面意味着新方案独占编辑，不再执行默认热键或指针状态机。
-        if ( !UI::Interaction::dispatchSurface(frame) ) {
-            // 按相机隔离菜单身份，两个画布不能共享一次右键打开状态。
-            ImGui::PushID(m_cameraId.c_str());
-            const bool menuOpen = ImGui::IsPopupOpen("SelectionEditMenu");
-            ImGui::PopID();
-            // 策略来自操作方案，画布不比较持久化方案字符串。
-            // 仅选中工具提供此菜单，绘制工具的右键擦除不受影响。
-            const bool selectionMenu =
-                UI::Interaction::activeProfile().selectionContextMenu() &&
-                currentSnapshot->currentTool == Logic::EditTool::Marquee &&
-                currentSnapshot->hasBeatmap;
-            // 菜单打开期间冻结画布指针目标，粘贴仍以右键落点为参照。
-            // 菜单文字上的移动不能重新计算谱面时间或改变活动轨道。
-            // 不遍历选择集合；复制和剪切由逻辑层执行时读取权威选择。
-            // 菜单点击不进入框选状态机，也不覆盖原选择或产生额外编辑事务。
-            if ( !menuOpen ) {
-                handleHotkeys(currentSnapshot);
-                handleInteractions(currentSnapshot, targetWidth, targetHeight);
-            }
-            // 先让正常鼠标路径发布本次落点，再打开菜单，保持命令队列顺序。
-            // 左键框选或中键平移尚未结束时不抢走它们的释放事件。
-            // 内容区与窗口悬浮必须同时成立，标题栏和留白不能触发编辑菜单。
-            // 播放中不新开菜单，打开后开始播放则禁用条目。
-            const auto pointer = ImGui::GetMousePos();
-            const bool inside  = pointer.x >= frame.m_x &&
-                                 pointer.y >= frame.m_y &&
-                                 pointer.x < frame.m_x + frame.m_width &&
-                                 pointer.y < frame.m_y + frame.m_height;
-            // 菜单 ID 作用域不包围原控制器，保持批注等既有控件身份不变。
-            ImGui::PushID(m_cameraId.c_str());
-            if ( selectionMenu && !menuOpen && frame.m_hovered && inside &&
-                 !currentSnapshot->isPlaying && !currentSnapshot->isSelecting &&
-                 !UI::Interaction::mouseDown(0) &&
-                 !UI::Interaction::mouseDown(2) &&
-                 UI::Interaction::mouseClicked(1) ) {
-                // 锁存本帧实际显示的吸附线；菜单中的鼠标移动和后续快照不能改写。
-                // 无吸附时使用可见鼠标时间，仍不回退到播放头。
-                // 使用同一快照的 snappedTime，与本帧高亮线的绘制时间一致。
-                // 不写入全局粘贴偏好，避免一次右键操作影响后续快捷键。
-                m_selectionPasteTime =
-                    currentSnapshot->isSnapped &&
-                            !UI::Interaction::activeProfile().bypassSnapping()
-                        ? currentSnapshot->snappedTime
-                        : currentSnapshot->hoveredTime;
-                m_selectionMenuPoint = m_lastMouseCommand.pos;
-                // 菜单可跨多个快照停留；记录谱面实例以隔离同路径重载。
-                // 所有候选仍是值语义 ID，不借用逻辑线程里的对象或容器。
-                m_selectionMenuBeatmapKey = currentSnapshot->beatmapPathKey;
-                m_selectionMenuBeatmapInstance =
-                    currentSnapshot->beatmapInstanceId;
-                // 坐标已经过当前相机逆投影，菜单点击不重新取屏幕坐标换算。
-                ImGui::OpenPopup("SelectionEditMenu");
-            }
-            // 标准菜单沿用 ImGui 的关闭和点击捕获，无需新增可见按钮样式。
-            // 动作身份复用顶栏编辑菜单，系统剪贴板仅在用户激活时访问。
-            // 不在每帧探测系统剪贴板，避免平台调用阻塞菜单绘制。
-            // 管理器只在同步激活时借用，不保存到后续帧。
-            if ( ImGui::BeginPopup("SelectionEditMenu") ) {
-                // 异步切换会话后 ImGui 弹窗仍可能存在，需要主动终止旧上下文。
-                // 请求关闭与禁用同时执行，确保本帧后续菜单项不能被激活。
-                const bool sameBeatmap = m_selectionMenuBeatmapKey ==
-                                             currentSnapshot->beatmapPathKey &&
-                                         m_selectionMenuBeatmapInstance ==
-                                             currentSnapshot->beatmapInstanceId;
-                if ( !selectionMenu || !sameBeatmap )
-                    ImGui::CloseCurrentPopup();
-                ImGui::BeginDisabled(!selectionMenu || !sameBeatmap ||
-                                     currentSnapshot->isPlaying);
-                renderHoverLayerMenu(*currentSnapshot);
-                // 模式只影响下一笔，活动框在起笔命令中锁存自己的集合操作。
-                // 单选菜单使追加与减选互斥，不借用全局 Ctrl 或 Shift 状态。
-                // 勾选项表示下一笔模式，不重解释已有框选的结果。
-                auto& profile = UI::Interaction::activeProfile();
-                for ( const auto& [operation, key] :
-                      { std::pair{ Logic::SelectionOperation::Replace,
-                                   "ui.selection.replace" },
-                        std::pair{ Logic::SelectionOperation::Add,
-                                   "ui.selection.add" },
-                        std::pair{ Logic::SelectionOperation::Subtract,
-                                   "ui.selection.subtract" } } ) {
-                    if ( ImGui::MenuItem(
-                             TR(key).data(),
-                             nullptr,
-                             profile.selectionOperation() == operation) )
-                        profile.setSelectionOperation(operation);
-                }
-                ImGui::Separator();
-                // 历史操作指向当前编辑器，沿用原撤销栈；空历史由逻辑层忽略。
-                // 菜单激活不携带快捷键来源，避免转入独立 BPM 工具的历史。
-                if ( ImGui::MenuItem(TR("ui.edit.undo").data()) )
-                    UI::Interaction::executeAction("UndoAction", sourceManager);
-                if ( ImGui::MenuItem(TR("ui.edit.redo").data()) )
-                    UI::Interaction::executeAction("RedoAction", sourceManager);
-                ImGui::Separator();
-                if ( ImGui::MenuItem(TR("ui.edit.cut").data()) )
-                    UI::Interaction::executeAction("CutAction", sourceManager);
-                if ( ImGui::MenuItem(TR("ui.edit.copy").data()) )
-                    UI::Interaction::executeAction("CopyAction", sourceManager);
-                if ( ImGui::MenuItem(TR("ui.edit.paste").data()) )
-                    UI::Interaction::executeAction(
-                        "PasteAction",
-                        sourceManager,
-                        UI::MainMenuItemActivation{
-                            .m_source = UI::MainMenuActivationSource::
-                                InteractionProfile,
-                            .m_pasteTime = m_selectionPasteTime });
-                // 镜像粘贴与普通粘贴共享右键打开时的吸附时间，不能回退播放头。
-                // 锚点作为本次激活载荷传递，不改变快捷键和顶栏菜单的定位偏好。
-                // 实际轨道镜像仍由既有动作处理器和命令层完成，菜单不转换数据。
-                if ( UI::FeedbackMenuItem(TR("ui.edit.mirror_paste").data()) )
-                    UI::Interaction::executeAction(
-                        "MirrorPasteAction",
-                        sourceManager,
-                        UI::MainMenuItemActivation{
-                            .m_source = UI::MainMenuActivationSource::
-                                InteractionProfile,
-                            .m_pasteTime = m_selectionPasteTime });
-                // 原地镜像只作用于当前选区，保持既有权限、撤销与混合领域规则。
-                if ( UI::FeedbackMenuItem(TR("ui.edit.mirror").data()) )
-                    UI::Interaction::executeAction("MirrorAction",
-                                                   sourceManager);
-                ImGui::Separator();
-                // 删除与 Delete
-                // 快捷键发布同一命令，权限和撤销仍由会话统一管理。
-                // 只在菜单项激活时发布一次，不读取或直接修改可变选择集合。
-                if ( ImGui::MenuItem(TR("ui.common.delete").data()) )
-                    UI::Interaction::dispatchCommand(
-                        Event::LogicCommandEvent(Logic::CmdDeleteSelected{}));
-                // 全选沿用 Ctrl+A 的当前轨道区范围，使用右键前保存的画布落点。
-                // 菜单中的移动不会把玩家区、草稿区或 BGM 区的选择范围串用。
-                if ( ImGui::MenuItem(TR("ui.edit.select_all").data()) )
-                    UI::Interaction::executeAction("SelectAllAction",
-                                                   sourceManager);
-                // 清空选择是非破坏性状态操作，不使用删除物件命令。
-                if ( ImGui::MenuItem(TR("ui.selection.clear").data()) )
-                    UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
-                        Logic::CmdSelectEntity{ entt::null, true }));
-                // 与经典
-                // Ctrl+右键复用同相机命中规则，仅移除右键起点下的一个框。
-                if ( ImGui::MenuItem(TR("ui.selection.remove_marquee").data()) )
-                    UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
-                        Logic::CmdRemoveMarqueeAt{ m_cameraId,
-                                                   m_selectionMenuPoint.x,
-                                                   m_selectionMenuPoint.y }));
-                // 扩展入口沿用当前谱面校验和播放禁用作用域，不另起输入状态机。
-                renderSelectionMenuExtras(sourceManager);
-                ImGui::EndDisabled();
-                ImGui::EndPopup();
-            }
-            // 即使菜单本帧关闭，也不补跑画布逻辑，防止释放点击穿透。
-            ImGui::PopID();
-        }
+        if ( !UI::Interaction::dispatchSurface(frame) )
+            m_pointerPresentation->update(*this,
+                                          sourceManager,
+                                          currentSnapshot,
+                                          frame,
+                                          targetWidth,
+                                          targetHeight);
     }
 
     // 瞬态 UI 与谱面快照无关，即使项目刚关闭也要自然结束计时。
@@ -2908,6 +2781,9 @@ void Basic2DCanvasInteraction::rebuildNoteLayoutInstances(
 /// @warning UI 手势边界路径：配置保存可能访问磁盘，仅在拖动结束执行。
 void Basic2DCanvasInteraction::finishLayoutEditing()
 {
+    // 原始触点在弹层、换工具或正常结束后不能接续旧布局。
+    m_layoutTouch.suspend(Graphic::mobileTouchSnapshot().m_epoch);
+    m_layoutTouchGrabOffset = {};
     if ( m_layoutConfigurationChanged ) {
         // 连续拖动只修改内存配置，最终释放时合并为一次磁盘保存和反馈。
         Config::AppConfig::instance().save();
@@ -2949,7 +2825,9 @@ void Basic2DCanvasInteraction::finishLayoutEditing()
 /// - 已经开始的拖动始终锁定原目标和原句柄。
 /// - 音符四角缩放句柄优先于文字组件。
 /// - 文字组件四角和主体优先于主轨道大矩形。
-/// - 主轨道边缘、中心和判定线优先于辅助区域。
+/// - 桌面主轨道边缘、中心和判定线优先于辅助区域。
+/// - 触控宽命中带重叠时按实际距离选择，公共交接边仍优先主区域。
+/// - 已捕获目标不参加新的距离仲裁，余下移动不允许切换区域。
 /// - 辅助区按批注、草稿、BGM 的固定顺序消解重叠命中。
 /// - 音符主体不在 Layout 模式移动，只允许四角调整全局渲染比例。
 /// - 隐藏文字组件和零面积字形不能成为命中目标。
@@ -3063,6 +2941,68 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     float targetWidth, float targetHeight, bool isHovered,
     const Common::Render::RenderSnapshot& currentSnapshot)
 {
+    // 移动布局与输入方案分别判定；外接鼠标时仍使用本来的即时鼠标路径。
+    // 原始快照只在触控方案读取，不能让桌面同时拥有第二套按下来源。
+    const bool        touch = !UI::workspaceAllowsHoverFeedback() &&
+                              UI::Interaction::activeProfile().touchGestures();
+    LayoutTouchResult touchInput;
+    if ( touch ) {
+        // 原始快照由 UI 线程事件泵发布，本次只借用到函数返回。
+        // 不读取 SDL 设备、不等待平台查询，也不保存可变数组元素地址。
+        const auto& raw     = Graphic::mobileTouchSnapshot();
+        const auto  display = ImGui::GetIO().DisplaySize;
+        bool        allowed = false;
+        if ( raw.m_epoch != m_layoutTouch.epoch() ) {
+            // 只在新落点查询窗口树，延迟合成鼠标不能决定触控归属。
+            // 从真实起点裁决前景窗口，不能通过矩形范围绕过弹层遮挡。
+            // 只有新代际查询一次，持续 Move 不遍历窗口树。
+            ImGuiWindow* hit{};
+            ImGuiWindow* under{};
+            ImGui::FindHoveredWindowEx(
+                { raw.m_originX * display.x, raw.m_originY * display.y },
+                false,
+                &hit,
+                &under);
+            allowed =
+                hit == ImGui::GetCurrentWindow() &&
+                ImGui::IsWindowContentHoverable(ImGui::GetCurrentWindow(), 0) &&
+                !UI::workspaceBlocksCanvasInput();
+        }
+        // 身份和几何来自同一不可变快照及当前画布，键数不能使用另一会话。
+        // 隐藏、重排或方案变化时控制器只报告结束，不使用旧投影补一次修改。
+        // 时间容差不参与布局编辑，静止长按不会在后台自动变成一次拖动。
+        touchInput = m_layoutTouch.update(
+            raw,
+            { .m_origin     = { canvasScreenX, canvasScreenY },
+              .m_size       = { targetWidth, targetHeight },
+              .m_display    = display,
+              .m_window     = ImGui::GetCurrentWindow()->ID,
+              .m_dock       = ImGui::GetCurrentWindow()->DockId,
+              .m_instance   = currentSnapshot.beatmapInstanceId,
+              .m_generation = UI::Interaction::profileGeneration(),
+              .m_frame      = ImGui::GetFrameCount(),
+              .m_keyCount   = currentSnapshot.trackCount,
+              .m_slop =
+                  8 * Config::AppConfig::instance().getWindowContentScale(),
+              .m_allowed = allowed });
+        // 算法继续接收原有画布局部坐标；平台归一化在输入层只转换一次。
+        // 按下回放使用真实原点，快速抬手下一帧再处理被保存的合法终点。
+        pointerX  = touchInput.m_point.x - canvasScreenX;
+        pointerY  = touchInput.m_point.y - canvasScreenY;
+        isHovered = touchInput.m_pressed || m_layoutTouch.active();
+    }
+    // 输入先经过代际、投影和多指门禁，后续业务分支不再推断系统取消。
+    // 按下时只锁定原候选和抓取偏差，不物化一次未发生的布局修改。
+    // 正常 Up 与 Cancel 的更新许可不同，不能统一解释为鼠标松开。
+    // 单指只有越过容差才更新配置；正常抬手仍可带最后一个合法终点。
+    const bool layoutDown =
+        touch ? touchInput.m_moved
+              : UI::Interaction::mouseDown(ImGuiMouseButton_Left);
+    // 捕获与更新分开：Down 可以命中并冻结，但不能因为放大命中带而跳位。
+    // 终点更新与真正的释放收尾也分开，保留 Up 所带的最后一个位移样本。
+    const bool layoutPressed =
+        touch ? touchInput.m_pressed
+              : UI::Interaction::mouseClicked(ImGuiMouseButton_Left, false);
     // 视口退化时无法继续几何换算；若鼠标已经释放，仍需完成并清理
     // 先前手势，避免拖动状态在窗口恢复后继续生效。
     if ( targetWidth <= 0.0f || targetHeight <= 0.0f ) {
@@ -3071,7 +3011,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                   HorizontalRegionDragHandle::None ||
               m_noteScaleDragTarget.has_value() ||
               m_canvasComponentDragTarget.has_value()) &&
-             !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
+             !layoutDown ) {
             finishLayoutEditing();
         }
         return;
@@ -3089,7 +3029,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         appConfig.getVisualConfig().trackLayoutForKeyCount(keyCount));
     // 无谱面时使用 keyCount=0 的独立布局配置；真实谱面至少按一轨处理。
     const float cameraOffsetX = currentSnapshot.canvasHorizontalOffsetX;
-    const float worldPointerX = pointerX - cameraOffsetX;
+    float       worldPointerX = pointerX - cameraOffsetX;
     // 主轨道随相机横移，配置仍存世界归一化坐标，命中时需先去掉偏移。
     // 辅助区布局使用零相机偏移解析为世界坐标，便于直接写回归一化值。
     const auto auxiliaryProjection =
@@ -3141,12 +3081,23 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     };
     float judgmentLinePosition = sanitizeJudgmentLinePosition(
         appConfig.getVisualConfig().judgmentLinePositionForKeyCount(keyCount));
+    // 触控边缘与角点的半径为 24dp，对应完整 48dp 命中带。
+    // 该范围只影响输入判定，显示把手仍使用原来的精细线宽和尺寸。
+    // 密集重叠区域继续遵循下面的目标优先级，不同时修改多个组件。
+    // 文字主体额外优先 Move，避免小字号全部被扩大的角点覆盖。
+    // 移动中心同样扩大命中，轨道移动仍保持按下相对位置。
+    // 每次捕获只锁定一个句柄，途中跨入其它命中带不会改变编辑方向。
+    // 吸附距离保持原配置，不随触摸命中半径扩大而改变对齐效果。
+    // 经典鼠标与纯鼠标方案继续使用原来的七像素角点半径。
     // 命中半径随 DPI 放大并保留逻辑像素下限；移动中心句柄范围大于
     // 边缘/角点，使精细缩放仍优先落在边界附近。
-    const float dpiScale                 = appConfig.getWindowContentScale();
-    const float edgeHitRadius            = std::max(6.0f, 7.0f * dpiScale);
-    const float moveHandleRadius         = std::max(12.0f, 15.0f * dpiScale);
-    const float componentCornerHitRadius = std::max(6.0f, 7.0f * dpiScale);
+    const float dpiScale = appConfig.getWindowContentScale();
+    const float edgeHitRadius =
+        std::max(6.0f, (touch ? 24.0f : 7.0f) * dpiScale);
+    const float moveHandleRadius =
+        std::max(12.0f, (touch ? 24.0f : 15.0f) * dpiScale);
+    const float componentCornerHitRadius =
+        std::max(6.0f, (touch ? 24.0f : 7.0f) * dpiScale);
     const float componentSnapDistance =
         std::max(CANVAS_COMPONENT_SNAP_DISTANCE,
                  CANVAS_COMPONENT_SNAP_DISTANCE * dpiScale);
@@ -3288,7 +3239,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     if ( (!movingCanvasComponent && !movingTrackLayout &&
           !movingHorizontalRegion && !resizingHorizontalRegion &&
           !resizingTrackWidth) ||
-         !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
+         !layoutDown ) {
         m_canvasComponentSnapGuideX.reset();
         m_canvasComponentSnapGuideY.reset();
     }
@@ -3348,8 +3299,16 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
                 // 无实际字形面积的组件不能产生移动或缩放句柄。
                 continue;
             }
-            const auto hit = Logic::hitTestCanvasComponent(
-                bounds, pointerX, pointerY, componentCornerHitRadius);
+            // 文字主体优先移动；放大的角点带只在主体外侧负责缩放。
+            // 否则小字号的整块文字都会被 48dp 角点覆盖，无法移动。
+            const bool body =
+                touch && pointerX >= bounds.left && pointerX <= bounds.right &&
+                pointerY >= bounds.top && pointerY <= bounds.bottom;
+            const auto hit =
+                body
+                    ? Logic::CanvasComponentDragHandle::Move
+                    : Logic::hitTestCanvasComponent(
+                          bounds, pointerX, pointerY, componentCornerHitRadius);
             if ( hit != Logic::CanvasComponentDragHandle::None ) {
                 // 保存完整实例快照，按下时需要其 instanceIndex、内容边界
                 // 和允许布局区域，而不仅是组件类型。
@@ -3382,35 +3341,100 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     HorizontalRegionDragHandle hoveredHorizontalHandle =
         HorizontalRegionDragHandle::None;
     if ( m_horizontalRegionDragHandle != HorizontalRegionDragHandle::None ) {
-        // 拖动期间锁定最初区域，避免重叠句柄导致目标切换。
+        // 捕获期间保持区域与句柄，不让途中经过的主轨道边缘抢走目标。
         hoveredAuxiliaryRegion  = m_auxiliaryLayoutRegion;
         hoveredHorizontalHandle = m_horizontalRegionDragHandle;
+        if ( touch ) hoveredHandle = TrackLayoutDragHandle::None;
     } else if ( auxiliaryProjection.valid && isHovered &&
-                hoveredHandle == TrackLayoutDragHandle::None &&
+                m_trackLayoutDragHandle == TrackLayoutDragHandle::None &&
+                (touch || hoveredHandle == TrackLayoutDragHandle::None) &&
                 !hoveredNote.has_value() && !hoveredComponent.has_value() ) {
-        // 辅助区命中只在更高优先级对象均未命中时执行；固定数组顺序
-        // 处理区域重叠时的稳定优先级。
-        constexpr std::array regions{
-            AuxiliaryLayoutRegion::Annotation,
-            AuxiliaryLayoutRegion::Draft,
-            AuxiliaryLayoutRegion::Bgm,
-        };
+        // 触控命中带可能覆盖整个窄批注区，需按实际距离消解区域之间的重叠。
+        // 桌面仍按主轨道优先及批注、草稿、BGM 的固定顺序命中。
+        // 只对当前触点附近的固定四个区域比较距离，不扫描谱面或完整对象集。
+        // 距离均在去掉相机横移的世界逻辑像素中计算，不能混入屏幕 X。
+        // 边缘用法向距离，中心和判定线把手用方形命中带的最大轴距。
+        // 该度量与现有矩形命中区域一致，不按控件绘制面积加权。
+        // 无限初值表示主轨道未命中，任意合法辅助候选均可取得归属。
+        float best = std::numeric_limits<float>::infinity();
+        if ( touch ) {
+            const float cx = (layout.left + layout.right) * .5f * targetWidth;
+            const float cy = (layout.top + layout.bottom) * .5f * targetHeight;
+            // 主轨道候选先参与比较，严格更近的辅助句柄才可以替换它。
+            // 因此公共交接边精确重合时仍保持原主区域优先，避免输入抖动。
+            // 只修改悬浮候选；真正捕获在后面唯一的按下分支完成。
+            switch ( hoveredHandle ) {
+            case TrackLayoutDragHandle::Left:
+                best = std::abs(worldPointerX - layout.left * targetWidth);
+                break;
+            case TrackLayoutDragHandle::Right:
+                best = std::abs(worldPointerX - layout.right * targetWidth);
+                break;
+            case TrackLayoutDragHandle::Top:
+                best = std::abs(pointerY - layout.top * targetHeight);
+                break;
+            case TrackLayoutDragHandle::Bottom:
+                best = std::abs(pointerY - layout.bottom * targetHeight);
+                break;
+            case TrackLayoutDragHandle::JudgmentLine:
+                best = std::max(
+                    std::abs(worldPointerX - layout.right * targetWidth),
+                    std::abs(pointerY - judgmentLinePosition * targetHeight));
+                break;
+            case TrackLayoutDragHandle::Move:
+                best = std::max(std::abs(worldPointerX - cx),
+                                std::abs(pointerY - cy));
+                break;
+            case TrackLayoutDragHandle::None: break;
+            }
+        }
+        constexpr std::array regions{ AuxiliaryLayoutRegion::Annotation,
+                                      AuxiliaryLayoutRegion::Draft,
+                                      AuxiliaryLayoutRegion::Bgm };
+        // 固定枚举顺序也是辅助候选等距时的稳定裁决，不依赖容器插入顺序。
+        // 只有尚未捕获的按下阶段允许这次比较，持续拖动在上面的锁定分支。
+        // 原桌面分支不比较距离，继续保持原来的首命中即停止规则。
         for ( const auto region : regions ) {
-            // 所有区域共享主轨道上下边界，但使用各自横向归一化边界。
+            // 区域边界与写回算法共用同一投影，草稿／BGM 仍表示完整轨道组。
+            // 这里只决定选哪个把手，不改变单轨宽度或相邻链的变换语义。
+            const auto bounds = regionBounds(region);
             const auto hit =
-                hitTestHorizontalRegion(regionBounds(region),
+                hitTestHorizontalRegion(bounds,
                                         layout.top * targetHeight,
                                         layout.bottom * targetHeight,
                                         worldPointerX,
                                         pointerY,
                                         targetWidth,
                                         edgeHitRadius,
-                                        moveHandleRadius);
+                                        moveHandleRadius,
+                                        touch);
             if ( hit == HorizontalRegionDragHandle::None ) continue;
-            // 首个命中即停止，避免同一按下同时激活多个区域。
+            if ( touch ) {
+                // helper 已在窄区内部消解中心与两侧的重叠，这里再与主轨道比较。
+                // 不扩大配置范围，不把绘制圆点尺寸当成额外的吸附半径。
+                const float x =
+                    (hit == HorizontalRegionDragHandle::Left ? bounds.left
+                     : hit == HorizontalRegionDragHandle::Right
+                         ? bounds.right()
+                         : bounds.left + bounds.width * .5f) *
+                    targetWidth;
+                float distance = std::abs(worldPointerX - x);
+                if ( hit == HorizontalRegionDragHandle::Move )
+                    distance = std::max(
+                        distance,
+                        std::abs(pointerY - (layout.top + layout.bottom) * .5f *
+                                                targetHeight));
+                // 真正重合的公共边仍保留原主区域优先，不来回切换同一位置。
+                // 中心把手距离更小时才取代宽边缘带，窄辅助区因此仍能移动。
+                if ( distance >= best ) continue;
+                best          = distance;
+                hoveredHandle = TrackLayoutDragHandle::None;
+            }
+            // 只保存最终区域的值身份，按下冻结前不借用临时 bounds 的地址。
+            // 被替换的主轨道候选已经清空，后面的捕获分支不会同时启动两者。
             hoveredAuxiliaryRegion  = region;
             hoveredHorizontalHandle = hit;
-            break;
+            if ( !touch ) break;
         }
     }
 
@@ -3449,8 +3473,75 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
     }
 
-    if ( isHovered &&
-         UI::Interaction::mouseClicked(ImGuiMouseButton_Left, false) ) {
+    if ( isHovered && layoutPressed ) {
+        // 每次新的物理按下都从零偏差开始，不能继承上一组件角点的补偿。
+        // 选择仍沿用原命中优先级，不把大范围触摸当成框选或物件拖动。
+        m_layoutTouchGrabOffset = {};
+        if ( touch ) {
+            // 抓取偏差保存在 UI 线程的固定向量，不随最新渲染快照重新求解。
+            // 组件尺寸因本次拖动变化后，起点仍保持冻结，避免反馈成指数缩放。
+            // 主轨道、辅助区和文字都复用相同屏幕域，不叠加两次相机横移。
+            // 扩大的角点／边缘输入带不改变真实几何，保留按下偏差。
+            // 移动主体已有冻结相对起点，不需要额外补偿。
+            const auto cornerOffset =
+                [&](const Logic::CanvasComponentBounds& bounds,
+                    Logic::CanvasComponentDragHandle    handle) {
+                    // 普通文字 Move 已保存中心偏差；只有四角需要对齐真实角点。
+                    // 音符四角同样使用这套补偿，不改变音符全局缩放的计算公式。
+                    using H = Logic::CanvasComponentDragHandle;
+                    if ( handle == H::Move || handle == H::None ) return;
+                    const bool left =
+                        handle == H::TopLeft || handle == H::BottomLeft;
+                    const bool top =
+                        handle == H::TopLeft || handle == H::TopRight;
+                    m_layoutTouchGrabOffset = {
+                        (left ? bounds.left : bounds.right) - pointerX,
+                        (top ? bounds.top : bounds.bottom) - pointerY
+                    };
+                };
+            // 更高层的音符或文字命中阻止底层轨道边界取得补偿和捕获。
+            // 只读取本帧有效包围盒，后续变换仍使用按下时冻结的几何。
+            if ( hoveredNoteBounds )
+                cornerOffset(*hoveredNoteBounds, hoveredNoteHandle);
+            else if ( hoveredComponentInstance )
+                cornerOffset(
+                    canvasComponentContentBounds(*hoveredComponentInstance),
+                    hoveredComponentHandle);
+            else if ( hoveredHorizontalHandle !=
+                          HorizontalRegionDragHandle::None &&
+                      hoveredHorizontalHandle !=
+                          HorizontalRegionDragHandle::Move ) {
+                // 辅助区存世界横坐标，只补 X，不能引入不存在的纵向编辑。
+                // 单轨宽度和相邻区域联动仍由原 helper 统一维护。
+                const auto bounds = regionBounds(hoveredAuxiliaryRegion);
+                m_layoutTouchGrabOffset.x =
+                    (hoveredHorizontalHandle == HorizontalRegionDragHandle::Left
+                         ? bounds.left
+                         : bounds.right()) *
+                        targetWidth -
+                    worldPointerX;
+            } else {
+                if ( hoveredHandle == TrackLayoutDragHandle::Left ||
+                     hoveredHandle == TrackLayoutDragHandle::Right )
+                    m_layoutTouchGrabOffset.x =
+                        (hoveredHandle == TrackLayoutDragHandle::Left
+                             ? layout.left
+                             : layout.right) *
+                            targetWidth -
+                        worldPointerX;
+                if ( hoveredHandle == TrackLayoutDragHandle::Top ||
+                     hoveredHandle == TrackLayoutDragHandle::Bottom ||
+                     hoveredHandle == TrackLayoutDragHandle::JudgmentLine )
+                    m_layoutTouchGrabOffset.y =
+                        (hoveredHandle == TrackLayoutDragHandle::Top
+                             ? layout.top
+                         : hoveredHandle == TrackLayoutDragHandle::Bottom
+                             ? layout.bottom
+                             : judgmentLinePosition) *
+                            targetHeight -
+                        pointerY;
+            }
+        }
         // 鼠标按下首帧按同一优先级冻结目标和起始几何；后续分支只读取
         // 成员状态，不再重新解释当前 hover。
         if ( hoveredNote.has_value() && hoveredNoteBounds.has_value() ) {
@@ -3579,8 +3670,17 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         }
     }
 
-    if ( m_noteScaleDragTarget.has_value() &&
-         UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
+    if ( touch ) {
+        // 补偿位于目标冻结之后，避免按下命中被修正坐标改变成另一个角点。
+        // 正常释放可继续用同一偏差；多指和取消没有更新许可，不写入候选。
+        // 桌面不进入本分支，原来的边缘拖动与鼠标位置语义保持一致。
+        // 捕获后使用同一偏差，包括正常 Up 的最后坐标；取消没有 moved 输出。
+        pointerX += m_layoutTouchGrabOffset.x;
+        pointerY += m_layoutTouchGrabOffset.y;
+        worldPointerX = pointerX - cameraOffsetX;
+    }
+
+    if ( m_noteScaleDragTarget.has_value() && layoutDown ) {
         // 角点拖动使用冻结 hitbox 和起始全局缩放计算候选，避免当前
         // 缩放反馈到新快照后再次叠加造成指数变化。
         constexpr float scaleEpsilon = 1e-6f;
@@ -3605,8 +3705,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         }
     }
 
-    if ( m_canvasComponentDragTarget.has_value() &&
-         UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
+    if ( m_canvasComponentDragTarget.has_value() && layoutDown ) {
         // 文字组件移动/缩放写入当前 keyCount 和 instanceIndex 对应的
         // 可编辑 placement，不覆盖其它轨道数配置。
         constexpr float componentPositionEpsilon = 1e-6f;
@@ -3979,7 +4078,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     if ( !m_noteScaleDragTarget.has_value() &&
          !m_canvasComponentDragTarget.has_value() &&
          m_horizontalRegionDragHandle != HorizontalRegionDragHandle::None &&
-         UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
+         layoutDown ) {
         // 辅助区拖动与文本组件拖动互斥；前面的条件确保同一帧只有一个
         // 布局对象能消费左键手势。
         // 缩放吸附指针边缘；整体移动随后比较候选区域的左右两侧。
@@ -4070,7 +4169,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     if ( !m_noteScaleDragTarget.has_value() &&
          !m_canvasComponentDragTarget.has_value() &&
          m_trackLayoutDragHandle != TrackLayoutDragHandle::None &&
-         UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
+         layoutDown ) {
         // 主轨道布局最后处理，优先级低于音符比例、文字组件和辅助区。
         // 非左右句柄保持未吸附的原始世界坐标。
         HorizontalResizeSnapResult widthSnap{ .position = worldPointerX };
@@ -4243,11 +4342,14 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         }
     }
 
+    // 等待越过容差的 Down 不属于释放，否则会把刚捕获的目标提前清掉。
+    // 正常结束先经过上方候选更新，再执行唯一保存；取消只执行本收尾。
+    // 句柄、吸附线与冻结目标共用清理入口，不会在下一笔引用旧目标。
     if ( (m_trackLayoutDragHandle != TrackLayoutDragHandle::None ||
           m_horizontalRegionDragHandle != HorizontalRegionDragHandle::None ||
           m_noteScaleDragTarget.has_value() ||
           m_canvasComponentDragTarget.has_value()) &&
-         !UI::Interaction::mouseDown(ImGuiMouseButton_Left) ) {
+         (touch ? touchInput.m_finished : !layoutDown) ) {
         // 释放发生在画布外也必须结束手势并落盘，不能依赖 hovered 状态。
         finishLayoutEditing();
     }
@@ -4709,8 +4811,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
 /// - 新增批注要求规范化后的默认创作者非空。
 /// - 历史批注允许展示未知作者。
 /// - 正文为空时保存按钮禁用。
-/// - 输入框上方提示 Enter 提交与 Shift+Enter 换行。
-/// - Enter 与保存按钮复用同一校验和提交路径。
+/// - 桌面提示 Enter 提交，移动端 Enter 仅换行。
+/// - 桌面 Enter 与保存按钮复用校验，触屏只有保存按钮提交。
 /// - 新增和编辑统一发布 `CmdUpsertBeatmapAnnotation`。
 /// - 空 ID 的生成职责属于逻辑层。
 /// - 时间点新建使用 TIMESTAMP 目标类型。
@@ -4897,7 +4999,9 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
         hoveredDetailIndex.value_or(m_annotationHoverDetailIndex),
         detailLinkHovered);
     // - 关闭帧继续属于批注层，不能让同一次右键或释放落到下层画笔。
-    if ( !annotationMenuHandled && hoveredMarker &&
+    const bool hoverAnnotations =
+        m_pointerPresentation->allowsHoverInspection();
+    if ( hoverAnnotations && !annotationMenuHandled && hoveredMarker &&
          !hoveredMarker->items.empty() ) {
         // 聚合标记使用首条批注 ID 作为稳定分组键；同一标记内切换详情
         // 不会错误触发整组重置。
@@ -5096,7 +5200,7 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
                 m_annotationEditor.requestOpen = true;
             }
         }
-    } else if ( !annotationMenuHandled && gutterHovered &&
+    } else if ( hoverAnnotations && !annotationMenuHandled && gutterHovered &&
                 !currentSnapshot.isPlaying &&
                 (!mouseAnnotationMenu || !hasActivePointerGesture()) &&
                 currentSnapshot.acceptsInteraction &&
@@ -5114,8 +5218,9 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
         // 时间轴左侧的负时间只用于视觉预卷，批注持久化时间不得为负。
         m_annotationEditor.content.fill('\0');
         m_annotationEditor.requestOpen = true;
-    } else if ( gutterHovered && !hoveredMarker ) {
-        // 空白区域仅给出新建提示，不创建不可见的 ImGui 交互控件。
+    } else if ( gutterHovered && !hoveredMarker &&
+                UI::workspaceAllowsHoverFeedback() ) {
+        // 仅在允许鼠标悬停反馈的工作区展示右键提示，避免触控抬手后残留气泡。
         ImGui::BeginTooltip();
         ImGui::TextUnformatted(TR("ui.annotation.gutter_hint").data());
         ImGui::EndTooltip();
@@ -5129,8 +5234,19 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
         ImGui::OpenPopup(popupLabel.c_str());
         m_annotationEditor.requestOpen = false;
     }
-    if ( ImGui::BeginPopupModal(
-             popupLabel.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize) ) {
+    // 移动端按键盘可见区域限制弹窗；桌面保留原生位置和样式。
+    // 可选样式只在触屏路径构造，避免桌面被移动居中策略间接重排。
+    const bool mobileAnnotation = !UI::workspaceAllowsHoverFeedback();
+    std::optional<UI::Utils::CenteredModalPopupScope> annotationModal;
+    if ( mobileAnnotation ) annotationModal.emplace();
+    const bool annotationOpened =
+        mobileAnnotation
+            ? annotationModal->begin(popupLabel.c_str())
+            : ImGui::BeginPopupModal(popupLabel.c_str(),
+                                     nullptr,
+                                     ImGuiWindowFlags_AlwaysAutoResize);
+    if ( annotationOpened ) {
+        UI::MobileInputBodyScope inputBody("AnnotationEditorFields");
         // annotationId 是编辑与新增的唯一判据；作者为空可能是历史数据，
         // 不能据此误判为新增。
         const bool editingExisting = !m_annotationEditor.annotationId.empty();
@@ -5158,15 +5274,44 @@ Basic2DCanvasInteraction::renderAnnotationGutter(
                                TR("ui.annotation.creator_required").data());
         }
         ImGui::TextDisabled("%s", TR("ui.annotation.markdown_hint").data());
-        ImGui::TextDisabled("%s", TR("ui.annotation.input_submit_hint").data());
+        if ( UI::workspaceAllowsHoverFeedback() )
+            ImGui::TextDisabled("%s",
+                                TR("ui.annotation.input_submit_hint").data());
         // 组合标志让普通 Enter 返回确认，Shift+Enter 仍由多行输入框插入换行。
-        const bool submitWithEnter = ImGui::InputTextMultiline(
-            "##BeatmapAnnotationMarkdown",
-            m_annotationEditor.content.data(),
-            m_annotationEditor.content.size(),
-            ImVec2(520.0F, 220.0F),
-            ImGuiInputTextFlags_EnterReturnsTrue |
-                ImGuiInputTextFlags_CtrlEnterForNewLine);
+        // 移动端输入返回值表示正文变化，不表示提交请求。
+        // 即使平台将键盘完成键映射成 Enter，也只按显式按钮保存。
+        // 本地缓冲跨焦点保留，取消仍由原批注事务负责。
+        const bool touchText = !UI::workspaceAllowsHoverFeedback();
+        // 这里限制的是编辑正文的阅读高度，不能改变实际保存文本的容量。
+        // 文本区最多占输入安全高度的三成，为作者、提示和确认行保留空间。
+        // 两行下限保证光标与换行可见，较长内容仍由输入框自身纵向滚动。
+        // 普通辅助窗几何不参与临时 IME 限制，键盘收起不改变其保存尺寸。
+        const bool submitWithEnter =
+            ImGui::InputTextMultiline(
+                "##BeatmapAnnotationMarkdown",
+                m_annotationEditor.content.data(),
+                m_annotationEditor.content.size(),
+                ImVec2(
+                    touchText
+                        ? std::min(520.0f, ImGui::GetContentRegionAvail().x)
+                        : 520.0f,
+                    touchText
+                        ? std::min(
+                              220.0f,
+                              std::max(
+                                  ImGui::GetFrameHeight() * 2,
+                                  UI::workspaceTextInputWindowArea().m_size.y *
+                                      .3f))
+                        : 220.0f),
+                touchText ? ImGuiInputTextFlags_None
+                          : ImGuiInputTextFlags_EnterReturnsTrue |
+                                ImGuiInputTextFlags_CtrlEnterForNewLine) &&
+            !touchText;
+        // 手机 Enter 保留为换行，输入变化与焦点离开不能隐式保存。
+        // 活动正文用自身真实矩形定位，不借用随后保存按钮的 LastItem。
+        // 只调整滚动位置，不改变批注草稿或保存许可。
+        UI::keepMobileInputItemVisible();
+        inputBody.end();
 
         // 空正文不能保存；新增还要求规范化后的创作者非空。
         const bool canSave = m_annotationEditor.content.front() != '\0' &&
@@ -6043,6 +6188,9 @@ void Basic2DCanvasInteraction::handleInteractions(
     };
     uint8_t hoveredPart     = 0;
     int     hoveredSubIndex = -1;
+    /// @brief 本帧节点身份随按下命令锁存，不以未来帧的下标替代。
+    // 零令牌兼容旧调用，有令牌的起笔必须核对稳定子身份。
+    std::uint64_t hoveredNodeToken{};
 
     std::vector<HoverLayerCandidate> candidates;
     std::string                      layerSignature;
@@ -6065,7 +6213,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                     { hitbox.entity,
                       hitbox.kind,
                       static_cast<std::uint8_t>(hitbox.part),
-                      hitbox.subIndex });
+                      hitbox.subIndex,
+                      hitbox.touchNodeToken });
                 // 同一实体部件可能贡献多个相交矩形，只保留一个层候选。
                 if ( !appended ) continue;
                 // 签名包含实体、类型、部件和子索引；集合变化时重置层选择。
@@ -6085,10 +6234,12 @@ void Basic2DCanvasInteraction::handleInteractions(
         m_hoverLayerIndex     = 0;
     }
 
-    m_hoverLayerCount = static_cast<int>(candidates.size());
-    // 纯鼠标优先项必须跟随方案和谱面生命周期，不能泄漏到经典键盘切层。
+    m_hoverLayerCount        = static_cast<int>(candidates.size());
+    m_currentHoverCandidates = candidates;
+    // 纯鼠标或触控菜单的优先项跟随方案和谱面生命周期，不能泄漏到经典键盘切层。
     // 路径用于隔离不同谱面，实例号补充隔离同一文件的重新打开。
     const bool mouseOnly =
+        !UI::workspaceAllowsHoverFeedback() ||
         UI::Interaction::activeProfile().selectionContextMenu();
     if ( !mouseOnly ||
          m_selectionMenuBeatmapKey != currentSnapshot->beatmapPathKey ||
@@ -6147,8 +6298,19 @@ void Basic2DCanvasInteraction::handleInteractions(
         hoveredObjectKind = candidate.kind;
         hoveredPart       = candidate.part;
         hoveredSubIndex   = candidate.subIndex;
+        hoveredNodeToken  = candidate.nodeToken;
     }
 
+    // 平台可见把手已验证起点身份；后续命令仍走同一个控制器。
+    // 普通输入传空值，桌面及未选物件的拾取优先级保持原样。
+    // 覆盖只在同步调用有效，不能存为跨谱面悬浮缓存。
+    if ( m_pointerTarget ) {
+        hoveredEntity     = m_pointerTarget->entity;
+        hoveredObjectKind = m_pointerTarget->kind;
+        hoveredPart       = m_pointerTarget->part;
+        hoveredSubIndex   = m_pointerTarget->subIndex;
+        hoveredNodeToken  = m_pointerTarget->nodeToken;
+    }
     bool shouldSendHover = !m_hasLastHovered ||
                            m_lastHoveredEntity != hoveredEntity ||
                            m_lastHoveredObjectKind != hoveredObjectKind ||
@@ -6242,7 +6404,9 @@ void Basic2DCanvasInteraction::handleInteractions(
                             operation }));
                     // 减选点击只改变集合，不能把刚移出的对象再次加入拖动事务。
                     // 追加和替换仍可拖动已选集合，保留常规批量移动。
-                    if ( !currentSnapshot->isPlaying &&
+                    // 已分类的轻点只选中；拖动门槛属于输入策略，不能用空动作
+                    // 代替选择，否则未保存标记和重做分支都会被无意义地改变。
+                    if ( !m_pointerTapOnly && !currentSnapshot->isPlaying &&
                          operation != Logic::SelectionOperation::Subtract ) {
                         // 播放时仍允许选择查看，但不允许改变对象位置。
                         // 按下处的命中部位与子索引随命令一起入队，避免拖拽工具
@@ -6254,10 +6418,11 @@ void Basic2DCanvasInteraction::handleInteractions(
                                 UI::Interaction::bypassSnapping(),
                                 hoveredObjectKind,
                                 hoveredPart,
-                                hoveredSubIndex }));
+                                hoveredSubIndex,
+                                hoveredNodeToken }));
                         m_leftPressStartedObjectDrag = true;
                     }
-                } else {
+                } else if ( !m_pointerTapOnly ) {
                     // 框选起点使用当前画布局部坐标，逻辑层维护矩形终点。
                     UI::Interaction::dispatchCommand(
                         Event::LogicCommandEvent(Logic::CmdStartMarquee{
@@ -6267,7 +6432,8 @@ void Basic2DCanvasInteraction::handleInteractions(
                             UI::Interaction::modifier(
                                 UI::Interaction::Modifier::Control),
                             UI::Interaction::activeProfile()
-                                .selectionOperation() }));
+                                .selectionOperation(),
+                            m_pointerCancellationEnabled }));
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::Draw ) {
@@ -6275,22 +6441,39 @@ void Basic2DCanvasInteraction::handleInteractions(
                     // 画笔起点连同方案延伸意图与 Ctrl 状态发送，逻辑层决定
                     // 物件种类、吸附与复合绘制模式。
                     // 教学策略只在起笔锁存，跳过提示也不能在结束时意外合并旧物件。
-                    m_standaloneBrush = m_walkthroughPlacement;
+                    // 折线模式轻点已有对象只选择，拖动才进入续写；第二指取消不需要撤销。
+                    // 该中立轻点意图只由触控桥提供，桌面和纯鼠标默认关闭。
+                    if ( m_pointerTapOnly && !m_walkthroughPlacement &&
+                         !UI::Interaction::activeProfile().noteHoldBrush(
+                             UI::Interaction::currentSurface()) &&
+                         hoveredEntity != entt::null ) {
+                        UI::Interaction::dispatchCommand(
+                            Event::LogicCommandEvent(Logic::CmdSelectEntity{
+                                hoveredEntity, true, hoveredObjectKind }));
+                        m_leftPressStartedOnCanvas = false;
+                        return;
+                    }
+                    m_standaloneBrush =
+                        m_walkthroughPlacement || m_pointerTapOnly;
                     // 固定起笔身份，后续返回或跳步不能把提交归属到另一次练习。
                     m_brushWalkthroughToken =
-                        m_standaloneBrush ? m_walkthroughToken : 0;
+                        m_walkthroughPlacement ? m_walkthroughToken : 0;
                     // 子段门槛同样随本次手势冻结，最终清洗后由逻辑层核验。
-                    m_brushMinimumSubNotes =
-                        m_standaloneBrush ? m_walkthroughMinimumSubNotes : 0;
-                    UI::Interaction::dispatchCommand(Event::LogicCommandEvent(
-                        Logic::CmdStartBrush{ m_cameraId,
-                                              localMousePos.x,
-                                              localMousePos.y,
-                                              UI::Interaction::extendBrush(),
-                                              UI::Interaction::bypassSnapping(),
-                                              m_standaloneBrush,
-                                              UI::Interaction::activeProfile()
-                                                  .bypassSnapping() }));
+                    m_brushMinimumSubNotes = m_walkthroughPlacement
+                                                 ? m_walkthroughMinimumSubNotes
+                                                 : 0;
+                    UI::Interaction::dispatchCommand(
+                        Event::LogicCommandEvent(Logic::CmdStartBrush{
+                            m_cameraId,
+                            localMousePos.x,
+                            localMousePos.y,
+                            UI::Interaction::extendBrush(),
+                            UI::Interaction::bypassSnapping(),
+                            m_standaloneBrush,
+                            UI::Interaction::activeProfile().bypassSnapping(),
+                            UI::Interaction::activeProfile().noteHoldBrush(
+                                UI::Interaction::currentSurface()),
+                            m_pointerCancellationEnabled }));
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::ColorBrush ) {
@@ -6509,8 +6692,11 @@ void Basic2DCanvasInteraction::handleInteractions(
         if ( m_leftPressStartedOnCanvas && !m_leftPressStartedOnEntity &&
              currentSnapshot->currentTool == Logic::EditTool::Marquee ) {
             // 释放命令依据按下时锁存的手势种类，而非释放位置的 hover。
-            UI::Interaction::dispatchCommand(
-                Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
+            // 纯轻点没有开始框选，仅在下方按既有规则清空选择。
+            // 不向逻辑层补发孤立 End，保留旧框与当前集合操作的语义。
+            if ( !m_pointerTapOnly )
+                UI::Interaction::dispatchCommand(
+                    Event::LogicCommandEvent(Logic::CmdEndMarquee{}));
         } else if ( m_leftPressStartedOnCanvas &&
                     currentSnapshot->currentTool == Logic::EditTool::Draw ) {
             UI::Interaction::dispatchCommand(
@@ -6668,6 +6854,10 @@ void Basic2DCanvasInteraction::renderHoverInspection(
 {
     if ( !currentSnapshot ) return;
     const ImVec2 mousePos{ mouseX, mouseY };
+    // 鼠标详情属于平台呈现策略；触屏使用自己的按住反馈。
+    // 不通过清空悬浮身份抑制窗口，否则会破坏命中、拖动与吸附。
+    // 桌面默认仍进入原路径，后台画布也遵守同一个呈现边界。
+    if ( !m_pointerPresentation->allowsHoverInspection() ) return;
     // 物件颜色遮罩使用画布局部位置，必须在打开提示窗口之前保存原画布原点。
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     const auto   plane  = planarObservationUnproject(

@@ -3,6 +3,7 @@
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 
 #include "imgui.h"
 #include <algorithm>
@@ -204,6 +205,11 @@ void SettingsView::addSettingItem(CLayVBox& parent, size_t& rowIndex,
 /// @param decorated 是否为整行绘制装饰背景与内边距。
 /// @param walkthroughTarget 可选引导目标，分别报告各实际单选按钮。
 /// @warning UI 热路径：每帧按可用宽度重新分行，选项集合应保持小规模稳定。
+/// 测量与实际 RadioButton 使用相同字号和样式，不能用逻辑像素常量代替。
+/// DPI、语言或主题变化后直接使用新尺寸，不保留跨帧的过期组件宽度。
+/// 移动端单项超出值列时纵向组合；桌面保留既有名称和值列布局。
+/// 响应式排版只改变几何，原配置字段、枚举值和点击处理保持不变。
+/// 搜索导航必须包含名称和全部选项行，不能用旧单行高度定位。
 void SettingsView::addRadioSetting(
     CLayVBox& parent, size_t& rowIndex, size_t& sectionIndex, const char* label,
     float labelWidth, const std::vector<std::pair<std::string, int>>& options,
@@ -215,11 +221,24 @@ void SettingsView::addRadioSetting(
     float totalWidth = ImGui::GetContentRegionAvail().x;
 
     // 扣除外层、分组、行内边距、列间距及滚动条缓冲后得到控件区宽度。
-    float widgetAvailW = totalWidth - labelWidth - 72.0f;
-    if ( widgetAvailW < 150.0f ) {
-        // 极窄窗口仍保留可绘制单选按钮的最小区域。
-        widgetAvailW = 150.0f;
-    }
+    float       widgetAvailW = std::max(1.0f, totalWidth - labelWidth - 72.0f);
+    const auto& style        = ImGui::GetStyle();
+    // 原生 RadioButton 的圆点区域占完整帧高；固定预留 36 像素会在大字号下重叠。
+    // 帧高已经包含当前 DPI 和字号，不再额外乘倍率，否则会再次高估或重复缩放。
+    // ItemInnerSpacing 只连接圆点和文字，外部选项间距仍由各行容器单独提供。
+    const float radioWidth = ImGui::GetFrameHeight() + style.ItemInnerSpacing.x;
+    float       widestOption = 0;
+    for ( const auto& option : options )
+        widestOption = std::max(
+            widestOption,
+            ImGui::CalcTextSize(option.first.c_str(), nullptr, true).x +
+                radioWidth);
+    // 触摸窄区不能靠强制最小值列宽撑出视口，单项放不下时改为名称在上、选项在下。
+    const bool stacked =
+        !workspaceAllowsHoverFeedback() && widestOption > widgetAvailW;
+    // 全宽预算扣除相同嵌套边距，纵向组合不增加额外装饰或外边距。
+    // 不以强制最小宽度撑大父窗口，仍由同一个原生内容区承载滚动。
+    if ( stacked ) widgetAvailW = std::max(1.0f, totalWidth - 72.0f);
 
     // 主行与标准设置项使用相同的装饰和间距规则。
     auto& row = getRow(rowIndex++);
@@ -236,21 +255,23 @@ void SettingsView::addRadioSetting(
                           std::to_string(rowIndex) + "_L_" + label;
 
     // 标签列固定宽度，使同一标签页的控件起点保持对齐。
-    row.addElement(
-        labelId + "_lbl",
-        Sizing::Fixed(labelWidth),
-        Sizing::Grow(),
-        [this, label, searchTarget, widgetAvailW](Clay_BoundingBox r, bool) {
-            // 标签在 Clay 分配行高中按实际文本高度居中。
-            float textH  = ImGui::CalcTextSize(label).y;
-            float offset = (r.height - textH) * 0.5f;
-            ImGui::SetCursorScreenPos({ r.x, r.y + offset });
-            ImGui::Text("%s", label);
-            // 标签列高度与整个自动换行行一致，保留完整高亮范围。
-            if ( searchTarget )
-                reportSettingsSearchRow(
-                    { r.x, r.y, r.width + widgetAvailW + 8.0f, r.height });
-        });
+    if ( !stacked )
+        row.addElement(
+            labelId + "_lbl",
+            Sizing::Fixed(labelWidth),
+            Sizing::Grow(),
+            [this, label, searchTarget, widgetAvailW](Clay_BoundingBox r,
+                                                      bool) {
+                // 标签在 Clay 分配行高中按实际文本高度居中。
+                float textH  = ImGui::CalcTextSize(label).y;
+                float offset = (r.height - textH) * 0.5f;
+                ImGui::SetCursorScreenPos({ r.x, r.y + offset });
+                ImGui::Text("%s", label);
+                // 标签列高度与整个自动换行行一致，保留完整高亮范围。
+                if ( searchTarget )
+                    reportSettingsSearchRow(
+                        { r.x, r.y, r.width + widgetAvailW + 8.0f, r.height });
+            });
 
     // 选项容器按需要建立多行 HBox，自身高度由所有行内容适配。
     auto& containerVBox = getSection(sectionIndex++);
@@ -262,13 +283,25 @@ void SettingsView::addRadioSetting(
     float     currentLineW   = 0;
     CLayHBox* currentLineRow = nullptr;
     int       lineCount      = 0;
+    float     optionHeight = 0, currentLineHeight = 0;
 
     for ( size_t i = 0; i < options.size(); ++i ) {
         const auto& [optLabel, optValue] = options[i];
-        // 文本宽度外预留 Radio 圆点和内部间距。
-        float itemW = ImGui::CalcTextSize(optLabel.c_str()).x + 36.0f;
+        // 与原生控件的字体、帧高、文本内间距一致，避免后项圆点覆盖前项文字。
+        // 隐藏 ID 后缀不参与可见宽度；显式换行则参与高度，与原生组件规则一致。
+        // 即使某项只有圆点也要保留完整帧高，不能因文本为空缩小触摸区域。
+        const auto textSize =
+            ImGui::CalcTextSize(optLabel.c_str(), nullptr, true);
+        const float itemW =
+            ImGui::GetFrameHeight() +
+            (textSize.x > 0 ? style.ItemInnerSpacing.x + textSize.x : 0.0f);
+        const float itemH = std::max(ImGui::GetFrameHeight(),
+                                     textSize.y + 2 * style.FramePadding.y);
 
         if ( !currentLineRow || (currentLineW + itemW > widgetAvailW) ) {
+            // 累计各行真实最高项，翻译自带换行时下一行也不能覆盖当前文字。
+            if ( currentLineRow ) optionHeight += currentLineHeight + 4;
+            currentLineHeight = 0;
             // 首项或超出控件区宽度时，从行对象池取得新横向容器。
             currentLineRow = &getRow(rowIndex++);
             currentLineRow->clear();
@@ -291,7 +324,7 @@ void SettingsView::addRadioSetting(
         currentLineRow->addElement(
             optId.c_str(),
             Sizing::Fixed(itemW),
-            Sizing::Fixed(ImGui::GetFrameHeight()),
+            Sizing::Fixed(itemH),
             [this,
              optLabel = optLabel,
              optValue = optValue,
@@ -324,14 +357,50 @@ void SettingsView::addRadioSetting(
 
         // 加入下一项前计入统一十二像素项间距。
         currentLineW += itemW + 12.0f;
+        currentLineHeight = std::max(currentLineHeight, itemH);
     }
+    // 最后一行没有后续换行分支，必须在循环后计入一次，且不添加尾部行间距。
+    optionHeight += currentLineHeight;
 
-    // 控件组使用计算后的固定宽度，高度按换行数量适配。
+    // 换行预算保守扣除嵌套边距，实际值列仍随父行增长，不强行撑宽窄分区。
     row.addLayout((labelId + "_group").c_str(),
                   containerVBox,
-                  Sizing::Fixed(widgetAvailW),
+                  Sizing::Grow(),
                   Sizing::Fit());
 
+    if ( stacked ) {
+        // 包装容器来自现有对象池，生命周期覆盖本帧布局执行，不保存父布局指针。
+        // 选项沿用原前缀，点击命中不依赖文字长度或当前换行序号。
+        auto& stack = getSection(sectionIndex++);
+        stack.clear();
+        stack.setPadding(0, 0, 0, 0).setSpacing(4);
+        // 名称换行与选项分别占据真实高度，搜索高亮必须包含整个纵向组合。
+        const float labelHeight =
+            ImGui::CalcTextSize(label, nullptr, false, widgetAvailW).y;
+        const float groupHeight = optionHeight + (decorated ? 12.0f : 4.0f);
+        stack.addElement(
+            labelId + "_stack_label",
+            Sizing::Grow(),
+            Sizing::Fixed(labelHeight),
+            [this, label, searchTarget, groupHeight](Clay_BoundingBox r, bool) {
+                // 换行只作用于本名称，不改变整个 Child 的文本裁剪区。
+                // 名称单独占行，不再垂直居中到多行选项的总高度。
+                ImGui::SetCursorScreenPos({ r.x, r.y });
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + r.width);
+                ImGui::TextUnformatted(label);
+                ImGui::PopTextWrapPos();
+                // 搜索高亮覆盖名称、组内间距和全部选项，不能只露出组标题。
+                if ( searchTarget )
+                    reportSettingsSearchRow(
+                        { r.x, r.y, r.width, r.height + 4 + groupHeight });
+            });
+        stack.addLayout(
+            (labelId + "_row").c_str(), row, Sizing::Grow(), Sizing::Fit());
+        parent.addLayout(
+            (labelId + "_stack").c_str(), stack, Sizing::Grow(), Sizing::Fit());
+        // 同一行仅挂入一条布局路径，避免控件重复提交相同 ImGui ID。
+        return;
+    }
     // 整个设置行高度由标签与多行选项中较高的一方决定。
     parent.addLayout(
         (labelId + "_row").c_str(), row, Sizing::Grow(), Sizing::Fit());

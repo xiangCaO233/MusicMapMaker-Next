@@ -991,10 +991,8 @@ void captureToolbarWorkspaceState(ProjectWorkspaceState&      workspace,
     toolbarState.m_valid = true;
     // valid 必须先随整份内存快照写入；实际磁盘序列化只会在函数完成后发生。
     toolbarState.m_reverseScroll = editorConfig.settings.reverseScroll;
-    toolbarState.m_scrollSnap    = editorConfig.settings.scrollSnap;
-    // 放置磁吸总开关、具体模式和公共分拍掩码共同描述完整吸附策略。
-    toolbarState.m_objectPlacementSnap =
-        editorConfig.settings.objectPlacementSnap;
+    // 两个吸附总开关属于应用偏好，不捕获到项目现场。
+    // 项目只恢复具体分拍模式和组合，打开旧工程不能关闭新安装的默认磁吸。
     toolbarState.m_objectPlacementSnapMode =
         objectPlacementSnapModeToWorkspaceName(
             editorConfig.settings.objectPlacementSnapMode);
@@ -1033,9 +1031,7 @@ void applyToolbarWorkspaceState(
 {
     // 布尔偏好可直接恢复，枚举与数值字段则通过兼容转换和边界钳制处理。
     editorConfig.settings.reverseScroll = toolbarState.m_reverseScroll;
-    editorConfig.settings.scrollSnap    = toolbarState.m_scrollSnap;
-    editorConfig.settings.objectPlacementSnap =
-        toolbarState.m_objectPlacementSnap;
+    // 保留当前软件的滚动和放置吸附开关，旧工程的开关不再是恢复来源。
     // 文本模式解析失败时由转换函数给出兼容默认值。
     editorConfig.settings.objectPlacementSnapMode =
         workspaceNameToObjectPlacementSnapMode(
@@ -2693,6 +2689,9 @@ void EditorEngine::syncProjectWithFile(const std::filesystem::path& mapPath)
 /// @note 名称表示统一入口，并非所有命令都异步入队；项目操作在此直接调用。
 /// @warning 鼠标等连续交互可每帧进入，路由仅检查命令类型和会话列表，
 /// 不得为等待焦点、视口或同步数据而休眠；文件操作只属于显式低频命令。
+/// @warning 连续导航每次变化借用一次拥有型发布快照（含一次原子 shared_ptr
+/// 读取）； 它保证并发关闭画布时队列仍存活。裸观察指针无法保证此生命周期，
+/// 使用注册表锁则会等待整轮更新；快照不复制各个会话的 shared_ptr。
 void EditorEngine::pushCommand(LogicCommand&& cmd)
 {
     // 路由顺序本身属于权限契约：临时项目另存必须先于写命令门禁，项目级
@@ -2882,43 +2881,26 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
         }
     }
 
-    // 主画布二维平移按 cameraId 精确路由，避免同帧焦点切换把增量发给旧画布。
-    // 平移不改变播放时间，因此无需要求目标与活动会话共享主音轨。
-    if ( std::holds_alternative<CmdPanCanvas>(cmd) ) {
-        const auto& pan = std::get<CmdPanCanvas>(cmd);
-        // 每次增量立即进入目标队列，不做固定窗口合并，连续拖动保持本地响应。
-        if ( SessionUtils::isMainCanvasCameraId(pan.cameraId) ) {
-            std::lock_guard<std::recursive_mutex> lock(
-                impl().m_sessionRegistry.mutex());
-            /// @brief 当前注册的 Session 列表，调用者已持有注册表锁。
-            auto&         sessions = impl().m_sessionRegistry.entriesUnsafe();
-            const int32_t targetIndex =
-                findSessionIndexByCameraIdUnsafe(sessions, pan.cameraId);
-            if ( targetIndex < 0 ||
-                 targetIndex >= static_cast<int32_t>(sessions.size()) ||
-                 !sessions[static_cast<size_t>(targetIndex)].session ) {
+    // 直接导航及带明确画布身份的历史动作使用已发布的不可变路由快照。
+    // UI 不等待注册表锁，该锁可能由逻辑线程持有跨整轮谱面更新。
+    const auto* pan  = std::get_if<CmdPanCanvas>(&cmd);
+    const auto* undo = std::get_if<CmdUndo>(&cmd);
+    const auto* redo = std::get_if<CmdRedo>(&cmd);
+    if ( (pan && SessionUtils::isMainCanvasCameraId(pan->cameraId)) ||
+         (undo && (undo->walkthroughToken != 0 || !undo->cameraId.empty())) ||
+         (redo && !redo->cameraId.empty()) ) {
+        const auto& camera   = pan    ? pan->cameraId
+                               : undo ? undo->cameraId
+                                      : redo->cameraId;
+        const auto  snapshot = impl().m_sessionRegistry.publishedSnapshot();
+        for ( const auto& entry : snapshot->sessions ) {
+            if ( entry.cameraId == camera ) {
+                // 快照只保证队列生命周期；不借用可变会话上下文或切换活动画布。
+                entry.session->pushCommand(std::move(cmd));
                 return;
             }
-            sessions[static_cast<size_t>(targetIndex)].session->pushCommand(
-                std::move(cmd));
-            return;
         }
-    }
-
-    // 教学回退绑定创建时的画布；切换标签后不得误用当前活动谱面的历史。
-    if ( const auto* undo = std::get_if<CmdUndo>(&cmd);
-         undo && undo->walkthroughToken != 0 ) {
-        std::lock_guard<std::recursive_mutex> lock(
-            impl().m_sessionRegistry.mutex());
-        auto&      sessions = impl().m_sessionRegistry.entriesUnsafe();
-        const auto index =
-            findSessionIndexByCameraIdUnsafe(sessions, undo->cameraId);
-        // 目标关闭或替换时直接放弃；唯一教学身份也阻止新会话命中旧练习。
-        if ( index >= 0 && index < static_cast<int32_t>(sessions.size()) &&
-             sessions[static_cast<size_t>(index)].session ) {
-            sessions[static_cast<size_t>(index)].session->pushCommand(
-                std::move(cmd));
-        }
+        // 目标已关闭就丢弃，不把上一画布的增量或 Undo 发给新标签。
         return;
     }
 
@@ -4238,10 +4220,40 @@ void EditorEngine::updateCanvasCameraConfig(const Config::VisualConfig& visual)
     impl().m_editorConfigRevision.fetch_add(1, std::memory_order_release);
 }
 
-/// @brief 合并软件级配置、项目工具栏状态并广播给全部会话。
+/// @brief 发布导航结束时的时间线缩放，不进入完整设置广播路径。
+/// @param zoom UI 已显示的有限倍率，拒绝非有限输入并钳制到工具栏范围。
+/// @warning 释放边沿调用；配置值锁只保护复制和标量发布，不等待会话长锁。
+void EditorEngine::updateTimelineZoom(float zoom)
+{
+    if ( !std::isfinite(zoom) ) return;
+    zoom = std::clamp(zoom, .1f, 10.0f);
+    // 与相机直接操纵共用短配置锁；所有持有者只复制配置值，不跨会话更新。
+    // 不调用 setEditorConfig，后者的广播会等待整个 Session::update 的注册表锁。
+    std::lock_guard<std::mutex> lock(impl().m_editorConfigMutex);
+    if ( impl().m_editorConfig.visual.timelineZoom == zoom ) return;
+    impl().m_editorConfig.visual.timelineZoom = zoom;
+    // 逻辑线程下一轮刷新后，由各会话辨认缩放变化并使缓存一次性失效。
+    // 发布期间画面继续使用直接缩放覆盖，不等待后台采纳最终配置。
+    impl().m_editorConfigRevision.fetch_add(1, std::memory_order_release);
+}
+
+/// @brief 发布预览手势的最终范围，保留主画布及其它全局配置。
+/// @warning 释放边沿仅持短配置锁，不进入完整设置广播或会话长锁。
+void EditorEngine::updatePreviewAreaRatio(float ratio)
+{
+    if ( !std::isfinite(ratio) ) return;
+    ratio = std::clamp(ratio, 1.0f, 50.0f);
+    // 与时间线标量入口共用已经审计的配置值锁，不调用 setEditorConfig。
+    // 逻辑线程从修订号采纳新值，手势显示覆盖在采纳之前持续有效。
+    std::lock_guard<std::mutex> lock(impl().m_editorConfigMutex);
+    if ( impl().m_editorConfig.visual.previewConfig.areaRatio == ratio ) return;
+    impl().m_editorConfig.visual.previewConfig.areaRatio = ratio;
+    impl().m_editorConfigRevision.fetch_add(1, std::memory_order_release);
+}
+
+/// @brief 合并完整软件配置并在设置操作时广播到会话。
 /// @param config 调用方提交的编辑器配置候选值。
-/// @warning 设置变更低频路径：依次持有配置更新锁、配置值锁和会话注册表锁，
-/// 并发布事件；调用者不得在持有上述锁时重入此入口。
+/// @warning 低频设置入口会取得注册表锁，不用于连续导航更新。
 void EditorEngine::setEditorConfig(const Config::EditorConfig& config)
 {
     // 外层递归锁串行化完整发布事务，防止两个设置来源交错覆盖 AppConfig、

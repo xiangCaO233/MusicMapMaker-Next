@@ -176,9 +176,7 @@ void to_json(nlohmann::json& j, const ProjectWorkspaceToolbarState& state)
     j = nlohmann::json{
         { "m_valid", state.m_valid },
         { "m_reverseScroll", state.m_reverseScroll },
-        { "m_scrollSnap", state.m_scrollSnap },
-        // 滚动吸附和物件吸附独立保存，旧项目兼容仅发生在读取一侧。
-        { "m_objectPlacementSnap", state.m_objectPlacementSnap },
+        // 吸附总开关由软件配置独立保存；项目只记录模式和分拍组合。
         { "m_objectPlacementSnapMode", state.m_objectPlacementSnapMode },
         { "m_commonBeatDivisorMask", state.m_commonBeatDivisorMask },
         // 吸附方向与线性映射各自保留，不能从分拍选择推导。
@@ -204,10 +202,9 @@ void from_json(const nlohmann::json& j, ProjectWorkspaceToolbarState& state)
     // 基础开关逐项读取默认值，避免缺失字段继承复用对象的旧状态。
     state.m_valid         = j.value("m_valid", false);
     state.m_reverseScroll = j.value("m_reverseScroll", false);
-    state.m_scrollSnap    = j.value("m_scrollSnap", false);
-    state.m_objectPlacementSnap =
-        j.value("m_objectPlacementSnap", state.m_scrollSnap);
-    // 旧项目没有独立物件磁吸开关时沿用原滚动吸附值。
+    // 旧版 m_scrollSnap / m_objectPlacementSnap
+    // 故意忽略，避免工程覆盖软件偏好。
+    // 工作区仍恢复分拍策略，不因两个总开关迁出而丢弃整个工具栏对象。
     state.m_objectPlacementSnapMode = j.value(
         "m_objectPlacementSnapMode", std::string{ "CurrentBeatDivisor" });
     if ( state.m_objectPlacementSnapMode != "CurrentBeatDivisor" &&
@@ -396,6 +393,9 @@ void to_json(nlohmann::json& j, const ProjectSettings& settings)
         editorOverrideJson.erase("fixedToolWindow");
         editorOverrideJson.erase("showManagerLabels");
         editorOverrideJson.erase("toolbarVisibility");
+        // 磁吸总开关跨项目共享，项目编辑覆盖不能重新制造这两个字段。
+        editorOverrideJson.erase("scrollSnap");
+        editorOverrideJson.erase("objectPlacementSnap");
         // 上传同意、诊断和欢迎页均是软件级隐私或启动行为。
         editorOverrideJson.erase("autoUploadPgoProfiles");
         editorOverrideJson.erase("pgoProfileUploadConsentAsked");
@@ -435,8 +435,14 @@ void from_json(const nlohmann::json& j, ProjectSettings& settings)
         // 不能跳过整个覆盖对象，否则会丢失允许随项目迁移的编辑行为。
         settings.m_editorOverride = it->get<Config::EditorSettings>();
         // 即使旧项目曾保存工具栏外观，也恢复为当前软件全局默认语义。
+        const Config::EditorSettings defaults;
         Config::preserveGlobalToolbarDisplaySettings(*settings.m_editorOverride,
-                                                     Config::EditorSettings{});
+                                                     defaults);
+        // 只重置旧项目中的软件字段，真正的运行值仍由应用配置提供。
+        // 类型默认值不代表覆盖当前用户选择；该对象不再拥有吸附总开关。
+        settings.m_editorOverride->scrollSnap = defaults.scrollSnap;
+        settings.m_editorOverride->objectPlacementSnap =
+            defaults.objectPlacementSnap;
         // 项目文件不得启用上传、伪造同意状态或修改启动欢迎页策略。
         settings.m_editorOverride->autoUploadPgoProfiles        = false;
         settings.m_editorOverride->pgoProfileUploadConsentAsked = false;

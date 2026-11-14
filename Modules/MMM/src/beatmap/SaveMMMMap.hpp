@@ -359,19 +359,22 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
         case NoteType::POLYLINE: {
             const auto& poly = static_cast<const Polyline&>(note);
 
-            // 折线自身、任一节点存在内联批注，或独立批注引用其 ID 时，必须
-            // 保存原始节点结构，不能让几何清洗破坏批注目标身份。
-            const bool preserveAnnotatedStructure =
+            // 折线自身、任一节点存在批注，或节点已有稳定身份时保留原结构。
+            // 合法绘制或续写的转折即使无批注，也不能在保存时丢失节点身份。
+            // 与读取器的节点身份保护保持对称，无身份的旧导入段仍可规范化。
+            const bool preserveNodeStructure =
                 !poly.m_annotation.empty() ||
                 annotatedObjectIds.contains(poly.m_collaborationId) ||
-                std::any_of(poly.m_subNotes.begin(),
-                            poly.m_subNotes.end(),
-                            [&](const auto& subNote) {
-                                return !subNote.get().m_annotation.empty() ||
-                                       annotatedObjectIds.contains(
-                                           subNote.get().m_collaborationId);
-                            });
-            if ( preserveAnnotatedStructure ) {
+                std::any_of(
+                    poly.m_subNotes.begin(),
+                    poly.m_subNotes.end(),
+                    [&](const auto& subNote) {
+                        return !subNote.get().m_annotation.empty() ||
+                               !subNote.get().m_collaborationId.empty() ||
+                               annotatedObjectIds.contains(
+                                   subNote.get().m_collaborationId);
+                    });
+            if ( preserveNodeStructure ) {
                 // 保留路径逐节点写出类型、派生字段、身份、采样和内联批注。
                 // 该路径不执行零段过滤或同类合并，优先保证所有 target_id
                 // 可解析。

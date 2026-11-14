@@ -1,6 +1,8 @@
 *build/
 *build*/
 build/
+# 安卓原生、Gradle、资源、APK、缓存和模拟器数据统一收在此目录。
+/build-android/
 .cache/
 .vscode/
 .idea/
@@ -13,3 +15,7 @@ release/
 *__pycache__*/
 
 .DS_Store
+
+# Android Studio 的本机 SDK 配置与项目缓存不进入版本控制。
+/packaging/android/local.properties
+/packaging/android/.gradle/

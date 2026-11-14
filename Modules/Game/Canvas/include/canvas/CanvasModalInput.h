@@ -2,6 +2,7 @@
 
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 
 namespace MMM::Canvas
 {
@@ -13,7 +14,8 @@ namespace MMM::Canvas
 [[nodiscard]] inline bool isCanvasInputBlockedByModal()
 {
     // 弹窗范围之外同样必须阻挡，不能只用当前鼠标几何或焦点判断。
-    return ImGui::GetTopMostPopupModal() != nullptr;
+    return UI::workspaceBlocksCanvasInput() ||
+           ImGui::GetTopMostPopupModal() != nullptr;
 }
 
 /// @brief 查询画布及其普通子窗口的鼠标归属。

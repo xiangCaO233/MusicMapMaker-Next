@@ -5,6 +5,7 @@
 #include "config/CreatorIdentity.h"
 #include "config/EditorConfig.h"
 #include "config/LayoutPresets.h"
+#include "config/MobileWorkspaceSettings.h"
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 
@@ -25,6 +26,8 @@ struct AppConfig::State {
     /// @brief 客户端布局集合，保存时捕获当前实时布局。
     // const 保存入口可更新派生的预设身份，但不会改变实时视觉布局。
     mutable LayoutPresets m_layoutPresets;
+    /// @brief 与桌面布局、项目快照分离的移动客户端标量状态。
+    MobileWorkspaceSettings m_mobileWorkspace;
 };
 
 
@@ -144,15 +147,40 @@ const LayoutPresets& AppConfig::getLayoutPresets() const
     return m_state->m_layoutPresets;
 }
 
+/// @brief 借用 UI 线程管理的移动布局，加载前采用默认两标签状态。
+/// @warning 只读稳定私有字段，不在每帧执行锁或文件访问。
+const MobileWorkspaceSettings& AppConfig::getMobileWorkspaceSettings() const
+{
+    return m_state->m_mobileWorkspace;
+}
+
+/// @brief 从移动交互提交边沿发布完整不可变配置快照。
+/// @details 标量比较在生成 JSON 前完成；未变化的点击不触发后台保存。
+/// @warning 低频 UI 操作调用，磁盘写入由已有单槽后台队列收尾。
+void AppConfig::saveMobileWorkspaceSettings(
+    const MobileWorkspaceSettings& value, const std::filesystem::path& path)
+{
+    {
+        // 该锁仅保护配置快照，不持有到后台写盘或跨线程等待阶段。
+        std::lock_guard<std::mutex> lock(m_mutex);
+        if ( m_state->m_mobileWorkspace == value ) return;
+        m_state->m_mobileWorkspace = value;
+    }
+    // 后台只读取冻结的 JSON，不能解引用 UI 正在拖动的可变布局。
+    queueConfigSnapshot(path.empty() ? getDefaultConfigPath() : path,
+                        snapshotForSave());
+}
+
 /// @brief 将编辑器设置恢复到类型定义的默认值。
 /// @warning 低频配置路径：获取互斥锁，只能在初始化或显式重置时调用。
 void AppConfig::reset()
 {
     // 整体替换保证新增字段自动采用 EditorConfig 的成员默认值。
     std::lock_guard<std::mutex> lock(m_mutex);
-    m_state->m_editorConfig  = EditorConfig();
-    m_state->m_audioPresets  = AudioPresets();
-    m_state->m_layoutPresets = LayoutPresets();
+    m_state->m_editorConfig    = EditorConfig();
+    m_state->m_audioPresets    = AudioPresets();
+    m_state->m_layoutPresets   = LayoutPresets();
+    m_state->m_mobileWorkspace = {};
 }
 
 /// @brief 从指定或默认 JSON 文件加载编辑器配置与协作者稳定标识。
@@ -230,6 +258,10 @@ bool AppConfig::load(const std::filesystem::path& path)
         std::lock_guard<std::mutex> lock(m_mutex);
         // EditorConfig 的 from_json 自行处理缺失字段与范围约束。
         m_state->m_editorConfig = j.get<EditorConfig>();
+        // 移动布局属于根级客户端状态，切换谱面和桌面预设不得覆盖它。
+        m_state->m_mobileWorkspace = {};
+        if ( const auto mobile = j.find("mobileWorkspace"); mobile != j.end() )
+            from_json(*mobile, m_state->m_mobileWorkspace);
         // 升级时把现有全部键数布局收为默认项，不覆盖用户已有编辑结果。
         m_state->m_layoutPresets = LayoutPresets();
 
@@ -330,6 +362,7 @@ nlohmann::json AppConfig::snapshotForSave() const
         auto presets       = m_state->m_audioPresets;
         captureAudioPreset(presets.current(), m_state->m_editorConfig.settings);
         j["audioPresets"]               = presets;
+        j["mobileWorkspace"]            = m_state->m_mobileWorkspace;
         j["collaborationParticipantId"] = m_collaborationParticipantId;
     }
 

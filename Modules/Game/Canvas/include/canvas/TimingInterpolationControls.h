@@ -31,6 +31,8 @@ bool moveTimingBezierControl(TimingInterpolation& curve, int index, double x,
 /// @brief 绘制带两枚可拖拽控制点的归一化贝塞尔编辑图。
 /// @return 控制点在本帧发生改变时返回真。
 /// @warning 每帧固定几何预算，无模型所有权复制、函数编译或文件访问。
-bool renderTimingBezierControls(TimingInterpolation& curve, const ImVec2& size);
+/// @param pointerInput 默认保留原鼠标命中；平台自行处理触点时只复用绘图。
+bool renderTimingBezierControls(TimingInterpolation& curve, const ImVec2& size,
+                                bool pointerInput = true);
 }  // namespace Canvas
 }  // namespace MMM

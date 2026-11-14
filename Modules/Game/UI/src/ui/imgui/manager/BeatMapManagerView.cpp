@@ -21,6 +21,7 @@
 #include "ui/layout/LayoutContext.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -553,7 +554,13 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
     // 极窄侧栏中 padding 不超过可用宽度的 2%，防止内容被完全挤压。
     const float panelPadding = std::min(
         4.0f * dpiScale, std::max(0.0f, layoutContext.m_avail.x) * 0.02f);
-    const float rowHeight = 28.0f * dpiScale;
+    const bool touchLayout = !workspaceAllowsHoverFeedback();
+    // 触屏将名称与辅助信息分两行，整张卡片共用原有激活和排序身份。
+    // 两行高度随字体变化，用户调大字号后不能重叠到下一张卡片。
+    // 点击高度不含 CellPadding，由原生表格另外结算上下留白。
+    const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
+    const float rowHeight  = workspaceTableItemHeight(
+        touchLayout ? 2 * lineHeight : 28.0f * dpiScale, dpiScale);
 
     if ( !project ) {
         // 无项目提示按当前内容区域水平和垂直居中。
@@ -602,14 +609,26 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
         // 表格滚动条使用统一 DPI 样式作用域。
         Utils::VerticalScrollbarStyleScope verticalScrollbarStyle(dpiScale);
         // 列支持排序、重排、隐藏与调整宽度；数据区独立垂直滚动。
-        const ImGuiTableFlags tableFlags =
+        ImGuiTableFlags tableFlags =
             ImGuiTableFlags_BordersV | ImGuiTableFlags_BordersOuterH |
             ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
             ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable |
             ImGuiTableFlags_Sortable | ImGuiTableFlags_ScrollY |
             ImGuiTableFlags_SizingStretchProp;
 
-        if ( ImGui::BeginTable("BeatmapManagerTableV2",
+        // 独立身份避免移动列布局覆盖桌面保存的宽度、顺序和显隐。
+        if ( touchLayout ) {
+            tableFlags &=
+                ~(ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
+                  ImGuiTableFlags_Hideable);
+            tableFlags |= ImGuiTableFlags_NoSavedSettings;
+        }
+        // 保留六列的逻辑编号，现有缓存排序和元数据菜单无需转换索引。
+        // Disabled 让辅助列不占空间，不把文字挤到极窄的列里。
+        const ImGuiTableColumnFlags detailFlags =
+            touchLayout ? ImGuiTableColumnFlags_Disabled : 0;
+        if ( ImGui::BeginTable(touchLayout ? "BeatmapManagerTouchTable"
+                                           : "BeatmapManagerTableV2",
                                6,
                                tableFlags,
                                ImGui::GetContentRegionAvail()) ) {
@@ -624,32 +643,32 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
             // 类型列固定宽度，随当前字体大小保留可读下限。
             ImGui::TableSetupColumn(
                 TR("ui.beatmap_manager.column_type").data(),
-                ImGuiTableColumnFlags_WidthFixed |
+                detailFlags | ImGuiTableColumnFlags_WidthFixed |
                     ImGuiTableColumnFlags_PreferSortAscending,
                 std::max(76.0f, 86.0f * ImGui::GetFontSize() / 17.0f));
             // Version 列固定宽度并默认显示。
             ImGui::TableSetupColumn(
                 TR("ui.beatmap_manager.column_version").data(),
-                ImGuiTableColumnFlags_WidthFixed |
+                detailFlags | ImGuiTableColumnFlags_WidthFixed |
                     ImGuiTableColumnFlags_PreferSortAscending,
                 std::max(96.0f, 120.0f * ImGui::GetFontSize() / 17.0f));
             // 完整路径较长，默认隐藏且显示时使用伸缩宽度。
             ImGui::TableSetupColumn(
                 TR("ui.beatmap_manager.column_path").data(),
-                ImGuiTableColumnFlags_DefaultHide |
+                detailFlags | ImGuiTableColumnFlags_DefaultHide |
                     ImGuiTableColumnFlags_WidthStretch |
                     ImGuiTableColumnFlags_PreferSortAscending);
             // 大小属于辅助元数据，默认隐藏。
             ImGui::TableSetupColumn(
                 TR("ui.beatmap_manager.column_size").data(),
-                ImGuiTableColumnFlags_DefaultHide |
+                detailFlags | ImGuiTableColumnFlags_DefaultHide |
                     ImGuiTableColumnFlags_WidthFixed |
                     ImGuiTableColumnFlags_PreferSortAscending,
                 std::max(96.0f, 104.0f * ImGui::GetFontSize() / 17.0f));
             // 修改时间默认隐藏，宽度按固定格式文本和单元格 padding 计算。
             ImGui::TableSetupColumn(
                 TR("ui.beatmap_manager.column_modified_time").data(),
-                ImGuiTableColumnFlags_DefaultHide |
+                detailFlags | ImGuiTableColumnFlags_DefaultHide |
                     ImGuiTableColumnFlags_WidthFixed |
                     ImGuiTableColumnFlags_PreferSortDescending,
                 std::max(168.0f,
@@ -1133,6 +1152,24 @@ void BeatMapManagerView::onUpdate(LayoutContext& layoutContext,
 
                     const std::string nameText =
                         std::string(ICON_MMM_FILE) + "  " + beatmap.m_name;
+                    if ( touchLayout ) {
+                        // 整行选择区已经提交，文字不增加导航焦点或第二个点击入口。
+                        // 隐藏列不再轮询 TableNextColumn，防止自动进入下一行。
+                        // 主名称占满抽屉宽度；次行不依赖鼠标悬浮即可查看格式与版本。
+                        // 两行分别裁剪并复用滚动文字，长名称不会挤掉辅助信息。
+                        Utils::drawScrollingText(
+                            nameText, nameCellPos, nameCellWidth, lineHeight);
+                        const auto details =
+                            typeText + "  ·  " + formatVersionColumn(metadata);
+                        Utils::drawScrollingTextOnDrawList(
+                            *ImGui::GetWindowDrawList(),
+                            details,
+                            { nameCellPos.x, nameCellPos.y + lineHeight },
+                            nameCellWidth,
+                            lineHeight,
+                            ImGui::GetColorU32(ImGuiCol_TextDisabled));
+                        continue;
+                    }
                     // 第一列在 Selectable
                     // 之后手工绘制图标名称，保留整行点击区域。
                     renderScrollingTableText(

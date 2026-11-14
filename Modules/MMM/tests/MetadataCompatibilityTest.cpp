@@ -1,5 +1,8 @@
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/note/Flick.h"
+#include "mmm/note/Hold.h"
+#include "mmm/note/Polyline.h"
 #include "mmm/project/ProjectSettings.h"
 
 #include <algorithm>
@@ -10,8 +13,10 @@
 #include <iterator>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
 /**
  * @file MetadataCompatibilityTest.cpp
@@ -1349,6 +1354,103 @@ bool testMMMPolylineAnnotationRoundTrip(
         "MMM polyline annotations should round-trip independently");
 }
 
+/// @brief 合法的交替 Hold/Flick 折线在两次往返中保留稳定身份。
+/// @param outputDirectory 构建树下的隔离测试输出，不写源码资源。
+/// @return 类型、连接时间、轨道及身份保持一致时返回真。
+/// @details 本样本不带批注，稳定身份保护仍应生效。
+/// 保护身份不是允许插入普通 Note 或保留连续同类段的理由。
+/// 测试先按 Polyline.h 建立正交几何，再验证保存器不改变它。
+/// 这里使用毫秒模型，与逻辑会话秒单位的拖动测试互为补充。
+/// 两次往返要求读取器和保存器对同一合法结构使用对称身份规则。
+/// 首尾都采用有效载体，不依赖零时长或零轨差段阻止规范化。
+bool testMMMPolylineIdentityRoundTrip(
+    const std::filesystem::path& outputDirectory)
+{
+    MMM::BeatMap source;
+    source.m_baseMapMetadata.track_count = 4;
+    auto& poly       = source.m_noteData.polylines.emplace_back();
+    poly.m_timestamp = 500;
+    poly.m_track     = 1;
+    // 父身份刻意留空，确保保护条件来自合法子段的稳定 ID。
+    // 全部内联批注也为空，不借助批注引用绕过几何的合法性要求。
+    const std::array<std::string_view, 4> ids{
+        "hold-first", "flick-turn", "hold-next", "flick-tail"
+    };
+    // 两次转折各由一段持续与一段横移组成，没有普通 Note 子节点。
+    // 实际资源在 BeatMap 的 deque 中拥有，父列表只保存稳定引用。
+    for ( int i = 0; i < 2; ++i ) {
+        auto& hold       = source.m_noteData.holds.emplace_back();
+        hold.m_timestamp = 500 + 250 * i;
+        hold.m_duration  = 250;
+        hold.m_track     = 1 + i;
+        // 子载体不重复进入顶层物件列表，否则四节点数量会被错误副本污染。
+        // 不给 Hold 附加虚构普通 Note，转折由随后的 Flick 自身表达。
+        hold.m_isSubNote       = true;
+        hold.m_collaborationId = ids[i * 2];
+        poly.m_subNotes.emplace_back(hold);
+        poly.m_subHolds.emplace_back(hold);
+        // Flick 时刻接前段结束，终轨接下一段起轨。
+        // 末段反向用于区分真实终轨与把轨差误当绝对轨号。
+        auto& flick             = source.m_noteData.flicks.emplace_back();
+        flick.m_timestamp       = hold.m_timestamp + hold.m_duration;
+        flick.m_track           = hold.m_track;
+        flick.m_dtrack          = i == 0 ? 1 : -1;
+        flick.m_isSubNote       = true;
+        flick.m_collaborationId = ids[i * 2 + 1];
+        poly.m_subNotes.emplace_back(flick);
+        poly.m_subFlicks.emplace_back(flick);
+    }
+    // 同步顶层索引，不通过重复顶层物件掩盖内嵌节点缺失。
+    // 第一段的起点与父锚点相同，保存前已经是规范路径。
+    // 保存器负责保真，不负责把测试构造的非法几何解释成新类型。
+    source.sync();
+    for ( int pass = 0; pass < 2; ++pass ) {
+        const auto path = outputDirectory / ("polyline_identity_" +
+                                             std::to_string(pass) + ".mmm");
+        if ( !source.saveToFile(path) ) return false;
+        auto restored = MMM::BeatMap::loadFromFile(path);
+        if ( !check(
+                 restored.m_noteData.polylines.size() == 1 &&
+                     restored.m_noteData.polylines.front().m_subNotes.size() ==
+                         4,
+                 "canonical polyline structure must survive native reload") )
+            return false;
+        // 先确认完整数组数量再索引，加载失败或意外降级不会造成越界读取。
+        // 两段 Hold 的时刻不同，单纯比较最终总时长无法证明接缝保真。
+        const auto& nodes = restored.m_noteData.polylines.front().m_subNotes;
+        // 每个节点的身份和类型都比较，不能重新生成四个 ID 伪装保留。
+        // 两次往返的第二轮使用正式加载结果，不再构造原始夹具。
+        for ( std::size_t i = 0; i < ids.size(); ++i ) {
+            const auto& node = nodes[i].get();
+            if ( !check(
+                     node.m_collaborationId == ids[i] &&
+                         node.m_type == (i % 2 == 0 ? MMM::NoteType::HOLD
+                                                    : MMM::NoteType::FLICK),
+                     "canonical node identity and alternation must survive") )
+                return false;
+        }
+        // 横向连接与时间连接同时成立，保存不能把合法折线改成斜线。
+        // 毫秒模型使用整数样本，所以这些端点可精确比较。
+        if ( !check(
+                 nodes[1].get().m_timestamp == 750 &&
+                     nodes[2].get().m_timestamp == 750 &&
+                     nodes[2].get().m_track == 2 &&
+                     static_cast<const MMM::Hold&>(nodes[2].get()).m_duration ==
+                         250 &&
+                     static_cast<const MMM::Flick&>(nodes[1].get()).m_dtrack ==
+                         1 &&
+                     static_cast<const MMM::Flick&>(nodes[3].get()).m_dtrack ==
+                         -1,
+                 "canonical connections must survive native reload") )
+            return false;
+        // 第二次保存不重新分配 ID，也不重新运行绘制命令恢复丢失的结构。
+        // 若读取器把合法四段清成单段，这一轮会在数量检查处失败。
+        // 移动拥有容器后不再访问上一轮的引用。
+        source = std::move(restored);
+    }
+    return true;
+}
+
 /**
  * @brief 验证 MMM 原生格式保留同时间戳的多条 Markdown 批注及物件目标。
  *
@@ -1556,6 +1658,8 @@ int main(int argc, char* argv[])
     ok &= testBeatmapConverterFormatMatrix(outputDirectory);
     // 批注组验证折线层级以及同时间戳多目标的稳定身份。
     ok &= testMMMPolylineAnnotationRoundTrip(outputDirectory);
+    // 无批注的合法正交折线仍保留原节点身份。
+    ok &= testMMMPolylineIdentityRoundTrip(outputDirectory);
     ok &= testMMMBeatmapAnnotationsRoundTrip(outputDirectory);
 
     if ( ok ) {

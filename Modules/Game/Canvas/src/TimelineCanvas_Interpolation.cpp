@@ -1,7 +1,11 @@
 #include "canvas/TimelineCanvas.h"
 #include "config/EditorSettings.h"
+#include "config/skin/translation/Translation.h"
 #include "mmm/timing/TimingInterpolationAlgorithms.h"
+#include "presentation/TimelineInteractionPresentation.h"
+#include "ui/Icons.h"
 #include "ui/imgui/ShortcutUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 // 插值弹窗沿用当前表面的取消动作，标准数值输入仍由 ImGui 处理。
 #include "ui/interaction/EditorInteraction.h"
 
@@ -58,9 +62,15 @@ constexpr std::array INTERPOLATION_LABELS{ "BPM", "Scroll", "Jump (ms)", "HS" };
 // 未来翻译名称变动不会改变已保存的曲线编号或计算结果。
 /// @note 新曲线只能追加稳定枚举，不能移动已发布的贝塞尔编号。
 constexpr std::array CURVE_LABELS{
-    "直线",       "二次渐入", "二次渐出", "平滑阶跃", "正弦渐变", "指数渐变",
-    "三次贝塞尔", "三次幂",   "四次幂",   "五次幂",   "平方根",   "立方根",
-    "对数",       "有理函数", "正弦渐入", "正弦渐出", "双曲正切", "自定义 f(t)"
+    "ui.timing.curve.linear",   "ui.timing.curve.ease_in",
+    "ui.timing.curve.ease_out", "ui.timing.curve.smooth",
+    "ui.timing.curve.sine",     "ui.timing.curve.exponential",
+    "ui.timing.curve.bezier",   "ui.timing.curve.cubic",
+    "ui.timing.curve.quartic",  "ui.timing.curve.quintic",
+    "ui.timing.curve.sqrt",     "ui.timing.curve.cbrt",
+    "ui.timing.curve.log",      "ui.timing.curve.rational",
+    "ui.timing.curve.sine_in",  "ui.timing.curve.sine_out",
+    "ui.timing.curve.tanh",     "ui.timing.curve.custom"
 };
 
 /// @brief 判定模态工作副本是否与同效果时间点冲突。
@@ -83,10 +93,9 @@ const char* interpolationValidationError(
     if ( !std::isfinite(edit.time) || edit.time < 0.0 ||
          !isValidTimingInterpolation(
              edit.interpolation, edit.effect, edit.value) )
-        return "范围、数值或密度不合法：起点须非负，时长至少 1 ms，BPM "
-               "须在 0.1–10000 之间，最多 65536 次切分。";
+        return TR("ui.timing.curve.invalid_range").data();
     const double end = edit.time + edit.interpolation.m_duration;
-    if ( !std::isfinite(end) ) return "段落终点超出可表示范围。";
+    if ( !std::isfinite(end) ) return TR("ui.timing.curve.end_overflow").data();
     // 和逻辑入口使用相同的开区间规则，边界不会误报为重叠。
     for ( const auto& row : rows ) {
         entt::entity entity = entt::null;
@@ -107,7 +116,7 @@ const char* interpolationValidationError(
                  ? std::min(end, otherEnd) - std::max(edit.time, row.time) >
                        1e-9
                  : row.time > edit.time + 1e-9 && row.time < end - 1e-9 )
-            return "范围内已有同类型时间点或插值段落，请调整范围后再保存。";
+            return TR("ui.timing.curve.overlap").data();
     }
     return nullptr;
 }
@@ -429,12 +438,14 @@ bool TimelineCanvas::handleInterpolationBody(const ImVec2& position,
             continue;
         // 双击的第二次按下可能遇到单点或移动预览，打开窗口前停止它们。
         // 实际数据还未修改，取消弹窗不会污染撤销历史。
-        ImGui::SetTooltip(
-            "%s 插值段落\n%.3f–%.3f s，%.4g Hz\n双击编辑，右键删除整个段落",
-            INTERPOLATION_LABELS[interpolationLane(segment.effect)],
-            segment.time,
-            segment.time + segment.interpolation.m_duration,
-            segment.interpolation.m_samplesPerSecond);
+        // 触屏没有悬浮说明，正文参数由长按菜单打开同一编辑器。
+        if ( m_timingPresentation->showHoverDetails() )
+            ImGui::SetTooltip(
+                TR("ui.timing.curve.range_tooltip").data(),
+                INTERPOLATION_LABELS[interpolationLane(segment.effect)],
+                segment.time,
+                segment.time + segment.interpolation.m_duration,
+                segment.interpolation.m_samplesPerSecond);
         if ( UI::Interaction::mouseDoubleClicked(ImGuiMouseButton_Left) ) {
             // 段首不必在可见区；双击正文仍能编辑整个原始段落。
             m_isTimingDragging       = false;
@@ -474,6 +485,7 @@ void TimelineCanvas::renderInterpolationOverlay(const ImVec2& position,
     const bool professional =
         Config::AppConfig::instance().getEditorSettings().professionalMode;
     auto* draw = ImGui::GetWindowDrawList();
+    // 移动图的背景与圆角跟随主题，桌面继续原有输出图外观。
     // 覆盖层追加到当前图像之上，裁剪与图像的边缘严格一致。
     // 曲线和范围带的屏幕坐标不进入逻辑模型或保存格式。
     draw->PushClipRect(
@@ -549,7 +561,7 @@ void TimelineCanvas::renderInterpolationOverlay(const ImVec2& position,
             }
             draw->AddText(ImVec2(left + 3.0f, std::max(top, position.y) + 3.0f),
                           color,
-                          "插值段落");
+                          TR("ui.timing.curve.range_name").data());
         };
     for ( std::size_t index = 0;
           index < m_currentSnapshot->timingInterpolations.size();
@@ -569,6 +581,9 @@ void TimelineCanvas::renderInterpolationOverlay(const ImVec2& position,
                m_interpolationEnd,
                m_interpolationDragPreview);
     draw->PopClipRect();
+    // 平台附加层最后提交，使细把手不被原函数曲线或范围带盖住。
+    // 默认桌面实现为空，移动状态及其头文件不传播到共同画布定义。
+    m_timingPresentation->renderOverlay(*this, position, size);
 }
 
 /// @brief 使用工作副本编辑范围、函数与采样密度，一次提交一个可撤销事务。
@@ -589,38 +604,55 @@ void TimelineCanvas::renderInterpolationEditor()
     // 弹窗在同一个 UI ID 栈中打开与绘制，表格和画布入口不会互相错配。
     // 请求只消费一次，后续帧沿用 ImGui 管理的模态窗口。
     if ( m_requestInterpolationEditor ) {
-        ImGui::OpenPopup("插值时间点段落###TimingInterpolationEditor");
+        ImGui::OpenPopup(TR("ui.timing.curve.title").data());
         m_requestInterpolationEditor = false;
         m_isInterpolationEditorOpen  = true;
     }
     // 未打开编辑器的常规帧不执行校验、数量计算或窗口布局。
     // 请求标记只为延迟到稳定 ID 栈，不承担时长消抖或阻塞等待。
     if ( !m_isInterpolationEditorOpen ) return;
+    const float parameterScale =
+        Config::AppConfig::instance().getWindowContentScale();
+    // 窗口与触摸控件采用同一倍率，不能只放大字体却保留桌面的像素宽度。
+    // 私有平台策略提供首开和最小尺寸，视口上限仍由共同弹窗统一约束。
+    // 桌面策略原样返回既有尺寸，不改变其布局与用户保存的窗口大小。
+    const auto preferred =
+        m_timingPresentation->parameterWindowSize(false, parameterScale);
+    const auto minimumSize =
+        m_timingPresentation->parameterWindowSize(true, parameterScale);
     const auto   workSize = ImGui::GetMainViewport()->WorkSize;
     const ImVec2 maximum(std::max(1.f, workSize.x * .95f),
                          std::max(1.f, workSize.y * .95f));
     // 初次打开才给定尺寸，重开时沿用用户调整的大小；小屏幕按工作区收敛。
-    ImGui::SetNextWindowSize(
-        ImVec2(std::min(620.f, maximum.x), std::min(820.f, workSize.y * .85f)),
-        ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(std::min(preferred.x, maximum.x),
+                                    std::min(preferred.y, workSize.y * .85f)),
+                             ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(
-        ImVec2(std::min(420.f, maximum.x), std::min(320.f, maximum.y)),
+        ImVec2(std::min(minimumSize.x, maximum.x),
+               std::min(minimumSize.y, maximum.y)),
         maximum);
     bool open = true;
     // 标题关闭使用独立布尔量，不能让 ImGui 修改逻辑段落状态。
     // 允许拖动边缘或右下角缩放；内容超出高度时由窗口滚动，而非强制改回尺寸。
-    if ( ImGui::BeginPopupModal("插值时间点段落###TimingInterpolationEditor",
-                                &open) ) {
+    if ( ImGui::BeginPopupModal(TR("ui.timing.curve.title").data(), &open) ) {
+        // 移动端只让表单正文滚动，确认区不进入可滚动子窗。
+        // 桌面策略返回 false，不引入子窗或改变原有参数排列。
+        // BeginChild 的可见返回值不代表配对义务，包装后总要 EndChild。
+        // 预览、函数和校验仍引用同一份工作副本，不生成另一份移动草稿。
+        // 弹窗关闭和会话切换仍由已有实例令牌门禁决定。
+        const bool parameterBody =
+            m_timingPresentation->beginParameterBody(parameterScale);
         auto& edit  = m_interpolationEdit;
         auto& curve = edit.interpolation;
         int   lane  = interpolationLane(edit.effect);
         // 普通模式也能在创建窗口选择效果，已有实体的类型保持不变。
         // 否则 CmdUpdate 只携带参数时可能把曲线写入错误的效果泳道。
         ImGui::BeginDisabled(edit.entity != entt::null);
-        if ( ImGui::Combo("类型",
-                          &lane,
-                          INTERPOLATION_LABELS.data(),
-                          static_cast<int>(INTERPOLATION_LABELS.size())) ) {
+        if ( m_timingPresentation->curveCombo(
+                 TR("ui.timing.curve.type").data(),
+                 &lane,
+                 INTERPOLATION_LABELS.data(),
+                 static_cast<int>(INTERPOLATION_LABELS.size())) ) {
             edit.effect = INTERPOLATION_EFFECTS[lane];
             edit.value =
                 edit.effect == TimingEffect::BPM
@@ -634,8 +666,10 @@ void TimelineCanvas::renderInterpolationEditor()
         ImGui::EndDisabled();
         // 时间字段统一为秒，与 TimelineComponent 一致。
         // 原生 Timing 的毫秒转换只发生在会话存取边界，UI 不混合两套单位。
-        ImGui::InputDouble("起点 (s)", &edit.time, 0.0, 0.0, "%.6f");
-        ImGui::InputDouble("终点 (s)", &m_interpolationEnd, 0.0, 0.0, "%.6f");
+        m_timingPresentation->curveDouble(
+            TR("ui.timing.curve.start").data(), &edit.time, "%.6f");
+        m_timingPresentation->curveDouble(
+            TR("ui.timing.curve.end").data(), &m_interpolationEnd, "%.6f");
         // 用户修改任意端点都会立即刷新时长、曲线图和预计事件数量。
         // 倒置范围保留错误提示，不能用绝对值掩盖用户输入问题。
         curve.m_duration = m_interpolationEnd - edit.time;
@@ -650,10 +684,17 @@ void TimelineCanvas::renderInterpolationEditor()
         // 轴选择不能绕过所属类型，BPM 始终采用时间模式。
         // 原生保存保留轴配置，再次编辑仍只有一个段落实体。
         // 红线函数只能选择秒域，自身 BPM 不能同时决定自变量速度。
-        int variable = static_cast<int>(curve.m_variable);
+        int              variable = static_cast<int>(curve.m_variable);
+        const std::array variableNames{
+            TR("ui.timing.curve.time").data(),
+            TR("ui.timing.curve.beat_variable").data()
+        };
         ImGui::BeginDisabled(edit.effect == TimingEffect::BPM);
-        bool axisChanged =
-            ImGui::Combo("自变量", &variable, "时间（秒）\0节拍 / 分拍\0");
+        bool axisChanged = m_timingPresentation->curveCombo(
+            TR("ui.timing.curve.variable").data(),
+            &variable,
+            variableNames.data(),
+            2);
         ImGui::EndDisabled();
         if ( edit.effect == TimingEffect::BPM ) variable = 0;
         if ( curve.m_variable != static_cast<TimingVariable>(variable) ) {
@@ -665,10 +706,12 @@ void TimelineCanvas::renderInterpolationEditor()
             m_timingFunctionEditor.m_fitFunction.reset();
         }
         if ( curve.m_variable == TimingVariable::Beat ) {
-            axisChanged |=
-                ImGui::InputInt("分拍分子", &curve.m_beatNumerator, 0, 0);
-            axisChanged |=
-                ImGui::InputInt("分拍分母", &curve.m_beatDenominator, 0, 0);
+            axisChanged |= m_timingPresentation->curveInt(
+                TR("ui.timing.curve.beat_numerator").data(),
+                &curve.m_beatNumerator);
+            axisChanged |= m_timingPresentation->curveInt(
+                TR("ui.timing.curve.beat_denominator").data(),
+                &curve.m_beatDenominator);
             // 先准备映射，再由函数编辑器重新编译源文本；非法函数也能修改范围。
             // 常规帧只比较两个标量，不排序、分配或等待逻辑线程。
             if ( axisChanged || edit.time != m_interpolationAxisStart ||
@@ -685,11 +728,9 @@ void TimelineCanvas::renderInterpolationEditor()
                 m_interpolationAxisDuration = curve.m_duration;
             }
             if ( m_interpolationAxisValid )
-                ImGui::TextWrapped(
-                    "每 %d/%d 拍插入一个时间点；t 为距段首的拍数，BPM "
-                    "变化时采样间隔随之变化。",
-                    curve.m_beatNumerator,
-                    curve.m_beatDenominator);
+                ImGui::TextWrapped(TR("ui.timing.curve.beat_hint").data(),
+                                   curve.m_beatNumerator,
+                                   curve.m_beatDenominator);
         } else
             m_interpolationAxisValid = true;
         // 预设切换轴后重建初始表达式模板，自定义模式则保留用户源式重编译。
@@ -697,14 +738,23 @@ void TimelineCanvas::renderInterpolationEditor()
             initializeTimingFunctionEditor();
         // 绝对函数首尾由 f(0) 和 f(duration) 推导，避免双重真值来源。
         ImGui::BeginDisabled(curve.m_curve == TimingCurve::Custom);
-        ImGui::InputDouble("起始参数", &edit.value, 0.0, 0.0, "%.6g");
-        ImGui::InputDouble("终点参数", &curve.m_endValue, 0.0, 0.0, "%.6g");
+        m_timingPresentation->curveDouble(
+            TR("ui.timing.curve.start_value").data(), &edit.value, "%.6g");
+        m_timingPresentation->curveDouble(
+            TR("ui.timing.curve.end_value").data(), &curve.m_endValue, "%.6g");
         ImGui::EndDisabled();
         int function = static_cast<int>(curve.m_curve);
-        if ( ImGui::Combo("变化函数",
-                          &function,
-                          CURVE_LABELS.data(),
-                          static_cast<int>(CURVE_LABELS.size())) ) {
+        // 翻译指针只活到本次控件提交结束，窗口不保存用户语言对应的枚举名称。
+        // 配置及谱面仍保存原数字曲线种类，语言切换不会重排已有定义。
+        std::array<const char*, CURVE_LABELS.size()> curveLabels{};
+        // 翻译仅替换显示指针，枚举次序和配置中的稳定标识不变。
+        for ( std::size_t i = 0; i < CURVE_LABELS.size(); ++i )
+            curveLabels[i] = TR(CURVE_LABELS[i]).data();
+        if ( m_timingPresentation->curveCombo(
+                 TR("ui.timing.curve.function").data(),
+                 &function,
+                 curveLabels.data(),
+                 static_cast<int>(CURVE_LABELS.size())) ) {
             curve.m_curve = static_cast<TimingCurve>(function);
             // 切换模式需要重编译一次，常规帧不得重复准备积分缓存。
             m_timingFunctionEditor.m_compiledDuration = -1;
@@ -713,25 +763,37 @@ void TimelineCanvas::renderInterpolationEditor()
         // 横轴是当前自变量比例，纵轴是参数比例，不是屏幕像素。
         if ( curve.m_curve == TimingCurve::Bezier ) {
             // 图形与数值输入共享控制点，拖动不会产生独立曲线或中间逻辑命令。
-            renderTimingBezierControls(
+            m_timingPresentation->bezierControls(
                 curve,
                 { std::max(180.f, ImGui::GetContentRegionAvail().x), 220.f });
             // 图表显示归一化曲率，起终参数相同也能先调整形状再修改端值。
             // 数值控件仍保留，用于精确输入而不是强迫用户靠鼠标对齐。
-            ImGui::TextUnformatted(
-                "拖动控制点 1、2 调整曲线；起终参数仍由上方输入设置。");
+            // 长英文说明按正文宽度换行，不能与数值标签一起裁切到右边界。
+            ImGui::TextWrapped("%s", TR("ui.timing.curve.bezier_hint").data());
             // 控制点有横纵两个坐标，限制单调时间轴并允许自由调整曲率。
-            ImGui::InputDouble(
-                "控制点 1 X", &curve.m_controlX1, 0.0, 0.0, "%.4f");
-            ImGui::InputDouble(
-                "控制点 1 Y", &curve.m_controlY1, 0.0, 0.0, "%.4f");
-            ImGui::InputDouble(
-                "控制点 2 X", &curve.m_controlX2, 0.0, 0.0, "%.4f");
-            ImGui::InputDouble(
-                "控制点 2 Y", &curve.m_controlY2, 0.0, 0.0, "%.4f");
-            ImGui::TextUnformatted("控制点范围 0–1，X1 ≤ X2。");
+            m_timingPresentation->curveDouble(
+                TR("ui.timing.curve.control_1_x").data(),
+                &curve.m_controlX1,
+                "%.4f");
+            m_timingPresentation->curveDouble(
+                TR("ui.timing.curve.control_1_y").data(),
+                &curve.m_controlY1,
+                "%.4f");
+            m_timingPresentation->curveDouble(
+                TR("ui.timing.curve.control_2_x").data(),
+                &curve.m_controlX2,
+                "%.4f");
+            m_timingPresentation->curveDouble(
+                TR("ui.timing.curve.control_2_y").data(),
+                &curve.m_controlY2,
+                "%.4f");
+            ImGui::TextUnformatted(TR("ui.timing.curve.control_limits").data());
         }
         renderTimingFunctionEditor();
+        // 图表被折叠或轴值暂时无效时取消未完成触摸，不能把半笔误作正常释放。
+        // 此收尾不提交模型，后面的保存区仍独占正式更新命令。
+        // 桌面默认无图表事务，参数框修改与快捷键结束时机保持原样。
+        m_timingPresentation->finishCurveFrame(curve, m_timingFunctionEditor);
         // 拍域密度不接受第二份自由输入，防止保存与预览真值冲突。
         // 常 BPM 时为 BPM / 60 / 分拍，100 BPM 半拍为 3.333… Hz。
         // 变 BPM 显示平均密度，落点逐个按拍位反解。
@@ -745,22 +807,19 @@ void TimelineCanvas::renderInterpolationEditor()
         // 重叠规则与轴无关，不能因分拍而放宽范围限制。
         // 拍域密度由红线和分拍推导，禁用输入避免出现两个互相矛盾的真值。
         ImGui::BeginDisabled(curve.m_variable == TimingVariable::Beat);
-        ImGui::InputDouble(curve.m_variable == TimingVariable::Beat
-                               ? "派生平均采样率 (Hz)"
-                               : "输出采样密度 (Hz)",
-                           &curve.m_samplesPerSecond,
-                           0.0,
-                           0.0,
-                           "%.6g");
+        m_timingPresentation->curveDouble(
+            curve.m_variable == TimingVariable::Beat
+                ? TR("ui.timing.curve.derived_density").data()
+                : TR("ui.timing.curve.density").data(),
+            &curve.m_samplesPerSecond,
+            "%.6g");
         ImGui::EndDisabled();
         // 已有时间点副本用于提前解释冲突，最终命令还会校验最新数据。
         // 联机编辑或队列提交之间出现变化时，逻辑入口拥有最终决定权。
         const char* error =
             interpolationValidationError(edit, m_interpolationValidationRows);
         if ( !m_interpolationAxisValid )
-            error =
-                "请设置有效的时间范围和正整数分拍，单段不能超过 65536 "
-                "个采样间隔。";
+            error = TR("ui.timing.curve.invalid_axis").data();
         if ( curve.m_curve == TimingCurve::Custom &&
              !m_timingFunctionEditor.m_error.empty() )
             error = m_timingFunctionEditor.m_error.c_str();
@@ -770,22 +829,29 @@ void TimelineCanvas::renderInterpolationEditor()
             m_currentSnapshot && m_currentSnapshot->hasBeatmap &&
             m_currentSnapshot->beatmapPathKey == m_interpolationBeatmapKey &&
             m_currentSnapshot->beatmapInstanceId == m_interpolationInstanceId;
-        if ( !sameBeatmap ) error = "当前谱面已切换，请取消后重新打开编辑器。";
+        if ( !sameBeatmap ) error = TR("ui.timing.curve.changed_chart").data();
         // 只有合法数据才能参与数量计算和图形归一化，防止无穷值污染 UI。
         // 预计数量包含精确段尾，与实际格式写出函数保持同一口径。
         if ( !error ) {
-            ImGui::Text("预计写出 %zu 个独立 Timing；原生保存为一个段落。",
-                        timingInterpolationSampleCount(curve));
+            ImGui::TextWrapped(TR("ui.timing.curve.sample_count").data(),
+                               timingInterpolationSampleCount(curve));
             // 图形横轴为时间，纵轴为参数；点代表输出采样，线代表原函数。
-            const ImVec2 origin = ImGui::GetCursorScreenPos();
             const ImVec2 graphSize(
-                std::max(100.0f, ImGui::GetContentRegionAvail().x), 150.0f);
-            auto* draw = ImGui::GetWindowDrawList();
+                std::max(100.0f, ImGui::GetContentRegionAvail().x),
+                m_timingPresentation->curveGraphHeight(150, parameterScale));
+            // 移动图表单独隔离拖动所有权，桌面返回 false 后仍沿用原布局。
+            // 子窗只包围预览，不包含其下的导航按钮和说明文字。
+            // 绘制缓存与原曲线共用真值，局部缩放不额外生成导出事件。
+            const bool surface = m_timingPresentation->beginCurveSurface(
+                "##TimingOutputSurface", graphSize);
+            const ImVec2 origin = ImGui::GetCursorScreenPos();
+            auto*        draw   = ImGui::GetWindowDrawList();
             draw->AddRectFilled(
                 origin,
                 ImVec2(origin.x + graphSize.x, origin.y + graphSize.y),
-                IM_COL32(20, 24, 30, 255),
-                4.0f);
+                surface ? ImGui::GetColorU32(ImGuiCol_FrameBg)
+                        : IM_COL32(20, 24, 30, 255),
+                surface ? ImGui::GetStyle().FrameRounding : 4.0f);
             const auto [minimum, maximum] =
                 timingInterpolationRange(curve, edit.value);
             auto& preview = m_timingFunctionEditor.m_outputPreview;
@@ -793,8 +859,11 @@ void TimelineCanvas::renderInterpolationEditor()
             // 源定义或拍轴变化由缓存键检测，模式切换不会沿用旧坐标映射。
             // 预览命中区仅调整本地视野，不操作段落、采样密度或逻辑事件。
             // InvisibleButton 没有普通按钮外观，拖动不需要通用按钮反馈。
-            ImGui::InvisibleButton("##TimingOutputPreview", graphSize);
-            if ( ImGui::IsItemHovered() ) {
+            const bool touchPreview =
+                m_timingPresentation->previewInput(preview, origin, graphSize);
+            if ( !touchPreview )
+                ImGui::InvisibleButton("##TimingOutputPreview", graphSize);
+            if ( !touchPreview && ImGui::IsItemHovered() ) {
                 // 鼠标滚轮由图表拥有，缩放时不能同时滚动整个弹窗。
                 ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
                 const auto& io = ImGui::GetIO();
@@ -808,7 +877,7 @@ void TimelineCanvas::renderInterpolationEditor()
                     preview.resetView();
             }
             // 活动拖动离开图表仍继续平移，边界约束由视图状态统一维护。
-            if ( ImGui::IsItemActive() &&
+            if ( !touchPreview && ImGui::IsItemActive() &&
                  UI::Interaction::mouseDragging(ImGuiMouseButton_Left) )
                 preview.pan(-ImGui::GetIO().MouseDelta.x / graphSize.x);
             // 每个真实输出样本先参与缓存，再按像素保留首尾和峰谷。
@@ -824,21 +893,31 @@ void TimelineCanvas::renderInterpolationEditor()
                 maximum,
                 IM_COL32(70, 195, 255, 255),
                 IM_COL32(250, 205, 95, 255));
-            ImGui::Text("预览：%.6g – %.6g 秒；可见 %zu 个真实采样点。",
-                        curve.m_duration * preview.viewStart(),
-                        curve.m_duration * preview.viewEnd(),
-                        preview.visibleSampleCount());
+            if ( surface ) ImGui::EndChild();
+            // 先结束图表子窗再提交按钮，使轻点不会被解释为图内的一次横向浏览。
+            // 按钮只改视野，保存命令仍由固定底部确认区负责。
+            m_timingPresentation->previewButtons(preview);
+            ImGui::TextWrapped(TR("ui.timing.curve.preview_range").data(),
+                               curve.m_duration * preview.viewStart(),
+                               curve.m_duration * preview.viewEnd(),
+                               preview.visibleSampleCount());
             // 密集区域显示包围而非每个独立圆点，文字明确说明需要放大查看。
             // 可见数量来自真实样本集合，不能把屏幕代表点数说成实际输出数。
-            ImGui::TextWrapped(
-                "蓝线为原函数，黄色为真实输出采样。密集区域按像素保留峰谷；"
-                "滚轮放大局部，拖动平移，双击恢复完整区间。");
-            ImGui::TextUnformatted(
-                "双击画布段落或点击表格中的“编辑段落”可再次修改。Shift "
-                "拖动创建，Esc 取消。");
-            if ( edit.effect == TimingEffect::JUMP )
+            // 触屏说明不宣传不存在的键盘修饰键或鼠标滚轮入口。
+            // 空键保留桌面完整说明，移动文案由私有平台策略选择。
+            if ( const auto* key = m_timingPresentation->rangeHintKey(true) )
+                ImGui::TextWrapped("%s", TR(key).data());
+            else
+                ImGui::TextWrapped(
+                    "%s", TR("ui.timing.curve.desktop_preview").data());
+            if ( const auto* key = m_timingPresentation->rangeHintKey(false) )
+                ImGui::TextWrapped("%s", TR(key).data());
+            else
                 ImGui::TextUnformatted(
-                    "Jump 为位移脉冲；采样密度也会改变脉冲次数与累计位移。");
+                    TR("ui.timing.curve.desktop_edit").data());
+            if ( edit.effect == TimingEffect::JUMP )
+                ImGui::TextWrapped("%s",
+                                   TR("ui.timing.curve.jump_hint").data());
         } else
             ImGui::TextWrapped("%s", error);
         // 禁用保存与显示原因绑定，但取消始终可用，避免错误输入困住用户。
@@ -846,9 +925,27 @@ void TimelineCanvas::renderInterpolationEditor()
         // 保存按钮的禁用条件来自模型与范围，而不是当前画布是否可见。
         // 用户可在隐藏时间线后继续编辑，谱面切换则由实例令牌拒绝。
         // 无效输入不自动重写为合法值，保留用户修正数值的机会。
+        // 子窗边界只隔离滚动与裁剪，验证结果在同一调用栈继续使用。
+        // 必须先退出正文子窗，再布局底部按钮，否则滚动仍会带走确认区。
+        // 保存命令和取消副本的原有边界保持不变，不提前应用参数。
+        if ( parameterBody ) ImGui::EndChild();
+        const float footerHeight =
+            m_timingPresentation->parameterButtonHeight(parameterScale);
+        // 桌面高度为零时保留自动宽度，移动才使用等宽的两个触摸按钮。
+        // 间距来自当前美化配置，不为手机额外写死圆角或边框样式。
+        const ImVec2 footerSize{ footerHeight > 0
+                                     ? (ImGui::GetContentRegionAvail().x -
+                                        ImGui::GetStyle().ItemSpacing.x) *
+                                           .5f
+                                     : 0,
+                                 footerHeight };
         ImGui::BeginDisabled(error != nullptr);
         // 保存是唯一发布编辑命令的入口，图形预览没有中间写入。
-        if ( UI::FeedbackButton("保存段落") ) {
+        if ( UI::workspaceActionButton(
+                 footerHeight > 0 ? TR("ui.mobile.timing.save_range").data()
+                                  : TR("ui.timing.curve.save").data(),
+                 UI::ICON_MMM_CHECK,
+                 footerSize) ) {
             // 仅确认有效段落时更新工具默认，取消不会覆盖上次成功使用的选项。
             // 配置写入是低频用户动作，禁止移入逐帧绘制或拖动更新分支。
             auto& app = Config::AppConfig::instance();
@@ -881,7 +978,11 @@ void TimelineCanvas::renderInterpolationEditor()
         // 每次成功或取消都同时清除本地窗口标志并关闭 ImGui 弹窗。
         ImGui::EndDisabled();
         ImGui::SameLine();
-        if ( UI::FeedbackButton("取消") ||
+        if ( UI::workspaceActionButton(
+                 footerHeight > 0 ? TR("ui.common.cancel").data()
+                                  : TR("ui.timing.curve.cancel").data(),
+                 UI::ICON_MMM_CLOSE,
+                 footerSize) ||
              UI::ShortcutUtils::isActionShortcutPressed("cancelInteraction",
                                                         true) ) {
             m_isInterpolationEditorOpen = false;

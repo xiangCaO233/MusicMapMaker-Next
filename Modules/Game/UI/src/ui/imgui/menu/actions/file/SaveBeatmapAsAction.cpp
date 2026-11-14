@@ -10,13 +10,16 @@
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
+#include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "ui/imgui/menu/package/BmsExportTouch.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/MobileInputEditor.h"
 
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -225,7 +228,8 @@ private:
     {
         // 引用编辑器设置以读取选择器类型和最近目录。
         auto& config = Config::AppConfig::instance().getEditorSettings();
-        if ( config.filePickerStyle == Config::FilePickerStyle::Native &&
+        if ( (NativeFileDialog::requiresSystemPicker() ||
+              config.filePickerStyle == Config::FilePickerStyle::Native) &&
              ext.empty() ) {
             // 原生多过滤器无法可靠获知用户最终过滤器，先要求显式选择格式。
             m_showExportFormatPicker = true;
@@ -256,10 +260,14 @@ private:
             }
         }
 
-        if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
+        // Android 的格式选择仍由项目处理，最后的目标文档由系统 provider 创建。
+        // 系统创建成功只是获得写入位置，现有 writer 和平台发布均成功才算保存。
+        // 回调依赖长期存在的 action 对象，不能借用当前 popup 的临时名称缓冲。
+        // 取消选择保留原谱面路径与编辑状态，不产生空路径保存。
+        if ( NativeFileDialog::requiresSystemPicker() ||
+             config.filePickerStyle == Config::FilePickerStyle::Native ) {
             // 原生选择器在当前调用内阻塞，显示前播放统一弹窗反馈。
             ::MMM::UI::PlayPopupOpenFeedback();
-            nfdu8char_t*      outPath = nullptr;
             nfdu8filteritem_t filters[5];
             int               filterCount = 0;
 
@@ -282,20 +290,19 @@ private:
                 filters[filterCount++] = { "BMS Beatmap", "bms,bme,bml,pms" };
             }
             // NFD 接收 UTF-8 默认目录和文件名，并返回其分配的 UTF-8 路径。
-            nfdresult_t result =
-                NativeFileDialog::saveFile(&outPath,
-                                           filters,
-                                           filterCount,
-                                           defaultPath.c_str(),
-                                           defaultName.c_str());
-
-            if ( result == NFD_OKAY ) {
-                // 选择成功后先复制路径进入覆盖与兼容性流程。
-                handleSelectedExportPath(outPath);
-                // NFD 路径必须在复制完成后用配套函数释放。
-                NFD_FreePathU8(outPath);
-            }
-            // 取消和错误当前均保持窗口关闭；错误报告由 NFD 层处理。
+            NativeFileDialog::saveFileAsync(
+                filters,
+                filterCount,
+                defaultPath.c_str(),
+                defaultName.c_str(),
+                [this](nfdresult_t result, const std::string& path) {
+                    // action 由主菜单拥有直到应用退出，结果回到 UI
+                    // 帧后才更新导出弹窗。
+                    if ( result == NFD_OKAY )
+                        handleSelectedExportPath(path);
+                    else if ( result == NFD_ERROR )
+                        XERROR("Export document selection failed");
+                });
             return;
         }
 
@@ -340,18 +347,21 @@ private:
     /// @note 用户确认路径后根据当前过滤器重新生成格式对应文件名。
     void renderSaveAsFileDialog(float dpiScale)
     {
+        // 与打包输出共用安全区域；高 DPI 与键盘出现都不能裁掉确认区。
+        // 桌面由公共策略保留原像素尺寸，不写入移动端的临时几何。
+        const auto fileDialogSize = exportFileDialogSize(dpiScale);
         // 居中样式作用域只影响当前内置文件对话框。
         Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
         if ( ImGuiFileDialog::Instance()->IsOpened("SaveAsFilePicker") ) {
             // 对话框打开期间固定逻辑尺寸并按公共 helper 居中。
-            Utils::prepareCenteredModalWindow({ 600, 400 });
+            Utils::prepareCenteredModalWindow(fileDialogSize);
         }
         // Display 返回 true 表示用户完成确认或取消，本帧应关闭对话框。
         if ( ImGuiFileDialog::Instance()->Display(
                  "SaveAsFilePicker",
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                      ImGuiWindowFlags_NoSavedSettings,
-                 { 600, 400 }) ) {
+                 fileDialogSize) ) {
             if ( ImGuiFileDialog::Instance()->IsOk() ) {
                 // 先取得完整 UTF-8 路径，再根据活动过滤器规范化文件名。
                 std::string filePath =
@@ -389,6 +399,9 @@ private:
         bool closeWindow = false;
         {
             // 居中样式的 RAII 生命周期严格包围模态弹窗。
+            // 标题在 Begin 前保持紧凑，内容触摸尺寸在 Begin 成功后单独启用。
+            // 固定格式按钮仍由原动作决定，不额外加入移动端格式白名单。
+            ExportTouchLayout              touchLayout(dpiScale);
             Utils::CenteredModalPopupScope popupStyle(dpiScale);
             // 当前字体可能随用户设置放大，不能只按 DPI 推算固定按钮宽度。
             // 窗口额外留出两侧内边距，最长格式名称必须完整放进按钮。
@@ -406,6 +419,11 @@ private:
                      &m_exportFormatPickerOpen,
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking,
                      ImVec2(windowWidth, 0.0f)) ) {
+                touchLayout.beginContent();
+                std::optional<MobileInputBodyScope> body;
+                // 多格式列表允许局部滚动，取消行不随列表移出高 DPI 横屏。
+                // 正文 ID 不依赖当前格式标题，尺寸约束变化不重建导航身份。
+                if ( touchLayout.mobile() ) body.emplace("##ExportFormatBody");
                 // 提示与按钮组使用分隔线形成明确选择层次。
                 ImGui::TextUnformatted("选择另存为格式：");
                 ImGui::Spacing();
@@ -415,7 +433,7 @@ private:
                 // 同组按钮等宽，使用可用区域兼容视口对窗口宽度的限制。
                 const ImVec2 buttonSize(
                     std::min(buttonWidth, ImGui::GetContentRegionAvail().x),
-                    0.0f);
+                    touchLayout.mobile() ? 48.f * dpiScale : 0.0f);
                 if ( MenuUtil::drawCenteredButton(
                          "MusicMapMaker Beatmap (.mmm)", buttonSize) ) {
                     // 原生项目格式使用 .mmm。
@@ -451,9 +469,9 @@ private:
                 ImGui::Spacing();
                 ImGui::Separator();
                 ImGui::Spacing();
-                if ( MenuUtil::drawCenteredButton(
-                         TR("ui.common.cancel").data(),
-                         ImVec2(120.0f * dpiScale, 0.0f)) ) {
+                if ( body ) body->end();
+                if ( MenuUtil::drawCenteredButton(TR("ui.common.cancel").data(),
+                                                  touchLayout.actionSize()) ) {
                     // 取消只关闭格式选择，不打开原生文件对话框。
                     closeWindow = true;
                 }
@@ -469,6 +487,7 @@ private:
                     ImGui::CloseCurrentPopup();
                 }
                 // 与成功 popupStyle.begin 配对。
+                touchLayout.endContent();
                 ImGui::EndPopup();
             }
         }
@@ -498,11 +517,13 @@ private:
         if ( !ImGui::IsPopupOpen(popupId) ) return;
 
         // 居中样式作用域负责恢复临时窗口设置。
+        ExportTouchLayout              touchLayout(dpiScale);
         Utils::CenteredModalPopupScope popupStyle(dpiScale);
         if ( popupStyle.begin(popupId,
                               nullptr,
                               ImGuiWindowFlags_None,
                               ImVec2(540.0f * dpiScale, 0.0f)) ) {
+            touchLayout.beginContent();
             // 明确告知操作将覆盖已有文件，要求用户再次确认。
             ImGui::TextWrapped("目标文件已经存在，是否覆盖？");
             if ( !m_pendingOverwritePath.empty() ) {
@@ -517,7 +538,7 @@ private:
             ImGui::Spacing();
 
             // 两个按钮共享按 DPI 缩放的固定尺寸。
-            const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
+            const ImVec2 buttonSize = touchLayout.actionSize();
             if ( ::MMM::UI::FeedbackButton("确认覆盖", buttonSize) ) {
                 // 路径仍按值传入下一阶段，兼容性弹窗可跨帧保存。
                 requestSaveBeatmapAs(m_pendingOverwritePath);
@@ -535,6 +556,7 @@ private:
             }
 
             // 与成功 popupStyle.begin 配对。
+            touchLayout.endContent();
             ImGui::EndPopup();
         }
     }
@@ -580,11 +602,18 @@ private:
         if ( !ImGui::IsPopupOpen(popupId) ) return;
 
         // 居中作用域限制弹窗样式并负责离开时恢复。
+        // 仅 BMS 兼容性页接管触控正文，保留其它格式既有临时选项语义。
+        // 草稿仍由原命令按值复制，移动控件不写全局编辑器配置。
+        ExportTouchLayout touchLayout(dpiScale,
+                                      m_pendingExportShowBmsAlignmentOption);
         Utils::CenteredModalPopupScope popupStyle(dpiScale);
         if ( popupStyle.begin(popupId,
                               nullptr,
                               ImGuiWindowFlags_None,
                               ImVec2(520.0f * dpiScale, 0.0f)) ) {
+            touchLayout.beginContent();
+            std::optional<MobileInputBodyScope> body;
+            if ( touchLayout.mobile() ) body.emplace("##BmsExportOptionsBody");
             if ( m_pendingExportWarnings.empty() &&
                  (m_pendingExportShowStoreModeExtOption ||
                   m_pendingExportShowMalodyModeOption ||
@@ -645,31 +674,38 @@ private:
                 }
             }
             if ( m_pendingExportShowBmsAlignmentOption ) {
-                // 两个状态始终互斥；单文件导出不显示音乐裁剪或补静音选项。
-                // RadioButton 重复激活已选项也不会使所有选项都取消。
-                ImGui::Spacing();
-                // 默认保真，旧版转换器所需的有损吸附必须由用户明确选择。
-                // 默认整体后移 BGM 与物件，保持源音频文件不被重编码。
-                // 原精度采用标准叠加行；不能承诺只读末行的转换器兼容。
-                // 临时选项随命令复制，取消或结束流程后恢复保真默认值。
-                MenuUtil::drawWrappedBulletText(
-                    "默认保留变速和物件时间；高精度叠加行可能不兼容 MyO2。"
-                    "有损吸附会移动或合并变速事件，复杂变速谱可能明显偏移。");
-                ::MMM::UI::FeedbackCheckbox("MyO2 兼容吸附（有损）",
-                                            &m_pendingExportBmsMyO2Grid);
-                ImGui::TextUnformatted("首拍对齐方式：");
-                if ( ::MMM::UI::FeedbackRadioButton(
-                         "保持原时间位置",
-                         !m_pendingExportBmsShiftEventsToGrid) )
-                    m_pendingExportBmsShiftEventsToGrid = false;
-                if ( ::MMM::UI::FeedbackRadioButton(
-                         "后移 BGM 触发和物件以对齐首拍",
-                         m_pendingExportBmsShiftEventsToGrid) )
-                    m_pendingExportBmsShiftEventsToGrid = true;
-                // 明确初始红线的例外和源文件边界，避免误以为会编辑项目时间轴。
-                MenuUtil::drawWrappedBulletText(
-                    "仅写出谱面文件，不修改或生成音频。后移时除初始 BPM "
-                    "外的所有红线一起移动，再进行格线吸附。");
+                if ( touchLayout.mobile() ) {
+                    drawBmsTouchOptions(false,
+                                        m_pendingExportBmsMyO2Grid,
+                                        m_pendingExportBmsShiftEventsToGrid);
+                } else {
+                    // 两个状态始终互斥；单文件导出不显示音乐裁剪或补静音选项。
+                    // RadioButton 重复激活已选项也不会使所有选项都取消。
+                    ImGui::Spacing();
+                    // 默认保真，旧版转换器所需的有损吸附必须由用户明确选择。
+                    // 默认整体后移 BGM 与物件，保持源音频文件不被重编码。
+                    // 原精度采用标准叠加行；不能承诺只读末行的转换器兼容。
+                    // 临时选项随命令复制，取消或结束流程后恢复保真默认值。
+                    MenuUtil::drawWrappedBulletText(
+                        "默认保留变速和物件时间；高精度叠加行可能不兼容 MyO2。"
+                        "有损吸附会移动或合并变速事件，复杂变速谱可能明显偏移"
+                        "。");
+                    ::MMM::UI::FeedbackCheckbox("MyO2 兼容吸附（有损）",
+                                                &m_pendingExportBmsMyO2Grid);
+                    ImGui::TextUnformatted("首拍对齐方式：");
+                    if ( ::MMM::UI::FeedbackRadioButton(
+                             "保持原时间位置",
+                             !m_pendingExportBmsShiftEventsToGrid) )
+                        m_pendingExportBmsShiftEventsToGrid = false;
+                    if ( ::MMM::UI::FeedbackRadioButton(
+                             "后移 BGM 触发和物件以对齐首拍",
+                             m_pendingExportBmsShiftEventsToGrid) )
+                        m_pendingExportBmsShiftEventsToGrid = true;
+                    // 明确初始红线的例外和源文件边界，避免误以为会编辑项目时间轴。
+                    MenuUtil::drawWrappedBulletText(
+                        "仅写出谱面文件，不修改或生成音频。后移时除初始 BPM "
+                        "外的所有红线一起移动，再进行格线吸附。");
+                }
             }
             if ( m_pendingExportShowStoreModeExtOption ) {
                 // 选项与警告列表之间保持标准间距。
@@ -706,7 +742,10 @@ private:
             ImGui::Spacing();
 
             // 两个动作按钮以完整行宽计算后整体居中。
-            const ImVec2 actionButtonSize(120.0f * dpiScale, 0.0f);
+            // 先结束局部正文再提交操作行，长警告只增加正文滚动长度。
+            // 确认和取消一直属于父模态，不可被内部 ScrollToRect 推出屏幕。
+            if ( body ) body->end();
+            const ImVec2 actionButtonSize = touchLayout.actionSize();
             const float  actionButtonRowWidth =
                 actionButtonSize.x * 2.0f + ImGui::GetStyle().ItemSpacing.x;
             MenuUtil::centerNextItem(actionButtonRowWidth);
@@ -738,6 +777,7 @@ private:
             }
 
             // 与成功 popupStyle.begin 配对。
+            touchLayout.endContent();
             ImGui::EndPopup();
         }
     }

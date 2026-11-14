@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <iterator>
 #include <limits>
 #include <string>
 
@@ -175,7 +176,11 @@ void cancelActiveEditingState(SessionContext& ctx)
 
     if ( !keepBrush ) {
         // 清掉长条起点与折线段，下一次绘制不继承上次尚未提交的形状。
-        ctx.brushState.isActive = false;
+        // 播放或定位打断续写时丢弃未执行的删除计划，正式原物件保持完整。
+        // 不执行普通 Undo，也不清理用户已有的重做分支。
+        ctx.brushState.m_pendingResume.reset();
+        ctx.brushState.m_transactionalResume = false;
+        ctx.brushState.isActive              = false;
         ctx.brushState.polylineSegments.clear();
         ctx.brushState.holdStartTime = -1.0;
         ctx.brushState.duration      = 0.0;
@@ -569,6 +574,15 @@ bool PlaybackController::stopAtComposeLessonEnd()
 /// @warning 输入命令路径；拖动会反复调用，不能增加阻塞等待或延迟本地定位反馈。
 void PlaybackController::handleCommand(const CmdSeek& cmd)
 {
+    // 原全局定位保留零约束；触控密度轴必须在队列消费时再次复核实例。
+    // 不带实例的旧快捷键和滚动条仍使用全局定位语义。
+    // 非零约束只用于已冻结谱面身份的输入，不能按文件路径猜测同一个实例。
+    // 拒绝发生在音频、Scrub 和播放暂停状态改变之前。
+    if ( cmd.beatmapInstanceId &&
+         (!m_ctx.currentBeatmap ||
+          cmd.beatmapInstanceId !=
+              reinterpret_cast<std::uintptr_t>(m_ctx.currentBeatmap.get())) )
+        return;
     // 自动首播和复播只接受教学自身在设置阶段前发出的定位命令。
     if ( m_ctx.composeLessonInputMode == ComposeLessonInputMode::AutoPlayback )
         return;
@@ -939,20 +953,44 @@ void PlaybackController::handleCommand(const CmdScroll& cmd)
     restoreActiveHoldEffectsAfterPlaybackJump(m_ctx);
 }
 
-/// @brief 处理主画布中键二维平移。
+/// @brief 处理画布二维平移及移动时间线的直接导航。
 /// @param cmd 逻辑像素空间中的平移增量和输入视口尺寸。
 /// @details 横向位移保存在指定相机，纵向位移转换为会话时间并复用定位入口。
 /// @note 纵向使用视觉时间与滚速缓存；传输时间不直接按像素线性相加。
-/// @warning 中键拖动期间可每个 update
+/// @warning 指针拖动或触控导航期间可每个 update
 /// 调用；纵向输入还会进入定位与特效恢复流程。
 /// 不得在此增加阻塞等待、文件操作或额外全量扫描。
 void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
 {
+    // 只有显式预览载荷可以进入独立导航；经典预览鼠标路径保持原规则。
+    if ( cmd.cameraId == "Preview" && cmd.previewInstanceId ) {
+        handlePreviewNavigation(cmd);
+        return;
+    }
+    if ( cmd.finishNavigation ) {
+        // 下次手势必须从实际落点开始，不能继承上一笔未满一格的余量。
+        m_ctx.m_pointerScrollVisualTime.reset();
+        // 收尾不需要有效视口或尚存相机；窗口关闭仍能释放局部覆盖。
+        // 标记最终配置已经发布，显示覆盖由会话在同版配置可见时移除。
+        // 不阻塞等待，也不让处理到旧配置的当前轮次产生一次缩放回跳。
+        m_ctx.m_pointerZoomFinished = true;
+        // 连续定位的最终状态立即提交，不能让音频或联机停留在中间帧。
+        // 即使最后一帧没有位移，也需要结束 isScrubbing 生命周期。
+        // 纯横移从未开启定位，不为它额外触发一次音频 seek。
+        if ( m_ctx.isSeekScrubbing )
+            handleCommand(CmdSeek{ .time = m_ctx.currentTime });
+        return;
+    }
     // 中键纵移同样是用户定位；首播和复播时不允许改变自动演示位置。
     if ( m_ctx.composeLessonInputMode == ComposeLessonInputMode::AutoPlayback )
         return;
-    // 预览和时间线有各自的坐标与交互规则，不套用主画布的二维拖动解释。
-    if ( !SessionUtils::isMainCanvasCameraId(cmd.cameraId) ) {
+    // 时间线仅放行移动直接导航；普通中键及预览相机仍保留既有规则。
+    // 直接导航与主画布共用滚速逆映射，不能用固定像素比例猜测谱面时间。
+    const bool timelineNavigation =
+        cmd.cameraId == "Timeline" && std::isfinite(cmd.timelineZoom) &&
+        cmd.timelineZoom > 0 && std::isfinite(cmd.anchorY);
+    if ( !SessionUtils::isMainCanvasCameraId(cmd.cameraId) &&
+         !timelineNavigation ) {
         return;
     }
 
@@ -987,7 +1025,8 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
         camera.viewportHeight = cmd.viewportHeight;
     }
 
-    if ( std::isfinite(cmd.deltaX) ) {
+    // 时间线泳道横坐标固定，多指横移只参与捏合，不能平移参数泳道。
+    if ( !timelineNavigation && std::isfinite(cmd.deltaX) ) {
         // 横向平移不改变谱面时间；累加溢出时仅恢复该相机的横向原点。
         camera.horizontalOffsetX += cmd.deltaX;
         if ( !std::isfinite(camera.horizontalOffsetX) ) {
@@ -995,7 +1034,14 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
         }
     }
 
-    if ( !std::isfinite(cmd.deltaY) || std::abs(cmd.deltaY) <= 0.001F ) {
+    const bool directNavigation = std::isfinite(cmd.timelineZoom) &&
+                                  cmd.timelineZoom > 0.0F &&
+                                  std::isfinite(cmd.anchorY);
+    const bool directZoom =
+        directNavigation &&
+        std::abs(cmd.timelineZoom - m_ctx.animatedTimelineZoom) > 1e-6F;
+    if ( !std::isfinite(cmd.deltaY) ||
+         (std::abs(cmd.deltaY) <= 0.001F && !directZoom) ) {
         // 纯横向输入已经处理完毕，不要额外触发音频 seek 或命中特效重建。
         return;
     }
@@ -1003,7 +1049,17 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
     const double visualOffset =
         m_ctx.lastConfig.visual.getEffectiveVisualOffset();
     // 判定线的视觉偏移在映射前加、定位前减，保持两种时间域对称。
-    const double visualTime   = m_ctx.currentTime + visualOffset;
+    // timelineZoom 是触控直接导航的显式标识；经典中键保持原自由平移语义。
+    // 临时旁路只属于当前输入命令，不修改持久化的 scrollSnap。
+    const bool snapPan = directNavigation && !directZoom &&
+                         m_ctx.lastConfig.settings.scrollSnap &&
+                         !cmd.bypassScrollSnap;
+    // 缩放时优先保证双指中点锚定；纯平移才消费连续位移余量并显示分拍吸附。
+    // 自由滚动和临时取消吸附必须从实际显示位置接续，不能沿用旧的隐藏余量。
+    if ( !snapPan ) m_ctx.m_pointerScrollVisualTime.reset();
+    const double visualTime   = snapPan && m_ctx.m_pointerScrollVisualTime
+                                    ? *m_ctx.m_pointerScrollVisualTime
+                                    : m_ctx.currentTime + visualOffset;
     double       renderScaleY = static_cast<double>(cmd.renderScaleY);
     if ( !std::isfinite(renderScaleY) || std::abs(renderScaleY) <= 1e-6 ) {
         // 缩放用于除法，未初始化或接近零时采用单位比例避免放大噪声。
@@ -1011,16 +1067,43 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
     }
     // 有效负缩放仍保留符号，像素拖动方向应与实际渲染方向一致。
 
-    double      targetVisualTime = visualTime;
-    const auto* cache =
-        m_ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    double targetVisualTime = visualTime;
+    auto*  cache = m_ctx.timelineRegistry.ctx().find<System::ScrollCache>();
     // 只借用会话内已有缓存，本次换算不复制缓存或取得跨线程共享所有权。
     if ( cache ) {
         // 滚速事件使像素与时间不再线性，必须先移动绝对纵坐标再反查时间。
         // 增量除以渲染缩放后才属于缓存所使用的未缩放坐标空间。
         const double currentAbsY = cache->getVisualAnchorAbsY(visualTime);
-        targetVisualTime         = cache->getTime(
-            currentAbsY + static_cast<double>(cmd.deltaY) / renderScaleY);
+        if ( directZoom ) {
+            // 缩放前后的积分坐标成比例，中点锚定只需要这一比例。
+            // 不先反查锚点时间：负 SV 和 Jump 中同一位置未必有唯一时间。
+            const double judgmentY =
+                camera.viewportHeight * m_ctx.lastConfig.visual.judgeline_pos;
+            const double oldScale = cache->getAnimatedZoomScale();
+            const float  zoom     = std::clamp(cmd.timelineZoom, .1F, 10.0F);
+            double       baseZoom = cache->getBaseZoom();
+            if ( !std::isfinite(baseZoom) || baseZoom <= 1e-9 ) baseZoom = 1.0;
+            // ScrollCache 已包含基础缩放，只更新动画相对倍率，复杂 SV
+            // 不重积分。
+            // 拾取、裁剪和渲染共用该缓存，不能只在纹理显示层做假缩放。
+            m_ctx.m_pointerTimelineZoom = zoom;
+            m_ctx.m_pointerZoomFinished = false;
+            m_ctx.animatedTimelineZoom  = m_ctx.animatedTimelineZoomTarget =
+                zoom;
+            m_ctx.animatedTimelineZoomAnimationActive = false;
+            cache->setAnimatedZoomScale(zoom / baseZoom);
+            const double ratio = cache->getAnimatedZoomScale() / oldScale;
+            // 旧中点偏移随倍率放大，再把新中点移动量叠加到同一表达式。
+            // 这条路径只查询已有索引，不遍历事件或重新积分。
+            const double offset = (judgmentY - cmd.anchorY) / renderScaleY;
+            targetVisualTime =
+                cache->getTime(currentAbsY * ratio + offset * (ratio - 1.0) +
+                               cmd.deltaY / renderScaleY);
+            // 动画倍率已有完整投影路径，连续缩放不触发全谱面 Transform 重建。
+        } else {
+            targetVisualTime = cache->getTime(
+                currentAbsY + static_cast<double>(cmd.deltaY) / renderScaleY);
+        }
     } else {
         // 缓存尚未就绪时提供固定比例的可用平移，不在输入路径临时重建缓存。
         constexpr double FALLBACK_PIXELS_PER_SECOND = 500.0;
@@ -1034,9 +1117,61 @@ void PlaybackController::handleCommand(const CmdPanCanvas& cmd)
         return;
     }
 
+    if ( snapPan ) {
+        // 原始位置独立于吸附结果：连续小增量累计后仍能跨过下一条分拍线。
+        m_ctx.m_pointerScrollVisualTime = targetVisualTime;
+        // BPM 变更后的脏缓存沿用会话维护规则，正常手势只读取已排序索引。
+        SessionUtils::ensureBpmEvents(m_ctx);
+        const auto& events = m_ctx.bpmEvents;
+        // 尚无 BPM 时保留自由定位，不能凭空创建谱面时间点或报一次吸附成功。
+        if ( !events.empty() ) {
+            // 缓存已排序，二分定位 BPM 段；触控每次更新不全量遍历时间线。
+            auto next = std::upper_bound(
+                events.begin(),
+                events.end(),
+                targetVisualTime,
+                [](double time, const TimelineComponent* timing) {
+                    return time < timing->m_timestamp;
+                });
+            // 首段之前沿首段外推，与现有滚轮前导区定位保持一致。
+            const auto* timing =
+                next == events.begin() ? events.front() : *std::prev(next);
+            const double fallback =
+                m_ctx.currentBeatmap
+                    ? m_ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
+                    : ::MMM::DEFAULT_NORMALIZED_BPM;
+            // 与滚轮相同，滚动吸附采用当前分拍；物件放置模式是另一个独立设置。
+            const int divisor = m_ctx.lastConfig.settings.beatDivisor > 0
+                                    ? m_ctx.lastConfig.settings.beatDivisor
+                                    : 4;
+            // 先转视觉拍位，再取整；视觉偏移不会被误当成网格相位。
+            const double steps =
+                timelineBeatsAt(*timing, targetVisualTime, fallback) * divisor;
+            // 向下取整偏好同样适用于触控，默认则选择最近的可见分拍线。
+            const double snapped = m_ctx.lastConfig.settings.snapFloor
+                                       ? std::floor(steps + 1e-6)
+                                       : std::round(steps);
+            // 连续 BPM 在拍位域取整再反解，不能把变速段当作恒定秒间隔。
+            const double candidate =
+                timelineTimeAtBeat(*timing, snapped / divisor, fallback);
+            // 旧 BPM 段的网格不能越过下一段起点，段落边界本身仍可成为落点。
+            // 无效反解保持原连续位置，避免把非有限时间交给音频定位。
+            if ( std::isfinite(candidate) )
+                targetVisualTime =
+                    next == events.end()
+                        ? candidate
+                        : std::min(candidate, (*next)->m_timestamp);
+        }
+    }
+
     // 复用统一定位入口处理范围、暂停偏好及音频归属；传入前转回谱面时间。
     // 未设置连续 scrub 标记，中键纵移采用定位命令默认的提交语义。
-    handleCommand(CmdSeek{ targetVisualTime - visualOffset });
+    handleCommand(CmdSeek{ .time        = targetVisualTime - visualOffset,
+                           .isScrubbing = directNavigation });
+    // 只有范围钳制才丢弃余量，普通吸附造成的距离必须留给后续小增量。
+    if ( snapPan &&
+         std::abs(m_ctx.currentTime + visualOffset - targetVisualTime) > 1e-7 )
+        m_ctx.m_pointerScrollVisualTime = m_ctx.currentTime + visualOffset;
 
     // 直接操作期间不叠加滚动动画，否则视觉内容会落后于中键指针。
     // 使用定位后已钳制的会话时间，而不是可能超出曲尾的原始拖动目标。

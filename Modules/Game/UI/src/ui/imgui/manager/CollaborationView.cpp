@@ -26,6 +26,7 @@
 #include "ui/imgui/manager/CollaborationRoomCoverImage.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 
 #include <ImGuiFileDialog.h>
 #include <algorithm>
@@ -33,6 +34,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <nfd.h>
 #include <string>
 #include <system_error>
@@ -120,14 +122,26 @@ static_assert(beijingClockTime(-1) == std::array<std::int64_t, 3>{ 7, 59, 59 });
     });
 }
 
-/// @brief 把较长说明收进悬停帮助提示。
+/// @brief 根据交互能力将长说明显示为悬浮提示或触屏内联段落。
 /// @param text 需要按段落换行展示的本地化说明。
 ///
 /// 默认只占用短问号标签，悬停时用约 24 个字体宽度限制说明文本，避免宽 tooltip
 /// 遮挡整个协作面板。
+/// 触屏直接在独立行显示完整说明，不依赖长按或问号悬浮。
+/// 换行宽度使用当前内容区域，不沿用桌面 tooltip 的字符宽度。
+/// 内联段落参与原生滚动高度计算，面板较短时可直接触摸拖动浏览。
 /// @warning UI 热路径：仅绘制一个短标签，悬停时才创建 tooltip。
 void drawHelpMarker(const char* text)
 {
+    // 触屏不依赖悬浮问号；长说明在独立行内完整显示并参与窗口滚动。
+    if ( !workspaceAllowsHoverFeedback() ) {
+        // 调用点位于标签 SameLine 后，换行后才有完整面板宽度可用。
+        ImGui::NewLine();
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextDisabled("%s", text);
+        ImGui::PopTextWrapPos();
+        return;
+    }
     // 禁用色提示该标记不是主要操作按钮。
     ImGui::TextDisabled("(?)");
     // 未悬停时不创建 tooltip 或计算换行内容。
@@ -570,7 +584,9 @@ void drawOfflineMemberHistoryRow(
 CollaborationView::CollaborationView(
     const std::string&                                         subViewName,
     std::shared_ptr<Network::Collaboration::CollaborationRoom> room)
-    : ISubView(subViewName), m_room(std::move(room))
+    : ISubView(subViewName)
+    , m_room(std::move(room))
+    , m_roomCoverPickerLifetime(std::make_shared<const bool>(true))
 {
     if ( m_room ) {
         // UI 整数值以服务当前配置为真实初值。
@@ -584,6 +600,8 @@ CollaborationView::CollaborationView(
 /// 只有 PendingGuestJoin 会主动设置该门；活动房间的正常解除由房间生命周期负责。
 CollaborationView::~CollaborationView()
 {
+    // 先使晚到的系统选择结果失效，再解除项目门控及销毁预览资源。
+    m_roomCoverPickerLifetime.reset();
     if ( m_pendingGuestJoin ) {
         // 防止视图销毁后本机永久无法打开项目。
         Logic::ProjectController::instance()
@@ -613,6 +631,9 @@ void CollaborationView::onUpdate(LayoutContext&, UIManager* sourceManager)
     }
 
     // 两类挂起动作在绘制按钮前推进，界面即时反映最新状态。
+    const bool touch = !workspaceAllowsHoverFeedback();
+    // 抽屉正文按实际宽度换行，说明、错误和长身份不能撑出横向滚动区域。
+    if ( touch ) ImGui::PushTextWrapPos(0);
     advancePendingHostStart();
     advancePendingGuestJoin(sourceManager);
 
@@ -622,6 +643,8 @@ void CollaborationView::onUpdate(LayoutContext&, UIManager* sourceManager)
         // drawActiveRoom 可能处理断开按钮，因此聊天前复查。
         if ( m_room->isActive() ) drawChatSection();
         drawLogSection(sourceManager);
+        // 活动房间路径也恢复正文换行栈，不能泄漏到其他管理器窗口。
+        if ( touch ) ImGui::PopTextWrapPos();
         return;
     }
 
@@ -634,6 +657,7 @@ void CollaborationView::onUpdate(LayoutContext&, UIManager* sourceManager)
     // 内置封面选择器必须在离线主控件之后持续驱动。
     renderRoomCoverFilePicker();
     drawLogSection(sourceManager);
+    if ( touch ) ImGui::PopTextWrapPos();
 }
 
 /// @brief 返回协作侧栏可读内容的最小尺寸。
@@ -721,17 +745,21 @@ void CollaborationView::reloadTextures(vk::PhysicalDevice& physicalDevice,
 
 /// @brief 打开用于房主房卡的图片选择器。
 ///
-/// 初始目录依次取当前自定义封面、谱面默认封面和软件最近目录。原生选择器同步返回，
-/// 内置选择器跨帧显示；两者只允许单张常见图片并在成功后保存最近父目录。
-/// @warning 低频用户路径：原生选择器会阻塞 UI，只由“选择封面”按钮触发。
+/// 初始目录依次取当前自定义封面、谱面默认封面和软件最近目录。安卓系统选择器异步返回，
+/// 桌面原生选择器保持同步，内置选择器跨帧显示；确认后复用原封面编码与最近目录逻辑。
+/// @warning
+/// 用户触发的低频路径：桌面原生选择仍可能阻塞；安卓不等待授权或文件复制。
 /// @details lastFilePickerPath
 /// 只在用户确认有效图片后更新并保存，取消或对话框错误不
 /// 污染最近目录。当前路径父目录优先保证连续更换封面时回到同一素材位置。
 /// 内置选择器的 wasOpen
 /// 检查确保重复点击或状态恢复不会重复播放打开反馈；原生窗口
-/// 每次调用都是新的同步交互，因此直接播放一次。
+/// 每次启动原生选择前播放一次，在途请求不重复创建或覆盖回调。
+/// 回调不拥有视图；原生选择完成后仍由同一 UI 线程校验存活并应用结果。
 void CollaborationView::openRoomCoverFilePicker()
 {
+    // 系统返回前保留唯一请求，不能用后一次点击覆盖先前的选择回调。
+    if ( m_roomCoverPickerPending ) return;
     auto& app      = Config::AppConfig::instance();
     auto& settings = app.getEditorSettings();
     // 优先在用户当前封面所在目录重新打开。
@@ -749,31 +777,42 @@ void CollaborationView::openRoomCoverFilePicker()
                                         ? std::string(".")
                                         : Config::pathToUtf8(defaultDirectory);
 
-    if ( settings.filePickerStyle == Config::FilePickerStyle::Native ) {
+    if ( NativeFileDialog::requiresSystemPicker() ||
+         settings.filePickerStyle == Config::FilePickerStyle::Native ) {
         // 原生对话框打开前播放统一弹窗反馈。
         PlayPopupOpenFeedback();
-        nfdu8char_t*      selectedPath = nullptr;
-        nfdu8filteritem_t filters[1]   = { { "Image Files",
-                                             "png,jpg,jpeg,bmp,tga" } };
-        const nfdresult_t result       = NativeFileDialog::openFile(
-            &selectedPath, filters, 1, defaultPath.c_str());
-        if ( result == NFD_OKAY && selectedPath ) {
-            // 先复制平台分配字符串，再释放 NFD 内存。
-            const auto path = Config::utf8ToPath(selectedPath);
-            NFD_FreePathU8(selectedPath);
-            // 自定义选择成功后切换默认模式并排队预览纹理。
-            setRoomCoverPath(path, true);
-            if ( !path.parent_path().empty() ) {
-                // 最近目录属于低频用户配置，选择成功后立即保存。
-                settings.lastFilePickerPath =
-                    Config::pathToUtf8(path.parent_path());
-                app.save();
-            }
-        } else if ( result == NFD_ERROR ) {
-            // 用户取消不记录错误，NFD 故障写入日志。
-            XERROR("Failed to open collaboration room cover picker: {}",
-                   NFD_GetError() ? NFD_GetError() : "Unknown NFD error");
-        }
+        const nfdu8filteritem_t filters[1] = { { "Image Files",
+                                                 "png,jpg,jpeg,bmp,tga" } };
+        m_roomCoverPickerPending           = true;
+        NativeFileDialog::openFileAsync(
+            filters,
+            1,
+            defaultPath.c_str(),
+            [this,
+             lifetime = std::weak_ptr<const bool>(m_roomCoverPickerLifetime)](
+                nfdresult_t result, const std::string& selectedPath) {
+                // 完成回调与视图销毁均在 UI 线程，不在 Java 工作线程访问视图。
+                // 不捕获本次调用栈的配置或路径引用；视图销毁后直接丢弃结果。
+                if ( lifetime.expired() ) return;
+                m_roomCoverPickerPending = false;
+                if ( result == NFD_OKAY && !selectedPath.empty() ) {
+                    // 安卓交回已复制的普通路径，编码和预览继续由原业务入口校验。
+                    const auto path = Config::utf8ToPath(selectedPath);
+                    setRoomCoverPath(path, true);
+                    if ( !path.parent_path().empty() ) {
+                        // 回调时重新取得配置，只在确认选择后更新最近目录。
+                        auto& config = Config::AppConfig::instance();
+                        config.getEditorSettings().lastFilePickerPath =
+                            Config::pathToUtf8(path.parent_path());
+                        config.save();
+                    }
+                } else if ( result == NFD_ERROR ) {
+                    // 失败给出可见提示，旧封面仍保留；取消则完全不修改封面及最近目录。
+                    m_roomCoverErrorKey =
+                        "ui.collaboration.cover_error_unavailable";
+                    XERROR("Failed to open collaboration room cover picker");
+                }
+            });
         return;
     }
 
@@ -1002,7 +1041,7 @@ bool CollaborationView::drawIdentitySection(UIManager* sourceManager)
     const auto creator = Config::normalizeCreatorIdentity(
         Config::AppConfig::instance().getEditorSettings().defaultCreator);
     ImGui::TextUnformatted(TR("ui.collaboration.identity").data());
-    ImGui::SameLine();
+    if ( workspaceAllowsHoverFeedback() ) ImGui::SameLine();
     if ( creator.empty() ) {
         // 警告色与其他协作前置条件保持一致。
         ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f),
@@ -1049,6 +1088,7 @@ bool CollaborationView::drawIdentitySection(UIManager* sourceManager)
 void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
                                         bool       creatorValid)
 {
+    const bool touch = !workspaceAllowsHoverFeedback();
     // 当前活动会话和项目共同决定能否作为房主。
     auto&       engine        = Logic::EditorEngine::instance();
     auto        activeSession = engine.getActiveNonLogoSession();
@@ -1119,10 +1159,16 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
         drawHelpMarker(TR("ui.collaboration.host_desc").data());
         if ( !hasProject ) {
             // 开房必须依赖本机项目与活动谱面。
-            ImGui::SameLine();
+            const bool touch = !workspaceAllowsHoverFeedback();
+            // 换行只覆盖这条前提说明，不改变后续输入框和封面按钮的排布。
+            if ( touch )
+                ImGui::PushTextWrapPos(0);
+            else
+                ImGui::SameLine();
             ImGui::TextColored(ImVec4(1.0F, 0.45F, 0.35F, 1.0F),
                                "%s",
                                TR("ui.collaboration.project_required").data());
+            if ( touch ) ImGui::PopTextWrapPos();
         }
 
         // 本地预览使用稳定 ID 隔离同窗口内的其他 InvisibleButton。
@@ -1131,7 +1177,7 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
         const float coverWidth = ImGui::GetContentRegionAvail().x;
         drawRoomCover(HOST_ROOM_COVER_TEXTURE_KEY,
                       ImVec2(coverWidth, coverWidth * 9.0F / 16.0F));
-        if ( ImGui::IsItemHovered() && !m_roomCoverPath.empty() ) {
+        if ( !touch && ImGui::IsItemHovered() && !m_roomCoverPath.empty() ) {
             // tooltip 展示完整路径，主界面只保留图像预览。
             ImGui::BeginTooltip();
             ImGui::TextUnformatted(Config::pathToUtf8(m_roomCoverPath).c_str());
@@ -1139,29 +1185,37 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
         }
         ImGui::PopID();
 
-        // 三等分按钮分别选择、恢复谱面默认和清除封面。
+        // 桌面保留三列，抽屉中纵向排列，翻译文字和触摸尺寸均不挤出列边界。
+        const auto coverButton = [touch](const char* label, const char* icon) {
+            // 移动按钮使用统一图文反馈；桌面仍沿用原来的紧凑小按钮。
+            return touch ? workspaceActionButton(label, icon, { -1, 0 })
+                         : FeedbackSmallButton(label);
+        };
         if ( ImGui::BeginTable("CollaborationRoomCoverActions",
-                               3,
+                               touch ? 1 : 3,
                                ImGuiTableFlags_SizingStretchSame) ) {
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
-            if ( FeedbackSmallButton(
-                     TR("ui.collaboration.cover_choose").data()) ) {
+            if ( coverButton(TR("ui.collaboration.cover_choose").data(),
+                             ICON_MMM_FOLDER_OPEN) ) {
                 // 选择器结果会进入 Custom 模式。
                 openRoomCoverFilePicker();
             }
-            ImGui::TableSetColumnIndex(1);
-            if ( FeedbackSmallButton(
-                     TR("ui.collaboration.cover_use_beatmap").data()) ) {
+            if ( touch ) ImGui::TableNextRow();
+            // 单列模式明确开始新行，不能用超出列数的索引模拟换行。
+            ImGui::TableSetColumnIndex(touch ? 0 : 1);
+            if ( coverButton(TR("ui.collaboration.cover_use_beatmap").data(),
+                             ICON_MMM_MUSIC) ) {
                 // 显式切回 Follow 后立即应用当前默认路径。
                 m_roomCoverDefaultMode = CollaborationDefaultMode::Follow;
                 setRoomCoverPath(m_defaultRoomCoverPath, false);
             }
-            ImGui::TableSetColumnIndex(2);
+            if ( touch ) ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(touch ? 0 : 2);
             // 没有编码图片时清除按钮无有效动作。
             ImGui::BeginDisabled(m_roomCoverImage.empty());
-            if ( FeedbackSmallButton(
-                     TR("ui.collaboration.cover_clear").data()) ) {
+            if ( coverButton(TR("ui.collaboration.cover_clear").data(),
+                             ICON_MMM_CLOSE) ) {
                 setRoomCoverPath({}, true);
             }
             ImGui::EndDisabled();
@@ -1176,9 +1230,13 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
 
         // 房间名默认跟随活动谱面标题，按钮可从 Custom 回到 Follow。
         ImGui::TextDisabled("%s", TR("ui.collaboration.room_name").data());
-        ImGui::SameLine();
-        if ( FeedbackSmallButton(
-                 TR("ui.collaboration.room_name_follow_beatmap").data()) ) {
+        if ( !touch ) ImGui::SameLine();
+        // 跟随操作单独成行，房间名标签与按钮不竞争同一行的剩余宽度。
+        const char* followLabel =
+            TR("ui.collaboration.room_name_follow_beatmap").data();
+        if ( touch
+                 ? workspaceActionButton(followLabel, ICON_MMM_MUSIC, { -1, 0 })
+                 : FeedbackSmallButton(followLabel) ) {
             m_roomNameDefaultMode = CollaborationDefaultMode::Follow;
             setInputBuffer(m_roomName, m_defaultRoomName);
         }
@@ -1246,9 +1304,13 @@ void CollaborationView::drawOfflineFlow(UIManager* sourceManager,
     if ( FeedbackCollapsingHeader(TR("ui.collaboration.online_rooms").data(),
                                   headerFlags) ) {
         drawHelpMarker(TR("ui.collaboration.join_desc").data());
-        ImGui::SameLine();
-        if ( FeedbackSmallButton(
-                 TR("ui.collaboration.refresh_rooms").data()) ) {
+        // 触屏说明已换行占满正文宽度，刷新必须从下一行开始，不能再 SameLine。
+        if ( !touch ) ImGui::SameLine();
+        const char* refreshLabel = TR("ui.collaboration.refresh_rooms").data();
+        // 独占一行后的按钮宽度取当前内容区，说明再长也不会把它推到抽屉外。
+        if ( touch ? workspaceActionButton(
+                         refreshLabel, ICON_MMM_REFRESH, { -1, 0 })
+                   : FeedbackSmallButton(refreshLabel) ) {
             // 网络刷新由房间服务异步执行，UI 不等待结果。
             static_cast<void>(m_room->refreshDirectory());
         }
@@ -1795,6 +1857,8 @@ void CollaborationView::drawActiveRoom(UIManager* sourceManager)
                              5,
                              60,
                              "%d Hz");
+            // 纵向滑过该设置行滚动，横向才交给数值拖动。
+            workspaceRegisterHorizontalDragItem();
             if ( ImGui::IsItemDeactivatedAfterEdit() ) {
                 // 拖动结束才提交最终值，避免每个像素变化发送配置更新。
                 m_room->setViewportPublishRateHz(

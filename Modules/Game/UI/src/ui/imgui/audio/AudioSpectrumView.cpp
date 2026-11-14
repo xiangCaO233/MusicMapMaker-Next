@@ -26,6 +26,7 @@
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/TimeFormatUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -118,6 +119,7 @@ AudioSpectrumView::AudioSpectrumView(const std::string& name)
 /// idle，不得逐帧调用。
 AudioSpectrumView::~AudioSpectrumView()
 {
+    m_touchNavigation.suspend();
     if ( m_calcFuture.valid() ) {
         // 协作式停止让后台循环在块或阶段边界尽快退出。
         m_calcStopSource.request_stop();
@@ -149,18 +151,36 @@ AudioSpectrumView::~AudioSpectrumView()
 /// 命令作为 ImGui 覆盖层绘制，不进入频谱纹理。
 /// @warning UI
 /// 热路径：窗口可见时每帧调用；不得等待后台任务、完整解码或设备空闲。
+/// @brief 关闭频谱立即结束已发布定位，后台 FFT 生命周期保持原样。
+// 窗口关闭属于低频生命周期事件，先收尾再改变打开状态。
+// 后台 FFT 的停止与等待仍由原析构流程负责，不在触控每帧里等待。
+// 本地触控状态不持有纹理，关闭图表不影响音频资源控制器。
+void AudioSpectrumView::setOpen(bool open)
+{
+    if ( !open ) m_touchNavigation.suspend();
+    IUIView::setOpen(open);
+}
+
 void AudioSpectrumView::update(UIManager* sourceManager)
 {
     // 首次打开采用可读默认尺寸，后续尊重停靠和用户调整。
     ImGui::SetNextWindowSize(ImVec2(800, 600), ImGuiCond_FirstUseEver);
+
 
     // 可见标题可变化，`###` 后缀固定 ImGui 窗口身份。
     std::string windowTitle = m_name + "###AudioSpectrumViewGlobal";
     // LayoutContext 负责窗口 Begin/End 与关闭状态。
     LayoutContext layoutContext(
         *this, windowTitle, true, ImGuiWindowFlags_None, &m_isOpen);
+    // 关闭标志由移动标签菜单与桌面原生标题共用，不复制第二套状态。
+    // 窗口关闭后不能继续用隐藏声道几何采纳残留触摸。
+    if ( !m_isOpen ) {
+        m_touchNavigation.suspend();
+        return;
+    }
 
     if ( sourceManager && sourceManager->isProjectTransitionInProgress() ) {
+        m_touchNavigation.suspend();
         // 工程切换时不读取可能失效的主音轨或 Session。
         Utils::renderProjectTransitionPlaceholder();
         return;
@@ -171,6 +191,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     auto  track        = audioManager.getBGMTrack();
 
     if ( !track ) {
+        m_touchNavigation.suspend();
         // 无主音轨时保留窗口并显示加载提示。
         ImGui::Text("%s", TR("ui.audio_manager.initial_hint").data());
         return;
@@ -186,6 +207,7 @@ void AudioSpectrumView::update(UIManager* sourceManager)
 
     // 计算状态每帧请求同一固定 ID 模态保持打开。
     if ( m_isCalculating.load() ) {
+        m_touchNavigation.suspend();
         ::MMM::UI::FeedbackOpenPopup("###SpectrumCalcModal");
     }
 
@@ -437,7 +459,10 @@ void AudioSpectrumView::update(UIManager* sourceManager)
     ImVec2 surfacePos = ImGui::GetCursorScreenPos();
     ImVec2 avail      = ImGui::GetContentRegionAvail();
     // 无有效绘制面积时不创建离屏目标或几何。
-    if ( avail.x <= 1.0f || avail.y <= 1.0f ) return;
+    if ( avail.x <= 1.0f || avail.y <= 1.0f ) {
+        m_touchNavigation.suspend();
+        return;
+    }
 
     // 两个声道各由一行标题和一块等高 Plot 组成。
     float textH    = ImGui::GetTextLineHeightWithSpacing();
@@ -449,6 +474,11 @@ void AudioSpectrumView::update(UIManager* sourceManager)
         plotH    = std::max(1.0f, (surfaceH - 2.0f * textH) * 0.5f);
     }
 
+    // 连续触控显示本地已提交的浏览中心，空闲时仍读取真实播放时间。
+    // 频谱采样专用偏移保持在几何采样中，不进入正式音频 Seek。
+    // 当前半窗先生成两个声道几何，再统一消费本帧原始输入。
+    visualTime = m_touchNavigation.begin(
+        visualTime, snapshot ? snapshot->beatmapInstanceId : 0);
     // 当前可见窗口以视觉播放头为中心，左右各展开 m_zoom 秒。
     double viewStart = visualTime - m_zoom;
     double viewEnd   = visualTime + m_zoom;
@@ -726,6 +756,35 @@ void AudioSpectrumView::renderChannelInteractionOverlay(
     // 透明交互 Item 覆盖完整声道，视觉内容由 DrawList 绘制。
     ImGui::SetCursorScreenPos(groupMin);
     ImGui::InvisibleButton(seekId, ImVec2(width, height));
+    if ( Interaction::activeProfile().touchGestures() ) {
+        // 透明命中区只登记横向意图；纵向留给页面，双指由原始触点独占。
+        // 这里只登记当前透明声道区，顶部数值滑条仍走原有方向仲裁。
+        // 滑动方向确定后不反转归属，纵向滚页不会附送音频定位。
+        // 两个声道由同一值状态锁定首指，不能各自处理一次双指手势。
+        workspaceRegisterHorizontalDragItem();
+        const bool blocked = ImGui::IsPopupOpen(
+            nullptr,
+            ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        // 命令只包含时间和实例标量，不拥有 PCM、纹理或活动会话。
+        // 取消继续使用上一次合法目标，不把取消事件坐标映射成新位置。
+        // 首指从窗口外移入不会认领，弹层接管立即停止旧浏览。
+        // 触屏分支在此返回，经典鼠标的边缘滚动和 Hover 提示不会重复执行。
+        m_touchNavigation.update(
+            { groupMin,
+              groupMax,
+              visualTime,
+              totalTime,
+              globalVisualOffset,
+              snapshot ? snapshot->beatmapInstanceId : 0,
+              channelIndex,
+              ImGui::IsWindowHovered(
+                  ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+                  !blocked,
+              snapshot && snapshot->hasBeatmap && !blocked },
+            m_zoom);
+        return;
+    }
+
 
     // 本帧输入状态在 InvisibleButton 后立即读取。
     const bool isInteractionActive  = ImGui::IsItemActive();
@@ -1090,7 +1149,7 @@ void AudioSpectrumView::startAsyncRecalculate()
     // 每轮使用新的 stop_source，析构可请求当前任务协作停止。
     m_calcStopSource                = std::stop_source{};
     const std::stop_token stopToken = m_calcStopSource.get_token();
-    m_calcFuture                    = appThreadPool->enqueue([this,
+    m_calcFuture = appThreadPool->enqueue([this,
                                            stopToken,
                                            eq      = std::move(eq),
                                            maxFreq = m_maxFreq,

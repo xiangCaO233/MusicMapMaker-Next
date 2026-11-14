@@ -3,6 +3,9 @@
 #include "config/skin/translation/Translation.h"
 #include "log/colorful-log.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
+#include "ui/interaction/EditorInteraction.h"
+#include "ui/workspace/IWorkspacePresentation.h"
+#include "ui/workspace/MobileDockLayout.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -34,6 +37,8 @@ struct BpmMeasurementHistoryTestAccess {
     /// 测试不执行首次拖动加载；该低频路径仍由生产加载失败状态处理。
     static bool checkPlaybackCursor(BpmMeasurementToolView& tool)
     {
+        // 每个图形用例建立独立上下文，禁用 INI 后不会污染个人布局。
+        // 字体图集只在本地准备，调用拍点高亮仍可检查合法绘制生命周期。
         ImGui::CreateContext();
         auto& io       = ImGui::GetIO();
         io.IniFilename = nullptr;
@@ -375,7 +380,264 @@ struct BpmMeasurementHistoryTestAccess {
         return passed;
     }
 
+    /// @brief 回归真实触点的图表归属、平移、双指缩放和中断，不复制生产判定。
+    /// @return 所有输入边界均符合导航契约时返回 true。
+    /// @details 使用独立的原始跟踪器，防止该用例改变后续 UI 测试的全局输入。
+    /// 中心取音轨中部，基础平移断言不混入首尾裁切影响。
+    /// 双指测试随后在同一对象继续，验证单指切换到双指时不会重置视野。
+    /// 所有步骤只推进帧号，不依赖真实时钟或睡眠。
+    /// 断言观察生产输出，不另写一个手势识别器计算期望事件。
+    /// @details 导航不初始化音频设备；只比较公开的图表输出与可观测边界。
+    static bool checkMobileNavigation()
+    {
+        // 一千像素逻辑宽下，图表占八百像素；八秒视野对应每秒一百像素。
+        // 这个整数比例使基础平移可精确比较，同时保留图表外侧的空白区。
+        // 后续输入均经过跟踪器归一化状态，不直接修改快照的峰值或取消位。
+        Graphic::MobileTouchTracker tracker;
+        BpmPlotTouch                plot;
+        BpmPlotTouchFrame           f{ .m_min        = { 100, 100 },
+                                       .m_max        = { 900, 400 },
+                                       .m_display    = { 1000, 600 },
+                                       .m_center     = 30,
+                                       .m_zoom       = 4,
+                                       .m_duration   = 100,
+                                       .m_owner      = 1,
+                                       .m_frame      = 1,
+                                       .m_generation = 1,
+                                       .m_hovered    = true };
+        /// @brief 每个输入推进一帧，导航结果立即作为下一帧的实际视野。
+        const auto step =
+            [&](Graphic::TouchPhase phase, int finger, float x, float y) {
+                tracker.update(phase, 1, finger, x, y, f.m_frame * .016);
+                const auto out = plot.update(tracker.snapshot(), f);
+                if ( out.m_navigation ) {
+                    f.m_center = out.m_center;
+                    f.m_zoom   = out.m_zoom;
+                }
+                ++f.m_frame;
+                return out;
+            };
+        // 一次 Down 后的每个 Move 都立即采纳，不等待后台配置保存。
+        // 用真实阶段枚举保持与 SDL 发布入口相同的顺序和取消语义。
+        using enum Graphic::TouchPhase;
+        bool passed = step(Down, 1, .5, .3).m_pressed;
+        // 横拖 100 像素应立即平移一秒；导航不能触发首拍或播放轻点。
+        const auto pan = step(Move, 1, .6, .3);
+        passed &= pan.m_navigation && close(f.m_center, 29) && !pan.m_tapped;
+        // 第二指加入时建立配对，不重新使用第一指较早的 Down 作为缩放锚点。
+        step(Down, 2, .8, .3);
+        // 扩大两指间距应缩小半窗；容差只吸收归一化 float 坐标误差。
+        // 图表中心也必须同步更新，不能只改变 zoom 后等待下一次拖动修正。
+        const auto pinch = step(Move, 2, .9, .3);
+        passed &= pinch.m_navigation && std::abs(f.m_zoom - 8. / 3) < 1e-5;
+        // 双指结束后余指不能退化为单指轻点，第三指也必须整体封锁。
+        passed &= step(Up, 2, .9, .3).m_finished;
+        passed &= !step(Up, 1, .6, .3).m_tapped;
+        // 第三指的加入应产生一次结束，其后任何 Up 都不得成为一次轻点。
+        // 保留三次独立释放，覆盖数组压缩后首指仍存在的阶段。
+        step(Down, 1, .5, .3);
+        step(Down, 2, .7, .3);
+        passed &= step(Down, 3, .8, .3).m_finished;
+        step(Up, 3, .8, .3);
+        step(Up, 2, .7, .3);
+        passed &= !step(Up, 1, .5, .3).m_tapped;
+        // 正常静止释放才产生轻点；Cancel 后的旧 Up 必须没有任何输出。
+        step(Down, 1, .5, .3);
+        passed &= step(Up, 1, .5, .3).m_tapped;
+        step(Down, 1, .5, .3);
+        tracker.cancel();
+        // Cancel 使用跟踪器的生命周期入口，不通过伪造一个正常 Up 测取消。
+        // 取消后坐标变化只用于证明旧 Up 被门闩拒绝。
+        const auto cancelled = plot.update(tracker.snapshot(), f);
+        ++f.m_frame;
+        passed &= cancelled.m_finished && !cancelled.m_tapped &&
+                  !cancelled.m_navigation;
+        passed &= !step(Up, 1, .8, .3).m_tapped;
+        // 外部起点不因后续移入而认领，也不能被另一图表延迟接管。
+        step(Down, 1, .01, .01);
+        passed &= !step(Move, 1, .5, .3).m_navigation;
+        step(Up, 1, .5, .3);
+        // 几何重排和隐藏缺帧都中止旧投影，防止恢复窗口时突然跳动。
+        step(Down, 1, .5, .3);
+        f.m_min.x += 10;
+        passed &= step(Move, 1, .6, .3).m_finished;
+        step(Up, 1, .6, .3);
+        f.m_min.x -= 10;
+        step(Down, 1, .5, .3);
+        f.m_frame += 3;
+        passed &= step(Move, 1, .6, .3).m_finished;
+        step(Up, 1, .6, .3);
+        // 零点附近实际只显示半个名义时间窗，捏合必须改变可见跨度本身。
+        // 仅断言 zoom 数字会漏掉图像完全不缩放的回归，因此同时检查投影秒域。
+        // 初始八秒可见窗，指距从 400 到 500 像素后应变成 6.4 秒。
+        // 锚点取第二指加入时的中点，移动后仍应投影到相同的五秒位置。
+        f.m_center = 0;
+        f.m_zoom   = 8;
+        step(Down, 1, .4, .3);
+        step(Down, 2, .8, .3);
+        const auto   edge  = step(Move, 2, .9, .3);
+        const double left  = std::max(0., f.m_center - f.m_zoom);
+        const double right = std::min(f.m_duration, f.m_center + f.m_zoom);
+        passed &= edge.m_navigation && std::abs(right - left - 6.4) < 1e-4;
+        passed &= std::abs(left + .6875 * (right - left) - 5) < 1e-4;
+        // 配对释放不再次定位，也不把边界处的合法缩放写进测量历史。
+        // 下一轮仍需要新的完整 Down，禁止依靠旧余指继续认领。
+        step(Up, 2, .9, .3);
+        step(Up, 1, .4, .3);
+        if ( !passed ) XERROR("BPM mobile navigation regression failed");
+        return passed;
+    }
+
+    /// @brief 以真实原始触点驱动既有拍点算法，验证宽命中不跳变和单笔历史。
+    /// @return 原业务算法、输入隔离和历史边界全部通过时返回 true。
+    /// @details 本测试只修改测量草稿，不向正式谱面写入 Timing。
+    /// 音轨同步键仅表达分析已就绪，试听仍明确保持未加载状态。
+    /// 不使用鼠标坐标模拟手指，所有移动经生产原始触点发布入口。
+    /// ImGui 上下文提供真实帧号和绘制列表，避免手势连续性检查被绕过。
+    /// 操作方案与全局触点在退出前恢复，测试不改变用户保存偏好。
+    /// @details 拖动非首拍反算 BPM，撤销／重做必须同时恢复全部兼容字段。
+    static bool checkMobileBeats(BpmMeasurementToolView& tool)
+    {
+        struct MobileShell : IWorkspacePresentation {
+            /// @brief 使用真实移动分流，不以宿主 Linux 平台宏代替设备策略。
+            bool allowsHoverFeedback() const override { return false; }
+            /// @brief 本用例只绘制单独图表，不需要完整工作区和音频设备。
+            void renderWorkspace(MainDockSpaceUI&, UIManager&) override {}
+            /// @brief 使用生产中央页签分配，完整工具 update
+            /// 不得用默认浮窗位置拆散节点。
+            bool beginWindow(std::string_view, const std::string& title,
+                             bool* open, ImGuiWindowFlags flags) override
+            {
+                m_layout.target(MobileDockPanel::Main, title.c_str());
+                return ImGui::Begin(title.c_str(), open, flags);
+            }
+            /// @brief 独立测试停靠树，不读取或覆盖用户布局。
+            MobileDockLayout m_layout;
+        } shell;
+        ImGui::CreateContext();
+        auto& io       = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.DisplaySize = { 1000, 600 };
+        io.DeltaTime   = 1.f / 60;
+        unsigned char* pixels{};
+        int            w{}, h{};
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+        const auto oldProfile = std::string(Interaction::activeProfile().id());
+        Interaction::synchronizeProfile("touch-gestures", true);
+        Interaction::synchronizeProfile("touch-gestures", true);
+        // 前面已有历史测试，这里显式清除草稿事务而不重置配置单例。
+        // 一段 120 BPM 可直接验证第一个非首拍移动后的反算结果。
+        // 首拍保持零秒，使拖动其它拍时不能靠移动整段掩盖算法错误。
+        tool.clearMeasurementHistory();
+        tool.m_duration             = 20;
+        tool.m_selectedAudioSyncKey = "mobile-unloaded-preview";
+        tool.m_playbackRoute        = BpmPlaybackRoute::Audition;
+        tool.m_timingSegments       = { { 0, 120 } };
+        tool.m_bpm                  = 120;
+        tool.m_firstBeatTime        = 0;
+        tool.m_beatLengthSeconds    = .5;
+        tool.m_viewCenter           = 2;
+        tool.m_zoomSeconds          = 2;
+        tool.m_mobileEdit           = true;
+        /// @brief 每次输入后走实际图表入口，窗口和帧均按真实顺序配对。
+        const auto frame = [&] {
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos({ 0, 0 });
+            ImGui::SetNextWindowSize({ 1000, 600 });
+            ImGui::Begin("BpmMobileRegression");
+            WorkspaceFrameScope scope(shell);
+            tool.handleMobilePlot({ 100, 100 }, { 900, 400 }, 0, 4, true, 1);
+            ImGui::End();
+            ImGui::Render();
+        };
+        using enum Graphic::TouchPhase;
+        /// @brief 归一化位置只用于注入；输出断言直接读取工具的实际 Timing。
+        const auto event = [&](Graphic::TouchPhase phase, float x) {
+            Graphic::publishMobileTouch(
+                phase, 50, 1, x, .3, ImGui::GetFrameCount() * .016);
+            frame();
+        };
+        // 原始命中查询使用上一帧可见窗口树，先按正常生命周期提交两帧。
+        // 合成鼠标始终不移入图表，专门覆盖真机快速触摸先于鼠标更新的路径。
+        // 如果用旧鼠标或 ImPlot hover 作为唯一许可，后续触摸断言将失败。
+        frame();
+        frame();
+        // 第一拍在 x200；指尖偏离 12 像素仍命中，按下不能改成 107 BPM。
+        event(Down, .212f);
+        bool passed = close(tool.m_bpm, 120) && !tool.canUndoMeasurement();
+        // 只有越过阈值后才真正修改 BPM；按下时记录的抓取偏差必须被扣除。
+        // 拖到 x232 表示原拍从 x200 到 x220，而不是把拍直接移到指尖。
+        event(Move, .232f);
+        passed &= std::abs(tool.m_bpm - 100) < 1e-3;
+        event(Up, .232f);
+        passed &= tool.canUndoMeasurement() &&
+                  tool.m_measurementUndoHistory.size() == 1;
+        // 一次撤销应回到整笔拖动前，不能需要逐帧撤销才能恢复 120。
+        // 再重做回到最后的合法 BPM，证明结束边沿没有丢失最后一帧。
+        tool.undoMeasurementFromShortcut();
+        passed &= close(tool.m_bpm, 120) && tool.canRedoMeasurement();
+        tool.redoMeasurementFromShortcut();
+        passed &= std::abs(tool.m_bpm - 100) < 1e-3;
+        // 静止轻点不制造空历史，系统 Cancel 也不能把取消坐标写到首拍。
+        const auto count = tool.m_measurementUndoHistory.size();
+        event(Down, .22f);
+        event(Up, .22f);
+        passed &= tool.m_measurementUndoHistory.size() == count;
+        event(Down, .22f);
+        Graphic::cancelMobileTouch();
+        frame();
+        passed &= tool.m_measurementUndoHistory.size() == count &&
+                  !tool.m_isBeatMarkerDragging;
+        // 不保留本用例的捕获和取消代际，后续桌面测试可从新 Down 开始。
+        // 恢复方案需要两次安全帧，与生产同步入口的切换契约一致。
+        // 最后销毁上下文，保证临时绘制列表不会跨测试被借用。
+        tool.suspendMobilePlot();
+        Graphic::cancelMobileTouch();
+        // 完整 update
+        // 必须真正进入移动中央节点；仅测分类无法发现显式位置导致脱停靠。
+        // 参数页在无项目下绘制占位，不初始化 ImPlot 或音频分析后台任务。
+        // 生产默认位置若仍在移动端设置，窗口 DockId 会被 ImGui
+        // 清零，本断言直接失败。
+        // 分页仅用于本用例避免解码任务，仍经过生产 LayoutContext
+        // 和外壳停靠入口。
+        // 断言同时覆盖首次出现和后续帧，不能靠下一次刷新重新停靠掩盖首帧脱落。
+        // 将旧桌面定位临时恢复时本回归已确认失败，证明检查能捕获设备上的遮挡原因。
+        // 正式实现恢复移动定位后再次通过，不弱化窗口的 DockId 比较。
+        tool.m_mobileParameters = true;
+        tool.m_selectedAudioTrackId.clear();
+        tool.m_selectedAudioSyncKey.clear();
+        tool.m_selectedAudioIdentityNeedsAnalysis = false;
+        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        for ( int index = 0; index < 3; ++index ) {
+            ImGui::NewFrame();
+            WorkspaceFrameScope scope(shell);
+            shell.m_layout.render({ 0, 0 }, { 1000, 600 }, 1, false, false);
+            tool.update(nullptr);
+            const auto* window =
+                ImGui::FindWindowByName("BPM###BpmMeasurementTool");
+            passed &= window && window->DockId ==
+                                    shell.m_layout.node(MobileDockPanel::Main);
+            ImGui::Render();
+        }
+        tool.m_mobileParameters = false;
+        Interaction::synchronizeProfile(oldProfile, true);
+        Interaction::synchronizeProfile(oldProfile, true);
+        ImGui::DestroyContext();
+        if ( !passed )
+            XERROR("BPM mobile beat/history regression failed: {}", tool.m_bpm);
+        return passed;
+    }
+
     /// @brief 阻止测试析构把临时显示偏好保存到个人配置。
+    /// @details 工具测试通过真实绘制入口会设置偏好脏标记。
+    /// 单纯恢复 settings 数值不能清掉对象内部的延迟保存计时器。
+    /// 因此退出前同时恢复单例与对象门闩，保持测试配置隔离。
+    /// 本函数不改变生产保存策略，也不等待真实消抖时间经过。
+    /// 测试失败同样走这里，避免失败现场触发额外个人配置写入。
+    /// 不通过销毁音频设备来绕过 UI 状态检查。
+    /// 后续用例仍可读取构造之前的 BPM 偏好。
+    /// 保持资源和历史清理与断言结果独立，退出码最后统一决定。
+    /// 此收尾只影响本地工具对象，不清除项目或全局快捷键配置。
     static void suppressPreferenceSave(BpmMeasurementToolView& tool)
     {
         // 清除延迟落盘计时器，不以真实等待方式让测试偏好保存。
@@ -413,7 +675,9 @@ int main()
         MMM::UI::BpmMeasurementHistoryTestAccess::checkHistory(tool) &&
         MMM::UI::BpmMeasurementHistoryTestAccess::checkWheel(tool) &&
         MMM::UI::BpmMeasurementHistoryTestAccess::checkPlaybackCursor(tool) &&
-        MMM::UI::BpmMeasurementHistoryTestAccess::checkChapterDeletion(tool);
+        MMM::UI::BpmMeasurementHistoryTestAccess::checkChapterDeletion(tool) &&
+        MMM::UI::BpmMeasurementHistoryTestAccess::checkMobileNavigation() &&
+        MMM::UI::BpmMeasurementHistoryTestAccess::checkMobileBeats(tool);
     // 先恢复偏好再抑制析构落盘，保持测试无用户设置副作用。
     settings.bpmMeasurementToolPreferences = original;
     MMM::UI::BpmMeasurementHistoryTestAccess::suppressPreferenceSave(tool);

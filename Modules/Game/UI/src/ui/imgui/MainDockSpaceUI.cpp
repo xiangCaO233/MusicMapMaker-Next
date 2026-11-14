@@ -18,6 +18,7 @@
 #include "graphic/imguivk/VKContext.h"
 #include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKTexture.h"
+#include "graphic/window/WindowPlatform.h"
 #include "imgui.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
@@ -31,8 +32,9 @@
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
-#include <GLFW/glfw3.h>
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <ImGuiFileDialog.h>
+#include <algorithm>
 #include <concurrentqueue.h>
 #include <filesystem>
 #include <fmt/format.h>
@@ -548,120 +550,23 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     m_beatmapLoadDiagnosticFeedback.update();
     m_mainMenuview.update(sourceManager, m_statusMessageService);
 
-    // 本帧复用引擎、皮肤、视口和 DPI 引用，避免各布局块采样到不同配置。
-    auto&                engine   = Logic::EditorEngine::instance();
-    Config::SkinManager& skinCfg  = Config::SkinManager::instance();
-    ImGuiViewport*       viewport = ImGui::GetMainViewport();
-    float dpiScale = MMM::Config::AppConfig::instance().getWindowContentScale();
-
-    // IGFD 翻译当前受库封装限制；此处不在热路径重复写入静态文案表。
-
-    if ( auto* nativeWindow =
-             sourceManager ? sourceManager->getNativeWindow() : nullptr ) {
-        // 每帧从平台窗口校正状态，覆盖可能延迟或丢失的事件通知。
-        m_isMaximized = nativeWindow->isWindowMaximized();
-    }
-
+    auto&       engine   = Logic::EditorEngine::instance();
+    auto&       skinCfg  = Config::SkinManager::instance();
+    auto*       viewport = ImGui::GetMainViewport();
+    const float dpiScale =
+        Config::AppConfig::instance().getWindowContentScale();
     const auto& editorSettings =
-        Config::AppConfig::instance().getEditorConfig().settings;
-    const auto& aesthetics = editorSettings.aesthetics;
+        Config::AppConfig::instance().getEditorSettings();
+    // 平台外壳负责布局，事件队列、导入和确认流程继续复用公共业务实现。
+    sourceManager->workspacePresentation().renderWorkspace(*this,
+                                                           *sourceManager);
 
-    float windowPaddingVal = std::floor(aesthetics.windowPadding * dpiScale);
-
-    // 独立侧栏宽度包含两侧窗口内边距，固定工具栏另按四边几何预留。
-    float sidebarWidth =
-        SideBarUI::GetSidebarWidth(dpiScale) + 2.0f * windowPaddingVal;
-    // 四边工具栏在停靠宿主内统一扣除，菜单不再只为右侧栏单独扣宽度。
-    // 固定几何与宿主共享计算入口，不能让两处布局产生重叠或重复预留。
-    const float toolbarLayoutWidth = 0.0f;
-
-    float       extraPaddingY = std::floor(4.0f * dpiScale);
-    ImGuiStyle& style         = ImGui::GetStyle();
-
-    // 把皮肤审美参数转换为整数像素并同步到本帧全局 ImGui 样式。
-    float windowRound     = std::floor(aesthetics.windowRounding * dpiScale);
-    float frameRound      = std::floor(aesthetics.frameRounding * dpiScale);
-    style.WindowRounding  = windowRound;
-    style.ChildRounding   = windowRound;
-    style.FrameRounding   = frameRound;
-    style.PopupRounding   = frameRound;
-    style.TabRounding     = frameRound;
-    style.ItemSpacing     = { std::floor(aesthetics.itemSpacing * dpiScale),
-                              std::floor(aesthetics.itemSpacing * dpiScale) };
-    style.WindowPadding   = { windowPaddingVal, windowPaddingVal };
-    style.FrameBorderSize = 0.0f;
-
-    // 菜单栏与状态栏等高，形成对称的顶部和底部固定区域。
-    float menuBarHeight =
-        ImGui::GetFontSize() + (style.FramePadding.y + extraPaddingY) * 2.0f;
-    float statusBarHeight = menuBarHeight;
-
-    // 在提交窗口控件前设置边缘鼠标形状，避免被中央内容覆盖。
-    handleNativeWindowFrameInteraction(sourceManager, dpiScale);
-
-    // 顶部菜单栏占据主视口第一条固定带。
-    renderMenuBar(sourceManager,
-                  menuBarHeight,
-                  sidebarWidth,
-                  toolbarLayoutWidth,
-                  dpiScale);
-
-    // 中央 DockSpace 使用扣除四周固定区域后的剩余矩形。
-    renderDockingSpace(sourceManager,
-                       menuBarHeight,
-                       statusBarHeight,
-                       sidebarWidth,
-                       toolbarLayoutWidth);
-
-    // 状态栏在 DockSpace 之后绘制，以覆盖底部边界接缝。
-    renderStatusBar(sourceManager, statusBarHeight, dpiScale);
-
-    // 固定工具栏直接占据宿主留出的边缘矩形，不使用任何 Dock 节点。
-    // renderDockingSpace 已在移出窗口前记录实际停靠边缘，不能用旧缓存定位。
-    if ( editorSettings.fixedToolWindow ) {
-        const float gap  = std::floor(aesthetics.windowGap * dpiScale);
-        const auto  edge = toolbarDockDirection(editorSettings.toolbarDockEdge);
-        const bool  horizontal = edge == ImGuiDir_Up || edge == ImGuiDir_Down;
-        const float thickness =
-            std::floor(
-                (horizontal && editorSettings.showToolLabels ? 46.0f : 32.0f) *
-                dpiScale) +
-            2.0f * windowPaddingVal;
-        // 左侧包含侧栏外边距和栏间距，右侧仅保留一份外边距。
-        // 与宿主使用同一基础矩形，避免固定工具栏右侧重复留白。
-        const auto geometry = calculateToolbarWorkspaceGeometry(
-            ImVec2(viewport->WorkPos.x + sidebarWidth + 2.0f * gap,
-                   viewport->WorkPos.y + menuBarHeight + gap),
-            ImVec2(viewport->WorkSize.x - sidebarWidth - 3.0f * gap,
-                   viewport->WorkSize.y - menuBarHeight - statusBarHeight -
-                       2.0f * gap),
-            true,
-            edge,
-            thickness,
-            gap);
-        // 始终相对当前视口设定，主窗口缩放和 DPI 改变后仍紧贴同一条边。
-        // 必须在 ToolbarView::Begin 之前提交，停靠标签宿主不再参与固定几何。
-        // 非固定阶段不提交这些约束，用户拖动位置和长轴尺寸由 ImGui 保存。
-        ImGui::SetNextWindowPos(geometry.m_toolbarPos);
-        ImGui::SetNextWindowSize(geometry.m_toolbarSize);
-        // 管理器展开时左侧固定带位于它与画布之间，以本帧占位叶几何定位。
-        // 占位只提供矩形，实际工具窗口仍强制移出 DockSpace 并保持独立固定。
-        if ( edge == ImGuiDir_Left ) {
-            const auto* slotWindow =
-                ImGui::FindWindowByName(TOOLBAR_MANAGER_SLOT_NAME);
-            const auto* slot = slotWindow ? slotWindow->DockNode : nullptr;
-            if ( slot ) {
-                ImGui::SetNextWindowPos(slot->Pos);
-                ImGui::SetNextWindowSize(ImVec2(thickness, slot->Size.y));
-            }
-        }
-        ImGui::SetNextWindowDockID(0);
-    }
-    ImGui::SetNextWindowViewport(viewport->ID);
-    m_toolbarView.update(sourceManager);
-
-    // 前景边框在所有主工作区窗口后绘制，确保无边框轮廓不被遮盖。
-    renderNativeWindowFrameOverlay(sourceManager, dpiScale);
+    // Android 字体已经按密度缩放，文件对话框的固定像素尺寸也要匹配。
+    // 视口比例上限保证底部文件名和确认按钮仍在屏幕内，不改变桌面尺寸约定。
+    // 这里只计算两个标量，不枚举文件、不查询 JNI，也不进行布局树复制。
+    const ImVec2 fileDialogSize =
+        sourceManager->workspacePresentation().fileDialogSize(
+            dpiScale, viewport->WorkSize);
 
     // Unified 模式的所有文件选择器都由同一 ImGuiFileDialog 实例逐帧驱动。
     if ( editorSettings.filePickerStyle == Config::FilePickerStyle::Unified ) {
@@ -682,13 +587,13 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened(
                      "ProjectFolderPicker") ) {
-                Utils::prepareCenteredModalWindow({ 600, 400 });
+                Utils::prepareCenteredModalWindow(fileDialogSize);
             }
             if ( ImGuiFileDialog::Instance()->Display(
                      "ProjectFolderPicker",
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoSavedSettings,
-                     { 600, 400 }) ) {
+                     fileDialogSize) ) {
                 if ( ImGuiFileDialog::Instance()->IsOk() ) {
                     // 某些平台目录模式只返回 CurrentPath，空结果时显式回退。
                     std::string folderPath =
@@ -719,13 +624,13 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened(
                      "TemporaryProjectSaveFolderPicker") ) {
-                Utils::prepareCenteredModalWindow({ 600, 400 });
+                Utils::prepareCenteredModalWindow(fileDialogSize);
             }
             if ( ImGuiFileDialog::Instance()->Display(
                      "TemporaryProjectSaveFolderPicker",
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoSavedSettings,
-                     { 600, 400 }) ) {
+                     fileDialogSize) ) {
                 if ( ImGuiFileDialog::Instance()->IsOk() ) {
                     // 目录选择的空路径回退规则与普通工程选择保持一致。
                     std::string folderPath =
@@ -756,13 +661,13 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             // 类型选择与文件选择分离，使同一音频路径可明确导入主轨或音效轨。
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened("AudioImportPicker") ) {
-                Utils::prepareCenteredModalWindow({ 600, 400 });
+                Utils::prepareCenteredModalWindow(fileDialogSize);
             }
             if ( ImGuiFileDialog::Instance()->Display(
                      "AudioImportPicker",
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoSavedSettings,
-                     { 600, 400 }) ) {
+                     fileDialogSize) ) {
                 if ( ImGuiFileDialog::Instance()->IsOk() ) {
                     // 文件模式直接使用 GetFilePathName，不接受空目录回退。
                     std::string filePath =
@@ -789,13 +694,13 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             // ASCII 与 CJK 分开配置，允许皮肤覆盖时保留用户字体回退策略。
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened("AsciiFontPicker") ) {
-                Utils::prepareCenteredModalWindow({ 600, 400 });
+                Utils::prepareCenteredModalWindow(fileDialogSize);
             }
             if ( ImGuiFileDialog::Instance()->Display(
                      "AsciiFontPicker",
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoSavedSettings,
-                     { 600, 400 }) ) {
+                     fileDialogSize) ) {
                 if ( ImGuiFileDialog::Instance()->IsOk() ) {
                     // 配置保存原始 UTF-8 路径，加载器负责后续有效性检查。
                     std::string filePath =
@@ -817,13 +722,13 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             // CJK 字体通常体积更大，仍只置重建请求而不阻塞当前模态帧。
             Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
             if ( ImGuiFileDialog::Instance()->IsOpened("CjkFontPicker") ) {
-                Utils::prepareCenteredModalWindow({ 600, 400 });
+                Utils::prepareCenteredModalWindow(fileDialogSize);
             }
             if ( ImGuiFileDialog::Instance()->Display(
                      "CjkFontPicker",
                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                          ImGuiWindowFlags_NoSavedSettings,
-                     { 600, 400 }) ) {
+                     fileDialogSize) ) {
                 if ( ImGuiFileDialog::Instance()->IsOk() ) {
                     // 不在文件选择回调中直接创建 GPU 字体资源。
                     std::string filePath =
@@ -926,10 +831,9 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
     renderCollaborationSafetyPopups(dpiScale);
     renderTemporaryProjectPopups(dpiScale, viewport);
     if ( m_exitAfterTemporaryProjectSave && viewport->PlatformHandle ) {
-        // 保存成功事件先落到 UI 队列，本帧再向 GLFW 提交最终退出标志。
+        // 保存成功事件先落到 UI 队列，本帧再向窗口平台提交最终退出标志。
         m_temporaryProjectExitConfirmed = true;
-        glfwSetWindowShouldClose(
-            static_cast<GLFWwindow*>(viewport->PlatformHandle), GLFW_TRUE);
+        Graphic::setPlatformWindowShouldClose(viewport->PlatformHandle, true);
         m_exitAfterTemporaryProjectSave = false;
         // 请求提交后立即清除一次性标志，避免后续帧重复设置关闭状态。
     }
@@ -941,13 +845,14 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
         // - 未确认且临时项目打开时必须询问正式保存；
         // - 普通工程有未保存内容时显示保存确认；
         // - 其他情况保留平台关闭标志并退出主循环。
-        // PlatformHandle 由 ImGui 主视口提供，只在本帧内转换为 GLFWwindow。
-        GLFWwindow* nativeWin = (GLFWwindow*)viewport->PlatformHandle;
-        if ( glfwWindowShouldClose(nativeWin) ) {
+        // PlatformHandle 由 ImGui
+        // 主视口提供，仅由平台辅助函数解释，不能跨后端强制转换。
+        void* nativeWin = viewport->PlatformHandle;
+        if ( Graphic::platformWindowShouldClose(nativeWin) ) {
             if ( !m_temporaryProjectExitConfirmed &&
                  engine.isTemporaryProjectOpen() ) {
                 // 临时项目优先于普通未保存判断，因为它还涉及正式目录选择。
-                glfwSetWindowShouldClose(nativeWin, GLFW_FALSE);
+                Graphic::setPlatformWindowShouldClose(nativeWin, false);
                 const auto info = engine.currentTemporaryProjectInfo();
                 // 冻结源包和缓存路径，关闭确认期间不再依赖引擎内部对象。
                 m_temporaryProjectSourcePath =
@@ -962,7 +867,7 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
             } else if ( !m_temporaryProjectExitConfirmed &&
                         engine.hasUnsavedChanges() ) {
                 // 普通工程拦截关闭请求，并使用稳定 ### ID 打开确认框。
-                glfwSetWindowShouldClose(nativeWin, GLFW_FALSE);
+                Graphic::setPlatformWindowShouldClose(nativeWin, false);
                 const std::string exitPopupName = fmt::format(
                     "{}###ExitConfirmation", TR("ui.exit.confirm_title"));
                 ::MMM::UI::FeedbackOpenPopup(exitPopupName.c_str());
@@ -1002,8 +907,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                 engine.pushCommand(Logic::CmdSaveBeatmap{});
                 // 当前逻辑命令模型按顺序处理保存和退出；此处不阻塞等待完成。
                 if ( viewport->PlatformHandle ) {
-                    glfwSetWindowShouldClose(
-                        (GLFWwindow*)viewport->PlatformHandle, GLFW_TRUE);
+                    Graphic::setPlatformWindowShouldClose(
+                        viewport->PlatformHandle, true);
                 }
                 ImGui::CloseCurrentPopup();
             }
@@ -1012,8 +917,8 @@ void MainDockSpaceUI::update(UIManager* sourceManager)
                                            ImVec2(120 * dpiScale, 0)) ) {
                 // 放弃保存直接恢复平台关闭请求，不向逻辑队列追加保存命令。
                 if ( viewport->PlatformHandle ) {
-                    glfwSetWindowShouldClose(
-                        (GLFWwindow*)viewport->PlatformHandle, GLFW_TRUE);
+                    Graphic::setPlatformWindowShouldClose(
+                        viewport->PlatformHandle, true);
                 }
                 ImGui::CloseCurrentPopup();
             }
@@ -1331,12 +1236,11 @@ void MainDockSpaceUI::renderTemporaryProjectPopups(float          dpiScale,
                                            ImVec2(120.0f * dpiScale, 0.0f)) ) {
                 if ( m_temporaryProjectAfterSaveAction ==
                      TemporaryProjectAfterSaveAction::ExitApp ) {
-                    // 退出分支恢复 GLFW 标志，并标记已通过临时项目确认。
+                    // 退出分支恢复平台关闭标志，并标记已通过临时项目确认。
                     if ( viewport && viewport->PlatformHandle ) {
                         m_temporaryProjectExitConfirmed = true;
-                        glfwSetWindowShouldClose(
-                            static_cast<GLFWwindow*>(viewport->PlatformHandle),
-                            GLFW_TRUE);
+                        Graphic::setPlatformWindowShouldClose(
+                            viewport->PlatformHandle, true);
                     }
                 } else {
                     // 非退出分支统一请求关闭当前工程，由上层执行资源清理。

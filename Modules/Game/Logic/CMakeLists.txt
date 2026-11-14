@@ -10,7 +10,11 @@ add_library(
   # 命令入口与帧更新分开编译，避免继续扩张会话主实现。
   src/logic/session/BeatmapSession_Commands.cpp
   src/logic/session/InteractionController.cpp
+  # 折线节点离散编辑单独编译，复用公共撤销与橡皮擦断开语义。
+  src/logic/session/InteractionController_Polyline.cpp
   src/logic/session/PlaybackController.cpp
+  # 预览触控定位与缩放单独实现，复用会话播放和滚速索引。
+  src/logic/session/PlaybackController_Preview.cpp
   src/logic/session/ActionController_Editing.cpp
   # 加载和运行期同步都使用 SessionUtils，但分别维护各自低频与热路径约束。
   src/logic/session/SessionUtils_Loading.cpp
@@ -507,3 +511,11 @@ target_link_libraries(BmsPackageExportServiceTest PRIVATE Logic Log)
 mmm_register_test_case(
   NAME BmsPackageExportServiceTest COMMAND BmsPackageExportServiceTest
   "${CMAKE_BINARY_DIR}/test_output/bms_package")
+
+# 直接导航通过真实 Session 更新验证缩放锚点和最终配置采纳时序。 不初始化音频设备，也不依赖用户谱面或模拟器的输入速度。
+mmm_add_test_executable(Logic CanvasTouchNavigationTest
+                        tests/CanvasTouchNavigationTest.cpp)
+# 链接真实会话控制器，避免测试公式复制掩盖配置交接错误。
+target_link_libraries(CanvasTouchNavigationTest PRIVATE Logic Log)
+mmm_register_test_case(NAME CanvasTouchNavigationTest COMMAND
+                       CanvasTouchNavigationTest)

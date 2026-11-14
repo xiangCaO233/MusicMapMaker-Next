@@ -124,6 +124,20 @@ struct SessionContext {
     float animatedTimelineZoomTarget{ 1.0f };
     /// @brief 时间线缩放动画是否仍需继续推进。
     bool animatedTimelineZoomAnimationActive{ false };
+    /// @brief 指针直接缩放的临时目标，仅由逻辑线程更新，不写入谱面。
+    /// @details 手势期间借用缓存动画倍率，避免逐帧重建滚速索引或广播完整配置。
+    /// 释放时 UI 发布最终配置，再清除此值；此状态不进入项目序列化。
+    std::optional<float> m_pointerTimelineZoom;
+    /// @brief 释放已发布最终配置；保持本地显示覆盖直到该配置进入逻辑轮次。
+    bool m_pointerZoomFinished{ false };
+    /// @brief 双指吸附前的连续视觉时间，只由逻辑线程在直接导航期间积分。
+    /// @details 保留不足一格的位移，避免逐次从吸附点重新计算而无法跨格。
+    /// 手势结束、取消吸附或捏合时清除，不持久化到项目。
+    std::optional<double> m_pointerScrollVisualTime;
+    /// @brief 预览手势的局部范围覆盖，仅逻辑线程读写，不改变全谱滚速缓存。
+    std::optional<float> m_pointerPreviewAreaRatio;
+    /// @brief 保留已显示的预览范围，直到 UI 发布的最终配置进入同一逻辑轮次。
+    bool m_pointerPreviewFinished{ false };
     bool isPlaying{ false };  ///< 是否正在播放
     /// @brief 是否正在本地预览连续 Seek；联机视口需等提交后再同步。
     bool isSeekScrubbing{ false };
@@ -290,6 +304,9 @@ struct SessionContext {
 
     // --- 笔刷工具状态 ---
     struct BrushState {
+        /// @brief 本笔固定轨道的单键／长条策略，取消和提交后清除。
+        /// 只由起笔命令写入，连续更新不读取 UI 方案或改变旧笔画语义。
+        bool   m_noteHoldOnly{ false };
         bool   isActive{ false };
         double time{ 0.0 };  ///< 当前选中的位置(对 Hold/Flick 为起始点)
         double holdStartTime{ -1.0 };  ///< 记录按下 Shift 瞬间的时间点
@@ -328,6 +345,13 @@ struct SessionContext {
 
         /// @brief 当前画笔是否通过先删除已有物件进入恢复或转换编辑。
         bool replacesExistingObject{ false };
+        /// @brief 本笔续写延迟到释放提交；默认关闭，不改变桌面两阶段路径。
+        bool m_transactionalResume{ false };
+        /// @brief 尚未执行的原物件删除快照；只在续写起笔时分配，取消直接丢弃。
+        /// 预览不改变谱面，保存和联机同步始终读取完整的原对象。
+        std::unique_ptr<IEditorAction> m_pendingResume;
+        /// @brief 起笔时的历史修订，其他编辑插入后不能用旧快照覆盖新内容。
+        std::uint64_t m_resumeRevision{ 0 };
         /// @brief 本笔续写删除动作的精确身份，供纯鼠标取消恢复；普通绘制为零。
         std::uint64_t resumedDeleteActionId{ 0 };
         /// @brief 续接前的根实体；用于把教学身份转移给替换后的折线。
@@ -346,6 +370,8 @@ struct SessionContext {
     // --- 橡皮擦工具状态 ---
     struct EraserState {
         bool isActive{ false };
+        /// @brief 离散节点删除只作用于冻结目标，不扩展到其余选中物件。
+        bool limitToTarget{ false };
         bool isShiftDown{ false };  ///< Shift 按下时整体删除 Polyline
         /// @brief 当前擦除目标所在的独立 ECS 注册表。
         ChartObjectKind targetObjectKind{ ChartObjectKind::PlayerNote };

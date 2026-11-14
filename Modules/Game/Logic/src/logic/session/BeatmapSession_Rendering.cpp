@@ -5,6 +5,7 @@
 #include "audio/AudioManager.h"
 #include "common/LogicCommands.h"
 // 快照生产端直接访问字段；缓冲兼容头只提供声明和公共小类型。
+#include "PreviewNavigationProjection.h"
 #include "common/render/RenderSnapshot.h"
 #include "config/Utf8Path.h"
 #include "logic/BeatmapSyncBuffer.h"
@@ -634,34 +635,18 @@ void rebuildPreviewDensitySnapshotIfNeeded(SessionContext& ctx,
 /// @return 可用的预览区纵向缩放倍率；输入尺寸无效时返回 0。
 /// @warning 逻辑/渲染热路径：每个 Session update 的预览相关分支调用；只允许
 /// 常量时间计算，禁止 ECS 遍历、文件系统访问和阻塞操作。
-/// @note 无主相机时使用兼容高度，只用于相机初始化过渡期。
+/// @note 无主相机时使用当前预览高度，只用于相机初始化过渡期。
 /// @note Preview 使用像素边距，主画布使用归一化轨道上下边界。
 /// @note 返回零表示不能进行逆映射，调用方不得拿它作为除数。
 float calculatePreviewRenderScaleY(const SessionContext&       ctx,
                                    const CameraInfo&           previewCamera,
                                    const Config::EditorConfig& config)
 {
-    // 主相机尚未注册时使用固定兼容高度。
-    // 相机存在后按实际像素高度计算，不保留旧回退值。
-    const auto* mainCamera = SessionUtils::findMainCanvasCamera(ctx.cameras);
-    float       mainViewportHeight =
-        mainCamera ? mainCamera->viewportHeight : 1000.0f;
-    float mainEffectiveH =
-        (config.visual.trackLayout.bottom - config.visual.trackLayout.top) *
-        mainViewportHeight;
-    float previewDrawH = previewCamera.viewportHeight -
-                         (config.visual.previewConfig.margin.top +
-                          config.visual.previewConfig.margin.bottom);
-    float areaRatio    = config.visual.previewConfig.areaRatio;
-
-    // 没有有效绘制面积时拒绝比例换算。
-    // 返回零让上层跳过除法，不把退化视图放大到异常比例。
-    if ( mainEffectiveH <= 0.0001f || previewDrawH <= 0.0001f ||
-         areaRatio <= 0.0001f ) {
-        return 0.0f;
-    }
-
-    return previewDrawH / (mainEffectiveH * areaRatio);
+    // 手势覆盖只影响 Preview，不改变主相机、时间线倍率或滚速缓存。
+    const float ratio = ctx.m_pointerPreviewAreaRatio.value_or(
+        config.visual.previewConfig.areaRatio);
+    return previewNavigationScale(
+        ctx, config, previewCamera.viewportHeight, ratio);
 }
 
 /// @brief 将当前动画缩放比例同步到 ScrollCache。
@@ -683,7 +668,11 @@ void syncScrollCacheAnimatedZoom(SessionContext&             ctx,
 
     // 滚动缓存已按目标缩放构建。
     // 本次只提供动画相对目标的比例，不重复乘目标 zoom。
-    double targetZoom = static_cast<double>(config.visual.timelineZoom);
+    // 脏缓存将在本轮按配置重建；否则积分可能仍使用手势开始前的基础倍率。
+    // 必须以实际积分基准换算，不能把已发布的新目标当作缓存已经重建。
+    double targetZoom = cache->isDirty
+                            ? static_cast<double>(config.visual.timelineZoom)
+                            : cache->getBaseZoom();
     if ( !std::isfinite(targetZoom) || targetZoom <= 1e-9 ) {
         targetZoom = 1.0;
     }
@@ -1181,6 +1170,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             isActiveSession &&
             (m_ctx->mouseCameraId == cameraId ||
              m_ctx->dragCameraId == cameraId || isPreviewExternalDrag ||
+             // 触屏预览不模拟鼠标，直接导航期间同样不得被辅助视图限频。
+             (cameraId == "Preview" && m_ctx->m_pointerPreviewAreaRatio &&
+              !m_ctx->m_pointerPreviewFinished) ||
              m_ctx->isSelecting || m_ctx->brushState.isActive ||
              m_ctx->eraserState.isActive);
         // 时间未到只跳过本次辅助快照，不 sleep、不忙等。
@@ -1355,7 +1347,11 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             // osu! 模式: timelineZoom 已写入 absY 流速，不在此处重复除以 scale
             // 主画布的 timelineZoom 已体现在缓存绝对位置中。
             // 再次除目标 zoom 会把可见时间范围缩放两次。
-            double scale = snapshot->renderScaleY;
+            // Preview 尚未生成本帧几何；可见范围不能读取池内上一帧比例。
+            // 使用与本帧几何相同的手势范围，避免捏合时漏剔除新进入的物件。
+            double scale = cameraId == "Preview" ? calculatePreviewRenderScaleY(
+                                                       *m_ctx, camera, config)
+                                                 : snapshot->renderScaleY;
             if ( !SessionUtils::isMainCanvasCameraId(cameraId) &&
                  std::abs(scale) > 0.0001f ) {
                 if ( std::abs(scale) < 1e-6 ) scale = 1.0;
@@ -2173,6 +2169,15 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             finalMainHeight = mainCameraFinal->viewportHeight;
         }
 
+        // 颜色笔在移动端起笔之前仍处于空闲状态，也需要完整画笔值快照。
+        // 仅颜色工具发布这份固定大小值，不把空闲几何伪装为活动预览。
+        // UI 起笔锁存此值，不能在释放消费时才读取可能已切换的调色盘。
+        // 现有 Draw 预览继续只在活动笔画中发布，桌面输入与几何语义不变。
+        // 颜色表没有动态容器或共享所有权，复制不增加分配、锁或等待。
+        // 后台会话仍不暴露前台画笔，避免不同谱面互相借用预设状态。
+        if ( isActiveSession && m_ctx->currentTool == EditTool::ColorBrush )
+            snapshot->brush.customColors = m_ctx->brushState.customColors;
+
         // --- 注入画笔预览状态 ---
         // 只有活跃会话发布未提交画笔状态。
         // 几何数据按值复制，UI 不借用正在追加的折线段数组。
@@ -2180,6 +2185,10 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             snapshot->brush.isActive = true;
             snapshot->brush.createsAudioSample =
                 m_ctx->brushState.createsAudioSample;
+            snapshot->brush.m_replacedEntity =
+                m_ctx->brushState.m_pendingResume
+                    ? m_ctx->brushState.resumedEntity
+                    : entt::null;
             snapshot->brush.time         = m_ctx->brushState.time;
             snapshot->brush.duration     = m_ctx->brushState.duration;
             snapshot->brush.track        = m_ctx->brushState.track;
@@ -2253,7 +2262,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             m_ctx->draftTrackCount,
             config,
             finalMainHeight,
-            &m_ctx->hitFXSystem);
+            &m_ctx->hitFXSystem,
+            m_ctx->m_pointerPreviewAreaRatio.value_or(0.0f));
 
         // 布局生成后才有最终 renderScaleY，批注屏幕坐标在此统一补齐。
         // 批注时间使用自身段的 HS 参考，保持与对应目标的显示映射一致。

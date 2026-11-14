@@ -449,6 +449,11 @@ void NoteRenderSystem::renderNotes(
         noteSeen,
         snapshot->isPlaying && config.visual.simulateAutoplay);
 
+    // 续写期间旧根仍是正式数据，只在本帧局部候选中隐藏，避免与画笔预览重影。
+    // 不触发注册表更新、索引重建或联机变更；取消后下一快照自然恢复原物件。
+    if ( snapshot->brush.m_replacedEntity != entt::null )
+        std::erase(noteEntities, snapshot->brush.m_replacedEntity);
+
     // 非专业模式统一过滤草稿，所有后续主体、发光和命中层使用相同可见集合。
     // 不要只在绘制层隐藏草稿而留下可拾取的命中区域。
     // 模拟判定只读当前画布时间，向前或向后跳转都不保留历史完成标记。
@@ -512,10 +517,10 @@ void NoteRenderSystem::renderNotes(
         SessionUtils::isMainCanvasCameraId(cameraId);
 
     // 2. 生成碰撞盒并获取可见实体
+    const std::size_t hitboxStart = snapshot->hitboxes.size();
     if ( shouldGenerateHitboxes ) {
         // 记录本次追加起点，只重标当前音符命中盒，不修改快照之前已有的其他领域条目。
         // 草稿与玩家共享组件 Registry，但命中种类必须保留正确交互路由。
-        const std::size_t hitboxStart = snapshot->hitboxes.size();
         NoteRenderSystem::generateNoteHitboxes(registry,
                                                snapshot,
                                                ctx,
@@ -528,16 +533,6 @@ void NoteRenderSystem::renderNotes(
                                                renderScaleY,
                                                config,
                                                laneProjection);
-        for ( std::size_t index = hitboxStart;
-              index < snapshot->hitboxes.size();
-              ++index ) {
-            auto&       hitbox = snapshot->hitboxes[index];
-            const auto* note =
-                registry.try_get<const NoteComponent>(hitbox.entity);
-            if ( note && note->m_isDraft ) {
-                hitbox.kind = ChartObjectKind::DraftNote;
-            }
-        }
     }
 
     // 3. 基础层渲染
@@ -566,6 +561,61 @@ void NoteRenderSystem::renderNotes(
             config.visual.showBoundSampleLabels &&
             SessionUtils::isMainCanvasCameraId(cameraId),
         laneProjection);
+
+    // 基础层生成完折线局部框后再统一发布触控能力和领域。
+    // 只遍历本画布已经生成的可见框，不另扫注册表或复制节点列表。
+    if ( shouldGenerateHitboxes ) {
+        for ( std::size_t index = hitboxStart;
+              index < snapshot->hitboxes.size();
+              ++index ) {
+            auto&       hitbox = snapshot->hitboxes[index];
+            const auto* note =
+                registry.try_get<const NoteComponent>(hitbox.entity);
+            // 复用可见命中框发布选择能力，不让 UI 遍历可变 ECS。
+            const auto* interaction =
+                registry.try_get<const InteractionComponent>(hitbox.entity);
+            if ( note && !note->m_isSubNote && interaction &&
+                 interaction->isSelected ) {
+                if ( note->m_type == ::MMM::NoteType::HOLD ) {
+                    if ( hitbox.part == HoverPart::Head )
+                        hitbox.touchHandle = HoverPart::HoldStart;
+                    if ( hitbox.part == HoverPart::HoldEnd )
+                        hitbox.touchHandle = HoverPart::HoldEnd;
+                } else if ( note->m_type == ::MMM::NoteType::FLICK ) {
+                    if ( hitbox.part == HoverPart::Head ||
+                         hitbox.part == HoverPart::FlickArrow )
+                        hitbox.touchHandle = hitbox.part;
+                } else if ( note->m_type == ::MMM::NoteType::POLYLINE &&
+                            hitbox.subIndex >= 0 &&
+                            hitbox.subIndex <
+                                static_cast<int>(note->m_subNotes.size()) ) {
+                    // 局部标记只发布节点及尾参数，不把连接体扩大成整条热区。
+                    const auto type = note->m_subNotes[hitbox.subIndex].type;
+                    if ( (type == ::MMM::NoteType::HOLD ||
+                          type == ::MMM::NoteType::FLICK) &&
+                         (hitbox.part == HoverPart::PolylineNode ||
+                          hitbox.part == HoverPart::HoldEnd ||
+                          hitbox.part == HoverPart::FlickArrow) )
+                        hitbox.touchHandle = hitbox.part;
+                } else if ( note->m_type == ::MMM::NoteType::NOTE &&
+                            hitbox.part == HoverPart::Head ) {
+                    hitbox.touchHandle = HoverPart::Head;
+                }
+            }
+            // 节点菜单对未选中物件也可用；身份不依赖选区瞬间是否更新。
+            // 只散列已有稳定 ID，不在逐帧渲染期间生成或复制身份字符串。
+            if ( note && note->m_type == ::MMM::NoteType::POLYLINE &&
+                 hitbox.subIndex >= 0 &&
+                 hitbox.subIndex < static_cast<int>(note->m_subNotes.size()) ) {
+                const auto& node = note->m_subNotes[hitbox.subIndex];
+                hitbox.touchNodeToken =
+                    Common::Render::polylineTouchToken(node.collaborationId);
+            }
+            if ( note && note->m_isDraft ) {
+                hitbox.kind = ChartObjectKind::DraftNote;
+            }
+        }
+    }
 
     // 4. 发光层渲染
     NoteRenderSystem::renderNoteGlowLayer(registry,

@@ -9,6 +9,7 @@
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughModel.h"
 #include "ui/walkthrough/WalkthroughService.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -389,8 +390,11 @@ void WelcomeView::update(UIManager* manager)
     // 欢迎页窗口内边距使用编辑器美学配置并按 DPI 缩放。
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                         ImVec2{ padding, padding });
-    const bool visible = ImGui::Begin(
-        title.c_str(),
+    // 平台策略只改变窗口宿主，演练进度和正文仍共享原有实现。
+    // 移动端不提供标签关闭按钮，欢迎页始终可通过中央页签返回。
+    const bool visible = beginWorkspaceWindow(
+        m_name,
+        title,
         &m_isOpen,
         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
     FeedbackCurrentWindowCloseButton(wasOpen, &m_isOpen);

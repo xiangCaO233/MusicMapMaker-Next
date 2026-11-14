@@ -3,6 +3,7 @@
 #include "ui/interaction/EditorInteraction.h"
 
 #include "canvas/HoverLayerSelection.h"
+#include "canvas/LayoutTouchInput.h"
 #include "canvas/PlanarObservationInput.h"
 #include "canvas/TrackLayoutEditing.h"
 #include "common/CanvasComponentLayout.h"
@@ -15,6 +16,7 @@
 #include <cstdint>
 #include <entt/entity/entity.hpp>
 #include <glm/glm.hpp>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -35,6 +37,8 @@ class UIManager;
 namespace MMM::Canvas
 {
 
+class CanvasInteractionPresentation;
+
 class Basic2DCanvasInteraction : public UI::Interaction::IInteractionGuard
 {
 public:
@@ -54,12 +58,7 @@ public:
                             float snapshotYOffset = 0.0F);
     /// @brief 判断画布是否持有未结束的编辑手势，防止摄像机抢走释放事件。
     /// @warning 每帧常量时间读取 UI 本地门闩，不读取逻辑线程状态。
-    bool hasActivePointerGesture() const override
-    {
-        return m_leftPressStartedOnCanvas || m_leftPressStartedObjectDrag ||
-               m_rightEraseActive || m_isMiddleCanvasPanning ||
-               m_mouseBrushCancelAwaitingRelease;
-    }
+    bool hasActivePointerGesture() const override;
 
     /// @brief 请求本帧左键释放时丢弃画笔而不是提交物件。
     /// @details 供上层事务式教学在发现拖拽落点错误后撤销本次临时放置；
@@ -118,12 +117,18 @@ public:
         bool                                  allowSelectionScroll = true);
 
 private:
+    /// @brief 平台策略仅由实现文件创建；公共头不包含移动手势或菜单定义。
+    friend class CanvasInteractionPresentation;
+    /// @brief 每画布独占的长生命周期输入策略，不在每帧分配。
+    std::unique_ptr<CanvasInteractionPresentation> m_pointerPresentation;
     /// @brief 纯鼠标绘制中右键取消预览，并消费同一组按钮的剩余释放。
     /// @warning 每帧只检查本地手势和输入边沿，取消时发布一次既有结束命令。
     bool handleMouseBrushCancellation(
         const Common::Render::RenderSnapshot& snapshot, bool hovered);
     /// @brief 无 GPU 测试从真实右键候选执行选择，不直接改写悬浮状态。
     friend struct EditorInteractionSurfaceTestAccess;
+    /// @brief CPU 回归只转发生产布局入口，不直接设置捕获或修改结果。
+    friend struct MobileLayoutEditingTestAccess;
     /// @brief 批注菜单回归只驱动真实输入并观察缓冲，不开放业务写入口。
     friend struct MouseAnnotationMenuTestAccess;
     /// @brief 验证右键候选仍存在后选择它，并保留后续重叠命中的优先身份。
@@ -343,6 +348,8 @@ private:
     std::string m_selectionMenuBeatmapKey;
     /// @brief 路径相同但重新加载也应失效旧菜单候选。
     std::uintptr_t m_selectionMenuBeatmapInstance{ 0 };
+    /// @brief 本帧拾取命中的重叠部位列表，供长按或右键打开菜单时直接锁存。
+    std::vector<HoverLayerCandidate> m_currentHoverCandidates;
     /// @brief 当前悬浮物件试听按钮的跨帧锚点。
     struct AudioPreviewOverlayState {
         /// @brief 是否持有有效物件与屏幕边界。
@@ -438,7 +445,15 @@ private:
     /// @brief 是否已经发送过悬浮状态。
     bool m_hasLastHovered{ false };
     /// @brief 左键按下时是否位于画布内。
-    bool m_leftPressStartedOnCanvas{ false };
+    /// @brief 平台解释器只在可取消触摸起笔期间启用检查点，桌面默认关闭。
+    bool m_pointerCancellationEnabled{ false };
+    /// @brief 已确定的纯选择输入，不开始物件拖动或空白框选事务。
+    /// @details 只在中立输入桥的同步调用期间生效，桌面默认关闭。
+    /// @brief 轻点已排除拖动；选择只改集合，折线模式命中旧物件只选择。
+    bool m_pointerTapOnly{ false };
+    /// @brief 平台把手只在同步路由调用期间覆盖命中身份，不改变真实指针坐标。
+    const HoverLayerCandidate* m_pointerTarget{ nullptr };
+    bool                       m_leftPressStartedOnCanvas{ false };
     /// @brief 左键按下时是否位于轨道布局内。
     bool m_leftPressStartedInTrackLayout{ false };
     /// @brief 左键按下时是否命中实体。
@@ -475,6 +490,10 @@ private:
     };
     /// @brief 轨道布局拖动开始时的矩形。
     Config::TrackLayout m_trackLayoutDragStart;
+    /// @brief 布局触点不经过普通长按菜单，状态只属于本画布。
+    LayoutTouchInput m_layoutTouch;
+    /// @brief 放大命中带后保留指尖与实际边／角点的偏差，按下不跳变。
+    glm::vec2 m_layoutTouchGrabOffset{};
     /// @brief 轨道布局拖动开始时的归一化指针坐标。
     glm::vec2 m_trackLayoutPointerStart{ 0.0f, 0.0f };
     /// @brief 当前独立横向拖动的辅助区域。

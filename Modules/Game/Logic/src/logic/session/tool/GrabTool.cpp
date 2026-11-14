@@ -1,5 +1,6 @@
 #include "logic/session/tool/GrabTool.h"
 #include "common/LogicCommands.h"
+#include "common/PolylineGeometry.h"
 #include "common/walkthrough/WalkthroughEditEvent.h"
 #include "logic/BeatmapSession.h"
 #include "logic/EditorEngine.h"
@@ -729,6 +730,31 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
     // 这里不替代控制器的领域校验，工具仍保留自己的局部前提检查。
     if ( cmd.entity == entt::null ) return;
     entt::entity draggedEntity = cmd.entity;
+    // 触控回放可能晚于结构更新，旧下标不得指向另一节点。
+    // 验证先于父子提升与初始快照，失败起笔不建立事务。
+    // 尾段也有子身份，不能只校验中间节点。
+    // 未携带令牌的经典调用仍按原有实体路径验证。
+    // 同一父重建后相邻节点可能占据旧索引，实体仍有效也不能放行。
+    if ( cmd.hitNodeToken != 0 ) {
+        const auto* note =
+            ctx.noteRegistry.try_get<const NoteComponent>(draggedEntity);
+        const int index = cmd.hitSubIndex.value_or(-1);
+        // 触控目标必须来自合法的交替 Hold/Flick 路径；普通 Note 不是自由锚点。
+        // 稳定令牌只证明身份，不证明前后几何连接，因此两者分别验证。
+        // 拒绝旧畸形数据时不自动改写或删除，保留原内容供明确修复。
+        if ( note && !Common::isCanonicalPolyline(
+                         note->m_subNotes,
+                         note->m_timestamp,
+                         note->m_trackIndex,
+                         note->m_isDraft ? -ctx.draftTrackCount : 0,
+                         note->m_isDraft ? -1 : ctx.trackCount - 1) )
+            return;
+        if ( !note || index < 0 ||
+             index >= static_cast<int>(note->m_subNotes.size()) ||
+             Common::Render::polylineTouchToken(
+                 note->m_subNotes[index].collaborationId) != cmd.hitNodeToken )
+            return;
+    }
     // 音符与采样必须分领域校验，两个 Registry 的同号实体并非同一对象。
     // 两个轨道域的子实体都提升到父折线，后面据父对象保存初始状态。
     if ( cmd.kind == ChartObjectKind::PlayerNote ||
@@ -804,8 +830,11 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
     }
     // 草稿从起始帧就使用统一有符号轨号，不能先进入只接受玩家轨的兼容路径。
     // 后面是否包含采样不会取消这一最初的跨域要求。
-    if ( cmd.kind == ChartObjectKind::DraftNote && !m_isFirstPolylineBodyDrag &&
-         !m_isPolylineSubDrag ) {
+    if ( cmd.kind == ChartObjectKind::DraftNote &&
+         ctx.draggedPart != HoverPart::HoldStart &&
+         ctx.draggedPart != HoverPart::HoldEnd &&
+         ctx.draggedPart != HoverPart::FlickArrow &&
+         !m_isFirstPolylineBodyDrag && !m_isPolylineSubDrag ) {
         // 首段身体有自己的有符号轨号计算，不进入整条折线跨域平移。
         m_usesUnifiedObjectDrag = true;
     }
@@ -921,8 +950,8 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
         // 该快照用于最终撤销，不以连续拖动后的临时位置作为 before。
         // 已选中根的首段身体仍是局部编辑，不带动其他选中物件。
         // 原有选择标志继续留在实体上，只缩小本次拖动的参与集合。
-        if ( primarySelected && !m_isFirstPolylineBodyDrag &&
-             !m_isPolylineSubDrag ) {
+        if ( primarySelected && ctx.draggedPart != HoverPart::HoldStart &&
+             !m_isFirstPolylineBodyDrag && !m_isPolylineSubDrag ) {
             // 模式 A: 拖动整个选中组
             auto view = registry.view<InteractionComponent, NoteComponent>();
             for ( auto entity : view ) {
@@ -1393,7 +1422,14 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
     }
     // 统一路径已接管时直接结束，避免同一输入被两套规则重复应用。
     // 普通路径必须找到主对象初始快照，不能临时以当前值作为起点。
-    if ( handleUnifiedDragUpdate(ctx, cmd) ) return;
+    // 首把手不能被横向跨域检测升级为整体移动，草稿轨尤其如此。
+    // 专用分支随后仍复用普通时间反投影、吸附和负时间钳制。
+    // 先在路由入口保护局部语义，不能等统一路径改完组件后再修正。
+    if ( ctx.draggedPart != HoverPart::HoldStart &&
+         ctx.draggedPart != HoverPart::HoldEnd &&
+         ctx.draggedPart != HoverPart::FlickArrow &&
+         handleUnifiedDragUpdate(ctx, cmd) )
+        return;
     // 普通音符拖动必须有参与快照，没有状态时不试图重建手势。
     // 主要实体还需存在于映射中，避免下标访问插入默认组件。
     if ( m_initialStates.empty() ) return;
@@ -1473,7 +1509,10 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
     int   maximumTrack = ctx.trackCount - 1;
     // 草稿局部编辑沿原轨道域钳制，不把玩家像素投影套到负轨号上。
     // 草稿区可能独立移动或改变宽度，原点取其右边界（绝对轨零）。
-    if ( m_isPolylineSubDrag &&
+    // 独立草稿尾参数也使用负轨投影，不能因未进入折线分支而回退玩家轨。
+    if ( (m_isPolylineSubDrag || ctx.draggedPart == HoverPart::FlickArrow ||
+          ctx.draggedPart == HoverPart::HoldStart ||
+          ctx.draggedPart == HoverPart::HoldEnd) &&
          m_initialStates.find(ctx.draggedEntity)->second.note.m_trackIndex <
              0 ) {
         const auto lanes = calculateCanvasLaneProjection(
@@ -1594,6 +1633,19 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         m_lastAppliedDragTargetTrack = targetTrack;
     }
 
+    // 显式首把手只作用于独立长条；以起笔快照尾时刻为不变量。
+    // 不改变轨道、不收集选中组，越过尾部时钳制为零长条预览。
+    // 取消和收尾仍消费相同初始快照，本分支不额外建立历史记录。
+    if ( ctx.draggedPart == HoverPart::HoldStart ) {
+        auto* note = ctx.noteRegistry.try_get<NoteComponent>(ctx.draggedEntity);
+        const auto& initial = primaryInitialState.note;
+        if ( note && initial.m_type == ::MMM::NoteType::HOLD ) {
+            const double end  = initial.m_timestamp + initial.m_duration;
+            note->m_timestamp = std::clamp(targetTime, 0.0, std::max(0.0, end));
+            note->m_duration  = end - note->m_timestamp;
+        }
+        return;
+    }
     if ( isPolylineSubDrag ) {
         auto* note = ctx.noteRegistry.try_get<NoteComponent>(ctx.draggedEntity);
         if ( !note ) return;
@@ -1795,10 +1847,9 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
                 }
                 // 允许的轨差由根轨到玩家左右边界推导，确保箭头不越界。
                 // 此处不移动根节点，属于局部箭头编辑。
-                note->m_dtrack =
-                    std::clamp(note->m_dtrack,
-                               -note->m_trackIndex,
-                               ctx.trackCount - 1 - note->m_trackIndex);
+                note->m_dtrack = std::clamp(note->m_dtrack,
+                                            minimumTrack - note->m_trackIndex,
+                                            maximumTrack - note->m_trackIndex);
             } else if ( ctx.draggedPart == HoverPart::PolylineNode &&
                         ctx.draggedSubIndex >= 0 &&
                         ctx.draggedSubIndex < (int)note->m_subNotes.size() ) {
@@ -2363,7 +2414,7 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
     m_hasLastAppliedDragTarget = false;
 }
 
-/// @brief 结束物件移动或局部编辑拖拽并提交动作。
+/// @brief 结束物件移动或局部编辑拖拽，按显式取消意图恢复或提交动作。
 /// @param ctx 会话上下文。
 /// @param cmd 拖拽结束命令。
 /// @warning 释放低频路径：汇总参与组件并构造历史动作，随后刷新打击事件。
@@ -2372,8 +2423,55 @@ void GrabTool::finishUnifiedDrag(SessionContext& ctx)
 /// @note 活动身份为空时直接返回；调用者不能用重复释放代替开始失败的清理。
 void GrabTool::handleEndDrag(SessionContext& ctx, const CmdEndDrag& cmd)
 {
-    (void)cmd;
     if ( ctx.draggedEntity == entt::null ) return;
+    if ( cmd.cancel ) {
+        // 初始快照在正式 StartDrag 建立，包含组内所有被拖动的物件。
+        // 修改仅覆盖仍然存在且仍含对应组件的实体，不重建已删除身份。
+        // 子实体和根组件一起恢复，避免折线下次同步继续使用预览位置。
+        // 音频采样使用独立注册表，数值相同的实体编号不能跨域写入。
+        // 回滚不生成新动作，已有 Undo/Redo 分支均不改变。
+        // 失效标记交给后续系统消费，不在取消边沿重新扫描整张谱面。
+        // 固定渲染集合只用于本次拖动，必须在恢复坐标之后清理。
+        // 不保留统一跨域和子项拖动模式，下一笔需要重新选择求解器。
+        // 教学完成事件只属于正式释放提交，取消不得推进演示步骤。
+        // 早返回阻止下方结构合并、位置批次与动作栈写入。
+        // 按下快照覆盖所有参与的父子实体，只回退本次预览，不能用 Undo
+        // 误撤销用户前一个操作；结构动作尚未在释放路径中提交。
+        for ( const auto& [entity, state] : m_initialStates ) {
+            if ( ctx.noteRegistry.valid(entity) &&
+                 ctx.noteRegistry.all_of<NoteComponent>(entity) )
+                ctx.noteRegistry.replace<NoteComponent>(entity, state.note);
+        }
+        for ( const auto& [entity, state] : m_initialSampleStates ) {
+            if ( ctx.sampleRegistry.valid(entity) &&
+                 ctx.sampleRegistry.all_of<SampleComponent>(entity) )
+                ctx.sampleRegistry.replace<SampleComponent>(entity,
+                                                            state.sample);
+        }
+        // 预览位置可能跨过可见性分桶；清除固定列表前使位置缓存失效。
+        ctx.isNoteOrderDirty             = true;
+        ctx.isNoteStatsDirty             = true;
+        ctx.isAnnotationRenderCacheDirty = true;
+        ctx.isTransformDirty             = true;
+        clearDraggingFlags(ctx, m_initialStates);
+        clearSampleDraggingFlags(ctx, m_initialSampleStates);
+        clearSessionDragState(ctx);
+        ctx.draggedEntity     = entt::null;
+        ctx.draggedObjectKind = ChartObjectKind::PlayerNote;
+        ctx.dragInitialNote.reset();
+        ctx.dragInitialSample.reset();
+        ctx.dragRenderPinnedEntities.clear();
+        ctx.dragSampleRenderPinnedEntities.clear();
+        m_initialStates.clear();
+        m_initialSampleStates.clear();
+        m_isFirstPolylineBodyDrag  = false;
+        m_usesUnifiedObjectDrag    = false;
+        m_isSampleOffsetDrag       = false;
+        m_isPolylineSubDrag        = false;
+        m_hasLastAppliedDragTarget = false;
+        // 不发布教学完成事件、不重建历史；下一次按下重新建立完整事务。
+        return;
+    }
     // 只发布释放事务的身份；几何仍由随后生成的正式快照验收。
     // 预览中的移动不能凭鼠标松开就推进教学步骤。
     auto& editEvent = ctx.walkthroughEditEvent;

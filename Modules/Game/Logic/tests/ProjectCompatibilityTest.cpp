@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <initializer_list>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <utility>
@@ -373,7 +374,7 @@ bool testBulkCurrentConfigMerge()
 bool testBeatLineToolbarStateMigration()
 {
     // 旧布尔只表达显示与隐藏，当前 NearCursor 场景用于验证更细的新模式不退化。
-    // m_scrollSnap 属于旧夹具已有字段，新版物件吸附开关由缺省兼容逻辑补齐。
+    // 旧夹具仍含项目级吸附总开关，新版应忽略它并独立恢复分拍策略。
     // 这里不验证真实滚轮行为，只检查存储形式到工作区值对象的转换。
     const nlohmann::json legacyJson{
         { "m_valid", true },
@@ -382,10 +383,10 @@ bool testBeatLineToolbarStateMigration()
     };
     const auto legacyState =
         legacyJson.get<MMM::ProjectWorkspaceToolbarState>();
-    // 旧布尔关闭值应映射成 Hidden，新版磁吸字段缺失时则继承兼容默认。
+    // 旧拍线布尔关闭值应映射成 Hidden，吸附总开关不再属于项目工作区。
     // 用分母 2 与 5 分别检验默认启用和默认未启用，不只验证掩码非零。
     if ( legacyState.m_beatLineDisplayMode != "Hidden" ||
-         legacyState.m_drawBeatLines || !legacyState.m_objectPlacementSnap ||
+         legacyState.m_drawBeatLines ||
          !MMM::Config::isCommonBeatDivisorEnabled(
              legacyState.m_commonBeatDivisorMask, 2) ||
          MMM::Config::isCommonBeatDivisorEnabled(
@@ -398,7 +399,6 @@ bool testBeatLineToolbarStateMigration()
     // 当前格式重新创建状态，不在 legacyState 上追加配置，避免迁移残留相互影响。
     currentState.m_valid                   = true;
     currentState.m_beatLineDisplayMode     = "NearCursor";
-    currentState.m_objectPlacementSnap     = true;
     currentState.m_objectPlacementSnapMode = "CommonBeatDivisors";
     currentState.m_commonBeatDivisorMask   = 0U;
     // 三分拍与七分拍都是明确选择，不能用恢复默认掩码替代按位保存用户选择。
@@ -416,7 +416,8 @@ bool testBeatLineToolbarStateMigration()
     if ( restoredState.m_beatLineDisplayMode != "NearCursor" ||
          !restoredState.m_drawBeatLines ||
          !currentJson.value("m_drawBeatLines", false) ||
-         !restoredState.m_objectPlacementSnap ||
+         currentJson.contains("m_scrollSnap") ||
+         currentJson.contains("m_objectPlacementSnap") ||
          restoredState.m_objectPlacementSnapMode != "CommonBeatDivisors" ||
          !MMM::Config::isCommonBeatDivisorEnabled(
              restoredState.m_commonBeatDivisorMask, 3) ||
@@ -528,6 +529,83 @@ bool testProjectToolbarDisplaySettingsAreGlobal()
     return true;
 }
 
+/// @brief 验证旧工程的磁吸开关不能重新成为项目配置来源。
+/// @details 四种显式开关组合分别覆盖，避免只忽略 true 或只忽略 false。
+/// 软件配置的显式选择仍由 MagnetDefaultsTest 验证，不在这里强制打开。
+/// @return 两条旧项目存储路径均隔离且其它项目字段保留时返回 true。
+/// @note 工作区字段删除由类型边界约束，UI 仍可修改完整的软件配置。
+/// @note 本用例不修改用户配置或触发工程磁盘保存。
+/// @note 安卓实际切换流程另用隔离应用和工程副本验收。
+bool testProjectMagnetSwitchesAreGlobal()
+{
+    // 本用例只要求旧项目不拥有软件开关，不读取当前软件保存的用户偏好。
+    // 类型默认值与持久化开关分别验证，迁移不能覆盖已有的显式关闭。
+    const MMM::Config::EditorSettings defaults;
+    for ( const bool scroll : { false, true } ) {
+        for ( const bool placement : { false, true } ) {
+            // 每种组合重新创建对象，排除上一组合遗留的字段或有效标记。
+            // 覆盖对象存在性也参与断言，不能通过读取时丢弃整个对象通过测试。
+            MMM::ProjectSettings settings;
+            settings.m_editorOverride.emplace();
+            auto& editor               = *settings.m_editorOverride;
+            editor.scrollSnap          = scroll;
+            editor.objectPlacementSnap = placement;
+            // 使用非默认项目字段，证明迁移没有通过丢弃整个覆盖对象实现。
+            editor.beatDivisor               = 7;
+            const nlohmann::json encoded     = settings;
+            const auto&          savedEditor = encoded.at("m_editorOverride");
+            const auto&          savedToolbar =
+                encoded.at("m_workspace").at("m_toolbarState");
+            // 新写入的覆盖对象与工作区都不得持久化这两个全局字段。
+            // 检查键不存在，而非恰好等于默认值，防止今后再次发生恢复覆盖。
+            if ( savedEditor.contains("scrollSnap") ||
+                 savedEditor.contains("objectPlacementSnap") ||
+                 savedToolbar.contains("m_scrollSnap") ||
+                 savedToolbar.contains("m_objectPlacementSnap") ) {
+                XERROR("Project still persists application magnet switches");
+                return false;
+            }
+            // 基础形状来自当前序列化，只有旧磁吸键由本用例手工补入。
+            // 这样能隔离磁吸迁移，不依赖其它历史格式字段的兼容巧合。
+            auto legacy = encoded;
+            // 用旧版真实形状同时放入编辑器覆盖和有效工作区，不能只测其中一条。
+            legacy["m_editorOverride"]["scrollSnap"]          = scroll;
+            legacy["m_editorOverride"]["objectPlacementSnap"] = placement;
+            auto& toolbar           = legacy["m_workspace"]["m_toolbarState"];
+            toolbar["m_valid"]      = true;
+            toolbar["m_scrollSnap"] = scroll;
+            toolbar["m_objectPlacementSnap"] = placement;
+            toolbar["m_beatDivisor"]         = 9;
+            const auto restored = legacy.get<MMM::ProjectSettings>();
+            // 旧总开关不再写入运行字段，其它覆盖和工作区内容继续有效。
+            // 先检查 optional，避免失败的迁移使测试自身解引用无效对象。
+            if ( !restored.m_editorOverride ||
+                 restored.m_editorOverride->scrollSnap != defaults.scrollSnap ||
+                 restored.m_editorOverride->objectPlacementSnap !=
+                     defaults.objectPlacementSnap ||
+                 restored.m_editorOverride->beatDivisor != 7 ||
+                 !restored.m_workspace.m_toolbarState.m_valid ||
+                 restored.m_workspace.m_toolbarState.m_beatDivisor != 9 ) {
+                XERROR(
+                    "Legacy project magnet switches remained project-scoped");
+                return false;
+            }
+            // 二次编码模拟旧项目被新版本正常保存的路径。
+            // 必须去掉旧键，而不是仅在某一次运行时暂时忽略。
+            const nlohmann::json rewritten = restored;
+            const auto&          rewrittenToolbar =
+                rewritten.at("m_workspace").at("m_toolbarState");
+            // 读取旧项目后再保存也应清除旧键，防止新版本继续传播关闭状态。
+            if ( rewrittenToolbar.contains("m_scrollSnap") ||
+                 rewrittenToolbar.contains("m_objectPlacementSnap") ) {
+                XERROR("Legacy project magnet switches were written back");
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 /// @brief 运行旧版项目音频配置兼容测试。
@@ -546,7 +624,8 @@ int main()
                    testBulkCurrentConfigMerge() &&
                    testBeatLineToolbarStateMigration() &&
                    testProjectAutoBackupOverrideCompatibility() &&
-                   testProjectToolbarDisplaySettingsAreGlobal()
+                   testProjectToolbarDisplaySettingsAreGlobal() &&
+                   testProjectMagnetSwitchesAreGlobal()
                ? 0
                : 1;
 }

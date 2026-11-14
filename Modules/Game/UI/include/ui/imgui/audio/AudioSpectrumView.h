@@ -1,4 +1,5 @@
 #pragma once
+#include "ui/workspace/AudioPlotTouch.h"
 
 #include "config/visual/SpectrumConfig.h"
 #include "graphic/imguivk/mesh/VKBasicVertex.h"
@@ -52,7 +53,13 @@ public:
                         vk::Device& logicalDevice, vk::CommandPool& cmdPool,
                         vk::Queue& queue) override;
 
+    /// @brief 关闭窗口时立即结束触控定位，不留待再次打开才提交。
+    void setOpen(bool open) override;
+
 private:
+    /// @brief 两个声道共用固定大小的触控导航状态，不持有快照。
+    AudioPlotTouch m_touchNavigation;
+
     /// @brief 离屏绘制频谱纹理分块时使用的命令。
     struct SpectrumDrawCmd {
         /// @brief 需要绑定的频谱纹理。

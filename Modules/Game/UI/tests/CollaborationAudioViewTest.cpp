@@ -12,12 +12,45 @@
 #include "ui/imgui/audio/AudioSpectrumView.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "ui/imgui/audio/AudioWaveformView.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace
 {
+/// @brief 记录真实控制器是否经平台入口提交窗口与关闭状态，不创建业务替身。
+/// @details 菜单布局由 MobileDockLayoutTest
+/// 验证；此处专门防止控制器绕过该入口。
+struct ControllerPresentation final : MMM::UI::IWorkspacePresentation {
+    /// @brief 下一帧模拟平台菜单已经返回明确关闭命令。
+    bool m_closeRequested{};
+    /// @brief 记录身份与关闭指针契约是否同时满足。
+    bool m_routed{};
+    /// @brief 原生测试窗口之外不需要宿主工作区。
+    void renderWorkspace(MMM::UI::MainDockSpaceUI&,
+                         MMM::UI::UIManager&) override
+    {
+    }
+    /// @brief 与移动外壳相同，关闭桌面 X 反馈路径。
+    bool allowsHoverFeedback() const override { return false; }
+    /// @brief 在真实 Begin/End
+    /// 作用域中消费关闭指针，返回隐藏内容以隔离音频参数。
+    /// @warning 只由测试帧调用，不执行模型操作、文件访问或等待。
+    bool beginWindow(std::string_view id, const std::string& title, bool* open,
+                     ImGuiWindowFlags flags) override
+    {
+        // 只有稳定资源身份和原始打开状态都到达，关闭动作才可安全交给外壳。
+        m_routed = id.starts_with("TrackController_") && title.ends_with(id) &&
+                   open && *open;
+        IWorkspacePresentation::beginWindow(id, title, nullptr, flags);
+        if ( m_closeRequested && open ) *open = false;
+        // 测试入口路由即可；折叠内容不能改变控制器所属的真实窗口生命周期。
+        return false;
+    }
+};
+
 /// @brief 验证主画布隐藏后音频分析仍读取最新播放、暂停与跳转状态。
 /// @param manager 本进程唯一的 UI 管理器，保持 Clay 上下文生命周期连续。
 /// @return 隐藏画布持续消费标题和分析快照但不恢复绘制时返回 true。
@@ -188,6 +221,39 @@ bool checkGuestAudio(MMM::UI::UIManager& manager)
     if ( !passed ) XERROR("Collaboration read-only audio view regression");
     return passed;
 }
+/// @brief 真实主轨和音效控制器都必须把稳定身份及关闭指针交给平台入口。
+/// @details 若控制器直接调用 ImGui::Begin，本测试不会收到路由和关闭请求。
+/// 绘制主体保持折叠，检查关闭契约不需要初始化音轨或修改任何播放参数。
+bool checkControllerWindowRouting(MMM::UI::UIManager& manager)
+{
+    ControllerPresentation       presentation;
+    MMM::UI::WorkspaceFrameScope frameScope(presentation);
+    bool                         passed = true;
+    for ( const auto type :
+          { MMM::UI::AudioTrackControllerUI::TrackType::Main,
+            MMM::UI::AudioTrackControllerUI::TrackType::Effect } ) {
+        MMM::UI::AudioTrackControllerUI controller(
+            type == MMM::UI::AudioTrackControllerUI::TrackType::Main
+                ? "routing-main"
+                : "routing-effect",
+            "Routing controller",
+            type);
+        // 初帧只验证稳定身份和可关闭状态，不在测试中直接改控制器字段。
+        presentation.m_closeRequested = false;
+        presentation.m_routed         = false;
+        // 两种轨道使用不同资源身份，不能因上一个窗口已存在而假通过。
+        // 关闭状态从公开接口读取，不访问控制器私有字段。
+        // 每个窗口仍完成真实 Begin/End，不用回调计数代替实际路径执行。
+        drawController(manager, controller, { -1, -1 }, false);
+        passed &= presentation.m_routed && controller.isOpen();
+        // 下一帧由平台明确消费关闭命令，主轨和音效轨都须反映到公开打开状态。
+        presentation.m_closeRequested = true;
+        drawController(manager, controller, { -1, -1 }, false);
+        passed &= presentation.m_routed && !controller.isOpen();
+    }
+    if ( !passed ) XERROR("Audio controller bypassed workspace close contract");
+    return passed;
+}
 }  // namespace
 
 /// @brief 使用隔离的真实 ImGui 上下文运行访客音轨浏览回归。
@@ -213,7 +279,9 @@ int main()
         // 成为下一次初始化目标。 全部窗口先于 ImGui
         // 上下文析构，维持生产代码的资源释放顺序。
         MMM::UI::UIManager manager;
-        passed = checkGuestAudio(manager) && checkHiddenCanvasPlayback(manager);
+        passed = checkGuestAudio(manager) &&
+                 checkHiddenCanvasPlayback(manager) &&
+                 checkControllerWindowRouting(manager);
     }
     // 所有拥有 UI 窗口的对象已销毁，随后释放全局上下文。
     ImGui::DestroyContext();

@@ -1,5 +1,7 @@
 #include "ui/interaction/EditorInteraction.h"
+#include "common/SelectionOperation.h"
 #include "config/EditorSettings.h"
+#include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "ui/imgui/menu/MainMenuTypes.h"
@@ -22,8 +24,82 @@ class ClassicDesktopProfile final : public IEditorInteractionProfile
 public:
     /// @brief 稳定身份与旧版没有方案字段的配置兼容。
     std::string_view id() const override { return "classic-desktop"; }
-    /// @brief 初期名称不依赖皮肤或翻译初始化顺序。
-    std::string_view name() const override { return "经典桌面"; }
+    /// @brief 名称随当前语言更新，稳定方案 ID 不参与翻译。
+    std::string_view name() const override
+    {
+        return TR_CACHE("ui.interaction.classic_desktop").view();
+    }
+};
+/// @brief 触控方案复用公共编辑命令，手势状态仍由各个画布独立持有。
+/// @details 长按、轻点回放和触摸菜单按此能力接通，切换方案不伪造键盘修饰键。
+class TouchGestureProfile final : public IEditorInteractionProfile
+{
+public:
+    /// @brief 固定身份用于设备策略和持久化请求，显示名可随语言切换。
+    std::string_view id() const override { return "touch-gestures"; }
+    /// @brief 名称使用全局翻译资源，不在每帧临时构造字符串。
+    std::string_view name() const override
+    {
+        return TR_CACHE("ui.interaction.touch_gestures").view();
+    }
+    /// @brief 只有此方案授权触控长按解释，经典及纯鼠标方案默认关闭。
+    /// @warning 每帧只返回固定布尔值，不访问手势状态或逻辑会话。
+    bool touchGestures() const override { return true; }
+    /// @brief Timing 点按与范围拖动无需键盘，起笔类型由时间线已有规则锁存。
+    /// @warning UI 热路径只返回常量，不合成 Shift 或改变普通控件的输入。
+    bool automaticTimingDraw() const override { return true; }
+    /// @brief 触屏长按菜单复用时间线完整点与段落选择能力。
+    /// @warning 每帧常量查询；具体菜单外观由移动私有实现负责。
+    bool selectionContextMenu() const override { return true; }
+    /// @brief 临时吸附意图只保存在触控方案内，不覆盖桌面和纯鼠标状态。
+    /// @warning 起笔和连续更新只读取 UI 线程标量，不改写键盘输入。
+    bool bypassSnapping() const override { return m_bypassSnap; }
+    /// @brief 下一笔可临时忽略吸附，工具菜单点击不产生谱面历史。
+    void setBypassSnapping(bool bypass) override { m_bypassSnap = bypass; }
+    /// @brief 主画布使用固定轨道绘制，Timing 等表面保留各自输入约定。
+    /// @warning 每次起笔只比较表面枚举，不访问逻辑线程或修改配置。
+    bool noteHoldBrush(Surface surface) const override
+    {
+        return surface == Surface::MainCanvas && m_noteHoldOnly;
+    }
+    /// @brief 工作台只修改触控方案，切换工具或谱面仍保留最近绘制意图。
+    void setNoteHoldBrush(bool enabled) override { m_noteHoldOnly = enabled; }
+    /// @brief 物件擦除只属于触控主画布，不能泄漏到桌面与 Timing。
+    /// @warning UI 热路径只读取标量，不访问会话。
+    bool objectEraser() const override { return m_objectEraser; }
+    /// @brief 后续起笔采用新意图，活动笔画由呈现层取消而非提交。
+    void setObjectEraser(bool enabled) override { m_objectEraser = enabled; }
+    /// @brief 主画布持续绘制无需修饰键，具体形状由起笔策略限制。
+    /// @warning 每帧只比较表面枚举，不改写真实 Shift，其他表面沿用原语义。
+    bool extendBrush(Surface surface, bool shift) const override
+    {
+        return surface == Surface::MainCanvas || shift;
+    }
+    /// @brief 触控使用显式集合操作，不借用桌面 Ctrl 状态。
+    /// @warning UI 热路径每帧只读取本方案标量，不访问逻辑线程或持锁状态。
+    std::optional<Logic::SelectionOperation> selectionOperation() const override
+    {
+        return m_selectionOperation;
+    }
+    /// @brief 只改变后续选择意图，按钮本身不创建编辑或修改现有选区。
+    /// @param operation UI 线程在点击模式按钮时提交的集合运算。
+    void setSelectionOperation(Logic::SelectionOperation operation) override
+    {
+        m_selectionOperation = operation;
+    }
+
+private:
+    /// @brief 简单绘制默认开启，折线需由工作台明确选择，避免横向抖动误建折线。
+    bool m_noteHoldOnly{ true };
+    /// @brief 默认仍为正常绘制，物件删除需要用户显式开启。
+    bool m_objectEraser{ false };
+    /// @brief 临时连续落点开关；只在触控菜单离散激活时改变。
+    bool m_bypassSnap{ false };
+    /// @brief 状态归触控方案所有，不与经典桌面或纯鼠标方案相互覆盖。
+    /// 切换谱面继续沿用当前意图，点选与框选从同一标量读取集合操作。
+    Logic::SelectionOperation m_selectionOperation{
+        Logic::SelectionOperation::Replace
+    };
 };
 /// @brief 纯鼠标方案通过独立语义选项和上下文菜单提供编辑入口。
 /// @details 意图按表面解释，不改写全局 Shift，避免影响框选和滚动。
@@ -33,7 +109,10 @@ public:
     /// @brief 稳定身份供设置页保存，经典方案仍为旧配置默认值。
     std::string_view id() const override { return "mouse-only"; }
     /// @brief 与经典方案并列显示，用户可在交互设置中切换。
-    std::string_view name() const override { return "纯鼠标"; }
+    std::string_view name() const override
+    {
+        return TR_CACHE("ui.interaction.mouse_only").view();
+    }
     /// @brief 选中工具提供右键菜单，绘制工具仍保留右键擦除。
     /// @warning 每帧常量策略，不持有弹窗或画布状态。
     bool selectionContextMenu() const override { return true; }
@@ -153,6 +232,7 @@ struct Registry {
     {
         m_entries.push_back(std::make_unique<ClassicDesktopProfile>());
         m_entries.push_back(std::make_unique<MouseOnlyProfile>());
+        m_entries.push_back(std::make_unique<TouchGestureProfile>());
         m_active = m_entries.front().get();
     }
 };

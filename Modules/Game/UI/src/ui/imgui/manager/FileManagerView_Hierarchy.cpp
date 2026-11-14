@@ -22,9 +22,11 @@
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
 #include "ui/imgui/manager/FileManagerView.h"
 #include "ui/imgui/manager/NewBeatmapWizard.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/DesktopPathUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -799,7 +801,9 @@ bool copyFilesystemEntry(const std::filesystem::path& source,
 ///
 /// Clay 负责根标题与表格的纵向分配，ImGui
 /// 表格提供冻结表头、列显隐、排序和滚动。 列宽按当前字体、DPI
-/// 和容器宽度计算，名称列吸收剩余空间，修改时间列可拉伸。
+/// 和容器宽度计算，桌面名称列吸收剩余空间，修改时间列可拉伸。
+/// 触屏抽屉仅显示名称主列，避免依赖悬浮才能辨认被裁剪的文件名。
+/// 两种表格使用独立身份，移动端重新计算列宽，不读取桌面保存的像素尺寸。
 /// @warning UI 热路径：每帧绘制；文件系统访问由目录快照缓存限制在失效重建时。
 void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
                                               UIManager*     sourceManager)
@@ -834,16 +838,43 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
         Sizing::Grow(),
         Sizing::Fixed(ImGui::GetFrameHeight()),
         [this, projectRoot](Clay_BoundingBox r, bool isHovered) {
-            // 可见名只展示根目录 basename，完整路径放入 tooltip。
-            std::string rootName = Config::pathToUtf8(projectRoot.filename());
+            // 展示身份来自根切换后准备的快照，不能直接使用 SAF 私有目录
+            // basename。 普通桌面根仍由原 basename
+            // 构成，平台映射只替换可见文字。
             Utils::renderScrollingCollapsingHeader(
-                "ProjectRootHeader", rootName, &m_showRoot, r);
-            if ( ImGui::IsItemHovered() ) {
+                "ProjectRootHeader", m_rootDisplayName, &m_showRoot, r);
+            if ( workspaceAllowsHoverFeedback() && ImGui::IsItemHovered() ) {
                 // tooltip 帮助区分同名但位于不同位置的项目。
-                std::string fullPath = Config::pathToUtf8(projectRoot);
+                std::string fullPath = m_rootDisplayLocation.empty()
+                                           ? Config::pathToUtf8(projectRoot)
+                                           : m_rootDisplayLocation;
                 ImGui::SetTooltip("%s", fullPath.c_str());
             }
         });
+
+    if ( !workspaceAllowsHoverFeedback() && !m_rootDisplayLocation.empty() ) {
+        // 名称与来源分成两行，路径说明不占用根节点标题的可点击空间。
+        // 先测量换行高度再交给 Clay，使文件表格起点跟随真实文字高度。
+        // 只读已有字符串与字体，不在此处解析 URI 或读取授权映射。
+        // 触屏将来源常驻换行显示，不依赖悬浮，也不让长路径撑出横向画布。
+        const float width =
+            std::max(1.0f, layoutContext.m_avail.x - 2 * rootPadding);
+        const float height =
+            ImGui::CalcTextSize(
+                m_rootDisplayLocation.c_str(), nullptr, false, width)
+                .y;
+        treeVBox.addElement(
+            "ProjectRootLocation",
+            Sizing::Grow(),
+            Sizing::Fixed(height),
+            [this](Clay_BoundingBox r, bool) {
+                ImGui::SetCursorScreenPos({ r.x, r.y });
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + r.width);
+                // 来源文本止于抽屉右边界，长目录层级不产生横向内容宽度。
+                ImGui::TextDisabled("%s", m_rootDisplayLocation.c_str());
+                ImGui::PopTextWrapPos();
+            });
+    }
 
     if ( m_showRoot ) {
         // 展开根节点后让表格占满剩余纵向空间。
@@ -859,13 +890,23 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
                     Utils::VerticalScrollbarStyleScope verticalScrollbarStyle(
                         dpiScale);
                     // 表格允许用户调整、重排、隐藏和排序列，并在内部纵向滚动。
-                    const ImGuiTableFlags tableFlags =
+                    const bool touchLayout = !workspaceAllowsHoverFeedback();
+                    ImGuiTableFlags tableFlags =
                         ImGuiTableFlags_BordersV |
                         ImGuiTableFlags_BordersOuterH | ImGuiTableFlags_RowBg |
                         ImGuiTableFlags_Resizable |
                         ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable |
                         ImGuiTableFlags_Sortable | ImGuiTableFlags_ScrollY |
                         ImGuiTableFlags_SizingStretchProp;
+                    // 触屏抽屉优先给名称整行宽度，不能让日期等桌面列挤走导航入口。
+                    // 使用独立身份且不保存列配置，旧版窄列宽不会在重启后重新生效。
+                    // 桌面仍保留原表格身份、列显隐、重排与持久化规则。
+                    if ( touchLayout ) {
+                        tableFlags &= ~(ImGuiTableFlags_Resizable |
+                                        ImGuiTableFlags_Reorderable |
+                                        ImGuiTableFlags_Hideable);
+                        tableFlags |= ImGuiTableFlags_NoSavedSettings;
+                    }
                     // 宽度下限结合字体缩放，避免翻译或大字体被裁切。
                     const auto& tableStyle = ImGui::GetStyle();
                     const float fontScale  = ImGui::GetFontSize() / 17.0f;
@@ -897,7 +938,8 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
                         r.width - typeColumnWidth - sizeColumnWidth -
                             modifiedColumnPreferredWidth - tableReserveWidth);
 
-                    if ( ImGui::BeginTable("FileTreeTableV2",
+                    if ( ImGui::BeginTable(touchLayout ? "FileTreeTouchTable"
+                                                       : "FileTreeTableV2",
                                            4,
                                            tableFlags,
                                            { r.width, r.height }) ) {
@@ -908,23 +950,28 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
                         ImGui::TableSetupColumn(
                             TR("ui.file_manager.column_name").data(),
                             ImGuiTableColumnFlags_DefaultSort |
-                                ImGuiTableColumnFlags_WidthFixed |
+                                (touchLayout
+                                     ? ImGuiTableColumnFlags_WidthStretch
+                                     : ImGuiTableColumnFlags_WidthFixed) |
                                 ImGuiTableColumnFlags_PreferSortAscending,
-                            nameColumnWidth);
+                            touchLayout ? 1.0f : nameColumnWidth);
+                        // 保留列索引与排序字段映射；移动端只改变展示，不改文件操作。
+                        const ImGuiTableColumnFlags detailFlags =
+                            touchLayout ? ImGuiTableColumnFlags_Disabled : 0;
                         ImGui::TableSetupColumn(
                             TR("ui.file_manager.column_type").data(),
-                            ImGuiTableColumnFlags_DefaultHide |
+                            detailFlags | ImGuiTableColumnFlags_DefaultHide |
                                 ImGuiTableColumnFlags_WidthFixed |
                                 ImGuiTableColumnFlags_PreferSortAscending,
                             typeColumnWidth);
                         ImGui::TableSetupColumn(
                             TR("ui.file_manager.column_size").data(),
-                            ImGuiTableColumnFlags_WidthFixed |
+                            detailFlags | ImGuiTableColumnFlags_WidthFixed |
                                 ImGuiTableColumnFlags_PreferSortAscending,
                             sizeColumnWidth);
                         ImGui::TableSetupColumn(
                             TR("ui.file_manager.column_modified_time").data(),
-                            ImGuiTableColumnFlags_WidthStretch |
+                            detailFlags | ImGuiTableColumnFlags_WidthStretch |
                                 ImGuiTableColumnFlags_PreferSortDescending,
                             1.0f);
                         if ( ImGuiTable* table = ImGui::GetCurrentTable() ) {
@@ -966,7 +1013,8 @@ void FileManagerView::renderActiveProjectView(LayoutContext& layoutContext,
 /// @param path 当前目录绝对路径。
 /// @param sourceManager 用于激活谱面、音频或打开相关视图。
 ///
-/// 每个条目占一行四列；第一列是透明背景 TreeNode，自行以整行 hover 色覆盖表格。
+/// 每个条目保留四列索引；触屏只启用名称，桌面继续按用户列设置绘制。
+/// 第一列是透明背景 TreeNode，自行以整行 hover 色覆盖表格。
 /// 只有目录节点处于展开状态时才递归获取子快照，折叠目录不会触发磁盘读取。
 /// @warning UI 热路径：按可见展开树线性遍历缓存条目，不得每帧全量扫描项目根。
 void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
@@ -976,8 +1024,9 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
     const auto& snapshot = getDirectorySnapshot(path);
     const float dpiScale =
         std::max(1.0f, Config::AppConfig::instance().getWindowContentScale());
-    // 行高至少为 24 个缩放像素，并容纳当前 ImGui Frame。
-    const float itemH = std::max(24.0f * dpiScale, ImGui::GetFrameHeight());
+    // 桌面保留原有高度；触屏命中区使用统一下限，并容纳当前 ImGui Frame。
+    const float itemH = workspaceTableItemHeight(
+        std::max(24.0f * dpiScale, ImGui::GetFrameHeight()), dpiScale);
 
     for ( const auto& entry : snapshot.entries ) {
         // 固定最小行高让所有列和整行 hover 区域一致。
@@ -985,8 +1034,8 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
 
         // 首列承载树层级、图标、名称和激活动作。
         ImGui::TableNextColumn();
-        const std::string displayName =
-            fmt::format("{}  {}", fileEntryIcon(entry), entry.filename);
+        // 图标与原始文件名单独传入，触屏换行不能把图标挤成独立一行。
+        // 显示分离不改变路径 ID、排序、激活或拖放使用的目录快照。
         const float nameColumnWidth = ImGui::GetContentRegionAvail().x;
         // TreeNode 默认 header 颜色设透明，整行 hover 由表格背景统一处理。
         const ImVec4 transparent{ 0.0f, 0.0f, 0.0f, 0.0f };
@@ -996,15 +1045,17 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
         // 文件作为叶节点，目录返回 open 状态决定是否递归。
         const bool open = Utils::renderScrollingTreeNode(
             entry.fullPath,
-            displayName,
+            entry.filename,
             nameColumnWidth,
             itemH,
             !entry.isDirectory,
             [this, &entry, sourceManager]() {
                 // 激活回调在当前条目引用仍有效的同一绘制调用内执行。
-                activateFileEntry(entry, sourceManager);
+                if ( !Interaction::activeProfile().touchGestures() )
+                    activateFileEntry(entry, sourceManager);
             },
-            "");
+            "",
+            fileEntryIcon(entry));
         ImGui::PopStyleColor(3);
 
         // 以 ImGui 表格行边界和首列结算高度判定 Hover，避免手算偏差。
@@ -1024,7 +1075,8 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
         }
         // 条目右键菜单与第一列 item 绑定，并允许行 hover 显示完整路径。
         renderFileEntryContextMenu(entry, sourceManager);
-        if ( rowHovered ) {
+        if ( rowHovered && workspaceAllowsHoverFeedback() ) {
+            // 手指停留不代表鼠标悬浮，移动端不弹出私有副本的完整路径。
             Utils::renderTooltip(entry.fullPath.c_str());
         }
 
@@ -1035,14 +1087,16 @@ void FileManagerView::drawDirectoryRecursive(const std::filesystem::path& path,
         }
 
         // 大小列由表格 API 自行跳过隐藏状态，文本构造保持轻量。
-        ImGui::TableNextColumn();
-        const std::string sizeText = formatSizeColumn(entry);
-        ImGui::TextUnformatted(sizeText.c_str());
+        if ( ImGui::TableNextColumn() ) {
+            const std::string sizeText = formatSizeColumn(entry);
+            ImGui::TextUnformatted(sizeText.c_str());
+        }
 
         // 修改时间在快照构建时已读取，此处只做本地格式化。
-        ImGui::TableNextColumn();
-        const std::string modifiedText = formatModifiedColumn(entry);
-        ImGui::TextUnformatted(modifiedText.c_str());
+        if ( ImGui::TableNextColumn() ) {
+            const std::string modifiedText = formatModifiedColumn(entry);
+            ImGui::TextUnformatted(modifiedText.c_str());
+        }
 
         if ( entry.isDirectory && open ) {
             // 递归只发生在用户展开目录时，结束后必须对称 TreePop。
@@ -1394,6 +1448,32 @@ void FileManagerView::renderFileSortContextMenu()
 /// 并提供显式缓存刷新；剪贴板无效时保持粘贴项可见但禁用。
 void FileManagerView::renderFileBackgroundContextMenu(UIManager* sourceManager)
 {
+    if ( Interaction::activeProfile().touchGestures() ) {
+        // 空目录也必须有新建／粘贴入口；行已认领时同一个分类器拒绝背景接管。
+        // 表格滚动子窗仍属于文件面板，标题和其他面板则不在该窗口命中内。
+        const ImVec2 min = ImGui::GetWindowPos(), size = ImGui::GetWindowSize();
+        // 起点在条目时，先提交的行已锁定稳定身份，背景不能借用同一长按。
+        // 空白只提供根目录操作，不把鼠标当前位置推断成目标子目录。
+        // 弹层存在时撤去许可，关闭后残留抬手不能变成目录菜单。
+        // 纵向滚动使用原始位移峰值，经过空白不会重新开始计时。
+        // 没有 Tap 分支，普通空白轻点不会弹菜单或创建文件。
+        // 文件写入仍由已有入口复核路径和错误，不在每帧访问文件系统。
+        // 窗口命中包含表格子窗，相邻面板仍由原生遮挡规则排除。
+        const bool hit = TouchReadPress::originInside(
+            min, { min.x + size.x, min.y + size.y });
+        const bool blocked = ImGui::IsPopupOpen(
+            nullptr,
+            ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        const auto press = m_resourcePress.update(
+            ImGui::GetID("FileTreeBackgroundContextMenu"),
+            hit && !blocked &&
+                ImGui::IsWindowHovered(
+                    ImGuiHoveredFlags_ChildWindows |
+                    ImGuiHoveredFlags_AllowWhenBlockedByActiveItem),
+            hit && !blocked);
+        if ( press == TouchReadPress::Result::Hold )
+            FeedbackOpenPopup("FileTreeBackgroundContextMenu");
+    }
     // 右键只在没有条目 item 命中的窗口区域打开。
     constexpr ImGuiPopupFlags popupFlags =
         ImGuiPopupFlags_MouseButtonRight | ImGuiPopupFlags_NoOpenOverItems;
@@ -1444,6 +1524,29 @@ void FileManagerView::renderFileEntryContextMenu(
 {
     // 完整路径构造稳定且唯一的上下文菜单 ID。
     const std::string popupId = "FileEntryContext_" + entry.fullPath;
+    // 触控使用原始 Down 冻结条目，滑动和长按结束不补交普通行点击。
+    // 目录箭头仍走原 TreeNode 展开，文件轻点只打开一次，不要求双击。
+    if ( Interaction::activeProfile().touchGestures() ) {
+        const bool hit = TouchReadPress::originInside(ImGui::GetItemRectMin(),
+                                                      ImGui::GetItemRectMax());
+        // 完整路径构成稳定目标，排序后的可见位置不是资源身份。
+        // 几何失效直接拒绝待定长按，不能在移动到另一行后恢复计时。
+        // 菜单复用已有文件操作及确认流程，不在输入分类器直接写文件。
+        const auto press = m_resourcePress.update(
+            ImGui::GetID(popupId.c_str()),
+            hit && ImGui::IsWindowHovered(
+                       ImGuiHoveredFlags_AllowWhenBlockedByActiveItem),
+            hit && !ImGui::IsPopupOpen(nullptr,
+                                       ImGuiPopupFlags_AnyPopupId |
+                                           ImGuiPopupFlags_AnyPopupLevel));
+        if ( press == TouchReadPress::Result::Tap && !entry.isDirectory )
+            activateFileEntry(entry, sourceManager);
+        if ( press == TouchReadPress::Result::Hold )
+            FeedbackOpenPopup(popupId.c_str());
+    } else {
+        // 切回经典方案后，上一触屏代际的残留 Up 不得重新激活资源。
+        m_resourcePress.cancel();
+    }
     if ( !ImGui::BeginPopupContextItem(popupId.c_str(),
                                        ImGuiPopupFlags_MouseButtonRight) ) {
         return;
@@ -1973,18 +2076,25 @@ void FileManagerView::renderFileOperationPopups(float dpiScale)
                               &open,
                               ImGuiWindowFlags_NoCollapse,
                               { 360.0f * dpiScale, 0.0f }) ) {
+            // 名称输入限定在模态可见宽度内，防止键盘重定位后产生横向滚动。
+            if ( !workspaceAllowsHoverFeedback() ) ImGui::SetScrollX(0);
             ImGui::TextUnformatted(label);
             if ( m_shouldFocusFileOperationInput ) {
                 // 只在弹窗首次出现时把键盘焦点交给输入框。
                 ImGui::SetKeyboardFocusHere();
                 m_shouldFocusFileOperationInput = false;
             }
-            // EnterReturnsTrue 与确认按钮共用同一回调。
+            // 触屏字段使用窗口真实余宽，不继承资源表格的列宽或 item width。
+            if ( !workspaceAllowsHoverFeedback() ) ImGui::SetNextItemWidth(-1);
+            // 桌面 Enter 与确认共用回调；手机只由显式按钮提交文件操作。
             const bool enterPressed =
                 ImGui::InputText("##FileManagerOperationName",
                                  m_fileOperationInput.data(),
                                  m_fileOperationInput.size(),
-                                 ImGuiInputTextFlags_EnterReturnsTrue);
+                                 workspaceAllowsHoverFeedback()
+                                     ? ImGuiInputTextFlags_EnterReturnsTrue
+                                     : ImGuiInputTextFlags_None) &&
+                workspaceAllowsHoverFeedback();
             if ( !m_fileOperationError.empty() ) {
                 // 失败保留弹窗和输入，方便用户直接修正。
                 ImGui::TextDisabled("%s", m_fileOperationError.c_str());

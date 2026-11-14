@@ -8,18 +8,21 @@
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/Translation.h"
+#include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectResourceService.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "mmm/project/PackageFileTypes.h"
 #include "mmm/project/PackagePathFilter.h"
 #include "mmm/project/Project.h"
+#include "ui/imgui/menu/package/BmsExportTouch.h"
 #include "ui/imgui/menu/package/PackageDefaultSelection.h"
 #include "ui/imgui/menu/package/PackageDialogState.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/MobileInputEditor.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <array>
@@ -75,11 +78,51 @@ void centerNextItem(float itemWidth)
 /// @return 按钮被点击时返回 true。
 /// @warning UI 绘制路径：只调整游标并调用统一反馈按钮。
 /// @note 统一反馈入口负责悬停与点击音效，本函数只封装布局。
+/// 长名称保持原字号，文字高度参与父窗滚动布局，不使用缩小字体或悬停提示补救。
+/// 展示副本仅用于当帧绘制，原按钮标签继续负责导航 ID 与反馈身份。
+/// 格式扩展名优先完整换行，只有更窄的窗口才继续按可用宽度折行。
 bool drawCenteredButton(const char* label, ImVec2 size)
 {
+    // 长格式名按当前字号换行，不能只按固定 dp 估计英文名称宽度。
+    // 保持完整标签作为按钮身份，导航激活、音效和轻点仍走统一入口。
+    const auto& style     = ImGui::GetStyle();
+    const float textWidth = std::max(1.f, size.x - style.FramePadding.x * 2);
+    const bool  wrap      = ImGui::CalcTextSize(label).x > textWidth;
+    // 后缀作为整体换到下一行，不能把 .mcz 拆成点号和扩展名两段。
+    // 只调整展示副本，按钮原标签仍作为稳定输入身份。
+    std::string displayLabel;
+    if ( wrap ) {
+        displayLabel         = label;
+        const auto extension = displayLabel.rfind(" (");
+        if ( extension != std::string::npos ) displayLabel[extension] = '\n';
+    }
+    const char* display = wrap ? displayLabel.c_str() : label;
+    const auto  textSize =
+        ImGui::CalcTextSize(display, nullptr, false, textWidth);
+    if ( wrap )
+        size.y = std::max(size.y, textSize.y + style.FramePadding.y * 2);
     // 必须在绘制按钮前调整游标，否则测量将作用于后续控件。
     centerNextItem(size.x);
-    return ::MMM::UI::FeedbackButton(label, size);
+    if ( !wrap ) return ::MMM::UI::FeedbackButton(label, size);
+    const auto textColor = ImGui::GetColorU32(ImGuiCol_Text);
+    // 隐藏原生单行文字，再在同一按钮矩形内绘制完整换行文本。
+    // 不增加第二个命中区，滑动起手仍由移动滚动器决定是否交付点击。
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0, 0, 0, 0));
+    const bool pressed = ::MMM::UI::FeedbackButton(label, size);
+    ImGui::PopStyleColor();
+    // 显示文字沿用按钮的裁剪区域；完整文字增加的高度已计入正文滚动范围。
+    // 多行布局仍只产生一个激活结果，不会在抬手时同时提交两次选择。
+    const auto origin = ImGui::GetItemRectMin();
+    ImGui::GetWindowDrawList()->AddText(
+        ImGui::GetFont(),
+        ImGui::GetFontSize(),
+        { origin.x + (size.x - textSize.x) * .5f,
+          origin.y + (size.y - textSize.y) * .5f },
+        textColor,
+        display,
+        nullptr,
+        textWidth);
+    return pressed;
 }
 
 /// @brief 估算 Checkbox 绘制指定标签时需要的宽度。
@@ -1019,6 +1062,12 @@ private:
     /// @note 该值对象集中维护跨多个延迟窗口延续的状态机。
     /// @warning 其候选缓存仅在用户选择格式时重建，渲染时不得扫描文件系统。
     PackageDialogState m_package;
+    /// @brief 移动 BMS 正文页签，不进入格式参数或项目序列化。
+    /// @details 新一轮流程回到选项页，页签切换不扫描工程、不清空已选文件。
+    bool m_bmsTouchFiles{};
+    /// @brief 系统选择在途时拒绝重新启动流程，避免覆盖已冻结选择。
+    /// @details 只有异步完成回调解除；取消也必须解除，不能靠固定超时复活请求。
+    bool m_outputPickerPending{};
     /// @brief 是否在下一帧打开打包输出覆盖确认弹窗。
     /// @note OpenPopup 后立即复位，实际可见性由 ImGui 弹窗栈维护。
     bool m_showPackageOverwriteWarning = false;
@@ -1205,12 +1254,20 @@ void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
     PackageFileType selectedType            = m_package.selectedFileType;
     {
         // 样式作用域在离开局部块时恢复，即使弹窗未成功 Begin。
+        // 公共格式选择器也可在移动端滚动，较低屏幕仍能看到取消入口。
+        // 只扩大按钮命中尺寸，不改变五种打包格式的先后顺序和选择结果。
+        ExportTouchLayout              touchLayout(dpiScale);
         Utils::CenteredModalPopupScope popupStyle(dpiScale);
         if ( popupStyle.begin(
                  popupId,
                  &m_package.formatPickerOpen,
                  ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking,
                  ImVec2(380.0f * dpiScale, 0.0f)) ) {
+            touchLayout.beginContent();
+            std::optional<MobileInputBodyScope> body;
+            // 正文与操作行分别拥有空间，整个父窗不因格式数量增加而向下溢出。
+            // 标题字体已经恢复，48dp 控件按实际内容字体测量。
+            if ( touchLayout.mobile() ) body.emplace("##PackageFormatBody");
             ImGui::TextUnformatted("选择目标打包格式：");
             // 分隔标题和大尺寸格式按钮，提高模态流程辨识度。
             ImGui::Spacing();
@@ -1218,7 +1275,9 @@ void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
             ImGui::Spacing();
 
             // 固定逻辑宽度随 DPI 缩放，四个入口保持一致。
-            const ImVec2 buttonSize(320.0f * dpiScale, 0.0f);
+            const ImVec2 buttonSize(
+                std::min(320.f * dpiScale, ImGui::GetContentRegionAvail().x),
+                touchLayout.mobile() ? 48.f * dpiScale : 0.f);
             if ( drawCenteredButton(
                      getPackageTypeDisplayName(PackageFileType::Mcz).c_str(),
                      buttonSize) ) {
@@ -1254,8 +1313,9 @@ void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
+            if ( body ) body->end();
             if ( drawCenteredButton(TR("ui.common.cancel").data(),
-                                    ImVec2(120.0f * dpiScale, 0.0f)) ) {
+                                    touchLayout.actionSize()) ) {
                 // 取消不改变最近选择的目标格式。
                 closeWindow = true;
             }
@@ -1269,6 +1329,7 @@ void PackBeatmapAction::renderPackageFormatPickerPopup(float dpiScale)
                 m_package.formatPickerOpen = false;
                 ImGui::CloseCurrentPopup();
             }
+            touchLayout.endContent();
             ImGui::EndPopup();
         }
     }
@@ -1318,15 +1379,26 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
     if ( !m_package.showFileSelectionWindow ) return;
 
     // 后续阶段请求延迟到弹窗完整结束之后执行。
-    bool requestOutputPicker = false;
-    bool closePopup          = false;
+    // BMS 的长选项需要独立正文；其它格式继续采用原有文件列表与兼容流程。
+    // 移动外壳是否允许鼠标反馈是呈现能力，不用编译宏猜测当前设备。
+    const bool touchBms = !workspaceAllowsHoverFeedback() &&
+                          m_package.selectedFileType == PackageFileType::BmsZip;
+    bool       requestOutputPicker = false;
+    bool       closePopup          = false;
     {
+        ExportTouchLayout              touchLayout(dpiScale, touchBms);
         Utils::CenteredModalPopupScope popupStyle(dpiScale);
         if ( popupStyle.begin(popupId,
                               &m_package.showFileSelectionWindow,
                               ImGuiWindowFlags_NoCollapse,
                               ImVec2(760.0f * dpiScale, 540.0f * dpiScale),
                               false) ) {
+            // 内容样式只活到当前模态结束，不能泄漏给工作台和后续系统选择器。
+            // 成功 Begin 后才压栈，折叠或已经关闭的窗口没有需要恢复的内容层。
+            touchLayout.beginContent();
+            // 换行只改变按钮高度，不把字体缩小成难以阅读的单行。
+            // 测量使用当前正文样式，避免标题字号与移动端正文倍率混用。
+            const auto& style = ImGui::GetStyle();
             // 每帧从缓存统计选择数，候选变化只发生于本窗口交互。
             const auto selectedCount = static_cast<int>(
                 std::count_if(m_package.candidateFiles.begin(),
@@ -1341,39 +1413,73 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
                 selectedCount,
                 static_cast<int>(m_package.candidateFiles.size()));
 
+            if ( touchBms ) {
+                // 选项与文件分别占用正文，底部确认行不随长说明和列表滚动。
+                // 两页仍引用同一个候选缓存与草稿，切页不刷新默认值。
+                // 用户可以先查资源再回到选项，不产生任何输出命令。
+                const auto tabSize = touchLayout.actionSize();
+                if ( FeedbackButton("导出选项", tabSize) )
+                    m_bmsTouchFiles = false;
+                ImGui::SameLine();
+                if ( FeedbackButton("文件选择", tabSize) )
+                    m_bmsTouchFiles = true;
+                // 操作行高度包含主题行间隔，必须先从正文可用高度中扣除。
+                // 下限只防退化区域为负数，不能通过强制一大块最小高度挤掉底部。
+                const float footer = ImGui::GetFrameHeightWithSpacing() +
+                                     style.ItemSpacing.y * 4.f + 2.f * dpiScale;
+                ImGui::BeginChild(
+                    "##BmsPackageBody",
+                    { 0,
+                      std::max(1.f,
+                               ImGui::GetContentRegionAvail().y - footer) });
+            }
             // BMS 时间变换始终发生在导出副本；此说明不需要每帧重新读取谱面。
             // 候选缓存和真正转换分离，打开窗口本身不会触发音频编码。
-            if ( m_package.selectedFileType == PackageFileType::BmsZip ) {
-                // 单个枚举作为唯一状态，重复点击已选项不会取消选择。
-                // 默认值由 PackageDialogState 初始化，第一次打开也有确定选择。
-                // 用户切换后保留该值，输出路径确认期间不会重新应用默认策略。
-                // 两种策略不能相加，否则音乐和物件会承受两次相位补偿。
-                // 批量模式对所有选中谱面的导出副本使用同一精度策略。
-                // 默认保真；只读末行的转换器需明确选择有损吸附。
-                ImGui::TextWrapped(
-                    "默认保留变速和物件时间；高精度叠加行可能不兼容 MyO2。"
-                    "有损吸附会移动或合并变速事件，复杂变速谱可能明显偏移。");
-                ::MMM::UI::FeedbackCheckbox("MyO2 兼容吸附（有损）",
-                                            &m_package.m_bmsMyO2Grid);
-                ImGui::TextUnformatted("首拍对齐方式（必选其一）：");
-                if ( ::MMM::UI::FeedbackRadioButton(
-                         "裁剪／补静音音乐副本",
-                         m_package.bmsAlignmentMode ==
-                             BmsPackageAlignmentMode::RewriteAudio) )
+            if ( m_package.selectedFileType == PackageFileType::BmsZip &&
+                 (!touchBms || !m_bmsTouchFiles) ) {
+                if ( touchBms ) {
+                    // UI 使用布尔单选草稿，调用边界立即映射回已有枚举。
+                    // 不增添第三种补偿，也不把处理音乐与移动事件叠加执行。
+                    bool shift = m_package.bmsAlignmentMode ==
+                                 BmsPackageAlignmentMode::ShiftEvents;
+                    drawBmsTouchOptions(true, m_package.m_bmsMyO2Grid, shift);
                     m_package.bmsAlignmentMode =
-                        BmsPackageAlignmentMode::RewriteAudio;
-                if ( ::MMM::UI::FeedbackRadioButton(
-                         "后移 BGM 触发和物件（保留音乐原文件）",
-                         m_package.bmsAlignmentMode ==
-                             BmsPackageAlignmentMode::ShiftEvents) )
-                    m_package.bmsAlignmentMode =
-                        BmsPackageAlignmentMode::ShiftEvents;
-                // 保留离拍节奏和后续变速关系，不让用户误以为逐物件量化。
-                // 唯一例外是 BMS 头部 BPM，标准格式要求其从零点生效。
-                ImGui::TextWrapped(
-                    "物件与除开头初始 BPM "
-                    "外的所有红线统一移动；默认不进行格线吸附。"
-                    "Key 采样不重编码，项目源文件不变。");
+                        shift ? BmsPackageAlignmentMode::ShiftEvents
+                              : BmsPackageAlignmentMode::RewriteAudio;
+                } else {
+                    // 单个枚举作为唯一状态，重复点击已选项不会取消选择。
+                    // 默认值由 PackageDialogState
+                    // 初始化，第一次打开也有确定选择。
+                    // 用户切换后保留该值，输出路径确认期间不会重新应用默认策略。
+                    // 两种策略不能相加，否则音乐和物件会承受两次相位补偿。
+                    // 批量模式对所有选中谱面的导出副本使用同一精度策略。
+                    // 默认保真；只读末行的转换器需明确选择有损吸附。
+                    ImGui::TextWrapped(
+                        "默认保留变速和物件时间；高精度叠加行可能不兼容 MyO2。"
+                        "有损吸附会移动或合并变速事件，复杂变速谱可能明显偏移"
+                        "。");
+                    ::MMM::UI::FeedbackCheckbox("MyO2 兼容吸附（有损）",
+                                                &m_package.m_bmsMyO2Grid);
+                    ImGui::TextUnformatted("首拍对齐方式（必选其一）：");
+                    if ( ::MMM::UI::FeedbackRadioButton(
+                             "裁剪／补静音音乐副本",
+                             m_package.bmsAlignmentMode ==
+                                 BmsPackageAlignmentMode::RewriteAudio) )
+                        m_package.bmsAlignmentMode =
+                            BmsPackageAlignmentMode::RewriteAudio;
+                    if ( ::MMM::UI::FeedbackRadioButton(
+                             "后移 BGM 触发和物件（保留音乐原文件）",
+                             m_package.bmsAlignmentMode ==
+                                 BmsPackageAlignmentMode::ShiftEvents) )
+                        m_package.bmsAlignmentMode =
+                            BmsPackageAlignmentMode::ShiftEvents;
+                    // 保留离拍节奏和后续变速关系，不让用户误以为逐物件量化。
+                    // 唯一例外是 BMS 头部 BPM，标准格式要求其从零点生效。
+                    ImGui::TextWrapped(
+                        "物件与除开头初始 BPM "
+                        "外的所有红线统一移动；默认不进行格线吸附。"
+                        "Key 采样不重编码，项目源文件不变。");
+                }
             }
 
             if ( m_package.selectedFileType == PackageFileType::Mcz ) {
@@ -1396,22 +1502,27 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
                 }
             }
 
-            // 批量选择按钮使用固定逻辑宽度，并在空间允许时同行。
-            const ImVec2 selectButtonSize(88.0f * dpiScale, 0.0f);
-            if ( ::MMM::UI::FeedbackButton("全选", selectButtonSize) ) {
-                // 先选择全部候选，再重新计算谱面依赖锁定计数。
-                for ( auto& file : m_package.candidateFiles ) {
-                    file.selected = true;
+            // 批量选择只出现在文件页，避免用户阅读对齐策略时误触清空候选。
+            // 这些按钮仍走原依赖同步，锁定媒体不能靠全不选留在错误状态。
+            if ( !touchBms || m_bmsTouchFiles ) {
+                // 批量选择按钮使用固定逻辑宽度，并在空间允许时同行。
+                const ImVec2 selectButtonSize(88.f * dpiScale,
+                                              touchBms ? 48.f * dpiScale : 0.f);
+                if ( ::MMM::UI::FeedbackButton("全选", selectButtonSize) ) {
+                    // 先选择全部候选，再重新计算谱面依赖锁定计数。
+                    for ( auto& file : m_package.candidateFiles ) {
+                        file.selected = true;
+                    }
+                    syncPackageDependencySelection();
                 }
-                syncPackageDependencySelection();
-            }
-            sameLineIfItemFits(selectButtonSize.x);
-            if ( ::MMM::UI::FeedbackButton("全不选", selectButtonSize) ) {
-                // 清空后同步会解除所有资源锁定和自动选择。
-                for ( auto& file : m_package.candidateFiles ) {
-                    file.selected = false;
+                sameLineIfItemFits(selectButtonSize.x);
+                if ( ::MMM::UI::FeedbackButton("全不选", selectButtonSize) ) {
+                    // 清空后同步会解除所有资源锁定和自动选择。
+                    for ( auto& file : m_package.candidateFiles ) {
+                        file.selected = false;
+                    }
+                    syncPackageDependencySelection();
                 }
-                syncPackageDependencySelection();
             }
             if ( shouldShowConvertedBeatmapSaveOption(
                      m_package.selectedFileType) ) {
@@ -1564,115 +1675,174 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
                     "所选谱面缺少或当前格式不支持其引用的图片/音频资源。");
             }
 
-            ImGui::Spacing();
-            ImGui::Separator();
-            ImGui::Spacing();
+            if ( !touchBms || m_bmsTouchFiles ) {
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
 
-            // 为底部确认按钮预留高度，候选表填充其余空间。
-            const ImGuiStyle& style = ImGui::GetStyle();
-            const float       footerReserveHeight =
-                ImGui::GetFrameHeightWithSpacing() +
-                style.ItemSpacing.y * 4.0f + 2.0f * dpiScale;
-            // 极窄窗口仍保证列表至少可见一行左右内容。
-            const float listHeight = std::max(
-                48.0f * dpiScale,
-                ImGui::GetContentRegionAvail().y - footerReserveHeight);
+                // 为底部确认按钮预留高度，候选表填充其余空间。
 
-            if ( ImGui::BeginChild("PackageCandidateFilesChild",
-                                   ImVec2(0.0f, listHeight),
-                                   true) ) {
-                if ( m_package.candidateFiles.empty() ) {
-                    // 空列表通常表示目标格式没有匹配的项目资源。
-                    ImGui::TextUnformatted(
-                        "没有找到符合当前打包格式规则的文件。");
-                } else {
-                    // 三列表格将选择状态、资源类别和相对路径分离展示。
-                    constexpr ImGuiTableFlags tableFlags =
-                        ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV |
-                        ImGuiTableFlags_ScrollY;
-                    if ( Utils::VerticalScrollbarStyleScope scrollbarStyle(
-                             dpiScale);
-                         ImGui::BeginTable("PackageCandidateFilesTable",
-                                           3,
-                                           tableFlags,
-                                           ImVec2(0.0f, 0.0f)) ) {
-                        ImGui::TableSetupColumn(
-                            "打包",
-                            ImGuiTableColumnFlags_WidthFixed,
-                            64.0f * dpiScale);
-                        ImGui::TableSetupColumn(
-                            "类型",
-                            ImGuiTableColumnFlags_WidthFixed,
-                            72.0f * dpiScale);
-                        ImGui::TableSetupColumn(
-                            "文件", ImGuiTableColumnFlags_WidthStretch);
-                        ImGui::TableHeadersRow();
+                const float footerReserveHeight =
+                    ImGui::GetFrameHeightWithSpacing() +
+                    style.ItemSpacing.y * 4.0f + 2.0f * dpiScale;
+                // 极窄窗口仍保证列表至少可见一行左右内容。
+                // 移动正文已经预留了父模态操作行，此处填充剩余高度即可。
+                // 桌面保留原列表高度和最小一行规则，不重复扣除或放大行高。
+                const float listHeight =
+                    touchBms ? std::max(1.f, ImGui::GetContentRegionAvail().y)
+                             : std::max(48.0f * dpiScale,
+                                        ImGui::GetContentRegionAvail().y -
+                                            footerReserveHeight);
 
-                        // 每行使用候选索引作为 ImGui ID，路径重复也不会冲突。
+                if ( ImGui::BeginChild("PackageCandidateFilesChild",
+                                       ImVec2(0.0f, listHeight),
+                                       true) ) {
+                    if ( m_package.candidateFiles.empty() ) {
+                        // 空列表通常表示目标格式没有匹配的项目资源。
+                        ImGui::TextUnformatted(
+                            "没有找到符合当前打包格式规则的文件。");
+                    } else if ( touchBms ) {
+                        // 文件名按整行换行，锁定来源和缺失引用常驻，不依赖
+                        // Hover。
                         for ( std::size_t index = 0;
                               index < m_package.candidateFiles.size();
                               ++index ) {
                             auto& file = m_package.candidateFiles[index];
                             ImGui::PushID(static_cast<int>(index));
-                            ImGui::TableNextRow();
-                            ImGui::TableSetColumnIndex(0);
-                            // 被已选谱面引用的非谱面资源必须随包携带。
-                            const bool dependencyLocked =
+                            // 候选按稳定索引隔离控件身份，同名文件也不能互相激活。
+                            // 所有路径都是扫描时已缓存的相对路径，绘制阶段不访问磁盘。
+                            const bool locked =
                                 file.requiredBySelectedBeatmaps > 0 &&
                                 file.resourceType !=
                                     PackageResourceType::Beatmap;
                             bool selected = file.selected;
-                            // 使用局部副本，仅在控件值变化时进入统一状态同步入口。
-                            if ( dependencyLocked ) ImGui::BeginDisabled();
-                            if ( ::MMM::UI::FeedbackCheckbox(
-                                     "##PackageFileSelected", &selected) ) {
+                            // 引用锁定与勾选状态独立；禁用复选框不会悄悄撤销已选资源。
+                            // 只有用户实际改变可编辑项才进入原依赖计数重建路径。
+                            ImGui::BeginDisabled(locked);
+                            if ( FeedbackCheckbox("##PackageFileSelected",
+                                                  &selected) )
                                 setPackageCandidateSelected(index, selected);
-                            }
-                            if ( dependencyLocked ) ImGui::EndDisabled();
-                            if ( dependencyLocked &&
-                                 ImGui::IsItemHovered(
-                                     ImGuiHoveredFlags_AllowWhenDisabled) ) {
-                                // 禁用控件仍提供锁定来源说明。
-                                ImGui::SetTooltip(
-                                    "该资源被已选中谱面引用，不能单独取消。");
-                            }
-                            ImGui::TableSetColumnIndex(1);
-                            // 类型标签由目标格式规则在扫描阶段预先计算。
-                            ImGui::TextUnformatted(file.typeLabel.c_str());
-                            ImGui::TableSetColumnIndex(2);
-                            // 相对路径使用通用正斜杠，便于跨平台识别包内位置。
-                            ImGui::TextUnformatted(file.relativePath.c_str());
-                            if ( file.selected &&
-                                 file.resourceType ==
-                                     PackageResourceType::Beatmap &&
-                                 !file.missingDependencyRelativePaths
-                                      .empty() ) {
-                                // 仅已选谱面显示缺失标记，未选问题不阻塞打包。
-                                ImGui::SameLine();
-                                ImGui::TextColored(
-                                    ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
-                                    "%s",
-                                    "(缺少依赖)");
-                                if ( ImGui::IsItemHovered() ) {
-                                    // 逐行列出预扫描阶段保存的缺失引用。
-                                    std::string tooltip = "未能绑定以下资源：";
-                                    for (
-                                        const auto& missingPath :
-                                        file.missingDependencyRelativePaths ) {
-                                        tooltip += "\n";
-                                        tooltip += missingPath;
-                                    }
-                                    ImGui::SetTooltip("%s", tooltip.c_str());
-                                }
-                            }
+                            ImGui::EndDisabled();
+                            ImGui::SameLine();
+                            // 路径所在组只占复选框右侧宽度，长文件名在组内换行。
+                            // 类别和依赖说明也在组中，下一候选必须从完整新行开始。
+                            ImGui::BeginGroup();
+                            ImGui::TextWrapped("%s", file.relativePath.c_str());
+                            ImGui::TextWrapped(
+                                "%s%s",
+                                file.typeLabel.c_str(),
+                                locked ? " · 随谱面自动包含" : "");
+                            // 只有已选源的缺失引用影响本次导出，未选错误不误报为阻塞。
+                            // 直接列出诊断，触屏不必通过禁用控件的悬浮提示查看原因。
+                            if ( file.selected )
+                                for ( const auto& missing :
+                                      file.missingDependencyRelativePaths )
+                                    ImGui::TextWrapped("缺少依赖：%s",
+                                                       missing.c_str());
+                            ImGui::EndGroup();
+                            ImGui::Separator();
                             ImGui::PopID();
                         }
+                    } else {
+                        // 三列表格将选择状态、资源类别和相对路径分离展示。
+                        constexpr ImGuiTableFlags tableFlags =
+                            ImGuiTableFlags_RowBg |
+                            ImGuiTableFlags_BordersInnerV |
+                            ImGuiTableFlags_ScrollY;
+                        if ( Utils::VerticalScrollbarStyleScope scrollbarStyle(
+                                 dpiScale);
+                             ImGui::BeginTable("PackageCandidateFilesTable",
+                                               3,
+                                               tableFlags,
+                                               ImVec2(0.0f, 0.0f)) ) {
+                            ImGui::TableSetupColumn(
+                                "打包",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                64.0f * dpiScale);
+                            ImGui::TableSetupColumn(
+                                "类型",
+                                ImGuiTableColumnFlags_WidthFixed,
+                                72.0f * dpiScale);
+                            ImGui::TableSetupColumn(
+                                "文件", ImGuiTableColumnFlags_WidthStretch);
+                            ImGui::TableHeadersRow();
 
-                        ImGui::EndTable();
+                            // 每行使用候选索引作为 ImGui
+                            // ID，路径重复也不会冲突。
+                            for ( std::size_t index = 0;
+                                  index < m_package.candidateFiles.size();
+                                  ++index ) {
+                                auto& file = m_package.candidateFiles[index];
+                                ImGui::PushID(static_cast<int>(index));
+                                ImGui::TableNextRow();
+                                ImGui::TableSetColumnIndex(0);
+                                // 被已选谱面引用的非谱面资源必须随包携带。
+                                const bool dependencyLocked =
+                                    file.requiredBySelectedBeatmaps > 0 &&
+                                    file.resourceType !=
+                                        PackageResourceType::Beatmap;
+                                bool selected = file.selected;
+                                // 使用局部副本，仅在控件值变化时进入统一状态同步入口。
+                                if ( dependencyLocked ) ImGui::BeginDisabled();
+                                if ( ::MMM::UI::FeedbackCheckbox(
+                                         "##PackageFileSelected", &selected) ) {
+                                    setPackageCandidateSelected(index,
+                                                                selected);
+                                }
+                                if ( dependencyLocked ) ImGui::EndDisabled();
+                                if (
+                                    dependencyLocked &&
+                                    ImGui::IsItemHovered(
+                                        ImGuiHoveredFlags_AllowWhenDisabled) ) {
+                                    // 禁用控件仍提供锁定来源说明。
+                                    ImGui::SetTooltip(
+                                        "该资源被已选中谱面引用，不能单独取消"
+                                        "。");
+                                }
+                                ImGui::TableSetColumnIndex(1);
+                                // 类型标签由目标格式规则在扫描阶段预先计算。
+                                ImGui::TextUnformatted(file.typeLabel.c_str());
+                                ImGui::TableSetColumnIndex(2);
+                                // 相对路径使用通用正斜杠，便于跨平台识别包内位置。
+                                ImGui::TextUnformatted(
+                                    file.relativePath.c_str());
+                                if ( file.selected &&
+                                     file.resourceType ==
+                                         PackageResourceType::Beatmap &&
+                                     !file.missingDependencyRelativePaths
+                                          .empty() ) {
+                                    // 仅已选谱面显示缺失标记，未选问题不阻塞打包。
+                                    ImGui::SameLine();
+                                    ImGui::TextColored(
+                                        ImVec4(1.0f, 0.35f, 0.25f, 1.0f),
+                                        "%s",
+                                        "(缺少依赖)");
+                                    if ( ImGui::IsItemHovered() ) {
+                                        // 逐行列出预扫描阶段保存的缺失引用。
+                                        std::string tooltip =
+                                            "未能绑定以下资源：";
+                                        for (
+                                            const auto& missingPath :
+                                            file.missingDependencyRelativePaths ) {
+                                            tooltip += "\n";
+                                            tooltip += missingPath;
+                                        }
+                                        ImGui::SetTooltip("%s",
+                                                          tooltip.c_str());
+                                    }
+                                }
+                                ImGui::PopID();
+                            }
+
+                            ImGui::EndTable();
+                        }
                     }
                 }
+                ImGui::EndChild();
             }
-            ImGui::EndChild();
+            // 正文在 footer 布局前结束；选项超长或候选很多时只滚动正文。
+            // 两个页签共用这一结束点，避免某页切换留下未配对的子窗口。
+            if ( touchBms ) ImGui::EndChild();
 
             ImGui::Spacing();
             ImGui::Separator();
@@ -1680,7 +1850,7 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
 
             // 至少选择一个文件且所有已选谱面依赖完整时才能继续。
             const bool   canPack = selectedCount > 0 && !hasMissingDependencies;
-            const ImVec2 footerButtonSize(120.0f * dpiScale, 0.0f);
+            const ImVec2 footerButtonSize = touchLayout.actionSize();
             const float  footerButtonRowWidth =
                 footerButtonSize.x * 2.0f + style.ItemSpacing.x;
             // 两个底部按钮作为整体居中，而不是分别居中。
@@ -1715,6 +1885,7 @@ void PackBeatmapAction::renderPackageFileSelectionWindow(float dpiScale)
                 m_package.showFileSelectionWindow = false;
                 ImGui::CloseCurrentPopup();
             }
+            touchLayout.endContent();
             ImGui::EndPopup();
         }
     }
@@ -2487,6 +2658,10 @@ std::string PackBeatmapAction::makePackageDefaultFileName() const
 /// @details 输出覆盖状态由文件选择器维护，本入口不删除任何既有文件。
 void PackBeatmapAction::openPackFilePicker()
 {
+    // 在途系统选择拥有已冻结的相对路径，不能被第二次菜单触发覆盖。
+    // 正常取消以后可立即重新进入，不依赖定时器或线程等待。
+    if ( m_outputPickerPending ) return;
+    m_bmsTouchFiles = false;
     // 清除所有依赖目标格式或上次候选选择的瞬态数据。
     m_package.candidateFiles.clear();
     m_package.pendingRelativePaths.clear();
@@ -2526,32 +2701,68 @@ void PackBeatmapAction::openPackageOutputFilePicker()
     // 默认文件名在打开选择器前按当前格式构造。
     const std::string defaultFileName = makePackageDefaultFileName();
     const std::string defaultPath     = getPackagePickerDefaultPath(config);
-    if ( config.filePickerStyle == Config::FilePickerStyle::Native ) {
-        // 原生选择器打开前播放统一弹窗反馈。
-        ::MMM::UI::PlayPopupOpenFeedback();
-        nfdu8char_t* outPath = nullptr;
-        const char*  packageFilter =
-            getNativePackageOutputFilterText(m_package.selectedFileType);
-        // NFD 过滤器使用不带点的目标扩展名。
-        nfdu8filteritem_t filters[1] = { { "Beatmap Package", packageFilter } };
-        nfdresult_t       result     = NativeFileDialog::saveFile(
-            &outPath, filters, 1, defaultPath.c_str(), defaultFileName.c_str());
-
-        if ( result == NFD_OKAY ) {
-            // 用户路径再次替换扩展名，确保与当前格式一致。
-            std::string filePath = applyPackSelectedFormatToPath(outPath);
-            if ( std::filesystem::exists(Config::utf8ToPath(filePath)) ) {
-                // 已存在目标延迟到自有覆盖确认弹窗处理。
-                m_pendingPackageOverwritePath  = std::move(filePath);
-                m_pendingOverwriteIsImdPackage = false;
-                m_showPackageOverwriteWarning  = true;
-            } else {
-                // 新路径可立即分发打包命令。
-                requestPackBeatmapTo(std::move(filePath));
-            }
-            // NFD 返回路径由库分配，成功分支必须释放。
-            NFD_FreePathU8(outPath);
-        }
+    if ( NativeFileDialog::requiresSystemPicker() ||
+         config.filePickerStyle == Config::FilePickerStyle::Native ) {
+        // 系统文档选择不能阻塞 SDL 事件；动作由主菜单持有直到应用退出。
+        if ( m_outputPickerPending ) return;
+        m_outputPickerPending = true;
+        PlayPopupOpenFeedback();
+        const nfdu8filteritem_t filter{ "Beatmap Package",
+                                        getNativePackageOutputFilterText(
+                                            m_package.selectedFileType) };
+        const auto*             project =
+            Logic::EditorEngine::instance().getCurrentProject();
+        // 根路径值只作为本轮请求的项目身份，不持有可变 Project 的观察指针。
+        // 后续返回时重新查询当前项目，不能解引用打开系统界面前的临时引用。
+        // 同一路径的普通文件选择仍按现有覆盖确认流程执行。
+        // 请求期间本动作不能重新进入，选项与候选相对路径因而保持同一事务。
+        // 默认目录和文件名只供选择器初始化，绝不当作用户最终同意的目标。
+        // 原生回调的空路径是取消或失败，不允许自动退回默认文件名导出。
+        // 平台目标创建不等于保存成功，实际写入与发布结果仍由逻辑层报告。
+        // 在 UI 回调这里只冻结路径，不提前读取或转换候选谱面内容。
+        // 因此用户停留在系统界面不会阻塞渲染、逻辑或后台资源处理线程。
+        const auto root =
+            project ? project->m_projectRoot : std::filesystem::path{};
+        // Java 只获得目标 URI，返回值仍是集中工作副本，由原 writer 完成写出。
+        // 回调捕获动作与根路径值，不借用过滤器、默认名或某个窗口的临时地址。
+        NativeFileDialog::saveFileAsync(
+            &filter,
+            1,
+            defaultPath.c_str(),
+            defaultFileName.c_str(),
+            [this, root](nfdresult_t result, const std::string& path) {
+                // 先解除在途状态，所有失败分支都能让下一次用户操作重新开始。
+                // 原生桌面可能同步完成，Android 则在后续有效 UI 帧消费结果。
+                m_outputPickerPending = false;
+                const auto* current =
+                    Logic::EditorEngine::instance().getCurrentProject();
+                // 取消或换项目后不把旧相对路径交给新项目，也不发空路径命令。
+                if ( result != NFD_OKAY || path.empty() || !current ||
+                     current->m_projectRoot != root ) {
+                    m_package.pendingRelativePaths.clear();
+                    m_package.pendingMetadataOverrides.clear();
+                    if ( result == NFD_ERROR )
+                        XERROR("Package document selection failed");
+                    return;
+                }
+                // 扩展名仍由已选择格式规范化，ZIP 目标不能误带 MCZ 或 OSZ
+                // 后缀。
+                // 只检测最终本机工作路径；文件系统失败不能落入新文件成功分支。
+                auto            filePath = applyPackSelectedFormatToPath(path);
+                std::error_code error;
+                if ( std::filesystem::exists(Config::utf8ToPath(filePath),
+                                             error) ) {
+                    // 覆盖确认仍是单独事务，回调不能直接截断已有目标。
+                    // 用户取消后既不创建包也不修改源工程，后续由原状态机推进。
+                    m_pendingPackageOverwritePath  = std::move(filePath);
+                    m_pendingOverwriteIsImdPackage = false;
+                    m_showPackageOverwriteWarning  = true;
+                } else if ( !error )
+                    requestPackBeatmapTo(std::move(filePath));
+                else
+                    XERROR("Package target inspection failed: {}",
+                           error.message());
+            });
     } else {
         // 统一选择器以非阻塞 ImGui 窗口形式在后续帧渲染。
         IGFD::FileDialogConfig fdConfig;
@@ -2646,17 +2857,20 @@ void PackBeatmapAction::openImdPackageOutputFilePicker()
 /// @pre PackFilePicker 已由 openPackageOutputFilePicker 打开。
 void PackBeatmapAction::renderPackageOutputFileDialog(float dpiScale)
 {
+    // 输出窗口与另存为共用当前安全区域，不能用未缩放的桌面像素。
+    // 键盘打开后同步限制最小尺寸，避免其覆盖文件名与确认按钮。
+    const auto fileDialogSize = exportFileDialogSize(dpiScale);
     // 样式作用域统一缩放和居中 ImGuiFileDialog。
     Utils::CenteredModalPopupScope fileDialogStyle(dpiScale);
     if ( ImGuiFileDialog::Instance()->IsOpened("PackFilePicker") ) {
         // 在 Display 前设置下一窗口位置，避免首帧跳动。
-        Utils::prepareCenteredModalWindow({ 600, 400 });
+        Utils::prepareCenteredModalWindow(fileDialogSize);
     }
     if ( ImGuiFileDialog::Instance()->Display(
              "PackFilePicker",
              ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoSavedSettings,
-             { 600, 400 }) ) {
+             fileDialogSize) ) {
         if ( ImGuiFileDialog::Instance()->IsOk() ) {
             // 用户确认路径后强制应用当前包扩展名。
             std::string filePath =
@@ -2670,8 +2884,15 @@ void PackBeatmapAction::renderPackageOutputFileDialog(float dpiScale)
                 ImGuiFileDialog::Instance()->GetCurrentPath();
             engine.setEditorConfig(config);
 
+            // 目录授权变化或提供器离线不能让文件查询异常越过 UI 边界。
+            // 无法确认目标状态时不直接写出，保留源工程和已有目标。
+            std::error_code error;
+            const bool      exists =
+                std::filesystem::exists(Config::utf8ToPath(filePath), error);
             // 已存在文件需显式确认，防止无提示覆盖。
-            if ( std::filesystem::exists(Config::utf8ToPath(filePath)) ) {
+            if ( error ) {
+                XERROR("Package target inspection failed: {}", error.message());
+            } else if ( exists ) {
                 m_pendingPackageOverwritePath  = std::move(filePath);
                 m_pendingOverwriteIsImdPackage = false;
                 m_showPackageOverwriteWarning  = true;
@@ -2754,11 +2975,16 @@ void PackBeatmapAction::renderPackageOverwriteWarningPopup(float dpiScale)
     // 没有打开的覆盖请求时不创建样式作用域。
     if ( !ImGui::IsPopupOpen(popupId) ) return;
 
+    ExportTouchLayout touchLayout(
+        dpiScale,
+        m_package.selectedFileType == PackageFileType::BmsZip &&
+            !m_pendingOverwriteIsImdPackage);
     Utils::CenteredModalPopupScope popupStyle(dpiScale);
     if ( popupStyle.begin(popupId,
                           nullptr,
                           ImGuiWindowFlags_None,
                           ImVec2(540.0f * dpiScale, 0.0f)) ) {
+        touchLayout.beginContent();
         ImGui::TextWrapped("目标打包文件已经存在，是否覆盖？");
         if ( !m_pendingPackageOverwritePath.empty() ) {
             // 展示完整目标路径，用户可在确认前核对覆盖对象。
@@ -2771,7 +2997,7 @@ void PackBeatmapAction::renderPackageOverwriteWarningPopup(float dpiScale)
         ImGui::Separator();
         ImGui::Spacing();
 
-        const ImVec2 buttonSize(120.0f * dpiScale, 0.0f);
+        const ImVec2 buttonSize = touchLayout.actionSize();
         if ( ::MMM::UI::FeedbackButton("确认覆盖", buttonSize) ) {
             // 根据流程来源选择常规包或独立 RM/IMD 命令。
             if ( m_pendingOverwriteIsImdPackage ) {
@@ -2793,6 +3019,7 @@ void PackBeatmapAction::renderPackageOverwriteWarningPopup(float dpiScale)
             ImGui::CloseCurrentPopup();
         }
 
+        touchLayout.endContent();
         ImGui::EndPopup();
     }
 }

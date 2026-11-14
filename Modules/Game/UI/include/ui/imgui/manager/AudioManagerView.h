@@ -6,6 +6,7 @@
 #include "mmm/project/AudioTrackType.h"
 #include "ui/ISubView.h"
 #include "ui/layout/box/CLayBox.h"
+#include "ui/workspace/TouchReadPress.h"
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -66,6 +67,9 @@ public:
     void swapPreparedUiFrameData() override;
 
 private:
+    /// @brief 资源行原始触点分类器，稳定 ID 不随可见行索引改变。
+    TouchReadPress m_resourcePress;
+
     /// @brief 所属 UI 管理器的观察指针，首次绘制后用于只读资源布局测量。
     /// @warning 管理器拥有本视图，指针只在 UI 主线程准备和绘制阶段使用。
     const UIManager* m_sourceManager{ nullptr };
@@ -83,6 +87,8 @@ private:
 
         /// @brief 当前是否展开全局设置段落。
         bool showGlobalSettings{ true };
+        /// @brief 是否显示输出设备行；平台能力也参与布局缓存键，防止保留空行。
+        bool showOutputDeviceSelector{ true };
     };
 
     /// @brief 音频管理器布局测量缓存。

@@ -11,6 +11,7 @@
 #include "common/render/AnnotationRenderData.h"
 #include "common/render/RenderSnapshot.h"
 #include "config/skin/translation/Translation.h"
+#include "presentation/CanvasInteractionPresentation.h"
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include <algorithm>
@@ -47,17 +48,32 @@ bool Basic2DCanvasInteraction::renderMouseAnnotationMenu(
         m_annotationMenu.m_wasOpen || ImGui::IsPopupOpen("MouseAnnotationMenu");
     const bool enabled =
         UI::Interaction::activeProfile().selectionContextMenu();
+    // 移动触点在抬手或长按成立后才请求常驻阅读，不沿用鼠标按下编辑。
+    const bool touch = !m_pointerPresentation->allowsHoverInspection();
+    // 平台请求只决定阅读菜单是否打开，不直接准备写入命令。
+    // 稳定分组与条目身份仍由下方共同路径冻结和逐帧核验。
+    // 接入鼠标后自动回到右键入口，经典气泡编辑不受此请求影响。
+    // 无目标帧也推进分类器，防止跨出批注区后重新接回旧手势。
+    const bool touchRequest = m_pointerPresentation->annotationMenuRequested(
+        hovered && !hovered->items.empty()
+            ? ImGui::GetID(hovered->items.front().id.c_str())
+            : 0,
+        !wasOpen && !linkHovered &&
+            !ImGui::IsPopupOpen(
+                nullptr,
+                ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel));
     bool opened = false;
     // 活动绘制、擦除和平移拥有自己的结束事件，右键不得插入另一笔菜单操作。
     // 只读和播放状态仍允许阅读，编辑按钮另行统一禁用。
     if ( enabled && !wasOpen && hovered && !hovered->items.empty() &&
-         !linkHovered && !hasActivePointerGesture() &&
-         !UI::Interaction::mouseDown(ImGuiMouseButton_Left) &&
+         !linkHovered && (touch || !hasActivePointerGesture()) &&
+         (touch || !UI::Interaction::mouseDown(ImGuiMouseButton_Left)) &&
          !UI::Interaction::mouseDown(ImGuiMouseButton_Middle) &&
          !ImGui::IsPopupOpen(
              nullptr,
              ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) &&
-         UI::Interaction::mouseClicked(ImGuiMouseButton_Right) ) {
+         (touchRequest ||
+          (!touch && UI::Interaction::mouseClicked(ImGuiMouseButton_Right))) ) {
         // 该观察指针来自当前快照的标记数组，只在起笔保存其值语义位置。
         // 首条 ID 锁定分组，选中条目 ID 防止组内删除后索引误指向另一批注。
         // - 菜单索引只用于快速核验，不能单独证明跨快照的对象身份。
@@ -133,9 +149,12 @@ bool Basic2DCanvasInteraction::renderMouseAnnotationMenu(
                         ? TR("ui.annotation.unknown_author").data()
                         : item.author.c_str());
                 // 固定高度的预览可滚动，超长批注不能把编辑与新增按钮推出屏幕。
-                if ( ImGui::BeginChild("AnnotationMenuPreview",
-                                       { 360, 140 },
-                                       ImGuiChildFlags_Borders) ) {
+                const auto work = ImGui::GetMainViewport()->WorkSize;
+                if ( ImGui::BeginChild(
+                         "AnnotationMenuPreview",
+                         { touch ? std::min(360.0f, work.x * 0.75f) : 360.0f,
+                           touch ? std::min(140.0f, work.y * 0.3f) : 140.0f },
+                         ImGuiChildFlags_Borders) ) {
                     // 切换条目复用同一个子窗口
                     // ID，必须清除上一条长正文的滚动位置。
                     if ( previous || next ) ImGui::SetScrollY(0);

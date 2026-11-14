@@ -1,8 +1,15 @@
+/// @file CheckUpdateAction.cpp
+/// @brief 更新动作共用异步状态机，桌面与触摸正文分别组合展示。
+/// @details 本文件只决定弹窗与用户操作，不承担网络下载或安装器执行。
+/// 状态快照来自 UpdateChecker，图像生命周期由独立缓存视图管理。
+/// UI 层不得通过等待下载完成来推进检查、下载或重启阶段。
 #define IMGUI_DEFINE_MATH_OPERATORS
+#include "DeferredUpdatePopup.h"
 #include "config/AppConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "mmmversion.h"
 #include "network/UpdateChecker.h"
+#include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/markdown/MarkdownImageCache.h"
 #include "ui/imgui/markdown/MarkdownRenderer.h"
@@ -10,6 +17,7 @@
 #include "ui/imgui/menu/actions/MainMenuHelpActions.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -96,8 +104,6 @@ public:
         m_isSilentCheck = false;
         // 打开请求延迟到 renderDeferred 转换为 ImGui 状态。
         m_showCheckingPopup = true;
-        // 新一轮检查允许发现更新后重新打开确认弹窗。
-        m_updatePopupCanceled = false;
         // 清除上一轮启动更新器失败文本，避免污染新任务。
         m_updateRestartError.clear();
         // UpdateChecker 在后台执行请求，当前调用立即返回。
@@ -149,11 +155,9 @@ private:
     /// @note 检查中、已最新、发现更新和错误四种状态互斥展示。
     void renderUpdateCheckingPopup()
     {
-        if ( m_showCheckingPopup ) {
-            // 将一次性打开请求交给统一反馈入口后立即清除。
-            ::MMM::UI::FeedbackOpenPopup(TR("ui.help.check_update").data());
-            m_showCheckingPopup = false;
-        }
+        // PGO 同意框等其它弹层结束后才消费请求，防止同层窗口互相顶掉。
+        Detail::openDeferredUpdatePopup(TR("ui.help.check_update").data(),
+                                        m_showCheckingPopup);
 
         // 每帧读取当前 DPI，使弹窗和进度控件跟随窗口缩放。
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
@@ -225,16 +229,10 @@ private:
         // 初始快照用于决定弹窗打开和布局大小。
         auto info = m_updateChecker->getInfo();
 
-        if ( m_showUpdatePopup ) {
-            // 显式请求优先打开弹窗，并立即消费一次性标志。
-            ::MMM::UI::FeedbackOpenPopup(TR("ui.help.update_found").data());
-            m_showUpdatePopup = false;
-        } else if ( info.status == MMM::Network::UpdateStatus::kUpdateFound &&
-                    !m_updatePopupCanceled ) {
-            // 未取消时维持发现更新弹窗，覆盖外部意外关闭后的状态恢复。
-            if ( !ImGui::IsPopupOpen(TR("ui.help.update_found").data()) )
-                ::MMM::UI::FeedbackOpenPopup(TR("ui.help.update_found").data());
-        }
+        // 发现更新只产生一次打开事件；持续终态不能重开窗口或反复发声。
+        // 忙碌时保留请求，其他模态关闭后再显示，不丢失启动检查结果。
+        Detail::openDeferredUpdatePopup(TR("ui.help.update_found").data(),
+                                        m_showUpdatePopup);
 
         // 布局使用当前内容缩放，不依赖可能过期的菜单上下文。
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
@@ -370,11 +368,9 @@ private:
     /// @note 成功标记通常来自更新器重启后的启动阶段。
     void renderUpdateSuccessPopup()
     {
-        if ( m_showUpdateSuccessPopup ) {
-            // 一次性请求转换为 ImGui 弹窗状态后立即清除。
-            ::MMM::UI::FeedbackOpenPopup(TR("ui.help.update_success").data());
-            m_showUpdateSuccessPopup = false;
-        }
+        // 更新完成通知同样等待其它模态结束，不覆盖当前用户确认流程。
+        Detail::openDeferredUpdatePopup(TR("ui.help.update_success").data(),
+                                        m_showUpdateSuccessPopup);
 
         // 成功窗口同样跟随当前 DPI 缩放。
         float dpiScale = Config::AppConfig::instance().getWindowContentScale();
@@ -436,6 +432,11 @@ private:
     void renderUpdateFoundBody(const MMM::Network::UpdateInfo& info,
                                float                           dpiScale)
     {
+        // 触摸布局使用独立的滚动正文与固定操作区，桌面表格保持原样。
+        if ( !workspaceAllowsHoverFeedback() ) {
+            renderTouchUpdateFoundBody(info, dpiScale);
+            return;
+        }
         // 版本信息表使用稳定列布局且不保存用户调整。
         if ( ImGui::BeginTable("UpdateInfoTable",
                                2,
@@ -602,8 +603,121 @@ private:
                  ImVec2(buttonWidth, 36.0f * dpiScale)) ) {
             // 用户取消仅关闭当前弹窗，不删除已获取的更新信息。
             ImGui::CloseCurrentPopup();
-            // 标志阻止 kUpdateFound 状态在下一帧自动重开弹窗。
-            m_updatePopupCanceled = true;
+            // 缓存终态不重开弹窗，下次手动检查仍可产生新请求。
+        }
+    }
+
+    /// @brief 用独立正文滚动区和常驻操作区展示移动端更新信息。
+    /// @param info 本帧不可变网络快照，按钮只发起既有异步下载。
+    /// @param scale 当前内容倍率，最小触摸高度与移动按钮保持一致。
+    /// @details 窄屏将操作纵排；版本说明随正文滚动，不能挤掉取消入口。
+    /// 横竖屏切换直接重新测量，不缓存与旧屏幕尺寸绑定的按钮坐标。
+    /// 操作外观由平台策略提供，更新状态机与桌面保持同一份实例。
+    /// 已取消、已下载和图片预览字段继续沿用共享动作的原有生命周期。
+    /// @warning 每帧只绘制现有快照和缓存图片，不同步等待网络。
+    void renderTouchUpdateFoundBody(const MMM::Network::UpdateInfo& info,
+                                    float                           scale)
+    {
+        const auto& style = ImGui::GetStyle();
+        // 从弹窗真实内容宽度开始分配，不能用主视口宽度越过弹窗内边距。
+        const float available = ImGui::GetContentRegionAvail().x;
+        const float height =
+            // 最小触摸高度并不限制大字号；文字更高时按钮也随之扩展。
+            std::max(48.0f * scale, ImGui::GetFontSize() + 16.0f * scale);
+        const char* cancel  = TR("ui.help.cancel").data();
+        const char* install = TR("ui.help.download_and_install").data();
+        // 图标与文字一起测量所需宽度，不能只给中文按钮预留固定宽度。
+        const float needed   = std::max(ImGui::CalcTextSize(cancel).x,
+                                        ImGui::CalcTextSize(install).x) +
+                               56.0f * scale;
+        const bool  download = !info.downloadUrl.empty();
+        // 缺少当前平台下载资产时只留返回，不制造不可执行的安装入口。
+        const bool stacked =
+            download && needed * 2 + style.ItemSpacing.x > available;
+        const float footer =
+            height * (stacked ? 2 : 1) +
+            // 计入分隔与换行间距后才分配正文，保证最后一行完整。
+            style.ItemSpacing.y * (stacked ? 3 : 2);
+        const float body =
+            std::max(1.0f, ImGui::GetContentRegionAvail().y - footer);
+        // 元数据和更新日志共用一个滚动区，旋转或大字号时操作区仍留在屏幕内。
+        ImGui::BeginChild("TouchUpdateDetails", { 0, body });
+        const auto version = [](const std::string& value,
+                                std::int64_t       revision) {
+            // 展示附带热修订号，比较与下载依然只使用检查器提供的原始字段。
+            // 临时字符串由立即执行的 Text 消费，不跨帧存储其 c_str。
+            return revision > 0 ? value + "-hotfix." + std::to_string(revision)
+                                : value;
+        };
+        ImGui::PushTextWrapPos(0);
+        // 版本标签和值放在同一文本流内，长版本号和翻译均可按宽度换行。
+        // 元数据不再对齐到输入框内边距，避免三行说明占掉大半屏幕。
+        ImGui::Text(
+            "%s: %s",
+            TR("ui.help.current_version").data(),
+            version(info.currentVersion, info.currentHotfixRevision).c_str());
+        ImGui::TextColored(
+            { .3f, 1, .3f, 1 },
+            "%s: %s",
+            TR("ui.help.latest_version").data(),
+            version(info.latestVersion, info.latestHotfixRevision).c_str());
+        if ( !info.releaseDate.empty() )
+            // 服务端未给日期时省略该行，不为缺失字段保留固定空白高度。
+            ImGui::Text("%s: %s",
+                        TR("ui.help.release_date").data(),
+                        info.releaseDate.c_str());
+        if ( info.downloadSize > 0 )
+            // 字节数沿用快照，只转换展示单位，不启动额外大小探测请求。
+            ImGui::Text("%s: %.1f MB",
+                        TR("ui.help.file_size").data(),
+                        info.downloadSize / (1024.0 * 1024.0));
+        ImGui::PopTextWrapPos();
+        // 文本换行作用域在 Markdown 前结束，正文渲染器自行管理段落布局。
+        // 单滚动区允许用户从空白处拖动阅读，不要求精确命中细滚动条。
+        if ( !info.changelog.empty() ) {
+            ImGui::Separator();
+            ImGui::TextUnformatted(TR("ui.help.changelog").data());
+            // 图片只在日志版本变化时准备；双击映射为移动端连续两次点按。
+            if ( m_images && m_imageVersion != info.latestVersion ) {
+                // 缓存对象由 UIManager 持有，当前动作只借用观察指针。
+                m_images->prepareDocument(info.changelog);
+                m_imageVersion = info.latestVersion;
+            }
+            renderMarkdown(
+                info.changelog,
+                MarkdownRenderOptions{
+                    .images             = m_images,
+                    .onImageDoubleClick = [this](std::string_view destination) {
+                        // 子区只记录预览意图；父弹窗稍后处理，保持弹窗栈层级。
+                        m_imagePreviewDestination.assign(destination);
+                        m_openImagePreview = true;
+                    } });
+        }
+        ImGui::EndChild();
+        // 操作在子区结束后提交，正文长度与滚动位置都不会带走底部按钮。
+        ImGui::Separator();
+        // 操作区只按当前宽度决定单行或双行，内容滚动不会改变按钮位置。
+        const float width =
+            download && !stacked
+                // 平分当前剩余宽度，预留同行间隙，不使用固定像素宽。
+                ? (available - style.ItemSpacing.x) * .5f
+                : available;
+        if ( download ) {
+            if ( workspaceActionButton(
+                     install, ICON_MMM_DOWNLOAD, { width, height }) ) {
+                // 只在松手激活时安排下载，不在动画或连续按住时重复安排。
+                m_updateRestartError.clear();
+                m_updateChecker->downloadAsync();
+            }
+            if ( !stacked ) ImGui::SameLine();
+            // 双行模式保留正常 ItemSpacing，避免触指同时覆盖两个操作。
+        }
+        if ( workspaceActionButton(
+                 cancel, ICON_MMM_ARROW_LEFT, { width, height }) ) {
+            // 只关闭本次通知，下次显式检查仍可产生新的打开请求。
+            ImGui::CloseCurrentPopup();
+            // 关闭只消费这次提示，不能由持久的发现更新状态自动重开。
+            // 仅关闭展示，不清除已取得的日志缓存和网络检查结果。
         }
     }
 
@@ -747,10 +861,6 @@ private:
     /// @brief 是否在下一帧打开更新成功弹窗。
     /// @note 由启动更新成功标记置位，在渲染阶段消费。
     bool m_showUpdateSuccessPopup = false;
-
-    /// @brief 用户是否取消或关闭了更新弹窗。
-    /// @note 新的手动检查开始时清除，避免旧取消状态屏蔽新结果。
-    bool m_updatePopupCanceled = false;
 
     /// @brief 点击重启更新失败时显示的错误信息。
     /// @note 新检查、新下载或新重启尝试开始时清除。

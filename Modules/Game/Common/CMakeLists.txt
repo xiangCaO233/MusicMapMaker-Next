@@ -71,3 +71,10 @@ if(SOURCES_BUILD
     # 第二个资源的缺失标签必须保持空或退回文件名。
     "${PROJECT_SOURCE_DIR}/tests/data/ma/雲散霧消/audio.ogg")
 endif()
+
+# Android 文档桥只链接目标 NDK 的 JNI 与 SDL，不向桌面引入 Java 运行时。
+if(ANDROID)
+  # 公共接口是普通路径与返回值；URI 和授权由 Activity 管理。
+  target_sources(Common PRIVATE src/common/AndroidDocumentStorage.cpp)
+  target_link_libraries(Common PRIVATE 3rd_sdl3)
+endif()

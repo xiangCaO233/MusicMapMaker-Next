@@ -111,9 +111,23 @@ public:
     /// @brief 解释画笔延伸意图，独立于选择、滚动等操作的 Shift 语义。
     /// @warning 每帧常量查询；起笔、拖动和滚动更新必须使用相同解释。
     virtual bool extendBrush(Surface surface, bool shift) const;
+    /// @brief 是否以固定轨道的单键／长条策略起笔，不续接已有折线。
+    /// @warning 每次起笔只查询方案能力；逻辑工具锁存结果，不模拟修饰键。
+    virtual bool noteHoldBrush(Surface) const { return false; }
+    /// @brief 显式选择简单笔画；默认不接受模式切换，桌面方案保持原规则。
+    /// @param enabled 为真只绘制单键／长条，为假允许自由折线及末端续写。
+    virtual void setNoteHoldBrush(bool enabled) {}
+    /// @brief 主画布显式物件擦除意图，默认关闭且不影响桌面右键。
+    /// @warning 每帧仅查询方案标量，实际笔画由移动私有解释器拥有。
+    virtual bool objectEraser() const { return false; }
+    /// @brief 只切换后续触控笔画，不更改当前工具、选区或物理输入。
+    virtual void setObjectEraser(bool enabled) {}
     /// @brief 是否在选中工具中启用无需键盘的右键编辑菜单。
     /// @warning 每帧只返回方案策略，不查询选择集合或访问会话锁。
     virtual bool selectionContextMenu() const;
+    /// @brief 触控仲裁与长按菜单只由触控方案启用，不由编译平台决定。
+    /// @warning 每帧返回固定能力，不查询操作系统或复制方案所有权。
+    virtual bool touchGestures() const { return false; }
     /// @brief 显式选择模式；经典方案返回空以保留物理修饰键语义。
     /// @warning 每帧只读取 UI 线程标量，不访问选择集合。
     virtual std::optional<Logic::SelectionOperation> selectionOperation() const;

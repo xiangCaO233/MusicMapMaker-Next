@@ -6,6 +6,7 @@
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 
 #include <imgui.h>
 #include <string_view>
@@ -86,7 +87,7 @@ void MainMenuView::handleHotkeys(MainMenuContext& context)
     m_navigationController.handleShortcuts();
 }
 
-/// @brief 遍历更新已注册菜单持有的 action 状态。
+/// @brief 更新菜单动作并处理独立于菜单栏显隐的应用快捷键。
 /// @param sourceManager 当前 UI 管理器。
 /// @param statusMessageSink 状态消息接收接口。
 /// @warning UI 热路径：每帧执行；不得在菜单更新中引入阻塞或文件系统操作。
@@ -104,6 +105,12 @@ void MainMenuView::update(UIManager*          sourceManager,
     for ( auto& menu : m_registeredMenus ) {
         if ( menu ) menu->update(context);
     }
+    // 无菜单栏的外壳仍需处理应用快捷键；桌面保留菜单窗口内的原有入口。
+    // Alt 菜单导航依赖所属窗口的 ImGui ID，不能把桌面弹窗查询移到宿主之外。
+    // 两种外壳每帧各消费一次，避免桌面重复保存或撤销。
+    if ( !sourceManager ||
+         !sourceManager->workspacePresentation().usesDesktopLayout() )
+        handleHotkeys(context);
 }
 
 /// @brief 遍历绘制已注册的一级菜单接口。
@@ -122,9 +129,8 @@ void MainMenuView::renderMenus(UIManager*          sourceManager,
         .sourceManager     = sourceManager,
         .dpiScale          = dpiScale,
     };
-    // 在构建菜单弹窗前收集快捷键请求，供本帧逐项消费。
+    // 桌面一级菜单仍在原窗口内处理导航，保持既有弹窗 ID 作用域。
     handleHotkeys(context);
-
     // 菜单样式只覆盖主菜单绘制作用域，不泄漏到后续 UI。
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                         ImVec2(8.0f * dpiScale, 8.0f * dpiScale));

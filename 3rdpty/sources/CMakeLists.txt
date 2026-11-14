@@ -6,7 +6,10 @@ include("IonCachyEngine")
 include("luajit")
 include("sol2")
 # * 窗口系统先于 UI 后端配置。
-include("GLFW")
+if(NOT ANDROID)
+  # Android 使用 SDL3 窗口，不编译桌面 GLFW。
+  include("GLFW")
+endif()
 include("imgui")
 # * 绘图库共享前面创建的 ImGui 目标。
 include("implot")
@@ -25,8 +28,8 @@ include("miniz")
 include("lunasvg")
 include("nlohmann_json")
 # * 网络依赖包装自行限定可选功能，避免依赖宿主缓存。
-include("curl")
 include("mbedtls")
+include("curl")
 # * 联机传输在 TLS 库配置完成后再建立依赖关系。
 include("libdatachannel")
 

@@ -7,11 +7,13 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 
 namespace MMM::Canvas
 {
+class AnnotationTablePresentation;
 
 /// @brief 独立管理谱面批注列表、详情和跳转操作的窗口。
 class AnnotationTableWindow final : public UI::IUIView,
@@ -21,6 +23,9 @@ public:
     /// @brief 创建拥有独立数据生命周期的批注表窗口。
     /// @param name UIManager 中的稳定注册名。
     explicit AnnotationTableWindow(const std::string& name);
+
+    /// @brief 在平台实现完整类型可见处销毁窗口状态。
+    ~AnnotationTableWindow() override;
 
     /// @brief 每帧更新独立批注表窗口。
     /// @param sourceManager UI 管理器；当前实现不需要访问。
@@ -85,6 +90,9 @@ private:
 
     /// @brief 与 Timeline 快照和窗口生命周期无关的批注表数据。
     AnnotationTableData m_data;
+
+    /// @brief 平台布局及未提交副本随窗口存活，不参与业务所有权。
+    std::unique_ptr<AnnotationTablePresentation> m_presentation;
 
     /// @brief 当前详情区选中的批注行。
     std::optional<std::size_t> m_selectedRow;

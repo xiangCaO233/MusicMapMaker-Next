@@ -1,11 +1,15 @@
 # Network 主库负责启动资源同步和版本更新检查。
-add_library(Network STATIC src/AssetSyncService.cpp src/UpdateChecker.cpp)
+add_library(Network STATIC src/AssetSyncService.cpp src/UpdateChecker.cpp
+                           src/CurlHandle.cpp)
 
 # 联机写谱作为 Network 的内部子模块，统一承载信令、P2P 传输和房间协议。
 add_subdirectory("Collaboration")
 
-# 公网协作目录与信令中继使用独立可执行文件，部署时不依赖游戏 UI。
-add_subdirectory("CollaborationServer")
+# 公网协作目录与信令中继使用独立可执行文件，部署时不依赖游戏 UI。 APK 只携带客户端，手机启动时不创建服务端命令行进程。
+# 此分支不裁掉编辑器已有的网络与房间客户端接口。
+if(NOT ANDROID)
+  add_subdirectory("CollaborationServer")
+endif()
 
 # 对消费模块公开网络服务接口，不暴露 src 内部帮助器。
 target_include_directories(Network PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -41,3 +45,8 @@ target_include_directories(AssetSyncServiceTest
 # 两个目标均在 CTest 隔离配置环境中运行。
 mmm_register_test_case(NAME UpdateCheckerTest COMMAND UpdateCheckerTest)
 mmm_register_test_case(NAME AssetSyncServiceTest COMMAND AssetSyncServiceTest)
+
+# 默认检查离线信任边界；设备验收可向同一用例显式传入证书文件和 HTTPS 地址。 不把外网或模拟器可用性作为桌面完整测试的前置条件。
+mmm_add_test_executable(Network CurlTrustTest tests/CurlTrustTest.cpp)
+target_link_libraries(CurlTrustTest PRIVATE Network Log)
+mmm_register_test_case(NAME CurlTrustTest COMMAND CurlTrustTest)

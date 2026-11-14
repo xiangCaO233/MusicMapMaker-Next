@@ -1,4 +1,5 @@
 #include "canvas/PreviewCanvas.h"
+#include "presentation/PreviewInteractionPresentation.h"
 #include "ui/interaction/EditorInteraction.h"
 /// @file PreviewCanvas.cpp
 /// @brief 实现谱面预览窗口、全谱密度导航及对应 Vulkan 命令录制。
@@ -148,6 +149,7 @@ PreviewCanvas::PreviewCanvas(
     std::shared_ptr<Common::Render::RenderSnapshotBuffer> syncBuffer)
     : IUIView(name)
     , IRenderableView(name)
+    , m_pointerPresentation(createPreviewInteractionPresentation())
     , m_canvasName(name)
     , m_syncBuffer(std::move(syncBuffer))
 {
@@ -156,6 +158,14 @@ PreviewCanvas::PreviewCanvas(
     // 会继续经 resizeCall 通知逻辑相机更新投影。
     m_targetWidth  = w;
     m_targetHeight = h;
+}
+
+/// @brief 待定触点也属于活动交互，不能在按住时把输入移交给另一方案。
+/// @warning 每帧只读 UI 本地门闩，不访问逻辑会话或图形资源。
+bool PreviewCanvas::hasActivePointerGesture() const
+{
+    return m_pointerPresentation->hasGesture() || m_wasDensitySeekActive ||
+           m_lastMouseCommand.isDragging;
 }
 
 /// @brief 绘制预览窗口右侧独立的全谱物件密度栏。
@@ -557,6 +567,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
     // 菜单隐藏窗口时本帧不会创建密度栏控件，必须显式结束可能仍被
     // ImGui 捕获的拖动，避免逻辑层持续保留 scrubbing 状态。
     if ( !editorSettings.showPreviewWindow ) {
+        m_pointerPresentation->suspend();
         commitDensitySeekScrub();
         return;
     }
@@ -573,6 +584,7 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
         // 标题栏关闭与菜单隐藏走同一持久化状态；先结束拖动，
         // 再保存设置，下一帧便不会重新创建已关闭窗口。
         commitDensitySeekScrub();
+        m_pointerPresentation->suspend();
         editorSettings.showPreviewWindow = false;
         appConfig.save();
         return;
@@ -604,7 +616,63 @@ void PreviewCanvas::update(UI::UIManager* sourceManager)
         ImGui::IsWindowFocused()
     };
     // RenderContext 已绘制谱面；新方案负责自己的预览导航与交互覆盖层。
-    if ( UI::Interaction::dispatchSurface(frame) ) return;
+    if ( UI::Interaction::dispatchSurface(frame) ) {
+        m_pointerPresentation->suspend();
+        commitDensitySeekScrub();
+        return;
+    }
+    // 触控与鼠标沿用同一密度轴几何，不另外估算左右保留宽度。
+    // 移动策略被构造在本视图内，切换操作方案无需创建第二份画布。
+    // 面板标题、密度轴和内容区互不重叠；起笔归属只在第一帧锁存。
+    // 外部模态抢占时策略结束已显示的浏览，禁止把残留抬手传给经典路径。
+    // 合成鼠标只属于原 ImGui 控件，不能再重复解释为预览定位。
+    // 本地滚动游标可以先于异步快照更新，但不改变快照中的全谱密度。
+    // 桌面工厂不接管输入，因此旧右侧预览的行为和布局保持原样。
+    // 平台策略不要求主画布可见，也不通过主画布执行拖动。
+    // 可见窗口独立维护手势，隐藏分支负责在不创建控件时主动收尾。
+    // 后续读取配置只用于显示偏好，不在这个分派点取得会话锁。
+    // 同一原始代际不会同时走移动和经典两个跳转入口。
+    const auto rail =
+        calculatePreviewDensityRailLayout(interactionOrigin,
+                                          interactionSize,
+                                          rctx.getReservedRightWidth(),
+                                          dpiScale);
+    // 触控起点必须在当前可见窗口，不能绕过其它窗口的覆盖命中。
+    // 持续导航允许手指拖出内容边界，但失焦或弹层接管后不能恢复旧代际。
+    // 配置和呈现状态均为 UI 线程所有，这里不从逻辑上下文反查输入。
+    // 原鼠标路径仍保留其命令去重缓存，移动返回后不会重复消费本次手势。
+    // 平台对象由 out-of-line 析构释放，公共头只保留中立观察接口。
+    const bool blocked = isCanvasInputBlockedByModal() ||
+                         ImGui::IsPopupOpen(nullptr,
+                                            ImGuiPopupFlags_AnyPopupId |
+                                                ImGuiPopupFlags_AnyPopupLevel);
+    const PreviewInteractionFrame previewFrame{
+        m_currentSnapshot,
+        interactionOrigin,
+        interactionSize,
+        rail.valid ? rail.innerMin : ImVec2{},
+        rail.valid ? rail.innerMax : ImVec2{},
+        m_lastAppliedYOffset,
+        dpiScale,
+        ImGui::IsWindowHovered(
+            ImGuiHoveredFlags_AllowWhenBlockedByActiveItem) &&
+            !blocked,
+        // 起笔已验证窗口命中；捕获后的拖出不依赖合成鼠标是否成功转移焦点。
+        // 真正失焦由平台 Cancel 结束，弹层接管仍由 blocked 立即撤销输入许可。
+        !blocked
+    };
+    // 移动策略独占内容与密度轴，不能再执行旧鼠标点击、拖拽或滚轮入口。
+    // 绘制继续复用同一离屏结果和密度缓存，不创建第二份谱面预览。
+    if ( m_pointerPresentation->update(previewFrame) ) {
+        commitDensitySeekScrub();
+        drawDensityOverview(interactionOrigin,
+                            interactionSize,
+                            rctx.getReservedRightWidth(),
+                            dpiScale,
+                            m_pointerPresentation->densityTarget(),
+                            sourceManager);
+        return;
+    }
 
     // 平台后端可能在窗口切换期间报告无效鼠标坐标；这时沿用最后一次
     // 有效位置，只把 hover/drag 状态变化发送给逻辑线程。
@@ -1218,6 +1286,7 @@ namespace MMM::Canvas
 /// @brief 先撤销输入事务观察登记，随后按原有顺序释放预览资源。
 PreviewCanvas::~PreviewCanvas()
 {
+    m_pointerPresentation->suspend();
     UI::Interaction::unregisterInteractionGuard(*this);
 }
 }  // namespace MMM::Canvas

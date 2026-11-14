@@ -15,7 +15,10 @@
 #include "mmm/beatmap/BeatMap.h"
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace MMM::Logic
 {
@@ -96,6 +99,82 @@ bool isHoveredAudioSample(const SessionContext& ctx)
            ctx.sampleRegistry.all_of<SampleComponent>(ctx.hoveredEntity);
 }
 
+/// @brief 保存续写删除计划；事务策略在正式释放之前不修改谱面与历史。
+/// @param ctx 本笔状态和会话动作栈。
+/// @param action 原根及其子实体的完整删除快照。
+/// @warning 只在续写起笔执行；不允许从连续更新路径重复分配或执行删除。
+void stageResumeDeletion(SessionContext&                ctx,
+                         std::unique_ptr<IEditorAction> action)
+{
+    if ( ctx.brushState.m_transactionalResume ) {
+        // 原对象持续可保存、可同步；预览层仅隐藏该根，第二指取消不需要 Undo。
+        ctx.brushState.m_pendingResume = std::move(action);
+    } else {
+        // 经典桌面和纯鼠标沿用既有两阶段历史，取消仍按精确动作身份恢复。
+        const auto* recorded = action.get();
+        ctx.actionStack.pushAndExecute(std::move(action), ctx);
+        ctx.brushState.resumedDeleteActionId = recorded->m_stackActionId;
+    }
+}
+
+/// @brief 续写复合事务保留新建动作的教学补偿能力，不恢复已被替代的旧练习。
+/// @details 普通撤销仍按复合动作逆序恢复原物件；教学返回只移除本步骤产物。
+class BrushResumeAction final : public CompositeEditorAction
+{
+public:
+    /// @brief 接管删除与新建两个动作，并借用其中长期稳定的新建动作。
+    /// @param actions 按原删除、新建的顺序转交基类独占持有。
+    /// @param creation 指向 actions 中新建动作，不能指向临时对象或外部会话。
+    BrushResumeAction(std::vector<std::unique_ptr<IEditorAction>> actions,
+                      IEditorAction*                              creation)
+        : CompositeEditorAction(std::move(actions), "Polyline Resume")
+        , m_creation(creation)
+    {
+        // 动作对象由 unique_ptr 间接持有，移动向量不会移动其实际内存。
+        // 顶层必须携带步骤身份，动作栈才能在返回步骤时找到这笔续写。
+        m_walkthroughToken = creation->m_walkthroughToken;
+        m_walkthroughSlot  = creation->m_walkthroughSlot;
+    }
+    /// @brief 教学返回只委托新产物补偿，不把普通 undo 当作步骤回退。
+    /// @warning 仅用户明确返回步骤时调用，不在逐帧预览中扫描动作条目。
+    std::unique_ptr<IEditorAction> walkthroughRollback(
+        SessionContext& ctx) override
+    {
+        return m_creation->walkthroughRollback(ctx);
+    }
+
+private:
+    /// @brief
+    /// 基类独占动作内的观察指针，存活期覆盖本复合动作，无额外共享所有权。
+    IEditorAction* m_creation;
+};
+
+/// @brief 将尚未执行的原物件删除和最终创建合为一次可撤销编辑。
+/// @param ctx 只由逻辑线程拥有的会话。
+/// @param action 已完成几何、权限和时间校验的新建动作。
+/// @warning 只在释放时分配复合动作，连续更新不访问撤销栈或同步数据。
+/// @note 只在释放阶段分配复合动作，连续预览不创建临时历史。
+/// @note 原删除计划移动后由复合动作拥有，清理画笔不得再次执行它。
+/// @note 桌面入口没有延迟删除计划，仍直接提交原创建动作。
+/// @note 两项执行结束后才由会话统一同步，观察者不会看到半笔替换。
+void commitBrushAction(SessionContext&                ctx,
+                       std::unique_ptr<IEditorAction> action)
+{
+    if ( ctx.brushState.m_pendingResume ) {
+        // 组件快照只随独占动作移动，不能复制共享所有权进入会话热路径。
+        // 复合动作持有子动作期间，教学补偿的观察指针始终指向同一个对象。
+        // 两项首次执行发生在同一命令中，外部观察者看不到中间缺失状态。
+        // 撤销先移除新对象，再恢复原根和全部子实体，重做顺序与首次提交一致。
+        auto*                                       creation = action.get();
+        std::vector<std::unique_ptr<IEditorAction>> actions;
+        actions.push_back(std::move(ctx.brushState.m_pendingResume));
+        actions.push_back(std::move(action));
+        action =
+            std::make_unique<BrushResumeAction>(std::move(actions), creation);
+    }
+    ctx.actionStack.pushAndExecute(std::move(action), ctx);
+}
+
 /// @brief 清理当前绘制笔刷状态。
 /// @param ctx 会话上下文引用。
 /// @note 清除当前手势的临时绑定，保留用户长期选定的资源与音量。
@@ -108,6 +187,10 @@ void resetBrushState(SessionContext& ctx)
     // 临时段列表和活动资源只属于一次手势，失败后不能被下一笔继承。
     // 清空 active 字段而保留 selected 字段，使工具选择在取消后仍有效。
     ctx.brushState.polylineSegments.clear();
+    // 延迟删除尚未执行，直接释放快照即可保留原对象及全部历史。
+    ctx.brushState.m_pendingResume.reset();
+    ctx.brushState.m_transactionalResume = false;
+    ctx.brushState.m_resumeRevision      = 0;
     ctx.brushState.activeAudioResourceId.clear();
     ctx.brushState.activeSampleBinding.reset();
     ctx.brushState.replacesExistingObject = false;
@@ -122,6 +205,7 @@ void resetBrushState(SessionContext& ctx)
     ctx.brushState.duration           = 0.0;
     ctx.brushState.dtrack             = 0;
     ctx.brushState.createsAudioSample = false;
+    ctx.brushState.m_noteHoldOnly     = false;
     ctx.brushState.isActive           = false;
 }
 
@@ -298,6 +382,12 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     // 重置替换标志，只有成功续接并删除原对象后才重新置位。
     ctx.brushState.isActive           = true;
     ctx.brushState.hasPolylineGesture = false;
+    // 策略只在起笔锁存，后续配置变化不能把同一笔改成折线或移动起轨。
+    ctx.brushState.m_noteHoldOnly = cmd.m_noteHoldOnly && !createsAudioSample;
+    ctx.brushState.m_transactionalResume =
+        cmd.m_transactionalResume && !createsAudioSample;
+    ctx.brushState.m_pendingResume.reset();
+    ctx.brushState.m_resumeRevision   = ctx.actionStack.captureSaveRevision();
     ctx.brushState.createsAudioSample = createsAudioSample;
     ctx.brushState.duration           = 0.0;
     ctx.brushState.dtrack             = 0;
@@ -404,7 +494,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     // 普通起笔仍可发生在已有对象附近，不隐式删除悬浮物件。
     bool isResuming = false;
     // 独立教学放置不能借 Shift 起笔删除已有物件，否则失败取消无法保留原谱。
-    if ( !cmd.createStandalone &&
+    if ( !cmd.createStandalone && !cmd.m_noteHoldOnly &&
          ctx.lastConfig.settings.enablePolylineEditing && cmd.isShiftDown &&
          isHoveredPlayerNote(ctx) ) {
         const auto& note =
@@ -454,8 +544,9 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                              static_cast<uint8_t>(HoverPart::HoldEnd) ||
                          ctx.hoveredPart ==
                              static_cast<uint8_t>(HoverPart::FlickArrow) ||
-                         ctx.hoveredPart ==
-                             static_cast<uint8_t>(HoverPart::HoldBody) ) {
+                         (!ctx.brushState.m_transactionalResume &&
+                          ctx.hoveredPart ==
+                              static_cast<uint8_t>(HoverPart::HoldBody)) ) {
                         // 进入恢复编辑模式
                         ctx.brushState.isActive = true;
                         ctx.brushState.type     = ::MMM::NoteType::POLYLINE;
@@ -464,8 +555,9 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                         ctx.brushState.polylineSegments = parentNote.m_subNotes;
 
                         // 如果最后一段是 Hold，则根据当前点击位置缩短/伸长它
-                        if ( ctx.brushState.polylineSegments.back().type ==
-                             ::MMM::NoteType::HOLD ) {
+                        if ( !ctx.brushState.m_transactionalResume &&
+                             ctx.brushState.polylineSegments.back().type ==
+                                 ::MMM::NoteType::HOLD ) {
                             double snapTime =
                                 (snap.isSnapped && !cmd.bypassSnapAtStart)
                                     ? snap.snappedTime
@@ -515,17 +607,13 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
 
                         auto deleteAction = std::make_unique<BatchNoteAction>(
                             std::move(deleteEntries), "Resume Polyline Edit");
-                        // 所有原组件快照均已复制，执行后不能继续读取原父引用。
-                        // 本次删除独立进入历史，画笔最终替代结果尚未提交。
-                        // 入栈后按栈分配的身份记录本笔删除，不持有跨帧动作指针。
-                        const auto* resumeDelete = deleteAction.get();
-                        ctx.actionStack.pushAndExecute(std::move(deleteAction),
-                                                       ctx);
-                        ctx.brushState.resumedDeleteActionId =
-                            resumeDelete->m_stackActionId;
+                        // 原组件已复制；事务策略只保存删除计划，桌面策略仍立即入栈。
+                        // 后续不能再借用旧父组件，因为桌面分支会立即销毁它。
+                        // 两种路径均由同一开始标志表示替换，取消语义按策略分别处理。
+                        stageResumeDeletion(ctx, std::move(deleteAction));
 
                         // 设置拖拽状态
-                        // 只有删除动作已入栈后才标记替换状态，取消恢复需要识别这一步历史。
+                        // 删除计划已建立后才标记替换，取消可准确区分暂存与已入栈动作。
                         // 普通未续接画笔不会携带该标志。
                         ctx.brushState.replacesExistingObject = true;
                         ctx.brushState.resumedEntity          = targetEntity;
@@ -541,7 +629,15 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
             } else if ( !parentNote.m_isSubNote &&
                         (parentNote.m_type == ::MMM::NoteType::NOTE ||
                          parentNote.m_type == ::MMM::NoteType::HOLD ||
-                         parentNote.m_type == ::MMM::NoteType::FLICK) ) {
+                         parentNote.m_type == ::MMM::NoteType::FLICK) &&
+                        (!ctx.brushState.m_transactionalResume ||
+                         parentNote.m_type == ::MMM::NoteType::NOTE ||
+                         (parentNote.m_type == ::MMM::NoteType::HOLD &&
+                          ctx.hoveredPart ==
+                              static_cast<uint8_t>(HoverPart::HoldEnd)) ||
+                         (parentNote.m_type == ::MMM::NoteType::FLICK &&
+                          ctx.hoveredPart ==
+                              static_cast<uint8_t>(HoverPart::FlickArrow))) ) {
                 // 将普通的 Note/Hold/Flick 转换为包含单个 subNote 的
                 // Polyline，并恢复编辑
                 ctx.brushState.isActive = true;
@@ -563,7 +659,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                 // 如果是 Hold，则根据当前点击位置缩短/伸长它
                 // 独立 Hold 续接也按当前点击调整末端，与既有折线末段保持一致。
                 // 普通 Note 和 Flick 不在这里改动它们的原跨度。
-                if ( parentNote.m_type == ::MMM::NoteType::HOLD ) {
+                if ( !ctx.brushState.m_transactionalResume &&
+                     parentNote.m_type == ::MMM::NoteType::HOLD ) {
                     double snapTime = (snap.isSnapped && !cmd.bypassSnapAtStart)
                                           ? snap.snappedTime
                                           : rawTime;
@@ -589,23 +686,19 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                 auto deleteAction = std::make_unique<BatchNoteAction>(
                     std::move(deleteEntries), "Convert Note to Polyline");
                 // 入栈后按栈分配的身份记录本笔删除，不持有跨帧动作指针。
-                const auto* resumeDelete = deleteAction.get();
-                ctx.actionStack.pushAndExecute(std::move(deleteAction), ctx);
-                ctx.brushState.resumedDeleteActionId =
-                    resumeDelete->m_stackActionId;
+                const auto originalType = parentNote.m_type;
+                stageResumeDeletion(ctx, std::move(deleteAction));
 
                 ctx.brushState.replacesExistingObject = true;
                 ctx.brushState.resumedEntity          = targetEntity;
                 ctx.isDragging                        = true;
                 ctx.dragCameraId                      = cmd.cameraId;
                 isResuming                            = true;
-                // 原对象删除后此日志仍读取
-                // parentNote，存在观察引用生命周期风险。
-                // 日志所需类型值应在删除前保存，不能依赖原组件存储继续有效。
+                // 经典路径已经删除原组件，日志只读取删除前保存的类型值。
                 XINFO(
                     "Converting ordinary note (type {}) to Polyline and "
                     "resuming edit for entity {}",
-                    static_cast<int>(parentNote.m_type),
+                    static_cast<int>(originalType),
                     static_cast<uint32_t>(targetEntity));
             }
         }
@@ -614,7 +707,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     // 续接成功已恢复原始参照，不能再用鼠标按下位置覆盖。
     // 新 Shift 手势才记录持续段起点，形状升级由更新入口决定。
     if ( !isResuming ) {
-        if ( cmd.isShiftDown ) {
+        if ( cmd.isShiftDown || cmd.m_noteHoldOnly ) {
             ctx.brushState.type = ::MMM::NoteType::NOTE;  // 初始为 Note
             ctx.brushState.holdStartTime = ctx.brushState.time;
             ctx.brushState.startTrack    = ctx.brushState.track;
@@ -712,6 +805,24 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         return;
     }
     currentPosTime = std::max(MIN_PLACEABLE_NOTE_TIME, currentPosTime);
+
+    // 固定轨道策略独立于折线能力开关，不会因手指横向漂移产生滑键。
+    // 起拍参照保持不变；向任一时间方向拖动都归一化为正时长。
+    // 回到同一吸附时间退回单键，不能创建零长度长条或移动原始轨道。
+    if ( ctx.brushState.m_noteHoldOnly ) {
+        const double anchor = ctx.brushState.holdStartTime;
+        const double length = std::abs(currentPosTime - anchor);
+        const bool   hold   = length > 1e-5;
+        ctx.brushState.type =
+            hold ? ::MMM::NoteType::HOLD : ::MMM::NoteType::NOTE;
+        ctx.brushState.time = hold ? std::min(anchor, currentPosTime) : anchor;
+        ctx.brushState.duration = hold ? length : 0.0;
+        ctx.brushState.track    = ctx.brushState.startTrack;
+        ctx.brushState.dtrack   = 0;
+        return;
+    }
+
+
 
     const bool isPreview =
         cmd.cameraId == "Preview" || cmd.cameraId == "PreviewCanvas";
@@ -1019,11 +1130,14 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
                     if ( timeChangedLocal || diffYLocal > 5.0f ) {
                         // 开启新的 Hold
                         ctx.brushState.polylineSegments.push_back(
-                            // 新增 Hold 从 Flick 终轨开始且初始持续为零。
-                            // 本轮只建立活动段，后续输入再更新长度或回退该段。
+                            // 触控可能在这个转向帧立即释放，不能等待下一帧补长度。
+                            // 桌面仍初始化零持续；事务策略立即采用本次指针的有效跨度。
                             { ::MMM::NoteType::HOLD,
                               last.timestamp,
-                              0.0,
+                              ctx.brushState.m_transactionalResume
+                                  ? std::max(0.0,
+                                             currentPosTime - last.timestamp)
+                                  : 0.0,
                               last.trackIndex + last.dtrack,
                               0 });
                         ctx.brushState.segmentStartMouseY = cmd.mouseY;
@@ -1073,7 +1187,7 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
 /// @param cmd 结束命令；当前实现使用最后一次更新留下的几何。
 /// @warning
 /// 释放低频路径：允许局部段清理、尾部全谱查找与批次分配，禁止移到连续更新。
-/// @note 新建和合并删除进入同一批次；此前续接原对象的删除已经独立入栈。
+/// @note 新建和合并删除进入同一批次；事务续写还包含原对象的延迟删除。
 /// @note 时间验证失败只取消当前画笔，不执行尚未提交的合并删除计划。
 /// @pre 读取的临时几何是最后一次有效更新结果，结束命令本身不重算鼠标位置。
 /// @note 连接候选按当前 Registry 顺序检查，不按距离重新排序或择优匹配。
@@ -1084,6 +1198,11 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
 {
     if ( !ctx.brushState.isActive ) return;
 
+    // 简单笔画只提交自己的新物件；即使尾部重叠也不能合并或删除原谱面。
+    // 教学仍使用命令中的独立放置标志及令牌，两种来源不相互覆盖。
+    const bool standalone =
+        cmd.createStandalone || ctx.brushState.m_noteHoldOnly;
+
     // 教学手势未落入指定目标时直接丢弃临时画笔。取消发生在创建动作入栈前，
     // 对用户表现为本次失败放置已撤销，同时不会误撤销更早的有效编辑。
     if ( cmd.cancel ) {
@@ -1091,9 +1210,20 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
         // 精确身份可跨过后续编辑定位自己的动作，不能直接撤销栈顶。
         // 取消移除的是未完成笔画的删除历史，不留下可重做的中间缺失状态。
         if ( cmd.restoreReplacedObjectOnCancel &&
+             !ctx.brushState.m_transactionalResume &&
              ctx.brushState.replacesExistingObject )
             ctx.actionStack.cancelAction(ctx.brushState.resumedDeleteActionId,
                                          ctx);
+        resetBrushState(ctx);
+        return;
+    }
+
+    // 续写快照不能覆盖期间插入的编辑或权威同步；保守放弃本笔，原对象仍完整。
+    // 修订只读标量，不持锁等待其他线程，也不尝试重放旧事务到新谱面。
+    if ( ctx.brushState.m_pendingResume &&
+         (ctx.actionStack.captureSaveRevision() !=
+              ctx.brushState.m_resumeRevision ||
+          !ctx.noteRegistry.valid(ctx.brushState.resumedEntity)) ) {
         resetBrushState(ctx);
         return;
     }
@@ -1140,6 +1270,16 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
     // 活动方案由渲染器解析；只有用户明确指定的画笔颜色才写入物件。
     applyNoteColorOverrides(note, ctx.brushState.drawCustomColors);
 
+    // 续写是原物件的延伸，根注释、额外元数据和颜色不能因替换实体而丢失。
+    // 原根在事务提交前一直存在，修订验证已经保证这些值没有被其它编辑改写。
+    if ( ctx.brushState.m_pendingResume ) {
+        const auto& source = ctx.noteRegistry.get<const NoteComponent>(
+            ctx.brushState.resumedEntity);
+        note.m_metadata     = source.m_metadata;
+        note.m_annotation   = source.m_annotation;
+        note.m_customColors = source.m_customColors;
+    }
+
     // 释放时再次检查配置门禁，覆盖手势中途切换编辑模式的情况。
     // 拒绝不会生成新音符或执行本函数后续合并。
     if ( !SessionUtils::isNoteEditable(note, ctx.lastConfig.settings) ) {
@@ -1147,6 +1287,10 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
         return;
     }
 
+    // 延迟计划尚未执行，任何后续校验失败都可直接丢弃而不用反向编辑。
+    // 原根的延迟删除保存在独立动作中，不混入尾部搜索候选。
+    // 最终复合提交只分配一次历史身份，取消或无效几何不会执行其中任何一步。
+    // 删除前保存的父子快照属于当前手势，桌面入口仍使用原有立即删除历史。
     // 折线尾部结合所需的删除条目列表 (声明在外部以便后续使用)
     std::vector<BatchNoteAction::Entry> mergeDeleteEntries;
 
@@ -1244,7 +1388,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
         // 清洗可能清空列表，先检查非空再读取末段。
         // 只有 Hold 和 Flick 在下面定义有效尾部，正常状态机应提供这两类尾段。
         // 独立练习仍规范化自身几何，但不得合并或删除附近已有物件。
-        if ( !cmd.createStandalone && segments.size() >= 1 ) {
+        if ( !standalone && segments.size() >= 1 ) {
             // 计算尾部的时间和轨道
             // 这里保存工作列表末元素引用，后续分支会向同一向量追加元素。
             // 向量扩容会使该引用失效，追加后的后续匹配存在既有生命周期风险。
@@ -1269,6 +1413,9 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
             for ( auto entity : noteView ) {
                 const auto& nc = noteView.get<NoteComponent>(entity);
                 if ( nc.m_isSubNote ) continue;  // 跳过子物件
+                if ( ctx.brushState.m_pendingResume &&
+                     entity == ctx.brushState.resumedEntity )
+                    continue;
 
                 // ===== 检测普通 Note（移除） =====
                 // 重叠点击只作为冗余对象删除，不向路径追加一个新的 NOTE 段。
@@ -1480,7 +1627,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
         // 该选项当前按路径节点匹配物件起点，不做段内部连续几何相交检测。
         // 候选仅限独立 NOTE、HOLD、FLICK，完整折线不在这段清理中删除。
         // 路径清除同样属于隐式改写，独立放置不能借此删除此前成功的练习。
-        if ( !cmd.createStandalone &&
+        if ( !standalone &&
              ctx.lastConfig.settings.removeObjectsOnPolylinePath ) {
             /// @brief 提交阶段用于起点重叠匹配的路径节点。
             struct Node {
@@ -1523,6 +1670,10 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
             for ( auto entity : noteView ) {
                 const auto& nc = noteView.get<NoteComponent>(entity);
                 if ( nc.m_isSubNote ) continue;
+                // 原根由延迟删除计划统一替换，路径清理不能重复删除它。
+                if ( ctx.brushState.m_pendingResume &&
+                     entity == ctx.brushState.resumedEntity )
+                    continue;
 
                 if ( nc.m_type == ::MMM::NoteType::NOTE ||
                      nc.m_type == ::MMM::NoteType::HOLD ||
@@ -1713,7 +1864,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
             std::move(mergeDeleteEntries), "Polyline Create");
         // 独立折线也属于教学产物，批量父子创建共用一次步骤身份。
         markPracticeAction(*action);
-        ctx.actionStack.pushAndExecute(std::move(action), ctx);
+        commitBrushAction(ctx, std::move(action));
     } else {
         // 非折线降级物件 (NOTE / HOLD / FLICK)
         // 有合并删除时，即使结果降级成普通物件也必须使用组合批次。
@@ -1724,7 +1875,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
             auto action = std::make_unique<BatchNoteAction>(
                 std::move(mergeDeleteEntries), "Note Create & Merge");
             markPracticeAction(*action);
-            ctx.actionStack.pushAndExecute(std::move(action), ctx);
+            commitBrushAction(ctx, std::move(action));
         } else {
             // 没有删除候选的普通新物件使用单对象创建动作。
             // 此路径由动作自行分配身份，保持空 before 的创建语义。
@@ -1732,7 +1883,7 @@ void DrawTool::handleEndBrush(SessionContext& ctx, const CmdEndBrush& cmd)
                 NoteAction::Type::Create, entt::null, std::nullopt, note);
             // 仅独立练习创建可被返回操作定向删除，普通绘制不能混入教学历史。
             markPracticeAction(*action);
-            ctx.actionStack.pushAndExecute(std::move(action), ctx);
+            commitBrushAction(ctx, std::move(action));
         }
     }
 
@@ -1764,8 +1915,9 @@ void DrawTool::handleStartErase(SessionContext& ctx, const CmdStartErase& cmd)
 {
     // 目标集合描述当前预览，不是沿鼠标轨迹累计的擦除历史。
     // 起笔时清空旧目标，防止上一笔未完成状态混入本次释放。
-    ctx.eraserState.isActive    = true;
-    ctx.eraserState.isShiftDown = cmd.isShiftDown;
+    ctx.eraserState.limitToTarget = false;
+    ctx.eraserState.isActive      = true;
+    ctx.eraserState.isShiftDown   = cmd.isShiftDown;
     ctx.eraserState.targetEntities.clear();
     // Note 和草稿共用 Note Registry，但领域标签仍保留命中类型。
     // 只读悬浮校验已经确认组件存在，后面才能安全解析父关系。
@@ -1863,7 +2015,7 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
         std::unordered_set<entt::entity> toDelete;
         // 选择集合在释放时读取，预览移动不承担完整扫描。
         // 同号 Note 实体不参与本次采样删除计划。
-        if ( targetIsSelected ) {
+        if ( targetIsSelected && !ctx.eraserState.limitToTarget ) {
             const auto selectedView =
                 ctx.sampleRegistry
                     .view<InteractionComponent, SampleComponent>();
@@ -1939,7 +2091,7 @@ void DrawTool::handleEndErase(SessionContext& ctx, const CmdEndErase& cmd)
             }
         }
 
-        if ( targetIsSelected ) {
+        if ( targetIsSelected && !ctx.eraserState.limitToTarget ) {
             // 场景 A: 擦除的目标中包含选中物件 -> 删除所有选中的物件 +
             // 擦除的目标物件
             // 选择扩展和显式目标可能重叠，先按本地身份去重再准备条目。

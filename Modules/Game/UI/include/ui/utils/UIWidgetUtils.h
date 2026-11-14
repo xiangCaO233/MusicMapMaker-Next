@@ -313,6 +313,16 @@ void drawScrollingText(std::string_view text, ImVec2 startPos,
                        float availableWidth, float targetHeight,
                        bool centerWhenFits = false);
 
+/// @brief 向指定宿主绘制同一滚动文本，用于原生停靠标签等独立绘制层。
+/// @param drawList 已由调用方确定生命周期的宿主绘制列表。
+/// @param color 主题已计算的文字颜色，不重复应用窗口透明度。
+/// @details 只操作绘制列表的局部裁剪，不切换当前业务窗口或改变输入矩形。
+/// @warning UI 热路径：复用原有滚动曲线，不分配资源或创建交互 Item。
+void drawScrollingTextOnDrawList(ImDrawList& drawList, std::string_view text,
+                                 ImVec2 startPos, float availableWidth,
+                                 float targetHeight, ImU32 color,
+                                 bool centerWhenFits = false);
+
 /// @brief Selectable 滚动文本核心绘制结果。
 struct ScrollingSelectableResult {
     /// @brief 背景 Selectable 本帧是否被点击。
@@ -390,11 +400,12 @@ bool renderScrollingCollapsingHeader(const std::string& id,
 /// @param height 控件高度。
 /// @param isLeaf 是否为叶子节点。
 /// @param tooltip 悬浮提示文本。
+/// @param icon 独立前导图标；触屏为其保留固定位置，文件名在右侧换行。
 /// @return 本帧交互结果。
 /// @warning UI 热路径：只执行 ImGui 控件绘制和局部文本滚动计算。
 ScrollingTreeNodeResult renderScrollingTreeNodeCore(
     const std::string& id, const std::string& text, float width, float height,
-    bool isLeaf, const std::string& tooltip = "");
+    bool isLeaf, const std::string& tooltip = "", std::string_view icon = {});
 
 /// @brief 渲染带自动滚动的树节点（针对文件浏览器）。
 /// @param id ImGui 控件 ID。
@@ -404,15 +415,17 @@ ScrollingTreeNodeResult renderScrollingTreeNodeCore(
 /// @param isLeaf 是否为叶子节点。
 /// @param onClick 点击回调。
 /// @param tooltip 悬浮提示文本。
+/// @param icon 独立前导图标；不参与文本换行或控件 ID。
 /// @return 本帧展开状态。
 /// @warning UI 热路径：模板层只分发点击回调，绘制逻辑在 .cpp 中。
 template<typename OnClick>
 bool renderScrollingTreeNode(const std::string& id, const std::string& text,
                              float width, float height, bool isLeaf,
-                             OnClick onClick, const std::string& tooltip = "")
+                             OnClick onClick, const std::string& tooltip = "",
+                             std::string_view icon = {})
 {
-    const auto result =
-        renderScrollingTreeNodeCore(id, text, width, height, isLeaf, tooltip);
+    const auto result = renderScrollingTreeNodeCore(
+        id, text, width, height, isLeaf, tooltip, icon);
     if ( result.clicked ) {
         onClick();
     }
@@ -429,6 +442,9 @@ void renderProjectTransitionPlaceholder();
 /// @param desiredSize 期望尺寸，任意轴为 0 时不强制该轴尺寸。
 /// @warning UI 热路径：只写入 ImGui 下一窗口状态。
 void prepareCenteredModalWindow(ImVec2 desiredSize = ImVec2(0.0f, 0.0f));
+/// @brief 返回含留白和小屏夹取的模态尺寸上限，正文与父窗口共用同一口径。
+/// @warning 每帧固定几何运算，不访问系统输入法或业务锁。
+ImVec2 centeredModalWindowMaxSize();
 
 /// @brief 在局部作用域内为纵向滚动容器推入 DPI 感知的最小滚动条宽度。
 /// @warning UI 热路径：构造与析构只读取当前 DPI/主题并执行一次 ImGui

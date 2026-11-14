@@ -80,6 +80,9 @@ public:
     /// @return 当前动画缩放相对缓存目标缩放的比例。
     /// @warning 热路径：渲染剔除和快照生成时读取；只返回缓存值。
     double getAnimatedZoomScale() const { return m_animatedZoomScale; }
+    /// @brief 返回实际积分缓存采用的基础倍率，可能暂时不同于新配置目标。
+    /// @warning 热路径只读标量；用于直接操纵期间复用积分而不重建时间线。
+    double getBaseZoom() const { return m_lastZoom; }
 
     /// @brief 获取给定时间戳对应的绝对 Y 坐标。
     double getAbsY(double t) const;

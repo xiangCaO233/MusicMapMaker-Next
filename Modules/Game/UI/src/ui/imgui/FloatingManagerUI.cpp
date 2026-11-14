@@ -1323,8 +1323,9 @@ void FloatingManagerUI::applyDockResizeConstraintsBeforeDockSpace(
                           : it->second->getMinContentSize(dpiScale),
         dpiScale);
     // ### 后缀与 update 中一致，标题变化不改变内部窗口 ID。
-    const std::string windowName = m_currentSubViewId + "###" + m_name;
-    ImGuiWindow*      window     = ImGui::FindWindowByName(windowName.c_str());
+    const std::string windowName =
+        TR(m_currentSubViewId.c_str()).toString() + "###" + m_name;
+    ImGuiWindow* window = ImGui::FindWindowByName(windowName.c_str());
     if ( !window || !window->DockNode ) {
         // 首帧或浮动窗口由常规 ImGui 尺寸约束处理。
         return;
@@ -1633,13 +1634,13 @@ bool FloatingManagerUI::renderCollapsedResizeOverlay(UIManager* sourceManager)
     bool  shouldShowSubView = false;
     float mouseAxis         = 0.0f;
     float dragDistance      = 0.0f;
-    float separatorAxis     = axis == ImGuiAxis_Y
-                                  ? (m_collapsedDockIsFirstChild
-                                         ? hostWindow->Pos.y
-                                         : hostWindow->Pos.y + hostWindow->Size.y)
-                                  : (m_collapsedDockIsFirstChild
-                                         ? hostWindow->Pos.x
-                                         : hostWindow->Pos.x + hostWindow->Size.x);
+    float separatorAxis = axis == ImGuiAxis_Y
+                              ? (m_collapsedDockIsFirstChild
+                                     ? hostWindow->Pos.y
+                                     : hostWindow->Pos.y + hostWindow->Size.y)
+                              : (m_collapsedDockIsFirstChild
+                                     ? hostWindow->Pos.x
+                                     : hostWindow->Pos.x + hostWindow->Size.x);
 
     if ( !overlayActive ) {
         m_collapsedResizeDragActive        = false;
@@ -1700,6 +1701,28 @@ bool FloatingManagerUI::renderCollapsedResizeOverlay(UIManager* sourceManager)
         return true;
     }
     return false;
+}
+
+/// @brief 在移动内容区复用当前子视图，不执行桌面停靠与边缘缩放。
+/// @warning 每帧只更新当前子视图；不得在此重新载入目录或等待后台任务。
+void FloatingManagerUI::updateAsDrawer(UIManager* sourceManager)
+{
+    // 使用同一份子视图，不因手势开关重复加载文件树或音轨资源。
+    // LayoutContext 配对窗口与 Clay 上下文，外壳只提供本帧显示矩形。
+    // 过渡阶段仍用公共占位视图，避免读取正在切换的项目状态。
+    // 抽屉显隐属于移动外壳，当前业务选择和准备快照仍由原管理器持有。
+    const auto it = m_subViews.find(m_currentSubViewId);
+    if ( !m_isVisible || it == m_subViews.end() ) return;
+    it->second->syncProjectUiState(sourceManager);
+    LayoutContext context(
+        *this,
+        TR(m_currentSubViewId.c_str()).toString() + "###" + m_name,
+        true,
+        ImGuiWindowFlags_NoTitleBar);
+    if ( sourceManager->isProjectTransitionInProgress() )
+        Utils::renderProjectTransitionPlaceholder();
+    else
+        it->second->onUpdate(context, sourceManager);
 }
 
 void FloatingManagerUI::update(UIManager* sourceManager)
@@ -1765,7 +1788,8 @@ void FloatingManagerUI::update(UIManager* sourceManager)
 
     // 使用 ### 后缀强制固定 ImGui 内部窗口
     // ID，即使显示的标题变化也不会丢失停靠状态
-    std::string   windowName   = m_currentSubViewId + "###" + m_name;
+    std::string windowName =
+        TR(m_currentSubViewId.c_str()).toString() + "###" + m_name;
     const ImGuiID resumeDockId = resumeCollapsedResize ? m_collapsedDockId : 0;
     const float   visibilityAlpha = m_isVisible
                                         ? easeOutCubic(m_visibilityAnimAmount)
@@ -1774,9 +1798,9 @@ void FloatingManagerUI::update(UIManager* sourceManager)
                         ImGui::GetStyle().Alpha * visibilityAlpha);
     {
         LayoutContext  lctx{ *this,           windowName,
-                            false,           ImGuiWindowFlags_NoTitleBar,
-                            nullptr,         resumeDockId,
-                            ImGuiCond_Always };
+                             false,           ImGuiWindowFlags_NoTitleBar,
+                             nullptr,         resumeDockId,
+                             ImGuiCond_Always };
         ImVec2         currentWindowSize = ImGui::GetWindowSize();
         const bool     isDocked          = ImGui::IsWindowDocked();
         ImGuiWindow*   currentWindow     = ImGui::GetCurrentWindow();
@@ -1825,9 +1849,9 @@ void FloatingManagerUI::update(UIManager* sourceManager)
                 resizeTarget = directTarget;
             }
         }
-        const ImVec2 dockResizeMousePos           = m_restoreMouseAfterDockSpace
-                                                        ? m_mousePosBeforeDockClamp
-                                                        : ImGui::GetMousePos();
+        const ImVec2 dockResizeMousePos = m_restoreMouseAfterDockSpace
+                                              ? m_mousePosBeforeDockClamp
+                                              : ImGui::GetMousePos();
         const DockResizeOverrun dockResizeOverrun = getDockResizeOverrun(
             resizeTarget, minWindowSize, dockResizeMousePos);
         bool collapsedDuringUpdate = false;

@@ -1,0 +1,69 @@
+name: Reusable Android ARM64 Build
+# Android 只交付 QA 制品，不参与桌面发布目录或网站清单的聚合。
+on:
+  workflow_call:
+    inputs:
+      source_ref:
+        # 调用者传入事件的精确 SHA，运行中不追随分支的新提交。
+        required: true
+        type: string
+permissions:
+  # 源码和制品使用当前任务身份，不需要写仓库或发布 Release 的权限。
+  contents: read
+concurrency:
+  # 固定 Android 工作树与增量缓存互斥；不会占用桌面工作树的锁。
+  group: musicmapmaker-android-arm64
+  cancel-in-progress: false
+jobs:
+  arm64:
+    # 现有 Debian 容器已挂载 cross，工具链与生成物均在该目录下。
+    # 只交叉编译 arm64-v8a，不安装模拟器镜像或构建 x86_64 APK。
+    runs-on: [self-hosted, Linux, X64, debian]
+    # 首次编译包含音视频依赖，给予完整编译窗口；超时只终止本任务。
+    # 工作树串行锁覆盖同步与打包，取消后的下一次构建重新核对精确 SHA。
+    timeout-minutes: 120
+    # 默认不自动拉取 LFS，下面仅显式获取 APK 需要的默认资源。
+    # Git 对象与二进制资源来源分别由 origin 和仓库 .lfsconfig 固定。
+    env:
+      GIT_LFS_SKIP_SMUDGE: "1"
+      MMM_SOURCE_REF: ${{ inputs.source_ref }}
+    # 同步和编译处于同一个 shell，文件锁不会在两个步骤之间提前释放。
+    # 失败时后续上传步骤由默认 success 条件跳过，避免交付上次生成的旧包。
+    steps:
+      - name: Sync and build Android ARM64 QA
+        shell: bash
+        # 子模块按 gitlink 固定；专用 checkout 的强制检出不触及用户工作树。
+        # 工具链预先安装在宿主挂载卷，作业不修改容器镜像和系统默认 Java。
+        run: |
+          set -euo pipefail
+          android_root=/home/xiang/cross/android
+          mkdir -p "$android_root/checkout"
+          # 手动预热与 CI 共用这把锁，整个同步和构建事务只允许一个写入者。
+          exec 9>"$android_root/build.lock"
+          flock 9
+          cd "$android_root/checkout"
+          # 这是 Android 专用 checkout，不复用桌面流水线的固定源码目录。
+          if [[ ! -d .git ]]; then
+            git init
+            git remote add origin https://github.com/xiangCaO233/MusicMapMaker-Next.git
+          fi
+          # SHA 经严格检查后才传入 Git，不能把输入值当作 shell 代码执行。
+          [[ "$MMM_SOURCE_REF" =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin "$MMM_SOURCE_REF"
+          git checkout --detach --force "$MMM_SOURCE_REF"
+          git submodule sync --recursive
+          git submodule update --init --recursive --force --depth 1 --jobs 4
+          # 源码构建不需要下载桌面预编译包和测试音频，只取 APK 默认资源。
+          git lfs pull --include='assets/**' --exclude=''
+          bash "$android_root/checkout/scripts/ci/android-build.sh"
+      - name: Upload signed ARM64 APK
+        # APK 已压缩，不再重复压缩；仅保留短期 QA 下载，控制托管存储费用。
+        uses: actions/upload-artifact@v4
+        # 上传范围精确到公开交付子目录，不包含缓存、私钥和整个工作目录。
+        # 保留期只作用于本制品，不能借此修改仓库现有 Release 的保存策略。
+        with:
+          name: android-qa-arm64-${{ inputs.source_ref }}
+          path: /home/xiang/cross/android/work/apk/ci/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3

@@ -1,5 +1,6 @@
 #include "BeatmapSession_CommandState.h"
 #include "common/LogicCommands.h"
+#include "common/platform/DocumentStorage.h"
 #include "config/EditorSettings.h"
 #include "logic/BeatmapSession.h"
 
@@ -1019,7 +1020,7 @@ bool readPackageSourceFile(const std::filesystem::path& path,
 /// @param path 输出文件路径。
 /// @param data 待写入数据指针。
 /// @param size 待写入字节数。
-/// @return 是否写入成功。
+/// @return 本地流关闭且授权文档发布完成时返回 true。
 /// @details
 /// 父目录按需创建，目标文件以 trunc 覆盖。零长度文件允许空数据指针；非零长度
 /// 指针生命周期由调用方保证覆盖整个同步 write 调用。
@@ -1042,8 +1043,36 @@ bool writePackageOutputFile(const std::filesystem::path& path, const void* data,
         file.write(static_cast<const char*>(data),
                    static_cast<std::streamsize>(size));
     }
-    return file.good();
+    file.close();
+    // 析构之前必须刷新并检查关闭结果，不能发布尚在用户态缓冲中的空文件。
+    if ( file.fail() ) return false;
+    std::string publishError;
+    // SAF 返回的是私有工作副本；写入本地不等于系统选择的目标已更新。
+    // 普通路径在桌面和本机目录模式下保持无操作，失败保留副本用于重试。
+    if ( !MMM::Common::publishDocument(path, publishError) ) {
+        XERROR("Package document publish failed: {}", publishError);
+        return false;
+    }
+    return true;
 }
+
+/// @brief 打包事务退出时检查平台占位，转换失败也不能留下零字节的假包。
+/// @details 仅借用命令路径；平台只删除本次新建且仍未写入的空文档。
+/// 已发布目标、普通磁盘文件和完整私有副本均保持原样。
+struct PackageDocumentGuard {
+    /// @brief 命令在整个处理调用中存活，守卫不复制会话或项目所有权。
+    const std::string& m_path;
+    /// @brief 所有提前退出共用平台清理，不依赖成功/失败事件的 UI 消费。
+    /// @warning 用户打包低频退出路径，包含 provider I/O，不能挪入每帧 update。
+    ~PackageDocumentGuard()
+    {
+        // 平台再次确认占位所有权及当前内容，清理失败不覆盖原始转换错误。
+        std::string error;
+        if ( !MMM::Common::discardUnwrittenDocument(
+                 MMM::Config::utf8ToPath(m_path), error) )
+            XERROR("Package placeholder cleanup failed: {}", error);
+    }
+};
 
 /// @brief 构建 EX Rhythm Master VI 上架用 Malody mode_ext。
 /// @return 固定的 mode_ext JSON 对象。
@@ -1831,6 +1860,7 @@ std::unordered_set<std::string> makeSelectedImdArchiveNameSet(
 }
 
 /// @brief 写入 zip 兼容的谱面包。
+/// @param errorMessage 失败时保留格式预检或资源转换的具体诊断供 UI 展示。
 /// @param project 当前项目及其资源分类。
 /// @param outputPath 输出包路径。
 /// @param selectedRelativePaths 需要打包的项目相对路径列表。
@@ -1885,7 +1915,8 @@ bool writeBeatmapPackage(
     bool                           addStoreModeExtForMalodyExport,
     bool                           stripMainAudioVolumeFromMalodyExport,
     bool                           alignNonOggMainAudioToOrigin,
-    MMM::BmsPackageAlignmentMode bmsAlignmentMode, bool bmsMyO2Grid)
+    MMM::BmsPackageAlignmentMode bmsAlignmentMode, bool bmsMyO2Grid,
+    std::string& errorMessage)
 {
     // UI 不枚举内部历史；命令层也检查，防止旧选择列表或其他入口夹带备份。
     // 任何不合法选择先整体失败，不创建或覆盖已有压缩包。
@@ -1915,8 +1946,10 @@ bool writeBeatmapPackage(
             metadataOverrides,
             bmsAlignmentMode,
             bmsMyO2Grid);
-        if ( !result.success )
+        if ( !result.success ) {
+            errorMessage = result.errorMessage;
             XERROR("BMS package export failed: {}", result.errorMessage);
+        }
         return result.success;
     }
     // 空选择无法形成有意义谱面包，也避免创建只有 zip 尾记录的空文件。
@@ -2028,6 +2061,8 @@ bool writeBeatmapPackage(
                 project, beatMap, sourcePath, alignNonOggMainAudio);
             if ( !planResult.errorMessage.empty() ) {
                 // 首拍补头是强制规则；无法建立计划时不能降级为仅移动谱面。
+                // 具体原因随结果传回 UI，不能只留下日志和一个通用“导出失败”。
+                errorMessage = relativeUtf8 + "：" + planResult.errorMessage;
                 XERROR("PackBeatmap: cannot align '{}': {}",
                        relativeUtf8,
                        planResult.errorMessage);
@@ -2776,7 +2811,9 @@ bool BeatmapSession::processCommands()
         if ( preservesActiveBrush ) {
             // 纯物件权威替换会重置交互缓存；先保存画笔草稿，使远端物件成为
             // 当前基线后仍可继续原手势并在松键时提交。
-            preservedBrushState.emplace(m_ctx->brushState);
+            // 纯新增画笔才进入此分支；替换处理器会清空旧草稿，暂存采用移动。
+            // 不复制独占的续写计划或其组件快照，命令结束后再移回完整草稿。
+            preservedBrushState.emplace(std::move(m_ctx->brushState));
             preservedBrushDragging     = m_ctx->isDragging;
             preservedBrushDragCameraId = m_ctx->dragCameraId;
         }
@@ -3054,6 +3091,8 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdEndDrag> ||
                     std::is_same_v<T, CmdCreateAudioSample> ||
                     std::is_same_v<T, CmdUpdateAudioSampleProperties> ||
+                    // 节点结构编辑经过统一权限、脏标记和协作通知。
+                    std::is_same_v<T, CmdDeletePolylineNode> ||
                     std::is_same_v<T, CmdUpdateObjectTimestamp> ||
                     std::is_same_v<T, CmdUpdateObjectSampleVolume> ||
                     std::is_same_v<T, CmdUpdateSelectedObjectSampleVolume> ||
@@ -3133,6 +3172,8 @@ bool BeatmapSession::processCommands()
                     std::is_same_v<T, CmdEndDrag> ||
                     std::is_same_v<T, CmdCreateAudioSample> ||
                     std::is_same_v<T, CmdUpdateAudioSampleProperties> ||
+                    // 节点结构编辑经过统一权限、脏标记和协作通知。
+                    std::is_same_v<T, CmdDeletePolylineNode> ||
                     std::is_same_v<T, CmdUpdateObjectTimestamp> ||
                     std::is_same_v<T, CmdUpdateObjectSampleVolume> ||
                     std::is_same_v<T, CmdUpdateSelectedObjectSampleVolume> ||
@@ -3323,8 +3364,11 @@ void BeatmapSession::handleCommand(
     m_ctx->marqueeBoxes.clear();
 
     // 画笔可能携带音频资源和折线临时段，只读切换不能让松键后继续提交。
-    m_ctx->brushState.isActive           = false;
-    m_ctx->brushState.createsAudioSample = false;
+    // 尚未执行的续写删除只需丢弃，不能在权限恢复后重放到新的权威状态。
+    m_ctx->brushState.m_pendingResume.reset();
+    m_ctx->brushState.m_transactionalResume = false;
+    m_ctx->brushState.isActive              = false;
+    m_ctx->brushState.createsAudioSample    = false;
     m_ctx->brushState.activeAudioResourceId.clear();
     m_ctx->brushState.activeSampleBinding.reset();
     m_ctx->brushState.polylineSegments.clear();
@@ -3462,8 +3506,11 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
             // 配色目标集合仅是暂存输入，清空不触碰正式 Note 或撤销历史。
             // 必须先停用手势再替换工具，否则释放事件会交给基础工具处理旧目标。
             // 当前工具已经属于基础集合时不执行此分支，保持正常绘制连续性。
-            m_ctx->brushState.isActive  = false;
-            m_ctx->eraserState.isActive = false;
+            // 工具能力失效即终止整笔预览，独占的续写计划也不能跨工具存活。
+            m_ctx->brushState.m_pendingResume.reset();
+            m_ctx->brushState.m_transactionalResume = false;
+            m_ctx->brushState.isActive              = false;
+            m_ctx->eraserState.isActive             = false;
             m_ctx->eraserState.targetEntities.clear();
             m_ctx->currentTool = availableTool;
         }
@@ -3471,8 +3518,11 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
         if ( m_ctx->brushState.isActive &&
              (m_ctx->brushState.createsAudioSample ||
               m_ctx->brushState.activeSampleBinding) ) {
-            m_ctx->brushState.isActive           = false;
-            m_ctx->brushState.createsAudioSample = false;
+            // 带绑定的续写也可能被能力门禁取消，旧物件本身仍保留正式数据。
+            m_ctx->brushState.m_pendingResume.reset();
+            m_ctx->brushState.m_transactionalResume = false;
+            m_ctx->brushState.isActive              = false;
+            m_ctx->brushState.createsAudioSample    = false;
         }
         // 仅清理放置偏好，不删除谱面中已存在的采样或绑定音频数据。
         // 活动资源和选择资源分别属于手势快照与工具偏好，二者都必须清空。
@@ -3556,6 +3606,12 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
     }
     // 先判断需清理的能力与交互，再提交配置供 isNoteEditable 判断。
     m_ctx->lastConfig = cmd.config;
+    // 外部设置或手势最终配置成为新的权威值，不保留旧的局部缩放覆盖。
+    // 配置已排入同一会话队列，不能从 UI 线程直接写这个临时状态。
+    m_ctx->m_pointerTimelineZoom.reset();
+    m_ctx->m_pointerZoomFinished = false;
+    m_ctx->m_pointerPreviewAreaRatio.reset();
+    m_ctx->m_pointerPreviewFinished = false;
     if ( disablePolylineEditing ) {
         // 能力关闭是低频设置动作，允许遍历 Note 交互视图清理不可编辑对象。
         auto view =
@@ -4188,6 +4244,8 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
 /// 离线混音和压缩，禁止在 Session update 热路径中调用。
 void BeatmapSession::handleCommand(const CmdExportImdPackage& cmd)
 {
+    // IMD 混音和格式预检也可能提前失败，与普通谱面包共用占位回收契约。
+    PackageDocumentGuard documentGuard{ cmd.path };
     // 所有前置校验和服务失败统一转成同结构结果事件，UI 不需解析日志。
     const auto publishFailure = [&cmd](std::string message) {
         XERROR("ExportImdPackage: {}", message);
@@ -4290,6 +4348,8 @@ void BeatmapSession::handleCommand(const CmdExportImdPackage& cmd)
 /// 和 zip 压缩；由文件操作门闩保证 UI 进度帧与写入不并发。
 void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
 {
+    // 系统保存器可能已创建空目标，所有提前退出都必须结束该平台事务。
+    PackageDocumentGuard documentGuard{ cmd.exportPath };
     // 打包读取磁盘项目文件，必须先把所有打开会话的脏内容完整落盘。
     if ( !EditorEngine::instance().saveDirtyBeatmapsForPackaging() ) {
         XERROR("PackBeatmap: dirty beatmaps could not be saved");
@@ -4331,7 +4391,9 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
     Event::EventBus::instance().publish(Event::BeatmapSaveProgressEvent{
         // 进入可能耗时的转换与压缩前替换初始“准备资源包”阶段文案。
         .stage = "正在转换谱面、处理音频并压缩资源…" });
-    const bool success =
+    // 未能提供更具体诊断的 I/O 或压缩失败仍保留明确的失败消息。
+    std::string errorMessage = "无法完成资源包转换或写入，请检查资源和目标目录";
+    const bool  success =
         writeBeatmapPackage(*project,
                             outputPath,
                             cmd.selectedProjectRelativePaths,
@@ -4344,7 +4406,8 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
                             cmd.stripMainAudioVolumeFromMalodyExport,
                             cmd.alignNonOggMainAudioToOrigin,
                             cmd.bmsAlignmentMode,
-                            cmd.bmsMyO2Grid);
+                            cmd.bmsMyO2Grid,
+                            errorMessage);
     if ( success ) {
         // writeBeatmapPackage 只有最终目标文件完整写出才返回成功。
         XINFO("PackBeatmap: package written to {}", cmd.exportPath);
@@ -4354,9 +4417,10 @@ void BeatmapSession::handleCommand(const CmdPackBeatmap& cmd)
 
     Event::EventBus::instance().publish(Event::BeatmapSaveResultEvent{
         // 打包不改变当前谱面会话保存点，结果统一标记为导出。
-        .path     = cmd.exportPath,
-        .success  = success,
-        .isExport = true,
+        .path         = cmd.exportPath,
+        .success      = success,
+        .isExport     = true,
+        .errorMessage = success ? std::string{} : std::move(errorMessage),
     });
 }
 

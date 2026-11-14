@@ -43,7 +43,25 @@ public:
     /// @param service 服务由 UIManager 持有，生命周期覆盖 ToolbarView。
     void setEditorApplicationService(IEditorApplicationService* service);
 
+    /// @brief 移动工作台可复用的工具内容，不包含桌面按钮布局。
+    enum class MobileTool { Layout, Magnet, SoundEffect, Palette };
+    /// @brief 从明确触摸入口切换工具，锚点为该按钮的屏幕位置。
+    void toggleMobileTool(MobileTool tool, glm::vec2 anchor);
+    /// @brief 查询浮层选中态，不读取会话或复制配置。
+    /// @warning 每帧固定布尔查询，不允许阻塞或分配。
+    bool mobileToolOpen(MobileTool tool) const;
+    /// @brief 独立推进移动工具内容，隐藏工作台时收起浮层并提交未完成设置。
+    /// @warning 每帧仅调用已打开内容；不能运行桌面工具栏的完整更新流程。
+    void renderMobileTools(UIManager* manager, float scale, bool visible);
+
 private:
+    /// @brief 仅移动入口设为真，工具内容以工作台而非桌面工具栏定位。
+    bool m_mobileTools{};
+    /// @brief 高级方案管理与快捷调色分开，重新打开默认回到手指友好页。
+    bool m_mobilePaletteDetails{};
+    /// @brief 移动调色页只修改画笔；选区需要显式确认，不复用桌面调色布局。
+    /// @warning 每帧只读本地颜色和应用标量，不读取可变 SessionContext。
+    void renderMobileColorPalette(float scale);
     /// @brief 编辑器状态读取与简单命令提交服务。
     IEditorApplicationService* m_editorApplicationService{ nullptr };
 
@@ -301,7 +319,7 @@ private:
     void pushPaletteToBrush(bool resetDrawColors = true);
 
     /// @brief 将当前调色盘颜色应用到选中物件。
-    void pushPaletteToSelection();
+    void pushPaletteToSelection(bool explicitTouch = false);
 
     /// @brief 将当前分拍线配色写入运行时渲染配置。
     void pushBeatLinePaletteToRenderer();

@@ -64,7 +64,7 @@ elseif(APPLE)
   find_library(MMM_CORE_TEXT_FRAMEWORK CoreText REQUIRED)
   target_link_libraries(Font PRIVATE "${MMM_CORE_FOUNDATION_FRAMEWORK}"
                                      "${MMM_CORE_TEXT_FRAMEWORK}")
-elseif(UNIX)
+elseif(UNIX AND NOT ANDROID)
   # 其余 Unix 平台统一依赖 Fontconfig 返回实际字体文件和集合索引。
   find_package(Fontconfig REQUIRED)
   target_link_libraries(Font PRIVATE Fontconfig::Fontconfig)

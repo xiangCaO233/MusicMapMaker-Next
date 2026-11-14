@@ -15,6 +15,8 @@ add_library(
   src/skin/translation/Translation.cpp
   src/AppPaths.cpp
   src/AppConfig.cpp
+  # 移动外壳标量单独序列化，禁止把像素坐标和平台停靠树写入项目快照。
+  src/MobileWorkspaceSettings.cpp
   # 配置快照使用单槽后台写入队列，连续布局编辑不等待磁盘。
   src/ConfigSnapshotWriter.cpp
   src/AudioPresets.cpp
@@ -22,6 +24,8 @@ add_library(
   src/LayoutPresets.cpp
   src/CreatorIdentity.cpp
   src/EditorSettingTypes.cpp
+  # 平台默认策略仅在实现中选择，不能向公开配置或 UI 传播条件宏。
+  src/EditorPlatformDefaults.cpp
   # 插值工具偏好仅保存源文本和标量，保持 Config 不依赖谱面模型。
   src/TimingInterpolationPreferences.cpp
   src/FontPreferenceValidator.cpp
@@ -308,3 +312,21 @@ mmm_add_test_executable(Config PastePositionConfigTest
 target_link_libraries(PastePositionConfigTest PRIVATE Config)
 mmm_register_test_case(NAME PastePositionConfigTest COMMAND
                        PastePositionConfigTest)
+
+# 移动客户端布局测试使用独立输出目录，覆盖后台保存和重启恢复。 不启动图形后端，持续集成不需要安卓设备即可验证持久化边界。
+mmm_add_test_executable(Config MobileWorkspaceSettingsTest
+                        tests/MobileWorkspaceSettingsTest.cpp)
+target_link_libraries(MobileWorkspaceSettingsTest PRIVATE Config Log)
+# 私有写入器只用于测试等待真实后台完成，不成为业务模块公开依赖。
+target_include_directories(MobileWorkspaceSettingsTest
+                           PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+# 序列化边界、旧配置默认与桌面布局隔离在同一进程独立核验。
+mmm_register_test_case(
+  NAME MobileWorkspaceSettingsTest COMMAND MobileWorkspaceSettingsTest
+  "${CMAKE_BINARY_DIR}/test_output/mobile_workspace")
+
+# 磁吸默认值测试只检查配置兼容，不启动图形、音频或个人项目。 显式关闭和旧版单开关迁移必须独立于平台缺省策略。
+mmm_add_test_executable(Config MagnetDefaultsTest tests/MagnetDefaultsTest.cpp)
+target_link_libraries(MagnetDefaultsTest PRIVATE Config)
+# 同一平台构造与 JSON 缺字段应采用同一个策略，用户显式值优先。
+mmm_register_test_case(NAME MagnetDefaultsTest COMMAND MagnetDefaultsTest)

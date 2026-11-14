@@ -12,6 +12,7 @@
 #include "ui/imgui/MainDockSpaceUI.h"
 #include "ui/imgui/WorkspaceDockRestore.h"
 #include "ui/walkthrough/WelcomeView.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 
 #include <algorithm>
 
@@ -336,9 +337,13 @@ void CanvasTabManager::update(UIManager* sourceManager)
                   entry.cameraId);
 
             // 工作区工厂按条目类型创建真实画布或 Logo 占位画布。
-            auto       newCanvas = workspace->createMainCanvas(entry, 200, 200);
+            auto newCanvas = workspace->createMainCanvas(entry, 200, 200);
+            // 桌面项目仍由项目 ini 或默认中央区决定首次位置。
+            // 移动布局独立恢复原生窗口设置，注册器不能先用 DockBuilder 改写其
+            // DockId。
             const bool useDefaultDock =
-                !entry.restoreDockFromWorkspace || !m_workspaceHasDockLayout;
+                sourceManager->workspacePresentation().usesDesktopLayout() &&
+                (!entry.restoreDockFromWorkspace || !m_workspaceHasDockLayout);
             // `restoreDockFromWorkspace` 只说明保留了 cameraId，不保证有 ini。
             if ( useDefaultDock ) {
                 // 旧项目可能保存了相机 ID 却没有 ini，仍须使用默认中央停靠。

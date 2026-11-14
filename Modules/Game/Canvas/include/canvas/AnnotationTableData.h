@@ -95,7 +95,20 @@ public:
         return m_timeFormatContext;
     }
 
+    /// @brief 行或拍位显示上下文改变时递增，用于平台派生文本的脏标记。
+    /// @warning 每帧只读取 UI 自持标量，不读取会话或遍历批注。
+    std::uint64_t displayRevision() const { return m_displayRevision; }
+    /// @brief 稳定实例令牌用于关闭跨谱面的未提交编辑，不解引用该地址。
+    /// @warning 每帧只读取 UI 缓存令牌，禁止解引用为会话或谱面。
+    std::uintptr_t instanceId() const { return m_beatmapInstanceId; }
+    /// @brief 低频刷新时发布的编辑许可；实际命令仍由会话执行时复核。
+    /// @warning 每帧只读取已发布许可，不查询设备或等待逻辑锁。
+    bool writable() const { return m_writable; }
+
 private:
+    /// @brief 实例重置与显示数据发布共同推进，不与后台缓存版本混用。
+    std::uint64_t m_displayRevision{};
+    bool          m_writable{};  ///< 播放或离线只读时保留阅读，禁止发起修改。
     /// @brief 当前绑定的谱面实例地址令牌。
     std::uintptr_t m_beatmapInstanceId{ 0U };
 

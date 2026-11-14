@@ -6,6 +6,7 @@
 #include "ui/imgui/manager/AudioManagerView.h"
 #include "audio/AudioManager.h"
 #include "common/AudioResourceDragPayload.h"
+#include "common/EditTool.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
 #include "config/EditorConfig.h"
@@ -25,12 +26,14 @@
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/AudioPresetControls.h"
 #include "ui/imgui/audio/AudioTrackControllerUI.h"
+#include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/LayoutContext.h"
 #include "ui/layout/box/CLayBox.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIThemeUtils.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/walkthrough/WalkthroughSpotlight.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <ImGuiFileDialog.h>
 #include <algorithm>
 #include <array>
@@ -597,7 +600,9 @@ AudioManagerView::captureLayoutInput() const
     input.permanentSfxCount =
         Config::SkinManager::instance().getData().audioPaths.size();
     input.showGlobalSettings = m_showGlobalSettings;
-    input.projectAudioCount  = project ? project->m_audioResources.size() : 0;
+    // 平台能力只在 UI 线程捕获，布局计算不读取可变外壳对象。
+    input.showOutputDeviceSelector = workspaceShowsAudioOutputDeviceSelector();
+    input.projectAudioCount = project ? project->m_audioResources.size() : 0;
     return input;
 }
 
@@ -623,7 +628,8 @@ bool AudioManagerView::layoutMetricsMatch(const LayoutMetricsCache&  cache,
         cache.input.hasProject == input.hasProject &&
         cache.input.permanentSfxCount == input.permanentSfxCount &&
         cache.input.projectAudioCount == input.projectAudioCount &&
-        cache.input.showGlobalSettings == input.showGlobalSettings;
+        cache.input.showGlobalSettings == input.showGlobalSettings &&
+        cache.input.showOutputDeviceSelector == input.showOutputDeviceSelector;
 
     // 除业务输入外，任何会改变文字宽度或控件间距的 UI 输入都要匹配。
     return cache.valid && inputMatch &&
@@ -743,7 +749,11 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
     };
 
     float labelWidth = 0.0f;
-    for ( const char* label : controlLabels ) {
+    // 隐藏设备选择时不测量其标签，移动窗口也不为隐藏文本预留固定列宽。
+    for ( size_t index = input.showOutputDeviceSelector ? 0u : 1u;
+          index < controlLabels.size();
+          ++index ) {
+        const char* label = controlLabels[index];
         // 翻译文本长度随语言变化，因此必须逐项取最大值。
         labelWidth =
             std::max(labelWidth,
@@ -805,10 +815,12 @@ AudioManagerView::LayoutMetricsCache AudioManagerView::buildLayoutMetrics(
         addAudioManagerListRow(listHeight, listRows, hintRowH, rowSpacingY);
     }
 
-    // 页脚标题始终存在，展开后再加入五个固定高度控制行。
+    // 页脚标题始终存在，设备选择由平台能力决定，其余四个音量行保留。
     float footerH = 2.0F * cache.footerHeaderHeight + footerSpacing;
     if ( input.showGlobalSettings ) {
-        footerH += 5.0f * controlRowH + 5.0f * footerSpacing;
+        // 缓存中的行数与实际提交的控件保持一致，隐藏行不能留下可点击空白。
+        const float controlRows = input.showOutputDeviceSelector ? 5.0f : 4.0f;
+        footerH += controlRows * controlRowH + controlRows * footerSpacing;
     }
     // 导入与项目工具按钮独立于折叠区域，始终计入总高度。
     footerH += importButtonH + importButtonGap;
@@ -927,10 +939,14 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     m_sourceManager = sourceManager;
     auto& engine    = Logic::EditorEngine::instance();
     // 查看与写入身份分开，访客资源不能作为项目管理命令的数据源。
-    const auto* project      = sourceManager->getAudioProject();
-    const bool  readOnly     = sourceManager->isAudioReadOnly();
-    auto&       skinCfg      = Config::SkinManager::instance();
-    auto&       audioManager = Audio::AudioManager::instance();
+    const auto* project = sourceManager->getAudioProject();
+    // 不同项目可能复用同名资源与相对路径，不能沿用上一项目的待定长按。
+    // 已有缓存身份可做常量检查，不逐帧拼接绝对路径或查询文件系统。
+    // 只封锁旧代际，后续新 Down 仍按新项目的实际可见行重新认领。
+    if ( project != m_cachedAudioTableProject ) m_resourcePress.cancel();
+    const bool readOnly     = sourceManager->isAudioReadOnly();
+    auto&      skinCfg      = Config::SkinManager::instance();
+    auto&      audioManager = Audio::AudioManager::instance();
 
     // 文件管理字体与资源表格的视觉语义一致；缺失时沿用当前字体。
     // 子视图只借用当前帧尺寸，持久 Clay Arena 仍由外层视图拥有。
@@ -943,14 +959,46 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     // 绘制只读取缓存后的尺寸，避免在多个 Clay 回调中重复测量。
     const auto& layoutMetrics = getLayoutMetrics(dpiScale);
     const float maxLabelW     = layoutMetrics.footerLabelWidth;
+    // 抽屉宽度由屏幕决定，不能强制采用桌面上由最长译文推导的最小窗口宽度。
+    // 不足以同时容纳标签与可操作轨道时分成两行，桌面布局继续沿用原有规则。
+    const bool touchLayout = !workspaceAllowsHoverFeedback();
+    const bool stackedControls =
+        touchLayout && layoutContext.m_avail.x < layoutMetrics.minContentSize.x;
+    // 换行宽度扣除页脚自身留白，与 Clay 最终分配的标签区域一致。
+    // 采用当前绘制字体测量，不能复用桌面文件字体的宽度来决定触摸轨道。
+    const float controlLabelWidth =
+        std::max(1.0f,
+                 layoutContext.m_avail.x - 2 * layoutMetrics.footerPaddingX -
+                     (touchLayout ? ImGui::GetStyle().ScrollbarSize : 0.0f));
+    /// @brief 计算当前字体下标签独占一行所需的高度，允许长译文自然换行。
+    /// @warning 每帧最多测量四条固定标签，不扫描音轨、不改变布局缓存键。
+    const auto labelHeight = [&](const char* label) {
+        return ImGui::CalcTextSize(label, nullptr, false, controlLabelWidth).y;
+    };
+    // 页脚的实际高度与提交行数保持一致，否则第二行会挤入导入按钮或列表。
+    // 折叠状态不提交额外标签，因此不能保留展开时的行高。
+    // 移动平台没有设备选择行，只累计实际绘制的四类增益。
+    // 每条新标签也是父容器的一项，必须同时计入一次父级间距。
+    // 分隔尺寸改变时本帧立即重新计算，不等待资源刷新或持久化配置。
+    // 这里只改变几何分配，音量与静音仍调用原来的即时更新回调。
+    float stackedHeight = 0;
+    if ( stackedControls && m_showGlobalSettings ) {
+        for ( const char* label :
+              { TR("ui.audio_manager.global_volume").data(),
+                TR("ui.audio_manager.bgm_gain").data(),
+                TR("ui.audio_manager.sfx_gain").data(),
+                TR("ui.audio_manager.interaction_sfx_volume").data() } )
+            stackedHeight += labelHeight(label) + layoutMetrics.footerSpacing;
+    }
     // Clay 的像素尺寸使用无符号整数；先夹到非负值再向上取整。
     auto toLayoutPixels = [](float value) {
         return static_cast<uint16_t>(std::ceil(std::max(0.0f, value)));
     };
-    // 输出设备枚举可能涉及后端查询，仅在后端变化或显式标脏时刷新。
+    // 没有设备选择入口的平台也不做后端设备枚举，避免隐藏控件仍触发查询。
     const auto playbackBackend = audioManager.getPlaybackBackend();
-    if ( m_outputDevicesDirty ||
-         m_cachedOutputDeviceBackend != playbackBackend ) {
+    if ( layoutMetrics.input.showOutputDeviceSelector &&
+         (m_outputDevicesDirty ||
+          m_cachedOutputDeviceBackend != playbackBackend) ) {
         m_cachedOutputDevices       = audioManager.listOutputDevices();
         m_cachedOutputDeviceBackend = playbackBackend;
         m_outputDevicesDirty        = false;
@@ -1029,11 +1077,26 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         // 弹簧将标签推到左侧，同时维持所有行的右边界一致。
         leftBox.addSpring();
 
-        // 左列禁止横向增长，避免长滑条反向挤压标签对齐线。
-        row.addLayout((std::string(id) + "_left").c_str(),
-                      leftBox,
-                      Sizing::Fixed(labelWidth),
-                      Sizing::Grow());
+        if ( stackedControls ) {
+            // 标签不再参与控制行的横向分配，静音按钮之后的整段宽度留给滑条。
+            // 每条标签按自身换行高度占位，英文和中文使用同一布局判断。
+            parent.addElement(
+                std::string(id) + "_stacked_label",
+                Sizing::Grow(),
+                Sizing::Fixed(labelHeight(label)),
+                [label](Clay_BoundingBox r, bool) {
+                    ImGui::SetCursorScreenPos({ r.x, r.y });
+                    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + r.width);
+                    ImGui::TextUnformatted(label);
+                    ImGui::PopTextWrapPos();
+                });
+        } else {
+            // 桌面和足够宽的抽屉保留对齐的双列，避免无必要地增加面板高度。
+            row.addLayout((std::string(id) + "_left").c_str(),
+                          leftBox,
+                          Sizing::Fixed(labelWidth),
+                          Sizing::Grow());
+        }
 
         // 右列承载固定尺寸静音按钮和占据余量的滑条。
         CLayHBox& rightBox = this->getSubHBox(subHBoxIndex++);
@@ -1660,6 +1723,9 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
     /// 表格默认展示 ID 与路径，类型、大小和修改时间按需由用户打开。
     /// 自定义表头菜单替代 ImGui 默认菜单，但继续使用其内部列状态字段。
     /// 分组头和资源行使用相同固定高度，使 ImGuiListClipper 可准确估算范围。
+    /// 移动端只启用整行资源标识，点击行仍打开原有音轨控制器。
+    /// 不为适配列宽改变资源缓存、分组顺序或固定行高，保持裁剪器索引稳定。
+    /// 触屏表格不沿用桌面保存的列宽，字体与抽屉尺寸变化时主列自动伸缩。
     /// 每个资源行先提交跨列命中区，再在各可见列直接绘制滚动文本。
     /// 展开状态在裁剪遍历结束后更新，确保当前帧的逻辑行映射保持不变。
     auto renderAudioResourcesTable = [&](Clay_BoundingBox r, bool) {
@@ -1668,15 +1734,27 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
         // 纵向滚动条样式只覆盖该表格，析构时自动恢复。
         Utils::VerticalScrollbarStyleScope verticalScrollbarStyle(dpiScale);
         // 支持用户调整、重排、隐藏与排序列，并固定表头进行纵向滚动。
-        const ImGuiTableFlags tableFlags =
+        ImGuiTableFlags tableFlags =
             ImGuiTableFlags_BordersV | ImGuiTableFlags_BordersOuterH |
             ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable |
             ImGuiTableFlags_Reorderable | ImGuiTableFlags_Hideable |
             ImGuiTableFlags_Sortable | ImGuiTableFlags_ScrollY |
             ImGuiTableFlags_SizingStretchProp;
+        // 移动列表以资源标识为主要入口，路径等详情不再平分抽屉宽度。
+        // 分组头与资源行因此共用整行，长英文分类也不会被第一列裁掉。
+        // 独立表格身份隔离旧列宽；桌面列设置和元数据惰性加载保持原样。
+        if ( touchLayout ) {
+            tableFlags &=
+                ~(ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
+                  ImGuiTableFlags_Hideable);
+            tableFlags |= ImGuiTableFlags_NoSavedSettings;
+        }
+        const ImGuiTableColumnFlags detailFlags =
+            touchLayout ? ImGuiTableColumnFlags_Disabled : 0;
 
         // BeginTable 失败时不能调用任何 Table API，也无需显式 EndTable。
-        if ( ImGui::BeginTable("AudioManagerGroupedTable",
+        if ( ImGui::BeginTable(touchLayout ? "AudioManagerTouchTable"
+                                           : "AudioManagerGroupedTable",
                                5,
                                tableFlags,
                                { r.width, r.height }) ) {
@@ -1691,26 +1769,26 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             // 类型列默认隐藏，但提供固定宽度以避免显示后挤压不稳定。
             ImGui::TableSetupColumn(
                 TR("ui.audio_manager.column_type").data(),
-                ImGuiTableColumnFlags_DefaultHide |
+                detailFlags | ImGuiTableColumnFlags_DefaultHide |
                     ImGuiTableColumnFlags_WidthFixed |
                     ImGuiTableColumnFlags_PreferSortAscending,
                 std::max(96.0f, 116.0f * ImGui::GetFontSize() / 17.0f));
             // 路径列承担剩余宽度，超长内容由单元格滚动绘制器处理。
             ImGui::TableSetupColumn(
                 TR("ui.audio_manager.column_path").data(),
-                ImGuiTableColumnFlags_WidthStretch |
+                detailFlags | ImGuiTableColumnFlags_WidthStretch |
                     ImGuiTableColumnFlags_PreferSortAscending);
             // 大小列涉及文件查询，默认隐藏以避免无需求值。
             ImGui::TableSetupColumn(
                 TR("ui.audio_manager.column_size").data(),
-                ImGuiTableColumnFlags_DefaultHide |
+                detailFlags | ImGuiTableColumnFlags_DefaultHide |
                     ImGuiTableColumnFlags_WidthFixed |
                     ImGuiTableColumnFlags_PreferSortAscending,
                 std::max(96.0f, 104.0f * ImGui::GetFontSize() / 17.0f));
             // 修改时间按固定格式预留宽度，并偏好最近时间在前。
             ImGui::TableSetupColumn(
                 TR("ui.audio_manager.column_modified_time").data(),
-                ImGuiTableColumnFlags_DefaultHide |
+                detailFlags | ImGuiTableColumnFlags_DefaultHide |
                     ImGuiTableColumnFlags_WidthFixed |
                     ImGuiTableColumnFlags_PreferSortDescending,
                 std::max(168.0f,
@@ -1757,7 +1835,12 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
             }
 
             // 行视觉高度包含单元格内边距，可点击内容高度需扣除上下内边距。
-            const float rowHeight = layoutMetrics.audioItemHeight;
+            // 选择区与分组头同步放大；裁剪器继续按首行实测步长虚拟化。
+            const float rowHeight =
+                touchLayout ? workspaceTableItemHeight(
+                                  layoutMetrics.audioItemHeight, dpiScale) +
+                                  ImGui::GetStyle().CellPadding.y * 2.0f
+                            : layoutMetrics.audioItemHeight;
             const float rowSelectableHeight =
                 std::max(ImGui::GetFontSize(),
                          rowHeight - ImGui::GetStyle().CellPadding.y * 2.0f);
@@ -1790,13 +1873,45 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                                                         rowData.m_id,
                                                         rowData.m_path,
                                                         rowIndex);
-                const bool        clicked = ::MMM::UI::FeedbackSelectable(
+                bool              clicked = ::MMM::UI::FeedbackSelectable(
                     rowId.c_str(),
                     false,
                     ImGuiSelectableFlags_SpanAllColumns,
                     { 0.0f, rowSelectableHeight });
                 // 在移动到其他列之前捕获整行悬浮态。
                 const bool hovered = ImGui::IsItemHovered();
+                const bool touchInput =
+                    Interaction::activeProfile().touchGestures();
+                // 行点击与长按都以原始输入为准，不能把鼠标补交沿当成第二次动作。
+                // 资源行只存稳定身份，不跨帧借用排序缓存中的元素引用。
+                // 滑动、多指或系统取消之后，本代际不得再打开控制器。
+                TouchReadPress::Result press = TouchReadPress::Result::None;
+                if ( touchInput ) {
+                    const bool hit = TouchReadPress::originInside(
+                        ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+                    // 类型和路径确定资源身份，可见行索引只属于当前排序视图。
+                    // 列表排序或裁剪变化不能把已经按住的资源菜单转交给相邻行。
+                    // 读写权限继续在菜单及正式命令入口复核，分类器不授予模型写权限。
+                    press = m_resourcePress.update(
+                        // 哈希输入是稳定资源键，不包含可能随表头排序变化的
+                        // rowIndex。
+                        ImHashStr(rowData.m_path.c_str(),
+                                  0,
+                                  ImHashStr(rowData.m_id.c_str())),
+                        hit &&
+                            ImGui::IsWindowHovered(
+                                ImGuiHoveredFlags_AllowWhenBlockedByActiveItem),
+                        hit && !ImGui::IsPopupOpen(
+                                   nullptr,
+                                   ImGuiPopupFlags_AnyPopupId |
+                                       ImGuiPopupFlags_AnyPopupLevel));
+                    // 长按只打开菜单；全局滚动层稍后的点击回放不能打开控制器。
+                    // 单指页面滑动由原始峰值拒绝，不会误触试听或编辑资源。
+                    clicked = press == TouchReadPress::Result::Tap;
+                } else {
+                    m_resourcePress.cancel();
+                }
+
                 const bool isProjectAudioResource =
                     rowData.m_kind == AudioTableRowKind::MainTrack ||
                     rowData.m_kind == AudioTableRowKind::ProjectSfx;
@@ -1810,7 +1925,7 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                         .getEditorSettings()
                         .professionalMode &&
                     Common::canStoreAudioResourceDragId(rowData.m_id);
-                if ( canDragAudioResource &&
+                if ( canDragAudioResource && !touchInput &&
                      ImGui::BeginDragDropSource(ImGuiDragDropFlags_None) ) {
                     // 由公共 helper 构造固定布局载荷，避免传递临时字符串指针。
                     const auto payload = Common::makeAudioResourceDragPayload(
@@ -1850,10 +1965,30 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing,
                                         popupItemSpacing);
                     // 使用独立 ID 打开行级右键菜单，不与表头菜单冲突。
+                    // 长按只把同一个右键菜单打开一次，资源操作语义保持共用。
+                    // 松手不再触发普通行打开，不会同时出现控制器和菜单。
+                    // 不改动皮肤资源的只读约束，也不在滑动过程中开始跨窗口拖放。
+                    if ( press == TouchReadPress::Result::Hold )
+                        FeedbackOpenPopup(contextMenuId.c_str());
                     const bool contextMenuOpen = ImGui::BeginPopupContextItem(
                         contextMenuId.c_str(),
                         ImGuiPopupFlags_MouseButtonRight);
                     if ( contextMenuOpen ) {
+                        if ( touchInput ) {
+                            // 触屏不依赖跨窗口拖放：选择画笔资源后在目标轨道放置。
+                            // 只设置绘制偏好，资源合法性与写权限仍由正式命令复核。
+                            if ( FeedbackMenuItem(
+                                     TR("ui.audio_manager.use_for_drawing")
+                                         .data()) ) {
+                                engine.pushCommand(
+                                    Logic::CmdSetBrushAudioResource{
+                                        rowData.m_id, rowData.m_type });
+                                engine.pushCommand(Logic::CmdChangeTool{
+                                    Logic::EditTool::Draw });
+                            }
+                            ImGui::Separator();
+                        }
+
                         /// @brief 绘制一种目标音轨类型并提交撤销命令。
                         auto changeTrackType = [&](AudioTrackType targetType,
                                                    const char*    label) {
@@ -2172,10 +2307,11 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
     if ( m_showGlobalSettings ) {
         // 设备选择置于所有音量控制之前，明确这些值作用于当前输出。
-        addDeviceComboRow(footerVBox,
-                          "OutputDevice",
-                          TR("ui.audio_manager.output_device").data(),
-                          maxLabelW);
+        if ( layoutMetrics.input.showOutputDeviceSelector )
+            addDeviceComboRow(footerVBox,
+                              "OutputDevice",
+                              TR("ui.audio_manager.output_device").data(),
+                              maxLabelW);
 
         // 全局音量控制最终混音输出，并显示当前左右输出电平输入。
         addControlRow(
@@ -2252,7 +2388,17 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
 
     // 布局分为可伸缩列表、固定页脚控制和底部等宽按钮三个区域。
     // 页脚高度已由缓存结合折叠状态计算，本帧不再重新测量子控件。
-    float footerH = layoutMetrics.footerHeight;
+    const float fullControlH =
+        layoutMetrics.globalControlsHeight + stackedHeight;
+    // 音轨资源是主内容，展开全局混音不能让固定页脚吞掉整个移动抽屉。
+    // 只限制可见控制区，内部内容仍保留完整高度并交给独立子窗口滚动。
+    // 下方导入入口继续固定，上方通常可保留超过半屏的可操作列表。
+    const float controlH =
+        touchLayout ? std::min(fullControlH,
+                               std::max(1.0f, layoutContext.m_avail.y * 0.4f))
+                    : fullControlH;
+    const float footerH =
+        layoutMetrics.footerHeight + stackedHeight - (fullControlH - controlH);
 
     // 根容器只描述顶部列表区域，它自动占据扣除页脚后的全部高度。
     rootVBox
@@ -2322,10 +2468,27 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                          layoutContext.m_startPos.y + listAreaHeight };
 
     // 控制区高度不包含下方导入按钮及两区之间的间隔。
-    float controlH = layoutMetrics.globalControlsHeight;
     // 折叠时仍渲染标题行，展开时容器内包含全部控制项。
-    footerVBox.renderInCurrent(footerPos,
-                               { layoutContext.m_avail.x, controlH });
+    if ( touchLayout ) {
+        // 子窗口只提供纵向滚动，不让长英文标题制造横向溢出。
+        // 零内边距保持原页脚与列表对齐，右侧滚动条由可用宽度自动扣除。
+        ImGui::SetCursorScreenPos(footerPos);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{});
+        if ( ImGui::BeginChild("AudioGlobalControls",
+                               { layoutContext.m_avail.x, controlH }) ) {
+            // 渲染原有布局和回调，不维护第二份增益值，也不延迟本地音量更新。
+            footerVBox.renderInCurrent(
+                ImGui::GetCursorScreenPos(),
+                { ImGui::GetContentRegionAvail().x, fullControlH });
+        }
+        // 被裁剪的子窗口同样必须结束，后续导入按钮才能回到外层父窗口。
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+    } else {
+        // 桌面保留固定页脚，窗口原有最小尺寸约束继续生效。
+        footerVBox.renderInCurrent(footerPos,
+                                   { layoutContext.m_avail.x, controlH });
+    }
     if ( controlH > 0.0F )
         // 控制区按展开状态使用实际高度；折叠时标题行仍提供可理解锚点。
         sourceManager->walkthroughSpotlight().reportTarget(
@@ -2391,28 +2554,31 @@ void AudioManagerView::onUpdate(LayoutContext& layoutContext,
                          ImVec2(r.width, r.height)) ) {
                     // 文件选择器类型和上次路径从当前编辑器配置快照读取。
                     const auto settings = engine.getEditorConfig().settings;
-                    if ( settings.filePickerStyle ==
-                         Config::FilePickerStyle::Native ) {
-                        // 原生对话框打开前播放统一弹窗反馈。
+                    // Android
+                    // 无法访问桌面文件浏览根，统一由系统选择授予单文件读取权。
+                    // 回调取得的是已完成复制的路径，原有音频导入仍校验真实内容。
+                    // 视图对象随管理器长期存在，选择期间不能借用当前帧局部变量。
+                    // 桌面用户的内置文件浏览偏好仍由原分支处理。
+                    if ( NativeFileDialog::requiresSystemPicker() ||
+                         settings.filePickerStyle ==
+                             Config::FilePickerStyle::Native ) {
                         ::MMM::UI::PlayPopupOpenFeedback();
-                        nfdu8char_t* outPath = nullptr;
-                        // 原生过滤器限制为音频导入流程支持的格式。
-                        nfdu8filteritem_t filters[1] = {
+                        const nfdu8filteritem_t filters[] = {
                             { "Audio Files", "mp3,ogg,wav,flac,opus,aac,m4a" }
                         };
-                        nfdresult_t result = NativeFileDialog::openFile(
-                            &outPath, filters, 1, nullptr);
-
-                        if ( result == NFD_OKAY ) {
-                            // 发布事件转交导入流程处理；本视图不直接复制文件。
-                            Event::EventBus::instance().publish(
-                                Event::AudioImportTriggerEvent{ outPath });
-                            // NFD 返回的 UTF-8 路径由库分配，成功分支负责释放。
-                            NFD_FreePathU8(outPath);
-                        } else if ( result == NFD_ERROR ) {
-                            // 取消选择是正常交互，只有库错误需要记录日志。
-                            XERROR("NFD Error: {}", NFD_GetError());
-                        }
+                        NativeFileDialog::openFileAsync(
+                            filters,
+                            1,
+                            nullptr,
+                            [](nfdresult_t result, const std::string& path) {
+                                // provider I/O 已由平台工作线程完成，UI
+                                // 只发布既有音频导入事件。
+                                if ( result == NFD_OKAY )
+                                    Event::EventBus::instance().publish(
+                                        Event::AudioImportTriggerEvent{ path });
+                                else if ( result == NFD_ERROR )
+                                    XERROR("Audio document selection failed");
+                            });
                     } else {
                         // 内置选择器使用只读文件名字段，并恢复上次浏览目录。
                         IGFD::FileDialogConfig fdConfig;

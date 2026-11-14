@@ -101,6 +101,9 @@ public:
     void updateMetronome(bool playbackJumped);
 
 private:
+    /// @brief 预览独立导航复用滚速索引，不进入物件编辑或主画布缩放。
+    /// @warning 每个触控增量最多两次索引查询，不加锁、分配或遍历 ECS。
+    void handlePreviewNavigation(const CmdPanCanvas& command);
     /// @brief 重建当前 BPM 段的下一拍游标。
     /// @param time 当前画布视觉时间，单位秒。
     /// @warning 跳转或 BPM 编辑时执行一次二分查找，不在稳定播放时重复扫描。

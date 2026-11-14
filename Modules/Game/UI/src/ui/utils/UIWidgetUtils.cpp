@@ -7,6 +7,10 @@
 #include "config/skin/translation/Translation.h"
 #include "imgui_internal.h"
 #include "ui/layout/CLayDefs.h"
+#include "ui/workspace/IWorkspacePresentation.h"
+#include "ui/workspace/MobileInputEditor.h"
+
+#include <fmt/format.h>
 
 #include <algorithm>
 #include <cfloat>
@@ -187,6 +191,25 @@ void drawScrollingText(std::string_view text, ImVec2 startPos,
                        float availableWidth, float targetHeight,
                        bool centerWhenFits)
 {
+    // 普通控件继续使用当前窗口及主题色，调用方无需感知独立宿主绘制路径。
+    drawScrollingTextOnDrawList(*ImGui::GetWindowDrawList(),
+                                text,
+                                startPos,
+                                availableWidth,
+                                targetHeight,
+                                ImGui::GetColorU32(ImGuiCol_Text),
+                                centerWhenFits);
+}
+
+/// @brief 在指定绘制列表上复用现有往复滚动和端点停留效果。
+/// @details 裁剪只包围本次文字，支持停靠宿主与当前业务窗口不同的情况。
+/// @param color 由调用方提供最终主题色，宿主透明度不在这里二次叠乘。
+/// @warning UI 热路径：只测量文字并追加图元，不修改窗口上下文或输入状态。
+void drawScrollingTextOnDrawList(ImDrawList& drawList, std::string_view text,
+                                 ImVec2 startPos, float availableWidth,
+                                 float targetHeight, ImU32 color,
+                                 bool centerWhenFits)
+{
     // 空文本不修改裁剪栈或 DrawList。
     if ( text.empty() ) return;
 
@@ -205,16 +228,16 @@ void drawScrollingText(std::string_view text, ImVec2 startPos,
                                    : 0.0f;
 
     // 裁剪只包围本次 DrawList 文本提交，结束后立即恢复。
-    ImGui::PushClipRect(
+    drawList.PushClipRect(
         startPos,
         ImVec2(startPos.x + visibleWidth, startPos.y + targetHeight),
         true);
-    ImGui::GetWindowDrawList()->AddText(
+    drawList.AddText(
         ImVec2(startPos.x + centerOffset - offset, startPos.y + offsetY),
-        ImGui::GetColorU32(ImGuiCol_Text),
+        color,
         textBegin,
         textEnd);
-    ImGui::PopClipRect();
+    drawList.PopClipRect();
 }
 
 /// @brief 渲染一个带水平自动滚动文本的 Selectable 核心。
@@ -330,26 +353,55 @@ bool renderScrollingCollapsingHeader(const std::string& id,
     return open;
 }
 
-/// @brief 渲染带自动滚动文本的树节点核心。
+/// @brief 渲染树节点核心；桌面长文本滚动，触屏长文本静态换行。
 /// @param id ImGui 控件 ID。
 /// @param text 显示文本。
 /// @param width 控件宽度。
 /// @param height 控件高度。
 /// @param isLeaf 是否为叶子节点。
 /// @param tooltip 悬浮提示文本。
+/// @param icon 独立前导图标；与文件名共用首行基线，不参与换行。
 /// @return 本帧交互结果。
 /// @warning UI 热路径：只执行 ImGui 控件绘制和局部文本滚动计算。
-ScrollingTreeNodeResult renderScrollingTreeNodeCore(const std::string& id,
-                                                    const std::string& text,
-                                                    float width, float height,
-                                                    bool               isLeaf,
-                                                    const std::string& tooltip)
+ScrollingTreeNodeResult renderScrollingTreeNodeCore(
+    const std::string& id, const std::string& text, float width, float height,
+    bool isLeaf, const std::string& tooltip, std::string_view icon)
 {
     // 保存原始游标，TreeNode 提交后在同一行上覆盖可见滚动文本。
-    const ImVec2      cursorPos    = ImGui::GetCursorScreenPos();
-    const ImGuiStyle& style        = ImGui::GetStyle();
-    const float       targetHeight = std::max(height, ImGui::GetFrameHeight());
+    const ImVec2      cursorPos   = ImGui::GetCursorScreenPos();
+    const ImGuiStyle& style       = ImGui::GetStyle();
+    const bool        touchLayout = !workspaceAllowsHoverFeedback();
+    const float       arrowWidth  = ImGui::GetTreeNodeToLabelSpacing();
+    // 叶节点不保留箭头槽；触屏换行宽度与最终绘制宽度必须完全一致。
+    // 留白取当前主题，避免大字号或深层缩进时仍按桌面固定像素排字。
+    const float treeGutterWidth = isLeaf ? 0.0f : arrowWidth;
+    const float textAvailableWidth =
+        std::max(1.0f,
+                 width - treeGutterWidth -
+                     (touchLayout ? 2 * style.FramePadding.x : 8.0f));
+    // 图标单独占用固定槽位，不能作为英文单词换行算法里的第一个词。
+    // 宽度按当前字体实测，间隔沿用主题；后续所有文件名行共用右侧起点。
+    // 触屏只借用图标和名称，不再为每个可见条目拼接临时字符串。
+    const float iconWidth =
+        touchLayout && !icon.empty()
+            ? ImGui::CalcTextSize(icon.data(), icon.data() + icon.size()).x +
+                  style.ItemInnerSpacing.x
+            : 0.0f;
+    const float nameWidth = std::max(1.0f, textAvailableWidth - iconWidth);
+    const float textHeight =
+        touchLayout
+            ? ImGui::CalcTextSize(text.c_str(), nullptr, false, nameWidth).y
+            : ImGui::GetFontSize();
+    // 先把完整换行高度交给 TreeNode，再提交文字；命中区与表格下一行同步增高。
+    // 只测量当前可见节点，不扫描目录，也不缓存可能跨字体重载失效的字形。
+    const float targetHeight = std::max(
+        { height,
+          ImGui::GetFrameHeight(),
+          touchLayout ? textHeight + 2 * style.FramePadding.y : 0.0f });
     // 纵向 padding 至少沿用主题，并能把文字居中到调用方目标高度。
+    // 空标签 TreeNode 仍以单行字高结算命中区，额外行高必须折入上下 padding。
+    // 只增加自定义节点所需的高度，不把整个窗口或相邻控件的主题留白一起放大。
+    // 目录箭头因此与整块可点击文本区域共用中心，展开后的子行不会盖住末行文字。
     const float framePaddingY = std::max(
         style.FramePadding.y, (targetHeight - ImGui::GetFontSize()) * 0.5f);
 
@@ -378,28 +430,62 @@ ScrollingTreeNodeResult renderScrollingTreeNodeCore(const std::string& id,
         renderTooltip(tooltip.c_str());
     }
 
-    const float arrowWidth = ImGui::GetTreeNodeToLabelSpacing();
-    // 叶节点无需为展开箭头预留 gutter，非叶节点扣除箭头宽度。
-    const float  treeGutterWidth    = isLeaf ? 0.0f : arrowWidth;
-    const float  textAvailableWidth = width - treeGutterWidth - 8.0f;
     const ImVec2 textStartPos = { cursorPos.x + treeGutterWidth, cursorPos.y };
 
-    // 长名称在可用文字区域内裁剪滚动，不覆盖展开箭头。
-    drawScrollingText(text, textStartPos, textAvailableWidth, targetHeight);
+    if ( touchLayout ) {
+        // 手指没有悬浮状态，完整名称在固定图标右侧换行，不按时间横移。
+        // 绘制列表不提交第二个 Item，点击、目录展开和拖放仍属于原 TreeNode。
+        ImGui::PushClipRect(textStartPos,
+                            { textStartPos.x + textAvailableWidth,
+                              textStartPos.y + targetHeight },
+                            true);
+        // 与父表格裁剪区求交，保留冻结表头及滚动边界，换行不能越界覆盖下一面板。
+        // 显式传入测量时的字体和字号，避免皮肤字体切换后绘制使用不同的换行宽度。
+        const float textY = textStartPos.y + (targetHeight - textHeight) * .5f;
+        if ( !icon.empty() ) {
+            // 图标始终和首行对齐；不提交额外 Item，整行选择和拖放仍由 TreeNode
+            // 接收。
+            ImGui::GetWindowDrawList()->AddText(
+                ImGui::GetFont(),
+                ImGui::GetFontSize(),
+                { textStartPos.x, textY },
+                ImGui::GetColorU32(ImGuiCol_Text),
+                icon.data(),
+                icon.data() + icon.size());
+        }
+        ImGui::GetWindowDrawList()->AddText(
+            ImGui::GetFont(),
+            ImGui::GetFontSize(),
+            { textStartPos.x + iconWidth, textY },
+            ImGui::GetColorU32(ImGuiCol_Text),
+            text.c_str(),
+            nullptr,
+            nameWidth);
+        ImGui::PopClipRect();
+    } else {
+        // 桌面继续使用原有单行跑马灯，不改变其行高和鼠标交互。
+        // 仍把图标和名称作为同一滚动段，保留原来的双空格间隔与分配频率。
+        if ( icon.empty() ) {
+            drawScrollingText(
+                text, textStartPos, textAvailableWidth, targetHeight);
+        } else {
+            drawScrollingText(fmt::format("{}  {}", icon, text),
+                              textStartPos,
+                              textAvailableWidth,
+                              targetHeight);
+        }
+    }
     return { .open = open, .clicked = isClicked };
 }
 
-/// @brief 将下一个弹出式窗口固定到主视口中心。
-/// @param desiredSize 期望尺寸，任意轴为 0 时不强制该轴尺寸。
-/// @warning UI 热路径：只写入 ImGui 下一窗口状态。
-void prepareCenteredModalWindow(ImVec2 desiredSize)
+/// @brief 取得居中模态实际尺寸上限，正文预留操作行时使用同一约束。
+/// @details 包含主题留白与小屏最小尺寸夹取，不能直接拿整块键盘安全高度替代。
+/// @warning 每帧只读缓存几何和配置标量，无平台调用或资源访问。
+ImVec2 centeredModalWindowMaxSize()
 {
-    // 模态始终绑定主视口，避免多视口环境下出现在无关窗口。
-    ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowViewport(viewport->ID);
-    ImGui::SetNextWindowPos(
-        viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-
+    const auto* viewport    = ImGui::GetMainViewport();
+    const bool  touchLayout = !workspaceAllowsHoverFeedback();
+    const auto  area        = workspaceTextInputWindowArea();
     // 边缘留白随 DPI 增长，并保证至少 16 像素。
     const float dpiScale =
         Config::AppConfig::instance().getWindowContentScale();
@@ -415,10 +501,32 @@ void prepareCenteredModalWindow(ImVec2 desiredSize)
         return std::max(1.0f, std::min(clampedSize, workSize));
     };
     // 两轴独立计算，支持窄屏或横向多视口布局。
-    const ImVec2 maxWindowSize{
-        maxAxisSize(viewport->WorkSize.x, 160.0f * dpiScale),
-        maxAxisSize(viewport->WorkSize.y, 160.0f * dpiScale),
+    return {
+        maxAxisSize(touchLayout ? area.m_size.x : viewport->WorkSize.x,
+                    160.0f * dpiScale),
+        maxAxisSize(touchLayout ? area.m_size.y : viewport->WorkSize.y,
+                    160.0f * dpiScale),
     };
+}
+
+/// @brief 将下一个弹出式窗口固定到主视口中心。
+/// @param desiredSize 期望尺寸，任意轴为 0 时不强制该轴尺寸。
+/// @warning UI 热路径：只写入 ImGui 下一窗口状态。
+void prepareCenteredModalWindow(ImVec2 desiredSize)
+{
+    // 模态始终绑定主视口，避免多视口环境下出现在无关窗口。
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowViewport(viewport->ID);
+    // 移动弹窗使用外壳扣除键盘与常驻工具栏后的区域，桌面保持既有中心。
+    const bool   touchLayout = !workspaceAllowsHoverFeedback();
+    const auto   area        = workspaceTextInputWindowArea();
+    const ImVec2 center = touchLayout
+                              ? ImVec2(area.m_origin.x + area.m_size.x * .5f,
+                                       area.m_origin.y + area.m_size.y * .5f)
+                              : viewport->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+
+    const ImVec2 maxWindowSize = centeredModalWindowMaxSize();
     ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), maxWindowSize);
 
     if ( desiredSize.x > 0.0f || desiredSize.y > 0.0f ) {
@@ -515,6 +623,12 @@ bool CenteredModalPopupScope::begin(const char* name, bool* pOpen,
     prepareCenteredModalWindow(desiredSize);
 
     flags |= ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize;
+    // 高 DPI 横屏键盘可能只留下不到一半高度，标题栏不能挤占活动字段。
+    // 仅键盘可见的移动模态临时省略原生标题；业务正文和确认／取消仍保留。
+    if ( !workspaceAllowsHoverFeedback() &&
+         workspaceTextInputWindowArea().m_size.y + 1 <
+             workspaceFloatingWindowArea().m_size.y )
+        flags |= ImGuiWindowFlags_NoTitleBar;
     if ( autoResize ) {
         flags |= ImGuiWindowFlags_AlwaysAutoResize;
     }
@@ -958,8 +1072,8 @@ void finishButtonFeedback(ImGuiID id, bool clicked, ImGuiStorage* storage,
         isHovered || (wasUpdatedCurrentFrame && storedHovered);
     const bool feedbackEnabled = isInteractionFeedbackEnabled();
 
-    if ( feedbackEnabled && isHovered && !wasHovered &&
-         !(wasUpdatedCurrentFrame && storedHovered) ) {
+    if ( feedbackEnabled && workspaceAllowsHoverFeedback() && isHovered &&
+         !wasHovered && !(wasUpdatedCurrentFrame && storedHovered) ) {
         Audio::AudioManager::instance().playSoundEffect(
             BUTTON_HOVER_SFX_KEY, BUTTON_HOVER_SFX_VOLUME);
     }
@@ -1132,6 +1246,21 @@ bool shouldUseTableRowHighlight(ImGuiSelectableFlags flags)
 {
     return (flags & ImGuiSelectableFlags_SpanAllColumns) != 0 && GImGui &&
            GImGui->CurrentTable != nullptr;
+}
+
+/// @brief 仅在触屏表格内扩大真实选择区，不影响普通菜单与桌面列表。
+/// @details 其他表格可能没有显式项目高度，统一入口保证留白不是唯一的可见变化。
+/// 显式更大的卡片高度原样保留；裁剪器应实测行高或使用相同内容尺寸。
+/// @warning 每个可见选择区常量级测量，只读取当前 UI 线程的倍率与表格身份。
+ImVec2 tableSelectableSize(ImVec2 size)
+{
+    // 弹层或普通列表没有当前表格，不能继承父视图的资源行密度。
+    if ( !workspaceAllowsHoverFeedback() && ImGui::GetCurrentTable() ) {
+        const float scale =
+            Config::AppConfig::instance().getWindowContentScale();
+        size.y = workspaceTableItemHeight(size.y, scale);
+    }
+    return size;
 }
 
 /// @brief 写入表格整行高亮背景。
@@ -1710,8 +1839,10 @@ bool FeedbackSelectable(const char* label, bool selected,
     if ( !useTableRowHighlight ) {
         beginRoundedHighlightLayer(&highlightLayer);
     }
-    const int    pushedColorCount = pushTransparentHeaderColors();
-    const bool   clicked = ImGui::Selectable(label, selected, flags, size);
+    const int pushedColorCount = pushTransparentHeaderColors();
+    // 自动高度表格也需要扩大实际 Item，不能仅让背景行看起来更高。
+    const bool clicked =
+        ImGui::Selectable(label, selected, flags, tableSelectableSize(size));
     const bool   hovered = ImGui::IsItemHovered();
     const bool   active  = ImGui::IsItemActive();
     const ImRect itemRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
@@ -1746,8 +1877,10 @@ bool FeedbackSelectable(const char* label, bool* pSelected,
     if ( !useTableRowHighlight ) {
         beginRoundedHighlightLayer(&highlightLayer);
     }
-    const int    pushedColorCount = pushTransparentHeaderColors();
-    const bool   clicked  = ImGui::Selectable(label, pSelected, flags, size);
+    const int pushedColorCount = pushTransparentHeaderColors();
+    // 指针重载与值重载采用相同触摸尺寸，避免不同选择模型出现密度差异。
+    const bool clicked =
+        ImGui::Selectable(label, pSelected, flags, tableSelectableSize(size));
     const bool   hovered  = ImGui::IsItemHovered();
     const bool   active   = ImGui::IsItemActive();
     const bool   selected = pSelected && *pSelected;
@@ -1896,13 +2029,20 @@ bool FeedbackSliderFloat(const char* label, float* value, float minValue,
     const bool changed =
         ImGui::SliderFloat(label, value, minValue, maxValue, format, flags) &&
         previous != *value;
+    // 横向调值与纵向滚动由平台仲裁，桌面默认不改变输入。
+    workspaceRegisterHorizontalDragItem();
     const bool clicked = isLastItemFeedbackActivated();
     // 当前百分比映射到统一滑块音效音高。
     ImGui::PopStyleColor(pushedColorCount);
     if ( changed )
         playSliderValueChangeFeedback(previous, *value, minValue, maxValue);
     finishLastItemFeedback(id, clicked);
-    return changed;
+    // 精调只在应用边沿写回；原生横拖和经典鼠标路径继续使用原返回值。
+    const bool precisionChanged =
+        !(flags & ImGuiSliderFlags_NoInput) &&
+        mobileScalarPrecisionItem(
+            ImGuiDataType_Float, value, &minValue, &maxValue, .01);
+    return changed || precisionChanged;
 }
 
 /// @brief 绘制带统一反馈的 ImGui Int 滑块。
@@ -1928,6 +2068,8 @@ bool FeedbackSliderInt(const char* label, int* value, int minValue,
     const bool    changed =
         ImGui::SliderInt(label, value, minValue, maxValue, format, flags) &&
         previous != *value;
+    // 横向调值与纵向滚动由平台仲裁，桌面默认不改变输入。
+    workspaceRegisterHorizontalDragItem();
     const bool clicked = isLastItemFeedbackActivated();
     ImGui::PopStyleColor(pushedColorCount);
     // 复合控件只抑制中间数值的滑动音效，保留统一悬浮动画及焦点行为。
@@ -1937,7 +2079,12 @@ bool FeedbackSliderInt(const char* label, int* value, int minValue,
                                       static_cast<float>(minValue),
                                       static_cast<float>(maxValue));
     finishLastItemFeedback(id, clicked);
-    return changed;
+    // 精调只在应用边沿写回；原生横拖和经典鼠标路径继续使用原返回值。
+    const bool precisionChanged =
+        !(flags & ImGuiSliderFlags_NoInput) &&
+        mobileScalarPrecisionItem(
+            ImGuiDataType_S32, value, &minValue, &maxValue, 1);
+    return changed || precisionChanged;
 }
 
 /// @brief 绘制带统一反馈的 ImGui 垂直 Float 滑块。
@@ -1964,12 +2111,19 @@ bool FeedbackVSliderFloat(const char* label, const ImVec2& size, float* value,
         ImGui::VSliderFloat(
             label, size, value, minValue, maxValue, format, flags) &&
         previous != *value;
+    // 告知移动外壳纵向手势属于调值，横向仍可浏览相邻频段。
+    workspaceRegisterVerticalDragItem();
     const bool clicked = isLastItemFeedbackActivated();
     ImGui::PopStyleColor(pushedColorCount);
     if ( changed )
         playSliderValueChangeFeedback(previous, *value, minValue, maxValue);
     finishLastItemFeedback(id, clicked);
-    return changed;
+    // 精调只在应用边沿写回；原生横拖和经典鼠标路径继续使用原返回值。
+    const bool precisionChanged =
+        !(flags & ImGuiSliderFlags_NoInput) &&
+        mobileScalarPrecisionItem(
+            ImGuiDataType_Float, value, &minValue, &maxValue, .01);
+    return changed || precisionChanged;
 }
 
 /// @brief 绘制带统一反馈的 ImGui Float 拖拽输入。
@@ -1993,10 +2147,17 @@ bool FeedbackDragFloat(const char* label, float* value, float speed,
     const int  pushedColorCount = pushAnimatedFrameColors(hoverAmount, false);
     const bool changed          = ImGui::DragFloat(
         label, value, speed, minValue, maxValue, format, flags);
+    // 横向调值与纵向滚动由平台仲裁，桌面默认不改变输入。
+    workspaceRegisterHorizontalDragItem();
     const bool clicked = isLastItemFeedbackActivated();
     ImGui::PopStyleColor(pushedColorCount);
     finishLastItemFeedback(id, clicked);
-    return changed;
+    // 精调只在应用边沿写回；原生横拖和经典鼠标路径继续使用原返回值。
+    const bool precisionChanged =
+        !(flags & ImGuiSliderFlags_NoInput) &&
+        mobileScalarPrecisionItem(
+            ImGuiDataType_Float, value, &minValue, &maxValue, speed);
+    return changed || precisionChanged;
 }
 
 /// @brief 绘制带统一反馈的 ImGui 二维 Int 拖拽输入。
@@ -2019,6 +2180,8 @@ bool FeedbackDragInt2(const char* label, int values[2], float speed,
     const int  pushedColorCount = pushAnimatedFrameColors(hoverAmount, false);
     const bool changed          = ImGui::DragInt2(
         label, values, speed, minValue, maxValue, format, flags);
+    // 横向调值与纵向滚动由平台仲裁，桌面默认不改变输入。
+    workspaceRegisterHorizontalDragItem();
     const bool clicked = isLastItemFeedbackActivated();
     ImGui::PopStyleColor(pushedColorCount);
     finishLastItemFeedback(id, clicked);
@@ -2046,10 +2209,16 @@ bool FeedbackDragScalar(const char* label, ImGuiDataType dataType, void* value,
     const int  pushedColorCount = pushAnimatedFrameColors(hoverAmount, false);
     const bool changed          = ImGui::DragScalar(
         label, dataType, value, speed, minValue, maxValue, format, flags);
+    // 横向调值与纵向滚动由平台仲裁，桌面默认不改变输入。
+    workspaceRegisterHorizontalDragItem();
     const bool clicked = isLastItemFeedbackActivated();
     ImGui::PopStyleColor(pushedColorCount);
     finishLastItemFeedback(id, clicked);
-    return changed;
+    // 精调只在应用边沿写回；原生横拖和经典鼠标路径继续使用原返回值。
+    const bool precisionChanged =
+        !(flags & ImGuiSliderFlags_NoInput) &&
+        mobileScalarPrecisionItem(dataType, value, minValue, maxValue, speed);
+    return changed || precisionChanged;
 }
 
 /// @brief 给上一条 ImGui Item 补充统一交互音效。

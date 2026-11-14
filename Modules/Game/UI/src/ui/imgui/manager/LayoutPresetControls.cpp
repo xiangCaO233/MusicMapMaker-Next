@@ -1,5 +1,6 @@
 // 布局方案操作同时消费视觉值和编辑偏好，不依赖单例头展开它们。
 #include "ui/imgui/manager/LayoutPresetControls.h"
+#include "common/platform/DocumentStorage.h"
 #include "config/AppConfig.h"
 #include "config/EditorConfig.h"
 #include "config/EditorSettings.h"
@@ -9,7 +10,10 @@
 #include "logic/EditorEngine.h"
 #include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
+#include "ui/workspace/MobileInputEditor.h"
 #include <ImGuiFileDialog.h>
+#include <algorithm>
 #include <array>
 #include <imgui.h>
 #include <initializer_list>
@@ -26,6 +30,14 @@ struct PresetControlsState {
     std::array<char, 256> m_name{};
     /// @brief 最近一次操作反馈，成功和失败均可明确识别。
     std::string m_status;
+    /// @brief 移动端名称事务：零为空闲，一为复制，二为改名，三为删除确认。
+    int m_action{};
+    /// @brief 冻结目标名称，外部切换预设后不能提交旧目标的名称。
+    std::string m_target;
+    /// @brief 新弹窗仅请求一次文本聚焦，Enter 不执行管理动作。
+    bool m_focus{};
+    /// @brief 文件选择在途时不重复调度，回调不捕获窗口对象。
+    bool m_filePending{};
 };
 /// @brief 当前客户端的方案管理状态，不参与项目序列化。
 PresetControlsState state;
@@ -61,10 +73,12 @@ void completeFile(const std::string& filename, bool exporting)
         if ( path.extension() != ".mmlayout" ) path += ".mmlayout";
         library.captureCurrent(app.getVisualConfig());
         std::string error;
-        state.m_status =
-            Config::exportLayoutPreset(path, library.current(), error)
-                ? "布局预设已导出。"
-                : error;
+        // Android SAF 先返回工作副本，writer 关闭后还须发布到授权文档。
+        // 普通本机路径和桌面在同一接口中直接成功，不新增第二套文件格式。
+        const bool written =
+            Config::exportLayoutPreset(path, library.current(), error);
+        const bool published = written && Common::publishDocument(path, error);
+        state.m_status       = published ? "布局预设已导出。" : error;
     } else {
         std::string error;
         // 失败时保持原方案、当前选择和实时画布全部不变。
@@ -84,21 +98,31 @@ void openFile(bool exporting)
 {
     auto& app = Config::AppConfig::instance();
     state.m_status.clear();
-    if ( app.getEditorSettings().filePickerStyle ==
-         Config::FilePickerStyle::Native ) {
+    if ( state.m_filePending ) return;
+    if ( NativeFileDialog::requiresSystemPicker() ||
+         app.getEditorSettings().filePickerStyle ==
+             Config::FilePickerStyle::Native ) {
         PlayPopupOpenFeedback();
-        nfdu8char_t*            path = nullptr;
+        // 回调完成之前状态跨帧保留，窗口暂时隐藏也不会重开同一个选择器。
+        // 不持有 AppConfig 库元素引用，导入可能重新分配整个预设数组。
+        state.m_filePending = true;
         const nfdu8filteritem_t filter{ "MusicMapMaker Layout", "mmlayout" };
-        const auto              result =
-            exporting ? NativeFileDialog::saveFile(
-                            &path, &filter, 1, nullptr, "layout.mmlayout")
-                      : NativeFileDialog::openFile(&path, &filter, 1, nullptr);
-        // NFD 路径使用配套释放接口，无论选择的是中文还是 ASCII 文件名。
-        if ( result == NFD_OKAY && path )
-            completeFile(path, exporting);
-        else if ( result == NFD_ERROR || result == NFD_OKAY )
-            state.m_status = "无法打开文件选择器。";
-        if ( path ) NFD_FreePathU8(path);
+        // 完成回调在有效 UI 帧执行；静态状态不持有布局面板或临时路径指针。
+        const auto completed = [exporting](nfdresult_t        result,
+                                           const std::string& path) {
+            // 取消也解除等待，但不清空布局或报告一次虚假的文件写入成功。
+            // 只有非空正常结果才交给现有格式校验和文档发布路径。
+            state.m_filePending = false;
+            if ( result == NFD_OKAY && !path.empty() )
+                completeFile(path, exporting);
+            else if ( result != NFD_CANCEL )
+                state.m_status = "无法打开文件选择器。";
+        };
+        if ( exporting )
+            NativeFileDialog::saveFileAsync(
+                &filter, 1, nullptr, "layout.mmlayout", completed);
+        else
+            NativeFileDialog::openFileAsync(&filter, 1, nullptr, completed);
         return;
     }
     IGFD::FileDialogConfig config;
@@ -115,6 +139,188 @@ void openFile(bool exporting)
         config);
     PlayPopupOpenFeedback();
 }
+/// @brief 移动端管理动作保持草稿与库分离，只有确认按钮提交。
+/// @param action 复制、重命名或删除；库中稳定名称只用于提交前校验。
+/// @warning 只在按钮激活时复制短名称，不创建后台任务。
+void beginMobileAction(int action)
+{
+    // 动作只在可见管理按钮激活时创建；输入草稿不借用库元素的地址。
+    // 后续复制、导入或删除可能让 vector 重分配，稳定名称才可跨帧校验。
+    const auto& preset =
+        Config::AppConfig::instance().getLayoutPresets().current();
+    state.m_action = action;
+    state.m_target = preset.m_name;
+    state.m_name.fill(0);
+    // 复制默认留空以便命名；重命名预填原值，不在输入期间改变稳定身份。
+    if ( action == 2 ) {
+        const auto count =
+            std::min(preset.m_name.size(), state.m_name.size() - 1);
+        std::copy_n(preset.m_name.data(), count, state.m_name.data());
+    }
+    // 删除没有可编辑字段，因此不主动唤起输入法。
+    // 复制和重命名只请求第一次聚焦，避免用户收起键盘后被强制重弹。
+    state.m_focus = action != 3;
+    state.m_status.clear();
+    FeedbackOpenPopup("管理布局预设###MobileLayoutPresetAction");
+}
+/// @brief 触屏预设入口按整行排布，避免长标签和两枚按钮挤出窄栏。
+/// @return 是否通过显式管理动作改变库；文件选择完成在独立回调中发布。
+/// @details 每行至少 48dp，主题本身更高时保留原高度，避免文字被裁切。
+/// 名称弹窗与确认行使用相同内容倍率，不复用桌面固定像素尺寸。
+/// @warning 每帧只借用库，复制、保存和发布均位于按钮边沿。
+bool drawMobilePresetControls()
+{
+    // 此分支仅由移动外壳调用；桌面仍保留原有紧凑控件和内联名称。
+    // 图形方案是否使用触摸不改变移动窗口的可用宽度约束。
+    auto&       app     = Config::AppConfig::instance();
+    auto&       library = app.getLayoutPresets();
+    const float scale   = app.getWindowContentScale();
+    const float height  = std::max(ImGui::GetFrameHeight(), 48.f * scale);
+    bool        changed = false;
+    // 标签与下拉分行，留出的整行宽度供长预设名和箭头使用。
+    // 不根据名称长度重建窗口尺寸，展开与收起不会横向跳动。
+    ImGui::TextUnformatted("布局预设");
+    // Popup 条目沿用稳定名称 ID，语言及内置标记不参与库身份。
+    // 选择过程可能保存离开时的实时布局，不能在成功后继续遍历旧 vector。
+    ImGui::SetNextItemWidth(-1);
+    if ( FeedbackBeginCombo("##MobileLayoutPreset",
+                            library.current().displayName()) ) {
+        for ( const auto& item : library.m_items ) {
+            // 每项也保留触摸高度；选择可能插入自定义项，立即停止旧容器枚举。
+            ImGui::PushID(item.m_name.c_str());
+            const bool selected =
+                FeedbackSelectable(item.displayName(),
+                                   item.m_name == library.m_selected,
+                                   0,
+                                   { 0, height });
+            ImGui::PopID();
+            if ( selected ) {
+                changed = library.select(item.m_name, app.getVisualConfig());
+                break;
+            }
+        }
+        FeedbackEndCombo();
+    }
+    // 常态只显示选择和默认恢复，命名、删除与文件操作按需展开。
+    // 不用横向 SameLine 堆叠，最大字号下每个操作仍有完整命中行。
+    if ( ImGui::CollapsingHeader("管理布局预设") ) {
+        ImGui::TextWrapped(
+            "每个预设包含全部键数的布局及公共相机参数；名称在独立输入框中确认"
+            "。");
+        if ( FeedbackButton("复制为新预设", { -1, height }) )
+            beginMobileAction(1);
+        // 内置项是代码基线，改名和删除不能绕过库的保护规则。
+        // 复制仍可用，用户不必先改变布局才能建立自己的命名方案。
+        ImGui::BeginDisabled(library.current().isBuiltIn());
+        if ( FeedbackButton("重命名", { -1, height }) ) beginMobileAction(2);
+        if ( FeedbackButton("删除当前预设", { -1, height }) )
+            beginMobileAction(3);
+        ImGui::EndDisabled();
+        // 系统文档选择异步返回，等待期间不允许同面板反复创建新请求。
+        // 普通控件仍继续渲染，不暂停 SDL 事件或 UI 帧推进。
+        ImGui::BeginDisabled(state.m_filePending);
+        if ( FeedbackButton("导入预设", { -1, height }) ) openFile(false);
+        if ( FeedbackButton("导出当前预设", { -1, height }) ) openFile(true);
+        ImGui::EndDisabled();
+    }
+    // 恢复默认仅切回代码基线，库保留其它自定义项供用户再次选择。
+    // 这条离散动作与长表单中的数值精调不共享草稿或确认状态。
+    if ( FeedbackButton("重置为软件默认", { -1, height }) ) {
+        library.resetToDefault(app.getVisualConfig());
+        changed = true;
+    }
+    ImGui::TextWrapped(
+        "内置布局首次修改会自动建立自定义副本；各键数分别保存。");
+    // 复用 T11 的安全尺寸和正文滚动，键盘出现时确认行仍在可见区。
+    // 临时名称只由本模态拥有，Enter 收键盘，不自动执行重命名或复制。
+    Utils::CenteredModalPopupScope style(scale);
+    Utils::prepareCenteredModalWindow({ 420.f * scale, 0 });
+    // 标题不是触摸按钮，不继承为 48dp 表单控件设置的垂直内边距。
+    // 百度横屏键盘仅余约 150dp 高度；紧凑标题让正文容纳完整输入行。
+    // Begin 固定本帧标题几何后立即恢复，输入框与底部按钮仍保持原命中高度。
+    const auto padding = ImGui::GetStyle().FramePadding;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                        { padding.x, std::min(padding.y, 4.f * scale) });
+    const bool opened =
+        ImGui::BeginPopupModal("管理布局预设###MobileLayoutPresetAction",
+                               nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize);
+    ImGui::PopStyleVar();
+    if ( opened ) {
+        // 库在其它入口变化后，旧模态不能把草稿提交到新选中的项。
+        // 原名称作为稳定身份校验，失败时保留取消入口及原草稿。
+        const bool           same = library.m_selected == state.m_target;
+        MobileInputBodyScope body("##LayoutPresetNameBody");
+        // 提示当前事务的原目标，键盘出现后即使原面板被遮住也可识别作用域。
+        // 标题的固定内部 ID 不随目标名称变化，输入焦点因此保持稳定。
+        ImGui::TextWrapped("当前预设：%s", state.m_target.c_str());
+        if ( state.m_action == 3 )
+            ImGui::TextWrapped("删除此自定义预设？其余预设保持不变。");
+        else {
+            if ( state.m_focus ) {
+                ImGui::SetKeyboardFocusHere();
+                state.m_focus = false;
+            }
+            ImGui::SetNextItemWidth(-1);
+            ImGui::InputTextWithHint("##LayoutPresetName",
+                                     "输入预设名称",
+                                     state.m_name.data(),
+                                     state.m_name.size());
+            keepMobileInputItemVisible();
+        }
+        // 不把外部目标变化当作自动取消，用户仍可阅读提示并明确关闭。
+        // 合法性只控制确认按钮，取消在所有情况下均保持可用。
+        if ( !same ) ImGui::TextWrapped("当前预设已改变，请取消后重新操作。");
+        if ( !state.m_status.empty() )
+            ImGui::TextWrapped("%s", state.m_status.c_str());
+        // 正文先结束，确认行由父模态持有；键盘只压缩正文滚动空间。
+        // 错误提示留在正文，长提示不能把确认与取消挤出安全区域。
+        body.end();
+        const float width = std::max(1.f,
+                                     (ImGui::GetContentRegionAvail().x -
+                                      ImGui::GetStyle().ItemSpacing.x) *
+                                         .5f);
+        // 只有完整目标仍相同时才允许提交，名称合法性继续交给库统一校验。
+        // 空白、重名失败都保留原库和草稿，让用户修正后继续确认。
+        ImGui::BeginDisabled(!same);
+        if ( FeedbackButton(state.m_action == 3 ? "确认删除" : "确认",
+                            { width, height }) ) {
+            // 复用库自身的冲突、只读和至少一项约束，不在界面复制第二套规则。
+            // 删除也必须通过库切换到有效方案，不能只从 vector 擦掉一行。
+            if ( state.m_action == 1 )
+                changed = library.duplicate(state.m_name.data(),
+                                            app.getVisualConfig());
+            else if ( state.m_action == 2 )
+                changed = library.rename(state.m_name.data());
+            else if ( state.m_action == 3 )
+                changed = library.remove(app.getVisualConfig());
+            // 成功后只结束本事务；持久化在退出模态后统一发布一次。
+            // 失败保留草稿便于修正，不先改名再通过回滚模拟校验失败。
+            if ( changed ) {
+                state.m_action = 0;
+                ImGui::CloseCurrentPopup();
+            } else
+                state.m_status = "名称不能为空、重复或指向内置预设。";
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        // 取消只丢弃临时动作，不能顺便保存当前输入或切换选择。
+        // 下一次动作重新初始化名称，避免误用上次未提交的文本。
+        if ( FeedbackButton("取消", { width, height }) ) {
+            state.m_action = 0;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+    // 一帧可能遍历多个按钮，但只有真实成功的离散动作走一次发布。
+    // 状态文案来自实际保存结果，不从窗口关闭或按钮反馈推断落盘成功。
+    if ( changed ) publish();
+    if ( !state.m_status.empty() )
+        ImGui::TextWrapped("%s", state.m_status.c_str());
+    // 返回值只表达本帧离散管理动作，异步文件完成有独立的发布结果。
+    // 调用方无需在每一空闲帧捕获布局或重复写入配置文件。
+    return changed;
+}
 }  // namespace
 
 /// @brief 在布局设置顶部提供选择和管理操作。
@@ -126,6 +332,7 @@ void openFile(bool exporting)
 /// 状态文案持续显示，用户无需从日志判断导入是否成功。
 bool drawLayoutPresetControls()
 {
+    if ( !workspaceAllowsHoverFeedback() ) return drawMobilePresetControls();
     auto& app     = Config::AppConfig::instance();
     auto& library = app.getLayoutPresets();
     bool  changed = false;

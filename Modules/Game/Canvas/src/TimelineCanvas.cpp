@@ -1,5 +1,7 @@
 #include "canvas/TimelineCanvas.h"
+#include "presentation/TimelineInteractionPresentation.h"
 #include "ui/interaction/EditorInteraction.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 /// @file TimelineCanvas.cpp
 /// @brief 实现总时间线窗口、时间点交互装饰与 Vulkan 命令录制。
 ///
@@ -387,6 +389,7 @@ TimelineCanvas::TimelineCanvas(
     std::shared_ptr<Common::Render::RenderSnapshotBuffer> syncBuffer)
     : UI::IUIView(name)
     , UI::IRenderableView(name)
+    , m_timingPresentation(createTimelineInteractionPresentation())
     , m_canvasName(name)
     , m_syncBuffer(std::move(syncBuffer))
 {
@@ -527,9 +530,12 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
     auto& appConfig      = Config::AppConfig::instance();
     auto& editorSettings = appConfig.getEditorSettings();
     if ( !editorSettings.showTimelineWindow ) {
+        m_timingPresentation->suspend(*this);
         // 主窗口隐藏不能阻断独立表格快照和交互生命周期。
         commitAudioTimeSliderScrub();
         renderTimingPointsTableWindow();
+        // 普通点编辑和插值编辑同样独立于主画布，表格长按后必须继续绘制。
+        renderEventEditorPopup();
         // 插值编辑器是独立模态窗口，隐藏 Timeline 不应丢弃已打开的副本。
         // 即使只从独立表格进入，也保留确认、取消和 Esc 的完整生命周期。
         renderInterpolationEditor();
@@ -569,6 +575,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
     }
     m_wasFocusedLastFrame = m_hasTimingInteractionFocus;
     if ( !windowOpen ) {
+        m_timingPresentation->suspend(*this);
         // 标题栏关闭是持久设置变更，同时终止所有主窗口局部状态。
         commitAudioTimeSliderScrub();
         m_wasFocusedLastFrame             = false;
@@ -576,6 +583,8 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
         editorSettings.showTimelineWindow = false;
         appConfig.save();
         renderTimingPointsTableWindow();
+        // 普通点编辑和插值编辑同样独立于主画布，表格长按后必须继续绘制。
+        renderEventEditorPopup();
         renderInterpolationEditor();
         renderTimingTemplateEditor();
         return;
@@ -953,6 +962,7 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             };
 
             const bool inlineGearCanOpenEditor =
+                m_timingPresentation->showHoverDetails() &&
                 !m_currentSnapshot->isPlaying &&
                 Logic::EditorEngine::instance().getCurrentTool() ==
                     Logic::EditTool::Draw;
@@ -1130,12 +1140,13 @@ void TimelineCanvas::update(UI::UIManager* sourceManager)
             }
             // 5. 渲染弹窗
 
-            renderEventEditorPopup();
             renderEventCreationPopup();
         }
     }
 
     renderTimingPointsTableWindow();
+    // 表格入口在本帧准备的副本也立即可见；每帧仅在统一位置绘制一次。
+    renderEventEditorPopup();
     renderInterpolationEditor();
     renderTimingTemplateEditor();
     // 警告晚于所有编辑窗口绘制，不在用户确认前抢占编辑弹窗。
@@ -1162,6 +1173,9 @@ void TimelineCanvas::renderProfessionalTimelineOverlay(const ImVec2& canvasPos,
         // 无快照或退化视口无法建立四泳道，直接跳过覆盖层。
         return;
     }
+
+    // 移动端窄栏采用独立文字布局；桌面仍使用原有水平泳道标签。
+    if ( UI::workspaceRenderTimelineLaneLabels(canvasPos, size) ) return;
 
     ImDrawList*  drawList = ImGui::GetWindowDrawList();
     const ImVec2 clipMax(canvasPos.x + size.x, canvasPos.y + size.y);

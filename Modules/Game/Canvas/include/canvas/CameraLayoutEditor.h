@@ -37,7 +37,7 @@ public:
     }
     /// @brief 查询本帧是否绘制摄像机操作空间。
     bool cameraMode() const { return m_cameraMode; }
-    /// @brief 在调用方工具窗口中仅绘制元素与相机模式切换。
+    /// @brief 在调用方工具窗口绘制模式切换，并为移动端内嵌相机参数。
     /// @warning 每帧只访问 UI 线程配置，不获取会话锁或执行磁盘 IO。
     void drawControls(Config::VisualConfig& visual);
     /// @brief 绘制三维操作空间及实际视角预览。
@@ -47,6 +47,13 @@ public:
                 ImTextureID texture, Config::VisualConfig& visual);
 
 private:
+    /// @brief 在移动布局面板中绘制单轴参数与观察控制，不创建覆盖画布的浮窗。
+    /// @warning 每帧固定规模控件；只更新本地值，保存仍归原布局生命周期。
+    void drawMobileControls(Config::VisualConfig& visual);
+    /// @brief 移动端实际预览替换操作视图，两者共用当前画布区域和纹理。
+    bool m_mobilePreview{ false };
+    /// @brief 观察参数与目标参数分组显示，避免窄面板同时展开全部坐标。
+    bool m_mobileObservation{ false };
     /// @brief 参数窗口独享的 Clay 上下文，只在相机模式存在。
     UI::CLayWrapperCore::WindowContext m_parameterLayout{};
     /// @brief 在独立窗口中用 Clay 排列工具和精确数值。

@@ -1,7 +1,12 @@
-# Modules/Game/Canvas/CMakeLists.txt
+# Modules/Game/Canvas/CMakeLists.txt 平台工厂采用互斥源文件，避免靠预处理宏隐藏平台实现。
+# 公共控制器头不暴露手势模型，私有包含根不作为 PUBLIC 传播。 CPU 测试编译移动生产策略，专用调用同样获得编译检查。
+# 手势测试观察正式命令，不能只用私有标志判断选区未变。 测试不要求图形设备，手机和平板触摸验收另外执行。
 
 # cmake-format: off
 # 维护约定：
+# - 触摸策略公开声明只存在于模块私有目录，不传播到其他业务头。
+# - 桌面策略独立链接，保留原有即时起笔和修饰键交互。
+# - 测试显式构造移动实现，不替换桌面生产工厂。
 # - Canvas 是业务 UI 模块，不向 Graphic 反向暴露 Brush、DrawCmd 等高层结构；新增渲染协作继续通过既有抽象回调完成。
 # - Basic2DCanvas 与 TimelineCanvas 的交互、渲染和弹窗实现保持分文件登记，避免单个翻译单元继续扩大。
 # - PreviewCanvas 复用逻辑快照但拥有独立视口，依赖调整时不能把预览生命周期重新绑定到主画布窗口显隐。
@@ -59,6 +64,29 @@ add_library(
   src/TimingInterpolationControls.cpp
   src/TimelineCanvas_Popups.cpp)
 
+# 公共控制器只链接中立桥；平台私有头与实现由目标选择，不向公开包含目录传播。
+target_sources(
+  Canvas
+  PRIVATE src/presentation/TimelineInteractionPresentation.cpp
+          src/presentation/CanvasInteractionPresentation.cpp
+          # 安卓接入鼠标后复用经典与纯鼠标解释器，不复制右键菜单。
+          src/presentation/desktop/DesktopCanvasInteractionPresentation.cpp)
+target_include_directories(Canvas PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+if(ANDROID)
+  # 安卓工厂根据当前操作方案选择触控仲裁或共用的桌面指针解释器。
+  target_sources(
+    Canvas
+    PRIVATE src/presentation/mobile/MobilePreviewInteractionPresentation.cpp
+            src/presentation/mobile/MobileAnnotationTablePresentation.cpp
+            src/presentation/mobile/MobileTimelineInteractionPresentation.cpp
+            src/presentation/mobile/MobileCanvasInteractionPresentation.cpp
+            src/presentation/mobile/MobileCanvasFactory.cpp)
+else()
+  # 桌面保持原有即时鼠标输入与标准菜单，工厂符号只有一个实现。
+  target_sources(Canvas
+                 PRIVATE src/presentation/desktop/DesktopCanvasFactory.cpp)
+endif()
+
 # PUBLIC 依赖构成 Canvas 公开头的传递接口；业务实现需要的新依赖应优先检查 能否保持 PRIVATE，避免继续扩大下游翻译单元的包含和链接范围。
 target_link_libraries(
   Canvas
@@ -113,6 +141,14 @@ target_include_directories(LayoutEditingTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(LayoutEditingTest PRIVATE Common Config)
 mmm_register_test_case(NAME LayoutEditingTest COMMAND LayoutEditingTest)
+
+# 布局触控回归进入真实 ImGui 窗口与生产布局处理器，覆盖宽命中、终点和取消。 独立 CTest 配置根隔离生产保存；不创建
+# Vulkan、音频设备或修改用户工作区。
+mmm_add_test_executable(Canvas MobileLayoutEditingTest
+                        tests/MobileLayoutEditingTest.cpp)
+target_link_libraries(MobileLayoutEditingTest PRIVATE Canvas)
+mmm_register_test_case(NAME MobileLayoutEditingTest COMMAND
+                       MobileLayoutEditingTest)
 
 # 画布标签测试覆盖标题格式与隐藏主画布的实际快照消费。 显式链接 Canvas 以验证无 GPU 的准备/交换入口，不以复制可见性判断代替生产路径。
 mmm_add_test_executable(Canvas CanvasTabTitleTest tests/CanvasTabTitleTest.cpp)
@@ -360,6 +396,9 @@ mmm_register_test_case(NAME EditorInteractionSurfaceTest COMMAND
 mmm_add_test_executable(Canvas TimingTableMouseSelectionTest
                         tests/TimingTableMouseSelectionTest.cpp)
 target_link_libraries(TimingTableMouseSelectionTest PRIVATE Canvas)
+# 表格触点回归借用套件已编译的移动生产呈现，不重复定义工厂。
+target_include_directories(TimingTableMouseSelectionTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 mmm_register_test_case(NAME TimingTableMouseSelectionTest COMMAND
                        TimingTableMouseSelectionTest)
 
@@ -368,5 +407,135 @@ mmm_register_test_case(NAME TimingTableMouseSelectionTest COMMAND
 mmm_add_test_executable(Canvas MouseAnnotationMenuTest
                         tests/MouseAnnotationMenuTest.cpp)
 target_link_libraries(MouseAnnotationMenuTest PRIVATE Canvas)
+# 整条批注栏测试显式选择移动工厂；实现已由套件链接，不再重复编译。
+target_include_directories(MouseAnnotationMenuTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 mmm_register_test_case(NAME MouseAnnotationMenuTest COMMAND
                        MouseAnnotationMenuTest)
+
+# 移动输入意图采用固定时间轴验证，独立于 GPU、Android 后端与设备帧率。
+mmm_add_test_executable(Canvas MobileCanvasGestureTest
+                        tests/MobileCanvasGestureTest.cpp)
+target_include_directories(MobileCanvasGestureTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(MobileCanvasGestureTest PRIVATE Canvas Log 3rd_imgui)
+# 桌面回归编译同一触摸策略，防止安卓专用调用在本地验证中被遗漏。
+if(NOT ANDROID)
+  target_sources(
+    MobileCanvasGestureTest
+    PRIVATE src/presentation/mobile/MobileCanvasInteractionPresentation.cpp)
+endif()
+mmm_register_test_case(NAME MobileCanvasGestureTest COMMAND
+                       MobileCanvasGestureTest)
+
+# 单指选择覆盖真实生产解释器的拾取、子部件锁存与快速释放。 桌面用同一个夹具核验双击跳转，确保移动语义不扩散到经典方案。
+mmm_add_test_executable(Canvas MobileCanvasSelectionTest
+                        tests/MobileCanvasSelectionTest.cpp)
+target_include_directories(MobileCanvasSelectionTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(MobileCanvasSelectionTest PRIVATE Canvas Log 3rd_imgui)
+# 同属 Canvas 测试套件，移动生产策略已由 MobileCanvasGestureTest 编译一次。 不重复加入实现，避免套件链接出现同名工厂符号。
+# 单指验证边界： - CPU 用例只观察正式输入派发，不持有用户会话。 - 实际谱面保存与轨道、时间变化仍由设备验收。
+mmm_register_test_case(NAME MobileCanvasSelectionTest COMMAND
+                       MobileCanvasSelectionTest)
+
+# 单键和长条回归贯通真实触点、移动解释器以及逻辑工具，检查实际几何与历史。 使用内存谱面，不创建 Vulkan 或音频设备，也不写入用户工程与配置。
+# 同一套件已编译移动工厂，不重复加入实现文件，防止同名符号重复定义。 桌面对照通过相同工厂的回退路径，确保固定轨道策略不会扩散到桌面方案。
+# 真机与模拟器验收仍负责设备事件和布局，CPU 测试专门覆盖帧合并与事务。
+mmm_add_test_executable(Canvas MobileCanvasDrawingTest
+                        tests/MobileCanvasDrawingTest.cpp)
+target_include_directories(MobileCanvasDrawingTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(MobileCanvasDrawingTest PRIVATE Canvas Log 3rd_imgui)
+mmm_register_test_case(NAME MobileCanvasDrawingTest COMMAND
+                       MobileCanvasDrawingTest)
+
+# 多触点导航直接消费生产跟踪器，使用固定事件时间而非真实设备计时。 测试不初始化 ImGui 或 Vulkan，手机上的布局与注入验收另行执行。
+# 私有手势头只暴露给这个测试目标，不成为 Canvas 的公共包含依赖。 真实跟踪器通过 Graphic 链接，防止测试复制输入身份维护算法。
+mmm_add_test_executable(Canvas MobileCanvasNavigationTest
+                        tests/MobileCanvasNavigationTest.cpp)
+target_include_directories(MobileCanvasNavigationTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# 仅链接生产输入和日志实现，不把窗口初始化变成导航测试前提。
+target_link_libraries(MobileCanvasNavigationTest PRIVATE Graphic Log)
+mmm_register_test_case(NAME MobileCanvasNavigationTest COMMAND
+                       MobileCanvasNavigationTest)
+
+# 时间线触控回归使用生产移动解释器，桌面工厂保持原样；安卓不重复编译实现。
+mmm_add_test_executable(Canvas MobileTimingInteractionTest
+                        tests/MobileTimingInteractionTest.cpp)
+target_include_directories(MobileTimingInteractionTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(MobileTimingInteractionTest PRIVATE Canvas Log 3rd_imgui)
+if(NOT ANDROID)
+  target_sources(
+    MobileTimingInteractionTest
+    PRIVATE src/presentation/mobile/MobileTimelineInteractionPresentation.cpp)
+endif()
+mmm_register_test_case(NAME MobileTimingInteractionTest COMMAND
+                       MobileTimingInteractionTest)
+
+# 图表触控与页面滚动共用真实 CPU ImGui 帧，独立验证夺笔、取消和双指视野。 通过正式 Canvas
+# 目标解析图表辅助，避免套件重复编译同名实现产生重复符号。 夹具只实例化窗口副本，不启动会话或替换桌面平台工厂；原鼠标控件另有阳性回归。
+mmm_add_test_executable(Canvas MobileTimingCurveInteractionTest
+                        tests/MobileTimingCurveInteractionTest.cpp)
+target_include_directories(
+  MobileTimingCurveInteractionTest PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
+                                           ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(MobileTimingCurveInteractionTest PRIVATE Canvas Log
+                                                               3rd_imgui)
+mmm_register_test_case(NAME MobileTimingCurveInteractionTest COMMAND
+                       MobileTimingCurveInteractionTest)
+
+# 该测试只创建 CPU ImGui 上下文，不启动窗口或上传字体纹理。 独立链接生产移动实现，保证桌面构建也能验证触控接管与取消。
+# 公共平台工厂没有替换，桌面兼容用例继续采用原默认解释器。 测试数据全部驻留内存，不产生源码资源目录下的输出文件。
+# 设备布局与真实后端事件差异另由手机、平板和实体机验收覆盖。 测试套件集成由顶层 helper 完成，不自行选择二进制输出目录。
+# 改动菜单或触点协议时，该目标与既有桌面 Timing 测试共同回归。
+
+# cmake-format: off
+# Timing 触控测试的职责边界：
+# 移动输入解释器使用真实原始触点代际，不替换公共平台工厂。
+# Windows 负责确定性状态机及桌面对照，Android 设备负责后端与布局验收。
+# 新增源文件只加入自维护 Canvas 目标，不修改第三方依赖的构建定义。
+# cmake-format: on
+
+# 批注列表回归采用正式移动呈现与全局滚动仲裁，桌面显式链接移动实现。 数据来自独立内存会话；翻译只读源码字典，不写测试资源或用户配置。
+mmm_add_test_executable(Canvas MobileAnnotationTableTest
+                        tests/MobileAnnotationTableTest.cpp)
+target_include_directories(MobileAnnotationTableTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(MobileAnnotationTableTest PRIVATE Canvas Log 3rd_imgui)
+target_compile_definitions(
+  MobileAnnotationTableTest
+  PRIVATE
+    MMM_T08_TRANSLATION="${CMAKE_SOURCE_DIR}/assets/translations/en_us.lua")
+if(NOT ANDROID)
+  target_sources(
+    MobileAnnotationTableTest
+    PRIVATE src/presentation/mobile/MobileAnnotationTablePresentation.cpp)
+endif()
+mmm_register_test_case(NAME MobileAnnotationTableTest COMMAND
+                       MobileAnnotationTableTest)
+
+# 本批测试入口只读取源码语言文件，不在测试资源目录生成文件。 移动平台工厂与桌面平台工厂互斥，避免改变宿主生产布局。
+# 属性草稿、选择和正式命令分别验证，构建通过不替代设备验收。 CPU 测试无图形及音频设备，设备证据继续集中存入外置工作树。
+
+# 表格私有呈现头只提供给实际消费目标，不能扩大 Canvas 的公开依赖。
+
+# 预览导航回归使用正式移动解释器和播放控制器，不初始化 GPU 或音频设备。 CTest 默认配置根位于
+# test_output，导航释放的布局保存不会写个人配置。 测试捕获正式事件再交给真实播放控制器，不以状态机私有布尔值代替结果。
+# 主画布横移、时间线倍率和不允许的命令作为交叉窗口污染的对照。
+mmm_add_test_executable(Canvas MobilePreviewInteractionTest
+                        tests/MobilePreviewInteractionTest.cpp)
+target_include_directories(MobilePreviewInteractionTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(MobilePreviewInteractionTest PRIVATE Canvas Log 3rd_imgui)
+if(NOT ANDROID)
+  target_sources(
+    MobilePreviewInteractionTest
+    PRIVATE src/presentation/mobile/MobilePreviewInteractionPresentation.cpp)
+endif()
+# 注册入口继续使用公共测试包装器，配置和运行输出归入二进制树。 设备验收包只写外置 Android 工作树，不属于此目标源码或测试资源。
+# 桌面生产工厂保持空策略；CPU 用例显式链接移动实现作平台对照。 不重复链接另一个同名工厂，避免测试套件发生符号冲突。
+mmm_register_test_case(NAME MobilePreviewInteractionTest COMMAND
+                       MobilePreviewInteractionTest)

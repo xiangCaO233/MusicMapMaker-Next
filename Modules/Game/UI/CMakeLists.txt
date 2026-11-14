@@ -18,17 +18,21 @@ foreach(
         software-personalization
         # 编辑器个性化复用实际画布布局边界，需要随程序一起嵌入。
         editor-personalization)
+  # 触屏软件设置没有光标组，使用独立教程声明，不让引导停在不存在的控件。 两端保留相同主题及其余步骤 ID，已有学习进度无需迁移或重置。
+  set(_mmm_walkthrough_file
+      "${PROJECT_SOURCE_DIR}/assets/walkthroughs/${_mmm_walkthrough}.json")
+  if(ANDROID AND _mmm_walkthrough STREQUAL "software-personalization")
+    set(_mmm_walkthrough_file
+        "${PROJECT_SOURCE_DIR}/assets/walkthroughs/mobile/software-personalization.json"
+    )
+  endif()
   # 所有主题 JSON 都列为配置依赖，编辑演练内容无需手动重新配置。
   set_property(
     DIRECTORY
     APPEND
-    PROPERTY
-      CMAKE_CONFIGURE_DEPENDS
-      "${PROJECT_SOURCE_DIR}/assets/walkthroughs/${_mmm_walkthrough}.json")
+    PROPERTY CMAKE_CONFIGURE_DEPENDS "${_mmm_walkthrough_file}")
   # 嵌入当前文件正文，与 WalkthroughService 中的内置注册顺序对应。
-  file(READ
-       "${PROJECT_SOURCE_DIR}/assets/walkthroughs/${_mmm_walkthrough}.json"
-       MMM_WALKTHROUGH_${_mmm_walkthrough})
+  file(READ "${_mmm_walkthrough_file}" MMM_WALKTHROUGH_${_mmm_walkthrough})
 endforeach()
 configure_file(
   src/ui/walkthrough/BuiltinWalkthrough.h.in
@@ -76,6 +80,8 @@ configure_file(
 # - 音频、协作和设置的拆分实现保持相邻；
 # - 自动生成的演练头仅通过私有生成目录提供。
 # cmake-format: on
+# 移动控件通过 CPU 绘制几何检查，回归不依赖截图颜色。 测试专用平台源不进入桌面 UI 库，维持生产实现隔离。 安卓 UI
+# 库已有移动绘制对象，测试不重复登记定义。
 add_library(
   UI STATIC
   # 操作方案拥有输入解释与动作路由，不进入底层渲染模块。
@@ -84,6 +90,17 @@ add_library(
   src/ui/interaction/EditorInteractionActions.cpp
   # 视图基础接口与演练流程。
   src/ui/IUIView.cpp
+  # 公共视图只认识工作区策略，平台工厂在下面按目标系统独立选择。
+  src/ui/workspace/WorkspacePresentation.cpp
+  src/ui/workspace/MobileWorkspaceModel.cpp
+  # 空白触屏滚动独立于业务视图，桌面只在无 GPU 回归中主动创建。
+  # 键盘避让与数值精调共用 UI 草稿，不在平台层修改业务属性。
+  src/ui/workspace/MobileInputEditor.cpp
+  src/ui/workspace/AudioPlotTouch.cpp
+  src/ui/workspace/TouchReadPress.cpp
+  src/ui/workspace/MobileTouchScroll.cpp
+  # 移动停靠树统一标签与内容边界，桌面仅通过无 GPU 测试创建。
+  src/ui/workspace/MobileDockLayout.cpp
   # 教学段落目录仅在服务构造时读取资源，运行时按已生成模型推进。
   src/ui/walkthrough/ComposeLessonCatalog.cpp
   src/ui/walkthrough/WalkthroughModel.cpp
@@ -103,8 +120,10 @@ add_library(
   # 通用绘制画刷及桌面、文件对话框、控件工具。
   src/ui/brush/Brush.cpp
   src/ui/utils/DesktopPathUtils.cpp
-  src/ui/utils/NativeFileDialog.cpp
+  $<$<NOT:$<BOOL:${ANDROID}>>:${CMAKE_CURRENT_SOURCE_DIR}/src/ui/utils/NativeFileDialog.cpp>
   src/ui/utils/TimeFormatUtils.cpp
+  # 内置选择器的移动扩展只调整绘制，保留上游目录和结果协议。
+  src/ui/utils/MobileFileDialog.cpp
   src/ui/utils/UIWidgetUtils.cpp
   src/ui/utils/VolumeSlider.cpp
   src/ui/imgui/audio/AudioPresetControls.cpp
@@ -236,6 +255,8 @@ add_library(
   src/ui/imgui/manager/SettingsView_Tabs.cpp
   src/ui/imgui/manager/SettingsView_VisualTab.cpp
   src/ui/imgui/manager/ToolbarView.cpp
+  # 移动调色实现独立于桌面布局；公共移动工具入口也由无图形测试链接。
+  src/ui/workspace/MobilePaletteControls.cpp
   # 音轨控制、试听控件、波形和频谱视图。
   src/ui/imgui/audio/AudioTrackControllerUI.cpp
   src/ui/imgui/audio/AudioTrackControllerUI_Widgets.cpp
@@ -366,6 +387,20 @@ target_include_directories(MarkdownRendererTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(MarkdownRendererTest PRIVATE 3rd_imgui)
 mmm_register_test_case(NAME MarkdownRendererTest COMMAND MarkdownRendererTest)
+
+# cmake-format: off
+# 更新通知回归契约：
+# - 使用真实 Popup 栈验证已有模态排队，不以布尔镜像替代窗口状态。
+# - 关闭后保持静默，用户明确重查仍能产生第二次提示。
+# - 显式禁用反馈音，不请求网络或打开真实音频设备。
+# cmake-format: on
+mmm_add_test_executable(UI DeferredUpdatePopupTest
+                        tests/DeferredUpdatePopupTest.cpp)
+target_include_directories(DeferredUpdatePopupTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(DeferredUpdatePopupTest PRIVATE UI 3rd_imgui)
+mmm_register_test_case(NAME DeferredUpdatePopupTest COMMAND
+                       DeferredUpdatePopupTest)
 
 # 更新图片测试默认离线，覆盖相对地址、非法协议和多帧 GIF 解码。 链接 UI 以复用正式 Markdown 图片缓存实现及其资源边界。
 mmm_add_test_executable(UI MarkdownImageCacheTest
@@ -653,5 +688,112 @@ mmm_add_test_executable(UI EditorInteractionProfileTest
                         tests/EditorInteractionProfileTest.cpp)
 target_link_libraries(EditorInteractionProfileTest PRIVATE UI Config 3rd_imgui)
 # 每个用例独立进程，测试方案不会进入生产方案列表或污染其他用例。
-mmm_register_test_case(NAME EditorInteractionProfileTest COMMAND
-                       EditorInteractionProfileTest)
+mmm_register_test_case(
+  NAME EditorInteractionProfileTest COMMAND EditorInteractionProfileTest
+  "${PROJECT_SOURCE_DIR}/assets/translations/zh_cn.lua"
+  "${PROJECT_SOURCE_DIR}/assets/translations/en_us.lua")
+
+# 纯状态机回归不要求 Android SDK 或 Vulkan；设备端另验收真实层级与触摸。
+mmm_add_test_executable(UI MobileWorkspaceModelTest
+                        tests/MobileWorkspaceModelTest.cpp)
+target_link_libraries(MobileWorkspaceModelTest PRIVATE UI Log)
+mmm_register_test_case(NAME MobileWorkspaceModelTest COMMAND
+                       MobileWorkspaceModelTest)
+
+# 用真实 ImGui 窗口验证空白滚动与控件输入归属，不创建平台窗口或 Vulkan。
+mmm_add_test_executable(UI MobileTouchScrollTest
+                        tests/MobileTouchScrollTest.cpp)
+target_link_libraries(MobileTouchScrollTest PRIVATE UI Log)
+mmm_register_test_case(NAME MobileTouchScrollTest COMMAND MobileTouchScrollTest)
+
+# 使用正式弹层和输入检查三类预设页的屏幕边界、内部滚动与固定关闭入口。 两种生产语言与不同屏幕比例共享测试入口，不初始化平台窗口或音频设备。
+mmm_add_test_executable(UI AudioPresetLayoutTest
+                        tests/AudioPresetLayoutTest.cpp)
+target_link_libraries(AudioPresetLayoutTest PRIVATE UI Log)
+mmm_register_test_case(
+  NAME AudioPresetLayoutTest COMMAND AudioPresetLayoutTest
+  "${PROJECT_SOURCE_DIR}/assets/translations/zh_cn.lua"
+  "${PROJECT_SOURCE_DIR}/assets/translations/en_us.lua")
+
+# 真实停靠树回归验证三个分区等高以及辅助窗口显隐后的结构。
+mmm_add_test_executable(UI MobileDockLayoutTest tests/MobileDockLayoutTest.cpp)
+target_link_libraries(MobileDockLayoutTest PRIVATE UI Log)
+mmm_register_test_case(NAME MobileDockLayoutTest COMMAND MobileDockLayoutTest)
+# 表格触摸密度回归： - 使用真实选择区与裁剪器，不依赖 GPU 和设备配置。 - 手机和平板密度各自建立隔离上下文，禁止读写用户 ini。 - UI
+# 提供生产尺寸策略和反馈控件，Log 负责聚合失败信息。 - 独立测试身份便于与手势滚动及音频面板布局回归共同运行。
+mmm_add_test_executable(UI MobileTableLayoutTest
+                        tests/MobileTableLayoutTest.cpp)
+target_link_libraries(MobileTableLayoutTest PRIVATE UI Log)
+mmm_register_test_case(NAME MobileTableLayoutTest COMMAND MobileTableLayoutTest)
+# Android 暂不提供桌面文件选择器，兼容层明确报告不支持，不能静默丢失用户文件。
+if(ANDROID)
+  target_sources(UI PRIVATE src/ui/utils/AndroidFileDialog.cpp)
+  # 参数弹层在移动组合根的面板结束后提交，不进入桌面工具栏更新流程。
+
+  # 移动外壳不编译桌面组合根，避免两套布局分支交织在业务视图中。
+  target_sources(
+    UI
+    PRIVATE src/ui/workspace/MobileWorkspacePresentation.cpp
+            # 时间线窄栏标签只在移动目标编译，公共画布通过中立策略转发。
+            src/ui/workspace/MobileTimelineLabels.cpp
+            src/ui/workspace/MobileButton.cpp
+            # 参数控件保持独立，播放与轨数仍复用正式命令。 工作台仅提供移动触摸入口，桌面继续使用原工具条和编辑菜单。
+            # 抽屉菜单只编译移动入口，业务动作继续复用公共注册表。
+            src/ui/workspace/MobileDrawerMenus.cpp
+            src/ui/workspace/MobileWorkbench.cpp
+            src/ui/workspace/MobilePlaybackControls.cpp)
+else()
+  # 桌面完整保留原有外壳；公共布局入口只链接唯一的平台工厂。
+  target_sources(UI PRIVATE src/ui/workspace/DesktopWorkspacePresentation.cpp
+                            src/ui/workspace/DesktopMainWorkspace.cpp)
+endif()
+
+# 工具插件直接读取 FFmpeg codec ID，必须显式继承其头文件和首次构建依赖。 不能依赖预编译 ICE
+# 恰好传播该目录，源码交叉构建也必须具有同一接口。
+target_link_libraries(UI PRIVATE 3rd_ffmpeg)
+
+# 异步选择器共用回调契约，Android 不阻塞 SDL 主循环，桌面沿用原 NFD。
+target_sources(UI PRIVATE src/ui/utils/NativeFileDialogAsync.cpp)
+
+# 桌面测试直接编译移动控件，生产桌面 UI 不链接这些平台实现。 安卓目标已经拥有相同对象，避免重复工厂与绘制符号。 -
+# 几何用例复用既有测试套件，不另建平台应用入口。
+mmm_add_test_executable(UI MobileWidgetGeometryTest
+                        tests/MobileWidgetGeometryTest.cpp)
+target_link_libraries(MobileWidgetGeometryTest PRIVATE UI Log)
+if(NOT ANDROID)
+  target_sources(
+    MobileWidgetGeometryTest PRIVATE src/ui/workspace/MobileButton.cpp
+                                     src/ui/workspace/MobileTimelineLabels.cpp)
+endif()
+mmm_register_test_case(NAME MobileWidgetGeometryTest COMMAND
+                       MobileWidgetGeometryTest)
+
+# 音频图表与资源行使用真实原始触点、ImGui 页面仲裁和正式播放控制器回归。 测试不创建 GPU 或音频设备，配置与所有运行输出仍由公共包装器隔离。
+mmm_add_test_executable(UI MobileAudioNavigationTest
+                        tests/MobileAudioNavigationTest.cpp)
+target_link_libraries(MobileAudioNavigationTest PRIVATE UI Logic Log)
+mmm_register_test_case(NAME MobileAudioNavigationTest COMMAND
+                       MobileAudioNavigationTest)
+
+# 参数输入回归使用真实 ImGui、原始触点与平台键盘快照，禁止创建系统音频设备。
+mmm_add_test_executable(UI MobileInputEditorTest
+                        tests/MobileInputEditorTest.cpp)
+target_link_libraries(MobileInputEditorTest PRIVATE UI Logic Log)
+mmm_register_test_case(NAME MobileInputEditorTest COMMAND MobileInputEditorTest)
+
+# BMS 触控回归绘制真实选项与公共工厂创建的格式模态，检查高 DPI 正文和底部操作行。 不选择输出路径或启动引擎导出，文件与音频保真由独立服务回归负责。
+mmm_add_test_executable(UI BmsTouchDialogTest tests/BmsTouchDialogTest.cpp)
+target_link_libraries(BmsTouchDialogTest PRIVATE UI Logic Log)
+mmm_register_test_case(NAME BmsTouchDialogTest COMMAND BmsTouchDialogTest)
+
+# 文件选择器回归使用原控件与真实输入队列，验证高键盘下焦点、几何及确认结果。
+mmm_add_test_executable(UI MobileFileDialogTest tests/MobileFileDialogTest.cpp)
+target_link_libraries(MobileFileDialogTest PRIVATE UI Logic Log)
+mmm_register_test_case(NAME MobileFileDialogTest COMMAND MobileFileDialogTest)
+
+# 直接绘制正式音效工具，验证卡片起手滚动与音量／静音操作互斥。
+mmm_add_test_executable(UI SoundEffectTouchScrollTest
+                        tests/SoundEffectTouchScrollTest.cpp)
+target_link_libraries(SoundEffectTouchScrollTest PRIVATE UI Audio Log)
+mmm_register_test_case(NAME SoundEffectTouchScrollTest COMMAND
+                       SoundEffectTouchScrollTest)

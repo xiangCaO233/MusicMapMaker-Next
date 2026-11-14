@@ -3,6 +3,7 @@
 #include "canvas/PlanarObservationInput.h"
 #include "common/render/CanvasThicknessCompensation.h"
 #include "common/render/TextureID.h"
+#include "config/AppConfig.h"
 #include "config/EditorConfig.h"
 #include "config/VisualConfig.h"
 #include "log/colorful-log.h"
@@ -13,6 +14,7 @@
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/ecs/system/render/Batcher.h"
 #include "ui/interaction/EditorInteraction.h"
+#include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -106,6 +108,26 @@ struct CameraLayoutEditorTestAccess {
     static bool rotating(const CameraLayoutEditor& editor)
     {
         return editor.m_rotate;
+    }
+    /// @brief 分页选择不替换业务绘制，复位仍通过真实按钮触发。
+    static void mobilePage(CameraLayoutEditor& editor, bool observation,
+                           bool preview)
+    {
+        editor.m_mobileObservation = observation;
+        editor.m_mobilePreview     = preview;
+    }
+    /// @brief 建立辅助观察现场，不能通过目标姿态代替独立观察量。
+    static void disturbObservation(CameraLayoutEditor& editor)
+    {
+        editor.m_center   = { 3, 4, 5 };
+        editor.m_orbit    = { 40, 50 };
+        editor.m_distance = 8;
+    }
+    /// @brief 检查观察复位的完整输出，距离与中心必须一并恢复。
+    static bool observationReset(const CameraLayoutEditor& editor)
+    {
+        return editor.m_center == glm::vec3(0, 0, .4f) &&
+               editor.m_orbit == glm::vec2(25, -35) && editor.m_distance == 4;
     }
     /// @brief 模拟工具栏模式选择，避免依赖中文字体的控件宽度。
     static void mode(CameraLayoutEditor& editor, bool camera)
@@ -1201,13 +1223,143 @@ bool checkWindows()
     ImGui::DestroyContext();
     return passed;
 }
+/// @brief 移动面板不再创建重叠浮窗，复位按钮仍修改正式配置。
+/// @details 使用真实 ImGui 帧与完整点击；仅分页设置沿用既有测试访问器。
+/// 两个宿主分别代表工具面板和画布，防止把参数误绘制到背景场景。
+/// 同一编辑器依次切换目标页、观察页和预览，不能靠重建对象清除旧状态。
+/// 复位结果比较完整三分量，不能只检查一个可见轴就认为姿态完全恢复。
+/// 目标长度、运动补偿和厚度补偿故意设为非默认值，作为相邻字段保护。
+/// 观察复位要求独立观察坐标回到基准，而目标配置必须逐值不变。
+/// 不传入图形纹理以避免 GPU 依赖；预览的窗口归属仍走真实生产分支。
+/// @return 窗口归属、触摸尺寸、复位语义和目标隔离全部满足时返回 true。
+bool checkMobileControls()
+{
+    using namespace MMM;
+    /// @brief 只替换外壳能力，不替换控件、反馈和配置修改逻辑。
+    struct MobileShell : UI::IWorkspacePresentation {
+        /// @brief 明确进入移动表现，防止宿主平台宏跳过本场景。
+        bool allowsHoverFeedback() const override { return false; }
+        /// @brief 本测试没有完整应用工作区，只有下面建立的独立宿主。
+        void renderWorkspace(UI::MainDockSpaceUI&, UI::UIManager&) override {}
+    } shell;
+    ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    // 禁止写入个人停靠配置，也不读取上次桌面相机窗口的位置。
+    // 长屏只用于容纳测试参数，生产尺寸约束另由设备验收覆盖。
+    io.IniFilename = nullptr;
+    io.DisplaySize = { 1400, 1600 };
+    io.DeltaTime   = 1.f / 60;
+    unsigned char* pixels{};
+    int            width{}, height{};
+    // 图集准备满足 NewFrame 前置条件；无需上传到真实图形设备。
+    // 测试不依赖中文字体宽度，按钮位置从实际绘制结果中读取。
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    bool passed = true;
+    {
+        // 编辑器先于上下文销毁；本场景不保存个人配置或 ini。
+        UI::WorkspaceFrameScope    workspace(shell);
+        Canvas::CameraLayoutEditor editor;
+        Config::VisualConfig       visual;
+        using Access = Canvas::CameraLayoutEditorTestAccess;
+        // 模式只负责显示权限，不能预先替测试执行任何相机变换。
+        // 参数现场跨全部帧保留，避免复位实际无效却被重新初始化掩盖。
+        Access::mode(editor, true);
+        visual.canvasCameraPosition        = { 1, 2, 3 };
+        visual.canvasCameraRotation        = { 10, 20, 30 };
+        visual.canvasCameraLength          = 7;
+        visual.canvasMotionCompensation    = 33;
+        visual.canvasThicknessCompensation = 66;
+        // 矩形仅服务当前控件，切页后下一帧必须重新读取。
+        // 不能沿用上一页按钮位置，否则两组内容长度不同时会误点标量。
+        ImVec2 actionMin{}, actionMax{};
+        /// @brief 窄参数宿主留足纵向空间，记录生产控件实际矩形。
+        const auto frame = [&] {
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos({ 0, 0 });
+            ImGui::SetNextWindowSize({ 500, 1500 });
+            ImGui::Begin("MobileCameraControls");
+            editor.drawControls(visual);
+            // 最后一个实际控件是复位操作，不根据文字长度或行号猜测坐标。
+            actionMin = ImGui::GetItemRectMin();
+            actionMax = ImGui::GetItemRectMax();
+            ImGui::End();
+            // 操作空间不和侧栏重叠，点击复位按钮不会顺便命中三维轴。
+            // 每次完整执行 update，使浮窗回归不能靠跳过场景绘制通过。
+            ImGui::SetNextWindowPos({ 550, 0 });
+            ImGui::SetNextWindowSize({ 800, 900 });
+            ImGui::Begin("MobileCameraScene");
+            editor.update("mobile-test", { 560, 40 }, { 780, 820 }, {}, visual);
+            ImGui::End();
+            ImGui::Render();
+            // 检查本帧 Active，允许 ImGui 继续缓存已不显示的旧窗口对象。
+            const auto* parameters = ImGui::FindWindowByName(
+                "摄像机参数###CameraLayoutParameters_mobile-test");
+            const auto* preview = ImGui::FindWindowByName(
+                "实际视角预览###CameraLayoutPreview_mobile-test");
+            passed &= !(parameters && parameters->Active) &&
+                      !(preview && preview->Active);
+        };
+        /// @brief 真实按下和释放各占一帧，不直接写 ActiveID 或按钮结果。
+        const auto clickLastAction = [&] {
+            io.AddMousePosEvent((actionMin.x + actionMax.x) / 2,
+                                (actionMin.y + actionMax.y) / 2);
+            // 第一帧更新指针，第二帧建立真实悬浮归属，再按下。
+            // 这样不依赖 ImGui 输入节流是否合并位置和按钮事件。
+            frame();
+            frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+            frame();
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            frame();
+        };
+        // 先建立真实窗口内容，最后操作行才具有可用于点击的布局结果。
+        // 这里不手动调用复位方法，否则无法覆盖按钮未提交或被裁掉的回归。
+        frame();
+        // 数值区的独立精调不能挤掉操作按钮的触摸下限。
+        passed &= actionMax.y - actionMin.y >=
+                  48 * Config::AppConfig::instance().getWindowContentScale();
+        clickLastAction();
+        // 与桌面契约相同：只复位位置和姿态，长度和补偿保留原值。
+        passed &=
+            visual.canvasCameraPosition == std::array<float, 3>{ 0, 0, 1 } &&
+            visual.canvasCameraRotation == std::array<float, 3>{ 0, 0, 0 } &&
+            visual.canvasCameraLength == 7 &&
+            visual.canvasMotionCompensation == 33 &&
+            visual.canvasThicknessCompensation == 66;
+        // 保存独立值副本，不持有随后会被修改的数组引用。
+        // 若观察复位串写目标位置，比较必须能够发现完整变化。
+        const auto position = visual.canvasCameraPosition;
+        const auto rotation = visual.canvasCameraRotation;
+        // 人为改变的只是独立观察现场，实际复位仍需后续按钮事件完成。
+        // 若控件误绑目标数组，下面的两个身份隔离断言会同时失败。
+        Access::disturbObservation(editor);
+        Access::mobilePage(editor, true, false);
+        frame();
+        clickLastAction();
+        // 辅助观察复位与实际预览均不得改变目标相机，避免两套坐标串写。
+        passed &= Access::observationReset(editor) &&
+                  position == visual.canvasCameraPosition &&
+                  rotation == visual.canvasCameraRotation;
+        // 预览复用同一控制器，检查没有遗留轴或中键事务。
+        // 这里不要求纹理存在，缺图也不能重开桌面浮动预览窗。
+        Access::mobilePage(editor, false, true);
+        frame();
+        passed &= !editor.hasActivePointerGesture() &&
+                  position == visual.canvasCameraPosition &&
+                  rotation == visual.canvasCameraRotation;
+    }
+    // 所有生产对象已退出作用域，避免上下文销毁时留下交互守卫。
+    // 不将本次 frame 的字体、窗口或配置观察指针传递给其它测试。
+    ImGui::DestroyContext();
+    return passed;
+}
 }  // namespace
 /// @brief 执行相机迁移和模式生命周期回归，不读写用户配置。
 int main()
 {
     if ( !checkMath() || !checkCanvasLength() || !checkCompensation() ||
          !checkDynamicThickness() || !checkPartialThickness() ||
-         !checkMouseCamera() || !checkWindows() ) {
+         !checkMouseCamera() || !checkWindows() || !checkMobileControls() ) {
         XERROR("CameraLayoutEditorTest failed");
         return 1;
     }

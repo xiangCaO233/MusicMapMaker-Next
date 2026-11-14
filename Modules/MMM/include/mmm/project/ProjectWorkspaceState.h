@@ -139,18 +139,13 @@ struct ProjectAudioToolItemPlacement {
 /// @details
 /// 这些值是项目关闭时的编辑现场，而不是项目级 EditorSettings 覆盖项。稳定文本
 /// 用于保存可扩展枚举；旧版布尔 drawBeatLines 只作为新显示模式的迁移来源。
+/// 滚动和物件吸附总开关属于应用偏好，不再随项目工作区保存或恢复。
 struct ProjectWorkspaceToolbarState {
     /// @brief 是否已经记录过有效工具栏状态。
     bool m_valid{ false };
 
     /// @brief 是否反转鼠标滚动方向。
     bool m_reverseScroll{ false };
-
-    /// @brief 是否开启滚动吸附。
-    bool m_scrollSnap{ false };
-
-    /// @brief 是否开启物件放置磁吸。
-    bool m_objectPlacementSnap{ false };
 
     /// @brief 物件放置磁吸模式，使用 CurrentBeatDivisor 或 CommonBeatDivisors。
     std::string m_objectPlacementSnapMode{ "CurrentBeatDivisor" };

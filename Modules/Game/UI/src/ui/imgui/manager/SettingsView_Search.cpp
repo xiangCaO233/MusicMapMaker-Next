@@ -4,6 +4,8 @@
 #include "ui/imgui/ShortcutUtils.h"
 #include "ui/imgui/manager/SettingsSearchIndex.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include "ui/workspace/IWorkspacePresentation.h"
+#include "ui/workspace/MobileInputPolicy.h"
 
 #include "imgui.h"
 
@@ -21,21 +23,49 @@ namespace MMM::UI
 /// @warning UI 热路径常态只复用索引；输入和翻译版本变化才过滤排序。
 void SettingsView::drawSettingsSearchBar()
 {
+    // 拔出鼠标后撤销指向隐藏行的旧导航；固定索引检查不扫描整个目录。
+    // 保留查询让下一次筛选自然返回其余结果，不修改隐藏参数的保存值。
+    if ( !workspaceShowsPointerSettings() && m_settingsSearchTarget ) {
+        const auto& target =
+            m_settingsSearch->entries()[*m_settingsSearchTarget];
+        if ( target.m_tab == Event::SettingsTab::Shortcut ||
+             isPointerOnlySetting(target.m_labelKey) ) {
+            m_settingsSearchTarget.reset();
+            m_settingsSearchScrollPending     = false;
+            m_settingsSearchTargetUnavailable = false;
+            m_showSettingsSearchResults       = m_settingsSearch->hasQuery();
+        }
+    }
     auto& translator = Translation::getActiveTranslator();
     // Translate 只借用稳定字符串池，转换为拥有文本仅发生在缓存失效时。
     const auto translate = [&translator](std::string_view key) {
+        key = workspaceSettingLabelKey(key);
         return translator.translate(Hash::hashString(key), key.data()).view();
     };
-    m_settingsSearch->update(
-        m_settingsSearchInput.data(), translator.getVersion(), translate);
+    // 光标外观与鼠标编辑入口是两种独立能力，不能用一者推断另一者。
+    // Android 接鼠标时恢复快捷键和滚轮行，仍保留移动外壳的反馈布局。
+    // 能力变化交给索引缓存失效处理，界面不自行复制或裁剪目录条目。
+    // 恢复鼠标能力无需重开设置页，当前查询可在原窗口直接恢复命中。
+    // 这样目录索引跨热插拔保持稳定，先前可见行不会指向另一项设置。
+    // 与软件页共用工作区能力；触屏端不提供光标设置的搜索或导航入口。
+    // 常态更新和输入变化必须传入同一能力，避免重复查询时复用桌面结果。
+    const bool showCursorSettings = workspaceAllowsHoverFeedback();
+    m_settingsSearch->update(m_settingsSearchInput.data(),
+                             translator.getVersion(),
+                             translate,
+                             showCursorSettings,
+                             workspaceShowsPointerSettings());
     // 搜索占用自己的整行，窗口窄时操作按钮放在下一行，避免挤掉输入框。
     ImGui::SetNextItemWidth(-1.0f);
     if ( ImGui::InputTextWithHint("##SettingsSearch",
                                   TR_CACHE("ui.settings.search.hint").data(),
                                   m_settingsSearchInput.data(),
                                   m_settingsSearchInput.size()) ) {
-        m_settingsSearch->update(
-            m_settingsSearchInput.data(), translator.getVersion(), translate);
+        m_settingsSearch->update(m_settingsSearchInput.data(),
+                                 translator.getVersion(),
+                                 translate,
+                                 showCursorSettings,
+                                 workspaceShowsPointerSettings());
         m_showSettingsSearchResults = m_settingsSearch->hasQuery();
         // 新查询取消旧定位，不能让旧高亮或滚动抢占新结果列表。
         m_settingsSearchTarget.reset();
