@@ -201,12 +201,13 @@ void resetBrushState(SessionContext& ctx)
     ctx.brushState.hasPolylineGesture     = false;
     // 负起点是尚未建立持续段的哨兵，不是可提交时间。
     // isActive 最后置为 false，后续更新入口会停止处理该手势。
-    ctx.brushState.holdStartTime      = -1.0;
-    ctx.brushState.duration           = 0.0;
-    ctx.brushState.dtrack             = 0;
-    ctx.brushState.createsAudioSample = false;
-    ctx.brushState.m_noteHoldOnly     = false;
-    ctx.brushState.isActive           = false;
+    ctx.brushState.holdStartTime            = -1.0;
+    ctx.brushState.duration                 = 0.0;
+    ctx.brushState.dtrack                   = 0;
+    ctx.brushState.createsAudioSample       = false;
+    ctx.brushState.m_noteHoldOnly           = false;
+    ctx.brushState.m_requireSnappedHoldDrag = false;
+    ctx.brushState.isActive                 = false;
 }
 
 /// @brief 判断批量操作条目中是否已经包含指定实体。
@@ -384,6 +385,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     ctx.brushState.hasPolylineGesture = false;
     // 策略只在起笔锁存，后续配置变化不能把同一笔改成折线或移动起轨。
     ctx.brushState.m_noteHoldOnly = cmd.m_noteHoldOnly && !createsAudioSample;
+    ctx.brushState.m_requireSnappedHoldDrag =
+        cmd.m_requireSnappedHoldDrag && !createsAudioSample;
     ctx.brushState.m_transactionalResume =
         cmd.m_transactionalResume && !createsAudioSample;
     ctx.brushState.m_pendingResume.reset();
@@ -804,7 +807,25 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         resetBrushState(ctx);
         return;
     }
+    // 类型门槛使用钳制前的吸附时间，几何和写出仍限制在非负时间。
+    // 起点为零秒时，明确拖到负分拍也必须能表达一个零长度 Hold。
+    const double gestureTargetTime = currentPosTime;
     currentPosTime = std::max(MIN_PLACEABLE_NOTE_TIME, currentPosTime);
+
+    /// @brief 新持续段统一按时间及吸附解释，像素距离只供旧方案兼容。
+    /// @warning 每次画笔更新只比较标量，不查方案、不分配、不重复构建网格。
+    const auto extendsHold = [&](double anchor, float pixels) {
+        const double delta = currentPosTime - anchor;
+        if ( !ctx.brushState.m_requireSnappedHoldDrag )
+            return std::abs(delta) > 1e-5 || pixels > 5.0f;
+        // 跨到更早分拍同样是明确拖动，按原有几何规则保留零时长 Hold。
+        // 当前拍线可能离按下位置超过五像素，不能用视觉距离替代跨拍判定。
+        // 候选来自本轮正式吸附结果，复用 BPM 相位、分拍密度和取整策略。
+        // 用户明确关闭或绕过吸附时允许自由时间，但仍须离开原始时间。
+        return std::abs(gestureTargetTime - anchor) > 1e-5 &&
+               (snap.isSnapped ||
+                !ctx.lastConfig.settings.objectPlacementSnap || cmd.isCtrlDown);
+    };
 
     // 固定轨道策略独立于折线能力开关，不会因手指横向漂移产生滑键。
     // 起拍参照保持不变；向任一时间方向拖动都归一化为正时长。
@@ -904,16 +925,14 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     // 关闭折线编辑时 Shift 仅控制持续长度，横向指针移动不生成 Flick。
     // 五像素阈值识别可见手势，时间容差则识别吸附后是否离开起拍。
     if ( cmd.isShiftDown && !ctx.lastConfig.settings.enablePolylineEditing ) {
-        const float diffY = std::abs(cmd.mouseY - ctx.brushState.startMouseY);
-        const bool  timeChanged =
-            std::abs(currentPosTime - ctx.brushState.holdStartTime) > 1e-5;
-        ctx.brushState.type  = timeChanged || diffY > 5.0F
-                                   ? ::MMM::NoteType::HOLD
-                                   : ::MMM::NoteType::NOTE;
-        ctx.brushState.time  = ctx.brushState.holdStartTime;
+        const float diffY   = std::abs(cmd.mouseY - ctx.brushState.startMouseY);
+        ctx.brushState.type = extendsHold(ctx.brushState.holdStartTime, diffY)
+                                  ? ::MMM::NoteType::HOLD
+                                  : ::MMM::NoteType::NOTE;
+        ctx.brushState.time = ctx.brushState.holdStartTime;
         ctx.brushState.track = ctx.brushState.startTrack;
         // 固定根时间与根轨，只从当前指针时间计算非负时长。
-        // 向起点之前拖动可保留零长度 Hold，不把负时长写入组件。
+        // 明确反向跨线仍保留零长 Hold，同拍内抖动则在类型门槛处保留单键。
         ctx.brushState.duration =
             ctx.brushState.type == ::MMM::NoteType::HOLD
                 ? std::max(0.0, currentPosTime - ctx.brushState.holdStartTime)
@@ -948,16 +967,15 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         if ( ctx.brushState.polylineSegments.empty() ) {
             // [Phase 1] 决定初始物件 (HOLD or FLICK)
             float diffY = std::abs(cmd.mouseY - ctx.brushState.startMouseY);
-            bool  timeChanged =
-                std::abs(currentPosTime - ctx.brushState.holdStartTime) > 1e-5;
+            const bool verticalExtension =
+                extendsHold(ctx.brushState.holdStartTime, diffY);
 
             // 已形成非零 Flick 才保留横移优先；尚未成形的对角拖动仍按初始分类。
             // 该条件保存手势方向顺序，不能简化成只检查当前鼠标位移。
             const bool extendsEstablishedFlick =
                 ctx.brushState.type == ::MMM::NoteType::FLICK &&
                 ctx.brushState.dtrack != 0 &&
-                currentTrack != ctx.brushState.startTrack &&
-                (timeChanged || diffY > 5.0F);
+                currentTrack != ctx.brushState.startTrack && verticalExtension;
 
             // 已经明确横移成 Flick 后再纵向延伸时，必须保留横向优先顺序；
             // 否则重新分类会先改成 Hold，导致 L 形折线反转为钩子。
@@ -966,7 +984,7 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
                 ctx.brushState.dtrack =
                     currentTrack - ctx.brushState.startTrack;
                 ctx.brushState.duration = 0.0;
-            } else if ( !timeChanged && diffY <= 5.0f ) {
+            } else if ( !verticalExtension ) {
                 // 如果时间未改变（停留在同一拍）且垂直拖拽极小，则判断为普通音符或滑键
                 // 同拍附近只解释横移，回到起轨时退回普通点击。
                 // 显式检查终轨范围，避免箭头把已钳制的域边界解释为跨域连接。
@@ -1017,7 +1035,7 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
                 ctx.brushState.segmentStartMouseY = cmd.mouseY;
                 ctx.brushState.type               = ::MMM::NoteType::POLYLINE;
             } else if ( ctx.brushState.type == ::MMM::NoteType::FLICK &&
-                        (timeChanged || diffY > 5.0f) ) {
+                        verticalExtension ) {
                 // FLICK 垂直位移 -> 开始 Polyline: [FLICK, HOLD]
                 // 先保存已形成的横移，再在箭头终轨追加持续段。
                 // 两个子段共用转折时间，使 L 形顺序与输入先后保持一致。
@@ -1122,19 +1140,17 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
                     // 时间判据仍参考 Flick 时间，吸附跨拍可直接触发下一段。
                     float diffYLocal = std::abs(
                         cmd.mouseY - ctx.brushState.segmentStartMouseY);
-                    bool timeChangedLocal =
-                        std::abs(currentPosTime - last.timestamp) > 1e-5;
-
-                    // 局部时间变化按绝对差判断，未在这里重新限制到前进方向。
-                    // 新段初始为零持续，后续 Hold 分支负责延长或退回。
-                    if ( timeChangedLocal || diffYLocal > 5.0f ) {
+                    // 后续拐点使用当前 Flick 时间作参照，不能复用整笔起拍。
+                    // 否则已有前缀的正时长会让同拍抖动也被误判为新持续段。
+                    if ( extendsHold(last.timestamp, diffYLocal) ) {
                         // 开启新的 Hold
                         ctx.brushState.polylineSegments.push_back(
                             // 触控可能在这个转向帧立即释放，不能等待下一帧补长度。
-                            // 桌面仍初始化零持续；事务策略立即采用本次指针的有效跨度。
+                            // 纯鼠标和事务策略都立即采用跨度，释放帧不能留下空末段。
                             { ::MMM::NoteType::HOLD,
                               last.timestamp,
-                              ctx.brushState.m_transactionalResume
+                              (ctx.brushState.m_transactionalResume ||
+                               ctx.brushState.m_requireSnappedHoldDrag)
                                   ? std::max(0.0,
                                              currentPosTime - last.timestamp)
                                   : 0.0,
@@ -1148,15 +1164,13 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
             } else if ( last.type == ::MMM::NoteType::NOTE ) {
                 float diffYLocal =
                     std::abs(cmd.mouseY - ctx.brushState.segmentStartMouseY);
-                bool timeChangedLocal =
-                    std::abs(currentPosTime - last.timestamp) > 1e-5;
 
                 if ( currentTrack != last.trackIndex ) {
                     // 改变轨道 -> 变成 Flick 段
                     last.type   = ::MMM::NoteType::FLICK;
                     last.dtrack = currentTrack - last.trackIndex;
                     ctx.brushState.segmentStartMouseY = cmd.mouseY;
-                } else if ( timeChangedLocal || diffYLocal > 5.0f ) {
+                } else if ( extendsHold(last.timestamp, diffYLocal) ) {
                     // 垂直拖动 -> 变成 Hold 段
                     last.type = ::MMM::NoteType::HOLD;
                     last.duration =

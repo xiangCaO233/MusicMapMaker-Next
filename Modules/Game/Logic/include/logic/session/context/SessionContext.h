@@ -306,7 +306,9 @@ struct SessionContext {
     struct BrushState {
         /// @brief 本笔固定轨道的单键／长条策略，取消和提交后清除。
         /// 只由起笔命令写入，连续更新不读取 UI 方案或改变旧笔画语义。
-        bool   m_noteHoldOnly{ false };
+        bool m_noteHoldOnly{ false };
+        /// @brief 持续段起笔门槛只属于当前笔画，清理后不能泄漏到其他输入方案。
+        bool   m_requireSnappedHoldDrag{ false };
         bool   isActive{ false };
         double time{ 0.0 };  ///< 当前选中的位置(对 Hold/Flick 为起始点)
         double holdStartTime{ -1.0 };  ///< 记录按下 Shift 瞬间的时间点

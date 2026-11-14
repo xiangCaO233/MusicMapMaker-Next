@@ -226,7 +226,9 @@ public:
                     service->isDraggingNote(),
                     service->isDrawingBrush(),
                     timelineTimingDragging,
-                    timelineMarqueeSelecting);
+                    timelineMarqueeSelecting,
+                    // 只扩展画笔分支；框选、Timing 与文本输入仍使用原有规则。
+                    Interaction::modifierFreeBrush());
             // 非白名单活动控件保留快捷键所有权，避免意外切歌或停播。
             if ( !allowPlaybackToggle ) return false;
         }

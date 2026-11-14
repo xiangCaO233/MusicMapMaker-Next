@@ -6473,7 +6473,12 @@ void Basic2DCanvasInteraction::handleInteractions(
                             UI::Interaction::activeProfile().bypassSnapping(),
                             UI::Interaction::activeProfile().noteHoldBrush(
                                 UI::Interaction::currentSurface()),
-                            m_pointerCancellationEnabled }));
+                            m_pointerCancellationEnabled,
+                            // 起笔锁存方案门槛；不能让后续配置切换重解释半笔几何。
+                            // 连续更新仍只发送落点，不逐帧传递或查询方案身份。
+                            UI::Interaction::activeProfile()
+                                .requiresSnappedHoldDrag(
+                                    UI::Interaction::currentSurface()) }));
                 }
             } else if ( currentSnapshot->currentTool ==
                         Logic::EditTool::ColorBrush ) {

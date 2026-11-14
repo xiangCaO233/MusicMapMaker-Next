@@ -13,6 +13,7 @@
 #include "log/colorful-log.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/SampleComponent.h"
+#include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/ActionController.h"
 #include "logic/session/ClipboardTypes.h"
@@ -26,6 +27,7 @@
 #include <cmath>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <string>
@@ -502,6 +504,275 @@ bool testMouseBrushContinuation()
            cancelled.m_timestamp == before.m_timestamp &&
            cancelled.m_trackIndex == before.m_trackIndex &&
            cancelled.m_subNotes.size() == before.m_subNotes.size();
+}
+
+/// @brief 纯鼠标须跨到不同吸附线，反向跨拍可显式创建零长 Hold。
+/// @details 使用正式画笔、滚动缓存及动作栈，检查预览和提交结果。
+/// 同时覆盖关闭折线、普通四分拍与向下取整；缩放放大同拍内的像素位移。
+/// Flick 及其后续转折同样不能通过旧五像素门槛追加空持续段。
+/// @return 同拍保留单键，正反向跨拍分别生成正时长与零时长 Hold。
+bool testMouseHoldRequiresGridDrag()
+{
+    using namespace MMM::Logic;
+    // 能力按主画布域获取，不能用测试中写死的布尔值跳过方案分发。
+    // 调用方已激活纯鼠标方案，此处不改写应用保存的方案配置。
+    const Interaction::SurfaceScope scope(Interaction::Surface::MainCanvas);
+    // 两条状态机分别覆盖：禁用折线的固定轨长条，以及允许 Flick 的自由画笔。
+    // 每条状态机再覆盖最近拍与向下取整，门槛不能偷偷改成固定秒间隔。
+    for ( const bool polyline : { false, true } ) {
+        for ( const bool floor : { false, true } ) {
+            // 各组合独占注册表和撤销栈，上一组合的草稿不能充当新的起笔参照。
+            // 不启动音频设备或线程，所有几何均由同线程领域入口推进。
+            SessionContext context;
+            context.currentBeatmap = std::make_shared<MMM::BeatMap>();
+            // 元数据轨数与运行态一致，避免投影使用不同来源制造错误的跨轨。
+            // 只配置玩家轨，测试不借辅助轨道的容差接受无效起点。
+            context.currentBeatmap->m_baseMapMetadata.track_count = 4;
+            context.trackCount                                    = 4;
+            // 起点远离零秒，反向跨拍不会被谱面起始钳制吞掉。
+            // 当前时间与动画时间相同，排除播放缓动对坐标反解的影响。
+            context.currentTime = context.animateTime   = 1.0;
+            context.lastConfig.visual.trackLayout.left  = .1f;
+            context.lastConfig.visual.trackLayout.right = .5f;
+            context.lastConfig.visual.judgeline_pos     = .5f;
+            // 放大显示使同一分拍内的小时间差超过旧五像素阈值。
+            // 若仍使用默认缩放，这类用例可能根本没有触发错误分支。
+            context.lastConfig.visual.timelineZoom = 4;
+            // 显式展示首 BPM 前的网格，零秒以前也有可命中的上一条分拍线。
+            // 不能依赖用户皮肤偏好，否则负分拍用例会退回无候选路径。
+            context.lastConfig.visual.drawBeatLinesBeforeFirstTiming = true;
+            // 明确固定分母，不能依赖用户或平台当前恰好选择四分拍。
+            // 向下取整只改变候选来源，持续段仍须相对起拍判断是否跨线。
+            context.lastConfig.settings.beatDivisor           = 4;
+            context.lastConfig.settings.snapFloor             = floor;
+            context.lastConfig.settings.objectPlacementSnap   = true;
+            context.lastConfig.settings.enablePolylineEditing = polyline;
+            // 显式提供 BPM 锚点，空时间线只会走无吸附回退，不能复现同拍误触。
+            context.timelineRegistry.emplace<TimelineComponent>(
+                context.timelineRegistry.create(),
+                0.0,
+                MMM::TimingEffect::BPM,
+                120.0);
+            // 相机采用生产 ID，确保命令进入主画布的玩家领域分支。
+            // 横移一百像素只跨一轨，不碰边界或轨道间隙。
+            context.cameras.emplace(
+                "Basic2DCanvas", CameraInfo{ "Basic2DCanvas", 1000, 600, 0 });
+            auto& cache =
+                context.timelineRegistry.ctx().emplace<System::ScrollCache>();
+            // 缓存只在建夹具时准备一次，连续手势不能重建另一份观察模型。
+            // 后续撤销仅改变 Note，不改变此 BPM／滚速投影。
+            cache.rebuild(context.timelineRegistry,
+                          context.lastConfig,
+                          context.currentBeatmap.get());
+            // 由生产积分投影实际时间，不能把另一套像素速度公式复制进测试。
+            // 120 BPM 四分拍相邻时间为 0.125 秒，1.02 秒仍应吸在起拍。
+            const auto yAt = [&](double time) {
+                return static_cast<float>(
+                    300 -
+                    (cache.getAbsY(time) - cache.getAbsY(context.animateTime)));
+            };
+            // 先断言夹具真正覆盖旧像素门槛，防止未来默认滚速变化使测试变空。
+            // 这不是拖动阈值的新规范，生产门槛仍来自吸附后的时间。
+            if ( std::abs(yAt(1.02) - yAt(1.0)) <= 5 ) return false;
+            DrawTool tool;
+            // 起笔使用方案能力，更新过程中不读取或覆写逻辑层私有标志。
+            // 同一个构造入口用于正常绘制、撤销后重画及临时免吸附场景。
+            const auto start = [&](double anchor = 1.0) {
+                // 生产命令只携带能力值，逻辑层无需认识 mouse-only 字符串。
+                // 辅助表面和其他方案的默认值继续关闭，防止修复外溢。
+                tool.handleStartBrush(
+                    context,
+                    { .cameraId    = "Basic2DCanvas",
+                      .mouseX      = 150,
+                      .mouseY      = yAt(anchor),
+                      .isShiftDown = Interaction::extendBrush(),
+                      .isCtrlDown  = false,
+                      .m_requireSnappedHoldDrag =
+                          Interaction::activeProfile().requiresSnappedHoldDrag(
+                              Interaction::currentSurface()) });
+            };
+            // 所有落点复用真实缓存反投影，不能直接篡改 brushState.time。
+            // 横向轨道与纵向时间分别传入，能表达先 Flick 再 Hold 的顺序。
+            const auto move = [&](float x, double time, bool bypass = false) {
+                tool.handleUpdateBrush(context,
+                                       { "Basic2DCanvas",
+                                         x,
+                                         yAt(time),
+                                         Interaction::extendBrush(),
+                                         bypass });
+            };
+            // 同拍内显著移动仍应保留单键，不能单凭五像素门槛生成长条。
+            start();
+            // 第一个落点仍吸回原拍，第二个落点恰好回到按下的位置。
+            // 两者都没有跨到其他分拍线，不能被误解释成显式的反向零长 Hold。
+            for ( const double time : { 1.02, 1.0 } ) {
+                move(150, time);
+                // 类型与时长必须同时检查：只检查时长会把故障的零长 Hold
+                // 当成通过。 起点必须保持不变，不能用重新起笔掩盖形状误判。
+                if ( context.brushState.type != MMM::NoteType::NOTE ||
+                     context.brushState.duration != 0 ) {
+                    XERROR(
+                        "Mouse jitter created Hold: polyline={}, floor={}, "
+                        "time={}, duration={}",
+                        polyline,
+                        floor,
+                        time,
+                        context.brushState.duration);
+                    return false;
+                }
+            }
+            // 正向相邻线提供独立预期时长，不能只断言当前值大于零。
+            // 保持轨道不变，排除 Flick 转折带来的形状转换。
+            move(150, 1.125);
+            // 四分拍的 0.125 秒为独立已知值，不由当前草稿字段推导期望结果。
+            if ( context.brushState.type != MMM::NoteType::HOLD ||
+                 std::abs(context.brushState.duration - .125) > 1e-6 )
+                return false;
+            // 拉回起拍必须恢复单键，释放后的实际组件也不能留下零长 Hold。
+            move(150, 1.02);
+            // 释放使用默认提交路径，不能用 cancel 避开真正写入组件的分支。
+            tool.handleEndBrush(context, { .cameraId = "Basic2DCanvas" });
+            if ( context.noteRegistry.view<NoteComponent>().size() != 1 )
+                return false;
+            // 检查实际提交的组件，不能靠预览显示成单键掩盖保存类型仍是 Hold。
+            for ( auto entity : context.noteRegistry.view<NoteComponent>() )
+                if ( context.noteRegistry.get<NoteComponent>(entity).m_type !=
+                     MMM::NoteType::NOTE )
+                    return false;
+            context.actionStack.undo(context);
+            // 明确反向跨到相邻分拍、小节起点或更早时间，应生成零长 Hold。
+            // 反向只决定类型，根仍固定在按下时的起点，不倒置成一条正长度长条。
+            // 另从零秒起笔，覆盖负时间被几何钳制回原点的边界。
+            for ( const double anchor : { 1.0, 0.0 } ) {
+                context.currentTime = context.animateTime = anchor;
+                // 第一组覆盖紧邻的上一条分拍线，后续落点继续越过更早的拍线。
+                // 负落点位于小节起点之前，实际物件时间仍保持合法非负值。
+                for ( const double offset : { -.125, -.5, -1.0, -1.5 } ) {
+                    start(anchor);
+                    // 同拍抖动先保持单键，再跨到上一条线，不能一律保留零长条。
+                    move(150, anchor + .02);
+                    if ( context.brushState.type != MMM::NoteType::NOTE )
+                        return false;
+                    move(150, anchor + offset);
+                    // 零秒起笔时钳制后的目标和起点相等，也不能取消跨线意图。
+                    // 长度按单向 Hold 几何计算，不由绝对拖动距离生成正长度。
+                    if ( context.brushState.type != MMM::NoteType::HOLD ||
+                         context.brushState.duration != 0 ||
+                         std::abs(context.brushState.time - anchor) > 1e-6 ) {
+                        XERROR(
+                            "Reverse grid drag did not create zero Hold: "
+                            "polyline={}, floor={}, time={}",
+                            polyline,
+                            floor,
+                            anchor + offset);
+                        return false;
+                    }
+                    // 检查正式释放及重做结果，不能只让预览显示出零长面条。
+                    // 单段零 Hold
+                    // 沿用提交时的保留规则，不被清洗降级为单键。
+                    tool.handleEndBrush(context,
+                                        { .cameraId = "Basic2DCanvas" });
+                    // 每次只提交一个根，不能靠重叠的单键和长条实现同一外观。
+                    // 重做可能重新分配实体，按几何契约验证而不锁定临时 ID。
+                    // 根时间可区分零 Hold 与把反向跨度翻转为正长条的错误修复。
+                    const auto hasZeroHold = [&] {
+                        if ( context.noteRegistry.view<NoteComponent>()
+                                 .size() != 1 )
+                            return false;
+                        for ( auto entity :
+                              context.noteRegistry.view<NoteComponent>() ) {
+                            const auto& note =
+                                context.noteRegistry.get<NoteComponent>(entity);
+                            if ( note.m_type != MMM::NoteType::HOLD ||
+                                 note.m_duration != 0 ||
+                                 std::abs(note.m_timestamp - anchor) > 1e-6 )
+                                return false;
+                        }
+                        return true;
+                    };
+                    if ( !hasZeroHold() ) return false;
+                    // 撤销须删除这一笔，不能额外保留一个同时间的 NOTE 替身。
+                    // 下一组沿用相同动作栈，保持真实的撤销／重做分支行为。
+                    context.actionStack.undo(context);
+                    if ( context.noteRegistry.view<NoteComponent>().size() !=
+                         0 )
+                        return false;
+                    context.actionStack.redo(context);
+                    // 重做也须恢复 Hold 类型，不能只在首次创建时显示为零长条。
+                    if ( !hasZeroHold() ) return false;
+                    context.actionStack.undo(context);
+                }
+            }
+            // 后续正向及 Flick 场景回到原视野，零秒锚点不能改变测试位置。
+            context.currentTime = context.animateTime = 1.0;
+            // 在同一动作栈上重画也会覆盖重做分支，不能遗留前一次临时类型。
+            // 再次跨拍并立即释放，提交应保留正时长；撤销删除整个新物件。
+            start();
+            move(150, 1.125);
+            tool.handleEndBrush(context, { .cameraId = "Basic2DCanvas" });
+            if ( context.noteRegistry.view<NoteComponent>().size() != 1 )
+                return false;
+            // 此次立即释放，没有下一轮 Update 可以补救缺失的时长。
+            for ( auto entity : context.noteRegistry.view<NoteComponent>() ) {
+                const auto& note =
+                    context.noteRegistry.get<NoteComponent>(entity);
+                if ( note.m_type != MMM::NoteType::HOLD ||
+                     std::abs(note.m_duration - .125) > 1e-6 )
+                    return false;
+            }
+            context.actionStack.undo(context);
+            if ( context.noteRegistry.view<NoteComponent>().size() != 0 )
+                return false;
+            // 删除完整根后再测转折，旧 Hold 的命中不能被误认为自动续写。
+            if ( polyline ) {
+                // 第一段横移仍在起拍内，应得到单一 Flick 而非一条伪折线。
+                // 只有之后跨拍，才把真实横移与正持续段连接起来。
+                start();
+                move(250, 1.02);
+                if ( context.brushState.type != MMM::NoteType::FLICK ||
+                     !context.brushState.polylineSegments.empty() )
+                    return false;
+                move(250, 1.125);
+                move(350, 1.125);
+                // 预期前缀为 Flick、Hold、Flick，最后一段的起拍已不是整笔起拍。
+                // 后续门槛若错用最初起点，同拍抖动也会误追加第四段。
+                const auto segments =
+                    context.brushState.polylineSegments.size();
+                // 活动末段为 Flick，同拍纵移不得再追加一个零持续节点。
+                move(350, 1.145);
+                if ( segments != 3 ||
+                     context.brushState.polylineSegments.size() != segments )
+                    return false;
+                move(350, 1.25);
+                // 再跨一拍应直接追加完整第四段，不能先留零长段等后续移动修正。
+                // 断言同时检查段数和最后时长，避免只删除所有新段来掩盖问题。
+                if ( context.brushState.polylineSegments.size() != 4 ||
+                     std::abs(
+                         context.brushState.polylineSegments.back().duration -
+                         .125) > 1e-6 )
+                    return false;
+                tool.handleEndBrush(
+                    context, { .cameraId = "Basic2DCanvas", .cancel = true });
+                // 取消草稿复用正式清理入口，不依靠销毁会话隐藏状态泄漏。
+            }
+            // 明确关闭吸附或临时绕过时仍可自由绘制，正时长约束继续成立。
+            // 这些入口不能因为新门槛而要求一个已经被用户关闭的吸附候选。
+            for ( const bool bypass : { false, true } ) {
+                // false 表示永久吸附关闭；true 表示吸附开启但本轮临时绕过。
+                // 两种场景都应保留原始 0.02 秒跨度，不被四分拍重新量化。
+                context.lastConfig.settings.objectPlacementSnap = bypass;
+                start();
+                // 起点恰在一秒，临时绕过只影响新落点，不混入首点吸附的差异。
+                move(150, 1.02, bypass);
+                if ( context.brushState.type != MMM::NoteType::HOLD ||
+                     std::abs(context.brushState.duration - .02) > 1e-6 )
+                    return false;
+                tool.handleEndBrush(
+                    context, { .cameraId = "Basic2DCanvas", .cancel = true });
+            }
+        }
+    }
+    return true;
 }
 /// @brief 在真实主画布控制器中替换整段操作，而非仅调用接口替身。
 class SurfaceProfile final : public Interaction::IEditorInteractionProfile
@@ -1115,6 +1386,28 @@ int main()
         snapshot.currentTool = MMM::Logic::EditTool::Draw;
         // 门禁仍要求有效谱面和停止播放，测试不能依靠绕过编辑许可起笔。
         snapshot.hasBeatmap = true;
+        // 常速开关关闭时，真实 Shift 仍须进入画布发布的加速滚动命令。
+        // 检查最终事件而非只查询方案布尔值，避免输入路由漏传修复后的状态。
+        // 显式关掉持久开关，确保本次加速确实来自键盘，而非前一个测试残留。
+        Interaction::activeProfile().setAcceleratedScrolling(false);
+        bool       shiftScroll = false;
+        const auto scrollSubscription =
+            bus.subscribe<MMM::Event::LogicCommandEvent>(
+                [&](const auto& event) {
+                    if ( const auto* scroll =
+                             std::get_if<MMM::Logic::CmdScroll>(
+                                 &event.command) )
+                        shiftScroll |= scroll->isShiftDown;
+                });
+        io.AddKeyEvent(ImGuiMod_Shift, true);
+        // 同帧滚轮与修饰键一起解析，覆盖实际用户按住 Shift 滚动的输入形态。
+        io.AddMouseWheelEvent(0, 1);
+        frame(interaction, snapshot, false);
+        io.AddKeyEvent(ImGuiMod_Shift, false);
+        frame(interaction, snapshot, false);
+        bus.unsubscribe<MMM::Event::LogicCommandEvent>(scrollSubscription);
+        // 解除观察后再开始画笔，滚动事件的计数不会被后续播放跟随干扰。
+        ok &= shiftScroll;
         int  starts = 0, updates = 0, ends = 0;
         bool extended      = true;
         bool bypassPayload = true;
@@ -1129,6 +1422,10 @@ int main()
                                  &event.command) ) {
                         ++starts;
                         extended &= start->isShiftDown;
+                        // 除了延伸意图，还要验证门槛实际随正式起笔命令发布。
+                        // 单测直接给 DrawTool 正确标志，不能替代这里的 UI
+                        // 路由检查。
+                        extended &= start->m_requireSnappedHoldDrag;
                         bypassPayload &=
                             start->isCtrlDown && start->bypassSnapAtStart;
                     }
@@ -1175,6 +1472,9 @@ int main()
         if ( !continuation )
             XERROR("Mouse brush continuation/cancel restore failed");
         ok &= continuation;
+        const bool holdDrag = testMouseHoldRequiresGridDrag();
+        if ( !holdDrag ) XERROR("Pure mouse Hold grid threshold regression");
+        ok &= holdDrag;
         const bool unsnap = testUnsnapBrushStart();
         if ( !unsnap ) XERROR("Raw brush start or classic start regression");
         ok &= unsnap;

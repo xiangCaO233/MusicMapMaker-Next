@@ -116,6 +116,16 @@ int main()
         false, false, false, false, false, true);
     ok &= shouldAllowPlaybackToggleWhileItemActive(
         true, false, false, true, false, false);
+    // 纯鼠标不按 Shift 也能边绘制边播放，经典绘制仍沿用修饰键门禁。
+    ok &= shouldAllowPlaybackToggleWhileItemActive(
+        false, false, false, true, false, false, true);
+    ok &= !shouldAllowPlaybackToggleWhileItemActive(
+        false, false, false, true, false, false, false);
+    // 方案能力不能使普通活动控件或带 Shift 的 Timing 交互获得播放许可。
+    ok &= !shouldAllowPlaybackToggleWhileItemActive(
+        false, false, false, false, false, false, true);
+    ok &= !shouldAllowPlaybackToggleWhileItemActive(
+        true, false, false, false, true, false, true);
     // 普通活动控件没有明确路由时必须保留空格给 ImGui。
     ok &= !shouldAllowPlaybackToggleWhileItemActive(
         false, false, false, false, false, false);

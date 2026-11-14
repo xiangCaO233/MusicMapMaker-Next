@@ -306,6 +306,9 @@ struct CmdStartBrush {
     /// @brief 续写只预览，释放时把删除与创建合成一次事务；旧入口默认关闭。
     /// 取消不改动注册表、撤销栈或重做栈，期间发生其他编辑则拒绝过期提交。
     bool m_transactionalResume{ false };
+    /// @brief 新持续段须拖到不同吸附线；关闭或临时绕过吸附时允许连续时间。
+    /// 默认关闭以保持旧方案解释，起笔后由会话锁存而不读取 UI 方案身份。
+    bool m_requireSnappedHoldDrag{ false };
 };
 
 /**
