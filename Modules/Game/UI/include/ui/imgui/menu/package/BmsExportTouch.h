@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ui/utils/MobileFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 #include <algorithm>
@@ -88,12 +89,9 @@ private:
 /// @warning 每帧只读外壳几何，不查询 IME、不枚举目录或保存窗口配置。
 inline ImVec2 exportFileDialogSize(float scale)
 {
-    // 移动窗口必须跟随键盘缩小，不能把完整主视口高度作为最小尺寸。
-    // 小窗口来自桌面固定像素，不能通过保存 INI 或放大字体来弥补。
-    if ( workspaceAllowsHoverFeedback() ) return { 600, 400 };
-    const auto available = workspaceTextInputWindowArea().m_size;
-    return { std::min(600.f * scale, available.x * .92f),
-             std::min(400.f * scale, available.y * .88f) };
+    // 主工程选择器与导出共用同一几何入口，键盘动画不能产生两种最小高度。
+    // 业务动作只读取尺寸，不拥有或重建内置选择器实例。
+    return mobileFileDialogSize(scale);
 }
 
 /// @brief 单文件和资源包共用的触控 BMS 选项，修改的只是本次导出草稿。

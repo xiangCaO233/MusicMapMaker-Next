@@ -21,6 +21,7 @@
 #include "ui/imgui/manager/ToolbarView.h"
 #include "ui/imgui/menu/utils/MenuUtil.h"
 #include "ui/interaction/EditorInteraction.h"
+#include "ui/utils/MobileFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 #include "ui/workspace/MobileButton.h"
@@ -137,10 +138,11 @@ public:
         return MobileActionButton(label, icon, label, size);
     }
     /// @brief 文件对话框始终保留设备工作区边距。
-    ImVec2 fileDialogSize(float scale, ImVec2 available) const override
+    ImVec2 fileDialogSize(float scale, ImVec2) const override
     {
-        return { std::min(600.0f * scale, available.x * 0.92f),
-                 std::min(400.0f * scale, available.y * 0.88f) };
+        // 不能把完整视口尺寸再作为 Display 最小值覆盖当前键盘安全区。
+        // 几何与导出选择器统一，收键盘恢复浏览时不保存临时窗口尺寸。
+        return mobileFileDialogSize(scale);
     }
 
 private:
@@ -1164,6 +1166,8 @@ std::unique_ptr<IWorkspacePresentation> createWorkspacePresentation()
 {
     // 创建发生在 UIManager 初始化期；后续帧只复用模型和窗口存储。
     // 工厂定义只链接一次，不依赖运行时平台枚举或 Android 宏分支。
+    // 移动选择器在所有业务视图创建前安装，不在键盘动画中替换对象。
+    installMobileFileDialog();
     return std::make_unique<MobileWorkspacePresentation>();
 }
 }  // namespace MMM::UI

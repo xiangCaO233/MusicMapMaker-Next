@@ -122,6 +122,8 @@ add_library(
   src/ui/utils/DesktopPathUtils.cpp
   $<$<NOT:$<BOOL:${ANDROID}>>:${CMAKE_CURRENT_SOURCE_DIR}/src/ui/utils/NativeFileDialog.cpp>
   src/ui/utils/TimeFormatUtils.cpp
+  # 内置选择器的移动扩展只调整绘制，保留上游目录和结果协议。
+  src/ui/utils/MobileFileDialog.cpp
   src/ui/utils/UIWidgetUtils.cpp
   src/ui/utils/VolumeSlider.cpp
   src/ui/imgui/audio/AudioPresetControls.cpp
@@ -783,3 +785,8 @@ mmm_register_test_case(NAME MobileInputEditorTest COMMAND MobileInputEditorTest)
 mmm_add_test_executable(UI BmsTouchDialogTest tests/BmsTouchDialogTest.cpp)
 target_link_libraries(BmsTouchDialogTest PRIVATE UI Logic Log)
 mmm_register_test_case(NAME BmsTouchDialogTest COMMAND BmsTouchDialogTest)
+
+# 文件选择器回归使用原控件与真实输入队列，验证高键盘下焦点、几何及确认结果。
+mmm_add_test_executable(UI MobileFileDialogTest tests/MobileFileDialogTest.cpp)
+target_link_libraries(MobileFileDialogTest PRIVATE UI Logic Log)
+mmm_register_test_case(NAME MobileFileDialogTest COMMAND MobileFileDialogTest)
