@@ -2878,7 +2878,7 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
     /// 调用者必须先压入能标识设置项或轨道的 ID，并与
     /// endSettingCard 成对调用。AlwaysUseWindowPadding 保证无边框子窗口仍
     /// 接受局部 WindowPadding；这是标签与背景边缘保持距离的必要条件。
-    /// 子窗口禁止独立滚动，所有滚轮输入都继续交给外层列表。
+    /// 卡片使用固定内容高度；移动触控沿父子关系交给外层列表，不在每张卡片单独积累偏移。
     const auto beginSettingCard = [&]() {
         ImGui::PushStyleColor(ImGuiCol_ChildBg, cardBackground);
         ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, frameRounding);
@@ -2888,7 +2888,12 @@ void ToolbarView::renderSoundEffectTool(float dpiScale)
             "##SettingCard",
             ImVec2(cardWidth, cardHeight),
             ImGuiChildFlags_AlwaysUseWindowPadding,
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+            // 移动卡片没有自己的滚动范围，只隐藏滚动条，让触控继续寻找外层列表。
+            // 两个禁止标志同时存在会形成输入边界，卡片内的文字和控件均无法起手滚动。
+            // 桌面保持原标志，不改变鼠标窗口与滚轮的既有行为。
+            m_mobileTools ? ImGuiWindowFlags_NoScrollbar
+                          : ImGuiWindowFlags_NoScrollbar |
+                                ImGuiWindowFlags_NoScrollWithMouse);
     };
 
     /// @brief 结束圆角设置卡片并恢复局部样式。

@@ -790,3 +790,10 @@ mmm_register_test_case(NAME BmsTouchDialogTest COMMAND BmsTouchDialogTest)
 mmm_add_test_executable(UI MobileFileDialogTest tests/MobileFileDialogTest.cpp)
 target_link_libraries(MobileFileDialogTest PRIVATE UI Logic Log)
 mmm_register_test_case(NAME MobileFileDialogTest COMMAND MobileFileDialogTest)
+
+# 直接绘制正式音效工具，验证卡片起手滚动与音量／静音操作互斥。
+mmm_add_test_executable(UI SoundEffectTouchScrollTest
+                        tests/SoundEffectTouchScrollTest.cpp)
+target_link_libraries(SoundEffectTouchScrollTest PRIVATE UI Audio Log)
+mmm_register_test_case(NAME SoundEffectTouchScrollTest COMMAND
+                       SoundEffectTouchScrollTest)
