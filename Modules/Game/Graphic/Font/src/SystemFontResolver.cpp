@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <type_traits>
 
 #ifdef _WIN32
@@ -806,6 +807,18 @@ std::vector<SystemFontFace> resolvePreferredSystemFonts()
         CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, 0.0, nullptr));
     appendUniqueFont(fonts, resolveCoreTextFont(preferredFont.get()));
     appendUniqueFont(fonts, resolveMacOSChineseFallback(preferredFont.get()));
+#elif defined(__ANDROID__)
+    // 冷启动尚未下载皮肤字体，使用系统可读字体呈现中文下载进度和错误按钮。
+    // 字体文件只在启动阶段访问；设备未提供候选时仍由图形层安全回退。
+    for ( const auto* path : { "/system/fonts/Roboto-Regular.ttf",
+                               "/system/fonts/NotoSansCJK-Regular.ttc" } ) {
+        std::error_code error;
+        if ( std::filesystem::is_regular_file(path, error) && !error ) {
+            // 集合首个 face 覆盖中日韩字形，只有实际存在的绝对路径才会发布。
+            appendUniqueFont(fonts,
+                             SystemFontFace{ path, 0, "Android system" });
+        }
+    }
 #elif !defined(__ANDROID__)
     // Fontconfig 配置加载失败时返回空列表，让上层继续使用内置字体。
     UniqueFontConfig config(FcInitLoadConfigAndFonts());

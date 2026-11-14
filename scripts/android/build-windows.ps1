@@ -103,11 +103,10 @@ $env:TMP = $env:TEMP
 # Meson 的目标安装前缀必须保留为 /，不能被 MSYS2 改成宿主根目录。
 # 其余 /c/... 文件路径仍须转换，供 Windows 原生 NDK 编译器和归档器读取。
 $env:MSYS2_ARG_CONV_EXCL = '--prefix=/'
-foreach ($androidFolder in @('cache/tmp', 'dependencies', 'build/assets', 'build/jni', 'apk', 'evidence')) {
+foreach ($androidFolder in @('cache/tmp', 'dependencies', 'build/jni', 'apk', 'evidence')) {
     New-Item -ItemType Directory -Force -Path "$WorkDir/$androidFolder" | Out-Null
 }
 $androidCmake = (Get-Command cmake.exe -ErrorAction Stop).Source
-$androidPython = "$MsysRoot/clang64/bin/python.exe"
 Invoke-AndroidTool "$JavaHome/bin/java.exe" @('-version')
 
 # Vulkan-Hpp 使用与 Linux 相同的固定官方标签，NDK 自带 C 头不能替代它。
@@ -147,9 +146,8 @@ foreach ($androidAbi in $Abi) {
     Copy-Item -LiteralPath "$androidNdk/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/$androidTriple/libc++_shared.so" -Destination $androidJni
 }
 
-# 资源与调试签名共用工作目录；用户工程与正式发布签名不属于缓存。
-# 资源脚本检查 LFS 内容，不能将指针文件当图片或字体放入 APK。
-Invoke-AndroidTool $androidPython @("$androidRepo/scripts/android/package_assets.py", '--repo', $androidRepo, '--output', "$WorkDir/build/assets")
+# APK 使用启动下载资源，旧资源 ZIP 缓存不再参与 Gradle 打包。
+# 调试签名继续留在集中工作目录，不改变用户工程或正式签名。
 if (!(Test-Path -LiteralPath "$WorkDir/cache/debug.keystore")) {
     Invoke-AndroidTool "$JavaHome/bin/keytool.exe" @('-genkeypair', '-keystore', "$WorkDir/cache/debug.keystore",
         '-storepass', 'android', '-keypass', 'android', '-alias', 'androiddebugkey', '-keyalg', 'RSA',

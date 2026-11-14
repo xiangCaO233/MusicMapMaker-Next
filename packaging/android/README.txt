@@ -49,7 +49,7 @@ Windows 原生构建（无 WSL）
   Gradle 9.3.0 wrapper、AGP 9.0.1；wrapper JAR 是引导文件，随源码保存。
   Vulkan-Headers 固定 vulkan-sdk-1.4.363.0，自动下载到专用构建树的 dependencies 目录。
   SDL Java 和 native 使用同一子模块版本，不复制上游 Java 实现到仓库。
-  需先检出项目原有依赖子模块与完整 LFS 资源；缺失资源会终止打包。
+  需先检出项目原有依赖子模块；完整运行资源由应用首次启动时下载，不再写入 APK。
 
 集中目录
   MMM_ANDROID_WORK_DIR 默认 <仓库>/build-android，已由 .gitignore 明确排除。
@@ -57,7 +57,6 @@ Windows 原生构建（无 WSL）
   build/<ABI>          各 ABI 独立的原生 CMake/Ninja、依赖生成物与未剥离符号
   build/gradle         Java 与 APK 打包输出
   build/jni/<ABI>      各 ABI 的 main、SDL3 和 libc++ 共享库
-  build/assets         受 Git 管理的默认资源 ZIP 与内容版本标记
   dependencies         Vulkan 公共头文件
   cache                临时文件、项目 Gradle 缓存与独立调试签名
   avd                  本项目模拟器配置、userdata 与运行时磁盘
@@ -75,10 +74,13 @@ Windows 原生构建（无 WSL）
 
 手机数据
   实验包 applicationId 为 top.xiang233.musicmapmaker.next.dev，不覆盖最小探针。
-  默认资源随包提供，首次启动展开到本包 files/config/mmm/assets。
+  首次启动显示下载进度，从正式资源清单下载并校验到本包 files/config/mmm/assets。
+  下载与启动界面使用系统字体，不依赖尚未下载的资源或共享文件访问权限。
+  已有完整资源时可离线启动；首次安装、清空数据或卸载重装后需要联网下载。
   配置和资源位于应用私有 files，日志在 cache/mmm/logs。
   SAF 工作副本与 URI 映射属于 files/documents 用户数据，不是可随意清理的缓存。
-  后续资源包变化按 ZIP 内容标记更新，升级保留已有配置。
+  后续启动与桌面共用资源更新、校验及失败重试流程，APK 升级保留已有配置。
+  旧版随包展开的资源保持原路径，可直接离线升级，不需要重新解压或搬移工程。
   后台恢复只更新 Surface/交换链；业务视图和工程状态继续保留。
   初期使用 identity surface transform 由系统合成器补偿横屏方向。
   设备旋转的 GPU 预旋转优化仍待单独接入。
@@ -90,7 +92,8 @@ Android Studio
     Gradle JDK 选完整 JDK 21（Windows 可选 ~/Android/jdk 下的安装），避免无 jlink 的 JRE。
     Gradle user home 选 <仓库>/build-android/cache/gradle-user，复用脚本下载缓存。
   Java 或 Manifest 修改后可由 Studio 打包；修改 C++ 后须先运行对应平台的构建脚本。
-  原生生成物、资源与签名仍取自集中工作树，Studio 不隐式重复构建另一套 CMake。
+  原生生成物与签名仍取自集中工作树，Studio 不隐式重复构建另一套 CMake。
+  Gradle 显式排除旧资源 ZIP 目录，历史构建缓存也不能把完整资源再次塞入 APK。
   .idea、Android 的 .gradle 和 local.properties 为忽略的本机文件，wrapper 继续入 Git。
 
 手机文件访问

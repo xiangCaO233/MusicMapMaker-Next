@@ -168,6 +168,17 @@ endif()
 # 后端必须成对选择，不能让一个进程同时处理两套输入回调。 业务渲染和 Vulkan 资源封装共用原有实现，平台分支只替换窗口边界。 桌面的 frame
 # adapter、光标和窗口扩展不进入 APK。
 if(ANDROID)
+  # Android 新版系统中文字体采用 CFF2，启动阶段不能依赖尚未下载的皮肤字体。 仅将上游 FreeType loader 编入 Android
+  # Graphic，不改第三方源码或桌面预编译包。
+  set(MMM_ANDROID_IMGUI_FREETYPE_SOURCE
+      "${CMAKE_SOURCE_DIR}/3rdpty/sources/imgui/misc/freetype/imgui_freetype.cpp"
+  )
+  target_sources(Graphic PRIVATE "${MMM_ANDROID_IMGUI_FREETYPE_SOURCE}")
+  # 宏只用于这个可选上游实现；启动字体显式选 loader，正式界面继续原策略。
+  set_source_files_properties(
+    "${MMM_ANDROID_IMGUI_FREETYPE_SOURCE}" PROPERTIES COMPILE_DEFINITIONS
+                                                      IMGUI_ENABLE_FREETYPE)
+  target_link_libraries(Graphic PRIVATE freetype::freetype)
   target_sources(Graphic PRIVATE src/sdl/AndroidNativeWindow.cpp
                                  src/sdl/VKContextSDL.cpp)
   target_link_libraries(Graphic PUBLIC 3rd_sdl3)

@@ -80,7 +80,7 @@ with zipfile.ZipFile(apk) as archive:
     with archive.open('lib/arm64-v8a/libmain.so') as main:
         header = main.read(20)
     assert header[:4] == b'\x7fELF' and int.from_bytes(header[18:20], 'little') == 183
-    # 完整 CRC 检查包含大型 assets.zip，不以 ZIP 中央目录可读冒充资源完整。
+    # 完整 CRC 检查覆盖运行库，另由统一交付校验拒绝旧的完整资源 ZIP。
     assert archive.testzip() is None
 # 签名验证输出仅包含公开证书信息，命令行没有私钥口令。
 certificate = subprocess.check_output([sdk / 'apksigner', 'verify', '--print-certs', apk], text=True)
@@ -99,6 +99,10 @@ info = dict(source=os.environ['MMM_SOURCE_REF'], abi='arm64-v8a', variant='relea
 # 日志只回显交付清单，原生调试符号继续留在 Runner 的专用目录。
 print(json.dumps(info, indent=2))
 PY
+# 单独构建同样执行交付校验，不能只在完整 CI 的 staging 阶段排除旧资源包。
+# 发布变体、实际摘要与 ABI 一并核对，不以包名符合规则代替内容验证。
+python3 "$android_repo/scripts/ci/android-release.py" verify \
+    --directory "$android_delivery" --source "$MMM_SOURCE_REF" --version "$android_version"
 # 完整 CI 使用运行专属目录，不能在聚合时读取可能已被下一任务覆盖的 apk/ci。
 # 单独安卓构建只上传 Artifact，不制造无人消费的发布缓存。
 if [[ "${MMM_ANDROID_STAGE_RELEASE:-0}" == 1 ]]; then

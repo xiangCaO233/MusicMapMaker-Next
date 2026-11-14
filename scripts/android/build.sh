@@ -27,7 +27,7 @@ export GRADLE_USER_HOME="${MMM_ANDROID_GRADLE_CACHE:-$android_work/cache/gradle-
 # SDK 的用户偏好也属于本工作树，不能由 AGP 另建宿主 ~/.android 缓存。
 export ANDROID_USER_HOME="$android_work/cache/android-user"
 export TMPDIR="$android_work/cache/tmp"
-mkdir -p "$android_work"/{cache,evidence,dependencies,build/assets,build/jni,apk} "$TMPDIR"
+mkdir -p "$android_work"/{cache,evidence,dependencies,build/jni,apk} "$TMPDIR"
 # 默认保留既有调试行为；发布型 QA 包必须显式选择并提供独立签名。
 # 在原生编译前拒绝拼写错误，避免长时间编译后才发现打包任务不存在。
 android_variant="${MMM_ANDROID_VARIANT:-debug}"
@@ -92,8 +92,8 @@ for android_abi in $android_abis; do
     # 同一 APK 的各 ABI 各带一份匹配架构的标准库，不混用 NDK 版本。
     cp "$android_ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/$android_triple/libc++_shared.so" "$android_jni/"
 done
-# 资源 ZIP 和内容标记只生成到集中构建目录，LFS 内容缺失时立即失败。
-python3 "$android_repo/scripts/android/package_assets.py" --repo "$android_repo" --output "$android_work/build/assets"
+# APK 不内置完整资源，启动时从正式资源清单下载到应用私有目录。
+# Gradle 同时排除旧 assets 缓存，复用既有构建树也不能把历史 ZIP 带进包。
 # 独立调试签名只属于实验包，不写入默认 ~/.android/debug.keystore。
 # QA 发布型包不生成无关调试密钥，也不会回退到调试签名。
 if [[ "$android_variant" == debug && ! -f "$android_work/cache/debug.keystore" ]]; then

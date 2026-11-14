@@ -61,6 +61,10 @@ def verify_delivery(directory, source, version=None):
     # 摘要之外核对 ZIP 和 JNI，避免把宿主库或错误 ABI 的安装包误当手机包。
     # CRC 检查覆盖资源正文；仅读中央目录不能发现截断或损坏的资源内容。
     with zipfile.ZipFile(apk) as archive:
+        # APK 只交付程序与运行库，完整资源由共享启动同步服务下载。
+        # 同时拦截旧标记，防止只移除 ZIP 后仍遗留依赖随包解压的半套交付。
+        if {"assets/mmm-assets.zip", "assets/mmm-assets.sha256"}.intersection(archive.namelist()):
+            raise ValueError("Android APK must not bundle the full asset package")
         libraries = [name for name in archive.namelist() if name.startswith("lib/")]
         if {name.split("/")[1] for name in libraries} != {"arm64-v8a"}:
             raise ValueError("Android APK contains an unexpected JNI ABI")

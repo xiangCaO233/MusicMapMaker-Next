@@ -15,6 +15,7 @@
 #include "graphic/theme/ImGuiThemeRegistry.h"
 #ifdef __ANDROID__
 #    include "imgui_impl_sdl3.h"
+#    include <misc/freetype/imgui_freetype.h>
 #else
 #    include "imgui_impl_glfw.h"
 #endif
@@ -425,6 +426,12 @@ void VKContext::setupBootstrapFonts()
     // 非 2 次幂高度减少系统 CJK 字体 atlas 的无效空白。
     ImGuiIO& io = ImGui::GetIO();
     io.Fonts->Flags |= ImFontAtlasFlags_NoPowerOfTwoHeight;
+#ifdef __ANDROID__
+    // 新版 Android 系统 CJK 集合为 CFF2，启动 atlas 必须先初始化 FreeType
+    // loader。 仅这个临时 context 使用 FreeType，正式编辑器重新创建 atlas
+    // 并保持既有策略。
+    io.Fonts->SetFontLoader(ImGuiFreeType::GetFontLoader());
+#endif
 
     // nativeScale 决定 raster 像素，uiScale 决定逻辑显示比例。
     float nativeScale = Config::AppConfig::instance().getNativeContentScale();

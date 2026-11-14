@@ -29,7 +29,9 @@ android {
         main {
             java.srcDirs += [sdlJava]
             jniLibs.srcDirs = ["${work}/build/jni"]
-            assets.srcDirs = ["${work}/build/assets"]
+            // 首次启动与桌面一样下载资源，不引用曾放置完整 ZIP 的构建缓存。
+            // 显式清空目录也覆盖 Studio 直接打包，升级工作树不会误带旧资源包。
+            assets.srcDirs = []
         }
     }
     // 原生调试信息在集中构建树保留，设备日志可用相同源码符号定位。

@@ -74,6 +74,22 @@ class AndroidReleaseTest(unittest.TestCase):
         self.assertEqual(RELEASE.stage_delivery(root, destination, SOURCE), apk)
         self.assertFalse(destination.with_name(".android-arm64.previous").exists())
 
+    def test_bundled_assets_are_rejected(self):
+        """@brief 即使摘要和架构正确，也不能重新把完整资源打入精简 APK。
+
+        ZIP 与旧版内容标记分别测试，避免只排除一种文件留下不完整旧入口。
+        更新记录中的真实摘要，使拒绝原因只来自资源交付契约。
+        """
+        for index, name in enumerate(("assets/mmm-assets.zip", "assets/mmm-assets.sha256")):
+            root, record = self.delivery(f"bundled-{index}")
+            apk = root / "MusicMapMaker-Next-0.6.4-android-arm64.apk"
+            with zipfile.ZipFile(apk, "a") as archive:
+                archive.writestr(name, b"legacy bundled resource")
+            record.update(bytes=apk.stat().st_size, sha256=hashlib.sha256(apk.read_bytes()).hexdigest())
+            (root / "build-info.json").write_text(json.dumps(record))
+            with self.assertRaisesRegex(ValueError, "must not bundle"):
+                RELEASE.verify_delivery(root, SOURCE)
+
     def test_github_package_only_preserves_apk(self):
         """@brief 实际调用正式打包入口，确认 APK 与校验清单进入最终附件集合。
 
