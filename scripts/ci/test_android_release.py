@@ -41,7 +41,7 @@ class AndroidReleaseTest(unittest.TestCase):
         self.addCleanup(self.m_temp.cleanup)
         self.m_root = Path(self.m_temp.name)
 
-    def delivery(self, name="input", abi="arm64-v8a"):
+    def delivery(self, name="input", abi="arm64-v8a", revision=0):
         """@brief 生成带真实摘要与 CRC 的最小交付，避免静态伪造校验成功。
 
         @param abi 控制 ZIP 内的实际 JNI 目录，用于错误架构反例。
@@ -50,11 +50,13 @@ class AndroidReleaseTest(unittest.TestCase):
         """
         root = self.m_root / name
         root.mkdir()
-        apk = root / "MusicMapMaker-Next-0.6.4-android-arm64.apk"
+        version = "0.6.4" + (f"-hotfix.{revision}" if revision else "")
+        apk = root / f"MusicMapMaker-Next-{version}-android-arm64.apk"
         with zipfile.ZipFile(apk, "w") as archive:
             archive.writestr(f"lib/{abi}/libmain.so", b"\x7fELF" + bytes(14) + (183).to_bytes(2, "little"))
             archive.writestr("assets/example", b"resource")
-        record = dict(source=SOURCE, abi="arm64-v8a", variant="release", versionName="0.6.4",
+        record = dict(source=SOURCE, abi="arm64-v8a", variant="release", versionName=version,
+                      baseVersion="0.6.4", hotfix_revision=revision,
                       bytes=apk.stat().st_size, sha256=hashlib.sha256(apk.read_bytes()).hexdigest())
         (root / "build-info.json").write_text(json.dumps(record))
         return root, record
@@ -138,6 +140,26 @@ class AndroidReleaseTest(unittest.TestCase):
         for source, version in (("b" * 40, "0.6.4"), (SOURCE, "0.6.5"), ("main", None)):
             with self.subTest(source=source, version=version), self.assertRaises(ValueError):
                 RELEASE.verify_delivery(root, source, version)
+
+    def test_hotfix_identity_and_staging(self):
+        """@brief 热修复必须同时携带修订、基础版本和规范可见名称。
+
+        正式版本与热修复可来自同一源码，不能只校验提交而遗漏修订。
+        包文件名由已验证记录导出，聚合后不能回退到基础版本文件名。
+        """
+        root, original = self.delivery(revision=1)
+        apk, _ = RELEASE.verify_delivery(root, SOURCE, "v0.6.4-hotfix.1")
+        self.assertEqual(apk.name, "MusicMapMaker-Next-0.6.4-hotfix.1-android-arm64.apk")
+        destination = self.m_root / "staged-hotfix"
+        self.assertEqual(RELEASE.stage_delivery(root, destination, SOURCE, "v0.6.4-hotfix.1").name, apk.name)
+        # 每次只改变一项记录；实际 ZIP、大小和 SHA 保持一致，以隔离身份错误。
+        for key, value in (("hotfix_revision", 0), ("hotfix_revision", 2),
+                           ("hotfix_revision", True), ("baseVersion", "0.6.5")):
+            record = dict(original)
+            record[key] = value
+            (root / "build-info.json").write_text(json.dumps(record))
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                RELEASE.verify_delivery(root, SOURCE)
 
     def test_wrong_variant_or_record(self):
         """@brief 记录中的调试变体、错误 ABI、长度与摘要都必须分别拒绝。

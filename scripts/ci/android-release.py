@@ -47,6 +47,17 @@ def verify_delivery(directory, source, version=None):
         raise ValueError("Android delivery has an invalid version")
     if version is not None and actual_version != version.removeprefix("v"):
         raise ValueError("Android APK version does not match release version")
+    # 修订是构建身份的一部分，拒绝拿旧正式包改文件名充当热修复。
+    # 老正式记录缺少此字段时按零处理，但带 hotfix 后缀的包不能这样兼容。
+    revision = record.get("hotfix_revision", 0)
+    if type(revision) is not int or not 0 <= revision <= 2147483647:
+        raise ValueError("Android delivery has an invalid hotfix revision")
+    if revision:
+        base = record.get("baseVersion", "")
+        if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", base) or actual_version != f"{base}-hotfix.{revision}":
+            raise ValueError("Android hotfix version differs from build revision")
+    elif "-hotfix." in actual_version:
+        raise ValueError("Android hotfix APK has no build revision")
     apk = root / f"MusicMapMaker-Next-{actual_version}-android-arm64.apk"
     if apk.is_symlink() or not apk.is_file() or apk.stat().st_size <= 0:
         raise ValueError("Android APK is missing, empty or linked")
