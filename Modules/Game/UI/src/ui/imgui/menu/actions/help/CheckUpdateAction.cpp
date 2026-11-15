@@ -16,6 +16,7 @@
 #include "ui/imgui/menu/MainMenuTypes.h"
 #include "ui/imgui/menu/actions/MainMenuHelpActions.h"
 #include "ui/imgui/status/IStatusMessageSink.h"
+#include "ui/utils/DownloadRouteSelector.h"
 #include "ui/utils/UIWidgetUtils.h"
 #include "ui/workspace/IWorkspacePresentation.h"
 
@@ -257,6 +258,16 @@ private:
                               !showChangelog) ) {
             // Begin 后重新读取快照，减少状态在布局判断与正文之间变化的窗口。
             info = m_updateChecker->getInfo();
+
+            // 入口位于正文滚动区外，桌面和触摸界面都能在下载中直接换路。
+            // 只发布会话选项，文件重下由后台处理，不能在 UI 等待旧请求退出。
+            if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ||
+                 info.status == MMM::Network::UpdateStatus::kDownloading ||
+                 (info.status == MMM::Network::UpdateStatus::kError &&
+                  !info.downloadUrl.empty()) )
+                drawDownloadRouteSelector(
+                    info.status == MMM::Network::UpdateStatus::kDownloading,
+                    dpiScale);
 
             if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {
                 // 检查完成且尚未下载时展示版本、日志和操作按钮。

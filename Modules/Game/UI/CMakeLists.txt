@@ -436,6 +436,14 @@ target_link_libraries(DeferredUpdatePopupTest PRIVATE UI 3rd_imgui)
 mmm_register_test_case(NAME DeferredUpdatePopupTest COMMAND
                        DeferredUpdatePopupTest)
 
+# 下载选线使用真实 ImGui 输入事件，验证两个窗口共用的控件入口。 不请求网络或打开桌面窗口，窄屏与放大字号布局也在同一用例检查。
+# 选中结果读取正式网络层的会话选项，不以控件临时下标冒充选线生效。 静音测试不初始化业务音频设备，也不触发任何更新弹窗反馈声。
+mmm_add_test_executable(UI DownloadRouteSelectorTest
+                        tests/DownloadRouteSelectorTest.cpp)
+target_link_libraries(DownloadRouteSelectorTest PRIVATE UI Network 3rd_imgui)
+mmm_register_test_case(NAME DownloadRouteSelectorTest COMMAND
+                       DownloadRouteSelectorTest)
+
 # 更新图片测试默认离线，覆盖相对地址、非法协议和多帧 GIF 解码。 链接 UI 以复用正式 Markdown 图片缓存实现及其资源边界。
 mmm_add_test_executable(UI MarkdownImageCacheTest
                         tests/MarkdownImageCacheTest.cpp)

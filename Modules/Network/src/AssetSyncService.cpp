@@ -3,6 +3,7 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "network/CurlHandle.h"
+#include "network/DownloadRouting.h"
 
 #include <array>
 #include <chrono>
@@ -640,12 +641,14 @@ bool downloadString(const std::string& url, std::string& response,
 /// @param errorMessage 接收失败详情。
 /// @param progressCallback 可选下载字节进度回调。
 /// @param cancellationCallback 可选取消查询。
+/// @param expectedSize 清单总长，已知小文件跳过独立测速，未知为零。
 /// @return 文件完整写入时返回 true。
 bool downloadFile(
     const std::string& url, const std::filesystem::path& path,
     std::string&                                           errorMessage,
     const std::function<void(std::int64_t, std::int64_t)>& progressCallback,
-    const std::function<bool()>&                           cancellationCallback)
+    const std::function<bool()>&                           cancellationCallback,
+    std::uint64_t                                          expectedSize = 0)
 {
     // 开始前取消不触碰目标路径。
     if ( cancellationCallback && cancellationCallback() ) {
@@ -732,7 +735,14 @@ bool downloadFile(
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
     }
 
-    const CURLcode result = curl_easy_perform(curl);
+    // 官方大文件共享按吞吐量选择线路与续传策略；清单和本地 file URL
+    // 保留原路径。
+    DownloadRoutingOptions routing;
+    routing.m_cancelled = cancellationCallback;
+    routing.m_progress  = progressCallback;
+    // 增量文件已知总长，避免为小图标或脚本重复读取探测前缀。
+    routing.m_expectedSize = expectedSize;
+    const CURLcode result  = performRoutedDownload(curl, url, file, routing);
 
     // 先关闭文件和 curl，随后处理失败并删除部分输出。
     std::fclose(file);
@@ -1151,7 +1161,8 @@ AssetSyncResult updateFromManifest(const AssetSyncOptions& options,
                                       totalFiles,
                                   });
                  },
-                 options.cancellationCallback) ) {
+                 options.cancellationCallback,
+                 file.size) ) {
             if ( isCancellationRequested(options) ) return cancelledResult();
             result.status = AssetSyncStatus::kError;
             return result;
