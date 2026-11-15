@@ -1,5 +1,6 @@
 #include "main/StartupProgressDialog.h"
 #include "config/AppConfig.h"
+#include "ui/utils/DownloadRouteSelector.h"
 #include "ui/utils/UIWidgetUtils.h"
 
 #include <algorithm>
@@ -201,6 +202,10 @@ void StartupProgressDialog::onUpdateUI()
         ImDrawFlags_RoundCornersTop);
 
     ImGui::TextColored(ImVec4(0.55f, 0.72f, 1.0f, 1.0f), "MUSIC MAP MAKER");
+
+    // 启动时也允许直接换路，失败后选好线路再点重试，不阻塞渲染线程。
+    // 提示阶段没有下载，不展示无关网络操作。
+    if ( !m_hasWarning ) UI::drawDownloadRouteSelector(!m_hasError, scale);
 
     if ( m_hasError ) {
         // 错误分支优先于警告和进度，提供明确的退出与重试决策。

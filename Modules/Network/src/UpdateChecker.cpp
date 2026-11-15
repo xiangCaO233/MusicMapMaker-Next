@@ -4,6 +4,7 @@
 #include "mmmversion.h"
 #include "network/AssetSyncService.h"
 #include "network/CurlHandle.h"
+#include "network/DownloadRouting.h"
 #include "runtime/AppThreadPool.h"
 #include <algorithm>
 #include <cctype>
@@ -1152,7 +1153,16 @@ void UpdateChecker::downloadAsync()
             curl_easy_setopt(uCurl, CURLOPT_XFERINFODATA, this);
             curl_easy_setopt(uCurl, CURLOPT_NOPROGRESS, 0L);
 
-            CURLcode uRes = curl_easy_perform(uCurl);
+            // 小更新器不单独消耗测速流量，但可复用已验证的 IP 和失败回退。
+            // 更新器通常很小，不能为它额外读取多个大样本。
+            // 六十秒预算包含线路切换，不会在每次重试时重新计满。
+            // 取消语义沿用检查器，不把用户关闭弹窗当作换路信号。
+            DownloadRoutingOptions updaterRouting;
+            updaterRouting.m_cancelled = [this] { return isCancelRequested(); };
+            updaterRouting.m_probeRoutes    = false;
+            updaterRouting.m_timeoutSeconds = 60;
+            CURLcode uRes                   = performRoutedDownload(
+                uCurl, result.updaterUrl, uFile, updaterRouting);
 
             // 传输返回后先关闭输出与 curl 资源，再进入任意失败分支。
             fclose(uFile);
@@ -1269,7 +1279,27 @@ void UpdateChecker::downloadAsync()
         curl_easy_setopt(mCurl, CURLOPT_CONNECTTIMEOUT, 30L);
         curl_easy_setopt(mCurl, CURLOPT_TIMEOUT, 3600L);
 
-        CURLcode mRes = curl_easy_perform(mCurl);
+        // 大型更新包与启动资源共用选路；切换线路不取消完整摘要验证。
+        // 老清单未知大小以零表示，不能把负数转成巨大的无符号总长。
+        // 下载器进度包含已复用前缀，UI 不应把剩余分片误当完整文件。
+        // 回调只短暂发布状态，不能持锁跨越后台网络请求。
+        // 失败后的部分文件仍由原有清理分支删除，禁止提前发布可执行路径。
+        // 只有完整摘要通过后才允许后续更新器替换或重启应用。
+        DownloadRoutingOptions mainRouting;
+        mainRouting.m_cancelled    = [this] { return isCancelRequested(); };
+        mainRouting.m_expectedSize = static_cast<std::uint64_t>(
+            std::max<std::int64_t>(0, result.downloadSize));
+        mainRouting.m_timeoutSeconds = 3600;
+        mainRouting.m_progress       = [this](std::int64_t downloaded,
+                                              std::int64_t total) {
+            std::lock_guard<std::mutex> lock(m_infoMutex);
+            m_info.downloadedBytes = downloaded;
+            if ( total > 0 )
+                m_info.downloadProgress = static_cast<double>(downloaded) /
+                                          static_cast<double>(total);
+        };
+        CURLcode mRes = performRoutedDownload(
+            mCurl, result.downloadUrl, mFile, mainRouting);
 
         // 文件和 curl 句柄在检查状态前关闭，确保摘要读取看到完整落盘内容。
         fclose(mFile);
