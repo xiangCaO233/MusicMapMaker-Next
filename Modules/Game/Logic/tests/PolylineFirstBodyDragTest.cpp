@@ -7,6 +7,7 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "logic/ecs/system/ScrollCache.h"
 #include "logic/session/CanvasCamera.h"
+#include "logic/session/InteractionController.h"
 #include "logic/session/NoteIdentity.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
@@ -483,12 +484,13 @@ bool runCase(DragCase kind)
 /// @brief 检查内部节点拖动只改变相连子段和后缀，不移动整条折线。
 /// @param selected 根折线与另一 Note 是否同时被选中。
 /// @param flick 抓取横移子段节点；否则抓取竖向子段节点。
+/// @param body 通过选择工具真实点选后拖动身体，覆盖先选择再拖动的命令顺序。
 /// @return 父子投影、选择组、撤销与重做均保持同一局部语义时返回 true。
 /// @details 横向拖动 Hold 节点时，前一 Flick 的终轨须接上新节点；
 /// 纵向拖动 Flick 节点时，前一 Hold 的尾端须接上新节点时间。
 /// 两种场景的后缀均跟随移动，根部与其它选中物件仍停在原位置。
 /// @warning 仅测试命令级手势，不改变测试用户配置或项目资源。
-bool runInternalNodeCase(bool selected, bool flick)
+bool runInternalNodeCase(bool selected, bool flick, bool body = false)
 {
     // 每个场景建立新会话，前一场景的选择与历史不影响本次结果。
     // 玩家轨道投影与首段身体场景一致，直接使用生产时间逆映射。
@@ -532,7 +534,8 @@ bool runInternalNodeCase(bool selected, bool flick)
     ctx.noteRegistry.emplace<Note>(root, parent);
     ctx.noteRegistry.emplace<MMM::Logic::TransformComponent>(root);
     ctx.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
-        root, MMM::Logic::InteractionComponent{ .isSelected = selected });
+        root,
+        MMM::Logic::InteractionComponent{ .isSelected = selected && !body });
     std::vector<entt::entity> children;
     // 真实加载的折线有子实体投影；只核对父列表会漏掉拾取与撤销错误。
     // 子实体直接从父子段构造，不能在测试中修补生产逻辑的输出。
@@ -551,32 +554,48 @@ bool runInternalNodeCase(bool selected, bool flick)
                                          .m_timestamp  = 3.0,
                                          .m_trackIndex = 3 });
     ctx.noteRegistry.emplace<MMM::Logic::InteractionComponent>(
-        other, MMM::Logic::InteractionComponent{ .isSelected = selected });
+        other,
+        MMM::Logic::InteractionComponent{ .isSelected = selected && !body });
     // 索引一是 Flick，索引二是其终轨上的 Hold。
     // 使用正交拖动分别检验时间连接与轨道连接。
     const int subIndex  = flick ? 1 : 2;
     ctx.hoveredPart     = static_cast<int>(MMM::Logic::HoverPart::Head);
     ctx.hoveredSubIndex = -1;
-    MMM::Logic::GrabTool tool;
+    // 使用正式控制器，选择工具与原抓取实现之间不能存在另一套拖动解释。
+    // 节点用例保留既有选择状态；身体用例重放 UI 实际发送的点选顺序。
+    MMM::Logic::InteractionController controller(ctx);
+    if ( body ) {
+        ctx.currentTool = MMM::Logic::EditTool::Marquee;
+        // 新选择先建立根；追加一个独立哨兵后，再按根应保留整个已选组。
+        // 这与直接给交互组件写选中位不同，会同时维护正式的选择索引。
+        controller.handleCommand(MMM::Logic::CmdSelectEntity{ root, true });
+        if ( selected )
+            controller.handleCommand(
+                MMM::Logic::CmdSelectEntity{ other, false });
+        // 每次画布按下都会先选中目标，再把同一帧的身体命中发送给拖动。
+        // 未选中根因此也会变成已选，不能仅用初始未选状态覆盖这个回归。
+        controller.handleCommand(MMM::Logic::CmdSelectEntity{ root, true });
+        if ( !ctx.noteRegistry.get<MMM::Logic::InteractionComponent>(root)
+                  .isSelected )
+            return false;
+    }
     // 按下帧明确传入节点身份，不能依赖上一帧悬停的 Head 状态。
     // 即使根和哨兵均已选中，本次手势仍只能编辑这一条折线的内部连接。
-    tool.handleStartDrag(
-        ctx,
-        MMM::Logic::CmdStartDrag{
-            root,
-            "Basic2DCanvas",
-            false,
-            MMM::Logic::ChartObjectKind::PlayerNote,
-            static_cast<std::uint8_t>(MMM::Logic::HoverPart::PolylineNode),
-            subIndex });
+    controller.handleCommand(MMM::Logic::CmdStartDrag{
+        root,
+        "Basic2DCanvas",
+        false,
+        MMM::Logic::ChartObjectKind::PlayerNote,
+        static_cast<std::uint8_t>(body ? MMM::Logic::HoverPart::HoldBody
+                                       : MMM::Logic::HoverPart::PolylineNode),
+        subIndex });
     if ( !ctx.isDragging ) return false;
     // Ctrl 关闭吸附；Flick 向时间后方移动，Hold 向右移动一轨。
     // 目标点跨过相应节点，但没有跨出当前谱面的玩家轨道域。
-    tool.handleUpdateDrag(ctx,
-                          MMM::Logic::CmdUpdateDrag{ "Basic2DCanvas",
-                                                     flick ? 150.0F : 350.0F,
-                                                     flick ? 0.0F : 300.0F,
-                                                     true });
+    controller.handleCommand(MMM::Logic::CmdUpdateDrag{ "Basic2DCanvas",
+                                                        flick ? 150.0F : 350.0F,
+                                                        flick ? 0.0F : 300.0F,
+                                                        true });
     const auto&  preview = ctx.noteRegistry.get<const Note>(root);
     const double shift   = preview.m_subNotes[1].timestamp - 1.5;
     // 父根与第一子段固定；横向调整改变前一 Flick 的终轨，
@@ -610,7 +629,7 @@ bool runInternalNodeCase(bool selected, bool flick)
              child.m_duration != preview.m_subNotes[index].duration )
             return false;
     }
-    tool.handleEndDrag(ctx, MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
+    controller.handleCommand(MMM::Logic::CmdEndDrag{ "Basic2DCanvas" });
     // 单次手势只能占一个历史动作，否则 Undo 会恢复半条折线。
     if ( ctx.actionStack.getUndoStackSize() != 1U ) return false;
     ctx.actionStack.undo(ctx);
@@ -1029,6 +1048,13 @@ int main()
                    runInternalNodeCase(false, false) &&
                    runInternalNodeCase(true, false) &&
                    runInternalNodeCase(true, true) &&
+                   // Hold 与 Flick
+                   // 身体都用相同局部编辑入口，不能因选择数量改变。
+                   // 新单选和保留多选各覆盖一次，前者是选择工具合并后最容易遗漏的顺序。
+                   runInternalNodeCase(false, false, true) &&
+                   runInternalNodeCase(true, false, true) &&
+                   runInternalNodeCase(false, true, true) &&
+                   runInternalNodeCase(true, true, true) &&
                    runPolylineEndpointCase(false, false, false) &&
                    runPolylineEndpointCase(false, false, true) &&
                    runPolylineEndpointCase(false, true, false) &&
