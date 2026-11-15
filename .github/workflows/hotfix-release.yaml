@@ -104,7 +104,7 @@ jobs:
       source_ref: ${{ inputs.source_ref }}
       pgo_instrument: ${{ inputs.pgo_instrument }}
       hotfix_revision: ${{ inputs.revision }}
-      # 原程序打包形式保持不变：Windows/Linux 单文件，macOS 完整 App ZIP。
+      # 同源打包 Windows/Linux 单文件、macOS 完整 App ZIP 以及 ARM64 APK。
 
   publish:
     permissions:
@@ -170,7 +170,7 @@ jobs:
               prepare_assets('assets', 'baseline/manifest.json', 'baseline/assets.zip', selected, base, revision, 'hotfix-output')
               # 准备器同时校验归档成员、旧文件摘要和输出目录，不执行 extractall。
           if scope != 'assets':
-              # 程序候选包含三平台主包和独立更新器，每件都有完整摘要。
+              # 程序候选包含三平台主包、独立更新器和 Android APK，每件都有完整摘要。
               # 按运行 ID 隔离的快照不会被下一次 CI 构建覆盖。
               release = Path('/home/xiang/MusicMapMaker-Next/.git/mmm-hotfix-releases') / os.environ['GITHUB_RUN_ID']
               prepare_program(release, 'baseline/program.json', base, revision, os.environ['HOTFIX_COMMIT'], 'hotfix-output')
@@ -219,7 +219,8 @@ jobs:
           # 暂存目录按运行和尝试隔离，失败内容不会被后续发布静默复用。
           ssh "${ssh_options[@]}" -p 22 podman@xiang233.top "mkdir -p '${stage}/tools'"
           scp "${ssh_options[@]}" -P 22 -r hotfix-output/. "podman@xiang233.top:${stage}/"
-          scp "${ssh_options[@]}" -P 22 scripts/hotfix/prepare_assets.py scripts/hotfix/prepare_program.py scripts/hotfix/publish_assets.py "podman@xiang233.top:${stage}/tools/"
+          # APK 校验器与本次准备脚本同源，服务器复核四平台闭包时直接复用。
+          scp "${ssh_options[@]}" -P 22 scripts/hotfix/prepare_assets.py scripts/hotfix/prepare_program.py scripts/hotfix/publish_assets.py scripts/ci/android-release.py "podman@xiang233.top:${stage}/tools/"
           # R2 密钥留在服务器，只将限时单对象许可写入私有临时文件。
           # 由 Runner 直传同一候选，避开网站服务器向 R2 的慢速出口。
           # 许可位于 workspace 外，且创建时间晚于 Artifact 上传，不会被归档。

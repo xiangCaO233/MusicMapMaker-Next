@@ -6,6 +6,7 @@
 """
 
 import json
+import importlib.util
 from pathlib import Path
 import re
 import shutil
@@ -14,12 +15,30 @@ from urllib.parse import quote
 from prepare_assets import digest
 
 
-# /// @brief 将三平台固定产物映射为不可变下载对象。
+# /// @brief 在准备端和服务器复用同一 APK 校验器，不复制 ABI/ZIP 判断。
+def android_delivery():
+    """本仓脚本从 ci 目录加载，服务器从同一候选的 tools 邻接文件加载。
+
+    校验器随固定源码提交传输，不下载或执行来自安装包的程序。
+    只借用交付核验接口，不触发 CLI 构建、签名或公开发布。
+    文件布局差异仅属于部署，不允许改成搜索任意系统 Python 模块。
+    """
+    path = Path(__file__).with_name('android-release.py')
+    if not path.is_file():
+        path = Path(__file__).resolve().parents[1] / 'ci/android-release.py'
+    spec = importlib.util.spec_from_file_location('hotfix_android_delivery', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+# /// @brief 将四平台固定产物映射为不可变下载对象。
 def prepare(release, baseline_path, base, revision, commit, output):
     """本期复用现有单文件和 macOS 整包更新协议。
 
     Windows 与 Linux 的主程序、macOS App ZIP 分别保留原协议字段。
     更新器单独上传并校验，不能用主程序摘要代替更新器摘要。
+    Android 使用同源 ARM64 APK，安装包版本与原生构建修订同步。
     旧平台节点的资源与其他元数据保持原值。
     revision 必须与本次聚合记录一致，不能只改服务器清单。
     """
@@ -66,6 +85,26 @@ def prepare(release, baseline_path, base, revision, commit, output):
             # 新条目不能继承旧 origin_url，否则 CDN 帮助器可能读到旧程序。
             target.pop('origin_url', None)
             uploads.append({'key': key, 'sha256': checksum, 'size': size})
+    # Android 是每次程序热修复的必需平台，不能只更新桌面全局修订。
+    # APK 外壳版本、原生修订与来源记录先在构建端核对，此处再验证交付正文。
+    apk, record = android_delivery().verify_delivery(
+        release / 'android-arm64', commit, f'{base}-hotfix.{revision}')
+    if record.get('hotfix_revision') != revision:
+        raise ValueError('Android build revision differs from program hotfix')
+    node = baseline['platforms'].get('android')
+    if not isinstance(node, dict):
+        raise ValueError('program hotfix requires Android platform')
+    key = prefix + '/android/' + apk.name
+    staged = output / key
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(apk, staged)
+    # 元数据留在候选供服务器复核，不作为程序二进制计数或公开安装入口。
+    shutil.copyfile(apk.parent / 'build-info.json', staged.parent / 'build-info.json')
+    checksum, size = digest(staged), staged.stat().st_size
+    node.update(url='/' + quote(key, safe='/'), checksum='sha256:' + checksum,
+                size=size, filename=apk.name, abi='arm64-v8a')
+    node.pop('origin_url', None)
+    uploads.append({'key': key, 'sha256': checksum, 'size': size})
     baseline.update(hotfix_revision=revision, hotfix_base_tag=base, hotfix_commit=commit)
     # 首次普通版本清单没有修订字段，发布器按零修订建立第一轮热修复。
     # 新字段独立存储，既有 version 文本保持正式发布 tag 的版本身份。
@@ -79,13 +118,13 @@ def prepare(release, baseline_path, base, revision, commit, output):
     return baseline, plan
 
 
-# /// @brief 发布阶段重新校验构建身份、当前版本和三平台制品。
+# /// @brief 发布阶段重新校验构建身份、当前版本和四平台制品。
 def validate(stage, root):
     """服务器不相信人工上传的 program.json，必须重新检查全部引用。
 
     baseline_sha256 保证检查与发布之间没有另一次程序更新。
     URL 限定在本次版本目录，不能由发布计划任意覆盖线上路径。
-    plan 必须精确包含六个制品，任何平台缺失都会阻止切换程序清单。
+    plan 必须精确包含七个制品，任何平台缺失都会阻止切换程序清单。
     """
     stage, root = Path(stage), Path(root)
     plan = json.loads((stage / 'program-plan.json').read_text())
@@ -106,14 +145,14 @@ def validate(stage, root):
         # 候选必须保留精确构建身份，不能通过删除字段伪装成普通发布。
         raise ValueError('program release has no valid build identity')
     prefix = f'download/hotfix/program/{version}/r{revision}/'
-    # 每个平台主程序和更新器各一份，重复键不可静默去重。
+    # 桌面各一份主程序及更新器，安卓一份 APK；重复键不可静默去重。
     records = {r['key']: r for r in plan['uploads']}
-    if len(records) != 6 or len(plan['uploads']) != 6:
-        raise ValueError('program release must contain six binaries')
-    for platform in ('windows', 'linux', 'macos'):
+    if len(records) != 7 or len(plan['uploads']) != 7:
+        raise ValueError('program release must contain seven binaries including Android APK')
+    for platform in ('windows', 'linux', 'macos', 'android'):
         # 下载地址由本次计划导出，不能引用未验证的执行文件。
         node = document['platforms'][platform]
-        for item in (node, node['updater']):
+        for item in ((node,) if platform == 'android' else (node, node['updater'])):
             key = next((k for k in records if item['url'] == '/' + quote(k, safe='/')), None)
             if key is None or not key.startswith(prefix + platform + '/'):
                 raise ValueError('invalid program download identity')
@@ -125,5 +164,12 @@ def validate(stage, root):
                 raise ValueError('staged program checksum mismatch')
             if item['checksum'] != 'sha256:' + record['sha256'] or item['size'] != record['size']:
                 raise ValueError('program manifest checksum mismatch')
+    # 服务端重验 APK 本体和同一来源记录，不只相信计划声称的 ARM64 标签。
+    # 四平台共用全局修订，漏 APK、旧源码或旧修订都必须在清单切换前失败。
+    apk, record = android_delivery().verify_delivery(
+        stage / prefix / 'android', document['hotfix_commit'], f'{version}-hotfix.{revision}')
+    node = document['platforms']['android']
+    if record.get('hotfix_revision') != revision or node.get('filename') != apk.name:
+        raise ValueError('Android manifest identity differs from hotfix APK')
     # 准备结果通过服务器校验后才成为可发布候选。
     return document, plan

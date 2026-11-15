@@ -11,6 +11,11 @@ on:
         # 与桌面共用人工选择，默认发布采样包；false 必须真正关闭采集。
         type: boolean
         default: true
+      hotfix_revision:
+        # 空值表示普通发布；程序热修复使用与其他平台相同的修订。
+        # 默认空值保证单独构建 APK 不继承以前运行的热修复身份。
+        type: string
+        default: ""
       stage_release:
         # 完整跨平台构建才需要聚合候选；单独下载 APK 不留下运行专属副本。
         # 默认关闭，避免人工安卓构建不断累积未消费的 staging 目录。
@@ -36,6 +41,7 @@ jobs:
     env:
       GIT_LFS_SKIP_SMUDGE: "1"
       MMM_SOURCE_REF: ${{ inputs.source_ref }}
+      MMM_HOTFIX_REVISION: ${{ inputs.hotfix_revision }}
       MMM_ANDROID_STAGE_RELEASE: ${{ inputs.stage_release && '1' || '0' }}
       MMM_ANDROID_PGO_INSTRUMENT: ${{ inputs.pgo_instrument && 'ON' || 'OFF' }}
     # 同步和编译处于同一个 shell，文件锁不会在两个步骤之间提前释放。
