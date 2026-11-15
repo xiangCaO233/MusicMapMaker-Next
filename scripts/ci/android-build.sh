@@ -36,6 +36,14 @@ export MMM_ANDROID_QA_VERSION_CODE="$((2026111404 + GITHUB_RUN_NUMBER))"
 android_version="$(sed -n 's/^set(APPVER "\([^"]*\)").*/\1/p' "$android_repo/CMakeLists.txt")"
 # 唯一版本源缺失时立即停止，不生成缺少主项目版本的安装包。
 [[ -n "$android_version" ]]
+# 基础版本用于来源核验，修订只追加到安装包可见身份，不改 APPVER。
+export MMM_ANDROID_BASE_VERSION="$android_version"
+android_revision="${MMM_HOTFIX_REVISION:-0}"
+[[ "$android_revision" =~ ^(0|[1-9][0-9]*)$ && ${#android_revision} -le 10 ]]
+(( android_revision <= 2147483647 ))
+if (( android_revision > 0 )); then
+    android_version="${android_version}-hotfix.${android_revision}"
+fi
 # 对外版本名与桌面 APPVER 一致，精确源码身份单独写入 build-info.json。
 # QA 前缀仅保留在历史签名接口中，不再写进交付文件名或版本名。
 export MMM_ANDROID_QA_VERSION_NAME="$android_version"
@@ -91,6 +99,8 @@ with apk.open('rb') as stream:
 # 元数据不包含环境变量全集和签名文件路径，避免泄露 Runner 的私有配置。
 info = dict(source=os.environ['MMM_SOURCE_REF'], abi='arm64-v8a', variant='release',
             versionName=os.environ['MMM_ANDROID_QA_VERSION_NAME'],
+            baseVersion=os.environ['MMM_ANDROID_BASE_VERSION'],
+            hotfix_revision=int(os.environ.get('MMM_HOTFIX_REVISION') or '0'),
             versionCode=int(os.environ['MMM_ANDROID_QA_VERSION_CODE']),
             bytes=apk.stat().st_size, sha256=digest, certificate=certificate,
             run=os.environ.get('GITHUB_SERVER_URL', '') + '/' + os.environ.get('GITHUB_REPOSITORY', '')
@@ -103,6 +113,10 @@ options = dict(line.split('=', 1) for line in cache.read_text().splitlines()
 assert options['CMAKE_BUILD_TYPE:STRING'] == 'RelWithDebInfo'
 assert options['MMM_PGO_INSTRUMENT:BOOL'] == os.environ['MMM_ANDROID_PGO_INSTRUMENT']
 assert options['MMM_PGO_USE:BOOL'] == 'OFF'
+# 原生头由 CMake 环境入口生成，单改 APK 外壳版本不能伪装已编入修订。
+header = (cache.parent / 'generated/mmmversion.h').read_text()
+assert f"#define MMM_HOTFIX_REVISION {info['hotfix_revision']}\n" in header
+
 info.update(buildType='RelWithDebInfo', pgoInstrument=options['MMM_PGO_INSTRUMENT:BOOL'] == 'ON', pgoUse=False)
 # 摘要文件使用相对 APK 名称，QA 下载整份制品后可以直接执行 sha256sum -c。
 (apk.parent / 'build-info.json').write_text(json.dumps(info, indent=2) + '\n')
