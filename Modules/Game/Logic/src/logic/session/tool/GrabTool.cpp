@@ -787,7 +787,10 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
     ctx.draggedSubIndex = cmd.hitSubIndex.value_or(ctx.hoveredSubIndex);
     // 内部节点编辑沿用折线子段局部拖动：当前子项与后缀一起移动，
     // 前一连接段随之伸缩。首节点仍保留整条折线移动语义。
-    // 未选中折线的内部身体也使用这一路径；选中组不能抢走节点手势。
+    // 内部身体与节点始终共用局部拖动，选中状态不改变命中部位的编辑语义。
+    // 选择工具起笔先发送点选命令，因此不能再以“未选中”作为子段编辑前提。
+    // 只有根头部等整体命中才允许展开选择组，子段身体必须固定父根锚点。
+    // Hold 与 Flick 的身体都登记为 HoldBody，统一交给既有子段更新及收尾。
     if ( cmd.kind == ChartObjectKind::PlayerNote ||
          cmd.kind == ChartObjectKind::DraftNote ) {
         const auto* note =
@@ -809,10 +812,8 @@ void GrabTool::handleStartDrag(SessionContext& ctx, const CmdStartDrag& cmd)
              ctx.draggedPart == HoverPart::FlickArrow);
         m_isPolylineSubDrag =
             tailPart ||
-            (internalSub &&
-             (ctx.draggedPart == HoverPart::PolylineNode ||
-              (ctx.draggedPart == HoverPart::HoldBody &&
-               !isEntitySelected(ctx.noteRegistry, draggedEntity))));
+            (internalSub && (ctx.draggedPart == HoverPart::PolylineNode ||
+                             ctx.draggedPart == HoverPart::HoldBody));
     }
     // 折线首节点头与身体共享索引零，必须再用命中部位区别拖动意图。
     // 只对能产生正交前置载体的 Hold/Flick 启用这种结构编辑。
