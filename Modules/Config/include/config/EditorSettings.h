@@ -303,6 +303,8 @@ void from_json(const nlohmann::json& json, PastePosition& position);
 struct BpmMeasurementToolPreferences {
     /// @brief 普通滚轮是否磁吸当前 BPM 段的分拍线，默认保留自由步进。
     bool wheelSnapEnabled{ false };
+    /// @brief 编辑测量段时保留后续完整拍位，旧配置默认关闭。
+    bool followSubsequentSegments{ false };
     /// @brief 黄色拍框宽度，单位为毫秒。
     double markerWidthMs{ 80.0 };
 

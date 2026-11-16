@@ -18,6 +18,7 @@
 #include <ice/config/config.hpp>
 #include <initializer_list>
 #include <nlohmann/json.hpp>
+#include <vector>
 
 namespace MMM::UI
 {
@@ -156,7 +157,9 @@ struct BpmMeasurementHistoryTestAccess {
         // 每个图形用例建立独立上下文，禁用 INI 后不会污染个人布局。
         // 字体图集只在本地准备，调用拍点高亮仍可检查合法绘制生命周期。
         ImGui::CreateContext();
-        auto& io       = ImGui::GetIO();
+        auto& io = ImGui::GetIO();
+        // 临时上下文不加载或写入用户停靠布局。
+        // 测试独立字体图集仅供 CPU 命中和绘制，真实项目资源保持不动。
         io.IniFilename = nullptr;
         io.DisplaySize = { 640, 480 };
         io.DeltaTime   = 1.0F / 60.0F;
@@ -648,13 +651,14 @@ struct BpmMeasurementHistoryTestAccess {
         tool.m_duration             = 20;
         tool.m_selectedAudioSyncKey = "mobile-unloaded-preview";
         tool.m_playbackRoute        = BpmPlaybackRoute::Audition;
-        tool.m_timingSegments       = { { 0, 120 } };
-        tool.m_bpm                  = 120;
-        tool.m_firstBeatTime        = 0;
-        tool.m_beatLengthSeconds    = .5;
-        tool.m_viewCenter           = 2;
-        tool.m_zoomSeconds          = 2;
-        tool.m_mobileEdit           = true;
+        tool.m_timingSegments = { { 0, 120 }, { 10.175, 150 }, { 13.375, 90 } };
+        tool.m_followSubsequentSegments = true;
+        tool.m_bpm                      = 120;
+        tool.m_firstBeatTime            = 0;
+        tool.m_beatLengthSeconds        = .5;
+        tool.m_viewCenter               = 2;
+        tool.m_zoomSeconds              = 2;
+        tool.m_mobileEdit               = true;
         /// @brief 每次输入后走实际图表入口，窗口和帧均按真实顺序配对。
         const auto frame = [&] {
             ImGui::NewFrame();
@@ -685,6 +689,8 @@ struct BpmMeasurementHistoryTestAccess {
         // 拖到 x232 表示原拍从 x200 到 x220，而不是把拍直接移到指尖。
         event(Move, .232f);
         passed &= std::abs(tool.m_bpm - 100) < 1e-3;
+        passed &=
+            std::abs(tool.m_timingSegments[1].timestampSeconds - 12.21) < 1e-4;
         event(Up, .232f);
         passed &= tool.canUndoMeasurement() &&
                   tool.m_measurementUndoHistory.size() == 1;
@@ -704,6 +710,7 @@ struct BpmMeasurementHistoryTestAccess {
         frame();
         passed &= tool.m_measurementUndoHistory.size() == count &&
                   !tool.m_isBeatMarkerDragging;
+        tool.m_followSubsequentSegments = false;
         // 不保留本用例的捕获和取消代际，后续桌面测试可从新 Down 开始。
         // 恢复方案需要两次安全帧，与生产同步入口的切换契约一致。
         // 最后销毁上下文，保证临时绘制列表不会跨测试被借用。
@@ -744,6 +751,260 @@ struct BpmMeasurementHistoryTestAccess {
         return passed;
     }
 
+    /// @brief 验证完整小数拍位、混合 BPM、多段级联、撤销及失败原子性。
+    /// @return 20.35 拍与后续各自拍长始终保留，越界不丢段时为真。
+    /// @note 只调用正式编辑入口，不直接写入预期结果，也不创建音频设备。
+    /// @details 所有期望时间来自固定音乐拍位，不从生产函数输出反推。
+    /// 基准第一段的边界包含 35% 拍，第三段另含 30% 拍。
+    /// 首、中、末段各自作为编辑目标，覆盖后缀为空和非空的情况。
+    /// 测试区分修改 BPM 与移动起点，前缀数据必须始终保持。
+    /// 拖动多帧只允许生成一个历史条目，撤销和重做都恢复全部段落。
+    /// 非法候选检查时间和数量，不能通过部分回滚或删除段落满足断言。
+    /// 关闭开关是独立阴性对照，确保原绝对秒行为继续可用。
+    static bool checkSegmentFollow(BpmMeasurementToolView& tool)
+    {
+        using Segment = BpmMeasurementToolView::BpmTimingSegment;
+        const std::vector<Segment> original{
+            { 0, 120 }, { 10.175, 150 }, { 13.375, 90 }, { 17.575, 180 }
+        };
+        // 保存编辑偏好，恢复历史不应替用户切换这个偏好。
+        // 本用例改变的只有工具内存草稿，退出时清理尚未提交的手势。
+        const bool oldFollow = tool.m_followSubsequentSegments;
+        // 固定原始间隔分别是 20.35、8、6.3 拍，三类 BPM 不相等。
+        // 这能识别取整、按分拍吸附及把后续所有间隔按首段 BPM 统一缩放。
+        // 每个分支从相同原始数据重新开始，前一项失败也不会把错误值当基准。
+        // 同一个工具对象复用，用于覆盖上一笔捕获和撤销状态的清理。
+        // 独立试听路由让允许时长只来自本地测试音频，不借用活动项目。
+        const auto reset = [&] {
+            tool.clearMeasurementHistory();
+            tool.m_playbackRoute        = BpmPlaybackRoute::Audition;
+            tool.m_selectedAudioSyncKey = "follow-regression";
+            tool.m_duration             = 60;
+            tool.m_timingSegments       = original;
+            tool.syncPrimaryTimingFieldsFromSegments();
+            tool.m_followSubsequentSegments = true;
+            tool.m_followEditRejected       = false;
+        };
+        /// @brief 比较模型实际值，不从生产换算 helper 生成预期列表。
+        // 数量也属于模型契约，归一化丢段即使其余时间相等也必须失败。
+        // BPM 独立比较，可捕捉只保留时间却误覆盖后续 BPM 的实现。
+        const auto same = [&](const std::vector<Segment>& expected) {
+            if ( tool.m_timingSegments.size() != expected.size() ) return false;
+            for ( std::size_t index = 0; index < expected.size(); ++index )
+                if ( !close(tool.m_timingSegments[index].timestampSeconds,
+                            expected[index].timestampSeconds) ||
+                     !close(tool.m_timingSegments[index].bpm,
+                            expected[index].bpm) )
+                    return false;
+            return true;
+        };
+        reset();
+        // 120 到 125 后第一间隔是 9.768 秒，后两间隔仍为 3.2 和 4.2 秒。
+        // 若错误缩放整个后缀的全部秒差，第二与第三项的期望会失败。
+        bool passed = tool.applyTimingSegmentEdit(0, 0, 125);
+        passed &= same(
+            { { 0, 125 }, { 9.768, 150 }, { 12.968, 90 }, { 17.168, 180 } });
+        // 在同一手势中往返修改，最后恢复 120，验证基准不是上一帧的输出。
+        // 首次修改只需一次历史快照，后续输入不为每帧创建撤销项。
+        for ( int index = 0; index < 100; ++index )
+            tool.applyTimingSegmentEdit(0, 0, 121 + index % 8);
+        tool.applyTimingSegmentEdit(0, 0, 120);
+        passed &= same(original);
+        // 手势完整回到原值后先结束，不能留下一个内容相同的历史条目。
+        // 再次起笔才是新事务，后面的真实修改仍只形成一条撤销记录。
+        tool.finishMeasurementHistoryGesture();
+        passed &= !tool.canUndoMeasurement();
+        tool.applyTimingSegmentEdit(0, 0, 125);
+        // 手势期间可以反复改变值，提交只取最终有效状态。
+        // 拍位恢复不能用取整掩盖精度误差，所有时间都检查双精度尾差。
+        tool.finishMeasurementHistoryGesture();
+        passed &= tool.m_measurementUndoHistory.size() == 1;
+        // 复用原工具快捷键入口，证明联动没有另起独立撤销栈。
+        // 显示与编辑偏好不在历史内，撤销只能恢复测量内容。
+        tool.undoMeasurementFromShortcut();
+        passed &= same(original) && tool.m_followSubsequentSegments;
+        tool.redoMeasurementFromShortcut();
+        passed &= same(
+            { { 0, 125 }, { 9.768, 150 }, { 12.968, 90 }, { 17.168, 180 } });
+        reset();
+        // 修改中间段不会动之前的段；下一段仍隔 8 拍，之后仍隔 6.3 拍。
+        // 当前段起点是显式输入的 11 秒，不应为了保持旧位置而忽略用户操作。
+        // 100 BPM 下 8 拍需要 4.8 秒，接下来的 90 BPM 间隔仍是 4.2 秒。
+        passed &= tool.applyTimingSegmentEdit(1, 11, 100);
+        passed &= same({ { 0, 120 }, { 11, 100 }, { 15.8, 90 }, { 20, 180 } });
+        tool.finishMeasurementHistoryGesture();
+        reset();
+        // 段起点移动只改变时间锚点，完整后缀保持原来的各自 BPM。
+        // 允许范围内的负首拍不能被联动逻辑强制改为零。
+        // 小数拍跨度仍完整保留，三段后缀只需同步平移 0.2 秒。
+        passed &= tool.applyTimingSegmentEdit(0, -.2, 120);
+        passed &= same(
+            { { -.2, 120 }, { 9.975, 150 }, { 13.175, 90 }, { 17.375, 180 } });
+        tool.finishMeasurementHistoryGesture();
+        reset();
+        // 末段没有后缀，仍可正常编辑；之前各段不是联动目标。
+        // 这里同时改末段 BPM 和起点，以免空后缀被当成无效操作。
+        passed &= tool.applyTimingSegmentEdit(3, 20, 155);
+        passed &=
+            same({ { 0, 120 }, { 10.175, 150 }, { 13.375, 90 }, { 20, 155 } });
+        tool.finishMeasurementHistoryGesture();
+        reset();
+        // 极慢 BPM、反向越段和末端越界都必须拒绝整个候选，不部分写入。
+        passed &= !tool.applyTimingSegmentEdit(0, 0, 1) && same(original) &&
+                  tool.m_followEditRejected;
+        passed &= !tool.applyTimingSegmentEdit(1, -1, 150) && same(original);
+        // 原始最后一段恰好位于音频末端，向后移动任何正距离都应整体拒绝。
+        // 失败后尚未改变的数据也不应形成可撤销项。
+        // 时长属于本场景输入，调整它不重建或重新排序原始段列表。
+        // 边界拒绝之后再提交空手势，确认失败候选没有进入撤销历史。
+        tool.m_duration = 17.575;
+        passed &= !tool.applyTimingSegmentEdit(0, .1, 120) && same(original);
+        tool.finishMeasurementHistoryGesture();
+        passed &= !tool.canUndoMeasurement();
+        reset();
+        // 前段不是零秒时，加上 epsilon 后可能实际只剩略小于 epsilon 的间隔。
+        // 必须用真实秒差拒绝它，不能在稍后的去重中吞掉当前段。
+        tool.m_timingSegments = { { 10, 120 }, { 11, 150 }, { 12, 90 } };
+        tool.syncPrimaryTimingFieldsFromSegments();
+        passed &= !tool.applyTimingSegmentEdit(1, 10 + 1e-6, 150) &&
+                  close(tool.m_timingSegments[1].timestampSeconds, 11);
+        tool.finishMeasurementHistoryGesture();
+        reset();
+        // 失败候选不进入历史；撤销上一个成功编辑后也不该保留旧报错。
+        // 重做恢复的是完整有效后缀，提示状态不属于历史内容。
+        tool.applyTimingSegmentEdit(0, 0, 125);
+        tool.finishMeasurementHistoryGesture();
+        tool.applyTimingSegmentEdit(0, 0, 1);
+        tool.finishMeasurementHistoryGesture();
+        tool.undoMeasurementFromShortcut();
+        passed &= same(original) && !tool.m_followEditRejected;
+        reset();
+        // 极短间隔在提速后不能被归一化合并掉，失败时连段数都保持不变。
+        // 旧间隔大于归一化去重阈值，只有新的提速候选会使它退化。
+        // 拒绝可防止下一次 normalize 把合法旧段落静默合并。
+        tool.m_timingSegments = { { 0, .1 }, { .000002, .1 }, { 1, 120 } };
+        tool.syncPrimaryTimingFieldsFromSegments();
+        passed &= !tool.applyTimingSegmentEdit(0, 0, 10000) &&
+                  tool.m_timingSegments.size() == 3;
+        tool.finishMeasurementHistoryGesture();
+        reset();
+        // 兼容首拍控件可能先改临时字段，再调用正式提交；撤销仍应回到旧模型。
+        // 同时改变起点和 BPM，验证平移与拍长换算可以在同一候选中组合。
+        // 不能先提交某一个兼容字段，导致历史错误记录中间状态。
+        // 后续段落仍采用原拍差，兼容控件不能另建一套联动公式。
+        tool.m_bpm           = 125;
+        tool.m_firstBeatTime = .125;
+        tool.syncPrimaryTimingFieldsToSegments();
+        passed &= same(
+            { { .125, 125 }, { 9.893, 150 }, { 13.093, 90 }, { 17.293, 180 } });
+        tool.finishMeasurementHistoryGesture();
+        tool.undoMeasurementFromShortcut();
+        passed &= same(original);
+        reset();
+        // 关闭后保持原来的绝对秒行为，后续段时间不受首段 BPM 改变影响。
+        // 用户选择不联动时无需冻结新后缀，原来的单段修改语义保持。
+        // 这个对照特别检查后续时间，而不是只检查开关字段本身。
+        tool.m_followSubsequentSegments = false;
+        passed &= tool.applyTimingSegmentEdit(0, 0, 125);
+        passed &= same(
+            { { 0, 125 }, { 10.175, 150 }, { 13.375, 90 }, { 17.575, 180 } });
+        tool.clearMeasurementHistory();
+        // 恢复开关只恢复偏好，不对当前段落再执行一次联动。
+        // 清空历史已经消费未完成快照，后续测试可建立自己的手势起点。
+        // 换轨清理也会清除候选提示，不能让下一首音频继承旧边界错误。
+        tool.m_followEditRejected = true;
+        tool.clearMeasurementHistory();
+        passed &= !tool.m_followEditRejected;
+        tool.m_followSubsequentSegments = oldFollow;
+        tool.m_followEditRejected       = false;
+        if ( !passed )
+            XERROR("BPM fractional segment follow regression failed");
+        return passed;
+    }
+
+    /// @brief 用真实 ImGui 指针帧验证白拍线与红段起点都触发后续联动。
+    /// @note 仅绘制交互层，无 GPU、音频分析或谱面写入。
+    /// @details 鼠标按下、移动和释放分别提交给真实 ImGui 输入队列。
+    /// 两帧预热建立窗口树，不通过伪造私有拖动标志获得命中。
+    /// 白线用例覆盖 BPM 反算，红线用例覆盖下一段旧时间约束的解除。
+    /// 下游段落不在当前视野内，仍应收到同一次有效的联动修改。
+    static bool checkDesktopFollow(BpmMeasurementToolView& tool)
+    {
+        ImGui::CreateContext();
+        auto& io       = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.DisplaySize = { 1000, 600 };
+        io.DeltaTime   = 1.F / 60;
+        unsigned char* pixels{};
+        int            width{}, height{};
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        const auto oldProfile = std::string(Interaction::activeProfile().id());
+        Interaction::synchronizeProfile("classic-desktop", true);
+        Interaction::synchronizeProfile("classic-desktop", true);
+        tool.clearMeasurementHistory();
+        tool.m_duration             = 60;
+        tool.m_selectedAudioSyncKey = "desktop-follow";
+        tool.m_playbackRoute        = BpmPlaybackRoute::Audition;
+        tool.m_timingSegments = { { 0, 120 }, { 10.175, 150 }, { 13.375, 90 } };
+        tool.syncPrimaryTimingFieldsFromSegments();
+        tool.m_followSubsequentSegments = true;
+        /// @brief 送入物理输入后只调用生产图表手势入口。
+        // 图表视野为 0 到 4 秒，800 像素宽对应每秒 200 像素。
+        // 这些输入坐标来自固定测试画布，不读取生产拍线反推目标。
+        const auto frame = [&](bool down, float x) {
+            io.AddMousePosEvent(x, 250);
+            io.AddMouseButtonEvent(0, down);
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos({ 0, 0 });
+            ImGui::SetNextWindowSize({ 1000, 600 });
+            ImGui::Begin("BpmDesktopFollow");
+            tool.handleBeatMarkerDrag(
+                { 100, 100 }, { 900, 400 }, 0, 4, true, 1);
+            // 与 update 的结束边界一致，抬手后整笔只记一条历史。
+            if ( !down && !tool.m_isBeatMarkerDragging )
+                tool.finishMeasurementHistoryGesture();
+            ImGui::End();
+            ImGui::Render();
+        };
+        // 空闲帧建立 hover 后才按下，不能借首帧窗口初始化触发手势。
+        // 按下时拍线仍在原处，只有下一帧移动才真正修改 BPM。
+        frame(false, 200);
+        frame(false, 200);
+        frame(true, 200);
+        frame(true, 220);
+        frame(false, 220);
+        // 第一拍从 .5 秒变为 .6 秒，原 20.35 拍边界应移到 12.21 秒。
+        bool passed = close(tool.m_bpm, 100) &&
+                      close(tool.m_timingSegments[1].timestampSeconds, 12.21) &&
+                      close(tool.m_timingSegments[2].timestampSeconds, 15.41) &&
+                      tool.m_measurementUndoHistory.size() == 1;
+        tool.undoMeasurementFromShortcut();
+        passed &= close(tool.m_timingSegments[1].timestampSeconds, 10.175);
+        // 红线拖动需要越过下一段旧位置：联动时旧边界不再限制起点。
+        tool.clearMeasurementHistory();
+        tool.m_timingSegments = { { .5, 120 }, { 1.5, 150 }, { 2.3, 90 } };
+        tool.syncPrimaryTimingFieldsFromSegments();
+        // 当前段的新起点是 2 秒，已经超过下一段原来的 1.5 秒。
+        // 如果仍用旧的单段边界夹住拖动，三个期望都会明显失败。
+        // 后续 150 BPM 的间隔继续是原来的 0.8 秒，不受前段拍长影响。
+        frame(false, 200);
+        frame(true, 200);
+        frame(true, 500);
+        frame(false, 500);
+        passed &= close(tool.m_timingSegments[0].timestampSeconds, 2) &&
+                  close(tool.m_timingSegments[1].timestampSeconds, 3) &&
+                  close(tool.m_timingSegments[2].timestampSeconds, 3.8);
+        // 捕获已经通过抬手正常结束，清理不依赖强制重置拖动私有标志。
+        // 先恢复输入方案，再销毁上下文，避免新方案借用失效的输入状态。
+        tool.m_followSubsequentSegments = false;
+        tool.clearMeasurementHistory();
+        Interaction::synchronizeProfile(oldProfile, true);
+        Interaction::synchronizeProfile(oldProfile, true);
+        ImGui::DestroyContext();
+        if ( !passed ) XERROR("BPM desktop follow drag regression failed");
+        return passed;
+    }
+
     /// @brief 阻止测试析构把临时显示偏好保存到个人配置。
     /// @details 工具测试通过真实绘制入口会设置偏好脏标记。
     /// 单纯恢复 settings 数值不能清掉对象内部的延迟保存计时器。
@@ -775,7 +1036,8 @@ int main()
     MMM::UI::BpmMeasurementToolView tool("BpmMeasurementHistoryTest");
     MMM::Config::BpmMeasurementToolPreferences preference;
     // 启用值必须真实参与 JSON 编码与恢复，而非依靠默认构造。
-    preference.wheelSnapEnabled = true;
+    preference.wheelSnapEnabled         = true;
+    preference.followSubsequentSegments = true;
     // 新开关跨启动保留，而旧配置没有该字段时仍默认关闭。
     const bool persisted =
         nlohmann::json(preference)
@@ -788,6 +1050,18 @@ int main()
     // 各职责顺序执行，失败时不继续制造其他历史状态。
     const bool passed =
         persisted && !legacy &&
+        // 新字段损坏时只回退这个开关，其余偏好照常读取。
+        !nlohmann::json{ { "followSubsequentSegments", "invalid" } }
+             .get<MMM::Config::BpmMeasurementToolPreferences>()
+             .followSubsequentSegments &&
+        nlohmann::json(preference)
+            .get<MMM::Config::BpmMeasurementToolPreferences>()
+            .followSubsequentSegments &&
+        !nlohmann::json::object()
+             .get<MMM::Config::BpmMeasurementToolPreferences>()
+             .followSubsequentSegments &&
+        MMM::UI::BpmMeasurementHistoryTestAccess::checkSegmentFollow(tool) &&
+        MMM::UI::BpmMeasurementHistoryTestAccess::checkDesktopFollow(tool) &&
         MMM::UI::BpmMeasurementHistoryTestAccess::checkHistory(tool) &&
         MMM::UI::BpmMeasurementHistoryTestAccess::checkWheel(tool) &&
         MMM::UI::BpmMeasurementHistoryTestAccess::checkPlaybackCursor(tool) &&

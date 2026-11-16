@@ -1502,6 +1502,14 @@ void BpmMeasurementToolView::syncPrimaryTimingFieldsFromSegments()
 /// @note 供仍使用单段控件的输入路径过渡到多段模型。
 void BpmMeasurementToolView::syncPrimaryTimingFieldsToSegments()
 {
+    if ( m_followSubsequentSegments && !m_timingSegments.empty() ) {
+        // 单段兼容控件只提出候选，后续时间由统一入口按完整拍位重算。
+        // 拒绝越界候选后也恢复兼容字段，数值控件不能显示未应用的 BPM。
+        applyTimingSegmentEdit(0, m_firstBeatTime, m_bpm);
+        syncPrimaryTimingFieldsFromSegments();
+        return;
+    }
+
     if ( m_timingSegments.empty() ) {
         // 旧控件可能先于段落面板修改字段，此时创建首段承接修改。
         m_timingSegments.push_back({ m_firstBeatTime, m_bpm });
@@ -1970,7 +1978,7 @@ void BpmMeasurementToolView::renderControlPanel(UIManager* sourceManager)
 /// @brief 绘制 BPM 段落列表和应用入口。
 /// @warning UI 热路径：每帧遍历当前段落；删除会中止本帧遍历以避免引用失效。
 /// @details 第一段作为基准不可删除；新增段继承当前视野处的 BPM；
-/// 所有编辑在本帧末尾统一归一化并重置节拍器。应用和向导导出共享
+/// 普通编辑在帧末归一化，联动编辑由统一入口校验有序后缀并重置节拍器。应用和向导导出共享
 /// 同一个标准化 Timing 转换入口。
 /// 表格仅改变布局，不替换段落的数据结构或拖动精度。
 /// 时间与 BPM 的最小宽度随当前字体变化，保证主题大字号也能读完整数值。
@@ -1980,6 +1988,19 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
 {
     ImGui::Spacing();
     ImGui::SeparatorText(TR("ui.tools.bpm_measure.segments").data());
+    // 只改变工具偏好，勾选本身不吸附、移动或改写现有段落。
+    if ( FeedbackCheckbox(TR("ui.tools.bpm_measure.follow_subsequent").data(),
+                          &m_followSubsequentSegments) ) {
+        m_followEditRejected = false;
+        markUserPreferencesChanged(true, false);
+    }
+    if ( m_followSubsequentSegments )
+        ImGui::TextWrapped(
+            "%s", TR("ui.tools.bpm_measure.follow_subsequent_hint").data());
+    if ( m_followEditRejected )
+        ImGui::TextWrapped(
+            "%s", TR("ui.tools.bpm_measure.follow_subsequent_rejected").data());
+
     // 关联谱面只在明确请求时读取，普通帧不为显示按钮扫描项目或等待会话锁。
     // 分析完成前禁止导入，避免稍后交付的自动测量或音频标记覆盖导入结果。
     ImGui::BeginDisabled(m_selectedAudioTrackId.empty() ||
@@ -2067,9 +2088,8 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
                          static_cast<float>(
                              std::max(0.001, playbackCanvasDuration())),
                          "%.4f") ) {
-                    // 拖动期间暂存原始值，循环结束后统一排序和限幅。
-                    segment.timestampSeconds = time;
-                    changed                  = true;
+                    // 统一入口按开关决定独立暂存或校验完整联动后缀。
+                    changed |= applyTimingSegmentEdit(i, time, segment.bpm);
                 }
                 if ( ImGui::IsItemHovered() ) {
                     Utils::renderTooltip(
@@ -2085,9 +2105,9 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
                          static_cast<float>(::MMM::MIN_NORMALIZED_BPM),
                          static_cast<float>(::MMM::MAX_NORMALIZED_BPM),
                          "%.3f") ) {
-                    // BPM 的最终公共范围由 normalizeTimingSegments 统一施加。
-                    segment.bpm = bpm;
-                    changed     = true;
+                    // 统一入口施加公共 BPM 范围，联动候选失败则保持原值。
+                    changed |= applyTimingSegmentEdit(
+                        i, segment.timestampSeconds, bpm);
                 }
                 if ( ImGui::IsItemHovered() ) {
                     Utils::renderTooltip(
@@ -2125,8 +2145,13 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
     }
 
     if ( changed ) {
-        // 批量提交本帧编辑后再重排，并重置依赖段边界的节拍器游标。
-        normalizeTimingSegments();
+        // 联动入口已验证完整有序后缀，避免持续拖动时再次复制、排序或量化它。
+        // 删除一段也保持原有顺序；新增段落仍走按钮自身的低频归一化入口。
+        // 关闭联动时保留原来的单段排序和限幅行为。
+        if ( m_followSubsequentSegments )
+            syncPrimaryTimingFieldsFromSegments();
+        else
+            normalizeTimingSegments();
         resetMetronomeScheduler(m_viewCenter);
     }
 
@@ -4278,7 +4303,11 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(
                           .timestampSeconds +
                       1e-4;
         double maxSegmentStart = canvasDuration;
-        if ( m_draggedBeatSegmentIndex + 1 < m_timingSegments.size() ) {
+        // 关闭时保留原相邻段约束；开启时下一段旧秒位置会随本段重排。
+        // 整条后缀的末端边界交给统一编辑入口校验，不能先夹住单独下一段。
+        // 上一段仍固定，因此前向最小间隔继续沿用旧规则。
+        if ( !m_followSubsequentSegments &&
+             m_draggedBeatSegmentIndex + 1 < m_timingSegments.size() ) {
             // 非末段同样不能越过下一段，保留微小严格递增间隔。
             maxSegmentStart =
                 std::min(maxSegmentStart,
@@ -4293,15 +4322,16 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(
             targetMarkerTime, minSegmentStart, maxSegmentStart);
         const double clampedStart =
             std::clamp(snappedStart, minSegmentStart, maxSegmentStart);
-        segment.timestampSeconds = clampedStart;
-        // 第一段变化需要同步兼容字段，任意段变化都重置节拍器网格。
-        syncPrimaryTimingFieldsFromSegments();
-        resetMetronomeScheduler(clampedStart);
-        drawMarkerGlow(clampedStart, BeatMarkerDragMode::SegmentStart);
+        if ( applyTimingSegmentEdit(
+                 m_draggedBeatSegmentIndex, clampedStart, segment.bpm) )
+            resetMetronomeScheduler(segment.timestampSeconds);
+        // 提示和高亮使用已接受的位置，越界候选不能伪装成应用成功。
+        const double actualStart = segment.timestampSeconds;
+        drawMarkerGlow(actualStart, BeatMarkerDragMode::SegmentStart);
 
         const std::string tooltip =
             fmt::format("{} / {:.3f} BPM",
-                        MMM::UI::Utils::formatCanvasTime(clampedStart),
+                        MMM::UI::Utils::formatCanvasTime(actualStart),
                         segment.bpm);
         ImGui::SetTooltip("%s", tooltip.c_str());
         return;
@@ -4322,15 +4352,21 @@ void BpmMeasurementToolView::handleBeatMarkerDrag(
                               static_cast<double>(m_draggedBeatIndex);
     if ( beatLength > 1e-6 && std::isfinite(beatLength) ) {
         // 归一化后的 BPM 回写段模型，并同步首段兼容字段。
-        segment.bpm = ::MMM::normalizeBpmValue(60.0 / beatLength);
-        syncPrimaryTimingFieldsFromSegments();
-        resetMetronomeScheduler(clampedTargetTime);
+        if ( applyTimingSegmentEdit(m_draggedBeatSegmentIndex,
+                                    segment.timestampSeconds,
+                                    60.0 / beatLength) )
+            resetMetronomeScheduler(clampedTargetTime);
     }
-    drawMarkerGlow(clampedTargetTime, BeatMarkerDragMode::BeatLength);
+    // BPM 限幅或候选拒绝后，只高亮实际接受的拍位。
+    // 不能把鼠标候选画成已经提交的新拍线，给用户错误的成功反馈。
+    const double actualBeatTime =
+        segment.timestampSeconds +
+        static_cast<double>(m_draggedBeatIndex) * (60.0 / segment.bpm);
+    drawMarkerGlow(actualBeatTime, BeatMarkerDragMode::BeatLength);
 
     const std::string tooltip =
         fmt::format("{} / {:.3f} BPM",
-                    MMM::UI::Utils::formatCanvasTime(clampedTargetTime),
+                    MMM::UI::Utils::formatCanvasTime(actualBeatTime),
                     segment.bpm);
     ImGui::SetTooltip("%s", tooltip.c_str());
 }
@@ -4974,8 +5010,9 @@ void BpmMeasurementToolView::restoreUserPreferences()
                                  4.0,
                                  1000.0);
     // 分拍数是整数，不需要有限值检查。
-    m_beatDivisor      = std::clamp(preferences.beatDivisor, 1, 64);
-    m_wheelSnapEnabled = preferences.wheelSnapEnabled;
+    m_beatDivisor              = std::clamp(preferences.beatDivisor, 1, 64);
+    m_wheelSnapEnabled         = preferences.wheelSnapEnabled;
+    m_followSubsequentSegments = preferences.followSubsequentSegments;
     // 视图偏好不能恢复到音频零点前，实际时长稍后再进一步钳制。
     m_viewCenter = std::max(0.0,
                             std::isfinite(preferences.viewCenterSeconds)
@@ -5007,6 +5044,7 @@ void BpmMeasurementToolView::markUserPreferencesChanged(
         preferences.markerWidthMs    = std::clamp(m_markerWidthMs, 4.0, 1000.0);
         preferences.beatDivisor      = std::clamp(m_beatDivisor, 1, 64);
         preferences.wheelSnapEnabled = m_wheelSnapEnabled;
+        preferences.followSubsequentSegments = m_followSubsequentSegments;
     }
     if ( viewChanged ) {
         // 只持久化非负中心和受支持半宽，不记录临时拖动标志。

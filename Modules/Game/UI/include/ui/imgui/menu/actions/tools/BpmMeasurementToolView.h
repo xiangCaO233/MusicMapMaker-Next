@@ -528,6 +528,11 @@ private:
 
     /// @brief 将兼容旧输入路径的字段写回第一段。
     void syncPrimaryTimingFieldsToSegments();
+    /// @brief 提交单段编辑；可选地按手势起点的完整拍间隔联动后续起点。
+    /// @return 有效且数据变化时为真，越界候选不部分写入。
+    /// @warning 手势首次编辑冻结快照；后续输入复用它，不重复分配、排序或阻塞。
+    bool applyTimingSegmentEdit(std::size_t index, double timestamp,
+                                double bpm);
 
     /// @brief 查找指定时间所在的 BPM 段落索引。
     /// @param timeSeconds 查询时间，单位为秒。
@@ -839,6 +844,10 @@ private:
 
     /// @brief 当前 BPM 工具可编辑的多段 BPM 列表。
     std::vector<BpmTimingSegment> m_timingSegments;
+    /// @brief 段落联动是用户编辑偏好，不属于谱面或本地撤销数据。
+    bool m_followSubsequentSegments{ false };
+    /// @brief 无法保留完整后缀时展示原因，保留上一份有效数据。
+    bool m_followEditRejected{ false };
 
     /// @brief 已提交的用户手工操作历史，尾部为最近一次。
     std::vector<MeasurementHistoryEntry> m_measurementUndoHistory;

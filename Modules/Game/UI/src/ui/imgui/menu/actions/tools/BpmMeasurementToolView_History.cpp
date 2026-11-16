@@ -25,6 +25,14 @@ BpmMeasurementToolView::captureMeasurementHistorySnapshot() const
     snapshot.bpm               = m_bpm;
     snapshot.beatLengthSeconds = m_beatLengthSeconds;
     snapshot.firstBeatTime     = m_firstBeatTime;
+    // 数值控件可能刚改兼容字段才进入统一编辑入口，以尚未提交的段模型为准。
+    // 首次按键就变化时，撤销也必须恢复旧 BPM，而非输入框中的新候选。
+    if ( !m_timingSegments.empty() ) {
+        snapshot.firstBeatTime     = m_timingSegments.front().timestampSeconds;
+        snapshot.bpm               = m_timingSegments.front().bpm;
+        snapshot.beatLengthSeconds = 60.0 / snapshot.bpm;
+    }
+
     return snapshot;
 }
 
@@ -84,6 +92,8 @@ void BpmMeasurementToolView::clearMeasurementHistory()
     m_measurementGestureBefore.reset();
     m_measurementUndoHistory.clear();
     m_measurementRedoHistory.clear();
+    // 音轨身份变化后，上一轨的候选越界提示已经失效。
+    m_followEditRejected = false;
 }
 
 /// @brief 恢复 BPM 段落，保留用户当前视野、播放位置、倍速与显示偏好。
@@ -103,6 +113,8 @@ void BpmMeasurementToolView::restoreMeasurementHistorySnapshot(
     // BPM 改变后重建节拍调度基线，不把播放头跳回编辑前的位置。
     resetMetronomeScheduler(m_viewCenter);
     m_restoringMeasurementHistory = false;
+    // 撤销或重做恢复完整有效模型，不继续显示此前候选的拒绝原因。
+    m_followEditRejected = false;
 }
 
 /// @brief 查询是否存在当前音轨可撤销的测量操作。
