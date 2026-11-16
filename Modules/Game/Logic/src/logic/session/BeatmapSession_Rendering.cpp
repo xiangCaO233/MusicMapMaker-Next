@@ -763,6 +763,8 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         // 前缀最大结束时间支持查找从窗口前开始、但仍延伸到窗口内的长物件。
         // 它与排序实体列表必须在同一次重建中更新。
         m_ctx->sortedNoteMaxEndPrefix.clear();
+        // 与时间索引同次重建，连续框选只读取标量，不另行扫描全谱。
+        m_ctx->maxSelectionNoteDuration = 0.0;
         m_ctx->sortedNoteMaxEndPrefix.reserve(m_ctx->sortedNoteEntities.size());
         // 统计变化不一定影响密度，按调用需求分别重建。
         // 重用容量，避免每次编辑都丢弃此前分配。
@@ -806,7 +808,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             }
             // 保存前缀最大值而非当前实体结束值。
             // 长物件位于更早位置时，后续短物件不能把可见候选范围缩短。
-            maxEndTime = std::max(maxEndTime, noteEnd);
+            maxEndTime                      = std::max(maxEndTime, noteEnd);
+            m_ctx->maxSelectionNoteDuration = std::max(
+                m_ctx->maxSelectionNoteDuration, noteEnd - note.m_timestamp);
             m_ctx->sortedNoteMaxEndPrefix.push_back(maxEndTime);
         }
 

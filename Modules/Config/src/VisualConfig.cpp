@@ -1,4 +1,5 @@
 #include "config/VisualConfig.h"
+#include "config/visual/InteractionHitboxConfig.h"
 
 #include <algorithm>
 #include <array>
@@ -1021,6 +1022,17 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
         // 音符缩放、标签和填充模式描述物件的基础呈现。
         { "noteScaleX", config.noteScaleX },
         { "noteScaleY", config.noteScaleY },
+        { "notePartScales",
+          [&config] {
+              nlohmann::json parts = nlohmann::json::object();
+              // 只保存独立的非头部值，头部继续沿用旧字段。
+              for ( std::size_t i = 0; i < config.notePartScales.size(); ++i ) {
+                  const auto& value             = config.notePartScales[i];
+                  parts[NOTE_PART_SIZE_KEYS[i]] = { { "x", value.x },
+                                                    { "y", value.y } };
+              }
+              return parts;
+          }() },
         { "showBoundSampleLabels", config.showBoundSampleLabels },
         { "noteFillMode", config.noteFillMode },
         // 使用稳定文本而非枚举序值保存布局选项，便于旧配置缺省与检查。
@@ -1073,6 +1085,16 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
         { "interactionHitboxScaleX", config.interactionHitboxScaleX },
         { "interactionHitboxScaleY", config.interactionHitboxScaleY }
     };
+    // 具名部件键不依赖枚举序号，后续增加部件不会错读已有配置。
+    auto& components = j["interactionHitboxComponents"] =
+        nlohmann::json::object();
+    // 保存完整部件表，保证改回单位倍率也能覆盖文件中的旧自定义值。
+    // 序列化只在保存和布局切换执行，不参与逐框拾取计算。
+    for ( std::size_t i = 0; i < HITBOX_COMPONENT_KEYS.size(); ++i ) {
+        const auto& scale = config.interactionHitboxComponents[i];
+        components[HITBOX_COMPONENT_KEYS[i]] = { { "x", scale.x },
+                                                 { "y", scale.y } };
+    }
 }
 
 /// @brief 从 JSON 恢复完整视觉配置并执行版本迁移与范围校正。
@@ -1131,6 +1153,28 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
     // 音符缩放和标签默认从类型实例读取，避免复制头文件默认常量。
     config.noteScaleX = j.value("noteScaleX", VisualConfig{}.noteScaleX);
     config.noteScaleY = j.value("noteScaleY", VisualConfig{}.noteScaleY);
+    // 老配置只在读取时复制旧头部尺寸，迁移后各部件不再动态继承。
+    // 只有读取边界负责兼容，日常编辑与渲染不得重新执行继承。
+    // 即便某部件尚未调整，也必须保存它迁移后的确定尺寸。
+    // 手工配置缺少某类时按旧值补齐，不影响其他合法类别。
+    // 只有读取边界负责兼容，日常编辑与渲染不得重新执行继承。
+    // 缺少某类时只补齐该类，其他合法覆盖不被丢弃。
+    // 这里产生确定值，而不是维持随 Head 更新的关联关系。
+    // 数组中的 X/Y 与旧头部值分别对应，不在迁移时改变外观比例。
+    // 再次保存会写出完整类别，后续读取不依赖当前默认值。
+    // 这种迁移不修改谱面、皮肤或预设以外的资源。
+    config.notePartScales.fill({ config.noteScaleX, config.noteScaleY });
+    if ( const auto parts = j.find("notePartScales");
+         parts != j.end() && parts->is_object() ) {
+        for ( std::size_t i = 0; i < config.notePartScales.size(); ++i ) {
+            const auto item = parts->find(NOTE_PART_SIZE_KEYS[i]);
+            if ( item == parts->end() || !item->is_object() ) continue;
+            // 单个字段损坏不丢弃另一轴，也不回头修改头部。
+            auto& scale = config.notePartScales[i];
+            scale.x     = readObservationValue(*item, "x", scale.x, .5F, 3.F);
+            scale.y     = readObservationValue(*item, "y", scale.y, .5F, 3.F);
+        }
+    }
     config.showBoundSampleLabels =
         j.value("showBoundSampleLabels", VisualConfig{}.showBoundSampleLabels);
     config.noteFillMode = j.value("noteFillMode", BackgroundFillMode::Stretch);
@@ -1295,6 +1339,21 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
         std::clamp(config.interactionHitboxScaleY,
                    VisualConfig::MIN_INTERACTION_HITBOX_SCALE,
                    VisualConfig::MAX_INTERACTION_HITBOX_SCALE);
+    // 缺失的新字段使用单位倍率，完整继承旧文件中的全局范围。
+    // 不让部分或损坏的部件配置影响其他部件，逐轴独立校验类型和有限性。
+    config.interactionHitboxComponents = {};
+    const auto components              = j.find("interactionHitboxComponents");
+    if ( components != j.end() && components->is_object() ) {
+        for ( std::size_t i = 0; i < HITBOX_COMPONENT_KEYS.size(); ++i ) {
+            const auto value = components->find(HITBOX_COMPONENT_KEYS[i]);
+            if ( value == components->end() || !value->is_object() ) continue;
+            auto& scale = config.interactionHitboxComponents[i];
+            scale.x     = readObservationValue(
+                *value, "x", 1.0F, MIN_HITBOX_SCALE, MAX_HITBOX_SCALE);
+            scale.y = readObservationValue(
+                *value, "y", 1.0F, MIN_HITBOX_SCALE, MAX_HITBOX_SCALE);
+        }
+    }
 }
 
 }  // namespace MMM::Config

@@ -1,3 +1,4 @@
+#include "common/render/NotePartSizing.h"
 #include "common/render/RenderSnapshot.h"
 #include "common/render/TextureID.h"
 #include "config/EditorConfig.h"
@@ -22,6 +23,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <glm/common.hpp>
 #include <iterator>
 #include <limits>
 #include <string>
@@ -61,9 +63,17 @@ const std::string DRAFT_NOTE_ARROW_COLOR_KEY{ "draft_notes.note_flick_arrow" };
 /// @note 连接体的持续时间或轨差不属于纹理尺寸，调用方须另行保留跨度。
 /// @warning 逐候选命中生成热路径：只查询现有纹理记录，不加载资源或分配内存。
 static glm::vec2 scaledNotePartSize(const RenderSnapshot& snapshot,
-                                    TextureID texture, float baseW, float baseH)
+                                    TextureID texture, float baseW, float baseH,
+                                    const Config::VisualConfig& visual)
 {
-    glm::vec2  size{ baseW, baseH };
+    // 换算独立部件基准后，再应用皮肤图集比例与皮肤倍率。
+    // 头部基准在调用方按轨宽建立，这里只替换尺寸因子，不修改中心坐标。
+    // 因此放大尾部不会把起点移到相邻轨道，也不会改变持续时间。
+    // 独立尺寸与皮肤资源倍率分属两层，不能把二者合并写回配置。
+    // 缺失纹理的后备尺寸也必须先解除 Head 的耦合。
+    const auto ratio = Common::Render::notePartSizeRatio(
+        visual, Common::Render::noteSizePart(texture));
+    glm::vec2  size = glm::vec2(baseW, baseH) * ratio;
     const auto base =
         snapshot.uvMap.find(static_cast<uint32_t>(TextureID::Note));
     const auto part = snapshot.uvMap.find(static_cast<uint32_t>(texture));
@@ -108,9 +118,10 @@ static float notePartVerticalShift(const RenderSnapshot& snapshot,
 /// @note 取最大值只扩大候选窗口，不改变拍线、时间索引或实际裁剪区。
 /// @warning 每个绘制阶段只计算一次，固定数量纹理查询，不扫描音符或纹理集合。
 static float noteVisualPaddingScale(const RenderSnapshot&       snapshot,
-                                    Config::NoteTexturePosition position)
+                                    const Config::VisualConfig& visual)
 {
-    float scale = 1.0F;
+    const auto position = visual.noteTexturePosition;
+    float      scale    = 1.0F;
     // 横向连接体的倍率会改变厚度，其余这些纹理都是独立的中心贴片。
     for ( const auto texture : { TextureID::Note,
                                  TextureID::HoldHead,
@@ -119,11 +130,27 @@ static float noteVisualPaddingScale(const RenderSnapshot&       snapshot,
                                  TextureID::FlickArrowLeft,
                                  TextureID::FlickArrowRight,
                                  TextureID::HoldBodyHorizontal } ) {
-        scale = std::max(scale,
-                         scaledNotePartSize(snapshot, texture, 1.0F, 1.0F).y *
-                             (1.0F + 2.0F * std::abs(noteTextureVerticalOffset(
-                                                texture, position))));
+        scale = std::max(
+            scale,
+            scaledNotePartSize(snapshot, texture, 1.0F, 1.0F, visual).y *
+                (1.0F + 2.0F * std::abs(noteTextureVerticalOffset(texture,
+                                                                  position))));
     }
+    // 折线横段与独立滑键可使用不同厚度，粗裁剪取二者的保守并集。
+    // 两种 Body 可以共享 UV，但横截面配置不同，必须都进入余量计算。
+    // 这里只计算保守包络，不借由扩大余量改变真实渲染坐标。
+    // 薄 Body 的最小像素限制仍留在原绘制阶段。
+    // 该扫描只覆盖固定类型，不查询实体或分配资源。
+    const auto polylineRatio = Common::Render::notePartSizeRatio(
+        visual, Config::NoteSizePart::PolylineBody);
+    const auto flickRatio = Common::Render::notePartSizeRatio(
+        visual, Config::NoteSizePart::FlickBody);
+    scale =
+        std::max(scale,
+                 scaledNotePartSize(
+                     snapshot, TextureID::HoldBodyHorizontal, 1.F, 1.F, visual)
+                         .y *
+                     polylineRatio.y / flickRatio.y);
     return scale;
 }
 
@@ -439,8 +466,7 @@ void NoteRenderSystem::renderNotes(
         topY,
         bottomY,
         renderScaleY,
-        std::max(ctx.noteH * noteVisualPaddingScale(
-                                 *snapshot, config.visual.noteTexturePosition),
+        std::max(ctx.noteH * noteVisualPaddingScale(*snapshot, config.visual),
                  1.0f),
         snapshot->isPlaying
             ? std::abs(snapshot->playbackSpeed) * MAX_UI_INTERPOLATION_SECONDS
@@ -1528,7 +1554,7 @@ void NoteRenderSystem::generateNoteHitboxes(
     const CanvasLaneProjection* laneProjection)
 {
     const float visualPaddingScale =
-        noteVisualPaddingScale(*snapshot, config.visual.noteTexturePosition);
+        noteVisualPaddingScale(*snapshot, config.visual);
     // 两遍命中共享同一皮肤余量；局部轨宽只在候选内换算，不重新扫描资源。
     // 第一遍：连接体，优先级较低。
     for ( auto entity : noteEntities ) {
@@ -1626,6 +1652,9 @@ void NoteRenderSystem::generateNoteHitboxes(
                              snapshot->uvMap.at(uint32_t(TextureID::Note)).w);
                 }
                 // 横向连接体仅缩放厚度，不改变两个轨道中心之间的编辑跨度。
+                drawH *= Common::Render::notePartSizeRatio(
+                             config.visual, Config::NoteSizePart::FlickBody)
+                             .y;
                 drawH = std::max(drawH, 1.5F) *
                         skinTextureScale(TextureID::HoldBodyHorizontal);
 
@@ -1640,12 +1669,15 @@ void NoteRenderSystem::generateNoteHitboxes(
                         static_cast<uint32_t>(TextureID::HoldHead))
                         ? TextureID::HoldHead
                         : TextureID::Note;
-                const float headShift = notePartVerticalShift(
-                    *snapshot,
-                    headTexture,
-                    scaledNotePartSize(
-                        *snapshot, headTexture, ctx.noteW, ctx.noteH),
-                    config.visual);
+                const float headShift =
+                    notePartVerticalShift(*snapshot,
+                                          headTexture,
+                                          scaledNotePartSize(*snapshot,
+                                                             headTexture,
+                                                             ctx.noteW,
+                                                             ctx.noteH,
+                                                             config.visual),
+                                          config.visual);
                 // 横向连接与箭头共用起点中心，不把资源高度差加入命中包络。
                 // 方向只交换左右端点，屏幕纵坐标和最终厚度始终一致。
                 // 尺寸仍由主体纹理倍率决定，不扩大到箭头的外观高度。
@@ -1664,6 +1696,10 @@ void NoteRenderSystem::generateNoteHitboxes(
                                                bodyTop,
                                                drawW,
                                                bodyHeight });
+                snapshot->hitboxes.back().renderSizePart =
+                    (note.m_type == ::MMM::NoteType::FLICK
+                         ? Config::NoteSizePart::FlickBody
+                         : Config::NoteSizePart::HoldBody);
             } else if ( note.m_type == ::MMM::NoteType::HOLD &&
                         std::abs(visualH) > ctx.noteH * 0.1f ) {
                 // Hold 身体宽度跟随竖向主体纹理的相对宽度，不直接使用整轨宽度。
@@ -1680,6 +1716,9 @@ void NoteRenderSystem::generateNoteHitboxes(
                     bodyW = ctx.noteW * (itBody->second.z / baseWRatio);
                 }
                 // 竖向连接体只放大横截面，显示端点另按点贴图中心定位。
+                bodyW *= Common::Render::notePartSizeRatio(
+                             config.visual, Config::NoteSizePart::HoldBody)
+                             .x;
                 bodyW *= skinTextureScale(TextureID::HoldBodyVertical);
 
                 float bodyX = leftX + note.m_trackIndex * singleTrackW +
@@ -1702,12 +1741,14 @@ void NoteRenderSystem::generateNoteHitboxes(
                         : TextureID::Note;
                 const float bodyHeadY =
                     screenY +
-                    notePartVerticalShift(
-                        *snapshot,
-                        headTexture,
-                        scaledNotePartSize(
-                            *snapshot, headTexture, ctx.noteW, ctx.noteH),
-                        config.visual);
+                    notePartVerticalShift(*snapshot,
+                                          headTexture,
+                                          scaledNotePartSize(*snapshot,
+                                                             headTexture,
+                                                             ctx.noteW,
+                                                             ctx.noteH,
+                                                             config.visual),
+                                          config.visual);
                 const float bodyEndY =
                     screenY + visualH +
                     notePartVerticalShift(*snapshot,
@@ -1715,7 +1756,8 @@ void NoteRenderSystem::generateNoteHitboxes(
                                           scaledNotePartSize(*snapshot,
                                                              TextureID::HoldEnd,
                                                              ctx.noteW,
-                                                             ctx.noteH),
+                                                             ctx.noteH,
+                                                             config.visual),
                                           config.visual);
                 // 正向与反向滚动使用同一包络公式，尺寸差不会改变根实体身份。
                 float bodyY = std::min(bodyHeadY, bodyEndY);
@@ -1728,6 +1770,10 @@ void NoteRenderSystem::generateNoteHitboxes(
                                                bodyY,
                                                bodyW,
                                                bodyH });
+                snapshot->hitboxes.back().renderSizePart =
+                    (note.m_type == ::MMM::NoteType::FLICK
+                         ? Config::NoteSizePart::FlickBody
+                         : Config::NoteSizePart::HoldBody);
             }
         }
     }
@@ -1784,8 +1830,8 @@ void NoteRenderSystem::generateNoteHitboxes(
                         static_cast<uint32_t>(TextureID::HoldHead))
                 ? TextureID::HoldHead
                 : TextureID::Note;
-        const auto headSize =
-            scaledNotePartSize(*snapshot, headTexture, ctx.noteW, ctx.noteH);
+        const auto headSize = scaledNotePartSize(
+            *snapshot, headTexture, ctx.noteW, ctx.noteH, config.visual);
         const float headShift = notePartVerticalShift(
             *snapshot, headTexture, headSize, config.visual);
         const float headX =
@@ -1836,6 +1882,19 @@ void NoteRenderSystem::generateNoteHitboxes(
                 }
                 const float arrowScale = skinTextureScale(arrowId);
                 // 左右箭头可以配置不同倍率，中心仍固定在滑动落点的轨道中线。
+                // 箭头可以与起点采用完全不同的两轴尺寸。
+                // 自身缩放只改变终轨中心两侧的视觉范围，终轨身份不变。
+                // 后续拾取框读取同一尺寸，不能继续复用起点的宽高。
+                // 左右方向共享尺寸项，资源仍可分别设置皮肤倍率。
+                // 先换用户部件尺寸，再乘皮肤自身倍率，两者不能重复计入。
+                // 命中与实际箭头绘制共用终轨基准，支持跨分区不同轨宽。
+                // 放大箭头不改变方向，方向仍由 dtrack 的符号决定。
+                // 横向连接体保持原来的起终中心，不跟着箭头宽度延伸。
+                // 拾取框稍后发布独立身份，让 UI 无需查询音符组件。
+                const auto arrowRatio = Common::Render::notePartSizeRatio(
+                    config.visual, Config::NoteSizePart::FlickTail);
+                arrowW *= arrowRatio.x;
+                arrowH *= arrowRatio.y;
                 arrowW *= arrowScale;
                 arrowH *= arrowScale;
 
@@ -1854,6 +1913,8 @@ void NoteRenderSystem::generateNoteHitboxes(
                       screenY - arrowH * 0.5f + arrowShift,
                       arrowW,
                       arrowH });
+                snapshot->hitboxes.back().renderSizePart =
+                    Config::NoteSizePart::FlickTail;
             } else if ( note.m_type == ::MMM::NoteType::HOLD ) {
                 auto it = snapshot->uvMap.find(
                     static_cast<uint32_t>(TextureID::HoldEnd));
@@ -1871,6 +1932,14 @@ void NoteRenderSystem::generateNoteHitboxes(
                 }
                 const float endScale = skinTextureScale(TextureID::HoldEnd);
                 // 尾部倍率不能反向修改 duration，只让尾部手柄围绕末端中心扩展。
+                // 尾部形状以原时刻居中扩展，不把视觉高度加到 note duration。
+                // 尺寸变大后，连接体仍接到尾部的最终视觉中心。
+                // 按底边对齐时的中心偏移要在最终两轴尺寸确定后计算。
+                // 这一处理与实际端点绘制使用相同的独立比例。
+                const auto endRatio = Common::Render::notePartSizeRatio(
+                    config.visual, Config::NoteSizePart::HoldTail);
+                endW *= endRatio.x;
+                endH *= endRatio.y;
                 endW *= endScale;
                 endH *= endScale;
 
@@ -1888,6 +1957,8 @@ void NoteRenderSystem::generateNoteHitboxes(
                       endY - endH * 0.5f + endShift,
                       endW,
                       endH });
+                snapshot->hitboxes.back().renderSizePart =
+                    Config::NoteSizePart::HoldTail;
             }
         }
     }
@@ -1927,7 +1998,7 @@ void NoteRenderSystem::renderNoteBaseLayer(
     const CanvasLaneProjection* laneProjection)
 {
     const float visualPaddingScale =
-        noteVisualPaddingScale(*snapshot, config.visual.noteTexturePosition);
+        noteVisualPaddingScale(*snapshot, config.visual);
     // 候选粗筛后还需普通主体的显示包络检查。
     // 当前实现使用局部向量保存结果，仍存在每次调用的容量分配成本。
     std::vector<entt::entity> visibleEntities;
@@ -2507,7 +2578,7 @@ void NoteRenderSystem::renderOverlapMasks(
         /// @brief 端点所属根身份，不拥有组件。
         entt::entity owner{ entt::null };
         /// @brief 相对基准音符的点遮罩缩放。
-        float scale{ 1.0f };
+        glm::vec2 scale{ 1.0f, 1.0f };
         /// @brief 该端点是否参与与其他 Flick 横向主体的相交检测。
         bool testsFlickBody{ false };
     };
@@ -2592,10 +2663,22 @@ void NoteRenderSystem::renderOverlapMasks(
 
     // 两个方向的主体各取自己的纹理比例，不把竖向宽度套到横向高度。
     // 这里先求玩家基准，绘制每段遮罩时再乘对应领域轨宽比例。
+    // 遮罩按两种主体尺寸的保守包络提示，不用 Head 的当前尺寸作为结果。
+    // 这里仅处理重叠提示，真实图元和拾取框仍按所属部件精确计算。
+    // 保留原遮罩合并规则，不扩展为重叠检测算法重构。
+    // 两轴保留独立比例，不将非等比缩放退化为一个最大倍率。
     const glm::vec2 verticalBodySize =
-        textureSize(TextureID::HoldBodyVertical, ctx.noteW, ctx.noteH);
+        textureSize(TextureID::HoldBodyVertical, ctx.noteW, ctx.noteH) *
+        glm::max(Common::Render::notePartSizeRatio(
+                     config.visual, Config::NoteSizePart::HoldBody),
+                 Common::Render::notePartSizeRatio(
+                     config.visual, Config::NoteSizePart::PolylineBody));
     const glm::vec2 horizontalBodySize =
-        textureSize(TextureID::HoldBodyHorizontal, ctx.noteW, ctx.noteH);
+        textureSize(TextureID::HoldBodyHorizontal, ctx.noteW, ctx.noteH) *
+        glm::max(Common::Render::notePartSizeRatio(
+                     config.visual, Config::NoteSizePart::FlickBody),
+                 Common::Render::notePartSizeRatio(
+                     config.visual, Config::NoteSizePart::PolylineBody));
 
     /// @brief 用当前显示锚点和采样时间自身 HS 把逻辑时间投影到屏幕。
     /// @param time 需要投影的秒时间。
@@ -2677,15 +2760,16 @@ void NoteRenderSystem::renderOverlapMasks(
     /// @param count 检测到的不同根数量。
     /// @note 宽高同时乘领域比例和点比例，Y 中心来自同一显示时间转换。
     /// @warning 每个命中点即时生成几何，不引入交互等待。
-    auto appendPointMask = [&](double time, int track, float scale, int count) {
-        const auto  lane      = laneForTrack(track);
-        const float laneScale = lane.width / singleTrackW;
-        const float w         = ctx.noteW * laneScale * scale;
-        const float h         = ctx.noteH * laneScale * scale;
-        const float x         = lane.leftX + (lane.width - w) * 0.5F;
-        const float y         = timeToY(time) - h * 0.5F;
-        appendMask(x, y, w, h, count);
-    };
+    auto appendPointMask =
+        [&](double time, int track, glm::vec2 scale, int count) {
+            const auto  lane      = laneForTrack(track);
+            const float laneScale = lane.width / singleTrackW;
+            const float w         = ctx.noteW * laneScale * scale.x;
+            const float h         = ctx.noteH * laneScale * scale.y;
+            const float x         = lane.leftX + (lane.width - w) * 0.5F;
+            const float y         = timeToY(time) - h * 0.5F;
+            appendMask(x, y, w, h, count);
+        };
 
     // 分类列表借用已完成构造的 items 存储，不能在分类后再向 items 追加。
     // 点标记按值保存，后续分桶和排序不会改变原几何条目地址。
@@ -2719,11 +2803,28 @@ void NoteRenderSystem::renderOverlapMasks(
         maxBucketTrack = std::max(maxBucketTrack, track);
     };
 
+    /// @brief 遮罩沿用自身部件尺寸，不能因 Head 改变而放大其他端点。
+    /// @warning 固定字段判断，不反查 Registry 或分配资源。
+    // 折线根头与后续节点逻辑类型相同，必须通过子索引区分尺寸。
+    // Tail 由调用方明确指定，不应被中间节点规则覆盖。
+    // 返回临时两轴转换，不修改点标记的对象身份。
+    // 转换只存在于当前快照局部工作集，不跨帧保留旧尺寸。
+    // 分组后仍需保留端点尺寸，不能都采用第一个 Head 的尺寸。
+    const auto pointScale = [&](const OverlapItem&   item,
+                                Config::NoteSizePart part) {
+        if ( part == Config::NoteSizePart::Head && item.subIndex > 0 )
+            part = Config::NoteSizePart::PolylineNode;
+        return Common::Render::notePartSizeRatio(config.visual, part);
+    };
     for ( const auto& item : items ) {
         if ( item.type == ::MMM::NoteType::NOTE ) {
             notes.push_back(&item);
             pointMarkers.push_back(
-                { item.startTime, item.track, item.owner, 1.0f, true });
+                { item.startTime,
+                  item.track,
+                  item.owner,
+                  pointScale(item, Config::NoteSizePart::Head),
+                  true });
             includeBucketTrack(item.track);
         } else if ( item.type == ::MMM::NoteType::HOLD ) {
             // 只有正长度 Hold 进入主体相交列表，退化长条仍保留头部点。
@@ -2731,22 +2832,35 @@ void NoteRenderSystem::renderOverlapMasks(
             if ( item.endTime > item.startTime + timeEpsilon ) {
                 holds.push_back(&item);
                 pointMarkers.push_back(
-                    { item.endTime, item.track, item.owner, 1.0f, true });
+                    { item.endTime,
+                      item.track,
+                      item.owner,
+                      pointScale(item, Config::NoteSizePart::HoldTail),
+                      true });
             }
             pointMarkers.push_back(
-                { item.startTime, item.track, item.owner, 1.0f, true });
+                { item.startTime,
+                  item.track,
+                  item.owner,
+                  pointScale(item, Config::NoteSizePart::Head),
+                  true });
             includeBucketTrack(item.track);
         } else if ( item.type == ::MMM::NoteType::FLICK ) {
             // Flick 起点不参与其他 Flick 主体的点检测，终点则参与。
             // 两个端点都进入点分组，可继续检测同轨同时间的头尾重叠。
             flicks.push_back(&item);
             pointMarkers.push_back(
-                { item.startTime, item.track, item.owner, 1.0f, false });
-            pointMarkers.push_back({ item.startTime,
-                                     item.track + item.dtrack,
-                                     item.owner,
-                                     1.0f,
-                                     true });
+                { item.startTime,
+                  item.track,
+                  item.owner,
+                  pointScale(item, Config::NoteSizePart::Head),
+                  false });
+            pointMarkers.push_back(
+                { item.startTime,
+                  item.track + item.dtrack,
+                  item.owner,
+                  pointScale(item, Config::NoteSizePart::FlickTail),
+                  true });
             includeBucketTrack(item.track);
             includeBucketTrack(item.track + item.dtrack);
         }
@@ -2899,19 +3013,19 @@ void NoteRenderSystem::renderOverlapMasks(
                 double                           maxTime = trackPoints[i].time;
                 // 相邻时间聚类可能链式扩张，矩形包住组的最早与最晚端点。
                 // 最大缩放保证大端点边缘不会被较小端点的尺寸裁掉。
-                float maxScale = trackPoints[i].scale;
+                glm::vec2 maxScale = trackPoints[i].scale;
                 for ( size_t k = i; k < j; ++k ) {
                     owners.insert(trackPoints[k].owner);
                     minTime  = std::min(minTime, trackPoints[k].time);
                     maxTime  = std::max(maxTime, trackPoints[k].time);
-                    maxScale = std::max(maxScale, trackPoints[k].scale);
+                    maxScale = glm::max(maxScale, trackPoints[k].scale);
                 }
 
                 if ( owners.size() >= 2 ) {
                     const auto  lane      = laneForTrack(trackPoints[i].track);
                     const float laneScale = lane.width / singleTrackW;
-                    const float w         = ctx.noteW * laneScale * maxScale;
-                    const float h0        = ctx.noteH * laneScale * maxScale;
+                    const float w         = ctx.noteW * laneScale * maxScale.x;
+                    const float h0        = ctx.noteH * laneScale * maxScale.y;
                     const float y0        = timeToY(minTime);
                     const float y1        = timeToY(maxTime);
                     const float x = lane.leftX + (lane.width - w) * 0.5F;
@@ -3191,8 +3305,10 @@ void NoteRenderSystem::renderOverlapMasks(
         // 交叉点使用缩小的点遮罩，突出主体交叉而不过度覆盖整颗音符。
         // 每轨计数保留横移根及所有相交长条根，重复子段不增加数量。
         for ( const auto& [track, owners] : ownersByTrack ) {
-            appendPointMask(
-                flick->startTime, track, 0.7f, static_cast<int>(owners.size()));
+            appendPointMask(flick->startTime,
+                            track,
+                            glm::vec2(0.7f),
+                            static_cast<int>(owners.size()));
         }
     }
 

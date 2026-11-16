@@ -1,6 +1,8 @@
 #pragma once
 
 #include "common/ChartObjectKind.h"
+#include "config/visual/InteractionHitboxConfig.h"
+#include "config/visual/NoteSizeConfig.h"
 #include <cmath>
 #include <cstdint>
 #include <entt/entity/entity.hpp>
@@ -168,6 +170,8 @@ struct Hitbox {
     HoverPart touchHandle{ HoverPart::None };
     /// @brief 折线子节点稳定身份令牌，防止旧菜单下标套用到相邻节点。
     std::uint64_t touchNodeToken{};
+    /// @brief 独立视觉部件身份；与拾取协议分离，折线身体和独立身体可不同。
+    Config::NoteSizePart renderSizePart{ Config::NoteSizePart::Head };
 };
 
 /// @brief 以包围盒中心为基准缩放交互拾取区域。
@@ -204,6 +208,53 @@ struct Hitbox {
         return hitbox;
     }
     return scaled;
+}
+
+/// @brief 将拾取协议部位映射到独立配置，未知部位返回 Count。
+/// @warning 拾取与布局热路径：只做固定分支，不分配或读取会话。
+[[nodiscard]] inline Config::HitboxComponent interactionHitboxComponent(
+    HoverPart part) noexcept
+{
+    // 协议枚举不能直接当配置下标；触控起点把手复用头部设置。
+    using C = Config::HitboxComponent;
+    switch ( part ) {
+    case HoverPart::Head:
+    case HoverPart::HoldStart: return C::Head;
+    case HoverPart::HoldBody: return C::HoldBody;
+    case HoverPart::HoldEnd: return C::HoldEnd;
+    case HoverPart::FlickArrow: return C::FlickArrow;
+    case HoverPart::PolylineNode: return C::PolylineNode;
+    case HoverPart::SampleAnchor: return C::SampleAnchor;
+    case HoverPart::SampleOffset: return C::SampleOffset;
+    default: return C::Count;
+    }
+}
+
+/// @brief 按拾取部件应用独立倍率，并保留旧版全局倍率的兼容语义。
+/// @param hitbox 原始几何及稳定拾取身份；返回值不回写渲染几何。
+/// @param scaleX 全局横向基础倍率。
+/// @param scaleY 全局纵向基础倍率。
+/// @param components 固定大小的部件附加倍率表。
+/// @return 包围框显示、光标捕捉与矩形框选共享的有效部件范围。
+/// @warning UI 与包围框显示热路径：仅分支、数组读取和算术，不分配或加锁。
+[[nodiscard]] inline Hitbox scaleInteractionHitbox(
+    const Hitbox& hitbox, float scaleX, float scaleY,
+    const Config::InteractionHitboxScales& components) noexcept
+{
+    // HoverPart 是命令协议，不能直接作为配置数组下标。
+    // 显式映射保留协议 ABI，也让触屏起点把手沿用头部捕捉规则。
+    const auto component = interactionHitboxComponent(hitbox.part);
+    if ( component == Config::HitboxComponent::Count ) {
+        // 未知或占位部件保留全局缩放，不能成为数组下标。
+        return scaleInteractionHitbox(hitbox, scaleX, scaleY);
+    }
+    const auto& scale = components[static_cast<std::size_t>(component)];
+    // 先规范各因子再相乘，避免非法附加倍率令整轴意外失去全局设置。
+    return scaleInteractionHitbox(hitbox,
+                                  Config::sanitizeHitboxScale(scaleX) *
+                                      Config::sanitizeHitboxScale(scale.x),
+                                  Config::sanitizeHitboxScale(scaleY) *
+                                      Config::sanitizeHitboxScale(scale.y));
 }
 
 }  // namespace MMM::Common::Render

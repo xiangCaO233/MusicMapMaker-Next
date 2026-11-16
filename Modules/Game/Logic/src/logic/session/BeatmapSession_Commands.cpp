@@ -3592,7 +3592,24 @@ void BeatmapSession::handleCommand(const CmdUpdateEditorConfig& cmd)
         m_interaction->handleCommand(CmdEndDrag{});
     }
     // 先判断需清理的能力与交互，再提交配置供 isNoteEditable 判断。
+    // 只在捕捉范围变化时重放已有框，切换无关显示偏好不能重置手选结果。
+    const auto& oldBounds = m_ctx->lastConfig.visual;
+    const auto& newBounds = cmd.config.visual;
+    const bool  captureBoundsChanged =
+        oldBounds.interactionHitboxScaleX !=
+            newBounds.interactionHitboxScaleX ||
+        oldBounds.interactionHitboxScaleY !=
+            newBounds.interactionHitboxScaleY ||
+        oldBounds.interactionHitboxComponents !=
+            newBounds.interactionHitboxComponents ||
+        oldBounds.noteScaleX != newBounds.noteScaleX ||
+        oldBounds.noteScaleY != newBounds.noteScaleY ||
+        oldBounds.notePartScales != newBounds.notePartScales;
     m_ctx->lastConfig = cmd.config;
+    // 捕捉范围变化后，已有框必须按新范围重新解释，不等下一次拖动才更新。
+    // 配置修改本就是低频入口；没有框时不触发额外的选择计算。
+    if ( captureBoundsChanged && !m_ctx->marqueeBoxes.empty() )
+        m_ctx->isMarqueeSelectionDirty = true;
     // 外部设置或手势最终配置成为新的权威值，不保留旧的局部缩放覆盖。
     // 配置已排入同一会话队列，不能从 UI 线程直接写这个临时状态。
     m_ctx->m_pointerTimelineZoom.reset();

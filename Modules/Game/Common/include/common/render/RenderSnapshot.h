@@ -15,6 +15,7 @@
 #include "common/render/TimelineInteractiveElement.h"
 #include "common/render/TimingInterpolationRenderData.h"
 #include "common/walkthrough/WalkthroughEditEvent.h"
+#include "config/visual/InteractionHitboxConfig.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -136,6 +137,8 @@ struct RenderSnapshot {
     float interactionHitboxScaleX{ 1.0F };
     /// @brief 普通悬浮拾取与调试显示使用的纵向包围盒缩放。
     float interactionHitboxScaleY{ 1.0F };
+    /// @brief 包围框显示与拾取共享的逐部件附加倍率，逻辑框选读取同份配置。
+    Config::InteractionHitboxScales interactionHitboxComponents{};
     /// @brief 本帧可交互的时间线效果标记。
     std::vector<TimelineInteractiveElement> timelineElements;
     /// @brief 全部插值段落的轻量描述，允许段首在视口之外。
@@ -508,10 +511,11 @@ struct RenderSnapshot {
         thicknessCompensation    = {};
         walkthroughPracticeNotes = {};
         // 复用快照缓冲时不能让上张谱面的释放事务流入下一张谱面。
-        walkthroughEditEvent    = {};
-        composeNoteRevision     = 0;
-        interactionHitboxScaleX = 1.0F;
-        interactionHitboxScaleY = 1.0F;
+        walkthroughEditEvent        = {};
+        composeNoteRevision         = 0;
+        interactionHitboxScaleX     = 1.0F;
+        interactionHitboxScaleY     = 1.0F;
+        interactionHitboxComponents = {};
         overlapMasks.clear();
         annotationMarkers.clear();
         annotationRevision = 0;

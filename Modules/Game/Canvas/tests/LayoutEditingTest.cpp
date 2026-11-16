@@ -482,10 +482,19 @@ bool testNoteRenderScaleResize()
         start, Handle::BottomRight, bounds, 1000.0f, 1000.0f);
     const auto clampedMinimum = MMM::Logic::resizeNoteRenderScale(
         start, Handle::TopLeft, bounds, 149.0f, 99.0f);
+    // 拾取范围共用角点几何，但允许独立的四分之一到四倍范围。
+    // 相同极端输入分别经过两套范围，证明默认实参不受新模式影响。
+    // 不能被 Note 外观的 0.5..3 限制截断，也不能反过来改变旧调用默认值。
+    const auto pickingMaximum = MMM::Logic::resizeNoteRenderScale(
+        start, Handle::BottomRight, bounds, 1000, 1000, .25F, 4.0F);
+    const auto pickingMinimum = MMM::Logic::resizeNoteRenderScale(
+        start, Handle::TopLeft, bounds, 149, 99, .25F, 4.0F);
     return near(clampedMaximum.x, MMM::Logic::NOTE_RENDER_MAX_SCALE) &&
            near(clampedMaximum.y, MMM::Logic::NOTE_RENDER_MAX_SCALE) &&
            near(clampedMinimum.x, MMM::Logic::NOTE_RENDER_MIN_SCALE) &&
-           near(clampedMinimum.y, MMM::Logic::NOTE_RENDER_MIN_SCALE);
+           near(clampedMinimum.y, MMM::Logic::NOTE_RENDER_MIN_SCALE) &&
+           near(pickingMaximum.x, 4) && near(pickingMaximum.y, 4) &&
+           near(pickingMinimum.x, .25F) && near(pickingMinimum.y, .25F);
 }
 
 /// @brief 验证同步字号缩放会让其他组件沿用当前把手的固定对角点。

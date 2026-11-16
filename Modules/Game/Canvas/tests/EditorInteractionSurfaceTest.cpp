@@ -11,6 +11,7 @@
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
 #include "log/colorful-log.h"
+#include "logic/EditorEngine.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/components/SampleComponent.h"
 #include "logic/ecs/components/TimelineComponent.h"
@@ -854,6 +855,184 @@ bool frame(MMM::Canvas::Basic2DCanvasInteraction&     interaction,
     ImGui::EndFrame();
     return menuOpen;
 }
+/// @brief 用真实 ImGui 鼠标帧验证逐部件拾取框拖拽和 Note 外观模式恢复。
+/// @return 默认关闭、部件独立、同号采样隔离和原尺寸手柄均通过时为真。
+/// @details 通过生产模式切换入口设定用户意图，不直接改私有捕获或缩放结果。
+/// 指针起点来自窗口实际内容原点，不用伪造局部 hovered 标志绕过窗口路由。
+/// 源快照故意保持不变，检验新范围由本地配置即时呈现，不依赖异步回流。
+/// @post 恢复原视觉配置；保存输出由 CTest 的配置根隔离。
+bool testVisualPickingBoundsResize()
+{
+    using namespace MMM;
+    // 方案注册表切换后旧对象可能失效，先按值保存其稳定 ID。
+    const std::string originalProfile(Interaction::activeProfile().id());
+    Interaction::synchronizeProfile("classic-desktop", true);
+    Interaction::synchronizeProfile("classic-desktop", true);
+    // 布局模式立即读取引擎当前工具，不等待渲染快照异步回流。
+    // 因而通过正式切换命令建立状态，不能只伪造 snapshot.currentTool。
+    auto&      engine       = Logic::EditorEngine::instance();
+    const auto originalTool = engine.getCurrentTool();
+    engine.pushCommand(Logic::CmdChangeTool{ Logic::EditTool::Layout });
+    auto&      app                          = Config::AppConfig::instance();
+    const auto original                     = app.getVisualConfig();
+    auto&      visual                       = app.getVisualConfig();
+    visual.noteScaleX                       = 1.2F;
+    visual.noteScaleY                       = 1.1F;
+    visual.interactionHitboxScaleX          = 1.2F;
+    visual.interactionHitboxScaleY          = 1.5F;
+    visual.interactionHitboxComponents      = {};
+    visual.interactionHitboxComponents[0].x = 1.5F;
+    // 使用不同全局和部件倍率，拖动时必须只改部件，不能重写全局或外观。
+    // 三个部件同号实体、不同类型，避免仅按实体合并也能通过本例。
+    Common::Render::RenderSnapshot snapshot;
+    snapshot.hasBeatmap = snapshot.isHoveringCanvas = true;
+    snapshot.trackCount                             = 4;
+    snapshot.currentTool                            = Logic::EditTool::Layout;
+    snapshot.hitboxes = { { static_cast<entt::entity>(42),
+                            Logic::HoverPart::Head,
+                            -1,
+                            80,
+                            80,
+                            40,
+                            20 },
+                          { static_cast<entt::entity>(42),
+                            Logic::HoverPart::HoldBody,
+                            -1,
+                            170,
+                            180,
+                            20,
+                            40 },
+                          { static_cast<entt::entity>(42),
+                            Logic::HoverPart::SampleAnchor,
+                            -1,
+                            230,
+                            100,
+                            20,
+                            20,
+                            Logic::ChartObjectKind::AudioSample } };
+    snapshot.hitboxes[1].renderSizePart = Config::NoteSizePart::HoldBody;
+    Canvas::Basic2DCanvasInteraction controller("VisualBounds",
+                                                "Canvas_VisualBounds");
+    bool passed = !controller.pickingBoundsEditing();
+    // 默认关闭属于用户可见契约，不能让前一个画布的开关传到新实例。
+    // 这个检查先于显式打开模式，不以测试夹具自己重置私有状态来保证。
+    ImVec2 origin{};
+    /// @brief 使用真实窗口内容原点发送完整鼠标帧，不访问控制器私有布局入口。
+    /// @warning CPU 回归仍执行正式结束保存，环境由 CTest 隔离。
+    const auto render = [&](bool down, ImVec2 point) {
+        auto& io = ImGui::GetIO();
+        io.AddMousePosEvent(origin.x + point.x, origin.y + point.y);
+        io.AddMouseButtonEvent(0, down);
+        // 按下和释放交给正式输入队列；窗口与原点由 ImGui 本帧实际布局建立。
+        // 不派发内部缩放命令，也不手动填充被捕获的角点成员。
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({ 0, 0 });
+        ImGui::SetNextWindowSize({ 400, 400 });
+        ImGui::Begin(
+            "VisualBounds###Canvas_VisualBounds",
+            nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoSavedSettings);
+        ImGui::SetWindowFocus();
+        origin = ImGui::GetCursorScreenPos();
+        // 从真实内容原点向画布传递指针，避免把标题和边距混入比例计算。
+        controller.update(nullptr, &snapshot, 300, 300);
+        ImGui::End();
+        ImGui::EndFrame();
+    };
+    // 两次空闲帧建立窗口树和真实原点，首次按下不能借初始化状态命中。
+    render(false, { 100, 100 });
+    render(false, { 100, 100 });
+    /// @brief 每次执行完整按下、移动和释放，结果从正式配置读取。
+    const auto drag = [&](ImVec2 start, ImVec2 end) {
+        // 空闲帧先建立悬浮，再产生实际按下边沿，避免上一笔释放状态干扰。
+        // 每组都正常释放，后一个目标必须重新执行拾取与类别映射。
+        render(false, start);
+        render(true, start);
+        render(true, end);
+        render(false, end);
+    };
+    /// @brief 只容忍浮点往返尾差，不掩盖一像素级的手柄偏移。
+    const auto equal = [](float a, float b) { return std::abs(a - b) < 1e-4F; };
+    // 全局倍率不为一，若把有效矩形误当成原始矩形，会产生重复补偿。
+    // 三次拖动共享同一个未更新快照，覆盖逻辑帧尚未回流的交互窗口。
+    // 每笔后再检查其他类别，避免只有最后一次结果正确却污染之前的配置。
+    controller.setPickingBoundsEditing(true);
+    // 使用控件自身调用的模式切换入口，只表达用户选择，不设置拖动身份。
+    // 后续全部倍率变化必须来自画布真实鼠标帧。
+    // 头部有效框为 [64,75]..[136,105]，围绕中心双向加倍。
+    // 起始抓取点与原始 Note 四角不同，能检测是否错误使用了外观框。
+    drag({ 64, 75 }, { 28, 60 });
+    // 期望值依据同一角点相对中心的两倍距离，不复述生产缩放 helper。
+    // Note 外观作为独立哨兵，防止只换了覆盖框而仍修改 noteScale 字段。
+    passed &= equal(visual.interactionHitboxComponents[0].x, 3) &&
+              equal(visual.interactionHitboxComponents[0].y, 2) &&
+              equal(visual.noteScaleX, 1.2F) && equal(visual.noteScaleY, 1.1F);
+    // 同实体长条体保留单独的四角，不能被合并外包框取代。
+    // 更改长条体时已经设置的头部倍率应完整保留。
+    drag({ 192, 170 }, { 204, 140 });
+    // 身体与头部同号，但类型不同，错误合并会使此角点根本无法捕获。
+    // 原始快照不更新，持续缩放若逐帧累乘也会在期望倍率上暴露。
+    passed &= equal(visual.interactionHitboxComponents[1].x, 2) &&
+              equal(visual.interactionHitboxComponents[1].y, 2) &&
+              equal(visual.interactionHitboxComponents[0].x, 3);
+    // 音频注册表与音符复用实体号，仍须写回采样锚点类别。
+    drag({ 228, 95 }, { 216, 80 });
+    // BMS 采样仅提供只读绘制身份，不需要测试创建音频资源或真实解码器。
+    // 与玩家物件共用数字 ID，领域串位会直接改错前面已经验证的类别。
+    passed &= equal(visual.interactionHitboxComponents[5].x, 2) &&
+              equal(visual.interactionHitboxComponents[5].y, 2) &&
+              equal(visual.interactionHitboxComponents[1].x, 2) &&
+              equal(visual.interactionHitboxScaleX, 1.2F) &&
+              equal(visual.interactionHitboxScaleY, 1.5F);
+    controller.setPickingBoundsEditing(false);
+    // 退出复选模式保留所有自定义范围，并清除上一类别捕获。
+    // 只剩头部作为恢复测试，排除长条合并框大小对原尺寸手柄的影响。
+    snapshot.hitboxes.resize(2);
+    // 取消后同一画布回到原始 Note 四角，不能继续套用已扩大的拾取框。
+    // 拾取范围保留用户修改，关闭模式不等于重置范围。
+    drag({ 80, 80 }, { 70, 75 });
+    // 这里的起点是未放大的原始框；若错误使用捕捉框就无法命中正确角点。
+    // 结果同时检查两轴，避免只恢复横向外观调整而纵向仍写拾取倍率。
+    passed &= !controller.pickingBoundsEditing() &&
+              equal(visual.noteScaleX, 1.8F) &&
+              equal(visual.noteScaleY, 1.65F) &&
+              equal(visual.interactionHitboxComponents[0].x, 3) &&
+              equal(visual.interactionHitboxComponents[0].y, 2);
+    // 同一实体的身体手柄改为独立视觉尺寸，不能再改 Head 或拾取倍率。
+    visual.notePartScales[0] = { .8F, .7F };
+    drag({ 170, 180 }, { 160, 160 });
+    passed &= equal(visual.notePartScales[0].x, 1.6F) &&
+              equal(visual.notePartScales[0].y, 1.4F) &&
+              equal(visual.noteScaleX, 1.8F) &&
+              equal(visual.noteScaleY, 1.65F) &&
+              equal(visual.interactionHitboxComponents[1].x, 2);
+    // 失败时输出每类实际值，区分输入归属失败与错误写入外观参数。
+    // 日志必须位于恢复配置之前，否则只能看到原始偏好而无法定位手势。
+    // 仅失败路径读取这些固定字段，不增加正常帧或生产交互的日志。
+    // 三个部件与最终外观一起报告，跨类别污染也能保留诊断证据。
+    if ( !passed )
+        XERROR(
+            "Visual bounds failed: head=({},{}), body=({},{}), sample=({},{}), "
+            "note=({},{})",
+            visual.interactionHitboxComponents[0].x,
+            visual.interactionHitboxComponents[0].y,
+            visual.interactionHitboxComponents[1].x,
+            visual.interactionHitboxComponents[1].y,
+            visual.interactionHitboxComponents[5].x,
+            visual.interactionHitboxComponents[5].y,
+            visual.noteScaleX,
+            visual.noteScaleY);
+    // 手势已正式释放，再恢复夹具配置，避免后续菜单用例继承布局偏好。
+    visual = original;
+    // 工具同样从正式命令入口恢复，后续右键菜单仍按原工具接收输入。
+    engine.pushCommand(Logic::CmdChangeTool{ originalTool });
+    // 恢复方案的代际交接与进入时一致，不能让经典方案泄漏到纯鼠标菜单。
+    // 第二次同步确认交接完成，后续用例无需承担前一用例的切换保护帧。
+    Interaction::synchronizeProfile(originalProfile, true);
+    Interaction::synchronizeProfile(originalProfile, true);
+    return passed;
+}
+
 /// @brief 验证统一选择工具按起笔命中区分物件拖动与空白框选。
 /// @return 子部件身份完整转发且跨过另一类区域不切换手势时返回真。
 /// @details 使用正式 ImGui 输入帧和事件总线，不直接修改控制器手势标志。
@@ -968,6 +1147,31 @@ bool testUnifiedSelectionGestureOwnership()
                 ends);
         passed &= matched;
     }
+    // 光标停在头部原框外侧；默认只会框选，扩大头部后应锁存同一物件。
+    // 使用真实输入与正式命令出口，防止只修改覆盖框显示却漏改悬浮拾取。
+    snapshot.hitboxes = { { .entity = static_cast<entt::entity>(42),
+                            .part   = Logic::HoverPart::Head,
+                            .x      = 120,
+                            .y      = 0,
+                            .w      = 40,
+                            .h      = 180 } };
+    for ( const bool expanded : { false, true } ) {
+        // 同一屏幕位置做阴性与阳性对照，只有部件范围发生变化。
+        // 位移超过拖动门槛，排除没有真正起拖导致命令数量为零。
+        // 每组包含完整释放，下一组必须重新经过悬浮拾取。
+        // 不依赖原框内的成功样本推断边缘命中已经生效。
+        snapshot.interactionHitboxComponents[0].x = expanded ? 2.5F : 1.0F;
+        frame(controller, snapshot, false, { 110, 100 });
+        starts.clear();
+        marquees = updates = ends = 0;
+        frame(controller, snapshot, true, { 110, 100 });
+        frame(controller, snapshot, true, { 115, 110 });
+        frame(controller, snapshot, false, { 115, 110 });
+        passed &= expanded ? starts.size() == 1 && marquees == 0
+                           : starts.empty() && marquees == 1;
+    }
+    // 测试不把自己的倍率泄漏给后续空白框选与快捷键用例。
+    snapshot.interactionHitboxComponents = {};
     // 从空白起笔，随后经过物件命中区域，整笔仍由框选持有。
     // 固定 hitbox 不随指针改写，避免测试把空白条件人为保持到结束。
     // 改变命中区域后保留同一控制器，验证上一笔的部件锁存确实已清除。
@@ -1664,8 +1868,17 @@ int main()
         XERROR("Unified selection gesture ownership failed");
         ok = false;
     }
-    ok &= testMenuNavigation();
-    ok &= testMouseEraseAndCancel();
+    ok &= testVisualPickingBoundsResize();
+    // 分别报告后续用例，避免模式恢复失败被汇总日志掩盖。
+    // 每个测试仍执行完整输入序列，不因前一项失败而短路。
+    if ( !testMenuNavigation() ) {
+        XERROR("Menu navigation failed");
+        ok = false;
+    }
+    if ( !testMouseEraseAndCancel() ) {
+        XERROR("Mouse erase and cancel failed");
+        ok = false;
+    }
     ImGui::DestroyContext();
     if ( !ok )
         XERROR(

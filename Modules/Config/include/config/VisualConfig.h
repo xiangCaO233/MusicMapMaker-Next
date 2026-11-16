@@ -4,6 +4,8 @@
 #include "config/NotePalette.h"
 #include "config/visual/BackgroundConfig.h"
 #include "config/visual/CanvasComponentConfig.h"
+#include "config/visual/InteractionHitboxConfig.h"
+#include "config/visual/NoteSizeConfig.h"
 #include "config/visual/NoteTexturePosition.h"
 #include "config/visual/PreviewAreaConfig.h"
 #include "config/visual/SpectrumConfig.h"
@@ -158,6 +160,35 @@ struct VisualConfig {
     float noteScaleX{ 0.95f };
     /// @brief 音符 Y 轴缩放，默认按基准高度的 95% 显示。
     float noteScaleY{ 0.95f };
+    /// @brief 除头部外各部件的独立尺寸；旧配置读取时一次性继承旧尺寸。
+    NotePartScales notePartScales{};
+    /// @brief 取得指定部件横向尺寸的可写引用，头部兼容旧字段。
+    /// @pre part 是公开部件而非 Count；调用方持有配置的合法访问权。
+    /// @warning 布局与渲染热路径：只做枚举比较和固定数组寻址。
+    float& notePartScaleX(NoteSizePart part)
+    {
+        return part == NoteSizePart::Head
+                   ? noteScaleX
+                   : notePartScales[static_cast<std::size_t>(part) - 1].x;
+    }
+    /// @brief 取得指定部件纵向尺寸，不把头部尺寸传播到其他部件。
+    /// @pre part 是公开部件而非 Count。
+    /// @warning 布局热路径：仅访问当前配置，不分配或同步。
+    float& notePartScaleY(NoteSizePart part)
+    {
+        return part == NoteSizePart::Head
+                   ? noteScaleY
+                   : notePartScales[static_cast<std::size_t>(part) - 1].y;
+    }
+    /// @brief 按值读取固定大小的部件尺寸，供几何计算使用。
+    /// @pre part 是公开部件而非 Count。
+    /// @warning 逐部件热路径：仅复制两个浮点数，不访问资源。
+    [[nodiscard]] NotePartScale notePartScale(NoteSizePart part) const
+    {
+        return part == NoteSizePart::Head
+                   ? NotePartScale{ noteScaleX, noteScaleY }
+                   : notePartScales[static_cast<std::size_t>(part) - 1];
+    }
     /// @brief 是否在玩家物件上方显示绑定音效资源标签。
     bool showBoundSampleLabels{ true };
     /// @brief
@@ -279,6 +310,8 @@ struct VisualConfig {
     float interactionHitboxScaleX{ DEFAULT_INTERACTION_HITBOX_SCALE };
     /// @brief 物件交互拾取包围盒相对原始几何的纵向缩放。
     float interactionHitboxScaleY{ DEFAULT_INTERACTION_HITBOX_SCALE };
+    /// @brief 各可拾取部件在全局倍率之上的独立横纵倍率，默认不改变旧配置。
+    InteractionHitboxScales interactionHitboxComponents{};
 };
 
 /// @brief 将完整视觉配置序列化为 JSON。

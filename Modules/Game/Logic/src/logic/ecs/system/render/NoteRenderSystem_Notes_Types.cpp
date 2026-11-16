@@ -1,3 +1,4 @@
+#include "common/render/NotePartSizing.h"
 #include "common/render/RenderSnapshot.h"
 #include "common/render/TextureID.h"
 #include "logic/BeatmapSyncBuffer.h"
@@ -19,8 +20,18 @@ namespace MMM::Logic::System
 /// @return 缺少基础或目标纹理记录时返回调用方的基础尺寸。
 /// @warning 端点绘制热路径，只查询已准备的图集，不加载纹理。
 static glm::vec2 getDrawSize(RenderSnapshot* snapshot, TextureID id,
-                             float baseW, float baseH)
+                             float baseW, float baseH,
+                             const Config::VisualConfig& visual)
 {
+    // 去掉头部尺寸并换成当前部件的独立尺寸，纹理比例仍由同一图集提供。
+    // 原始宽高来自所在轨道，独立尺寸只替换缩放因子。
+    // 部件放大不会改变两端的时间或终轨编号。
+    // HoldTail 与 FlickTail 即使皮肤比例相同，也使用不同配置。
+    // 后续 Batcher 继续负责皮肤倍率和填充，不在此重复应用。
+    const auto ratio = Common::Render::notePartSizeRatio(
+        visual, Common::Render::noteSizePart(id, false));
+    baseW *= ratio.x;
+    baseH *= ratio.y;
     auto itBase = snapshot->uvMap.find(static_cast<uint32_t>(TextureID::Note));
     if ( itBase == snapshot->uvMap.end() ) return { baseW, baseH };
 
@@ -100,10 +111,12 @@ void NoteRenderSystem::renderHold(
         snapshot->uvMap.contains(static_cast<uint32_t>(TextureID::HoldHead))
             ? TextureID::HoldHead
             : TextureID::Note;
-    glm::vec2 headSize = getDrawSize(snapshot, headTexture, w, h);
-    glm::vec2 endSize  = getDrawSize(snapshot, TextureID::HoldEnd, w, h);
+    glm::vec2 headSize =
+        getDrawSize(snapshot, headTexture, w, h, config.visual);
+    glm::vec2 endSize =
+        getDrawSize(snapshot, TextureID::HoldEnd, w, h, config.visual);
     glm::vec2 bodySize =
-        getDrawSize(snapshot, TextureID::HoldBodyVertical, w, h);
+        getDrawSize(snapshot, TextureID::HoldBodyVertical, w, h, config.visual);
 
     // 头尾与主体各自在轨道内居中，左右边界不参与纵向裁剪。
     // 固定 X 可保证裁剪后的四边形仍是等宽矩形。
@@ -261,8 +274,9 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
         snapshot->uvMap.contains(static_cast<uint32_t>(TextureID::HoldHead))
             ? TextureID::HoldHead
             : TextureID::Note;
-    glm::vec2 headSize = getDrawSize(snapshot, headTexture, w, h);
-    float     headX    = x + (w - headSize.x) * 0.5f;
+    glm::vec2 headSize =
+        getDrawSize(snapshot, headTexture, w, h, config.visual);
+    float headX = x + (w - headSize.x) * 0.5f;
     // 横滑整体以起点贴图的视觉中心定位；箭头大小不改变连接方向。
     // 偏移在填充和皮肤倍率确定后计算，不改变时间或终轨坐标。
     const float headShift =
@@ -283,7 +297,11 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
             // 横向主体只按皮肤比例调整厚度，跨度由两端实际中心决定。
             float drawH =
                 std::max(1.5F,
-                         h * (itBodyH->second.w /
+                         h *
+                             Common::Render::notePartSizeRatio(
+                                 config.visual, Config::NoteSizePart::FlickBody)
+                                 .y *
+                             (itBodyH->second.w /
                               snapshot->uvMap.at(uint32_t(TextureID::Note)).w));
             // 连接体直接跨越根节点与真实终点中心，保留独立区域之间的间隙。
             const float headCenterX = x + w * 0.5F;
@@ -327,7 +345,7 @@ void NoteRenderSystem::renderFlick(Batcher&                           batcher,
                                                 : TextureID::FlickArrowRight;
         // 箭头尺寸和中心均取终点轨道，避免沿根节点轨宽连续外推。
         glm::vec2 arrowSize =
-            getDrawSize(snapshot, arrowId, endpointW, endpointH);
+            getDrawSize(snapshot, arrowId, endpointW, endpointH, config.visual);
         const float arrowX = endpointCenterX - arrowSize.x * 0.5F;
         // 箭头跟随头部中心，禁用自身底边位移以避免再次按较小高度偏移。
         const NoteTexturePositionScope arrowPosition(

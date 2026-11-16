@@ -84,6 +84,9 @@ bool testExtremeSvHoldIsClippedBeforeBatching(bool independentHead)
     config.visual.trackLayout.right = 0.9F;
     config.visual.noteScaleX        = 0.8F;
     config.visual.noteScaleY        = 1.0F;
+    // 本场景显式保持各部件同尺寸，继续聚焦原有几何回归职责。
+    config.visual.notePartScales.fill(
+        { config.visual.noteScaleX, config.visual.noteScaleY });
     // 关闭无关动态线，保证快照中的测试纹理只来自 Hold。
     config.visual.beatLineDisplayMode =
         MMM::Config::BeatLineDisplayMode::Hidden;

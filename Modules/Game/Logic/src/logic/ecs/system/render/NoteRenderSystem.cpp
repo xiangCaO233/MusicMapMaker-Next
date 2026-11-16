@@ -1,9 +1,11 @@
 #include "logic/ecs/system/NoteRenderSystem.h"
 #include "common/render/CanvasCameraMath.h"
+#include "common/render/HoverRenderData.h"
 #include "common/render/TextureID.h"
 #include "config/AppConfig.h"
 #include "config/EditorSettings.h"
 #include "config/skin/SkinConfig.h"
+#include "config/visual/InteractionHitboxConfig.h"
 #include "logic/ecs/components/TimelineComponent.h"
 #include "logic/ecs/system/BackgroundRenderSystem.h"
 #include "logic/ecs/system/CanvasComponentRenderSystem.h"
@@ -267,6 +269,14 @@ void NoteRenderSystem::generateSnapshot(
         normalizeInteractionHitboxScale(config.visual.interactionHitboxScaleX);
     snapshot->interactionHitboxScaleY =
         normalizeInteractionHitboxScale(config.visual.interactionHitboxScaleY);
+    // 固定数组按值发布，不让 UI 在跨线程拾取时借用可变配置。
+    // 每个轴独立规范，实时脚本配置也不能把非法数值传进投影后的几何。
+    snapshot->interactionHitboxComponents =
+        config.visual.interactionHitboxComponents;
+    for ( auto& scale : snapshot->interactionHitboxComponents ) {
+        scale.x = Config::sanitizeHitboxScale(scale.x);
+        scale.y = Config::sanitizeHitboxScale(scale.y);
+    }
 
     // 核心同步：如果预览区正在拖拽，主画布渲染的时间应该是预览区当前的悬停时间
     // 预览拖动期间先改变本地视觉时间，不等待播放时钟追上。
@@ -2099,7 +2109,8 @@ void NoteRenderSystem::debugRenderHitboxes(Batcher&        batcher,
         const auto hb =
             scaleInteractionHitbox(rawHitbox,
                                    snapshot->interactionHitboxScaleX,
-                                   snapshot->interactionHitboxScaleY);
+                                   snapshot->interactionHitboxScaleY,
+                                   snapshot->interactionHitboxComponents);
         if ( hb.entity == entt::null || hb.w <= 0.0f || hb.h <= 0.0f ) continue;
 
         // 填充统一保持低透明度，部件差异主要由描边颜色表达。

@@ -49,6 +49,10 @@ VisualConfig configured()
     // 新增补偿与相机姿态一起参与所有预设往返、迁移和内置保护案例。
     visual.canvasMotionCompensation    = 35;
     visual.canvasThicknessCompensation = 75;
+    // 逐部件捕捉范围属于布局快照；切换及文件导入须同时恢复两个轴。
+    visual.interactionHitboxComponents[4] = { 2.25F, 0.75F };
+    // 独立尺寸和拾取倍率同属布局，但必须分别保存，不能互相替代。
+    visual.notePartScales[4] = { 1.7F, .6F };
     return visual;
 }
 /// @brief 比较全部布局，而非仅比较主轨道的某一个坐标。

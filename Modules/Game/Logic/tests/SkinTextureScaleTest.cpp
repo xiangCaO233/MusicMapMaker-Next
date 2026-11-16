@@ -474,7 +474,10 @@ bool testBuiltInHitEffects(const std::filesystem::path& skinsRoot,
             config.visual.enableHitEffects = true;
             config.visual.noteScaleX       = 1.25F;
             config.visual.noteScaleY       = 0.75F;
-            config.visual.noteFillMode     = BackgroundFillMode::Stretch;
+            // 本场景显式保持各部件同尺寸，继续聚焦原有几何回归职责。
+            config.visual.notePartScales.fill(
+                { config.visual.noteScaleX, config.visual.noteScaleY });
+            config.visual.noteFillMode = BackgroundFillMode::Stretch;
             // 使用非默认物件倍率，确保皮肤倍率是叠乘，而非覆盖现有配置。
             HitFXSystem::HitEvent event{};
             // 值初始化保留零起始时间、非草稿和独立物件角色。

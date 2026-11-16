@@ -6093,6 +6093,11 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
             ImGui::PopID();
         };
 
+        // 编辑模式由当前画布独立持有，新画布默认不勾选。
+        // 工具栏只消费能力接口，不包含拾取部件或布局拖动的私有实现头。
+        const bool editingPickingBounds =
+            canvas && canvas->drawPickingBoundsLayoutControls();
+
         // 音符渲染分组只修改与音符外观直接相关的 VisualConfig 字段。
         //
         // 分组字段职责：
@@ -6113,17 +6118,43 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                                      [](Config::EditorConfig& config) {
                                          config.resetNoteRenderingToDefaults();
                                      });
+            // 部件选择只决定后续滑条写入哪个字段，不复制或联动其他尺寸。
+            // 列表顺序与轻量枚举一致，UI 不使用拾取部位推断尺寸类别。
+            // 例如折线 Body 与长条 Body 可以共用纹理，但使用不同尺寸配置。
+            // 选择本身不发布配置命令，只有实际修改滑条才更新会话。
+            // 切换语言只改变标签，不影响当前编辑类别。
+            const char* sizeParts[] = {
+                TR("ui.toolbar.note_size.head").data(),
+                TR("ui.toolbar.note_size.hold_body").data(),
+                TR("ui.toolbar.note_size.hold_tail").data(),
+                TR("ui.toolbar.note_size.flick_body").data(),
+                TR("ui.toolbar.note_size.flick_tail").data(),
+                TR("ui.toolbar.note_size.polyline_node").data(),
+                TR("ui.toolbar.note_size.polyline_body").data()
+            };
+            ImGui::TextUnformatted(TR("ui.toolbar.note_size.part").data());
+            ImGui::SetNextItemWidth(visualControlWidth);
+            ::MMM::UI::FeedbackCombo("##LayoutNoteSizePart",
+                                     &m_noteSizePart,
+                                     sizeParts,
+                                     IM_ARRAYSIZE(sizeParts));
+            const auto sizePart =
+                static_cast<Config::NoteSizePart>(m_noteSizePart);
+            ImGui::TextWrapped("%s", TR("ui.toolbar.note_size.hint").data());
             // 每个连续控件前重取快照，防止前一控件应用后被旧值覆盖。
             auto visual = appConfig.getVisualConfig();
+            // 拾取框模式禁止这两个外观滑块，防止调整目标混淆。
+            ImGui::BeginDisabled(editingPickingBounds);
             // 横向缩放影响音符宽度，范围限制为默认尺寸的 0.5..3 倍。
             ImGui::TextUnformatted(
                 TR("ui.settings.visual.note_scale_x").data());
             ImGui::SetNextItemWidth(visualControlWidth);
-            if ( ::MMM::UI::FeedbackSliderFloat("##LayoutNoteScaleX",
-                                                &visual.noteScaleX,
-                                                0.5f,
-                                                3.0f,
-                                                "%.4f") ) {
+            if ( ::MMM::UI::FeedbackSliderFloat(
+                     "##LayoutNoteScaleX",
+                     &visual.notePartScaleX(sizePart),
+                     0.5f,
+                     3.0f,
+                     "%.4f") ) {
                 applyVisualConfig(visual);
                 m_layoutVisualConfigDirty = true;
             }
@@ -6134,15 +6165,18 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
             ImGui::TextUnformatted(
                 TR("ui.settings.visual.note_scale_y").data());
             ImGui::SetNextItemWidth(visualControlWidth);
-            if ( ::MMM::UI::FeedbackSliderFloat("##LayoutNoteScaleY",
-                                                &visual.noteScaleY,
-                                                0.5f,
-                                                3.0f,
-                                                "%.4f") ) {
+            if ( ::MMM::UI::FeedbackSliderFloat(
+                     "##LayoutNoteScaleY",
+                     &visual.notePartScaleY(sizePart),
+                     0.5f,
+                     3.0f,
+                     "%.4f") ) {
                 applyVisualConfig(visual);
                 m_layoutVisualConfigDirty = true;
             }
             saveVisualAfterEdit();
+
+            ImGui::EndDisabled();
 
             // 非长按击打特效时长使用配置声明的边界，避免 UI 常量漂移。
             visual = appConfig.getVisualConfig();

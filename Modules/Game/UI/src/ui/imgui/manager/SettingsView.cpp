@@ -230,7 +230,15 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         // 组合框选项宽度由 widget 测量函数另行覆盖。
         // 内部滑键开关的“不含首尾”属于完整标签，测量时不能截断限定语。
         // 即使分组折叠也保留这些宽度，避免展开时值列位置跳动。
-        const std::array<const char*, 19> labels{
+        const std::array<const char*, 26> labels{
+            // 正式包围框设置参与视觉页测宽，不能沿用调试页的缓存宽度。
+            TR_CACHE("ui.settings.visual.hitboxes.show").data(),
+            TR_CACHE("ui.settings.visual.hitboxes.global_x").data(),
+            TR_CACHE("ui.settings.visual.hitboxes.global_y").data(),
+            TR_CACHE("ui.settings.visual.hitboxes.component").data(),
+            TR_CACHE("ui.settings.visual.hitboxes.component_x").data(),
+            TR_CACHE("ui.settings.visual.hitboxes.component_y").data(),
+            TR_CACHE("ui.settings.visual.hitboxes.reset").data(),
             TR_CACHE("ui.settings.visual.flick_hit_effect_mode").data(),
             TR_CACHE("ui.settings.visual.polyline_internal_flick_effects")
                 .data(),
@@ -373,12 +381,9 @@ float measureSettingsTabLabelWidth(Event::SettingsTab     tab,
         return measureSettingsTextList(labels, font, snapshot.fontSize);
     }
     case Event::SettingsTab::Debug: {
-        /// 调试页测量摄像机控制、诊断开关和命中框缩放。
+        /// 调试页仅测量保留的渲染和网络诊断开关。
         // 调试日志运行态输出不属于设置标签，不在此列表中出现。
-        const std::array<const char*, 9> labels{
-            TR_CACHE("ui.settings.debug.draw_hitboxes").data(),
-            TR_CACHE("ui.settings.debug.hitbox_scale_x").data(),
-            TR_CACHE("ui.settings.debug.hitbox_scale_y").data(),
+        const std::array<const char*, 2> labels{
             TR_CACHE("ui.settings.debug.render_profile_logging").data(),
             TR_CACHE("ui.settings.debug.rtc_diagnostic_logging").data()
         };
@@ -445,6 +450,18 @@ float measureSettingsTabWidgetWidth(Event::SettingsTab     tab,
     }
     case Event::SettingsTab::Visual: {
         // 填充模式与滑键播放模式都参与离散控件的最小宽度计算。
+        // 逐部件捕捉下拉也测量全部选项，不能只按当前短标签估算。
+        // 这样英文模式的折线尾部箭头说明不会挤掉下拉箭头。
+        // 文本测宽继续纳入现有语言版本缓存，空闲帧无需重算这些尺寸。
+        // 新分组没有额外浮动窗口，窄屏仍使用设置页本身的换行策略。
+        addOptions(std::array<const char*, 7>{
+            TR_CACHE("ui.settings.visual.hitboxes.head").data(),
+            TR_CACHE("ui.settings.visual.hitboxes.hold_body").data(),
+            TR_CACHE("ui.settings.visual.hitboxes.hold_end").data(),
+            TR_CACHE("ui.settings.visual.hitboxes.flick_arrow").data(),
+            TR_CACHE("ui.settings.visual.hitboxes.polyline_node").data(),
+            TR_CACHE("ui.settings.visual.hitboxes.sample_anchor").data(),
+            TR_CACHE("ui.settings.visual.hitboxes.sample_offset").data() });
         // 连续数值滑块继续使用基础数值宽度，无需逐项测量。
         // 英文“头到尾”文本较长，不能只依据当前中文选项或选中项估算。
         // 翻译版本变化时布局缓存重建，选项宽度随当前语言统一更新。
