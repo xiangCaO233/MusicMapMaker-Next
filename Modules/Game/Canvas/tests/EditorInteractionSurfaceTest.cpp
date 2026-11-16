@@ -910,6 +910,7 @@ bool testVisualPickingBoundsResize()
                             20,
                             20,
                             Logic::ChartObjectKind::AudioSample } };
+    snapshot.hitboxes[1].renderSizePart = Config::NoteSizePart::HoldBody;
     Canvas::Basic2DCanvasInteraction controller("VisualBounds",
                                                 "Canvas_VisualBounds");
     bool passed = !controller.pickingBoundsEditing();
@@ -986,7 +987,7 @@ bool testVisualPickingBoundsResize()
     controller.setPickingBoundsEditing(false);
     // 退出复选模式保留所有自定义范围，并清除上一类别捕获。
     // 只剩头部作为恢复测试，排除长条合并框大小对原尺寸手柄的影响。
-    snapshot.hitboxes.resize(1);
+    snapshot.hitboxes.resize(2);
     // 取消后同一画布回到原始 Note 四角，不能继续套用已扩大的拾取框。
     // 拾取范围保留用户修改，关闭模式不等于重置范围。
     drag({ 80, 80 }, { 70, 75 });
@@ -997,6 +998,14 @@ bool testVisualPickingBoundsResize()
               equal(visual.noteScaleY, 1.65F) &&
               equal(visual.interactionHitboxComponents[0].x, 3) &&
               equal(visual.interactionHitboxComponents[0].y, 2);
+    // 同一实体的身体手柄改为独立视觉尺寸，不能再改 Head 或拾取倍率。
+    visual.notePartScales[0] = { .8F, .7F };
+    drag({ 170, 180 }, { 160, 160 });
+    passed &= equal(visual.notePartScales[0].x, 1.6F) &&
+              equal(visual.notePartScales[0].y, 1.4F) &&
+              equal(visual.noteScaleX, 1.8F) &&
+              equal(visual.noteScaleY, 1.65F) &&
+              equal(visual.interactionHitboxComponents[1].x, 2);
     // 失败时输出每类实际值，区分输入归属失败与错误写入外观参数。
     // 日志必须位于恢复配置之前，否则只能看到原始偏好而无法定位手势。
     // 仅失败路径读取这些固定字段，不增加正常帧或生产交互的日志。

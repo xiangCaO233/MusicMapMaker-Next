@@ -2,6 +2,7 @@
 
 #include "common/ChartObjectKind.h"
 #include "config/visual/InteractionHitboxConfig.h"
+#include "config/visual/NoteSizeConfig.h"
 #include <cmath>
 #include <cstdint>
 #include <entt/entity/entity.hpp>
@@ -169,6 +170,8 @@ struct Hitbox {
     HoverPart touchHandle{ HoverPart::None };
     /// @brief 折线子节点稳定身份令牌，防止旧菜单下标套用到相邻节点。
     std::uint64_t touchNodeToken{};
+    /// @brief 独立视觉部件身份；与拾取协议分离，折线身体和独立身体可不同。
+    Config::NoteSizePart renderSizePart{ Config::NoteSizePart::Head };
 };
 
 /// @brief 以包围盒中心为基准缩放交互拾取区域。

@@ -281,7 +281,35 @@ bool testMarqueeHitboxScales()
     // 提供与生产索引一致的保守时长，查询时不扫描注册表填这个值。
     // 终点前缀仍是原持续时间，扩大的只能是查询窗口与交互矩形。
     visual.interactionHitboxScaleX = 1;
-    const double anchor            = cache.getVisualAnchorAbsY(ctx.animateTime);
+    // 独立视觉尺寸也必须进入框选，不能只改变渲染图元。
+    // 选框位于头尾外侧，只能由变粗后的长条体命中。
+    // 两种模式都检查，严格框选仍要求覆盖整个普通 Hold。
+    // 纵向范围故意覆盖完整载体，只用横向边界区分部件尺寸的作用。
+    // 这里先保留单位拾取倍率，将视觉尺寸与捕捉扩展的作用区分开。
+    const auto originalBody    = visual.notePartScales[0];
+    visual.notePartScales[0].x = .5F;
+    if ( select(215,
+                225,
+                -1000000,
+                1000000,
+                Config::SelectionMode::Intersection) ||
+         !select(95, 205, -1000000, 1000000, Config::SelectionMode::Strict) )
+        return false;
+    visual.notePartScales[0].x = 2.F;
+    // 头部改变但依然不进入外侧选框，身体的独立宽度应保持有效。
+    // 若框选仍乘 Head 尺寸，这个边缘用例就会丢失命中。
+    visual.noteScaleX = .8F;
+    if ( !select(215,
+                 225,
+                 -1000000,
+                 1000000,
+                 Config::SelectionMode::Intersection) ||
+         select(95, 205, -1000000, 1000000, Config::SelectionMode::Strict) )
+        return false;
+    // 恢复视觉配置后继续原来的远端拾取扩展测试，两个职责互不替代。
+    visual.noteScaleX        = .6F;
+    visual.notePartScales[0] = originalBody;
+    const double anchor      = cache.getVisualAnchorAbsY(ctx.animateTime);
     const float  remoteY =
         300 - static_cast<float>(cache.getDisplayDelta(130, anchor, 1));
     // 单位倍率作为阴性对照；扩展后的载体才允许进入远端框。

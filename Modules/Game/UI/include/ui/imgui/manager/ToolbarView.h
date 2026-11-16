@@ -95,6 +95,8 @@ private:
     bool m_layoutSpectrumConfigDirty{ false };
     /// @brief 物件与背景折叠菜单是否有尚未写入配置文件的连续调整。
     bool m_layoutVisualConfigDirty{ false };
+    /// @brief 布局面板当前编辑的尺寸类别，只属于本地界面状态。
+    int m_noteSizePart{ 0 };
     /// @brief 上一帧布局组件颜色选择器是否打开。
     bool m_layoutComponentColorPickerOpen{ false };
     /// @brief 时间线缩放浮层的显示状态，不存储缩放值副本。

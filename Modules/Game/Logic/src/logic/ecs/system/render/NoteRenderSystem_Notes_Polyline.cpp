@@ -1,3 +1,4 @@
+#include "common/render/NotePartSizing.h"
 #include "common/render/TextureID.h"
 #include "logic/ecs/components/NoteComponent.h"
 #include "logic/ecs/system/NoteRenderSystem.h"
@@ -51,8 +52,18 @@ static void offsetLastPartHitbox(const Batcher&  batcher,
 /// @note 仅换算几何尺寸，UV 内缩及纹理填充由后续批处理接口负责。
 /// @warning 折线逐节点绘制热路径，只查询现有图集，不加载纹理。
 static glm::vec2 getDrawSize(RenderSnapshot* snapshot, TextureID id,
-                             float baseW, float baseH)
+                             float baseW, float baseH,
+                             const Config::VisualConfig& visual)
 {
+    // 去掉头部尺寸并换成当前部件的独立尺寸，纹理比例仍由同一图集提供。
+    // 折线载体与独立长条可以共用贴图，尺寸身份仍由当前绘制入口确定。
+    // 首个节点继续使用 Head，后续节点才读取 PolylineNode。
+    // 这样缩放中间节点不会连带改变首节点或末端装饰。
+    // 纹理不存在时同样保留独立尺寸后备，不恢复 Head 继承。
+    const auto ratio = Common::Render::notePartSizeRatio(
+        visual, Common::Render::noteSizePart(id, true));
+    baseW *= ratio.x;
+    baseH *= ratio.y;
     auto itBase = snapshot->uvMap.find(static_cast<uint32_t>(TextureID::Note));
     if ( itBase == snapshot->uvMap.end() ) return { baseW, baseH };
 
@@ -309,6 +320,11 @@ void NoteRenderSystem::drawPolylineBody(
             : TextureID::Note;
     /// @brief 计算连接点最终视觉中心，兼容不同轨道尺寸、倍率和填充留白。
     /// @warning 每个可见端点仅做常量尺寸换算，不改动节点时间或读取资源。
+    // 连接端点依照所连接贴片的最终中心计算，独立尺寸不会造成接缝。
+    // 中间节点和箭头仍遵循原头部定位规则，不借此改变谱面时刻。
+    // 中心或底边定位只决定接点位置，不把接点高度当成 Body 尺寸。
+    // Body 的两轴尺寸随后独立换算，纵段和横段各取有效横截面。
+    // 高亮遍复用同一函数，不能让普通图元与发光轮廓大小不一致。
     const auto centerShift = [&](TextureID               texture,
                                  const NoteLaneGeometry& lane) {
         // 中间节点与箭头共用参考头部中心，不能按各自较小的高度单独移位。
@@ -318,7 +334,8 @@ void NoteRenderSystem::drawPolylineBody(
              texture == TextureID::FlickArrowRight )
             texture = rootHeadTexture;
         const auto size =
-            getDrawSize(snapshot, texture, lane.noteW, lane.noteH) *
+            getDrawSize(
+                snapshot, texture, lane.noteW, lane.noteH, config.visual) *
             skinTextureScale(texture);
         return noteTextureCenterShiftY(texture,
                                        size.x,
@@ -389,7 +406,8 @@ void NoteRenderSystem::drawPolylineBody(
             getDrawSize(snapshot,
                         TextureID::HoldBodyHorizontal,
                         startLane.noteW,
-                        startLane.noteH)
+                        startLane.noteH,
+                        config.visual)
                 .y *
             skinTextureScale(TextureID::HoldBodyHorizontal);
         // 底边定位会整体上移端点，门禁余量必须包含移动后仍露在视口内的主体。
@@ -435,6 +453,9 @@ void NoteRenderSystem::drawPolylineBody(
                 // 横向主体的厚度沿用起始轨尺寸，长度则由两端真实中心距离决定。
                 const float drawH =
                     startLane.noteH *
+                    Common::Render::notePartSizeRatio(
+                        config.visual, Config::NoteSizePart::PolylineBody)
+                        .y *
                     (itBodyH->second.w /
                      snapshot->uvMap.at(uint32_t(TextureID::Note)).w);
                 // 连接体跨越两个真实轨道中心，独立区域间隙也属于连接范围。
@@ -486,6 +507,10 @@ void NoteRenderSystem::drawPolylineBody(
                           std::min(leftY, rightY) - hitH * 0.5F,
                           drawW,
                           std::abs(leftY - rightY) + hitH });
+                    // 直接发布生成几何的部件身份，UI 只消费值快照。
+                    // 不让画布为识别折线身体再访问逻辑线程的 ECS。
+                    snapshot->hitboxes.back().renderSizePart =
+                        Config::NoteSizePart::PolylineBody;
                 }
             }
         } else if ( sub.type == ::MMM::NoteType::HOLD && sub.duration > 0 &&
@@ -494,7 +519,8 @@ void NoteRenderSystem::drawPolylineBody(
             const glm::vec2 bodySize = getDrawSize(snapshot,
                                                    TextureID::HoldBodyVertical,
                                                    startLane.noteW,
-                                                   startLane.noteH);
+                                                   startLane.noteH,
+                                                   config.visual);
             // 长条主体宽度来自纹理相对比例，不以整条轨道宽度直接填满。
             const float bodyX =
                 startLane.leftX + (startLane.width - bodySize.x) * 0.5F;
@@ -556,6 +582,8 @@ void NoteRenderSystem::drawPolylineBody(
                       hitY,
                       hitW,
                       hitH });
+                snapshot->hitboxes.back().renderSizePart =
+                    Config::NoteSizePart::PolylineBody;
             }
         }
 
@@ -587,12 +615,14 @@ void NoteRenderSystem::drawPolylineBody(
                 getDrawSize(snapshot,
                             TextureID::HoldBodyVertical,
                             endLane.noteW,
-                            endLane.noteH);
+                            endLane.noteH,
+                            config.visual);
             const glm::vec2 nextBodySize =
                 getDrawSize(snapshot,
                             TextureID::HoldBodyVertical,
                             nextLane.noteW,
-                            nextLane.noteH);
+                            nextLane.noteH,
+                            config.visual);
             // 两端分别按所在区域计算宽度，跨独立轨宽区域时允许形成梯形连接。
             const float curBodyX =
                 endLane.leftX + (endLane.width - curBodySize.x) * 0.5F;
@@ -699,6 +729,8 @@ void NoteRenderSystem::drawPolylineBody(
                                                ymin,
                                                xmax - xmin,
                                                ymax - ymin });
+                snapshot->hitboxes.back().renderSizePart =
+                    Config::NoteSizePart::PolylineBody;
             }
         }
     }
@@ -787,13 +819,16 @@ void NoteRenderSystem::drawPolylineNodes(
             (judgmentLineY - bottomY) / static_cast<double>(renderScaleY);
         const auto lane = resolveNoteLaneGeometry(
             sub.trackIndex, laneProjection, leftX, singleTrackW, noteW, noteH);
-        const glm::vec2 nodeSize =
-            getDrawSize(snapshot, TextureID::Node, lane.noteW, lane.noteH);
+        const glm::vec2 nodeSize = getDrawSize(
+            snapshot, TextureID::Node, lane.noteW, lane.noteH, config.visual);
         const glm::vec2 hitSize = nodeSize * skinTextureScale(TextureID::Node);
         // 定位依据与 Body 接点一致，Fit 留白和独立头部倍率均在这里换算。
-        const auto headSize =
-            getDrawSize(snapshot, rootHeadTexture, lane.noteW, lane.noteH) *
-            skinTextureScale(rootHeadTexture);
+        const auto  headSize = getDrawSize(snapshot,
+                                           rootHeadTexture,
+                                           lane.noteW,
+                                           lane.noteH,
+                                           config.visual) *
+                               skinTextureScale(rootHeadTexture);
         const float centerShift =
             noteTextureCenterShiftY(rootHeadTexture,
                                     headSize.x,
@@ -853,6 +888,8 @@ void NoteRenderSystem::drawPolylineNodes(
                                            subStartY - hitSize.y * 0.5f,
                                            hitSize.x,
                                            hitSize.y });
+            snapshot->hitboxes.back().renderSizePart =
+                Config::NoteSizePart::PolylineNode;
             // 命中框已使用补偿后的中心，不再叠加 Node 自身高度偏移。
         }
     }
@@ -957,8 +994,8 @@ void NoteRenderSystem::drawPolylineHead(
         snapshot->uvMap.contains(static_cast<uint32_t>(TextureID::HoldHead))
             ? TextureID::HoldHead
             : TextureID::Note;
-    const glm::vec2 headSize =
-        getDrawSize(snapshot, headTexture, lane.noteW, lane.noteH);
+    const glm::vec2 headSize = getDrawSize(
+        snapshot, headTexture, lane.noteW, lane.noteH, config.visual);
     const glm::vec2 hitSize = headSize * skinTextureScale(headTexture);
     // 自动播放中的移动头也使用同一倍率，纹理缩放不参与沿折线的插值。
     const double padDelta =
@@ -1096,8 +1133,8 @@ void NoteRenderSystem::drawPolylineDecoration(
             ? (last.dtrack < 0 ? TextureID::FlickArrowLeft
                                : TextureID::FlickArrowRight)
             : TextureID::HoldEnd;
-    const glm::vec2 decorationSize =
-        getDrawSize(snapshot, decorationTexture, lane.noteW, lane.noteH);
+    const glm::vec2 decorationSize = getDrawSize(
+        snapshot, decorationTexture, lane.noteW, lane.noteH, config.visual);
     const glm::vec2 hitSize =
         decorationSize * skinTextureScale(decorationTexture);
     // 箭头中心沿用末横段起点的参考头部，落点轨宽只决定箭头大小。
@@ -1110,10 +1147,12 @@ void NoteRenderSystem::drawPolylineDecoration(
                 : TextureID::Note;
         const auto startLane = resolveNoteLaneGeometry(
             last.trackIndex, laneProjection, leftX, singleTrackW, noteW, noteH);
-        const auto referenceSize =
-            getDrawSize(
-                snapshot, referenceTexture, startLane.noteW, startLane.noteH) *
-            skinTextureScale(referenceTexture);
+        const auto referenceSize = getDrawSize(snapshot,
+                                               referenceTexture,
+                                               startLane.noteW,
+                                               startLane.noteH,
+                                               config.visual) *
+                                   skinTextureScale(referenceTexture);
         flickCenterShift =
             noteTextureCenterShiftY(referenceTexture,
                                     referenceSize.x,
@@ -1199,6 +1238,8 @@ void NoteRenderSystem::drawPolylineDecoration(
                       lStartY + flickCenterShift - hitSize.y * 0.5f,
                       hitSize.x,
                       hitSize.y });
+                snapshot->hitboxes.back().renderSizePart =
+                    Config::NoteSizePart::FlickTail;
                 // 命中框已使用横段中心，不再叠加箭头自己的底边偏移。
             }
         }
@@ -1240,6 +1281,8 @@ void NoteRenderSystem::drawPolylineDecoration(
                       subEndY - hitSize.y * 0.5f,
                       hitSize.x,
                       hitSize.y });
+                snapshot->hitboxes.back().renderSizePart =
+                    Config::NoteSizePart::HoldTail;
                 offsetLastPartHitbox(batcher, *snapshot);
             }
         }

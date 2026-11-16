@@ -2705,33 +2705,31 @@ void Basic2DCanvasInteraction::handleHotkeys(
 /// - null entity 不进入布局缓存。
 /// - 非有限坐标或尺寸被忽略。
 /// - 宽度或高度非正的 hitbox 被忽略。
-/// - 默认合并同实体部件，拾取框模式按完整部件身份分别保留。
-/// - 合并外框取四条边的最小值与最大值。
-/// - 普通模式每实体一项，拾取框模式每部件一项。
+/// - 两种模式都按完整部件身份分别保留，不合并头、身体和尾。
+/// - 原始边界供视觉尺寸使用，拾取模式额外应用捕捉倍率。
+/// - 每个部件一项，共用的配置类别不改变部件拾取身份。
 /// - 结果顺序沿用 hitbox 首次出现顺序。
 /// - 后续反向命中据此保持上层实体优先。
-/// - scratch 索引保存 entity 到结果槽位的映射。
-/// - 两个成员容器每帧 clear 但保留容量。
+/// - 渲染身份随值快照发布，不从实体编号推断尺寸类别。
+/// - 部件数组每帧 clear 但保留容量。
 /// - reserve 依据当前 hitbox 数降低重新分配概率。
 /// - 缓存只用于 Layout 模式的四角命中和轮廓绘制。
 /// - UI 线程不读取音符 ECS 组件。
 /// - 结果按值复制实体、部件身份与边界，不保留快照指针。
 /// @param currentSnapshot 当前画布渲染快照。
-/// @details 外观模式只收集 PlayerNote 并按 entity 合并；拾取模式保留各部件。
+/// @details 外观模式只收集 PlayerNote；拾取模式还允许采样，各部件独立保留。
 /// 结果用于缩放/布局命中，不在 UI 线程访问 ECS。
-/// 两个 scratch 容器复用容量，重建只处理当前已裁剪 hitbox。
+/// 重建复用数组容量，只处理当前已裁剪 hitbox。
 /// @warning UI 布局热路径：Layout 模式每帧调用，线性遍历快照 hitbox。
 void Basic2DCanvasInteraction::rebuildNoteLayoutInstances(
     const Common::Render::RenderSnapshot& currentSnapshot)
 {
     // clear 保留容量，随后按本帧 hitbox 数预留，降低连续布局编辑分配。
     m_noteLayoutInstances.clear();
-    m_noteLayoutIndexScratch.clear();
     m_noteLayoutInstances.reserve(currentSnapshot.hitboxes.size());
     // 模式切换复用原有容量，不为每个部件建立独立堆对象。
     // 数据来自当前可见快照，框选和捕捉范围仍由共享配置负责解释。
     // 这里保留原始矩形，显示时才应用最新 UI 倍率，避免等待逻辑帧回流。
-    m_noteLayoutIndexScratch.reserve(currentSnapshot.hitboxes.size());
 
     for ( const auto& hitbox : currentSnapshot.hitboxes ) {
         // 外观模式过滤非玩家物件；两种模式都过滤空实体、非有限和退化矩形，保证后续命中
@@ -2748,35 +2746,19 @@ void Basic2DCanvasInteraction::rebuildNoteLayoutInstances(
         const Logic::CanvasComponentBounds bounds{
             hitbox.x, hitbox.y, hitbox.x + hitbox.w, hitbox.y + hitbox.h
         };
-        if ( m_editPickingBounds ) {
-            // 同一折线节点的稳定令牌与子索引一起保留，显示高亮不按实体猜测。
-            // 音频采样和玩家物件可复用实体整数，kind 是身份的必要部分。
-            // 未知部位没有对应配置，必须在开始拖动前排除。
-            // 可视化范围不合并头、体、尾，也不能合并不同注册表的同号实体。
-            if ( Common::Render::interactionHitboxComponent(hitbox.part) ==
-                 Config::HitboxComponent::Count )
-                continue;
-            m_noteLayoutInstances.push_back(
-                { hitbox.entity,
-                  bounds,
-                  hitbox.kind,
-                  static_cast<std::uint8_t>(hitbox.part),
-                  hitbox.subIndex,
-                  hitbox.touchNodeToken });
+        // 两种模式都保留单个部件，不能再把身体与头尾合成全局尺寸手柄。
+        // 拾取协议只控制捕捉倍率，视觉尺寸使用渲染阶段明确写入的身份。
+        if ( Common::Render::interactionHitboxComponent(hitbox.part) ==
+             Config::HitboxComponent::Count )
             continue;
-        }
-        const auto [it, inserted] = m_noteLayoutIndexScratch.try_emplace(
-            hitbox.entity, m_noteLayoutInstances.size());
-        if ( inserted ) {
-            // 首个部件建立实体条目，索引 map 指向 vector 稳定位置。
-            m_noteLayoutInstances.push_back({ hitbox.entity, bounds });
-            continue;
-        }
-
-        // 同一实体的长条头、身体或折线节点合并为一个整体外包矩形。
-        bool hasBounds = true;
-        mergeCanvasComponentBounds(
-            bounds, m_noteLayoutInstances[it->second].bounds, hasBounds);
+        m_noteLayoutInstances.push_back(
+            { hitbox.entity,
+              bounds,
+              hitbox.kind,
+              static_cast<std::uint8_t>(hitbox.part),
+              hitbox.subIndex,
+              hitbox.touchNodeToken,
+              hitbox.renderSizePart });
     }
 }
 
@@ -2852,7 +2834,7 @@ void Basic2DCanvasInteraction::finishLayoutEditing()
     m_auxiliaryLayoutRegion      = AuxiliaryLayoutRegion::None;
     m_horizontalRegionDragHandle = HorizontalRegionDragHandle::None;
     m_noteScaleDragTarget.reset();
-    m_pickingBoundsDragTarget.reset();
+    m_notePartDragTarget.reset();
     // 身份和角点都不能跨手势保留，但临时编辑模式不因正常松手而退出。
     m_noteScaleDragHandle = Logic::CanvasComponentDragHandle::None;
     m_canvasComponentDragTarget.reset();
@@ -2899,7 +2881,7 @@ void Basic2DCanvasInteraction::finishLayoutEditing()
 /// @details 手势起始快照：
 /// - 按下时冻结当前 TrackLayout，拖动不累加上一帧候选。
 /// - 按下时冻结组件 placement、内容边界和可编辑 region。
-/// - 按下时冻结音符包围盒和当前 noteScaleX/noteScaleY。
+/// - 按下时冻结部件包围盒及该部件当前的视觉或拾取倍率。
 /// - 按下时记录指针相对组件中心的偏移，防止组件瞬移。
 /// - 主轨道和辅助区记录归一化指针起点。
 /// - 横向缩放在按下时收集固定吸附目标。
@@ -3089,7 +3071,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
     /// @warning 布局热路径：只读固定配置并做常量几何，不访问 ECS 或分配。
     const auto noteLayoutBounds = [&](const NoteLayoutInstance& instance) {
         if ( !m_editPickingBounds ) return instance.bounds;
-        // 普通 Note 外观句柄继续使用原来的实体合并框，不套捕捉倍率。
+        // 外观句柄使用单个部件的原始框，不套捕捉倍率。
         // 拾取框始终从原始矩形计算，当前显示结果不反过来成为下一帧基准。
         const auto&                  r = instance.bounds;
         const Common::Render::Hitbox source{
@@ -3350,7 +3332,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         // 活动拖动期间锁定按下时音符和句柄，不随指针经过其它物件切换。
         hoveredNote         = m_noteScaleDragTarget;
         hoveredNoteHandle   = m_noteScaleDragHandle;
-        hoveredNoteInstance = m_pickingBoundsDragTarget;
+        hoveredNoteInstance = m_notePartDragTarget;
         // 按值保留显示身份：释放稍后会清空成员，不能保留其内部指针。
         // 本地值只用到本帧轮廓绘制，不会跨会话缓存实体身份。
     } else if ( !m_canvasComponentDragTarget.has_value() && isHovered ) {
@@ -3581,7 +3563,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         // 每次新的物理按下都从零偏差开始，不能继承上一组件角点的补偿。
         // 选择仍沿用原命中优先级，不把大范围触摸当成框选或物件拖动。
         m_layoutTouchGrabOffset = {};
-        if ( touch || (m_editPickingBounds && hoveredNoteInstance) ) {
+        if ( touch || hoveredNoteInstance ) {
             // 抓取偏差保存在 UI 线程的固定向量，不随最新渲染快照重新求解。
             // 组件尺寸因本次拖动变化后，起点仍保持冻结，避免反馈成指数缩放。
             // 主轨道、辅助区和文字都复用相同屏幕域，不叠加两次相机横移。
@@ -3655,9 +3637,13 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             m_noteScaleDragHandle      = hoveredNoteHandle;
             m_noteScaleDragStartBounds = *hoveredNoteBounds;
             const auto& visual         = appConfig.getVisualConfig();
-            m_noteScaleDragStart = { visual.noteScaleX, visual.noteScaleY };
+            m_notePartDragTarget       = hoveredNoteInstance;
+            // 外观与拾取模式共享手柄身份，起始值分别来自各自的配置。
+            const auto size =
+                visual.notePartScale(hoveredNoteInstance->sizePart);
+            m_noteScaleDragStart = { size.x, size.y };
             if ( m_editPickingBounds && hoveredNoteInstance ) {
-                m_pickingBoundsDragTarget = hoveredNoteInstance;
+                m_notePartDragTarget = hoveredNoteInstance;
                 // 起点保存部件附加倍率，不能把全局基础倍率再次累乘进去。
                 // 原始边界已经包含本帧有效范围，拖动仅计算相对起点的变化。
                 const auto component =
@@ -3787,7 +3773,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         }
     }
 
-    if ( touch || m_pickingBoundsDragTarget ) {
+    if ( touch || m_notePartDragTarget ) {
         // 补偿位于目标冻结之后，避免按下命中被修正坐标改变成另一个角点。
         // 正常释放可继续用同一偏差；多指和取消没有更新许可，不写入候选。
         // 桌面普通 Note 保留旧路径；拾取框同样保留抓取偏差以防按下跳变。
@@ -3802,7 +3788,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         // 拾取框使用独立范围限制，普通 Note 仍沿用原来的外观范围。
         // 模式由按下时的目标身份决定，不能在拖动中读取悬浮部件替换目标。
         // 模式切换入口已先完成旧手势，因此两组配置不会在同一笔混写。
-        const bool      editingBounds = m_pickingBoundsDragTarget.has_value();
+        const bool      editingBounds = m_editPickingBounds;
         constexpr float scaleEpsilon  = 1e-6f;
         const auto      candidate     = Logic::resizeNoteRenderScale(
             m_noteScaleDragStart,
@@ -3815,8 +3801,8 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             editingBounds ? Config::MAX_HITBOX_SCALE
                           : Logic::NOTE_RENDER_MAX_SCALE);
         auto&  visual = appConfig.getVisualConfig();
-        float* scaleX = &visual.noteScaleX;
-        float* scaleY = &visual.noteScaleY;
+        float* scaleX = &visual.notePartScaleX(m_notePartDragTarget->sizePart);
+        float* scaleY = &visual.notePartScaleY(m_notePartDragTarget->sizePart);
         // 非拥有指针只在本次同步计算中使用，AppConfig 始终持有字段。
         // 复用同一更新出口，保持两种手柄的保存、反馈和预设归属一致。
         if ( editingBounds ) {
@@ -3825,7 +3811,7 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
             // 头部与 HoldStart 共用类别，节点、身体及采样仍各自独立。
             const auto component = Common::Render::interactionHitboxComponent(
                 static_cast<Common::Render::HoverPart>(
-                    m_pickingBoundsDragTarget->part));
+                    m_notePartDragTarget->part));
             auto& scale =
                 visual.interactionHitboxComponents[static_cast<std::size_t>(
                     component)];
@@ -4789,15 +4775,10 @@ void Basic2DCanvasInteraction::handleLayoutEditing(
         // 计算出的矩形不写回源快照，实际图元仍使用原来的渲染尺寸。
         if ( bounds.width() <= 0.0f || bounds.height() <= 0.0f ) continue;
         const bool highlighted =
-            m_editPickingBounds
-                ? ((hoveredNoteInstance &&
-                    sameLayoutPart(*hoveredNoteInstance, instance)) ||
-                   (m_pickingBoundsDragTarget &&
-                    sameLayoutPart(*m_pickingBoundsDragTarget, instance)))
-                : ((hoveredNote.has_value() &&
-                    *hoveredNote == instance.entity) ||
-                   (m_noteScaleDragTarget.has_value() &&
-                    *m_noteScaleDragTarget == instance.entity));
+            (hoveredNoteInstance &&
+             sameLayoutPart(*hoveredNoteInstance, instance)) ||
+            (m_notePartDragTarget &&
+             sameLayoutPart(*m_notePartDragTarget, instance));
         // 悬停和正在拖动共享高亮色，指针离开画布后仍保持拖动反馈。
         const ImU32 componentColor =
             highlighted ? highlightedColor : noteBoundsColor;

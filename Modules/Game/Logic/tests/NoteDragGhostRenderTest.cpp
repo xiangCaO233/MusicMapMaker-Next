@@ -202,6 +202,9 @@ void renderCrossRegionGhost(
     // 独立轨宽应同时作用于本体、箭头和命中宽度。
     config.visual.noteScaleX = 0.8F;
     config.visual.noteScaleY = 1.0F;
+    // 本场景显式保持各部件同尺寸，继续聚焦原有几何回归职责。
+    config.visual.notePartScales.fill(
+        { config.visual.noteScaleX, config.visual.noteScaleY });
     // 关闭节拍和 Timing 辅助线，缩小测试中非目标纹理的干扰。
     // 仍走完整快照入口，不直接调用内部几何函数构造期望结果。
     config.visual.beatLineDisplayMode =
@@ -356,6 +359,9 @@ bool testDraggedTapUsesBgmLaneBounds()
     // 测试目标是 BGM 投影选择，不是配置默认值。
     config.visual.noteScaleX = 0.8F;
     config.visual.noteScaleY = 1.0F;
+    // 本场景显式保持各部件同尺寸，继续聚焦原有几何回归职责。
+    config.visual.notePartScales.fill(
+        { config.visual.noteScaleX, config.visual.noteScaleY });
     // 本例同时验证创作教程消费的渲染几何契约，因此保留玩家区拍线。
     // 拍线使用纯色纹理，不会混入下面按 Note UV 筛选的物件边界。
     config.visual.beatLineDisplayMode =

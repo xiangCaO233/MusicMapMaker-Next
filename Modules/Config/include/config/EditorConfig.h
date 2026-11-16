@@ -29,8 +29,9 @@ struct EditorConfig {
     {
         // 临时默认对象集中提供字段初值，避免在重置路径重复维护常量。
         const EditorConfig defaults;
-        visual.noteScaleX = defaults.visual.noteScaleX;
-        visual.noteScaleY = defaults.visual.noteScaleY;
+        visual.noteScaleX     = defaults.visual.noteScaleX;
+        visual.noteScaleY     = defaults.visual.noteScaleY;
+        visual.notePartScales = defaults.visual.notePartScales;
         visual.nonHoldHitEffectDuration =
             defaults.visual.nonHoldHitEffectDuration;
         visual.showBoundSampleLabels = defaults.visual.showBoundSampleLabels;

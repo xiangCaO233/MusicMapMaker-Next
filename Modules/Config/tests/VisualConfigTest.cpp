@@ -1249,6 +1249,44 @@ bool testSimulateAutoplayConfig()
     return true;
 }
 
+/// @brief 验证旧整体尺寸只迁移一次、逐部件独立持久化及损坏字段回退。
+/// @return 头部后续变化不传播到其他部件，且新尺寸完整往返时为真。
+/// @note 使用内存 JSON，不创建配置文件或修改个人布局。
+bool testIndependentNoteSizes()
+{
+    using namespace MMM::Config;
+    // 旧文件必须保留原外观；缺少新增对象时，各部件复制原来的两轴值。
+    auto config =
+        nlohmann::json{ { "noteScaleX", .7F }, { "noteScaleY", 1.3F } }
+            .get<VisualConfig>();
+    for ( const auto& part : config.notePartScales )
+        if ( !near(part.x, .7F) || !near(part.y, 1.3F) ) return false;
+    // 迁移结果是值，而不是继续指向 Head 的关联关系。
+    config.noteScaleX = 2.F;
+    config.noteScaleY = .5F;
+    for ( std::size_t i = 0; i < config.notePartScales.size(); ++i )
+        config.notePartScales[i] = { .6F + float(i) * .2F,
+                                     1.7F - float(i) * .1F };
+    // 每类使用不同数值，可识别键串线与数组顺序错误。
+    const nlohmann::json encoded = config;
+    // 再次读取已包含独立对象，不得用 Head 当前值覆盖这些字段。
+    // 比较固定数组覆盖每类与两个轴，避免只检查第一个类别。
+    // 两轴采用不同变化方向，键串线不能偶然得到相同值。
+    // 全程在内存 JSON 中往返，与本机个人配置无关。
+    const auto restored = encoded.get<VisualConfig>();
+    if ( restored.notePartScales != config.notePartScales ||
+         !near(restored.noteScaleX, 2.F) )
+        return false;
+    // 非对象与非数值只回退相应字段，合法的另一轴仍须读出。
+    auto damaged                           = encoded;
+    damaged["notePartScales"]["holdBody"]  = { { "x", "bad" }, { "y", 2.3F } };
+    damaged["notePartScales"]["flickTail"] = false;
+    const auto recovered                   = damaged.get<VisualConfig>();
+    return near(recovered.notePartScales[0].x, 2.F) &&
+           near(recovered.notePartScales[0].y, 2.3F) &&
+           recovered.notePartScales[3] == NotePartScale{ 2.F, .5F };
+}
+
 }  // namespace
 
 /// @brief 运行视觉配置兼容性与默认值测试。
@@ -1260,7 +1298,8 @@ bool testSimulateAutoplayConfig()
 int main()
 {
     // 用例顺序先覆盖视觉字段，再覆盖 EditorSettings 和复杂布局集合。
-    return testSimulateAutoplayConfig() && testBeatLineDisplayModeRoundTrip() &&
+    return testIndependentNoteSizes() && testSimulateAutoplayConfig() &&
+                   testBeatLineDisplayModeRoundTrip() &&
                    testLegacyDrawBeatLinesMigration() &&
                    testBeatLineAutoRatioClamping() &&
                    testHoverSubdivisionLineExtensionRatioConfig() &&

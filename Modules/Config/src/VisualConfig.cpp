@@ -1022,6 +1022,17 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
         // 音符缩放、标签和填充模式描述物件的基础呈现。
         { "noteScaleX", config.noteScaleX },
         { "noteScaleY", config.noteScaleY },
+        { "notePartScales",
+          [&config] {
+              nlohmann::json parts = nlohmann::json::object();
+              // 只保存独立的非头部值，头部继续沿用旧字段。
+              for ( std::size_t i = 0; i < config.notePartScales.size(); ++i ) {
+                  const auto& value             = config.notePartScales[i];
+                  parts[NOTE_PART_SIZE_KEYS[i]] = { { "x", value.x },
+                                                    { "y", value.y } };
+              }
+              return parts;
+          }() },
         { "showBoundSampleLabels", config.showBoundSampleLabels },
         { "noteFillMode", config.noteFillMode },
         // 使用稳定文本而非枚举序值保存布局选项，便于旧配置缺省与检查。
@@ -1142,6 +1153,28 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
     // 音符缩放和标签默认从类型实例读取，避免复制头文件默认常量。
     config.noteScaleX = j.value("noteScaleX", VisualConfig{}.noteScaleX);
     config.noteScaleY = j.value("noteScaleY", VisualConfig{}.noteScaleY);
+    // 老配置只在读取时复制旧头部尺寸，迁移后各部件不再动态继承。
+    // 只有读取边界负责兼容，日常编辑与渲染不得重新执行继承。
+    // 即便某部件尚未调整，也必须保存它迁移后的确定尺寸。
+    // 手工配置缺少某类时按旧值补齐，不影响其他合法类别。
+    // 只有读取边界负责兼容，日常编辑与渲染不得重新执行继承。
+    // 缺少某类时只补齐该类，其他合法覆盖不被丢弃。
+    // 这里产生确定值，而不是维持随 Head 更新的关联关系。
+    // 数组中的 X/Y 与旧头部值分别对应，不在迁移时改变外观比例。
+    // 再次保存会写出完整类别，后续读取不依赖当前默认值。
+    // 这种迁移不修改谱面、皮肤或预设以外的资源。
+    config.notePartScales.fill({ config.noteScaleX, config.noteScaleY });
+    if ( const auto parts = j.find("notePartScales");
+         parts != j.end() && parts->is_object() ) {
+        for ( std::size_t i = 0; i < config.notePartScales.size(); ++i ) {
+            const auto item = parts->find(NOTE_PART_SIZE_KEYS[i]);
+            if ( item == parts->end() || !item->is_object() ) continue;
+            // 单个字段损坏不丢弃另一轴，也不回头修改头部。
+            auto& scale = config.notePartScales[i];
+            scale.x     = readObservationValue(*item, "x", scale.x, .5F, 3.F);
+            scale.y     = readObservationValue(*item, "y", scale.y, .5F, 3.F);
+        }
+    }
     config.showBoundSampleLabels =
         j.value("showBoundSampleLabels", VisualConfig{}.showBoundSampleLabels);
     config.noteFillMode = j.value("noteFillMode", BackgroundFillMode::Stretch);

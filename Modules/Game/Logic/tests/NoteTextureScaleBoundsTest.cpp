@@ -177,6 +177,11 @@ struct Scene {
         m_config.visual.trackLayout.bottom = 1.0F;
         m_config.visual.noteScaleX         = 0.75F;
         m_config.visual.noteScaleY         = 0.5F;
+        // 本场景显式保持各部件同尺寸，继续聚焦原有几何回归职责。
+        m_config.visual.notePartScales.fill(
+            { m_config.visual.noteScaleX, m_config.visual.noteScaleY });
+        // 原皮肤倍率用例显式给各部件同一初值，后续独立性用例再分别修改。
+        m_config.visual.notePartScales.fill({ .75F, .5F });
         // 显式选择 Stretch，避免 Fit 留白使拾取布局与纹理像素区域不同。
         m_config.visual.noteFillMode = MMM::Config::BackgroundFillMode::Stretch;
         m_config.visual.beatLineDisplayMode =
@@ -285,6 +290,104 @@ struct Scene {
     }
 };
 
+/// @brief 通过完整 CPU 快照验证七类尺寸互不传播及拾取身份。
+/// @return 各自放大后仅目标尺寸变化、其余贴片尺寸不变时为真。
+/// @note 两个场景独立创建，避免复用顶点或从生产 helper 推导期望。
+bool testIndependentPartGeometry()
+{
+    using namespace MMM;
+    using P = Config::NoteSizePart;
+    bool ok = true;
+    // 七类各自建立新场景，前一类的变化不能泄漏到下一轮。
+    // 场景内轨宽、图集与时间一致，尺寸差只来自目标字段。
+    // 不使用生产尺寸 helper 推导期望，避免断言复制实现错误。
+    // 同一纹理只输出一组四点，确保能明确识别目标部件。
+    // 覆盖独立长条与折线，它们共用 Body 纹理但不能共用尺寸。
+    // 每轮同时检查非目标部件，不能只看到目标变大便判定通过。
+    // 首节点与中间节点使用不同资源，分别检查 Head 和 Node 身份。
+    // 当前用例保持暂停中心对齐，排除播放裁剪和底边位移的影响。
+    for ( const auto part : { P::Head,
+                              P::HoldBody,
+                              P::HoldTail,
+                              P::FlickBody,
+                              P::FlickTail,
+                              P::PolylineNode,
+                              P::PolylineBody } ) {
+        Scene baseline, changed;
+        // 除 Head 外全部部件都脱离头部比例；Body 只修改其横截面。
+        const bool poly  = part == P::PolylineNode || part == P::PolylineBody;
+        const bool flick = part == P::FlickBody || part == P::FlickTail;
+        for ( Scene* scene : { &baseline, &changed } ) {
+            Logic::NoteComponent note;
+            note.m_trackIndex = 1;
+            note.m_timestamp  = 0;
+            if ( poly ) {
+                note.m_type = NoteType::POLYLINE;
+                // 一段连接体和一个中间节点，各 UV 仅产生一组四点。
+                note.m_subNotes = {
+                    { .type = NoteType::NOTE, .timestamp = 0, .trackIndex = 1 },
+                    { .type       = NoteType::NOTE,
+                      .timestamp  = scene->timeAtY(120),
+                      .trackIndex = 2 }
+                };
+            } else {
+                note.m_type     = flick ? NoteType::FLICK : NoteType::HOLD;
+                note.m_duration = flick ? 0 : scene->timeAtY(120);
+                note.m_dtrack   = flick ? 1 : 0;
+            }
+            scene->add(note);
+        }
+        // 每类各自放大两倍，非目标项仍保持夹具的明确初值。
+        // 中心对齐下部件几何中心保持不变，只有自身横截面变化。
+        // Body 沿时间或轨道的跨度仍由两个真实节点决定。
+        // 独立 Body 与折线 Body 分开跑，不能因共用纹理串用配置。
+        changed.m_config.visual.notePartScaleX(part) *= 2;
+        changed.m_config.visual.notePartScaleY(part) *= 2;
+        baseline.render();
+        changed.render();
+        // 顶点尺寸来自最终渲染输出，不比较配置字段冒充视觉验收。
+        // UV 在夹具中互不相交，目标贴图不会与轨道背景混淆。
+        // 独立身体检查完整跨度与厚度构成的 AABB，不要求跨度也翻倍。
+        // 尾部和节点则是定尺寸贴片，可以改变两个轴。
+        // 非目标贴片尺寸随后单独比较，连接位置不参与尺寸比较。
+        // 尺寸不能从拾取框反推，否则两层共同出错仍可能通过。
+        // 期望差异直接由两次正式快照的顶点得到。
+        const auto targetUV = part == P::Head ? HEAD_UV
+                              : part == P::HoldBody || part == P::PolylineBody
+                                  ? BODY_UV
+                              : part == P::HoldTail  ? END_UV
+                              : part == P::FlickBody ? HORIZONTAL_UV
+                              : part == P::FlickTail ? ARROW_UV
+                                                     : NODE_UV;
+        glm::vec4  before{}, after{};
+        ok &= check(quadBounds(baseline.m_snapshot, targetUV, before) &&
+                        quadBounds(changed.m_snapshot, targetUV, after),
+                    "独立部件必须实际绘制");
+        // 斜向 Body 的 AABB 包含节点跨度，因此只要求其横截面导致范围变化。
+        ok &= check(!near(before.z, after.z) || !near(before.w, after.w),
+                    "目标部件尺寸没有变化");
+        // 折线起点同样使用 HoldHead 资源，不能按内嵌 NOTE 类型猜测贴图。
+        const auto unchangedUV = part == P::Head ? END_UV : HEAD_UV;
+        glm::vec4  otherBefore{}, otherAfter{};
+        ok &= check(quadBounds(baseline.m_snapshot, unchangedUV, otherBefore) &&
+                        quadBounds(changed.m_snapshot, unchangedUV, otherAfter),
+                    "非目标部件必须实际绘制");
+        ok &= check(near(otherBefore.z, otherAfter.z) &&
+                        near(otherBefore.w, otherAfter.w),
+                    "独立尺寸仍传播到其他部件");
+        // 生产拾取框携带自己的尺寸身份，布局无需反查可变 ECS。
+        // 身份检查同时覆盖折线中间点和尾部，而非仅普通 Head。
+        // 所有目标必须真正产生拾取框，空输出不能被视为通过。
+        // 枚举是绘制协议的值，不把 ECS 地址或组件引用存到快照里。
+        // 后续布局测试据此选择独立字段，不在 UI 线程反查物件类型。
+        bool hasIdentity = false;
+        for ( const auto& hit : changed.m_snapshot.hitboxes )
+            hasIdentity |= hit.renderSizePart == part;
+        ok &= check(hasIdentity, "拾取框丢失独立尺寸身份");
+    }
+    return ok;
+}
+
 /// @brief 验证单键缩小与长条头尾独立放大均反映到教程和拾取边界。
 /// @param endScale 尾部独立倍率，不得继承单键或头部的值。
 /// @return 三类部件尺寸、教程边界和三类拾取框都匹配时返回真。
@@ -361,6 +464,10 @@ bool testVerticalBodyPosition(bool polyline, bool bottom, bool fit,
     if ( fit ) {
         // Fit 的纵向留白应被排除，不能直接使用布局框的一半高度。
         scene.m_config.visual.noteScaleY = 2;
+        // 本场景显式保持各部件同尺寸，继续聚焦原有几何回归职责。
+        scene.m_config.visual.notePartScales.fill(
+            { scene.m_config.visual.noteScaleX,
+              scene.m_config.visual.noteScaleY });
         scene.m_config.visual.noteFillMode =
             MMM::Config::BackgroundFillMode::AspectFit;
     }
@@ -576,6 +683,9 @@ bool testBottomAspectFit()
     scene.m_config.visual.noteTexturePosition =
         MMM::Config::NoteTexturePosition::Bottom;
     scene.m_config.visual.noteScaleY = 2.0F;
+    // 本场景显式保持各部件同尺寸，继续聚焦原有几何回归职责。
+    scene.m_config.visual.notePartScales.fill(
+        { scene.m_config.visual.noteScaleX, scene.m_config.visual.noteScaleY });
     scene.m_config.visual.noteFillMode =
         MMM::Config::BackgroundFillMode::AspectFit;
     const auto tap = scene.add({ .m_type       = MMM::NoteType::NOTE,
@@ -644,6 +754,10 @@ bool testFlickBodyPosition(bool polyline, int direction, bool bottom, bool fit,
     if ( fit ) {
         // 放大纵向布局使 Fit 留白明显，防止 Stretch 恰好掩盖错误。
         scene.m_config.visual.noteScaleY = 2;
+        // 本场景显式保持各部件同尺寸，继续聚焦原有几何回归职责。
+        scene.m_config.visual.notePartScales.fill(
+            { scene.m_config.visual.noteScaleX,
+              scene.m_config.visual.noteScaleY });
         scene.m_config.visual.noteFillMode =
             MMM::Config::BackgroundFillMode::AspectFit;
     }
@@ -850,6 +964,10 @@ bool testAuxiliaryPosition(bool bottom, bool timeline, bool professional,
     if ( fit ) {
         // 纵向放大使预览 Note 出现 Fit 留白，判定框不能按原布局高计算。
         scene.m_config.visual.noteScaleY = 2.0F;
+        // 本场景显式保持各部件同尺寸，继续聚焦原有几何回归职责。
+        scene.m_config.visual.notePartScales.fill(
+            { scene.m_config.visual.noteScaleX,
+              scene.m_config.visual.noteScaleY });
         scene.m_config.visual.noteFillMode =
             MMM::Config::BackgroundFillMode::AspectFit;
     }
@@ -963,6 +1081,7 @@ int main(int argc, char** argv)
         ok &= testVisibleEnlargedTail(endScale);
         ok &= testBottomPosition(endScale);
     }
+    ok &= testIndependentPartGeometry();
     // 折线沿用最后一轮皮肤，其中连接体始终明确配置二倍厚度。
     ok &= testPolylineCrossSection(false);
     ok &= testPolylineCrossSection(true);

@@ -2,6 +2,7 @@
 #include "common/EditTool.h"
 #include "common/LogicCommands.h"
 #include "common/render/HoverRenderData.h"
+#include "common/render/NotePartSizing.h"
 #include "common/render/TextureID.h"
 #include "config/VisualConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -386,10 +387,20 @@ float getTextureAspect(const std::unordered_map<uint32_t, glm::vec4>& uvMap,
 /// @return 按图块相对尺寸换算后的部件像素宽高。
 glm::vec2 getTextureDrawSize(
     const std::unordered_map<uint32_t, glm::vec4>& uvMap, TextureID id,
-    float baseW, float baseH)
+    float baseW, float baseH, const Config::VisualConfig& visual,
+    bool polyline = false)
 {
     // 所有部件尺寸相对 Note 图块计算，保持框选与渲染使用同一比例约定。
     // 缺少基准纹理时只能保留传入的基础宽高。
+    // 与渲染共用部件解析，不能从头部尺寸派生其他部件。
+    // 框选可覆盖当前快照以外的物件，因此必须在逻辑侧复用相同尺寸公式。
+    // 原始 Note 基准只承担轨宽换算，倍率相除后不会再继承 Head 的变化。
+    // 先换布局基准再应用图集比例，避免不同部件皮肤 UV 尺寸失真。
+    // 这个转换不改变时间坐标或物件所属轨道。
+    const auto ratio = Common::Render::notePartSizeRatio(
+        visual, Common::Render::noteSizePart(id, polyline));
+    baseW *= ratio.x;
+    baseH *= ratio.y;
     auto itBase = uvMap.find(static_cast<uint32_t>(TextureID::Note));
     if ( itBase == uvMap.end() ) return { baseW, baseH };
 
@@ -560,8 +571,22 @@ SelectionScreenContext makeSelectionScreenContext(
     float maxScaleY = 1.0F;
     for ( const auto& scale : screen.visual->interactionHitboxComponents )
         maxScaleY = std::max(maxScaleY, Config::sanitizeHitboxScale(scale.y));
+    // 头部缩小时，尾部和节点仍可能很大，粗筛不能只取头部高度。
+    // 固定类别扫描与谱面大小无关，不在这里增加实体遍历。
+    // 放大后的余量仅扩大候选窗口，精筛仍使用每个部件自己的矩形。
+    // 旧尺寸相同的配置得到比例一，保留原有候选范围。
+    // 缩小 Head 后也不能把仍然可见的 Tail 从粗筛中漏掉。
+    float maxRenderRatioY = 1.F;
+    for ( std::size_t i = 1;
+          i < static_cast<std::size_t>(Config::NoteSizePart::Count);
+          ++i )
+        maxRenderRatioY =
+            std::max(maxRenderRatioY,
+                     Common::Render::notePartSizeRatio(
+                         *screen.visual, static_cast<Config::NoteSizePart>(i))
+                         .y);
     screen.hitboxPadding =
-        std::max(screen.noteH, 28.0F) *
+        std::max(screen.noteH * maxRenderRatioY, 28.0F) *
         std::max(1.0F,
                  Config::sanitizeHitboxScale(
                      screen.visual->interactionHitboxScaleY) *
@@ -750,8 +775,11 @@ SelectionRect makeTextureRect(const SelectionScreenContext& screen,
     // 分区轨宽与玩家基准轨宽之比同时作用于基础宽高。
     // 保持纹理纵横比例随所属区域变化，而不是只修改 X 位置。
     const float     laneScale = lane.width / screen.singleTrackW;
-    const glm::vec2 size      = getTextureDrawSize(
-        *screen.uvMap, id, screen.noteW * laneScale, screen.noteH * laneScale);
+    const glm::vec2 size      = getTextureDrawSize(*screen.uvMap,
+                                                   id,
+                                                   screen.noteW * laneScale,
+                                                   screen.noteH * laneScale,
+                                                   *screen.visual);
     // 纹理矩形以真实区域单轨居中，框选命中与渲染完全对齐。
     const float x = lane.leftX + (lane.width - size.x) * 0.5F;
     const float y = timeToScreenY(screen, time, anchorTime);
@@ -788,7 +816,8 @@ void includeCarrierRect(SelectionRect&                target,
                         const SelectionScreenContext& screen,
                         ::MMM::NoteType type, double timestamp, double duration,
                         int trackIndex, int dtrack,
-                        const ::MMM::NoteMetadata* metadata = nullptr)
+                        const ::MMM::NoteMetadata* metadata = nullptr,
+                        bool                       polyline = false)
 {
     if ( !screen.valid || !screen.uvMap ) return;
 
@@ -796,6 +825,9 @@ void includeCarrierRect(SelectionRect&                target,
     const float laneScale = startLane.width / screen.singleTrackW;
     // 根物件按持久化语义投影尾部，折线虚拟载体继续共用头部 HS。
     // 主体横向宽度按起始轨道所在区域的图块比例计算。
+    // polyline 参数来自调用语境，不以共用的 Body 纹理猜测所属组件。
+    // 独立 Hold 与折线载体各自读取对应尺寸，拾取倍率随后再单独应用。
+    // 调整粗细不会改变 duration 或 HS 锚点，从而保留既有谱面时序。
     if ( type == ::MMM::NoteType::HOLD && duration > 0.0 ) {
         // 长条体保持原持续区间，再按专属部位倍率扩展捕捉范围。
         // 纹理端点由调用方单独加入，不用持续体高度替代端点高度。
@@ -803,7 +835,9 @@ void includeCarrierRect(SelectionRect&                target,
             getTextureDrawSize(*screen.uvMap,
                                TextureID::HoldBodyVertical,
                                screen.noteW * laneScale,
-                               screen.noteH * laneScale);
+                               screen.noteH * laneScale,
+                               *screen.visual,
+                               polyline);
         const float x = startLane.leftX + (startLane.width - bodySize.x) * 0.5F;
         const float sy = timeToScreenY(screen, timestamp, timestamp);
         const float ey = timeToScreenY(
@@ -824,7 +858,9 @@ void includeCarrierRect(SelectionRect&                target,
             getTextureDrawSize(*screen.uvMap,
                                TextureID::HoldBodyHorizontal,
                                screen.noteW * laneScale,
-                               screen.noteH * laneScale);
+                               screen.noteH * laneScale,
+                               *screen.visual,
+                               polyline);
         // Flick 主体跨越两个真实轨道中心，支持跨区域拖动后的命中。
         const float startCenter = startLane.leftX + startLane.width * 0.5F;
         const float endCenter   = endLane.leftX + endLane.width * 0.5F;
@@ -870,12 +906,16 @@ void includePolylineTransitionRect(SelectionRect&                target,
         getTextureDrawSize(*screen.uvMap,
                            TextureID::HoldBodyVertical,
                            screen.noteW * currentScale,
-                           screen.noteH * currentScale);
+                           screen.noteH * currentScale,
+                           *screen.visual,
+                           true);
     const glm::vec2 nextBodySize =
         getTextureDrawSize(*screen.uvMap,
                            TextureID::HoldBodyVertical,
                            screen.noteW * nextScale,
-                           screen.noteH * nextScale);
+                           screen.noteH * nextScale,
+                           *screen.visual,
+                           true);
     // 连接段两端分别按所属区域的真实宽度居中。
     const float currentX =
         currentLane.leftX + (currentLane.width - currentBodySize.x) * 0.5F;
@@ -1054,7 +1094,9 @@ bool polylineMatchesSelection(const NoteComponent&          note,
                            sub.timestamp,
                            sub.duration,
                            sub.trackIndex,
-                           sub.dtrack);
+                           sub.dtrack,
+                           nullptr,
+                           true);
         if ( selectionMatchesRect(selection, carrierRect, mode) ) {
             return true;
         }

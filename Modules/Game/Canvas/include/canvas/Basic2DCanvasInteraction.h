@@ -1,4 +1,5 @@
 #pragma once
+#include "config/visual/NoteSizeConfig.h"
 
 #include "ui/interaction/EditorInteraction.h"
 
@@ -237,7 +238,7 @@ private:
     struct NoteLayoutInstance {
         /// @brief 对应的物件实体。
         entt::entity entity{ entt::null };
-        /// @brief 物件全部可交互渲染部位的合并像素边界。
+        /// @brief 单个可交互渲染部件的像素边界。
         Logic::CanvasComponentBounds bounds;
         /// @brief 拾取框模式保留完整领域身份，同号采样与音符不得混合。
         Logic::ChartObjectKind kind{ Logic::ChartObjectKind::PlayerNote };
@@ -247,6 +248,8 @@ private:
         int subIndex{ -1 };
         /// @brief 稳定节点令牌，仅用于高亮当前锁定的部件。
         std::uint64_t nodeToken{};
+        /// @brief 绘制时确定的尺寸配置身份，无需在 UI 线程查询谱面。
+        Config::NoteSizePart sizePart{ Config::NoteSizePart::Head };
     };
 
     std::string              m_canvasName;
@@ -531,21 +534,19 @@ private:
     HorizontalRegionBounds m_horizontalRegionDragStart;
     /// @brief 辅助区域拖动开始时的归一化横坐标。
     float m_horizontalRegionPointerStart{ 0.0F };
-    /// @brief 当前快照中可见物件的合并布局包围框。
+    /// @brief 当前快照中可见部件的独立布局包围框。
     std::vector<NoteLayoutInstance> m_noteLayoutInstances;
-    /// @brief 重建物件布局包围框时复用的实体到数组下标映射。
-    std::unordered_map<entt::entity, std::size_t> m_noteLayoutIndexScratch;
     /// @brief 当前正在通过包围框缩放的物件实体。
     std::optional<entt::entity> m_noteScaleDragTarget;
     /// @brief 拾取范围模式不持久化；同一次拖动期间只能调整一种部件。
     bool m_editPickingBounds{ false };
-    /// @brief 按下时冻结的拾取部件身份，范围仍使用既有起点矩形。
-    std::optional<NoteLayoutInstance> m_pickingBoundsDragTarget;
+    /// @brief 两种尺寸模式共用的冻结部件身份，范围仍使用既有起点矩形。
+    std::optional<NoteLayoutInstance> m_notePartDragTarget;
     /// @brief 当前物件缩放拖动的角点。
     Logic::CanvasComponentDragHandle m_noteScaleDragHandle{
         Logic::CanvasComponentDragHandle::None
     };
-    /// @brief 物件缩放开始时的合并像素边界。
+    /// @brief 部件缩放开始时冻结的像素边界。
     Logic::CanvasComponentBounds m_noteScaleDragStartBounds;
     /// @brief 物件缩放开始时的横纵比例。
     Logic::NoteRenderScale m_noteScaleDragStart;

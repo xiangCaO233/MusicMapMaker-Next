@@ -23,6 +23,7 @@ constexpr const char* FIELDS[] = {
     "judgeline_pos",
     "noteScaleX",
     "noteScaleY",
+    "notePartScales",
     "noteTexturePosition",
     "debugCanvasCameraAngleDegrees",
     "debugCanvasCameraYawDegrees",
@@ -240,6 +241,7 @@ void applyLayoutPreset(const LayoutPreset& preset, VisualConfig& visual)
     visual.judgeline_pos       = preset.m_visual.judgeline_pos;
     visual.noteScaleX          = preset.m_visual.noteScaleX;
     visual.noteScaleY          = preset.m_visual.noteScaleY;
+    visual.notePartScales      = preset.m_visual.notePartScales;
     visual.noteTexturePosition = preset.m_visual.noteTexturePosition;
     visual.debugCanvasCameraAngleDegrees =
         preset.m_visual.debugCanvasCameraAngleDegrees;
