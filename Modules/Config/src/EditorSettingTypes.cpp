@@ -815,14 +815,15 @@ void from_json(const nlohmann::json& json, ObjectPlacementSnapMode& mode)
 void to_json(nlohmann::json&                      json,
              const BpmMeasurementToolPreferences& preferences)
 {
-    // 四个字段共同恢复测量窗口，但不保存任何谱面分析结果。
-    json =
-        nlohmann::json{ { "markerWidthMs", preferences.markerWidthMs },
-                        { "wheelSnapEnabled", preferences.wheelSnapEnabled },
-                        { "beatDivisor", preferences.beatDivisor },
-                        { "viewCenterSeconds", preferences.viewCenterSeconds },
-                        { "viewHalfWidthSeconds",
-                          preferences.viewHalfWidthSeconds } };
+    // 显示与编辑偏好共同恢复测量窗口，但不保存任何谱面分析结果。
+    json = nlohmann::json{
+        { "markerWidthMs", preferences.markerWidthMs },
+        { "wheelSnapEnabled", preferences.wheelSnapEnabled },
+        { "followSubsequentSegments", preferences.followSubsequentSegments },
+        { "beatDivisor", preferences.beatDivisor },
+        { "viewCenterSeconds", preferences.viewCenterSeconds },
+        { "viewHalfWidthSeconds", preferences.viewHalfWidthSeconds }
+    };
 }
 
 /// @brief 从 JSON 恢复 BPM 测量工具偏好。
@@ -833,8 +834,13 @@ void from_json(const nlohmann::json&          json,
                BpmMeasurementToolPreferences& preferences)
 {
     // 视野默认覆盖中心前后八秒，便于首次打开时观察多个拍点。
-    preferences.markerWidthMs        = json.value("markerWidthMs", 80.0);
-    preferences.wheelSnapEnabled     = json.value("wheelSnapEnabled", false);
+    preferences.markerWidthMs    = json.value("markerWidthMs", 80.0);
+    preferences.wheelSnapEnabled = json.value("wheelSnapEnabled", false);
+    // 新增编辑偏好不改变旧用户的段落时间行为。
+    const auto follow = json.find("followSubsequentSegments");
+    // 手工配置填错类型时沿用关闭默认，不隐式转换文本或触发 JSON 类型错误。
+    preferences.followSubsequentSegments =
+        follow != json.end() && follow->is_boolean() && follow->get<bool>();
     preferences.beatDivisor          = json.value("beatDivisor", 4);
     preferences.viewCenterSeconds    = json.value("viewCenterSeconds", 0.0);
     preferences.viewHalfWidthSeconds = json.value("viewHalfWidthSeconds", 8.0);
