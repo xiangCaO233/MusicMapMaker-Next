@@ -59,6 +59,17 @@ public:
     /// @brief 判断画布是否持有未结束的编辑手势，防止摄像机抢走释放事件。
     /// @warning 每帧常量时间读取 UI 本地门闩，不读取逻辑线程状态。
     bool hasActivePointerGesture() const override;
+    /// @brief 绘制默认关闭的拾取包围框编辑开关，模式只属于当前画布。
+    /// @warning 布局页每帧调用；只在显式切换时完成旧配置手势。
+    bool drawPickingBoundsLayoutControls();
+    /// @brief 切换四角手柄的目标：Note 外观或逐部件拾取范围。
+    /// @warning 用户切换入口；先完成旧手势，防止途中改写另一类配置。
+    void setPickingBoundsEditing(bool enabled);
+    /// @brief 查询临时编辑模式，启动或新建画布时保持关闭。
+    [[nodiscard]] bool pickingBoundsEditing() const
+    {
+        return m_editPickingBounds;
+    }
 
     /// @brief 请求本帧左键释放时丢弃画笔而不是提交物件。
     /// @details 供上层事务式教学在发现拖拽落点错误后撤销本次临时放置；
@@ -228,6 +239,14 @@ private:
         entt::entity entity{ entt::null };
         /// @brief 物件全部可交互渲染部位的合并像素边界。
         Logic::CanvasComponentBounds bounds;
+        /// @brief 拾取框模式保留完整领域身份，同号采样与音符不得混合。
+        Logic::ChartObjectKind kind{ Logic::ChartObjectKind::PlayerNote };
+        /// @brief 协议部位，避免公开头引入完整拾取渲染数据。
+        std::uint8_t part{};
+        /// @brief 折线细分节点下标，普通物件为负一。
+        int subIndex{ -1 };
+        /// @brief 稳定节点令牌，仅用于高亮当前锁定的部件。
+        std::uint64_t nodeToken{};
     };
 
     std::string              m_canvasName;
@@ -518,6 +537,10 @@ private:
     std::unordered_map<entt::entity, std::size_t> m_noteLayoutIndexScratch;
     /// @brief 当前正在通过包围框缩放的物件实体。
     std::optional<entt::entity> m_noteScaleDragTarget;
+    /// @brief 拾取范围模式不持久化；同一次拖动期间只能调整一种部件。
+    bool m_editPickingBounds{ false };
+    /// @brief 按下时冻结的拾取部件身份，范围仍使用既有起点矩形。
+    std::optional<NoteLayoutInstance> m_pickingBoundsDragTarget;
     /// @brief 当前物件缩放拖动的角点。
     Logic::CanvasComponentDragHandle m_noteScaleDragHandle{
         Logic::CanvasComponentDragHandle::None

@@ -125,6 +125,8 @@ void SessionUtils::loadBeatmap(SessionContext&               ctx,
     ctx.sortedNoteEntities.clear();
     // 实体顺序与结束时间前缀必须一起失效，否则裁剪查询可能借用旧下标。
     ctx.sortedNoteMaxEndPrefix.clear();
+    ctx.maxSelectionNoteDuration = 0.0;
+    // 新谱面重新建立候选余量，不继承上一谱面的最长载体。
     ctx.sortedSampleEntities.clear();
     ctx.sortedSampleMaxEndPrefix.clear();
     // 音符与自动采样使用两套有序索引，清空其中一套不能代替另一套失效处理。

@@ -4,6 +4,7 @@
 #include "config/NotePalette.h"
 #include "config/visual/BackgroundConfig.h"
 #include "config/visual/CanvasComponentConfig.h"
+#include "config/visual/InteractionHitboxConfig.h"
 #include "config/visual/NoteTexturePosition.h"
 #include "config/visual/PreviewAreaConfig.h"
 #include "config/visual/SpectrumConfig.h"
@@ -279,6 +280,8 @@ struct VisualConfig {
     float interactionHitboxScaleX{ DEFAULT_INTERACTION_HITBOX_SCALE };
     /// @brief 物件交互拾取包围盒相对原始几何的纵向缩放。
     float interactionHitboxScaleY{ DEFAULT_INTERACTION_HITBOX_SCALE };
+    /// @brief 各可拾取部件在全局倍率之上的独立横纵倍率，默认不改变旧配置。
+    InteractionHitboxScales interactionHitboxComponents{};
 };
 
 /// @brief 将完整视觉配置序列化为 JSON。

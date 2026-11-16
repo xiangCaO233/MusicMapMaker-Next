@@ -35,6 +35,7 @@ constexpr const char* FIELDS[] = {
     "canvasCameraRotation",
     "interactionHitboxScaleX",
     "interactionHitboxScaleY",
+    "interactionHitboxComponents",
 };
 /// @brief 从已有视觉序列化结果提取布局字段。
 /// @note 仅在保存、切换和文件操作的低频路径创建 JSON。
@@ -260,6 +261,9 @@ void applyLayoutPreset(const LayoutPreset& preset, VisualConfig& visual)
     // 音符命中仍使用原始时间坐标，此处不移动任何谱面物件。
     visual.interactionHitboxScaleX = preset.m_visual.interactionHitboxScaleX;
     visual.interactionHitboxScaleY = preset.m_visual.interactionHitboxScaleY;
+    // 部件附加倍率随布局预设切换，避免只恢复全局倍率留下旧部件覆盖。
+    visual.interactionHitboxComponents =
+        preset.m_visual.interactionHitboxComponents;
 }
 /// @brief 收取实时配置中的布局子集，不改变方案名称。
 /// @param preset 接收布局快照的当前方案。

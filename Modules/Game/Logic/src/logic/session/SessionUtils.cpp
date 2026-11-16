@@ -453,11 +453,17 @@ bool applyNoteCacheMutationsIncrementally(
     for ( std::size_t index = prefixIndex;
           index < ctx.sortedNoteEntities.size();
           ++index ) {
-        const auto entity = ctx.sortedNoteEntities[index];
-        maximumEnd        = std::max(
-            maximumEnd,
-            noteEndTime(ctx.noteRegistry.get<const NoteComponent>(entity)));
+        const auto  entity = ctx.sortedNoteEntities[index];
+        const auto& selectionNote =
+            ctx.noteRegistry.get<const NoteComponent>(entity);
+        const double selectionEnd         = noteEndTime(selectionNote);
+        maximumEnd                        = std::max(maximumEnd, selectionEnd);
         ctx.sortedNoteMaxEndPrefix[index] = maximumEnd;
+        // 复用已经访问到的后缀，增量更新只扩大保守时长，不新增全谱统计。
+        // 缩短或删除最长载体后允许多查候选，不为缩小余量额外遍历全谱。
+        ctx.maxSelectionNoteDuration =
+            std::max(ctx.maxSelectionNoteDuration,
+                     selectionEnd - selectionNote.m_timestamp);
     }
 
     // 防止无符号统计下溢；先撤去旧贡献，再加入新贡献。

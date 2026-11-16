@@ -59,6 +59,9 @@ public:
     /// @brief 把当前布局编辑器控件绘制到工具栏附着窗口。
     /// @warning UI 每帧调用，只借用已有编辑器，不分配或取得会话锁。
     bool drawCameraLayoutControls() override;
+    /// @brief 绘制拾取框编辑展开页，返回当前画布的临时编辑模式。
+    /// @warning UI 每帧只借用已建立的交互控制器，不获取会话锁。
+    bool drawPickingBoundsLayoutControls() override;
 
     /// @brief 返回当前已准备画布快照的玩家键数，未载谱时为零。
     /// @warning UI 每帧只读本地稳定快照，不复制所有权或取得会话锁。

@@ -1,4 +1,5 @@
 #include "config/VisualConfig.h"
+#include "config/visual/InteractionHitboxConfig.h"
 
 #include <algorithm>
 #include <array>
@@ -1073,6 +1074,16 @@ void to_json(nlohmann::json& j, const VisualConfig& config)
         { "interactionHitboxScaleX", config.interactionHitboxScaleX },
         { "interactionHitboxScaleY", config.interactionHitboxScaleY }
     };
+    // 具名部件键不依赖枚举序号，后续增加部件不会错读已有配置。
+    auto& components = j["interactionHitboxComponents"] =
+        nlohmann::json::object();
+    // 保存完整部件表，保证改回单位倍率也能覆盖文件中的旧自定义值。
+    // 序列化只在保存和布局切换执行，不参与逐框拾取计算。
+    for ( std::size_t i = 0; i < HITBOX_COMPONENT_KEYS.size(); ++i ) {
+        const auto& scale = config.interactionHitboxComponents[i];
+        components[HITBOX_COMPONENT_KEYS[i]] = { { "x", scale.x },
+                                                 { "y", scale.y } };
+    }
 }
 
 /// @brief 从 JSON 恢复完整视觉配置并执行版本迁移与范围校正。
@@ -1295,6 +1306,21 @@ void from_json(const nlohmann::json& j, VisualConfig& config)
         std::clamp(config.interactionHitboxScaleY,
                    VisualConfig::MIN_INTERACTION_HITBOX_SCALE,
                    VisualConfig::MAX_INTERACTION_HITBOX_SCALE);
+    // 缺失的新字段使用单位倍率，完整继承旧文件中的全局范围。
+    // 不让部分或损坏的部件配置影响其他部件，逐轴独立校验类型和有限性。
+    config.interactionHitboxComponents = {};
+    const auto components              = j.find("interactionHitboxComponents");
+    if ( components != j.end() && components->is_object() ) {
+        for ( std::size_t i = 0; i < HITBOX_COMPONENT_KEYS.size(); ++i ) {
+            const auto value = components->find(HITBOX_COMPONENT_KEYS[i]);
+            if ( value == components->end() || !value->is_object() ) continue;
+            auto& scale = config.interactionHitboxComponents[i];
+            scale.x     = readObservationValue(
+                *value, "x", 1.0F, MIN_HITBOX_SCALE, MAX_HITBOX_SCALE);
+            scale.y = readObservationValue(
+                *value, "y", 1.0F, MIN_HITBOX_SCALE, MAX_HITBOX_SCALE);
+        }
+    }
 }
 
 }  // namespace MMM::Config

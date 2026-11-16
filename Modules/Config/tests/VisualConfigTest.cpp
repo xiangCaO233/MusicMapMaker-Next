@@ -253,6 +253,9 @@ bool testInteractionHitboxScaleConfig()
     MMM::Config::VisualConfig source;
     source.interactionHitboxScaleX = 2.5F;
     source.interactionHitboxScaleY = 0.75F;
+    // 头部和折线节点采用相反设置，证明具名部件键不会串位。
+    source.interactionHitboxComponents[0] = { 2.0F, 0.5F };
+    source.interactionHitboxComponents[4] = { 0.75F, 3.0F };
 
     const nlohmann::json encoded  = source;
     const auto           restored = encoded.get<MMM::Config::VisualConfig>();
@@ -277,7 +280,30 @@ bool testInteractionHitboxScaleConfig()
         // 精确错误归属于配置范围，而非实际拾取系统行为。
         return false;
     }
-    return true;
+    // 旧文件缺少新字段时保持单位附加倍率，继续沿用全局缩放。
+    // 损坏对象、错误轴类型和越界数值分别处理，不能整表丢弃合法项。
+    // 新字段中的错误类型只影响对应轴，不要求重置整份视觉配置。
+    // 未知键模拟较新版本的文件，旧客户端应忽略而不改写邻近部件。
+    // 头部同时覆盖上下界；身体保留合法轴以排除整对象回退的实现。
+    const auto partial = nlohmann::json{
+        { "interactionHitboxComponents",
+          { { "head", { { "x", 0 }, { "y", 9 } } },
+            { "holdBody", { { "x", "invalid" }, { "y", 2 } } },
+            { "holdEnd", false },
+            { "futureComponent", { { "x", 3 } } } } }
+    }.get<MMM::Config::VisualConfig>();
+    // 分别验证当前格式、旧格式和损坏格式，不能只检查正常往返。
+    // 非相邻部件的不同倍率可检测序列号持久化和默认填充错误。
+    return near(restored.interactionHitboxComponents[0].x, 2) &&
+           near(restored.interactionHitboxComponents[0].y, .5F) &&
+           near(restored.interactionHitboxComponents[4].x, .75F) &&
+           near(restored.interactionHitboxComponents[4].y, 3) &&
+           near(legacy.interactionHitboxComponents[4].x, 1) &&
+           near(partial.interactionHitboxComponents[0].x, .25F) &&
+           near(partial.interactionHitboxComponents[0].y, 4) &&
+           near(partial.interactionHitboxComponents[1].x, 1) &&
+           near(partial.interactionHitboxComponents[1].y, 2) &&
+           near(partial.interactionHitboxComponents[2].x, 1);
 }
 
 /// @brief 验证非 Hold 打击特效时长能够持久化并兼容旧配置。

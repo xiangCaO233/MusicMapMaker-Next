@@ -1,7 +1,9 @@
 #include "logic/session/InteractionController.h"
 #include "common/EditTool.h"
 #include "common/LogicCommands.h"
+#include "common/render/HoverRenderData.h"
 #include "common/render/TextureID.h"
+#include "config/VisualConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectResourceService.h"
@@ -58,6 +60,11 @@ struct SelectionRect {
 
 /// @brief 框选屏幕空间投影上下文。
 struct SelectionScreenContext {
+    /// @brief 同一逻辑线程本轮借用的视觉配置，生命周期覆盖框选计算。
+    const Config::VisualConfig* visual{ nullptr };
+    /// @brief 覆盖放大后的定高部件的候选粗筛余量，单位像素。
+    float hitboxPadding{ 0.0F };
+
     /// @brief 当前框选所在视口的 ScrollCache。
     const System::ScrollCache* cache{ nullptr };
 
@@ -516,6 +523,8 @@ SelectionScreenContext makeSelectionScreenContext(
     }
 
     screen.cache = cache;
+    // 只借用会话当前配置，不在逐物件热路径复制配置容器或共享所有权。
+    screen.visual = &ctx.lastConfig.visual;
     // 缓存指针只是观察引用，图集句柄则维持快照在本次框选期间的生命周期。
     // 即使引擎切换图集版本，本上下文仍使用同一份 UV 数据。
     screen.uvMap = std::move(uvMap);
@@ -546,6 +555,17 @@ SelectionScreenContext makeSelectionScreenContext(
         (singleTrackW / baseAspect) * ctx.lastConfig.visual.noteScaleY;
     // 用动画时间作为屏幕锚点，与当前显示位置一致。
     // 若改用音频真实时间，平滑滚动期间框选会与可见物件错位。
+    // 粗筛窗口也必须覆盖放大后的定高部件，否则精筛看不到边缘候选。
+    // 固定七类扫描与谱面大小无关；最终仍由各部件自己的矩形精确判定。
+    float maxScaleY = 1.0F;
+    for ( const auto& scale : screen.visual->interactionHitboxComponents )
+        maxScaleY = std::max(maxScaleY, Config::sanitizeHitboxScale(scale.y));
+    screen.hitboxPadding =
+        std::max(screen.noteH, 28.0F) *
+        std::max(1.0F,
+                 Config::sanitizeHitboxScale(
+                     screen.visual->interactionHitboxScaleY) *
+                     maxScaleY);
     screen.currentTime    = ctx.animateTime;
     screen.viewportHeight = cameraIt->second.viewportHeight;
     screen.currentAbsY    = cache->getVisualAnchorAbsY(ctx.animateTime);
@@ -678,6 +698,35 @@ SelectionLaneGeometry selectionLaneGeometry(
              screen.singleTrackW };
 }
 
+/// @brief 把框选部件转换为与光标捕捉一致的有效包围框。
+/// @param rect 原始部件矩形，不允许对合并后的整物件重复缩放。
+/// @param part 正式拾取部位，映射沿用包围框显示与光标捕捉的公共 helper。
+/// @param screen 当前逻辑线程本轮借用的配置与投影上下文。
+/// @return 保持中心的有效矩形；无效输入保持无效。
+/// @warning 框选精筛热路径：只做常量级算术，不分配、不加锁、不访问 ECS。
+SelectionRect interactionSelectionRect(SelectionRect rect, HoverPart part,
+                                       const SelectionScreenContext& screen)
+{
+    if ( !rect.valid || !screen.visual ) return rect;
+    // 部件先独立缩放，再交给普通物件整体或折线逐段的原有组合规则。
+    // 对合并框再放大会把头部倍率错误传播给长条体与尾部。
+    // 实体只是几何变换的占位，不向选择集合发布这个临时身份。
+    const Hitbox original{ entt::null,
+                           part,
+                           -1,
+                           rect.left,
+                           rect.top,
+                           rect.right - rect.left,
+                           rect.bottom - rect.top };
+    const auto   scaled =
+        scaleInteractionHitbox(original,
+                               screen.visual->interactionHitboxScaleX,
+                               screen.visual->interactionHitboxScaleY,
+                               screen.visual->interactionHitboxComponents);
+    return makeRect(
+        scaled.x, scaled.y, scaled.x + scaled.w, scaled.y + scaled.h);
+}
+
 /// @brief 计算某个轨道时间点上的纹理矩形。
 /// @warning 逻辑热路径：框选重算时只做坐标换算和 UV 尺寸读取。
 /// @note 纹理尺寸先按所在分区轨宽缩放，再在该轨内居中。
@@ -687,10 +736,12 @@ SelectionLaneGeometry selectionLaneGeometry(
 /// @param track 用于解析物件分区的统一轨号。
 /// @param time 部件中心所在逻辑时间。
 /// @param anchorTime 显示速度锚点时间。
+/// @param part 可选的拾取部位覆盖，用于区分同一贴图的普通头和折线首节点。
 /// @return 居中的部件矩形，输入上下文无效时返回无效矩形。
 SelectionRect makeTextureRect(const SelectionScreenContext& screen,
                               TextureID id, float track, double time,
-                              double anchorTime)
+                              double    anchorTime,
+                              HoverPart part = HoverPart::None)
 {
     if ( !screen.valid || !screen.uvMap ) return {};
 
@@ -704,7 +755,21 @@ SelectionRect makeTextureRect(const SelectionScreenContext& screen,
     // 纹理矩形以真实区域单轨居中，框选命中与渲染完全对齐。
     const float x = lane.leftX + (lane.width - size.x) * 0.5F;
     const float y = timeToScreenY(screen, time, anchorTime);
-    return makeRect(x, y - size.y * 0.5f, x + size.x, y + size.y * 0.5f);
+    // 纹理类别默认映射到拾取部位，折线首节点由调用方显式指定。
+    // 不能按枚举序号推断，因为渲染纹理与命令部位是独立协议。
+    if ( part == HoverPart::None ) {
+        switch ( id ) {
+        case TextureID::HoldEnd: part = HoverPart::HoldEnd; break;
+        case TextureID::Node: part = HoverPart::PolylineNode; break;
+        case TextureID::FlickArrowLeft:
+        case TextureID::FlickArrowRight: part = HoverPart::FlickArrow; break;
+        default: part = HoverPart::Head; break;
+        }
+    }
+    return interactionSelectionRect(
+        makeRect(x, y - size.y * 0.5f, x + size.x, y + size.y * 0.5f),
+        part,
+        screen);
 }
 
 /// @brief 将 Hold/Flick 的主体矩形合并到屏幕包围盒。
@@ -732,6 +797,8 @@ void includeCarrierRect(SelectionRect&                target,
     // 根物件按持久化语义投影尾部，折线虚拟载体继续共用头部 HS。
     // 主体横向宽度按起始轨道所在区域的图块比例计算。
     if ( type == ::MMM::NoteType::HOLD && duration > 0.0 ) {
+        // 长条体保持原持续区间，再按专属部位倍率扩展捕捉范围。
+        // 纹理端点由调用方单独加入，不用持续体高度替代端点高度。
         const glm::vec2 bodySize =
             getTextureDrawSize(*screen.uvMap,
                                TextureID::HoldBodyVertical,
@@ -744,7 +811,11 @@ void includeCarrierRect(SelectionRect&                target,
             carrierEndTime(type, timestamp, duration),
             metadata ? ::MMM::holdEndHsAnchor(*metadata, timestamp, duration)
                      : carrierEndAnchorTime(screen, type, timestamp, duration));
-        includeRect(target, makeRect(x, sy, x + bodySize.x, ey));
+        includeRect(
+            target,
+            interactionSelectionRect(makeRect(x, sy, x + bodySize.x, ey),
+                                     HoverPart::HoldBody,
+                                     screen));
     } else if ( type == ::MMM::NoteType::FLICK && dtrack != 0 ) {
         // Flick 终点可能跨入另一布局区域，必须重新解析终点轨。
         // 轨差只能决定逻辑终点，不能直接乘起轨宽度求像素距离。
@@ -758,11 +829,14 @@ void includeCarrierRect(SelectionRect&                target,
         const float startCenter = startLane.leftX + startLane.width * 0.5F;
         const float endCenter   = endLane.leftX + endLane.width * 0.5F;
         const float y           = timeToScreenY(screen, timestamp, timestamp);
-        includeRect(target,
-                    makeRect(std::min(startCenter, endCenter),
-                             y - bodySize.y * 0.5F,
-                             std::max(startCenter, endCenter),
-                             y + bodySize.y * 0.5F));
+        includeRect(
+            target,
+            interactionSelectionRect(makeRect(std::min(startCenter, endCenter),
+                                              y - bodySize.y * 0.5F,
+                                              std::max(startCenter, endCenter),
+                                              y + bodySize.y * 0.5F),
+                                     HoverPart::HoldBody,
+                                     screen));
     }
 }
 
@@ -820,10 +894,13 @@ void includePolylineTransitionRect(SelectionRect&                target,
     // 该保守矩形用于框选，不承担逐像素或三角形精确拾取。
     includeRect(
         target,
-        makeRect(std::min(currentX, nextX),
-                 std::min(sy, ey),
-                 std::max(currentX + currentBodySize.x, nextX + nextBodySize.x),
-                 std::max(sy, ey)));
+        interactionSelectionRect(makeRect(std::min(currentX, nextX),
+                                          std::min(sy, ey),
+                                          std::max(currentX + currentBodySize.x,
+                                                   nextX + nextBodySize.x),
+                                          std::max(sy, ey)),
+                                 HoverPart::HoldBody,
+                                 screen));
 }
 
 /// @brief 计算普通物件的屏幕选择包围盒。
@@ -962,7 +1039,8 @@ bool polylineMatchesSelection(const NoteComponent&          note,
                                  i == 0 ? TextureID::Note : TextureID::Node,
                                  static_cast<float>(sub.trackIndex),
                                  sub.timestamp,
-                                 sub.timestamp),
+                                 sub.timestamp,
+                                 HoverPart::PolylineNode),
                  mode) ) {
             return true;
         }
@@ -1059,18 +1137,22 @@ SelectionRect makeSampleScreenRect(const SampleComponent&        sample,
     const auto lane = selectionLaneGeometry(
         screen, static_cast<std::int32_t>(sample.m_track));
     const float laneWidth = lane.width;
-    // 采样选择主体沿用这里的独立尺寸规则，并设置最小可选宽高。
-    // 此计算不读取音频资源或 Note 图块，只依赖所在轨宽。
-    const float bodyWidth  = std::max(12.0F, laneWidth * 0.78F);
-    const float bodyHeight = std::clamp(laneWidth * 0.24F, 16.0F, 28.0F);
+    // 采样主体复用渲染的 Note 尺寸比例，不再维护另一套固定宽高。
+    // 两个轴都按本区域轨宽换算，BGM 轨不会借用玩家区的实际宽度。
+    // 范围调整不移动锚点或触发时间，严格模式继续要求覆盖合并后的外包框。
+    // 只读取本轮已有图集快照，不访问音频资源或重建贴图。
+    const float bodyWidth  = screen.noteW * laneWidth / screen.singleTrackW;
+    const float bodyHeight = screen.noteH * laneWidth / screen.singleTrackW;
     const float bodyX      = lane.leftX + (laneWidth - bodyWidth) * 0.5F;
     const float anchorY =
         timeToScreenY(screen, sample.m_timestamp, sample.m_timestamp);
     includeRect(rect,
-                makeRect(bodyX,
-                         anchorY - bodyHeight * 0.5F,
-                         bodyX + bodyWidth,
-                         anchorY + bodyHeight * 0.5F));
+                interactionSelectionRect(makeRect(bodyX,
+                                                  anchorY - bodyHeight * 0.5F,
+                                                  bodyX + bodyWidth,
+                                                  anchorY + bodyHeight * 0.5F),
+                                         HoverPart::SampleAnchor,
+                                         screen));
 
     // 偏移通过 SampleComponent 统一换算为实际秒时间。
     // 触发手柄采用自身时间作为显示锚点，与主体锚点分开投影。
@@ -1080,17 +1162,15 @@ SelectionRect makeSampleScreenRect(const SampleComponent&        sample,
     // 手柄大小按轨宽缩放后钳制，保持窄轨下仍可选中。
     // 横向位于轨内固定比例，不能默认放到主体中心。
     const float handleSize    = std::clamp(laneWidth * 0.12F, 8.0F, 14.0F);
-    const float handleCenterX = lane.leftX + 0.82F * laneWidth;
-    includeRect(rect,
-                makeRect(handleCenterX - handleSize * 0.5F,
-                         effectiveY - handleSize * 0.5F,
-                         handleCenterX + handleSize * 0.5F,
-                         effectiveY + handleSize * 0.5F));
-    includeRect(rect,
-                makeRect(handleCenterX - 1.0F,
-                         std::min(anchorY, effectiveY),
-                         handleCenterX + 1.0F,
-                         std::max(anchorY, effectiveY)));
+    const float handleCenterX = bodyX + bodyWidth - handleSize * 0.5F;
+    includeRect(
+        rect,
+        interactionSelectionRect(makeRect(handleCenterX - handleSize * 0.5F,
+                                          effectiveY - handleSize * 0.5F,
+                                          handleCenterX + handleSize * 0.5F,
+                                          effectiveY + handleSize * 0.5F),
+                                 HoverPart::SampleOffset,
+                                 screen));
     return rect;
 }
 
@@ -1176,6 +1256,21 @@ bool collectMarqueeBoxCandidates(
         return false;
     }
 
+    // 放大长条体会使其两端越出原时间索引，额外余量只读低频维护的最大时长。
+    // 只扩大排序查询区间，精筛仍逐候选验证有效部件矩形。
+    // 删除最长物件后缓存允许保守高估，完整重建时才收敛。
+    // 该标量随原索引维护，不在拖框过程中另行统计全部物件。
+    // 不在连续框选中重建索引或统计全谱；缩小范围时也不能漏掉原区间候选。
+    const auto& visual = ctx.lastConfig.visual;
+    const float bodyScaleY =
+        Config::sanitizeHitboxScale(visual.interactionHitboxScaleY) *
+        Config::sanitizeHitboxScale(
+            visual
+                .interactionHitboxComponents[static_cast<std::size_t>(
+                    Config::HitboxComponent::HoldBody)]
+                .y);
+    const double carrierPadding =
+        std::max(0.0F, bodyScaleY - 1.0F) * 0.5 * ctx.maxSelectionNoteDuration;
     // 时间余量仅扩大候选窗口，不等待数据或延迟本地交互。
     // 最终仍以屏幕几何判定命中，所以多收集候选不会直接多选。
     /// @brief 将一个保守时间窗口内的候选追加到当前结果。
@@ -1183,8 +1278,8 @@ bool collectMarqueeBoxCandidates(
     /// @param maxTime 窗口较晚边界，单位秒。
     /// @warning 框选脏刷新路径：仅查询有序区间并扫描局部候选，不重建全局排序。
     auto collectTimeRangeCandidates = [&](double minTime, double maxTime) {
-        minTime -= MARQUEE_CANDIDATE_TIME_PADDING_SECONDS;
-        maxTime += MARQUEE_CANDIDATE_TIME_PADDING_SECONDS;
+        minTime -= MARQUEE_CANDIDATE_TIME_PADDING_SECONDS + carrierPadding;
+        maxTime += MARQUEE_CANDIDATE_TIME_PADDING_SECONDS + carrierPadding;
         // 非有限或反向时间窗不能交给有序索引二分。
         // 忽略该时间段，不修改全局排序数据。
         if ( !std::isfinite(minTime) || !std::isfinite(maxTime) ||
@@ -1245,8 +1340,8 @@ bool collectMarqueeBoxCandidates(
 
     // 先按基础音符高度向上下扩展屏幕窗口，覆盖边缘纹理。
     // 再逆映射时间，避免只看框选端点秒数漏掉滚动折返区域。
-    const double paddedTopY    = box.rect.top - box.screen.noteH;
-    const double paddedBottomY = box.rect.bottom + box.screen.noteH;
+    const double paddedTopY    = box.rect.top - box.screen.hitboxPadding;
+    const double paddedBottomY = box.rect.bottom + box.screen.hitboxPadding;
     const double absA   = box.screen.currentAbsY +
                           (box.screen.judgmentLineY - paddedTopY) /
                               static_cast<double>(box.screen.renderScaleY);
@@ -1411,8 +1506,8 @@ bool collectMarqueeBoxSampleCandidates(
 
     // 先按基础音符高度向上下扩展屏幕窗口，覆盖边缘纹理。
     // 再逆映射时间，避免只看框选端点秒数漏掉滚动折返区域。
-    const double paddedTopY    = box.rect.top - box.screen.noteH;
-    const double paddedBottomY = box.rect.bottom + box.screen.noteH;
+    const double paddedTopY    = box.rect.top - box.screen.hitboxPadding;
+    const double paddedBottomY = box.rect.bottom + box.screen.hitboxPadding;
     const double absA   = box.screen.currentAbsY +
                           (box.screen.judgmentLineY - paddedTopY) /
                               static_cast<double>(box.screen.renderScaleY);

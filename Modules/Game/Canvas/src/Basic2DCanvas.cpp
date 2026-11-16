@@ -3757,6 +3757,14 @@ int Basic2DCanvas::layoutKeyCount() const
                : 0;
 }
 
+/// @brief 在布局工具展开页借用当前画布的拾取框编辑控制器。
+/// @warning UI 每帧调用，不复制所有权或读取逻辑会话。
+bool Basic2DCanvas::drawPickingBoundsLayoutControls()
+{
+    // 交互控制器随画布生命周期建立，工具栏不另建一份编辑模式。
+    return m_interaction && m_interaction->drawPickingBoundsLayoutControls();
+}
+
 /// @brief 将相机编辑器控件嵌入调用方的布局工具窗口。
 /// @warning UI 每帧借用本地编辑器；不分配资源或获取会话锁。
 bool Basic2DCanvas::drawCameraLayoutControls()

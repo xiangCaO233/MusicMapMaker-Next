@@ -2,7 +2,6 @@
 #include "config/AppConfig.h"
 #include "config/EditorConfig.h"
 #include "config/EditorSettings.h"
-#include "config/VisualConfig.h"
 #include "config/skin/translation/Translation.h"
 #include "event/core/EventBus.h"
 #include "event/logic/LogicCommandEvent.h"
@@ -37,8 +36,6 @@ void SettingsView::drawDebugSettings()
     auto& appConfig = Config::AppConfig::instance();
     // 通用编辑器选项保存渲染日志与 RTC 诊断开关。
     auto& settings = appConfig.getEditorSettings();
-    /// 视觉配置提供命中框显示和缩放系数。
-    auto& visual = appConfig.getVisualConfig();
     /// 标准设置项使用本帧变化标记，折叠标题不触发保存。
     /// 标题展开状态只属于临时窗口状态，不触发配置更新。
     bool changed = false;
@@ -159,60 +156,9 @@ void SettingsView::drawDebugSettings()
         return nullptr;
     };
 
-    // 渲染诊断分组默认展开，方便开发构建快速访问命中框工具。
+    // 渲染诊断分组只保留耗时日志，正式捕捉设置已移到视觉页。
     if ( auto* sec =
              addHeader(TR_CACHE("ui.settings.debug.rendering").data(), true) ) {
-        // 其余诊断项用于检查二维拾取几何与渲染阶段。
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.debug.draw_hitboxes").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                // Checkbox 按标准帧高在 Clay 行内垂直居中。
-                ImGui::SetCursorScreenPos(
-                    { r.x, r.y + (r.height - ImGui::GetFrameHeight()) * 0.5f });
-                // 命中框开关只改变可视化，不触发几何重建。
-                changed |= ::MMM::UI::FeedbackCheckbox(
-                    "##DebugDrawHitboxes", &visual.debugDrawHitboxes);
-            });
-
-        // 第二项调整命中框横向缩放，用于定位过宽或过窄的拾取区域。
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.debug.hitbox_scale_x").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                // 滑杆占满右侧控件列宽度。
-                ImGui::SetNextItemWidth(r.width);
-                // 横向命中框倍率限制在 VisualConfig 公开安全范围内。
-                changed |= ::MMM::UI::FeedbackSliderFloat(
-                    "##InteractionHitboxScaleX",
-                    &visual.interactionHitboxScaleX,
-                    Config::VisualConfig::MIN_INTERACTION_HITBOX_SCALE,
-                    Config::VisualConfig::MAX_INTERACTION_HITBOX_SCALE,
-                    "%.2f");
-            });
-
-        // 第三项独立调整纵向缩放，便于验证轨道高度方向的命中范围。
-        addSettingItem(
-            *sec,
-            rowIndex,
-            TR_CACHE("ui.settings.debug.hitbox_scale_y").data(),
-            maxLabelW,
-            [&](Clay_BoundingBox r, bool) {
-                // 纵向倍率与横向倍率使用相同的布局和格式精度。
-                ImGui::SetNextItemWidth(r.width);
-                // 配置边界防止零尺寸或过大命中框破坏交互。
-                changed |= ::MMM::UI::FeedbackSliderFloat(
-                    "##InteractionHitboxScaleY",
-                    &visual.interactionHitboxScaleY,
-                    Config::VisualConfig::MIN_INTERACTION_HITBOX_SCALE,
-                    Config::VisualConfig::MAX_INTERACTION_HITBOX_SCALE,
-                    "%.2f");
-            });
-
         // 最后一项启用渲染 profile 日志，不改变实际画布视觉状态。
         addSettingItem(
             *sec,

@@ -9,6 +9,7 @@
 #include "ui/imgui/manager/SettingsView.h"
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/utils/UIWidgetUtils.h"
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <fmt/format.h>
@@ -438,6 +439,180 @@ void SettingsView::drawVisualSettings()
                 // Timing 线可单独关闭，便于降低密集变速谱面的视觉噪声。
                 changed |= ::MMM::UI::FeedbackCheckbox(
                     "##DrawTimingLines", &visual.previewConfig.drawTimingLines);
+            });
+    }
+
+    // 捕捉范围是正式编辑偏好，独立分组不再混在调试诊断中。
+    // 当前部件倍率只参与拾取变换，不改变图元、谱面时间或撤销内容。
+    // 包围框在渲染端使用正式拾取函数；设置页不维护第二套预览计算。
+    // 显示开关和有效范围独立，关闭显示后仍保留用户调整过的范围。
+    // 配置键继续兼容旧文件中的 debugDrawHitboxes，页面移动不强制迁移文件。
+    if ( auto* sec = addHeader(
+             TR_CACHE("ui.settings.visual.hitboxes.title").data(), true) ) {
+        // 显示的是实际捕捉范围，开关只添加覆盖框，不改变物件绘制。
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.hitboxes.show").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                // Checkbox 按标准帧高在 Clay 行内垂直居中。
+                // 不修改颜色和描边样式，覆盖框继续服从现有部件着色规则。
+                // 此项不参与布局预设，切换皮肤布局时保持用户的显示偏好。
+                ImGui::SetCursorScreenPos(
+                    { r.x, r.y + (r.height - ImGui::GetFrameHeight()) * 0.5f });
+                // 命中框开关只改变可视化，不触发几何重建。
+                changed |= ::MMM::UI::FeedbackCheckbox(
+                    "##DebugDrawHitboxes", &visual.debugDrawHitboxes);
+            });
+
+        // 全局倍率保留旧版配置，部件调整在它的基础上生效。
+        // 默认附加倍率为一，因此已有全局倍率不会被静默覆盖。
+        // 两层倍率相乘，不将部件范围解释为覆盖全局设置的绝对像素。
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.hitboxes.global_x").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                // 滑杆占满右侧控件列宽度。
+                ImGui::SetNextItemWidth(r.width);
+                // 横向命中框倍率限制在 VisualConfig 公开安全范围内。
+                changed |= ::MMM::UI::FeedbackSliderFloat(
+                    "##InteractionHitboxScaleX",
+                    &visual.interactionHitboxScaleX,
+                    Config::VisualConfig::MIN_INTERACTION_HITBOX_SCALE,
+                    Config::VisualConfig::MAX_INTERACTION_HITBOX_SCALE,
+                    "%.2f");
+            });
+
+        // 两个轴独立设置，避免横向放大同时干扰密集的时间方向。
+        // 范围以拾取包围框中心计算，三维视角继续复用既有逆投影。
+        // 横纵设置不改图元缩放，折线与长条的连接点仍保持原来的绘制坐标。
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.hitboxes.global_y").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox r, bool) {
+                // 纵向倍率与横向倍率使用相同的布局和格式精度。
+                ImGui::SetNextItemWidth(r.width);
+                // 配置边界防止零尺寸或过大命中框破坏交互。
+                changed |= ::MMM::UI::FeedbackSliderFloat(
+                    "##InteractionHitboxScaleY",
+                    &visual.interactionHitboxScaleY,
+                    Config::VisualConfig::MIN_INTERACTION_HITBOX_SCALE,
+                    Config::VisualConfig::MAX_INTERACTION_HITBOX_SCALE,
+                    "%.2f");
+            });
+
+
+        // 选择仅属于当前设置页的临时状态，不应保存为谱面或布局偏好。
+        // 每次回调读取同一个窗口槽位，切换后后续行立即编辑新部件。
+        // Clay 延后执行回调，块内选项表和选择器必须按值捕获。
+        // 只借用配置与变化标志，它们的生命周期覆盖本次布局实际绘制。
+        // 翻译指针来自本帧稳定缓存，不把临时拼接字符串交给延后回调。
+        const auto componentId = ImGui::GetID("HitboxComponentSelection");
+        // 单键与长条头共用 Head；滑键箭头和折线节点保留独立设置。
+        // 采样锚点和触发点分开，零偏移重叠时仍能分别保留用户偏好。
+        // 这里只列举生产拾取协议实际区分的部件，不伪造更细的渲染分类。
+        // 选项顺序固定，切换语言只替换文字，不改变当前选中的部件。
+        const std::array<const char*, 7> componentLabels{
+            TR_CACHE("ui.settings.visual.hitboxes.head").data(),
+            TR_CACHE("ui.settings.visual.hitboxes.hold_body").data(),
+            TR_CACHE("ui.settings.visual.hitboxes.hold_end").data(),
+            TR_CACHE("ui.settings.visual.hitboxes.flick_arrow").data(),
+            TR_CACHE("ui.settings.visual.hitboxes.polyline_node").data(),
+            TR_CACHE("ui.settings.visual.hitboxes.sample_anchor").data(),
+            TR_CACHE("ui.settings.visual.hitboxes.sample_offset").data()
+        };
+        // 组件顺序和配置数组一一对应；翻译只作为显示文本，不用于索引。
+        // 窗口状态可能来自旧会话，使用前限制在固定数组的有效范围内。
+        /// @brief 获取当前窗口中选中的有效部件索引，不访问业务选择集合。
+        /// @warning 设置页绘制热路径：只读 ImGui 状态并限幅，不分配或保存文件。
+        const auto selectedComponent = [componentId]() {
+            return std::clamp(
+                ImGui::GetStateStorage()->GetInt(componentId, 0),
+                0,
+                static_cast<int>(Config::HITBOX_COMPONENT_KEYS.size()) - 1);
+        };
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.hitboxes.component").data(),
+            maxLabelW,
+            [&, selectedComponent, componentLabels, componentId](
+                Clay_BoundingBox r, bool) {
+                ImGui::SetNextItemWidth(r.width);
+                int selected = selectedComponent();
+                // 切换部件不发布配置，也不清除正在配置的其他部件倍率。
+                // Combo 只改变临时导航，避免仅浏览选项就写入配置文件。
+                // 正式值在后续两行按当前索引读取，不缓存旧部件引用。
+                if ( FeedbackCombo("##HitboxComponent",
+                                   &selected,
+                                   componentLabels.data(),
+                                   static_cast<int>(componentLabels.size())) )
+                    ImGui::GetStateStorage()->SetInt(componentId, selected);
+            });
+        // 仅更改附加倍率，旧配置全局值无需迁移或静默重写。
+        // 单独两行沿用设置页窄屏布局，数值区不会被多列挤压。
+        // 复用页面标准控件回调，移动端仍由既有输入和布局策略处理。
+        // 不在共享设置页添加平台宏或复制一套触摸拾取实现。
+        // 滑块只保存倍率，实际像素尺寸由当前图元和相机投影共同决定。
+        // 反向滚动和物件时间不参与此计算，不能把范围扩展当作时间偏移。
+        // 范围更新使用现有配置事件，不向撤销栈写入虚假的谱面动作。
+        // 几何实时反馈不等待保存文件完成，磁盘写入仍走统一配置服务。
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.hitboxes.component_x").data(),
+            maxLabelW,
+            [&, selectedComponent](Clay_BoundingBox r, bool) {
+                auto& scale =
+                    visual.interactionHitboxComponents[selectedComponent()];
+                // 读取当前部件而非登记回调时的部件，切换后当帧即可调整。
+                // 写入普通值对象；配置发布仍由页面末尾 changed 分支统一负责。
+                ImGui::SetNextItemWidth(r.width);
+                changed |= FeedbackSliderFloat("##HitboxComponentX",
+                                               &scale.x,
+                                               Config::MIN_HITBOX_SCALE,
+                                               Config::MAX_HITBOX_SCALE,
+                                               "%.2fx");
+            });
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.hitboxes.component_y").data(),
+            maxLabelW,
+            [&, selectedComponent](Clay_BoundingBox r, bool) {
+                auto& scale =
+                    visual.interactionHitboxComponents[selectedComponent()];
+                ImGui::SetNextItemWidth(r.width);
+                changed |= FeedbackSliderFloat("##HitboxComponentY",
+                                               &scale.y,
+                                               Config::MIN_HITBOX_SCALE,
+                                               Config::MAX_HITBOX_SCALE,
+                                               "%.2fx");
+            });
+        // 行标签区分全局基础倍率和部件附加倍率，触屏不必依赖 Hover。
+        // 恢复仅针对当前部件，不修改全局倍率和其他部件的用户设置。
+        // 已经是单位倍率时点击不保存，避免无变化操作产生配置事件。
+        // 显示开关不随恢复变化，用户可以继续观察当前有效范围。
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.visual.hitboxes.reset").data(),
+            maxLabelW,
+            [&, selectedComponent](Clay_BoundingBox r, bool) {
+                if ( FeedbackButton(
+                         TR_CACHE("ui.settings.visual.hitboxes.reset_button")
+                             .data(),
+                         { r.width, 0 }) ) {
+                    auto& scale =
+                        visual.interactionHitboxComponents[selectedComponent()];
+                    changed |= scale.x != 1.0F || scale.y != 1.0F;
+                    scale = {};
+                }
             });
     }
 

@@ -89,16 +89,21 @@ struct NoteRenderScale {
 /// @param startBounds 拖动开始时的物件像素边界。
 /// @param pointerX 当前指针横坐标。
 /// @param pointerY 当前指针纵坐标。
+/// @param minimumScale 当前编辑模式允许的最小倍率，默认保持 Note 外观范围。
+/// @param maximumScale 当前编辑模式允许的最大倍率，拾取框传入自己的边界。
+/// @pre 两个范围边界须为正有限值，且 minimumScale 不大于 maximumScale。
 /// @return 限制在视觉配置合法范围内的横纵缩放。
 /// @warning UI 布局热路径：物件缩放期间每帧调用；只允许常量级数值计算。
 [[nodiscard]] inline NoteRenderScale resizeNoteRenderScale(
     NoteRenderScale startScale, CanvasComponentDragHandle handle,
-    const CanvasComponentBounds& startBounds, float pointerX, float pointerY)
+    const CanvasComponentBounds& startBounds, float pointerX, float pointerY,
+    float minimumScale = NOTE_RENDER_MIN_SCALE,
+    float maximumScale = NOTE_RENDER_MAX_SCALE)
 {
     // 输入缩放来自持久化配置，先恢复非有限值并限制到允许范围。
-    const auto sanitizeScale = [](float value) {
+    const auto sanitizeScale = [minimumScale, maximumScale](float value) {
         if ( !std::isfinite(value) ) return 1.0f;
-        return std::clamp(value, NOTE_RENDER_MIN_SCALE, NOTE_RENDER_MAX_SCALE);
+        return std::clamp(value, minimumScale, maximumScale);
     };
     startScale.x = sanitizeScale(startScale.x);
     startScale.y = sanitizeScale(startScale.y);

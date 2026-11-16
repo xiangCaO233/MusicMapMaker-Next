@@ -225,6 +225,9 @@ struct SessionContext {
         sortedNoteEntities;  ///< 缓存并按时间排序后的音符实体列表
     std::vector<double>
         sortedNoteMaxEndPrefix;  ///< 排序音符列表的前缀最大结束时间缓存
+    /// @brief 框选候选扩展使用的保守最大物件时长，随索引重建更新。
+    /// @note 增量更新只增不减，删除后允许保守高估，完整重建时重新归零。
+    double        maxSelectionNoteDuration{ 0.0 };
     std::uint64_t noteVisibilityIndexRevision{ 0 };  ///< 音符可见性索引版本号
     /// @brief 按可见区间起点排序的自动采样实体缓存。
     std::vector<entt::entity> sortedSampleEntities;

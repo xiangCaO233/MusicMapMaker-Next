@@ -20,6 +20,10 @@ public:
     /// @return 正在编辑相机时返回 true，以隐藏互斥的元素布局控件。
     /// @warning 每帧调用，仅访问 UI 本地状态；默认无此能力。
     virtual bool drawCameraLayoutControls() { return false; }
+    /// @brief 在布局工具绘制当前画布的拾取包围框编辑页。
+    /// @return 正在调整拾取框时为真，默认无此编辑能力。
+    /// @warning 每帧只读写画布本地状态，模式切换时才结束旧编辑手势。
+    virtual bool drawPickingBoundsLayoutControls() { return false; }
 
     /// @brief 获取当前画布已发布布局快照对应的键数，未载谱时为零。
     /// @return 当前实际显示谱面的玩家轨道数，不包含草稿或 BGM 轨道。

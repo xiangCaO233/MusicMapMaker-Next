@@ -6093,6 +6093,11 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
             ImGui::PopID();
         };
 
+        // 编辑模式由当前画布独立持有，新画布默认不勾选。
+        // 工具栏只消费能力接口，不包含拾取部件或布局拖动的私有实现头。
+        const bool editingPickingBounds =
+            canvas && canvas->drawPickingBoundsLayoutControls();
+
         // 音符渲染分组只修改与音符外观直接相关的 VisualConfig 字段。
         //
         // 分组字段职责：
@@ -6115,6 +6120,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                                      });
             // 每个连续控件前重取快照，防止前一控件应用后被旧值覆盖。
             auto visual = appConfig.getVisualConfig();
+            // 拾取框模式禁止这两个外观滑块，防止调整目标混淆。
+            ImGui::BeginDisabled(editingPickingBounds);
             // 横向缩放影响音符宽度，范围限制为默认尺寸的 0.5..3 倍。
             ImGui::TextUnformatted(
                 TR("ui.settings.visual.note_scale_x").data());
@@ -6143,6 +6150,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                 m_layoutVisualConfigDirty = true;
             }
             saveVisualAfterEdit();
+
+            ImGui::EndDisabled();
 
             // 非长按击打特效时长使用配置声明的边界，避免 UI 常量漂移。
             visual = appConfig.getVisualConfig();
