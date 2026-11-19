@@ -82,9 +82,12 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     // 初始 BPM 与导入器相同，第一条红线之前也有确定的积分速度。
     // 没有红线时才回退参考 BPM，避免把参考值当作所有段的实际 BPM。
     double initial = meta.preference_bpm > 0 ? meta.preference_bpm : 120;
+    // 只记录提供头部 BPM 的红线身份，不能按数值过滤后续重复红线。
+    const Timing* initialTiming = nullptr;
     for ( const auto* t : timings )
         if ( t->m_timingEffect == TimingEffect::BPM ) {
-            initial = t->m_timingEffectParameter;
+            initial       = t->m_timingEffectParameter;
+            initialTiming = t;
             break;
         }
     // 映射只积分 BPM；STOP 是同一音乐位置的等待，不改变拍位。
@@ -207,7 +210,7 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
     // 数值精度与头部一致，避免倒数运算产生的伪小数进入协议声明。
     // 编号引用的是速度定义，而非事件身份；多次切回同一 BPM 可共用定义。
     // 精确比较已验证有限的正值，不通过近似舍入合并不同速度。
-    // 事件仍逐条 emit，拍位积分及 STOP 的有效 BPM 都保持原来的时序。
+    // 保留变速的原时序与编号，只让文件头承担已存在于零点的首条 BPM。
     std::map<double, int> bpmDefinitions;
     int                   stopId = 0;
     double                bpm    = initial;
@@ -241,6 +244,9 @@ inline bool save(const BeatMap& map, const std::filesystem::path& path)
                 definition   = bpmDefinitions.emplace(bpm, id).first;
                 header << "#BPM" << encode(id) << ' ' << bpm << '\n';
             }
+            // 零点首红线已写入 #BPM，重复写 08 会在编辑器里叠出第二条红线。
+            // 仍建立积分锚点与原定义编号，后续 BPM、STOP 和音符编码不变。
+            if ( t == initialTiming && t->m_timestamp == 0 ) continue;
             if ( !emitBeat(*beat, 8, definition->second) ) return false;
         } else {
             // 同刻红线决定 STOP 长度，与导入器及常见 BMS 播放器保持一致。
