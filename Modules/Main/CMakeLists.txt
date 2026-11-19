@@ -112,10 +112,35 @@ endif()
 
 # 启动辅助实现归入主目标，不额外暴露静态库或跨模块链接接口。
 target_sources(
-  MusicMapMaker-Next PRIVATE src/PGOProfiler.cpp src/PGOProfileCache.cpp
-                             src/StartupProgressDialog.cpp)
-# include 目录只服务 Main 内部实现，其他模块不得反向依赖启动层。 两个辅助头通过该私有目录供 main.cpp 使用，不构成安装接口。
-target_include_directories(MusicMapMaker-Next PRIVATE include)
+  MusicMapMaker-Next
+  PRIVATE src/PGOProfiler.cpp src/PGOProfileCache.cpp
+          src/StartupProgressDialog.cpp src/StartupLogoShader.cpp)
+# 启动 Logo 与桌面图标使用同一份 SVG。构建期嵌入母版，以便首次同步前离线播放动画。
+
+# 跟踪 SVG 源文件，增量构建也会更新启动遮罩。
+set_property(
+  DIRECTORY
+  APPEND
+  PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/logo.svg")
+# 先读入原始文本，不能让 configure_file 对 SVG 中的字符执行变量替换。
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/src/logo.svg" MMM_STARTUP_LOGO_SVG)
+
+# Android 源码构建与各桌面构建一样，必须先取得启动所需的 LFS 对象。 跳过 LFS 拉取时工作树只有指针；构建立即指出需要的对象，避免安装后没有
+# Logo。
+if(MMM_STARTUP_LOGO_SVG MATCHES "^version https://git-lfs")
+  message(
+    FATAL_ERROR
+      "Missing startup logo SVG. Run git lfs pull --include=Modules/Main/src/logo.svg --exclude=''"
+  )
+endif()
+# 模板用原始字符串保留曲线和透明度，无需专用的字节数组生成程序。
+
+# 生成件放在构建树，不影响其他平台或工具链共用的源码目录。
+configure_file(src/StartupLogoSvg.h.in
+               "${CMAKE_CURRENT_BINARY_DIR}/generated/StartupLogoSvg.h" @ONLY)
+# 私有头和生成的 SVG 文本只服务启动层，不构成安装接口。
+target_include_directories(
+  MusicMapMaker-Next PRIVATE include "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 # 缓存回归只依赖文件系统，复用 Common 基础测试套件，不新增独立程序。 独立目录和小容量夹具验证边界，禁止触及用户真实临时缓存。
 mmm_add_test_executable(Common PGOProfileCacheTest
@@ -128,7 +153,7 @@ mmm_register_test_case(NAME PGOProfileCacheTest COMMAND PGOProfileCacheTest
                        "${CMAKE_BINARY_DIR}/test_output/PGOProfileCacheTest")
 
 # 主程序是依赖汇聚点；各业务模块之间仍按自身公开 target 传播依赖。 Runtime 必须保留在链接集合中，为启动同步和退出 PGO
-# 上传提供共享线程池。
+# 上传提供共享线程池。 显式链接 LunaSVG，启动层在默认皮肤与业务 UI 加载之前就能解析 SVG。
 target_link_libraries(
   MusicMapMaker-Next
   PRIVATE Log
@@ -137,7 +162,8 @@ target_link_libraries(
           Game
           Network
           NetworkCollaboration
-          Runtime)
+          Runtime
+          3rd_lunasvg)
 
 # 平台运行库复制和 Bundle 修整均在链接依赖完整后执行。
 

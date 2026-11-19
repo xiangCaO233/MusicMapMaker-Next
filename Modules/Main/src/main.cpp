@@ -239,14 +239,8 @@ namespace
 /// @brief 启动资源检查窗口的逻辑宽度。
 constexpr int STARTUP_WINDOW_WIDTH = 600;
 
-/// @brief 启动资源检查进度状态的逻辑高度。
-constexpr int STARTUP_PROGRESS_WINDOW_HEIGHT = 270;
-
-/// @brief 启动资源检查错误状态的逻辑高度。
-constexpr int STARTUP_ERROR_WINDOW_HEIGHT = 320;
-
-/// @brief 启动翻译覆写提示状态的逻辑高度。
-constexpr int STARTUP_WARNING_WINDOW_HEIGHT = 440;
+/// @brief 启动窗口在动画、进度及日志展开过程中共用的逻辑高度。
+constexpr int STARTUP_WINDOW_HEIGHT = 640;
 
 /// @brief 正式主窗口的默认逻辑宽度。
 constexpr int APPLICATION_WINDOW_WIDTH = 1400;
@@ -476,7 +470,7 @@ StartupPreparationResult prepareStartupAssets()
     // 启动窗口使用独立模式，避免读取正式编辑器窗口的保存位置与尺寸。
     Graphic::NativeWindow startupWindow(
         scaledStartupWindowDimension(STARTUP_WINDOW_WIDTH),
-        scaledStartupWindowDimension(STARTUP_PROGRESS_WINDOW_HEIGHT),
+        scaledStartupWindowDimension(STARTUP_WINDOW_HEIGHT),
         "MusicMapMaker - Resource Update",
         Graphic::NativeWindowMode::Startup);
     // 释放守卫在窗口之后构造，因此离开作用域时会先释放 Vulkan 上下文。
@@ -504,6 +498,19 @@ StartupPreparationResult prepareStartupAssets()
 
     // 对话框跨重试复用，beginSync 会在每轮开始时清理错误和按钮状态。
     StartupProgressDialog startupProgressDialog;
+    // 先完整呈现 Logo，直到最后一帧提交后才允许创建或排队任何资源任务。
+    std::array<Graphic::IGraphicUserHook*, 1> introHooks{
+        &startupProgressDialog
+    };
+    do {
+        startupContext.getRenderer().render(startupWindow, introHooks);
+        if ( startupWindow.shouldClose() ||
+             startupProgressDialog.isExitRequested() )
+            return StartupPreparationResult::Cancelled;
+        // 窗口隐藏期间 renderer 可提前返回；短暂休眠仅限制轮询成本。
+        std::this_thread::sleep_for(std::chrono::milliseconds(8));
+    } while ( startupProgressDialog.isIntroPlaying() );
+
     // 默认皮肤是资源准备完成的最终哨兵，必须在进入正式 UI 前可加载。
     const auto defaultSkinPath = Config::AppPaths::defaultSkinFilePath();
     bool       skinLoaded      = false;
@@ -600,10 +607,6 @@ StartupPreparationResult prepareStartupAssets()
         XERROR("Startup asset preparation failed: {}", startupErrorMessage);
         startupProgressDialog.showError(std::move(startupErrorTitle),
                                         std::move(startupErrorMessage));
-        // 错误详情需要比普通进度状态更高的窗口以减少文本截断。
-        startupWindow.resizeAndCenter(
-            scaledStartupWindowDimension(STARTUP_WINDOW_WIDTH),
-            scaledStartupWindowDimension(STARTUP_ERROR_WINDOW_HEIGHT));
         if ( !waitForStartupRetry(
                  startupContext, startupWindow, startupProgressDialog) ) {
             // 关闭窗口或点击退出都结束整个启动准备阶段。
@@ -612,10 +615,6 @@ StartupPreparationResult prepareStartupAssets()
 
         // 用户主动重试时绕过版本快路径，确保缺失或损坏资源真正得到修复。
         forcePreciseVerification = true;
-        // 回到进度状态时恢复紧凑高度，并重新居中避免窗口下沿漂移。
-        startupWindow.resizeAndCenter(
-            scaledStartupWindowDimension(STARTUP_WINDOW_WIDTH),
-            scaledStartupWindowDimension(STARTUP_PROGRESS_WINDOW_HEIGHT));
     }
 
     // 皮肤加载成功后检查翻译覆写契约，未知键不阻止其他有效覆写生效。
@@ -627,10 +626,6 @@ StartupPreparationResult prepareStartupAssets()
         startupProgressDialog.showWarning(
             "皮肤翻译覆写包含未知字段",
             buildTranslationOverrideWarning(unknownOverrideFields));
-        // 警告列表可能较长，扩展窗口并使用对话框内部滚动区域承载。
-        startupWindow.resizeAndCenter(
-            scaledStartupWindowDimension(STARTUP_WINDOW_WIDTH),
-            scaledStartupWindowDimension(STARTUP_WARNING_WINDOW_HEIGHT));
         if ( !waitForStartupContinue(
                  startupContext, startupWindow, startupProgressDialog) ) {
             // 未确认未知字段时不进入可能显示错误翻译的正式界面。
