@@ -117,7 +117,7 @@ if(NOT ANDROID)
     CollaborationRoomTest PRIVATE NetworkCollaboration
                                   NetworkCollaborationServer Runtime)
   # 该目标故意不注册自动 CTest，避免同进程 RTC 客户端与服务端全局状态竞争。 同进程混用 libdatachannel 服务端与 WebRTC
-  # 客户端会受全局句柄调度影响。 `p2p`、`resource` 与 `external` 链路保留为手动部署探针。
+  # 客户端会受全局句柄调度影响。 `follow`、`p2p`、`resource` 与 `external` 链路保留为手动部署探针。
   # 稳定自动覆盖由状态机、资源同步、目录与服务端测试共同承担。
 
   # 公网目录客户端测试覆盖房间列表订阅、刷新与异常消息隔离。

@@ -152,6 +152,27 @@ struct ParticipantViewport {
     double receivedAt = 0.0;
 };
 
+/// @brief 访客的跟随请求或房主确认的跟随边，不参与谱面修订。
+/// @details 同一类型按传输方向区分请求与权威状态；访客不得乐观应用请求。
+struct ParticipantFollowState {
+    /// @brief 跟随边的来源；访客请求必须与传输发送者一致。
+    PeerId peerId = 0;
+    /// @brief 被跟随的在线路由槽位；零表示取消跟随。
+    PeerId targetPeerId = 0;
+    /// @brief 请求方的递增序号；零仅用于初始状态及离线清理广播。
+    std::uint64_t requestSequence = 0;
+    /// @brief 来源稳定身份，防止排队消息命中复用槽位的新参与者。
+    ParticipantId participantId;
+    /// @brief 来源加入会话，重连不能继承旧请求及水位。
+    OperationSessionId sessionId;
+    /// @brief 目标稳定身份；取消时必须为空。
+    ParticipantId targetParticipantId;
+    /// @brief 目标加入会话；槽位相同也必须精确匹配。
+    OperationSessionId targetSessionId;
+    /// @brief 房主是否接受该请求；请求和无请求快照必须为 true。
+    bool accepted = true;
+};
+
 /// @brief 沿房主星型拓扑路由的单调时钟探测，不依赖系统日期一致。
 struct PlaybackClockProbe {
     /// @brief 原始发送方，房主必须校验其与直接连接身份一致。

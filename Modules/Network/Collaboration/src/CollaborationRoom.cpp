@@ -506,6 +506,8 @@ bool CollaborationRoom::startHost(CollaborationHostRoomConfig config)
     m_localViewportPublishDeferred = false;
     m_nextViewportPublish          = std::chrono::steady_clock::now();
     m_followedParticipantId.clear();
+    m_followRequestPending = false;
+    m_followResumeSessionId.clear();
     m_followPlaybackEnabled = false;
     m_pendingJoinRequests.clear();
     resetRemoteOperationPipeline();
@@ -637,6 +639,8 @@ bool CollaborationRoom::join(CollaborationJoinRoomConfig config)
     m_localViewportPublishDeferred = false;
     m_nextViewportPublish          = std::chrono::steady_clock::now();
     m_followedParticipantId.clear();
+    m_followRequestPending = false;
+    m_followResumeSessionId.clear();
     m_followPlaybackEnabled = false;
     m_pendingJoinRequests.clear();
     resetRemoteOperationPipeline();
@@ -997,6 +1001,8 @@ void CollaborationRoom::resetOnlineSessionState()
     m_lastPublishedLocalViewport.reset();
     m_localViewportPublishDeferred = false;
     m_followedParticipantId.clear();
+    m_followRequestPending = false;
+    m_followResumeSessionId.clear();
     m_followPlaybackEnabled = false;
     m_pendingJoinRequests.clear();
     m_hasDocument.store(false, std::memory_order_relaxed);
@@ -1062,6 +1068,37 @@ void CollaborationRoom::update()
         m_peer->probePlaybackClock(m_followPlaybackEnabled ? followedPeerId()
                                                            : 0);
         m_peer->update();
+        // 画布和音频只读取权威目标，稳定身份缓存不提前改变实际跟随。
+        const PeerId confirmedFollow = followedPeerId();
+        if ( auto confirmation = m_peer->popFollowConfirmation() ) {
+            // 确认保存的是生效瞬间的目标身份，不能用本轮最终图的零值推断取消。
+            // 明确取消或无原边的拒绝携带空目标；接受后离开仍携带原稳定目标。
+            m_followRequestPending = false;
+            m_followedParticipantId =
+                std::move(confirmation->targetParticipantId);
+            m_followResumeSessionId = std::move(confirmation->targetSessionId);
+        }
+        if ( !m_followRequestPending && confirmedFollow == 0 &&
+             !m_followedParticipantId.empty() ) {
+            // 断线清理只移除路由边，稳定身份保留；相同槽位的新身份不能匹配。
+            // 只按稳定身份找人；即使旧槽位已经有人占用，也不能视为重连。
+            const auto& identities = m_peer->participantIdentities();
+            const auto  target =
+                std::find_if(identities.begin(),
+                             identities.end(),
+                             [this](const auto& entry) {
+                                 return entry.second.participantId ==
+                                        m_followedParticipantId;
+                             });
+            if ( target != identities.end() &&
+                 target->second.sessionId != m_followResumeSessionId ) {
+                // 按加入会话去重：恢复失败也不在每帧重发，后续手动操作可重试。
+                // 重连恢复与普通点击复用权威入口，再次检查新图中的闭环。
+                m_followResumeSessionId = target->second.sessionId;
+                if ( m_peer->requestFollowPeer(target->first) )
+                    m_followRequestPending = true;
+            }
+        }
         const auto permission =
             m_peer->participantPermissions().find(m_peer->localPeerId());
         const auto currentPermissions =
@@ -1248,28 +1285,42 @@ void CollaborationRoom::setViewportPublishRateHz(std::uint32_t rateHz)
     m_nextViewportPublish = std::chrono::steady_clock::now();
 }
 
-/// @brief 设置 UI 当前跟随的远端参与者。
-/// @param peerId 目标路由 ID；零值取消跟随。
-/// @return 目标是当前已知远端参与者时返回 true。
-///
-/// @details 内部保存稳定 participantId 而非可复用 peerId，重连后 followedPeerId
-/// 可重新解析同一身份，不会误跟随占用旧槽位的新参与者。
-///
-/// @note 禁止跟随本地 peer；目标离线后查询返回零，稳定身份可等待同一参与者在
-///       当前会话重新出现。
+/// @brief 请求修改持续跟随目标；访客等待最新确认期间暂停旧目标。
+/// @param peerId 在线目标，零值请求取消。
+/// @return 请求被房主接受或成功发送时返回 true。
+/// @details 稳定身份仅在最新请求确认后更新，拒绝回复不会留下错误恢复意图。
 bool CollaborationRoom::setFollowedPeer(PeerId peerId)
 {
-    if ( peerId == 0 ) {
+    if ( !m_peer ) {
+        // 离线时仍可清除恢复意图；非零目标必须有当前房间身份可验证。
+        if ( peerId != 0 ) return false;
         m_followedParticipantId.clear();
+        m_followResumeSessionId.clear();
+        m_followRequestPending = false;
         return true;
     }
-    if ( !m_peer || peerId == m_peer->localPeerId() ||
-         !m_peer->participantIdentities().contains(peerId) ) {
-        return false;
+    // 不在发送前写稳定身份，拒绝或发送失败都不能污染后续重连恢复。
+    if ( !m_peer->requestFollowPeer(peerId) ) return false;
+    m_followRequestPending = true;
+    // 房主同步确认；访客等 update 收到对应序号后才更新稳定身份。
+    if ( auto confirmation = m_peer->popFollowConfirmation() ) {
+        m_followRequestPending  = false;
+        m_followedParticipantId = std::move(confirmation->targetParticipantId);
+        m_followResumeSessionId = std::move(confirmation->targetSessionId);
     }
-    m_followedParticipantId =
-        m_peer->participantIdentities().at(peerId).participantId;
     return true;
+}
+
+/// @brief 使用房主镜像图检查当前选择，取消操作不依赖连接状态。
+bool CollaborationRoom::canFollowPeer(PeerId peerId) const
+{
+    return peerId == 0 || (m_peer && m_peer->canFollowPeer(peerId));
+}
+
+/// @brief 查询一个在线成员已确认的直接目标。
+PeerId CollaborationRoom::followTargetPeerId(PeerId peerId) const
+{
+    return m_peer ? m_peer->followTargetPeerId(peerId) : 0;
 }
 
 /// @brief 获取当前房间生命周期状态。
@@ -1444,17 +1495,21 @@ CollaborationRoom::participantViewports() const
     return m_peer ? m_peer->participantViewports() : m_emptyViewports;
 }
 
-/// @brief 把保存的稳定跟随身份解析为当前 peer ID。
-/// @return 当前匹配 peer；身份离线或未跟随时为零。
+/// @brief 返回房主确认且当前有效的目标，请求等待期间先暂停旧边。
+/// @return 在线有效目标；未连接、目标离线或最新请求待确认时为零。
+/// @warning UI 每帧调用；只读取本地 Peer 状态，不等待网络确认。
 PeerId CollaborationRoom::followedPeerId() const
 {
-    if ( !m_peer || m_followedParticipantId.empty() ) return 0;
-    const auto& identities  = m_peer->participantIdentities();
-    const auto  participant = std::find_if(
-        identities.begin(), identities.end(), [this](const auto& entry) {
-            return entry.second.participantId == m_followedParticipantId;
-        });
-    return participant == identities.end() ? 0 : participant->first;
+    // pending 先停旧边，权威图仍留给 canFollowPeer 检查；新目标只在确认后生效。
+    return m_peer ? m_peer->followedPeerId() : 0;
+}
+
+/// @brief 查询列表最新选择，与真正驱动画布的有效目标分离。
+/// @return 待确认且身份仍匹配的目标，或已确认目标。
+/// @warning UI 每帧调用；只做本地身份索引查询，不等待网络。
+PeerId CollaborationRoom::selectedFollowPeerId() const
+{
+    return m_peer ? m_peer->selectedFollowPeerId() : 0;
 }
 
 /// @brief 获取当前视口广播频率。
@@ -2435,10 +2490,10 @@ void CollaborationRoom::processMemberHistoryProposals()
     const auto submitted     = m_peer->commitHostCorrection(
         proposal.payload,
         CollaborationHistoryCorrection{
-            .participantId  = proposal.participantId,
-            .sessionId      = proposal.sessionId,
-            .clientSequence = proposal.clientSequence,
-            .redo           = proposal.redo,
+                .participantId  = proposal.participantId,
+                .sessionId      = proposal.sessionId,
+                .clientSequence = proposal.clientSequence,
+                .redo           = proposal.redo,
         });
     m_pendingHistoryRevision = 0;
     m_pendingHistoryRedo     = false;

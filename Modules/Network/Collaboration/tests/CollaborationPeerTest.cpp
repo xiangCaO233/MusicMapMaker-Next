@@ -1,5 +1,7 @@
 #include "network/collaboration/CollaborationPeer.h"
+#include "network/collaboration/CollaborationProtocol.h"
 #include "network/collaboration/CollaborationTypes.h"
+#include "network/collaboration/ICollaborationTransport.h"
 #include "network/collaboration/LoopbackTransport.h"
 
 #include <algorithm>
@@ -9,6 +11,8 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <utility>
+#include <variant>
 #include <vector>
 
 namespace
@@ -727,9 +731,9 @@ void pumpPeers(CollaborationPeer&                               host,
     const auto               chatEncoded = encodeCollaborationMessage(chat, 4U);
     const auto               chatDecoded =
         chatEncoded
-            ? decodeCollaborationMessage(*chatEncoded, 4U)
-            : std::expected<MMM::Network::Collaboration::CollaborationMessage,
-                            ProtocolError>(
+                          ? decodeCollaborationMessage(*chatEncoded, 4U)
+                          : std::expected<MMM::Network::Collaboration::CollaborationMessage,
+                                          ProtocolError>(
                   std::unexpected(ProtocolError::InvalidChatMessage));
     const auto* decodedChat =
         chatDecoded ? std::get_if<CollaborationChatMessage>(&*chatDecoded)
@@ -1491,10 +1495,10 @@ void pumpPeers(CollaborationPeer&                               host,
     hostConfig.limits.maxJournalOperations = 2;
     // 房主模型记录五条普通操作，用于建立当前 revision 5。
     CollaborationPeer   host(hostConfig,
-                             hub.createEndpoint(HOST_ID),
-                             [&hostModel](const CommittedOperation& operation) {
+                           hub.createEndpoint(HOST_ID),
+                           [&hostModel](const CommittedOperation& operation) {
                                hostModel.push_back(operation.payload);
-                             });
+                           });
     ParticipantViewport hostViewport;
     // 加入前发布视口，验证新访客初始同步不仅包含文档快照。
     hostViewport.playbackTime          = 4.0;
@@ -1630,6 +1634,479 @@ void pumpPeers(CollaborationPeer&                               host,
            guest.appliedRevision() == host.appliedRevision() &&
            guestModel.size() == 1U && guestModel.front() == fullSnapshot;
 }
+/// @brief 构造绑定默认测试双身份的跟随帧，非法路由场景仍由协议判定。
+/// @param source 来源槽位，身份使用统一测试映射。
+/// @param target 目标槽位，零目标必须保留空目标双身份。
+/// @param sequence 当前来源的请求序号。
+/// @return 可直接编码的跟随请求或初始快照。
+MMM::Network::Collaboration::ParticipantFollowState makeTestFollowState(
+    PeerId source, PeerId target, std::uint64_t sequence)
+{
+    MMM::Network::Collaboration::ParticipantFollowState result{
+        .peerId          = source,
+        .targetPeerId    = target,
+        .requestSequence = sequence,
+        .participantId   = makeTestStableId(source, 'a'),
+        .sessionId       = makeTestStableId(source, 'b')
+    };
+    // 取消不携带任何目标身份，不能用全零字符串冒充空值。
+    if ( target != 0 ) {
+        result.targetParticipantId = makeTestStableId(target, 'a');
+        result.targetSessionId     = makeTestStableId(target, 'b');
+    }
+    return result;
+}
+
+/// @brief 验证跟随状态固定布局、取消语义以及协议九到十的兼容边界。
+/// @return 往返保留全部字段且坏帧均被拒绝时返回 true。
+/// @details 请求序号区别快速换目标和取消；零序号保留给房主易失状态快照。
+/// 不能把版本九帧当作没有跟随状态的兼容客户端，否则会绕过权威无环约束。
+bool testFollowProtocol()
+{
+    using MMM::Network::Collaboration::ParticipantFollowState;
+    // 超过三十二位的值验证每个字段都按完整 uint64_t 传输。
+    const auto state = makeTestFollowState(2, 3, 0x100000002ULL);
+    auto       frame = encodeCollaborationMessage(state, 4U);
+    if ( !frame || frame->size() != 165U ) return false;
+    // 固定控制字段不受操作负载四字节上限限制，解码还须确认具体变体类型。
+    const auto  decoded = decodeCollaborationMessage(*frame, 4U);
+    const auto* restored =
+        decoded ? std::get_if<ParticipantFollowState>(&*decoded) : nullptr;
+    // 来源和目标分别校验，字段互换不能被同一数据往返掩盖。
+    // 请求序号超出三十二位，窄化后也不能误通过仅比较低位的检查。
+    // 此处不要求图中节点在线，在线约束属于有状态 Peer 层而非协议层。
+    // 可靠传输只负责交付完整帧，不替代这些字段级验证。
+    if ( !restored || restored->peerId != state.peerId ||
+         restored->targetPeerId != state.targetPeerId ||
+         restored->requestSequence != state.requestSequence ||
+         restored->participantId != state.participantId ||
+         restored->sessionId != state.sessionId ||
+         restored->targetParticipantId != state.targetParticipantId ||
+         restored->targetSessionId != state.targetSessionId ||
+         !restored->accepted )
+        return false;
+    // 快照的零序号及取消的零目标必须能完整往返。
+    // 快照不需要伪造请求序号，取消也不能依赖目标在线。
+    const auto cancelled =
+        encodeCollaborationMessage(makeTestFollowState(2, 0, 0), 4U);
+    if ( !cancelled || !decodeCollaborationMessage(*cancelled, 4U) )
+        return false;
+    // 零来源与直接自环在编解码边界即可拒绝，不交给权威状态机。
+    if ( encodeCollaborationMessage(makeTestFollowState(0, 3, 1), 4U) ||
+         encodeCollaborationMessage(makeTestFollowState(2, 2, 1), 4U) )
+        return false;
+    // 取消若仍带目标身份，可能把清理消息误当成可恢复目标，因此必须拒绝。
+    // 这里只改路由值，刻意保留先前非空双身份以覆盖该不变量。
+    auto malformed         = state;
+    malformed.targetPeerId = 0;
+    if ( encodeCollaborationMessage(malformed, 4U) ) return false;
+    // 两层目标身份必须同时存在，不能只按稳定参与者身份接受旧会话目标。
+    malformed = state;
+    malformed.targetSessionId.clear();
+    if ( encodeCollaborationMessage(malformed, 4U) ) return false;
+    // 来源加入会话同样必需；传输端点身份不能代替消息中的会话绑定。
+    malformed = state;
+    malformed.sessionId.clear();
+    if ( encodeCollaborationMessage(malformed, 4U) ) return false;
+    // 拒绝消息仍需完整来源双身份，空目标表示原权威图没有既有边。
+    // 结果位必须往返保持 false，不能被默认构造的 accepted=true 覆盖。
+    auto refusal            = makeTestFollowState(2, 0, 5);
+    refusal.accepted        = false;
+    const auto refusedFrame = encodeCollaborationMessage(refusal, 4U);
+    if ( !refusedFrame ) return false;
+    const auto  refusedDecoded = decodeCollaborationMessage(*refusedFrame, 4U);
+    const auto* refusedState =
+        refusedDecoded ? std::get_if<ParticipantFollowState>(&*refusedDecoded)
+                       : nullptr;
+    // 拒绝结果携带零目标不代表用户显式取消，接受结果位仍须准确保留。
+    // 请求序号也不能归零，否则最新等待意图将无法匹配这份拒绝。
+    if ( !refusedState || refusedState->accepted ||
+         refusedState->requestSequence != 5 )
+        return false;
+    // 零序号属于快照而非请求，不能附带拒绝结果让接收方猜测原因。
+    refusal.requestSequence = 0;
+    if ( encodeCollaborationMessage(refusal, 4U) ) return false;
+
+    // 帧头四字节魔数之后是小端版本；旧客户端必须显式获得不支持错误。
+    // 保留消息类型与正文，只改变版本，确保错误来自兼容性检查。
+    auto oldFrame         = *frame;
+    oldFrame[4]           = 9U;
+    oldFrame[5]           = 0U;
+    const auto oldVersion = decodeCollaborationMessage(oldFrame, 4U);
+    if ( oldVersion || oldVersion.error() != ProtocolError::UnsupportedVersion )
+        return false;
+    // 声明正文仍包含双端点身份时截断一字节，必须在帧长度检查被拒绝。
+    // 长度声明不变，故不能把未知类型或非法来源误计为截断覆盖。
+    frame->pop_back();
+    const auto truncated = decodeCollaborationMessage(*frame, 4U);
+    return !truncated &&
+           truncated.error() == ProtocolError::InvalidMessageLength;
+}
+
+/// @brief 验证合法链、任意闭环、同轮竞争、快速取消和跟随图生命周期。
+/// @return 房主与全部访客最终观察到同一无环图时返回 true。
+/// @details 每个场景使用确定轮数消费可靠队列，不依赖线程调度或真实时间。
+/// 房主也作为普通链节点参与；访客之间的跟随仍必须经房主确认。
+/// 直接与间接闭环都不能靠 UI 隐藏入口保证，因此还直接注入伪造消息。
+/// @par 顺序契约
+/// - 初次身份同步结束后才发请求，失败不应来自未知目标。
+/// - 同轮请求在房主处依次提交，而不是由客户端自行决定胜负。
+/// - 每次取消保持原成员在线，不能用断线清理冒充取消成功。
+/// - 退房后的新身份即使复用槽位，也必须以新的序号水位重新提交。
+/// - 伪造消息只影响无效计数，不得改变任何合法成员的既有边。
+bool testAuthoritativeFollowGraph()
+{
+    using MMM::Network::Collaboration::ICollaborationTransport;
+    LoopbackTransportHub    hub;
+    CollaborationPeerConfig config;
+    setTestPeerIdentity(config, HOST_ID);
+    config.creator = "Host";
+    config.isHost  = true;
+    // 只检查成员易失状态，不创建谱面模型、资源任务或编辑应用回调。
+    CollaborationPeer host(config, hub.createEndpoint(HOST_ID), nullptr);
+    std::vector<std::unique_ptr<CollaborationPeer>> guests;
+    // 观察指针只用于模拟非法传输来源，实际端点仍由对应 Peer 独占。
+    ICollaborationTransport* fourthTransport = nullptr;
+    ICollaborationTransport* thirdTransport  = nullptr;
+    const auto               join =
+        [&](PeerId id, char identityDomain = 'a', char sessionDomain = 'b') {
+            CollaborationPeerConfig guestConfig;
+            setTestPeerIdentity(guestConfig, id);
+            guestConfig.participantId = makeTestStableId(id, identityDomain);
+            guestConfig.sessionId     = makeTestStableId(id, sessionDomain);
+            guestConfig.creator       = "Guest";
+            // 四号每次只读一包，允许精确观察旧确认与最新取消之间的状态。
+            if ( id == 4 ) guestConfig.limits.maxMessagesPerUpdate = 1;
+            auto transport = hub.createEndpoint(id);
+            if ( id == 4 ) fourthTransport = transport.get();
+            if ( id == 3 ) thirdTransport = transport.get();
+            auto guest = std::make_unique<CollaborationPeer>(
+                guestConfig, std::move(transport), nullptr);
+            if ( !host.addParticipant(id,
+                                      guestConfig.participantId,
+                                      guestConfig.sessionId,
+                                      guestConfig.creator) )
+                return false;
+            // 新端点先取得完整身份，之后才可接受引用既有成员的边。
+            guests.push_back(std::move(guest));
+            // 单包端点首次加入需额外推进，其余加入沿用两轮。
+            pumpPeers(host, guests, id == 4 ? 8U : 2U);
+            return true;
+        };
+    if ( !join(2) || !join(3) || !join(4) ) return false;
+    // 引用绑定堆内 Peer，新增 vector 槽位不会使这些观察引用失效。
+    auto& second = *guests[0];
+    auto& third  = *guests[1];
+    auto& fourth = *guests[2];
+    // 两位访客均在旧图上点跟随；房主串行接受先到的边并拒绝闭环边。
+    if ( !second.requestFollowPeer(3) || !third.requestFollowPeer(2) ||
+         second.followTargetPeerId(2) != 0 ||
+         third.followTargetPeerId(3) != 0 ||
+         second.selectedFollowPeerId() != 3 || second.followedPeerId() != 0 )
+        return false;
+    // 入队次序固定为二号先发，不能依赖成员哈希表顺序决定竞争胜者。
+    // 两条请求在发送时均合法，客户端预检无法代替房主串行确认。
+    pumpPeers(host, guests, 2U);
+    if ( host.followTargetPeerId(2) != 3 || host.followTargetPeerId(3) != 0 ||
+         third.followRequestPending() )
+        return false;
+    // 被拒绝请求必须结束等待，但不能生成原本没有的出边。
+    // 清除先前合法边，使房主参与下一组三节点链。
+    if ( !second.requestFollowPeer(0) ) return false;
+    pumpPeers(host, guests, 2U);
+    // 房主到二号立即确认，但三号尚未消费该广播时就发出闭环请求。
+    // 权威入口必须按最新图判断，不能信任访客发送时的旧镜像。
+    if ( !host.requestFollowPeer(2) || !second.requestFollowPeer(3) ||
+         !third.requestFollowPeer(HOST_ID) )
+        return false;
+    pumpPeers(host, guests, 2U);
+    // 检查房主的真实权威图，不仅检查访客按钮是否禁用。
+    // 1->2->3 合法；3->1、3->2、2->1 都会跟到自身祖先或链中节点。
+    if ( host.followTargetPeerId(HOST_ID) != 2 ||
+         host.followTargetPeerId(2) != 3 || host.followTargetPeerId(3) != 0 ||
+         third.canFollowPeer(HOST_ID) || third.canFollowPeer(2) ||
+         second.canFollowPeer(HOST_ID) )
+        return false;
+    // 绕开访客本地预检直接请求链中间节点，房主仍须拒绝三号到二号。
+    // 高序号保证拒绝原因是闭环，而不是请求被去重水位丢弃。
+    const auto middleCycle =
+        encodeCollaborationMessage(makeTestFollowState(3, 2, 100), 4U);
+    if ( !middleCycle || !thirdTransport->send(HOST_ID, *middleCycle) )
+        return false;
+    pumpPeers(host, guests, 2U);
+    if ( host.followTargetPeerId(3) != 0 ) return false;
+    // 链外成员可以接入任意现有节点，不能误用“已被跟随就禁止”的规则。
+    if ( !fourth.canFollowPeer(2) || !fourth.requestFollowPeer(2) )
+        return false;
+    pumpPeers(host, guests, 2U);
+    // 四号和房主共享目标属于合法汇入，不能被误判为互相跟随。
+    if ( host.followTargetPeerId(4) != 2 ) return false;
+    // 迟加入成员须在完整身份之后取得全部既有边，而不只得到房主视口。
+    if ( !join(5) || guests.back()->followTargetPeerId(HOST_ID) != 2 ||
+         guests.back()->followTargetPeerId(2) != 3 ||
+         guests.back()->followTargetPeerId(4) != 2 )
+        return false;
+    // 迟加入镜像须覆盖房主、链中节点及链外汇入三类来源。
+    // 只同步非零边足够恢复图，缺少的来源统一表示无跟随。
+    // 有效访客不能以自己端点冒充另一来源，访客也不能接受非房主状态。
+    const auto forged =
+        encodeCollaborationMessage(makeTestFollowState(2, 3, 100), 4U);
+    const auto falseAuthority =
+        encodeCollaborationMessage(makeTestFollowState(HOST_ID, 3, 100), 4U);
+    // 两侧各记录一次无效消息，且原来的合法边必须保持不变。
+    // 防止非法状态被接受后又恢复原值，而令最终值检查形成假阳性。
+    const auto hostInvalid  = host.stats().invalidMessages;
+    const auto guestInvalid = second.stats().invalidMessages;
+    if ( !forged || !falseAuthority ||
+         !fourthTransport->send(HOST_ID, *forged) ||
+         !fourthTransport->send(2, *falseAuthority) )
+        return false;
+    pumpPeers(host, guests, 2U);
+    if ( host.stats().invalidMessages != hostInvalid + 1 ||
+         second.stats().invalidMessages != guestInvalid + 1 ||
+         host.followTargetPeerId(2) != 3 ||
+         second.followTargetPeerId(HOST_ID) != 2 )
+        return false;
+    // 同一访客在未收到首次确认前换目标再取消，最终意图不能被早期回复覆盖。
+    if ( !fourth.requestFollowPeer(3) || !fourth.requestFollowPeer(0) ||
+         !fourth.followRequestPending() || fourth.selectedFollowPeerId() != 0 ||
+         fourth.followedPeerId() != 0 )
+        return false;
+    // 两条请求先都经过房主，保证两份确认已排入四号接收队列。
+    host.update();
+    // 每次只消费一包，明确观察旧确认不得结束最新取消的等待状态。
+    // 首份确认可更新有效目标，却不能结束后发取消的等待状态。
+    fourth.update();
+    if ( !fourth.followRequestPending() || fourth.followTargetPeerId(4) != 3 )
+        return false;
+    fourth.update();
+    // 第二份确认匹配最新序号，此时才完成取消并移除有效边。
+    if ( fourth.followRequestPending() || fourth.followTargetPeerId(4) != 0 )
+        return false;
+    pumpPeers(host, guests, 2U);
+    // 恢复第二条入边，确保中间节点退房会清理全部来源而不只清理房主。
+    if ( !fourth.requestFollowPeer(2) ) return false;
+    pumpPeers(host, guests, 2U);
+    // 中间节点退房应同时删除其出边及全部入边。
+    // 退房直接使关系失效，无需等待该节点的视口过期。
+    // 两条入边都要发布清理，出边再随成员离开通知幂等消失。
+    host.removeParticipant(2);
+    pumpPeers(host, guests, 2U);
+    for ( const auto& peer : guests ) {
+        // 被移除端点由连接层终止，只比较仍在线成员的镜像。
+        if ( peer->localPeerId() == 2 ) continue;
+        if ( peer->followTargetPeerId(HOST_ID) != 0 ||
+             peer->followTargetPeerId(2) != 0 ||
+             peer->followTargetPeerId(4) != 0 )
+            return false;
+    }
+    if ( host.followTargetPeerId(HOST_ID) != 0 ||
+         host.followTargetPeerId(2) != 0 )
+        return false;
+    // 退役旧端点后复用槽位，新的稳定身份不能继承旧边或请求水位。
+    // 先注销旧队列，防止测试中两个端点共享同一路由槽位。
+    guests.erase(guests.begin());
+    // 新稳定身份不能因为数字槽位相同而恢复上个成员的跟随关系。
+    if ( !join(2, 'c', 'e') ) return false;
+    if ( host.followTargetPeerId(2) != 0 ||
+         guests.back()->followTargetPeerId(HOST_ID) != 0 )
+        return false;
+    // 新会话从序号一开始仍可建立合法边，证明旧会话水位已经清理。
+    if ( !guests.back()->requestFollowPeer(3) ) return false;
+    pumpPeers(host, guests, 2U);
+    // 同时检查房主和请求者，避免把本地改值误认为网络确认成功。
+    return host.followTargetPeerId(2) == 3 &&
+           guests.back()->followTargetPeerId(2) == 3;
+}
+
+/// @brief 验证排队请求遇到端点槽位复用、确认后离开与不同确认进度的安全性。
+/// @return 旧会话不能改写新图，确认身份可恢复且有效跟随从不形成反馈环时返回
+/// true。
+/// @details 只使用公开 Peer 接口和真实 Loopback 队列，不借助私有状态钩子。
+/// 所有重连都更换 SessionId，避免相同会话字符串掩盖旧来源消息的风险。
+/// 目标槽位先换成另一个稳定身份，之后原稳定身份再改用新的槽位重连。
+/// @par 不变量
+/// - 合法来源请求的拒绝必须结束等待，并消耗该会话的请求水位。
+/// - 非法来源会话的旧包不得推进新会话水位，也不得向新会话发送旧确认。
+/// - 匹配确认保存当时目标身份，不能被同次更新中稍后的离开事件覆盖。
+/// - 等待期间 UI 选择仍可取消，但实际跟随必须先移除旧边。
+/// - 客户端消费不同权威前缀时，实际驱动边只能构成权威图的安全子图。
+bool testFollowIdentityLifecycle()
+{
+    // 配置工厂同时区分稳定参与者域和加入会话域；两者不能互相代替。
+    // 每次重连显式使用新会话域，不能析构后重建相同配置冒充重连。
+    // 房主固定为一号，访客通过真实队列参与同一个权威图。
+    const auto configFor =
+        [](PeerId id, char participantDomain, char sessionDomain) {
+            CollaborationPeerConfig config;
+            setTestPeerIdentity(config, id);
+            config.creator       = "Lifecycle";
+            config.participantId = makeTestStableId(id, participantDomain);
+            config.sessionId     = makeTestStableId(id, sessionDomain);
+            config.isHost        = id == HOST_ID;
+            return config;
+        };
+    LoopbackTransportHub hub;
+    const auto           hostConfig = configFor(HOST_ID, 'a', 'b');
+    CollaborationPeer    host(hostConfig, hub.createEndpoint(HOST_ID), nullptr);
+    // 稳定参与者身份不变，仅会话更换，单看 ParticipantId 不能识别旧包。
+    // 这一步单独验证来源会话绑定，而非依赖参与者身份也发生变化。
+    auto secondConfig    = configFor(2, 'a', 'b');
+    auto thirdConfig     = configFor(3, 'a', 'b');
+    auto secondTransport = hub.createEndpoint(2);
+    // 观察端点仅用于合法来源的旧序号重放，所有权仍移入 Peer。
+    auto* secondWire = secondTransport.get();
+    auto  second     = std::make_unique<CollaborationPeer>(
+        secondConfig, std::move(secondTransport), nullptr);
+    auto third = std::make_unique<CollaborationPeer>(
+        thirdConfig, hub.createEndpoint(3), nullptr);
+    // 复用生产登记入口发布身份快照，不直接改任何私有身份表。
+    // 后续由 Peer 消费消息，不能把本地构造配置当成已完成网络同步。
+    const auto registerPeer = [&](const CollaborationPeerConfig& config) {
+        return host.addParticipant(config.peerId,
+                                   config.participantId,
+                                   config.sessionId,
+                                   config.creator);
+    };
+    if ( !registerPeer(secondConfig) || !registerPeer(thirdConfig) )
+        return false;
+    // 初次身份同步后才提交请求，避免未知目标的拒绝掩盖排队场景。
+    second->update();
+    third->update();
+
+    // 请求已入房主队列但尚未处理，模拟连接事件先移除并复用目标槽位。
+    if ( !second->requestFollowPeer(3) || second->selectedFollowPeerId() != 3 ||
+         second->followedPeerId() != 0 )
+        return false;
+    // 这里刻意不先调用房主更新，让旧请求真正遗留在其接收队列。
+    // 若先处理请求再断开，就无法覆盖目标槽位在请求消费前复用的竞争。
+    host.removeParticipant(3);
+    third.reset();
+    // 不同稳定身份占据同一数字槽位，且必须使用新的加入会话。
+    thirdConfig = configFor(3, 'c', 'd');
+    third       = std::make_unique<CollaborationPeer>(
+        thirdConfig, hub.createEndpoint(3), nullptr);
+    if ( !registerPeer(thirdConfig) ) return false;
+    second->update();
+    third->update();
+    // 请求选择也应因目标身份变化消失，不能展示成正在跟随新占位者。
+    if ( second->selectedFollowPeerId() != 0 ||
+         !second->followRequestPending() )
+        return false;
+    // 这里真正处理权威消息，不直接设置结果或触发测试专用回调。
+    host.update();
+    second->update();
+    // 拒绝应精确匹配原请求序号，不能用连接断开代替正常拒绝回复。
+    // 零返回目标表示此前没有已确认边，与目标过期的具体原因无关。
+    const auto refused = second->popFollowConfirmation();
+    // 正常目标生命周期竞争必须回复拒绝，而不是让请求方永久等待。
+    if ( !refused || refused->accepted || refused->targetPeerId != 0 ||
+         second->followRequestPending() || host.followTargetPeerId(2) != 0 )
+        return false;
+    // 拒绝已经消费序号一；即使把目标改成新身份，旧序号也不能重放生效。
+    // 重放特意更换为当前合法目标身份，排除目标仍过期造成的假阳性。
+    // 唯一应阻止该请求的条件就是拒绝时已经消费了来源序号水位。
+    auto replay = makeTestFollowState(2, 3, refused->requestSequence);
+    replay.targetParticipantId = thirdConfig.participantId;
+    replay.targetSessionId     = thirdConfig.sessionId;
+    const auto replayFrame     = encodeCollaborationMessage(replay, 4U);
+    if ( !replayFrame || !secondWire->send(HOST_ID, *replayFrame) )
+        return false;
+    host.update();
+    if ( host.followTargetPeerId(2) != 0 ) return false;
+
+    // 旧来源先发出第二个请求，再在房主处理前退出；其排队包仍留在房主队列。
+    if ( !second->requestFollowPeer(3) ) return false;
+    // 旧包已经入房主队列，来源端点析构不会删除房主保存的包副本。
+    // 重新创建的同槽位端点只能发送带新加入会话的请求。
+    host.removeParticipant(2);
+    second.reset();
+    // 原参与者重连复用槽位但更换会话，新请求从序号一重新开始。
+    secondConfig = configFor(2, 'a', 'e');
+    second       = std::make_unique<CollaborationPeer>(
+        secondConfig, hub.createEndpoint(2), nullptr);
+    if ( !registerPeer(secondConfig) ) return false;
+    second->update();
+    third->update();
+    if ( !second->requestFollowPeer(3) ) return false;
+    // 旧会话序号二在前，新会话序号一在后，水位污染会立即暴露。
+    const auto invalidBefore = host.stats().invalidMessages;
+    host.update();
+    // 旧来源包只能产生一次无效计数，不能让新来源序号一被旧水位二压住。
+    if ( host.stats().invalidMessages != invalidBefore + 1 ||
+         host.followTargetPeerId(2) != 3 )
+        return false;
+    // 先不让新来源读取确认，立即移除其刚获准的目标。
+    // 接收队列现在依次包含接受确认、清理入边和离开通知。
+    host.removeParticipant(3);
+    third.reset();
+    second->update();
+    // 一次更新读完队列，最终零边不能作为本地明确请求取消的证据。
+    // 确认必须独立保存当时身份，否则重连恢复意图会在这里被清空。
+    const auto accepted = second->popFollowConfirmation();
+    // 当前图已为零，但确认快照必须保留刚接受的稳定身份和旧加入会话。
+    if ( !accepted || !accepted->accepted || accepted->targetPeerId != 3 ||
+         accepted->targetParticipantId != thirdConfig.participantId ||
+         accepted->targetSessionId != thirdConfig.sessionId ||
+         accepted->sessionId != secondConfig.sessionId ||
+         second->followedPeerId() != 0 || second->followRequestPending() )
+        return false;
+    // 已消费结果不能重复返回，离开清理也不能伪造一次新的确认。
+    // 结果只允许消费一次，不能在后续每帧重复应用而覆盖新选择。
+    if ( second->popFollowConfirmation() ) return false;
+
+    // 让确认中的同一稳定目标改用四号槽位重新加入，验证恢复依靠稳定身份。
+    // 原稳定目标使用新路由和新会话重连，旧数字三不能作为恢复依据。
+    // 保留已确认身份再查新身份表，覆盖 Room 采用的公开恢复流程。
+    auto reconnectedConfig          = configFor(4, 'c', 'f');
+    reconnectedConfig.participantId = accepted->targetParticipantId;
+    third                           = std::make_unique<CollaborationPeer>(
+        reconnectedConfig, hub.createEndpoint(4), nullptr);
+    if ( !registerPeer(reconnectedConfig) ) return false;
+    second->update();
+    third->update();
+    // 从真实身份镜像找稳定目标，不能因测试知道四号就直接跟过去。
+    const auto& identities = second->participantIdentities();
+    const auto  restored   = std::find_if(
+        identities.begin(), identities.end(), [&accepted](const auto& entry) {
+            return entry.second.participantId == accepted->targetParticipantId;
+        });
+    // 与 Room 一样先匹配稳定身份，再为新会话重新请求；不复活旧路由边。
+    if ( restored == identities.end() || restored->first != 4 ||
+         restored->second.sessionId == accepted->targetSessionId ||
+         !second->requestFollowPeer(restored->first) ||
+         second->selectedFollowPeerId() != 4 || second->followedPeerId() != 0 )
+        return false;
+    host.update();
+    second->update();
+    third->update();
+    if ( second->followedPeerId() != 4 || second->selectedFollowPeerId() != 4 )
+        return false;
+
+    // 二号先请求取消但尚未收确认，权威图和 UI 选择应与实际驱动明确分离。
+    // 取消提交瞬间权威旧边仍保留，但实际驱动已经暂停。
+    // 展示选择归零，旧确认不能把界面切回之前的目标。
+    if ( !second->requestFollowPeer(0) || second->followTargetPeerId(2) != 4 ||
+         second->followedPeerId() != 0 || second->selectedFollowPeerId() != 0 )
+        return false;
+    host.update();
+    // 四号先读取取消并反向跟随二号，二号仍停留在旧的权威图前缀。
+    third->update();
+    // 四号已知取消生效，反向请求合法；二号尚未消费取消确认。
+    // 刻意保留不同权威前缀，以实际有效边证明不会产生反馈环。
+    if ( !third->requestFollowPeer(2) ) return false;
+    host.update();
+    third->update();
+    // 若二号等待取消时仍驱动旧边，此处就会形成临时的二号与四号互跟环。
+    if ( third->followedPeerId() != 2 || second->followTargetPeerId(2) != 4 ||
+         second->followedPeerId() != 0 || !second->followRequestPending() )
+        return false;
+    second->update();
+    return !second->followRequestPending() && second->followedPeerId() == 0 &&
+           second->selectedFollowPeerId() == 0 &&
+           host.followTargetPeerId(4) == 2;
+}
+
 /// @brief 验证默认授权进入房主权威表，并同步到新访客而不覆盖已有成员。
 /// @return 自定义、全选、清零、禁用及重复登记均保持正确权限时返回 true。
 /// @details 使用真实 Loopback 消息泵，不能仅查询房主本地设置就认为授权成功。
@@ -1649,7 +2126,7 @@ bool testDefaultParticipantPermissions()
     setTestPeerIdentity(hostConfig, HOST_ID);
     hostConfig.creator = "Host";
     hostConfig.isHost  = true;
-    CollaborationPeer host(hostConfig,
+    CollaborationPeer                               host(hostConfig,
                            hub.createEndpoint(HOST_ID),
                            [](const CommittedOperation&) {});
     std::vector<std::unique_ptr<CollaborationPeer>> guests;
@@ -1769,6 +2246,11 @@ int main()
     if ( !testParticipantPermissionsAreAuthoritative() ) return 9;
     // 新成员自动授权与人工覆盖使用独立场景，失败码十便于定位。
     if ( !testDefaultParticipantPermissions() ) return 10;
-    // 全部十组场景通过。
+    // 跟随协议及权威图分别保留独立失败码，便于定位兼容或状态机回归。
+    if ( !testFollowProtocol() ) return 11;
+    if ( !testAuthoritativeFollowGraph() ) return 12;
+    // 生命周期场景覆盖真实排队包与确认前缀，不能只检查最终图。
+    if ( !testFollowIdentityLifecycle() ) return 13;
+    // 全部场景通过。
     return 0;
 }

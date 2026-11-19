@@ -456,21 +456,23 @@ bool drawPermissionEditor(
 ///
 /// 本地成员只显示“你”标记；远端成员可切换视野跟随。房主额外获得权限编辑和移除
 /// 操作，权限弹窗以 participantId 作为 ImGui ID 隔离不同成员的同名按钮。
-/// @warning UI 热路径：成员表可见时每帧最多调用 8 次；只绘制内存状态，
-/// 不执行网络发送或文件系统访问。
+/// @warning UI 热路径：成员表可见时每帧最多调用 8 次；常态只观察内存状态。
+/// 只有点击动作的低频分支提交非阻塞网络请求，禁止等待回包或访问文件系统。
 /// @details 主 Edit 位关闭时细分 checkbox 在 UI 上禁用，但其已有 bit
 /// 值仍保留在局部 掩码中；重新开启 Edit
 /// 后可恢复之前细分选择。实际授权由网络层同时考虑主位。
 /// follow、权限更新和移除都只传递稳定 PeerId，不以可重名 Creator 定位成员。
+/// 跟随按钮观察房主确认的无环关系图，合法的间接跟随仍保持可用。
+/// 网络层会再次验证请求，按钮状态不能代替对同时点击竞态的检查。
 
 void drawParticipantRow(
     Network::Collaboration::CollaborationRoom&         room,
     Network::Collaboration::PeerId                     peerId,
     const Network::Collaboration::ParticipantIdentity& identity)
 {
-    // 本地和正在跟随状态决定第二列动作。
+    // 按最新选择保留停止入口；等待确认时实际视野跟随已暂停，但仍可立即取消。
     const bool local     = peerId == room.localPeerId();
-    const bool following = room.followedPeerId() == peerId;
+    const bool following = room.selectedFollowPeerId() == peerId;
 
     // participantId 比 creator 展示名稳定且唯一。
     ImGui::PushID(identity.participantId.c_str());
@@ -508,9 +510,28 @@ void drawParticipantRow(
         const char* actionLabel =
             following ? TR("ui.collaboration.stop_following").data()
                       : TR("ui.collaboration.follow").data();
+        // 停止跟随始终可用；只禁用会把当前权威关系链闭合的新增跟随。
+        // 成员数有固定上限，此处只检查内存关系链，不等待网络响应。
+        const bool blocked = !following && !room.canFollowPeer(peerId);
+        ImGui::BeginDisabled(blocked);
         if ( FeedbackSmallButton(actionLabel) ) {
-            // PeerId 0 表示清除当前跟随目标。
+            // PeerId 0 表示清除当前跟随目标，最终关系仍由房主串行确认。
             static_cast<void>(room.setFollowedPeer(following ? 0 : peerId));
+        }
+        ImGui::EndDisabled();
+        // 禁用控件仍解释具体成员及闭环原因，不把正常链式跟随一并禁止。
+        if ( blocked &&
+             ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal |
+                                  ImGuiHoveredFlags_AllowWhenDisabled) ) {
+            const bool mutual =
+                room.followTargetPeerId(peerId) == room.localPeerId();
+            // 提示只借用翻译和成员名，不在成员表的逐帧路径创建字符串。
+            // 展示名始终作为参数传入，不解释成格式模板或成员路由身份。
+            const auto reason =
+                mutual ? TR("ui.collaboration.follow_blocked_mutual")
+                       : TR("ui.collaboration.follow_blocked_chain");
+            ImGui::SetTooltip(
+                "%s\n%s", identity.creator.c_str(), reason.data());
         }
         if ( room.isHost() ) {
             drawMemberHistoryActions(room, identity.participantId);
@@ -821,8 +842,8 @@ void CollaborationView::openRoomCoverFilePicker()
     dialogConfig.path              = defaultPath;
     dialogConfig.countSelectionMax = 1;
     dialogConfig.flags             = ImGuiFileDialogFlags_Modal |
-                                     ImGuiFileDialogFlags_HideColumnType |
-                                     ImGuiFileDialogFlags_ReadOnlyFileNameField;
+                         ImGuiFileDialogFlags_HideColumnType |
+                         ImGuiFileDialogFlags_ReadOnlyFileNameField;
     // 只在从关闭变为打开时播放音效，重复请求不重复反馈。
     const bool wasOpen =
         ImGuiFileDialog::Instance()->IsOpened(ROOM_COVER_FILE_DIALOG_ID);

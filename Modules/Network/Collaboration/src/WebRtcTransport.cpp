@@ -29,7 +29,9 @@ namespace
 constexpr std::uint64_t BROKER_PROTOCOL_VERSION = 1;
 /// @brief 中心完成配对后两端直接交换身份使用的协议版本。
 /// @note 该版本覆盖 join、accepted、description、candidate 与 p2p_ready。
-constexpr std::uint64_t P2P_SIGNALING_PROTOCOL_VERSION = 2;
+/// 第三版要求业务协议十的权威跟随关系；关闭构建指纹匹配也不能接入旧端。
+/// 中心目录仍使用独立的 broker 协议，不需要随客户端透明身份握手升级。
+constexpr std::uint64_t P2P_SIGNALING_PROTOCOL_VERSION = 3;
 /// @brief 协作 DataChannel 的稳定标签。
 /// @note 房主拒绝任何其他标签，避免把同一 PeerConnection 的扩展通道误接入。
 constexpr std::string_view COLLABORATION_CHANNEL_LABEL = "mmm-collaboration-v2";

@@ -216,6 +216,26 @@ public:
     /// @return 状态有效且已经写入本地状态表并发送时返回 true。
     [[nodiscard]] bool publishViewport(ParticipantViewport viewport);
 
+    /// @brief 检查添加本地跟随边是否保持已确认图无环，零目标总是合法。
+    /// @warning UI 每帧查询；最多访问八个成员，不等待网络或分配容器。
+    [[nodiscard]] bool canFollowPeer(PeerId peerId) const;
+    /// @brief 返回指定参与者已由房主确认的直接目标，离线或无边时为零。
+    [[nodiscard]] PeerId followTargetPeerId(PeerId peerId) const;
+    /// @brief 请求修改本地跟随边，访客等待房主回复后才应用。
+    /// @return 房主已接受或访客请求成功入发送队列时返回 true。
+    [[nodiscard]] bool requestFollowPeer(PeerId peerId);
+    /// @brief 查询最新本地请求是否仍在等待权威回复，不等待早期请求。
+    [[nodiscard]] bool followRequestPending() const;
+    /// @brief 返回最新待确认选择或已确认目标，供 UI 保留停止入口。
+    /// @warning UI 每帧读取；仅检查身份与会话，不分配或等待。
+    [[nodiscard]] PeerId selectedFollowPeerId() const;
+    /// @brief 返回实际驱动画布的本地目标，最新请求等待期间为零。
+    /// @warning UI 每帧读取；暂停旧边而不乐观启用新边。
+    [[nodiscard]] PeerId followedPeerId() const;
+    /// @brief 消费最新请求匹配的确认快照，目标随后离开也保留当时身份。
+    /// @warning 房间每帧查询；仅最新请求有结果时移动一个有界状态对象。
+    [[nodiscard]] std::optional<ParticipantFollowState> popFollowConfirmation();
+
     /// @brief 非阻塞探测跟随目标时钟，每秒最多一次，不等待网络回应。
     /// @warning 房间每帧路径；只在截止时间到达时发送固定大小消息。
     void probePlaybackClock(PeerId peerId);
@@ -238,6 +258,22 @@ public:
     void update();
 
 private:
+    /// @brief 构造绑定在线来源、目标双身份的权威状态或请求。
+    [[nodiscard]] ParticipantFollowState makeFollowState(
+        PeerId source, PeerId target, std::uint64_t sequence,
+        bool accepted = true) const;
+    /// @brief 比较消息声明的来源或目标是否仍是当前路由槽位的同一加入会话。
+    [[nodiscard]] bool followIdentityMatches(
+        PeerId peerId, const ParticipantId& participantId,
+        const OperationSessionId& sessionId) const;
+    /// @brief 沿目标链检查来源是否可达，限制步数防御异常缓存中的已有环。
+    [[nodiscard]] bool canFollowTarget(PeerId source, PeerId target) const;
+    /// @brief 按角色验证跟随请求或权威状态，房主先写图再广播。
+    void handleParticipantFollowState(PeerId                        senderId,
+                                      const ParticipantFollowState& follow);
+    /// @brief 成员退房时清理入边和出边，房主广播受影响的完整状态。
+    void clearParticipantFollowState(PeerId peerId);
+
     /// @brief 校验探测来源、沿房主路由，并匹配本地尚未完成的探测。
     void handlePlaybackClockProbe(PeerId                    senderId,
                                   const PlaybackClockProbe& probe);
@@ -364,6 +400,14 @@ private:
     std::uint64_t m_nextClientSequence = 1;
     /// @brief 当前客户端下一个本地视口状态序号。
     std::uint64_t m_nextViewportSequence = 1;
+    /// @brief 当前客户端下一条跟随请求序号，与视口序号互相独立。
+    std::uint64_t m_nextFollowRequestSequence = 1;
+    /// @brief 最新待确认跟随请求，零表示没有待处理请求。
+    std::uint64_t m_pendingFollowRequestSequence = 0;
+    /// @brief 最新匹配确认的身份与结果快照，不能被后续离开清理覆盖。
+    std::optional<ParticipantFollowState> m_followConfirmation;
+    /// @brief 最新已发送请求的完整目标身份，供等待期间展示选择且防止槽位复用。
+    std::optional<ParticipantFollowState> m_pendingFollowRequest;
     /// @brief 当前客户端下一条聊天消息序号。
     std::uint64_t m_nextChatSequence = 1;
     /// @brief 房主要分配的下一个全房间版本。
@@ -392,6 +436,10 @@ private:
     bool m_defaultPermissionsEnabled{ false };
     /// @brief 房主显式选择的初始权限；禁用时保留，禁止沿用到另一房间。
     CollaborationPermissionMask m_defaultPermissions{ 0U };
+    /// @brief 房主权威跟随图；访客仅保存已确认边，零目标不占表项。
+    std::unordered_map<PeerId, PeerId> m_participantFollowTargets;
+    /// @brief 房主为每名访客保留的请求水位，拒绝重复和倒序请求。
+    std::unordered_map<PeerId, std::uint64_t> m_lastFollowRequestSequence;
     /// @brief 各参与者最近一次通过序号校验的主画布视口状态。
     std::unordered_map<PeerId, ParticipantViewport> m_participantViewports;
     /// @brief 各参与者最近一次通过校验的聊天消息序号。
