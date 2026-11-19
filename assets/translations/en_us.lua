@@ -1187,6 +1187,8 @@ return {
 	["ui.collaboration.you_suffix"] = " (you)",
 	["ui.collaboration.follow"] = "Follow",
 	["ui.collaboration.stop_following"] = "Stop following",
+	["ui.collaboration.follow_blocked_mutual"] = "This user is already following you. You cannot follow each other.",
+	["ui.collaboration.follow_blocked_chain"] = "This user already follows a chain that includes you. Circular following is not allowed.",
 	["ui.collaboration.viewport_rate"] = "Viewport sync rate",
 	["ui.collaboration.viewport_render_mode"] = "Viewport frame",
 	["ui.collaboration.viewport_render_mode.filled"] = "Filled frame",

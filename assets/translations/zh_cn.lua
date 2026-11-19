@@ -1186,6 +1186,8 @@ return {
 	["ui.collaboration.you_suffix"] = "（你）",
 	["ui.collaboration.follow"] = "跟随",
 	["ui.collaboration.stop_following"] = "停止跟随",
+	["ui.collaboration.follow_blocked_mutual"] = "你已被此用户跟随，两者不能互相跟随。",
+	["ui.collaboration.follow_blocked_chain"] = "此用户的跟随链已包含你，不能形成循环跟随。",
 	["ui.collaboration.viewport_rate"] = "视野同步频率",
 	["ui.collaboration.viewport_render_mode"] = "视野框显示",
 	["ui.collaboration.viewport_render_mode.filled"] = "填充视野框",

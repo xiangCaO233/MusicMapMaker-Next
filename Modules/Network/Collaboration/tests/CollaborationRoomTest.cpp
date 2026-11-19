@@ -186,8 +186,8 @@ std::shared_ptr<BeatMap> makeBeatmap(double noteTimestamp, std::string author)
     note.m_track           = 2;
     note.m_collaborationId = "room-note-root";
     note.m_sampleBinding   = MMM::AudioSampleBinding{
-        .m_audioResourceId = "tap.wav",
-        .m_volume          = 0.45F,
+          .m_audioResourceId = "tap.wav",
+          .m_volume          = 0.45F,
     };
     note.m_metadata.note_properties[MMM::NoteMetadataType::MMM]["transport"] =
         "preserved";
@@ -516,7 +516,8 @@ bool hasConcurrentBurstNotes(const std::shared_ptr<const BeatMap>& beatmap,
 /// 房主断开后，访客不仅要离开 Connected，还必须清除 peer ID、参与者列表、
 /// 视口缓存和权限。保留非空 lastError 与唯一 HostDisconnected 日志，使上层
 /// 可以向用户说明会话终止原因，同时不会把同一事件重复上报。
-bool testPublicDirectoryWebRtcRoom()
+/// @param followOnly 为 true 时单独验收真实跟随链路；完整模式继续全部编辑断言。
+bool testPublicDirectoryWebRtcRoom(bool followOnly = false)
 {
     // 使用系统分配端口避免并行 CTest 实例争抢固定端口；回环地址保证该用例
     // 不依赖外网或防火墙配置。
@@ -737,6 +738,57 @@ bool testPublicDirectoryWebRtcRoom()
         guestApplyMutationSequences[index].clear();
         guestAcknowledgedMutationSequences[index].clear();
     }
+
+    // 使用已经连通的真实 DataChannel 验证 Room 不能乐观启用跟随。
+    // 跟随及取消都以房主确认作为完成条件，避免未送达请求被当作成功。
+    // 使用真实分配的路由，不假设信令服务从固定编号开始。
+    const PeerId followHostId  = host.localPeerId();
+    const PeerId followGuestId = guests.front()->localPeerId();
+    // 提交瞬间仍为零，证明用户意图没有提前驱动画布。
+    // 等到非零确认后再取消，零目标断言才真正覆盖了往返。
+    if ( !guests.front()->setFollowedPeer(followHostId) ||
+         guests.front()->followedPeerId() != 0 ||
+         guests.front()->selectedFollowPeerId() != followHostId ||
+         !pumpUntil(server,
+                    host,
+                    guests,
+                    [&]() {
+                        return guests.front()->followedPeerId() == followHostId;
+                    }) ||
+         !guests.front()->setFollowedPeer(0) ||
+         // 尚未推进房主，图仍有旧边；本地实际跟随和取消选择已立即归零。
+         guests.front()->followedPeerId() != 0 ||
+         guests.front()->selectedFollowPeerId() != 0 ||
+         // 房主未处理取消，非零断言证明本地暂停先于权威图改变。
+         host.followTargetPeerId(followGuestId) != followHostId ||
+         !pumpUntil(server, host, guests, [&]() {
+             return host.followTargetPeerId(followGuestId) == 0 &&
+                    guests.front()->followedPeerId() == 0;
+         }) )
+        return false;
+    // 快速换目标的逐包中间态由 Peer 用例覆盖，不依靠网络延迟造竞态。
+    // 真实探针验证 DataChannel 与 Room 的接入及确认后的有效目标。
+    // 房主也参与无环约束：确认房主跟随访客后，访客不得反向跟随房主。
+    // 先让访客取得房主新边，再检查预检和实际提交入口都拒绝反向边。
+    // 单独验证按钮状态不足以证明其它调用路径不能绕过约束。
+    if ( !host.setFollowedPeer(followGuestId) ||
+         !pumpUntil(server,
+                    host,
+                    guests,
+                    [&]() {
+                        return guests.front()->followTargetPeerId(
+                                   followHostId) == followGuestId;
+                    }) ||
+         guests.front()->canFollowPeer(followHostId) ||
+         guests.front()->setFollowedPeer(followHostId) ||
+         !host.setFollowedPeer(0) || !pumpUntil(server, host, guests, [&]() {
+             return guests.front()->followTargetPeerId(followHostId) == 0;
+         }) )
+        return false;
+
+    // 独立跟随探针在相同真实握手和 Room 断言后结束，不改变完整探针的检查。
+    // 按模式明确隔离验收范围，不能将本返回值当作并发编辑和历史测试通过。
+    if ( followOnly ) return true;
 
     // 第五阶段：房主和访客从同一基线各新增一个物件，并在尚未交换增量时连续
     // 提交，验证按 collaborationId 合并而不是后到版本整表覆盖。
@@ -1200,11 +1252,11 @@ bool testHostAdmissionControl()
         // 工厂统一绑定同一房间和端点，两个子场景只改变名称与稳定身份。
         auto guest = std::make_unique<CollaborationRoom>();
         CollaborationJoinRoomConfig config;
-        config.creator       = std::move(creator);
+        config.creator = std::move(creator);
         config.participantId = makeRoomTestParticipantId(nextGuestIdentity++);
-        config.roomId        = host.roomId();
-        config.roomName      = host.roomName();
-        config.endpoint      = endpoint;
+        config.roomId   = host.roomId();
+        config.roomName = host.roomName();
+        config.endpoint = endpoint;
         // 用空 unique_ptr 表达同步 join 启动失败，调用方在加入容器后统一检查。
         if ( !guest->join(std::move(config)) ) {
             return std::unique_ptr<CollaborationRoom>{};
@@ -1854,7 +1906,7 @@ bool testExternalPublicDirectoryWebRtcRoom(CollaborationServerEndpoint endpoint)
 
 /// @brief 根据命令行模式执行本机 P2P、资源同步或公网部署验收。
 /// @param argc 参数数量。
-/// @param argv 参数数组；第一个业务参数为 p2p、resource 或 external。
+/// @param argv 参数数组；第一个业务参数为 follow、p2p、resource 或 external。
 /// @return 0 表示所选场景通过，1/2 表示场景失败，3 表示参数无效，4 表示
 ///         协作构建指纹初始化失败。
 ///
@@ -1869,6 +1921,7 @@ bool testExternalPublicDirectoryWebRtcRoom(CollaborationServerEndpoint endpoint)
 /// @par 命令行契约
 /// 支持的精确形式为：
 ///
+/// - `CollaborationRoomTest follow`：真实房间的跟随、取消与防互跟；
 /// - `CollaborationRoomTest p2p`：本机协作与准入控制；
 /// - `CollaborationRoomTest resource`：本机资源同步与在线替换；
 /// - `CollaborationRoomTest external ADDRESS PORT TLS`：公网部署探针。
@@ -1938,7 +1991,10 @@ int main(int argc, char** argv)
     // 默认保持参数错误退出码，只有精确匹配模式及其参数数量才执行场景。
     const std::string_view mode(argv[1]);
     int                    result = 3;
-    if ( mode == "p2p" && argc == 2 ) {
+    if ( mode == "follow" && argc == 2 ) {
+        // 跟随模式使用同一握手与控制消息，只将后续编辑检查留给完整模式。
+        result = testPublicDirectoryWebRtcRoom(true) ? 0 : 1;
+    } else if ( mode == "p2p" && argc == 2 ) {
         // 本机主模式连续覆盖协作收敛与准入控制，两者共享成功退出码。
         result = testPublicDirectoryWebRtcRoom() && testHostAdmissionControl()
                      ? 0

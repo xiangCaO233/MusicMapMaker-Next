@@ -320,8 +320,13 @@ public:
 
     /// @brief 设置用户列表选择的持续跟随目标。
     /// @param peerId 远端参与者标识；传入 0 停止跟随。
-    /// @return 目标是当前在线的非本机参与者或成功停止时返回 true。
+    /// @return 房主已接受或请求已发送时返回 true；访客等待确认期间暂停旧目标。
     bool setFollowedPeer(PeerId peerId);
+    /// @brief 查询当前已确认图是否允许跟随目标，零表示取消且总是合法。
+    /// @warning UI 每帧查询；只做有界成员链检查，不等待网络。
+    [[nodiscard]] bool canFollowPeer(PeerId peerId) const;
+    /// @brief 查询指定成员已由房主确认的直接跟随目标。
+    [[nodiscard]] PeerId followTargetPeerId(PeerId peerId) const;
 
     /// @brief 获取当前房间状态。
     [[nodiscard]] CollaborationRoomState state() const;
@@ -373,9 +378,14 @@ public:
     /// @return 以 PeerId 索引的最新只读状态表。
     [[nodiscard]] const std::unordered_map<PeerId, ParticipantViewport>&
     participantViewports() const;
-    /// @brief 获取用户列表当前选择的持续跟随目标。
-    /// @return 远端 PeerId；未跟随时为 0。
+    /// @brief 获取实际驱动画布的已确认目标，最新请求等待期间暂停为零。
+    /// @return 当前有效目标，取消、离线或待确认时为零。
+    /// @warning UI 每帧读取；不等待网络，也不乐观启用新目标。
     [[nodiscard]] PeerId followedPeerId() const;
+    /// @brief 返回列表最新选择，等待确认期间仍保留停止入口。
+    /// @return 身份会话仍匹配的待确认目标，否则返回权威目标或零。
+    /// @warning UI 每帧读取；只进行有界身份检查。
+    [[nodiscard]] PeerId selectedFollowPeerId() const;
     /// @brief 设置当前房间是否跟随远端播放，默认关闭且不跨房间继承。
     void setFollowPlaybackEnabled(bool enabled);
     /// @brief 查询跟随播放开关；独立于视角跟随是否已有目标。
@@ -634,7 +644,11 @@ private:
     std::chrono::steady_clock::time_point m_nextViewportPublish;
     /// @brief P2P 主画布状态的本地发送频率，限制为 5～60 Hz。
     std::uint32_t m_viewportPublishRateHz = 10;
-    /// @brief 用户列表选择的持续跟随稳定身份；为空表示未跟随。
+    /// @brief 最新跟随请求是否等待完成，避免旧回复覆盖稳定身份意图。
+    bool m_followRequestPending{ false };
+    /// @brief 已尝试恢复跟随的目标会话；每次重连最多重新请求一次。
+    OperationSessionId m_followResumeSessionId;
+    /// @brief 已确认的持续跟随稳定身份；离线后保留以安全恢复同一参与者。
     ParticipantId m_followedParticipantId;
     /// @brief 当前房间的跟随音频选择，结束房间时恢复关闭。
     bool m_followPlaybackEnabled{ false };

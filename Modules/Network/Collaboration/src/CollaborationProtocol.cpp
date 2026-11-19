@@ -576,7 +576,7 @@ std::expected<ByteBuffer, ProtocolError> encodeCollaborationMessage(
             return std::unexpected(ProtocolError::InvalidViewportState);
         }
         kind = CollaborationMessageKind::ParticipantViewport;
-        // 原视口末尾追加播放标志、倍率与单调采样时刻，版本九固定 73 字节。
+        // 自协议九起视口追加播放标志、倍率与单调采样时刻，保持 73 字节。
         body.reserve(73U);
         appendUint64(body, viewport->peerId);
         appendUint64(body, viewport->sequence);
@@ -592,6 +592,54 @@ std::expected<ByteBuffer, ProtocolError> encodeCollaborationMessage(
         // 采样时刻对应播放位置，发送限频期间位置仍能按原时刻正确外推。
         // receivedAt 属于接收端私有时钟，不写入正文，房主转发保留原采样值。
         appendDouble(body, viewport->sampledAt);
+    } else if ( const auto* follow =
+                    std::get_if<ParticipantFollowState>(&message) ) {
+        // 两个端点必须绑定稳定身份和加入会话，不能只传可复用路由槽位。
+        // 固定身份规范化发生在分配正文前，格式错误不能形成半帧。
+        // 来源的稳定身份与加入会话各占三十二字符，二者必须独立验证。
+        const auto participant =
+            Config::normalizeCollaborationStableId(follow->participantId);
+        const auto session =
+            Config::normalizeCollaborationStableId(follow->sessionId);
+        // 目标可能已在传输期间退出；协议只验证字节形状，在线性由房主决定。
+        // 即使路由槽位相同，新的加入会话也不能继承旧目标的授权含义。
+        const auto targetParticipant =
+            Config::normalizeCollaborationStableId(follow->targetParticipantId);
+        const auto targetSession =
+            Config::normalizeCollaborationStableId(follow->targetSessionId);
+        // 取消必须使用真正的空身份，禁止携带残留目标字符串。
+        // 非零目标则要求两层身份均有效，不能以单一参与者身份推断当前会话。
+        const bool targetValid =
+            follow->targetPeerId == 0
+                ? follow->targetParticipantId.empty() &&
+                      follow->targetSessionId.empty()
+                : !targetParticipant.empty() && !targetSession.empty();
+        // 零请求序号表示无请求的权威快照，不能附带拒绝语义。
+        // 来源与目标相等可以直接判定自环，长链仍需房主查图。
+        if ( follow->peerId == 0 || follow->peerId == follow->targetPeerId ||
+             participant.empty() || session.empty() || !targetValid ||
+             (follow->requestSequence == 0 && !follow->accepted) )
+            return std::unexpected(ProtocolError::InvalidFollowState);
+        kind = CollaborationMessageKind::ParticipantFollowState;
+        // 固定前缀后接来源双身份；仅非零目标携带目标双身份。
+        // 正文仅有取消和非零目标两种确定布局，不写任意长度身份字段。
+        // 操作负载上限不作用于这些固定控制字段，避免短测试上限影响成员状态。
+        body.reserve(follow->targetPeerId == 0 ? 89U : 153U);
+        appendUint64(body, follow->peerId);
+        appendUint64(body, follow->targetPeerId);
+        appendUint64(body, follow->requestSequence);
+        // 来源身份在所有方向都传输，新会话收到旧房主状态也能拒绝。
+        // 房主拒绝时重建当前权威目标身份，不回显已经过期的请求目标。
+        appendStableIdentity(body, participant);
+        appendStableIdentity(body, session);
+        // 目标为零时不编码占位身份，接收端据目标值确定剩余字段数。
+        // 这也让离线清理保留明确的空目标语义，而不冒充有效加入会话。
+        if ( follow->targetPeerId != 0 ) {
+            appendStableIdentity(body, targetParticipant);
+            appendStableIdentity(body, targetSession);
+        }
+        // 接受结果必须显式传输，不能根据清理后图的最终零值猜测请求结果。
+        body.push_back(follow->accepted ? 1U : 0U);
     } else if ( const auto* probe =
                     std::get_if<PlaybackClockProbe>(&message) ) {
         // 时钟探测只承载有限单调时间，身份与请求匹配由 Peer 再验证。
@@ -991,6 +1039,37 @@ std::expected<CollaborationMessage, ProtocolError> decodeCollaborationMessage(
         }
         // 验证后的轻量视口对象按值进入消息变体。
         return CollaborationMessage(viewport);
+    }
+    case CollaborationMessageKind::ParticipantFollowState: {
+        ParticipantFollowState follow;
+        std::uint8_t           accepted = 0;
+        // 固定来源身份先读完，目标零明确表示没有任何目标身份字段。
+        if ( !reader.readUint64(follow.peerId) ||
+             !reader.readUint64(follow.targetPeerId) ||
+             !reader.readUint64(follow.requestSequence) ||
+             !readStableIdentity(reader, follow.participantId) ||
+             !readStableIdentity(reader, follow.sessionId) )
+            return std::unexpected(ProtocolError::TruncatedMessage);
+        // 固定来源字段已完整，只有目标非零才继续读取两层目标身份。
+        // 取消帧若塞入额外目标身份，会在最终尾随字节检查中失败。
+        if ( follow.targetPeerId != 0 &&
+             (!readStableIdentity(reader, follow.targetParticipantId) ||
+              !readStableIdentity(reader, follow.targetSessionId)) )
+            return std::unexpected(ProtocolError::TruncatedMessage);
+        // 接受结果使用明确的一字节零或一，不能依赖 C++ bool 内存表示。
+        // 完整确认身份必须与结果一并到达，短读不能触发本地恢复意图更新。
+        if ( !reader.readUint8(accepted) )
+            return std::unexpected(ProtocolError::TruncatedMessage);
+        // 固定身份读取器校验字节形状，具体在线会话仍由 Peer 比对。
+        // 快照不能表达请求失败；明确拒绝必须携带非零请求序号。
+        if ( reader.remaining() != 0 || follow.peerId == 0 ||
+             follow.peerId == follow.targetPeerId || accepted > 1U ||
+             (follow.requestSequence == 0 && accepted == 0U) )
+            return std::unexpected(ProtocolError::InvalidFollowState);
+        // 结果原样交给 Peer，匹配请求时立即保存完整身份快照。
+        // 后续成员离开可以清理图，但不能把已接受结果重新解释为明确取消。
+        follow.accepted = accepted == 1U;
+        return CollaborationMessage(std::move(follow));
     }
     case CollaborationMessageKind::PlaybackClockProbe: {
         // 路由消息没有任意长度负载，未知或额外字节必须在本入口拒绝。

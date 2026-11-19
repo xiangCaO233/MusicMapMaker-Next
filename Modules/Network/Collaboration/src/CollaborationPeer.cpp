@@ -211,6 +211,11 @@ bool CollaborationPeer::addParticipant(PeerId             peerId,
         static_cast<void>(knownPeerId);
         static_cast<void>(sendMessage(peerId, identity));
     }
+    // 跟随图依赖身份表，必须先发完全部身份再同步既有边。
+    for ( const auto& [source, target] : m_participantFollowTargets ) {
+        static_cast<void>(
+            sendMessage(peerId, makeFollowState(source, target, 0)));
+    }
     // 同步发送失败会进入 sendFailures，但成员登记仍继续保持拓扑收敛。
     // 已发布视口作为初始在线状态一并补给新访客。
     for ( const auto& [knownPeerId, viewport] : m_participantViewports ) {
@@ -309,6 +314,8 @@ void CollaborationPeer::removeParticipant(PeerId peerId)
         m_lastAcceptedSequence.erase(sessionId);
     }
     // 确认、视口、聊天序号和权限均以临时 PeerId 为生命周期边界。
+    clearParticipantFollowState(peerId);
+    m_lastFollowRequestSequence.erase(peerId);
     m_lastAcknowledgedRevision.erase(peerId);
     m_participantViewports.erase(peerId);
     // 断开后清除同一槽位的时钟偏移，重连必须重新校准。
@@ -541,6 +548,294 @@ bool CollaborationPeer::publishViewport(ParticipantViewport viewport)
     return sendMessage(m_config.hostPeerId, viewport);
 }
 
+/// @brief 检查从指定来源添加目标边是否保持无环。
+/// @param source 欲修改出边的在线参与者。
+/// @param target 欲添加的直接目标，零表示移除该出边。
+/// @return 目标链不会回到来源且所有端点在线时返回 true。
+/// @details 检查图只包含房主已接受的边，不能把尚待确认的请求当成事实。
+/// @warning UI 查询与低频请求路径；只访问最多八个在线成员，禁止等待。
+bool CollaborationPeer::canFollowTarget(PeerId source, PeerId target) const
+{
+    // 取消只会减少边，任何缓存状态下都不会产生新的环。
+    if ( target == 0 ) return true;
+    if ( !m_valid || !m_participantIdentities.contains(source) ||
+         !m_participantIdentities.contains(target) )
+        return false;
+    // 每个节点最多一条出边，因此沿目标链走到零即可证明不会闭环。
+    // 八步仍未结束意味着命中异常已有环；保守拒绝，避免无限遍历。
+    for ( std::size_t step = 0; step < MAX_COLLABORATION_PARTICIPANTS;
+          ++step ) {
+        if ( target == source ) return false;
+        target = followTargetPeerId(target);
+        if ( target == 0 ) return true;
+    }
+    return false;
+}
+
+/// @brief 检查当前本地跟随选择是否保持已确认图无环。
+/// @param peerId 新目标；零值取消无需在线目标。
+/// @return 返回本地镜像上的预检结果，房主收包时仍须重新检查。
+/// @warning UI 每帧查询路径；禁止引入阻塞、锁或按谱面规模增长的工作。
+bool CollaborationPeer::canFollowPeer(PeerId peerId) const
+{
+    return canFollowTarget(m_config.peerId, peerId);
+}
+
+/// @brief 查询在线参与者的权威直接目标，离线边永远不向调用方暴露。
+/// @param peerId 来源成员的当前路由槽位。
+/// @return 已确认在线直接目标；无边或任一端点离线时为零。
+/// @warning UI 每帧查询路径；仅进行固定数量的哈希查询。
+PeerId CollaborationPeer::followTargetPeerId(PeerId peerId) const
+{
+    // 同时验证来源和目标生命周期，不能把表内旧路由值暴露给画布。
+    const auto found = m_participantFollowTargets.find(peerId);
+    return found != m_participantFollowTargets.end() &&
+                   m_participantIdentities.contains(peerId) &&
+                   m_participantIdentities.contains(found->second)
+               ? found->second
+               : 0;
+}
+
+/// @brief 比较路由槽位与双身份，旧会话消息不能命中新连接。
+/// @param peerId 需要验证的在线路由槽位。
+/// @param participantId 消息声明的稳定参与者身份。
+/// @param sessionId 消息声明的单次加入身份。
+/// @return 两个身份均精确匹配当前槽位时返回 true。
+bool CollaborationPeer::followIdentityMatches(
+    PeerId peerId, const ParticipantId& participantId,
+    const OperationSessionId& sessionId) const
+{
+    const auto identity = m_participantIdentities.find(peerId);
+    // 传输发送者仍需另行验证，稳定身份不能代替端点认证。
+    return identity != m_participantIdentities.end() &&
+           identity->second.participantId == participantId &&
+           identity->second.sessionId == sessionId;
+}
+
+/// @brief 用当前在线端点构造完整跟随状态，零目标明确留空目标身份。
+/// @param source 已登记的来源；调用方先验证成员生命周期。
+/// @param target 已登记目标或表示取消的零值。
+/// @param sequence 请求序号，零仅用于无请求的权威快照。
+/// @param accepted 是否接受该请求；拒绝时仍传回原权威目标。
+/// @return 与当前身份表一致的完整状态值。
+ParticipantFollowState CollaborationPeer::makeFollowState(
+    PeerId source, PeerId target, std::uint64_t sequence, bool accepted) const
+{
+    const auto sourceIdentity = m_participantIdentities.find(source);
+    // 调用者已校验来源；缺失时仍返回不可编码空值，不用抛异常索引。
+    if ( sourceIdentity == m_participantIdentities.end() ) return {};
+    const auto&            identity = sourceIdentity->second;
+    ParticipantFollowState result{ .peerId          = source,
+                                   .targetPeerId    = target,
+                                   .requestSequence = sequence,
+                                   .participantId   = identity.participantId,
+                                   .sessionId       = identity.sessionId,
+                                   .accepted        = accepted };
+    if ( target != 0 ) {
+        // 身份随状态复制，后续移除成员也不能改变这份确认的含义。
+        const auto targetIdentity = m_participantIdentities.find(target);
+        // 同线程状态正常不会消失，防御分支仍保持显式失败值语义。
+        if ( targetIdentity == m_participantIdentities.end() ) return {};
+        result.targetParticipantId = targetIdentity->second.participantId;
+        result.targetSessionId     = targetIdentity->second.sessionId;
+    }
+    return result;
+}
+
+/// @brief 提交本地跟随请求；访客在等待期间暂停旧边且不提前启用新边。
+/// @param peerId 在线直接目标或取消标识零。
+/// @return 请求通过本地预检且进入权威处理或发送队列时返回 true。
+/// @details 请求序号只属于当前 Peer 生命周期，不随文档 revision 增长。
+bool CollaborationPeer::requestFollowPeer(PeerId peerId)
+{
+    if ( !m_valid || !canFollowPeer(peerId) ) return false;
+    const auto request =
+        makeFollowState(m_config.peerId, peerId, m_nextFollowRequestSequence++);
+    // 只有成功入发送队列才暂停旧边，失败保留此前仍有效的选择。
+    if ( !m_config.isHost && !sendMessage(m_config.hostPeerId, request) )
+        return false;
+    // 只保留最新意图的结果；旧确认仍可更新权威图，不能完成新的等待。
+    // 旧确认已不代表最新用户意图，必须在新请求提交时清除。
+    m_followConfirmation.reset();
+    m_pendingFollowRequestSequence = request.requestSequence;
+    m_pendingFollowRequest         = request;
+    if ( m_config.isHost ) {
+        // 房主本地操作与访客收包共用同一串行校验和确认快照入口。
+        handleParticipantFollowState(m_config.peerId, request);
+        return followTargetPeerId(m_config.peerId) == peerId;
+    }
+    return true;
+}
+
+/// @brief 查询最新请求是否尚未收到房主的对应确认。
+/// @return 只有最新一次成功发送的请求尚未回应时返回 true。
+/// @warning UI 每帧查询路径；只读取同线程维护的序号，不等待网络。
+bool CollaborationPeer::followRequestPending() const
+{
+    return m_pendingFollowRequestSequence != 0;
+}
+
+/// @brief 返回 UI 最新选择，等待期间仍可显示停止按钮。
+/// @return 待确认在线目标或已确认目标；取消或目标已换会话时为零。
+/// @warning UI 每帧读取；仅访问当前线程状态和固定数量身份索引。
+PeerId CollaborationPeer::selectedFollowPeerId() const
+{
+    if ( !followRequestPending() ) return followTargetPeerId(m_config.peerId);
+    // 只展示最新请求，旧确认即使先到也不能把停止入口切回旧目标。
+    // 展示目标也检查加入会话，防止停止按钮误关联到新占位者。
+    const auto& request = m_pendingFollowRequest;
+    return request && followIdentityMatches(request->targetPeerId,
+                                            request->targetParticipantId,
+                                            request->targetSessionId)
+               ? request->targetPeerId
+               : 0;
+}
+
+/// @brief 返回实际有效的跟随目标，等待期间把旧边从有效图暂时移除。
+/// @return 最新请求尚待确认时为零，其余情况返回权威直接目标。
+/// @warning UI 每帧读取；不改变权威图，不等待跨客户端的确认进度。
+PeerId CollaborationPeer::followedPeerId() const
+{
+    // 各客户端可能只消费了权威日志的不同前缀；先停旧边避免形成临时反馈环。
+    return followRequestPending() ? 0 : followTargetPeerId(m_config.peerId);
+}
+
+/// @brief 消费请求匹配时保存的身份快照，不能根据当前图重建确认。
+/// @return 最新匹配确认或空值；被消费后不重复返回。
+/// @warning 房间每帧调用；无结果时只检查 optional，不做分配或等待。
+std::optional<ParticipantFollowState> CollaborationPeer::popFollowConfirmation()
+{
+    // 移动有界身份字符串；清理图时不会修改已经匹配的确认结果。
+    return std::exchange(m_followConfirmation, std::nullopt);
+}
+
+/// @brief 串行验证跟随请求，或应用来自房主的完整权威边。
+/// @param senderId 由可靠传输提供的真实直接发送者。
+/// @param follow 请求方向携带意图，房主方向携带已经确认的目标。
+/// @details 来源双身份检查必须先于请求水位更新，目标过期仍消耗合法来源的意图。
+/// @warning 低频选择消息路径；最多检查八人图，禁止等待其它线程。
+void CollaborationPeer::handleParticipantFollowState(
+    PeerId senderId, const ParticipantFollowState& follow)
+{
+    if ( m_config.isHost ) {
+        if ( senderId != follow.peerId || follow.requestSequence == 0 ||
+             !follow.accepted ||
+             (senderId != m_config.peerId &&
+              !m_participants.contains(senderId)) ||
+             !followIdentityMatches(
+                 follow.peerId, follow.participantId, follow.sessionId) ) {
+            // 旧来源会话不得回复给占据同一槽位的新会话，也不能推进其水位。
+            ++m_stats.invalidMessages;
+            return;
+        }
+        // 来源验证先完成，目标缺失随后才作为正常生命周期竞争处理。
+        // 旧来源包不能借目标过期触发回复，更不能影响新来源等待的序号。
+        const bool targetMatches =
+            follow.targetPeerId == 0
+                ? follow.targetParticipantId.empty() &&
+                      follow.targetSessionId.empty()
+                : followIdentityMatches(follow.targetPeerId,
+                                        follow.targetParticipantId,
+                                        follow.targetSessionId);
+        // 水位属于已验证的来源会话，退房时会与其图状态一起清理。
+        // 目标过期被拒绝也要消耗意图序号，避免旧包在以后重新生效。
+        auto& sequence = m_lastFollowRequestSequence[senderId];
+        if ( follow.requestSequence <= sequence ) return;
+        // 来源双身份验证后即可消费意图序号；目标过期或闭环拒绝也不能被旧包回滚。
+        sequence = follow.requestSequence;
+        // 目标刚离开或重连属于正常竞争，拒绝回应但不记为伪造消息。
+        const bool accepted =
+            targetMatches &&
+            canFollowTarget(follow.peerId, follow.targetPeerId);
+        if ( accepted ) {
+            // 先改权威图，后续同轮请求看到最新已确认边，不能同时闭环。
+            if ( follow.targetPeerId == 0 )
+                m_participantFollowTargets.erase(follow.peerId);
+            else
+                m_participantFollowTargets.insert_or_assign(
+                    follow.peerId, follow.targetPeerId);
+        }
+        // 确认复制当时目标双身份与接受结果，不引用后续可变身份表。
+        // 本次更新内随后发生的退房只改图，不能改变这份确认的含义。
+        const auto confirmed =
+            makeFollowState(follow.peerId,
+                            followTargetPeerId(follow.peerId),
+                            follow.requestSequence,
+                            accepted);
+        // 房主本地操作也产生确认快照，Room 不需要按角色猜测恢复意图。
+        if ( senderId == m_config.peerId ) {
+            m_followConfirmation           = confirmed;
+            m_pendingFollowRequestSequence = 0;
+            m_pendingFollowRequest.reset();
+        }
+        if ( !accepted ) {
+            // 目标已换会话或闭环时，明确回复原权威边与拒绝结果。
+            if ( senderId != m_config.peerId )
+                static_cast<void>(sendMessage(senderId, confirmed));
+            return;
+        }
+        for ( const PeerId participant : m_participants )
+            static_cast<void>(sendMessage(participant, confirmed));
+        return;
+    }
+    const bool targetMatches =
+        follow.targetPeerId == 0
+            ? follow.targetParticipantId.empty() &&
+                  follow.targetSessionId.empty()
+            : followIdentityMatches(follow.targetPeerId,
+                                    follow.targetParticipantId,
+                                    follow.targetSessionId);
+    if ( senderId != m_config.hostPeerId ||
+         !followIdentityMatches(
+             follow.peerId, follow.participantId, follow.sessionId) ||
+         !targetMatches ||
+         !canFollowTarget(follow.peerId, follow.targetPeerId) ) {
+        // 即使来源是房主，也拒绝已退役端点的过期状态快照。
+        ++m_stats.invalidMessages;
+        return;
+    }
+    if ( follow.targetPeerId == 0 )
+        m_participantFollowTargets.erase(follow.peerId);
+    else
+        m_participantFollowTargets.insert_or_assign(follow.peerId,
+                                                    follow.targetPeerId);
+    // 零序号清理不能匹配本地待确认请求。
+    // 较早回复也不能完成最新请求，避免覆盖快速取消或换目标。
+    if ( follow.peerId == m_config.peerId &&
+         m_pendingFollowRequestSequence != 0 &&
+         follow.requestSequence == m_pendingFollowRequestSequence ) {
+        // 在确认生效瞬间保存身份；本轮后续退房清理不能抹掉恢复目标。
+        m_followConfirmation           = follow;
+        m_pendingFollowRequestSequence = 0;
+        m_pendingFollowRequest.reset();
+    }
+}
+
+/// @brief 清理退房成员的全部相关边，防止旧路由槽位污染新会话。
+/// @param peerId 已经退出成员广播集合的路由槽位。
+/// @details 稳定身份恢复由 Room 重新提交请求，不能直接复活旧边。
+/// @warning 成员生命周期低频路径；最多处理八条边，不触碰文档实体。
+void CollaborationPeer::clearParticipantFollowState(PeerId peerId)
+{
+    // 来源的离开通知将使所有镜像删除出边；入边额外发送明确取消状态。
+    m_participantFollowTargets.erase(peerId);
+    for ( auto iterator = m_participantFollowTargets.begin();
+          iterator != m_participantFollowTargets.end(); ) {
+        if ( iterator->second != peerId ) {
+            ++iterator;
+            continue;
+        }
+        const PeerId source = iterator->first;
+        iterator            = m_participantFollowTargets.erase(iterator);
+        // 只有房主发权威清理；访客收到离开通知也执行相同幂等清理。
+        if ( m_config.isHost ) {
+            for ( const PeerId participant : m_participants )
+                static_cast<void>(
+                    sendMessage(participant, makeFollowState(source, 0, 0)));
+        }
+    }
+}
+
 /// @brief 按角色白名单发送已经由资源状态机构造的消息。
 /// @param recipientId 资源消息目标。
 /// @param message 允许的清单、请求或分块变体。
@@ -621,6 +916,11 @@ bool CollaborationPeer::enqueueHostRequest(EditRequest request)
 void CollaborationPeer::handleMessage(PeerId                      senderId,
                                       const CollaborationMessage& message)
 {
+    // 跟随状态按角色区分请求和确认，不能落入普通视口转发路径。
+    if ( const auto* follow = std::get_if<ParticipantFollowState>(&message) ) {
+        handleParticipantFollowState(senderId, *follow);
+        return;
+    }
     // 时钟探测有独立的源与目标校验，房主和访客复用同一个中继处理器。
     if ( const auto* probe = std::get_if<PlaybackClockProbe>(&message) ) {
         handlePlaybackClockProbe(senderId, *probe);
@@ -865,6 +1165,8 @@ void CollaborationPeer::handleParticipantLeft(
         ++m_stats.invalidMessages;
         return;
     }
+    // 跟随图先清除入边和出边，不能让新身份复用旧路由关系。
+    clearParticipantFollowState(participantLeft.peerId);
     // 身份、视口、聊天水位和权限共享同一 PeerId 生命周期。
     m_participantIdentities.erase(participantLeft.peerId);
     m_participantViewports.erase(participantLeft.peerId);
