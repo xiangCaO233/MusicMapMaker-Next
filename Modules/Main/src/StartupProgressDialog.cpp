@@ -1,5 +1,7 @@
 #include "main/StartupProgressDialog.h"
 #include "config/AppConfig.h"
+#include "graphic/window/StartupWindowAppearance.h"
+#include "main/StartupLogoShader.h"
 #include "ui/utils/DownloadRouteSelector.h"
 #include "ui/utils/UIWidgetUtils.h"
 
@@ -20,12 +22,26 @@ float sanitizedScale(float scale)
     // 配置可能来自旧版本或损坏文件，布局层只接受可参与乘法的正数。
     return std::isfinite(scale) && scale > 0.0f ? scale : 1.0f;
 }
+/// @brief 完整播放后才能开始资源同步的 Logo 入场时长。
+constexpr float INTRO_DURATION = 1.6f;
+
+/// @brief 启动窗口保留最近的状态变化，逐文件下载不会无界积累。
+constexpr std::size_t MAX_LOG_ENTRIES = 16;
+
 }  // namespace
+
+/// @brief 动画只在窗口首次出现时播放，后续重试复用同一渲染状态。
+StartupProgressDialog::StartupProgressDialog() = default;
+
+/// @brief 由启动窗口所有者按设备生命周期释放 GPU 资源。
+StartupProgressDialog::~StartupProgressDialog() = default;
 
 /// @brief 重置一次资源同步所需的进度、提示和用户操作状态。
 /// @warning 启动低频路径：只能在旧同步线程已经停止后由渲染主线程调用。
 void StartupProgressDialog::beginSync()
 {
+    // 第一轮只会在 Logo 终点帧提交后进入，重试不重置动画时钟。
+    m_syncStarted = true;
     // 每轮都从清单检查开始，避免重试期间暂时显示上一轮的末尾阶段。
     Network::AssetSyncProgress initialProgress;
     initialProgress.stage = Network::AssetSyncProgressStage::kCheckingManifest;
@@ -38,6 +54,10 @@ void StartupProgressDialog::beginSync()
     }
     // 主线程可直接采用初值，不必制造一次无意义的脏快照消费。
     m_visibleProgress = initialProgress;
+    m_progressLabel   = progressText(m_visibleProgress);
+    // 每轮同步从清单检查重新记日志，详情开合由用户保留。
+    m_logs.clear();
+    m_logs.emplace_back(m_progressLabel);
     // dirty=false 与直接可见初值配套，首帧无需争用进度互斥量。
     m_progressDirty.store(false, std::memory_order_release);
     // 错误和警告互斥；新一轮同步必须清空两种终止界面。
@@ -53,6 +73,13 @@ void StartupProgressDialog::beginSync()
     // 两套文本分别归属互斥状态，清空可防止调试器观察到陈旧提示。
     m_warningTitle.clear();
     m_warningMessage.clear();
+}
+
+/// @brief 查询 Logo 是否仍处于资源同步之前的独立动画阶段。
+/// @warning 启动每帧调用；只读同一渲染线程维护的时间。
+bool StartupProgressDialog::isIntroPlaying() const
+{
+    return !m_introPresented;
 }
 
 /// @brief 从后台同步线程发布最新的进度快照。
@@ -135,12 +162,17 @@ bool StartupProgressDialog::isExitRequested() const
     return m_exitRequested;
 }
 
-/// @brief 实现图形钩子的资源准备入口；启动界面没有专用 Vulkan 资源。
-/// @warning 启动渲染热路径：保持为空，不得增加分配、等待或文件访问。
-void StartupProgressDialog::onPrepareResources(vk::PhysicalDevice&, vk::Device&,
-                                               Graphic::VKSwapchain&,
-                                               vk::CommandPool&, vk::Queue&)
+/// @brief 在首次启动绘制前准备独立的 Logo shader。
+/// @warning 检查每帧执行；分配只发生在第一次，管线失败也不会反复尝试。
+void StartupProgressDialog::onPrepareResources(
+    vk::PhysicalDevice& physicalDevice, vk::Device& device,
+    Graphic::VKSwapchain& swapchain, vk::CommandPool& commandPool,
+    vk::Queue& queue)
 {
+    // 构造结果也作为已尝试标志，失败后进入静态回退而不反复创建。
+    if ( !m_logoShader )
+        m_logoShader = std::make_unique<StartupLogoShader>(
+            physicalDevice, device, swapchain, commandPool, queue);
 }
 
 /// @brief 绘制当前资源同步进度、错误或警告状态。
@@ -160,159 +192,203 @@ void StartupProgressDialog::onUpdateUI()
     // 启动窗口完全覆盖工作区，不使用持久布局或用户拖拽结果。
     ImGui::SetNextWindowPos(viewport->WorkPos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(viewport->WorkSize, ImGuiCond_Always);
-    // 临时样式只包围 Begin，窗口创建后立即恢复全局主题栈。
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
-                        ImVec2(30.0f * scale, 26.0f * scale));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 12.0f * scale);
-    // 边框保持一个样式单位，避免高 DPI 下外沿过度加粗。
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-    // 启动配色固定且不依赖尚未完成加载的用户皮肤。
-    ImGui::PushStyleColor(ImGuiCol_WindowBg,
-                          ImVec4(0.055f, 0.064f, 0.092f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.20f, 0.30f, 0.50f, 0.85f));
-
     constexpr ImGuiWindowFlags windowFlags =
         ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
         ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings |
         ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar |
-        ImGuiWindowFlags_NoScrollWithMouse;
-    // ### 后缀固定内部 ID，显示标题变化也不会破坏窗口身份。
-    const bool windowVisible = ImGui::Begin(
-        "MusicMapMaker Startup###StartupAssetSync", nullptr, windowFlags);
-    // 无论 Begin 返回值如何都平衡样式栈，避免污染后续 ImGui 窗口。
-    ImGui::PopStyleColor(2);
-    ImGui::PopStyleVar(3);
-    if ( !windowVisible ) {
-        // Begin 与 End 必须严格成对，折叠或裁剪也不能提前遗漏 End。
+        ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoBackground;
+    // 固定 ID 与正式应用隔离，首次运行、重试及错误切换共用一个输入焦点。
+    if ( !ImGui::Begin("MusicMapMaker Startup###StartupAssetSync",
+                       nullptr,
+                       windowFlags) ) {
         ImGui::End();
         return;
     }
 
-    // 顶部蓝色细条直接写入窗口绘制列表，不额外创建子窗口或纹理。
-    ImDrawList*  drawList  = ImGui::GetWindowDrawList();
-    const ImVec2 windowPos = ImGui::GetWindowPos();
-    const ImVec2 windowMax{ windowPos.x + ImGui::GetWindowWidth(),
-                            windowPos.y + ImGui::GetWindowHeight() };
-    // 内缩一个像素避免强调条覆盖边框，顶部圆角与窗口轮廓一致。
-    drawList->AddRectFilled(
-        ImVec2(windowPos.x + 1.0f, windowPos.y + 1.0f),
-        ImVec2(windowMax.x - 1.0f, windowPos.y + 4.0f * scale),
-        IM_COL32(74, 134, 230, 255),
-        12.0f * scale,
-        ImDrawFlags_RoundCornersTop);
+    // 原生窗口保持无标题栏。背景层按完整客户区绘制，四角留给桌面合成，
+    // 边线轻微内收以免 ImGui 的抗锯齿笔画被 framebuffer 边缘截断。
+    const ImVec2 origin       = viewport->WorkPos;
+    const ImVec2 area         = viewport->WorkSize;
+    const float  cornerRadius = Graphic::STARTUP_WINDOW_CORNER_RADIUS * scale;
+    auto*        frame        = ImGui::GetBackgroundDrawList(viewport);
+    // 背景填充和描边使用同一尺寸，外圈像素由桌面合成或原生裁剪保留。
+    // 在正文前提交边框，动画首帧和同步终态共享同一个窗口外形。
+    frame->AddRectFilled(origin,
+                         { origin.x + area.x, origin.y + area.y },
+                         ImGui::GetColorU32(ImGuiCol_WindowBg),
+                         cornerRadius);
+    frame->AddRect({ origin.x + 1.0f, origin.y + 1.0f },
+                   { origin.x + area.x - 1.0f, origin.y + area.y - 1.0f },
+                   ImGui::GetColorU32(ImGuiCol_Text, 0.24f),
+                   std::max(0.0f, cornerRadius - 1.0f));
 
-    ImGui::TextColored(ImVec4(0.55f, 0.72f, 1.0f, 1.0f), "MUSIC MAP MAKER");
+    // 以逻辑宽度和可用比例决定布局。横屏让 Logo 和更新面板并列，
+    // 手机竖屏在同一绘制路径回落为上下排列。
+    const bool   horizontal = area.x >= 560.0f * scale && area.x > area.y;
+    const ImVec2 center{ origin.x + area.x * (horizontal ? 0.205f : 0.5f),
+                         origin.y + area.y * (horizontal ? 0.5f : 0.23f) };
+    // 动画与进度阶段共享锚点，出现详情时 Logo 不移动；小视口按短边限幅。
+    const float logoSize = std::min({ 252.0f * scale,
+                                      area.x * (horizontal ? 0.34f : 0.74f),
+                                      area.y * (horizontal ? 0.68f : 0.38f) });
+    const float radius   = logoSize * 0.5f;
 
-    // 启动时也允许直接换路，失败后选好线路再点重试，不阻塞渲染线程。
-    // 提示阶段没有下载，不展示无关网络操作。
-    if ( !m_hasWarning ) UI::drawDownloadRouteSelector(!m_hasError, scale);
+    // 先提交这一帧的时间再累积下一帧：首帧显示开场，掉帧也不会跳过显影。
+    if ( !m_logoShader || !m_logoShader->isValid() ) {
+        // GPU 管线无法使用时，以相同 SVG 的稳定帧继续资源检查。
+        m_introElapsed = INTRO_DURATION;
+    }
+    if ( m_logoShader ) {
+        m_logoShader->draw(center.x - radius,
+                           center.y - radius,
+                           logoSize,
+                           m_introElapsed / INTRO_DURATION);
+    }
+    // 引导尚无按钮，通过 Esc 也可退出。外层收到请求后不会启动资源任务。
+    // Esc 同样适用于还没有显示退出按钮的首个阶段。
+    if ( ImGui::IsKeyPressed(ImGuiKey_Escape) ) m_exitRequested = true;
+    if ( m_introElapsed < INTRO_DURATION ) {
+        // 使用有限步长推进实际呈现的帧。动画期间不提交路线、进度或日志控件。
+        m_introElapsed = std::min(
+            INTRO_DURATION,
+            m_introElapsed + std::min(ImGui::GetIO().DeltaTime, 1.0f / 30.0f));
+        ImGui::End();
+        return;
+    }
 
-    if ( m_hasError ) {
-        // 错误分支优先于警告和进度，提供明确的退出与重试决策。
-        ImGui::TextColored(
-            ImVec4(1.0f, 0.63f, 0.60f, 1.0f), "%s", m_errorTitle.c_str());
-        ImGui::Separator();
+    // 本帧已登记静态终点。下一帧开始资源任务后才允许显示进度和操作。
+    // 此握手不会把倒数第二帧误当作完全显影，也不会在重试时重新播放。
+    m_introPresented = true;
+    // 最后一帧独立展示标志，测试可通过服务端首个请求区分动画与同步阶段。
+    if ( !m_syncStarted ) {
+        ImGui::End();
+        return;
+    }
 
-        // 详情随可用宽度换行，长网络错误不会横向撑大窗口。
-        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() +
-                               ImGui::GetContentRegionAvail().x);
-        ImGui::TextUnformatted(m_errorMessage.c_str());
-        ImGui::PopTextWrapPos();
+    const auto& style             = ImGui::GetStyle();
+    const auto  padding           = style.WindowPadding;
+    const float contentX          = horizontal ? area.x * 0.39f : padding.x;
+    const float progressBarHeight = 6.0f * scale;
+    const float rowGap            = style.ItemSpacing.y;
+    // 状态文字和操作按钮始终存在。资源进度、下载线路只在对应状态加入；
+    // 使用当前字体和边距，DPI 改变时仍以控件的实际行高对齐。
+    // 状态行本身不含末尾留白，操作按钮使用普通 ImGui 帧。
+    // 下方只加实际可见的两组控件，离线警告不参与线路下拉框计高。
+    float controlsHeight =
+        ImGui::GetTextLineHeight() + rowGap + ImGui::GetFrameHeight();
+    if ( !m_hasError && !m_hasWarning )
+        controlsHeight += rowGap + progressBarHeight;
+    if ( !m_hasWarning )
+        controlsHeight += ImGui::GetTextLineHeightWithSpacing() + rowGap +
+                          ImGui::GetFrameHeight();
 
-        // 两个动作使用固定逻辑宽度，翻译文字变化不会造成按钮跳动。
-        const float buttonWidth = 118.0f * scale;
-        const float buttonGap   = 12.0f * scale;
-        const float rowWidth    = buttonWidth * 2.0f + buttonGap;
-        // 按钮组靠右对齐；窄窗口用 max 防止游标向左越过内容起点。
-        ImGui::SetCursorPosX(
-            ImGui::GetCursorPosX() +
-            std::max(ImGui::GetContentRegionAvail().x - rowWidth, 0.0f));
-        if ( UI::FeedbackButton("退出###StartupExit",
-                                ImVec2(buttonWidth, 0.0f)) ) {
-            // 退出请求保持为 true，由外层启动循环统一终止同步和窗口。
-            m_exitRequested = true;
-        }
-        ImGui::SameLine(0.0f, buttonGap);
-        // 重试位于右侧，作为错误恢复的主要动作。
-        if ( UI::FeedbackButton("重试###StartupRetry",
-                                ImVec2(buttonWidth, 0.0f)) ) {
-            // 重试采用一次性请求，下一帧由启动状态机重新创建同步任务。
-            m_retryRequested = true;
-        }
-    } else if ( m_hasWarning ) {
-        // 警告允许继续启动，因此与必须修复的错误使用独立按钮语义。
-        ImGui::TextColored(
-            ImVec4(1.0f, 0.78f, 0.36f, 1.0f), "%s", m_warningTitle.c_str());
-        ImGui::Separator();
-
-        const float buttonHeight = ImGui::GetFrameHeight();
-        // 详情子区域占用按钮行之外的空间，并保留最小可阅读高度。
-        const float messageHeight =
-            std::max(ImGui::GetContentRegionAvail().y - buttonHeight -
-                         ImGui::GetStyle().ItemSpacing.y,
-                     80.0f * scale);
-        if ( ImGui::BeginChild("TranslationOverrideWarningDetails",
-                               ImVec2(0.0f, messageHeight),
-                               ImGuiChildFlags_Borders) ) {
-            // 子窗口允许长提示滚动，文本宽度始终跟随当前内容区。
-            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() +
-                                   ImGui::GetContentRegionAvail().x);
-            ImGui::TextUnformatted(m_warningMessage.c_str());
-            ImGui::PopTextWrapPos();
-        }
+    // 展开时将日志与控件一起居中，日志高度受当前窗口限制。
+    // 在较矮的视口优先让操作按钮可见，日志继续在剩余空间内滚动。
+    // 用固定可见行数设定目标高度，后台日志条目数变化时面板不抖动。
+    // 窗口不足时以外层内边距为界，滚动区不能把面板推出客户区。
+    const float logPaddingY = 8.0f * scale;
+    const float logHeight   = std::max(
+        1.0f,
+        std::min(8.0f * ImGui::GetTextLineHeightWithSpacing() + 2 * logPaddingY,
+                 area.y - 2 * padding.y - controlsHeight - rowGap));
+    // 捕获这一帧的展开态，避免按钮回调使新日志出现在上一种布局中。
+    const bool  detailsExpanded = m_detailsExpanded;
+    const float panelHeight =
+        controlsHeight + (detailsExpanded ? rowGap + logHeight : 0.0f);
+    // 横屏的面板与 Logo 共用同一水平中线。竖屏仍从 Logo 下方布局。
+    const float contentY =
+        horizontal ? std::max(padding.y, (area.y - panelHeight) * 0.5f)
+                   : center.y - origin.y + radius * 0.62f + 14.0f * scale;
+    const float contentWidth  = std::max(1.0f, area.x - contentX - padding.x);
+    const float contentHeight = std::max(1.0f, area.y - contentY - padding.y);
+    // 用子区域限制所有控件的宽度，复用既有线路选择器及其窄屏裁剪。
+    // 子区域起点用屏幕坐标设置，后续 SameLine 仍以子区域的局部原点计算。
+    ImGui::SetCursorScreenPos({ origin.x + contentX, origin.y + contentY });
+    if ( !ImGui::BeginChild("StartupUpdateContent",
+                            { contentWidth, contentHeight },
+                            ImGuiChildFlags_None,
+                            ImGuiWindowFlags_NoBackground) ) {
         ImGui::EndChild();
+        ImGui::End();
+        return;
+    }
 
-        // 退出与继续保持等宽，避免把继续选择误表现为无条件推荐。
-        const float buttonWidth = 118.0f * scale;
-        const float buttonGap   = 12.0f * scale;
-        const float rowWidth    = buttonWidth * 2.0f + buttonGap;
-        // 警告按钮沿用错误分支的宽度和对齐，降低启动界面的布局跳动。
-        ImGui::SetCursorPosX(
-            ImGui::GetCursorPosX() +
-            std::max(ImGui::GetContentRegionAvail().x - rowWidth, 0.0f));
-        if ( UI::FeedbackButton("退出###StartupWarningExit",
-                                ImVec2(buttonWidth, 0.0f)) ) {
-            m_exitRequested = true;
-        }
-        ImGui::SameLine(0.0f, buttonGap);
-        // 继续只在非致命警告分支出现，错误状态不会提供绕过入口。
-        if ( UI::FeedbackButton("继续###StartupWarningContinue",
-                                ImVec2(buttonWidth, 0.0f)) ) {
-            // 继续请求只确认当前警告，不在视图层直接启动主应用。
-            m_continueRequested = true;
-        }
+    if ( m_hasError || m_hasWarning ) {
+        // 错误与警告仍拥有原来的恢复动作，长正文放在详情区域。
+        ImGui::TextUnformatted(m_hasError ? m_errorTitle.c_str()
+                                          : m_warningTitle.c_str());
     } else {
-        // 正常分支只展示已消费的稳定快照，不直接访问后台写入对象。
-        ImGui::TextUnformatted("正在准备应用资源");
-        ImGui::TextColored(ImVec4(0.66f, 0.70f, 0.80f, 1.0f),
-                           "%s",
-                           progressText(m_visibleProgress).c_str());
-
-        // 阶段函数负责把不同同步策略映射到同一条单调视觉进度轴。
         const float fraction = progressFraction(m_visibleProgress);
-        // 百分比仅用于展示，四舍五入不会反向参与同步状态判断。
-        const std::string overlay =
-            std::to_string(static_cast<int>(std::round(fraction * 100.0f))) +
-            "%";
-        // overlay 的存储覆盖本次 ProgressBar 调用，传入的 c_str 不会悬空。
-        ImGui::ProgressBar(
-            fraction, ImVec2(-1.0f, ImGui::GetFrameHeight()), overlay.c_str());
-        // 网络提示保持为次要灰色，不与阶段说明和百分比争夺注意力。
-        ImGui::TextColored(ImVec4(0.48f, 0.53f, 0.64f, 1.0f),
-                           "资源校验和更新期间请保持网络连接");
+        const float rightEdge =
+            ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+        // 百分比与阶段分离，细条不会因内嵌文本截挡而降低对比度。
+        ImGui::TextUnformatted(m_progressLabel.c_str());
+        ImGui::SameLine(std::max(rightEdge - ImGui::CalcTextSize("100%").x,
+                                 ImGui::GetItemRectMax().x -
+                                     ImGui::GetWindowPos().x +
+                                     ImGui::GetStyle().ItemSpacing.x));
+        ImGui::Text("%d%%", static_cast<int>(std::round(fraction * 100.0f)));
+        ImGui::ProgressBar(fraction, ImVec2(-1.0f, progressBarHeight), "");
+    }
+    // 重用原有会话选线，失败也是换线时机；皮肤警告没有待下载内容。
+    // 不在 UI 记录或覆盖实际选中的地址，后台下载仍按共用线路策略处理。
+    if ( !m_hasWarning ) UI::drawDownloadRouteSelector(false, scale);
 
-        const float exitButtonWidth = 96.0f * scale;
-        // 单按钮同样靠右，保持与错误和警告操作区一致的视觉锚点。
-        ImGui::SetCursorPosX(
-            ImGui::GetCursorPosX() +
-            std::max(ImGui::GetContentRegionAvail().x - exitButtonWidth, 0.0f));
-        if ( UI::FeedbackButton("退出###StartupCancel",
-                                ImVec2(exitButtonWidth, 0.0f)) ) {
-            // 取消同步由外层状态机执行，UI 不在渲染回调里阻塞等待线程。
-            m_exitRequested = true;
+    if ( UI::FeedbackButton(detailsExpanded
+                                ? "收起详情###StartupDetailsToggle"
+                                : "展开详情###StartupDetailsToggle") )
+        m_detailsExpanded = !detailsExpanded;
+
+    // 退出和状态确认共用当前行右边界，保持展开折叠时的横向位置。
+    const bool hasConfirm = m_hasError || m_hasWarning;
+    // 狭窄视口仍给两个并排操作及详情折叠按钮分配各自的命中空间。
+    const float buttonWidth = std::min(96.0f * scale, contentWidth * 0.26f);
+    const float buttonGap   = ImGui::GetStyle().ItemSpacing.x;
+    const float actionsWidth =
+        hasConfirm ? 2.0f * buttonWidth + buttonGap : buttonWidth;
+    // SameLine 的偏移相对当前窗口而非系统屏幕，窄窗口优先保留同排控件间隔。
+    const float rowEnd =
+        ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+    ImGui::SameLine(std::max(
+        rowEnd - actionsWidth,
+        ImGui::GetItemRectMax().x - ImGui::GetWindowPos().x + buttonGap));
+    if ( UI::FeedbackButton("退出###StartupExit", ImVec2(buttonWidth, 0.0f)) )
+        m_exitRequested = true;
+    if ( hasConfirm ) {
+        ImGui::SameLine();
+        // 意图由启动循环消费，视图本身不启动下载或切换上下文。
+        if ( UI::FeedbackButton(
+                 m_hasError ? "重试###StartupRetry" : "继续###StartupContinue",
+                 ImVec2(buttonWidth, 0.0f)) ) {
+            m_retryRequested    = m_hasError;
+            m_continueRequested = m_hasWarning;
         }
     }
-    // 所有状态分支共享同一次 Begin，统一在函数末尾结束窗口。
+
+    // 日志默认收起，切换详情与重新计算面板位置在同一帧边界生效。
+    // 详情不拥有后台下载对象，关闭后日志仍随快照继续累积。
+    if ( detailsExpanded ) {
+        // 详情区域下边界由窗口内容区决定；长诊断仅滚动正文。
+        // 错误信息使用同一滚动区域，用户换线重试时仍可保留展开状态。
+        // 日志用独立内边距，避免沿用外窗的大留白占走可阅读的行数。
+        // 容器占用剩余高度，状态文本较长时可换行滚动而无需移动整块面板。
+        // 收起只停止提交日志区域，保留已有日志以便再次展开时查看。
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
+                            ImVec2(14.0f * scale, logPaddingY));
+        if ( ImGui::BeginChild("StartupDetails",
+                               ImVec2(0.0f, horizontal ? logHeight : 0.0f),
+                               ImGuiChildFlags_Borders) ) {
+            for ( const auto& entry : m_logs )
+                ImGui::TextWrapped("%s", entry.c_str());
+            if ( m_hasError || m_hasWarning )
+                ImGui::TextWrapped(
+                    "%s",
+                    (m_hasError ? m_errorMessage : m_warningMessage).c_str());
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+    }
+    ImGui::EndChild();
     ImGui::End();
 }
 
@@ -338,8 +414,22 @@ void StartupProgressDialog::consumePendingProgress()
     }
 
     // 锁内只做值复制，避免渲染线程等待网络或文件系统操作。
-    std::scoped_lock lock(m_progressMutex);
-    m_visibleProgress = m_pendingProgress;
+    {
+        std::scoped_lock lock(m_progressMutex);
+        m_visibleProgress = m_pendingProgress;
+    }
+    // 格式化放在锁外且仅在快照变化时执行，不延长后台回调等待。
+    m_progressLabel = progressText(m_visibleProgress);
+    // 原始阶段信息可含当前文件名，优先用于诊断；字节进度只更新上面的状态行。
+    const auto& entry = m_visibleProgress.message.empty()
+                            ? m_progressLabel
+                            : m_visibleProgress.message;
+    // 每个进度快照只记最后一个有变化的描述，连续字节回调不会刷屏。
+    // 容量到顶丢弃最旧日志，长期下载时仍只保留当前操作附近的线索。
+    if ( m_logs.empty() || m_logs.back() != entry ) {
+        if ( m_logs.size() == MAX_LOG_ENTRIES ) m_logs.pop_front();
+        m_logs.push_back(entry);
+    }
 }
 
 /// @brief 将资源同步的离散阶段和局部计数映射到统一进度比例。

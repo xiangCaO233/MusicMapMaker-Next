@@ -50,6 +50,12 @@ public:
     /// @brief 刷新 X11 Shape 圆角裁剪。
     void refreshFrameShape() override;
 
+    /// @brief 仅应用 XShape 裁剪，供没有主窗口适配器的启动窗复用。
+    /// @param windowHandle GLFW 的 X11 窗口。
+    /// @param cornerRadius 已按内容缩放换算的圆角半径。
+    /// @warning 创建或改变窗口尺寸后调用，不在渲染帧中执行 X11 操作。
+    static void applyFrameShape(GLFWwindow* windowHandle, float cornerRadius);
+
     /// @brief 在 GLFW 鼠标按键回调中处理 X11 无装饰窗口交互。
     /// @param button GLFW 鼠标按键值。
     /// @param action GLFW 鼠标动作值。

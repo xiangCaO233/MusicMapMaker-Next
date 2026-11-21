@@ -11,10 +11,12 @@
 #include "event/ui/GLFWNativeEvent.h"
 #include "graphic/glfw/window/adapters/IWindowFrameAdapter.h"
 #include "graphic/window/InputDevices.h"
+#include "graphic/window/StartupWindowAppearance.h"
 #include "graphic/window/WindowPlatform.h"
 #include "log/colorful-log.h"
 #include <GLFW/glfw3.h>
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -510,6 +512,7 @@ void iconifyWin32WindowPreservingMaximize(GLFWwindow* window,
 /// GLFW 初始化后的窗口线程执行。
 NativeWindow::NativeWindow(int w, int h, const char* wtitle,
                            NativeWindowMode windowMode)
+    : m_windowMode(windowMode)
 {
     // 记录能力错误但继续创建窗口，让上层初始化流程统一处理缺少 Vulkan 的结果。
     if ( !glfwVulkanSupported() ) {
@@ -646,7 +649,7 @@ NativeWindow::NativeWindow(int w, int h, const char* wtitle,
 
     // Startup 资源窗口不安装主 frame adapter，避免 Win32 style 修改在首帧前短暂
     // 显示系统标题栏，也不订阅应用级窗口命令。
-    if ( windowMode == NativeWindowMode::Application ) {
+    if ( m_windowMode == NativeWindowMode::Application ) {
         // adapter 需要已经创建的 GLFW/native
         // handle，各平台分支至多选择一个实现。
 #if defined(_WIN32)
@@ -1686,10 +1689,40 @@ bool NativeWindow::applyEmulatedMaximizedPlacement()
 /// API。
 void NativeWindow::refreshWindowFrameShape()
 {
-    // Startup 或不支持的平台没有 adapter，保持无操作。
     if ( m_windowFrameAdapter ) {
         m_windowFrameAdapter->refreshFrameShape();
+        return;
     }
+    if ( m_windowMode != NativeWindowMode::Startup || !m_windowHandle ) return;
+
+    // 不安装正式窗口的拖动和缩放适配器，仅处理原生轮廓。
+    // Wayland 由 Vulkan surface 逐像素合成，其他桌面平台可直接裁剪窗口。
+#if defined(_WIN32) || defined(__APPLE__) || \
+    defined(MMM_ENABLE_X11_FRAME_INTERACTION)
+    const float scale  = Config::AppConfig::instance().getWindowContentScale();
+    const float radius = STARTUP_WINDOW_CORNER_RADIUS *
+                         (std::isfinite(scale) && scale > 0.0f ? scale : 1.0f);
+#endif
+#ifdef _WIN32
+    HWND hwnd = glfwGetWin32Window(m_windowHandle);
+    RECT bounds{};
+    if ( !hwnd || !GetWindowRect(hwnd, &bounds) ) return;
+    const int width  = bounds.right - bounds.left;
+    const int height = bounds.bottom - bounds.top;
+    if ( width <= 0 || height <= 0 ) return;
+    const int diameter = static_cast<int>(std::min(
+        2 * radius + 0.5f, static_cast<float>(std::min(width, height))));
+    if ( diameter <= 0 ) return;
+    // 使用窗口坐标；成功后 region 归系统所有，失败才在此释放。
+    if ( HRGN region =
+             CreateRoundRectRgn(0, 0, width, height, diameter, diameter);
+         region && !SetWindowRgn(hwnd, region, TRUE) )
+        DeleteObject(region);
+#elif defined(__APPLE__)
+    MacOSWindowAdapter::applyFrameShape(m_windowHandle, radius, true);
+#elif defined(MMM_ENABLE_X11_FRAME_INTERACTION)
+    X11WindowAdapter::applyFrameShape(m_windowHandle, radius);
+#endif
 }
 
 /// @brief 写入经过验证的普通窗口还原矩形缓存。

@@ -235,6 +235,8 @@ static void applyMoonlightStyle(ImGuiStyle& style);
  * @param style 接收完整主题覆盖的 ImGui 样式对象。
  */
 static void applyCeciliaStyle(ImGuiStyle& style);
+/// @brief 应用 Cecilia 的内置配色，调用者提供可选的皮肤节点颜色。
+static void applyCeciliaPalette(ImGuiStyle& style, ImVec4 nodeColor);
 /// @brief 内置 ComfortableLight 主题样式。
 /**
  * @brief 应用 Comfortable Light内置主题的布局与颜色参数。
@@ -333,7 +335,9 @@ void VKContext::imguiVulkanInit(PlatformWindowHandle* windowHandle,
     // 浮动面板仍可停靠或在 MMM 主窗口内移动，而不会创建额外 GLFW 窗口。
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 #ifndef __ANDROID__
-    if ( glfwGetPlatform() != GLFW_PLATFORM_WAYLAND ) {
+    // 启动窗口只有一个平台表面，线路弹窗应留在当前窗口内，避免额外系统窗口取得焦点。
+    if ( mode != VKWindowResourceMode::Bootstrap &&
+         glfwGetPlatform() != GLFW_PLATFORM_WAYLAND ) {
         io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
     }
 #endif
@@ -506,58 +510,41 @@ void VKContext::setupBootstrapFonts()
     }
 }
 
-/// @brief 应用不依赖皮肤资源的启动期最小样式。
-///
-/// 从 ImGui 默认 Dark palette 建立圆角、间距和少量关键颜色，只使用 AppConfig 的
-/// UI scale，不访问主题插件或 SkinManager 色板。正式 context
-/// 会在资源加载后替换。
-///
-/// @warning 启动低频路径：重置并缩放全局 ImGuiStyle，只在 Bootstrap
-/// 初始化调用。
+/// @brief 在资源到位前应用默认皮肤的内置浅色或深色主题。
+/// @warning 启动低频路径：读取一次系统外观，只在 Bootstrap 初始化调用。
 void VKContext::applyBootstrapTheme()
 {
-    // 先恢复全新 ImGuiStyle，避免复用 context 时残留其他主题字段。
-    ImGuiStyle& style = ImGui::GetStyle();
-    style             = ImGuiStyle();
-    ImGui::StyleColorsDark(&style);
+    // 沿用默认皮肤的 Cecilia/Moonlight
+    // 映射；系统未报告外观时与正式界面一样回退浅色。
+    ImGuiStyle& style  = ImGui::GetStyle();
+    style              = ImGuiStyle();
+    const auto& config = Config::AppConfig::instance();
+    const auto& theme  = config.getEditorSettings().theme;
+    const bool  dark =
+        theme == "Moonlight" ||
+        (theme != "Cecilia" && getSystemTheme() == SystemTheme::Dark);
+    if ( dark )
+        applyMoonlightStyle(style);
+    else
+        // 启动时资源可能还不存在，直接使用 Cecilia 的内置节点色。
+        applyCeciliaPalette(style, ImVec4(0.9922f, 0.9255f, 0.5608f, 1.0f));
 
-    // 启动样式不允许缩小到 1 以下，确保错误提示和操作控件可读。
-    const float uiScale =
-        std::max(Config::AppConfig::instance().getUIScale(), 1.0f);
-    // 先统一缩放默认字段，再覆盖项目启动界面的特定圆角和间距。
-    style.ScaleAllSizes(uiScale);
+    // 配色与正式界面一致，间距和控件尺寸则为独立启动窗口设置。
+    const float uiScale = config.getUIScale();
+    const float scale =
+        std::isfinite(uiScale) && uiScale > 0.0f ? uiScale : 1.0f;
+    style.ScaleAllSizes(scale);
     style.FontScaleDpi     = 1.0f;
-    style.WindowRounding   = 12.0f * uiScale;
-    style.ChildRounding    = 12.0f * uiScale;
-    style.FrameRounding    = 7.0f * uiScale;
-    style.PopupRounding    = 10.0f * uiScale;
-    style.GrabRounding     = 7.0f * uiScale;
+    style.WindowRounding   = 0.0f;
+    style.ChildRounding    = 10.0f * scale;
+    style.FrameRounding    = 8.0f * scale;
+    style.PopupRounding    = 10.0f * scale;
     style.WindowBorderSize = 0.0f;
     style.ChildBorderSize  = 1.0f;
-    // 框体内边距决定输入框和按钮的文字基线及垂直触达面积。
-    style.FramePadding = ImVec2(12.0f * uiScale, 8.0f * uiScale);
-    // 项目间距约束同级控件节奏，也是多数自动布局的基础步长。
-    style.ItemSpacing = ImVec2(10.0f * uiScale, 10.0f * uiScale);
-    // 窗口内边距同时决定内容密度和停靠面板的呼吸空间。
-    style.WindowPadding = ImVec2(24.0f * uiScale, 22.0f * uiScale);
-
-    // 深色中性背景与蓝色操作强调保证尚未加载皮肤时的基本层级对比。
-    // 窗口底色奠定整套主题明度，后续容器和控件颜色均以此为参照。
-    style.Colors[ImGuiCol_WindowBg] = ImVec4(0.035f, 0.043f, 0.065f, 1.0f);
-    // 子窗口背景可选择透明继承，避免嵌套区域产生多余色块。
-    style.Colors[ImGuiCol_ChildBg] = ImVec4(0.075f, 0.086f, 0.12f, 0.98f);
-    // 边框色用于低成本描绘控件和容器边界，透明度决定强调强度。
-    style.Colors[ImGuiCol_Border] = ImVec4(0.20f, 0.24f, 0.34f, 0.8f);
-    // 框体常态是输入和选择控件的静止基面，也是交互渐变的起点。
-    style.Colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.14f, 0.20f, 1.0f);
-    // 柱状图使用独立数据色，避免与按钮等交互强调色混淆。
-    style.Colors[ImGuiCol_PlotHistogram] = ImVec4(0.31f, 0.57f, 0.96f, 1.0f);
-    // 按钮常态建立操作面的基础层级，为悬浮和按下反馈预留变化空间。
-    style.Colors[ImGuiCol_Button] = ImVec4(0.18f, 0.36f, 0.68f, 1.0f);
-    // 按钮悬浮态只表达指向，不应与已按下状态混淆。
-    style.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.24f, 0.46f, 0.84f, 1.0f);
-    // 按钮激活态提供按下确认，需要成为三态中最明确的反馈。
-    style.Colors[ImGuiCol_ButtonActive] = ImVec4(0.15f, 0.31f, 0.62f, 1.0f);
+    style.DisabledAlpha    = 0.5f;
+    style.FramePadding     = ImVec2(12.0f * scale, 7.0f * scale);
+    style.ItemSpacing      = ImVec2(10.0f * scale, 8.0f * scale);
+    style.WindowPadding    = ImVec2(30.0f * scale, 24.0f * scale);
 }
 
 /// @brief 加载完整运行时 ASCII、CJK、合并图标与独立图标字体。
@@ -5141,19 +5128,19 @@ static void applyMoonlightStyle(ImGuiStyle& style)
  */
 static void applyCeciliaStyle(ImGuiStyle& style)
 {
+    // 只有正式界面读取皮肤覆写；启动入口直接使用下方内置配色。
+    ImVec4      nodeColor(0.9922f, 0.9255f, 0.5608f, 1.0f);
+    const auto& colors = Config::SkinManager::instance().getData().colors;
+    if ( const auto node = colors.find("note_node"); node != colors.end() )
+        nodeColor =
+            ImVec4(node->second.r, node->second.g, node->second.b, 1.0f);
+    applyCeciliaPalette(style, nodeColor);
+}
+
+/// @brief 在 Moonlight 的样式框架上应用默认皮肤的浅色配色。
+static void applyCeciliaPalette(ImGuiStyle& style, ImVec4 nodeColor)
+{
     applyMoonlightStyle(style);
-
-
-    auto skinColor = [](const std::string& key, ImVec4 fallback) {
-        const auto& colors = Config::SkinManager::instance().getData().colors;
-        if ( auto it = colors.find(key); it != colors.end() ) {
-            return ImVec4(it->second.r, it->second.g, it->second.b, fallback.w);
-        }
-        return fallback;
-    };
-
-    const ImVec4 nodeColor =
-        skinColor("note_node", ImVec4(0.9922f, 0.9255f, 0.5608f, 1.0f));
     auto rgb = [](int r, int g, int b) {
         return ImVec4(static_cast<float>(r) / 255.0f,
                       static_cast<float>(g) / 255.0f,

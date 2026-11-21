@@ -4,18 +4,23 @@
 #include "network/AssetSyncService.h"
 
 #include <atomic>
+#include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 
 namespace MMM::Main
 {
+class StartupLogoShader;
 
 /// @brief 使用最小 ImGui 环境绘制的启动期资源同步界面。
 class StartupProgressDialog final : public Graphic::IGraphicUserHook
 {
 public:
     /// @brief 创建初始处于资源检查状态的启动界面。
-    StartupProgressDialog() = default;
+    StartupProgressDialog();
+    /// @brief 在 Vulkan 启动上下文之前释放 Logo 管线。
+    ~StartupProgressDialog();
 
     StartupProgressDialog(const StartupProgressDialog&)            = delete;
     StartupProgressDialog& operator=(const StartupProgressDialog&) = delete;
@@ -23,6 +28,10 @@ public:
     /// @brief 为一次新的资源同步尝试重置界面状态。
     /// @warning 启动低频路径：只能在上一轮同步线程结束后由主线程调用。
     void beginSync();
+
+    /// @brief 查询首轮启动动效是否仍在播放。
+    /// @warning 启动渲染热路径：只读单调时钟，不等待动画或同步任务。
+    [[nodiscard]] bool isIntroPlaying() const;
 
     /// @brief 发布后台资源同步进度。
     /// @param progress 最新资源同步进度快照。
@@ -54,8 +63,8 @@ public:
     /// @return 用户点击退出时返回 true。
     [[nodiscard]] bool isExitRequested() const;
 
-    /// @brief 启动界面不需要准备额外 Vulkan 资源。
-    /// @warning 启动渲染热路径：每帧调用，保持为空且不得加入阻塞操作。
+    /// @brief 启动界面首次绘制前初始化 Logo 管线。
+    /// @warning 每帧检查一次指针；创建资源仅发生在首次调用。
     void onPrepareResources(vk::PhysicalDevice&, vk::Device&,
                             Graphic::VKSwapchain&, vk::CommandPool&,
                             vk::Queue&) override;
@@ -87,6 +96,27 @@ private:
     /// @param progress 资源同步进度快照。
     /// @return 面向用户的进度文本。
     static std::string progressText(const Network::AssetSyncProgress& progress);
+
+    /// @brief 渲染线程累计的动效时间，重试继续沿用已展开的界面。
+    float m_introElapsed{ 0.0f };
+
+    /// @brief 首次提交静态 Logo 终点帧后才能启动资源同步。
+    bool m_introPresented{ false };
+
+    /// @brief 只有资源任务开始后才显示进度和线路等控件。
+    bool m_syncStarted{ false };
+
+    /// @brief 只在启动窗口生命周期内持有的单色管线。
+    std::unique_ptr<StartupLogoShader> m_logoShader;
+
+    /// @brief 有界阶段日志，重复进度包不追加相同的消息。
+    std::deque<std::string> m_logs;
+
+    /// @brief 详情已经展开时才提交日志滚动区。
+    bool m_detailsExpanded{ false };
+
+    /// @brief 当前阶段说明，只在进度变化时格式化。
+    std::string m_progressLabel;
 
     /// @brief 后台线程写入的最新进度快照。
     Network::AssetSyncProgress m_pendingProgress;

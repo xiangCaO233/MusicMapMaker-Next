@@ -98,6 +98,10 @@ public:
     /// @return 平台适配器观察指针；当前平台无适配器时返回 nullptr。
     [[nodiscard]] IWindowFrameAdapter* getWindowFrameAdapter() const;
 
+    /// @brief 因 DPI、窗口尺寸或 Vulkan 表面变化重新应用原生窗口边界。
+    /// @warning 低频平台路径，可能调用 XShape、GDI 或 Core Animation。
+    void refreshWindowFrameShape();
+
     /// @brief 获取 GLFW 主窗口句柄。
     /// @return GLFW 窗口句柄；未创建时返回 nullptr。
     [[nodiscard]] GLFWwindow* getFrameWindowHandle() const override;
@@ -203,8 +207,6 @@ private:
     /// @return 成功进入模拟最大化状态时返回 true。
     bool applyEmulatedMaximizedPlacement();
 
-    /// @brief 刷新无原生装饰窗口的平台外形。
-    void refreshWindowFrameShape();
 
     /// @brief 写入普通窗口还原矩形。
     /// @param x 窗口左上角 X 坐标。
@@ -219,7 +221,9 @@ private:
     /// glfwMaximizeWindow 纠正 Windows 对无边框最大化窗口的普通还原。
     void handleWindowIconify(int iconified);
 
-    GLFWwindow*                           m_windowHandle{ nullptr };
+    /// @brief 启动窗跨屏变更尺寸时需刷新原生轮廓。
+    NativeWindowMode m_windowMode{ NativeWindowMode::Application };
+    GLFWwindow*      m_windowHandle{ nullptr };
     std::chrono::steady_clock::time_point m_lastResizeTime;
     /// @brief 是否有待消抖的窗口尺寸变化。
     /// @warning 热路径/原子：由 GLFW 回调写入、渲染循环读取；只表示 resize

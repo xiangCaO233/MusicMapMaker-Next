@@ -1,0 +1,4 @@
+#pragma once
+
+/// @brief 内嵌桌面图标母版，以便启动时在资源同步前生成 Logo 遮罩。
+inline constexpr char STARTUP_LOGO_SVG[] = R"MMMLogo(@MMM_STARTUP_LOGO_SVG@)MMMLogo";

@@ -246,30 +246,34 @@ bool MacOSWindowAdapter::usesClientFrameOverlay() const
 /// frame 状态变化后调用。
 void MacOSWindowAdapter::refreshFrameShape()
 {
+    const bool rounded = m_window && glfwGetWindowMonitor(m_window) == nullptr &&
+                         !m_host.isFrameMaximized();
+    applyFrameShape(m_window, MACOS_WINDOW_CORNER_RADIUS, rounded);
+}
+
+/// @brief 在 AppKit 窗口和承载 Vulkan 的图层上应用相同的裁剪。
+/// @warning 原生窗口几何变化路径，禁止在每帧录制时触发阴影重算。
+void MacOSWindowAdapter::applyFrameShape(GLFWwindow* windowHandle,
+                                         float cornerRadius, bool rounded)
+{
     // GLFW 可能尚未创建 Cocoa 窗口或正在销毁，nil 时保持幂等退出。
-    NSWindow* nativeWindow = m_window ? glfwGetCocoaWindow(m_window) : nil;
+    NSWindow* nativeWindow = windowHandle ? glfwGetCocoaWindow(windowHandle) : nil;
     if ( !nativeWindow ) {
         return;
     }
 
-    // 系统模式窗口不应用客户区圆角/阴影，普通无边框窗口才启用视觉效果。
-    const bool useWindowEffects =
-        glfwGetWindowMonitor(m_window) == nullptr && !m_host.isFrameMaximized();
     NSView* contentView = [nativeWindow contentView];
 
     // 透明 NSWindow 背景让裁剪后的圆角区域显示桌面合成结果。
     [nativeWindow setOpaque:NO];
     [nativeWindow setBackgroundColor:[NSColor clearColor]];
-    [nativeWindow setHasShadow:useWindowEffects ? YES : NO];
+    [nativeWindow setHasShadow:rounded ? YES : NO];
 
     if ( contentView ) {
         // 两层采用同一半径，避免 GLFW 包装 view 在 contentView 外保留矩形背景。
-        const CGFloat cornerRadius =
-            useWindowEffects ? MACOS_WINDOW_CORNER_RADIUS : 0.0;
-        applyRoundedContentLayer(
-            contentView, cornerRadius, useWindowEffects);
-        applyRoundedContentLayer(
-            [contentView superview], cornerRadius, useWindowEffects);
+        const CGFloat radius = rounded ? cornerRadius : 0.0;
+        applyRoundedContentLayer(contentView, radius, rounded);
+        applyRoundedContentLayer([contentView superview], radius, rounded);
     }
 
     // 属性变化后请求 AppKit 重新计算当前窗口阴影轮廓。

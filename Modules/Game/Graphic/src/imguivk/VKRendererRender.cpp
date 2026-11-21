@@ -14,6 +14,7 @@
 #include "graphic/imguivk/VKRenderPass.h"
 #include "graphic/imguivk/VKRenderer.h"
 #include "graphic/imguivk/VKSwapchain.h"
+#include "imgui.h"
 #ifdef __ANDROID__
 #    include "imgui_impl_sdl3.h"
 #else
@@ -952,8 +953,17 @@ void VKRenderer::render(NativeWindow&                window,
     auto swapchainCreateInfo = m_vkSwapChain.info();
     // 清除值顺序与 render pass 附件契约一致：颜色在索引 0，深度模板在索引 1。
     std::array<vk::ClearValue, 2> clearValues;
-    vk::ClearColorValue           clearColorValue(s_clear_color);
-    clearValues[0].setColor(clearColorValue);
+    auto                          clearColor = s_clear_color;
+    if ( m_vkContext.m_windowResourceMode == VKWindowResourceMode::Bootstrap ) {
+        // 透明交换链用全零色；圆角边缘通过预乘 Alpha 与桌面混合。
+        // 不支持透明时底色由启动主题提供，避免圆角外露出灰色块。
+        const auto bg = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+        clearColor    = swapchainCreateInfo.compositeAlpha ==
+                                vk::CompositeAlphaFlagBitsKHR::eOpaque
+                            ? std::array<float, 4>{ bg.x, bg.y, bg.z, 1.0f }
+                            : std::array<float, 4>{};
+    }
+    clearValues[0].setColor(vk::ClearColorValue(clearColor));
     clearValues[1].setDepthStencil({ 1.0f, 0 });
 
     // 只有线程池存在且任务多于一个时并行；单任务走主缓冲可避免调度与 latch
