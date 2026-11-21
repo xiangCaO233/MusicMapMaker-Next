@@ -617,6 +617,7 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
 /// 隐藏窗口仍保留其原生位置；只有节点真正失效时才补新的缺省落点。
 /// 首帧可从设置读取身份，后续运行期窗口的实际 DockId 优先。
 /// 原生焦点仅用于选择文档上下文，不以工具窗口焦点覆盖文档类型。
+/// 关闭后只考虑上一帧仍提交的窗口，避免保留已销毁业务视图的原生身份。
 /// @warning 每帧只访问 UI 登记和有限停靠树，不读取会话或持有互斥锁。
 void MobileDockLayout::refreshNodes()
 {
@@ -653,6 +654,12 @@ void MobileDockLayout::refreshNodes()
                 leaf->ChildNodes[0] ? leaf->ChildNodes[0] : leaf->ChildNodes[1];
         m_center = leaf->ID;
     }
+    // ImGui 会保留已关闭文档的 Window 和 DockId。该文档停交 Begin 后，
+    // 工作台焦点应关联仍可见的文档，否则工作台会自身触发显隐交替。
+    const auto* last       = ImGui::FindWindowByID(m_lastMainSelection);
+    const bool  recover    = !last || !last->WasActive;
+    const auto  centerDock = m_center;
+    if ( recover ) m_lastMainSelection = 0;
     for ( const auto& binding : m_windows ) {
         const auto* window = ImGui::FindWindowByID(binding.m_window);
         if ( !window || !window->DockNode ) continue;
@@ -661,21 +668,24 @@ void MobileDockLayout::refreshNodes()
         case MobileDockPanel::Preview: m_preview = window->DockId; break;
         case MobileDockPanel::Workbench: m_workbench = window->DockId; break;
         case MobileDockPanel::Main:
-            // 多个文档分开可见时不能按遍历顺序覆盖最近编辑目标。
-            // 只在还没有文档上下文时用可见页初始化，之后以实际聚焦为准。
-            if ( !m_lastMainSelection &&
+            // 关闭后优先继承原分区的可见页；没有此页才取其他有效分区。
+            // 已有活动文档时不按遍历顺序改选，更新上下文交给原生焦点。
+            if ( (!m_lastMainSelection ||
+                  (recover && window->DockId == centerDock)) &&
+                 window->WasActive &&
                  window->DockNode->VisibleWindow == window )
                 m_lastMainSelection = window->ID;
             if ( m_lastMainSelection == window->ID ) m_center = window->DockId;
             break;
         }
     }
-    // 多个文档分开显示时，明确聚焦的那个优先于登记遍历顺序。
-    // 浮动窗口没有 DockNode，但仍需保留其文档身份供工作台继续使用。
+    // 多个文档分开显示时，明确聚焦且仍在提交的文档优先。
+    // 浮动文档仍可成为编辑目标；已关闭的焦点残留不能重新占据上下文。
     const auto* focused = ImGui::GetCurrentContext()->NavWindow;
     focused             = focused ? focused->RootWindow : nullptr;
     for ( const auto& binding : m_windows )
-        if ( focused && binding.m_panel == MobileDockPanel::Main &&
+        if ( focused && focused->WasActive &&
+             binding.m_panel == MobileDockPanel::Main &&
              focused->ID == binding.m_window ) {
             m_lastMainSelection = focused->ID;
             if ( focused->DockNode ) m_center = focused->DockId;
