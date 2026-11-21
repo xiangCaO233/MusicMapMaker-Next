@@ -6,6 +6,7 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "DeferredUpdatePopup.h"
 #include "config/AppConfig.h"
+#include "config/EditorSettings.h"
 #include "config/skin/translation/Translation.h"
 #include "mmmversion.h"
 #include "network/UpdateChecker.h"
@@ -21,6 +22,8 @@
 #include "ui/workspace/IWorkspacePresentation.h"
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <imgui.h>
@@ -32,6 +35,18 @@ namespace MMM::UI
 {
 namespace
 {
+/// @brief 使用完整发布版本标识，区分同一正式版本下的不同热修复。
+/// @param version 更新清单或当前编译版本的正式版本字符串。
+/// @param revision 发布基线下的修订号，零对应没有热修复的正式发布。
+/// @return 可用于界面展示和持久化比较的版本标识。
+/// @note 两种用法共用同一格式，避免跳过记录与界面显示的版本不一致。
+/// @warning 只在读取更新结果或展示版本信息时构造字符串。
+std::string releaseVersion(const std::string& version, std::int64_t revision)
+{
+    return revision > 0 ? version + "-hotfix." + std::to_string(revision)
+                        : version;
+}
+
 /// @brief 检查更新动作。
 /// @details 管理启动静默检查、手动检查、下载、重启安装及三个独立弹窗状态。
 /// @warning 网络和下载工作必须留在 UpdateChecker 异步任务中，UI 只轮询快照。
@@ -64,8 +79,11 @@ public:
 
             if ( MMM::Network::UpdateChecker::checkStartupUpdateMarker() ) {
                 // 更新器留下成功标记时直接展示完成提示，不再联网查询。
+                // 这是上一次安装的结果，独立于自动检查的偏好。
                 m_showUpdateSuccessPopup = true;
-            } else {
+            } else if ( Config::AppConfig::instance()
+                            .getEditorSettings()
+                            .m_showUpdateOnStartup ) {
                 // 无成功标记时启动后台静默检查，UI 帧不等待网络结果。
                 m_isSilentCheck = true;
                 m_updateChecker->checkAsync();
@@ -78,8 +96,15 @@ public:
         // UpdateInfo 是线程安全状态快照，按值读取后在本帧判断。
         auto info = m_updateChecker->getInfo();
         if ( info.status == MMM::Network::UpdateStatus::kUpdateFound ) {
-            // 静默发现新版本时转为可见下载确认弹窗。
-            m_showUpdatePopup = true;
+            // 跳过只匹配完整发布标识，更高的热修复修订号也能重新提醒。
+            // 手动结果不经过此路径，即使用户跳过了同一发布也能查到。
+            // 检查期间用户可能更改了设置，以结果到达时的最新偏好为准。
+            const auto& settings =
+                Config::AppConfig::instance().getEditorSettings();
+            m_showUpdatePopup = settings.m_showUpdateOnStartup &&
+                                settings.m_skippedUpdateVersion !=
+                                    releaseVersion(info.latestVersion,
+                                                   info.latestHotfixRevision);
             m_isSilentCheck   = false;
         } else if ( info.status == MMM::Network::UpdateStatus::kUpToDate ) {
             // 已是最新版本使用非模态状态消息，避免启动时打断用户。
@@ -135,6 +160,13 @@ public:
         renderUpdateCheckingPopup();
         renderUpdatePopup();
         renderUpdateSuccessPopup();
+        if ( m_updatePreferenceSaveFailed ) {
+            // 弹窗已关闭，通过状态栏提示用户本次选择未能持久化。
+            context.statusMessageSink.showStatusMessage(
+                TR("ui.help.update_preference_save_failed").data(), 5.0f);
+            // 保留内存中的选择，以便后续常规保存有机会写入配置。
+            m_updatePreferenceSaveFailed = false;
+        }
     }
 
 private:
@@ -156,7 +188,7 @@ private:
     /// @note 检查中、已最新、发现更新和错误四种状态互斥展示。
     void renderUpdateCheckingPopup()
     {
-        // PGO 同意框等其它弹层结束后才消费请求，防止同层窗口互相顶掉。
+        // PGO 同意框等其它弹层结束后才打开检查弹窗，避免共享宿主内互相抢占。
         Detail::openDeferredUpdatePopup(TR("ui.help.check_update").data(),
                                         m_showCheckingPopup);
 
@@ -167,6 +199,9 @@ private:
         if ( modalScope.begin(TR("ui.help.check_update").data()) ) {
             // 异步状态可能在弹窗打开期间变化，因此每帧获取新快照。
             auto info = m_updateChecker->getInfo();
+            // 已找到更新时直接交接到确认弹窗，由确认弹窗负责此次反馈。
+            if ( info.status != MMM::Network::UpdateStatus::kUpdateFound )
+                Detail::confirmDeferredUpdatePopup(m_showCheckingPopup);
 
             if ( info.status == MMM::Network::UpdateStatus::kChecking ) {
                 // 检查中文本按活动字体测宽后居中。
@@ -230,8 +265,7 @@ private:
         // 初始快照用于决定弹窗打开和布局大小。
         auto info = m_updateChecker->getInfo();
 
-        // 发现更新只产生一次打开事件；持续终态不能重开窗口或反复发声。
-        // 忙碌时保留请求，其他模态关闭后再显示，不丢失启动检查结果。
+        // 发现更新只登记一次请求；首帧被欢迎页抢焦点时仍可重新展示。
         Detail::openDeferredUpdatePopup(TR("ui.help.update_found").data(),
                                         m_showUpdatePopup);
 
@@ -240,22 +274,27 @@ private:
         // 居中作用域统一管理弹窗位置和样式恢复。
         Utils::CenteredModalPopupScope modalScope(dpiScale);
         // 更新日志包含图片时需要独立阅读空间，尺寸随主视口工作区收缩。
-        const bool showChangelog =
-            info.status == MMM::Network::UpdateStatus::kUpdateFound &&
-            !info.changelog.empty();
+        const bool found =
+            info.status == MMM::Network::UpdateStatus::kUpdateFound;
+        // 触摸版即使没有日志也需要给正文滚动区和底部操作留出空间。
+        const bool largePopup = found && (!info.changelog.empty() ||
+                                          !workspaceAllowsHoverFeedback());
         // 工作区尺寸排除平台保留区域，避免阅读窗口超出可用屏幕。
         const ImVec2 workSize = ImGui::GetMainViewport()->WorkSize;
         // 有日志时提供大窗口，无日志时保持内容自适应尺寸。
         const ImVec2 desiredSize =
-            showChangelog
+            largePopup
                 ? ImVec2(std::min(960.0f * dpiScale, workSize.x * 0.9f),
                          std::min(900.0f * dpiScale, workSize.y * 0.9f))
-                : ImVec2(0.0f, 0.0f);
+                : ImVec2(found ? std::min(480.0f * dpiScale, workSize.x * 0.9f)
+                               : 0.0f,
+                         0.0f);
         if ( modalScope.begin(TR("ui.help.update_found").data(),
                               nullptr,
                               ImGuiWindowFlags_None,
                               desiredSize,
-                              !showChangelog) ) {
+                              !largePopup) ) {
+            Detail::confirmDeferredUpdatePopup(m_showUpdatePopup);
             // Begin 后重新读取快照，减少状态在布局判断与正文之间变化的窗口。
             info = m_updateChecker->getInfo();
 
@@ -294,6 +333,142 @@ private:
             if ( m_images ) m_images->releasePreviewImage();
             m_imagePreviewOpen = false;
             m_imagePreviewDestination.clear();
+        }
+    }
+
+    /// @brief 本帧可见操作的网格尺寸，供日志滚动区预留空间。
+    /// @details 布局与绘制共用测量值，避免切换语言或窗口尺寸后底部被截断。
+    /// 结构只借用当帧的本地化标签，不跟随窗口跨帧缓存。
+    /// 下载缺失时仍可关闭提醒，因此操作区至少包含三个有效项。
+    /// 每行等宽用于保证后一个按钮不会因前一个本地化文本较长而偏离预期范围。
+    struct UpdateFoundActionLayout {
+        /// @brief 操作顺序同时决定文本、图标及点击行为。
+        enum Action : std::size_t { Install, Later, SkipVersion, HideReminder };
+
+        /// @brief 依次为安装、稍后提醒、跳过发布和关闭启动提醒。
+        std::array<const char*, 4> m_labels;
+        /// @brief 下载资产缺失时从第二个操作开始绘制。
+        std::size_t m_first;
+        /// @brief 本帧一行可容纳的等宽操作数。
+        std::size_t m_columns;
+        /// @brief 受内容宽度限制的单个操作尺寸。
+        ImVec2 m_buttonSize;
+
+        /// @brief 按与实际绘制一致的行数和项间距预留底部空间。
+        /// @return 完整按钮区高度，分隔线与正文间距由调用方另行预留。
+        /// @warning UI 热路径：只计算尺寸，不写入 ImGui 状态。
+        float height() const
+        {
+            // 向上取整使未填满的最后一行也计入高度；列数至少为一。
+            const auto rows =
+                (m_labels.size() - m_first + m_columns - 1) / m_columns;
+            return rows * m_buttonSize.y +
+                   (rows - 1) * ImGui::GetStyle().ItemSpacing.y;
+        }
+    };
+
+    /// @brief 测量当前语言下的更新操作，窄窗口逐步换行以保留按钮文字。
+    /// @param info 用于判断当前平台是否有可操作的下载地址。
+    /// @param scale 决定按钮基础尺寸。
+    /// @param touch 为触摸操作预留最小高度和图标空间。
+    /// @return 供正文和按钮绘制共同使用的行列数、尺寸和标签。
+    /// @warning UI 热路径：每帧最多测量四个短文本，不分配绘制缓存。
+    UpdateFoundActionLayout measureUpdateFoundActions(
+        const MMM::Network::UpdateInfo& info, float scale, bool touch) const
+    {
+        UpdateFoundActionLayout layout{
+            .m_labels     = { TR("ui.help.download_and_install").data(),
+                              TR("ui.help.cancel").data(),
+                              TR("ui.help.skip_update_version").data(),
+                              TR("ui.help.hide_startup_update").data() },
+            .m_first      = info.downloadUrl.empty()
+                                ? UpdateFoundActionLayout::Later
+                                : UpdateFoundActionLayout::Install,
+            .m_columns    = 1,
+            .m_buttonSize = { 0.0f,
+                              std::max((touch ? 48.0f : 36.0f) * scale,
+                                       ImGui::GetFrameHeight()) }
+        };
+        const auto& style     = ImGui::GetStyle();
+        const float available = ImGui::GetContentRegionAvail().x;
+        float       width     = (touch ? 100.0f : 140.0f) * scale;
+        for ( auto i = layout.m_first; i < layout.m_labels.size(); ++i ) {
+            // 触摸策略在文字外还绘制图标，测量需留出图标和两侧内边距。
+            width = std::max(
+                width,
+                ImGui::CalcTextSize(layout.m_labels[i]).x +
+                    (touch ? 56.0f * scale : 2.0f * style.FramePadding.x));
+        }
+        const auto count = layout.m_labels.size() - layout.m_first;
+        // 宽桌面允许整排展示；触摸版最多两列，避免触点密集而误触。
+        // 列数变化同时影响正文的剩余高度，本帧即可重新分配。
+        if ( !touch &&
+             count * width + (count - 1) * style.ItemSpacing.x <= available )
+            layout.m_columns = count;
+        else if ( 2.0f * width + style.ItemSpacing.x <= available )
+            layout.m_columns = 2;
+        // 单列时撑满可用宽度；多列时限制按钮宽度，避免文字被相邻项覆盖。
+        layout.m_buttonSize.x =
+            layout.m_columns == 1 ? std::max(1.0f, available) : width;
+        return layout;
+    }
+
+    /// @brief 在各平台共享更新操作及持久化语义。
+    /// @param info 用户此刻看到的发布快照，跳过必须绑定这次的实际版本。
+    /// @param layout 当前内容区域内绘制的按钮尺寸和排列。
+    /// @details 稍后再说只处理本次通知。另两种关闭方式写入客户端全局设置，
+    /// 并保留检查器已取得的结果供本次会话内的手动查询使用。
+    /// @warning UI 热路径：只绘制有限数量按钮，明确点击偏好项时才保存配置。
+    void renderUpdateFoundActions(const MMM::Network::UpdateInfo& info,
+                                  const UpdateFoundActionLayout&  layout)
+    {
+        constexpr std::array icons{
+            ICON_MMM_DOWNLOAD, ICON_MMM_ARROW_LEFT, ICON_MMM_CLOSE, ICON_MMM_EYE
+        };
+        const float spacing = ImGui::GetStyle().ItemSpacing.x;
+        for ( auto i = layout.m_first; i < layout.m_labels.size(); ++i ) {
+            const auto column = (i - layout.m_first) % layout.m_columns;
+            if ( column == 0 ) {
+                // 最后一行不足整列时单独居中，避免只有三个操作时留下空位。
+                const auto count =
+                    std::min(layout.m_columns, layout.m_labels.size() - i);
+                const float width =
+                    count * layout.m_buttonSize.x + (count - 1) * spacing;
+                ImGui::SetCursorPosX(
+                    ImGui::GetCursorPosX() +
+                    std::max(
+                        0.0f,
+                        (ImGui::GetContentRegionAvail().x - width) * 0.5f));
+            } else {
+                // 只有同一行的后续按钮继承前一项横向位置，换行由默认游标推进。
+                ImGui::SameLine();
+            }
+            if ( !workspaceActionButton(
+                     layout.m_labels[i], icons[i], layout.m_buttonSize) )
+                continue;
+
+            if ( i == UpdateFoundActionLayout::Install ) {
+                // 下载采用既有异步路径，操作区下帧进入进度展示。
+                m_updateRestartError.clear();
+                m_updateChecker->downloadAsync();
+                break;
+            }
+            if ( i != UpdateFoundActionLayout::Later ) {
+                // 跳过单个发布仍会在启动时检查，关闭自动检查也保留此前跳过的版本。
+                auto& config   = Config::AppConfig::instance();
+                auto& settings = config.getEditorSettings();
+                if ( i == UpdateFoundActionLayout::SkipVersion )
+                    settings.m_skippedUpdateVersion = releaseVersion(
+                        info.latestVersion, info.latestHotfixRevision);
+                else
+                    settings.m_showUpdateOnStartup = false;
+                // 同步保存仅发生在用户点击时，立即退出也能保留选择。
+                m_updatePreferenceSaveFailed = !config.save();
+            }
+            // 用户主动关闭即消费请求，首次可见帧点击也不会再次打开。
+            m_showUpdatePopup = false;
+            ImGui::CloseCurrentPopup();
+            break;
         }
     }
 
@@ -388,6 +563,7 @@ private:
         Utils::CenteredModalPopupScope modalScope(dpiScale);
         // 弹窗未打开时提前退出，不提交后续表格和按钮。
         if ( !modalScope.begin(TR("ui.help.update_success").data()) ) return;
+        Detail::confirmDeferredUpdatePopup(m_showUpdateSuccessPopup);
 
         // 绿色只用于成功结果与当前版本值，保持状态语义一致。
         ImVec4 greenColor(0.3f, 1.0f, 0.3f, 1.0f);
@@ -443,9 +619,14 @@ private:
     void renderUpdateFoundBody(const MMM::Network::UpdateInfo& info,
                                float                           dpiScale)
     {
-        // 触摸布局使用独立的滚动正文与固定操作区，桌面表格保持原样。
-        if ( !workspaceAllowsHoverFeedback() ) {
-            renderTouchUpdateFoundBody(info, dpiScale);
+        const bool touch = !workspaceAllowsHoverFeedback();
+        // 两个平台的正文都使用实测操作区高度，窄窗口时会自动预留更多空间。
+        const auto actions = measureUpdateFoundActions(info, dpiScale, touch);
+        // 触摸版的元数据也在滚动区，操作区保持和桌面一致的行为。
+        if ( touch ) {
+            renderTouchUpdateFoundBody(info, actions.height());
+            ImGui::Separator();
+            renderUpdateFoundActions(info, actions);
             return;
         }
         // 版本信息表使用稳定列布局且不保存用户调整。
@@ -484,16 +665,10 @@ private:
             // 普通发布不附加零修订，保持原显示格式和翻译表契约。
             // 字符串在整个表格绘制期间存活，不传递临时 c_str。
             // 重启仍由既有按钮接管，展示修订不改变安装时机。
-            const auto displayVersion = [](const std::string& version,
-                                           std::int64_t       revision) {
-                return revision > 0
-                           ? version + "-hotfix." + std::to_string(revision)
-                           : version;
-            };
             const auto currentDisplay =
-                displayVersion(info.currentVersion, info.currentHotfixRevision);
+                releaseVersion(info.currentVersion, info.currentHotfixRevision);
             const auto latestDisplay =
-                displayVersion(info.latestVersion, info.latestHotfixRevision);
+                releaseVersion(info.latestVersion, info.latestHotfixRevision);
             addRow(TR("ui.help.current_version").data(),
                    currentDisplay.c_str());
             ImVec4 green(0.3f, 1.0f, 0.3f, 1.0f);
@@ -549,8 +724,9 @@ private:
                 ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding,
                                     ImVec2(8.0f * dpiScale, 8.0f * dpiScale));
                 // 为底部操作按钮与分隔留出空间，其余高度全部用于阅读。
+                // 额外间距包含正文之后的分隔线及上下的布局留白。
                 const float footerHeight =
-                    36.0f * dpiScale + ImGui::GetStyle().ItemSpacing.y * 5.0f +
+                    actions.height() + ImGui::GetStyle().ItemSpacing.y * 5.0f +
                     1.0f;
                 // 至少保留一个像素高度，避免极小视口传入负尺寸。
                 const float contentHeight = std::max(
@@ -585,93 +761,39 @@ private:
         ImGui::Separator();
         ImGui::Spacing();
 
-        // 按钮宽度与间距均按当前 DPI 和主题样式计算。
-        float buttonWidth = 140.0f * dpiScale;
-        // 没有可用下载地址时只显示取消按钮。
-        float totalButtons = info.downloadUrl.empty() ? 1.0f : 2.0f;
-        float spacing      = ImGui::GetStyle().ItemSpacing.x;
-        float totalWidth =
-            totalButtons * buttonWidth + (totalButtons - 1) * spacing;
-        // 将整个按钮组而非单个按钮在窗口内居中。
-        ImGui::SetCursorPosX((ImGui::GetWindowWidth() - totalWidth) * 0.5f);
-
-        if ( !info.downloadUrl.empty() ) {
-            // 下载入口只在检查结果提供 URL 时出现。
-            if ( ::MMM::UI::FeedbackButton(
-                     TR("ui.help.download_and_install").data(),
-                     ImVec2(buttonWidth, 36.0f * dpiScale)) ) {
-                // 新下载开始前清除上一次更新器启动错误。
-                m_updateRestartError.clear();
-                // 异步下载立即返回，进度由后续帧轮询。
-                m_updateChecker->downloadAsync();
-            }
-            // 取消按钮与下载按钮同行排列。
-            ImGui::SameLine();
-        }
-
-        if ( ::MMM::UI::FeedbackButton(
-                 TR("ui.help.cancel").data(),
-                 ImVec2(buttonWidth, 36.0f * dpiScale)) ) {
-            // 用户取消仅关闭当前弹窗，不删除已获取的更新信息。
-            ImGui::CloseCurrentPopup();
-            // 缓存终态不重开弹窗，下次手动检查仍可产生新请求。
-        }
+        renderUpdateFoundActions(info, actions);
     }
 
-    /// @brief 用独立正文滚动区和常驻操作区展示移动端更新信息。
-    /// @param info 本帧不可变网络快照，按钮只发起既有异步下载。
-    /// @param scale 当前内容倍率，最小触摸高度与移动按钮保持一致。
-    /// @details 窄屏将操作纵排；版本说明随正文滚动，不能挤掉取消入口。
-    /// 横竖屏切换直接重新测量，不缓存与旧屏幕尺寸绑定的按钮坐标。
-    /// 操作外观由平台策略提供，更新状态机与桌面保持同一份实例。
-    /// 已取消、已下载和图片预览字段继续沿用共享动作的原有生命周期。
+    /// @brief 在触摸布局的独立子窗口内滚动版本信息与更新日志。
+    /// @param info 当前帧更新结果。
+    /// @details 触摸版将版本信息和长日志放在同一滚动区域。
+    /// 底部操作由父窗口分别提交，正文滚动或旋转设备时仍可直接点击。
+    /// @param actionsHeight 已测量的操作区高度，包含按钮间距。
     /// @warning 每帧只绘制现有快照和缓存图片，不同步等待网络。
     void renderTouchUpdateFoundBody(const MMM::Network::UpdateInfo& info,
-                                    float                           scale)
+                                    float actionsHeight)
     {
-        const auto& style = ImGui::GetStyle();
-        // 从弹窗真实内容宽度开始分配，不能用主视口宽度越过弹窗内边距。
-        const float available = ImGui::GetContentRegionAvail().x;
-        const float height =
-            // 最小触摸高度并不限制大字号；文字更高时按钮也随之扩展。
-            std::max(48.0f * scale, ImGui::GetFontSize() + 16.0f * scale);
-        const char* cancel  = TR("ui.help.cancel").data();
-        const char* install = TR("ui.help.download_and_install").data();
-        // 图标与文字一起测量所需宽度，不能只给中文按钮预留固定宽度。
-        const float needed   = std::max(ImGui::CalcTextSize(cancel).x,
-                                        ImGui::CalcTextSize(install).x) +
-                               56.0f * scale;
-        const bool  download = !info.downloadUrl.empty();
-        // 缺少当前平台下载资产时只留返回，不制造不可执行的安装入口。
-        const bool stacked =
-            download && needed * 2 + style.ItemSpacing.x > available;
+        // 从实际余高扣除操作区与分隔，正文滚动时始终保留底部操作。
         const float footer =
-            height * (stacked ? 2 : 1) +
-            // 计入分隔与换行间距后才分配正文，保证最后一行完整。
-            style.ItemSpacing.y * (stacked ? 3 : 2);
+            actionsHeight + ImGui::GetStyle().ItemSpacing.y * 2.0f;
         const float body =
             std::max(1.0f, ImGui::GetContentRegionAvail().y - footer);
-        // 元数据和更新日志共用一个滚动区，旋转或大字号时操作区仍留在屏幕内。
+        // 子窗口只占剩余空间，服务端未提供日志时也保留固定操作区。
         ImGui::BeginChild("TouchUpdateDetails", { 0, body });
-        const auto version = [](const std::string& value,
-                                std::int64_t       revision) {
-            // 展示附带热修订号，比较与下载依然只使用检查器提供的原始字段。
-            // 临时字符串由立即执行的 Text 消费，不跨帧存储其 c_str。
-            return revision > 0 ? value + "-hotfix." + std::to_string(revision)
-                                : value;
-        };
         ImGui::PushTextWrapPos(0);
         // 版本标签和值放在同一文本流内，长版本号和翻译均可按宽度换行。
         // 元数据不再对齐到输入框内边距，避免三行说明占掉大半屏幕。
         ImGui::Text(
             "%s: %s",
             TR("ui.help.current_version").data(),
-            version(info.currentVersion, info.currentHotfixRevision).c_str());
+            releaseVersion(info.currentVersion, info.currentHotfixRevision)
+                .c_str());
         ImGui::TextColored(
             { .3f, 1, .3f, 1 },
             "%s: %s",
             TR("ui.help.latest_version").data(),
-            version(info.latestVersion, info.latestHotfixRevision).c_str());
+            releaseVersion(info.latestVersion, info.latestHotfixRevision)
+                .c_str());
         if ( !info.releaseDate.empty() )
             // 服务端未给日期时省略该行，不为缺失字段保留固定空白高度。
             ImGui::Text("%s: %s",
@@ -705,31 +827,6 @@ private:
                     } });
         }
         ImGui::EndChild();
-        // 操作在子区结束后提交，正文长度与滚动位置都不会带走底部按钮。
-        ImGui::Separator();
-        // 操作区只按当前宽度决定单行或双行，内容滚动不会改变按钮位置。
-        const float width =
-            download && !stacked
-                // 平分当前剩余宽度，预留同行间隙，不使用固定像素宽。
-                ? (available - style.ItemSpacing.x) * .5f
-                : available;
-        if ( download ) {
-            if ( workspaceActionButton(
-                     install, ICON_MMM_DOWNLOAD, { width, height }) ) {
-                // 只在松手激活时安排下载，不在动画或连续按住时重复安排。
-                m_updateRestartError.clear();
-                m_updateChecker->downloadAsync();
-            }
-            if ( !stacked ) ImGui::SameLine();
-            // 双行模式保留正常 ItemSpacing，避免触指同时覆盖两个操作。
-        }
-        if ( workspaceActionButton(
-                 cancel, ICON_MMM_ARROW_LEFT, { width, height }) ) {
-            // 只关闭本次通知，下次显式检查仍可产生新的打开请求。
-            ImGui::CloseCurrentPopup();
-            // 关闭只消费这次提示，不能由持久的发现更新状态自动重开。
-            // 仅关闭展示，不清除已取得的日志缓存和网络检查结果。
-        }
     }
 
     /// @brief 渲染下载中状态。
@@ -861,17 +958,20 @@ private:
     /// @note 只在等待启动检查终态时为 true。
     bool m_isSilentCheck = false;
 
-    /// @brief 是否在下一帧打开更新下载弹窗。
-    /// @note 由静默或手动检查发现新版本时置位。
+    /// @brief 是否还有未确认展示的新版本通知。
+    /// @note 静默或手动检查发现新版本时置位，持续可见后清除。
     bool m_showUpdatePopup = false;
 
-    /// @brief 是否在下一帧打开更新检查中弹窗。
-    /// @note 由 execute 置位，在渲染阶段消费。
+    /// @brief 是否还有未确认展示的手动检查通知。
+    /// @note 由 execute 置位，持续可见或交接到更新确认弹窗时清除。
     bool m_showCheckingPopup = false;
 
-    /// @brief 是否在下一帧打开更新成功弹窗。
-    /// @note 由启动更新成功标记置位，在渲染阶段消费。
+    /// @brief 是否还有未确认展示的更新成功通知。
+    /// @note 由启动更新成功标记置位，持续可见后清除。
     bool m_showUpdateSuccessPopup = false;
+
+    /// @brief 更新提醒偏好写盘失败时转交主菜单状态栏一次。
+    bool m_updatePreferenceSaveFailed = false;
 
     /// @brief 点击重启更新失败时显示的错误信息。
     /// @note 新检查、新下载或新重启尝试开始时清除。

@@ -1095,6 +1095,11 @@ void preserveGlobalAppManagedSettings(Config::EditorConfig&       target,
         source.settings.pgoProfileUploadConsentAsked;
     target.settings.m_showWelcomeOnStartup =
         source.settings.m_showWelcomeOnStartup;
+    // 更新提醒由当前用户决定，工程或旧编辑器快照不能恢复已关闭的提醒。
+    target.settings.m_showUpdateOnStartup =
+        source.settings.m_showUpdateOnStartup;
+    target.settings.m_skippedUpdateVersion =
+        source.settings.m_skippedUpdateVersion;
     // 诊断日志、自动保存和协作视口同属软件级行为，项目只可通过专门覆盖项调整备份。
     target.settings.rtcDiagnosticLogging = source.settings.rtcDiagnosticLogging;
     target.settings.autoSave             = source.settings.autoSave;
