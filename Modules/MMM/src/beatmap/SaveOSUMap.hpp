@@ -324,17 +324,21 @@ inline bool saveOSUMap(const BeatMap& beatMap, std::filesystem::path path)
     // Events 当前生成单个背景或视频事件，并原样附加已保留的 Break 行。
     ofs << "[Events]\n";
     ofs << "//Background and Video events\n";
-    if ( beatMap.m_baseMapMetadata.cover_type == CoverType::IMAGE ) {
-        // 图片事件包含 X/Y 偏移，并将 filesystem::path 转成 UTF-8 文本。
-        ofs << "0,0,\""
-            << Config::pathToUtf8(beatMap.m_baseMapMetadata.main_cover_path)
-            << "\"," << beatMap.m_baseMapMetadata.bgxoffset << ","
-            << beatMap.m_baseMapMetadata.bgyoffset << "\n";
-    } else {
-        // 视频事件保存开始毫秒和路径，不写图片偏移字段。
-        ofs << "Video," << beatMap.m_baseMapMetadata.video_starttime << ",\""
-            << Config::pathToUtf8(beatMap.m_baseMapMetadata.main_cover_path)
-            << "\"\n";
+    // 未绑定背景时保留空 Events，不创建没有媒体目标的视频或图片事件。
+    if ( !beatMap.m_baseMapMetadata.main_cover_path.empty() ) {
+        if ( beatMap.m_baseMapMetadata.cover_type == CoverType::IMAGE ) {
+            // 图片事件包含 X/Y 偏移，并将 filesystem::path 转成 UTF-8 文本。
+            ofs << "0,0,\""
+                << Config::pathToUtf8(beatMap.m_baseMapMetadata.main_cover_path)
+                << "\"," << beatMap.m_baseMapMetadata.bgxoffset << ","
+                << beatMap.m_baseMapMetadata.bgyoffset << "\n";
+        } else {
+            // 视频事件保存开始毫秒和路径，不写图片偏移字段。
+            ofs << "Video," << beatMap.m_baseMapMetadata.video_starttime
+                << ",\""
+                << Config::pathToUtf8(beatMap.m_baseMapMetadata.main_cover_path)
+                << "\"\n";
+        }
     }
 
     ofs << "//Break Periods\n";

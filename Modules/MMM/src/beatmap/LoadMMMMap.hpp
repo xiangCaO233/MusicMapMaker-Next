@@ -464,13 +464,20 @@ inline BeatMap loadMMMMap(const std::filesystem::path& path)
                 Config::utf8ToPath(readMMMString(base, "audio"));
             beatMap.m_baseMapMetadata.song_file_hint =
                 Config::utf8ToPath(readMMMString(base, "song_file_hint"));
-            // 新提示缺失时仍以旧字段补足项目资源选择信息。
-            if ( beatMap.m_baseMapMetadata.song_file_hint.empty() ) {
+            const auto cleared = base.find("song_file_hint_cleared");
+            beatMap.m_baseMapMetadata.song_file_hint_cleared =
+                beatMap.m_baseMapMetadata.song_file_hint.empty() &&
+                cleared != base.end() && cleared->is_boolean() &&
+                cleared->get<bool>();
+            // 缺省的空提示仍兼容旧字段，显式清除时两种旧路径都不可恢复。
+            if ( beatMap.m_baseMapMetadata.song_file_hint.empty() &&
+                 !beatMap.m_baseMapMetadata.song_file_hint_cleared ) {
                 beatMap.m_baseMapMetadata.song_file_hint = legacyAudioPath;
             }
             // 仅旧版本把 audio 写回
             // main_audio_path，新版本避免产生双重音频来源。
-            if ( formatVersion < 2 ) {
+            if ( formatVersion < 2 &&
+                 !beatMap.m_baseMapMetadata.song_file_hint_cleared ) {
                 beatMap.m_baseMapMetadata.main_audio_path = legacyAudioPath;
             } else {
                 beatMap.m_baseMapMetadata.main_audio_path.clear();

@@ -740,6 +740,8 @@ return {
 	["ui.settings.beatmap.import_audio"] = "导入音频…",
 	["ui.settings.beatmap.import_image"] = "导入图片…",
 	["ui.settings.beatmap.import_video"] = "导入视频…",
+	["ui.settings.beatmap.no_resource"] = "无",
+	["ui.settings.beatmap.clear_reference"] = "无（清除引用）",
 	["ui.settings.beatmap.rename_resource"] = "重命名当前资源文件",
 	["ui.settings.beatmap.rename_hint"] = "重命名当前资源文件。若有其他谱面依赖原文件，将先提示复制副本。请保留原扩展名。",
 	["ui.settings.beatmap.rename_copy_hint"] = "该资源被 {} 份关联谱面使用。继续将复制一份并使用新文件名，只改绑当前谱面；原文件保留，其他谱面不变。",

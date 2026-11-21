@@ -203,7 +203,9 @@ void SettingsView::drawBeatmapSettings()
         // 即时修改的结构字段，文本输入草稿继续由本页保留。
         m_editingMeta.track_count = currentMeta.track_count;
         // 音频管理器可在设置页外重命名资源，路径字段不属于需保留的文本输入。
-        m_editingMeta.song_file_hint  = currentMeta.song_file_hint;
+        m_editingMeta.song_file_hint = currentMeta.song_file_hint;
+        m_editingMeta.song_file_hint_cleared =
+            currentMeta.song_file_hint_cleared;
         m_editingMeta.main_audio_path = currentMeta.main_audio_path;
         m_editingMeta.main_cover_path = currentMeta.main_cover_path;
         m_editingMeta.cover_path      = currentMeta.cover_path;
@@ -858,7 +860,7 @@ void SettingsView::drawBeatmapSettings()
         // 当前引用即使不在候选列表中也继续显示，以保留可修复信息。
         // 采用统一标签宽度，使音频、封面与背景组合框对齐。
         // 每行右侧导入按钮把外部资源复制到当前工程并绑定此谱面。
-        // 下拉框仍只列工程内候选，失效引用可以通过导入按钮修复。
+        // 「无」允许清除已有引用，独立于当前工程里能否找到有效候选。
         // 背景导入遵循当前图片/视频类型，重命名不改变媒体类型。
 
         if ( isImd ) {
@@ -981,14 +983,29 @@ void SettingsView::drawBeatmapSettings()
                 ImGui::PopID();
             };
 
+        const auto* noResource =
+            TR_CACHE("ui.settings.beatmap.no_resource").data();
+        /// @brief 在候选顶部显示无绑定选项，文件列表为空时也可清除。
+        /// @warning 资源下拉打开时执行，不访问磁盘或项目资源清单。
+        const auto drawClearReference = [](bool empty) {
+            const bool selected = ::MMM::UI::FeedbackSelectable(
+                TR_CACHE("ui.settings.beatmap.clear_reference").data(), empty);
+            if ( empty ) ImGui::SetItemDefaultFocus();
+            return selected;
+        };
+
         // 音频选择优先使用外部格式提示字段，并限定为 Project 登记的主音频资源。
         addSettingItem(
             *sec,
             rowIndex,
             TR_CACHE("ui.settings.beatmap.audio").data(),
             maxLabelW,
-            [&, resourceComboWidth, drawResourceImportButton, audioImportLabel](
-                Clay_BoundingBox r, bool) {
+            [&,
+             resourceComboWidth,
+             drawResourceImportButton,
+             audioImportLabel,
+             noResource,
+             drawClearReference](Clay_BoundingBox r, bool) {
                 /// @brief 歌曲文件提示只服务于外部格式，不决定实际播放时间线。
                 /// 空提示时回退到主音频路径，兼容本项目原生元数据。
                 const auto& audioHint        = meta.song_file_hint.empty()
@@ -996,7 +1013,8 @@ void SettingsView::drawBeatmapSettings()
                                                    : meta.song_file_hint;
                 std::string currentAudioPath = displayProjectPath(audioHint);
                 // 预览与比较都使用规范化后的显示路径。
-                std::string audioPreview = currentAudioPath;
+                const char* audioPreview =
+                    audioHint.empty() ? noResource : currentAudioPath.c_str();
 
                 // 当前引用不存在时以警告色提示，但不自动清空草稿字段。
                 bool audioExists =
@@ -1013,11 +1031,21 @@ void SettingsView::drawBeatmapSettings()
                 // 组合框占满值列；打开后才遍历 Project 已登记音频。
                 ImGui::SetNextItemWidth(resourceComboWidth(r));
                 if ( ::MMM::UI::FeedbackBeginCombo("##AudioCombo",
-                                                   audioPreview.c_str()) ) {
+                                                   audioPreview) ) {
                     if ( audioPushed ) {
                         // 弹窗内容不继承失效预览的警告色，立即恢复文本样式。
                         ImGui::PopStyleColor();
                         audioPushed = false;
+                    }
+                    if ( drawClearReference(audioHint.empty()) &&
+                         (!audioHint.empty() ||
+                          !meta.song_file_hint_cleared) ) {
+                        meta.song_file_hint.clear();
+                        meta.main_audio_path.clear();
+                        // 持久化这次显式选择，保存时不从别的 Main BGM
+                        // 自动填回。
+                        meta.song_file_hint_cleared = true;
+                        changed                     = true;
                     }
                     if ( project ) {
                         // 只列出 Main 类型，BGM 和音效资源不能成为谱面主音频。
@@ -1037,7 +1065,8 @@ void SettingsView::drawBeatmapSettings()
                                         Config::utf8ToPath(res.m_path));
                                 // 选择提示字段后清空旧主音频路径，消除双重来源歧义。
                                 meta.main_audio_path.clear();
-                                changed = true;
+                                meta.song_file_hint_cleared = false;
+                                changed                     = true;
                             }
                             // 打开弹窗时将键盘焦点定位到当前资源。
                             if ( isSelected ) ImGui::SetItemDefaultFocus();
@@ -1058,12 +1087,18 @@ void SettingsView::drawBeatmapSettings()
             rowIndex,
             TR_CACHE("ui.settings.beatmap.cover").data(),
             maxLabelW,
-            [&, resourceComboWidth, drawResourceImportButton, imageImportLabel](
-                Clay_BoundingBox r, bool) {
+            [&,
+             resourceComboWidth,
+             drawResourceImportButton,
+             imageImportLabel,
+             noResource,
+             drawClearReference](Clay_BoundingBox r, bool) {
                 // 当前显示路径经过旧前缀兼容和工程相对化。
                 std::string currentCoverPath =
                     displayProjectPath(meta.cover_path);
-                std::string coverPreview = currentCoverPath;
+                const char* coverPreview = meta.cover_path.empty()
+                                               ? noResource
+                                               : currentCoverPath.c_str();
 
                 // error_code 避免文件状态异常中断当前 UI 帧。
                 std::error_code coverExistsError;
@@ -1083,11 +1118,16 @@ void SettingsView::drawBeatmapSettings()
                 // 目录递归扫描仅在组合框打开后的分支发生。
                 ImGui::SetNextItemWidth(resourceComboWidth(r));
                 if ( ::MMM::UI::FeedbackBeginCombo("##CoverCombo",
-                                                   coverPreview.c_str()) ) {
+                                                   coverPreview) ) {
                     if ( coverPushed ) {
                         // 弹窗候选恢复普通文本颜色，不继承预览警告样式。
                         ImGui::PopStyleColor();
                         coverPushed = false;
+                    }
+                    if ( drawClearReference(meta.cover_path.empty()) &&
+                         !meta.cover_path.empty() ) {
+                        meta.cover_path.clear();
+                        changed = true;
                     }
                     if ( project ) {
                         // 封面白名单限定常见静态图片格式。
@@ -1125,12 +1165,18 @@ void SettingsView::drawBeatmapSettings()
             rowIndex,
             TR_CACHE("ui.settings.beatmap.background").data(),
             maxLabelW,
-            [&, resourceComboWidth, drawResourceImportButton, imageImportLabel](
-                Clay_BoundingBox r, bool) {
+            [&,
+             resourceComboWidth,
+             drawResourceImportButton,
+             imageImportLabel,
+             noResource,
+             drawClearReference](Clay_BoundingBox r, bool) {
                 // main_cover_path 是实际背景引用，独立于缩略封面 cover_path。
                 std::string currentBgPath =
                     displayProjectPath(meta.main_cover_path);
-                std::string bgPreview = currentBgPath;
+                const char* bgPreview = meta.main_cover_path.empty()
+                                            ? noResource
+                                            : currentBgPath.c_str();
 
                 // 存在性检查失败与明确不存在都产生同样的警告预览。
                 std::error_code bgExistsError;
@@ -1150,12 +1196,16 @@ void SettingsView::drawBeatmapSettings()
 
                 // 打开组合框后才扫描匹配当前背景类型的资源。
                 ImGui::SetNextItemWidth(resourceComboWidth(r));
-                if ( ::MMM::UI::FeedbackBeginCombo("##BgCombo",
-                                                   bgPreview.c_str()) ) {
+                if ( ::MMM::UI::FeedbackBeginCombo("##BgCombo", bgPreview) ) {
                     if ( bgPushed ) {
                         // 候选列表恢复主题正常文本色。
                         ImGui::PopStyleColor();
                         bgPushed = false;
+                    }
+                    if ( drawClearReference(meta.main_cover_path.empty()) &&
+                         !meta.main_cover_path.empty() ) {
+                        meta.main_cover_path.clear();
+                        changed = true;
                     }
                     if ( project ) {
                         // 背景类型是用户的显式选择，下拉项只展示同类型资源。

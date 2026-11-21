@@ -2484,7 +2484,12 @@ ProjectResourceService::refreshSongFileHintForSave(
 {
     BeatmapSongFileHintUpdateResult result;
     auto&                           metadata = beatMap.m_baseMapMetadata;
-    const auto                      referenceMapPath =
+    if ( metadata.song_file_hint_cleared && metadata.song_file_hint.empty() &&
+         metadata.main_audio_path.empty() ) {
+        // 其他 Main 采样仍可独立播放，不能在保存时把它填成用户已清除的提示。
+        return result;
+    }
+    const auto referenceMapPath =
         beatmapPath.empty() ? metadata.map_path : beatmapPath;
     // 调用方传入的保存位置优先，另存为时不能继续用旧文件目录解释相对引用。
 

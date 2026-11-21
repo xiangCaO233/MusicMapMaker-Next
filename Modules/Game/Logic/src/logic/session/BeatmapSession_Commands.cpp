@@ -33,6 +33,7 @@
 #include "logic/session/CanvasCamera.h"
 #include "logic/session/InteractionController.h"
 #include "logic/session/PlaybackController.h"
+#include "logic/session/SampleAction.h"
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
@@ -56,6 +57,7 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <unordered_map>
 #include <unordered_set>
@@ -580,6 +582,7 @@ bool baseMapMetadataEqual(const MMM::BaseMapMeta& lhs,
            lhs.map_path == rhs.map_path &&
            lhs.main_audio_path == rhs.main_audio_path &&
            lhs.song_file_hint == rhs.song_file_hint &&
+           lhs.song_file_hint_cleared == rhs.song_file_hint_cleared &&
            lhs.main_cover_path == rhs.main_cover_path &&
            lhs.cover_path == rhs.cover_path &&
            lhs.cover_type == rhs.cover_type &&
@@ -657,6 +660,69 @@ bool validateSampleTrackCountMigration(const MMM::Logic::SessionContext& ctx,
     return true;
 }
 
+/// @brief 解除显式清除的主音频对应的 BGM 采样关联。
+/// @param ctx 当前会话，采样注册表和 BeatMap 由同一逻辑线程持有。
+/// @param oldMetadata 清除之前的路径或旧单轨提示。
+/// @return 实际移除过至少一项匹配 BGM 采样时返回 true。
+/// @warning 低频元数据提交路径；批量解析引用，不用于逐帧播放或渲染。
+bool clearLinkedMainBgmSamples(MMM::Logic::SessionContext& ctx,
+                               const MMM::BaseMapMeta&     oldMetadata)
+{
+    using namespace MMM::Logic;
+    const auto& oldHint = oldMetadata.song_file_hint.empty()
+                              ? oldMetadata.main_audio_path
+                              : oldMetadata.song_file_hint;
+    if ( oldHint.empty() || ctx.trackCount <= 0 ) return false;
+
+    const auto* project = ctx.collaborationProject
+                              ? ctx.collaborationProject.get()
+                              : EditorEngine::instance().getCurrentProject();
+    const auto  oldReference = MMM::Config::pathToUtf8(oldHint);
+    auto        view         = ctx.sampleRegistry.view<const SampleComponent>();
+    std::vector<entt::entity>     candidates;
+    std::vector<std::string_view> references{ oldReference };
+    const auto firstBgmTrack = static_cast<std::uint32_t>(ctx.trackCount);
+    for ( const auto entity : view ) {
+        const auto& sample = view.get<const SampleComponent>(entity);
+        if ( sample.m_track < firstBgmTrack ||
+             sample.m_audioResourceId.empty() )
+            continue;
+        // 歌曲行仅管理 BGM 区，仍保留玩家相关音效与其他资源。
+        candidates.push_back(entity);
+        references.push_back(sample.m_audioResourceId);
+    }
+    if ( candidates.empty() ) return false;
+    const auto resolved =
+        project ? ProjectResourceService::resolveAudioResourceReferences(
+                      *project, oldMetadata.map_path, references)
+                : std::vector<const MMM::AudioResource*>{};
+
+    /// @brief 统一历史 Windows 路径写法，只比较路径身份，不探测文件是否存在。
+    const auto normalize = [](std::string reference) {
+        std::replace(reference.begin(), reference.end(), '\\', '/');
+        return MMM::Config::utf8ToPath(reference).lexically_normal();
+    };
+    const auto normalizedOld = normalize(oldReference);
+    std::vector<BatchSampleAction::Entry> removals;
+    for ( std::size_t index = 0; index < candidates.size(); ++index ) {
+        // 资源已遗失时仍可按旧路径识别；有资源表时也兼容稳定 ID 与路径混存。
+        const bool sameResource = !resolved.empty() && resolved.front() &&
+                                  resolved[index + 1] == resolved.front();
+        if ( !sameResource &&
+             normalize(std::string(references[index + 1])) != normalizedOld )
+            continue;
+        const auto entity = candidates[index];
+        removals.push_back(
+            { .entity = entity,
+              .before = view.get<const SampleComponent>(entity) });
+    }
+    if ( removals.empty() ) return false;
+    // 复用采样删除动作的选择清理和缓存失效逻辑，保持 BGM 轨道数与其他物件。
+    BatchSampleAction(std::move(removals)).execute(ctx);
+    SessionUtils::syncBeatmap(ctx);
+    return true;
+}
+
 /// @brief 在谱面主音轨提示变化时替换时间最早的 Main BGM 自动采样资源。
 /// @param ctx 当前谱面会话上下文。
 /// @param oldMetadata 更新前的谱面基础元数据。
@@ -680,8 +746,8 @@ bool retargetFirstMainBgmSample(MMM::Logic::SessionContext& ctx,
                                        ? updatedMetadata.main_audio_path
                                        : updatedMetadata.song_file_hint;
     if ( oldAudioHint == updatedAudioHint || updatedAudioHint.empty() ||
-         ctx.trackCount <= 0 ) {
-        // 提示未变、目标被清空或轨道布局无效时不推测任何自动采样目标。
+         oldMetadata.song_file_hint_cleared || ctx.trackCount <= 0 ) {
+        // 显式清除之后的其他 BGM 是独立采样，重新选择提示时不能改绑它们。
         return false;
     }
 
@@ -4535,6 +4601,10 @@ void BeatmapSession::recordResourceRename(const std::filesystem::path& oldPath,
         // 旧值按值保留，用于判等、轨道迁移、资源重定向和派生缓存比较。
         const auto oldMetadata = m_ctx->currentBeatmap->m_baseMapMetadata;
         auto       updatedMeta = cmd.baseMeta;
+        // 重新选择或导入音频即退出显式清除状态，其他调用方可继续只填路径。
+        if ( !updatedMeta.song_file_hint.empty() ||
+             !updatedMeta.main_audio_path.empty() )
+            updatedMeta.song_file_hint_cleared = false;
         // UI 输入在进入会话后统一规范化路径和结构边界，避免多个入口行为不一。
         normalizeCurrentProjectMetadataPaths(updatedMeta);
         // 只迁移命令入队以后发生的改名；后来新建同名文件时的新命令不受影响。
@@ -4591,8 +4661,12 @@ void BeatmapSession::recordResourceRename(const std::filesystem::path& oldPath,
             }
         }
 
-        if ( retargetFirstMainBgmSample(*m_ctx, oldMetadata, updatedMeta) ) {
-            // song.file 变化实际修改 Sample ECS 时补充独立音频采样变更类别。
+        const bool audioSamplesChanged =
+            updatedMeta.song_file_hint_cleared
+                ? clearLinkedMainBgmSamples(*m_ctx, oldMetadata)
+                : retargetFirstMainBgmSample(*m_ctx, oldMetadata, updatedMeta);
+        if ( audioSamplesChanged ) {
+            // 主音频绑定变更后同步通知协作和其余采样消费者。
             mutationFlags |= ::MMM::BeatmapMutationFlags::AudioSamples;
         }
 

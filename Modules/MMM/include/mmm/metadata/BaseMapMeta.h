@@ -34,6 +34,8 @@ struct BaseMapMeta {
     std::filesystem::path main_audio_path;
     /// @brief 歌曲文件提示，用于格式元数据显示和资源选择。
     std::filesystem::path song_file_hint;
+    /// @brief 用户显式清除主音频提示，保存时不再从其他 BGM 采样推断。
+    bool song_file_hint_cleared{ false };
     /// @brief 主背景文件路径
     std::filesystem::path main_cover_path;
     /// @brief 封面图片文件路径
