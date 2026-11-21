@@ -106,6 +106,12 @@ return {
 或加载期调用会返回空字符串。`purpose` 是插件自己决定的非空用途键，例如
 `"audio_input"`、`"audio_output"`，同一插件的不同用途不会互相覆盖。
 
+桌面宿主还提供 `api.pick_files(purpose, extensions)` 和
+`api.pick_folder(purpose)`。多选返回 1 起始的 UTF-8 绝对路径数组，取消返回空表，
+错误附带 `error` 字段。可选的 `extensions` 用逗号分隔后缀，例如
+`"wav,ogg,flac"`，不加点。选目录返回路径字符串，取消返回空字符串。
+这两个入口同样只能在用户动作中打开。脚本可先检查对应函数是否存在。
+
 每个插件的用途键和最近目录保存在用户配置目录
 `plugin-state/<plugin-id>.json` 中。状态按插件 `id` 隔离，重载和应用重启后继续
 使用；只有用户成功选择文件时才写磁盘。插件的 `id` 改变时会得到一份新的
@@ -146,13 +152,24 @@ C++→Lua 调用约 `0.008 µs/帧`；一次 C++→Lua 加 40 次空 Lua→C 调
 ## 音频宿主 API
 
 内置实现可见于 [`assets/plugins/tools/audio.lua`](../../assets/plugins/tools/audio.lua)。
-读取和导出操作都只能在 `on_action` 中发起。
+读取操作在 `on_action` 发起。导出可由 `on_action` 启动，也可从音频完成回调提交下一项。
 
 | 调用 | 返回值 | 说明 |
 | --- | --- | --- |
 | `api.audio_probe(path)` | 表 | 读取标题、艺术家、专辑、时长、总帧数、声道、采样率、码率与封面存在状态，并补充容器和各流公开的标签及编码信息；失败时返回 `error`。封面像素在低频资源准备阶段上传，随后由 `image` 控件显示。 |
 | `api.audio_export(options)` | 错误字符串 | 空字符串表示后台任务已提交；`options` 包含 `input`、`output`、`speed`、`pitch_semitones`、`sample_rate`、`bitrate`。非空字符串解释拒绝原因。 |
+| `api.audio_export_batch(options)` | 错误字符串 | 接受 `inputs`、可选的 `charts` 路径数组、目标 `directory`、带点的 `extension`，以及与单文件相同的编码参数。宿主按顺序执行，文件失败后继续处理其他项。 |
 | `api.audio_status()` | 表 | `state` 为 `idle`、`running`、`success` 或 `error`；运行时带 `progress`，结束时带 `error`、`frames`、`duration`。 |
+
+工具可声明 `on_audio_export_complete(status, api)`。每次单项或批量任务结束，
+宿主在 UI 线程调用一次，随后刷新控件。回调可以继续调用音频导出 API，
+也可以记录结果供 `build` 展示。文件选择器仍由 `on_action` 打开。
+
+批量状态还包含 `audio_written`、`charts_written`、`charts_unchanged` 和
+`errors`。批次使用一个输出目录，已有文件名以编号避让。选中的谱面以副本
+输出，只替换成功转码的音频引用。支持 MMM、Malody、osu!、RM/IMD 和 BMS 系列。
+显式引用谱面的副本写在原谱面旁边，RM/IMD 副本与同前缀的转码音频同目录。
+同步引用时倍速为 1，使谱面时间与采样时长保持一致。
 
 `audio_probe` 的 `format_tags` 是容器标签数组；`streams` 是流数组，每条流
 提供 `index`、`type`、`codec`、`bitrate`、`sample_rate`、`channels`、

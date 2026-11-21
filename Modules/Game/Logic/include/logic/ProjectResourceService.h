@@ -7,6 +7,8 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -20,6 +22,20 @@ class Project;
 
 namespace MMM::Logic
 {
+
+/// @brief 保留 osu! 原文布局，逐字段改写主音频、物件采样和内嵌 Storyboard
+/// 采样。
+/// @param source 原始文件字节。
+/// @param resolve 无匹配返回空 optional；有匹配但目标不可表达时返回空字符串。
+/// @param output 改写文本，失败时不能使用。
+/// @param changed 是否实际替换过引用。
+/// @warning 低频文件任务；扫描完整谱面并分配结果文本。
+bool rewriteOsuAudioReferences(
+    const std::string& source,
+    const std::function<std::optional<std::string>(const std::string&)>&
+                 resolve,
+    std::string& output, bool& changed);
+
 
 /// @brief 根据项目目录扫描结果构建并同步项目内的谱面和音频资源列表。
 class ProjectResourceService

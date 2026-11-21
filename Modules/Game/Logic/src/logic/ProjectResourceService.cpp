@@ -1065,27 +1065,15 @@ void trimAsciiRange(const std::string& line, std::size_t& begin,
     }
 }
 
-/// @brief 在不重新序列化谱面的前提下重写 osu! 音频路径字段。
-/// @param source 原始 osu! 文本。
-/// @param project 资源所属项目。
-/// @param mapPathBeforeMove 移动前谱面绝对路径。
-/// @param mapPathAfterMove 移动后谱面绝对路径。
-/// @param remaps 受影响资源路径投影。
-/// @param output 改写后的完整文本。
-/// @param changed 是否实际替换了至少一个引用。
-/// @return 所有匹配引用都能无损改写时返回 true。
-/// @note 失败时 output 可能只包含已处理前缀，调用方不能提交这份不完整文本。
-/// @pre source 与 output
-/// 不得别名，入口会先清空输出；资源投影在处理期间保持稳定。
-/// @details 仅识别 General/AudioFilename 和 HitObjects 尾部显式采样文件名。
-/// 这不是完整 osu! 格式校验器，成功不表示所有未知字段都已验证。
-/// @warning 全文副本和局部字符串替换会分配内存，只用于低频移动准备与提交。
-bool rewriteOsuAudioReferenceText(
-    const std::string& source, const Project& project,
-    const std::filesystem::path&          mapPathBeforeMove,
-    const std::filesystem::path&          mapPathAfterMove,
-    const std::vector<ResourcePathRemap>& remaps, std::string& output,
-    bool& changed)
+}  // namespace
+
+/// @brief 切换原文节上下文，只替换解析出的音频字段值。
+/// @warning 低频文件任务；保留原始 CRLF、注释和未识别字段。
+bool rewriteOsuAudioReferences(
+    const std::string& source,
+    const std::function<std::optional<std::string>(const std::string&)>&
+                 resolve,
+    std::string& output, bool& changed)
 {
     output.clear();
     output.reserve(source.size());
@@ -1128,6 +1116,37 @@ bool rewriteOsuAudioReferenceText(
                         // 只把首个冒号视为键值分隔，路径文本里的后续冒号不再次拆字段。
                         referenceBegin = separator + 1U;
                         referenceEnd   = line.size();
+                    }
+                }
+            } else if ( currentSection == "Events" ) {
+                // Storyboard 样本的文件名是第四个 CSV
+                // 字段，带引号时可包含逗号。
+                const auto first = line.find(',', contentBegin);
+                if ( first != std::string::npos ) {
+                    auto typeEnd = first;
+                    trimAsciiRange(line, contentBegin, typeEnd);
+                    const auto type =
+                        line.substr(contentBegin, typeEnd - contentBegin);
+                    const auto second = line.find(',', first + 1);
+                    const auto third  = second == std::string::npos
+                                            ? second
+                                            : line.find(',', second + 1);
+                    if ( (type == "Sample" || type == "5") &&
+                         third != std::string::npos ) {
+                        referenceBegin = third + 1;
+                        referenceEnd   = line.size();
+                        trimAsciiRange(line, referenceBegin, referenceEnd);
+                        if ( referenceBegin < referenceEnd &&
+                             line[referenceBegin] == '"' ) {
+                            ++referenceBegin;
+                            referenceEnd = line.find('"', referenceBegin);
+                            if ( referenceEnd == std::string::npos )
+                                referenceBegin = std::string::npos;
+                        } else if ( const auto end =
+                                        line.find(',', referenceBegin);
+                                    end != std::string::npos ) {
+                            referenceEnd = end;
+                        }
                     }
                 }
             } else if ( currentSection == "HitObjects" &&
@@ -1194,13 +1213,7 @@ bool rewriteOsuAudioReferenceText(
                     // 空文件名表示没有显式文件引用，不为它查找默认项目音效。
                     const auto reference = line.substr(
                         referenceBegin, referenceEnd - referenceBegin);
-                    const auto replacement =
-                        remapOsuAudioReference(project,
-                                               reference,
-                                               mapPathBeforeMove,
-                                               mapPathAfterMove,
-                                               remaps);
-                    // 命中却不能构造替换值时停止，不交付“部分引用已改、部分失效”的谱面。
+                    const auto replacement = resolve(reference);
                     if ( replacement && replacement->empty() ) return false;
                     if ( replacement && *replacement != reference ) {
                         // 两侧空白不属于替换范围，同值替换也不将 changed 置为
@@ -1222,6 +1235,30 @@ bool rewriteOsuAudioReferenceText(
         // 末行没有换行时仍完整处理一次，不额外补写换行或产生空尾行。
     }
     return true;
+}
+
+namespace
+{
+/// @brief 将项目资源移动投影接入通用 osu! 文件重写器。
+/// @warning 低频文件任务；解析移动前引用并计算新相对路径。
+bool rewriteOsuAudioReferenceText(
+    const std::string& source, const Project& project,
+    const std::filesystem::path&          mapPathBeforeMove,
+    const std::filesystem::path&          mapPathAfterMove,
+    const std::vector<ResourcePathRemap>& remaps, std::string& output,
+    bool& changed)
+{
+    return rewriteOsuAudioReferences(
+        source,
+        [&](const std::string& reference) {
+            return remapOsuAudioReference(project,
+                                          reference,
+                                          mapPathBeforeMove,
+                                          mapPathAfterMove,
+                                          remaps);
+        },
+        output,
+        changed);
 }
 
 /// @brief 读取完整文本文件且不改变换行符。

@@ -47,9 +47,15 @@ local function format_from_path(path)
 end
 
 local state = {
-    input = "",
+    -- 批量输入和待改链谱面独立选择；未选谱面时仍可只转码音频。
+    inputs = {},
+    charts = {},
     -- 保存位置由导出按钮打开的对话框决定，格式仅控制建议文件名。
     format = output_formats[1].label,
+    -- 用户明确选择后，切换输入不覆盖格式。
+    custom_format = false,
+    -- 选择或拒绝新任务时优先显示当前操作的提示。
+    show_result = false,
     -- 文本输入便于原样保留用户编辑；提交时才转换成数值并验证。
     speed = "1.0",
     pitch = "0.0",
@@ -67,8 +73,13 @@ local state = {
 -- 源文件中的标签和封面目前只作展示，导出音频不会自动复制这些数据。
 -- 最近目录由宿主按插件 ID 和用途写入配置目录，不保存在此闭包中。
 -- 状态文字在任务完成时由宿主触发重建，不需要 Lua 定时器轮询。
--- 单个插件同时只运行一项导出，重复提交由宿主拒绝。
+-- 宿主一次处理一批，进度覆盖转码与谱面改链；Lua 不等待后台结果。
 -- 不在脚本中保存后台任务对象，避免重载插件时留下悬空回调。
+
+-- 一项普通导出沿用另存为；多项或关联谱面时统一选择输出目录。
+local function uses_batch()
+    return #state.inputs > 1 or #state.charts > 0
+end
 
 -- 探测失败也显示原始诊断，不把缺失字段当作成功读到的标签。
 -- 时长是后端从帧数和时钟估算出的秒数；零表示无法确定。
@@ -138,22 +149,55 @@ return {
         -- 后台进度另由 audio_progress 读取原子值，避免每帧进入 Lua。
         local status = api.audio_status()
         local status_text = state.message
-        if status.state == "running" then
+        if state.show_result and status.audio_written then
+            -- 即使部分失败也展示已提交的文件数，方便继续处理失败项。
+            status_text = string.format("已转码 %d 个音频，生成 %d 份谱面副本，%d 张没有匹配引用。",
+                status.audio_written, status.charts_written, status.charts_unchanged)
+            if status.errors and #status.errors > 0 then
+                local shown = math.min(#status.errors, 12)
+                status_text = status_text .. "\n失败 " .. #status.errors .. " 项：\n" ..
+                    table.concat(status.errors, "\n", 1, shown)
+                if shown < #status.errors then
+                    status_text = status_text .. "\n另有 " .. (#status.errors - shown) .. " 项失败。"
+                end
+            end
+        elseif status.state == "running" then
             -- 文本快照可用于没有进度控件的插件；本工具显示实时进度条。
             status_text = string.format("正在导出：%.1f%%", (status.progress or 0) * 100)
-        elseif status.state == "success" then
+        elseif state.show_result and status.state == "success" then
             -- duration 是按输入时钟和送入编码器的帧数计算的导出时长。
             status_text = string.format("导出完成：%.4f 秒", status.duration or 0)
-        elseif status.state == "error" then
+        elseif state.show_result and status.state == "error" then
             -- 编码器拒绝参数、文件打开失败等都沿同一错误通道呈现。
             status_text = "导出失败：" .. (status.error or "未知错误")
         end
         -- 输入信息与封面归为一组，输出参数在导出按钮之前展示。
         local widgets = {
             { type = "button", id = "select_input", label = "选择输入音频" },
-            { type = "text", id = "input_path", label = state.input },
-            { type = "text", id = "media_info", label = describe(state.info) },
         }
+        if #state.inputs == 1 then
+            widgets[#widgets + 1] = { type = "text", id = "input_path", label = state.inputs[1] }
+            widgets[#widgets + 1] = { type = "text", id = "media_info", label = describe(state.info) }
+        elseif #state.inputs > 1 then
+            widgets[#widgets + 1] = {
+                type = "text", id = "batch_count",
+                label = string.format("已选择 %d 个音频", #state.inputs),
+            }
+        end
+        if #state.inputs > 0 and api.pick_files and api.pick_folder then
+            widgets[#widgets + 1] = {
+                type = "button", id = "select_charts", label = "选择要同步引用的谱面",
+            }
+            if #state.charts > 0 then
+                widgets[#widgets + 1] = {
+                    type = "text", id = "chart_count",
+                    label = string.format("已选择 %d 张谱面，会生成引用更新后的副本（倍速须为 1）", #state.charts),
+                }
+                widgets[#widgets + 1] = {
+                    type = "button", id = "clear_charts", label = "取消谱面同步",
+                }
+            end
+        end
         if state.info and state.info.cover_present then
             -- 图像纹理在宿主资源阶段上传，上传前先显示文字占位。
             -- 封面存在标志表示已经成功解码为可上传像素，不只检查附件标签。
@@ -211,7 +255,10 @@ return {
                     or { type = "text", id = "lossless_bitrate", label = "无损格式不使用目标码率" },
             },
         }
-        widgets[#widgets + 1] = { type = "button", id = "export", label = "开始导出" }
+        widgets[#widgets + 1] = {
+            type = "button", id = "export",
+            label = uses_batch() and "批量导出到目录…" or "开始导出",
+        }
         if status.state == "running" then
             -- 进度由 C++ 缓存控件直接读取原子快照，无需每帧跨 Lua 边界。
             widgets[#widgets + 1] = { type = "audio_progress", id = "status", label = "正在导出" }
@@ -225,17 +272,45 @@ return {
     on_action = function(id, value, api)
         -- 只有明确点击按钮或修改参数才会到达这里；文件对话框可阻塞 UI。
         if id == "select_input" then
-            local path = api.pick_file("audio_input")
-            if path ~= "" then
-                -- 成功选择后才替换旧探测；取消时保留上一份信息与参数。
-                state.input = path
-                state.info = api.audio_probe(path)
-                -- 探测失败也保留路径，便于重新选择；状态文字必须报告真实结果。
-                state.message = state.info.error or "已读取音频信息。"
+            local paths
+            if api.pick_files and api.pick_folder then
+                paths = api.pick_files("audio_input",
+                    "wav,ogg,mp3,flac,opus,m4a,aac,wma,ape,alac,aif,aiff,amr,ac3,mka")
+            else
+                local path = api.pick_file("audio_input")
+                paths = path == "" and {} or { path }
             end
+            if #paths > 0 then
+                -- 取消选择保留旧输入；成功更换输入后清掉旧批次的谱面。
+                state.inputs, state.charts = paths, {}
+                state.info, state.show_details, state.show_result = nil, false, false
+                if not state.custom_format then
+                    state.format = #paths > 1 and "Ogg (.ogg)" or output_formats[1].label
+                end
+                -- 单选保留原音频信息，批量则由后台逐项解码，避免卡住文件选择。
+                if #paths == 1 then
+                    state.info = api.audio_probe(paths[1])
+                    state.message = state.info.error or "已读取音频信息。"
+                else
+                    state.message = "已选择批量转码输入。"
+                end
+            elseif paths.error then
+                state.show_result = false
+                state.message = paths.error
+            end
+        elseif id == "select_charts" then
+            local paths = api.pick_files("audio_batch_charts", "mmm,mc,osu,imd,bms,bme,bml,pms")
+            if #paths > 0 then state.charts = paths end
+            if paths.error then
+                state.show_result = false
+                state.message = paths.error
+            end
+        elseif id == "clear_charts" then
+            state.charts = {}
         elseif id == "output_format" then
             -- 此时没有待确认的输出路径，切换格式只更新保存建议名。
             state.format = selected_format(value).label
+            state.custom_format = true
         elseif id == "toggle_details" then
             state.show_details = not state.show_details
         elseif id == "speed" then
@@ -256,7 +331,8 @@ return {
                 state.message = "已有音频导出任务正在运行。"
                 return
             end
-            if state.input == "" or not state.info or state.info.error then
+            state.show_result = false
+            if #state.inputs == 0 or (not uses_batch() and (not state.info or state.info.error)) then
                 state.message = "请先选择可读取的输入音频。"
                 return
             end
@@ -275,6 +351,24 @@ return {
                 state.message = "倍速、变调、采样率和码率必须是有效数字；后两项必须为非负整数。"
                 return
             end
+            if uses_batch() then
+                -- 改写引用不能补偿倍速引起的时长变化，避免生成不同步的谱面副本。
+                if #state.charts > 0 and speed ~= 1 then
+                    state.message = "同步谱面引用时倍速必须为 1。"
+                    return
+                end
+                local directory = api.pick_folder("audio_batch_output")
+                if directory == "" then return end
+                -- 取得目录后一次提交，逐文件错误与最终成果由同一状态接口返回。
+                local error = api.audio_export_batch({
+                    inputs = state.inputs, charts = state.charts, directory = directory,
+                    extension = format.extension, speed = speed, pitch_semitones = pitch,
+                    sample_rate = sample_rate, bitrate = bitrate,
+                })
+                state.show_result = error == ""
+                state.message = state.show_result and "正在准备批量导出..." or error
+                return
+            end
             -- 参数正确后才选择目标；取消对话框不改变状态，也不启动任务。
             -- 用途键只记最近目录，不能把上次输出文件当成本次隐式目标。
             local output = api.save_file("audio_output", "output" .. format.extension)
@@ -288,6 +382,7 @@ return {
             if chosen ~= format then
                 -- 手动改后缀时沿用原行为，同步格式并重新核验码率。
                 state.format = chosen.label
+                state.custom_format = true
                 format = chosen
                 bitrate = format.lossy and tonumber(state.bitrate) or 0
                 if not bitrate or bitrate < 0 or bitrate % 1 ~= 0 then
@@ -298,11 +393,12 @@ return {
             -- 宿主再次验证数值范围、路径和编码器能力，脚本校验只负责输入体验。
             -- 返回空串仅表示任务进入队列，最终结果仍以 audio_status 为准。
             local error = api.audio_export({
-                input = state.input, output = output,
+                input = state.inputs[1], output = output,
                 speed = speed, pitch_semitones = pitch,
                 sample_rate = sample_rate, bitrate = bitrate,
             })
-            state.message = error == "" and "正在准备导出..." or error
+            state.show_result = error == ""
+            state.message = state.show_result and "正在准备导出..." or error
             -- 成功提交后控件树重建一次；后续进度由宿主 C++ 直接绘制。
         end
     end,

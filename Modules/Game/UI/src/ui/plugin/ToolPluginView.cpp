@@ -23,6 +23,7 @@
 #include "config/AppPaths.h"
 #include "config/Utf8Path.h"
 #include "graphic/imguivk/VKTexture.h"
+#include "logic/AudioBatchExportService.h"
 #include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
 #include "runtime/AppThreadPool.h"
@@ -57,6 +58,7 @@ extern "C" {
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -530,6 +532,8 @@ struct ToolPluginView::Impl {
         std::atomic<bool> done{ false };
         /// @brief 工作线程独占写入的最终结果。
         Audio::AudioSpeedExportResult result;
+        /// @brief 批量任务完成后发布音频和谱面统计。
+        std::optional<Logic::AudioBatchExportResult> batchResult;
     };
 
     /// @brief 已加载插件的可变运行状态。
@@ -542,6 +546,8 @@ struct ToolPluginView::Impl {
         sol::protected_function build;
         /// @brief 用户动作回调，只在控件变更后执行。
         sol::protected_function onAction;
+        /// @brief 可选的后台音频任务完成回调，在 UI 线程调用。
+        sol::protected_function onAudioExportComplete;
         /// @brief 向脚本提供低频宿主能力的表。
         sol::table api;
         /// @brief 稳定插件标识与窗口显示名称。
@@ -574,6 +580,8 @@ struct ToolPluginView::Impl {
         // 路径与编辑器当前打开的工程相互独立，工具转换不会修改会话状态。
         /// @brief 文件选择器只允许从用户动作回调打开。
         bool actionActive{ false };
+        /// @brief 完成回调可继续提交音频任务，文件对话框仍只由控件动作触发。
+        bool audioCompletionActive{ false };
         /// @brief 窗口打开状态独立于插件视图本身。
         bool open{ false };
         /// @brief 首次展示时等待主 DockSpace 节点就绪，再提交一次默认停靠。
@@ -588,6 +596,94 @@ struct ToolPluginView::Impl {
     /// @brief 已换下的纹理留到视图安全销毁，避免在途 GPU 命令引用失效。
     std::vector<std::unique_ptr<Graphic::VKTexture>> retiredTextures;
     // 该向量只在低频封面替换时增长，常态帧不会执行 GPU 销毁。
+
+    /// @brief 读取音频请求共用的 DSP 和编码参数。
+    static Audio::AudioSpeedExportOptions audioOptions(
+        const sol::table& request)
+    {
+        Audio::AudioSpeedExportOptions options;
+        options.speed          = request["speed"].get_or(1.0);
+        options.pitchSemitones = request["pitch_semitones"].get_or(0.0);
+        options.outputSampleRate =
+            request["sample_rate"].get_or(std::uint32_t{ 0 });
+        options.bitrate       = request["bitrate"].get_or(std::uint64_t{ 0 });
+        options.preservePitch = true;
+        return options;
+    }
+
+    /// @brief 提交音频后台任务，工作线程只取得参数和结果对象的所有权。
+    /// @warning 用户动作或完成回调中的低频分支；不得进入每帧绘制。
+    template<typename Work>
+    static std::string submitAudioTask(Plugin& plugin, Work work)
+    {
+        if ( !plugin.actionActive && !plugin.audioCompletionActive )
+            return "仅可由用户动作或音频完成回调启动导出";
+        if ( plugin.audioTask &&
+             !plugin.audioTask->done.load(std::memory_order_acquire) )
+            return "已有音频导出任务正在运行";
+        auto* pool = Runtime::AppThreadPool::instance().getFileThreadPool();
+        if ( !pool ) return "文件任务线程池尚未初始化";
+
+        auto task                   = std::make_shared<AudioTask>();
+        plugin.audioTask            = task;
+        plugin.audioCompletionShown = false;
+        pool->enqueue_void([task, work = std::move(work)]() mutable {
+            work(*task);
+            // 先完整写入结果，再发布完成位；无须让 UI 等待线程或互斥锁。
+            task->done.store(true, std::memory_order_release);
+        });
+        return {};
+    }
+
+    /// @brief 生成一次 Lua 状态快照，只有已完成任务才读取工作线程结果。
+    static sol::table audioStatus(Plugin& plugin)
+    {
+        auto        status = plugin.lua.create_table();
+        const auto* task   = plugin.audioTask.get();
+        if ( !task ) {
+            status["state"] = "idle";
+        } else if ( !task->done.load(std::memory_order_acquire) ) {
+            status["state"]    = "running";
+            status["progress"] = task->progress.load(std::memory_order_relaxed);
+        } else if ( task->batchResult ) {
+            // 结果含失败清单，即使部分失败仍返回成功写出的文件数。
+            const auto& batch = *task->batchResult;
+            status["state"]   = batch.m_errors.empty() ? "success" : "error";
+            status["audio_written"]    = batch.m_audioWritten;
+            status["charts_written"]   = batch.m_chartsWritten;
+            status["charts_unchanged"] = batch.m_chartsUnchanged;
+            if ( !batch.m_errors.empty() )
+                status["error"] = batch.m_errors.front();
+            auto errors = plugin.lua.create_table(
+                static_cast<int>(batch.m_errors.size()), 0);
+            for ( const auto& message : batch.m_errors ) errors.add(message);
+            status["errors"] = errors;
+        } else {
+            status["state"]    = task->result.success ? "success" : "error";
+            status["error"]    = task->result.errorMessage;
+            status["frames"]   = task->result.outputFrames;
+            status["duration"] = task->result.outputDurationSeconds;
+        }
+        return status;
+    }
+
+    /// @brief 从 Lua 的 1 起始数组取路径，拒绝稀疏或非路径元素。
+    static bool readPathList(const sol::object&                  value,
+                             std::vector<std::filesystem::path>& paths)
+    {
+        if ( value.get_type() == sol::type::lua_nil ) return true;
+        if ( !value.is<sol::table>() ) return false;
+        const auto list = value.as<sol::table>();
+        paths.reserve(list.size());
+        for ( std::size_t index = 1; index <= list.size(); ++index ) {
+            const sol::object item = list[index];
+            if ( !item.is<std::string>() ) return false;
+            auto path = Config::utf8ToPath(item.as<std::string>());
+            if ( !path.is_absolute() ) return false;
+            paths.push_back(std::move(path));
+        }
+        return true;
+    }
 
     /// @brief 将入口加载错误保留在工具列表，避免坏脚本静默消失。
     /// @param source 脚本文件或内置块名称。
@@ -1097,83 +1193,105 @@ struct ToolPluginView::Impl {
                 }
                 return output;
             });
-        plugin.api.set_function("audio_export", [&plugin](sol::table request) {
-            // 提交只发生在用户动作；实际解码、DSP 和编码都交给文件线程池。
-            // Lua 表在此转换成值语义选项，后台线程不接触 Lua 对象。
-            // 参数能否被具体编码器支持仍由离线服务和 ICE 共同确认。
-            // 提交成功返回空串不代表导出成功，脚本要读取任务最终状态。
-            if ( !plugin.actionActive )
-                return std::string("仅可由用户动作启动导出");
-            // 同一插件只保留一项进行中的导出，避免状态栏指向错误任务。
-            // done 的 acquire 与工作线程 release 配对，结果读取有序。
-            if ( plugin.audioTask &&
-                 !plugin.audioTask->done.load(std::memory_order_acquire) ) {
-                return std::string("已有音频导出任务正在运行");
-            }
-            auto* pool = Runtime::AppThreadPool::instance().getFileThreadPool();
-            // 文件线程池尚未启动时立即拒绝，不能在 UI 线程同步导出。
-            if ( !pool ) return std::string("文件任务线程池尚未初始化");
-            // 不退回 UI 同步导出；渲染帧必须继续正常推进。
-            Audio::AudioSpeedExportOptions options;
-            // 路径从 UTF-8 映射到平台文件系统类型，Windows 下保留 Unicode。
-            options.inputPath =
-                Config::utf8ToPath(request["input"].get_or(std::string{}));
-            options.outputPath =
-                Config::utf8ToPath(request["output"].get_or(std::string{}));
-            options.speed          = request["speed"].get_or(1.0);
-            options.pitchSemitones = request["pitch_semitones"].get_or(0.0);
-            options.outputSampleRate =
-                request["sample_rate"].get_or(std::uint32_t{ 0 });
-            options.bitrate = request["bitrate"].get_or(std::uint64_t{ 0 });
-            // 独立半音变调要求保持音高图，由拉伸器处理倍速和音调。
-            options.preservePitch = true;
-            if ( options.inputPath.empty() || options.outputPath.empty() ) {
-                // 不允许把空路径交给后台服务，更不能默认写入当前工程目录。
-                return std::string("请选择输入和输出文件");
-            }
-            auto task = std::make_shared<AudioTask>();
-            // 进度是独立原子快照，不承载最终结果同步语义。
-            // 后台回调只持有任务所有权，插件重载不会让回调访问已销毁对象。
-            options.progressCallback =
-                [task](const Audio::AudioSpeedExportProgress& progress) {
-                    task->progress.store(progress.progress,
-                                         std::memory_order_relaxed);
-                };
-            plugin.audioTask            = task;
-            plugin.audioCompletionShown = false;
-            // UI 在下一次 rebuild 中读到 running，普通帧仅直接绘制原子进度。
-            // 工作线程只持有任务与参数副本，不借用插件视图或 Lua 对象。
-            pool->enqueue_void([task, options = std::move(options)]() {
-                // 异步回调不更新插件或窗口状态，避免重载期间竞争 Lua 生命周期。
-                task->result =
-                    Audio::AudioSpeedExportService::exportWav(options);
-                // 写完普通 result 后再发布完成位，UI 不需等待锁。
-                task->done.store(true, std::memory_order_release);
+        plugin.api.set_function(
+            "audio_export", [&plugin](const sol::table& request) {
+                auto options = audioOptions(request);
+                options.inputPath =
+                    Config::utf8ToPath(request["input"].get_or(std::string{}));
+                options.outputPath =
+                    Config::utf8ToPath(request["output"].get_or(std::string{}));
+                if ( options.inputPath.empty() || options.outputPath.empty() )
+                    return std::string("请选择输入和输出文件");
+                return submitAudioTask(
+                    plugin,
+                    [options = std::move(options)](AudioTask& task) mutable {
+                        options.progressCallback =
+                            [&task](const auto& progress) {
+                                task.progress.store(progress.progress,
+                                                    std::memory_order_relaxed);
+                            };
+                        task.result =
+                            Audio::AudioSpeedExportService::exportWav(options);
+                    });
             });
-            return std::string{};
-        });
-        plugin.api.set_function("audio_status", [&plugin]() {
-            // Lua 查询只在 build 期发生，用于初始、完成与错误状态文字。
-            // 实时进度控件绕过 Lua，直接读同一任务的原子进度。
-            sol::table  status = plugin.lua.create_table();
-            const auto* task   = plugin.audioTask.get();
-            if ( !task ) {
-                // 尚未提交任务时不制造虚假的百分比或结果。
-                status["state"] = "idle";
-            } else if ( !task->done.load(std::memory_order_acquire) ) {
-                // 未完成时只能读原子进度，不能读正在写入的 result。
-                status["state"] = "running";
-                status["progress"] =
-                    task->progress.load(std::memory_order_relaxed);
-            } else {
-                // acquire 之后结果稳定，可复制到独立 Lua 表中供窗口构建。
-                status["state"]    = task->result.success ? "success" : "error";
-                status["error"]    = task->result.errorMessage;
-                status["frames"]   = task->result.outputFrames;
-                status["duration"] = task->result.outputDurationSeconds;
-            }
-            return status;
-        });
+        plugin.api.set_function(
+            "audio_export_batch", [&plugin](const sol::table& request) {
+                Logic::AudioBatchExportRequest batch;
+                if ( !readPathList(request["inputs"], batch.m_inputs) ||
+                     !readPathList(request["charts"], batch.m_charts) ||
+                     batch.m_inputs.empty() )
+                    return std::string("请选择输入音频并传入绝对文件路径");
+                batch.m_directory = Config::utf8ToPath(
+                    request["directory"].get_or(std::string{}));
+                batch.m_extension = request["extension"].get_or(std::string{});
+                if ( !batch.m_directory.is_absolute() )
+                    return std::string("请选择输出目录");
+                batch.m_options = audioOptions(request);
+                return submitAudioTask(
+                    plugin,
+                    [batch = std::move(batch)](AudioTask& task) mutable {
+                        batch.m_options.progressCallback =
+                            [&task](const auto& progress) {
+                                task.progress.store(progress.progress,
+                                                    std::memory_order_relaxed);
+                            };
+                        task.batchResult =
+                            Logic::exportAudioBatch(std::move(batch));
+                    });
+            });
+        plugin.api.set_function("audio_status",
+                                [&plugin]() { return audioStatus(plugin); });
+
+#ifndef __ANDROID__
+        plugin.api.set_function(
+            "pick_files",
+            [&plugin](const std::string& purpose,
+                      sol::optional<std::string>
+                          extensions) {
+                auto result = plugin.lua.create_table();
+                if ( !plugin.actionActive || purpose.empty() ) return result;
+                const auto  recent    = plugin.recent.find(purpose);
+                const auto* directory = recent == plugin.recent.end()
+                                            ? nullptr
+                                            : recent->second.c_str();
+                const auto  filter    = extensions.value_or(std::string{});
+                const nfdu8filteritem_t  types{ "Files", filter.c_str() };
+                std::vector<std::string> paths;
+                const auto selection = NativeFileDialog::openFiles(
+                    paths,
+                    filter.empty() ? nullptr : &types,
+                    filter.empty() ? 0 : 1,
+                    directory);
+                if ( selection == NFD_ERROR ) {
+                    const auto* error = NFD_GetError();
+                    result["error"]   = error ? error : "无法打开文件多选框";
+                }
+                if ( selection != NFD_OKAY || paths.empty() ) return result;
+                plugin.recent[purpose] = Config::pathToUtf8(
+                    Config::utf8ToPath(paths.front()).parent_path());
+                (void)saveRecent(plugin.info.id, plugin.recent);
+                for ( const auto& path : paths ) result.add(path);
+                return result;
+            });
+        plugin.api.set_function(
+            "pick_folder", [&plugin](const std::string& purpose) {
+                if ( !plugin.actionActive || purpose.empty() )
+                    return std::string{};
+                const auto   recent    = plugin.recent.find(purpose);
+                const auto*  directory = recent == plugin.recent.end()
+                                             ? nullptr
+                                             : recent->second.c_str();
+                nfdu8char_t* selected  = nullptr;
+                const auto   result =
+                    NativeFileDialog::pickFolder(&selected, directory);
+                if ( result != NFD_OKAY || !selected ) return std::string{};
+                std::string path(selected);
+                NFD_FreePathU8(selected);
+                plugin.recent[purpose] = path;
+                (void)saveRecent(plugin.info.id, plugin.recent);
+                return path;
+            });
+#endif
         plugin.api.set_function(
             "pick_file", [&plugin](const std::string& purpose) {
                 // purpose 由插件定义，输入与输出或不同数据类型可使用独立历史。
@@ -1301,6 +1419,16 @@ struct ToolPluginView::Impl {
         }
         plugin->build    = build.as<sol::protected_function>();
         plugin->onAction = onAction.as<sol::protected_function>();
+        const sol::object onAudioComplete =
+            definition["on_audio_export_complete"];
+        if ( onAudioComplete.is<sol::protected_function>() )
+            plugin->onAudioExportComplete =
+                onAudioComplete.as<sol::protected_function>();
+        else if ( onAudioComplete.get_type() != sol::type::lua_nil ) {
+            recordLoadError(std::move(chunkName),
+                            "on_audio_export_complete 必须是函数");
+            return;
+        }
         // 最近目录按 ID 载入，不与主题插件的启用状态共用配置键。
         plugin->recent = loadRecent(plugin->info.id);
         // API 绑定发生在首次 build 前，入口自身只定义清单，不做文件 I/O。
@@ -1423,6 +1551,19 @@ void ToolPluginView::update(UIManager* sourceManager)
              plugin.audioTask->done.load(std::memory_order_acquire) ) {
             // acquire 保证后台结果完整发布；标记先于 rebuild 防止重复执行。
             plugin.audioCompletionShown = true;
+            if ( plugin.onAudioExportComplete.valid() ) {
+                // 先为旧任务构造结果，回调随后可替换当前任务并登记下一次完成。
+                auto status                  = Impl::audioStatus(plugin);
+                plugin.audioCompletionActive = true;
+                const auto response =
+                    plugin.onAudioExportComplete(status, plugin.api);
+                plugin.audioCompletionActive = false;
+                if ( !response.valid() ) {
+                    const sol::error error = response;
+                    plugin.info.error      = error.what();
+                    continue;
+                }
+            }
             (void)Impl::rebuild(plugin);
         }
         if ( !plugin.open ) continue;

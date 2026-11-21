@@ -3,6 +3,7 @@
 #include <functional>
 #include <nfd.h>
 #include <string>
+#include <vector>
 
 #include "graphic/window/WindowPlatform.h"
 
@@ -25,6 +26,19 @@ void bindMainWindow(Graphic::PlatformWindowHandle* window);
                                    const nfdu8filteritem_t* filters,
                                    nfdfiltersize_t          filterCount,
                                    const nfdu8char_t*       defaultPath);
+
+/// @brief 在桌面原生对话框中一次选择多份文件。
+/// @param paths 成功时返回完整 UTF-8 路径列表；取消及失败时清空。
+/// @param filters 可选扩展名过滤器。
+/// @param count 过滤器数量。
+/// @param defaultPath 可选起始目录。
+/// @warning 用户显式操作的阻塞调用，仅在 UI 线程执行。
+#ifndef __ANDROID__
+[[nodiscard]] nfdresult_t openFiles(std::vector<std::string>& paths,
+                                    const nfdu8filteritem_t*  filters,
+                                    nfdfiltersize_t           count,
+                                    const nfdu8char_t*        defaultPath);
+#endif
 
 /// @brief 打开带统一父窗口和前台激活处理的原生保存选择器。
 /// @param outPath 输出 UTF-8 文件路径。
