@@ -1078,6 +1078,8 @@ void to_json(nlohmann::json& json, const EditorSettings& settings)
         // 启动与语言身份字段属于应用级偏好，不随单个项目迁移。
         { "recentProjectsLimit", settings.recentProjectsLimit },
         { "showWelcomeOnStartup", settings.m_showWelcomeOnStartup },
+        { "showUpdateOnStartup", settings.m_showUpdateOnStartup },
+        { "skippedUpdateVersion", settings.m_skippedUpdateVersion },
         { "language", settings.language },
         { "defaultCreator", normalizeCreatorIdentity(settings.defaultCreator) },
         // 渲染帧率和音频后端字段在下次启动时用于初始化底层设备。
@@ -1228,6 +1230,15 @@ void from_json(const nlohmann::json& json, EditorSettings& settings)
     const auto welcome = json.find("showWelcomeOnStartup");
     settings.m_showWelcomeOnStartup =
         welcome == json.end() || !welcome->is_boolean() || welcome->get<bool>();
+    // 缺失或类型异常时沿用原有启动检查行为，并清除无效的版本跳过记录。
+    const auto update = json.find("showUpdateOnStartup");
+    settings.m_showUpdateOnStartup =
+        update == json.end() || !update->is_boolean() || update->get<bool>();
+    const auto skippedVersion = json.find("skippedUpdateVersion");
+    settings.m_skippedUpdateVersion =
+        skippedVersion != json.end() && skippedVersion->is_string()
+            ? skippedVersion->get<std::string>()
+            : std::string{};
     settings.language = json.value("language", std::string("zh_cn"));
     // 创作者字符串在进入内存前统一规范化，持久化两端语义对称。
     settings.defaultCreator =

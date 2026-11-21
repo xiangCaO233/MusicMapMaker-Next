@@ -498,6 +498,12 @@ struct EditorSettings {
     /// @brief 启动时显示独立欢迎页；关闭页面不修改此偏好。
     bool m_showWelcomeOnStartup{ true };
 
+    /// @brief 允许启动时自动检查并提醒程序更新；手动检查始终可用。
+    bool m_showUpdateOnStartup{ true };
+
+    /// @brief 启动时忽略的发布版本，包含热修复修订号，空字符串表示未跳过。
+    std::string m_skippedUpdateVersion;
+
     /// @brief 语言设置 (zh_cn, en_us)
     std::string language{ "zh_cn" };
 

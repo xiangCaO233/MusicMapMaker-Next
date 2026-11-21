@@ -700,6 +700,20 @@ void SettingsView::drawSoftwareSettings()
                 }
             });
 
+        // 从设置可恢复被启动弹窗关闭的自动提醒，沿用软件页统一保存入口。
+        // 跳过记录属于单次发布，切换自动提醒开关时保留。
+        // 该开关只控制下一轮启动检查，当前手动检查不会被中断。
+        // 每帧读取全局配置，确保从弹窗返回后显示真实的提醒状态。
+        addSettingItem(
+            *sec,
+            rowIndex,
+            TR_CACHE("ui.settings.software.show_update_on_startup").data(),
+            maxLabelW,
+            [&](Clay_BoundingBox, bool) {
+                changed |= FeedbackCheckbox("##ShowUpdateOnStartup",
+                                            &settings.m_showUpdateOnStartup);
+            });
+
         // 语言选择使用固定自描述名称，选中后立即切换 Translator。
         addSettingItem(
             *sec,
