@@ -9,6 +9,22 @@
 
 namespace MMM::UI
 {
+namespace
+{
+/// @brief 用固定窗口身份区分主画布和同属主区的工具页。
+/// @warning 每帧比较标题后缀，不分配内存或查询会话。
+bool isCanvasWindow(const ImGuiWindow* window)
+{
+    if ( !window ) return false;
+    const std::string_view name(window->Name);
+    const auto             separator = name.rfind("###");
+    const auto             id =
+        separator == std::string_view::npos ? name : name.substr(separator + 3);
+    // 谱名和脏标记会变化，只有稳定内部身份代表画布。
+    return id.starts_with("Canvas_") || id == "Basic2DCanvas";
+}
+}  // namespace
+
 /// @brief 波形和频谱归入主区标签，避免移动端出现无法操作的桌面浮窗。
 /// @details 后缀与业务视图的 ### 身份一致，语言切换不改变其归属。
 /// @warning 每帧常量级文本比较，不拥有窗口或业务会话。
@@ -33,6 +49,33 @@ void MobileDockLayout::restore(float timingRatio, float previewRatio,
     m_restoreFocus   = selectedTab;
     m_startupFocus   = selectedTab;
     m_visibility     = -1;
+}
+
+/// @brief 标记显式重建，并保留可用于重新显示工作台的画布身份。
+/// @warning 只在还原按钮触发时查找已登记窗口，无文件访问或会话操作。
+void MobileDockLayout::reset(float timingRatio, float previewRatio,
+                             float workbenchRatio)
+{
+    const auto isOpenCanvas = [](const ImGuiWindow* window) {
+        return isCanvasWindow(window) && window->WasActive;
+    };
+    ImGuiID selected{};
+    // 优先保留正在编辑的谱面。若当前在设置、欢迎或音频页，改选已打开的画布。
+    if ( isOpenCanvas(ImGui::FindWindowByID(m_lastMainSelection)) )
+        selected = m_lastMainSelection;
+    else {
+        for ( const auto& binding : m_windows ) {
+            if ( binding.m_panel == MobileDockPanel::Main &&
+                 isOpenCanvas(ImGui::FindWindowByID(binding.m_window)) ) {
+                selected = binding.m_window;
+                break;
+            }
+        }
+    }
+    // 复用启动焦点机制，在画布完成 Begin 后再生效，避免仅聚焦空宿主。
+    restore(timingRatio, previewRatio, selected, workbenchRatio);
+    m_lastMainSelection = selected;
+    m_resetPending      = true;
 }
 
 /// @brief 冻结用户实际调整结果，不能用最初默认比例冒充当前停靠宽度。
@@ -347,6 +390,9 @@ ImGuiID MobileDockLayout::node(MobileDockPanel panel) const
 /// @warning 每帧固定节点查询，不分配字符串或访问后台会话。
 bool MobileDockLayout::isMainCanvasSelected() const
 {
+    // 还原首帧的旧焦点可能仍在抽屉或工具页；按已选定的画布决定工作台显隐。
+    if ( m_resetPending )
+        return isCanvasWindow(ImGui::FindWindowByID(m_startupFocus));
     const auto* node = ImGui::DockBuilderGetNode(m_center);
     // 重建首帧尚未结算原生可见页，先使用待恢复身份，避免显隐条件反向触发重建。
     const auto* window = m_startupFocus ? ImGui::FindWindowByID(m_startupFocus)
@@ -367,14 +413,7 @@ bool MobileDockLayout::isMainCanvasSelected() const
     if ( window &&
          std::string_view(window->Name).ends_with("###MobileWorkbench") )
         window = ImGui::FindWindowByID(m_lastMainSelection);
-    if ( !window ) return false;
-    const std::string_view name(window->Name);
-    // 标题随谱名和语言变化，不能以可见文字判断编辑上下文。
-    const auto separator = name.rfind("###");
-    const auto id =
-        separator == std::string_view::npos ? name : name.substr(separator + 3);
-    // 显示标题可包含谱名和脏标记，只有稳定内部身份能够区分真正的编辑画布。
-    return id.starts_with("Canvas_") || id == "Basic2DCanvas";
+    return isCanvasWindow(window);
 }
 
 /// @brief
@@ -420,6 +459,9 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
         (timing ? 1 : 0) | (preview ? 2 : 0) | (workbench ? 4 : 0);
     const auto flags = ImGuiDockNodeFlags_NoWindowMenuButton |
                        ImGuiDockNodeFlags_NoCloseButton;
+    const bool reset = std::exchange(m_resetPending, false);
+    // 只移除当前移动宿主的树。已被拖出来的窗口在新树建好后按原身份归位。
+    if ( reset ) ImGui::DockBuilderRemoveNode(m_root);
     if ( !ImGui::DockBuilderGetNode(m_root) ) {
         // 没有已保存的移动根时才创建默认布局，不能因显隐或旋转销毁用户树。
         ImGui::DockBuilderAddNode(m_root, ImGuiDockNodeFlags_DockSpace | flags);
@@ -453,10 +495,27 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
         // 从两侧向内切出辅助区，最终为预览、主区、时间线、工作台。
         // 恢复仍沿用各分区自身宽度比例，不把旧版保存的左右位置当作新布局依据。
         // 最右工作台先切出，随后时间线仅使用剩余空间，不会越过工作台。
-        if ( workbench )
+        // 即使此刻没有画布，也要为保存过的工作台提供新的默认落点。
+        if ( workbench || reset )
             splitSide(m_workbenchRatio, ImGuiDir_Right, m_workbench);
         if ( preview ) splitSide(m_previewRatio, ImGuiDir_Left, m_preview);
         if ( timing ) splitSide(m_timingRatio, ImGuiDir_Right, m_timing);
+        if ( reset ) {
+            // 分区可能从未在本次启动中打开，直接更新原生 ini 中固定身份的落点。
+            // 这样 Finish 绑定窗口时就能解析正确的叶节点。
+            ImGui::DockBuilderDockWindow("###Timeline", m_timing);
+            ImGui::DockBuilderDockWindow("###PreviewWindow", m_preview);
+            ImGui::DockBuilderDockWindow("###MobileWorkbench", m_workbench);
+            // 保存窗口身份而非标题；运行期名称包含最新谱名，且 ### 哈希稳定。
+            // 所有登记窗口重新停靠，包括浮在屏幕外及不在当前页签的文档。
+            for ( const auto& binding : m_windows ) {
+                if ( binding.m_panel != MobileDockPanel::Main ) continue;
+                if ( const auto* window =
+                         ImGui::FindWindowByID(binding.m_window) )
+                    ImGui::DockBuilderDockWindow(window->Name, m_center);
+            }
+            ImGui::MarkIniSettingsDirty();
+        }
         ImGui::DockBuilderFinish(m_root);
         // 完成整棵树后再记录组合，下一帧即可走不重建的稳定路径。
         // 业务窗口稍后依次 Begin，并从当前布局获取各自所属叶节点。
@@ -466,11 +525,18 @@ void MobileDockLayout::render(ImVec2 position, ImVec2 size, float scale,
     // 不能把窗口尚未 Begin 的启动阶段误判为用户删除了全部停靠节点。
     // 已保存树由 ImGui 启动加载；恢复窗口身份后沿用真实节点，不消费桌面根。
     // 显隐切换只改变业务窗口是否提交，原生隐藏叶会释放占用几何。
-    refreshNodes();
-    if ( workbench )
-        ensurePanel(MobileDockPanel::Workbench, m_workbenchRatio, false);
-    if ( preview ) ensurePanel(MobileDockPanel::Preview, m_previewRatio, true);
-    if ( timing ) ensurePanel(MobileDockPanel::Timing, m_timingRatio, false);
+    // 新树已经有完整落点，旧活动焦点与浮动窗口不应在此帧覆盖它们。
+    if ( !reset ) refreshNodes();
+    // 拖出标签时旧叶可能已经释放，原生停靠仍在处理被拖动的窗口。
+    // 此时补叶会再次分割同一棵树，等原生拖动结束后的常规帧再补缺失位置。
+    if ( !ImGui::GetCurrentContext()->MovingWindow ) {
+        if ( workbench )
+            ensurePanel(MobileDockPanel::Workbench, m_workbenchRatio, false);
+        if ( preview )
+            ensurePanel(MobileDockPanel::Preview, m_previewRatio, true);
+        if ( timing )
+            ensurePanel(MobileDockPanel::Timing, m_timingRatio, false);
+    }
     // 可见性只决定当前业务窗口是否提交，缓存节点仍供下次打开复用。
     // 关闭工作台后不能清除用户合并到其它标签栏的原生设置。
     m_visibility = visible;

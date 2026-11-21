@@ -1775,6 +1775,7 @@ return {
 	["ui.mobile.erase.hint"] = "Tap or sweep objects, then release to erase. Polylines are erased as a whole. A second finger cancels this stroke.",
 	["ui.mobile.workbench"] = "Workbench",
 	["ui.mobile.workbench_shown"] = "Workbench: Shown",
+	["ui.mobile.restore_layout"] = "Restore Layout",
 	["ui.mobile.workbench_hidden"] = "Workbench: Hidden",
 	["ui.mobile.select_all"] = "Select All",
 	["ui.mobile.annotate"] = "Annotate",

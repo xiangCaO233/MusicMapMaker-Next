@@ -1774,6 +1774,7 @@ return {
 	["ui.mobile.erase.hint"] = "点按或拖过物件，松手擦除；折线整条删除。第二指接管会取消本笔。",
 	["ui.mobile.workbench"] = "工具工作台",
 	["ui.mobile.workbench_shown"] = "工具工作台：显示",
+	["ui.mobile.restore_layout"] = "还原布局",
 	["ui.mobile.workbench_hidden"] = "工具工作台：隐藏",
 	["ui.mobile.select_all"] = "全选",
 	["ui.mobile.annotate"] = "添加批注",
