@@ -301,7 +301,9 @@ bool isSafeRelativeAssetPath(const std::string& path)
         const std::size_t end     = path.find('/', start);
         const auto        segment = path.substr(
             start, end == std::string::npos ? std::string::npos : end - start);
-        if ( segment.empty() || segment == "." || segment == ".." ) {
+        // Windows 会规范化尾空格和尾点；先拒绝这些别名再检查组合路径。
+        if ( segment.empty() || segment.back() == ' ' ||
+             segment.back() == '.' ) {
             return false;
         }
         if ( end == std::string::npos ) break;
@@ -1061,6 +1063,133 @@ AssetSyncResult downloadFullPackage(const AssetSyncOptions& options,
     return result;
 }
 
+/// @brief 先完整解压本地包，再把 assets 树发布到实际资源根。
+/// @details 临时目录与资源根共用文件系统。首次导入整树重命名，已有目录
+/// 只覆盖包内同名文件，保留自定义资源。已发布文件用同目录树内的原子移动。
+/// @param options 本地 ZIP、资源位置以及可选取消回调。
+/// @param assetsExist 调用前已确认当前资源根是否存在。
+/// @param errorMessage 解压、路径检查或发布失败时的诊断。
+/// @return 包内资源已经发布且本地版本快路径已失效。
+bool importLocalPackage(const AssetSyncOptions& options, bool assetsExist,
+                        std::string& errorMessage)
+{
+    std::error_code ec;
+    // 暂存与实际资源根共用文件系统，避免跨盘时降级成截断覆盖。
+    // 目标父目录可能尚不存在，冷启动先建立该层，再创建任务目录。
+    const auto parent = options.assetsRootPath.parent_path();
+    std::filesystem::create_directories(parent, ec);
+    if ( ec ) {
+        errorMessage = ec.message();
+        return false;
+    }
+    // 使用单调时钟后缀只为隔离同名导入任务，目录创建仍检查是否已存在。
+    // 目录名不取自 ZIP，归档不能指定待清理的上级目录。
+    // 仅回收本次独占创建的目录，不能在重试或其他进程运行时误删其工作区。
+    const auto stamp =
+        std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto staging =
+        parent / (".mmm-assets-import-" + std::to_string(stamp));
+    if ( !std::filesystem::create_directory(staging, ec) ) {
+        errorMessage =
+            ec ? ec.message() : "Asset import directory already exists";
+        return false;
+    }
+    struct RemoveStaging {
+        std::filesystem::path m_path;  ///< 当前任务独占的解压目录。
+        /// @brief 成功、失败、取消均回收解压中间文件。
+        ~RemoveStaging()
+        {
+            std::error_code cleanupError;
+            std::filesystem::remove_all(m_path, cleanupError);
+        }
+    } cleanup{ staging };
+
+    emitProgress(options,
+                 { AssetSyncProgressStage::kImportingPackage,
+                   "Importing local asset package" });
+    // 这里复用下载路径的 ZIP 读取和校验，解压错误只影响任务独占目录。
+    // 解压过程也可以被退出或新一轮资源选择打断，已有安装尚未被写入。
+    if ( !AssetSyncService::extractZipArchive(options.localPackagePath,
+                                              staging,
+                                              errorMessage,
+                                              options.cancellationCallback) )
+        return false;
+
+    // 仅发布约定的 assets 顶层；压缩包里的其他顶层文件不进入配置目录。
+    // 发布时只读取资源子树，压缩包不能覆盖编辑器的配置、布局和日志文件。
+    // 资源根可由调用方改变名称，归档顶层仍与网站的固定 assets 布局一致。
+    const auto extracted = staging / "assets";
+    if ( !std::filesystem::is_directory(extracted, ec) || ec ) {
+        errorMessage = "Asset package must contain an assets directory";
+        return false;
+    }
+    // 本地 ZIP 中的版本号不代表本机实际文件已通过远端清单校验。
+    std::filesystem::remove(extracted / kLocalVersionFileName, ec);
+    if ( ec ) {
+        errorMessage = ec.message();
+        return false;
+    }
+
+    // 先检查整个文件树。对于已有安装，当前文件与所属目录须仍处于实际资源根内。
+    // 配置根本身可能位于管理员或用户配置的软链接路径下，因此先解析根。
+    // 在这个根以下不沿用目录重定向，防止覆盖参照资产目录之外的自定义文件。
+    const auto canonicalRoot =
+        std::filesystem::weakly_canonical(options.assetsRootPath, ec);
+    if ( ec || !canonicalRoot.is_absolute() ) {
+        // 路径转换失败不能继续遍历；迭代器构造会重设错误码。
+        // 资源根不明确时也绝不能把相对条目写入进程工作目录。
+        errorMessage =
+            ec ? ec.message() : "Asset import destination is not absolute";
+        return false;
+    }
+    // 收集相对路径使预检与发布使用同一个基准，不依赖遍历器在 rename 后的状态。
+    // ZIP 显式空目录无需逐个合并；增量文件和非空目录的上级会在写入前创建。
+    std::vector<std::filesystem::path> files;
+    for ( std::filesystem::recursive_directory_iterator it(extracted, ec), end;
+          !ec && it != end;
+          it.increment(ec) ) {
+        if ( isCancellationRequested(options) ) return false;
+        const auto relative    = it->path().lexically_relative(extracted);
+        const auto destination = canonicalRoot / relative;
+        const auto canonicalTarget =
+            std::filesystem::weakly_canonical(destination, ec);
+        if ( ec || canonicalTarget != destination ) {
+            errorMessage = "Asset import destination contains a redirect: " +
+                           Config::pathToUtf8(relative);
+            return false;
+        }
+        // 解压器只生成普通文件；目录检查仍参与预检，以拦住上层路径的重定向。
+        if ( it->is_regular_file(ec) ) files.push_back(relative);
+    }
+    // 空归档或只有版本标记的归档不能建立可供离线启动的资源安装。
+    // 校验失败不删除已经存在的版本标记，原安装仍能正常重试。
+    if ( ec || files.empty() ) {
+        errorMessage =
+            ec ? ec.message() : "Asset package contains no resource files";
+        return false;
+    }
+    if ( isCancellationRequested(options) ) return false;
+    if ( !assetsExist ) {
+        // 冷启动一次发布整棵树；无效压缩包或中途取消不会留下半份资源根。
+        std::filesystem::rename(extracted, options.assetsRootPath, ec);
+    } else {
+        // 在首次覆盖前移除旧标记。即使后续失败或离线，下次也会精确核对。
+        std::filesystem::remove(canonicalRoot / kLocalVersionFileName, ec);
+        // 按单文件原子替换保留旧安装中未包含于归档的用户资源。
+        // 取消或 I/O 失败时不恢复被淘汰的版本号，避免下次跳过剩余差异。
+        for ( const auto& relative : files ) {
+            if ( ec || isCancellationRequested(options) ) break;
+            const auto destination = canonicalRoot / relative;
+            std::filesystem::create_directories(destination.parent_path(), ec);
+            if ( !ec )
+                std::filesystem::rename(extracted / relative, destination, ec);
+        }
+    }
+    if ( ec ) errorMessage = ec.message();
+    // 在最终操作后确认取消位，防止已经切换来源时仍发出清单或增量下载请求。
+    return !ec && !isCancellationRequested(options);
+}
+
 /// @brief 按清单下载缺失或变更的单文件。
 /// @details
 /// 先逐项检查安全路径、普通文件、大小和 SHA-256，按清单顺序收集过期项。
@@ -1308,7 +1437,7 @@ AssetSyncResult AssetSyncService::sync(const AssetSyncOptions& options)
 
     std::error_code existsError;
     // exists 查询失败等同于路径不可可靠使用；后续目录检查会形成明确错误。
-    const bool assetsExist =
+    bool assetsExist =
         std::filesystem::exists(options.assetsRootPath, existsError);
     if ( assetsExist ) {
         // 已存在路径必须是目录，普通文件不能被完整包解压覆盖。
@@ -1321,6 +1450,22 @@ AssetSyncResult AssetSyncService::sync(const AssetSyncOptions& options)
             result.errorMessage = "Assets path exists but is not a directory";
             return result;
         }
+    }
+
+    // 非空路径仅表示本轮选定来源，不保留到后续启动的远程配置中。
+    // 导入和普通更新使用同一份目录和校验逻辑，包旧格式或损坏时仍能重试。
+    const bool importing = !options.localPackagePath.empty();
+    if ( importing ) {
+        // 本地包优先于清单请求和完整下载，即使目标已有同版本资源也先导入。
+        AssetSyncResult result;
+        if ( !importLocalPackage(options, assetsExist, result.errorMessage) ) {
+            if ( isCancellationRequested(options) ) return cancelledResult();
+            result.status = AssetSyncStatus::kError;
+            return result;
+        }
+        // 导入成功后的网络分支只核对清单和逐文件补齐。
+        // 若清单不可达，保留刚完成的文件以便离线启动。启动层再加载默认皮肤。
+        assetsExist = true;
     }
 
     std::string manifestText;
@@ -1393,10 +1538,12 @@ AssetSyncResult AssetSyncService::sync(const AssetSyncOptions& options)
         return keepExistingAssetsAfterUpdateFailure(manifestParseError);
     }
 
+    // 本地导入主动绕过快路径；离线后也没有可充当已验证依据的版本号。
+    // 清单成功时只下载内容不同的条目，导入包本身的 ZIP 摘要不参与判断。
     const auto localVersion = readLocalVersionFile(options.assetsRootPath);
     // 默认快速路径信任完整安装后写入的版本标记，显式精确模式绕过该优化。
-    if ( !options.forcePreciseVerification && !manifest->version.empty() &&
-         localVersion == manifest->version ) {
+    if ( !importing && !options.forcePreciseVerification &&
+         !manifest->version.empty() && localVersion == manifest->version ) {
         XINFO(
             "AssetSync: local assets version {} is current; precise file "
             "verification skipped",

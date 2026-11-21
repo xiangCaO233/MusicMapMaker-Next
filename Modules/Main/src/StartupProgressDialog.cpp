@@ -65,6 +65,7 @@ void StartupProgressDialog::beginSync()
     m_hasWarning = false;
     // 按钮请求是一次性边沿状态，重试时不能继承此前点击结果。
     m_retryRequested    = false;
+    m_importRequested   = false;
     m_continueRequested = false;
     m_exitRequested     = false;
     // 清理文本释放旧提示语义，后续状态只读取与当前标志对应的字段。
@@ -142,6 +143,22 @@ bool StartupProgressDialog::consumeRetryRequest()
     const bool requested = m_retryRequested;
     m_retryRequested     = false;
     return requested;
+}
+
+/// @brief 取走界面发出的资源包选择请求，避免一次点击打开多个选择器。
+bool StartupProgressDialog::consumeImportRequest()
+{
+    const bool requested = m_importRequested;
+    m_importRequested    = false;
+    return requested;
+}
+
+/// @brief 同步平台文件选择状态，使等待和失败都能在启动界面上看到。
+void StartupProgressDialog::setImportSelectionState(bool pending, bool failed)
+{
+    // 保存纯显示状态，不从视图调用系统 API，也不让后台进度覆盖选择结果。
+    m_importPending = pending;
+    m_importFailed  = failed;
 }
 
 /// @brief 读取并清除一次继续按钮请求。
@@ -282,6 +299,12 @@ void StartupProgressDialog::onUpdateUI()
         controlsHeight += ImGui::GetTextLineHeightWithSpacing() + rowGap +
                           ImGui::GetFrameHeight();
 
+    // 导入单独一行，Android 横屏的可用空间较窄时也不与重试或退出竞争。
+    if ( !m_hasWarning ) controlsHeight += rowGap + ImGui::GetFrameHeight();
+    // 与普通行一起计入面板高度，错误提示出现时不挤出关闭和重试按钮。
+    if ( m_importFailed && !m_hasWarning )
+        controlsHeight += rowGap + ImGui::GetTextLineHeight();
+
     // 展开时将日志与控件一起居中，日志高度受当前窗口限制。
     // 在较矮的视口优先让操作按钮可见，日志继续在剩余空间内滚动。
     // 用固定可见行数设定目标高度，后台日志条目数变化时面板不抖动。
@@ -333,6 +356,22 @@ void StartupProgressDialog::onUpdateUI()
     // 重用原有会话选线，失败也是换线时机；皮肤警告没有待下载内容。
     // 不在 UI 记录或覆盖实际选中的地址，后台下载仍按共用线路策略处理。
     if ( !m_hasWarning ) UI::drawDownloadRouteSelector(false, scale);
+
+    // 警告页只有确认和退出语义，此时所有资源已经准备完毕。
+    // 错误页仍可打开选择器，允许在联网失败后直接恢复。
+    // 同一按钮 ID 跨阶段不变，切换文字不会把旧点击计为新请求。
+    if ( !m_hasWarning ) {
+        // 一次系统选择只有一个结果槽，平台复制尚未完成也属于在途状态。
+        // 在渲染结束后消费请求，桌面的模态文件对话框不会持有 ImGui 帧状态。
+        ImGui::BeginDisabled(m_importPending);
+        if ( UI::FeedbackButton(m_importPending
+                                    ? "正在选择资源包…###StartupImport"
+                                    : "导入资源包###StartupImport") )
+            m_importRequested = true;
+        ImGui::EndDisabled();
+        // 选取器失败与资源同步错误可以同时存在，仍可用下面的重试或退出按钮。
+        if ( m_importFailed ) ImGui::TextUnformatted("无法打开资源包选择器");
+    }
 
     if ( UI::FeedbackButton(detailsExpanded
                                 ? "收起详情###StartupDetailsToggle"
@@ -460,6 +499,8 @@ float StartupProgressDialog::progressFraction(
     // 各区间预留阶段切换反馈，避免检查、下载和解压显示同一百分比。
     switch ( progress.stage ) {
     // 清单检查只占初始小段，给用户立即可见的启动反馈。
+    // 导入是清单验证前的独立阶段，使用较低进度避免误提示资源已可启动。
+    case Network::AssetSyncProgressStage::kImportingPackage: return 0.04f;
     case Network::AssetSyncProgressStage::kCheckingManifest: return 0.06f;
     case Network::AssetSyncProgressStage::kDownloadingPackage:
         // 整包下载覆盖主要区间，字节进度在其中线性展开。
@@ -498,6 +539,8 @@ std::string StartupProgressDialog::progressText(
 {
     // 阶段文本与 progressFraction 使用同一枚举分派，保证描述和进度一致。
     switch ( progress.stage ) {
+    case Network::AssetSyncProgressStage::kImportingPackage:
+        return "正在解压本地资源包…";
     case Network::AssetSyncProgressStage::kCheckingManifest:
         // 清单阶段不依赖服务端消息，保持首次反馈稳定。
         return "正在检查资源更新...";

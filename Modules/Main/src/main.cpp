@@ -24,6 +24,7 @@
 #include "network/collaboration/CollaborationBuildFingerprint.h"
 #include "network/collaboration/RtcDiagnosticLogging.h"
 #include "runtime/AppThreadPool.h"
+#include "ui/utils/NativeFileDialog.h"
 #include "ui/utils/UIWidgetUtils.h"
 
 #include <fmt/core.h>
@@ -37,6 +38,7 @@
 #include <filesystem>
 #include <future>
 #include <ice/thread/ThreadPool.hpp>
+#include <memory>
 #include <string>
 #include <thread>
 #include <utility>
@@ -248,6 +250,95 @@ enum class StartupPreparationResult : std::uint8_t {
     Failed      ///< 临时图形上下文或资源准备流程初始化失败。
 };
 
+/// @brief 启动页使用的原生文件选择器生命周期。
+/// @note Android 的系统选择器依赖 Activity，不需要先授权工程目录。
+/// @note 桌面选取器 owner 只能引用启动期窗口，不能保留到正式窗口。
+/// @warning 仅启动线程构造和析构，不在 ImGui 渲染回调初始化平台后端。
+/// @details 桌面绑定当前启动窗口；正式编辑器稍后独立初始化自己的选择器。
+struct StartupFileDialogScope final {
+    /// @brief 初始化成功时才能打开平台选择器并在析构时释放。
+    /// @details Android 使用相同接口的 SDL/SAF 外壳，无需初始化桌面 GTK 或
+    /// COM。
+    bool m_ready{ NFD_Init() == NFD_OKAY };
+
+    /// @brief 初始化后绑定窗口，原生模态对话框始终属于当前启动页。
+    explicit StartupFileDialogScope(Graphic::NativeWindow& window)
+    {
+        // 正式窗口尚未创建；此时不能借用编辑器稍后才提供的 owner。
+        if ( m_ready )
+            UI::NativeFileDialog::bindMainWindow(window.getWindowHandle());
+    }
+
+    /// @brief 在启动窗口销毁前解除绑定，避免编辑器复用旧窗口。
+    ~StartupFileDialogScope()
+    {
+        if ( !m_ready ) return;
+        UI::NativeFileDialog::bindMainWindow(nullptr);
+        NFD_Quit();
+    }
+};
+
+/// @brief 回收 Android 本次选取的缓存文件；桌面始终保留选中的原文件。
+/// @warning 启动低频清理，只对系统选取器交付的私有副本调用。
+void releaseStartupPackageSelection(const std::filesystem::path& path)
+{
+#ifdef __ANDROID__
+    if ( path.empty() ) return;
+    std::error_code error;
+    // 选取器交付的是独立缓存路径，删除副本不会触碰用户授权的源 ZIP。
+    std::filesystem::remove(path, error);
+#else
+    (void)path;
+#endif
+}
+
+/// @brief 启动线程独占的文件选取状态，回调允许晚于启动窗口结束。
+/// @details 在途状态只跨帧，由 SDL 同一线程提交、查询和消费。
+/// 原生路径只在系统选取器成功后保存，取消和平台错误不替换后台任务。
+struct StartupPackageSelection final {
+    bool                  m_pickerReady{ false };  ///< 平台选择器可正常初始化。
+    bool                  m_pending{ false };  ///< 正在等待系统选择或缓存复制。
+    bool                  m_failed{ false };   ///< 平台文件选择失败。
+    std::filesystem::path m_path;  ///< 已选定但尚未交给后台同步的本地路径。
+
+    /// @brief 退出期间如仍有未消费的结果，回收 Android 缓存文件。
+    ~StartupPackageSelection() { releaseStartupPackageSelection(m_path); }
+};
+
+/// @brief 在启动窗口的 ImGui 帧外处理文件选择器请求和完成结果。
+/// @param progressDialog 当前显示的启动进度页或错误页。
+/// @param picker 启动期文件请求和选中路径的唯一状态所有者。
+/// @warning 启动低频循环：常态只轮询已完成结果；桌面仅在点击后打开模态窗口。
+void pollStartupPackageSelection(
+    StartupProgressDialog&                          progressDialog,
+    const std::shared_ptr<StartupPackageSelection>& picker)
+{
+    // Android 结果只能由这条 UI 线程执行回调；桌面同步选择在此次调用内完成。
+    // 两端都以已交付路径作为切换来源的唯一依据，取消选择只结束选择器自身。
+    UI::NativeFileDialog::pollAsyncDialogs();
+    if ( progressDialog.consumeImportRequest() && !picker->m_pending &&
+         picker->m_path.empty() ) {
+        // 平台初始化失败与取消选择的含义不同，错误文案不能遮掉已有同步结果。
+        picker->m_failed = !picker->m_pickerReady;
+        if ( picker->m_pickerReady ) {
+            picker->m_pending = true;
+            // 异步授权只持有状态，不访问可能已关闭的启动窗口或进度控件。
+            UI::NativeFileDialog::openAssetPackageAsync(
+                [picker](nfdresult_t result, const std::string& selected) {
+                    // 工作线程或 Java 不持有 C++
+                    // 回调的原始窗口引用，只发布返回值。
+                    picker->m_pending = false;
+                    picker->m_failed = result == NFD_ERROR ||
+                                       (result == NFD_OKAY && selected.empty());
+                    if ( result == NFD_OKAY && !selected.empty() )
+                        picker->m_path = Config::utf8ToPath(selected);
+                });
+        }
+    }
+    // Pending 时禁止重复点击，仍允许由同一界面退出程序。
+    progressDialog.setImportSelectionState(picker->m_pending, picker->m_failed);
+}
+
 /// @brief 后台资源同步任务的跨线程完成状态。
 struct AssetSyncTaskState final {
     /// @brief 后台同步结束后写入的最终结果。
@@ -264,12 +355,16 @@ struct AssetSyncTaskState final {
 /// @param window 独立的启动资源准备窗口。
 /// @param progressDialog 启动进度界面。
 /// @param forcePreciseVerification 是否忽略版本标记并逐文件校验资源。
+/// @param localPackage 本轮优先导入的资源包。
+/// @param picker 等候界面期间用于切换资源来源的系统选择器。
 /// @return 本次资源同步结果。
 /// @warning 启动低频循环：同步期间持续执行 Vulkan 帧循环，网络和文件系统
 /// 操作只运行在后台线程。
 Network::AssetSyncResult runAssetSyncWithStartupUI(
     Graphic::VKContext& context, Graphic::NativeWindow& window,
-    StartupProgressDialog& progressDialog, bool forcePreciseVerification)
+    StartupProgressDialog& progressDialog, bool forcePreciseVerification,
+    const std::filesystem::path&                    localPackage,
+    const std::shared_ptr<StartupPackageSelection>& picker)
 {
     // 每次重试重新初始化界面和请求标志，不继承上一轮错误状态。
     progressDialog.beginSync();
@@ -278,6 +373,7 @@ Network::AssetSyncResult runAssetSyncWithStartupUI(
     // 默认选项集中维护服务地址、资源根和校验策略，本函数只覆盖本轮差异。
     auto options = Network::AssetSyncService::defaultOptions();
     options.forcePreciseVerification = forcePreciseVerification;
+    options.localPackagePath         = localPackage;
     // 后台回调只发布值快照，StartupProgressDialog 负责跨线程同步。
     options.progressCallback =
         [&progressDialog](const Network::AssetSyncProgress& progress) {
@@ -315,13 +411,21 @@ Network::AssetSyncResult runAssetSyncWithStartupUI(
     do {
         // 主线程持续提交图形帧，网络、校验和解压均留在后台任务。
         context.getRenderer().render(window, graphicUserHooks);
-        if ( window.shouldClose() || progressDialog.isExitRequested() ) {
-            // 请求取消不等待服务立即停止，循环继续渲染直至任务发布终态。
+        const bool exiting =
+            window.shouldClose() || progressDialog.isExitRequested();
+        // 先读取退出意图，避免关窗这帧还打开另一个原生模态窗口。
+        if ( !exiting ) pollStartupPackageSelection(progressDialog, picker);
+        if ( exiting || !picker->m_path.empty() ) {
+            // 取消选择不会干扰原任务。确认新包后先让旧任务结束，避免并发写资源根。
             cancellationRequested.store(true, std::memory_order_relaxed);
         }
-        // 8 毫秒只限制启动等待循环占用，不用于业务状态同步或视觉延迟。
+        // 完成位独立于文件选择，不能在 Android 系统界面暂时取得焦点时提前退场。
+        if ( taskState.m_finished.load(std::memory_order_acquire) &&
+             (exiting || !picker->m_pending) )
+            break;
+        // 后台完成后也保留界面直到文件选择结束，防止系统选择器被切换主窗口打断。
         std::this_thread::sleep_for(std::chrono::milliseconds(8));
-    } while ( !taskState.m_finished.load(std::memory_order_acquire) );
+    } while ( true );
 
     // acquire 已保证结果可见，wait 进一步回收线程池任务的 future 状态。
     syncFuture.wait();
@@ -337,7 +441,8 @@ Network::AssetSyncResult runAssetSyncWithStartupUI(
 /// @warning 启动低频循环：只渲染错误界面并读取按钮状态。
 bool waitForStartupRetry(Graphic::VKContext&    context,
                          Graphic::NativeWindow& window,
-                         StartupProgressDialog& progressDialog)
+                         StartupProgressDialog& progressDialog,
+                         const std::shared_ptr<StartupPackageSelection>& picker)
 {
     // 钩子数组生命周期覆盖整个等待循环，渲染器只借用其中指针。
     std::array<Graphic::IGraphicUserHook*, 1> graphicUserHooks{
@@ -346,8 +451,13 @@ bool waitForStartupRetry(Graphic::VKContext&    context,
     while ( !window.shouldClose() && !progressDialog.isExitRequested() ) {
         // 错误界面仍保持窗口事件和 Vulkan 帧循环推进。
         context.getRenderer().render(window, graphicUserHooks);
-        // 请求采用消费语义，true 只会结束本轮一次。
-        if ( progressDialog.consumeRetryRequest() ) return true;
+        if ( window.shouldClose() || progressDialog.isExitRequested() )
+            return false;
+        pollStartupPackageSelection(progressDialog, picker);
+        // 文件选择成功也可以结束错误等待，下一轮优先使用选中的本地 ZIP。
+        if ( !picker->m_path.empty() ||
+             (!picker->m_pending && progressDialog.consumeRetryRequest()) )
+            return true;
         // 低频等待限制空闲 CPU，占用时间不参与同步正确性判断。
         std::this_thread::sleep_for(std::chrono::milliseconds(8));
     }
@@ -409,8 +519,11 @@ StartupPreparationResult prepareStartupAssets()
     // 窗口先于对话框构造，确保 Logo 管线先于设备和平台窗口释放。
     StartupWindow startup("MusicMapMaker - Resource Update");
     if ( !startup.isReady() ) return StartupPreparationResult::Failed;
-    auto& startupContext = startup.context();
-    auto& startupWindow  = startup.window();
+    auto&                  startupContext = startup.context();
+    auto&                  startupWindow  = startup.window();
+    StartupFileDialogScope fileDialog(startupWindow);
+    auto                   picker = std::make_shared<StartupPackageSelection>();
+    picker->m_pickerReady         = fileDialog.m_ready;
 
     // 对话框跨重试复用，beginSync 会在每轮开始时清理错误和按钮状态。
     StartupProgressDialog startupProgressDialog;
@@ -432,21 +545,39 @@ StartupPreparationResult prepareStartupAssets()
     bool       skinLoaded      = false;
     // 首轮可使用版本快路径；用户重试后强制逐文件验证以真正修复损坏。
     bool forcePreciseVerification = false;
+    // 自动包来源只在这次冷启动采样；不存在时保持既有联网启动流程。
+    // 用户明确选中的包可接替失败的自动包，而不会在重试时被它再次覆盖。
+    std::filesystem::path adjacentPackage;
+#ifndef __ANDROID__
+    // 只检查真实可执行文件所在目录。自动包本次启动仅尝试一次，失败仍可换包或重试下载。
+    const auto candidate =
+        Config::AppPaths::executableDirectoryPath() / "assets.zip";
+    std::error_code probeError;
+    if ( std::filesystem::is_regular_file(candidate, probeError) )
+        adjacentPackage = candidate;
+#endif
 
     while ( !skinLoaded ) {
-        // 每轮同步在后台执行，当前线程持续拥有和渲染临时图形资源。
+        const bool manual       = !picker->m_path.empty();
+        const auto localPackage = manual ? std::exchange(picker->m_path, {})
+                                         : std::exchange(adjacentPackage, {});
+        // 旧任务已停止才开始新一轮。Android 缓存必须活到后台解压返回。
         const auto assetSyncResult =
             runAssetSyncWithStartupUI(startupContext,
                                       startupWindow,
                                       startupProgressDialog,
-                                      forcePreciseVerification);
+                                      forcePreciseVerification,
+                                      localPackage,
+                                      picker);
+        if ( manual ) releaseStartupPackageSelection(localPackage);
 
-        // 服务取消、窗口关闭和 UI 退出请求统一映射为正常用户取消结果。
-        if ( assetSyncResult.status == Network::AssetSyncStatus::kCancelled ||
-             startupWindow.shouldClose() ||
-             startupProgressDialog.isExitRequested() ) {
+        if ( startupWindow.shouldClose() ||
+             startupProgressDialog.isExitRequested() )
             return StartupPreparationResult::Cancelled;
-        }
+        // 新选择可能恰好撞上旧任务完成。优先处理选中的资源，再尝试加载皮肤。
+        if ( !picker->m_path.empty() ) continue;
+        if ( assetSyncResult.status == Network::AssetSyncStatus::kCancelled )
+            return StartupPreparationResult::Cancelled;
 
         // 错误文本在每轮重新构造，只有 skinLoaded=false 时才进入重试界面。
         std::string startupErrorTitle;
@@ -456,8 +587,8 @@ StartupPreparationResult prepareStartupAssets()
             const auto assetPath = Config::AppPaths::assetsRootPath();
             startupErrorTitle    = "资源同步失败";
             startupErrorMessage =
-                "无法自动下载或校验资源。请检查网络连接，或从网站下载 "
-                "assets.zip 并解压到：\n\n" +
+                "无法准备应用资源。请检查网络连接后重试，或选择「导入资源包」。"
+                "\n\n资源目录：\n" +
                 Config::pathToUtf8(assetPath) + "\n\n错误详情：" +
                 assetSyncResult.errorMessage;
         } else {
@@ -523,8 +654,10 @@ StartupPreparationResult prepareStartupAssets()
         XERROR("Startup asset preparation failed: {}", startupErrorMessage);
         startupProgressDialog.showError(std::move(startupErrorTitle),
                                         std::move(startupErrorMessage));
-        if ( !waitForStartupRetry(
-                 startupContext, startupWindow, startupProgressDialog) ) {
+        if ( !waitForStartupRetry(startupContext,
+                                  startupWindow,
+                                  startupProgressDialog,
+                                  picker) ) {
             // 关闭窗口或点击退出都结束整个启动准备阶段。
             return StartupPreparationResult::Cancelled;
         }

@@ -26,7 +26,7 @@ bool publishDocument(const std::filesystem::path& path, std::string& error);
 /// @warning 仅导出事务退出时调用，Android 会检查提供器内容，不可逐帧执行。
 bool discardUnwrittenDocument(const std::filesystem::path& path,
                               std::string&                 error);
-/// @brief 启动平台选择器；0 打开文件、1 创建目标、2 授权目录。
+/// @brief 启动平台选择器；0 打开文件、1 创建目标、2 授权目录、3 只读导入 ZIP。
 /// @details 请求只调度 Java UI 操作，不阻塞 SDL 事件分发。
 bool beginDocumentSelection(int kind, std::string_view defaultName);
 /// @brief 查询已由用户授权的本机共享目录根，未授权时返回空值。
