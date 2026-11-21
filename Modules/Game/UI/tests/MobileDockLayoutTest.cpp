@@ -97,6 +97,13 @@ struct Fixture {
     bool m_canvasPage{}, m_workbenchRequested{};
     /// @brief 仅在内存 ini 往返用例启用窗口设置，不触及用户磁盘。
     bool m_persistWindows{};
+    /// @brief 额外文档在关闭回归场景使用业务窗口的真实稳定身份。
+    /// @details 标题在上下文存活期间固定，复用同一夹具检查不同业务页。
+    const char* m_otherTitle{ "Other" };
+    /// @brief 模拟文档视图收到关闭请求后停止提交 Begin。
+    bool m_closeOtherOnRequest{};
+    /// @brief 模拟文档页惰性打开，可从长按菜单关闭。
+    bool m_otherOpen{ true };
     /// @brief 完整标题用于展示，固定后缀用于检验窗口身份不随谱名变化。
     std::string longTitle{
         "Editor [4K] A deliberately long beatmap name that must keep its full "
@@ -127,7 +134,14 @@ struct Fixture {
             main && mainCanOpenComparison ? "Compare" : nullptr,
             1,
             true);
-        if ( action == Action::Close ) ++closeRequests;
+        if ( action == Action::Close ) {
+            ++closeRequests;
+            // 生产视图在点击帧写回打开状态，下一帧不再提交该窗口。
+            // 保留 ImGui 的 Window 对象，模拟业务视图关闭后的原生缓存。
+            if ( m_closeOtherOnRequest &&
+                 std::string_view(name) == m_otherTitle )
+                m_otherOpen = false;
+        }
         if ( action == Action::OpenComparison ) ++comparisonRequests;
         // 比较实际节点标签边界，避免三个窗口同时错位仍被等高断言放过。
         const auto* node = ImGui::GetCurrentWindow()->DockNode;
@@ -152,19 +166,21 @@ struct Fixture {
         const auto padding = ImGui::GetStyle().FramePadding;
         // 每帧捕获进入时的值；前一帧泄漏不能被下一帧取样掩盖。
         const auto separator = ImGui::GetStyle().DockingSeparatorSize;
-        layout.render({ 0, 0 },
-                      { hostWidth, height },
-                      1,
-                      timing,
-                      preview,
-                      m_workbenchRequested && layout.isMainCanvasSelected());
+        // 与生产外壳共用帧首的显隐决定，避免节点缺失时测试偷偷省略工作台。
+        const bool workbench =
+            m_workbenchRequested && layout.isMainCanvasSelected();
+        layout.render(
+            { 0, 0 }, { hostWidth, height }, 1, timing, preview, workbench);
         // 既检查平衡恢复，也检查自定义美化宽度没有被固定触摸尺寸替换。
         styleIntact &= ImGui::GetStyle().FramePadding.x == padding.x &&
                        ImGui::GetStyle().FramePadding.y == padding.y &&
                        ImGui::GetStyle().DockingSeparatorSize == separator;
         bounds[0] = pane(MMM::UI::MobileDockPanel::Main, "Main");
-        if ( lateFocus ) ImGui::SetNextWindowFocus();
-        pane(MMM::UI::MobileDockPanel::Main, "Other");
+        if ( m_otherOpen ) {
+            // 隐藏页不能再接收聚焦请求，避免把已关闭文档重新引入当前 Dock。
+            if ( lateFocus ) ImGui::SetNextWindowFocus();
+            pane(MMM::UI::MobileDockPanel::Main, m_otherTitle);
+        }
         if ( m_canvasPage )
             pane(MMM::UI::MobileDockPanel::Main, "Chart###Canvas_workbench");
         if ( longCaption )
@@ -185,7 +201,8 @@ struct Fixture {
         if ( preview )
             bounds[2] = pane(MMM::UI::MobileDockPanel::Preview,
                              "Preview###PreviewWindow");
-        if ( layout.node(MMM::UI::MobileDockPanel::Workbench) )
+        // 与生产一样使用帧首的决定，期间焦点变化在下一帧重新求值。
+        if ( workbench )
             pane(MMM::UI::MobileDockPanel::Workbench,
                  "Tools###MobileWorkbench");
         layout.finishFrame();
@@ -306,6 +323,67 @@ struct Fixture {
         return true;
     }
 };
+
+/// @brief 模拟长按关闭当前文档页，画布和辅助面板在其后保持稳定。
+/// @param title 包含固定窗口身份的设置或分析页标题。
+/// @return 四栏实际可见并且无输入帧内不再移动时为真。
+/// @details 录制故障来自活动文档关闭，其后没有对分隔条的操作。
+/// 通过真实标签菜单关闭窗口，在连续空闲帧中对比辅助区的位置。
+/// @note 独立上下文避免其他场景的启动焦点或窗格分割干扰原生恢复选择。
+bool closeDocumentKeepsLayout(const char* title)
+{
+    using namespace MMM::UI;
+    ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    // 设置页先后结算、原生关闭恢复焦点和辅助节点重现均由同一上下文处理。
+    io.IniFilename = nullptr;
+    io.DisplaySize = { 1000, 700 };
+    io.DeltaTime   = 1.0f / 60;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    unsigned char* pixels{};
+    int            width{}, height{};
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    Fixture fixture;
+    fixture.m_otherTitle          = title;
+    fixture.m_otherOpen           = false;
+    fixture.m_closeOtherOnRequest = true;
+    // 先提交真实工作台再打开工具页，重现布局保留其历史焦点的条件。
+    // 从工作台未曾展开的状态开始会漏掉这条原生焦点回退路径。
+    fixture.m_canvasPage = fixture.m_workbenchRequested = true;
+    fixture.settle();
+    fixture.holdTab("Chart###Canvas_workbench", false, 3);
+    fixture.settle();
+    // 与关闭前的应用状态一致：同一容器中的工具文档成了活动页，工作台暂时收起。
+    fixture.m_otherOpen = fixture.lateFocus = true;
+    fixture.settle();
+    fixture.lateFocus     = false;
+    const bool toolActive = !fixture.layout.isMainCanvasSelected();
+    // 关闭后不人为聚焦画布，让 ImGui 自己选择恢复的活动窗口。
+    fixture.holdTab(title);
+    const bool closed = fixture.clickFirstMenuItem() && !fixture.m_otherOpen;
+    fixture.settle();
+    // 读原生窗口而非仅看开关；卡在宿主外的工作台也不能通过断言。
+    // 按稳定身份重新查询文档和工具，避免复用关闭前的叶节点指针。
+    const auto* chart  = ImGui::FindWindowByName("Chart###Canvas_workbench");
+    const auto* timing = ImGui::FindWindowByName("Timing###Timeline");
+    const auto* tools  = ImGui::FindWindowByName("Tools###MobileWorkbench");
+    const float chartWidth = chart ? chart->Size.x : 0;
+    const float timingX    = timing ? timing->Pos.x : 0;
+    const float toolsX     = tools ? tools->Pos.x : 0;
+    // 确认辅助区的可见顺序，防止稳定但位置已错的窗口成为基线。
+    bool stable = closed && toolActive && chart && timing && tools &&
+                  chart->Pos.x < timingX && timingX < toolsX;
+    // 不发送新的触点，持续跨帧检测相邻帧交替变宽和缩窄的布局。
+    // 除位置外检查工具仍在原生叶，避免浮动窗口碰巧位置不变而通过。
+    for ( int i = 0; stable && i < 60; ++i ) {
+        fixture.frame();
+        stable &= fixture.layout.isMainCanvasSelected() && tools->Active &&
+                  tools->DockNode && tools->Pos.x == toolsX &&
+                  timing->Pos.x == timingX && chart->Size.x == chartWidth;
+    }
+    ImGui::DestroyContext();
+    return stable;
+}
 }  // namespace
 
 /// @brief 验证单窗口标签、实际内容等高、宿主缩放和分区显隐。
@@ -317,6 +395,10 @@ int main()
 {
     using namespace MMM::UI;
     const bool freshDocked = freshCanvasDocked();
+    const bool stableAfterSettings =
+        closeDocumentKeepsLayout("设置###SettingsWindow");
+    const bool stableAfterWaveform =
+        closeDocumentKeepsLayout("波形###AudioWaveformViewGlobal");
     ImGui::CreateContext();
     // 上下文由本测试独占；禁用 ini，避免本机历史布局影响叶节点身份。
     auto& io       = ImGui::GetIO();
@@ -340,6 +422,10 @@ int main()
     };
     check(freshDocked,
           "fresh logo canvas fills the center after repeated targeting");
+    check(stableAfterSettings,
+          "closing settings keeps active canvas and split widths stable");
+    check(stableAfterWaveform,
+          "closing waveform keeps active canvas and split widths stable");
     // 真实 UI 注册顺序允许画布先于移动宿主出现；下一帧仍须正确建立缺省停靠。
     // 不能在根 ID 尚未创建时就永久消费首次定位请求。
     ImGui::NewFrame();
