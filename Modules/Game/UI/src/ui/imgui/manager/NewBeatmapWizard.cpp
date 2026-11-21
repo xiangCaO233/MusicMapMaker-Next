@@ -584,17 +584,17 @@ void NewBeatmapWizard::syncMetaFromInputs()
 /// 相等。过滤后没有有效点不会覆盖之前结果，也不会结束手动测量流程。
 /// 同时间戳点通过 stable_sort 保持工具输出顺序，创建命令后续可决定如何合并；
 /// 向导只保证按时间非递减和每个 BPM 字段内部一致。
-void NewBeatmapWizard::applyMeasuredTimingsFromTool(
+bool NewBeatmapWizard::applyMeasuredTimingsFromTool(
     const std::string& audioTrackId, const std::vector<::MMM::Timing>& timings)
 {
     if ( !m_isOpen || timings.empty() ) {
         // 关闭后的异步结果和空结果不改变下一次向导状态。
-        return;
+        return false;
     }
     if ( !audioTrackId.empty() && !m_selectedAudioTrackId.empty() &&
          audioTrackId != m_selectedAudioTrackId ) {
         // 用户已切换音频时拒绝旧轨道的迟到测量结果。
-        return;
+        return false;
     }
 
     // 最坏情况保留全部输入，预留容量避免过滤循环中重分配。
@@ -609,7 +609,8 @@ void NewBeatmapWizard::applyMeasuredTimingsFromTool(
         // 兼容工具把 BPM 写在专用字段或通用效果参数中的两种表示。
         const double bpm =
             timing.m_bpm > 0.0 ? timing.m_bpm : timing.m_timingEffectParameter;
-        if ( !std::isfinite(bpm) || bpm <= 0.0 ) {
+        if ( !std::isfinite(timing.m_timestamp) || !std::isfinite(bpm) ||
+             bpm <= 0.0 ) {
             // 无效数值不能参与节拍长度除法。
             continue;
         }
@@ -627,7 +628,7 @@ void NewBeatmapWizard::applyMeasuredTimingsFromTool(
 
     if ( bpmTimings.empty() ) {
         // 全部被过滤时保留已有向导值，不制造空覆盖。
-        return;
+        return false;
     }
 
     // stable_sort 保留同时间戳输入的原始次序，便于诊断重复点。
@@ -650,6 +651,7 @@ void NewBeatmapWizard::applyMeasuredTimingsFromTool(
         // 手动流程观察此标志后恢复被暂时关闭的模态向导。
         m_manualBpmMeasurementExported = true;
     }
+    return true;
 }
 
 /// @brief 开始手动 BPM 测量并暂时收起向导模态弹窗。
@@ -1996,6 +1998,38 @@ void NewBeatmapWizard::open(Logic::BeatmapCreateOrigin origin)
     reset();
     m_origin = origin;
     publishInteraction(Event::BeatmapCreateInteractionStage::WizardOpened);
+}
+
+/// @brief 用 BPM 工具的主音轨启动新建流程，最终仍由用户确认创建。
+/// @param audioTrackId 当前项目内所测量的主音轨 ID。
+/// @param timings 测量工具转换后的毫秒 Timing，仍需经过向导常规验证。
+/// @details 先选音轨再回填段落，因为向导会在切换音频时清除已有测量。
+/// 只匹配创建向导可选的 Main 音轨，避免把试听效果音当作主音乐。
+/// 已有向导草稿优先，保留用户填写的元数据和手动测量回填。
+/// 本入口只建立草稿；创建、重名处理和命令入队仍由向导统一完成。
+/// @return 成功打开预填草稿返回 true。
+bool NewBeatmapWizard::openWithMeasuredTimings(
+    const std::string& audioTrackId, const std::vector<::MMM::Timing>& timings)
+{
+    const auto* project = Logic::EditorEngine::instance().getCurrentProject();
+    if ( m_isOpen || !project || audioTrackId.empty() || timings.empty() )
+        return false;
+
+    for ( const auto& resource : project->m_audioResources ) {
+        if ( resource.m_id != audioTrackId ||
+             resource.m_type != ::MMM::AudioTrackType::Main ||
+             resource.m_path.empty() )
+            continue;
+
+        open();
+        m_selectedAudioTrackId = resource.m_id;
+        onAudioSelected(Config::utf8ToPath(resource.m_path));
+        if ( applyMeasuredTimingsFromTool(audioTrackId, timings) ) return true;
+        // 无效数据不能留下一个看似已接收测量结果的空向导。
+        close();
+        return false;
+    }
+    return false;
 }
 
 /// @brief 发布本轮新建谱面向导已经到达的业务阶段。

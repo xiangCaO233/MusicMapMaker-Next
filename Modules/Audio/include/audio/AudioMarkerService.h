@@ -80,6 +80,14 @@ public:
     /// @brief 读取内嵌章节、测量 BPM 或版本化配套文件。
     /// @warning 低频文件路径；需在后台线程或显式文件操作中调用。
     static AudioMarkerReadResult read(const std::filesystem::path& path);
+    /// @brief 读取独立 .mmmt 文件中的 BPM 段落，时间相对音频起点。
+    /// @warning 低频文件读取，应在后台线程执行。
+    static AudioMarkerReadResult readBpmSegmentFile(
+        const std::filesystem::path& path);
+    /// @brief 原子写出独立 .mmmt 文件，失败时返回原因，成功时返回空字符串。
+    /// @warning 低频文件写入，应在后台线程执行。
+    static std::string writeBpmSegmentFile(const std::filesystem::path& path,
+                                           const AudioMarkerData&       data);
     /// @brief 保留编码数据并写入标记，同时生成 AU XMP；必要时另存精确配套数据。
     /// @warning 后台文件事务；会遍历音频包，但不修改原文件或执行实时 DSP。
     static AudioMarkerExportResult exportFile(

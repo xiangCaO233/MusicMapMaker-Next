@@ -25,6 +25,7 @@
 #include "ui/Icons.h"
 #include "ui/UIManager.h"
 #include "ui/imgui/audio/SpectrumTimeMapping.h"
+#include "ui/imgui/manager/NewBeatmapWizard.h"
 #include "ui/imgui/menu/actions/tools/BpmAutomaticMeasurementPolicy.h"
 #include "ui/interaction/EditorInteraction.h"
 #include "ui/layout/LayoutContext.h"
@@ -1039,7 +1040,8 @@ void BpmMeasurementToolView::requestAutomaticMeasurement(
 /// @details 每帧顺序固定为：
 /// - 在项目稳定时刷新播放路由和选择身份；
 /// - 根据身份脏位启动低频分析任务；
-/// - 消费已完成的后台结果；
+/// - 消费已完成的后台分析结果；
+/// 新文件导入在分析结果之后提交，防止音频内嵌标记覆盖显式导入。
 /// - 处理后台自动测量的隐式关闭；
 /// - 更新节拍器调度；
 /// - 设置窗口首次位置和两栏布局；
@@ -1089,6 +1091,8 @@ void BpmMeasurementToolView::update(UIManager* sourceManager)
     // 只轮询已完成的文件任务，不让导出延迟 UI 与节拍播放。
     // 完成状态提交归 UI 线程所有，后台任务不持有工具对象。
     consumeMarkerExport();
+    // 原生与内置选择器均产生值结果，段落替换统一在当前视图的 UI 帧执行。
+    consumeBpmSegmentFileOperations(!projectTransition);
 
     if ( m_requestFocus ) {
         // 焦点请求延迟到窗口 Begin 前执行，满足 ImGui 的调用时序。
@@ -1952,7 +1956,7 @@ void BpmMeasurementToolView::renderControlPanel(UIManager* sourceManager)
         markUserPreferencesChanged(false, true);
     }
 
-    renderTimingSegmentsPanel();
+    renderTimingSegmentsPanel(sourceManager);
 
     ImGui::Spacing();
     ImGui::SeparatorText(TR("ui.tools.bpm_measure.status").data());
@@ -1975,7 +1979,8 @@ void BpmMeasurementToolView::renderControlPanel(UIManager* sourceManager)
     }
 }
 
-/// @brief 绘制 BPM 段落列表和应用入口。
+/// @brief 绘制 BPM 段落列表、应用入口和导出标记面板。
+/// @param sourceManager 提供正常注册的新建谱面向导，可空用于界面测试。
 /// @warning UI 热路径：每帧遍历当前段落；删除会中止本帧遍历以避免引用失效。
 /// @details 第一段作为基准不可删除；新增段继承当前视野处的 BPM；
 /// 普通编辑在帧末归一化，联动编辑由统一入口校验有序后缀并重置节拍器。应用和向导导出共享
@@ -1984,7 +1989,7 @@ void BpmMeasurementToolView::renderControlPanel(UIManager* sourceManager)
 /// 时间与 BPM 的最小宽度随当前字体变化，保证主题大字号也能读完整数值。
 /// 横向滚动只在容器宽度不足时出现，普通宽度仍自动铺满控制栏。
 /// 固定的首列让横向滚动时仍可辨认段落编号。
-void BpmMeasurementToolView::renderTimingSegmentsPanel()
+void BpmMeasurementToolView::renderTimingSegmentsPanel(UIManager* sourceManager)
 {
     ImGui::Spacing();
     ImGui::SeparatorText(TR("ui.tools.bpm_measure.segments").data());
@@ -2172,14 +2177,38 @@ void BpmMeasurementToolView::renderTimingSegmentsPanel()
              ImVec2(-1.0f, 0.0f)) ) {
         requestOpenApplyTimingPopup();
     }
-    if ( m_measurementExportCallback ) {
-        // 新建谱面向导注入回调后额外显示导出入口。
-        if ( ::MMM::UI::FeedbackButton(
-                 TR("ui.tools.bpm_measure.export_to_wizard").data(),
-                 ImVec2(-1.0f, 0.0f)) ) {
+    // 从向导发起的测量仍回填原草稿，独立打开时进入新的创建流程。
+    // 音轨身份未切换完成时仍可能显示旧波形，等当前分析结果交付后再导出。
+    // 只有用户确认向导表单才入队创建谱面，打开向导没有项目写入副作用。
+    // 向导主动发起的原回填流程仍由原回调决定是否接收当前数据。
+    // 独立入口需要稳定音轨与波形；失败时只显示状态，不动已有谱面。
+    const bool readyForNewWizard =
+        !m_selectedAudioTrackId.empty() && !m_waveTimes.empty() &&
+        !m_selectedAudioIdentityNeedsAnalysis &&
+        !m_analysisRunning.load(std::memory_order_relaxed) &&
+        !m_analysisFinished.load(std::memory_order_acquire);
+    ImGui::BeginDisabled(!m_measurementExportCallback && !readyForNewWizard);
+    if ( ::MMM::UI::FeedbackButton(
+             TR("ui.tools.bpm_measure.export_to_wizard").data(),
+             ImVec2(-1.0f, 0.0f)) ) {
+        if ( m_measurementExportCallback ) {
             exportMeasuredTimingsToCallback(true);
+        } else {
+            auto* wizard = sourceManager
+                               ? sourceManager->getView<NewBeatmapWizard>(
+                                     "NewBeatmapWizard")
+                               : nullptr;
+            // 复用主菜单注册的向导实例，避免创建第二个模态窗口和状态副本。
+            const bool opened =
+                wizard && wizard->openWithMeasuredTimings(
+                              m_selectedAudioTrackId, makeMeasuredTimings());
+            m_statusText =
+                TR(opened ? "ui.tools.bpm_measure.export_done"
+                          : "ui.tools.bpm_measure.export_wizard_unavailable")
+                    .data();
         }
     }
+    ImGui::EndDisabled();
     renderMarkerPanel();
 }
 

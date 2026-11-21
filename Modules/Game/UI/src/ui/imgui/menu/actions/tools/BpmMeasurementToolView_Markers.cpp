@@ -1,6 +1,7 @@
 #include "config/EditorSettings.h"
 #include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
 
+#include "common/platform/DocumentStorage.h"
 #include "config/AppConfig.h"
 #include "config/Utf8Path.h"
 #include "config/skin/translation/TranslationFormat.h"
@@ -23,6 +24,10 @@ namespace
 {
 /// @brief 内置文件选择器的固定标识，不随本地化标题改变。
 constexpr const char* MARKER_EXPORT_DIALOG = "BpmAudioMarkerExport";
+/// @brief 独立段落文件导入选择器的固定标识。
+constexpr const char* BPM_FILE_IMPORT_DIALOG = "BpmSegmentFileImport";
+/// @brief 独立段落文件导出选择器的固定标识。
+constexpr const char* BPM_FILE_EXPORT_DIALOG = "BpmSegmentFileExport";
 }  // namespace
 
 /// @brief 将后台读取的音频标记恢复到测量草稿。
@@ -234,6 +239,26 @@ void BpmMeasurementToolView::renderMarkerPanel()
     // 导出状态也由零超时轮询推进，频谱和播放不需等待。
     ImGui::Separator();
     ImGui::TextUnformatted(TR("ui.tools.bpm_measure.markers_title").data());
+    // 导入可先于波形完成，导出需要当前音轨的测量数据。
+    // 进度使用 future
+    // 是否占用槽位判断，未确认文件目标时也避免重复开系统选择器。 .mmmt
+    // 按钮独立于下方音频格式和整拍标记，选择 WAV 或 MP3 不影响段落文件。
+    ImGui::BeginDisabled(m_selectedAudioTrackId.empty() ||
+                         m_bpmFileImport.valid() || m_bpmFilePickerLifetime);
+    if ( FeedbackButton(TR("ui.tools.bpm_measure.bpm_file_import").data(),
+                        ImVec2(-1.0f, 0.0f)) )
+        openBpmSegmentFilePicker(false);
+    ImGui::EndDisabled();
+    ImGui::BeginDisabled(m_selectedAudioTrackId.empty() ||
+                         m_waveTimes.empty() ||
+                         m_selectedAudioIdentityNeedsAnalysis ||
+                         m_analysisRunning.load(std::memory_order_relaxed) ||
+                         m_analysisFinished.load(std::memory_order_acquire) ||
+                         m_bpmFileExport.valid() || m_bpmFilePickerLifetime);
+    if ( FeedbackButton(TR("ui.tools.bpm_measure.bpm_file_export").data(),
+                        ImVec2(-1.0f, 0.0f)) )
+        openBpmSegmentFilePicker(true);
+    ImGui::EndDisabled();
     // 原格式是默认选项，不根据可用编码器偷偷改变文件类型。
     // 其他格式只在保存时显式选择，相关耗时由后台任务承担。
     // 下拉框本身不建立音频解码器，也不查询磁盘格式。
@@ -328,5 +353,222 @@ void BpmMeasurementToolView::renderMarkerPanel()
                 ImGuiFileDialog::Instance()->GetFilePathName()));
         ImGuiFileDialog::Instance()->Close();
     }
+}
+/// @brief 读取独立段落，绑定当前音轨身份以拒绝切歌后的迟到结果。
+/// @param path 用户投放或文件选择器确认的路径，可能是 SAF 工作副本。
+/// @details 独立文件无需重扫音频；只有结果提交时才把音频秒数变为画布秒数。
+/// 任务保持单槽，避免先后读取的两个文件以相反顺序替换同一个草稿。
+/// 读取失败或音轨已换都不生成历史；切换检查由 UI 消费结果统一执行。
+/// 使用应用文件池保证即使文件来自较慢的移动存储也不阻塞波形绘制。
+/// @warning 低频输入入口；当前轨道变化时可刷新绝对路径身份。
+void BpmMeasurementToolView::importBpmSegmentFile(
+    const std::filesystem::path& path)
+{
+    // 已有导入即使读取完成也可能在等波形结果，不能直接覆盖其交付槽。
+    if ( m_bpmFileImport.valid() ) return;
+    // 系统投放先于视图本帧更新，需要先确认所选资源依然属于当前项目。
+    refreshSelectedAudioIdentity();
+    if ( m_selectedAudioSyncKey.empty() ) {
+        m_markerStatus =
+            TR("ui.tools.bpm_measure.bpm_file_select_audio").toString();
+        return;
+    }
+    auto* pool = Runtime::AppThreadPool::instance().getFileThreadPool();
+    if ( !pool ) return;
+    // 使用规范化绝对路径区分同名音轨，避免不同项目的资源 ID 偶然相同。
+    // 路径身份由当前 UI 持有，读取任务不访问工具或项目资源表。
+    m_bpmFileImportAudioKey = m_selectedAudioSyncKey;
+    m_markerStatus  = TR("ui.tools.bpm_measure.bpm_file_importing").toString();
+    m_bpmFileImport = pool->enqueue(
+        [path] { return Audio::AudioMarkerService::readBpmSegmentFile(path); });
+}
+
+/// @brief 以音频相对时间冻结段落，异步写出并发布到选定路径。
+/// @param path 保存选择器确认的 .mmmt 目标，授权文档保留选择器返回的完整路径。
+/// @details 冻结后继续修改或关闭测量工具都不会影响写出内容。
+/// 音频章节和整拍标记只属于已有音频导出选项，不写入独立段落。
+/// 最终成功要求目标文件写入及文档发布都通过，取消的选择不产生工作项。
+/// @warning 显式操作，仅复制段落快照；校验、编码及发布都在文件线程完成。
+void BpmMeasurementToolView::exportBpmSegmentFile(
+    const std::filesystem::path& path)
+{
+    auto* pool = Runtime::AppThreadPool::instance().getFileThreadPool();
+    if ( !pool || m_bpmFileExport.valid() ) return;
+
+    Audio::AudioMarkerData data;
+    // 音频相对时间可跨主题和视觉偏移往返，不能乘试听倍速。
+    const double offset = waveformCanvasOffset();
+    data.bpmSegments.reserve(m_timingSegments.size());
+    for ( const auto& segment : m_timingSegments )
+        data.bpmSegments.push_back(
+            { segment.timestampSeconds - offset, segment.bpm });
+
+    // 任务开始后使用自己的状态提示，避免将独立段落误报为音频编码。
+    m_markerStatus = TR("ui.tools.bpm_measure.bpm_file_exporting").toString();
+    // 捕获只读的序列和目标路径，池任务不越过 UI 线程读取视图成员。
+    m_bpmFileExport = pool->enqueue([path, data = std::move(data)] {
+        auto error = Audio::AudioMarkerService::writeBpmSegmentFile(path, data);
+        if ( error.empty() ) {
+            // SAF 工作副本写入后还需向系统选中的文档发布。
+            if ( !Common::publishDocument(path, error) && error.empty() )
+                error = "无法发布 BPM 段落文件";
+        } else {
+            // SAF 的保存命令可能已在外部创建占位文档。
+            // 丢弃接口只清理为本次输出创建的空文档，桌面路径不受影响。
+            std::string cleanupError;
+            (void)Common::discardUnwrittenDocument(path, cleanupError);
+        }
+        return error;
+    });
+}
+
+/// @brief 使用编辑器文件选择偏好打开独立段落的导入或保存选择器。
+/// @param exporting 为真时确认保存目标，否则选择一份已有 .mmmt。
+/// @details Android 缺少直读授权时经系统选择器取得文档权限。
+/// 选择器从当前音频目录开始，默认名称借用音频名便于辨认。
+/// 原生和内置选择器共用后台文件入口，取消不会修改测量草稿。
+/// @pre 选择发起时工具已有选中的项目音轨。
+/// @warning 显式点击路径，允许询问平台权限及打开文件选择器。
+void BpmMeasurementToolView::openBpmSegmentFilePicker(bool exporting)
+{
+    const auto source = selectedAudioAbsolutePath();
+    if ( !source || m_bpmFilePickerLifetime ) return;
+    const auto folder = Config::pathToUtf8(source->parent_path());
+    // 建议名称只用于填充选择器，最终保存路径以用户选择为准。
+    const auto name = Config::pathToUtf8(source->stem()) + ".mmmt";
+    const auto style =
+        Config::AppConfig::instance().getEditorSettings().filePickerStyle;
+    PlayPopupOpenFeedback();
+    if ( NativeFileDialog::requiresSystemPicker() ||
+         style == Config::FilePickerStyle::Native ) {
+        // 桌面可能同步完成，Android 会跨帧持有回调，先建立同一个存活令牌。
+        // 令牌不拥有视图，项目关闭后不能借文件选择回调延长 UI 生命周期。
+        m_bpmFilePickerLifetime = std::make_shared<bool>(true);
+        const auto completed    = [this,
+                                   exporting,
+                                   lifetime = std::weak_ptr<bool>(
+                                       m_bpmFilePickerLifetime)](
+                                      nfdresult_t        result,
+                                      const std::string& path) {
+            if ( lifetime.expired() ) return;
+            // 所有返回状态都解除选择器占用；取消保留当前段落和旧提示。
+            m_bpmFilePickerLifetime.reset();
+            if ( result == NFD_OKAY && !path.empty() ) {
+                if ( exporting )
+                    exportBpmSegmentFile(Config::utf8ToPath(path));
+                else
+                    importBpmSegmentFile(Config::utf8ToPath(path));
+            } else if ( result != NFD_CANCEL ) {
+                m_markerStatus =
+                    TR("ui.tools.bpm_measure.bpm_file_picker_error").toString();
+            }
+        };
+        // 系统选择器只在启动阶段借用过滤器和建议名，回调接收独立路径值。
+        const nfdu8filteritem_t filter{ "MusicMapMaker BPM", "mmmt" };
+        if ( exporting )
+            NativeFileDialog::saveFileAsync(
+                &filter, 1, folder.c_str(), name.c_str(), completed);
+        else
+            NativeFileDialog::openFileAsync(
+                &filter, 1, folder.c_str(), completed);
+        return;
+    }
+
+    // 内置模式仍使用统一的弹窗实例，以稳定的导入和导出 ID 区分处理结果。
+    // 不填充导入文件名，避免用户确认时误用默认导出名。
+    IGFD::FileDialogConfig config;
+    config.path              = folder;
+    config.fileName          = exporting ? name : "";
+    config.countSelectionMax = 1;
+    config.flags =
+        ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_HideColumnType;
+    // 写入服务可以替换已有文件，因此必须在选择阶段得到覆盖确认。
+    if ( exporting ) config.flags |= ImGuiFileDialogFlags_ConfirmOverwrite;
+    ImGuiFileDialog::Instance()->OpenDialog(
+        exporting ? BPM_FILE_EXPORT_DIALOG : BPM_FILE_IMPORT_DIALOG,
+        TR(exporting ? "ui.tools.bpm_measure.bpm_file_export"
+                     : "ui.tools.bpm_measure.bpm_file_import")
+            .data(),
+        ".mmmt",
+        config);
+}
+
+/// @brief 处理独立文件的选择确认与完成结果。
+/// @param projectReady 当前工程已完成切换，所选音轨身份可以使用。
+/// @details 选择器关闭与任务完成分开处理，后者可以经过多次 UI 帧。
+/// 导入优先等音频内嵌标记恢复完成，再用用户显式选择的段落替换时间数据。
+/// 工程过渡期不读取变更中的资源身份；待工程稳定后再检查导入能否沿用。
+/// 文件导出只冻结了数值和目标，可以在工程过渡期间消费最终写入状态。
+/// 写入完成不引用音轨状态，用户可以在生成期间继续其他编辑。
+/// @warning UI 热路径，仅零超时轮询，禁止等待分析或文件任务。
+void BpmMeasurementToolView::consumeBpmSegmentFileOperations(bool projectReady)
+{
+    auto* dialog = ImGuiFileDialog::Instance();
+    // 控制栏和波形在移动端可以分开显示，对话框需要独立于当前面板推进。
+    // 两个候选 ID 固定，未打开的项不会进入 Display。
+    for ( const bool exporting : { false, true } ) {
+        const auto* key =
+            exporting ? BPM_FILE_EXPORT_DIALOG : BPM_FILE_IMPORT_DIALOG;
+        // 展示仅处理当前打开的 ID，不消费其他工具使用的全局选择器。
+        if ( !dialog->IsOpened(key) || !dialog->Display(key) ) continue;
+        // 关闭不能推迟到 projectReady 恢复后，否则旧模态会继续拦截输入。
+        if ( dialog->IsOk() && projectReady ) {
+            const auto path = Config::utf8ToPath(dialog->GetFilePathName());
+            if ( exporting )
+                exportBpmSegmentFile(path);
+            else
+                importBpmSegmentFile(path);
+        }
+        dialog->Close();
+    }
+    if ( m_bpmFileExport.valid() &&
+         m_bpmFileExport.wait_for(std::chrono::seconds(0)) ==
+             std::future_status::ready ) {
+        auto error = m_bpmFileExport.get();
+        m_markerStatus =
+            error.empty()
+                ? TR("ui.tools.bpm_measure.bpm_file_exported").toString()
+                : TR_FMT("ui.tools.bpm_measure.bpm_file_failed", error);
+    }
+    if ( !projectReady || !m_bpmFileImport.valid() ||
+         m_bpmFileImport.wait_for(std::chrono::seconds(0)) !=
+             std::future_status::ready )
+        return;
+
+    // 同一轨道的标记分析可能尚未完成，等它的结果提交后再应用显式导入。
+    // 若已换歌，直接丢弃先前文件，不能等新音轨跑完再回填旧结果。
+    const bool sameAudio = m_bpmFileImportAudioKey == m_selectedAudioSyncKey;
+    // 分析尚未启动、正在解码或已经交付但未提交时，保留已经完成的文件快照。
+    if ( sameAudio && (m_selectedAudioIdentityNeedsAnalysis ||
+                       hasAnalysisPendingForImport()) )
+        return;
+    // get 释放唯一任务槽，下一次投放或文件选择即可提交新的导入。
+    auto result = m_bpmFileImport.get();
+    if ( !sameAudio ) {
+        m_markerStatus =
+            TR("ui.tools.bpm_measure.bpm_file_audio_changed").toString();
+        return;
+    }
+    if ( !result.success ) {
+        // 完整性校验失败连同历史一起保持原状，允许用户换文件重试。
+        m_markerStatus =
+            TR_FMT("ui.tools.bpm_measure.bpm_file_failed", result.error);
+        return;
+    }
+
+    // 音频章节仍归原音轨所有；只转换独立文件内的段落到当前画布。
+    // 不使用鼠标拖动的限幅，原有负首拍和超出当前视野的段落需要保留。
+    // 恢复时使用当前波形偏移，因为导出工具可来自另一个主题或设备。
+    std::vector<BpmTimingSegment> segments;
+    segments.reserve(result.data.bpmSegments.size());
+    const double offset = waveformCanvasOffset();
+    for ( const auto& segment : result.data.bpmSegments )
+        segments.push_back({ segment.seconds + offset, segment.bpm });
+    // 合并成一条用户操作，成功后可恢复此前全部测量而无需重新读取文件。
+    replaceImportedTimingSegments(std::move(segments));
+    // 复用红线导入的完成提示，篇幅不随数值精度或段落数量增加。
+    // 复用已有红线导入提示，反馈集中显示在导出标记面板。
+    m_markerStatus =
+        TR_FMT("ui.tools.bpm_measure.import_done", m_timingSegments.size());
 }
 }  // namespace MMM::UI

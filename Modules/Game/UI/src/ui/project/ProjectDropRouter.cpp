@@ -4,6 +4,9 @@
 #include "event/input/glfw/GLFWDropEvent.h"
 #include "event/ui/menu/OpenProjectEvent.h"
 #include "mmm/project/PackageFileTypes.h"
+#include "ui/UIManager.h"
+#include "ui/imgui/menu/actions/tools/BpmMeasurementToolView.h"
+#include "ui/imgui/menu/actions/tools/BpmShortcutFocus.h"
 #include "ui/walkthrough/WalkthroughService.h"
 #include <algorithm>
 #include <cctype>
@@ -39,9 +42,12 @@ ProjectDropRouter::~ProjectDropRouter()
 }
 /// @brief 消费本帧待处理投放并发布项目打开事件。
 /// @param enabled 当前 UI 是否允许接受主窗口投放。
+/// @param manager 提供 BPM 工具视图；为空时仅处理项目投放。
 /// @warning UI 热路径：空队列时常数时间返回；仅真实投放时查询文件系统。
 /// @details
 /// 只接受主视口内的单一路径，目录和 BMS 谱面按项目打开，压缩包按临时项目打开。
+/// 独立段落文件必须投放在当前 BPM 工具，常规区域不会尝试打开文件。
+/// 使用实际投放坐标，避免一次拖放因指针在同帧移动而被误路由。
 /// 投放处理保持以下约束：
 /// - 模态弹窗打开时不延迟执行用户此前的投放；
 /// - 每个 GLFW 事件只消费一次；
@@ -49,9 +55,11 @@ ProjectDropRouter::~ProjectDropRouter()
 /// - 视口外投放不路由给主窗口；
 /// - 目录优先于扩展名判断；
 /// - 文件系统错误按非目录处理且不抛出异常；
+/// - 工程切换时不能将段落绑定到尚未完成迁移的音轨；
+/// - BPM 工具关闭或被其他窗口遮挡时不消费独立段落；
 /// - 不支持的普通文件保持静默；
 /// - 发布事件携带明确来源供上层选择导入策略。
-void ProjectDropRouter::update(bool enabled)
+void ProjectDropRouter::update(bool enabled, UIManager* manager)
 {
     // 常规帧没有投放时不访问 ImGui 视口或文件系统。
     if ( m_impl->m_drops.empty() ) return;
@@ -88,6 +96,30 @@ void ProjectDropRouter::update(bool enabled)
             extension.end(),
             extension.begin(),
             [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        // 独立段落只投放给 BPM 工具；它始终保留当前工程。
+        if ( extension == ".mmmt" ) {
+            // 使用投放坐标命中最上层窗口，BPM 工具取得焦点并不是拖入的前提。
+            if ( manager && !manager->isProjectTransitionInProgress() ) {
+                auto* tool = manager->getView<BpmMeasurementToolView>(
+                    "BpmMeasurementTool");
+                if ( tool && tool->isOpen() ) {
+                    // GLFW 坐标相对主客户区，ImGui 窗口矩形使用视口全局坐标。
+                    // 计算最上层命中窗口，遮挡时不能穿透到背后的 BPM 工具。
+                    ImGuiWindow* hovered           = nullptr;
+                    ImGuiWindow* underMovingWindow = nullptr;
+                    ImGui::FindHoveredWindowEx(
+                        ImVec2(
+                            viewport->Pos.x + static_cast<float>(drop.pos.x),
+                            viewport->Pos.y + static_cast<float>(drop.pos.y)),
+                        false,
+                        &hovered,
+                        &underMovingWindow);
+                    if ( isBpmMeasurementToolWindow(hovered) )
+                        tool->importBpmSegmentFile(path);
+                }
+            }
+            continue;
+        }
         // BMS 家族由主窗口接收，空工作区也可投放，不依赖已有画布悬浮。
         // 旧格式仍由画布处理，本入口不重复发布原有画布已消费的文件事件。
         // 统一使用完整谱面路径，让项目服务打开父目录后自动选择对应谱面。

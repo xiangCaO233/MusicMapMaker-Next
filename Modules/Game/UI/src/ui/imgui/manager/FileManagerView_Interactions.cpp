@@ -101,6 +101,10 @@ void FileManagerView::handleDragDrop(UIManager* sourceManager)
             continue;
         }
 
+        // 独立 BPM 段落仅由测量工具接收，文件管理器不打开其父目录。
+        if ( toLowerAscii(Config::pathToUtf8(p.extension())) == ".mmmt" )
+            continue;
+
         if ( isTemporaryPackagePath(p) ) {
             // 谱包由主窗口级路由统一解包并打开，避免重复项目切换。
             continue;

@@ -43,9 +43,17 @@ public:
     /// @brief 关闭向导弹窗。
     void close();
 
+    /// @brief 以当前项目的主音轨和已测量的 BPM 打开新建向导。
+    /// @return 已有向导草稿或资源无效时返回 false，保留已有草稿。
+    /// @warning 用户触发的低频路径，选择音轨时沿用向导的音频探针。
+    bool openWithMeasuredTimings(const std::string&                audioTrackId,
+                                 const std::vector<::MMM::Timing>& timings);
+
 private:
     /// @brief 仅向回归测试开放向导资源草稿，不增加产品测试接口。
     friend struct NewBeatmapWizardResourceRenameTestAccess;
+    /// @brief 允许验证测量导出预填值及已有创建草稿的边界。
+    friend struct BpmBeatmapImportTestAccess;
     /// @brief 导入后需要自动选中的资源用途。
     enum class ResourceTarget {
         Audio,      ///< 主音轨。
@@ -196,7 +204,7 @@ private:
     /// @brief 接收 BPM 测量工具导出的 Timing，并写回新建谱面向导。
     /// @param audioTrackId 测量结果所属的音频轨道 ID。
     /// @param timings 测量得到的 BPM Timing 列表。
-    void applyMeasuredTimingsFromTool(
+    bool applyMeasuredTimingsFromTool(
         const std::string&                audioTrackId,
         const std::vector<::MMM::Timing>& timings);
 

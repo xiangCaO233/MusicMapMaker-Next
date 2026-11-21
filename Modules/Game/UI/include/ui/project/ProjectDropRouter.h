@@ -3,6 +3,7 @@
 
 namespace MMM::UI
 {
+class UIManager;
 /// @brief 主窗口级文件夹、BMS 谱面与谱包拖放路由，与演练窗口和具体画布解耦。
 /// @details GLFW 投放先进入内部队列，再由 UI
 /// 更新阶段验证位置和类型后发布项目事件。
@@ -16,7 +17,7 @@ public:
     ~ProjectDropRouter();
     /// @brief 处理本帧的投放，模态弹窗或阻塞操作期间丢弃投放。
     /// @warning 每帧只查看事件队列，实际文件系统检查仅在拖放完成时执行。
-    void update(bool enabled);
+    void update(bool enabled, UIManager* manager = nullptr);
 
 private:
     struct Impl;  ///< 隔离事件类型和队列容器的私有实现。
