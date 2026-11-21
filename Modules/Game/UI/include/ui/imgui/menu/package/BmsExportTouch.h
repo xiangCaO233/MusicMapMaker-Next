@@ -95,7 +95,8 @@ inline ImVec2 exportFileDialogSize(float scale)
 }
 
 /// @brief 单文件和资源包共用的触控 BMS 选项，修改的只是本次导出草稿。
-/// @param package 资源包允许处理音乐副本，单文件只写谱面且不生成音频。
+/// @param package
+/// 资源包允许处理音乐副本，单文件可生成静音配套文件，保持主音乐不变。
 /// @param lossy 有损吸附必须由用户明确启用，绘制不重设默认值。
 /// @param shift 与另一个选项互斥，资源包 false 表示处理音乐副本。
 /// @warning 可见弹窗每帧绘制固定控件，不编码音频、不改项目或触发保存。
@@ -107,7 +108,8 @@ inline void drawBmsTouchOptions(bool package, bool& lossy, bool& shift)
     // 风险说明只在用户主动开启有损策略时展开，保真路径不承担额外操作。
     if ( lossy )
         ImGui::TextWrapped(
-            "有损吸附可能移动或合并变速事件，复杂变速谱可能明显偏移。");
+            "按 MyO2 4K/7K 协议保留 Scroll、BGA 和轨道控制。"
+            "吸附会移动离拍事件，出现冲突时导出失败。");
     ImGui::Separator();
     ImGui::TextUnformatted("首拍对齐方式");
     // 两个单选共享唯一草稿值，重复点击已选项也不能造成全部取消。

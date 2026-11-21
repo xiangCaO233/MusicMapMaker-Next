@@ -1,6 +1,7 @@
 #include "../src/beatmap/BmsMyO2Grid.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/beatmap/MyO2Bms.h"
 #include "mmm/note/Hold.h"
 #include "mmm/note/Note.h"
 #include "mmm/timing/Timing.h"
@@ -145,7 +146,10 @@ bool verifyBpmDefinitionReuse(const std::filesystem::path& root)
         map.m_metadata.map_properties[MMM::MapMetadataType::BMS]["myo2_grid"] =
             mode;
         const auto path = root / (std::string("repeated_bpm_") + mode + ".bms");
-        if ( !map.saveToFile(path) || definitions(path) != 3 ) return false;
+        // MyO2 直接以 03 保存整数 BPM，仅小数占用 08 定义。
+        const int expectedDefinitions = std::string_view(mode) == "1" ? 1 : 3;
+        if ( !map.saveToFile(path) || definitions(path) != expectedDefinitions )
+            return false;
         const auto restored = MMM::BeatMap::loadFromFile(path);
         // 头部对应原零点首红线，其余通道事件包括同值的回归速度必须保留。
         // 数量少一条会漏红线，多一条则说明零点仍然重复写出。
@@ -170,6 +174,7 @@ bool verifyBpmDefinitionReuse(const std::filesystem::path& root)
     // 真正超过 1295 种不同 BPM 时仍应拒绝，不能回绕并覆盖旧定义。
     // 使用独立内容作为目标，失败还必须保证已有用户文件不被截断。
     map.m_timings.clear();
+    map.m_metadata.map_properties[MMM::MapMetadataType::BMS]["myo2_grid"] = "0";
     // 容量夹具保留原来的零点物件，替换的只是独立测试模型的时轴。
     // 不读取用户资源，因此失败边界可在各平台 CTest 中直接复现。
     milliseconds = 0;
@@ -280,8 +285,7 @@ bool verifyKeyboardChannels(const std::filesystem::path& root,
     constexpr std::array<std::string_view, 8> channels{
         "16", "11", "12", "13", "14", "15", "18", "19"
     };
-    // 五种键数都必须覆盖，六、八轨本来正确，不能因修复四、七轨发生回归。
-    // 五轨仍使用表的前五项，不能误触发旧的普通键补位分支。
+    // 标准 BMS 验证原有键数，MyO2 协议只允许 4K 与 7K。
     // 三种后缀直接交给公共保存入口，验证它们没有额外键数限制。
     // 特别是 BML 的长条仍用成对端点，不能因后缀不同额外移动轨道。
     for ( int tracks = 4; tracks <= 8; ++tracks ) {
@@ -293,8 +297,11 @@ bool verifyKeyboardChannels(const std::filesystem::path& root,
             map.m_baseMapMetadata.track_count = tracks;
             // 本夹具专门检查只读末行的转换器，因此明确选择兼容模式。
             // 默认保真允许标准叠加行，其时轴契约由密集变速夹具独立验证。
-            map.m_metadata
-                .map_properties[MMM::MapMetadataType::BMS]["myo2_grid"] = "1";
+            const bool myO2 = tracks == 4 || tracks == 7;
+            auto&      properties =
+                map.m_metadata.map_properties[MMM::MapMetadataType::BMS];
+            properties["myo2_grid"]    = myO2 ? "1" : "0";
+            properties["compact_rows"] = "0";
             // 使用整拍时轴，使失败只来自通道或文本结构，不混入速度误差。
             // 各轨均有四个点按以及一个同小节内起止的长条。
             MMM::Timing bpm;
@@ -359,7 +366,7 @@ bool verifyKeyboardChannels(const std::filesystem::path& root,
                 const std::string hold = "5" + tap.substr(1);
                 if ( count(tap) != 4 || count(hold) != 2 ) return false;
             }
-            // 传统读取器仍保留标准六轨或八轨宽度，但实际音符键序不得漂移。
+            // 标准保留六轨或八轨布局，明确的 MyO2 模式按 4K/7K 还原。
             // BML 与其他后缀共享通道协议，不能单独引入补转盘或端点差异。
             const auto restored = MMM::BeatMap::loadFromFile(path);
             if ( restored.m_noteData.notes.size() != 4U * tracks ||
@@ -389,6 +396,215 @@ bool verifyKeyboardChannels(const std::filesystem::path& root,
     }
     return true;
 }
+/// @brief 用规范示例形状校验 MyO2 基础扩展及原生保存后的可逆性。
+/// @details 预期通过手工拍位计算，不调用导出积分器生成测试基线。
+/// 覆盖 4K、普通键、跨变速长条、负起点、02/03/08/09/SC、BGA 与轨道控制。
+/// 01 在同拍出现两次；两条 09 分别为正和零，不应互相覆盖。
+/// @return 头部与编码行、可编辑数据及重复导出都符合预期时返回 true。
+bool verifyMyO2Basic(const std::filesystem::path& root)
+{
+    using namespace MMM;
+    const auto source = root / "myo2-basic-source.bms";
+    // 两拍短小节从 2000ms 开始，240 BPM 下第二拍为 2250ms。
+    // 该拍先换成 150.5 BPM，再按新 BPM 解释一拍长度的 STOP。
+    std::ofstream(source) << R"BMS(#PLAYER 1
+#TITLE basic test
+#ARTIST Example
+#PLAYLEVEL 7
+#RANK 2
+#TOTAL 5
+#BPM 120
+#LNTYPE 1
+#AUDIO_MODE MYO2
+#BGM music.wav
+#KEYSOUND hit-bank.zip
+#WAV01 samples/hit.wav
+#WAV02 samples/auto.wav
+#BPM01 150.5
+#STOP01 48
+#STOP02 0
+#SCROLL01 0.5
+#SCROLL02 0
+#SCROLL03 -1
+#SCROLL04 1
+#BGA_MODE 1
+#SP_NOTE 1
+
+*---------------------- MAIN DATA FIELD
+#00016:00010000
+#00011:00ww
+#00102:0.5
+#00103:F0
+#00108:0001
+#00156:0101
+#00116:0001
+#00101:0002
+#00101:0002
+#00109:0001
+#00109:0002
+#000SC:01
+#001SC:02
+#001SC:0003
+#002SC:04
+#00013:ff
+#00112:he
+#00212:sw
+#00312:ed
+#00412:ff
+#00416:01
+)BMS";
+    auto map = BeatMap::loadFromFile(source);
+    if ( map.m_baseMapMetadata.track_count != 4 ||
+         map.m_noteData.notes.size() != 3 || map.m_noteData.holds.size() != 1 ||
+         map.m_audioSamples.size() != 3 ||
+         map.m_audioSamples.front().effectiveTimestamp() != 1000 ||
+         map.m_noteData.notes.front().m_timestamp != 500 ||
+         map.m_noteData.holds.front().m_timestamp != 2000 ||
+         map.m_noteData.holds.front().m_duration != 250 )
+        return false;
+
+    // 中间使用普通 MMM 持久化，确保
+    // BGA、轨道控制和变长小节并非仅存在于读取缓冲。
+    const auto native = root / "myo2-basic.mmm";
+    if ( !map.saveToFile(native) ) return false;
+    map                  = BeatMap::loadFromFile(native);
+    auto& options        = map.m_metadata.map_properties[MapMetadataType::BMS];
+    options["myo2_grid"] = "1";
+    const auto target    = root / "myo2-basic.bms";
+    if ( !map.saveToFile(target) ) return false;
+    std::ifstream     input(target, std::ios::binary);
+    const std::string text(std::istreambuf_iterator<char>(input), {});
+    // 核查扩展通道及保留标记，避免读取器和写入器共享相同笔误导致假通过。
+    for ( const auto* required : { "#AUDIO_MODE MYO2",
+                                   "#BGM music.wav",
+                                   "#KEYSOUND hit-bank.zip",
+                                   "#00102:0.5",
+                                   "#00103:F0",
+                                   "#00108:0001",
+                                   "#BPM01 150.5",
+                                   "#SCROLL03 -1",
+                                   "#STOP02 0",
+                                   "#BGA_MODE 1",
+                                   "#SP_NOTE 1",
+                                   "#RANK 2",
+                                   "#TOTAL 5",
+                                   "ww",
+                                   "ff",
+                                   "he",
+                                   "sw",
+                                   "ed" } )
+        if ( text.find(required) == std::string::npos ) return false;
+    const auto restored = BeatMap::loadFromFile(target);
+    if ( restored.m_noteData.notes.size() != 3 ||
+         restored.m_noteData.holds.size() != 1 ||
+         restored.m_audioSamples.size() != 3 ||
+         restored.m_audioSamples[0].effectiveTimestamp() != 1000 ||
+         restored.m_audioSamples[1].effectiveTimestamp() != 2250 ||
+         restored.m_audioSamples[2].effectiveTimestamp() != 2250 )
+        return false;
+    std::vector<double> rates;
+    std::vector<double> stops;
+    for ( const auto& timing : restored.m_timings ) {
+        if ( timing.m_timingEffect == TimingEffect::SCROLL )
+            rates.push_back(timing.m_timingEffectParameter);
+        if ( timing.m_timingEffect == TimingEffect::STOP )
+            stops.push_back(timing.m_timingEffectParameter);
+    }
+    if ( rates != std::vector{ .5, 0., -1., 1. } || stops.size() != 2 ||
+         std::abs(stops[0] - 60 / 150.5) > 1e-9 || stops[1] != 0 )
+        return false;
+
+    // 原生背景没有现成的 BGA 事件，导出时由视频起始时间生成 FF。
+    BeatMap video      = BeatMap::loadFromFile(target);
+    auto&   videoProps = video.m_metadata.map_properties[MapMetadataType::BMS];
+    std::erase_if(videoProps, [](const auto& entry) {
+        return entry.first.starts_with("myo2_cue_");
+    });
+    videoProps.erase("myo2_bga");
+    video.m_baseMapMetadata.cover_type      = CoverType::VIDEO;
+    video.m_baseMapMetadata.main_cover_path = "test-video.MP4";
+    video.m_baseMapMetadata.video_starttime = 1000;
+    const auto videoTarget                  = root / "myo2-native-video.bms";
+    if ( !video.saveToFile(videoTarget) ) return false;
+    const auto  restoredVideo = BeatMap::loadFromFile(videoTarget);
+    const auto& videoData     = restoredVideo.m_metadata.map_properties;
+    const auto  videoFormat   = videoData.find(MapMetadataType::BMS);
+    if ( videoFormat == videoData.end() ) return false;
+    const auto videoCue = videoFormat->second.find("myo2_cue_0");
+    if ( videoCue == videoFormat->second.end() ||
+         videoCue->second != "FF 1000" )
+        return false;
+    video.m_baseMapMetadata.main_cover_path = "test-video.webm";
+    if ( video.saveToFile(root / "myo2-unsupported-video.bms") ) return false;
+
+    // 历史中文文件允许 GBK；输出用 UTF-8，二者的 TITLE 必须一致。
+    const auto legacy = root / "myo2-gbk.bms";
+    std::ofstream(legacy, std::ios::binary)
+        << "#TITLE \xd6\xd0\xce\xc4\n#BPM 120\n#AUDIO_MODE STANDARD\n"
+           "#WAV01 samples/hit.wav\n#00016:01\n";
+    const auto legacyMap = BeatMap::loadFromFile(legacy);
+    const auto utf8      = root / "myo2-utf8.bms";
+    if ( legacyMap.m_baseMapMetadata.title != "中文" ||
+         !legacyMap.saveToFile(utf8) )
+        return false;
+    std::ifstream     utf8Input(utf8, std::ios::binary);
+    const std::string utf8Text(std::istreambuf_iterator<char>(utf8Input), {});
+    if ( utf8Text.find("#TITLE 中文") == std::string::npos ) return false;
+
+    // 旧整曲使用普通码占位，即使也声明了 WAV，没有 Key 音包时播放器只播 BGM。
+    const auto wholeOnly = root / "myo2-whole-only.bms";
+    std::ofstream(wholeOnly) << "#BPM 120\n#BGM music.wav\n#WAV01 music.wav\n"
+                                "#00011:00ww\n#00016:01\n#00001:01\n";
+    const auto wholeOnlyMap = BeatMap::loadFromFile(wholeOnly);
+    if ( wholeOnlyMap.m_noteData.notes.size() != 1 ||
+         wholeOnlyMap.m_noteData.notes.front().m_sampleBinding ||
+         wholeOnlyMap.m_audioSamples.size() != 1 ||
+         wholeOnlyMap.m_audioSamples.front().effectiveTimestamp() != 1000 ||
+         !wholeOnlyMap.saveToFile(root / "myo2-whole-only-export.bms") )
+        return false;
+
+    // 7K 可以只用 14 和 55；没有最右轨数据也应保留第 5、6 轨。
+    const auto sparseSeven = root / "myo2-sparse-seven.bms";
+    std::ofstream(sparseSeven) << "#BPM 120\n#AUDIO_MODE MYO2\n#BGM music.wav\n"
+                                  "#00014:01\n#00055:0101\n";
+    const auto seven       = BeatMap::loadFromFile(sparseSeven);
+    const auto sevenTarget = root / "myo2-sparse-seven-export.bms";
+    if ( seven.m_baseMapMetadata.track_count != 7 ||
+         seven.m_noteData.notes.size() != 1 ||
+         seven.m_noteData.notes.front().m_track != 4 ||
+         seven.m_noteData.holds.size() != 1 ||
+         seven.m_noteData.holds.front().m_track != 5 ||
+         !seven.saveToFile(sevenTarget) )
+        return false;
+
+    // 起播和隐藏标记落在四键和弦上时，需要保留 01 行中的两个单独事件。
+    const auto fullChord = root / "myo2-full-chord.bms";
+    std::ofstream(fullChord) << "#BPM 120\n#BGM music.wav\n#SP_NOTE 1\n"
+                                "#00116:01\n#00111:01\n#00112:01\n#00113:01\n"
+                                "#00101:ww\n#00101:he\n";
+    const auto chord       = BeatMap::loadFromFile(fullChord);
+    const auto chordTarget = root / "myo2-full-chord-export.bms";
+    if ( !chord.saveToFile(chordTarget) ) return false;
+    const auto restoredChord = BeatMap::loadFromFile(chordTarget);
+    if ( restoredChord.m_noteData.notes.size() != 4 ||
+         restoredChord.m_audioSamples.size() != 1 ||
+         restoredChord.m_audioSamples.front().effectiveTimestamp() != 2000 )
+        return false;
+    const auto chordProperties =
+        restoredChord.m_metadata.map_properties.find(MapMetadataType::BMS);
+    if ( chordProperties == restoredChord.m_metadata.map_properties.end() ||
+         !chordProperties->second.contains("myo2_cue_0") ||
+         chordProperties->second.at("myo2_cue_0") != "HE 2000" )
+        return false;
+
+    // 两条同轨长条互相穿插时，端点仍可能成对，但留下的会是两个不同的长条。
+    // 要求在写盘前拒绝，不能用输出的重新配对掩盖源谱重叠。
+    auto overlapping = map.m_noteData.holds.front();
+    overlapping.m_timestamp += 125;
+    map.m_noteData.holds.push_back(overlapping);
+    return !map.saveToFile(root / "myo2-overlap.bms");
+}
+
 }  // namespace
 
 /// @brief 生成独立夹具并验证 BMS、MMM 两条往返路径及失败边界。
@@ -411,6 +627,9 @@ int main(int argc, char** argv)
         // 兼容路径与普通路径共享生产导出器，仅显式覆盖本次模式。
         source.m_metadata
             .map_properties[MMM::MapMetadataType::BMS]["myo2_grid"] =
+            std::string_view(argv[1]) == "--export-myo2" ? "1" : "0";
+        source.m_metadata
+            .map_properties[MMM::MapMetadataType::BMS]["myo2_format"] =
             std::string_view(argv[1]) == "--export-myo2" ? "1" : "0";
         if ( source.m_baseMapMetadata.map_path.empty() ) return 30;
         if ( !source.saveToFile(argv[3]) ) return 31;
@@ -789,6 +1008,7 @@ int main(int argc, char** argv)
     // 逐个后缀验证所有五种键数，而非只覆盖恰好包含转盘的六轨来源。
     // 每种夹具检查真实文本和重读结果，能发现后缀分支及多行丢物件回归。
     if ( !verifyKeyboardChannels(root, map) ) return 20;
+    if ( !verifyMyO2Basic(root) ) return 43;
     XINFO("BMS import/export and native STOP persistence passed");
     return 0;
 }

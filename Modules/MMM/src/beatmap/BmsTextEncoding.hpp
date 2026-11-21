@@ -52,13 +52,15 @@ inline bool validUtf8(std::string_view text)
     return true;
 }
 
-/// @brief 将传统 CP932 BMS 文本转换为项目统一的 UTF-8。
+/// @brief 将旧 CP932 或 MyO2 GBK BMS 转成项目统一的 UTF-8。
 /// @param text 原始文件文本，调用者已限制到 64 MiB。
+/// @param myO2 已从 ASCII 协议标记识别到 MyO2，使用规范指定的 GBK 回退。
 /// @return UTF-8 原文或转换结果；非法编码返回空 optional。
 /// @note 先验证整份文件，不能逐行猜测编码，否则双字节路径可能被拆错。
 /// @note CP932 为传统日文 BMS 的常用 Windows 编码，不使用本机 ACP。
 /// @warning 仅在低频文件加载执行，涉及分配及操作系统转换资源。
-inline std::optional<std::string> decodeText(std::string text)
+inline std::optional<std::string> decodeText(std::string text,
+                                             bool        myO2 = false)
 {
     // UTF-8 优先，导出器生成的 Unicode 文件不应再次按旧代码页解码。
     // 没有编码声明的 ASCII 文件在两种编码下完全等价。
@@ -72,12 +74,13 @@ inline std::optional<std::string> decodeText(std::string text)
     // MB_ERR_INVALID_CHARS 使缺失尾字节的日文字符明确失败。
     // 先查询 UTF-16 容量，再查询 UTF-8 容量，两个单位不可相互代替。
     // 原文和输出使用独立存储，不向输入缓冲区原地扩写。
-    const int inputSize = static_cast<int>(text.size());
-    const int wideSize  = MultiByteToWideChar(
-        932, MB_ERR_INVALID_CHARS, text.data(), inputSize, nullptr, 0);
+    const UINT codePage  = myO2 ? 936 : 932;
+    const int  inputSize = static_cast<int>(text.size());
+    const int  wideSize  = MultiByteToWideChar(
+        codePage, MB_ERR_INVALID_CHARS, text.data(), inputSize, nullptr, 0);
     if ( wideSize <= 0 ) return std::nullopt;
     std::wstring wide(wideSize, L'\0');
-    if ( MultiByteToWideChar(932,
+    if ( MultiByteToWideChar(codePage,
                              MB_ERR_INVALID_CHARS,
                              text.data(),
                              inputSize,
@@ -106,7 +109,7 @@ inline std::optional<std::string> decodeText(std::string text)
     // 输出没有 transliteration 选项，禁止把无法转换的字符近似成其他字符。
     // iconv 更新指针与剩余长度，最终同时检查错误码和输入是否完整消费。
     // 转换输出不包含额外终止符，std::string 的逻辑长度单独收缩。
-    auto converter = iconv_open("UTF-8", "CP932");
+    auto converter = iconv_open("UTF-8", myO2 ? "GBK" : "CP932");
     if ( converter == reinterpret_cast<iconv_t>(-1) ) return std::nullopt;
     std::string result(text.size() * 4, '\0');
     char*       input     = text.data();

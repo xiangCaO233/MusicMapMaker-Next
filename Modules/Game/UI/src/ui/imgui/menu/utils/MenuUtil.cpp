@@ -688,8 +688,8 @@ std::vector<std::string> MenuUtil::collectExportCompatibilityWarnings(
                                     timing.m_timingEffect != TimingEffect::STOP;
                          }) )
             warnings.push_back(
-                "标准 BMS 导出只保留 BPM 和 STOP；Scroll、Jump、HS "
-                "等视觉效果将被忽略。");
+                "标准 BMS 保留 BPM 和 STOP。MyO2 兼容模式还保留 Scroll。"
+                "Jump 和 HS 暂无对应的基础 BMS 字段。");
         // 自动采样和玩家绑定分别检查；只要存在差异便在同一个确认流程告知。
         bool hasVolume = std::any_of(
             beatMap.m_audioSamples.begin(),

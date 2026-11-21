@@ -688,8 +688,8 @@ private:
                     // 临时选项随命令复制，取消或结束流程后恢复保真默认值。
                     MenuUtil::drawWrappedBulletText(
                         "默认保留变速和物件时间；高精度叠加行可能不兼容 MyO2。"
-                        "有损吸附会移动或合并变速事件，复杂变速谱可能明显偏移"
-                        "。");
+                        "兼容模式保留 Scroll、BGA 和轨道控制，适用 4K/7K。"
+                        "吸附会移动离拍事件，出现冲突时导出失败。");
                     ::MMM::UI::FeedbackCheckbox("MyO2 兼容吸附（有损）",
                                                 &m_pendingExportBmsMyO2Grid);
                     ImGui::TextUnformatted("首拍对齐方式：");

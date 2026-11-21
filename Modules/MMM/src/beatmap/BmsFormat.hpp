@@ -5,11 +5,13 @@
 #include "log/colorful-log.h"
 #include "mmm/SafeParse.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/beatmap/MyO2Bms.h"
 #include "mmm/note/Hold.h"
 #include <algorithm>
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <fmt/format.h>
 #include <fstream>
 #include <map>
 #include <optional>
@@ -60,24 +62,29 @@ inline int integer(std::string_view text, int base)
                : -1;
 }
 
-/// @brief 严格解析有限的正十进制数，禁止部分消费及十六进制扩展。
-/// @param text 允许指数记法的十进制文本。
-/// @return 有限正值；失败时以零表示无效。
-/// @note 不允许不完整的指数、额外单位或其他尾随字符。
-/// @note 先做字符约束，再做完整消费与范围检查。
+/// @brief 严格解析有限十进制，保留 SCROLL 和零时长 STOP 的合法零值。
+/// @param text 允许符号与指数的字段文本。
+/// @return 完整解析成功时返回数值，非法字段返回空。
+/// @note macOS 低部署目标也通过项目统一浮点入口解析。
+inline std::optional<double> decimal(std::string_view text)
+{
+    text = trim(text);
+    // 字符白名单阻止不同平台的解析器接受十六进制和特殊浮点值。
+    if ( text.empty() ||
+         text.find_first_not_of("0123456789.eE+-") != std::string_view::npos )
+        return std::nullopt;
+    const auto value = Internal::parseFloatingPrefix(text);
+    if ( value.error != std::errc{} || value.parsedLength != text.size() ||
+         !std::isfinite(value.value) )
+        return std::nullopt;
+    return value.value;
+}
+
+/// @brief 正值字段沿用零作为无效标记，避免无效 BPM 进入时间积分。
 inline double positive(std::string_view text)
 {
-    // macOS 低部署目标也通过项目统一浮点入口解析。
-    // 字符白名单阻止平台 strtod 接受十六进制等非 BMS 数值。
-    // NaN、Inf、零和负值都不允许进入 BPM 分母。
-    text = trim(text);
-    if ( text.find_first_not_of("0123456789.eE+-") != std::string_view::npos )
-        return 0;
-    const auto value = Internal::parseFloatingPrefix(text);
-    return value.error == std::errc{} && value.parsedLength == text.size() &&
-                   std::isfinite(value.value) && value.value > 0
-               ? value.value
-               : 0;
+    const auto value = decimal(text).value_or(0);
+    return value > 0 ? value : 0;
 }
 
 /// @brief 只规范 ASCII 指令部分，资源路径保留大小写。
@@ -92,6 +99,45 @@ inline std::string upper(std::string_view text)
     for ( auto& ch : result )
         if ( ch >= 'a' && ch <= 'z' ) ch -= 'a' - 'A';
     return result;
+}
+
+/// @brief SC 使用独立编号，避免和传统十六进制通道重叠。
+inline constexpr int SCROLL_CHANNEL = 0x100;
+
+/// @brief FX 仅用于识别并跳过超出基本规范的实验室行。
+inline constexpr int LAB_CHANNEL = 0x101;
+
+/// @brief 读取两位通道标识，保留传统十六进制通道解析。
+inline int channelNumber(std::string_view text)
+{
+    const auto key = upper(text);
+    if ( key == "SC" ) return SCROLL_CHANNEL;
+    if ( key == "FX" ) return LAB_CHANNEL;
+    return integer(text, 16);
+}
+
+/// @brief 识别控制码及 WAV 编号时共用同一三十六进制编码。
+/// @pre value 在 0 到 1295 之间。
+inline std::string base36Code(int value)
+{
+    constexpr std::string_view digits = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    return { digits[value / 36], digits[value % 36] };
+}
+
+/// @brief 判断是否为 MyO2 普通通道可用的非音符标记。
+inline bool myO2ControlCode(std::string_view code)
+{
+    return code == "WW" || code == "FF" || code == "HE" || code == "SW" ||
+           code == "ED";
+}
+
+/// @brief 存储需要在另存 MMM 后保留的 MyO2 头部字段。
+/// @param value 不含指令名的值，空字段留给导出器应用缺省规则。
+inline void storeMyO2Property(MapMetadata& metadata, std::string_view key,
+                              std::string_view value)
+{
+    if ( !value.empty() )
+        metadata.map_properties[MapMetadataType::BMS][std::string(key)] = value;
 }
 
 /// @brief 标准键盘通道到内部轨道；每侧顺序为转盘、五键或七键。
@@ -150,9 +196,14 @@ inline BeatMap load(const std::filesystem::path& path)
     // UTF-8 与旧 CP932 在同一入口规范，标题和资源引用使用相同编码。
     // 解码发生在指令识别之前，双字节字符不会被误认成 ASCII 分隔符。
     // 原始文件不重写，后续另存为 BMS 时才输出统一 UTF-8 文本。
-    auto decoded = decodeText(std::move(bytes));
+    // 这些协议标记是 ASCII，可以在 Unicode 解码前选择 MyO2 的 GBK 回退。
+    const bool myO2Encoding = bytes.find("#AUDIO_MODE") != std::string::npos ||
+                              bytes.find("#BGM ") != std::string::npos ||
+                              bytes.find("#KEYSOUND ") != std::string::npos;
+    auto       decoded      = decodeText(std::move(bytes), myO2Encoding);
     if ( !decoded ) {
-        XERROR("Invalid BMS text encoding: expected UTF-8 or CP932");
+        XERROR("Invalid BMS text encoding: expected UTF-8 or {}",
+               myO2Encoding ? "GBK" : "CP932");
         return {};
     }
     std::istringstream input(std::move(*decoded));
@@ -164,7 +215,8 @@ inline BeatMap load(const std::filesystem::path& path)
     // 未声明的小节固定四个四分音符；02 通道覆盖的是整小节长度。
     // 长度必须在展开之前确定，否则先出现的数据行会算错位置。
     lengths.fill(4.0);
-    bool        seven = false, dual = false;
+    bool seven = false, dual = false, hasScroll = false, hasLabEvents = false;
+    bool myO2Seven = false;
     std::string line;
     // 先收集声明和小节长度，允许 WAV/BPM/STOP 定义位于数据行之后。
     std::size_t inputBytes = 0;
@@ -179,7 +231,7 @@ inline BeatMap load(const std::filesystem::path& path)
         // 小节号按十进制、通道号按十六进制独立解析。
         if ( text.size() >= 7 && text[6] == ':' ) {
             const int measure = integer(text.substr(1, 3), 10);
-            const int channel = integer(text.substr(4, 2), 16);
+            const int channel = channelNumber(text.substr(4, 2));
             if ( measure < 0 || measure >= 1000 || channel < 0 ) return {};
             // 02 通道是单个比例文本，而非两字符资源编号序列。
             // 上限限制异常的小节拍位，不让时间积分无限放大。
@@ -188,10 +240,19 @@ inline BeatMap load(const std::filesystem::path& path)
                 if ( ratio == 0 || ratio > 1000 ) return {};
                 lengths[measure] = ratio * 4;
             } else {
+                if ( channel == LAB_CHANNEL ) {
+                    hasLabEvents |= text.substr(7).find_first_not_of("0 \t") !=
+                                    std::string_view::npos;
+                    continue;
+                }
                 rows.emplace_back(text);
+                hasScroll |= channel == SCROLL_CHANNEL;
                 // 长条通道减去 0x40 后与普通键共享键位布局。
                 // 在展开前探测七键和双人，保证此前的轨道也使用相同偏移。
                 const int normalized = channel & 0x3F;
+                // MyO2 的 14/15 已属于 7K；标准 BMS 仍把它们作为五键轨道。
+                myO2Seven |= normalized == 0x14 || normalized == 0x15 ||
+                             normalized == 0x18;
                 if ( normalized >= 0x11 && normalized <= 0x29 ) {
                     seven |= (normalized & 15) >= 8;
                     dual |= (normalized >> 4) == 2;
@@ -223,8 +284,36 @@ inline BeatMap load(const std::filesystem::path& path)
     if ( initialBpm == 0 ||
          (headers.contains("LNTYPE") && headers["LNTYPE"] != "1") )
         return {};
-    const bool pms    = upper(Config::pathToUtf8(path.extension())) == ".PMS";
-    const int  tracks = pms ? 9 : (seven ? 8 : 6) * (dual ? 2 : 1);
+    const bool pms = upper(Config::pathToUtf8(path.extension())) == ".PMS";
+    // 只有独有头部、SC 或 WW 触发才选择 MyO2 键位，避免误改标准 BMS。
+    const auto mode = upper(headers["AUDIO_MODE"]);
+    if ( !mode.empty() && mode != "MYO2" && mode != "STANDARD" ) return {};
+    const bool hasOrigin =
+        !headers.contains("WAVWW") &&
+        std::any_of(rows.begin(), rows.end(), [](const auto& row) {
+            const auto text = std::string_view(row);
+            const int  ch   = channelNumber(text.substr(4, 2));
+            if ( ch != 1 && (ch < 0x11 || ch > 0x69) ) return false;
+            const auto data = trim(text.substr(7));
+            for ( std::size_t i = 0; i + 1 < data.size(); i += 2 )
+                if ( upper(data.substr(i, 2)) == "WW" ) return true;
+            return false;
+        });
+    const bool myO2 =
+        !pms && (!mode.empty() || !headers["BGM"].empty() ||
+                 !headers["KEYSOUND"].empty() || headers["BGA_MODE"] == "1" ||
+                 headers["SP_NOTE"] == "1" || hasScroll || hasOrigin);
+    const bool wholeMusic =
+        myO2 && (mode == "MYO2" ||
+                 (mode.empty() && (!headers["BGM"].empty() || hasOrigin)));
+    if ( myO2 && (dual || (headers["LAB_EFFECTS"] == "1" && hasLabEvents)) )
+        return {};
+    // 旧整曲模式只解码主音轨；读取 WAV 声明不会自动启用松散 Key 音。
+    // 声明与 01 可出现在历史谱中作占位，不能把它们变成新的可播放音源。
+    const bool usesWav = !wholeMusic || !headers["KEYSOUND"].empty();
+    const int  tracks  = pms    ? 9
+                         : myO2 ? (myO2Seven ? 7 : 4)
+                                : (seven ? 8 : 6) * (dual ? 2 : 1);
     // 前缀和只计算小节绝对拍位，暂不涉及 BPM 和 STOP。
     // 因此变长小节与时间线效果可以独立组合。
     std::array<double, 1001> starts{};
@@ -243,7 +332,7 @@ inline BeatMap load(const std::filesystem::path& path)
     for ( const auto& row : rows ) {
         const auto text    = std::string_view(row);
         const int  measure = integer(text.substr(1, 3), 10);
-        const int  channel = integer(text.substr(4, 2), 16);
+        const int  channel = channelNumber(text.substr(4, 2));
         const auto data    = trim(text.substr(7));
         if ( data.size() % 2 || data.size() > 2'000'000 ) return {};
         for ( std::size_t i = 0; i < data.size(); i += 2 ) {
@@ -280,10 +369,32 @@ inline BeatMap load(const std::filesystem::path& path)
     meta.main_cover_path = Config::utf8ToPath(headers["STAGEFILE"]);
     meta.preference_bpm  = initialBpm;
     meta.track_count     = tracks;
-    // 保留来源布局语义，避免另存 MMM 后转盘又被当作普通键显示。
-    // 只记录每侧普通键数；总轨数仍由基础元数据维护。
-    map.m_metadata.map_properties[MapMetadataType::BMS]["keys_per_side"] =
-        pms ? "9" : (seven ? "7" : "5");
+    storeMyO2Property(map.m_metadata, "myo2_player", headers["PLAYER"]);
+    storeMyO2Property(map.m_metadata, "myo2_rank", headers["RANK"]);
+    storeMyO2Property(map.m_metadata, "myo2_total", headers["TOTAL"]);
+    // 原生 MMM 不用小节长度参与时间积分，另存时按拍位还原源布局。
+    for ( int i = 0; i < 1000; ++i )
+        if ( lengths[i] != 4.0 )
+            storeMyO2Property(map.m_metadata,
+                              fmt::format("{}{}", MYO2_MEASURE_PREFIX, i),
+                              fmt::format("{}", lengths[i] / 4));
+    // 标准读取器保留转盘标签；MyO2 的首轨是普通键，因此不登记标准布局。
+    if ( myO2 ) {
+        storeMyO2Property(map.m_metadata, "myo2_format", "1");
+        storeMyO2Property(
+            map.m_metadata, MYO2_AUDIO_MODE, wholeMusic ? "MYO2" : "STANDARD");
+        storeMyO2Property(map.m_metadata, MYO2_KEYSOUND, headers["KEYSOUND"]);
+        storeMyO2Property(map.m_metadata, "myo2_bga", headers["BGA_MODE"]);
+        storeMyO2Property(map.m_metadata, "myo2_sp_note", headers["SP_NOTE"]);
+        if ( wholeMusic ) {
+            std::replace(
+                headers["BGM"].begin(), headers["BGM"].end(), '\\', '/');
+            meta.song_file_hint = Config::utf8ToPath(headers["BGM"]);
+        }
+    } else {
+        map.m_metadata.map_properties[MapMetadataType::BMS]["keys_per_side"] =
+            pms ? "9" : (seven ? "7" : "5");
+    }
     meta.bgm_track_count = 1;
     double bpm = initialBpm, previousBeat = 0, milliseconds = 0;
     // Timing 的毫秒时间与 BPM 派生字段一并初始化，供已有编辑器使用。
@@ -300,21 +411,15 @@ inline BeatMap load(const std::filesystem::path& path)
     timing(TimingEffect::BPM, bpm);
     std::array<std::optional<Note>, 16>        longStarts;
     std::array<std::optional<std::size_t>, 16> lastNotes;
-    const int  lnobj = integer(headers["LNOBJ"], 36);
-    const auto id    = [](int value) {
-        constexpr std::string_view digits =
-            "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-        std::string result(2, '0');
-        result[0] = digits[value / 36];
-        result[1] = digits[value % 36];
-        return result;
-    };
+    const int             lnobj = integer(headers["LNOBJ"], 36);
+    std::optional<double> origin;
+    int                   cueIndex = 0;
     // 未定义资源保留空采样；时间和物件不能因缺少 WAV 声明而丢失。
     // Key 的绑定覆盖默认打击音，BGM 使用同一资源表但由自动采样触发。
     // 两者共享文件定义不意味着共用播放游标，每次触发仍是独立声音。
     // 保留原始相对路径，使重开 MMM 后仍可在源目录找到文件。
     const auto binding = [&](int value) {
-        std::string filename = headers["WAV" + id(value)];
+        std::string filename = headers["WAV" + base36Code(value)];
         // Windows 反斜杠路径规范为跨平台分隔符，保留文件名本身。
         // 空绑定仍代表静音物件，不能删除其判定。
         std::replace(filename.begin(), filename.end(), '\\', '/');
@@ -325,40 +430,83 @@ inline BeatMap load(const std::filesystem::path& path)
         previousBeat = event.m_beat;
         // 极小 BPM 可能使积分溢出；拒绝非有限时间，不能传给播放调度。
         if ( !std::isfinite(milliseconds) ) return {};
+        const bool playerOrAuto =
+            myO2 && (event.m_channel == 1 ||
+                     (event.m_channel >= 0x11 && event.m_channel <= 0x69));
+        const auto code =
+            playerOrAuto ? base36Code(event.m_value) : std::string{};
+        const bool videoTrigger = code == "FF" && headers["BGA_MODE"] == "1";
+        const bool displayCue = headers["SP_NOTE"] == "1" &&
+                                (code == "HE" || code == "SW" || code == "ED");
+        // 启用但超出基础范围的特殊音符不能静默退化成普通点按。
+        if ( playerOrAuto && ((code == "BB" && headers.contains("BOUNCE")) ||
+                              headers.contains("BOUNCE" + code) ||
+                              (headers["LAB_EFFECTS"] == "1" &&
+                               (headers.contains("RELAY" + code) ||
+                                headers.contains("CHARGE" + code) ||
+                                headers.contains("CATCH" + code) ||
+                                headers.contains("SLIDE" + code)))) ) {
+            XERROR("MyO2 基础格式不支持特殊物件 {}", code);
+            return {};
+        }
         if ( event.m_channel == 3 || event.m_channel == 8 ) {
             bpm = event.m_channel == 3
                       ? event.m_value
-                      : positive(headers["BPM" + id(event.m_value)]);
+                      : positive(headers["BPM" + base36Code(event.m_value)]);
             if ( bpm <= 0 ) return {};
             timing(TimingEffect::BPM, bpm);
         } else if ( event.m_channel == 9 ) {
             // 同拍 BPM 已由排序优先处理，STOP 使用该拍开始时的有效 BPM。
             // 不增加 milliseconds：播放层另外消耗等待期间的输出帧。
-            const double units = positive(headers["STOP" + id(event.m_value)]);
-            if ( units <= 0 ) return {};
-            const double duration = units * 60 / (48 * bpm);
+            const auto units =
+                decimal(headers["STOP" + base36Code(event.m_value)]);
+            if ( !units || *units < 0 ) return {};
+            const double duration = *units * 60 / (48 * bpm);
             if ( !std::isfinite(duration) ) return {};
             timing(TimingEffect::STOP, duration);
+        } else if ( event.m_channel == SCROLL_CHANNEL ) {
+            // 滚动倍率属于独立视觉状态，零和负数都不改变音乐时间。
+            const auto rate =
+                decimal(headers["SCROLL" + base36Code(event.m_value)]);
+            if ( !rate ) return {};
+            timing(TimingEffect::SCROLL, *rate);
+        } else if ( code == "WW" || videoTrigger || displayCue ) {
+            if ( code == "WW" ) {
+                if ( origin && *origin != milliseconds ) return {};
+                origin = milliseconds;
+            } else {
+                // 全局控制项保存在 BMS 属性中，不能作为假音符进入编辑器。
+                storeMyO2Property(
+                    map.m_metadata,
+                    fmt::format("{}{}", MYO2_CUE_PREFIX, cueIndex++),
+                    fmt::format("{} {}", code, milliseconds));
+            }
         } else if ( event.m_channel == 1 ) {
+            if ( !usesWav ) continue;
             // 多条 BGM 即使同拍也全部保留，播放器负责混音。
             // 自动采样放在玩家轨道之后，与 Key 音显式绑定分开。
             AudioSampleEvent sample;
             sample.m_timestamp       = milliseconds;
             sample.m_track           = tracks;
             sample.m_audioResourceId = binding(event.m_value).m_audioResourceId;
-            map.m_audioSamples.push_back(std::move(sample));
+            // #BGM 的同路径 01 引用在 MyO2 模式由整曲轨承担，不重复播放。
+            if ( !wholeMusic || meta.song_file_hint.empty() ||
+                 Config::utf8ToPath(sample.m_audioResourceId)
+                         .lexically_normal() !=
+                     meta.song_file_hint.lexically_normal() )
+                map.m_audioSamples.push_back(std::move(sample));
         } else {
             const bool longChannel =
                 event.m_channel >= 0x51 && event.m_channel <= 0x69;
             const int track =
                 lane(longChannel ? event.m_channel - 0x40 : event.m_channel,
-                     seven,
+                     myO2 ? myO2Seven : seven,
                      pms);
             if ( track < 0 || track >= tracks ) continue;
             Note note;
             note.m_timestamp = milliseconds;
             note.m_track     = track;
-            note.setSampleBinding(binding(event.m_value));
+            if ( usesWav ) note.setSampleBinding(binding(event.m_value));
             // 长条端点复用开始点的音效，尾部资源编号不重新触发 Key。
             // 零长度或逆序端点不能转换成有效 Hold。
             // 成对模式在关闭后立即清空状态，下一对可重用相同 WAV 编号。
@@ -395,6 +543,15 @@ inline BeatMap load(const std::filesystem::path& path)
                 map.m_noteData.notes.push_back(std::move(note));
             }
         }
+    }
+    if ( wholeMusic && !meta.song_file_hint.empty() ) {
+        // 以谱面零点留住前导音符；整曲音频从 WW 时刻触发。
+        AudioSampleEvent sample;
+        sample.m_timestamp = origin.value_or(0);
+        sample.m_track     = tracks;
+        sample.m_audioResourceId =
+            Config::pathToUtf8Generic(meta.song_file_hint);
+        map.m_audioSamples.push_front(std::move(sample));
     }
     // 未闭合的长条不能猜测终点；整个导入失败避免静默截断。
     // sync 在所有拥有型容器稳定后建立统一索引和缓存。

@@ -7,6 +7,7 @@
 #include "config/Utf8Path.h"
 #include "log/colorful-log.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/beatmap/MyO2Bms.h"
 #include "mmm/project/PackageFileTypes.h"
 #include "mmm/project/Project.h"
 #include "runtime/AppThreadPool.h"
@@ -806,6 +807,117 @@ bool checkDenseSingleRow(const std::filesystem::path& root)
     return rows == 1;
 }
 
+/// @brief 独立验证 MyO2 谱包中的 KEY 音 ZIP、WW 和两种音乐对齐。
+/// @details KEY 音只存在于内层 ZIP，文件大小写有意与 #WAV 引用不同。
+/// 对同一来源分别保留原音频和重写音乐副本，检查 BGM 引用没有混入 KEY 音包。
+/// 源文件中的小节长度和滚速是 BMS 扩展，通过真正的打包服务执行。
+bool checkMyO2Pack(const std::filesystem::path& root)
+{
+    using namespace MMM;
+    using Logic::BmsPackageExportService;
+    const auto      source = root / "myo2-pack-source";
+    std::error_code error;
+    std::filesystem::create_directories(source / "charts", error);
+    if ( error || !makeAudio(source / "music.wav") ) return false;
+    const auto music = bytes(source / "music.wav");
+    const auto bank  = source / "hits.zip";
+    // 独立构造内层归档，只写入键音名；整曲波形仍需经外层谱包传递。
+    mz_zip_archive inner{};
+    if ( !mz_zip_writer_init_heap(&inner, 0, 0) ) return false;
+    void*       data = nullptr;
+    std::size_t size = 0;
+    const bool  zipped =
+        mz_zip_writer_add_mem(&inner,
+                              "Keys/HIT.wav",
+                              music.data(),
+                              music.size(),
+                              MZ_DEFAULT_COMPRESSION) &&
+        mz_zip_writer_finalize_heap_archive(&inner, &data, &size);
+    mz_zip_writer_end(&inner);
+    if ( !zipped ) return false;
+    std::ofstream bankOut(bank, std::ios::binary);
+    bankOut.write(static_cast<const char*>(data), size);
+    mz_free(data);
+    bankOut.close();
+    if ( !bankOut ) return false;
+
+    // WW 在起点之后 500ms，普通键与 SCROLL 处于音乐起播前。
+    // 单个较短小节覆盖相位处理后仍会保留 02 标签的情况。
+    const auto chartPath = source / "charts/demo.bms";
+    std::ofstream(chartPath) << R"BMS(#TITLE archive
+#BPM 120
+#AUDIO_MODE MYO2
+#BGM ../music.wav
+#KEYSOUND ../hits.zip
+#WAV01 keys/hit.wav
+#SCROLL01 -1
+
+*---------------------- MAIN DATA FIELD
+#00002:0.5
+#00016:00010000
+#00011:00ww
+#000SC:0001
+#00113:01
+)BMS";
+    Project project;
+    project.m_projectRoot = source;
+    project.m_audioResources.push_back(
+        AudioResource{ .m_id   = "main",
+                       .m_path = "music.wav",
+                       .m_type = AudioTrackType::Main });
+    const std::vector<std::string> files{ "charts/demo.bms",
+                                          "music.wav",
+                                          "hits.zip" };
+
+    // 两种对齐分别写入文件，读回实际包内路径，不能靠原始绝对路径播放。
+    for ( const auto mode : { BmsPackageAlignmentMode::ShiftEvents,
+                              BmsPackageAlignmentMode::RewriteAudio } ) {
+        const bool rewrite = mode == BmsPackageAlignmentMode::RewriteAudio;
+        const auto out =
+            root / (rewrite ? "myo2-rewrite.zip" : "myo2-shift.zip");
+        const auto extracted = root / (rewrite ? "myo2-rewrite" : "myo2-shift");
+        const auto result    = BmsPackageExportService::exportPackage(
+            project, files, out, {}, mode, true);
+        if ( !result.success ) {
+            XERROR("MyO2 带 KEY 音包的导出失败：{}", result.errorMessage);
+            return false;
+        }
+        if ( !unpack(out, extracted) ||
+             bytes(extracted / "hits.zip") != bytes(bank) )
+            return false;
+        const auto restored =
+            BeatMap::loadFromFile(extracted / "charts/demo.bms");
+        const auto& hint     = restored.m_baseMapMetadata.song_file_hint;
+        const auto  resolved = (extracted / "charts" / hint).lexically_normal();
+        if ( Bms::bmsProperty(restored.m_metadata, Bms::MYO2_AUDIO_MODE) !=
+                 "MYO2" ||
+             Bms::bmsProperty(restored.m_metadata, Bms::MYO2_KEYSOUND) !=
+                 "../hits.zip" ||
+             Bms::bmsProperty(restored.m_metadata, "myo2_measure_0") != "0.5" ||
+             restored.m_noteData.notes.size() != 2 ||
+             !restored.m_noteData.notes.front().m_sampleBinding ||
+             restored.m_noteData.notes.front()
+                     .m_sampleBinding->m_audioResourceId != "keys/hit.wav" ||
+             restored.m_audioSamples.size() != 1 ||
+             restored.m_audioSamples.front().effectiveTimestamp() !=
+                 (rewrite ? 0 : 500) ||
+             (rewrite ? !checkAudio(resolved, -500)
+                      : bytes(resolved) != music) )
+            return false;
+    }
+    // 依赖缺失只能让整次事务失败，不能重新写出无音源的 ZIP 覆盖先前成品。
+    const auto existing = root / "myo2-shift.zip";
+    const auto saved    = bytes(existing);
+    const auto missing  = BmsPackageExportService::exportPackage(
+        project,
+        { "charts/demo.bms", "music.wav" },
+        existing,
+        {},
+        BmsPackageAlignmentMode::ShiftEvents,
+        true);
+    return !missing.success && bytes(existing) == saved;
+}
+
 /// @brief 对用户指定的真实谱面执行只读来源探针。
 /// @param source 外部来源文件，永不覆盖。
 /// @param root 统一的构建输出目录。
@@ -973,6 +1085,7 @@ int main(int argc, char** argv)
     if ( !checkSingleFileExports(root) ) return 6;
     if ( !checkDenseSingleRow(root) ) return 7;
     if ( !checkDefaultFaithfulExport(root) ) return 8;
+    if ( !checkMyO2Pack(root) ) return 9;
     return argc == 2 || externalProbe(MMM::Config::utf8ToPath(argv[2]), root)
                ? 0
                : 4;

@@ -36,6 +36,7 @@
 #include "logic/session/SessionUtils.h"
 #include "logic/session/context/SessionContext.h"
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/beatmap/MyO2Bms.h"
 #include "mmm/project/PackageFileTypes.h"
 #include "mmm/project/PackagePathFilter.h"
 #include "mmm/project/Project.h"
@@ -4141,22 +4142,59 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
                              : nullptr;
         bool referencesValid =
             !needsResourceSnapshot || static_cast<bool>(exportMap);
+        std::string bmsAlignmentError;
         if ( exportMap ) {
             const auto& sourcePath =
                 m_ctx->currentBeatmap->m_baseMapMetadata.map_path;
+            bool myO2Bank = false;
+            if ( isBms ) {
+                // 在首拍对齐之前写入目标协议，使控制标记沿用本次平移。
+                auto& format =
+                    exportMap->m_metadata.map_properties[MapMetadataType::BMS];
+                format["myo2_grid"]   = cmd.bmsMyO2Grid ? "1" : "0";
+                format["myo2_format"] = cmd.bmsMyO2Grid ? "1" : "0";
+                const auto bank =
+                    Bms::bmsProperty(exportMap->m_metadata, Bms::MYO2_KEYSOUND);
+                myO2Bank = cmd.bmsMyO2Grid && !bank.empty();
+                if ( myO2Bank ) {
+                    const auto sourceBank =
+                        sourcePath.parent_path() /
+                        Config::utf8ToPath(std::string(bank));
+                    std::error_code error;
+                    const auto      relative = std::filesystem::relative(
+                        sourceBank, savePath.parent_path(), error);
+                    referencesValid =
+                        !error && !relative.empty() &&
+                        BmsPackageExportService::validateMyO2KeySoundBank(
+                            *exportMap, sourceBank, bmsAlignmentError);
+                    if ( referencesValid )
+                        format[std::string(Bms::MYO2_KEYSOUND)] =
+                            Config::pathToUtf8Generic(relative);
+                }
+            }
             const auto references =
                 ProjectResourceService::collectBeatmapAudioReferences(
                     *exportMap, Config::pathToUtf8(sourcePath));
             const auto* project = EditorEngine::instance().getCurrentProject();
+            const auto  originalMain =
+                exportMap->m_baseMapMetadata.song_file_hint.lexically_normal();
             // 收集结果持有自己的字符串，后续改写快照不会使其失效。
             // 音效引用可出现在普通 Note、Hold
             // 和自动采样中，统一通过服务重映射。
             // 同文件被多处引用仍解析为同一路径，由 BMS writer 去重声明。
             // 未绑定的静音 Note 没有文件引用，不要求构造虚假的 WAV 文件。
             for ( const auto& reference : references ) {
+                if ( !referencesValid ) break;
                 if ( reference.m_audioReference.empty() ) continue;
                 auto resourcePath =
                     Config::utf8ToPath(reference.m_audioReference);
+                if ( myO2Bank &&
+                     (reference.m_kind ==
+                          BeatmapAudioReferenceKind::NoteSampleBinding ||
+                      (reference.m_kind ==
+                           BeatmapAudioReferenceKind::AudioSampleEvent &&
+                       resourcePath.lexically_normal() != originalMain)) )
+                    continue;
                 const auto* resource =
                     project
                         ? ProjectResourceService::findAudioResourceForReference(
@@ -4191,7 +4229,7 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
                 ProjectResourceService::remapBeatmapAudioResourceId(
                     *exportMap,
                     reference.m_audioReference,
-                    Config::pathToUtf8(relative));
+                    Config::pathToUtf8Generic(relative));
                 if ( exportMap->m_baseMapMetadata.song_file_hint ==
                      Config::utf8ToPath(reference.m_audioReference) )
                     exportMap->m_baseMapMetadata.song_file_hint = relative;
@@ -4203,11 +4241,6 @@ void BeatmapSession::handleCommand(const CmdSaveBeatmapAs& cmd)
         // 选项关闭时保持既有另存为语义；其他格式不接受 BMS 对齐参数。
         // 对齐失败与资源缺失一样阻止序列化，已有目标不能被提前截断。
         // 有损网格选项只写入导出快照，不污染当前谱面或普通保存。
-        if ( exportMap && isBms )
-            exportMap->m_metadata
-                .map_properties[MapMetadataType::BMS]["myo2_grid"] =
-                cmd.bmsMyO2Grid ? "1" : "0";
-        std::string bmsAlignmentError;
         if ( referencesValid && exportMap && isBms &&
              cmd.bmsShiftEventsToGrid ) {
             referencesValid = BmsPackageExportService::shiftEventsToGrid(
