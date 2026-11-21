@@ -75,6 +75,12 @@ using Common::Render::TextureID;
 constexpr Color BACKGROUND{ 16, 18, 22 };
 /// @brief 轨道贴图透明处的纯色背景，保留轨道和分拍线对比。
 constexpr Color TRACK_BACKGROUND{ 25, 29, 36 };
+/// @brief 列外框使用独立的蓝灰色，与轨道线和页间底色区分。
+constexpr Color COLUMN_BORDER{ 113, 133, 163 };
+/// @brief 外框占用已有页边距；缩图时仍可辨认各列边界。
+/// @details 相邻列各使用一份边宽，间隔内仍要留出底色，避免两列外框粘连。
+constexpr int COLUMN_BORDER_WIDTH = 3;
+static_assert(2 * COLUMN_BORDER_WIDTH < MARGIN);
 /// @brief 时间栏与水印的字体色，保留原始字形的覆盖率。
 constexpr Color ATTRIBUTION{ 207, 215, 229 };
 
@@ -681,6 +687,7 @@ void labelGlyphs(const Graphic::RasterizedAsciiFont& font,
 /// @details 首列决定输出高度，末列使用实际秒数和相同像素比例。
 /// 没有物件的余下图像区域继续使用整图底色。
 /// 每个绘制器只按该列的局部行号推进。
+/// 外框使用原有边距与时间栏余量，输出尺寸和像素预算沿用原布局。
 /// 整行合成后过滤再压缩，确保列顺序、边距和水印不会乱序。
 ScreenshotResult encode(const BeatmapScreenshotImage& image,
                         const std::filesystem::path& temp, std::stop_token stop)
@@ -726,20 +733,35 @@ ScreenshotResult encode(const BeatmapScreenshotImage& image,
         if ( stop.stop_requested() ) return ScreenshotResult::Cancelled;
         std::fill(row.begin(), row.end(), BACKGROUND);
         // 轨道从时间栏之后开始，防止长图裁切时标签落在节点上。
-        // 逐列判断短列是否还有实际轨道，再尝试合成其活动图元。
-        if ( y < top ) {
-            drawWatermarks(y, row, glyphs);
-        } else {
-            const int dy = y - top;
+        if ( y < top ) drawWatermarks(y, row, glyphs);
+
+        const int dy = y - top;
+        if ( dy >= -COLUMN_BORDER_WIDTH ) {
             for ( std::size_t col = 0; col < image.m_columns.size(); ++col ) {
-                if ( dy >= image.m_columns[col].m_height ) continue;
-                // 每一列使用同样的宽度和时间比例，只有有效裁切高度不同。
+                const int trackHeight = image.m_columns[col].m_height;
+                // 末列的底边跟随实际轨道高度，以下继续留空。
+                if ( dy >= trackHeight + COLUMN_BORDER_WIDTH ) continue;
                 const auto left = MARGIN + col * spacing +
                                   (spacing - MARGIN - image.m_columnWidth) / 2;
-                rasterizers[col].draw(
-                    dy,
-                    std::span(row).subspan(left, image.m_columnWidth),
-                    image.m_atlas);
+                // 在现有间距中向外描边，保留轨道范围和边缘物件。
+                auto frame = std::span(row).subspan(
+                    left - COLUMN_BORDER_WIDTH,
+                    image.m_columnWidth + 2 * COLUMN_BORDER_WIDTH);
+                if ( dy < 0 || dy >= trackHeight ) {
+                    // 顶边与底边不推进轨道栅格器，保留每列的局部扫描顺序。
+                    std::ranges::fill(frame, COLUMN_BORDER);
+                } else {
+                    // 中间行只填两侧，并将原尺寸的内部区间交回轨道栅格器。
+                    // 轨道本身保留皮肤的轨道线和分拍线配色。
+                    std::ranges::fill(frame.first(COLUMN_BORDER_WIDTH),
+                                      COLUMN_BORDER);
+                    std::ranges::fill(frame.last(COLUMN_BORDER_WIDTH),
+                                      COLUMN_BORDER);
+                    rasterizers[col].draw(
+                        dy,
+                        frame.subspan(COLUMN_BORDER_WIDTH, image.m_columnWidth),
+                        image.m_atlas);
+                }
             }
         }
 
