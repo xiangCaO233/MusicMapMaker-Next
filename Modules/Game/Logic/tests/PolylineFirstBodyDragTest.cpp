@@ -1,3 +1,4 @@
+#include "common/PolylineGeometry.h"
 #include "common/render/TextureID.h"
 #include "log/colorful-log.h"
 #include "logic/ecs/components/InteractionComponent.h"
@@ -1035,6 +1036,213 @@ bool runDraftInternalHoldBoundaryCase()
            restored.m_subNotes[1].trackIndex == -3 &&
            restored.m_subNotes[2].trackIndex == -3;
 }
+/// @brief 通过选择工具的实际起拖、位移与释放命令验证首尾接合。
+/// @param targetType 落点上原有的独立物件或另一根折线。
+/// @param holdTail 以 Hold 尾端替换 Flick 尾端，覆盖纵向和同类接缝。
+/// @param timeOffset 目标相对尾端的时间差，覆盖容差内对齐和远离时保留物件。
+/// @param cancel 是否取消实际发生的移动，确保预览期未吞掉目标。
+/// @return 根、子投影、目标及历史都符合所选接缝类型时返回真。
+/// @par 画布坐标
+/// 判定线处的时间为一秒，整个手势保持同一纵坐标，隔离出一轨横移。
+/// 目标排在源根之后半秒；不能把目标当成鼠标悬浮或拖动开始处命中的物件。
+/// 值略有偏差的长条用于区分真正的接缝对齐与简单拼接列表。
+/// 更新带临时关闭磁吸的意图，使偏差情形不被全局时间网格提前校正。
+/// @par 案例构造
+/// Flick 尾与移动根隔一轨，实际接点要使用箭头终轨。
+/// Hold 尾与移动根隔一段时间，只有计算末段结束时间才会接到目标。
+/// 相同类型的首尾接合后压缩成同类型的一段；不同类型保留转折。
+/// @par 历史和投影
+/// 按下前建好普通音符、折线根和子投影，避免假设顶层模型可以直接充当拾取实体。
+/// 合并前保留目标实体的完整几何和属性，因此同一夹具也能检查取消分支。
+/// 撤销检查的是原先的实体句柄和稳定身份，防止只恢复相同数量的新对象。
+/// 重做再次验证已提交结构，证明历史可独立于鼠标位置及接缝搜索重放。
+/// 生产路径在首次释放和重做时用同一批次写入，子实体数量必须与根数组一致。
+bool runDropJoinCase(MMM::NoteType targetType, bool holdTail = false,
+                     double timeOffset = 0.0, bool cancel = false)
+{
+    using namespace MMM::Logic;
+    using Type = MMM::NoteType;
+    SessionContext ctx;
+    configure(ctx);
+    // 走选择工具对应的控制器，直接调用绘制工具会掩盖接合入口未接通的回归。
+    ctx.currentTool = EditTool::Marquee;
+    auto& registry  = ctx.noteRegistry;
+    /// @brief 生成正式根和全部子投影，为撤销前后关系保留原始实体身份。
+    const auto addNote = [&](NoteComponent& note) {
+        // 贴近装载流程，根和内嵌子段各自持有稳定标识。
+        ensureNoteCollaborationIdentity(note);
+        const auto entity = registry.create();
+        registry.emplace<NoteComponent>(entity, note);
+        registry.emplace<InteractionComponent>(entity);
+        // 若只填入父组件，子投影泄漏或错绑也会通过几何断言。
+        for ( std::size_t i = 0; i < note.m_subNotes.size(); ++i ) {
+            const auto child = registry.create();
+            registry.emplace<NoteComponent>(
+                child,
+                makeNoteComponentFromSubNote(
+                    note.m_subNotes[i], true, entity, static_cast<int>(i)));
+        }
+        return entity;
+    };
+
+    // 源根右移一轨，尾端落在目标头的轨道上。Flick 的实际终轨和起轨不同。
+    // 两种尾部共享 1.5 秒落点，垂直段以结束时间匹配，不能只用其起点。
+    NoteComponent source{ .m_type       = Type::POLYLINE,
+                          .m_timestamp  = 1.0,
+                          .m_trackIndex = 1,
+                          .m_annotation = "source" };
+    if ( holdTail ) {
+        // Hold 末段保持非零长度，留下与目标 Hold 延伸前后的可辨识边界。
+        source.m_subNotes = {
+            { .type       = Type::FLICK,
+              .timestamp  = 1.0,
+              .trackIndex = 1,
+              .dtrack     = 1 },
+            { .type       = Type::HOLD,
+              .timestamp  = 1.0,
+              .duration   = 0.5,
+              .trackIndex = 2 },
+        };
+    } else {
+        // 从二轨附近向左滑，统一横移后仍要用正确的方向推算终轨。
+        source.m_subNotes = {
+            { .type       = Type::HOLD,
+              .timestamp  = 1.0,
+              .duration   = 0.5,
+              .trackIndex = 1 },
+            { .type       = Type::FLICK,
+              .timestamp  = 1.5,
+              .trackIndex = 1,
+              .dtrack     = -1 },
+        };
+    }
+    const auto moving = addNote(source);
+    // 目标时间来自输入参数和夹具的固定落点，不从实际拖动结果反推。
+    const auto    joinTime  = 1.5 + timeOffset;
+    const int     joinTrack = holdTail ? 3 : 1;
+    NoteComponent target{ .m_type       = targetType,
+                          .m_timestamp  = joinTime,
+                          .m_duration   = targetType == Type::HOLD ? 0.5 : 0.0,
+                          .m_trackIndex = joinTrack,
+                          .m_dtrack     = targetType == Type::FLICK ? -1 : 0,
+                          .m_annotation = "target" };
+    // 目标折线以 Hold 起笔，附加 Flick 用来核对后续绝对拍位保持原样。
+    if ( targetType == Type::POLYLINE )
+        target.m_subNotes = {
+            { .type       = Type::HOLD,
+              .timestamp  = joinTime,
+              .duration   = 0.5,
+              .trackIndex = joinTrack },
+            { .type       = Type::FLICK,
+              .timestamp  = joinTime + 0.5,
+              .trackIndex = joinTrack,
+              .dtrack     = -1 },
+        };
+    const auto stationary = addNote(target);
+    // 各目标的子段数不同，撤销以后要求回到本例真实的注册表规模。
+    const auto originalCount = registry.view<const NoteComponent>().size();
+
+    // 两种桌面输入方案都在按下处先选中根，再发送带命中部位的拖动命令。
+    InteractionController controller(ctx);
+    // 目标保持未选中，确保是接点检测发现它，而不是批量移动把它带进来。
+    controller.handleCommand(CmdSelectEntity{ moving, true });
+    // 子索引零结合根节点命中表示整根移动，不误入首段身体的局部拖动。
+    controller.handleCommand(
+        CmdStartDrag{ moving,
+                      "Basic2DCanvas",
+                      false,
+                      ChartObjectKind::PlayerNote,
+                      static_cast<std::uint8_t>(HoverPart::PolylineNode),
+                      0 });
+    controller.handleCommand(
+        CmdUpdateDrag{ "Basic2DCanvas", 350.0F, 300.0F, true });
+    // 预览可暂时重叠，但必须仍能取消，且不能提前写入历史。
+    if ( !ctx.isDragging ||
+         registry.get<const NoteComponent>(moving).m_trackIndex != 2 ||
+         !registry.valid(stationary) ||
+         ctx.actionStack.getUndoStackSize() != 0 )
+        return false;
+    controller.handleCommand(CmdEndDrag{ "Basic2DCanvas", cancel });
+    // 取消用例在实际跨轨后提交取消，覆盖目标在取消前已对齐的情形。
+    if ( cancel )
+        return registry.valid(stationary) &&
+               registry.get<const NoteComponent>(moving).m_trackIndex == 1 &&
+               ctx.actionStack.getUndoStackSize() == 0;
+    if ( ctx.actionStack.getUndoStackSize() != 1 ) return false;
+    // 容差外仍应产生普通移动历史，目标保持独立。
+    if ( std::abs(timeOffset) > 0.003 ) return registry.valid(stationary);
+
+    // 检查合法连接和投影生命周期。图三中的同向 Flick 接成一段更长的 Flick。
+    // Hold 尾接 Hold 则延长原末段，避免生成两个相邻的同类子段。
+    /// @brief 共同检查首次提交和重做，不借用撤销前的组件引用。
+    const auto checkJoined = [&] {
+        // 新子投影会在动作中重新分配，只有保留的根句柄能跨提交连续访问。
+        const auto& result   = registry.get<const NoteComponent>(moving);
+        const auto& segments = result.m_subNotes;
+        // 单键只是接点，不能也作为一个子段插入正交路径。
+        // 单段长条与 Flick 只有与源尾部同类时才会压缩为一段。
+        const auto expectedCount =
+            targetType == Type::POLYLINE
+                ? 4U
+                : (targetType == Type::HOLD && !holdTail ? 3U : 2U);
+        // 根批注的来源文字分别不同，检验删除目标时没有一起丢掉这份内容。
+        // 顶层只有保留的根，其余实体都应是结果子投影。
+        if ( registry.valid(stationary) ||
+             result.m_annotation != "source\ntarget" ||
+             segments.size() != expectedCount ||
+             registry.view<const NoteComponent>().size() != expectedCount + 1 ||
+             !MMM::Common::isCanonicalPolyline(
+                 segments, result.m_timestamp, result.m_trackIndex, 0, 3) )
+            return false;
+        // 允许在容差内微调源路径，静止长条的结束时间仍使用原拍位。
+        if ( targetType == Type::HOLD &&
+             std::abs(segments.back().timestamp + segments.back().duration -
+                      (joinTime + 0.5)) > 1e-7 )
+            return false;
+        // 同向 Flick 的合并终轨落在两轨之外，只拼列表或仅删后一段都会错。
+        if ( targetType == Type::FLICK && segments.back().dtrack != -2 )
+            return false;
+        if ( targetType == Type::POLYLINE &&
+             segments.back().timestamp != joinTime + 0.5 )
+            return false;
+        // 位置正确仍可能有重复投影，分别核对每个索引只出现一次。
+        const auto        notes = registry.view<const NoteComponent>();
+        std::vector<bool> projected(segments.size());
+        for ( auto entity : notes ) {
+            if ( entity == moving ) continue;
+            const auto& child = notes.get<const NoteComponent>(entity);
+            // 每个子投影都归入保留的根，并与内嵌子段共享身份。
+            // 子索引先做范围检查，再验证身份，避免坏索引令测试自身越界。
+            if ( !child.m_isSubNote || child.m_parentPolyline != moving ||
+                 child.m_subIndex < 0 ||
+                 static_cast<std::size_t>(child.m_subIndex) >=
+                     segments.size() ||
+                 projected[child.m_subIndex] ||
+                 child.m_collaborationId !=
+                     segments[child.m_subIndex].collaborationId )
+                return false;
+            projected[child.m_subIndex] = true;
+        }
+        return true;
+    };
+    if ( !checkJoined() ) return false;
+    ctx.actionStack.undo(ctx);
+    // 一次撤销应同时恢复源的位置和静止目标、子投影及独立批注。
+    // 取原句柄核验，因为按数目恢复一个替代对象会破坏之前已存在的动作引用。
+    // 检查源起轨可排除只逆转结构合并、遗漏先前横移的双动作实现。
+    if ( !registry.valid(stationary) ||
+         registry.view<const NoteComponent>().size() != originalCount ||
+         registry.get<const NoteComponent>(moving).m_trackIndex != 1 ||
+         registry.get<const NoteComponent>(stationary).m_collaborationId !=
+             target.m_collaborationId ||
+         registry.get<const NoteComponent>(stationary).m_annotation !=
+             "target" )
+        return false;
+    ctx.actionStack.redo(ctx);
+    // 重做不重新查找目标；重建后的投影仍必须与根数组一致。
+    // checkJoined 只读当前 Registry，任何失效的目标句柄都不用于访问组件。
+    return checkJoined();
+}
 }  // namespace
 
 /// @brief 运行折线身体、内部节点、末端和草稿边界的回归矩阵。
@@ -1063,7 +1271,21 @@ int main()
                    runPolylineEndpointCase(true, false, true) &&
                    runPolylineEndpointCase(true, true, false) &&
                    runPolylineEndpointCase(true, true, true) &&
-                   runDraftInternalHoldBoundaryCase()
+                   runDraftInternalHoldBoundaryCase() &&
+                   // 单键被接点吸收，折线段数保持不变。
+                   runDropJoinCase(MMM::NoteType::NOTE) &&
+                   // 独立 Hold 接入时，源尾部有小幅误差仍能贴齐。
+                   runDropJoinCase(MMM::NoteType::HOLD, false, 0.001) &&
+                   // 复现相邻的同向 Flick，结束时合成一个更长的横移。
+                   runDropJoinCase(MMM::NoteType::FLICK) &&
+                   // 后一根折线的其余段随接合保留。
+                   runDropJoinCase(MMM::NoteType::POLYLINE) &&
+                   // 纵向尾部也必须能合并同轨独立 Hold。
+                   runDropJoinCase(MMM::NoteType::HOLD, true) &&
+                   // 同轨但超出时间容差时，只移动源物件。
+                   runDropJoinCase(MMM::NoteType::NOTE, false, 0.01) &&
+                   // 实际发生预览移动后才取消，测试接合没有在中途提交。
+                   runDropJoinCase(MMM::NoteType::POLYLINE, false, 0.0, true)
                ? 0
                : 1;
 }
