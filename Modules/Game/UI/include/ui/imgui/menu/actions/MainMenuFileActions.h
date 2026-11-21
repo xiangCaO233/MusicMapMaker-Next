@@ -34,6 +34,10 @@ std::unique_ptr<IMainMenuItemActionHandler> createSaveBeatmapAction();
 /// @brief 创建打开另存为流程的菜单项业务处理器。
 std::unique_ptr<IMainMenuItemActionHandler> createSaveBeatmapAsAction();
 
+/// @brief 创建导出谱面长截图的菜单项业务处理器。
+std::unique_ptr<IMainMenuItemActionHandler>
+createExportBeatmapScreenshotAction();
+
 /// @brief 创建打开谱面打包流程的菜单项业务处理器。
 std::unique_ptr<IMainMenuItemActionHandler> createPackBeatmapAction();
 

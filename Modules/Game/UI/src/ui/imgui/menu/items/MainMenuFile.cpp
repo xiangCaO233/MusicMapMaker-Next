@@ -85,6 +85,14 @@ MainMenuFile::MainMenuFile()
         MainMenuItemTextKind::TranslationKey,
         "Ctrl+Shift+S",
         createSaveBeatmapAsAction()));
+    // 长截图单独收集成图范围和水印，仍从文件菜单的导出区打开。
+    // 同一动作也由移动文件页按语义标识派发。
+    registerItem(std::make_unique<MainMenuActionItem>(
+        nullptr,
+        "ui.file.long_screenshot",
+        MainMenuItemTextKind::TranslationKey,
+        nullptr,
+        createExportBeatmapScreenshotAction()));
     // 打包位于文件菜单末尾，表示其依赖已保存项目资源。
     registerItem(std::make_unique<MainMenuActionItem>(
         ICON_MMM_PACK,

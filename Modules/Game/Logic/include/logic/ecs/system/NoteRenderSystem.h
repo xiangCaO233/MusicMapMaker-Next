@@ -70,6 +70,28 @@ public:
         class HitFXSystem* hitFXSystem = nullptr, float previewAreaRatio = 0.0f,
         const ScrollCache* viewportCache = nullptr);
 
+    /// @brief 为导出的单列生成普通轨道、分拍线和正式物件绘制命令。
+    /// @param registry 导出私有注册表；包含选中时间范围的正式物件。
+    /// @param entities 本列相交的物件；跨列的长条由调用方重复传入。
+    /// @param cache 导出专用的线性时间映射。
+    /// @param bpmEvents 按时间排序的 BPM 事件，供正式分拍线渲染器消费。
+    /// @param snapshot 已设置导出皮肤图集 UV 的目标批次。
+    /// @param config 保留物件尺寸、填充和分拍的正式编辑器配置。
+    /// @param begin 列底部的时间，以秒计。
+    /// @param width 正式轨道总宽。
+    /// @param height 本列实际时长对应的像素高度。
+    /// @param trackCount 正式轨道数。
+    /// @param pixelsPerSecond 导出时每秒的像素高度。
+    /// @param showBeatLines 是否在轨道和物件之间绘制横向分拍线。
+    /// @warning 用户明确导出时才调用，不得在常规渲染路径追加此批次。
+    static void generateLongScreenshotColumn(
+        entt::registry& registry, const std::vector<entt::entity>& entities,
+        const ScrollCache&                           cache,
+        const std::vector<const TimelineComponent*>& bpmEvents,
+        RenderSnapshot& snapshot, const Config::EditorConfigView& config,
+        double begin, float width, float height, int trackCount,
+        float pixelsPerSecond, bool showBeatLines);
+
 private:
     // --- 内部逻辑拆分方法 ---
 

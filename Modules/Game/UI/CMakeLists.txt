@@ -176,6 +176,9 @@ add_library(
   src/ui/imgui/menu/actions/file/PackBeatmapAction.cpp
   src/ui/imgui/menu/actions/file/SaveBeatmapAction.cpp
   src/ui/imgui/menu/actions/file/SaveBeatmapAsAction.cpp
+  # 长截图独立栅格化正式轨道，菜单只负责快照和保存路径。
+  src/ui/imgui/menu/actions/file/ExportBeatmapScreenshotAction.cpp
+  src/ui/export/BeatmapLongScreenshot.cpp
   # 帮助菜单动作：更新检查、帮助路径和关于窗口。
   src/ui/imgui/menu/actions/help/CheckUpdateAction.cpp
   src/ui/imgui/menu/actions/help/OpenHelpPathAction.cpp
@@ -325,6 +328,9 @@ target_link_libraries(
          Network)
 target_link_libraries(UI PRIVATE NetworkCollaboration luajit::luajit 3rd_sol2
                                  3rd_nlohmann_json)
+
+# 逐行压缩长截图的 PNG 数据，复用项目的 miniz 依赖。
+target_link_libraries(UI PRIVATE 3rd_miniz)
 
 # Windows 系统文件管理器调用 ShellExecuteW，需要显式链接 Shell32。
 if(WIN32)
@@ -841,3 +847,19 @@ mmm_add_test_executable(UI SoundEffectTouchScrollTest
 target_link_libraries(SoundEffectTouchScrollTest PRIVATE UI Audio Log)
 mmm_register_test_case(NAME SoundEffectTouchScrollTest COMMAND
                        SoundEffectTouchScrollTest)
+
+# 复用真实画布批次，以独立解码器检查 PNG 像素、时间裁切与分列。
+mmm_add_test_executable(UI BeatmapLongScreenshotTest
+                        tests/BeatmapLongScreenshotTest.cpp)
+# 链接生产导出器，让测试与应用共用同一组绘制和编码代码。
+target_link_libraries(BeatmapLongScreenshotTest PRIVATE UI)
+
+# 从源码目录读取默认皮肤及字库，避免依赖执行机器的已安装字体。 测试仅向构建输出目录写入 PNG，保留可检查的结果。
+mmm_register_test_case(
+  NAME
+  BeatmapLongScreenshotTest
+  COMMAND
+  BeatmapLongScreenshotTest
+  "${CMAKE_SOURCE_DIR}/assets/skins/mmm-default/skin.lua"
+  "${CMAKE_SOURCE_DIR}/assets/translations"
+  "${CMAKE_BINARY_DIR}/test_output")
