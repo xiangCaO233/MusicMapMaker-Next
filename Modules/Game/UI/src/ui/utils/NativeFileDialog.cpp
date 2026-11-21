@@ -6,6 +6,7 @@
 
 #include <GLFW/glfw3.h>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -278,6 +279,42 @@ nfdresult_t openFile(nfdu8char_t** outPath, const nfdu8filteritem_t* filters,
     return runDialog(args, [outPath](const nfdopendialogu8args_t& dialogArgs) {
         return NFD_OpenDialogU8_With(outPath, &dialogArgs);
     });
+}
+
+/// @brief 多选沿用单文件选择的父窗口、光标和最近目录处理。
+/// @warning 用户触发的阻塞调用；必须保持在 UI 线程。
+nfdresult_t openFiles(std::vector<std::string>& paths,
+                      const nfdu8filteritem_t* filters, nfdfiltersize_t count,
+                      const nfdu8char_t* defaultPath)
+{
+    paths.clear();
+    const auto            directory = resolveDefaultPath(defaultPath);
+    nfdopendialogu8args_t args{};
+    args.filterList  = filters;
+    args.filterCount = count;
+    args.defaultPath = directory.empty() ? nullptr : directory.c_str();
+    const nfdpathset_t* selected = nullptr;
+    const auto result = runDialog(args, [&selected](const auto& dialogArgs) {
+        return NFD_OpenDialogMultipleU8_With(&selected, &dialogArgs);
+    });
+    if ( result != NFD_OKAY ) return result;
+    // 整个路径集与每个元素的分配相互独立，部分读取失败时也必须释放两者。
+    const std::unique_ptr<const nfdpathset_t, decltype(&NFD_PathSet_Free)>
+                     selection(selected, NFD_PathSet_Free);
+    nfdpathsetsize_t size = 0;
+    if ( NFD_PathSet_GetCount(selected, &size) != NFD_OKAY ) return NFD_ERROR;
+    paths.reserve(size);
+    for ( nfdpathsetsize_t index = 0; index < size; ++index ) {
+        nfdu8char_t* path = nullptr;
+        if ( NFD_PathSet_GetPathU8(selected, index, &path) != NFD_OKAY ) {
+            paths.clear();
+            return NFD_ERROR;
+        }
+        const std::unique_ptr<nfdu8char_t, decltype(&NFD_PathSet_FreePathU8)>
+            owned(path, NFD_PathSet_FreePathU8);
+        paths.emplace_back(path);
+    }
+    return NFD_OKAY;
 }
 
 /// @brief 打开保存文件原生选择器。

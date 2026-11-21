@@ -1,7 +1,9 @@
 #include "mmm/beatmap/BeatMap.h"
+#include "mmm/beatmap/BmsTextEncoding.h"
 #include "mmm/timing/TimingInterpolationAlgorithms.h"
 
 #include "BmsFormat.hpp"
+#include "BmsTextEncoding.hpp"
 #include "LoadMMMMap.hpp"
 #include "LoadMalodyMap.hpp"
 #include "LoadOSUMap.hpp"
@@ -22,6 +24,13 @@
 #include <nlohmann/json.hpp>
 #include <unordered_map>
 #include <utility>
+
+/// @brief 复用 BMS 加载器的编码规则，平台转换器留在 MMM 模块内。
+/// @warning 低频谱面操作；调用者持有完整文件文本。
+std::optional<std::string> MMM::Bms::decodeBmsText(std::string text, bool myO2)
+{
+    return decodeText(std::move(text), myO2);
+}
 
 namespace MMM
 {

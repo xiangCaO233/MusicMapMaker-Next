@@ -40,6 +40,8 @@ add_library(
   src/logic/ImdPackageExportService.cpp
   # BMS 谱包独立管理首拍平移、音频副本和 ZIP 事务。
   src/logic/BmsPackageExportService.cpp
+  # 批量转码及按格式改写谱面引用由后台逻辑服务负责。
+  src/logic/AudioBatchExportService.cpp
   # 音频原点对齐是导出模型转换，不要求渲染器介入时间调整。
   src/logic/MczAudioOriginAlignment.cpp
   # 注册表管理会话与渲染同步身份，项目服务管理目录、资源和保存命令。
@@ -534,3 +536,11 @@ mmm_add_test_executable(Logic CanvasTouchNavigationTest
 target_link_libraries(CanvasTouchNavigationTest PRIVATE Logic Log)
 mmm_register_test_case(NAME CanvasTouchNavigationTest COMMAND
                        CanvasTouchNavigationTest)
+
+# 使用生成的 PCM 和各谱面格式小夹具，验证完整批量转换与音频改链。
+mmm_add_test_executable(Logic AudioBatchExportServiceTest
+                        tests/AudioBatchExportServiceTest.cpp)
+target_link_libraries(AudioBatchExportServiceTest PRIVATE Logic Log)
+mmm_register_test_case(
+  NAME AudioBatchExportServiceTest COMMAND AudioBatchExportServiceTest
+  "${CMAKE_BINARY_DIR}/test_output/audio_batch_export")
