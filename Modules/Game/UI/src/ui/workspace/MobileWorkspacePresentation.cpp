@@ -182,6 +182,8 @@ private:
     bool m_showWorkbench{ true };
     /// @brief 返回操作可没有触屏释放，用独立边沿提交设置关闭状态。
     bool m_commitLayout{};
+    /// @brief 工具抽屉的还原请求在下一帧提交宿主前消费。
+    bool m_layoutResetPending{};
     /// @brief 等公共首次工作区初始化完成后，再恢复客户端资源类别。
     int m_restoreResourceTab{};
     /// @brief 当前帧几何不跨线程共享，旋转后立即重新计算。
@@ -259,6 +261,24 @@ void MobileWorkspacePresentation::beginFrame(UIManager& manager)
         // 公共无项目初始化会在本帧稍后选择文件页，资源类别必须延后到帧末恢复。
         m_restoreResourceTab = saved.m_resourceTab;
         m_initialized        = true;
+    }
+    if ( std::exchange(m_layoutResetPending, false) ) {
+        // 放在共享显隐状态发布之前，避免本帧的窗口提交读取旧开关。
+        const Config::MobileWorkspaceSettings defaults;
+        // 复用首次启动默认值，不修改资源抽屉选中的页签或设置页的开关。
+        m_showToolbar   = defaults.m_toolbar;
+        m_showTiming    = defaults.m_timing;
+        m_showPreview   = defaults.m_preview;
+        m_showWorkbench = defaults.m_workbench;
+        // 把手也回到默认安全区，避免下次需要还原时找不到抽屉入口。
+        m_model.restoreHandleCenters(defaults.m_leftCenter,
+                                     defaults.m_rightCenter);
+        // 停靠树随后按本帧实际视口尺寸计算，旋转后的窗口不会沿用旧像素坐标。
+        m_dock.reset(defaults.m_timingRatio,
+                     defaults.m_previewRatio,
+                     defaults.m_workbenchRatio);
+        // 帧末保存新建树的比例和显隐，即使当前没有触点释放事件。
+        m_commitLayout = true;
     }
     // 共享窗口仍通过原有显示字段判断是否准备内容。
     // 移动状态只发布最新值，不为未变化的开关执行保存。
@@ -851,14 +871,30 @@ void MobileWorkspacePresentation::drawRightDrawer(UIManager& manager,
                  halfSize,
                  m_showWorkbench) )
             m_showWorkbench = !m_showWorkbench;
+        const auto& settings =
+            Config::AppConfig::instance().getEditorSettings();
+        const auto restoreLabel = TR_CACHE("ui.mobile.restore_layout");
+        // 旧资源包可能没有新翻译，恢复入口仍须显示可读文案。
+        const char* restoreText =
+            restoreLabel.view() != "ui.mobile.restore_layout"
+                ? restoreLabel.data()
+                : (settings.language == "zh_cn" ? "还原布局"
+                                                : "Restore Layout");
+        // 入口由抽屉提供，所有辅助窗口丢失时仍可进入。
+        if ( MobileActionButton("MobileRestoreLayout",
+                                ICON_MMM_UNDO,
+                                restoreText,
+                                fullSize) ) {
+            // 沿用抽屉关闭动画及触点拦截，释放事件不能落到重排后的画布。
+            m_layoutResetPending = true;
+            m_model.closeDrawer();
+        }
         // 编辑模式放在抽屉中，复用菜单动作的门禁、配置广播和持久化。
         // 专业模式是全局能力开关，不能与工作台的临时显隐保存在同一配置值。
         // BMS 在普通模式下显示为关闭，但保留用户专业模式下的子偏好。
         // 折线独立于 BMS，不通过一个总开关同时改写两个功能。
         // 动作处理器会在执行时复核能力，表中状态只是本帧显示快照。
         ImGui::Separator();
-        const auto& settings =
-            Config::AppConfig::instance().getEditorSettings();
         const std::array modes{ std::tuple{ "ProfessionalModeToggleAction",
                                             "ui.edit.professional_mode",
                                             ICON_MMM_SLIDERS,
@@ -1134,7 +1170,9 @@ void MobileWorkspacePresentation::endFrame(UIManager& manager)
     ImGui::PopStyleVar();
     // 普通帧和拖动中不保存；松手读取最终比例，也覆盖原生分隔条拖动。
     const bool commitLayout = std::exchange(m_commitLayout, false);
-    if ( ImGui::IsMouseReleased(0) || commitLayout ) saveLayout(manager);
+    // 点击还原的释放帧仍是旧拓扑，等下一帧重建后再保存。
+    if ( !m_layoutResetPending && (ImGui::IsMouseReleased(0) || commitLayout) )
+        saveLayout(manager);
     // 确认只发布既有窗口命令，继续走工程收尾和资源销毁流程。
     // 不调用进程终止、Activity.finish 或跨线程 join 来模拟退出。
     if ( m_model.takeExitRequest() ) {

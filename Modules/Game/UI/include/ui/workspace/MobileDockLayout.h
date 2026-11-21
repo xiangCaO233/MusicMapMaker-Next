@@ -36,6 +36,9 @@ public:
     /// @brief 首次建树前恢复客户端比例和中心活动标签，不消费桌面 ini。
     void restore(float timingRatio, float previewRatio, ImGuiID selectedTab,
                  float workbenchRatio = .17f);
+    /// @brief 下次提交时重建移动停靠根，以默认比例归位窗口并聚焦当前画布。
+    /// @warning 仅响应显式还原请求，查找画布时只访问已登记的 UI 窗口。
+    void reset(float timingRatio, float previewRatio, float workbenchRatio);
     /// @brief 在显式提交边沿读取实际比例和中心标签，隐藏区保留原比例。
     /// @warning 只查询固定数量节点，不构造 JSON 或执行文件访问。
     void capture(float& timingRatio, float& previewRatio, ImGuiID& selectedTab,
@@ -94,6 +97,8 @@ private:
     ImGuiID m_lastMainSelection{};
     /// @brief 最近显隐组合，不把旋转或宿主变宽误判为需要重建。
     int m_visibility{ -1 };
+    /// @brief 下一次提交宿主时消费，避免在抽屉按钮绘制期间更改停靠树。
+    bool m_resetPending{};
     /// @brief 各辅助分区占根宽度的比例，隐藏前保留用户实际调整值。
     float m_timingRatio{ .28f }, m_previewRatio{ .2f },
         m_workbenchRatio{ .17f };

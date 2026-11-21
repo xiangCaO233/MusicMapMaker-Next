@@ -785,25 +785,27 @@ int main()
     std::size_t       iniSize{};
     const char*       iniText = ImGui::SaveIniSettingsToMemory(&iniSize);
     const std::string savedIni(iniText, iniSize);
-    // 全新上下文没有旧运行期窗口或节点，因此能检验真正的启动恢复路径。
-    // 保存字符串独立拥有内存，不持有已销毁上下文的缓冲区。
-    ImGui::DestroyContext();
-    ImGui::CreateContext();
-    auto& restoredIo       = ImGui::GetIO();
-    restoredIo.IniFilename = nullptr;
-    restoredIo.DisplaySize = { 1000, 700 };
-    restoredIo.DeltaTime   = 1.0f / 60;
-    // 不启动平台视口或 GPU 后端，布局恢复应仅依赖原生设置和字体度量。
-    // 新字体图集必须在第一次 NewFrame
-    // 前构建，避免把前置条件失败误判为布局问题。
-    restoredIo.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    restoredIo.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
-    // 加载发生在首个移动宿主提交之前，顺序与生产环境一致。
+    /// @brief 用独立保存的 ini 重启宿主，清除运行期节点和窗口登记。
+    /// @param ini 拥有内存的设置副本，不得借用被销毁上下文的缓冲区。
+    /// @details 仅保留夹具的显示条件。布局只能由新对象和传入的设置恢复。
+    const auto restartWithIni = [&](const std::string& ini) {
+        ImGui::DestroyContext();
+        ImGui::CreateContext();
+        auto& restarted = ImGui::GetIO();
+        // 禁用文件名，防止新上下文读到本机的布局或在帧末向磁盘写入。
+        restarted.IniFilename = nullptr;
+        restarted.DisplaySize = { 1000, 700 };
+        restarted.DeltaTime   = 1.0f / 60;
+        // 不启动平台视口或 GPU 后端，布局恢复只依赖原生设置和字体度量。
+        restarted.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        restarted.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        // 在首个移动宿主提交前载入设置，与生产环境顺序一致。
+        ImGui::LoadIniSettingsFromMemory(ini.data(), ini.size());
+        fixture.layout = MobileDockLayout{};
+    };
+    restartWithIni(savedIni);
     // 若外壳首帧仍无条件重建整树，下面保存的上下分割 ID 将无法保留。
-    ImGui::LoadIniSettingsFromMemory(savedIni.data(), savedIni.size());
-    // 新布局对象同样不保留旧绑定；只允许读取正式的原生设置和缺省比例。
     // 选中标签设置为零，防止强制恢复焦点掩盖窗口归属错误。
-    fixture.layout = MobileDockLayout{};
     fixture.layout.restore(savedTiming, savedPreview, 0);
     fixture.settle();
     check(
@@ -811,6 +813,65 @@ int main()
             ImGui::FindWindowByName("Other")->DockId == upper &&
             ImGui::FindWindowByName("Preview###PreviewWindow")->DockId == upper,
         "fresh context restores custom native topology");
+    // 模拟用户把画布和时间线拖成浮窗、将预览合并进文档列后隐藏辅助区。
+    // 以另一个主区页签的焦点触发恢复，工作台仍应回到实际编辑画布右侧。
+    fixture.m_canvasPage = fixture.m_workbenchRequested = true;
+    fixture.settle();
+    // DockId 为零是 ImGui 保存浮窗的合法状态，常规显示不能自行拉回。
+    ImGui::DockBuilderDockWindow("Chart###Canvas_workbench", 0);
+    ImGui::DockBuilderDockWindow("Timing###Timeline", 0);
+    ImGui::SetWindowFocus("Other");
+    // 隐藏期间不提交 Begin，验证恢复直接更新已存在的原生窗口设置。
+    fixture.settle(false, false);
+    // 先对夹具断言，避免普通渲染若已自动归位则测试不到显式还原的差异。
+    // 时间线虽然没提交，本次还原仍须覆盖其运行期的浮窗落点。
+    check(ImGui::FindWindowByName("Chart###Canvas_workbench")->DockId == 0 &&
+              ImGui::FindWindowByName("Timing###Timeline")->DockId == 0,
+          "fixture keeps detached windows before reset");
+    fixture.layout.reset(.28f, .2f, .17f);
+    // 模拟真实外壳将时间线、预览的显示开关恢复为开启。
+    fixture.settle();
+    /// @brief 同时检查真实节点、顺序和文档焦点，排除窗口仍处于浮动或后台。
+    const auto checkReset = [&] {
+        // 每次都从当前上下文查找窗口，重启前的观察指针不能复用。
+        const auto* chart = ImGui::FindWindowByName("Chart###Canvas_workbench");
+        const auto* other = ImGui::FindWindowByName("Other");
+        const auto* time  = ImGui::FindWindowByName("Timing###Timeline");
+        const auto* prev  = ImGui::FindWindowByName("Preview###PreviewWindow");
+        const auto* tools = ImGui::FindWindowByName("Tools###MobileWorkbench");
+        // 使用窗口实际停靠和位置验证，单独检查预分配节点无法发现浮窗残留。
+        // 同一列中的其他标签仍须存在，避免把关闭后台文档误判为画布恢复。
+        // Workbench 在当前画布上才提交，因此它实际出现在最右列也验证焦点回归。
+        check(
+            chart && other && time && prev && tools && chart->DockNode &&
+                other->DockNode == chart->DockNode && time->DockNode &&
+                prev->DockNode && tools->DockNode &&
+                prev->Pos.x < chart->Pos.x && chart->Pos.x < time->Pos.x &&
+                time->Pos.x < tools->Pos.x &&
+                chart->DockNode->VisibleWindow == chart,
+            "reset redocks floating and hidden panes and preserves open tabs");
+    };
+    checkReset();
+    // 读回客户端持久字段，并用它们恢复下一个上下文。
+    // 宽度从实际窗口几何计算，容许原生分割器的像素取整误差。
+    float   resetTiming{}, resetPreview{}, resetWorkbench{};
+    ImGuiID resetTab{};
+    fixture.layout.capture(
+        resetTiming, resetPreview, resetTab, &resetWorkbench);
+    // 保存值必须对应本次归位结果，避免重启后重新使用旧窄列或旧工具页焦点。
+    check(std::abs(resetTiming - .28f) < .004f &&
+              std::abs(resetPreview - .2f) < .004f &&
+              std::abs(resetWorkbench - .17f) < .004f &&
+              resetTab == ImHashStr("###Canvas_workbench"),
+          "reset captures default proportions and selected chart");
+    // 从还原后的 ini 重启，验证旧的浮动或合并归属没有留在持久设置中。
+    const std::string resetIni = ImGui::SaveIniSettingsToMemory();
+    // 原对象的窗口登记不参与重启，避免绕过真正的 ini 恢复路径。
+    restartWithIni(resetIni);
+    // 比例与选中画布模拟客户端保存值，拓扑必须由刚导出的原生设置恢复。
+    fixture.layout.restore(resetTiming, resetPreview, resetTab, resetWorkbench);
+    fixture.settle();
+    checkReset();
     ImGui::DestroyContext();
     // 所有窗口、字体和节点统一由上下文销毁，测试不保留跨用例状态。
     return failures == 0 ? 0 : 1;
