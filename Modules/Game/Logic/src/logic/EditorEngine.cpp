@@ -1,8 +1,10 @@
 // 引擎在此按值取得完整配置快照，公开接口仅声明返回类型。
 #include "logic/EditorEngine.h"
+
 #include "EditorEngine_Impl.h"
 #include "audio/AudioManager.h"
 #include "common/AsciiFontData.h"
+#include "common/ComparisonCanvas.h"
 #include "common/EditTool.h"
 #include "common/LogicCommands.h"
 #include "common/UnicodeFontData.h"
@@ -1235,6 +1237,10 @@ EditorEngine::EditorEngine() : m_impl(std::make_unique<Impl>())
             CmdUpdateViewport cmd{ e.canvasName,
                                    static_cast<float>(e.newSize.x),
                                    static_cast<float>(e.newSize.y) };
+            if ( Common::isComparisonCanvas(cmd.cameraId) ) {
+                pushCommand(LogicCommand(std::move(cmd)));
+                return;
+            }
             // 先保留最新尺寸，使尚未创建或随后切换的会话也能使用该视口。
             // 事件回调只投递命令，实际相机更新在会话处理命令时完成。
             impl().m_renderSyncRegistry.cacheViewportSize(
@@ -2827,6 +2833,19 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     // 当前目标仍需继续接收命令，所以这里不提前返回。
     if ( std::holds_alternative<CmdUpdateViewport>(cmd) ) {
         const auto& v = std::get<CmdUpdateViewport>(cmd);
+        if ( Common::isComparisonCanvas(v.cameraId) ) {
+            const auto owner    = Common::canvasSessionCameraId(v.cameraId);
+            const auto snapshot = impl().m_sessionRegistry.publishedSnapshot();
+            for ( const auto& entry : snapshot->sessions ) {
+                if ( entry.cameraId == owner ) {
+                    entry.session->pushCommand(std::move(cmd));
+                    return;
+                }
+            }
+            // 会话先被关闭时已无生产者，UI 可以直接回收缓冲键。
+            if ( v.closeComparison ) releaseComparisonCanvasBuffer(v.cameraId);
+            return;
+        }
         impl().m_renderSyncRegistry.cacheViewportSize(v.cameraId,
                                                       { v.width, v.height });
     }
@@ -2844,7 +2863,8 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
         const bool isMainCanvas = SessionUtils::isMainCanvasCameraId(cameraId);
         const int32_t activeIndex = impl().m_sessionRegistry.activeIndex();
         for ( const auto& entry : snapshot->sessions ) {
-            if ( (isMainCanvas && entry.cameraId == cameraId) ||
+            if ( (isMainCanvas &&
+                  entry.cameraId == Common::canvasSessionCameraId(cameraId)) ||
                  (!isMainCanvas && entry.index == activeIndex) ) {
                 entry.session->pushCommand(std::move(cmd));
                 return;
@@ -2858,6 +2878,19 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
     // 而不是依赖上一帧仍未完成切换的活动索引。
     if ( std::holds_alternative<CmdScroll>(cmd) ) {
         const auto& scroll = std::get<CmdScroll>(cmd);
+        if ( Common::isComparisonCanvas(scroll.cameraId) ) {
+            // 对比视口处理滚轮前已经激活所属会话，与主窗口共享传输时钟。
+            const auto owner = Common::canvasSessionCameraId(scroll.cameraId);
+            const auto snapshot = impl().m_sessionRegistry.publishedSnapshot();
+            const auto activeIndex = impl().m_sessionRegistry.activeIndex();
+            for ( const auto& entry : snapshot->sessions ) {
+                if ( entry.index == activeIndex && entry.cameraId == owner ) {
+                    entry.session->pushCommand(std::move(cmd));
+                    break;
+                }
+            }
+            return;
+        }
         if ( SessionUtils::isMainCanvasCameraId(scroll.cameraId) ) {
             std::lock_guard<std::recursive_mutex> lock(
                 impl().m_sessionRegistry.mutex());
@@ -2894,7 +2927,7 @@ void EditorEngine::pushCommand(LogicCommand&& cmd)
                                       : redo->cameraId;
         const auto  snapshot = impl().m_sessionRegistry.publishedSnapshot();
         for ( const auto& entry : snapshot->sessions ) {
-            if ( entry.cameraId == camera ) {
+            if ( entry.cameraId == Common::canvasSessionCameraId(camera) ) {
                 // 快照只保证队列生命周期；不借用可变会话上下文或切换活动画布。
                 entry.session->pushCommand(std::move(cmd));
                 return;
@@ -2996,6 +3029,12 @@ bool EditorEngine::hasUnsavedChanges() const
         }
     }
     return false;
+}
+
+/// @brief 回收已停止生成快照的对比相机注册项。
+void EditorEngine::releaseComparisonCanvasBuffer(const std::string& cameraId)
+{
+    impl().m_renderSyncRegistry.eraseCamera(cameraId);
 }
 
 /// @brief 获取指定摄像机/画布的同步缓冲区。

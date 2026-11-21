@@ -1009,6 +1009,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                                         m_ctx->currentBeatmap.get(),
                                         m_ctx->isTransformDirty);
     m_ctx->isTransformDirty = false;
+    SessionUtils::refreshComparisonScrollCache(*m_ctx, config);
 
     // 0. 更新 BPM 缓存（仅在脏时执行 O(N log N) 操作）
     SessionUtils::ensureBpmEvents(*m_ctx);
@@ -1148,6 +1149,15 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
     // 每个相机有独立几何与同步缓冲。
     // 共用状态已在循环外收集，视口相关状态在这里单独投影。
     for ( auto& [cameraId, camera] : m_ctx->cameras ) {
+        if ( camera.comparison && !camera.comparison->visible ) continue;
+        // 对比相机借用自己的视觉快照，谱面编辑规则仍由会话配置提供。
+        const Config::EditorConfigView viewportConfig{
+            SessionUtils::visualForCamera(*m_ctx, cameraId), config.settings
+        };
+        const auto* cache =
+            SessionUtils::scrollCacheForCamera(*m_ctx, cameraId);
+        // 没有有效备用映射时不发布主坐标的对比帧。
+        if ( camera.comparison && !cache ) continue;
         // 只有活跃 Session 才能往 Preview 和 Timeline 缓冲写入，避免后台
         // Session 覆盖
         // Preview 与 Timeline 是活跃会话共享视图。
@@ -1343,10 +1353,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         // 计算可见时间范围 (基于动画时间)
         // 可见范围也使用动画位置，避免交互提示与画面错位。
         // 借用同一缓存供后面批注投影，不重新构建映射。
-        auto* cache = m_ctx->timelineRegistry.ctx().find<System::ScrollCache>();
         if ( cache ) {
             float judgmentLineY =
-                camera.viewportHeight * config.visual.judgeline_pos;
+                camera.viewportHeight * viewportConfig.visual.judgeline_pos;
             double currentAbsY = cache->getAbsY(m_ctx->animateTime);
             // osu! 模式: timelineZoom 已写入 absY 流速，不在此处重复除以 scale
             // 主画布的 timelineZoom 已体现在缓存绝对位置中。
@@ -1459,11 +1468,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         // 完整悬浮拟合只为鼠标所在视图生成。
         // 非当前视图仍接收必要的共享预览拖动状态。
         if ( snapshot->isHoveringCanvas ) {
-            auto* cache =
-                m_ctx->timelineRegistry.ctx().find<System::ScrollCache>();
             if ( cache ) {
                 float judgmentLineY =
-                    camera.viewportHeight * config.visual.judgeline_pos;
+                    camera.viewportHeight * viewportConfig.visual.judgeline_pos;
 
                 double currentAbsY = cache->getAbsY(m_ctx->animateTime);
                 // 从判定线到鼠标的像素差表达滚动距离方向。
@@ -1521,7 +1528,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                         camera.viewportWidth,
                         m_ctx->trackCount,
                         m_ctx->bgmTrackCount,
-                        config.visual.trackLayout,
+                        viewportConfig.visual.trackLayout,
                         camera.horizontalOffsetX,
                         true,
                         config.settings.isBmsEditingEnabled(),
@@ -1555,12 +1562,13 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
                 auto snap = SessionUtils::getSnapResult(snapshot->hoveredTime,
                                                         m_ctx->lastMousePos.y,
                                                         camera,
-                                                        config,
+                                                        viewportConfig,
                                                         bpmEvents,
                                                         m_ctx->timelineRegistry,
                                                         m_ctx->animateTime,
                                                         m_ctx->cameras,
-                                                        snapshotFallbackBpm);
+                                                        snapshotFallbackBpm,
+                                                        cache);
 
                 // 判断是否在轨道框内
                 // Timeline 没有普通音符轨道限制。
@@ -2136,11 +2144,9 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
         // 实际鼠标就在 Preview 时沿用直接鼠标坐标，避免覆盖它。
         if ( cameraId == "Preview" && snapshot->isPreviewDragging &&
              !snapshot->isHoveringCanvas ) {
-            auto* cache =
-                m_ctx->timelineRegistry.ctx().find<System::ScrollCache>();
             if ( cache ) {
                 float judgmentLineY =
-                    camera.viewportHeight * config.visual.judgeline_pos;
+                    camera.viewportHeight * viewportConfig.visual.judgeline_pos;
                 double currentAbsY = cache->getAbsY(m_ctx->animateTime);
                 // 源时间与目标时间都经同一动画缓存转换。
                 // 即使滚速变化，也能保持预览框与主画布跳转一致。
@@ -2160,7 +2166,7 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
 
         // 判定线高度比例计算
         float judgmentLineY =
-            camera.viewportHeight * config.visual.judgeline_pos;
+            camera.viewportHeight * viewportConfig.visual.judgeline_pos;
 
         // 获取主视口高度用于预览区比例对齐
         float finalMainHeight =
@@ -2264,10 +2270,11 @@ void BeatmapSession::updateECSAndRender(const Config::EditorConfig& config,
             m_ctx->trackCount,
             m_ctx->bgmTrackCount,
             m_ctx->draftTrackCount,
-            config,
+            viewportConfig,
             finalMainHeight,
             &m_ctx->hitFXSystem,
-            m_ctx->m_pointerPreviewAreaRatio.value_or(0.0f));
+            m_ctx->m_pointerPreviewAreaRatio.value_or(0.0f),
+            cache);
 
         // 布局生成后才有最终 renderScaleY，批注屏幕坐标在此统一补齐。
         // 批注时间使用自身段的 HS 参考，保持与对应目标的显示映射一致。

@@ -19,6 +19,9 @@ struct CanvasWorkspaceEntry {
 
     /// @brief 是否应恢复项目工作区保存的 Dock 状态。
     bool restoreDockFromWorkspace{ false };
+
+    /// @brief 对比标签的显示序号；零为拥有谱面会话的主画布。
+    std::uint64_t comparisonIndex{ 0 };
 };
 
 /// @brief 由组合根实现的画布工作区端口，隔离 UI 与 Logic/Canvas 具体类型。
@@ -64,6 +67,9 @@ public:
     [[nodiscard]] virtual std::unique_ptr<IUIView> createMainCanvas(
         const CanvasWorkspaceEntry& entry, std::uint32_t width,
         std::uint32_t height) = 0;
+
+    /// @brief 对比视图关闭后移除其专属逻辑相机及渲染缓存。
+    virtual void closeComparisonCanvas(const std::string&) {}
 
     /// @brief 创建应用启动时的预览画布。
     [[nodiscard]] virtual std::unique_ptr<IUIView> createPreviewCanvas(

@@ -96,6 +96,8 @@ struct Batcher {
     /// @brief 可投影内容允许的最小逻辑 Y；二维批次默认在零处截断。
     /// @note 三维主画布显式设置负边界，GPU 裁剪仍在投影后限制到视口。
     float m_minScissorY{ 0.0F };
+    /// @brief 主画布相机远端延伸量，供场景裁剪与轨道底板共同使用。
+    float m_cameraExtension{ 0.0F };
     /// @brief 三维批次允许保留的负 X 边界，二维批次保持零。
     float m_minScissorX{ 0.0F };
     /// @brief 本帧摄像机可见的源平面左边界，不能按窗口零点再次裁剪。

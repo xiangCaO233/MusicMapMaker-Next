@@ -259,4 +259,14 @@ private:
     std::uint64_t m_revision{ 0 };
 };
 
+/// @brief 同一谱面只需一套备用滚动坐标，所有反向映射的对比视口共用。
+struct ComparisonScrollCache {
+    /// @brief 地址在会话期间保持稳定，渲染端据此区分两份位置索引。
+    ScrollCache cache;
+    /// @brief 主缓存修订涵盖 BPM、变速、跳跃和目标缩放变化。
+    std::uint64_t mainRevision{};
+    /// @brief 缓存实际采用的映射，避免设置刚切换时解释旧坐标。
+    bool linearMapping{ false };
+};
+
 }  // namespace MMM::Logic::System

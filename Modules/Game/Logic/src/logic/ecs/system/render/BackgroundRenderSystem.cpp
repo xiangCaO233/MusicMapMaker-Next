@@ -16,9 +16,9 @@ namespace MMM::Logic::System
 /// @param snapshot 调用方保证非空且在本次绘制期间有效的只读快照。
 /// @warning 每帧调用；不得在这里加载背景文件或等待音频解码。
 void BackgroundRenderSystem::render(Batcher& batcher, float viewportWidth,
-                                    float                       viewportHeight,
-                                    const Config::EditorConfig& config,
-                                    const RenderSnapshot*       snapshot)
+                                    float viewportHeight,
+                                    const Config::EditorConfigView& config,
+                                    const RenderSnapshot*           snapshot)
 {
     // 空会话既不铺背景，也不请求频谱；占位内容由其他绘制流程负责。
     if ( !snapshot->hasBeatmap ) return;

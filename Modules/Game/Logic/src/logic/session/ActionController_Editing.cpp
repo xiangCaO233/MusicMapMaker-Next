@@ -273,6 +273,10 @@ void clearMalodyTimingBeatMetadata(::MMM::TimingMetadata& metadata)
 /// @warning 仅在粘贴命令执行时调用，不在渲染热路径中重建缓存。
 double resolveClipboardPasteTime(SessionContext& ctx)
 {
+
+    // 坐标采用收到输入的视口布局，保留会话原有的编辑和吸附规则。
+    const auto& visual =
+        SessionUtils::visualForCamera(ctx, ctx.lastPasteCameraId);
     if ( ctx.lastConfig.settings.pastePosition !=
              Config::PastePosition::MouseCursor ||
          ctx.lastPasteCameraId.empty() )
@@ -282,11 +286,12 @@ double resolveClipboardPasteTime(SessionContext& ctx)
          !std::isfinite(ctx.lastPasteMousePos.y) )
         return ctx.animateTime;
     SessionUtils::ensureBpmEvents(ctx);
-    const auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    const auto* cache =
+        SessionUtils::scrollCacheForCamera(ctx, ctx.lastPasteCameraId);
     if ( !cache ) return ctx.animateTime;
     // 三维输入已经逆投影到轨道平面，轨道长度和运动补偿无需再乘除一次。
     const float judgmentY =
-        camera->second.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
+        camera->second.viewportHeight * visual.judgeline_pos;
     const double rawTime = cache->getTime(cache->getAbsY(ctx.animateTime) +
                                           judgmentY - ctx.lastPasteMousePos.y);
     if ( !std::isfinite(rawTime) ) return ctx.animateTime;
@@ -294,14 +299,15 @@ double resolveClipboardPasteTime(SessionContext& ctx)
         rawTime,
         ctx.lastPasteMousePos.y,
         camera->second,
-        ctx.lastConfig,
+        Config::EditorConfigView{ visual, ctx.lastConfig.settings },
         ctx.bpmEvents,
         ctx.timelineRegistry,
         ctx.animateTime,
         ctx.cameras,
         ctx.currentBeatmap
             ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
-            : 120.0);
+            : 120.0,
+        cache);
     return std::max(0.0, snap.isSnapped ? snap.snappedTime : rawTime);
 }
 

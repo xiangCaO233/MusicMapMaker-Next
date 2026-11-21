@@ -355,6 +355,9 @@ public:
     /// 中的可见脏状态，供逻辑线程裁剪隐藏 tab 快照。
     void setSessionCanvasVisible(const std::string& cameraId, bool isVisible);
 
+    /// @brief 视口从会话摘除后释放注册表中的对比缓冲及图集缓存。
+    void releaseComparisonCanvasBuffer(const std::string& cameraId);
+
     /// @brief 获取会话保护递归锁，以同步访问会话内部状态。
     /// @return 逻辑线程 Session update 与 UI 低频直接读取共用的递归锁。
     /// @warning UI 直接访问 SessionContext 或 ECS 的整个期间必须持锁；逻辑线程

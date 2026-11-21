@@ -1,5 +1,7 @@
 #include "logic/session/SessionUtils.h"
+
 #include "audio/AudioManager.h"
+#include "common/ComparisonCanvas.h"
 #include "log/colorful-log.h"
 #include "logic/EditorEngine.h"
 #include "logic/ecs/components/NoteComponent.h"
@@ -574,6 +576,114 @@ bool isMainCanvasCameraId(const std::string& cameraId)
            cameraId != "AudioSpectrum";
 }
 
+/// @brief 借用指定投影的缓存；备用映射尚未生成时拒绝误用主缓存。
+/// @warning 快照及吸附热路径，只访问 ECS 上下文缓存，不遍历事件。
+static const System::ScrollCache* scrollCacheForSettings(
+    const entt::registry&                   timelineRegistry,
+    const Common::ComparisonCanvasSettings* comparison, bool mainLinear)
+{
+    // 辅助视口没有自己的变速开关。只有相机显式要求另一种映射，
+    // 才读取备用积分缓存，不能把首个对比的开关当成会话默认值。
+    const auto& storage = timelineRegistry.ctx();
+    if ( comparison && comparison->linearMapping != mainLinear ) {
+        const auto* alternate = storage.find<System::ComparisonScrollCache>();
+        if ( alternate &&
+             alternate->linearMapping == comparison->linearMapping )
+            return &alternate->cache;
+        return nullptr;
+    }
+    return storage.find<System::ScrollCache>();
+}
+
+/// @brief 用实际收到输入或需要快照的相机选择时间映射。
+/// @param ctx 当前谱面会话，提供已同步的映射偏好和时间线缓存。
+/// @param cameraId 稳定视口标识，可以属于主画布、对比或辅助窗口。
+/// @return 对应该画布的缓存，尚未初始化或相机已关闭则可能为空。
+/// @warning 输入和逐视口绘制路径，只读取已有缓存，无状态发布或全谱重建。
+const System::ScrollCache* scrollCacheForCamera(const SessionContext& ctx,
+                                                const std::string&    cameraId)
+{
+    const Common::ComparisonCanvasSettings* settings = nullptr;
+    // 原始画布与辅助窗口沿用基线缓存，避免为常态调用增加相机表查找。
+    // 晚到的对比相机输入找不到注册项时，不能退回无关视口的坐标。
+    if ( Common::isComparisonCanvas(cameraId) ) {
+        const auto camera = ctx.cameras.find(cameraId);
+        if ( camera == ctx.cameras.end() ) return nullptr;
+        if ( camera->second.comparison ) settings = &*camera->second.comparison;
+    }
+    return scrollCacheForSettings(
+        ctx.timelineRegistry,
+        settings,
+        ctx.lastConfig.visual.enableLinearScrollMapping);
+}
+
+/// @brief 借用指定相机的只读布局，普通视口回退到本轮会话配置。
+/// @warning 渲染和逻辑热路径只做常量时间查找，不复制配置或获取新锁。
+/// 对比快照由视口命令更新；调用方不能把引用保存到下一批命令。
+/// 辅助视口保持原有全局布局，主视图的键数覆盖在会话入口解析。
+const Config::VisualConfig& visualForCamera(const SessionContext& ctx,
+                                            const std::string&    cameraId)
+{
+    // 普通画布保持常量时间读取；对比的快照只在编辑或键数变化时替换。
+    if ( Common::isComparisonCanvas(cameraId) ) {
+        const auto camera = ctx.cameras.find(cameraId);
+        if ( camera != ctx.cameras.end() && camera->second.comparison &&
+             camera->second.comparison->visual )
+            return *camera->second.comparison->visual;
+    }
+    return ctx.lastConfig.visual;
+}
+
+/// @brief 同步整个谱面会话唯一的反向映射缓存。
+/// @param ctx 谱面 ECS 与对比视口的所属会话，仅由逻辑线程访问。
+/// @param config 当前会话生效的配置，包含主映射开关及公共目标缩放。
+/// @details 只有两种映射，每个对比选择其中一种。增开或切换多个视图
+/// 不增加同一映射的拷贝，保留稳定缓存地址供物件可见性索引使用。
+/// @warning 逐帧只检查已注册相机及缓存修订；重积分只在首次使用或失效发生。
+void refreshComparisonScrollCache(SessionContext&             ctx,
+                                  const Config::EditorConfig& config)
+{
+    auto&       storage = ctx.timelineRegistry.ctx();
+    const auto* main    = storage.find<System::ScrollCache>();
+    if ( !main ) return;
+
+    // 隐藏标签持有本地配置即可。在再次可见的命令到达时追上主修订，
+    // 避免编辑 timing 时为了没显示的窗口重复准备整套备用积分。
+    const bool linear = config.visual.enableLinearScrollMapping;
+    const bool needed = std::any_of(
+        ctx.cameras.begin(), ctx.cameras.end(), [linear](const auto& entry) {
+            const auto& settings = entry.second.comparison;
+            return settings && settings->visible &&
+                   settings->linearMapping != linear;
+        });
+    if ( !needed ) return;
+
+    // 在可能插入新上下文槽之前读取主映射参数，后面不借用上下文内部指针。
+    const auto mainRevision = main->getRevision();
+    const auto zoomScale    = main->getAnimatedZoomScale();
+    // 保留缓存地址，让对应的音符可见性桶能跨快照复用。
+    auto* alternate = storage.find<System::ComparisonScrollCache>();
+    if ( !alternate )
+        alternate = &storage.emplace<System::ComparisonScrollCache>();
+
+    // 两种映射都使用同一 timing ECS 与目标缩放，只有时间坐标公式不同。
+    if ( alternate->cache.getRevision() == 0 ||
+         alternate->mainRevision != mainRevision ||
+         alternate->linearMapping == linear ) {
+        auto comparisonConfig                             = config;
+        comparisonConfig.visual.enableLinearScrollMapping = !linear;
+        alternate->cache.rebuild(
+            ctx.timelineRegistry, comparisonConfig, ctx.currentBeatmap.get());
+        alternate->mainRevision  = mainRevision;
+        alternate->linearMapping = !linear;
+    }
+
+    // 动画缩放只影响投影倍率，不能把每一帧动画当作时间线编辑重建。
+    // 两份缓存的基础目标缩放来自同一配置，因此相对倍率可以直接同步。
+    // 分段积分保持原精度，视图切回同一映射时可继续复用已有缓存。
+    alternate->cache.setAnimatedZoomScale(zoomScale);
+}
+
 /// @brief 从已登记相机中借用一个主画布相机，找不到时返回空指针。
 /// @param cameras 调用方拥有的相机表，返回值不得跨越条目删除使用。
 /// @return 借用的候选相机，空表或只有辅助相机时返回 nullptr。
@@ -591,7 +701,8 @@ const CameraInfo* findMainCanvasCamera(
 
     // 多个动态主画布都合法时不排序候选，避免查询辅助函数引入焦点管理职责。
     for ( const auto& [cameraId, camera] : cameras ) {
-        if ( isMainCanvasCameraId(cameraId) ) {
+        if ( isMainCanvasCameraId(cameraId) &&
+             !Common::isComparisonCanvas(cameraId) ) {
             return &camera;
         }
     }
@@ -1115,16 +1226,24 @@ SnapResult calculateObjectPlacementSnap(double rawTime, double timingTime,
 /// @warning 交互更新路径会查询滚动映射，不得增加磁盘读取或阻塞等待。
 SnapResult getSnapResult(
     double rawTime, float mouseY, const CameraInfo& camera,
-    const Config::EditorConfig&                  config,
+    const Config::EditorConfigView&              config,
     const std::vector<const TimelineComponent*>& bpmEvents,
     entt::registry& timelineRegistry, double animateTime,
     const std::unordered_map<std::string, CameraInfo>& cameras,
-    double                                             fallbackBpm)
+    double fallbackBpm, const System::ScrollCache* viewportCache)
 {
     SnapResult result;
 
-    auto* cache = timelineRegistry.ctx().find<System::ScrollCache>();
+    const auto* cache =
+        viewportCache ? viewportCache
+                      : scrollCacheForSettings(
+                            timelineRegistry,
+                            camera.comparison ? &*camera.comparison : nullptr,
+                            config.visual.enableLinearScrollMapping);
     // 只借用已准备好的滚动映射，输入查询不能把首次构建成本带入连续拖动。
+    // 除 BPM 时间网格外，吸附近邻检查还依赖当前视口的屏幕距离。
+    // 变速图和线性图可能同样接近一条拍线的时间，却相距多个像素阈值。
+    // 使用本视口的映射才能让悬浮高亮与最终落点遵循同一规则。
     if ( !cache ) return result;
 
     if ( bpmEvents.empty() ) return result;

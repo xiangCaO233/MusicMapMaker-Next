@@ -158,22 +158,25 @@ void MobileDockLayout::finishFrame()
         ImGui::FocusWindow(window);
 }
 
-/// @brief 用非阻塞长按打开标签操作菜单，关闭仍由业务窗口消费原有打开指针。
+/// @brief 用非阻塞长按打开标签操作菜单，业务窗口消费返回的动作。
 /// @details 命中原生标签实际矩形，并扣除滚动裁剪，不能把标签旁空白当作标签。
-/// @param closeLabel 当前界面语言的关闭文案，不参与窗口身份计算。
+/// @param closeLabel 可用的关闭文案，空指针时隐藏关闭项。
+/// @param comparisonLabel 可用的对比视图文案，空指针时隐藏创建项。
 /// @param scale 触摸容差和命中高度的内容倍率，不覆盖主题圆角。
-/// @param canClose 业务关闭权限，无可用操作时不弹出空菜单。
 /// @param enabled 是否允许开始新手势，不影响已经打开菜单的正常取消。
 /// @warning UI 热路径：只读取当前 Dock 标签与触点标量，不保存窗口观察指针。
-bool MobileDockLayout::tabCloseRequested(const char* closeLabel, float scale,
-                                         bool canClose, bool enabled)
+MobileDockLayout::TabMenuAction MobileDockLayout::tabMenuAction(
+    const char* closeLabel, const char* comparisonLabel, float scale,
+    bool enabled)
 {
-    auto* window = ImGui::GetCurrentWindow();
-    auto* bar    = window->DockNode ? window->DockNode->TabBar : nullptr;
-    auto* tab    = bar ? ImGui::TabBarFindTabByID(bar, window->TabId) : nullptr;
+    // 有创建权限的最后一个谱面可以打开菜单，关闭权限仍单独保护。
+    const bool hasActions = closeLabel || comparisonLabel;
+    auto*      window     = ImGui::GetCurrentWindow();
+    auto*      bar = window->DockNode ? window->DockNode->TabBar : nullptr;
+    auto* tab = bar ? ImGui::TabBarFindTabByID(bar, window->TabId) : nullptr;
     // 浮动窗口使用自己的标题栏；仍支持长按关闭和继续拖回停靠区。
     // 停靠首帧尚未建立标签时不能借标题矩形启动错误的手势。
-    if ( !tab && window->DockNode ) return false;
+    if ( !tab && window->DockNode ) return TabMenuAction::None;
     // 跟随原生标签排序与滚动，不按标题文本宽度另建一份命中几何。
     // 当前预编译 ImGui 尚未导出 TabBarGetTabPos，按官方标签布局公式换算。
     ImRect rect = window->TitleBarRect();
@@ -217,7 +220,7 @@ bool MobileDockLayout::tabCloseRequested(const char* closeLabel, float scale,
             // 拖动优先于长按菜单；最后一个主画布也可以拖动，仅关闭受保护。
             m_dragWindow = window->ID;
             m_holdWindow = 0;
-        } else if ( canClose && rect.Contains(io.MousePos) &&
+        } else if ( hasActions && rect.Contains(io.MousePos) &&
                     ImGui::GetTime() - m_holdStarted >= .55 ) {
             // 时间只用于识别手势，不阻塞 UI，也不延迟原生标签的短按切换。
             // Popup ID 属于当前业务窗口，关闭菜单不会错误地改绑相邻标签。
@@ -234,8 +237,8 @@ bool MobileDockLayout::tabCloseRequested(const char* closeLabel, float scale,
         m_menuWindow   = 0;
         m_releaseGuard = true;
     }
-    // 只返回本次显式命令，不把正在显示菜单当作关闭成功。
-    bool close = false;
+    // 只返回本次显式命令，弹出菜单和释放长按均不会选择任何动作。
+    auto action = TabMenuAction::None;
     if ( m_menuWindow == window->ID ) {
         // 菜单宽度服从安全工作区；关闭项保留完整手指命中高度。
         // 位置由普通 Popup 的安全区避让处理，不用固定屏幕坐标保存菜单。
@@ -247,26 +250,29 @@ bool MobileDockLayout::tabCloseRequested(const char* closeLabel, float scale,
             if ( !ImGui::IsMouseDown(0) && !ImGui::IsMouseReleased(0) )
                 // 连释放帧都排除，必须由下一次独立触摸激活关闭。
                 m_waitMenuRelease = false;
-            // 权限在菜单打开期间变化时也必须移除关闭项，不留下空的禁用按钮。
-            if ( !canClose )
-                ImGui::CloseCurrentPopup();
-            else {
+            // 权限在菜单打开期间也由调用方实时提供；只有实际可用的动作才占一行。
+            // 两种意图共享同一释放保护；新增标签可能立即获得焦点，
+            // 也必须等触点彻底结束，防止点击穿透到创建出来的画布。
+            if ( hasActions ) {
+                const ImVec2 buttonSize{
+                    -1, std::max(48 * scale, ImGui::GetFrameHeight())
+                };
                 ImGui::BeginDisabled(m_waitMenuRelease);
-                if ( FeedbackButton(
-                         closeLabel,
-                         { -1,
-                           std::max(48 * scale, ImGui::GetFrameHeight()) }) ) {
-                    close          = true;
-                    m_releaseGuard = true;
-                    ImGui::CloseCurrentPopup();
-                }
+                if ( comparisonLabel &&
+                     FeedbackButton(comparisonLabel, buttonSize) )
+                    action = TabMenuAction::OpenComparison;
+                if ( closeLabel && FeedbackButton(closeLabel, buttonSize) )
+                    action = TabMenuAction::Close;
                 ImGui::EndDisabled();
             }
-            // 关闭权限由调用方实时提供，欢迎和设置不能充当额外主画布。
+            if ( !hasActions || action != TabMenuAction::None ) {
+                m_releaseGuard = true;
+                ImGui::CloseCurrentPopup();
+            }
             ImGui::EndPopup();
         }
     }
-    return close;
+    return action;
 }
 
 /// @brief 在原生 TabBar 排版前约束实际宽度，不截短窗口名称或更换窗口 ID。

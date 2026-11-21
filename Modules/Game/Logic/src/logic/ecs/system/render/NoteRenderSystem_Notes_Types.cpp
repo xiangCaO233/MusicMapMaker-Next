@@ -62,9 +62,9 @@ static float getTexAspect(RenderSnapshot* snapshot, TextureID id)
 /// @warning 逐物件绘制热路径，不得引入资源加载或阻塞等待。
 void NoteRenderSystem::renderTap(Batcher&                           batcher,
                                  const ::MMM::Logic::NoteComponent& note,
-                                 const Config::EditorConfig& config, float x,
-                                 float y, float w, float h, float aspect,
-                                 glm::vec4 color)
+                                 const Config::EditorConfigView&    config,
+                                 float x, float y, float w, float h,
+                                 float aspect, glm::vec4 color)
 {
     // Batcher 使用底边坐标，中心高度需加上半高后再提交。
     batcher.setTexture(TextureID::Note);
@@ -98,7 +98,7 @@ void NoteRenderSystem::renderTap(Batcher&                           batcher,
 /// @warning 逐物件热路径；只使用现有快照和缓存，不执行资源访问或同步等待。
 void NoteRenderSystem::renderHold(
     Batcher& batcher, const ::MMM::Logic::NoteComponent& note,
-    const Config::EditorConfig& config, RenderSnapshot* snapshot, float x,
+    const Config::EditorConfigView& config, RenderSnapshot* snapshot, float x,
     float w, float h, float singleTrackW, glm::vec4 headColor,
     glm::vec4 bodyColor, glm::vec4 endColor, const ScrollCache* cache,
     double currentAbsY, double currentTime, float judgmentLineY,
@@ -262,7 +262,7 @@ void NoteRenderSystem::renderHold(
 /// @warning 逐物件热路径；轨道投影由调用方完成，此处仅生成图元。
 void NoteRenderSystem::renderFlick(Batcher&                           batcher,
                                    const ::MMM::Logic::NoteComponent& note,
-                                   const Config::EditorConfig&        config,
+                                   const Config::EditorConfigView&    config,
                                    RenderSnapshot* snapshot, float x, float y,
                                    float w, float h, float endpointCenterX,
                                    float endpointW, float endpointH,

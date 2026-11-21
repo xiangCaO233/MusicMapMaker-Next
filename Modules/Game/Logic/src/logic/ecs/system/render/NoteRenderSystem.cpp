@@ -245,8 +245,9 @@ void NoteRenderSystem::generateSnapshot(
     RenderSnapshot* snapshot, const std::string& cameraId, double currentTime,
     float viewportWidth, float viewportHeight, float judgmentLineY,
     int32_t trackCount, int32_t bgmTrackCount, int32_t draftTrackCount,
-    const Config::EditorConfig& config, float mainViewportHeight,
-    HitFXSystem* hitFXSystem, float previewAreaRatio)
+    const Config::EditorConfigView& config, float mainViewportHeight,
+    HitFXSystem* hitFXSystem, float previewAreaRatio,
+    const ScrollCache* viewportCache)
 {
     // 相机 ID 决定视图职责，不根据视口尺寸猜测主画布。
     // 多个主画布会话都应走相同的主画布分支。
@@ -288,7 +289,9 @@ void NoteRenderSystem::generateSnapshot(
 
     // 滚动映射由时间线侧预先维护。
     // 没有缓存就不能可靠地把时间转换成像素，不在此临时构建。
-    const auto* cache = timelineRegistry.ctx().find<ScrollCache>();
+    const auto* cache = viewportCache
+                            ? viewportCache
+                            : timelineRegistry.ctx().find<ScrollCache>();
     if ( !cache ) return;
 
     // 将 ScrollCache 指针存入 context 供 renderPolyline 等后续使用
@@ -381,15 +384,20 @@ void NoteRenderSystem::generateSnapshot(
     // 辅助预览不能继承主摄像机配置，否则缩略图也会错误增加横向候选。
     batcher.m_viewRightX = viewportWidth;
     if ( isMainCanvas ) {
+        // 全部视口均使用本次传入的有效布局。范围、厚度补偿和 GPU 投影
+        // 必须保持相同的观察参数，独立相机不会缓存或读取主视图的姿态。
+        const auto& visual        = config.visual;
+        batcher.m_cameraExtension = visual.canvasCameraExtension();
         batcher.m_minScissorY =
-            -std::ceil(viewportHeight * config.visual.canvasCameraExtension());
-        // config 是本次快照的值配置，不从渲染线程借用正在修改的相机状态。
-        const auto& visual = config.visual;
-        if ( visual.canvasCameraPoseEnabled ||
-             Common::Render::planarObservationEnabled(
-                 visual.debugCanvasCameraAngleDegrees,
-                 visual.debugCanvasCameraYawDegrees,
-                 visual.debugCanvasCameraDistance) ) {
+            -std::ceil(viewportHeight * batcher.m_cameraExtension);
+        const bool  freePose = visual.canvasCameraPoseEnabled;
+        const float angle    = visual.debugCanvasCameraAngleDegrees;
+        const float yaw      = visual.debugCanvasCameraYawDegrees;
+        const float distance = visual.debugCanvasCameraDistance;
+        // 二维视图维持空厚度补偿；透视视锥必须由最终使用的观察矩阵计算。
+        // 否则变换只反映在 GPU 投影，CPU 会按另一套坐标提前剔除目标。
+        if ( freePose ||
+             Common::Render::planarObservationEnabled(angle, yaw, distance) ) {
             // 与最终录制共用相机投影公式，布局尺度和世界轴约定完全相同。
             // 场景覆盖实际分区和用户配置长度，不以二维视口先截掉左右轨道。
             // 区域数量与生成底板时保持一致，包含临时追加轨但遵守隐藏区开关。
@@ -411,16 +419,16 @@ void NoteRenderSystem::generateSnapshot(
             // 自由姿态和旧实验观察使用各自原有矩阵，不能用倾角近似自由相机。
             // 仅查询当前帧的固定投影，不缓存跨配置变化的视锥结果。
             const auto matrix =
-                visual.canvasCameraPoseEnabled
+                freePose
                     ? Common::Render::canvasCameraPoseProjection(
                           viewportWidth, viewportHeight, 0, visual, trackCount)
                     : Common::Render::planarObservationProjection(
                           viewportWidth,
                           viewportHeight,
                           0,
-                          visual.debugCanvasCameraAngleDegrees,
-                          visual.debugCanvasCameraYawDegrees,
-                          visual.debugCanvasCameraDistance);
+                          angle,
+                          yaw,
+                          distance);
             // 最终图元才知道自身位置和皮肤高度；所有批处理器借用同一份参数。
             // 运动补偿已经包含在矩阵内，不能再次按原始相机距离重复放大。
             // 参数按快照值存储，不引用 UI 正在编辑的全局配置或跨线程相机对象。
@@ -450,8 +458,8 @@ void NoteRenderSystem::generateSnapshot(
             const auto visible = Common::Render::canvasPlaneVisibleBounds(
                 matrix,
                 { content.leftX - padding,
-                  viewportHeight * (visual.trackLayout.top -
-                                    visual.canvasCameraExtension()) -
+                  viewportHeight *
+                          (visual.trackLayout.top - batcher.m_cameraExtension) -
                       padding,
                   content.rightX + padding,
                   viewportHeight * 1.5F + padding });
@@ -1302,7 +1310,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
     RenderSnapshot*                              snapshot,
     const std::vector<const TimelineComponent*>& bpmEvents, Batcher& batcher,
     double currentTime, float viewportWidth, float viewportHeight,
-    float judgmentLineY, const Config::EditorConfig& config,
+    float judgmentLineY, const Config::EditorConfigView& config,
     const ScrollCache* cache)
 {
     // 曲线描述保留原始实体；积分采样不是可交互时间点。
@@ -1874,7 +1882,7 @@ void NoteRenderSystem::generateTimelineSnapshot(
 void NoteRenderSystem::generatePreviewSnapshot(
     RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
     float viewportWidth, float viewportHeight, float judgmentLineY,
-    int32_t trackCount, const Config::EditorConfig& config,
+    int32_t trackCount, const Config::EditorConfigView& config,
     float mainViewportHeight, float previewAreaRatio, float& leftX,
     float& rightX, float& topY, float& bottomY, float& trackAreaW,
     float& singleTrackW, float& renderScaleY)
@@ -1945,7 +1953,7 @@ void NoteRenderSystem::generateMainCanvasSnapshot(
     entt::registry& registry, const entt::registry& timelineRegistry,
     RenderSnapshot* snapshot, Batcher& batcher, double currentTime,
     float viewportWidth, float viewportHeight, float judgmentLineY,
-    int32_t trackCount, const Config::EditorConfig& config,
+    int32_t trackCount, const Config::EditorConfigView& config,
     int32_t bgmTrackCount, int32_t draftTrackCount, const ScrollCache* cache,
     float& leftX, float& rightX, float& topY, float& bottomY, float& trackAreaW,
     float& singleTrackW, float renderScaleY)

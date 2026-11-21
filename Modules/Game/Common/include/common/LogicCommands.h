@@ -1,5 +1,7 @@
 #pragma once
 
+#include "common/ComparisonCanvas.h"
+
 #include "common/AutoSaveTypes.h"
 #include "common/LogicCommandFwd.h"
 
@@ -57,6 +59,11 @@ struct CmdUpdateViewport {
     std::string cameraId;
     float       width;
     float       height;
+
+    /// @brief 含选项时创建或更新对比视口，零尺寸保留当前尺寸。
+    std::optional<Common::ComparisonCanvasSettings> comparison{};
+    /// @brief 关闭对比视口，释放相机与专属同步缓冲。
+    bool closeComparison{ false };
 };
 
 /**

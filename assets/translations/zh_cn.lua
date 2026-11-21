@@ -433,6 +433,9 @@ return {
 	["ui.pgo.upload.runtime_fmt"] = "本次运行时长：{} 秒",
 
 	["canvas.editor"] = "编辑器",
+	["canvas.comparison.title"] = "对比 {}",
+	["canvas.comparison.open"] = "新建对比视图",
+	["canvas.comparison.perspective"] = "3D 视角",
 	["canvas.collaboration.online"] = "(在线)",
 	["canvas.collaboration.offline"] = "(离线)",
 	["canvas.preview"] = "预览",

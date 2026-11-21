@@ -50,8 +50,11 @@ MarqueeTool::~MarqueeTool() = default;
 void MarqueeTool::handleStartMarquee(SessionContext&        ctx,
                                      const CmdStartMarquee& cmd)
 {
-    auto& saved    = *m_checkpoint;
-    saved.m_active = cmd.captureSelectionForCancel;
+
+    // 坐标采用收到输入的视口布局，保留会话原有的编辑和吸附规则。
+    const auto& visual = SessionUtils::visualForCamera(ctx, cmd.cameraId);
+    auto&       saved  = *m_checkpoint;
+    saved.m_active     = cmd.captureSelectionForCancel;
     if ( saved.m_active ) {
         // 必须先于替换模式清空旧框；否则取消只能恢复空选择。
         saved.m_boxes           = ctx.marqueeBoxes;
@@ -104,7 +107,7 @@ void MarqueeTool::handleStartMarquee(SessionContext&        ctx,
     }
 
     // 使用现有滚速缓存反查时间，不在输入处理时临时构建滚速数据。
-    auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    auto* cache = SessionUtils::scrollCacheForCamera(ctx, cmd.cameraId);
     if ( cache ) {
         auto it = ctx.cameras.find(cmd.cameraId);
         if ( it != ctx.cameras.end() ) {
@@ -117,7 +120,7 @@ void MarqueeTool::handleStartMarquee(SessionContext&        ctx,
             // 记录发起相机，拖动更新不能因鼠标经过其他画布而改变坐标解释。
 
             float judgmentLineY =
-                it->second.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
+                it->second.viewportHeight * visual.judgeline_pos;
             // 判定线位置由当前视口比例计算，不沿用主画布的像素坐标。
 
             float renderScaleY = 1.0f;
@@ -132,18 +135,16 @@ void MarqueeTool::handleStartMarquee(SessionContext&        ctx,
 
                 float mainEffectiveH =
                     // 使用实际轨道布局高度，而不是把整个主窗口都当作绘图区。
-                    (ctx.lastConfig.visual.trackLayout.bottom -
-                     ctx.lastConfig.visual.trackLayout.top) *
+                    (visual.trackLayout.bottom - visual.trackLayout.top) *
                     mainViewportHeight;
-                float ty = ctx.lastConfig.visual.previewConfig.margin.top;
-                float by = it->second.viewportHeight -
-                           ctx.lastConfig.visual.previewConfig.margin.bottom;
+                float ty           = visual.previewConfig.margin.top;
+                float by           = it->second.viewportHeight -
+                                     visual.previewConfig.margin.bottom;
                 float previewDrawH = by - ty;
                 // 预览上下边距不属于可绘制高度，必须在计算压缩比例前扣除。
 
-                renderScaleY = previewDrawH /
-                               (mainEffectiveH *
-                                ctx.lastConfig.visual.previewConfig.areaRatio);
+                renderScaleY = previewDrawH / (mainEffectiveH *
+                                               visual.previewConfig.areaRatio);
                 // areaRatio 表示预览覆盖的主画布高度倍数，放在分母中压缩显示。
             } else {
                 // 主画布使用滚速缓存的原始纵向尺度，不套用预览压缩。
@@ -164,8 +165,8 @@ void MarqueeTool::handleStartMarquee(SessionContext&        ctx,
                 // 横轴复用轨道投影，保证布局边距与画面拾取一致。
                 it->second.viewportWidth,
                 ctx.trackCount,
-                ctx.lastConfig.visual.trackLayout.left,
-                ctx.lastConfig.visual.trackLayout.right,
+                visual.trackLayout.left,
+                visual.trackLayout.right,
                 SessionUtils::isMainCanvasCameraId(cmd.cameraId)
                     ? it->second.horizontalOffsetX
                     : 0.0F);
@@ -194,16 +195,18 @@ void MarqueeTool::handleUpdateMarquee(SessionContext&         ctx,
     // 开始阶段可能因缺少相机或缓存未能建立框，空集合不能作为有效拖动处理。
     if ( !ctx.isSelecting || ctx.marqueeBoxes.empty() ) return;
     // 松开之后即使仍有已完成的框，迟到的移动事件也不得改写它们。
-    auto& currentBox = ctx.marqueeBoxes.back();
+    auto&       currentBox = ctx.marqueeBoxes.back();
+    const auto& visual =
+        SessionUtils::visualForCamera(ctx, currentBox.cameraId);
     // 先前完成的追加框保持不变，只有末尾框跟随当前指针。
 
-    auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    auto* cache = SessionUtils::scrollCacheForCamera(ctx, currentBox.cameraId);
     if ( cache ) {
         auto it = ctx.cameras.find(currentBox.cameraId);
         // 相机消失时保留最后有效终点，不以另一画布的投影覆盖历史坐标。
         if ( it != ctx.cameras.end() ) {
             float judgmentLineY =
-                it->second.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
+                it->second.viewportHeight * visual.judgeline_pos;
 
             float renderScaleY = 1.0f;
             if ( currentBox.cameraId == "Preview" ) {
@@ -215,17 +218,15 @@ void MarqueeTool::handleUpdateMarquee(SessionContext&         ctx,
                                                : it->second.viewportHeight;
 
                 float mainEffectiveH =
-                    (ctx.lastConfig.visual.trackLayout.bottom -
-                     ctx.lastConfig.visual.trackLayout.top) *
+                    (visual.trackLayout.bottom - visual.trackLayout.top) *
                     mainViewportHeight;
-                float ty = ctx.lastConfig.visual.previewConfig.margin.top;
-                float by = it->second.viewportHeight -
-                           ctx.lastConfig.visual.previewConfig.margin.bottom;
+                float ty           = visual.previewConfig.margin.top;
+                float by           = it->second.viewportHeight -
+                                     visual.previewConfig.margin.bottom;
                 float previewDrawH = by - ty;
 
-                renderScaleY = previewDrawH /
-                               (mainEffectiveH *
-                                ctx.lastConfig.visual.previewConfig.areaRatio);
+                renderScaleY = previewDrawH / (mainEffectiveH *
+                                               visual.previewConfig.areaRatio);
             } else {
                 renderScaleY = 1.0f;
             }
@@ -241,8 +242,8 @@ void MarqueeTool::handleUpdateMarquee(SessionContext&         ctx,
                 // 仅主画布应用自己的横向平移，预览不继承该相机偏移。
                 it->second.viewportWidth,
                 ctx.trackCount,
-                ctx.lastConfig.visual.trackLayout.left,
-                ctx.lastConfig.visual.trackLayout.right,
+                visual.trackLayout.left,
+                visual.trackLayout.right,
                 SessionUtils::isMainCanvasCameraId(currentBox.cameraId)
                     ? it->second.horizontalOffsetX
                     : 0.0F);
@@ -333,8 +334,11 @@ void MarqueeTool::handleEndMarquee(SessionContext&      ctx,
 void MarqueeTool::handleRemoveMarqueeAt(SessionContext&           ctx,
                                         const CmdRemoveMarqueeAt& cmd)
 {
-    // 没有可用投影时不能可靠命中框，保持原有选择状态。
-    auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+
+    // 坐标采用收到输入的视口布局，保留会话原有的编辑和吸附规则。
+    const auto& visual = SessionUtils::visualForCamera(
+        ctx, cmd.cameraId);  // 没有可用投影时不能可靠命中框，保持原有选择状态。
+    auto* cache = SessionUtils::scrollCacheForCamera(ctx, cmd.cameraId);
     if ( !cache ) return;
     // 框存储的是逻辑时间，没有滚速映射就无法从像素可靠恢复点击位置。
 
@@ -343,8 +347,7 @@ void MarqueeTool::handleRemoveMarqueeAt(SessionContext&           ctx,
     if ( it == ctx.cameras.end() ) return;
 
     // 点击需转换到框保存的时间/轨道空间，不直接比较跨缩放的像素矩形。
-    float judgmentLineY =
-        it->second.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
+    float judgmentLineY = it->second.viewportHeight * visual.judgeline_pos;
 
     float renderScaleY = 1.0f;
     if ( cmd.cameraId == "Preview" ) {
@@ -353,18 +356,17 @@ void MarqueeTool::handleRemoveMarqueeAt(SessionContext&           ctx,
             SessionUtils::findMainCanvasCamera(ctx.cameras);
         float mainViewportHeight =
             mainCamera ? mainCamera->viewportHeight : it->second.viewportHeight;
-        float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
-                                ctx.lastConfig.visual.trackLayout.top) *
-                               mainViewportHeight;
+        float mainEffectiveH =
+            (visual.trackLayout.bottom - visual.trackLayout.top) *
+            mainViewportHeight;
         // 高度只用于确定尺度，后续位置仍以当前视口自己的判定线为锚点。
-        float ty           = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by           = it->second.viewportHeight -
-                             ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float ty = visual.previewConfig.margin.top;
+        float by =
+            it->second.viewportHeight - visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         // 可绘制高度排除预览边距，与绘制时压缩的有效范围保持一致。
         renderScaleY =
-            previewDrawH /
-            (mainEffectiveH * ctx.lastConfig.visual.previewConfig.areaRatio);
+            previewDrawH / (mainEffectiveH * visual.previewConfig.areaRatio);
     } else {
         renderScaleY = 1.0f;
     }
@@ -380,8 +382,8 @@ void MarqueeTool::handleRemoveMarqueeAt(SessionContext&           ctx,
         // 主画布横移必须参与逆投影，否则点击会落到错误的逻辑轨道。
         it->second.viewportWidth,
         ctx.trackCount,
-        ctx.lastConfig.visual.trackLayout.left,
-        ctx.lastConfig.visual.trackLayout.right,
+        visual.trackLayout.left,
+        visual.trackLayout.right,
         SessionUtils::isMainCanvasCameraId(cmd.cameraId)
             ? it->second.horizontalOffsetX
             : 0.0F);

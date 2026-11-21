@@ -1,3 +1,4 @@
+#include "common/ComparisonCanvas.h"
 #include "common/EditTool.h"
 #include "common/LogicCommands.h"
 #include "config/AppConfig.h"
@@ -556,7 +557,7 @@ bool MobileWorkspacePresentation::beginWindow(std::string_view   id,
     return visible;
 }
 
-/// @brief 统一处理移动标签关闭，辅助窗口显隐与抽屉开关保持同一状态。
+/// @brief 处理移动标签菜单，创建对比及关闭权限由窗口的谱面身份决定。
 /// @details 不注销画布或直接关闭会话，未保存确认继续经过原有视图生命周期。
 /// @param id 稳定视图身份，辅助窗口显隐不依赖可见标题。
 /// @param open 本次 Begin 作用域的关闭状态，不保存指针或延长其生命周期。
@@ -572,21 +573,40 @@ void MobileWorkspacePresentation::processTabMenu(std::string_view id,
         if ( id == "PreviewWindow" ) open = &m_showPreview;
         if ( id == "MobileWorkbench" ) open = &m_showWorkbench;
     }
-    const auto* tabs =
+    auto* tabs =
         m_frameManager
             ? m_frameManager->getView<CanvasTabManager>("CanvasTabManager")
             : nullptr;
     // 最后一个主画布即使打开了欢迎或设置页，也不能被当作多画布关闭。
-    const bool canClose =
-        open && *open && (!mainCanvas || (tabs && tabs->hasMultipleCanvases()));
-    if ( !m_dock.tabCloseRequested(
-             TR_CACHE("ui.window.close").data(),
-             m_scale,
-             canClose,
-             Interaction::activeProfile().touchGestures() &&
-                 !m_model.blocksCanvasInput() &&
-                 !m_playbackControls.blocksCanvasInput()) )
+    // 对比标签拥有自己的关闭状态，关闭它无需判定还有几张原始谱面。
+    const bool canClose = open && *open &&
+                          (!mainCanvas || Common::isComparisonCanvas(id) ||
+                           (tabs && tabs->hasMultipleCanvases()));
+    // 真实谱面才向 Begin 提供打开指针；Logo 占位和工具页不提供对比入口。
+    const bool canCompare = mainCanvas && tabs && open && *open;
+    // 已安装的旧资源可能缺少对比入口的译文。保持菜单可读，
+    // 并继续使用现有语种及同一个谱面的稳定身份。
+    // 长按动作仍由当前 Dock 节点消费，防止一次触摸打开多个对比窗口。
+    const bool chinese =
+        Config::AppConfig::instance().getEditorSettings().language == "zh_cn";
+    const auto action = m_dock.tabMenuAction(
+        canClose ? TR_CACHE("ui.window.close").data() : nullptr,
+        canCompare
+            ? MMM::Translation::getActiveTranslator()
+                  .translate(MMM::Hash::hashString("canvas.comparison.open"),
+                             chinese ? "新建对比视图" : "New comparison view")
+                  .data()
+            : nullptr,
+        m_scale,
+        (canCompare || Interaction::activeProfile().touchGestures()) &&
+            !m_model.blocksCanvasInput() &&
+            !m_playbackControls.blocksCanvasInput());
+    if ( action == MobileDockLayout::TabMenuAction::OpenComparison ) {
+        // 选择后台标签也沿用被长按窗口的谱面身份，不读取当前活动会话。
+        tabs->requestComparisonCanvas(Common::canvasSessionCameraId(id));
         return;
+    }
+    if ( action != MobileDockLayout::TabMenuAction::Close ) return;
     // open 可能是辅助窗口的栈变量，必须在这次同步 Begin 作用域内写回。
     // 业务画布下一帧再处理保存确认，不能在此直接注销正在绘制的视图。
     *open = false;
