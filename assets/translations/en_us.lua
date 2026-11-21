@@ -741,6 +741,8 @@ return {
 	["ui.settings.beatmap.import_audio"] = "Import audio…",
 	["ui.settings.beatmap.import_image"] = "Import image…",
 	["ui.settings.beatmap.import_video"] = "Import video…",
+	["ui.settings.beatmap.no_resource"] = "None",
+	["ui.settings.beatmap.clear_reference"] = "None (clear reference)",
 	["ui.settings.beatmap.rename_resource"] = "Rename the current resource file",
 	["ui.settings.beatmap.rename_hint"] = "Rename the current resource file. If linked charts need the original, you will be asked to create a copy first. Keep the original extension.",
 	["ui.settings.beatmap.rename_copy_hint"] = "This resource is used by {} linked charts. Continuing creates a copy with the new filename and rebinds only this chart. The original file and other charts are preserved.",

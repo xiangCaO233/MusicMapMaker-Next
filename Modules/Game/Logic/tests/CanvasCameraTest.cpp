@@ -1,12 +1,14 @@
 #include "logic/session/CanvasCamera.h"
 #include "common/LogicCommands.h"
 #include "common/render/RenderSnapshot.h"
+#include "config/AppPaths.h"
 #include "config/EditorConfig.h"
 #include "log/colorful-log.h"
 #include "logic/BeatmapSession.h"
 #include "logic/BeatmapSyncBuffer.h"
 #include "logic/EditorEngine.h"
 #include "logic/ProjectDraftLaneService.h"
+#include "logic/ProjectResourceService.h"
 #include "logic/audio/AudioTimelineDescriptor.h"
 #include "logic/ecs/components/InteractionComponent.h"
 #include "logic/ecs/components/NoteColorUtils.h"
@@ -41,6 +43,7 @@
 #include <limits>
 #include <memory>
 #include <string_view>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -4328,6 +4331,78 @@ bool testMetadataAudioChangeRetargetsFirstMainBgmSample()
            updatedDomainSample->m_offsetMs == -100 &&
            updatedDomainSample->m_track == 4 &&
            near(updatedDomainSample->m_volume, 0.6);
+}
+
+/// @brief 清除缺失资源后，持久化文件仍保持三项引用为空。
+/// @details 使用真实元数据命令，确保匹配的 BGM 被解除，其他 Main 不会在保存时
+/// 重新占据已清除的提示，也不会被一同删除。输出位于 CTest 注入的配置根。
+bool testClearMissingBeatmapResources()
+{
+    using namespace MMM;
+    using namespace MMM::Logic;
+    BeatmapSession session;
+    auto&          ctx = session.getContextMutable();
+    ctx.currentBeatmap = std::make_shared<BeatMap>();
+    auto& meta         = ctx.currentBeatmap->m_baseMapMetadata;
+    meta.map_path      = "missing-resources.mmm";
+    meta.track_count = ctx.trackCount = 4;
+    meta.bgm_track_count = ctx.bgmTrackCount   = 2;
+    meta.song_file_hint                        = "audio/missing.wav";
+    meta.main_audio_path                       = meta.song_file_hint;
+    meta.cover_path                            = "missing-cover.png";
+    meta.main_cover_path                       = "missing-background.png";
+    ctx.collaborationProject                   = std::make_shared<Project>();
+    ctx.collaborationProject->m_audioResources = {
+        AudioResource{ .m_id   = "other-main",
+                       .m_path = "audio/other.wav",
+                       .m_type = AudioTrackType::Main },
+    };
+
+    // 模拟外部格式导入后残留的失效采样，以及同谱面上独立的另一个 BGM。
+    const auto stale = ctx.sampleRegistry.create();
+    const auto other = ctx.sampleRegistry.create();
+    ctx.sampleRegistry.emplace<SampleComponent>(
+        stale,
+        SampleComponent{ .m_track           = 4,
+                         .m_audioResourceId = "audio/missing.wav" });
+    ctx.sampleRegistry.emplace<SampleComponent>(
+        other,
+        SampleComponent{ .m_timestamp       = 2.0,
+                         .m_track           = 5,
+                         .m_audioResourceId = "other-main" });
+    auto updated = meta;
+    updated.song_file_hint.clear();
+    updated.main_audio_path.clear();
+    updated.song_file_hint_cleared = true;
+    updated.cover_path.clear();
+    updated.main_cover_path.clear();
+    session.pushCommand(
+        LogicCommand{ CmdUpdateBeatmapMetadata{ .baseMeta = updated } });
+    session.update(0.0, Config::EditorConfig{}, false);
+    if ( ctx.sampleRegistry.valid(stale) || !ctx.sampleRegistry.valid(other) ||
+         ctx.bgmTrackCount != 2 ||
+         ctx.currentBeatmap->m_audioSamples.size() != 1U )
+        return false;
+
+    const auto result = ProjectResourceService::refreshSongFileHintForSave(
+        *ctx.collaborationProject, *ctx.currentBeatmap, meta.map_path);
+    if ( result.m_changed || !meta.song_file_hint.empty() ||
+         !meta.main_audio_path.empty() )
+        return false;
+
+    // 重开实际 MMM 内容，验证旧字段不会回填，独立 BGM 的身份仍然完整。
+    const auto path =
+        Config::AppPaths::configRootPath() / "missing-resources.mmm";
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    if ( error || !ctx.currentBeatmap->saveToFile(path) ) return false;
+    const auto  restored = BeatMap::loadFromFile(path);
+    const auto& saved    = restored.m_baseMapMetadata;
+    return saved.song_file_hint_cleared && saved.song_file_hint.empty() &&
+           saved.main_audio_path.empty() && saved.cover_path.empty() &&
+           saved.main_cover_path.empty() &&
+           restored.m_audioSamples.size() == 1U &&
+           restored.m_audioSamples.front().m_audioResourceId == "other-main";
 }
 
 /// @brief 验证教学回退只替换所选时间窗内的正式物件。
@@ -9094,6 +9169,7 @@ int main()
                    testTrackCountOverflowIsRejectedAtomically() &&
                    testMetadataTrackCountMigrationIsAtomic() &&
                    testMetadataAudioChangeRetargetsFirstMainBgmSample() &&
+                   testClearMissingBeatmapResources() &&
                    testReplaceBeatmapMetadataMigratesSamples() &&
                    testReplaceBeatmapMetadataOverflowIsRejected() &&
                    testAuthoritativeReplacementPreservesOwnedCreateUndo() &&

@@ -401,12 +401,12 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
 
     // 读取 Events 段中的背景配置。
     // osu! 同时存在图片和视频事件时以视频为准；数字 1 与 Video 均表示视频。
-    // 视频优先于图片背景；没有事件时使用默认图片占位描述。
+    // 没有事件时保持空引用，保存后重开也不能补出一个不存在的路径。
     auto background_des =
         osureader.get_value("Events", "background video", std::string{});
     if ( background_des.empty() ) {
-        background_des = osureader.get_value(
-            "Events", "background", std::string("0,0,\"bg.png\",0,0"));
+        background_des =
+            osureader.get_value("Events", "background", std::string{});
     }
     osumeta_props["Events::background"] = background_des;
     std::string              token;
@@ -427,10 +427,11 @@ inline BeatMap loadOSUMap(std::filesystem::path path)
     }
     basemeta.video_starttime =
         MMM::Internal::safeStoi(MMM::Internal::safeAt(background_paras, 1));
-    auto cover_path = MMM::Internal::safeAt(background_paras, 2, "\"bg.png\"");
+    auto cover_path = MMM::Internal::safeAt(background_paras, 2);
     trim(cover_path);
     // 文件名通常由双引号包围，领域路径只保存去引号后的文本。
-    if ( cover_path.starts_with('\"') ) {
+    if ( cover_path.size() >= 2 && cover_path.starts_with('\"') &&
+         cover_path.ends_with('\"') ) {
         cover_path.replace(cover_path.begin(), cover_path.begin() + 1, "");
         cover_path.replace(cover_path.end() - 1, cover_path.end(), "");
     }

@@ -717,6 +717,8 @@ Json encodeMetadata(const ::MMM::BeatMap& beatmap)
         { "map_length", base.map_length },
         { "extra", encodePropertyMap(beatmap.m_metadata.map_properties) },
     };
+    // 仅发送显式清除，旧协作快照缺少可选字段时仍按原有推断规则处理。
+    if ( base.song_file_hint_cleared ) result["song_file_hint_cleared"] = true;
     return result;
 }
 
@@ -1040,6 +1042,7 @@ bool decodeMetadata(const Json& source, ::MMM::BeatMap& beatmap)
     // 旧协作快照缺少专辑时清空目标值，防止整体替换误保留上一版元数据。
     // 若字段存在仍必须按字符串校验，错误类型应使整个快照解码失败。
     base.album.clear();
+    base.song_file_hint_cleared = false;
     if ( !readValue(source, "name", base.name) ||
          !readValue(source, "title", base.title) ||
          !readValue(source, "title_unicode", base.title_unicode) ||
@@ -1050,6 +1053,9 @@ bool decodeMetadata(const Json& source, ::MMM::BeatMap& beatmap)
          !readValue(source, "map_path", mapPath) ||
          !readValue(source, "main_audio_path", mainAudioPath) ||
          !readValue(source, "song_file_hint", songFileHint) ||
+         (source.contains("song_file_hint_cleared") &&
+          !readValue(
+              source, "song_file_hint_cleared", base.song_file_hint_cleared)) ||
          !readValue(source, "main_cover_path", mainCoverPath) ||
          !readValue(source, "cover_path", coverPath) ||
          !readValue(source, "cover_type", coverType) || coverType > 1U ||

@@ -165,6 +165,11 @@ inline bool saveMMMMap(const BeatMap&               beatMap,
     base["author"]         = beatMap.m_baseMapMetadata.author;
     base["song_file_hint"] =
         Config::pathToUtf8(beatMap.m_baseMapMetadata.song_file_hint);
+    if ( beatMap.m_baseMapMetadata.song_file_hint_cleared &&
+         beatMap.m_baseMapMetadata.song_file_hint.empty() ) {
+        // 显式清除与旧文件缺省的空提示语义不同，只为前者写标记。
+        base["song_file_hint_cleared"] = true;
+    }
     base["cover"] =
         Config::pathToUtf8(beatMap.m_baseMapMetadata.main_cover_path);
     base["cover_img"] =
