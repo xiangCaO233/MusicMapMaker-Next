@@ -9,6 +9,7 @@
 #include "config/AudioPresets.h"
 #include "config/ColorPaletteFile.h"
 #include "config/EditorConfig.h"
+#include "config/LayoutPresets.h"
 #include "config/Utf8Path.h"
 #include "config/skin/SkinConfig.h"
 #include "config/skin/translation/Translation.h"
@@ -5173,7 +5174,7 @@ void ToolbarView::renderColorPalettePopup(float dpiScale)
 /// @warning UI 热路径：每个工具栏按钮每帧调用，只执行字体测量与绘制提交。
 bool ToolbarView::drawIconButton(const char* icon, const char* id,
                                  const char* shortLabel, float width,
-                                 float height, bool showLabel) const
+                                 float height, bool showLabel)
 {
     // 先提交完整按钮命中区，再使用其最终矩形叠加内容。
     const bool clicked = ::MMM::UI::FeedbackButton(id, ImVec2(width, height));
@@ -5889,44 +5890,101 @@ void ToolbarView::renderBeatLinePopup(float dpiScale)
 /// 当前目标若被弹层滚动裁掉，只请求下一帧滚到该项，不使用裁剪外旧坐标。
 /// @warning UI 热路径：浮层打开时每帧执行；会话锁只允许短时读取元数据。
 /// @param sourceManager 提供组件开关的引导备用目标。
-void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
+/// @param comparison 对比窗打开时借用的本地工具上下文，为空则处理普通工具栏。
+/// @details 两个入口共用控件、步长及重置语义，但保存端由调用方决定。
+/// 对比面板不使用全局工具选择，允许并排的两个画布独立进入布局模式。
+/// 对比的变化标志只表示需要发布新的局部视觉快照，不能代替全局配置持久化。
+/// 面板打开状态属于具体视口；即使多个面板同时进入同一个颜色分组，
+/// 它们的拖动值、弹窗尺寸和连续滑条保存边沿也不会串到相邻窗口。
+/// 控件收到的布局值需完整覆盖当前作用域；全局配置读取只用于皮肤与预设目录。
+/// 选择已有预设可以即刻更新对比视图，无需修改预设库的活动方案。
+/// 对比关闭时可以直接销毁交互状态，因为已变化的值会在该视口末尾发布。
+/// 仅全局入口参与个性化引导，避免对比控件改写主窗口的引导目标。
+void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager,
+                                    ComparisonLayoutPanel* comparison)
 {
+    auto&      panel       = comparison ? comparison->state : m_layoutPanel;
+    const bool mobileTools = comparison ? comparison->mobile : m_mobileTools;
+    auto&      appConfig   = Config::AppConfig::instance();
+    auto&      editorConfig =
+        comparison ? comparison->config : appConfig.getEditorConfig();
+    // 只建立本帧有效的引用。普通工具栏更新应用设置，对比面板使用独立副本，
+    // 这样重置、颜色、相机设置和组件拖动不需要各写一套逻辑。
+    /// @brief 对比只更新调用方的副本，普通编辑器仍走应用配置入口。
+    const auto applyEditorConfig = [&](const Config::EditorConfig& updated) {
+        if ( comparison ) {
+            editorConfig        = updated;
+            comparison->changed = true;
+        } else {
+            updateEditorConfig(updated);
+        }
+    };
+    /// @brief 只有全局布局在编辑边沿持久化，对比释放后仍归属本次窗口。
+    const auto saveEditorConfig = [&] {
+        if ( !comparison ) appConfig.save();
+    };
+
     // 浮层关闭或工具切走时提交未完成连续编辑，并清理颜色选择器状态。
-    if ( !m_showLayoutPopup || m_currentTool != Logic::EditTool::Layout ) {
-        if ( m_layoutComponentColorDirty ) {
+    if ( !comparison &&
+         (!m_showLayoutPopup || m_currentTool != Logic::EditTool::Layout) ) {
+        if ( panel.m_layoutComponentColorDirty ) {
             // 组件颜色编辑可能因浮层关闭未触发控件失活，需兜底保存。
-            Config::AppConfig::instance().save();
-            m_layoutComponentColorDirty = false;
+            saveEditorConfig();
+            panel.m_layoutComponentColorDirty = false;
         }
-        if ( m_layoutSpectrumConfigDirty ) {
+        if ( panel.m_layoutSpectrumConfigDirty ) {
             // 频谱连续参数使用独立脏标记，避免无变化保存。
-            Config::AppConfig::instance().save();
-            m_layoutSpectrumConfigDirty = false;
+            saveEditorConfig();
+            panel.m_layoutSpectrumConfigDirty = false;
         }
-        if ( m_layoutVisualConfigDirty ) {
+        if ( panel.m_layoutVisualConfigDirty ) {
             // 普通视觉滑条的最终值在关闭边沿统一持久化。
-            Config::AppConfig::instance().save();
-            m_layoutVisualConfigDirty = false;
+            saveEditorConfig();
+            panel.m_layoutVisualConfigDirty = false;
         }
         // 关闭后丢弃颜色选择器打开态，重新进入时由控件状态重建。
-        m_layoutComponentColorPickerOpen = false;
+        panel.m_layoutComponentColorPickerOpen = false;
         return;
     }
 
-    ImGuiWindow* toolbarWindow = ImGui::FindWindowByName(
-        m_mobileTools ? "###MobileWorkbench" : " ###Toolbar");
+    const auto* toolbarWindow =
+        comparison ? ImGui::GetCurrentWindow()
+                   : ImGui::FindWindowByName(mobileTools ? "###MobileWorkbench"
+                                                         : " ###Toolbar");
     // 找不到工具栏锚点时保持脏标记，不提前丢失待保存状态。
     if ( !toolbarWindow ) return;
 
     // 每种弹层保留独立尺寸缓存，方向与边界统一由工具栏定位入口处理。
-    const float popupW = m_layoutPopupWidth > 0 ? m_layoutPopupWidth
-                                                : std::floor(260.0f * dpiScale);
-    const float popupH = m_layoutPopupHeight > 0
-                             ? m_layoutPopupHeight
-                             : std::floor(100.0f * dpiScale);
-    const auto  geometry = positionToolbarPopup(
-        *toolbarWindow, m_lastLayoutBtnPos, ImVec2(popupW, popupH), dpiScale);
-    if ( m_mobileTools ) {
+    const float popupW   = panel.m_layoutPopupWidth > 0
+                               ? panel.m_layoutPopupWidth
+                               : std::floor(260.0f * dpiScale);
+    const float popupH   = panel.m_layoutPopupHeight > 0
+                               ? panel.m_layoutPopupHeight
+                               : std::floor(100.0f * dpiScale);
+    auto        geometry = [&] {
+        if ( !comparison )
+            return positionToolbarPopup(*toolbarWindow,
+                                        m_lastLayoutBtnPos,
+                                        ImVec2(popupW, popupH),
+                                        dpiScale);
+        // 以对比视口的本地竖栏为锚点，不读取全局工具栏的停靠方向。
+        // 弹层若在外部浮动窗口内打开，必须使用那个窗口的工作区边界。
+        // 相同定位算法也处理窗口很窄或靠屏幕边缘时的最大可用尺寸。
+        const auto* viewport = toolbarWindow->Viewport;
+        const auto  result   = calculateToolbarPopupGeometry(
+            { comparison->railPosition.x, comparison->railPosition.y },
+            { comparison->railSize.x, comparison->railSize.y },
+            { comparison->railPosition.x, comparison->railPosition.y },
+            { popupW, popupH },
+            viewport->WorkPos,
+            viewport->WorkSize,
+            ImGuiDir_Right,
+            4 * dpiScale,
+            8 * dpiScale);
+        prepareToolbarPopup(result, viewport->ID);
+        return result;
+    }();
+    if ( mobileTools ) {
         // 移动面板宽度按实际内侧空间夹取，长名称不能撑出屏幕或盖住工作台。
         // 高度继续自动计算并受既有最大高度约束，超长表单只在面板内滚动。
         ImGui::SetNextWindowSize(
@@ -5951,7 +6009,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding,
                         std::floor(aesthetics.frameRounding * dpiScale));
 
-    if ( m_mobileTools ) {
+    if ( mobileTools ) {
         // 只扩大本面板控件的输入行，桌面密度与持久化主题不受影响。
         const auto padding = ImGui::GetStyle().FramePadding;
         ImGui::PushStyleVar(
@@ -5960,9 +6018,12 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                    std::max(padding.y,
                             (48.f * dpiScale - ImGui::GetFontSize()) * .5f)));
     }
-    if ( ImGui::Begin("##LayoutComponentsPopup", nullptr, popupFlags) ) {
+    if ( ImGui::Begin(
+             comparison ? comparison->windowName : "##LayoutComponentsPopup",
+             nullptr,
+             popupFlags) ) {
         // 移动布局工具需覆盖整棵停靠宿主，不能被工作台自身盖住一部分。
-        if ( m_mobileTools &&
+        if ( mobileTools &&
              !ImGui::IsPopupOpen(
                  nullptr,
                  ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) )
@@ -5975,7 +6036,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         // 模式切换与精确数值入口固定附着于布局按钮，避免遮住操作空间。
         // 当前画布由已有稳定 ID 定位，不复制会话所有权或获取会话长锁。
         auto* canvas =
-            sourceManager
+            comparison ? &comparison->canvas
+            : sourceManager
                 ? sourceManager->getCanvasView(
                       Logic::EditorEngine::instance().getActiveCameraId())
                 : nullptr;
@@ -5986,10 +6048,30 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
             ImGui::Text("正在调整：%d Key 布局", keyCount);
         else
             ImGui::TextUnformatted("正在调整：通用布局（未打开谱面）");
-        ImGui::TextWrapped(
-            "轨道与组件按键数分别保存；摄像机参数由所有键数共用。");
+        if ( !comparison )
+            ImGui::TextWrapped(
+                "轨道与组件按键数分别保存；摄像机参数由所有键数共用。");
         // 预设入口位于相机模式提前返回之前，两种布局编辑模式均可切换。
-        drawLayoutPresetControls();
+        // 对比预设名称不能指向全局“当前方案”，因为可以同时套用多个方案。
+        // 始终让列表反映共享预设目录；列表选择只影响当前编辑器的组件和相机。
+        if ( comparison ) {
+            // 借用全局预设目录的内容。选用方案只覆盖当前对比视口，
+            // 原方案库及主画布的已选方案保持原有状态。
+            const auto& library = appConfig.getLayoutPresets();
+            if ( ImGui::BeginCombo("布局预设", "应用到当前视图") ) {
+                for ( const auto& preset : library.m_items ) {
+                    ImGui::PushID(preset.m_name.c_str());
+                    if ( FeedbackSelectable(preset.displayName(), false) ) {
+                        Config::applyLayoutPreset(preset, editorConfig.visual);
+                        comparison->changed = true;
+                    }
+                    ImGui::PopID();
+                }
+                ImGui::EndCombo();
+            }
+        } else {
+            drawLayoutPresetControls();
+        }
         ImGui::Separator();
 
         const bool cameraMode = canvas && canvas->drawCameraLayoutControls();
@@ -5997,25 +6079,24 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         // 元素和相机控件互斥，切回元素后恢复原有配置分组。
         if ( cameraMode ) {
             // 相机模式同样缓存真实尺寸，保持弹层贴着布局按钮。
-            const ImVec2 size   = ImGui::GetWindowSize();
-            m_layoutPopupWidth  = size.x;
-            m_layoutPopupHeight = size.y;
+            const ImVec2 size         = ImGui::GetWindowSize();
+            panel.m_layoutPopupWidth  = size.x;
+            panel.m_layoutPopupHeight = size.y;
             // 提前返回仍须配对 Begin 和样式栈，不能影响后续工具窗口。
             ImGui::End();
-            ImGui::PopStyleVar(m_mobileTools ? 4 : 3);
+            ImGui::PopStyleVar(mobileTools ? 4 : 3);
             return;
         }
-        auto& appConfig = Config::AppConfig::instance();
         {
             // 禁止垂直拖动属于编辑器设置，不是视觉配置。
-            auto& dragSettings = appConfig.getEditorSettings();
+            auto& dragSettings = editorConfig.settings;
             if ( ::MMM::UI::FeedbackCheckbox(
                      TR("ui.toolbar.layout_disable_vertical_object_drag")
                          .data(),
                      &dragSettings.disableVerticalObjectDrag) ) {
                 // 引用字段已直接修改 AppConfig，随后广播完整配置并保存。
-                updateEditorConfig(appConfig.getEditorConfig());
-                appConfig.save();
+                applyEditorConfig(editorConfig);
+                saveEditorConfig();
             }
             if ( ImGui::IsItemHovered() ) {
                 // 详细行为通过悬浮提示说明，主标签保持简洁。
@@ -6031,11 +6112,11 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         // 宽度按当前翻译文本测量，颜色列相对它定位，因此语言切换后仍对齐。
         // 视觉滑条采用统一宽度，自动尺寸弹层不会随当前数值文本抖动。
         const float colorButtonSize =
-            std::floor((m_mobileTools ? 48.0f : 22.0f) * dpiScale);
+            std::floor((mobileTools ? 48.0f : 22.0f) * dpiScale);
         const float visualControlWidth =
-            m_mobileTools ? std::min(std::floor(230.0f * dpiScale),
-                                     ImGui::GetContentRegionAvail().x)
-                          : std::floor(230.0f * dpiScale);
+            mobileTools ? std::min(std::floor(230.0f * dpiScale),
+                                   ImGui::GetContentRegionAvail().x)
+                        : std::floor(230.0f * dpiScale);
         const auto  resetButtonLabel = TR("ui.toolbar.layout_component_reset");
         const float resetButtonWidth =
             ImGui::CalcTextSize(resetButtonLabel.data()).x +
@@ -6047,19 +6128,21 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
             // 每次从最新 EditorConfig 复制后只替换
             // visual，保留音效、快捷键和
             // 其他设置在同一帧可能产生的变化。应用服务负责广播新快照。
-            auto updatedConfig   = appConfig.getEditorConfig();
+            // 现有控件构造快照时也要保留当前窗口的拖动约束。
+            // 对比视图的设置永远不回写普通编辑器的配置发布入口。
+            auto updatedConfig   = editorConfig;
             updatedConfig.visual = visual;
-            updateEditorConfig(updatedConfig);
+            applyEditorConfig(updatedConfig);
         };
         /// @brief 在当前 ImGui 控件结束编辑后保存普通视觉脏值。
         const auto saveVisualAfterEdit = [&]() {
             // helper 必须紧跟产生当前 ImGui item 的滑条调用；插入其他控件后
             // IsItemDeactivatedAfterEdit 会查询错误对象并遗漏保存边沿。
             if ( ImGui::IsItemDeactivatedAfterEdit() &&
-                 m_layoutVisualConfigDirty ) {
+                 panel.m_layoutVisualConfigDirty ) {
                 // 连续拖动期间只应用内存配置，失活边沿一次落盘。
-                appConfig.save();
-                m_layoutVisualConfigDirty = false;
+                saveEditorConfig();
+                panel.m_layoutVisualConfigDirty = false;
             }
         };
         /// @brief 绘制分组右对齐恢复按钮并执行对应配置重置函数。
@@ -6078,14 +6161,14 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
             }
             if ( ::MMM::UI::FeedbackSmallButton(resetButtonLabel.data()) ) {
                 // 重置闭包只改对应字段，随后同步 AppConfig 和应用服务。
-                auto updatedConfig = appConfig.getEditorConfig();
+                auto updatedConfig = editorConfig;
                 resetConfig(updatedConfig);
-                appConfig.getEditorConfig() = updatedConfig;
-                updateEditorConfig(updatedConfig);
-                appConfig.save();
+                editorConfig = updatedConfig;
+                applyEditorConfig(updatedConfig);
+                saveEditorConfig();
                 // 重置已立即保存，清除可能来自此前滑条的脏标记。
                 // 完整重置已经保存，旧滑条手势留下的脏标记不能再次写过时值。
-                m_layoutVisualConfigDirty = false;
+                panel.m_layoutVisualConfigDirty = false;
             }
             if ( ImGui::IsItemHovered() ) {
                 drawTooltip(TR("ui.toolbar.layout_render_reset_hint").data());
@@ -6135,14 +6218,14 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
             ImGui::TextUnformatted(TR("ui.toolbar.note_size.part").data());
             ImGui::SetNextItemWidth(visualControlWidth);
             ::MMM::UI::FeedbackCombo("##LayoutNoteSizePart",
-                                     &m_noteSizePart,
+                                     &panel.m_noteSizePart,
                                      sizeParts,
                                      IM_ARRAYSIZE(sizeParts));
             const auto sizePart =
-                static_cast<Config::NoteSizePart>(m_noteSizePart);
+                static_cast<Config::NoteSizePart>(panel.m_noteSizePart);
             ImGui::TextWrapped("%s", TR("ui.toolbar.note_size.hint").data());
             // 每个连续控件前重取快照，防止前一控件应用后被旧值覆盖。
-            auto visual = appConfig.getVisualConfig();
+            auto visual = editorConfig.visual;
             // 拾取框模式禁止这两个外观滑块，防止调整目标混淆。
             ImGui::BeginDisabled(editingPickingBounds);
             // 横向缩放影响音符宽度，范围限制为默认尺寸的 0.5..3 倍。
@@ -6156,12 +6239,12 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                      3.0f,
                      "%.4f") ) {
                 applyVisualConfig(visual);
-                m_layoutVisualConfigDirty = true;
+                panel.m_layoutVisualConfigDirty = true;
             }
             saveVisualAfterEdit();
 
             // 纵向缩放独立控制音符高度，不隐式联动横向比例。
-            visual = appConfig.getVisualConfig();
+            visual = editorConfig.visual;
             ImGui::TextUnformatted(
                 TR("ui.settings.visual.note_scale_y").data());
             ImGui::SetNextItemWidth(visualControlWidth);
@@ -6172,14 +6255,14 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                      3.0f,
                      "%.4f") ) {
                 applyVisualConfig(visual);
-                m_layoutVisualConfigDirty = true;
+                panel.m_layoutVisualConfigDirty = true;
             }
             saveVisualAfterEdit();
 
             ImGui::EndDisabled();
 
             // 非长按击打特效时长使用配置声明的边界，避免 UI 常量漂移。
-            visual = appConfig.getVisualConfig();
+            visual = editorConfig.visual;
             ImGui::TextUnformatted(
                 TR("ui.settings.visual.non_hold_hit_effect_duration").data());
             ImGui::SetNextItemWidth(visualControlWidth);
@@ -6190,7 +6273,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                      Config::VisualConfig::MAX_NON_HOLD_HIT_EFFECT_DURATION,
                      "%.4f s") ) {
                 applyVisualConfig(visual);
-                m_layoutVisualConfigDirty = true;
+                panel.m_layoutVisualConfigDirty = true;
             }
             // 在调用保存 helper 前缓存悬浮态，因为后续 ImGui
             // 项会改变查询对象。
@@ -6203,22 +6286,22 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
             }
 
             // 高级采样辅助文字属于专业编辑，关闭时不展示其控制项。
-            if ( appConfig.getEditorSettings().professionalMode ) {
+            if ( editorConfig.settings.professionalMode ) {
                 // 绑定采样标签属于离散显示开关，切换后立即保存。
-                visual = appConfig.getVisualConfig();
+                visual = editorConfig.visual;
                 if ( ::MMM::UI::FeedbackCheckbox(
                          TR("ui.settings.visual.note_bound_sample_labels")
                              .data(),
                          &visual.showBoundSampleLabels) ) {
                     applyVisualConfig(visual);
-                    appConfig.save();
-                    m_layoutVisualConfigDirty = false;
+                    saveEditorConfig();
+                    panel.m_layoutVisualConfigDirty = false;
                 }
             }
 
             // 固定位置只提供中心与底边，不让用户输入任意偏移或编辑皮肤文件。
             // 离散布局切换立即应用并保存，主画布、预览和拾取共用同一配置。
-            visual           = appConfig.getVisualConfig();
+            visual           = editorConfig.visual;
             int notePosition = static_cast<int>(visual.noteTexturePosition);
             const char* positions[] = {
                 TR("ui.settings.visual.note_texture_position.center").data(),
@@ -6234,8 +6317,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                 visual.noteTexturePosition =
                     static_cast<Config::NoteTexturePosition>(notePosition);
                 applyVisualConfig(visual);
-                appConfig.save();
-                m_layoutVisualConfigDirty = false;
+                saveEditorConfig();
+                panel.m_layoutVisualConfigDirty = false;
             }
             if ( ImGui::IsItemHovered() ) {
                 drawTooltip(
@@ -6244,7 +6327,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
             }
 
             // 填充模式通过整数适配 ImGui Combo，再显式转换回强类型枚举。
-            visual           = appConfig.getVisualConfig();
+            visual           = editorConfig.visual;
             int noteFillMode = static_cast<int>(visual.noteFillMode);
             // 顺序必须与 BackgroundFillMode 枚举序值一致。
             const char* fillModes[] = {
@@ -6264,50 +6347,53 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                 visual.noteFillMode =
                     static_cast<Config::BackgroundFillMode>(noteFillMode);
                 applyVisualConfig(visual);
-                appConfig.save();
-                m_layoutVisualConfigDirty = false;
+                saveEditorConfig();
+                panel.m_layoutVisualConfigDirty = false;
             }
 
-            // 默认调色方案属于软件设置，不随当前项目活动方案自动变化。
-            auto&       settings      = appConfig.getEditorSettings();
-            auto&       defaultScheme = settings.defaultColorPaletteSchemeName;
-            const auto& paletteConfig = settings.colorPalettes;
-            // 内部皮肤默认标识在 UI 中替换为本地化友好名称。
-            const std::string previewName =
-                defaultScheme == Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID
-                    ? std::string(
-                          TR("ui.toolbar.note_palette.skin_default_scheme")
-                              .data())
-                    : defaultScheme;
-            ImGui::TextUnformatted(
-                TR("ui.settings.visual.note_palette_default").data());
-            ImGui::SetNextItemWidth(visualControlWidth);
-            if ( ::MMM::UI::FeedbackBeginCombo("##LayoutDefaultNotePalette",
-                                               previewName.c_str()) ) {
-                // 皮肤默认项始终位于自定义方案列表之前。
-                const bool skinSelected =
+            if ( !comparison ) {
+                // 默认调色方案属于软件设置，不随当前项目活动方案自动变化。
+                auto& settings      = editorConfig.settings;
+                auto& defaultScheme = settings.defaultColorPaletteSchemeName;
+                const auto& paletteConfig = settings.colorPalettes;
+                // 内部皮肤默认标识在 UI 中替换为本地化友好名称。
+                const std::string previewName =
                     defaultScheme ==
-                    Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
-                if ( ::MMM::UI::FeedbackSelectable(
-                         TR("ui.toolbar.note_palette.skin_default_scheme")
-                             .data(),
-                         skinSelected) ) {
-                    defaultScheme =
+                            Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID
+                        ? std::string(
+                              TR("ui.toolbar.note_palette.skin_default_scheme")
+                                  .data())
+                        : defaultScheme;
+                ImGui::TextUnformatted(
+                    TR("ui.settings.visual.note_palette_default").data());
+                ImGui::SetNextItemWidth(visualControlWidth);
+                if ( ::MMM::UI::FeedbackBeginCombo("##LayoutDefaultNotePalette",
+                                                   previewName.c_str()) ) {
+                    // 皮肤默认项始终位于自定义方案列表之前。
+                    const bool skinSelected =
+                        defaultScheme ==
                         Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
-                    appConfig.save();
-                }
-                if ( skinSelected ) ImGui::SetItemDefaultFocus();
-                // 方案名同时作为持久化引用；选择后无需复制颜色数组。
-                for ( const auto& scheme : paletteConfig.schemes ) {
-                    const bool selected = defaultScheme == scheme.name;
-                    if ( ::MMM::UI::FeedbackSelectable(scheme.name.c_str(),
-                                                       selected) ) {
-                        defaultScheme = scheme.name;
-                        appConfig.save();
+                    if ( ::MMM::UI::FeedbackSelectable(
+                             TR("ui.toolbar.note_palette.skin_default_scheme")
+                                 .data(),
+                             skinSelected) ) {
+                        defaultScheme =
+                            Config::COLOR_PALETTE_SKIN_DEFAULT_SCHEME_ID;
+                        saveEditorConfig();
                     }
-                    if ( selected ) ImGui::SetItemDefaultFocus();
+                    if ( skinSelected ) ImGui::SetItemDefaultFocus();
+                    // 方案名同时作为持久化引用；选择后无需复制颜色数组。
+                    for ( const auto& scheme : paletteConfig.schemes ) {
+                        const bool selected = defaultScheme == scheme.name;
+                        if ( ::MMM::UI::FeedbackSelectable(scheme.name.c_str(),
+                                                           selected) ) {
+                            defaultScheme = scheme.name;
+                            saveEditorConfig();
+                        }
+                        if ( selected ) ImGui::SetItemDefaultFocus();
+                    }
+                    ::MMM::UI::FeedbackEndCombo();
                 }
-                ::MMM::UI::FeedbackEndCombo();
             }
             // 提示说明 Layout 模式中的直接拖拽能力，不承担交互。
             ImGui::TextDisabled(
@@ -6334,7 +6420,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                     config.resetBackgroundRenderingToDefaults();
                 });
             // 背景填充枚举与音符填充共用同一模式集合。
-            auto visual     = appConfig.getVisualConfig();
+            auto visual     = editorConfig.visual;
             int  bgFillMode = static_cast<int>(visual.background.fillMode);
             // 显示顺序与 BackgroundFillMode 枚举保持一致。
             const char* fillModes[] = {
@@ -6353,12 +6439,12 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                 visual.background.fillMode =
                     static_cast<Config::BackgroundFillMode>(bgFillMode);
                 applyVisualConfig(visual);
-                appConfig.save();
-                m_layoutVisualConfigDirty = false;
+                saveEditorConfig();
+                panel.m_layoutVisualConfigDirty = false;
             }
 
             // opaque_ratio 控制原图混合比例，合法范围为零到一。
-            visual = appConfig.getVisualConfig();
+            visual = editorConfig.visual;
             ImGui::TextUnformatted(TR("ui.settings.visual.bg_opaque").data());
             ImGui::SetNextItemWidth(visualControlWidth);
             if ( ::MMM::UI::FeedbackSliderFloat("##LayoutBackgroundOpaque",
@@ -6367,12 +6453,12 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                                                 1.0f,
                                                 "%.4f") ) {
                 applyVisualConfig(visual);
-                m_layoutVisualConfigDirty = true;
+                panel.m_layoutVisualConfigDirty = true;
             }
             saveVisualAfterEdit();
 
             // darken_ratio 在背景图之上叠加暗化，不改变资源本身。
-            visual = appConfig.getVisualConfig();
+            visual = editorConfig.visual;
             ImGui::TextUnformatted(TR("ui.settings.visual.bg_darken").data());
             ImGui::SetNextItemWidth(visualControlWidth);
             if ( ::MMM::UI::FeedbackSliderFloat("##LayoutBackgroundDarken",
@@ -6381,12 +6467,12 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                                                 1.0f,
                                                 "%.4f") ) {
                 applyVisualConfig(visual);
-                m_layoutVisualConfigDirty = true;
+                panel.m_layoutVisualConfigDirty = true;
             }
             saveVisualAfterEdit();
 
             // 分拍线透明度只改变渲染可见度，不等价于隐藏分拍线模式。
-            visual = appConfig.getVisualConfig();
+            visual = editorConfig.visual;
             ImGui::TextUnformatted(
                 TR("ui.settings.visual.beat_line_alpha").data());
             ImGui::SetNextItemWidth(visualControlWidth);
@@ -6396,12 +6482,12 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                                                 1.0f,
                                                 "%.4f") ) {
                 applyVisualConfig(visual);
-                m_layoutVisualConfigDirty = true;
+                panel.m_layoutVisualConfigDirty = true;
             }
             saveVisualAfterEdit();
 
             // 悬浮细分线延伸比例控制选中反馈超出画布的长度。
-            visual = appConfig.getVisualConfig();
+            visual = editorConfig.visual;
             ImGui::TextUnformatted(
                 TR("ui.settings.visual.hover_subdivision_line_extension")
                     .data());
@@ -6413,7 +6499,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                      1.0f,
                      "%.4f") ) {
                 applyVisualConfig(visual);
-                m_layoutVisualConfigDirty = true;
+                panel.m_layoutVisualConfigDirty = true;
             }
             saveVisualAfterEdit();
         }
@@ -6444,13 +6530,13 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                                               bool showColor = true) {
             ImGui::PushID(static_cast<int>(type));
             // 从当前轨道数对应布局读取值，避免跨键数修改其他布局。
-            bool visible = appConfig.getVisualConfig()
-                               .canvasComponentsForKeyCount(keyCount)
-                               .placement(type)
-                               .visible;
+            bool visible =
+                editorConfig.visual.canvasComponentsForKeyCount(keyCount)
+                    .placement(type)
+                    .visible;
             if ( ::MMM::UI::FeedbackCheckbox(label.data(), &visible) ) {
                 // 基于最新完整配置修改单一 placement 字段。
-                auto updatedConfig = appConfig.getEditorConfig();
+                auto updatedConfig = editorConfig;
                 updatedConfig.visual
                     .editableCanvasComponentsForKeyCount(keyCount)
                     .placement(type)
@@ -6459,8 +6545,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                     // 兼容字段与组件可见性必须原子地写入同一配置快照。
                     updatedConfig.visual.background.spectrum.enabled = visible;
                 }
-                updateEditorConfig(updatedConfig);
-                appConfig.save();
+                applyEditorConfig(updatedConfig);
+                saveEditorConfig();
             }
             // 未启用或暂时离屏时，精确指向该组件的显隐开关；画布实体
             // 一旦可见便覆盖这个备用锚点，避免跨面板合并成大片亮区。
@@ -6517,7 +6603,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
             if ( showColor ) {
                 // 频谱使用左右声道专用颜色，因此不显示通用组件色按钮。
                 // 移动端独立一行放颜色与恢复，长组件名不会把按钮推出面板。
-                if ( !m_mobileTools ) ImGui::SameLine();
+                if ( !mobileTools ) ImGui::SameLine();
                 // 颜色按钮固定在复位列左侧，避免组件名称长度改变颜色列位置。
                 const float contentRight =
                     ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
@@ -6528,11 +6614,10 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                     ImGui::SetCursorPosX(colorColumnX);
                 }
                 // 存储数组先转换为命名通道结构，供 ImGui RGBA 接口编辑。
-                const auto componentColor =
-                    fromStoredColor(appConfig.getVisualConfig()
-                                        .canvasComponentsForKeyCount(keyCount)
-                                        .placement(type)
-                                        .color);
+                const auto componentColor = fromStoredColor(
+                    editorConfig.visual.canvasComponentsForKeyCount(keyCount)
+                        .placement(type)
+                        .color);
                 // 按钮仅打开自定义取色器，不使用 ImGui 默认大型预览弹窗。
                 if ( ::MMM::UI::FeedbackColorButton(
                          "##Color",
@@ -6548,7 +6633,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                 }
             }
 
-            if ( showColor || !m_mobileTools ) ImGui::SameLine();
+            if ( showColor || !mobileTools ) ImGui::SameLine();
             // 将所有复位按钮锚定到弹窗内容区右侧，避免标签长度造成错位。
             const float remainingWidth = ImGui::GetContentRegionAvail().x;
             if ( remainingWidth > resetButtonWidth ) {
@@ -6557,7 +6642,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
             }
             if ( ::MMM::UI::FeedbackSmallButton(resetButtonLabel.data()) ) {
                 // 恢复当前位置和颜色到该轨道数布局的默认值。
-                auto updatedConfig = appConfig.getEditorConfig();
+                auto updatedConfig = editorConfig;
                 updatedConfig.visual
                     .editableCanvasComponentsForKeyCount(keyCount)
                     .resetPlacementToDefault(type);
@@ -6573,8 +6658,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                     updatedConfig.visual.background.spectrum.baselineRatio =
                         defaults.baselineRatio;
                 }
-                updateEditorConfig(updatedConfig);
-                appConfig.save();
+                applyEditorConfig(updatedConfig);
+                saveEditorConfig();
             }
             if ( ImGui::IsItemHovered() ) {
                 drawTooltip(
@@ -6586,11 +6671,10 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                 anyColorPickerOpen = true;
                 // 每帧从配置重建编辑色；取色器活动期间应用服务同步值会成为
                 // 下一帧起点，而成员脏标记负责把最后一次值落盘。
-                auto editableColor =
-                    fromStoredColor(appConfig.getVisualConfig()
-                                        .canvasComponentsForKeyCount(keyCount)
-                                        .placement(type)
-                                        .color);
+                auto editableColor = fromStoredColor(
+                    editorConfig.visual.canvasComponentsForKeyCount(keyCount)
+                        .placement(type)
+                        .color);
                 if ( ImGui::ColorPicker4(
                          "##Value",
                          &editableColor.r,
@@ -6598,19 +6682,19 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                              ImGuiColorEditFlags_AlphaPreviewHalf |
                              ImGuiColorEditFlags_DisplayRGB) ) {
                     // 拖动中只应用新颜色并设置脏标志，不逐帧写磁盘。
-                    auto updatedConfig = appConfig.getEditorConfig();
+                    auto updatedConfig = editorConfig;
                     updatedConfig.visual
                         .editableCanvasComponentsForKeyCount(keyCount)
                         .placement(type)
                         .color = toStoredColor(editableColor);
-                    updateEditorConfig(updatedConfig);
-                    m_layoutComponentColorDirty = true;
+                    applyEditorConfig(updatedConfig);
+                    panel.m_layoutComponentColorDirty = true;
                 }
                 if ( ImGui::IsItemDeactivatedAfterEdit() &&
-                     m_layoutComponentColorDirty ) {
+                     panel.m_layoutComponentColorDirty ) {
                     // 正常失活路径立即提交；关闭弹层路径由函数入口兜底。
-                    appConfig.save();
-                    m_layoutComponentColorDirty = false;
+                    saveEditorConfig();
+                    panel.m_layoutComponentColorDirty = false;
                 }
                 ImGui::EndPopup();
             }
@@ -6638,7 +6722,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         // - opacity 和 includeHitEffects 控制最终混合与分析输入。
         //
         // 连续数值及颜色共用
-        // m_layoutSpectrumConfigDirty。滑条失活、颜色取色器 关闭、Layout
+        // panel.m_layoutSpectrumConfigDirty。滑条失活、颜色取色器 关闭、Layout
         // 弹层关闭三条路径都能保存最终值，且任一路径保存后清除
         // 标志，避免重复磁盘写入。离散 includeHitEffects
         // 和匹配画布按钮立即保存。
@@ -6653,23 +6737,23 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                     // 频谱局部副本不拥有 enabled
                     // 权威值；它始终跟随当前键数布局 中 BackgroundSpectrum
                     // placement 的 visible 字段。
-                    auto updatedConfig = appConfig.getEditorConfig();
+                    auto updatedConfig                       = editorConfig;
                     updatedConfig.visual.background.spectrum = spectrum;
                     // enabled 不从可能过时的局部 spectrum 副本读取。
                     updatedConfig.visual.background.spectrum.enabled =
                         updatedConfig.visual
                             .canvasComponentsForKeyCount(keyCount)
                             .backgroundSpectrum.visible;
-                    updateEditorConfig(updatedConfig);
+                    applyEditorConfig(updatedConfig);
                 };
             /// @brief 在连续频谱控件结束编辑时一次性保存最终值。
             const auto saveSpectrumAfterEdit = [&]() {
                 // 与普通视觉 helper
                 // 相同，此函数必须在目标控件之后立即调用。
                 if ( ImGui::IsItemDeactivatedAfterEdit() &&
-                     m_layoutSpectrumConfigDirty ) {
-                    appConfig.save();
-                    m_layoutSpectrumConfigDirty = false;
+                     panel.m_layoutSpectrumConfigDirty ) {
+                    saveEditorConfig();
+                    panel.m_layoutSpectrumConfigDirty = false;
                 }
             };
             /// @brief 绘制一个由成员指针指定的频谱颜色取色器。
@@ -6682,8 +6766,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                     std::array<float, 4>
                         Config::BackgroundSpectrumConfig::* colorMember) {
                     // 每帧从最新配置重新构造编辑值，避免左右颜色互相覆盖。
-                    auto spectrum =
-                        appConfig.getVisualConfig().background.spectrum;
+                    auto spectrum = editorConfig.visual.background.spectrum;
                     auto editableColor = fromStoredColor(spectrum.*colorMember);
                     ImGui::AlignTextToFramePadding();
                     ImGui::TextUnformatted(label.data());
@@ -6717,12 +6800,11 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                                      ImGuiColorEditFlags_AlphaPreviewHalf |
                                      ImGuiColorEditFlags_DisplayRGB) ) {
                             // 重新获取最新结构后只替换目标颜色成员。
-                            spectrum =
-                                appConfig.getVisualConfig().background.spectrum;
+                            spectrum = editorConfig.visual.background.spectrum;
                             spectrum.*colorMember =
                                 toStoredColor(editableColor);
                             applySpectrumConfig(spectrum);
-                            m_layoutSpectrumConfigDirty = true;
+                            panel.m_layoutSpectrumConfigDirty = true;
                         }
                         // 取色器失活时保存；直接关闭弹层仍由外层边沿检测兜底。
                         saveSpectrumAfterEdit();
@@ -6732,7 +6814,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                 };
 
             // 频带数受渲染器声明的上下限约束，避免过量顶点或空频谱。
-            auto spectrum = appConfig.getVisualConfig().background.spectrum;
+            auto spectrum = editorConfig.visual.background.spectrum;
             ImGui::TextUnformatted(
                 TR("ui.settings.visual.background_spectrum.band_count").data());
             ImGui::SetNextItemWidth(spectrumControlWidth);
@@ -6742,12 +6824,12 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                      Config::BACKGROUND_SPECTRUM_MIN_BANDS,
                      Config::BACKGROUND_SPECTRUM_MAX_BANDS) ) {
                 applySpectrumConfig(spectrum);
-                m_layoutSpectrumConfigDirty = true;
+                panel.m_layoutSpectrumConfigDirty = true;
             }
             saveSpectrumAfterEdit();
 
             // 宽度比例相对画布宽度计算，保留至少 10% 可见范围。
-            spectrum = appConfig.getVisualConfig().background.spectrum;
+            spectrum = editorConfig.visual.background.spectrum;
             ImGui::TextUnformatted(
                 TR("ui.settings.visual.background_spectrum.width_ratio")
                     .data());
@@ -6759,12 +6841,12 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                      1.0F,
                      "%.2f") ) {
                 applySpectrumConfig(spectrum);
-                m_layoutSpectrumConfigDirty = true;
+                panel.m_layoutSpectrumConfigDirty = true;
             }
             saveSpectrumAfterEdit();
 
             // 高度比例相对画布高度计算，最小值避免频谱完全退化。
-            spectrum = appConfig.getVisualConfig().background.spectrum;
+            spectrum = editorConfig.visual.background.spectrum;
             ImGui::TextUnformatted(
                 TR("ui.settings.visual.background_spectrum.height_ratio")
                     .data());
@@ -6776,7 +6858,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                      1.0F,
                      "%.2f") ) {
                 applySpectrumConfig(spectrum);
-                m_layoutSpectrumConfigDirty = true;
+                panel.m_layoutSpectrumConfigDirty = true;
             }
             saveSpectrumAfterEdit();
 
@@ -6790,8 +6872,8 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                 spectrum.widthRatio  = 1.0F;
                 spectrum.heightRatio = 1.0F;
                 applySpectrumConfig(spectrum);
-                appConfig.save();
-                m_layoutSpectrumConfigDirty = false;
+                saveEditorConfig();
+                panel.m_layoutSpectrumConfigDirty = false;
             }
             if ( ImGui::IsItemHovered() ) {
                 drawTooltip(TR("ui.settings.visual.background_spectrum."
@@ -6812,7 +6894,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                 &Config::BackgroundSpectrumConfig::rightBarColor);
 
             // 总透明度作用于两侧颜色的最终混合，不改写颜色 Alpha 通道。
-            spectrum = appConfig.getVisualConfig().background.spectrum;
+            spectrum = editorConfig.visual.background.spectrum;
             ImGui::TextUnformatted(
                 TR("ui.settings.visual.background_spectrum.opacity").data());
             ImGui::SetNextItemWidth(spectrumControlWidth);
@@ -6823,20 +6905,20 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                      1.0F,
                      "%.2f") ) {
                 applySpectrumConfig(spectrum);
-                m_layoutSpectrumConfigDirty = true;
+                panel.m_layoutSpectrumConfigDirty = true;
             }
             saveSpectrumAfterEdit();
 
             // 击打特效是否注入频谱属于离散分析源开关，立即持久化。
-            spectrum = appConfig.getVisualConfig().background.spectrum;
+            spectrum = editorConfig.visual.background.spectrum;
             if ( ::MMM::UI::FeedbackCheckbox(
                      TR("ui.settings.visual.background_spectrum."
                         "include_hit_effects")
                          .data(),
                      &spectrum.includeHitEffects) ) {
                 applySpectrumConfig(spectrum);
-                appConfig.save();
-                m_layoutSpectrumConfigDirty = false;
+                saveEditorConfig();
+                panel.m_layoutSpectrumConfigDirty = false;
             }
         }
         // KPS 组件本身仍使用通用可见性、颜色和复位入口。
@@ -6857,19 +6939,19 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
                  TR("ui.toolbar.layout_kps_sync_settings").data(),
                  ImGuiTreeNodeFlags_DefaultOpen) ) {
             // 尺寸同步只影响轨道级 KPS 组件，不隐式开启位置同步。
-            bool syncKpsTrackSizes = appConfig.getVisualConfig()
-                                         .canvasComponentsForKeyCount(keyCount)
-                                         .syncKpsTrackSizes;
+            bool syncKpsTrackSizes =
+                editorConfig.visual.canvasComponentsForKeyCount(keyCount)
+                    .syncKpsTrackSizes;
             if ( ::MMM::UI::FeedbackCheckbox(
                      TR("ui.toolbar.layout_kps_sync_track_sizes").data(),
                      &syncKpsTrackSizes) ) {
                 // 配置字段按当前键数布局修改并立即保存。
-                auto updatedConfig = appConfig.getEditorConfig();
+                auto updatedConfig = editorConfig;
                 updatedConfig.visual
                     .editableCanvasComponentsForKeyCount(keyCount)
                     .syncKpsTrackSizes = syncKpsTrackSizes;
-                updateEditorConfig(updatedConfig);
-                appConfig.save();
+                applyEditorConfig(updatedConfig);
+                saveEditorConfig();
             }
             if ( ImGui::IsItemHovered() ) {
                 drawTooltip(
@@ -6878,20 +6960,19 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
 
             // 相对位置同步通过配置 helper 更新相关内部派生状态。
             bool syncKpsTrackRelativePositions =
-                appConfig.getVisualConfig()
-                    .canvasComponentsForKeyCount(keyCount)
+                editorConfig.visual.canvasComponentsForKeyCount(keyCount)
                     .syncKpsTrackRelativePositions;
             if ( ::MMM::UI::FeedbackCheckbox(
                      TR("ui.toolbar.layout_kps_sync_track_positions").data(),
                      &syncKpsTrackRelativePositions) ) {
                 // set 方法维护此选项关联的不变量，禁止直接写裸字段。
-                auto updatedConfig = appConfig.getEditorConfig();
+                auto updatedConfig = editorConfig;
                 updatedConfig.visual
                     .editableCanvasComponentsForKeyCount(keyCount)
                     .setSyncKpsTrackRelativePositions(
                         syncKpsTrackRelativePositions);
-                updateEditorConfig(updatedConfig);
-                appConfig.save();
+                applyEditorConfig(updatedConfig);
+                saveEditorConfig();
             }
             if ( ImGui::IsItemHovered() ) {
                 drawTooltip(
@@ -6901,20 +6982,19 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
 
             // 全组件同步是更高层策略，与单轨相对位置同步分开控制。
             bool syncAllKpsComponentPositions =
-                appConfig.getVisualConfig()
-                    .canvasComponentsForKeyCount(keyCount)
+                editorConfig.visual.canvasComponentsForKeyCount(keyCount)
                     .syncAllKpsComponentPositions;
             if ( ::MMM::UI::FeedbackCheckbox(
                      TR("ui.toolbar.layout_kps_sync_all_positions").data(),
                      &syncAllKpsComponentPositions) ) {
                 // 使用专用 setter 统一传播同步状态。
-                auto updatedConfig = appConfig.getEditorConfig();
+                auto updatedConfig = editorConfig;
                 updatedConfig.visual
                     .editableCanvasComponentsForKeyCount(keyCount)
                     .setSyncAllKpsComponentPositions(
                         syncAllKpsComponentPositions);
-                updateEditorConfig(updatedConfig);
-                appConfig.save();
+                applyEditorConfig(updatedConfig);
+                saveEditorConfig();
             }
             if ( ImGui::IsItemHovered() ) {
                 drawTooltip(
@@ -6923,21 +7003,22 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         }
 
         // 上一帧有取色器而本帧全部关闭时，提交可能未收到失活事件的最终值。
-        if ( m_layoutComponentColorPickerOpen && !anyColorPickerOpen ) {
-            if ( m_layoutComponentColorDirty || m_layoutSpectrumConfigDirty ||
-                 m_layoutVisualConfigDirty ) {
+        if ( panel.m_layoutComponentColorPickerOpen && !anyColorPickerOpen ) {
+            if ( panel.m_layoutComponentColorDirty ||
+                 panel.m_layoutSpectrumConfigDirty ||
+                 panel.m_layoutVisualConfigDirty ) {
                 // 多种脏状态合并为一次配置文件保存。
                 // 同一关闭边沿最多执行一次保存，并清除三类连续编辑标志。
-                appConfig.save();
-                m_layoutComponentColorDirty = false;
-                m_layoutSpectrumConfigDirty = false;
-                m_layoutVisualConfigDirty   = false;
+                saveEditorConfig();
+                panel.m_layoutComponentColorDirty = false;
+                panel.m_layoutSpectrumConfigDirty = false;
+                panel.m_layoutVisualConfigDirty   = false;
             }
         }
         // 保存本帧聚合状态，供下一帧检测关闭边沿。
-        m_layoutComponentColorPickerOpen = anyColorPickerOpen;
+        panel.m_layoutComponentColorPickerOpen = anyColorPickerOpen;
 
-        if ( m_mobileTools ) {
+        if ( mobileTools ) {
             // 说明常驻并自动换行，触屏不依赖 Hover 或桌面修饰键。
             ImGui::TextWrapped(
                 "单指拖边框或中心把手调整轨道；拖文字主体移动，从外角拖动缩放。"
@@ -6953,7 +7034,7 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         // 判定线、轨宽和 Note 步骤也保留此面板：它们同样有配置入口。
         // 仅当前个性化目标可请求额外亮区，其他演练继续只照亮自身目标。
         // 弹层必须先绘制完所有可选项，才可读取完整的当帧窗口尺寸。
-        // 以实际 WindowPos/Size 而非上帧 m_layoutPopupWidth/Height 上报，
+        // 以实际 WindowPos/Size 而非上帧 panel.m_layoutPopupWidth/Height 上报，
         // 否则展开“物件渲染”或“KPS 同步设置”后亮区会漏掉新行。
         // 弹层未打开时不报告，Spotlight 下一帧会清掉上一帧的面板亮区。
         if ( sourceManager ) {
@@ -6984,13 +7065,24 @@ void ToolbarView::renderLayoutPopup(float dpiScale, UIManager* sourceManager)
         }
 
         // 缓存真实自动布局尺寸，下一帧可在视口边缘稳定定位。
-        const ImVec2 size   = ImGui::GetWindowSize();
-        m_layoutPopupWidth  = size.x;
-        m_layoutPopupHeight = size.y;
+        const ImVec2 size         = ImGui::GetWindowSize();
+        panel.m_layoutPopupWidth  = size.x;
+        panel.m_layoutPopupHeight = size.y;
     }
     ImGui::End();
     // 恢复仅属于 Layout 弹层的窗口样式。
-    ImGui::PopStyleVar(m_mobileTools ? 4 : 3);
+    ImGui::PopStyleVar(mobileTools ? 4 : 3);
+}
+
+/// @brief 从对比相机提交布局弹层，不绑定主工具栏选中态或引导目标。
+/// @warning 每帧只借用当前窗口的配置，写入仅由实际控件交互触发。
+/// 借用窗口专属状态，使多个对比视口按各自工具按钮显隐。
+/// 不注册常规工具栏命令，不触碰主画布的布局预设保存状态。
+/// 布局表单由调用方窗口的视口定位，工具栏实例只负责提交控件。
+void ToolbarView::renderComparisonLayout(float                  dpiScale,
+                                         ComparisonLayoutPanel& panel)
+{
+    renderLayoutPopup(dpiScale, nullptr, &panel);
 }
 
 /// @brief 在工具栏项目左侧绘制统一悬浮提示。

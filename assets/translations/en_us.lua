@@ -434,6 +434,9 @@ return {
 	["ui.pgo.upload.runtime_fmt"] = "Runtime: {} seconds",
 
 	["canvas.editor"] = "Editor",
+	["canvas.comparison.title"] = "Compare {}",
+	["canvas.comparison.open"] = "New comparison view",
+	["canvas.comparison.perspective"] = "3D view",
 	["canvas.collaboration.online"] = "(Online)",
 	["canvas.collaboration.offline"] = "(Offline)",
 	["canvas.preview"] = "Preview",

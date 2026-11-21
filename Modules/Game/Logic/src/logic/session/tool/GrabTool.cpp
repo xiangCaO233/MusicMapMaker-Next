@@ -1,4 +1,5 @@
 #include "logic/session/tool/GrabTool.h"
+#include "common/ComparisonCanvas.h"
 #include "common/LogicCommands.h"
 #include "common/PolylineGeometry.h"
 #include "common/walkthrough/WalkthroughEditEvent.h"
@@ -34,6 +35,19 @@ namespace MMM::Logic
 
 namespace
 {
+/// @brief 对比视口的纵向锁定覆盖会话默认值，其它视口继续使用主工具的规则。
+/// @warning 拖动热路径仅查询已有相机状态，不访问文件或复制布局配置。
+bool disablesVerticalDrag(const SessionContext& ctx,
+                          const std::string&    cameraId)
+{
+    if ( Common::isComparisonCanvas(cameraId) ) {
+        const auto entry = ctx.cameras.find(cameraId);
+        if ( entry != ctx.cameras.end() && entry->second.comparison )
+            return entry->second.comparison->disableVerticalObjectDrag;
+    }
+    return ctx.lastConfig.settings.disableVerticalObjectDrag;
+}
+
 /// @brief 折线子段拖拽结束时用于判断零长度 Hold 的容差。
 constexpr double POLYLINE_SUB_DRAG_ZERO_DURATION = 1e-5;
 
@@ -380,17 +394,19 @@ struct UnifiedDragTarget {
 std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
     SessionContext& ctx, const CmdUpdateDrag& cmd)
 {
-    // 先确认相机和滚动缓存存在，再读取尺寸与时间映射。
+
+    // 坐标采用收到输入的视口布局，保留会话原有的编辑和吸附规则。
+    const auto& visual = SessionUtils::visualForCamera(
+        ctx, cmd.cameraId);  // 先确认相机和滚动缓存存在，再读取尺寸与时间映射。
     // 初始化尚未完成时不创建临时缓存，避免拖动路径触发昂贵重建。
     const auto cameraIterator = ctx.cameras.find(cmd.cameraId);
     if ( cameraIterator == ctx.cameras.end() ) return std::nullopt;
-    const auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    const auto* cache = SessionUtils::scrollCacheForCamera(ctx, cmd.cameraId);
     if ( !cache ) return std::nullopt;
 
-    const auto& camera = cameraIterator->second;
-    const float judgmentLineY =
-        camera.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
-    float renderScaleY = 1.0F;
+    const auto& camera        = cameraIterator->second;
+    const float judgmentLineY = camera.viewportHeight * visual.judgeline_pos;
+    float       renderScaleY  = 1.0F;
     // Preview 需要解除相对主画布的压缩后才能反算逻辑时间。
     // 两个既有预览标识共用该规则，普通主画布倍率保持一。
     if ( cmd.cameraId == "Preview" || cmd.cameraId == "PreviewCanvas" ) {
@@ -399,17 +415,15 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
         const float mainViewportHeight =
             mainCamera ? mainCamera->viewportHeight : camera.viewportHeight;
         const float mainEffectiveHeight =
-            (ctx.lastConfig.visual.trackLayout.bottom -
-             ctx.lastConfig.visual.trackLayout.top) *
+            (visual.trackLayout.bottom - visual.trackLayout.top) *
             mainViewportHeight;
-        const float previewTop = ctx.lastConfig.visual.previewConfig.margin.top;
+        const float previewTop = visual.previewConfig.margin.top;
         const float previewBottom =
-            camera.viewportHeight -
-            ctx.lastConfig.visual.previewConfig.margin.bottom;
+            camera.viewportHeight - visual.previewConfig.margin.bottom;
         // 主画布使用归一化轨道高度，预览使用像素边距。
         // 两者换成像素后再结合 areaRatio，避免把整个窗口高度当作有效轨道高度。
         const float denominator =
-            mainEffectiveHeight * ctx.lastConfig.visual.previewConfig.areaRatio;
+            mainEffectiveHeight * visual.previewConfig.areaRatio;
         if ( std::abs(denominator) > 1e-6F ) {
             renderScaleY = (previewBottom - previewTop) / denominator;
         }
@@ -429,14 +443,15 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
         targetTime,
         cmd.mouseY,
         camera,
-        ctx.lastConfig,
+        Config::EditorConfigView{ visual, ctx.lastConfig.settings },
         ctx.bpmEvents,
         ctx.timelineRegistry,
         ctx.animateTime,
         ctx.cameras,
         ctx.currentBeatmap
             ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
-            : 120.0);
+            : 120.0,
+        cache);
     // Ctrl 绕过本次吸附，保留原始鼠标时间。
     // 是否在最终物件层钳制时间由后续拖动更新决定，此处只计算目标。
     if ( snap.isSnapped && !cmd.isCtrlDown ) {
@@ -450,7 +465,7 @@ std::optional<UnifiedDragTarget> calculateUnifiedDragTarget(
         camera.viewportWidth,
         ctx.trackCount,
         ctx.bgmTrackCount,
-        ctx.lastConfig.visual.trackLayout,
+        visual.trackLayout,
         isMainCanvas ? camera.horizontalOffsetX : 0.0F,
         isMainCanvas,
         isMainCanvas && ctx.lastConfig.settings.isBmsEditingEnabled(),
@@ -1314,11 +1329,15 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
         if ( !SessionUtils::isMainCanvasCameraId(cmd.cameraId) ) return false;
         const auto cameraIterator = ctx.cameras.find(cmd.cameraId);
         if ( cameraIterator == ctx.cameras.end() ) return false;
+        // 玩家边界决定是否接管为跨区移动，必须与该视口的实际轨道一致。
+        // 从普通画布切来时，不能沿用上一画布的宽度或轨道中心。
+        const auto& layout =
+            SessionUtils::visualForCamera(ctx, cmd.cameraId).trackLayout;
         const auto playerProjection = calculatePlayerTrackProjection(
             cameraIterator->second.viewportWidth,
             ctx.trackCount,
-            ctx.lastConfig.visual.trackLayout.left,
-            ctx.lastConfig.visual.trackLayout.right,
+            layout.left,
+            layout.right,
             cameraIterator->second.horizontalOffsetX);
         if ( !playerProjection.valid ||
              (cmd.mouseX >= playerProjection.leftX &&
@@ -1413,7 +1432,7 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
         static_cast<std::int64_t>(target->absoluteTrack) - primaryTrack;
     // 禁用纵向拖动时只把组时间位移归零，横向移动仍正常计算。
     // 吸附目标可以变化，但不应间接改变参与对象的时间。
-    if ( ctx.lastConfig.settings.disableVerticalObjectDrag ) {
+    if ( disablesVerticalDrag(ctx, cmd.cameraId) ) {
         deltaTime = 0.0;
     }
 
@@ -1603,6 +1622,9 @@ bool GrabTool::handleUnifiedDragUpdate(SessionContext&      ctx,
 /// @note 连续写入用于即时预览；外部读取者应遵循会话既有线程归属。
 void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
 {
+
+    // 坐标采用收到输入的视口布局，保留会话原有的编辑和吸附规则。
+    const auto& visual = SessionUtils::visualForCamera(ctx, cmd.cameraId);
     if ( ctx.draggedEntity == entt::null ) return;
     // 首段身体只移动原有后缀；不能落入整条平移或跨域转换路径。
     // PolylineNode/0 仍移动整条；内部节点在后面的子段路径中处理。
@@ -1633,27 +1655,25 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
     // --- 1. 计算鼠标指向的目标位置 (Time, Track) ---
     // 以所属相机的判定线和动画时间逆映射，保持鼠标与可见物件对应。
     // Preview 额外解除压缩，主画布缩放已包含在滚动缓存中。
-    float judgmentLineY =
-        it->second.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
-    float renderScaleY = 1.0f;
+    float judgmentLineY = it->second.viewportHeight * visual.judgeline_pos;
+    float renderScaleY  = 1.0f;
     if ( cmd.cameraId == "Preview" ) {
         const auto* mainCamera =
             SessionUtils::findMainCanvasCamera(ctx.cameras);
         float mainViewportHeight =
             mainCamera ? mainCamera->viewportHeight : it->second.viewportHeight;
-        float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
-                                ctx.lastConfig.visual.trackLayout.top) *
-                               mainViewportHeight;
-        float ty             = ctx.lastConfig.visual.previewConfig.margin.top;
-        float by           = it->second.viewportHeight -
-                             ctx.lastConfig.visual.previewConfig.margin.bottom;
+        float mainEffectiveH =
+            (visual.trackLayout.bottom - visual.trackLayout.top) *
+            mainViewportHeight;
+        float ty = visual.previewConfig.margin.top;
+        float by =
+            it->second.viewportHeight - visual.previewConfig.margin.bottom;
         float previewDrawH = by - ty;
         renderScaleY =
-            previewDrawH /
-            (mainEffectiveH * ctx.lastConfig.visual.previewConfig.areaRatio);
+            previewDrawH / (mainEffectiveH * visual.previewConfig.areaRatio);
     }
 
-    auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    auto* cache = SessionUtils::scrollCacheForCamera(ctx, cmd.cameraId);
     if ( !cache ) return;
 
     double currentAbsY = cache->getAbsY(ctx.animateTime);
@@ -1669,14 +1689,15 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
         targetTime,
         cmd.mouseY,
         it->second,
-        ctx.lastConfig,
+        Config::EditorConfigView{ visual, ctx.lastConfig.settings },
         bpmEvents,
         ctx.timelineRegistry,
         ctx.animateTime,
         ctx.cameras,
         ctx.currentBeatmap
             ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
-            : 120.0);
+            : 120.0,
+        cache);
     // 吸附只修改当前目标时间，初始时间始终保留按下时的值。
     // Ctrl 释放后可以重新吸附，不需要重新开始拖动。
     if ( snap.isSnapped && !cmd.isCtrlDown ) {
@@ -1688,8 +1709,8 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
     const auto projection = calculatePlayerTrackProjection(
         it->second.viewportWidth,
         ctx.trackCount,
-        ctx.lastConfig.visual.trackLayout.left,
-        ctx.lastConfig.visual.trackLayout.right,
+        visual.trackLayout.left,
+        visual.trackLayout.right,
         SessionUtils::isMainCanvasCameraId(cmd.cameraId)
             ? it->second.horizontalOffsetX
             : 0.0F);
@@ -1710,7 +1731,7 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
             it->second.viewportWidth,
             ctx.trackCount,
             ctx.bgmTrackCount,
-            ctx.lastConfig.visual.trackLayout,
+            visual.trackLayout,
             it->second.horizontalOffsetX,
             true,
             ctx.lastConfig.settings.isBmsEditingEnabled(),
@@ -1802,8 +1823,7 @@ void GrabTool::handleUpdateDrag(SessionContext& ctx, const CmdUpdateDrag& cmd)
     // 禁用纵向对象拖动仅约束整体平移，不禁用改变局部持续时间。
     // 内部子段移动与末端拉伸继续遵守各自规则。
     const bool movesWholeObjects = isMultiDrag && !isPolylineSubDrag;
-    if ( movesWholeObjects &&
-         ctx.lastConfig.settings.disableVerticalObjectDrag ) {
+    if ( movesWholeObjects && disablesVerticalDrag(ctx, cmd.cameraId) ) {
         deltaT = 0.0;
     }
 

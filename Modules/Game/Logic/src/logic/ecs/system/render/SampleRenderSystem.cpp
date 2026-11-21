@@ -412,7 +412,7 @@ void SampleRenderSystem::renderSamples(
     entt::registry& registry, const std::vector<entt::entity>& sortedEntities,
     const std::vector<double>& maxEndPrefix, RenderSnapshot* snapshot,
     Batcher& batcher, const CanvasLaneProjection& projection,
-    const ScrollCache* cache, const Config::EditorConfig& config,
+    const ScrollCache* cache, const Config::EditorConfigView& config,
     double currentTime, float judgmentLineY, float viewportWidth, float topY,
     float bottomY, float renderScaleY)
 {

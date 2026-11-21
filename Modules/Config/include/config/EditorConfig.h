@@ -61,6 +61,28 @@ struct EditorConfig {
     }
 };
 
+/// @brief 同时借用会话行为与视口视觉配置，渲染时不复制配置容器。
+/// @details 生命周期不得超过两份被借用配置，不能保存为异步任务状态。
+/// 传递此值不改变所有权；调用方需保持引用有效直至本次绘制或坐标计算完成。
+/// 仅独立视图会覆盖视觉字段，多窗口共享谱面时音符操作规则仍指向同一会话。
+struct EditorConfigView {
+    const VisualConfig&   visual;    ///< 当前视口的有效视觉配置。
+    const EditorSettings& settings;  ///< 与谱面会话共用的编辑及音频策略。
+
+    /// @brief 普通画布与辅助视图沿用同一份完整配置。
+    EditorConfigView(const EditorConfig& config)
+        : EditorConfigView(config.visual, config.settings)
+    {
+    }
+
+    /// @brief 对比视图可提供独立布局，行为仍由谱面会话管理。
+    EditorConfigView(const VisualConfig&   visualConfig,
+                     const EditorSettings& editorSettings)
+        : visual(visualConfig), settings(editorSettings)
+    {
+    }
+};
+
 /// @brief 将完整编辑器配置序列化为 JSON。
 void to_json(nlohmann::json& json, const EditorConfig& config);
 /// @brief 从 JSON 读取完整编辑器配置。

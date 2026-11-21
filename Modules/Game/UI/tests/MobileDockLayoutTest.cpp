@@ -82,6 +82,10 @@ struct Fixture {
     float hostWidth{ 900.85f };
     /// @brief 菜单只返回意图；测试不销毁窗口，便于连续检查各个叶节点。
     int closeRequests{};
+    /// @brief 最后一个谱面还能触发创建对比，独立统计该动作。
+    int comparisonRequests{};
+    /// @brief 只给真实谱面提供创建入口，其他测试窗口维持原有菜单。
+    bool mainCanOpenComparison{};
     /// @brief 模拟最后主画布受保护，其余测试标签仍可关闭。
     bool mainClosable{ false };
     /// @brief 独立长标题窗口，复用稳定后缀来检查重命名与滚动裁剪。
@@ -116,12 +120,15 @@ struct Fixture {
                      nullptr,
                      m_persistWindows ? 0 : ImGuiWindowFlags_NoSavedSettings);
         ImGui::PopStyleVar();
-        if ( layout.tabCloseRequested(
-                 "Close",
-                 1,
-                 std::string_view(name) != "Main" || mainClosable,
-                 true) )
-            ++closeRequests;
+        using Action      = MMM::UI::MobileDockLayout::TabMenuAction;
+        const bool main   = std::string_view(name) == "Main";
+        const auto action = layout.tabMenuAction(
+            !main || mainClosable ? "Close" : nullptr,
+            main && mainCanOpenComparison ? "Compare" : nullptr,
+            1,
+            true);
+        if ( action == Action::Close ) ++closeRequests;
+        if ( action == Action::OpenComparison ) ++comparisonRequests;
         // 比较实际节点标签边界，避免三个窗口同时错位仍被等高断言放过。
         const auto* node = ImGui::GetCurrentWindow()->DockNode;
         if ( node && node->TabBar )
@@ -271,11 +278,11 @@ struct Fixture {
         settle();
     }
 
-    /// @brief 点击真实弹层的关闭项，测试返回值而不是直接调用业务关闭接口。
+    /// @brief 点击真实弹层的第一项，测试动作返回值而不是直接调用业务接口。
     /// @return 是否确实存在可点击菜单，避免失败后访问空窗口。
     /// @details 返回值只说明发出了触摸序列，是否成功关闭必须由计数单独断言。
     /// 菜单是否出现与关闭计数分别检查，不能把发出触摸序列直接视为关闭成功。
-    bool clickCloseMenu()
+    bool clickFirstMenuItem()
     {
         // 菜单不存在时返回失败，不能用空指针继续制造一次假点击。
         auto& context = *ImGui::GetCurrentContext();
@@ -284,7 +291,7 @@ struct Fixture {
             return false;
         // 读取经过视口避让后的实际位置，不假设菜单始终在标签正下方。
         const auto* popup = context.OpenPopupStack.back().Window;
-        // 唯一关闭项有 48 像素命中高度，选择中心避开窗口内边距。
+        // 菜单第一项有 48 像素命中高度，选择中心避开窗口内边距。
         const ImVec2 point{ popup->Pos.x + popup->Size.x * .5f,
                             popup->Pos.y + popup->WindowPadding.y + 24 };
         auto&        io = ImGui::GetIO();
@@ -528,12 +535,25 @@ int main()
     check(menuOpen() && fixture.closeRequests == 0,
           "long press opens menu without closing on release");
     // 菜单出现和关闭是两个独立动作，第一次松手不能增加计数。
-    check(fixture.clickCloseMenu() && fixture.closeRequests == 1,
+    check(fixture.clickFirstMenuItem() && fixture.closeRequests == 1,
           "menu closes only after explicit selection");
     // 最后主画布没有关闭项，当前没有其他操作时也不显示空菜单。
     fixture.holdTab("Main");
     check(!menuOpen() && fixture.closeRequests == 1,
           "last main canvas exposes no close item or empty menu");
+    // 同一个受保护标签启用创建权限后，长按可以打开只含对比动作的菜单。
+    // 释放仍不能误触；必须再点菜单项，而且不能产生关闭意图。
+    // 这里保持 mainClosable=false，排除测试实际点击的是旧关闭入口。
+    // 使用与其他标签相同的长按与菜单点击流程，覆盖手势层的实际动作分发。
+    fixture.mainCanOpenComparison = true;
+    fixture.holdTab("Main");
+    check(menuOpen() && fixture.comparisonRequests == 0,
+          "long press on last beatmap opens comparison menu without activating "
+          "it");
+    check(fixture.clickFirstMenuItem() && fixture.comparisonRequests == 1 &&
+              fixture.closeRequests == 1,
+          "selecting comparison on last beatmap emits only open comparison");
+    fixture.mainCanOpenComparison = false;
     // 从可关闭标签再次打开菜单，单独检验不选择任何操作时的外部取消。
     fixture.holdTab("Other");
     check(menuOpen(), "closable tab menu can reopen");
@@ -554,7 +574,7 @@ int main()
         const int before = fixture.closeRequests;
         fixture.holdTab(name);
         const bool opened  = menuOpen();
-        const bool clicked = opened && fixture.clickCloseMenu();
+        const bool clicked = opened && fixture.clickFirstMenuItem();
         if ( !opened || !clicked || fixture.closeRequests != before + 1 )
             XERROR("Auxiliary menu {}: opened={}, clicked={}, count={}/{}",
                    name,
@@ -571,7 +591,7 @@ int main()
     fixture.mainClosable = true;
     const int before     = fixture.closeRequests;
     fixture.holdTab("Main");
-    check(menuOpen() && fixture.clickCloseMenu() &&
+    check(menuOpen() && fixture.clickFirstMenuItem() &&
               fixture.closeRequests == before + 1,
           "additional main canvas can close");
     // 长标题仍保留原生窗口名与 ID，宽度约束只影响标签外观。
@@ -609,7 +629,7 @@ int main()
     // 自动滚动只改变文字，缩窄后的真实标签仍须能长按并明确关闭。
     const int beforeCaptionClose = fixture.closeRequests;
     fixture.holdTab(fixture.longTitle.c_str());
-    check(menuOpen() && fixture.clickCloseMenu() &&
+    check(menuOpen() && fixture.clickFirstMenuItem() &&
               fixture.closeRequests == beforeCaptionClose + 1,
           "bounded caption preserves native long press interaction");
     // 分析页必须真正出现在中央标签栏，不能仅确认分类函数返回了 true。
@@ -635,7 +655,7 @@ int main()
     // 分析页没有最后画布保护，必须提供可操作关闭入口。
     // 此处只返回关闭意图，生产注销仍由下一帧公共生命周期执行。
     fixture.holdTab("Wave###AudioWaveformViewGlobal");
-    check(menuOpen() && fixture.clickCloseMenu() &&
+    check(menuOpen() && fixture.clickFirstMenuItem() &&
               fixture.closeRequests == beforeAnalysisClose + 1,
           "audio analysis tab can close through touch menu");
     // 工作台只由主区选中的真实画布打开，后台会话存在不能让欢迎和设置占着它。
@@ -743,7 +763,7 @@ int main()
     // 计数是消费业务意图的观测值，不直接修改被测内部状态。
     const int beforeToolClose = fixture.closeRequests;
     fixture.holdTab("Tools###MobileWorkbench");
-    check(menuOpen() && fixture.clickCloseMenu() &&
+    check(menuOpen() && fixture.clickFirstMenuItem() &&
               fixture.closeRequests == beforeToolClose + 1,
           "workbench tab supports touch close menu");
     // 合并后的预览仍可隐藏和重开，主区标签和其它节点不得被整树重建覆盖。

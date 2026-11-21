@@ -43,6 +43,10 @@ public:
     /// @brief 请求把主画布停靠到编辑区中心。
     virtual void requestDockToCenter() {}
 
+    /// @brief 查询停靠标签的内容是否可见，供共享会话归并更新预算。
+    /// @warning 每帧只读取 UI 本地可见性，不访问逻辑会话。
+    [[nodiscard]] virtual bool isCanvasContentVisible() const { return false; }
+
     /// @brief 查询时间线上一帧是否持有交互焦点。
     [[nodiscard]] virtual bool wasFocusedLastFrame() const { return false; }
 

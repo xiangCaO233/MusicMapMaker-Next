@@ -81,7 +81,9 @@ float calculateCursorRevealAlpha(float distanceToCursor, float viewportHeight,
 /// @warning 快照生成热路径，使用现有皮肤资源，不执行加载或时间线重建。
 void NoteRenderSystem::renderTrackLayout(
     Batcher& batcher, float viewportWidth, float viewportHeight,
-    float judgmentLineY, int32_t trackCount, const Config::EditorConfig& config,
+    float judgmentLineY, int32_t trackCount,
+    // 调用方已选择实际视口对应的渲染和命中布局。
+    const Config::EditorConfigView& config,
     const entt::registry& timelineRegistry, double currentTime,
     const ScrollCache* cache, float& leftX, float& rightX, float& topY,
     float& bottomY, float& trackAreaW, float& singleTrackW, float renderScaleY)
@@ -109,7 +111,7 @@ void NoteRenderSystem::renderTrackLayout(
     // 只把远端边界向负 Y 推进；音符和拍线继续使用原像素/时间比例。
     // 下游可见区间查询直接使用 topY，因此会纳入更远处的真实物件。
     // 判定线和底边不参与缩放，不能通过拉伸已有顶点模拟延长。
-    topY       = viewportHeight * (t - config.visual.canvasCameraExtension());
+    topY       = viewportHeight * (t - batcher.m_cameraExtension);
     bottomY    = viewportHeight * b;
     trackAreaW = rightX - leftX;
     // 无有效轨道时仍提供有限的宽度输出，具体纹理绘制再按轨道数量跳过。
@@ -297,8 +299,8 @@ void NoteRenderSystem::drawTrackBackground(Batcher& batcher, int32_t trackCount,
 void NoteRenderSystem::drawJudgmentArea(Batcher& batcher, int32_t trackCount,
                                         float leftX, float judgmentLineY,
                                         float singleTrackW, float trackAreaW,
-                                        const Config::EditorConfig& config,
-                                        glm::vec4                   color)
+                                        const Config::EditorConfigView& config,
+                                        glm::vec4                       color)
 {
     // 判定区必须与到达当前时间的 Note 使用相同位置规则。
     // 独立作用域只覆盖此区域，退出后不影响底板、拍线和其他辅助图像。
@@ -380,7 +382,7 @@ void NoteRenderSystem::drawJudgmentArea(Batcher& batcher, int32_t trackCount,
 /// @note 本实现每次调用创建像素行占用表，不能将其描述成完全无分配路径。
 void NoteRenderSystem::drawBeatLines(
     Batcher& batcher, float viewportWidth, float viewportHeight,
-    float judgmentLineY, const Config::EditorConfig& config,
+    float judgmentLineY, const Config::EditorConfigView& config,
     const std::vector<const TimelineComponent*>& bpmEvents, double currentTime,
     const ScrollCache* cache, float leftX, float topY, float bottomY,
     float trackAreaW, float renderScaleY, bool revealNearCursor,
@@ -944,8 +946,8 @@ void NoteRenderSystem::drawBeatLines(
 /// @warning 快照生成路径遍历缓存段落，不查询或排序时间线实体。
 void NoteRenderSystem::drawTimingLines(Batcher& batcher, float viewportHeight,
                                        float judgmentLineY,
-                                       const Config::EditorConfig& config,
-                                       double                      currentTime,
+                                       const Config::EditorConfigView& config,
+                                       double             currentTime,
                                        const ScrollCache* cache, float leftX,
                                        float topY, float bottomY,
                                        float trackAreaW, float renderScaleY)

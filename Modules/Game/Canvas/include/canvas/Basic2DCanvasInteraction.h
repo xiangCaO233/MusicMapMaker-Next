@@ -24,6 +24,11 @@
 #include <unordered_set>
 #include <vector>
 
+namespace MMM::Config
+{
+struct VisualConfig;
+}
+
 namespace MMM::Common::Render
 {
 struct RenderSnapshot;
@@ -50,6 +55,11 @@ public:
     void update(UI::UIManager*                        sourceManager,
                 const Common::Render::RenderSnapshot* currentSnapshot,
                 float targetWidth, float targetHeight);
+
+    /// @brief 将对比视口的可变布局及变更标记绑定到现有布置手势。
+    /// @note 三个字段由同一所属画布持有，生命周期覆盖交互控制器。
+    void setLocalLayout(Config::VisualConfig* visual, bool* dirty,
+                        const bool* editing);
 
     /// @brief 发布与当前画面同一组观察矩阵和动态顶点插值偏移。
     /// @param projection 屏幕与谱面平面的双向映射，二维模式为恒等映射。
@@ -252,8 +262,17 @@ private:
         Config::NoteSizePart sizePart{ Config::NoteSizePart::Head };
     };
 
-    std::string              m_canvasName;
-    std::string              m_cameraId;
+    std::string m_canvasName;
+    std::string m_cameraId;
+    /// @brief 对比画布的布局由所属窗口持有；空指针沿用应用布局。
+    Config::VisualConfig* m_localVisual{};
+    /// @brief 编辑真实变更时通知窗口发布最新视觉快照。
+    bool* m_localLayoutDirty{};
+    /// @brief 布局工具在对比视口独立开关，不修改会话选中工具。
+    const bool* m_localLayoutEditing{};
+    /// @brief 获取当前窗口的视觉参数，供渲染命中与布局工具共同使用。
+    /// @warning 输入热路径只借用同线程配置值。
+    Config::VisualConfig&    visualConfig() const;
     std::vector<PendingDrop> m_pendingDrops;
     Event::SubscriptionID    m_dropSubId;
 

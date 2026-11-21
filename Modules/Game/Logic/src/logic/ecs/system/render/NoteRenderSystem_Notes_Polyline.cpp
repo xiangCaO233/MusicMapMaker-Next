@@ -143,7 +143,7 @@ static double getSubCarrierEndTime(const NoteComponent::SubNote& sub)
 /// @warning 快照生成热路径，不允许在逐节点绘制中引入资源加载或阻塞等待。
 void NoteRenderSystem::renderPolyline(
     const ScrollCache* cache, Batcher& batcher, const NoteComponent& note,
-    const Config::EditorConfig& config, RenderSnapshot* snapshot,
+    const Config::EditorConfigView& config, RenderSnapshot* snapshot,
     double currentAbsY, double currentTime, float judgmentLineY, float leftX,
     float topY, float bottomY, float singleTrackW, float renderScaleY,
     glm::vec4 colorHead, glm::vec4 colorHoldBody, glm::vec4 colorHoldEnd,
@@ -304,7 +304,7 @@ void NoteRenderSystem::drawPolylineBody(
     glm::vec4 colorHold, entt::entity entity, bool generateHitboxes,
     HoverPart glowPart, int glowSubIndex,
     const CanvasLaneProjection* laneProjection, bool simulateJudgment,
-    const Config::EditorConfig& config)
+    const Config::EditorConfigView& config)
 {
     if ( note.m_subNotes.empty() ) return;
     // 非主体部位的高亮调用不生成连接几何，避免背景主体参与节点光晕叠加。
@@ -769,7 +769,7 @@ void NoteRenderSystem::drawPolylineNodes(
     RenderSnapshot* snapshot, float judgmentLineY, float leftX,
     float singleTrackW, float renderScaleY, double currentAbsY,
     double currentTime, float topY, float bottomY, float noteW, float noteH,
-    glm::vec4 colorNode, const Config::EditorConfig& config,
+    glm::vec4 colorNode, const Config::EditorConfigView& config,
     entt::entity entity, bool generateHitboxes, HoverPart glowPart,
     int glowSubIndex, const CanvasLaneProjection* laneProjection)
 {
@@ -927,7 +927,7 @@ void NoteRenderSystem::drawPolylineHead(
     RenderSnapshot* snapshot, float judgmentLineY, float leftX,
     float singleTrackW, float renderScaleY, double currentAbsY,
     double currentTime, float topY, float bottomY, float noteW, float noteH,
-    glm::vec4 colorHead, const Config::EditorConfig& config,
+    glm::vec4 colorHead, const Config::EditorConfigView& config,
     entt::entity entity, bool generateHitboxes, HoverPart glowPart,
     int glowSubIndex, const CanvasLaneProjection* laneProjection)
 {
@@ -1091,7 +1091,7 @@ void NoteRenderSystem::drawPolylineDecoration(
     float singleTrackW, float renderScaleY, double currentAbsY,
     double currentTime, float topY, float bottomY, float noteW, float noteH,
     glm::vec4 colorHoldEnd, glm::vec4 colorArrow,
-    const Config::EditorConfig& config, entt::entity entity,
+    const Config::EditorConfigView& config, entt::entity entity,
     bool generateHitboxes, HoverPart glowPart, int glowSubIndex,
     const CanvasLaneProjection* laneProjection)
 {

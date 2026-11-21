@@ -1,5 +1,7 @@
 #pragma once
 
+#include "common/ComparisonCanvas.h"
+
 #include "canvas/BackgroundVideoPlayer.h"
 #include "canvas/CanvasSnapshotPrepare.h"
 #include "canvas/ComposePolylineTarget.h"
@@ -27,6 +29,11 @@ class Basic2DCanvasInteraction;
 class CameraLayoutEditor;
 }  // namespace MMM::Canvas
 
+namespace MMM::Config
+{
+struct VisualConfig;
+}
+
 namespace MMM::Event
 {
 struct GLFWDropEvent;
@@ -42,13 +49,20 @@ public:
     Basic2DCanvas(
         const std::string& name, uint32_t w, uint32_t h,
         std::shared_ptr<Common::Render::RenderSnapshotBuffer> syncBuffer,
-        const std::string&                                    cameraId = "");
+        const std::string& cameraId = "", std::uint64_t comparisonIndex = 0);
     Basic2DCanvas(Basic2DCanvas&&)                 = delete;
     Basic2DCanvas(const Basic2DCanvas&)            = delete;
     Basic2DCanvas& operator=(Basic2DCanvas&&)      = delete;
     Basic2DCanvas& operator=(const Basic2DCanvas&) = delete;
 
     ~Basic2DCanvas() override;
+
+    /// @brief 返回窗口上一次提交内容时的可见性。
+    /// @warning 每帧访问，只读取 UI 线程布尔值。
+    [[nodiscard]] bool isCanvasContentVisible() const override
+    {
+        return m_isCanvasVisible;
+    }
 
     // 接口实现
     /// @brief 更新画布 ImGui 窗口和交互状态。
@@ -279,6 +293,24 @@ private:
 
     /// @brief 逻辑视口 ID (对应 BeatmapSession 中的 Camera)
     std::string m_cameraId;
+    /// @brief 非零表示只关闭独立窗口，不关闭拥有谱面的会话。
+    std::uint64_t m_comparisonIndex{ 0 };
+    /// @brief 当前对比标签的映射与观察状态，只在本地控件中修改。
+    Common::ComparisonCanvasSettings m_comparisonSettings{};
+    /// @brief 对比视口编辑布局及右侧按钮时独享的 UI 状态。
+    struct ComparisonLayout;
+    std::unique_ptr<ComparisonLayout> m_comparisonLayout;
+
+    /// @brief 取得本画布可编辑的视觉状态，普通画布仍使用软件配置。
+    /// @warning 逐帧及录制路径只借用稳定 UI 值，不复制配置容器。
+    Config::VisualConfig& canvasVisualConfig() const;
+
+    /// @brief 绘制右侧工具条，并保留固定画布高度。
+    /// @warning 每帧只绘制固定数量按钮，布局弹层仅在主动打开时绘制。
+    void drawComparisonToolbar(UI::UIManager& manager, ImVec2 railPosition,
+                               ImVec2 railSize);
+    /// @brief 首次可见时建立视口；后续只在状态边沿同步。
+    bool m_comparisonSettingsPublished{ false };
 
     /// @brief 下一帧是否调用 ImGui::SetNextWindowFocus。
     bool m_shouldFocusNextFrame{ false };

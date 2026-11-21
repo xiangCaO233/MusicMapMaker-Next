@@ -308,7 +308,11 @@ void appendPolylineChildDeleteEntries(
 /// @note 返回后画笔可能仍未激活，调用方不能把命令到达视为创建成功。
 void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
 {
-    // 缺失相机时无法解释鼠标坐标，保持现有状态并忽略此命令。
+
+    // 坐标采用收到输入的视口布局，保留会话原有的编辑和吸附规则。
+    const auto& visual = SessionUtils::visualForCamera(
+        ctx,
+        cmd.cameraId);  // 缺失相机时无法解释鼠标坐标，保持现有状态并忽略此命令。
     // 先解析实际命中领域，再激活画笔，避免空隙点击产生默认零轨物件。
     auto itCamera = ctx.cameras.find(cmd.cameraId);
     if ( itCamera == ctx.cameras.end() ) return;
@@ -320,8 +324,8 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     const auto playerProjection =
         calculatePlayerTrackProjection(itCamera->second.viewportWidth,
                                        ctx.trackCount,
-                                       ctx.lastConfig.visual.trackLayout.left,
-                                       ctx.lastConfig.visual.trackLayout.right,
+                                       visual.trackLayout.left,
+                                       visual.trackLayout.right,
                                        itCamera->second.horizontalOffsetX);
     float                            leftX  = playerProjection.leftX;
     float                            rightX = playerProjection.rightX;
@@ -330,9 +334,9 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     // 预览仅提供玩家轨号，右边缘包含在命中范围内。
     // floor 后钳制保证恰好点击最右边时仍落在最后一轨。
     if ( isPreview ) {
-        leftX  = ctx.lastConfig.visual.previewConfig.margin.left;
-        rightX = itCamera->second.viewportWidth -
-                 ctx.lastConfig.visual.previewConfig.margin.right;
+        leftX = visual.previewConfig.margin.left;
+        rightX =
+            itCamera->second.viewportWidth - visual.previewConfig.margin.right;
         if ( cmd.mouseX >= leftX && cmd.mouseX <= rightX &&
              ctx.trackCount > 0 ) {
             // 轨宽由预览可绘制区和玩家轨数决定，不能借用主画布单轨宽度。
@@ -352,7 +356,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
             itCamera->second.viewportWidth,
             ctx.trackCount,
             ctx.bgmTrackCount,
-            ctx.lastConfig.visual.trackLayout,
+            visual.trackLayout,
             itCamera->second.horizontalOffsetX,
             true,
             ctx.lastConfig.settings.isBmsEditingEnabled(),
@@ -418,7 +422,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     const auto& bpmEvents = ctx.bpmEvents;
 
     // 计算逻辑时间
-    auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    auto* cache = SessionUtils::scrollCacheForCamera(ctx, cmd.cameraId);
     // 没有滚动映射不能从屏幕位置推导时间，撤回刚激活的画笔。
     // 这里沿用仅解除 isActive 的失败路径，后续新起笔会覆盖活动字段。
     if ( !cache ) {
@@ -429,7 +433,7 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
     // 以动画时间对应的绝对滚动位置为锚点，让起笔落在当前所见位置。
     // 鼠标在判定线上方时 deltaY 为正，时间由滚动缓存反解。
     float judgmentLineY =
-        itCamera->second.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
+        itCamera->second.viewportHeight * visual.judgeline_pos;
     double currentAbsY = cache->getAbsY(ctx.animateTime);
     double deltaY      = (judgmentLineY - cmd.mouseY);
 
@@ -442,16 +446,14 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
                                               : itCamera->second.viewportHeight;
         // 主画布轨道上下界是归一化比例，须先乘视口高度换算像素。
         // 预览边距则已经是像素，两种单位不可直接相减。
-        float mainEffectiveH = (ctx.lastConfig.visual.trackLayout.bottom -
-                                ctx.lastConfig.visual.trackLayout.top) *
-                               mainViewportHeight;
-        float previewDrawH =
-            itCamera->second.viewportHeight -
-            (ctx.lastConfig.visual.previewConfig.margin.top +
-             ctx.lastConfig.visual.previewConfig.margin.bottom);
+        float mainEffectiveH =
+            (visual.trackLayout.bottom - visual.trackLayout.top) *
+            mainViewportHeight;
+        float previewDrawH = itCamera->second.viewportHeight -
+                             (visual.previewConfig.margin.top +
+                              visual.previewConfig.margin.bottom);
         renderScaleY =
-            previewDrawH /
-            (mainEffectiveH * ctx.lastConfig.visual.previewConfig.areaRatio);
+            previewDrawH / (mainEffectiveH * visual.previewConfig.areaRatio);
     }
     // 解除预览压缩后再进入滚动缓存，避免预览中同一像素被当作主画布距离。
     // 倍率由有效视口和 areaRatio 配置提供，当前入口不另行修正退化布局。
@@ -463,14 +465,15 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
         rawTime,
         cmd.mouseY,
         itCamera->second,
-        ctx.lastConfig,
+        Config::EditorConfigView{ visual, ctx.lastConfig.settings },
         bpmEvents,
         ctx.timelineRegistry,
         ctx.animateTime,
         ctx.cameras,
         ctx.currentBeatmap
             ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
-            : 120.0);
+            : 120.0,
+        cache);
 
     // 经典起笔沿用吸附结果；纯鼠标显式覆盖可以从首点就采用原始时间。
     // 独立字段不改变经典 Ctrl 语义，后续连续更新仍复用原来的免吸附字段。
@@ -734,6 +737,9 @@ void DrawTool::handleStartBrush(SessionContext& ctx, const CmdStartBrush& cmd)
 /// @note 一次输入最多增长或回退活动末段，连续事件推进整个折线路径。
 void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
 {
+
+    // 坐标采用收到输入的视口布局，保留会话原有的编辑和吸附规则。
+    const auto& visual = SessionUtils::visualForCamera(ctx, cmd.cameraId);
     if ( !ctx.brushState.isActive ) return;
     // 记录手势曾进入 Flick 或 Polyline，而不只观察最后一帧类型。
     // 该历史标志可区分退化后的点击与从未延伸过的普通点击。
@@ -752,11 +758,11 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     // 不把 BPM 列表复制进每次鼠标更新的临时对象。
     const auto& bpmEvents = ctx.bpmEvents;
 
-    auto* cache = ctx.timelineRegistry.ctx().find<System::ScrollCache>();
+    auto* cache = SessionUtils::scrollCacheForCamera(ctx, cmd.cameraId);
     if ( !cache ) return;
 
     float judgmentLineY =
-        itCamera->second.viewportHeight * ctx.lastConfig.visual.judgeline_pos;
+        itCamera->second.viewportHeight * visual.judgeline_pos;
     // 拖动时播放可以继续推进，当前屏幕锚点必须每次重新查询。
     // 固定使用起笔时的绝对 Y 会让画笔与正在滚动的画面分离。
     double currentAbsY = cache->getAbsY(ctx.animateTime);
@@ -770,16 +776,14 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         // 该回退只替代尺寸来源，不改变预览边距和覆盖比例的含义。
         float mainViewportHeight = mainCamera ? mainCamera->viewportHeight
                                               : itCamera->second.viewportHeight;
-        float mainEffectiveH     = (ctx.lastConfig.visual.trackLayout.bottom -
-                                    ctx.lastConfig.visual.trackLayout.top) *
-                                   mainViewportHeight;
-        float previewDrawH =
-            itCamera->second.viewportHeight -
-            (ctx.lastConfig.visual.previewConfig.margin.top +
-             ctx.lastConfig.visual.previewConfig.margin.bottom);
+        float mainEffectiveH =
+            (visual.trackLayout.bottom - visual.trackLayout.top) *
+            mainViewportHeight;
+        float previewDrawH = itCamera->second.viewportHeight -
+                             (visual.previewConfig.margin.top +
+                              visual.previewConfig.margin.bottom);
         renderScaleY =
-            previewDrawH /
-            (mainEffectiveH * ctx.lastConfig.visual.previewConfig.areaRatio);
+            previewDrawH / (mainEffectiveH * visual.previewConfig.areaRatio);
     }
     deltaY /= renderScaleY;
 
@@ -788,14 +792,15 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
         rawTime,
         cmd.mouseY,
         itCamera->second,
-        ctx.lastConfig,
+        Config::EditorConfigView{ visual, ctx.lastConfig.settings },
         bpmEvents,
         ctx.timelineRegistry,
         ctx.animateTime,
         ctx.cameras,
         ctx.currentBeatmap
             ? ctx.currentBeatmap->m_baseMapMetadata.preference_bpm
-            : 120.0);
+            : 120.0,
+        cache);
 
     // Ctrl 切换仅影响这一轮时间目标，起笔参照仍保留原始锁定时间。
     // 恢复吸附后会直接按新目标更新几何，不等待额外稳定窗口。
@@ -854,7 +859,7 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
             itCamera->second.viewportWidth,
             ctx.trackCount,
             ctx.bgmTrackCount,
-            ctx.lastConfig.visual.trackLayout,
+            visual.trackLayout,
             itCamera->second.horizontalOffsetX,
             true,
             ctx.lastConfig.settings.isBmsEditingEnabled(),
@@ -895,15 +900,15 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
     const auto projection =
         calculatePlayerTrackProjection(itCamera->second.viewportWidth,
                                        ctx.trackCount,
-                                       ctx.lastConfig.visual.trackLayout.left,
-                                       ctx.lastConfig.visual.trackLayout.right,
+                                       visual.trackLayout.left,
+                                       visual.trackLayout.right,
                                        itCamera->second.horizontalOffsetX);
     float leftX  = projection.leftX;
     float rightX = projection.rightX;
     if ( cmd.cameraId == "Preview" ) {
-        leftX  = ctx.lastConfig.visual.previewConfig.margin.left;
-        rightX = itCamera->second.viewportWidth -
-                 ctx.lastConfig.visual.previewConfig.margin.right;
+        leftX = visual.previewConfig.margin.left;
+        rightX =
+            itCamera->second.viewportWidth - visual.previewConfig.margin.right;
     }
     float trackAreaW = rightX - leftX;
     // 没有离散领域地址的预览沿用连续玩家轨算式。
@@ -961,7 +966,7 @@ void DrawTool::handleUpdateBrush(SessionContext& ctx, const CmdUpdateBrush& cmd)
 
         // 该配置读数当前未用于下面的状态切换，既有逻辑仍采用固定像素判据。
         // 调整手势敏感度时需同时审视时间与像素条件，不能只修改此局部变量。
-        float threshold = ctx.lastConfig.visual.snapThreshold;
+        float threshold = visual.snapThreshold;
 
         // --- Polyline 状态机 ---
         if ( ctx.brushState.polylineSegments.empty() ) {
